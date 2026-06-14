@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <HTTPClient.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 
 namespace {
 constexpr uint32_t kProbeIntervalMs = 5000;
@@ -41,40 +42,63 @@ std::vector<ServerCandidate> HttpProbeDiscovery::poll(uint32_t nowMs) {
   parseUrl();
 
   std::vector<ServerCandidate> found;
-  HTTPClient http;
   const String probeUrl = String(baseUrl_.c_str()) + "/api/";
+
+  HTTPClient http;
   http.setConnectTimeout(2000);
   http.setTimeout(3000);
-  if (http.begin(probeUrl)) {
-    const int code = http.GET();
-    if (code == 200) {
-      const String body = http.getString();
-      // mStream's public GET /api/ returns {"server":"<version>", ...}.
-      std::string version;
-      const int k = body.indexOf("\"server\"");
-      if (k >= 0) {
-        const int colon = body.indexOf(':', k);
-        const int q1 = body.indexOf('"', colon);
-        const int q2 = (q1 >= 0) ? body.indexOf('"', q1 + 1) : -1;
-        if (colon >= 0 && q1 >= 0 && q2 > q1) {
-          version = std::string(body.substring(q1 + 1, q2).c_str());
-        }
-      }
-      ServerCandidate srv;
-      srv.instanceId = "probe:" + baseUrl_;  // stable, distinct from mDNS ids
-      srv.instanceName = host_;
-      srv.host = host_;
-      srv.port = port_;
-      srv.scheme = scheme_;
-      srv.baseUrl = baseUrl_;
-      srv.version = version;
-      found.push_back(srv);
-      Serial.printf("[probe] %s reachable (mStream %s)\n", baseUrl_.c_str(), version.c_str());
-    } else {
+
+  // Turn a 200 response into a verified candidate. Captures http + found.
+  auto handleResponse = [&](int code) {
+    if (code != 200) {
       Serial.printf("[probe] %s -> HTTP %d\n", probeUrl.c_str(), code);
+      return;
     }
-    http.end();
+    const String body = http.getString();
+    // mStream's public GET /api/ returns {"server":"<version>", ...}.
+    std::string version;
+    const int k = body.indexOf("\"server\"");
+    if (k >= 0) {
+      const int colon = body.indexOf(':', k);
+      const int q1 = body.indexOf('"', colon);
+      const int q2 = (q1 >= 0) ? body.indexOf('"', q1 + 1) : -1;
+      if (colon >= 0 && q1 >= 0 && q2 > q1) {
+        version = std::string(body.substring(q1 + 1, q2).c_str());
+      }
+    }
+    ServerCandidate srv;
+    srv.instanceId = "probe:" + baseUrl_;  // stable, distinct from mDNS ids
+    srv.instanceName = host_;
+    srv.host = host_;
+    srv.port = port_;
+    srv.scheme = scheme_;
+    srv.baseUrl = baseUrl_;
+    srv.version = version;
+    found.push_back(srv);
+    Serial.printf("[probe] %s reachable (mStream %s)\n", baseUrl_.c_str(), version.c_str());
+  };
+
+  bool began = false;
+  if (scheme_ == "https") {
+    // Discovery probe only: skip certificate validation. Real TLS trust (a
+    // pinned CA / trust-on-first-use) belongs to the pairing+sync slices, where
+    // a credential actually crosses the wire — here we only read public /api/.
+    WiFiClientSecure tls;
+    tls.setInsecure();
+    began = http.begin(tls, probeUrl);
+    if (began) {
+      handleResponse(http.GET());
+      http.end();
+    }
   } else {
+    WiFiClient tcp;
+    began = http.begin(tcp, probeUrl);
+    if (began) {
+      handleResponse(http.GET());
+      http.end();
+    }
+  }
+  if (!began) {
     Serial.printf("[probe] begin failed for %s\n", probeUrl.c_str());
   }
 

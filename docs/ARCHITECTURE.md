@@ -55,19 +55,20 @@ Two discovery sources:
 - **`MdnsDiscovery`** (`src/net`) — browses `_mstream._tcp` and maps each result's
   TXT records into a base-URL-shaped `ServerCandidate`. **The path on real
   hardware.**
-- **`HttpProbeDiscovery`** (`src/net`) — probes a fixed base URL and emits a
-  *verified* candidate only if the server answers `GET /api/`. **The path in the
-  simulator.**
+- **`HttpProbeDiscovery`** (`src/net`) — probes a fixed base URL (HTTP or HTTPS)
+  and emits a *verified* candidate only if the server answers `GET /api/`. **The
+  path in the simulator.**
 
 Why two: free **Wokwi can't reach your LAN at all** — its default Public Gateway
 gives the sim internet only, so mDNS multicast never sees the host's server.
 Wokwi's **Private Gateway** (paid) bridges the sim to your machine via
 `host.wokwi.internal`; pointing `HttpProbeDiscovery` there (build flag
 `-DDISCOVERY_PROBE_URL`, see `platformio.ini`) makes discovery genuinely
-end-to-end in simulation against the real Dockerized mStream — over HTTP rather
-than multicast. mDNS itself is validated on hardware on the same LAN (the server
-side is already proven). `DiscoveryController` is host-tested regardless of
-either source.
+end-to-end in simulation against the real mStream — over HTTP(S) rather than
+multicast. (Alternatively, on the free Public Gateway, point the probe at a
+public `https://` mStream URL — no gateway app needed.) mDNS itself is validated
+on hardware on the same LAN (the server side is already proven).
+`DiscoveryController` is host-tested regardless of either source.
 
 ### What can't be emulated (and why it's fine)
 
