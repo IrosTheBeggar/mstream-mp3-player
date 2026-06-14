@@ -1,0 +1,49 @@
+{
+  "version": 1,
+  "author": "mstream-mp3-player",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": 0, "left": 0, "attrs": { "psramSize": "8" } },
+    { "type": "wokwi-ili9341", "id": "tft", "top": -120, "left": 180, "attrs": {} },
+    { "type": "wokwi-ky-040", "id": "enc", "top": 130, "left": 200, "attrs": {} },
+    { "type": "wokwi-microsd-card", "id": "sd", "top": 30, "left": 230, "attrs": {} },
+    { "type": "wokwi-pushbutton", "id": "btnPlay", "top": 280, "left": 30, "attrs": { "color": "green", "label": "PLAY" } },
+    { "type": "wokwi-pushbutton", "id": "btnPrev", "top": 280, "left": 130, "attrs": { "color": "blue", "label": "PREV" } },
+    { "type": "wokwi-pushbutton", "id": "btnNext", "top": 280, "left": 230, "attrs": { "color": "blue", "label": "NEXT" } },
+    { "type": "wokwi-pushbutton", "id": "btnDock", "top": 280, "left": 330, "attrs": { "color": "red", "label": "DOCK" } }
+  ],
+  "connections": [
+    [ "tft:VCC", "esp:3V3.1", "red", [] ],
+    [ "tft:GND", "esp:GND.1", "black", [] ],
+    [ "tft:CS", "esp:10", "green", [] ],
+    [ "tft:RST", "esp:8", "orange", [] ],
+    [ "tft:D/C", "esp:9", "blue", [] ],
+    [ "tft:MOSI", "esp:11", "purple", [] ],
+    [ "tft:SCK", "esp:12", "yellow", [] ],
+    [ "tft:LED", "esp:14", "white", [] ],
+    [ "tft:MISO", "esp:13", "cyan", [] ],
+
+    [ "sd:VCC", "esp:3V3.2", "red", [] ],
+    [ "sd:GND", "esp:GND.2", "black", [] ],
+    [ "sd:SCK", "esp:12", "yellow", [] ],
+    [ "sd:DO", "esp:13", "cyan", [] ],
+    [ "sd:DI", "esp:11", "purple", [] ],
+    [ "sd:CS", "esp:7", "green", [] ],
+
+    [ "enc:VCC", "esp:3V3.2", "red", [] ],
+    [ "enc:GND", "esp:GND.3", "black", [] ],
+    [ "enc:CLK", "esp:4", "green", [] ],
+    [ "enc:DT", "esp:5", "blue", [] ],
+    [ "enc:SW", "esp:6", "orange", [] ],
+
+    [ "btnPlay:1.l", "esp:15", "green", [] ],
+    [ "btnPlay:2.l", "esp:GND.4", "black", [] ],
+    [ "btnPrev:1.l", "esp:16", "green", [] ],
+    [ "btnPrev:2.l", "esp:GND.4", "black", [] ],
+    [ "btnNext:1.l", "esp:17", "green", [] ],
+    [ "btnNext:2.l", "esp:GND.4", "black", [] ],
+    [ "btnDock:1.l", "esp:18", "green", [] ],
+    [ "btnDock:2.l", "esp:GND.4", "black", [] ]
+  ],
+  "dependencies": {}
+}
