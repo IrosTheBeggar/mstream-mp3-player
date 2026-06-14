@@ -29,6 +29,7 @@ std::vector<ServerCandidate> MdnsDiscovery::poll(uint32_t nowMs) {
 
   std::vector<ServerCandidate> found;
   const int n = MDNS.queryService("mstream", "tcp");
+  Serial.printf("[mdns] query: %d mStream service(s)\n", n);
   for (int i = 0; i < n; ++i) {
     ServerCandidate s;
     s.instanceId = MDNS.txt(i, "id").c_str();
@@ -43,26 +44,6 @@ std::vector<ServerCandidate> MdnsDiscovery::poll(uint32_t nowMs) {
     s.baseUrl = s.scheme + "://" + s.host + ":" + std::to_string(s.port);
     found.push_back(s);
   }
-
-#ifdef DISCOVERY_FALLBACK_URL
-  // Dev aid: Wokwi's virtual network may not forward mDNS multicast to the host
-  // LAN, so the sim can't always see a real server. Define
-  //   -DDISCOVERY_FALLBACK_URL=\"192.168.1.71:3000\"
-  // to inject that server when no real results come back, exercising the whole
-  // discovery UI in simulation against the Dockerized mStream.
-  if (found.empty()) {
-    const String hp = DISCOVERY_FALLBACK_URL;
-    const int colon = hp.lastIndexOf(':');
-    ServerCandidate s;
-    s.instanceId = "fallback";
-    s.instanceName = "mStream (fallback)";
-    s.host = (colon > 0 ? hp.substring(0, colon) : hp).c_str();
-    s.port = colon > 0 ? static_cast<uint16_t>(hp.substring(colon + 1).toInt()) : 3000;
-    s.scheme = "http";
-    s.baseUrl = s.scheme + "://" + s.host + ":" + std::to_string(s.port);
-    found.push_back(s);
-  }
-#endif
 
   cached_ = found;
   return cached_;

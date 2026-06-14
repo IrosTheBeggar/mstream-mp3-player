@@ -20,6 +20,7 @@
 #include "input/Controls.h"
 #include "net/Wifi.h"
 #include "net/MdnsDiscovery.h"
+#include "net/HttpProbeDiscovery.h"
 #include "ui/DisplayView.h"
 
 // ---- HAL + core instances ----
@@ -29,6 +30,11 @@ static SimDock dock;
 static Controls controls;
 static DisplayView view;
 static MdnsDiscovery discovery;
+#ifdef DISCOVERY_PROBE_URL
+// Non-mDNS source for the sim: probe a known address (host.wokwi.internal) so
+// discovery works end-to-end in Wokwi against the real server. See platformio.ini.
+static HttpProbeDiscovery probe(DISCOVERY_PROBE_URL);
+#endif
 
 static PlaybackController player(audio);
 static DockController dockCtrl(dock);
@@ -93,6 +99,10 @@ void setup() {
   Wifi::begin();
   discovery.begin();
   discovery.start();
+#ifdef DISCOVERY_PROBE_URL
+  probe.begin();
+  probe.start();
+#endif
   dockCtrl.begin();
   storage.begin();
   loadLibrary();
@@ -119,7 +129,12 @@ void loop() {
     Wifi::loop(now);
     const bool wifi = Wifi::isConnected();
     if (wifi) {
-      discoveryCtrl.update(now, discovery.poll(now));
+      std::vector<ServerCandidate> sightings = discovery.poll(now);
+#ifdef DISCOVERY_PROBE_URL
+      const auto probed = probe.poll(now);
+      sightings.insert(sightings.end(), probed.begin(), probed.end());
+#endif
+      discoveryCtrl.update(now, sightings);
     }
 
     InputEvents ev = controls.poll(now);
