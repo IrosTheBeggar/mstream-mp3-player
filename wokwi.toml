@@ -1,0 +1,6 @@
+# Wokwi simulator config. Build the firmware first (pio run -e esp32-s3-wokwi),
+# then "Run" from the Wokwi VS Code extension or wokwi.com.
+[wokwi]
+version = 1
+firmware = '.pio/build/esp32-s3-wokwi/firmware.bin'
+elf = '.pio/build/esp32-s3-wokwi/firmware.elf'

@@ -1,0 +1,27 @@
+# mStream server for developing the dock/sync side against a real backend.
+#
+# The docked player will eventually present its SD card to this server as USB
+# mass-storage; until the hardware exists, point a plain USB flash drive (or a
+# local folder) at ./dev-data/music — to mStream it looks identical.
+#
+#   docker compose -f docker/docker-compose.yml up -d
+#   open http://localhost:3000
+#
+services:
+  mstream:
+    # You're the mStream author — build straight from your local checkout.
+    # Assumes mStream is a sibling of this repo (../../mStream). Override with:
+    #   MSTREAM_SRC=/path/to/mStream docker compose ... up
+    build:
+      context: ${MSTREAM_SRC:-../../mStream}
+    # ...or swap the build: block above for a prebuilt image:
+    #   image: your-registry/mstream:latest
+    container_name: mstream-dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./dev-data/config:/config
+      - ./dev-data/music:/music
+    environment:
+      - NODE_ENV=development
+    restart: unless-stopped
