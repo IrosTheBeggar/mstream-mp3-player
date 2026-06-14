@@ -10,12 +10,17 @@
 
 #include "PlaybackController.h"
 #include "DockController.h"
+#include "DiscoveryController.h"
+#include "ServerCandidate.h"
 #include "Track.h"
 
 #include "audio/SimAudioBackend.h"
 #include "storage/SdStorage.h"
 #include "dock/SimDock.h"
 #include "input/Controls.h"
+#include "net/Wifi.h"
+#include "net/MdnsDiscovery.h"
+#include "net/HttpProbeDiscovery.h"
 #include "ui/DisplayView.h"
 
 // ---- HAL + core instances ----
@@ -24,17 +29,25 @@ static SdStorage storage;
 static SimDock dock;
 static Controls controls;
 static DisplayView view;
+static MdnsDiscovery discovery;
+#ifdef DISCOVERY_PROBE_URL
+// Non-mDNS source for the sim: probe a known address (host.wokwi.internal) so
+// discovery works end-to-end in Wokwi against the real server. See platformio.ini.
+static HttpProbeDiscovery probe(DISCOVERY_PROBE_URL);
+#endif
 
 static PlaybackController player(audio);
 static DockController dockCtrl(dock);
+static DiscoveryController discoveryCtrl;
 
 // ---- UI state ----
-enum class Screen { Library, NowPlaying };
-static Screen screen = Screen::Library;
+enum class Screen { Discovery, Library, NowPlaying };
+static Screen screen = Screen::Discovery;   // boot into "find my server"
 static int selected = 0;
 static int topRow = 0;
 static bool dirty = true;            // needs a redraw
 static uint32_t lastNowPlayingDraw = 0;
+static uint32_t lastDiscoveryDraw = 0;
 
 // A built-in library so the sim shows content even with no SD files loaded.
 static std::vector<Track> demoLibrary() {
@@ -83,6 +96,13 @@ void setup() {
 
   view.begin();
   controls.begin();
+  Wifi::begin();
+  discovery.begin();
+  discovery.start();
+#ifdef DISCOVERY_PROBE_URL
+  probe.begin();
+  probe.start();
+#endif
   dockCtrl.begin();
   storage.begin();
   loadLibrary();
@@ -103,6 +123,39 @@ void setup() {
 
 void loop() {
   const uint32_t now = millis();
+
+  // Discovery screen — find the user's mStream server before anything else.
+  if (screen == Screen::Discovery) {
+    Wifi::loop(now);
+    const bool wifi = Wifi::isConnected();
+    if (wifi) {
+      std::vector<ServerCandidate> sightings = discovery.poll(now);
+#ifdef DISCOVERY_PROBE_URL
+      const auto probed = probe.poll(now);
+      sightings.insert(sightings.end(), probed.begin(), probed.end());
+#endif
+      discoveryCtrl.update(now, sightings);
+    }
+
+    InputEvents ev = controls.poll(now);
+    if (ev.encoderDelta) { discoveryCtrl.moveSelection(ev.encoderDelta); dirty = true; }
+    if (ev.select && discoveryCtrl.selected()) {
+      const ServerCandidate* s = discoveryCtrl.selected();
+      Serial.printf("[disc] selected '%s' @ %s\n", s->instanceName.c_str(), s->baseUrl.c_str());
+      // Slice 2 will pair with this server; for now, continue to the library.
+      screen = Screen::Library;
+      dirty = true;
+    }
+    if (ev.next) { screen = Screen::Library; dirty = true; }  // skip discovery
+
+    if (dirty || (now - lastDiscoveryDraw) >= 500) {
+      view.showDiscovery(discoveryCtrl.servers(), discoveryCtrl.selectedIndex(), wifi);
+      lastDiscoveryDraw = now;
+      dirty = false;
+    }
+    delay(5);
+    return;
+  }
 
   dockCtrl.update(now);
   audio.loop(now);

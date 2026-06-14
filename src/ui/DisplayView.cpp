@@ -39,6 +39,48 @@ void DisplayView::drawHeader(const char* title) {
   tft.setTextDatum(TL_DATUM);
 }
 
+void DisplayView::showDiscovery(const std::vector<ServerCandidate>& servers, int selected, bool wifiConnected) {
+  tft.fillScreen(kBg);
+  drawHeader("Discover");
+
+  if (!wifiConnected) {
+    tft.setTextColor(kDim, kBg);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("Connecting to Wi-Fi...", kW / 2, kH / 2, 2);
+    tft.setTextDatum(TL_DATUM);
+    return;
+  }
+
+  if (servers.empty()) {
+    tft.setTextColor(kAccent, kBg);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("Searching for servers...", kW / 2, kH / 2 - 10, 2);
+    tft.setTextColor(kDim, kBg);
+    tft.drawString("mStream on your network", kW / 2, kH / 2 + 14, 2);
+    tft.setTextDatum(TL_DATUM);
+    return;
+  }
+
+  const int rows = visibleRows();
+  for (int i = 0; i < rows && i < static_cast<int>(servers.size()); ++i) {
+    const int y = kHeaderH + 4 + i * kRowH;
+    const bool sel = (i == selected);
+    if (sel) tft.fillRect(0, y, kW, kRowH, kSelBg);
+
+    const ServerCandidate& s = servers[i];
+    tft.setTextColor(sel ? kFg : kDim, sel ? kSelBg : kBg);
+    tft.setTextDatum(ML_DATUM);
+    String name = s.instanceName.c_str();
+    if (name.length() > 22) name = name.substring(0, 21) + "...";
+    tft.drawString(name, 10, y + 8, 2);
+    // host:port subtitle
+    String addr = String(s.host.c_str()) + ":" + String(s.port);
+    tft.setTextColor(sel ? kAccent : kDim, sel ? kSelBg : kBg);
+    tft.drawString(addr, 10, y + 19, 1);
+  }
+  tft.setTextDatum(TL_DATUM);
+}
+
 void DisplayView::showLibrary(const std::vector<Track>& tracks, int selected, int top) {
   tft.fillScreen(kBg);
   drawHeader("Library");

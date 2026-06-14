@@ -40,6 +40,35 @@ the dev board ships, and runs unchanged in the Wokwi simulator.
 | `IAudioBackend` | `SimAudioBackend` — advances a virtual playback head, no sound | `I2sAudioBackend` — decode MP3/FLAC → PCM5102A over I2S |
 | `IStorage` | `SdStorage` over shared SPI | same, but 4-bit SDIO (`SD_MMC`) for throughput |
 | `IDock` | `SimDock` — DOCK button toggles dock state | USB VBUS / host enumeration + TinyUSB MSC class |
+| `IDiscovery` | scripted sightings in unit tests; `HttpProbeDiscovery` probes a known URL (sim) | `MdnsDiscovery` — browses `_mstream._tcp` via ESP32 mDNS (hardware) |
+
+### Discovery (Slice 1)
+
+The player finds the user's server over the network with zero config. The
+brain — dedupe, TTL pruning, stable sort, selection cursor — lives in
+`DiscoveryController` (`lib/core`, host-tested), fed by one or more `IDiscovery`
+sources whose sightings it merges. The server side is the mStream
+`feat/mdns-discovery` PR.
+
+Two discovery sources:
+
+- **`MdnsDiscovery`** (`src/net`) — browses `_mstream._tcp` and maps each result's
+  TXT records into a base-URL-shaped `ServerCandidate`. **The path on real
+  hardware.**
+- **`HttpProbeDiscovery`** (`src/net`) — probes a fixed base URL (HTTP or HTTPS)
+  and emits a *verified* candidate only if the server answers `GET /api/`. **The
+  path in the simulator.**
+
+Why two: free **Wokwi can't reach your LAN at all** — its default Public Gateway
+gives the sim internet only, so mDNS multicast never sees the host's server.
+Wokwi's **Private Gateway** (paid) bridges the sim to your machine via
+`host.wokwi.internal`; pointing `HttpProbeDiscovery` there (build flag
+`-DDISCOVERY_PROBE_URL`, see `platformio.ini`) makes discovery genuinely
+end-to-end in simulation against the real mStream — over HTTP(S) rather than
+multicast. (Alternatively, on the free Public Gateway, point the probe at a
+public `https://` mStream URL — no gateway app needed.) mDNS itself is validated
+on hardware on the same LAN (the server side is already proven).
+`DiscoveryController` is host-tested regardless of either source.
 
 ### What can't be emulated (and why it's fine)
 
