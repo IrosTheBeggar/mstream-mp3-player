@@ -2,6 +2,7 @@
 #include <vector>
 
 #include "PlaybackController.h"
+#include "ServerCandidate.h"
 #include "Track.h"
 
 // Thin rendering layer over TFT_eSPI. Stateless beyond the panel handle: the
@@ -10,6 +11,7 @@ class DisplayView {
 public:
   void begin();
 
+  void showDiscovery(const std::vector<ServerCandidate>& servers, int selected, bool wifiConnected);
   void showLibrary(const std::vector<Track>& tracks, int selected, int top);
   void showNowPlaying(const Track* track, PlayState state, uint32_t posMs, uint32_t durMs);
   void showDocked();
