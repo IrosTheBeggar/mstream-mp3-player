@@ -2,6 +2,7 @@
 #include <unity.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <thread>
 #include <vector>
@@ -162,6 +163,79 @@ void test_concurrent_producer_and_consumer_keep_order() {
   TEST_ASSERT_EQUAL_INT(kTotal, expected);
 }
 
+void test_discard_bumps_the_epoch_reads_report() {
+  TestRing t(8);
+  PcmRing& r = t.ring;
+  TEST_ASSERT_EQUAL_UINT32(0, r.epoch());
+  auto in = frames(0, 4);
+  r.write(in.data(), 4);
+  std::vector<int16_t> out(8 * 2);
+  uint32_t epoch = 99;
+  TEST_ASSERT_EQUAL_UINT32(2, r.read(kBt, out.data(), 2, &epoch));
+  TEST_ASSERT_EQUAL_UINT32(0, epoch);
+
+  r.discardAll();
+  TEST_ASSERT_EQUAL_UINT32(1, r.epoch());
+  TEST_ASSERT_EQUAL_UINT32(0, r.read(kBt, out.data(), 2, &epoch));  // empty, but reported
+  TEST_ASSERT_EQUAL_UINT32(1, epoch);
+  r.discardAll();
+  r.write(in.data(), 4);
+  TEST_ASSERT_EQUAL_UINT32(4, r.read(kBt, out.data(), 8, &epoch));
+  TEST_ASSERT_EQUAL_UINT32(2, epoch);
+}
+
+void test_epoch_left_alone_for_a_non_consumer() {
+  TestRing t(8);
+  PcmRing& r = t.ring;
+  r.discardAll();
+  std::vector<int16_t> out(2);
+  uint32_t epoch = 42;
+  TEST_ASSERT_EQUAL_UINT32(0, r.read(kSpeaker, out.data(), 1, &epoch));
+  TEST_ASSERT_EQUAL_UINT32(42, epoch);
+}
+
+// Frames always arrive with the epoch of the track they belong to, even while
+// the producer skips tracks under the consumer's feet.
+void test_concurrent_skips_never_mix_epochs() {
+  constexpr int kTracks = 3000;
+  TestRing t(64);
+  PcmRing& r = t.ring;
+  std::atomic<bool> done{false};
+
+  std::thread producer([&r, &done] {
+    for (int track = 1; track <= kTracks; ++track) {
+      r.discardAll();  // epoch == track from here on
+      std::vector<int16_t> in;
+      const int n = 1 + track % 97;
+      for (int i = 0; i < n; ++i) {
+        in.push_back(static_cast<int16_t>(track));
+        in.push_back(static_cast<int16_t>(i));
+      }
+      int written = 0;
+      int spins = track % 5;  // sometimes skip before the track has been written
+      while (written < n && spins-- >= 0) {
+        written += static_cast<int>(r.write(in.data() + 2 * written, static_cast<uint32_t>(n - written)));
+      }
+    }
+    done = true;
+  });
+
+  bool consistent = true;
+  uint32_t seen = 0;
+  std::vector<int16_t> out(16 * 2);
+  while (!done.load() || r.size() > 0) {
+    uint32_t epoch = 0xFFFFFFFFu;
+    const uint32_t got = r.read(kBt, out.data(), 1 + seen % 16, &epoch);
+    for (uint32_t i = 0; i < got; ++i) {
+      if (static_cast<uint32_t>(out[2 * i]) != epoch) consistent = false;
+    }
+    seen += got;
+  }
+  producer.join();
+  TEST_ASSERT_TRUE(consistent);
+  TEST_ASSERT_EQUAL_UINT32(kTracks, r.epoch());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_write_then_read_round_trip);
@@ -171,5 +245,8 @@ int main(int, char**) {
   RUN_TEST(test_only_the_current_consumer_reads);
   RUN_TEST(test_indices_survive_uint32_wrap);
   RUN_TEST(test_concurrent_producer_and_consumer_keep_order);
+  RUN_TEST(test_discard_bumps_the_epoch_reads_report);
+  RUN_TEST(test_epoch_left_alone_for_a_non_consumer);
+  RUN_TEST(test_concurrent_skips_never_mix_epochs);
   return UNITY_END();
 }

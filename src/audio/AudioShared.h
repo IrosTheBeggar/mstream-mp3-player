@@ -8,8 +8,8 @@ struct AudioShared {
   // Sample rate of the frames in the ring. Set before the first frame of a
   // track is written, so an output that has read a frame sees its rate.
   std::atomic<int> rate{44100};
-  // Outputs play silence without reading: pausing is instant and the ring
-  // keeps its audio for resume.
+  // Outputs fade the next 64 frames out, then play silence without reading:
+  // pausing takes ~1.5 ms and the ring keeps its audio for resume.
   std::atomic<bool> paused{false};
   // A track is producing and past its pre-roll, so an empty ring now means an
   // audible gap: the outputs count it as an underrun.

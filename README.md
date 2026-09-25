@@ -49,9 +49,11 @@ use Bluetooth headphones, the speaker, or (later) M5Stack's RCA/3.5 mm module.
    ```
 
    or at runtime with the serial console command `c<name>` (saved on the
-   device). Put the headphones in pairing mode near the Core2; it connects and
-   switches its output to Bluetooth, and reconnects to them the next time it
-   starts up.
+   device). Put the headphones in pairing mode near the Core2; it connects,
+   switches its output to Bluetooth and remembers them: after a drop or a
+   restart it tries them for ~30 s, then scans for a minute, then tries them
+   again, and the headphones can also reconnect by themselves whenever they
+   wake up.
 
 5. **Host unit tests** for the portable core (needs a host C++ compiler, e.g.
    MinGW-w64): `pio test -e native`.
@@ -60,7 +62,17 @@ use Bluetooth headphones, the speaker, or (later) M5Stack's RCA/3.5 mm module.
 
 The three touch buttons under the screen: **prev** (hold: volume down),
 **play/pause** (hold: switch between speaker and Bluetooth), **next** (hold:
-volume up). The playlist is the files under `/music` followed by three built-in
+volume up). Volume is per output: the speaker and Bluetooth keep their own.
+The headphones' own buttons work too (play, pause, next, previous, volume);
+their play resumes paused playback but never starts music from stopped.
+Headphones with AVRCP absolute volume (most current ones) take over the
+Bluetooth volume when they connect: the Core2 and the headphones show the same
+value, and changing it on either side changes both. (If audio already played
+on a connection before they could, the Core2 keeps applying its volume until
+the next connection, and their buttons only change their own level: taking
+over mid-connection could suddenly make it louder.)
+
+The playlist is the files under `/music` followed by three built-in
 test tones.
 
 The serial console (115200 baud) is there for scripted testing:
@@ -84,6 +96,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   PcmRing             PCM ring between the decode task and the active output
   TransportSync       Generation-tagged decode progress (no stale "track ended")
   ToneGen             Built-in test tones
+  BtControl           Bluetooth decisions: media stream (StreamControl), volume
+                      (AbsVolumePolicy, GainRamp), reconnect (ReconnectPlanner)
   hal/                IAudioBackend, IStorage
 src/                  Core2 firmware
   audio/              Core2AudioBackend (decode task), RingOutput, BtSink, SpeakerSink

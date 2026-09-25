@@ -86,7 +86,7 @@ void Core2AudioBackend::request(const std::string& path, Kind kind) {
   if (!task_) return;  // begin() failed
   {
     std::lock_guard<std::mutex> guard(lock_);
-    request_ = {path, kind};
+    request_ = {path, kind, pauses_.load()};
   }
   sync_.post(kind == Kind::Play ? Phase::Pending : Phase::Idle);
   xTaskNotifyGive(task_);
@@ -95,14 +95,31 @@ void Core2AudioBackend::request(const std::string& path, Kind kind) {
 bool Core2AudioBackend::play(const std::string& path, uint32_t) {
   // Un-paused by the decode task once the old track is discarded (start()), so
   // a paused ring never plays a burst of the previous track first.
+  transportPlaying_ = true;
   request(path, Kind::Play);
   return true;
 }
 
-void Core2AudioBackend::stop() { request("", Kind::Stop); }
-void Core2AudioBackend::bench(const std::string& path) { request(path, Kind::Bench); }
-void Core2AudioBackend::pause() { shared_.paused = true; }
-void Core2AudioBackend::resume() { shared_.paused = false; }
+void Core2AudioBackend::stop() {
+  transportPlaying_ = false;
+  request("", Kind::Stop);
+}
+
+void Core2AudioBackend::bench(const std::string& path) {
+  transportPlaying_ = false;
+  request(path, Kind::Bench);
+}
+
+void Core2AudioBackend::pause() {
+  pauses_.fetch_add(1);  // before paused: see start()
+  shared_.paused = true;
+  transportPlaying_ = false;
+}
+
+void Core2AudioBackend::resume() {
+  shared_.paused = false;
+  transportPlaying_ = true;
+}
 
 bool Core2AudioBackend::isPlaying() const {
   const Phase p = sync_.phase();
@@ -127,12 +144,32 @@ void Core2AudioBackend::setOutput(Output output) {
 }
 
 void Core2AudioBackend::setVolume(uint8_t percent) {
-  volume_ = percent > 100 ? 100 : percent;
+  if (percent > 100) percent = 100;
+  if (output_ == Output::Bluetooth) {
+    bt_.setVolume(percent);
+    return;
+  }
+  volume_ = percent;
   speaker_.setVolume(volume_);
-  bt_.setVolume(volume_);
+}
+
+void Core2AudioBackend::stepVolume(int delta) {
+  if (output_ == Output::Bluetooth) {
+    bt_.stepVolume(delta);
+    return;
+  }
+  volume_ = static_cast<uint8_t>(std::min(100, std::max(0, volume_ + delta)));
+  speaker_.setVolume(volume_);
+}
+
+uint8_t Core2AudioBackend::volume() const {
+  return output_ == Output::Bluetooth ? bt_.volume() : volume_;
 }
 
 void Core2AudioBackend::loop(uint32_t nowMs) {
+  // Every pass: the Bluetooth media stream runs while the player plays on it,
+  // and is suspended 3 s after that stops.
+  bt_.update(nowMs, output_ == Output::Bluetooth && transportPlaying_);
   if (nowMs - lastStatsMs_ < 1000) return;
   const uint32_t pulled = bt_.framesPulled();
   stats_.btFramesPerSec =
@@ -251,7 +288,13 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
     runBench(req.path);
     return Work::Idle;
   }
-  shared_.paused = false;  // a newly started track always plays
+  // A newly started track plays, unless the player paused since asking. A
+  // pause() racing with this counts first and sets paused itself, so checking
+  // again after un-pausing leaves it paused whichever store lands last.
+  if (pauses_.load() == req.pauses) {
+    shared_.paused = false;
+    if (pauses_.load() != req.pauses) shared_.paused = true;
+  }
   setText(note_, "");
 
   if (req.path.rfind("tone:", 0) == 0) {

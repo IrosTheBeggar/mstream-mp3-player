@@ -8,6 +8,7 @@
 #include <M5Unified.h>
 #include <esp_chip_info.h>
 
+#include <cmath>
 #include <vector>
 
 #include "PlaybackController.h"
@@ -32,6 +33,9 @@ static PlaybackController player(audio);
 static std::vector<Track> library;  // files found in storage
 
 static constexpr uint32_t kDiagnosticsScreenMs = 3000;
+// Volume keys of headphones without absolute volume (AVRCP passthrough):
+// about 1/16 of the range per press, like a phone.
+static constexpr int kHeadphoneVolumeStep = 6;
 
 static std::vector<Track> builtInTones() {
   return {
@@ -75,9 +79,39 @@ static void toggleOutput() {
   audio.setOutput(audio.output() == Output::Speaker ? Output::Bluetooth : Output::Speaker);
 }
 
+static bool headphonesSetVolume() {
+  return audio.output() == Output::Bluetooth && audio.bluetooth().headphonesControlVolume();
+}
+
+// The active output's volume (the speaker and Bluetooth each keep their own).
+// Bluetooth applies the step on its own task, so the value logged is where
+// it should land (the screen shows the result at its next redraw).
 static void stepVolume(int delta) {
-  audio.setVolume(static_cast<uint8_t>(constrain(audio.volume() + delta, 0, 100)));
-  Serial.printf("[audio] volume %u%%\n", audio.volume());
+  const int expected = constrain(audio.volume() + delta, 0, 100);
+  audio.stepVolume(delta);
+  Serial.printf("[audio] volume %d%% (%s)\n", expected,
+                audio.output() == Output::Speaker ? "speaker"
+                : headphonesSetVolume()           ? "bluetooth, sent to the headphones"
+                                                  : "bluetooth, applied by the Core2");
+}
+
+// Headphone volume keys change the Bluetooth volume, whichever output is active.
+static void stepBluetoothVolume(int delta) {
+  BtSink& bt = audio.bluetooth();
+  bt.stepVolume(delta);
+  Serial.printf("[bt] volume %d%%\n", constrain(bt.volume() + delta, 0, 100));
+}
+
+// Play and pause as commands, not a toggle: in-ear detection sends them too,
+// and a repeat must not undo the first. PLAY only resumes what was paused:
+// putting a bud back in (or fiddling with one) must never start music the
+// listener didn't have playing.
+static void resumeIfPaused() {
+  if (player.state() == PlayState::Paused) player.togglePlayPause();
+}
+
+static void pauseIfPlaying() {
+  if (player.state() == PlayState::Playing) player.togglePlayPause();
 }
 
 static const char* stateName() {
@@ -103,6 +137,23 @@ static void printStats() {
       s.decodeLoad * 100.0f, (unsigned long)s.decodeStackFree, (unsigned long)(h.internalFree / 1024),
       (unsigned long)(h.internalMin / 1024), (unsigned long)(h.psramFree / 1024),
       (int)M5.Power.getBatteryLevel());
+
+  BtSink& bt = audio.bluetooth();
+  if (!bt.connected() && audio.output() != Output::Bluetooth) return;
+  // vol/control: the Bluetooth volume and who applies it (headphones = AVRCP
+  // absolute volume, asking = waiting for them to accept it, software = the
+  // Core2). headphones: their last reported volume. gain: the Core2's gain
+  // stage (-2.0dB with absolute volume). gap: longest wait between two data
+  // callbacks since the last line (~10-30 ms is healthy).
+  const BtSink::Stats b = bt.stats();
+  char gain[12] = "mute";
+  if (b.gainQ15 > 0) snprintf(gain, sizeof(gain), "%.1fdB", 20.0f * log10f(b.gainQ15 / 32768.0f));
+  char headset[8] = "?";
+  if (b.headsetVolume >= 0) snprintf(headset, sizeof(headset), "%d", b.headsetVolume);
+  Serial.printf("[stats] bt vol=%u%% control=%s headphones=%s/127 gain=%s stream=%s gap=%lums "
+                "events_dropped=%lu btapp_stack_free=%lu\n",
+                (unsigned)b.volume, b.volumeControl, headset, gain, b.stream,
+                (unsigned long)b.maxGapMs, (unsigned long)b.eventsDropped, (unsigned long)b.appTaskStackFree);
 }
 
 static void listTracks() {
@@ -129,7 +180,7 @@ static SerialConsole console({
       audio.bench(tracks[i].path);
     },
     [] {
-      audio.bluetooth().forgetDevice();
+      audio.bluetooth().forgetDevice(/*waitMs=*/3000);  // before the restart
       Serial.println("[bt] forgot the remembered device; restarting to scan");
       Serial.flush();
       ESP.restart();
@@ -151,23 +202,65 @@ static void handleButtons() {
   if (M5.BtnC.wasHold()) stepVolume(+10);
 }
 
+// Link changes and headphone buttons, queued by BtSink on the Bluetooth tasks.
 static void handleBluetooth() {
-  switch (audio.bluetooth().takeEvent()) {
-    case BtSink::Event::Connected:
-      Serial.printf("[bt] connected%s%s\n", audio.bluetooth().deviceName()[0] ? " to " : "",
-                    audio.bluetooth().deviceName());
-      audio.setOutput(Output::Bluetooth);
-      diag::logHeap("bt-link");
-      break;
-    case BtSink::Event::Disconnected:
-      Serial.println("[bt] disconnected");
-      // Like a phone: don't carry on through the speaker, pause.
-      if (audio.output() == Output::Bluetooth && player.state() == PlayState::Playing) {
-        player.togglePlayPause();
-      }
-      break;
-    case BtSink::Event::None:
-      break;
+  BtSink& bt = audio.bluetooth();
+  for (BtSink::Event e = bt.takeEvent(); e != BtSink::Event::None; e = bt.takeEvent()) {
+    switch (e) {
+      case BtSink::Event::Connected:
+        Serial.printf("[bt] connected%s%s\n", bt.deviceName()[0] ? " to " : "", bt.deviceName());
+        audio.setOutput(Output::Bluetooth);
+        diag::logHeap("bt-link");
+        break;
+      case BtSink::Event::Disconnected:
+        Serial.println("[bt] disconnected");
+        // Like a phone: don't carry on through the speaker, pause.
+        if (audio.output() == Output::Bluetooth) pauseIfPlaying();
+        break;
+      case BtSink::Event::Suspended:
+        // The headphones stopped the stream themselves: show it as paused;
+        // play (here or on them) starts it again.
+        if (audio.output() == Output::Bluetooth) pauseIfPlaying();
+        break;
+      case BtSink::Event::VolumeChanged:
+        Serial.printf("[bt] volume now %u%%\n", bt.volume());  // the screen follows at its next redraw
+        break;
+      case BtSink::Event::Play:
+        if (player.state() != PlayState::Paused) {
+          Serial.printf("[bt] headphones: play (ignored: %s)\n", stateName());
+          break;
+        }
+        Serial.println("[bt] headphones: play");
+        if (bt.connected() && audio.output() != Output::Bluetooth) audio.setOutput(Output::Bluetooth);
+        resumeIfPaused();
+        break;
+      case BtSink::Event::Pause:
+        Serial.println("[bt] headphones: pause");
+        if (audio.output() != Output::Bluetooth) break;  // not the speaker's playback
+        pauseIfPlaying();
+        // They pick their next key from the stream: suspend it now, so the
+        // next press is PLAY. Also when we were paused already (paused on the
+        // Core2, the stream still in its 3 s tail): this press did nothing,
+        // the next one plays.
+        bt.suspendPromptly();
+        break;
+      case BtSink::Event::Next:
+        Serial.println("[bt] headphones: next");
+        player.next();
+        break;
+      case BtSink::Event::Prev:
+        Serial.println("[bt] headphones: previous");
+        player.prev();
+        break;
+      case BtSink::Event::VolumeUp:
+        stepBluetoothVolume(+kHeadphoneVolumeStep);
+        break;
+      case BtSink::Event::VolumeDown:
+        stepBluetoothVolume(-kHeadphoneVolumeStep);
+        break;
+      case BtSink::Event::None:
+        break;
+    }
   }
 }
 
@@ -210,6 +303,7 @@ static void render() {
     }
   }
   np.volume = "Volume " + String(audio.volume()) + "%";
+  if (headphonesSetVolume()) np.volume += " (headphones)";
   np.note = audio.note().c_str();
 
   const auto& s = audio.stats();

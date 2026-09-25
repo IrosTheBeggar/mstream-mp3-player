@@ -32,9 +32,11 @@ uint32_t PcmRing::write(const int16_t* frames, uint32_t count) {
   return n;
 }
 
-uint32_t PcmRing::read(uint8_t id, int16_t* out, uint32_t count) {
+uint32_t PcmRing::read(uint8_t id, int16_t* out, uint32_t count, uint32_t* epoch) {
   std::unique_lock<std::mutex> lock(lock_, std::try_to_lock);
   if (!lock.owns_lock() || id != consumer_.load(std::memory_order_relaxed)) return 0;
+  // Under the lock, so it can't change between here and the frames below.
+  if (epoch) *epoch = epoch_.load(std::memory_order_relaxed);
 
   const uint32_t r = readIdx_.load(std::memory_order_relaxed);
   const uint32_t n = std::min(count, writeIdx_.load(std::memory_order_acquire) - r);
@@ -50,6 +52,7 @@ uint32_t PcmRing::discardAll() {
   std::lock_guard<std::mutex> lock(lock_);
   const uint32_t w = writeIdx_.load(std::memory_order_relaxed);
   readIdx_.store(w, std::memory_order_release);
+  epoch_.store(epoch_.load(std::memory_order_relaxed) + 1, std::memory_order_release);
   return w;
 }
 

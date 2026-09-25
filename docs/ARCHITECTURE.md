@@ -14,7 +14,9 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
 ```
               +---------------------------------------------------------------+
   lib/core/   |  PlaybackController   PcmRing   TransportSync   ToneGen       |  portable C++17,
-  (portable)  |  Track, hal/IAudioBackend, hal/IStorage                       |  host-tested
+  (portable)  |  BtControl (StreamControl, AbsVolumePolicy)  ReconnectPlanner  |  host-tested
+              |  GainRamp  VolumeMath                                         |
+              |  Declicker  DeclickReader  Track  hal/*                       |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -42,11 +44,25 @@ The rules that keep it deadlock- and glitch-free:
   hands the right to read to one output; the other reads nothing. Switching
   output is a consumer handover: the decoder never touches M5.Speaker, and
   neither `M5.Speaker.end()` nor ESP32-A2DP's `end()` is ever called.
-- **The Bluetooth callback never blocks or logs.** It takes what the ring has,
-  pads with silence, and only *tries* the ring's mutex (taken for real only by
-  `setConsumer()` and `discardAll()`).
-- **Pause happens in the outputs.** They play silence without reading, so pause
-  is instant and the buffered audio waits for resume.
+- **The Bluetooth callback never blocks or logs.** It reads the ring only
+  while Bluetooth is the consumer (through its `DeclickReader`), takes what the
+  ring has, pads with silence, and only *tries* the ring's mutex (taken for
+  real only by `setConsumer()` and `discardAll()`). Its gain stage
+  (`GainRamp`) takes new targets through atomic words.
+- **Pause happens in the outputs.** They fade the next 64 frames (~1.5 ms)
+  out, then play silence without reading, so pause is near-instant and the
+  buffered audio waits for resume, which fades back in.
+- **Nothing starts, stops or jumps with a click.** Each output reads the ring
+  through a `DeclickReader`: audio fades in after any gap; when it breaks off
+  (underrun, output switch) the last frame is held and ramped to 0 over 64
+  frames; a skip (`discardAll()` bumps the ring's epoch) becomes a 64-frame
+  crossfade from that held frame into the new track. At full level it is
+  bit-exact. The speaker always queues that fade, because M5.Speaker drops
+  straight to 0 when its queue runs dry. Test tones have 5 ms attack/release.
+  On Bluetooth the fader runs before the gain stage; both only ever multiply
+  by at most 1, so together they never add level. A new or resumed stream
+  (a gap of 100 ms or more between data callbacks, or ESP-IDF's flush) fades
+  in from silence; the data callback detects that itself.
 - **Track changes don't wait for the outputs.** A skip calls `discardAll()`;
   a natural end drains the ring first (`finished()` = end of file *and* ring
   empty), so a new track's sample rate never plays into the old track's tail.
@@ -67,7 +83,8 @@ The rules that keep it deadlock- and glitch-free:
 | Task | Core | Priority | Notes |
 |---|---|---|---|
 | Bluetooth controller + host (Bluedroid) | 0 | high | ~70 KB internal RAM, claimed at boot |
-| A2DP data callback | 0 (BT task) | — | every ~30 ms, pulls 44.1 kHz stereo |
+| A2DP data callback | 0 (ESP-IDF's A2DP source media task, BtA2dSourceT) | — | 128 frames at a time, several per ~30 ms tick; applies the volume ramp; never blocks or logs |
+| ESP32-A2DP app task (BtAppT) | 0 | 15 | connection, stream and AVRCP handlers (`PlayerA2dp`); 6 KB stack; blocks 10 s at stack-up |
 | decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack) |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake |
 | M5.Speaker | 1 | 2 | mixes/resamples to 44.1 kHz mono |
@@ -78,9 +95,81 @@ The rules that keep it deadlock- and glitch-free:
 `BtSink` connects to the first headphones whose name contains the configured
 name (`BT_SINK_NAME` build flag, or the console's `c<name>`, saved in NVS).
 Without a name it only accepts a device practically touching the Core2;
-signal strength alone once picked a TV in the next room. It reconnects to the
-last device for ~30 s after boot, then scans again. On connect the output
-switches to Bluetooth; a real disconnect pauses playback.
+signal strength alone once picked a TV in the next room. It remembers the
+device it connected to: after a boot or a drop it tries it for ~30 s, then
+scans again, and all along it stays connectable (never discoverable) so the
+headphones can reconnect by themselves; other devices are refused. Scanning
+that finds nothing for a minute goes back to trying the remembered device, and
+a failed connection (also a first pairing) always leads to a retry or a new
+scan, never to a dead end (`ReconnectPlanner`, host-tested against a model of
+the library's reconnect logic). On connect the output switches to Bluetooth; a
+real disconnect pauses playback.
+
+`BtSink` wraps `PlayerA2dp`, a subclass of ESP32-A2DP's `BluetoothA2DPSource`
+(in `BtSink.cpp`) that makes it behave like a phone. All its state lives on
+the library's app task (BtAppT); the loop task only posts work to it (also
+forgetting the remembered headphones). The decisions are made in `BtControl`
+(lib/core), which ties the media stream and the volume together and is
+host-tested with both; `PlayerA2dp` feeds it the stack's events and carries
+out what it returns.
+
+- **Volume** (`AbsVolumePolicy`, host-tested). The library's volume path is
+  off (it scaled the PCM with truncation and echoed every headphone volume
+  change back). Headphones that report volume changes get the Bluetooth volume
+  as AVRCP absolute volume; once they accept it (or change it themselves) the
+  Core2's gain stays at a fixed -2 dB of headroom, and their buttons change
+  the volume shown without it being sent back. Others get a software volume
+  (dB-linear over 40 dB). Every link starts in software mode at the safe level
+  and at most 60 %. The gain stage (`GainRamp`) falls in ~23 ms, rises at
+  most ~20 dB/s, and fades in over ~46 ms when a stream (re)starts. The
+  speaker and Bluetooth keep separate volumes.
+  Hearing safety: what the listener hears is the headphones' own level (unknown
+  until they report it) times our gain. So the handover only happens before
+  anything has played on a link: the first SET_ABSOLUTE_VOLUME (the probe)
+  goes out while no media flows, a new stream waits until it is answered (or
+  ~1.5 s for AVRCP to show up, up to 3 s once it is connected), and the first
+  stream fades in from silence straight to the handed-over level. Once media
+  has flowed on a link (a START out counts), nothing is sent to the
+  headphones and our gain never rises except through the listener's own
+  volume step: capabilities, an ACCEPT or a VOLUME_CHANGED that come later
+  leave that link in software mode (their buttons then change their own level
+  only), and the next link hands over. A notification counts as an echo of
+  ours only if it matches a command they haven't confirmed yet (within 4/127,
+  or what their ACCEPT said), so their own steps always reach the UI. Volume
+  steps travel as steps to BtAppT, so quick presses are never lost.
+- **Media stream** (`StreamControl`, host-tested against the event orderings
+  ESP-IDF produces). Started (CHECK_SRC_RDY, then START) as soon as Bluetooth
+  is the output and the player plays, retried after 1, 3, then every 10 s;
+  suspended 3 s after playback stops, or at once after a pause from the
+  headphones' key: ESP-IDF's AVRCP target can't report the play status, so
+  they pick PLAY or PAUSE for their button from the stream. One media command
+  at a time, and one unanswered for 3 s is given up on, as is a START that was
+  acknowledged (ESP-IDF's stop_tx acks any pending command with SUCCESS) but
+  never reported STARTED. The data callback fades in after a START or a new
+  link; a late callback alone (congestion, a flash write) doesn't restart
+  anything. A stream the headphones suspend themselves pauses the
+  player and isn't restarted until it plays again; one they start themselves
+  (ESP-IDF suspends it at once) is not ours and doesn't pause anything. The
+  library's own media handling (heartbeat starts, its connecting-state
+  guesses) is bypassed.
+- **Buttons.** The AVRCP target is on: play, pause/stop, next, previous and
+  volume keys become `BtSink::Event`s, queued to the loop. Play and pause are
+  commands, never toggles: in-ear detection sends them. Play only resumes
+  paused playback; it never starts music from stopped.
+- **On-device checks** the host tests can't cover (the glue in `BtSink.cpp`:
+  event and address filters, what the library does between our hooks): boot
+  with the headphones in their case, then take them out (they reconnect by
+  themselves); switch them off for 2 minutes and back on (paged again after
+  the minute of scanning); fresh NVS with pairing mode left mid-connect (a
+  new scan follows, no reboot needed); `f` then reboot (scans); while
+  playing, caps arriving late must log `applied by the Core2 ... until the
+  next connection` and their buttons must not make it louder; pause from
+  the headphones then play from them within 3 s.
+- **Diagnostics.** Once per connection: the SBC configuration, the delay
+  report, the headphones' AVRCP features and notifications, and how long a
+  stream took to start. The `s` stats add a `[stats] bt` line: volume and who
+  applies it, gain, stream state, longest gap between data callbacks, dropped
+  events, BtAppT stack left.
 
 ## Storage
 
@@ -117,6 +206,5 @@ library index and sync from mStream replace this scan (see Roadmap).
    mStream's session-centroid scoring plus its BPM/key/artist filters.
 4. **Server discovery without mDNS** (it doesn't work in Docker installs), then
    the device-code pairing flow.
-5. Headphone buttons (AVRCP) mapped to the player, a resampler for 48 kHz on
-   Bluetooth, the RCA/3.5 mm module (`cfg.external_speaker.module_rca`), SD card
-   verification, power management.
+5. A resampler for 48 kHz on Bluetooth, the RCA/3.5 mm module
+   (`cfg.external_speaker.module_rca`), SD card verification, power management.

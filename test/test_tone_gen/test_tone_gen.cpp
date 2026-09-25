@@ -59,11 +59,43 @@ void test_peak_level_matches_dbfs() {
   TEST_ASSERT_INT_WITHIN(5, 4125, peak);
 }
 
+void test_fades_in_and_out_over_5_ms() {
+  ToneGen t;
+  constexpr uint32_t kFrames = 44100 / 10;  // 100 ms
+  constexpr uint32_t kEdge = 220;            // 5 ms at 44.1 kHz
+  t.start(44100, 1000.0f, -18.0f, ToneGen::Channels::Both, kFrames);
+  std::vector<int16_t> out(kFrames * 2);
+  TEST_ASSERT_EQUAL_UINT32(kFrames, t.generate(out.data(), kFrames));
+
+  TEST_ASSERT_EQUAL_INT16(0, out[0]);
+  TEST_ASSERT_EQUAL_INT16(0, out[2 * (kFrames - 1)]);
+  auto peak = [&out](uint32_t from, uint32_t to) {
+    int p = 0;
+    for (uint32_t i = from; i < to; ++i) p = std::max(p, std::abs(static_cast<int>(out[2 * i])));
+    return p;
+  };
+  // First and last 1 ms: at most 44/220 of full level (~825 of 4125).
+  TEST_ASSERT_LESS_OR_EQUAL_INT(4125 * 45 / kEdge, peak(0, 44));
+  TEST_ASSERT_LESS_OR_EQUAL_INT(4125 * 45 / kEdge, peak(kFrames - 44, kFrames));
+  TEST_ASSERT_INT_WITHIN(5, 4125, peak(kEdge, kFrames - kEdge));  // full level in between
+}
+
+void test_very_short_tone_is_all_ramp() {
+  ToneGen t;
+  t.start(44100, 1000.0f, 0.0f, ToneGen::Channels::Both, 50);
+  std::vector<int16_t> out(50 * 2);
+  TEST_ASSERT_EQUAL_UINT32(50, t.generate(out.data(), 50));
+  for (int16_t s : out) TEST_ASSERT_LESS_OR_EQUAL_INT(32767 * 25 / 220 + 1, std::abs(static_cast<int>(s)));
+  TEST_ASSERT_EQUAL_INT16(0, out[2 * 49]);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_chunked_output_matches_one_call);
   RUN_TEST(test_left_only_silences_right);
   RUN_TEST(test_stops_after_duration);
   RUN_TEST(test_peak_level_matches_dbfs);
+  RUN_TEST(test_fades_in_and_out_over_5_ms);
+  RUN_TEST(test_very_short_tone_is_all_ramp);
   return UNITY_END();
 }

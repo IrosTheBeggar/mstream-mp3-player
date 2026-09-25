@@ -69,8 +69,16 @@ public:
 
   void setOutput(Output output);
   Output output() const { return output_; }
+  // The active output's volume, 0-100 %. The speaker and Bluetooth keep their
+  // own, like a phone: with absolute volume the Bluetooth one is the
+  // headphones' own volume (their buttons change it), and a loud speaker
+  // setting must never be sent to headphones.
   void setVolume(uint8_t percent);
-  uint8_t volume() const { return volume_; }
+  // Up or down from the active output's current volume. On Bluetooth the
+  // step is applied where the volume lives (BtSink), so quick presses and
+  // headphone changes in between are never lost.
+  void stepVolume(int delta);
+  uint8_t volume() const;
 
   BtSink& bluetooth() { return bt_; }
   const Stats& stats() const { return stats_; }  // refreshed by loop() once a second
@@ -88,6 +96,7 @@ private:
   struct Request {
     std::string path;
     Kind kind = Kind::Stop;
+    uint32_t pauses = 0;  // pauses_ when it was made
   };
 
   static void taskEntry(void* self);
@@ -136,8 +145,18 @@ private:
   std::atomic<uint64_t> busyUs_{0};      // decode task time spent producing, current track
   std::atomic<uint64_t> producedFrames_{0};
 
+  // Counts pause() calls. The decode task un-pauses a newly started track
+  // (start()) only if the player hasn't paused since asking for it: a Next
+  // then a Pause must stay paused.
+  std::atomic<uint32_t> pauses_{0};
+
+  // Loop task only.
   Output output_ = Output::Speaker;
-  uint8_t volume_ = 30;
+  uint8_t volume_ = 30;  // the speaker's; Bluetooth's is in BtSink
+  // The player's transport: playing since play()/resume(), until pause()/stop().
+  // Unlike isPlaying() it doesn't blink between tracks or while the decode
+  // task catches up, so the Bluetooth stream follows the player's intent.
+  bool transportPlaying_ = false;
   Stats stats_{};
   uint32_t lastStatsMs_ = 0;
   uint32_t lastBtFrames_ = 0;

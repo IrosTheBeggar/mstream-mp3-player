@@ -28,8 +28,9 @@ public:
   // Copies up to `count` frames; returns how many fit.
   uint32_t write(const int16_t* frames, uint32_t count);
   uint32_t space() const;
-  // Drops every unread frame (track change). Returns the index the next
-  // written frame will get, i.e. the start of the new track in readPos() terms.
+  // Drops every unread frame (track change) and bumps epoch(). Returns the
+  // index the next written frame will get, i.e. the start of the new track in
+  // readPos() terms.
   uint32_t discardAll();
 
   // ---- control ----
@@ -41,10 +42,15 @@ public:
   // ---- consumer ----
   // Copies up to `count` frames into `out` and returns how many. Returns 0
   // without blocking if `id` isn't the current consumer or the ring is busy
-  // with setConsumer()/discardAll().
-  uint32_t read(uint8_t id, int16_t* out, uint32_t count);
+  // with setConsumer()/discardAll(). When it did get to read (even 0 frames)
+  // it stores the epoch the frames belong to in `*epoch`; otherwise `*epoch`
+  // is left alone. A consumer that sees it change knows the audio jumped (a
+  // skip) and can crossfade.
+  uint32_t read(uint8_t id, int16_t* out, uint32_t count, uint32_t* epoch = nullptr);
   // Total frames consumed so far (free-running).
   uint32_t readPos() const { return readIdx_.load(std::memory_order_acquire); }
+  // Number of discardAll() calls so far (free-running).
+  uint32_t epoch() const { return epoch_.load(std::memory_order_acquire); }
 
   // ---- either side ----
   uint32_t size() const;  // frames ready to read
@@ -57,5 +63,6 @@ private:
   std::atomic<uint32_t> writeIdx_;
   std::atomic<uint32_t> readIdx_;
   std::atomic<uint8_t> consumer_{kNoConsumer};
+  std::atomic<uint32_t> epoch_{0};  // written only under lock_
   std::mutex lock_;
 };
