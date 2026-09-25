@@ -1,161 +1,115 @@
-// mstream-mp3-player — firmware entry point.
+// mstream-mp3-player — firmware entry point (M5Stack Core2).
 //
-// Wires the portable core (PlaybackController, DockController) to the hardware
-// HAL implementations and runs the UI loop. Everything hardware-specific is
-// behind a HAL interface, so the core stays unit-testable on the host.
+// Bring-up build: starts the board, the local library and the Bluetooth stack,
+// and shows what it found on screen and over serial. Playback comes next.
 
 #include <Arduino.h>
-#include <utility>  // std::move
+#include <BluetoothA2DPSource.h>
+#include <M5Unified.h>
+#include <esp_chip_info.h>
+
+#include <atomic>
 #include <vector>
 
-#include "PlaybackController.h"
-#include "DockController.h"
-#include "Track.h"
+// Not used yet: linked so this build proves the decoders build alongside
+// M5Unified and ESP32-A2DP.
+#include <AudioGeneratorFLAC.h>
+#include <AudioGeneratorMP3.h>
 
-#include "audio/SimAudioBackend.h"
-#include "storage/SdStorage.h"
-#include "dock/SimDock.h"
-#include "input/Controls.h"
+#include "Track.h"
+#include "app/Diagnostics.h"
+#include "storage/LocalStorage.h"
 #include "ui/DisplayView.h"
 
-// ---- HAL + core instances ----
-static SimAudioBackend audio;
-static SdStorage storage;
-static SimDock dock;
-static Controls controls;
+static LocalStorage storage;
 static DisplayView view;
+static BluetoothA2DPSource a2dp;
+static AudioGeneratorMP3 mp3;
+static AudioGeneratorFLAC flac;
 
-static PlaybackController player(audio);
-static DockController dockCtrl(dock);
+static std::vector<Track> tracks;
+static std::atomic<int> btDevicesSeen{0};
 
-// ---- UI state ----
-enum class Screen { Library, NowPlaying };
-static Screen screen = Screen::Library;
-static int selected = 0;
-static int topRow = 0;
-static bool dirty = true;            // needs a redraw
-static uint32_t lastNowPlayingDraw = 0;
-
-// A built-in library so the sim shows content even with no SD files loaded.
-static std::vector<Track> demoLibrary() {
-  return {
-    {"/demo/midnight_drive.mp3", "Midnight Drive", "Neon Cassette", 215000},
-    {"/demo/paper_planes.mp3", "Paper Planes", "The Slow Hours", 188000},
-    {"/demo/glass_oceans.mp3", "Glass Oceans", "Marlowe", 242000},
-    {"/demo/no_signal.mp3", "No Signal", "Held Static", 167000},
-    {"/demo/afterglow.mp3", "Afterglow", "June & The Tide", 203000},
-    {"/demo/lowlight.mp3", "Lowlight", "Cabinet", 198000},
-    {"/demo/dust.mp3", "Dust", "Ferrous", 221000},
-    {"/demo/citrus.mp3", "Citrus", "Pale Green Things", 175000},
-    {"/demo/undertow.mp3", "Undertow", "Marlowe", 256000},
-    {"/demo/static_bloom.mp3", "Static Bloom", "Held Static", 184000},
-  };
+// For now Bluetooth only lists the audio devices it can see (never connects),
+// so you can find your headphones' name for local.ini.
+static bool onBtDeviceFound(const char* name, esp_bd_addr_t, int rssi) {
+  btDevicesSeen++;
+  Serial.printf("[bt] found \"%s\" rssi=%d\n", name, rssi);
+  return false;
 }
 
-static void loadLibrary() {
-  std::vector<Track> tracks;
-  if (storage.available()) tracks = storage.listTracks();
-  if (tracks.empty()) {
-    Serial.println("[lib] using built-in demo library");
-    tracks = demoLibrary();
-  } else {
-    Serial.printf("[lib] loaded %u tracks from SD\n", (unsigned)tracks.size());
-  }
-  player.setPlaylist(std::move(tracks));
-  selected = 0;
-  topRow = 0;
+static int32_t silence(Frame* frames, int32_t count) {
+  memset(frames, 0, sizeof(Frame) * count);
+  return count;
 }
 
-static void clampScroll() {
-  const int n = static_cast<int>(player.playlist().size());
-  if (selected < 0) selected = 0;
-  if (selected >= n) selected = n - 1;
-  const int rows = view.visibleRows();
-  if (selected < topRow) topRow = selected;
-  if (selected >= topRow + rows) topRow = selected - rows + 1;
-  if (topRow < 0) topRow = 0;
+static String kb(uint32_t bytes) { return String(bytes / 1024) + "K"; }
+
+static std::vector<DisplayView::Row> diagnosticsRows() {
+  esp_chip_info_t chip;
+  esp_chip_info(&chip);
+  const diag::Heap h = diag::heap();
+  const int battery = M5.Power.getBatteryLevel();
+  const bool charging = M5.Power.isCharging() == m5::Power_Class::is_charging;
+
+  std::vector<DisplayView::Row> rows;
+  rows.push_back({"Board", diag::boardName()});
+  rows.push_back({"Power chip", diag::pmicName()});
+  rows.push_back({"IMU", diag::imuName()});
+  rows.push_back({"Chip", String(ESP.getChipModel()) + " rev " + (chip.revision / 100) + "." +
+                              (chip.revision % 100)});
+  rows.push_back({"Flash", String(ESP.getFlashChipSize() / (1024 * 1024)) + " MB"});
+  rows.push_back({"PSRAM", kb(ESP.getPsramSize()) + " (" + kb(h.psramFree) + " free)"});
+  rows.push_back({"Last reset", diag::resetReason()});
+  rows.push_back({"Battery", String(battery) + "%" + (charging ? " charging" : "")});
+  rows.push_back({"Library", String(storage.name()) + ", " + tracks.size() + " tracks"});
+  rows.push_back({"Bluetooth", String("scanning, ") + btDevicesSeen.load() + " seen"});
+  rows.push_back({"RAM free", kb(h.internalFree) + " (min " + kb(h.internalMin) + ", block " +
+                                  kb(h.internalLargest) + ")"});
+  rows.push_back({"Uptime", String(millis() / 1000) + " s"});
+  return rows;
 }
 
 void setup() {
-  Serial.begin(115200);
-  delay(200);
-  Serial.println("\nmstream-mp3-player booting...");
+  auto cfg = M5.config();
+  cfg.serial_baudrate = 115200;  // M5Unified leaves Serial off unless asked
+  cfg.internal_mic = false;      // the mic shares GPIO0 with the speaker's I2S clock
+  M5.begin(cfg);
+  Serial.println("\nmstream-mp3-player bring-up");
+  diag::logHeap("boot");
 
   view.begin();
-  controls.begin();
-  dockCtrl.begin();
-  storage.begin();
-  loadLibrary();
 
-  // Dock handoff side effects (the core stays storage/audio-agnostic).
-  dockCtrl.onDock = []() {
-    player.stop();
-    storage.releaseToHost();
-    screen = Screen::Library;
-    dirty = true;
-  };
-  dockCtrl.onUndock = []() {
-    storage.reclaim();
-    loadLibrary();
-    dirty = true;
-  };
+  storage.begin();
+  tracks = storage.listTracks();
+  Serial.printf("[lib] %s: %u tracks\n", storage.name(), (unsigned)tracks.size());
+  for (const Track& t : tracks) Serial.printf("[lib]   %s\n", t.path.c_str());
+  diag::logHeap("storage");
+
+  a2dp.set_local_name("mStream Player");
+  a2dp.set_ssid_callback(onBtDeviceFound);
+  a2dp.set_data_callback_in_frames(silence);
+  a2dp.start();
+  diag::logHeap("bt");
+
+  for (const auto& row : diagnosticsRows()) {
+    Serial.printf("[diag] %-10s %s\n", row.label.c_str(), row.value.c_str());
+  }
 }
 
 void loop() {
+  M5.update();
+
   const uint32_t now = millis();
-
-  dockCtrl.update(now);
-  audio.loop(now);
-  player.update(now);
-
-  // While docked, the card belongs to the host — show the docked screen and
-  // ignore everything except the dock toggle (handled in dockCtrl.update).
-  if (dockCtrl.state() == DockState::Docked) {
-    if (dirty) {
-      view.showDocked();
-      dirty = false;
-    }
-    delay(5);
-    return;
+  static uint32_t lastDraw = 0;
+  static uint32_t lastLog = 0;
+  if (now - lastDraw >= 1000) {
+    view.showDiagnostics(diagnosticsRows());
+    lastDraw = now;
   }
-
-  InputEvents ev = controls.poll(now);
-
-  if (screen == Screen::Library) {
-    if (ev.encoderDelta) {
-      selected += ev.encoderDelta;
-      clampScroll();
-      dirty = true;
-    }
-    if (ev.select || ev.play) {
-      player.play(static_cast<size_t>(selected));
-      screen = Screen::NowPlaying;
-      dirty = true;
-    }
-    if (ev.next) { player.next(); screen = Screen::NowPlaying; dirty = true; }
-    if (ev.prev) { player.prev(); screen = Screen::NowPlaying; dirty = true; }
-  } else {  // NowPlaying
-    if (ev.play) { player.togglePlayPause(); dirty = true; }
-    if (ev.next) { player.next(); dirty = true; }
-    if (ev.prev) { player.prev(); dirty = true; }
-    if (ev.select) { screen = Screen::Library; dirty = true; }
+  if (now - lastLog >= 10000) {
+    diag::logHeap("steady");
+    lastLog = now;
   }
-
-  // Render. NowPlaying also refreshes a few times a second for the progress bar.
-  if (screen == Screen::Library) {
-    if (dirty) {
-      view.showLibrary(player.playlist(), selected, topRow);
-      dirty = false;
-    }
-  } else {
-    if (dirty || (now - lastNowPlayingDraw) >= 250) {
-      const Track* t = player.currentTrack();
-      view.showNowPlaying(t, player.state(), player.positionMs(),
-                          t ? t->durationMs : 0);
-      lastNowPlayingDraw = now;
-      dirty = false;
-    }
-  }
-
-  delay(5);
+  delay(20);
 }

@@ -1,0 +1,10 @@
+# M5Stack Core2, 16MB flash.
+# One 4MB app slot (no OTA yet) + ~11.9MB LittleFS holding test audio until the
+# player reads from the SD card. The filesystem partition keeps the "spiffs"
+# label/subtype because that is what LittleFS.begin() and `pio run -t uploadfs`
+# look for. coredump keeps crash evidence across resets.
+# Name,   Type, SubType,  Offset,   Size
+nvs,      data, nvs,      0x9000,   0x5000
+factory,  app,  factory,  0x10000,  0x400000
+spiffs,   data, spiffs,   0x410000, 0xBE0000
+coredump, data, coredump, 0xFF0000, 0x10000

@@ -1,22 +1,25 @@
 #pragma once
+#include <Arduino.h>
+
 #include <vector>
 
-#include "PlaybackController.h"
-#include "Track.h"
-
-// Thin rendering layer over TFT_eSPI. Stateless beyond the panel handle: the
-// app owns UI state and tells the view what to draw.
+// Rendering on the Core2's 320x240 LCD (M5GFX). The app owns all state and
+// tells the view what to draw. Text is drawn over its own background with
+// padding, so refreshing a value in place doesn't flicker.
 class DisplayView {
 public:
+  struct Row {
+    String label;
+    String value;
+  };
+
   void begin();
 
-  void showLibrary(const std::vector<Track>& tracks, int selected, int top);
-  void showNowPlaying(const Track* track, PlayState state, uint32_t posMs, uint32_t durMs);
-  void showDocked();
-
-  // Rows of the library list that fit on screen.
-  int visibleRows() const { return 8; }
+  // Bring-up screen: a title bar plus label/value rows. Call again to refresh.
+  void showDiagnostics(const std::vector<Row>& rows);
 
 private:
   void drawHeader(const char* title);
+
+  bool diagnosticsShown_ = false;
 };
