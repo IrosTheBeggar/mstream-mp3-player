@@ -1,95 +1,122 @@
 # Architecture
 
-A portable ESP32-S3 music player that plays from a local SD card and, when
-dropped into a USB-C dock, presents that card to a host running
-[mStream](https://mstream.io) as a mass-storage device for sync.
+A portable music player on the M5Stack Core2 (original ESP32, 16 MB flash,
+8 MB PSRAM). It plays MP3 and FLAC from local storage to Bluetooth headphones
+or the built-in speaker, and will keep its library in sync with an
+[mStream](https://mstream.io) server over WiFi.
 
-The guiding rule: **portable logic knows nothing about hardware.** Everything
-device-specific sits behind a small HAL interface, so the interesting logic
-(transport, playlist, dock handoff) is built and unit-tested on the laptop while
-the dev board ships, and runs unchanged in the Wokwi simulator.
+The guiding rule is unchanged from the first scaffold: **portable logic knows
+nothing about hardware.** Anything that can be tested on the laptop lives in
+`lib/core/` and is covered by `pio test -e native`; `src/` holds the Core2 side.
 
 ## Layers
 
 ```
-              +-----------------------------------------------+
-  lib/core/   |  PlaybackController     DockController         |   framework-agnostic C++17
-  (portable)  |  Track                  (injected clock +      |   -> also compiles for `native`
-              |                          callbacks)            |      host unit tests
-              +----------------+------------------+------------+
-                               | HAL interfaces   |
-                               v                  v
-              IAudioBackend   IStorage          IDock
-                               |                  |
-              +----------------+------------------+------------+
-  src/        |  SimAudioBackend  SdStorage   SimDock          |   Arduino / ESP32 only
-  (hardware)  |  Controls         DisplayView (TFT_eSPI)       |   built for the board + Wokwi
-              +-----------------------------------------------+
+              +---------------------------------------------------------------+
+  lib/core/   |  PlaybackController   PcmRing   TransportSync   ToneGen       |  portable C++17,
+  (portable)  |  Track, hal/IAudioBackend, hal/IStorage                       |  host-tested
+              +------------------------------+--------------------------------+
+                                             |
+              +------------------------------+--------------------------------+
+  src/        |  audio/  Core2AudioBackend (decode task), RingOutput,         |  Arduino-ESP32 3.x
+  (Core2)     |          BtSink (ESP32-A2DP source), SpeakerSink (M5.Speaker) |  (pioarduino),
+              |  storage/LocalStorage   ui/DisplayView   app/SerialConsole    |  M5Unified/M5GFX,
+              |  main.cpp: buttons, Bluetooth events, rendering               |  ESP8266Audio
+              +---------------------------------------------------------------+
 ```
 
-- **`lib/core/`** — `PlaybackController`, `DockController`, `Track`, and the HAL
-  interface headers (`hal/`). No `Arduino.h`, no globals, time is injected via
-  `update(nowMs)`. This is what `pio test -e native` compiles and tests.
-- **`src/`** — the Arduino entry point (`main.cpp`) plus the concrete HAL
-  implementations and the UI/input code. Not compiled for `native`.
-
-## HAL seams
-
-| Interface | Sim implementation (Wokwi) | Real board (next) |
-|-----------|----------------------------|-------------------|
-| `IAudioBackend` | `SimAudioBackend` — advances a virtual playback head, no sound | `I2sAudioBackend` — decode MP3/FLAC → PCM5102A over I2S |
-| `IStorage` | `SdStorage` over shared SPI | same, but 4-bit SDIO (`SD_MMC`) for throughput |
-| `IDock` | `SimDock` — DOCK button toggles dock state | USB VBUS / host enumeration + TinyUSB MSC class |
-
-### What can't be emulated (and why it's fine)
-
-- **Real I2S audio output** — no simulator drives an audio DAC. The decode
-  pipeline can still *run* in sim; only the final PCM sink is stubbed.
-- **USB-OTG device mode (the MSC dock handoff)** — no simulator models it. The
-  `IDock` seam keeps this stubbed so the *state machine* around it is still
-  fully testable (see `test/test_dock`).
-
-Both wait for the physical board, and neither blocks UI/logic/sync development.
-
-## Dock state machine
-
-`DockController` owns the handoff so playback/storage stay decoupled:
+## Audio pipeline
 
 ```
-        Inserted                         Removed
-Undocked --------> [onDock(): stop +    Docked --------> [reclaimMassStorage();
-                    release SD to host]                   onUndock(): remount +
-         exposeMassStorage()                              rescan library]
-         state = Docked                                   state = Undocked
+ source:  /music on LittleFS (SD card later: same fs::FS code)  |  built-in tone: tracks
+            └ AudioFileSourceFS (+ID3 for MP3)                   |    └ ToneGen
+                └ AudioGeneratorMP3 (libmad) | AudioGeneratorFLAC (libFLAC)
+ decode task (core 1, prio 2, 16 KB internal stack) ─► RingOutput ─► PcmRing (PSRAM, 64k frames ≈ 1.5 s)
+                                                                        ├─► BtSink: ESP32-A2DP data callback (Bluetooth task, 44.1 kHz)
+                                                                        └─► SpeakerSink: pump task ─► M5.Speaker.playRaw (44.1 kHz out, mono)
 ```
 
-Side effects are injected as `onDock` / `onUndock` callbacks (wired in
-`main.cpp`), so the controller itself depends on nothing but `IDock`.
+The rules that keep it deadlock- and glitch-free:
 
-## Pin map (Wokwi sim)
+- **One ring, two consumers, one active at a time.** `PcmRing::setConsumer()`
+  hands the right to read to one output; the other reads nothing. Switching
+  output is a consumer handover: the decoder never touches M5.Speaker, and
+  neither `M5.Speaker.end()` nor ESP32-A2DP's `end()` is ever called.
+- **The Bluetooth callback never blocks or logs.** It takes what the ring has,
+  pads with silence, and only *tries* the ring's mutex (taken for real only by
+  `setConsumer()` and `discardAll()`).
+- **Pause happens in the outputs.** They play silence without reading, so pause
+  is instant and the buffered audio waits for resume.
+- **Track changes don't wait for the outputs.** A skip calls `discardAll()`;
+  a natural end drains the ring first (`finished()` = end of file *and* ring
+  empty), so a new track's sample rate never plays into the old track's tail.
+- **The decoder never blocks inside an output.** `RingOutput::ConsumeSample`
+  returns false when the ring is full or the pass's budget (1024 frames) is
+  spent; the generator keeps that sample and retries it on its next `loop()`.
+  The decode task re-checks requests and yields between passes.
+- **Requests are generations.** `play()`/`stop()` post a new generation to
+  `TransportSync`; the decode task's progress reports for anything older are
+  dropped, so a stale "ended" can't skip the track that was just requested.
+- **Bluetooth is 44.1 kHz only.** ESP-IDF's SBC source takes nothing else, so
+  other rates fail on Bluetooth (the player skips them) until a resampler lands.
+  The speaker takes any rate: `RingOutput` keeps the rate in an `int` because
+  ESP8266Audio's base class stores it in a `uint16_t`.
 
-Set via build flags in `platformio.ini`; mirrored for editors in `include/Pins.h`.
+## Tasks and cores
 
-| Function | GPIO | Notes |
-|----------|------|-------|
-| TFT SCLK / MOSI / MISO | 12 / 11 / 13 | SPI bus, shared with SD |
-| TFT CS / DC / RST / BL | 10 / 9 / 8 / 14 | |
-| SD CS | 7 | shares the SPI bus above |
-| Encoder CLK / DT / SW | 4 / 5 / 6 | KY-040 |
-| Buttons Play / Prev / Next | 15 / 16 / 17 | active-low, `INPUT_PULLUP` |
-| DOCK (sim dock toggle) | 18 | becomes USB detection on hardware |
+| Task | Core | Priority | Notes |
+|---|---|---|---|
+| Bluetooth controller + host (Bluedroid) | 0 | high | ~70 KB internal RAM, claimed at boot |
+| A2DP data callback | 0 (BT task) | — | every ~30 ms, pulls 44.1 kHz stereo |
+| decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack) |
+| speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake |
+| M5.Speaker | 1 | 2 | mixes/resamples to 44.1 kHz mono |
+| Arduino loop (UI, console, buttons) | 1 | 1 | redraws at 4 Hz |
 
-On the real board the SD card moves to dedicated 4-bit SDIO pins; the display is
-an ST7789 (`-DST7789_DRIVER`, `env:hardware`) instead of Wokwi's ILI9341.
+## Bluetooth
+
+`BtSink` connects to the first headphones whose name contains the configured
+name (`BT_SINK_NAME` build flag, or the console's `c<name>`, saved in NVS).
+Without a name it only accepts a device practically touching the Core2;
+signal strength alone once picked a TV in the next room. It reconnects to the
+last device for ~30 s after boot, then scans again. On connect the output
+switches to Bluetooth; a real disconnect pauses playback.
+
+## Storage
+
+`LocalStorage` mounts the SD card (shared SPI bus with the LCD, 25 MHz) if one
+is present, otherwise the ~11.9 MB LittleFS partition, and lists the `.mp3` and
+`.flac` files under `/music` (recursive, sorted, capped at 200). The planned
+library index and sync from mStream replace this scan (see Roadmap).
+
+## Build notes
+
+- **pioarduino** (Arduino-ESP32 3.3.12 / ESP-IDF 5.5.5) instead of the official
+  platform, which is stuck on Arduino 2.0.17. On Windows, build from PowerShell
+  with `MSYSTEM` unset.
+- **IRAM is the scarcest resource** on the original ESP32 (128 KB). Bluetooth
+  plus M5Unified overflowed it with the prebuilt Arduino libraries. Two fixes:
+  `lib_archive = yes` (pioarduino otherwise links every library object), and
+  `tools/iram_diet.py`, which moves the libc functions that the rev-1 PSRAM
+  workaround pins in IRAM back to flash (this rev-3 chip doesn't need it).
+  About 7 KB of IRAM is left. Adding WiFi will need more: likely pioarduino's
+  `custom_sdkconfig` to rebuild the framework without the workaround.
 
 ## Roadmap
 
-1. **Real decode in sim** — split `IAudioBackend` into a decoder + an `IPcmSink`
-   so MP3/FLAC decode runs and is verifiable in Wokwi (sink = null), and the
-   same decoder feeds I2S on hardware.
-2. **`I2sAudioBackend`** on the PCM5102A.
-3. **USB-MSC dock** via TinyUSB; real VBUS/enumeration detection in `IDock`.
-4. **mStream sync** — auto-detect the docked player and reconcile the library
-   (server side develops independently against a USB stick today).
-5. **Power-path / battery UI** — TP4056 + load-sharing, gauge on the now-playing
-   screen.
+1. **Library index + sync over WiFi.** mStream exports a manifest and compact
+   index files (tracks, albums, artists, strings) for the synced selection; the
+   player mirrors files to the SD card under the server's paths, downloads with
+   resumable requests, and swaps the index in atomically. First fill by card
+   reader; WiFi for updates. WiFi and Bluetooth don't share the radio well, so
+   sync is its own mode.
+2. **Browsing UI:** artists, albums (92 px covers from mStream's thumbnails),
+   playlists, queue, resume after power-off.
+3. **AutoDJ:** mStream precomputes a similar-tracks table (top-K neighbours per
+   synced track, from its 1280-d embeddings) that the player walks with
+   mStream's session-centroid scoring plus its BPM/key/artist filters.
+4. **Server discovery without mDNS** (it doesn't work in Docker installs), then
+   the device-code pairing flow.
+5. Headphone buttons (AVRCP) mapped to the player, a resampler for 48 kHz on
+   Bluetooth, the RCA/3.5 mm module (`cfg.external_speaker.module_rca`), SD card
+   verification, power management.
