@@ -309,7 +309,11 @@ bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out) {
 }
 
 void Core2AudioBackend::closeDecoder() {
-  if (decoder_ && decoder_->isRunning()) decoder_->stop();
+  // Always stop(), even when the decoder already says it isn't running: at the
+  // end of a file AudioGeneratorFLAC clears `running` itself but only stop()
+  // deletes its libFLAC decoder (~100 KB PSRAM + ~2.5 KB internal per track).
+  // stop() is safe to repeat for both the MP3 and FLAC generators.
+  if (decoder_) decoder_->stop();
   decoder_ = nullptr;
   id3_.reset();
   if (file_) file_->close();
