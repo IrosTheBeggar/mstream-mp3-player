@@ -115,7 +115,7 @@ private:
   std::unique_ptr<RingOutput> out_;
   std::unique_ptr<AudioFileSourceFS> file_;
   std::unique_ptr<AudioFileSourceID3> id3_;  // per MP3 track
-  std::unique_ptr<AudioGeneratorMP3> mp3_;   // created once, reused
+  std::unique_ptr<AudioGeneratorMP3> mp3_;   // created fresh for each track
   std::unique_ptr<AudioGeneratorFLAC> flac_;
   AudioGenerator* decoder_ = nullptr;        // the one decoding now, or null
   const char* codec_ = "";

@@ -4,8 +4,11 @@
 #include <esp_heap_caps.h>
 
 namespace {
-constexpr int kChannel = 0;           // M5.Speaker virtual channel
-constexpr uint8_t kMaxVolume = 200;   // of 255: the 1 W speaker distorts near the top
+constexpr int kChannel = 0;  // M5.Speaker virtual channel
+// Loudest M5.Speaker master volume that can't clip. M5 sums L+R into mono with
+// a gain of 2 * magnification(16) * (volume * 255)^2 / 2^36, which is unity at
+// volume ~181.7; at 200 it is +1.7 dB and loud masters hard-clip.
+constexpr uint8_t kMaxVolume = 181;
 constexpr int kTopUpWaitMs = 20;      // wait this long for a full buffer before sending a short one
 }  // namespace
 

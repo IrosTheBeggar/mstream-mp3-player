@@ -69,8 +69,6 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
   fs_ = fs;
   out_.reset(new RingOutput(*ring_, shared_));
   if (fs_) file_.reset(new AudioFileSourceFS(*fs_));
-  mp3_.reset(new AudioGeneratorMP3());
-  flac_.reset(new AudioGeneratorFLAC());
 
   bt_.begin(*ring_, shared_, btSinkName);
   speaker_.begin(*ring_, shared_);
@@ -85,6 +83,7 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
 // ---- control side (loop task) ----
 
 void Core2AudioBackend::request(const std::string& path, Kind kind) {
+  if (!task_) return;  // begin() failed
   {
     std::lock_guard<std::mutex> guard(lock_);
     request_ = {path, kind};
@@ -94,7 +93,8 @@ void Core2AudioBackend::request(const std::string& path, Kind kind) {
 }
 
 bool Core2AudioBackend::play(const std::string& path, uint32_t) {
-  shared_.paused = false;  // a newly started track always plays
+  // Un-paused by the decode task once the old track is discarded (start()), so
+  // a paused ring never plays a burst of the previous track first.
   request(path, Kind::Play);
   return true;
 }
@@ -251,6 +251,7 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
     runBench(req.path);
     return Work::Idle;
   }
+  shared_.paused = false;  // a newly started track always plays
   setText(note_, "");
 
   if (req.path.rfind("tone:", 0) == 0) {
@@ -289,13 +290,20 @@ bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out) {
   if (!fs_ || (!isMp3 && ext != ".flac")) return false;
   if (!file_->open(path.c_str())) return false;
 
-  AudioGenerator* decoder = flac_.get();
+  // A fresh generator per track: both keep state across begin() (FLAC its
+  // sample buffer, which can replay freed memory; MP3 its last sample). Their
+  // big buffers are allocated in begin() anyway, so this costs little.
+  AudioGenerator* decoder;
   AudioFileSource* source = file_.get();
   if (isMp3) {  // MP3 reads its title/artist from ID3 tags on the way in
     id3_.reset(new AudioFileSourceID3(file_.get()));
     id3_->RegisterMetadataCB(onMetadata, this);
     source = id3_.get();
+    mp3_.reset(new AudioGeneratorMP3());
     decoder = mp3_.get();
+  } else {
+    flac_.reset(new AudioGeneratorFLAC());
+    decoder = flac_.get();
   }
   if (!decoder->begin(source, out)) {
     closeDecoder();
@@ -378,13 +386,18 @@ void Core2AudioBackend::runBench(const std::string& path) {
     Serial.printf("[bench] can't decode %s\n", path.c_str());
     return;
   }
-  const int64_t t0 = esp_timer_get_time();
+  // Times only the decoding, and yields between bursts so the UI loop runs.
+  int64_t busyUs = 0;
   for (;;) {
     counter.budget = CountingOutput::kBurst;
-    if (!decoder_->loop()) break;
+    const int64_t t0 = esp_timer_get_time();
+    const bool more = decoder_->loop();
+    busyUs += esp_timer_get_time() - t0;
+    if (!more) break;
     if (counter.rate > 0 && counter.frames >= static_cast<uint64_t>(counter.rate) * kBenchSeconds) break;
+    vTaskDelay(1);
   }
-  const double seconds = (esp_timer_get_time() - t0) / 1e6;
+  const double seconds = busyUs / 1e6;
   closeDecoder();
   const double audio = counter.rate > 0 ? static_cast<double>(counter.frames) / counter.rate : 0;
   Serial.printf("[bench] %s: %.1f s of %d Hz audio in %.2f s = %.1fx realtime (%.1f%% of a core), "
