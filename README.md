@@ -67,10 +67,10 @@ The headphones' own buttons work too (play, pause, next, previous, volume);
 their play resumes paused playback but never starts music from stopped.
 Headphones with AVRCP absolute volume (most current ones) take over the
 Bluetooth volume when they connect: the Core2 and the headphones show the same
-value, and changing it on either side changes both. (If audio already played
-on a connection before they could, the Core2 keeps applying its volume until
-the next connection, and their buttons only change their own level: taking
-over mid-connection could suddenly make it louder.)
+value, and changing it on either side changes both. (Headphones whose remote
+control only comes up after playback started take over mid-song: the music
+goes silent for about a second, then fades back in over ~2 s, so the
+change of their level is never heard as a jump.)
 
 The playlist is the files under `/music` followed by three built-in
 test tones.
@@ -82,7 +82,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `n` / `p` | next / previous | `i<n>` | play track n (0-based) |
 | space | play / pause | `b<n>` | benchmark decoding track n |
 | `o` | switch output | `c<name>` | headphones to connect to |
-| `+` / `-` | volume | | |
+| `+` / `-` | volume | `h<n>` | Bluetooth headroom -n dB, 0-12 (default 2, not saved) |
 | `s` / `l` | stats / list tracks | | |
 | `f` | forget the paired headphones and restart | | |
 

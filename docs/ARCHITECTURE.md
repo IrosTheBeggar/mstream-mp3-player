@@ -124,19 +124,32 @@ out what it returns.
   most ~20 dB/s, and fades in over ~46 ms when a stream (re)starts. The
   speaker and Bluetooth keep separate volumes.
   Hearing safety: what the listener hears is the headphones' own level (unknown
-  until they report it) times our gain. So the handover only happens before
-  anything has played on a link: the first SET_ABSOLUTE_VOLUME (the probe)
-  goes out while no media flows, a new stream waits until it is answered (or
-  ~1.5 s for AVRCP to show up, up to 3 s once it is connected), and the first
-  stream fades in from silence straight to the handed-over level. Once media
-  has flowed on a link (a START out counts), nothing is sent to the
-  headphones and our gain never rises except through the listener's own
-  volume step: capabilities, an ACCEPT or a VOLUME_CHANGED that come later
-  leave that link in software mode (their buttons then change their own level
-  only), and the next link hands over. A notification counts as an echo of
+  until they report it) times our gain, and SET_ABSOLUTE_VOLUME changes their
+  level at once. So a command the listener didn't ask for only reaches them
+  while nothing from us is heard. Before anything has played on a link, the
+  first SET_ABSOLUTE_VOLUME (the probe) goes out while no media flows, a new
+  stream waits until it is answered (or ~1.5 s for AVRCP to show up, up to
+  3 s once it is connected), and the first stream fades in from silence
+  straight to the handed-over level. Headphones whose AVRCP comes up after
+  playback started (Powerbeats Pro: ~7 s after the link) get a late probe:
+  the volume is capped at 60 % as on a new link, our gain fades to silence
+  (~23 ms), and the command goes out 800 ms later, once that silence has
+  passed ESP-IDF's frame queue and the headphones' own buffer (or once
+  nothing has streamed for 800 ms: at once after a longer pause). The
+  stream keeps running, silent; an answer within 1 s
+  hands over and our gain rises from silence at the gain stage's slow rate
+  (~2.4 s to the headroom), no answer brings back the software level the
+  same way. A later ACCEPT or echo of a volume we sent after an unanswered
+  probe also hands over, our gain rising slowly from the software level;
+  their own change first means the listener sets their level there, and the
+  link stays in software mode. Apart from the listener's own volume step and
+  the fade back after a stream restarts, our gain only rises at that slow
+  rate once audio has played. A notification counts as an echo of
   ours only if it matches a command they haven't confirmed yet (within 4/127,
   or what their ACCEPT said), so their own steps always reach the UI. Volume
-  steps travel as steps to BtAppT, so quick presses are never lost.
+  steps travel as steps to BtAppT, so quick presses are never lost. The
+  headroom (-2 dB) can be changed from the console (`h<n>`, not saved) to
+  find where loud masters start to distort.
 - **Media stream** (`StreamControl`, host-tested against the event orderings
   ESP-IDF produces). Started (CHECK_SRC_RDY, then START) as soon as Bluetooth
   is the output and the player plays, retried after 1, 3, then every 10 s;
@@ -162,14 +175,17 @@ out what it returns.
   themselves); switch them off for 2 minutes and back on (paged again after
   the minute of scanning); fresh NVS with pairing mode left mid-connect (a
   new scan follows, no reboot needed); `f` then reboot (scans); while
-  playing, caps arriving late must log `applied by the Core2 ... until the
-  next connection` and their buttons must not make it louder; pause from
-  the headphones then play from them within 3 s.
+  playing, caps arriving late must log `came up after playback started:
+  dipping`, the music must go silent for about a second and then fade
+  back in over ~2 s with `control=headphones` in the stats (or `no answer`
+  and the software level), never jumping up; their buttons must then change
+  the volume shown; pause from the headphones then play from them within
+  3 s.
 - **Diagnostics.** Once per connection: the SBC configuration, the delay
   report, the headphones' AVRCP features and notifications, and how long a
   stream took to start. The `s` stats add a `[stats] bt` line: volume and who
-  applies it, gain, stream state, longest gap between data callbacks, dropped
-  events, BtAppT stack left.
+  applies it, gain, headroom, stream state, longest gap between data
+  callbacks, dropped events, BtAppT stack left.
 
 ## Storage
 

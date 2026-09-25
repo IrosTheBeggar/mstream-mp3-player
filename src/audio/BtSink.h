@@ -9,6 +9,7 @@
 #include "DeclickReader.h"
 #include "GainRamp.h"
 #include "PcmRing.h"
+#include "VolumeMath.h"
 #include "audio/AudioShared.h"
 
 class PlayerA2dp;  // BtSink.cpp: ESP32-A2DP's source with the fixes below
@@ -33,10 +34,10 @@ class PlayerA2dp;  // BtSink.cpp: ESP32-A2DP's source with the fixes below
 // absolute volume get the Bluetooth volume as their own, their buttons change
 // it, and the PCM goes out at full resolution with a fixed 2 dB of headroom.
 // Headphones without it get a software volume. Every link starts at the safe
-// software level and at most 60 %, and the volume is only handed to the
-// headphones before anything has played on a link (else Software until the
-// next one): once audio has played, nothing but the user's own volume step
-// makes it louder. Our gain falls fast and rises slowly.
+// software level and at most 60 %. The volume is handed to the headphones
+// before anything plays on a link, or, when their remote control comes up
+// later, during a short dip to silence (their level changes at once when
+// asked). Our gain falls fast and rises slowly.
 //
 // The media stream (StreamControl) starts as soon as there is something to
 // play and is suspended 3 s after playback stops, again like a phone
@@ -71,6 +72,7 @@ public:
     const char* volumeControl;  // "headphones" (absolute volume), "asking", "software"
     int headsetVolume;          // last absolute volume the headphones reported (0-127), -1 unknown
     uint16_t gainQ15;           // our gain stage now (32768 = 0 dB, headroom included)
+    uint16_t headroomQ15;       // the fixed attenuation it keeps (setHeadroomDb())
     const char* stream;         // "started", "starting", "suspending", "suspended", "held off"
     uint32_t maxGapMs;          // longest wait between data callbacks since the last stats()
     uint32_t eventsDropped;     // events lost because the loop didn't collect them
@@ -100,6 +102,10 @@ public:
   // are applied on BtAppT, in order; volume() shows the result a moment later.
   void setVolume(uint8_t percent);
   void stepVolume(int delta);  // relative to whatever it is by then (no lost steps)
+  // Diagnostic: the fixed attenuation our gain stage keeps, -db dB (default
+  // 2, vol::kHeadroomDb), to find where loud masters start to distort in SBC.
+  // Not saved. Loop task; applied on BtAppT.
+  void setHeadroomDb(uint8_t db);
   // The player was paused from the headphones' key: suspend the stream as
   // soon as the pause reaches it, not 3 s later. ESP-IDF's AVRCP target can't
   // tell them the play status, so they pick their next key (PLAY or PAUSE)
@@ -156,12 +162,14 @@ private:
   std::atomic<uint8_t> volume_{kDefaultVolume};
   std::atomic<uint8_t> control_{0};  // AbsVolumePolicy::Mode
   std::atomic<int16_t> headsetVolume_{-1};
+  std::atomic<uint16_t> headroom_{vol::kHeadroomQ15};
 
   // Loop task only.
   bool wantAudio_ = false;      // as last handed to BtAppT
   uint32_t nextTickMs_ = 0;
   int16_t unsentVolume_ = -1;   // a setVolume() BtAppT's queue had no room for yet
   int unsentStep_ = 0;          // stepVolume()s it had no room for yet
+  int16_t unsentHeadroom_ = -1; // a setHeadroomDb() it had no room for yet
   bool forgetPending_ = false;  // a forgetDevice() not handed to BtAppT yet
   bool suspendPending_ = false; // a suspendPromptly() waiting for the pause to reach BtAppT
   uint32_t suspendPendingMs_ = 0;

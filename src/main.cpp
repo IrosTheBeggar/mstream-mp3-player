@@ -143,17 +143,19 @@ static void printStats() {
   // vol/control: the Bluetooth volume and who applies it (headphones = AVRCP
   // absolute volume, asking = waiting for them to accept it, software = the
   // Core2). headphones: their last reported volume. gain: the Core2's gain
-  // stage (-2.0dB with absolute volume). gap: longest wait between two data
-  // callbacks since the last line (~10-30 ms is healthy).
+  // stage (the headroom with absolute volume). headroom: its fixed
+  // attenuation (-2.0dB unless set with h<n>). gap: longest wait between two
+  // data callbacks since the last line (~10-30 ms is healthy).
   const BtSink::Stats b = bt.stats();
   char gain[12] = "mute";
   if (b.gainQ15 > 0) snprintf(gain, sizeof(gain), "%.1fdB", 20.0f * log10f(b.gainQ15 / 32768.0f));
   char headset[8] = "?";
   if (b.headsetVolume >= 0) snprintf(headset, sizeof(headset), "%d", b.headsetVolume);
-  Serial.printf("[stats] bt vol=%u%% control=%s headphones=%s/127 gain=%s stream=%s gap=%lums "
+  Serial.printf("[stats] bt vol=%u%% control=%s headphones=%s/127 gain=%s headroom=%.1fdB stream=%s gap=%lums "
                 "events_dropped=%lu btapp_stack_free=%lu\n",
-                (unsigned)b.volume, b.volumeControl, headset, gain, b.stream,
-                (unsigned long)b.maxGapMs, (unsigned long)b.eventsDropped, (unsigned long)b.appTaskStackFree);
+                (unsigned)b.volume, b.volumeControl, headset, gain, 20.0f * log10f(b.headroomQ15 / 32768.0f),
+                b.stream, (unsigned long)b.maxGapMs, (unsigned long)b.eventsDropped,
+                (unsigned long)b.appTaskStackFree);
 }
 
 static void listTracks() {
@@ -189,6 +191,10 @@ static SerialConsole console({
       audio.bluetooth().setSinkName(name);
       Serial.printf("[bt] headphones: %s (saved)\n",
                     name[0] ? ("name contains \"" + String(name) + "\"").c_str() : "any very close device");
+    },
+    [](int db) {
+      audio.bluetooth().setHeadroomDb(static_cast<uint8_t>(db));
+      Serial.printf("[bt] headroom -%d dB (until restart; the stats line shows it once applied)\n", db);
     },
 });
 
@@ -346,7 +352,8 @@ void setup() {
   Serial.printf("[bt] headphones: %s\n",
                 headphones[0] ? ("name contains \"" + String(headphones) + "\"").c_str() : "any very close device");
   Serial.println("[console] n/p next/prev, space play/pause, o output, +/- volume, s stats, l list, "
-                 "f forget bt; with Enter: i<n> play, b<n> bench, c<name> headphones name");
+                 "f forget bt; with Enter: i<n> play, b<n> bench, c<name> headphones name, "
+                 "h<n> bt headroom -n dB");
 }
 
 void loop() {

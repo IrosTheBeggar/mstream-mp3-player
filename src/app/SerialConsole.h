@@ -10,6 +10,7 @@
 // and commands that take an argument, ended with Enter:
 //   i<n> play track n (0-based)   b<n> benchmark decoding track n
 //   c<name> connect to headphones whose name contains <name> (saved)
+//   h<n> Bluetooth headroom -n dB, 0-12 (a diagnostic, not saved; default 2)
 class SerialConsole {
 public:
   struct Actions {
@@ -24,6 +25,7 @@ public:
     std::function<void(int)> bench;
     std::function<void()> forgetBluetooth;
     std::function<void(const char*)> setHeadphonesName;
+    std::function<void(int)> setHeadroom;
   };
 
   explicit SerialConsole(Actions actions) : actions_(std::move(actions)) {}
@@ -32,7 +34,7 @@ public:
   void poll();
 
 private:
-  enum class Pending { None, PlayIndex, Bench, HeadphonesName };
+  enum class Pending { None, PlayIndex, Bench, HeadphonesName, Headroom };
 
   Actions actions_;
   Pending pending_ = Pending::None;  // a command waiting for its argument

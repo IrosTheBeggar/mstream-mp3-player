@@ -10,8 +10,9 @@ AbsVolumePolicy::AbsVolumePolicy(uint8_t percent) : percent_(clampPercent(percen
 }
 
 uint16_t AbsVolumePolicy::targetGain() const {
-  if (mode_ == Mode::Absolute) return vol::kHeadroomQ15;
-  return vol::mulQ15(vol::kHeadroomQ15, vol::softwareVolumeQ15(percent_));
+  if (ducked_) return 0;
+  if (mode_ == Mode::Absolute) return headroom_;
+  return vol::mulQ15(headroom_, vol::softwareVolumeQ15(percent_));
 }
 
 void AbsVolumePolicy::retarget(Actions& a, bool snap) {
@@ -73,13 +74,47 @@ void AbsVolumePolicy::clearSent() {
   for (Sent& s : sent_) s.valid = false;
 }
 
+// The probe steps the headphones' own volume, from a level we can't know, at
+// once. So it only goes out before anything has been heard on this link, or
+// while what they play from us is silent (a late probe dips first).
 void AbsVolumePolicy::maybeProbe(Actions& a, uint32_t nowMs) {
-  // Only before anything has been heard on this link: the probe steps the
-  // headphones' own volume, from a level we can't know.
-  if (!linked_ || !capable_ || probed_ || !canHandOver() || mode_ != Mode::Software) return;
+  if (!linked_ || !capable_ || probed_ || mode_ != Mode::Software) return;
   probed_ = true;
+  setMode(a, Mode::Probing);
+  if (canHandOver()) {
+    sendProbe(a, nowMs);  // gain unchanged: still attenuating
+    return;
+  }
+  ducked_ = true;
+  duckMs_ = nowMs;
+  if (percent_ > kMaxLinkUpPercent) setPercent(a, kMaxLinkUpPercent);  // as on a new link
+  // Down to silence: faded while media may flow, at once while none does.
+  retarget(a, /*snap=*/!streaming_);
+  sendPending_ = true;
+  sendIfSilent(a, nowMs);  // at once after a pause; else tick() sends it
+}
+
+// What the headphones play from us is silent: the dip has had kDuckSettleMs
+// to pass ESP-IDF's frame queue and their buffer, or nothing has flowed for
+// that long (what they still had from before a stop has played out).
+bool AbsVolumePolicy::silentAtHeadphones(uint32_t nowMs) const {
+  return nowMs - duckMs_ >= kDuckSettleMs || (!streaming_ && nowMs - stopMs_ >= kDuckSettleMs);
+}
+
+void AbsVolumePolicy::sendIfSilent(Actions& a, uint32_t nowMs) {
+  if (sendPending_ && silentAtHeadphones(nowMs)) sendProbe(a, nowMs);
+}
+
+void AbsVolumePolicy::sendProbe(Actions& a, uint32_t nowMs) {
+  sendPending_ = false;
   probeStartMs_ = nowMs;
-  setMode(a, Mode::Probing);  // gain unchanged: still attenuating
+  // A late probe: the silence is snapped as well. If no audio data flowed
+  // since the dip (a START out, or a stream the stack hasn't started), the
+  // gain stage never saw that target, and the answer's would replace it: a
+  // resumed stream would then fade back quickly to the level heard before,
+  // at the headphones' new level. A snap is kept until it is applied (a
+  // no-op once the fade has reached 0).
+  if (ducked_) retarget(a, /*snap=*/true);
   send(a, nowMs);
 }
 
@@ -94,6 +129,21 @@ void AbsVolumePolicy::handOver(Actions& a) {
   a.lift = true;
 }
 
+// After audio has flowed: the headphones apply our volume (or less) now, and
+// our gain rises to the headroom at the gain stage's own slow rate, from
+// silence after a dip or from the software level.
+void AbsVolumePolicy::handOverPlaying(Actions& a) {
+  keepSending_ = false;
+  endDip();
+  setMode(a, Mode::Absolute);
+  retarget(a, /*snap=*/false);
+}
+
+void AbsVolumePolicy::endDip() {
+  ducked_ = false;
+  sendPending_ = false;
+}
+
 AbsVolumePolicy::Actions AbsVolumePolicy::linkUp(uint32_t nowMs) {
   Actions a;
   if (linked_) return a;  // a repeated report must not snap or re-probe
@@ -103,6 +153,7 @@ AbsVolumePolicy::Actions AbsVolumePolicy::linkUp(uint32_t nowMs) {
   streaming_ = false;
   probed_ = false;
   keepSending_ = false;
+  endDip();
   headsetAbs_ = -1;
   clearSent();
   if (percent_ > kMaxLinkUpPercent) {
@@ -122,6 +173,7 @@ AbsVolumePolicy::Actions AbsVolumePolicy::linkDown() {
   // no new capabilities arrive for the next one.
   probed_ = false;
   keepSending_ = false;
+  endDip();
   streaming_ = false;
   heard_ = false;
   headsetAbs_ = -1;
@@ -147,8 +199,10 @@ AbsVolumePolicy::Actions AbsVolumePolicy::capabilities(bool volumeChange, uint32
 
 AbsVolumePolicy::Actions AbsVolumePolicy::streamActive(bool active, uint32_t nowMs) {
   Actions a;
+  if (streaming_ && !active) stopMs_ = nowMs;
   streaming_ = active;
   if (active && linked_) heard_ = true;
+  sendIfSilent(a, nowMs);
   maybeProbe(a, nowMs);
   return a;
 }
@@ -159,7 +213,7 @@ bool AbsVolumePolicy::audioReady(uint32_t nowMs) const {
   if (heard_ || capsKnown_) return true;
   if (nowMs - linkUpMs_ < kCapsWaitMs) return false;
   // AVRCP is up and its capabilities are on their way: worth a little longer,
-  // since a link that has played can't hand the volume over any more.
+  // since on a link that has played the handover takes a dip to silence.
   return !(avrcUp_ && nowMs - avrcUpMs_ < kCapsReplyWaitMs);
 }
 
@@ -168,13 +222,14 @@ AbsVolumePolicy::Actions AbsVolumePolicy::avrcpDown() {
   avrcUp_ = false;
   capsKnown_ = false;
   capable_ = false;
-  probed_ = false;  // a new AVRCP connection gets its own probe, if nothing was heard yet
+  probed_ = false;  // a new AVRCP connection gets its own probe
   keepSending_ = false;
+  endDip();
   headsetAbs_ = -1;
   clearSent();
   if (mode_ != Mode::Software) {
     setMode(a, Mode::Software);
-    retarget(a, /*snap=*/false);  // down, quickly
+    retarget(a, /*snap=*/false);  // down quickly, or from a dip slowly up
   }
   return a;
 }
@@ -190,22 +245,26 @@ AbsVolumePolicy::Actions AbsVolumePolicy::accepted(uint8_t absolute, uint32_t no
     case Mode::Absolute:
       break;  // a step of ours, applied; the UI already shows it
     case Mode::Probing:
+      if (sendPending_) break;  // a late probe's command hasn't gone out: not an answer to it
+      // The UI keeps what the user chose. Media may have flowed since a
+      // probe went out before it (a stream the headphones started): they
+      // apply ours, so our gain only has to rise, slowly.
       if (canHandOver()) {
-        handOver(a);  // the UI keeps what the user chose
+        handOver(a);
       } else {
-        // Capable, but media has flowed since the probe went out (a stream
-        // the headphones started): not on this link. They follow our
-        // commands, so keep sending them.
-        setMode(a, Mode::Software);
-        keepSending_ = true;
+        handOverPlaying(a);
       }
       break;
     case Mode::Software:
-      // An answer after the probe timed out. Nothing heard yet: as if in
-      // time. Otherwise it changes nothing: our gain never rises on a link
-      // that has played.
-      if (keepSending_ && canHandOver()) {
-        handOver(a);
+      // An answer after the probe timed out: they apply what we sent (on
+      // each userSet() since). Nothing heard yet: as if in time. Otherwise
+      // our gain rises slowly from the software level to the headroom.
+      if (keepSending_) {
+        if (canHandOver()) {
+          handOver(a);
+        } else {
+          handOverPlaying(a);
+        }
         // Later commands may still be on their way; make sure they end on ours.
         if (absolute != vol::percentToAbs(percent_)) send(a, nowMs);
       }
@@ -223,25 +282,32 @@ AbsVolumePolicy::Actions AbsVolumePolicy::headsetChanged(uint8_t absolute, uint3
   const bool waiting = mode_ == Mode::Probing || (mode_ == Mode::Software && keepSending_);
   if (mode_ == Mode::Absolute) {
     if (!echo) setPercent(a, vol::absToPercent(absolute));  // their buttons: the UI follows
-  } else if (waiting && canHandOver()) {
-    // Nothing heard yet: they render the volume themselves.
+  } else if (ducked_ || (waiting && canHandOver())) {
+    // Nothing heard yet, or silence during a late probe's dip: they render
+    // the volume themselves, no louder than we ask for.
     if (echo || absolute <= vol::percentToAbs(percent_)) {
-      handOver(a);
+      if (ducked_) {
+        handOverPlaying(a);  // up from silence, slowly; a command still pending is dropped
+      } else {
+        handOver(a);
+      }
       if (!echo) setPercent(a, vol::absToPercent(absolute));
-    } else {
-      // Louder than we asked for: ask again (the link-up cap holds).
+    } else if (!sendPending_) {
+      // Louder than we asked for: ask again (the link-up cap holds). A late
+      // probe's command still pending does that anyway.
       if (mode_ == Mode::Probing) probeStartMs_ = nowMs;
       send(a, nowMs);
     }
-  } else {
+  } else if (echo && waiting) {
+    // Media has flowed and they confirm a command of ours: they apply our
+    // volume. Our gain rises slowly from the software level to the headroom.
+    handOverPlaying(a);
+  } else if (waiting) {
     // Media has flowed at a level that includes theirs, unknown until now:
     // neither our gain nor the UI volume follows it. The listener set it on
-    // the headphones; if it isn't ours, stop sending ours.
-    if (!echo) keepSending_ = false;
-    if (mode_ == Mode::Probing) {
-      setMode(a, Mode::Software);
-      keepSending_ = echo;
-    }
+    // the headphones: stop sending ours.
+    keepSending_ = false;
+    setMode(a, Mode::Software);
   }
   return a;  // never sends a change of theirs back
 }
@@ -259,8 +325,9 @@ AbsVolumePolicy::Actions AbsVolumePolicy::userSet(uint8_t percent, uint32_t nowM
       if (keepSending_ && changed) send(a, nowMs);
       break;
     case Mode::Probing:
-      retarget(a, /*snap=*/false);
-      if (changed) {
+      retarget(a, /*snap=*/false);  // none during a dip: silence until they answer
+      // A late probe's command that hasn't gone out yet carries the new value.
+      if (changed && !sendPending_) {
         probeStartMs_ = nowMs;  // give the new command its own time to be answered
         send(a, nowMs);
       }
@@ -274,10 +341,23 @@ AbsVolumePolicy::Actions AbsVolumePolicy::userSet(uint8_t percent, uint32_t nowM
 
 AbsVolumePolicy::Actions AbsVolumePolicy::tick(uint32_t nowMs) {
   Actions a;
-  if (mode_ == Mode::Probing && nowMs - probeStartMs_ >= kProbeTimeoutMs) {
-    setMode(a, Mode::Software);  // gain is already the software level
+  sendIfSilent(a, nowMs);
+  const uint32_t timeout = ducked_ ? kLateProbeTimeoutMs : kProbeTimeoutMs;
+  if (mode_ == Mode::Probing && !sendPending_ && nowMs - probeStartMs_ >= timeout) {
+    setMode(a, Mode::Software);
     keepSending_ = true;
     a.probeUnanswered = true;
+    if (ducked_) {
+      endDip();
+      retarget(a, /*snap=*/false);  // slowly up from silence to the software level
+    }  // otherwise the gain is at the software level already
   }
+  return a;
+}
+
+AbsVolumePolicy::Actions AbsVolumePolicy::setHeadroom(uint16_t q15) {
+  Actions a;
+  headroom_ = q15 > vol::kUnityQ15 ? vol::kUnityQ15 : q15;
+  retarget(a, /*snap=*/false);  // quickly down, slowly up; none during a dip
   return a;
 }

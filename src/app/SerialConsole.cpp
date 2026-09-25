@@ -26,6 +26,16 @@ void SerialConsole::poll() {
           Serial.printf("> headphones name \"%s\"\n", arg_.c_str());
           actions_.setHeadphonesName(arg_.c_str());
           break;
+        case Pending::Headroom: {
+          const long db = arg_.toInt();
+          if (arg_.length() == 0 || !isDigit(arg_[0]) || db > 12) {
+            Serial.println("> headroom: h<n> with n 0-12 (dB)");
+            break;
+          }
+          Serial.printf("> bluetooth headroom -%ld dB\n", db);
+          actions_.setHeadroom(static_cast<int>(db));
+          break;
+        }
         case Pending::None:
           break;
       }
@@ -44,6 +54,7 @@ void SerialConsole::poll() {
       case 'i': pending_ = Pending::PlayIndex; arg_ = ""; break;
       case 'b': pending_ = Pending::Bench; arg_ = ""; break;
       case 'c': pending_ = Pending::HeadphonesName; arg_ = ""; break;
+      case 'h': pending_ = Pending::Headroom; arg_ = ""; break;
       default: break;  // newlines etc.
     }
   }

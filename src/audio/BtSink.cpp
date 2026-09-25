@@ -150,6 +150,7 @@ public:
   bool requestVolumeStep(int delta) {
     return dispatch(onVolumeWork, kVolumeStep | static_cast<uint8_t>(static_cast<int8_t>(delta)));
   }
+  bool requestHeadroom(uint8_t db) { return dispatch(onHeadroomWork, db); }
   // BtAppT has finished starting the stack (its first 10 s go to that).
   bool ready() const { return ready_.load(); }
 
@@ -203,6 +204,7 @@ private:
   bool dispatch(bt_app_cb_t cb, uint16_t event) { return bt_app_work_dispatch(cb, event, nullptr, 0, nullptr); }
   static void onWork(uint16_t work, void*);
   static void onVolumeWork(uint16_t work, void*);
+  static void onHeadroomWork(uint16_t db, void*);
 
   bool isLinked(const uint8_t* bda) const { return linkUp_ && packBda(bda) == linkedBda_.load(); }
   bool acceptable(const uint8_t* bda) const;
@@ -236,6 +238,7 @@ private:
   uint8_t label_ = kFirstLabel;
   bool codecLogged_ = false;
   bool delayLogged_ = false;
+  bool lateProbe_ = false;  // the last probe logged was a late one (its timeout)
 };
 
 namespace {
@@ -269,6 +272,11 @@ void PlayerA2dp::onVolumeWork(uint16_t work, void*) {
   } else {
     a2dp.ctl_.setVolume(static_cast<uint8_t>(std::min<int>(100, work & 0xFF)), millis());
   }
+}
+
+// A diagnostic: our fixed attenuation, -db dB.
+void PlayerA2dp::onHeadroomWork(uint16_t db, void*) {
+  a2dp.ctl_.setHeadroom(vol::dbToQ15(-static_cast<float>(db)), millis());
 }
 
 // Forgets the remembered headphones in NVS and RAM. On BtAppT, which also
@@ -531,22 +539,30 @@ void PlayerA2dp::setGain(uint16_t q15, BtControl::GainMove move) {
 void PlayerA2dp::volumeChanged() { sink->post(BtSink::Event::VolumeChanged); }
 
 void PlayerA2dp::volumeModeChanged(AbsVolumePolicy::Mode mode, bool probeUnanswered) {
-  const unsigned percent = ctl_.volume().percent();
+  const AbsVolumePolicy& v = ctl_.volume();
+  const unsigned percent = v.percent();
   switch (mode) {
     case AbsVolumePolicy::Mode::Probing:
-      Serial.printf("[bt] volume: asking the headphones to take it over (AVRCP absolute volume, %u%%)\n", percent);
+      lateProbe_ = v.ducked();
+      if (lateProbe_) {
+        Serial.printf("[bt] volume: the headphones' remote control came up after playback started: dipping, "
+                      "then handing them the volume (%u%%)\n",
+                      percent);
+      } else {
+        Serial.printf("[bt] volume: asking the headphones to take it over (AVRCP absolute volume, %u%%)\n", percent);
+      }
       break;
     case AbsVolumePolicy::Mode::Absolute:
-      Serial.printf("[bt] volume: the headphones control it (%u%%); the Core2 only keeps %.0f dB of headroom\n",
-                    percent, static_cast<double>(vol::kHeadroomDb));
+      Serial.printf("[bt] volume: the headphones control it (%u%%); the Core2 only keeps %.1f dB of headroom\n",
+                    percent, static_cast<double>(vol::q15ToDb(v.headroomQ15())));
       break;
     case AbsVolumePolicy::Mode::Software:
       if (probeUnanswered) {
         Serial.printf("[bt] volume: asked the headphones, no answer in %lu ms; applied by the Core2 "
                       "(software, %u%%), still sent to them\n",
-                      static_cast<unsigned long>(AbsVolumePolicy::kProbeTimeoutMs), percent);
-      } else if (ctl_.volume().heard()) {
-        Serial.printf("[bt] volume: applied by the Core2 (software, %u%%) until the next connection\n", percent);
+                      static_cast<unsigned long>(lateProbe_ ? AbsVolumePolicy::kLateProbeTimeoutMs
+                                                            : AbsVolumePolicy::kProbeTimeoutMs),
+                      percent);
       } else {
         Serial.printf("[bt] volume: applied by the Core2 (software, %u%%)\n", percent);
       }
@@ -571,6 +587,7 @@ void PlayerA2dp::streamStarted(uint32_t afterMs) {
 void PlayerA2dp::publish() {
   const AbsVolumePolicy& v = ctl_.volume();
   sink->volume_.store(v.percent());
+  sink->headroom_.store(v.headroomQ15());
   sink->control_.store(static_cast<uint8_t>(v.mode()));
   sink->headsetVolume_.store(static_cast<int16_t>(v.headsetAbsolute()));
   const StreamControl& s = ctl_.stream();
@@ -614,10 +631,10 @@ void PlayerA2dp::bt_av_hdl_avrc_ct_evt(uint16_t event, void* param) {
           esp_avrc_rn_evt_bit_mask_operation(ESP_AVRC_BIT_MASK_OP_TEST, &caps, ESP_AVRC_RN_VOLUME_CHANGE);
       Serial.printf("[bt] AVRCP: headphones' notifications 0x%04x: absolute volume %s\n",
                     static_cast<unsigned>(caps.bits), volumeEvents ? "offered" : "not offered");
-      // Like a phone: the Bluetooth volume becomes the headphones' volume, if
-      // nothing has played on this link yet (AbsVolumePolicy). Their current
-      // one can't be known: ESP-IDF drops the INTERIM reply to the
-      // registration (btc_avrc.c:961-965).
+      // Like a phone: the Bluetooth volume becomes the headphones' volume
+      // (AbsVolumePolicy; after a dip to silence if audio has played on this
+      // link already). Their current one can't be known: ESP-IDF drops the
+      // INTERIM reply to the registration (btc_avrc.c:961-965).
       ctl_.capabilities(volumeEvents, now);
       return;
     }
@@ -795,6 +812,10 @@ void BtSink::stepVolume(int delta) {
   unsentStep_ = std::min(100, std::max(-100, unsentStep_ + delta));  // sent with the next update()
 }
 
+void BtSink::setHeadroomDb(uint8_t db) {
+  unsentHeadroom_ = a2dp.ready() && a2dp.requestHeadroom(db) ? -1 : db;
+}
+
 void BtSink::suspendPromptly() {
   suspendPending_ = true;
   suspendPendingMs_ = millis();
@@ -807,6 +828,7 @@ void BtSink::update(uint32_t nowMs, bool wantAudio) {
   if (forgetPending_ && a2dp.requestForget()) forgetPending_ = false;
   if (unsentVolume_ >= 0 && a2dp.requestVolumeSet(static_cast<uint8_t>(unsentVolume_))) unsentVolume_ = -1;
   if (unsentVolume_ < 0 && unsentStep_ != 0 && a2dp.requestVolumeStep(unsentStep_)) unsentStep_ = 0;
+  if (unsentHeadroom_ >= 0 && a2dp.requestHeadroom(static_cast<uint8_t>(unsentHeadroom_))) unsentHeadroom_ = -1;
   if (wantAudio != wantAudio_ && a2dp.requestStream(wantAudio)) wantAudio_ = wantAudio;
   if (suspendPending_) {
     // Once the pause has reached BtAppT (queued in order after it).
@@ -866,6 +888,7 @@ BtSink::Stats BtSink::stats() {
   s.volumeControl = controlName(static_cast<AbsVolumePolicy::Mode>(control_.load()));
   s.headsetVolume = headsetVolume_.load();
   s.gainQ15 = gain_.currentQ15();
+  s.headroomQ15 = headroom_.load();
   s.stream = streamName(streamState_.load());
   s.maxGapMs = maxGapUs_.exchange(0, std::memory_order_relaxed) / 1000;
   s.eventsDropped = eventsDropped_.load(std::memory_order_relaxed);

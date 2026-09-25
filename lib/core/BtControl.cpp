@@ -20,9 +20,10 @@ void BtControl::apply(const AbsVolumePolicy::Actions& a) {
   if (a.modeChanged) io_.volumeModeChanged(policy_.mode(), a.probeUnanswered);
 }
 
-// Brings the two into line after any event: media that may flow ends the
-// chance of a handover on this link, and a probe (or capabilities still on
-// their way) holds a new stream back. Each step can enable the other once.
+// Brings the two into line after any event: media that may flow makes a
+// handover on this link a late one (or sends a late probe's command once it
+// stops), and a probe (or capabilities still on their way) holds a new
+// stream back. Each step can enable the other once.
 void BtControl::settle(uint32_t nowMs) {
   for (int i = 0; i < 4; ++i) {
     bool changed = false;
@@ -99,6 +100,11 @@ void BtControl::stepVolume(int delta, uint32_t nowMs) {
   int percent = policy_.percent() + delta;
   percent = percent < 0 ? 0 : (percent > 100 ? 100 : percent);
   setVolume(static_cast<uint8_t>(percent), nowMs);
+}
+
+void BtControl::setHeadroom(uint16_t q15, uint32_t nowMs) {
+  apply(policy_.setHeadroom(q15));
+  settle(nowMs);
 }
 
 void BtControl::setWanted(bool wanted, uint32_t nowMs) {

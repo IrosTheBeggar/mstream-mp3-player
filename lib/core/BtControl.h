@@ -7,10 +7,11 @@
 // The Bluetooth output's decisions in one place: the media stream
 // (StreamControl) and the volume (AbsVolumePolicy), and how they depend on
 // each other. A probe of the headphones' volume holds a new stream back until
-// it is answered; media that may be flowing (a START out or answered, the
-// stream running or being suspended) stops the volume from being handed to
-// the headphones on that link. BtSink's PlayerA2dp feeds it the Bluetooth
-// stack's events and carries out what comes back through Io.
+// it is answered (a stream already running goes on); once media may have
+// flowed on a link (a START out or answered, the stream running or being
+// suspended), a probe first dips our gain to silence. BtSink's PlayerA2dp
+// feeds it the Bluetooth stack's events and carries out what comes back
+// through Io.
 //
 // Portable and single-threaded: on the Core2 every call runs on ESP32-A2DP's
 // app task (BtAppT). Millisecond clock, wraparound-safe.
@@ -62,6 +63,8 @@ public:
   // Volume from the Core2 (buttons, console, headphone VOL keys).
   void setVolume(uint8_t percent, uint32_t nowMs);
   void stepVolume(int delta, uint32_t nowMs);
+  // Our fixed attenuation (Q15), a diagnostic.
+  void setHeadroom(uint16_t q15, uint32_t nowMs);
   // Playback wants the stream; suspend at once once it doesn't.
   void setWanted(bool wanted, uint32_t nowMs);
   void suspendNow(uint32_t nowMs);
