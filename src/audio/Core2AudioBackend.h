@@ -19,6 +19,7 @@
 class AudioFileSourceFS;
 class AudioFileSourceID3;
 class AudioGenerator;
+class AudioGeneratorFLAC;
 class AudioGeneratorMP3;
 class AudioOutput;
 class RingOutput;
@@ -29,8 +30,8 @@ class RingOutput;
 // post a new generation to TransportSync and wake the decode task, and
 // finished()/failed() only ever describe the latest request.
 //
-// Tracks are .mp3 files on the library filesystem, or the built-in test tones
-// "tone:440", "tone:1000" and "tone:left" (440 Hz, left channel only).
+// Tracks are .mp3/.flac files on the library filesystem, or the built-in test
+// tones "tone:440", "tone:1000" and "tone:left" (440 Hz, left channel only).
 class Core2AudioBackend : public IAudioBackend {
 public:
   enum class Output : uint8_t { Speaker, Bluetooth };
@@ -115,7 +116,9 @@ private:
   std::unique_ptr<AudioFileSourceFS> file_;
   std::unique_ptr<AudioFileSourceID3> id3_;  // per MP3 track
   std::unique_ptr<AudioGeneratorMP3> mp3_;   // created once, reused
+  std::unique_ptr<AudioGeneratorFLAC> flac_;
   AudioGenerator* decoder_ = nullptr;        // the one decoding now, or null
+  const char* codec_ = "";
   bool toneTrack_ = false;
   bool sourceDone_ = false;                  // decoder reached the end of the file
   bool described_ = false;

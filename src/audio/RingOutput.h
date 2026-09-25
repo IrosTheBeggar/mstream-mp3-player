@@ -45,6 +45,7 @@ public:
   bool begin() override { return true; }
   // The base class keeps the rate in a uint16_t, which 88.2/96 kHz overflow.
   bool SetRate(int hz) override {
+    if (hz <= 0) return true;  // FLAC says 0 before it has read the stream header
     rate_ = hz;
     rejected_ = only44k_ && hz != 44100;
     // Published before this track's first frame reaches the ring (see AudioShared).

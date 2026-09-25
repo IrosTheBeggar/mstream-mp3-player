@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <AudioFileSourceFS.h>
 #include <AudioFileSourceID3.h>
+#include <AudioGeneratorFLAC.h>
 #include <AudioGeneratorMP3.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
@@ -69,6 +70,7 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
   out_.reset(new RingOutput(*ring_, shared_));
   if (fs_) file_.reset(new AudioFileSourceFS(*fs_));
   mp3_.reset(new AudioGeneratorMP3());
+  flac_.reset(new AudioGeneratorFLAC());
 
   bt_.begin(*ring_, shared_, btSinkName);
   speaker_.begin(*ring_, shared_);
@@ -282,15 +284,25 @@ Core2AudioBackend::Work Core2AudioBackend::fail(uint32_t generation, const std::
 }
 
 bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out) {
-  if (!fs_ || extensionOf(path) != ".mp3") return false;
+  const std::string ext = extensionOf(path);
+  const bool isMp3 = ext == ".mp3";
+  if (!fs_ || (!isMp3 && ext != ".flac")) return false;
   if (!file_->open(path.c_str())) return false;
-  id3_.reset(new AudioFileSourceID3(file_.get()));
-  id3_->RegisterMetadataCB(onMetadata, this);
-  if (!mp3_->begin(id3_.get(), out)) {
+
+  AudioGenerator* decoder = flac_.get();
+  AudioFileSource* source = file_.get();
+  if (isMp3) {  // MP3 reads its title/artist from ID3 tags on the way in
+    id3_.reset(new AudioFileSourceID3(file_.get()));
+    id3_->RegisterMetadataCB(onMetadata, this);
+    source = id3_.get();
+    decoder = mp3_.get();
+  }
+  if (!decoder->begin(source, out)) {
     closeDecoder();
     return false;
   }
-  decoder_ = mp3_.get();
+  decoder_ = decoder;
+  codec_ = isMp3 ? "MP3" : "FLAC";
   sourceDone_ = false;
   described_ = false;
   return true;
@@ -344,7 +356,7 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
 
   if (out_->rateRejected()) return Produced::Failed;
   if (!described_ && out_->rate() > 0) {
-    setText(description_, "MP3, " + std::to_string(out_->rate()) + " Hz");
+    setText(description_, std::string(codec_) + ", " + std::to_string(out_->rate()) + " Hz");
     described_ = true;
   }
   if (!shared_.expectingAudio && out_->rate() > 0 &&
