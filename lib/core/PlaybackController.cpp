@@ -17,6 +17,7 @@ void PlaybackController::startCurrent() {
 
 void PlaybackController::play(size_t index) {
   if (index >= playlist_.size()) return;
+  failuresInARow_ = 0;
   index_ = static_cast<int>(index);
   startCurrent();
 }
@@ -39,12 +40,18 @@ void PlaybackController::togglePlayPause() {
 
 void PlaybackController::next() {
   if (playlist_.empty()) return;
+  failuresInARow_ = 0;
+  advance();
+}
+
+void PlaybackController::advance() {
   index_ = (index_ + 1) % static_cast<int>(playlist_.size());
   startCurrent();
 }
 
 void PlaybackController::prev() {
   if (playlist_.empty()) return;
+  failuresInARow_ = 0;
   const int n = static_cast<int>(playlist_.size());
   index_ = (index_ - 1 + n) % n;
   startCurrent();
@@ -57,7 +64,15 @@ void PlaybackController::stop() {
 
 void PlaybackController::update(uint32_t nowMs) {
   (void)nowMs;  // the backend owns the clock via its own loop(); reserved here
-  if (state_ == PlayState::Playing && audio_.finished()) {
-    next();  // wraps to the start of the playlist at the end
+  if (state_ != PlayState::Playing) return;
+  if (audio_.failed()) {
+    if (++failuresInARow_ >= playlist_.size()) {
+      stop();  // every track failed in a row: nothing here plays
+      return;
+    }
+    advance();
+  } else if (audio_.finished()) {
+    failuresInARow_ = 0;
+    advance();  // wraps to the start of the playlist at the end
   }
 }

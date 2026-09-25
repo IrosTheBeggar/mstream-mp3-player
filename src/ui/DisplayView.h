@@ -13,13 +13,30 @@ public:
     String value;
   };
 
+  // Everything on the now-playing screen, already formatted.
+  struct NowPlaying {
+    String battery;   // "87%"
+    String position;  // "Track 2 of 8"
+    String title;
+    String subtitle;  // artist, or what's being decoded
+    String status;    // "Playing 0:12", "Paused 0:12", "Stopped"
+    String output;    // "Bluetooth: WH-1000XM4", "Speaker"
+    String volume;    // "Volume 30%"
+    String note;      // why the last track failed; highlighted
+    String stats;     // one line of numbers for testing
+  };
+
   void begin();
 
   // Bring-up screen: a title bar plus label/value rows. Call again to refresh.
   void showDiagnostics(const std::vector<Row>& rows);
+  // Player screen, with labels for the three touch buttons along the bottom.
+  void showNowPlaying(const NowPlaying& np);
 
 private:
+  enum class Screen { None, Diagnostics, NowPlaying };
+  void enter(Screen screen, const char* title);
   void drawHeader(const char* title);
 
-  bool diagnosticsShown_ = false;
+  Screen screen_ = Screen::None;
 };

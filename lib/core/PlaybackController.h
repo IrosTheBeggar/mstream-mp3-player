@@ -21,7 +21,9 @@ public:
   void prev();
   void stop();
 
-  // Advance state: auto-skips to the next track when the current one ends.
+  // Advance state: moves to the next track when the current one ends or can't
+  // be played. Stops once every track in the playlist has failed in a row, so
+  // an unplayable playlist doesn't spin forever.
   void update(uint32_t nowMs);
 
   PlayState state() const { return state_; }
@@ -33,9 +35,13 @@ public:
 
 private:
   void startCurrent();
+  void advance();  // next track without counting as a user action
 
   IAudioBackend& audio_;
   std::vector<Track> playlist_;
   int index_ = -1;
   PlayState state_ = PlayState::Stopped;
+  // Tracks that failed since the last one that played through or the last
+  // user action.
+  size_t failuresInARow_ = 0;
 };

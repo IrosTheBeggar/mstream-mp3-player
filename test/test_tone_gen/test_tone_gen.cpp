@@ -1,0 +1,69 @@
+// Host unit tests for ToneGen. Run: pio test -e native
+#include <unity.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <vector>
+
+#include "ToneGen.h"
+
+void setUp() {}
+void tearDown() {}
+
+void test_chunked_output_matches_one_call() {
+  ToneGen whole, chunked;
+  whole.start(44100, 1000.0f, -18.0f, ToneGen::Channels::Both, 3000);
+  chunked.start(44100, 1000.0f, -18.0f, ToneGen::Channels::Both, 3000);
+
+  std::vector<int16_t> a(3000 * 2), b(3000 * 2);
+  TEST_ASSERT_EQUAL_UINT32(3000, whole.generate(a.data(), 3000));
+  uint32_t at = 0;
+  for (uint32_t n : {1u, 7u, 512u, 333u, 2147u}) {
+    at += chunked.generate(b.data() + at * 2, n);
+  }
+  TEST_ASSERT_EQUAL_UINT32(3000, at);
+  TEST_ASSERT_EQUAL_INT16_ARRAY(a.data(), b.data(), a.size());
+}
+
+void test_left_only_silences_right() {
+  ToneGen t;
+  t.start(44100, 440.0f, -18.0f, ToneGen::Channels::LeftOnly, 1000);
+  std::vector<int16_t> out(1000 * 2);
+  t.generate(out.data(), 1000);
+  bool leftHasSignal = false;
+  for (int i = 0; i < 1000; ++i) {
+    TEST_ASSERT_EQUAL_INT16(0, out[2 * i + 1]);
+    if (out[2 * i] != 0) leftHasSignal = true;
+  }
+  TEST_ASSERT_TRUE(leftHasSignal);
+}
+
+void test_stops_after_duration() {
+  ToneGen t;
+  t.start(44100, 440.0f, -18.0f, ToneGen::Channels::Both, 100);
+  std::vector<int16_t> out(256 * 2);
+  TEST_ASSERT_EQUAL_UINT32(100, t.generate(out.data(), 256));
+  TEST_ASSERT_TRUE(t.done());
+  TEST_ASSERT_EQUAL_UINT32(0, t.generate(out.data(), 256));
+}
+
+void test_peak_level_matches_dbfs() {
+  ToneGen t;
+  t.start(44100, 1000.0f, -18.0f, ToneGen::Channels::Both, 44100);
+  std::vector<int16_t> out(44100 * 2);
+  t.generate(out.data(), 44100);
+  int peak = 0;
+  for (int16_t s : out) peak = std::max(peak, std::abs(static_cast<int>(s)));
+  // -18 dBFS of full scale is ~4125.
+  TEST_ASSERT_INT_WITHIN(5, 4125, peak);
+}
+
+int main(int, char**) {
+  UNITY_BEGIN();
+  RUN_TEST(test_chunked_output_matches_one_call);
+  RUN_TEST(test_left_only_silences_right);
+  RUN_TEST(test_stops_after_duration);
+  RUN_TEST(test_peak_level_matches_dbfs);
+  return UNITY_END();
+}

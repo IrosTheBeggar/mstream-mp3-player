@@ -1,0 +1,141 @@
+#pragma once
+#include <FS.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+#include <atomic>
+#include <memory>
+#include <mutex>
+#include <string>
+
+#include "PcmRing.h"
+#include "ToneGen.h"
+#include "TransportSync.h"
+#include "audio/AudioShared.h"
+#include "audio/BtSink.h"
+#include "audio/SpeakerSink.h"
+#include "hal/IAudioBackend.h"
+
+class AudioFileSourceFS;
+class AudioFileSourceID3;
+class AudioGenerator;
+class AudioGeneratorMP3;
+class AudioOutput;
+class RingOutput;
+
+// IAudioBackend for the Core2. A decode task turns the current track into PCM
+// in a PSRAM ring (PcmRing); the active output, Bluetooth headphones or the
+// internal speaker, plays from the ring. play() and stop() are requests: they
+// post a new generation to TransportSync and wake the decode task, and
+// finished()/failed() only ever describe the latest request.
+//
+// Tracks are .mp3 files on the library filesystem, or the built-in test tones
+// "tone:440", "tone:1000" and "tone:left" (440 Hz, left channel only).
+class Core2AudioBackend : public IAudioBackend {
+public:
+  enum class Output : uint8_t { Speaker, Bluetooth };
+
+  struct Stats {
+    uint32_t bufferedMs;       // audio waiting in the ring
+    uint32_t underruns;        // gaps the active output had to fill with silence
+    uint32_t btFramesPerSec;   // pulled by the Bluetooth stack, ~44100 while streaming
+    float decodeLoad;          // time spent producing / audio produced, current track
+    uint32_t decodeStackFree;  // bytes never used by the decode task
+  };
+
+  Core2AudioBackend();
+  ~Core2AudioBackend() override;  // out of line: the decoder types are incomplete here
+
+  // Allocates the ring, starts Bluetooth (headphones named `btSinkName`, see
+  // BtSink), the speaker pump and the decode task. `fs` is the library
+  // (nullptr: tones only).
+  bool begin(fs::FS* fs, const char* btSinkName);
+
+  // IAudioBackend
+  bool play(const std::string& path, uint32_t durationHintMs) override;
+  void pause() override;
+  void resume() override;
+  void stop() override;
+  void loop(uint32_t nowMs) override;
+  bool isPlaying() const override;
+  uint32_t positionMs() const override;
+  bool finished() const override;
+  bool failed() const override;
+
+  // Decodes up to 20 s of `path` as fast as possible, output discarded, and
+  // prints how many times faster than realtime that was. Stops playback.
+  void bench(const std::string& path);
+
+  void setOutput(Output output);
+  Output output() const { return output_; }
+  void setVolume(uint8_t percent);
+  uint8_t volume() const { return volume_; }
+
+  BtSink& bluetooth() { return bt_; }
+  const Stats& stats() const { return stats_; }  // refreshed by loop() once a second
+  // For the UI; set by the decode task. Title/artist come from ID3 tags and are
+  // empty when the file has none.
+  std::string description() const;  // e.g. "MP3, 44100 Hz"
+  std::string trackTitle() const;
+  std::string trackArtist() const;
+  std::string note() const;  // why the last track failed, or ""
+
+private:
+  enum class Work : uint8_t { Idle, Producing, Draining };
+  enum class Produced : uint8_t { More, Done, Failed };
+  enum class Kind : uint8_t { Play, Stop, Bench };
+  struct Request {
+    std::string path;
+    Kind kind = Kind::Stop;
+  };
+
+  static void taskEntry(void* self);
+  static void onMetadata(void* self, const char* type, bool isUnicode, const char* value);
+  void request(const std::string& path, Kind kind);
+  void decodeTask();
+  Work start(uint32_t generation);
+  Work fail(uint32_t generation, const std::string& why);
+  bool openDecoder(const std::string& path, AudioOutput* out);
+  void closeDecoder();
+  Produced produceTone();
+  Produced produceDecoded();
+  void runBench(const std::string& path);
+  void setText(std::string& field, const std::string& value);
+
+  std::unique_ptr<PcmRing> ring_;
+  AudioShared shared_;
+  TransportSync sync_;
+  BtSink bt_;
+  SpeakerSink speaker_;
+  TaskHandle_t task_ = nullptr;
+
+  // Owned by the decode task.
+  fs::FS* fs_ = nullptr;
+  std::unique_ptr<RingOutput> out_;
+  std::unique_ptr<AudioFileSourceFS> file_;
+  std::unique_ptr<AudioFileSourceID3> id3_;  // per MP3 track
+  std::unique_ptr<AudioGeneratorMP3> mp3_;   // created once, reused
+  AudioGenerator* decoder_ = nullptr;        // the one decoding now, or null
+  bool toneTrack_ = false;
+  bool sourceDone_ = false;                  // decoder reached the end of the file
+  bool described_ = false;
+  ToneGen tone_;
+  int16_t* chunk_ = nullptr;  // tone scratch buffer (PSRAM)
+
+  mutable std::mutex lock_;  // guards request_ and the strings below
+  Request request_;
+  std::string description_;
+  std::string title_;
+  std::string artist_;
+  std::string note_;
+
+  std::atomic<uint32_t> trackStart_{0};  // ring readPos() where the current track begins
+  std::atomic<uint64_t> busyUs_{0};      // decode task time spent producing, current track
+  std::atomic<uint64_t> producedFrames_{0};
+
+  Output output_ = Output::Speaker;
+  uint8_t volume_ = 30;
+  Stats stats_{};
+  uint32_t lastStatsMs_ = 0;
+  uint32_t lastBtFrames_ = 0;
+};
