@@ -185,3 +185,9 @@ e944373); 7 is open:
    callbacks, so listening tests can be interpreted.
 7. A 48 → 44.1 kHz resampler for Bluetooth (speexdsp or polyphase), and
    shrinking the decode stack from 16 KB to 8 KB.
+
+Known follow-up (volume): the absolute-mode UI race. The volume shown
+follows the headphones' reports, so one that overtakes a command of ours
+still on its way leaves the UI above their level until they report again,
+and a step down from there sends more than they have (documented as a
+residual in `AbsVolumePolicy.h`; the random-events test counts these steps).

@@ -562,7 +562,7 @@ void PlayerA2dp::volumeModeChanged(AbsVolumePolicy::Mode mode, bool probeUnanswe
     case AbsVolumePolicy::Mode::Software:
       if (probeUnanswered) {
         Serial.printf("[bt] volume: asked the headphones, no answer in %lu ms; applied by the Core2 "
-                      "(software, %u%%); steps down still sent to them\n",
+                      "(software, %u%%); a late answer still hands it over\n",
                       static_cast<unsigned long>(lateProbe_ ? AbsVolumePolicy::kLateProbeTimeoutMs
                                                             : AbsVolumePolicy::kProbeTimeoutMs),
                       percent);

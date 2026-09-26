@@ -11,7 +11,12 @@ AbsVolumePolicy::AbsVolumePolicy(uint8_t percent) : percent_(clampPercent(percen
 
 uint16_t AbsVolumePolicy::targetGain() const {
   if (ducked_) return 0;
-  if (mode_ == Mode::Absolute) return headroom_;
+  if (mode_ == Mode::Absolute) {
+    // A late handover's rise waits for the answer to what it sent (see
+    // sendHeld()): our gain stays where it was.
+    if (riseHeld_) return heldGain_ < headroom_ ? heldGain_ : headroom_;
+    return headroom_;
+  }
   return vol::mulQ15(headroom_, vol::softwareVolumeQ15(percent_));
 }
 
@@ -44,7 +49,48 @@ void AbsVolumePolicy::sendValue(Actions& a, uint8_t absolute, uint32_t nowMs, bo
   lastSent_ = absolute;
   askedAgain_ = again;
   for (int i = 0; i + 1 < kSentHistory; ++i) sent_[i] = sent_[i + 1];
-  sent_[kSentHistory - 1] = {absolute, -1, nowMs, true};
+  sent_[kSentHistory - 1] = {absolute, -1, nowMs, true, false};
+}
+
+// A command that ends a wait (their level back, ours after a late
+// confirmation) while one of ours may still be on its way, maybe louder: a
+// new stream waits until it is answered, or `waitMs`, so that whatever was
+// on its way has landed before anything is heard (see audioReady()); so
+// does a rise of our gain that waits for it (riseHeld_). Its answer names no
+// command: an ACCEPT paired with it by order counts only if it is near what
+// it asked for, an echo if it matches it or a later command (they land in
+// order) and every older command of ours has been answered (else it can't
+// be told from a key of theirs near it, see takeEcho()).
+void AbsVolumePolicy::sendHeld(Actions& a, uint8_t absolute, uint32_t nowMs, uint32_t waitMs) {
+  for (Sent& s : sent_) s.holds = false;
+  sendValue(a, absolute, nowMs);
+  sent_[kSentHistory - 1].holds = true;
+  held_ = true;
+  heldMs_ = nowMs;
+  heldForMs_ = waitMs;
+}
+
+// How long to wait for the answer to a command sent after a late
+// confirmation: as long as they took to answer the one they confirmed (the
+// probe went unanswered for kProbeTimeoutMs: these headphones are slow),
+// from kProbeTimeoutMs up to kHoldMaxMs.
+uint32_t AbsVolumePolicy::lateWaitMs(uint32_t nowMs) const {
+  const uint32_t took = nowMs - answeredMs_;
+  return took < kProbeTimeoutMs ? kProbeTimeoutMs : (took > kHoldMaxMs ? kHoldMaxMs : took);
+}
+
+// The held command is answered, or its time is up: a rise of our gain that
+// waited for it goes ahead, at the slow rate (from a dip's silence, or from
+// the software level).
+void AbsVolumePolicy::releaseHold(Actions& a, uint32_t nowMs) {
+  if (held_ && nowMs - heldMs_ >= heldForMs_) {  // (the clock wraps)
+    held_ = false;
+    for (Sent& s : sent_) s.holds = false;
+  }
+  if (held_ || !riseHeld_) return;
+  riseHeld_ = false;
+  endDip();
+  retarget(a, /*snap=*/false);
 }
 
 // Their ACCEPTs answer our commands in order: the oldest one not answered yet.
@@ -54,6 +100,14 @@ int AbsVolumePolicy::noteAccepted(uint8_t absolute) {
   for (Sent& s : sent_) {
     if (s.valid && s.accepted < 0) {
       s.accepted = absolute;
+      answeredMs_ = s.ms;
+      if (s.holds) {
+        // Its own answer: what was on its way before it has landed. Not
+        // near it: the stack paired another's with it (a command they
+        // dropped, a stale answer); the stream waits out the timeout.
+        s.holds = false;
+        if (absDiff(absolute, s.absolute) <= kEchoTolerance) held_ = false;
+      }
       return s.absolute;
     }
   }
@@ -64,17 +118,41 @@ int AbsVolumePolicy::noteAccepted(uint8_t absolute) {
 // yet. It (and anything older) is used up; anything else is one of their own
 // changes, after which every notification shows their real level. Unless
 // `keepOnMiss`: while a probe waits, a command of ours may still be on its
-// way, and its echo must still be recognised when it lands.
+// way, and its echo (and its ACCEPT, paired by order) must still be
+// recognised when it lands.
 bool AbsVolumePolicy::takeEcho(uint8_t absolute, uint32_t nowMs, bool keepOnMiss) {
   for (int i = kSentHistory - 1; i >= 0; --i) {
     const Sent& s = sent_[i];
     if (!s.valid || nowMs - s.ms > kEchoWindowMs) continue;
     if (absDiff(absolute, s.absolute) <= kEchoTolerance || (s.accepted >= 0 && absDiff(absolute, s.accepted) <= 1)) {
-      for (int j = 0; j <= i; ++j) sent_[j].valid = false;
+      // Near a held command (or a later one) while an older command of ours
+      // is still unanswered: as far as we know that one hasn't landed, and
+      // a key of theirs near ours looks the same (headphones with fine
+      // steps). Taken as theirs, and nothing is used up: their answers
+      // still pair with our commands, and the hold waits for its own.
+      if (held_ && unansweredBeforeHeld(i)) return false;
+      for (int j = 0; j <= i; ++j) {
+        if (sent_[j].valid && sent_[j].holds) held_ = false;  // it, or a later one, landed
+        sent_[j].valid = false;
+      }
+      answeredMs_ = s.ms;
       return true;
     }
   }
   if (!keepOnMiss) clearSent();
+  return false;
+}
+
+// The held command is sent_[i] or older, and a command older than it has no
+// answer yet (no ACCEPT paired with it, no echo taken for it).
+bool AbsVolumePolicy::unansweredBeforeHeld(int i) const {
+  bool unanswered = false;
+  for (int j = 0; j <= i; ++j) {
+    const Sent& s = sent_[j];
+    if (!s.valid) continue;
+    if (s.holds) return unanswered;
+    if (s.accepted < 0) unanswered = true;
+  }
   return false;
 }
 
@@ -96,20 +174,12 @@ bool AbsVolumePolicy::askAgain(Actions& a, uint32_t nowMs, bool newLevel) {
   return true;
 }
 
-// What we ask them for now: the volume shown, or less while a rise since
-// was left to our gain (Software after an unanswered probe).
+// What we ask them for now: the volume shown, but no more than we last sent
+// (Software after an unanswered probe leaves the user's changes to our gain,
+// a rise included).
 uint8_t AbsVolumePolicy::askedLevel() const {
   const uint8_t ours = vol::percentToAbs(percent_);
   return lastSent_ >= 0 && lastSent_ < ours ? static_cast<uint8_t>(lastSent_) : ours;
-}
-
-// Software after an unanswered probe: the most we still send. Their level is
-// unknown (they may have applied what we sent, silently), so only a step
-// down goes out; a rise is left to our own gain and its slow ramp.
-uint8_t AbsVolumePolicy::keepCeiling() const {
-  int c = lastSent_ >= 0 ? lastSent_ : 0;
-  if (headsetAbs_ >= 0 && headsetAbs_ < c) c = headsetAbs_;
-  return static_cast<uint8_t>(c);
 }
 
 void AbsVolumePolicy::clearSent() {
@@ -164,7 +234,7 @@ void AbsVolumePolicy::sendProbe(Actions& a, uint32_t nowMs) {
 // Only while nothing has been heard on this link (canHandOver()): the level
 // the first stream fades in to is not a rise over anything the listener heard.
 void AbsVolumePolicy::handOver(Actions& a) {
-  keepSending_ = false;
+  awaitingLate_ = false;
   setMode(a, Mode::Absolute);
   gain_ = targetGain();
   a.gainChanged = true;
@@ -176,7 +246,7 @@ void AbsVolumePolicy::handOver(Actions& a) {
 // our gain rises to the headroom at the gain stage's own slow rate, from
 // silence after a dip or from the software level.
 void AbsVolumePolicy::handOverPlaying(Actions& a) {
-  keepSending_ = false;
+  awaitingLate_ = false;
   endDip();
   setMode(a, Mode::Absolute);
   retarget(a, /*snap=*/false);
@@ -185,22 +255,36 @@ void AbsVolumePolicy::handOverPlaying(Actions& a) {
 // An ACCEPT or an echo of a command of ours after the probe timed out (or an
 // echo during one, once a stream the headphones started has flowed): they
 // apply what we send. Nothing heard yet: as if in time, and ours goes out if
-// it isn't what they have (commands may still be on their way). Otherwise
-// our gain rises slowly from the software level to the headroom, and they
-// end at the last command we sent (each lower than the one before): the
-// volume shown comes down to it if the user rose since (that rise was only
-// our gain's), and only a level below what they confirmed is sent.
+// it isn't what they have (the user's changes since were not sent); a new
+// stream waits for its answer, so that it doesn't land during the first
+// one, a rise heard as a step (sendHeld()). Otherwise they end at the last
+// command we sent (the probe, or ours again, no louder): the volume shown
+// comes down to it if the user rose since (that rise was only our gain's),
+// and only a level below what they confirmed is sent (a step down on the
+// Core2 since, left to our gain). Our gain rises slowly from the software
+// level to the headroom, but only once that is answered: until it lands
+// they are at the level they confirmed, above the user's, and our gain is
+// what keeps it down. These headphones are slow (the probe went unanswered
+// in time), so either wait lasts as long as they took to confirm.
 void AbsVolumePolicy::confirmLate(Actions& a, uint8_t absolute, uint32_t nowMs) {
   if (canHandOver()) {
     handOver(a);
-    if (absolute != vol::percentToAbs(percent_)) send(a, nowMs);
+    const uint8_t ours = vol::percentToAbs(percent_);
+    if (absolute != ours) sendHeld(a, ours, nowMs, lateWaitMs(nowMs));
     return;
   }
-  handOverPlaying(a);
+  awaitingLate_ = false;
+  setMode(a, Mode::Absolute);
   if (lastSent_ >= 0 && vol::percentToAbs(percent_) > lastSent_) {
     setPercent(a, vol::absToPercent(static_cast<uint8_t>(lastSent_)));
   }
-  if (vol::percentToAbs(percent_) < absolute) send(a, nowMs);
+  const uint8_t ours = vol::percentToAbs(percent_);
+  if (ours < absolute) {
+    riseHeld_ = true;
+    heldGain_ = gain_;  // the software level they were heard at
+    sendHeld(a, ours, nowMs, lateWaitMs(nowMs));
+  }
+  retarget(a, /*snap=*/false);  // up to the headroom, unless held
 }
 
 void AbsVolumePolicy::endDip() {
@@ -216,7 +300,9 @@ AbsVolumePolicy::Actions AbsVolumePolicy::linkUp(uint32_t nowMs) {
   heard_ = false;
   streaming_ = false;
   probed_ = false;
-  keepSending_ = false;
+  awaitingLate_ = false;
+  held_ = false;
+  riseHeld_ = false;
   endDip();
   headsetAbs_ = -1;
   lastSent_ = -1;
@@ -238,7 +324,9 @@ AbsVolumePolicy::Actions AbsVolumePolicy::linkDown() {
   // capable_ and capsKnown_ stay: AVRCP may outlive the A2DP link, and then
   // no new capabilities arrive for the next one.
   probed_ = false;
-  keepSending_ = false;
+  awaitingLate_ = false;
+  held_ = false;
+  riseHeld_ = false;
   endDip();
   streaming_ = false;
   heard_ = false;
@@ -278,9 +366,12 @@ AbsVolumePolicy::Actions AbsVolumePolicy::streamActive(bool active, uint32_t now
 bool AbsVolumePolicy::audioReady(uint32_t nowMs) const {
   if (!linked_) return true;
   if (mode_ == Mode::Probing) return false;
+  // A command that ended a wait while one of ours may still be on its way:
+  // until it is answered, or its timeout (see sendHeld()).
+  if (held_ && nowMs - heldMs_ < heldForMs_) return false;
   // A probe that went unanswered before anything was heard: a little longer,
   // in case they apply it late (see kProbeGraceMs).
-  if (keepSending_ && !heard_ && nowMs - unansweredMs_ < kProbeGraceMs) return false;
+  if (awaitingLate_ && !heard_ && nowMs - unansweredMs_ < kProbeGraceMs) return false;
   if (heard_ || capsKnown_) return true;
   if (nowMs - linkUpMs_ < kCapsWaitMs) return false;
   // AVRCP is up and its capabilities are on their way: worth a little longer,
@@ -294,7 +385,9 @@ AbsVolumePolicy::Actions AbsVolumePolicy::avrcpDown() {
   capsKnown_ = false;
   capable_ = false;
   probed_ = false;  // a new AVRCP connection gets its own probe
-  keepSending_ = false;
+  awaitingLate_ = false;
+  held_ = false;  // what was on its way went with it
+  riseHeld_ = false;
   endDip();
   headsetAbs_ = -1;
   lastSent_ = -1;
@@ -343,7 +436,7 @@ AbsVolumePolicy::Actions AbsVolumePolicy::accepted(uint8_t absolute, uint32_t no
       break;
     case Mode::Software:
       // An answer after the probe timed out: they apply what we sent.
-      if (!keepSending_ || asked < 0) break;
+      if (!awaitingLate_ || asked < 0) break;
       if (!confirms) {
         askAgain(a, nowMs, /*newLevel=*/false);  // ours again (at most what we last sent)
         break;
@@ -351,6 +444,7 @@ AbsVolumePolicy::Actions AbsVolumePolicy::accepted(uint8_t absolute, uint32_t no
       confirmLate(a, absolute, nowMs);
       break;
   }
+  releaseHold(a, nowMs);
   return a;
 }
 
@@ -360,11 +454,11 @@ AbsVolumePolicy::Actions AbsVolumePolicy::headsetChanged(uint8_t absolute, uint3
   const bool newLevel = absolute != headsetAbs_;
   headsetAbs_ = absolute;
   if (!linked_) return a;
-  const bool waiting = mode_ == Mode::Probing || (mode_ == Mode::Software && keepSending_);
+  const bool waiting = mode_ == Mode::Probing || (mode_ == Mode::Software && awaitingLate_);
   // Nothing heard yet, or silence during a late probe's dip: they render the
   // volume themselves, no louder than we ask for.
   const bool asking = mode_ != Mode::Absolute && (ducked_ || (waiting && canHandOver()));
-  const bool echo = takeEcho(absolute, nowMs, /*keepOnMiss=*/asking);
+  const bool echo = takeEcho(absolute, nowMs, /*keepOnMiss=*/asking || waiting);
   // An echo confirms only if no louder than what we ask for now: one of an
   // older command (a lower one still on its way), or a key of theirs that
   // happens to land near one, isn't proof they are at or below ours.
@@ -375,19 +469,25 @@ AbsVolumePolicy::Actions AbsVolumePolicy::headsetChanged(uint8_t absolute, uint3
     if (confirms && mode_ == Mode::Software) {
       confirmLate(a, absolute, nowMs);
     } else if (confirms || (!echo && absolute <= vol::percentToAbs(percent_))) {
-      const bool ourCommandOut = !sendPending_;
-      if (ducked_) {
+      // A command of ours may still be on its way (their key, or their
+      // answer to the library's registration, crossed it): landing after
+      // this, it would step them up to ours. Their own level goes after it,
+      // so the last command they get is theirs, and a new stream waits for
+      // its answer: ours lands before anything is heard. During a dip our
+      // gain waits for it too, at silence: ours lands before it rises.
+      const bool sendBack = !echo && !sendPending_;
+      if (ducked_ && sendBack) {
+        awaitingLate_ = false;
+        setMode(a, Mode::Absolute);
+        riseHeld_ = true;  // still ducked: releaseHold() ends the dip
+      } else if (ducked_) {
         handOverPlaying(a);  // up from silence, slowly; a command still pending is dropped
       } else {
         handOver(a);
       }
       if (!echo) {
         setPercent(a, vol::absToPercent(absolute));
-        // A command of ours may still be on its way (their key, or their
-        // answer to the library's registration, crossed it): landing after
-        // this, it would step them up to ours. Their own level goes after
-        // it, so the last command they get is theirs.
-        if (ourCommandOut) sendValue(a, absolute, nowMs);
+        if (sendBack) sendHeld(a, absolute, nowMs);
       }
     } else if (!sendPending_) {
       // Louder than we asked for: ask again (the link-up cap holds; after an
@@ -397,21 +497,28 @@ AbsVolumePolicy::Actions AbsVolumePolicy::headsetChanged(uint8_t absolute, uint3
     }
   } else if (confirms && waiting) {
     // Media has flowed and they confirm a command of ours: they apply our
-    // volume. Our gain rises slowly from the software level to the headroom.
+    // volume. Our gain rises slowly from the software level to the headroom
+    // (once a step down it sends is answered, see confirmLate()).
     confirmLate(a, absolute, nowMs);
   } else if (waiting) {
     // Media has flowed at a level that includes theirs, unknown until now:
     // neither our gain nor the UI volume follows it. The listener set it on
     // the headphones: stop sending ours. A louder command of ours may still
     // be on its way (the probe, when a stream they started themselves has
-    // flowed meanwhile): landing after this, it would step them up while
-    // audio plays. Their own level goes after it, so the last command they
-    // get is theirs.
-    if (lastSent_ > absolute && absolute <= vol::percentToAbs(percent_)) sendValue(a, absolute, nowMs);
-    keepSending_ = false;
+    // flowed meanwhile, or a late one): landing after this, it would step
+    // them up while audio plays, and stay. Their own level goes after it
+    // (or the volume shown, if lower: a step down on the Core2 since was
+    // our gain's alone), so the last command they get is no louder than
+    // what they have, and a new stream waits for its answer.
+    if (lastSent_ > absolute) {
+      const uint8_t ours = vol::percentToAbs(percent_);
+      sendHeld(a, absolute < ours ? absolute : ours, nowMs);
+    }
+    awaitingLate_ = false;
     setMode(a, Mode::Software);
   }
-  return a;  // a change of theirs is only ever sent back as itself, once (above)
+  releaseHold(a, nowMs);
+  return a;  // a change of theirs is only ever sent back as itself (or less), once (above)
 }
 
 AbsVolumePolicy::Actions AbsVolumePolicy::userSet(uint8_t percent, uint32_t nowMs) {
@@ -421,11 +528,13 @@ AbsVolumePolicy::Actions AbsVolumePolicy::userSet(uint8_t percent, uint32_t nowM
   percent_ = percent;
   switch (mode_) {
     case Mode::Software:
+      // Our gain alone, also after an unanswered probe: their level is
+      // unknown (they may have kept their own, rejected ours, or apply
+      // absolute volume only while streaming), and whatever we send could
+      // be the first command they apply, at once, from their own level:
+      // louder than asked even for a step down. A late answer to what was
+      // sent still hands over (confirmLate()).
       retarget(a, /*snap=*/false);
-      // After an unanswered probe: they may apply it without saying so.
-      // Stacked with our gain that is quieter, never louder, than asked; and
-      // only a step down goes out (see keepCeiling()).
-      if (keepSending_ && changed && vol::percentToAbs(percent_) <= keepCeiling()) send(a, nowMs);
       break;
     case Mode::Probing:
       retarget(a, /*snap=*/false);  // none during a dip: silence until they answer
@@ -444,12 +553,13 @@ AbsVolumePolicy::Actions AbsVolumePolicy::userSet(uint8_t percent, uint32_t nowM
 
 AbsVolumePolicy::Actions AbsVolumePolicy::tick(uint32_t nowMs) {
   Actions a;
+  releaseHold(a, nowMs);
   sendIfSilent(a, nowMs);
   const uint32_t timeout = ducked_ ? kLateProbeTimeoutMs : kProbeTimeoutMs;
   if (mode_ == Mode::Probing && !sendPending_ &&
       (nowMs - probeStartMs_ >= timeout || nowMs - probeFirstMs_ >= kProbeDeadlineFactor * timeout)) {
     setMode(a, Mode::Software);
-    keepSending_ = true;
+    awaitingLate_ = true;
     unansweredMs_ = nowMs;
     a.probeUnanswered = true;
     if (ducked_) {

@@ -57,31 +57,47 @@
 //    reply to the answer to that very repeat unless it is a new level of
 //    theirs: headphones that can't set our level (they round up by more
 //    than kEchoTolerance, or have a floor) would trade commands and ACCEPTs
-//    with us for ever; the probe runs out instead, and a later step down
-//    that they do set confirms.
+//    with us for ever; the probe runs out instead.
 //    Each command restarts the timeout, but the probe ends at the latest
 //    kProbeDeadlineFactor timeouts after its first one. An ACCEPT with no
 //    command of ours waiting (more ACCEPTs than commands) is ignored.
 //    A notification at or below ours that isn't an echo hands over at
 //    *their* level: the UI follows it, and it is sent back once, so that a
 //    command of ours still on its way can't land after it and step them up
-//    (its echo is still recognised as ours).
-//  - No answer to a probe: Software, and only steps *down* are still sent on
-//    userSet() (to at most the last value sent): headphones that apply them
-//    silently stack them with our gain, quieter, never louder; a rise is
-//    left to our gain alone. If they confirm one of ours later (an ACCEPT for
-//    no more than it asked, or an echo no louder than what we now ask for),
-//    they apply our volume: Absolute. Nothing heard yet: lifted, and ours
-//    sent if it isn't what they confirmed. Otherwise our gain ramps up at the
-//    slow rate from the software level, they end at the last value we sent
-//    (the volume shown comes down to it if the user rose since), and ours is
-//    only sent if it is below what they confirmed. What isn't a confirmation
-//    gets ours again as above, at most the last value sent. If a
+//    (its echo is still recognised as ours). A new stream waits until that
+//    is answered (its ACCEPT, or its echo), at most kProbeTimeoutMs: what
+//    was on its way lands before anything is heard, not into the first
+//    stream (the Powerbeats Pro answer a command ~1 s after it). During a
+//    late probe's dip the silence waits for it too, and our gain only then
+//    ramps up. A notification near it counts as its echo only once every
+//    older command of ours is answered: before that, a key of theirs near
+//    it (headphones with fine steps) looks the same, and is taken as theirs.
+//  - No answer to a probe: Software, and the user's volume is no longer sent
+//    at all: our gain alone follows it. Their level is unknown (they may
+//    have kept their own, rejected ours, or apply absolute volume only while
+//    streaming), and any command could be the first they apply, at once,
+//    from their own level: even a step down on the Core2 could step them
+//    up. If they confirm one of ours later (an ACCEPT for no more than it
+//    asked, or an echo no louder than what we now ask for), they apply our
+//    volume: Absolute. Nothing heard yet: lifted, and ours sent if it isn't
+//    what they confirmed (a rise, maybe: a new stream waits for its answer,
+//    as above). Otherwise they end at the last value we sent (the volume
+//    shown comes down to it if the user rose since), and ours is only sent
+//    if it is below what they confirmed (a step down on the Core2 since);
+//    our gain ramps up at the slow rate from the software level, but only
+//    once that is answered: until it lands they are at what they confirmed,
+//    above the user's volume. These headphones are slow, so either wait
+//    lasts as long as they took to confirm (kProbeTimeoutMs to kHoldMaxMs).
+//    What isn't a confirmation (an ACCEPT above what it answers; before
+//    anything was heard, also a louder notification) gets ours again as
+//    above: at most the last value sent, and below what they just reported,
+//    so it can't step them up; they are applying our commands then. If a
 //    notification of their own comes first after audio flowed (also during
 //    a probe, once a stream they started themselves has flowed), the user
-//    sets their level there: their level is sent back once if a louder
-//    command of ours may still be on its way, then nothing more is sent, and
-//    the link stays in Software.
+//    sets their level there: if a louder command of ours may still be on
+//    its way, their level is sent back once (the volume shown instead if
+//    that is lower; a new stream waits for its answer, as above), then
+//    nothing more is sent, and the link stays in Software.
 //  - Changes made on the headphones update percent() in Absolute mode and are
 //    never sent back (except once, as themselves, above). A
 //    notification is an echo of ours (it doesn't move the UI) only if it
@@ -111,10 +127,17 @@
 //    level they already have from us or reported themselves: ours again (a
 //    repeat of what is out, or lower), their own level back (at a handover,
 //    or when their report ends our asking), a lower one after a late
-//    confirmation. None of them repeats without news: ours goes again once
-//    per non-answer, not in reply to the answer to a repeat, so the
-//    commands on a link are bounded by the user's and the headphones' own
-//    changes.
+//    confirmation. (After an unanswered probe the user's own volume is not
+//    sent, see above.) One that ends a wait while a command of ours may
+//    still be on its way (their level back, ours after a late confirmation)
+//    holds a new stream until it is answered or its wait has passed
+//    (kProbeTimeoutMs; after a late confirmation as long as they took, up to
+//    kHoldMaxMs), so that what was on its way lands before the stream, not
+//    into it; once audio has flowed, our gain's rise at that handover waits
+//    for it the same way (at silence after a dip, else where it was).
+//    None of them repeats without news: ours goes again once per
+//    non-answer, not in reply to the answer to a repeat, so the commands on
+//    a link are bounded by the user's and the headphones' own changes.
 //  - A handover never lands above kMaxLinkUpPercent unless the user chose more
 //    (with the Core2's volume, which is then sent).
 //  - The headroom (setHeadroom(), a diagnostic, not saved) is applied in both
@@ -129,22 +152,40 @@
 //    may have raised since; still rising from silence after a late probe),
 //    never above what Absolute gives for p. Its ACCEPT or echo then hands
 //    over by the ramp. The random-events test's headset lands commands
-//    seconds late and checks this bound.
+//    seconds late and checks this bound. The same holds for one still on its
+//    way when a stream held for the answer to a later one (sendHeld())
+//    starts after its wait without it, and for one still on its way when a
+//    rise held for such an answer (a late handover, their report ending a
+//    dip) goes ahead after that wait: our gain then rises by the ramp while
+//    their level may still be the one they confirmed, at most what absolute
+//    volume gives for the volume sent then (headphones slower than they
+//    were, or than kHoldMaxMs).
+//  - The answer that releases a held stream names no command either. A
+//    notification within kEchoTolerance of the held command (or of a later
+//    one) counts once every older command of ours has an answer: then the
+//    echo of an older one near it (the held one, landing in the stream, is
+//    within that tolerance of it), or a key of theirs near it (the held one
+//    may still land in the stream, within kEchoTolerance of that key). An
+//    ACCEPT paired with it by order that isn't near it (a command they
+//    dropped, a stale answer) leaves it to the wait.
 //  - Their level sent back at a handover may land after a further key press
 //    of theirs, taking them back to the level they had just reported.
-//  - An ACCEPT of an older command of ours hands over while a lower one is
-//    still on its way: until it lands they stay at the older (the user's
-//    own) level, and our gain meanwhile only rises by the ramp.
+//  - During a probe, an ACCEPT of an older command of ours hands over while
+//    a lower one is still on its way: until it lands they stay at the older
+//    level (the user's own a moment ago), and our gain meanwhile only rises
+//    by the ramp. (After a probe, see the late confirmation above: the rise
+//    waits for the lower one.)
 //  - An ACCEPT for a command from before the probe that asked no more than
 //    it can't be told from the probe's own: it hands over, and the probe,
 //    landing after it, sets our level.
 //  - In Absolute mode the UI follows their reports. One that overtakes a
 //    command of ours still on its way (a key of theirs, or after it the
-//    echo of an older command, no longer recognised as ours) leaves the UI
-//    above their level once ours lands, until they report again; a step
-//    down from it then sends more than they have: the user's own volume, as
-//    shown. The random-events test counts these steps instead of checking
-//    them.
+//    echo of an older command, no longer recognised as ours: also an echo
+//    more than kEchoWindowMs after its command, as from headphones slow
+//    enough to confirm late) leaves the UI above their level once ours
+//    lands, until they report again; a step down from it then sends more
+//    than they have: the user's own volume, as shown. The random-events
+//    test counts these steps instead of checking them.
 //
 // Portable and single-threaded: the caller serialises calls (on the Core2 all
 // of them run on ESP32-A2DP's app task, BtAppT, through BtControl) and passes a
@@ -169,7 +210,13 @@ public:
     bool probeUnanswered = false;  // the probe timed out (worth a log line)
   };
 
+  // How long a probe's command may take to be answered; also how long a new
+  // stream waits for the answer to a command that ended a wait (sendHeld()).
   static constexpr uint32_t kProbeTimeoutMs = 2000;
+  // After a late confirmation (the probe went unanswered in time), that wait,
+  // and our gain's rise with it, lasts as long as they took to confirm: at
+  // most this.
+  static constexpr uint32_t kHoldMaxMs = 6000;
   // A probe ends at the latest this many timeouts after its first command,
   // however often a new command of it (the user's volume, ours again) has
   // restarted the timeout since: a new stream isn't held back for long.
@@ -227,10 +274,13 @@ public:
   int headsetAbsolute() const { return headsetAbs_; }  // last reported by the headphones, -1 unknown
   bool linked() const { return linked_; }
   bool heard() const { return heard_; }  // media has flowed on this link
-  bool ducked() const { return ducked_; }  // a late probe: our gain is at silence
+  bool ducked() const { return ducked_; }  // a late probe (or its handover, see sendHeld()): our gain is at silence
   uint16_t headroomQ15() const { return headroom_; }
-  // A new media stream may start: not while a probe is out, and not while
-  // the capabilities of a new link are still on their way (see kCapsWaitMs).
+  // A new media stream may start: not while a probe is out, not while a
+  // command that ended a wait is unanswered (at most kProbeTimeoutMs, or
+  // kHoldMaxMs after a late confirmation), and
+  // not while the capabilities of a new link are still on their way (see
+  // kCapsWaitMs).
   bool audioReady(uint32_t nowMs) const;
 
 private:
@@ -240,6 +290,7 @@ private:
     int16_t accepted = -1;  // what their ACCEPT said they set, -1 not yet
     uint32_t ms = 0;
     bool valid = false;
+    bool holds = false;  // a new stream waits for its answer (see sendHeld())
   };
 
   uint16_t targetGain() const;
@@ -248,6 +299,9 @@ private:
   void setPercent(Actions& a, uint8_t percent);
   void send(Actions& a, uint32_t nowMs);
   void sendValue(Actions& a, uint8_t absolute, uint32_t nowMs, bool again = false);
+  void sendHeld(Actions& a, uint8_t absolute, uint32_t nowMs, uint32_t waitMs = kProbeTimeoutMs);
+  uint32_t lateWaitMs(uint32_t nowMs) const;
+  void releaseHold(Actions& a, uint32_t nowMs);
   bool askAgain(Actions& a, uint32_t nowMs, bool newLevel);
   void maybeProbe(Actions& a, uint32_t nowMs);
   bool silentAtHeadphones(uint32_t nowMs) const;
@@ -259,8 +313,8 @@ private:
   void endDip();
   bool canHandOver() const { return !heard_ && !streaming_; }
   bool takeEcho(uint8_t absolute, uint32_t nowMs, bool keepOnMiss);
+  bool unansweredBeforeHeld(int i) const;
   int noteAccepted(uint8_t absolute);
-  uint8_t keepCeiling() const;
   uint8_t askedLevel() const;
   void clearSent();
 
@@ -273,7 +327,7 @@ private:
   bool capsKnown_ = false;  // the capabilities arrived on this AVRCP connection
   bool capable_ = false;    // they list VOLUME_CHANGED
   bool probed_ = false;     // probe already tried on this link / AVRCP connection
-  bool keepSending_ = false;  // Software after an unanswered probe: still send the volume
+  bool awaitingLate_ = false;  // Software after an unanswered probe: a late answer still hands over
   bool streaming_ = false;
   bool heard_ = false;      // media has flowed on this link
   bool ducked_ = false;     // a late probe: our gain held at silence
@@ -288,5 +342,11 @@ private:
   int headsetAbs_ = -1;
   int lastSent_ = -1;  // the last absolute volume sent on this link / AVRCP connection
   bool askedAgain_ = false;  // ...was ours again, in reply to something that wasn't an answer
+  bool held_ = false;        // a new stream waits for the answer to a command (see sendHeld())
+  uint32_t heldMs_ = 0;      // ...sent then
+  uint32_t heldForMs_ = kProbeTimeoutMs;  // ...for at most this long
+  bool riseHeld_ = false;    // ...and so does our gain's rise after a late handover
+  uint16_t heldGain_ = 0;    // ...kept meanwhile at this (or at silence, ducked_)
+  uint32_t answeredMs_ = 0;  // when the command the last ACCEPT or echo answered went out
   Sent sent_[kSentHistory];  // oldest first
 };

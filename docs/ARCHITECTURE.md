@@ -154,13 +154,31 @@ out what it returns.
   of the link. A notification of theirs at or below ours hands over at
   their level, which is sent back once so that a command of ours still on
   its way can't land after it and raise them (the same when their report
-  ends a probe after a stream they started themselves has played). After an unanswered probe their level is
-  unknown, so only volume steps *down* are still sent; a rise is our gain's
-  alone. A later ACCEPT or echo of a volume we sent then also hands over,
-  our gain rising slowly from the software level to where they are (the
-  last value sent; the volume shown comes down to it if the listener rose
-  since); their own change first means the listener sets their level there,
-  and the link stays in software mode. Apart from the listener's own volume
+  ends a probe after a stream they started themselves has played), and a
+  new stream waits until that is answered (its ACCEPT or echo, at most 2 s):
+  what was on its way lands before the stream, not ~1 s into it. During a
+  late probe's dip the silence waits for it too. A notification near it only
+  counts as its echo once every older command of ours has been answered;
+  before that, a key of theirs near it (headphones with fine steps) looks
+  the same, and is taken as theirs. After an
+  unanswered probe their level is unknown, and any command could be the
+  first they apply, at once, from their own level (even a volume step down
+  could raise them), so the listener's volume is no longer sent at all: our
+  gain alone follows it. A later ACCEPT or echo of a volume we sent (the
+  probe, or ours again after an answer above what a command asked for)
+  then also hands over: before anything has played with a lift, and the
+  listener's volume sent if it changed (a new stream waiting for its
+  answer, as above); after, they end at the last value sent (the volume
+  shown comes down to it if the listener rose since, and a step down since
+  is sent now), and our gain rises slowly from the software level to where
+  they are, but only once that step down is answered: until it lands they
+  are at what they confirmed, louder than the listener chose. Headphones
+  that confirm late are slow, so both waits last as long as they took to
+  confirm (2 to 6 s). Their own change first means the listener sets their
+  level there: if a louder command of ours may still be on its way, their
+  level goes back once (the volume shown instead, if lower), and the link
+  stays in software mode.
+  Apart from the listener's own volume
   step and the fade back after a stream restarts, our gain only rises at
   that slow rate once audio has played. (That includes the narrow race of a
   stream the headphones start themselves during the probe: our data
@@ -172,6 +190,9 @@ out what it returns.
   volume p while it plays: heard as their level for p times our gain at
   that moment (the software gain for the volume shown, which the listener
   may have raised since), never above what absolute volume gives for p.
+  The same bound holds for a command still on its way when a stream, or a
+  rise of our gain, held for an answer goes ahead after its wait without
+  one (headphones slower than that).
   And in absolute mode, a report of theirs that overtakes a command of ours
   still on its way can leave the volume shown above their level until they
   report again; a step down from it then sends the level shown. A notification

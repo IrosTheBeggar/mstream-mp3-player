@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <vector>
 
@@ -236,6 +237,163 @@ void test_their_level_is_sent_after_a_probe_still_on_its_way() {
   TEST_ASSERT_TRUE(p.headsetChanged(28, 2000).volumeChanged);
 }
 
+// The recheck's case, with the Powerbeats Pro's timing (a SET answered 1 s
+// after it): the probe (64) is out, the listener presses their VOL- (20)
+// before it lands. The handover at their level sends it back, and the first
+// stream waits for its answer: the probe lands first, while nothing plays,
+// instead of stepping them up by ~14 dB in the first stream. (The gate used
+// to open at once.)
+void test_their_report_during_the_probe_holds_the_first_stream() {
+  AbsVolumePolicy p(50);
+  p.linkUp(0);
+  TEST_ASSERT_EQUAL_UINT8(64, p.capabilities(true, 0).absolute);
+  const auto a = p.headsetChanged(20, 300);
+  TEST_ASSERT_EQUAL(Mode::Absolute, p.mode());
+  TEST_ASSERT_TRUE(a.lift);
+  TEST_ASSERT_TRUE(a.sendAbsolute);
+  TEST_ASSERT_EQUAL_UINT8(20, a.absolute);
+  TEST_ASSERT_FALSE(p.audioReady(300));
+  p.accepted(64, 1000);  // the probe lands: still waiting for ours
+  TEST_ASSERT_FALSE(p.audioReady(1000));
+  p.tick(1100);
+  TEST_ASSERT_FALSE(p.audioReady(1100));
+  p.accepted(20, 1300);  // their level back, answered
+  TEST_ASSERT_TRUE(p.audioReady(1300));
+  TEST_ASSERT_EQUAL_UINT8(vol::absToPercent(20), p.percent());
+
+  // By its echo (the probe's own doesn't count).
+  AbsVolumePolicy q(50);
+  q.linkUp(0);
+  q.capabilities(true, 0);
+  q.headsetChanged(20, 300);
+  TEST_ASSERT_FALSE(q.headsetChanged(64, 1010).volumeChanged);
+  TEST_ASSERT_FALSE(q.audioReady(1010));
+  TEST_ASSERT_FALSE(q.headsetChanged(20, 1310).volumeChanged);
+  TEST_ASSERT_TRUE(q.audioReady(1310));
+
+  // No answer (headphones that report nothing): the timeout.
+  AbsVolumePolicy r(50);
+  r.linkUp(0);
+  r.capabilities(true, 0);
+  r.headsetChanged(20, 300);
+  TEST_ASSERT_FALSE(r.audioReady(300 + AbsVolumePolicy::kProbeTimeoutMs - 1));
+  TEST_ASSERT_TRUE(r.audioReady(300 + AbsVolumePolicy::kProbeTimeoutMs));
+
+  // They rejected the probe (ESP-IDF reports only ACCEPTs): the one ACCEPT
+  // pairs with it by order, not near what ours asked for. It can't be told
+  // from the probe's, so the stream waits out the timeout.
+  AbsVolumePolicy s(50);
+  s.linkUp(0);
+  s.capabilities(true, 0);
+  s.headsetChanged(20, 300);
+  s.accepted(20, 1300);
+  TEST_ASSERT_FALSE(s.audioReady(1300));
+  s.tick(300 + AbsVolumePolicy::kProbeTimeoutMs);
+  TEST_ASSERT_TRUE(s.audioReady(300 + AbsVolumePolicy::kProbeTimeoutMs));
+
+  // A new link starts afresh.
+  AbsVolumePolicy t(50);
+  t.linkUp(0);
+  t.capabilities(true, 0);
+  t.headsetChanged(20, 300);
+  t.linkDown();
+  t.avrcpDown();
+  t.linkUp(500);
+  t.capabilities(false, 600);
+  TEST_ASSERT_TRUE(t.audioReady(600));
+}
+
+// After an unanswered probe and a stream the headphones started (so their
+// report isn't a handover), their report sends their level back after the
+// probe that may still be on its way: a new stream waits for its answer too.
+// (Software once audio has flowed used to open the gate at once.)
+void test_their_report_after_an_unanswered_probe_holds_a_new_stream() {
+  AbsVolumePolicy p(50);
+  p.linkUp(0);
+  p.capabilities(true, 0);  // 64
+  p.streamActive(true, 100);  // theirs; ESP-IDF suspends it again
+  p.streamActive(false, 150);
+  p.tick(AbsVolumePolicy::kProbeTimeoutMs);  // unanswered
+  TEST_ASSERT_TRUE(p.audioReady(AbsVolumePolicy::kProbeTimeoutMs));  // heard: no grace
+  const auto a = p.headsetChanged(20, 2500);
+  TEST_ASSERT_EQUAL(Mode::Software, p.mode());
+  TEST_ASSERT_TRUE(a.sendAbsolute);
+  TEST_ASSERT_EQUAL_UINT8(20, a.absolute);
+  TEST_ASSERT_FALSE(p.audioReady(2500));
+  p.accepted(64, 3000);  // the late probe
+  TEST_ASSERT_FALSE(p.audioReady(3000));
+  p.accepted(20, 3500);
+  TEST_ASSERT_TRUE(p.audioReady(3500));
+}
+
+// The recheck's case again, with headphones that step by 4 (32 steps): a
+// key of theirs lands within kEchoTolerance of their level sent back while
+// the probe is still out. It can't be told from the echo of ours, and the
+// probe hasn't been answered: taken as theirs (the UI follows), nothing is
+// used up, and the stream still waits for the answers. (It used to be taken
+// as the echo: the gate opened, and the probe, no longer known as ours,
+// stepped them up ~12-15 dB in the first stream.)
+void test_a_key_near_their_level_back_keeps_the_first_stream_held() {
+  for (const uint8_t key : {16, 24}) {
+    AbsVolumePolicy p(50);
+    p.linkUp(0);
+    TEST_ASSERT_EQUAL_UINT8(64, p.capabilities(true, 0).absolute);
+    TEST_ASSERT_EQUAL_UINT8(20, p.headsetChanged(20, 300).absolute);
+    const auto k = p.headsetChanged(key, 400);
+    TEST_ASSERT_TRUE(k.volumeChanged);
+    TEST_ASSERT_EQUAL_UINT8(vol::absToPercent(key), p.percent());
+    TEST_ASSERT_FALSE(k.sendAbsolute);
+    TEST_ASSERT_FALSE(p.audioReady(400));
+    p.accepted(64, 1000);  // the probe lands while nothing plays
+    TEST_ASSERT_FALSE(p.headsetChanged(64, 1010).volumeChanged);  // still known as ours
+    TEST_ASSERT_FALSE(p.audioReady(1010));
+    p.accepted(20, 1300);
+    TEST_ASSERT_TRUE(p.audioReady(1300));
+  }
+  // Headphones that only notify: the probe's echo answers it, and then the
+  // one near their level back releases the stream.
+  AbsVolumePolicy q(50);
+  q.linkUp(0);
+  q.capabilities(true, 0);
+  q.headsetChanged(20, 300);
+  q.headsetChanged(16, 400);
+  TEST_ASSERT_FALSE(q.headsetChanged(64, 1010).volumeChanged);
+  TEST_ASSERT_FALSE(q.audioReady(1010));
+  TEST_ASSERT_FALSE(q.headsetChanged(20, 1310).volumeChanged);
+  TEST_ASSERT_TRUE(q.audioReady(1310));
+}
+
+// Headphones slow enough that the probe (64, at 50 %) went unanswered, audio
+// has played, and the user stepped down on the Core2 to 10 % (13, not sent).
+// A key of theirs reports 28: above the volume shown. The probe may still be
+// on its way; with nothing after it, it would step them up to 64 and stay.
+// So the volume shown goes after it (below what they have: no step up), and
+// a new stream waits for its answer. (Only their level at or below the
+// volume shown used to go back: nothing did here.)
+void test_their_report_above_the_volume_shown_still_ends_below_it() {
+  AbsVolumePolicy p(50);
+  p.linkUp(0);
+  p.capabilities(true, 0);
+  p.tick(AbsVolumePolicy::kProbeTimeoutMs);  // unanswered
+  p.streamActive(true, 3000);
+  TEST_ASSERT_FALSE(p.userSet(10, 3200).sendAbsolute);
+  p.streamActive(false, 3900);
+  const auto a = p.headsetChanged(28, 4000);
+  TEST_ASSERT_EQUAL(Mode::Software, p.mode());
+  TEST_ASSERT_TRUE(a.sendAbsolute);
+  TEST_ASSERT_EQUAL_UINT8(13, a.absolute);
+  TEST_ASSERT_FALSE(a.volumeChanged);
+  TEST_ASSERT_FALSE(a.gainChanged);
+  TEST_ASSERT_FALSE(p.audioReady(4000));
+  const auto b = p.accepted(64, 4500);  // the probe lands: no longer an answer to wait for
+  TEST_ASSERT_FALSE(b.sendAbsolute);
+  TEST_ASSERT_EQUAL(Mode::Software, p.mode());
+  TEST_ASSERT_FALSE(p.audioReady(4500));
+  p.accepted(16, 5000);  // 13, as 16-step headphones set it
+  TEST_ASSERT_TRUE(p.audioReady(5000));
+  TEST_ASSERT_EQUAL_UINT8(10, p.percent());
+}
+
 // Louder than the probe asked for: asked again, the link-up cap holds.
 void test_louder_notification_during_probe_is_answered_with_ours() {
   AbsVolumePolicy p = probing();
@@ -271,46 +429,130 @@ void test_probe_timeout_survives_millis_wraparound() {
   TEST_ASSERT_EQUAL(Mode::Software, p.mode());
 }
 
-// Their level is unknown (they may have applied the probe silently): only a
-// step down is sent, to at most the last value sent; a rise is our gain's.
-void test_after_an_unanswered_probe_only_steps_down_are_sent() {
-  AbsVolumePolicy p = probing();  // sent 38
-  const auto t = p.tick(5000);    // timed out
+// Their level is unknown (they may have kept their own, rejected the probe,
+// or apply absolute volume only while streaming): any command could be the
+// first they apply, at once, from their own level. So nothing is sent for
+// the user's volume, a step down included (it used to be sent: at 20 %
+// ours, 57 for a step down from 50 % to 45 % took them there, +10 dB);
+// our gain alone follows it.
+void test_after_an_unanswered_probe_nothing_is_sent() {
+  AbsVolumePolicy p(50);
+  p.linkUp(0);
+  TEST_ASSERT_EQUAL_UINT8(64, p.capabilities(true, 0).absolute);
+  const auto t = p.tick(AbsVolumePolicy::kProbeTimeoutMs);  // timed out
   TEST_ASSERT_TRUE(t.probeUnanswered);
   TEST_ASSERT_EQUAL(Mode::Software, p.mode());
-  const auto s = p.userSet(20, 6000);  // our gain, and the headphones may apply it too
+  p.streamActive(true, 3000);
+  const auto s = p.userSet(45, 4000);  // a step down: our gain only
   TEST_ASSERT_TRUE(s.gainChanged);
   TEST_ASSERT_FALSE(s.snap);
-  TEST_ASSERT_TRUE(s.sendAbsolute);
-  TEST_ASSERT_EQUAL_UINT8(25, s.absolute);
-  TEST_ASSERT_EQUAL_UINT16(softwareGain(20), p.gainQ15());
-  const auto u = p.userSet(40, 6100);  // above what was sent: our gain only
-  TEST_ASSERT_TRUE(u.gainChanged);
-  TEST_ASSERT_FALSE(u.sendAbsolute);
-  TEST_ASSERT_FALSE(p.userSet(25, 6200).sendAbsolute);  // 32: still above 25
-  const auto d = p.userSet(15, 6300);
-  TEST_ASSERT_TRUE(d.sendAbsolute);
-  TEST_ASSERT_EQUAL_UINT8(19, d.absolute);
+  TEST_ASSERT_FALSE(s.sendAbsolute);
+  TEST_ASSERT_EQUAL_UINT16(softwareGain(45), p.gainQ15());
+  TEST_ASSERT_FALSE(p.userSet(60, 4100).sendAbsolute);  // a rise
+  TEST_ASSERT_FALSE(p.userSet(5, 4200).sendAbsolute);   // far down
+  TEST_ASSERT_EQUAL_UINT16(softwareGain(5), p.gainQ15());
+  // The same before anything was heard.
+  AbsVolumePolicy q = probing();  // 38
+  q.tick(1000 + AbsVolumePolicy::kProbeTimeoutMs);
+  TEST_ASSERT_FALSE(q.userSet(20, 3500).sendAbsolute);
+  TEST_ASSERT_FALSE(q.userSet(40, 3600).sendAbsolute);
+  TEST_ASSERT_EQUAL(Mode::Software, q.mode());
 }
 
 // The probe (38) times out and the stream plays at the software level; then
 // its answer arrives. They apply what we send: they take over, and our gain
 // rises to the headroom at the gain stage's slow rate (not a lift: audio
-// plays). A step down sent since is on its way; in case it was dropped,
-// ours (below what they confirmed) goes again so they end on it.
+// plays). The user's step down since was our gain's alone (not sent): ours,
+// below what they confirmed, goes out now that they apply our commands, and
+// our gain only rises once it is answered. (It used to rise at once, with
+// them still at 38: see test_late_accept_after_a_step_down_holds_the_rise.)
 void test_late_accept_after_audio_ramps_to_the_headphones() {
   AbsVolumePolicy p = probing();
   p.tick(5000);
   p.streamActive(true, 5100);
-  p.userSet(20, 6000);  // sent 25 (they may apply it silently)
+  TEST_ASSERT_FALSE(p.userSet(20, 6000).sendAbsolute);  // 25: not sent
   const auto a = p.accepted(38, 6500);
   TEST_ASSERT_EQUAL(Mode::Absolute, p.mode());
-  TEST_ASSERT_TRUE(ramped(a));
-  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, p.gainQ15());
+  TEST_ASSERT_FALSE(a.gainChanged);  // still the software level
+  TEST_ASSERT_EQUAL_UINT16(softwareGain(20), p.gainQ15());
   TEST_ASSERT_TRUE(a.sendAbsolute);
   TEST_ASSERT_EQUAL_UINT8(25, a.absolute);
   TEST_ASSERT_FALSE(a.volumeChanged);
   TEST_ASSERT_EQUAL_UINT8(20, p.percent());
+  const auto b = p.accepted(24, 7500);  // its answer (16-step headphones)
+  TEST_ASSERT_TRUE(ramped(b));
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, p.gainQ15());
+  TEST_ASSERT_FALSE(b.sendAbsolute);
+}
+
+// The recheck's case: headphones slow enough that the probe (64, at 50 %)
+// went unanswered, the stream plays at the software level, and the user
+// steps down on the Core2 to 10 % (our gain only: nothing is sent there).
+// Then they confirm the probe: they are at 64 now, and 13 goes out. Our gain
+// stays at the software level for 10 % until 13 is answered; rising at once
+// it would have taken what they play to absolute volume for 50 %, ~16 dB
+// above what the user chose, until 13 landed. They took 3.5 s to confirm, so
+// the wait lasts as long; after it, the rise goes ahead anyway.
+void test_late_accept_after_a_step_down_holds_the_rise() {
+  auto slow = [](AbsVolumePolicy& p) {
+    p.linkUp(0);
+    TEST_ASSERT_EQUAL_UINT8(64, p.capabilities(true, 0).absolute);
+    p.tick(AbsVolumePolicy::kProbeTimeoutMs);  // unanswered
+    p.streamActive(true, 3000);
+    TEST_ASSERT_FALSE(p.userSet(10, 3200).sendAbsolute);
+  };
+  AbsVolumePolicy p(50);
+  slow(p);
+  const auto a = p.accepted(64, 3500);
+  TEST_ASSERT_EQUAL(Mode::Absolute, p.mode());
+  TEST_ASSERT_TRUE(a.sendAbsolute);
+  TEST_ASSERT_EQUAL_UINT8(13, a.absolute);
+  TEST_ASSERT_FALSE(a.gainChanged);
+  TEST_ASSERT_EQUAL_UINT16(softwareGain(10), p.gainQ15());
+  TEST_ASSERT_FALSE(p.userSet(15, 4000).gainChanged);  // the user's own step: sent, our gain stays
+  TEST_ASSERT_FALSE(p.userSet(10, 4100).gainChanged);
+  TEST_ASSERT_FALSE(p.tick(5000).gainChanged);
+  TEST_ASSERT_EQUAL_UINT16(softwareGain(10), p.gainQ15());
+  TEST_ASSERT_FALSE(p.audioReady(5000));
+  const auto b = p.accepted(16, 6900);  // 13, as 16-step headphones set it
+  TEST_ASSERT_TRUE(ramped(b));
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, p.gainQ15());
+  TEST_ASSERT_TRUE(p.audioReady(6900));
+  TEST_ASSERT_EQUAL_UINT8(10, p.percent());
+
+  // Its echo releases it as well.
+  AbsVolumePolicy q(50);
+  slow(q);
+  q.accepted(64, 3500);
+  TEST_ASSERT_TRUE(ramped(q.headsetChanged(16, 4900)));
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, q.gainQ15());
+
+  // No answer: as long as they took to confirm (3.5 s), then the rise.
+  AbsVolumePolicy r(50);
+  slow(r);
+  r.accepted(64, 3500);
+  TEST_ASSERT_FALSE(r.tick(3500 + 3500 - 1).gainChanged);
+  TEST_ASSERT_FALSE(r.audioReady(3500 + 3500 - 1));
+  const auto c = r.tick(3500 + 3500);
+  TEST_ASSERT_TRUE(ramped(c));
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, r.gainQ15());
+  TEST_ASSERT_TRUE(r.audioReady(3500 + 3500));
+
+  // A very late confirmation waits at most kHoldMaxMs.
+  AbsVolumePolicy s(50);
+  slow(s);
+  s.accepted(64, 20000);
+  TEST_ASSERT_FALSE(s.tick(20000 + AbsVolumePolicy::kHoldMaxMs - 1).gainChanged);
+  TEST_ASSERT_TRUE(ramped(s.tick(20000 + AbsVolumePolicy::kHoldMaxMs)));
+
+  // AVRCP goes: nothing waits any more, software volume.
+  AbsVolumePolicy t(50);
+  slow(t);
+  t.accepted(64, 3500);
+  t.avrcpDown();
+  TEST_ASSERT_EQUAL(Mode::Software, t.mode());
+  TEST_ASSERT_EQUAL_UINT16(softwareGain(10), t.gainQ15());
+  TEST_ASSERT_TRUE(t.audioReady(3600));
 }
 
 // A rise after the timeout was only our gain's, never sent: a late answer
@@ -331,18 +573,22 @@ void test_late_accept_after_a_rise_keeps_their_level() {
   TEST_ASSERT_EQUAL_UINT8(vol::percentToAbs(25), p.userSet(25, 7000).absolute);
 }
 
-// The same with an echo of a command of ours instead of an ACCEPT.
+// The same with an echo of a command of ours instead of an ACCEPT. (It used
+// to be the echo of the user's step down sent after the timeout; nothing of
+// the user's is sent there now, and an echo is only recognised within
+// kEchoWindowMs of its command, so here it is that of ours again, sent in
+// reply to a stale ACCEPT.)
 void test_late_echo_after_audio_ramps_to_the_headphones() {
-  AbsVolumePolicy p = probing();
+  AbsVolumePolicy p = probing();  // 38
   p.tick(5000);
   p.streamActive(true, 5100);
-  p.userSet(20, 6000);                        // 25
-  const auto a = p.headsetChanged(24, 6300);  // 16-step headphones
+  TEST_ASSERT_EQUAL_UINT8(38, p.accepted(127, 6000).absolute);  // not an answer: ours again
+  const auto a = p.headsetChanged(36, 6300);                    // 16-step headphones
   TEST_ASSERT_EQUAL(Mode::Absolute, p.mode());
   TEST_ASSERT_TRUE(ramped(a));
   TEST_ASSERT_FALSE(a.sendAbsolute);
   TEST_ASSERT_FALSE(a.volumeChanged);
-  TEST_ASSERT_EQUAL_UINT8(20, p.percent());
+  TEST_ASSERT_EQUAL_UINT8(30, p.percent());
 }
 
 // An ACCEPT above what its command asked for is not an answer (a stale one,
@@ -391,26 +637,25 @@ void test_late_accept_above_what_we_asked_is_not_a_confirmation() {
   TEST_ASSERT_TRUE(a.sendAbsolute);
   TEST_ASSERT_EQUAL_UINT8(38, a.absolute);
   // The answer to that repeat, again above it: not asked a third time.
-  p.userSet(70, 6100);  // a rise since: our gain only
+  TEST_ASSERT_FALSE(p.userSet(70, 6100).sendAbsolute);  // a rise since: our gain only
   const auto b = p.accepted(127, 6200);
   TEST_ASSERT_FALSE(b.sendAbsolute);
   TEST_ASSERT_EQUAL(Mode::Software, p.mode());
-  // A step down is news: sent, and what is asked for again after a stale
-  // answer to it is at most what we last sent.
-  TEST_ASSERT_EQUAL_UINT8(25, p.userSet(20, 6300).absolute);
+  // (A step down used to be sent here, and answered again: nothing of the
+  // user's goes out after an unanswered probe now.) A further stale ACCEPT
+  // finds no command of ours waiting: ignored.
+  TEST_ASSERT_FALSE(p.userSet(20, 6300).sendAbsolute);
   const auto c = p.accepted(127, 6400);
-  TEST_ASSERT_TRUE(c.sendAbsolute);
-  TEST_ASSERT_EQUAL_UINT8(25, c.absolute);
-  // Its real answer confirms.
-  TEST_ASSERT_TRUE(ramped(p.accepted(25, 6500)));
-  TEST_ASSERT_EQUAL(Mode::Absolute, p.mode());
+  TEST_ASSERT_FALSE(c.sendAbsolute);
+  TEST_ASSERT_FALSE(c.gainChanged);
+  TEST_ASSERT_EQUAL(Mode::Software, p.mode());
 }
 
 // Headphones that can't set our level (they round up by more than
 // kEchoTolerance, or have a floor) answer every command above it. Ours goes
 // again once, not in reply to the answer to that repeat: no endless
-// SET/ACCEPT trade. The probe runs out; a later step down that they do set
-// confirms.
+// SET/ACCEPT trade. The probe runs out, and stays out: the user's volume
+// isn't sent after it.
 void test_headphones_that_round_up_are_not_asked_for_ever() {
   AbsVolumePolicy p(28);
   p.linkUp(0);
@@ -433,11 +678,10 @@ void test_headphones_that_round_up_are_not_asked_for_ever() {
   TEST_ASSERT_TRUE(k.sendAbsolute);
   TEST_ASSERT_EQUAL_UINT8(36, k.absolute);
   TEST_ASSERT_FALSE(p.accepted(42, 2600).sendAbsolute);
-  // A step down they can set confirms (nothing heard yet: a lift).
-  TEST_ASSERT_EQUAL_UINT8(32, p.userSet(25, 5000).absolute);
-  const auto ok = p.accepted(32, 5100);
-  TEST_ASSERT_EQUAL(Mode::Absolute, p.mode());
-  TEST_ASSERT_TRUE(ok.lift);
+  // (A step down they could set used to be sent, and confirmed. Nothing of
+  // the user's goes out after an unanswered probe now: it stays Software.)
+  TEST_ASSERT_FALSE(p.userSet(25, 5000).sendAbsolute);
+  TEST_ASSERT_EQUAL(Mode::Software, p.mode());
 }
 
 // Ours again only brings them down: an ACCEPT above what an older, lower
@@ -464,28 +708,42 @@ void test_ours_again_never_steps_them_up() {
   TEST_ASSERT_EQUAL(Mode::Probing, q.mode());
 }
 
-// After an unanswered probe, an echo that doesn't confirm (of an older,
-// louder command of ours) gets ours again, but never above what we last sent:
-// a rise since was our gain's alone, and a louder command could land after
-// the grace, once audio plays.
-void test_echo_after_an_unanswered_probe_is_answered_with_at_most_the_last_sent() {
+// After an unanswered probe, an ACCEPT that doesn't confirm (a stale one, or
+// a level of their own) gets ours again: they are applying our commands, so
+// the bounded resend stays. Never above what we last sent (a rise since was
+// our gain's alone, and a louder command could land once audio plays), and
+// only below what they just reported. (This used to be shown with an echo
+// of the user's steps down sent after the timeout; those aren't sent now.)
+void test_ours_again_after_an_unanswered_probe_is_at_most_the_last_sent() {
   AbsVolumePolicy p(50);
   p.linkUp(0);
   TEST_ASSERT_EQUAL_UINT8(64, p.capabilities(true, 0).absolute);
   p.tick(AbsVolumePolicy::kProbeTimeoutMs);  // unanswered
-  TEST_ASSERT_EQUAL_UINT8(57, p.userSet(45, 2100).absolute);
-  TEST_ASSERT_EQUAL_UINT8(51, p.userSet(40, 2200).absolute);
-  TEST_ASSERT_FALSE(p.userSet(50, 2300).sendAbsolute);  // a rise: our gain only
-  const auto a = p.headsetChanged(57, 2500);           // the 57 landed
+  p.streamActive(true, 3000);
+  TEST_ASSERT_FALSE(p.userSet(70, 3100).sendAbsolute);  // a rise: our gain only
+  const auto a = p.accepted(100, 3500);
   TEST_ASSERT_EQUAL(Mode::Software, p.mode());
   TEST_ASSERT_TRUE(a.sendAbsolute);
-  TEST_ASSERT_EQUAL_UINT8(51, a.absolute);
+  TEST_ASSERT_EQUAL_UINT8(64, a.absolute);  // not 89
+  // The user's step down since: what we ask for now, still below them.
+  AbsVolumePolicy q(50);
+  q.linkUp(0);
+  q.capabilities(true, 0);
+  q.tick(AbsVolumePolicy::kProbeTimeoutMs);
+  q.streamActive(true, 3000);
+  TEST_ASSERT_FALSE(q.userSet(40, 3100).sendAbsolute);
+  const auto b = q.accepted(100, 3500);
+  TEST_ASSERT_TRUE(b.sendAbsolute);
+  TEST_ASSERT_EQUAL_UINT8(51, b.absolute);
+  // (An ACCEPT that could make it a step up, one for an older command that
+  // asked for less, is test_ours_again_never_steps_them_up.)
 }
 
 // A stream the headphones started themselves has flowed during the probe
 // (so no handover by the lift), and a notification of theirs below ours ends
 // it: the probe may still be on its way, and landing later it would step
-// them up while our stream plays. Their level goes after it.
+// them up while our stream plays. Their level goes after it, and our stream
+// waits for its answer (it used to start at once: the probe landed in it).
 void test_their_report_after_a_stream_they_started_sends_their_level_back() {
   AbsVolumePolicy p(50);
   p.linkUp(0);
@@ -497,11 +755,17 @@ void test_their_report_after_a_stream_they_started_sends_their_level_back() {
   TEST_ASSERT_TRUE(a.sendAbsolute);
   TEST_ASSERT_EQUAL_UINT8(20, a.absolute);
   TEST_ASSERT_FALSE(a.volumeChanged);
-  TEST_ASSERT_TRUE(p.audioReady(300));
-  // The probe lands, then theirs: nothing more is sent, nothing moves.
-  p.streamActive(true, 600);
-  for (const auto& b : {p.accepted(64, 1000), p.headsetChanged(64, 1010), p.accepted(20, 1100),
-                        p.headsetChanged(20, 1110)}) {
+  TEST_ASSERT_FALSE(p.audioReady(300));
+  // The probe lands, then theirs: nothing more is sent, nothing moves, and
+  // the stream may start once theirs is answered.
+  const auto b1 = p.accepted(64, 1000);
+  const auto b2 = p.headsetChanged(64, 1010);
+  TEST_ASSERT_FALSE(p.audioReady(1010));
+  const auto b3 = p.accepted(20, 1100);
+  TEST_ASSERT_TRUE(p.audioReady(1100));
+  p.streamActive(true, 1150);
+  const auto b4 = p.headsetChanged(20, 1160);
+  for (const auto& b : {b1, b2, b3, b4}) {
     TEST_ASSERT_FALSE(b.sendAbsolute);
     TEST_ASSERT_FALSE(b.gainChanged);
     TEST_ASSERT_FALSE(b.volumeChanged);
@@ -535,15 +799,19 @@ void test_echo_of_an_older_louder_command_is_not_an_answer() {
   TEST_ASSERT_EQUAL_UINT8(30, p.percent());
 
   // After audio, in Software following an unanswered probe: taken as theirs.
+  // (The older command used to be a step down of the user's, sent after the
+  // timeout; nothing of the user's is sent there now: here it is ours again,
+  // with the user's step down since left to our gain.)
   AbsVolumePolicy q = probing();
   q.tick(5000);
   q.streamActive(true, 5100);
-  q.userSet(20, 6000);  // 25; the echo window of the probe's 38 is over
-  q.userSet(10, 6100);  // 13
-  const auto b = q.headsetChanged(24, 6200);  // near 25, above 13
+  TEST_ASSERT_EQUAL_UINT8(38, q.accepted(127, 6000).absolute);  // ours again
+  TEST_ASSERT_FALSE(q.userSet(10, 6100).sendAbsolute);          // 13: our gain only
+  const auto b = q.headsetChanged(38, 6200);                    // its echo, above 13
   TEST_ASSERT_EQUAL(Mode::Software, q.mode());
   TEST_ASSERT_FALSE(b.gainChanged);
-  TEST_ASSERT_FALSE(q.userSet(5, 6300).sendAbsolute);  // their level now: no more sends
+  TEST_ASSERT_FALSE(b.sendAbsolute);
+  TEST_ASSERT_FALSE(q.accepted(127, 6300).sendAbsolute);  // their level now: no more sends
 }
 
 // A probe's commands can't hold a new stream back for ever: the listener's
@@ -627,17 +895,50 @@ void test_avrcp_back_on_a_link_that_has_played_probes_late() {
 }
 
 // A late answer while nothing has been heard yet (paused all along) is as
-// good as one in time; commands sent since are made to end on ours.
+// good as one in time; ours goes out, since the user's change since was our
+// gain's alone. A new stream waits for its answer, so that it lands before
+// the first stream: a rise in it would be heard as a step.
 void test_late_accept_before_any_audio_hands_over() {
   AbsVolumePolicy p = probing();
   p.tick(5000);
-  p.userSet(20, 6000);  // sent 25
+  TEST_ASSERT_FALSE(p.userSet(20, 6000).sendAbsolute);  // 25: our gain only
   const auto a = p.accepted(38, 6500);
   TEST_ASSERT_EQUAL(Mode::Absolute, p.mode());
   TEST_ASSERT_TRUE(a.lift);
   TEST_ASSERT_TRUE(a.sendAbsolute);
   TEST_ASSERT_EQUAL_UINT8(25, a.absolute);
   TEST_ASSERT_EQUAL_UINT8(20, p.percent());
+  TEST_ASSERT_FALSE(p.audioReady(6500));
+  p.accepted(24, 7500);  // its answer (16-step headphones)
+  TEST_ASSERT_TRUE(p.audioReady(7500));
+
+  // The review's case: a rise the user made meanwhile. The first stream
+  // must not start before it lands. These headphones took 5.5 s to answer
+  // the probe (sent at t=1000), so the stream waits as long for the answer
+  // to 76 (it used to wait kProbeTimeoutMs: 76 could land in the stream).
+  AbsVolumePolicy q = probing();  // 38
+  q.tick(5000);
+  TEST_ASSERT_FALSE(q.userSet(60, 6000).sendAbsolute);  // 76: our gain only
+  const auto b = q.accepted(38, 6500);
+  TEST_ASSERT_TRUE(b.lift);
+  TEST_ASSERT_TRUE(b.sendAbsolute);
+  TEST_ASSERT_EQUAL_UINT8(76, b.absolute);
+  TEST_ASSERT_FALSE(q.audioReady(6500));
+  TEST_ASSERT_FALSE(q.audioReady(6500 + AbsVolumePolicy::kProbeTimeoutMs));
+  TEST_ASSERT_FALSE(q.audioReady(6500 + 5500 - 1));
+  TEST_ASSERT_TRUE(q.audioReady(6500 + 5500));  // or its timeout
+  // Its echo releases it as well.
+  AbsVolumePolicy r = probing();
+  r.tick(5000);
+  r.userSet(60, 6000);
+  r.accepted(38, 6500);
+  TEST_ASSERT_FALSE(r.headsetChanged(76, 7400).volumeChanged);
+  TEST_ASSERT_TRUE(r.audioReady(7400));
+  // Not if they confirmed what ours is: nothing is sent, nothing waits.
+  AbsVolumePolicy s = probing();
+  s.tick(5000);
+  TEST_ASSERT_FALSE(s.accepted(38, 6500).sendAbsolute);
+  TEST_ASSERT_TRUE(s.audioReady(6500));
 }
 
 void test_rounded_accept_in_absolute_mode_keeps_the_ui() {
@@ -752,8 +1053,9 @@ void test_late_probe_stop_after_the_dip_settled() {
   TEST_ASSERT_EQUAL_UINT8(vol::percentToAbs(40), a.absolute);
 }
 
-// No answer: software volume, still sent along; the gain rises from silence
-// to the software level at the slow rate.
+// No answer: software volume; the gain rises from silence to the software
+// level at the slow rate. The user's volume is our gain's alone from then
+// (a step down used to be sent: it could be the first command they apply).
 void test_late_probe_timeout_ramps_to_software() {
   AbsVolumePolicy p = lateProbing();
   TEST_ASSERT_FALSE(p.tick(kLateSentMs + AbsVolumePolicy::kLateProbeTimeoutMs - 1).modeChanged);
@@ -765,9 +1067,9 @@ void test_late_probe_timeout_ramps_to_software() {
   TEST_ASSERT_TRUE(ramped(a));
   TEST_ASSERT_EQUAL_UINT16(softwareGain(30), p.gainQ15());
   TEST_ASSERT_FALSE(p.userSet(40, 5000).sendAbsolute);  // a rise: our gain only
-  const auto b = p.userSet(20, 5100);
-  TEST_ASSERT_TRUE(b.sendAbsolute);
-  TEST_ASSERT_EQUAL_UINT8(25, b.absolute);
+  const auto b = p.userSet(20, 5100);                    // a step down: the same
+  TEST_ASSERT_FALSE(b.sendAbsolute);
+  TEST_ASSERT_TRUE(ramped(b));
   TEST_ASSERT_FALSE(p.capabilities(true, 6000).sendAbsolute);  // no second probe
 }
 
@@ -802,18 +1104,31 @@ void test_user_volume_during_the_dip_after_the_send() {
 }
 
 // A notification at or below what we sent answers the probe (the UI follows
-// theirs); one above it is answered with ours again, still in silence.
+// theirs); one above it is answered with ours again, still in silence. Their
+// level goes back after our 38, which may still land, and the silence lasts
+// until that is answered: 38 lands before our gain rises. (The gain used to
+// rise at once: 38 landed during the rise, a step up.)
 void test_notification_during_a_late_probe() {
   AbsVolumePolicy p = lateProbing();  // sent 38
   const auto a = p.headsetChanged(30, kLateSentMs + 100);
   TEST_ASSERT_EQUAL(Mode::Absolute, p.mode());
-  TEST_ASSERT_TRUE(ramped(a));
-  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, p.gainQ15());
+  TEST_ASSERT_FALSE(a.gainChanged);
+  TEST_ASSERT_TRUE(p.ducked());
+  TEST_ASSERT_EQUAL_UINT16(0, p.gainQ15());
   TEST_ASSERT_TRUE(a.volumeChanged);
   TEST_ASSERT_EQUAL_UINT8(vol::absToPercent(30), p.percent());
   TEST_ASSERT_TRUE(a.sendAbsolute);  // theirs, after our 38 that may still land
   TEST_ASSERT_EQUAL_UINT8(30, a.absolute);
-  TEST_ASSERT_FALSE(p.headsetChanged(38, kLateSentMs + 150).volumeChanged);  // it did: an echo
+  TEST_ASSERT_FALSE(p.accepted(38, kLateSentMs + 150).gainChanged);  // it did
+  const auto e = p.headsetChanged(38, kLateSentMs + 160);              // ...and its echo
+  TEST_ASSERT_FALSE(e.volumeChanged);
+  TEST_ASSERT_FALSE(e.gainChanged);
+  TEST_ASSERT_EQUAL_UINT16(0, p.gainQ15());
+  const auto g = p.accepted(30, kLateSentMs + 500);  // theirs, answered: up from silence
+  TEST_ASSERT_TRUE(ramped(g));
+  TEST_ASSERT_FALSE(p.ducked());
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, p.gainQ15());
+  TEST_ASSERT_EQUAL_UINT8(vol::absToPercent(30), p.percent());
 
   AbsVolumePolicy q = lateProbing();
   const auto b = q.headsetChanged(90, kLateSentMs + 500);
@@ -828,6 +1143,55 @@ void test_notification_during_a_late_probe() {
   TEST_ASSERT_TRUE(ramped(c));
   TEST_ASSERT_EQUAL(Mode::Absolute, q.mode());
   TEST_ASSERT_EQUAL_UINT8(30, q.percent());
+}
+
+// The device's flow with one key press more (Powerbeats Pro: capabilities
+// 1.1 s into playback, a SET answered 1.0 s after it): in the dip's silence
+// the listener presses VOL- (28, below our 38 still on its way). That hands
+// over at their level, sent back, and the silence lasts until it is
+// answered: 38 lands while nothing is heard, and our gain rises from
+// silence only once 28 has landed. (It used to rise at once: 38 landed
+// ~0.6 s into the rise, a step up.) No answer: kProbeTimeoutMs.
+void test_their_key_during_the_dip_keeps_the_silence_until_answered() {
+  const uint32_t caps = 1100, sent = caps + AbsVolumePolicy::kDuckSettleMs;
+  auto dip = [&](AbsVolumePolicy& p) {
+    p.capabilities(true, caps);
+    TEST_ASSERT_EQUAL_UINT8(38, p.tick(sent).absolute);
+    const auto a = p.headsetChanged(28, sent + 400);
+    TEST_ASSERT_EQUAL(Mode::Absolute, p.mode());
+    TEST_ASSERT_TRUE(p.ducked());
+    TEST_ASSERT_FALSE(a.gainChanged);
+    TEST_ASSERT_EQUAL_UINT16(0, p.gainQ15());
+    TEST_ASSERT_TRUE(a.sendAbsolute);
+    TEST_ASSERT_EQUAL_UINT8(28, a.absolute);
+    TEST_ASSERT_EQUAL_UINT8(vol::absToPercent(28), p.percent());
+  };
+  AbsVolumePolicy p = playing();  // 30 %
+  dip(p);
+  TEST_ASSERT_FALSE(p.accepted(38, sent + 1000).gainChanged);  // lands in silence
+  TEST_ASSERT_FALSE(p.tick(sent + 1100).gainChanged);
+  TEST_ASSERT_EQUAL_UINT16(0, p.gainQ15());
+  const auto b = p.accepted(28, sent + 1400);
+  TEST_ASSERT_TRUE(ramped(b));
+  TEST_ASSERT_FALSE(p.ducked());
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, p.gainQ15());
+  TEST_ASSERT_TRUE(p.headsetChanged(20, 5000).volumeChanged);  // the rocker moves the UI
+
+  AbsVolumePolicy q = playing();
+  dip(q);
+  TEST_ASSERT_FALSE(q.tick(sent + 400 + AbsVolumePolicy::kProbeTimeoutMs - 1).gainChanged);
+  const auto c = q.tick(sent + 400 + AbsVolumePolicy::kProbeTimeoutMs);
+  TEST_ASSERT_TRUE(ramped(c));
+  TEST_ASSERT_FALSE(q.ducked());
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, q.gainQ15());
+
+  // AVRCP goes meanwhile: software, up from silence.
+  AbsVolumePolicy r = playing();
+  dip(r);
+  const auto d = r.avrcpDown();
+  TEST_ASSERT_TRUE(ramped(d));
+  TEST_ASSERT_FALSE(r.ducked());
+  TEST_ASSERT_EQUAL_UINT16(softwareGain(vol::absToPercent(28)), r.gainQ15());
 }
 
 // Their volume keys while the command still waits for the silence: louder
@@ -947,16 +1311,23 @@ void test_headroom_setting_retargets_by_the_ramp() {
 }
 
 // After an unanswered probe and audio at the software level, the headphones'
-// own change shows the listener sets their level there: we stop sending ours
-// (a send from our stale value could step them up by more than one step).
+// own change shows the listener sets their level there: it ends the wait for
+// a late answer (the user's volume wasn't sent anyway, see
+// test_after_an_unanswered_probe_nothing_is_sent). Their level goes back
+// once, after the probe that may still be on its way; then nothing more,
+// not even ours again for a stale ACCEPT.
 void test_their_change_after_an_unanswered_probe_stops_our_sends() {
-  AbsVolumePolicy p = probing();
-  p.tick(5000);  // unanswered: still sent along
+  AbsVolumePolicy p = probing();  // 38
+  p.tick(5000);                   // unanswered
   p.streamActive(true, 5100);
-  TEST_ASSERT_TRUE(p.userSet(20, 6000).sendAbsolute);
-  const auto a = p.headsetChanged(8, 9000);  // not an echo of 25
+  TEST_ASSERT_FALSE(p.userSet(20, 6000).sendAbsolute);
+  const auto a = p.headsetChanged(8, 9000);  // theirs
   TEST_ASSERT_FALSE(a.gainChanged);
   TEST_ASSERT_FALSE(a.volumeChanged);
+  TEST_ASSERT_TRUE(a.sendAbsolute);
+  TEST_ASSERT_EQUAL_UINT8(8, a.absolute);
+  TEST_ASSERT_EQUAL(Mode::Software, p.mode());
+  TEST_ASSERT_FALSE(p.accepted(127, 9500).sendAbsolute);
   const auto b = p.userSet(15, 10000);
   TEST_ASSERT_FALSE(b.sendAbsolute);
   TEST_ASSERT_TRUE(b.gainChanged);  // our own gain, one step
@@ -1118,23 +1489,26 @@ void test_nothing_happens_to_the_mode_without_a_link() {
 // delay: at once, within a few hundred ms, or seconds late (past the probe's
 // timeout, grace and deadline); its answers and echoes of what it applied
 // come later still, but before a notification of a later key of its own.
-// It sets ~16 steps: to the nearest, rounding up, or above a floor. What
-// the listener hears is its level times our gain.
+// It sets ~16 steps (~32 on some links): to the nearest, rounding up, or
+// above a floor. What
+// the listener hears is its level times our gain. Our streams start only
+// when audioReady() lets them; the headset starts its own at any time.
 namespace {
 double headsetDb(int level) { return level <= 0 ? -100.0 : 40.0 * (level / 127.0 - 1.0); }
 double gainDb(uint16_t q) { return q == 0 ? -100.0 : 20.0 * std::log10(q / 32768.0); }
 // What the listener hears; our gain at 0 is silence, whatever their level.
 double heardDb(int level, uint16_t q) { return q == 0 ? -1000.0 : headsetDb(level) + gainDb(q); }
-// How the headset sets a level: ~16 steps, to the nearest one, up to the
-// next one (more than kEchoTolerance above what we asked for, at times), or
-// the nearest one but never below a floor.
+// How the headset sets a level: in steps of `step` (8: ~16 steps, 4: ~32),
+// to the nearest one, up to the next one (more than kEchoTolerance above
+// what we asked for, at times), or the nearest one but never below a floor.
 enum class Rounding { Nearest, Up, Floor };
-int quantise(int abs, Rounding r) {
+int quantise(int abs, Rounding r, int step) {
   abs = abs < 0 ? 0 : (abs > 127 ? 127 : abs);
+  const int nearest = abs >= 128 - step / 2 ? 127 : ((abs + step / 2) / step) * step;
   switch (r) {
-    case Rounding::Up: return abs > 120 ? 127 : ((abs + 7) / 8) * 8;
-    case Rounding::Floor: return std::max(16, abs >= 124 ? 127 : ((abs + 4) / 8) * 8);
-    default: return abs >= 124 ? 127 : ((abs + 4) / 8) * 8;
+    case Rounding::Up: return abs > 128 - step ? 127 : ((abs + step - 1) / step) * step;
+    case Rounding::Floor: return std::max(16, nearest);
+    default: return nearest;
   }
 }
 
@@ -1149,7 +1523,8 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
     seed = seed * 1664525u + 1013904223u;
     return (seed >> 8) % n;
   };
-  auto quantise = [rounding](int abs) { return ::quantise(abs, rounding); };
+  int step = 8;  // the headset's key step (and how it sets a level)
+  auto quantise = [rounding, &step](int abs) { return ::quantise(abs, rounding, step); };
   AbsVolumePolicy p(30);
   uint32_t now = 0;
   bool streaming = false;
@@ -1163,18 +1538,44 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
     bool user;     // the user's own volume (userSet())
     uint8_t percent;  // the volume shown when it was sent
     int depth;        // sent in reply to an answer: see kMaxReplyDepth
+    int id;           // in the order sent
   };
   struct Due {
     int level;
     int depth;  // of the command it answers
+    int id;     // ...and its id
   };
   std::deque<InFlight> inFlight;
   std::vector<Due> acceptsDue, echoesDue;
-  auto apply = [&](int value, int depth) {
+  auto apply = [&](int value, int depth, int id) {
     level = quantise(value);
-    if (answers) acceptsDue.push_back({level, depth});
-    if (echoes) echoesDue.push_back({level, depth});
+    if (answers) acceptsDue.push_back({level, depth, id});
+    if (echoes) echoesDue.push_back({level, depth, id});
   };
+  // A command that ended a wait while one of ours may have been on its way
+  // (their level back, ours after a late confirmation): a stream of ours
+  // must not start, nor our gain rise once audio has flowed, until it is
+  // answered or kProbeTimeoutMs has passed. Answered: an ACCEPT or echo of
+  // it or of a later command (they land in order), or one the policy can't
+  // tell from its own (ESP-IDF names no command): an ACCEPT near what it
+  // asked for, an echo of an older command near it or a later command, or
+  // within 1 of an ACCEPT since. A key of theirs near those only once
+  // nothing older of ours is still on its way.
+  struct Held {
+    bool on = false;
+    bool answered = false;
+    int id = 0;
+    uint32_t ms = 0;
+    std::vector<int> sent;      // it and the commands sent since
+    std::vector<int> accepted;  // ACCEPTs since
+  } held;
+  auto near = [](const std::vector<int>& v, int x, int tol) {
+    for (int y : v) {
+      if (std::abs(x - y) <= tol) return true;
+    }
+    return false;
+  };
+  int nextId = 0, heldCmds = 0, heldBack = 0, ourStarts = 0, heldChecks = 0;
   int probesSent = 0, lifts = 0, heardChecks = 0, lateProbes = 0, lateSends = 0, rampedRises = 0;
   int delayed = 0, landings = 0, landingRises = 0, handBacks = 0, timeouts = 0;
   uint32_t silentMs = 0;  // when our gain was last taken to silence
@@ -1197,11 +1598,13 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
     int levelBefore = level;
     int delivered = -1;  // what an ACCEPT or a notification said
     int deliveredDepth = -1;  // ...answering a command of this depth (-1: a key of theirs)
+    int deliveredId = -1;     // ...and its id
     bool landed = false;
     InFlight cmd{};
     switch (what) {
       case 0:
         if (!p.linked()) {  // a new link, maybe other headphones
+          step = rnd(3) == 0 ? 4 : 8;
           level = quantise(static_cast<int>(rnd(128)));
           applies = rnd(4) != 0;
           answers = rnd(3) != 0;
@@ -1212,6 +1615,7 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
           heardLink = false;
           streaming = false;
           levelBefore = level;
+          held = Held{};
         }
         a = p.linkUp(now);
         break;
@@ -1229,11 +1633,13 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
         inFlight.clear();
         acceptsDue.clear();
         echoesDue.clear();
+        held = Held{};
         break;
       case 4:
         if (acceptsDue.empty()) break;
         delivered = acceptsDue.front().level;
         deliveredDepth = acceptsDue.front().depth;
+        deliveredId = acceptsDue.front().id;
         acceptsDue.erase(acceptsDue.begin());
         a = p.accepted(static_cast<uint8_t>(delivered), now);
         break;
@@ -1241,6 +1647,7 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
         if (echoesDue.empty()) break;
         delivered = echoesDue.front().level;
         deliveredDepth = echoesDue.front().depth;
+        deliveredId = echoesDue.front().id;
         echoesDue.erase(echoesDue.begin());
         a = p.headsetChanged(static_cast<uint8_t>(delivered), now);
         break;
@@ -1249,19 +1656,31 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
         // channel, then BTC_TASK and BtAppT's queue. A key pressed after a
         // command of ours landed is reported after its ACCEPT and echo.)
         if (!echoesDue.empty() || !acceptsDue.empty()) break;
-        level = quantise(level + (rnd(2) ? 8 : -8));
+        level = quantise(level + (rnd(2) ? step : -step));
         levelBefore = level;  // their doing, not ours
         delivered = level;
         a = p.headsetChanged(static_cast<uint8_t>(level), now);
         break;
       case 7: a = p.userSet(static_cast<uint8_t>(rnd(101)), now); break;
-      case 8:  // (only linked: StreamControl has no stream without a link)
+      case 8: {  // (only linked: StreamControl has no stream without a link)
         if (!p.linked()) break;
-        streaming = rnd(2) != 0;
+        const bool start = rnd(2) != 0;
+        if (start && !wasStreaming && rnd(4) != 0) {  // ours: through the gate
+          const bool heldNow = held.on && !held.answered && now - held.ms < AbsVolumePolicy::kProbeTimeoutMs;
+          if (!p.audioReady(now)) {
+            if (heldNow) ++heldBack;
+            break;
+          }
+          ++ourStarts;
+          // Nothing of ours still on its way lands into it unanswered.
+          TEST_ASSERT_FALSE(heldNow);
+        }
+        streaming = start;
         if (wasStreaming && !streaming) stopMs = now;
         a = p.streamActive(streaming, now);
         if (streaming) heardLink = true;
         break;
+      }
       case 9:
       case 10:  // a command of ours lands at the headset
         if (inFlight.empty() || inFlight.front().at > now) break;
@@ -1269,20 +1688,51 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
         inFlight.pop_front();
         landed = true;
         ++landings;
-        apply(cmd.value, cmd.depth);
+        apply(cmd.value, cmd.depth, cmd.id);
         break;
       default: a = p.tick(now); break;
     }
+    // Answers to a held command (before a command sent now can be one).
+    if (held.on && delivered >= 0) {
+      if (what == 4) {
+        if (deliveredId >= held.id || std::abs(delivered - held.sent.front()) <= AbsVolumePolicy::kEchoTolerance) {
+          held.answered = true;
+        }
+        held.accepted.push_back(delivered);
+      } else {
+        const bool nearOurs =
+            near(held.sent, delivered, AbsVolumePolicy::kEchoTolerance) || near(held.accepted, delivered, 1);
+        bool olderOut = false;  // a command sent before it still on its way
+        for (const InFlight& f : inFlight) olderOut = olderOut || f.id < held.id;
+        if (deliveredId >= held.id || (nearOurs && (what == 5 || !olderOut))) held.answered = true;
+      }
+    }
     const int depth = deliveredDepth >= 0 ? deliveredDepth + 1 : 0;
+    const int id = a.sendAbsolute ? nextId++ : -1;
+    if (a.sendAbsolute && held.on) held.sent.push_back(a.absolute);
+    // What ends a wait while one of ours may be on its way (see Held): a
+    // handover's (their level, ours after a late confirmation), or a report
+    // of theirs ending one after audio has flowed (their level, or the
+    // volume shown if lower).
+    if (a.sendAbsolute && what != 7 &&
+        ((a.modeChanged && p.mode() == Mode::Absolute) ||
+         ((what == 5 || what == 6) && p.mode() == Mode::Software && (wasHeard || wasStreaming || streaming)))) {
+      held = Held{};
+      held.on = true;
+      held.id = id;
+      held.ms = now;
+      held.sent.push_back(a.absolute);
+      ++heldCmds;
+    }
     if (a.sendAbsolute && p.linked() && applies) {
       const uint32_t kind = rnd(3);
       const uint32_t delay = kind == 0 ? 0 : (kind == 1 ? rnd(400) : rnd(6000));
       if (delay == 0 && inFlight.empty()) {
-        apply(a.absolute, depth);
+        apply(a.absolute, depth, id);
       } else {
         uint32_t at = now + delay;
         if (!inFlight.empty() && static_cast<int32_t>(inFlight.back().at - at) > 0) at = inFlight.back().at;
-        inFlight.push_back({a.absolute, at, what == 7, p.percent(), depth});
+        inFlight.push_back({a.absolute, at, what == 7, p.percent(), depth, id});
         ++delayed;
       }
     }
@@ -1296,18 +1746,27 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
     }
 
     TEST_ASSERT_TRUE(p.gainQ15() <= vol::kHeadroomQ15);  // headroom always applied
-    // Jumps only go down. (A link lost during a dip snaps to the next link's
-    // level from silence: nothing plays, and the gain stage's snap never
-    // raises anyway.)
-    if (a.snap && !(what == 1 && gainBefore == 0)) TEST_ASSERT_TRUE(p.gainQ15() <= gainBefore);
+    // Jumps only go down. (A link lost during a dip, or while a late
+    // handover's rise waits for an answer, snaps to the next link's level
+    // from below: nothing plays, and the gain stage's snap never raises
+    // anyway.)
+    if (a.snap && !(what == 1 && (gainBefore == 0 || modeBefore == Mode::Absolute))) {
+      TEST_ASSERT_TRUE(p.gainQ15() <= gainBefore);
+    }
     if (p.mode() == Mode::Absolute) TEST_ASSERT_TRUE(p.linked());
-    if (p.ducked()) {
-      TEST_ASSERT_EQUAL(Mode::Probing, p.mode());
+    if (p.ducked()) {  // a late probe, or its handover waiting for their level back
+      TEST_ASSERT_TRUE(p.mode() != Mode::Software);
       TEST_ASSERT_EQUAL_UINT16(0, p.gainQ15());
     } else if (p.mode() != Mode::Absolute) {
       TEST_ASSERT_EQUAL_UINT16(softwareGain(p.percent()), p.gainQ15());
     }
     if (p.mode() == Mode::Probing) TEST_ASSERT_FALSE(p.audioReady(now));
+    // The gate stays shut while a command that ended a wait is unanswered
+    // inside its window (see Held), whether or not a start of ours comes.
+    if (p.linked() && held.on && !held.answered && now - held.ms < AbsVolumePolicy::kProbeTimeoutMs) {
+      ++heldChecks;
+      TEST_ASSERT_FALSE(p.audioReady(now));
+    }
     // A probe ends by its deadline, however often its timeout restarted.
     if (p.mode() != Mode::Probing) {
       probeOut = false;
@@ -1328,10 +1787,11 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
       } else {
         TEST_ASSERT_TRUE(a.absolute <= vol::percentToAbs(p.percent()) + 1);
       }
-      // After an unanswered probe, only steps down go out: the user's, ours
-      // again, their own level back.
+      // In Software mode (after an unanswered probe), only steps down go
+      // out: ours again, their own level back; never the user's volume.
       if (p.mode() == Mode::Software) TEST_ASSERT_TRUE(lastSent >= 0 && a.absolute <= lastSent);
     }
+    if (what == 7 && modeBefore == Mode::Software) TEST_ASSERT_FALSE(a.sendAbsolute);
     // No command loop: replies to answers of replies end.
     if (a.sendAbsolute) {
       maxDepth = std::max(maxDepth, depth);
@@ -1396,6 +1856,9 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
         if (after > before + 1e-9) {
           ++rampedRises;
           TEST_ASSERT_TRUE(a.gainChanged && !a.snap && !a.lift);
+          // Not while a command that ended a wait may still be on its way
+          // unanswered (see Held): what it follows could land in the rise.
+          TEST_ASSERT_FALSE(held.on && !held.answered && now - held.ms < AbsVolumePolicy::kProbeTimeoutMs);
           // Their level unchanged, or lowered (their own level sent back).
           TEST_ASSERT_TRUE(level <= levelBefore);
           // With nothing in flight, they are at no more than what we sent
@@ -1421,9 +1884,10 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
     }
   }
   printf("random events (rounding %d): %d probes/non-user sends, %d lifts, %d late probes, %d handbacks, "
-         "%d timeouts, %d landing rises, reply depth up to %d, %d steps from a UI above them\n",
+         "%d timeouts, %d landing rises, reply depth up to %d, %d steps from a UI above them, "
+         "%d held commands (gate checked shut %d times), %d of our starts (%d held back for one)\n",
          static_cast<int>(rounding), probesSent, lifts, lateProbes, handBacks, timeouts, landingRises,
-         maxDepth, desynced);
+         maxDepth, desynced, heldCmds, heldChecks, ourStarts, heldBack);
   TEST_ASSERT_TRUE(probesSent > 50);
   TEST_ASSERT_TRUE(heardChecks > 1000);
   TEST_ASSERT_TRUE(landings > 300);
@@ -1436,6 +1900,9 @@ void runRandomEvents(uint32_t seed, Rounding rounding, bool full) {
   TEST_ASSERT_TRUE(handBacks > 5);
   TEST_ASSERT_TRUE(timeouts > 20);
   TEST_ASSERT_TRUE(landingRises > 0);  // the residual risk does occur in this model
+  TEST_ASSERT_TRUE(heldCmds > 20);
+  TEST_ASSERT_TRUE(heldBack > 5);
+  TEST_ASSERT_TRUE(heldChecks > 100);
 }
 }  // namespace
 
@@ -1465,11 +1932,16 @@ int main(int, char**) {
   RUN_TEST(test_same_value_after_the_echo_window_is_adopted);
   RUN_TEST(test_notification_during_probe_proves_support);
   RUN_TEST(test_their_level_is_sent_after_a_probe_still_on_its_way);
+  RUN_TEST(test_their_report_during_the_probe_holds_the_first_stream);
+  RUN_TEST(test_their_report_after_an_unanswered_probe_holds_a_new_stream);
+  RUN_TEST(test_a_key_near_their_level_back_keeps_the_first_stream_held);
+  RUN_TEST(test_their_report_above_the_volume_shown_still_ends_below_it);
   RUN_TEST(test_louder_notification_during_probe_is_answered_with_ours);
   RUN_TEST(test_probe_times_out_to_software);
   RUN_TEST(test_probe_timeout_survives_millis_wraparound);
-  RUN_TEST(test_after_an_unanswered_probe_only_steps_down_are_sent);
+  RUN_TEST(test_after_an_unanswered_probe_nothing_is_sent);
   RUN_TEST(test_late_accept_after_audio_ramps_to_the_headphones);
+  RUN_TEST(test_late_accept_after_a_step_down_holds_the_rise);
   RUN_TEST(test_late_accept_after_a_rise_keeps_their_level);
   RUN_TEST(test_late_echo_after_audio_ramps_to_the_headphones);
   RUN_TEST(test_accept_above_what_we_asked_is_not_an_answer);
@@ -1477,7 +1949,7 @@ int main(int, char**) {
   RUN_TEST(test_late_accept_above_what_we_asked_is_not_a_confirmation);
   RUN_TEST(test_headphones_that_round_up_are_not_asked_for_ever);
   RUN_TEST(test_ours_again_never_steps_them_up);
-  RUN_TEST(test_echo_after_an_unanswered_probe_is_answered_with_at_most_the_last_sent);
+  RUN_TEST(test_ours_again_after_an_unanswered_probe_is_at_most_the_last_sent);
   RUN_TEST(test_their_report_after_a_stream_they_started_sends_their_level_back);
   RUN_TEST(test_echo_of_an_older_louder_command_is_not_an_answer);
   RUN_TEST(test_probe_has_a_hard_deadline);
@@ -1494,6 +1966,7 @@ int main(int, char**) {
   RUN_TEST(test_user_volume_during_the_dip_before_the_send);
   RUN_TEST(test_user_volume_during_the_dip_after_the_send);
   RUN_TEST(test_notification_during_a_late_probe);
+  RUN_TEST(test_their_key_during_the_dip_keeps_the_silence_until_answered);
   RUN_TEST(test_notification_before_a_late_probe_is_sent);
   RUN_TEST(test_late_probe_caps_a_loud_volume);
   RUN_TEST(test_link_down_during_the_dip);

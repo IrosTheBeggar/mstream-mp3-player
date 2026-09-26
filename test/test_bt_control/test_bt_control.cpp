@@ -162,6 +162,41 @@ void test_late_capabilities_while_started_leave_the_stream_alone() {
   TEST_ASSERT_TRUE(c.stream().streaming());
 }
 
+// The same with the Powerbeats Pro's timing (capabilities 1.1 s in, a SET
+// answered 1.0 s after it) and one key press more: in the dip's silence the
+// listener presses their VOL- (28, below our 38 still on its way). Their
+// level goes back after ours, and our gain stays at silence until it is
+// answered: 38 lands while nothing is heard, and only then does the gain
+// ramp up. The stream runs on throughout.
+void test_their_key_during_the_dip_keeps_the_silence_until_answered() {
+  FakeIo io;
+  BtControl c(io, 30);
+  c.linkUp(0);
+  c.setWanted(true, 10);
+  c.tick(AbsVolumePolicy::kCapsWaitMs);
+  startStream(c, io, 1600);
+  const size_t cmds = io.cmds.size();
+  const uint32_t caps = 1600 + 1100, sent = caps + AbsVolumePolicy::kDuckSettleMs;
+  c.capabilities(true, caps);
+  c.tick(sent);
+  TEST_ASSERT_EQUAL(1, static_cast<int>(io.sent.size()));
+  TEST_ASSERT_EQUAL_UINT8(38, io.sent[0]);
+  c.headsetChanged(28, sent + 400);
+  TEST_ASSERT_EQUAL(Mode::Absolute, c.volume().mode());
+  TEST_ASSERT_EQUAL(2, static_cast<int>(io.sent.size()));
+  TEST_ASSERT_EQUAL_UINT8(28, io.sent[1]);
+  TEST_ASSERT_EQUAL_UINT16(0, io.gain);
+  c.accepted(38, sent + 1000);  // lands in silence
+  c.tick(sent + 1200);
+  TEST_ASSERT_EQUAL_UINT16(0, io.gain);
+  c.accepted(28, sent + 1400);
+  TEST_ASSERT_EQUAL(Move::Ramp, io.moves.back());
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, io.gain);
+  TEST_ASSERT_EQUAL_UINT8(vol::absToPercent(28), c.volume().percent());
+  TEST_ASSERT_EQUAL(cmds, io.cmds.size());
+  TEST_ASSERT_TRUE(c.stream().streaming());
+}
+
 // A late probe after a pause: sent at once, and a NEW start waits for the
 // answer.
 void test_late_probe_holds_a_new_start() {
@@ -280,6 +315,48 @@ void test_headroom_setting() {
   TEST_ASSERT_EQUAL(Move::Ramp, io.moves.back());
   TEST_ASSERT_EQUAL_UINT16(vol::dbToQ15(-6.0f), io.gain);
   TEST_ASSERT_EQUAL_UINT16(vol::dbToQ15(-6.0f), c.volume().headroomQ15());
+}
+
+// The recheck's case, as BtControl runs it with the Powerbeats Pro's timing
+// (a SET answered 1 s after it): playing at 50 % when they connect, the
+// probe (64) goes out, and the listener presses their VOL- (20) before it
+// lands. The handover at their level sends it back, and START waits for
+// its ACCEPT: the probe lands (+14 dB on their side) while nothing plays,
+// not ~400 ms into the first stream as before.
+void test_their_report_during_the_probe_holds_the_start_until_answered() {
+  FakeIo io;
+  BtControl c(io, 50);
+  c.setWanted(true, 0);
+  c.linkUp(0);
+  c.capabilities(true, 0);
+  TEST_ASSERT_EQUAL(1, static_cast<int>(io.sent.size()));
+  TEST_ASSERT_EQUAL_UINT8(64, io.sent[0]);
+  c.headsetChanged(20, 300);
+  TEST_ASSERT_EQUAL(Mode::Absolute, c.volume().mode());
+  TEST_ASSERT_EQUAL(Move::Lift, io.moves.back());
+  TEST_ASSERT_EQUAL(2, static_cast<int>(io.sent.size()));
+  TEST_ASSERT_EQUAL_UINT8(20, io.sent[1]);
+  TEST_ASSERT_TRUE(io.cmds.empty());  // held until it is answered
+  c.tick(600);
+  c.accepted(64, 1000);  // the probe lands
+  c.tick(1100);
+  TEST_ASSERT_TRUE(io.cmds.empty());
+  c.accepted(20, 1300);  // their level back lands after it
+  TEST_ASSERT_EQUAL(Cmd::CheckReady, io.last());
+  startStream(c, io, 1350);
+  TEST_ASSERT_EQUAL(2, static_cast<int>(io.sent.size()));
+
+  // Headphones that never answer: START after kProbeTimeoutMs.
+  FakeIo io2;
+  BtControl d(io2, 50);
+  d.setWanted(true, 0);
+  d.linkUp(0);
+  d.capabilities(true, 0);
+  d.headsetChanged(20, 300);
+  d.tick(300 + AbsVolumePolicy::kProbeTimeoutMs - 1);
+  TEST_ASSERT_TRUE(io2.cmds.empty());
+  d.tick(300 + AbsVolumePolicy::kProbeTimeoutMs);
+  TEST_ASSERT_EQUAL(Cmd::CheckReady, io2.last());
 }
 
 // A probe that is never answered: the stream starts after the timeout and a
@@ -468,10 +545,12 @@ int main(int, char**) {
   RUN_TEST(test_link_while_playing_waits_for_the_probe_then_lifts);
   RUN_TEST(test_capabilities_between_start_and_started_dip_first);
   RUN_TEST(test_late_capabilities_while_started_leave_the_stream_alone);
+  RUN_TEST(test_their_key_during_the_dip_keeps_the_silence_until_answered);
   RUN_TEST(test_late_probe_holds_a_new_start);
   RUN_TEST(test_late_probe_waits_when_the_stream_stops);
   RUN_TEST(test_late_probe_without_audio_data_keeps_the_silence);
   RUN_TEST(test_headroom_setting);
+  RUN_TEST(test_their_report_during_the_probe_holds_the_start_until_answered);
   RUN_TEST(test_unanswered_probe_releases_the_stream);
   RUN_TEST(test_answer_within_the_grace_lifts);
   RUN_TEST(test_lift_after_a_stream_the_headphones_started_only_ramps);
