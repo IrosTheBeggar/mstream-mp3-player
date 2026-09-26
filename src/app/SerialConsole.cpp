@@ -65,6 +65,26 @@ void SerialConsole::poll() {
           actions_.freezePose(static_cast<int>(n));
           break;
         }
+        case Pending::InputLab:
+          Serial.printf("> input lab \"%s\"\n", arg_.c_str());
+          actions_.inputLab(arg_.c_str());
+          break;
+        case Pending::ScrollLab:
+          Serial.printf("> scroll lab \"%s\"\n", arg_.c_str());
+          actions_.scrollLab(arg_.c_str());
+          break;
+        case Pending::LibraryIndex:
+          Serial.printf("> library index \"%s\"\n", arg_.c_str());
+          actions_.libraryIndex(arg_.c_str());
+          break;
+        case Pending::FontProbe:
+          Serial.printf("> font probe \"%s\"\n", arg_.c_str());
+          actions_.fontProbe(arg_.c_str());
+          break;
+        case Pending::ThumbProbe:
+          Serial.printf("> thumbnail probe \"%s\"\n", arg_.c_str());
+          actions_.thumbProbe(arg_.c_str());
+          break;
         case Pending::None:
           break;
       }
@@ -93,6 +113,11 @@ void SerialConsole::poll() {
       case 't': pending_ = Pending::TempoPrior; arg_ = ""; break;
       case 'y': pending_ = Pending::DanceOffset; arg_ = ""; break;
       case 'k': pending_ = Pending::Freeze; arg_ = ""; break;
+      case 'u': pending_ = Pending::InputLab; arg_ = ""; break;
+      case 'w': pending_ = Pending::ScrollLab; arg_ = ""; break;
+      case 'g': pending_ = Pending::LibraryIndex; arg_ = ""; break;
+      case 'e': pending_ = Pending::FontProbe; arg_ = ""; break;
+      case 'j': pending_ = Pending::ThumbProbe; arg_ = ""; break;
       default: break;  // newlines etc.
     }
   }

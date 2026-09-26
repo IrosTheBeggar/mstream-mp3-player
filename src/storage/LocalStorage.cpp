@@ -37,7 +37,31 @@ void scan(fs::FS& fs, const String& dir, int depth, std::vector<Track>& out) {
     f.close();
   }
 }
+uint32_t walk(fs::FS& fs, const char* dir, int depth, int maxDepth, void (*fn)(const char*, void*), void* ctx) {
+  File d = fs.open(dir);
+  if (!d || !d.isDirectory()) return 0;
+  uint32_t n = 0;
+  for (File f = d.openNextFile(); f; f = d.openNextFile()) {
+    // A copy of the path: the File's buffer goes with it, and recursion opens more.
+    char path[256];
+    strlcpy(path, f.path(), sizeof(path));
+    const bool isDir = f.isDirectory();
+    f.close();
+    if (isDir) {
+      if (depth < maxDepth) n += walk(fs, path, depth + 1, maxDepth, fn, ctx);
+    } else {
+      fn(path, ctx);
+      ++n;
+    }
+  }
+  return n;
+}
 }  // namespace
+
+uint32_t LocalStorage::forEachFile(void (*fn)(const char* path, void* ctx), void* ctx, int maxDepth) {
+  if (!available()) return 0;
+  return walk(*fs_, kMusicDir, 0, maxDepth, fn, ctx);
+}
 
 bool LocalStorage::begin() {
   // The SD card shares the LCD's SPI bus; M5Unified knows the pins.

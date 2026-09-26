@@ -16,9 +16,11 @@
 #include "Track.h"
 #include "app/DanceMode.h"
 #include "app/Diagnostics.h"
+#include "app/Haptics.h"
 #include "app/Screenshot.h"
 #include "app/SerialConsole.h"
 #include "audio/Core2AudioBackend.h"
+#include "spike/Spike.h"
 #include "storage/LocalStorage.h"
 #include "ui/DisplayView.h"
 
@@ -36,6 +38,10 @@ static PlaybackController player(audio);
 static std::vector<Track> library;  // files found in storage
 static DanceMode danceMode(audio, player);
 static Screenshot shot;
+static Haptics haptics;
+// UI spike tools (docs/UI-SPIKE.md): input lab, scroll lab, library index,
+// font and thumbnail probes. Created in PSRAM on first use.
+static Spike spike(audio, haptics, storage);
 // Silent test mode (console z), until restart: the output stays on the
 // speaker at volume 0 and headphones connecting don't take it over, so
 // tests can run at night with the headphones connected.
@@ -261,9 +267,17 @@ static SerialConsole console({
       Serial.printf("[dance] latency offset %+d ms (not saved)\n", ms);
     },
     [](int n) { danceMode.freeze(n); },
+    [](const char* a) { spike.inputLab(a); },
+    [](const char* a) { spike.scrollLab(a); },
+    [](const char* a) { spike.index(a); },
+    [](const char* a) { spike.fontProbe(a); },
+    [](const char* a) { spike.thumbProbe(a); },
 });
 
 static void handleButtons() {
+  // The input lab logs the buttons and the glass instead (a B-hold would
+  // switch the output mid-test).
+  if (spike.ownsInput()) return;
   // The three touch buttons under the screen: click, or hold for half a second.
   if (M5.BtnA.wasClicked()) player.prev();
   if (M5.BtnA.wasHold()) stepVolume(-10);
@@ -273,7 +287,8 @@ static void handleButtons() {
   if (M5.BtnC.wasHold()) stepVolume(+10);
   // A tap on the screen itself (not the button strip) toggles the dance
   // screen; on the dance screen, a tap on the dancer's box cycles the dancer.
-  for (size_t i = 0; i < M5.Touch.getCount(); ++i) {
+  // A spike screen (scroll lab, probes) takes the glass for itself.
+  for (size_t i = 0; !spike.ownsScreen() && i < M5.Touch.getCount(); ++i) {
     const auto& t = M5.Touch.getDetail(i);
     if (!t.wasClicked() || t.y < 0 || t.y >= kDanceTouchMaxY) continue;
     if (danceMode.active() && DanceView::inBox(t.x, t.y)) {
@@ -415,7 +430,9 @@ void setup() {
   view.begin();
 
   storage.begin();
+  const uint32_t freeBeforeList = diag::heap().internalFree;
   library = storage.listTracks();
+  const int32_t libraryMeasured = static_cast<int32_t>(freeBeforeList) - static_cast<int32_t>(diag::heap().internalFree);
   Serial.printf("[lib] %s: %u tracks\n", storage.name(), (unsigned)library.size());
   diag::logHeap("storage");
 
@@ -424,9 +441,26 @@ void setup() {
   }
   diag::logHeap("audio");
 
-  std::vector<Track> playlist = library;
-  for (const Track& tone : builtInTones()) playlist.push_back(tone);
-  player.setPlaylist(playlist);
+  // Today's track list costs internal RAM twice: `library` and the
+  // player's copy. Measured here for the UI spike's report (g); the library
+  // index (PSRAM) is meant to replace both.
+  const uint32_t freeBeforePlaylist = diag::heap().internalFree;
+  {
+    // Sized exactly before the copy: the player keeps this vector, so any
+    // growth slack (a push_back past a copy's capacity doubles it) would stay
+    // in internal RAM for good. Same final layout as copying into
+    // setPlaylist's by-value parameter, without the transient second copy.
+    const std::vector<Track> tones = builtInTones();
+    std::vector<Track> playlist;
+    playlist.reserve(library.size() + tones.size());
+    playlist.insert(playlist.end(), library.begin(), library.end());
+    playlist.insert(playlist.end(), tones.begin(), tones.end());
+    player.setPlaylist(std::move(playlist));
+  }
+  const int32_t playlistMeasured =
+      static_cast<int32_t>(freeBeforePlaylist) - static_cast<int32_t>(diag::heap().internalFree);
+  spike.setTrackListCost(static_cast<uint32_t>(library.size()), libraryMeasured, playlistMeasured,
+                         Spike::estimateBytes(library), Spike::estimateBytes(player.playlist()));
 
   const auto rows = diagnosticsRows();
   for (const auto& row : rows) Serial.printf("[diag] %-10s %s\n", row.label.c_str(), row.value.c_str());
@@ -436,10 +470,16 @@ void setup() {
                 headphones[0] ? ("name contains \"" + String(headphones) + "\"").c_str() : "any very close device");
   danceMode.begin();
   diag::logHeap("dance");
+  haptics.begin();
+  spike.onScreenReleased([] { view.forget(); });  // the now-playing screen redraws in full
+  spike.begin();  // the library index, from the card
+  diag::logHeap("index");
   Serial.println("[console] n/p next/prev, space play/pause, o output, +/- volume, s stats, l list, "
                  "f forget bt, z silent test mode, d dance, m next dancer, x/X screenshot dancer/screen, v beat log; "
                  "with Enter: i<n> play, b<n> bench, c<name> headphones name, h<n> bt headroom -n dB, "
-                 "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes)");
+                 "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
+                 "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress), "
+                 "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja)");
 }
 
 void loop() {
@@ -458,6 +498,9 @@ void loop() {
     if (lastTrack >= 0) danceMode.onTrackChanged();
     lastTrack = player.currentIndex();
   }
+  // A spike screen owns the display while it's up: no dance, no now-playing.
+  spike.loop(now);
+  if (spike.ownsScreen() && danceMode.active()) danceMode.setActive(false);
   // The dance screen draws its own frames (~30/s); the now-playing screen waits.
   danceMode.loop(now, silent);
   shot.poll();
@@ -469,7 +512,7 @@ void loop() {
     diag::logHeap("playing");
     heapLoggedWhilePlaying = true;
   }
-  if (!danceMode.active() && now >= kDiagnosticsScreenMs && now - lastDraw >= 250) {
+  if (!danceMode.active() && !spike.ownsScreen() && now >= kDiagnosticsScreenMs && now - lastDraw >= 250) {
     render();
     lastDraw = now;
   }

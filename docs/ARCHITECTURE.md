@@ -19,6 +19,8 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  Declicker  DeclickReader  Track  hal/*                       |
               |  AudioTap  TapReader  BeatTracker  ClickGen  DancePose        |
               |  CrabPose  CrabArt (generated)  DanceSkin                     |
+              |  LibraryIndex  LibrarySynth  TextFold  TouchGesture           |
+              |  KineticScroll  ScrollGovernor                                |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -278,6 +280,23 @@ results: [MASCOT-POC.md](MASCOT-POC.md).
 is present, otherwise the ~11.9 MB LittleFS partition, and lists the `.mp3` and
 `.flac` files under `/music` (recursive, sorted, capped at 200). The planned
 library index and sync from mStream replace this scan (see Roadmap).
+
+## UI spike (browsing UI groundwork)
+
+The browsing UI follows the tab bar design. Its riskiest parts are measured
+first by tools that stay in the firmware as diagnostics
+([UI-SPIKE.md](UI-SPIKE.md)): an input lab (button and glass-touch timing,
+target practice near the bottom edge, haptic ticks), a scroll lab (a
+virtualised list flick-scrolled while audio streams from the SD card, with
+per-slice SPI bus hold times and the ring fill), a font probe and a thumbnail
+probe. The pieces the real UI will keep are portable and host-tested:
+`LibraryIndex` (the library as a PSRAM string arena, fixed records and
+sorted views, built from the card's folders; the future single store, which
+the playlist doesn't use yet), `TextFold`, `TouchGesture`, `KineticScroll`
+and `ScrollGovernor` (lists back off the SPI bus when the decoder's buffer,
+`Core2AudioBackend::bufferedMsNow()`, runs low). On the Core2, `LcdLock`
+times each LCD hold of the bus it shares with the SD card, and `Haptics`
+plays vibration patterns from a FreeRTOS timer.
 
 ## Build notes
 

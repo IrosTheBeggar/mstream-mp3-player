@@ -18,6 +18,14 @@
 //   t<bpm> tempo prior for the beat tracker (t or t0 clears it; a track change does too)
 //   y<ms> dance latency offset, + later / - earlier (not saved)
 //   k<n> freeze the dancer at phase n/8 of a two-beat cycle, 0-15 (k alone: follow the beat)
+// and the UI spike's tools (docs/UI-SPIKE.md), also ended with Enter, the
+// text after the letter passed on as it is:
+//   u...  input lab (u toggles; u0-u3 modes; us summary)
+//   w...  scroll lab (w toggles; w0 interactive, w1-w3 stress)
+//   g...  library index (g report, g0 from the SD card, g<n> synthetic)
+//   e...  font probe (e all, e1-e5 one option)
+//   j...  thumbnail probe (j first cover, j<n>, jw<n> with .565 files, ja all)
+// (No 'f' for fonts: f forgets the headphones and restarts.)
 class SerialConsole {
 public:
   struct Actions {
@@ -41,6 +49,12 @@ public:
     std::function<void(float)> tempoPrior;
     std::function<void(int)> danceOffset;
     std::function<void(int)> freezePose;   // -1: unfreeze
+    // UI spike: the argument as typed (may be "").
+    std::function<void(const char*)> inputLab;
+    std::function<void(const char*)> scrollLab;
+    std::function<void(const char*)> libraryIndex;
+    std::function<void(const char*)> fontProbe;
+    std::function<void(const char*)> thumbProbe;
   };
 
   explicit SerialConsole(Actions actions) : actions_(std::move(actions)) {}
@@ -49,7 +63,10 @@ public:
   void poll();
 
 private:
-  enum class Pending { None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze };
+  enum class Pending {
+    None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
+    InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe,
+  };
 
   Actions actions_;
   Pending pending_ = Pending::None;  // a command waiting for its argument

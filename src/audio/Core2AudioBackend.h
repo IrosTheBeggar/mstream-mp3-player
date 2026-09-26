@@ -97,6 +97,23 @@ public:
   // Sample rate of the audio in the ring (the speaker plays at it).
   int sampleRate() const { return shared_.rate; }
   const Stats& stats() const { return stats_; }  // refreshed by loop() once a second
+  // Live numbers for the UI (any task; stats() is once a second):
+  // audio waiting in the ring now, in ms of the ring's sample rate. The
+  // scrolling lists back off when it runs low (ScrollGovernor).
+  uint32_t bufferedMsNow() const;
+  // The outputs' underrun count (free-running).
+  uint32_t underrunsNow() const { return shared_.underruns.load(std::memory_order_relaxed); }
+  // Decode task time spent producing, since boot (never reset; per-second
+  // deltas give the decoder's share of core 1, SD waits included).
+  uint64_t decodeBusyUsTotal() const { return busyTotalUs_.load(std::memory_order_relaxed); }
+  // Whether a low ring now means the audio is at risk: true once the
+  // current track has filled the ring to kSteadyMs, false from a track's
+  // start until then (the ring is filling from empty) and while it drains at
+  // the end of a file (the ring empties on purpose). The scrolling lists
+  // only back off while this is true (ScrollGovernor); an underrun counts
+  // whatever it says.
+  bool ringSteady() const { return ringSteady_.load(std::memory_order_relaxed); }
+  static constexpr uint32_t kSteadyMs = 1000;
   // For the UI; set by the decode task. Title/artist come from ID3 tags and are
   // empty when the file has none.
   std::string description() const;  // e.g. "MP3, 44100 Hz"
@@ -124,6 +141,7 @@ private:
   void closeDecoder();
   Produced produceTone();
   Produced produceDecoded();
+  void noteRingFill(int rate);  // decode task: ringSteady_ once the ring holds kSteadyMs
   void runBench(const std::string& path);
   void setText(std::string& field, const std::string& value);
 
@@ -160,6 +178,8 @@ private:
 
   std::atomic<uint32_t> trackStart_{0};  // ring readPos() where the current track begins
   std::atomic<uint64_t> busyUs_{0};      // decode task time spent producing, current track
+  std::atomic<uint64_t> busyTotalUs_{0}; // the same, since boot
+  std::atomic<bool> ringSteady_{false};  // see ringSteady()
   std::atomic<uint64_t> producedFrames_{0};
 
   // Counts pause() calls. The decode task un-pauses a newly started track

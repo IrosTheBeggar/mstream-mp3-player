@@ -104,6 +104,18 @@ The serial console (115200 baud) is there for scripted testing:
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | | |
 
+The UI spike's tools ([docs/UI-SPIKE.md](docs/UI-SPIKE.md)) measure the
+browsing UI's risks before its screens are built. Each is a letter, an
+optional argument and Enter:
+
+| Command | Tool |
+|---|---|
+| `u` (`u0`-`u3`, `us`, `uh<ms>`, `ut<ms>`) | input lab: button and glass-touch logging, tab target practice, button practice, haptic ticks, percentile summary |
+| `w` (`w0`-`w3`, `wv` `wf` `wh` `wc` `wd` `wg` `ws`) | scroll lab: a flick-scrolled library list, interactive or a 60 s stress while audio plays |
+| `g` (`g0`, `g<n>`) | library index: report, rebuild from the card, or a synthetic library of n tracks |
+| `e` (`e1`-`e5`) | font probe: list rows in FreeSans (folded), efont and a VLW font, timed |
+| `j` (`j<n>`, `jw<n>`, `ja`) | thumbnail probe: cover.jpg to 40x40 / 80x80, decoder RAM, PSRAM and .565 caches |
+
 ## Layout
 
 ```
@@ -121,21 +133,32 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   CrabPose, CrabArt   The crab's layer frames and offsets per beat phase; its
                       pixel art (generated from tools/art/crab.json)
   DanceSkin           Which dancer is on screen (crab, stick)
+  LibraryIndex        The library in a few PSRAM blocks: string arena, records,
+                      sorted views, A-Z buckets, folder tree (LibrarySynth:
+                      made-up libraries of any size)
+  TextFold            UTF-8 to ASCII for the GFX fonts; the library's sort order
+  TouchGesture, KineticScroll, ScrollGovernor
+                      Tap/hold/drag/flick; inertial list scrolling; how hard a
+                      list may use the SPI bus, from the audio buffer's fill
   BtControl           Bluetooth decisions: media stream (StreamControl), volume
                       (AbsVolumePolicy, GainRamp), reconnect (ReconnectPlanner)
   hal/                IAudioBackend, IStorage
 src/                  Core2 firmware
   audio/              Core2AudioBackend (decode task), RingOutput, BtSink, SpeakerSink
   storage/            LocalStorage: SD card if present, else LittleFS
-  ui/                 DisplayView (M5GFX): bring-up and now-playing screens; DanceView
-  app/                SerialConsole, Diagnostics, DanceMode, Screenshot
+  ui/                 DisplayView (M5GFX): bring-up and now-playing screens; DanceView;
+                      LcdLock (times how long the LCD holds the SPI bus)
+  app/                SerialConsole, Diagnostics, DanceMode, Screenshot, Haptics
+  spike/              UI spike tools: input lab, scroll lab, font and thumbnail
+                      probes (docs/UI-SPIKE.md)
   main.cpp            Wires it together; buttons, Bluetooth events, rendering
 data/                 LittleFS image source (data/music is gitignored)
 tools/                make_test_audio.py; iram_diet.py (build post-script);
-                      crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*)
+                      crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*);
+                      vlw_font.py (VLW fonts for the font probe -> src/spike/VlwFonts.cpp)
 test/                 Host unit tests (Unity)
 docker/               mStream dev server
-docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md
+docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.md
 ```
 
 ## License

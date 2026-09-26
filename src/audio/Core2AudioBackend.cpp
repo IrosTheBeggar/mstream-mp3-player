@@ -217,6 +217,12 @@ void Core2AudioBackend::loop(uint32_t nowMs) {
   stats_.decodeStackFree = uxTaskGetStackHighWaterMark(task_);
 }
 
+uint32_t Core2AudioBackend::bufferedMsNow() const {
+  const int rate = shared_.rate;
+  if (!ring_ || rate <= 0) return 0;
+  return static_cast<uint32_t>(static_cast<uint64_t>(ring_->size()) * 1000 / rate);
+}
+
 std::string Core2AudioBackend::description() const {
   std::lock_guard<std::mutex> guard(lock_);
   return description_;
@@ -273,6 +279,7 @@ void Core2AudioBackend::decodeTask() {
             break;
           case Produced::Done:
             work = Work::Draining;
+            ringSteady_ = false;  // the ring empties on purpose now
             shared_.expectingAudio = false;
             sync_.report(generation, Phase::Draining);
             break;
@@ -307,6 +314,7 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   toneTrack_ = false;
   clickTrack_ = false;
   shared_.expectingAudio = false;
+  ringSteady_ = false;  // filling from empty until kSteadyMs
   trackStart_ = ring_->discardAll();  // nothing of the previous track plays after this
   busyUs_ = 0;
   producedFrames_ = 0;
@@ -420,11 +428,21 @@ Core2AudioBackend::Produced Core2AudioBackend::produceTone() {
   const uint32_t n = clickTrack_ ? click_.generate(chunk_, kChunkFrames) : tone_.generate(chunk_, kChunkFrames);
   if (n == 0) return Produced::Done;
   ring_->write(chunk_, n);
-  busyUs_ += static_cast<uint64_t>(esp_timer_get_time() - t0);
+  const auto toneUs = static_cast<uint64_t>(esp_timer_get_time() - t0);
+  busyUs_ += toneUs;
+  busyTotalUs_ += toneUs;
   producedFrames_ += n;
   if (!shared_.expectingAudio && producedFrames_ >= kToneRate / 4) shared_.expectingAudio = true;
+  noteRingFill(kToneRate);
   vTaskDelay(1);  // share core 1 with the UI loop
   return Produced::More;
+}
+
+void Core2AudioBackend::noteRingFill(int rate) {
+  if (ringSteady_.load(std::memory_order_relaxed) || rate <= 0) return;
+  if (static_cast<uint64_t>(ring_->size()) * 1000 >= static_cast<uint64_t>(kSteadyMs) * static_cast<uint64_t>(rate)) {
+    ringSteady_ = true;
+  }
 }
 
 Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
@@ -447,7 +465,9 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
   out_->setBudget(kChunkFrames);
   const bool running = decoder_->loop();
   out_->commit();
-  busyUs_ += static_cast<uint64_t>(esp_timer_get_time() - t0);
+  const auto passUs = static_cast<uint64_t>(esp_timer_get_time() - t0);
+  busyUs_ += passUs;
+  busyTotalUs_ += passUs;
   producedFrames_ = before + kChunkFrames - out_->budgetLeft();
 
   if (out_->rateRejected()) return Produced::Failed;
@@ -459,6 +479,7 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
       producedFrames_ >= static_cast<uint64_t>(out_->rate()) / 4) {
     shared_.expectingAudio = true;  // past the pre-roll
   }
+  noteRingFill(out_->rate());
   if (!running) sourceDone_ = true;
   vTaskDelay(1);  // share core 1 with the UI loop
   return Produced::More;
