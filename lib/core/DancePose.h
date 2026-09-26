@@ -100,8 +100,9 @@ public:
   // A fixed pose for screenshots: full dance weight, no smoothing.
   Pose frozen(float phi, bool odd) const { return dancePose(phi, odd, box_); }
   float weight() const { return weight_; }
-  void reset() {
-    weight_ = 0.0f;
+  // `weight`: start there (a skin switch hands over the other skin's weight).
+  void reset(float weight = 0.0f) {
+    weight_ = weight < 0.0f ? 0.0f : (weight > 1.0f ? 1.0f : weight);
     idle_ = 0.0f;
   }
 

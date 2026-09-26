@@ -8,7 +8,8 @@
 //   n next   p prev   <space> play/pause   o switch output   + / - volume
 //   s stats  l list tracks   f forget the remembered Bluetooth device and restart
 //   z silent test mode (speaker at volume 0, Bluetooth doesn't take over; until restart)
-//   d dance screen on/off   x / X screenshot of the figure / the whole screen
+//   d dance screen on/off   m next dancer (crab, stick)
+//   x / X screenshot of the dancer's box / the whole screen
 //   v per-beat log on/off
 // and commands that take an argument, ended with Enter:
 //   i<n> play track n (0-based)   b<n> benchmark decoding track n
@@ -16,7 +17,7 @@
 //   h<n> Bluetooth headroom -n dB, 0-12 (a diagnostic, not saved; default 2)
 //   t<bpm> tempo prior for the beat tracker (t or t0 clears it; a track change does too)
 //   y<ms> dance latency offset, + later / - earlier (not saved)
-//   k<n> freeze the figure at phase n/8 of a two-beat cycle, 0-15 (k alone: follow the beat)
+//   k<n> freeze the dancer at phase n/8 of a two-beat cycle, 0-15 (k alone: follow the beat)
 class SerialConsole {
 public:
   struct Actions {
@@ -34,6 +35,7 @@ public:
     std::function<void(int)> setHeadroom;
     std::function<void()> silentMode;
     std::function<void()> toggleDance;
+    std::function<void()> cycleSkin;
     std::function<void(bool)> screenshot;  // true: the whole screen
     std::function<void()> toggleBeatLog;
     std::function<void(float)> tempoPrior;

@@ -25,10 +25,31 @@ constexpr int kFlashX = DanceView::kBoxW - 10;  // the beat dot's centre, in the
 constexpr int kFlashY = 10;
 }  // namespace
 
-bool DanceView::begin() {
+bool DanceView::begin(dance::Skin skin) {
   sprite_.setPsram(true);  // before createSprite(): otherwise internal RAM
-  sprite_.setColorDepth(8);
+  skin_ = skin;
+  return create();
+}
+
+bool DanceView::setSkin(dance::Skin skin) {
+  if (skin == skin_ && ready_) return true;
+  skin_ = skin;
+  return create();
+}
+
+bool DanceView::create() {
+  sprite_.deleteSprite();
+  sprite_.deletePalette();  // or an 8-bit sprite would be a palette one
+  paletteStep_ = -1;
+  full_ = true;             // the next frame pushes the whole box
+  last_ = Rect{};
+  // Crab: RGB565, the panel's own format, so a push is a plain copy (a
+  // 4-bit palette sprite, tried first, converted every pixel through the
+  // palette during the push: ~4 ms more of held SPI bus per frame while an
+  // MP3 played). Stick figure: RGB332.
+  sprite_.setColorDepth(static_cast<uint8_t>(skin_ == dance::Skin::Crab ? 16 : 8));
   ready_ = sprite_.createSprite(kBoxW, kBoxH) != nullptr;
+  if (ready_) sprite_.fillSprite(0);  // black
   return ready_;
 }
 
@@ -57,7 +78,7 @@ void DanceView::setTitle(const String& title) {
   d.setFont(&fonts::Font2);
   d.setTextColor(kFg, kHeader);
   d.setTextDatum(textdatum_t::middle_left);
-  d.setTextPadding(kW - 16);
+  d.setTextPadding(kW - 8);  // to the screen's edge: a shorter title clears a longer one's tail
   d.drawString(title, 8, kHeaderH / 2);
 }
 
@@ -105,17 +126,36 @@ DanceView::Rect DanceView::unite(const Rect& a, const Rect& b) {
   return {std::min(a.x0, b.x0), std::min(a.y0, b.y0), std::max(a.x1, b.x1), std::max(a.y1, b.y1)};
 }
 
-void DanceView::drawFigure(const dance::Pose& p, bool flash, bool dancing) {
-  if (!ready_) return;
-  auto& s = sprite_;
-  const uint16_t c = dancing ? kFg : kIdle;
-  const Rect now = bounds(p);
+void DanceView::beginFrame(const Rect& now, int bg) {
   dirty_ = full_ ? Rect{0, 0, kBoxW, kBoxH} : unite(now, last_);
   last_ = now;
   // Only the dirty rectangle is cleared and drawn (the rest of the sprite
   // still holds what the LCD shows).
-  s.setClipRect(dirty_.x0, dirty_.y0, dirty_.x1 - dirty_.x0, dirty_.y1 - dirty_.y0);
-  s.fillRect(dirty_.x0, dirty_.y0, dirty_.x1 - dirty_.x0, dirty_.y1 - dirty_.y0, kBg);
+  sprite_.setClipRect(dirty_.x0, dirty_.y0, dirty_.x1 - dirty_.x0, dirty_.y1 - dirty_.y0);
+  sprite_.fillRect(dirty_.x0, dirty_.y0, dirty_.x1 - dirty_.x0, dirty_.y1 - dirty_.y0, bg);
+}
+
+void DanceView::drawDot(bool flash, int bg, int colour, bool smooth) {
+  const Rect dot{kFlashX - 8, kFlashY - 8, kFlashX + 8, kFlashY + 8};
+  const bool overlap = dirty_.x0 < dot.x1 && dot.x0 < dirty_.x1 && dirty_.y0 < dot.y1 && dot.y0 < dirty_.y1;
+  flashDirty_ = full_ || overlap || flash != flash_;
+  if (!flashDirty_) return;
+  sprite_.fillRect(dot.x0, dot.y0, dot.x1 - dot.x0, dot.y1 - dot.y0, bg);
+  if (flash) {
+    if (smooth) {
+      sprite_.fillSmoothCircle(kFlashX, kFlashY, 5, colour);
+    } else {
+      sprite_.fillCircle(kFlashX, kFlashY, 5, colour);  // crisp, as the crab's pixels
+    }
+  }
+  flash_ = flash;
+}
+
+void DanceView::drawFigure(const dance::Pose& p, bool flash, bool dancing) {
+  if (!ready_ || skin_ != dance::Skin::Stick) return;
+  auto& s = sprite_;
+  const uint16_t c = dancing ? kFg : kIdle;
+  beginFrame(bounds(p), kBg);
   const dance::Box box;
   s.fillRect(4, static_cast<int>(box.groundY) + 3, kBoxW - 8, 2, kGround);
   auto line = [&](dance::Point a, dance::Point b) {
@@ -144,16 +184,40 @@ void DanceView::drawFigure(const dance::Pose& p, bool flash, bool dancing) {
   s.fillSmoothCircle(hx, hy, hr, c);
   s.fillSmoothCircle(hx, hy, hr - 4, kBg);
   s.clearClipRect();
-  // The beat dot, in its corner: drawn and pushed only when it changes (or
-  // the figure's rectangle reached into its corner and cleared it).
-  const Rect dot{kFlashX - 8, kFlashY - 8, kFlashX + 8, kFlashY + 8};
-  const bool overlap = dirty_.x0 < dot.x1 && dot.x0 < dirty_.x1 && dirty_.y0 < dot.y1 && dot.y0 < dirty_.y1;
-  flashDirty_ = full_ || overlap || flash != flash_;
-  if (flashDirty_) {
-    s.fillRect(kFlashX - 8, kFlashY - 8, 16, 16, kBg);
-    if (flash) s.fillSmoothCircle(kFlashX, kFlashY, 5, kAccent);
-    flash_ = flash;
+  drawDot(flash, kBg, kAccent, true);
+}
+
+void DanceView::drawCrab(const crab::Pose& p, float weight, bool flash) {
+  if (!ready_ || skin_ != dance::Skin::Crab) return;
+  auto& s = sprite_;
+  // The palette, idle to dance, as RGB565. Every pixel in a crab colour is
+  // inside this frame's dirty rectangle (it holds the last frame's crab), so
+  // the crab is redrawn in the new colours everywhere; the background,
+  // shadow, ground and dot entries are the same in both palettes.
+  const int step = crab::paletteStep(weight);
+  if (step != paletteStep_) {
+    uint8_t pal[crab::kPaletteSize][3];
+    crab::paletteAt(step, pal);
+    for (int i = 0; i < crab::kPaletteSize; ++i) ink_[i] = lgfx::color565(pal[i][0], pal[i][1], pal[i][2]);
+    paletteStep_ = step;
   }
+  // The blitter hands out palette indices; this canvas turns them into colours.
+  struct Ink {
+    M5Canvas& s;
+    const uint16_t* ink;
+    void fillRect(int x, int y, int w, int h, int ix) { s.fillRect(x, y, w, h, ink[ix]); }
+  } ink{s, ink_};
+  const crab::Rect r = crab::drawnRect(p);
+  beginFrame(Rect{r.x0, r.y0, r.x1, r.y1}, ink_[0]);
+  ink.fillRect(4, crab::kOriginY, kBoxW - 8, 2, crab::kGroundIx);  // the stick figure's ground line
+  const crab::Rect sh = crab::shadowRect(p);
+  ink.fillRect(sh.x0, sh.y0, sh.x1 - sh.x0, sh.y1 - sh.y0, crab::kShadowIx);
+  // Integer blocks of one colour: nothing is smoothed or blended.
+  crab::forEachLayer(p, [&](crab::FrameId f, int x, int y, bool flip, int repeat) {
+    crab::blit(ink, f, x, y, flip, repeat);
+  });
+  s.clearClipRect();
+  drawDot(flash, ink_[0], ink_[crab::kBeatDotIx], false);
 }
 
 void DanceView::pushRect(const Rect& r) {

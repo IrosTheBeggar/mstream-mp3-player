@@ -1,8 +1,10 @@
 # Dancing figure: proof of concept
 
-A stick figure on the Core2's screen that dances to what is playing: it hops
-and lands on the beat, over Bluetooth and on the speaker. This is a proof of
-concept for a mascot. The questions it answers:
+A dancer on the Core2's screen that dances to what is playing: it hops and
+lands on the beat, over Bluetooth and on the speaker. This is a proof of
+concept for a mascot. The first dancer was a stick figure; the default is now
+a pixel-art crab (see [The crab](#the-crab-crabpose-crabart)), and `m` or a
+tap on the dancer swaps between the two. The questions it answers:
 
 - Can the Core2 find the beat by itself? mStream has a BPM for only 2.7 % of
   the user's library, and a whole-number BPM drifts off the beat within
@@ -23,7 +25,7 @@ Everything that can be tested on the laptop is in `lib/core` and covered by
                                                          └─► AudioTap (real frames only)
  loop task (core 1, prio 1):
    TapReader ─► BeatTracker ─► grid ─┐
-   TapReader clock − output latency ─┴─► phase at the heard frame ─► DancePose ─► DanceView ─► LCD box
+   TapReader clock − output latency ─┴─► phase at the heard frame ─► CrabPose | DancePose ─► DanceView ─► LCD box
 ```
 
 ### The output tap (`AudioTap`, `TapReader`)
@@ -184,7 +186,7 @@ error live. It feeds the tracker up to each true beat and scores the grid as
 it stood at that moment (a prediction, the same as in the host tests),
 modulo the true period: a grid at half the tempo is on the beat too.
 
-### The figure (`DancePose`, `DanceView`)
+### The stick figure (`DancePose`, `DanceView`)
 
 The poses are pure functions of (phi, the beat index's parity). `Dancer`
 adds the confidence and dt. Following Takehana et al. (2019), ground contact
@@ -218,9 +220,103 @@ keeps its `delay(5)`, so IDLE1, the decode task and the speaker pump always
 get their time. The now-playing screen isn't drawn while dancing.
 
 The screen has a title bar ("Dance: <track>", plus `[silent]` in silent
-mode), the figure, a line of numbers (bpm, confidence, locked, fps) redrawn
-at 2 Hz and only when it changes, and the button labels. A cyan dot flashes
-on each beat.
+mode), the dancer, a line of numbers (the dancer's name, bpm, confidence,
+locked, fps) redrawn at 2 Hz and only when it changes, and the button labels.
+A cyan dot flashes on each beat.
+
+### The crab (`CrabPose`, `CrabArt`)
+
+![The crab over two beats: phase 0/8 to 7/8 of the even beat (top) and the odd one (bottom)](img/crab-phases.png)
+
+The default dancer: a round red crab with eyes on stalks, blush, a face that
+changes with the beat, jointed legs, and two big pincers (a fat fixed finger
+and a thin movable one with a V between them). It was chosen from three
+designs (kawaii, arcade, party) by how well it reads as a crab at 320×240,
+its charm, how clearly it marks the beat, its idle, and how well it fits the
+existing box. The kawaii design won, and took over from the others the
+pincer shape, the snap spark, the eyes looking where the crab travels, and
+the contact shadow. The arms are a red 4-px tile, so they don't read as a
+second pair of eye stalks.
+
+**Art.** 13 layer frames (body, squash and stretch bodies with the face
+baked in; eyes, squinting eyes, glancing eyes; open and shut claws; the arm
+tile; standing, splayed and tucked legs; the spark) in a 16-colour palette,
+1382 bytes packed two pixels to a byte. Index 0 is transparent; 13-15 are
+the contact shadow, the ground line (the stick figure's 0x4208) and the beat
+dot (its cyan), which the view draws itself. `tools/art/crab.json` is the
+source (palette, idle palette, frames as text grids, where each layer sits);
+`python tools/crab_art.py` generates `lib/core/CrabArt.h` and `CrabArt.cpp`
+(const arrays in a .cpp, so they are in flash, once), and
+`python tools/crab_art.py --check` fails if they are stale.
+
+**Motion** (`crab::dancePose`, pure functions of phi and the beat's parity;
+a two-beat cycle, u = parity + phi). Contact and the extremes land on
+phi = 0:
+
+- **Hop:** on the ground and squashed (squash body, splayed legs, an open
+  grin) for phi < 0.12, then a parabola, dy = −9 · 4a(1 − a) with
+  a = (phi − 0.12) / 0.88: highest at phi 0.56, and down hard exactly on the
+  next beat. The legs tuck up mid-air (phi 0.3-0.7).
+- **Side-step:** ±6 px with a smoothstep over phi 0.12-0.92. The even beat
+  travels left to right and the odd one back, so every beat is at a side
+  extreme.
+- **Anticipation:** the stretched body with an "o" mouth from phi 0.84.
+- **Claws:** the left punches on even beats, the right on odd ones:
+  lift = 1 + round(8 · pulse), the pulse rising as x² over the last 0.22 beat,
+  at its top on the beat, falling with a smoothstep over 0.7 beat. The
+  beat's claw is shut (the snap) for phi < 0.16, and a white and gold spark
+  sits over it while the body is squashed (phi < 0.12).
+- **Eyes** (the lagging secondary element): offset by where the body was
+  0.12 beat earlier less where it is, /3, clamped to ±2 native px, so the
+  stalks trail the hop and the step. Mid-air (phi 0.2-0.8) the pupils look
+  where the crab travels; on odd impacts the eyes squint (^ ^), so the face
+  alternates each beat.
+- **Contact shadow:** 66 px wide on the ground line, 2 px narrower per px of
+  hop.
+
+**Idle** (`crab::idlePose`) is a loop, not a still: breathing (the body,
+claws and eyes bob 1.5 sin(2π t / 2.6 s) px while the legs stay planted),
+the claws tucked low and each twitching up and snapping for 0.25 s on its
+own 2.9 s or 3.3 s cycle, a glance to each side on a 5.3 s cycle (the
+glancing eyes plus a pixel), the eyes settling a pixel on the out-breath, and
+a 0.16 s blink every 3.7 s. It is drawn in the idle palette: the same indices,
+half grey and dimmed.
+
+**Blending** (`crab::Crab`, the crab's `Dancer`): the dance weight follows
+the tracker's confidence exactly as the stick figure's does (0 below 0.3,
+1 above 0.7, over ~0.4 s; a lost beat holds its last pose while it fades).
+Offsets and claw lifts lerp from the idle to the dance, the frames switch at
+a weight of 0.5, and the palette fades channel by channel in 32 steps.
+
+**Drawing.** The crab's sprite is a 120×150 **RGB565** `M5Canvas` (36 KB
+of PSRAM; RGB332 would turn its reds pink and its legs brown). The first
+version used a 4-bit palette sprite (9 KB), which is exact too, but M5GFX
+converts every pixel through the palette while it pushes, and on the device
+that push held the SPI bus (and the SD card) ~1.6 ms a frame longer while
+an MP3 played (see Device results). In RGB565, the panel's own format, the
+push is a plain copy. Each layer is blitted at an integer 3× as
+`fillRect()`s of one palette index, which `DanceView` maps to the RGB565 of
+the current palette step: a run of one index in a row is one rectangle, and
+so is the same run repeated in the rows below it, so a whole crab is ~210
+rectangles (the arm tile is one rectangle per column however long the arm).
+Nothing is smoothed or anti-aliased. The dirty rectangle is the crab's
+layers and its shadow, now and in the last frame: that holds every crab
+pixel, so when the palette fades every crab pixel is redrawn in the new
+colours (the background, shadow, ground and dot entries are the same in both
+palettes). It averages ~11,800 px a frame at 90-140 BPM against the stick
+figure's ~10,800 px (at most 13,200 px for both, of 18,000 in the box). The
+beat dot is a plain `fillCircle`, as crisp as the crab. A skin switch
+deletes the sprite and creates it in the other format (8-bit for the stick
+figure), and the next frame pushes the whole box.
+
+**Skins** (`DanceSkin`): `m`, or a tap inside the dancer's 120×150 box
+while dancing, cycles crab → stick → crab; a tap elsewhere above the button
+strip still leaves the dance screen. The new dancer starts at the old one's
+dance weight, so a switch mid-song doesn't fade out and back in. The choice
+isn't saved: every boot starts with the crab. `k<n>`, `x` and `X` work for
+both.
+
+On the device: see [The crab on the Core2](#the-crab-on-the-core2).
 
 ### Silent test mode
 
@@ -238,17 +334,19 @@ line and the title bar. All device tests of this proof of concept run in it.
 | Key | Action |
 |---|---|
 | `z` | silent test mode (until restart) |
-| `d`, or a tap on the screen above the button strip | dance screen on/off |
+| `d`, or a tap on the screen above the button strip (outside the dancer's box while dancing) | dance screen on/off |
+| `m`, or a tap on the dancer's box while dancing | next dancer: crab (default) → stick figure → crab |
 | `s` | stats, including the `[dance]` line (also every 5 s while dancing) |
 | `v` | a `[beat]` line per tracker beat on/off |
-| `x` | screenshot of the figure's box |
+| `x` | screenshot of the dancer's box |
 | `X` | screenshot of the whole screen (~20 s at 115200 baud) |
 | `t<bpm>` + Enter | tempo prior; `t` or `t0` clears it, and so does a track change |
 | `y<ms>` + Enter | latency offset, + later / − earlier (not saved) |
-| `k<n>` + Enter | freeze the pose at phase n/8 of a two-beat cycle (0-7 even beat, 8-15 odd); `k` alone follows the beat again |
+| `k<n>` + Enter | freeze the dancer (either one) at phase n/8 of a two-beat cycle (0-7 even beat, 8-15 odd); `k` alone follows the beat again |
 
 The `[dance]` line has these fields:
 
+- `skin`: the dancer (`crab` or `stick`).
 - `fps`, `draw`, `push`: frame rate, and the smoothed drawing and SPI push
   times in ms.
 - `bpm`, `conf`, `locked`, `lock_after`: the tracker's tempo, confidence and
@@ -300,6 +398,28 @@ after the device run's tracker rework). The new
 suites are `test_beat_tracker`, `test_audio_tap` (which includes the ring's
 position reporting), `test_click_gen` and `test_dance_pose` (which includes
 the helpers).
+
+With the crab: 284 cases (15 new in `test_crab_pose`, and the stick
+figure's weight hand-over added to `test_dance_pose`). `test_crab_pose`
+checks:
+
+- the generated art: frame sizes, index ranges, the view's palette slots
+  unused by the frames, the ground and dot colours equal to the stick
+  figure's;
+- against the Python rig the crab was designed with: the 16 frozen phases
+  k0-k15 field by field, and the pixels (FNV-1a of the box) of those, of 16
+  idle moments and of 16 blends;
+- contact and the extremes on phi = 0 (on the ground, squashed, at a side
+  extreme, the beat's claw at its top and shut, the spark), the hop's arc,
+  the anticipation, continuity across beats and from frame to frame at
+  160 BPM, the eyes trailing and looking where the crab travels;
+- every pose inside the box, the dirty rectangle holding every pixel drawn
+  and the shadow, the shadow narrowing with the hop;
+- the idle loop (feet planted, claws tucked, blinks, glances both ways, the
+  legs not bobbing), the blend, the weight fading in and out, the palette
+  fade;
+- the blitter (3× blocks, transparency, the mirror, merged runs, under 240
+  rectangles a frame) and the skin cycle.
 
 Click trains with white noise at −30 dBFS RMS. The phase error is the grid's
 prediction for each true beat, scored from 4 s after the start:
@@ -374,6 +494,18 @@ At run time these come from the heap:
 On the device the dance screen lowered the internal heap's minimum by ~2 KB
 while an MP3 played (M5GFX's push buffers), and its free level not at all
 (see Device results).
+
+The crab, against the same build of 0de17ea (`git archive`, same libraries):
+
+| | Before | After | Change |
+|---|---|---|---|
+| IRAM (`.iram0.vectors` + `.iram0.text`) | 124,035 B | 124,035 B | 0: the same 1047 symbols |
+| Internal `.dram0.data` + `.dram0.bss` | 50,984 B | 51,056 B | +72 B (`danceMode` 1,608 B: the crab's state, its 16 RGB565 colours and the skin) |
+| Flash (`.flash.text` + `.flash.rodata` + `.eh_frame`) | 1,542,312 B | 1,549,600 B | +7,288 B (1,382 B of them pixels, 96 B palettes) |
+
+At run time the crab's sprite takes 36 KB of PSRAM instead of the stick
+figure's 18 KB (on the device: 3578K PSRAM free with the crab, 3596K with
+the stick figure) and no internal heap.
 
 ## Device results (September 2026)
 
@@ -548,7 +680,108 @@ What still looks weak: the legs barely change between phi 1/4 and 3/4 (the
 hop is the only lower-body motion), and at phi 7/8 the raised upper arm
 still brushes the head.
 
+### The crab on the Core2
+
+Same Core2, same silent test mode (`z` after each flash and boot, and
+`out=speaker(silent test mode)` in the log before anything played; the
+headphones linked but idle). Two rounds: **crab round 1** is the crab as
+first written (4-bit palette sprite), **crab round 2** has the fixes below.
+The logs are `dev_crab_r1_4bit.log` and `dev.log` in the session
+scratchpad; the screenshots are in its `crab_shots/` (round 1 in
+`crab_shots/round1_4bit/`).
+
+What round 2 changed:
+
+- **The crab's sprite is RGB565, not a 4-bit palette** (see the crab's
+  Drawing paragraph). The 4-bit push converts every pixel through the
+  palette while it holds the SPI bus: on the click tracks, where the
+  decoder hardly runs, the crab's push took 7.0-7.2 ms against the stick
+  figure's 5.6-5.9 ms for a similar rectangle; in RGB565 it takes
+  5.8-6.1 ms. Drawing costs ~1.5-2 ms more (twice the bytes per
+  rectangle), which the loop can spare; the bus is the part shared with the
+  SD card. 27 KB more PSRAM, no internal RAM.
+- **The title bar** (not the crab's, but first seen with it): a shorter
+  title left the last 8 px of a longer one at the right edge (`le` from
+  "[silent]" after Harder, Better, Faster, Stronger was followed by Aphex
+  Twin "I"). The title's padding now runs to the screen edge.
+
+**Boot, heap, IRAM.** IRAM unchanged (124,035 B, the same 1047 symbols).
+No crash or reset in either round (18 and 30 minutes of uptime). At boot
+`[heap] dance` shows 69K internal free (min 67K), as before the crab;
+PSRAM 3566K free (3593K with the 4-bit sprite). The internal heap doesn't
+see the skin: paused with the dance screen on, 58K free with either dancer
+(PSRAM 3578K crab, 3596K stick). Playing an MP3: 49-50K free, min 49K
+(round 1: 49K, min 48K; the stick figure on the same build: 49K, min
+47K). FLAC: 52K.
+
+**Screenshots.** Every readback matched the sprite (`LCD readback
+checked: 0 of 18000 px differ`), so these are the LCD itself. Each was also
+compared with the Python rig the crab was designed with, rendered and
+reduced to RGB565 the way M5GFX does (`crab_cmp.py`, `livematch.py`,
+`blendcheck.py`):
+
+- `crab_k00.png`-`crab_k15.png` and `crab_k_contact_sheet.png` (`k0`-`k15`):
+  **0 px differ** from the rig in all 16 (the beat dot's corner left out:
+  the rig draws its dot with Pillow), in both rounds. So the colours, the
+  RGB565 byte order, the 3× scaling, the mirroring and the placement are
+  exact, and nothing is clipped: at the side-step's extremes the crab
+  reaches x 0 (`k0`) and x 119 (`k8`), and the spark y 25, as designed.
+- `crab_live_hbfs_1/2.png` (Harder, Better, Faster, Stronger, MP3) and
+  `crab_live_testarossa_1/2.png` (Testarossa Autodrive, FLAC), caught while
+  locked: each is exactly (0 px off) the rig's dance pose at some phase
+  (0.458 even, 0.406 odd, 0.083 even, 0.000 even in round 2), so no stale
+  or torn pixels in the box. `crab_screen_hbfs.png` (round 1) is the whole
+  screen.
+- `crab_idle_aphex.png`, `crab_screen_aphex_idle.png`: the idle crab on
+  Aphex Twin "I" ("no beat"), only idle-palette colours (the whole screen
+  caught it mid-glance); the title bar without the leftover.
+- `crab_blend_2150.png`-`crab_blend_2600.png` and `crab_blend_sheet.png`
+  (idle, four fade frames, dance): shots taken 2.15-2.6 s into `click120`,
+  while the weight rises. Each uses exactly one palette step (21, 25, 28,
+  29 of 32), never a mix of an old step and a new one.
+- `stick_live_click120.png`: the stick figure after `m`, dancing.
+
+By eye: a clean red crab with crisp 3× pixels, the same as the host
+previews. Tearing can't be judged from a readback: the push isn't
+synchronised to the panel's refresh (as for the stick figure), so it needs
+someone watching the screen.
+
+**Performance.** Medians of the 5 s `[dance]` lines, 10th-percentile fps
+in brackets, lines within a screenshot's printing left out (`perf2.py`):
+
+| | Crab round 1 (4-bit) | Crab round 2 (RGB565) | Stick figure (same build as round 1) |
+|---|---|---|---|
+| click120 (decode 3 %): fps / draw / push | 30.3 (29.7) / 2.2 / 7.2 ms | 30.7 (29.9) / 3.6 / 5.8 ms | 29.9 (29.9) / 8.3 / 5.9 ms |
+| HBFS, MP3 (decode 37-39 %) | 30.4 (30.0) / 4.0 / 11.4 ms | 30.2 (29.2) / 6.1 / 9.8 ms | 26.4 (24.9) / 15.2 / 7.6 ms |
+| Testarossa, FLAC (decode 32 %) | 30.2 (29.4) / 2.8 / 8.9 ms | 30.5 (29.7) / 4.5 / 7.3 ms | 28.9 (27.3) / 10.8 / 7.0 ms |
+| Paused, idle crab / sway | | 30 / 1.9 / 4.1 ms | 30 / 6.5 / 3.2 ms |
+
+The crab makes the ≥ 27 fps target with an MP3 playing, where the stick
+figure doesn't (26.4): its ~210 rectangles draw in a third of the time of
+the anti-aliased lines. Its push is still ~2 ms longer than the stick
+figure's while an MP3 decodes (the rectangle is ~10 % bigger, and the
+decode task preempts the push). Emancipator "Alligator" (FLAC, decode
+29 %): 30.4 (29.8) fps, draw 3.9 ms, push 5.8 ms.
+
+**10-minute soak** (Daft Punk "Too Long", MP3, crab round 2): 0 underruns,
+the ring full throughout (1439-1462 ms), decode load 33-39 %, internal RAM
+49-50K free (min 49K), fps median 30.4 (10th percentile 29.9, lowest 5 s
+window 28.6), draw 6.1 ms, push 9.8 ms, no tracker restarts, `lost=0`. The
+5 s window over the track change read 9.3 fps: the decoder refills the
+ring flat out at a track start and the loop (priority 1) waits; the stick
+figure's log shows the same dips at track starts.
+
+**Beat sync unchanged.** `click120` with the crab: locked 2.62 s, median
+|error| 2.7 ms, p95 5.7 ms, mean −2.9 ms, 120.01 BPM, in both rounds. The
+stick figure on the same builds gives the same numbers to 0.1 ms (locked
+2.62-2.65 s): the tracker doesn't see the dancer. (The table above, from
+the tracker's round 1, has 2.4 / 5.7 ms.)
+
 ### Not done
+
+- **The crab, by hand:** a tap on the dancer's box (the skin switch was
+  tested with `m` only; nobody was there to touch the screen), and whether
+  the crab looks on the beat and free of tearing to someone watching it.
 
 - Bluetooth: nothing was played over the headphones (silent mode for the
   whole run), so the delay-report latency (150 ms + 25 ms) and whether `y`

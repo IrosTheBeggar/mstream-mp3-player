@@ -78,11 +78,16 @@ change of their level is never heard as a jump.)
 The playlist is the files under `/music` followed by three built-in
 test tones and six click tracks (60 s at 90-174 BPM, for the beat tracker).
 
-**Dancing figure** (proof of concept, [docs/MASCOT-POC.md](docs/MASCOT-POC.md)):
-tap the screen above the button strip, or send `d`, and a stick figure
-dances to what's playing. The Core2 finds the beat itself (tempo and phase
-from the audio, no metadata needed), over Bluetooth and on the speaker, and
-sways idly when there's no beat to follow.
+**Dancing crab** (proof of concept, [docs/MASCOT-POC.md](docs/MASCOT-POC.md)):
+tap the screen above the button strip, or send `d`, and a pixel-art crab
+dances to what's playing: it lands, squashes and snaps a claw on every beat.
+The Core2 finds the beat itself (tempo and phase from the audio, no metadata
+needed), over Bluetooth and on the speaker, and the crab idles (breathing,
+blinking, glancing around, in dimmed colours) when there's no beat to follow.
+A tap on the crab, or `m`, swaps it for the first proof of concept, a stick
+figure, and back.
+
+![The crab over two beats, phase 0/8 to 7/8 of each](docs/img/crab-phases.png)
 
 The serial console (115200 baud) is there for scripted testing:
 
@@ -96,7 +101,8 @@ The serial console (115200 baud) is there for scripted testing:
 | `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
 | `d` / `v` | dance screen / per-beat log | | |
-| `x` / `X` | screenshot of the figure / whole screen (base64 RGB565) | | |
+| `m` | next dancer: crab (default) / stick figure | | |
+| `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | | |
 
 ## Layout
 
@@ -111,7 +117,10 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   ToneGen, ClickGen   Built-in test tones; click tracks with a known beat
   AudioTap, TapReader What an output played, placed in its track; audible-time clock
   BeatTracker         Tempo, phase and confidence from the audio (onsets, ACF, PLL)
-  DancePose           The dancing figure's joints as functions of the beat phase
+  DancePose           The stick figure's joints as functions of the beat phase
+  CrabPose, CrabArt   The crab's layer frames and offsets per beat phase; its
+                      pixel art (generated from tools/art/crab.json)
+  DanceSkin           Which dancer is on screen (crab, stick)
   BtControl           Bluetooth decisions: media stream (StreamControl), volume
                       (AbsVolumePolicy, GainRamp), reconnect (ReconnectPlanner)
   hal/                IAudioBackend, IStorage
@@ -122,7 +131,8 @@ src/                  Core2 firmware
   app/                SerialConsole, Diagnostics, DanceMode, Screenshot
   main.cpp            Wires it together; buttons, Bluetooth events, rendering
 data/                 LittleFS image source (data/music is gitignored)
-tools/                make_test_audio.py; iram_diet.py (build post-script)
+tools/                make_test_audio.py; iram_diet.py (build post-script);
+                      crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*)
 test/                 Host unit tests (Unity)
 docker/               mStream dev server
 docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md

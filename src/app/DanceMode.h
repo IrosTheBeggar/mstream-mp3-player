@@ -3,17 +3,20 @@
 
 #include "BeatTracker.h"
 #include "ClickGen.h"
+#include "CrabPose.h"
 #include "DancePose.h"
+#include "DanceSkin.h"
 #include "PlaybackController.h"
 #include "RollingStats.h"
 #include "TapReader.h"
 #include "audio/Core2AudioBackend.h"
 #include "ui/DanceView.h"
 
-// The dancing stick figure (proof of concept, docs/MASCOT-POC.md), on the
-// loop task. Every pass while it's on: the new audio from the active
+// The dancing character (proof of concept, docs/MASCOT-POC.md), on the
+// loop task: the crab (the default) or the stick figure, swapped by
+// cycleSkin(). Every pass while it's on: the new audio from the active
 // output's tap goes to the BeatTracker (reset on an output switch, a track
-// change, a skip, or frames lost), and ~30 times a second the figure is drawn
+// change, a skip, or frames lost), and ~30 times a second the dancer is drawn
 // for the moment the listener hears: the tap's clock minus the output's
 // latency, a little early for the LCD. On the click tracks the true beat is
 // known, so the tracker's phase error is measured as it plays.
@@ -33,6 +36,8 @@ public:
   void onTrackChanged();
   void setOffsetMs(int ms) { offsetMs_ = ms; }
   void freeze(int n);                // phase n/8 of a two-beat cycle; -1 unfreezes
+  void cycleSkin();                  // crab -> stick -> crab (console m, a tap on the box)
+  dance::Skin skin() const { return skin_; }
   void toggleVerbose();
   void printStats(uint32_t nowMs);   // the [dance] line
 
@@ -54,7 +59,9 @@ private:
   DanceView view_;
   BeatTracker tracker_;
   TapReader reader_;
-  dance::Dancer dancer_;
+  dance::Skin skin_ = dance::kDefaultSkin;
+  dance::Dancer dancer_;        // the stick figure's state
+  crab::Crab crab_;             // the crab's
   dance::TempoFold fold_;       // the dance tempo's octave, kept between frames
   int16_t* scratch_ = nullptr;  // PSRAM
   bool ready_ = false;

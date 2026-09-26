@@ -22,7 +22,7 @@ void psramFree(void* p) { heap_caps_free(p); }
 
 bool DanceMode::begin() {
   scratch_ = static_cast<int16_t*>(psramAlloc(kScratchFrames * sizeof(int16_t)));
-  ready_ = scratch_ && tracker_.begin(BeatTracker::Config{}, psramAlloc, psramFree) && view_.begin();
+  ready_ = scratch_ && tracker_.begin(BeatTracker::Config{}, psramAlloc, psramFree) && view_.begin(skin_);
   if (!ready_) {
     Serial.println("[dance] no PSRAM for the dance screen");
     return false;
@@ -68,9 +68,10 @@ void DanceMode::setActive(bool on) {
     Serial.println("[dance] off");
     return;
   }
-  Serial.println("[dance] on");
+  Serial.printf("[dance] on (%s)\n", dance::skinName(skin_));
   view_.enter();
   dancer_.reset();
+  crab_.reset();
   follow(audio_.output());
   freshWhy_ = "dance screen on";
   lastFrameMs_ = 0;
@@ -105,6 +106,31 @@ void DanceMode::freeze(int n) {
     Serial.printf("[dance] frozen at phase %d/8 of a two-beat cycle (beat %s, phi %.3f)\n", n, n >= 8 ? "odd" : "even",
                   (n % 8) / 8.0f);
   }
+}
+
+void DanceMode::cycleSkin() {
+  const dance::Skin next = dance::nextSkin(skin_);
+  if (ready_ && !view_.setSkin(next)) {
+    // No PSRAM for the other format: stay as we were if that still works.
+    Serial.printf("[dance] no PSRAM for the %s sprite\n", dance::skinName(next));
+    ready_ = view_.setSkin(skin_);
+    if (!ready_) {
+      Serial.println("[dance] dance screen off: no sprite");
+      active_ = false;
+    }
+    return;
+  }
+  // The new skin takes over where the old one's dance weight was, so a
+  // switch mid-song doesn't fade out and back in.
+  const float w = skin_ == dance::Skin::Crab ? crab_.weight() : dancer_.weight();
+  if (next == dance::Skin::Crab) {
+    crab_.reset(w);
+  } else {
+    dancer_.reset(w);
+  }
+  skin_ = next;
+  lastStatusMs_ = 0;  // the status line shows the new name at the next frame
+  Serial.printf("[dance] skin: %s\n", dance::skinName(skin_));
 }
 
 void DanceMode::toggleVerbose() {
@@ -250,11 +276,18 @@ void DanceMode::render(uint32_t nowMs) {
   // passes (delay(5) and the rest) would otherwise add a few ms to every frame.
   lastFrameMs_ = nowMs - lastFrameMs_ < 2 * kFrameMs ? lastFrameMs_ + kFrameMs : nowMs;
 
-  dance::Pose pose;
   bool flash = false, dancing = false;
+  const bool isCrab = skin_ == dance::Skin::Crab;
+  dance::Pose pose;
+  crab::Pose crabPose;
+  float weight = 1.0f;
   if (frozen_ >= 0) {
     const float phi = (frozen_ % 8) / 8.0f;
-    pose = dancer_.frozen(phi, frozen_ >= 8);
+    if (isCrab) {
+      crabPose = crab::Crab::frozen(phi, frozen_ >= 8);
+    } else {
+      pose = dancer_.frozen(phi, frozen_ >= 8);
+    }
     flash = phi < kFlashBeats;
     dancing = true;
   } else {
@@ -270,12 +303,22 @@ void DanceMode::render(uint32_t nowMs) {
       const float bpm = tracker_.bpm();
       step = dance::danceStep(g.beatIndex + g.beatsAt(heard.trackFrame, heard.frac), bpm, fold_.apply(bpm));
     }
-    pose = dancer_.update(step.phi, step.odd, tracker_.confidence(), beat, dt);
-    dancing = dancer_.weight() > 0.5f;
+    if (isCrab) {
+      crabPose = crab_.update(step.phi, step.odd, tracker_.confidence(), beat, dt);
+      weight = crab_.weight();
+    } else {
+      pose = dancer_.update(step.phi, step.odd, tracker_.confidence(), beat, dt);
+      weight = dancer_.weight();
+    }
+    dancing = weight > 0.5f;
     flash = beat && dancing && step.phi < kFlashBeats;
   }
   const int64_t t0 = esp_timer_get_time();
-  view_.drawFigure(pose, flash, dancing);
+  if (isCrab) {
+    view_.drawCrab(crabPose, weight, flash);
+  } else {
+    view_.drawFigure(pose, flash, dancing);
+  }
   const int64_t t1 = esp_timer_get_time();
   view_.push();
   const int64_t t2 = esp_timer_get_time();
@@ -290,14 +333,17 @@ void DanceMode::render(uint32_t nowMs) {
   if (t) title += ": " + String(t->title.c_str());
   if (silent_) title += "  [silent]";
   view_.setTitle(title);
-  char line[64];
+  // The skin's name first. The longest line fits Font2's 320 px with ~13 to
+  // spare: "stick  174.0 BPM  conf 0.85  searching  30 fps".
+  char line[72];
+  const char* name = dance::skinName(skin_);
   if (frozen_ >= 0) {
-    snprintf(line, sizeof(line), "frozen at %d/8 of two beats", frozen_);
+    snprintf(line, sizeof(line), "%s  frozen at %d/8 of two beats", name, frozen_);
   } else if (tracker_.bpm() > 0.0f) {
-    snprintf(line, sizeof(line), "%.1f BPM  conf %.2f  %s  %.0f fps", tracker_.bpm(), tracker_.confidence(),
-             tracker_.locked() ? "locked" : "searching", fps_);
+    snprintf(line, sizeof(line), "%s  %.1f BPM  conf %.2f  %s  %.0f fps", name, tracker_.bpm(),
+             tracker_.confidence(), tracker_.locked() ? "locked" : "searching", fps_);
   } else {
-    snprintf(line, sizeof(line), "no beat  conf %.2f  %.0f fps", tracker_.confidence(), fps_);
+    snprintf(line, sizeof(line), "%s  no beat  conf %.2f  %.0f fps", name, tracker_.confidence(), fps_);
   }
   view_.setStatus(line);
 }
@@ -319,11 +365,11 @@ void DanceMode::printStats(uint32_t nowMs) {
     }
   }
   const diag::Heap h = diag::heap();
-  Serial.printf("[dance] %s fps=%.1f draw=%.1fms push=%.1fms | bpm=%.2f conf=%.2f %s lock_after=%s %s | "
+  Serial.printf("[dance] %s skin=%s fps=%.1f draw=%.1fms push=%.1fms | bpm=%.2f conf=%.2f %s lock_after=%s %s | "
                 "latency=%.1fms (%s) offset=%+dms | tracker=%.2f%% resets=%lu lost=%lu | ram=%luK min=%luK%s\n",
-                active_ ? "on" : "off", fps_, drawUs_ / 1000.0f, pushUs_ / 1000.0f, tracker_.bpm(),
-                tracker_.confidence(), tracker_.locked() ? "locked" : "unlocked", lockAfter, error, latency / 1000.0f,
-                how, offsetMs_, trackerLoad_ * 100.0f, static_cast<unsigned long>(resets_),
+                active_ ? "on" : "off", dance::skinName(skin_), fps_, drawUs_ / 1000.0f, pushUs_ / 1000.0f,
+                tracker_.bpm(), tracker_.confidence(), tracker_.locked() ? "locked" : "unlocked", lockAfter, error,
+                latency / 1000.0f, how, offsetMs_, trackerLoad_ * 100.0f, static_cast<unsigned long>(resets_),
                 static_cast<unsigned long>(reader_.lostFrames()), static_cast<unsigned long>(h.internalFree / 1024),
                 static_cast<unsigned long>(h.internalMin / 1024), silent_ ? " | silent" : "");
 }

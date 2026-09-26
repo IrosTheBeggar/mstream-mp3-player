@@ -191,6 +191,13 @@ void test_low_confidence_blends_to_idle() {
   const Pose f = d.frozen(0.25f, true);
   const Pose ref = dance::dancePose(0.25f, true);
   TEST_ASSERT_EQUAL_FLOAT(ref.handL.x, f.handL.x);
+  // A skin switch hands the crab's weight over (clamped to 0..1).
+  d.reset(0.8f);
+  TEST_ASSERT_EQUAL_FLOAT(0.8f, d.weight());
+  d.reset(-1.0f);
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, d.weight());
+  d.reset();
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, d.weight());
 }
 
 // The dance tempo is the tracked one folded into 80-160 BPM.

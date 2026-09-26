@@ -42,8 +42,9 @@ static Screenshot shot;
 static bool silent = false;
 
 static constexpr uint32_t kDiagnosticsScreenMs = 3000;
-// Touches above this (screen y) toggle the dance screen; below are the
-// button labels and the touch buttons.
+// Touches above this (screen y) toggle the dance screen (on the dance
+// screen, a tap on the dancer's box cycles the dancer instead); below are
+// the button labels and the touch buttons.
 static constexpr int kDanceTouchMaxY = 200;
 // Volume keys of headphones without absolute volume (AVRCP passthrough):
 // about 1/16 of the range per press, like a phone.
@@ -114,6 +115,12 @@ static void enterSilentMode() {
 static void setDance(bool on) {
   danceMode.setActive(on);
   if (!danceMode.active()) view.forget();  // the now-playing screen redraws in full
+}
+
+static void cycleDancer() {
+  const bool was = danceMode.active();
+  danceMode.cycleSkin();
+  if (was && !danceMode.active()) view.forget();  // no sprite for either dancer: back to now-playing
 }
 
 static bool headphonesSetVolume() {
@@ -236,6 +243,7 @@ static SerialConsole console({
     },
     enterSilentMode,
     [] { setDance(!danceMode.active()); },
+    cycleDancer,
     [](bool full) {
       DanceView& v = danceMode.view();
       M5Canvas* figure = danceMode.active() ? &v.sprite() : nullptr;  // what the box should show
@@ -263,10 +271,16 @@ static void handleButtons() {
   if (M5.BtnB.wasHold()) toggleOutput();
   if (M5.BtnC.wasClicked()) player.next();
   if (M5.BtnC.wasHold()) stepVolume(+10);
-  // A tap on the screen itself (not the button strip) toggles the dance screen.
+  // A tap on the screen itself (not the button strip) toggles the dance
+  // screen; on the dance screen, a tap on the dancer's box cycles the dancer.
   for (size_t i = 0; i < M5.Touch.getCount(); ++i) {
     const auto& t = M5.Touch.getDetail(i);
-    if (t.wasClicked() && t.y >= 0 && t.y < kDanceTouchMaxY) setDance(!danceMode.active());
+    if (!t.wasClicked() || t.y < 0 || t.y >= kDanceTouchMaxY) continue;
+    if (danceMode.active() && DanceView::inBox(t.x, t.y)) {
+      cycleDancer();
+    } else {
+      setDance(!danceMode.active());
+    }
   }
 }
 
@@ -423,7 +437,7 @@ void setup() {
   danceMode.begin();
   diag::logHeap("dance");
   Serial.println("[console] n/p next/prev, space play/pause, o output, +/- volume, s stats, l list, "
-                 "f forget bt, z silent test mode, d dance, x/X screenshot figure/screen, v beat log; "
+                 "f forget bt, z silent test mode, d dance, m next dancer, x/X screenshot dancer/screen, v beat log; "
                  "with Enter: i<n> play, b<n> bench, c<name> headphones name, h<n> bt headroom -n dB, "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes)");
 }

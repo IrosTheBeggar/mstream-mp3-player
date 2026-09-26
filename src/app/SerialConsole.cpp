@@ -86,7 +86,8 @@ void SerialConsole::poll() {
       case 'h': pending_ = Pending::Headroom; arg_ = ""; break;
       case 'z': Serial.println("> silent test mode"); actions_.silentMode(); break;
       case 'd': Serial.println("> dance screen"); actions_.toggleDance(); break;
-      case 'x': Serial.println("> screenshot of the figure"); actions_.screenshot(false); break;
+      case 'm': Serial.println("> next dancer"); actions_.cycleSkin(); break;
+      case 'x': Serial.println("> screenshot of the dancer"); actions_.screenshot(false); break;
       case 'X': Serial.println("> screenshot of the screen"); actions_.screenshot(true); break;
       case 'v': actions_.toggleBeatLog(); break;
       case 't': pending_ = Pending::TempoPrior; arg_ = ""; break;
