@@ -21,6 +21,13 @@ constexpr uint32_t kChunkFrames = 1024;  // produced per pass of the decode task
 constexpr uint32_t kDecodeStack = 16384;
 constexpr uint32_t kToneRate = 44100;
 constexpr uint32_t kToneSeconds = 30;
+constexpr uint32_t kClickSeconds = 60;
+// Bluetooth: what the headphones report plus ESP-IDF's frame queue and the
+// air (an estimate); without a report, what the Powerbeats Pro report.
+constexpr uint32_t kBtExtraUs = 25000;
+constexpr uint32_t kBtDefaultReportUs = 150000;
+// The speaker before its first buffer has been timed: ~3 buffers + DMA.
+constexpr uint32_t kSpeakerDefaultUs = 115000;
 constexpr uint32_t kBenchSeconds = 20;
 
 std::string extensionOf(const std::string& path) {
@@ -162,8 +169,30 @@ void Core2AudioBackend::stepVolume(int delta) {
   speaker_.setVolume(volume_);
 }
 
+void Core2AudioBackend::setSpeakerVolume(uint8_t percent) {
+  volume_ = percent > 100 ? 100 : percent;
+  speaker_.setVolume(volume_);
+}
+
 uint8_t Core2AudioBackend::volume() const {
   return output_ == Output::Bluetooth ? bt_.volume() : volume_;
+}
+
+uint32_t Core2AudioBackend::outputLatencyUs(Output output, char* how, size_t howLen) const {
+  if (output == Output::Bluetooth) {
+    const uint32_t report = bt_.delayReportUs();
+    const uint32_t used = report ? report : kBtDefaultReportUs;
+    snprintf(how, howLen, "bt: %s %.1f + %lu ms", report ? "report" : "no report, assumed", used / 1000.0f,
+             (unsigned long)(kBtExtraUs / 1000));
+    return used + kBtExtraUs;
+  }
+  const uint32_t queue = speaker_.queueLatencyUs();
+  if (queue == 0) {
+    snprintf(how, howLen, "speaker: not measured yet, assumed");
+    return kSpeakerDefaultUs;
+  }
+  snprintf(how, howLen, "speaker: queue %.1f + dma %.1f ms", queue / 1000.0f, speaker_.dmaLatencyUs() / 1000.0f);
+  return queue + speaker_.dmaLatencyUs();
 }
 
 void Core2AudioBackend::loop(uint32_t nowMs) {
@@ -276,6 +305,7 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   }
   closeDecoder();
   toneTrack_ = false;
+  clickTrack_ = false;
   shared_.expectingAudio = false;
   trackStart_ = ring_->discardAll();  // nothing of the previous track plays after this
   busyUs_ = 0;
@@ -299,6 +329,17 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
 
   if (req.path.rfind("tone:", 0) == 0) {
     const std::string what = req.path.substr(5);
+    ClickGen::Spec click;
+    if (ClickGen::parse(what, &click)) {
+      shared_.rate = kToneRate;
+      click_.start(kToneRate, click, kToneRate * kClickSeconds);
+      toneTrack_ = clickTrack_ = true;
+      char text[48];
+      snprintf(text, sizeof(text), "clicks %.0f BPM%s, 44100 Hz", click.bpm, click.offsetBeats > 0 ? ", off-beat start" : "");
+      setText(description_, text);
+      sync_.report(generation, Phase::Decoding);
+      return Work::Producing;
+    }
     const bool leftOnly = what == "left";
     const int hz = leftOnly ? 440 : std::atoi(what.c_str());
     if (hz <= 0) return fail(generation, "unknown tone " + req.path);
@@ -376,7 +417,7 @@ Core2AudioBackend::Produced Core2AudioBackend::produceTone() {
     return Produced::More;
   }
   const int64_t t0 = esp_timer_get_time();
-  const uint32_t n = tone_.generate(chunk_, kChunkFrames);
+  const uint32_t n = clickTrack_ ? click_.generate(chunk_, kChunkFrames) : tone_.generate(chunk_, kChunkFrames);
   if (n == 0) return Produced::Done;
   ring_->write(chunk_, n);
   busyUs_ += static_cast<uint64_t>(esp_timer_get_time() - t0);

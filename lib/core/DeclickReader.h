@@ -16,6 +16,11 @@ public:
     uint32_t wanted;  // real frames asked of the ring: 0 when not the consumer or paused and faded
     uint32_t read;    // real frames it had
     uint32_t total;   // frames written to `out`
+    // Where the real frames came from (valid when read > 0): the ring's epoch
+    // and the first one's frame in it (PcmRing::read()'s position), so an
+    // output's AudioTap can place them in the track.
+    uint32_t epoch;
+    uint32_t position;
   };
 
   explicit DeclickReader(uint8_t consumerId, uint32_t rampFrames = Declicker::kDefaultRampFrames)
@@ -62,11 +67,12 @@ public:
 private:
   Result readReal(int16_t* out, uint32_t count, bool playing) {
     fader_.setOpen(playing);
-    Result r{0, 0, 0};
+    Result r{0, 0, 0, epoch_, 0};
     if (ring_ && ring_->consumer() == id_) r.wanted = fader_.framesWanted(count);
     if (r.wanted > 0) {
       uint32_t epoch = epoch_;
-      r.read = ring_->read(id_, out, r.wanted, &epoch);
+      r.read = ring_->read(id_, out, r.wanted, &epoch, &r.position);
+      r.epoch = epoch;
       if (epoch != epoch_) {  // discardAll() since our last read: a skip
         epoch_ = epoch;
         fader_.cut();

@@ -32,6 +32,9 @@ public:
   void showDiagnostics(const std::vector<Row>& rows);
   // Player screen, with labels for the three touch buttons along the bottom.
   void showNowPlaying(const NowPlaying& np);
+  // Someone else drew on the screen (the dance screen): the next show*()
+  // redraws all of it.
+  void forget() { screen_ = Screen::None; }
 
 private:
   enum class Screen { None, Diagnostics, NowPlaying };

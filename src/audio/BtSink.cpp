@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <esp_heap_caps.h>
 #include <esp_timer.h>
 
 #include <algorithm>
@@ -26,6 +27,8 @@ constexpr int kReconnectTries = 3;
 // default of 3072 bytes is too tight (watch appTaskStackFree in the stats).
 constexpr int kAppTaskStack = 6144;
 constexpr UBaseType_t kEventQueueLength = 16;
+// What the data callback played, for the beat tracker: ~0.74 s, 64 KB of PSRAM.
+constexpr uint32_t kTapFrames = 32768;
 
 // How often the loop lets BtAppT check its timers (stream retries, the delayed
 // suspend, command and probe timeouts).
@@ -343,13 +346,16 @@ void PlayerA2dp::bt_app_av_sm_hdlr(uint16_t event, void* param) {
       if (acceptable(a2d->audio_cfg.remote_bda)) logCodec(a2d->audio_cfg.mcc);
       return;
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 3, 0)
-    case ESP_A2D_REPORT_SNK_DELAY_VALUE_EVT:
+    case ESP_A2D_REPORT_SNK_DELAY_VALUE_EVT: {
+      // Kept from every report (the dancing figure's timing), logged once.
+      const unsigned d = a2d->a2d_report_delay_value_stat.delay_value;  // 1/10 ms
+      sink->delayReport_.store(static_cast<uint16_t>(d), std::memory_order_relaxed);
       if (!delayLogged_) {
         delayLogged_ = true;
-        const unsigned d = a2d->a2d_report_delay_value_stat.delay_value;  // 1/10 ms
         Serial.printf("[bt] headphones report %u.%u ms of delay\n", d / 10, d % 10);
       }
       return;
+    }
 #endif
     case ESP_A2D_MEDIA_CTRL_ACK_EVT: {
       // Before the link is up these answer the library's connecting-state
@@ -414,6 +420,7 @@ void PlayerA2dp::linkDown(const esp_a2d_cb_param_t& a2d) {
   s_a2d_state = APP_AV_STATE_UNCONNECTED;  // the heartbeat's reconnect logic takes over
   codecLogged_ = false;
   delayLogged_ = false;
+  sink->delayReport_.store(0, std::memory_order_relaxed);  // the next headphones report their own
   Serial.printf("[bt] A2DP down (%s)\n",
                 a2d.conn_stat.disc_rsn == ESP_A2D_DISC_RSN_ABNORMAL ? "signal lost" : "closed");
   ctl_.linkDown(millis());
@@ -770,6 +777,9 @@ void BtSink::begin(PcmRing& ring, AudioShared& shared, const char* defaultSinkNa
   reader_.bind(ring);
   sink = this;
   events_ = xQueueCreate(kEventQueueLength, sizeof(Event));
+  // Before the stack starts: the data callback writes it from its first call.
+  auto* tapBuffer = static_cast<int16_t*>(heap_caps_malloc(kTapFrames * sizeof(int16_t), MALLOC_CAP_SPIRAM));
+  if (tapBuffer) tap_ = new AudioTap(tapBuffer, kTapFrames);
 
   Preferences prefs;
   prefs.begin(kPrefsNamespace, false);
@@ -916,6 +926,7 @@ void BtSink::setDeviceName(const char* name) {
 // tick. No blocking, no logging.
 int32_t BtSink::onData(Frame* frames, int32_t count) {
   BtSink& s = *sink;
+  const int64_t nowUs = esp_timer_get_time();
   // A new or resumed stream (StreamRestart): the listener heard silence, so
   // the audio fades in from 0 (the fader) back to the level heard before, or
   // the level a handover lifted it to (the gain stage). Detected here, on the
@@ -923,7 +934,7 @@ int32_t BtSink::onData(Frame* frames, int32_t count) {
   // (btc_a2dp_source_aa_tx_flush: data NULL, len -1) arrives here as 0
   // frames, on this same task.
   const bool restart =
-      s.restart_.callback(esp_timer_get_time(), count, s.streamEpoch_.load(std::memory_order_acquire));
+      s.restart_.callback(nowUs, count, s.streamEpoch_.load(std::memory_order_acquire));
   if (count <= 0) return 0;
   if (restart) {
     s.gain_.restart();
@@ -946,6 +957,9 @@ int32_t BtSink::onData(Frame* frames, int32_t count) {
   if (playing && r.read < r.wanted && s.shared_->expectingAudio.load(std::memory_order_relaxed)) {
     s.shared_->underruns.fetch_add(1, std::memory_order_relaxed);
   }
+  // A copy for the beat tracker, before the volume: all `want` frames (the
+  // tap marks which were real audio, and where in the track). Copy only.
+  if (s.tap_) s.tap_->write(out, want, r.read, r.epoch, r.position, static_cast<uint32_t>(nowUs));
   // Then the volume, over every frame so its ramps keep real time. Both
   // stages only ever multiply by at most 1: together they never add level.
   s.gain_.process(out, want);

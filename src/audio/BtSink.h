@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 
+#include "AudioTap.h"
 #include "DeclickReader.h"
 #include "GainRamp.h"
 #include "PcmRing.h"
@@ -131,6 +132,12 @@ public:
   uint32_t framesPulled() const { return framesPulled_.load(std::memory_order_relaxed); }
   // For the serial stats line. Resets maxGapMs.
   Stats stats();
+  // What the data callback played (before our gain stage), for the beat
+  // tracker. nullptr if its PSRAM couldn't be had.
+  const AudioTap* tap() const { return tap_; }
+  // The headphones' last delay report (AVDTP), in microseconds; 0 when they
+  // haven't sent one on this link.
+  uint32_t delayReportUs() const { return delayReport_.load(std::memory_order_relaxed) * 100u; }
 
 private:
   friend class PlayerA2dp;
@@ -164,6 +171,7 @@ private:
   std::atomic<uint8_t> control_{0};  // AbsVolumePolicy::Mode
   std::atomic<int16_t> headsetVolume_{-1};
   std::atomic<uint16_t> headroom_{vol::kHeadroomQ15};
+  std::atomic<uint16_t> delayReport_{0};  // 1/10 ms, from BtAppT
 
   // Loop task only.
   bool wantAudio_ = false;      // as last handed to BtAppT
@@ -185,6 +193,7 @@ private:
 
   // Data callback only, apart from the atomics.
   DeclickReader reader_{kConsumerId};
+  AudioTap* tap_ = nullptr;  // written only here; read by the loop
   StreamRestart restart_;  // when its audio fades in from 0
   std::atomic<uint32_t> maxGapUs_{0};
   std::atomic<uint32_t> framesPulled_{0};

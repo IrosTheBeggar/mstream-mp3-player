@@ -36,6 +36,35 @@ void SerialConsole::poll() {
           actions_.setHeadroom(static_cast<int>(db));
           break;
         }
+        case Pending::TempoPrior: {
+          const float bpm = arg_.toFloat();  // "" -> 0: clear
+          if (bpm != 0.0f && (bpm < 30.0f || bpm > 300.0f)) {
+            Serial.println("> tempo prior: t<bpm> with bpm 30-300, or t / t0 to clear");
+            break;
+          }
+          Serial.printf("> tempo prior %.1f\n", bpm);
+          actions_.tempoPrior(bpm);
+          break;
+        }
+        case Pending::DanceOffset:
+          Serial.printf("> dance latency offset %+ld ms\n", arg_.toInt());
+          actions_.danceOffset(static_cast<int>(arg_.toInt()));
+          break;
+        case Pending::Freeze: {
+          if (arg_.length() == 0) {
+            Serial.println("> unfreeze");
+            actions_.freezePose(-1);
+            break;
+          }
+          const long n = arg_.toInt();
+          if (!isDigit(arg_[0]) || n > 15) {
+            Serial.println("> freeze: k<n> with n 0-15, or k alone to unfreeze");
+            break;
+          }
+          Serial.printf("> freeze %ld\n", n);
+          actions_.freezePose(static_cast<int>(n));
+          break;
+        }
         case Pending::None:
           break;
       }
@@ -55,6 +84,14 @@ void SerialConsole::poll() {
       case 'b': pending_ = Pending::Bench; arg_ = ""; break;
       case 'c': pending_ = Pending::HeadphonesName; arg_ = ""; break;
       case 'h': pending_ = Pending::Headroom; arg_ = ""; break;
+      case 'z': Serial.println("> silent test mode"); actions_.silentMode(); break;
+      case 'd': Serial.println("> dance screen"); actions_.toggleDance(); break;
+      case 'x': Serial.println("> screenshot of the figure"); actions_.screenshot(false); break;
+      case 'X': Serial.println("> screenshot of the screen"); actions_.screenshot(true); break;
+      case 'v': actions_.toggleBeatLog(); break;
+      case 't': pending_ = Pending::TempoPrior; arg_ = ""; break;
+      case 'y': pending_ = Pending::DanceOffset; arg_ = ""; break;
+      case 'k': pending_ = Pending::Freeze; arg_ = ""; break;
       default: break;  // newlines etc.
     }
   }

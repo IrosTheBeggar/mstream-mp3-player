@@ -45,8 +45,11 @@ public:
   // with setConsumer()/discardAll(). When it did get to read (even 0 frames)
   // it stores the epoch the frames belong to in `*epoch`; otherwise `*epoch`
   // is left alone. A consumer that sees it change knows the audio jumped (a
-  // skip) and can crossfade.
-  uint32_t read(uint8_t id, int16_t* out, uint32_t count, uint32_t* epoch = nullptr);
+  // skip) and can crossfade. `*position` (same rule) gets where the first
+  // frame read sits in its epoch: frames since the discardAll() that began it,
+  // the count positionMs() is made of (readPos() minus the track's start).
+  uint32_t read(uint8_t id, int16_t* out, uint32_t count, uint32_t* epoch = nullptr,
+                uint32_t* position = nullptr);
   // Total frames consumed so far (free-running).
   uint32_t readPos() const { return readIdx_.load(std::memory_order_acquire); }
   // Number of discardAll() calls so far (free-running).
@@ -64,5 +67,6 @@ private:
   std::atomic<uint32_t> readIdx_;
   std::atomic<uint8_t> consumer_{kNoConsumer};
   std::atomic<uint32_t> epoch_{0};  // written only under lock_
+  uint32_t epochStart_;             // readIdx_ when epoch_ began; under lock_
   std::mutex lock_;
 };

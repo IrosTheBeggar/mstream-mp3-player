@@ -8,6 +8,7 @@
 #include <mutex>
 #include <string>
 
+#include "ClickGen.h"
 #include "PcmRing.h"
 #include "ToneGen.h"
 #include "TransportSync.h"
@@ -31,7 +32,9 @@ class RingOutput;
 // finished()/failed() only ever describe the latest request.
 //
 // Tracks are .mp3/.flac files on the library filesystem, or the built-in test
-// tones "tone:440", "tone:1000" and "tone:left" (440 Hz, left channel only).
+// tones "tone:440", "tone:1000" and "tone:left" (440 Hz, left channel only),
+// and 60 s click tracks with a known beat, "tone:click<bpm>" and
+// "tone:click<bpm>off" (first beat 0.37 of a period in; see ClickGen).
 class Core2AudioBackend : public IAudioBackend {
 public:
   enum class Output : uint8_t { Speaker, Bluetooth };
@@ -79,8 +82,20 @@ public:
   // headphone changes in between are never lost.
   void stepVolume(int delta);
   uint8_t volume() const;
+  // The speaker's volume whichever output is active: silent test mode mutes
+  // it before the speaker takes the ring, so no buffer plays at the old level.
+  void setSpeakerVolume(uint8_t percent);
 
   BtSink& bluetooth() { return bt_; }
+  // What an output just played, for the beat tracker (nullptr: no PSRAM).
+  const AudioTap* tap(Output output) const { return output == Output::Bluetooth ? bt_.tap() : speaker_.tap(); }
+  // How long after an output's tap write its audio is heard, and how that
+  // was found (for the logs): Bluetooth, the headphones' delay report plus
+  // ~25 ms for ESP-IDF's queue and the radio; the speaker, its measured queue
+  // plus the I2S DMA. Loop task.
+  uint32_t outputLatencyUs(Output output, char* how, size_t howLen) const;
+  // Sample rate of the audio in the ring (the speaker plays at it).
+  int sampleRate() const { return shared_.rate; }
   const Stats& stats() const { return stats_; }  // refreshed by loop() once a second
   // For the UI; set by the decode task. Title/artist come from ID3 tags and are
   // empty when the file has none.
@@ -129,9 +144,11 @@ private:
   AudioGenerator* decoder_ = nullptr;        // the one decoding now, or null
   const char* codec_ = "";
   bool toneTrack_ = false;
+  bool clickTrack_ = false;                  // a tone: track made by click_, not tone_
   bool sourceDone_ = false;                  // decoder reached the end of the file
   bool described_ = false;
   ToneGen tone_;
+  ClickGen click_;
   int16_t* chunk_ = nullptr;  // tone scratch buffer (PSRAM)
 
   mutable std::mutex lock_;  // guards request_ and the strings below

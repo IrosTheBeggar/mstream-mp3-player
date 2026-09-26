@@ -76,7 +76,13 @@ goes silent for about a second, then fades back in over ~2 s, so the
 change of their level is never heard as a jump.)
 
 The playlist is the files under `/music` followed by three built-in
-test tones.
+test tones and six click tracks (60 s at 90-174 BPM, for the beat tracker).
+
+**Dancing figure** (proof of concept, [docs/MASCOT-POC.md](docs/MASCOT-POC.md)):
+tap the screen above the button strip, or send `d`, and a stick figure
+dances to what's playing. The Core2 finds the beat itself (tempo and phase
+from the audio, no metadata needed), over Bluetooth and on the speaker, and
+sways idly when there's no beat to follow.
 
 The serial console (115200 baud) is there for scripted testing:
 
@@ -86,8 +92,11 @@ The serial console (115200 baud) is there for scripted testing:
 | space | play / pause | `b<n>` | benchmark decoding track n |
 | `o` | switch output | `c<name>` | headphones to connect to |
 | `+` / `-` | volume | `h<n>` | Bluetooth headroom -n dB, 0-12 (default 2, not saved) |
-| `s` / `l` | stats / list tracks | | |
-| `f` | forget the paired headphones and restart | | |
+| `s` / `l` | stats / list tracks | `t<bpm>` | tempo prior for the dance (`t` clears) |
+| `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
+| `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
+| `d` / `v` | dance screen / per-beat log | | |
+| `x` / `X` | screenshot of the figure / whole screen (base64 RGB565) | | |
 
 ## Layout
 
@@ -99,21 +108,24 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   HeadsetKeys         What the headphones' transport keys do (never start music)
   PcmRing             PCM ring between the decode task and the active output
   TransportSync       Generation-tagged decode progress (no stale "track ended")
-  ToneGen             Built-in test tones
+  ToneGen, ClickGen   Built-in test tones; click tracks with a known beat
+  AudioTap, TapReader What an output played, placed in its track; audible-time clock
+  BeatTracker         Tempo, phase and confidence from the audio (onsets, ACF, PLL)
+  DancePose           The dancing figure's joints as functions of the beat phase
   BtControl           Bluetooth decisions: media stream (StreamControl), volume
                       (AbsVolumePolicy, GainRamp), reconnect (ReconnectPlanner)
   hal/                IAudioBackend, IStorage
 src/                  Core2 firmware
   audio/              Core2AudioBackend (decode task), RingOutput, BtSink, SpeakerSink
   storage/            LocalStorage: SD card if present, else LittleFS
-  ui/                 DisplayView (M5GFX): bring-up and now-playing screens
-  app/                SerialConsole, Diagnostics
+  ui/                 DisplayView (M5GFX): bring-up and now-playing screens; DanceView
+  app/                SerialConsole, Diagnostics, DanceMode, Screenshot
   main.cpp            Wires it together; buttons, Bluetooth events, rendering
 data/                 LittleFS image source (data/music is gitignored)
 tools/                make_test_audio.py; iram_diet.py (build post-script)
 test/                 Host unit tests (Unity)
 docker/               mStream dev server
-docs/                 ARCHITECTURE.md, POC-RESULTS.md
+docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md
 ```
 
 ## License

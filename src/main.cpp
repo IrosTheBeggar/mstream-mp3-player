@@ -14,7 +14,9 @@
 #include "HeadsetKeys.h"
 #include "PlaybackController.h"
 #include "Track.h"
+#include "app/DanceMode.h"
 #include "app/Diagnostics.h"
+#include "app/Screenshot.h"
 #include "app/SerialConsole.h"
 #include "audio/Core2AudioBackend.h"
 #include "storage/LocalStorage.h"
@@ -32,8 +34,17 @@ static DisplayView view;
 static Core2AudioBackend audio;
 static PlaybackController player(audio);
 static std::vector<Track> library;  // files found in storage
+static DanceMode danceMode(audio, player);
+static Screenshot shot;
+// Silent test mode (console z), until restart: the output stays on the
+// speaker at volume 0 and headphones connecting don't take it over, so
+// tests can run at night with the headphones connected.
+static bool silent = false;
 
 static constexpr uint32_t kDiagnosticsScreenMs = 3000;
+// Touches above this (screen y) toggle the dance screen; below are the
+// button labels and the touch buttons.
+static constexpr int kDanceTouchMaxY = 200;
 // Volume keys of headphones without absolute volume (AVRCP passthrough):
 // about 1/16 of the range per press, like a phone.
 static constexpr int kHeadphoneVolumeStep = 6;
@@ -43,6 +54,13 @@ static std::vector<Track> builtInTones() {
       {"tone:440", "Test tone 440 Hz", "built-in", 0},
       {"tone:1000", "Test tone 1 kHz", "built-in", 0},
       {"tone:left", "Left ear only", "built-in", 0},
+      // Click tracks with a known beat, for the dancing figure's tracker.
+      {"tone:click90", "Clicks 90 BPM", "built-in", 60000},
+      {"tone:click120", "Clicks 120 BPM", "built-in", 60000},
+      {"tone:click128", "Clicks 128 BPM", "built-in", 60000},
+      {"tone:click140", "Clicks 140 BPM", "built-in", 60000},
+      {"tone:click174", "Clicks 174 BPM", "built-in", 60000},
+      {"tone:click120off", "Clicks 120 BPM, late start", "built-in", 60000},
   };
 }
 
@@ -77,7 +95,25 @@ static std::vector<DisplayView::Row> diagnosticsRows() {
 // ---- actions shared by the touch buttons and the serial console ----
 
 static void toggleOutput() {
+  if (silent) {
+    Serial.println("[test] silent mode: the output stays on the speaker");
+    return;
+  }
   audio.setOutput(audio.output() == Output::Speaker ? Output::Bluetooth : Output::Speaker);
+}
+
+static void enterSilentMode() {
+  silent = true;
+  // Muted before the speaker takes the ring: the pump preempts loop(), so
+  // muting after the switch could let a buffer play at the old volume.
+  audio.setSpeakerVolume(0);
+  if (audio.output() != Output::Speaker) audio.setOutput(Output::Speaker);
+  Serial.println("[test] silent mode: speaker muted, bluetooth won't take over");
+}
+
+static void setDance(bool on) {
+  danceMode.setActive(on);
+  if (!danceMode.active()) view.forget();  // the now-playing screen redraws in full
 }
 
 static bool headphonesSetVolume() {
@@ -88,6 +124,10 @@ static bool headphonesSetVolume() {
 // Bluetooth applies the step on its own task, so the value logged is where
 // it should land (the screen shows the result at its next redraw).
 static void stepVolume(int delta) {
+  if (silent && audio.output() == Output::Speaker) {
+    Serial.println("[test] silent mode: the speaker stays at volume 0");
+    return;
+  }
   const int expected = constrain(audio.volume() + delta, 0, 100);
   audio.stepVolume(delta);
   Serial.printf("[audio] volume %d%% (%s)\n", expected,
@@ -125,11 +165,13 @@ static void printStats() {
       player.currentIndex(), stateName(), audio.positionMs() / 1000.0f,
       audio.output() == Output::Bluetooth ? "bt" : "speaker",
       audio.output() == Output::Bluetooth ? (audio.bluetooth().connected() ? "(connected)" : "(searching)")
+      : silent                            ? "(silent test mode)"
                                           : "",
       (unsigned long)s.bufferedMs, (unsigned long)s.underruns, (unsigned long)s.btFramesPerSec,
       s.decodeLoad * 100.0f, (unsigned long)s.decodeStackFree, (unsigned long)(h.internalFree / 1024),
       (unsigned long)(h.internalMin / 1024), (unsigned long)(h.psramFree / 1024),
       (int)M5.Power.getBatteryLevel());
+  if (danceMode.active()) danceMode.printStats(millis());  // every 5 s while dancing
 
   BtSink& bt = audio.bluetooth();
   if (!bt.connected() && audio.output() != Output::Bluetooth) return;
@@ -165,7 +207,10 @@ static SerialConsole console({
     [] { player.togglePlayPause(); },
     toggleOutput,
     stepVolume,
-    printStats,
+    [] {
+      printStats();
+      if (!danceMode.active()) danceMode.printStats(millis());  // on request also when not dancing
+    },
     listTracks,
     [](int i) { player.play(static_cast<size_t>(i)); },
     [](int i) {
@@ -189,6 +234,25 @@ static SerialConsole console({
       audio.bluetooth().setHeadroomDb(static_cast<uint8_t>(db));
       Serial.printf("[bt] headroom -%d dB (until restart; the stats line shows it once applied)\n", db);
     },
+    enterSilentMode,
+    [] { setDance(!danceMode.active()); },
+    [](bool full) {
+      DanceView& v = danceMode.view();
+      M5Canvas* figure = danceMode.active() ? &v.sprite() : nullptr;  // what the box should show
+      if (full) {
+        shot.request(0, 0, M5.Display.width(), M5.Display.height(), figure, DanceView::kBoxX, DanceView::kBoxY);
+      } else {
+        shot.request(DanceView::kBoxX, DanceView::kBoxY, DanceView::kBoxW, DanceView::kBoxH, figure,
+                     DanceView::kBoxX, DanceView::kBoxY);
+      }
+    },
+    [] { danceMode.toggleVerbose(); },
+    [](float bpm) { danceMode.setPrior(bpm); },
+    [](int ms) {
+      danceMode.setOffsetMs(ms);
+      Serial.printf("[dance] latency offset %+d ms (not saved)\n", ms);
+    },
+    [](int n) { danceMode.freeze(n); },
 });
 
 static void handleButtons() {
@@ -199,6 +263,11 @@ static void handleButtons() {
   if (M5.BtnB.wasHold()) toggleOutput();
   if (M5.BtnC.wasClicked()) player.next();
   if (M5.BtnC.wasHold()) stepVolume(+10);
+  // A tap on the screen itself (not the button strip) toggles the dance screen.
+  for (size_t i = 0; i < M5.Touch.getCount(); ++i) {
+    const auto& t = M5.Touch.getDetail(i);
+    if (t.wasClicked() && t.y >= 0 && t.y < kDanceTouchMaxY) setDance(!danceMode.active());
+  }
 }
 
 // Link changes and headphone buttons, queued by BtSink on the Bluetooth tasks.
@@ -208,7 +277,11 @@ static void handleBluetooth() {
     switch (e) {
       case BtSink::Event::Connected:
         Serial.printf("[bt] connected%s%s\n", bt.deviceName()[0] ? " to " : "", bt.deviceName());
-        audio.setOutput(Output::Bluetooth);
+        if (silent) {
+          Serial.println("[test] silent mode: staying on the speaker");
+        } else {
+          audio.setOutput(Output::Bluetooth);
+        }
         diag::logHeap("bt-link");
         break;
       case BtSink::Event::Disconnected:
@@ -232,7 +305,7 @@ static void handleBluetooth() {
           break;
         }
         Serial.println("[bt] headphones: play");
-        if (bt.connected() && audio.output() != Output::Bluetooth) audio.setOutput(Output::Bluetooth);
+        if (bt.connected() && audio.output() != Output::Bluetooth && !silent) audio.setOutput(Output::Bluetooth);
         HeadsetKeys::apply(player, HeadsetKeys::Key::Play);
         break;
       case BtSink::Event::Pause:
@@ -347,9 +420,12 @@ void setup() {
   const char* headphones = audio.bluetooth().sinkName();
   Serial.printf("[bt] headphones: %s\n",
                 headphones[0] ? ("name contains \"" + String(headphones) + "\"").c_str() : "any very close device");
+  danceMode.begin();
+  diag::logHeap("dance");
   Serial.println("[console] n/p next/prev, space play/pause, o output, +/- volume, s stats, l list, "
-                 "f forget bt; with Enter: i<n> play, b<n> bench, c<name> headphones name, "
-                 "h<n> bt headroom -n dB");
+                 "f forget bt, z silent test mode, d dance, x/X screenshot figure/screen, v beat log; "
+                 "with Enter: i<n> play, b<n> bench, c<name> headphones name, h<n> bt headroom -n dB, "
+                 "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes)");
 }
 
 void loop() {
@@ -362,6 +438,16 @@ void loop() {
   player.update(now);
   audio.loop(now);
 
+  // A new track (skip, jump, natural end) drops the tempo prior.
+  static int lastTrack = -1;
+  if (player.currentIndex() != lastTrack) {
+    if (lastTrack >= 0) danceMode.onTrackChanged();
+    lastTrack = player.currentIndex();
+  }
+  // The dance screen draws its own frames (~30/s); the now-playing screen waits.
+  danceMode.loop(now, silent);
+  shot.poll();
+
   static uint32_t lastDraw = 0;
   static uint32_t lastStats = 0;
   static bool heapLoggedWhilePlaying = false;
@@ -369,7 +455,7 @@ void loop() {
     diag::logHeap("playing");
     heapLoggedWhilePlaying = true;
   }
-  if (now >= kDiagnosticsScreenMs && now - lastDraw >= 250) {
+  if (!danceMode.active() && now >= kDiagnosticsScreenMs && now - lastDraw >= 250) {
     render();
     lastDraw = now;
   }
