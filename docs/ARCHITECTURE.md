@@ -157,10 +157,17 @@ out what it returns.
   ends a probe after a stream they started themselves has played), and a
   new stream waits until that is answered (its ACCEPT or echo, at most 2 s):
   what was on its way lands before the stream, not ~1 s into it. During a
-  late probe's dip the silence waits for it too. A notification near it only
-  counts as its echo once every older command of ours has been answered;
-  before that, a key of theirs near it (headphones with fine steps) looks
-  the same, and is taken as theirs. After an
+  late probe's dip the silence waits for it too. A notification names no
+  command; only an ACCEPT shows that one of ours has landed. So a
+  notification near it only counts as its echo once every older command of
+  ours has an ACCEPT (paired by order), and none left our short history of
+  commands without one; one near an older command with no ACCEPT answers
+  nothing either. Before that, a key of theirs near either (headphones with
+  fine steps) looks the same: it answers nothing and uses nothing up, so
+  their ACCEPTs still pair with our commands in order, and the volume shown
+  doesn't follow it either (echo or key, the command that waits lands after
+  it, and they end at that). Headphones that only notify wait the 2 s out.
+  After an
   unanswered probe their level is unknown, and any command could be the
   first they apply, at once, from their own level (even a volume step down
   could raise them), so the listener's volume is no longer sent at all: our
@@ -192,13 +199,17 @@ out what it returns.
   may have raised since), never above what absolute volume gives for p.
   The same bound holds for a command still on its way when a stream, or a
   rise of our gain, held for an answer goes ahead after its wait without
-  one (headphones slower than that).
+  one (headphones slower than that), or after an ACCEPT paired with it by
+  order that was an older command's (more than one of ours left the
+  history unanswered, so the pairing runs late).
   And in absolute mode, a report of theirs that overtakes a command of ours
   still on its way can leave the volume shown above their level until they
   report again; a step down from it then sends the level shown. A notification
   counts as an echo of ours only if it matches a command they haven't
   confirmed yet (within 4/127, or what their ACCEPT said), so their own
-  steps always reach the UI. Volume steps travel as steps to BtAppT, so
+  steps reach the UI, except one near a command of ours on its way while a
+  new stream waits for an answer (if the command that waits is then dropped,
+  the volume shown stays at it until they report again). Volume steps travel as steps to BtAppT, so
   quick presses are never lost. The headroom (-2 dB) can be changed from the
   console (`h<n>`, not saved) to find where loud masters start to distort.
 - **Media stream** (`StreamControl`, host-tested against the event orderings

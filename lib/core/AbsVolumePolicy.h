@@ -69,9 +69,18 @@
 //    was on its way lands before anything is heard, not into the first
 //    stream (the Powerbeats Pro answer a command ~1 s after it). During a
 //    late probe's dip the silence waits for it too, and our gain only then
-//    ramps up. A notification near it counts as its echo only once every
-//    older command of ours is answered: before that, a key of theirs near
-//    it (headphones with fine steps) looks the same, and is taken as theirs.
+//    ramps up. A notification names no command, and only an ACCEPT shows
+//    that one of ours has landed: while it waits, a notification near it
+//    counts as its echo only once every older command of ours has an
+//    ACCEPT (paired by order) and none left our history without one
+//    (pushed out by later ones, or used up by a notification before the
+//    wait); one near an older command with no ACCEPT answers nothing
+//    either. Before that, a key of theirs near either (headphones with fine
+//    steps) looks the same: it answers nothing and uses nothing up, so
+//    their ACCEPTs still pair in order, and the UI doesn't follow it either:
+//    echo or key, the command that waits lands after it, and they end at
+//    that, the level the UI shows. Headphones that only notify (no ACCEPTs)
+//    wait it out.
 //  - No answer to a probe: Software, and the user's volume is no longer sent
 //    at all: our gain alone follows it. Their level is unknown (they may
 //    have kept their own, rejected ours, or apply absolute volume only while
@@ -98,8 +107,9 @@
 //    its way, their level is sent back once (the volume shown instead if
 //    that is lower; a new stream waits for its answer, as above), then
 //    nothing more is sent, and the link stays in Software.
-//  - Changes made on the headphones update percent() in Absolute mode and are
-//    never sent back (except once, as themselves, above). A
+//  - Changes made on the headphones update percent() in Absolute mode (except
+//    near a command of ours on its way while one waits for an answer, above)
+//    and are never sent back (except once, as themselves, above). A
 //    notification is an echo of ours (it doesn't move the UI) only if it
 //    matches a command they haven't confirmed yet: within kEchoTolerance of
 //    what we sent (some headphones keep ~16 steps), or exactly what their
@@ -162,12 +172,17 @@
 //    were, or than kHoldMaxMs).
 //  - The answer that releases a held stream names no command either. A
 //    notification within kEchoTolerance of the held command (or of a later
-//    one) counts once every older command of ours has an answer: then the
-//    echo of an older one near it (the held one, landing in the stream, is
-//    within that tolerance of it), or a key of theirs near it (the held one
-//    may still land in the stream, within kEchoTolerance of that key). An
-//    ACCEPT paired with it by order that isn't near it (a command they
-//    dropped, a stale answer) leaves it to the wait.
+//    one) counts once every older command of ours has an ACCEPT, and none
+//    left the history without one: then the echo of an older one near it
+//    (the held one, landing in the stream, is within that tolerance of it),
+//    or a key of theirs near it (the held one may still land in the
+//    stream, within kEchoTolerance of that key). An ACCEPT paired with it
+//    by order that isn't near it (a command they dropped, a stale answer)
+//    leaves it to the wait. Commands that left the history with no ACCEPT
+//    make the pairing late: the ACCEPT paired with the held one is then
+//    that of the command just before it (one left: only the held one may
+//    still land, as above), or of an older one (more than one: one after
+//    that may still land too, bounded as the first risk above).
 //  - Their level sent back at a handover may land after a further key press
 //    of theirs, taking them back to the level they had just reported.
 //  - During a probe, an ACCEPT of an older command of ours hands over while
@@ -185,7 +200,12 @@
 //    enough to confirm late) leaves the UI above their level once ours
 //    lands, until they report again; a step down from it then sends more
 //    than they have: the user's own volume, as shown. The random-events
-//    test counts these steps instead of checking them.
+//    test counts these steps instead of checking them. While a command
+//    waits for an answer (sendHeld()), a notification near one of ours on
+//    its way doesn't move the UI; if that one then isn't the last to land
+//    (the one that waits was dropped, or a key of theirs came after it
+//    landed, reported before an older one's ACCEPT), the UI stays at the
+//    level that waits instead of theirs, until they report again.
 //
 // Portable and single-threaded: the caller serialises calls (on the Core2 all
 // of them run on ESP32-A2DP's app task, BtAppT, through BtControl) and passes a
@@ -312,10 +332,15 @@ private:
   void confirmLate(Actions& a, uint8_t absolute, uint32_t nowMs);
   void endDip();
   bool canHandOver() const { return !heard_ && !streaming_; }
-  bool takeEcho(uint8_t absolute, uint32_t nowMs, bool keepOnMiss);
+  // What a notification is to takeEcho(): a level of theirs, the echo of a
+  // command of ours, or, while a command is held, one near a command of ours
+  // that may still be on its way (see takeEcho()).
+  enum class Heard : uint8_t { Theirs, Echo, Held };
+  Heard takeEcho(uint8_t absolute, uint32_t nowMs, bool keepOnMiss);
   bool unansweredBeforeHeld(int i) const;
   int noteAccepted(uint8_t absolute);
   uint8_t askedLevel() const;
+  void dropSent(int i);
   void clearSent();
 
   uint8_t percent_;
@@ -349,4 +374,8 @@ private:
   uint16_t heldGain_ = 0;    // ...kept meanwhile at this (or at silence, ducked_)
   uint32_t answeredMs_ = 0;  // when the command the last ACCEPT or echo answered went out
   Sent sent_[kSentHistory];  // oldest first
+  // A command of ours left sent_ with no ACCEPT (shifted out, or used up by
+  // a notification) on this link / AVRCP connection: it may still be on its
+  // way, and a notification can no longer release a hold (see sendHeld()).
+  bool lostUnanswered_ = false;
 };

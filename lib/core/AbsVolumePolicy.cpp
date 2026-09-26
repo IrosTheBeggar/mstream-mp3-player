@@ -48,6 +48,9 @@ void AbsVolumePolicy::sendValue(Actions& a, uint8_t absolute, uint32_t nowMs, bo
   a.absolute = absolute;
   lastSent_ = absolute;
   askedAgain_ = again;
+  // The oldest leaves the history: with no ACCEPT yet, it may still be on
+  // its way, and its ACCEPT will pair with a later command.
+  if (sent_[0].valid && sent_[0].accepted < 0) lostUnanswered_ = true;
   for (int i = 0; i + 1 < kSentHistory; ++i) sent_[i] = sent_[i + 1];
   sent_[kSentHistory - 1] = {absolute, -1, nowMs, true, false};
 }
@@ -59,8 +62,8 @@ void AbsVolumePolicy::sendValue(Actions& a, uint8_t absolute, uint32_t nowMs, bo
 // does a rise of our gain that waits for it (riseHeld_). Its answer names no
 // command: an ACCEPT paired with it by order counts only if it is near what
 // it asked for, an echo if it matches it or a later command (they land in
-// order) and every older command of ours has been answered (else it can't
-// be told from a key of theirs near it, see takeEcho()).
+// order) and every older command of ours has an ACCEPT (else it can't be
+// told from a key of theirs near it, see takeEcho()).
 void AbsVolumePolicy::sendHeld(Actions& a, uint8_t absolute, uint32_t nowMs, uint32_t waitMs) {
   for (Sent& s : sent_) s.holds = false;
   sendValue(a, absolute, nowMs);
@@ -120,40 +123,52 @@ int AbsVolumePolicy::noteAccepted(uint8_t absolute) {
 // `keepOnMiss`: while a probe waits, a command of ours may still be on its
 // way, and its echo (and its ACCEPT, paired by order) must still be
 // recognised when it lands.
-bool AbsVolumePolicy::takeEcho(uint8_t absolute, uint32_t nowMs, bool keepOnMiss) {
+AbsVolumePolicy::Heard AbsVolumePolicy::takeEcho(uint8_t absolute, uint32_t nowMs, bool keepOnMiss) {
   for (int i = kSentHistory - 1; i >= 0; --i) {
     const Sent& s = sent_[i];
     if (!s.valid || nowMs - s.ms > kEchoWindowMs) continue;
     if (absDiff(absolute, s.absolute) <= kEchoTolerance || (s.accepted >= 0 && absDiff(absolute, s.accepted) <= 1)) {
-      // Near a held command (or a later one) while an older command of ours
-      // is still unanswered: as far as we know that one hasn't landed, and
-      // a key of theirs near ours looks the same (headphones with fine
-      // steps). Taken as theirs, and nothing is used up: their answers
-      // still pair with our commands, and the hold waits for its own.
-      if (held_ && unansweredBeforeHeld(i)) return false;
+      // While a command is held, a command older than it with no ACCEPT yet
+      // may not have landed, and a key of theirs near it, or near the held
+      // one, looks the same as an echo (headphones with fine steps). Not an
+      // answer, and nothing is used up: their ACCEPTs still pair with our
+      // commands in order, that command still counts as unanswered, its own
+      // echo is still recognised, and the hold waits for an answer (see
+      // unansweredBeforeHeld()). Nor does the UI follow it: echo or key, the
+      // held command (or a later one) lands after it, and they end there,
+      // at the level the UI shows. (Followed, the probe's echo arriving
+      // before its ACCEPT left the UI at the probe's level once their level
+      // back had landed and its echo released the hold.)
+      if (held_ && unansweredBeforeHeld(i)) return Heard::Held;
       for (int j = 0; j <= i; ++j) {
         if (sent_[j].valid && sent_[j].holds) held_ = false;  // it, or a later one, landed
-        sent_[j].valid = false;
       }
+      dropSent(i);
       answeredMs_ = s.ms;
-      return true;
+      return Heard::Echo;
     }
   }
-  if (!keepOnMiss) clearSent();
-  return false;
+  if (!keepOnMiss) dropSent(kSentHistory - 1);
+  return Heard::Theirs;
 }
 
-// The held command is sent_[i] or older, and a command older than it has no
-// answer yet (no ACCEPT paired with it, no echo taken for it).
+// While a command is held: using up sent_[0..i] would take a notification
+// as the answer to a command older than it that has no ACCEPT yet, or, if
+// the held command is among them, release the hold while a command of ours
+// that left the history with no ACCEPT (lostUnanswered_) may still be on its
+// way. A notification names no command: only an ACCEPT, paired by order,
+// shows that one of ours has landed. (Nothing left before it: what remains
+// was sent after it, and using that up can't release it.)
 bool AbsVolumePolicy::unansweredBeforeHeld(int i) const {
-  bool unanswered = false;
-  for (int j = 0; j <= i; ++j) {
-    const Sent& s = sent_[j];
-    if (!s.valid) continue;
-    if (s.holds) return unanswered;
-    if (s.accepted < 0) unanswered = true;
+  int held = -1;
+  for (int j = 0; j < kSentHistory; ++j) {
+    if (sent_[j].valid && sent_[j].holds) held = j;
   }
-  return false;
+  if (held < 0) return false;
+  for (int j = 0; j <= i && j < held; ++j) {
+    if (sent_[j].valid && sent_[j].accepted < 0) return true;
+  }
+  return i >= held && lostUnanswered_;
 }
 
 // What isn't an answer (an ACCEPT or echo above what we ask for, a louder
@@ -182,8 +197,20 @@ uint8_t AbsVolumePolicy::askedLevel() const {
   return lastSent_ >= 0 && lastSent_ < ours ? static_cast<uint8_t>(lastSent_) : ours;
 }
 
+// Uses up sent_[0..i]. One with no ACCEPT yet may still be on its way (the
+// notification that used it up may have been a key of theirs near it), and
+// its ACCEPT will pair with a later command: see unansweredBeforeHeld().
+void AbsVolumePolicy::dropSent(int i) {
+  for (int j = 0; j <= i; ++j) {
+    if (sent_[j].valid && sent_[j].accepted < 0) lostUnanswered_ = true;
+    sent_[j].valid = false;
+  }
+}
+
+// A new link or AVRCP connection: nothing of ours is on its way over it.
 void AbsVolumePolicy::clearSent() {
   for (Sent& s : sent_) s.valid = false;
+  lostUnanswered_ = false;
 }
 
 // The probe steps the headphones' own volume, from a level we can't know, at
@@ -458,13 +485,16 @@ AbsVolumePolicy::Actions AbsVolumePolicy::headsetChanged(uint8_t absolute, uint3
   // Nothing heard yet, or silence during a late probe's dip: they render the
   // volume themselves, no louder than we ask for.
   const bool asking = mode_ != Mode::Absolute && (ducked_ || (waiting && canHandOver()));
-  const bool echo = takeEcho(absolute, nowMs, /*keepOnMiss=*/asking || waiting);
+  const Heard heard = takeEcho(absolute, nowMs, /*keepOnMiss=*/asking || waiting);
+  const bool echo = heard == Heard::Echo;
   // An echo confirms only if no louder than what we ask for now: one of an
   // older command (a lower one still on its way), or a key of theirs that
   // happens to land near one, isn't proof they are at or below ours.
   const bool confirms = echo && absolute <= askedLevel() + kEchoTolerance;
   if (mode_ == Mode::Absolute) {
-    if (!echo) setPercent(a, vol::absToPercent(absolute));  // their buttons: the UI follows
+    // Their buttons: the UI follows. (Not while held near a command of ours
+    // still on its way: they end at the held one, see takeEcho().)
+    if (heard == Heard::Theirs) setPercent(a, vol::absToPercent(absolute));
   } else if (asking) {
     if (confirms && mode_ == Mode::Software) {
       confirmLate(a, absolute, nowMs);
