@@ -282,8 +282,8 @@ void test_headroom_setting() {
   TEST_ASSERT_EQUAL_UINT16(vol::dbToQ15(-6.0f), c.volume().headroomQ15());
 }
 
-// A probe that is never answered: the stream starts after the timeout, at
-// the software level.
+// A probe that is never answered: the stream starts after the timeout and a
+// short grace (in case they apply it late), at the software level.
 void test_unanswered_probe_releases_the_stream() {
   FakeIo io;
   BtControl c(io, 30);
@@ -291,18 +291,111 @@ void test_unanswered_probe_releases_the_stream() {
   c.capabilities(true, 100);  // probe out
   c.setWanted(true, 200);
   TEST_ASSERT_TRUE(io.cmds.empty());
-  c.tick(100 + AbsVolumePolicy::kProbeTimeoutMs);
+  const uint32_t timeout = 100 + AbsVolumePolicy::kProbeTimeoutMs;
+  c.tick(timeout);
   TEST_ASSERT_EQUAL(Mode::Software, c.volume().mode());
+  TEST_ASSERT_TRUE(io.cmds.empty());  // the grace
+  c.tick(timeout + AbsVolumePolicy::kProbeGraceMs - 1);
+  TEST_ASSERT_TRUE(io.cmds.empty());
+  c.tick(timeout + AbsVolumePolicy::kProbeGraceMs);
   TEST_ASSERT_EQUAL(Cmd::CheckReady, io.last());
-  startStream(c, io, 2200);
+  startStream(c, io, 3200);
   // Its late answer: they apply ours, so the gain rises by the ramp only,
   // and the stream runs on.
   const size_t cmds = io.cmds.size();
-  c.accepted(38, 3000);
+  c.accepted(38, 4000);
   TEST_ASSERT_EQUAL(Mode::Absolute, c.volume().mode());
   TEST_ASSERT_EQUAL(Move::Ramp, io.moves.back());
   TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, io.gain);
   TEST_ASSERT_EQUAL(cmds, io.cmds.size());
+}
+
+// An answer within the grace is as good as one in time: the stream waits
+// no longer, and fades in straight to the handed-over level.
+void test_answer_within_the_grace_lifts() {
+  FakeIo io;
+  BtControl c(io, 30);
+  c.linkUp(0);
+  c.capabilities(true, 100);
+  c.setWanted(true, 200);
+  c.tick(100 + AbsVolumePolicy::kProbeTimeoutMs);
+  TEST_ASSERT_TRUE(io.cmds.empty());
+  c.accepted(38, 2500);
+  TEST_ASSERT_EQUAL(Mode::Absolute, c.volume().mode());
+  TEST_ASSERT_EQUAL(Move::Lift, io.moves.back());
+  TEST_ASSERT_EQUAL(Cmd::CheckReady, io.last());
+}
+
+// The narrow race of a pre-audio handover: the headphones start a stream
+// themselves while our probe is out, and ESP-IDF runs the data callback
+// (which restarts the gain stage for the new stream) before STARTED reaches
+// BtAppT. The ACCEPT that follows is still taken as a pre-audio handover (a
+// lift), but its restart is used up: the gain stage drops the lift and ramps
+// to the headroom at the up rate from the software level, with no step.
+void test_lift_after_a_stream_the_headphones_started_only_ramps() {
+  RampIo io;
+  BtControl c(io, 30);
+  c.linkUp(0);
+  io.ramp.reset(softwareGain(30));
+  c.capabilities(true, 100);  // probe out
+  io.ramp.restart();          // their stream's first data, unknown to BtAppT
+  TEST_ASSERT_EQUAL_UINT16(softwareGain(30), io.play(GainRamp::kFadeFrames));
+  c.accepted(38, 200);
+  TEST_ASSERT_EQUAL(Mode::Absolute, c.volume().mode());
+  TEST_ASSERT_EQUAL(Move::Lift, io.moves.back());
+  constexpr uint32_t kWindow = 441;  // 10 ms
+  uint16_t last = softwareGain(30);
+  uint32_t windows = 0;
+  while (last != vol::kHeadroomQ15 && windows < 1000) {
+    const uint16_t now = io.play(kWindow);
+    TEST_ASSERT_TRUE(now >= last);
+    TEST_ASSERT_TRUE(vol::q15ToDb(now) - vol::q15ToDb(last) <= 0.22f);  // <= ~20 dB/s, +rounding
+    last = now;
+    ++windows;
+  }
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, last);  // ends at the handover level
+  const float rise = vol::q15ToDb(vol::kHeadroomQ15) - vol::q15ToDb(softwareGain(30));
+  TEST_ASSERT_TRUE(windows >= static_cast<uint32_t>(rise / 20.5f * 100.0f));
+  // STARTED reaches BtAppT: nothing moves.
+  const size_t moves = io.moves.size();
+  c.audioState(true, 2000);
+  TEST_ASSERT_EQUAL(moves, io.moves.size());
+}
+
+// AVRCP drops on a link that has played in Absolute mode and comes back: the
+// headphones kept their level while our gain came down, so the return gets
+// a late probe of its own (dip, command once silent, ramp) instead of
+// staying stacked. The stream runs on throughout.
+void test_avrcp_back_on_a_link_that_has_played() {
+  FakeIo io;
+  BtControl c(io, 30);
+  c.linkUp(0);
+  c.capabilities(true, 10);
+  c.accepted(38, 20);
+  c.setWanted(true, 30);
+  startStream(c, io, 40);
+  const size_t cmds = io.cmds.size();
+  c.avrcpDown(5000);
+  TEST_ASSERT_EQUAL(Mode::Software, c.volume().mode());
+  TEST_ASSERT_EQUAL(Move::Ramp, io.moves.back());
+  TEST_ASSERT_EQUAL_UINT16(softwareGain(30), io.gain);
+  const size_t sent = io.sent.size();
+  c.capabilities(true, 8000);  // AVRCP back
+  TEST_ASSERT_TRUE(c.avrcpConnected());
+  TEST_ASSERT_EQUAL(Mode::Probing, c.volume().mode());
+  TEST_ASSERT_TRUE(c.volume().ducked());
+  TEST_ASSERT_EQUAL(Move::Ramp, io.moves.back());
+  TEST_ASSERT_EQUAL_UINT16(0, io.gain);
+  TEST_ASSERT_EQUAL(sent, io.sent.size());
+  c.tick(8000 + AbsVolumePolicy::kDuckSettleMs);
+  TEST_ASSERT_EQUAL(sent + 1, io.sent.size());
+  TEST_ASSERT_EQUAL_UINT8(38, io.sent.back());
+  c.accepted(38, 8000 + AbsVolumePolicy::kDuckSettleMs + 150);
+  TEST_ASSERT_EQUAL(Mode::Absolute, c.volume().mode());
+  TEST_ASSERT_EQUAL(Move::Ramp, io.moves.back());
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, io.gain);
+  TEST_ASSERT_EQUAL(cmds, io.cmds.size());
+  TEST_ASSERT_TRUE(c.stream().streaming());
 }
 
 // Sends only reach the headphones while AVRCP is connected.
@@ -380,6 +473,9 @@ int main(int, char**) {
   RUN_TEST(test_late_probe_without_audio_data_keeps_the_silence);
   RUN_TEST(test_headroom_setting);
   RUN_TEST(test_unanswered_probe_releases_the_stream);
+  RUN_TEST(test_answer_within_the_grace_lifts);
+  RUN_TEST(test_lift_after_a_stream_the_headphones_started_only_ramps);
+  RUN_TEST(test_avrcp_back_on_a_link_that_has_played);
   RUN_TEST(test_no_absolute_volume_without_avrcp);
   RUN_TEST(test_suspend_now_after_a_pause);
   RUN_TEST(test_media_ctrl_failure_waits_for_the_schedule);

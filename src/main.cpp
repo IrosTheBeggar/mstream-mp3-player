@@ -11,6 +11,7 @@
 #include <cmath>
 #include <vector>
 
+#include "HeadsetKeys.h"
 #include "PlaybackController.h"
 #include "Track.h"
 #include "app/Diagnostics.h"
@@ -100,14 +101,6 @@ static void stepBluetoothVolume(int delta) {
   BtSink& bt = audio.bluetooth();
   bt.stepVolume(delta);
   Serial.printf("[bt] volume %d%%\n", constrain(bt.volume() + delta, 0, 100));
-}
-
-// Play and pause as commands, not a toggle: in-ear detection sends them too,
-// and a repeat must not undo the first. PLAY only resumes what was paused:
-// putting a bud back in (or fiddling with one) must never start music the
-// listener didn't have playing.
-static void resumeIfPaused() {
-  if (player.state() == PlayState::Paused) player.togglePlayPause();
 }
 
 static void pauseIfPlaying() {
@@ -231,19 +224,21 @@ static void handleBluetooth() {
       case BtSink::Event::VolumeChanged:
         Serial.printf("[bt] volume now %u%%\n", bt.volume());  // the screen follows at its next redraw
         break;
+      // Transport keys: HeadsetKeys decides (headphone input never starts
+      // music that wasn't playing); this adds the output and the stream.
       case BtSink::Event::Play:
-        if (player.state() != PlayState::Paused) {
+        if (HeadsetKeys::decide(player.state(), HeadsetKeys::Key::Play) != HeadsetKeys::Action::Resume) {
           Serial.printf("[bt] headphones: play (ignored: %s)\n", stateName());
           break;
         }
         Serial.println("[bt] headphones: play");
         if (bt.connected() && audio.output() != Output::Bluetooth) audio.setOutput(Output::Bluetooth);
-        resumeIfPaused();
+        HeadsetKeys::apply(player, HeadsetKeys::Key::Play);
         break;
       case BtSink::Event::Pause:
         Serial.println("[bt] headphones: pause");
         if (audio.output() != Output::Bluetooth) break;  // not the speaker's playback
-        pauseIfPlaying();
+        HeadsetKeys::apply(player, HeadsetKeys::Key::Pause);
         // They pick their next key from the stream: suspend it now, so the
         // next press is PLAY. Also when we were paused already (paused on the
         // Core2, the stream still in its 3 s tail): this press did nothing,
@@ -251,13 +246,14 @@ static void handleBluetooth() {
         bt.suspendPromptly();
         break;
       case BtSink::Event::Next:
-        Serial.println("[bt] headphones: next");
-        player.next();
+      case BtSink::Event::Prev: {
+        const bool next = e == BtSink::Event::Next;
+        const HeadsetKeys::Action a =
+            HeadsetKeys::apply(player, next ? HeadsetKeys::Key::Next : HeadsetKeys::Key::Prev);
+        Serial.printf("[bt] headphones: %s (track %d, %s)\n", next ? "next" : "previous", player.currentIndex(),
+                      a == HeadsetKeys::Action::Skip ? "playing" : "selected, not started");
         break;
-      case BtSink::Event::Prev:
-        Serial.println("[bt] headphones: previous");
-        player.prev();
-        break;
+      }
       case BtSink::Event::VolumeUp:
         stepBluetoothVolume(+kHeadphoneVolumeStep);
         break;

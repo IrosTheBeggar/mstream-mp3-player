@@ -9,13 +9,14 @@
 #include "DeclickReader.h"
 #include "GainRamp.h"
 #include "PcmRing.h"
+#include "StreamRestart.h"
 #include "VolumeMath.h"
 #include "audio/AudioShared.h"
 
 class PlayerA2dp;  // BtSink.cpp: ESP32-A2DP's source with the fixes below
 
 // Streams the ring to Bluetooth headphones with ESP32-A2DP (A2DP source). The
-// Bluetooth stack pulls 44.1 kHz stereo from its own task (128 frames at a
+// Bluetooth stack pulls 44.1 kHz stereo on its BTC task (128 frames at a
 // time, several times per ~30 ms tick) while the media stream runs; that
 // callback must never block, so it takes what the ring has, pads the rest with
 // silence and applies our gain stage (GainRamp). A DeclickReader fades that in
@@ -176,8 +177,6 @@ private:
 
   // The gain stage: requests from BtAppT, applied by the data callback.
   GainRamp gain_;
-  // ESP-IDF flushed the stream (it stopped): the next audio starts from silence.
-  std::atomic<bool> restartFade_{false};
   // Bumped by BtAppT before every START and on every link: the next audio
   // after a pause in the callbacks belongs to a new stream (fade in).
   std::atomic<uint32_t> streamEpoch_{0};
@@ -186,8 +185,7 @@ private:
 
   // Data callback only, apart from the atomics.
   DeclickReader reader_{kConsumerId};
-  int64_t lastDataUs_ = 0;
-  uint32_t seenEpoch_ = 0;
+  StreamRestart restart_;  // when its audio fades in from 0
   std::atomic<uint32_t> maxGapUs_{0};
   std::atomic<uint32_t> framesPulled_{0};
 };

@@ -10,6 +10,7 @@
 
 #include "BtControl.h"
 #include "ReconnectPlanner.h"
+#include "StreamRestart.h"
 #include "VolumeMath.h"
 
 namespace {
@@ -32,16 +33,6 @@ constexpr uint32_t kTickMs = 250;
 // How long a pause from the headphones' key may take to reach the transport
 // before the prompt suspend it asked for is dropped.
 constexpr uint32_t kSuspendPromptlyForMs = 1000;
-// A wait this long between data callbacks: the listener certainly heard
-// silence (the headphones buffer a few hundred ms at most), so the next audio
-// fades in. Also the limit for the gap statistics.
-constexpr int64_t kGapResetUs = 1000000;
-// A shorter wait counts as silence only for a stream we started anew (a
-// START since the last callback); otherwise it is congestion or a flash
-// write stalling the media task, and the audio simply goes on (a fade from 0
-// would click). Normal is ~10-30 ms.
-constexpr int64_t kRestartGapUs = 100000;
-
 constexpr const char* kPrefsNamespace = "player";
 constexpr const char* kPrefsSinkName = "bt_name";
 
@@ -121,14 +112,26 @@ uint64_t packBda(const uint8_t* bda) {
 // task). The loop task never touches this state: it posts work to BtAppT
 // (requestStream, requestVolume*, requestTick, requestSuspendNow, requestForget).
 //
+// Bluedroid's BTC task (BTC_TASK) also runs the data callback (BtSink::onData):
+// ESP-IDF 5.5's A2DP source has no media task of its own
+// (btc_a2dp_source_startup(): btc_aa_src_task_hdl = btc_get_current_thread(),
+// and its media timer posts there). So audio shares that task with
+// app_gap_callback, app_rc_tg_callback, BtSink::onDeviceFound and the
+// library's app_a2d_callback and app_rc_ct_callback. Those hand their events
+// to BtAppT through bt_app_work_dispatch(): a malloc, then up to 10 ms of
+// waiting for room in BtAppT's queue (BluetoothA2DPCommon.cpp:547; 20
+// entries). BtAppT must keep its queue drained (no long work in its handlers,
+// the loop's requests only a few at a time), or every such event can block
+// BTC_TASK, and with it the audio, for 10 ms.
+//
 // Library internals relied on (ESP32-A2DP v1.8.11, pinned in platformio.ini;
 // re-check on any upgrade): BluetoothA2DPSource.cpp's file-local
 // BT_APP_HEART_BEAT_EVT 0xff00 (:21) and BT_APP_EVT_STACK_UP 0 (:24-26); the
 // protected members s_a2d_state, s_connecting_heatbeat_count, discovery_active,
 // peer_bd_addr, last_connection, reconnect_status, reconnect_retries,
 // max_reconnect_retries, is_autoreconnect_allowed, last_heart_beat,
-// app_task_handle and discoverability (BluetoothA2DPSource.h:279-305,
-// BluetoothA2DPCommon.h:373-416); ccall_av_hdl_avrc_tg_evt.
+// app_task_handle (BluetoothA2DPSource.h:279-305, BluetoothA2DPCommon.h:373-416)
+// and discoverability (BluetoothA2DPCommon.h:464); ccall_av_hdl_avrc_tg_evt.
 class PlayerA2dp : public BluetoothA2DPSource, private BtControl::Io {
 public:
   enum Work : uint16_t { kWantOff, kWantOn, kTick, kSuspendNow, kForget };
@@ -175,8 +178,8 @@ public:
   void set_volume(uint8_t) override {}
 
 protected:
-  // Data callback, on ESP-IDF's A2DP source media task (BtA2dSourceT). No
-  // library volume stage: BtSink::onData applies ours. (The library would run
+  // Data callback, on Bluedroid's BTC task (see above). No library volume
+  // stage: BtSink::onData applies ours. (The library would run
   // its A2DPVolumeControl, BluetoothA2DPSource.cpp:188-192.)
   int32_t get_audio_data_volume(uint8_t* data, int32_t len) override { return get_audio_data(data, len); }
 
@@ -559,7 +562,7 @@ void PlayerA2dp::volumeModeChanged(AbsVolumePolicy::Mode mode, bool probeUnanswe
     case AbsVolumePolicy::Mode::Software:
       if (probeUnanswered) {
         Serial.printf("[bt] volume: asked the headphones, no answer in %lu ms; applied by the Core2 "
-                      "(software, %u%%), still sent to them\n",
+                      "(software, %u%%); steps down still sent to them\n",
                       static_cast<unsigned long>(lateProbe_ ? AbsVolumePolicy::kLateProbeTimeoutMs
                                                             : AbsVolumePolicy::kProbeTimeoutMs),
                       percent);
@@ -908,37 +911,26 @@ void BtSink::setDeviceName(const char* name) {
   deviceNameIdx_.store(next);
 }
 
-// Bluetooth data callback: ESP-IDF's A2DP source media task (BtA2dSourceT),
-// 128 frames at a time at 44.1 kHz, several times per ~30 ms tick. No
-// blocking, no logging.
+// Bluetooth data callback, on Bluedroid's BTC task (see the task note above
+// PlayerA2dp), 128 frames at a time at 44.1 kHz, several times per ~30 ms
+// tick. No blocking, no logging.
 int32_t BtSink::onData(Frame* frames, int32_t count) {
   BtSink& s = *sink;
-  if (count <= 0) {
-    // ESP-IDF flushes its queue when the stream stops (btc_a2dp_source_aa_tx_flush:
-    // data NULL, len -1, arriving here as 0 frames), on this same media task.
-    s.restartFade_.store(true, std::memory_order_release);
-    return 0;
-  }
-
-  const int64_t now = esp_timer_get_time();
-  const int64_t gap = now - s.lastDataUs_;
-  const bool first = s.lastDataUs_ == 0;
-  s.lastDataUs_ = now;
-  const uint32_t epoch = s.streamEpoch_.load(std::memory_order_acquire);
-  const bool newStream = epoch != s.seenEpoch_;  // a START (or a new link) since the last callback
-  s.seenEpoch_ = epoch;
-  // A new or resumed stream: the listener heard silence, so the audio fades in
-  // from 0 (the fader) back to the level heard before, or the level a
-  // handover lifted it to (the gain stage). Detected here, on the task that
-  // owns both. A gap alone, without a new START, is only a late media task:
-  // the audio goes on as it was.
-  if (s.restartFade_.exchange(false, std::memory_order_acquire) || first || gap >= kGapResetUs ||
-      (newStream && gap >= kRestartGapUs)) {
+  // A new or resumed stream (StreamRestart): the listener heard silence, so
+  // the audio fades in from 0 (the fader) back to the level heard before, or
+  // the level a handover lifted it to (the gain stage). Detected here, on the
+  // task that owns both. ESP-IDF's flush when the stream stops
+  // (btc_a2dp_source_aa_tx_flush: data NULL, len -1) arrives here as 0
+  // frames, on this same task.
+  const bool restart =
+      s.restart_.callback(esp_timer_get_time(), count, s.streamEpoch_.load(std::memory_order_acquire));
+  if (count <= 0) return 0;
+  if (restart) {
     s.gain_.restart();
     s.reader_.reset();
   }
-  if (!first && gap < kGapResetUs && gap > static_cast<int64_t>(s.maxGapUs_.load(std::memory_order_relaxed))) {
-    s.maxGapUs_.store(static_cast<uint32_t>(gap), std::memory_order_relaxed);
+  if (s.restart_.statGapUs() > s.maxGapUs_.load(std::memory_order_relaxed)) {
+    s.maxGapUs_.store(s.restart_.statGapUs(), std::memory_order_relaxed);
   }
 
   auto* out = reinterpret_cast<int16_t*>(frames);

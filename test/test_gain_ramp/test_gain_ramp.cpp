@@ -284,6 +284,38 @@ void test_lift_without_a_restart_is_dropped() {
   TEST_ASSERT_TRUE(vol::q15ToDb(g.currentQ15()) < -30.0f + 2.0f);
 }
 
+// A lift whose restart was used up by a stream that started first (the
+// headphones started it; the control side didn't know yet): no step, only
+// the up rate, from the level playing to the lift's level; the stream's
+// next restart then fades back to where the ramp got.
+void test_lift_after_the_restart_was_used_up_only_ramps() {
+  const uint16_t sw = vol::mulQ15(vol::kHeadroomQ15, vol::softwareVolumeQ15(30));  // -30 dB
+  GainRamp g(vol::kHeadroomQ15);
+  g.request(sw, true);  // new link: snapped
+  g.restart();          // their stream's first data
+  run(g, GainRamp::kFadeFrames);
+  TEST_ASSERT_EQUAL_UINT16(sw, g.currentQ15());
+  g.lift(vol::kHeadroomQ15);  // a handover still taken for a pre-audio one
+  constexpr uint32_t kWindow = 441;  // 10 ms
+  double last = db(sw / 32768.0);
+  uint32_t frames = 0;
+  while (g.currentQ15() != vol::kHeadroomQ15 && frames < 10 * 44100) {
+    const auto gains = gainsOf(run(g, kWindow));
+    for (size_t i = 1; i < gains.size(); ++i) TEST_ASSERT_TRUE(gains[i] >= gains[i - 1]);
+    frames += kWindow;
+    const double now = db(g.currentQ15() / 32768.0);
+    TEST_ASSERT_TRUE(now - last <= 0.2 + 0.02);  // 20 dB/s in every 10 ms, +Q15 rounding
+    last = now;
+  }
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, g.currentQ15());
+  const double rise = db(vol::kHeadroomQ15 / 32768.0) - db(sw / 32768.0);
+  TEST_ASSERT_TRUE(frames / 44100.0 >= rise / 20.5);
+  // Our own stream later: the quick fade back to the level heard, no further.
+  g.restart();
+  run(g, GainRamp::kFadeFrames);
+  TEST_ASSERT_EQUAL_UINT16(vol::kHeadroomQ15, g.currentQ15());
+}
+
 void test_lift_never_exceeds_the_target_and_a_snap_cancels_it() {
   const uint16_t sw = vol::dbToQ15(-30.0f);
   GainRamp g(sw);
@@ -377,6 +409,7 @@ int main(int, char**) {
   RUN_TEST(test_snap_before_restart_fades_to_the_snapped_level);
   RUN_TEST(test_lift_sets_the_level_the_next_restart_fades_to);
   RUN_TEST(test_lift_without_a_restart_is_dropped);
+  RUN_TEST(test_lift_after_the_restart_was_used_up_only_ramps);
   RUN_TEST(test_lift_never_exceeds_the_target_and_a_snap_cancels_it);
   RUN_TEST(test_second_restart_during_the_fade_is_ignored);
   RUN_TEST(test_chunking_does_not_change_the_output);

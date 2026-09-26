@@ -13,6 +13,7 @@ void PlaybackController::startCurrent() {
   const Track& t = playlist_[index_];
   audio_.play(t.path, t.durationMs);
   state_ = PlayState::Playing;
+  cued_ = false;
 }
 
 void PlaybackController::play(size_t index) {
@@ -32,6 +33,10 @@ void PlaybackController::togglePlayPause() {
       state_ = PlayState::Paused;
       break;
     case PlayState::Paused:
+      if (cued_) {
+        startCurrent();
+        break;
+      }
       audio_.resume();
       state_ = PlayState::Playing;
       break;
@@ -57,9 +62,28 @@ void PlaybackController::prev() {
   startCurrent();
 }
 
+void PlaybackController::cueNext() { cue(+1); }
+void PlaybackController::cuePrev() { cue(-1); }
+
+void PlaybackController::cue(int delta) {
+  if (state_ == PlayState::Playing) {
+    delta > 0 ? next() : prev();
+    return;
+  }
+  if (playlist_.empty()) return;
+  failuresInARow_ = 0;
+  const int n = static_cast<int>(playlist_.size());
+  index_ = ((index_ + delta) % n + n) % n;
+  if (state_ == PlayState::Paused && !cued_) {
+    audio_.stop();  // the paused track can't be resumed any more
+    cued_ = true;
+  }
+}
+
 void PlaybackController::stop() {
   audio_.stop();
   state_ = PlayState::Stopped;
+  cued_ = false;
 }
 
 void PlaybackController::update(uint32_t nowMs) {

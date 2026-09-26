@@ -19,8 +19,8 @@
 //    headphones stopping *our* stream, so it must not pause the player.
 //  - An acknowledgement can be lost (e.g. a START that meets a suspend in
 //    progress). A command unanswered for kAckTimeoutMs is given up on.
-//  - An acknowledgement can also be false: the media task's stop_tx acks
-//    whatever command is pending with SUCCESS (btc_a2dp_source.c,
+//  - An acknowledgement can also be false: ESP-IDF's stop_tx (on BTC_TASK)
+//    acks whatever command is pending with SUCCESS (btc_a2dp_source.c,
 //    btc_a2dp_source_aa_stop_tx). A START acknowledged but not followed by
 //    STARTED within kAckTimeoutMs is given up on too, and retried.
 //

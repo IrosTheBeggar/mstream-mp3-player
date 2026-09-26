@@ -162,6 +162,84 @@ void test_user_skip_resets_the_failure_count() {
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
 }
 
+void test_cue_while_stopped_only_moves() {
+  FakeAudioBackend a;
+  PlaybackController p(a);
+  p.setPlaylist(threeTracks());
+  p.cueNext();
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+  p.cuePrev();
+  p.cuePrev();  // wraps 0 -> 2
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(0, a.playCount);
+  p.togglePlayPause();  // play starts the cued track
+  TEST_ASSERT_EQUAL_STRING("/c.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+}
+
+void test_cue_while_paused_stays_paused_and_play_starts_it() {
+  FakeAudioBackend a;
+  PlaybackController p(a);
+  p.setPlaylist(threeTracks());
+  p.play(0);
+  p.togglePlayPause();  // paused in track 0
+  p.cueNext();
+  p.cueNext();
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(1, a.playCount);  // nothing started
+  TEST_ASSERT_FALSE(a.playing);           // the paused track was dropped
+  p.update(0);                            // nothing advances while paused
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  p.togglePlayPause();  // not a resume of track 0: the cued track from its start
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  TEST_ASSERT_EQUAL_STRING("/c.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_INT(2, a.playCount);
+  p.togglePlayPause();  // an ordinary pause and resume again
+  p.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT(2, a.playCount);
+  TEST_ASSERT_FALSE(a.paused);
+}
+
+void test_cue_while_playing_skips() {
+  FakeAudioBackend a;
+  PlaybackController p(a);
+  p.setPlaylist(threeTracks());
+  p.play(1);
+  p.cueNext();
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("/c.mp3", a.lastPath.c_str());
+  p.cuePrev();
+  TEST_ASSERT_EQUAL_STRING("/b.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+}
+
+void test_next_after_a_cue_while_paused_plays() {
+  FakeAudioBackend a;
+  PlaybackController p(a);
+  p.setPlaylist(threeTracks());
+  p.play(0);
+  p.togglePlayPause();
+  p.cueNext();  // paused on track 1, not started
+  p.next();     // the Core2's own button: skips and plays, as before
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  p.togglePlayPause();  // then pause and resume are ordinary
+  p.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT(2, a.playCount);
+}
+
+void test_cue_on_an_empty_playlist_does_nothing() {
+  FakeAudioBackend a;
+  PlaybackController p(a);
+  p.cueNext();
+  p.cuePrev();
+  TEST_ASSERT_EQUAL_INT(-1, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_setPlaylist_selects_first_and_stops);
@@ -173,5 +251,10 @@ int main(int, char**) {
   RUN_TEST(test_all_tracks_failing_stops_after_one_pass);
   RUN_TEST(test_a_finished_track_resets_the_failure_count);
   RUN_TEST(test_user_skip_resets_the_failure_count);
+  RUN_TEST(test_cue_while_stopped_only_moves);
+  RUN_TEST(test_cue_while_paused_stays_paused_and_play_starts_it);
+  RUN_TEST(test_cue_while_playing_skips);
+  RUN_TEST(test_next_after_a_cue_while_paused_plays);
+  RUN_TEST(test_cue_on_an_empty_playlist_does_nothing);
   return UNITY_END();
 }

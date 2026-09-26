@@ -15,7 +15,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               +---------------------------------------------------------------+
   lib/core/   |  PlaybackController   PcmRing   TransportSync   ToneGen       |  portable C++17,
   (portable)  |  BtControl (StreamControl, AbsVolumePolicy)  ReconnectPlanner  |  host-tested
-              |  GainRamp  VolumeMath                                         |
+              |  GainRamp  VolumeMath  StreamRestart  HeadsetKeys             |
               |  Declicker  DeclickReader  Track  hal/*                       |
               +------------------------------+--------------------------------+
                                              |
@@ -34,7 +34,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
             └ AudioFileSourceFS (+ID3 for MP3)                   |    └ ToneGen
                 └ AudioGeneratorMP3 (libmad) | AudioGeneratorFLAC (libFLAC)
  decode task (core 1, prio 2, 16 KB internal stack) ─► RingOutput ─► PcmRing (PSRAM, 64k frames ≈ 1.5 s)
-                                                                        ├─► BtSink: ESP32-A2DP data callback (Bluetooth task, 44.1 kHz)
+                                                                        ├─► BtSink: ESP32-A2DP data callback (Bluedroid's BTC task, 44.1 kHz)
                                                                         └─► SpeakerSink: pump task ─► M5.Speaker.playRaw (44.1 kHz out, mono)
 ```
 
@@ -61,8 +61,11 @@ The rules that keep it deadlock- and glitch-free:
   straight to 0 when its queue runs dry. Test tones have 5 ms attack/release.
   On Bluetooth the fader runs before the gain stage; both only ever multiply
   by at most 1, so together they never add level. A new or resumed stream
-  (a gap of 100 ms or more between data callbacks, or ESP-IDF's flush) fades
-  in from silence; the data callback detects that itself.
+  fades in from silence; the data callback detects that itself
+  (`StreamRestart`, host-tested against ESP-IDF's callback sequences):
+  ESP-IDF's flush, the first callback, a wait of 1 s or more, or a START of
+  ours or a new link followed by a wait of 100 ms or more. A shorter stall
+  without a START is only a late callback, and the audio goes on.
 - **Track changes don't wait for the outputs.** A skip calls `discardAll()`;
   a natural end drains the ring first (`finished()` = end of file *and* ring
   empty), so a new track's sample rate never plays into the old track's tail.
@@ -83,8 +86,8 @@ The rules that keep it deadlock- and glitch-free:
 | Task | Core | Priority | Notes |
 |---|---|---|---|
 | Bluetooth controller + host (Bluedroid) | 0 | high | ~70 KB internal RAM, claimed at boot |
-| A2DP data callback | 0 (ESP-IDF's A2DP source media task, BtA2dSourceT) | — | 128 frames at a time, several per ~30 ms tick; applies the volume ramp; never blocks or logs |
-| ESP32-A2DP app task (BtAppT) | 0 | 15 | connection, stream and AVRCP handlers (`PlayerA2dp`); 6 KB stack; blocks 10 s at stack-up |
+| A2DP data callback | 0 (Bluedroid's BTC task, BTC_TASK) | high | 128 frames at a time, several per ~30 ms tick; applies the volume ramp; never blocks or logs. ESP-IDF 5.5's A2DP source has no media task of its own: this is the task that also runs the GAP and AVRCP callbacks, which queue their events to BtAppT (below). If BtAppT's queue (20 entries) is full, each such event blocks BTC_TASK, and the audio, for up to 10 ms |
+| ESP32-A2DP app task (BtAppT) | 0 | 15 | connection, stream and AVRCP handlers (`PlayerA2dp`); 6 KB stack; blocks 10 s at stack-up; must keep its queue drained (no long work in a handler) |
 | decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack) |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake |
 | M5.Speaker | 1 | 2 | mixes/resamples to 44.1 kHz mono |
@@ -129,27 +132,54 @@ out what it returns.
   while nothing from us is heard. Before anything has played on a link, the
   first SET_ABSOLUTE_VOLUME (the probe) goes out while no media flows, a new
   stream waits until it is answered (or ~1.5 s for AVRCP to show up, up to
-  3 s once it is connected), and the first stream fades in from silence
-  straight to the handed-over level. Headphones whose AVRCP comes up after
-  playback started (Powerbeats Pro: ~7 s after the link) get a late probe:
-  the volume is capped at 60 % as on a new link, our gain fades to silence
-  (~23 ms), and the command goes out 800 ms later, once that silence has
-  passed ESP-IDF's frame queue and the headphones' own buffer (or once
-  nothing has streamed for 800 ms: at once after a longer pause). The
-  stream keeps running, silent; an answer within 1 s
-  hands over and our gain rises from silence at the gain stage's slow rate
-  (~2.4 s to the headroom), no answer brings back the software level the
-  same way. A later ACCEPT or echo of a volume we sent after an unanswered
-  probe also hands over, our gain rising slowly from the software level;
-  their own change first means the listener sets their level there, and the
-  link stays in software mode. Apart from the listener's own volume step and
-  the fade back after a stream restarts, our gain only rises at that slow
-  rate once audio has played. A notification counts as an echo of
-  ours only if it matches a command they haven't confirmed yet (within 4/127,
-  or what their ACCEPT said), so their own steps always reach the UI. Volume
-  steps travel as steps to BtAppT, so quick presses are never lost. The
-  headroom (-2 dB) can be changed from the console (`h<n>`, not saved) to
-  find where loud masters start to distort.
+  3 s once it is connected; 2 s for the answer, then 1 s more in case they
+  apply it late), and the first stream fades in from silence straight to the
+  handed-over level. Headphones whose AVRCP comes up after playback started
+  (Powerbeats Pro: ~7 s after the link), or comes back after dropping on a
+  link that has played, get a late probe: the volume is capped at 60 % as on
+  a new link, our gain fades to silence (~23 ms), and the command goes out
+  800 ms later, once that silence has passed ESP-IDF's frame queue and the
+  headphones' own buffer (or once nothing has streamed for 800 ms: at once
+  after a longer pause). The stream keeps running, silent; an answer within
+  1 s hands over and our gain rises from silence at the gain stage's slow
+  rate (~2.4 s to the headroom), no answer brings back the software level
+  the same way. The listener's volume presses during a probe are sent and
+  restart its timeout, but a probe ends at the latest twice its timeout
+  after its first command. Only an answer counts: an ACCEPT for more than
+  the command it answers asked for (a stale one, or a level of their own),
+  or an echo louder than what we now ask for, gets ours again instead, if
+  that brings them down, and not again in reply to the answer to that
+  repeat: headphones that can't set our level (they round up, or have a
+  floor) would otherwise trade commands and answers with us for the rest
+  of the link. A notification of theirs at or below ours hands over at
+  their level, which is sent back once so that a command of ours still on
+  its way can't land after it and raise them (the same when their report
+  ends a probe after a stream they started themselves has played). After an unanswered probe their level is
+  unknown, so only volume steps *down* are still sent; a rise is our gain's
+  alone. A later ACCEPT or echo of a volume we sent then also hands over,
+  our gain rising slowly from the software level to where they are (the
+  last value sent; the volume shown comes down to it if the listener rose
+  since); their own change first means the listener sets their level there,
+  and the link stays in software mode. Apart from the listener's own volume
+  step and the fade back after a stream restarts, our gain only rises at
+  that slow rate once audio has played. (That includes the narrow race of a
+  stream the headphones start themselves during the probe: our data
+  callback runs before STARTED reaches BtAppT, so the handover still looks
+  pre-audio, and the gain stage, finding the stream's restart used up,
+  ramps to the handover level instead of lifting.) Residual risk, from
+  latency: a probe the headphones apply after its timeout and grace, once
+  audio plays in software mode, raises their level to what we sent for
+  volume p while it plays: heard as their level for p times our gain at
+  that moment (the software gain for the volume shown, which the listener
+  may have raised since), never above what absolute volume gives for p.
+  And in absolute mode, a report of theirs that overtakes a command of ours
+  still on its way can leave the volume shown above their level until they
+  report again; a step down from it then sends the level shown. A notification
+  counts as an echo of ours only if it matches a command they haven't
+  confirmed yet (within 4/127, or what their ACCEPT said), so their own
+  steps always reach the UI. Volume steps travel as steps to BtAppT, so
+  quick presses are never lost. The headroom (-2 dB) can be changed from the
+  console (`h<n>`, not saved) to find where loud masters start to distort.
 - **Media stream** (`StreamControl`, host-tested against the event orderings
   ESP-IDF produces). Started (CHECK_SRC_RDY, then START) as soon as Bluetooth
   is the output and the player plays, retried after 1, 3, then every 10 s;
@@ -166,9 +196,15 @@ out what it returns.
   library's own media handling (heartbeat starts, its connecting-state
   guesses) is bypassed.
 - **Buttons.** The AVRCP target is on: play, pause/stop, next, previous and
-  volume keys become `BtSink::Event`s, queued to the loop. Play and pause are
-  commands, never toggles: in-ear detection sends them. Play only resumes
-  paused playback; it never starts music from stopped.
+  volume keys become `BtSink::Event`s, queued to the loop. What the transport
+  keys do is `HeadsetKeys` (host-tested): headphone input never starts music
+  that wasn't playing, since in-ear detection and a bud being adjusted send
+  keys too. Play and pause are commands, never toggles. Play only resumes
+  paused playback (stopped, e.g. after a boot and an automatic reconnect, it
+  does nothing). Next and previous skip while playing; paused or stopped
+  they only select the next or previous track, which the screen shows and a
+  later play starts from its beginning. The Core2's own buttons and the
+  console keep toggling and skip-and-play.
 - **On-device checks** the host tests can't cover (the glue in `BtSink.cpp`:
   event and address filters, what the library does between our hooks): boot
   with the headphones in their case, then take them out (they reconnect by
@@ -180,7 +216,8 @@ out what it returns.
   back in over ~2 s with `control=headphones` in the stats (or `no answer`
   and the software level), never jumping up; their buttons must then change
   the volume shown; pause from the headphones then play from them within
-  3 s.
+  3 s; while paused, next on the headphones shows the next track and stays
+  paused, and their play then starts it.
 - **Diagnostics.** Once per connection: the SBC configuration, the delay
   report, the headphones' AVRCP features and notifications, and how long a
   stream took to start. The `s` stats add a `[stats] bt` line: volume and who

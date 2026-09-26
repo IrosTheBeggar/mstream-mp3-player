@@ -63,8 +63,11 @@ use Bluetooth headphones, the speaker, or (later) M5Stack's RCA/3.5 mm module.
 The three touch buttons under the screen: **prev** (hold: volume down),
 **play/pause** (hold: switch between speaker and Bluetooth), **next** (hold:
 volume up). Volume is per output: the speaker and Bluetooth keep their own.
-The headphones' own buttons work too (play, pause, next, previous, volume);
-their play resumes paused playback but never starts music from stopped.
+The headphones' own buttons work too (play, pause, next, previous, volume),
+but never start music that wasn't playing: their play resumes paused
+playback (not from stopped), and their next/previous while paused or stopped
+only select the track: the Core2's play starts it, or the headphones' play
+when paused.
 Headphones with AVRCP absolute volume (most current ones) take over the
 Bluetooth volume when they connect: the Core2 and the headphones show the same
 value, and changing it on either side changes both. (Headphones whose remote
@@ -93,6 +96,7 @@ platformio.ini        Build envs: core2 | native; local*.ini holds per-developer
 partitions.csv        4 MB app + ~11.9 MB LittleFS (test audio) + coredump
 lib/core/             Portable logic, framework-agnostic (also compiled for native)
   PlaybackController  Playlist + transport; skips tracks that fail
+  HeadsetKeys         What the headphones' transport keys do (never start music)
   PcmRing             PCM ring between the decode task and the active output
   TransportSync       Generation-tagged decode progress (no stale "track ended")
   ToneGen             Built-in test tones
