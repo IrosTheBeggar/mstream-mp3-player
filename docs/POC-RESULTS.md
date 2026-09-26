@@ -111,6 +111,22 @@ Next: fix the volume design (fixed −2 dB headroom, headphone volume via AVRCP
 only) and run the A/B listening tests to separate SBC, the master and the
 headphones.
 
+### After the fixes
+
+- **First listen (software volume only):** "sounds a lot better", but far too
+  quiet even with the headphones at max. The Powerbeats bring up AVRCP after
+  the first stream has started, so the volume never reached them: the Core2
+  applied −30 dB and their rocker only moved their own amp. No volume
+  notifications or keys reached the Core2 in that state.
+- **Second listen (late handover, e944373):** AVRCP came up 3.7 s after the
+  link, 1.1 s into playback. The Core2 dipped to silence, the headphones
+  accepted absolute volume 38/127 (30%) 1.0 s later, and our gain rose from
+  silence to −2 dB in about 2 s. The rocker then moved the volume in 6–7%
+  steps (up to 74%, 94/127), their pause key worked, and there were 0 underruns
+  in 16 minutes. The user was happy with it. The top of the volume range on
+  loud material hasn't been checked specifically; `h<n>` can raise the
+  headroom by ear if it distorts there.
+
 ## What we learned
 
 - **IRAM is the tight resource.** The prebuilt Arduino-ESP32 libraries pin
@@ -153,7 +169,8 @@ See the roadmap in [ARCHITECTURE.md](ARCHITECTURE.md): library index and sync
 (with hi-res conversion), browsing UI, AutoDJ from a precomputed similarity
 table, server discovery without mDNS, and headphone controls.
 
-Audio fixes from the review, smallest first:
+Audio fixes from the review, smallest first. 1–6 are done (1682ddc, 6a7817b,
+e944373); 7 is open:
 
 1. A fresh FLAC generator per track: the reused one can replay up to ~100–190 ms
    of freed memory at the start of a FLAC that follows an interrupted one.
