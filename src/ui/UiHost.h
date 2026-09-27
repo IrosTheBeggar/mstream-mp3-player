@@ -3,6 +3,7 @@
 
 #include "ButtonPolicy.h"
 #include "OutputModel.h"
+#include "PlayGate.h"
 #include "PlaybackController.h"
 #include "QueueView.h"
 
@@ -16,7 +17,7 @@
 namespace ui {
 
 struct AppState {
-  // The player and the queue.
+  // The player and the queue (Waiting: a play waits for the headphones).
   PlayState play = PlayState::Stopped;
   bool failed = false;           // the current track can't be played
   uint32_t trackId = 0xFFFFFFFFu;  // TrackCatalog id of the current entry
@@ -43,6 +44,10 @@ struct AppState {
   // to the headphones once they are linked; until then it stays put).
   BtLink btLink;
   BtSession btSession;
+  // Play while the headphones aren't connected (PlayGate): waiting, or the
+  // last wait failed; `gateFailures` counts the failures (the notice, once each).
+  PlayGate::State gate = PlayGate::State::Idle;
+  uint32_t gateFailures = 0;
   char btDetail[40] = "";        // "SBC 44.1 kHz, 175 ms" while connected
   // Storage and the library.
   bool card = false;             // a microSD card is mounted (not the flash fallback)
@@ -67,7 +72,16 @@ struct AboutInfo {
 class UiHost {
 public:
   virtual void snapshot(AppState& s) = 0;
+  // Play / pause (while play waits for the headphones: cancels the wait).
   virtual void playPause() = 0;
+  // Play, not a toggle ("Couldn't reach" notice's Try again): paused or
+  // stopped, it plays (or waits for the headphones again).
+  virtual void play() = 0;
+  // Play on speaker: the listener's explicit choice while play waits for the
+  // headphones, or after they couldn't be reached. The speaker becomes the
+  // output (paused first, the connection on its way cancelled), then plays
+  // at its own volume.
+  virtual void playOnSpeaker() = 0;
   virtual void next() = 0;
   virtual void prev() = 0;
   // The active output's volume, by `delta` %.

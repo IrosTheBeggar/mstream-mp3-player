@@ -79,6 +79,14 @@ public:
   void connect(uint32_t nowMs);
   // Cancel, Disconnect, Forget: no longer wanted; the link is let go.
   void cancel();
+  // A play that waited for the headphones ended without them (PlayGate):
+  // the ask is withdrawn but the link is left alone, so the radio carries
+  // on (the burst's last tries, then the background cycle) and a link it
+  // brings later answers nothing (no "Now playing on"). `failed`: they
+  // couldn't be reached, and the card says so as the notice does (red, Try
+  // again); otherwise the listener cancelled the wait. A pairing the
+  // listener started on the Pair screen is theirs, not the play's: kept.
+  void withdraw(bool failed);
   // Pairing with the headphones picked on the Pair screen started. With
   // other headphones linked now, only a new link counts: theirs is going.
   void pairStarted(uint32_t nowMs);

@@ -17,7 +17,8 @@
 // is the Output tab whatever it is corrected to.
 //
 // Status in the bar: the Now Playing icon is live (EQ bars moving 4 times a
-// second while playing, flat when paused, a note when nothing is loaded)
+// second while playing, flat when paused, flat in amber while play waits for
+// the headphones, a note when nothing is loaded)
 // with a progress hairline under it; the Queue icon has an up-next badge,
 // which flashes for 1.5 s when tracks are added; the Output icon's colour
 // is the Bluetooth state; the active tab has a plate, an underline and a
@@ -40,7 +41,7 @@ inline int tabAt(int x, bool atRightEdge) {
 }
 
 enum class Output : uint8_t { Speaker, BtConnected, BtConnecting, BtLost };
-enum class Play : uint8_t { Nothing, Stopped, Paused, Playing };
+enum class Play : uint8_t { Nothing, Stopped, Paused, Playing, Waiting };
 
 // Everything the bar shows. Two states compare cell by cell (dirty()).
 struct State {

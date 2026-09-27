@@ -27,7 +27,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  NavModel  FrameClock  ListLayout  BitSet  TextFit            |
               |  TabBarModel  TrackProgress  JumpIndex                        |
               |  ThumbCache  ThumbScaler  JpegInfo                            |
-              |  OutputModel  QueueView                                       |
+              |  OutputModel  PlayGate  QueueView                             |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -324,6 +324,53 @@ out what it returns.
   card's codec line comes from the SBC configuration ("SBC 44.1 kHz") and
   the delay report. A pairing scan while headphones stream costs airtime:
   the Pair screen is the only thing that runs one.
+- **Play while the headphones aren't connected** (`PlayGate`, host-tested
+  with the player, `BtSession` and `ButtonPolicy` in `test_play_gate`). The
+  bug it fixes: the headphones dropped overnight while idle, the output
+  stayed Bluetooth with the background cycle scanning, and play went to
+  "Playing" at 0:00, "connecting...", for good (the decoder filled the
+  ring, the stream stayed suspended; no explanation, timeout or way out).
+  Now play from anywhere (the button, B, the Library's Play, the Queue's
+  Play now, a resume, a skip) while Bluetooth is the output and the link
+  is down makes the player **wait** (`PlayState::Waiting`: nothing starts,
+  the position holds) and `PlayGate` (fed every loop pass after
+  `BtSession`) **connects at once**: `BtSession::connect()` and
+  `BtSink::connect()`, the paging burst ("try 1 of 3"), not the background
+  cycle's next round. A background page still on its way (within the
+  page timeout, `kPageMs`) isn't paged over: it counts as try 1 of a full
+  burst (the retries restarted), so a wait that begins at the background
+  burst's last try doesn't fail with it. While the Pair screen has the
+  radio (its scan, or a pairing) only the session is asked (a pairing's
+  own session is kept): the scan isn't stopped for a B click. The "lost"
+  mark goes (the tab bar and the card say Connecting). The link comes up:
+  the wait is released and plays on them, "Now playing on SPYDRONE"
+  (said once: the Connected event's own toast is skipped while the gate
+  waits). The tries run out (`BtSession::failed()`) or 20 s pass
+  (`kBackstopMs`, the listener's number: the burst itself takes 20-30 s, a
+  try at once and then one each ~10 s heartbeat, so this usually ends the
+  wait during the third try): the wait ends **paused**, and a notice says
+  "Couldn't reach SPYDRONE. Are they on, out of the case, and not
+  connected to your phone?" with Try again (a new wait and burst) and
+  Play on speaker. The session's ask is **withdrawn** as failed
+  (`BtSession::withdraw(true)`: no disconnect), so the card ("Couldn't
+  connect") and the tab bar turn red with the notice while the tries left
+  and the background cycle go on quietly; a link they bring later closes
+  the notice and is no answer to anything: nothing plays, no "Now playing
+  on". A tap on the play button (a spinner while waiting) or a B click
+  cancels the wait (paused); a B hold, Disconnect or Cancel on the card
+  end it paused too (every move to the speaker pauses first;
+  `pauseIfPlaying()` counts a wait as playing). A wait that ends any way
+  but a link withdraws its ask the same way (`withdraw(false)`: the radio
+  left as it was), so a link after a cancel says nothing either. **Play on speaker** is the one way out that plays: the
+  listener's explicit choice, the wait ended paused first, the speaker
+  made the output as the Speaker row makes it (a connection on its way
+  cancelled), then play, at the speaker's own volume
+  (`PlayGate::playOnSpeaker()`). The output moving away by itself (silent
+  test mode) ends a wait paused. Headphones dropping while idle stay
+  quiet (no dialog), but the Output tab shows them lost and Now Playing's
+  output line says "SPYDRONE (not connected)". The name shown is the
+  headphones' own (read at each link), or before any link the name
+  looked for.
 - **Diagnostics.** Once per connection: the SBC configuration, the delay
   report, the headphones' AVRCP features and notifications, and how long a
   stream took to start. The `s` stats add a `[stats] bt` line: volume and who
@@ -407,7 +454,13 @@ the browsing UI hold its **track ids**, never strings.
   is cued; none left after it: stop); Clear stops; undo returns to the entry
   that was current if the one playing isn't in the restored queue. Play next,
   + Queue and Clear up next change nothing that plays. `HeadsetKeys` works
-  unchanged on top (`cueNext()`/`cuePrev()` move the current entry).
+  unchanged on top (`cueNext()`/`cuePrev()` move the current entry). A
+  `Hold` (main.cpp's: Bluetooth is the output and the headphones aren't
+  connected) turns every play into **Waiting**, a state of its own (not
+  Playing): a new track is only selected (the backend drops what it had), a
+  resume leaves the paused track where it is, skips stay waiting on the new
+  track, play/pause cancels the wait (Paused); `release()` plays what waits,
+  `cancelWait()` ends it paused (`PlayGate` decides which: see Bluetooth).
 - **Persistence** (`app/QueueStore`, `QueueText`): the queue is saved as paths,
   one a line (`queue.txt`, header `mstream-queue 1 <entries> <current>
   <generation>`), so a rebuilt library, whose ids differ, finds its tracks
@@ -550,7 +603,9 @@ Queue, Dance and Output (with its Pair and About pages).
   Playing icon's EQ bars move 4 times a second while playing, with a progress
   hairline (dotted while the length isn't known); the Queue's up-next badge
   (flashing for 1.5 s when tracks are added); the Output icon's colour is the
-  Bluetooth state (cyan connected, amber connecting, red lost). The Library
+  Bluetooth state (cyan connected, amber connecting, red lost or a
+  connection that failed); the EQ bars lie flat in amber while a play
+  waits for the headphones. The Library
   icon is a record half out of its sleeve, unlike Now Playing's bars. Only
   the cells whose state changed are drawn (a 54x36 push, ~1 ms).
 - **Texts that must fit**: the fixed texts with a fixed room (the coach
@@ -680,8 +735,14 @@ Queue, Dance and Output (with its Pair and About pages).
   bands** right of the cover (the review's graft: a tap meant for one never
   opens the other; the cover is the album's too), the progress and times
   (between them "4 of 16 · SPYDRONE": where it plays, mockup 01's output
-  line, when it fits), and the transport row (the volume, prev,
-  play/pause, next, "..."). The
+  line, when it fits; the headphones not connected, "SPYDRONE (not
+  connected)" alone when both don't fit), and the transport row (the
+  volume, prev, play/pause, next, "..."). While a play waits for the
+  headphones (`PlayGate`), the play button is a spinner (a tap cancels the
+  wait), "Waiting, 24 of 86" is the progress line, and the artist and
+  album bands give way to "Waiting for SPYDRONE..." over "try 2 of 3" and
+  two plain buttons, **Play on speaker** and **Cancel** (out loud is a
+  choice, not the way on: neither is the accent). The
   artist opens the Library at that artist, the album at the album (one Back
   from its artist), each **scrolled to the playing item and tinted**; "..."
   is a sheet of Go to artist, Go to album and Show in folders (each with
@@ -776,7 +837,15 @@ Queue, Dance and Output (with its Pair and About pages).
   a name too long for the title goes into the body; the reconnecting as a
   live line: "Trying to reconnect: try 2 of 3"), Use speaker (paused: B
   plays) or OK; it closes itself when they're back, and whatever it was
-  over (the coach cards too) is drawn again. Now Playing with nothing
+  over (the coach cards too) is drawn again. A play that waited for the
+  headphones and failed: a buzz and the dialog "Couldn't reach SPYDRONE"
+  (no icon: the title has its whole width; a name too long goes into the
+  body), "Are they on, out of the case, and not connected to your
+  phone?", Play on speaker (in Small: 4 px too wide for its button in
+  Body, which the Dialog now does for any such label) and Try again; it
+  closes itself when they connect after all or the speaker becomes the
+  output. A Library Play or a Queue Play now that waits says so in its
+  note ("Waiting for SPYDRONE: One More Time"). Now Playing with nothing
   queued: "Nothing playing", Open Library, Shuffle all. With nothing
   queued the A/B/C clicks are inert: a short double buzz instead of the
   tap tick (`ButtonPolicy::Transport::idle()`; the input layer plays the
@@ -841,10 +910,11 @@ Queue, Dance and Output (with its Pair and About pages).
   overlays, the covers (above) and the loop task's unused stack. `ui0`-`ui4`
   tap a tab, `uib` goes back, `uic` shows the coach cards, `uiT` decodes
   the covers again (their timings), `uiV` shows the volume HUD, and
-  **`uiF<c/s/p/l/n>`** shows a faked state for screenshots of what a test
+  **`uiF<c/s/p/l/n/w>`** shows a faked state for screenshots of what a test
   can't safely cause (display only: the radio and the card are left
   alone): the Bluetooth card connecting, searching or pairing, the
-  headphones lost (with the dialog), or no card (on Now Playing); `uiF0`
+  headphones lost (with the dialog), no card (on Now Playing), or a play
+  waiting for the headphones (Now Playing's panel and spinner); `uiF0`
   the real state. **`uil<n>`**: the Library browses a synthetic
   library of n tracks (the spike's `g<n>`: 6 artists and 15 albums per 100
   tracks), to see the lists, the rail and the jump grid at the scale of

@@ -6,7 +6,11 @@
 #include "TrackCatalog.h"
 #include "hal/IAudioBackend.h"
 
-enum class PlayState { Stopped, Playing, Paused };
+// Waiting: a play the output can't carry yet (Bluetooth is the output and
+// the headphones aren't connected): nothing starts and the position holds
+// until PlayGate releases it (they connected) or it ends paused (cancelled,
+// or they couldn't be reached). Never "Playing" meanwhile.
+enum class PlayState { Stopped, Playing, Paused, Waiting };
 
 // Transport over the play queue. Framework-agnostic: it talks only to an
 // IAudioBackend, reads the queue (QueueModel: track ids) and turns the
@@ -23,12 +27,40 @@ enum class PlayState { Stopped, Playing, Paused };
 //
 // At either end of the queue next() and prev() wrap around, as does a
 // track ending (setRepeat(false): the end of the last track stops there).
+//
+// A Hold (main.cpp's: Bluetooth is the output and the headphones aren't
+// connected) turns every play into a wait (PlayState::Waiting): a new track
+// (play, playNow, next, prev, a resume of a cued entry) is only selected, the
+// backend dropping what it had; a resume leaves the paused track where it is.
+// Skips while waiting stay waiting, on the new track. togglePlayPause() while
+// waiting cancels it (Paused); release() plays what waits; cancelWait() ends
+// it paused (PlayGate decides which).
 class PlaybackController {
 public:
+  // Whether a play must wait for the output (read at every start).
+  class Hold {
+  public:
+    virtual bool holdPlay() const = 0;
+
+  protected:
+    ~Hold() = default;
+  };
+
   PlaybackController(IAudioBackend& audio, QueueModel& queue, const TrackCatalog& catalog)
       : audio_(audio), queue_(queue), catalog_(catalog) {}
 
+  // nullptr (the default): nothing waits.
+  void setHold(const Hold* hold) { hold_ = hold; }
+  // Waiting: plays now, whatever the hold says (the headphones connected, or
+  // the listener chose the speaker). Anything else: nothing.
+  void release();
+  // Waiting: ends paused, on the entry that waited (cancelled, or the
+  // headphones couldn't be reached). Anything else: nothing.
+  void cancelWait();
+
   void play(size_t position);  // start the queue entry at `position`
+  // Stopped or Paused: plays (or waits); Playing: pauses; Waiting: cancels
+  // the wait (Paused).
   void togglePlayPause();
   void next();
   void prev();
@@ -36,7 +68,7 @@ public:
   // Move to the next or previous track without starting it: Stopped stays
   // Stopped; Paused stays Paused, on the new track from its start (the old
   // one is dropped), and the next togglePlayPause() starts it. While Playing
-  // the same as next()/prev().
+  // (or Waiting) the same as next()/prev().
   void cueNext();
   void cuePrev();
 
@@ -85,7 +117,10 @@ public:
   uint32_t positionMs() const { return audio_.positionMs(); }
 
 private:
+  bool held() const { return hold_ && hold_->holdPlay(); }
+  // The current entry plays, or (held) waits.
   void startCurrent();
+  void startNow();
   void advance();  // next track without counting as a user action
   void cue(int delta);
   // The current entry changed under the backend: carry on from the new one
@@ -95,9 +130,11 @@ private:
   IAudioBackend& audio_;
   QueueModel& queue_;
   const TrackCatalog& catalog_;
+  const Hold* hold_ = nullptr;
   PlayState state_ = PlayState::Stopped;
   bool repeat_ = true;
-  // Paused on a cued track: the backend holds nothing, so a resume starts it.
+  // Paused (or Waiting) on a cued track: the backend holds nothing, so a
+  // resume starts it.
   bool cued_ = false;
   // Tracks that failed since the last one that played through or the last
   // user action.

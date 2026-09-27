@@ -97,7 +97,8 @@ public:
   void volumeKeys();           // the headphones' volume keys: the HUD
   void headphonesLost();       // dropped while playing on them: a dialog (and a long buzz)
   // The headphones the listener asked for are connected and the audio
-  // moved to them (seconds after the tap): a toast says where, two ticks.
+  // moved to them (seconds after the tap), or a play that waited for them
+  // started on them: a toast says where, two ticks.
   void headphonesConnected();
   void toggleDance();          // console d
   // The Library browses `index` instead of the card's (console uil<n>: a
@@ -198,6 +199,11 @@ private:
   bool modalUp() const { return sheet_.up() || dialog_.up() || volumeSheet_.up() || jumpGrid_.up() || coach_.up(); }
   void coachDone();
   void updateLostDialog();
+  // A play that waited for the headphones failed (PlayGate): "Couldn't
+  // reach SPYDRONE" with Play on speaker and Try again; it closes itself
+  // when they connect after all, or the speaker becomes the output.
+  void playFailed();
+  void updatePlayFailed();
   void noteFailures();
   // The A-Z rail's tap (ListView::RailHost): the jump grid, and its taps.
   void onRailTap() override;
@@ -237,6 +243,11 @@ private:
   OverlayOwner* sheetOwner_ = nullptr;
   OverlayOwner* dialogOwner_ = nullptr;
   bool lostDialog_ = false;  // the dialog up is headphonesLost()'s
+  bool playFailedDialog_ = false;  // ... is playFailed()'s
+  // Which of the Ui's own dialogs onDialog() answers (the flags above are
+  // cleared as a dialog closes, before its owner hears the button).
+  enum class OwnDialog : uint8_t { None, Lost, PlayFailed } ownDialog_ = OwnDialog::None;
+  uint32_t gateFailuresSeen_ = 0;
   bool coachDue_ = false;    // the first-boot tips haven't been seen (NVS)
   queueview::AddedMark added_;
   queueview::KeyRing failedKeys_;

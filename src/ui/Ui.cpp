@@ -9,6 +9,7 @@
 #include <cstring>
 
 #include "TextFold.h"
+#include "UiText.h"
 #include "app/Psram.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
@@ -97,6 +98,7 @@ void Ui::start(uint32_t nowMs) {
   nowMs_ = nowMs;
   host_.snapshot(state_);
   hudSeq_ = state_.feedback.seq;
+  gateFailuresSeen_ = state_.gateFailures;
   lastContent_ = state_.contentVersion;
   lastUpNext_ = state_.upNext;
   failuresSeen_ = player_.lastFailure().count;
@@ -372,6 +374,7 @@ bool Ui::closeModal(bool notify) {
     dialog_.close();
     closed = true;
     lostDialog_ = false;
+    playFailedDialog_ = false;
     if (notify && dialogOwner_) dialogOwner_->onDialog(-1);
   }
   if (volumeSheet_.up()) {
@@ -569,6 +572,8 @@ void Ui::openDialog(OverlayOwner* owner, const char* title, const char* body, co
   closeModal(true);
   dialogOwner_ = owner;
   lostDialog_ = false;
+  playFailedDialog_ = false;
+  ownDialog_ = OwnDialog::None;
   dialog_.open(title, body, buttons, n, accent(), danger);
   applyCover();
 }
@@ -598,6 +603,7 @@ void Ui::headphonesLost() {
   dialog_.open(title, body, kButtons, 2, col::AMBER);
   dialog_.setIcon(&icons::kHeadphones, col::AMBER, true);
   lostDialog_ = true;
+  ownDialog_ = OwnDialog::Lost;
   applyCover();
   updateLostDialog();
 }
@@ -625,9 +631,62 @@ void Ui::updateLostDialog() {
   dialog_.setStatus(line, col::AMBER);
 }
 
+// A play waited for the headphones and they didn't come (PlayGate, its
+// tries or its backstop): paused; this says why and what to check. "Try
+// again" waits for them afresh; "Play on speaker" is the explicit choice.
+void Ui::playFailed() {
+  input_.alertBuzz();  // they may be waiting with the device in a pocket
+  if (!started_ || suspended_) return;
+  const char* name = state_.btName[0] ? state_.btName : "the headphones";
+  char title[48], body[128];
+  snprintf(title, sizeof(title), "Couldn't reach %s", name);
+  // No icon: the title's whole width (a name as long as "WH-1000XM4" fits).
+  if (Fonts::instance().width(Font::Bold, title) <= Dialog::titleRoom(false)) {
+    snprintf(body, sizeof(body), "%s", uitext::kPlayFailedBody);
+  } else {
+    // (A long name: it goes into the body, as headphonesLost() does.)
+    snprintf(title, sizeof(title), "Couldn't reach them");
+    snprintf(body, sizeof(body), "%s: on, out of the case, and not connected to your phone?", name);
+  }
+  static const char* const kButtons[2] = {uitext::kPlayOnSpeaker, "Try again"};
+  endPageTouch();
+  closeModal(true);
+  dialogOwner_ = this;
+  dialog_.open(title, body, kButtons, 2, col::AMBER);
+  playFailedDialog_ = true;
+  ownDialog_ = OwnDialog::PlayFailed;
+  applyCover();
+  Serial.printf("[ui] play: %s (paused)\n", title);
+}
+
+void Ui::updatePlayFailed() {
+  if (state_.gateFailures != gateFailuresSeen_) {
+    gateFailuresSeen_ = state_.gateFailures;
+    if (state_.gate == PlayGate::State::Failed) playFailed();
+  }
+  // Nothing to decide any more: they connected after all, or the speaker
+  // is the output (the notice's own buttons close it before this).
+  if (playFailedDialog_ && dialog_.up() && state_.gate != PlayGate::State::Failed) {
+    closeModal(false);
+    repaintUnder();
+  }
+}
+
 void Ui::onDialog(int button) {
+  const OwnDialog which = ownDialog_;
+  ownDialog_ = OwnDialog::None;
+  if (which == OwnDialog::PlayFailed) {
+    if (button == 0) {
+      Serial.println("[ui] play failed: play on the speaker");
+      host_.playOnSpeaker();
+    } else if (button == 1) {
+      Serial.println("[ui] play failed: try again");
+      host_.play();
+    }
+    return;
+  }
   // headphonesLost()'s dialog: "Use speaker" moves the output (paused: B plays).
-  if (button == 0) host_.selectOutput(false);
+  if (which == OwnDialog::Lost && button == 0) host_.selectOutput(false);
 }
 
 void Ui::volumeKeys() { volumeHudDue_ = true; }
@@ -692,6 +751,8 @@ tabbar::State Ui::tabState(uint32_t nowMs) const {
     s.play = tabbar::Play::Nothing;
   } else if (state_.play == PlayState::Playing) {
     s.play = tabbar::Play::Playing;
+  } else if (state_.play == PlayState::Waiting) {
+    s.play = tabbar::Play::Waiting;
   } else {
     s.play = state_.play == PlayState::Paused ? tabbar::Play::Paused : tabbar::Play::Stopped;
   }
@@ -706,7 +767,9 @@ tabbar::State Ui::tabState(uint32_t nowMs) const {
   } else if (state_.btConnected) {
     s.output = tabbar::Output::BtConnected;
   } else {
-    s.output = state_.btLost ? tabbar::Output::BtLost : tabbar::Output::BtConnecting;
+    // Lost (dropped while the output), or a connection that failed (a play
+    // that waited for them, or the card's): red, as the card is.
+    s.output = state_.btLost || state_.btSession.failed() ? tabbar::Output::BtLost : tabbar::Output::BtConnecting;
   }
   s.volume = state_.volume;
   s.battery = state_.battery;
@@ -748,6 +811,7 @@ void Ui::loop(uint32_t nowMs) {
     closeModal(false);
     repaintUnder();
   }
+  updatePlayFailed();
   // Tracks added: the Queue badge flashes.
   if (state_.contentVersion != lastContent_) {
     if (state_.upNext > lastUpNext_) badgeUntilMs_ = nowMs + 1500;
@@ -909,6 +973,7 @@ void Ui::route(const InputEvent& e) {
         OverlayOwner* owner = dialogOwner_;
         dialog_.close();
         lostDialog_ = false;
+        playFailedDialog_ = false;
         repaintUnder();
         if (owner) owner->onDialog(b);
       }
@@ -1137,12 +1202,13 @@ void Ui::printState() const {
                 volumeSheet_.up() ? (volumeSheetBt_ ? "open (headphones)" : "open (speaker)") : "no",
                 jumpGrid_.up() ? "open" : "no", dialog_.up() ? "open" : "no",
                 coach_.up() ? (coach_.card() == 0 ? "card 1" : "card 2") : "no");
-  Serial.printf("[ui] bluetooth: link %s (try %u of %u, %s), session%s%s%s; queue marks: added since key %ld, "
-                "%d failed\n",
+  Serial.printf("[ui] bluetooth: link %s (try %u of %u, %s), session%s%s%s, play gate %s (%lu failed); queue marks: "
+                "added since key %ld, %d failed\n",
                 btPhaseName(state_.btLink.phase), (unsigned)state_.btLink.attempt, (unsigned)state_.btLink.attempts,
                 state_.btLink.remembered ? "remembered" : "none remembered",
                 state_.btSession.wanted() ? " wanted" : "", state_.btSession.failed() ? " failed" : "",
-                state_.btSession.pairing() ? " pairing" : "",
+                state_.btSession.pairing() ? " pairing" : "", PlayGate::stateName(state_.gate),
+                (unsigned long)state_.gateFailures,
                 added_.pending() ? (long)added_.since() : -1L, failedKeys_.count());
   if (browse_) {
     Serial.printf("[ui] the Library browses a SYNTHETIC library: %lu tracks, %lu artists, %lu albums (uil0: the card's)\n",

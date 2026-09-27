@@ -29,7 +29,9 @@ void drawNowPlaying(M5Canvas& c, int cx, int iconTop, const tabbar::State& s, bo
   }
   uint8_t h[4];
   tabbar::eqBars(s.eqStep, s.play == tabbar::Play::Playing, h);
-  const uint16_t colour = s.play == tabbar::Play::Playing || active ? accent::NowPlaying : col::ICON;
+  const uint16_t colour = s.play == tabbar::Play::Waiting                 ? col::AMBER
+                          : s.play == tabbar::Play::Playing || active ? accent::NowPlaying
+                                                                      : col::ICON;
   const int bottom = iconTop + tabbar::kEqMaxH;
   for (int i = 0; i < 4; ++i) c.fillRect(cx - 9 + i * 5, bottom - h[i], 3, h[i], colour);
   // The hairline: filled to the position, dotted when the length isn't known.

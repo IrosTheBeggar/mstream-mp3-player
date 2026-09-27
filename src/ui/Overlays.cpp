@@ -609,7 +609,11 @@ void Dialog::render() {
     const bool primary = i == n_ - 1;
     const uint16_t b = i == pressed_ ? col::BTN_HI : primary ? (danger_ ? col::RED : accent_) : col::BTN;
     s.fillRoundRect(x, kH - 46, bw, 36, 8, b);
-    f.draw(s, primary ? Font::Bold : Font::Body, buttons_[i], x + bw / 2, kH - 28, bw - 8,
+    // A label too wide for its button ("Play on speaker": 127 px of 123)
+    // in Small, not cut.
+    Font font = primary ? Font::Bold : Font::Body;
+    if (f.width(font, buttons_[i]) > bw - 8) font = Font::Small;
+    f.draw(s, font, buttons_[i], x + bw / 2, kH - 28, bw - 8,
            primary && i != pressed_ ? col::DARK : col::TXT, b, Fonts::Align::Centre);
   }
 }

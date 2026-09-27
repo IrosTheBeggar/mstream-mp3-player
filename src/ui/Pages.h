@@ -5,6 +5,7 @@
 #include "LibraryIndex.h"
 #include "OutputModel.h"
 #include "PlaybackController.h"
+#include "UiText.h"
 #include "ui/ListView.h"
 #include "ui/UiHost.h"
 #include "ui/Page.h"
@@ -44,8 +45,16 @@ struct Header {
 //   90-129   the artist ›   } 40 px bands (the review: a tap meant for one
 //   130-169  the album ›    } never opens the other), x 112 to the edge
 //   170-191  the progress line, elapsed / "4 of 16 · SPYDRONE" / length
-//            (where it plays, when it fits: mockup 01's output line)
+//            (where it plays, when it fits: mockup 01's output line; the
+//            headphones not connected, "SPYDRONE (not connected)" even
+//            when the rest doesn't fit, so a play that waits for them
+//            is no surprise)
 //   192-239  [volume] [prev] [play/pause] [next] [...]   64 px zones
+//
+// While play waits for the headphones (PlayState::Waiting, PlayGate): the
+// play button is a spinner (a tap, or B, cancels the wait: paused), and the
+// artist and album bands give way to "Waiting for SPYDRONE... try 2 of 3"
+// with [Play on speaker] (the explicit choice) and [Cancel].
 //
 // The volume zone opens the volume sheet; "..." the sheet with Go to
 // artist, Go to album, Show in folders. Only what changed is redrawn: the
@@ -67,7 +76,8 @@ public:
   void describe(char* buf, size_t size) const override;
 
 private:
-  enum Zone : int8_t { None = -1, Cover, Artist, Album, Volume, Prev, PlayPause, Next, More };
+  // (The transport's zones last, from Volume: `Volume + z`.)
+  enum Zone : int8_t { None = -1, Cover, Artist, Album, WaitSpeaker, WaitCancel, Volume, Prev, PlayPause, Next, More };
   enum class Go : uint8_t { Artist, Album, Folders };
   Zone zoneAt(const InputEvent& e) const;
   // The playing track's album in the library index (kNone: none, or a
@@ -76,11 +86,20 @@ private:
   void drawCover();
   void drawTitle();
   void drawArtistAlbum();
+  // The artist and album bands, or (waiting) the waiting panel in their place.
+  void drawMiddle();
+  void drawWaiting();
   void drawProgress();
   void drawTransport();
+  // The play button (a spinner while waiting) into `c`, centred at (cx, cy).
+  void drawPlayButton(M5Canvas& c, int cx, int cy, bool down);
+  // Only the play button's zone (the spinner's next step).
+  void drawPlayZone();
+  uint32_t waitSig() const;
   // The progress line's middle: at most this wide (between the times).
-  static constexpr int kMidW = 170;
-  const char* outputName() const;  // "SPYDRONE", "Speaker", "connecting..."
+  static constexpr int kMidW = uitext::kNowPlayingMidW;
+  // "SPYDRONE", "Speaker", "SPYDRONE (not connected)" (into buf).
+  const char* outputName(char* buf, size_t size) const;
   uint32_t outputSig() const;
   void goToLibrary(Go where);
   // Nothing queued: the empty (or no-card) state instead of the player.
@@ -102,8 +121,12 @@ private:
     bool coverShown = false;  // the thumbnail, not the placeholder
     bool empty = false;       // the empty state is what's drawn
     bool noCard = false;
+    bool waiting = false;     // the waiting panel is what's drawn
+    uint32_t waitSig = 0;     // waitSig()
   } drawn_;
   Zone pressed_ = None;
+  uint8_t spin_ = 0;          // the waiting spinner's step (8 a turn)
+  uint32_t nextSpinMs_ = 0;
   int emptyPressed_ = -1;
   M5Canvas* cover_ = nullptr;  // PSRAM, 98 x 98 (the cover and its frame)
   char moreFolder_[96] = "";   // the "..." sheet's folder line

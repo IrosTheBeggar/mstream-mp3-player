@@ -128,6 +128,49 @@ void test_a_connect_that_links_is_satisfied() {
   TEST_ASSERT_FALSE(s.failed());
 }
 
+// A play that waited for the headphones ended without them (PlayGate): the
+// ask is withdrawn, the link left paging. A link it brings answers nothing.
+void test_a_withdrawn_connect_answers_nothing() {
+  using P = BtLink::Phase;
+  // Failed (the play's backstop, the third try still paging): the card is
+  // red with the notice, and stays so while the tries go on.
+  BtSession s;
+  s.connect(0);
+  s.update(link(P::Paging, true, 3, 3), 20000);
+  s.withdraw(true);
+  TEST_ASSERT_FALSE(s.wanted());
+  TEST_ASSERT_TRUE(s.failed());
+  s.update(link(P::Paging, true, 3, 3), 21000);
+  s.update(link(P::Scanning), 30000);
+  TEST_ASSERT_TRUE(s.failed());
+  TEST_ASSERT_EQUAL(BtCard::Failed, btCardView(link(P::Scanning), s, false).card);
+  // A link comes, phase first, then the event: not asked for.
+  s.update(link(P::Linked), 40000);
+  TEST_ASSERT_FALSE(s.failed());
+  TEST_ASSERT_FALSE(s.onConnected().asked);
+  // Cancelled: neither wanted nor failed; the card shows the page on its way.
+  BtSession c;
+  c.connect(0);
+  c.update(link(P::Paging, true, 1, 3), 100);
+  c.withdraw(false);
+  TEST_ASSERT_FALSE(c.wanted());
+  TEST_ASSERT_FALSE(c.failed());
+  TEST_ASSERT_EQUAL(BtCard::Connecting, btCardView(link(P::Paging, true, 1, 3), c, false).card);
+  c.update(link(P::Scanning), 30000);
+  TEST_ASSERT_FALSE(c.failed());  // its tries running out isn't the listener's failure
+  TEST_ASSERT_FALSE(c.onConnected().asked);
+  // A pairing the listener started is theirs: kept.
+  BtSession p;
+  p.pairStarted(0);
+  p.update(link(P::Pairing, true, 1, 3), 100);
+  p.withdraw(false);
+  TEST_ASSERT_TRUE(p.wanted());
+  TEST_ASSERT_TRUE(p.pairing());
+  const BtSession::Answer a = p.onConnected();
+  TEST_ASSERT_TRUE(a.asked);
+  TEST_ASSERT_TRUE(a.paired);
+}
+
 void test_a_pairing_fails_when_it_stops_or_takes_too_long() {
   using P = BtLink::Phase;
   BtSession s;
@@ -358,6 +401,7 @@ int main(int, char**) {
   RUN_TEST(test_card_for_every_link_state);
   RUN_TEST(test_a_connect_that_runs_out_of_tries_fails);
   RUN_TEST(test_a_connect_that_links_is_satisfied);
+  RUN_TEST(test_a_withdrawn_connect_answers_nothing);
   RUN_TEST(test_a_pairing_fails_when_it_stops_or_takes_too_long);
   RUN_TEST(test_an_expected_drop_is_forgotten_by_the_next_link);
   RUN_TEST(test_a_drop_that_never_comes_is_no_longer_expected);

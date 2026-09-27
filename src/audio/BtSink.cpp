@@ -24,6 +24,9 @@ constexpr int kMinRssi = -55;
 // Reconnect attempts (~10 s apart) to the remembered device before scanning.
 // The library's default of 1000 blocks discovery for hours if it's gone.
 constexpr int kReconnectTries = 3;
+// A page this recent may still be answered: the controller's page timeout
+// (5.12 s by default) and a margin. Connect doesn't page on top of it.
+constexpr uint32_t kPageMs = 5500;
 // BtAppT runs our handlers, which log and read/write NVS: the library's
 // default of 3072 bytes is too tight (watch appTaskStackFree in the stats).
 constexpr int kAppTaskStack = 6144;
@@ -211,6 +214,8 @@ protected:
   // and ours. For the Output card's "try 2 of 3".
   bool connect_to(esp_bd_addr_t peer) override {
     attempt_ = static_cast<uint8_t>(std::max(1, std::min(max_reconnect_retries - reconnect_retries, 9)));
+    pageAtMs_ = millis();
+    paged_ = true;
     const bool ok = BluetoothA2DPCommon::connect_to(peer);
     publishLink();
     return ok;
@@ -286,6 +291,8 @@ private:
   bool pendingPair_ = false;     // ... once the link that is up has gone
   uint8_t pendingAddr_[ESP_BD_ADDR_LEN] = {};
   uint8_t attempt_ = 0;          // the last page's try number
+  bool paged_ = false;           // a page was made (pageAtMs_: when)
+  uint32_t pageAtMs_ = 0;
 };
 
 namespace {
@@ -940,11 +947,29 @@ void PlayerA2dp::userConnect() {
     esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
     return;
   }
-  if (discovery_active) esp_bt_gap_cancel_discovery();  // a page competes with a scan
+  // A page of the background cycle's still on its way (the library pages
+  // each heartbeat, and its burst may be at its last try): it counts as the
+  // first try of a full burst, not a second page on top of it.
+  const bool pageOnItsWay = paged_ && !pairing_ && !discovery_active && reconnect_status == AutoReconnect &&
+                            s_a2d_state != APP_AV_STATE_DISCOVERING && s_a2d_state != APP_AV_STATE_DISCOVERED &&
+                            millis() - pageAtMs_ < kPageMs;
+  if (discovery_active) {
+    // A page competes with a scan. The scan's end arrives later on the BTC
+    // task, which doesn't publish: marked over now, so the card and Now
+    // Playing say "try 1 of 3" at once instead of "looking for them".
+    esp_bt_gap_cancel_discovery();
+    discovery_active = false;
+  }
   s_a2d_state = APP_AV_STATE_UNCONNECTED;
   reconnect_status = AutoReconnect;
   is_autoreconnect_allowed = true;
   reconnect_retries = max_reconnect_retries - 1;  // this is the first
+  if (pageOnItsWay) {
+    attempt_ = 1;
+    Serial.printf("[bt] connect: a page to %s is on its way: try 1 of %d\n", to_str(last_connection),
+                  max_reconnect_retries);
+    return;
+  }
   Serial.printf("[bt] connect: paging %s\n", to_str(last_connection));
   connect_to(last_connection);
 }

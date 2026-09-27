@@ -40,6 +40,30 @@ inline constexpr int kEmptyIconW[2] = {26, 20};  // the Library's and Shuffle's 
 inline constexpr int kEmptyLineW = 304;  // a line (Small), centred
 inline constexpr const char* kPickInLibrary = "Pick an album, folder or track in the Library.";
 
+// ---- Now Playing (ui/NowPlayingPage) ----
+// The progress line's middle (Small), centred between the times (from
+// x 12 and to 308): "4 of 16 · SPYDRONE", or the headphones' "SPYDRONE (not
+// connected)" (177 px: 170 cut it).
+inline constexpr int kNowPlayingMidW = 190;
+
+// ---- play waiting for the headphones (ui/NowPlayingPage, ui/Ui) ----
+// Now Playing's panel over the artist and album bands (x 112-319, y 90-169):
+// "Waiting for SPYDRONE..." (Small, amber) over "try 2 of 3" (Small, dim),
+// then two buttons (Body), x from the band's left.
+inline constexpr int kWaitTextX = 8, kWaitTextW = 196;
+inline constexpr int kWaitSpeakerX = 4, kWaitSpeakerW = 136;
+inline constexpr int kWaitCancelX = 144, kWaitCancelW = 62;
+inline constexpr int kWaitButtonPad = 8;  // a label has the box less this
+inline constexpr const char* kPlayOnSpeaker = "Play on speaker";
+inline constexpr const char* kWaitCancel = "Cancel";
+// The notice when they can't be reached (ui/Overlays' Dialog: no icon, so
+// "Couldn't reach SPYDRONE" has its title's 260 px; the body in Small over
+// 260 px; two buttons of 131 px, their labels 8 px in: "Play on speaker"
+// is 4 px too wide in Body, so the Dialog draws it in Small).
+inline constexpr int kDialogTitleW = 260;
+inline constexpr int kDialogButtonTextW = 123;
+inline constexpr const char* kPlayFailedBody = "Are they on, out of the case, and not connected to your phone?";
+
 // ---- the Queue's selection bar (ui/QueuePage) ----
 // Remove N (Bold, after the trash icon; without it when it doesn't fit),
 // Play next and Clear… (Body).

@@ -18,6 +18,7 @@
 #include "HeadsetKeys.h"
 #include "InputEvent.h"
 #include "OutputModel.h"
+#include "PlayGate.h"
 #include "PlaybackController.h"
 #include "QueueModel.h"
 #include "QueueView.h"
@@ -85,6 +86,11 @@ static ui::Ui* userInterface = nullptr;
 // What the listener asked of Bluetooth (OutputModel): the audio waits on
 // its output until the headphones they asked for are linked.
 static BtSession btSession;
+// Play while Bluetooth is the output and the headphones aren't connected
+// (PlayGate): the player waits (PlayState::Waiting), the headphones are
+// connected at once, and the wait ends playing on them, or paused with a
+// notice when they can't be reached.
+static PlayGate playGate;
 // The name of the headphones being paired from the Pair screen: once they
 // are linked it becomes the sink name, so a later scan by name finds them.
 static char pairName[32] = "";
@@ -191,18 +197,38 @@ static void stepBluetoothVolume(int delta) {
   Serial.printf("[bt] volume %d%%\n", constrain(bt.volume() + delta, 0, 100));
 }
 
+// Playing, or waiting for the headphones (the wait counts as playing on
+// them: a move to the speaker ends it paused, never playing out loud).
 static bool pauseIfPlaying() {
+  if (player.state() == PlayState::Waiting) {
+    player.cancelWait();
+    return true;
+  }
   if (player.state() != PlayState::Playing) return false;
   player.togglePlayPause();
   return true;
 }
 
+// The player's hold (PlaybackController::Hold): a play waits while
+// Bluetooth is the output and the headphones aren't connected (PlayGate
+// connects them, and releases or ends the wait).
+struct OutputHold : PlaybackController::Hold {
+  bool holdPlay() const override {
+    return !silent && audio.output() == Output::Bluetooth && !audio.bluetooth().connected();
+  }
+};
+static OutputHold outputHold;
+
 // What the touch buttons drive (ButtonPolicy decides which button does what).
 struct ButtonTransport : ButtonPolicy::Transport {
   void prev() override { player.prev(); }
   void next() override { player.next(); }
+  // (Waiting: cancels the wait, paused.)
   void playPause() override { player.togglePlayPause(); }
-  bool playing() const override { return player.state() == PlayState::Playing; }
+  // Waiting for the headphones counts: a B hold then ends the wait paused.
+  bool playing() const override {
+    return player.state() == PlayState::Playing || player.state() == PlayState::Waiting;
+  }
   void pause() override { (void)pauseIfPlaying(); }
   void stepVolume(int delta) override { ::stepVolume(delta); }
   int volume() const override { return audio.volume(); }
@@ -280,10 +306,24 @@ static void letGoOfHeadphones(bool forget) {
   Serial.printf("[output] %s the headphones%s\n", forget ? "forgot" : "disconnected", paused ? " (paused first)" : "");
 }
 
+// [Play on speaker] (Now Playing while play waits for the headphones, the
+// "Couldn't reach" notice): the listener's explicit choice. The wait ends
+// paused, the speaker becomes the output, and then it plays, at the
+// speaker's own volume. From both places the headphones are still looked
+// for quietly in the background: only the ask is withdrawn (not the radio
+// let go, as the Speaker row does for a connection on its way), so they
+// can come back by themselves once they are on.
+static void playOnSpeaker() {
+  btSession.withdraw(/*failed=*/false);
+  const bool playing = PlayGate::playOnSpeaker(player, [] { return ButtonTransport::selectOutput(false); });
+  Serial.printf("[output] play on the speaker%s\n", playing ? "" : ": nothing to play");
+}
+
 // uiF<k>: a state the UI is shown, for screenshots of the states a
 // test can't safely cause (the radio and the card are left alone): c
 // connecting, s searching, p pairing, l the headphones lost (the dialog
-// too), n no card (on Now Playing); uiF0 (or uiF) the real state. Display only: a button
+// too), n no card (on Now Playing), w play waiting for the headphones (Now
+// Playing's panel); uiF0 (or uiF) the real state. Display only: a button
 // on a faked card still does what it does.
 static char uiFake = 0;
 
@@ -309,7 +349,8 @@ struct MainUiHost : ui::UiHost {
     s.onBluetooth = audio.output() == Output::Bluetooth;
     s.btConnected = bt.connected();
     s.btLost = btLost && s.onBluetooth && !s.btConnected;
-    snprintf(s.btName, sizeof(s.btName), "%s", bt.deviceName());
+    // Their name (read at each link; before the first, the name looked for).
+    snprintf(s.btName, sizeof(s.btName), "%s", bt.deviceName()[0] ? bt.deviceName() : bt.sinkName());
     s.volume = audio.volume();
     s.speakerVolume = audio.speakerVolume();
     s.btVolume = bt.volume();
@@ -317,6 +358,8 @@ struct MainUiHost : ui::UiHost {
     s.silent = silent;
     s.btLink = bt.link();
     s.btSession = btSession;
+    s.gate = playGate.state();
+    s.gateFailures = playGate.failures();
     s.btDetail[0] = 0;
     if (s.btConnected) {
       const uint32_t delayMs = bt.delayReportUs() / 1000;
@@ -366,12 +409,22 @@ struct MainUiHost : ui::UiHost {
                                      : BtLink::Phase::Paging;
     s.btLink.attempt = 2;
     s.btLink.attempts = 3;
+    if (uiFake == 'w') {
+      s.onBluetooth = true;
+      if (s.current >= 0) s.play = PlayState::Waiting;
+      s.gate = PlayGate::State::Waiting;
+      return;
+    }
     if (uiFake == 'l') {
       s.onBluetooth = true;
       s.btLost = true;
     }
   }
   void playPause() override { player.togglePlayPause(); }
+  void play() override {
+    if (player.state() == PlayState::Paused || player.state() == PlayState::Stopped) player.togglePlayPause();
+  }
+  void playOnSpeaker() override { ::playOnSpeaker(); }
   void next() override { player.next(); }
   void prev() override { player.prev(); }
   void stepVolume(int delta) override { ::stepVolume(delta); }
@@ -497,6 +550,7 @@ static const char* stateName() {
   switch (player.state()) {
     case PlayState::Playing: return "playing";
     case PlayState::Paused: return "paused";
+    case PlayState::Waiting: return "waiting";
     default: return "stopped";
   }
 }
@@ -937,8 +991,13 @@ static void handleBluetooth() {
           Serial.println("[test] silent mode: staying on the speaker");
         } else {
           audio.setOutput(Output::Bluetooth);
-          // Asked for: the audio moved, seconds after the tap; say where.
-          if (answer.asked && userInterface) userInterface->headphonesConnected();
+          // Asked for: the audio moved, seconds after the tap; say where. (A
+          // play waiting for them: PlayGate's release says it, once; a wait
+          // cancelled in this pass, before PlayGate withdrew its ask: paused,
+          // nothing to say.)
+          if (answer.asked && userInterface && !playGate.waiting() && player.state() != PlayState::Waiting) {
+            userInterface->headphonesConnected();
+          }
         }
         diag::logHeap("bt-link");
         break;
@@ -1015,6 +1074,57 @@ static void handleBluetooth() {
   }
 }
 
+// Play while Bluetooth is the output and the headphones aren't connected:
+// PlayGate's decisions (the player and the session are done in step()), and
+// what is left to do here: the radio and what the UI says.
+static void stepPlayGate(uint32_t now) {
+  BtSink& bt = audio.bluetooth();
+  PlayGate::In in;
+  in.play = player.state();
+  in.onBluetooth = audio.output() == Output::Bluetooth;
+  in.linked = bt.connected();
+  in.link = bt.link();
+  in.sessionFailed = btSession.failed();
+  in.nowMs = now;
+  const PlayGate::Do d = playGate.step(in, player, btSession);
+  if (d == PlayGate::Do::None) return;
+  const char* name = bt.deviceName()[0] ? bt.deviceName() : bt.sinkName();
+  if (!name[0]) name = "the headphones";
+  switch (d) {
+    case PlayGate::Do::Connect:
+      // The paging burst now: try 1 of 3 (a background page on its way
+      // counts as that try: BtSink doesn't page on top of it).
+      bt.connect();
+      // fall through
+    case PlayGate::Do::Track:
+      // Asked for now: connecting, not lost (the tab bar and the card agree).
+      btLost = false;
+      Serial.printf("[play] waiting for %s: %s\n", name,
+                    d == PlayGate::Do::Connect ? "connecting now" : "the Pair screen has the radio");
+      break;
+    case PlayGate::Do::Release:
+      Serial.printf("[play] %s connected after %lu ms: playing\n", name, (unsigned long)(now - playGate.sinceMs()));
+      if (userInterface) userInterface->headphonesConnected();
+      break;
+    case PlayGate::Do::GiveUp:
+      // The session's ask is withdrawn as failed: the card and the tab turn
+      // red with the notice; the radio carries on quietly (no disconnect).
+      Serial.printf("[play] %s not reached in %lu ms (link %s): paused\n", name,
+                    (unsigned long)(now - playGate.sinceMs()), btPhaseName(in.link.phase));
+      break;
+    case PlayGate::Do::Cancel:
+      Serial.println("[play] the output isn't bluetooth any more: the wait ends, paused");
+      break;
+    case PlayGate::Do::Ended:
+      // Cancelled (or the speaker, or stopped): a link that comes later
+      // answers nothing; the radio carries on as it was.
+      Serial.printf("[play] the wait for %s ended (%s)\n", name, stateName());
+      break;
+    case PlayGate::Do::None:
+      break;
+  }
+}
+
 void setup() {
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;  // M5Unified leaves Serial off unless asked
@@ -1054,6 +1164,7 @@ void setup() {
   const char* headphones = audio.bluetooth().sinkName();
   Serial.printf("[bt] headphones: %s\n",
                 headphones[0] ? ("name contains \"" + String(headphones) + "\"").c_str() : "any very close device");
+  player.setHold(&outputHold);  // a play waits while the headphones aren't connected (PlayGate)
   danceMode.begin();
   diag::logHeap("dance");
   haptics.begin();
@@ -1082,7 +1193,7 @@ void setup() {
                  "ad default table, ah0/1 haptics, ar0/1 rail ticks), "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
                  "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid scripted finger, "
-                 "uiF<c/s/p/l/n> show a faked Bluetooth or no-card state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
+                 "uiF<c/s/p/l/n/w> show a faked Bluetooth or no-card state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
                  "library of n tracks in the Library tab, uil0 the card's); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja)");
@@ -1096,6 +1207,7 @@ void loop() {
   console.poll();
   handleBluetooth();
   btSession.update(audio.bluetooth().link(), now);
+  stepPlayGate(now);
   player.update(now);
   audio.loop(now);
   queueStore.loop(now);

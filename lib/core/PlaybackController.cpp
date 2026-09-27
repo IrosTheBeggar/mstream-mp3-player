@@ -4,6 +4,19 @@
 
 void PlaybackController::startCurrent() {
   if (!hasTrack()) return;
+  if (held()) {
+    // The output can't be heard yet: this entry waits, selected. The
+    // backend lets go of what it had (a track playing or paused).
+    if (state_ != PlayState::Stopped && !cued_) audio_.stop();
+    state_ = PlayState::Waiting;
+    cued_ = true;
+    return;
+  }
+  startNow();
+}
+
+void PlaybackController::startNow() {
+  if (!hasTrack()) return;
   // An unknown id gives "": the backend fails it and update() skips on.
   char path[TrackCatalog::kMaxPath];
   const uint32_t id = queue_.currentTrack();
@@ -34,10 +47,31 @@ void PlaybackController::togglePlayPause() {
         startCurrent();
         break;
       }
+      if (held()) {
+        state_ = PlayState::Waiting;  // the backend keeps the paused track: release() resumes it
+        break;
+      }
       audio_.resume();
       state_ = PlayState::Playing;
       break;
+    case PlayState::Waiting:
+      state_ = PlayState::Paused;  // cancelled: a cued entry stays cued, a paused track paused
+      break;
   }
+}
+
+void PlaybackController::release() {
+  if (state_ != PlayState::Waiting) return;
+  if (cued_) {
+    startNow();
+    return;
+  }
+  audio_.resume();
+  state_ = PlayState::Playing;
+}
+
+void PlaybackController::cancelWait() {
+  if (state_ == PlayState::Waiting) state_ = PlayState::Paused;
 }
 
 void PlaybackController::next() {
@@ -65,7 +99,7 @@ void PlaybackController::cueNext() { cue(+1); }
 void PlaybackController::cuePrev() { cue(-1); }
 
 void PlaybackController::cue(int delta) {
-  if (state_ == PlayState::Playing) {
+  if (state_ == PlayState::Playing || state_ == PlayState::Waiting) {
     delta > 0 ? next() : prev();
     return;
   }
@@ -110,6 +144,7 @@ void PlaybackController::currentMoved() {
   }
   switch (state_) {
     case PlayState::Playing:
+    case PlayState::Waiting:
       startCurrent();
       break;
     case PlayState::Paused:

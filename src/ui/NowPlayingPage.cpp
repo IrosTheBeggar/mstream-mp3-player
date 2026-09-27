@@ -1,8 +1,10 @@
 // Now Playing (the tab bar spec §6.1, mockups 01-04, with the review's
 // grafts): the cover, the title, the artist and the album as 40 px bands
 // that open them in the Library at the playing track, the progress and
-// times, and the transport with the volume sheet and a "..." sheet. The
-// layout is in Pages.h. The "..." zone reaches the screen's edge.
+// times, and the transport with the volume sheet and a "..." sheet; while
+// play waits for the headphones, a spinner for play and the waiting panel
+// (PlayGate). The layout is in Pages.h. The "..." zone reaches the
+// screen's edge.
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -30,6 +32,10 @@ constexpr int kAlbumY = 130, kAlbumH = 40;
 constexpr int kProgressY = 170, kProgressH = 22;
 constexpr int kTransportY = 192, kTransportH = 48;
 constexpr int kZoneW = 64;
+// The waiting panel (over the artist and album bands): its text in the
+// artist band, its buttons in the album band.
+constexpr int kWaitButtonsY = kAlbumY;
+constexpr uint32_t kSpinMs = 125;  // the waiting spinner: 8 steps a second
 
 void mmss(uint32_t ms, char* buf, size_t size) {
   snprintf(buf, size, "%lu:%02lu", static_cast<unsigned long>(ms / 60000), static_cast<unsigned long>(ms / 1000 % 60));
@@ -197,31 +203,102 @@ void NowPlayingPage::drawProgress() {
   } else if (s.current < 0) {
     snprintf(mid, sizeof(mid), "The queue is empty");
   } else {
-    snprintf(mid, sizeof(mid), "%s%lu of %lu", s.play == PlayState::Paused ? "Paused, " : s.play == PlayState::Stopped ? "Stopped, " : "",
-             static_cast<unsigned long>(s.current + 1), static_cast<unsigned long>(s.queueSize));
+    const char* state = s.play == PlayState::Paused    ? "Paused, "
+                        : s.play == PlayState::Stopped ? "Stopped, "
+                        : s.play == PlayState::Waiting ? "Waiting, "
+                                                       : "";
+    snprintf(mid, sizeof(mid), "%s%lu of %lu", state, static_cast<unsigned long>(s.current + 1),
+             static_cast<unsigned long>(s.queueSize));
     if (s.play != PlayState::Playing) mc = col::AMBER;
     // Where it plays (mockup 01's output line): "4 of 16 · SPYDRONE", when
-    // it fits between the times.
-    char withOutput[72];
-    snprintf(withOutput, sizeof(withOutput), "%s \xC2\xB7 %s", mid, outputName());
-    if (f.width(Font::Small, withOutput) <= kMidW) snprintf(mid, sizeof(mid), "%s", withOutput);
+    // it fits between the times. The headphones not connected (and no
+    // wait saying so above): that alone, if both don't fit.
+    char where[48], withOutput[96];
+    const char* out = outputName(where, sizeof(where));
+    snprintf(withOutput, sizeof(withOutput), "%s \xC2\xB7 %s", mid, out);
+    if (f.width(Font::Small, withOutput) <= kMidW) {
+      snprintf(mid, sizeof(mid), "%s", withOutput);
+    } else if (s.onBluetooth && !s.btConnected && s.play != PlayState::Waiting) {
+      snprintf(mid, sizeof(mid), "%s", out);
+      mc = col::AMBER;
+    }
   }
   f.draw(c, Font::Small, mid, kW / 2, kTextY, kMidW, mc, col::BG, Fonts::Align::Centre);
   gfx::push(c, 0, kProgressY, kW, kProgressH);
 }
 
-const char* NowPlayingPage::outputName() const {
+const char* NowPlayingPage::outputName(char* buf, size_t size) const {
   const AppState& s = ui_.state();
   if (!s.onBluetooth) return "Speaker";
-  if (!s.btConnected) return "connecting...";
-  return s.btName[0] ? s.btName : "Headphones";
+  const char* name = s.btName[0] ? s.btName : "Headphones";
+  if (s.btConnected) return name;
+  // Not "connecting...": after a night they may only be looked for now
+  // and then, and a play would wait for them.
+  snprintf(buf, size, "%s (not connected)", name);
+  return buf;
 }
 
 uint32_t NowPlayingPage::outputSig() const {
   const AppState& s = ui_.state();
-  uint32_t h = (s.onBluetooth ? 1u : 0u) | (s.btConnected ? 2u : 0u);
+  const bool red = s.btLost || s.btSession.failed();
+  uint32_t h = (s.onBluetooth ? 1u : 0u) | (s.btConnected ? 2u : 0u) | (red ? 4u : 0u);
   for (const char* p = s.btName; *p; ++p) h = h * 31u + static_cast<unsigned char>(*p);
   return h;
+}
+
+// What the waiting panel shows: the name, and how the connection goes.
+uint32_t NowPlayingPage::waitSig() const {
+  const AppState& s = ui_.state();
+  uint32_t h = static_cast<uint32_t>(s.btLink.phase) * 131u + s.btLink.attempt * 7u + s.btLink.attempts;
+  h = h * 31u + static_cast<uint32_t>(pressed_ + 1);
+  for (const char* p = s.btName; *p; ++p) h = h * 31u + static_cast<unsigned char>(*p);
+  return h;
+}
+
+void NowPlayingPage::drawMiddle() {
+  if (ui_.state().play == PlayState::Waiting) {
+    drawWaiting();
+  } else {
+    drawArtistAlbum();
+  }
+}
+
+// "Waiting for SPYDRONE..." over "try 2 of 3", then [Play on speaker] and
+// [Cancel] (Cancel reaches the screen's edge).
+void NowPlayingPage::drawWaiting() {
+  using namespace uitext;
+  const AppState& s = ui_.state();
+  M5Canvas& c = gfx::strip();
+  Fonts& f = Fonts::instance();
+  const int w = kW - kColumnX;
+  // The text, in the artist band.
+  c.fillRect(0, 0, w, kArtistH, col::BG);
+  char line[64];
+  snprintf(line, sizeof(line), "Waiting for %s\xE2\x80\xA6", s.btName[0] ? s.btName : "the headphones");
+  f.draw(c, Font::Small, line, kWaitTextX, 12, kWaitTextW, col::AMBER, col::BG);
+  const BtLink& l = s.btLink;
+  if (l.phase == BtLink::Phase::Paging && l.attempt > 0) {
+    snprintf(line, sizeof(line), "try %u of %u", static_cast<unsigned>(l.attempt),
+             static_cast<unsigned>(l.attempts > l.attempt ? l.attempts : l.attempt));
+  } else if (l.phase == BtLink::Phase::Scanning) {
+    snprintf(line, sizeof(line), "looking for them");
+  } else {
+    snprintf(line, sizeof(line), "connecting");
+  }
+  f.draw(c, Font::Small, line, kWaitTextX, 30, kWaitTextW, col::DIM, col::BG);
+  gfx::push(c, kColumnX, kArtistY, w, kArtistH);
+  // The buttons, in the album band. Neither is the accent: out loud is a
+  // choice, not the way on.
+  c.fillRect(0, 0, w, kAlbumH, col::BG);
+  const uint16_t sp = pressed_ == WaitSpeaker ? col::BTN_HI : col::BTN;
+  c.fillRoundRect(kWaitSpeakerX, 3, kWaitSpeakerW, 34, 8, sp);
+  f.draw(c, Font::Body, kPlayOnSpeaker, kWaitSpeakerX + kWaitSpeakerW / 2, 20, kWaitSpeakerW - kWaitButtonPad,
+         col::TXT, sp, Fonts::Align::Centre);
+  const uint16_t cn = pressed_ == WaitCancel ? col::BTN_HI : col::BTN;
+  c.fillRoundRect(kWaitCancelX, 3, kWaitCancelW, 34, 8, cn);
+  f.draw(c, Font::Body, kWaitCancel, kWaitCancelX + kWaitCancelW / 2, 20, kWaitCancelW - kWaitButtonPad, col::TXT, cn,
+         Fonts::Align::Centre);
+  gfx::push(c, kColumnX, kWaitButtonsY, w, kAlbumH);
 }
 
 void NowPlayingPage::drawTransport() {
@@ -236,7 +313,8 @@ void NowPlayingPage::drawTransport() {
     if (down && z != 2) c.fillCircle(cx, cy, 22, col::BTN_HI);
     switch (z) {
       case 0: {  // the output and its volume: tap for the volume sheet
-        const uint16_t ic = s.onBluetooth ? (s.btConnected ? col::CYAN : col::AMBER) : col::SOFT;
+        const uint16_t off = s.btLost || s.btSession.failed() ? col::RED : col::AMBER;
+        const uint16_t ic = s.onBluetooth ? (s.btConnected ? col::CYAN : off) : col::SOFT;
         icons::drawCentred(c, s.onBluetooth ? icons::kHeadphones : icons::kSpeaker, cx, cy - 8, ic);
         char v[6];
         snprintf(v, sizeof(v), "%u%%", static_cast<unsigned>(s.volume));
@@ -244,18 +322,37 @@ void NowPlayingPage::drawTransport() {
         break;
       }
       case 1: icons::drawCentred(c, icons::kPrev, cx, cy, col::TXT); break;
-      case 2: {
-        const uint16_t disc = down ? col::SOFT : accent::NowPlaying;
-        c.fillCircle(cx, cy, 23, disc);
-        icons::drawCentred(c, s.play == PlayState::Playing ? icons::kPause : icons::kPlay,
-                           cx + (s.play == PlayState::Playing ? 0 : 2), cy, col::DARK);
-        break;
-      }
+      case 2: drawPlayButton(c, cx, cy, down); break;
       case 3: icons::drawCentred(c, icons::kNext, cx, cy, col::TXT); break;
       default: icons::drawCentred(c, icons::kMore, cx, cy, col::SOFT); break;
     }
   }
   gfx::push(c, 0, kTransportY, kW, kTransportH);
+}
+
+void NowPlayingPage::drawPlayButton(M5Canvas& c, int cx, int cy, bool down) {
+  const PlayState play = ui_.state().play;
+  const uint16_t disc = down ? col::SOFT : accent::NowPlaying;
+  c.fillCircle(cx, cy, 23, disc);
+  if (play == PlayState::Waiting) {
+    // A ring of 8 dots, one big (the step): waiting; a tap cancels.
+    static const int8_t kDx[8] = {0, 8, 11, 8, 0, -8, -11, -8};
+    static const int8_t kDy[8] = {-11, -8, 0, 8, 11, 8, 0, -8};
+    for (int i = 0; i < 8; ++i) {
+      const int age = (spin_ - i + 8) % 8;
+      c.fillCircle(cx + kDx[i], cy + kDy[i], age == 0 ? 3 : age < 3 ? 2 : 1, col::DARK);
+    }
+    return;
+  }
+  icons::drawCentred(c, play == PlayState::Playing ? icons::kPause : icons::kPlay, cx + (play == PlayState::Playing ? 0 : 2),
+                     cy, col::DARK);
+}
+
+void NowPlayingPage::drawPlayZone() {
+  M5Canvas& c = gfx::strip();
+  c.fillRect(0, 0, kZoneW, kTransportH, col::BG);
+  drawPlayButton(c, kZoneW / 2, kTransportH / 2, pressed_ == PlayPause);
+  gfx::push(c, 2 * kZoneW, kTransportY, kZoneW, kTransportH);
 }
 
 bool NowPlayingPage::emptyState(EmptyState& e) const {
@@ -336,10 +433,11 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   }
   const bool all = !drawn_.valid;
   const bool newTrack = all || s.trackId != drawn_.track || (s.current < 0) != (drawn_.current < 0);
-  if (newTrack) {
-    drawTitle();
-    drawArtistAlbum();
-  }
+  const bool waiting = s.play == PlayState::Waiting;
+  const uint32_t wsig = waiting ? waitSig() : 0;
+  if (!waiting && (pressed_ == WaitSpeaker || pressed_ == WaitCancel)) pressed_ = None;
+  if (newTrack) drawTitle();
+  if (newTrack || waiting != drawn_.waiting || wsig != drawn_.waitSig) drawMiddle();
   // The cover: when the album changes (a track of the same album keeps it).
   if (all || (newTrack && playingAlbum() != drawn_.coverAlbum)) drawCover();
   const uint32_t second = s.positionMs / 1000;
@@ -349,8 +447,19 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       s.current != drawn_.current || s.queueSize != drawn_.size || output != drawn_.output) {
     drawProgress();
   }
-  if (all || s.play != drawn_.play || s.volume != drawn_.volume || s.onBluetooth != drawn_.bluetooth) drawTransport();
+  if (all || s.play != drawn_.play || s.volume != drawn_.volume || s.onBluetooth != drawn_.bluetooth ||
+      output != drawn_.output) {
+    drawTransport();
+    nextSpinMs_ = nowMs + kSpinMs;
+  } else if (waiting && static_cast<int32_t>(nowMs - nextSpinMs_) >= 0) {
+    // The spinner's next step: only its zone.
+    nextSpinMs_ = nowMs + kSpinMs;
+    spin_ = static_cast<uint8_t>((spin_ + 1) % 8);
+    drawPlayZone();
+  }
   drawn_.valid = true;
+  drawn_.waiting = waiting;
+  drawn_.waitSig = wsig;
   drawn_.track = s.trackId;
   drawn_.play = s.play;
   drawn_.second = second;
@@ -370,6 +479,12 @@ NowPlayingPage::Zone NowPlayingPage::zoneAt(const InputEvent& e) const {
     return static_cast<Zone>(Volume + (z < 0 ? 0 : z > 4 ? 4 : z));
   }
   if (e.x < kColumnX && e.y >= kCoverY - 4 && e.y < kCoverY + kCoverPx + 4) return Cover;
+  if (ui_.state().play == PlayState::Waiting && e.x >= kColumnX && e.y >= kArtistY) {
+    // The waiting panel: its text is inert; Cancel reaches the edge.
+    if (e.y < kWaitButtonsY || e.y >= kAlbumY + kAlbumH) return None;
+    const bool cancel = e.atRightEdge() || e.x - kColumnX >= uitext::kWaitCancelX - 3;
+    return cancel ? WaitCancel : WaitSpeaker;
+  }
   if (e.x >= kColumnX && e.y >= kArtistY && e.y < kArtistY + kArtistH) return Artist;
   if (e.x >= kColumnX && e.y >= kAlbumY && e.y < kAlbumY + kAlbumH) return Album;
   return None;
@@ -440,6 +555,7 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
   if (e.type == T::Down) {
     pressed_ = z;
     if (z == Artist || z == Album) drawArtistAlbum();
+    if (z == WaitSpeaker || z == WaitCancel) drawWaiting();
     if (z >= Volume) drawTransport();
     return;
   }
@@ -447,10 +563,19 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
   const Zone was = pressed_;
   pressed_ = None;
   if (was == Artist || was == Album) drawArtistAlbum();
+  if (was == WaitSpeaker || was == WaitCancel) drawMiddle();  // (the wait may have ended meanwhile)
   if (was >= Volume) drawTransport();
   if (e.type != T::Tap || was == None) return;
   ui_.tick();
   switch (was) {
+    case WaitSpeaker:
+      Serial.println("[ui] now playing: play on the speaker (the wait for the headphones)");
+      ui_.host().playOnSpeaker();
+      break;
+    case WaitCancel:
+      Serial.println("[ui] now playing: cancel the wait for the headphones");
+      if (ui_.state().play == PlayState::Waiting) ui_.host().playPause();
+      break;
     case Cover:
     case Album: goToLibrary(Go::Album); break;
     case Artist: goToLibrary(Go::Artist); break;
@@ -460,7 +585,8 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
       ui_.host().prev();
       break;
     case PlayPause:
-      Serial.println("[ui] now playing: play/pause");
+      Serial.println(ui_.state().play == PlayState::Waiting ? "[ui] now playing: cancel the wait"
+                                                            : "[ui] now playing: play/pause");
       ui_.host().playPause();
       break;
     case Next:

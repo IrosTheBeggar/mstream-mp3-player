@@ -64,6 +64,15 @@ void BtSession::cancel() {
   answered_ = answeredPairing_ = false;
 }
 
+void BtSession::withdraw(bool failed) {
+  if (wanted_ && pairing_) return;
+  wanted_ = false;
+  sawTrying_ = false;
+  awaitNewLink_ = false;
+  answered_ = answeredPairing_ = false;
+  if (failed) failed_ = true;  // (pairing_ stays: a failed pairing's card says so)
+}
+
 void BtSession::pairStarted(uint32_t nowMs) {
   wanted_ = true;
   failed_ = false;

@@ -635,7 +635,9 @@ void OutputPage::onCardButton(BtButton b) {
     case BtButton::Cancel: ui_.host().btDisconnect(); break;
     case BtButton::Disconnect:
       ui_.host().btDisconnect();
-      ui_.toast(s.play == PlayState::Playing && s.onBluetooth ? "Disconnected: paused on the speaker" : "Disconnected",
+      ui_.toast((s.play == PlayState::Playing || s.play == PlayState::Waiting) && s.onBluetooth
+                    ? "Disconnected: paused on the speaker"
+                    : "Disconnected",
                 false);
       break;
     case BtButton::Forget:

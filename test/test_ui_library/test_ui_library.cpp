@@ -433,6 +433,37 @@ void test_output_texts_fit() {
   fits(small, v, kAboutValueW);
 }
 
+// Now Playing while play waits for the headphones (PlayGate): the panel's
+// lines and buttons, the notice's buttons, and the output line that says
+// they aren't connected.
+void test_waiting_texts_fit() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
+  const int panelW = 320 - 112;  // the artist and album bands
+  fits(small, "Waiting for SPYDRONE\xE2\x80\xA6", kWaitTextW);
+  fits(small, "Waiting for WH-1000XM4\xE2\x80\xA6", kWaitTextW);
+  fits(small, "Waiting for the headphones\xE2\x80\xA6", kWaitTextW);
+  fits(small, "try 3 of 3", kWaitTextW);
+  fits(small, "looking for them", kWaitTextW);
+  TEST_ASSERT_TRUE(kWaitTextX + kWaitTextW <= panelW);
+  fits(body, kPlayOnSpeaker, kWaitSpeakerW - kWaitButtonPad);
+  fits(body, kWaitCancel, kWaitCancelW - kWaitButtonPad);
+  TEST_ASSERT_TRUE(kWaitSpeakerX + kWaitSpeakerW < kWaitCancelX);
+  TEST_ASSERT_TRUE(kWaitCancelX + kWaitCancelW <= panelW - 2);
+  // The notice (a Dialog): its title, its buttons (the primary in Bold; a
+  // label too wide for Body is drawn in Small).
+  fits(bold, "Couldn't reach SPYDRONE", kDialogTitleW);
+  TEST_ASSERT_TRUE(body.width(kPlayOnSpeaker) > kDialogButtonTextW);
+  fits(small, kPlayOnSpeaker, kDialogButtonTextW);
+  fits(bold, "Try again", kDialogButtonTextW);
+  // The progress line's middle.
+  fits(small, "SPYDRONE (not connected)", kNowPlayingMidW);
+  fits(small, "Waiting, 24 of 86", kNowPlayingMidW);
+  fits(small, "24 of 86 \xC2\xB7 SPYDRONE", kNowPlayingMidW);
+  // ... clear of the times either side (x 12 and 308), long ones too.
+  TEST_ASSERT_TRUE(12 + small.width("88:88") + 4 <= 160 - kNowPlayingMidW / 2);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_jump_letters_match_the_index_buckets);
@@ -448,5 +479,6 @@ int main(int, char**) {
   RUN_TEST(test_empty_state_texts_fit);
   RUN_TEST(test_queue_texts_fit);
   RUN_TEST(test_output_texts_fit);
+  RUN_TEST(test_waiting_texts_fit);
   return UNITY_END();
 }

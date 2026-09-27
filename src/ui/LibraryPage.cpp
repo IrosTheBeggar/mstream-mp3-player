@@ -690,7 +690,14 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
     case 0:
       ok = p.playNow(span.ids, span.count, start >= 0 ? static_cast<uint32_t>(start) : 0);
       if (ok) ui_.added().clear();  // a new queue: nothing "added" to show in it
-      snprintf(text, sizeof(text), "Playing: %s", start >= 0 ? what : name);
+      if (ok && p.state() == PlayState::Waiting) {
+        // The headphones aren't connected: it plays once they are (Now
+        // Playing shows the wait, and its way out).
+        const char* them = ui_.state().btName[0] ? ui_.state().btName : "the headphones";
+        snprintf(text, sizeof(text), "Waiting for %s: %s", them, start >= 0 ? what : name);
+      } else {
+        snprintf(text, sizeof(text), "Playing: %s", start >= 0 ? what : name);
+      }
       break;
     case 1:
       ok = p.playNext(span.ids, span.count);
