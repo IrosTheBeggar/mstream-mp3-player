@@ -20,8 +20,9 @@
 //     they do.
 //
 // The feedback, as the user chose it: a tap tick (33 ms, strong) and, the
-// moment a hold is recognised, a double tick. The buttons' it plays itself
-// (every click and hold of theirs does something). The glass's is played by
+// moment a hold is recognised, a double tick. The buttons' is played once
+// ButtonPolicy has acted (buttonFeedback()): a click with nothing to play
+// gets a short double buzz instead ("inert", spec §4 and §7). The glass's is played by
 // whatever acts on the touch (tapTick(), holdTick()), so a tap on nothing,
 // or a long press on a control that has no hold, doesn't confirm anything.
 // Nothing on scroll frames; the A-Z rail asks for a tick per new letter
@@ -65,6 +66,14 @@ public:
   void tapTick();
   // A long press did something (it has a hold action): the double tick.
   void holdTick();
+  // A touch button's event once ButtonPolicy has handled it: the tick for
+  // a click, the double tick for a hold; `acted` false (a click with
+  // nothing to play): the inert buzz.
+  void buttonFeedback(const InputEvent& e, bool acted);
+  // Not a touch's: the headphones asked for are connected (the double
+  // tick), or dropped while playing (one long buzz, 80 ms).
+  void connectedTick();
+  void alertBuzz();
   // Whether holdTick() was called since the last call (the Ui: a long press
   // nobody used ends as a tap).
   bool takeHoldUsed();
@@ -95,7 +104,6 @@ private:
   static constexpr int kQueue = 8;
 
   void push(const InputEvent& e);
-  void feedback(const InputEvent& e);
   void saveFlag(const char* key, bool on);
 
   Haptics& haptics_;

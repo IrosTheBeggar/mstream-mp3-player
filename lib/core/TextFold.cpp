@@ -270,6 +270,13 @@ char railKey(const char* s) {
   return '#';
 }
 
+char secondKey(const char* s) {
+  Cursor c(s);
+  if (c.next() == 0) return '#';
+  const char second = lower(c.next());
+  return isAlpha(second) ? second : '#';
+}
+
 int bucketOf(char key) {
   if (key >= 'A' && key <= 'Z') return 1 + (key - 'A');
   if (key >= 'a' && key <= 'z') return 1 + (key - 'a');

@@ -7,7 +7,9 @@
 #include "KineticScroll.h"
 #include "ListLayout.h"
 #include "NavModel.h"
+#include "ui/EmptyState.h"
 #include "ui/Fonts.h"
+#include "ui/Icons.h"
 #include "ui/Input.h"
 #include "ui/ListScroller.h"
 
@@ -40,7 +42,21 @@
 //     pushed full width over it), and drawn again when it settles, or at
 //     once when a finger lands on the rail (x 280 to the edge). A drag on it
 //     scrubs (a tick per new letter; resting on it first is no hold); a tap
-//     only stops the list (the jump grid will be the tap's).
+//     opens the jump grid (the RailHost's: the Ui's overlay).
+//
+// A move is drawn in steps of at most kMaxStep lines a frame, the hardware
+// scroll's one-hold step: a finger faster than that (over ~2,500 px/s at
+// 30 fps; only flings are capped, at 2,000 px/s) used to make a frame of a
+// full redraw (50-78 ms on the device); now the list trails the finger by a
+// frame or two and catches up when it slows. Jumps (a scroll to a row, the
+// rail, a page's first frame) still draw at once.
+//
+// The band is y 72-239 (kHeight), or shorter (setHeight(): the Queue's
+// selection mode keeps y 198-239 for its bar; the LCD's scroll band ends
+// above it, so the bar stays put while the list scrolls).
+//
+// An empty list shows its source's empty state (ui/EmptyState: "Your
+// queue is empty" with its buttons), or a line of text.
 //
 // Each page's scroll position and expanded row are kept in its nav entry
 // (NavModel::PageRef): attach() restores them, detach() saves them.
@@ -63,7 +79,9 @@ public:
 
   // What a row renderer gets: the sprite (cleared to `bg`), and the
   // columns: content from x to right (a checkbox before x in selection
-  // mode, the rail's column after right).
+  // mode, the rail's column after right). `pressX`: where the finger is
+  // on a pressed row (a row with buttons of its own highlights the one
+  // under it), -1 otherwise.
   struct Row {
     M5Canvas& c;
     uint32_t row;
@@ -73,6 +91,7 @@ public:
     bool pressed;
     bool expanded;
     bool selected;
+    int pressX;
   };
   enum class Tap : uint8_t { Handled, Expand };
 
@@ -100,6 +119,22 @@ public:
       (void)row;
       return Tap::Handled;
     }
+    // The same, with where on the row it was tapped (a row with buttons of
+    // its own: the Output card's). `rightEdge`: a reading clamped at the
+    // screen's edge. Default: onTap().
+    virtual Tap onTapAt(uint32_t row, int x, bool rightEdge) {
+      (void)x;
+      (void)rightEdge;
+      return onTap(row);
+    }
+    // The empty list's state (the disc, the title, the buttons); false:
+    // just emptyText().
+    virtual bool emptyState(EmptyState& e) {
+      (void)e;
+      return false;
+    }
+    // A tap on its button `i`.
+    virtual void onEmptyAction(int i) { (void)i; }
     // Whether a long press on the row does something (onHold): only then
     // is it a hold (the double tick); else it ends as a tap.
     virtual bool holds(uint32_t row) {
@@ -120,13 +155,43 @@ public:
     }
     // Shown in the band when there are no rows.
     virtual const char* emptyText() { return "Nothing here"; }
+    // The rail's rows: the first railRows() rows are sorted by name (the
+    // rest, a folder's files after its folders, aren't in the jump grid).
+    virtual uint32_t railRows() { return rows(); }
+    // The sorted name of a rail row (the jump grid's keys).
+    virtual const char* railName(uint32_t row) {
+      (void)row;
+      return "";
+    }
+    // What the jump grid says it jumps in ("Artists").
+    virtual const char* jumpTitle() { return ""; }
+    // The row holds what plays now (opened from Now Playing): tinted.
+    virtual bool tinted(uint32_t row) {
+      (void)row;
+      return false;
+    }
 
   protected:
     ~Source() = default;
   };
 
+  // A tap on the A-Z rail: the jump grid (the Ui opens it).
+  class RailHost {
+  public:
+    virtual void onRailTap() = 0;
+
+  protected:
+    ~RailHost() = default;
+  };
+
   // The row sprites and the rail's (PSRAM). False: no memory.
   bool begin(ListScroller& scroller, Input& input);
+  // The band's height (kHeight, or less: y 72 to 72 + h). The Ui sets the
+  // LCD's scroll band to match first.
+  void setHeight(int h);
+  int height() const { return height_; }
+  void setRailHost(RailHost* host) { railHost_ = host; }
+  Source* source() const { return src_; }
 
   // Shows `src`, where its page was (ref's scrollPx, or `defaultOffset` the
   // first time; its expanded row). The band is redrawn at the next frame.
@@ -148,6 +213,8 @@ public:
   void collapse();
   // Something else drew over the band: all of it is drawn again.
   void invalidate();
+  // The empty state changed (its buttons, a press): drawn again.
+  void redrawEmpty() { if (src_ && layout_.rows() == 0) drawEmpty(); }
 
   // Every loop pass while the page is up. `frameDue`: a frame may be drawn
   // (the UI's 30 fps cadence); `wholeRows`: the audio is short of time,
@@ -155,14 +222,32 @@ public:
   bool update(uint32_t nowMs, bool frameDue, bool wholeRows);
   // Moving, or owing a frame: the UI keeps its frame cadence.
   bool animating() const;
+  // Between frames while the list moves: the item just past the edge it
+  // moves toward, rendered into a spare slot now, so the frame that
+  // brings it on screen only pushes it. On the device a row's render
+  // (~5 ms) took 20-39 ms when the audio decoder (above the loop) ran in
+  // the middle of it, and that frame then took 35-90 ms; here, that time
+  // falls between frames. The Ui calls it only with a frame's worth of
+  // time left before the next is due. True if it rendered one.
+  bool renderAhead();
   // A glass event of a touch that landed in the band.
   void onEvent(const InputEvent& e);
 
   int32_t offset() const;
+  // Data rows on screen now (drawn or about to be): [first, last]; false
+  // if none.
+  bool visibleRows(uint32_t* first, uint32_t* last) const;
   int32_t expanded() const { return layout_.expanded(); }
   const ListLayout& layout() const { return layout_; }
   const KineticScroll& scroll() const { return scroll_; }
   uint32_t framesDrawn() const { return frames_; }
+  // The last frame's items rendered, the time that took, and its move.
+  struct FrameCost {
+    uint32_t renders = 0, renderUs = 0;
+    int32_t from = 0, to = 0;
+  };
+  const FrameCost& lastFrame() const { return cost_; }
+  uint32_t aheadRenders() const { return aheadRenders_; }
 
   // ---- the standard row pieces (each returns the x after it) ----
   // A number, right-aligned in a 30 px column ("06"); or the playing
@@ -171,8 +256,13 @@ public:
   static int playing(Row& r, uint16_t colour);
   // A 30 px disc with an initial.
   static int disc(Row& r, char initial, uint16_t colour);
-  // The 40 x 40 thumbnail slot (a placeholder until covers are cached).
-  static int thumb(Row& r);
+  // The 40 x 40 thumbnail: `pixels` (big-endian RGB565, ui/Thumbs), or
+  // the placeholder (nullptr: none yet, or no cover).
+  static int thumb(Row& r, const uint16_t* pixels = nullptr);
+  // A 1-bit icon in a 40 px column (a folder, a file).
+  static int icon(Row& r, const icons::Icon& icon, uint16_t colour);
+  // A small outlined badge at the right ("MP3"); returns the new right edge.
+  static int badge(Row& r, const char* text);
   // A chevron at the right; returns the new right edge.
   static int chevron(Row& r);
   // One line (centred) or two (title over subtitle), fitted with "…".
@@ -219,26 +309,34 @@ private:
 
   ListScroller* vs_ = nullptr;
   Input* input_ = nullptr;
+  RailHost* railHost_ = nullptr;
   Slot* slots_ = nullptr;     // PSRAM, kSlots
   M5Canvas* rail_ = nullptr;  // PSRAM, 36 x 168
   Source* src_ = nullptr;
   NavModel::PageRef* ref_ = nullptr;
+  int height_ = kHeight;
   ListLayout layout_;
   KineticScroll scroll_;
   Edge edge_ = Edge::None;
   TouchOn touchOn_ = TouchOn::None;
   int32_t drawnOffset_ = -1;
   bool force_ = true;
+  bool jumped_ = true;  // the next frame goes straight to the offset (not a step at a time)
   bool railWanted_ = false;  // the rail should be on screen this pass
   bool railUp_ = false;      // it is
   bool railDue_ = false;     // prepareFixed() rendered it: pushFixed() pushes it
   int railKeyShown_ = -1;    // the scrub's last letter (a tick at each new one)
   int32_t pressedItem_ = -1;
   int pressedButton_ = -1;
+  int pressedX_ = -1;       // the finger on the pressed row
+  int emptyPressed_ = -1;   // the empty state's button under a finger
   int32_t downItem_ = -1;
   bool dragged_ = false;  // this touch moved the list
   uint32_t keepFirst_ = 0, keepLast_ = 0;
   uint32_t frames_ = 0;
+  FrameCost cost_;
+  int8_t lastDir_ = 0;          // the last frame's move: +1 down the list, -1 up (renderAhead)
+  uint32_t aheadRenders_ = 0;   // renderAhead()'s, for 'ui'
 };
 
 }  // namespace ui

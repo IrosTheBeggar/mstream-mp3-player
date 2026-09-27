@@ -93,3 +93,16 @@ bool LocalStorage::begin() {
   }
   return available();
 }
+
+bool LocalStorage::probeCard() {
+  if (onCard()) return true;
+  const int cs = M5.getPin(m5::pin_name_t::sd_spi_cs);
+  if (!SD.begin(cs, SPI, 25000000, kSdMount)) return false;
+  SD.end();  // only a look: the restart mounts it properly
+  return true;
+}
+
+uint64_t LocalStorage::totalBytes() const {
+  if (!available()) return 0;
+  return onCard() ? SD.totalBytes() : LittleFS.totalBytes();
+}

@@ -52,5 +52,10 @@ int compare(const char* a, const char* b);
 char railKey(const char* s);
 // '#' -> 0, 'A'..'Z' -> 1..26 (27 buckets, in the order compare() sorts them).
 int bucketOf(char key);
+// The jump grid's second level ("Ka", "Ke"...): the second character,
+// folded and lower-cased, when it is a letter; '#' otherwise (a digit, a
+// symbol, a space, or no second character). Within one railKey() its
+// bucket (bucketOf) never goes down in compare() order.
+char secondKey(const char* s);
 
 }  // namespace textfold

@@ -44,13 +44,26 @@ bool ListView::begin(ListScroller& scroller, Input& input) {
     if (!rail_) return false;
     rail_->setPsram(true);
     rail_->setColorDepth(16);
-    if (!rail_->createSprite(kRailW, kHeight)) {
+    if (!rail_->createSprite(kRailW, kHeight)) {  // the tallest band
       psramDelete(rail_);
       rail_ = nullptr;
       return false;
     }
   }
   return true;
+}
+
+void ListView::setHeight(int h) {
+  h = std::max(kPitch, std::min(kHeight, h));
+  if (h == height_) return;
+  height_ = h;
+  if (src_) {
+    setEdge();
+    scroll_.setExtent(static_cast<float>(layout_.contentPx()), height_);
+    scroll_.jumpTo(static_cast<float>(ListLayout::clamp(offset(), layout_.maxOffset(height_))));
+    jumped_ = true;
+  }
+  invalidate();
 }
 
 void ListView::dropSlots() {
@@ -66,8 +79,8 @@ void ListView::dropSlots() {
 // ---- attaching, data changes ----
 
 void ListView::setEdge() {
-  const bool long_ = layout_.contentPx() > kHeight;
-  if (src_ && src_->alphabetical() && layout_.rows() > kRailMinRows && long_) {
+  const bool long_ = layout_.contentPx() > height_;
+  if (src_ && src_->alphabetical() && src_->railRows() > kRailMinRows && long_) {
     edge_ = Edge::Rail;
   } else if (long_) {
     edge_ = Edge::Bar;
@@ -82,15 +95,18 @@ void ListView::attach(Source* src, NavModel::PageRef* ref, int32_t defaultOffset
   touchOn_ = TouchOn::None;
   pressedItem_ = downItem_ = -1;
   pressedButton_ = -1;
+  pressedX_ = -1;
+  emptyPressed_ = -1;
   railKeyShown_ = -1;
   layout_ = ListLayout();
   layout_.set(src->rows(), src->topBar());
   const int32_t exp = ref ? ref->expanded : -1;
-  if (exp >= 0 && static_cast<uint32_t>(exp) < layout_.rows()) layout_.setExpanded(exp, 0, kHeight);
+  if (exp >= 0 && static_cast<uint32_t>(exp) < layout_.rows()) layout_.setExpanded(exp, 0, height_);
   setEdge();
-  scroll_.setExtent(static_cast<float>(layout_.contentPx()), kHeight);
+  scroll_.setExtent(static_cast<float>(layout_.contentPx()), height_);
   const int32_t want = ref && ref->scrollPx >= 0 ? ref->scrollPx : defaultOffset;
-  scroll_.jumpTo(static_cast<float>(ListLayout::clamp(want, layout_.maxOffset(kHeight))));
+  scroll_.jumpTo(static_cast<float>(ListLayout::clamp(want, layout_.maxOffset(height_))));
+  jumped_ = true;
   invalidate();
 }
 
@@ -122,8 +138,8 @@ void ListView::reload() {
   layout_.set(src_->rows(), src_->topBar());
   if (exp >= 0 && layout_.expanded() < 0) pressedItem_ = -1;
   setEdge();
-  scroll_.setExtent(static_cast<float>(layout_.contentPx()), kHeight);
-  if (!scroll_.moving()) scroll_.jumpTo(static_cast<float>(ListLayout::clamp(offset(), layout_.maxOffset(kHeight))));
+  scroll_.setExtent(static_cast<float>(layout_.contentPx()), height_);
+  if (!scroll_.moving()) scroll_.jumpTo(static_cast<float>(ListLayout::clamp(offset(), layout_.maxOffset(height_))));
   invalidate();
 }
 
@@ -144,21 +160,43 @@ void ListView::refreshRow(uint32_t row) {
 int32_t ListView::offset() const { return static_cast<int32_t>(std::lround(scroll_.offset())); }
 
 void ListView::scrollTo(int32_t off) {
-  scroll_.jumpTo(static_cast<float>(ListLayout::clamp(off, layout_.maxOffset(kHeight))));
+  scroll_.jumpTo(static_cast<float>(ListLayout::clamp(off, layout_.maxOffset(height_))));
+  jumped_ = true;
 }
 
-void ListView::scrollToRow(uint32_t row) { scrollTo(layout_.topOf(layout_.itemOfRow(row), kHeight)); }
+bool ListView::visibleRows(uint32_t* first, uint32_t* last) const {
+  if (!src_ || layout_.rows() == 0) return false;
+  const int32_t off = std::max<int32_t>(0, offset());
+  const int32_t i0 = layout_.itemAt(off);
+  int32_t i1 = layout_.itemAt(off + height_ - 1);
+  if (i1 < 0) i1 = static_cast<int32_t>(layout_.itemCount()) - 1;
+  if (i0 < 0 || i1 < i0) return false;
+  int32_t r0 = -1, r1 = -1;
+  for (int32_t i = i0; i <= i1; ++i) {
+    const ListLayout::Item it = layout_.item(static_cast<uint32_t>(i));
+    if (it.kind != ListLayout::Kind::Row) continue;
+    if (r0 < 0) r0 = it.row;
+    r1 = it.row;
+  }
+  if (r0 < 0) return false;
+  *first = static_cast<uint32_t>(r0);
+  *last = static_cast<uint32_t>(r1);
+  return true;
+}
 
-void ListView::revealRow(uint32_t row) { scrollTo(layout_.reveal(layout_.itemOfRow(row), offset(), kHeight)); }
+void ListView::scrollToRow(uint32_t row) { scrollTo(layout_.topOf(layout_.itemOfRow(row), height_)); }
+
+void ListView::revealRow(uint32_t row) { scrollTo(layout_.reveal(layout_.itemOfRow(row), offset(), height_)); }
 
 void ListView::collapse() {
   if (layout_.expanded() >= 0) setExpanded(-1);
 }
 
 void ListView::setExpanded(int32_t row) {
-  const int32_t o = layout_.setExpanded(row, offset(), kHeight);
-  scroll_.setExtent(static_cast<float>(layout_.contentPx()), kHeight);
+  const int32_t o = layout_.setExpanded(row, offset(), height_);
+  scroll_.setExtent(static_cast<float>(layout_.contentPx()), height_);
   scroll_.jumpTo(static_cast<float>(o));
+  jumped_ = true;
   setEdge();
   // Every item from the row down moved: the band is redrawn in place.
   invalidate();
@@ -185,7 +223,10 @@ ListView::Slot* ListView::slotFor(uint32_t item) {
 ListView::Slot* ListView::renderedSlot(uint32_t item) {
   Slot* s = slotFor(item);
   if (s->item != static_cast<int32_t>(item)) {
+    const uint32_t t0 = micros();
     renderItem(s->sprite, item);
+    ++cost_.renders;
+    cost_.renderUs += micros() - t0;
     s->item = static_cast<int32_t>(item);
   }
   return s;
@@ -241,9 +282,12 @@ void ListView::renderItem(M5Canvas& c, uint32_t item) {
   const bool selected = selecting && src_->selected(row);
   const bool pressed = pressedItem_ == static_cast<int32_t>(item);
   const bool expanded = layout_.expanded() == it.row;
-  const uint16_t bg = pressed || expanded ? col::ROW_SEL : selected ? col::SELECTED : col::BG;
+  const uint16_t bg = pressed || expanded ? col::ROW_SEL
+                     : selected           ? col::SELECTED
+                     : src_->tinted(row)  ? col::ROW_SEL
+                                          : col::BG;
   c.fillSprite(bg);
-  Row r{c, row, 0, layoutWidth(), bg, pressed, expanded, selected};
+  Row r{c, row, 0, layoutWidth(), bg, pressed, expanded, selected, pressed ? pressedX_ : -1};
   if (selecting) {
     // The checkbox: an empty ring, or the accent disc with a check.
     if (selected) {
@@ -264,7 +308,7 @@ void ListView::render(int32_t off) {
   const uint32_t n = layout_.itemCount();
   const int32_t top = std::max<int32_t>(off, 0);
   keepFirst_ = static_cast<uint32_t>(top / kPitch);
-  keepLast_ = std::min<uint32_t>(n ? n - 1 : 0, static_cast<uint32_t>((top + kHeight - 1) / kPitch));
+  keepLast_ = std::min<uint32_t>(n ? n - 1 : 0, static_cast<uint32_t>((top + height_ - 1) / kPitch));
   vs_->scrollTo(off, *this);
   if (n == 0) drawEmpty();
 }
@@ -332,7 +376,7 @@ void ListView::prepareFixed(int32_t off) {
 void ListView::pushFixed() {
   if (!railDue_) return;
   railDue_ = false;
-  vs_->pushAtScreen(*rail_, railX(), kTop, &gfx::holds());
+  vs_->pushAtScreen(*rail_, railX(), kTop, &gfx::holds(), height_);
   railUp_ = true;
 }
 
@@ -343,7 +387,7 @@ void ListView::pushItemInPlace(uint32_t item) {
   const int32_t off = vs_->map().offset();
   const int32_t top = static_cast<int32_t>(item) * kPitch;
   int32_t c = std::max(top, off);
-  const int32_t end = std::min(top + kPitch, off + kHeight);
+  const int32_t end = std::min(top + kPitch, off + height_);
   if (c >= end) return;
   Slot* slot = renderedSlot(item);
   auto& d = M5.Display;
@@ -363,6 +407,11 @@ void ListView::pushItemInPlace(uint32_t item) {
 }
 
 void ListView::drawEmpty() {
+  EmptyState e;
+  if (src_ && src_->emptyState(e)) {
+    drawEmptyState(e, kTop, height_, src_->accent(), emptyPressed_);
+    return;
+  }
   M5Canvas& s = gfx::strip();
   s.fillSprite(col::BG);
   Fonts::instance().draw(s, Font::Body, src_ ? src_->emptyText() : "", kW / 2, 24, kW - 24, col::DIM, col::BG,
@@ -375,23 +424,23 @@ void ListView::drawEmpty() {
 void ListView::drawRailSprite(int32_t off) {
   M5Canvas& s = *rail_;
   s.fillSprite(col::BG);
-  const int32_t maxOff = layout_.maxOffset(kHeight);
+  const int32_t maxOff = layout_.maxOffset(height_);
   if (edge_ == Edge::Bar) {
     // A thin scrollbar, its thumb as long as the share of the list on screen.
-    const int track = kHeight - 8;
-    const int th = std::max(16, static_cast<int>(static_cast<int64_t>(track) * kHeight / layout_.contentPx()));
+    const int track = height_ - 8;
+    const int th = std::max(16, static_cast<int>(static_cast<int64_t>(track) * height_ / layout_.contentPx()));
     const int y = 4 + ListLayout::thumbTop(off, maxOff, track, th);
     s.fillRoundRect(2, y, 3, th, 1, col::FAINT);
     return;
   }
-  const int y = 2 + ListLayout::thumbTop(off, maxOff, kHeight - 4, kThumbH);
+  const int y = 2 + ListLayout::thumbTop(off, maxOff, height_ - 4, kThumbH);
   const int32_t item = std::max<int32_t>(0, off / kPitch);
   const ListLayout::Item it = layout_.item(static_cast<uint32_t>(item));
   const char key[2] = {it.kind == ListLayout::Kind::Row || it.kind == ListLayout::Kind::InlineBar
                            ? src_->railKey(static_cast<uint32_t>(it.row))
                            : src_->railKey(0),
                        0};
-  s.drawFastVLine(22, 4, kHeight - 8, col::DIV);
+  s.drawFastVLine(22, 4, height_ - 8, col::DIV);
   const uint16_t thumb = touchOn_ == TouchOn::Rail ? src_->accent() : col::BTN_HI;
   s.fillRoundRect(11, y, 22, kThumbH, 5, thumb);
   Fonts::instance().draw(s, Font::Bold, key, 22, y + kThumbH / 2, 20, touchOn_ == TouchOn::Rail ? col::DARK : col::TXT,
@@ -399,20 +448,21 @@ void ListView::drawRailSprite(int32_t off) {
 }
 
 void ListView::hideRail() {
-  gfx::fill(railX(), kTop, kW - railX(), kHeight, col::BG);
+  gfx::fill(railX(), kTop, kW - railX(), height_, col::BG);
   railUp_ = false;
 }
 
 void ListView::showRail(int32_t off) {
   if (!rail_ || !vs_->active()) return;
   drawRailSprite(off);
-  gfx::push(*rail_, railX(), kTop, kW - railX(), kHeight);
+  gfx::push(*rail_, railX(), kTop, kW - railX(), height_);
   railUp_ = true;
 }
 
 void ListView::scrub(int y) {
-  const int32_t o = ListLayout::scrubOffset(y - kTop, layout_.maxOffset(kHeight), kHeight, kThumbH);
+  const int32_t o = ListLayout::scrubOffset(y - kTop, layout_.maxOffset(height_), height_, kThumbH);
   scroll_.jumpTo(static_cast<float>(o));
+  jumped_ = true;
   const ListLayout::Item it = layout_.item(static_cast<uint32_t>(o / kPitch));
   const int key = it.row >= 0 ? src_->railKey(static_cast<uint32_t>(it.row)) : 0;
   if (key != railKeyShown_) {
@@ -437,22 +487,62 @@ bool ListView::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   if (!src_ || !slots_) return false;
   scroll_.update(nowMs);
   int32_t off = offset();
-  if (wholeRows && moving()) off = off / kPitch * kPitch;
+  // A step of at most kMaxStep lines a frame (one bus hold of new lines):
+  // a finger faster than that is followed a frame or two late instead of
+  // costing a full redraw. Jumps and redraws in place go straight there.
+  // In whole rows (the governor, when the audio is short of time): the
+  // rounding is part of the step, never on top of it.
+  const bool rows = wholeRows && moving();
+  if (!force_ && !jumped_ && drawnOffset_ >= 0) {
+    off = rows ? ListLayout::stepTowardRows(drawnOffset_, off, kMaxStep, kPitch)
+               : ListLayout::stepToward(drawnOffset_, off, kMaxStep);
+  } else if (rows) {
+    off = off / kPitch * kPitch;
+  }
   // The rail sits in the scrolled band: hidden while the list moves, back
   // once it settles, or at once under a finger.
-  railWanted_ = edge_ != Edge::None && (touchOn_ == TouchOn::Rail || !moving());
+  // (Still catching up with the finger, a step a frame, is moving too.)
+  const bool catchingUp = !force_ && !jumped_ && drawnOffset_ >= 0 && off != offset();
+  railWanted_ = edge_ != Edge::None && (touchOn_ == TouchOn::Rail || (!moving() && !catchingUp));
   if (!railWanted_ && railUp_) hideRail();
   const bool owed = off != drawnOffset_ || force_;
   if (owed && frameDue) {
+    cost_ = FrameCost{};
+    cost_.from = drawnOffset_;
+    cost_.to = off;
+    if (drawnOffset_ >= 0 && off != drawnOffset_) lastDir_ = off > drawnOffset_ ? 1 : -1;
     render(off);
     drawnOffset_ = off;
     force_ = false;
+    jumped_ = false;
     ++frames_;
     if (!moving() && ref_) saveRef();
     return true;
   }
   if (!owed && railWanted_ && !railUp_) showRail(drawnOffset_);
   return false;
+}
+
+bool ListView::renderAhead() {
+  if (!src_ || !slots_ || drawnOffset_ < 0 || force_ || jumped_ || lastDir_ == 0 || !moving()) return false;
+  const auto n = static_cast<int32_t>(layout_.itemCount());
+  if (n == 0) return false;
+  const int32_t first = std::max<int32_t>(0, drawnOffset_ / kPitch);
+  const int32_t last = std::min<int32_t>(n - 1, (drawnOffset_ + height_ - 1) / kPitch);
+  const int32_t next = lastDir_ > 0 ? last + 1 : first - 1;
+  if (next < 0 || next >= n) return false;
+  for (int i = 0; i < kSlots; ++i) {
+    if (slots_[i].item == next) return false;  // ready
+  }
+  // The items on screen keep their slots (the next move pushes the rest of
+  // the edge ones); the spare one takes this.
+  keepFirst_ = static_cast<uint32_t>(first);
+  keepLast_ = static_cast<uint32_t>(last);
+  Slot* s = slotFor(static_cast<uint32_t>(next));
+  renderItem(s->sprite, static_cast<uint32_t>(next));
+  s->item = next;
+  ++aheadRenders_;
+  return true;
 }
 
 // ---- touch ----
@@ -500,7 +590,9 @@ void ListView::tapItem(int32_t item, const InputEvent& e) {
         refreshRow(row);
         break;
       }
-      if (src_->onTap(row) == Tap::Expand) setExpanded(layout_.expanded() == it.row ? -1 : it.row);
+      if (src_->onTapAt(row, e.x, e.atRightEdge()) == Tap::Expand) {
+        setExpanded(layout_.expanded() == it.row ? -1 : it.row);
+      }
       break;
     }
     default:
@@ -511,14 +603,36 @@ void ListView::tapItem(int32_t item, const InputEvent& e) {
 void ListView::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   if (!src_) return;
+  if (layout_.rows() == 0 && layout_.itemCount() == 0) {
+    // The empty state's buttons.
+    EmptyState es;
+    if (!src_->emptyState(es)) return;
+    const int b = emptyStateButtonAt(es, kTop, height_, e);
+    if (e.type == T::Down) {
+      emptyPressed_ = b;
+      if (b >= 0) drawEmpty();
+    } else if (e.type == T::Tap) {
+      const int was = emptyPressed_;
+      emptyPressed_ = -1;
+      if (was >= 0) {
+        drawEmpty();
+        input_->tapTick();
+        src_->onEmptyAction(was);
+      }
+    } else if (e.type == T::DragStart || e.type == T::Release || e.type == T::Cancel) {
+      if (emptyPressed_ >= 0) {
+        emptyPressed_ = -1;
+        drawEmpty();
+      }
+    }
+    return;
+  }
   if (e.type == T::Down) {
     if (edge_ == Edge::Rail && e.inRightEdgeZone(kEdgeHitX)) {
       // The rail comes up at once (railWanted_), the thumb in the accent.
-      // Only a drag scrubs: a tap here doesn't move the list (the spec's
-      // tap is the jump grid, not built yet), so a tap that meant the row's
-      // right end, read at the panel's clamp, loses no place. A finger
-      // resting on it to read the letter is no hold: it still scrubs when
-      // it slides.
+      // A drag scrubs; a tap opens the jump grid (the list doesn't move
+      // under it). A finger resting on it to read the letter is no hold:
+      // it still scrubs when it slides.
       touchOn_ = TouchOn::Rail;
       railKeyShown_ = -1;
       railUp_ = false;
@@ -538,6 +652,7 @@ void ListView::onEvent(const InputEvent& e) {
     scroll_.press(e.ms, e.y);
     // Highlight what's under the finger (only once the list is still).
     downItem_ = layout_.itemAt(offset() + e.y - kTop);
+    pressedX_ = e.atRightEdge() ? kW - 1 : e.x;
     if (downItem_ >= 0 && !wasMoving && drawnOffset_ == offset()) {
       const ListLayout::Item it = layout_.item(static_cast<uint32_t>(downItem_));
       int button = -1;
@@ -552,6 +667,13 @@ void ListView::onEvent(const InputEvent& e) {
   const bool ends = e.type == T::Tap || e.type == T::Release || e.type == T::DragEnd || e.type == T::Cancel;
   if (touchOn_ == TouchOn::Rail) {
     if (e.type == T::DragStart || e.type == T::DragMove) scrub(e.y);
+    if (e.type == T::Tap && railHost_) {
+      input_->tapTick();
+      touchOn_ = TouchOn::None;
+      railUp_ = false;
+      railHost_->onRailTap();  // the jump grid, over the band
+      return;
+    }
     if (ends) {
       touchOn_ = TouchOn::None;
       railUp_ = false;  // redrawn in the resting colours
@@ -622,10 +744,28 @@ int ListView::disc(Row& r, char initial, uint16_t colour) {
   return r.x + 50;
 }
 
-int ListView::thumb(Row& r) {
-  r.c.fillRoundRect(r.x + 6, 1, 40, 40, 4, col::BTN);
-  icons::drawCentred(r.c, icons::kNote, r.x + 26, 21, col::FAINT);
+int ListView::thumb(Row& r, const uint16_t* pixels) {
+  if (pixels) {
+    r.c.pushImage(r.x + 6, 1, 40, 40, reinterpret_cast<const lgfx::swap565_t*>(pixels));
+  } else {
+    r.c.fillRoundRect(r.x + 6, 1, 40, 40, 4, col::BTN);
+    icons::drawCentred(r.c, icons::kNote, r.x + 26, 21, col::FAINT);
+  }
   return r.x + 54;
+}
+
+int ListView::icon(Row& r, const icons::Icon& icon, uint16_t colour) {
+  icons::drawCentred(r.c, icon, r.x + 22, 21, colour);
+  return r.x + 44;
+}
+
+int ListView::badge(Row& r, const char* text) {
+  Fonts& f = Fonts::instance();
+  const int w = f.width(Font::Small, text) + 10;
+  const int x = r.right - 8 - w;
+  r.c.drawRoundRect(x, 12, w, 18, 5, col::FAINT);
+  f.draw(r.c, Font::Small, text, x + w / 2, 21, w - 4, col::DIM, r.bg, Fonts::Align::Centre);
+  return x - 8;
 }
 
 int ListView::chevron(Row& r) {

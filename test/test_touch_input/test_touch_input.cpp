@@ -291,6 +291,8 @@ struct FakeTransport : ButtonPolicy::Transport {
   std::string log;
   bool isPlaying = true;
   bool bluetooth = true;
+  bool audioBt = true;  // false: asked for, the audio still on the speaker
+  bool empty = false;
   bool allowSwitch = true;
   int vol = 50;
   void prev() override { log += "prev;"; }
@@ -312,6 +314,8 @@ struct FakeTransport : ButtonPolicy::Transport {
   }
   int volume() const override { return vol; }
   bool onBluetooth() const override { return bluetooth; }
+  bool audioOnBluetooth() const override { return bluetooth && audioBt; }
+  bool idle() const override { return empty; }
   bool switchOutput() override {
     if (!allowSwitch) {
       log += "refused;";
@@ -403,6 +407,38 @@ void test_policy_b_hold_to_the_speaker_pauses_first() {
   p.handle(button(T::Hold, 1, 9000), t);
   TEST_ASSERT_EQUAL_STRING("refused;", t.log.c_str());
   TEST_ASSERT_TRUE(p.feedback().refused);
+}
+
+// Headphones asked for, not connected yet: the music still plays on the
+// speaker. A B hold cancels them and leaves it playing (as the Output
+// tab's Speaker row does); only music on the headphones is paused first.
+void test_policy_b_hold_cancelling_a_connection_keeps_the_speaker_playing() {
+  ButtonPolicy p;
+  using T = InputEvent::Type;
+  FakeTransport t;
+  t.bluetooth = true;  // on its way
+  t.audioBt = false;   // the audio on the speaker meanwhile
+  t.isPlaying = true;
+  p.handle(button(T::Hold, 1, 600), t);
+  TEST_ASSERT_EQUAL_STRING("to-speaker;", t.log.c_str());
+  TEST_ASSERT_TRUE(t.isPlaying);
+  TEST_ASSERT_FALSE(p.feedback().paused);
+  TEST_ASSERT_FALSE(p.feedback().toBluetooth);
+}
+
+// Nothing to play: the clicks are inert (false: the "inert" buzz); the
+// volume holds still work.
+void test_policy_clicks_with_nothing_to_play_are_inert() {
+  ButtonPolicy p;
+  using T = InputEvent::Type;
+  FakeTransport t;
+  t.empty = true;
+  TEST_ASSERT_FALSE(p.handle(button(T::Click, 0), t));
+  TEST_ASSERT_FALSE(p.handle(button(T::Click, 1), t));
+  TEST_ASSERT_FALSE(p.handle(button(T::Click, 2), t));
+  TEST_ASSERT_EQUAL_STRING("", t.log.c_str());
+  TEST_ASSERT_TRUE(p.handle(button(T::Hold, 2, 500), t));
+  TEST_ASSERT_EQUAL_STRING("vol5;", t.log.c_str());
 }
 
 // ---- TouchRecognizer ----
@@ -605,6 +641,8 @@ int main(int, char**) {
   RUN_TEST(test_policy_clicks_are_transport);
   RUN_TEST(test_policy_holds_step_the_volume);
   RUN_TEST(test_policy_b_hold_to_the_speaker_pauses_first);
+  RUN_TEST(test_policy_b_hold_cancelling_a_connection_keeps_the_speaker_playing);
+  RUN_TEST(test_policy_clicks_with_nothing_to_play_are_inert);
   RUN_TEST(test_touch_tap_and_long_press);
   RUN_TEST(test_touch_no_hold_for_the_rail);
   RUN_TEST(test_touch_drag_and_capped_fling);

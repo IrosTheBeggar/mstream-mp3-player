@@ -66,7 +66,7 @@ const char* const kFiles[] = {
     "/music/Daft Punk/Discovery/01 - One More Time.mp3",
     "/music/Daft Punk/Discovery/03 - Digital Love.mp3",
     "/music/Daft Punk/Discovery/02 - Aerodynamic.mp3",
-    "/music/Daft Punk/Discovery/cover.jpg",  // not audio: skipped
+    "/music/Daft Punk/Discovery/cover.jpg",  // not audio: counted, and the album's cover
     "/music/Daft Punk/Homework/07 - Around the World.flac",
     "/music/Kanye West/Graduation/06 - Can’T Tell Me Nothing.mp3",
     "/music/Kanye West/Graduation/05 - Good Life Feat. T‐Pain.MP3",
@@ -117,14 +117,16 @@ void tearDown() {}
 void test_counts_and_skips() {
   LibraryIndex idx(Heap::alloc, Heap::release);
   TEST_ASSERT_TRUE(idx.begin("/music/"));  // a trailing slash is fine
-  uint32_t added = 0, skipped = 0;
+  uint32_t added = 0, skipped = 0, other = 0;
   for (const char* f : kFiles) {
     const auto r = idx.addFile(f);
     if (r == LibraryIndex::Add::Added) ++added;
     if (r == LibraryIndex::Add::Skipped) ++skipped;
+    if (r == LibraryIndex::Add::Other) ++other;
   }
   TEST_ASSERT_EQUAL_UINT32(kAudio, added);
-  TEST_ASSERT_EQUAL_UINT32(3, skipped);
+  TEST_ASSERT_EQUAL_UINT32(1, skipped);  // outside the root
+  TEST_ASSERT_EQUAL_UINT32(2, other);    // cover.jpg, notes.txt
   TEST_ASSERT_TRUE(idx.finish());
   TEST_ASSERT_TRUE(idx.ready());
   TEST_ASSERT_EQUAL_UINT32(kAudio, idx.trackCount());
@@ -264,6 +266,111 @@ void test_folder_tree() {
   TEST_ASSERT_EQUAL_UINT32(3, disc.count);
   TEST_ASSERT_EQUAL_STRING("01 - One More Time.mp3", idx.trackFileName(disc[0]));
   TEST_ASSERT_EQUAL_STRING("03 - Digital Love.mp3", idx.trackFileName(disc[2]));
+}
+
+// Every file that isn't audio is counted in its folder; the best-named
+// image is the folder's cover; folders with no audio under them are left out.
+void test_other_files_and_covers() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  const char* const files[] = {
+      "/music/Daft Punk/Discovery/back.jpg",
+      "/music/Daft Punk/Discovery/01 - One More Time.mp3",
+      "/music/Daft Punk/Discovery/cover.jpg",
+      "/music/Daft Punk/Discovery/notes.txt",
+      "/music/Air/Moon Safari/AlbumArtSmall.jpg",
+      "/music/Air/Moon Safari/Folder.JPG",
+      "/music/Air/Moon Safari/01 - La femme d'argent.mp3",
+      "/music/Air/Moon Safari/front.jpeg",
+      "/music/Air/Moon Safari/scan.png",
+      "/music/Kavinsky/OutRun/CD1/01 - Prelude.mp3",
+      "/music/Kavinsky/OutRun/CD1/Cover.jpg",
+      "/music/Kavinsky/OutRun/CD2/01 - Bonus.mp3",
+      "/music/Artwork/poster.jpg",  // no audio under it: not a folder in the views
+      "/music/Artwork/Sub/x.png",
+      "/music/Empty/readme",        // no extension: another "other"
+  };
+  for (const char* f : files) idx.addFile(f);
+  TEST_ASSERT_TRUE(idx.finish());
+
+  const LibraryIndex::Span top = idx.subfolders(LibraryIndex::rootFolder());
+  TEST_ASSERT_EQUAL_UINT32(3, top.count);
+  TEST_ASSERT_EQUAL_STRING("Air", idx.folderName(top[0]));
+  TEST_ASSERT_EQUAL_STRING("Daft Punk", idx.folderName(top[1]));
+  TEST_ASSERT_EQUAL_STRING("Kavinsky", idx.folderName(top[2]));
+
+  char buf[128];
+  const uint32_t discovery = findAlbum(idx, "Discovery");
+  const uint32_t df = idx.album(discovery).folder;
+  TEST_ASSERT_EQUAL_UINT16(3, idx.folder(df).otherCount);
+  TEST_ASSERT_EQUAL_UINT8(2, idx.folder(df).imageCount);
+  TEST_ASSERT_EQUAL_UINT8(0, idx.folder(df).imageRank);
+  TEST_ASSERT_EQUAL_UINT32(df, idx.albumCover(discovery));
+  TEST_ASSERT_TRUE(idx.imagePath(df, buf, sizeof(buf)) > 0);
+  TEST_ASSERT_EQUAL_STRING("/music/Daft Punk/Discovery/cover.jpg", buf);
+  TEST_ASSERT_EQUAL_UINT32(1, idx.filesIn(df).count);
+
+  // folder.jpg beats front.jpeg and any other .jpg, whatever the order and case.
+  const uint32_t moon = findAlbum(idx, "Moon Safari");
+  const uint32_t mf = idx.album(moon).folder;
+  TEST_ASSERT_EQUAL_UINT8(3, idx.folder(mf).imageCount);
+  TEST_ASSERT_EQUAL_UINT16(4, idx.folder(mf).otherCount);
+  idx.imagePath(idx.albumCover(moon), buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING("/music/Air/Moon Safari/Folder.JPG", buf);
+
+  // OutRun's own folder has no image: its first disc's cover.
+  const uint32_t outrun = findAlbum(idx, "OutRun");
+  TEST_ASSERT_EQUAL_UINT32(LibraryIndex::kNone, idx.folder(idx.album(outrun).folder).image);
+  idx.imagePath(idx.albumCover(outrun), buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING("/music/Kavinsky/OutRun/CD1/Cover.jpg", buf);
+  // No image at all: no path.
+  TEST_ASSERT_EQUAL_size_t(0, idx.imagePath(LibraryIndex::rootFolder(), buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("", buf);
+}
+
+void test_image_rank() {
+  auto rank = [](const char* n) { return LibraryIndex::imageRank(n, std::strlen(n)); };
+  TEST_ASSERT_EQUAL_UINT8(0, rank("cover.jpg"));
+  TEST_ASSERT_EQUAL_UINT8(0, rank("COVER.JPEG"));
+  TEST_ASSERT_EQUAL_UINT8(1, rank("Folder.jpg"));
+  TEST_ASSERT_EQUAL_UINT8(2, rank("front.jpg"));
+  TEST_ASSERT_EQUAL_UINT8(3, rank("AlbumArt_{X}_Large.jpg"));
+  TEST_ASSERT_EQUAL_UINT8(3, rank("cover2.jpg"));
+  TEST_ASSERT_EQUAL_UINT8(LibraryIndex::kNoImage, rank("cover.png"));
+  TEST_ASSERT_EQUAL_UINT8(LibraryIndex::kNoImage, rank(".jpg"));
+  TEST_ASSERT_EQUAL_UINT8(LibraryIndex::kNoImage, rank("cover"));
+  TEST_ASSERT_EQUAL_UINT8(LibraryIndex::kNoImage, rank("01 - Track.mp3"));
+}
+
+// A folder's whole tree is one run: its own files A-Z, then each
+// subfolder's tree, A-Z; filesIn() is the start of it.
+void test_tree_tracks() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  buildSample(idx);
+  const uint32_t root = LibraryIndex::rootFolder();
+  TEST_ASSERT_EQUAL_UINT32(kAudio, idx.treeTracks(root).count);
+  const LibraryIndex::Span top = idx.subfolders(root);
+  const uint32_t kav = top[6];
+  const LibraryIndex::Span tree = idx.treeTracks(kav);
+  TEST_ASSERT_EQUAL_UINT32(3, tree.count);
+  TEST_ASSERT_EQUAL_STRING("Loose Track.mp3", idx.trackFileName(tree[0]));
+  TEST_ASSERT_EQUAL_STRING("08 - Nightcall.mp3", idx.trackFileName(tree[1]));
+  TEST_ASSERT_EQUAL_STRING("01 - Bonus.mp3", idx.trackFileName(tree[2]));
+  TEST_ASSERT_EQUAL_PTR(tree.ids, idx.filesIn(kav).ids);
+  // No files of its own: an empty filesIn() where its tree starts.
+  const uint32_t dp = top[3];
+  TEST_ASSERT_EQUAL_STRING("Daft Punk", idx.folderName(dp));
+  TEST_ASSERT_EQUAL_UINT32(0, idx.filesIn(dp).count);
+  const LibraryIndex::Span dpTree = idx.treeTracks(dp);
+  TEST_ASSERT_EQUAL_UINT32(4, dpTree.count);
+  TEST_ASSERT_EQUAL_PTR(dpTree.ids, idx.filesIn(idx.subfolders(dp)[0]).ids);
+  TEST_ASSERT_EQUAL_STRING("01 - One More Time.mp3", idx.trackFileName(dpTree[0]));
+  TEST_ASSERT_EQUAL_STRING("07 - Around the World.flac", idx.trackFileName(dpTree[3]));
+  // Every track once, in the root's tree.
+  std::set<uint32_t> seen;
+  const LibraryIndex::Span all = idx.treeTracks(root);
+  for (uint32_t i = 0; i < all.count; ++i) seen.insert(all[i]);
+  TEST_ASSERT_EQUAL_UINT32(kAudio, seen.size());
 }
 
 void test_buckets() {
@@ -524,6 +631,11 @@ void expectSameIndex(const LibraryIndex& a, const LibraryIndex& b) {
     TEST_ASSERT_EQUAL_STRING(pa, pb);
     TEST_ASSERT_EQUAL_UINT32(a.subfolders(f).count, b.subfolders(f).count);
     TEST_ASSERT_EQUAL_UINT32(a.filesIn(f).count, b.filesIn(f).count);
+    TEST_ASSERT_EQUAL_UINT32(a.treeTracks(f).count, b.treeTracks(f).count);
+    TEST_ASSERT_EQUAL_UINT32(a.folder(f).otherCount, b.folder(f).otherCount);
+    a.imagePath(f, pa, sizeof(pa));
+    b.imagePath(f, pb, sizeof(pb));
+    TEST_ASSERT_EQUAL_STRING(pa, pb);
   }
   for (int k = 0; k <= LibraryIndex::kBuckets; ++k) {
     TEST_ASSERT_EQUAL_UINT32(a.bucketStart(LibraryIndex::View::Artists, k),
@@ -636,6 +748,9 @@ int main(int, char**) {
   RUN_TEST(test_paths_round_trip);
   RUN_TEST(test_artist_and_album_views);
   RUN_TEST(test_folder_tree);
+  RUN_TEST(test_other_files_and_covers);
+  RUN_TEST(test_image_rank);
+  RUN_TEST(test_tree_tracks);
   RUN_TEST(test_buckets);
   RUN_TEST(test_memory_comes_from_the_hooks_and_goes_back);
   RUN_TEST(test_out_of_memory_is_clean);

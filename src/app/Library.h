@@ -29,6 +29,7 @@ public:
   bool rebuild();
 
   LibraryIndex* index() { return index_; }
+  LocalStorage& storage() { return storage_; }
   const TrackCatalog& catalog() const { return catalog_; }
   // The [index] report (console g).
   void report() const;

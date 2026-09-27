@@ -25,7 +25,9 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  TouchCalibration  TouchRecognizer  ButtonGesture             |
               |  ButtonPolicy  InputEvent                                     |
               |  NavModel  FrameClock  ListLayout  BitSet  TextFit            |
-              |  TabBarModel  TrackProgress                                   |
+              |  TabBarModel  TrackProgress  JumpIndex                        |
+              |  ThumbCache  ThumbScaler  JpegInfo                            |
+              |  OutputModel  QueueView                                       |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -34,7 +36,9 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  storage/LocalStorage   app/SerialConsole   app/Library        |  M5Unified/M5GFX,
               |  app/QueueStore   ui/Input   ui/CalibrationScreen             |
               |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
-              |         Fonts (VLW DejaVu), Icons, Gfx   ui/BootScreen        |
+              |         Fonts (VLW DejaVu), Icons, Gfx, Thumbs (covers),      |
+              |         EmptyState                                            |
+              |  ui/BootScreen                                                |
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
@@ -49,6 +53,15 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
                                                                         ├─► BtSink: ESP32-A2DP data callback (Bluedroid's BTC task, 44.1 kHz)
                                                                         └─► SpeakerSink: pump task ─► M5.Speaker.playRaw (44.1 kHz out, mono)
 ```
+
+ESP8266Audio's ID3 reader walks the whole ID3v2 tag a byte per read. An
+MP3 with an embedded picture (two Moon Safari tracks on the test card have
+351 KB tags) then took 4 s of CPU on the decode task, above the loop: the
+track started 4 s late and the UI froze as long (seen in the stage-2 device
+soak). A tag over 16 KB is now skipped (the file handed to the decoder
+from its first frame, `[audio] ID3 tag of N KB (a picture?): skipped`); its
+title and artist aren't needed (the library has them). Both tracks now
+start in 23-30 ms.
 
 The rules that keep it deadlock- and glitch-free:
 
@@ -103,6 +116,7 @@ The rules that keep it deadlock- and glitch-free:
 | decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start) |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake |
 | M5.Speaker | 1 | 2 | mixes/resamples to 44.1 kHz mono |
+| cover thumbnails (`thumbs`, ui/Thumbs) | 1 | 1, or 0 while a list moves | only while there are covers to make: made for the first, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device); reads the card in 4 KB pieces; level with the loop while nothing moves (at 0 it shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves, always below the decoder (below) |
 | Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and ~30 dancer frames/s; sleeps 1-5 ms every pass (less while a list frame is due) |
 
 ## Bluetooth
@@ -262,6 +276,54 @@ out what it returns.
   the volume shown; pause from the headphones then play from them within
   3 s; while paused, next on the headphones shows the next track and stays
   paused, and their play then starts it.
+- **The Output screen** (`OutputModel`, host-tested for its decisions;
+  `BtSink` carries them out on BtAppT, the loop only posts asks, retried
+  in order when BtAppT's queue is full). `BtSink::link()` publishes what
+  the link is doing: Off, Paging (the try and of how many: `connect_to()`
+  is overridden to count the library's retries and ours), Scanning,
+  Linked, PairScan, Pairing, and whether a device is remembered. The
+  listener's asks: **connect()** pages the remembered headphones at once
+  (then the library's retries; with none remembered, a scan by name);
+  **disconnect()** lets go (or stops a page) and stops trying: no paging,
+  no scanning, not connectable, and the headphones coming back by
+  themselves are refused, until the next connect(); **startPairScan()**
+  runs inquiry rounds back to back and lists every audio device (class of
+  device: the rendering service or the Audio/Video major class; the name
+  from the result or its EIR) into a `BtScanList` in PSRAM, under a
+  spinlock, connecting to none (the library would connect to the first
+  that matches), while the background cycle is held off; **pairWith()**
+  lets go of the link that is up first, then pages the picked device with
+  the usual tries: it becomes the remembered one (NVS) only once linked,
+  and the sink name becomes its name (so a later scan by name finds it);
+  a pairing that fails puts the old address back in RAM (NVS still has
+  it) and stops there; a Cancel while the old link is still being let go
+  ends the pairing the same way. The Pair list leaves out the headphones
+  linked now (multipoint sets stay discoverable; "pairing" with them only
+  let them go), and picking them anyway just makes them the output.
+  Forget from the screen forgets and disconnects, no restart, and **for
+  good**: a saved flag (NVS `bt_forgot`) stops every scan by name (the
+  boot's, the background cycle's, a B hold's), so the forgotten headphones
+  can't come back by their name; the next pairing clears it (the
+  console's `f` still restarts and scans by name). `BtSession` (main.cpp's)
+  holds what the listener asked: **the audio stays on its output until the
+  headphones they asked for are linked** (the card, Connect, the B hold
+  only connect; the Connected event moves the audio, as it always did,
+  and when it was asked for, a toast "Now playing on SPYDRONE" and two
+  ticks say so), a connection whose tries run out (the link goes on to
+  Scanning or Off) is Failed, and so is a connect with none remembered (a
+  scan by name) after 30 s; a link let go on purpose (Disconnect, Forget,
+  a new pairing) drops without the "lost" dialog (expected for 10 s at
+  most while the link stays up). A pairing started while other headphones
+  are linked only counts a new link (the old one is still up for a
+  moment), and the Connected event and the link's phase, seen in either
+  order, give the same answer (`BtSession::onConnected()`), so the new
+  name is always kept. Every move off the headphones pauses first
+  (Disconnect, Forget, the speaker card, pairing others); a cancelled
+  connection leaves music already on the speaker playing, whether the
+  Speaker row or a B hold cancels it. The
+  card's codec line comes from the SBC configuration ("SBC 44.1 kHz") and
+  the delay report. A pairing scan while headphones stream costs airtime:
+  the Pair screen is the only thing that runs one.
 - **Diagnostics.** Once per connection: the SBC configuration, the delay
   report, the headphones' AVRCP features and notifications, and how long a
   stream took to start. The `s` stats add a `[stats] bt` line: volume and who
@@ -291,7 +353,8 @@ VFS's `readdir`, which names each entry and says whether it's a folder, rather
 than Arduino's `File::openNextFile()`, which opens every entry and so searches
 its directory again for each file (the UI spike measured that walk at ~5.7 ms a
 file). The player's own files live in `/.player` on the same volume:
-`library.idx` (the index's cache) and `queue.txt`.
+`library.idx` (the index's cache), `queue.txt`, and `thumbs/` (the album
+covers' thumbnails, below).
 
 ## Library and queue
 
@@ -314,6 +377,18 @@ the browsing UI hold its **track ids**, never strings.
   which is saved (written aside, then renamed over the old one). Any file
   added, removed or renamed under `/music` rebuilds it. Console `g0` rebuilds
   it on request.
+- **Folders and covers**: every file under `/music` that isn't audio is
+  counted in its folder (the Folders view lists only folders and audio
+  files, and says "14 audio files, 1 other"), and a folder's cover image is
+  picked from them by name: `cover.jpg`, then `folder.jpg`, then
+  `front.jpg`, then any other `.jpg`/`.jpeg` (`imageRank()`; the largest of
+  several such is picked when the cover is made). An album's cover is its
+  folder's, else its first track's folder's (a disc subfolder). A folder
+  with no audio anywhere under it (artwork alone) is left out of the folder
+  views. A folder's whole tree is one run of the tracks-by-folder view
+  (`treeTracks()`: its own files A-Z, then each subfolder's tree), which is
+  what a folder's Play plays. (The cache file's version went to 2 with the
+  36-byte folder record: an old cache is rebuilt once.)
 - **The queue** (`QueueModel`, host-tested): track ids in a PSRAM array (8 B an
   entry with its key), a current position, and one level of undo. Its edits
   are the design's Library and Queue actions: Play (replace the queue, start at
@@ -417,7 +492,8 @@ layer is suspended).
   on anything else is no hold: its lift, where it pressed, is a tap (the Ui
   converts it). Nothing on scroll frames, and optionally a tick per new
   letter on the A-Z rail (`railTick()`). Both can be turned off (`ah0`,
-  `ar0`; NVS keys `haptics`, `railtick`). `Haptics` plays patterns from a
+  `ar0`, and the haptics also on the Output tab; NVS keys `haptics`,
+  `railtick`). `Haptics` plays patterns from a
   FreeRTOS timer, so a tick lasts its length whatever the loop does.
 
 The layer costs ~660 B of internal RAM (an 8-event queue, the tables, the
@@ -428,8 +504,10 @@ recognisers); the calibration screen is in PSRAM.
 The tab bar design (the design review's winner, with its grafts and the
 user's measurements), built as a framework the screens sit on:
 `ui/Ui` owns the display, `ui/TabBar`, `ui/ListView` and `ui/Overlays` are
-its widgets, and five first pages exercise them (the real screens come
-next).
+its widgets, `ui/Thumbs` makes the album covers, `ui/EmptyState` draws the
+empty and error states, and the five tabs' pages sit on them, all as the
+spec has them with the review's grafts: Now Playing, the Library, the
+Queue, Dance and Output (with its Pair and About pages).
 
 - **One owner, on the loop task.** The UI is the only thing that draws
   (while no other screen has taken the display: the touch calibration or a
@@ -475,17 +553,63 @@ next).
   Bluetooth state (cyan connected, amber connecting, red lost). The Library
   icon is a record half out of its sleeve, unlike Now Playing's bars. Only
   the cells whose state changed are drawn (a 54x36 push, ~1 ms).
-- **Overlays**: the **toast** (one line, with Undo for 4 s after a queue
-  edit, else 1.8 s) sits at the **top of the content area** (y 36-71, over
-  the page header: the usability walk found the spec's bottom toast right
-  above BtnC); the pages' drawing leaves those rows alone while it's up
-  (`gfx::setCover`), and the header is redrawn when it goes. The **volume
+- **Texts that must fit**: the fixed texts with a fixed room (the coach
+  cards, the empty states' buttons, the Queue's bar, the Output tab's
+  buttons, status lines and hints, the two-line toast's name) are in
+  `lib/core/UiText.h` next to their room, and `test_ui_library` measures
+  each with the firmware's own DejaVu data (as it does the tab bar's), so
+  a label cut to "Remov…" or "Tap ag…" on the device fails a host test.
+- **Overlays**: the **toast** (with Undo for 4 s after a queue edit, else
+  1.8 s) sits at the **top of the content area** (y 36-71, over the page
+  header: the usability walk found the spec's bottom toast right above
+  BtnC); the pages' drawing leaves those rows alone while it's up
+  (`gfx::setCover`), and the header is redrawn when it goes. One line when
+  it fits; "Plays next: <name>" whose name doesn't fit beside View and
+  Undo (54 px pills, their hit areas 190-249 and 250 to the edge) takes
+  two lines, "Plays next" small over the name, and the buttons become
+  icons (Undo's arrow, View as the Queue tab's icon; hit areas 228-263 and
+  264 to the edge), so the name has 216 px (Body, else Small): "Can'T
+  Tell Me Nothing" and "Harder, Better, Faster, Stronger" both fit. It
+  stays 36 px tall: a taller toast would reach the list's hardware-scrolled
+  band, which carries whatever is in it along with the list. The header's
+  ‹ (and its pill, when the toast has no buttons) still works under it: a
+  touch there hides the toast and goes to the page. **Sheets** have a ✕
+  pill in their title row, all rows alike but a main choice (the Library's
+  Play, Bold in the accent) and one that can't be taken back (red). The
+  **volume sheet**
+  (Now Playing's volume button; mockup 04): from y 124, the output and its
+  volume, − and + (to the edge), a slider to tap or drag in 5 % steps
+  (nothing changes on touch-down, and a touch in its first 300 ms is
+  ignored: a quick second tap on the chip that opened it would land on
+  the slider); closes 3 s after the last change, on a tap above it or a
+  tab. Its steps
+  go through the host's `stepVolume()` as the buttons' do (relative to the
+  last one asked for, since Bluetooth applies them on its own task: the
+  volume read back lags a drag), so AbsVolumePolicy and BtControl see
+  nothing new. The **jump grid** (a tap on the A-Z rail; mockup 08) covers
+  the content: '#', A-Z in 7 x 4 cells of 44 x 41, the letters with no rows
+  faint and inert, the list's letter outlined; a letter with more than 16
+  rows opens its second level, the letter and its 26 two-letter starts
+  ("Ka", "Ke", "Ki"... in the library's folding: "Kæthe" is "Ka"), with a
+  way back (`JumpIndex`, host-tested: binary searches on the names, no
+  index, no memory). In 5,000 artists any one is three taps and a short
+  scroll away. The **volume
   HUD** covers the tab bar for 1.5 s after an A/C hold or the headphones'
   volume keys, with or without absolute volume (20 blocks and the value; a
   change within 2 s of connecting is the link-up cap, not shown; a B hold
-  says where the output went and whether it paused); a tap on it still switches the tab. A **sheet**
+  says where the output went and whether it paused); a tap on it still switches the tab. The
+  volume sheet is **per output**: Now Playing's opens the active one's,
+  the Output cards' chips the speaker's or the headphones' whichever
+  plays (`UiHost::stepOutputVolume()`: the active one's as the buttons
+  do, the headphones' as their own keys do, the speaker's directly). The
+  **coach cards** (first boot, once: NVS `ui`/`coach`; About's "Show the
+  tips again" and console `uic`): the three red buttons' clicks and holds,
+  each over its button with an arrow down to its dot, then "tap the tab
+  you're on again: back to its start"; a tap anywhere goes on, a tab tap
+  ends them. A **sheet**
   (from the bottom, never above y 72) and a **dialog** (modal, the tab bar
-  still works) freeze the page under them; one that opens while a finger is
+  still works; optionally an icon, a live status line and a red primary
+  button) freeze the page under them; one that opens while a finger is
   on the page (the headphones' drop dialog) ends that touch for the page (a
   Cancel), so its lift can't act or draw under it. All are opaque and drawn
   through the list's scroll mapping, so they land right over a scrolled
@@ -510,10 +634,38 @@ next).
   settles, or at once when a finger lands on the rail (x 280 to the edge).
   A drag on it scrubs (a haptic tick per new letter); the touch has no hold
   (`TouchRecognizer::noHold()`), so resting on it to read the letter and
-  then sliding still scrubs. A tap there only stops the list: the spec's
-  tap is the jump grid (not built yet), and a tap meant for a row's right
-  end that reads at the panel's clamp no longer jumps the list. A press
-  that only touches the list (a tap) doesn't hide it.
+  then sliding still scrubs. A tap on it opens the jump grid (above). A
+  press that only touches the list (a tap) doesn't hide it. **A move is
+  drawn in steps of at most 84 lines a frame** (the hardware scroll's
+  one-hold step, `ListLayout::stepToward()`): only flings were capped, so a
+  finger faster than ~2,500 px/s made a frame move more than that, a full
+  redraw of 50-78 ms (1 motion in 5 on the device). Now the list trails such
+  a finger by a frame or two (84 lines at 30 fps is 2,520 px/s) and catches
+  up as it slows; flings (2,000 px/s) are never held back, and jumps (a
+  scroll to a row, the rail, a page's first frame) still draw at once. The
+  rail and the scrollbar stay hidden until it has caught up. **The next
+  row is rendered ahead** (`ListView::renderAhead()`): the device showed
+  that the remaining long frames (35-90 ms, in most motions while an MP3
+  played) were not big steps but a single row's render (~5 ms) stretched
+  to 20-39 ms by the audio decoder, which runs above the loop, in the
+  middle of it. So between frames, while a list moves and the next frame
+  is at least 15 ms off, the row just past the edge it moves toward is
+  rendered into the spare slot (5 rows show at most, 6 slots); the frame
+  that brings it on screen only pushes it. Drags and flings then drew in
+  2-5 ms a frame on average, 10-25 ms at most; only very fast drags (over
+  ~3,000 px/s, two new rows in one frame) still have one frame of 35-55
+  ms. `ui` counts the rows rendered ahead. The band can
+  be **shorter** (`Ui::setListBand()`: the Queue's selection mode, 72-197):
+  the LCD's scroll area is defined again with a bottom fixed area
+  (VSCRDEF's BFA), so a bar under the list (198-239) stays put while the
+  list scrolls; the rail's pushes stop at the band's end. An **empty list**
+  shows its source's empty state (a disc and icon, a title, a line or two,
+  up to two buttons, drawn in strips through the scroll mapping): the
+  Queue's "Your queue is empty" (Open Library, Shuffle all), the Library's
+  "No music found" and, with no card, "No microSD card" (Try again). A
+  row can have buttons of its own (the Output card's): the source gets
+  where on the row it was tapped (`onTapAt()`) and where a finger presses
+  (`Row::pressX`).
 - **Text** (`ui/Fonts`, `TextFit`, host-tested): DejaVu Sans 16 and 13 and
   DejaVu Sans Bold 16 and 22 as anti-aliased VLW fonts in flash (~170 KB;
   `tools/vlw_font.py`), which cover ASCII, Latin-1, the common Latin
@@ -522,21 +674,160 @@ next).
   with "…". efont is out of the build (the font probe keeps it behind
   `UI_SPIKE_EFONT`). Licence: `LICENSES/DejaVu-Fonts.txt`.
 - **Icons**: 1-bit bitmaps in flash (`tools/ui_icons.py` -> `IconData.cpp`).
-- **The pages** for now: Now Playing (title, 40 px artist and album bands
-  that open them in the Library at the playing track or its album,
-  progress, transport, a "..." sheet); the Library (artists A-Z, an artist,
-  an album's or an artist's tracks, with Play / Play next / + Queue and Undo
-  toasts; two levels down an "Artists" pill in the header is the root crumb);
-  the Queue (opened on the playing track, and there again with no row open
-  when the queue changed while you were away; a row's bar Play / Play next /
-  Remove; a tap on the title goes to the playing track, the top, the end in
-  turn; selection mode with Remove in the header, away from the touch
-  buttons); Dance (the dancer's
-  box, the beat and the dancer's name around it; no tap zone at the bottom,
-  which sat over BtnC); Output (Bluetooth or the speaker, the volume, the
-  touch calibration, Forget with a confirmation). A Bluetooth drop while
-  playing pauses and opens a dialog ("Use speaker" / OK) that closes itself
-  when they come back.
+- **Now Playing** (spec §6.1, mockups 01-04): the album's cover (96 x 96,
+  its thumbnail, a note until it's made), the title (Bold 22 on up to two
+  lines, else Bold 16 on up to three), the artist and the album as **40 px
+  bands** right of the cover (the review's graft: a tap meant for one never
+  opens the other; the cover is the album's too), the progress and times
+  (between them "4 of 16 · SPYDRONE": where it plays, mockup 01's output
+  line, when it fits), and the transport row (the volume, prev,
+  play/pause, next, "..."). The
+  artist opens the Library at that artist, the album at the album (one Back
+  from its artist), each **scrolled to the playing item and tinted**; "..."
+  is a sheet of Go to artist, Go to album and Show in folders (each with
+  its name, dim, on the right), the last opening the chain of folders down
+  to the track's, one Back apart, the playing file tinted. The volume
+  button opens the volume sheet. Only what changed is redrawn: the cover
+  when the album changes or its thumbnail arrives, the text when the track
+  does, the times once a second, the transport on a change.
+- **The Library** (spec §6.2, mockups 07-15, with the grafts): the root's
+  header is the segmented control **Artists | Albums | Folders** (the root
+  PageRef's id is the segment; each keeps its own scroll; the Library opens
+  on the last one). Artists A-Z (a disc with the initial, "1 album, 14
+  tracks") > an artist (its Play / Play next / + Queue bar, "All tracks",
+  its albums with covers) > an album's or all its tracks. **Albums**: every
+  album A-Z with its 40 x 40 cover and artist. **Folders**: a folder's
+  folders (amber icon, "1 folder, 13 files, 1 other"), then its audio files
+  (a file icon, the name, an MP3/FLAC badge); the header's second line is
+  its counts, whole ("14 audio files, 1 other"), and, when 60 px or more
+  are left beside them, the folder's place cut from the left
+  ("…/Kavinsky"; beside "‹ Library" there is no room, and "/Daft…" said
+  nothing on the device); the root's bar is **"Play all N"** and
+  + Queue instead of a Play that would quietly replace the queue with the
+  whole card. Every container's list starts with its bar; a tapped track
+  or file opens the **inline action row** under it (Play: its album or
+  folder from it, the rest following; Play next and + Queue: it alone);
+  **a long press on any row** gives the same three in a sheet. Deeper than
+  one level the header's pill is **"‹ Library"**, the root crumb. The row
+  holding what plays (its artist, album, track, the folders on its path) is
+  tinted in every list. The rail and the jump grid are on the Artists and
+  Albums lists and on folders of folders, once over 30.
+- **The Queue** (spec §6.4, mockups 16-18, with the grafts): opened on the
+  playing track (tinted, on top; there again with no row open when the
+  queue changed while you were away); the header's summary "4 of 16 · 12
+  up next · 49 min" (`QueueView`: the lengths are learned as tracks play
+  into a `DurationBook`, 2 bytes a track in PSRAM, reset with the library;
+  "49+ min" while some are unknown; "4 of 16 · 49 min" when the long one
+  doesn't fit beside Edit: the position is kept first); a tap on the title goes to the playing track,
+  the top, the end in turn; a row's bar **Play now / Play next / Remove**.
+  **After an add in the Library** (Play next, + Queue) the next visit
+  scrolls to the first added entry and highlights what was added
+  (`AddedMark`: every entry's key only grows, so what came since the first
+  add is every key from that one's; the visit clears it, a Play in the
+  Library clears it, the toast's View does the same at once). **Selection
+  mode** (Edit, or a long press: that row selected): ✕, "2 selected of
+  16", **All**/None, and a bar under a shorter list band: **Remove N**
+  (red, wide enough for "Remove 16"; a bigger count drops the icon, never
+  the number), **Play next** (the selection after the playing entry, in queue
+  order), **Clear...**: a sheet, "Clear up next" (keeps what plays and
+  what played) or "Clear queue" (stops; a dialog with a red Clear asks
+  first). Every edit has Undo on its toast. A track that failed keeps an
+  amber "!" (`KeyRing`, the last 16 entries by key). Empty: "Your queue is
+  empty", Open Library, Shuffle all (`queueview::shuffle()`: the whole
+  library, a random seed, playing).
+- **Output** (spec §6.6, mockups 19-21, with the grafts; a list, so it
+  scrolls): the **Bluetooth card** (two rows; `OutputModel`'s view of the
+  link and the session: No headphones paired [Pair new headphones], Not
+  connected [Connect, Forget], Connecting... try 2 of 3 [Cancel], Looking
+  for SPYDRONE... [Cancel] (also a connect with none remembered),
+  Pairing... [Cancel], Connected "SBC 44.1 kHz, 175 ms" [Disconnect, "...",
+  the volume chip], Couldn't connect [Try again, Forget] (a pairing that
+  failed: [Try again, Connect], the headphones remembered before; none
+  remembered: [Try again, Pair new]), Lost [Cancel]; a spinner while under
+  way. Connected, Forget is not beside Disconnect and the volume: "..."
+  opens a sheet (Disconnect, Pair new headphones, Forget in red, which
+  asks in a dialog). Elsewhere **Forget takes a second tap within 3 s**,
+  the button turning red, "Tap again"; a tap on the card makes it the
+  output, connecting first), the **speaker card** (its own volume chip;
+  "Here until SPYDRONE connects" while they're on their way, "Waits for
+  SPYDRONE" when that doesn't fit; a tap moves the output, pausing
+  first), the **line-out** row
+  (the 3.5 mm / RCA module's place, not fitted yet), **Pair new
+  headphones** (the **Pair** page: "Searching", the audio devices found,
+  their kind and 4 signal bars, in the order found so no row moves under a
+  finger; a tap pairs, after a confirmation when it replaces the
+  remembered pair, and goes back to the card), **Haptics** on/off (the
+  input layer's saved setting), **Touch calibration**, **About** (battery,
+  storage, the library, the headphones, memory, the version, and "Show the
+  tips again"). The tab bar's Output icon is amber while a connection the
+  listener asked for is on its way.
+- **States** (spec §7): no microSD card (and no music on the flash
+  fallback): the Library, and the Queue and Now Playing while nothing is
+  queued, show "No microSD card" and **Try again**, which looks for a card
+  (`LocalStorage::probeCard()`, never inside an LCD hold) and restarts the
+  player to use it (the backend, the library and the queue were set up on
+  the flash); no automatic re-check (an SD init with no card could hold
+  the loop). A card without music: "No music found", Try again walks
+  /music again (the `g0` path). A track that can't be played: an amber
+  note ("Skipped 07 - x: can't play it", from `PlaybackController`'s
+  failure record) and its "!". The headphones lost while playing: paused,
+  a long buzz (80 ms), and the dialog of mockup 23 ("SPYDRONE
+  disconnected. Paused, so the speaker doesn't suddenly play out loud.";
+  a name too long for the title goes into the body; the reconnecting as a
+  live line: "Trying to reconnect: try 2 of 3"), Use speaker (paused: B
+  plays) or OK; it closes itself when they're back, and whatever it was
+  over (the coach cards too) is drawn again. Now Playing with nothing
+  queued: "Nothing playing", Open Library, Shuffle all. With nothing
+  queued the A/B/C clicks are inert: a short double buzz instead of the
+  tap tick (`ButtonPolicy::Transport::idle()`; the input layer plays the
+  buttons' feedback once the policy has acted).
+- **Dance** (the dancer's box, the beat and the dancer's name around it; no
+  tap zone at the bottom, which sat over BtnC).
+- **Album covers** (`ui/Thumbs`, with the host-tested `ThumbCache`,
+  `ThumbScaler`, `JpegInfo`): a page draws a cover with `get()`: the
+  thumbnail, or the placeholder and a request. Where they come from, first
+  that works: the **PSRAM LRU** (64 small, 6 large: ~315 KB), the **card's
+  copy** (`/.player/thumbs/<h>/<hash>.565`: both sizes of one cover, 21.6 KB,
+  8.3 names in 16 subfolders since a FAT folder is searched entry by entry;
+  what the next boot finds), then the **cover image**, decoded once into both
+  sizes (40 x 40 for the lists, 96 x 96 for Now Playing: TJpgDec shrinks
+  by 1/2-1/8 while decoding as far as the larger allows, then a box filter
+  on a centred square) and saved as the card's copy. A **progressive JPEG**
+  (TJpgDec reads baseline only; one of six covers on the test card) or a
+  damaged one keeps the placeholder, is logged once, and gets a
+  header-only file so the next boot doesn't try it again. Requests are
+  served newest first (the rows on screen when a list stops come before the
+  ones it passed; only the last 24 are kept). When one arrives, the Ui has
+  the page redraw what shows that album: a row (`refreshRow`), or Now
+  Playing's cover. **Why a worker task, not work in the loop's idle time:**
+  a decode takes 125-300 ms, and TJpgDec can't stop part-way and carry on
+  later (its entropy decoding runs through the file in one call), so the
+  loop would stop answering the finger for that long. The worker runs on
+  core 1 below the decoder (2), **level with the loop (1) while nothing
+  moves** and at **priority 0 the moment a list moves** (a job is never
+  started then, but one may be under way), so no frame waits for it. (At
+  priority 0 throughout, as first built, it shared what the loop and the
+  decoder left with the idle task: on the device, while an MP3 played, a
+  200 x 200 cover took 0.6-1.5 s and Discovery's 650 x 565 one 2.6 s;
+  level with the loop, 0.36-0.56 s and 1.1 s. Decoding at 1/4 or 1/2 for
+  the 96 px size costs more than the spike's 1/8, which skips the IDCT.)
+  Its card reads are 4 KB each (while it
+  holds the SPI bus or the FAT lock, priority inheritance lifts it, ~3 ms);
+  and **no new job starts while a list moves**. **Its RAM:** a 6 KB stack in
+  internal RAM (a task that reads the card or the flash can't have its
+  stack in PSRAM), only while it lives: it is made for the first job and
+  ends after 3 s without one. It drives lgfx_tjpgd itself with its 3.9 KB
+  work pool **in PSRAM** (M5GFX's `drawJpg()` mallocs it, in internal RAM:
+  with Arduino's File buffers, the spike's 8.6 KB), and reads with POSIX
+  calls (no stdio buffer); the JPEG (read whole, up to 2 MB), the scaler's
+  sums (~170 KB while decoding) and the job are in PSRAM. `ui` prints the
+  cache, the decodes (mean and max ms), failures, the worker's stack
+  high-water mark and the lowest internal RAM free during its jobs; each
+  decode logs `[thumb] <path>: WxH at 1/n, 40 + 96 px in N ms (read R,
+  decode D, card copy W)`; console `uiT` decodes every cover again this
+  session (the card's copies are rewritten), for those timings. A cover
+  replaced under the same name keeps its old thumbnail until
+  `/.player/thumbs` is deleted.
 - **The length of a track** for the progress: the decoders don't expose it,
   so the backend reads it when the track opens (`TrackProgress`, host-tested):
   a FLAC file's from its STREAMINFO, a VBR MP3's from the Xing/Info or VBRI
@@ -547,22 +838,61 @@ next).
   a 5:20 LAME VBR track 15 s in, and 3:30 for a 3:13 FLAC.)
 - **Console** `ui`: each tab's stack with scroll positions, the list's state,
   frames and fps, the governor, the UI's bus holds (count, mean, max), the
-  overlays and the loop task's unused stack. `ui0`-`ui4` tap a tab, `uib` goes
-  back. The screenshot (`X`) reads the list band back through the scroll
+  overlays, the covers (above) and the loop task's unused stack. `ui0`-`ui4`
+  tap a tab, `uib` goes back, `uic` shows the coach cards, `uiT` decodes
+  the covers again (their timings), `uiV` shows the volume HUD, and
+  **`uiF<c/s/p/l/n>`** shows a faked state for screenshots of what a test
+  can't safely cause (display only: the radio and the card are left
+  alone): the Bluetooth card connecting, searching or pairing, the
+  headphones lost (with the dialog), or no card (on Now Playing); `uiF0`
+  the real state. **`uil<n>`**: the Library browses a synthetic
+  library of n tracks (the spike's `g<n>`: 6 artists and 15 albums per 100
+  tracks), to see the lists, the rail and the jump grid at the scale of
+  thousands (the card has 6 artists); look only (its ids aren't the
+  player's: its actions are refused, and it has no covers); `uil0` the
+  card's again (`g0` or a new `g<n>` re-points it). The screenshot (`X`) reads the list band back through the scroll
   offset, as before. For tests without a hand on the device there is a
   **scripted finger** (`Input::simulate`, replacing the panel until it
   lifts; a real touch cancels it): `uit<x>,<y>` a tap, `uih<x>,<y>` a long
   press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` a swipe that lifts at once (a fling
   when fast), `uid...` the same resting 150 ms before the lift (a drag).
-  Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max,
-  ring min, underruns +n, governor` when it settles; every touch logs
+  Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max
+  (n over 35 ms), ring min, underruns +n, governor` when it settles, and a
+  frame over 50 ms logs `[ui] slow frame` with its move and its renders; every touch logs
   `[touch] down/tap/long press/fling x,y (raw x,y)` (with `scripted` for
-  the scripted finger's), and every move of the queue's current entry
-  `[queue] now at n of N (state)`.
+  the scripted finger's), every move of the queue's current entry
+  `[queue] now at n of N (state)`, every tab change (`[ui] tab: Queue`) and
+  every action that plays something (`[ui] queue: play entry n (its row's
+  bar)`, `[ui] now playing: next`, `[ui] library: play 14 tracks`, `[ui]
+  shuffle all: 77 tracks`), every queue edit from the Queue (`[ui] queue:
+  removed 2`, `... to play next`, `... clear up next`, `... cleared`) and
+  every output change (`[output] ...`, `[ui] bluetooth: ...`). `ui` adds
+  the Bluetooth link and session and the queue's marks.
+- **The queue jump seen once (entry 24 to 2, during a screenshot)**: every
+  path that sets the current entry was reviewed. The player moves it only on
+  `play(n)` (the console's `i<n>`, the Queue's row-bar Play), prev/next and a
+  track's end or failure (always ±1, logged by the audio on a failure),
+  `playNow()` (a Library Play: the queue replaced, a toast), a removal of
+  the current entry (a toast), undo (logged) and the queue's restore/remap
+  (boot, `g0`). A jump to entry 2 with the queue's size unchanged is only
+  `play(1)`: the console (it prints `> play 1`; nothing was sent) or **the
+  Queue's row-bar Play, which had no toast and no log line**. The same log
+  shows the Dance tab opening at 341.7 s, 2.5 s after the jump, with no
+  console `d`: only a tap on the Dance tab does that, so fingers were on the
+  glass then; and the Queue opened at its remembered top (it had been left
+  at "@0px"), where entry 2 is the second row. So the likely cause is three
+  touches (the Queue tab, row 2, its Play) that nothing logged at the time.
+  Now touches, tab changes and that Play are all logged: a repeat will say.
 
 The UI costs ~200 B of static internal RAM (the font slots' pointer, the
-drawing helpers' state, the host adapter); the boot log's `[ui] internal RAM
-... before the UI, ... after` line has the rest.
+drawing helpers' state, the host adapter; the pages' text buffers, the
+Pair screen's device list copy and About's texts are members, in PSRAM
+with the Ui); the Queue and Output screens added ~160 B more (the
+Bluetooth session and the link's published state, the pairing's name; the
+scan list and the learned track lengths are in PSRAM). The boot log's
+`[ui] internal RAM ... before the UI, ... after` line has the rest. The covers add ~340 KB of PSRAM (the
+LRU and the worker's buffers) and, only while the worker lives, its 6 KB
+stack.
 
 ## UI spike (browsing UI groundwork)
 
@@ -609,12 +939,11 @@ while the list moves (it sits in the scrolled band, and jittered).
    its cache and the queue's remap by path are in place). First fill by card
    reader; WiFi for updates. WiFi and Bluetooth don't share the radio well, so
    sync is its own mode.
-2. **Browsing screens** on the UI framework (above): the Library's albums
-   and folders segments with the A-Z jump grid, covers (92 px, from mStream's
-   thumbnails), the full Now Playing, Queue and Output screens (pairing, the
-   volume sheet), the first-boot coach cards; A-click restarting a track
-   after 3 s, a double buzz for inert buttons; resume within a track after
-   power-off.
+2. **UI follow-ups**: covers from mStream's thumbnails at sync (the
+   device's own decode stays the fallback), track lengths from the sync's
+   metadata (the Queue's minutes are learned as tracks play until then);
+   A-click restarting a track after 3 s, a double buzz for inert buttons;
+   resume within a track after power-off.
 3. **AutoDJ:** mStream precomputes a similar-tracks table (top-K neighbours per
    synced track, from its 1280-d embeddings) that the player walks with
    mStream's session-centroid scoring plus its BPM/key/artist filters.

@@ -11,8 +11,6 @@ namespace ui {
 
 namespace {
 
-const char* const kLabels[tabbar::kTabs] = {"Playing", "Library", "Queue", "Dance", "Output"};
-
 uint16_t outputColour(tabbar::Output o, uint16_t idle) {
   switch (o) {
     case tabbar::Output::BtConnected: return col::CYAN;
@@ -55,7 +53,8 @@ void drawBattery(M5Canvas& c, int x, int y, const tabbar::State& s, uint16_t bg)
   }
   char t[6];
   snprintf(t, sizeof(t), "%u%%", static_cast<unsigned>(s.battery));
-  f.draw(c, Font::Small, t, x + 12, 27, 38, s.charging ? col::GREEN : col::DIM, bg, Fonts::Align::Centre);
+  f.draw(c, Font::Small, t, x + 12, 27, tabbar::kBatteryTextW, s.charging ? col::GREEN : col::DIM, bg,
+         Fonts::Align::Centre);
 }
 
 }  // namespace
@@ -74,8 +73,8 @@ void TabBar::drawCell(int t, const tabbar::State& s) {
   // The plate is nearly the cell's width (only the active tab has one, so
   // plates never meet): the label under the icon needs it ("Playing" is
   // 48 px in DejaVu 13).
-  const int plateX = output ? 3 : 1;
-  const int plateW = output ? 64 : w - 2;
+  const int plateX = output ? tabbar::kOutputPlateX : 1;
+  const int plateW = tabbar::labelWidth(t);
   const int cx = output ? plateX + plateW / 2 : w / 2;  // the plate's centre, in the cell
   c.fillRect(0, 0, w, tabbar::kHeight, col::SURF);
   uint16_t bg = col::SURF;
@@ -100,8 +99,8 @@ void TabBar::drawCell(int t, const tabbar::State& s) {
       if (n[0]) {
         // The up-next badge, in digits you can read (the review: Font0's
         // 3x5 were not): on the accent while it flashes after an add.
-        const int bw = f.width(Font::Small, n) + 8;
-        const int bx = cx + 23 - bw;  // right-aligned over the icon's top right
+        const int bw = f.width(Font::Small, n) + tabbar::kBadgePad;
+        const int bx = cx + tabbar::kBadgeRight - bw;  // right-aligned over the icon's top right
         const uint16_t pill = s.badgeFlash ? acc : col::BTN_HI;
         c.fillRoundRect(bx, 1, bw, 14, 7, pill);
         f.draw(c, Font::Small, n, bx + bw / 2, 8, bw, s.badgeFlash ? col::DARK : col::TXT, pill, Fonts::Align::Centre);
@@ -124,13 +123,13 @@ void TabBar::drawCell(int t, const tabbar::State& s) {
       // chip in the corner stole every tap meant for this tab).
       char v[6];
       snprintf(v, sizeof(v), "%u%%", static_cast<unsigned>(s.volume));
-      f.draw(c, Font::Small, v, 31, iconTop + 9, 36, active ? col::TXT : col::SOFT, bg);
-      drawBattery(c, 288 - x0, 6, s, col::SURF);
+      f.draw(c, Font::Small, v, tabbar::kVolumeX, iconTop + 9, tabbar::kVolumeW, active ? col::TXT : col::SOFT, bg);
+      drawBattery(c, tabbar::kBatteryX, 6, s, col::SURF);
       break;
     }
   }
   if (active) {
-    f.draw(c, Font::Small, kLabels[t], cx, 27, plateW, acc, bg, Fonts::Align::Centre);
+    f.draw(c, Font::Small, tabbar::kLabels[t], cx, 27, plateW, acc, bg, Fonts::Align::Centre);
     c.fillRect(cx - 12, 33, 24, 2, acc);
   }
   c.drawFastHLine(0, tabbar::kHeight - 1, w, col::DIV);

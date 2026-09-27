@@ -64,6 +64,9 @@ public:
   // What the labs show: the synthetic library if g<n> made one, else the
   // app's.
   LibraryIndex* libraryIndex();
+  // The synthetic library g<n> made (nullptr: none). The UI's Library can
+  // browse it (console uil<n>); g0 drops it.
+  LibraryIndex* synthetic() { return synth_ && synth_->ready() ? synth_ : nullptr; }
 
 private:
   enum class Screen : uint8_t { None, Input, Scroll, Font, Thumb };

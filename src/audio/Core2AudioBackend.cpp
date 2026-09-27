@@ -459,9 +459,15 @@ bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out) {
     // frame (after the ID3v2 tag): the read-rate estimate is only exact for
     // constant bitrates. A buffer in PSRAM (under 4 KB would be internal).
     constexpr uint32_t kProbe = 2048;
+    // ESP8266Audio's ID3 reader goes through the whole tag a byte per read.
+    // Through an embedded picture that is seconds of CPU on this task,
+    // above the loop: on the device two Moon Safari tracks started 4 s late
+    // and froze the UI for as long. A tag this big is skipped instead (its
+    // title and artist aren't used: the library has them).
+    constexpr uint32_t kMaxTagParsed = 16 * 1024;
+    uint32_t start = 0;
     auto* probe = static_cast<uint8_t*>(heap_caps_malloc(kProbe, MALLOC_CAP_SPIRAM));
     if (probe) {
-      uint32_t start = 0;
       if (file_->read(probe, 10) == 10) start = progress::id3v2Size(probe, 10);
       if (start < file_->getSize() && file_->seek(static_cast<int32_t>(start), SEEK_SET)) {
         const uint32_t got = file_->read(probe, kProbe);
@@ -469,10 +475,15 @@ bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out) {
       }
       heap_caps_free(probe);
     }
-    file_->seek(0, SEEK_SET);
-    id3_.reset(new AudioFileSourceID3(file_.get()));
-    id3_->RegisterMetadataCB(onMetadata, this);
-    source = id3_.get();
+    if (probe && start > kMaxTagParsed && start < file_->getSize()) {
+      file_->seek(static_cast<int32_t>(start), SEEK_SET);
+      Serial.printf("[audio] ID3 tag of %lu KB (a picture?): skipped, not read\n", (unsigned long)(start / 1024));
+    } else {
+      file_->seek(0, SEEK_SET);
+      id3_.reset(new AudioFileSourceID3(file_.get()));
+      id3_->RegisterMetadataCB(onMetadata, this);
+      source = id3_.get();
+    }
     mp3_.reset(new AudioGeneratorMP3());
     decoder = mp3_.get();
   } else {

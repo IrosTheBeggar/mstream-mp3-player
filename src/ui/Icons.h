@@ -29,6 +29,17 @@ extern const Icon kCheck;
 extern const Icon kCross;
 extern const Icon kPlus;
 extern const Icon kMinus;
+extern const Icon kFolder;        // the Folders explorer's folders
+extern const Icon kFile;          // its audio files
+extern const Icon kTrash;         // Remove (the Queue's edit bar)
+extern const Icon kUndo;          // the toast's compact Undo
+extern const Icon kSdCard;        // the no-card state
+extern const Icon kShuffle;       // Shuffle all
+extern const Icon kJack;          // line out (the 3.5 mm / RCA module)
+extern const Icon kWarn;          // a track that couldn't be played
+extern const Icon kGear;          // settings rows
+extern const Icon kInfo;          // About
+extern const Icon kVibrate;       // Haptics
 
 // Draws `icon` with its top-left at (x, y), or centred on (cx, cy).
 inline void draw(lgfx::LovyanGFX& g, const Icon& icon, int x, int y, uint16_t colour) {

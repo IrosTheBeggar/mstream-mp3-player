@@ -36,6 +36,24 @@ bool extIs(const char* ext, size_t len, const char* want) {
 
 bool isSeparator(char c) { return c == ' ' || c == '-' || c == '.' || c == '_'; }
 
+// A case-insensitive match of the first `len` bytes of `s` with `want`.
+bool nameIs(const char* s, size_t len, const char* want) {
+  if (std::strlen(want) != len) return false;
+  for (size_t i = 0; i < len; ++i) {
+    if (lower(s[i]) != want[i]) return false;
+  }
+  return true;
+}
+
+LibraryIndex::Folder newFolder(uint32_t name, uint32_t parent) {
+  LibraryIndex::Folder f{};
+  f.name = name;
+  f.parent = parent;
+  f.image = LibraryIndex::kNone;
+  f.imageRank = LibraryIndex::kNoImage;
+  return f;
+}
+
 uint32_t pow2AtLeast(uint32_t n) {
   uint32_t p = 64;
   while (p < n) p <<= 1;
@@ -66,7 +84,7 @@ uint32_t findByName(const uint32_t* ids, uint32_t n, const char* name, NameOf na
 // changed makes the file Corrupt, and the version is bumped when a record's
 // meaning changes.
 constexpr uint32_t kMagic = 0x494C504Du;  // "MPLI"
-constexpr uint32_t kVersion = 1;
+constexpr uint32_t kVersion = 2;  // 2: folders count their other files and pick a cover
 constexpr int kCountWords = 10;           // magic .. folders
 constexpr int kHeaderWords = kCountWords + 2 * (LibraryIndex::kBuckets + 1);
 constexpr uint32_t kMaxRecords = 1u << 22;  // a damaged header must not ask for gigabytes
@@ -251,7 +269,7 @@ void LibraryIndex::resetViews() {
   release(viewsBlock_, viewsBytes_);
   viewsBlock_ = nullptr;
   viewsBytes_ = 0;
-  artistsAZ_ = albumsAZ_ = albumsByArtist_ = tracksByAlbum_ = folderChildren_ = folderFiles_ = nullptr;
+  artistsAZ_ = albumsAZ_ = albumsByArtist_ = tracksByAlbum_ = folderChildren_ = folderTree_ = nullptr;
   std::memset(artistBuckets_, 0, sizeof(artistBuckets_));
   std::memset(albumBuckets_, 0, sizeof(albumBuckets_));
 }
@@ -307,8 +325,7 @@ bool LibraryIndex::begin(const char* root, uint32_t expectTracks) {
   emptyName_ = intern("", 0);
   if (rootName == kNone || emptyName_ == kNone) return false;
   rootLen_ = static_cast<uint32_t>(rootLen);
-  const Folder rootFolder{rootName, kNone, 0, 0, 0, 0};
-  return push(foldersB_, rootFolder);
+  return push(foldersB_, newFolder(rootName, kNone));
 }
 
 uint32_t LibraryIndex::folderChild(uint32_t parent, const char* name, size_t len) {
@@ -320,7 +337,7 @@ uint32_t LibraryIndex::folderChild(uint32_t parent, const char* name, size_t len
   const uint32_t off = intern(name, len);
   if (off == kNone) return kNone;
   const uint32_t id = foldersB_.size;
-  if (!push(foldersB_, Folder{off, parent, 0, 0, 0, 0})) return kNone;
+  if (!push(foldersB_, newFolder(off, parent))) return kNone;
   if (!tableInsert(folderTable_, h, id)) return kNone;
   return id;
 }
@@ -354,6 +371,66 @@ uint32_t LibraryIndex::albumFor(uint32_t artist, uint32_t nameOffset, uint32_t f
   return id;
 }
 
+uint32_t LibraryIndex::folderOf(const char* path, const char* lastSlash, int* depth, uint32_t* artistFolder,
+                                uint32_t* albumFolder) {
+  uint32_t folder = 0;
+  *depth = 0;
+  *artistFolder = *albumFolder = kNone;
+  for (const char* p = path + rootLen_ + 1; p < lastSlash;) {
+    const char* q = static_cast<const char*>(std::memchr(p, '/', static_cast<size_t>(lastSlash - p)));
+    if (!q) q = lastSlash;
+    if (q > p) {
+      folder = folderChild(folder, p, static_cast<size_t>(q - p));
+      if (folder == kNone) return kNone;
+      ++*depth;
+      if (*depth == 1) *artistFolder = folder;
+      if (*depth == 2) *albumFolder = folder;
+    }
+    p = q + 1;
+  }
+  return folder;
+}
+
+uint8_t LibraryIndex::imageRank(const char* name, size_t len) {
+  const char* dot = nullptr;
+  for (size_t i = len; i-- > 0;) {
+    if (name[i] == '.') {
+      dot = name + i;
+      break;
+    }
+  }
+  if (!dot || dot == name) return kNoImage;
+  const size_t stem = static_cast<size_t>(dot - name);
+  const size_t extLen = len - stem - 1;
+  if (!extIs(dot + 1, extLen, "jpg") && !extIs(dot + 1, extLen, "jpeg")) return kNoImage;
+  if (nameIs(name, stem, "cover")) return 0;
+  if (nameIs(name, stem, "folder")) return 1;
+  if (nameIs(name, stem, "front")) return 2;
+  return 3;
+}
+
+// A file that isn't audio: counted in its folder, and its cover if it's the
+// best-named image there so far.
+LibraryIndex::Add LibraryIndex::addOther(const char* path, const char* lastSlash, const char* leaf, size_t leafLen) {
+  int depth;
+  uint32_t artistFolder, albumFolder;
+  const uint32_t folder = folderOf(path, lastSlash, &depth, &artistFolder, &albumFolder);
+  if (folder == kNone) return Add::NoMemory;
+  Folder& f = foldersB_.data[folder];
+  if (f.otherCount < 0xFFFF) ++f.otherCount;
+  const uint8_t rank = imageRank(leaf, leafLen);
+  if (rank == kNoImage) return Add::Other;
+  if (f.imageCount < 0xFF) ++f.imageCount;
+  if (rank < f.imageRank) {
+    const uint32_t name = intern(leaf, leafLen);
+    if (name == kNone) return Add::NoMemory;
+    Folder& g = foldersB_.data[folder];  // intern() doesn't move folders, but be plain about it
+    g.image = name;
+    g.imageRank = rank;
+  }
+  return Add::Other;
+}
+
 LibraryIndex::Add LibraryIndex::addFile(const char* path) {
   if (!building_ || !path) return Add::Skipped;
   if (failed_) return Add::NoMemory;
@@ -362,34 +439,24 @@ LibraryIndex::Add LibraryIndex::addFile(const char* path) {
   const char* lastSlash = std::strrchr(path, '/');
   const char* leaf = lastSlash + 1;
   const size_t leafLen = std::strlen(leaf);
+  if (leafLen == 0) return Add::Skipped;
   const char* dot = std::strrchr(leaf, '.');
-  if (leafLen == 0 || !dot || dot == leaf) return Add::Skipped;
-  const size_t extLen = leafLen - static_cast<size_t>(dot + 1 - leaf);
   Format format = Format::Unknown;
-  if (extIs(dot + 1, extLen, "mp3")) {
-    format = Format::Mp3;
-  } else if (extIs(dot + 1, extLen, "flac")) {
-    format = Format::Flac;
-  } else {
-    return Add::Skipped;
+  if (dot && dot != leaf) {
+    const size_t extLen = leafLen - static_cast<size_t>(dot + 1 - leaf);
+    if (extIs(dot + 1, extLen, "mp3")) {
+      format = Format::Mp3;
+    } else if (extIs(dot + 1, extLen, "flac")) {
+      format = Format::Flac;
+    }
   }
+  if (format == Format::Unknown) return addOther(path, lastSlash, leaf, leafLen);
 
   // The folders, creating the ones not seen yet.
-  uint32_t folder = 0;
-  uint32_t artistFolder = kNone, albumFolder = kNone;
-  int depth = 0;
-  for (const char* p = path + rootLen_ + 1; p < lastSlash;) {
-    const char* q = static_cast<const char*>(std::memchr(p, '/', static_cast<size_t>(lastSlash - p)));
-    if (!q) q = lastSlash;
-    if (q > p) {
-      folder = folderChild(folder, p, static_cast<size_t>(q - p));
-      if (folder == kNone) return Add::NoMemory;
-      ++depth;
-      if (depth == 1) artistFolder = folder;
-      if (depth == 2) albumFolder = folder;
-    }
-    p = q + 1;
-  }
+  int depth;
+  uint32_t artistFolder, albumFolder;
+  const uint32_t folder = folderOf(path, lastSlash, &depth, &artistFolder, &albumFolder);
+  if (folder == kNone) return Add::NoMemory;
 
   const uint32_t artist = artistFor(depth >= 1 ? foldersB_.data[artistFolder].name : emptyName_);
   if (artist == kNone) return Add::NoMemory;
@@ -435,9 +502,9 @@ bool LibraryIndex::buildViews() {
   viewsBytes_ = (words ? words : 1) * sizeof(uint32_t);
   viewsBlock_ = static_cast<uint32_t*>(alloc(viewsBytes_));
   // Temporary, in one block: an artist's place in A-Z, an album's in
-  // albumsByArtist, a folder's in the folder tree (depth first, A-Z), and the
-  // walk's stack.
-  const size_t tempBytes = (static_cast<size_t>(nA) + nB + 2 * static_cast<size_t>(nF) + 4) * sizeof(uint32_t);
+  // albumsByArtist, a folder's in the folder tree (depth first, A-Z), the
+  // walk's stack, and where each folder's tracks start in the tree view.
+  const size_t tempBytes = (static_cast<size_t>(nA) + nB + 3 * static_cast<size_t>(nF) + 6) * sizeof(uint32_t);
   auto* temp = static_cast<uint32_t*>(alloc(tempBytes));
   if (!viewsBlock_ || !temp) {
     release(temp, tempBytes);
@@ -447,12 +514,13 @@ bool LibraryIndex::buildViews() {
   uint32_t* albumPos = artistRank + nA + 1;
   uint32_t* folderRank = albumPos + nB + 1;
   uint32_t* stack = folderRank + nF + 1;
+  uint32_t* rankStart = stack + nF + 1;
   artistsAZ_ = viewsBlock_;
   albumsAZ_ = artistsAZ_ + nA;
   albumsByArtist_ = albumsAZ_ + nB;
   tracksByAlbum_ = albumsByArtist_ + nB;
   folderChildren_ = tracksByAlbum_ + nT;
-  folderFiles_ = folderChildren_ + nF;
+  folderTree_ = folderChildren_ + nF;
 
   const char* s = arenaB_.data;
   Track* tracks = tracksB_.data;
@@ -490,31 +558,43 @@ bool LibraryIndex::buildViews() {
     if (ar.albumCount++ == 0) ar.firstAlbum = i;
   }
 
-  // Folder tree: each folder's folders, A-Z.
+  // Folder tree. First what's under each folder: its own audio files, then
+  // every folder's added to its parent's (children come after their
+  // parents: a folder's id is always above its parent's). A folder with no
+  // audio anywhere under it (artwork alone) stays out of the views.
+  for (uint32_t i = 0; i < nF; ++i) {
+    folders[i].firstFolder = folders[i].folderCount = 0;
+    folders[i].firstFile = folders[i].fileCount = folders[i].treeCount = 0;
+  }
+  for (uint32_t i = 0; i < nT; ++i) ++folders[tracks[i].folder].fileCount;
+  for (uint32_t i = 0; i < nF; ++i) folders[i].treeCount = folders[i].fileCount;
+  for (uint32_t i = nF; i-- > 1;) folders[folders[i].parent].treeCount += folders[i].treeCount;
+  // Each folder's folders, A-Z.
   uint32_t nSub = 0;
-  for (uint32_t i = 1; i < nF; ++i) folderChildren_[nSub++] = i;
+  for (uint32_t i = 1; i < nF; ++i) {
+    if (folders[i].treeCount) folderChildren_[nSub++] = i;
+  }
+  for (uint32_t i = nSub; i < nF; ++i) folderChildren_[i] = 0;  // unused: saved as zeros
   std::sort(folderChildren_, folderChildren_ + nSub, [&](uint32_t a, uint32_t b) {
     if (folders[a].parent != folders[b].parent) return folders[a].parent < folders[b].parent;
     const int c = textfold::compare(s + folders[a].name, s + folders[b].name);
     return c != 0 ? c < 0 : a < b;
   });
-  for (uint32_t i = 0; i < nF; ++i) {
-    folders[i].firstFolder = folders[i].folderCount = 0;
-    folders[i].firstFile = folders[i].fileCount = 0;
-  }
   for (uint32_t i = 0; i < nSub; ++i) {
     Folder& parent = folders[folders[folderChildren_[i]].parent];
     if (parent.folderCount++ == 0) parent.firstFolder = i;
   }
   // Each folder's place in a depth-first walk: a folder before its
   // subfolders, those A-Z. So an album's own files come first, then CD1,
-  // CD2 and so on.
+  // CD2 and so on; and a folder's whole tree is one run of places.
+  for (uint32_t i = 0; i < nF; ++i) folderRank[i] = kNone;
+  uint32_t nRanks = 0;
   if (nF) {
-    uint32_t sp = 0, next = 0;
+    uint32_t sp = 0;
     stack[sp++] = 0;
     while (sp) {
       const uint32_t f = stack[--sp];
-      folderRank[f] = next++;
+      folderRank[f] = nRanks++;
       for (uint32_t k = folders[f].folderCount; k-- > 0;) stack[sp++] = folderChildren_[folders[f].firstFolder + k];
     }
   }
@@ -542,16 +622,27 @@ bool LibraryIndex::buildViews() {
     if (ar.trackCount++ == 0) ar.firstTrack = i;
   }
 
-  // Each folder's files, A-Z.
-  for (uint32_t i = 0; i < nT; ++i) folderFiles_[i] = i;
-  std::sort(folderFiles_, folderFiles_ + nT, [&](uint32_t a, uint32_t b) {
-    if (tracks[a].folder != tracks[b].folder) return tracks[a].folder < tracks[b].folder;
+  // The folder tree's tracks: folder by folder in that walk, each folder's
+  // files A-Z. So a folder's own files (filesIn) and its whole tree
+  // (treeTracks) are runs that start at the same place.
+  for (uint32_t i = 0; i < nT; ++i) folderTree_[i] = i;
+  std::sort(folderTree_, folderTree_ + nT, [&](uint32_t a, uint32_t b) {
+    const uint32_t ra = folderRank[tracks[a].folder], rb = folderRank[tracks[b].folder];
+    if (ra != rb) return ra < rb;
     const int c = textfold::compare(s + tracks[a].name, s + tracks[b].name);
     return c != 0 ? c < 0 : a < b;
   });
+  for (uint32_t r = 0; r <= nRanks; ++r) rankStart[r] = kNone;
   for (uint32_t i = 0; i < nT; ++i) {
-    Folder& f = folders[tracks[folderFiles_[i]].folder];
-    if (f.fileCount++ == 0) f.firstFile = i;
+    const uint32_t r = folderRank[tracks[folderTree_[i]].folder];
+    if (rankStart[r] == kNone) rankStart[r] = i;
+  }
+  rankStart[nRanks] = nT;
+  for (uint32_t r = nRanks; r-- > 0;) {
+    if (rankStart[r] == kNone) rankStart[r] = rankStart[r + 1];  // no files of its own: where the next one's start
+  }
+  for (uint32_t i = 0; i < nF; ++i) {
+    if (folderRank[i] != kNone) folders[i].firstFile = rankStart[folderRank[i]];
   }
 
   // A-Z buckets: the keys are in order, since compare() sorts '#' first.
@@ -636,6 +727,33 @@ size_t LibraryIndex::trackPath(uint32_t id, char* buf, size_t size) const {
   size_t n = folderPath(tracks_[id].folder, buf, size);
   if (n == 0) return 0;
   const char* name = str(tracks_[id].name);
+  const size_t len = std::strlen(name);
+  if (n + 1 + len + 1 > size) {
+    buf[0] = 0;
+    return 0;
+  }
+  buf[n++] = '/';
+  std::memcpy(buf + n, name, len + 1);
+  return n + len;
+}
+
+uint32_t LibraryIndex::albumCover(uint32_t album) const {
+  if (!ready_ || album >= albumN_) return kNone;
+  const uint32_t f = albums_[album].folder;
+  if (f < folderN_ && folders_[f].image != kNone) return f;
+  const Span t = tracksOfAlbum(album);
+  if (t.count == 0) return kNone;
+  const uint32_t g = tracks_[t[0]].folder;
+  return g < folderN_ && folders_[g].image != kNone ? g : kNone;
+}
+
+size_t LibraryIndex::imagePath(uint32_t folder, char* buf, size_t size) const {
+  if (size == 0) return 0;
+  buf[0] = 0;
+  if (!ready_ || folder >= folderN_ || folders_[folder].image == kNone) return 0;
+  size_t n = folderPath(folder, buf, size);
+  if (n == 0) return 0;
+  const char* name = str(folders_[folder].image);
   const size_t len = std::strlen(name);
   if (n + 1 + len + 1 > size) {
     buf[0] = 0;
@@ -786,7 +904,7 @@ LibraryIndex::Load LibraryIndex::load(ByteSource& in, uint64_t signature) {
   albumsByArtist_ = albumsAZ_ + nB;
   tracksByAlbum_ = albumsByArtist_ + nB;
   folderChildren_ = tracksByAlbum_ + nT;
-  folderFiles_ = folderChildren_ + nF;
+  folderTree_ = folderChildren_ + nF;
   arena_ = arenaB_.data;
   tracks_ = tracksB_.data;
   artists_ = artistsB_.data;

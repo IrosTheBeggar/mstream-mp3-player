@@ -42,8 +42,20 @@ public:
     // is headed (the HUD shows it).
     virtual void stepVolume(int delta) = 0;
     virtual int volume() const = 0;
+    // Bluetooth is the output, or on its way to it (asked for, not linked
+    // yet): a B hold then goes to the speaker.
     virtual bool onBluetooth() const = 0;
-    // Switches to the other output; false if it can't (silent test mode).
+    // The audio plays through Bluetooth now (not only asked for): going to
+    // the speaker pauses only then. Music still on the speaker while the
+    // headphones connect plays on when a B hold cancels them (as the
+    // Output tab's Speaker row does).
+    virtual bool audioOnBluetooth() const { return onBluetooth(); }
+    // Nothing to play (the queue is empty, no card): clicks do nothing,
+    // and say so (handle() returns false: the input layer's "inert" buzz,
+    // not the tap tick).
+    virtual bool idle() const { return false; }
+    // Switches to the other output; false if it can't (silent test mode,
+    // no headphones paired).
     virtual bool switchOutput() = 0;
 
   protected:
@@ -62,7 +74,8 @@ public:
   };
 
   // Acts on a button event (Click, Hold, Repeat; Press and HoldEnd do
-  // nothing). True if it did something.
+  // nothing). True if it did something (a click with nothing to play
+  // doesn't).
   bool handle(const InputEvent& e, Transport& t);
   const Feedback& feedback() const { return feedback_; }
 

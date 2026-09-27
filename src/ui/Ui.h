@@ -5,6 +5,7 @@
 #include "InputEvent.h"
 #include "NavModel.h"
 #include "QueueModel.h"
+#include "QueueView.h"
 #include "ScrollGovernor.h"
 #include "TabBarModel.h"
 #include "app/DanceMode.h"
@@ -16,6 +17,7 @@
 #include "ui/Page.h"
 #include "ui/Pages.h"
 #include "ui/TabBar.h"
+#include "ui/Thumbs.h"
 #include "ui/UiHost.h"
 
 // The UI: the tab bar design's framework (docs/ARCHITECTURE.md, "UI").
@@ -41,7 +43,15 @@
 //     badge, the output and its VOLUME, the battery. The Output tab's hit
 //     area reaches the screen's edge.
 //   - Overlays (ui/Overlays): the toast with Undo at the top of the content,
-//     the volume HUD over the tab bar, a bottom sheet, a dialog.
+//     the volume HUD over the tab bar, a bottom sheet, the volume sheet (per
+//     output), the A-Z jump grid, a dialog, the first-boot coach cards.
+//   - States: a track that can't be played is a note (an amber toast) and
+//     a "!" on its Queue row; the headphones lost while playing are a
+//     dialog that follows their reconnecting; the pages have their empty
+//     and no-card states (ui/EmptyState).
+//   - Album covers (ui/Thumbs): thumbnails made by a worker task below the
+//     loop, never while a list moves; a page redraws the row (or the
+//     cover) that shows one when it arrives.
 //   - The lists (ui/ListView) on the LCD's hardware scroll: the scroller is
 //     started when a list page comes up and stopped (its band cleared) when
 //     a page without one does.
@@ -60,7 +70,7 @@
 // ~0 internal RAM.
 namespace ui {
 
-class Ui : private OverlayOwner {
+class Ui : private OverlayOwner, private ListView::RailHost {
 public:
   Ui(UiHost& host, Input& input, PlaybackController& player, QueueModel& queue, Library& library,
      DanceMode& dance);
@@ -85,12 +95,19 @@ public:
   // ---- events from the rest of the firmware ----
   void libraryChanged();       // the index was rebuilt (g0): the Library's ids are stale
   void volumeKeys();           // the headphones' volume keys: the HUD
-  void headphonesLost();       // dropped while playing on them: a dialog
+  void headphonesLost();       // dropped while playing on them: a dialog (and a long buzz)
+  // The headphones the listener asked for are connected and the audio
+  // moved to them (seconds after the tap): a toast says where, two ticks.
+  void headphonesConnected();
   void toggleDance();          // console d
+  // The Library browses `index` instead of the card's (console uil<n>: a
+  // synthetic library, to see the lists at scale; nullptr: the card's). Its
+  // pages start over; its actions are refused (its ids aren't the player's).
+  void browse(LibraryIndex* index);
 
   // ---- console ----
   void printState() const;     // ui
-  void command(const char* a); // ui<n>: tab n; uib: back
+  void command(const char* a); // ui<n>: tab n; uib back; uic the coach cards
 
   // ---- for the pages ----
   const AppState& state() const { return state_; }
@@ -99,6 +116,7 @@ public:
   QueueModel& queue() { return queue_; }
   Library& library() { return library_; }
   DanceMode& dance() { return dance_; }
+  Input& input() { return input_; }
   ListView& list() { return list_; }
   NavModel& nav() { return nav_; }
   const NavModel& nav() const { return nav_; }
@@ -111,18 +129,47 @@ public:
   void toRoot();
   // Shows tab t (as a tab tap does, but never pops it).
   void showTab(NavModel::Tab t);
-  // The Library tab showing an artist (and an album of it), one Back apart.
-  void showInLibrary(uint32_t artist, uint32_t album);
+  // The Library tab showing `pages` above its root on segment `seg` (Now
+  // Playing's Go to artist / album / Show in folders); the stack it had
+  // is replaced.
+  void showLibrary(LibrarySegment seg, const NavModel::PageRef* pages, int n);
+  // What the Library shows (the card's index, or a synthetic one).
+  LibraryIndex* browseIndex() { return browse_ ? browse_ : library_.index(); }
+  bool browsingSynthetic() const { return browse_ != nullptr; }
+  Thumbs& thumbs() { return thumbs_; }
   // `viewKey`: the queue entry (its key) of the first track an add put in
-  // the queue: the toast also offers "View" (the Queue, scrolled to it).
+  // the queue: the toast also offers "View" (the Queue, scrolled to it),
+  // and the next visit to the Queue shows and highlights what was added.
   void toast(const char* text, bool undo, uint32_t viewKey = QueueModel::kNone);
-  void openSheet(OverlayOwner* owner, const char* title, const char* const* rows, int n);
-  void openDialog(OverlayOwner* owner, const char* title, const char* body, const char* const* buttons, int n);
+  // A note in amber (a track skipped, no card yet).
+  void warn(const char* text);
+  // `primary`: the row that is the main choice (-1 none); `danger`: the
+  // row in red (-1 none).
+  void openSheet(OverlayOwner* owner, const char* title, const char* const* rows, int n,
+                 const char* const* details = nullptr, int primary = -1, int danger = -1);
+  // An output's volume, as a sheet: -1 the active one (Now Playing's
+  // volume button), 0 the speaker's, 1 the headphones' (the Output cards).
+  void openVolume(int output = -1);
+  // `danger`: the primary button is red (Clear queue).
+  void openDialog(OverlayOwner* owner, const char* title, const char* body, const char* const* buttons, int n,
+                  bool danger = false);
+  // The first-boot tips (again, from About).
+  void showCoach();
+  // The list band's height (the Queue's selection mode keeps y 198-239 for
+  // its bar): the LCD's scroll band follows.
+  void setListBand(int height);
+  // What Library adds put in the queue since the Queue was last shown
+  // (it scrolls to them and highlights them), and the entries whose track
+  // failed (their "!").
+  queueview::AddedMark& added() { return added_; }
+  const queueview::KeyRing& failedKeys() const { return failedKeys_; }
+  // Shuffle all: the whole library, shuffled, playing (the empty states).
+  void shuffleAll();
   bool toastUp() const { return toast_.up(); }
   void drawHeader(const Header& h);
 
 private:
-  enum class TouchOn : uint8_t { None, Bar, Toast, Sheet, Dialog, Page };
+  enum class TouchOn : uint8_t { None, Bar, Toast, Sheet, Volume, Jump, Dialog, Coach, Page };
 
   Page* pageFor(uint8_t kind);
   void showTop();
@@ -137,11 +184,26 @@ private:
   void viewInQueue(uint32_t key);
   // Closes a sheet or dialog (telling its owner, if `notify`); true if one was up.
   bool closeModal(bool notify);
+  // A modal went: what it covered drawn again (the coach cards if they're
+  // up, else the page), and the toast over it.
+  void repaintUnder();
+  // The toast went (it was down to `oldBottom`; another in its place is
+  // nothing to do): what it covered drawn again.
+  void uncover(int oldBottom);
   void applyCover();
   void updateHud(uint32_t nowMs);
   tabbar::State tabState(uint32_t nowMs) const;
   void onDialog(int button) override;
   void trackMotion(uint32_t nowMs);
+  bool modalUp() const { return sheet_.up() || dialog_.up() || volumeSheet_.up() || jumpGrid_.up() || coach_.up(); }
+  void coachDone();
+  void updateLostDialog();
+  void noteFailures();
+  // The A-Z rail's tap (ListView::RailHost): the jump grid, and its taps.
+  void onRailTap() override;
+  void openJumpLetters();
+  void onJumpCell(int cell);
+  void resetLibraryTab();
 
   UiHost& host_;
   Input& input_;
@@ -157,10 +219,28 @@ private:
   Toast toast_;
   Hud hud_;
   Sheet sheet_;
+  VolumeSheet volumeSheet_;
+  JumpGrid jumpGrid_;
   Dialog dialog_;
+  Coach coach_;
+  Thumbs thumbs_;
+  LibraryIndex* browse_ = nullptr;  // uil<n>: a synthetic library in the Library tab
+  int volumeAsked_ = -1;            // the volume sheet's last target (steps are relative)
+  bool volumeSheetBt_ = false;      // the volume sheet's output
+  // The jump grid: its list, level (1 letters, 2 a letter's two-letter
+  // starts) and each cell's first row.
+  ListView::Source* jumpSource_ = nullptr;
+  int jumpLevel_ = 1;
+  int32_t jumpFirst_[jump::kCells] = {};
+  int32_t jumpEnd_[jump::kCells] = {};
+  int32_t jumpSecond_[jump::kCells] = {};
   OverlayOwner* sheetOwner_ = nullptr;
   OverlayOwner* dialogOwner_ = nullptr;
   bool lostDialog_ = false;  // the dialog up is headphonesLost()'s
+  bool coachDue_ = false;    // the first-boot tips haven't been seen (NVS)
+  queueview::AddedMark added_;
+  queueview::KeyRing failedKeys_;
+  uint32_t failuresSeen_ = 0;
 
   NowPlayingPage nowPlaying_;
   LibraryPage libraryPage_;
@@ -201,6 +281,7 @@ private:
     uint32_t frames = 0;
     uint64_t sumUs = 0;
     uint32_t maxUs = 0;
+    uint32_t slow = 0;      // frames over kSlowFrameUs
     uint32_t ringMin = 0;
     uint32_t underruns = 0;
   } motion_;

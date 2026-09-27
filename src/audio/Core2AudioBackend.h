@@ -161,6 +161,9 @@ public:
   // settling within seconds otherwise). 0: not known yet (the first ~1 s).
   // Any task.
   uint32_t durationMs() const;
+  // durationMs() was read from the file (or is a built-in track's), not
+  // estimated.
+  bool durationKnown() const { return knownDurationMs_.load(std::memory_order_relaxed) > 0; }
 
 private:
   enum class Work : uint8_t { Idle, Producing, Draining };

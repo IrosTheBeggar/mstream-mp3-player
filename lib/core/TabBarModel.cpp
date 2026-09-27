@@ -4,6 +4,8 @@
 
 namespace tabbar {
 
+const char* const kLabels[kTabs] = {"Playing", "Library", "Queue", "Dance", "Output"};
+
 uint8_t dirty(const State& a, const State& b) {
   uint8_t d = 0;
   // The active tab moving redraws the old and the new cell (plate, label, colour).

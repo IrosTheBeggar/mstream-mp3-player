@@ -183,6 +183,144 @@ def minus():
     return img
 
 
+def folder():
+    # The Folders explorer's folder (drawn amber).
+    img, d = canvas(22, 18)
+    d.polygon([(0, 2), (7, 2), (9, 4), (21, 4), (21, 17), (0, 17)], fill=1)
+    d.line((1, 7, 20, 7), fill=0)                       # the flap's edge
+    return img
+
+
+def audio_file():
+    # A page with a folded corner and a note: an audio file.
+    img, d = canvas(16, 20)
+    d.polygon([(1, 0), (10, 0), (15, 5), (15, 19), (1, 19)], outline=1)
+    d.line((10, 0, 10, 5), fill=1)
+    d.line((10, 5, 15, 5), fill=1)
+    d.ellipse((4, 13, 8, 16), fill=1)                  # the note
+    d.rectangle((7, 7, 8, 15), fill=1)
+    d.line((8, 7, 11, 9), fill=1)
+    return img
+
+
+def trash():
+    # Remove (the Queue's edit bar).
+    img, d = canvas(16, 18)
+    d.rectangle((5, 0, 10, 1), fill=1)                  # the handle
+    d.rectangle((0, 2, 15, 3), fill=1)                  # the lid
+    d.polygon([(2, 5), (13, 5), (12, 17), (3, 17)], outline=1)
+    d.line((2, 5, 3, 17), fill=1)
+    d.line((13, 5, 12, 17), fill=1)
+    for x in (6, 9):
+        d.line((x, 8, x, 14), fill=1)
+    return img
+
+
+def undo():
+    # Undo (the toast's compact button): an arrow curling back to the left.
+    return from_art([
+        "....#...........",
+        "...##...........",
+        "..###########...",
+        ".#############..",
+        "..###.......###.",
+        "...##........##.",
+        "....#........##.",
+        ".............##.",
+        "............###.",
+        "......#########.",
+        "......########..",
+        "................",
+    ])
+
+
+def sd_card():
+    # The no-card state: a microSD card with its contacts.
+    img, d = canvas(24, 30)
+    d.polygon([(0, 0), (17, 0), (23, 6), (23, 29), (0, 29)], outline=1)
+    d.polygon([(1, 1), (16, 1), (22, 7), (22, 28), (1, 28)], outline=1)
+    for x in (6, 10, 14, 18):
+        d.rectangle((x, 4, x + 1, 9), fill=1)
+    return img
+
+
+def shuffle():
+    # Shuffle all: two crossing arrows.
+    img, d = canvas(20, 16)
+    d.line((0, 3, 5, 3), fill=1, width=2)
+    d.line((5, 3, 13, 12), fill=1, width=2)
+    d.line((13, 12, 17, 12), fill=1, width=2)
+    d.line((0, 12, 5, 12), fill=1, width=2)
+    d.line((5, 12, 13, 3), fill=1, width=2)
+    d.line((13, 3, 17, 3), fill=1, width=2)
+    d.polygon([(16, 0), (19, 3), (16, 6)], fill=1)
+    d.polygon([(16, 9), (19, 12), (16, 15)], fill=1)
+    return img
+
+
+def jack():
+    # Line out: a 3.5 mm plug.
+    img, d = canvas(22, 18)
+    d.rectangle((0, 7, 5, 10), fill=1)                  # the cable
+    d.rounded_rectangle((6, 5, 12, 12), 1, fill=1)      # the body
+    d.rectangle((13, 7, 20, 10), fill=1)                # the tip
+    d.line((16, 7, 16, 10), fill=0)                     # its rings
+    d.line((18, 7, 18, 10), fill=0)
+    return img
+
+
+def warn():
+    # A track that couldn't be played: "!" in a triangle.
+    return from_art([
+        ".......##.......",
+        "......####......",
+        "......####......",
+        ".....##..##.....",
+        ".....##..##.....",
+        "....##.##.##....",
+        "....##.##.##....",
+        "...##..##..##...",
+        "...##..##..##...",
+        "..##...##...##..",
+        "..##........##..",
+        ".##.....##...##.",
+        ".##..........##.",
+        "################",
+    ])
+
+
+def gear():
+    # Settings rows (touch calibration).
+    img, d = canvas(18, 18)
+    d.ellipse((3, 3, 14, 14), outline=1, width=2)
+    d.ellipse((7, 7, 10, 10), fill=1)
+    for x0, y0, x1, y1 in ((8, 0, 9, 3), (8, 14, 9, 17), (0, 8, 3, 9), (14, 8, 17, 9)):
+        d.rectangle((x0, y0, x1, y1), fill=1)
+    for (x, y) in ((2, 2), (13, 2), (2, 13), (13, 13)):
+        d.rectangle((x, y, x + 2, y + 2), fill=1)
+    return img
+
+
+def info():
+    # About: "i" in a circle.
+    img, d = canvas(18, 18)
+    d.ellipse((0, 0, 17, 17), outline=1, width=2)
+    d.rectangle((8, 4, 9, 5), fill=1)
+    d.rectangle((8, 7, 9, 13), fill=1)
+    return img
+
+
+def vibrate():
+    # Haptics: a phone with buzz marks.
+    img, d = canvas(20, 18)
+    d.rounded_rectangle((6, 0, 13, 17), 2, outline=1)
+    for x in (2, 17):
+        d.line((x, 5, x, 12), fill=1)
+    for x in (0, 19):
+        d.line((x, 7, x, 10), fill=1)
+    return img
+
+
 ICONS = [
     ("Library", library),
     ("Queue", queue),
@@ -201,6 +339,17 @@ ICONS = [
     ("Cross", cross),
     ("Plus", plus),
     ("Minus", minus),
+    ("Folder", folder),
+    ("File", audio_file),
+    ("Trash", trash),
+    ("Undo", undo),
+    ("SdCard", sd_card),
+    ("Shuffle", shuffle),
+    ("Jack", jack),
+    ("Warn", warn),
+    ("Gear", gear),
+    ("Info", info),
+    ("Vibrate", vibrate),
 ]
 
 

@@ -88,6 +88,9 @@ void PlaybackController::update(uint32_t nowMs) {
   (void)nowMs;  // the backend owns the clock via its own loop(); reserved here
   if (state_ != PlayState::Playing) return;
   if (audio_.failed()) {
+    ++failure_.count;
+    failure_.track = queue_.currentTrack();
+    failure_.key = queue_.currentKey();
     if (++failuresInARow_ >= queue_.size()) {
       stop();  // every track failed in a row: nothing here plays
       return;

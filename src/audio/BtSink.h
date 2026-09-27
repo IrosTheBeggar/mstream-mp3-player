@@ -9,6 +9,7 @@
 #include "AudioTap.h"
 #include "DeclickReader.h"
 #include "GainRamp.h"
+#include "OutputModel.h"
 #include "PcmRing.h"
 #include "StreamRestart.h"
 #include "VolumeMath.h"
@@ -50,6 +51,14 @@ class PlayerA2dp;  // BtSink.cpp: ESP32-A2DP's source with the fixes below
 //
 // Headphone buttons and link changes arrive as events for the loop task
 // (takeEvent()); nothing is acted on inside the Bluetooth callbacks.
+//
+// The Output screen (OutputModel) drives the link as a listener would:
+// connect() pages the remembered headphones now, disconnect() lets go and
+// stops trying (and refuses them coming back by themselves) until the next
+// connect(), and the Pair screen scans (startPairScan(): audio devices are
+// listed, none is connected to) and pairs with one it picked (pairWith():
+// it replaces the remembered headphones once it is linked; a pairing that
+// fails keeps the old ones). link() says what it is doing, for the card.
 class BtSink {
 public:
   static constexpr uint8_t kConsumerId = 1;
@@ -124,9 +133,40 @@ public:
   // with that address); waits up to waitMs for it, and with a wait (for a
   // restart that follows) erases the stored copy itself if that task can't.
   // true: done. Without a wait it is posted by update().
-  bool forgetDevice(uint32_t waitMs = 0);
+  // `forGood` (the Output screen's Forget): nothing is looked for by name
+  // either (saved), until new headphones link: the forgotten ones can't
+  // come back by a scan for their name, at the next boot or a B hold.
+  // Without it (the console's f), the scan by name is back.
+  bool forgetDevice(uint32_t waitMs = 0, bool forGood = false);
+  // Nothing remembered and nothing to look for (forgotten for good): a
+  // connect can't find anything; pairing is the way.
+  bool nothingToFind() const { return !linkRemembered_.load(std::memory_order_relaxed) && forgotForGood_.load(); }
+  // The device linked now has this address (the Pair screen's pick).
+  bool isLinkedTo(const uint8_t addr[6]) const;
   // Next queued event, oldest first, or Event::None. Loop task.
   Event takeEvent();
+
+  // ---- the Output screen (loop task; carried out on BtAppT) ----
+  // What the link is doing (published by BtAppT a few times a second).
+  BtLink link() const;
+  // Page the remembered headphones now (3 tries, then the scan by name);
+  // with none remembered, scan by name. Undoes disconnect().
+  void connect();
+  // Let go of the link (or stop connecting) and stop trying: the
+  // headphones can't come back by themselves until connect().
+  void disconnect();
+  // The Pair screen: scan and list audio devices, connecting to none;
+  // stopPairScan() goes back to what it was doing.
+  void startPairScan();
+  void stopPairScan();
+  // Pair with a device the scan listed (its address): the link that is up
+  // goes first; it becomes the remembered headphones once linked.
+  void pairWith(const uint8_t addr[6]);
+  // The scan's list, copied; returns its version (bumped when it changes).
+  uint32_t scanList(BtScanList& out) const;
+  uint32_t scanVersion() const { return scanVersion_.load(std::memory_order_relaxed); }
+  // "SBC 44.1 kHz" once the link's codec is known, else "".
+  const char* codec() const { return codecs_[codecIdx_.load()]; }
   // Frames handed to the Bluetooth stack, silence included: ~44100/s while
   // streaming, 0 while the stream is suspended.
   uint32_t framesPulled() const { return framesPulled_.load(std::memory_order_relaxed); }
@@ -148,6 +188,7 @@ private:
   static void onKey(uint8_t key, bool released);
 
   void post(Event e);                    // any task; never blocks
+  void setForgotForGood(bool on);        // saves it (loop task, or BtAppT on a link)
   void setDeviceName(const char* name);  // Bluedroid's BTC task only
 
   PcmRing* ring_ = nullptr;
@@ -155,12 +196,32 @@ private:
   QueueHandle_t events_ = nullptr;
   std::atomic<uint32_t> eventsDropped_{0};
 
+  void setCodec(const char* text);        // BtAppT
+  void flushAsks();                        // hands the Output screen's asks to BtAppT
+  void noteScanResult(const uint8_t* addr, const char* name, int rssi, uint32_t cod);  // BTC task
+
   // Two copies each, so a writer never rewrites the one another task reads.
   char sinkNames_[2][64] = {"", ""};
   std::atomic<uint8_t> sinkNameIdx_{0};
   char deviceNames_[2][64] = {"", ""};
   std::atomic<uint8_t> deviceNameIdx_{0};
   char lastLogged_[64] = "";
+  char codecs_[2][24] = {"", ""};
+  std::atomic<uint8_t> codecIdx_{0};
+
+  // The link for the Output screen, published by BtAppT (BtLink's fields).
+  std::atomic<uint8_t> linkPhase_{0};
+  std::atomic<uint8_t> linkAttempt_{0};
+  std::atomic<uint8_t> linkAttempts_{0};
+  std::atomic<bool> linkRemembered_{false};
+  // The pairing scan's list (PSRAM), written on the BTC task, copied out
+  // by the loop, under scanLock_.
+  BtScanList* scan_ = nullptr;
+  mutable portMUX_TYPE scanLock_ = portMUX_INITIALIZER_UNLOCKED;
+  std::atomic<uint32_t> scanVersion_{0};
+  uint8_t pairAddr_[6] = {};  // pairWith()'s, read by BtAppT after the work is posted
+  // The Output screen's asks not handed to BtAppT yet (its queue was full).
+  uint8_t askPending_ = 0;
 
   // Set on Bluetooth tasks, read anywhere.
   std::atomic<bool> linked_{false};     // the A2DP link as reported to the loop
@@ -190,6 +251,7 @@ private:
   std::atomic<uint32_t> streamEpoch_{0};
 
   std::atomic<bool> forgotten_{false};  // set by BtAppT once it forgot the device
+  std::atomic<bool> forgotForGood_{false};  // forgetDevice(forGood): no scan by name (NVS "bt_forgot")
 
   // Data callback only, apart from the atomics.
   DeclickReader reader_{kConsumerId};

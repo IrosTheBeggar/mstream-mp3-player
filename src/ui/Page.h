@@ -17,14 +17,19 @@ class Ui;
 enum class PageKind : uint8_t {
   None = 0,
   NowPlaying,
-  Artists,       // Library root: every artist, A-Z
+  Library,       // the Library's root: id is its segment (LibrarySegment)
   Artist,        // an artist: Play/Play next/+Queue, "All tracks", the albums
   Album,         // an album's tracks
   ArtistTracks,  // all of an artist's tracks
+  Folder,        // a folder: its folders, then its audio files
   Queue,
   Dance,
   Output,
+  Pair,   // the Output tab's Pair screen (a scan list)
+  About,  // the Output tab's About
 };
+// The Library root's segments (its PageRef::id).
+enum class LibrarySegment : uint8_t { Artists = 0, Albums = 1, Folders = 2 };
 const char* pageKindName(uint8_t kind);
 
 // PageRef::scrollPx for a page opened from Now Playing: open at the playing
@@ -59,6 +64,9 @@ public:
   virtual void repaint() = 0;
   // Draw the header row again (the toast was over it).
   virtual void repaintHeader() { repaint(); }
+  // It has the page header (y 36-71: ‹, a title, a pill), whose ‹ and pill
+  // stay live under the toast. Now Playing and the Dance tab have none.
+  virtual bool hasHeader() const { return true; }
   // Every loop pass while the page is up and nothing modal covers it:
   // redraw what changed. `frameDue`: an animation frame may be drawn now
   // (30 fps on deadlines); `wholeRows`: lists move in whole rows (the audio
@@ -76,6 +84,8 @@ public:
   // Its tab was tapped again at its root (e.g. the Queue: back to the
   // playing track).
   virtual void home() {}
+  // An album's cover thumbnail arrived (ui/Thumbs): redraw what shows it.
+  virtual void thumbReady(uint32_t album) { (void)album; }
   // 'ui' on the console: one line about its state.
   virtual void describe(char* buf, size_t size) const;
 

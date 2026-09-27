@@ -28,6 +28,19 @@ public:
   fs::FS& fs() { return *fs_; }
   // "SD", "flash" or "none", for the diagnostics screen.
   const char* name() const { return name_; }
+  // The microSD card is what's mounted (not the flash fallback).
+  bool onCard() const { return name_[0] == 'S'; }  // "SD"
+  // No card at boot: is one there now? (SD.begin() again: the UI's "Try
+  // again". The firmware restarts to use it: the audio backend, the
+  // library and the queue were all set up on the flash.) Loop task, never
+  // inside an LcdLock (the card shares the LCD's bus and its lock).
+  bool probeCard();
+  // The mounted volume's size in bytes (0: none), for About.
+  uint64_t totalBytes() const;
+  // The VFS mount point ("/sd", "/littlefs"): a path the fs sees as
+  // "/music/x" is "<vfsRoot>/music/x" to POSIX calls (open, stat, opendir),
+  // which other tasks use (the thumbnail worker) without Arduino's File.
+  const char* vfsRoot() const { return mount_; }
 
 private:
   fs::FS* fs_ = nullptr;

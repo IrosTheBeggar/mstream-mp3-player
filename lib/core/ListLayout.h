@@ -57,6 +57,26 @@ public:
   static int32_t clamp(int32_t offset, int32_t maxOffset) {
     return offset < 0 ? 0 : offset > maxOffset ? maxOffset : offset;
   }
+  // The offset to draw a moving list at: `target`, or at most `maxStep`
+  // from `drawn` towards it (the hardware scroll's one-hold step: a bigger
+  // move would be a full redraw).
+  static int32_t stepToward(int32_t drawn, int32_t target, int32_t maxStep) {
+    if (target > drawn + maxStep) return drawn + maxStep;
+    if (target < drawn - maxStep) return drawn - maxStep;
+    return target;
+  }
+  // The same while the list moves in whole rows (the audio is short of
+  // time): `target` to a whole row, then at most `maxStep` from `drawn`,
+  // and a capped step ends on the whole row nearest `drawn` within it, so
+  // the rounding never makes the step longer (from an unaligned `drawn`,
+  // rounding after the cap could add most of a row: a full redraw).
+  // `maxStep` must be at least a pitch.
+  static int32_t stepTowardRows(int32_t drawn, int32_t target, int32_t maxStep, int32_t pitch) {
+    const int32_t t = target / pitch * pitch;
+    const int32_t s = stepToward(drawn, t, maxStep);
+    if (s == t) return s;
+    return s > drawn ? s / pitch * pitch : (s + pitch - 1) / pitch * pitch;
+  }
 
   // ---- the rail (a scrollbar thumb, or the A-Z rail's letter thumb) ----
   // The thumb's top in a track of `trackPx` for `offset`, a thumb of `thumbPx`.

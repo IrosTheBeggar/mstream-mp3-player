@@ -63,6 +63,7 @@ constexpr int kBarH = 36;       // the tab bar, y 0-35 (fixed)
 constexpr int kContentY = 36;   // the content area, y 36-239
 constexpr int kHeaderY = 36;    // a page header, y 36-71
 constexpr int kHeaderH = 36;
+constexpr int kMinPathRoom = 60;  // a folder header's path line, or none
 constexpr int kListY = 72;      // a list's band, y 72-239: 4 rows of 42
 constexpr int kListH = kH - kListY;
 constexpr int kRowH = 42;

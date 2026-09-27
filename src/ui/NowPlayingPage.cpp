@@ -1,21 +1,15 @@
-// Now Playing (a first page for the framework; the spec's §6.1 is the full
-// screen): the title (2 lines), the artist and the album (each a 40 px band
-// that opens it in the Library, at the playing track: the review's grafts,
-// 40 px or more so a tap meant for one doesn't open the other), the
-// progress and times, and the transport. Content y 36-239:
-//
-//   38-89    title, DejaVu Bold 22, up to 2 lines
-//   90-129   artist  ›          (tap: Library > artist)
-//   130-169  album   ›          (tap: Library > artist > album)
-//   170-191  progress bar, elapsed / "4 of 16" / length
-//   192-239  [output + volume] [prev] [play/pause] [next] [...]   64 px zones
-//
-// The "..." zone reaches the screen's edge.
+// Now Playing (the tab bar spec §6.1, mockups 01-04, with the review's
+// grafts): the cover, the title, the artist and the album as 40 px bands
+// that open them in the Library at the playing track, the progress and
+// times, and the transport with the volume sheet and a "..." sheet. The
+// layout is in Pages.h. The "..." zone reaches the screen's edge.
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
 #include "TrackCatalog.h"
+#include "UiText.h"
+#include "app/Psram.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
@@ -27,6 +21,9 @@ namespace ui {
 
 namespace {
 
+constexpr int kCoverX = 12, kCoverY = 40, kCoverPx = 96;
+constexpr int kTextX = 120;       // the title and the bands' text
+constexpr int kColumnX = 112;     // what's right of the cover (drawn and hit)
 constexpr int kTitleY = 38, kTitleH = 52;
 constexpr int kArtistY = 90, kArtistH = 40;
 constexpr int kAlbumY = 130, kAlbumH = 40;
@@ -38,43 +35,104 @@ void mmss(uint32_t ms, char* buf, size_t size) {
   snprintf(buf, size, "%lu:%02lu", static_cast<unsigned long>(ms / 60000), static_cast<unsigned long>(ms / 1000 % 60));
 }
 
-// The artist and album ids of a library track (kNone for a built-in).
-void containers(Library& lib, uint32_t track, uint32_t* artist, uint32_t* album) {
-  *artist = *album = NavModel::kNone;
-  const LibraryIndex* index = lib.index();
-  if (!index || !index->ready() || track >= index->trackCount()) return;
-  *artist = index->track(track).artist;
-  *album = index->track(track).album;
+// The last line of a wrap was cut ("…" added): the text needs more room.
+bool cutShort(const char* line, const char* text) {
+  const size_t n = strlen(line), t = strlen(text);
+  const bool ends = (n >= 3 && strcmp(line + n - 3, "\xE2\x80\xA6") == 0) || (n >= 3 && strcmp(line + n - 3, "...") == 0);
+  return ends && !(t >= 3 && strcmp(text + t - 3, line + n - 3) == 0);
 }
 
 }  // namespace
 
+uint32_t NowPlayingPage::playingAlbum() const {
+  const AppState& s = ui_.state();
+  const LibraryIndex* index = const_cast<Ui&>(ui_).library().index();
+  if (s.current < 0 || !index || !index->ready() || s.trackId >= index->trackCount()) return LibraryIndex::kNone;
+  return index->track(s.trackId).album;
+}
+
 void NowPlayingPage::enter(NavModel::PageRef& ref) {
   (void)ref;
   pressed_ = None;
+  emptyPressed_ = -1;
+  if (!cover_) {
+    cover_ = psramNew<M5Canvas>();
+    if (cover_) {
+      cover_->setPsram(true);  // before createSprite(): otherwise internal RAM
+      cover_->setColorDepth(16);
+      if (!cover_->createSprite(kCoverPx + 2, kCoverPx + 2)) {
+        psramDelete(cover_);
+        cover_ = nullptr;
+      }
+    }
+  }
   repaint();
 }
 
 void NowPlayingPage::repaint() {
-  gfx::fill(0, kContentY, kW, kTitleY - kContentY, col::BG);  // the 2 rows above the title
+  if (ui_.state().current < 0) {
+    drawn_ = Drawn{};  // the empty state, all of it
+    update(0, false, false);
+    return;
+  }
+  // What the pieces don't cover: the rows above the title, the left column
+  // under the cover.
+  gfx::fill(0, kContentY, kW, kTitleY - kContentY, col::BG);
+  gfx::fill(0, kTitleY, kColumnX, kCoverY - 1 - kTitleY, col::BG);
+  gfx::fill(0, kCoverY + kCoverPx + 1, kColumnX, kProgressY - (kCoverY + kCoverPx + 1), col::BG);
+  gfx::fill(0, kCoverY - 1, kCoverX - 1, kCoverPx + 2, col::BG);
+  gfx::fill(kCoverX + kCoverPx + 1, kCoverY - 1, kColumnX - (kCoverX + kCoverPx + 1), kCoverPx + 2, col::BG);
   drawn_ = Drawn{};
   update(0, false, false);
+}
+
+void NowPlayingPage::thumbReady(uint32_t album) {
+  if (album == playingAlbum() && !drawn_.coverShown) drawCover();
+}
+
+void NowPlayingPage::drawCover() {
+  const uint32_t album = playingAlbum();
+  const uint16_t* px = album != LibraryIndex::kNone ? ui_.thumbs().get(album, ThumbCache::Size::Large) : nullptr;
+  drawn_.coverAlbum = album;
+  drawn_.coverShown = px != nullptr;
+  if (!cover_) {
+    gfx::fill(kCoverX, kCoverY, kCoverPx, kCoverPx, col::CARD);
+    return;
+  }
+  M5Canvas& c = *cover_;
+  c.fillSprite(col::DIV);  // the frame
+  if (px) {
+    c.pushImage(1, 1, kCoverPx, kCoverPx, reinterpret_cast<const lgfx::swap565_t*>(px));
+  } else {
+    // The placeholder: no cover, or not made yet.
+    c.fillRect(1, 1, kCoverPx, kCoverPx, col::CARD);
+    c.fillCircle(1 + kCoverPx / 2, 1 + kCoverPx / 2, 28, col::BTN);
+    icons::drawCentred(c, icons::kNote, 1 + kCoverPx / 2, 1 + kCoverPx / 2, ui_.state().current >= 0 ? col::DIM : col::FAINT);
+  }
+  gfx::push(c, kCoverX - 1, kCoverY - 1, kCoverPx + 2, kCoverPx + 2);
 }
 
 void NowPlayingPage::drawTitle() {
   const AppState& s = ui_.state();
   M5Canvas& c = gfx::strip();
   Fonts& f = Fonts::instance();
-  c.fillRect(0, 0, kW, kTitleH, col::BG);
-  char title[128] = "Nothing playing";
+  const int w = kW - kColumnX;
+  const int textW = 310 - kTextX;
+  c.fillRect(0, 0, w, kTitleH, col::BG);
+  char title[160] = "Nothing playing";
   if (s.current >= 0) ui_.player().catalog().title(s.trackId, title, sizeof(title));
-  char lines[2][96];
-  const int n = textfit::wrap(f.fit(Font::Title), title, strlen(title), kW - 24, 2, &lines[0][0], sizeof(lines[0]));
-  for (int i = 0; i < n; ++i) {
-    f.draw(c, Font::Title, lines[i], 12, n == 1 ? 26 : 13 + i * 26, kW - 24, s.current >= 0 ? col::TXT : col::DIM,
-           col::BG);
+  const uint16_t ink = s.current >= 0 ? col::TXT : col::DIM;
+  const int x = kTextX - kColumnX;
+  char lines[3][112];
+  int n = textfit::wrap(f.fit(Font::Title), title, strlen(title), textW, 2, &lines[0][0], sizeof(lines[0]));
+  if (n == 2 && cutShort(lines[1], title)) {
+    // Too long for two big lines: three smaller ones.
+    n = textfit::wrap(f.fit(Font::Bold), title, strlen(title), textW, 3, &lines[0][0], sizeof(lines[0]));
+    for (int i = 0; i < n; ++i) f.draw(c, Font::Bold, lines[i], x, 9 + i * 17, textW, ink, col::BG);
+  } else {
+    for (int i = 0; i < n; ++i) f.draw(c, Font::Title, lines[i], x, n == 1 ? 26 : 13 + i * 26, textW, ink, col::BG);
   }
-  gfx::push(c, 0, kTitleY, kW, kTitleH);
+  gfx::push(c, kColumnX, kTitleY, w, kTitleH);
 }
 
 void NowPlayingPage::drawArtistAlbum() {
@@ -83,23 +141,26 @@ void NowPlayingPage::drawArtistAlbum() {
   Fonts& f = Fonts::instance();
   const TrackCatalog& cat = ui_.player().catalog();
   const bool lib = s.current >= 0 && !TrackCatalog::isBuiltin(s.trackId);
+  const int w = kW - kColumnX;
+  const int x = kTextX - kColumnX;
+  const int textW = w - x - 26;
   // The artist band.
   uint16_t bg = pressed_ == Artist ? col::ROW_SEL : col::BG;
-  c.fillRect(0, 0, kW, kArtistH, bg);
+  c.fillRect(0, 0, w, kArtistH, bg);
   const char* artist = s.current < 0 ? "Open the Library" : lib ? cat.artist(s.trackId) : "Built-in test track";
   if (lib && !artist[0]) artist = "(no artist folder)";
-  f.draw(c, Font::Body, artist, 12, kArtistH / 2, kW - 44, s.current < 0 ? accent::Library : col::SOFT, bg);
-  if (lib || s.current < 0) icons::drawCentred(c, icons::kChevronRight, kW - 16, kArtistH / 2, col::FAINT);
-  gfx::push(c, 0, kArtistY, kW, kArtistH);
+  f.draw(c, Font::Body, artist, x, kArtistH / 2, textW, s.current < 0 ? accent::Library : col::SOFT, bg);
+  if (lib || s.current < 0) icons::drawCentred(c, icons::kChevronRight, w - 14, kArtistH / 2, col::FAINT);
+  gfx::push(c, kColumnX, kArtistY, w, kArtistH);
   // The album band.
   bg = pressed_ == Album ? col::ROW_SEL : col::BG;
-  c.fillRect(0, 0, kW, kAlbumH, bg);
+  c.fillRect(0, 0, w, kAlbumH, bg);
   if (lib) {
     const char* album = cat.album(s.trackId);
-    f.draw(c, Font::Small, album[0] ? album : "(loose tracks)", 12, kAlbumH / 2, kW - 44, col::DIM, bg);
-    icons::drawCentred(c, icons::kChevronRight, kW - 16, kAlbumH / 2, col::FAINT);
+    f.draw(c, Font::Body, album[0] ? album : "(loose tracks)", x, kAlbumH / 2, textW, col::DIM, bg);
+    icons::drawCentred(c, icons::kChevronRight, w - 14, kAlbumH / 2, col::FAINT);
   }
-  gfx::push(c, 0, kAlbumY, kW, kAlbumH);
+  gfx::push(c, kColumnX, kAlbumY, w, kAlbumH);
 }
 
 void NowPlayingPage::drawProgress() {
@@ -128,7 +189,7 @@ void NowPlayingPage::drawProgress() {
     }
     f.draw(c, Font::Small, t, x0 + w, kTextY, 60, col::SOFT, col::BG, Fonts::Align::Right);
   }
-  char mid[40];
+  char mid[72];
   uint16_t mc = col::DIM;
   if (s.failed) {
     snprintf(mid, sizeof(mid), "Can't play this track");
@@ -139,9 +200,28 @@ void NowPlayingPage::drawProgress() {
     snprintf(mid, sizeof(mid), "%s%lu of %lu", s.play == PlayState::Paused ? "Paused, " : s.play == PlayState::Stopped ? "Stopped, " : "",
              static_cast<unsigned long>(s.current + 1), static_cast<unsigned long>(s.queueSize));
     if (s.play != PlayState::Playing) mc = col::AMBER;
+    // Where it plays (mockup 01's output line): "4 of 16 · SPYDRONE", when
+    // it fits between the times.
+    char withOutput[72];
+    snprintf(withOutput, sizeof(withOutput), "%s \xC2\xB7 %s", mid, outputName());
+    if (f.width(Font::Small, withOutput) <= kMidW) snprintf(mid, sizeof(mid), "%s", withOutput);
   }
-  f.draw(c, Font::Small, mid, kW / 2, kTextY, 170, mc, col::BG, Fonts::Align::Centre);
+  f.draw(c, Font::Small, mid, kW / 2, kTextY, kMidW, mc, col::BG, Fonts::Align::Centre);
   gfx::push(c, 0, kProgressY, kW, kProgressH);
+}
+
+const char* NowPlayingPage::outputName() const {
+  const AppState& s = ui_.state();
+  if (!s.onBluetooth) return "Speaker";
+  if (!s.btConnected) return "connecting...";
+  return s.btName[0] ? s.btName : "Headphones";
+}
+
+uint32_t NowPlayingPage::outputSig() const {
+  const AppState& s = ui_.state();
+  uint32_t h = (s.onBluetooth ? 1u : 0u) | (s.btConnected ? 2u : 0u);
+  for (const char* p = s.btName; *p; ++p) h = h * 31u + static_cast<unsigned char>(*p);
+  return h;
 }
 
 void NowPlayingPage::drawTransport() {
@@ -155,7 +235,7 @@ void NowPlayingPage::drawTransport() {
     const bool down = pressed_ == static_cast<Zone>(Volume + z);
     if (down && z != 2) c.fillCircle(cx, cy, 22, col::BTN_HI);
     switch (z) {
-      case 0: {  // the output and its volume: tap for the Output tab
+      case 0: {  // the output and its volume: tap for the volume sheet
         const uint16_t ic = s.onBluetooth ? (s.btConnected ? col::CYAN : col::AMBER) : col::SOFT;
         icons::drawCentred(c, s.onBluetooth ? icons::kHeadphones : icons::kSpeaker, cx, cy - 8, ic);
         char v[6];
@@ -178,20 +258,95 @@ void NowPlayingPage::drawTransport() {
   gfx::push(c, 0, kTransportY, kW, kTransportH);
 }
 
+bool NowPlayingPage::emptyState(EmptyState& e) const {
+  const AppState& s = ui_.state();
+  if (!s.card && s.libraryTracks == 0) {
+    e.icon = &icons::kSdCard;
+    e.title = "No microSD card";
+    e.line1 = "Insert a card with your music in /music,";
+    e.line2 = "as /music/Artist/Album/01 - Title.mp3";
+    e.buttons[0] = "Try again";
+    return true;
+  }
+  e.icon = &icons::kNote;
+  e.title = "Nothing playing";
+  e.line1 = uitext::kPickInLibrary;  // (fits: the longer one didn't)
+  e.buttons[0] = "Open Library";
+  e.buttonIcons[0] = &icons::kLibrary;
+  if (s.libraryTracks > 0) {
+    e.buttons[1] = "Shuffle all";
+    e.buttonIcons[1] = &icons::kShuffle;
+  }
+  return true;
+}
+
+void NowPlayingPage::onEmptyEvent(const InputEvent& e) {
+  using T = InputEvent::Type;
+  EmptyState es;
+  emptyState(es);
+  const int b = emptyStateButtonAt(es, kContentY, kH - kContentY, e);
+  if (e.type == T::Down) {
+    emptyPressed_ = b;
+    if (b >= 0) drawEmptyState(es, kContentY, kH - kContentY, accent::NowPlaying, emptyPressed_);
+    return;
+  }
+  if (e.type != T::Tap && e.type != T::DragStart && e.type != T::Release && e.type != T::Cancel) return;
+  const int was = emptyPressed_;
+  emptyPressed_ = -1;
+  if (was >= 0) drawEmptyState(es, kContentY, kH - kContentY, accent::NowPlaying, -1);
+  if (e.type != T::Tap || was < 0) return;
+  ui_.tick();
+  const AppState& s = ui_.state();
+  if (!s.card && s.libraryTracks == 0) {
+    if (ui_.host().retryCard()) {
+      ui_.toast("Card found: starting again", false);
+    } else {
+      ui_.warn("Still no card: is it all the way in?");
+    }
+  } else if (was == 0) {
+    ui_.showTab(NavModel::Tab::Library);
+  } else {
+    ui_.shuffleAll();
+  }
+}
+
 bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   (void)nowMs;
   (void)frameDue;
   (void)wholeRows;
   const AppState& s = ui_.state();
+  // Nothing queued: the empty state, drawn when it (or the card) changes.
+  const bool empty = s.current < 0;
+  const bool noCard = !s.card && s.libraryTracks == 0;
+  if (empty) {
+    if (!drawn_.valid || !drawn_.empty || drawn_.noCard != noCard) {
+      EmptyState es;
+      emptyState(es);
+      drawEmptyState(es, kContentY, kH - kContentY, accent::NowPlaying, emptyPressed_);
+      drawn_ = Drawn{};
+      drawn_.valid = true;
+      drawn_.empty = true;
+      drawn_.noCard = noCard;
+    }
+    return false;
+  }
+  if (drawn_.empty) {
+    repaint();  // a track: the player again, all of it
+    return false;
+  }
   const bool all = !drawn_.valid;
-  if (all || s.trackId != drawn_.track || (s.current < 0) != (drawn_.current < 0)) {
+  const bool newTrack = all || s.trackId != drawn_.track || (s.current < 0) != (drawn_.current < 0);
+  if (newTrack) {
     drawTitle();
     drawArtistAlbum();
   }
+  // The cover: when the album changes (a track of the same album keeps it).
+  if (all || (newTrack && playingAlbum() != drawn_.coverAlbum)) drawCover();
   const uint32_t second = s.positionMs / 1000;
   const uint32_t durS = s.durationMs / 1000;
+  const uint32_t output = outputSig();
   if (all || second != drawn_.second || durS != drawn_.durationS || s.play != drawn_.play ||
-      s.current != drawn_.current || s.queueSize != drawn_.size) {
+      s.current != drawn_.current || s.queueSize != drawn_.size || output != drawn_.output) {
     drawProgress();
   }
   if (all || s.play != drawn_.play || s.volume != drawn_.volume || s.onBluetooth != drawn_.bluetooth) drawTransport();
@@ -204,34 +359,83 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   drawn_.size = s.queueSize;
   drawn_.volume = s.volume;
   drawn_.bluetooth = s.onBluetooth;
+  drawn_.output = output;
   return false;
 }
 
 NowPlayingPage::Zone NowPlayingPage::zoneAt(const InputEvent& e) const {
-  if (e.y >= kArtistY && e.y < kArtistY + kArtistH) return Artist;
-  if (e.y >= kAlbumY && e.y < kAlbumY + kAlbumH) return Album;
   if (e.y >= kTransportY) {
     if (e.atRightEdge()) return More;  // the "..." zone reaches the edge
     const int z = e.x / kZoneW;
     return static_cast<Zone>(Volume + (z < 0 ? 0 : z > 4 ? 4 : z));
   }
+  if (e.x < kColumnX && e.y >= kCoverY - 4 && e.y < kCoverY + kCoverPx + 4) return Cover;
+  if (e.x >= kColumnX && e.y >= kArtistY && e.y < kArtistY + kArtistH) return Artist;
+  if (e.x >= kColumnX && e.y >= kAlbumY && e.y < kAlbumY + kAlbumH) return Album;
   return None;
 }
 
-void NowPlayingPage::goToLibrary(bool album) {
+void NowPlayingPage::goToLibrary(Go where) {
   const AppState& s = ui_.state();
   if (s.current < 0) {
     ui_.showTab(NavModel::Tab::Library);
     return;
   }
-  uint32_t artist, alb;
-  containers(ui_.library(), s.trackId, &artist, &alb);
-  if (artist == NavModel::kNone) return;  // a built-in track
-  ui_.showInLibrary(artist, album ? alb : NavModel::kNone);
+  const LibraryIndex* index = ui_.library().index();
+  if (TrackCatalog::isBuiltin(s.trackId) || !index || !index->ready() || s.trackId >= index->trackCount()) {
+    ui_.toast("A built-in track isn't in the Library", false);
+    return;
+  }
+  if (ui_.browsingSynthetic()) {
+    ui_.toast("Browsing a synthetic library (uil0: the card's)", false);
+    return;
+  }
+  const LibraryIndex::Track& t = index->track(s.trackId);
+  NavModel::PageRef pages[NavModel::kMaxDepth];
+  int n = 0;
+  auto page = [&](PageKind kind, uint32_t id) {
+    NavModel::PageRef p;
+    p.kind = static_cast<uint8_t>(kind);
+    p.id = id;
+    p.scrollPx = kShowPlaying;  // opened at the playing track (or what holds it)
+    pages[n++] = p;
+  };
+  switch (where) {
+    case Go::Artist:
+      page(PageKind::Artist, t.artist);
+      Serial.printf("[ui] now playing: go to the artist %lu\n", (unsigned long)t.artist);
+      ui_.showLibrary(LibrarySegment::Artists, pages, n);
+      break;
+    case Go::Album:
+      // The album one Back from its artist.
+      page(PageKind::Artist, t.artist);
+      page(PageKind::Album, t.album);
+      Serial.printf("[ui] now playing: go to the album %lu\n", (unsigned long)t.album);
+      ui_.showLibrary(LibrarySegment::Artists, pages, n);
+      break;
+    case Go::Folders: {
+      // Every folder from /music down to the track's, each a Back from the next.
+      uint32_t chain[32];
+      int depth = 0;
+      for (uint32_t f = t.folder; f != LibraryIndex::rootFolder() && f != LibraryIndex::kNone && depth < 32;
+           f = index->folder(f).parent) {
+        chain[depth++] = f;
+      }
+      const int keep = std::min(depth, NavModel::kMaxDepth - 1);
+      for (int i = keep - 1; i >= 0; --i) page(PageKind::Folder, chain[i]);
+      Serial.printf("[ui] now playing: show in folders (%d deep)\n", depth);
+      ui_.showLibrary(LibrarySegment::Folders, pages, n);
+      break;
+    }
+  }
 }
 
 void NowPlayingPage::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
+  if (drawn_.empty) {
+    onEmptyEvent(e);
+    return;
+  }
   const Zone z = zoneAt(e);
   if (e.type == T::Down) {
     pressed_ = z;
@@ -247,15 +451,40 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
   if (e.type != T::Tap || was == None) return;
   ui_.tick();
   switch (was) {
-    case Artist: goToLibrary(false); break;
-    case Album: goToLibrary(true); break;
-    case Volume: ui_.showTab(NavModel::Tab::Output); break;
-    case Prev: ui_.host().prev(); break;
-    case PlayPause: ui_.host().playPause(); break;
-    case Next: ui_.host().next(); break;
+    case Cover:
+    case Album: goToLibrary(Go::Album); break;
+    case Artist: goToLibrary(Go::Artist); break;
+    case Volume: ui_.openVolume(); break;
+    case Prev:
+      Serial.println("[ui] now playing: previous");
+      ui_.host().prev();
+      break;
+    case PlayPause:
+      Serial.println("[ui] now playing: play/pause");
+      ui_.host().playPause();
+      break;
+    case Next:
+      Serial.println("[ui] now playing: next");
+      ui_.host().next();
+      break;
     case More: {
-      static const char* const kRows[3] = {"Go to artist", "Go to album", "Show in the queue"};
-      ui_.openSheet(this, "This track", kRows, 3);
+      static const char* const kRows[3] = {"Go to artist", "Go to album", "Show in folders"};
+      const AppState& s = ui_.state();
+      const TrackCatalog& cat = ui_.player().catalog();
+      const bool lib = s.current >= 0 && !TrackCatalog::isBuiltin(s.trackId);
+      char* folder = moreFolder_;
+      folder[0] = 0;
+      const LibraryIndex* index = ui_.library().index();
+      if (lib && index && index->ready() && s.trackId < index->trackCount()) {
+        char path[256];
+        if (index->folderPath(index->track(s.trackId).folder, path, sizeof(path))) {
+          snprintf(folder, sizeof(moreFolder_), "%s", path);
+        }
+      }
+      const char* details[3] = {lib ? cat.artist(s.trackId) : "", lib ? cat.album(s.trackId) : "", folder};
+      char title[128] = "Nothing playing";
+      if (s.current >= 0) cat.title(s.trackId, title, sizeof(title));
+      ui_.openSheet(this, title, kRows, 3, details);
       break;
     }
     default: break;
@@ -264,21 +493,20 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
 
 void NowPlayingPage::onSheet(int choice) {
   switch (choice) {
-    case 0: goToLibrary(false); break;
-    case 1: goToLibrary(true); break;
-    case 2:
-      ui_.nav().top(NavModel::Tab::Queue).scrollPx = -1;  // opens on the playing track
-      ui_.showTab(NavModel::Tab::Queue);
-      break;
+    case 0: goToLibrary(Go::Artist); break;
+    case 1: goToLibrary(Go::Album); break;
+    case 2: goToLibrary(Go::Folders); break;
     default: break;
   }
 }
 
 void NowPlayingPage::describe(char* buf, size_t size) const {
   const AppState& s = ui_.state();
-  snprintf(buf, size, "Now Playing: track id %lu, entry %ld of %lu, %lu / %lu ms", static_cast<unsigned long>(s.trackId),
-           static_cast<long>(s.current), static_cast<unsigned long>(s.queueSize),
-           static_cast<unsigned long>(s.positionMs), static_cast<unsigned long>(s.durationMs));
+  snprintf(buf, size, "Now Playing: track id %lu, entry %ld of %lu, %lu / %lu ms, cover of album %ld %s",
+           static_cast<unsigned long>(s.trackId), static_cast<long>(s.current), static_cast<unsigned long>(s.queueSize),
+           static_cast<unsigned long>(s.positionMs), static_cast<unsigned long>(s.durationMs),
+           static_cast<long>(drawn_.coverAlbum == LibraryIndex::kNone ? -1 : static_cast<long>(drawn_.coverAlbum)),
+           drawn_.coverShown ? "(its thumbnail)" : "(the placeholder)");
 }
 
 }  // namespace ui

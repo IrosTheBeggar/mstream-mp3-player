@@ -18,6 +18,8 @@ bool ButtonPolicy::handle(const InputEvent& e, Transport& t) {
   if (!e.isButton()) return false;
   const int b = e.button;
   if (e.type == T::Click) {
+    if (b > kButtonC) return false;
+    if (t.idle()) return false;  // inert: nothing to play
     if (b == kButtonA) {
       t.prev();
     } else if (b == kButtonB) {
@@ -42,7 +44,7 @@ bool ButtonPolicy::handle(const InputEvent& e, Transport& t) {
   Feedback f;
   f.kind = Hud::Output;
   f.toBluetooth = !t.onBluetooth();
-  if (!f.toBluetooth && t.playing()) {
+  if (!f.toBluetooth && t.playing() && t.audioOnBluetooth()) {
     t.pause();  // never on to the speaker still playing
     f.paused = true;
   }

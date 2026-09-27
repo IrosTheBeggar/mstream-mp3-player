@@ -41,7 +41,10 @@ public:
   // Draws `text` (the first `len` bytes; UTF-8, not necessarily
   // NUL-terminated) fitted to `maxW` px, vertically centred on `y`,
   // left-aligned at `x` (or right-aligned / centred by `datum`). Returns
-  // the width drawn.
+  // the width drawn. The line's whole height is filled with `bg` behind
+  // the glyphs, which cuts into a line drawn close above or below (its
+  // descenders, a border); bg == fg draws the glyphs only, blended with
+  // what is there (a sprite can be read back).
   enum class Align : uint8_t { Left, Centre, Right };
   int draw(lgfx::LovyanGFX& g, Font f, const char* text, size_t len, int x, int y, int maxW, uint16_t fg,
            uint16_t bg, Align align = Align::Left) const;

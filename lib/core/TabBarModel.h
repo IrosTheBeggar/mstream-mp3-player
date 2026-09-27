@@ -59,6 +59,22 @@ struct State {
 };
 constexpr int kProgressW = 32;
 
+// Where the bar's texts go in a cell (x from the cell's left) and how
+// wide each may be. The host test measures every text any state can show
+// with the real fonts (DejaVu Sans 13) against these, so none is cut on
+// the device ("Playi…" and the battery's "10…" were, before).
+constexpr int kLabelW = kTabW - 2;           // the active tab's label, on its plate
+constexpr int kOutputPlateX = 3;             // the Output tab's plate: its icon and the volume
+constexpr int kOutputPlateW = 64;
+constexpr int kVolumeX = 31;                 // "100%" beside the output icon
+constexpr int kVolumeW = 36;
+constexpr int kBatteryX = 288 - kOutputX;    // the battery icon (288 on screen), 22 x 11
+constexpr int kBatteryTextW = 38;            // its "100%", centred under it (kBatteryX + 12)
+constexpr int kBadgeRight = 23;              // the Queue badge's right edge, from the icon's centre
+constexpr int kBadgePad = 8;                 // the badge pill: its text + this
+inline int labelWidth(int tab) { return tab == kTabs - 1 ? kOutputPlateW : kLabelW; }
+extern const char* const kLabels[kTabs];     // "Playing", "Library", "Queue", "Dance", "Output"
+
 // Bit t: tab cell t must be redrawn to go from `drawn` to `now`.
 uint8_t dirty(const State& drawn, const State& now);
 constexpr uint8_t kAll = (1u << kTabs) - 1u;

@@ -136,6 +136,26 @@ void test_failed_track_is_skipped() {
   TEST_ASSERT_EQUAL_STRING("/music/b.mp3", a.lastPath.c_str());
 }
 
+// The UI's note and the Queue's "!" come from the failure record: which
+// entry failed, counted once per failure.
+void test_a_failure_is_recorded_with_its_entry() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  TEST_ASSERT_EQUAL_UINT32(0, p.lastFailure().count);
+  p.play(1);
+  const uint32_t key = r.queue.keyAt(1);
+  a.failedFlag = true;
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().count);
+  TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().track);
+  TEST_ASSERT_EQUAL_UINT32(key, p.lastFailure().key);
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());  // skipped on
+  // The next one plays: nothing new is recorded.
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().count);
+}
+
 void test_all_tracks_failing_stops_after_one_pass() {
   Rig r(2);
   FakeAudioBackend& a = r.audio;
@@ -435,6 +455,7 @@ int main(int, char**) {
   RUN_TEST(test_next_and_prev_wrap);
   RUN_TEST(test_auto_advance_when_track_finishes);
   RUN_TEST(test_failed_track_is_skipped);
+  RUN_TEST(test_a_failure_is_recorded_with_its_entry);
   RUN_TEST(test_all_tracks_failing_stops_after_one_pass);
   RUN_TEST(test_a_finished_track_resets_the_failure_count);
   RUN_TEST(test_user_skip_resets_the_failure_count);

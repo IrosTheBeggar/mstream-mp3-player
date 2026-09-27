@@ -22,7 +22,12 @@
 // The artist and album names are the folder names (their strings are the
 // folders' own, not copies). The track number and title come from the file
 // name: leading digits, then separators (" - ", ". ", "_"), then the title
-// up to the extension. Only .mp3 and .flac are indexed.
+// up to the extension. Only .mp3 and .flac are tracks. Every other file is
+// counted in its folder (the Folders view hides them but says how many:
+// "14 audio files, 1 other"), and the folder's cover image is picked from
+// them by name: cover.jpg, then folder.jpg, then front.jpg, then any other
+// .jpg (imageRank()). A folder with no audio anywhere under it (artwork
+// alone, say) is left out of the folder views.
 //
 // Views (all sorted with textfold::compare: case- and accent-insensitive,
 // symbols and digits before letters):
@@ -32,8 +37,10 @@
 //   tracksOfAlbum(album)  an album's tracks folder by folder (its own files,
 //                         then disc subfolders A-Z), each by number, then name
 //   tracksOfArtist(artist) the artist's albums' tracks, album after album
-//   subfolders(folder)    a folder's folders, A-Z
+//   subfolders(folder)    a folder's folders with audio under them, A-Z
 //   filesIn(folder)       a folder's audio files, A-Z
+//   treeTracks(folder)    every audio file under a folder: its own files A-Z,
+//                         then each subfolder's tree, A-Z (depth first)
 // plus the A-Z rail's buckets for the two long lists ('#', A..Z).
 //
 // save() writes the finished index as one file (its blocks as they are, a
@@ -52,7 +59,11 @@ public:
   static constexpr int kBuckets = 27;  // '#', 'A'..'Z'
 
   enum class Format : uint8_t { Unknown = 0, Mp3, Flac };
-  enum class Add : uint8_t { Added, Skipped, NoMemory };
+  // Added: a track. Other: a file that isn't audio, counted in its folder
+  // (and a candidate for its cover). Skipped: outside the root, or no name.
+  enum class Add : uint8_t { Added, Skipped, NoMemory, Other };
+  // imageRank(): how good a cover a file name makes, 0 best; kNoImage: none.
+  static constexpr uint8_t kNoImage = 0xFF;
   enum class View : uint8_t { Artists, Albums };
   // load(): Stale means a good file for another `signature` (the card
   // changed); Corrupt a short, damaged or foreign one.
@@ -81,11 +92,16 @@ public:
     uint32_t folder;         // the album's folder (depth 2), or the track's folder
     uint32_t firstTrack, trackCount;
   };
-  struct Folder {            // 24 bytes; folder 0 is the root
+  struct Folder {            // 36 bytes; folder 0 is the root
     uint32_t name;           // the root's is its whole path, "/music"
     uint32_t parent;         // kNone for the root
-    uint32_t firstFolder, folderCount;
-    uint32_t firstFile, fileCount;
+    uint32_t firstFolder, folderCount;  // in subfolders(): those with audio under them
+    uint32_t firstFile, fileCount;      // its own audio files; firstFile also starts its tree's
+    uint32_t treeCount;      // audio files in it and in every folder under it
+    uint32_t image;          // its cover image's file name (arena offset), kNone: none
+    uint16_t otherCount;     // its files that aren't audio (saturating)
+    uint8_t imageRank;       // imageRank() of `image`; kNoImage: none
+    uint8_t imageCount;      // its .jpg/.jpeg files (saturating)
   };
 
   // A run of ids inside a view.
@@ -171,9 +187,24 @@ public:
     return {folderChildren_ + folders_[folder].firstFolder, folders_[folder].folderCount};
   }
   Span filesIn(uint32_t folder) const {
-    return {folderFiles_ + folders_[folder].firstFile, folders_[folder].fileCount};
+    return {folderTree_ + folders_[folder].firstFile, folders_[folder].fileCount};
+  }
+  Span treeTracks(uint32_t folder) const {
+    return {folderTree_ + folders_[folder].firstFile, folders_[folder].treeCount};
   }
   static constexpr uint32_t rootFolder() { return 0; }
+
+  // ---- covers ----
+  // The rank of a file name as a cover: 0 cover.jpg, 1 folder.jpg, 2
+  // front.jpg, 3 any other .jpg or .jpeg (case-insensitive); kNoImage for
+  // anything else (PNGs included: the device decodes JPEG only).
+  static uint8_t imageRank(const char* name, size_t len);
+  // The folder whose image is `album`'s cover: the album's folder, else
+  // its first track's (a disc subfolder); kNone if neither has one.
+  uint32_t albumCover(uint32_t album) const;
+  // "<folder path>/<its image>" into buf; 0 (and "") if it has none or it
+  // didn't fit.
+  size_t imagePath(uint32_t folder, char* buf, size_t size) const;
 
   // A-Z rail: the position in artistsAZ()/albumsAZ() of the first entry in
   // bucket b (0 '#', 1..26 A..Z); bucketStart(v, kBuckets) is the count. A
@@ -228,6 +259,11 @@ private:
   bool tableInsert(Table& t, uint32_t hash, uint32_t id);
   uint32_t intern(const char* s, size_t len);  // kNone: no memory
   uint32_t folderChild(uint32_t parent, const char* name, size_t len);
+  // The folders of `path` up to `lastSlash`, created when new; kNone: no
+  // memory. The artist's (depth 1) and album's (depth 2) folders too.
+  uint32_t folderOf(const char* path, const char* lastSlash, int* depth, uint32_t* artistFolder,
+                    uint32_t* albumFolder);
+  Add addOther(const char* path, const char* lastSlash, const char* leaf, size_t leafLen);
   uint32_t artistFor(uint32_t nameOffset);
   uint32_t albumFor(uint32_t artist, uint32_t nameOffset, uint32_t folder);
   bool buildViews();
@@ -259,7 +295,7 @@ private:
   uint32_t* albumsByArtist_ = nullptr;
   uint32_t* tracksByAlbum_ = nullptr;
   uint32_t* folderChildren_ = nullptr;
-  uint32_t* folderFiles_ = nullptr;
+  uint32_t* folderTree_ = nullptr;   // tracks by folder: depth first, each folder's files A-Z
   uint32_t artistBuckets_[kBuckets + 1] = {};
   uint32_t albumBuckets_[kBuckets + 1] = {};
 

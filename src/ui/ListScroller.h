@@ -104,7 +104,8 @@ public:
   // there (split at the wrap), each piece under its own LcdLock (nested,
   // and so free, inside a Painter::pushFixed() on a move). For what must
   // not move with the list: the A-Z rail, overlays, toasts.
-  void pushAtScreen(M5Canvas& sprite, int x, int screenY, SpiHoldStats* stats = nullptr);
+  // `h`: only its top h lines (0: all of it).
+  void pushAtScreen(M5Canvas& sprite, int x, int screenY, SpiHoldStats* stats = nullptr, int h = 0);
 
   // The GRAM line the panel shows at screen line `y` now (identity when no
   // scroller is active), and the start address in use (0 when none).

@@ -61,6 +61,16 @@ public:
   // current one starts.
   void queueReplaced(bool currentKept);
 
+  // The last track that couldn't be played (skipped by update()), for the
+  // UI's note ("Skipped 07 - x.flac: can't play it") and the Queue's mark
+  // on its row. `count` goes up by one per failure.
+  struct Failure {
+    uint32_t count = 0;
+    uint32_t track = QueueModel::kNone;  // its TrackCatalog id
+    uint32_t key = QueueModel::kNone;    // its queue entry's key
+  };
+  const Failure& lastFailure() const { return failure_; }
+
   void setRepeat(bool on) { repeat_ = on; }
   bool repeat() const { return repeat_; }
 
@@ -92,4 +102,5 @@ private:
   // Tracks that failed since the last one that played through or the last
   // user action.
   size_t failuresInARow_ = 0;
+  Failure failure_;
 };

@@ -69,14 +69,19 @@ bool Input::poll(InputEvent& e) {
   return true;
 }
 
-// The buttons' feedback: every click and hold does something (ButtonPolicy).
-// The glass's is played by whoever acts on the touch (tapTick, holdTick).
-void Input::feedback(const InputEvent& e) {
+// The buttons' feedback, once ButtonPolicy has acted on the event. The
+// glass's is played by whoever acts on the touch (tapTick, holdTick).
+void Input::buttonFeedback(const InputEvent& e, bool acted) {
   if (!hapticsOn_) return;
   using T = InputEvent::Type;
   switch (e.type) {
     case T::Click:
-      haptics_.tap();
+      if (acted) {
+        haptics_.tap();
+      } else {
+        // Inert: two short, softer pulses, quicker than the hold's.
+        haptics_.pulses(20, Haptics::kMedium, 2, 50);
+      }
       break;
     case T::Hold:
       haptics_.doubleTick();
@@ -84,6 +89,14 @@ void Input::feedback(const InputEvent& e) {
     default:
       break;
   }
+}
+
+void Input::connectedTick() {
+  if (hapticsOn_) haptics_.doubleTick();
+}
+
+void Input::alertBuzz() {
+  if (hapticsOn_) haptics_.tick(80, Haptics::kTapLevel);
 }
 
 void Input::tapTick() {
@@ -118,8 +131,7 @@ void Input::update(uint32_t nowMs) {
     const uint32_t r = buttons_[b].repeats();
     e.repeat = static_cast<uint8_t>(r > 255 ? 255 : r);
     if (suspended_) continue;
-    feedback(e);
-    push(e);
+    push(e);  // its feedback once it's handled (buttonFeedback())
   }
 
   // The glass: the first touch point, as M5Unified converts it (screen

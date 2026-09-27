@@ -17,8 +17,10 @@
 #include "ButtonPolicy.h"
 #include "HeadsetKeys.h"
 #include "InputEvent.h"
+#include "OutputModel.h"
 #include "PlaybackController.h"
 #include "QueueModel.h"
+#include "QueueView.h"
 #include "TrackCatalog.h"
 #include "app/DanceMode.h"
 #include "app/Diagnostics.h"
@@ -40,6 +42,10 @@
 // Headphones to connect to; set in a gitignored local.ini (see platformio.ini).
 #ifndef BT_SINK_NAME
 #define BT_SINK_NAME ""
+#endif
+// Shown in About.
+#ifndef PLAYER_VERSION
+#define PLAYER_VERSION "0.4-dev"
 #endif
 
 using Output = Core2AudioBackend::Output;
@@ -76,6 +82,17 @@ static bool btLost = false;
 // The UI (ui/Ui): the tab bar and its pages. In PSRAM, made in setup(); up
 // once the boot screen has been shown for kDiagnosticsScreenMs.
 static ui::Ui* userInterface = nullptr;
+// What the listener asked of Bluetooth (OutputModel): the audio waits on
+// its output until the headphones they asked for are linked.
+static BtSession btSession;
+// The name of the headphones being paired from the Pair screen: once they
+// are linked it becomes the sink name, so a later scan by name finds them.
+static char pairName[32] = "";
+// Track lengths learned as they play (the Queue's "49 min"): PSRAM.
+static queueview::DurationBook durations(psramAlloc, psramFree);
+// A card was found by "Try again": restart at this time (the UI's toast
+// shows first). 0: none.
+static uint32_t restartAtMs = 0;
 
 static constexpr uint32_t kDiagnosticsScreenMs = 3000;
 // Volume keys of headphones without absolute volume (AVRCP passthrough):
@@ -189,17 +206,86 @@ struct ButtonTransport : ButtonPolicy::Transport {
   void pause() override { (void)pauseIfPlaying(); }
   void stepVolume(int delta) override { ::stepVolume(delta); }
   int volume() const override { return audio.volume(); }
-  bool onBluetooth() const override { return audio.output() == Output::Bluetooth; }
+  // Bluetooth, or on its way to it (asked for, not linked yet): a B hold
+  // then goes back to the speaker, which cancels the connection.
+  bool onBluetooth() const override { return audio.output() == Output::Bluetooth || btSession.wanted(); }
+  // Only music on the headphones is paused by a B hold: music still on the
+  // speaker while they connect plays on (as the Output tab's Speaker row).
+  bool audioOnBluetooth() const override { return audio.output() == Output::Bluetooth; }
+  // Nothing queued: the clicks are inert (the "inert" buzz, not the tick).
+  bool idle() const override { return queue.size() == 0; }
   bool switchOutput() override {
     if (silent) {
       Serial.println("[test] silent mode: the output stays on the speaker");
       return false;
     }
-    toggleOutput();
-    return true;
+    return selectOutput(!onBluetooth());
   }
+  // False: refused (no headphones paired since Forget: nothing to connect to).
+  static bool selectOutput(bool bluetooth);
 };
 static ButtonTransport buttonTransport;
+
+// The one way the output changes (the B hold, the Output tab):
+//   - to Bluetooth: at once if the headphones are linked; otherwise they
+//     are connected and the audio stays where it is until they are
+//     (handleBluetooth() moves it on Connected);
+//   - to the speaker: paused first (ButtonPolicy pauses before a B hold;
+//     the Output tab's tap here), and a connection on its way is
+//     cancelled.
+bool ButtonTransport::selectOutput(bool bluetooth) {
+  BtSink& bt = audio.bluetooth();
+  if (bluetooth) {
+    if (bt.connected()) {
+      if (audio.output() != Output::Bluetooth) audio.setOutput(Output::Bluetooth);
+      Serial.println("[output] bluetooth");
+      return true;
+    }
+    if (bt.nothingToFind()) {
+      Serial.println("[output] bluetooth: no headphones paired (forgotten): pair them on the Output tab");
+      return false;
+    }
+    btSession.connect(millis());
+    bt.connect();
+    Serial.println("[output] bluetooth asked for: connecting; the audio stays on the speaker until it's up");
+    return true;
+  }
+  const bool paused = audio.output() == Output::Bluetooth && pauseIfPlaying();
+  if (btSession.wanted()) {
+    btSession.cancel();
+    bt.disconnect();
+    Serial.println("[output] the connection on its way is cancelled");
+  }
+  if (audio.output() != Output::Speaker) audio.setOutput(Output::Speaker);
+  btLost = false;
+  Serial.printf("[output] the speaker%s\n", paused ? " (paused first)" : "");
+  return true;
+}
+
+// Disconnect (and Forget): the audio goes to the speaker, paused, and the
+// headphones are let go; nothing tries to connect until the listener asks.
+static void letGoOfHeadphones(bool forget) {
+  BtSink& bt = audio.bluetooth();
+  // Off the headphones: paused first (only then: music already on the
+  // speaker, waiting for a connection that is cancelled, plays on).
+  const bool paused = audio.output() == Output::Bluetooth && pauseIfPlaying();
+  if (audio.output() != Output::Speaker) audio.setOutput(Output::Speaker);
+  btLost = false;
+  if (bt.connected()) btSession.expectDrop(millis());  // no "lost" dialog for it
+  btSession.cancel();
+  // For good: not looked for by name either, so they can't come back by
+  // themselves (at the next boot, or a B hold) until paired again.
+  if (forget) bt.forgetDevice(0, /*forGood=*/true);
+  bt.disconnect();
+  Serial.printf("[output] %s the headphones%s\n", forget ? "forgot" : "disconnected", paused ? " (paused first)" : "");
+}
+
+// uiF<k>: a state the UI is shown, for screenshots of the states a
+// test can't safely cause (the radio and the card are left alone): c
+// connecting, s searching, p pairing, l the headphones lost (the dialog
+// too), n no card (on Now Playing); uiF0 (or uiF) the real state. Display only: a button
+// on a faked card still does what it does.
+static char uiFake = 0;
 
 // What the UI reads and asks for (ui/UiHost.h).
 struct MainUiHost : ui::UiHost {
@@ -229,6 +315,23 @@ struct MainUiHost : ui::UiHost {
     s.btVolume = bt.volume();
     s.headphonesSetVolume = headphonesSetVolume();
     s.silent = silent;
+    s.btLink = bt.link();
+    s.btSession = btSession;
+    s.btDetail[0] = 0;
+    if (s.btConnected) {
+      const uint32_t delayMs = bt.delayReportUs() / 1000;
+      const char* codec = bt.codec();
+      if (codec[0] && delayMs) {
+        snprintf(s.btDetail, sizeof(s.btDetail), "%s, %lu ms", codec, (unsigned long)delayMs);
+      } else if (codec[0]) {
+        snprintf(s.btDetail, sizeof(s.btDetail), "%s", codec);
+      } else if (delayMs) {
+        snprintf(s.btDetail, sizeof(s.btDetail), "%lu ms delay", (unsigned long)delayMs);
+      }
+    }
+    s.card = storage.onCard();
+    const LibraryIndex* index = library.index();
+    s.libraryTracks = index && index->ready() ? index->trackCount() : 0;
     // The battery is an I2C read of the power chip: every 10 s is plenty.
     const uint32_t now = millis();
     if (batteryAtMs == 0 || now - batteryAtMs >= 10000) {
@@ -242,33 +345,152 @@ struct MainUiHost : ui::UiHost {
     s.underruns = audio.underrunsNow();
     s.ringMatters = audio.isPlaying() && audio.ringSteady();
     s.feedback = buttonPolicy.feedback();
+    fake(s);
+  }
+  static void fake(ui::AppState& s) {
+    if (!uiFake) return;
+    if (uiFake == 'n') {
+      // As after a boot with no card: nothing indexed, nothing queued (Now
+      // Playing shows it; the Library and Queue lists read the real index
+      // and queue, so they don't).
+      s.card = false;
+      s.libraryTracks = 0;
+      s.current = -1;
+      return;
+    }
+    s.btConnected = false;
+    s.btDetail[0] = 0;
+    s.btLink.remembered = true;
+    s.btLink.phase = uiFake == 's' ? BtLink::Phase::Scanning
+                     : uiFake == 'p' ? BtLink::Phase::Pairing
+                                     : BtLink::Phase::Paging;
+    s.btLink.attempt = 2;
+    s.btLink.attempts = 3;
+    if (uiFake == 'l') {
+      s.onBluetooth = true;
+      s.btLost = true;
+    }
   }
   void playPause() override { player.togglePlayPause(); }
   void next() override { player.next(); }
   void prev() override { player.prev(); }
   void stepVolume(int delta) override { ::stepVolume(delta); }
-  void selectOutput(bool bluetooth) override {
-    const Output want = bluetooth ? Output::Bluetooth : Output::Speaker;
-    if (audio.output() == want) return;
+  void stepOutputVolume(bool bluetooth, int delta) override {
+    if (bluetooth == (audio.output() == Output::Bluetooth)) {
+      ::stepVolume(delta);  // the active one: as the buttons do
+    } else if (bluetooth) {
+      stepBluetoothVolume(delta);  // as the headphones' keys do
+    } else if (silent) {
+      Serial.println("[test] silent mode: the speaker stays at volume 0");
+    } else {
+      const int v = constrain(audio.speakerVolume() + delta, 0, 100);
+      audio.setSpeakerVolume(static_cast<uint8_t>(v));
+      Serial.printf("[audio] speaker volume %d%% (not the output now)\n", v);
+    }
+  }
+  bool selectOutput(bool bluetooth) override {
     if (silent && bluetooth) {
       Serial.println("[test] silent mode: the output stays on the speaker");
-      return;
+      return false;
     }
-    // To the speaker: paused first, like the B hold (B plays it again).
-    const bool paused = !bluetooth && pauseIfPlaying();
-    audio.setOutput(want);
-    if (!bluetooth) btLost = false;
-    Serial.printf("[ui] output: %s%s\n", bluetooth ? "bluetooth" : "the speaker", paused ? " (paused first)" : "");
+    Serial.printf("[ui] output: %s\n", bluetooth ? "bluetooth" : "the speaker");
+    return ButtonTransport::selectOutput(bluetooth);
   }
   void openCalibration() override;
-  void forgetHeadphones() override {
-    audio.bluetooth().forgetDevice(/*waitMs=*/3000);  // before the restart
-    Serial.println("[bt] forgot the remembered device; restarting to scan");
-    Serial.flush();
-    ESP.restart();
+  void btConnect() override {
+    if (silent) {
+      Serial.println("[test] silent mode: bluetooth stays off");
+      return;
+    }
+    if (audio.bluetooth().nothingToFind()) {
+      Serial.println("[ui] bluetooth: connect: no headphones paired");
+      return;
+    }
+    btSession.connect(millis());
+    audio.bluetooth().connect();
+    Serial.println("[ui] bluetooth: connect");
+  }
+  void btDisconnect() override { letGoOfHeadphones(false); }
+  void btForget() override { letGoOfHeadphones(true); }
+  void btPairScan(bool on) override {
+    BtSink& bt = audio.bluetooth();
+    if (on) {
+      bt.startPairScan();
+    } else {
+      bt.stopPairScan();
+    }
+  }
+  uint32_t btScan(BtScanList& out) override { return audio.bluetooth().scanList(out); }
+  bool btPairWith(const BtDevice& d) override {
+    BtSink& bt = audio.bluetooth();
+    if (bt.isLinkedTo(d.addr)) {
+      // The headphones linked now (still discoverable): nothing to pair,
+      // nothing to let go. They are the output, as a tap on the card does.
+      Serial.printf("[ui] bluetooth: pair with \"%s\": linked already\n", d.name);
+      if (!silent && audio.output() != Output::Bluetooth) audio.setOutput(Output::Bluetooth);
+      return false;
+    }
+    // The link that is up goes away: paused on the speaker meanwhile; the
+    // new headphones take the audio once linked.
+    const bool paused = audio.output() == Output::Bluetooth && pauseIfPlaying();
+    if (audio.output() != Output::Speaker) audio.setOutput(Output::Speaker);
+    btLost = false;
+    if (bt.connected()) btSession.expectDrop(millis());
+    btSession.pairStarted(millis());
+    snprintf(pairName, sizeof(pairName), "%s", d.name);
+    bt.pairWith(d.addr);
+    Serial.printf("[ui] bluetooth: pair with \"%s\" %02x:%02x:%02x:%02x:%02x:%02x%s\n", d.name, d.addr[0], d.addr[1],
+                  d.addr[2], d.addr[3], d.addr[4], d.addr[5], paused ? " (paused first)" : "");
+    return true;
+  }
+  bool retryCard() override {
+    if (!storage.probeCard()) {
+      Serial.println("[storage] try again: still no card");
+      return false;
+    }
+    Serial.println("[storage] try again: a card is in: restarting to use it");
+    restartAtMs = millis() + 1200;  // the toast shows first
+    return true;
+  }
+  void rescanLibrary() override;
+  const queueview::DurationBook& durations() override { return ::durations; }
+  void about(ui::AboutInfo& a) override {
+    const uint64_t bytes = storage.totalBytes();
+    if (!storage.available()) {
+      snprintf(a.storage, sizeof(a.storage), "No storage");
+    } else if (storage.onCard()) {
+      snprintf(a.storage, sizeof(a.storage), "microSD card, %.1f GB", bytes / 1e9);
+    } else {
+      snprintf(a.storage, sizeof(a.storage), "Internal flash, %.1f MB (no card)", bytes / 1e6);
+    }
+    snprintf(a.version, sizeof(a.version), "%s, built %s", PLAYER_VERSION, __DATE__);
+    BtSink& bt = audio.bluetooth();
+    const BtLink l = bt.link();
+    snprintf(a.bluetooth, sizeof(a.bluetooth), "%s%s", l.remembered ? (bt.deviceName()[0] ? bt.deviceName() : "paired") : "none paired",
+             bt.connected() ? ", connected" : "");
+    const diag::Heap h = diag::heap();
+    a.ramFree = h.internalFree;
+    a.ramMin = h.internalMin;
+    a.psramFree = h.psramFree;
   }
 };
 static MainUiHost uiHost;
+
+// The library walked and built again (g0, the UI's "Try again" with no
+// music): the queue follows its tracks by path, the UI's ids start over,
+// the lengths learned are for the old ids.
+static bool rebuildLibrary() {
+  const bool ok = queueStore.remap([](void*) { return library.rebuild(); }, nullptr);
+  const LibraryIndex* index = library.index();
+  durations.reset(index && index->ready() ? index->trackCount() : 0);
+  if (userInterface) userInterface->libraryChanged();  // every index id changed
+  return ok;
+}
+
+void MainUiHost::rescanLibrary() {
+  Serial.println("[ui] try again: walking /music");
+  rebuildLibrary();
+}
 
 static const char* stateName() {
   if (audio.failed()) return "failed";
@@ -504,8 +726,33 @@ static void spikeCommand(void (Spike::*fn)(const char*), const char* a) {
     closeCalibration();
   }
   (spike.*fn)(a);
+  // g<n> rebuilt the synthetic library, or g0 dropped it: the Library tab,
+  // if it browses it, follows before it draws again.
+  if (userInterface && userInterface->browsingSynthetic()) userInterface->browse(spike.synthetic());
   uiHeld = false;
   uiResume();
+}
+
+// uil<n>: the Library tab browses a synthetic library of n tracks (the
+// spike's g<n>: 6 artists and 15 albums per 100 tracks), to see the lists,
+// the A-Z rail and the jump grid at the scale of thousands (the card has 6
+// artists). Look only: its ids aren't the player's. uil0 (or uil): the
+// card's library again.
+static void browseCommand(const char* a) {
+  if (!userInterface) return;
+  const long n = atol(a);
+  if (n <= 0) {
+    userInterface->browse(nullptr);
+    return;
+  }
+  char num[16];
+  snprintf(num, sizeof(num), "%ld", n);
+  spikeCommand(&Spike::index, num);  // builds it (and reports it) while the UI is held
+  if (!spike.synthetic()) {
+    Serial.println("[ui] no synthetic library was made");
+    return;
+  }
+  userInterface->browse(spike.synthetic());
 }
 
 // uit/uih/uis/uid: a scripted finger on the glass (Input::simulate), for
@@ -587,7 +834,21 @@ static SerialConsole console({
     [](const char* a) {
       // ui (u + "i"): the UI's navigation state; ui0-ui4 a tab, uib back.
       if (a[0] == 'i') {
+        if (a[1] == 'l') {
+          browseCommand(a + 2);
+          return;
+        }
         if (simulatedTouch(a + 1)) return;
+        if (a[1] == 'F') {
+          uiFake = a[2] == '0' ? 0 : a[2];
+          Serial.printf("[ui] shown state: %s\n", uiFake ? "faked (uiF0: the real one)" : "the real one");
+          if (uiFake == 'l' && userInterface) userInterface->headphonesLost();
+          return;
+        }
+        if (a[1] == 'V') {
+          if (userInterface) userInterface->volumeKeys();  // the HUD, the volume unchanged
+          return;
+        }
         if (userInterface) userInterface->command(a + 1);
         return;
       }
@@ -604,9 +865,16 @@ static SerialConsole console({
 // Touch buttons: the same on every screen (ButtonPolicy). Each click and
 // hold is logged; repeats show as the volume lines.
 static void handleButton(const InputEvent& e) {
-  if (!buttonPolicy.handle(e, buttonTransport)) return;
-  if (e.type == InputEvent::Type::Repeat) return;
+  const bool acted = buttonPolicy.handle(e, buttonTransport);
+  // The tick for a click or hold that did something; a double buzz for a
+  // click with nothing to play (spec §4, §7: inert).
+  input.buttonFeedback(e, acted);
   const char b = static_cast<char>('A' + e.button);
+  if (!acted) {
+    if (e.type == InputEvent::Type::Click) Serial.printf("[button] %c click: nothing to play\n", b);
+    return;
+  }
+  if (e.type == InputEvent::Type::Repeat) return;
   const ButtonPolicy::Feedback& f = buttonPolicy.feedback();
   if (e.type == InputEvent::Type::Hold && f.kind == ButtonPolicy::Hud::Output) {
     Serial.printf("[button] B hold: output to %s%s%s\n", f.toBluetooth ? "bluetooth" : "the speaker",
@@ -652,19 +920,37 @@ static void handleBluetooth() {
   BtSink& bt = audio.bluetooth();
   for (BtSink::Event e = bt.takeEvent(); e != BtSink::Event::None; e = bt.takeEvent()) {
     switch (e) {
-      case BtSink::Event::Connected:
+      case BtSink::Event::Connected: {
         Serial.printf("[bt] connected%s%s\n", bt.deviceName()[0] ? " to " : "", bt.deviceName());
         connectedAtMs = millis();
         btLost = false;
+        // Whether the listener asked for this link (and paired it): the
+        // session answers the same whether its phase or this event came first.
+        const BtSession::Answer answer = btSession.onConnected();
+        if (answer.paired && pairName[0]) {
+          // Paired from the Pair screen: a later scan by name finds them.
+          bt.setSinkName(pairName);
+          Serial.printf("[bt] headphones: \"%s\" from now on (saved)\n", pairName);
+          pairName[0] = 0;
+        }
         if (silent) {
           Serial.println("[test] silent mode: staying on the speaker");
         } else {
           audio.setOutput(Output::Bluetooth);
+          // Asked for: the audio moved, seconds after the tap; say where.
+          if (answer.asked && userInterface) userInterface->headphonesConnected();
         }
         diag::logHeap("bt-link");
         break;
+      }
       case BtSink::Event::Disconnected:
         Serial.println("[bt] disconnected");
+        if (btSession.dropExpected()) {
+          // Let go on purpose (Disconnect, Forget, a new pairing): the
+          // audio is on the speaker already, paused.
+          btSession.dropSeen();
+          break;
+        }
         // Like a phone: don't carry on through the speaker, pause (and say why).
         if (audio.output() == Output::Bluetooth) {
           btLost = true;
@@ -773,11 +1059,11 @@ void setup() {
   haptics.begin();
   input.begin();
   spike.onScreenReleased(uiResume);  // the UI draws again
-  spike.onRebuild([] {
-    const bool ok = queueStore.remap([](void*) { return library.rebuild(); }, nullptr);
-    if (userInterface) userInterface->libraryChanged();  // every index id changed
-    return ok;
-  });
+  spike.onRebuild(rebuildLibrary);
+  {
+    const LibraryIndex* index = library.index();
+    durations.reset(index && index->ready() ? index->trackCount() : 0);
+  }
   // The UI, in PSRAM (its sprites too): it takes the display after the boot screen.
   const uint32_t freeBeforeUi = diag::heap().internalFree;
   userInterface = psramNew<ui::Ui>(uiHost, input, player, queue, library, danceMode);
@@ -795,7 +1081,9 @@ void setup() {
                  "q queue (q? for its commands), a touch calibration (a5-a9 fewer crosshairs, ac check, as status, "
                  "ad default table, ah0/1 haptics, ar0/1 rail ticks), "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
-                 "ui the UI's navigation (ui0-ui4 tab, uib back, uit/uih/uis/uid scripted finger); "
+                 "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid scripted finger, "
+                 "uiF<c/s/p/l/n> show a faked Bluetooth or no-card state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
+                 "library of n tracks in the Library tab, uil0 the card's); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja)");
 }
@@ -807,9 +1095,46 @@ void loop() {
   handleInput(now);
   console.poll();
   handleBluetooth();
+  btSession.update(audio.bluetooth().link(), now);
   player.update(now);
   audio.loop(now);
   queueStore.loop(now);
+  // What a track's length is, once the backend knows it (read from the
+  // file; or its estimate 20 s in, exact for a constant bitrate): the
+  // Queue's "49 min"; once per entry (each change redoes the Queue's sum).
+  // A skip changes the entry at once, but the backend starts it a moment
+  // later: until then the position and length are the last track's. So a
+  // length is noted only once this entry has started: a start since the
+  // change, the position gone back, or a change right at a track's start.
+  if (queue.current() >= 0 && audio.isPlaying()) {
+    static uint32_t lengthKey = QueueModel::kNone;
+    static uint8_t lengthNoted = 0;  // 1 the estimate, 2 the file's
+    static uint32_t startSeqAtKey = 0, posAtKey = 0;
+    static bool started = false;
+    const uint32_t pos = audio.positionMs();
+    const uint32_t seq = audio.startTiming().seq;
+    if (queue.currentKey() != lengthKey) {
+      lengthKey = queue.currentKey();
+      lengthNoted = 0;
+      startSeqAtKey = seq;
+      posAtKey = pos;
+      started = pos < 1000;  // this entry's start already, or the last one barely begun
+    }
+    if (!started && (seq != startSeqAtKey || pos < posAtKey)) started = true;
+    if (!started) {
+      // not this entry's position yet
+    } else if (lengthNoted < 2 && audio.durationKnown() && pos > 3000) {
+      durations.note(queue.currentTrack(), audio.durationMs());
+      lengthNoted = 2;
+    } else if (lengthNoted == 0 && pos > 20000) {
+      durations.note(queue.currentTrack(), audio.durationMs());
+      lengthNoted = 1;
+    }
+  }
+  if (restartAtMs && static_cast<int32_t>(now - restartAtMs) >= 0) {
+    Serial.flush();
+    ESP.restart();
+  }
 
   // A new track (skip, jump, natural end, a queue edit) drops the tempo prior.
   static uint32_t lastEntry = QueueModel::kNone;

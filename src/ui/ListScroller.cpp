@@ -103,9 +103,9 @@ int ListScroller::scrollTo(int32_t offset, Painter& painter, uint32_t* sendUs) {
   return lines;
 }
 
-void ListScroller::pushAtScreen(M5Canvas& sprite, int x, int screenY, SpiHoldStats* stats) {
+void ListScroller::pushAtScreen(M5Canvas& sprite, int x, int screenY, SpiHoldStats* stats, int lines) {
   auto& d = M5.Display;
-  const int h = sprite.height();
+  const int h = lines > 0 && lines < sprite.height() ? lines : sprite.height();
   const int w = sprite.width();
   int y = screenY;
   const int end = screenY + h;

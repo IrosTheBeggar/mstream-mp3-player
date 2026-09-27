@@ -1694,3 +1694,458 @@ current entry (`[queue] now at ...`), so a repeat will show its cause.
    headphones while playing: pause, then the speaker.
 6. The headphones' own volume keys: the same HUD.
 7. Now Playing's times and progress line on your own files.
+
+## After the framework: Now Playing, the Library and covers
+
+The next stage builds the two screens the design centres on, on the
+framework ([ARCHITECTURE.md](ARCHITECTURE.md#ui)), and fixes what the
+framework's smoke test left. Built and host-tested only (the host tests,
+and a firmware build); **nothing below had run on the device yet** (it has since: "Stage 2 on the device", at the end).
+
+**What the smoke test left, and what was done:**
+
+- **The play-next toast cut the name** ("Plays next: Aer…", View and Undo
+  took the right half): View and Undo are compact pills now (54 px each,
+  their hit areas unchanged in reach: Undo still to the screen's edge),
+  and a "Plays next: <name>" that doesn't fit takes two lines, "Plays next"
+  small over the name, which then has 164 px ("Aerodynamic" is 106).
+- **A very fast drag made a 50-78 ms frame** (1 motion in 5): a move is now
+  drawn in steps of at most 84 lines a frame (`ListLayout::stepToward()`),
+  the hardware scroll's one-hold step. A finger over ~2,500 px/s is
+  followed a frame or two late and caught up as it slows; flings (capped at
+  2,000 px/s, 67 lines a frame at 30 fps) never meet the step, and jumps
+  still draw at once. The host test runs a 4,000 px/s drag: 84 lines a
+  frame, caught up within 7 frames of the finger stopping.
+- **The tab bar's battery text was cut** before a late fix: every text the
+  bar can show is now measured in a host test with the firmware's own font
+  data (`src/ui/VlwFonts.cpp`): the five labels on their plates, the volume
+  and the battery at every level 0-100 % (the widest, "100%", is 36 px:
+  exactly the volume's room, 2 px under the battery's), the Queue badge at
+  every count. The room each gets is in `TabBarModel` now, where the drawing
+  and the test read it.
+- **The unexplained queue jump** (entry 24 to 2 during a screenshot): every
+  path that moves the current entry was reviewed (ARCHITECTURE "UI",
+  "Console"). The only one that can go to entry 2 with the queue's size
+  unchanged and leave no line in the log was the Queue's row-bar Play; the
+  same log shows the Dance tab opening 2.5 s later with no console command,
+  so fingers were on the glass. It is logged now, with every tab change and
+  every play from Now Playing and the Library.
+
+**What was built:** Now Playing with the cover, the 40 px artist and album
+bands, the volume sheet and the "..." sheet (Go to artist, Go to album,
+Show in folders); the Library's Artists, Albums (with covers) and Folders
+(non-audio files counted, the path on one thin line, "Play all N" at the
+root), the inline action row and a long press on any row, "‹ Library" on
+deep levels, the A-Z rail's jump grid with a second level; album covers
+decoded by a worker task below the loop into a PSRAM LRU and `.565` files
+on the card. The choices (why a task, what it costs in RAM) are in
+ARCHITECTURE "UI", "Album covers".
+
+**To check on the device:**
+
+1. Boot: the library cache is rebuilt once (its version changed: folders
+   now count their other files and pick a cover). `[lib] ... built (the
+   cache was unreadable)` then, next boot, `loaded from the cache`.
+2. Now Playing: the cover appears within ~0.3 s of the page (a
+   `[thumb] /music/.../cover.jpg: 650x565 at 1/4, 40 + 96 px in N ms` line
+   the first time; nothing the next boot: the card's copy). The album with
+   the progressive cover keeps the note and logs it once (`progressive
+   JPEG ... (remembered on the card)`), and not again after a reboot. Tap
+   the artist, the album, the cover; "..." > Show in folders.
+3. `ui` after browsing the Albums list: the `[thumb]` lines: decodes' mean
+   and max, the worker's least stack left (of 6,144 B: trim it if it's
+   far from full) and the lowest internal RAM free during its jobs (the
+   spike's drawJpg path took it to 46 KB; this path should stay near the
+   playing figure, 55-63 KB). After 10 s without covers to make, `worker
+   not running`.
+4. Scrolling the Albums list while an MP3 plays: `[ui] scroll:` lines as
+   before (no new job starts while it moves; the covers fill in when it
+   stops, a row at a time), ring minimum and underruns unchanged.
+5. Very fast drags: no frame over ~35 ms in the `[ui] scroll:` max.
+6. `uil10000`: the Library shows 600 artists and 1,500 albums; tap the rail
+   for the grid, a big letter for its "Ka/Ke/..." level, drag the rail to
+   scrub (a tick per letter); `uil0` goes back.
+7. The volume sheet: drag the slider with the headphones on (the value
+   follows the finger; the headphones' level follows in 5 % steps), and the
+   A/C holds while it's open (it shows their steps).
+8. The toast after Play next on a long title: two lines, the whole name.
+
+## After the Library: the Queue, Output, states and the coach cards
+
+The rest of the tab bar design, on the framework
+([ARCHITECTURE.md](ARCHITECTURE.md#ui)). Built and host-tested only (the
+host tests, and a firmware build); **nothing below had run on the device
+yet** (it has since: "Stage 2 on the device", at the end).
+
+**What was built:**
+
+- **The Queue** (mockups 16-18): the summary "4 of 16 · 12 up next · 49
+  min" in the header (track lengths learned as they play; "49+ min" while
+  some aren't known), Play now / Play next / Remove under a tapped row,
+  the added tracks shown and highlighted on the visit after a Library
+  add, selection mode with All / None and a bar under a shorter list
+  (Remove, Play next, Clear...: "Clear up next" keeps the playing song,
+  "Clear queue" stops it after a red confirmation), Undo on every edit,
+  an amber "!" on a track that couldn't be played, and the empty state
+  (Open Library, Shuffle all).
+- **Output** (mockups 19-21): the Bluetooth card in all its states
+  (`OutputModel`: not paired, off, connecting "try 2 of 3" with Cancel,
+  searching, pairing, connected with the codec and the delay, failed with
+  Try again, lost), Disconnect, Forget on a second tap within 3 s (red
+  "Tap again"), the speaker card, each with its own volume sheet, the
+  line-out placeholder, Pair new headphones (a scan list with the
+  devices' kind and signal, a tap pairs; the new pair replaces the old one
+  only once it is connected), Haptics on/off, Touch calibration, About.
+  The audio stays where it is until the headphones asked for are up
+  (the card, Connect and the B hold only connect them), and every move
+  off them pauses first.
+- **States**: no card (Try again: looks for a card and restarts the
+  player to use it), no music (Try again: walks /music again), a track
+  that failed (an amber note and the "!"), the headphones lost (mockup
+  23's dialog, following their reconnecting). Now Playing with nothing
+  queued: "Nothing playing", Open Library, Shuffle all.
+- **The coach cards** (first boot, once; About and `uic` show them
+  again): the three red buttons' clicks and holds, then "tap the tab
+  you're on again: back to its start".
+
+**The stage-1 leftovers** were fixed with the Library (the section above:
+the two-line play-next toast, the per-frame step for very fast drags, the
+tab bar's texts measured in a host test); their host tests still pass. The
+queue-jump review holds: every new path that moves the current entry logs
+a line (`[ui] queue: removed 2 (the playing one too: the next plays)`,
+`[ui] queue: cleared (16), stopped`, `[ui] shuffle all: 77 tracks`, the
+row bar's Play as before), next to `[queue] now at ...`.
+
+**To check on the device:**
+
+1. First boot after flashing: the two tips; "Next", then "Got it"; a
+   reboot doesn't show them again; Output > About > "Show the tips again"
+   does. The arrows on the first card should point at the three red dots.
+2. Queue: the header's summary (after a few tracks have played, the
+   minutes); Edit, select three, the bar: Remove (Undo on the note), Play
+   next; Clear... > Clear up next (the playing song keeps playing) and
+   Clear queue (the red confirmation, the music stops, Undo brings the
+   queue back stopped). While selecting, scroll the list: the bar must
+   not move or flicker (the LCD's scroll band ends above it), and the
+   scrollbar must stop at the bar. Leave the tab while selecting: the
+   next page's list uses the whole band again.
+3. Library > an album > + Queue, then the Queue tab: it opens at the added
+   tracks, highlighted (a dot); the next visit doesn't highlight them.
+4. A file that can't be played (rename a .txt to .mp3 in an album): the
+   amber note, the next track plays, the row keeps its "!".
+5. Output with the headphones: Disconnect (the music, if it played on
+   them, pauses and moves to the speaker; nothing reconnects until
+   Connect), Connect ("Connecting... try 1 of 3", then Connected with the
+   codec and the delay), Cancel while connecting (the speaker plays on if
+   it was playing), Forget (one tap: "Tap again" in red for 3 s; a second:
+   "No headphones paired"), the volume chips (each output's own sheet).
+   Hold B on the speaker with the headphones off: the icon turns amber,
+   the music stays on the speaker; hold B again: cancelled.
+6. Pair new headphones with another headset in pairing mode: the list
+   fills in (kind, signal bars); tap it, confirm: the card shows
+   "Pairing...", then Connected; after a reboot it reconnects to the new
+   one. With a device that won't pair (not in pairing mode): "Couldn't
+   pair", and the old headphones are still remembered (Connect reaches
+   them). Watch `[stats]` for underruns if headphones were streaming
+   while the scan ran.
+7. Switch the headphones off while playing on them: the dialog, its line
+   following the reconnecting ("try 2 of 3", "Looking for them..."), Use
+   speaker (paused), or switch them on again (the dialog closes, still
+   paused).
+8. Without a card (or with an empty /music): the no-card state on the
+   Library, the Queue and Now Playing (with nothing queued), Try again
+   with and without a card.
+9. `ui` after all this: the Bluetooth link and session line, and the
+   loop task's unused stack (the Output page's rows and the empty states
+   draw with a few hundred bytes of locals).
+
+### The review's fixes (before the device)
+
+A review of the uncommitted stage found these; each was checked against
+the code first. Host-tested where it is portable; nothing here has run on
+the device yet either.
+
+- **Bluetooth.** Picking the headphones linked now on the Pair screen
+  (multipoint sets stay discoverable) moved the audio to the speaker and
+  left a drop expected for ever, so a real drop later went unnoticed:
+  they are left out of the list, picking them anyway only makes them the
+  output, and a drop is expected for 10 s at most while the link stays
+  up. Pairing new headphones while others were linked was undone on the
+  next loop pass (the old link still up looked like the answer): the
+  pairing now waits for a new link, and the Connected event and the
+  link's phase answer the same in either order, so the new name is kept.
+  Disconnect while the old link was being let go for a pairing left
+  "Pairing..." up for good: it ends the pairing now. Forget from the
+  screen was undone by the next boot or B hold (a scan by the saved
+  name): it now stops every scan by name until the next pairing. A
+  connect with none remembered showed "No headphones paired" with no
+  Cancel and waited for ever: "Looking for..." with Cancel, failed after
+  30 s. A B hold that cancelled a connection paused music that was still
+  on the speaker: it plays on now, as the Speaker row does.
+- **Feedback.** "Now playing on SPYDRONE" and two ticks when the
+  headphones asked for connect; a long buzz with the lost dialog; inert
+  A/B/C clicks (nothing queued) buzz twice, short, instead of the tap
+  tick; the volume sheet ticks on every control tap and when a tap above
+  it closes it.
+- **Touch.** The volume sheet changed the volume on touch-down, so a
+  quick second tap on the Speaker chip landed on its slider (80-100 %):
+  it changes on a tap or a drag only, and ignores a touch in its first
+  300 ms. The toast over the header ate taps on ‹: the header's ‹ (and
+  its pill, beside a toast with no buttons) works through it.
+- **Covers.** A worker exiting could be handed a job in the gap between
+  its two stores and delete itself with it queued (no cover again until
+  a reboot): it says it's gone before it says it's idle. A frame header
+  past the first 64 KB (EXIF, XMP, a Photoshop block, an ICC profile)
+  marked a decodable cover undecodable for good: the whole file is
+  walked.
+- **Lists.** In whole-row mode (the audio short of time) the rounding
+  after the per-frame cap could make a 125-line step, a full redraw:
+  it's part of the step now (`ListLayout::stepTowardRows`, tested over a
+  grid of offsets).
+- **The Queue's minutes.** A skip changed the entry before the backend
+  started it, so the old track's length could be noted for the new one:
+  a length is noted only once this entry has started.
+- **Drawing.** A dialog closing over the coach cards drew the page's
+  header over them: whatever a modal covered is drawn again (the coach,
+  the jump grid, or the page, and the toast). The Folders header's counts
+  ran under "‹ Library" two levels down: they end before the pill.
+- **Cut texts** (measured with the firmware's fonts, now host tests):
+  "Remove 2" (Remove is wider; a big count drops the icon, never the
+  number), "Open Lib…" (the primary button is wider), Now Playing's empty
+  line, the coach card's title and "Play / pa…", "Tap again", the volume
+  chip at 100 %, the Bluetooth status lines, "Here until SPYDRONE
+  connects" (falls back to "Waits for SPYDRONE"), the Pair hint, the
+  line-out line, About's long values (Small when Body doesn't fit), the
+  lost dialog's title (a long name goes into the body), the Queue header
+  ("4 of 16 · 49 min" keeps the position when the long form doesn't
+  fit), and the play-next toast's name (two lines with the buttons as
+  icons: 216 px).
+- **Design grafts built.** The Bluetooth "..." sheet (Disconnect, Pair
+  new headphones, Forget in red with a dialog) instead of Forget beside
+  Disconnect and the volume; sheets' ✕ pill, and the first row no longer
+  looks like the main choice (only the Library's Play is); Now Playing
+  names the output again ("4 of 16 · SPYDRONE").
+
+**Also to check on the device** (with the list above):
+
+10. Pair screen with the headphones connected: they aren't listed (a
+    multipoint set). Pair other headphones while connected: the card
+    goes "Pairing...", then Connected to the new ones, and a reboot
+    finds the new ones (the saved name). Cancel during the change-over:
+    the card says "Not connected", not "Pairing...".
+11. Forget (Output > "..." > Forget > Forget), reboot: nothing
+    reconnects; hold B: "No headphones paired yet". Pair them again:
+    back to normal.
+12. The play-next toast with a long title: two lines, the Undo arrow and
+    the Queue icon at the right; both work, and a tap on the name only
+    dismisses it. With a toast up on a Library page, ‹ goes back.
+13. Double-tap the Speaker volume chip: the sheet opens and the volume
+    doesn't move.
+14. Connect the headphones from the card: "Now playing on ..." and two
+    ticks when the music moves. With nothing queued, A/B/C buzz twice.
+
+## Stage 2 on the device (27 September 2026)
+
+The Now Playing, Library, Queue and Output screens, the states and the
+coach cards, run on the Core2 for the first time. Everything was driven
+from the console in silent test mode (`z`: the speaker at volume 0, the
+headphones connected but never the output) with the scripted finger
+(`uit`/`uih`/`uis`/`uid`). The card's library is 77 tracks, 6 artists, 6
+albums; `uil10000` and `uil2000` stood in for a big one. Screenshots of
+every screen are in the session's `ui_shots2/` (with a contact sheet).
+Nothing was paired, forgotten, disconnected or connected: the states a
+test can't cause safely were shown with a display-only fake (`uiF`,
+below).
+
+**Boot and memory** (internal RAM free):
+
+| | stage 2 | stage 1 |
+|---|---|---|
+| after the library and queue | 91K (min 85K) | 91K |
+| after the UI | 89K (the UI takes 0.7 KB; PSRAM free 2914K, the covers' LRU included) | 90K |
+| idle, UI up, stopped | 83-86K (min 78K); 76K just as the headphones link | 81K (min 75K) |
+| playing MP3 | 63K (min 56-57K) | 63K (min 58K) |
+| playing FLAC | 64-65K | 66-75K |
+| lowest seen, 10-minute soak | 50K | 58K |
+
+The lowest point is new. Stepped through by hand, it came from three
+things at once: the cover worker's 6 KB stack (alive while it reads or
+writes the card), a queue save (a Library Play next, then Undo) and a
+Folders page. Together they reached 51K; each alone stays at 55-57K. The
+worker now ends 3 s after its last cover instead of 10, which narrows
+the window. Its stack's high-water mark over the whole session was
+2.3 KB of 6 KB. The stack was kept at 6 KB because the largest-JPEG path
+(folders without a well-named cover) never ran.
+
+**Screens** (compared with the mockups in `navui/tabs`):
+
+- **Now Playing:** playing, paused and empty; its "..." sheet; the volume
+  sheet and the volume HUD; Dance.
+- **Library:**
+  - the Artists list, with the card's library and with 10,000 synthetic
+    tracks;
+  - the jump grid, its second level ("L: 18" > La/Li/Lu) and the list
+    after a jump;
+  - an artist, an album, the inline actions, a long-press sheet;
+  - the play-next and added toasts;
+  - Albums with covers, Folders, and a folder's files.
+- **Queue:** the added tracks' dots, selection mode, its Remove toast, the
+  Clear sheet, the red confirmation, the queue after Clear up next, and
+  the empty queue.
+- **Output:**
+  - connected, and the lower rows (line out, Pair, Haptics, Calibration);
+  - About (two screens) and the Bluetooth "..." sheet;
+  - connecting, searching and pairing (faked);
+  - Pair headphones, searching (nothing else was in pairing mode nearby).
+- **Other states:** no card (faked, on Now Playing), the headphones-lost
+  dialog (faked), both coach cards.
+
+Three differences from the mockups are by design: each tab has its own
+accent colour (purple Library, teal Queue), the toast sits at the top,
+and sheets have no row icons.
+
+**Fixed on the device:**
+
+- **The Folders header:**
+  - the second line's fill cut the title's descenders ("Discoverv");
+  - two levels down, it showed "/Daft…" beside "14 audio files, 1…".
+
+  Now the counts are always drawn whole. The path is drawn only when at
+  least 60 px are left beside them. The title is drawn last.
+- **The two-line play-next toast:** each line's fill cut the other line's
+  descenders and the box's border. Its lines are now drawn as glyphs only
+  (`Fonts::draw` with bg == fg: no fill, blended with the sprite).
+- **Queue selection mode:** the playing row had no checkbox, because the
+  row was refilled after its ring was drawn. The row is now tinted through
+  `tinted()`, like the other rows.
+- **Long list frames while an MP3 plays.** The per-frame step works: no
+  move is over 84 lines. But most motions still had frames of 35-90 ms.
+  The `[ui] slow frame` log showed the cause: one row's render (~5 ms)
+  stretched to 20-39 ms. The audio decoder, which runs above the loop,
+  ran in the middle of it. **`ListView::renderAhead()`** now renders the
+  next row in the direction of travel between frames, when the next frame
+  is 15 ms or more away. The frame that shows that row then only pushes
+  it. Queue, MP3 playing:
+
+  | | before | after |
+  |---|---|---|
+  | slow drag (250 px/s) | mean 8.4, max 35 ms | mean 2.4-3.8, max 11-13 ms |
+  | fling (1,000 px/s) | mean 10.7, max 42-88 ms, ~12 frames over 30 ms | mean 3.4-3.9, max 19-21 ms, none over 35 |
+  | fast fling (2,300-2,800 px/s) | max 41-54 ms | max 46-48 ms, 1 frame over 35 |
+  | very fast drag (3,500-5,000 px/s) | max 41-60 ms | max 36-53 ms, 1 frame (two new rows at once) |
+
+  With FLAC playing, drags and flings peak at 11-29 ms; fast flings have 2
+  frames of 36-38 ms.
+- **Covers took 0.6-2.6 s each while an MP3 played.** The worker ran at
+  priority 0, where it shared with the idle task whatever CPU the loop and
+  the decoder left. It now runs at the loop's priority while nothing
+  moves, and drops to priority 0 as soon as a list moves. The decode
+  times below come from `uiT`, which decodes the covers again. The
+  `[thumb]` lines now split the time into read, decode and card copy.
+
+  | cover | before | after |
+  |---|---|---|
+  | Aphex Twin, 200 x 197, 8 KB | 894 ms | 364 ms |
+  | Moon Safari, 200 x 200, 32 KB | 1348 ms | 490-800 ms |
+  | Graduation, 250 x 250, 20 KB | 1264 ms | 559-838 ms |
+  | OutRun, 1000 x 1000 at 1/8, 59 KB | 1898 ms | 809-983 ms |
+  | Discovery, 650 x 565 at 1/4, 46 KB | 2619 ms | 1062-1473 ms |
+
+  While the covers decoded, the Albums list scrolled with frames of at
+  most 25 ms, no underruns and the ring full (1439 ms). Most of the time
+  is the decode itself. The 96 px size decodes at 1/2 or 1/4, which runs
+  the IDCT that the spike's 1/8 skipped. Writing the card copy costs
+  70-280 ms. Only the first view of each album pays this; the next boot
+  reads the card's copies.
+- **Two MP3s started 4 s late and froze the UI** (the soak found it). Air's
+  "New Star in the Sky" and "Le voyage de Pénélope" have 351 KB ID3 tags
+  (a picture). ESP8266Audio's ID3 reader walks a tag one byte per read, on
+  the decode task, which runs above the loop. A tag over 16 KB is now
+  skipped (the library has the title), and both tracks start in 23-30 ms.
+  The problem predates stage 2.
+
+**Flows by scripted touch** (all behaved as designed):
+
+- **Library:**
+  - Play from an album's hold sheet: 14 tracks, from the one tapped.
+  - Play next: the toast and the badge flash; the Queue opens on the
+    added track, marked with a dot.
+  - + Queue, then View on the toast: the Queue scrolls to the added
+    tracks, marked.
+  - Folders "Play all 77".
+  - The A-Z grid on the synthetic library, to a letter and to a
+    second-level key.
+  - Long-press sheets on albums and tracks.
+- **Queue:**
+  - Remove in selection mode, with Undo.
+  - Clear up next: the playing track stays.
+  - Clear queue: the red confirmation, then the music stops; Undo brings
+    the queue back, stopped.
+  - Shuffle all, with Undo.
+- **Now Playing:**
+  - "..." > Show in folders: the folder opens on the playing file,
+    tinted.
+  - The volume sheet opened and closed. Its controls weren't touched,
+    because they would move the headphones' volume.
+- **Output:**
+  - The Bluetooth "..." sheet opened and closed.
+  - Pair opened (the scan started) and left (`scan stopped`).
+
+**10-minute soak** (`soak2.py`, 11 cycles, MP3 then FLAC). Each cycle ran:
+
+- every tab, including Dance, and Output scrolled;
+- Now Playing's two sheets;
+- Queue flings and very fast drags;
+- the Library's three lists and drill-downs, a hold sheet, Play next +
+  Undo, and Folders;
+- a skip;
+- every third cycle, the covers decoded again;
+- for four cycles, the synthetic 2,000-track library with its jump grid.
+
+Results:
+
+- No crash and 0 underruns. The ring stayed at 1428 ms or more during
+  scrolls, and tracks started in 25-57 ms.
+- 65 motions and 2,229 frames at 22.9 fps on average. The short drags
+  pull that down; flings run at 29-30 fps.
+- 20 frames over 35 ms (0.9 %): the first frame of each very fast drag,
+  and one in some long flings.
+- The governor stayed "normal" throughout.
+- Stacks: the loop's never went below 5,272 B unused of 8 KB; the
+  worker's never below 3,844 B unused of 6 KB.
+- No heap drift. Internal RAM with FLAC playing was 65K before and 64K
+  after. PSRAM free was 2814K before and 2811K after the synthetic library
+  was dropped (`g0`).
+
+The soak ran on the firmware from before the worker's 3 s exit; the
+flashed firmware is otherwise the same.
+
+**Diagnostics added:**
+
+- `uiT`: decode the covers again, with their timings.
+- `uiV`: show the volume HUD.
+- `uiF<c/s/p/l/n>`: show a faked Bluetooth or no-card state (display
+  only); `uiF0` goes back to the real one.
+- The `[ui] scroll:` line now counts frames over 35 ms.
+- `[ui] slow frame`: logged for a frame over 50 ms, with its move and its
+  renders.
+- `ui` reports the rows rendered ahead.
+
+**Still open:**
+
+- `sdCommand(): crc error` appeared twice in the session, both while the
+  cover worker was writing card copies, and none in the final soak. The
+  SD driver's retry recovered each time. If it comes back, suspect the
+  card copies' writes: they are the one new card write while music plays.
+- About reads "microSD card, 1023.6 GB" (from `SD.totalBytes()`): check
+  that against the card's label.
+- The Queue's minutes read "N+ min" until each track has played once.
+- The first frame of a very fast drag, which renders two rows at once,
+  still takes 35-55 ms.
+- Only the user can check:
+  - the haptics;
+  - real fingers (the scripted finger bypasses the panel and its
+    calibration);
+  - the headphones' own volume keys;
+  - everything in the checklists above that needs pairing, forgetting, a
+    second headset or pulling the card.

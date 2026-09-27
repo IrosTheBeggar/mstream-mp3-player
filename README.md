@@ -7,9 +7,11 @@ speaker as a fallback.
 
 > **Status:** proof of concept. Plays MP3 and FLAC from the SD card (or the
 > Core2's internal flash) to Bluetooth headphones or the speaker. The UI is a
-> tab bar (Now Playing, Library, Queue, Dance, Output) with first versions of
-> its pages; the full browsing screens come next, then library sync and
-> AutoDJ. The library is indexed from the card (and cached there), and the
+> tab bar (Now Playing, Library, Queue, Dance, Output), all five built:
+> Now Playing with the album cover, the Library (artists, albums with
+> covers, folders, the A-Z jump grid), the Queue (editing, Undo), Output
+> (Bluetooth pairing, per-output volume, settings, About); library sync and
+> AutoDJ come next. The library is indexed from the card (and cached there), and the
 > play queue survives a restart. Measurements: [docs/POC-RESULTS.md](docs/POC-RESULTS.md).
 > Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -84,27 +86,64 @@ dropped out. Tap a tab to go there: each tab keeps its place (the Library
 where you left it, the lists where they were scrolled). Tap the tab you are
 on to go back to its start, "‹" in a page's header to go back one step.
 Lists scroll with a finger and fling (a touch stops a moving list without
-tapping a row); slide a finger down the letter rail on the right of a long
-A-Z list (hidden while the list moves) to go through it. What the pages do
-for now:
+tapping a row). A long A-Z list (over 30) has a letter rail on the right
+(hidden while the list moves): slide a finger down it to go through the
+list, or tap it for a grid of the letters; a letter with many entries
+opens a second grid of its two-letter starts ("Ka", "Ke", "Ki"...). What the
+pages do:
 
-- **Now Playing**: the title, the artist and the album (tap either to open it
-  in the Library, at the playing track), the progress, and prev / play-pause /
-  next; "..." for "Go to artist / album", "Show in the queue".
-- **Library**: artists A-Z, an artist's albums, an album's tracks. Play /
-  Play next / + Queue sit at the top of an artist or an album, and under a
-  track once you tap it (Play on a track plays its album from there). A long
-  press on an artist or an album offers the same without opening it. Every
-  change to the queue shows a message at the top with **Undo** (and **View**
-  after an add: the Queue at the added tracks). Two levels down, "Artists"
-  in the header goes straight back to the list of artists.
-- **Queue**: the queue, opened on the playing track. Tap a track for Play /
-  Play next / Remove; a long press (or "Select") selects several to remove.
-  Tap the "Queue" title to go to the playing track, the top, the end, in
-  turn.
+- **Now Playing**: the album's cover, the title, the artist and the album
+  (tap either, or the cover, to open it in the Library, scrolled to the
+  playing track), the progress, the volume (tap: a slider), prev /
+  play-pause / next, and "..." for Go to artist, Go to album, Show in
+  folders.
+- **Library**: three lists at the top: **Artists**, **Albums** (with their
+  covers) and **Folders** (the card's folders; only audio files are listed,
+  the others counted: "14 audio files, 1 other"). An artist opens its
+  albums and "All tracks"; an album or a folder its tracks. Play / Play
+  next / + Queue sit at the top of each (at the Folders' top: "Play all N"
+  and + Queue), and under a track once you tap it (Play on a track plays its
+  album or folder from there); a long press on any row offers the same
+  without opening it. What plays is tinted in every list. Every change to
+  the queue shows a message at the top with **Undo** (and **View** after an
+  add: the Queue at the added tracks). Two levels down, "‹ Library" in the
+  header goes straight back to the lists.
+- **Queue**: the queue, opened on the playing track, with what's left in
+  the header ("4 of 16 · 12 up next · 49 min": lengths are learned as
+  tracks play, "49+ min" until they all are). Tap a track for Play now /
+  Play next / Remove. After Play next or + Queue in the Library, the next
+  visit shows the added tracks, highlighted. **Edit** (or a long press on
+  a track) selects: tap tracks, or All; then Remove, Play next, or
+  Clear... ("Clear up next" keeps the playing song; "Clear queue" stops the
+  music, and asks first). Every change can be undone from the message at
+  the top. A track that couldn't be played is skipped with a note, and
+  keeps a small "!". Tap the "Queue" title to go to the playing track, the
+  top, the end, in turn. Empty, it offers Open Library and Shuffle all.
 - **Dance**: the dancer (below).
-- **Output**: Bluetooth or the speaker, the volume, the touch calibration,
-  and "Forget headphones".
+- **Output**: a card for the Bluetooth headphones (connected, with the
+  codec and delay; connecting, "try 2 of 3", with Cancel; failed, with Try
+  again; Disconnect; Forget, which takes a second tap within 3 s, or,
+  while connected, is in the "..." sheet and asks first) and one for the
+  speaker; each shows its own volume (tap it for a slider). Tap a card to
+  make it the output: the music stays where it is until the headphones
+  are connected ("Now playing on ..." says when), and it pauses whenever
+  it leaves them. Forgotten headphones stay forgotten (not even looked
+  for by name) until you pair some again.
+  **Pair new headphones** lists the audio devices in pairing mode nearby
+  (with their signal); tap one to pair it, in place of the ones paired
+  before (they stay if the new pairing fails). Then the line-out module's
+  place (not fitted yet), **Haptics** on/off, **Touch calibration**, and
+  **About** (battery, storage, library, headphones, memory, version, and
+  the tips again).
+
+The first time, two tips show what the three red buttons do and that
+tapping the tab you're on goes back to its start (console `uic` shows them
+again). With no microSD card (and no music on the flash), the pages say so
+and offer **Try again** (with a card in, the player restarts to use it);
+a card without music offers the same, which looks through `/music` again.
+If the headphones drop out while playing, the music pauses (it never
+carries on out loud) and a message follows their reconnecting, with **Use
+speaker** or **OK** to keep waiting.
 The headphones' own buttons work too (play, pause, next, previous, volume),
 but never start music that wasn't playing: their play resumes paused
 playback (not from stopped), and their next/previous while paused or stopped
@@ -120,6 +159,12 @@ change of their level is never heard as a jump.)
 The music is the `.mp3` and `.flac` files under `/music`
 (`/music/Artist/Album/NN - Title.mp3`), indexed at boot; the index is cached
 in `/.player` on the card and rebuilt when anything under `/music` changes.
+An album's cover is the `cover.jpg` in its folder (else `folder.jpg`,
+`front.jpg`, or the largest `.jpg` there). It is made into thumbnails the
+first time it shows, which are kept in `/.player/thumbs` (delete that folder
+to have them made again, after replacing a cover under the same name). A
+progressive JPEG can't be decoded on the Core2: its album shows a note
+instead.
 The first time, the queue is the whole library (artist, album, track order)
 followed by three built-in test tones and six click tracks (60 s at 90-174
 BPM, for the beat tracker). The queue and its position are saved on the card:
@@ -157,7 +202,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
 | `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
-| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag |
+| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag; `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/l/n>` show a faked Bluetooth (connecting, searching, pairing, lost) or no-card state for screenshots, `uiF0` the real one |
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosshairs; `a5`-`a9` for fewer), `ac` check the touch, `as` status, `ad` the default table, `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
@@ -201,11 +246,26 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       sorted views, A-Z buckets, folder tree; saved and loaded
                       as one file (LibrarySynth: made-up libraries of any size)
   TextFold            UTF-8 to ASCII for the GFX fonts; the library's sort order
+  JumpIndex           The A-Z jump grid: each letter's first row, and a big
+                      letter's two-letter starts
+  ThumbCache, ThumbScaler, JpegInfo
+                      Album covers as thumbnails: the PSRAM LRU and what's
+                      asked, the card's .565 files; the box-filter scaler;
+                      a JPEG's size and whether it is progressive
   TouchCalibration    The touch correction: a monotonic piecewise-linear table
                       per axis, its fit to taps, and its bytes for NVS
   TouchRecognizer, ButtonGesture, ButtonPolicy, InputEvent
                       The glass's tap/hold/drag/fling events; the touch
                       buttons' click/hold/repeat, and what they do
+  OutputModel         The Output tab's Bluetooth card (its state for every
+                      link state, a connection that failed), what the
+                      listener asked for (BtSession), Forget's second
+                      tap, the pairing scan's list
+  UiText              The UI's fixed texts next to their room (the host
+                      tests measure them with the firmware's fonts)
+  QueueView           The Queue's summary from learned track lengths, the
+                      mark on what a Library add put in, the failed-track
+                      ring, Shuffle all
   TouchGesture, KineticScroll, ScrollGovernor
                       Tap/hold/drag/flick; inertial list scrolling (flings
                       capped at 2,000 px/s); how hard a list may use the SPI
@@ -220,8 +280,11 @@ src/                  Core2 firmware
   storage/            LocalStorage: SD card if present, else LittleFS; FileStream
   ui/                 Ui (the one owner of the display: navigation, tab bar,
                       overlays, pages), TabBar, ListView (lists on the
-                      hardware scroll), Overlays (toast, HUD, sheet, dialog),
-                      the pages (NowPlaying, Library, Queue, Dance, Output),
+                      hardware scroll), Overlays (toast, HUD, sheet, volume
+                      sheet, jump grid, dialog, coach cards), EmptyState,
+                      the pages (NowPlaying, Library, Queue, Dance, Output
+                      with Pair and About), Thumbs (album covers:
+                      a worker task decodes them below the loop),
                       Fonts + VlwFonts (DejaVu, anti-aliased), Icons +
                       IconData, Gfx (pushes through the scroll and the
                       bus lock), Theme; Input (the one input layer: corrected

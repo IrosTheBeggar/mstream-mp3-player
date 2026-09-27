@@ -122,7 +122,11 @@ int Fonts::draw(lgfx::LovyanGFX& g, Font f, const char* text, size_t len, int x,
     textfit::fit(t, text, len, buf, sizeof(buf), maxW);
   }
   if (!buf[0]) return 0;
-  g.setTextColor(fg, bg);
+  if (bg == fg) {
+    g.setTextColor(fg);  // transparent: no fill, blended with the pixels there
+  } else {
+    g.setTextColor(fg, bg);
+  }
   g.setTextPadding(0);
   g.setTextDatum(align == Align::Left ? textdatum_t::middle_left
                  : align == Align::Right ? textdatum_t::middle_right
