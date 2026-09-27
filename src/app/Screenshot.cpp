@@ -4,6 +4,7 @@
 #include <esp_heap_caps.h>
 
 #include "Base64Text.h"
+#include "ui/ListScroller.h"
 
 namespace {
 constexpr int kRowsPerRead = 8;  // rows per readRect(): one SPI transaction each
@@ -36,10 +37,18 @@ void Screenshot::request(int x, int y, int w, int h, M5Canvas* check, int checkX
   }
   auto& d = M5.Display;
   const bool readable = d.isReadable();
+  // With a list scrolling in hardware (ui/ListScroller), the panel shows
+  // its GRAM rotated within the list's band and readRect() reads GRAM: read
+  // each screen row from the GRAM row it shows, in runs of consecutive ones.
+  const bool scrolled = ListScroller::anyActive();
+  const uint16_t vsp = ListScroller::activeVsp();
   if (readable) {
-    for (int r = 0; r < h; r += kRowsPerRead) {
-      const int n = min(kRowsPerRead, h - r);
-      d.readRect(x, y + r, w, n, pixels_ + static_cast<size_t>(r) * w);
+    for (int r = 0; r < h;) {
+      const int g = ListScroller::gramLineForScreen(y + r);
+      int n = 1;
+      while (n < kRowsPerRead && r + n < h && ListScroller::gramLineForScreen(y + r + n) == g + n) ++n;
+      d.readRect(x, g, w, n, pixels_ + static_cast<size_t>(r) * w);
+      r += n;
     }
   }
 
@@ -91,6 +100,11 @@ void Screenshot::request(int x, int y, int w, int h, M5Canvas* check, int checkX
   h_ = h;
   row_ = -1;
   Serial.printf("[shot] format rgb565 big-endian, one base64 line per row%s", note);
+  if (scrolled && readable && !useSprite) {
+    Serial.printf(" (hardware scroll active: rows read back through the scroll offset, start address %u, so this is "
+                  "what the panel shows)",
+                  (unsigned)vsp);
+  }
   if (checked > 0 && !useSprite) Serial.printf(" (LCD readback checked: %d of %d px differ)", differ, checked);
   if (!check) Serial.print(" (LCD readback not checked: dance screen off)");
   Serial.println();

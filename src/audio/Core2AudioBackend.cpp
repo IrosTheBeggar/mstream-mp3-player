@@ -83,7 +83,7 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
   setVolume(volume_);
 
   // Internal-RAM stack: flash reads (LittleFS) can't run on a PSRAM stack.
-  xTaskCreatePinnedToCore(taskEntry, "decode", kDecodeStack, this, 2, &task_, APP_CPU_NUM);
+  xTaskCreatePinnedToCore(taskEntry, "decode", kDecodeStack, this, kDecodePriority, &task_, APP_CPU_NUM);
   return task_ != nullptr;
 }
 
@@ -95,6 +95,7 @@ void Core2AudioBackend::request(const std::string& path, Kind kind) {
     std::lock_guard<std::mutex> guard(lock_);
     request_ = {path, kind, pauses_.load()};
   }
+  requestMs_.store(millis(), std::memory_order_relaxed);
   sync_.post(kind == Kind::Play ? Phase::Pending : Phase::Idle);
   xTaskNotifyGive(task_);
 }
@@ -199,6 +200,26 @@ void Core2AudioBackend::loop(uint32_t nowMs) {
   // Every pass: the Bluetooth media stream runs while the player plays on it,
   // and is suspended 3 s after that stops.
   bt_.update(nowMs, output_ == Output::Bluetooth && transportPlaying_);
+  // How the last start filled the ring, once it's full (or 5 s on).
+  // Signed: nowMs was read at the top of the main loop, before the console
+  // or a touch made the request, so it can be a few ms before requestMs_
+  // (unsigned, that wrapped and logged every start at once, all -1).
+  const uint32_t seq = startSeq_.load(std::memory_order_acquire);
+  if (seq != loggedStartSeq_ &&
+      (fullMs_.load(std::memory_order_relaxed) >= 0 ||
+       static_cast<int32_t>(nowMs - requestMs_.load(std::memory_order_relaxed)) > 5000)) {
+    loggedStartSeq_ = seq;
+    const StartTiming t = startTiming();
+    const RefillPacer::Config pace = refillPacing();
+    char paced[40] = "off";
+    if (pace.enabled) {
+      snprintf(paced, sizeof(paced), "%.1fx from %lu ms", pace.capX10 / 10.0f, (unsigned long)pace.gentleFromMs);
+    }
+    Serial.printf("[audio] refill: first audio in the ring %ld ms after the request, 500 ms buffered at %ld ms, "
+                  "%lu ms (steady) at %ld ms, full at %ld ms (-1: not reached); pacing %s\n",
+                  (long)t.firstAudioMs, (long)t.ring500Ms, (unsigned long)kSteadyMs, (long)t.steadyMs, (long)t.fullMs,
+                  paced);
+  }
   if (nowMs - lastStatsMs_ < 1000) return;
   const uint32_t pulled = bt_.framesPulled();
   stats_.btFramesPerSec =
@@ -221,6 +242,101 @@ uint32_t Core2AudioBackend::bufferedMsNow() const {
   const int rate = shared_.rate;
   if (!ring_ || rate <= 0) return 0;
   return static_cast<uint32_t>(static_cast<uint64_t>(ring_->size()) * 1000 / rate);
+}
+
+// ---- sharing core 1 with the UI (see the header) ----
+
+void Core2AudioBackend::setUiBoost(bool enabled) {
+  if (!task_) return;
+  if (enabled && !boostTimer_) {
+    esp_timer_create_args_t args = {};
+    args.callback = boostTimerEntry;
+    args.arg = this;
+    args.dispatch_method = ESP_TIMER_TASK;  // the esp_timer task, core 0: never starved by core 1
+    args.name = "uiboost";
+    if (esp_timer_create(&args, &boostTimer_) != ESP_OK) {
+      boostTimer_ = nullptr;
+      Serial.println("[boost] no timer: the boost stays off");
+      return;
+    }
+  }
+  if (enabled == boostEnabled_.load()) return;
+  if (enabled) {
+    boostEnabled_ = true;
+    esp_timer_start_periodic(boostTimer_, 10000);
+    return;
+  }
+  esp_timer_stop(boostTimer_);
+  // Under the lock: a tick already past its enabled check can't drop the
+  // priority again after this restores it.
+  std::lock_guard<std::mutex> guard(boostLock_);
+  boostEnabled_ = false;
+  applyDecodePriority(false, UiBoost::Why::Idle, bufferedMsNow(), millis());
+}
+
+void Core2AudioBackend::noteUiActivity(uint32_t nowMs) {
+  uiActiveMs_.store(nowMs, std::memory_order_relaxed);
+  uiEverActive_.store(true, std::memory_order_relaxed);
+}
+
+Core2AudioBackend::BoostStatus Core2AudioBackend::boostStatus() const {
+  BoostStatus b;
+  b.changes = boostChanges_.load(std::memory_order_acquire);
+  b.on = boostOn_.load(std::memory_order_relaxed);
+  b.why = static_cast<UiBoost::Why>(boostWhy_.load(std::memory_order_relaxed));
+  b.ringMs = boostRingMs_.load(std::memory_order_relaxed);
+  b.atMs = boostAtMs_.load(std::memory_order_relaxed);
+  return b;
+}
+
+void Core2AudioBackend::boostTimerEntry(void* self) { static_cast<Core2AudioBackend*>(self)->boostTick(); }
+
+void Core2AudioBackend::boostTick() {
+  std::lock_guard<std::mutex> guard(boostLock_);
+  if (!boostEnabled_.load()) return;
+  const uint32_t nowMs = millis();
+  // A new track was asked for: the decoder must get to it (discard the old
+  // ring, open the file) at once, so no boost until it has; its ring is
+  // about to be empty anyway.
+  const bool starting = sync_.phase() == Phase::Pending;
+  const uint32_t ringMs = starting ? 0 : bufferedMsNow();
+  const bool on = boost_.update(nowMs, uiEverActive_.load(std::memory_order_relaxed),
+                                uiActiveMs_.load(std::memory_order_relaxed), ringMs, isPlaying());
+  applyDecodePriority(on, boost_.why(), ringMs, nowMs);
+}
+
+void Core2AudioBackend::applyDecodePriority(bool yielding, UiBoost::Why why, uint32_t ringMs, uint32_t nowMs) {
+  if (yielding == boostOn_.load(std::memory_order_relaxed)) return;
+  vTaskPrioritySet(task_, yielding ? kDecodePriorityYielding : kDecodePriority);
+  boostOn_.store(yielding, std::memory_order_relaxed);
+  boostWhy_.store(static_cast<uint8_t>(why), std::memory_order_relaxed);
+  boostRingMs_.store(ringMs, std::memory_order_relaxed);
+  boostAtMs_.store(nowMs, std::memory_order_relaxed);
+  boostChanges_.fetch_add(1, std::memory_order_release);
+}
+
+void Core2AudioBackend::setRefillPacing(bool enabled, uint32_t capX10) {
+  // At least 1.5x (RefillPacer::kMinCapX10): near 1x the paced ring would
+  // stop growing at 500 ms.
+  paceCapX10_.store(capX10 < RefillPacer::kMinCapX10 ? RefillPacer::kMinCapX10 : capX10, std::memory_order_relaxed);
+  paceEnabled_.store(enabled, std::memory_order_relaxed);
+}
+
+RefillPacer::Config Core2AudioBackend::refillPacing() const {
+  RefillPacer::Config c;
+  c.enabled = paceEnabled_.load(std::memory_order_relaxed);
+  c.capX10 = paceCapX10_.load(std::memory_order_relaxed);
+  return c;
+}
+
+Core2AudioBackend::StartTiming Core2AudioBackend::startTiming() const {
+  StartTiming t;
+  t.seq = startSeq_.load(std::memory_order_acquire);
+  t.firstAudioMs = firstAudioMs_.load(std::memory_order_relaxed);
+  t.ring500Ms = ring500Ms_.load(std::memory_order_relaxed);
+  t.steadyMs = steadyMs_.load(std::memory_order_relaxed);
+  t.fullMs = fullMs_.load(std::memory_order_relaxed);
+  return t;
 }
 
 std::string Core2AudioBackend::description() const {
@@ -316,6 +432,13 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   shared_.expectingAudio = false;
   ringSteady_ = false;  // filling from empty until kSteadyMs
   trackStart_ = ring_->discardAll();  // nothing of the previous track plays after this
+  if (req.kind == Kind::Play) {  // a new start to time (startTiming())
+    firstAudioMs_ = -1;
+    ring500Ms_ = -1;
+    steadyMs_ = -1;
+    fullMs_ = -1;
+    startSeq_.fetch_add(1, std::memory_order_release);
+  }
   busyUs_ = 0;
   producedFrames_ = 0;
   setText(description_, "");
@@ -421,6 +544,7 @@ void Core2AudioBackend::closeDecoder() {
 
 Core2AudioBackend::Produced Core2AudioBackend::produceTone() {
   if (ring_->space() < kChunkFrames) {  // ring full: the output is ~1.5 s behind us
+    noteStartProgress(kToneRate, true);
     vTaskDelay(pdMS_TO_TICKS(10));
     return Produced::More;
   }
@@ -434,8 +558,19 @@ Core2AudioBackend::Produced Core2AudioBackend::produceTone() {
   producedFrames_ += n;
   if (!shared_.expectingAudio && producedFrames_ >= kToneRate / 4) shared_.expectingAudio = true;
   noteRingFill(kToneRate);
+  noteStartProgress(kToneRate, false);
   vTaskDelay(1);  // share core 1 with the UI loop
   return Produced::More;
+}
+
+void Core2AudioBackend::noteStartProgress(int rate, bool full) {
+  if (fullMs_.load(std::memory_order_relaxed) >= 0 || rate <= 0) return;  // done for this start
+  const auto since = static_cast<int32_t>(millis() - requestMs_.load(std::memory_order_relaxed));
+  const uint64_t bufferedMs = static_cast<uint64_t>(ring_->size()) * 1000 / static_cast<uint64_t>(rate);
+  if (firstAudioMs_.load(std::memory_order_relaxed) < 0 && producedFrames_ > 0) firstAudioMs_ = since;
+  if (ring500Ms_.load(std::memory_order_relaxed) < 0 && bufferedMs >= 500) ring500Ms_ = since;
+  if (steadyMs_.load(std::memory_order_relaxed) < 0 && bufferedMs >= kSteadyMs) steadyMs_ = since;
+  if (full) fullMs_ = since;
 }
 
 void Core2AudioBackend::noteRingFill(int rate) {
@@ -456,6 +591,7 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
   }
   // Room for a full pass plus what RingOutput may already be holding.
   if (ring_->space() < 2 * kChunkFrames) {
+    noteStartProgress(out_->rate(), true);
     vTaskDelay(pdMS_TO_TICKS(10));
     return Produced::More;
   }
@@ -480,8 +616,18 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
     shared_.expectingAudio = true;  // past the pre-roll
   }
   noteRingFill(out_->rate());
+  noteStartProgress(out_->rate(), false);
   if (!running) sourceDone_ = true;
-  vTaskDelay(1);  // share core 1 with the UI loop
+  // Share core 1 with the UI loop: 1 ms, or, with refill pacing on, during
+  // the fill after a start or skip (until the ring is first full: fullMs_
+  // is -1 until then) and past 500 ms, long enough to keep this track under
+  // the rate cap (see setRefillPacing()). Later dips (an SD stall, a
+  // Bluetooth burst, a boost drop) refill flat out, as without pacing.
+  const int rate = out_->rate();
+  RefillPacer::Config pace = refillPacing();
+  pace.enabled = pace.enabled && fullMs_.load(std::memory_order_relaxed) < 0;
+  vTaskDelay(RefillPacer::sleepMs(pace, bufferedMsNow(), static_cast<uint32_t>(producedFrames_ - before),
+                                  rate > 0 ? static_cast<uint32_t>(rate) : 0, static_cast<uint32_t>(passUs)));
   return Produced::More;
 }
 

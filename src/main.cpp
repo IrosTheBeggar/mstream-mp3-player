@@ -118,12 +118,23 @@ static void enterSilentMode() {
   Serial.println("[test] silent mode: speaker muted, bluetooth won't take over");
 }
 
+// A spike screen (the scroll lab, a probe) owns the display while it's up:
+// the dance screen would draw over it (and, with the lab's hardware scroll
+// on, into GRAM the panel shows rotated, which the lab never redraws).
+static bool spikeHasScreen() {
+  if (!spike.ownsScreen()) return false;
+  Serial.println("[dance] not while a spike screen is up (close it first)");
+  return true;
+}
+
 static void setDance(bool on) {
+  if (spikeHasScreen()) return;
   danceMode.setActive(on);
   if (!danceMode.active()) view.forget();  // the now-playing screen redraws in full
 }
 
 static void cycleDancer() {
+  if (spikeHasScreen()) return;
   const bool was = danceMode.active();
   danceMode.cycleSkin();
   if (was && !danceMode.active()) view.forget();  // no sprite for either dancer: back to now-playing
@@ -478,7 +489,7 @@ void setup() {
                  "f forget bt, z silent test mode, d dance, m next dancer, x/X screenshot dancer/screen, v beat log; "
                  "with Enter: i<n> play, b<n> bench, c<name> headphones name, h<n> bt headroom -n dB, "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
-                 "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress), "
+                 "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0-2 redraw/hw scroll/+boost, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja)");
 }
 

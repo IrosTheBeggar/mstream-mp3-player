@@ -11,7 +11,7 @@ the serial console and can stay in the firmware as diagnostics.
 | Hold versus click on BtnA/B/C: how long people press, where the thresholds go | Input lab, button practice | `u2` |
 | Glass touches near the bottom edge versus the touch buttons below it; the dead band | Input lab, target practice | `u1` |
 | The haptic tick: which length and strength can be felt | Input lab, haptics | `u3` |
-| Flick-scrolling a list while audio streams from the SD card on the LCD's SPI bus | Scroll lab | `w0`-`w3` |
+| Flick-scrolling a list while audio streams from the SD card on the LCD's SPI bus | Scroll lab (round 2: hardware scroll, boost, gentle refill) | `w0`-`w3`, `wm`, `wb`, `wp` |
 | The library at 2,000-10,000 tracks: build time, sort time, memory | Library index | `g0`, `g<n>` |
 | Internal RAM (about 48-50 KB free while playing) | every probe logs it | |
 | Names that aren't ASCII ("Can’T", "T‐Pain", "Pénélope"): fonts, speed, flash | Font probe | `e`, `e1`-`e5` |
@@ -797,3 +797,671 @@ with the scroll lab's three lists). All of them render as designed.
 Haptics: the tick the user preferred, and whether 15 ms can be felt at all.
 Scroll feel: whether `w0` at 10-12 fps during playback feels acceptable, and
 whether `wc6` helps slow drags.
+
+## Scroll round 2: hardware scroll, interaction boost, gentle refill
+
+**Status: measured on the device (26 September 2026), silent, speaker
+path; the user's visual check and a Bluetooth run are still to do.** The
+sections up to "Build and host results" are the design and its estimates,
+written before the device runs. The results and the recommendation are in
+"On the device" at the end. In short: the hardware scroll delivers for
+drags (13.9 fps instead of 10.8 with an MP3 playing, 40 uncapped), the
+gentle refill halves the track-start stall, and the interaction boost
+makes things worse and should be dropped.
+
+### Why
+
+In a session with the user on the device (Bluetooth output, an MP3 playing,
+`w0` with a finger), scrolling felt "not great":
+
+- fps while moving: p50 12.6;
+- frame p50 76.7 ms (draw 37 ms, push 33 ms);
+- the audio was perfect: ring minimum 1,409 ms of about 1,450, no underruns,
+  decode 35-43 %.
+
+So the decoder has plenty of slack, and the list is short of CPU and bus
+time. Round 2 adds three ways to give it more, each a scroll lab option so
+it can be A/B measured against the spike-1 path:
+
+1. hardware vertical scroll (`wm1`);
+2. an interaction boost (`wb1`, or `wm2` with the hardware scroll);
+3. a gentler ring refill at track starts (`wp1`).
+
+A correction to the brief: the lab's list band is **168 lines** (y 72-239),
+under the 36 px tab bar and the 36 px segmented header, not 204. So the
+fixed top area here is 72 lines (the bar and the header). A 204-line list
+(the bar alone fixed) works the same way; the host tests cover both shapes.
+
+### Can the ILI9342C scroll the list vertically in our orientation? Yes
+
+The evidence, from the ILI9342C datasheet (ILITEK, v1.00, 235 pages; the
+copy M5Stack hosts), the ILI9342E datasheet (the later Core2 panel, which
+M5GFX 0.2.30 detects) and M5GFX 0.2.30's source:
+
+- **The controller's scroll axis is its 240 frame-memory lines.**
+  - VSCRDEF (33h, §8.2.26) takes TFA, VSA and BFA "in No. of lines of the
+    Frame Memory". Its reset default is 0 / 240 / 0.
+  - §9.2.2 states that scrolling is undefined unless TFA + VSA + BFA = 240.
+  - VSCRSADD (37h, §8.2.30) takes the frame-memory line shown right after
+    the top fixed area. A new value takes effect at the next panel scan.
+  - The ILI9342E lists the same two commands, with 9-bit parameters.
+- **The frame memory is 320 x 240, and those 240 lines are the page (row)
+  addresses when MADCTL's MV bit is 0.** The reset defaults are:
+  - CASET (2Ah): EC = 013Fh (320 columns) with MV = 0;
+  - PASET (2Bh): EP = 00EFh (240 pages) with MV = 0.
+
+  The out-of-range notes in those two sections contradict the defaults.
+  They are left over from the ILI9341 datasheet, a portrait panel, and
+  can be ignored.
+- **M5GFX drives the Core2's panel with MV = 0.**
+  - `Panel_ILI9342` sets memory and panel to 320 x 240.
+  - `Panel_M5StackCore2_T` sets `offset_rotation = 3` and a default
+    `_rotation = 1`. The firmware never calls `setRotation`.
+  - `Panel_LCD::setRotation` computes the internal rotation:
+    (1 + 3) & 3 = 0, with no flip bit.
+  - `getMadCtl(0)` is 0. MADCTL is therefore only the BGR bit: no MV, no
+    MX, no MY, no ML. `_colstart` and `_rowstart` are 0.
+- So screen row y is page y, which is frame-memory line y, top first. ML = 0
+  means TFA counts from the top.
+- **The controller's scroll axis is the screen's vertical.**
+- **M5GFX has no hardware scroll.** Its `scroll()` and `copyRect()` copy
+  GRAM through reads and writes. It never sends 33h or 37h, and it caches
+  only CASET and PASET, which these commands don't touch. Raw commands
+  through `writeCommand` / `writeData16` inside a `startWrite()` are safe.
+
+The one orientation risk is a rotation change, for example 3 (upside down,
+which sets MY and ML). That would reverse the line mapping and make TFA count
+from the bottom. `ListScroller::begin()` refuses anything but the Core2 in
+rotation 1, and says so.
+
+### What was built
+
+Portable, in `lib/core/`, host-tested (`test/test_ui_scroll2`, 13 new
+cases, 324 in all):
+
+- **`VScrollMap`**: the bookkeeping of the hardware scroll.
+  - Content line c lives at GRAM line top + ((c - base) mod height).
+  - The start address is top + ((offset - base) mod height).
+  - So screen line top + k always shows content line offset + k.
+  - `plan(offset)` returns the newly exposed content lines as at most two
+    GRAM spans, split at the wrap, for a move of up to `maxStep` lines.
+  - A bigger move, or an `invalidate()`, is a **full redraw in place**: it
+    re-picks `base` so the start address stays what the panel already
+    has. The new content is then written straight into the screen lines
+    where it will show, top to bottom, like spike 1's redraw, and never
+    shows wrapped or shifted while it is drawn.
+  - It also maps lines both ways, from screen to GRAM and back.
+  - The tests check against a fake panel that applies the datasheet's
+    rule. A 3,000-step random walk of drags, flick frames, jumps and
+    invalidates (with the default `maxStep` and the lab's 84) must always
+    show the right content, and draw exactly |d| lines per incremental
+    step and the whole band otherwise. Another test checks, line by line,
+    that a full redraw lands in place under the panel's current address.
+- **`UiBoost`**: the boost rule, a Schmitt trigger on the ring (below).
+- **`RefillPacer`**: the gentle refill's sleep per pass (below).
+
+On the Core2:
+
+- **`src/ui/ListScroller`**: the reusable part for the real UI.
+  - `begin(top, height)` sends VSCRDEF, then VSCRSADD = top, so nothing
+    moves yet.
+  - `begin(top, height, stats, maxStep)`: the lab uses a `maxStep` of 84
+    lines (2 rows), which bounds a move's single bus hold (below).
+  - `scrollTo(offset, painter)` calls back a `ListScroller::Painter`:
+    - for a move of up to `maxStep` lines: `prepare()` (render the row
+      sprites of the new lines) and `prepareFixed()` (render the rail),
+      both off the bus; then, in **one bus hold**, `push()` the new lines,
+      send the new start address (2 bytes), and `pushFixed()` the rail
+      back to its place;
+    - for a full redraw in place: `push()` in slices under their own
+      locks, with yields, as spike 1 did; the address doesn't change.
+  - `pushAtScreen(sprite, x, y)` puts something that must not move (the
+    rail, an overlay, a toast) where the panel currently shows that screen
+    position. Its lines go to the GRAM lines on screen there, in at most
+    two pieces.
+  - `gramLineForScreen(y)` is a static helper for screenshots.
+  - `end()` sets VSCRSADD back to the top, then sends Normal Display Mode
+    On (13h), which leaves scroll mode (§9.2.2).
+  - Why a move is one hold: the GRAM lines the new lines go into are the
+    ones leaving at the far edge, and they are **still on screen** until
+    the address changes. Pushing, sending and putting the rail back back
+    to back limits that wrong strip, and the rail's displacement, to the
+    bus time (about 0.125 ms a 290 px line, plus ~2 ms for the rail), or
+    a little more if the decoder (priority 2) preempts the loop in the
+    middle; with the boost on it can't.
+- **The scroll lab's hardware path** (`wm1`):
+  - Rows are drawn into the same PSRAM row sprites, but only the newly
+    exposed lines of them are pushed: whole, in the move's one hold, or in
+    `wh` slices on a full redraw.
+  - It uses all 6 row sprites (`wc` is ignored): a move renders every row
+    its new lines come from (3 at most with the 84-line step) before it
+    pushes any, and a row that is half-exposed stays cached for the next
+    frame.
+  - The A-Z rail is inside the scrolled band, so the panel moves it with
+    the list. It is redrawn into a 30 x 168 PSRAM sprite before the hold
+    and put back with `pushAtScreen` inside it, at every move.
+  - The tab bar, the header and the fps chip are in the fixed area and are
+    drawn as before.
+  - On close (and on `w`, `wq`, or another spike screen), the band is
+    cleared first, so the GRAM is uniform and nothing shows rotated, and
+    then `end()`. Every later screen draws at the identity, as before.
+- **Screenshots** (`X`, `app/Screenshot`):
+  - Each screen row is read from the GRAM row the panel shows there, in
+    runs of consecutive rows.
+  - The format line says "hardware scroll active: rows read back through
+    the scroll offset, start address n, so this is what the panel shows".
+- **`Core2AudioBackend`**: the boost, the pacer and the start timing, all
+  off by default. Only the lab turns them on. See the header's comments.
+
+### 1. Hardware vertical scroll: what it should save
+
+These are estimates from spike 1's measurements, not device results:
+
+- a push costs about 0.43 us per pixel (a 290 x 168 viewport in 20.7 ms);
+- a row costs 2.8 ms to draw idle and 5-7 ms during playback.
+
+| At 15 fps | Lines per frame | Push | Rows drawn per frame | Frame, idle (spike 1: 35 ms) |
+|---|---|---|---|---|
+| slow drag, 300 px/s | 20 | 2.5 ms, + 2.1 ms rail | ~0.5 | ~6-8 ms |
+| drag, 1,000 px/s | 67 | 8.2 ms, + 2.1 ms rail | ~1.6 | ~15-20 ms |
+| over ~1,260 px/s (more than 84 lines a frame) | 168 (a full redraw in place) | 20.7 ms, + 2.1 ms rail | 4-5 | ~37 ms, the same as spike 1 plus the rail |
+
+- **Drags and the tail of every flick get much cheaper.** Those are the
+  "finger scrolling" of the user's complaint.
+- **A fast flick doesn't.** Above 84 lines a frame the move is a full
+  redraw in place, to bound the move's bus hold at ~12 ms (84 lines + the
+  rail; spike 1's holds reached 15-33 ms while playing). At 4,000 px/s a
+  frame moves 267 lines anyway, more than the band. That is the whole `w1`
+  stress, so `w1` with `wm1` should read about like `wm0`, or 2 ms worse
+  for the rail. Use `w0` with a finger, or a slower stress, to see the
+  gain.
+- The frame rate should rise with it: cheaper frames mean fewer lines per
+  frame, which means cheaper frames again.
+- The tracks list has no rail. Its frames are the line pushes alone.
+
+Known artifacts, to check on the device:
+
+- **Tearing.** The Core2 doesn't wire the TE pin, so the new lines and the
+  address can land mid-scan. It is the same as spike 1's pushes, but it
+  now involves a shift of the whole band.
+- **A wrong strip at the far edge during a move.** The new lines are
+  pushed into GRAM lines still on screen at the other edge (the top d
+  lines show the rows about to appear at the bottom, or the reverse)
+  until the address changes, in the same hold: for the push's bus time,
+  ~2.5-10.5 ms for a 20-84 line move, longer if the decoder preempts.
+- **The rail is displaced after the address** until it is pushed back,
+  in the same hold, ~2 ms later.
+- A full redraw (a jump, a rail scrub, a view change, a fast flick) fills
+  in top to bottom in place, exactly like spike 1's redraw.
+
+### 2. Interaction boost (`wb1`, `wm2`)
+
+**Mechanism: lower the decoder, don't raise the loop.** Core 1 runs:
+
+| Task | Priority |
+|---|---|
+| the speaker pump | 3 |
+| M5.Speaker's own task (`task_priority` 2, pinned to core 1 by `SpeakerSink`) | 2 |
+| the decoder | 2 |
+| the Arduino loop | 1 |
+
+Raising the loop to 3 would starve M5.Speaker's task during every frame,
+and tie with the pump. Instead, while boosted, the decode task drops to
+priority 0 (`kDecodePriorityYielding`), below the loop. It then runs only
+while the loop sleeps: in its `delay(5)` per pass, while it waits for the
+frame cap, and in a guaranteed rest after each frame (below). The outputs
+and the speaker tasks keep their priorities.
+
+At priority 0 the decoder shares core 1 with IDLE1: FreeRTOS time-slices
+equal priorities (`configUSE_TIME_SLICING` 1), and IDLE1 doesn't yield
+(`configIDLE_SHOULD_YIELD` 0) but waits for the next tick. So the decoder
+gets **about half** of the loop's sleep, not all of it. (Priority 1, level
+with the loop, would give the loop no more than it has unboosted.)
+
+**The rule** (`UiBoost`, host-tested):
+
+- wanted while the lab reports activity (finger down, list moving, a
+  stress running), and for 300 ms after;
+- on from a ring of at least 1,200 ms (under the ring's full level at
+  48 kHz too: 65,536 frames are ~1.32 s full there, ~1.44 s at 44.1 kHz);
+- off the moment the ring is below 900 ms, and on again only from
+  1,200 ms **and** at least 300 ms after the drop (fewer, longer on and
+  off periods instead of a flip every few hundred ms);
+- with nothing playing (stopped, paused), on whenever wanted;
+- a pending track start (Pending) counts as an empty ring, so the decoder
+  gets to a skip at once.
+
+**Enforcement from core 0.** A 10 ms `esp_timer` applies the rule
+(`vTaskPrioritySet`). It runs on the esp_timer task on core 0, so it keeps
+running however busy core 1 is. Even if the loop never slept, the ring
+could only fall one check (10 ms of audio) below the floor before the
+decoder is back at priority 2. The ring can't approach 500 ms because of the
+boost. The host test runs a simulated minute of a finger on the glass with
+the boosted decoder producing 0x (starved outright), 0.15x, 0.5x and 0.9x
+realtime: the ring never goes below 890 ms, and the hold-off is kept after
+every drop.
+
+**The UI must still sleep.** While boosted, the loop rests at least 20 ms
+after each frame (`kBoostRestMs`), measured from the frame's end, on top
+of the frame cap (from its start) and even in `w3`, and it keeps its
+`delay(5)`. The decoder gets about half of that rest.
+
+**Logging.**
+
+- `[boost] on|off at t=<ms>: <why>, ring <ms> ms` at each change;
+- `boost=<ms>` in each `[scroll]` second: time boosted;
+- in the stress summary: the share of time boosted, and the longest loop
+  gap.
+
+**What to expect.**
+
+- With spike 1's full redraw (`wm0` `wb1`), a frame needs 35-46 ms of
+  CPU. At the 66 ms cap that leaves 20-31 ms of sleep a frame, about half
+  of it for the decoder: ~15-23 % of the core against the ~40 % an MP3
+  needs, so the ring drains at about 0.5x (about 0.85x in `w3`, with only
+  the 20 ms rest). The boost borrows the ~540 ms between full and the
+  floor: about 1 s of heavy scrolling (0.6 s in `w3`). Then it is off for
+  at least 300 ms while the decoder refills flat out, and on again from
+  1,200 ms for another ~0.6 s: the frame rate alternates between boosted
+  and not about once a second. These are estimates; the device run says.
+- With the hardware scroll (`wm2`), drag frames are a fraction of that, so
+  the loop sleeps most of each frame, the decoder gets most of what it
+  needs, and the ring drains slowly or not at all while boosted.
+
+**Costs.**
+
+- `vTaskPrioritySet`, `esp_timer_create`/`start_periodic`/`stop` were
+  already linked, so IRAM is unchanged.
+- `xTaskDelayUntil` is not linked, and would land in IRAM. It is not used.
+- The boost's mutex allocates a FreeRTOS semaphore (about 100 B internal)
+  the first time the boost is enabled.
+
+### 3. Gentle refill (`wp1`)
+
+**What the decoder does now.** At a start or a skip it refills the empty
+ring flat out, with only `vTaskDelay(1)` per 1,024-frame pass (23.2 ms of
+audio).
+
+- An MP3 pass takes about 9.3 ms, 40 % of realtime, so "flat out" is only
+  about 2.3x realtime. That means a 2-3x cap would change nothing for
+  MP3.
+- The refill takes about 0.7 s and leaves the loop almost nothing: spike 1
+  measured frames of 600-820 ms.
+
+**With pacing on (`RefillPacer`, host-tested):**
+
+- below 500 ms buffered, flat out, exactly as now;
+- from 500 ms, the decode task sleeps after each pass so it produces at most
+  **1.5x realtime** (`wp15`, the default cap; `wp<15-40>` sets x/10). 1.5x
+  is also the lowest cap applied (`RefillPacer::kMinCapX10`, in the pacer,
+  the backend and the console): near 1x, with the sleep rounded up, the
+  paced ring would stop growing and settle at 500 ms for the whole track.
+- only during the fill after a start or skip: once the ring has been full
+  once, the pacing is off until the next start.
+- For an MP3, that is a 7 ms sleep per 9.3 ms pass. The decoder's share of
+  the core falls from about 90-100 % to about 57 %, and the ring still
+  grows at +0.5x.
+
+The simulated refill from empty:
+
+| | Pacing off | Pacing on (1.5x) |
+|---|---|---|
+| To 500 ms buffered | ~0.4 s | ~0.4 s (the same) |
+| Decoder's share of the core, 500 ms to full | ~90-100 % | ~57 % |
+| Ring full | ~0.7 s | ~2.5 s |
+
+**Time to first audio doesn't change.** The outputs read the ring as soon
+as it has frames, and the pacing starts at 500 ms.
+
+**Risk.** Above 500 ms the paced ring always grows (at least ~1.4x
+production against 1x playback, with the rounding; a host test checks it
+for MP3- and FLAC-like passes). A Bluetooth pull burst takes tens of ms,
+far from 500. The ring's end-of-track drain and the governor's steady gate
+are unchanged.
+
+**The pacing applies only to the fill after a start or skip** (the backend
+paces while that start's "ring full" time is still unset). A dip later in
+the track (an SD stall, a Bluetooth burst, a boost drop to 900 ms) refills
+flat out, as without pacing, so it doesn't eat into the margin the rest
+of the design assumes.
+
+**Measurement.** Both lines are new:
+
+```
+[audio] refill: first audio in the ring <ms> ms after the request, 500 ms buffered at <ms> ms, 1000 ms (steady) at <ms> ms, full at <ms> ms (-1: not reached); pacing off|<x>x from 500 ms
+[scroll] track start: in the 3 s after it, longest frame <ms> ms, longest loop gap <ms> ms, <n> frames (<path>, boost on|off, refill pacing ...)
+```
+
+- The first comes from the backend, once per start, on any screen.
+- The second comes from the lab, for each start while it is open. The loop
+  gap catches a stall that falls between two frames.
+- Spike 1's figure (a 600-820 ms frame) is the "before".
+
+`wp` stays set after the lab closes, so a start can be timed from the
+now-playing screen too. `wp0` turns it off.
+
+### Console (scroll lab)
+
+| Command | What |
+|---|---|
+| `wm0` | full redraw, spike 1 (the default) |
+| `wm1` | hardware vertical scroll |
+| `wm2` | hardware scroll + boost |
+| `wb0` / `wb1` | boost off / on, on either path (`wm0` `wb1` = spike 1 + boost) |
+| `wp0` / `wp1` / `wp<15-40>` | refill pacing off / on / on at x/10 realtime (1.5x at least) |
+| `wk<px/s>` | the stress's flick speed, 200-6,000 (default 4,000, spike 1's); `wk1000` is a fast drag, the hardware path's case |
+| `ws` | shows all of them |
+
+- `wm` works live: switching back to `wm0` clears the band (its GRAM is
+  in the rotated order), ends the scroll and redraws in full at the
+  identity.
+- The console's `d` and `m` (the dance screen) refuse while a spike screen
+  is up: the dance screen drew over the lab, and with the hardware scroll
+  on the lab never redrew those lines (and the panel showed them rotated).
+- The `[scroll]` line gains four fields: `hw|redraw`, `lines=` (lines drawn
+  on the hardware path), `boost=` and `gap_max=`.
+
+### Build and host results
+
+- `pio test -e native`: **324 cases pass**, the 13 new included.
+- `pio run -e core2` (pioarduino 55.03.312-1) builds.
+
+| | IRAM (vectors + text) | Internal `.dram0.data` + `.bss` | Flash |
+|---|---|---|---|
+| round 1 on the device (the table above) | 124,035 B | 51,392 B | 2,251,508 B |
+| round 2, after its review fixes | 124,035 B (unchanged) | 51,504 B (+112) | 2,260,212 B (+8,704) |
+
+The new buffers are in PSRAM: the rail sprite (10 KB), and the `ListScroller`
+inside the lab, which lives in PSRAM itself.
+
+### On the device (26 September 2026)
+
+Measured on the Core2 v1.3 (COM3) in silent test mode (`z`, confirmed after
+every boot: `out=speaker(silent test mode)`), so the audio went to the muted
+speaker. **Bluetooth output was not measured**: the headphones were connected
+but silent mode kept them off the output. Audio came from the SD card: MP3
+index 26 (Daft Punk) and FLAC index 70 (Kavinsky). The lists were the
+synthetic 10,000-track library (`g10000`, artists view, with the A-Z rail)
+and the card's 77 tracks (`g0`, tracks view `wv2`, no rail). Logs:
+`r2_*.log` in the session scratchpad.
+
+Changes made for the measurement (all in the lab or its logging):
+
+- **`wk<px/s>`, the stress's flick speed** (200-6,000, default 4,000). At
+  spike 1's 4,000 px/s nearly every frame moves more than the 84-line step,
+  so `w1` could never exercise the hardware path. `wk1000` (1,000 px/s,
+  slowing to ~400 before the next flick) is a fast drag: 20-60 lines per
+  frame.
+- **The `[scroll]` per-second line printed four strings into three `%s`**,
+  so `lines=` showed a pointer and `boost=` / `gap_max=` showed the next
+  field. Fixed (one `%s` added).
+- **The `[audio] refill` line printed at once with every field -1.** The
+  loop's `nowMs` is read before the console makes the request, so
+  `nowMs - requestMs_` wrapped (the same bug as the stress's start in spike
+  1). Now a signed difference.
+- **The `[scroll] track start` watch missed the stall.** The decode task
+  counts the start when it takes the request, while the loop is mid-frame,
+  and then refills at priority 2: the stall is in the frame that is
+  already running when the lab sees the new start. The watch read ~90 ms
+  for an 800 ms stall. Fixed after these runs: the watch now includes the
+  frame and loop gap that just ended. It was checked on the final build
+  (`wm1`, `wp0`, three MP3 skips): the watch read 633, 416 and 506 ms, the
+  same as the per-second maxima. The track-start figures below come from
+  the per-second `frame=` maximum and `gap_max=` in the 4 s after each `n`,
+  which catch it on every build.
+
+The final build (all four changes): IRAM 124,035 B and internal
+`.dram0.data` + `.bss` 51,504 B, both unchanged from the review build; flash
++~40 B.
+
+#### 1. `w1` stress: `wm0` / `wm1` / `wm2`
+
+`w1` as in spike 1 (governor on, 15 fps cap, 14 px slices, 30 s; 20 s for
+the idle rows). fps is while moving (100 % of the time), p10 / p50. Frame
+is p50 / max, draw and push are per-frame p50 of the per-second means, hold
+is the SPI hold per lock, mean p50 / max. Boost is the share of time boosted
+and the on/off count. No run had an underrun.
+
+**10,000 tracks, artists view (rail), nothing playing:**
+
+| Path, flick | fps p50 | Frame ms | Draw | Push | Hold ms | Heap min |
+|---|---|---|---|---|---|---|
+| `wm0`, 4,000 | 14.8 | 35.0 / 44.4 | 13.6 | 20.4 | 1.54 / 2.8 | 62 K |
+| `wm1`, 4,000 | 14.5 | 41.8 / 49.8 | 19.3 | 22.4 | 1.44 / 12.2 | 67 K |
+| `wm0`, 1,000 | 14.7 | 34.7 / 37.6 | 13.8 | 20.4 | 1.55 / 2.8 | 67 K |
+| `wm1`, 1,000 | 14.9 | **13.9** / 42.3 | 5.7 | 8.0 | 7.61 / 12.2 | 67 K |
+
+**10,000 tracks, artists view (rail), MP3 playing:**
+
+| Path, flick | fps p10 / p50 | Frame ms | Draw | Push | Hold ms | Ring min | Decode p50 / max | Heap min | Boost |
+|---|---|---|---|---|---|---|---|---|---|
+| `wm0`, 4,000 | 9.7 / 10.6 | 80.5 / 104.9 | 34.5 | 40.1 | 2.99 / 23.0 | 1,439 | 40 / 42 % | 49.5 K | |
+| `wm1`, 4,000 | 8.7 / 9.7 | 83.7 / 111.9 | 40.6 | 40.3 | 2.81 / 31.0 | 1,439 | 39 / 44 % | 49.4 K | |
+| `wm2`, 4,000 | 5.8 / 6.4 | 79.7 / **421** | 47.4 | 30.3 | 1.92 / 52.9 | **888** | 91 / 115 % | 49.4 K | 85 %, 23 on / 25 off |
+| `wm0`, 1,000 | 9.4 / 10.8 | 79.8 / 102.0 | 37.7 | 38.5 | 2.91 / 23.5 | 1,439 | 38 / 44 % | 49.5 K | |
+| `wm1`, 1,000 | **13.7 / 13.9** | **25.8** / 91.7 | 10.2 | 14.2 | 14.4 / 33.8 | 1,439 | 38 / 41 % | 49.1 K | |
+| `wm2`, 1,000 | 6.4 / 7.0 | 48.2 / **370** | 22.6 | 18.2 | 2.37 / 52.8 | **882** | 91 / 96 % | 49.2 K | 92 %, 18 on / 18 off |
+
+**10,000 tracks, artists view (rail), FLAC playing:**
+
+| Path, flick | fps p10 / p50 | Frame ms | Draw | Push | Hold ms | Ring min | Decode p50 / max | Heap min | Boost |
+|---|---|---|---|---|---|---|---|---|---|
+| `wm0`, 4,000 | 10.8 / 11.7 | 54.8 / 80.4 | 23.5 | 28.8 | 2.17 / 32.2 | 1,439 | 32 / 36 % | 51.9 K | |
+| `wm1`, 4,000 | 10.6 / 11.0 | 62.8 / 88.7 | 30.0 | 28.5 | 2.01 / 38.0 | 1,439 | 32 / 36 % | 51.8 K | |
+| `wm2`, 4,000 | 6.0 / 7.7 | 59.3 / **327** | 29.6 | 28.4 | 1.67 / 32.6 | **899** | 83 / 97 % | 51.9 K | 94 %, 16 on / 16 off |
+| `wm0`, 1,000 | 10.7 / 11.7 | 55.2 / 80.0 | 25.2 | 28.2 | 2.19 / 33.0 | 1,422 | 32 / 36 % | 51.8 K | |
+| `wm1`, 1,000 | **11.7 / 12.6** | **22.8** / 79.6 | 9.6 | 10.9 | 7.31 / 38.3 | 1,439 | 32 / 34 % | 51.5 K | |
+| `wm2`, 1,000 | 8.7 / 14.0 | 18.1 / **215** | 7.7 | 9.4 | 4.87 / 37.7 | **882** | 89 / 100 % | 51.5 K | 98 %, 6 on / 6 off |
+
+**The card's 77 tracks, tracks view (no rail), MP3 playing:**
+
+| Path, flick | fps p10 / p50 | Frame ms | Draw | Push | Hold ms | Ring min | Decode p50 / max | Boost |
+|---|---|---|---|---|---|---|---|---|
+| `wm0`, 4,000 | 9.5 / 10.3 | 82.5 / 114.1 | 35.0 | 43.5 | 3.35 / 24.2 | 1,439 | 39 / 43 % | |
+| `wm1`, 4,000 | 8.9 / 9.9 | 80.5 / 125.7 | 36.5 | 40.2 | 3.33 / 25.7 | 1,439 | 39 / 44 % | |
+| `wm0`, 1,000 | 9.4 / 10.0 | 84.9 / 113.8 | 37.1 | 45.2 | 3.50 / 24.1 | 1,439 | 39 / 42 % | |
+| `wm1`, 1,000 | **13.7 / 13.9** | **22.3** / 98.0 | 8.5 | 12.3 | 12.2 / 24.3 | 1,439 | 37 / 41 % | |
+| `wm2`, 1,000 | 6.4 / 7.0 | 50.8 / **366** | 20.5 | 17.9 | 2.71 / 55.9 | **888** | 91 / 99 % | 17 on / 18 off |
+
+**The frame cap is now the limit** (MP3 playing, 10,000 tracks, rail):
+
+| Run | fps p10 / p50 | Frame ms |
+|---|---|---|
+| `w3` (no cap, no governor), `wm0`, 1,000 | 10.5 / 10.7 | 79.1 / 103.3 |
+| `w3`, `wm1`, 1,000 | **37.8 / 40.6** | 14.4 / 88.2 (draw 4.7, push 8.3) |
+| `w1` `wf30`, `wm0`, 1,000 | 9.8 / 10.9 | 78.7 / 100.6 |
+| `w1` `wf30`, `wm1`, 1,000 | **23.7 / 25.0** | 18.2 / 91.7 |
+| `w1` `wf30`, `wm1`, 2,000 | 14.5 / 16.5 | 46.5 / 96.9 |
+| `w1` `wf30`, `wm1`, 4,000 | 9.7 / 10.2 | 82.4 / 111.1 |
+
+All with ring minimum 1,439 ms and no underruns.
+
+What this shows:
+
+- **The hardware scroll works as predicted for drags.** At 1,000 px/s a
+  frame costs 22-26 ms during playback instead of 80 (MP3) or 55 (FLAC),
+  and 13.9 ms idle instead of 35. At the 15 fps cap that gives 13.9 fps
+  with an MP3 against 10.8, and 12.6 with a FLAC against 11.7. Uncapped,
+  the same drag runs at 40 fps with an MP3 playing (the full redraw: 10.7).
+- **It doesn't help fast flicks, as predicted, and costs a little.** At
+  4,000 px/s the lines per frame exceed the 84-line step, every frame is a
+  full redraw in place, and the rail sprite is extra: 9.7 fps against 10.6
+  with an MP3, 11.0 against 11.7 with a FLAC. Idle it costs ~7 ms a frame
+  (draw 19.3 against 13.6: the rail sprite is drawn at every frame).
+- **There is a cliff between the two.** Once a frame moves more than 84
+  lines it costs a full redraw, which makes the next frame later and
+  longer still (`wf30` at 2,000 px/s: 16.5 fps, most frames full).
+- **The move's single bus hold** (new lines, the address, the rail) is
+  7-14 ms on average during drags and at most 34-38 ms with audio (12.2 ms
+  idle): the decoder preempts the loop inside the hold. The ring never
+  noticed: 1,439 ms minimum in every non-boosted run.
+- **The interaction boost (`wm2`) makes everything worse.** Frame rate
+  halves (7.0 fps against 13.9 for `wm1` with an MP3), stalls of 215-421 ms
+  appear, and the ring cycles between 1,200 and ~885 ms, the boost turning
+  on and off every ~1.5 s (18-25 times in 28 s). The decoder's "decode %"
+  reads 90 % because its passes are spread out by preemption, not because
+  it works harder. Why:
+  - boosted, the decoder (priority 0) only runs while the loop sleeps,
+    and shares that time with IDLE1; the loop's sleeps (the frame cap,
+    the 20 ms rest, `delay(5)`) are therefore half wasted on the idle
+    task;
+  - so the decoder falls behind, the ring drains to the 900 ms floor, the
+    boost drops, and the decoder refills at priority 2 flat out
+    (about 2.3x realtime), which stalls the UI for 200-400 ms;
+  - over each cycle the decoder still needs its ~40 % of core 1: the boost
+    cannot create CPU, only move it, and it moves it badly.
+- **The ring is never the constraint without the boost.** 1,439 ms (of
+  ~1,450) in every run, as in spike 1.
+- The heap minimum is unchanged (49-52 K while playing, as spike 1).
+
+#### 2. Track starts: the gentle refill (`wp1`)
+
+`w1` at 1,000 px/s, 40 s, three `n` skips 10 s apart, after an `i26` (MP3)
+or `i70` (FLAC) start. The stall is the longest frame and the longest loop
+gap in the 4 s after each skip. The refill timings are the backend's
+`[audio] refill` line, in ms after the request. No underruns in any run.
+
+| Audio, path | Pacing | Longest frame per skip (ms) | Longest loop gap (ms) | Lowest fps in a second |
+|---|---|---|---|---|
+| MP3, `wm0` | off | 809, 790, 788 | 819, 810, 809 | 2.7 |
+| MP3, `wm0` | 1.5x | 326, 337, 378 | 359, 355, 393 | 6.2 |
+| MP3, `wm1` | off | 710, 325, 364 | 725, 345, 388 | 3.0 |
+| MP3, `wm1` | 1.5x | **235, 146, 156** | 258, 204, 165 | 10.0 |
+| FLAC, `wm0` | off | 621, 635, 673 | 745, 661, 710 | 4.3 |
+| FLAC, `wm0` | 1.5x | 353, 355, 252 | 391, 362, 317 | 7.9 |
+| FLAC, `wm1` | off | 545, 388, 433 | 576, 440, 439 | 3.9 |
+| FLAC, `wm1` | 1.5x | **311, 292, 300** | 319, 316, 309 | 8.8 |
+
+| Audio | Pacing | First audio in the ring | 500 ms buffered | 1,000 ms (steady) | Full |
+|---|---|---|---|---|---|
+| MP3 | off (12 starts) | 20-30 ms | 283-325 ms | 556-628 ms | 810-886 ms |
+| MP3 | 1.5x (14 starts) | 18-32 ms | 284-333 ms | 1,373-1,449 ms | 2,341-2,426 ms |
+| FLAC | off (4 starts) | 85-96 ms | 358-394 ms | 571-705 ms | 777-988 ms |
+| FLAC | 1.5x (4 starts) | 82-99 ms | 322-383 ms | 2,005-2,707 ms | 3,595-4,652 ms |
+
+- **The stall is halved or better**: 790-810 ms to 150-380 ms with an MP3,
+  620-670 ms to 250-355 ms with a FLAC. What is left is the flat-out fill
+  to 500 ms (~300 ms), which is by design.
+- **Time to first audio doesn't move** (MP3 20-30 ms, FLAC 85-99 ms), nor
+  does the time to 500 ms buffered.
+- **A FLAC's paced fill is slower than modelled**: full at 3.6-4.7 s, not
+  ~2.5 s, so it grows at about 1.25x rather than 1.5x. It still always
+  grows, and the ring minimum after each start (counted once steady) was
+  981-1,021 ms. It means the ring spends 2-4 s under 1 s after each FLAC
+  start: fine for the speaker, to be checked over Bluetooth.
+
+#### 3. Soak: 10 minutes, `wm1` + `wp1`, 30 fps cap
+
+The configuration recommended below: `wm1` (hardware scroll), `wp1` (1.5x
+pacing), boost off, `wf30` (30 fps cap), `w1` at `wk2000` (2,000 px/s
+flicks: a mix of incremental moves and full redraws, plus an A-Z jump every
+5th action), 10,000 tracks, artists view with the rail. Two 300 s stresses
+back to back: from `i26` (MP3, then tracks 27-36, all MP3) and from `i70`
+(FLAC, tracks 70-76, then the card's tone and click test tracks 77-82),
+with `n` every 30 s (20 skips, plus two ends of track).
+
+| Half | fps while moving p10 / p50 / min | Frame max | SPI hold max | Ring min (steady) | Underruns | Decode p50 / max | Heap min |
+|---|---|---|---|---|---|---|---|
+| MP3, 290 s | 13.0 / 15.8 / 6.6 | 381 ms (a skip) | 71.9 ms | 1,021 ms | **0** | 39 / 65 % | 48.6 K |
+| FLAC then tones, 294 s | 17.9 / 20.6 / 8.6 | 350 ms (a skip) | 45.7 ms | 981 ms | **0** | 31 / 62 % | 51.0 K |
+
+- **No underrun in 10 minutes**, and none in any other run of this round
+  (about 35 minutes of stress with audio playing in all).
+- The stall at each skip: 156-381 ms with an MP3 (9 skips), 183-350 ms with
+  a FLAC (6); 46-153 ms into the tone tracks, which fill in ~0.2 s.
+- Every start's first audio came 21-32 ms (MP3) and 84-97 ms (FLAC) after
+  the request; 500 ms was buffered at 284-392 ms.
+- The ring minimum (981-1,021 ms) is the paced fill passing 1,000 ms, when
+  the ring starts to count as steady. Mid-track the ring stayed at 1,439 ms.
+- The longest SPI hold was 72 ms: the loop's hold preempted by the
+  decoder's flat-out fill to 500 ms after a skip (spike 1 saw 15-33 ms for
+  the same reason). The ring didn't notice.
+
+#### Screenshots and what only the user can check
+
+**The screenshot's reconstruction is consistent.** After the soak the lab
+was left at a row-aligned offset with the panel's start address at 211. That
+is a shift of 139 lines, so the band's wrap was at screen line 101, inside
+the second row. `X` logged "hardware scroll active: rows read back through
+the scroll offset, start address 211", and the picture showed the list
+straight (four artist rows, the rail's L). Then `wm0` (which clears the
+band, returns the address to the identity and redraws in full) and `X`
+again: **the list band (lines 72-239, rail included) was identical, pixel
+for pixel**. Only the fps chip in the tab bar differed (92 px). Files:
+`r2_shot_wm1.png`, `r2_shot_wm0.png`.
+
+What that proves: `ListScroller::gramLineForScreen()` (the screenshot) and
+`VScrollMap`'s placement (the drawing) agree on where every line is, across
+a wrap, and leaving the hardware path leaves nothing rotated in GRAM. What
+it can't prove: that the panel really shows GRAM that way. A readback reads
+GRAM, and the reconstruction assumes the datasheet's rule. Only eyes can
+check that.
+
+**The user's visual check (about 2 minutes).** Over the serial console,
+with the Core2 in front of you:
+
+1. `z` (silent mode), `g10000` + Enter (the synthetic library), `i26` +
+   Enter (an MP3, silent).
+2. `wm1` + Enter, then `w0` + Enter: the scroll lab on the hardware path.
+   With a finger, in the Artists list, slow drags up and down, then fast
+   drags, then flicks. Look for:
+   - **the rows move smoothly and in order**: no row appears twice, none
+     is missing, nothing jumps back;
+   - **the tab bar and the Artists / Albums / Tracks header stay still**,
+     and nothing of the list is drawn over them;
+   - **no band of wrong rows** at the top or bottom of the list during a
+     move (a strip showing rows from the other end, or a line of
+     misplaced pixels), and no seam that stays on screen;
+   - **the A-Z rail on the right stays in place**, perhaps with a brief
+     flicker as the list moves (it is put back after each move). A rail
+     that visibly travels with the list is a fault;
+   - dragging the rail itself (a scrub) makes the list jump and redraw
+     top to bottom, as before.
+3. `wv2` + Enter (the tracks list, no rail): the same drags.
+4. `X`: a screenshot. It must match what you see.
+5. `wm0` + Enter: the same drags on the old path, to compare the feel.
+   Expected: visibly choppier drags with the music playing.
+6. `wq` + Enter: the lab closes. The next screen must draw straight, with
+   no part of it shifted or rotated. Then space (pause).
+
+Tearing: the Core2 doesn't wire the panel's TE pin, so a diagonal tear in a
+fast move is possible on both paths. Note whether it is worse on `wm1`.
+
+#### Recommendation for the real UI
+
+1. **Use the hardware scroll (`ListScroller`) for the real UI's lists**,
+   once the user's visual check passes. For finger drags (the complaint)
+   it cuts a frame during MP3 playback from ~80 ms to ~25 ms: 13.9 fps
+   against 10.8 at the 15 fps cap, and 40 fps uncapped. It costs the audio
+   nothing (the ring stayed at 1,439 ms) and no internal RAM.
+2. **Raise the list's frame cap to 30 fps with it** (25 fps measured at
+   `wf30`, 40 uncapped). Schedule frames from the deadline rather than
+   from the pass that drew the last one, to get closer to 30: today a
+   frame slips by up to a `delay(5)` plus a decoder pass.
+3. **Remove the fast-flick cliff.** Above 84 lines a frame, a move becomes
+   a full redraw, which makes the next frame later and longer still.
+   Either cap the list's fling speed at about 2,000 px/s (at 25-30 fps
+   that stays under 84 lines), or raise `maxStep` to the band height minus
+   one: the bounded hold it buys (~12 ms) isn't needed, since holds of
+   34-72 ms occurred in this round with no effect on the ring. Measure it
+   with `w1` `wf30` `wk2000` / `wk4000`.
+4. **Turn the refill pacing on for good (`wp1`, 1.5x).** It halves the
+   stall at every start and skip (MP3 ~800 ms to ~150-380; FLAC ~650 to
+   ~250-350), leaves the first audio where it was (20-30 ms MP3, 85-99 ms
+   FLAC), and had no underrun in 41 paced starts (33 of them MP3 or FLAC
+   files). The stall left is the flat-out fill to 500 ms (~300 ms). Starting the gentle phase
+   lower (say 300 ms) would shorten it, but needs a Bluetooth check first.
+5. **Drop the interaction boost.** In every configuration it made the list
+   slower (7 fps against 13.9), added 200-420 ms stalls, and cycled the
+   ring down to ~885 ms every 1.5 s. Lowering the decoder to priority 0
+   hands the loop's sleep half to IDLE1, and the decoder still needs its
+   ~40 % of core 1. The decoder's slack is better spent by making frames
+   cheaper (point 1). Keep `UiBoost` off (it is by default), and remove it
+   from the backend when the real UI lands, unless a different design
+   (for example the decoder at priority 1 only during a frame) is measured
+   first.
+6. **Before shipping, repeat `w1` (`wm1`, `wp1`, `wf30`) and the skip test
+   with Bluetooth output**, in a session where the user takes the
+   headphones off. None of this round ran over Bluetooth, and the A2DP pull
+   is burstier than the speaker's. The paced FLAC fill spends 2-4 s under
+   1 s of ring after each start: that is the case to watch.

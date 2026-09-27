@@ -13,7 +13,10 @@
 //   ...
 //   [shot] end
 //
-// Rows are the panel's RGB565, high byte first. If the LCD can't be read
+// Rows are the panel's RGB565, high byte first. While a list scrolls in
+// hardware (ui/ListScroller) each row is read from the GRAM row the panel
+// shows there, so the shot is what is on screen, and the format line says
+// so ("hardware scroll active ... start address n"). If the LCD can't be read
 // (or what it gives back doesn't match `check`, the sprite last pushed at
 // checkX/checkY), the sprite's own pixels are dumped instead, and the format
 // line says so. Loop task only: the one task that draws, so the capture

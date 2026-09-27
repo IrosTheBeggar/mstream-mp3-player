@@ -1,5 +1,6 @@
 #pragma once
 #include <FS.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -12,6 +13,7 @@
 #include "PcmRing.h"
 #include "ToneGen.h"
 #include "TransportSync.h"
+#include "UiBoost.h"
 #include "audio/AudioShared.h"
 #include "audio/BtSink.h"
 #include "audio/SpeakerSink.h"
@@ -114,6 +116,64 @@ public:
   // whatever it says.
   bool ringSteady() const { return ringSteady_.load(std::memory_order_relaxed); }
   static constexpr uint32_t kSteadyMs = 1000;
+
+  // ---- Sharing core 1 with the UI (docs/UI-SPIKE.md, "Scroll round 2") ----
+  //
+  // The decode task runs at kDecodePriority, above the Arduino loop (1), so
+  // the UI gets what the decoder leaves. Two opt-in changes to that, both
+  // off by default (the scroll lab turns them on for its A/B runs; the real
+  // UI will too):
+  //
+  // Interaction boost. While enabled, the UI calls noteUiActivity() every
+  // pass while the user interacts (finger down, list moving). A 10 ms
+  // esp_timer, on the esp_timer task (core 0, so it runs however busy core 1
+  // is), applies UiBoost's rule: while the interaction lasts (and 300 ms
+  // after) and the ring holds at least 900 ms, it drops the decode task to
+  // kDecodePriorityYielding (0, below the loop), so the decoder only runs
+  // when the loop sleeps (its delay(5) per pass, its frame cap and its rest
+  // after each frame), and then shares core 1 with IDLE1 (also priority 0,
+  // time-sliced), so it gets about half of that sleep; the ring pays for
+  // the difference. Below 900 ms it restores kDecodePriority at once, and
+  // boosts again only from 1,200 ms and at least 300 ms after the drop.
+  // Nothing else changes: the outputs, the speaker pump (3) and
+  // M5.Speaker's task (2) keep their priorities, all above the loop. The UI
+  // must still sleep every frame (the scroll lab rests >= 20 ms after each).
+  void setUiBoost(bool enabled);  // loop task
+  bool uiBoostEnabled() const { return boostEnabled_.load(std::memory_order_relaxed); }
+  void noteUiActivity(uint32_t nowMs);  // any task
+  struct BoostStatus {
+    bool on;            // the decode task yields to the UI now
+    UiBoost::Why why;   // why, at the last change
+    uint32_t changes;   // on/off changes since boot (free-running)
+    uint32_t ringMs;    // the ring at the last change
+    uint32_t atMs;      // when (millis)
+  };
+  BoostStatus boostStatus() const;
+  static constexpr UBaseType_t kDecodePriority = 2;
+  static constexpr UBaseType_t kDecodePriorityYielding = 0;
+
+  // Gentle refill. At a track start or skip the decoder fills the whole
+  // ~1.45 s ring flat out, which on core 1 starves the UI for ~0.7 s (an
+  // MP3). With pacing on, during that fill (until the ring is first full)
+  // and once the ring holds gentleFromMs (500 ms), the decode task sleeps
+  // after each pass so that it produces at most capX10/10 times realtime
+  // (RefillPacer; capX10 is at least 15, 1.5x); below 500 ms it
+  // runs flat out as before, so the time to first audio doesn't change.
+  // Refills later in the track (after a dip) are never paced.
+  void setRefillPacing(bool enabled, uint32_t capX10);  // any task
+  RefillPacer::Config refillPacing() const;
+
+  // How the last start or skip filled the ring, ms after the request
+  // (play()); -1 not yet. The decode task fills it in; loop() logs it once
+  // the ring is full ("[audio] refill: ...").
+  struct StartTiming {
+    uint32_t seq;          // counts starts (free-running)
+    int32_t firstAudioMs;  // the first frames in the ring (time to first audio, before the output's own latency)
+    int32_t ring500Ms;     // 500 ms buffered
+    int32_t steadyMs;      // kSteadyMs buffered (ringSteady())
+    int32_t fullMs;        // the ring full (the decoder waits for room)
+  };
+  StartTiming startTiming() const;
   // For the UI; set by the decode task. Title/artist come from ID3 tags and are
   // empty when the file has none.
   std::string description() const;  // e.g. "MP3, 44100 Hz"
@@ -142,6 +202,10 @@ private:
   Produced produceTone();
   Produced produceDecoded();
   void noteRingFill(int rate);  // decode task: ringSteady_ once the ring holds kSteadyMs
+  void noteStartProgress(int rate, bool full);  // decode task: fills in startTiming()
+  static void boostTimerEntry(void* self);
+  void boostTick();  // esp_timer task
+  void applyDecodePriority(bool yielding, UiBoost::Why why, uint32_t ringMs, uint32_t nowMs);  // under boostLock_
   void runBench(const std::string& path);
   void setText(std::string& field, const std::string& value);
 
@@ -186,6 +250,33 @@ private:
   // (start()) only if the player hasn't paused since asking for it: a Next
   // then a Pause must stay paused.
   std::atomic<uint32_t> pauses_{0};
+
+  // Interaction boost (see setUiBoost()).
+  std::mutex boostLock_;  // the priority change and boostEnabled_ together
+  esp_timer_handle_t boostTimer_ = nullptr;
+  UiBoost boost_;                               // esp_timer task (and setUiBoost, timer stopped)
+  std::atomic<bool> boostEnabled_{false};
+  std::atomic<bool> uiEverActive_{false};
+  std::atomic<uint32_t> uiActiveMs_{0};
+  std::atomic<bool> boostOn_{false};
+  std::atomic<uint8_t> boostWhy_{0};
+  std::atomic<uint32_t> boostChanges_{0};
+  std::atomic<uint32_t> boostRingMs_{0};
+  std::atomic<uint32_t> boostAtMs_{0};
+
+  // Gentle refill (see setRefillPacing()).
+  std::atomic<bool> paceEnabled_{false};
+  std::atomic<uint32_t> paceCapX10_{15};
+
+  // Start timing (see startTiming()): the request time is the loop's, the
+  // rest the decode task's.
+  std::atomic<uint32_t> requestMs_{0};
+  std::atomic<uint32_t> startSeq_{0};
+  std::atomic<int32_t> firstAudioMs_{-1};
+  std::atomic<int32_t> ring500Ms_{-1};
+  std::atomic<int32_t> steadyMs_{-1};
+  std::atomic<int32_t> fullMs_{-1};
+  uint32_t loggedStartSeq_ = 0;  // loop task
 
   // Loop task only.
   Output output_ = Output::Speaker;
