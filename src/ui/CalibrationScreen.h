@@ -24,7 +24,8 @@
 //      coral dot) and the panel's raw reading (grey); Done closes.
 //
 // While it's up it owns the screen (main.cpp stops the now-playing and
-// dance screens) and the glass; BtnA/B/C keep doing what they always do.
+// dance screens) and the glass; the touch buttons keep doing what they
+// always do.
 // Loop task only; it draws in small pieces, each under its own LcdLock.
 class CalibrationScreen {
 public:

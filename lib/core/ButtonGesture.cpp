@@ -30,6 +30,13 @@ ButtonGesture::Event ButtonGesture::update(uint32_t ms, bool pressed) {
   return Event::Repeat;
 }
 
+ButtonGesture::Event ButtonGesture::cancel() {
+  const bool wasHeld = down_ && held_;
+  down_ = false;
+  held_ = false;
+  return wasHeld ? Event::HoldEnd : Event::None;
+}
+
 const char* ButtonGesture::name(Event e) {
   switch (e) {
     case Event::Press: return "press";

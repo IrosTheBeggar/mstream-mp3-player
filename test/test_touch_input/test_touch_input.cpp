@@ -1,7 +1,9 @@
 // Host tests for the input layer's portable pieces: the touch correction
 // (TouchCalibration, with the user's own target-practice logs), the touch
 // buttons' click/hold/repeat (ButtonGesture) and what they do
-// (ButtonPolicy), the glass's events (TouchRecognizer), and the fling cap.
+// (ButtonPolicy), the glass's events (TouchRecognizer), the buttons made
+// from the touch point (StripButtons: the "random pause" of a swipe that
+// ended in the strip), and the fling cap.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -15,6 +17,7 @@
 #include "ButtonPolicy.h"
 #include "InputEvent.h"
 #include "KineticScroll.h"
+#include "StripButtons.h"
 #include "TouchCalibration.h"
 #include "TouchRecognizer.h"
 
@@ -603,6 +606,387 @@ void test_touch_right_edge_flag() {
   TEST_ASSERT_TRUE(plain.inRightEdgeZone(280));
 }
 
+// ---- StripButtons (the buttons, from the touch point) ----
+
+namespace {
+
+// What Input does every loop pass: StripButtons, then a ButtonGesture per
+// button (cancelled when the strip drops the press). Logs "B click;",
+// "A hold;", "A hold end;" and "ignored B glass;" etc.; repeats are counted.
+struct Strip {
+  StripButtons strip;
+  ButtonGesture g[3];
+  std::string log;
+  int repeats = 0;
+
+  Strip() {
+    for (int b = 0; b < 3; ++b) g[b].setConfig(ButtonPolicy::gestureFor(b));
+  }
+  static const char* why(StripButtons::Why w) {
+    switch (w) {
+      case StripButtons::Why::Glass: return "glass";
+      case StripButtons::Why::Moved: return "moved";
+      case StripButtons::Why::Bounce: return "bounce";
+      default: return "none";
+    }
+  }
+  void at(uint32_t ms, bool pressed, int x = 0, int y = 0, bool newTouch = false) {
+    const StripButtons::Result r = strip.update(ms, pressed, x, y, newTouch);
+    if (r.ignored != StripButtons::Why::None) {
+      log += std::string("ignored ") + static_cast<char>('A' + r.button) + " " + why(r.ignored) + ";";
+    }
+    for (int b = 0; b < 3; ++b) {
+      using E = ButtonGesture::Event;
+      const E e = r.cancelled && r.button == b ? g[b].cancel() : g[b].update(ms, r.pressed == b);
+      if (e == E::Repeat) {
+        ++repeats;
+        continue;
+      }
+      if (e == E::None || e == E::Press) continue;
+      log += std::string(1, static_cast<char>('A' + b)) + " " + ButtonGesture::name(e) + ";";
+    }
+  }
+  // The finger goes from (x0, y0) to (x1, y1) between t0 and t1, a loop
+  // pass every stepMs (at t1 it is at (x1, y1), still down).
+  void slide(uint32_t t0, uint32_t t1, int x0, int y0, int x1, int y1, uint32_t stepMs = 5) {
+    for (uint32_t t = t0; t < t1; t += stepMs) {
+      const float f = static_cast<float>(t - t0) / static_cast<float>(t1 - t0);
+      at(t, true, x0 + static_cast<int>((x1 - x0) * f), y0 + static_cast<int>((y1 - y0) * f));
+    }
+    at(t1, true, x1, y1);
+  }
+  // Still at (x, y) from t0 to t1.
+  void rest(uint32_t t0, uint32_t t1, int x, int y, uint32_t stepMs = 5) {
+    for (uint32_t t = t0; t <= t1; t += stepMs) at(t, true, x, y);
+  }
+  void lift(uint32_t ms) { at(ms, false); }
+  // A press at (x, y) lasting `ms` (down at t0, the first pass without it
+  // at t0 + ms), a loop pass every stepMs; the point jitters a pixel or two.
+  void press(uint32_t t0, uint32_t ms, int x, int y, uint32_t stepMs = 5) {
+    int k = 0;
+    for (uint32_t t = t0; t < t0 + ms; t += stepMs, ++k) at(t, true, x + (k % 3) - 1, y + (k % 2) * 2);
+    lift(t0 + ms);
+  }
+};
+
+}  // namespace
+
+void test_strip_columns_are_m5unifieds() {
+  TEST_ASSERT_EQUAL_INT(0, StripButtons::column(0));
+  TEST_ASSERT_EQUAL_INT(0, StripButtons::column(106));
+  TEST_ASSERT_EQUAL_INT(1, StripButtons::column(107));
+  TEST_ASSERT_EQUAL_INT(1, StripButtons::column(213));
+  TEST_ASSERT_EQUAL_INT(2, StripButtons::column(214));
+  TEST_ASSERT_EQUAL_INT(2, StripButtons::column(319));
+  TEST_ASSERT_EQUAL_INT(0, StripButtons::column(-5));
+  TEST_ASSERT_EQUAL_INT(2, StripButtons::column(400));
+}
+
+// The device log of the "random pause": a flick down the Queue landed at
+// (203,190) raw and was last read at (195,264), in the strip; M5Unified's
+// buttons then clicked B and C together. The panel lost the finger and
+// found it again as a new touch in the strip, which slid on into C.
+void test_strip_captured_swipe_presses_nothing() {
+  Strip s;
+  s.slide(0, 483, 203, 190, 195, 264, 16);
+  s.lift(499);
+  // Found again 16 ms later, in the strip, sliding right into C; lifted
+  // 155 ms after the glass touch.
+  s.slide(515, 640, 197, 266, 222, 270, 16);
+  s.lift(654);
+  TEST_ASSERT_EQUAL_STRING("ignored B glass;ignored B bounce;", s.log.c_str());
+  // The glass sees only its own touch (a drag), and nothing of the one
+  // that started in the strip.
+  Rec g;
+  for (uint32_t t = 0; t <= 480; t += 16) {
+    g.at(t, true, 203 - static_cast<int>(8 * t / 480), 190 + static_cast<int>(74 * t / 480));
+  }
+  g.at(499, false);
+  const std::string glass = g.types();
+  TEST_ASSERT_EQUAL_STRING("down;drag start;", glass.substr(0, 16).c_str());
+  TEST_ASSERT_EQUAL_STRING("drag end;", glass.substr(glass.size() - 9).c_str());
+  g.at(515, true, 197, 266);
+  g.at(560, true, 210, 268);
+  g.at(654, false);
+  TEST_ASSERT_EQUAL_STRING(glass.c_str(), g.types().c_str());
+
+  // The same new touch a while later is a real strip touch, but it slides
+  // 25 px: not a press either.
+  Strip late;
+  late.slide(0, 483, 203, 190, 195, 264, 16);
+  late.lift(499);
+  late.slide(1000, 1125, 197, 266, 222, 270, 16);
+  late.lift(1140);
+  TEST_ASSERT_EQUAL_STRING("ignored B glass;ignored B moved;", late.log.c_str());
+}
+
+// A drag on the glass that comes to rest in the strip (long enough to be a
+// hold there) and lifts: no button, and the log says so once.
+void test_strip_glass_drag_resting_in_the_strip_presses_nothing() {
+  Strip s;
+  s.slide(0, 100, 160, 200, 160, 262);
+  s.rest(105, 1200, 160, 262);
+  s.rest(1205, 1300, 230, 270);  // and sliding along it into C
+  s.lift(1305);
+  TEST_ASSERT_EQUAL_STRING("ignored B glass;", s.log.c_str());
+  TEST_ASSERT_EQUAL_INT(0, s.repeats);
+  // A glass touch that never reaches the strip says nothing.
+  Strip q;
+  q.slide(0, 100, 160, 100, 160, 239);
+  q.lift(105);
+  TEST_ASSERT_EQUAL_STRING("", q.log.c_str());
+}
+
+void test_strip_click_and_hold() {
+  Strip s;
+  s.press(0, 50, 160, 260);
+  TEST_ASSERT_EQUAL_STRING("B click;", s.log.c_str());
+  s.log.clear();
+  s.press(1000, 700, 160, 260);
+  TEST_ASSERT_EQUAL_STRING("B hold;B hold end;", s.log.c_str());
+  TEST_ASSERT_EQUAL_INT(0, s.repeats);  // B doesn't repeat
+  TEST_ASSERT_EQUAL_INT(-1, s.strip.pressed());
+}
+
+// A touch that goes down in the strip and slides up onto the glass was
+// M5Unified's short press, a click. Here it is nothing (and the glass
+// ignores it too: test_touch_button_strip_and_cancel).
+void test_strip_press_dragged_onto_the_glass_is_cancelled() {
+  Strip s;
+  s.at(0, true, 160, 262);
+  s.at(10, true, 160, 258);
+  TEST_ASSERT_EQUAL_INT(1, s.strip.pressed());
+  s.slide(15, 100, 160, 255, 160, 150);
+  TEST_ASSERT_EQUAL_INT(-1, s.strip.pressed());
+  s.lift(105);
+  TEST_ASSERT_EQUAL_STRING("ignored B moved;", s.log.c_str());
+  // Back down onto the strip within the same touch: still nothing.
+  Strip b;
+  b.slide(0, 60, 160, 262, 160, 200);
+  b.slide(65, 120, 160, 200, 160, 262);
+  b.rest(125, 900, 160, 262);
+  b.lift(905);
+  TEST_ASSERT_EQUAL_STRING("ignored B moved;", b.log.c_str());
+}
+
+// Only the column where it went down counts: a slide from B into C within
+// the slop is B's click; further, it is nothing (M5Unified pressed both).
+void test_strip_slide_between_buttons() {
+  Strip s;
+  s.at(0, true, 205, 262);
+  s.slide(5, 60, 205, 262, 222, 265);  // 17 px, into C's column
+  s.lift(65);
+  TEST_ASSERT_EQUAL_STRING("B click;", s.log.c_str());
+  Strip f;
+  f.at(0, true, 205, 262);
+  f.slide(5, 60, 205, 262, 250, 262);  // 45 px
+  f.lift(65);
+  TEST_ASSERT_EQUAL_STRING("ignored B moved;", f.log.c_str());
+  // The same after the hold: the hold ends there, no click (B's output
+  // switch already happened), and C never goes down.
+  Strip h;
+  h.rest(0, 600, 205, 262);
+  h.slide(605, 700, 205, 262, 250, 262);
+  h.rest(705, 1000, 250, 262);
+  h.lift(1005);
+  TEST_ASSERT_EQUAL_STRING("B hold;ignored B moved;B hold end;", h.log.c_str());
+}
+
+// A strip touch starting within 150 ms of a glass touch's lift is the
+// panel finding the finger again: ignored. From 150 ms, a press (the tap
+// didn't move, so the wider window after a swipe doesn't apply).
+void test_strip_bounce_window() {
+  Strip s;
+  s.press(0, 80, 100, 100);  // a tap on the glass, lifted at 80
+  s.press(229, 60, 160, 262);
+  TEST_ASSERT_EQUAL_STRING("ignored B bounce;", s.log.c_str());
+  s.log.clear();
+  s.press(1000, 80, 100, 100);  // lifted at 1080
+  s.press(1230, 60, 160, 262);
+  TEST_ASSERT_EQUAL_STRING("B click;", s.log.c_str());
+  // After a strip press there is no window: a quick double click is two.
+  s.log.clear();
+  s.press(2000, 40, 50, 262);
+  s.press(2060, 40, 50, 262);
+  TEST_ASSERT_EQUAL_STRING("A click;A click;", s.log.c_str());
+  // A bounced touch stays ignored however long it rests.
+  s.log.clear();
+  s.press(3000, 80, 100, 100);
+  s.press(3100, 900, 280, 262);
+  TEST_ASSERT_EQUAL_STRING("ignored C bounce;", s.log.c_str());
+  // A tap on the last row, right above B, then B at 200 ms: a click.
+  s.log.clear();
+  s.press(5000, 60, 160, 230);
+  s.press(5260, 60, 160, 262);
+  TEST_ASSERT_EQUAL_STRING("B click;", s.log.c_str());
+}
+
+// The captured swipe again, but the panel finds the finger later: from
+// 150 ms up to 400 ms, and it slides only 14 px, into C's column (within
+// the slop). The 150 ms window alone would make that a B click, the same
+// "random pause"; after a swipe, a strip touch within 60 px of where the
+// swipe was last seen is still the lost finger.
+void test_strip_swipe_found_late_presses_nothing() {
+  const uint32_t founds[] = {150, 175, 200, 300, 399};
+  for (uint32_t after : founds) {
+    Strip s;
+    s.slide(0, 483, 203, 190, 195, 264, 16);
+    s.lift(499);
+    const uint32_t t = 499 + after;
+    s.slide(t, t + 110, 200, 266, 214, 268, 5);
+    s.rest(t + 115, t + 200, 214, 268);
+    s.lift(t + 205);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("ignored B glass;ignored B bounce;", s.log.c_str(), "found late");
+  }
+  // From 400 ms it's a press like any other.
+  Strip p;
+  p.slide(0, 483, 203, 190, 195, 264, 16);
+  p.lift(499);
+  p.press(899, 60, 200, 266);
+  TEST_ASSERT_EQUAL_STRING("ignored B glass;B click;", p.log.c_str());
+  // A button away from where the swipe was lost counts at once (after the
+  // 150 ms any-touch window): A and C, 200 ms after it.
+  Strip a;
+  a.slide(0, 483, 203, 190, 195, 264, 16);
+  a.lift(499);
+  a.press(699, 60, 40, 262);
+  a.slide(1000, 1300, 195, 190, 190, 262, 16);
+  a.lift(1310);
+  a.press(1510, 60, 300, 262);
+  TEST_ASSERT_EQUAL_STRING("ignored B glass;A click;ignored B glass;C click;", a.log.c_str());
+  // A press in between ends the window: B where the swipe was lost, 350 ms
+  // after it but after A's click, is a click too.
+  Strip b;
+  b.slide(0, 483, 203, 190, 195, 264, 16);
+  b.lift(499);
+  b.press(699, 60, 40, 262);
+  b.press(849, 60, 196, 265);
+  TEST_ASSERT_EQUAL_STRING("ignored B glass;A click;B click;", b.log.c_str());
+  // A swipe that lifted on the glass, just above the strip, and came back in
+  // it: the same.
+  Strip g;
+  g.slide(0, 300, 160, 100, 170, 236, 16);
+  g.lift(310);
+  g.press(560, 80, 172, 250);
+  TEST_ASSERT_EQUAL_STRING("ignored B bounce;", g.log.c_str());
+}
+
+// A strip touch already cancelled (it moved), then lost and found again by
+// the panel: the lost finger, not a new press. And a found finger lost
+// again is still the swipe's.
+void test_strip_ignored_touch_found_again_presses_nothing() {
+  Strip s;
+  s.at(0, true, 160, 262);
+  s.slide(5, 80, 160, 262, 190, 264);  // 30 px: cancelled
+  s.lift(85);
+  s.press(285, 100, 192, 265);  // found again, 200 ms later
+  TEST_ASSERT_EQUAL_STRING("ignored B moved;ignored B bounce;", s.log.c_str());
+  // The captured swipe, found (ignored), lost and found again: each time
+  // the swipe's lost finger.
+  Strip c;
+  c.slide(0, 483, 203, 190, 195, 264, 16);
+  c.lift(499);
+  c.press(560, 60, 197, 266);
+  c.press(870, 90, 199, 267);  // 250 ms after that lift
+  TEST_ASSERT_EQUAL_STRING("ignored B glass;ignored B bounce;ignored B bounce;", c.log.c_str());
+  // A strip press that was a press opens no window: a double click.
+  Strip d;
+  d.press(0, 60, 160, 262);
+  d.press(120, 60, 162, 264);
+  TEST_ASSERT_EQUAL_STRING("B click;B click;", d.log.c_str());
+}
+
+// When the first touch point becomes another finger without a lift (the
+// first lifted while a second stayed on), the old touch lifts and the new
+// one goes down there and then: a second finger already on the strip,
+// under a glass touch that lifts, is a bounce (it went down while the glass
+// was being touched); a press handed straight to another press is a click
+// of each.
+void test_strip_another_finger_takes_over() {
+  Strip s;
+  s.slide(0, 300, 160, 100, 160, 180, 16);  // a drag on the glass
+  s.at(316, true, 150, 262, true);          // it lifts; the second finger is now the first
+  s.rest(321, 900, 150, 262);
+  s.lift(905);
+  TEST_ASSERT_EQUAL_STRING("ignored B bounce;", s.log.c_str());
+  TEST_ASSERT_EQUAL_INT(0, s.repeats);
+  // Without the new-touch flag that finger would read as the glass touch
+  // arriving in the strip (the old log's wrong cause).
+  Strip o;
+  o.slide(0, 300, 160, 100, 160, 180, 16);
+  o.at(316, true, 150, 262);
+  o.lift(330);
+  TEST_ASSERT_EQUAL_STRING("ignored B glass;", o.log.c_str());
+
+  Strip p;
+  p.rest(0, 60, 40, 262);  // A down
+  p.at(65, true, 290, 262, true);  // A lifts as C (already down) takes over
+  p.rest(70, 120, 290, 262);
+  p.lift(125);
+  TEST_ASSERT_EQUAL_STRING("A click;C click;", p.log.c_str());
+}
+
+// A's hold repeats as before (volume down every 200 ms from the hold); a
+// slide off the button stops the repeats.
+void test_strip_a_hold_repeats() {
+  Strip s;
+  std::vector<uint32_t> repeats;
+  uint32_t holdAt = 0;
+  for (uint32_t t = 0; t <= 1500; t += 7) {
+    const int before = s.repeats;
+    const size_t logBefore = s.log.size();
+    s.at(t, true, 50, 265);
+    if (s.repeats > before) repeats.push_back(t);
+    if (s.log.size() > logBefore && s.log.compare(logBefore, 7, "A hold;") == 0) holdAt = t;
+  }
+  TEST_ASSERT_EQUAL_UINT32(504, holdAt);
+  TEST_ASSERT_EQUAL_INT(4, static_cast<int>(repeats.size()));
+  const uint32_t expect[] = {707, 910, 1106, 1309};
+  for (int i = 0; i < 4; ++i) TEST_ASSERT_UINT32_WITHIN(7, expect[i], repeats[i]);
+  s.lift(1510);
+  TEST_ASSERT_EQUAL_STRING("A hold;A hold end;", s.log.c_str());
+
+  Strip m;
+  m.rest(0, 800, 50, 265);  // the hold and a repeat
+  TEST_ASSERT_EQUAL_INT(1, m.repeats);
+  m.slide(805, 850, 50, 265, 50, 200);
+  m.rest(855, 2000, 50, 200);
+  m.lift(2005);
+  TEST_ASSERT_EQUAL_INT(1, m.repeats);
+  TEST_ASSERT_EQUAL_STRING("A hold;ignored A moved;A hold end;", m.log.c_str());
+}
+
+// The user's presses in the input lab's button practice: down at y
+// 247-278, clicks 17-143 ms, holds 509-2383 ms. Every one still counts, on
+// every button, at the loop's 1-5 ms passes and at a slow 20 ms one.
+void test_strip_users_measured_presses() {
+  const int xs[] = {20, 53, 100, 110, 160, 210, 220, 270, 315};
+  const int ys[] = {247, 255, 262, 270, 278};
+  const uint32_t clicks[] = {17, 40, 90, 143};
+  const uint32_t holds[] = {509, 800, 1500, 2383};
+  const uint32_t steps[] = {1, 3, 5, 20};
+  for (uint32_t step : steps) {
+    for (int x : xs) {
+      for (int y : ys) {
+        const char b = static_cast<char>('A' + StripButtons::column(x));
+        for (uint32_t ms : clicks) {
+          if (ms < step) continue;
+          Strip s;
+          s.press(1000, ms, x, y, step);
+          const std::string want = std::string(1, b) + " click;";
+          TEST_ASSERT_EQUAL_STRING_MESSAGE(want.c_str(), s.log.c_str(), "a measured click");
+        }
+        for (uint32_t ms : holds) {
+          Strip s;
+          s.press(1000, ms, x, y, step);
+          const std::string want = std::string(1, b) + " hold;" + b + " hold end;";
+          TEST_ASSERT_EQUAL_STRING_MESSAGE(want.c_str(), s.log.c_str(), "a measured hold");
+        }
+      }
+    }
+  }
+}
+
 // ---- the fling cap in KineticScroll ----
 
 void test_kinetic_scroll_caps_flings() {
@@ -648,6 +1032,18 @@ int main(int, char**) {
   RUN_TEST(test_touch_drag_and_capped_fling);
   RUN_TEST(test_touch_button_strip_and_cancel);
   RUN_TEST(test_touch_right_edge_flag);
+  RUN_TEST(test_strip_columns_are_m5unifieds);
+  RUN_TEST(test_strip_captured_swipe_presses_nothing);
+  RUN_TEST(test_strip_glass_drag_resting_in_the_strip_presses_nothing);
+  RUN_TEST(test_strip_click_and_hold);
+  RUN_TEST(test_strip_press_dragged_onto_the_glass_is_cancelled);
+  RUN_TEST(test_strip_slide_between_buttons);
+  RUN_TEST(test_strip_bounce_window);
+  RUN_TEST(test_strip_swipe_found_late_presses_nothing);
+  RUN_TEST(test_strip_ignored_touch_found_again_presses_nothing);
+  RUN_TEST(test_strip_another_finger_takes_over);
+  RUN_TEST(test_strip_a_hold_repeats);
+  RUN_TEST(test_strip_users_measured_presses);
   RUN_TEST(test_kinetic_scroll_caps_flings);
   return UNITY_END();
 }

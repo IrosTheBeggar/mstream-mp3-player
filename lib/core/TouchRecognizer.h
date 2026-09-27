@@ -20,10 +20,11 @@
 // cheap path: above ~2,500 px/s every frame at 25-30 fps moves more than
 // the 84-line step, and each becomes a full redraw (docs/UI-SPIKE.md).
 //
-// A touch that lands on the button strip (raw y >= stripY: BtnA/B/C, which
-// M5Unified makes from the same panel's points) is the buttons' alone: it
+// A touch that lands on the button strip (raw y >= stripY: the buttons,
+// which StripButtons makes from the same points) is the buttons' alone: it
 // makes no glass events at all. One that lands on the glass and slides onto
-// the strip stays a glass touch (its y goes on past the glass).
+// the strip stays a glass touch (its y goes on past the glass), and never
+// presses a button.
 //
 // Portable: fed with timestamps and corrected points, no clock of its own.
 class TouchRecognizer {

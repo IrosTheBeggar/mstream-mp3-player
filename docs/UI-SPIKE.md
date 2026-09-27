@@ -2171,3 +2171,22 @@ Earlier, with the headphones unreachable (speaker at 0 %): the 20 s give-up and
 its notice, Cancel, [Play on speaker] from both places (the background search
 keeps running), a skip while waiting, and Play during a background scan (the
 status reads "try 1 of 3" at once).
+
+## The button strip: no more presses from swipes (27 September 2026)
+
+The user saw random pauses while scrolling the Queue. The log caught it: a
+downward flick ran off the screen into the touch-button strip, and M5Unified
+turned the end of it into BtnB (and, sliding right, BtnC) clicks. The buttons
+are now derived by `StripButtons` (lib/core) from touches that go down in the
+strip and stay within 20 px; glass-started touches, strip touches that move,
+and strip touches re-found within the bounce window after a swipe never press
+a button, and each rejection logs `[button] ignored: ...`. M5.BtnA/B/C are no
+longer read outside the input lab.
+
+On the device: the captured swipe replayed, 2 minutes of scripted flicks
+ending in the strip (72 flings, 33 re-found presses) gave 0 button events;
+deliberate presses, holds and A/C repeats unchanged. By hand, the user's
+flicks off the bottom edge were all ignored (11 touches: 9 strip-started and
+moved, 2 swipes from the glass that ended on a red dot) and playback never
+paused. Swipes that start on the strip don't scroll the list (a possible
+follow-up).

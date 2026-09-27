@@ -3,7 +3,7 @@
 
 // What the input layer (src/ui/Input) hands the screens: one clean event per
 // thing that happened, on the glass or on a touch button. Nothing
-// downstream reads the touch panel or BtnA/B/C itself.
+// downstream reads the touch panel or M5Unified's BtnA/B/C itself.
 //
 // Glass coordinates are screen pixels, already corrected (TouchCalibration)
 // before any hit test; rawX/rawY are what the panel read (the calibration

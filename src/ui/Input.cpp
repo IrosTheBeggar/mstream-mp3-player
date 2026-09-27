@@ -12,8 +12,6 @@ constexpr const char* kKeyCal = "cal";
 constexpr const char* kKeyHaptics = "haptics";
 constexpr const char* kKeyRailTick = "railtick";
 
-m5::Button_Class& button(int b) { return b == 0 ? M5.BtnA : b == 1 ? M5.BtnB : M5.BtnC; }
-
 void printAxis(const char* name, const TouchCalibration::Axis& a) {
   char line[200];
   int n = snprintf(line, sizeof(line), "[input] touch %s:", name);
@@ -115,31 +113,15 @@ bool Input::takeHoldUsed() {
 }
 
 void Input::update(uint32_t nowMs) {
-  // The buttons (M5Unified makes them from panel points at y >= 240).
-  for (int b = 0; b < 3; ++b) {
-    const ButtonGesture::Event g = buttons_[b].update(nowMs, button(b).isPressed());
-    InputEvent e;
-    switch (g) {
-      case ButtonGesture::Event::Click: e.type = InputEvent::Type::Click; break;
-      case ButtonGesture::Event::Hold: e.type = InputEvent::Type::Hold; break;
-      case ButtonGesture::Event::Repeat: e.type = InputEvent::Type::Repeat; break;
-      case ButtonGesture::Event::HoldEnd: e.type = InputEvent::Type::HoldEnd; break;
-      default: continue;
-    }
-    e.button = static_cast<uint8_t>(b);
-    e.ms = nowMs;
-    const uint32_t r = buttons_[b].repeats();
-    e.repeat = static_cast<uint8_t>(r > 255 ? 255 : r);
-    if (suspended_) continue;
-    push(e);  // its feedback once it's handled (buttonFeedback())
-  }
-
-  // The glass: the first touch point, as M5Unified converts it (screen
-  // pixels, what the input lab logged as "raw"), then corrected.
+  // The touch point: the first one, as M5Unified converts it (screen
+  // pixels, what the input lab logged as "raw"), then corrected; or the
+  // scripted finger's.
   TouchRecognizer::Sample s;
+  int id = -1;
   if (M5.Touch.getCount() > 0 && M5.Touch.getDetail(0).isPressed()) {
     m5gfx::touch_point_t tp = M5.Touch.getTouchPointRaw(0);
     M5.Display.convertRawXY(&tp, 1);
+    id = tp.id;
     s.pressed = true;
     s.rawX = tp.x;
     s.rawY = tp.y;
@@ -151,11 +133,84 @@ void Input::update(uint32_t nowMs) {
     scripted_ = false;
   } else if (sim_.on && simSample(nowMs, s)) {
     scripted_ = true;
+    id = kScriptedId;
   }
+  // The first point is another finger than last pass's, with no lift
+  // between (the first lifted while a second stayed on).
+  const bool newTouch = id >= 0 && touchId_ >= 0 && id != touchId_;
+  touchId_ = id;
+  if (id >= 0 && id != kScriptedId) {
+    logOtherFingers(id);
+  } else {
+    otherLogged_ = 0;
+  }
+
+  // The buttons, from the same point (a touch that went down in the strip).
+  updateButtons(nowMs, s, newTouch);
+
+  // The glass (a touch that went down in the strip is the buttons' alone).
   InputEvent out[TouchRecognizer::kMaxEvents];
   const int n = glass_.update(nowMs, s, out);
   if (suspended_) return;
   for (int i = 0; i < n; ++i) push(out[i]);
+}
+
+// Only the first touch point is followed (StripButtons, like the glass): a
+// strip press by any other finger does nothing. Logged once per finger, so a
+// press that "didn't work" shows in the log.
+void Input::logOtherFingers(int firstId) {
+  uint8_t seen = 0;
+  for (int i = 0; i < M5.Touch.getCount(); ++i) {
+    const auto& d = M5.Touch.getDetail(i);
+    if (!d.isPressed() || d.id == firstId || d.id >= 8) continue;
+    const uint8_t bit = static_cast<uint8_t>(1u << d.id);
+    seen |= bit;
+    // base: where that finger went down (screen pixels, as the first point's).
+    if ((otherLogged_ & bit) || d.base_y < strip_.config().stripY) continue;
+    otherLogged_ |= bit;
+    if (suspended_) continue;
+    Serial.printf("[button] ignored: %c at %d,%d (raw): a second finger (only the first touch counts)\n",
+                  static_cast<char>('A' + StripButtons::column(d.base_x)), d.base_x, d.base_y);
+  }
+  otherLogged_ &= seen;
+}
+
+// StripButtons says which button is down (if any) and whether the press in
+// progress was dropped; ButtonGesture makes the events. A strip touch that
+// doesn't count is logged, once per touch.
+void Input::updateButtons(uint32_t nowMs, const TouchRecognizer::Sample& s, bool newTouch) {
+  const StripButtons::Result r = strip_.update(nowMs, s.pressed, s.rawX, s.rawY, newTouch);
+  if (r.ignored != StripButtons::Why::None && !suspended_) {
+    char detail[80] = "";
+    if (r.ignored == StripButtons::Why::Moved) {
+      snprintf(detail, sizeof(detail), " (%d px): cancelled", r.moved);
+    } else if (r.ignored == StripButtons::Why::Bounce) {
+      snprintf(detail, sizeof(detail), " (%lu ms, %d px from where it lifted%s)", (unsigned long)r.sinceLiftMs,
+               r.fromLiftPx, r.afterSwipe ? ", after a swipe" : "");
+    }
+    Serial.printf("[button] ignored: %c at %d,%d (raw): %s%s%s%s\n", static_cast<char>('A' + r.button), s.rawX,
+                  s.rawY, StripButtons::name(r.ignored), detail, newTouch ? " (another finger took over)" : "",
+                  scripted_ ? " (scripted)" : "");
+  }
+  for (int b = 0; b < 3; ++b) {
+    // A press dropped: no click or hold from it (a hold it had ends).
+    const ButtonGesture::Event g =
+        r.cancelled && r.button == b ? buttons_[b].cancel() : buttons_[b].update(nowMs, r.pressed == b);
+    InputEvent e;
+    switch (g) {
+      case ButtonGesture::Event::Click: e.type = InputEvent::Type::Click; break;
+      case ButtonGesture::Event::Hold: e.type = InputEvent::Type::Hold; break;
+      case ButtonGesture::Event::Repeat: e.type = InputEvent::Type::Repeat; break;
+      case ButtonGesture::Event::HoldEnd: e.type = InputEvent::Type::HoldEnd; break;
+      default: continue;
+    }
+    e.button = static_cast<uint8_t>(b);
+    e.ms = nowMs;
+    const uint32_t rp = buttons_[b].repeats();
+    e.repeat = static_cast<uint8_t>(rp > 255 ? 255 : rp);
+    if (suspended_) continue;
+    push(e);  // its feedback once it's handled (buttonFeedback())
+  }
 }
 
 void Input::simulate(int x0, int y0, int x1, int y1, uint32_t dwellMs, uint32_t moveMs, uint32_t restMs) {

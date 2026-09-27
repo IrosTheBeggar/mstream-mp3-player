@@ -202,7 +202,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
 | `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
-| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag; `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/l/n>` show a faked Bluetooth (connecting, searching, pairing, lost) or no-card state for screenshots, `uiF0` the real one |
+| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/l/n>` show a faked Bluetooth (connecting, searching, pairing, lost) or no-card state for screenshots, `uiF0` the real one |
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosshairs; `a5`-`a9` for fewer), `ac` check the touch, `as` status, `ad` the default table, `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
@@ -254,9 +254,10 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       a JPEG's size and whether it is progressive
   TouchCalibration    The touch correction: a monotonic piecewise-linear table
                       per axis, its fit to taps, and its bytes for NVS
-  TouchRecognizer, ButtonGesture, ButtonPolicy, InputEvent
+  TouchRecognizer, StripButtons, ButtonGesture, ButtonPolicy, InputEvent
                       The glass's tap/hold/drag/fling events; the touch
-                      buttons' click/hold/repeat, and what they do
+                      buttons (only a touch that went down on one, and
+                      stays), their click/hold/repeat, and what they do
   OutputModel         The Output tab's Bluetooth card (its state for every
                       link state, a connection that failed), what the
                       listener asked for (BtSession), Forget's second

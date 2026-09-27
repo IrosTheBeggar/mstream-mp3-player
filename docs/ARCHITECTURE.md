@@ -492,8 +492,9 @@ the browsing UI hold its **track ids**, never strings.
 
 ## Input
 
-One input layer (`ui/Input`) reads the touch panel and M5Unified's BtnA/B/C;
-every screen gets **events** from it and nothing else reads the hardware
+One input layer (`ui/Input`) reads the touch panel (the glass and the
+button strip below it); every screen gets **events** from it and nothing
+else reads the hardware
 (the input lab, a measuring tool, is the one exception: while it is open the
 layer is suspended).
 
@@ -527,6 +528,34 @@ layer is suspended).
   frame of the hardware scroll moves more than its 84-line step and becomes
   a full redraw. A touch that lands on the button strip (raw y >= 240) is
   the buttons' and makes no glass events.
+- **The button strip** (`StripButtons`, host-tested). The three buttons
+  are made from the same touch point as the glass, not taken from
+  M5Unified's BtnA/B/C: those press for any point in the strip that isn't
+  "moving", and once one is down a sliding finger adds its neighbours. So
+  a flick up the Queue that ended in the strip, where the panel lost the
+  finger and found it again as a new touch, clicked B and C at once (a
+  "random pause" and a skip, in the device log). Now **only a touch that
+  went down in the strip presses a button**: the one under where it went
+  down (raw x 0-106 A, 107-213 B, 214-319 C, M5Unified's split), however
+  it drifts after. Moving more than 20 px from there cancels it (no click,
+  no hold, the repeats stop: `ButtonGesture::cancel()`); a touch that went
+  down on the glass never presses one, wherever it goes; a strip touch
+  starting soon after a touch that wasn't a press lifted (a glass touch,
+  or a strip touch already ignored) is ignored as the panel finding that
+  finger again: within 150 ms anywhere, and within 400 ms if that touch
+  had moved (a swipe) and this one is within 60 px of where it was last
+  seen. (The captured finger came back within ~145 ms; one found a little
+  later, sliding less than the 20 px slop into C, would otherwise click B.
+  A deliberate press elsewhere, or after another press, is not held up.)
+  Only the panel's first touch point counts, as for the glass: a second
+  finger pressing the strip does nothing, and when the first point
+  becomes another finger without a lift (the first lifted, a second
+  stayed on) the old touch lifts and the new one goes down there, bounce
+  rules and all. Each rejected strip touch logs
+  `[button] ignored: <button> at x,y (raw): <why>` once (a second finger
+  too). The user's
+  measured presses (down at y 247-278, clicks 17-143 ms, holds
+  509-2383 ms) all still count (the host test replays them).
 - **The buttons** (`ButtonGesture`, `ButtonPolicy`, host-tested): Click,
   Hold at **500 ms** (the user's clicks lasted 17-143 ms, holds 509-2383 ms),
   Repeat every 200 ms for A and C, HoldEnd. The same on every screen: A
@@ -925,7 +954,11 @@ Queue, Dance and Output (with its Pair and About pages).
   **scripted finger** (`Input::simulate`, replacing the panel until it
   lifts; a real touch cancels it): `uit<x>,<y>` a tap, `uih<x>,<y>` a long
   press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` a swipe that lifts at once (a fling
-  when fast), `uid...` the same resting 150 ms before the lift (a drag).
+  when fast), `uid...` the same resting 150 ms before the lift (a drag),
+  `uip<x>,<ms>` a press on the button strip (y 260) for ms. A y from 240
+  is the strip in all of them, through the same `StripButtons` as a
+  finger: `uit160,260` clicks B, `uis160,200,160,264,80` is a swipe that
+  ends there and presses nothing.
   Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max
   (n over 35 ms), ring min, underruns +n, governor` when it settles, and a
   frame over 50 ms logs `[ui] slow frame` with its move and its renders; every touch logs

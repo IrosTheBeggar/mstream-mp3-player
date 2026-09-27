@@ -1,8 +1,9 @@
 #pragma once
 #include <cstdint>
 
-// One of the Core2's three touch buttons (BtnA/B/C), from its pressed state
-// sampled every loop pass: click, hold, and the hold's auto-repeat.
+// One of the Core2's three touch buttons (A, B, C), from its pressed state
+// sampled every loop pass (StripButtons): click, hold, and the hold's
+// auto-repeat.
 //
 //   Press   the button went down
 //   Click   released before holdMs (acts on release: a hold never clicks)
@@ -33,6 +34,11 @@ public:
   const Config& config() const { return config_; }
 
   Event update(uint32_t ms, bool pressed);
+  // Drops the press in progress (the finger slid off the button: it wasn't
+  // a press): no Click, Hold or Repeat comes of it. A press that had
+  // already held ends with HoldEnd (what the hold did stays done); else
+  // None.
+  Event cancel();
   bool pressed() const { return down_; }
   bool held() const { return held_; }
   // How long the current press has lasted (0 when up).

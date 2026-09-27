@@ -10,6 +10,9 @@
 // people actually press the Core2's three touch buttons (BtnA/B/C: regions
 // of the touch panel below the LCD, which M5Unified turns into buttons) and
 // tap the glass near them, before any screen is built on assumptions.
+// The lab reads M5Unified's BtnA/B/C, as measured then; the app's buttons
+// are StripButtons' (only a touch that went down in the strip, see
+// ui/Input), and the input layer is suspended while the lab is open.
 //
 // While it is open it owns the screen, the glass and the buttons (they are
 // logged, not acted on: a B-hold would switch the output). Modes:

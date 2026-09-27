@@ -3,21 +3,29 @@
 
 #include "ButtonGesture.h"
 #include "InputEvent.h"
+#include "StripButtons.h"
 #include "TouchCalibration.h"
 #include "TouchRecognizer.h"
 #include "app/Haptics.h"
 
 // The one input layer (the tab bar spec's dispatcher, §10.1). It alone reads
-// the touch panel and M5Unified's BtnA/B/C; everything downstream gets
-// InputEvents from poll():
+// the touch panel; everything downstream gets InputEvents from poll():
 //
 //   - the glass: every touch point is corrected (TouchCalibration: the
 //     user's panel reads x up to ~45 px too far right) before anything hit
 //     tests it, then TouchRecognizer makes Down, Tap, LongPress, Release,
 //     DragStart/Move/End and Fling (capped at 2,000 px/s) of it;
-//   - the buttons: ButtonGesture makes Click, Hold (500 ms), Repeat (A and
-//     C, every 200 ms) and HoldEnd; ButtonPolicy (main.cpp) decides what
-//     they do.
+//   - the buttons (the strip below the LCD, raw y >= 240): StripButtons
+//     makes their presses from the same touch point (only a touch that
+//     went down there, and stays put; never a swipe from the glass), then
+//     ButtonGesture makes Click, Hold (500 ms), Repeat (A and C, every
+//     200 ms) and HoldEnd; ButtonPolicy (main.cpp) decides what they do.
+//     M5Unified's BtnA/B/C are not read (they press for any point in the
+//     strip, a swipe's end too); only the input lab looks at them. Like the
+//     glass, only the panel's first touch point counts: a second finger
+//     pressing the strip does nothing (and is logged).
+//
+// A strip touch that doesn't count is logged ("[button] ignored: ...").
 //
 // The feedback, as the user chose it: a tap tick (33 ms, strong) and, the
 // moment a hold is recognised, a double tick. The buttons' is played once
@@ -37,8 +45,8 @@ public:
 
   // Loads the settings and the calibration.
   void begin();
-  // Every loop pass, after M5.update(): samples the glass and the three
-  // buttons, queues their events and plays the feedback.
+  // Every loop pass, after M5.update(): samples the touch panel (the glass
+  // and the button strip), queues their events.
   void update(uint32_t nowMs);
   // The next event, oldest first. False when there is none.
   bool poll(InputEvent& e);
@@ -90,11 +98,13 @@ public:
   // "[input] ..." lines: the tables, the settings, events dropped.
   void printStatus() const;
 
-  // ---- a scripted finger, for tests over the console (ui t/h/s/d) ----
+  // ---- a scripted finger, for tests over the console (ui t/h/s/d/p) ----
   // Replaces the panel until it lifts: lands on (x0, y0) (screen pixels,
   // already corrected), rests there dwellMs, slides to (x1, y1) in moveMs,
   // rests restMs, lifts. A fast slide that lifts at once is a fling (the
-  // recogniser measures its speed as a finger's). A real touch cancels it.
+  // recogniser measures its speed as a finger's). Points at y >= 240 are on
+  // the button strip and go through StripButtons like a finger's (a press
+  // there is a click or a hold). A real touch cancels it.
   void simulate(int x0, int y0, int x1, int y1, uint32_t dwellMs, uint32_t moveMs, uint32_t restMs);
   bool simulating() const { return sim_.on; }
   // The last touch was the scripted finger's (for the log).
@@ -110,6 +120,7 @@ private:
   TouchCalibration cal_ = TouchCalibration::defaults();
   bool custom_ = false;
   TouchRecognizer glass_;
+  StripButtons strip_;
   ButtonGesture buttons_[3];
   InputEvent queue_[kQueue];
   uint8_t head_ = 0;
@@ -127,5 +138,13 @@ private:
     uint32_t dwell = 0, move = 0, rest = 0;
   } sim_;
   bool scripted_ = false;
+  // The finger of the first touch point last pass (the panel's id;
+  // kScriptedId for the scripted finger; -1 none), and the other fingers
+  // whose strip press was logged as ignored (a bit per id).
+  static constexpr int kScriptedId = 0x7f;
+  int touchId_ = -1;
+  uint8_t otherLogged_ = 0;
   bool simSample(uint32_t nowMs, TouchRecognizer::Sample& s);
+  void updateButtons(uint32_t nowMs, const TouchRecognizer::Sample& s, bool newTouch);
+  void logOtherFingers(int firstId);
 };

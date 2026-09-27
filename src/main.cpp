@@ -63,7 +63,7 @@ static QueueStore queueStore(storage, queue, player, library.catalog());
 static DanceMode danceMode(audio, player);
 static Screenshot shot;
 static Haptics haptics;
-// The one input layer: the glass (corrected) and BtnA/B/C, as events.
+// The one input layer: the glass (corrected) and the button strip, as events.
 static Input input(haptics);
 // What the touch buttons do, the same on every screen.
 static ButtonPolicy buttonPolicy;
@@ -809,22 +809,29 @@ static void browseCommand(const char* a) {
   userInterface->browse(spike.synthetic());
 }
 
-// uit/uih/uis/uid: a scripted finger on the glass (Input::simulate), for
-// tests without a hand on the device: t<x>,<y> tap; h<x>,<y> long press
+// uit/uih/uis/uid/uip: a scripted finger (Input::simulate), for tests
+// without a hand on the device: t<x>,<y> tap; h<x>,<y> long press
 // (800 ms); s<x0>,<y0>,<x1>,<y1>,<ms> swipe and lift (a fling when fast);
-// d<...> the same but resting 150 ms before the lift (a drag, no fling).
-// Screen pixels, as the corrected touch reports them.
+// d<...> the same but resting 150 ms before the lift (a drag, no fling);
+// p<x>,<ms> a press on the button strip (y 260) for ms (a click, or from
+// 500 ms a hold). Screen pixels, as the corrected touch reports them; y
+// from 240 is the button strip, which takes the same path as a finger's
+// (StripButtons): uit160,260 clicks B, uis160,200,160,264,80 is a swipe
+// that ends there (no button).
 static bool simulatedTouch(const char* a) {
   const char c = a[0];
-  if (c != 't' && c != 'h' && c != 's' && c != 'd') return false;
+  if (c != 't' && c != 'h' && c != 's' && c != 'd' && c != 'p') return false;
   int v[5] = {0, 0, 0, 0, 0};
   const int n = sscanf(a + 1, "%d,%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3], &v[4]);
   if ((c == 't' || c == 'h') && n >= 2) {
     input.simulate(v[0], v[1], v[0], v[1], c == 't' ? 60 : 800, 0, 0);
   } else if ((c == 's' || c == 'd') && n == 5 && v[4] > 0) {
     input.simulate(v[0], v[1], v[2], v[3], 30, static_cast<uint32_t>(v[4]), c == 'd' ? 150 : 0);
+  } else if (c == 'p' && n == 2 && v[1] > 0) {
+    input.simulate(v[0], 260, v[0], 260, static_cast<uint32_t>(v[1]), 0, 0);
   } else {
-    Serial.println("[input] uit<x>,<y> tap, uih<x>,<y> long press, uis<x0>,<y0>,<x1>,<y1>,<ms> swipe, uid... drag");
+    Serial.println("[input] uit<x>,<y> tap, uih<x>,<y> long press, uis<x0>,<y0>,<x1>,<y1>,<ms> swipe, uid... drag, "
+                   "uip<x>,<ms> a press on the button strip (y >= 240 is the strip in all of them)");
     return true;
   }
   Serial.printf("[input] scripted finger: %s\n", a);
@@ -1192,7 +1199,7 @@ void setup() {
                  "q queue (q? for its commands), a touch calibration (a5-a9 fewer crosshairs, ac check, as status, "
                  "ad default table, ah0/1 haptics, ar0/1 rail ticks), "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
-                 "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid scripted finger, "
+                 "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid/uip scripted finger, "
                  "uiF<c/s/p/l/n/w> show a faked Bluetooth or no-card state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
                  "library of n tracks in the Library tab, uil0 the card's); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "

@@ -1242,7 +1242,7 @@ void Ui::command(const char* a) {
   } else {
     Serial.println("[ui] ui: the navigation state; ui0-ui4 tap a tab (0 Now Playing, 1 Library, 2 Queue, 3 Dance, "
                    "4 Output); uib back; uic the coach cards; uiT the covers decoded again (timings); uil<n> the Library browses a synthetic library of n "
-                   "tracks (uil0: the card's); uit/uih/uis/uid a scripted finger");
+                   "tracks (uil0: the card's); uit/uih/uis/uid/uip a scripted finger");
     return;
   }
   printState();
