@@ -21,10 +21,14 @@
 // the 84-line step, and each becomes a full redraw (docs/UI-SPIKE.md).
 //
 // A touch that lands on the button strip (raw y >= stripY: the buttons,
-// which StripButtons makes from the same points) is the buttons' alone: it
-// makes no glass events at all. One that lands on the glass and slides onto
-// the strip stays a glass touch (its y goes on past the glass), and never
-// presses a button.
+// which StripButtons makes from the same points) is the buttons': it makes
+// no glass events, unless StripButtons finds it is a swipe up from the
+// strip and hands it over (fromStrip()). From that sample on it is a drag
+// that starts there: DragStart (dx, dy 0; no Down before it), DragMove,
+// then DragEnd and Fling as any drag's, every event flagged
+// InputEvent::fromStrip; never a Tap or a LongPress. One that lands on the
+// glass and slides onto the strip stays a glass touch (its y goes on past
+// the glass), and never presses a button.
 //
 // Portable: fed with timestamps and corrected points, no clock of its own.
 class TouchRecognizer {
@@ -65,12 +69,20 @@ public:
   // LongPress for it; it stays a press until it moves past the slop (a
   // drag) or lifts (a tap). The next touch has its hold again.
   void noHold() { holdOff_ = true; }
+  // The touch in progress, which landed on the button strip, is a swipe up
+  // from it (StripButtons' `scroll`): the next update, with the same
+  // sample, makes it a drag from that point. Nothing for any other touch
+  // (one on the glass, or one cancel() dropped).
+  void fromStrip() {
+    if (state_ == State::Strip) handOver_ = true;
+  }
 
-  bool active() const { return state_ != State::Idle && state_ != State::Ignored; }
+  bool active() const { return state_ != State::Idle && state_ != State::Strip && state_ != State::Ignored; }
   bool dragging() const { return state_ == State::Dragging; }
 
 private:
-  enum class State : uint8_t { Idle, Pressed, LongPressed, Dragging, Ignored };
+  // Strip: landed on the button strip (the buttons' until fromStrip()).
+  enum class State : uint8_t { Idle, Pressed, LongPressed, Dragging, Strip, Ignored };
   struct Point {
     uint32_t ms;
     int16_t x, y;
@@ -84,6 +96,8 @@ private:
   Config config_;
   State state_ = State::Idle;
   bool holdOff_ = false;  // noHold(): this touch never becomes a LongPress
+  bool handOver_ = false;  // fromStrip(): the next update starts the drag
+  bool strip_ = false;     // this touch is a swipe from the strip (its events say so)
   uint32_t downMs_ = 0;
   int16_t downX_ = 0, downY_ = 0, downRawX_ = 0, downRawY_ = 0;
   uint8_t downEdges_ = 0;

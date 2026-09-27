@@ -685,6 +685,16 @@ void ScrollLab::onTouch(const InputEvent& e) {
     if (touchOn_ == TouchOn::Rail) scrubRail(e.y);
     return;
   }
+  if (e.type == T::DragStart && e.fromStrip) {
+    // A swipe up from the button strip (no Down): the list, from here.
+    touchOn_ = TouchOn::List;
+    if (stress_) {
+      Serial.println("[scroll] touch: stress stopped");
+      finishStress();
+    }
+    scroll_.press(e.ms, e.y);
+    return;
+  }
   const bool ends = e.type == T::Tap || e.type == T::Release || e.type == T::DragEnd || e.type == T::Cancel;
   switch (touchOn_) {
     case TouchOn::List:

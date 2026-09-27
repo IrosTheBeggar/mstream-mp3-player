@@ -32,6 +32,7 @@ InputEvent TouchRecognizer::make(InputEvent::Type t, uint32_t ms, const Sample& 
   e.rawX = s.rawX;
   e.rawY = s.rawY;
   e.edges = s.edges;
+  e.fromStrip = strip_;
   return e;
 }
 
@@ -72,6 +73,7 @@ int TouchRecognizer::update(uint32_t ms, const Sample& s, InputEvent* out) {
   if (!s.pressed) {
     const State was = state_;
     state_ = State::Idle;
+    handOver_ = false;
     switch (was) {
       case State::Pressed: {
         // Where it landed: the point that was aimed.
@@ -108,9 +110,32 @@ int TouchRecognizer::update(uint32_t ms, const Sample& s, InputEvent* out) {
   switch (state_) {
     case State::Ignored:
       return 0;
+    case State::Strip: {
+      if (!handOver_) return 0;
+      // A swipe up from the strip: a drag from here (where it was handed
+      // over is where it "landed": the list moves with the finger from now
+      // on, no jump by the way it came).
+      handOver_ = false;
+      state_ = State::Dragging;
+      strip_ = true;
+      downMs_ = ms;
+      downX_ = lastX_ = s.x;
+      downY_ = lastY_ = s.y;
+      downRawX_ = s.rawX;
+      downRawY_ = s.rawY;
+      downEdges_ = s.edges;
+      last_ = s;
+      head_ = 0;
+      count_ = 0;
+      remember(ms, s.x, s.y);
+      out[0] = make(T::DragStart, ms, s);
+      return 1;
+    }
     case State::Idle:
-      if (s.rawY >= config_.stripY) {  // the button strip (as M5Unified reads it): BtnA/B/C, not the glass
-        state_ = State::Ignored;
+      strip_ = false;
+      handOver_ = false;
+      if (s.rawY >= config_.stripY) {  // the button strip (as M5Unified reads it): the buttons', not the glass
+        state_ = State::Strip;
         return 0;
       }
       state_ = State::Pressed;
@@ -173,6 +198,11 @@ int TouchRecognizer::update(uint32_t ms, const Sample& s, InputEvent* out) {
 InputEvent TouchRecognizer::cancel(uint32_t ms) {
   InputEvent e;
   if (state_ == State::Idle || state_ == State::Ignored) return e;
+  if (state_ == State::Strip) {  // not the glass's (yet): nothing to end, and no swipe from it now
+    state_ = State::Ignored;
+    handOver_ = false;
+    return e;
+  }
   e = make(InputEvent::Type::Cancel, ms, last_);
   state_ = State::Ignored;  // until the finger lifts
   return e;

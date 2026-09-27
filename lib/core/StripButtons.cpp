@@ -15,10 +15,11 @@ int StripButtons::column(int x) {
   return (x * 614) >> 16;  // M5Unified's (65536 * 3 / 320)
 }
 
-// The touch lifted. One that wasn't a press (glass, or a strip touch
-// already ignored) opens the bounce windows for the next.
+// The touch lifted. One that wasn't a press (glass, a swipe from the
+// strip, or a strip touch already ignored) opens the bounce windows for the
+// next.
 void StripButtons::lift(uint32_t ms) {
-  if (state_ == State::Glass || state_ == State::Ignored) {
+  if (state_ == State::Glass || state_ == State::Ignored || state_ == State::Scrolling) {
     lost_ = true;
     lostMs_ = ms;
     lostX_ = lastX_;
@@ -32,8 +33,10 @@ void StripButtons::lift(uint32_t ms) {
 void StripButtons::down(uint32_t ms, int x, int y, Result& r) {
   downX_ = lastX_ = static_cast<int16_t>(x);
   downY_ = lastY_ = static_cast<int16_t>(y);
+  downMs_ = ms;
   reported_ = false;
   moved_ = false;
+  held_ = false;
   if (y < config_.stripY) {
     state_ = State::Glass;  // its lift opens the windows afresh
     lost_ = false;
@@ -58,6 +61,12 @@ void StripButtons::down(uint32_t ms, int x, int y, Result& r) {
   state_ = State::Pressing;
   button_ = static_cast<int8_t>(column(x));
   r.pressed = button_;
+}
+
+bool StripButtons::upward(int x, int y) const {
+  const int dx = x - downX_, dy = y - downY_;
+  if (std::max(std::abs(dx), std::abs(dy)) <= config_.slopPx) return false;
+  return y < config_.stripY || (dy < 0 && -dy >= std::abs(dx));
 }
 
 StripButtons::Result StripButtons::update(uint32_t ms, bool pressed, int x, int y, bool newTouch) {
@@ -94,14 +103,30 @@ StripButtons::Result StripButtons::update(uint32_t ms, bool pressed, int x, int 
       break;
     case State::Pressing:
       if (moved > config_.slopPx) {
-        state_ = State::Ignored;
         r.cancelled = true;
-        r.ignored = Why::Moved;
         r.button = button_;
         r.moved = static_cast<int16_t>(moved);
         button_ = -1;
+        if (!held_ && upward(x, y)) {
+          state_ = State::Scrolling;
+          r.scroll = true;
+        } else {
+          state_ = State::Ignored;
+          r.ignored = Why::Moved;
+        }
       } else {
         r.pressed = button_;
+        // ButtonGesture holds in this update if it is due (the same test).
+        if (ms - downMs_ >= config_.holdMs) held_ = true;
+      }
+      break;
+    case State::Ignored:
+      // Pressing nothing, but a swipe up from here still scrolls.
+      if (!held_ && upward(x, y)) {
+        state_ = State::Scrolling;
+        r.scroll = true;
+        r.button = static_cast<int8_t>(column(downX_));
+        r.moved = static_cast<int16_t>(moved);
       }
       break;
     default:

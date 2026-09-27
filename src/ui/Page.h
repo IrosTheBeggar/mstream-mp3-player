@@ -79,7 +79,9 @@ public:
   }
   // Moving: the UI keeps its frame cadence (and the loop sleeps less).
   virtual bool animating() const { return false; }
-  // Glass events of a touch that landed in the content area.
+  // Glass events of a touch that landed in the content area, or of a swipe
+  // up from the button strip (fromStrip: it starts with a DragStart, no
+  // Down; only a list may follow it, nothing may take it for a press).
   virtual void onEvent(const InputEvent& e) { (void)e; }
   // Its tab was tapped again at its root (e.g. the Queue: back to the
   // playing track).

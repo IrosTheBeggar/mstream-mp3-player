@@ -425,6 +425,8 @@ void LibraryPage::onEvent(const InputEvent& e) {
         if (headerPressed_ == 2) repaintHeader();
       }
     }
+  } else if (e.type == T::DragStart && e.fromStrip) {
+    touchInList_ = true;  // a swipe up from the strip: it scrolls the list
   }
   if (touchInList_) {
     ui_.list().onEvent(e);

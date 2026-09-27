@@ -444,6 +444,10 @@ void QueuePage::onEvent(const InputEvent& e) {
     } else {
       touchOn_ = TouchOn::List;
     }
+  } else if (e.type == T::DragStart && e.fromStrip) {
+    // A swipe up from the strip: it scrolls the list, even from under the
+    // edit bar (which it doesn't press).
+    touchOn_ = TouchOn::List;
   }
   switch (touchOn_) {
     case TouchOn::List:

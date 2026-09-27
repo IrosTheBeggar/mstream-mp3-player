@@ -57,7 +57,9 @@
 //     a page without one does.
 //
 // Touches: a finger that lands on the tab bar is the bar's; on a dialog,
-// sheet or the toast, theirs; else the page's. A sheet or dialog that opens
+// sheet or the toast, theirs; else the page's. A swipe up from the button
+// strip (InputEvent::fromStrip: a DragStart with no Down) is the page's, to
+// scroll its list, unless a modal is up (then nobody's). A sheet or dialog that opens
 // while a finger is on the page ends that touch for the page (a Cancel), so
 // the rest of it can't act under the overlay. A long press on something
 // with no hold (only list rows have holds) ends as a tap when it lifts where

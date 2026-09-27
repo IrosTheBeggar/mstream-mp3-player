@@ -953,6 +953,14 @@ void Ui::route(const InputEvent& e) {
     } else {
       touch_ = TouchOn::Page;
     }
+  } else if (e.type == T::DragStart && e.fromStrip) {
+    // A swipe up from the button strip: no Down came first, and it is no
+    // press. The page's, to scroll its list (its bottom rows are just above
+    // the strip); under a modal nothing takes it (the modals don't scroll:
+    // their controls are presses, and the volume slider must not jump to
+    // the finger). Not the toast's either: it only has buttons.
+    holdUnused_ = false;
+    touch_ = modalUp() ? TouchOn::None : TouchOn::Page;
   }
   const bool ends = e.type == T::Tap || e.type == T::Release || e.type == T::DragEnd || e.type == T::Cancel;
   switch (touch_) {

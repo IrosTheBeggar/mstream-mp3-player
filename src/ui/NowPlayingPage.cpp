@@ -547,6 +547,9 @@ void NowPlayingPage::goToLibrary(Go where) {
 
 void NowPlayingPage::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
+  // A swipe up from the button strip: nothing here scrolls, and it presses
+  // nothing (the transport is right above the strip).
+  if (e.fromStrip) return;
   if (drawn_.empty) {
     onEmptyEvent(e);
     return;

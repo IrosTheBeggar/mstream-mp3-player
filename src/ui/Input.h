@@ -17,7 +17,9 @@
 //     DragStart/Move/End and Fling (capped at 2,000 px/s) of it;
 //   - the buttons (the strip below the LCD, raw y >= 240): StripButtons
 //     makes their presses from the same touch point (only a touch that
-//     went down there, and stays put; never a swipe from the glass), then
+//     went down there, and stays put; never a swipe from the glass; a
+//     swipe UP from the strip is handed to the glass as a drag, so a scroll
+//     that starts on the strip scrolls: InputEvent::fromStrip), then
 //     ButtonGesture makes Click, Hold (500 ms), Repeat (A and C, every
 //     200 ms) and HoldEnd; ButtonPolicy (main.cpp) decides what they do.
 //     M5Unified's BtnA/B/C are not read (they press for any point in the
@@ -25,7 +27,9 @@
 //     glass, only the panel's first touch point counts: a second finger
 //     pressing the strip does nothing (and is logged).
 //
-// A strip touch that doesn't count is logged ("[button] ignored: ...").
+// A strip touch that doesn't count is logged ("[button] ignored: ..."), and
+// so is a swipe handed over ("[button] B at x,y (raw): a swipe from the
+// strip (n px): scrolling").
 //
 // The feedback, as the user chose it: a tap tick (33 ms, strong) and, the
 // moment a hold is recognised, a double tick. The buttons' is played once
@@ -104,7 +108,8 @@ public:
   // rests restMs, lifts. A fast slide that lifts at once is a fling (the
   // recogniser measures its speed as a finger's). Points at y >= 240 are on
   // the button strip and go through StripButtons like a finger's (a press
-  // there is a click or a hold). A real touch cancels it.
+  // there is a click or a hold; a swipe up from there scrolls). A real
+  // touch cancels it.
   void simulate(int x0, int y0, int x1, int y1, uint32_t dwellMs, uint32_t moveMs, uint32_t restMs);
   bool simulating() const { return sim_.on; }
   // The last touch was the scripted finger's (for the log).

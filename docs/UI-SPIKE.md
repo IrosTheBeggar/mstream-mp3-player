@@ -2188,5 +2188,33 @@ ending in the strip (72 flings, 33 re-found presses) gave 0 button events;
 deliberate presses, holds and A/C repeats unchanged. By hand, the user's
 flicks off the bottom edge were all ignored (11 touches: 9 strip-started and
 moved, 2 swipes from the glass that ended on a red dot) and playback never
-paused. Swipes that start on the strip don't scroll the list (a possible
-follow-up).
+paused. Swipes that start on the strip didn't scroll the list: the next section.
+
+## Swipes from the strip scroll (27 September 2026)
+
+In that hand test the user's scrolls often began on the strip, just below the
+list ("ignored: B at 174,243: moved off the button (35 px)"), so the list
+didn't move. Now a strip touch that moves beyond the 20 px slop **upward** (at
+least as much up as sideways, or onto the glass by then) is handed to the glass
+recogniser as a drag (`StripButtons` says `scroll`, Input calls
+`TouchRecognizer::fromStrip()`): a DragStart at the hand-over point with no Down
+before it, so the list moves by the finger's movement from there (no jump by
+the slop), then DragMove, DragEnd and a Fling capped at 2,000 px/s as usual.
+Every event of it carries `InputEvent::fromStrip`; it never becomes a Tap or a
+LongPress, presses no button and plays no tick. The log says `[button] B at
+x,y (raw): a swipe from the strip (n px): scrolling` instead of the ignored
+line.
+
+What is drawn just above the strip must not take it for a press: the Ui routes
+it to the page only (nobody's while a sheet, dialog, the volume slider, the jump
+grid or a tip is up: none of them scrolls, and the slider must not jump), the
+list pages hand it to their `ListView` (the Queue's edit bar and the A-Z rail
+aren't pressed; the list starts its drag there, stopping a fling like a finger
+landing), and Now Playing ignores it (its transport is the bottom row). What
+stays: a slide along or down the strip is ignored; a still press is a click or a
+hold, including one that rolls up to 20 px (even across y 240); a press that has
+held (500 ms) never scrolls; glass-started swipes that end in the strip press
+nothing, and a bounced strip touch presses nothing (but a swipe up from it still
+scrolls: quick repeated flicks from the strip). Host tests replay each case
+(`test_touch_input`). The scripted finger takes the same path:
+`uis160,265,160,100,120` flings the list from the strip. Not yet tried by hand.

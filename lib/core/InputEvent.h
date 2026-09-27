@@ -35,6 +35,13 @@ struct InputEvent {
   uint8_t button = 0;  // buttons: 0 A, 1 B, 2 C
   uint8_t edges = 0;   // glass: Edge bits of the point
   uint8_t repeat = 0;  // Repeat: how many so far (1, 2, ...; saturates at 255)
+  // Glass: a swipe that went down on the button strip and came up onto the
+  // glass (TouchRecognizer::fromStrip()). No Down came first: its DragStart
+  // is the first event of the touch, at the point it was handed over, with
+  // (dx, dy) 0. It never taps or holds; only something that scrolls may
+  // follow it (start the drag there: no jump), nothing may take it for a
+  // press.
+  bool fromStrip = false;
   int16_t x = 0, y = 0;
   int16_t dx = 0, dy = 0;
   int16_t rawX = 0, rawY = 0;

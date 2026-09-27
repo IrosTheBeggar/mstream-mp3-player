@@ -627,6 +627,18 @@ void ListView::onEvent(const InputEvent& e) {
     }
     return;
   }
+  if (e.type == T::DragStart && e.fromStrip) {
+    // A swipe up from the button strip (no Down): a drag of the list from
+    // here, as if it had landed at this point, so the list moves with the
+    // finger from now on (no jump). Nothing pressed, not even at the rail;
+    // it stops a moving list like a finger landing.
+    touchOn_ = TouchOn::List;
+    dragged_ = true;
+    downItem_ = -1;
+    if (pressedItem_ >= 0) setPressed(-1, -1);
+    scroll_.press(e.ms, e.y);
+    return;
+  }
   if (e.type == T::Down) {
     if (edge_ == Edge::Rail && e.inRightEdgeZone(kEdgeHitX)) {
       // The rail comes up at once (railWanted_), the thumb in the accent.

@@ -25,6 +25,9 @@ void printAxis(const char* name, const TouchCalibration::Axis& a) {
 
 void Input::begin() {
   for (int b = 0; b < 3; ++b) buttons_[b].setConfig(ButtonPolicy::gestureFor(b));
+  StripButtons::Config sc = strip_.config();
+  sc.holdMs = ButtonPolicy::kHoldMs;  // a press that has held never scrolls
+  strip_.setConfig(sc);
   Preferences p;
   // Read-write: a read-only open of a namespace never written logs an error.
   if (!p.begin(kNvsNamespace, false)) {
@@ -145,10 +148,12 @@ void Input::update(uint32_t nowMs) {
     otherLogged_ = 0;
   }
 
-  // The buttons, from the same point (a touch that went down in the strip).
+  // The buttons, from the same point (a touch that went down in the strip;
+  // a swipe up from there is handed to the glass).
   updateButtons(nowMs, s, newTouch);
 
-  // The glass (a touch that went down in the strip is the buttons' alone).
+  // The glass (a touch that went down in the strip is the buttons', until
+  // it is handed over: a drag from this very point).
   InputEvent out[TouchRecognizer::kMaxEvents];
   const int n = glass_.update(nowMs, s, out);
   if (suspended_) return;
@@ -175,11 +180,20 @@ void Input::logOtherFingers(int firstId) {
   otherLogged_ &= seen;
 }
 
-// StripButtons says which button is down (if any) and whether the press in
-// progress was dropped; ButtonGesture makes the events. A strip touch that
-// doesn't count is logged, once per touch.
+// StripButtons says which button is down (if any), whether the press in
+// progress was dropped, and whether the touch is a swipe up from the strip
+// (the glass follows it from here: it scrolls); ButtonGesture makes the
+// events. A strip touch that doesn't count is logged, once per touch, and
+// so is a swipe handed over.
 void Input::updateButtons(uint32_t nowMs, const TouchRecognizer::Sample& s, bool newTouch) {
   const StripButtons::Result r = strip_.update(nowMs, s.pressed, s.rawX, s.rawY, newTouch);
+  if (r.scroll) {
+    glass_.fromStrip();
+    if (!suspended_) {
+      Serial.printf("[button] %c at %d,%d (raw): a swipe from the strip (%d px): scrolling%s\n",
+                    static_cast<char>('A' + r.button), s.rawX, s.rawY, r.moved, scripted_ ? " (scripted)" : "");
+    }
+  }
   if (r.ignored != StripButtons::Why::None && !suspended_) {
     char detail[80] = "";
     if (r.ignored == StripButtons::Why::Moved) {
@@ -193,7 +207,8 @@ void Input::updateButtons(uint32_t nowMs, const TouchRecognizer::Sample& s, bool
                   scripted_ ? " (scripted)" : "");
   }
   for (int b = 0; b < 3; ++b) {
-    // A press dropped: no click or hold from it (a hold it had ends).
+    // A press dropped (it moved, or it became a swipe): no click or hold
+    // from it (a hold it had ends).
     const ButtonGesture::Event g =
         r.cancelled && r.button == b ? buttons_[b].cancel() : buttons_[b].update(nowMs, r.pressed == b);
     InputEvent e;

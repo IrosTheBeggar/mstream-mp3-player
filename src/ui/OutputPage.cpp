@@ -253,6 +253,8 @@ void OutputPage::onEvent(const InputEvent& e) {
     if (!touchInList_) {
       headerPressed_ = header().hit(e);
     }
+  } else if (e.type == T::DragStart && e.fromStrip) {
+    touchInList_ = true;  // a swipe up from the strip: it scrolls the list
   }
   if (touchInList_) {
     ui_.list().onEvent(e);

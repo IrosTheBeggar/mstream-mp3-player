@@ -527,7 +527,8 @@ layer is suspended).
   and `KineticScroll` caps flings at the same speed: faster, nearly every
   frame of the hardware scroll moves more than its 84-line step and becomes
   a full redraw. A touch that lands on the button strip (raw y >= 240) is
-  the buttons' and makes no glass events.
+  the buttons' and makes no glass events, unless it is a swipe up from the
+  strip (below).
 - **The button strip** (`StripButtons`, host-tested). The three buttons
   are made from the same touch point as the glass, not taken from
   M5Unified's BtnA/B/C: those press for any point in the strip that isn't
@@ -538,7 +539,20 @@ layer is suspended).
   went down in the strip presses a button**: the one under where it went
   down (raw x 0-106 A, 107-213 B, 214-319 C, M5Unified's split), however
   it drifts after. Moving more than 20 px from there cancels it (no click,
-  no hold, the repeats stop: `ButtonGesture::cancel()`); a touch that went
+  no hold, the repeats stop: `ButtonGesture::cancel()`). **A swipe up from
+  the strip scrolls**: if that move is upward (at least as much up as
+  sideways, or onto the glass by then) the touch is handed to the glass
+  recogniser as a drag (`TouchRecognizer::fromStrip()`): a DragStart at the
+  hand-over point with no Down before it (so the list moves with the finger
+  from there, no jump), then DragMove, DragEnd and Fling (capped) as any
+  drag, each flagged `InputEvent::fromStrip`; never a Tap or a LongPress,
+  and no tick. The Ui gives it to the page (nobody's under a modal: the
+  sheets, dialogs and the volume slider only have presses), and only the
+  lists follow it (`ListView`, the Library, Queue and Output pages; the
+  Queue's edit bar and the A-Z rail are not pressed); Now Playing ignores
+  it. A slide along the strip, or down it, stays ignored, and one that
+  later turns up onto the glass becomes a swipe there; a press that has
+  held (500 ms) did its hold and never scrolls. A touch that went
   down on the glass never presses one, wherever it goes; a strip touch
   starting soon after a touch that wasn't a press lifted (a glass touch,
   or a strip touch already ignored) is ignored as the panel finding that
@@ -547,13 +561,19 @@ layer is suspended).
   seen. (The captured finger came back within ~145 ms; one found a little
   later, sliding less than the 20 px slop into C, would otherwise click B.
   A deliberate press elsewhere, or after another press, is not held up.)
+  Such a touch presses nothing, but a swipe up from it still scrolls
+  (flicking the list again and again from the strip is quicker than the
+  windows); a swipe from the strip, once lifted, opens them like a glass
+  touch.
   Only the panel's first touch point counts, as for the glass: a second
   finger pressing the strip does nothing, and when the first point
   becomes another finger without a lift (the first lifted, a second
   stayed on) the old touch lifts and the new one goes down there, bounce
   rules and all. Each rejected strip touch logs
   `[button] ignored: <button> at x,y (raw): <why>` once (a second finger
-  too). The user's
+  too), and a swipe handed over `[button] B at x,y (raw): a swipe from the
+  strip (n px): scrolling` (its fling logs `[touch] fling ... from the
+  strip`). The user's
   measured presses (down at y 247-278, clicks 17-143 ms, holds
   509-2383 ms) all still count (the host test replays them).
 - **The buttons** (`ButtonGesture`, `ButtonPolicy`, host-tested): Click,
@@ -958,7 +978,8 @@ Queue, Dance and Output (with its Pair and About pages).
   `uip<x>,<ms>` a press on the button strip (y 260) for ms. A y from 240
   is the strip in all of them, through the same `StripButtons` as a
   finger: `uit160,260` clicks B, `uis160,200,160,264,80` is a swipe that
-  ends there and presses nothing.
+  ends there and presses nothing, and `uis160,265,160,100,120` is a swipe
+  up from the strip that flings the list (`uid...` the same as a drag).
   Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max
   (n over 35 ms), ring min, underruns +n, governor` when it settles, and a
   frame over 50 ms logs `[ui] slow frame` with its move and its renders; every touch logs

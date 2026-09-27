@@ -817,7 +817,8 @@ static void browseCommand(const char* a) {
 // 500 ms a hold). Screen pixels, as the corrected touch reports them; y
 // from 240 is the button strip, which takes the same path as a finger's
 // (StripButtons): uit160,260 clicks B, uis160,200,160,264,80 is a swipe
-// that ends there (no button).
+// that ends there (no button), uis160,265,160,100,120 a swipe up from it
+// (it flings the list).
 static bool simulatedTouch(const char* a) {
   const char c = a[0];
   if (c != 't' && c != 'h' && c != 's' && c != 'd' && c != 'p') return false;
@@ -965,8 +966,8 @@ static void handleInput(uint32_t now) {
     // in the log next to what it caused.
     using T = InputEvent::Type;
     if (e.type == T::Down || e.type == T::Tap || e.type == T::LongPress || e.type == T::Fling) {
-      Serial.printf("[touch] %s %d,%d (raw %d,%d)%s\n", InputEvent::name(e.type), e.x, e.y, e.rawX, e.rawY,
-                    input.scriptedTouch() ? " scripted" : "");
+      Serial.printf("[touch] %s %d,%d (raw %d,%d)%s%s\n", InputEvent::name(e.type), e.x, e.y, e.rawX, e.rawY,
+                    e.fromStrip ? " from the strip" : "", input.scriptedTouch() ? " scripted" : "");
     }
     if (userInterface) userInterface->onEvent(e);
   }

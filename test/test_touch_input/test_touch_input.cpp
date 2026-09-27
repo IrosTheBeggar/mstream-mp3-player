@@ -566,7 +566,8 @@ void test_touch_drag_and_capped_fling() {
 }
 
 void test_touch_button_strip_and_cancel() {
-  // Landing on the strip (y >= 240) is BtnA/B/C's: no glass events at all.
+  // Landing on the strip (y >= 240) is the buttons': no glass events at
+  // all, unless StripButtons hands it over (test_touch_from_strip).
   Rec b;
   b.at(0, true, 160, 255);
   b.at(100, true, 160, 200);
@@ -593,6 +594,51 @@ void test_touch_button_strip_and_cancel() {
   TEST_ASSERT_EQUAL_STRING("down;down;tap;", c.types().c_str());
 }
 
+// A strip touch handed over (fromStrip(), StripButtons' `scroll`): a drag
+// from that sample, flagged; never a tap. Only for a strip touch: not for a
+// glass touch, nor one cancel() dropped.
+void test_touch_from_strip() {
+  Rec r;
+  r.at(0, true, 160, 262);
+  r.at(20, true, 160, 250);
+  TEST_ASSERT_EQUAL_STRING("", r.types().c_str());
+  r.r.fromStrip();
+  r.at(30, true, 160, 238);
+  TEST_ASSERT_EQUAL_STRING("drag start;", r.types().c_str());
+  const InputEvent st = r.events[0];
+  TEST_ASSERT_EQUAL_INT(238, st.y);  // where it was handed over
+  TEST_ASSERT_EQUAL_INT(0, st.dx);
+  TEST_ASSERT_EQUAL_INT(0, st.dy);
+  TEST_ASSERT_EQUAL_UINT32(30, st.ms);
+  TEST_ASSERT_TRUE(st.fromStrip);
+  TEST_ASSERT_TRUE(r.r.dragging());
+  r.at(40, true, 160, 220);
+  r.at(50, false);
+  TEST_ASSERT_EQUAL_STRING("drag start;drag;drag end;fling;", r.types().c_str());
+  TEST_ASSERT_EQUAL_INT(-18, r.events[1].dy);
+  TEST_ASSERT_EQUAL_INT(-18, r.events[2].dy);  // from the hand-over point
+  for (const auto& e : r.events) TEST_ASSERT_TRUE(e.fromStrip);
+  // The next touch is an ordinary one.
+  r.at(100, true, 100, 100);
+  r.at(150, false);
+  TEST_ASSERT_EQUAL_STRING("drag start;drag;drag end;fling;down;tap;", r.types().c_str());
+  TEST_ASSERT_FALSE(r.events.back().fromStrip);
+
+  Rec g;
+  g.at(0, true, 100, 100);
+  g.r.fromStrip();
+  g.at(10, true, 100, 101);
+  g.at(20, false);
+  TEST_ASSERT_EQUAL_STRING("down;tap;", g.types().c_str());
+  Rec c;
+  c.at(0, true, 160, 262);
+  TEST_ASSERT_EQUAL_INT((int)InputEvent::Type::None, (int)c.r.cancel(5).type);
+  c.r.fromStrip();
+  c.at(10, true, 160, 200);
+  c.at(20, false);
+  TEST_ASSERT_EQUAL_STRING("", c.types().c_str());
+}
+
 void test_touch_right_edge_flag() {
   Rec t;
   t.at(0, true, 282, 20, InputEvent::kEdgeRight);  // read 319: clamped
@@ -611,13 +657,20 @@ void test_touch_right_edge_flag() {
 namespace {
 
 // What Input does every loop pass: StripButtons, then a ButtonGesture per
-// button (cancelled when the strip drops the press). Logs "B click;",
-// "A hold;", "A hold end;" and "ignored B glass;" etc.; repeats are counted.
+// button (cancelled when the strip drops the press), then the glass
+// (TouchRecognizer, told when the strip hands a swipe over). Logs "B
+// click;", "A hold;", "A hold end;", "ignored B glass;" and "scroll B;"
+// etc.; repeats are counted. The glass's events go to `events` and `touch`
+// ("down;drag start;...").
 struct Strip {
   StripButtons strip;
   ButtonGesture g[3];
+  TouchRecognizer glass;
   std::string log;
+  std::string touch;
+  std::vector<InputEvent> events;
   int repeats = 0;
+  int16_t scrollMoved = 0;  // the last hand-over's distance
 
   Strip() {
     for (int b = 0; b < 3; ++b) g[b].setConfig(ButtonPolicy::gestureFor(b));
@@ -635,6 +688,11 @@ struct Strip {
     if (r.ignored != StripButtons::Why::None) {
       log += std::string("ignored ") + static_cast<char>('A' + r.button) + " " + why(r.ignored) + ";";
     }
+    if (r.scroll) {
+      log += std::string("scroll ") + static_cast<char>('A' + r.button) + ";";
+      scrollMoved = r.moved;
+      glass.fromStrip();
+    }
     for (int b = 0; b < 3; ++b) {
       using E = ButtonGesture::Event;
       const E e = r.cancelled && r.button == b ? g[b].cancel() : g[b].update(ms, r.pressed == b);
@@ -645,6 +703,32 @@ struct Strip {
       if (e == E::None || e == E::Press) continue;
       log += std::string(1, static_cast<char>('A' + b)) + " " + ButtonGesture::name(e) + ";";
     }
+    TouchRecognizer::Sample s;
+    s.pressed = pressed;
+    s.x = s.rawX = static_cast<int16_t>(x);
+    s.y = s.rawY = static_cast<int16_t>(y);
+    InputEvent out[TouchRecognizer::kMaxEvents];
+    const int n = glass.update(ms, s, out);
+    for (int i = 0; i < n; ++i) {
+      events.push_back(out[i]);
+      touch += std::string(InputEvent::name(out[i].type)) + ";";
+    }
+  }
+  // The glass's events with the drag moves left out ("drag start;drag
+  // end;fling;"), and whether any was a press (a down, tap or long press).
+  std::string gist() const {
+    std::string s;
+    for (const auto& e : events) {
+      if (e.type != InputEvent::Type::DragMove) s += std::string(InputEvent::name(e.type)) + ";";
+    }
+    return s;
+  }
+  bool pressedGlass() const {
+    for (const auto& e : events) {
+      using T = InputEvent::Type;
+      if (e.type == T::Down || e.type == T::Tap || e.type == T::LongPress || e.type == T::Release) return true;
+    }
+    return false;
   }
   // The finger goes from (x0, y0) to (x1, y1) between t0 and t1, a loop
   // pass every stepMs (at t1 it is at (x1, y1), still down).
@@ -690,11 +774,14 @@ void test_strip_captured_swipe_presses_nothing() {
   Strip s;
   s.slide(0, 483, 203, 190, 195, 264, 16);
   s.lift(499);
+  TEST_ASSERT_EQUAL_STRING("down;drag start;drag end;", s.gist().c_str());
   // Found again 16 ms later, in the strip, sliding right into C; lifted
   // 155 ms after the glass touch.
   s.slide(515, 640, 197, 266, 222, 270, 16);
   s.lift(654);
   TEST_ASSERT_EQUAL_STRING("ignored B glass;ignored B bounce;", s.log.c_str());
+  // Not a swipe up either: the found finger makes no glass events.
+  TEST_ASSERT_EQUAL_STRING("down;drag start;drag end;", s.gist().c_str());
   // The glass sees only its own touch (a drag), and nothing of the one
   // that started in the strip.
   Rec g;
@@ -718,6 +805,7 @@ void test_strip_captured_swipe_presses_nothing() {
   late.slide(1000, 1125, 197, 266, 222, 270, 16);
   late.lift(1140);
   TEST_ASSERT_EQUAL_STRING("ignored B glass;ignored B moved;", late.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("down;drag start;drag end;", late.gist().c_str());
 }
 
 // A drag on the glass that comes to rest in the strip (long enough to be a
@@ -749,9 +837,9 @@ void test_strip_click_and_hold() {
 }
 
 // A touch that goes down in the strip and slides up onto the glass was
-// M5Unified's short press, a click. Here it is nothing (and the glass
-// ignores it too: test_touch_button_strip_and_cancel).
-void test_strip_press_dragged_onto_the_glass_is_cancelled() {
+// M5Unified's short press, a click. Here it presses nothing: it is a swipe
+// from the strip, and scrolls (test_strip_swipe_up_scrolls).
+void test_strip_press_dragged_onto_the_glass_is_a_swipe() {
   Strip s;
   s.at(0, true, 160, 262);
   s.at(10, true, 160, 258);
@@ -759,14 +847,18 @@ void test_strip_press_dragged_onto_the_glass_is_cancelled() {
   s.slide(15, 100, 160, 255, 160, 150);
   TEST_ASSERT_EQUAL_INT(-1, s.strip.pressed());
   s.lift(105);
-  TEST_ASSERT_EQUAL_STRING("ignored B moved;", s.log.c_str());
-  // Back down onto the strip within the same touch: still nothing.
+  TEST_ASSERT_EQUAL_STRING("scroll B;", s.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("drag start;drag end;fling;", s.gist().c_str());
+  // Back down onto the strip within the same touch, resting there as long
+  // as a hold: still no button, and the glass's drag ends where it rests.
   Strip b;
   b.slide(0, 60, 160, 262, 160, 200);
   b.slide(65, 120, 160, 200, 160, 262);
   b.rest(125, 900, 160, 262);
   b.lift(905);
-  TEST_ASSERT_EQUAL_STRING("ignored B moved;", b.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("scroll B;", b.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("drag start;drag end;", b.gist().c_str());
+  TEST_ASSERT_EQUAL_INT(0, b.repeats);
 }
 
 // Only the column where it went down counts: a slide from B into C within
@@ -782,6 +874,9 @@ void test_strip_slide_between_buttons() {
   f.slide(5, 60, 205, 262, 250, 262);  // 45 px
   f.lift(65);
   TEST_ASSERT_EQUAL_STRING("ignored B moved;", f.log.c_str());
+  // Along the strip: no swipe from it either (the glass sees nothing).
+  TEST_ASSERT_EQUAL_STRING("", s.touch.c_str());
+  TEST_ASSERT_EQUAL_STRING("", f.touch.c_str());
   // The same after the hold: the hold ends there, no click (B's output
   // switch already happened), and C never goes down.
   Strip h;
@@ -954,6 +1049,8 @@ void test_strip_a_hold_repeats() {
   m.lift(2005);
   TEST_ASSERT_EQUAL_INT(1, m.repeats);
   TEST_ASSERT_EQUAL_STRING("A hold;ignored A moved;A hold end;", m.log.c_str());
+  // It slid up onto the glass, but it was a hold: it doesn't scroll.
+  TEST_ASSERT_EQUAL_STRING("", m.touch.c_str());
 }
 
 // The user's presses in the input lab's button practice: down at y
@@ -975,16 +1072,224 @@ void test_strip_users_measured_presses() {
           s.press(1000, ms, x, y, step);
           const std::string want = std::string(1, b) + " click;";
           TEST_ASSERT_EQUAL_STRING_MESSAGE(want.c_str(), s.log.c_str(), "a measured click");
+          TEST_ASSERT_EQUAL_STRING_MESSAGE("", s.touch.c_str(), "a measured click on the glass");
         }
         for (uint32_t ms : holds) {
           Strip s;
           s.press(1000, ms, x, y, step);
           const std::string want = std::string(1, b) + " hold;" + b + " hold end;";
           TEST_ASSERT_EQUAL_STRING_MESSAGE(want.c_str(), s.log.c_str(), "a measured hold");
+          TEST_ASSERT_EQUAL_STRING_MESSAGE("", s.touch.c_str(), "a measured hold on the glass");
         }
       }
     }
   }
+}
+
+// ---- swipes from the strip: they scroll ----
+
+// The user's scrolls that began on the strip (the hand test's "ignored: B
+// at 174,243: moved off the button (35 px)"): a swipe up from the strip is
+// handed to the glass as a drag. No button, and nothing pressed on the
+// glass (no Down, Tap or LongPress: the bottom rows and the transport are
+// right above the strip); a quick one flings, capped at 2,000 px/s.
+void test_strip_swipe_up_scrolls() {
+  Strip s;
+  s.rest(0, 40, 174, 278);
+  s.slide(45, 150, 174, 278, 170, 120);  // ~1,500 px/s up
+  s.lift(155);
+  TEST_ASSERT_EQUAL_STRING("scroll B;", s.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("drag start;drag end;fling;", s.gist().c_str());
+  TEST_ASSERT_FALSE(s.pressedGlass());
+  for (const auto& e : s.events) TEST_ASSERT_TRUE(e.fromStrip);
+  const InputEvent& fl = s.events.back();
+  TEST_ASSERT_TRUE(fl.vy < -1200 && fl.vy > -1800);
+  TEST_ASSERT_EQUAL_INT(0, s.repeats);
+  TEST_ASSERT_EQUAL_INT(-1, s.strip.pressed());
+
+  // A flick at ~4,000 px/s: capped like any other.
+  Strip f;
+  f.at(0, true, 60, 270);
+  f.slide(5, 65, 60, 270, 60, 20);
+  f.lift(70);
+  TEST_ASSERT_EQUAL_STRING("scroll A;", f.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("drag start;drag end;fling;", f.gist().c_str());
+  TEST_ASSERT_FLOAT_WITHIN(1.0f, 2000.0f, -f.events.back().vy);
+  TEST_ASSERT_FALSE(f.pressedGlass());
+}
+
+// Where it is handed over is where the drag starts: the first point beyond
+// the slop, (dx, dy) 0 there, so the list moves by the finger's movement
+// from then on (not by the 20-odd px it took to get there).
+void test_strip_swipe_hand_over_point() {
+  Strip s;
+  s.at(0, true, 174, 278);
+  s.at(10, true, 174, 270);
+  s.at(20, true, 174, 262);  // 16 px: still the press
+  TEST_ASSERT_EQUAL_INT(1, s.strip.pressed());
+  TEST_ASSERT_EQUAL_STRING("", s.touch.c_str());
+  s.at(30, true, 174, 243);  // 35 px up: the hand test's point
+  TEST_ASSERT_EQUAL_STRING("scroll B;", s.log.c_str());
+  TEST_ASSERT_EQUAL_INT(35, s.scrollMoved);
+  TEST_ASSERT_EQUAL_INT(-1, s.strip.pressed());
+  TEST_ASSERT_EQUAL_STRING("drag start;", s.touch.c_str());
+  const InputEvent st = s.events[0];
+  TEST_ASSERT_EQUAL_INT(174, st.x);
+  TEST_ASSERT_EQUAL_INT(243, st.y);
+  TEST_ASSERT_EQUAL_INT(243, st.rawY);
+  TEST_ASSERT_EQUAL_INT(0, st.dx);
+  TEST_ASSERT_EQUAL_INT(0, st.dy);
+  TEST_ASSERT_EQUAL_UINT32(30, st.ms);
+  TEST_ASSERT_TRUE(st.fromStrip);
+  s.at(40, true, 175, 230);
+  s.at(50, true, 175, 200);
+  s.rest(55, 200, 175, 200);  // it stops
+  s.lift(205);
+  TEST_ASSERT_EQUAL_STRING("drag start;drag;drag;drag end;", s.touch.c_str());
+  TEST_ASSERT_EQUAL_INT(1, s.events[1].dx);
+  TEST_ASSERT_EQUAL_INT(-13, s.events[1].dy);
+  TEST_ASSERT_EQUAL_INT(-30, s.events[2].dy);
+  const InputEvent& end = s.events[3];
+  TEST_ASSERT_EQUAL_INT(200, end.y);
+  TEST_ASSERT_EQUAL_INT(-43, end.dy);  // from the hand-over point
+  TEST_ASSERT_EQUAL_FLOAT(0, end.vy);  // stopped: no fling
+  TEST_ASSERT_EQUAL_STRING("scroll B;", s.log.c_str());  // no click at the lift
+}
+
+// A slow swipe up (100 px/s): a drag, and no fling.
+void test_strip_slow_swipe_is_a_drag() {
+  Strip s;
+  s.at(0, true, 160, 270);
+  s.slide(5, 1005, 160, 270, 160, 170, 10);
+  s.lift(1010);
+  TEST_ASSERT_EQUAL_STRING("scroll B;", s.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("drag start;drag end;", s.gist().c_str());
+  TEST_ASSERT_FALSE(s.pressedGlass());
+  TEST_ASSERT_FLOAT_WITHIN(20.0f, -100.0f, s.events.back().vy);
+}
+
+// Only a swipe UP: along the strip, even rising a little, or down it, is
+// nothing, as before. A diagonal that reaches the glass is a swipe, and so
+// is a slide along the strip that then turns up onto the glass (the slide
+// already logged as ignored).
+void test_strip_swipe_must_go_up() {
+  Strip a;
+  a.at(0, true, 250, 275);
+  a.slide(5, 80, 250, 275, 295, 258);  // 45 px along, 17 up
+  a.lift(85);
+  TEST_ASSERT_EQUAL_STRING("ignored C moved;", a.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("", a.touch.c_str());
+  Strip d;
+  d.at(0, true, 160, 245);
+  d.slide(5, 80, 160, 245, 165, 279);  // down, toward the edge
+  d.lift(85);
+  TEST_ASSERT_EQUAL_STRING("ignored B moved;", d.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("", d.touch.c_str());
+
+  Strip g;
+  g.at(0, true, 250, 262);
+  g.at(20, true, 280, 236);  // 30 along, 26 up: onto the glass
+  g.at(40, true, 290, 200);
+  g.rest(45, 150, 290, 200);
+  g.lift(155);
+  TEST_ASSERT_EQUAL_STRING("scroll C;", g.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("drag start;drag;drag end;", g.touch.c_str());
+  TEST_ASSERT_EQUAL_INT(236, g.events[0].y);
+
+  Strip t;
+  t.at(0, true, 250, 248);
+  t.at(20, true, 262, 244);  // 12 px
+  t.at(40, true, 275, 241);  // 25 px, mostly along: cancelled
+  t.at(60, true, 285, 232);  // onto the glass: a swipe from here
+  t.rest(65, 200, 285, 232);
+  t.lift(205);
+  TEST_ASSERT_EQUAL_STRING("ignored C moved;scroll C;", t.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("drag start;drag end;", t.touch.c_str());
+  TEST_ASSERT_EQUAL_INT(232, t.events[0].y);
+}
+
+// Moving up within the slop is still the press (a finger rolling as it
+// presses), even onto the glass by a few px: a click, nothing on the glass.
+// Past the slop, a swipe.
+void test_strip_press_moving_up_within_the_slop_is_a_click() {
+  Strip s;
+  s.at(0, true, 160, 262);
+  s.slide(5, 60, 160, 262, 160, 252);  // 10 px up
+  s.lift(65);
+  TEST_ASSERT_EQUAL_STRING("B click;", s.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("", s.touch.c_str());
+  Strip t;
+  t.at(0, true, 160, 247);
+  t.slide(5, 60, 160, 247, 163, 237);  // 10 px up, across y 240
+  t.lift(65);
+  TEST_ASSERT_EQUAL_STRING("B click;", t.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("", t.touch.c_str());
+  Strip e;
+  e.at(0, true, 160, 270);
+  e.at(20, true, 160, 250);  // 20 px: the slop's edge
+  e.lift(40);
+  TEST_ASSERT_EQUAL_STRING("B click;", e.log.c_str());
+  Strip o;
+  o.at(0, true, 160, 270);
+  o.at(20, true, 160, 249);  // 21 px
+  o.lift(40);
+  TEST_ASSERT_EQUAL_STRING("scroll B;", o.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("drag start;drag end;", o.touch.c_str());
+}
+
+// A press that has held did what a hold does (B switched the output, A or
+// C stepped the volume): moving off it only ends it, it never scrolls.
+// Short of the hold, the same swipe scrolls and nothing clicks.
+void test_strip_swipe_after_a_hold_does_not_scroll() {
+  Strip h;
+  h.rest(0, 600, 160, 265);
+  h.slide(605, 700, 160, 265, 160, 120);
+  h.lift(705);
+  TEST_ASSERT_EQUAL_STRING("B hold;ignored B moved;B hold end;", h.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("", h.touch.c_str());
+  Strip e;
+  e.rest(0, 500, 160, 265);  // the hold at 500 ms exactly
+  e.at(505, true, 160, 230);
+  e.lift(510);
+  TEST_ASSERT_EQUAL_STRING("B hold;ignored B moved;B hold end;", e.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("", e.touch.c_str());
+  Strip r;
+  r.rest(0, 400, 160, 265);
+  r.slide(405, 500, 160, 265, 160, 120);
+  r.lift(505);
+  TEST_ASSERT_EQUAL_STRING("scroll B;", r.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("drag start;drag end;fling;", r.gist().c_str());
+  TEST_ASSERT_FALSE(r.pressedGlass());
+}
+
+// A strip touch in a bounce window presses nothing, as before, but a swipe
+// up from it still scrolls: flicking up the list again and again from the
+// strip is quicker than the windows. A swipe from the strip, once lifted,
+// opens them like a glass touch.
+void test_strip_swipes_in_the_bounce_window_scroll() {
+  Strip s;
+  s.at(0, true, 160, 270);
+  s.slide(5, 80, 160, 270, 160, 100);  // a flick from the strip
+  s.lift(85);
+  s.at(150, true, 165, 272);  // again, 65 ms later
+  s.slide(155, 230, 165, 272, 165, 100);
+  s.lift(235);
+  TEST_ASSERT_EQUAL_STRING("scroll B;ignored B bounce;scroll B;", s.log.c_str());
+  TEST_ASSERT_EQUAL_STRING("drag start;drag end;fling;drag start;drag end;fling;", s.gist().c_str());
+  TEST_ASSERT_FALSE(s.pressedGlass());
+  // Still, 65 ms after that one: the bounce, no click.
+  s.press(300, 60, 160, 262);
+  TEST_ASSERT_EQUAL_STRING("scroll B;ignored B bounce;scroll B;ignored B bounce;", s.log.c_str());
+  // A swipe from the strip that comes back down and is lost there: the
+  // finger found again sliding into C presses nothing (the swipe window).
+  Strip l;
+  l.slide(0, 100, 200, 270, 200, 180, 10);
+  l.slide(105, 300, 200, 180, 197, 266, 10);
+  l.lift(310);
+  l.slide(560, 640, 200, 266, 214, 268, 10);  // 250 ms later, 14 px into C
+  l.rest(645, 700, 214, 268);
+  l.lift(705);
+  TEST_ASSERT_EQUAL_STRING("scroll B;ignored B bounce;", l.log.c_str());
 }
 
 // ---- the fling cap in KineticScroll ----
@@ -1031,12 +1336,13 @@ int main(int, char**) {
   RUN_TEST(test_touch_no_hold_for_the_rail);
   RUN_TEST(test_touch_drag_and_capped_fling);
   RUN_TEST(test_touch_button_strip_and_cancel);
+  RUN_TEST(test_touch_from_strip);
   RUN_TEST(test_touch_right_edge_flag);
   RUN_TEST(test_strip_columns_are_m5unifieds);
   RUN_TEST(test_strip_captured_swipe_presses_nothing);
   RUN_TEST(test_strip_glass_drag_resting_in_the_strip_presses_nothing);
   RUN_TEST(test_strip_click_and_hold);
-  RUN_TEST(test_strip_press_dragged_onto_the_glass_is_cancelled);
+  RUN_TEST(test_strip_press_dragged_onto_the_glass_is_a_swipe);
   RUN_TEST(test_strip_slide_between_buttons);
   RUN_TEST(test_strip_bounce_window);
   RUN_TEST(test_strip_swipe_found_late_presses_nothing);
@@ -1044,6 +1350,13 @@ int main(int, char**) {
   RUN_TEST(test_strip_another_finger_takes_over);
   RUN_TEST(test_strip_a_hold_repeats);
   RUN_TEST(test_strip_users_measured_presses);
+  RUN_TEST(test_strip_swipe_up_scrolls);
+  RUN_TEST(test_strip_swipe_hand_over_point);
+  RUN_TEST(test_strip_slow_swipe_is_a_drag);
+  RUN_TEST(test_strip_swipe_must_go_up);
+  RUN_TEST(test_strip_press_moving_up_within_the_slop_is_a_click);
+  RUN_TEST(test_strip_swipe_after_a_hold_does_not_scroll);
+  RUN_TEST(test_strip_swipes_in_the_bounce_window_scroll);
   RUN_TEST(test_kinetic_scroll_caps_flings);
   return UNITY_END();
 }
