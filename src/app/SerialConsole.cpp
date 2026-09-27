@@ -93,6 +93,10 @@ void SerialConsole::poll() {
           Serial.printf("> input \"%s\"\n", arg_.c_str());
           actions_.touch(arg_.c_str());
           break;
+        case Pending::Power:
+          Serial.printf("> power \"%s\"\n", arg_.c_str());
+          if (actions_.power) actions_.power(arg_.c_str());
+          break;
         case Pending::None:
           break;
       }
@@ -128,6 +132,7 @@ void SerialConsole::poll() {
       case 'j': pending_ = Pending::ThumbProbe; arg_ = ""; break;
       case 'q': pending_ = Pending::Queue; arg_ = ""; break;
       case 'a': pending_ = Pending::Touch; arg_ = ""; break;
+      case 'P': pending_ = Pending::Power; arg_ = ""; break;
       default: break;  // newlines etc.
     }
   }

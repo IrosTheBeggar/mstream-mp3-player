@@ -27,6 +27,7 @@
 #include "app/Diagnostics.h"
 #include "app/Haptics.h"
 #include "app/Library.h"
+#include "app/PowerLab.h"
 #include "app/Psram.h"
 #include "app/QueueStore.h"
 #include "app/Screenshot.h"
@@ -555,6 +556,11 @@ static const char* stateName() {
   }
 }
 
+// Power measurements and their A/B knobs (the console's P, app/PowerLab):
+// nothing runs until a P command.
+static PowerLab powerLab(audio, player, danceMode, storage,
+                         {[] { return stateName(); }, [] { return silent; }});
+
 static void printStats() {
   const auto& s = audio.stats();
   const diag::Heap h = diag::heap();
@@ -922,6 +928,7 @@ static SerialConsole console({
     [](const char* a) { spikeCommand(&Spike::thumbProbe, a); },
     queueCommand,
     touchCommand,
+    [](const char* a) { powerLab.command(a); },
 });
 
 // Touch buttons: the same on every screen (ButtonPolicy). Each click and
@@ -950,7 +957,9 @@ static void handleButton(const InputEvent& e) {
 // spike screen, or the UI. The input lab reads the panel and the buttons
 // itself: no events while it's open.
 static void handleInput(uint32_t now) {
-  input.setSuspended(spike.ownsInput());
+  // The screen off for a power measurement: its waking touch does nothing else.
+  const bool powerHeld = powerLab.holdInput();
+  input.setSuspended(spike.ownsInput() || powerHeld);
   input.update(now);
   for (InputEvent e; input.poll(e);) {
     if (e.isButton()) {
@@ -1134,11 +1143,13 @@ static void stepPlayGate(uint32_t now) {
 }
 
 void setup() {
+  PowerLab::applyBootClock();  // the clock saved by Pcb (if any), before Bluetooth starts
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;  // M5Unified leaves Serial off unless asked
   cfg.internal_mic = false;      // the mic shares GPIO0 with the speaker's I2S clock
   M5.begin(cfg);
   Serial.println("\nmstream-mp3-player");
+  PowerLab::logBootClock();
   diag::logHeap("boot");
 
   bootScreen.begin();
@@ -1204,7 +1215,8 @@ void setup() {
                  "uiF<c/s/p/l/n/w> show a faked Bluetooth or no-card state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
                  "library of n tracks in the Library tab, uil0 the card's); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
-                 "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja)");
+                 "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja); "
+                 "P power measurement (P a line, Pl log, P? the knobs)");
 }
 
 void loop() {
@@ -1218,6 +1230,7 @@ void loop() {
   stepPlayGate(now);
   player.update(now);
   audio.loop(now);
+  powerLab.loop(now);
   queueStore.loop(now);
   // What a track's length is, once the backend knows it (read from the
   // file; or its estimate 20 s in, exact for a constant bitrate): the
@@ -1288,5 +1301,6 @@ void loop() {
   }
   // Yield every pass (the decoder runs above the loop on this core), less
   // while a list frame is due soon.
-  delay(userInterface ? userInterface->idleMs(millis()) : 5);
+  // (A power measurement's Pd stretches the wait while nothing animates.)
+  delay(powerLab.loopDelayMs(userInterface ? userInterface->idleMs(millis()) : 5, danceMode.active()));
 }

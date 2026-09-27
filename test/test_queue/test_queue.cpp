@@ -504,7 +504,14 @@ void test_catalog_library_and_builtin_ids() {
   TEST_ASSERT_EQUAL_STRING("Le voyage de Pén", cut);
   // Unknown ids: "" and kNone.
   TEST_ASSERT_FALSE(c.valid(idx.trackCount()));
-  TEST_ASSERT_FALSE(c.valid(TrackCatalog::kBuiltin + 9));
+  // The power test's silence: known, but not listed with the others.
+  const uint32_t silence = c.find(TrackCatalog::kSilencePath);
+  TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kBuiltin + 9, silence);
+  TEST_ASSERT_TRUE(c.valid(silence));
+  TEST_ASSERT_EQUAL_UINT32(3600000, c.durationHintMs(silence));
+  for (uint32_t i = 0; i < b.count; ++i) TEST_ASSERT_NOT_EQUAL(silence, b[i]);
+  TEST_ASSERT_EQUAL_UINT32(10, TrackCatalog::builtinCount());
+  TEST_ASSERT_FALSE(c.valid(TrackCatalog::kBuiltin + 10));
   TEST_ASSERT_EQUAL_STRING("", pathOf(c, 1234).c_str());
   TEST_ASSERT_EQUAL_STRING("", c.artist(1234));
   TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kNone, c.find("tone:nope"));

@@ -89,6 +89,27 @@ void test_very_short_tone_is_all_ramp() {
   TEST_ASSERT_EQUAL_INT16(0, out[2 * 49]);
 }
 
+void test_silence_is_zeros_for_its_duration() {
+  ToneGen t;
+  t.startSilence(44100, 3000);
+  std::vector<int16_t> out(4096 * 2, 123);
+  TEST_ASSERT_EQUAL_UINT32(2048, t.generate(out.data(), 2048));
+  for (int i = 0; i < 2048 * 2; ++i) TEST_ASSERT_EQUAL_INT16(0, out[i]);
+  TEST_ASSERT_FALSE(t.done());
+  std::fill(out.begin(), out.end(), static_cast<int16_t>(123));
+  TEST_ASSERT_EQUAL_UINT32(952, t.generate(out.data(), 2048));
+  TEST_ASSERT_EQUAL_INT16(0, out[951 * 2 + 1]);
+  TEST_ASSERT_EQUAL_INT16(123, out[952 * 2]);  // nothing written past the end
+  TEST_ASSERT_TRUE(t.done());
+  TEST_ASSERT_EQUAL_UINT32(0, t.generate(out.data(), 16));
+  // A tone started afterwards is a tone again.
+  t.start(44100, 1000.0f, -18.0f, ToneGen::Channels::Both, 1000);
+  t.generate(out.data(), 1000);
+  bool signal = false;
+  for (int i = 0; i < 2000; ++i) signal = signal || out[i] != 0;
+  TEST_ASSERT_TRUE(signal);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_chunked_output_matches_one_call);
@@ -97,5 +118,6 @@ int main(int, char**) {
   RUN_TEST(test_peak_level_matches_dbfs);
   RUN_TEST(test_fades_in_and_out_over_5_ms);
   RUN_TEST(test_very_short_tone_is_all_ramp);
+  RUN_TEST(test_silence_is_zeros_for_its_duration);
   return UNITY_END();
 }

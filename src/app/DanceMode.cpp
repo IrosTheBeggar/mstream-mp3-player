@@ -130,6 +130,12 @@ void DanceMode::cycleSkin() {
   Serial.printf("[dance] skin: %s\n", dance::skinName(skin_));
 }
 
+void DanceMode::setTracking(bool on) {
+  if (on && !tracking_) refollow_ = true;  // what the tap holds meanwhile is skipped
+  if (!on) fresh_ = true;                  // no grid to dance to meanwhile: the dancer idles
+  tracking_ = on;
+}
+
 void DanceMode::toggleVerbose() {
   verbose_ = !verbose_;
   Serial.printf("[dance] per-beat log %s\n", verbose_ ? "on" : "off");
@@ -150,10 +156,15 @@ uint32_t DanceMode::latencyUs(char* how, size_t howLen) const {
 void DanceMode::loop(uint32_t nowMs, bool silent) {
   silent_ = silent;
   if (!active_ || !ready_) return;
-  const Core2AudioBackend::Output out = audio_.output();
-  if (out != followed_ || reader_.tap() != audio_.tap(out)) follow(out);
-  reader_.setSampleRate(static_cast<float>(audio_.sampleRate()));
-  reader_.poll(scratch_, kScratchFrames, [this](const TapReader::Run& r) { feed(r); });
+  if (tracking_) {
+    const Core2AudioBackend::Output out = audio_.output();
+    if (refollow_ || out != followed_ || reader_.tap() != audio_.tap(out)) {
+      refollow_ = false;
+      follow(out);
+    }
+    reader_.setSampleRate(static_cast<float>(audio_.sampleRate()));
+    reader_.poll(scratch_, kScratchFrames, [this](const TapReader::Run& r) { feed(r); });
+  }
 
   const uint32_t elapsed = nowMs - framesSinceMs_;
   if (elapsed >= 1000) {

@@ -27,7 +27,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  NavModel  FrameClock  ListLayout  BitSet  TextFit            |
               |  TabBarModel  TrackProgress  JumpIndex                        |
               |  ThumbCache  ThumbScaler  JpegInfo                            |
-              |  OutputModel  PlayGate  QueueView                             |
+              |  OutputModel  PlayGate  QueueView  PowerWindow                |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -35,6 +35,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
   (Core2)     |          BtSink (ESP32-A2DP source), SpeakerSink (M5.Speaker) |  (pioarduino),
               |  storage/LocalStorage   app/SerialConsole   app/Library        |  M5Unified/M5GFX,
               |  app/QueueStore   ui/Input   ui/CalibrationScreen             |
+              |  app/PowerProbe + app/PowerLab (power measurement, console P) |
               |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
               |         Fonts (VLW DejaVu), Icons, Gfx, Thumbs (covers),      |
               |         EmptyState                                            |
@@ -1040,6 +1041,77 @@ measured worse and was removed. The scroll lab now runs the
 recommended setup by default: the hardware scroll, a 30 fps cap kept on
 the frames' deadlines, flings capped at 2,000 px/s, and the A-Z rail hidden
 while the list moves (it sits in the scrolled band, and jittered).
+
+## Power measurement
+
+Nothing had been measured on battery (every POC run was on USB), so every
+battery-life estimate was a guess. The console's `P` commands (with Enter;
+`src/app/PowerLab`, `src/app/PowerProbe`, `lib/core/PowerWindow`) measure
+what the Core2 draws and switch one consumer at a time. All of it is off
+until a `P` command: then the loop reads the power chip 10 times a second.
+
+**What is read.** The AXP192 through M5Unified's I2C, from the loop task:
+reg 0x00 (which supply is there), 0x56-0x5F (ACIN and VBUS voltage, 1.7 mV;
+ACIN current, 0.625 mA; VBUS current, 0.375 mA; the chip's temperature,
+0.1 C), 0x78-0x7F (battery voltage, 1.1 mV; charge and discharge current,
+0.5 mA, 13 bits; APS, the system rail, 1.4 mV). Three I2C transactions,
+~0.7 ms per sample. M5Unified already switches every ADC on (reg 0x82 =
+0xFF, 0x83 = 0x80) at 25 Hz; the probe checks and says so. Samples go into
+5 s windows: mean, min and max.
+
+`P` prints one line at the end of a 5 s window; `Pl` prints one every 5 s;
+`Pw` appends every window to `/.player/power.csv` on the card; `Pm<name>`
+marks a change (the window ends there, so the next is all after it). The
+line's format (one line on the console; `x` stands for the numbers):
+
+```
+[power] 5.0 s n=50 in=x mA (min..max) x W (min..max) [<supplies>: ACIN x V x mA, VBUS x V x mA]
+  bat=±x mA (min..max) ±x W x V aps=x V x C [cc=...] | bl=127 (DC3 2875 mV) screen=on cpu=240 MHz
+  play=playing out=bt link=<phase> stream=started amp=off exten=on led=0 imu=on taps=on dance=hidden bg=on loop=auto
+```
+
+`<supplies>` is what reg 0x00 says is present (ACIN, VBUS, both, none);
+`cc` appears while the coulomb counter runs; `tx=` appears once `Pt` set it.
+
+- **in** is what comes in from USB. Which AXP192 pin USB-C reaches on this
+  board isn't assumed: ACIN and VBUS are both read and added (the one
+  without a supply reads ~0 mA; with the 5 V boost on, VBUS can show the
+  bus's own ~5 V with no current).
+- **bat** is + charging, − discharging. With USB in, the Core2 runs from
+  USB, so the battery current is the charger's, not the device's.
+- **Two ways to measure.** (1) On USB with the battery full (bat ~0: the
+  charger has stopped; it restarts once the cell sags, which spoils long
+  runs): `in` is the device's draw. (2) On battery alone, the real case:
+  serial goes with the cable, so start `Pw` (and `Pq1`) first, unplug,
+  and read the CSV off the card afterwards. `Pq1` starts the AXP192's
+  coulomb counter (the battery's charge and discharge, integrated in the
+  chip: best for overnight runs); P lines then show the net mAh and the
+  average mA since.
+- Average at least 60 s per condition and alternate A/B/A: the 25 Hz ADC
+  against Bluetooth's TX bursts is noisy. The probe's own reads cost
+  ~0.1 mA of CPU while it runs.
+
+**The knobs** (each says what it was and what it is now, and is undone by
+its opposite; only `Pcb` is saved):
+
+| Command | What it switches | Notes |
+|---|---|---|
+| `Pb<0-255>` | backlight (M5GFX: AXP192 DCDC3, 2.5-3.275 V; 0 = DCDC3 off) | default 127 (2.875 V) |
+| `Ps0` / `Ps1` | screen off (backlight off, ILI9342C sleep-in) / on | the UI still draws (into the panel's RAM); while off, the first touch wakes it and does nothing else |
+| `Pc<mhz>` | CPU clock now | only 160 ↔ 80 (same 320 MHz PLL); 240 ↔ 160/80 retunes the BBPLL the Bluetooth radio runs from, refused. 80 not while audio runs, and back to 160 by itself when it starts |
+| `Pcb<mhz>` | CPU clock from boot (saved) | 160 or 240 (`Pcb0` the default, Arduino's 240), set before Bluetooth starts |
+| `Pt<min>,<max>` | Bluetooth BR/EDR TX power levels 0-7 (−12..+9 dBm) | default 4,5 (0..+3 dBm); from the next page, scan or connection |
+| `Pe0` / `Pe1` | the 5 V boost (EXTEN, M-Bus/Grove 5 V) | M5Unified's setExtOutput(), as at boot |
+| `Pg0` / `Pg1` | the green LED | off at boot |
+| `Pi0` / `Pi1` | the BMI270 IMU suspended / on | nothing reads it |
+| `Pa0` / `Pa1` | the speaker amp (NS4168 enable, AXP192 GPIO2) and M5.Speaker's I2S | once the speaker is quiet; the next speaker playback turns it on; `Pa1` clocks zeros, silent |
+| `Pd<ms>` | the loop's idle delay while nothing animates (1-100) | `Pd0` the UI's own (~5 ms); never while a list moves or the Dance tab is up |
+| `Pk0` / `Pk1` | the outputs' taps and the dance beat tracker | |
+| `Pr0` / `Pr1` | the background Bluetooth reconnect (pages, scans by name) | stays connectable; a connect, the Pair screen or a play waiting for the headphones resumes it |
+| `Pz` | plays `tone:silence` next | an hour of zeros: the output runs at its full rate (SBC over Bluetooth), nothing is heard |
+
+`tone:silence` is a built-in track (TrackCatalog) that isn't queued with
+the others: only `Pz` plays it.
 
 ## Build notes
 

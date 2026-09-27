@@ -41,6 +41,10 @@ public:
   void cycleSkin();                  // crab -> stick -> crab (console m, a tap on the box)
   dance::Skin skin() const { return skin_; }
   void toggleVerbose();
+  // Power measurements (the console's Pk): the beat tracker stops reading
+  // the tap (the dancer idles); on again it starts over from what plays.
+  void setTracking(bool on);
+  bool tracking() const { return tracking_; }
   // What the Dance page shows around the dancer.
   float bpm() const { return tracker_.bpm(); }
   float confidence() const { return tracker_.confidence(); }
@@ -74,6 +78,8 @@ private:
   int16_t* scratch_ = nullptr;  // PSRAM
   bool ready_ = false;
   bool active_ = false;
+  bool tracking_ = true;
+  bool refollow_ = false;  // tracking came back: attach to the tap afresh
 
   // What the tracker is following.
   Core2AudioBackend::Output followed_ = Core2AudioBackend::Output::Speaker;

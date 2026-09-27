@@ -36,6 +36,19 @@ public:
   uint32_t queueLatencyUs() const { return queueUs_.load(std::memory_order_relaxed); }
   uint32_t dmaLatencyUs() const { return dmaUs_; }
 
+  // Power measurements (the console's Pa): switch the amp (the NS4168's
+  // enable, AXP192 GPIO2) and M5.Speaker's I2S off or on while the speaker
+  // is quiet. Carried out by the pump once it is idle (paused, or not the
+  // output) and every queued buffer has been played, so nothing is cut
+  // off; the next speaker playback turns it on again by itself. `on`
+  // without playing clocks zeros into the amp: nothing is heard.
+  enum class Amp : uint8_t { None, Off, On };
+  void requestAmp(Amp a) { ampRequest_.store(a, std::memory_order_relaxed); }
+  // A request not carried out yet (the speaker is still playing).
+  bool ampPending() const { return ampRequest_.load(std::memory_order_relaxed) != Amp::None; }
+  // M5.Speaker is running: its task, the I2S and the amp are on.
+  static bool ampOn();
+
 private:
   static void taskEntry(void* self);
   static void onBufferReleased(void* self, const void* data, uint8_t channel);
@@ -54,6 +67,7 @@ private:
   std::atomic<uint32_t> queueUs_{0};  // smoothed fill -> release time (speaker task)
   uint32_t dmaUs_ = 0;
   AudioTap* tap_ = nullptr;  // written only by the pump
+  std::atomic<Amp> ampRequest_{Amp::None};  // loop task -> pump
   // Pump task only.
   DeclickReader reader_{kConsumerId};
   int lastRate_ = 44100;  // of the last buffer queued

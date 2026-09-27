@@ -12,7 +12,9 @@
 //   0 .. trackCount()-1   a track of the LibraryIndex
 //   kBuiltin + n          a built-in track: the test tones and the click
 //                         tracks with a known beat (paths "tone:..."), the
-//                         "Built-in" pseudo-folder, always there, card or not
+//                         "Built-in" pseudo-folder, always there, card or not;
+//                         and, last and not listed by builtins(), an hour of
+//                         silence for power measurements (kSilencePath)
 // Anything else, or a library id while the index isn't ready (a rebuild),
 // is unknown: path() gives "", and the player skips it as a track that
 // can't be played.
@@ -27,9 +29,14 @@ public:
   void setIndex(const LibraryIndex* index) { index_ = index; }
   const LibraryIndex* index() const { return index_; }
 
+  // The power test's silence (the console's Pz): zeros for an hour.
+  static constexpr const char* kSilencePath = "tone:silence";
+
+  // Every built-in track, the silence included.
   static uint32_t builtinCount();
   static bool isBuiltin(uint32_t id) { return id >= kBuiltin && id - kBuiltin < builtinCount(); }
-  // The built-in tracks' ids, in order (a Span, like the index's views).
+  // The built-in tracks queued with the library (the tones, the click
+  // tracks), in order (a Span, like the index's views): not the silence.
   static LibraryIndex::Span builtins();
 
   bool valid(uint32_t id) const;

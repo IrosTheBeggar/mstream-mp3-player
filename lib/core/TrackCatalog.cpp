@@ -22,12 +22,17 @@ constexpr Builtin kBuiltins[] = {
     {"tone:click140", "Clicks 140 BPM", 60000},
     {"tone:click174", "Clicks 174 BPM", 60000},
     {"tone:click120off", "Clicks 120 BPM, late start", 60000},
+    // An hour of digital silence, for power measurements (the console's
+    // Pz): the outputs run at their full rate and nothing is heard. Known
+    // (a path, a title) but not listed: never queued with the others.
+    {TrackCatalog::kSilencePath, "Silence (power test)", 3600000},
 };
 constexpr uint32_t kCount = sizeof(kBuiltins) / sizeof(kBuiltins[0]);
+constexpr uint32_t kListed = kCount - 1;  // all but the silence
 
 constexpr uint32_t B = TrackCatalog::kBuiltin;
 constexpr uint32_t kIds[] = {B + 0, B + 1, B + 2, B + 3, B + 4, B + 5, B + 6, B + 7, B + 8};
-static_assert(sizeof(kIds) / sizeof(kIds[0]) == kCount, "one id per built-in track");
+static_assert(sizeof(kIds) / sizeof(kIds[0]) == kListed, "one id per listed built-in track");
 
 // Copies `len` bytes and a NUL, or writes "" and returns 0 if it won't fit.
 size_t copyOut(const char* s, size_t len, char* buf, size_t size) {
@@ -55,7 +60,7 @@ size_t copyCut(const char* s, size_t len, char* buf, size_t size) {
 
 uint32_t TrackCatalog::builtinCount() { return kCount; }
 
-LibraryIndex::Span TrackCatalog::builtins() { return {kIds, kCount}; }
+LibraryIndex::Span TrackCatalog::builtins() { return {kIds, kListed}; }
 
 bool TrackCatalog::valid(uint32_t id) const { return isBuiltin(id) || inIndex(id); }
 

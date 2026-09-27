@@ -23,6 +23,8 @@
 //   a... the input layer: a touch calibration (a5-a9 with fewer crosshairs), ac check the
 //        touch, as status, ad the default table, ah0/ah1 haptics, ar0/ar1 rail ticks, aq close
 //        (a, not "cal": c<name> is the headphones' name)
+//   P... power measurements (app/PowerLab): P a [power] line, Pl log, Pw csv, Pm<name> mark,
+//        Pq coulomb counter, and A/B knobs (P? lists them)
 // and the UI spike's tools (docs/UI-SPIKE.md), also ended with Enter, the
 // text after the letter passed on as it is:
 //   u...  input lab (u toggles; u0-u3 modes; us summary)
@@ -64,6 +66,8 @@ public:
     std::function<void(const char*)> queue;
     // The input layer (touch calibration, haptics): the argument as typed.
     std::function<void(const char*)> touch;
+    // Power measurements and knobs (app/PowerLab): the argument as typed.
+    std::function<void(const char*)> power;
   };
 
   explicit SerialConsole(Actions actions) : actions_(std::move(actions)) {}
@@ -74,7 +78,7 @@ public:
 private:
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
-    InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch,
+    InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power,
   };
 
   Actions actions_;

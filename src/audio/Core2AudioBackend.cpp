@@ -23,6 +23,7 @@ constexpr uint32_t kDecodeStack = 16384;
 constexpr uint32_t kToneRate = 44100;
 constexpr uint32_t kToneSeconds = 30;
 constexpr uint32_t kClickSeconds = 60;
+constexpr uint32_t kSilenceSeconds = 3600;  // "tone:silence", for power measurements
 // Bluetooth: what the headphones report plus ESP-IDF's frame queue and the
 // air (an estimate); without a report, what the Powerbeats Pro report.
 constexpr uint32_t kBtExtraUs = 25000;
@@ -411,6 +412,15 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
       char text[48];
       snprintf(text, sizeof(text), "clicks %.0f BPM%s, 44100 Hz", click.bpm, click.offsetBeats > 0 ? ", off-beat start" : "");
       setText(description_, text);
+      sync_.report(generation, Phase::Decoding);
+      return Work::Producing;
+    }
+    if (what == "silence") {
+      shared_.rate = kToneRate;
+      tone_.startSilence(kToneRate, kToneRate * kSilenceSeconds);
+      knownDurationMs_ = kSilenceSeconds * 1000;
+      toneTrack_ = true;
+      setText(description_, "silence (zeros, for power tests), 44100 Hz");
       sync_.report(generation, Phase::Decoding);
       return Work::Producing;
     }

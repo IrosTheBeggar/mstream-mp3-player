@@ -7,6 +7,8 @@
 // is involved. The phase carries over between generate() calls, so the output
 // doesn't depend on how the caller chunks it. The tone fades in and out over
 // 5 ms (linear), so it starts and ends at 0 instead of with a click.
+// startSilence() makes digital silence instead ("tone:silence", for power
+// measurements: the outputs run at their full rate, nothing is heard).
 class ToneGen {
 public:
   enum class Channels { Both, LeftOnly };
@@ -22,12 +24,24 @@ public:
     remaining_ = durationFrames;
     edge_ = sampleRate * kEdgeMs / 1000;
     if (edge_ == 0) edge_ = 1;
+    silent_ = false;
+  }
+
+  // `durationFrames` of zeros (no sine computed).
+  void startSilence(uint32_t sampleRate, uint32_t durationFrames) {
+    start(sampleRate, 0.0f, -120.0f, Channels::Both, durationFrames);
+    silent_ = true;
   }
 
   // Writes up to `frames` interleaved stereo frames; returns how many (0 once
   // the tone's duration has been produced).
   uint32_t generate(int16_t* out, uint32_t frames) {
     const uint32_t n = frames < remaining_ ? frames : remaining_;
+    if (silent_) {
+      for (uint32_t i = 0; i < 2 * n; ++i) out[i] = 0;
+      remaining_ -= n;
+      return n;
+    }
     const uint32_t start = total_ - remaining_;  // frames produced before this call
     for (uint32_t i = 0; i < n; ++i) {
       // Distance to the nearer end: the first and the last frame are 0.
@@ -60,4 +74,5 @@ private:
   uint32_t total_ = 0;
   uint32_t remaining_ = 0;
   uint32_t edge_ = 1;  // attack/release length in frames
+  bool silent_ = false;  // startSilence(): zeros
 };

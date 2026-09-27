@@ -162,6 +162,14 @@ public:
   // Pair with a device the scan listed (its address): the link that is up
   // goes first; it becomes the remembered headphones once linked.
   void pairWith(const uint8_t addr[6]);
+  // Power measurements (the console's Pr): pause the background search for
+  // the remembered headphones while unlinked (the heartbeat's pages and
+  // scans by name; a scan by name running is stopped, a page on its way
+  // ends by itself within ~5 s). The Core2 stays connectable, so the
+  // headphones can still come back by themselves. connect(), the Pair
+  // screen and pairWith() resume it (a listener's ask always wins).
+  void setBackgroundReconnect(bool on);
+  bool backgroundReconnectPaused() const { return bgPaused_.load(std::memory_order_relaxed); }
   // The scan's list, copied; returns its version (bumped when it changes).
   uint32_t scanList(BtScanList& out) const;
   uint32_t scanVersion() const { return scanVersion_.load(std::memory_order_relaxed); }
@@ -172,6 +180,8 @@ public:
   uint32_t framesPulled() const { return framesPulled_.load(std::memory_order_relaxed); }
   // For the serial stats line. Resets maxGapMs.
   Stats stats();
+  // The media stream's state as stats() names it, without resetting anything.
+  const char* streamState() const;
   // What the data callback played (before our gain stage), for the beat
   // tracker. nullptr if its PSRAM couldn't be had.
   const AudioTap* tap() const { return tap_; }
@@ -214,6 +224,7 @@ private:
   std::atomic<uint8_t> linkAttempt_{0};
   std::atomic<uint8_t> linkAttempts_{0};
   std::atomic<bool> linkRemembered_{false};
+  std::atomic<bool> bgPaused_{false};  // setBackgroundReconnect(false), as BtAppT carried it out
   // The pairing scan's list (PSRAM), written on the BTC task, copied out
   // by the loop, under scanLock_.
   BtScanList* scan_ = nullptr;

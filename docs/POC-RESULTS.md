@@ -159,7 +159,8 @@ headphones.
 ## Not verified yet
 
 - SD card: coded, but no card was available.
-- Battery drain: every run was on USB power.
+- Battery drain: every run was on USB power. The tooling to measure it is
+  in (the console's `P`, [ARCHITECTURE.md](ARCHITECTURE.md#power-measurement)).
 - WiFi, and WiFi alongside Bluetooth.
 - The RCA/3.5 mm module (M5Unified supports it with one config bit).
 

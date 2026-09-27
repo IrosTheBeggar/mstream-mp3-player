@@ -46,6 +46,8 @@ void SpeakerSink::setVolume(uint8_t percent) {
 
 void SpeakerSink::taskEntry(void* self) { static_cast<SpeakerSink*>(self)->pump(); }
 
+bool SpeakerSink::ampOn() { return M5.Speaker.isRunning(); }
+
 void SpeakerSink::onBufferReleased(void* self, const void* data, uint8_t) {
   auto* s = static_cast<SpeakerSink*>(self);
   for (size_t i = 0; i < kBuffers; ++i) {
@@ -72,6 +74,18 @@ void SpeakerSink::pump() {
     const bool playing = ring_->consumer() == kConsumerId && !paused;
     // Idle once paused or handed to Bluetooth, and the fade-out is queued.
     if (!playing && reader_.silent()) {
+      // A power measurement's amp switch (requestAmp()), once every queued
+      // buffer is back (end() mustn't drop one: its release would never
+      // come and the pump would wait on it for good).
+      const Amp amp = ampRequest_.load(std::memory_order_relaxed);
+      if (amp != Amp::None && !busy_[0] && !busy_[1] && !busy_[2]) {
+        if (amp == Amp::Off) {
+          M5.Speaker.end();
+        } else {
+          M5.Speaker.begin();
+        }
+        ampRequest_.store(Amp::None, std::memory_order_relaxed);
+      }
       waited = 0;
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;
@@ -105,7 +119,9 @@ void SpeakerSink::pump() {
     // A copy of the real audio for the beat tracker (never the fade after
     // it), and when this buffer was filled, to time its release.
     const auto nowUs = static_cast<uint32_t>(esp_timer_get_time());
-    if (r.read > 0 && tap_) tap_->write(buffers_[idx], r.read, r.read, r.epoch, r.position, nowUs);
+    if (r.read > 0 && tap_ && shared_->tapOn.load(std::memory_order_relaxed)) {
+      tap_->write(buffers_[idx], r.read, r.read, r.epoch, r.position, nowUs);
+    }
     filledUs_[idx].store(r.read == kFrames ? (nowUs | 1u) : 0u, std::memory_order_relaxed);
     busy_[idx] = true;  // before playRaw(): the release can only come after it's queued
     if (!M5.Speaker.playRaw(buffers_[idx], r.total * 2, lastRate_, true, 1, kChannel)) {

@@ -148,6 +148,8 @@ public:
     kWantOff, kWantOn, kTick, kSuspendNow, kForget,
     // The Output screen's asks (BtSink::connect() ...).
     kConnect, kDisconnect, kPairScanOn, kPairScanOff, kPairWith,
+    // Power measurements: the background reconnect cycle paused / resumed.
+    kBgPause, kBgResume,
   };
   static constexpr uint16_t kVolumeStep = 0x100;  // onVolumeWork: low byte is a signed step
 
@@ -256,6 +258,7 @@ private:
   void userConnect();
   void userDisconnect();
   void pairScan(bool on);
+  void pauseBackground(bool on, const char* why);
   void startPairing(const uint8_t* bda);
   void pairFailed(const char* why);
   void noteDiscovery(const esp_bt_gap_cb_param_t& param);  // BTC task
@@ -289,6 +292,7 @@ private:
   bool offBeforeScan_ = false;   // userOff_ when the pair scan began
   bool pairing_ = false;         // connecting to a device picked on the Pair screen
   bool pendingPair_ = false;     // ... once the link that is up has gone
+  bool bgPaused_ = false;        // power measurements: no background pages or scans (BtSink::setBackgroundReconnect)
   uint8_t pendingAddr_[ESP_BD_ADDR_LEN] = {};
   uint8_t attempt_ = 0;          // the last page's try number
   bool paged_ = false;           // a page was made (pageAtMs_: when)
@@ -328,7 +332,12 @@ void PlayerA2dp::onWork(uint16_t work, void*) {
     case kPairScanOff:
       a2dp.pairScan(work == kPairScanOn);
       break;
+    case kBgPause:
+    case kBgResume:
+      a2dp.pauseBackground(work == kBgPause, nullptr);
+      break;
     case kPairWith:
+      a2dp.pauseBackground(false, "pairing asked for");
       a2dp.pairScan(false);
       if (a2dp.linkUp_ && packBda(sink->pairAddr_) != a2dp.linkedBda_.load()) {
         // The link that is up goes first; linkDown() starts the pairing.
@@ -530,6 +539,8 @@ void PlayerA2dp::heartbeat() {
   if (!linkUp_) {
     // The listener let go, or the Pair screen scans: nothing to page.
     if (userOff_ || pairScan_ || pendingPair_) return;
+    // Paused for a power measurement: connectable only (they can come back).
+    if (bgPaused_ && !pairing_) return;
     // A pairing whose tries are used up (the last page had a heartbeat to
     // answer): it failed; the library would scan by name next.
     if (pairing_ && reconnect_retries <= 0) {
@@ -931,6 +942,7 @@ void PlayerA2dp::publishLink() {
 // a scan by name when none is remembered. Let in again.
 void PlayerA2dp::userConnect() {
   userOff_ = false;
+  pauseBackground(false, "connect asked for");
   if (linkUp_) return;
   if (pairScan_) pairScan(false);
   set_scan_mode_connectable(true);
@@ -1006,6 +1018,7 @@ void PlayerA2dp::userDisconnect() {
 void PlayerA2dp::pairScan(bool on) {
   if (on == pairScan_.load()) return;
   if (on) {
+    pauseBackground(false, "the Pair screen scans");
     offBeforeScan_ = userOff_;
     portENTER_CRITICAL(&sink->scanLock_);
     if (sink->scan_) sink->scan_->clear();
@@ -1040,6 +1053,30 @@ void PlayerA2dp::pairScan(bool on) {
     reconnect_retries = max_reconnect_retries;
     is_autoreconnect_allowed = true;
   }
+}
+
+// Power measurements (BtSink::setBackgroundReconnect): no background pages
+// or scans while unlinked. Only a scan by name is stopped here (not the Pair
+// screen's; pairing resumes the cycle first anyway); a page on its way ends
+// by itself. Page scan stays on: the headphones can come back by themselves.
+void PlayerA2dp::pauseBackground(bool on, const char* why) {
+  if (on == bgPaused_) return;
+  bgPaused_ = on;
+  sink->bgPaused_.store(on, std::memory_order_relaxed);
+  if (!on) {
+    Serial.printf("[bt] background reconnect resumed%s%s\n", why ? ": " : "", why ? why : "");
+    return;
+  }
+  bool stopped = false;
+  if (!linkUp_ && !pairScan_ && !pairing_ &&
+      (discovery_active || s_a2d_state == APP_AV_STATE_DISCOVERING)) {
+    s_a2d_state = APP_AV_STATE_UNCONNECTED;  // app_gap_callback won't restart discovery now
+    esp_bt_gap_cancel_discovery();
+    stopped = true;
+  }
+  Serial.printf("[bt] background reconnect paused: no pages or scans%s (still connectable: the headphones can "
+                "come back by themselves)\n",
+                stopped ? ", the scan by name stopped" : "");
 }
 
 // Page the device picked on the Pair screen. It is remembered (NVS) only
@@ -1282,6 +1319,8 @@ BtSink::Stats BtSink::stats() {
   return s;
 }
 
+const char* BtSink::streamState() const { return streamName(streamState_.load()); }
+
 void BtSink::post(Event e) {
   if (!events_ || xQueueSend(events_, &e, 0) != pdTRUE) eventsDropped_.fetch_add(1, std::memory_order_relaxed);
 }
@@ -1298,6 +1337,7 @@ void BtSink::setDeviceName(const char* name) {
 namespace {
 // askPending_ bits, in the order they are handed over.
 constexpr uint8_t kAskDisconnect = 1, kAskConnect = 2, kAskScanOff = 4, kAskScanOn = 8, kAskPair = 16;
+constexpr uint8_t kAskBgPause = 32, kAskBgResume = 64;  // handed over first: a later ask resumes it
 }  // namespace
 
 void BtSink::flushAsks() {
@@ -1305,7 +1345,8 @@ void BtSink::flushAsks() {
   static const struct {
     uint8_t bit;
     PlayerA2dp::Work work;
-  } kOrder[] = {{kAskDisconnect, PlayerA2dp::kDisconnect}, {kAskConnect, PlayerA2dp::kConnect},
+  } kOrder[] = {{kAskBgPause, PlayerA2dp::kBgPause},         {kAskBgResume, PlayerA2dp::kBgResume},
+                {kAskDisconnect, PlayerA2dp::kDisconnect}, {kAskConnect, PlayerA2dp::kConnect},
                 {kAskScanOff, PlayerA2dp::kPairScanOff},     {kAskScanOn, PlayerA2dp::kPairScanOn},
                 {kAskPair, PlayerA2dp::kPairWith}};
   for (const auto& o : kOrder) {
@@ -1322,6 +1363,11 @@ BtLink BtSink::link() const {
   l.attempts = linkAttempts_.load(std::memory_order_relaxed);
   l.remembered = linkRemembered_.load(std::memory_order_relaxed);
   return l;
+}
+
+void BtSink::setBackgroundReconnect(bool on) {
+  askPending_ = static_cast<uint8_t>((askPending_ & ~(kAskBgPause | kAskBgResume)) | (on ? kAskBgResume : kAskBgPause));
+  flushAsks();
 }
 
 void BtSink::connect() {
@@ -1414,7 +1460,9 @@ int32_t BtSink::onData(Frame* frames, int32_t count) {
   }
   // A copy for the beat tracker, before the volume: all `want` frames (the
   // tap marks which were real audio, and where in the track). Copy only.
-  if (s.tap_) s.tap_->write(out, want, r.read, r.epoch, r.position, static_cast<uint32_t>(nowUs));
+  if (s.tap_ && s.shared_->tapOn.load(std::memory_order_relaxed)) {
+    s.tap_->write(out, want, r.read, r.epoch, r.position, static_cast<uint32_t>(nowUs));
+  }
   // Then the volume, over every frame so its ramps keep real time. Both
   // stages only ever multiply by at most 1: together they never add level.
   s.gain_.process(out, want);

@@ -35,7 +35,9 @@ class RingOutput;
 // Tracks are .mp3/.flac files on the library filesystem, or the built-in test
 // tones "tone:440", "tone:1000" and "tone:left" (440 Hz, left channel only),
 // and 60 s click tracks with a known beat, "tone:click<bpm>" and
-// "tone:click<bpm>off" (first beat 0.37 of a period in; see ClickGen).
+// "tone:click<bpm>off" (first beat 0.37 of a period in; see ClickGen), and
+// an hour of digital silence, "tone:silence" (power measurements: the
+// output runs at its full rate, nothing is heard).
 class Core2AudioBackend : public IAudioBackend {
 public:
   enum class Output : uint8_t { Speaker, Bluetooth };
@@ -89,6 +91,11 @@ public:
   uint8_t speakerVolume() const { return volume_; }
 
   BtSink& bluetooth() { return bt_; }
+  SpeakerSink& speaker() { return speaker_; }
+  // Whether the outputs copy what they play to their taps (the beat
+  // tracker's input): on unless a power measurement turns it off (P).
+  void setTapsOn(bool on) { shared_.tapOn.store(on, std::memory_order_relaxed); }
+  bool tapsOn() const { return shared_.tapOn.load(std::memory_order_relaxed); }
   // What an output just played, for the beat tracker (nullptr: no PSRAM).
   const AudioTap* tap(Output output) const { return output == Output::Bluetooth ? bt_.tap() : speaker_.tap(); }
   // How long after an output's tap write its audio is heard, and how that

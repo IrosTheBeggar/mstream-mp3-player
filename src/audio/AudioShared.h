@@ -15,4 +15,7 @@ struct AudioShared {
   // audible gap: the outputs count it as an underrun.
   std::atomic<bool> expectingAudio{false};
   std::atomic<uint32_t> underruns{0};
+  // The outputs copy what they play to their AudioTap (the beat tracker's
+  // input). A power measurement can turn it off (the console's Pk0).
+  std::atomic<bool> tapOn{true};
 };
