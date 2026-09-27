@@ -2149,3 +2149,25 @@ flashed firmware is otherwise the same.
   - the headphones' own volume keys;
   - everything in the checklists above that needs pairing, forgetting, a
     second headset or pulling the card.
+
+## Waiting for the headphones (27 September 2026)
+
+The user found the player "stuck in connecting" after the Core2 sat all night: the
+headphones had dropped while idle, the output stayed Bluetooth, and Play went to
+"Playing" at 0:00 with no timeout. Fixed in 26c50fd (PlayGate and a Waiting
+player state; see ARCHITECTURE.md). Checked by hand with the Powerbeats:
+
+| Step | Result |
+|---|---|
+| Play with the headphones just out of the case | waiting, paged at once (try 1 of 3) |
+| The link came up | after 6.8 s; playing on the headphones, resumed at 18.5 s, "Now playing on SPYDRONE" |
+| Stream start | 1.9 s after the link |
+| Late AVRCP: dip, then the headphones' volume | 30 %, 4.5 s after the link |
+| Headphones into the case while playing | they suspended the stream first: paused at once; then the link closed |
+| The lost dialog | shown; OK closes it; output stays Bluetooth, background reconnect running |
+| Underruns | 0 |
+
+Earlier, with the headphones unreachable (speaker at 0 %): the 20 s give-up and
+its notice, Cancel, [Play on speaker] from both places (the background search
+keeps running), a skip while waiting, and Play during a background scan (the
+status reads "try 1 of 3" at once).
