@@ -2,23 +2,18 @@
 
 #include <M5Unified.h>
 
+#include "ui/LcdLock.h"
+
 #include <algorithm>
 #include <cmath>
 
 namespace {
-// The same palette as DisplayView.
-constexpr uint16_t kBg = TFT_BLACK;
-constexpr uint16_t kFg = TFT_WHITE;
-constexpr uint16_t kDim = 0x7BEF;     // grey
-constexpr uint16_t kHeader = 0x001F;  // blue
-constexpr uint16_t kAccent = 0x07FF;  // cyan
+// The UI's background (so the box is invisible on the Dance page) and inks.
+constexpr uint16_t kBg = 0x0862;
+constexpr uint16_t kFg = 0xF79F;
+constexpr uint16_t kAccent = 0x3EBE;  // cyan
 constexpr uint16_t kIdle = 0xAD55;    // light grey: swaying, no beat
 constexpr uint16_t kGround = 0x4208;  // dark grey
-
-constexpr int kW = 320;
-constexpr int kH = 240;
-constexpr int kHeaderH = 24;
-constexpr int kStatusY = DanceView::kBoxY + DanceView::kBoxH + 14;  // under the box, above the labels
 
 constexpr float kLimb = 2.5f;  // half the line width
 constexpr int kFlashX = DanceView::kBoxW - 10;  // the beat dot's centre, in the box
@@ -49,49 +44,15 @@ bool DanceView::create() {
   // MP3 played). Stick figure: RGB332.
   sprite_.setColorDepth(static_cast<uint8_t>(skin_ == dance::Skin::Crab ? 16 : 8));
   ready_ = sprite_.createSprite(kBoxW, kBoxH) != nullptr;
-  if (ready_) sprite_.fillSprite(0);  // black
+  if (ready_) sprite_.fillSprite(kBg);
   return ready_;
 }
 
-void DanceView::enter() {
-  full_ = true;  // the screen is cleared: the next frame pushes the whole box
-  auto& d = M5.Display;
-  d.fillScreen(kBg);
-  title_ = "";
-  status_ = "";
-  d.fillRect(0, 0, kW, kHeaderH, kHeader);
-  // Labels for the touch buttons under the screen, as on the now-playing screen.
-  d.setFont(&fonts::Font0);
-  d.setTextColor(kDim, kBg);
-  d.setTextPadding(0);
-  d.setTextDatum(textdatum_t::middle_center);
-  d.drawString("prev / vol-", 53, kH - 8);
-  d.drawString("play / output", 160, kH - 8);
-  d.drawString("next / vol+", 267, kH - 8);
-  d.setTextDatum(textdatum_t::middle_left);
-}
-
-void DanceView::setTitle(const String& title) {
-  if (title == title_) return;
-  title_ = title;
-  auto& d = M5.Display;
-  d.setFont(&fonts::Font2);
-  d.setTextColor(kFg, kHeader);
-  d.setTextDatum(textdatum_t::middle_left);
-  d.setTextPadding(kW - 8);  // to the screen's edge: a shorter title clears a longer one's tail
-  d.drawString(title, 8, kHeaderH / 2);
-}
-
-void DanceView::setStatus(const String& status) {
-  if (status == status_) return;
-  status_ = status;
-  auto& d = M5.Display;
-  d.setFont(&fonts::Font2);
-  d.setTextColor(kFg, kBg);
-  d.setTextDatum(textdatum_t::middle_center);
-  d.setTextPadding(kW);
-  d.drawString(status, kW / 2, kStatusY);
-  d.setTextDatum(textdatum_t::middle_left);
+void DanceView::setVisibleRows(int y0, int y1) {
+  if (y0 == visTop_ && y1 == visBottom_) return;
+  if (y0 < visTop_ || y1 > visBottom_) full_ = true;  // rows came back: push them all
+  visTop_ = y0;
+  visBottom_ = y1;
 }
 
 DanceView::Rect DanceView::bounds(const dance::Pose& p) {
@@ -199,6 +160,7 @@ void DanceView::drawCrab(const crab::Pose& p, float weight, bool flash) {
     uint8_t pal[crab::kPaletteSize][3];
     crab::paletteAt(step, pal);
     for (int i = 0; i < crab::kPaletteSize; ++i) ink_[i] = lgfx::color565(pal[i][0], pal[i][1], pal[i][2]);
+    ink_[0] = kBg;  // the art's background is the UI's: the box doesn't show
     paletteStep_ = step;
   }
   // The blitter hands out palette indices; this canvas turns them into colours.
@@ -222,10 +184,15 @@ void DanceView::drawCrab(const crab::Pose& p, float weight, bool flash) {
 
 void DanceView::pushRect(const Rect& r) {
   if (r.empty()) return;
+  // Only the rows no overlay holds.
+  const int y0 = std::max(kBoxY + r.y0, visTop_);
+  const int y1 = std::min(kBoxY + r.y1, visBottom_);
+  if (y1 <= y0) return;
   auto& d = M5.Display;
   // M5GFX clips the push to the display's clip rectangle: only these pixels
-  // are converted and sent.
-  d.setClipRect(kBoxX + r.x0, kBoxY + r.y0, r.x1 - r.x0, r.y1 - r.y0);
+  // are converted and sent. Each push is its own (short) bus hold.
+  LcdLock lock;
+  d.setClipRect(kBoxX + r.x0, y0, r.x1 - r.x0, y1 - y0);
   sprite_.pushSprite(&d, kBoxX, kBoxY);
   d.clearClipRect();
 }

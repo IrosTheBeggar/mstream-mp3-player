@@ -2,11 +2,12 @@
 #include <Arduino.h>
 #include <M5GFX.h>
 
+#include "InputEvent.h"
 #include "KineticScroll.h"
 #include "LibraryIndex.h"
 #include "ScrollGovernor.h"
-#include "app/Haptics.h"
 #include "audio/Core2AudioBackend.h"
+#include "ui/Input.h"
 #include "ui/LcdLock.h"
 #include "ui/ListScroller.h"
 
@@ -22,8 +23,9 @@
 // for that slice only), with a yield between slices. `cacheRows` row sprites
 // (1 = the spec's single sprite, every row redrawn every frame; up to 6 keeps
 // rows that are still on screen, so a scroll only pushes them). The frame
-// rate is capped by the ScrollGovernor from the ring fill: 15 fps normally,
-// fewer frames, whole-row steps, or none while the decoder's buffer is low.
+// rate is capped by the ScrollGovernor from the ring fill: 30 fps normally
+// (15 in spike 1), fewer frames, whole-row steps, or none while the
+// decoder's buffer is low.
 //
 // Modes: w0 interactive (drag, flick, rail scrub, header taps switch the
 // view); w1 a 60 s stress of full-speed flicks up and down plus A-Z jumps,
@@ -38,23 +40,35 @@
 // longest SPI hold, ring fill minimum, underruns, decode load, internal
 // heap minimum, governor level; a summary at the end of a stress.
 //
-// Scroll round 2 (docs/UI-SPIKE.md) adds three options, to A/B against the
-// path above:
+// Scroll round 2 (docs/UI-SPIKE.md) added options to A/B against the path
+// above:
 //   wm0  full redraw, as above (spike 1)
-//   wm1  hardware vertical scroll (ui/ListScroller): the tab bar and header
+//   wm1  hardware vertical scroll (ui/ListScroller), the default since the
+//        user saw it on the device ("much smoother"): the tab bar and header
 //        are the fixed top area; a move of up to kHwMaxStep lines renders
-//        first, then pushes only the newly exposed lines, sends the new
-//        start address and puts the A-Z rail (a 30 x 168 PSRAM sprite) back
-//        where it belongs, in one bus hold; bigger moves redraw in place
-//   wm2  wm1 plus the interaction boost (wb1)
-//   wb0/wb1  the interaction boost off/on, on either path: while the list
-//        is touched or moving (and 300 ms after) and the ring holds >= 900
-//        ms, the decode task yields core 1 to the loop
-//        (Core2AudioBackend::setUiBoost); the loop then rests at least
-//        kBoostRestMs after each frame so the decoder always gets time
+//        first, then pushes only the newly exposed lines and sends the new
+//        start address, in one bus hold; bigger moves redraw in place
 //   wp0 / wp1 / wp<x10>  gentle refill at track starts off / on / on at
 //        x10/10 times realtime, 15-40 (Core2AudioBackend::setRefillPacing;
-//        it stays set after the lab closes)
+//        on by default, and it stays set after the lab closes)
+// (The interaction boost, wm2 / wb1, measured worse and was removed.)
+//
+// The polish after the user's look at wm1:
+//   - the A-Z rail sits inside the hardware-scrolled band, so every move
+//     shifted it with the list until it was pushed back: it jittered. It is
+//     now hidden while the list moves (the rows are pushed full width over
+//     its column) and drawn again once the list settles, or at once when a
+//     finger touches the right edge (a scrub);
+//   - flings are capped at 2,000 px/s (KineticScroll, and the input
+//     layer's release velocity): faster, nearly every frame is a full
+//     redraw. The stress's own flicks (wk) may still go faster;
+//   - 30 fps cap (wf30) by default, scheduled from each frame's deadline
+//     rather than from the pass that drew the last one, so a late pass
+//     doesn't push every later frame back.
+// Touches come from the input layer (ui/Input): corrected, as events. The
+// rail's touch zone is x 280 to the screen's edge (a reading clamped at
+// the right edge counts wherever it was corrected to).
+//
 // For each track start while the lab is open it logs the longest frame and
 // the longest loop gap in the 3 s after it ("[scroll] track start: ...");
 // the backend logs how the ring filled ("[audio] refill: ...").
@@ -62,12 +76,12 @@
 // Console (Enter after each): w toggles; w0-w3 modes; wv<0-2> view
 // (artists, albums, tracks); wf<fps> the normal frame cap (0: none); wh<px>
 // slice height (1-42); wc<n> cached row sprites (1-6; the hardware path
-// uses all 6); wd<s> stress length; wg0/wg1 governor
-// off/on; wm<0-2> render path; wb0/wb1 boost; wp<n> refill pacing; ws the
-// settings and last summary; wq closes.
+// uses all 6); wd<s> stress length; wk<px/s> the stress's flick speed;
+// wg0/wg1 governor off/on; wm<0-1> render path; wp<n> refill pacing; ws
+// the settings and last summary; wq closes.
 class ScrollLab : private ListScroller::Painter {
 public:
-  ScrollLab(Core2AudioBackend& audio, Haptics& haptics);
+  ScrollLab(Core2AudioBackend& audio, Input& input);
   ~ScrollLab();
 
   bool open(LibraryIndex* index, int mode);
@@ -75,6 +89,8 @@ public:
   bool active() const { return active_; }
   void command(const char* arg, LibraryIndex* index);
   void loop(uint32_t nowMs);
+  // A glass event from the input layer while the lab is open.
+  void onTouch(const InputEvent& e);
   // The index is about to change under us (a rebuild): close first.
   void indexChanging() { close(); }
 
@@ -87,11 +103,10 @@ private:
   // runs ~1 s before an end) it runs with a note (the card's 77 tracks).
   static constexpr int kMinStressPx = 2000;
   static constexpr int kShortStressPx = 4000;
-  // While boosted, the loop rests at least this long after each frame
-  // (from the frame's end, whatever the cap; w3 has none), so the lowered
-  // decoder gets a defined share of core 1. At priority 0 it shares that
-  // rest with IDLE1 (time slicing), so it gets about half of it.
-  static constexpr uint32_t kBoostRestMs = 20;
+  // The rail's touch zone starts here (to the screen's edge): the panel
+  // reads the right side too far right and stops at 319, which the
+  // correction puts at ~282, so a zone of the rail's 30 px would miss.
+  static constexpr int kRailHitX = 280;
   // The hardware path draws moves of up to this many lines incrementally, in
   // one bus hold (2 rows: ~10.5 ms idle, plus ~2 ms for the rail); bigger
   // moves are full redraws in place (see ListScroller).
@@ -114,7 +129,6 @@ private:
     uint16_t underruns;
     float decode;
     uint32_t heapMin;
-    float boosted;    // share of the second the boost was on (0-1)
     float gapMaxMs;   // longest time between two passes of the lab's loop
   };
 
@@ -122,7 +136,15 @@ private:
   void dropSlots();
   uint32_t count() const;
   bool railShown() const { return view_ != Tracks && count() * 42 > 168; }
+  // The rows' layout width (the rail's column kept free when it can show).
   int rowWidth() const { return railShown() ? 290 : 320; }
+  // The width rows are pushed at: full, over the rail's column, while the
+  // rail is hidden (the list moving).
+  int pushWidth() const { return railShown() && railWanted_ ? 290 : 320; }
+  // The rail shows while the list is still, or while a finger is on it.
+  bool railWanted() const;
+  void hideRail();
+  void showRail(int offset);
   void enterScreen();
   void drawHeader();
   void drawRail(int offset, bool force);
@@ -144,17 +166,16 @@ private:
   bool createRailSprite();
   void drawRailSprite(int offset);
   void setPath(int m);
-  void pollBoost();
   void pollTrackStart(uint32_t nowMs, uint32_t dtMs);
   void setView(View v);
-  void handleTouch(uint32_t nowMs);
+  void scrubRail(int y);
   void stressStep(uint32_t nowMs);
   void perSecond(uint32_t nowMs, bool force);
   void finishStress();
   void printSettings();
 
   Core2AudioBackend& audio_;
-  Haptics& haptics_;
+  Input& input_;
   LibraryIndex* index_ = nullptr;
   bool active_ = false;
   int mode_ = 0;
@@ -163,14 +184,14 @@ private:
   Slot* slots_ = nullptr;  // PSRAM array of kMaxSlots
   int cacheRows_ = 1;
   int sliceH_ = 14;
-  uint32_t normalFrameMs_ = 66;
+  uint32_t normalFrameMs_ = 33;  // 30 fps (wf)
   uint32_t stressMs_ = 60000;
-  // The stress's flick speed (wk<px/s>): 4,000 is spike 1's "full speed";
-  // ~1,000 keeps most frames under kHwMaxStep lines, like a drag.
-  float flickPxPerS_ = 4000.0f;
+  // The stress's flick speed (wk<px/s>): 2,000, the fling cap, by default;
+  // spike 1's "full speed" was 4,000; ~1,000 keeps most frames under
+  // kHwMaxStep lines, like a drag.
+  float flickPxPerS_ = 2000.0f;
   bool governed_ = true;
-  Path path_ = Path::Redraw;
-  bool boost_ = false;
+  Path path_ = Path::Hardware;
 
   ListScroller vscroll_;
   M5Canvas* rail_ = nullptr;  // PSRAM, the hardware path's rail (30 x 168)
@@ -178,23 +199,22 @@ private:
   // or, while a move is prepared, the rows its new lines come from.
   uint32_t keepFirst_ = 0, keepLast_ = 0;
   bool railDue_ = false;  // prepareFixed() rendered the rail: pushFixed() pushes it
+  bool railWanted_ = false;  // this pass: the rail should be on screen (railWanted())
+  bool railUp_ = false;      // the rail is on screen now
 
   KineticScroll scroll_;
   ScrollGovernor gov_;
   ScrollGovernor::Budget budget_;
   int drawnOffset_ = -1;
   bool forceFrame_ = true;
-  uint32_t lastFrameMs_ = 0;
+  uint32_t nextFrameMs_ = 0;  // the next frame's deadline (the cap's cadence)
   uint32_t lastFrameEndMs_ = 0;
   int railThumbY_ = -1;
   char railKey_ = 0;
   int railBucket_ = -1;
 
-  // Touch.
-  bool touching_ = false;
+  // Touch: where the finger landed.
   enum class TouchOn : uint8_t { None, List, Rail, Header, Bar } touchOn_ = TouchOn::None;
-  int touchX_ = 0, touchY_ = 0;
-  uint32_t touchDownMs_ = 0;
 
   // Stress.
   bool stress_ = false;
@@ -216,7 +236,6 @@ private:
   uint32_t ringMin_ = UINT32_MAX;
   uint32_t heapMin_ = UINT32_MAX;
   uint32_t linesPushed_ = 0;  // hardware path: lines drawn this second
-  uint32_t boostMs_ = 0;      // this second, while the boost was on
   uint32_t gapMaxMs_ = 0;     // this second, the longest loop gap
   uint32_t underruns0_ = 0;
   uint64_t busy0_ = 0;
@@ -226,8 +245,6 @@ private:
   uint32_t runUnderruns0_ = 0;
   char lastSummary_[400] = "";
 
-  // Boost changes already logged.
-  uint32_t boostSeen_ = 0;
   // The track start being watched (kStartWatchMs).
   uint32_t startSeen_ = 0;
   bool watching_ = false;

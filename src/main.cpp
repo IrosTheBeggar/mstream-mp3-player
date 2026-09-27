@@ -1,8 +1,11 @@
 // mstream-mp3-player — firmware entry point (M5Stack Core2).
 //
-// Wires the portable core (PlaybackController) to the Core2 audio backend,
-// storage, screen, touch buttons and a serial console. The playlist is the
-// library's files followed by the built-in test tones.
+// Wires the portable core (PlaybackController over the queue and the
+// library index) to the Core2 audio backend, storage, the UI (ui/Ui: the
+// tab bar and its pages, the one owner of the display), the input layer
+// (touch buttons and glass) and a serial console. The queue is restored
+// from the card at boot; the first time it's the whole library followed by
+// the built-in test tones.
 
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -11,18 +14,28 @@
 #include <cmath>
 #include <vector>
 
+#include "ButtonPolicy.h"
 #include "HeadsetKeys.h"
+#include "InputEvent.h"
 #include "PlaybackController.h"
-#include "Track.h"
+#include "QueueModel.h"
+#include "TrackCatalog.h"
 #include "app/DanceMode.h"
 #include "app/Diagnostics.h"
 #include "app/Haptics.h"
+#include "app/Library.h"
+#include "app/Psram.h"
+#include "app/QueueStore.h"
 #include "app/Screenshot.h"
 #include "app/SerialConsole.h"
 #include "audio/Core2AudioBackend.h"
 #include "spike/Spike.h"
 #include "storage/LocalStorage.h"
-#include "ui/DisplayView.h"
+#include "ui/BootScreen.h"
+#include "ui/CalibrationScreen.h"
+#include "ui/Input.h"
+#include "ui/Ui.h"
+#include "ui/UiHost.h"
 
 // Headphones to connect to; set in a gitignored local.ini (see platformio.ini).
 #ifndef BT_SINK_NAME
@@ -32,58 +45,50 @@
 using Output = Core2AudioBackend::Output;
 
 static LocalStorage storage;
-static DisplayView view;
+static BootScreen bootScreen;
 static Core2AudioBackend audio;
-static PlaybackController player(audio);
-static std::vector<Track> library;  // files found in storage
+// The library (a LibraryIndex, the single store) and the play queue (track
+// ids): both in PSRAM, only these small objects in internal RAM.
+static Library library(storage);
+static QueueModel queue(psramAlloc, psramFree);
+static PlaybackController player(audio, queue, library.catalog());
+static QueueStore queueStore(storage, queue, player, library.catalog());
 static DanceMode danceMode(audio, player);
 static Screenshot shot;
 static Haptics haptics;
+// The one input layer: the glass (corrected) and BtnA/B/C, as events.
+static Input input(haptics);
+// What the touch buttons do, the same on every screen.
+static ButtonPolicy buttonPolicy;
+// The touch calibration screen (console a): in PSRAM, made on first use.
+static CalibrationScreen* calibration = nullptr;
+static bool calibrationUp() { return calibration && calibration->active(); }
 // UI spike tools (docs/UI-SPIKE.md): input lab, scroll lab, library index,
 // font and thumbnail probes. Created in PSRAM on first use.
-static Spike spike(audio, haptics, storage);
+static Spike spike(audio, haptics, storage, library, input);
 // Silent test mode (console z), until restart: the output stays on the
 // speaker at volume 0 and headphones connecting don't take it over, so
 // tests can run at night with the headphones connected.
 static bool silent = false;
+// The headphones dropped while they were the output (the tab bar's icon
+// turns red) until they're back or the output moves.
+static bool btLost = false;
+// The UI (ui/Ui): the tab bar and its pages. In PSRAM, made in setup(); up
+// once the boot screen has been shown for kDiagnosticsScreenMs.
+static ui::Ui* userInterface = nullptr;
 
 static constexpr uint32_t kDiagnosticsScreenMs = 3000;
-// Touches above this (screen y) toggle the dance screen (on the dance
-// screen, a tap on the dancer's box cycles the dancer instead); below are
-// the button labels and the touch buttons.
-static constexpr int kDanceTouchMaxY = 200;
 // Volume keys of headphones without absolute volume (AVRCP passthrough):
 // about 1/16 of the range per press, like a phone.
 static constexpr int kHeadphoneVolumeStep = 6;
 
-static std::vector<Track> builtInTones() {
-  return {
-      {"tone:440", "Test tone 440 Hz", "built-in", 0},
-      {"tone:1000", "Test tone 1 kHz", "built-in", 0},
-      {"tone:left", "Left ear only", "built-in", 0},
-      // Click tracks with a known beat, for the dancing figure's tracker.
-      {"tone:click90", "Clicks 90 BPM", "built-in", 60000},
-      {"tone:click120", "Clicks 120 BPM", "built-in", 60000},
-      {"tone:click128", "Clicks 128 BPM", "built-in", 60000},
-      {"tone:click140", "Clicks 140 BPM", "built-in", 60000},
-      {"tone:click174", "Clicks 174 BPM", "built-in", 60000},
-      {"tone:click120off", "Clicks 120 BPM, late start", "built-in", 60000},
-  };
-}
-
 static String kb(uint32_t bytes) { return String(bytes / 1024) + "K"; }
 
-static String mmss(uint32_t ms) {
-  char buf[12];
-  snprintf(buf, sizeof(buf), "%lu:%02lu", (unsigned long)(ms / 60000), (unsigned long)(ms / 1000 % 60));
-  return buf;
-}
-
-static std::vector<DisplayView::Row> diagnosticsRows() {
+static std::vector<BootScreen::Row> diagnosticsRows() {
   esp_chip_info_t chip;
   esp_chip_info(&chip);
   const diag::Heap h = diag::heap();
-  std::vector<DisplayView::Row> rows;
+  std::vector<BootScreen::Row> rows;
   rows.push_back({"Board", diag::boardName()});
   rows.push_back({"Power chip", diag::pmicName()});
   rows.push_back({"IMU", diag::imuName()});
@@ -93,7 +98,9 @@ static std::vector<DisplayView::Row> diagnosticsRows() {
   rows.push_back({"PSRAM", kb(ESP.getPsramSize()) + " (" + kb(h.psramFree) + " free)"});
   rows.push_back({"Last reset", diag::resetReason()});
   rows.push_back({"Battery", String(M5.Power.getBatteryLevel()) + "%"});
-  rows.push_back({"Library", String(storage.name()) + ", " + library.size() + " tracks"});
+  const LibraryIndex* index = library.index();
+  const uint32_t tracks = index && index->ready() ? index->trackCount() : 0;
+  rows.push_back({"Library", String(storage.name()) + ", " + tracks + " tracks"});
   rows.push_back({"RAM free", kb(h.internalFree) + " (min " + kb(h.internalMin) + ", block " +
                                   kb(h.internalLargest) + ")"});
   return rows;
@@ -118,26 +125,26 @@ static void enterSilentMode() {
   Serial.println("[test] silent mode: speaker muted, bluetooth won't take over");
 }
 
-// A spike screen (the scroll lab, a probe) owns the display while it's up:
-// the dance screen would draw over it (and, with the lab's hardware scroll
-// on, into GRAM the panel shows rotated, which the lab never redraws).
-static bool spikeHasScreen() {
-  if (!spike.ownsScreen()) return false;
-  Serial.println("[dance] not while a spike screen is up (close it first)");
-  return true;
+// A screen of its own (the touch calibration, a spike screen: the scroll
+// lab, a probe) owns the display while it's up: the UI is suspended.
+static bool screenTaken() { return calibrationUp() || spike.ownsScreen(); }
+
+// A spike command is running: the UI stays suspended until it's done (a
+// screen it closes on the way mustn't bring the UI back in between).
+static bool uiHeld = false;
+
+// The UI draws again once no other screen has the display.
+static void uiResume() {
+  if (userInterface && !uiHeld && !screenTaken()) userInterface->resume();
 }
 
-static void setDance(bool on) {
-  if (spikeHasScreen()) return;
-  danceMode.setActive(on);
-  if (!danceMode.active()) view.forget();  // the now-playing screen redraws in full
-}
-
-static void cycleDancer() {
-  if (spikeHasScreen()) return;
-  const bool was = danceMode.active();
-  danceMode.cycleSkin();
-  if (was && !danceMode.active()) view.forget();  // no sprite for either dancer: back to now-playing
+// Console d: the Dance tab, and back to where you were.
+static void toggleDance() {
+  if (screenTaken()) {
+    Serial.println("[dance] not while another screen is up (close it first)");
+    return;
+  }
+  if (userInterface) userInterface->toggleDance();
 }
 
 static bool headphonesSetVolume() {
@@ -167,9 +174,101 @@ static void stepBluetoothVolume(int delta) {
   Serial.printf("[bt] volume %d%%\n", constrain(bt.volume() + delta, 0, 100));
 }
 
-static void pauseIfPlaying() {
-  if (player.state() == PlayState::Playing) player.togglePlayPause();
+static bool pauseIfPlaying() {
+  if (player.state() != PlayState::Playing) return false;
+  player.togglePlayPause();
+  return true;
 }
+
+// What the touch buttons drive (ButtonPolicy decides which button does what).
+struct ButtonTransport : ButtonPolicy::Transport {
+  void prev() override { player.prev(); }
+  void next() override { player.next(); }
+  void playPause() override { player.togglePlayPause(); }
+  bool playing() const override { return player.state() == PlayState::Playing; }
+  void pause() override { (void)pauseIfPlaying(); }
+  void stepVolume(int delta) override { ::stepVolume(delta); }
+  int volume() const override { return audio.volume(); }
+  bool onBluetooth() const override { return audio.output() == Output::Bluetooth; }
+  bool switchOutput() override {
+    if (silent) {
+      Serial.println("[test] silent mode: the output stays on the speaker");
+      return false;
+    }
+    toggleOutput();
+    return true;
+  }
+};
+static ButtonTransport buttonTransport;
+
+// What the UI reads and asks for (ui/UiHost.h).
+struct MainUiHost : ui::UiHost {
+  uint32_t batteryAtMs = 0;
+  uint8_t battery = 0;
+  bool charging = false;
+
+  void snapshot(ui::AppState& s) override {
+    s.play = player.state();
+    s.failed = audio.failed();
+    s.current = queue.current();
+    s.trackId = queue.currentTrack();
+    s.currentKey = queue.currentKey();
+    s.queueSize = queue.size();
+    s.upNext = queue.upNext();
+    s.contentVersion = queue.contentVersion();
+    s.positionVersion = queue.positionVersion();
+    s.positionMs = s.current >= 0 ? audio.positionMs() : 0;
+    s.durationMs = s.current >= 0 ? audio.durationMs() : 0;
+    BtSink& bt = audio.bluetooth();
+    s.onBluetooth = audio.output() == Output::Bluetooth;
+    s.btConnected = bt.connected();
+    s.btLost = btLost && s.onBluetooth && !s.btConnected;
+    snprintf(s.btName, sizeof(s.btName), "%s", bt.deviceName());
+    s.volume = audio.volume();
+    s.speakerVolume = audio.speakerVolume();
+    s.btVolume = bt.volume();
+    s.headphonesSetVolume = headphonesSetVolume();
+    s.silent = silent;
+    // The battery is an I2C read of the power chip: every 10 s is plenty.
+    const uint32_t now = millis();
+    if (batteryAtMs == 0 || now - batteryAtMs >= 10000) {
+      batteryAtMs = now ? now : 1;
+      battery = static_cast<uint8_t>(constrain(M5.Power.getBatteryLevel(), 0, 100));
+      charging = M5.Power.isCharging() == m5::Power_Class::is_charging;
+    }
+    s.battery = battery;
+    s.charging = charging;
+    s.ringMs = audio.bufferedMsNow();
+    s.underruns = audio.underrunsNow();
+    s.ringMatters = audio.isPlaying() && audio.ringSteady();
+    s.feedback = buttonPolicy.feedback();
+  }
+  void playPause() override { player.togglePlayPause(); }
+  void next() override { player.next(); }
+  void prev() override { player.prev(); }
+  void stepVolume(int delta) override { ::stepVolume(delta); }
+  void selectOutput(bool bluetooth) override {
+    const Output want = bluetooth ? Output::Bluetooth : Output::Speaker;
+    if (audio.output() == want) return;
+    if (silent && bluetooth) {
+      Serial.println("[test] silent mode: the output stays on the speaker");
+      return;
+    }
+    // To the speaker: paused first, like the B hold (B plays it again).
+    const bool paused = !bluetooth && pauseIfPlaying();
+    audio.setOutput(want);
+    if (!bluetooth) btLost = false;
+    Serial.printf("[ui] output: %s%s\n", bluetooth ? "bluetooth" : "the speaker", paused ? " (paused first)" : "");
+  }
+  void openCalibration() override;
+  void forgetHeadphones() override {
+    audio.bluetooth().forgetDevice(/*waitMs=*/3000);  // before the restart
+    Serial.println("[bt] forgot the remembered device; restarting to scan");
+    Serial.flush();
+    ESP.restart();
+  }
+};
+static MainUiHost uiHost;
 
 static const char* stateName() {
   if (audio.failed()) return "failed";
@@ -184,9 +283,9 @@ static void printStats() {
   const auto& s = audio.stats();
   const diag::Heap h = diag::heap();
   Serial.printf(
-      "[stats] track=%d %s pos=%.1fs out=%s%s buf=%lums underruns=%lu bt=%lufps load=%.1f%% "
+      "[stats] track=%d/%lu %s pos=%.1fs out=%s%s buf=%lums underruns=%lu bt=%lufps load=%.1f%% "
       "stack_free=%lu ram=%luK min=%luK psram=%luK bat=%d%%\n",
-      player.currentIndex(), stateName(), audio.positionMs() / 1000.0f,
+      player.currentIndex() + 1, (unsigned long)queue.size(), stateName(), audio.positionMs() / 1000.0f,
       audio.output() == Output::Bluetooth ? "bt" : "speaker",
       audio.output() == Output::Bluetooth ? (audio.bluetooth().connected() ? "(connected)" : "(searching)")
       : silent                            ? "(silent test mode)"
@@ -218,11 +317,217 @@ static void printStats() {
 }
 
 static void listTracks() {
-  const auto& tracks = player.playlist();
-  for (size_t i = 0; i < tracks.size(); ++i) {
-    Serial.printf("  %u%s %s\n", (unsigned)i, (int)i == player.currentIndex() ? "*" : " ",
-                  tracks[i].path.c_str());
+  char path[TrackCatalog::kMaxPath];
+  for (uint32_t i = 0; i < queue.size(); ++i) {
+    library.catalog().path(queue.trackAt(i), path, sizeof(path));
+    Serial.printf("  %u%s %s\n", (unsigned)i, (int)i == queue.current() ? "*" : " ",
+                  path[0] ? path : "(not in the library)");
   }
+  queueStore.printStatus();
+}
+
+// The whole library, then the built-in tracks, from the first: played now,
+// or (start false) only queued, stopped, the way the playlist always was.
+static bool queueEverything(bool start) {
+  const LibraryIndex* index = library.index();
+  const LibraryIndex::Span lib = index && index->ready() ? index->allTracks() : LibraryIndex::Span{};
+  const LibraryIndex::Span builtins = TrackCatalog::builtins();
+  const uint32_t n = lib.count + builtins.count;
+  auto* ids = static_cast<uint32_t*>(psramAlloc(n * sizeof(uint32_t)));
+  if (!ids) return false;
+  if (lib.count) memcpy(ids, lib.ids, lib.count * sizeof(uint32_t));
+  memcpy(ids + lib.count, builtins.ids, builtins.count * sizeof(uint32_t));
+  bool ok;
+  if (start) {
+    ok = player.playNow(ids, n, 0);
+  } else {
+    ok = queue.assign(ids, n, 0);
+    player.queueReplaced(false);
+  }
+  psramFree(ids);
+  return ok;
+}
+
+// q...: the queue from the console, until the Queue and Library screens
+// exist. Positions are the ones `l` lists (0-based); albums are numbered by
+// `ql` (A-Z).
+static void queueCommand(const char* a) {
+  const LibraryIndex* index = library.index();
+  const bool haveLibrary = index && index->ready();
+  const char c = a[0];
+  const bool number = c && a[1] >= '0' && a[1] <= '9';
+  const long n = number ? atol(a + 1) : -1;
+  switch (c) {
+    case 0:
+      break;
+    case 'a':
+      queueEverything(true);
+      break;
+    case 'b': {
+      const LibraryIndex::Span b = TrackCatalog::builtins();
+      player.playNow(b.ids, b.count, 0);
+      break;
+    }
+    case 'l':
+      if (!haveLibrary) break;
+      for (uint32_t i = 0; i < index->albumCount(); ++i) {
+        const uint32_t album = index->albumsAZ()[i];
+        Serial.printf("  %lu  %s - %s (%lu)\n", (unsigned long)i, index->artistName(index->album(album).artist),
+                      index->albumName(album), (unsigned long)index->album(album).trackCount);
+      }
+      break;
+    case 'p':
+    case 'n':
+    case '+': {
+      if (!haveLibrary || n < 0 || static_cast<uint32_t>(n) >= index->albumCount()) {
+        Serial.println("[queue] no such album (ql lists them)");
+        break;
+      }
+      const LibraryIndex::Span t = index->tracksOfAlbum(index->albumsAZ()[n]);
+      const bool ok = c == 'p' ? player.playNow(t.ids, t.count, 0)
+                      : c == 'n' ? player.playNext(t.ids, t.count)
+                                 : player.addToQueue(t.ids, t.count);
+      Serial.printf("[queue] %s %s: %lu tracks%s\n", c == 'p' ? "playing" : c == 'n' ? "plays next:" : "added",
+                    index->albumName(index->albumsAZ()[n]), (unsigned long)t.count, ok ? "" : " (NO MEMORY)");
+      break;
+    }
+    case 'r': {
+      if (n < 0) {
+        Serial.println("[queue] qr<n>: remove entry n (l lists them)");
+        break;
+      }
+      const uint32_t pos = static_cast<uint32_t>(n);
+      const QueueModel::Removed r = player.remove(&pos, 1);
+      Serial.printf("[queue] removed %lu%s\n", (unsigned long)r.count, r.current ? " (it was the current one)" : "");
+      break;
+    }
+    case 'c':
+      player.clearUpNext();
+      break;
+    case 'x':
+      player.clearQueue();
+      break;
+    case 'u':
+      Serial.printf("[queue] undo: %s\n", player.undo() ? "done" : "nothing to undo");
+      break;
+    default:
+      Serial.println("[queue] q status, qa play all, qb built-ins, ql albums, qp<n>/qn<n>/q+<n> album n: play / "
+                     "play next / add, qr<pos> remove, qc clear up next, qx clear, qu undo");
+      return;
+  }
+  queueStore.printStatus();
+}
+
+static void openCalibration(int targets, bool check) {
+  if (!calibration) {
+    calibration = psramNew<CalibrationScreen>(input);
+    if (!calibration) {
+      Serial.println("[input] no PSRAM for the calibration screen");
+      return;
+    }
+    calibration->onClosed(uiResume);  // the UI draws again
+  }
+  // It takes the screen: whatever had it lets go first.
+  if (userInterface) userInterface->suspend();
+  spike.closeAll();
+  if (danceMode.active()) danceMode.setActive(false);
+  input.cancelTouch(millis());
+  if (check) {
+    calibration->openCheck();
+  } else {
+    calibration->open(targets);
+  }
+}
+
+void MainUiHost::openCalibration() { ::openCalibration(CalibrationScreen::kMaxTargets, false); }
+
+static void closeCalibration() {
+  if (calibration) calibration->close();
+}
+
+// a...: the input layer: touch calibration, haptics.
+static void touchCommand(const char* a) {
+  const char c = a[0];
+  const bool on = a[1] == '1';
+  const bool flag = a[1] == '0' || a[1] == '1';
+  if (c == 0) {
+    if (calibrationUp()) {
+      closeCalibration();
+    } else {
+      openCalibration(CalibrationScreen::kMaxTargets, false);
+    }
+    return;
+  }
+  if (c >= '0' && c <= '9') {
+    const int n = atoi(a);
+    if (n < CalibrationScreen::kMinTargets || n > CalibrationScreen::kMaxTargets) {
+      Serial.println("[input] a<n>: 5-9 crosshairs");
+      return;
+    }
+    openCalibration(n, false);
+    return;
+  }
+  if (c == 'q') {
+    closeCalibration();
+    return;
+  }
+  if (c == 'c') {
+    openCalibration(0, true);
+    return;
+  }
+  if (c == 'd') {
+    input.resetCalibration();
+    Serial.println("[input] touch: back to the default table (saved)");
+  } else if (c == 'h' && flag) {
+    input.setHapticsOn(on);
+  } else if (c == 'r' && flag) {
+    input.setRailTicksOn(on);
+  } else if (c != 's') {
+    Serial.println("[input] a calibrate (9 crosshairs; a5-a9: fewer), ac check the touch, as status, ad default "
+                   "table, ah0/ah1 haptics off/on, ar0/ar1 rail ticks off/on, aq close");
+    return;
+  }
+  input.printStatus();
+}
+
+// A spike command may bring its screen up: the UI lets go of the display
+// (and the LCD's hardware scroll, which the scroll lab needs) first, and
+// takes it back if nothing took it.
+// The touch calibration closes first: two screens drawing (and the scroll
+// lab moving the LCD's scroll under the crosshairs) would pair taps with the
+// wrong targets.
+static void spikeCommand(void (Spike::*fn)(const char*), const char* a) {
+  uiHeld = true;
+  if (userInterface) userInterface->suspend();
+  if (calibrationUp()) {
+    Serial.println("[cal] closed: a spike command takes the screen");
+    closeCalibration();
+  }
+  (spike.*fn)(a);
+  uiHeld = false;
+  uiResume();
+}
+
+// uit/uih/uis/uid: a scripted finger on the glass (Input::simulate), for
+// tests without a hand on the device: t<x>,<y> tap; h<x>,<y> long press
+// (800 ms); s<x0>,<y0>,<x1>,<y1>,<ms> swipe and lift (a fling when fast);
+// d<...> the same but resting 150 ms before the lift (a drag, no fling).
+// Screen pixels, as the corrected touch reports them.
+static bool simulatedTouch(const char* a) {
+  const char c = a[0];
+  if (c != 't' && c != 'h' && c != 's' && c != 'd') return false;
+  int v[5] = {0, 0, 0, 0, 0};
+  const int n = sscanf(a + 1, "%d,%d,%d,%d,%d", &v[0], &v[1], &v[2], &v[3], &v[4]);
+  if ((c == 't' || c == 'h') && n >= 2) {
+    input.simulate(v[0], v[1], v[0], v[1], c == 't' ? 60 : 800, 0, 0);
+  } else if ((c == 's' || c == 'd') && n == 5 && v[4] > 0) {
+    input.simulate(v[0], v[1], v[2], v[3], 30, static_cast<uint32_t>(v[4]), c == 'd' ? 150 : 0);
+  } else {
+    Serial.println("[input] uit<x>,<y> tap, uih<x>,<y> long press, uis<x0>,<y0>,<x1>,<y1>,<ms> swipe, uid... drag");
+    return true;
+  }
+  Serial.printf("[input] scripted finger: %s\n", a);
+  return true;
 }
 
 static SerialConsole console({
@@ -238,10 +543,11 @@ static SerialConsole console({
     listTracks,
     [](int i) { player.play(static_cast<size_t>(i)); },
     [](int i) {
-      const auto& tracks = player.playlist();
-      if (i < 0 || static_cast<size_t>(i) >= tracks.size()) return;
+      if (i < 0 || static_cast<uint32_t>(i) >= queue.size()) return;
+      char path[TrackCatalog::kMaxPath];
+      library.catalog().path(queue.trackAt(i), path, sizeof(path));
       player.stop();
-      audio.bench(tracks[i].path);
+      audio.bench(path);
     },
     [] {
       audio.bluetooth().forgetDevice(/*waitMs=*/3000);  // before the restart
@@ -259,8 +565,8 @@ static SerialConsole console({
       Serial.printf("[bt] headroom -%d dB (until restart; the stats line shows it once applied)\n", db);
     },
     enterSilentMode,
-    [] { setDance(!danceMode.active()); },
-    cycleDancer,
+    toggleDance,
+    [] { danceMode.cycleSkin(); },
     [](bool full) {
       DanceView& v = danceMode.view();
       M5Canvas* figure = danceMode.active() ? &v.sprite() : nullptr;  // what the box should show
@@ -278,45 +584,78 @@ static SerialConsole console({
       Serial.printf("[dance] latency offset %+d ms (not saved)\n", ms);
     },
     [](int n) { danceMode.freeze(n); },
-    [](const char* a) { spike.inputLab(a); },
-    [](const char* a) { spike.scrollLab(a); },
-    [](const char* a) { spike.index(a); },
-    [](const char* a) { spike.fontProbe(a); },
-    [](const char* a) { spike.thumbProbe(a); },
+    [](const char* a) {
+      // ui (u + "i"): the UI's navigation state; ui0-ui4 a tab, uib back.
+      if (a[0] == 'i') {
+        if (simulatedTouch(a + 1)) return;
+        if (userInterface) userInterface->command(a + 1);
+        return;
+      }
+      spikeCommand(&Spike::inputLab, a);
+    },
+    [](const char* a) { spikeCommand(&Spike::scrollLab, a); },
+    [](const char* a) { spikeCommand(&Spike::index, a); },
+    [](const char* a) { spikeCommand(&Spike::fontProbe, a); },
+    [](const char* a) { spikeCommand(&Spike::thumbProbe, a); },
+    queueCommand,
+    touchCommand,
 });
 
-static void handleButtons() {
-  // The input lab logs the buttons and the glass instead (a B-hold would
-  // switch the output mid-test).
-  if (spike.ownsInput()) return;
-  // The three touch buttons under the screen: click, or hold for half a second.
-  if (M5.BtnA.wasClicked()) player.prev();
-  if (M5.BtnA.wasHold()) stepVolume(-10);
-  if (M5.BtnB.wasClicked()) player.togglePlayPause();
-  if (M5.BtnB.wasHold()) toggleOutput();
-  if (M5.BtnC.wasClicked()) player.next();
-  if (M5.BtnC.wasHold()) stepVolume(+10);
-  // A tap on the screen itself (not the button strip) toggles the dance
-  // screen; on the dance screen, a tap on the dancer's box cycles the dancer.
-  // A spike screen (scroll lab, probes) takes the glass for itself.
-  for (size_t i = 0; !spike.ownsScreen() && i < M5.Touch.getCount(); ++i) {
-    const auto& t = M5.Touch.getDetail(i);
-    if (!t.wasClicked() || t.y < 0 || t.y >= kDanceTouchMaxY) continue;
-    if (danceMode.active() && DanceView::inBox(t.x, t.y)) {
-      cycleDancer();
-    } else {
-      setDance(!danceMode.active());
-    }
+// Touch buttons: the same on every screen (ButtonPolicy). Each click and
+// hold is logged; repeats show as the volume lines.
+static void handleButton(const InputEvent& e) {
+  if (!buttonPolicy.handle(e, buttonTransport)) return;
+  if (e.type == InputEvent::Type::Repeat) return;
+  const char b = static_cast<char>('A' + e.button);
+  const ButtonPolicy::Feedback& f = buttonPolicy.feedback();
+  if (e.type == InputEvent::Type::Hold && f.kind == ButtonPolicy::Hud::Output) {
+    Serial.printf("[button] B hold: output to %s%s%s\n", f.toBluetooth ? "bluetooth" : "the speaker",
+                  f.paused ? " (paused first: B plays)" : "", f.refused ? ": refused" : "");
+  } else if (e.type == InputEvent::Type::Click) {
+    Serial.printf("[button] %c click: %s\n", b, b == 'A' ? "previous" : b == 'B' ? "play/pause" : "next");
   }
 }
 
+// Every input event, to whoever owns the screen: the calibration screen, a
+// spike screen, or the UI. The input lab reads the panel and the buttons
+// itself: no events while it's open.
+static void handleInput(uint32_t now) {
+  input.setSuspended(spike.ownsInput());
+  input.update(now);
+  for (InputEvent e; input.poll(e);) {
+    if (e.isButton()) {
+      handleButton(e);
+      continue;
+    }
+    if (calibrationUp()) {
+      calibration->onEvent(e);
+      continue;
+    }
+    if (spike.onGlass(e)) continue;
+    // A line per touch (its landing and how it ended): what a finger did is
+    // in the log next to what it caused.
+    using T = InputEvent::Type;
+    if (e.type == T::Down || e.type == T::Tap || e.type == T::LongPress || e.type == T::Fling) {
+      Serial.printf("[touch] %s %d,%d (raw %d,%d)%s\n", InputEvent::name(e.type), e.x, e.y, e.rawX, e.rawY,
+                    input.scriptedTouch() ? " scripted" : "");
+    }
+    if (userInterface) userInterface->onEvent(e);
+  }
+}
+
+// The link-up volume cap lands within this long of a connection: not a HUD.
+static constexpr uint32_t kLinkUpQuietMs = 2000;
+
 // Link changes and headphone buttons, queued by BtSink on the Bluetooth tasks.
 static void handleBluetooth() {
+  static uint32_t connectedAtMs = 0;
   BtSink& bt = audio.bluetooth();
   for (BtSink::Event e = bt.takeEvent(); e != BtSink::Event::None; e = bt.takeEvent()) {
     switch (e) {
       case BtSink::Event::Connected:
         Serial.printf("[bt] connected%s%s\n", bt.deviceName()[0] ? " to " : "", bt.deviceName());
+        connectedAtMs = millis();
+        btLost = false;
         if (silent) {
           Serial.println("[test] silent mode: staying on the speaker");
         } else {
@@ -326,16 +665,25 @@ static void handleBluetooth() {
         break;
       case BtSink::Event::Disconnected:
         Serial.println("[bt] disconnected");
-        // Like a phone: don't carry on through the speaker, pause.
-        if (audio.output() == Output::Bluetooth) pauseIfPlaying();
+        // Like a phone: don't carry on through the speaker, pause (and say why).
+        if (audio.output() == Output::Bluetooth) {
+          btLost = true;
+          if (pauseIfPlaying() && userInterface) userInterface->headphonesLost();
+        }
         break;
       case BtSink::Event::Suspended:
         // The headphones stopped the stream themselves: show it as paused;
         // play (here or on them) starts it again.
-        if (audio.output() == Output::Bluetooth) pauseIfPlaying();
+        if (audio.output() == Output::Bluetooth) (void)pauseIfPlaying();
         break;
       case BtSink::Event::VolumeChanged:
-        Serial.printf("[bt] volume now %u%%\n", bt.volume());  // the screen follows at its next redraw
+        // The headphones' own keys with absolute volume (or the link-up cap,
+        // just after connecting: no HUD for that). The Output tab's % follows
+        // at its next redraw either way.
+        Serial.printf("[bt] volume now %u%%\n", bt.volume());
+        if (userInterface && bt.connected() && millis() - connectedAtMs >= kLinkUpQuietMs) {
+          userInterface->volumeKeys();  // the same HUD as the A/C holds
+        }
         break;
       // Transport keys: HeadsetKeys decides (headphone input never starts
       // music that wasn't playing); this adds the output and the stream.
@@ -369,65 +717,16 @@ static void handleBluetooth() {
       }
       case BtSink::Event::VolumeUp:
         stepBluetoothVolume(+kHeadphoneVolumeStep);
+        if (userInterface) userInterface->volumeKeys();  // the same HUD as the A/C holds
         break;
       case BtSink::Event::VolumeDown:
         stepBluetoothVolume(-kHeadphoneVolumeStep);
+        if (userInterface) userInterface->volumeKeys();
         break;
       case BtSink::Event::None:
         break;
     }
   }
-}
-
-static void render() {
-  DisplayView::NowPlaying np;
-  const Track* t = player.currentTrack();
-  const auto& tracks = player.playlist();
-  np.battery = String(M5.Power.getBatteryLevel()) + "%";
-  np.position = "No tracks";
-  if (t) {
-    np.position = "Track " + String(player.currentIndex() + 1) + " of " + String(tracks.size());
-    const std::string tagTitle = audio.trackTitle();
-    np.title = tagTitle.empty() ? t->title.c_str() : tagTitle.c_str();
-  }
-  // "Artist  -  MP3, 44100 Hz": tag artist, else the track's, then what's decoding.
-  std::string artist = audio.trackArtist();
-  if (artist.empty() && t) artist = t->artist;
-  const std::string desc = audio.description();
-  np.subtitle = artist.c_str();
-  if (!artist.empty() && !desc.empty()) np.subtitle += "  -  ";
-  np.subtitle += desc.c_str();
-
-  const String at = mmss(audio.positionMs());
-  switch (player.state()) {
-    case PlayState::Playing: np.status = "Playing  " + at; break;
-    case PlayState::Paused: np.status = "Paused  " + at; break;
-    case PlayState::Stopped: np.status = "Stopped"; break;
-  }
-  if (audio.failed()) np.status = "Can't play";
-
-  np.output = "Speaker";
-  if (audio.output() == Output::Bluetooth) {
-    BtSink& bt = audio.bluetooth();
-    if (!bt.connected()) {
-      np.output = "Bluetooth: looking for headphones...";
-    } else if (bt.deviceName()[0]) {
-      np.output = "Bluetooth: " + String(bt.deviceName());
-    } else {
-      np.output = "Bluetooth: connected";
-    }
-  }
-  np.volume = "Volume " + String(audio.volume()) + "%";
-  if (headphonesSetVolume()) np.volume += " (headphones)";
-  np.note = audio.note().c_str();
-
-  const auto& s = audio.stats();
-  char stats[80];
-  snprintf(stats, sizeof(stats), "buf %lums  underruns %lu  cpu %.1f%%  ram %luK",
-           (unsigned long)s.bufferedMs, (unsigned long)s.underruns, s.decodeLoad * 100.0f,
-           (unsigned long)(diag::heap().internalFree / 1024));
-  np.stats = stats;
-  view.showNowPlaying(np);
 }
 
 void setup() {
@@ -438,13 +737,9 @@ void setup() {
   Serial.println("\nmstream-mp3-player");
   diag::logHeap("boot");
 
-  view.begin();
+  bootScreen.begin();
 
   storage.begin();
-  const uint32_t freeBeforeList = diag::heap().internalFree;
-  library = storage.listTracks();
-  const int32_t libraryMeasured = static_cast<int32_t>(freeBeforeList) - static_cast<int32_t>(diag::heap().internalFree);
-  Serial.printf("[lib] %s: %u tracks\n", storage.name(), (unsigned)library.size());
   diag::logHeap("storage");
 
   if (!audio.begin(storage.available() ? &storage.fs() : nullptr, BT_SINK_NAME)) {
@@ -452,44 +747,56 @@ void setup() {
   }
   diag::logHeap("audio");
 
-  // Today's track list costs internal RAM twice: `library` and the
-  // player's copy. Measured here for the UI spike's report (g); the library
-  // index (PSRAM) is meant to replace both.
-  const uint32_t freeBeforePlaylist = diag::heap().internalFree;
-  {
-    // Sized exactly before the copy: the player keeps this vector, so any
-    // growth slack (a push_back past a copy's capacity doubles it) would stay
-    // in internal RAM for good. Same final layout as copying into
-    // setPlaylist's by-value parameter, without the transient second copy.
-    const std::vector<Track> tones = builtInTones();
-    std::vector<Track> playlist;
-    playlist.reserve(library.size() + tones.size());
-    playlist.insert(playlist.end(), library.begin(), library.end());
-    playlist.insert(playlist.end(), tones.begin(), tones.end());
-    player.setPlaylist(std::move(playlist));
+  // The library (from the card's cache when /music is unchanged) and the
+  // queue as it was. Both live in PSRAM: this measures what they still cost
+  // in internal RAM (the old std::vector<Track> playlist, 77 tracks, took
+  // ~13 KB for its two copies).
+  const uint32_t freeBeforeLibrary = diag::heap().internalFree;
+  library.begin();
+  if (!queueStore.restore()) {
+    queueEverything(false);
+    Serial.printf("[queue] no saved queue: the whole library, %lu tracks with the built-in ones\n",
+                  (unsigned long)queue.size());
   }
-  const int32_t playlistMeasured =
-      static_cast<int32_t>(freeBeforePlaylist) - static_cast<int32_t>(diag::heap().internalFree);
-  spike.setTrackListCost(static_cast<uint32_t>(library.size()), libraryMeasured, playlistMeasured,
-                         Spike::estimateBytes(library), Spike::estimateBytes(player.playlist()));
+  Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
+                (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);
+  diag::logHeap("library");
 
   const auto rows = diagnosticsRows();
   for (const auto& row : rows) Serial.printf("[diag] %-10s %s\n", row.label.c_str(), row.value.c_str());
-  view.showDiagnostics(rows);
+  bootScreen.show(rows);
   const char* headphones = audio.bluetooth().sinkName();
   Serial.printf("[bt] headphones: %s\n",
                 headphones[0] ? ("name contains \"" + String(headphones) + "\"").c_str() : "any very close device");
   danceMode.begin();
   diag::logHeap("dance");
   haptics.begin();
-  spike.onScreenReleased([] { view.forget(); });  // the now-playing screen redraws in full
-  spike.begin();  // the library index, from the card
-  diag::logHeap("index");
+  input.begin();
+  spike.onScreenReleased(uiResume);  // the UI draws again
+  spike.onRebuild([] {
+    const bool ok = queueStore.remap([](void*) { return library.rebuild(); }, nullptr);
+    if (userInterface) userInterface->libraryChanged();  // every index id changed
+    return ok;
+  });
+  // The UI, in PSRAM (its sprites too): it takes the display after the boot screen.
+  const uint32_t freeBeforeUi = diag::heap().internalFree;
+  userInterface = psramNew<ui::Ui>(uiHost, input, player, queue, library, danceMode);
+  if (!userInterface || !userInterface->begin()) {
+    Serial.println("[ui] can't start the UI (no PSRAM): the console still works");
+    psramDelete(userInterface);
+    userInterface = nullptr;
+  }
+  Serial.printf("[ui] internal RAM %lu B free before the UI, %lu B after\n", (unsigned long)freeBeforeUi,
+                (unsigned long)diag::heap().internalFree);
+  diag::logHeap("ui");
   Serial.println("[console] n/p next/prev, space play/pause, o output, +/- volume, s stats, l list, "
-                 "f forget bt, z silent test mode, d dance, m next dancer, x/X screenshot dancer/screen, v beat log; "
+                 "f forget bt, z silent test mode, d dance tab, m next dancer, x/X screenshot dancer/screen, v beat log; "
                  "with Enter: i<n> play, b<n> bench, c<name> headphones name, h<n> bt headroom -n dB, "
+                 "q queue (q? for its commands), a touch calibration (a5-a9 fewer crosshairs, ac check, as status, "
+                 "ad default table, ah0/1 haptics, ar0/1 rail ticks), "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
-                 "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0-2 redraw/hw scroll/+boost, wp refill pacing), "
+                 "ui the UI's navigation (ui0-ui4 tab, uib back, uit/uih/uis/uid scripted finger); "
+                 "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja)");
 }
 
@@ -497,39 +804,44 @@ void loop() {
   M5.update();
   const uint32_t now = millis();
 
-  handleButtons();
+  handleInput(now);
   console.poll();
   handleBluetooth();
   player.update(now);
   audio.loop(now);
+  queueStore.loop(now);
 
-  // A new track (skip, jump, natural end) drops the tempo prior.
-  static int lastTrack = -1;
-  if (player.currentIndex() != lastTrack) {
-    if (lastTrack >= 0) danceMode.onTrackChanged();
-    lastTrack = player.currentIndex();
+  // A new track (skip, jump, natural end, a queue edit) drops the tempo prior.
+  static uint32_t lastEntry = QueueModel::kNone;
+  if (queue.currentKey() != lastEntry) {
+    if (lastEntry != QueueModel::kNone) danceMode.onTrackChanged();
+    Serial.printf("[queue] now at %d of %lu (%s)\n", queue.current() + 1, (unsigned long)queue.size(), stateName());
+    lastEntry = queue.currentKey();
   }
-  // A spike screen owns the display while it's up: no dance, no now-playing.
+  // A screen of its own (calibration, a spike screen) owns the display
+  // while it's up: the UI is suspended, the dancer too.
   spike.loop(now);
-  if (spike.ownsScreen() && danceMode.active()) danceMode.setActive(false);
-  // The dance screen draws its own frames (~30/s); the now-playing screen waits.
+  if (screenTaken() && danceMode.active()) danceMode.setActive(false);
+  // The dancer (the Dance tab) draws its own frames (~30/s) into its box.
   danceMode.loop(now, silent);
+  // The UI: the tab bar, overlays, the page (list frames on 30 fps deadlines).
+  if (userInterface) {
+    if (!userInterface->started() && now >= kDiagnosticsScreenMs && !screenTaken()) userInterface->start(now);
+    userInterface->loop(now);
+  }
   shot.poll();
 
-  static uint32_t lastDraw = 0;
   static uint32_t lastStats = 0;
   static bool heapLoggedWhilePlaying = false;
   if (!heapLoggedWhilePlaying && audio.isPlaying() && audio.positionMs() > 2000) {
     diag::logHeap("playing");
     heapLoggedWhilePlaying = true;
   }
-  if (!danceMode.active() && !spike.ownsScreen() && now >= kDiagnosticsScreenMs && now - lastDraw >= 250) {
-    render();
-    lastDraw = now;
-  }
   if (now - lastStats >= 5000) {
     printStats();
     lastStats = now;
   }
-  delay(5);
+  // Yield every pass (the decoder runs above the loop on this core), less
+  // while a list frame is due soon.
+  delay(userInterface ? userInterface->idleMs(millis()) : 5);
 }

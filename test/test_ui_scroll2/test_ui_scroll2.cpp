@@ -1,6 +1,7 @@
 // Host tests for the UI spike's scroll round 2 (docs/UI-SPIKE.md): the
-// hardware vertical scroll's bookkeeping (VScrollMap), the interaction boost
-// rule (UiBoost) and the decoder's gentle refill (RefillPacer).
+// hardware vertical scroll's bookkeeping (VScrollMap) and the decoder's
+// gentle refill (RefillPacer). (The interaction boost, UiBoost, measured
+// worse on the device and was removed with its tests.)
 // Run: pio test -e native
 #include <unity.h>
 
@@ -8,7 +9,7 @@
 #include <cstdlib>
 #include <vector>
 
-#include "UiBoost.h"
+#include "RefillPacer.h"
 #include "VScrollMap.h"
 
 void setUp() {}
@@ -231,100 +232,12 @@ void test_vscroll_full_redraw_draws_in_place_under_the_current_address() {
   checkShows(p, m, 37);
 }
 
-// ---- UiBoost ----
-
-void test_boost_follows_interaction_and_lingers() {
-  UiBoost b;  // floor 900, resume 1200, hold-off 300, linger 300
-  TEST_ASSERT_FALSE(b.update(1000, false, 0, 1450, true));  // never active
-  TEST_ASSERT_TRUE(b.update(1000, true, 1000, 1450, true));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(UiBoost::Why::Interacting), static_cast<int>(b.why()));
-  TEST_ASSERT_TRUE(b.update(1300, true, 1000, 1450, true));   // 300 ms after: still
-  TEST_ASSERT_FALSE(b.update(1301, true, 1000, 1450, true));  // then off
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(UiBoost::Why::Idle), static_cast<int>(b.why()));
-  // Nothing playing: on whatever the ring says.
-  TEST_ASSERT_TRUE(b.update(2000, true, 2000, 0, false));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(UiBoost::Why::NotPlaying), static_cast<int>(b.why()));
-  // A track starts under the finger: the ring is empty, off at once.
-  TEST_ASSERT_FALSE(b.update(2010, true, 2010, 0, true));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(UiBoost::Why::BelowFloor), static_cast<int>(b.why()));
-}
-
-void test_boost_hysteresis_on_the_ring() {
-  UiBoost b;
-  // Filling: not on until resumeMs.
-  TEST_ASSERT_FALSE(b.update(0, true, 0, 950, true));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(UiBoost::Why::BelowResume), static_cast<int>(b.why()));
-  TEST_ASSERT_FALSE(b.update(10, true, 10, 1199, true));
-  TEST_ASSERT_TRUE(b.update(20, true, 20, 1200, true));
-  // On: stays on down to the floor...
-  TEST_ASSERT_TRUE(b.update(30, true, 30, 950, true));
-  TEST_ASSERT_TRUE(b.update(40, true, 40, 900, true));
-  // ...and off the moment it's below.
-  TEST_ASSERT_FALSE(b.update(50, true, 50, 899, true));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(UiBoost::Why::BelowFloor), static_cast<int>(b.why()));
-  // Back over the floor isn't enough.
-  TEST_ASSERT_FALSE(b.update(60, true, 60, 1000, true));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(UiBoost::Why::BelowFloor), static_cast<int>(b.why()));
-  // Nor is resumeMs within the hold-off (300 ms from the drop at 50)...
-  TEST_ASSERT_FALSE(b.update(200, true, 200, 1300, true));
-  TEST_ASSERT_FALSE(b.update(349, true, 349, 1400, true));
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(UiBoost::Why::BelowFloor), static_cast<int>(b.why()));
-  // ...but both together are.
-  TEST_ASSERT_TRUE(b.update(350, true, 350, 1400, true));
-  // Below the floor while already off (never boosted): no hold-off.
-  UiBoost c;
-  TEST_ASSERT_FALSE(c.update(0, true, 0, 500, true));
-  TEST_ASSERT_TRUE(c.update(10, true, 10, 1200, true));
-}
-
-// A crude core-1 model: while boosted the decoder produces `boosted` x
-// realtime (the ring drains), otherwise it refills flat out (2.3x for an
-// MP3). Checked every `checkMs` like the firmware's 10 ms timer, for a
-// minute of a finger on the glass. Boosted production, from the lab's
-// numbers (an MP3 needs ~40 % of the core; at priority 0 the decoder gets
-// about half of the loop's sleep, IDLE1 the other half):
-//   - 0.0: the decoder starved outright (the worst case);
-//   - 0.15: full-redraw frames (wm0) with only the 20 ms rest (w3);
-//   - 0.5: wm0 at the 66 ms cap (26-31 ms of rest a frame);
-//   - 0.9: the hardware path's cheap frames.
-// The ring never goes below the floor by more than one check's worth of
-// audio (never near 500 ms), and after each drop the boost stays off for
-// at least the hold-off.
-void test_boost_never_takes_the_ring_below_the_floor() {
-  for (float boosted : {0.0f, 0.15f, 0.5f, 0.9f}) {
-    UiBoost b;
-    float ring = 1440.0f;
-    float lowest = ring;
-    const uint32_t checkMs = 10;
-    uint32_t drops = 0, lastDrop = 0;
-    bool wasOn = false;
-    for (uint32_t t = 0; t < 60000; t += checkMs) {
-      const bool on = b.update(t, true, t, static_cast<uint32_t>(ring), true);
-      if (wasOn && !on) {
-        ++drops;
-        lastDrop = t;
-      }
-      if (!wasOn && on && drops > 0) TEST_ASSERT_TRUE(t - lastDrop >= b.config().holdOffMs);
-      wasOn = on;
-      const float produce = on ? boosted : 2.3f;  // x realtime
-      ring += (produce - 1.0f) * checkMs;
-      if (ring > 1440.0f) ring = 1440.0f;
-      if (ring < lowest) lowest = ring;
-    }
-    TEST_ASSERT_TRUE(lowest >= 900.0f - 1.0f * checkMs);
-    TEST_ASSERT_TRUE(lowest > 500.0f);
-    // Starved: after the first drain, cycles of >= 300 ms off and ~300 ms
-    // on (1,200 -> 900), so no more than ~100 drops a minute; the hardware
-    // path's case drains 300 ms of ring in ~3 s: a handful.
-    TEST_ASSERT_TRUE(drops <= 110);
-    if (boosted >= 0.9f) TEST_ASSERT_TRUE(drops <= 25);
-  }
-}
-
 // ---- RefillPacer ----
 
 void test_pacer_flat_out_when_off_or_low() {
-  RefillPacer::Config c;  // disabled by default: today's behaviour
+  RefillPacer::Config c;
+  TEST_ASSERT_TRUE(c.enabled);  // on by default (1.5x from 500 ms)
+  c.enabled = false;            // off: a plain 1 ms per pass, flat out
   TEST_ASSERT_EQUAL_UINT32(1, RefillPacer::sleepMs(c, 1200, 1024, 44100, 9300));
   c.enabled = true;
   TEST_ASSERT_EQUAL_UINT32(1, RefillPacer::sleepMs(c, 0, 1024, 44100, 9300));
@@ -412,9 +325,6 @@ int main(int, char**) {
   RUN_TEST(test_vscroll_big_jumps_and_invalidate_redraw_everything);
   RUN_TEST(test_vscroll_random_walk_always_shows_the_offset);
   RUN_TEST(test_vscroll_full_redraw_draws_in_place_under_the_current_address);
-  RUN_TEST(test_boost_follows_interaction_and_lingers);
-  RUN_TEST(test_boost_hysteresis_on_the_ring);
-  RUN_TEST(test_boost_never_takes_the_ring_below_the_floor);
   RUN_TEST(test_pacer_flat_out_when_off_or_low);
   RUN_TEST(test_pacer_caps_the_rate_above_the_threshold);
   RUN_TEST(test_pacer_ring_always_grows_above_the_threshold);

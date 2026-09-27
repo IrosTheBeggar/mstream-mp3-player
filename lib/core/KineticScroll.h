@@ -6,7 +6,10 @@
 // friction (0.92 per 15 fps frame, whatever the real frame rate), and the
 // list always comes to rest on a row boundary (a short eased snap). The
 // offset is in pixels, 0 = the first row at the top, growing as the list
-// moves up. Portable: driven by timestamps, no clock of its own.
+// moves up. Flings are capped at maxPxPerS, 2,000 px/s: faster, nearly every
+// frame of the hardware scroll (ui/ListScroller) moves more than its 84-line
+// step and becomes a full redraw (docs/UI-SPIKE.md). Portable: driven by
+// timestamps, no clock of its own.
 class KineticScroll {
 public:
   enum class Phase : uint8_t { Idle, Dragging, Flinging, Snapping };
@@ -16,7 +19,7 @@ public:
     float frictionPerFrame = 0.92f;  // velocity kept per reference frame
     float frameMs = 1000.0f / 15.0f; // the reference frame
     float stopPxPerS = 60.0f;        // a fling slower than this ends (and snaps)
-    float maxPxPerS = 5000.0f;
+    float maxPxPerS = 2000.0f;       // the fling cap
     float snapTauMs = 45.0f;         // the snap's time constant
     uint32_t velocityWindowMs = 60;  // release velocity over this much of the drag
   };
@@ -33,6 +36,10 @@ public:
   void press(uint32_t ms, int y);
   void drag(uint32_t ms, int y);
   void release(uint32_t ms);
+  // The same with the release velocity measured by the caller (the input
+  // layer's DragEnd, already capped): `pxPerS` in offset units (positive:
+  // the list moves up, so a finger moving up at v px/s is -vy).
+  void release(uint32_t ms, float pxPerS);
   // Starts a fling at `pxPerS` (positive: the offset grows, the list moves up).
   void fling(uint32_t ms, float pxPerS);
   // Jumps (A-Z rail, jump grid), no animation; stops any motion.

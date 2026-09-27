@@ -42,6 +42,82 @@ uint32_t pow2AtLeast(uint32_t n) {
   return p;
 }
 
+// The first id in `ids` (sorted by textfold::compare, then id) whose name
+// is `name`, or kNone. compare() is a total order (names that fold alike
+// fall back to their bytes), so the equal run is the name itself.
+template <typename NameOf>
+uint32_t findByName(const uint32_t* ids, uint32_t n, const char* name, NameOf nameOf) {
+  uint32_t lo = 0, hi = n;
+  while (lo < hi) {
+    const uint32_t mid = lo + (hi - lo) / 2;
+    if (textfold::compare(nameOf(ids[mid]), name) < 0) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo < n && std::strcmp(nameOf(ids[lo]), name) == 0 ? ids[lo] : LibraryIndex::kNone;
+}
+
+// ---- the cache file ----
+// Little-endian 32-bit words: the header, then the blocks as they are in
+// memory (the arena, the four record tables, the views), then an FNV-1a sum
+// of everything before it. Same compiler, same layout: a record size that
+// changed makes the file Corrupt, and the version is bumped when a record's
+// meaning changes.
+constexpr uint32_t kMagic = 0x494C504Du;  // "MPLI"
+constexpr uint32_t kVersion = 1;
+constexpr int kCountWords = 10;           // magic .. folders
+constexpr int kHeaderWords = kCountWords + 2 * (LibraryIndex::kBuckets + 1);
+constexpr uint32_t kMaxRecords = 1u << 22;  // a damaged header must not ask for gigabytes
+constexpr uint32_t kMaxArena = 256u << 20;
+
+uint32_t recordSizes() {
+  return static_cast<uint32_t>(sizeof(LibraryIndex::Track)) |
+         static_cast<uint32_t>(sizeof(LibraryIndex::Artist)) << 8 |
+         static_cast<uint32_t>(sizeof(LibraryIndex::Album)) << 16 |
+         static_cast<uint32_t>(sizeof(LibraryIndex::Folder)) << 24;
+}
+
+struct Fnv32 {
+  uint32_t h = 2166136261u;
+  void add(const void* data, size_t n) {
+    const auto* p = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < n; ++i) {
+      h ^= p[i];
+      h *= 16777619u;
+    }
+  }
+};
+
+class SummingSink : public ByteSink {
+public:
+  explicit SummingSink(ByteSink& out) : out_(out) {}
+  bool write(const void* data, size_t n) override {
+    if (n == 0) return true;
+    sum.add(data, n);
+    return out_.write(data, n);
+  }
+  Fnv32 sum;
+
+private:
+  ByteSink& out_;
+};
+
+class SummingSource : public ByteSource {
+public:
+  explicit SummingSource(ByteSource& in) : in_(in) {}
+  size_t read(void* data, size_t n) override {
+    const size_t got = in_.read(data, n);
+    sum.add(data, got);
+    return got;
+  }
+  Fnv32 sum;
+
+private:
+  ByteSource& in_;
+};
+
 }  // namespace
 
 LibraryIndex::LibraryIndex(AllocFn alloc, FreeFn release)
@@ -596,4 +672,130 @@ LibraryIndex::Memory LibraryIndex::memory() const {
   m.total = m.strings + m.tracks + m.artists + m.albums + m.folders + m.views;
   m.buildPeak = buildPeak_;
   return m;
+}
+
+uint32_t LibraryIndex::findTrack(const char* path) const {
+  if (!ready_ || !path) return kNone;
+  const char* root = folderName(rootFolder());
+  const size_t rootLen = std::strlen(root);
+  if (std::strncmp(path, root, rootLen) != 0 || path[rootLen] != '/') return kNone;
+  char name[256];
+  uint32_t folder = rootFolder();
+  for (const char* p = path + rootLen + 1;;) {
+    const char* slash = std::strchr(p, '/');
+    const size_t len = slash ? static_cast<size_t>(slash - p) : std::strlen(p);
+    if (len >= sizeof(name)) return kNone;
+    if (slash && len == 0) {  // "a//b": addFile() skips empty names too
+      p = slash + 1;
+      continue;
+    }
+    std::memcpy(name, p, len);
+    name[len] = 0;
+    if (!slash) {
+      const Span files = filesIn(folder);
+      return findByName(files.ids, files.count, name, [&](uint32_t id) { return trackFileName(id); });
+    }
+    const Span sub = subfolders(folder);
+    folder = findByName(sub.ids, sub.count, name, [&](uint32_t id) { return folderName(id); });
+    if (folder == kNone) return kNone;
+    p = slash + 1;
+  }
+}
+
+bool LibraryIndex::save(ByteSink& out, uint64_t signature) const {
+  if (!ready_) return false;
+  uint32_t h[kHeaderWords] = {};
+  h[0] = kMagic;
+  h[1] = kVersion;
+  h[2] = recordSizes();
+  h[3] = static_cast<uint32_t>(signature);
+  h[4] = static_cast<uint32_t>(signature >> 32);
+  h[5] = arenaB_.size;
+  h[6] = trackN_;
+  h[7] = artistN_;
+  h[8] = albumN_;
+  h[9] = folderN_;
+  std::memcpy(h + kCountWords, artistBuckets_, sizeof(artistBuckets_));
+  std::memcpy(h + kCountWords + kBuckets + 1, albumBuckets_, sizeof(albumBuckets_));
+  SummingSink s(out);
+  const bool ok = s.write(h, sizeof(h)) && s.write(arena_, arenaB_.size) &&
+                  s.write(tracks_, static_cast<size_t>(trackN_) * sizeof(Track)) &&
+                  s.write(artists_, static_cast<size_t>(artistN_) * sizeof(Artist)) &&
+                  s.write(albums_, static_cast<size_t>(albumN_) * sizeof(Album)) &&
+                  s.write(folders_, static_cast<size_t>(folderN_) * sizeof(Folder)) &&
+                  s.write(viewsBlock_, viewsBytes_);
+  const uint32_t sum = s.sum.h;
+  return ok && out.write(&sum, sizeof(sum));
+}
+
+template <typename T>
+bool LibraryIndex::readBlock(ByteSource& in, Block<T>& b, uint32_t n) {
+  if (n == 0) return true;
+  b.data = static_cast<T*>(alloc(static_cast<size_t>(n) * sizeof(T)));
+  if (!b.data) return false;
+  b.cap = b.size = n;
+  return readFully(in, b.data, static_cast<size_t>(n) * sizeof(T));
+}
+
+LibraryIndex::Load LibraryIndex::load(ByteSource& in, uint64_t signature) {
+  clear();
+  SummingSource s(in);
+  uint32_t h[kHeaderWords];
+  if (!readFully(s, h, sizeof(h)) || h[0] != kMagic || h[1] != kVersion || h[2] != recordSizes()) {
+    return Load::Corrupt;
+  }
+  if ((static_cast<uint64_t>(h[4]) << 32 | h[3]) != signature) return Load::Stale;
+  const uint32_t arenaBytes = h[5], nT = h[6], nA = h[7], nB = h[8], nF = h[9];
+  if (arenaBytes == 0 || arenaBytes > kMaxArena || nT > kMaxRecords || nA > kMaxRecords || nB > kMaxRecords ||
+      nF == 0 || nF > kMaxRecords) {
+    return Load::Corrupt;
+  }
+  const size_t words = static_cast<size_t>(nA) + nB + nB + nT + nF + nT;
+  const size_t viewsBytes = (words ? words : 1) * sizeof(uint32_t);
+
+  // Into blocks of exactly the saved size; on any failure clear() gives
+  // every block back.
+  auto fail = [&](Load why) {
+    clear();
+    return why;
+  };
+  bool noMemory = false;
+  auto block = [&](auto& b, uint32_t n) {
+    if (readBlock(s, b, n)) return true;
+    noMemory = !b.data;
+    return false;
+  };
+  if (!block(arenaB_, arenaBytes) || !block(tracksB_, nT) || !block(artistsB_, nA) || !block(albumsB_, nB) ||
+      !block(foldersB_, nF)) {
+    return fail(noMemory ? Load::NoMemory : Load::Corrupt);
+  }
+  viewsBlock_ = static_cast<uint32_t*>(alloc(viewsBytes));
+  if (!viewsBlock_) return fail(Load::NoMemory);
+  viewsBytes_ = viewsBytes;
+  if (!readFully(s, viewsBlock_, viewsBytes)) return fail(Load::Corrupt);
+  const uint32_t want = s.sum.h;
+  uint32_t sum = 0;
+  if (!readFully(in, &sum, sizeof(sum)) || sum != want || arenaB_.data[arenaBytes - 1] != 0) {
+    return fail(Load::Corrupt);
+  }
+
+  std::memcpy(artistBuckets_, h + kCountWords, sizeof(artistBuckets_));
+  std::memcpy(albumBuckets_, h + kCountWords + kBuckets + 1, sizeof(albumBuckets_));
+  artistsAZ_ = viewsBlock_;
+  albumsAZ_ = artistsAZ_ + nA;
+  albumsByArtist_ = albumsAZ_ + nB;
+  tracksByAlbum_ = albumsByArtist_ + nB;
+  folderChildren_ = tracksByAlbum_ + nT;
+  folderFiles_ = folderChildren_ + nF;
+  arena_ = arenaB_.data;
+  tracks_ = tracksB_.data;
+  artists_ = artistsB_.data;
+  albums_ = albumsB_.data;
+  folders_ = foldersB_.data;
+  trackN_ = nT;
+  artistN_ = nA;
+  albumN_ = nB;
+  folderN_ = nF;
+  ready_ = true;
+  return Load::Loaded;
 }

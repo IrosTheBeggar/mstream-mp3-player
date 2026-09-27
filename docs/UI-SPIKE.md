@@ -11,7 +11,7 @@ the serial console and can stay in the firmware as diagnostics.
 | Hold versus click on BtnA/B/C: how long people press, where the thresholds go | Input lab, button practice | `u2` |
 | Glass touches near the bottom edge versus the touch buttons below it; the dead band | Input lab, target practice | `u1` |
 | The haptic tick: which length and strength can be felt | Input lab, haptics | `u3` |
-| Flick-scrolling a list while audio streams from the SD card on the LCD's SPI bus | Scroll lab (round 2: hardware scroll, boost, gentle refill) | `w0`-`w3`, `wm`, `wb`, `wp` |
+| Flick-scrolling a list while audio streams from the SD card on the LCD's SPI bus | Scroll lab (round 2: hardware scroll, boost, gentle refill; the boost was removed after it) | `w0`-`w3`, `wm`, `wp` |
 | The library at 2,000-10,000 tracks: build time, sort time, memory | Library index | `g0`, `g<n>` |
 | Internal RAM (about 48-50 KB free while playing) | every probe logs it | |
 | Names that aren't ASCII ("Can’T", "T‐Pain", "Pénélope"): fonts, speed, flash | Font probe | `e`, `e1`-`e5` |
@@ -60,7 +60,8 @@ On the Core2, in `src/`:
 - `LocalStorage::forEachFile()`: an uncapped walk of `/music` that keeps nothing.
 - `spike/`: the labs and probes (`InputLab`, `ScrollLab`, `FontProbe`,
   `ThumbProbe`), the tab bar stand-in and colours (`SpikeUi`), the generated
-  VLW fonts (`VlwFonts.cpp`, from `tools/vlw_font.py`), and `Spike`, which owns
+  VLW fonts (`VlwFonts.cpp`, from `tools/vlw_font.py`; since moved to
+  `src/ui/`, the UI's), and `Spike`, which owns
   them. Every lab is created in PSRAM on first use (`psramNew`), and so are
   all their buffers and sprites.
 
@@ -267,6 +268,17 @@ are needed or too cautious (compare `w1` and `w2`).
 later the queue: nothing is migrated to it yet (the player still has its
 `std::vector<Track>` playlist).
 
+> **Since the spike:** the player now plays from it. The queue and the player
+> hold its track ids, the `std::vector<Track>` library and playlist are gone,
+> and the index is loaded from a cache on the card when `/music` is
+> unchanged ([ARCHITECTURE.md](ARCHITECTURE.md#library-and-queue)). `g`
+> reports the app's index (and a synthetic one, if made); `g0` rebuilds the
+> app's index, and the queue follows by path; `g<n>` builds the synthetic
+> library into an index of the spike's own, which the scroll lab and the
+> thumbnail probe use until `g0`, while the player keeps the real one. The
+> last line below (today's track list) is no longer printed. What follows
+> describes the spike as it was measured.
+
 - **Layout**: one string arena (every name once), fixed records (track 24 B,
   artist 20 B, album 20 B, folder 24 B), and sorted views as arrays of 32-bit
   ids: artists A-Z, albums A-Z, each artist's albums, each album's tracks (so
@@ -344,6 +356,8 @@ DejaVu Sans; M5GFX keeps their glyph tables in PSRAM.
 
 Compile-time switches, for the flash cost: `UI_SPIKE_EFONT` (options 3 and 5)
 and `UI_SPIKE_VLW` (option 4), both 1 by default (`src/spike/VlwFonts.h`).
+(Since the UI framework: the fonts are the UI's, `src/ui/VlwFonts.*`, always
+in the build, and `UI_SPIKE_EFONT` is 0 by default, in `FontProbe.h`.)
 
 ### Thumbnail probe (`j`)
 
@@ -772,7 +786,11 @@ Rules for the real build:
 - Once the playlist is on the index, the 13 KB the track list holds today
   (77 tracks, both copies) comes back.
 
-### Input (with the user, still to do)
+### Input (with the user)
+
+> **Since:** the user's session gave the button timings, the touch error
+> and the haptic choice; what was built from them is in "After the spike:
+> the input layer" at the end. The tables below were left blank.
 
 The automated stage took screenshots only (`uispike_shots/input_u0.png`,
 `input_u1_*.png`, `input_u2.png`, `input_u3.png`, and `sheet_labs.png`
@@ -1144,10 +1162,10 @@ now-playing screen too. `wp0` turns it off.
 
 | Command | What |
 |---|---|
-| `wm0` | full redraw, spike 1 (the default) |
-| `wm1` | hardware vertical scroll |
-| `wm2` | hardware scroll + boost |
-| `wb0` / `wb1` | boost off / on, on either path (`wm0` `wb1` = spike 1 + boost) |
+| `wm0` | full redraw, spike 1 (the default then) |
+| `wm1` | hardware vertical scroll (the default since the input stage) |
+| `wm2` | hardware scroll + boost (removed since: now the same as `wm1`) |
+| `wb0` / `wb1` | boost off / on, on either path (removed since) |
 | `wp0` / `wp1` / `wp<15-40>` | refill pacing off / on / on at x/10 realtime (1.5x at least) |
 | `wk<px/s>` | the stress's flick speed, 200-6,000 (default 4,000, spike 1's); `wk1000` is a fast drag, the hardware path's case |
 | `ws` | shows all of them |
@@ -1465,3 +1483,214 @@ fast move is possible on both paths. Note whether it is worse on `wm1`.
    headphones off. None of this round ran over Bluetooth, and the A2DP pull
    is burstier than the speaker's. The paced FLAC fill spends 2-4 s under
    1 s of ring after each start: that is the case to watch.
+
+## After the spike: the input layer and scroll polish
+
+The user tried the input lab and the scroll lab on the device. What they
+measured, and what the firmware does about it now (the browsing screens
+themselves come next). Nothing below has been run on the device yet.
+
+**What the user measured:**
+
+- **Buttons:** clicks lasted 17-143 ms, holds 509-2,383 ms. The 500 ms hold
+  threshold separates them: kept (not the 800 ms the design review proposed
+  for B). The red dots never registered as glass touches, and glass taps at
+  the bottom edge never fired a button: no dead band is needed.
+- **Touch x error** (`u1`, thumb and index finger alike, so the sensor):
+  about 0 at x 60-150, about +20 px at x 190, +35-45 px from x 240, clamped
+  at 319; a target at x 27 read 0. The volume chip in the tab bar's corner
+  (280-319) took every tap meant for the Output tab next to it (224-279):
+  those taps read 276-298.
+- **Haptics:** a tap is 33 ms at level 235 (strong); a hold, once
+  recognised, a double tick (2 x 33 ms, 80 ms apart). Nothing on scroll
+  frames; a tick per new letter on the A-Z rail is optional.
+- **Scrolling:** the hardware scroll (`wm1`) is "much smoother"; the A-Z
+  rail on the right jittered while swiping.
+
+**What was built** ([ARCHITECTURE.md](ARCHITECTURE.md#input)):
+
+- **One input layer** (`ui/Input`) that alone reads the panel and the
+  buttons and hands out events: the glass's Down, Tap, LongPress, Release,
+  DragStart/Move/End and Fling (`TouchRecognizer`), the buttons' Click,
+  Hold (500 ms), Repeat (A and C, 200 ms) and HoldEnd (`ButtonGesture`).
+  What the buttons do is `ButtonPolicy`: the same on every screen, and a
+  B-hold to the speaker pauses first.
+- **Touch correction** (`TouchCalibration`): a monotonic piecewise-linear
+  table per axis, applied to every touch before any hit test. The default x
+  table is the least-squares fit of the 72 `u1` taps (the "last list row"
+  taps left out: that target is the whole width). Per target, the mean
+  corrected position is within 6.2 px of every target but the volume chip
+  (Play next +18.5 px raw, +0.2 corrected; Output tab +35.0 / +6.2; Undo
+  +36.3 / +2.4; Clear all +41.8 / +5.3); the rms error over all 72 taps is
+  26.4 px raw, 9.0 px corrected, most of what is left being the clamped
+  readings at 319 (the volume chip's taps: +13 raw, -23 corrected).
+
+  | Raw x | 0 | 40 | 80 | 120 | 160 | 200 | 240 | 280 | 319 |
+  |---|---|---|---|---|---|---|---|---|---|
+  | Corrected | 25.6 | 43.2 | 78.5 | 122.7 | 154.4 | 181.9 | 212.3 | 253.1 | 281.3 |
+
+  A reading clamped at 319 lands at ~282 (between the targets at 273 and
+  299 whose taps read 319), so a control at the right edge must reach the
+  screen's edge and be ~40 px wide; the events also flag a clamped reading.
+  The volume chip goes: the design will show the volume inside the Output
+  tab instead, with a HUD for the A/C holds (the policy leaves the feedback
+  for it).
+- **A calibration screen** (console `a`, `a5`-`a9`): tap the crosshairs, a
+  new table is fitted the same way, Save keeps it in NVS, `ac` checks it,
+  `ad` goes back to the default.
+- **`u1` now also logs the corrected press:** each `[target]` line ends with
+  `cal=(x,y) cal_off=(dx,dy) cal_hit=yes|no` for the table in use (the
+  lab's own coordinates stay raw). A new `u1` round is the check of the
+  default table.
+- **Haptics** as chosen: a tick on each button click and glass tap, a
+  double tick at each recognised hold; `ah0` turns them off, `ar0` the
+  rail's ticks.
+
+**Scroll lab polish:**
+
+- The **interaction boost is removed** (`UiBoost`, the backend's 10 ms timer,
+  `wm2`, `wb`): it measured worse in every configuration. **Refill pacing
+  is on by default** (1.5x from 500 ms; `wp0` turns it off). `RefillPacer`
+  now lives in its own file.
+- **Defaults:** the hardware scroll (`wm1`), a **30 fps** cap (`wf30`), and
+  the stress's flicks at 2,000 px/s (`wk`; the stress may still go faster
+  to measure it).
+- **Frames on deadlines:** each frame is due a period after the previous
+  one's deadline, not after the pass that drew it, so a late pass (the
+  `delay(5)`, a decoder pass) no longer pushes every later frame back;
+  after an idle spell the cadence starts over.
+- **Flings capped at 2,000 px/s** (the input layer's release velocity and
+  `KineticScroll`): above ~2,500 px/s every frame at 25-30 fps moved more
+  than the 84-line step and was a full redraw.
+- **The A-Z rail no longer jitters:** it sits inside the hardware-scrolled
+  band, so each move shifted it with the list until it was pushed back. It
+  is now hidden while the list moves (its column cleared once, the rows
+  pushed full width over it) and drawn again when the list comes to rest,
+  or at once when a finger touches the right edge (a scrub keeps it up and
+  puts it back after each jump, as before). Its touch zone is x 280 to the
+  screen's edge.
+- The lab's touches come from the input layer, corrected.
+
+**To check on the device:**
+
+1. `w0` (`g10000` first): drag and flick the artists list; the rail should
+   vanish while the list moves and come back where it stops, with no
+   jitter; a touch on the right edge brings it back at once and scrubs.
+   Flicks should feel capped but not sluggish.
+2. `w1` with an MP3 playing: fps while moving (expect ~25-30 on drags), the
+   ring minimum and underruns (expect none).
+3. `u1`: the `cal_hit` rate against the raw `hit` rate, per zone.
+4. `a`: the calibration screen, Save, then `ac`.
+5. Buttons: holds on A and C step the volume 5 % every 0.2 s with a double
+   tick at the start; a B-hold on Bluetooth while playing pauses, then
+   switches to the speaker.
+
+## After the spike: the UI framework
+
+The tab bar framework the screens will sit on is built on what the spike
+measured ([ARCHITECTURE.md](ARCHITECTURE.md#ui)): the lists use
+`ListScroller` (the hardware scroll) with the polish above (the rail and the
+scrollbar hidden while a list moves, flings capped at 2,000 px/s, a 30 fps
+cap on deadlines, the governor as the safety net), the text is the VLW
+DejaVu of `e4` (16 and 13 px, plus DejaVu Sans Bold 16 and 22, with the
+licence in `LICENSES/`), efont is out of the default build (the font probe
+keeps it behind `-DUI_SPIKE_EFONT=1`), and every overlay and page draws
+through the scroll mapping and in short bus holds. The spike tools stay as
+diagnostics: opening one suspends the UI (and frees the hardware scroll for
+the scroll lab); closing it brings the UI back as it was.
+
+### The framework on the device (27 September 2026)
+
+A smoke test of the framework (the data layer, the input layer and the tab
+UI), run from the console in silent test mode (speaker at volume 0; the
+headphones were connected but never the output). The pages were driven with
+a scripted finger (`uit`/`uis`/`uid`, see ARCHITECTURE "UI"), which goes
+through the same recogniser and hit tests as a real touch but not through
+the panel or its calibration. The library is the card's: 77 tracks,
+6 artists, 6 albums.
+
+**Boot and memory** (internal RAM free, from the `[heap]` and `[stats]`
+lines):
+
+| | now | the spike (round 2) |
+|---|---|---|
+| after the library and queue | 91K (the library + queue cost 4.2 KB of internal RAM; the old two-copy track list cost ~13 KB for 77 tracks) | 71K after the track list |
+| idle, UI up, headphones linked | 81K (min 75K) | 76-77K |
+| playing MP3 | 63K (min 58K) | 55-61K |
+| playing FLAC | 66-75K (72K at its first `[heap] playing`) | |
+
+The UI itself costs no internal RAM at start (`[ui] internal RAM 92620 B
+free before the UI, 92620 B after`); PSRAM free drops from 3588K to 3260K.
+The library loads from its cache in 5 ms (83 files walked in 56-58 ms);
+the queue came back after a reset (`restored 11 of 11 ... at 2 of 11
+(position from NVS)`).
+
+**The tabs** (screenshots `X`, compared with the design's mockups): every
+tab renders. Fixed: the active tab's label was cut ("Playi…": "Playing" is
+48 px and had 46; the plate is now the cell's width less 2 px), the battery's
+"100%" was cut to "10…" (36 px in 34), the Output page's "Forget
+headphones" link was cut (now "Forget pairing") and its speaker line (now
+"(silent)" in test mode).
+
+**The track length** on Now Playing was wrong: 7:37 for a 5:20 VBR MP3
+15 s in, and 3:30 for a 3:13 FLAC (the read-rate estimate assumes a
+constant bitrate). The backend now reads the length when a track opens:
+FLAC from STREAMINFO, MP3 from the Xing/Info or VBRI header (new
+`TrackProgress` functions, host-tested); both then read exactly (5:20.9,
+7:09.9, 3:13.4, 3:15.2).
+
+**Library and queue, by touch** (all worked): artists > artist > album >
+a track's inline bar; Play next (toast "Plays next: …" with View and Undo,
+the Queue badge flashing 62 → 63), + Queue then Undo on the toast (88 → 87
+tracks), View (the Queue opened scrolled to the added entry, 3486 px down),
+Play from a track (the album from that track, 14 entries at 2), the
+Queue's row bar Remove, selection mode (2 selected, Remove in the header:
+"Removed 2 tracks"), and a reset (the queue and its position restored).
+
+**Scrolling** while an MP3 plays (the new `[ui] scroll:` line per motion;
+the real lists are the Queue, 86 rows, and an artist's 14 tracks: the card
+has no alphabetical list long enough for the A-Z rail, so the rail itself
+is still to see, see below): drags and flings at 23-30 fps (30 once a
+motion is under way; the short ones count the first frame from the press),
+draw time per frame mean 3-16 ms, ring minimum 1439 ms (full), no
+underruns, the governor never left "normal". About 1 motion in 5 has one
+frame of 50-78 ms: a very fast drag (the finger isn't capped, only the
+fling) moves more than the 84-line step in a frame, which is a full redraw.
+Bus holds over the whole session: mean 2.8 ms, max 51 ms.
+
+**Dance:** the 128 BPM click track locked at 128.05 BPM 2.6 s after the
+tab opened (median phase error 2.5-3.0 ms), the dancer at 30.5 fps.
+
+**Soak:** 10 minutes (618 s, 18 rounds of tab switches, Library
+drill-downs and back, 68 scrolls on the Queue and the album list; MP3 for
+the first half, FLAC for the second): no crash, 0 underruns, ring minimum
+1129 ms (at the FLAC's start), scroll fps mean 26.8, the governor always
+"normal", the loop task's stack never below 5404 B unused of 8 KB. No heap
+drift: the same MP3 track afterwards showed ram=63K min=58K psram=3235K,
+as before the soak.
+
+**Not explained:** once, early in the session, the player jumped from queue
+entry 24 to entry 2 while a screenshot was being read (nothing in the log
+said why; no button or console command). It didn't happen again in ~15
+minutes of the same actions. The log now has a line for every touch
+(`[touch] ...`, "scripted" for the test finger's) and every move of the
+current entry (`[queue] now at ...`), so a repeat will show its cause.
+
+**Still for the user, by hand:**
+
+1. Touch: `ac` (the check page) with the default table, then `a` to
+   calibrate, Save, `ac` again; tabs at the right edge land on Output.
+2. Haptics: a tap tick on tabs, rows and buttons (not on empty space); a
+   double tick on a long press of an artist or album (its sheet) and on
+   A/C holds; nothing while scrolling.
+3. Real fingers on the lists: flicks feel capped but not sluggish; the
+   scrollbar on the Queue vanishes while it moves and comes back when it
+   stops, with no jitter.
+4. The A-Z rail needs a long alphabetical list (over 30 artists): with a
+   bigger card, drag the Library's artists and the right edge (the rail
+   hides while moving, comes back on a touch at the edge and scrubs with a
+   tick per letter).
+5. A/C holds: the volume HUD over the tab bar, 5 % every 0.2 s; B hold on
+   headphones while playing: pause, then the speaker.
+6. The headphones' own volume keys: the same HUD.
+7. Now Playing's times and progress line on your own files.

@@ -1,6 +1,7 @@
 #pragma once
 #include <Arduino.h>
 
+#include "TouchCalibration.h"
 #include "TouchGesture.h"
 #include "app/Haptics.h"
 #include "ui/LcdLock.h"
@@ -35,6 +36,12 @@
 // (tap/hold/drag/flick, duration, movement, release velocity), [target] per
 // u1 attempt, [haptic] per pattern. Samples are kept in PSRAM (the lab
 // itself is psramNew'd), so internal RAM stays untouched.
+//
+// The lab measures the panel as it is: its coordinates are the raw ones
+// (what M5Unified converts), never corrected. Since the input layer
+// corrects every touch (TouchCalibration), each u1 attempt also says where
+// the correction in use puts the press and whether that hits: "cal=(x,y)
+// cal_off=(dx,dy) cal_hit=yes|no" (a raw x of 319 is marked "clamped").
 class InputLab {
 public:
   explicit InputLab(Haptics& haptics);
@@ -50,6 +57,8 @@ public:
   // Every loop pass, after M5.update().
   void loop(uint32_t nowMs);
   void summary();
+  // The correction the input layer applies (for the u1 lines); null: none.
+  void setCalibration(const TouchCalibration* c) { cal_ = c; }
   void resetStats();
 
 private:
@@ -142,6 +151,7 @@ private:
   void readout(const char* line);
 
   Haptics& haptics_;
+  const TouchCalibration* cal_ = nullptr;
   bool active_ = false;
   int mode_ = Free;
 

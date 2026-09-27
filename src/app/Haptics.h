@@ -28,6 +28,15 @@ public:
   static constexpr uint8_t kStrong = 235;
   static constexpr int kMaxSteps = 8;
 
+  // The UI's feedback, as the user picked it on the device (the input lab's
+  // haptic tiles): a tap is one 33 ms tick at kStrong (3.3 V); a hold, once
+  // recognised, is a double tick, 2 x 33 ms 80 ms apart. Nothing on scroll
+  // frames. The input layer (ui/Input) plays them, unless its haptics
+  // setting is off.
+  static constexpr uint16_t kTapMs = 33;
+  static constexpr uint8_t kTapLevel = kStrong;
+  static constexpr uint16_t kDoubleGapMs = 80;
+
   // The LDO3 voltage a setVibration(level) gives (0: off).
   static int motorMv(uint8_t level) {
     const int mv = level ? 480 + 12 * level : 0;
@@ -46,10 +55,15 @@ public:
   void tick(uint16_t ms, uint8_t level = kMedium);
   // `count` pulses of `ms`, `gapMs` apart (the spec's double tick: 2, 20, 80).
   void pulses(uint16_t ms, uint8_t level, int count, uint16_t gapMs);
+  // The tap feedback (one tick) and the hold feedback (a double tick).
+  void tap() { tick(kTapMs, kTapLevel); }
+  void doubleTick() { pulses(kTapMs, kTapLevel, 2, kDoubleGapMs); }
   // Any pattern; a new one replaces what's playing.
   void play(const Step* steps, int count);
   void stop();
   bool busy() const { return busy_.load(); }
+  // Off: nothing plays at all. (The UI's feedback has its own saved
+  // setting in the input layer, so the input lab's tiles still play.)
   void setEnabled(bool on);
   bool enabled() const { return enabled_; }
   // The motor's measured on-time in the last finished pattern (us), for the lab.

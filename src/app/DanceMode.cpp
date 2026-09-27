@@ -9,7 +9,6 @@
 namespace {
 constexpr uint32_t kScratchFrames = 2048;  // mono frames handed to the tracker at a time (PSRAM)
 constexpr uint32_t kFrameMs = 33;          // ~30 frames a second
-constexpr uint32_t kStatusMs = 500;        // the line of numbers, twice a second
 // Aim the figure this much before the sound (then the LCD's own delay):
 // ahead of the beat looks right, behind it looks late.
 constexpr uint32_t kAimEarlyUs = 15000;
@@ -76,7 +75,6 @@ void DanceMode::setActive(bool on) {
   freshWhy_ = "dance screen on";
   lastFrameMs_ = 0;
   lastFrameUs_ = 0;
-  lastStatusMs_ = 0;
   frames_ = 0;
   trackerUs_ = 0;
   framesSinceMs_ = millis();
@@ -129,7 +127,6 @@ void DanceMode::cycleSkin() {
     dancer_.reset(w);
   }
   skin_ = next;
-  lastStatusMs_ = 0;  // the status line shows the new name at the next frame
   Serial.printf("[dance] skin: %s\n", dance::skinName(skin_));
 }
 
@@ -181,9 +178,10 @@ void DanceMode::restart(const TapReader::Run& run, const char* why) {
   haveError_ = false;
 
   // A click track: the truth to measure against.
-  const Track* t = player_.currentTrack();
+  char path[TrackCatalog::kMaxPath];
+  player_.currentPath(path, sizeof(path));
   ClickGen::Spec spec;
-  truth_ = t && t->path.rfind("tone:", 0) == 0 && ClickGen::parse(t->path.substr(5), &spec);
+  truth_ = strncmp(path, "tone:", 5) == 0 && ClickGen::parse(std::string(path + 5), &spec);
   if (truth_) {
     clicks_.start(44100, spec, 0);
     const double period = 60.0 * 44100.0 / spec.bpm;
@@ -325,27 +323,6 @@ void DanceMode::render(uint32_t nowMs) {
   drawUs_ += (static_cast<float>(t1 - t0) - drawUs_) * 0.1f;
   pushUs_ += (static_cast<float>(t2 - t1) - pushUs_) * 0.1f;
   ++frames_;
-
-  if (nowMs - lastStatusMs_ < kStatusMs) return;
-  lastStatusMs_ = nowMs;
-  const Track* t = player_.currentTrack();
-  String title = "Dance";
-  if (t) title += ": " + String(t->title.c_str());
-  if (silent_) title += "  [silent]";
-  view_.setTitle(title);
-  // The skin's name first. The longest line fits Font2's 320 px with ~13 to
-  // spare: "stick  174.0 BPM  conf 0.85  searching  30 fps".
-  char line[72];
-  const char* name = dance::skinName(skin_);
-  if (frozen_ >= 0) {
-    snprintf(line, sizeof(line), "%s  frozen at %d/8 of two beats", name, frozen_);
-  } else if (tracker_.bpm() > 0.0f) {
-    snprintf(line, sizeof(line), "%s  %.1f BPM  conf %.2f  %s  %.0f fps", name, tracker_.bpm(),
-             tracker_.confidence(), tracker_.locked() ? "locked" : "searching", fps_);
-  } else {
-    snprintf(line, sizeof(line), "%s  no beat  conf %.2f  %.0f fps", name, tracker_.confidence(), fps_);
-  }
-  view_.setStatus(line);
 }
 
 void DanceMode::printStats(uint32_t nowMs) {

@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "TrackProgress.h"
 #include "audio/RingOutput.h"
 
 namespace {
@@ -135,6 +136,14 @@ bool Core2AudioBackend::isPlaying() const {
          (p == Phase::Pending || p == Phase::Decoding || p == Phase::Draining);
 }
 
+uint32_t Core2AudioBackend::durationMs() const {
+  const uint32_t known = knownDurationMs_.load(std::memory_order_relaxed);
+  if (known) return known;
+  return progress::estimateDurationMs(producedFrames_.load(std::memory_order_relaxed), shared_.rate,
+                                      srcPos0_.load(std::memory_order_relaxed), srcPos_.load(std::memory_order_relaxed),
+                                      srcSize_.load(std::memory_order_relaxed));
+}
+
 uint32_t Core2AudioBackend::positionMs() const {
   const int rate = shared_.rate;
   const uint32_t frames = ring_->readPos() - trackStart_;
@@ -245,75 +254,6 @@ uint32_t Core2AudioBackend::bufferedMsNow() const {
 }
 
 // ---- sharing core 1 with the UI (see the header) ----
-
-void Core2AudioBackend::setUiBoost(bool enabled) {
-  if (!task_) return;
-  if (enabled && !boostTimer_) {
-    esp_timer_create_args_t args = {};
-    args.callback = boostTimerEntry;
-    args.arg = this;
-    args.dispatch_method = ESP_TIMER_TASK;  // the esp_timer task, core 0: never starved by core 1
-    args.name = "uiboost";
-    if (esp_timer_create(&args, &boostTimer_) != ESP_OK) {
-      boostTimer_ = nullptr;
-      Serial.println("[boost] no timer: the boost stays off");
-      return;
-    }
-  }
-  if (enabled == boostEnabled_.load()) return;
-  if (enabled) {
-    boostEnabled_ = true;
-    esp_timer_start_periodic(boostTimer_, 10000);
-    return;
-  }
-  esp_timer_stop(boostTimer_);
-  // Under the lock: a tick already past its enabled check can't drop the
-  // priority again after this restores it.
-  std::lock_guard<std::mutex> guard(boostLock_);
-  boostEnabled_ = false;
-  applyDecodePriority(false, UiBoost::Why::Idle, bufferedMsNow(), millis());
-}
-
-void Core2AudioBackend::noteUiActivity(uint32_t nowMs) {
-  uiActiveMs_.store(nowMs, std::memory_order_relaxed);
-  uiEverActive_.store(true, std::memory_order_relaxed);
-}
-
-Core2AudioBackend::BoostStatus Core2AudioBackend::boostStatus() const {
-  BoostStatus b;
-  b.changes = boostChanges_.load(std::memory_order_acquire);
-  b.on = boostOn_.load(std::memory_order_relaxed);
-  b.why = static_cast<UiBoost::Why>(boostWhy_.load(std::memory_order_relaxed));
-  b.ringMs = boostRingMs_.load(std::memory_order_relaxed);
-  b.atMs = boostAtMs_.load(std::memory_order_relaxed);
-  return b;
-}
-
-void Core2AudioBackend::boostTimerEntry(void* self) { static_cast<Core2AudioBackend*>(self)->boostTick(); }
-
-void Core2AudioBackend::boostTick() {
-  std::lock_guard<std::mutex> guard(boostLock_);
-  if (!boostEnabled_.load()) return;
-  const uint32_t nowMs = millis();
-  // A new track was asked for: the decoder must get to it (discard the old
-  // ring, open the file) at once, so no boost until it has; its ring is
-  // about to be empty anyway.
-  const bool starting = sync_.phase() == Phase::Pending;
-  const uint32_t ringMs = starting ? 0 : bufferedMsNow();
-  const bool on = boost_.update(nowMs, uiEverActive_.load(std::memory_order_relaxed),
-                                uiActiveMs_.load(std::memory_order_relaxed), ringMs, isPlaying());
-  applyDecodePriority(on, boost_.why(), ringMs, nowMs);
-}
-
-void Core2AudioBackend::applyDecodePriority(bool yielding, UiBoost::Why why, uint32_t ringMs, uint32_t nowMs) {
-  if (yielding == boostOn_.load(std::memory_order_relaxed)) return;
-  vTaskPrioritySet(task_, yielding ? kDecodePriorityYielding : kDecodePriority);
-  boostOn_.store(yielding, std::memory_order_relaxed);
-  boostWhy_.store(static_cast<uint8_t>(why), std::memory_order_relaxed);
-  boostRingMs_.store(ringMs, std::memory_order_relaxed);
-  boostAtMs_.store(nowMs, std::memory_order_relaxed);
-  boostChanges_.fetch_add(1, std::memory_order_release);
-}
 
 void Core2AudioBackend::setRefillPacing(bool enabled, uint32_t capX10) {
   // At least 1.5x (RefillPacer::kMinCapX10): near 1x the paced ring would
@@ -441,6 +381,8 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   }
   busyUs_ = 0;
   producedFrames_ = 0;
+  srcPos0_ = srcPos_ = srcSize_ = 0;
+  knownDurationMs_ = 0;
   setText(description_, "");
   setText(title_, "");
   setText(artist_, "");
@@ -464,6 +406,7 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
     if (ClickGen::parse(what, &click)) {
       shared_.rate = kToneRate;
       click_.start(kToneRate, click, kToneRate * kClickSeconds);
+      knownDurationMs_ = kClickSeconds * 1000;
       toneTrack_ = clickTrack_ = true;
       char text[48];
       snprintf(text, sizeof(text), "clicks %.0f BPM%s, 44100 Hz", click.bpm, click.offsetBeats > 0 ? ", off-beat start" : "");
@@ -478,6 +421,7 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
     tone_.start(kToneRate, static_cast<float>(hz), -18.0f,
                 leftOnly ? ToneGen::Channels::LeftOnly : ToneGen::Channels::Both,
                 kToneRate * kToneSeconds);
+    knownDurationMs_ = kToneSeconds * 1000;
     toneTrack_ = true;
     setText(description_, "tone " + std::to_string(hz) + " Hz" + (leftOnly ? ", left only" : "") +
                               ", 44100 Hz");
@@ -511,12 +455,33 @@ bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out) {
   AudioGenerator* decoder;
   AudioFileSource* source = file_.get();
   if (isMp3) {  // MP3 reads its title/artist from ID3 tags on the way in
+    // A VBR file's length, from the Xing/Info or VBRI header in its first
+    // frame (after the ID3v2 tag): the read-rate estimate is only exact for
+    // constant bitrates. A buffer in PSRAM (under 4 KB would be internal).
+    constexpr uint32_t kProbe = 2048;
+    auto* probe = static_cast<uint8_t*>(heap_caps_malloc(kProbe, MALLOC_CAP_SPIRAM));
+    if (probe) {
+      uint32_t start = 0;
+      if (file_->read(probe, 10) == 10) start = progress::id3v2Size(probe, 10);
+      if (start < file_->getSize() && file_->seek(static_cast<int32_t>(start), SEEK_SET)) {
+        const uint32_t got = file_->read(probe, kProbe);
+        knownDurationMs_.store(progress::mp3HeaderDurationMs(probe, got), std::memory_order_relaxed);
+      }
+      heap_caps_free(probe);
+    }
+    file_->seek(0, SEEK_SET);
     id3_.reset(new AudioFileSourceID3(file_.get()));
     id3_->RegisterMetadataCB(onMetadata, this);
     source = id3_.get();
     mp3_.reset(new AudioGeneratorMP3());
     decoder = mp3_.get();
   } else {
+    // Its length from STREAMINFO (the decoder doesn't expose it).
+    uint8_t head[42];
+    if (file_->read(head, sizeof(head)) == sizeof(head)) {
+      knownDurationMs_.store(progress::flacDurationMs(head, sizeof(head)), std::memory_order_relaxed);
+    }
+    file_->seek(0, SEEK_SET);
     flac_.reset(new AudioGeneratorFLAC());
     decoder = flac_.get();
   }
@@ -598,9 +563,14 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
 
   const int64_t t0 = esp_timer_get_time();
   const uint64_t before = producedFrames_;
+  // Where the file was when the first audio came (the tags in front are
+  // left out of the length estimate), and where it is now.
+  if (before == 0) srcPos0_.store(file_->getPos(), std::memory_order_relaxed);
   out_->setBudget(kChunkFrames);
   const bool running = decoder_->loop();
   out_->commit();
+  srcPos_.store(file_->getPos(), std::memory_order_relaxed);
+  srcSize_.store(file_->getSize(), std::memory_order_relaxed);
   const auto passUs = static_cast<uint64_t>(esp_timer_get_time() - t0);
   busyUs_ += passUs;
   busyTotalUs_ += passUs;
@@ -622,7 +592,7 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
   // the fill after a start or skip (until the ring is first full: fullMs_
   // is -1 until then) and past 500 ms, long enough to keep this track under
   // the rate cap (see setRefillPacing()). Later dips (an SD stall, a
-  // Bluetooth burst, a boost drop) refill flat out, as without pacing.
+  // Bluetooth burst) refill flat out, as without pacing.
   const int rate = out_->rate();
   RefillPacer::Config pace = refillPacing();
   pace.enabled = pace.enabled && fullMs_.load(std::memory_order_relaxed) < 0;

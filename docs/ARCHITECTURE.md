@@ -16,18 +16,26 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
   lib/core/   |  PlaybackController   PcmRing   TransportSync   ToneGen       |  portable C++17,
   (portable)  |  BtControl (StreamControl, AbsVolumePolicy)  ReconnectPlanner  |  host-tested
               |  GainRamp  VolumeMath  StreamRestart  HeadsetKeys             |
-              |  Declicker  DeclickReader  Track  hal/*                       |
+              |  Declicker  DeclickReader  hal/*                              |
               |  AudioTap  TapReader  BeatTracker  ClickGen  DancePose        |
               |  CrabPose  CrabArt (generated)  DanceSkin                     |
               |  LibraryIndex  LibrarySynth  TextFold  TouchGesture           |
-              |  KineticScroll  ScrollGovernor                                |
+              |  KineticScroll  ScrollGovernor  VScrollMap  RefillPacer       |
+              |  ByteStream  QueueModel  QueueText  TrackCatalog              |
+              |  TouchCalibration  TouchRecognizer  ButtonGesture             |
+              |  ButtonPolicy  InputEvent                                     |
+              |  NavModel  FrameClock  ListLayout  BitSet  TextFit            |
+              |  TabBarModel  TrackProgress                                   |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
   src/        |  audio/  Core2AudioBackend (decode task), RingOutput,         |  Arduino-ESP32 3.x
   (Core2)     |          BtSink (ESP32-A2DP source), SpeakerSink (M5.Speaker) |  (pioarduino),
-              |  storage/LocalStorage   ui/DisplayView   app/SerialConsole    |  M5Unified/M5GFX,
-              |  main.cpp: buttons, Bluetooth events, rendering               |  ESP8266Audio
+              |  storage/LocalStorage   app/SerialConsole   app/Library        |  M5Unified/M5GFX,
+              |  app/QueueStore   ui/Input   ui/CalibrationScreen             |
+              |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
+              |         Fonts (VLW DejaVu), Icons, Gfx   ui/BootScreen        |
+              |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
 
@@ -92,10 +100,10 @@ The rules that keep it deadlock- and glitch-free:
 | Bluetooth controller + host (Bluedroid) | 0 | high | ~70 KB internal RAM, claimed at boot |
 | A2DP data callback | 0 (Bluedroid's BTC task, BTC_TASK) | high | 128 frames at a time, several per ~30 ms tick; applies the volume ramp; never blocks or logs. ESP-IDF 5.5's A2DP source has no media task of its own: this is the task that also runs the GAP and AVRCP callbacks, which queue their events to BtAppT (below). If BtAppT's queue (20 entries) is full, each such event blocks BTC_TASK, and the audio, for up to 10 ms |
 | ESP32-A2DP app task (BtAppT) | 0 | 15 | connection, stream and AVRCP handlers (`PlayerA2dp`); 6 KB stack; blocks 10 s at stack-up; must keep its queue drained (no long work in a handler) |
-| decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack) |
+| decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start) |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake |
 | M5.Speaker | 1 | 2 | mixes/resamples to 44.1 kHz mono |
-| Arduino loop (UI, console, buttons) | 1 | 1 | redraws at 4 Hz; on the dance screen, the beat tracker and ~30 dancer frames/s (each push holds the SPI bus for that push only), `delay(5)` every pass |
+| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and ~30 dancer frames/s; sleeps 1-5 ms every pass (less while a list frame is due) |
 
 ## Bluetooth
 
@@ -277,9 +285,284 @@ results: [MASCOT-POC.md](MASCOT-POC.md).
 ## Storage
 
 `LocalStorage` mounts the SD card (shared SPI bus with the LCD, 25 MHz) if one
-is present, otherwise the ~11.9 MB LittleFS partition, and lists the `.mp3` and
-`.flac` files under `/music` (recursive, sorted, capped at 200). The planned
-library index and sync from mStream replace this scan (see Roadmap).
+is present, otherwise the ~11.9 MB LittleFS partition. It walks `/music` for
+the library (up to 8 folders deep, no cap, hidden names skipped) through the
+VFS's `readdir`, which names each entry and says whether it's a folder, rather
+than Arduino's `File::openNextFile()`, which opens every entry and so searches
+its directory again for each file (the UI spike measured that walk at ~5.7 ms a
+file). The player's own files live in `/.player` on the same volume:
+`library.idx` (the index's cache) and `queue.txt`.
+
+## Library and queue
+
+Everything the player knows about the music is one `LibraryIndex` in PSRAM,
+the single store: a string arena, fixed-size records and sorted views
+(~70-80 B a track, nothing in internal RAM). The queue, the player and later
+the browsing UI hold its **track ids**, never strings.
+
+- **Track ids** (`TrackCatalog`): `0 .. n-1` are the index's tracks, and
+  `0x80000000 + k` the built-in tracks (the test tones and the click tracks,
+  paths `tone:...`), which are there with or without a card. The catalog turns
+  an id into a path to play or a title and artist to show, into the caller's
+  buffer, when needed. An id it doesn't know (a library rebuilt under it) gives
+  the path "", which the backend fails and the player skips.
+- **Boot** (`app/Library`): `/music` is walked for its paths only, hashed into a
+  signature (FNV-1a 64). If `/.player/library.idx` was saved for that
+  signature, it's loaded as it is: blocks of exactly the saved size, no sorting,
+  no build peak (`LibraryIndex::load()`, checked by a checksum; a stale, cut or
+  damaged file is refused). Otherwise the walk is done again into a new index,
+  which is saved (written aside, then renamed over the old one). Any file
+  added, removed or renamed under `/music` rebuilds it. Console `g0` rebuilds
+  it on request.
+- **The queue** (`QueueModel`, host-tested): track ids in a PSRAM array (8 B an
+  entry with its key), a current position, and one level of undo. Its edits
+  are the design's Library and Queue actions: Play (replace the queue, start at
+  a track), Play next (after the current entry), + Queue (append), remove a
+  selection, move a selection after the current entry, Clear up next (keeps
+  what plays and what played), Clear. Each entry has a **key** given when it
+  joins and never reused, so the UI can keep a selection or a row across edits.
+  Each edit saves a snapshot first; undo puts the queue back, keeping what
+  plays current if it was in the queue then.
+- **Transport** (`PlaybackController`) plays the queue's current entry through
+  the catalog and keeps its rules: prev/next and a track's end wrap around the
+  queue (`setRepeat(false)` stops at the end instead), a track that can't be
+  played is skipped, and once every track in the queue has failed in a row it
+  stops. The edits that touch what plays go through it: Play starts the new
+  queue; removing the current entry plays the next one that stayed (paused: it
+  is cued; none left after it: stop); Clear stops; undo returns to the entry
+  that was current if the one playing isn't in the restored queue. Play next,
+  + Queue and Clear up next change nothing that plays. `HeadsetKeys` works
+  unchanged on top (`cueNext()`/`cuePrev()` move the current entry).
+- **Persistence** (`app/QueueStore`, `QueueText`): the queue is saved as paths,
+  one a line (`queue.txt`, header `mstream-queue 1 <entries> <current>
+  <generation>`), so a rebuilt library, whose ids differ, finds its tracks
+  again; paths that are gone are dropped, and if the current one is among them
+  the next one that stayed is current. The file is rewritten 2 s after the
+  last edit, 32 lines a loop pass (a 10,000-track queue is ~700 KB and never
+  holds the loop), into `queue.tmp`, then renamed over `queue.txt`. The
+  position goes to NVS (at most once a second), tagged with the file's
+  generation, so a track change doesn't rewrite the file and a position is
+  never paired with an older file. After a restart the queue is where it
+  was, stopped. `g0` carries the queue across the rebuild the same way, in a
+  PSRAM buffer: the track that plays keeps playing if it's still there. A
+  rebuild that leaves no library (out of PSRAM, or a card that went away)
+  isn't taken as the queue changing: what survives stays in memory,
+  playback stops if its track is gone, and `queue.txt` isn't rewritten.
+- **SD access while playing**: the index cache and the queue file are
+  written and read in pieces of at most 4 KB (`storage/FileStream`): one
+  `f_write` holds the FAT volume's lock for its whole length, and the decoder
+  reads the playing track through that lock, so a g0 rebuild's cache save
+  (blocks of hundreds of KB at 10,000 tracks) never makes it wait long.
+  With no saved queue, it's the whole library (artist, album, track order)
+  followed by the built-in tracks.
+- **Internal RAM**: the old `std::vector<Track>` library and its playlist copy
+  cost ~86 B of internal RAM per track per copy (13 KB for 77 tracks, and
+  impossible at a few thousand). Now the library, the queue and its undo are
+  in PSRAM; the boot log's `[lib] library + queue` line and `[heap] library`
+  show what is left in internal RAM, and `[heap] playing` the figure while
+  playing.
+
+## Input
+
+One input layer (`ui/Input`) reads the touch panel and M5Unified's BtnA/B/C;
+every screen gets **events** from it and nothing else reads the hardware
+(the input lab, a measuring tool, is the one exception: while it is open the
+layer is suspended).
+
+- **Touch correction** (`TouchCalibration`, host-tested). The user's Core2
+  reads x too far right, more so further right: ~0 at x 60-150, ~+20 px at
+  x 190, +35-45 px from x 240, and it stops at 319 (thumb and index finger
+  alike: the sensor). Every touch point goes through a monotonic
+  piecewise-linear table per axis (x knots every 40 px, y every 60; y is the
+  identity for now) before anything hit tests it. The default x table is
+  the least-squares fit (smoothed, slopes kept between 0.25 and 4) of the
+  input lab's 72 target-practice taps; the host test fits the same logs and
+  checks the default still matches. A reading clamped at 319 can't say how
+  far out the finger was: the table puts it at ~282, where the fingers that
+  read 319 were aimed on average. So **a control at the right edge must have
+  a hit area that reaches the screen's edge and is at least ~40 px wide**;
+  events also flag a clamped reading (`InputEvent::atRightEdge()`,
+  `inRightEdgeZone(left)`). The table is saved in NVS (namespace `input`,
+  key `cal`), checked by a checksum when loaded; without it, the default.
+- **Calibration screen** (`ui/CalibrationScreen`, console `a`): 5-9
+  crosshairs with distinct x and y each; a tap on each (raw reading, where
+  the finger landed) is a sample, one too far from the cross is asked
+  again. The same fit makes a new table, shown with the error before and
+  after; Save stores it, then a check page shows where each tap now lands.
+  It is made in PSRAM on first use, owns the screen while up (like the spike
+  screens), and opens from the Output tab ("Touch calibration") or the console.
+- **The glass** (`TouchRecognizer`, host-tested): Down, Tap (within 12 px
+  and 500 ms; its position is where the finger landed), LongPress (500 ms,
+  while still down), Release, DragStart / DragMove / DragEnd, and Fling.
+  The release velocity (over the last 60 ms) is **capped at 2,000 px/s**,
+  and `KineticScroll` caps flings at the same speed: faster, nearly every
+  frame of the hardware scroll moves more than its 84-line step and becomes
+  a full redraw. A touch that lands on the button strip (raw y >= 240) is
+  the buttons' and makes no glass events.
+- **The buttons** (`ButtonGesture`, `ButtonPolicy`, host-tested): Click,
+  Hold at **500 ms** (the user's clicks lasted 17-143 ms, holds 509-2383 ms),
+  Repeat every 200 ms for A and C, HoldEnd. The same on every screen: A
+  click previous / hold volume -5 % (repeating); B click play/pause / hold
+  switch the output, and switching **to the speaker always pauses first**;
+  C click next / hold volume +5 % (repeating). Each hold leaves a
+  `Feedback` (the new volume, or the new output and whether it paused) for
+  the screens' HUD. The glass taps near the bottom edge never fired a
+  button in the user's tests, so there is no dead band.
+- **Haptics**: a tap tick (33 ms at level 235, 3.3 V) on every button click
+  and a double tick (2 x 33 ms, 80 ms apart) the moment a button hold is
+  recognised, both played by the input layer. On the glass the feedback is
+  played by whatever acts on the touch (`tapTick()`, `holdTick()`), so it
+  confirms only what did something: a tap on a control, a long press on a
+  list row that has a hold (an artist, an album, a Queue row). A long press
+  on anything else is no hold: its lift, where it pressed, is a tap (the Ui
+  converts it). Nothing on scroll frames, and optionally a tick per new
+  letter on the A-Z rail (`railTick()`). Both can be turned off (`ah0`,
+  `ar0`; NVS keys `haptics`, `railtick`). `Haptics` plays patterns from a
+  FreeRTOS timer, so a tick lasts its length whatever the loop does.
+
+The layer costs ~660 B of internal RAM (an 8-event queue, the tables, the
+recognisers); the calibration screen is in PSRAM.
+
+## UI
+
+The tab bar design (the design review's winner, with its grafts and the
+user's measurements), built as a framework the screens sit on:
+`ui/Ui` owns the display, `ui/TabBar`, `ui/ListView` and `ui/Overlays` are
+its widgets, and five first pages exercise them (the real screens come
+next).
+
+- **One owner, on the loop task.** The UI is the only thing that draws
+  (while no other screen has taken the display: the touch calibration or a
+  spike tool, which suspend it; it redraws everything when they let go; one
+  at a time: the calibration closes any spike screen, and a spike command
+  closes the calibration, so no two draw at once). It
+  runs from `loop()`, not a task of its own: the player, the queue, the
+  library index and the input layer all live on the loop task and aren't
+  thread-safe, so a UI task would need a lock around each, and its own stack
+  in internal RAM (6-8 KB of the ~48 KB left while playing). The loop runs
+  below the decoder on core 1 (priority 1 vs 2), so the audio goes first,
+  and it sleeps 1-5 ms every pass. The `Ui` object and all its sprites live
+  in PSRAM (~340 KB: six 320x42 row sprites, a 320x56 strip, a 320x168 panel
+  for sheets and dialogs, the rail); the fonts' glyph tables too.
+- **Frames.** Only what changed is redrawn (each page keeps what it drew and
+  compares the one `AppState` snapshot the host fills per pass). Animation
+  (a moving list) is drawn on a **30 fps cap kept on deadlines**
+  (`FrameClock`: each frame due a period after the previous one's deadline,
+  so a late pass doesn't push the rest back; after a stall the cadence starts
+  over, no catch-up burst), with `ScrollGovernor` as the safety net (fewer
+  frames, or whole rows, when the decoder's buffer runs low). Everything is
+  drawn into a PSRAM sprite and pushed in pieces of at most 40 lines, each
+  under its own `LcdLock` (`ui/Gfx`).
+- **Navigation** (`NavModel`, host-tested): five tabs (Now Playing, Library,
+  Queue, Dance, Output), a stack of pages each. A tab tap switches (the tab
+  keeps its stack); a tap on the current tab takes it to its root (the Queue:
+  back to the playing track); "‹" in a header pops. Each stack entry keeps its
+  page's scroll position and expanded row. Deeper than 8, the oldest page
+  above the root goes.
+- **The tab bar** (`TabBarModel`, host-tested for layout and redraws): 36 px
+  at the top, in the panel's fixed area. Tabs 0-53, 54-107, 108-161, 162-215
+  and **Output 216-319, to the screen's edge**: the user's panel reads the
+  right side up to 45 px too far right and stops at 319, so a reading clamped
+  there is the Output tab wherever it's corrected to. The **volume is part of
+  the Output tab** ("60%" beside its icon; a separate chip in the corner took
+  every tap meant for the Output tab), with the battery in the same cell. The
+  active tab gets a plate, a text label and an underline **in its section's
+  colour** (Now Playing coral, Library violet, Queue teal, Dance pink, Output
+  blue; the page headers and primary buttons carry it too). Status: the Now
+  Playing icon's EQ bars move 4 times a second while playing, with a progress
+  hairline (dotted while the length isn't known); the Queue's up-next badge
+  (flashing for 1.5 s when tracks are added); the Output icon's colour is the
+  Bluetooth state (cyan connected, amber connecting, red lost). The Library
+  icon is a record half out of its sleeve, unlike Now Playing's bars. Only
+  the cells whose state changed are drawn (a 54x36 push, ~1 ms).
+- **Overlays**: the **toast** (one line, with Undo for 4 s after a queue
+  edit, else 1.8 s) sits at the **top of the content area** (y 36-71, over
+  the page header: the usability walk found the spec's bottom toast right
+  above BtnC); the pages' drawing leaves those rows alone while it's up
+  (`gfx::setCover`), and the header is redrawn when it goes. The **volume
+  HUD** covers the tab bar for 1.5 s after an A/C hold or the headphones'
+  volume keys, with or without absolute volume (20 blocks and the value; a
+  change within 2 s of connecting is the link-up cap, not shown; a B hold
+  says where the output went and whether it paused); a tap on it still switches the tab. A **sheet**
+  (from the bottom, never above y 72) and a **dialog** (modal, the tab bar
+  still works) freeze the page under them; one that opens while a finger is
+  on the page (the headphones' drop dialog) ends that touch for the page (a
+  Cancel), so its lift can't act or draw under it. All are opaque and drawn
+  through the list's scroll mapping, so they land right over a scrolled
+  list. After an add (Play next, + Queue) the toast also has **View**: the
+  Queue, scrolled to the first added entry (found by its queue key).
+- **Lists** (`ui/ListView`, with `ListLayout`, host-tested): virtualised rows
+  (a source gives a count and a row renderer; standard pieces for 1- and
+  2-line rows, the number column, a disc, a 40x40 thumbnail slot, a
+  chevron), 42 px items in the band y 72-239 on the LCD's **hardware
+  vertical scroll** (`ListScroller`), inertia from `KineticScroll` with
+  **flings capped at 2,000 px/s**, presses highlighted on the Down and acted
+  on at the Tap (a drag never taps, nor does a press that stops a moving
+  list), long press on rows that have a hold, a top action bar (a
+  container's Play / Play next / + Queue) and **inline action rows** (a tap on
+  a track opens its bar under it; `ListLayout` keeps the tapped row where it
+  was and scrolls just enough to show the bar), and **selection mode**
+  (checkboxes; `BitSet` in PSRAM). The right edge is an **A-Z rail** on long
+  alphabetical lists (over 30 rows) or a thin scrollbar: both sit in the
+  scrolled band, which moved them on every frame (the user saw the scroll
+  bar jitter), so they are **hidden while the list moves** (their column
+  cleared once, the rows pushed full width over it) and drawn again when it
+  settles, or at once when a finger lands on the rail (x 280 to the edge).
+  A drag on it scrubs (a haptic tick per new letter); the touch has no hold
+  (`TouchRecognizer::noHold()`), so resting on it to read the letter and
+  then sliding still scrubs. A tap there only stops the list: the spec's
+  tap is the jump grid (not built yet), and a tap meant for a row's right
+  end that reads at the panel's clamp no longer jumps the list. A press
+  that only touches the list (a tap) doesn't hide it.
+- **Text** (`ui/Fonts`, `TextFit`, host-tested): DejaVu Sans 16 and 13 and
+  DejaVu Sans Bold 16 and 22 as anti-aliased VLW fonts in flash (~170 KB;
+  `tools/vlw_font.py`), which cover ASCII, Latin-1, the common Latin
+  Extended-A letters and the typographic punctuation. A character without a
+  glyph is folded by `TextFold` (e.g. "Ł" to "L"); a name too wide is cut
+  with "…". efont is out of the build (the font probe keeps it behind
+  `UI_SPIKE_EFONT`). Licence: `LICENSES/DejaVu-Fonts.txt`.
+- **Icons**: 1-bit bitmaps in flash (`tools/ui_icons.py` -> `IconData.cpp`).
+- **The pages** for now: Now Playing (title, 40 px artist and album bands
+  that open them in the Library at the playing track or its album,
+  progress, transport, a "..." sheet); the Library (artists A-Z, an artist,
+  an album's or an artist's tracks, with Play / Play next / + Queue and Undo
+  toasts; two levels down an "Artists" pill in the header is the root crumb);
+  the Queue (opened on the playing track, and there again with no row open
+  when the queue changed while you were away; a row's bar Play / Play next /
+  Remove; a tap on the title goes to the playing track, the top, the end in
+  turn; selection mode with Remove in the header, away from the touch
+  buttons); Dance (the dancer's
+  box, the beat and the dancer's name around it; no tap zone at the bottom,
+  which sat over BtnC); Output (Bluetooth or the speaker, the volume, the
+  touch calibration, Forget with a confirmation). A Bluetooth drop while
+  playing pauses and opens a dialog ("Use speaker" / OK) that closes itself
+  when they come back.
+- **The length of a track** for the progress: the decoders don't expose it,
+  so the backend reads it when the track opens (`TrackProgress`, host-tested):
+  a FLAC file's from its STREAMINFO, a VBR MP3's from the Xing/Info or VBRI
+  header in its first frame (after the ID3v2 tag; a 2 KB PSRAM read). Only
+  a file without one (a plain constant-bitrate MP3) falls back to the
+  estimate from how fast the decoder reads the file since its first audio,
+  which is exact for those. (On the device the estimate alone read 7:37 for
+  a 5:20 LAME VBR track 15 s in, and 3:30 for a 3:13 FLAC.)
+- **Console** `ui`: each tab's stack with scroll positions, the list's state,
+  frames and fps, the governor, the UI's bus holds (count, mean, max), the
+  overlays and the loop task's unused stack. `ui0`-`ui4` tap a tab, `uib` goes
+  back. The screenshot (`X`) reads the list band back through the scroll
+  offset, as before. For tests without a hand on the device there is a
+  **scripted finger** (`Input::simulate`, replacing the panel until it
+  lifts; a real touch cancels it): `uit<x>,<y>` a tap, `uih<x>,<y>` a long
+  press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` a swipe that lifts at once (a fling
+  when fast), `uid...` the same resting 150 ms before the lift (a drag).
+  Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max,
+  ring min, underruns +n, governor` when it settles; every touch logs
+  `[touch] down/tap/long press/fling x,y (raw x,y)` (with `scripted` for
+  the scripted finger's), and every move of the queue's current entry
+  `[queue] now at n of N (state)`.
+
+The UI costs ~200 B of static internal RAM (the font slots' pointer, the
+drawing helpers' state, the host adapter); the boot log's `[ui] internal RAM
+... before the UI, ... after` line has the rest.
 
 ## UI spike (browsing UI groundwork)
 
@@ -291,12 +574,18 @@ virtualised list flick-scrolled while audio streams from the SD card, with
 per-slice SPI bus hold times and the ring fill), a font probe and a thumbnail
 probe. The pieces the real UI will keep are portable and host-tested:
 `LibraryIndex` (the library as a PSRAM string arena, fixed records and
-sorted views, built from the card's folders; the future single store, which
-the playlist doesn't use yet), `TextFold`, `TouchGesture`, `KineticScroll`
+sorted views, built from the card's folders: now the single store, see above),
+`TextFold`, `TouchGesture`, `KineticScroll`
 and `ScrollGovernor` (lists back off the SPI bus when the decoder's buffer,
-`Core2AudioBackend::bufferedMsNow()`, runs low). On the Core2, `LcdLock`
-times each LCD hold of the bus it shares with the SD card, and `Haptics`
-plays vibration patterns from a FreeRTOS timer.
+`Core2AudioBackend::bufferedMsNow()`, runs low), and round 2's `VScrollMap`
+(the LCD's hardware vertical scroll, `ui/ListScroller` on the Core2: the
+user found it "much smoother") and `RefillPacer`. On the Core2, `LcdLock`
+times each LCD hold of the bus it shares with the SD card. Round 2's
+interaction boost (the decoder lowered below the loop while a list moves)
+measured worse and was removed. The scroll lab now runs the
+recommended setup by default: the hardware scroll, a 30 fps cap kept on
+the frames' deadlines, flings capped at 2,000 px/s, and the A-Z rail hidden
+while the list moves (it sits in the scrolled band, and jittered).
 
 ## Build notes
 
@@ -313,14 +602,19 @@ plays vibration patterns from a FreeRTOS timer.
 
 ## Roadmap
 
-1. **Library index + sync over WiFi.** mStream exports a manifest and compact
-   index files (tracks, albums, artists, strings) for the synced selection; the
-   player mirrors files to the SD card under the server's paths, downloads with
-   resumable requests, and swaps the index in atomically. First fill by card
+1. **Sync over WiFi.** mStream exports a manifest and compact index files
+   (tracks, albums, artists, strings) for the synced selection; the player
+   mirrors files to the SD card under the server's paths, downloads with
+   resumable requests, and swaps the index in atomically (the library index,
+   its cache and the queue's remap by path are in place). First fill by card
    reader; WiFi for updates. WiFi and Bluetooth don't share the radio well, so
    sync is its own mode.
-2. **Browsing UI:** artists, albums (92 px covers from mStream's thumbnails),
-   playlists, queue, resume after power-off.
+2. **Browsing screens** on the UI framework (above): the Library's albums
+   and folders segments with the A-Z jump grid, covers (92 px, from mStream's
+   thumbnails), the full Now Playing, Queue and Output screens (pairing, the
+   volume sheet), the first-boot coach cards; A-click restarting a track
+   after 3 s, a double buzz for inert buttons; resume within a track after
+   power-off.
 3. **AutoDJ:** mStream precomputes a similar-tracks table (top-K neighbours per
    synced track, from its 1280-d embeddings) that the player walks with
    mStream's session-centroid scoring plus its BPM/key/artist filters.

@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "TextFold.h"
+#include "app/Psram.h"
 #include "ui/LcdLock.h"
 
 // Shared bits of the UI spike (docs/UI-SPIKE.md): the tab bar design's
@@ -79,21 +80,11 @@ void ellipsize(lgfx::LovyanGFX& g, char* text, size_t size, int maxW);
 // Unicode fonts.
 const char* fitRaw(lgfx::LovyanGFX& g, const char* in, size_t inLen, char* out, size_t outSize, int maxW);
 
-// PSRAM (MALLOC_CAP_SPIRAM): anything under 4 KB would otherwise land in
-// internal RAM (SPIRAM_MALLOC_ALWAYSINTERNAL).
-inline void* psramAlloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_SPIRAM); }
-inline void psramFree(void* p) { heap_caps_free(p); }
-template <typename T, typename... Args>
-T* psramNew(Args&&... args) {
-  void* p = psramAlloc(sizeof(T));
-  return p ? new (p) T(std::forward<Args>(args)...) : nullptr;
-}
-template <typename T>
-void psramDelete(T* p) {
-  if (!p) return;
-  p->~T();
-  psramFree(p);
-}
+// PSRAM allocation (app/Psram.h), under the spike's names too.
+using ::psramAlloc;
+using ::psramDelete;
+using ::psramFree;
+using ::psramNew;
 
 // Internal-RAM free now and lowest since boot, in bytes.
 uint32_t internalFree();

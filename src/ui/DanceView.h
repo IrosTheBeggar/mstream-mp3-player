@@ -6,8 +6,8 @@
 #include "DancePose.h"
 #include "DanceSkin.h"
 
-// The dance screen: a title bar, the dancing character in its own box, and
-// one line of numbers. The character is drawn into a sprite in PSRAM
+// The dancer's box on the Dance tab (ui/DancePage draws the panels around
+// it: the beat, the dancer's name, the track). The character is drawn into a sprite in PSRAM
 // (setPsram() before createSprite(): the default would take internal RAM)
 // and pushed once per frame; M5GFX converts it to the panel's RGB565 through
 // its small flip buffers. Each push takes the SPI bus (shared with the SD
@@ -34,8 +34,9 @@
 // Loop task only: the one task that draws to M5.Display.
 class DanceView {
 public:
+  // Under the tab bar, in the middle of the content area (spec §6.5).
   static constexpr int kBoxX = 100;
-  static constexpr int kBoxY = 32;
+  static constexpr int kBoxY = 44;
   static constexpr int kBoxW = 120;
   static constexpr int kBoxH = 150;
 
@@ -50,12 +51,13 @@ public:
   // A screen point inside the character's box.
   static bool inBox(int x, int y) { return x >= kBoxX && x < kBoxX + kBoxW && y >= kBoxY && y < kBoxY + kBoxH; }
 
-  // Clears the screen for the dance: title bar, button labels, empty box.
-  void enter();
-  // The title bar's text; redrawn only when it changes.
-  void setTitle(const String& title);
-  // The line of numbers under the figure; redrawn only when it changes.
-  void setStatus(const String& status);
+  // The box is on screen again (the page cleared it): the next frame
+  // pushes all of it.
+  void enter() { full_ = true; }
+  // Only screen rows [y0, y1) of the box may be pushed: an overlay has the
+  // rest (the toast over the top of the content, a sheet from the bottom).
+  // When rows come back, the next frame pushes the whole box.
+  void setVisibleRows(int y0, int y1);
   // Draws a pose into the sprite. `flash`: the beat dot; `dancing`: the
   // figure follows a beat (drawn brighter than the idle sway). Stick skin only.
   void drawFigure(const dance::Pose& pose, bool flash, bool dancing);
@@ -92,6 +94,5 @@ private:
   Rect dirty_;         // to push: the figure's, now and last frame
   bool flash_ = false; // the beat dot as last drawn
   bool flashDirty_ = false;
-  String title_;
-  String status_;
+  int visTop_ = 0, visBottom_ = 240;  // screen rows the box may be pushed to
 };

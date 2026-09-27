@@ -4,12 +4,14 @@
 #include <functional>
 #include <vector>
 
+#include "InputEvent.h"
 #include "LibraryIndex.h"
-#include "Track.h"
 #include "app/Haptics.h"
+#include "app/Library.h"
 #include "audio/Core2AudioBackend.h"
 #include "storage/LocalStorage.h"
 
+class Input;
 class InputLab;
 class ScrollLab;
 class FontProbe;
@@ -22,22 +24,35 @@ class ThumbProbe;
 // most one owns the screen at a time; main.cpp stops drawing the now-playing
 // and dance screens while one does, and redraws when it lets go.
 //
-// The library index (LibraryIndex in PSRAM) is built from the SD card at
-// boot and rebuilt by g0; g<n> replaces it with a synthetic library of n
-// tracks; g alone reports what it holds and what today's track list costs.
+// The library index is the app's (app/Library, the player's single
+// store): g reports it, g0 rebuilds it from the card (through the callback
+// main.cpp gives, which carries the queue across). g<n> builds a synthetic
+// library of n tracks in an index of the spike's own, which the scroll lab
+// and the thumbnail probe then use instead, until g0; the player never sees
+// it.
+//
+// The screens get the glass from the input layer (ui/Input: corrected,
+// as events) through onGlass(), like every other screen. The input lab is
+// the exception: it measures the raw panel and M5Unified's own buttons, so
+// it reads them itself (ownsInput(): the input layer sends nothing then).
 class Spike {
 public:
-  Spike(Core2AudioBackend& audio, Haptics& haptics, LocalStorage& storage);
+  Spike(Core2AudioBackend& audio, Haptics& haptics, LocalStorage& storage, Library& library, Input& input);
 
-  // Builds the library index from the card (logged as [index]).
-  void begin();
   void loop(uint32_t nowMs);
   // A spike screen is up: the app's own screens must not draw.
   bool ownsScreen() const;
   // The input lab is open: BtnA/B/C and the glass are its alone.
   bool ownsInput() const;
+  // A glass event from the input layer: true if a spike screen took it.
+  bool onGlass(const InputEvent& e);
+  // Closes whatever spike screen is up (another screen takes the display).
+  void closeAll() { closeAllBut(Screen::None); }
   // Called when the last spike screen closes (the app redraws its own).
   void onScreenReleased(std::function<void()> fn) { released_ = std::move(fn); }
+  // g0: rebuilds the library (main.cpp wraps Library::rebuild() so the
+  // queue follows).
+  void onRebuild(std::function<bool()> fn) { rebuild_ = std::move(fn); }
 
   // Console commands (the text after the letter).
   void inputLab(const char* arg);
@@ -46,46 +61,38 @@ public:
   void fontProbe(const char* arg);
   void thumbProbe(const char* arg);
 
-  // Today's track list (main.cpp's `library` and the playlist copy): what
-  // it measured around building them, for g's report.
-  void setTrackListCost(uint32_t tracks, int32_t libraryMeasured, int32_t playlistMeasured, uint32_t libraryEstimate,
-                        uint32_t playlistEstimate);
-  // Internal-RAM bytes a Track list holds (vector + strings past libstdc++'s
-  // 15-byte in-place buffer, with ESP-IDF's per-block overhead).
-  static uint32_t estimateBytes(const std::vector<Track>& tracks);
-
-  LibraryIndex* libraryIndex() { return index_; }
+  // What the labs show: the synthetic library if g<n> made one, else the
+  // app's.
+  LibraryIndex* libraryIndex();
 
 private:
   enum class Screen : uint8_t { None, Input, Scroll, Font, Thumb };
   void closeAllBut(Screen keep);
-  bool buildReal();
   bool buildSynthetic(uint32_t tracks);
   void report();
-  bool ensureIndex();
+  void dropSynthetic();
 
   Core2AudioBackend& audio_;
   Haptics& haptics_;
   LocalStorage& storage_;
-  LibraryIndex* index_ = nullptr;  // PSRAM
+  Library& library_;
+  Input& inputLayer_;
+  LibraryIndex* synth_ = nullptr;  // PSRAM, g<n> only
   InputLab* input_ = nullptr;      // PSRAM, on first use
   ScrollLab* scroll_ = nullptr;
   FontProbe* font_ = nullptr;
   ThumbProbe* thumb_ = nullptr;
   std::function<void()> released_;
+  std::function<bool()> rebuild_;
   bool owned_ = false;
 
-  // The last build, for the report.
+  // The synthetic build, for the report.
   struct Build {
-    bool synthetic = false;
     uint32_t files = 0, added = 0;
-    float walkMs = 0, addMs = 0, finishMs = 0;
+    float addMs = 0, finishMs = 0;
     int32_t psramUsed = 0;
     int32_t internalDelta = 0;    // free after - free before
     uint32_t internalMinDuring = 0;
     uint32_t internalFreeBefore = 0;
   } build_;
-  uint32_t listTracks_ = 0;
-  int32_t listMeasured_ = 0, playlistMeasured_ = 0;
-  uint32_t listEstimate_ = 0, playlistEstimate_ = 0;
 };

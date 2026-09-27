@@ -334,8 +334,8 @@ line and the title bar. All device tests of this proof of concept run in it.
 | Key | Action |
 |---|---|
 | `z` | silent test mode (until restart) |
-| `d`, or a tap on the screen above the button strip (outside the dancer's box while dancing) | dance screen on/off |
-| `m`, or a tap on the dancer's box while dancing | next dancer: crab (default) → stick figure → crab |
+| `d`, or the Dance tab | the Dance tab (the UI's, since the tab bar; `d` again goes back to the tab you were on). The old "tap the screen to dance" is gone |
+| `m`, or a tap on the dancer's box on the Dance tab | next dancer: crab (default) → stick figure → crab |
 | `s` | stats, including the `[dance]` line (also every 5 s while dancing) |
 | `v` | a `[beat]` line per tracker beat on/off |
 | `x` | screenshot of the dancer's box |

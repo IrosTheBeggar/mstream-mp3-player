@@ -673,12 +673,20 @@ void InputLab::finishAttempt(uint32_t nowMs) {
     s.dy = static_cast<int16_t>(r.downY - cy);
     s.durMs = static_cast<uint16_t>(r.durationMs > 65535 ? 65535 : r.durationMs);
     const int got = targetAt(r.downX, r.downY);
+    // Where the input layer's correction puts the press.
+    char cal[80] = "";
+    if (cal_) {
+      const int x = cal_->mapX(r.downX), y = cal_->mapY(r.downY);
+      const bool calHit = x >= want.x0 && x <= want.x1 && y >= want.y0 && y <= want.y1;
+      snprintf(cal, sizeof(cal), " cal=(%d,%d) cal_off=(%+d,%+d) cal_hit=%s%s", x, y, x - cx, y - cy,
+               calHit ? "yes" : "no", TouchCalibration::clampedHighX(r.downX) ? " (clamped)" : "");
+    }
     Serial.printf("[target] #%lu %s (%s): %s down=(%d,%d) off=(%+d,%+d) up=(%d,%d)%s %s dur=%lums move=%dpx "
-                  "hit=%s button=%s\n",
+                  "hit=%s button=%s%s\n",
                   (unsigned long)attempts_, want.name, kZoneNames[want.zone], hit ? "HIT" : "MISS", r.downX, r.downY,
                   s.dx, s.dy, r.upX, r.upY, upHit ? "" : " (up outside)", TouchGesture::name(r.kind),
                   (unsigned long)r.durationMs, r.maxMovePx,
-                  got >= 0 ? kTargets[got].name : s.strip ? "the button strip" : "nothing", btn);
+                  got >= 0 ? kTargets[got].name : s.strip ? "the button strip" : "nothing", btn, cal);
   }
   if (nTargets_ < kMaxSamples) targets_[nTargets_++] = s;
   // Feedback: the target's outline, green or red, then the next prompt.

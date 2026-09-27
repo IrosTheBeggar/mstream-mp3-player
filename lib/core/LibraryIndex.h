@@ -2,8 +2,11 @@
 #include <cstddef>
 #include <cstdint>
 
-// The music library as one compact index: the future single store the
-// browsing UI and the queue read from. Portable, host-tested.
+#include "ByteStream.h"
+
+// The music library as one compact index: the single store the browsing UI,
+// the queue and the player read from (they hold its track ids). Portable,
+// host-tested.
 //
 // Everything lives in a few flat blocks from an allocator hook (the firmware
 // points it at PSRAM): one string arena (every name once, NUL-terminated),
@@ -33,6 +36,12 @@
 //   filesIn(folder)       a folder's audio files, A-Z
 // plus the A-Z rail's buckets for the two long lists ('#', A..Z).
 //
+// save() writes the finished index as one file (its blocks as they are, a
+// header, a checksum) and load() reads it back into blocks of exactly that
+// size, with no sorting and no build peak: the firmware's cache on the card.
+// findTrack() turns a path back into an id (the queue is saved as paths, so
+// it survives a rebuild that renumbers the tracks).
+//
 // Not thread-safe: build and read on one task (the firmware's loop task).
 class LibraryIndex {
 public:
@@ -45,6 +54,9 @@ public:
   enum class Format : uint8_t { Unknown = 0, Mp3, Flac };
   enum class Add : uint8_t { Added, Skipped, NoMemory };
   enum class View : uint8_t { Artists, Albums };
+  // load(): Stale means a good file for another `signature` (the card
+  // changed); Corrupt a short, damaged or foreign one.
+  enum class Load : uint8_t { Loaded, Stale, Corrupt, NoMemory };
 
   // String offsets are into the arena (str()); ids index the record tables.
   struct Track {             // 24 bytes
@@ -137,6 +149,10 @@ public:
   // if it didn't fit (buf then holds "").
   size_t trackPath(uint32_t id, char* buf, size_t size) const;
   size_t folderPath(uint32_t id, char* buf, size_t size) const;
+  // The track at `path` ("<root>/Artist/Album/06 - Title.mp3", as
+  // trackPath() writes it), or kNone. A binary search per folder level: no
+  // allocation, O(depth x log n).
+  uint32_t findTrack(const char* path) const;
 
   Span artistsAZ() const { return {artistsAZ_, artistN_}; }
   Span albumsAZ() const { return {albumsAZ_, albumN_}; }
@@ -168,6 +184,15 @@ public:
 
   Memory memory() const;
 
+  // ---- the cache ----
+  // Writes the finished index; `signature` is the caller's (what the index
+  // was built from), handed back to load() to tell a stale file. False: not
+  // ready, or the sink failed.
+  bool save(ByteSink& out, uint64_t signature) const;
+  // Replaces what's here with a saved index. Anything but Loaded leaves the
+  // index empty. Every block comes from the hooks, sized exactly.
+  Load load(ByteSource& in, uint64_t signature);
+
 private:
   template <typename T>
   struct Block {  // a growable array from the hooks
@@ -192,6 +217,8 @@ private:
   void trim(Block<T>& b);
   template <typename T>
   void drop(Block<T>& b);
+  template <typename T>
+  bool readBlock(ByteSource& in, Block<T>& b, uint32_t n);  // exactly n records
   template <typename T>
   size_t bytes(const Block<T>& b) const { return static_cast<size_t>(b.cap) * sizeof(T); }
   bool tableInit(Table& t, uint32_t cap);

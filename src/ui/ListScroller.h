@@ -30,8 +30,7 @@
 //     are still on screen until the address changes), the new start address
 //     is sent, and what must not move is pushed back to its place. So the
 //     wrong strip and the displaced rail are on screen for that bus time
-//     only (plus any preemption by a higher-priority task: the decoder,
-//     unless the interaction boost has lowered it).
+//     only (plus any preemption by a higher-priority task: the decoder).
 //   - A full redraw (the first frame, after invalidate(), or a move of more
 //     than maxStep lines): the start address is kept and the content is
 //     written in place, top to bottom, exactly like a plain redraw (in

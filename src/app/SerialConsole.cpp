@@ -85,6 +85,14 @@ void SerialConsole::poll() {
           Serial.printf("> thumbnail probe \"%s\"\n", arg_.c_str());
           actions_.thumbProbe(arg_.c_str());
           break;
+        case Pending::Queue:
+          Serial.printf("> queue \"%s\"\n", arg_.c_str());
+          actions_.queue(arg_.c_str());
+          break;
+        case Pending::Touch:
+          Serial.printf("> input \"%s\"\n", arg_.c_str());
+          actions_.touch(arg_.c_str());
+          break;
         case Pending::None:
           break;
       }
@@ -118,6 +126,8 @@ void SerialConsole::poll() {
       case 'g': pending_ = Pending::LibraryIndex; arg_ = ""; break;
       case 'e': pending_ = Pending::FontProbe; arg_ = ""; break;
       case 'j': pending_ = Pending::ThumbProbe; arg_ = ""; break;
+      case 'q': pending_ = Pending::Queue; arg_ = ""; break;
+      case 'a': pending_ = Pending::Touch; arg_ = ""; break;
       default: break;  // newlines etc.
     }
   }

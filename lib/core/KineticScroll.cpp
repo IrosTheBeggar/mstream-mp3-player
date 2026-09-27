@@ -72,9 +72,14 @@ void KineticScroll::release(uint32_t ms) {
       v = (histOffset_[last] - histOffset_[ref]) * 1000.0f / static_cast<float>(histMs_[last] - histMs_[ref]);
     }
   }
+  release(ms, v);
+}
+
+void KineticScroll::release(uint32_t ms, float pxPerS) {
+  if (phase_ != Phase::Dragging) return;
   lastMs_ = ms;
-  if (std::fabs(v) >= config_.stopPxPerS) {
-    fling(ms, v);
+  if (std::fabs(pxPerS) >= config_.stopPxPerS) {
+    fling(ms, pxPerS);
   } else {
     startSnap(rowTarget(offset_, 0));
   }

@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "ByteStream.h"
 #include "LibraryIndex.h"
 #include "LibrarySynth.h"
 #include "TextFold.h"
@@ -448,6 +449,186 @@ void test_rebuild_and_expect_hint() {
   }
 }
 
+// ---- finding a track by its path ----
+
+void test_find_track_by_path() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  buildSample(idx);
+  char buf[256];
+  for (uint32_t t = 0; t < idx.trackCount(); ++t) {
+    TEST_ASSERT_TRUE(idx.trackPath(t, buf, sizeof(buf)) > 0);
+    TEST_ASSERT_EQUAL_UINT32(t, idx.findTrack(buf));
+  }
+  const char* none[] = {
+      "/music/Daft Punk/Discovery/cover.jpg",               // not indexed
+      "/music/daft punk/Discovery/01 - One More Time.mp3",  // case matters (it's a path)
+      "/music/Daft Punk/Discovery",                         // a folder
+      "/music/Daft Punk/Discovery/",
+      "/music",
+      "/musicx/Root Track.mp3",
+      "/elsewhere/x.mp3",
+      "relative.mp3",
+      "",
+  };
+  for (const char* p : none) TEST_ASSERT_EQUAL_UINT32(LibraryIndex::kNone, idx.findTrack(p));
+  // Doubled slashes are skipped, as addFile() skips them.
+  TEST_ASSERT_TRUE(idx.findTrack("/music/Kavinsky//OutRun/08 - Nightcall.mp3") != LibraryIndex::kNone);
+  LibraryIndex empty(Heap::alloc, Heap::release);
+  TEST_ASSERT_EQUAL_UINT32(LibraryIndex::kNone, empty.findTrack("/music/Root Track.mp3"));
+}
+
+void test_find_track_in_a_big_library() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  const synth::Spec spec = synth::specFor(2000);
+  TEST_ASSERT_TRUE(idx.begin(spec.root, 2000));
+  synth::addTracks(idx, spec);
+  TEST_ASSERT_TRUE(idx.finish());
+  char buf[256];
+  for (uint32_t t = 0; t < idx.trackCount(); t += 7) {
+    idx.trackPath(t, buf, sizeof(buf));
+    TEST_ASSERT_EQUAL_UINT32(t, idx.findTrack(buf));
+  }
+}
+
+// ---- the cache ----
+
+namespace {
+// Everything a reader can see: the counts, every view, every path.
+void expectSameIndex(const LibraryIndex& a, const LibraryIndex& b) {
+  TEST_ASSERT_TRUE(b.ready());
+  TEST_ASSERT_EQUAL_UINT32(a.trackCount(), b.trackCount());
+  TEST_ASSERT_EQUAL_UINT32(a.artistCount(), b.artistCount());
+  TEST_ASSERT_EQUAL_UINT32(a.albumCount(), b.albumCount());
+  TEST_ASSERT_EQUAL_UINT32(a.folderCount(), b.folderCount());
+  char pa[256], pb[256];
+  for (uint32_t t = 0; t < a.trackCount(); ++t) {
+    a.trackPath(t, pa, sizeof(pa));
+    b.trackPath(t, pb, sizeof(pb));
+    TEST_ASSERT_EQUAL_STRING(pa, pb);
+    TEST_ASSERT_EQUAL_UINT32(a.allTracks()[t], b.allTracks()[t]);
+    TEST_ASSERT_EQUAL_UINT32(t, b.findTrack(pa));
+  }
+  for (uint32_t i = 0; i < a.artistCount(); ++i) {
+    TEST_ASSERT_EQUAL_UINT32(a.artistsAZ()[i], b.artistsAZ()[i]);
+    TEST_ASSERT_EQUAL_STRING(a.artistName(i), b.artistName(i));
+    TEST_ASSERT_EQUAL_UINT32(a.albumsOf(i).count, b.albumsOf(i).count);
+    TEST_ASSERT_EQUAL_UINT32(a.tracksOfArtist(i).count, b.tracksOfArtist(i).count);
+  }
+  for (uint32_t i = 0; i < a.albumCount(); ++i) {
+    TEST_ASSERT_EQUAL_UINT32(a.albumsAZ()[i], b.albumsAZ()[i]);
+    TEST_ASSERT_EQUAL_UINT32(a.tracksOfAlbum(i).count, b.tracksOfAlbum(i).count);
+  }
+  for (uint32_t f = 0; f < a.folderCount(); ++f) {
+    a.folderPath(f, pa, sizeof(pa));
+    b.folderPath(f, pb, sizeof(pb));
+    TEST_ASSERT_EQUAL_STRING(pa, pb);
+    TEST_ASSERT_EQUAL_UINT32(a.subfolders(f).count, b.subfolders(f).count);
+    TEST_ASSERT_EQUAL_UINT32(a.filesIn(f).count, b.filesIn(f).count);
+  }
+  for (int k = 0; k <= LibraryIndex::kBuckets; ++k) {
+    TEST_ASSERT_EQUAL_UINT32(a.bucketStart(LibraryIndex::View::Artists, k),
+                             b.bucketStart(LibraryIndex::View::Artists, k));
+    TEST_ASSERT_EQUAL_UINT32(a.bucketStart(LibraryIndex::View::Albums, k), b.bucketStart(LibraryIndex::View::Albums, k));
+  }
+  TEST_ASSERT_EQUAL_size_t(a.memory().total, b.memory().total);
+}
+}  // namespace
+
+void test_save_and_load_round_trip() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  buildSample(idx);
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, 0x1234567890ABCDEFull));
+  const size_t before = Heap::live;
+  LibraryIndex back(Heap::alloc, Heap::release);
+  MemorySource in(file.data(), file.size(), 100);  // reads split into pieces
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded),
+                        static_cast<int>(back.load(in, 0x1234567890ABCDEFull)));
+  expectSameIndex(idx, back);
+  // Blocks of exactly the saved size, and no build peak beyond them.
+  TEST_ASSERT_EQUAL_size_t(Heap::live - before, back.memory().total);
+  TEST_ASSERT_EQUAL_size_t(back.memory().total, back.memory().buildPeak);
+  // It saves again byte for byte.
+  MemorySink again;
+  TEST_ASSERT_TRUE(back.save(again, 0x1234567890ABCDEFull));
+  TEST_ASSERT_EQUAL_size_t(file.size(), again.size());
+  TEST_ASSERT_EQUAL_MEMORY(file.data(), again.data(), file.size());
+}
+
+void test_save_and_load_a_big_library() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  const synth::Spec spec = synth::specFor(10000);
+  TEST_ASSERT_TRUE(idx.begin(spec.root));
+  synth::addTracks(idx, spec);
+  TEST_ASSERT_TRUE(idx.finish());
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, 7));
+  // The file is the index's blocks plus a small header.
+  TEST_ASSERT_TRUE(file.size() >= idx.memory().total && file.size() < idx.memory().total + 512);
+  LibraryIndex back(Heap::alloc, Heap::release);
+  MemorySource in(file.data(), file.size(), 4096);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(in, 7)));
+  expectSameIndex(idx, back);
+  printf("[index] cache of 10000 tracks: %u bytes (the index holds %u)\n", static_cast<unsigned>(file.size()),
+         static_cast<unsigned>(idx.memory().total));
+}
+
+void test_load_rejects_stale_and_damaged_files() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  buildSample(idx);
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, 42));
+  LibraryIndex back(Heap::alloc, Heap::release);
+  auto load = [&](const std::vector<uint8_t>& bytes, uint64_t sig) {
+    MemorySource in(bytes.data(), bytes.size());
+    return static_cast<int>(back.load(in, sig));
+  };
+  const std::vector<uint8_t> good(file.data(), file.data() + file.size());
+  const size_t emptyHeap = Heap::live;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Stale), load(good, 43));
+  TEST_ASSERT_FALSE(back.ready());
+  // Cut short anywhere.
+  for (size_t cut : {size_t(0), size_t(3), size_t(100), good.size() / 2, good.size() - 1}) {
+    const std::vector<uint8_t> shortFile(good.begin(), good.begin() + static_cast<long>(cut));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), load(shortFile, 42));
+    TEST_ASSERT_FALSE(back.ready());
+    TEST_ASSERT_EQUAL_size_t(emptyHeap, Heap::live);  // whatever it took went back
+  }
+  // A flipped byte in the payload: the checksum catches it.
+  std::vector<uint8_t> flipped = good;
+  flipped[good.size() / 2] ^= 0x20;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), load(flipped, 42));
+  // Not an index at all.
+  std::vector<uint8_t> junk(good.size(), 0x5A);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), load(junk, 42));
+  // Out of memory while loading: clean, and says so.
+  Heap::limit = Heap::live + 64;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::NoMemory), load(good, 42));
+  TEST_ASSERT_EQUAL_size_t(emptyHeap, Heap::live);
+  Heap::limit = SIZE_MAX;
+  // And the good file still loads after all that.
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), load(good, 42));
+  expectSameIndex(idx, back);
+  // An index that isn't ready has nothing to save.
+  LibraryIndex none(Heap::alloc, Heap::release);
+  MemorySink nothing;
+  TEST_ASSERT_FALSE(none.save(nothing, 1));
+}
+
+void test_an_empty_library_round_trips() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  TEST_ASSERT_TRUE(idx.finish());
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, 5));
+  LibraryIndex back(Heap::alloc, Heap::release);
+  MemorySource in(file.data(), file.size());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(in, 5)));
+  TEST_ASSERT_EQUAL_UINT32(0, back.trackCount());
+  TEST_ASSERT_EQUAL_UINT32(1, back.folderCount());
+  TEST_ASSERT_EQUAL_STRING("/music", back.folderName(0));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_counts_and_skips);
@@ -461,5 +642,11 @@ int main(int, char**) {
   RUN_TEST(test_synthetic_10k);
   RUN_TEST(test_multi_disc_album);
   RUN_TEST(test_rebuild_and_expect_hint);
+  RUN_TEST(test_find_track_by_path);
+  RUN_TEST(test_find_track_in_a_big_library);
+  RUN_TEST(test_save_and_load_round_trip);
+  RUN_TEST(test_save_and_load_a_big_library);
+  RUN_TEST(test_load_rejects_stale_and_damaged_files);
+  RUN_TEST(test_an_empty_library_round_trips);
   return UNITY_END();
 }

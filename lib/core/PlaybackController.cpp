@@ -1,32 +1,29 @@
 #include "PlaybackController.h"
 
-#include <utility>  // std::move
-
-void PlaybackController::setPlaylist(std::vector<Track> tracks) {
-  stop();
-  playlist_ = std::move(tracks);
-  index_ = playlist_.empty() ? -1 : 0;
-}
+#include <string>
 
 void PlaybackController::startCurrent() {
   if (!hasTrack()) return;
-  const Track& t = playlist_[index_];
-  audio_.play(t.path, t.durationMs);
+  // An unknown id gives "": the backend fails it and update() skips on.
+  char path[TrackCatalog::kMaxPath];
+  const uint32_t id = queue_.currentTrack();
+  catalog_.path(id, path, sizeof(path));
+  audio_.play(std::string(path), catalog_.durationHintMs(id));
   state_ = PlayState::Playing;
   cued_ = false;
 }
 
-void PlaybackController::play(size_t index) {
-  if (index >= playlist_.size()) return;
+void PlaybackController::play(size_t position) {
+  if (position >= queue_.size()) return;
   failuresInARow_ = 0;
-  index_ = static_cast<int>(index);
+  queue_.setCurrent(static_cast<uint32_t>(position));
   startCurrent();
 }
 
 void PlaybackController::togglePlayPause() {
   switch (state_) {
     case PlayState::Stopped:
-      if (!playlist_.empty()) play(index_ < 0 ? 0 : static_cast<size_t>(index_));
+      if (!queue_.empty()) play(queue_.current() < 0 ? 0 : static_cast<size_t>(queue_.current()));
       break;
     case PlayState::Playing:
       audio_.pause();
@@ -44,21 +41,23 @@ void PlaybackController::togglePlayPause() {
 }
 
 void PlaybackController::next() {
-  if (playlist_.empty()) return;
+  if (queue_.empty()) return;
   failuresInARow_ = 0;
   advance();
 }
 
 void PlaybackController::advance() {
-  index_ = (index_ + 1) % static_cast<int>(playlist_.size());
+  if (!queue_.step(+1, repeat_)) {
+    stop();  // the end of the queue, and no repeat
+    return;
+  }
   startCurrent();
 }
 
 void PlaybackController::prev() {
-  if (playlist_.empty()) return;
+  if (queue_.empty()) return;
   failuresInARow_ = 0;
-  const int n = static_cast<int>(playlist_.size());
-  index_ = (index_ - 1 + n) % n;
+  queue_.step(-1, repeat_);  // at the start without repeat: the first track again
   startCurrent();
 }
 
@@ -70,10 +69,9 @@ void PlaybackController::cue(int delta) {
     delta > 0 ? next() : prev();
     return;
   }
-  if (playlist_.empty()) return;
+  if (queue_.empty()) return;
   failuresInARow_ = 0;
-  const int n = static_cast<int>(playlist_.size());
-  index_ = ((index_ + delta) % n + n) % n;
+  queue_.step(delta, repeat_);
   if (state_ == PlayState::Paused && !cued_) {
     audio_.stop();  // the paused track can't be resumed any more
     cued_ = true;
@@ -90,13 +88,72 @@ void PlaybackController::update(uint32_t nowMs) {
   (void)nowMs;  // the backend owns the clock via its own loop(); reserved here
   if (state_ != PlayState::Playing) return;
   if (audio_.failed()) {
-    if (++failuresInARow_ >= playlist_.size()) {
+    if (++failuresInARow_ >= queue_.size()) {
       stop();  // every track failed in a row: nothing here plays
       return;
     }
     advance();
   } else if (audio_.finished()) {
     failuresInARow_ = 0;
-    advance();  // wraps to the start of the playlist at the end
+    advance();  // wraps to the start of the queue at the end (with repeat)
   }
+}
+
+void PlaybackController::currentMoved() {
+  failuresInARow_ = 0;
+  if (!hasTrack()) {
+    stop();
+    return;
+  }
+  switch (state_) {
+    case PlayState::Playing:
+      startCurrent();
+      break;
+    case PlayState::Paused:
+      if (!cued_) {
+        audio_.stop();
+        cued_ = true;
+      }
+      break;
+    case PlayState::Stopped:
+      break;
+  }
+}
+
+bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start) {
+  if (!queue_.replace(tracks, n, start)) return false;
+  failuresInARow_ = 0;
+  if (hasTrack()) {
+    startCurrent();
+  } else {
+    stop();
+  }
+  return true;
+}
+
+QueueModel::Removed PlaybackController::remove(const uint32_t* positions, uint32_t n) {
+  const QueueModel::Removed r = queue_.remove(positions, n);
+  if (!r.current) return r;
+  if (r.pastEnd) {
+    stop();  // nothing after it stayed: stopped, on the last track
+  } else {
+    currentMoved();
+  }
+  return r;
+}
+
+void PlaybackController::clearQueue() {
+  stop();
+  queue_.clear();
+}
+
+bool PlaybackController::undo() {
+  const uint32_t key = queue_.currentKey();
+  if (!queue_.undo()) return false;
+  if (queue_.currentKey() != key) currentMoved();
+  return true;
+}
+
+void PlaybackController::queueReplaced(bool currentKept) {
+  if (!currentKept) currentMoved();
 }

@@ -12,8 +12,8 @@
 #include "audio/Core2AudioBackend.h"
 #include "ui/DanceView.h"
 
-// The dancing character (proof of concept, docs/MASCOT-POC.md), on the
-// loop task: the crab (the default) or the stick figure, swapped by
+// The dancing character (proof of concept, docs/MASCOT-POC.md), the Dance
+// tab's dancer (ui/DancePage draws the page around its box), on the loop task: the crab (the default) or the stick figure, swapped by
 // cycleSkin(). Every pass while it's on: the new audio from the active
 // output's tap goes to the BeatTracker (reset on an output switch, a track
 // change, a skip, or frames lost), and ~30 times a second the dancer is drawn
@@ -28,7 +28,9 @@ public:
   bool begin();
   void setActive(bool on);
   bool active() const { return active_; }
-  // Every loop pass. Draws a frame when one is due; `silent` goes in the title.
+  bool ready() const { return ready_; }
+  // Every loop pass. Draws a frame when one is due (`silent`: the silent
+  // test mode, noted in the stats).
   void loop(uint32_t nowMs, bool silent);
 
   // Console.
@@ -39,6 +41,12 @@ public:
   void cycleSkin();                  // crab -> stick -> crab (console m, a tap on the box)
   dance::Skin skin() const { return skin_; }
   void toggleVerbose();
+  // What the Dance page shows around the dancer.
+  float bpm() const { return tracker_.bpm(); }
+  float confidence() const { return tracker_.confidence(); }
+  bool locked() const { return tracker_.locked(); }
+  bool frozen() const { return frozen_ >= 0; }
+  float fps() const { return fps_; }
   void printStats(uint32_t nowMs);   // the [dance] line
 
   // For screenshots of the figure's box.
@@ -89,7 +97,6 @@ private:
   // Drawing.
   uint32_t lastFrameMs_ = 0;
   uint32_t lastFrameUs_ = 0;
-  uint32_t lastStatusMs_ = 0;
   int frozen_ = -1;
   int offsetMs_ = 0;
   bool verbose_ = false;

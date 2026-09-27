@@ -7,8 +7,10 @@
 #include <vector>
 
 #include "HeadsetKeys.h"
+#include "LibraryIndex.h"
 #include "PlaybackController.h"
-#include "Track.h"
+#include "QueueModel.h"
+#include "TrackCatalog.h"
 #include "hal/IAudioBackend.h"
 
 using Key = HeadsetKeys::Key;
@@ -43,9 +45,25 @@ public:
   bool failed() const override { return false; }
 };
 
-std::vector<Track> threeTracks() {
-  return {{"/a.mp3", "A", "x", 1000}, {"/b.mp3", "B", "y", 1000}, {"/c.mp3", "C", "z", 1000}};
-}
+// A library of up to three tracks at the root ("/music/a.mp3" is id 0, b 1,
+// c 2: ids are in the order the files were added), a queue of all of them,
+// and the player.
+struct Rig {
+  LibraryIndex index;
+  TrackCatalog catalog{&index};
+  QueueModel queue;
+  FakeAudioBackend audio;
+  PlaybackController player{audio, queue, catalog};
+
+  explicit Rig(uint32_t tracks) {
+    const char* files[] = {"/music/a.mp3", "/music/b.mp3", "/music/c.mp3"};
+    index.begin("/music");
+    for (uint32_t i = 0; i < tracks; ++i) index.addFile(files[i]);
+    index.finish();
+    const uint32_t ids[] = {0, 1, 2};
+    queue.assign(ids, tracks, 0);
+  }
+};
 
 // Music is audible: the backend plays and isn't paused.
 bool audible(const FakeAudioBackend& a) { return a.playing && !a.paused; }
@@ -70,9 +88,9 @@ void test_the_rule() {
 
 // After a boot and an automatic reconnect: nothing the headphones send starts music.
 void test_nothing_starts_from_stopped() {
-  FakeAudioBackend a;
-  PlaybackController p(a);
-  p.setPlaylist(threeTracks());
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
   for (Key k : {Key::Play, Key::Next, Key::Play, Key::Prev, Key::Prev, Key::Pause, Key::Play}) {
     HeadsetKeys::apply(p, k);
     TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
@@ -82,9 +100,9 @@ void test_nothing_starts_from_stopped() {
 }
 
 void test_next_and_prev_while_paused_select_without_playing() {
-  FakeAudioBackend a;
-  PlaybackController p(a);
-  p.setPlaylist(threeTracks());
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
   p.play(0);
   TEST_ASSERT_EQUAL(Action::Pause, HeadsetKeys::apply(p, Key::Pause));
   TEST_ASSERT_EQUAL(Action::Cue, HeadsetKeys::apply(p, Key::Next));  // a double-press while adjusting a bud
@@ -100,15 +118,15 @@ void test_next_and_prev_while_paused_select_without_playing() {
   // Their PLAY resumes: the selected track, from its start.
   TEST_ASSERT_EQUAL(Action::Resume, HeadsetKeys::apply(p, Key::Play));
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
-  TEST_ASSERT_EQUAL_STRING("/c.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.lastPath.c_str());
   TEST_ASSERT_EQUAL_INT(0, a.resumeCount);
   TEST_ASSERT_TRUE(audible(a));
 }
 
 void test_play_and_pause_are_commands_not_toggles() {
-  FakeAudioBackend a;
-  PlaybackController p(a);
-  p.setPlaylist(threeTracks());
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
   p.play(1);
   TEST_ASSERT_EQUAL(Action::Ignore, HeadsetKeys::apply(p, Key::Play));  // ear detection: already playing
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
@@ -123,15 +141,15 @@ void test_play_and_pause_are_commands_not_toggles() {
 }
 
 void test_next_and_prev_while_playing_skip() {
-  FakeAudioBackend a;
-  PlaybackController p(a);
-  p.setPlaylist(threeTracks());
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
   p.play(0);
   TEST_ASSERT_EQUAL(Action::Skip, HeadsetKeys::apply(p, Key::Next));
-  TEST_ASSERT_EQUAL_STRING("/b.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", a.lastPath.c_str());
   TEST_ASSERT_EQUAL(Action::Skip, HeadsetKeys::apply(p, Key::Prev));
   TEST_ASSERT_EQUAL(Action::Skip, HeadsetKeys::apply(p, Key::Prev));
-  TEST_ASSERT_EQUAL_STRING("/c.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.lastPath.c_str());
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
   TEST_ASSERT_TRUE(audible(a));
 }
@@ -139,9 +157,9 @@ void test_next_and_prev_while_playing_skip() {
 // Any sequence of headphone keys: music is only audible after a key if it
 // was playing, or paused and the key was PLAY.
 void test_no_key_sequence_starts_music_that_was_not_playing() {
-  FakeAudioBackend a;
-  PlaybackController p(a);
-  p.setPlaylist(threeTracks());
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
   const Key keys[] = {Key::Play, Key::Pause, Key::Next, Key::Prev};
   uint32_t x = 12345;
   for (int i = 0; i < 2000; ++i) {

@@ -40,7 +40,7 @@ void chevron(M5Canvas& s, int x, int cy, uint16_t c) {
 
 }  // namespace
 
-ScrollLab::ScrollLab(Core2AudioBackend& audio, Haptics& haptics) : audio_(audio), haptics_(haptics) {
+ScrollLab::ScrollLab(Core2AudioBackend& audio, Input& input) : audio_(audio), input_(input) {
   seconds_ = static_cast<Second*>(psramAlloc(kMaxSeconds * sizeof(Second)));
 }
 
@@ -112,6 +112,11 @@ bool ScrollLab::open(LibraryIndex* index, int mode) {
   g.normalFrameMs = mode_ == 3 ? 0 : normalFrameMs_;
   gov_.setConfig(g);
   gov_.reset();
+  // Flings are capped at the input layer's 2,000 px/s; the stress's own
+  // flicks (wk) may go faster, to measure what that costs.
+  KineticScroll::Config kc = scroll_.config();
+  kc.maxPxPerS = std::max(KineticScroll::Config{}.maxPxPerS, mode_ >= 1 ? flickPxPerS_ : 0.0f);
+  scroll_.setConfig(kc);
   scroll_.jumpTo(0);
   setView(view_);
 
@@ -133,14 +138,14 @@ bool ScrollLab::open(LibraryIndex* index, int mode) {
     Serial.println("[scroll] hardware scroll unavailable: full redraw (wm0) instead");
     path_ = Path::Redraw;
   }
-  audio_.setUiBoost(boost_);
-  boostSeen_ = audio_.boostStatus().changes;
   startSeen_ = audio_.startTiming().seq;
   watching_ = false;
   const uint32_t now = millis();
   secStartMs_ = now;
   lastLoopMs_ = now;
-  linesPushed_ = boostMs_ = gapMaxMs_ = 0;
+  nextFrameMs_ = now;
+  touchOn_ = TouchOn::None;
+  linesPushed_ = gapMaxMs_ = 0;
   frames_ = rowsDrawn_ = slicesPushed_ = 0;
   frameUs_ = drawUs_ = pushUs_ = 0;
   frameMaxUs_ = 0;
@@ -152,11 +157,11 @@ bool ScrollLab::open(LibraryIndex* index, int mode) {
 
   const RefillPacer::Config pace = audio_.refillPacing();
   Serial.printf("[scroll] open w%d: %s view, %lu rows, governor %s, frame cap %lu ms, slices of %d px, %d cached row "
-                "sprite%s (%u KB PSRAM); %s, boost %s, refill pacing %s (%.1fx)\n",
+                "sprite%s (%u KB PSRAM); %s, flings capped at %.0f px/s, refill pacing %s (%.1fx)\n",
                 mode_, kViewNames[view_], (unsigned long)count(), g.enabled ? "on" : "off",
                 (unsigned long)g.normalFrameMs, sliceH_, cacheRows_, cacheRows_ == 1 ? "" : "s",
                 (unsigned)(kMaxSlots * kW * kRowH * 2 / 1024), kPathNames[static_cast<int>(path_)],
-                boost_ ? "on" : "off", pace.enabled ? "on" : "off", pace.capX10 / 10.0f);
+                scroll_.config().maxPxPerS, pace.enabled ? "on" : "off", pace.capX10 / 10.0f);
   stress_ = mode_ >= 1;
   if (stress_) {
     stressStartMs_ = now;
@@ -180,10 +185,9 @@ void ScrollLab::close() {
   // Leave the panel as every other screen expects it: no scroll offset, and
   // the band cleared first so the switch back shows nothing rotated.
   stopHw(true);
-  audio_.setUiBoost(false);
   watching_ = false;
   active_ = false;
-  touching_ = false;
+  touchOn_ = TouchOn::None;
   Serial.println("[scroll] closed");
 }
 
@@ -198,6 +202,7 @@ void ScrollLab::setView(View v) {
   railThumbY_ = -1;
   railKey_ = 0;
   railBucket_ = -1;
+  railUp_ = false;  // the frame redraws the band; the rail with it if it's wanted
 }
 
 void ScrollLab::enterScreen() {
@@ -210,6 +215,7 @@ void ScrollLab::enterScreen() {
   drawHeader();
   forceFrame_ = true;
   drawnOffset_ = -1;
+  railUp_ = false;
 }
 
 void ScrollLab::drawHeader() {
@@ -329,7 +335,7 @@ ScrollLab::Slot* ScrollLab::slotFor(uint32_t row, uint32_t firstVisible, uint32_
 void ScrollLab::renderFrame(int offset) {
   auto& d = M5.Display;
   const uint32_t n = count();
-  const int w = rowWidth();
+  const int w = pushWidth();
   const uint32_t first = static_cast<uint32_t>(offset / kRowH);
   const uint32_t last = std::min<uint32_t>(n ? n - 1 : 0, static_cast<uint32_t>((offset + kViewportH - 1) / kRowH));
   int y = kListY - offset % kRowH;
@@ -406,11 +412,12 @@ void ScrollLab::stopHw(bool clearBand) {
   vscroll_.end();
   forceFrame_ = true;
   railThumbY_ = -1;
+  railUp_ = false;
 }
 
 void ScrollLab::setPath(int m) {
+  if (m >= 2) Serial.println("[scroll] wm2 (hardware scroll + the interaction boost): the boost was removed, wm1");
   path_ = m >= 1 ? Path::Hardware : Path::Redraw;
-  boost_ = m >= 2;
   if (!active_) return;
   if (hw() && !startHw()) {
     Serial.println("[scroll] hardware scroll unavailable: staying on the full redraw");
@@ -420,9 +427,9 @@ void ScrollLab::setPath(int m) {
   // the identity (its GRAM is in the rotated order), then the next frame
   // redraws every row and the rail at the identity.
   if (!hw()) stopHw(true);
-  audio_.setUiBoost(boost_);
   forceFrame_ = true;
   railThumbY_ = -1;
+  railUp_ = false;
 }
 
 // The slot for `row` with the row drawn in it (drawn now if it isn't).
@@ -461,7 +468,7 @@ void ScrollLab::prepare(const VScrollMap::Span* spans, int n) {
 void ScrollLab::push(const VScrollMap::Span& span, bool committing) {
   auto& d = M5.Display;
   const auto n = static_cast<int32_t>(count());
-  const int w = rowWidth();
+  const int w = pushWidth();
   int32_t c = span.contentY;
   const int32_t end = span.contentY + span.h;
   int g = span.gramY;
@@ -504,21 +511,53 @@ void ScrollLab::push(const VScrollMap::Span& span, bool committing) {
 }
 
 void ScrollLab::prepareFixed(int32_t offset) {
-  railDue_ = railShown() && rail_;
+  railDue_ = railShown() && railWanted_ && rail_;
   if (!railDue_) return;
   const int64_t t0 = nowUs();
   drawRailSprite(static_cast<int>(offset));
   drawUs_ += static_cast<uint64_t>(nowUs() - t0);
 }
 
-// The rail sits in the scrolled band: the panel moved it with the list, so
-// it goes back to its place at every move (30 x 168: ~2 ms of bus).
+// The rail sits in the scrolled band: the panel moves it with the list, so
+// while it shows (a scrub) it goes back to its place at every move (30 x
+// 168: ~2 ms of bus). While the list moves on its own it is hidden.
 void ScrollLab::pushFixed() {
   if (!railDue_) return;
   railDue_ = false;
   const int64_t t0 = nowUs();
   vscroll_.pushAtScreen(*rail_, kRailX, kListY, &lock_);
   pushUs_ += static_cast<uint64_t>(nowUs() - t0);
+  railUp_ = true;
+}
+
+bool ScrollLab::railWanted() const {
+  return railShown() && (touchOn_ == TouchOn::Rail || !scroll_.moving());
+}
+
+// The rail's column, cleared (the whole band's height: every GRAM line of
+// it, so the hardware scroll's rotation doesn't matter). The rows are then
+// pushed full width over it until it shows again.
+void ScrollLab::hideRail() {
+  {
+    LcdLock lock(&lock_);
+    M5.Display.fillRect(kRailX, kListY, kW - kRailX, kViewportH, col::BG);
+  }
+  railUp_ = false;
+  railThumbY_ = -1;
+}
+
+// The rail, drawn again where the list came to rest.
+void ScrollLab::showRail(int offset) {
+  if (hw()) {
+    if (!rail_ || !vscroll_.active()) return;
+    const int64_t t0 = nowUs();
+    drawRailSprite(offset);
+    vscroll_.pushAtScreen(*rail_, kRailX, kListY, &lock_);
+    pushUs_ += static_cast<uint64_t>(nowUs() - t0);
+  } else {
+    drawRail(offset, true);
+  }
+  railUp_ = true;
 }
 
 // The whole rail, as drawRail() draws it on the LCD, into its sprite.
@@ -552,17 +591,6 @@ void ScrollLab::renderFrameHw(int offset) {
   pushUs_ += sendUs;
 }
 
-// Logs every change of the interaction boost (the backend's timer makes them).
-void ScrollLab::pollBoost() {
-  const Core2AudioBackend::BoostStatus b = audio_.boostStatus();
-  if (b.changes == boostSeen_) return;
-  const uint32_t missed = b.changes - boostSeen_ - 1;
-  boostSeen_ = b.changes;
-  Serial.printf("[boost] %s at t=%lu: %s, ring %lu ms%s\n", b.on ? "on" : "off", (unsigned long)b.atMs,
-                UiBoost::name(b.why), (unsigned long)b.ringMs,
-                missed ? " (and changes in between not logged)" : "");
-}
-
 // The longest frame and loop gap in the kStartWatchMs after each track start.
 void ScrollLab::pollTrackStart(uint32_t nowMs, uint32_t dtMs) {
   const uint32_t seq = audio_.startTiming().seq;
@@ -590,9 +618,9 @@ void ScrollLab::pollTrackStart(uint32_t nowMs, uint32_t dtMs) {
   char paced[24] = "off";
   if (pace.enabled) snprintf(paced, sizeof(paced), "on, %.1fx", pace.capX10 / 10.0f);
   Serial.printf("[scroll] track start: in the %lu s after it, longest frame %.1f ms, longest loop gap %lu ms, %lu "
-                "frames (%s, boost %s, refill pacing %s)\n",
+                "frames (%s, refill pacing %s)\n",
                 (unsigned long)(kStartWatchMs / 1000), watchFrameMaxUs_ / 1000.0f, (unsigned long)watchGapMaxMs_,
-                (unsigned long)watchFrames_, kPathNames[static_cast<int>(path_)], boost_ ? "on" : "off", paced);
+                (unsigned long)watchFrames_, kPathNames[static_cast<int>(path_)], paced);
 }
 
 void ScrollLab::drawRail(int offset, bool force) {
@@ -623,68 +651,71 @@ void ScrollLab::drawRail(int offset, bool force) {
   railKey_ = key;
 }
 
-void ScrollLab::handleTouch(uint32_t nowMs) {
-  const auto& det = M5.Touch.getDetail(0);
-  if (det.isPressed()) {
-    m5gfx::touch_point_t tp = M5.Touch.getTouchPointRaw(0);
-    M5.Display.convertRawXY(&tp, 1);
-    if (!touching_) {
-      touching_ = true;
-      touchDownMs_ = nowMs;
-      touchX_ = tp.x;
-      touchY_ = tp.y;
-      if (tp.y >= kH) {
-        touchOn_ = TouchOn::None;  // the button strip
-      } else if (tp.y < kBarH) {
-        touchOn_ = TouchOn::Bar;
-      } else if (tp.y < kListY) {
-        touchOn_ = TouchOn::Header;
-      } else if (railShown() && tp.x >= kRailX) {
-        touchOn_ = TouchOn::Rail;
-      } else {
-        touchOn_ = TouchOn::List;
-      }
-      if (touchOn_ != TouchOn::None && stress_) {
-        Serial.println("[scroll] touch: stress stopped");
-        finishStress();
-      }
-      if (touchOn_ == TouchOn::List) scroll_.press(nowMs, tp.y);
-    } else if (touchOn_ == TouchOn::List) {
-      scroll_.drag(nowMs, tp.y);
+// Scrub: the list jumps to the proportional row; a tick at each new letter.
+void ScrollLab::scrubRail(int y) {
+  const float f = std::min(1.0f, std::max(0.0f, (y - kListY - kThumbH / 2) / static_cast<float>(kViewportH - kThumbH)));
+  const float row = std::round(f * scroll_.maxOffset() / kRowH);
+  scroll_.jumpTo(row * kRowH);
+  const int b = index_->bucketAt(view_ == Artists ? LibraryIndex::View::Artists : LibraryIndex::View::Albums,
+                                 static_cast<uint32_t>(row));
+  if (b != railBucket_) {
+    if (railBucket_ >= 0) input_.railTick();
+    railBucket_ = b;
+  }
+}
+
+void ScrollLab::onTouch(const InputEvent& e) {
+  using T = InputEvent::Type;
+  if (!active_) return;
+  if (e.type == T::Down) {
+    if (e.y < kBarH) {
+      touchOn_ = TouchOn::Bar;
+    } else if (e.y < kListY) {
+      touchOn_ = TouchOn::Header;
+    } else if (railShown() && e.inRightEdgeZone(kRailHitX)) {
+      touchOn_ = TouchOn::Rail;  // shows the rail at once (railWanted())
+    } else {
+      touchOn_ = TouchOn::List;
     }
-    if (touchOn_ == TouchOn::Rail) {
-      // Scrub: the list jumps to the proportional row; a tick at each new letter.
-      const float f = std::min(1.0f, std::max(0.0f, (tp.y - kListY - kThumbH / 2) /
-                                                        static_cast<float>(kViewportH - kThumbH)));
-      const float row = std::round(f * scroll_.maxOffset() / kRowH);
-      scroll_.jumpTo(row * kRowH);
-      const int b = index_->bucketAt(view_ == Artists ? LibraryIndex::View::Artists : LibraryIndex::View::Albums,
-                                     static_cast<uint32_t>(row));
-      if (b != railBucket_) {
-        if (railBucket_ >= 0) haptics_.tick(8, Haptics::kMedium);
-        railBucket_ = b;
-      }
+    if (stress_) {
+      Serial.println("[scroll] touch: stress stopped");
+      finishStress();
     }
-    touchX_ = tp.x;
-    touchY_ = tp.y;
+    if (touchOn_ == TouchOn::List) scroll_.press(e.ms, e.y);
+    if (touchOn_ == TouchOn::Rail) scrubRail(e.y);
     return;
   }
-  if (!touching_) return;
-  touching_ = false;
-  const uint32_t dur = nowMs - touchDownMs_;
-  if (touchOn_ == TouchOn::List) {
-    scroll_.release(nowMs);
-  } else if (touchOn_ == TouchOn::Header && dur < 500) {
-    const int seg = std::min(2, std::max(0, (touchX_ - 8) / 102));
-    if (seg != view_) {
-      setView(static_cast<View>(seg));
-      drawHeader();
-      Serial.printf("[scroll] view: %s, %lu rows\n", kViewNames[view_], (unsigned long)count());
-    }
-  } else if (touchOn_ == TouchOn::Bar && dur < 500 && touchX_ >= 56 && touchX_ < 112) {
-    scroll_.jumpTo(0);  // the Library tab again: back to the top
+  const bool ends = e.type == T::Tap || e.type == T::Release || e.type == T::DragEnd || e.type == T::Cancel;
+  switch (touchOn_) {
+    case TouchOn::List:
+      if (e.type == T::DragStart || e.type == T::DragMove) {
+        scroll_.drag(e.ms, e.y);
+      } else if (e.type == T::DragEnd) {
+        scroll_.release(e.ms, -e.vy);  // the input layer's velocity, capped; the list moves against the finger
+      } else if (ends) {
+        scroll_.release(e.ms, 0.0f);   // a tap or a hold: snap to a row
+      }
+      break;
+    case TouchOn::Rail:
+      if (e.type == T::DragStart || e.type == T::DragMove) scrubRail(e.y);
+      break;
+    case TouchOn::Header:
+      if (e.type == T::Tap) {
+        const int seg = std::min(2, std::max(0, (e.x - 8) / 102));
+        if (seg != view_) {
+          setView(static_cast<View>(seg));
+          drawHeader();
+          Serial.printf("[scroll] view: %s, %lu rows\n", kViewNames[view_], (unsigned long)count());
+        }
+      }
+      break;
+    case TouchOn::Bar:
+      if (e.type == T::Tap && e.x >= kTabW && e.x < 2 * kTabW) scroll_.jumpTo(0);  // the Library tab again: the top
+      break;
+    default:
+      break;
   }
-  touchOn_ = TouchOn::None;
+  if (ends) touchOn_ = TouchOn::None;
 }
 
 // Keeps the list moving for the whole run, so the numbers describe a list
@@ -763,7 +794,7 @@ void ScrollLab::perSecond(uint32_t nowMs, bool force) {
     const float f = frames_ ? static_cast<float>(frames_) : 1.0f;
     Serial.printf("[scroll] t=%lus fps=%.1f moving=%.0f%% fps_moving=%.1f held=%lums frame=%.1f/%.1fms draw=%.1fms "
                   "push=%.1fms rows_drawn=%lu slices=%lu lock=%.2f/%.2fms ring_min=%lums underruns=+%lu decode=%.0f%% "
-                  "heap_min=%.1fK level=%s %s %s %s lines=%lu boost=%lums gap_max=%lums\n",
+                  "heap_min=%.1fK level=%s %s %s %s lines=%lu gap_max=%lums\n",
                   (unsigned long)((nowMs - (stress_ ? stressStartMs_ : secStartMs_)) / 1000), fps, moving * 100.0f,
                   movingFps, (unsigned long)heldMs_, frameUs_ / f / 1000.0f, frameMaxUs_ / 1000.0f, drawUs_ / f / 1000.0f, pushUs_ / f / 1000.0f,
                   (unsigned long)rowsDrawn_, (unsigned long)slicesPushed_, lock_.meanUs() / 1000.0f,
@@ -771,7 +802,7 @@ void ScrollLab::perSecond(uint32_t nowMs, bool force) {
                   decode * 100.0f, heapMin_ / 1024.0f, ScrollGovernor::name(budget_.level),
                   !audio_.isPlaying() ? "stopped" : audio_.ringSteady() ? "steady" : "filling/draining",
                   KineticScroll::name(scroll_.phase()), hw() ? "hw" : "redraw", (unsigned long)linesPushed_,
-                  (unsigned long)boostMs_, (unsigned long)gapMaxMs_);
+                  (unsigned long)gapMaxMs_);
     // The frame rate in the tab bar's corner.
     char s[12];
     snprintf(s, sizeof(s), "%.0ffps", fps);
@@ -796,7 +827,6 @@ void ScrollLab::perSecond(uint32_t nowMs, bool force) {
                              static_cast<uint16_t>(std::min<uint32_t>(du, 65535)),
                              decode,
                              heapMin_,
-                             std::min(1.0f, static_cast<float>(boostMs_) / elapsed),
                              static_cast<float>(gapMaxMs_)};
   }
   secStartMs_ = nowMs;
@@ -804,7 +834,7 @@ void ScrollLab::perSecond(uint32_t nowMs, bool force) {
   frameUs_ = drawUs_ = pushUs_ = 0;
   frameMaxUs_ = 0;
   movingMs_ = heldMs_ = 0;
-  linesPushed_ = boostMs_ = gapMaxMs_ = 0;
+  linesPushed_ = gapMaxMs_ = 0;
   lock_.reset();
   ringMin_ = heapMin_ = UINT32_MAX;
   underruns0_ = underruns;
@@ -824,7 +854,7 @@ void ScrollLab::finishStress() {
   if (!fps) return;
   float* dec = fps + kMaxSeconds;
   float* mov = dec + kMaxSeconds;
-  float frameMax = 0, lockMax = 0, movingSum = 0, boostedSum = 0, gapMax = 0;
+  float frameMax = 0, lockMax = 0, movingSum = 0, gapMax = 0;
   uint32_t ringMin = UINT32_MAX, heapMin = UINT32_MAX;
   for (uint32_t i = 0; i < nSeconds_; ++i) {
     fps[i] = seconds_[i].movingFps;
@@ -835,7 +865,6 @@ void ScrollLab::finishStress() {
     lockMax = std::max(lockMax, seconds_[i].lockMaxMs);
     ringMin = std::min<uint32_t>(ringMin, seconds_[i].ringMinMs);
     heapMin = std::min(heapMin, seconds_[i].heapMin);
-    boostedSum += seconds_[i].boosted;
     gapMax = std::max(gapMax, seconds_[i].gapMaxMs);
   }
   const Percentiles f = Percentiles::of(fps, nSeconds_);
@@ -845,22 +874,21 @@ void ScrollLab::finishStress() {
   snprintf(lastSummary_, sizeof(lastSummary_),
            "w%d %lus: moving %.0f%% of the time (p10 %.0f%%), fps while moving p10=%.1f p50=%.1f min=%.1f, frame max "
            "%.1fms, SPI hold max %.2fms, ring min %lums, underruns %lu, decode p50=%.0f%% max=%.0f%%, heap min %.1fK "
-           "(ever %.1fK); %s, boost %s (on %.0f%% of the time), loop gap max %.0fms",
+           "(ever %.1fK); %s, flicks at %.0f px/s, loop gap max %.0fms",
            mode_, (unsigned long)nSeconds_, movingSum * 100.0f / nSeconds_, m.p10, f.p10, f.p50, f.min, frameMax,
            lockMax, (unsigned long)ringMin,
            (unsigned long)(audio_.underrunsNow() - runUnderruns0_), d.p50, d.max, heapMin / 1024.0f,
-           internalMinEver() / 1024.0f, kPathNames[static_cast<int>(path_)], boost_ ? "on" : "off",
-           boostedSum * 100.0f / nSeconds_, gapMax);
+           internalMinEver() / 1024.0f, kPathNames[static_cast<int>(path_)], flickPxPerS_, gapMax);
   Serial.printf("[scroll] stress done: %s\n", lastSummary_);
 }
 
 void ScrollLab::printSettings() {
   const RefillPacer::Config pace = audio_.refillPacing();
   Serial.printf("[scroll] settings: view %s, frame cap %lu ms, slices %d px, %d cached row sprite(s), stress %lu s at %.0f px/s, "
-                "governor %s (w0); %s, boost %s (wb), refill pacing %s at %.1fx from %lu ms (wp); index %s\n",
+                "governor %s (w0); %s, flings capped at %.0f px/s, refill pacing %s at %.1fx from %lu ms (wp); index %s\n",
                 kViewNames[view_], (unsigned long)normalFrameMs_, sliceH_, cacheRows_,
                 (unsigned long)(stressMs_ / 1000), flickPxPerS_, governed_ ? "on" : "off", kPathNames[static_cast<int>(path_)],
-                boost_ ? "on" : "off", pace.enabled ? "on" : "off", pace.capX10 / 10.0f,
+                KineticScroll::Config{}.maxPxPerS, pace.enabled ? "on" : "off", pace.capX10 / 10.0f,
                 (unsigned long)pace.gentleFromMs, index_ && index_->ready() ? "ready" : "none");
   if (lastSummary_[0]) Serial.printf("[scroll] last stress: %s\n", lastSummary_);
 }
@@ -899,9 +927,8 @@ void ScrollLab::command(const char* arg, LibraryIndex* index) {
     case 'g': governed_ = v != 0; break;
     case 'm': setPath(constrain(v, 0, 2)); break;
     case 'b':
-      boost_ = v != 0;
-      if (active_) audio_.setUiBoost(boost_);
-      break;
+      Serial.println("[scroll] the interaction boost was removed (it measured worse: docs/UI-SPIKE.md)");
+      return;
     case 'p': {
       // wp0 off, wp1 on at the current cap, wp<x10> on at x10/10 times realtime.
       const RefillPacer::Config pace = audio_.refillPacing();
@@ -930,8 +957,8 @@ void ScrollLab::command(const char* arg, LibraryIndex* index) {
       break;
     default:
       Serial.println("[scroll] w toggles; w0 interactive, w1 stress, w2 stress without governor, w3 no frame cap; "
-                     "wv<0-2> wf<fps> wh<px> wc<n> wd<s> wk<px/s> wg0/1; wm0 full redraw, wm1 hardware scroll, wm2 hardware "
-                     "scroll + boost; wb0/1 boost; wp0/wp1/wp<15-40> refill pacing; ws wq");
+                     "wv<0-2> wf<fps> wh<px> wc<n> wd<s> wk<px/s> wg0/1; wm0 full redraw, wm1 hardware scroll (default); "
+                     "wp0/wp1/wp<15-40> refill pacing; ws wq");
       return;
   }
   if (active_ && mode_ == 0) {
@@ -957,17 +984,12 @@ void ScrollLab::loop(uint32_t nowMs) {
   const uint32_t heap = internalFree();
   if (heap < heapMin_) heapMin_ = heap;
 
-  handleTouch(nowMs);
   if (stress_) stressStep(nowMs);
   // A low ring is only a risk once the track has filled it: not while it
   // fills at a track's start, nor while it drains at a file's end (a track
   // change took the list to "paused" for ~4 s before this).
   budget_ = gov_.update(nowMs, ring, audio_.underrunsNow(), audio_.isPlaying() && audio_.ringSteady());
   scroll_.update(nowMs);
-  // The interaction boost's input: a finger on the glass, or the list moving.
-  if (boost_ && (touching_ || scroll_.moving() || stress_)) audio_.noteUiActivity(nowMs);
-  const bool boosted = audio_.boostStatus().on;
-  pollBoost();
   int off = static_cast<int>(std::lround(scroll_.offset()));
   if (budget_.wholeRows && scroll_.moving()) off = off / kRowH * kRowH;
   // Time the list wanted frames (moving, or a frame still owed), so an idle
@@ -981,22 +1003,28 @@ void ScrollLab::loop(uint32_t nowMs) {
     movingMs_ += dt;
     if (budget_.level != ScrollGovernor::Level::Normal) heldMs_ += dt;
   }
-  if (boosted) boostMs_ += dt;
   if (dt > gapMaxMs_) gapMaxMs_ = dt;
   pollTrackStart(nowMs, dt);
-  // Boosted, the decoder (priority 0) only runs while the loop sleeps: the
-  // loop rests at least kBoostRestMs after each frame, measured from the
-  // frame's end, on top of the cap (w3 has none).
+  // The rail: hidden while the list moves (it sits in the scrolled band),
+  // back once it settles, or at once under a finger.
+  railWanted_ = railWanted();
+  if (!railWanted_ && railUp_) hideRail();
+  // Frames on the cap's cadence: each one due at its deadline, the next a
+  // period later, so a pass that comes late doesn't push every later frame
+  // back; after a longer wait (idle, a stall) the cadence starts over.
   const uint32_t frameMs = budget_.frameMs;
-  const bool due = (frameMs == 0 || nowMs - lastFrameMs_ >= frameMs) &&
-                   (!boosted || static_cast<int32_t>(nowMs - lastFrameEndMs_) >= static_cast<int32_t>(kBoostRestMs));
-  if (budget_.draw && due && (off != drawnOffset_ || forceFrame_)) {
+  const bool due = frameMs == 0 || static_cast<int32_t>(nowMs - nextFrameMs_) >= 0;
+  const bool owed = off != drawnOffset_ || forceFrame_;
+  if (budget_.draw && due && owed) {
     const int64_t t0 = nowUs();
     if (hw()) {
-      renderFrameHw(off);
+      renderFrameHw(off);  // the rail with it, if it's wanted
     } else {
       renderFrame(off);
-      drawRail(off, forceFrame_);
+      if (railWanted_) {
+        drawRail(off, forceFrame_ || !railUp_);
+        railUp_ = true;
+      }
     }
     const auto us = static_cast<uint32_t>(nowUs() - t0);
     frameUs_ += us;
@@ -1007,10 +1035,13 @@ void ScrollLab::loop(uint32_t nowMs) {
       if (us > watchFrameMaxUs_) watchFrameMaxUs_ = us;
     }
     ++frames_;
-    lastFrameMs_ = nowMs;
+    nextFrameMs_ += frameMs;
+    if (static_cast<int32_t>(nowMs - nextFrameMs_) >= 0) nextFrameMs_ = nowMs + frameMs;
     lastFrameEndMs_ = millis();
     drawnOffset_ = off;
     forceFrame_ = false;
+  } else if (railWanted_ && !railUp_ && !owed) {
+    showRail(drawnOffset_);  // the list came to rest (or a finger is on the rail)
   }
   perSecond(nowMs, false);
 }
