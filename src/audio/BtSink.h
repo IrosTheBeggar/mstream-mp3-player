@@ -180,6 +180,14 @@ public:
   // connectable, so the headphones can still come back by themselves.
   // connect() and the Pair screen start the search again too.
   void setBackgroundReconnect(bool on);
+  // The sleep timer, 5 min after its pause (ENERGY.md section 3), and the
+  // idle power-off before the power goes (item 4): let go of
+  // the headphones and rest (no pages, no scans), still connectable, so
+  // they come back when switched on, and not refused as after
+  // disconnect(); connect() (a play through PlayGate) pages them again.
+  // Unlinked: the search rests. The caller expects the drop
+  // (BtSession::expectDrop()) and leaves the output as it is.
+  void releaseHeadphones();
   // Nobody is around (the screen is off, nothing plays or waits): after a
   // burst the search rests at once instead of backing off. Loop task,
   // every pass (the screen policy's hook; today the probe's Ps0).
@@ -257,7 +265,7 @@ private:
   std::atomic<uint32_t> scanVersion_{0};
   uint8_t pairAddr_[6] = {};  // pairWith()'s, read by BtAppT after the work is posted
   // The Output screen's asks not handed to BtAppT yet (its queue was full).
-  uint8_t askPending_ = 0;
+  uint16_t askPending_ = 0;
 
   // Set on Bluetooth tasks, read anywhere.
   std::atomic<bool> linked_{false};     // the A2DP link as reported to the loop

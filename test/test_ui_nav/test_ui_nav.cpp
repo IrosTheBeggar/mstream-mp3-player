@@ -16,9 +16,11 @@
 #include "FrameClock.h"
 #include "ListLayout.h"
 #include "NavModel.h"
+#include "SheetLayout.h"
 #include "TabBarModel.h"
 #include "TextFit.h"
 #include "TrackProgress.h"
+#include "UiText.h"
 
 void setUp() {}
 void tearDown() {}
@@ -474,6 +476,17 @@ void test_tabbar_redraws_only_what_changed() {
   b.battery = 50;
   b.output = tabbar::Output::BtConnecting;
   TEST_ASSERT_EQUAL_UINT8(1u << 4, tabbar::dirty(a, b));
+  // The sleep timer's moon is the Now Playing cell's; its minutes aren't
+  // in the bar (no redraw as they pass), only running or fading.
+  b = a;
+  b.sleep = tabbar::Sleep::Running;
+  TEST_ASSERT_EQUAL_UINT8(1u << 0, tabbar::dirty(a, b));
+  a = b;
+  b.sleep = tabbar::Sleep::Fading;
+  TEST_ASSERT_EQUAL_UINT8(1u << 0, tabbar::dirty(a, b));
+  // It fits in the cell, clear of the EQ bars (x -9..+9 from the centre).
+  TEST_ASSERT_TRUE(tabbar::kTabW / 2 + tabbar::kMoonRight <= tabbar::kTabW);
+  TEST_ASSERT_TRUE(tabbar::kMoonRight - tabbar::kMoonPx > 9);
 }
 
 // The Output icon: amber only while something is on its way; resting
@@ -641,6 +654,23 @@ void test_progress_id3v2_size() {
   TEST_ASSERT_EQUAL_UINT32(0, progress::id3v2Size(tag, 9));
 }
 
+// Every sheet row is at least 40 px, the touch minimum, however many rows
+// (Now Playing's "..." has 4: it rises into the header row, never onto
+// the tab bar, and keeps 4 px off the touch strip); up to 3 stay in the
+// list's band. The panel sprite holds the tallest.
+void test_sheet_rows_are_never_under_40_px() {
+  TEST_ASSERT_TRUE(sheet::kRowH >= 40);
+  for (int n = 1; n <= sheet::kMaxRows; ++n) {
+    TEST_ASSERT_TRUE(sheet::top(n) >= sheet::kContentY);
+    TEST_ASSERT_EQUAL_INT(sheet::kScreenH - sheet::kMargin, sheet::top(n) + sheet::kTitleH + n * sheet::kRowH);
+    TEST_ASSERT_TRUE(sheet::height(n) <= sheet::kPanelH);
+    if (n <= 3) TEST_ASSERT_TRUE(sheet::top(n) >= 72);
+  }
+  TEST_ASSERT_EQUAL_INT(40, sheet::top(4));
+  // The sleep and idle toasts' buttons: 36 px drawn, 40 or more to touch.
+  TEST_ASSERT_TRUE(36 + uitext::kToastButtonSlop >= 40);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_nav_tabs_keep_their_stacks);
@@ -670,5 +700,6 @@ int main(int, char**) {
   RUN_TEST(test_progress_mp3_header_length);
   RUN_TEST(test_progress_id3v2_size);
   RUN_TEST(test_progress_flac_streaminfo);
+  RUN_TEST(test_sheet_rows_are_never_under_40_px);
   return UNITY_END();
 }

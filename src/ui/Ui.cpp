@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "SleepTimer.h"
 #include "TextFold.h"
 #include "UiText.h"
 #include "app/Psram.h"
@@ -357,6 +358,7 @@ void Ui::applyCover() {
   const int top = toast_.bottom();
   const int bottom = jumpGrid_.up() || coach_.up() ? top
                      : sheet_.up()       ? sheet_.top()
+                     : sleepSheet_.up()  ? SleepSheet::kY
                      : volumeSheet_.up() ? VolumeSheet::kY
                      : dialog_.up()      ? Dialog::kY
                                          : kH;
@@ -379,6 +381,10 @@ bool Ui::closeModal(bool notify) {
   }
   if (volumeSheet_.up()) {
     volumeSheet_.close();
+    closed = true;
+  }
+  if (sleepSheet_.up()) {
+    sleepSheet_.close();
     closed = true;
   }
   if (jumpGrid_.up()) {
@@ -413,6 +419,15 @@ void Ui::uncover(int oldBottom) {
   } else if (page_) {
     page_->repaintHeader();
   }
+  // A page with no header (Now Playing, the Dance tab) draws all of itself
+  // again for the header row (Page::repaintHeader()'s default): every sheet
+  // over it is drawn again too, else it stays up (live) but unseen. Seen on
+  // the device: +10 min on the fade toast over the Sleep timer sheet left
+  // its pills invisible over the transport, and a tap on "..." hit Turn off.
+  const bool wholePage = !jumpGrid_.up() && !coach_.up() && page_ && !page_->hasHeader();
+  if (sheet_.up() && (wholePage || sheet_.top() < oldBottom)) sheet_.draw();  // the 4-row sheet reaches the header row
+  if (wholePage && sleepSheet_.up()) sleepSheet_.draw();
+  if (wholePage && volumeSheet_.up()) volumeSheet_.draw();
   if (dialog_.up()) dialog_.draw();
 }
 
@@ -433,6 +448,16 @@ void Ui::warn(const char* text) {
   toast_.show(text, false, false, col::AMBER, nowMs_);
   uncover(was);
   Serial.printf("[ui] note: %s\n", text);
+}
+
+void Ui::note(const char* text, uint32_t ms) {
+  if (!started_ || suspended_) return;
+  viewKey_ = QueueModel::kNone;
+  const int was = toast_.bottom();
+  if (toast_.undo()) queue_.dropUndo();
+  toast_.show(text, false, false, accent(), nowMs_, ms);
+  uncover(was);
+  Serial.printf("[ui] toast: %s\n", text);
 }
 
 void Ui::viewInQueue(uint32_t key) {
@@ -466,8 +491,48 @@ void Ui::openSheet(OverlayOwner* owner, const char* title, const char* const* ro
   endPageTouch();
   closeModal(true);
   sheetOwner_ = owner;
+  sheetSleepRow_ = -1;
   sheet_.open(title, rows, n, accent(), details, primary, danger);
   applyCover();
+  // A 4-row sheet reaches the header row: a toast up stays on top.
+  if (toast_.up() && sheet_.top() < toast_.bottom()) toast_.draw();
+}
+
+void Ui::sheetFollowsSleep(int row) {
+  if (sheet_.up()) sheetSleepRow_ = row;
+}
+
+void Ui::sleepTitle(char* buf, size_t size) const {
+  // Lower case after the colon, as the toasts say it ("Sleep timer: end of
+  // track"); the "..." row's detail alone is capitalised ("End of track").
+  snprintf(buf, size, "%s: %s", uitext::kSleepRow, state_.sleepTitle);
+}
+
+void Ui::openSleepSheet() {
+  endPageTouch();
+  closeModal(true);
+  char title[40];
+  sleepTitle(title, sizeof(title));
+  sleepSheet_.open(state_.sleepPick, state_.sleepRunning, state_.sleepCanExtend, title, accent::NowPlaying);
+  applyCover();
+  Serial.printf("[ui] sleep timer sheet (%s)\n", state_.sleepRow);
+}
+
+void Ui::refreshSleepSheet() {
+  if (!sleepSheet_.up()) return;
+  char title[40];
+  sleepTitle(title, sizeof(title));
+  sleepSheet_.refresh(state_.sleepPick, state_.sleepRunning, state_.sleepCanExtend, title);
+}
+
+void Ui::sleepFading() {
+  if (!started_ || suspended_ || toast_.sleep()) return;
+  viewKey_ = QueueModel::kNone;
+  const int was = toast_.bottom();
+  if (toast_.undo()) queue_.dropUndo();
+  toast_.showSleep(accent::NowPlaying, nowMs_);
+  uncover(was);
+  Serial.println("[ui] toast: sleep timer: fading (+10 min, Turn off)");
 }
 
 void Ui::openVolume(int output) {
@@ -777,6 +842,9 @@ tabbar::State Ui::tabState(uint32_t nowMs) const {
   s.charging = state_.charging;
   // Low: the battery blinks off for half a second once a minute.
   s.lowBlink = state_.battery <= 10 && (nowMs / 500) % 120 == 0;
+  s.sleep = state_.sleepFading    ? tabbar::Sleep::Fading
+            : state_.sleepRunning ? tabbar::Sleep::Running
+                                  : tabbar::Sleep::None;
   return s;
 }
 
@@ -813,6 +881,34 @@ void Ui::loop(uint32_t nowMs) {
     repaintUnder();
   }
   updatePlayFailed();
+  // The sleep timer: its sheet follows it, and the "..." sheet's row; the
+  // fade's toast goes with the fade.
+  refreshSleepSheet();
+  if (sheet_.up() && sheetSleepRow_ >= 0) sheet_.setDetail(sheetSleepRow_, state_.sleepRow);
+  if (toast_.sleep() && !state_.sleepFading) {
+    const int was = toast_.bottom();
+    toast_.hide();
+    uncover(was);
+  }
+  // The idle power-off's warning: up for its last 30 s, counting down; it
+  // goes when anything keeps the device on. (Drawn only on a lit screen:
+  // it doesn't light a dark one, it may be night.)
+  if (state_.idleWarnS) {
+    if (!toast_.idle()) {
+      viewKey_ = QueueModel::kNone;
+      const int was = toast_.bottom();
+      if (toast_.undo()) queue_.dropUndo();
+      toast_.showIdle(state_.idleWarnS, accent(), nowMs);
+      uncover(was);
+      Serial.printf("[ui] toast: %s (Keep on)\n", toast_.text());
+    } else if (toast_.idleSeconds() != state_.idleWarnS) {
+      toast_.setIdleSeconds(state_.idleWarnS);
+    }
+  } else if (toast_.idle()) {
+    const int was = toast_.bottom();
+    toast_.hide();
+    uncover(was);
+  }
   // The page's deadlines (under a modal too, and in the dark).
   if (page_) page_->tick(nowMs);
   // Tracks added: the Queue badge flashes.
@@ -943,10 +1039,16 @@ void Ui::route(const InputEvent& e) {
     holdUnused_ = false;
     if (e.y < kBarH) {
       touch_ = TouchOn::Bar;
+    } else if (toast_.onSleepButton(e)) {
+      // The fade toast's buttons, drawn over whatever is open (a sheet, the
+      // volume sheet): the only controls that act on the timer, first.
+      touch_ = TouchOn::Toast;
     } else if (dialog_.up()) {
       touch_ = TouchOn::Dialog;
     } else if (sheet_.up()) {
       touch_ = TouchOn::Sheet;
+    } else if (sleepSheet_.up()) {
+      touch_ = TouchOn::Sleep;
     } else if (volumeSheet_.up()) {
       touch_ = TouchOn::Volume;
       input_.noHold();  // resting on the slider is no long press
@@ -962,7 +1064,7 @@ void Ui::route(const InputEvent& e) {
       toast_.hide();
       uncover(was);
       touch_ = TouchOn::Page;
-    } else if (toast_.hit(e)) {
+    } else if (toast_.hit(e, true)) {
       touch_ = TouchOn::Toast;
     } else {
       touch_ = TouchOn::Page;
@@ -1012,6 +1114,16 @@ void Ui::route(const InputEvent& e) {
       }
       break;
     }
+    case TouchOn::Sleep: {
+      const int c = sleepSheet_.onEvent(e);
+      if (c >= 0 || c == -2) {
+        tick();
+        sleepSheet_.close();
+        repaintUnder();
+        if (c >= 0) host_.sleepChoose(c);
+      }
+      break;
+    }
     case TouchOn::Volume: {
       const VolumeSheet::Result r = volumeSheet_.onEvent(e, nowMs_);
       if (r.target >= 0) {
@@ -1054,12 +1166,43 @@ void Ui::route(const InputEvent& e) {
       break;
     }
     case TouchOn::Toast:
-      if (e.type == T::Down && toast_.hit(e) >= 2) toast_.draw(toast_.hit(e));
-      if (e.type == T::Tap) {
-        tick();
-        const int hit = toast_.hit(e);
+      if (e.type == T::Down && toast_.idle()) {
+        // The idle warning: this touch keeps it on (any would); it goes now,
+        // and the rest of the touch is its (its tap ticks).
+        const bool keepOn = toast_.hit(e, true) == Toast::kHitKeepOn;
         const int was = toast_.bottom();
-        if (hit == 2) {
+        toast_.hide();
+        uncover(was);
+        if (keepOn) host_.idleKeepOn();
+        break;
+      }
+      if (e.type == T::Down && toast_.sleep() && host_.touchLandedUnattended()) {
+        // The fade toast and the touch that attended a screen woken from
+        // off (maybe a pocket's second contact): neither button acts on it
+        // (they raise the level), so no press is shown.
+        if (toast_.hit(e, true) >= Toast::kHitExtend) {
+          Serial.println("[ui] sleep toast: the first touch after a wake from off: +10 min / Turn off wait for the next");
+        }
+      } else if (e.type == T::Down && toast_.hit(e, true) >= 2) {
+        toast_.draw(toast_.hit(e, true));
+      }
+      if (e.type == T::Tap) {
+        const int hit = toast_.hit(e, true);
+        const int was = toast_.bottom();
+        // The sleep timer's fade: its buttons are the only controls that act
+        // on it, and not on the touch that attended the screen
+        // (SleepTimer::toastTap()): no tick, the toast stays.
+        const bool sleepButton = hit == Toast::kHitExtend || hit == Toast::kHitTurnOff;
+        const bool refused = sleepButton && SleepTimer::toastTap(e.x, e.atRightEdge(), host_.touchLandedUnattended()) ==
+                                                SleepTimer::ToastButton::None;
+        if (!refused) tick();
+        if (refused) {
+          toast_.draw(0);
+        } else if (sleepButton) {
+          toast_.hide();
+          uncover(was);
+          host_.sleepChoose(hit == Toast::kHitExtend ? SleepSheet::kExtend : SleepSheet::kTurnOff);
+        } else if (hit == 2) {
           const bool undone = player_.undo();
           Serial.printf("[ui] undo: %s\n", undone ? "done" : "nothing to undo");
           toast_.show(undone ? "Undone" : "Nothing to undo", false, false, accent(), nowMs_);
@@ -1165,6 +1308,7 @@ void Ui::redrawAll() {
     page_->repaint();
   }
   if (sheet_.up()) sheet_.draw();
+  if (sleepSheet_.up()) sleepSheet_.draw();
   if (volumeSheet_.up()) volumeSheet_.draw();
   if (dialog_.up()) dialog_.draw();
   if (toast_.up()) toast_.draw();
@@ -1281,9 +1425,10 @@ void Ui::printState() const {
                 "mean %.2f ms, max %.2f ms\n",
                 (unsigned long)frames_, fps_, (unsigned long)clock_.period(), ScrollGovernor::name(budget_.level),
                 (unsigned long)h.count, h.meanUs() / 1000.0f, h.maxUs / 1000.0f);
-  Serial.printf("[ui] overlays: toast %s%s%s, HUD %s, sheet %s, volume %s, jump grid %s, dialog %s, coach %s\n",
+  Serial.printf("[ui] overlays: toast %s%s%s, HUD %s, sheet %s, sleep timer sheet %s, volume %s, jump grid %s, "
+                "dialog %s, coach %s\n",
                 toast_.up() ? "\"" : "none", toast_.up() ? toast_.text() : "", toast_.up() ? "\"" : "",
-                hud_.up() ? "up" : "no", sheet_.up() ? "open" : "no",
+                hud_.up() ? "up" : "no", sheet_.up() ? "open" : "no", sleepSheet_.up() ? "open" : "no",
                 volumeSheet_.up() ? (volumeSheetBt_ ? "open (headphones)" : "open (speaker)") : "no",
                 jumpGrid_.up() ? "open" : "no", dialog_.up() ? "open" : "no",
                 coach_.up() ? (coach_.card() == 0 ? "card 1" : "card 2") : "no");

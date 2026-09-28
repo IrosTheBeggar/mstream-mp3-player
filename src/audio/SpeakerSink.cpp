@@ -199,6 +199,10 @@ void SpeakerSink::pump() {
     // filled, to time its release.
     const auto nowUs = static_cast<uint32_t>(esp_timer_get_time());
     if (r.read > 0 && tap_) tap_->write(buffers_[idx], r.read, r.read, r.epoch, r.position, nowUs);
+    // The sleep timer's fade (ENERGY.md section 3), after the tap (the
+    // tracker hears the music) and before playRaw: at most 1, one level
+    // for both outputs. Moved only while the speaker is the consumer.
+    shared_->fade.process(buffers_[idx], r.total, ring_->consumer() == kConsumerId);
     filledUs_[idx].store(r.read == kFrames ? (nowUs | 1u) : 0u, std::memory_order_relaxed);
     busy_[idx] = true;  // before playRaw(): the release can only come after it's queued
     if (!M5.Speaker.playRaw(buffers_[idx], r.total * 2, lastRate_, true, 1, kChannel)) {

@@ -36,6 +36,13 @@
 // to the speaker pauses first), a play on the headphones. Going Off ends it
 // (the next wake decides again).
 //
+// The touch that ends it (glassLanded()) is remembered for the rest of
+// that touch (landedUnattended()): the sleep timer's fade toast doesn't
+// take it for +10 min or Turn off, which bring the music back up. In a
+// pocket the first contact wakes the screen (swallowed) and the next one
+// lands on a lit toast: it attends, but acts on nothing that raises the
+// level; a listener's next tap does.
+//
 // An event's wake from Off lights the screen for the dialog, but a touch
 // still only answers it (touchActs() false until then): the first contact
 // after it is swallowed like a wake, as from Off, so a pocket's contact
@@ -51,7 +58,7 @@ class ScreenPower {
 public:
   enum class Level : uint8_t { Bright, Dim, Off };
   // Why the level last changed (the log).
-  enum class Why : uint8_t { Boot, Timeout, PocketGuard, Console, Touch, PowerKey, Event, KeepLit, Setting };
+  enum class Why : uint8_t { Boot, Timeout, PocketGuard, Console, Touch, PowerKey, Event, KeepLit, Setting, SleepTimer };
 
   static constexpr uint8_t kDimBacklight = 30;
   static constexpr uint32_t kDimForMs = 10000;     // Dim for the last 10 s ...
@@ -99,6 +106,16 @@ public:
   // A deliberate input: a touch on the glass that lands and acts, the PWR
   // key while lit. Ends unattended().
   void attend() { unattended_ = false; }
+  // A touch landing on the glass: attend(), and whether this touch is the
+  // one that ended unattended() (landedUnattended(), until the next landing).
+  void glassLanded() {
+    landedUnattended_ = unattended_;
+    unattended_ = false;
+  }
+  // The last touch to land on the glass landed while unattended() (it
+  // woke nothing, but nobody had looked yet): it may be a pocket's second
+  // contact. The fade toast's buttons don't act on it.
+  bool landedUnattended() const { return landedUnattended_; }
   // A touch or the PWR key on a screen where a touch doesn't act (the input
   // layer swallows that touch; touchActs()), or an event that needs the
   // listener (Why::Event, at any level: the countdown starts again), or the
@@ -108,8 +125,8 @@ public:
   // !touchActs() until a Touch or PowerKey wake answers it. The console
   // ends both.
   bool wake(uint32_t nowMs, Why why);
-  // Off now (the console's Ps0). A touch's or the key's wake from it has
-  // the pocket guard.
+  // Off now (the console's Ps0, the sleep timer's end). A touch's or the
+  // key's wake from it has the pocket guard.
   void turnOff(Why why);
 
   // Every loop pass: the countdown and `keepLit`. True if the level changed
@@ -146,6 +163,7 @@ private:
   bool changed_ = false;
   bool pocket_ = false;
   bool unattended_ = false;
+  bool landedUnattended_ = false;
   bool eventLit_ = false;
   uint32_t sinceMs_ = 0;  // the last input (or the wake, for the pocket guard)
   int timeout_ = kDefaultTimeout;

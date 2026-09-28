@@ -40,6 +40,10 @@ void ScreenControl::begin(uint32_t nowMs) {
                 (unsigned)power_.backlight());
 }
 
+bool ScreenControl::readExternalPower() {
+  return (M5.Power.Axp192.readRegister8(kAxpStatus) & kAxpUsbBits) != 0;
+}
+
 uint8_t ScreenControl::backlight() const { return asleep_ ? 0 : M5.Display.getBrightness(); }
 
 void ScreenControl::beginPass(uint32_t nowMs) {
@@ -47,17 +51,19 @@ void ScreenControl::beginPass(uint32_t nowMs) {
   // screen that isn't bright (or answers an event's wake), else it is
   // input like a touch, and deliberate: the pocket rule ends.
   if (M5.BtnPWR.wasClicked()) {
+    inputSeen_ = true;
     if (power_.touchActs() && !asleep_) {
       power_.activity(nowMs);
       power_.attend();
     } else if (power_.wake(nowMs, ScreenPower::Why::PowerKey)) {
       Serial.println("[screen] wake by the power key");
+      woken_ = true;
     }
   }
   // USB plugged in or out: the charging state changed under the listener.
   if (static_cast<int32_t>(nowMs - nextUsbMs_) >= 0) {
     nextUsbMs_ = nowMs + kUsbPollMs;
-    const int8_t usb = (M5.Power.Axp192.readRegister8(kAxpStatus) & kAxpUsbBits) ? 1 : 0;
+    const int8_t usb = readExternalPower() ? 1 : 0;
     if (usb_ >= 0 && usb != usb_) wake(usb ? "USB plugged in" : "USB unplugged");
     usb_ = usb;
   }
@@ -78,7 +84,10 @@ void ScreenControl::afterInput(uint32_t nowMs) {
                   answer ? "event's wake answered" : "wake", x, y, strip ? " on the strip: " : "",
                   strip ? (x < 107 ? "A" : x < 214 ? "B" : "C") : "");
     power_.wake(nowMs, ScreenPower::Why::Touch);
+    woken_ = true;
+    inputSeen_ = true;
   } else if (input_.touching()) {
+    inputSeen_ = true;
     if (input_.scriptedTouch() && !power_.bright()) {
       // The console's scripted finger acts in the dark (it bypasses the
       // latch); someone is at the console: lit, so what it does shows.
@@ -87,9 +96,10 @@ void ScreenControl::afterInput(uint32_t nowMs) {
       power_.activity(nowMs);  // a finger that acts, landing or moving
     }
   }
-  if (input_.glassLanded() && power_.unattended()) {
-    power_.attend();  // someone is looking at it
-    Serial.println("[screen] a touch on the glass: attended (B plays on the speaker again)");
+  if (input_.glassLanded()) {
+    const bool was = power_.unattended();
+    power_.glassLanded();  // someone is looking at it (this touch itself doesn't raise the sleep fade)
+    if (was) Serial.println("[screen] a touch on the glass: attended (B plays on the speaker again)");
   }
 }
 
@@ -186,6 +196,8 @@ void ScreenControl::setBrightness(int choice) {
 }
 
 void ScreenControl::consoleOff() { power_.turnOff(ScreenPower::Why::Console); }
+
+void ScreenControl::sleepTimerOff() { power_.turnOff(ScreenPower::Why::SleepTimer); }
 
 void ScreenControl::consoleOn() { power_.wake(millis(), ScreenPower::Why::Console); }
 

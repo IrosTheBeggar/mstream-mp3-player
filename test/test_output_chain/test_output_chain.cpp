@@ -1,10 +1,12 @@
 // Host test of the Bluetooth output chain as BtSink::onData composes it: the
-// DeclickReader (pause/skip/underrun/output-switch fades) and then the
-// GainRamp (volume), 128 frames per call; and the speaker pump's amp gate
-// (AmpGate: the amp and I2S off 2 s after the speaker goes quiet).
+// DeclickReader (pause/skip/underrun/output-switch fades), the GainRamp
+// (volume), then the sleep timer's FadeStage, 128 frames per call; and the
+// speaker pump's amp gate (AmpGate: the amp and I2S off 2 s after the
+// speaker goes quiet).
 // Run: pio test -e native
 #include <unity.h>
 
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <random>
@@ -12,6 +14,7 @@
 
 #include "AmpGate.h"
 #include "DeclickReader.h"
+#include "FadeStage.h"
 #include "GainRamp.h"
 #include "PcmRing.h"
 #include "VolumeMath.h"
@@ -26,6 +29,7 @@ struct Chain {
   PcmRing ring{buf.data(), 4096};
   DeclickReader reader{kBt};
   GainRamp gain{vol::kHeadroomQ15};
+  FadeStage fade;
   Chain() {
     ring.setConsumer(kBt);
     reader.bind(ring);
@@ -39,6 +43,7 @@ struct Chain {
     std::vector<int16_t> out(kCall * 2, 12345);  // garbage: all of it must be overwritten
     reader.fill(out.data(), kCall, playing);
     gain.process(out.data(), kCall);
+    fade.process(out.data(), kCall, ring.consumer() == kBt);
     return out;
   }
 };
@@ -60,6 +65,14 @@ void test_never_adds_level() {
       case 1: c.ring.discardAll(); break;                                    // skip
       case 2: c.ring.setConsumer(rng() % 2 ? kBt : kSpeaker); break;         // output switch
       case 3: c.gain.request(static_cast<uint16_t>(rng() % 32769), rng() % 3 == 0); break;
+      case 4:
+        // The sleep timer's fade: any target (never above 1.0), or back to 1.0.
+        if (rng() % 4) {
+          c.fade.setTarget(static_cast<uint16_t>(rng() % 40000));
+        } else {
+          c.fade.restore();
+        }
+        break;
       default: {
         std::vector<int16_t> in(2 * (rng() % 300));
         for (auto& s : in) s = static_cast<int16_t>(static_cast<int>(rng() % (2 * kAmp + 1)) - kAmp);
@@ -253,6 +266,77 @@ void test_amp_quiet_across_the_clock_wrap() {
   TEST_ASSERT_FALSE(p.running);
 }
 
+// ---- the sleep timer's fade (FadeStage) ----
+
+namespace {
+float dbOf(uint16_t q15) { return q15 ? 20.0f * std::log10(q15 / 32768.0f) : -120.0f; }
+}  // namespace
+
+// At 1.0 it passes the samples untouched; never above 1.0 whatever it's asked.
+void test_fade_is_bit_exact_at_unity_and_never_above_it() {
+  FadeStage f;
+  std::vector<int16_t> in(2 * 256), out;
+  for (size_t i = 0; i < in.size(); ++i) in[i] = static_cast<int16_t>((i * 7919) % 65536 - 32768);
+  out = in;
+  f.process(out.data(), 256);
+  TEST_ASSERT_EQUAL_MEMORY(in.data(), out.data(), in.size() * sizeof(int16_t));
+  f.setTarget(60000);  // clamped
+  TEST_ASSERT_EQUAL_UINT16(FadeStage::kUnity, f.target());
+  out = in;
+  f.process(out.data(), 256);
+  TEST_ASSERT_EQUAL_MEMORY(in.data(), out.data(), in.size() * sizeof(int16_t));
+}
+
+// Down it follows the target within ~23 ms (no step); up it rises at
+// GainRamp's slow rate, ~20 dB/s: "+10 min" brings the music back over
+// seconds, never at once.
+void test_fade_falls_smoothly_and_rises_slowly() {
+  FadeStage f;
+  std::vector<int16_t> buf(2 * 128, 20000);
+  f.setTarget(328);  // -40 dB
+  int16_t last = 20000;
+  for (int call = 0; call < 20; ++call) {
+    std::fill(buf.begin(), buf.end(), 20000);
+    f.process(buf.data(), 128);
+    for (uint32_t i = 0; i < 128; ++i) {
+      TEST_ASSERT_TRUE(buf[2 * i] <= last);                 // only down
+      TEST_ASSERT_TRUE(last - buf[2 * i] <= 20000 / 1024 + 1);  // a frame's step at most
+      last = buf[2 * i];
+    }
+  }
+  TEST_ASSERT_FLOAT_WITHIN(0.5f, -40.0f, dbOf(f.levelQ15()));
+  f.setTarget(FadeStage::kUnity);
+  for (int call = 0; call < 44100 / 128; ++call) {  // 1 s
+    std::fill(buf.begin(), buf.end(), 20000);
+    f.process(buf.data(), 128);
+  }
+  const float after = dbOf(f.levelQ15());
+  TEST_ASSERT_TRUE(after > -35.0f);
+  TEST_ASSERT_TRUE(after < -40.0f + 21.0f);
+}
+
+// Only the ring's consumer moves the level (two tasks moving it would
+// double the rate); the other applies it as it is. restore() snaps back
+// to 1.0 (only called while nothing is heard).
+void test_fade_moves_only_for_the_consumer_and_restore_snaps() {
+  FadeStage f;
+  std::vector<int16_t> buf(2 * 128, 10000);
+  f.setTarget(0);
+  f.process(buf.data(), 128, /*advance=*/false);
+  TEST_ASSERT_EQUAL_UINT16(FadeStage::kUnity, f.levelQ15());
+  TEST_ASSERT_EQUAL_INT16(10000, buf[0]);
+  for (int i = 0; i < 20; ++i) f.process(buf.data(), 128, true);
+  TEST_ASSERT_EQUAL_UINT16(0, f.levelQ15());
+  std::fill(buf.begin(), buf.end(), 10000);
+  f.process(buf.data(), 128, false);  // the other output, at the level: silent
+  TEST_ASSERT_EQUAL_INT16(0, buf[0]);
+  f.restore();
+  TEST_ASSERT_TRUE(f.atUnity());
+  std::fill(buf.begin(), buf.end(), 10000);
+  f.process(buf.data(), 128, false);
+  TEST_ASSERT_EQUAL_INT16(10000, buf[0]);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_never_adds_level);
@@ -264,5 +348,8 @@ int main(int, char**) {
   RUN_TEST(test_amp_pa0_switches_off_once_quiet);
   RUN_TEST(test_amp_pa1_holds_it_on_until_pa0);
   RUN_TEST(test_amp_quiet_across_the_clock_wrap);
+  RUN_TEST(test_fade_is_bit_exact_at_unity_and_never_above_it);
+  RUN_TEST(test_fade_falls_smoothly_and_rises_slowly);
+  RUN_TEST(test_fade_moves_only_for_the_consumer_and_restore_snaps);
   return UNITY_END();
 }

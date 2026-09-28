@@ -29,6 +29,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  ThumbCache  ThumbScaler  JpegInfo                            |
               |  OutputModel  PlayGate  QueueView  PowerWindow                |
               |  ScreenPower (and WakeLatch)  AmpGate                         |
+              |  SleepTimer  FadeStage  IdlePolicy  QueueSaver                |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -39,6 +40,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/PowerProbe + app/PowerLab (power measurement, console P) |
               |  app/ScreenControl (the screen policy: backlight, sleep)      |
               |  app/BoardPower (IMU suspended, EXTEN off at boot)            |
+              |  app/IdlePower (the idle power-off: setting, note, power off) |
               |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
               |         Fonts (VLW DejaVu), Icons, Gfx, Thumbs (covers),      |
               |         EmptyState                                            |
@@ -109,6 +111,17 @@ The rules that keep it deadlock- and glitch-free:
   other rates fail on Bluetooth (the player skips them) until a resampler lands.
   The speaker takes any rate: `RingOutput` keeps the rate in an `int` because
   ESP8266Audio's base class stores it in a `uint16_t`.
+- **The sleep timer's fade is one more stage, after the gain** (`FadeStage`,
+  in `AudioShared`, host-tested in test_output_chain; docs/ENERGY.md
+  section 3): on Bluetooth after `gain_.process`, on the speaker after the
+  tap write and before `playRaw`. One level for both outputs (an output
+  switch during a fade carries it), an atomic Q15 target from the loop
+  (never above 1.0) and an atomic Q30 level, moved only by the output that
+  is the ring's consumer: down at most full scale in 1024 frames, up at
+  GainRamp's slow rate (~20 dB/s). `restore()` puts it back to 1.0 at once,
+  only while the outputs play silence (a confirmed pause). At 1.0 it is
+  bit-exact. It is our gain only: no AVRCP absolute volume is ever sent
+  for it.
 - **The speaker amp is on only while the speaker is used** (`AmpGate`,
   host-tested in test_output_chain; docs/ENERGY.md item 5). The pump
   switches the NS4168 (AXP192 GPIO2) and M5.Speaker's I2S off
@@ -303,7 +316,12 @@ out what it returns.
   that wasn't playing, since in-ear detection and a bud being adjusted send
   keys too. Play and pause are commands, never toggles. Play only resumes
   paused playback (stopped, e.g. after a boot and an automatic reconnect, it
-  does nothing). Next and previous skip while playing; paused or stopped
+  does nothing), and never a pause the sleep timer made
+  (`PlaybackController::pausedByTimer()`: in-ear detection sends Play
+  when a sleeper turns over; the Core2's own play resumes it). Only a key
+  that acted counts as input for the idle power-off (`HeadsetKeys::
+  isInput()`: not an ignored Play or Pause, nor a cue after the timer's
+  pause). Next and previous skip while playing; paused or stopped
   they only select the next or previous track, which the screen shows and a
   later play starts from its beginning. The Core2's own buttons and the
   console keep toggling and skip-and-play.
@@ -437,6 +455,106 @@ out what it returns.
   minute. Each page, scan and phase change logs a `[bt] reconnect:` line
   (`paging ..., try 2 of 3`, `backing off`, `resting (why)`).
 
+## Sleep timer
+
+The listener's "fell asleep with music on" (docs/ENERGY.md section 3;
+`SleepTimer`, `FadeStage`, host-tested in test_sleep_timer). Choices, RAM
+only: 15, 30, 45, 60 or 90 min, End of track, End of album (the next
+entry on another album; with no album, another folder), End of queue.
+Now Playing's "..." > Sleep timer opens its sheet (`SleepSheet`: the
+minutes, the three ends, and while one runs +10 min and Turn off in red;
+the running choice outlined). main.cpp's `stepSleep()` feeds the timer
+every pass before the player and carries out what it says:
+
+1. the fade, our gain only (the stage above): a timed choice over the 30 s
+   after it expires, linear in dB to -40 dB then 0; the ends over the
+   track's last 10 s when its length is known. It only falls by itself: a
+   skip keeps it, and only +10 min, Turn off or another choice bring it
+   back, at the slow rate. After a skip the length counts only once the
+   backend has started the new track (`EntryStart`: until then it reports
+   the old one's end, which would fade the new track at once);
+2. the pause (`pauseByTimer()`, or the player's own at the boundary:
+   `setPauseAfterTrack()`), never a stop, the output never moved; a pause
+   during the fade, or an expiry while paused or waiting for the
+   headphones, goes straight here;
+3. once nothing has played for 250 ms: the fade back to 1.0 and the screen
+   off (`ScreenControl::sleepTimerOff()`; the pocket guard for any wake);
+4. 5 min later, unless something played: `releaseHeadphones()`, the drop
+   expected (no dialog), the reconnect resting, still connectable, the
+   output still Bluetooth (a later play pages them through PlayGate). A
+   play in the moment between the release and the drop (the link still
+   up) is paused when the drop comes (`BtSession::onDisconnected()`), so
+   nothing "plays" without a link and the headphones never start music
+   when they come back.
+
++10 min never leaves less time than before (`SleepTimer::canExtend()`):
+End of album or End of queue before its last track can't say what is
+left, so +10 min is dim and does nothing there.
+
+During the fade any touch, strip press or PWR wake (swallowed as usual)
+shows the toast "Sleep timer: fading" with +10 min and Turn off, the only
+controls that act on it; they come before an open sheet's (the toast is
+drawn over it) and take a tap to y 77. Both raise the level, so neither
+acts on a clamped edge reading or on the touch that attended a screen
+woken from off (`SleepTimer::toastTap()`, `ScreenPower::
+landedUnattended()`): a pocket's second contact lands on a lit toast;
+the listener's next tap acts. After the timer's pause the headphones' Play is
+ignored (HeadsetKeys); the Core2's play resumes. Console: `T` status,
+`T<min>`, `Ts<sec>` (tests), `Tt`, `Ta`, `Tq`, `T+`, `T0`; each step logs a
+`[sleep]` line. The idle power-off (below) follows the timer's pause.
+
+## Idle power-off
+
+The device turns itself off after N minutes idle (docs/ENERGY.md item 4;
+`IdlePolicy`, host-tested in test_idle_policy): "Turn off when idle" on the
+Output tab, 10 / **20** / 60 min / Never, saved (NVS "power"/"idle_after",
+`app/IdlePower`). Idle means all of these: the player Stopped or Paused
+(not Playing, not Waiting for the headphones); not on USB (the AXP192's
+power status, ACIN or VBUS, read once a second by `ScreenControl`; not read
+yet counts as USB); no Pair screen scan or pairing; no queue write under way
+or edit waiting (`QueueStore::busy()`; not a write that failed and waits its
+retry); no screen of its own (calibration, a spike tool). Anything that
+blocks restarts the countdown when it goes, and so does any input: a touch
+or strip press (a waking one too), PWR, a headphone key that acted (not a
+Play ignored after the sleep timer's pause, a Pause while paused, a cue
+after the timer's pause: `HeadsetKeys::isInput()`), a console byte. So it
+counts from the pause, the sleep timer's too.
+
+main.cpp's `stepIdle()` feeds it each pass after the player and carries it
+out:
+
+1. **The warning**, the last 30 s: the toast "Turning off in 30 s" (counting
+   down) with **Keep on** (`Toast::showIdle`). Any input ends it, the
+   button included; so does anything that blocks. It is drawn on a lit
+   screen only: it doesn't light a dark one (it may be night). In practice
+   that means only with Screen off after: Never: the shortest idle length
+   (10 min) outlasts the longest screen timeout (5 min), and what keeps
+   the screen lit also blocks the countdown.
+2. **At the end:** `QueueStore::flushNow()` (a piece-wise write under way
+   finished, or the queue written again whole if it changed since it
+   began; an edit inside its 2 s written at once; the position), the note
+   for the next boot (NVS "power"/"off_idle": the length), and the
+   headphones let go the sleep timer's way (`releaseHeadphones()`: the
+   drop expected, resting, still connectable, the output unchanged).
+3. **The power**, once they are unlinked (at most 3 s, so they see a clean
+   disconnect): the power status read once more (USB plugged in meanwhile:
+   it stays on), haptics stopped, `Serial.flush()`, `M5.Power.powerOff()`
+   (the AXP192's power-off bit; M5Unified then deep-sleeps with no wake
+   source in case it didn't take). Input or a blocker during step 3's wait
+   cancels it: the note is cleared, the headphones stay let go (a play
+   pages them).
+
+PWR boots it again, stopped where it was (the queue and position from the
+card and NVS). The next boot reads and removes the note and, once the UI is
+up, shows "Turned off after 20 minutes idle" for 6 s. Console: `I` status
+(`[power] idle: off after 20 min; counting, off in 1142 s`, or what it waits
+for), `I<min>` / `Is<sec>` a test length until restart, `I0` the setting's
+again; for bench tests on USB, `Iu1` / `Iu0` tell the policy "on battery"
+(until restart; the last-moment read of the AXP192 is the real one, so on
+USB it logs `USB power at the last moment: staying on` instead of turning
+off) and `Ib<sec>` leaves the note for the next boot's toast. Its log lines are `[power] idle: ...`, `[power] off after idle
+(...)`, `[power] off now (...)`.
+
 ## Dancing crab (proof of concept)
 
 Each output copies what it plays into its own `AudioTap` (PSRAM, written only
@@ -523,8 +641,13 @@ the browsing UI hold its **track ids**, never strings.
   Playing): a new track is only selected (the backend drops what it had), a
   resume leaves the paused track where it is, skips stay waiting on the new
   track, play/pause cancels the wait (Paused); `release()` plays what waits,
-  `cancelWait()` ends it paused (`PlayGate` decides which: see Bluetooth).
-- **Persistence** (`app/QueueStore`, `QueueText`): the queue is saved as paths,
+  `cancelWait()` ends it paused (`PlayGate` decides which: see Bluetooth). For the sleep
+  timer: `setPauseAfterTrack()` (at the track's natural end the next entry
+  is cued and it stays paused at 0:00; at the queue's end without repeat,
+  the natural stop; `timerStops()` counts them) and `pauseByTimer()`
+  (playing pauses, a wait ends paused); both mark the pause
+  `pausedByTimer()` until any play.
+- **Persistence** (`app/QueueStore` over `QueueSaver`, `QueueText`): the queue is saved as paths,
   one a line (`queue.txt`, header `mstream-queue 1 <entries> <current>
   <generation>`), so a rebuilt library, whose ids differ, finds its tracks
   again; paths that are gone are dropped, and if the current one is among them
@@ -539,6 +662,13 @@ the browsing UI hold its **track ids**, never strings.
   rebuild that leaves no library (out of PSRAM, or a card that went away)
   isn't taken as the queue changing: what survives stays in memory,
   playback stops if its track is gone, and `queue.txt` isn't rewritten.
+  When and what to write is `QueueSaver`'s (lib/core, host-tested in
+  test_queue: the timing, a failure keeping the last file); `QueueStore`
+  gives it the card and NVS. `flushNow()` does it all synchronously, for
+  the idle power-off: a write under way finished (or, if the queue changed
+  since it began, dropped and written again whole), an edit not yet written
+  written without its 2 s, then the position. `queue.tmp` only replaces
+  `queue.txt` complete, so a flush that fails leaves the last good file.
 - **SD access while playing**: the index cache and the queue file are
   written and read in pieces of at most 4 KB (`storage/FileStream`): one
   `f_write` holds the FAT volume's lock for its whole length, and the decoder
@@ -714,8 +844,8 @@ Queue, Dance and Output (with its Pair and About pages).
   in internal RAM (6-8 KB of the ~48 KB left while playing). The loop runs
   below the decoder on core 1 (priority 1 vs 2), so the audio goes first,
   and it sleeps 1-5 ms every pass. The `Ui` object and all its sprites live
-  in PSRAM (~340 KB: six 320x42 row sprites, a 320x56 strip, a 320x168 panel
-  for sheets and dialogs, the rail); the fonts' glyph tables too.
+  in PSRAM (~365 KB: six 320x42 row sprites, a 320x56 strip, a 320x204 panel
+  for sheets and dialogs (the content area: the 4-row sheet), the rail); the fonts' glyph tables too.
 - **The screen's power** (`ScreenPower`, host-tested; `app/ScreenControl`
   on the device; [ENERGY.md](ENERGY.md) item 2: the screen was ~15 mA of
   the ~116 while streaming). Bright at the chosen brightness (Low 60,
@@ -784,7 +914,8 @@ Queue, Dance and Output (with its Pair and About pages).
   (flashing for 1.5 s when tracks are added); the Output icon's colour is the
   Bluetooth state (cyan connected, amber connecting, red lost or a
   connection that failed); the EQ bars lie flat in amber while a play
-  waits for the headphones. The Library
+  waits for the headphones; a 7 x 7 moon in the Now Playing cell's corner
+  while a sleep timer runs (amber while it fades). The Library
   icon is a record half out of its sleeve, unlike Now Playing's bars. Only
   the cells whose state changed are drawn (a 54x36 push, ~1 ms).
 - **Texts that must fit**: the fixed texts with a fixed room (the coach
@@ -841,11 +972,18 @@ Queue, Dance and Output (with its Pair and About pages).
   each over its button with an arrow down to its dot, then "tap the tab
   you're on again: back to its start"; a tap anywhere goes on, a tab tap
   ends them. A **sheet**
-  (from the bottom, never above y 72) and a **dialog** (modal, the tab bar
+  (from the bottom, rows of 40 px: up to 3 in the list's band from y 72,
+  the 4-row one from y 40, never onto the tab bar) and a **dialog** (modal, the tab bar
   still works; optionally an icon, a live status line and a red primary
   button) freeze the page under them; one that opens while a finger is
   on the page (the headphones' drop dialog) ends that touch for the page (a
-  Cancel), so its lift can't act or draw under it. All are opaque and drawn
+  Cancel), so its lift can't act or draw under it. When a toast goes, the
+  header row it covered is drawn again (`Ui::uncover()`); a page with no
+  header (Now Playing, the Dance tab) draws all of itself for that, so every
+  sheet up over it (the "..." sheet, the Sleep timer sheet, the volume
+  sheet) is drawn again after it (found on the device: the fade toast's
+  +10 min over the Sleep timer sheet left the sheet up and live but unseen,
+  and a tap on "..." hit its Turn off). All are opaque and drawn
   through the list's scroll mapping, so they land right over a scrolled
   list. After an add (Play next, + Queue) the toast also has **View**: the
   Queue, scrolled to the first added entry (found by its queue key).
@@ -921,12 +1059,20 @@ Queue, Dance and Output (with its Pair and About pages).
   wait), "Waiting, 24 of 86" is the progress line, and the artist and
   album bands give way to "Waiting for SPYDRONE..." over "try 2 of 3" and
   two plain buttons, **Play on speaker** and **Cancel** (out loud is a
-  choice, not the way on: neither is the accent). The
+  choice, not the way on: neither is the accent). While a sleep timer runs,
+  the progress line has a moon and "23 min" ("track", "45 s", "fading")
+  after "4 of 16 · Speaker"; when both don't fit the output's name goes
+  first ("4 of 16" and the moon), then the line (the moon alone), but the
+  amber "SPYDRONE (not connected)" never does (the moon, or nothing of the
+  timer, beside it: `uitext::sleepLineFit()`; see "Sleep timer" above). The
   artist opens the Library at that artist, the album at the album (one Back
   from its artist), each **scrolled to the playing item and tinted**; "..."
-  is a sheet of Go to artist, Go to album and Show in folders (each with
-  its name, dim, on the right), the last opening the chain of folders down
-  to the track's, one Back apart, the playing file tinted. The volume
+  is a sheet of Sleep timer (its state), Go to artist, Go to album and
+  Show in folders (each with its name, dim, on the right; the Sleep timer
+  row's follows the timer while the sheet is up; four rows of 40 px, the
+  sheet rising into the header row from y 40: `SheetLayout.h`), the last
+  opening the chain of folders down to the
+  track's, one Back apart, the playing file tinted. The volume
   button opens the volume sheet. Only what changed is redrawn: the cover
   when the album changes or its thumbnail arrives, the text when the track
   does, the times once a second, the transport on a change.
@@ -1004,7 +1150,8 @@ Queue, Dance and Output (with its Pair and About pages).
   remembered pair, and goes back to the card), **Haptics** on/off (the
   input layer's saved setting), **Screen off after** and **Brightness**
   (the screen policy's; the value in a pill, a tap takes the next choice,
-  saved), **Touch calibration**, **About** (battery,
+  saved), **Turn off when idle** (the idle power-off's, the same way: 10 /
+  20 / 60 min / Never, a power symbol), **Touch calibration**, **About** (battery,
   storage, the library, the headphones, memory, the version, and "Show the
   tips again"). The tab bar's Output icon is amber while a connection the
   listener asked for is on its way, and while the link looks for them; the

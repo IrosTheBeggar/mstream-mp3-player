@@ -223,6 +223,43 @@ void test_an_expected_drop_is_forgotten_by_the_next_link() {
   TEST_ASSERT_FALSE(s.dropExpected());
 }
 
+// BtSink's Disconnected: a drop not expected on Bluetooth is lost (pause,
+// the dialog); an expected one never shows the dialog, and pauses only a
+// play that started between the release and the drop (the sleep timer's
+// or the idle power-off's release keeps the output Bluetooth: that play
+// would otherwise "play" with no link, and start in the listener's ears
+// when the headphones came back). Either way the expectation is used up.
+void test_a_drop_pauses_a_play_that_has_no_link() {
+  using P = BtLink::Phase;
+  BtSession s;
+  s.update(link(P::Linked), 0);
+  // Lost while playing on Bluetooth, or while paused there.
+  BtSession::Drop d = s.onDisconnected(true, true);
+  TEST_ASSERT_TRUE(d.lost);
+  TEST_ASSERT_TRUE(d.pause);
+  d = s.onDisconnected(true, false);
+  TEST_ASSERT_TRUE(d.lost);
+  // On the speaker: not ours to pause.
+  d = s.onDisconnected(false, true);
+  TEST_ASSERT_FALSE(d.lost);
+  TEST_ASSERT_FALSE(d.pause);
+  // Released (the output stays Bluetooth), and a play came before the drop.
+  s.expectDrop(100);
+  d = s.onDisconnected(true, true);
+  TEST_ASSERT_FALSE(d.lost);
+  TEST_ASSERT_TRUE(d.pause);
+  TEST_ASSERT_FALSE(s.dropExpected());
+  // Released while paused (the usual case), or let go to the speaker.
+  s.expectDrop(200);
+  d = s.onDisconnected(true, false);
+  TEST_ASSERT_FALSE(d.lost);
+  TEST_ASSERT_FALSE(d.pause);
+  s.expectDrop(300);
+  d = s.onDisconnected(false, true);
+  TEST_ASSERT_FALSE(d.lost);
+  TEST_ASSERT_FALSE(d.pause);  // the speaker plays on (the listener's choice)
+}
+
 // A drop expected of a link that never goes (the headphones picked on the
 // Pair screen were the linked ones): not expected for ever, or a real drop
 // much later would be taken for it (no pause, no dialog).
@@ -503,6 +540,7 @@ int main(int, char**) {
   RUN_TEST(test_a_pairing_fails_when_it_stops_or_takes_too_long);
   RUN_TEST(test_an_expected_drop_is_forgotten_by_the_next_link);
   RUN_TEST(test_a_drop_that_never_comes_is_no_longer_expected);
+  RUN_TEST(test_a_drop_pauses_a_play_that_has_no_link);
   RUN_TEST(test_pairing_while_linked_waits_for_the_new_link);
   RUN_TEST(test_the_connected_event_answers_whichever_comes_first);
   RUN_TEST(test_a_connect_with_none_remembered_searches_then_fails);

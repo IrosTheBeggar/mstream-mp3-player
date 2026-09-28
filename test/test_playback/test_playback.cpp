@@ -447,6 +447,83 @@ void test_a_replaced_queue_starts_the_new_current_if_the_old_one_is_gone() {
   TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
 }
 
+// ---- the sleep timer's asks (SleepTimer) ----
+
+// "Pause after this track": at the natural end, the next entry, paused at
+// 0:00 (cued: nothing held by the backend); a later play starts it.
+void test_pause_after_this_track_cues_the_next_entry() {
+  Rig r(3);
+  r.player.play(0);
+  r.player.setPauseAfterTrack(true);
+  r.audio.finishedFlag = true;
+  r.player.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_TRUE(r.player.pausedByTimer());
+  TEST_ASSERT_FALSE(r.player.pauseAfterTrack());  // done: once
+  TEST_ASSERT_EQUAL_UINT32(1, r.player.timerStops());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);    // nothing started
+  TEST_ASSERT_FALSE(r.audio.playing);             // the finished track let go
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+  TEST_ASSERT_FALSE(r.player.pausedByTimer());
+}
+
+// A skip or a failure isn't the track's end: the flag stays for the next.
+void test_pause_after_this_track_survives_a_skip_and_a_failure() {
+  Rig r(3);
+  r.player.play(0);
+  r.player.setPauseAfterTrack(true);
+  r.player.next();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  r.audio.failedFlag = true;
+  r.player.update(0);  // b fails: skipped to c
+  TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+  TEST_ASSERT_TRUE(r.player.pauseAfterTrack());
+  r.audio.finishedFlag = true;
+  r.player.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());  // (repeat: the first entry)
+}
+
+// At the end of the queue without repeat: the natural stop.
+void test_pause_after_the_last_track_without_repeat_stops() {
+  Rig r(2);
+  r.player.setRepeat(false);
+  r.player.play(1);
+  r.player.setPauseAfterTrack(true);
+  r.audio.finishedFlag = true;
+  r.player.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(1, r.player.timerStops());
+}
+
+// pauseByTimer(): playing pauses, a wait ends paused, a pause is marked;
+// stopped stays stopped. Any play clears the mark.
+void test_pause_by_timer_marks_the_pause() {
+  Rig r(2);
+  r.player.pauseByTimer();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+  TEST_ASSERT_FALSE(r.player.pausedByTimer());
+  r.player.play(0);
+  r.player.pauseByTimer();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_TRUE(r.audio.paused);
+  TEST_ASSERT_TRUE(r.player.pausedByTimer());
+  r.player.cueNext();  // (the headphones' next while paused: still the timer's pause)
+  TEST_ASSERT_TRUE(r.player.pausedByTimer());
+  r.player.togglePlayPause();
+  TEST_ASSERT_FALSE(r.player.pausedByTimer());
+  r.player.togglePlayPause();  // the listener's own pause: not the timer's
+  TEST_ASSERT_FALSE(r.player.pausedByTimer());
+  r.player.pauseByTimer();     // a pause that is there becomes the timer's
+  TEST_ASSERT_TRUE(r.player.pausedByTimer());
+  r.player.next();             // a skip plays: cleared
+  TEST_ASSERT_FALSE(r.player.pausedByTimer());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
@@ -478,5 +555,9 @@ int main(int, char**) {
   RUN_TEST(test_an_unknown_track_is_skipped);
   RUN_TEST(test_without_repeat_the_end_of_the_queue_stops);
   RUN_TEST(test_a_replaced_queue_starts_the_new_current_if_the_old_one_is_gone);
+  RUN_TEST(test_pause_after_this_track_cues_the_next_entry);
+  RUN_TEST(test_pause_after_this_track_survives_a_skip_and_a_failure);
+  RUN_TEST(test_pause_after_the_last_track_without_repeat_stops);
+  RUN_TEST(test_pause_by_timer_marks_the_pause);
   return UNITY_END();
 }

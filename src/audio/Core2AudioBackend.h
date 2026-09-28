@@ -89,6 +89,14 @@ public:
   // it before the speaker takes the ring, so no buffer plays at the old level.
   void setSpeakerVolume(uint8_t percent);
   uint8_t speakerVolume() const { return volume_; }
+  // The sleep timer's fade (FadeStage, after both outputs' gain; ENERGY.md
+  // section 3): its target (Q15, at most 1.0), and back to 1.0 at once,
+  // only while nothing is heard (a confirmed pause). Loop task. Never sent
+  // to the headphones: their own level stays as it is.
+  void setFade(uint16_t q15) { shared_.fade.setTarget(q15); }
+  void restoreFade() { shared_.fade.restore(); }
+  uint16_t fadeLevelQ15() const { return shared_.fade.levelQ15(); }
+  uint16_t fadeTargetQ15() const { return shared_.fade.target(); }
 
   BtSink& bluetooth() { return bt_; }
   SpeakerSink& speaker() { return speaker_; }

@@ -49,4 +49,21 @@ inline void drawCentred(lgfx::LovyanGFX& g, const Icon& icon, int cx, int cy, ui
   draw(g, icon, cx - icon.w / 2, cy - icon.h / 2, colour);
 }
 
+// The sleep timer's moon: a crescent in a `d` x `d` box with its top-left
+// at (x, y), pixel by pixel (drawn, not a bitmap: the tab bar's badge is
+// 7 px, Now Playing's 11; nothing outside the box is touched, so it sits on
+// any background). In doubled coordinates from the box's centre: inside
+// the disc, outside the bite (a disc of the same size up and to the right).
+inline void drawMoon(lgfx::LovyanGFX& g, int x, int y, int d, uint16_t colour) {
+  const int r2 = d * d;
+  const int bx = d, by = d * 6 / 10;  // the bite's centre, doubled
+  for (int py = 0; py < d; ++py) {
+    for (int px = 0; px < d; ++px) {
+      const int dx = 2 * px + 1 - d, dy = 2 * py + 1 - d;
+      const int ex = dx - bx, ey = dy + by;
+      if (dx * dx + dy * dy <= r2 && ex * ex + ey * ey > r2) g.drawPixel(x + px, y + py, colour);
+    }
+  }
+}
+
 }  // namespace icons

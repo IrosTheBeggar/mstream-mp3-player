@@ -52,6 +52,9 @@ enum class Output : uint8_t { Speaker, BtConnected, BtConnecting, BtLost, BtIdle
 // resting or off.
 Output outputFor(bool onBluetooth, bool connected, bool lost, bool asked, bool failed, bool looking);
 enum class Play : uint8_t { Nothing, Stopped, Paused, Playing, Waiting };
+// The sleep timer's badge on the Now Playing cell (a 7 x 7 moon in its
+// top-right corner): none, running (counting or armed), fading (amber).
+enum class Sleep : uint8_t { None, Running, Fading };
 
 // Everything the bar shows. Two states compare cell by cell (dirty()).
 struct State {
@@ -67,7 +70,10 @@ struct State {
   uint8_t battery = 0;             // 0-100
   bool charging = false;
   bool lowBlink = false;           // battery at 10 % or less: its blink phase
+  Sleep sleep = Sleep::None;       // the sleep timer's moon (no minutes: no redraw as they pass)
 };
+constexpr int kMoonPx = 7;         // the sleep timer's badge
+constexpr int kMoonRight = 25;     // its right edge, from the Now Playing icon's centre
 constexpr int kProgressW = 32;
 
 // Where the bar's texts go in a cell (x from the cell's left) and how

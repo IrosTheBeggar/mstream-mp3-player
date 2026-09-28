@@ -35,6 +35,18 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // Skips while waiting stay waiting, on the new track. togglePlayPause() while
 // waiting cancels it (Paused); release() plays what waits; cancelWait() ends
 // it paused (PlayGate decides which).
+//
+// The sleep timer (SleepTimer, docs/ENERGY.md section 3) asks two things:
+//   - "pause after this track" (setPauseAfterTrack()): at the track's
+//     natural end the player moves to the next entry and stays paused there
+//     at 0:00 (cued: a later play starts it from its beginning); at the end
+//     of the queue without repeat it stops, as it would. timerStops() counts
+//     those. A skip or a failure is no end: the flag stays for the next track.
+//   - pauseByTimer(): Playing pauses, Waiting ends paused, Paused stays.
+// Either way the pause is marked "paused by the timer" (pausedByTimer()):
+// headphone Play (HeadsetKeys) doesn't resume it, since in-ear detection
+// sends Play when a sleeper turns over. Any play clears the mark (the
+// Core2's own buttons, the screen, the console: the headphones can't).
 class PlaybackController {
 public:
   // Whether a play must wait for the output (read at every start).
@@ -71,6 +83,18 @@ public:
   // (or Waiting) the same as next()/prev().
   void cueNext();
   void cuePrev();
+
+  // ---- the sleep timer ----
+  // At the current track's natural end: the next entry, paused at 0:00.
+  void setPauseAfterTrack(bool on) { pauseAfter_ = on; }
+  bool pauseAfterTrack() const { return pauseAfter_; }
+  // Pauses (a wait ends paused) and marks it the timer's. Stopped: nothing.
+  void pauseByTimer();
+  // Paused by the timer and not played since: headphone Play doesn't resume.
+  bool pausedByTimer() const { return pausedByTimer_; }
+  // The pauses (or the stop, at the queue's end) setPauseAfterTrack() made,
+  // free-running.
+  uint32_t timerStops() const { return timerStops_; }
 
   // Advance state: moves to the next track when the current one ends or can't
   // be played. Stops once every track in the queue has failed in a row, so
@@ -126,6 +150,13 @@ private:
   // The current entry changed under the backend: carry on from the new one
   // in the same state (Playing starts it, Paused cues it, Stopped waits).
   void currentMoved();
+  // The track ended with "pause after this track": the next entry, cued.
+  void pauseAtBoundary();
+  // Playing or Waiting from now: any play clears the timer's mark.
+  void setPlaying(PlayState s) {
+    state_ = s;
+    pausedByTimer_ = false;
+  }
 
   IAudioBackend& audio_;
   QueueModel& queue_;
@@ -140,4 +171,7 @@ private:
   // user action.
   size_t failuresInARow_ = 0;
   Failure failure_;
+  bool pauseAfter_ = false;
+  bool pausedByTimer_ = false;
+  uint32_t timerStops_ = 0;
 };

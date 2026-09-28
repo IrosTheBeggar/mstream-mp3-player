@@ -25,6 +25,13 @@
 //        (a, not "cal": c<name> is the headphones' name)
 //   P... power measurements (app/PowerLab): P a [power] line, Pl log, Pw csv, Pm<name> mark,
 //        Pq coulomb counter, and A/B knobs (P? lists them)
+//   T... the sleep timer (docs/ENERGY.md section 3): T status, T<min> minutes from now,
+//        Ts<sec> seconds (tests), Tt / Ta / Tq the end of the track / album / queue,
+//        T+ +10 min, T0 off
+//   I... the idle power-off (docs/ENERGY.md item 4): I status, I<min> a test length in
+//        minutes, Is<sec> in seconds (until restart), I0 the setting's again; tests:
+//        Iu1/Iu0 pretend on battery (the last-moment USB read stays real), Ib<sec>
+//        the next boot's toast note
 // and the UI spike's tools (docs/UI-SPIKE.md), also ended with Enter, the
 // text after the letter passed on as it is:
 //   u...  input lab (u toggles; u0-u3 modes; us summary)
@@ -68,17 +75,22 @@ public:
     std::function<void(const char*)> touch;
     // Power measurements and knobs (app/PowerLab): the argument as typed.
     std::function<void(const char*)> power;
+    // The sleep timer: the argument as typed (may be "").
+    std::function<void(const char*)> sleep;
+    // The idle power-off: the argument as typed (may be "").
+    std::function<void(const char*)> idle;
   };
 
   explicit SerialConsole(Actions actions) : actions_(std::move(actions)) {}
 
-  // Handles whatever has arrived; call from the main loop.
-  void poll();
+  // Handles whatever has arrived; call from the main loop. True: something
+  // arrived (someone is at the console: the idle power-off waits).
+  bool poll();
 
 private:
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
-    InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power,
+    InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle,
   };
 
   Actions actions_;

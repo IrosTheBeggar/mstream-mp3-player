@@ -4,6 +4,7 @@
 
 #include "PlaybackController.h"
 #include "QueueModel.h"
+#include "QueueSaver.h"
 #include "QueueText.h"
 #include "TrackCatalog.h"
 #include "storage/FileStream.h"
@@ -20,8 +21,10 @@
 //   only counts for the file with the same generation: a position saved
 //   for a newer queue than the file holds (an edit not yet written) is
 //   never paired with the older file.
-// After a boot the queue is where it was, stopped: nothing starts by itself.
-class QueueStore {
+// When and what to write is QueueSaver's (lib/core, host-tested); this is
+// its card and NVS. After a boot the queue is where it was, stopped:
+// nothing starts by itself.
+class QueueStore : private QueueSaver::Store {
 public:
   QueueStore(LocalStorage& storage, QueueModel& queue, PlaybackController& player, const TrackCatalog& catalog);
 
@@ -30,6 +33,14 @@ public:
   bool restore();
   // Saves what changed; call every loop pass.
   void loop(uint32_t nowMs);
+  // Everything now, synchronously (before a power-off: ENERGY.md item 4):
+  // a write under way finished (or written again whole if the queue
+  // changed since it began), an edit not yet written, the position. True:
+  // the card has the queue as it is (or there is no storage).
+  bool flushNow();
+  // Something on its way to the card (a write under way, an edit or a
+  // move waiting its delay; not a failed one waiting its retry).
+  bool busy() const { return storage_.available() && saver_.busy(); }
   // Runs `rebuild` (a library rebuild: every library id changes) with the
   // queue carried across it by its paths; the track that plays keeps
   // playing if it's still there. Returns what `rebuild` returned.
@@ -38,36 +49,22 @@ public:
   void printStatus() const;
 
 private:
-  void startWrite();
-  void stepWrite();
-  void finishWrite();
-  void abortWrite();
-  void savePosition();
+  // QueueSaver::Store: queue.tmp through a PSRAM buffer, then renamed.
+  ByteSink* openTemp() override;
+  bool commitTemp() override;
+  void discardTemp() override;
+  void savePosition(uint32_t generation, int32_t current) override;
   void paths(char* file, char* temp, size_t size);
+  void noteFailures();
 
   LocalStorage& storage_;
   QueueModel& queue_;
   PlaybackController& player_;
   const TrackCatalog& catalog_;
+  QueueSaver saver_;
+  uint32_t failuresSeen_ = 0;
 
-  uint32_t generation_ = 0;       // of the file on the card
-  uint32_t savedContent_ = 0;     // the queue's contentVersion() the file holds
-  uint32_t savedPosition_ = 0;    // positionVersion() last saved to NVS
-  bool contentDirty_ = false;
-  bool positionDirty_ = false;
-  uint32_t contentChangedMs_ = 0;
-  uint32_t positionChangedMs_ = 0;
-  uint32_t lastContent_ = 0, lastPosition_ = 0;  // versions seen last pass
-
-  // A write in progress (across loop passes).
-  bool writing_ = false;
   File file_;
   uint8_t* buf_ = nullptr;  // PSRAM
   BufferedFileSink sink_;
-  queuetext::Writer writer_;
-  uint32_t writeGeneration_ = 0;
-  uint32_t writeStartMs_ = 0;
-  uint32_t nextTryMs_ = 0;  // after a failed write
-  uint32_t lastWriteMs_ = 0;  // how long the last complete write took
-  uint32_t writes_ = 0, failures_ = 0;
 };

@@ -68,6 +68,82 @@ inline constexpr int kDialogTitleW = 260;
 inline constexpr int kDialogButtonTextW = 123;
 inline constexpr const char* kPlayFailedBody = "Are they on, out of the case, and not connected to your phone?";
 
+// ---- the sleep timer (SleepTimer; docs/ENERGY.md section 3) ----
+// Now Playing's "..." sheet: its first row (Body), the timer's state dim
+// on the right (SleepTimer::rowText(): "Off", "23 min", "End of queue").
+inline constexpr const char* kSleepRow = "Sleep timer";
+// The Sleep timer sheet (ui/Overlays' SleepSheet, the sheet panel 320 x
+// 168 from y 72): its title (Small) left of the ✕ pill (x 16 to 242), then
+// three rows of pills 36 px tall, 44 px apart. The running choice is
+// outlined in the Now Playing accent. A label has its pill less
+// kSleepPillPad.
+inline constexpr int kSleepTitleW = 226;
+inline constexpr int kSleepPillPad = 8;
+// Row 1 (Body): the minutes; "90 min" says what the numbers are.
+inline constexpr const char* kSleepMinutes[5] = {"15", "30", "45", "60", "90 min"};
+inline constexpr int kSleepMinX[5] = {12, 68, 124, 180, 236}, kSleepMinW[5] = {50, 50, 50, 50, 72};
+// Row 2 (Small: "End of album" is 106 px in Body).
+inline constexpr const char* kSleepEnds[3] = {"End of track", "End of album", "End of queue"};
+inline constexpr int kSleepEndX[3] = {12, 112, 212}, kSleepEndW[3] = {94, 94, 96};
+// Row 3 while a timer runs (Body): +10 min, and Turn off in red (to the edge).
+inline constexpr const char* kSleepExtend = "+10 min";
+inline constexpr const char* kSleepTurnOff = "Turn off";
+inline constexpr int kSleepExtendX = 12, kSleepExtendW = 144;
+inline constexpr int kSleepOffX = 162, kSleepOffW = 146;
+// ... and while none runs, a line (Small) across the row.
+inline constexpr int kSleepHintW = 296;
+inline constexpr const char* kSleepHint = "Fades out, pauses, then the screen goes off.";
+// The toast during the fade (ui/Overlays' Toast): its line (Small) from
+// kToastTextX to the +10 min pill, then +10 min and Turn off (Body),
+// Turn off reaching the screen's edge.
+inline constexpr const char* kSleepFading = "Sleep timer: fading";
+inline constexpr int kSleepToastPlusX = 158, kSleepToastPlusW = 74;
+inline constexpr int kSleepToastOffX = 238, kSleepToastOffW = 72;
+inline constexpr int kSleepToastPad = 6;  // a label has its pill less this
+// The sleep and idle toasts' buttons take a tap this far below the toast
+// (y 36 to 77, not 71: 42 px, used half asleep) while no sheet or dialog
+// is up; the toast is still drawn 36 px (the list's scrolled band starts
+// at 72). Under a modal the toast's own 36 px only: a sheet's top is there.
+inline constexpr int kToastButtonSlop = 6;
+// Now Playing's progress line: the moon (11 px) and 2 px, then
+// SleepTimer::shortText() ("23 min", "45 s", "track", "fading"), 6 px
+// after the line, in kNowPlayingMidW. What shows is sleepLineFit()'s.
+inline constexpr int kSleepMoonW = 13;
+inline constexpr int kSleepGap = 6;
+
+// The progress line with the sleep timer running: the first of these that
+// fits in `room`.
+//   The line as it is ("4 of 16 · SPYDRONE"), the moon and its text;
+//   the line without "· <output>" ("4 of 16", `baseW`), the moon and its
+//   text (a headphone name leaves no room: the queue position stays);
+//   the moon and its text alone.
+// With the headphones not connected (`warnW` >= 0: the amber "SPYDRONE
+// (not connected)" alone), that text is never dropped for the timer:
+//   the line as it is, the moon and its text;
+//   the warning, the moon and its text;
+//   the warning and the moon;
+//   the warning alone (the tab bar's moon badge still shows the timer).
+// `fullW`, `baseW`, `warnW`: the Small widths; `moonTextW`: kSleepMoonW
+// and the timer's text.
+struct SleepLine {
+  enum class Text : unsigned char { Full, Base, Warn, None };
+  Text text = Text::Full;
+  bool moon = true;
+  bool moonText = true;
+  int width = 0;  // all of it, gaps included (centred on the line)
+};
+constexpr SleepLine sleepLineFit(int fullW, int baseW, int warnW, int moonTextW, int room) {
+  using T = SleepLine::Text;
+  if (fullW + kSleepGap + moonTextW <= room) return {T::Full, true, true, fullW + kSleepGap + moonTextW};
+  if (warnW >= 0) {
+    if (warnW + kSleepGap + moonTextW <= room) return {T::Warn, true, true, warnW + kSleepGap + moonTextW};
+    if (warnW + kSleepGap + kSleepMoonW <= room) return {T::Warn, true, false, warnW + kSleepGap + kSleepMoonW};
+    return {T::Warn, false, false, warnW};
+  }
+  if (baseW + kSleepGap + moonTextW <= room) return {T::Base, true, true, baseW + kSleepGap + moonTextW};
+  return {T::None, true, true, moonTextW};
+}
+
 // ---- the Queue's selection bar (ui/QueuePage) ----
 // Remove N (Bold, after the trash icon; without it when it doesn't fit),
 // Play next and Clear… (Body).
@@ -124,6 +200,21 @@ inline constexpr const char* kScreenOffSub = "dims first; a tap wakes it";
 inline constexpr const char* kScreenNeverSub = "stays on: more battery";
 inline constexpr const char* kBrightnessTitle = "Brightness";
 inline constexpr const char* kBrightnessSub = "higher uses more battery";
+// "Turn off when idle" (IdlePolicy's choices, the same row: ENERGY.md item 4).
+inline constexpr const char* kIdleOffTitle = "Turn off when idle";
+inline constexpr const char* kIdleOffSub = "paused, on battery";
+inline constexpr const char* kIdleNeverSub = "stays on: more battery";
+
+// ---- the idle power-off (IdlePolicy; ENERGY.md item 4) ----
+// The warning toast (ui/Overlays' Toast), its last 30 s: "Turning off in
+// 30 s" (Body) from kToastTextX to the button, then [Keep on] (Body) to the
+// screen's edge. Any input keeps it on; the button says so.
+inline constexpr const char* kIdleKeepOn = "Keep on";
+inline constexpr int kIdleToastKeepX = 214, kIdleToastKeepW = 96;
+inline constexpr int kIdleToastPad = 8;  // a label has its pill less this
+// The next boot's toast (IdlePolicy::offText(): "Turned off after 20
+// minutes idle"): Body on one line, no buttons, kToastTextX to
+// kToastTextRight.
 // About: a value (Body, or Small when Body doesn't fit).
 inline constexpr int kAboutValueW = 260;
 inline constexpr const char* kAboutMemory = "RAM %lu KB (low %lu), PSRAM %.1f MB";

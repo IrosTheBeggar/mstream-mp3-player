@@ -7,10 +7,6 @@
 namespace {
 
 constexpr const char* kNvsNamespace = "queue";
-constexpr uint32_t kContentDelayMs = 2000;   // after the last edit
-constexpr uint32_t kPositionDelayMs = 1000;  // after the last move
-constexpr uint32_t kRetryMs = 10000;         // after a failed write
-constexpr uint32_t kLinesPerPass = 32;       // ~2 KB of paths
 constexpr size_t kBufSize = 2048;
 
 struct SavedPosition {
@@ -36,13 +32,11 @@ int32_t pickCurrent(const queuetext::Header& h, void* ctx) {
   return s.have && s.generation == h.generation ? s.position : h.current;
 }
 
-bool timeFor(uint32_t now, uint32_t since, uint32_t delay) { return now - since >= delay; }
-
 }  // namespace
 
 QueueStore::QueueStore(LocalStorage& storage, QueueModel& queue, PlaybackController& player,
                        const TrackCatalog& catalog)
-    : storage_(storage), queue_(queue), player_(player), catalog_(catalog) {}
+    : storage_(storage), queue_(queue), player_(player), catalog_(catalog), saver_(*this, queue, catalog) {}
 
 void QueueStore::paths(char* file, char* temp, size_t size) {
   const char* dir = storage_.stateDir();
@@ -55,7 +49,7 @@ bool QueueStore::restore() {
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
   SavedPosition saved = readPosition();
-  generation_ = saved.generation;
+  saver_.setGeneration(saved.generation);
   // queue.tmp is only ever a whole file if power went between removing
   // queue.txt and renaming it: then it's the newest.
   for (const char* path : {file, temp}) {
@@ -68,16 +62,15 @@ bool QueueStore::restore() {
       Serial.printf("[queue] %s: not a whole queue file, ignored\n", path);
       continue;
     }
-    if (r.header.generation > generation_) generation_ = r.header.generation;
     player_.queueReplaced(r.currentKept);
-    savedContent_ = lastContent_ = queue_.contentVersion();
-    savedPosition_ = lastPosition_ = queue_.positionVersion();
     // Tracks that are gone, or a file from the wrong name: write it again.
     // (Not for tracks dropped because there's no library at all this time,
     // a card that failed to read, say: the file keeps them for next time.)
     const LibraryIndex* index = catalog_.index();
-    contentDirty_ = (r.dropped > 0 && index && index->ready()) || path == temp;
-    contentChangedMs_ = millis();
+    const bool rewrite = (r.dropped > 0 && index && index->ready()) || path == temp;
+    const uint32_t generation =
+        r.header.generation > saved.generation ? r.header.generation : saved.generation;
+    saver_.loaded(generation, rewrite, millis());
     const bool fromNvs = saved.have && saved.generation == r.header.generation;
     Serial.printf("[queue] restored %lu of %lu tracks from %s (%lu no longer there), at %d of %lu (position from %s)\n",
                   (unsigned long)r.entries, (unsigned long)r.lines, path, (unsigned long)r.dropped,
@@ -89,75 +82,48 @@ bool QueueStore::restore() {
 
 void QueueStore::loop(uint32_t nowMs) {
   if (!storage_.available()) return;
-  const uint32_t cv = queue_.contentVersion();
-  const uint32_t pv = queue_.positionVersion();
-  if (cv != lastContent_) {
-    lastContent_ = cv;
-    contentChangedMs_ = nowMs;
-    contentDirty_ = cv != savedContent_;
-  }
-  if (pv != lastPosition_) {
-    lastPosition_ = pv;
-    positionChangedMs_ = nowMs;
-    positionDirty_ = pv != savedPosition_;
-  }
-  if (writing_) {
-    stepWrite();
-    return;
-  }
-  if (contentDirty_ && timeFor(nowMs, contentChangedMs_, kContentDelayMs) &&
-      static_cast<int32_t>(nowMs - nextTryMs_) >= 0) {
-    startWrite();
-    return;
-  }
-  // A position only means something for the queue the file holds.
-  if (positionDirty_ && !contentDirty_ && timeFor(nowMs, positionChangedMs_, kPositionDelayMs)) savePosition();
+  saver_.loop(nowMs);
+  noteFailures();
 }
 
-void QueueStore::startWrite() {
+bool QueueStore::flushNow() {
+  if (!storage_.available()) return true;  // nothing is saved without storage
+  const uint32_t t0 = millis();
+  const bool wasWriting = saver_.writing(), wasDirty = saver_.contentDirty();
+  const uint32_t writes = saver_.writes();
+  const bool ok = saver_.flushNow(t0);
+  noteFailures();
+  Serial.printf("[queue] saved now%s%s in %lu ms: %s\n", wasWriting ? " (a write under way finished)" : "",
+                saver_.writes() != writes ? ", the file written" : wasDirty ? "" : " (the file was up to date)",
+                (unsigned long)(millis() - t0), ok ? "the card has the queue as it is" : "FAILED (the last file stays)");
+  return ok;
+}
+
+void QueueStore::noteFailures() {
+  if (saver_.failures() == failuresSeen_) return;
+  failuresSeen_ = saver_.failures();
+  Serial.printf("[queue] saving the queue failed (card full or gone?): trying again in %lu s\n",
+                (unsigned long)(QueueSaver::kRetryMs / 1000));
+}
+
+ByteSink* QueueStore::openTemp() {
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
   if (!buf_) buf_ = static_cast<uint8_t*>(psramAlloc(kBufSize));
   if (buf_) file_ = storage_.fs().open(temp, FILE_WRITE);
   if (!buf_ || !file_) {
-    ++failures_;
-    nextTryMs_ = millis() + kRetryMs;
-    Serial.printf("[queue] couldn't write %s (retrying in %lu s)\n", temp, (unsigned long)(kRetryMs / 1000));
-    return;
+    Serial.printf("[queue] couldn't write %s\n", temp);
+    return nullptr;
   }
   sink_.reset(&file_, buf_, kBufSize);
-  writeGeneration_ = generation_ + 1;
-  writer_.begin(queue_, writeGeneration_);
-  writeStartMs_ = millis();
-  writing_ = true;
-  stepWrite();
+  return &sink_;
 }
 
-void QueueStore::stepWrite() {
-  switch (writer_.step(queue_, catalog_, sink_, kLinesPerPass)) {
-    case queuetext::Writer::Step::More:
-      break;
-    case queuetext::Writer::Step::Done:
-      finishWrite();
-      break;
-    case queuetext::Writer::Step::Changed:
-      abortWrite();  // edited meanwhile: written again once it settles
-      break;
-    case queuetext::Writer::Step::Failed:
-      abortWrite();
-      ++failures_;
-      nextTryMs_ = millis() + kRetryMs;
-      Serial.println("[queue] writing the queue file failed (card full or gone?)");
-      break;
-  }
-}
-
-void QueueStore::finishWrite() {
+bool QueueStore::commitTemp() {
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
   bool ok = sink_.flush();
   file_.close();
-  writing_ = false;
   fs::FS& fs = storage_.fs();
   if (ok) {
     fs.remove(file);
@@ -165,43 +131,31 @@ void QueueStore::finishWrite() {
   }
   if (!ok) {
     fs.remove(temp);
-    ++failures_;
-    nextTryMs_ = millis() + kRetryMs;
     Serial.printf("[queue] couldn't replace %s\n", file);
-    return;
   }
-  generation_ = writeGeneration_;
-  savedContent_ = queue_.contentVersion();  // Done: unchanged since begin()
-  contentDirty_ = false;
-  ++writes_;
-  lastWriteMs_ = millis() - writeStartMs_;
-  savePosition();  // paired with this generation from now on
+  return ok;
 }
 
-void QueueStore::abortWrite() {
+void QueueStore::discardTemp() {
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
   file_.close();
   storage_.fs().remove(temp);
-  writing_ = false;
 }
 
-void QueueStore::savePosition() {
+void QueueStore::savePosition(uint32_t generation, int32_t current) {
   Preferences p;
-  if (p.begin(kNvsNamespace, false)) {
-    p.putUInt("gen", generation_);
-    p.putInt("pos", queue_.current());
-    p.end();
-  }
-  savedPosition_ = queue_.positionVersion();
-  positionDirty_ = false;
+  if (!p.begin(kNvsNamespace, false)) return;
+  p.putUInt("gen", generation);
+  p.putInt("pos", current);
+  p.end();
 }
 
 bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
-  if (writing_) abortWrite();  // its lines would mix old ids and new
+  saver_.abort();  // its lines would mix old ids and new
   // The queue as paths while the old index can still name them.
   MemorySink text(psramAlloc, psramFree);
-  const bool saved = queuetext::write(queue_, catalog_, generation_, text) && !text.failed();
+  const bool saved = queuetext::write(queue_, catalog_, saver_.generation(), text) && !text.failed();
   const bool ok = rebuild(ctx);
   if (!saved) {
     // Its ids now name other tracks, or none: better no queue than a wrong one.
@@ -232,9 +186,7 @@ bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
     } else {
       player_.stop();
     }
-    savedContent_ = lastContent_ = queue_.contentVersion();
-    savedPosition_ = lastPosition_ = queue_.positionVersion();
-    contentDirty_ = positionDirty_ = false;
+    saver_.markSaved();
     Serial.printf("[queue] the rebuild left no library: %lu of %lu tracks here until it's back (queue.txt stays as "
                   "it was last saved)%s\n",
                   (unsigned long)r.entries, (unsigned long)r.lines, r.currentKept ? "" : "; stopped");
@@ -252,7 +204,7 @@ void QueueStore::printStatus() const {
   Serial.printf("[queue] %lu tracks, at %d, %lu up next; undo: %s; file generation %lu%s, %lu writes (last %lu ms), "
                 "%lu failures\n",
                 (unsigned long)queue_.size(), queue_.current() + 1, (unsigned long)queue_.upNext(),
-                kEdits[static_cast<int>(queue_.undoable())], (unsigned long)generation_,
-                writing_ ? " (writing)" : contentDirty_ ? " (to write)" : "", (unsigned long)writes_,
-                (unsigned long)lastWriteMs_, (unsigned long)failures_);
+                kEdits[static_cast<int>(queue_.undoable())], (unsigned long)saver_.generation(),
+                saver_.writing() ? " (writing)" : saver_.contentDirty() ? " (to write)" : "",
+                (unsigned long)saver_.writes(), (unsigned long)saver_.lastWriteMs(), (unsigned long)saver_.failures());
 }

@@ -16,18 +16,21 @@
 
 #include "ButtonPolicy.h"
 #include "HeadsetKeys.h"
+#include "IdlePolicy.h"
 #include "InputEvent.h"
 #include "OutputModel.h"
 #include "PlayGate.h"
 #include "PlaybackController.h"
 #include "QueueModel.h"
 #include "QueueView.h"
+#include "SleepTimer.h"
 #include "TrackCatalog.h"
 #include "UiText.h"
 #include "app/DanceMode.h"
 #include "app/BoardPower.h"
 #include "app/Diagnostics.h"
 #include "app/Haptics.h"
+#include "app/IdlePower.h"
 #include "app/Library.h"
 #include "app/PowerLab.h"
 #include "app/Psram.h"
@@ -103,6 +106,18 @@ static PlayGate playGate;
 // The name of the headphones being paired from the Pair screen: once they
 // are linked it becomes the sink name, so a later scan by name finds them.
 static char pairName[32] = "";
+// The sleep timer (docs/ENERGY.md section 3): RAM only, fed every loop
+// pass (stepSleep()); what it says is carried out here: the fade's target,
+// the pause, the screen off, and 5 min later the headphones let go.
+static SleepTimer sleepTimer;
+// The idle power-off (docs/ENERGY.md item 4; IdlePolicy): off after the
+// chosen minutes stopped or paused on the battery with nobody around;
+// stepIdle() feeds it and carries it out (the queue flushed, the
+// headphones let go, then the power off).
+static IdlePower idlePower;
+// Input this pass that the screen doesn't see: a headphone key that acted,
+// the console, the idle warning's Keep on (the idle countdown starts again).
+static bool idleInput = false;
 // Track lengths learned as they play (the Queue's "49 min"): PSRAM.
 static queueview::DurationBook durations(psramAlloc, psramFree);
 // A card was found by "Try again": restart at this time (the UI's toast
@@ -326,6 +341,25 @@ static void letGoOfHeadphones(bool forget) {
   Serial.printf("[output] %s the headphones%s\n", forget ? "forgot" : "disconnected", paused ? " (paused first)" : "");
 }
 
+// The sleep timer, 5 min after its pause (ENERGY.md section 3, step 5),
+// and the idle power-off before the power goes (item 4): the headphones
+// are let go (their battery; their keys go quiet) and the search rests.
+// Not letGoOfHeadphones(): the output stays as it is (on Bluetooth a later
+// play waits for them and pages them: PlayGate), nothing is refused (the
+// Core2 stays connectable: they come back when switched on), and the drop
+// is expected (no "lost" dialog). Unlinked: the search rests (no pages
+// while nobody listens). `why` begins the log line.
+static void releaseHeadphones(const char* why) {
+  BtSink& bt = audio.bluetooth();
+  const bool linked = bt.connected();
+  if (linked) btSession.expectDrop(millis());  // no "lost" dialog for it
+  bt.releaseHeadphones();
+  Serial.printf("%s: %s; the output stays %s\n", why,
+                linked ? "letting go of the headphones (resting after, still connectable)"
+                       : "not linked: the search for them rests",
+                audio.output() == Output::Bluetooth ? "bluetooth" : "the speaker");
+}
+
 // [Play on speaker] (Now Playing while play waits for the headphones, the
 // "Couldn't reach" notice): the listener's explicit choice. The wait ends
 // paused, the speaker becomes the output, and then it plays, at the
@@ -411,6 +445,15 @@ struct MainUiHost : ui::UiHost {
     s.feedback = buttonPolicy.feedback();
     s.screenTimeout = static_cast<uint8_t>(screen.timeoutChoice());
     s.brightness = static_cast<uint8_t>(screen.brightnessChoice());
+    s.sleepRunning = sleepTimer.running();
+    s.sleepFading = sleepTimer.fading();
+    s.sleepPick = static_cast<int8_t>(sleepPick());
+    s.sleepCanExtend = sleepTimer.canExtend();
+    sleepTimer.rowText(now, s.sleepRow, sizeof(s.sleepRow));
+    sleepTimer.titleText(now, s.sleepTitle, sizeof(s.sleepTitle));
+    sleepTimer.shortText(now, s.sleepShort, sizeof(s.sleepShort));
+    s.idleOff = static_cast<uint8_t>(idlePower.choice());
+    s.idleWarnS = static_cast<uint8_t>(idlePower.policy().warnSeconds(now));
     fake(s);
   }
   static void fake(ui::AppState& s) {
@@ -551,7 +594,25 @@ struct MainUiHost : ui::UiHost {
     a.ramMin = h.internalMin;
     a.psramFree = h.psramFree;
   }
+  void sleepChoose(int pick) override;
+  // The Sleep timer sheet's outlined pill (SleepSheet's 0-7), or -1.
+  static int sleepPick() {
+    if (!sleepTimer.running()) return -1;
+    switch (sleepTimer.choice()) {
+      case SleepTimer::Choice::Timed: return sleepTimer.timedIndex();
+      case SleepTimer::Choice::EndOfTrack: return ui::SleepSheet::kTrack;
+      case SleepTimer::Choice::EndOfAlbum: return ui::SleepSheet::kAlbum;
+      case SleepTimer::Choice::EndOfQueue: return ui::SleepSheet::kQueue;
+      default: return -1;
+    }
+  }
   void setScreenTimeout(int choice) override { screen.setTimeout(choice); }
+  void setIdleOff(int choice) override { idlePower.setChoice(choice); }
+  bool touchLandedUnattended() const override { return screen.landedUnattended(); }
+  void idleKeepOn() override {
+    idleInput = true;
+    Serial.println("[power] idle: Keep on");
+  }
   void setBrightness(int choice) override { screen.setBrightness(choice); }
   void wakeScreen(const char* why) override { screen.wake(why); }
 };
@@ -878,6 +939,11 @@ static bool simulatedTouch(const char* a) {
   return true;
 }
 
+// The sleep timer's console command (T; below, with the rest of the timer).
+static void sleepCommand(const char* a);
+// The idle power-off's (I; below, with stepIdle()).
+static void idleCommand(const char* a);
+
 static SerialConsole console({
     [] { player.next(); },
     [] { player.prev(); },
@@ -962,6 +1028,8 @@ static SerialConsole console({
     queueCommand,
     touchCommand,
     [](const char* a) { powerLab.command(a); },
+    sleepCommand,
+    idleCommand,
 });
 
 // Touch buttons: the same on every screen (ButtonPolicy). Each click and
@@ -998,6 +1066,10 @@ static void handleButton(const InputEvent& e) {
 // Every input event, to whoever owns the screen: the calibration screen, a
 // spike screen, or the UI. The input lab reads the panel and the buttons
 // itself: no events while it's open.
+// A finger landed this pass (the glass, or a strip button's first event):
+// the sleep timer's fade shows its toast.
+static bool touchedThisPass = false;
+
 static void handleInput(uint32_t now) {
   // The screen: the PWR key, USB, and whether a touch now would only wake
   // it (dim or off: the input layer swallows that touch through its lift).
@@ -1005,7 +1077,9 @@ static void handleInput(uint32_t now) {
   input.setSuspended(spike.ownsInput());
   input.update(now);
   screen.afterInput(now);  // the wake it saw (logged), or input: the countdown again
+  touchedThisPass = false;
   for (InputEvent e; input.poll(e);) {
+    if (e.type == InputEvent::Type::Down || e.isButton()) touchedThisPass = true;
     if (e.isButton()) {
       handleButton(e);
       continue;
@@ -1063,20 +1137,30 @@ static void handleBluetooth() {
         diag::logHeap("bt-link");
         break;
       }
-      case BtSink::Event::Disconnected:
+      case BtSink::Event::Disconnected: {
         Serial.println("[bt] disconnected");
-        if (btSession.dropExpected()) {
-          // Let go on purpose (Disconnect, Forget, a new pairing): the
-          // audio is on the speaker already, paused.
-          btSession.dropSeen();
+        // BtSession decides: let go on purpose (Disconnect, Forget, a new
+        // pairing: the audio is on the speaker already, paused; the sleep
+        // timer's or the idle power-off's release: the output stays
+        // Bluetooth), or lost.
+        const bool expected = btSession.dropExpected();
+        const BtSession::Drop d =
+            btSession.onDisconnected(audio.output() == Output::Bluetooth, player.state() == PlayState::Playing);
+        if (expected) {
+          if (d.pause) {
+            // A play between a release and its drop: no link to carry it.
+            (void)pauseIfPlaying();
+            Serial.println("[bt] let go while a play had just started: paused (play pages them)");
+          }
           break;
         }
         // Like a phone: don't carry on through the speaker, pause (and say why).
-        if (audio.output() == Output::Bluetooth) {
+        if (d.lost) {
           btLost = true;
-          if (pauseIfPlaying() && userInterface) userInterface->headphonesLost();
+          if (d.pause && pauseIfPlaying() && userInterface) userInterface->headphonesLost();
         }
         break;
+      }
       case BtSink::Event::Suspended:
         // The headphones stopped the stream themselves: show it as paused;
         // play (here or on them) starts it again.
@@ -1094,38 +1178,57 @@ static void handleBluetooth() {
       // Transport keys: HeadsetKeys decides (headphone input never starts
       // music that wasn't playing); this adds the output and the stream.
       case BtSink::Event::Play:
-        if (HeadsetKeys::decide(player.state(), HeadsetKeys::Key::Play) != HeadsetKeys::Action::Resume) {
-          Serial.printf("[bt] headphones: play (ignored: %s)\n", stateName());
+        if (HeadsetKeys::decide(player.state(), HeadsetKeys::Key::Play, player.pausedByTimer()) !=
+            HeadsetKeys::Action::Resume) {
+          // (Paused by the sleep timer: in-ear detection sends Play when a
+          // sleeper turns over. The Core2's play button resumes it.)
+          Serial.printf("[bt] headphones: play (ignored: %s%s)\n", stateName(),
+                        player.pausedByTimer() ? ", paused by the sleep timer" : "");
           break;
         }
         Serial.println("[bt] headphones: play");
+        idleInput = true;  // (it resumes: HeadsetKeys::isInput())
         if (bt.connected() && audio.output() != Output::Bluetooth && !silent) audio.setOutput(Output::Bluetooth);
         HeadsetKeys::apply(player, HeadsetKeys::Key::Play);
         break;
-      case BtSink::Event::Pause:
-        Serial.println("[bt] headphones: pause");
-        if (audio.output() != Output::Bluetooth) break;  // not the speaker's playback
-        HeadsetKeys::apply(player, HeadsetKeys::Key::Pause);
+      case BtSink::Event::Pause: {
+        if (audio.output() != Output::Bluetooth) {
+          Serial.println("[bt] headphones: pause (ignored: the speaker's playback)");
+          break;
+        }
+        // Only a pause that acted is someone's input for the idle power-off
+        // (a bud taken out sends PAUSE while paused too).
+        const bool byTimer = player.pausedByTimer();
+        const HeadsetKeys::Action a = HeadsetKeys::apply(player, HeadsetKeys::Key::Pause);
+        Serial.printf("[bt] headphones: pause%s\n", a == HeadsetKeys::Action::Ignore ? " (nothing plays)" : "");
+        if (HeadsetKeys::isInput(a, byTimer)) idleInput = true;
         // They pick their next key from the stream: suspend it now, so the
         // next press is PLAY. Also when we were paused already (paused on the
         // Core2, the stream still in its 3 s tail): this press did nothing,
         // the next one plays.
         bt.suspendPromptly();
         break;
+      }
       case BtSink::Event::Next:
       case BtSink::Event::Prev: {
         const bool next = e == BtSink::Event::Next;
+        const bool byTimer = player.pausedByTimer();
         const HeadsetKeys::Action a =
             HeadsetKeys::apply(player, next ? HeadsetKeys::Key::Next : HeadsetKeys::Key::Prev);
+        // (A cue after the sleep timer's pause isn't input: a bud adjusted
+        // in bed sends these too.)
+        if (HeadsetKeys::isInput(a, byTimer)) idleInput = true;
         Serial.printf("[bt] headphones: %s (track %d, %s)\n", next ? "next" : "previous", player.currentIndex(),
                       a == HeadsetKeys::Action::Skip ? "playing" : "selected, not started");
         break;
       }
       case BtSink::Event::VolumeUp:
+        idleInput = true;
         stepBluetoothVolume(+kHeadphoneVolumeStep);
         if (userInterface) userInterface->volumeKeys();  // the same HUD as the A/C holds
         break;
       case BtSink::Event::VolumeDown:
+        idleInput = true;
         stepBluetoothVolume(-kHeadphoneVolumeStep);
         if (userInterface) userInterface->volumeKeys();
         break;
@@ -1186,6 +1289,306 @@ static void stepPlayGate(uint32_t now) {
   }
 }
 
+// ---- the sleep timer (docs/ENERGY.md section 3) ----
+
+static const char* sleepEndName(SleepTimer::Choice c) {
+  return c == SleepTimer::Choice::EndOfTrack   ? "the end of this track"
+         : c == SleepTimer::Choice::EndOfAlbum ? "the end of this album"
+                                               : "the end of the queue";
+}
+
+// Whether the backend's position and length are the current entry's yet
+// (stepSleep() feeds it every pass).
+static EntryStart sleepEntry;
+
+// What is left of the playing track (0: not known).
+static uint32_t trackLeftMs() {
+  if (queue.current() < 0 || !sleepEntry.started()) return 0;
+  const uint32_t d = audio.durationMs(), p = audio.positionMs();
+  return d > p ? d - p : 0;
+}
+
+static void printSleep() {
+  const uint32_t now = millis();
+  char row[16];
+  sleepTimer.rowText(now, row, sizeof(row));
+  const uint16_t target = audio.fadeTargetQ15(), level = audio.fadeLevelQ15();
+  char fade[40] = "none";
+  if (target < SleepTimer::kUnity || level < SleepTimer::kUnity) {
+    snprintf(fade, sizeof(fade), "level %.1f dB, target %.1f dB", level ? 20.0f * log10f(level / 32768.0f) : -99.0f,
+             target ? 20.0f * log10f(target / 32768.0f) : -99.0f);
+  }
+  Serial.printf("[sleep] %s (%s, %s); fade: %s; player %s%s%s\n", row, SleepTimer::phaseName(sleepTimer.phase()),
+                SleepTimer::choiceName(sleepTimer.choice()), fade, stateName(),
+                player.pausedByTimer() ? ", paused by the timer (headphone play ignored)" : "",
+                sleepTimer.releasePending() ? "; the headphones are let go 5 min after the pause" : "");
+}
+
+// A choice from the Sleep timer sheet, the fade's toast or the console:
+// SleepSheet's 0-4 (15-90 min), kTrack, kAlbum, kQueue, kExtend, kTurnOff.
+static void chooseSleep(int pick) {
+  const uint32_t now = millis();
+  char text[48];
+  if (pick >= 0 && pick < SleepTimer::kTimedChoices) {
+    sleepTimer.setTimed(SleepTimer::kMinutes[pick] * 60000u, now);
+    snprintf(text, sizeof(text), "Sleep timer: %lu min", (unsigned long)SleepTimer::kMinutes[pick]);
+  } else if (pick >= ui::SleepSheet::kTrack && pick <= ui::SleepSheet::kQueue) {
+    const SleepTimer::Choice c = pick == ui::SleepSheet::kTrack   ? SleepTimer::Choice::EndOfTrack
+                                 : pick == ui::SleepSheet::kAlbum ? SleepTimer::Choice::EndOfAlbum
+                                                                  : SleepTimer::Choice::EndOfQueue;
+    sleepTimer.setEnd(c);
+    snprintf(text, sizeof(text), "Sleep timer: %s", c == SleepTimer::Choice::EndOfTrack   ? "end of track"
+                                                    : c == SleepTimer::Choice::EndOfAlbum ? "end of album"
+                                                                                          : "end of queue");
+    Serial.printf("[sleep] pauses at %s\n", sleepEndName(c));
+  } else if (pick == ui::SleepSheet::kExtend) {
+    if (!sleepTimer.extend(now, trackLeftMs())) {
+      // (Nothing runs; or End of album / queue before its last track, or
+      // a track of unknown length: what is left isn't known, and +10 must
+      // never shorten it. The sheet shows +10 min dim then.)
+      Serial.printf("[sleep] +10 min: %s\n", sleepTimer.running() ? "refused (what is left isn't known)"
+                                                                   : "no timer runs");
+      return;
+    }
+    char left[24];
+    sleepTimer.titleText(now, left, sizeof(left));
+    snprintf(text, sizeof(text), "Sleep timer: %s", left);
+  } else if (pick == ui::SleepSheet::kTurnOff) {
+    sleepTimer.cancel();
+    snprintf(text, sizeof(text), "Sleep timer off");
+  } else {
+    return;
+  }
+  Serial.printf("[sleep] %s\n", text);
+  if (userInterface) userInterface->toast(text, false);
+  printSleep();
+}
+
+void MainUiHost::sleepChoose(int pick) { chooseSleep(pick); }
+
+// T...: the sleep timer from the console. T status, T<min> minutes (from
+// now), Ts<sec> seconds (tests), Tt / Ta / Tq the end of the track, album,
+// queue, T+ +10 min, T0 off.
+static void sleepCommand(const char* a) {
+  const uint32_t now = millis();
+  if (!a[0]) {
+    printSleep();
+    return;
+  }
+  if (a[0] == 's' && a[1] >= '0' && a[1] <= '9') {
+    const long sec = atol(a + 1);
+    if (sec <= 0) {
+      Serial.println("[sleep] Ts<sec>: a timer of that many seconds");
+      return;
+    }
+    sleepTimer.setTimed(static_cast<uint32_t>(sec) * 1000u, now);
+    Serial.printf("[sleep] %ld s (a test length)\n", sec);
+    printSleep();
+    return;
+  }
+  if (a[0] >= '0' && a[0] <= '9') {
+    const long min = atol(a);
+    if (min <= 0) {
+      chooseSleep(ui::SleepSheet::kTurnOff);
+      return;
+    }
+    sleepTimer.setTimed(static_cast<uint32_t>(min) * 60000u, now);
+    Serial.printf("[sleep] %ld min\n", min);
+    printSleep();
+    return;
+  }
+  switch (a[0]) {
+    case 't': chooseSleep(ui::SleepSheet::kTrack); return;
+    case 'a': chooseSleep(ui::SleepSheet::kAlbum); return;
+    case 'q': chooseSleep(ui::SleepSheet::kQueue); return;
+    case '+': chooseSleep(ui::SleepSheet::kExtend); return;
+    default:
+      Serial.println("[sleep] T status, T<min> minutes, Ts<sec> seconds (tests), Tt/Ta/Tq end of track/album/queue, "
+                     "T+ +10 min, T0 off");
+      return;
+  }
+}
+
+// Every loop pass, before the player's (its "pause after this track" must
+// be set for a track that ends in this pass). The order at expiry is the
+// timer's: the pause, then (confirmed, silent) the factor back to 1.0 and
+// the screen off, then 5 min later the headphones let go.
+static void stepSleep(uint32_t now) {
+  SleepTimer::In in;
+  in.nowMs = now;
+  in.play = player.state();
+  in.boundaryStops = player.timerStops();
+  const int cur = queue.current();
+  // The position and length are this entry's only once it has started
+  // (EntryStart: after a skip the backend reports the last track's for a
+  // moment). Unknown (0) until then, as the lengths the Queue learns (in
+  // loop()).
+  const bool started = sleepEntry.update(queue.currentKey(), audio.startTiming().seq, audio.positionMs());
+  if (cur >= 0) {
+    in.positionMs = audio.positionMs();
+    in.durationMs = started ? audio.durationMs() : 0;
+    const bool last = static_cast<uint32_t>(cur) + 1 >= queue.size();
+    in.lastOfQueue = last;
+    // The queue's end is an album's end too (with repeat, what comes next
+    // may be the same album again: it still ends here).
+    if (sleepTimer.choice() == SleepTimer::Choice::EndOfAlbum) {
+      in.lastOfAlbum = last || SleepTimer::albumEndsBetween(library.index(), queue.currentTrack(),
+                                                       queue.trackAt(static_cast<uint32_t>(cur) + 1));
+    }
+  }
+  const SleepTimer::Phase before = sleepTimer.phase();
+  const SleepTimer::Out o = sleepTimer.update(in);
+  audio.setFade(o.fadeQ15);  // never sent to the headphones: our gain only
+  if (player.pauseAfterTrack() != o.pauseAfterTrack) {
+    player.setPauseAfterTrack(o.pauseAfterTrack);
+    Serial.printf("[sleep] %s\n", o.pauseAfterTrack ? "this track is the last: pausing at its end"
+                                                    : "not pausing at this track's end");
+  }
+  // (Once when it goes off, and again when its fade ends: said apart.)
+  if (o.expired) {
+    Serial.printf("[sleep] %s (%s)\n", before == SleepTimer::Phase::Fading ? "the fade ended" : "the timer went off",
+                  stateName());
+  }
+  if (o.fadeStarted) {
+    Serial.printf("[sleep] fading out (%s; our gain only, nothing sent to the headphones)\n",
+                  sleepTimer.phase() == SleepTimer::Phase::Fading && before == SleepTimer::Phase::Armed
+                      ? "the track's last 10 s"
+                      : "30 s, then pause");
+    if (userInterface) userInterface->sleepFading();
+  }
+  if (o.pauseNow) {
+    const PlayState was = player.state();
+    player.pauseByTimer();
+    Serial.printf("[sleep] %s: paused by the timer (headphone play won't resume it; the Core2's does)\n",
+                  was == PlayState::Waiting ? "the wait for the headphones ended" : "pause");
+  }
+  if (o.restore) {
+    audio.restoreFade();
+    Serial.println("[sleep] the pause is confirmed (silent): the fade back to 0 dB");
+  }
+  if (o.screenOff) {
+    screen.sleepTimerOff();
+    Serial.println("[sleep] the screen off; the headphones are let go in 5 min unless something plays");
+  }
+  if (o.release) releaseHeadphones("[sleep] 5 min paused");
+  if (before != sleepTimer.phase() && sleepTimer.phase() == SleepTimer::Phase::Off &&
+      (before == SleepTimer::Phase::Ending || before == SleepTimer::Phase::Ended) && !o.release) {
+    Serial.println("[sleep] playing again: nothing more to do");
+  }
+}
+
+// ---- the idle power-off (docs/ENERGY.md item 4) ----
+
+// A console test only (Iu1, until restart): the policy is told "on
+// battery" while USB is in, so the countdown, the warning and the release
+// can be run on the bench. The last-moment read in stepIdle() is the real
+// register's, so on USB it still stays on ("USB power at the last moment").
+static bool idleFakeBattery = false;
+
+// I...: I status, I<min> a test length in minutes, Is<sec> in seconds
+// (until restart, in place of the setting), I0 the setting's again. Tests:
+// Iu1/Iu0 pretend on battery (above), Ib<sec> leave the power-off note
+// for the next boot's toast (as if it had turned off after that long).
+static void idleCommand(const char* a) {
+  const uint32_t now = millis();
+  IdlePolicy& p = idlePower.policy();
+  if (a[0] == 'u' && (a[1] == '0' || a[1] == '1')) {
+    idleFakeBattery = a[1] == '1';
+    Serial.printf("[power] idle: %s\n", idleFakeBattery ? "TEST: told on battery while USB is in (until restart; "
+                                                          "the last-moment USB read still keeps it on)"
+                                                        : "the real USB state again");
+  } else if (a[0] == 'b' && a[1] >= '0' && a[1] <= '9') {
+    const long sec = atol(a + 1);
+    idlePower.noteOff(sec > 0 ? static_cast<uint32_t>(sec) * 1000u : p.lengthMs());
+    Serial.println("[power] idle: TEST: the power-off note is left for the next boot's toast");
+    return;
+  } else if (a[0] == 's' && a[1] >= '0' && a[1] <= '9') {
+    const long sec = atol(a + 1);
+    p.setTestMs(sec > 0 ? static_cast<uint32_t>(sec) * 1000u : 0, now);
+    Serial.printf("[power] idle: %s\n", sec > 0 ? "a test length (until restart)" : "the setting's length again");
+  } else if (a[0] >= '0' && a[0] <= '9') {
+    const long min = atol(a);
+    p.setTestMs(min > 0 ? static_cast<uint32_t>(min) * 60000u : 0, now);
+    Serial.printf("[power] idle: %s\n", min > 0 ? "a test length (until restart)" : "the setting's length again");
+  } else if (a[0]) {
+    Serial.println("[power] I status, I<min> a test length in minutes, Is<sec> in seconds (until restart), I0 the "
+                   "setting's again (Output tab: Turn off when idle); tests: Iu1/Iu0 pretend on battery, Ib<sec> "
+                   "the boot toast's note");
+    return;
+  }
+  idlePower.printStatus(now);
+}
+
+// Every loop pass, after the player's (a pause this pass counts from now).
+// IdlePolicy decides; this carries it out: the warning (the UI reads it
+// from the snapshot), then the queue flushed, the note for the next boot,
+// the headphones let go, and once they are gone (at most 3 s) the power.
+static void stepIdle(uint32_t now, bool input) {
+  BtSink& bt = audio.bluetooth();
+  const BtLink link = bt.link();
+  IdlePolicy::In in;
+  in.nowMs = now;
+  in.play = player.state();
+  in.usb = screen.externalPower() && !idleFakeBattery;
+  in.input = input;
+  in.pairing = link.phase == BtLink::Phase::PairScan || link.phase == BtLink::Phase::Pairing ||
+               btSession.pairingUnderWay();
+  in.queueWrite = queueStore.busy();
+  in.busy = screenTaken();
+  in.linked = bt.connected();
+  IdlePolicy& p = idlePower.policy();
+  const IdlePolicy::Phase before = p.phase();
+  const IdlePolicy::Out o = p.update(in);
+  // What it waits for, when that changes (not every touch: those restart
+  // the countdown quietly).
+  if (p.phase() != before && (p.phase() == IdlePolicy::Phase::Blocked || before == IdlePolicy::Phase::Blocked) &&
+      p.phase() != IdlePolicy::Phase::Releasing) {
+    if (p.phase() == IdlePolicy::Phase::Blocked) {
+      Serial.printf("[power] idle: waiting (%s)\n", IdlePolicy::blockerName(p.blocker()));
+    } else {
+      Serial.printf("[power] idle: counting: off in %lu s unless something happens\n",
+                    (unsigned long)((p.msLeft(now) + 999) / 1000));
+    }
+  }
+  if (o.warn) {
+    Serial.printf("[power] idle: turning off in %lu s (%s); any input keeps it on\n",
+                  (unsigned long)p.warnSeconds(now),
+                  screen.off() ? "the screen is off and stays off: it may be night" : "the warning is up");
+  }
+  if (o.warnEnd) {
+    Serial.printf("[power] idle: kept on (%s)\n", p.blocker() != IdlePolicy::Blocker::None
+                                                      ? IdlePolicy::blockerName(p.blocker())
+                                                      : "input");
+  }
+  if (o.shutdown) {
+    const uint32_t len = p.lengthMs();
+    Serial.printf("[power] off after idle (%lu %s %s, on battery, no input): saving the queue, letting go of the "
+                  "headphones\n",
+                  (unsigned long)(len >= 60000 ? len / 60000 : len / 1000), len >= 60000 ? "min" : "s", stateName());
+    queueStore.flushNow();
+    idlePower.noteOff(p.lengthMs());
+    releaseHeadphones("[power] turning off");
+  }
+  if (o.cancelled) {
+    idlePower.clearNote();
+    Serial.printf("[power] idle: not turning off after all (%s); the headphones stay let go (play pages them)\n",
+                  p.blocker() != IdlePolicy::Blocker::None ? IdlePolicy::blockerName(p.blocker()) : "input");
+  }
+  if (o.powerOff) {
+    // The last look at the power: plugged in during the release, it stays
+    // on (the AXP192 wouldn't stay off anyway).
+    if (ScreenControl::readExternalPower()) {
+      p.cancel(now);
+      idlePower.clearNote();
+      Serial.println("[power] idle: USB power at the last moment: staying on");
+      return;
+    }
+    Serial.printf("[power] off now (%s)\n", bt.connected() ? "the headphones still linked after 3 s" : "headphones let go");
+    haptics.stop();
+    idlePower.powerOff();  // (doesn't return)
+  }
+}
+
 void setup() {
   PowerLab::applyBootClock();  // the clock saved by Pcb (if any), before Bluetooth starts
   auto cfg = M5.config();
@@ -1238,6 +1641,7 @@ void setup() {
   haptics.begin();
   input.begin();
   screen.begin(millis());
+  idlePower.begin(millis());  // the setting, and whether it turned itself off last time
   screen.onDark([](bool dark) {
     if (userInterface) userInterface->setDark(dark);
   });
@@ -1269,15 +1673,18 @@ void setup() {
                  "library of n tracks in the Library tab, uil0 the card's); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja); "
-                 "P power measurement (P a line, Pl log, P? the knobs; Ps the screen, Ps0/Ps1 off/on)");
+                 "P power measurement (P a line, Pl log, P? the knobs; Ps the screen, Ps0/Ps1 off/on); "
+                 "T sleep timer (T status, T<min>, Ts<sec> for tests, Tt/Ta/Tq end of track/album/queue, T+ +10 min, "
+                 "T0 off); I idle power-off (I status, I<min>/Is<sec> a test length, I0 the setting's)");
 }
 
 void loop() {
   M5.update();
   const uint32_t now = millis();
 
+  idleInput = false;
   handleInput(now);
-  console.poll();
+  if (console.poll()) idleInput = true;  // someone is at the console
   handleBluetooth();
   // Nobody around: the screen is off and nothing plays or waits. After a
   // burst the search for the headphones then rests at once (ENERGY.md item
@@ -1289,7 +1696,13 @@ void loop() {
                              player.state() != PlayState::Waiting && !btLost);
   btSession.update(audio.bluetooth().link(), now);
   stepPlayGate(now);
+  // The fade's toast: a touch (swallowed as a wake, or on a lit screen) or
+  // the PWR key while it fades; only its buttons act on the timer.
+  const bool woken = screen.takeWoken();
+  if (sleepTimer.fading() && (woken || touchedThisPass) && userInterface) userInterface->sleepFading();
+  stepSleep(now);
   player.update(now);
+  stepIdle(now, idleInput || touchedThisPass || screen.takeInput());
   audio.loop(now);
   powerLab.loop(now);
   queueStore.loop(now);
@@ -1345,7 +1758,13 @@ void loop() {
   danceMode.loop(now, silent);
   // The UI: the tab bar, overlays, the page (list frames on 30 fps deadlines).
   if (userInterface) {
-    if (!userInterface->started() && now >= kDiagnosticsScreenMs && !screenTaken()) userInterface->start(now);
+    if (!userInterface->started() && now >= kDiagnosticsScreenMs && !screenTaken()) {
+      userInterface->start(now);
+      // It turned itself off last time: say so, once (a PWR boot, stopped
+      // where it was).
+      char note[48];
+      if (idlePower.takeBootNote(note, sizeof(note))) userInterface->note(note, 6000);
+    }
     userInterface->loop(now);
   }
   shot.poll();

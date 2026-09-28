@@ -196,6 +196,8 @@ void NowPlayingPage::drawProgress() {
     f.draw(c, Font::Small, t, x0 + w, kTextY, 60, col::SOFT, col::BG, Fonts::Align::Right);
   }
   char mid[72];
+  char base[40] = "";  // "Paused, 4 of 16": the line without its output
+  char warn[48] = "";  // "SPYDRONE (not connected)": never dropped for the timer
   uint16_t mc = col::DIM;
   if (s.failed) {
     snprintf(mid, sizeof(mid), "Can't play this track");
@@ -209,12 +211,14 @@ void NowPlayingPage::drawProgress() {
                                                        : "";
     snprintf(mid, sizeof(mid), "%s%lu of %lu", state, static_cast<unsigned long>(s.current + 1),
              static_cast<unsigned long>(s.queueSize));
+    snprintf(base, sizeof(base), "%s", mid);
     if (s.play != PlayState::Playing) mc = col::AMBER;
     // Where it plays (mockup 01's output line): "4 of 16 · SPYDRONE", when
     // it fits between the times. The headphones not connected (and no
     // wait saying so above): that alone, if both don't fit.
     char where[48], withOutput[96];
     const char* out = outputName(where, sizeof(where));
+    if (s.onBluetooth && !s.btConnected && s.play != PlayState::Waiting) snprintf(warn, sizeof(warn), "%s", out);
     snprintf(withOutput, sizeof(withOutput), "%s \xC2\xB7 %s", mid, out);
     if (f.width(Font::Small, withOutput) <= kMidW) {
       snprintf(mid, sizeof(mid), "%s", withOutput);
@@ -223,7 +227,27 @@ void NowPlayingPage::drawProgress() {
       mc = col::AMBER;
     }
   }
-  f.draw(c, Font::Small, mid, kW / 2, kTextY, kMidW, mc, col::BG, Fonts::Align::Centre);
+  // The sleep timer: a moon and "23 min" ("track", "45 s", "fading") after
+  // the line; what gives way when both don't fit is uitext::sleepLineFit()'s
+  // (the output's name first; never the headphones' not-connected warning).
+  if (s.sleepShort[0] && s.current >= 0 && !s.failed) {
+    using namespace uitext;
+    using Text = SleepLine::Text;
+    const int sw = kSleepMoonW + f.width(Font::Small, s.sleepShort);
+    const SleepLine fit = sleepLineFit(f.width(Font::Small, mid), f.width(Font::Small, base),
+                                       warn[0] ? f.width(Font::Small, warn) : -1, sw, kMidW);
+    const char* text = fit.text == Text::Full ? mid : fit.text == Text::Base ? base : fit.text == Text::Warn ? warn : "";
+    const uint16_t tc = fit.text == Text::Warn ? col::AMBER : mc;
+    const int tw = text[0] ? f.width(Font::Small, text) : 0;
+    const int x0 = kW / 2 - fit.width / 2;
+    if (text[0]) f.draw(c, Font::Small, text, x0, kTextY, tw, tc, col::BG);
+    const int sx = text[0] ? x0 + tw + kSleepGap : x0;
+    const uint16_t sc = s.sleepFading ? col::AMBER : col::SOFT;
+    if (fit.moon) icons::drawMoon(c, sx, kTextY - 6, 11, sc);
+    if (fit.moonText) f.draw(c, Font::Small, s.sleepShort, sx + kSleepMoonW, kTextY, sw - kSleepMoonW, sc, col::BG);
+  } else {
+    f.draw(c, Font::Small, mid, kW / 2, kTextY, kMidW, mc, col::BG, Fonts::Align::Centre);
+  }
   gfx::push(c, 0, kProgressY, kW, kProgressH);
 }
 
@@ -443,8 +467,10 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   const uint32_t second = s.positionMs / 1000;
   const uint32_t durS = s.durationMs / 1000;
   const uint32_t output = outputSig();
+  uint32_t sleep = s.sleepFading ? 1u : 0u;
+  for (const char* p = s.sleepShort; *p; ++p) sleep = sleep * 31u + static_cast<unsigned char>(*p);
   if (all || second != drawn_.second || durS != drawn_.durationS || s.play != drawn_.play ||
-      s.current != drawn_.current || s.queueSize != drawn_.size || output != drawn_.output) {
+      s.current != drawn_.current || s.queueSize != drawn_.size || output != drawn_.output || sleep != drawn_.sleep) {
     drawProgress();
   }
   if (all || s.play != drawn_.play || s.volume != drawn_.volume || s.onBluetooth != drawn_.bluetooth ||
@@ -469,6 +495,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   drawn_.volume = s.volume;
   drawn_.bluetooth = s.onBluetooth;
   drawn_.output = output;
+  drawn_.sleep = sleep;
   return false;
 }
 
@@ -597,7 +624,8 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
       ui_.host().next();
       break;
     case More: {
-      static const char* const kRows[3] = {"Go to artist", "Go to album", "Show in folders"};
+      // The sleep timer first (ENERGY.md section 3), its state on the right.
+      static const char* const kRows[4] = {uitext::kSleepRow, "Go to artist", "Go to album", "Show in folders"};
       const AppState& s = ui_.state();
       const TrackCatalog& cat = ui_.player().catalog();
       const bool lib = s.current >= 0 && !TrackCatalog::isBuiltin(s.trackId);
@@ -610,10 +638,12 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
           snprintf(folder, sizeof(moreFolder_), "%s", path);
         }
       }
-      const char* details[3] = {lib ? cat.artist(s.trackId) : "", lib ? cat.album(s.trackId) : "", folder};
+      const char* details[4] = {s.sleepRow, lib ? cat.artist(s.trackId) : "", lib ? cat.album(s.trackId) : "",
+                                folder};
       char title[128] = "Nothing playing";
       if (s.current >= 0) cat.title(s.trackId, title, sizeof(title));
-      ui_.openSheet(this, title, kRows, 3, details);
+      ui_.openSheet(this, title, kRows, 4, details);
+      ui_.sheetFollowsSleep(0);  // its detail follows the timer while it is up
       break;
     }
     default: break;
@@ -622,9 +652,10 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
 
 void NowPlayingPage::onSheet(int choice) {
   switch (choice) {
-    case 0: goToLibrary(Go::Artist); break;
-    case 1: goToLibrary(Go::Album); break;
-    case 2: goToLibrary(Go::Folders); break;
+    case 0: ui_.openSleepSheet(); break;
+    case 1: goToLibrary(Go::Artist); break;
+    case 2: goToLibrary(Go::Album); break;
+    case 3: goToLibrary(Go::Folders); break;
     default: break;
   }
 }

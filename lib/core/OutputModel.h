@@ -123,6 +123,25 @@ public:
   // by the next link, or when the link stays up kDropWaitMs.
   bool dropExpected() const { return dropExpected_; }
   void dropSeen() { dropExpected_ = false; }
+
+  // BtSink's Disconnected event: what the loop does about it. `onBluetooth`:
+  // Bluetooth is the output; `playing`: the player plays (not waiting).
+  //   - Not expected, on Bluetooth: lost. Pause (a wait ends paused too)
+  //     and say so (the "lost" dialog), like a phone.
+  //   - Expected (Disconnect, Forget, a pairing: the output is on the
+  //     speaker already; or a release that keeps the output, the sleep
+  //     timer's or the idle power-off's): no dialog. Still playing on
+  //     Bluetooth means a play came between the release and the drop (the
+  //     link was still up, so nothing held it): pause it, or it would
+  //     "play" with no link, and the headphones coming back later would
+  //     start it in the listener's ears. A wait is left alone: a play
+  //     after the link went pages them (PlayGate).
+  // The expectation is used up (dropSeen()).
+  struct Drop {
+    bool pause = false;  // pause the player (main.cpp's pauseIfPlaying())
+    bool lost = false;   // the headphones were lost: btLost, the dialog
+  };
+  Drop onDisconnected(bool onBluetooth, bool playing);
   void expectDrop(uint32_t nowMs) {
     dropExpected_ = true;
     dropSinceMs_ = nowMs;

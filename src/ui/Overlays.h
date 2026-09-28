@@ -5,6 +5,7 @@
 
 #include "InputEvent.h"
 #include "JumpIndex.h"
+#include "SheetLayout.h"
 #include "ui/Icons.h"
 
 // What comes over a page (spec §6, with the usability fixes). All opaque
@@ -31,8 +32,10 @@
 //           volume keys), or where a B hold moved the output. The content
 //           below keeps going (the dancer dances); a tap on the bar hides it
 //           and still switches the tab.
-//   Sheet   from the bottom (never above y 72): a title with a ✕ pill (its
-//           hit area x 250 to the edge) and up to 3 rows of 40 px, each
+//   Sheet   from the bottom: a title with a ✕ pill (its hit area x 250 to
+//           the edge) and up to 4 rows of 40 px (SheetLayout.h: up to 3
+//           in the list's band from y 72; 4, Now Playing's "...", from
+//           y 40, over the header row like the dialog), each
 //           with an optional dim detail on the right ("Go to artist   Daft
 //           Punk"); optionally one row the primary (Bold, the accent: the
 //           Library's Play) and one red (Forget); a tap outside closes it.
@@ -60,14 +63,31 @@
 // hardware scroll, and "over" the cover). Loop task only.
 namespace ui {
 
-// The sprite sheets and dialogs are drawn in (320 x 168, PSRAM).
+// The sprite sheets and dialogs are drawn in (320 x 204, PSRAM: the
+// content area, for the 4-row sheet; the others use its top 168 rows).
 bool overlaysBegin();
 
 class Toast {
 public:
   static constexpr int kY = 36;
   static constexpr int kH = 36;  // the header row only: never in the list's scrolled band
-  void show(const char* text, bool undo, bool view, uint16_t accent, uint32_t nowMs);
+  // hit()'s answers for the sleep timer's toast, and the idle warning's.
+  static constexpr int kHitExtend = 4, kHitTurnOff = 5, kHitKeepOn = 6;
+  // `holdMs`: how long it stays (0: 1.8 s, 4 s with Undo).
+  void show(const char* text, bool undo, bool view, uint16_t accent, uint32_t nowMs, uint32_t holdMs = 0);
+  // The sleep timer's fade (ENERGY.md section 3): "Sleep timer: fading"
+  // with +10 min and Turn off (Turn off to the screen's edge). Up until
+  // hidden (the fade ends) or replaced by another toast.
+  void showSleep(uint16_t accent, uint32_t nowMs);
+  bool sleep() const { return up_ && sleep_; }
+  // The idle power-off's warning (IdlePolicy, its last 30 s): "Turning off
+  // in 30 s" with Keep on (to the screen's edge). Up until hidden (it
+  // counts down: setIdleSeconds()), or replaced by another toast.
+  void showIdle(uint32_t seconds, uint16_t accent, uint32_t nowMs);
+  bool idle() const { return up_ && idle_; }
+  uint32_t idleSeconds() const { return idleSeconds_; }
+  // The count changed: the new text, drawn.
+  void setIdleSeconds(uint32_t seconds);
   void hide() { up_ = false; }
   bool up() const { return up_; }
   // The screen row under it (0 when it isn't up).
@@ -79,8 +99,18 @@ public:
   bool expired(uint32_t nowMs) const { return up_ && static_cast<int32_t>(nowMs - untilMs_) >= 0; }
   // `pressed`: the button under a finger (hit()'s 2 or 3), 0 none.
   void draw(int pressed = 0);
-  // A tap: 2 on Undo, 3 on View, 1 elsewhere on the toast, 0 not on it.
-  int hit(const InputEvent& e) const;
+  // A tap: 2 on Undo, 3 on View, kHitExtend / kHitTurnOff on the sleep
+  // timer's buttons (SleepTimer::toastTap(): never a clamped reading),
+  // kHitKeepOn on the idle warning's, 1 elsewhere on the toast, 0 not on
+  // it. `slop`: the sleep and idle toasts' buttons also take a tap up to
+  // uitext::kToastButtonSlop below it (no modal up).
+  int hit(const InputEvent& e, bool slop = false) const;
+  // The fade toast's buttons are under `e` (the toast's own 36 px): a
+  // touch that goes to them even over a sheet (they are drawn on top).
+  bool onSleepButton(const InputEvent& e) const {
+    const int h = hit(e);
+    return sleep_ && (h == kHitExtend || h == kHitTurnOff);
+  }
   const char* text() const { return text_; }
 
 private:
@@ -89,6 +119,9 @@ private:
   bool view_ = false;
   bool up_ = false;
   bool compact_ = false;  // two lines, the buttons as icons
+  bool sleep_ = false;    // the sleep timer's (showSleep())
+  bool idle_ = false;     // the idle warning (showIdle())
+  uint32_t idleSeconds_ = 0;
   uint16_t accent_ = 0;
   uint32_t untilMs_ = 0;
 };
@@ -120,9 +153,11 @@ private:
 
 class Sheet {
 public:
-  static constexpr int kMaxRows = 3;
-  static constexpr int kRowH = 40;
-  static constexpr int kTitleH = 36;
+  // Up to 4 rows, each 40 px (the touch minimum): 4 (Now Playing's "...",
+  // the sleep timer first) rise into the header row (SheetLayout.h).
+  static constexpr int kMaxRows = sheet::kMaxRows;
+  static constexpr int kRowH = sheet::kRowH;
+  static constexpr int kTitleH = sheet::kTitleH;
   // `details`: nullptr, or a dim text per row (nullptr or "" for none).
   // `primary`: the row drawn as the main choice (-1 none); `danger`: the
   // row in red (-1 none).
@@ -135,6 +170,9 @@ public:
   // A glass event: the row index on a Tap on a row, -2 on a Tap outside
   // or on ✕ (close), -1 otherwise. Presses highlight what's under the finger.
   int onEvent(const InputEvent& e);
+  // Row `i`'s dim detail is now `text` (the "..." sheet's Sleep timer row
+  // follows the timer): drawn again only if it changed.
+  void setDetail(int i, const char* text);
 
 private:
   static constexpr int kCross = -3;  // pressed_: the ✕ pill
@@ -149,6 +187,44 @@ private:
   int pressed_ = -1;
   int primary_ = -1;
   int danger_ = -1;
+  bool up_ = false;
+  uint16_t accent_ = 0;
+};
+
+// The sleep timer's choices (ENERGY.md section 3; Now Playing's "..." >
+// Sleep timer): the sheet panel (320 x 168 from y 72), the title with a
+// close pill, then three rows of pills: "15", "30", "45", "60", "90 min";
+// "End of track", "End of album", "End of queue"; and while a timer runs,
+// "+10 min" and "Turn off" (red), else a line on what it does. The
+// running choice is outlined in the accent. Texts and rooms: UiText.h.
+class SleepSheet {
+public:
+  static constexpr int kY = 72;
+  // onEvent()'s answers: 0-4 the minutes, then these.
+  static constexpr int kTrack = 5, kAlbum = 6, kQueue = 7, kExtend = 8, kTurnOff = 9;
+  // `current`: the pill outlined (0-7, -1 none); `running`: +10 min and
+  // Turn off are offered; `extend`: +10 min acts (else drawn dim and inert:
+  // End of album / queue before its last track, SleepTimer::canExtend());
+  // `state`: the title ("Sleep timer: 23 min left").
+  void open(int current, bool running, bool extend, const char* state, uint16_t accent);
+  // Drawn again if any of it changed (the minutes pass, the timer ends).
+  void refresh(int current, bool running, bool extend, const char* state);
+  void close() { up_ = false; }
+  bool up() const { return up_; }
+  void draw();
+  // A Tap: a choice (above), -2 on the close pill or above the sheet
+  // (close), -1 otherwise. Presses highlight what's under the finger.
+  int onEvent(const InputEvent& e);
+
+private:
+  static constexpr int kCross = -3;
+  int pillAt(const InputEvent& e) const;
+  void render();
+  int current_ = -1;
+  bool running_ = false;
+  bool extend_ = false;
+  char state_[40] = "";
+  int pressed_ = -1;
   bool up_ = false;
   uint16_t accent_ = 0;
 };

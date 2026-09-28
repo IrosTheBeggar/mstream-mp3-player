@@ -151,6 +151,7 @@ const char* ScreenPower::name(Why w) {
     case Why::Event: return "an event for the listener";
     case Why::KeepLit: return "kept lit";
     case Why::Setting: return "the setting";
+    case Why::SleepTimer: return "the sleep timer";
   }
   return "?";
 }

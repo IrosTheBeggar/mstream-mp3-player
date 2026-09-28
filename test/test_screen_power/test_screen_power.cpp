@@ -5,6 +5,8 @@
 // Run: pio test -e native
 #include <unity.h>
 
+#include <initializer_list>
+
 #include <cstring>
 
 #include "ScreenPower.h"
@@ -473,6 +475,41 @@ void test_names() {
   TEST_ASSERT_TRUE(std::strlen(ScreenPower::name(W::PocketGuard)) > 0);
 }
 
+// The touch that attends a screen woken from off is remembered for that
+// touch (landedUnattended()): a pocket's second contact lands on a lit
+// fade toast, and must not act on +10 min or Turn off. The next touch was
+// made on an attended screen. PWR while lit attends too, but no touch
+// landed then.
+void test_the_touch_that_attends_is_remembered() {
+  for (W why : {W::Touch, W::PowerKey, W::Event}) {
+    ScreenPower s;
+    s.begin(0);
+    s.step(30000, false);
+    TEST_ASSERT_TRUE(s.off());
+    s.wake(40000, why);
+    s.step(40000, false);
+    if (why == W::Event) s.wake(40500, W::Touch);  // the answer (swallowed)
+    TEST_ASSERT_TRUE(s.unattended());
+    s.glassLanded();  // the next contact: it acts, but it is the one that attended
+    TEST_ASSERT_FALSE(s.unattended());
+    TEST_ASSERT_TRUE(s.landedUnattended());
+    s.glassLanded();  // another touch: made on an attended screen
+    TEST_ASSERT_FALSE(s.landedUnattended());
+  }
+  // Lit all along (no wake from off): no touch lands unattended.
+  ScreenPower s;
+  s.begin(0);
+  s.glassLanded();
+  TEST_ASSERT_FALSE(s.landedUnattended());
+  // Attended by the key while lit: the next touch lands attended.
+  s.step(30000, false);
+  s.wake(40000, W::PowerKey);
+  s.step(40000, false);
+  s.attend();
+  s.glassLanded();
+  TEST_ASSERT_FALSE(s.landedUnattended());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_tables_and_defaults);
@@ -489,5 +526,6 @@ int main(int, char**) {
   RUN_TEST(test_unattended_and_the_event_answer);
   RUN_TEST(test_wake_latch_timing);
   RUN_TEST(test_finger_activity);
+  RUN_TEST(test_the_touch_that_attends_is_remembered);
   return UNITY_END();
 }

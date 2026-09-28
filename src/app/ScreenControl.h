@@ -63,6 +63,9 @@ public:
   // Woken from off and nobody has touched the glass since (maybe a pocket):
   // a B click doesn't start the speaker (ScreenPower's pocket rule).
   bool unattended() const { return power_.unattended(); }
+  // The touch on the glass now (the last to land) is the one that ended
+  // unattended(): maybe a pocket's; the fade toast's buttons ignore it.
+  bool landedUnattended() const { return power_.landedUnattended(); }
   const char* levelName() const { return ScreenPower::name(power_.level()); }
   // What the backlight is now (0 while off).
   uint8_t backlight() const;
@@ -72,6 +75,31 @@ public:
   int brightnessChoice() const { return power_.brightness(); }
   void setTimeout(int choice);
   void setBrightness(int choice);
+
+  // The sleep timer paused (ENERGY.md section 3, step 4): off now, as the
+  // countdown would (a touch's or the key's wake has the pocket guard).
+  void sleepTimerOff();
+  // A touch or the PWR key woke it (dim or off) since the last call: the
+  // sleep timer's fade shows its toast then.
+  bool takeWoken() {
+    const bool w = woken_;
+    woken_ = false;
+    return w;
+  }
+  // Someone did something since the last call: a touch on the glass or
+  // the strip (a wake too), the PWR key. The idle power-off's countdown
+  // starts again (IdlePolicy).
+  bool takeInput() {
+    const bool i = inputSeen_;
+    inputSeen_ = false;
+    return i;
+  }
+  // External power: USB (ACIN) or VBUS present, as read once a second (the
+  // AXP192's power status). Not read yet counts as present: the idle
+  // power-off never acts on a guess.
+  bool externalPower() const { return usb_ != 0; }
+  // The same, read now (the idle power-off's last check).
+  static bool readExternalPower();
 
   // ---- the console (P) ----
   // Ps0: off now (as the countdown would; a wake has the pocket guard).
@@ -98,4 +126,6 @@ private:
   const char* wakeWhy_ = nullptr;  // an event's wake, for the log
   uint32_t nextUsbMs_ = 0;
   int8_t usb_ = -1;              // USB power present (ACIN or VBUS); -1 not read yet
+  bool woken_ = false;           // takeWoken()
+  bool inputSeen_ = false;      // takeInput()
 };

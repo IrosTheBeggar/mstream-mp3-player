@@ -154,6 +154,8 @@ public:
     kConnect, kDisconnect, kPairScanOn, kPairScanOff, kPairScanPause, kPairWith,
     // Power measurements: the background search rests now / starts again.
     kBgPause, kBgResume,
+    // The sleep timer, the idle power-off: let go of the headphones, then rest (connectable).
+    kRelease,
   };
   static constexpr uint16_t kVolumeStep = 0x100;  // onVolumeWork: low byte is a signed step
 
@@ -269,6 +271,7 @@ private:
   void pairScan(bool on);
   void pairScanPause();
   void setBackground(bool on);
+  void userRelease();
   void startPairing(const uint8_t* bda);
   void pairFailed(const char* why);
   void noteDiscovery(const esp_bt_gap_cb_param_t& param);  // BTC task
@@ -306,6 +309,7 @@ private:
   bool pendingPair_ = false;     // ... once the link that is up has gone
   uint8_t pendingAddr_[ESP_BD_ADDR_LEN] = {};
   uint8_t attempt_ = 0;          // the last page's try number
+  bool releasing_ = false;       // let go (userRelease()): the drop rests instead of paging them
 };
 
 namespace {
@@ -348,6 +352,9 @@ void PlayerA2dp::onWork(uint16_t work, void*) {
     case kBgPause:
     case kBgResume:
       a2dp.setBackground(work == kBgResume);
+      break;
+    case kRelease:
+      a2dp.userRelease();
       break;
     case kPairWith:
       a2dp.pairScan(false);
@@ -546,6 +553,13 @@ void PlayerA2dp::linkDown(const esp_a2d_cb_param_t& a2d) {
   if (pendingPair_) {
     pendingPair_ = false;
     startPairing(pendingAddr_);
+  } else if (releasing_ && !userOff_) {
+    // Let go (userRelease(): the sleep timer, the idle power-off): nobody is listening.
+    // Resting, still connectable: no pages, they come back when switched
+    // on (or a play pages them: PlayGate). The output stays Bluetooth.
+    releasing_ = false;
+    reconnect_.rest();
+    Serial.println("[bt] reconnect: resting (let go: the sleep timer, or turning off): no pages or scans, still connectable");
   } else if (!userOff_) {
     // Lost: a burst of pages from the next tick, then the back-off.
     reconnect_.start(ReconnectPlanner::Why::Drop, has_last_connection(), millis());
@@ -1030,6 +1044,7 @@ void PlayerA2dp::publishLink() {
 // none is remembered. Let in again.
 void PlayerA2dp::userConnect() {
   userOff_ = false;
+  releasing_ = false;
   if (linkUp_) return;
   if (pairScan_ || pairPage_) pairScan(false);
   set_scan_mode_connectable(true);
@@ -1189,6 +1204,30 @@ void PlayerA2dp::setBackground(bool on) {
   }
   publishLink();
   planStep(millis());  // (resting: a scan by name running stops now)
+}
+
+// The sleep timer, 5 min after it paused (ENERGY.md section 3, step 5), and
+// the idle power-off before the power goes (item 4):
+// let go of the headphones (their battery; their keys go quiet) and rest.
+// Unlike userDisconnect() they aren't refused: the Core2 stays
+// connectable, so they come back when switched on, and a play pages them
+// (the output stays Bluetooth: PlayGate). The loop expects the drop
+// (BtSession::expectDrop: no "lost" dialog). Unlinked: the search rests.
+void PlayerA2dp::userRelease() {
+  if (userOff_ || pairScan_ || pairPage_ || pairing_ || pendingPair_) {
+    Serial.printf("[bt] release: nothing to let go (%s)\n", userOff_ ? "let go already" : "the Pair screen or a pairing");
+    return;
+  }
+  if (linkUp_) {
+    releasing_ = true;
+    Serial.printf("[bt] release: letting go of %s (resting after: still connectable)\n", to_str(peer_bd_addr));
+    esp_a2d_source_disconnect(peer_bd_addr);
+    return;
+  }
+  reconnect_.rest();
+  Serial.println("[bt] release: not linked: the search rests (no pages or scans, still connectable)");
+  publishLink();
+  planStep(millis());  // (a scan by name running stops now)
 }
 
 // Page the device picked on the Pair screen. It is remembered (NVS) only
@@ -1460,25 +1499,26 @@ void BtSink::setDeviceName(const char* name) {
 
 namespace {
 // askPending_ bits, in the order they are handed over.
-constexpr uint8_t kAskDisconnect = 1, kAskConnect = 2, kAskScanOff = 4, kAskScanOn = 8, kAskPair = 16;
-constexpr uint8_t kAskBgPause = 32, kAskBgResume = 64;  // handed over first: a later ask resumes it
-constexpr uint8_t kAskScanPause = 128;
+constexpr uint16_t kAskDisconnect = 1, kAskConnect = 2, kAskScanOff = 4, kAskScanOn = 8, kAskPair = 16;
+constexpr uint16_t kAskBgPause = 32, kAskBgResume = 64;  // handed over first: a later ask resumes it
+constexpr uint16_t kAskScanPause = 128;
+constexpr uint16_t kAskRelease = 256;  // the sleep timer's: after a disconnect or connect asked before it
 }  // namespace
 
 void BtSink::flushAsks() {
   if (!askPending_ || !a2dp.ready()) return;
   static const struct {
-    uint8_t bit;
+    uint16_t bit;
     PlayerA2dp::Work work;
   } kOrder[] = {{kAskBgPause, PlayerA2dp::kBgPause},         {kAskBgResume, PlayerA2dp::kBgResume},
                 {kAskDisconnect, PlayerA2dp::kDisconnect}, {kAskConnect, PlayerA2dp::kConnect},
                 {kAskScanPause, PlayerA2dp::kPairScanPause}, {kAskScanOff, PlayerA2dp::kPairScanOff},
                 {kAskScanOn, PlayerA2dp::kPairScanOn},
-                {kAskPair, PlayerA2dp::kPairWith}};
+                {kAskPair, PlayerA2dp::kPairWith},         {kAskRelease, PlayerA2dp::kRelease}};
   for (const auto& o : kOrder) {
     if (!(askPending_ & o.bit)) continue;
     if (!a2dp.request(o.work)) return;  // its queue is full: the rest wait, in order
-    askPending_ &= static_cast<uint8_t>(~o.bit);
+    askPending_ &= static_cast<uint16_t>(~o.bit);
   }
 }
 
@@ -1492,38 +1532,43 @@ BtLink BtSink::link() const {
 }
 
 void BtSink::setBackgroundReconnect(bool on) {
-  askPending_ = static_cast<uint8_t>((askPending_ & ~(kAskBgPause | kAskBgResume)) | (on ? kAskBgResume : kAskBgPause));
+  askPending_ = static_cast<uint16_t>((askPending_ & ~(kAskBgPause | kAskBgResume)) | (on ? kAskBgResume : kAskBgPause));
   flushAsks();
 }
 
 void BtSink::connect() {
-  askPending_ = static_cast<uint8_t>((askPending_ & ~(kAskDisconnect | kAskScanOn)) | kAskConnect);
+  askPending_ = static_cast<uint16_t>((askPending_ & ~(kAskDisconnect | kAskScanOn | kAskRelease)) | kAskConnect);
   flushAsks();
 }
 
 void BtSink::disconnect() {
-  askPending_ = static_cast<uint8_t>((askPending_ & ~(kAskConnect | kAskPair | kAskScanOn)) | kAskDisconnect);
+  askPending_ = static_cast<uint16_t>((askPending_ & ~(kAskConnect | kAskPair | kAskScanOn | kAskRelease)) | kAskDisconnect);
+  flushAsks();
+}
+
+void BtSink::releaseHeadphones() {
+  askPending_ = static_cast<uint16_t>(askPending_ | kAskRelease);
   flushAsks();
 }
 
 void BtSink::startPairScan() {
-  askPending_ = static_cast<uint8_t>((askPending_ & ~(kAskScanOff | kAskScanPause)) | kAskScanOn);
+  askPending_ = static_cast<uint16_t>((askPending_ & ~(kAskScanOff | kAskScanPause)) | kAskScanOn);
   flushAsks();
 }
 
 void BtSink::stopPairScan() {
-  askPending_ = static_cast<uint8_t>((askPending_ & ~(kAskScanOn | kAskScanPause)) | kAskScanOff);
+  askPending_ = static_cast<uint16_t>((askPending_ & ~(kAskScanOn | kAskScanPause)) | kAskScanOff);
   flushAsks();
 }
 
 void BtSink::pausePairScan() {
-  askPending_ = static_cast<uint8_t>((askPending_ & ~kAskScanOn) | kAskScanPause);
+  askPending_ = static_cast<uint16_t>((askPending_ & ~kAskScanOn) | kAskScanPause);
   flushAsks();
 }
 
 void BtSink::pairWith(const uint8_t addr[6]) {
   std::memcpy(pairAddr_, addr, sizeof(pairAddr_));
-  askPending_ = static_cast<uint8_t>((askPending_ & ~(kAskScanOn | kAskConnect | kAskDisconnect)) | kAskPair);
+  askPending_ = static_cast<uint16_t>((askPending_ & ~(kAskScanOn | kAskConnect | kAskDisconnect)) | kAskPair);
   flushAsks();
 }
 
@@ -1593,9 +1638,13 @@ int32_t BtSink::onData(Frame* frames, int32_t count) {
   // tap marks which were real audio, and where in the track). Copy only,
   // and nothing while the Dance tab isn't up (the tap is switched off).
   if (s.tap_) s.tap_->write(out, want, r.read, r.epoch, r.position, static_cast<uint32_t>(nowUs));
-  // Then the volume, over every frame so its ramps keep real time. Both
-  // stages only ever multiply by at most 1: together they never add level.
+  // Then the volume, over every frame so its ramps keep real time. All
+  // three stages only ever multiply by at most 1: together they never add level.
   s.gain_.process(out, want);
+  // The sleep timer's fade, after our gain (never above 1, never sent to
+  // the headphones as absolute volume). Moved only while Bluetooth is the
+  // ring's consumer; otherwise (a fade-out after a handover) applied as it is.
+  s.shared_->fade.process(out, want, s.ring_->consumer() == kConsumerId);
   s.framesPulled_.fetch_add(want, std::memory_order_relaxed);
   return count;
 }

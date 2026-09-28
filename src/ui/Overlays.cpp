@@ -4,6 +4,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "IdlePolicy.h"
+#include "SleepTimer.h"
 #include "UiText.h"
 #include "app/Psram.h"
 #include "ui/Fonts.h"
@@ -15,7 +17,7 @@ namespace ui {
 
 namespace {
 
-M5Canvas* panel_ = nullptr;  // PSRAM, 320 x 168: a sheet, a dialog, the jump grid
+M5Canvas* panel_ = nullptr;  // PSRAM, 320 x 204: a sheet, a dialog, the jump grid
 
 void copy(char* dst, size_t size, const char* src) {
   snprintf(dst, size, "%s", src ? src : "");
@@ -36,7 +38,7 @@ bool overlaysBegin() {
   if (!panel_) return false;
   panel_->setPsram(true);  // before createSprite(): otherwise internal RAM
   panel_->setColorDepth(16);
-  if (!panel_->createSprite(kW, kListH)) {
+  if (!panel_->createSprite(kW, sheet::kPanelH)) {
     psramDelete(panel_);
     panel_ = nullptr;
     return false;
@@ -65,16 +67,43 @@ int textRightOf(bool compact, bool undo, bool view) {
 }
 }  // namespace
 
-void Toast::show(const char* text, bool undo, bool view, uint16_t accent, uint32_t nowMs) {
+void Toast::show(const char* text, bool undo, bool view, uint16_t accent, uint32_t nowMs, uint32_t holdMs) {
   copy(text_, sizeof(text_), text);
+  sleep_ = idle_ = false;
   undo_ = undo;
   view_ = view;
   accent_ = accent;
   up_ = true;
-  untilMs_ = nowMs + (undo ? 4000 : 1800);
+  untilMs_ = nowMs + (holdMs ? holdMs : undo ? 4000 : 1800);
   // One line if it fits beside the buttons; else "what: <name>" on two,
   // with the buttons as icons.
   compact_ = strstr(text_, ": ") && Fonts::instance().width(Font::Body, text_) > textRightOf(false, undo, view) - kTextX;
+  draw();
+}
+
+void Toast::showSleep(uint16_t accent, uint32_t nowMs) {
+  copy(text_, sizeof(text_), uitext::kSleepFading);
+  sleep_ = true;
+  idle_ = false;
+  undo_ = view_ = compact_ = false;
+  accent_ = accent;
+  up_ = true;
+  untilMs_ = nowMs + 0x40000000u;  // until the fade ends (the Ui hides it)
+  draw();
+}
+
+void Toast::showIdle(uint32_t seconds, uint16_t accent, uint32_t nowMs) {
+  idle_ = true;
+  sleep_ = undo_ = view_ = compact_ = false;
+  accent_ = accent;
+  up_ = true;
+  untilMs_ = nowMs + 0x40000000u;  // until the warning ends (the Ui hides it)
+  setIdleSeconds(seconds);
+}
+
+void Toast::setIdleSeconds(uint32_t seconds) {
+  idleSeconds_ = seconds;
+  IdlePolicy::warnText(seconds, text_, sizeof(text_));
   draw();
 }
 
@@ -86,6 +115,34 @@ void Toast::draw(int pressed) {
   s.fillRoundRect(4, 2, 312, 32, 8, col::CARD);
   s.drawRoundRect(4, 2, 312, 32, 8, accent_);
   s.fillRect(10, 10, 4, 16, accent_);
+  if (sleep_) {
+    // "Sleep timer: fading" [+10 min] [Turn off]: only these act on the
+    // timer (a stray touch elsewhere doesn't undo it).
+    using namespace uitext;
+    f.draw(s, Font::Small, text_, kTextX, 18, kSleepToastPlusX - 6 - kTextX, col::TXT, col::CARD);
+    const uint16_t pb = pressed == kHitExtend ? col::BTN_HI : col::BTN;
+    s.fillRoundRect(kSleepToastPlusX, 6, kSleepToastPlusW, 24, 6, pb);
+    f.draw(s, Font::Body, kSleepExtend, kSleepToastPlusX + kSleepToastPlusW / 2, 18,
+           kSleepToastPlusW - kSleepToastPad, accent_, pb, Fonts::Align::Centre);
+    const uint16_t ob = pressed == kHitTurnOff ? col::BTN_HI : col::BTN;
+    s.fillRoundRect(kSleepToastOffX, 6, kSleepToastOffW, 24, 6, ob);
+    f.draw(s, Font::Body, kSleepTurnOff, kSleepToastOffX + kSleepToastOffW / 2, 18, kSleepToastOffW - kSleepToastPad,
+           col::RED, ob, Fonts::Align::Centre);
+    gfx::push(s, 0, kY, kW, kH, true);
+    return;
+  }
+  if (idle_) {
+    // "Turning off in 30 s" [Keep on]: any touch keeps it on; the button
+    // says so.
+    using namespace uitext;
+    f.draw(s, Font::Body, text_, kTextX, 18, kIdleToastKeepX - 6 - kTextX, col::TXT, col::CARD);
+    const uint16_t kb = pressed == kHitKeepOn ? col::BTN_HI : col::BTN;
+    s.fillRoundRect(kIdleToastKeepX, 6, kIdleToastKeepW, 24, 6, kb);
+    f.draw(s, Font::Body, kIdleKeepOn, kIdleToastKeepX + kIdleToastKeepW / 2, 18, kIdleToastKeepW - kIdleToastPad,
+           accent_, kb, Fonts::Align::Centre);
+    gfx::push(s, 0, kY, kW, kH, true);
+    return;
+  }
   const int textW = textRightOf(compact_, undo_, view_) - kTextX;
   if (!compact_) {
     f.draw(s, Font::Body, text_, kTextX, 18, textW, col::TXT, col::CARD);
@@ -123,8 +180,28 @@ void Toast::draw(int pressed) {
   gfx::push(s, 0, kY, kW, kH, true);
 }
 
-int Toast::hit(const InputEvent& e) const {
-  if (!up_ || e.y < kY || e.y >= kY + kH) return 0;
+int Toast::hit(const InputEvent& e, bool slop) const {
+  const int below = slop && (sleep_ || idle_) ? uitext::kToastButtonSlop : 0;
+  if (!up_ || e.y < kY || e.y >= kY + kH + below) return 0;
+  if (e.y >= kY + kH) {
+    // The slop below it: its buttons only (the page's own touch otherwise).
+    InputEvent in = e;
+    in.y = kY + kH - 1;
+    const int h = hit(in);
+    return h >= kHitExtend ? h : 0;
+  }
+  if (sleep_) {
+    // Turn off reaches the screen's edge; a clamped reading is neither
+    // (SleepTimer::toastTap(): both raise the level). Whether this touch
+    // may act (the pocket rule) is the Ui's, on the tap.
+    switch (SleepTimer::toastTap(e.x, e.atRightEdge(), false)) {
+      case SleepTimer::ToastButton::TurnOff: return kHitTurnOff;
+      case SleepTimer::ToastButton::Extend: return kHitExtend;
+      case SleepTimer::ToastButton::None: return 1;
+    }
+    return 1;
+  }
+  if (idle_) return e.x >= uitext::kIdleToastKeepX - 6 || e.inRightEdgeZone(uitext::kIdleToastKeepX) ? kHitKeepOn : 1;
   const int undoHit = compact_ ? kUndoCHitX : kUndoHitX;
   const int viewHit = compact_ ? kViewCHitX : kViewHitX;
   // Undo reaches the screen's edge (and takes a clamped reading).
@@ -136,8 +213,9 @@ int Toast::hit(const InputEvent& e) const {
 bool Toast::passesThrough(const InputEvent& e) const {
   if (!up_ || e.y < kY || e.y >= kY + kHeaderH) return false;  // the header row only
   if (e.x < kBackZone) return true;
-  // The header pill's zone (x 240 to the edge), unless Undo or View is there.
-  return !undo_ && !view_ && e.inRightEdgeZone(240);
+  // The header pill's zone (x 240 to the edge), unless Undo or View (or
+  // the sleep timer's buttons) is there.
+  return !undo_ && !view_ && !sleep_ && !idle_ && e.inRightEdgeZone(240);
 }
 
 // ---- Hud ----
@@ -196,8 +274,17 @@ void Sheet::open(const char* title, const char* const* rows, int n, uint16_t acc
   accent_ = accent;
   pressed_ = -1;
   up_ = true;
-  y0_ = std::max(kListY, kH - (kTitleH + n_ * kRowH + 4));
+  // Every row 40 px: 4 rows rise into the header row (SheetLayout.h).
+  y0_ = sheet::top(n_);
   draw();
+}
+
+void Sheet::setDetail(int i, const char* text) {
+  if (!up_ || i < 0 || i >= n_ || std::strcmp(details_[i], text ? text : "") == 0) return;
+  copy(details_[i], sizeof(details_[i]), text);
+  if (!panel_) return;
+  render();
+  pushRow(i);
 }
 
 // The ✕ pill: x 262-311 of the title row (its hit area 250 to the edge).
@@ -276,6 +363,138 @@ int Sheet::onEvent(const InputEvent& e) {
   pressed_ = -1;
   if (e.y < y0_ || was == kCross) return -2;  // outside, or ✕: close
   return inRow == kCross ? -1 : inRow;
+}
+
+// ---- SleepSheet ----
+//
+// Panel rows (the sheet from y 72, 168 tall):
+//   0-35     the title ("Sleep timer: 23 min left") and the close pill
+//   40-75    15 | 30 | 45 | 60 | 90 min
+//   84-119   End of track | End of album | End of queue   (Small)
+//   128-163  +10 min | Turn off (red), while a timer runs; else a line
+
+namespace {
+constexpr int kSleepH = kH - SleepSheet::kY;  // 168
+constexpr int kSleepRow0 = 40, kSleepPitch = 44, kSleepPillH = 36;
+constexpr int kSleepCrossX = 262, kSleepCrossW = 50, kSleepCrossHitX = 250;
+
+// The pill of row `row` (0-2) under x: its index in that row, -1 none.
+// Each pill's hit area reaches half the gap to its neighbours; the last one
+// the screen's edge.
+int pillIn(const int* xs, int n, const InputEvent& e) {
+  if (e.atRightEdge()) return n - 1;
+  for (int i = n - 1; i >= 0; --i) {
+    if (e.x >= xs[i] - 3) return i;
+  }
+  return 0;
+}
+}  // namespace
+
+void SleepSheet::open(int current, bool running, bool extend, const char* state, uint16_t accent) {
+  current_ = current;
+  running_ = running;
+  extend_ = extend;
+  copy(state_, sizeof(state_), state);
+  accent_ = accent;
+  pressed_ = -1;
+  up_ = true;
+  draw();
+}
+
+void SleepSheet::refresh(int current, bool running, bool extend, const char* state) {
+  if (!up_) return;
+  if (current == current_ && running == running_ && extend == extend_ && std::strcmp(state, state_) == 0) return;
+  current_ = current;
+  running_ = running;
+  extend_ = extend;
+  copy(state_, sizeof(state_), state);
+  draw();
+}
+
+int SleepSheet::pillAt(const InputEvent& e) const {
+  using namespace uitext;
+  const int y = e.y - kY;
+  if (y < kSleepRow0 - 4) return -1;
+  const int row = (y - (kSleepRow0 - 4)) / kSleepPitch;
+  switch (row) {
+    case 0: return pillIn(kSleepMinX, 5, e);
+    case 1: return kTrack + pillIn(kSleepEndX, 3, e);
+    case 2: {
+      if (!running_) return -1;
+      const int xs[2] = {kSleepExtendX, kSleepOffX};
+      if (pillIn(xs, 2, e) != 0) return kTurnOff;
+      return extend_ ? kExtend : -1;  // dim: nothing to add to (inert)
+    }
+    default: return -1;
+  }
+}
+
+void SleepSheet::render() {
+  using namespace uitext;
+  M5Canvas& s = *panel_;
+  Fonts& f = Fonts::instance();
+  sheetCard(s, kSleepH);
+  f.draw(s, Font::Small, state_, 16, 22, kSleepTitleW, col::DIM, col::CARD);
+  const uint16_t cross = pressed_ == kCross ? col::BTN_HI : col::BTN;
+  s.fillRoundRect(kSleepCrossX, 9, kSleepCrossW, 24, 12, cross);
+  icons::drawCentred(s, icons::kCross, kSleepCrossX + kSleepCrossW / 2, 21, col::TXT);
+  auto pill = [&](int id, int x, int w, int y, Font font, const char* label, uint16_t ink) {
+    const uint16_t bg = pressed_ == id ? col::BTN_HI : col::BTN;
+    s.fillRoundRect(x, y, w, kSleepPillH, 10, bg);
+    if (id == current_) {
+      // The running choice, outlined in the accent (2 px).
+      s.drawRoundRect(x, y, w, kSleepPillH, 10, accent_);
+      s.drawRoundRect(x + 1, y + 1, w - 2, kSleepPillH - 2, 9, accent_);
+    }
+    f.draw(s, font, label, x + w / 2, y + kSleepPillH / 2, w - kSleepPillPad, ink, bg, Fonts::Align::Centre);
+  };
+  for (int i = 0; i < 5; ++i) pill(i, kSleepMinX[i], kSleepMinW[i], kSleepRow0, Font::Body, kSleepMinutes[i], col::TXT);
+  for (int i = 0; i < 3; ++i) {
+    pill(kTrack + i, kSleepEndX[i], kSleepEndW[i], kSleepRow0 + kSleepPitch, Font::Small, kSleepEnds[i], col::TXT);
+  }
+  const int y2 = kSleepRow0 + 2 * kSleepPitch;
+  if (running_) {
+    // +10 min dim when there is nothing to add to (End of album / queue
+    // before its last track: what is left isn't known).
+    pill(kExtend, kSleepExtendX, kSleepExtendW, y2, Font::Body, kSleepExtend, extend_ ? accent_ : col::FAINT);
+    pill(kTurnOff, kSleepOffX, kSleepOffW, y2, Font::Body, kSleepTurnOff, col::RED);
+  } else {
+    f.draw(s, Font::Small, kSleepHint, kW / 2, y2 + kSleepPillH / 2, kSleepHintW, col::DIM, col::CARD,
+           Fonts::Align::Centre);
+  }
+}
+
+void SleepSheet::draw() {
+  if (!up_ || !panel_) return;
+  render();
+  gfx::push(*panel_, 0, kY, kW, kSleepH, true);
+}
+
+int SleepSheet::onEvent(const InputEvent& e) {
+  using T = InputEvent::Type;
+  if (!up_) return -1;
+  const bool onCross = e.y >= kY && e.y < kY + 36 && e.inRightEdgeZone(kSleepCrossHitX);
+  const int at = onCross ? kCross : pillAt(e);
+  if (e.type == T::Down) {
+    pressed_ = at;
+    if (at != -1) draw();
+    return -1;
+  }
+  if (e.type == T::DragStart || e.type == T::Cancel || e.type == T::Release) {
+    const int was = pressed_;
+    pressed_ = -1;
+    if (was != -1) draw();
+    return -1;
+  }
+  if (e.type != T::Tap) return -1;
+  const int was = pressed_;
+  pressed_ = -1;
+  if (e.y < kY || was == kCross) return -2;  // above it, or the close pill
+  if (at < 0) {
+    if (was != -1) draw();
+    return -1;
+  }
+  return at;
 }
 
 // ---- VolumeSheet ----

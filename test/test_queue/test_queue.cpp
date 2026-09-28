@@ -11,6 +11,7 @@
 #include "ByteStream.h"
 #include "LibraryIndex.h"
 #include "QueueModel.h"
+#include "QueueSaver.h"
 #include "QueueText.h"
 #include "TrackCatalog.h"
 
@@ -656,6 +657,252 @@ void test_text_writer_in_steps() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(queuetext::Writer::Step::More), static_cast<int>(w.step(q, c, partial, 8)));
 }
 
+// ---- QueueSaver (app/QueueStore's timing, the card replaced by memory) ----
+
+// The card and NVS, in memory: the temporary file, the queue file, the
+// saved position; each can be told to fail.
+struct MemStore : QueueSaver::Store {
+  MemorySink* temp = nullptr;
+  std::string file;  // the queue file
+  uint32_t posGeneration = 0;
+  int32_t pos = -99;
+  int opens = 0, commits = 0, discards = 0, positions = 0;
+  bool failOpen = false, failCommit = false;
+
+  ~MemStore() { delete temp; }
+  ByteSink* openTemp() override {
+    ++opens;
+    delete temp;
+    temp = nullptr;
+    if (failOpen) return nullptr;
+    temp = new MemorySink();
+    return temp;
+  }
+  bool commitTemp() override {
+    ++commits;
+    const bool ok = temp && !failCommit;
+    if (ok) file.assign(reinterpret_cast<const char*>(temp->data()), temp->size());
+    delete temp;
+    temp = nullptr;
+    return ok;
+  }
+  void discardTemp() override {
+    ++discards;
+    delete temp;
+    temp = nullptr;
+  }
+  void savePosition(uint32_t generation, int32_t current) override {
+    ++positions;
+    posGeneration = generation;
+    pos = current;
+  }
+};
+
+std::string wholeText(const QueueModel& q, const TrackCatalog& c, uint32_t generation) {
+  MemorySink out;
+  TEST_ASSERT_TRUE(queuetext::write(q, c, generation, out));
+  return std::string(reinterpret_cast<const char*>(out.data()), out.size());
+}
+
+// 200 entries: a write takes 7 passes of 32 lines.
+void fillLong(QueueModel& q) {
+  std::vector<uint32_t> ids;
+  for (uint32_t i = 0; i < 200; ++i) ids.push_back(i % 6);
+  TEST_ASSERT_TRUE(q.assign(ids.data(), 200, 5));
+}
+
+// The saver's timing, as QueueStore had it: 2 s after the last edit, a few
+// lines a pass, then the position with the new generation.
+void test_saver_writes_after_the_edits_settle() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  saver.setGeneration(3);
+  saver.loaded(3, false, 0);
+  fillLong(q);
+  saver.loop(100);
+  TEST_ASSERT_TRUE(saver.busy());  // an edit waiting its 2 s
+  saver.loop(2000);
+  TEST_ASSERT_EQUAL_INT(0, st.opens);
+  int passes = 0;
+  for (uint32_t t = 2100; saver.writing() || passes == 0; t += 20, ++passes) {
+    saver.loop(t);
+    if (passes == 0) TEST_ASSERT_TRUE(saver.writing());
+  }
+  TEST_ASSERT_EQUAL_INT(7, passes);  // 201 lines, 32 a pass
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 4).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(4, st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(5, st.pos);
+  TEST_ASSERT_FALSE(saver.busy());
+  // A move alone: the position a second later, no file.
+  q.step(1, true);
+  saver.loop(5000);
+  TEST_ASSERT_TRUE(saver.busy());
+  saver.loop(6000);
+  TEST_ASSERT_EQUAL_INT(6, st.pos);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_FALSE(saver.busy());
+}
+
+// A power-off in the middle of a piece-wise write: flushNow() finishes it,
+// and the file is the whole queue (not the lines written so far), with the
+// position for its generation.
+void test_flush_now_in_the_middle_of_a_write() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  st.file = "old";
+  QueueSaver saver(st, q, c);
+  saver.loaded(8, false, 0);
+  fillLong(q);
+  saver.loop(10);
+  saver.loop(2100);  // the write begins: 32 lines
+  saver.loop(2120);  // 64
+  TEST_ASSERT_TRUE(saver.writing());
+  TEST_ASSERT_EQUAL_STRING("old", st.file.c_str());
+  // (The file's own current line is the one at the write's start: the
+  // position saved with its generation is what counts.)
+  const std::string whole = wholeText(q, c, 9);
+  q.step(2, true);  // and a move not saved yet
+  TEST_ASSERT_TRUE(saver.flushNow(2130));
+  TEST_ASSERT_FALSE(saver.writing());
+  TEST_ASSERT_FALSE(saver.busy());
+  TEST_ASSERT_EQUAL_INT(1, st.opens);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_INT(0, st.discards);
+  TEST_ASSERT_EQUAL_STRING(whole.c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(9, st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(7, st.pos);
+  // Nothing left: the loop writes nothing more.
+  for (uint32_t t = 2200; t < 20000; t += 100) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+}
+
+// The queue changed after the write began (an edit, then the power-off
+// before the next pass): the partial write is dropped and the queue as it
+// is now written whole.
+void test_flush_now_after_an_edit_during_the_write() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  saver.loaded(1, false, 0);
+  fillLong(q);
+  saver.loop(10);
+  saver.loop(2100);
+  TEST_ASSERT_TRUE(saver.writing());
+  const uint32_t more[] = {1, 2, 3};
+  q.append(more, 3);
+  TEST_ASSERT_TRUE(saver.flushNow(2110));
+  TEST_ASSERT_EQUAL_INT(1, st.discards);  // the partial queue.tmp
+  TEST_ASSERT_EQUAL_INT(2, st.opens);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_UINT32(203, q.size());
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 2).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(2, st.posGeneration);
+  TEST_ASSERT_FALSE(saver.busy());
+}
+
+// An edit still inside its 2 s (a power-off right after a queue edit): it
+// is written now. With nothing to write, only the position; with nothing
+// at all, nothing.
+void test_flush_now_writes_an_edit_at_once() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  fillLong(q);
+  saver.loaded(4, false, 0);  // as restored: saved
+  TEST_ASSERT_TRUE(saver.flushNow(10));
+  TEST_ASSERT_EQUAL_INT(0, st.opens);
+  TEST_ASSERT_EQUAL_INT(0, st.positions);
+  q.step(1, true);
+  TEST_ASSERT_TRUE(saver.flushNow(20));  // (no loop pass saw the move)
+  TEST_ASSERT_EQUAL_INT(0, st.opens);
+  TEST_ASSERT_EQUAL_INT(6, st.pos);
+  TEST_ASSERT_EQUAL_UINT32(4, st.posGeneration);
+  const uint32_t first = 0;
+  q.remove(&first, 1);
+  saver.loop(30);
+  TEST_ASSERT_TRUE(saver.busy());
+  TEST_ASSERT_TRUE(saver.flushNow(40));
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 5).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  TEST_ASSERT_EQUAL_UINT32(5, st.posGeneration);
+}
+
+// The card fails: flushNow() says so and the last file stays; the saver
+// isn't busy with a failed write (no reason to stay on for it), and tries
+// again 10 s later.
+void test_flush_now_that_fails_keeps_the_last_file() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  st.file = "last good";
+  QueueSaver saver(st, q, c);
+  saver.loaded(2, false, 0);
+  fillLong(q);
+  saver.loop(10);
+  saver.loop(2100);
+  TEST_ASSERT_TRUE(saver.writing());
+  st.failCommit = true;
+  TEST_ASSERT_FALSE(saver.flushNow(2110));
+  TEST_ASSERT_EQUAL_STRING("last good", st.file.c_str());
+  TEST_ASSERT_FALSE(saver.writing());
+  TEST_ASSERT_TRUE(saver.contentDirty());
+  TEST_ASSERT_FALSE(saver.busy());
+  TEST_ASSERT_EQUAL_INT(0, st.positions);  // never paired with the old file
+  st.failCommit = false;
+  st.failOpen = true;
+  TEST_ASSERT_FALSE(saver.flushNow(2120));
+  st.failOpen = false;
+  saver.loop(5000);
+  TEST_ASSERT_EQUAL_STRING("last good", st.file.c_str());  // the retry waits its 10 s
+  for (uint32_t t = 12200; t < 12400; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 3).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(3, st.posGeneration);
+  // An edit after a failure makes it busy again.
+  const uint32_t more[] = {2};
+  q.append(more, 1);
+  saver.loop(12500);
+  TEST_ASSERT_TRUE(saver.busy());
+}
+
+// A write dropped for a library rebuild (remap), and the queue then marked
+// saved: nothing is written.
+void test_saver_abort_and_mark_saved() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  saver.loaded(1, false, 0);
+  fillLong(q);
+  saver.loop(10);
+  saver.loop(2100);
+  saver.abort();
+  TEST_ASSERT_FALSE(saver.writing());
+  TEST_ASSERT_EQUAL_INT(1, st.discards);
+  saver.markSaved();
+  TEST_ASSERT_FALSE(saver.busy());
+  TEST_ASSERT_TRUE(saver.flushNow(3000));
+  TEST_ASSERT_EQUAL_INT(0, st.commits);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -681,5 +928,11 @@ int main(int, char**) {
   RUN_TEST(test_text_remaps_after_a_rebuild);
   RUN_TEST(test_text_current_override_and_bad_files);
   RUN_TEST(test_text_writer_in_steps);
+  RUN_TEST(test_saver_writes_after_the_edits_settle);
+  RUN_TEST(test_flush_now_in_the_middle_of_a_write);
+  RUN_TEST(test_flush_now_after_an_edit_during_the_write);
+  RUN_TEST(test_flush_now_writes_an_edit_at_once);
+  RUN_TEST(test_flush_now_that_fails_keeps_the_last_file);
+  RUN_TEST(test_saver_abort_and_mark_saved);
   return UNITY_END();
 }

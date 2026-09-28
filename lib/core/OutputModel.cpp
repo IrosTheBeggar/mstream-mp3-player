@@ -144,6 +144,18 @@ BtSession::Answer BtSession::onConnected() {
   return a;
 }
 
+BtSession::Drop BtSession::onDisconnected(bool onBluetooth, bool playing) {
+  Drop d;
+  if (dropExpected_) {
+    dropExpected_ = false;
+    d.pause = onBluetooth && playing;
+    return d;
+  }
+  d.lost = onBluetooth;
+  d.pause = onBluetooth;
+  return d;
+}
+
 // ---- the card ----
 
 BtCardView btCardView(const BtLink& link, const BtSession& session, bool lost) {

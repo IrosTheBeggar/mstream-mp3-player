@@ -8,7 +8,7 @@ void PlaybackController::startCurrent() {
     // The output can't be heard yet: this entry waits, selected. The
     // backend lets go of what it had (a track playing or paused).
     if (state_ != PlayState::Stopped && !cued_) audio_.stop();
-    state_ = PlayState::Waiting;
+    setPlaying(PlayState::Waiting);
     cued_ = true;
     return;
   }
@@ -22,7 +22,7 @@ void PlaybackController::startNow() {
   const uint32_t id = queue_.currentTrack();
   catalog_.path(id, path, sizeof(path));
   audio_.play(std::string(path), catalog_.durationHintMs(id));
-  state_ = PlayState::Playing;
+  setPlaying(PlayState::Playing);
   cued_ = false;
 }
 
@@ -48,11 +48,11 @@ void PlaybackController::togglePlayPause() {
         break;
       }
       if (held()) {
-        state_ = PlayState::Waiting;  // the backend keeps the paused track: release() resumes it
+        setPlaying(PlayState::Waiting);  // the backend keeps the paused track: release() resumes it
         break;
       }
       audio_.resume();
-      state_ = PlayState::Playing;
+      setPlaying(PlayState::Playing);
       break;
     case PlayState::Waiting:
       state_ = PlayState::Paused;  // cancelled: a cued entry stays cued, a paused track paused
@@ -67,7 +67,7 @@ void PlaybackController::release() {
     return;
   }
   audio_.resume();
-  state_ = PlayState::Playing;
+  setPlaying(PlayState::Playing);
 }
 
 void PlaybackController::cancelWait() {
@@ -116,6 +116,37 @@ void PlaybackController::stop() {
   audio_.stop();
   state_ = PlayState::Stopped;
   cued_ = false;
+  pausedByTimer_ = false;  // (stopped: headphone Play starts nothing anyway)
+}
+
+void PlaybackController::pauseByTimer() {
+  switch (state_) {
+    case PlayState::Playing:
+      audio_.pause();
+      state_ = PlayState::Paused;
+      break;
+    case PlayState::Waiting:
+      state_ = PlayState::Paused;  // as cancelWait(): a cued entry stays cued
+      break;
+    case PlayState::Paused:
+      break;
+    case PlayState::Stopped:
+      return;
+  }
+  pausedByTimer_ = true;
+}
+
+void PlaybackController::pauseAtBoundary() {
+  pauseAfter_ = false;
+  ++timerStops_;
+  if (!queue_.step(+1, repeat_)) {
+    stop();  // the end of the queue, and no repeat: the natural stop
+    return;
+  }
+  audio_.stop();  // the finished track lets go; the next one is cued
+  state_ = PlayState::Paused;
+  cued_ = true;
+  pausedByTimer_ = true;
 }
 
 void PlaybackController::update(uint32_t nowMs) {
@@ -132,6 +163,10 @@ void PlaybackController::update(uint32_t nowMs) {
     advance();
   } else if (audio_.finished()) {
     failuresInARow_ = 0;
+    if (pauseAfter_) {
+      pauseAtBoundary();  // the sleep timer: the next entry, paused at 0:00
+      return;
+    }
     advance();  // wraps to the start of the queue at the end (with repeat)
   }
 }

@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "IdlePolicy.h"
 #include "LibraryIndex.h"
 #include "ScreenPower.h"
 #include "UiText.h"
@@ -234,11 +235,12 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawnHaptics_ = ui_.input().hapticsOn();
       list.refreshRow(Haptics);
     }
-    const uint8_t sc = screenSig(ui_.state());
+    const uint16_t sc = screenSig(ui_.state());
     if (sc != drawnScreen_ && still) {
       drawnScreen_ = sc;
       list.refreshRow(ScreenOff);
       list.refreshRow(Brightness);
+      list.refreshRow(IdleOff);
     }
     // The spinner, while something is under way.
     const AppState& s = ui_.state();
@@ -370,6 +372,7 @@ void OutputPage::drawRow(ListView::Row& r) {
     }
     case ScreenOff: drawScreenSetting(r, false); break;
     case Brightness: drawScreenSetting(r, true); break;
+    case IdleOff: drawIdleSetting(r); break;
     case Calibrate:
       drawSetting(r, icons::kGear, "Touch calibration", "if taps land off target", col::TXT, true);
       break;
@@ -426,8 +429,29 @@ void OutputPage::drawScreenSetting(ListView::Row& r, bool brightness) {
                          col::TXT, pill, Fonts::Align::Centre);
 }
 
-uint8_t OutputPage::screenSig(const AppState& s) {
-  return static_cast<uint8_t>((s.screenTimeout & 0x0F) << 4 | (s.brightness & 0x0F));
+// "Turn off when idle" (IdlePolicy's choices, saved: ENERGY.md item 4): as
+// the screen's rows, with a power symbol drawn here (a ring open at the
+// top, and its bar).
+void OutputPage::drawIdleSetting(ListView::Row& r) {
+  using namespace uitext;
+  const AppState& s = ui_.state();
+  const int cx = r.x + 22;
+  const uint16_t ink = s.idleOff == IdlePolicy::kNever ? col::FAINT : col::SOFT;
+  r.c.fillArc(cx, 22, 8, 7, 300, 360, ink);
+  r.c.fillArc(cx, 22, 8, 7, 0, 240, ink);
+  r.c.fillRect(cx - 1, 11, 2, 10, ink);
+  const int x = r.x + 44;
+  const int pillX = r.right - 8 - kSettingPillW;
+  const char* sub = s.idleOff == IdlePolicy::kNever ? kIdleNeverSub : kIdleOffSub;
+  ListView::lines(r, x, pillX - 8, kIdleOffTitle, strlen(kIdleOffTitle), sub, strlen(sub), col::TXT);
+  const uint16_t pill = r.pressed ? col::BTN_HI : col::BTN;
+  r.c.fillRoundRect(pillX, 9, kSettingPillW, 24, 8, pill);
+  Fonts::instance().draw(r.c, Font::Body, IdlePolicy::choiceLabel(s.idleOff), pillX + kSettingPillW / 2, 21,
+                         kSettingPillW - kSettingPillPad, col::TXT, pill, Fonts::Align::Centre);
+}
+
+uint16_t OutputPage::screenSig(const AppState& s) {
+  return static_cast<uint16_t>((s.idleOff & 0x0F) << 8 | (s.screenTimeout & 0x0F) << 4 | (s.brightness & 0x0F));
 }
 
 // The Bluetooth card's top row: the headphones in the state's colour, the
@@ -708,6 +732,10 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
     case Brightness:
       // The next level, at once (Max, then Low again).
       ui_.host().setBrightness((s.brightness + 1) % ScreenPower::kBrightnesses);
+      break;
+    case IdleOff:
+      // The next choice (after Never, 10 min again); the countdown restarts.
+      ui_.host().setIdleOff((s.idleOff + 1) % IdlePolicy::kChoices);
       break;
     case Calibrate: ui_.host().openCalibration(); break;
     case AboutRow: ui_.push(page(PageKind::About)); break;

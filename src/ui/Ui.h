@@ -112,6 +112,11 @@ public:
   // started on them: a toast says where, two ticks.
   void headphonesConnected();
   void toggleDance();          // console d
+  // The sleep timer's fade runs and the listener touched the device (or
+  // the fade just began): the toast "Sleep timer: fading" with +10 min and
+  // Turn off, the only controls that act on the timer. It goes when the
+  // fade does.
+  void sleepFading();
   // The Library browses `index` instead of the card's (console uil<n>: a
   // synthetic library, to see the lists at scale; nullptr: the card's). Its
   // pages start over; its actions are refused (its ids aren't the player's).
@@ -155,13 +160,21 @@ public:
   void toast(const char* text, bool undo, uint32_t viewKey = QueueModel::kNone);
   // A note in amber (a track skipped, no card yet).
   void warn(const char* text);
+  // A plain toast that stays `ms` (the next boot's "Turned off after 20
+  // minutes idle").
+  void note(const char* text, uint32_t ms);
   // `primary`: the row that is the main choice (-1 none); `danger`: the
   // row in red (-1 none).
   void openSheet(OverlayOwner* owner, const char* title, const char* const* rows, int n,
                  const char* const* details = nullptr, int primary = -1, int danger = -1);
+  // The sheet just opened shows the sleep timer's state as row `row`'s
+  // detail ("23 min", "Fading", "Off"): it follows the timer while it is up.
+  void sheetFollowsSleep(int row);
   // An output's volume, as a sheet: -1 the active one (Now Playing's
   // volume button), 0 the speaker's, 1 the headphones' (the Output cards).
   void openVolume(int output = -1);
+  // The sleep timer's choices (Now Playing's "..." > Sleep timer).
+  void openSleepSheet();
   // `danger`: the primary button is red (Clear queue).
   void openDialog(OverlayOwner* owner, const char* title, const char* body, const char* const* buttons, int n,
                   bool danger = false);
@@ -181,7 +194,7 @@ public:
   void drawHeader(const Header& h);
 
 private:
-  enum class TouchOn : uint8_t { None, Bar, Toast, Sheet, Volume, Jump, Dialog, Coach, Page };
+  enum class TouchOn : uint8_t { None, Bar, Toast, Sheet, Volume, Jump, Dialog, Coach, Page, Sleep };
 
   Page* pageFor(uint8_t kind);
   void showTop();
@@ -207,7 +220,14 @@ private:
   tabbar::State tabState(uint32_t nowMs) const;
   void onDialog(int button) override;
   void trackMotion(uint32_t nowMs);
-  bool modalUp() const { return sheet_.up() || dialog_.up() || volumeSheet_.up() || jumpGrid_.up() || coach_.up(); }
+  bool modalUp() const {
+    return sheet_.up() || dialog_.up() || volumeSheet_.up() || jumpGrid_.up() || coach_.up() || sleepSheet_.up();
+  }
+  // The sleep timer's sheet: its state as the snapshot has it.
+  void refreshSleepSheet();
+  // The "..." sheet's row that shows the timer's state (-1 none).
+  int sheetSleepRow_ = -1;
+  void sleepTitle(char* buf, size_t size) const;
   void coachDone();
   void updateLostDialog();
   // A play that waited for the headphones failed (PlayGate): "Couldn't
@@ -236,6 +256,7 @@ private:
   Toast toast_;
   Hud hud_;
   Sheet sheet_;
+  SleepSheet sleepSheet_;
   VolumeSheet volumeSheet_;
   JumpGrid jumpGrid_;
   Dialog dialog_;

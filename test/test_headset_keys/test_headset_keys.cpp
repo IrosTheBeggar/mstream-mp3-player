@@ -179,6 +179,60 @@ void test_no_key_sequence_starts_music_that_was_not_playing() {
   }
 }
 
+// The sleep timer's pause: the headphones' Play (in-ear detection as a
+// sleeper turns over) doesn't resume it; the Core2's own play does, and
+// clears the mark. Their Next/Prev still only select.
+void test_play_does_not_resume_a_sleep_timer_pause() {
+  TEST_ASSERT_EQUAL(Action::Ignore, HeadsetKeys::decide(PlayState::Paused, Key::Play, true));
+  TEST_ASSERT_EQUAL(Action::Resume, HeadsetKeys::decide(PlayState::Paused, Key::Play, false));
+  TEST_ASSERT_EQUAL(Action::Cue, HeadsetKeys::decide(PlayState::Paused, Key::Next, true));
+  Rig r(3);
+  r.player.play(0);
+  r.player.pauseByTimer();
+  for (int i = 0; i < 5; ++i) {
+    TEST_ASSERT_EQUAL(Action::Ignore, HeadsetKeys::apply(r.player, Key::Play));
+    TEST_ASSERT_FALSE(audible(r.audio));
+  }
+  TEST_ASSERT_EQUAL(Action::Cue, HeadsetKeys::apply(r.player, Key::Next));
+  TEST_ASSERT_EQUAL(Action::Ignore, HeadsetKeys::apply(r.player, Key::Play));
+  TEST_ASSERT_FALSE(audible(r.audio));
+  r.player.togglePlayPause();  // the Core2's play button
+  TEST_ASSERT_TRUE(audible(r.audio));
+  TEST_ASSERT_EQUAL(Action::Pause, HeadsetKeys::apply(r.player, Key::Pause));
+  TEST_ASSERT_EQUAL(Action::Resume, HeadsetKeys::apply(r.player, Key::Play));  // their own pause
+}
+
+// Which keys are someone's input for the idle power-off: only a key that
+// acted. In-ear detection's PLAY and PAUSE while paused (by the timer or
+// not) do nothing and don't count, so a sleeper's buds can't keep the
+// device on all night; after the timer's pause a cue doesn't count either.
+void test_only_a_key_that_acts_is_idle_input() {
+  TEST_ASSERT_TRUE(HeadsetKeys::isInput(Action::Pause, false));
+  TEST_ASSERT_TRUE(HeadsetKeys::isInput(Action::Resume, false));
+  TEST_ASSERT_TRUE(HeadsetKeys::isInput(Action::Skip, false));
+  TEST_ASSERT_TRUE(HeadsetKeys::isInput(Action::Cue, false));
+  TEST_ASSERT_FALSE(HeadsetKeys::isInput(Action::Cue, true));
+  TEST_ASSERT_FALSE(HeadsetKeys::isInput(Action::Ignore, false));
+  TEST_ASSERT_FALSE(HeadsetKeys::isInput(Action::Ignore, true));
+  // As main.cpp feeds it: the mark read before the key.
+  Rig r(3);
+  r.player.play(0);
+  bool byTimer = r.player.pausedByTimer();
+  TEST_ASSERT_TRUE(HeadsetKeys::isInput(HeadsetKeys::apply(r.player, Key::Pause), byTimer));  // it paused
+  for (int i = 0; i < 3; ++i) {
+    byTimer = r.player.pausedByTimer();
+    TEST_ASSERT_FALSE(HeadsetKeys::isInput(HeadsetKeys::apply(r.player, Key::Pause), byTimer));  // already paused
+  }
+  r.player.togglePlayPause();
+  r.player.pauseByTimer();
+  for (Key k : {Key::Play, Key::Pause, Key::Next, Key::Prev}) {
+    byTimer = r.player.pausedByTimer();
+    TEST_ASSERT_TRUE(byTimer);
+    TEST_ASSERT_FALSE(HeadsetKeys::isInput(HeadsetKeys::apply(r.player, k), byTimer));
+    TEST_ASSERT_FALSE(audible(r.audio));
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_rule);
@@ -187,5 +241,7 @@ int main(int, char**) {
   RUN_TEST(test_play_and_pause_are_commands_not_toggles);
   RUN_TEST(test_next_and_prev_while_playing_skip);
   RUN_TEST(test_no_key_sequence_starts_music_that_was_not_playing);
+  RUN_TEST(test_play_does_not_resume_a_sleep_timer_pause);
+  RUN_TEST(test_only_a_key_that_acts_is_idle_input);
   return UNITY_END();
 }

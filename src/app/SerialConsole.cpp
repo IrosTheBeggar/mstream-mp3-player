@@ -2,9 +2,11 @@
 
 #include <Arduino.h>
 
-void SerialConsole::poll() {
+bool SerialConsole::poll() {
+  bool any = false;
   while (Serial.available() > 0) {
     const char c = static_cast<char>(Serial.read());
+    any = true;
     if (pending_ != Pending::None) {
       if (c != '\n' && c != '\r') {  // collect the argument up to Enter
         arg_ += c;
@@ -97,6 +99,14 @@ void SerialConsole::poll() {
           Serial.printf("> power \"%s\"\n", arg_.c_str());
           if (actions_.power) actions_.power(arg_.c_str());
           break;
+        case Pending::Sleep:
+          Serial.printf("> sleep timer \"%s\"\n", arg_.c_str());
+          if (actions_.sleep) actions_.sleep(arg_.c_str());
+          break;
+        case Pending::Idle:
+          Serial.printf("> idle power-off \"%s\"\n", arg_.c_str());
+          if (actions_.idle) actions_.idle(arg_.c_str());
+          break;
         case Pending::None:
           break;
       }
@@ -133,7 +143,10 @@ void SerialConsole::poll() {
       case 'q': pending_ = Pending::Queue; arg_ = ""; break;
       case 'a': pending_ = Pending::Touch; arg_ = ""; break;
       case 'P': pending_ = Pending::Power; arg_ = ""; break;
+      case 'T': pending_ = Pending::Sleep; arg_ = ""; break;
+      case 'I': pending_ = Pending::Idle; arg_ = ""; break;
       default: break;  // newlines etc.
     }
   }
+  return any;
 }

@@ -90,6 +90,12 @@ void TabBar::drawCell(int t, const tabbar::State& s) {
   switch (tab) {
     case NavModel::Tab::NowPlaying:
       drawNowPlaying(c, cx, iconTop, s, active);
+      if (s.sleep != tabbar::Sleep::None) {
+        // The sleep timer's moon in the cell's top-right corner (amber
+        // while it fades), drawn like the Queue's badge: no animation.
+        icons::drawMoon(c, cx + tabbar::kMoonRight - tabbar::kMoonPx, 4, tabbar::kMoonPx,
+                        s.sleep == tabbar::Sleep::Fading ? col::AMBER : col::SOFT);
+      }
       break;
     case NavModel::Tab::Library:
       icons::drawCentred(c, icons::kLibrary, cx, iconTop + 8, ink);

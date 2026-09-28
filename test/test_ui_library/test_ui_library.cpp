@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "IdlePolicy.h"
 #include "JumpIndex.h"
 #include "LibraryIndex.h"
 #include "LibrarySynth.h"
@@ -20,6 +21,7 @@
 #include "OutputModel.h"
 #include "QueueView.h"
 #include "ScreenPower.h"
+#include "SleepTimer.h"
 #include "TabBarModel.h"
 #include "TextFold.h"
 #include "UiText.h"
@@ -495,6 +497,145 @@ void test_waiting_texts_fit() {
   TEST_ASSERT_TRUE(12 + small.width("88:88") + 4 <= 160 - kNowPlayingMidW / 2);
 }
 
+// The sleep timer (ENERGY.md section 3): the "..." row and its state, the
+// sheet's pills, the fade's toast, and the moon's text on Now Playing's
+// progress line.
+void test_sleep_timer_texts_fit() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
+  // The "..." sheet's row (Body from x 16), its state right-aligned (Small)
+  // in what the label leaves (Sheet::render: 16 px each side and between).
+  const int stateRoom = 320 - 16 - (16 + body.width(kSleepRow) + 16);
+  for (const char* t : {"Off", "90 min", "59 s", "End of track", "End of album", "End of queue", "Fading"}) {
+    fits(small, t, stateRoom);
+  }
+  // The sheet's title (Small), left of its close pill: "Sleep timer: " and
+  // SleepTimer::titleText(), lower case after the colon (as the toasts), in
+  // every state: off, each end-of choice, the longest counts, fading.
+  {
+    std::vector<std::string> titles;
+    auto add = [&](const SleepTimer& t, uint32_t now) {
+      char buf[24];
+      t.titleText(now, buf, sizeof(buf));
+      titles.push_back(std::string(kSleepRow) + ": " + buf);
+    };
+    SleepTimer t;
+    add(t, 0);
+    for (SleepTimer::Choice c : {SleepTimer::Choice::EndOfTrack, SleepTimer::Choice::EndOfAlbum,
+                                 SleepTimer::Choice::EndOfQueue}) {
+      t.setEnd(c);
+      add(t, 0);
+    }
+    t.setTimed(90 * 60000, 0);
+    t.extend(0, 0);  // 100 min left
+    add(t, 0);
+    add(t, 100 * 60000 - 59000);  // 59 s
+    for (const std::string& s : titles) {
+      fits(small, s.c_str(), kSleepTitleW);
+      TEST_ASSERT_NULL(strstr(s.c_str(), ": End"));  // no capital after the colon
+    }
+    TEST_ASSERT_EQUAL_STRING("Sleep timer: end of album", titles[2].c_str());
+    TEST_ASSERT_EQUAL_STRING("Sleep timer: 100 min left", titles[4].c_str());
+    fits(small, "Sleep timer: fading", kSleepTitleW);
+  }
+  // The pills: each label in its pill less the pad; the rows inside the
+  // screen with gaps between the pills.
+  for (int i = 0; i < 5; ++i) {
+    fits(body, kSleepMinutes[i], kSleepMinW[i] - kSleepPillPad);
+    if (i > 0) TEST_ASSERT_TRUE(kSleepMinX[i - 1] + kSleepMinW[i - 1] < kSleepMinX[i]);
+  }
+  TEST_ASSERT_TRUE(kSleepMinX[4] + kSleepMinW[4] <= 312);
+  for (int i = 0; i < 3; ++i) {
+    TEST_ASSERT_TRUE(body.width(kSleepEnds[1]) > kSleepEndW[1] - kSleepPillPad);  // why they are in Small
+    fits(small, kSleepEnds[i], kSleepEndW[i] - kSleepPillPad);
+    if (i > 0) TEST_ASSERT_TRUE(kSleepEndX[i - 1] + kSleepEndW[i - 1] < kSleepEndX[i]);
+  }
+  TEST_ASSERT_TRUE(kSleepEndX[2] + kSleepEndW[2] <= 312);
+  fits(body, kSleepExtend, kSleepExtendW - kSleepPillPad);
+  fits(body, kSleepTurnOff, kSleepOffW - kSleepPillPad);
+  TEST_ASSERT_TRUE(kSleepExtendX + kSleepExtendW < kSleepOffX && kSleepOffX + kSleepOffW <= 312);
+  fits(small, kSleepHint, kSleepHintW);
+  // The fade's toast: its line (Small) before +10 min, the two buttons (Body).
+  fits(small, kSleepFading, kSleepToastPlusX - 6 - kToastTextX);
+  fits(body, kSleepExtend, kSleepToastPlusW - kSleepToastPad);
+  fits(body, kSleepTurnOff, kSleepToastOffW - kSleepToastPad);
+  TEST_ASSERT_TRUE(kSleepToastPlusX + kSleepToastPlusW < kSleepToastOffX && kSleepToastOffX + kSleepToastOffW <= 312);
+  // The toasts a choice gives (one line, no buttons).
+  for (const char* t : {"Sleep timer: 90 min", "Sleep timer: end of album", "Sleep timer: end of queue",
+                        "Sleep timer off", "Sleep timer: 100 min left", "Sleep timer: 59 s left"}) {
+    fits(body, t, kToastTextRight - kToastTextX);
+  }
+  // Now Playing's progress line: the moon and its text alone always fit,
+  // and after "4 of 16 · Speaker" (a long headphone name leaves it alone).
+  for (const char* t : {"90 min", "59 s", "track", "album", "queue", "fading"}) {
+    fits(small, t, kNowPlayingMidW - kSleepMoonW);
+  }
+  fits(small, "4 of 16 · Speaker", kNowPlayingMidW - kSleepGap - kSleepMoonW - small.width("23 min"));
+  // What gives way when the line and the moon don't both fit
+  // (sleepLineFit()): the output's name first, so the queue position stays.
+  using Text = SleepLine::Text;
+  const int moon23 = kSleepMoonW + small.width("23 min");
+  const int moon90 = kSleepMoonW + small.width("90 min");
+  SleepLine f = sleepLineFit(small.width("4 of 16 · Speaker"), small.width("4 of 16"), -1, moon23, kNowPlayingMidW);
+  TEST_ASSERT_EQUAL(Text::Full, f.text);
+  f = sleepLineFit(small.width("4 of 16 · SPYDRONE"), small.width("4 of 16"), -1, moon23, kNowPlayingMidW);
+  TEST_ASSERT_EQUAL(Text::Base, f.text);  // "4 of 16" and the moon, not the moon alone
+  TEST_ASSERT_TRUE(f.moon && f.moonText);
+  TEST_ASSERT_TRUE(f.width <= kNowPlayingMidW);
+  // Paused, with a long queue: the position still shows beside the moon.
+  for (const char* base : {"Paused, 12 of 160", "Paused, 160 of 160", "Stopped, 99 of 999"}) {
+    const std::string full = std::string(base) + " · SPYDRONE";
+    f = sleepLineFit(small.width(full.c_str()), small.width(base), -1, moon90, kNowPlayingMidW);
+    TEST_ASSERT_EQUAL(Text::Base, f.text);
+    TEST_ASSERT_TRUE(f.width <= kNowPlayingMidW);
+  }
+  // The headphones not connected (the drop during the countdown pauses):
+  // the amber warning never gives way to the timer, whatever the name.
+  for (const char* warn : {"SPYDRONE (not connected)", "Headphones (not connected)",
+                           "WH-1000XM4 Long Name (not connected)"}) {
+    for (int moonText : {kSleepMoonW + small.width("45 s"), moon90, kSleepMoonW + small.width("fading")}) {
+      f = sleepLineFit(small.width(warn), small.width("Paused, 4 of 16"), small.width(warn), moonText, kNowPlayingMidW);
+      TEST_ASSERT_TRUE(f.text == Text::Warn || f.text == Text::Full);
+      TEST_ASSERT_TRUE(f.width <= kNowPlayingMidW || !f.moon);
+    }
+  }
+  // "SPYDRONE (not connected)" (Small, 177 px measured: the room less the
+  // moon is 171): the warning alone, the timer on the tab bar's badge.
+  f = sleepLineFit(small.width("SPYDRONE (not connected)"), small.width("Paused, 4 of 16"),
+                   small.width("SPYDRONE (not connected)"), moon23, kNowPlayingMidW);
+  TEST_ASSERT_EQUAL(Text::Warn, f.text);
+  TEST_ASSERT_TRUE(f.width <= kNowPlayingMidW);
+  // A short name keeps the moon (and its text) beside the warning.
+  f = sleepLineFit(small.width("Buds (not connected)"), small.width("Paused, 4 of 16"),
+                   small.width("Buds (not connected)"), moon23, kNowPlayingMidW);
+  TEST_ASSERT_EQUAL(Text::Warn, f.text);
+  TEST_ASSERT_TRUE(f.moon);
+  (void)bold;
+}
+
+// The idle power-off (IdlePolicy; ENERGY.md item 4): the setting's row
+// (as the screen's), the warning toast and its button, and the next boot's
+// toast for every length.
+void test_idle_power_off_texts_fit() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  for (int c = 0; c < IdlePolicy::kChoices; ++c) fits(body, IdlePolicy::choiceLabel(c), kSettingPillW - kSettingPillPad);
+  fits(body, kIdleOffTitle, kSettingValueSubW);
+  fits(small, kIdleOffSub, kSettingValueSubW);
+  fits(small, kIdleNeverSub, kSettingValueSubW);
+  // The warning: its longest count, then [Keep on] to the edge.
+  char t[48];
+  IdlePolicy::warnText(30, t, sizeof(t));
+  fits(body, t, kIdleToastKeepX - 6 - kToastTextX);
+  fits(body, kIdleKeepOn, kIdleToastKeepW - kIdleToastPad);
+  TEST_ASSERT_TRUE(kIdleToastKeepX + kIdleToastKeepW <= 312);
+  // The next boot's toast: each setting, and the console's test lengths.
+  for (uint32_t ms : {10u * 60000u, 20u * 60000u, 60u * 60000u, 60000u, 59000u, 90u * 60000u}) {
+    IdlePolicy::offText(ms, t, sizeof(t));
+    fits(body, t, kToastTextRight - kToastTextX);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_jump_letters_match_the_index_buckets);
@@ -511,5 +652,7 @@ int main(int, char**) {
   RUN_TEST(test_queue_texts_fit);
   RUN_TEST(test_output_texts_fit);
   RUN_TEST(test_waiting_texts_fit);
+  RUN_TEST(test_sleep_timer_texts_fit);
+  RUN_TEST(test_idle_power_off_texts_fit);
   return UNITY_END();
 }

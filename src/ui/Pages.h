@@ -56,8 +56,12 @@ struct Header {
 // artist and album bands give way to "Waiting for SPYDRONE... try 2 of 3"
 // with [Play on speaker] (the explicit choice) and [Cancel].
 //
-// The volume zone opens the volume sheet; "..." the sheet with Go to
-// artist, Go to album, Show in folders. Only what changed is redrawn: the
+// The volume zone opens the volume sheet; "..." the sheet with Sleep timer
+// (its state on the right: "Off", "23 min", "End of track"; a tap opens the
+// Sleep timer sheet), Go to artist, Go to album, Show in folders. While a
+// sleep timer runs, the progress line has a moon and "23 min" ("track",
+// "fading"; seconds in the last minute) after "4 of 16 · SPYDRONE", or in
+// its place when both don't fit. Only what changed is redrawn: the
 // cover when the album changes or its thumbnail arrives, the text when the
 // track does, the times once a second, the transport on a state change.
 // Nothing queued: "Nothing playing" with Open Library and Shuffle all (or,
@@ -123,6 +127,7 @@ private:
     bool noCard = false;
     bool waiting = false;     // the waiting panel is what's drawn
     uint32_t waitSig = 0;     // waitSig()
+    uint32_t sleep = 0;       // the sleep timer's text on the progress line (a hash)
   } drawn_;
   Zone pressed_ = None;
   uint8_t spin_ = 0;          // the waiting spinner's step (8 a turn)
@@ -396,7 +401,8 @@ private:
 //   line out: the 3.5 mm / RCA module's place (not fitted yet)
 //   + Pair new headphones  >  the Pair screen
 //   Haptics (on / off), Screen off after (15 s ... Never), Brightness
-//   (Low ... Max), Touch calibration >, About >
+//   (Low ... Max), Turn off when idle (10 min ... Never), Touch
+//   calibration >, About >
 // Pair (mockup 21): "Searching", the audio devices found (their kind and a
 // signal of 4 bars); a tap pairs (after a confirmation when it replaces
 // the remembered headphones), and the card shows how it goes.
@@ -440,6 +446,7 @@ private:
     Haptics,
     ScreenOff,
     Brightness,
+    IdleOff,
     Calibrate,
     AboutRow,
     kRootRows
@@ -454,7 +461,9 @@ private:
   // "Screen off after" and "Brightness": the title, its line, and the
   // value in a pill at the right; a tap takes the next choice.
   void drawScreenSetting(ListView::Row& r, bool brightness);
-  static uint8_t screenSig(const AppState& s);
+  // "Turn off when idle" (IdlePolicy's choices, saved), the same way.
+  void drawIdleSetting(ListView::Row& r);
+  static uint16_t screenSig(const AppState& s);
   void drawDevice(ListView::Row& r, const BtDevice& d);
   void drawPairStatus(ListView::Row& r);
   void drawAbout(ListView::Row& r);
@@ -476,7 +485,7 @@ private:
   ConfirmTap forget_;
   uint32_t drawnBt_ = 0, drawnSpeaker_ = 0;
   bool drawnHaptics_ = false;
-  uint8_t drawnScreen_ = 0xFF;  // the screen settings drawn (timeout * 16 + brightness)
+  uint16_t drawnScreen_ = 0xFFFF;  // the screen and idle settings drawn (screenSig())
   uint32_t nextSpinMs_ = 0;
   uint8_t spin_ = 0;  // the spinner's step (8 a turn)
   // Pair: the scan's list as last copied, and the device picked.

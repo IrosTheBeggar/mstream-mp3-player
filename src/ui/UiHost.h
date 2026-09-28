@@ -63,6 +63,26 @@ struct AppState {
   // "Brightness"), for the Output tab's rows.
   uint8_t screenTimeout = 1;
   uint8_t brightness = 1;
+  // The sleep timer (SleepTimer; ENERGY.md section 3): running (counting,
+  // armed for an end, or fading), fading, the sheet's outlined choice
+  // (SleepSheet's 0-7, -1 none), the "..." row's state ("Off", "23 min",
+  // "End of track"), the Sleep timer sheet's title after "Sleep timer: "
+  // ("23 min left", "end of track", "fading", "off"), and the moon's text
+  // on Now Playing ("23 min", "track", "fading"; "" when it doesn't run).
+  // `sleepCanExtend`: +10 min would do something (SleepTimer::canExtend():
+  // not on End of album / queue before its last track).
+  bool sleepRunning = false;
+  bool sleepFading = false;
+  bool sleepCanExtend = false;
+  int8_t sleepPick = -1;
+  char sleepRow[16] = "Off";
+  char sleepTitle[24] = "off";
+  char sleepShort[12] = "";
+  // The idle power-off (IdlePolicy; ENERGY.md item 4): the setting ("Turn
+  // off when idle": its choice), and while it warns (its last 30 s), the
+  // seconds left (0: no warning).
+  uint8_t idleOff = 1;
+  uint8_t idleWarnS = 0;
 };
 
 // About (the Output tab): what the device is and has.
@@ -138,6 +158,24 @@ public:
   // track that failed): the screen lights if it was dim or off, and the
   // countdown starts again. `why` is logged.
   virtual void wakeScreen(const char* why) = 0;
+
+  // ---- the sleep timer (SleepTimer) ----
+  // A choice on the Sleep timer sheet or the fade's toast: SleepSheet's
+  // 0-4 (15-90 min: restarts from now), kTrack, kAlbum, kQueue, kExtend
+  // (+10 min), kTurnOff.
+  virtual void sleepChoose(int pick) = 0;
+
+  // ---- the idle power-off (IdlePolicy; saved) ----
+  // "Turn off when idle": IdlePolicy's choice index.
+  virtual void setIdleOff(int choice) = 0;
+  // The warning's Keep on (any touch keeps it on as well: logged).
+  virtual void idleKeepOn() = 0;
+
+  // ---- the screen's pocket rule (ScreenPower) ----
+  // The touch on the glass now landed on a screen woken from off that
+  // nobody had looked at yet (maybe a pocket's second contact): the fade
+  // toast's +10 min and Turn off don't act on it (they raise the level).
+  virtual bool touchLandedUnattended() const = 0;
 
 protected:
   ~UiHost() = default;

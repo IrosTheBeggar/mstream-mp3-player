@@ -11,7 +11,10 @@ uint8_t dirty(const State& a, const State& b) {
   // The active tab moving redraws the old and the new cell (plate, label, colour).
   if (a.active != b.active) d |= static_cast<uint8_t>((1u << a.active) | (1u << b.active));
   const bool eqMoves = b.play == Play::Playing && a.eqStep != b.eqStep;
-  if (a.play != b.play || eqMoves || a.progressPx != b.progressPx || a.progressKnown != b.progressKnown) d |= 1u << 0;
+  if (a.play != b.play || eqMoves || a.progressPx != b.progressPx || a.progressKnown != b.progressKnown ||
+      a.sleep != b.sleep) {
+    d |= 1u << 0;
+  }
   if (a.upNext != b.upNext || a.badgeFlash != b.badgeFlash) d |= 1u << 2;
   if (a.output != b.output || a.volume != b.volume || a.battery != b.battery || a.charging != b.charging ||
       a.lowBlink != b.lowBlink) {
