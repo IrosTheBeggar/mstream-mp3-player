@@ -3,6 +3,8 @@
 // Run: pio test -e native
 #include <unity.h>
 
+#include <initializer_list>
+
 #include "PowerWindow.h"
 
 void setUp() {}
@@ -133,6 +135,92 @@ void test_adc_rate_and_coulombs() {
   TEST_ASSERT_FLOAT_WITHIN(1e-9, 0.0, power::coulombMah(5, 0));
 }
 
+// Pl's first window: the console command starts it from its own millis(),
+// read after the loop took the `now` it then passes to the probe. The
+// window's start is a moment ahead of that `now`: it hasn't begun, and
+// isn't 2^32 ms old (it printed "4294967.5 s: no samples" at once).
+void test_a_window_started_ahead_of_now_has_not_begun() {
+  power::Window w;
+  w.reset(10005);
+  TEST_ASSERT_EQUAL_UINT32(0, w.elapsedMs(10000));
+  TEST_ASSERT_FALSE(w.over(10000, 5000));
+  TEST_ASSERT_EQUAL_UINT32(0, w.elapsedMs(10005));
+  TEST_ASSERT_FALSE(w.over(15004, 5000));
+  TEST_ASSERT_TRUE(w.over(15005, 5000));
+  TEST_ASSERT_EQUAL_UINT32(5000, w.elapsedMs(15005));
+  // Across millis()' wraparound.
+  w.reset(0xFFFFF000u);
+  TEST_ASSERT_EQUAL_UINT32(0, w.elapsedMs(0xFFFFEFF0u));
+  TEST_ASSERT_EQUAL_UINT32(0x2000u, w.elapsedMs(0x00001000u));
+  TEST_ASSERT_TRUE(w.over(0x00001000u, 5000));
+}
+
+namespace {
+power::Sample usb(float ma) {
+  power::Sample s;
+  s.acinV = 5.13f;
+  s.acinMa = ma;
+  s.status = 0x80;  // ACIN present
+  return s;
+}
+}  // namespace
+
+// A single sample of 0-15 mA on USB between normal ones is the chip's
+// glitch: left out of the mean, min and max, and counted.
+void test_a_single_acin_glitch_is_left_out() {
+  power::Window w;
+  w.reset(0);
+  for (float ma : {50.0f, 52.0f, 3.1f, 49.0f, 51.0f}) w.add(usb(ma));
+  TEST_ASSERT_EQUAL_UINT32(4, w.count());
+  TEST_ASSERT_EQUAL_UINT32(1, w.glitches());
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 49.0f, w.inMa().min);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 52.0f, w.inMa().max);
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 50.5f, w.inMa().mean);
+}
+
+// A drop that lasts is real (the device did draw less, or USB went): both
+// samples count, nothing is called a glitch.
+void test_a_drop_that_lasts_is_kept() {
+  power::Window w;
+  w.reset(0);
+  for (float ma : {50.0f, 10.0f, 12.0f, 11.0f}) w.add(usb(ma));
+  TEST_ASSERT_EQUAL_UINT32(0, w.glitches());
+  TEST_ASSERT_EQUAL_UINT32(4, w.count());
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 10.0f, w.inMa().min);
+  // On battery (no supply) a low reading is the normal case: never held.
+  power::Window b;
+  b.reset(0);
+  power::Sample s;
+  s.acinMa = 0.0f;
+  b.add(usb(50.0f));
+  b.add(s);
+  b.add(usb(50.0f));
+  TEST_ASSERT_EQUAL_UINT32(3, b.count());
+  TEST_ASSERT_EQUAL_UINT32(0, b.glitches());
+}
+
+// A sample held at the end of a window is decided by the next window's
+// first: a glitch then, left out of both.
+void test_a_glitch_held_across_windows() {
+  power::Window w;
+  w.reset(0);
+  w.add(usb(50.0f));
+  w.add(usb(2.0f));  // held
+  TEST_ASSERT_EQUAL_UINT32(1, w.count());
+  w.reset(5000);
+  w.add(usb(51.0f));
+  TEST_ASSERT_EQUAL_UINT32(1, w.count());
+  TEST_ASSERT_EQUAL_UINT32(1, w.glitches());
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 51.0f, w.inMa().min);
+  // ... and a real drop held there counts in the new one.
+  w.add(usb(1.0f));  // held
+  w.reset(10000);
+  w.add(usb(1.5f));
+  TEST_ASSERT_EQUAL_UINT32(2, w.count());
+  TEST_ASSERT_EQUAL_UINT32(0, w.glitches());
+  TEST_ASSERT_FLOAT_WITHIN(0.001f, 1.0f, w.inMa().min);
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_decode_scales_every_register);
@@ -140,5 +228,9 @@ int main() {
   RUN_TEST(test_decode_full_scale);
   RUN_TEST(test_window_mean_min_max);
   RUN_TEST(test_adc_rate_and_coulombs);
+  RUN_TEST(test_a_window_started_ahead_of_now_has_not_begun);
+  RUN_TEST(test_a_single_acin_glitch_is_left_out);
+  RUN_TEST(test_a_drop_that_lasts_is_kept);
+  RUN_TEST(test_a_glitch_held_across_windows);
   return UNITY_END();
 }

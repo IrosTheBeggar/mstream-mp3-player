@@ -36,6 +36,13 @@ bool begin();
 // Not kept between uses.
 M5Canvas& strip();
 
+// The screen is off (ScreenPower): nothing reaches the panel, every fill and
+// push is dropped. The UI draws it all again when it comes back
+// (Ui::setDark). Only the UI's own drawing is gated: a screen of its own
+// (the calibration, a spike tool) keeps it lit.
+void setDark(bool on);
+bool dark();
+
 // Rows [y0, y1) belong to an overlay: page drawing skips them. (0, 0): none.
 void setCover(int y0, int y1);
 bool covered(int y);

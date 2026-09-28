@@ -19,8 +19,21 @@ void AudioTap::startSegment(uint32_t tapStart, uint32_t trackStart, uint32_t epo
 void AudioTap::write(const int16_t* stereo, uint32_t frames, uint32_t realFrames, uint32_t epoch,
                      uint32_t trackFrame, uint32_t nowUs) {
   if (frames == 0) return;
+  if (!enabled_.load(std::memory_order_relaxed)) {
+    skipped_ = true;
+    return;
+  }
   if (realFrames > frames) realFrames = frames;
   const uint32_t c = count_.load(std::memory_order_relaxed);
+  if (skipped_) {
+    // Audio played that the tap doesn't have: close the real segment with
+    // an empty one of silence, so what comes next starts its own.
+    skipped_ = false;
+    if (real_) {
+      startSegment(c, kNoTrack, epoch_);
+      real_ = false;
+    }
+  }
   const bool any = segments_.load(std::memory_order_relaxed) > 0;
   if (realFrames > 0) {
     if (!real_ || epoch != epoch_ || trackFrame != nextTrack_) startSegment(c, trackFrame, epoch);

@@ -3,6 +3,7 @@
 
 #include "ButtonGesture.h"
 #include "InputEvent.h"
+#include "ScreenPower.h"
 #include "StripButtons.h"
 #include "TouchCalibration.h"
 #include "TouchRecognizer.h"
@@ -40,6 +41,16 @@
 // Nothing on scroll frames; the A-Z rail asks for a tick per new letter
 // (railTick()). Both can be turned off (saved).
 //
+// The screen's wake (docs/ENERGY.md item 2): a finger that lands while a
+// touch doesn't act (setLit(false): dim, off, or lit by an event nobody
+// has answered) only wakes it. The latch (WakeLatch) drops every event of
+// that touch, its lift included, and of any other finger until none has
+// been on for 400 ms; the recognisers keep following, so nothing fires
+// afterwards. takeWake() hands the wake to the screen policy. A finger
+// already resting as the screen dimmed is taken too (its touch ends with
+// a Cancel), but it isn't a wake. The scripted finger isn't a finger
+// here: it acts in the dark.
+//
 // Saved in NVS (namespace "input"): the touch calibration ("cal", the
 // TouchCalibration bytes; the default table when absent), "haptics" and
 // "railtick". Loop task only.
@@ -60,6 +71,24 @@ public:
   // the buttons, so a press that began before doesn't fire afterwards.
   void setSuspended(bool on) { suspended_ = on; }
   bool suspended() const { return suspended_; }
+  // Before update(), every pass: whether a touch acts now
+  // (ScreenPower::touchActs()). A finger landing while it doesn't is a wake.
+  void setLit(bool lit) { lit_ = lit; }
+  // A finger woke the screen in the last update(): where it landed (what
+  // the panel read), once. Its events, and every other finger's until all
+  // lift, are dropped.
+  bool takeWake(int* rawX, int* rawY);
+  // The wake's touch is still being swallowed.
+  bool swallowing() const { return latch_.holding(); }
+  // A finger that acts is on the panel (a real one not being swallowed, or
+  // the scripted finger) and has just landed or moved (FingerActivity: one
+  // resting still for 15 s stops counting): input for the screen's
+  // countdown.
+  bool touching() const { return touching_; }
+  // A touch landed on the glass in the last update() and acts (not a
+  // swallowed one, not a swipe from the strip): the listener is looking
+  // (ScreenPower::attend()).
+  bool glassLanded() const { return glassLanded_; }
   // A screen changed under the finger: the touch ends with a Cancel event,
   // and nothing more comes of it until it lifts.
   void cancelTouch(uint32_t nowMs);
@@ -132,6 +161,16 @@ private:
   uint8_t count_ = 0;
   uint32_t dropped_ = 0;
   bool suspended_ = false;
+  // The screen's wake: the latch, whether the screen is lit, this pass's
+  // drop (suspended, or the latch holding), and the wake to hand over.
+  WakeLatch latch_;
+  bool lit_ = true;
+  bool drop_ = false;
+  bool touching_ = false;
+  bool glassLanded_ = false;
+  FingerActivity still_;
+  bool woke_ = false;
+  int16_t wakeX_ = 0, wakeY_ = 0;
   bool hapticsOn_ = true;
   bool railTicks_ = true;
   bool holdUsed_ = false;

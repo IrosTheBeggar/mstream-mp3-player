@@ -30,6 +30,10 @@ inline constexpr const char* kCoachTabMore[3] = {"The Library goes back to its l
 // to the View icon's pill.
 inline constexpr int kToastTextX = 22;
 inline constexpr int kToastCompactTextRight = 238;
+inline constexpr int kToastTextRight = 306;  // a note (Ui::warn) on one line, no buttons
+// A B click refused by the pocket rule (the screen woke from off and
+// nothing touched the glass since; ScreenPower::unattended()).
+inline constexpr const char* kTouchFirst = "Tap the screen first, then B plays";
 
 // ---- the empty states (ui/EmptyState): two buttons ----
 // The primary (Bold, its icon 26 px + 8 before the text) and the second
@@ -82,6 +86,18 @@ inline constexpr int kBtButtons3X[3] = {16, 124, 192}, kBtButtons3W[3] = {100, 6
 inline constexpr int kBtButtonPad = 8;       // a label has the box less this
 inline constexpr int kBtWideButtonW = 200;   // narrower boxes take the short labels (btButtonLabel)
 inline constexpr int kBtChipTextX = 30;      // the volume chip: its % after the speaker icon
+// The resting card (the background search stopped): "Not connected" on the
+// status line, and these two lines (Small) beside its one button,
+// [Connect]: "Not connected. They'll reconnect when switched on."
+inline constexpr int kBtHintX = kBtButtons1X + kBtButtons1W + 12, kBtHintW = 320 - 8 - kBtHintX;
+inline constexpr const char* kBtHintLine1 = "They'll reconnect";
+inline constexpr const char* kBtHintLine2 = "when switched on.";
+// ... when they dropped while the output (BtCardView::lostHint): resting
+// only after the whole back-off (15 min), and they may be on and back in
+// range with their own reconnect given up. The lost dialog's line then.
+inline constexpr const char* kBtLostHintLine1 = "Back in range?";
+inline constexpr const char* kBtLostHintLine2 = "Tap Connect.";
+inline constexpr const char* kBtLostRestingLine = "Stopped looking for them: Play tries again";
 // The speaker card: its status line (Small), before the volume chip.
 inline constexpr int kSpeakerLineW = 160;
 inline constexpr int kSpeakerChipX = 218, kSpeakerChipW = 48;
@@ -90,9 +106,24 @@ inline constexpr const char* kForgetArmed = "Tap again";
 // The Pair screen's hint (Small, x 48 to 312).
 inline constexpr int kPairHintW = 264;
 inline constexpr const char* kPairHint = "Pairing mode on, then tap them.";
+// ... once its scan stopped by itself (2 min: OutputModel's PairSearch; or
+// the screen went off).
+inline constexpr const char* kPairSearchAgain = "Search again";
+inline constexpr const char* kPairSearchStopped = "Stopped, to save the battery.";
 // Settings rows: the line under a title with no chevron (Small).
 inline constexpr int kSettingSubW = 204;
 inline constexpr const char* kLineOutSub = "3.5 mm / RCA: not fitted yet";
+// Settings rows with a value (Screen off after, Brightness: ScreenPower's
+// choices): the value (Body) in a pill at the row's right (8 px from its
+// right end), the title and its line (Small) up to 8 px before the pill.
+inline constexpr int kSettingPillW = 76;
+inline constexpr int kSettingPillPad = 8;  // a value has the pill less this
+inline constexpr int kSettingValueSubW = 312 - 8 - kSettingPillW - 8 - 44;  // from x 44, the row's right 312
+inline constexpr const char* kScreenOffTitle = "Screen off after";
+inline constexpr const char* kScreenOffSub = "dims first; a tap wakes it";
+inline constexpr const char* kScreenNeverSub = "stays on: more battery";
+inline constexpr const char* kBrightnessTitle = "Brightness";
+inline constexpr const char* kBrightnessSub = "higher uses more battery";
 // About: a value (Body, or Small when Body doesn't fit).
 inline constexpr int kAboutValueW = 260;
 inline constexpr const char* kAboutMemory = "RAM %lu KB (low %lu), PSRAM %.1f MB";

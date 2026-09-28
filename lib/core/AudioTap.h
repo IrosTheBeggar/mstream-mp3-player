@@ -20,6 +20,13 @@
 // positionMs() is made of). The tap keeps that as segments: a new one
 // starts wherever the track position doesn't follow on (a skip, a pause,
 // an underrun, silence), so any recent tap frame can be placed in its track.
+//
+// It can be switched off (setEnabled(false), from any task): write() then
+// copies nothing and the count stands still. It is on only while the Dance
+// tab is up (ENERGY.md item 9). The first write after it is switched back
+// on never continues the segment from before: what played meanwhile isn't
+// in the tap, so the frames on either side aren't contiguous in time even
+// when the track position follows on.
 class AudioTap {
 public:
   static constexpr uint32_t kNoTrack = 0xFFFFFFFFu;  // a segment of silence or fade
@@ -34,9 +41,14 @@ public:
 
   AudioTap(int16_t* buffer, uint32_t capacityFrames);
 
+  // Any task. On from construction.
+  void setEnabled(bool on) { enabled_.store(on, std::memory_order_relaxed); }
+  bool enabled() const { return enabled_.load(std::memory_order_relaxed); }
+
   // ---- writer (one task) ----
   // `frames` interleaved stereo frames just played; the first `realFrames`
   // came from the ring, the first of them at `trackFrame` of epoch `epoch`.
+  // Nothing while switched off.
   void write(const int16_t* stereo, uint32_t frames, uint32_t realFrames, uint32_t epoch, uint32_t trackFrame,
              uint32_t nowUs);
 
@@ -69,8 +81,10 @@ private:
   std::atomic<uint32_t> seq_{0};
   std::atomic<uint32_t> segments_{0};  // started so far (free-running)
   Slot slots_[kSegments];
+  std::atomic<bool> enabled_{true};
 
   // Writer only.
+  bool skipped_ = false;       // a write was dropped while switched off
   bool real_ = false;          // the current segment is real audio
   uint32_t epoch_ = 0;
   uint32_t nextTrack_ = 0;     // track frame that would continue it

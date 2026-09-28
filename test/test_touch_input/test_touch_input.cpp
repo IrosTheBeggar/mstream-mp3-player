@@ -319,6 +319,8 @@ struct FakeTransport : ButtonPolicy::Transport {
   bool onBluetooth() const override { return bluetooth; }
   bool audioOnBluetooth() const override { return bluetooth && audioBt; }
   bool idle() const override { return empty; }
+  bool refuseStart = false;  // the screen's pocket rule (main: unattended, not on the headphones)
+  bool startRefused() const override { return refuseStart; }
   bool switchOutput() override {
     if (!allowSwitch) {
       log += "refused;";
@@ -356,6 +358,36 @@ void test_policy_clicks_are_transport() {
   TEST_ASSERT_FALSE(p.handle(tap, t));
   TEST_ASSERT_EQUAL_STRING("prev;playpause;next;", t.log.c_str());
   TEST_ASSERT_EQUAL_INT((int)ButtonPolicy::Hud::None, (int)p.feedback().kind);
+}
+
+// The pocket rule (ScreenPower::unattended(), the speaker the output): a B
+// click that would start playing is refused, the inert way (false: the
+// buzz); pausing, A and C, the volume and the B hold still act.
+void test_policy_refuses_a_start_while_unattended() {
+  ButtonPolicy p;
+  FakeTransport t;
+  using T = InputEvent::Type;
+  t.bluetooth = false;
+  t.isPlaying = false;
+  t.refuseStart = true;
+  TEST_ASSERT_FALSE(p.handle(button(T::Click, 1), t));
+  TEST_ASSERT_FALSE(t.isPlaying);
+  TEST_ASSERT_TRUE(p.handle(button(T::Click, 0), t));
+  TEST_ASSERT_TRUE(p.handle(button(T::Click, 2), t));
+  TEST_ASSERT_TRUE(p.handle(button(T::Hold, 2, 500), t));
+  TEST_ASSERT_EQUAL_STRING("prev;next;vol5;", t.log.c_str());
+  // Playing: B pauses, refused or not.
+  t.isPlaying = true;
+  TEST_ASSERT_TRUE(p.handle(button(T::Click, 1), t));
+  TEST_ASSERT_FALSE(t.isPlaying);
+  // The B hold still switches the output (to the headphones here).
+  TEST_ASSERT_TRUE(p.handle(button(T::Hold, 1, 900), t));
+  TEST_ASSERT_TRUE(t.bluetooth);
+  // Attended again: B plays.
+  t.refuseStart = false;
+  TEST_ASSERT_TRUE(p.handle(button(T::Click, 1), t));
+  TEST_ASSERT_TRUE(t.isPlaying);
+  TEST_ASSERT_EQUAL_STRING("prev;next;vol5;playpause;to-bt;playpause;", t.log.c_str());
 }
 
 void test_policy_holds_step_the_volume() {
@@ -1358,5 +1390,6 @@ int main(int, char**) {
   RUN_TEST(test_strip_swipe_after_a_hold_does_not_scroll);
   RUN_TEST(test_strip_swipes_in_the_bounce_window_scroll);
   RUN_TEST(test_kinetic_scroll_caps_flings);
+  RUN_TEST(test_policy_refuses_a_start_while_unattended);
   return UNITY_END();
 }

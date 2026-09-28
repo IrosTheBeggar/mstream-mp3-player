@@ -19,6 +19,7 @@
 #include "ListLayout.h"
 #include "OutputModel.h"
 #include "QueueView.h"
+#include "ScreenPower.h"
 #include "TabBarModel.h"
 #include "TextFold.h"
 #include "UiText.h"
@@ -365,7 +366,7 @@ void test_output_texts_fit() {
   using namespace uitext;
   using P = BtLink::Phase;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  const P phases[] = {P::Off, P::Paging, P::Scanning, P::Linked, P::PairScan, P::Pairing};
+  const P phases[] = {P::Off, P::Paging, P::Scanning, P::Linked, P::PairScan, P::Pairing, P::Backoff, P::Resting};
   int cards = 0;
   for (int sess = 0; sess < 5; ++sess) {
     for (P phase : phases) {
@@ -409,6 +410,12 @@ void test_output_texts_fit() {
           char line[80];
           btStatusLine(v, link, "SPYDRONE", "SBC 44.1 kHz, 175 ms", line, sizeof(line));
           fits(small, line, kBtStatusW);
+          if (v.hint) {
+            // Resting: its two lines beside the one button, right of it.
+            TEST_ASSERT_EQUAL_INT(1, n);
+            fits(small, kBtHintLine1, kBtHintW);
+            fits(small, kBtHintLine2, kBtHintW);
+          }
         }
       }
     }
@@ -424,7 +431,31 @@ void test_output_texts_fit() {
   fits(body, "100%", kSpeakerChipW - 2);
   TEST_ASSERT_TRUE(52 + kSpeakerLineW <= kSpeakerChipX);
   fits(small, kPairHint, kPairHintW);
+  // The resting card's hint starts past its button and ends before the edge.
+  TEST_ASSERT_TRUE(kBtHintX >= kBtButtons1X + kBtButtons1W + 8);
+  TEST_ASSERT_TRUE(kBtHintX + kBtHintW <= 320 - 8);
+  // The lost dialog's line while resting (Small over the dialog's 288 px).
+  fits(small, kBtLostRestingLine, 320 - 32);
+  // The resting card's hint when they dropped while the output.
+  fits(small, kBtLostHintLine1, kBtHintW);
+  fits(small, kBtLostHintLine2, kBtHintW);
+  // The pocket rule's note (Ui::warn: Body on one line, no buttons).
+  fits(body, kTouchFirst, kToastTextRight - kToastTextX);
+  // The Pair screen once its search stopped.
+  fits(bold, kPairSearchAgain, 320 - 60);
+  fits(small, kPairSearchStopped, kPairHintW);
   fits(small, kLineOutSub, kSettingSubW);
+  // The screen settings: every choice in its pill, the lines beside it.
+  for (int c = 0; c < ScreenPower::kTimeouts; ++c) fits(body, ScreenPower::timeoutLabel(c), kSettingPillW - kSettingPillPad);
+  for (int c = 0; c < ScreenPower::kBrightnesses; ++c) {
+    fits(body, ScreenPower::brightnessLabel(c), kSettingPillW - kSettingPillPad);
+  }
+  fits(body, kScreenOffTitle, kSettingValueSubW);
+  fits(body, kBrightnessTitle, kSettingValueSubW);
+  fits(small, kScreenOffSub, kSettingValueSubW);
+  fits(small, kScreenNeverSub, kSettingValueSubW);
+  fits(small, kBrightnessSub, kSettingValueSubW);
+  TEST_ASSERT_TRUE(kSettingValueSubW > 100);
   // About: a long value falls back to Small, which fits.
   char v[80];
   snprintf(v, sizeof(v), kAboutMemory, 263ul, 158ul, 3.2f);

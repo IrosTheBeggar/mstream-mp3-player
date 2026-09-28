@@ -476,6 +476,27 @@ void test_tabbar_redraws_only_what_changed() {
   TEST_ASSERT_EQUAL_UINT8(1u << 4, tabbar::dirty(a, b));
 }
 
+// The Output icon: amber only while something is on its way; resting
+// (nothing looks for them, they come back by themselves) is the plain icon.
+void test_tabbar_output_state() {
+  using O = tabbar::Output;
+  // outputFor(onBluetooth, connected, lost, asked, failed, looking)
+  TEST_ASSERT_EQUAL(O::Speaker, tabbar::outputFor(false, false, false, false, false, true));
+  TEST_ASSERT_EQUAL(O::BtConnecting, tabbar::outputFor(false, false, false, true, false, true));
+  TEST_ASSERT_EQUAL(O::BtConnected, tabbar::outputFor(true, true, false, false, false, false));
+  TEST_ASSERT_EQUAL(O::BtConnecting, tabbar::outputFor(true, false, false, false, false, true));
+  TEST_ASSERT_EQUAL(O::BtIdle, tabbar::outputFor(true, false, false, false, false, false));
+  TEST_ASSERT_EQUAL(O::BtLost, tabbar::outputFor(true, false, true, false, false, false));
+  TEST_ASSERT_EQUAL(O::BtLost, tabbar::outputFor(true, false, false, false, true, true));
+  // An ask on its way is amber even before the link starts paging.
+  TEST_ASSERT_EQUAL(O::BtConnecting, tabbar::outputFor(true, false, false, true, false, false));
+  tabbar::State a, b;
+  a.output = O::BtConnecting;
+  b = a;
+  b.output = O::BtIdle;
+  TEST_ASSERT_EQUAL_UINT8(1u << 4, tabbar::dirty(a, b));
+}
+
 void test_tabbar_eq_badge_progress() {
   uint8_t h[4], h2[4];
   tabbar::eqBars(7, true, h);
@@ -643,6 +664,7 @@ int main(int, char**) {
   RUN_TEST(test_textfit_wraps_two_lines);
   RUN_TEST(test_tabbar_hit_areas_reach_the_right_edge);
   RUN_TEST(test_tabbar_redraws_only_what_changed);
+  RUN_TEST(test_tabbar_output_state);
   RUN_TEST(test_tabbar_eq_badge_progress);
   RUN_TEST(test_progress_estimate_from_the_file);
   RUN_TEST(test_progress_mp3_header_length);

@@ -22,6 +22,7 @@ void psramFree(void* p) { heap_caps_free(p); }
 bool DanceMode::begin() {
   scratch_ = static_cast<int16_t*>(psramAlloc(kScratchFrames * sizeof(int16_t)));
   ready_ = scratch_ && tracker_.begin(BeatTracker::Config{}, psramAlloc, psramFree) && view_.begin(skin_);
+  syncTaps();  // off until the Dance tab is up
   if (!ready_) {
     Serial.println("[dance] no PSRAM for the dance screen");
     return false;
@@ -63,6 +64,7 @@ void DanceMode::setActive(bool on) {
   }
   if (on == active_) return;
   active_ = on;
+  syncTaps();  // on before follow(): the reader starts from what is written next
   if (!on) {
     Serial.println("[dance] off");
     return;
@@ -115,6 +117,7 @@ void DanceMode::cycleSkin() {
     if (!ready_) {
       Serial.println("[dance] dance screen off: no sprite");
       active_ = false;
+      syncTaps();
     }
     return;
   }
@@ -134,7 +137,10 @@ void DanceMode::setTracking(bool on) {
   if (on && !tracking_) refollow_ = true;  // what the tap holds meanwhile is skipped
   if (!on) fresh_ = true;                  // no grid to dance to meanwhile: the dancer idles
   tracking_ = on;
+  syncTaps();
 }
+
+void DanceMode::syncTaps() { audio_.setTapsOn(ready_ && active_ && tracking_); }
 
 void DanceMode::toggleVerbose() {
   verbose_ = !verbose_;

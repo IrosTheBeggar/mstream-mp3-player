@@ -383,7 +383,8 @@ void ListView::pushFixed() {
 // Redraws an item where the panel shows it now (a press, a toggle), without
 // moving anything: its lines go to the GRAM lines they live at.
 void ListView::pushItemInPlace(uint32_t item) {
-  if (!vs_->active() || !vs_->map().valid() || drawnOffset_ < 0 || force_) return;
+  // (The screen off: nothing drawn; the band is redrawn whole on the wake.)
+  if (!vs_->active() || !vs_->map().valid() || drawnOffset_ < 0 || force_ || gfx::dark()) return;
   const int32_t off = vs_->map().offset();
   const int32_t top = static_cast<int32_t>(item) * kPitch;
   int32_t c = std::max(top, off);

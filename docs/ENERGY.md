@@ -103,8 +103,15 @@ in a sheet.
 baseline) for as long as the headphones are gone. That is the same at
 160 MHz (81.1 vs 45.5).
 
-**What happens today.** The cycle never stops (ReconnectPlanner.h:44
-`kScanForMs`, BtSink.cpp heartbeat):
+**Status: in the code (step 1), host-tested, measured on the device
+(section 4, "Device run: steps 0-3"): with the headphones gone and the
+screen on, 51.1 USB mA backing off and 47.7 resting, against 85.7
+(-34.6 / -38.0); 29.2 with the screen off. The checks that need the
+headphones answering are still to do.** What follows under "What happened" is the firmware the
+measurements were taken on.
+
+**What happened before.** The cycle never stopped (the old
+ReconnectPlanner's `kScanForMs`, BtSink.cpp's heartbeat):
 
 - about 3 pages, 10 s apart, each up to the 5.12 s page timeout, then
 - ~60 s of back-to-back inquiry, then pages again, forever.
@@ -120,11 +127,16 @@ the Pair screen's scan while it stays open.
    as today. A listener ask is: Play through PlayGate, Connect or a tap
    on the card, a B hold, or opening the Output tab.
 2. **Back-off.** Then one page at a time, with no inquiry, at 30 s, 1,
-   2 and 5 min, then every 5 min. Implement it by keeping the library's
-   auto-reconnect disarmed between pages and re-arming with 1 retry, so
-   its "retries exhausted, start discovery" branch never runs.
+   2 and 5 min, then every 5 min. As built, the library's auto-reconnect
+   stays disarmed outside a pairing and the planner makes every page
+   itself: re-arming with 1 retry would still reach the "retries
+   exhausted, start discovery" branch, from the DISCONNECTED that
+   answers that one page.
 3. **Resting.** After 15 min without success, stop paging. Stop at once,
    after the burst, when the screen is off and nothing plays or waits.
+   As built, not after a drop while listening: that pause is the drop's
+   own, and the listener may still be wearing them (a range drop is what
+   the back-off is for), so a lost link gets the whole back-off.
    Stay connectable (page scan, ~1% duty, estimated <1 mA), so headphones
    that are switched on or taken out of the case reconnect by themselves.
    The Powerbeats do that.
@@ -132,7 +144,9 @@ the Pair screen's scan while it stays open.
    are limited to 2 min after boot or after a listener ask, and only when
    nothing is remembered. The Pair screen's scan stops after 2 min and
    offers "Search again". It also stops when the page is left or the
-   screen goes off.
+   screen goes off. While the page stays up with its scan stopped, the
+   background search stays held off (the old headphones would link while
+   new ones are picked); it starts when the page closes.
 
 **UX impact.** Headphones that page back by themselves (most, and the
 user's) are unchanged. Headphones that never page back reconnect only
@@ -166,6 +180,12 @@ Stopping all UI drawing while off is *estimated* at a further 1-2 mA: the
 EQ bars at 4 Hz, the 1 Hz times, spinners, thumbnail jobs. It rises to
 the whole Dance cost (4.5-8.8) if the Dance tab was left up.
 
+**Status: in the code (step 2), host-tested, measured idle on the device
+(bright 100: 44.0, dim: 35.7, off: 29.2 USB mA); a wake-redraw bug found
+and fixed there (section 4, "Device run"). The finger, streaming and
+pocket checks are still to do.** What follows under "The change" is the plan; the as-built
+notes are under step 2 in section 4.
+
 **The change.** A `ScreenPower` state machine in lib/core (host-tested),
 with the states Bright, Dim and Off, driven from the loop. Only it calls
 `setBrightness`, `sleep` and `wakeup`, and it does so under `LcdLock`: the
@@ -189,7 +209,7 @@ panel shares SPI with the SD card.
   - the low-battery warning.
 
   Headphone keys, track changes and a link coming up do not wake it.
-- **The waking touch is swallowed** until it lifts, as `Ps0` already does.
+- **The waking touch is swallowed** until it lifts, as `Ps0` did.
   It makes no tap, click, hold, volume repeat, swipe or haptic. This
   applies from **Dim** as well as from **Off**, as one rule: a touch on a
   screen that isn't at full brightness only brightens it. This is a
@@ -198,6 +218,16 @@ panel shares SPI with the SD card.
   the latch.
 - **Pocket guard.** A wake from Off with no further input goes back to Off
   after 10 s, without the dim step.
+- **Pocket rule** (as built, from the review). The guard alone let the
+  second pocket contact on B, 300 ms after the swallowed one, play out
+  loud. After any wake from Off (a touch, PWR, an event, keepLit) and
+  until a touch lands on the glass (or PWR while lit, or the console), a
+  B click that would start the **speaker** is refused: the inert buzz,
+  and the note "Tap the screen first, then B plays". Pausing, A and C,
+  the volume, the B hold and a play on the headphones still act, so a
+  blind pause from a pocket still works. An event's wake from Off (the
+  lost dialog) also swallows the first touch, as a wake from Off does, so
+  a pocket contact can't tap "Use speaker".
 - **While off:**
   - `Ui::loop` keeps its logic (snapshot, dialogs, toasts, timers) but
     draws nothing;
@@ -310,6 +340,10 @@ reach the speaker while Bluetooth is the output. EXTEN turned out not to
 feed the amp: its current was unchanged with EXTEN off.
 
 **UX impact:** none if there is no pop.
+
+**Status: in the code (step 3), host-tested (the AmpGate cases in
+test_output_chain); measured on the device: off 2.01 s after a pause,
+-5.2 USB mA (45.5 vs 50.7 held on). The by-ear checks are still to do.**
 
 | | |
 |---|---|
@@ -428,6 +462,12 @@ dancing.
   Measured as noise while lit, so leave the lit UI at ~5 ms.
 - **Green LED:** already off. Keep it off, and don't use it as a
   "playing" light.
+
+**Status: in the code (step 3): the IMU suspended and EXTEN off from boot,
+the taps only while the Dance tab is up (test_audio_tap), the 20 ms loop
+delay while the screen is off (since step 2). Checked on the device:
+the boot line and `imu=suspended exten=off taps=off`, taps on only with
+the Dance tab up. The battery ear check for EXTEN is still to do.**
 
 ### 10. Measured or reasoned as not worth doing now
 
@@ -591,6 +631,24 @@ step 9 on, battery-only runs (`Pw` plus `Pq1`).
 
 ### Step 0: land the probe, and fix what the measuring run found
 
+**Status: done in the code, host-tested (test_power_window); the device
+check is still to do.**
+
+- `Pl`: the window a console command starts was timed from the command's
+  `millis()`, a moment after the loop's `now`: `nowMs - start` wrapped.
+  `power::Window::elapsedMs()`/`over()` now read a start in the future as
+  "not begun".
+- `Pt` with a link up says "applies from the next connection" with the
+  range asked for, instead of the controller's stale read-back.
+- `link=` comes from the reconnect planner's phase (step 1): `Pr0` shows
+  `link=resting bg=resting`. The line adds `radio=N%`.
+- `Ps0`'s swallowed wake touch logs `[screen] wake by touch at x,y (raw)`.
+- ACIN glitches: a single sample of ≤15 mA on USB right after one above
+  30 mA is held until the next; when that one is back above 30 mA it was a
+  glitch, left out of the mean, min and max and counted (`glitches=N` on
+  the line; not in the CSV, whose columns stay as they were). A drop that
+  lasts counts.
+
 - **Commit the power probe** as built: PowerProbe, PowerLab, PowerWindow,
   test_power_window, `tone:silence`.
 - **Fix `Pl`:** its first window prints "4294967.5 s: no samples", an
@@ -607,6 +665,59 @@ Host test: a test_power_window case for the first window.
 **Device check:** `Pl` starts clean; `Pt` then a reconnect shows the new range.
 
 ### Step 1: reconnect back-off, resting, scan deadlines (item 1)
+
+**Status: done in the code, host-tested (test_reconnect, test_ui_output,
+test_ui_library, test_ui_nav; test_play_gate unchanged and green); the
+on-device checks below are still to do.** As built:
+
+- `ReconnectPlanner` (lib/core): phases Idle, Burst, Backoff, Resting and
+  Scan; `start(why)` on a drop, at boot and on an ask; `pageMade()` from
+  every `connect_to()`, `pageEnded()` from the DISCONNECTED that answers a
+  page; `step()` on BtAppT's 250 ms ticks and heartbeats. A burst page
+  goes at once, the next once the last has its answer and 10 s after it
+  began (~25 s for the three). A page on its way when a burst starts is
+  its try 1 (the boot's page included).
+- The library's auto-reconnect is disarmed except during a pairing (whose
+  tries are still the library's); `rememberPeer()` replaces the old
+  re-arm on every link.
+- The asks that start a burst: `BtSink::connect()` (PlayGate's Play, the
+  card's Connect and tap, a B hold, console `o`), the Pair screen closing
+  without a pairing, and `Pr1`. **Opening the Output tab is not an ask**
+  (a deviation from item 1): the resting card would never be seen, and
+  its Connect is one tap away.
+- The quiet hook: `BtSink::setQuiet(bool)`, fed each loop pass with
+  "screen off and nothing playing or waiting". Since step 2 the screen
+  policy's Off feeds it (the probe's `Ps0` is that Off now). Fixed in
+  review: not while the headphones are lost (`btLost`, a drop while they
+  were the output): the drop pauses the player itself, so it counted as
+  "nobody around" and the back-off never ran for a range drop. The
+  resting card for lost headphones (only after the whole back-off now)
+  reads "Back in range? / Tap Connect.", and the lost dialog "Stopped
+  looking for them: Play tries again", instead of "They'll reconnect
+  when switched on" (they may be on, their own reconnect given up).
+- Scan deadlines: the scan by name (none remembered) runs 2 min after the
+  boot or an ask, then rests. The Pair page stops its scan after 2 min
+  (`PairSearch`) and shows "Search again" (a tap starts another 2 min).
+  Since step 2 it also stops when the screen goes off. Fixed in review:
+  those stops (`BtSink::pausePairScan()`) keep the background search held
+  off while the page is up; they used to start the old headphones' burst
+  and back-off with the page still open, as closing it does
+  (`stopPairScan()`). The 2 min are checked every UI pass
+  (`Page::tick()`): a dialog over the page stopped its `update()` and so
+  kept the inquiry running.
+- Radio busy: `RadioMeter` samples "a page on its way, or an inquiry" on
+  every tick; `[stats] bt` shows `search=<phase> radio=N%/min`, and the P
+  line `bg=<phase> radio=N%`.
+- The card: `BtLink::Phase::Backoff` shows as "Looking for SPYDRONE..."
+  (or Lost: "looking for"); `Resting` is its own card, "Not connected"
+  with "They'll reconnect / when switched on." beside [Connect], dim (red
+  when they dropped while the output), no spinner. The tab icon is the
+  plain headphones while resting (`tabbar::Output::BtIdle`). A connect's
+  burst that ends in Backoff or Resting is Failed (BtSession). Console
+  `uiFr` fakes the resting card for a screenshot.
+- Fixed with it: console `o` goes through the B hold's `selectOutput()`,
+  so after a Disconnect it connects (and the audio moves once linked), and
+  a move to the speaker pauses first.
 
 **Code:**
 
@@ -643,6 +754,90 @@ that it fits.
 
 ### Step 2: screen policy and the swallowed wake (item 2)
 
+**Status: done in the code, host-tested (test_screen_power, the latch
+cases in test_ui_input, the settings texts in test_ui_library); the
+on-device checks below are still to do.** As built:
+
+- `ScreenPower` (lib/core): Bright, Dim (backlight 30) for the last 10 s
+  (from 7 s with 15 s), Off after the chosen time without input: 15 s /
+  **30 s** / 1 / 2 / 5 min / Never. Brightness Low 60 / **Medium 100** /
+  High 160 / Max 255. Input is a touch that acts, a finger resting on the
+  glass or the strip, or the PWR key while bright. `wake(why)`: Touch and
+  PowerKey (from Off: the pocket guard, off again 10 s later with no dim
+  step unless input follows; not with Never), Event (the whole countdown,
+  and it ends a guard), Console. Kept Bright (and woken) while a screen of
+  its own owns the display, a play waits for the headphones, or a pairing
+  is under way (`link.phase == Pairing` or `btSession.pairingUnderWay()`).
+  Fixed in review: it read `btSession.pairing()`, which stays set after a
+  pairing fails (the Failed card says so), so a failed pairing kept the
+  screen Bright for good, and the latch never armed.
+- The countdown's input from a finger (`FingerActivity`, fixed in
+  review): its landing and its moves (more than 8 px); a finger resting
+  still stops counting after 15 s, so a pocket's pressure can't keep the
+  screen lit. As it dims under such a finger, the latch takes it (its
+  glass touch ends with a Cancel) without a wake.
+- The pocket rule (fixed in review, item 2 above): `ScreenPower::
+  unattended()` and `touchActs()`, `attend()` on a glass touch's landing
+  (`Input::glassLanded()`) or PWR while lit; main's
+  `ButtonTransport::startRefused()`.
+- `WakeLatch` (lib/core), owned by `ui/Input`: a real finger landing on
+  the panel while a touch doesn't act arms it; every event is dropped
+  (the `suspended_` drop path) until no finger has been on for 400 ms
+  (`kQuietMs`), so the lift (where a button clicks, a tap and a fling are
+  made) is swallowed, and so is a second finger. Fixed in review: it let
+  go after 2 quiet passes, ~10 ms at the lit loop's 1-5 ms, so the panel
+  losing the waking finger for 20-140 ms (as StripButtons records it
+  does) released it, and the finger found again was a fresh press: a
+  click of B played out loud. 400 ms is StripButtons' swipe bounce
+  window; a pass after a longer gap is a new touch however the passes
+  ran. The recognisers keep following. The scripted
+  finger isn't a finger for it: it acts in the dark, and wakes the screen
+  (Why::Console) so what it does shows.
+- `app/ScreenControl`: the hardware glue, the only caller of
+  `setBrightness`, `sleep` and `wakeup` (the last two under `LcdLock`).
+  Each pass: `beginPass()` (the PWR key's short press via `M5.BtnPWR`,
+  USB in or out from AXP192 reg 0x00 once a second, `Input::setLit()`),
+  `afterInput()` (the wake, logged `[screen] wake by touch at x,y (raw)`,
+  with the strip button if it was one; else activity), and `step()` last
+  in the loop. Off: the UI goes dark first, then backlight off and
+  sleep-in. Wake: sleep-out with the backlight still off, 5 ms, the UI
+  draws everything, then the backlight (`[screen] awake in N ms`). Fixed
+  on the device: the UI used to draw while the panel was still asleep,
+  and on this Core2 those pixels land garbled in the panel's memory
+  (every wake: rows shifted sideways, colours byte-swapped, until the
+  element was drawn again lit). A sleep-in or sleep-out waits until 120 ms after the last one;
+  a touch meanwhile is still a swallowed wake. After a sleep-out, 5 ms
+  before anything is drawn (the ILI9342C's wait before the next command;
+  fixed in review: the next frame could come 1 ms later). Every change logs
+  `[screen] <from> -> <to> (<why>)` with when the next one is due.
+- The event wakes: `Ui::headphonesLost()` (the dialog), `Ui::playFailed()`
+  ("Couldn't reach"), `Ui::noteFailures()` (a track that failed), and USB
+  in or out, through `UiHost::wakeScreen()`. There is no low-battery
+  warning yet, so none for it.
+- The UI's dark mode (`Ui::setDark`): `gfx::fill`/`push` drop everything
+  (also `ListView::pushItemInPlace` and `DanceView::pushRect`, which draw
+  directly); `Ui::loop` keeps the snapshot, dialogs, toasts and their
+  timers but skips the tab bar, page updates and frames; a fling stops
+  where it is; `Thumbs::loop(now, busy)` takes in what the worker made
+  and starts no new job; DanceMode is `setActive(false)` (its tracker and
+  tap reader stop; since step 3 the outputs' taps too);
+  `idleMs()` is 20. The page gets `screenOff()`: the Pair screen stops
+  its scan and shows "Search again". On the wake: the list's scroll
+  registers are sent again (`ListScroller::resend()`, the panel should
+  keep them through sleep-in), the tab bar, the page (a list's band at
+  its next frame), then the jump grid or coach cards, a sheet, the volume
+  sheet, a dialog and the toast; a HUD from the dark is dropped.
+  A screen of its own (calibration, spike tools) is never gated: the UI
+  lets go of the gate when it is suspended.
+- The quiet hook: `setQuiet(screen off and nothing playing or waiting)`.
+- The console: `Ps` the state, `Ps0` the policy's Off (a touch's wake has
+  the pocket guard), `Ps1` on; `Pb<n>` is the Bright level until restart
+  (`Pb0` the setting's), refused while dim or off.
+- Settings: the Output tab's rows "Screen off after" and "Brightness"
+  (after Haptics), each a value pill; a tap takes the next choice (a
+  sheet only has room for 3 rows). NVS namespace `screen`, keys
+  `off_after` and `bright` (the choices' indices).
+
 **Code:**
 
 - `lib/core/ScreenPower`, fed with input times, player state, dialogs
@@ -669,10 +864,69 @@ guard; test_ui_input: the latch):
 - Wake latency under 150 ms.
 - Speaker as output, paused, screen off: tap B, hold B, hold C, swipe up,
   tap a row. The log shows only `[screen] wake`, and no audio starts.
+- The same, then B again within 10 s: the inert buzz, "Tap the screen
+  first, then B plays", no audio; a tap on the glass, then B plays.
+- A long press of B from the dark, lifting and pressing again quickly
+  (under 400 ms): nothing but the wake. A tap meant to act after a wake
+  waits 400 ms from the lift.
+- The lost dialog from a dark screen: the first tap only answers it
+  (`[screen] event's wake answered by touch`), the second acts.
+- A finger resting still on the glass: the screen dims 35 s after it
+  landed (15 s + 20 s) and goes off; no wake while it stays.
+- A failed pairing (headphones not in pairing mode), then leave it: the
+  screen dims and goes off as usual.
 - A wake mid-list leaves no corrupted band.
 - Count false wakes over an hour in a pocket.
 
 ### Step 3: amp, IMU, EXTEN, taps (items 5 and 9)
+
+**Status: done in the code, host-tested (test_output_chain's AmpGate
+cases, test_audio_tap); the on-device checks below are still to do.** As
+built:
+
+- `AmpGate` (lib/core), asked by the speaker pump (the only task that
+  queues buffers, so it alone calls `M5.Speaker.end()`/`begin()`): off
+  (`end()`: the NS4168's enable, AXP192 GPIO2, first, then M5.Speaker's
+  task and the I2S) 2 s after the pump last queued a buffer, once every
+  queued buffer is back from M5.Speaker. "Quiet" is any pass with nothing
+  to queue: paused, stopped with the speaker the output (the pump used to
+  count that as playing and never went idle), the queue's end, an
+  underrun of 2 s, or the output moved to Bluetooth. A pause under 2 s
+  never switches it.
+- On again before the next buffer: `begin()` (the I2S set up and
+  clocking zeros), then 5 ms later the amp's enable, then 20 ms of zeros
+  into the amp (`kAmpSettleMs`, so its start-up can't cut into the
+  fade-in), then the audio, which the DeclickReader fades in as it always
+  does after a gap. Fixed in review: M5Unified's enable callback raised
+  the enable at the start of `begin()`, before the port was uninstalled,
+  reinstalled and its pins reconfigured, now on every resume after 2 s;
+  the pump replaces that callback (`M5.Speaker.setCallback`: nothing on
+  begin, the enable down first on end) and raises the enable itself on
+  the running clock (AXP192 GPIO2, or ALDO3 on an AXP2101 Core2). A fade-only buffer (the tail of audio that was never
+  heard) doesn't switch it on.
+- The log: `[speaker] amp off: I2S stopped, AXP192 GPIO2 low (quiet for
+  2 s)` and `[speaker] amp on (audio to play)`, from the loop task.
+- The console's `Pa`: `Pa0` switches it off as soon as the speaker is
+  quiet (no 2 s wait); `Pa1` switches it on (zeros, silent) and holds it on
+  through playing and pausing until `Pa0` (the P line's `amp=held`).
+- The IMU: app/BoardPower suspends the BMI270 in `setup()` after
+  `M5.begin()` (the code `Pi0` used, moved there; `Pi1` wakes it). One line
+  says what boot left: `[power] boot: IMU suspended, 5 V boost (EXTEN) off,
+  green LED off`.
+- EXTEN: `cfg.output_power = false`. On USB the 5 V bus comes from USB
+  anyway, so the measurement that the amp isn't fed from the boost was on
+  USB: **the battery ear check below decides it.** If the speaker is
+  silent on battery, the fallback is to switch EXTEN with the amp (on
+  before `begin()`, off after `end()`), not to leave it on.
+- Taps: `AudioTap::setEnabled()` (any task); a write while off copies
+  nothing and the count stands still, and the first write after it is on
+  again starts a new segment (the tracker never splices audio across the
+  time it didn't see). Both taps are off from boot; `DanceMode` switches
+  them with `active && tracking` (the Dance tab, the screen going dark,
+  `Pk`). `AudioShared::tapOn` is gone; `Pk0`/`Pk1` now switch the tracker
+  and the taps follow.
+- The 20 ms loop delay while the screen is off was already step 2's
+  (`Ui::idleMs`); main now also uses 20 ms when there is no UI (no PSRAM).
 
 **Code:**
 
@@ -683,15 +937,131 @@ guard; test_ui_input: the latch):
 
 **Host tests:** test_audio_tap (a tap switched back on starts a new
 segment); test_output_chain for the amp gating logic, if it is moved
-into lib/core.
+into lib/core. As built: test_audio_tap's
+`test_tap_switched_off_skips_and_starts_a_new_segment`; test_output_chain's
+six AmpGate cases (off until audio; off 2 s after the last buffer and not
+a pass sooner, on before the next, a short pause never switches; a
+buffer still queued holds it; `Pa0` without the wait; `Pa1` held through
+play and pause until `Pa0`; the clock wrap).
 
 **On the device:**
 
+- The boot line: `[power] boot: IMU suspended, 5 V boost (EXTEN) off,
+  green LED off`; the P line `imu=suspended exten=off taps=off`.
+- `[speaker] amp off ... (quiet for 2 s)` 2 s after a pause, a stop, and
+  a move to Bluetooth; `[speaker] amp on (audio to play)` at the resume.
 - After 10 s of speaker play, then pause, the current drops ~5 USB mA.
 - **By ear:** no pop at the amp off and on handover, at 10% and 100%
   volume, with the headphones off your head.
+- **By ear:** a resume on the speaker after >2 s paused starts cleanly
+  (the 20 ms settle): the first beat isn't clipped. Tune `kAmpSettleMs` if
+  it is.
 - **On battery with USB unplugged:** the speaker is audible with EXTEN off.
-- The Dance tab still locks within its usual time.
+- The Dance tab still locks within its usual time, also after leaving it
+  and coming back, and after a screen-off on it (`taps=on` only while it
+  is up).
+
+### Device run: steps 0-3 (2026-09-27)
+
+The working tree of steps 0-3 (plus the wake fix below), flashed on the
+Core2 (COM3). Same method as section 1: on USB, the battery full (0.0 mA),
+`in=` in USB mA, the mean of 12-13 five-second windows (60-65 s) after a
+`Pm` marker unless said otherwise, 240 MHz (the default). Differences
+under ~2.5 mA are noise. **The Powerbeats never answered a page during the
+run** (7 bursts over ~40 min, the Pair screen's scan didn't see them
+either): they were in their case or switched off. So everything that needs
+a link is still to do (below).
+
+**Measured:**
+
+| State | USB mA | Against | Change |
+|---|---|---|---|
+| Headphones gone, screen on (bl 127), back-off (5 min: pages at +30 s, 1, 2 min) | 51.1 (60 windows, sd 8.5) | the old cycle, 85.7 | **-34.6** |
+| Headphones gone, screen on (bl 127), resting (`Pr0`) | 47.7 | the old cycle, 85.7; the old "paused", 50.2 | **-38.0**; -2.5 (the step 3 knobs) |
+| Headphones gone, a burst (3 pages, bl 127) | 73.4 (5 windows, sd 20) | the old paging windows, 60-84 | as before, now 25 s long |
+| Headphones gone, screen off (the night case), resting | 29.2 | the old cycle with the screen on, 85.7 | **-56.5** |
+| Idle, resting: bright at the new default (100) | 44.0 (43.9, 44.2: A/B/A) | | |
+| Idle, resting: dim (bl 30; `Pb30`) | 35.7 (35.0, 36.3) | bright 100 | **-8.3** |
+| Idle, resting: off | 29.2 | bright 100 | **-14.8** |
+| Speaker playing (silent mode, FLAC, bl 100) | 65.5 | | |
+| Speaker paused, amp off by itself | 45.5 (45.6, 45.3: A/B/A) | amp held on (`Pa1`), 50.7 | **-5.2** |
+| The Pair screen scanning (bl 100) | ~89 (windows 2-24; 84.0 with the first) | after its 2 min stop, 44.5 | -44.5 while it would have kept scanning |
+
+The idle "off" figure at 240 MHz (29.2) is below section 1's "screen off,
+160 MHz" 28.5 + 4.7 (240 vs 160) = 33.2: the step 3 knobs (IMU, EXTEN,
+taps) and the 20 ms loop delay, about -4, within noise of the -2.5 to -3.9
+measured for them in section 1.
+
+**Checked on the device (log):**
+
+- Step 0: `Pl`'s first window is clean (no "4294967"); `Pr0` gives
+  `link=resting bg=resting`; the line carries `radio=N%` (24% in a burst's
+  windows, 100% while the Pair screen scans, 0% resting).
+- Step 1 schedule: a burst's pages 10.1 s apart (346.9, 357.0, 367.1 s),
+  "backing off" 5.4 s after the third, then pages 30.3 s after the third,
+  then 60.2 s and 120.2 s apart, "the next in 300 s". With the screen off
+  and nothing playing it rests right after the burst (boot, `Pr1`, the Pair
+  screen closing). The resting card reads "Not connected / They'll
+  reconnect when switched on." beside Connect (screenshot). `radio=` is
+  the last *whole* minute's share, so it lags up to 60 s (26% for the
+  minute after a boot's burst, then 0).
+- The Pair screen: the scan stops at exactly 2:00 ("the search stopped
+  after 2 min (tap Search again)", the row "Search again / Stopped, to save
+  the battery.") and nothing pages while the page stays up (`bg=idle`, 44.5
+  mA). "Search again" scans again; the screen going off stops it ("the
+  screen went off"); it keeps scanning while dim. Leaving the page starts a
+  burst.
+- Step 2: off after 30 s (dim at 20 s, `bl=30 screen=dim`, then off);
+  "Never" and the brightness choices are saved and come back after a
+  reboot; the defaults (30 s, Medium 100) restored at the end. Console
+  wakes (`Ps1`, `ui<n>`): `[screen] awake in 24-63 ms` on Now Playing and
+  Output, 105-108 ms on the Dance tab (the redraw included).
+- **Found and fixed: every wake left the screen garbled.** Screenshots
+  (LCD readback) after `Ps0`/`Ps1` showed the elements drawn at the wake
+  shifted sideways within their rows with byte-swapped colours (the play
+  button green, text magenta), identical in two shots of the same wake, on
+  Now Playing and the Output list; one drawn again while lit was clean, and
+  so was every screen before the first screen-off. The pixels were written
+  while the panel was in sleep-in. `ScreenControl::apply()` now sends the
+  sleep-out first (the backlight still off), waits the 5 ms, lets the UI
+  draw, then turns the backlight on: 4 of 4 wakes clean since (Now Playing
+  three times, the Output list scrolled mid-way), 5 of 5 garbled before.
+- Step 3: the boot line `[power] boot: IMU suspended, 5 V boost (EXTEN)
+  off, green LED off`; the P line `amp=off exten=off led=0
+  imu=suspended taps=off`. `[speaker] amp off ... (quiet for 2 s)` 2.01 s
+  after a pause (twice); a 1.1 s pause didn't switch it; `amp on (audio to
+  play)` 44-79 ms after the play key; `Pa1` shows `amp=held`, `Pa0`
+  switches it off at once. `taps=on` only while the Dance tab is shown
+  (off on Now Playing and while the screen is off, on again after). The
+  tracker locked on "Stronger" 6.2 s after the reset (3.3 s on another
+  run), 9.8 s after leaving the tab and coming back, and 14.4 s after a
+  screen-off on the tab (it loses and finds this track's beat now and then
+  either way).
+- The probe: at 240 MHz the glitch filter fires too (up to 85 in 5 min at
+  ~50 mA), and some windows still show `min 0.0` with no glitch counted:
+  drops of two or more samples to 0 mA, which the filter keeps by design.
+  The means are unaffected at the noise level above.
+
+**Still to do (needs the headphones, a finger, or an ear):**
+
+- Headphones: taking them out of the case reconnects within ~5 s while
+  resting; Play pages at once ("try 1 of 3"); `Pt` then a reconnect shows
+  the new range; streaming `tone:silence` with the screen bright (100), dim
+  and off, and the streaming baseline at the new default (expected ~106:
+  109.8 at 127 minus 3.1, minus the knobs); the headphones-lost dialog and
+  "Couldn't reach" waking a dark screen, and its first tap only answering it.
+- By hand (the scripted finger bypasses the wake latch by design, so it
+  can't test it): from the dark on the speaker, tap B, hold B, hold C,
+  swipe up, tap a row: only `[screen] wake by touch`, no audio; B again
+  within 10 s: the inert buzz and "Tap the screen first, then B plays"; the
+  pocket guard (a touch or PWR wake from off, nothing more: off again 10 s
+  later); a finger resting still: dims and goes off; real-touch wake
+  latency; the screen really looks right after a wake (the readback says
+  so now).
+- By ear: no pop at the amp's off and on at 10% and 100%; a resume after
+  more than 2 s paused isn't clipped; on battery with USB unplugged, the
+  speaker is audible with EXTEN off.
+- USB in or out waking the screen; false wakes over an hour in a pocket.
 
 ### Step 4: sleep timer (section 3)
 
@@ -817,9 +1187,9 @@ rebuild (item 6.3).
   by design, but from Stopped on the speaker this plays unexpectedly. The
   screen-off swallow covers pocket presses; lit, it is a deliberate press.
   Confirm it is intended.
-- **Console `o` after a Disconnect** selects Bluetooth but starts no
-  connection: the card shows "Not connected", and nothing pages until
-  Connect is tapped.
+- **Console `o` after a Disconnect** selected Bluetooth but started no
+  connection: the card showed "Not connected", and nothing paged until
+  Connect was tapped. **Fixed in step 1:** `o` does what a B hold does.
 - **The Powerbeats stopped answering pages and inquiry for ~40 min** in
   the measuring run, then connected at a later boot. It is probably the
   headphones, but step 1's on-device checks should note it if it recurs.

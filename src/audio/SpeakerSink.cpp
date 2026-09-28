@@ -13,6 +13,40 @@ constexpr uint8_t kMaxVolume = 181;
 constexpr int kTopUpWaitMs = 20;      // wait this long for a full buffer before sending a short one
 // What the pump queued, for the beat tracker: ~0.74 s, 64 KB of PSRAM.
 constexpr uint32_t kTapFrames = 32768;
+// The amp's enable comes up only once M5.Speaker's I2S is set up and
+// clocking zeros (kClockFirstMs after begin()), never while its pins are
+// being reconfigured; then the amp gets kAmpSettleMs of zeros before the
+// first buffer, so its start-up can't cut into the fade-in (tune by ear,
+// ENERGY.md step 3).
+constexpr uint32_t kClockFirstMs = 5;
+constexpr uint32_t kAmpSettleMs = 20;
+
+// The NS4168's enable: AXP192 GPIO2 (AXP2101 ALDO3 on later Core2s), as
+// M5Unified's own callback switches it.
+void ampEnable(bool on) {
+  switch (M5.Power.getType()) {
+    case m5::Power_Class::pmic_axp192: M5.Power.Axp192.setGPIO2(on); break;
+    case m5::Power_Class::pmic_axp2101: M5.Power.Axp2101.setALDO3(on ? 3300 : 0); break;
+    default: break;
+  }
+}
+
+// M5.Speaker's enable callback, replacing M5Unified's (which raises the
+// enable at the start of begin(), before the I2S is set up: the amp was
+// live while the port was uninstalled and its clock pins reconfigured).
+// begin() leaves it alone (the pump raises it once the clock runs);
+// end() still drops it first, before the task and the I2S stop.
+bool onSpeakerEnable(void*, bool enabled) {
+  if (!enabled) ampEnable(false);
+  return true;
+}
+
+// Speaker_Class::setCallback() is protected (M5Unified::begin() sets its
+// own): reached through a pointer to it, taken where it is accessible.
+struct SpeakerCallbackAccess : m5::Speaker_Class {
+  using Setter = void (m5::Speaker_Class::*)(void*, bool (*)(void*, bool));
+  static Setter setter() { return &SpeakerCallbackAccess::setCallback; }
+};
 }  // namespace
 
 void SpeakerSink::begin(PcmRing& ring, AudioShared& shared) {
@@ -25,7 +59,10 @@ void SpeakerSink::begin(PcmRing& ring, AudioShared& shared) {
   }
 
   auto* tapBuffer = static_cast<int16_t*>(heap_caps_malloc(kTapFrames * sizeof(int16_t), MALLOC_CAP_SPIRAM));
-  if (tapBuffer) tap_ = new AudioTap(tapBuffer, kTapFrames);
+  if (tapBuffer) {
+    tap_ = new AudioTap(tapBuffer, kTapFrames);
+    tap_->setEnabled(false);  // until the Dance tab is up (DanceMode)
+  }
 
   auto cfg = M5.Speaker.config();
   cfg.sample_rate = 44100;             // most music needs no resampling
@@ -36,6 +73,8 @@ void SpeakerSink::begin(PcmRing& ring, AudioShared& shared) {
                                  cfg.sample_rate);
   // Has to be registered before the first playRaw().
   M5.Speaker.setBufferReleaseCallback(this, onBufferReleased);
+  // The amp's enable is the pump's to raise (switchAmp), after the clock.
+  (M5.Speaker.*SpeakerCallbackAccess::setter())(nullptr, onSpeakerEnable);
 
   xTaskCreatePinnedToCore(taskEntry, "speaker", 3072, this, 3, nullptr, APP_CPU_NUM);
 }
@@ -66,26 +105,54 @@ void SpeakerSink::onBufferReleased(void* self, const void* data, uint8_t) {
   }
 }
 
+// A Pa request from the loop task, to the gate. ampAsking_ goes up before
+// the request comes down, so ampPending() never reads false in between.
+void SpeakerSink::takeAmpRequest() {
+  const Amp a = ampRequest_.load(std::memory_order_relaxed);
+  if (a == Amp::None) return;
+  gate_.ask(a == Amp::On ? AmpGate::Ask::On : AmpGate::Ask::Off);
+  ampAsking_.store(true, std::memory_order_relaxed);
+  Amp expected = a;
+  ampRequest_.compare_exchange_strong(expected, Amp::None, std::memory_order_relaxed);
+}
+
+void SpeakerSink::switchAmp(AmpGate::Do d) {
+  if (d == AmpGate::Do::Nothing) return;
+  if (d == AmpGate::Do::Stop) {
+    // The amp's enable first, then M5.Speaker's task and the I2S (end()
+    // does it in that order), on the zeros that followed the last fade.
+    M5.Speaker.end();
+  } else {
+    // The I2S first (set up, its task clocking zeros), the amp's enable
+    // only then, and zeros into the amp before any audio.
+    M5.Speaker.begin();
+    vTaskDelay(pdMS_TO_TICKS(kClockFirstMs));
+    ampEnable(true);
+    vTaskDelay(pdMS_TO_TICKS(kAmpSettleMs));
+  }
+  ampWhy_.store(gate_.why(), std::memory_order_relaxed);
+  ampSwitches_.fetch_add(1, std::memory_order_release);
+}
+
+void SpeakerSink::quietPass() {
+  // end() mustn't drop a buffer still queued: its release would never come
+  // and the pump would wait on it for good.
+  const bool drained = !busy_[0] && !busy_[1] && !busy_[2];
+  switchAmp(gate_.quiet(millis(), M5.Speaker.isRunning(), drained));
+  ampAsking_.store(gate_.asking(), std::memory_order_relaxed);
+  ampHeld_.store(gate_.held(), std::memory_order_relaxed);
+}
+
 void SpeakerSink::pump() {
   size_t idx = 0;
   int waited = 0;
   for (;;) {
+    takeAmpRequest();
     const bool paused = shared_->paused;
     const bool playing = ring_->consumer() == kConsumerId && !paused;
     // Idle once paused or handed to Bluetooth, and the fade-out is queued.
     if (!playing && reader_.silent()) {
-      // A power measurement's amp switch (requestAmp()), once every queued
-      // buffer is back (end() mustn't drop one: its release would never
-      // come and the pump would wait on it for good).
-      const Amp amp = ampRequest_.load(std::memory_order_relaxed);
-      if (amp != Amp::None && !busy_[0] && !busy_[1] && !busy_[2]) {
-        if (amp == Amp::Off) {
-          M5.Speaker.end();
-        } else {
-          M5.Speaker.begin();
-        }
-        ampRequest_.store(Amp::None, std::memory_order_relaxed);
-      }
+      quietPass();
       waited = 0;
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;
@@ -107,26 +174,37 @@ void SpeakerSink::pump() {
     const DeclickReader::Result r = reader_.pull(buffers_[idx], kFrames, !paused);
     if (playing && r.read < r.wanted && shared_->expectingAudio) shared_->underruns++;
     if (r.total == 0) {
-      // Also yields when the ring was busy: the task holding its lock
-      // (setConsumer on the loop task, discardAll on the decode task) runs
-      // on this core at a lower priority and must get to finish.
+      // Nothing to send (stopped with the speaker the output, an underrun):
+      // as quiet as paused. Also yields when the ring was busy: the task
+      // holding its lock (setConsumer on the loop task, discardAll on the
+      // decode task) runs on this core at a lower priority and must get to
+      // finish.
+      quietPass();
       vTaskDelay(1);
       continue;
     }
+    const bool running = M5.Speaker.isRunning();
+    if (!running && r.read == 0) {
+      // Only a fade to 0 after audio that was never heard (the amp is off):
+      // nothing to play.
+      continue;
+    }
+    // The amp on again (after a quiet spell) before any audio reaches it.
+    switchAmp(gate_.beforeQueue(running));
     // Read the rate after the frames: it is published before a track's first
     // frame. A fade-only buffer keeps the rate of the audio it ends.
     if (r.read > 0) lastRate_ = shared_->rate;
     // A copy of the real audio for the beat tracker (never the fade after
-    // it), and when this buffer was filled, to time its release.
+    // it; nothing while the Dance tab isn't up), and when this buffer was
+    // filled, to time its release.
     const auto nowUs = static_cast<uint32_t>(esp_timer_get_time());
-    if (r.read > 0 && tap_ && shared_->tapOn.load(std::memory_order_relaxed)) {
-      tap_->write(buffers_[idx], r.read, r.read, r.epoch, r.position, nowUs);
-    }
+    if (r.read > 0 && tap_) tap_->write(buffers_[idx], r.read, r.read, r.epoch, r.position, nowUs);
     filledUs_[idx].store(r.read == kFrames ? (nowUs | 1u) : 0u, std::memory_order_relaxed);
     busy_[idx] = true;  // before playRaw(): the release can only come after it's queued
     if (!M5.Speaker.playRaw(buffers_[idx], r.total * 2, lastRate_, true, 1, kChannel)) {
       busy_[idx] = false;
     }
+    gate_.queued(millis());
     idx = (idx + 1) % kBuffers;
   }
 }

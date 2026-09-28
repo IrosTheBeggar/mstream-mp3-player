@@ -584,6 +584,7 @@ void Ui::openDialog(OverlayOwner* owner, const char* title, const char* body, co
 // plays), OK keeps waiting. It closes itself when they are back.
 void Ui::headphonesLost() {
   input_.alertBuzz();  // felt in a pocket too (spec §8: 80 ms)
+  host_.wakeScreen("the headphones dropped");  // the dialog needs the listener
   if (!started_ || suspended_) return;
   // "SPYDRONE disconnected" if it fits beside the icon; else the name goes
   // into the body ("WH-1000XM4 disconnected" is 15 px too wide).
@@ -625,6 +626,10 @@ void Ui::updateLostDialog() {
              (unsigned)std::max(l.attempt, l.attempts));
   } else if (l.phase == BtLink::Phase::Off) {
     snprintf(line, sizeof(line), "Not trying to reconnect");
+  } else if (l.phase == BtLink::Phase::Resting) {
+    // (Lost: resting only after the whole back-off; they may be back in
+    // range with their own reconnect given up.)
+    snprintf(line, sizeof(line), "%s", uitext::kBtLostRestingLine);
   } else {
     snprintf(line, sizeof(line), "Looking for them...");
   }
@@ -636,6 +641,7 @@ void Ui::updateLostDialog() {
 // again" waits for them afresh; "Play on speaker" is the explicit choice.
 void Ui::playFailed() {
   input_.alertBuzz();  // they may be waiting with the device in a pocket
+  host_.wakeScreen("couldn't reach the headphones");
   if (!started_ || suspended_) return;
   const char* name = state_.btName[0] ? state_.btName : "the headphones";
   char title[48], body[128];
@@ -703,6 +709,7 @@ void Ui::noteFailures() {
   char text[112];
   snprintf(text, sizeof(text), "Skipped %s: can't play it", title);
   warn(text);
+  host_.wakeScreen("a track couldn't be played");
   if (page_ == &queuePage_) list_.refreshAll();
 }
 
@@ -761,16 +768,10 @@ tabbar::State Ui::tabState(uint32_t nowMs) const {
   s.progressPx = tabbar::progressPx(state_.positionMs, state_.durationMs);
   s.upNext = static_cast<uint16_t>(std::min<uint32_t>(state_.upNext, 65535));
   s.badgeFlash = static_cast<int32_t>(badgeUntilMs_ - nowMs) > 0;
-  if (!state_.onBluetooth) {
-    // Asked for, on its way: the audio waits on the speaker meanwhile.
-    s.output = state_.btSession.wanted() ? tabbar::Output::BtConnecting : tabbar::Output::Speaker;
-  } else if (state_.btConnected) {
-    s.output = tabbar::Output::BtConnected;
-  } else {
-    // Lost (dropped while the output), or a connection that failed (a play
-    // that waited for them, or the card's): red, as the card is.
-    s.output = state_.btLost || state_.btSession.failed() ? tabbar::Output::BtLost : tabbar::Output::BtConnecting;
-  }
+  // (Not amber while the background search rests: tabbar::outputFor.)
+  const BtLink::Phase ph = state_.btLink.phase;
+  s.output = tabbar::outputFor(state_.onBluetooth, state_.btConnected, state_.btLost, state_.btSession.wanted(),
+                               state_.btSession.failed(), ph != BtLink::Phase::Resting && ph != BtLink::Phase::Off);
   s.volume = state_.volume;
   s.battery = state_.battery;
   s.charging = state_.charging;
@@ -812,12 +813,24 @@ void Ui::loop(uint32_t nowMs) {
     repaintUnder();
   }
   updatePlayFailed();
+  // The page's deadlines (under a modal too, and in the dark).
+  if (page_) page_->tick(nowMs);
   // Tracks added: the Queue badge flashes.
   if (state_.contentVersion != lastContent_) {
     if (state_.upNext > lastUpNext_) badgeUntilMs_ = nowMs + 1500;
     lastContent_ = state_.contentVersion;
   }
   lastUpNext_ = state_.upNext;
+  if (dark_) {
+    // The screen is off: nothing drawn (the page, the tab bar, frames);
+    // what the cover worker made comes in, and no new job starts.
+    if (dance_.active()) {
+      dance_.setActive(false);  // (a console tab change while dark)
+      danceWasOn_ = true;
+    }
+    thumbs_.loop(nowMs, /*busy=*/true);
+    return;
+  }
   if (!hud_.up()) tabBar_.update(tabState(nowMs));
 
   // The page: redraws what changed, and animation frames on the cadence.
@@ -891,6 +904,7 @@ void Ui::trackMotion(uint32_t nowMs) {
 }
 
 uint32_t Ui::idleMs(uint32_t nowMs) const {
+  if (dark_ && started_ && !suspended_) return 20;  // nothing to draw: touches read every 20 ms
   if (!started_ || suspended_ || !page_ || !page_->animating()) return 5;
   return std::max<uint32_t>(1, std::min<uint32_t>(5, clock_.msUntilDue(nowMs)));
 }
@@ -1076,6 +1090,9 @@ void Ui::route(const InputEvent& e) {
 void Ui::suspend() {
   if (suspended_) return;
   suspended_ = true;
+  // The screen that takes the display draws as ever (it keeps it lit).
+  gfx::setDark(false);
+  danceWasOn_ = false;  // its page is left below
   if (!started_) return;
   closeModal(false);
   if (coach_.up()) coach_.close();  // shown again at the next boot (not marked seen)
@@ -1091,10 +1108,67 @@ void Ui::suspend() {
 void Ui::resume() {
   if (!suspended_) return;
   suspended_ = false;
+  gfx::setDark(dark_);  // (dark: drawn when it wakes)
   if (!started_) return;
   gfx::fill(0, 0, kW, kH, col::BG, true);
   tabBar_.invalidate();
   showTop();
+}
+
+// ---- the screen off (ScreenPower) ----
+
+void Ui::setDark(bool on) {
+  if (on == dark_) return;
+  dark_ = on;
+  if (on) {
+    if (!suspended_) gfx::setDark(true);
+    if (!started_ || suspended_) return;
+    // (No finger is on: a touch keeps the screen lit. The console's Ps0 can.)
+    endPageTouch();
+    touch_ = TouchOn::None;
+    holdUnused_ = false;
+    // A fling stops where it is (not carried on, or caught up, on the wake).
+    if (list_.attached() && list_.animating()) list_.scrollTo(list_.offset());
+    if (page_) page_->screenOff();
+    if (dance_.active()) {
+      dance_.setActive(false);
+      danceWasOn_ = true;
+    }
+    Serial.println("[ui] dark: nothing drawn until the screen wakes");
+    return;
+  }
+  gfx::setDark(false);
+  if (!started_ || suspended_) return;
+  redrawAll();
+}
+
+// Everything drawn again, as it is now: nothing reached the panel while it
+// was off, and what was drawn before (its GRAM) may be stale.
+void Ui::redrawAll() {
+  const uint32_t t0 = millis();
+  // The panel keeps its scroll registers through sleep-in; sent again anyway.
+  if (vscroll_.active()) vscroll_.resend();
+  // A volume HUD that came up in the dark is old news.
+  if (hud_.up()) hud_.hide();
+  if (danceWasOn_ && page_ == &dancePage_) dance_.setActive(true);
+  danceWasOn_ = false;
+  tabBar_.invalidate();
+  tabBar_.update(tabState(nowMs_));
+  // The page (a list page: its header now, its band at the next frame, or
+  // when the modal over it goes), then what is over it, the toast last.
+  applyCover();
+  if (jumpGrid_.up()) {
+    jumpGrid_.draw();
+  } else if (coach_.up()) {
+    coach_.draw();
+  } else if (page_) {
+    page_->repaint();
+  }
+  if (sheet_.up()) sheet_.draw();
+  if (volumeSheet_.up()) volumeSheet_.draw();
+  if (dialog_.up()) dialog_.draw();
+  if (toast_.up()) toast_.draw();
+  Serial.printf("[ui] awake: drawn again in %lu ms\n", (unsigned long)(millis() - t0));
 }
 
 // ---- the header every list page has ----
@@ -1172,7 +1246,10 @@ void Ui::drawHeader(const Header& h) {
 
 void Ui::printState() const {
   Serial.printf("[ui] %s; tab %s, page %s (depth %d)%s\n",
-                !started_ ? "not started" : suspended_ ? "SUSPENDED (another screen has the display)" : "up",
+                !started_    ? "not started"
+                : suspended_ ? "SUSPENDED (another screen has the display)"
+                : dark_      ? "up, DARK (the screen is off: nothing drawn)"
+                             : "up",
                 NavModel::name(nav_.tab()), pageKindName(nav_.top().kind), nav_.depth(),
                 vscroll_.active() ? ", hardware scroll on" : "");
   for (int t = 0; t < NavModel::kTabs; ++t) {
@@ -1238,6 +1315,7 @@ void Ui::command(const char* a) {
     Serial.println("[ui] not on screen now");
     return;
   }
+  if (dark_) host_.wakeScreen("console ui");  // drawn again on the wake
   if (a[0] >= '0' && a[0] <= '4' && !a[1]) {
     tapTab(static_cast<NavModel::Tab>(a[0] - '0'));  // as a tap on that tab (again: to its root)
   } else if (a[0] == 'b') {

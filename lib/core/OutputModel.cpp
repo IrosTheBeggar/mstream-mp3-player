@@ -11,6 +11,8 @@ const char* btPhaseName(BtLink::Phase p) {
     case BtLink::Phase::Linked: return "linked";
     case BtLink::Phase::PairScan: return "pair scan";
     case BtLink::Phase::Pairing: return "pairing";
+    case BtLink::Phase::Backoff: return "backoff";
+    case BtLink::Phase::Resting: return "resting";
   }
   return "?";
 }
@@ -25,6 +27,7 @@ const char* btCardName(BtCard c) {
     case BtCard::Connected: return "connected";
     case BtCard::Failed: return "failed";
     case BtCard::Lost: return "lost";
+    case BtCard::Resting: return "resting";
   }
   return "?";
 }
@@ -106,9 +109,10 @@ void BtSession::update(const BtLink& link, uint32_t nowMs) {
     sawTrying_ = false;
   } else if (wanted_) {
     if (link.phase == P::Paging || link.phase == P::Pairing) sawTrying_ = true;
-    // The tries ran out: BtSink went on to scanning by name (a connect) or
-    // stopped (a pairing).
-    const bool gaveUp = sawTrying_ && (link.phase == P::Scanning || link.phase == P::Off);
+    // The tries ran out: BtSink went on to the back-off (or rests, or
+    // scans by name) after a connect's burst, or stopped (a pairing).
+    const bool gaveUp = sawTrying_ && (link.phase == P::Scanning || link.phase == P::Off ||
+                                       link.phase == P::Backoff || link.phase == P::Resting);
     const bool tooLong = pairing_ && static_cast<int32_t>(nowMs - pairSinceMs_) >= static_cast<int32_t>(kPairTimeoutMs);
     // None remembered: a scan by name, which has no tries to run out.
     const bool notFound = !pairing_ && !link.remembered && !sawTrying_ &&
@@ -156,7 +160,7 @@ BtCardView btCardView(const BtLink& link, const BtSession& session, bool lost) {
     v.tone = BtTone::Cyan;
     // Forget in the More sheet: not beside Disconnect and the volume.
     buttons(BtButton::Disconnect, BtButton::More, BtButton::Volume);
-  } else if (lost && link.phase != P::Off) {
+  } else if (lost && link.phase != P::Off && link.phase != P::Resting) {
     v.card = BtCard::Lost;
     v.tone = BtTone::Red;
     v.spinner = true;
@@ -193,6 +197,14 @@ BtCardView btCardView(const BtLink& link, const BtSession& session, bool lost) {
   } else if (link.phase == P::Off || link.phase == P::PairScan) {
     v.card = BtCard::Off;
     buttons(BtButton::Connect, BtButton::Forget);
+  } else if (link.phase == P::Resting) {
+    // Not looking any more, but they come back by themselves once on:
+    // no spinner, not amber (red if they dropped while the output).
+    v.card = BtCard::Resting;
+    v.tone = lost ? BtTone::Red : BtTone::Dim;
+    v.hint = true;
+    v.lostHint = lost;  // (after the whole back-off: maybe back in range, their own reconnect given up)
+    buttons(BtButton::Connect);
   } else if (link.phase == P::Paging) {
     v.card = BtCard::Connecting;
     v.tone = BtTone::Amber;
@@ -218,7 +230,10 @@ char* btStatusLine(const BtCardView& v, const BtLink& link, const char* name, co
   const char* them = name && name[0] ? name : "headphones";
   switch (v.card) {
     case BtCard::NotPaired: snprintf(buf, size, "No headphones paired"); break;
-    case BtCard::Off: snprintf(buf, size, "Not connected"); break;
+    case BtCard::Off:
+    case BtCard::Resting:  // (and the hint beside its button)
+      snprintf(buf, size, "Not connected");
+      break;
     case BtCard::Connecting: snprintf(buf, size, "Connecting...%s", tries); break;
     case BtCard::Searching: snprintf(buf, size, "Looking for %s...", them); break;
     case BtCard::Pairing: snprintf(buf, size, "Pairing...%s", tries); break;

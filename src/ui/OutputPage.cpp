@@ -14,6 +14,7 @@
 #include <cstring>
 
 #include "LibraryIndex.h"
+#include "ScreenPower.h"
 #include "UiText.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
@@ -106,15 +107,18 @@ void OutputPage::enter(NavModel::PageRef& ref) {
   headerPressed_ = 0;
   forget_.reset();
   picked_ = -1;
+  searchEnded_ = false;
   ask_ = Ask::None;
   drawnBt_ = btSig();
   drawnSpeaker_ = speakerSig();
   drawnHaptics_ = ui_.input().hapticsOn();
+  drawnScreen_ = screenSig(ui_.state());
   if (kind_ == PageKind::Pair) {
     scan_.clear();
     scanVersion_ = 0;
     nextScanMs_ = 0;
     ui_.host().btPairScan(true);
+    search_.start(millis());
     Serial.println("[ui] output: pair screen (scanning)");
   }
   if (kind_ == PageKind::About) {
@@ -127,6 +131,7 @@ void OutputPage::enter(NavModel::PageRef& ref) {
 
 void OutputPage::leave() {
   if (kind_ == PageKind::Pair) ui_.host().btPairScan(false);
+  search_.stop();
   ui_.list().detach();
 }
 
@@ -138,6 +143,29 @@ void OutputPage::repaint() {
 // Its tab tapped again: Pair and About go back to the Output list (the Ui
 // pops them); at the root, to the top.
 void OutputPage::home() { ui_.list().scrollTo(0); }
+
+// The screen went off: the Pair screen's scan (an inquiry, back to back)
+// stops, as after its 2 minutes; the row offers "Search again" on the wake.
+// A pairing under way keeps the screen lit, so it isn't one.
+void OutputPage::screenOff() {
+  if (kind_ != PageKind::Pair || !search_.searching()) return;
+  if (ui_.state().btLink.phase == BtLink::Phase::Pairing) return;
+  search_.stop();
+  ui_.host().btPairScanPause();  // (the page stays: nothing else is tried until it closes)
+  Serial.println("[ui] output: pair screen: the search stopped (the screen went off; tap Search again)");
+}
+
+// The Pair screen's 2 minutes, checked every pass: a dialog over the page
+// (the headphones lost, "Couldn't reach") stops its update(), not the
+// inquiry, which costs power while it runs. Stopped, and the status row
+// offers to search again (drawn by update() once the page shows). The
+// list stays, and nothing else is tried until the page closes.
+void OutputPage::tick(uint32_t nowMs) {
+  if (kind_ != PageKind::Pair || !search_.due(nowMs)) return;
+  ui_.host().btPairScanPause();
+  searchEnded_ = true;
+  Serial.println("[ui] output: pair screen: the search stopped after 2 min (tap Search again)");
+}
 
 Header OutputPage::header() const {
   Header h;
@@ -206,6 +234,12 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawnHaptics_ = ui_.input().hapticsOn();
       list.refreshRow(Haptics);
     }
+    const uint8_t sc = screenSig(ui_.state());
+    if (sc != drawnScreen_ && still) {
+      drawnScreen_ = sc;
+      list.refreshRow(ScreenOff);
+      list.refreshRow(Brightness);
+    }
     // The spinner, while something is under way.
     const AppState& s = ui_.state();
     if (btCardView(s.btLink, s.btSession, s.btLost).spinner && still &&
@@ -215,6 +249,10 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       list.refreshRow(BtTop);
     }
   } else if (kind_ == PageKind::Pair) {
+    if (searchEnded_) {
+      searchEnded_ = false;
+      list.refreshRow(0);  // "Search again" (tick() stopped it)
+    }
     if (static_cast<int32_t>(nowMs - nextScanMs_) >= 0) {
       nextScanMs_ = nowMs + kScanPollMs;
       // Devices came (or their signal changed): the list again, once it's
@@ -228,7 +266,7 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
         }
       }
     }
-    if (still && static_cast<int32_t>(nowMs - nextSpinMs_) >= 0) {
+    if (still && search_.searching() && static_cast<int32_t>(nowMs - nextSpinMs_) >= 0) {
       nextSpinMs_ = nowMs + kSpinMs;
       spin_ = static_cast<uint8_t>((spin_ + 1) % 8);
       list.refreshRow(0);
@@ -278,7 +316,7 @@ void OutputPage::describe(char* buf, size_t size) const {
   snprintf(buf, size, "Output (%s): %s, the card %s (link %s), volume %u%% (speaker %u%%, bluetooth %u%%)%s",
            pageKindName(static_cast<uint8_t>(kind_)), s.onBluetooth ? "bluetooth" : "speaker", btCardName(v.card),
            btPhaseName(s.btLink.phase), static_cast<unsigned>(s.volume), static_cast<unsigned>(s.speakerVolume),
-           static_cast<unsigned>(s.btVolume), kind_ == PageKind::Pair ? (scan_.count() ? ", devices found" : ", scanning") : "");
+           static_cast<unsigned>(s.btVolume), kind_ == PageKind::Pair ? (!search_.searching() ? ", search stopped" : scan_.count() ? ", devices found" : ", scanning") : "");
 }
 
 // ---- the list ----
@@ -330,6 +368,8 @@ void OutputPage::drawRow(ListView::Row& r) {
       r.c.fillCircle(on ? x + 34 : x + 10, 21, 8, on ? col::DARK : col::DIM);
       break;
     }
+    case ScreenOff: drawScreenSetting(r, false); break;
+    case Brightness: drawScreenSetting(r, true); break;
     case Calibrate:
       drawSetting(r, icons::kGear, "Touch calibration", "if taps land off target", col::TXT, true);
       break;
@@ -346,6 +386,48 @@ void OutputPage::drawSetting(ListView::Row& r, const icons::Icon& icon, const ch
   const int x = ListView::icon(r, icon, ink == col::TXT ? col::SOFT : ink);
   const int right = chevron ? ListView::chevron(r) : r.right - 64;
   ListView::lines(r, x, right, title, strlen(title), sub, strlen(sub), ink);
+}
+
+// "Screen off after" and "Brightness" (ScreenPower's choices, saved): the
+// title and its line, the value in a pill at the right. A tap takes the
+// next choice (a sheet has room for 3 rows, not 6). Their icons are drawn
+// here: a screen, and a sun.
+void OutputPage::drawScreenSetting(ListView::Row& r, bool brightness) {
+  using namespace uitext;
+  const AppState& s = ui_.state();
+  const int cx = r.x + 22;
+  if (brightness) {
+    // A sun: a disc and 8 rays (the diagonals start and end nearer, so all
+    // eight are about as long, 6.5 to 9.5 px out).
+    r.c.fillCircle(cx, 21, 4, col::SOFT);
+    static const int8_t kRay[8][2] = {{0, -1}, {1, -1}, {1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}};
+    for (const auto& d : kRay) {
+      const bool diag = d[0] && d[1];
+      const int from = diag ? 5 : 7, to = diag ? 7 : 9;
+      r.c.drawLine(cx + d[0] * from, 21 + d[1] * from, cx + d[0] * to, 21 + d[1] * to, col::SOFT);
+    }
+  } else {
+    r.c.drawRoundRect(cx - 9, 13, 18, 13, 2, col::SOFT);
+    r.c.fillRect(cx - 7, 15, 14, 9, s.screenTimeout == ScreenPower::kNever ? col::SOFT : col::FAINT);
+    r.c.fillRect(cx - 4, 28, 8, 2, col::SOFT);
+  }
+  const int x = r.x + 44;
+  const int pillX = r.right - 8 - kSettingPillW;
+  const char* title = brightness ? kBrightnessTitle : kScreenOffTitle;
+  const char* sub = brightness                                 ? kBrightnessSub
+                    : s.screenTimeout == ScreenPower::kNever ? kScreenNeverSub
+                                                               : kScreenOffSub;
+  ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
+  const uint16_t pill = r.pressed ? col::BTN_HI : col::BTN;
+  r.c.fillRoundRect(pillX, 9, kSettingPillW, 24, 8, pill);
+  const char* value =
+      brightness ? ScreenPower::brightnessLabel(s.brightness) : ScreenPower::timeoutLabel(s.screenTimeout);
+  Fonts::instance().draw(r.c, Font::Body, value, pillX + kSettingPillW / 2, 21, kSettingPillW - kSettingPillPad,
+                         col::TXT, pill, Fonts::Align::Centre);
+}
+
+uint8_t OutputPage::screenSig(const AppState& s) {
+  return static_cast<uint8_t>((s.screenTimeout & 0x0F) << 4 | (s.brightness & 0x0F));
 }
 
 // The Bluetooth card's top row: the headphones in the state's colour, the
@@ -433,6 +515,13 @@ void OutputPage::drawBtButtons(ListView::Row& r) {
              w[i] - uitext::kBtButtonPad, ink, fill, Fonts::Align::Centre);
     }
   }
+  if (v.hint) {
+    // Resting: why nothing is under way, beside [Connect] (lost: what to try).
+    f.draw(r.c, Font::Small, v.lostHint ? uitext::kBtLostHintLine1 : uitext::kBtHintLine1, uitext::kBtHintX, 12,
+           uitext::kBtHintW, col::DIM, bg);
+    f.draw(r.c, Font::Small, v.lostHint ? uitext::kBtLostHintLine2 : uitext::kBtHintLine2, uitext::kBtHintX, 28,
+           uitext::kBtHintW, col::DIM, bg);
+  }
 }
 
 void OutputPage::drawSpeaker(ListView::Row& r) {
@@ -473,6 +562,14 @@ void OutputPage::drawPairStatus(ListView::Row& r) {
   const AppState& s = ui_.state();
   r.c.fillSprite(col::BG);
   const bool pairing = s.btLink.phase == BtLink::Phase::Pairing;
+  if (!pairing && !search_.searching()) {
+    // Stopped after its 2 minutes (or the screen went off): a tap on this
+    // row searches again.
+    icons::drawCentred(r.c, icons::kPlus, 24, 21, accent::Output);
+    f.draw(r.c, Font::Bold, uitext::kPairSearchAgain, 48, 13, kW - 60, accent::Output, col::BG);
+    f.draw(r.c, Font::Small, uitext::kPairSearchStopped, 48, 31, uitext::kPairHintW, col::DIM, col::BG);
+    return;
+  }
   spinner(r.c, 24, 21, spin_, col::CYAN);
   f.draw(r.c, Font::Bold, pairing ? "Pairing..." : "Searching", 48, 13, kW - 60, col::TXT, col::BG);
   f.draw(r.c, Font::Small, uitext::kPairHint, 48, 31, uitext::kPairHintW, col::DIM, col::BG);
@@ -555,7 +652,19 @@ void OutputPage::drawAbout(ListView::Row& r) {
 
 ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
   if (kind_ == PageKind::Pair) {
-    if (row >= 1) pick(static_cast<int>(row) - 1);
+    if (row >= 1) {
+      pick(static_cast<int>(row) - 1);
+    } else if (!search_.searching() && ui_.state().btLink.phase != BtLink::Phase::Pairing) {
+      // Search again: the list starts over, for another 2 minutes.
+      ui_.tick();
+      scan_.clear();
+      scanVersion_ = 0;
+      ui_.host().btPairScan(true);
+      search_.start(millis());
+      Serial.println("[ui] output: pair screen: searching again");
+      ui_.list().reload();
+      repaintHeader();
+    }
     return ListView::Tap::Handled;
   }
   if (kind_ == PageKind::About) {
@@ -592,6 +701,14 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
       Serial.printf("[ui] haptics %s\n", in.hapticsOn() ? "on" : "off");
       break;
     }
+    case ScreenOff:
+      // The next choice (after Never, 15 s again); the countdown restarts.
+      ui_.host().setScreenTimeout((s.screenTimeout + 1) % ScreenPower::kTimeouts);
+      break;
+    case Brightness:
+      // The next level, at once (Max, then Low again).
+      ui_.host().setBrightness((s.brightness + 1) % ScreenPower::kBrightnesses);
+      break;
     case Calibrate: ui_.host().openCalibration(); break;
     case AboutRow: ui_.push(page(PageKind::About)); break;
     default: break;
@@ -609,6 +726,7 @@ void OutputPage::onCard() {
       if (!s.onBluetooth) ui_.host().selectOutput(true);
       break;
     case BtCard::Off:
+    case BtCard::Resting:
       ui_.host().selectOutput(true);  // connects; the audio waits
       break;
     case BtCard::Failed:
@@ -722,6 +840,7 @@ void OutputPage::onDialog(int button) {
   if (ask != Ask::Pair || kind_ != PageKind::Pair || button != 1 || picked_ < 0 || picked_ >= scan_.count()) return;
   const BtDevice d = scan_.at(picked_);
   picked_ = -1;
+  searchEnded_ = false;
   char text[64];
   if (ui_.host().btPairWith(d)) {
     snprintf(text, sizeof(text), "Pairing with %s...", d.name[0] ? d.name : "it");

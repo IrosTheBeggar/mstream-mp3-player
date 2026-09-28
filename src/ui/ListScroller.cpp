@@ -60,6 +60,18 @@ void ListScroller::end() {
   active_ = nullptr;
 }
 
+void ListScroller::resend() {
+  if (active_ != this) return;
+  LcdLock lock(stats_);
+  auto& d = M5.Display;
+  d.writeCommand(kVscrdef);
+  d.writeData16(static_cast<uint16_t>(map_.top()));
+  d.writeData16(static_cast<uint16_t>(map_.height()));
+  d.writeData16(static_cast<uint16_t>(kPanelLines - map_.top() - map_.height()));
+  d.writeCommand(kVscrsadd);
+  d.writeData16(sentVsp_);
+}
+
 void ListScroller::sendStartAddress(uint16_t vsp) {
   if (vsp == sentVsp_) return;
   LcdLock lock(stats_);

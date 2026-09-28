@@ -52,4 +52,15 @@ uint8_t progressPx(uint32_t positionMs, uint32_t durationMs) {
   return static_cast<uint8_t>(static_cast<uint64_t>(positionMs) * kProgressW / durationMs);
 }
 
+Output outputFor(bool onBluetooth, bool connected, bool lost, bool asked, bool failed, bool looking) {
+  // Asked for, on its way: the audio waits on the speaker meanwhile.
+  if (!onBluetooth) return asked ? Output::BtConnecting : Output::Speaker;
+  if (connected) return Output::BtConnected;
+  // Lost (dropped while the output), or a connection that failed (a play
+  // that waited for them, or the card's): red, as the card is.
+  if (lost || failed) return Output::BtLost;
+  // Resting: nothing under way, so not amber.
+  return looking || asked ? Output::BtConnecting : Output::BtIdle;
+}
+
 }  // namespace tabbar

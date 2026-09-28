@@ -18,6 +18,10 @@
 // Switching to Bluetooth keeps playing or paused as it was (the audio stays
 // on the speaker until the headphones are up).
 //
+// A B click that would start the speaker right after the screen woke from
+// off, before anyone touched the glass, is refused (Transport::
+// startRefused(): the pocket rule, docs/ENERGY.md item 2).
+//
 // Every hold leaves a Feedback for the screen's HUD (the volume, or where
 // the output went and whether that paused). Portable: the Transport is
 // main.cpp's.
@@ -54,6 +58,12 @@ public:
     // and say so (handle() returns false: the input layer's "inert" buzz,
     // not the tap tick).
     virtual bool idle() const { return false; }
+    // A play started now would sound on the speaker while nobody may be
+    // looking (the screen woke from off and no touch on the glass since:
+    // ScreenPower::unattended(), a pocket's contacts): a B click that
+    // would start playing does nothing, and says so (the inert buzz). A
+    // pause, the volume and a B hold still act.
+    virtual bool startRefused() const { return false; }
     // Switches to the other output; false if it can't (silent test mode,
     // no headphones paired).
     virtual bool switchOutput() = 0;

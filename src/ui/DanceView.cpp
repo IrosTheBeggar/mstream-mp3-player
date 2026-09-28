@@ -2,6 +2,7 @@
 
 #include <M5Unified.h>
 
+#include "ui/Gfx.h"
 #include "ui/LcdLock.h"
 
 #include <algorithm>
@@ -183,7 +184,7 @@ void DanceView::drawCrab(const crab::Pose& p, float weight, bool flash) {
 }
 
 void DanceView::pushRect(const Rect& r) {
-  if (r.empty()) return;
+  if (r.empty() || ui::gfx::dark()) return;  // (the screen off: nothing drawn)
   // Only the rows no overlay holds.
   const int y0 = std::max(kBoxY + r.y0, visTop_);
   const int y1 = std::min(kBoxY + r.y1, visBottom_);

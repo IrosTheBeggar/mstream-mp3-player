@@ -21,12 +21,9 @@ BtSink* sink = nullptr;  // ESP32-A2DP takes plain function pointers
 // Without a configured name, only connect to a device this close (dBm). -70
 // wasn't enough: a TV in the next room fluctuated past it and got paired.
 constexpr int kMinRssi = -55;
-// Reconnect attempts (~10 s apart) to the remembered device before scanning.
-// The library's default of 1000 blocks discovery for hours if it's gone.
+// A pairing's tries (the library's retries, the one place they still run:
+// every other page is ReconnectPlanner's).
 constexpr int kReconnectTries = 3;
-// A page this recent may still be answered: the controller's page timeout
-// (5.12 s by default) and a margin. Connect doesn't page on top of it.
-constexpr uint32_t kPageMs = 5500;
 // BtAppT runs our handlers, which log and read/write NVS: the library's
 // default of 3072 bytes is too tight (watch appTaskStackFree in the stats).
 constexpr int kAppTaskStack = 6144;
@@ -117,6 +114,13 @@ uint64_t packBda(const uint8_t* bda) {
 // ReconnectPlanner (lib/core, host-tested) make the decisions; this class
 // only wires them to the stack and carries them out (BtControl::Io).
 //
+// Finding the headphones while no link is up is ReconnectPlanner's (a burst
+// of pages, a back-off, then resting connectable; a scan by name only with
+// none remembered): the library's own auto-reconnect is kept disarmed
+// (is_autoreconnect_allowed false) except during a pairing, so its "retries
+// exhausted: start discovery" branch never runs. Its heartbeat and BtAppT's
+// ticks from the loop step the planner.
+//
 // Every handler runs on the library's app task (BtAppT), which drains its
 // event queue, except app_gap_callback and app_rc_tg_callback (Bluedroid's BTC
 // task). The loop task never touches this state: it posts work to BtAppT
@@ -147,8 +151,8 @@ public:
   enum Work : uint16_t {
     kWantOff, kWantOn, kTick, kSuspendNow, kForget,
     // The Output screen's asks (BtSink::connect() ...).
-    kConnect, kDisconnect, kPairScanOn, kPairScanOff, kPairWith,
-    // Power measurements: the background reconnect cycle paused / resumed.
+    kConnect, kDisconnect, kPairScanOn, kPairScanOff, kPairScanPause, kPairWith,
+    // Power measurements: the background search rests now / starts again.
     kBgPause, kBgResume,
   };
   static constexpr uint16_t kVolumeStep = 0x100;  // onVolumeWork: low byte is a signed step
@@ -211,13 +215,14 @@ protected:
   // library makes us non-connectable there (BluetoothA2DPSource.h:374-376).
   void set_scan_mode_connectable_default() override { set_scan_mode_connectable(!linkUp_.load()); }
 
-  // Every page goes through here: the library's retries
-  // (handle_reconnect_logic() counts reconnect_retries down, then calls it)
-  // and ours. For the Output card's "try 2 of 3".
+  // Every page goes through here: ReconnectPlanner's, the boot's (the
+  // library's, at stack-up) and a pairing's (the library's retries:
+  // handle_reconnect_logic() counts reconnect_retries down, then calls it).
+  // For the Output card's "try 2 of 3", and the planner's timing.
   bool connect_to(esp_bd_addr_t peer) override {
-    attempt_ = static_cast<uint8_t>(std::max(1, std::min(max_reconnect_retries - reconnect_retries, 9)));
-    pageAtMs_ = millis();
-    paged_ = true;
+    reconnect_.pageMade(millis());
+    attempt_ = pairing_ ? static_cast<uint8_t>(std::max(1, std::min(max_reconnect_retries - reconnect_retries, 9)))
+                        : static_cast<uint8_t>(reconnect_.burstTry());
     const bool ok = BluetoothA2DPCommon::connect_to(peer);
     publishLink();
     return ok;
@@ -251,14 +256,19 @@ private:
   void finishLinkUp(const esp_a2d_cb_param_t& a2d);
   void linkDown(const esp_a2d_cb_param_t& a2d);
   void heartbeat();
-  void rearmReconnect(const uint8_t* bda);
+  // BtAppT's ticks and heartbeats: ReconnectPlanner decides, this carries it out.
+  void planStep(uint32_t nowMs);
+  void notePhase(ReconnectPlanner::Phase before, uint32_t nowMs);
+  ReconnectPlanner::Lib libState() const;
+  void rememberPeer(const uint8_t* bda);
   void forgetPeer();
   void logCodec(const esp_a2d_mcc_t& mcc);
   // The Output screen (BtAppT).
   void userConnect();
   void userDisconnect();
   void pairScan(bool on);
-  void pauseBackground(bool on, const char* why);
+  void pairScanPause();
+  void setBackground(bool on);
   void startPairing(const uint8_t* bda);
   void pairFailed(const char* why);
   void noteDiscovery(const esp_bt_gap_cb_param_t& param);  // BTC task
@@ -283,6 +293,7 @@ private:
   // BtAppT only from here on.
   BtControl ctl_{*this, BtSink::kDefaultVolume};
   ReconnectPlanner reconnect_;
+  RadioMeter radio_;  // the share of time paging or scanning, per minute
   uint8_t label_ = kFirstLabel;
   bool codecLogged_ = false;
   bool delayLogged_ = false;
@@ -290,13 +301,11 @@ private:
   // The Output screen's state (BtAppT).
   bool userOff_ = false;         // the listener let go: no paging, no scanning, none let in
   bool offBeforeScan_ = false;   // userOff_ when the pair scan began
+  bool pairPage_ = false;        // the Pair screen is up, its scan stopped (2 min, the screen off): nothing to plan
   bool pairing_ = false;         // connecting to a device picked on the Pair screen
   bool pendingPair_ = false;     // ... once the link that is up has gone
-  bool bgPaused_ = false;        // power measurements: no background pages or scans (BtSink::setBackgroundReconnect)
   uint8_t pendingAddr_[ESP_BD_ADDR_LEN] = {};
   uint8_t attempt_ = 0;          // the last page's try number
-  bool paged_ = false;           // a page was made (pageAtMs_: when)
-  uint32_t pageAtMs_ = 0;
 };
 
 namespace {
@@ -314,6 +323,7 @@ void PlayerA2dp::onWork(uint16_t work, void*) {
       break;
     case kTick:
       a2dp.ctl_.tick(now);
+      a2dp.planStep(now);
       a2dp.publishLink();
       break;
     case kSuspendNow:
@@ -332,12 +342,14 @@ void PlayerA2dp::onWork(uint16_t work, void*) {
     case kPairScanOff:
       a2dp.pairScan(work == kPairScanOn);
       break;
+    case kPairScanPause:
+      a2dp.pairScanPause();
+      break;
     case kBgPause:
     case kBgResume:
-      a2dp.pauseBackground(work == kBgPause, nullptr);
+      a2dp.setBackground(work == kBgResume);
       break;
     case kPairWith:
-      a2dp.pauseBackground(false, "pairing asked for");
       a2dp.pairScan(false);
       if (a2dp.linkUp_ && packBda(sink->pairAddr_) != a2dp.linkedBda_.load()) {
         // The link that is up goes first; linkDown() starts the pairing.
@@ -413,8 +425,14 @@ void PlayerA2dp::bt_app_av_sm_hdlr(uint16_t event, void* param) {
                  reconnect_retries <= 0) {
         // The last try to pair failed: stop there (the library would go on
         // to scan by name and could connect to something else).
+        reconnect_.pageEnded(millis());
         pairFailed("no answer to the last try");
       } else {
+        // Unlinked, a DISCONNECTED answers a page: nobody took it. (Before
+        // the library sees it: during a pairing it pages again at once.)
+        // Outside a pairing the library is disarmed and does nothing more;
+        // the planner's next step decides.
+        if (c.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED && !linkUp_) reconnect_.pageEnded(millis());
         BluetoothA2DPSource::bt_app_av_sm_hdlr(event, param);
         if (c.state == ESP_A2D_CONNECTION_STATE_DISCONNECTED) linkDown(*a2d);
       }
@@ -496,7 +514,8 @@ void PlayerA2dp::finishLinkUp(const esp_a2d_cb_param_t& a2d) {
   s_a2d_state = APP_AV_STATE_CONNECTED;
   s_connecting_heatbeat_count = 0;
   std::memcpy(peer_bd_addr, bda, ESP_BD_ADDR_LEN);
-  rearmReconnect(bda);
+  rememberPeer(bda);
+  reconnect_.linked();
   // Unconditionally: discovery_active is only set once the stack reports the
   // start, which may still be on its way. Harmless when nothing runs.
   esp_bt_gap_cancel_discovery();
@@ -527,88 +546,132 @@ void PlayerA2dp::linkDown(const esp_a2d_cb_param_t& a2d) {
   if (pendingPair_) {
     pendingPair_ = false;
     startPairing(pendingAddr_);
+  } else if (!userOff_) {
+    // Lost: a burst of pages from the next tick, then the back-off.
+    reconnect_.start(ReconnectPlanner::Why::Drop, has_last_connection(), millis());
+    Serial.println("[bt] reconnect: paging them (3 tries, then now and then; resting after 15 min, or at once "
+                   "after the tries while nobody is around)");
   }
   publishLink();
 }
 
-// The library's 10 s heartbeat: ReconnectPlanner decides, this carries it out.
+// The library's 10 s heartbeat.
 void PlayerA2dp::heartbeat() {
   // Unlinked it can't be connected (e.g. a link the library never saw close).
   if (!linkUp_ && s_a2d_state == APP_AV_STATE_CONNECTED) s_a2d_state = APP_AV_STATE_UNCONNECTED;
+  if (linkUp_) {
+    // Connected, the library would start an idle stream (BluetoothA2DPSource.cpp:807-812).
+    last_heart_beat = get_millis();
+    publishLink();
+    return;
+  }
+  // A pairing whose tries are used up (the last page had a heartbeat to
+  // answer): it failed; the library would scan by name next.
+  if (pairing_ && reconnect_retries <= 0) {
+    pairFailed("no answer");
+    return;
+  }
+  // The library's own heartbeat only where it has something to do: a
+  // pairing's retries (armed only then: :675-683, :700-708), and the
+  // 2-heartbeat timeout of a connection it makes itself (the boot's page, a
+  // device a scan by name found: :750-757). Disarmed, its unconnected
+  // handler does nothing.
+  if (pairing_ || s_a2d_state == APP_AV_STATE_CONNECTING) BluetoothA2DPSource::bt_app_av_sm_hdlr(kHeartBeatEvt, nullptr);
+  planStep(millis());
   publishLink();
-  if (!linkUp_) {
-    // The listener let go, or the Pair screen scans: nothing to page.
-    if (userOff_ || pairScan_ || pendingPair_) return;
-    // Paused for a power measurement: connectable only (they can come back).
-    if (bgPaused_ && !pairing_) return;
-    // A pairing whose tries are used up (the last page had a heartbeat to
-    // answer): it failed; the library would scan by name next.
-    if (pairing_ && reconnect_retries <= 0) {
-      pairFailed("no answer");
-      return;
-    }
-    // Forgotten on the Output screen, none paired since: nothing to page,
-    // nothing to look for by name.
-    if (!has_last_connection() && sink->forgotForGood_.load()) return;
-  }
-  ReconnectPlanner::Lib state = ReconnectPlanner::Lib::Other;
-  switch (s_a2d_state) {
-    case APP_AV_STATE_UNCONNECTED: state = ReconnectPlanner::Lib::Unconnected; break;
-    case APP_AV_STATE_CONNECTING: state = ReconnectPlanner::Lib::Connecting; break;
-    case APP_AV_STATE_DISCOVERING: state = ReconnectPlanner::Lib::Discovering; break;
-    default: break;
-  }
-  const ReconnectPlanner::In in{linkUp_.load(),
-                                state,
-                                discovery_active,
-                                is_autoreconnect_allowed && reconnect_status == AutoReconnect,
-                                has_last_connection(),
-                                static_cast<uint32_t>(get_millis())};
-  switch (reconnect_.heartbeat(in)) {
-    case ReconnectPlanner::Do::KeepAlive:
-      // Connected, the library would start an idle stream (BluetoothA2DPSource.cpp:807-812).
-      last_heart_beat = get_millis();
-      return;
-    case ReconnectPlanner::Do::KeepScanning:
-      return;
-    case ReconnectPlanner::Do::StopScanAndPage:
-      Serial.printf("[bt] nothing found by scanning: trying %s again\n", to_str(last_connection));
-      s_a2d_state = APP_AV_STATE_UNCONNECTED;  // app_gap_callback won't restart discovery now
-      esp_bt_gap_cancel_discovery();
-      reconnect_status = AutoReconnect;
-      reconnect_retries = max_reconnect_retries;
-      is_autoreconnect_allowed = true;
-      break;
-    case ReconnectPlanner::Do::ReArm:
-      Serial.printf("[bt] trying %s again\n", to_str(last_connection));
-      reconnect_status = AutoReconnect;
-      reconnect_retries = max_reconnect_retries;
-      is_autoreconnect_allowed = true;
-      break;
-    case ReconnectPlanner::Do::Scan:
-      Serial.println("[bt] scanning for headphones again");
-      s_a2d_state = APP_AV_STATE_DISCOVERING;
-      esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
-      return;
-    case ReconnectPlanner::Do::PassOn:
-      break;
-  }
-  // Unconnected: retries, then discovery (:675-683, :700-718). Connecting: the
-  // library's 2-heartbeat timeout (:750-757).
-  BluetoothA2DPSource::bt_app_av_sm_hdlr(kHeartBeatEvt, nullptr);
 }
 
-// ESP32-A2DP leaves auto-reconnect off after a connection made through
-// discovery (start() only enables it when NVS had an address,
-// BluetoothA2DPSource.cpp:99-111) and for good once its retries ran out
-// (:710-716), so a later drop never reconnected. Re-armed on every link, and
-// NVS is checked directly: set_last_connection() skips the write when RAM
-// already holds the address or while retries are exhausted
-// (BluetoothA2DPCommon.cpp:274-281).
-void PlayerA2dp::rearmReconnect(const uint8_t* bda) {
+ReconnectPlanner::Lib PlayerA2dp::libState() const {
+  switch (s_a2d_state) {
+    case APP_AV_STATE_UNCONNECTED: return ReconnectPlanner::Lib::Unconnected;
+    case APP_AV_STATE_CONNECTED: return linkUp_ ? ReconnectPlanner::Lib::Other : ReconnectPlanner::Lib::Unconnected;
+    case APP_AV_STATE_CONNECTING: return ReconnectPlanner::Lib::Connecting;
+    case APP_AV_STATE_DISCOVERING: return ReconnectPlanner::Lib::Discovering;
+    default: return ReconnectPlanner::Lib::Other;
+  }
+}
+
+// BtAppT's ticks (every 250 ms from the loop) and heartbeats.
+void PlayerA2dp::planStep(uint32_t nowMs) {
+  radio_.sample(nowMs, reconnect_.pageOnItsWay(nowMs) || discovery_active || pairScan_);
+  sink->radioBusy_.store(static_cast<int8_t>(radio_.lastMinutePercent()), std::memory_order_relaxed);
+  // The listener's: let go, the Pair screen (scanning, or up with its scan
+  // stopped), a pairing (the library's tries). Nothing to plan until they
+  // are done.
+  if (linkUp_ || userOff_ || pairScan_ || pairPage_ || pairing_ || pendingPair_) {
+    sink->reconnectPhase_.store(static_cast<uint8_t>(reconnect_.phase()), std::memory_order_relaxed);
+    return;
+  }
+  const ReconnectPlanner::Phase before = reconnect_.phase();
+  const ReconnectPlanner::In in{false,
+                                libState(),
+                                discovery_active,
+                                has_last_connection(),
+                                !sink->forgotForGood_.load(),
+                                sink->quiet_.load(std::memory_order_relaxed),
+                                nowMs};
+  switch (reconnect_.step(in)) {
+    case ReconnectPlanner::Do::Page: {
+      s_a2d_state = APP_AV_STATE_UNCONNECTED;
+      const bool burst = reconnect_.phase() == ReconnectPlanner::Phase::Burst;
+      connect_to(last_connection);
+      if (burst) {
+        Serial.printf("[bt] reconnect: paging %s, try %d of %d\n", to_str(last_connection), reconnect_.burstTry(),
+                      ReconnectPlanner::kBurstPages);
+      } else {
+        Serial.printf("[bt] reconnect: paging %s (backing off: the next in %lu s, unless they answer)\n",
+                      to_str(last_connection), static_cast<unsigned long>(reconnect_.nextPageInMs(nowMs) / 1000));
+      }
+      break;
+    }
+    case ReconnectPlanner::Do::Scan:
+      Serial.printf("[bt] reconnect: none remembered: scanning for headphones by name (for %lu s)\n",
+                    static_cast<unsigned long>(ReconnectPlanner::kScanForMs / 1000));
+      s_a2d_state = APP_AV_STATE_DISCOVERING;
+      esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+      break;
+    case ReconnectPlanner::Do::StopScan:
+      Serial.println("[bt] reconnect: scan by name stopped");
+      s_a2d_state = APP_AV_STATE_UNCONNECTED;  // app_gap_callback won't restart discovery now
+      esp_bt_gap_cancel_discovery();
+      break;
+    case ReconnectPlanner::Do::Nothing:
+      break;
+  }
+  notePhase(before, nowMs);
+}
+
+// Says what the planner went on to, once.
+void PlayerA2dp::notePhase(ReconnectPlanner::Phase before, uint32_t nowMs) {
+  using Ph = ReconnectPlanner::Phase;
+  const Ph now = reconnect_.phase();
+  sink->reconnectPhase_.store(static_cast<uint8_t>(now), std::memory_order_relaxed);
+  if (now == before) return;
+  if (now == Ph::Backoff) {
+    Serial.printf("[bt] reconnect: no answer to %d tries: backing off (a page in %lu s, then 1, 2, 5 min apart; no "
+                  "scans)\n",
+                  ReconnectPlanner::kBurstPages, static_cast<unsigned long>(reconnect_.nextPageInMs(nowMs) / 1000));
+  } else if (now == Ph::Resting) {
+    const char* why = before == Ph::Scan                                ? "the scan by name is over"
+                      : sink->quiet_.load(std::memory_order_relaxed) ? "nobody around (the screen off, nothing playing)"
+                                                                     : "15 min without an answer";
+    Serial.printf("[bt] reconnect: resting (%s): no pages or scans, still connectable: they come back by "
+                  "themselves when switched on\n",
+                  why);
+  }
+  publishLink();
+}
+
+// The headphones linked now are the remembered ones (RAM and NVS). The
+// library's auto-reconnect stays disarmed: after a drop the planner pages
+// them (reconnect_status stays AutoReconnect: set_last_connection() then
+// still writes NVS for a device a scan by name finds). NVS is checked
+// directly: set_last_connection() skips the write when RAM already holds
+// the address (BluetoothA2DPCommon.cpp:274-281).
+void PlayerA2dp::rememberPeer(const uint8_t* bda) {
   reconnect_status = AutoReconnect;
   reconnect_retries = max_reconnect_retries;
-  is_autoreconnect_allowed = true;
+  is_autoreconnect_allowed = false;
   esp_bd_addr_t addr;
   std::memcpy(addr, bda, ESP_BD_ADDR_LEN);
   std::memcpy(last_connection, addr, ESP_BD_ADDR_LEN);
@@ -851,7 +914,19 @@ void PlayerA2dp::av_hdl_stack_evt(uint16_t event, void* param) {
   // Stay connectable while unconnected, so the remembered headphones can
   // reconnect by themselves when they wake up, as they do to a phone.
   if (!linkUp_) set_scan_mode_connectable(true);
+  // The library has paged the remembered headphones (its connect_to(): the
+  // planner counts it as the boot burst's first try) or started a scan by
+  // name; from here on every background page is the planner's, and the
+  // library's auto-reconnect stays disarmed (outside a pairing).
+  is_autoreconnect_allowed = false;
+  if (!linkUp_) {
+    reconnect_.start(ReconnectPlanner::Why::Boot, has_last_connection(), millis());
+    Serial.printf("[bt] reconnect: %s\n", has_last_connection() ? "paging the remembered headphones (3 tries, then now "
+                                                                   "and then; resting after 15 min)"
+                                                                 : "none remembered: scanning by name for 2 min");
+  }
   ready_ = true;  // the loop's work can come in now
+  publishLink();
 }
 
 // BTC task. Reads s_a2d_state, which BtAppT writes (as the library itself does).
@@ -924,47 +999,59 @@ void PlayerA2dp::publishLink() {
     p = P::PairScan;
   } else if (pairing_ || pendingPair_) {
     p = P::Pairing;
-  } else if (userOff_ || (!has_last_connection() && sink->forgotForGood_.load())) {
+  } else if (userOff_ || pairPage_ || (!has_last_connection() && sink->forgotForGood_.load())) {
+    // (The Pair screen with its scan stopped: not trying either. A play
+    // then connects: BtSink::connect() ends the Pair screen's hold.)
     p = P::Off;
-  } else if (s_a2d_state == APP_AV_STATE_DISCOVERING || s_a2d_state == APP_AV_STATE_DISCOVERED || discovery_active ||
-             !has_last_connection() || reconnect_status != AutoReconnect) {
-    p = P::Scanning;  // by name (or, with none remembered, close by)
   } else {
-    p = P::Paging;
+    switch (reconnect_.phase()) {
+      case ReconnectPlanner::Phase::Burst: p = P::Paging; break;
+      case ReconnectPlanner::Phase::Backoff: p = P::Backoff; break;
+      case ReconnectPlanner::Phase::Resting: p = P::Resting; break;
+      case ReconnectPlanner::Phase::Scan: p = P::Scanning; break;  // by name (or, with none remembered, close by)
+      case ReconnectPlanner::Phase::Idle:
+      default:
+        // Before the stack is up (its first 10 s): what the boot will do.
+        p = has_last_connection() ? P::Paging : P::Scanning;
+        break;
+    }
   }
   sink->linkPhase_.store(static_cast<uint8_t>(p), std::memory_order_relaxed);
-  sink->linkAttempt_.store(p == P::Paging || p == P::Pairing ? attempt_ : 0, std::memory_order_relaxed);
-  sink->linkAttempts_.store(static_cast<uint8_t>(max_reconnect_retries), std::memory_order_relaxed);
+  const uint8_t attempt = p == P::Pairing ? attempt_ : p == P::Paging ? static_cast<uint8_t>(reconnect_.burstTry()) : 0;
+  sink->linkAttempt_.store(attempt, std::memory_order_relaxed);
+  sink->linkAttempts_.store(static_cast<uint8_t>(p == P::Pairing ? max_reconnect_retries : ReconnectPlanner::kBurstPages),
+                            std::memory_order_relaxed);
+  sink->reconnectPhase_.store(static_cast<uint8_t>(reconnect_.phase()), std::memory_order_relaxed);
   sink->linkRemembered_.store(has_last_connection(), std::memory_order_relaxed);
 }
 
-// Connect: the remembered headphones now (then the library's retries), or
-// a scan by name when none is remembered. Let in again.
+// Connect (the card, a B hold, a play waiting for them): a full burst of
+// pages to the remembered headphones now, or a scan by name (2 min) when
+// none is remembered. Let in again.
 void PlayerA2dp::userConnect() {
   userOff_ = false;
-  pauseBackground(false, "connect asked for");
   if (linkUp_) return;
-  if (pairScan_) pairScan(false);
+  if (pairScan_ || pairPage_) pairScan(false);
   set_scan_mode_connectable(true);
   if (!has_last_connection() && sink->forgotForGood_.load()) {
     // (main.cpp doesn't ask then: BtSink::nothingToFind())
     Serial.println("[bt] connect: no headphones paired since Forget: pair them on the Output tab");
     userOff_ = true;
+    reconnect_.stop();
     set_scan_mode_connectable(false);
     return;
   }
+  const uint32_t now = millis();
   if (!has_last_connection()) {
-    Serial.println("[bt] connect: none remembered, scanning");
-    s_a2d_state = APP_AV_STATE_DISCOVERING;
-    esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY, 10, 0);
+    Serial.println("[bt] connect: none remembered, scanning by name");
+    reconnect_.start(ReconnectPlanner::Why::Ask, false, now);
+    planStep(now);
     return;
   }
-  // A page of the background cycle's still on its way (the library pages
-  // each heartbeat, and its burst may be at its last try): it counts as the
-  // first try of a full burst, not a second page on top of it.
-  const bool pageOnItsWay = paged_ && !pairing_ && !discovery_active && reconnect_status == AutoReconnect &&
-                            s_a2d_state != APP_AV_STATE_DISCOVERING && s_a2d_state != APP_AV_STATE_DISCOVERED &&
-                            millis() - pageAtMs_ < kPageMs;
+  // A page still on its way (the back-off's, the last of a burst): it
+  // counts as the first try of the new burst, not a page on top of it.
+  const bool pageOnItsWay = !pairing_ && reconnect_.pageOnItsWay(now) && s_a2d_state != APP_AV_STATE_DISCOVERING &&
+                            s_a2d_state != APP_AV_STATE_DISCOVERED;
   if (discovery_active) {
     // A page competes with a scan. The scan's end arrives later on the BTC
     // task, which doesn't publish: marked over now, so the card and Now
@@ -973,25 +1060,25 @@ void PlayerA2dp::userConnect() {
     discovery_active = false;
   }
   s_a2d_state = APP_AV_STATE_UNCONNECTED;
-  reconnect_status = AutoReconnect;
-  is_autoreconnect_allowed = true;
-  reconnect_retries = max_reconnect_retries - 1;  // this is the first
+  reconnect_status = AutoReconnect;  // (a Disconnect cleared it; the library still pages nothing by itself)
+  reconnect_.start(ReconnectPlanner::Why::Ask, true, now);  // (counts the page on its way as try 1)
   if (pageOnItsWay) {
-    attempt_ = 1;
     Serial.printf("[bt] connect: a page to %s is on its way: try 1 of %d\n", to_str(last_connection),
-                  max_reconnect_retries);
+                  ReconnectPlanner::kBurstPages);
+    publishLink();
     return;
   }
-  Serial.printf("[bt] connect: paging %s\n", to_str(last_connection));
-  connect_to(last_connection);
+  Serial.printf("[bt] connect: paging %s now\n", to_str(last_connection));
+  planStep(now);
 }
 
 // Disconnect / Cancel: let go and stop trying, until userConnect().
 void PlayerA2dp::userDisconnect() {
   const bool wasPairing = pairing_ || pendingPair_;
   userOff_ = true;
+  reconnect_.stop();
   pendingPair_ = false;
-  if (pairScan_) pairScan(false);
+  if (pairScan_ || pairPage_) pairScan(false);
   userOff_ = true;  // (the scan's end restores what it was before)
   reconnect_status = NoReconnect;
   is_autoreconnect_allowed = false;
@@ -1015,11 +1102,15 @@ void PlayerA2dp::userDisconnect() {
   }
 }
 
+// On: the Pair screen scans. Off: the Pair screen closed (or a pairing,
+// a connect or a disconnect took over): back to what it was doing.
 void PlayerA2dp::pairScan(bool on) {
-  if (on == pairScan_.load()) return;
+  if (on == pairScan_.load() && (on || !pairPage_)) return;
   if (on) {
-    pauseBackground(false, "the Pair screen scans");
-    offBeforeScan_ = userOff_;
+    reconnect_.stop();  // no background pages or scans while it scans
+    // (Search again: what it was before the first scan still stands.)
+    if (!pairPage_) offBeforeScan_ = userOff_;
+    pairPage_ = false;
     portENTER_CRITICAL(&sink->scanLock_);
     if (sink->scan_) sink->scan_->clear();
     portEXIT_CRITICAL(&sink->scanLock_);
@@ -1042,49 +1133,71 @@ void PlayerA2dp::pairScan(bool on) {
     Serial.println("[bt] pair: scanning for audio devices");
     return;
   }
-  pairScan_ = false;
-  esp_bt_gap_cancel_discovery();
-  Serial.println("[bt] pair: scan stopped");
+  pairPage_ = false;
+  if (pairScan_) {
+    pairScan_ = false;
+    esp_bt_gap_cancel_discovery();
+    Serial.println("[bt] pair: scan stopped");
+  }
   if (linkUp_ || pairing_ || pendingPair_) return;
   userOff_ = offBeforeScan_;
   if (!userOff_ && has_last_connection()) {
-    // Back to the background cycle: page the remembered headphones.
-    reconnect_status = AutoReconnect;
-    reconnect_retries = max_reconnect_retries;
-    is_autoreconnect_allowed = true;
+    // The Pair screen closed without a pairing: the remembered headphones
+    // get a burst (a listener was just here), then the back-off.
+    reconnect_.start(ReconnectPlanner::Why::Ask, true, millis());
+  } else if (!userOff_) {
+    reconnect_.rest();  // none remembered: its 2 minutes of scanning were the search
   }
+  publishLink();
 }
 
-// Power measurements (BtSink::setBackgroundReconnect): no background pages
-// or scans while unlinked. Only a scan by name is stopped here (not the Pair
-// screen's; pairing resumes the cycle first anyway); a page on its way ends
-// by itself. Page scan stays on: the headphones can come back by themselves.
-void PlayerA2dp::pauseBackground(bool on, const char* why) {
-  if (on == bgPaused_) return;
-  bgPaused_ = on;
-  sink->bgPaused_.store(on, std::memory_order_relaxed);
-  if (!on) {
-    Serial.printf("[bt] background reconnect resumed%s%s\n", why ? ": " : "", why ? why : "");
+// The Pair screen's scan stopped by itself (its 2 minutes, or the screen
+// went off) while the page stays up with "Search again": the inquiry
+// stops, and nothing else starts. The remembered headphones get their
+// burst when the page closes (pairScan(false)), not now: pages on the
+// radio while the listener picks new ones would link the old ones first.
+void PlayerA2dp::pairScanPause() {
+  if (!pairScan_) return;
+  pairScan_ = false;
+  pairPage_ = true;
+  esp_bt_gap_cancel_discovery();
+  if (s_a2d_state == APP_AV_STATE_DISCOVERING || s_a2d_state == APP_AV_STATE_DISCOVERED) {
+    s_a2d_state = APP_AV_STATE_UNCONNECTED;
+  }
+  Serial.println("[bt] pair: scan stopped (the Pair screen stays up: nothing tried until it closes)");
+  publishLink();
+}
+
+// Power measurements (BtSink::setBackgroundReconnect, the console's Pr):
+// off rests the background search now (a scan by name running is stopped
+// by the next step; a page on its way ends by itself; page scan stays on:
+// the headphones can come back by themselves); on starts a burst again.
+// A connect, the Pair screen or a play waiting for them does that too.
+void PlayerA2dp::setBackground(bool on) {
+  if (linkUp_ || userOff_ || pairScan_ || pairPage_ || pairing_ || pendingPair_) {
+    Serial.printf("[bt] background reconnect: nothing to %s (%s)\n", on ? "resume" : "rest",
+                  linkUp_ ? "linked" : userOff_ ? "let go" : "the Pair screen or a pairing");
     return;
   }
-  bool stopped = false;
-  if (!linkUp_ && !pairScan_ && !pairing_ &&
-      (discovery_active || s_a2d_state == APP_AV_STATE_DISCOVERING)) {
-    s_a2d_state = APP_AV_STATE_UNCONNECTED;  // app_gap_callback won't restart discovery now
-    esp_bt_gap_cancel_discovery();
-    stopped = true;
+  if (on) {
+    reconnect_.start(ReconnectPlanner::Why::Ask, has_last_connection(), millis());
+    Serial.println("[bt] background reconnect: on again (a burst from now)");
+  } else {
+    reconnect_.rest();
+    Serial.println("[bt] background reconnect: resting now (no pages or scans; still connectable: the headphones "
+                   "can come back by themselves)");
   }
-  Serial.printf("[bt] background reconnect paused: no pages or scans%s (still connectable: the headphones can "
-                "come back by themselves)\n",
-                stopped ? ", the scan by name stopped" : "");
+  publishLink();
+  planStep(millis());  // (resting: a scan by name running stops now)
 }
 
 // Page the device picked on the Pair screen. It is remembered (NVS) only
-// once linked (rearmReconnect()); until then last_connection names it, so
+// once linked (rememberPeer()); until then last_connection names it, so
 // its answer is accepted and the library's retries page it.
 void PlayerA2dp::startPairing(const uint8_t* bda) {
   pairing_ = true;
   userOff_ = false;
+  reconnect_.stop();  // a pairing's tries are the library's
   std::memcpy(last_connection, bda, ESP_BD_ADDR_LEN);
   std::memcpy(peer_bd_addr, bda, ESP_BD_ADDR_LEN);
   if (discovery_active) esp_bt_gap_cancel_discovery();
@@ -1105,6 +1218,7 @@ void PlayerA2dp::pairFailed(const char* why) {
   pairing_ = false;
   pendingPair_ = false;
   userOff_ = true;
+  reconnect_.stop();
   reconnect_status = NoReconnect;
   is_autoreconnect_allowed = false;
   esp_bt_gap_cancel_discovery();
@@ -1169,7 +1283,10 @@ void BtSink::begin(PcmRing& ring, AudioShared& shared, const char* defaultSinkNa
   events_ = xQueueCreate(kEventQueueLength, sizeof(Event));
   // Before the stack starts: the data callback writes it from its first call.
   auto* tapBuffer = static_cast<int16_t*>(heap_caps_malloc(kTapFrames * sizeof(int16_t), MALLOC_CAP_SPIRAM));
-  if (tapBuffer) tap_ = new AudioTap(tapBuffer, kTapFrames);
+  if (tapBuffer) {
+    tap_ = new AudioTap(tapBuffer, kTapFrames);
+    tap_->setEnabled(false);  // until the Dance tab is up (DanceMode)
+  }
   // The Pair screen's list: PSRAM (~0.5 KB).
   if (void* mem = heap_caps_malloc(sizeof(BtScanList), MALLOC_CAP_SPIRAM)) scan_ = new (mem) BtScanList();
 
@@ -1316,7 +1433,14 @@ BtSink::Stats BtSink::stats() {
   s.eventsDropped = eventsDropped_.load(std::memory_order_relaxed);
   const TaskHandle_t task = a2dp.appTask();
   s.appTaskStackFree = task ? uxTaskGetStackHighWaterMark(task) : 0;
+  s.reconnect = reconnectPhase();
+  s.radioBusyPercent = radioBusyPercent();
   return s;
+}
+
+const char* BtSink::reconnectPhase() const {
+  return ReconnectPlanner::phaseName(
+      static_cast<ReconnectPlanner::Phase>(reconnectPhase_.load(std::memory_order_relaxed)));
 }
 
 const char* BtSink::streamState() const { return streamName(streamState_.load()); }
@@ -1338,6 +1462,7 @@ namespace {
 // askPending_ bits, in the order they are handed over.
 constexpr uint8_t kAskDisconnect = 1, kAskConnect = 2, kAskScanOff = 4, kAskScanOn = 8, kAskPair = 16;
 constexpr uint8_t kAskBgPause = 32, kAskBgResume = 64;  // handed over first: a later ask resumes it
+constexpr uint8_t kAskScanPause = 128;
 }  // namespace
 
 void BtSink::flushAsks() {
@@ -1347,7 +1472,8 @@ void BtSink::flushAsks() {
     PlayerA2dp::Work work;
   } kOrder[] = {{kAskBgPause, PlayerA2dp::kBgPause},         {kAskBgResume, PlayerA2dp::kBgResume},
                 {kAskDisconnect, PlayerA2dp::kDisconnect}, {kAskConnect, PlayerA2dp::kConnect},
-                {kAskScanOff, PlayerA2dp::kPairScanOff},     {kAskScanOn, PlayerA2dp::kPairScanOn},
+                {kAskScanPause, PlayerA2dp::kPairScanPause}, {kAskScanOff, PlayerA2dp::kPairScanOff},
+                {kAskScanOn, PlayerA2dp::kPairScanOn},
                 {kAskPair, PlayerA2dp::kPairWith}};
   for (const auto& o : kOrder) {
     if (!(askPending_ & o.bit)) continue;
@@ -1381,12 +1507,17 @@ void BtSink::disconnect() {
 }
 
 void BtSink::startPairScan() {
-  askPending_ = static_cast<uint8_t>((askPending_ & ~kAskScanOff) | kAskScanOn);
+  askPending_ = static_cast<uint8_t>((askPending_ & ~(kAskScanOff | kAskScanPause)) | kAskScanOn);
   flushAsks();
 }
 
 void BtSink::stopPairScan() {
-  askPending_ = static_cast<uint8_t>((askPending_ & ~kAskScanOn) | kAskScanOff);
+  askPending_ = static_cast<uint8_t>((askPending_ & ~(kAskScanOn | kAskScanPause)) | kAskScanOff);
+  flushAsks();
+}
+
+void BtSink::pausePairScan() {
+  askPending_ = static_cast<uint8_t>((askPending_ & ~kAskScanOn) | kAskScanPause);
   flushAsks();
 }
 
@@ -1459,10 +1590,9 @@ int32_t BtSink::onData(Frame* frames, int32_t count) {
     s.shared_->underruns.fetch_add(1, std::memory_order_relaxed);
   }
   // A copy for the beat tracker, before the volume: all `want` frames (the
-  // tap marks which were real audio, and where in the track). Copy only.
-  if (s.tap_ && s.shared_->tapOn.load(std::memory_order_relaxed)) {
-    s.tap_->write(out, want, r.read, r.epoch, r.position, static_cast<uint32_t>(nowUs));
-  }
+  // tap marks which were real audio, and where in the track). Copy only,
+  // and nothing while the Dance tab isn't up (the tap is switched off).
+  if (s.tap_) s.tap_->write(out, want, r.read, r.epoch, r.position, static_cast<uint32_t>(nowUs));
   // Then the volume, over every frame so its ramps keep real time. Both
   // stages only ever multiply by at most 1: together they never add level.
   s.gain_.process(out, want);

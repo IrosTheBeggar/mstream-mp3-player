@@ -81,8 +81,9 @@ struct Rig : PlaybackController::Hold {
     const uint32_t ids[] = {0, 1, 2};
     queue.assign(ids, 3, 0);
     player.setHold(this);
-    // Overnight: they dropped while idle; the background cycle scans.
-    link.phase = P::Scanning;
+    // Overnight: they dropped while idle; the background search has long
+    // since come to rest (ReconnectPlanner: connectable only).
+    link.phase = P::Resting;
     link.remembered = true;
     link.attempts = 3;
   }
@@ -110,8 +111,9 @@ struct Rig : PlaybackController::Hold {
     link.phase = P::Paging;
     link.attempt = attempt;
   }
-  void scanning() {
-    link.phase = P::Scanning;
+  // After a burst: a page now and then, no scan (ReconnectPlanner).
+  void backingOff() {
+    link.phase = P::Backoff;
     link.attempt = 0;
   }
   void up() {
@@ -132,14 +134,14 @@ struct Rig : PlaybackController::Hold {
   // unlinked, red when lost or the session failed).
   BtCard card() const { return btCardView(link, session, false).card; }
   bool tabRed() const { return !linked && session.failed(); }
-  // The tries run out: BtSink goes on to scanning by name.
+  // The tries run out: BtSink goes on to the back-off.
   void triesRunOut() {
     for (uint8_t t = 1; t <= 3; ++t) {
       paging(t);
       TEST_ASSERT_EQUAL(Do::None, pass(5000));
       TEST_ASSERT_EQUAL(PlayState::Waiting, player.state());
     }
-    scanning();
+    backingOff();
   }
   // Played on the headphones, then paused: the backend holds the track.
   void pausedMidTrack() {
@@ -149,7 +151,7 @@ struct Rig : PlaybackController::Hold {
     player.togglePlayPause();
     TEST_ASSERT_EQUAL(PlayState::Paused, player.state());
     linked = false;  // then they dropped, idle
-    scanning();
+    backingOff();
     pass();
   }
   const char* path() const { return audio.lastPath.c_str(); }
@@ -195,7 +197,7 @@ void test_play_while_unlinked_waits_and_connects_now() {
   TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());  // not "Playing"
   TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);              // nothing started
   TEST_ASSERT_FALSE(r.audio.isPlaying());
-  // The paging burst at once, not the background cycle's next round.
+  // The paging burst at once, even though the search rests.
   TEST_ASSERT_EQUAL(Do::Connect, r.pass());
   TEST_ASSERT_EQUAL_INT(1, r.pages);
   TEST_ASSERT_TRUE(r.gate.waiting());
@@ -269,7 +271,7 @@ void test_a_wait_during_a_background_burst_gets_a_full_burst() {
   r.paging(3);
   TEST_ASSERT_EQUAL(Do::None, r.pass(5000));
   TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());
-  r.scanning();
+  r.backingOff();
   TEST_ASSERT_EQUAL(Do::GiveUp, r.pass());  // this burst's tries ran out
   TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
 }
@@ -309,6 +311,31 @@ void test_a_wait_during_a_pairing_keeps_the_pairing() {
   TEST_ASSERT_TRUE(r.session.onConnected().paired);  // its name is kept
 }
 
+// A wait while the search rests (or backs off): the full burst at once,
+// and the card and tab bar follow it (amber, "try 1 of 3"), not the
+// resting line.
+void test_a_wait_while_resting_gets_a_full_burst() {
+  Rig r;
+  TEST_ASSERT_EQUAL(BtCard::Resting, r.card());
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Connect, r.pass());
+  TEST_ASSERT_EQUAL_INT(1, r.pages);
+  TEST_ASSERT_EQUAL(BtCard::Connecting, r.card());
+  TEST_ASSERT_TRUE(r.session.wanted());
+  // They answer the second try.
+  r.paging(2);
+  TEST_ASSERT_EQUAL(Do::None, r.pass(5000));
+  TEST_ASSERT_FALSE(r.upWithEvent());
+  TEST_ASSERT_EQUAL(Do::Release, r.pass());
+  TEST_ASSERT_EQUAL(PlayState::Playing, r.player.state());
+  // From the back-off likewise.
+  Rig b;
+  b.backingOff();
+  b.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Connect, b.pass());
+  TEST_ASSERT_EQUAL_INT(1, b.pages);
+}
+
 // ---- the ways a wait ends ----
 
 void test_tries_run_out_ends_the_wait_paused_and_failed() {
@@ -330,9 +357,9 @@ void test_tries_run_out_ends_the_wait_paused_and_failed() {
   TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
 }
 
-// The burst as the device runs it: try 1 at once, then one each heartbeat
-// (~10 s), scanning ~10 s after the third. The 20 s backstop comes first,
-// during the third try.
+// The burst as the device runs it: try 1 at once, then one 10 s after the
+// last began (ReconnectPlanner), the back-off ~5 s after the third. The
+// 20 s backstop comes first, during the third try.
 void test_the_backstop_during_the_last_try_settles_the_session() {
   Rig r;
   r.player.togglePlayPause();
@@ -622,6 +649,7 @@ int main() {
   RUN_TEST(test_a_resume_waits_with_the_paused_track_kept);
   RUN_TEST(test_play_while_linked_plays_at_once);
   RUN_TEST(test_a_wait_during_a_background_burst_gets_a_full_burst);
+  RUN_TEST(test_a_wait_while_resting_gets_a_full_burst);
   RUN_TEST(test_the_pair_screens_scan_isnt_stopped_by_a_wait);
   RUN_TEST(test_a_wait_during_a_pairing_keeps_the_pairing);
   RUN_TEST(test_tries_run_out_ends_the_wait_paused_and_failed);

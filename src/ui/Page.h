@@ -86,6 +86,14 @@ public:
   // Its tab was tapped again at its root (e.g. the Queue: back to the
   // playing track).
   virtual void home() {}
+  // Every UI pass, whether or not a modal covers it (update() doesn't run
+  // then) and while dark: deadlines that mustn't wait for the page to be
+  // seen (the Pair screen's 2 min scan). Draws nothing.
+  virtual void tick(uint32_t nowMs) { (void)nowMs; }
+  // The screen went off (ScreenPower): stop what costs power for nobody
+  // (the Pair screen's scan). The page stays up, drawing nothing, until
+  // repaint() on the wake.
+  virtual void screenOff() {}
   // An album's cover thumbnail arrived (ui/Thumbs): redraw what shows it.
   virtual void thumbReady(uint32_t album) { (void)album; }
   // 'ui' on the console: one line about its state.

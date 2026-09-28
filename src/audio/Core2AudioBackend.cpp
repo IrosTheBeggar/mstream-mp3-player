@@ -210,6 +210,17 @@ void Core2AudioBackend::loop(uint32_t nowMs) {
   // Every pass: the Bluetooth media stream runs while the player plays on it,
   // and is suspended 3 s after that stops.
   bt_.update(nowMs, output_ == Output::Bluetooth && transportPlaying_);
+  // The speaker amp's switches (the pump makes them: AmpGate).
+  const uint32_t switches = speaker_.ampSwitches();
+  if (switches != loggedAmpSwitches_) {
+    loggedAmpSwitches_ = switches;
+    const bool on = SpeakerSink::ampOn();
+    const AmpGate::Why why = speaker_.ampWhy();
+    Serial.printf("[speaker] amp %s (%s)\n", on ? "on" : "off: I2S stopped, AXP192 GPIO2 low",
+                  why == AmpGate::Why::Asked   ? "asked: Pa"
+                  : why == AmpGate::Why::Quiet ? "quiet for 2 s"
+                                               : "audio to play");
+  }
   // How the last start filled the ring, once it's full (or 5 s on).
   // Signed: nowMs was read at the top of the main loop, before the console
   // or a touch made the request, so it can be a few ms before requestMs_

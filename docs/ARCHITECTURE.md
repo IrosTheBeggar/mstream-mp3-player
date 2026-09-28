@@ -28,6 +28,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  TabBarModel  TrackProgress  JumpIndex                        |
               |  ThumbCache  ThumbScaler  JpegInfo                            |
               |  OutputModel  PlayGate  QueueView  PowerWindow                |
+              |  ScreenPower (and WakeLatch)  AmpGate                         |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -36,6 +37,8 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  storage/LocalStorage   app/SerialConsole   app/Library        |  M5Unified/M5GFX,
               |  app/QueueStore   ui/Input   ui/CalibrationScreen             |
               |  app/PowerProbe + app/PowerLab (power measurement, console P) |
+              |  app/ScreenControl (the screen policy: backlight, sleep)      |
+              |  app/BoardPower (IMU suspended, EXTEN off at boot)            |
               |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
               |         Fonts (VLW DejaVu), Icons, Gfx, Thumbs (covers),      |
               |         EmptyState                                            |
@@ -106,6 +109,20 @@ The rules that keep it deadlock- and glitch-free:
   other rates fail on Bluetooth (the player skips them) until a resampler lands.
   The speaker takes any rate: `RingOutput` keeps the rate in an `int` because
   ESP8266Audio's base class stores it in a `uint16_t`.
+- **The speaker amp is on only while the speaker is used** (`AmpGate`,
+  host-tested in test_output_chain; docs/ENERGY.md item 5). The pump
+  switches the NS4168 (AXP192 GPIO2) and M5.Speaker's I2S off
+  (`M5.Speaker.end()`: the enable first, then the I2S) 2 s after it last
+  queued audio, once every queued buffer is back: paused, stopped, the
+  queue's end, or the output moved to Bluetooth. Before the next buffer
+  it switches the I2S on (`begin()`; the pump owns M5.Speaker's enable
+  callback, so the amp stays off while the port is set up and its pins
+  reconfigured), raises the amp's enable 5 ms later on the running
+  clock, lets it clock 20 ms of zeros into the amp, then the audio, which
+  the DeclickReader fades in (always after such a gap). It saves ~5.3 USB mA (measured), and with the amp off
+  no stray buffer can reach the speaker while Bluetooth plays. Each
+  switch logs `[speaker] amp on (audio to play)` / `[speaker] amp off: I2S
+  stopped, AXP192 GPIO2 low (quiet for 2 s)`.
 
 ## Tasks and cores
 
@@ -115,10 +132,10 @@ The rules that keep it deadlock- and glitch-free:
 | A2DP data callback | 0 (Bluedroid's BTC task, BTC_TASK) | high | 128 frames at a time, several per ~30 ms tick; applies the volume ramp; never blocks or logs. ESP-IDF 5.5's A2DP source has no media task of its own: this is the task that also runs the GAP and AVRCP callbacks, which queue their events to BtAppT (below). If BtAppT's queue (20 entries) is full, each such event blocks BTC_TASK, and the audio, for up to 10 ms |
 | ESP32-A2DP app task (BtAppT) | 0 | 15 | connection, stream and AVRCP handlers (`PlayerA2dp`); 6 KB stack; blocks 10 s at stack-up; must keep its queue drained (no long work in a handler) |
 | decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start) |
-| speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake |
-| M5.Speaker | 1 | 2 | mixes/resamples to 44.1 kHz mono |
+| speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
+| M5.Speaker | 1 | 2 | mixes/resamples to 44.1 kHz mono; runs only while the amp is on |
 | cover thumbnails (`thumbs`, ui/Thumbs) | 1 | 1, or 0 while a list moves | only while there are covers to make: made for the first, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device); reads the card in 4 KB pieces; level with the loop while nothing moves (at 0 it shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves, always below the decoder (below) |
-| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and ~30 dancer frames/s; sleeps 1-5 ms every pass (less while a list frame is due) |
+| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and ~30 dancer frames/s; sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms) |
 
 ## Bluetooth
 
@@ -126,14 +143,40 @@ The rules that keep it deadlock- and glitch-free:
 name (`BT_SINK_NAME` build flag, or the console's `c<name>`, saved in NVS).
 Without a name it only accepts a device practically touching the Core2;
 signal strength alone once picked a TV in the next room. It remembers the
-device it connected to: after a boot or a drop it tries it for ~30 s, then
-scans again, and all along it stays connectable (never discoverable) so the
-headphones can reconnect by themselves; other devices are refused. Scanning
-that finds nothing for a minute goes back to trying the remembered device, and
-a failed connection (also a first pairing) always leads to a retry or a new
-scan, never to a dead end (`ReconnectPlanner`, host-tested against a model of
-the library's reconnect logic). On connect the output switches to Bluetooth; a
-real disconnect pauses playback.
+device it connected to, and all along it stays connectable (never
+discoverable) so the headphones can reconnect by themselves; other devices
+are refused. How it looks for them while no link is up is
+`ReconnectPlanner`'s (host-tested with a model of the glue and the library;
+[ENERGY.md](ENERGY.md) item 1: the old cycle, pages then a minute of inquiry
+forever, cost +35.5 mA for as long as they were away):
+
+- **Burst**: on a drop, at boot and on a listener's ask (a play waiting for
+  them, Connect or a tap on the card, a B hold, console `o`), 3 pages: one
+  at once, the next once the last has had its answer (refused, or the 5.12 s
+  page timeout) and 10 s after it began. A page already on its way is the
+  burst's first try, never paged over.
+- **Back-off**: then one page at 30 s, 1, 2 and 5 min, then every 5 min.
+  Never an inquiry while headphones are remembered (it can't find them
+  unless they are in pairing mode); a scan found running is stopped.
+- **Resting**: after 15 min without an answer, or at once after the burst
+  while nobody is around (the screen off and nothing playing or waiting,
+  and not lost: a drop while listening pauses the player itself, and the
+  listener may still wear them, so that gets the whole back-off;
+  `BtSink::setQuiet()`, fed with the screen policy's Off), no pages and
+  no scans: connectable only, so headphones
+  that are switched on or taken out of their case come back by themselves.
+  A listener's ask starts a burst again.
+- **Scan by name**: only with none remembered, for 2 min after the boot or
+  an ask, then resting. A device it finds and fails to connect to is
+  remembered by then: a burst pages it.
+
+The library's own auto-reconnect is kept disarmed outside a pairing (its
+"retries exhausted: start discovery" branch must never run): every
+background page is the planner's, carried out on BtAppT from its
+heartbeat and the loop's 250 ms ticks. A failed connection (also a first
+pairing) never ends in a dead end: a burst, then the back-off, and the
+listener's Connect at any time. On connect the output switches to
+Bluetooth; a real disconnect pauses playback.
 
 `BtSink` wraps `PlayerA2dp`, a subclass of ESP32-A2DP's `BluetoothA2DPSource`
 (in `BtSink.cpp`) that makes it behave like a phone. All its state lives on
@@ -267,9 +310,11 @@ out what it returns.
 - **On-device checks** the host tests can't cover (the glue in `BtSink.cpp`:
   event and address filters, what the library does between our hooks): boot
   with the headphones in their case, then take them out (they reconnect by
-  themselves); switch them off for 2 minutes and back on (paged again after
-  the minute of scanning); fresh NVS with pairing mode left mid-connect (a
-  new scan follows, no reboot needed); `f` then reboot (scans); while
+  themselves); switch them off for 2 minutes and back on (they page back by
+  themselves; if not, the back-off's next page finds them: at most 30 s, 1,
+  2 or 5 min after the last, and not at all once resting: then Play,
+  Connect or a B hold); fresh NVS with pairing mode left mid-connect (the
+  device found is remembered by then: a burst pages it, no reboot needed); `f` then reboot (scans); while
   playing, caps arriving late must log `came up after playback started:
   dipping`, the music must go silent for about a second and then fade
   back in over ~2 s with `control=headphones` in the stats (or `no answer`
@@ -280,11 +325,13 @@ out what it returns.
 - **The Output screen** (`OutputModel`, host-tested for its decisions;
   `BtSink` carries them out on BtAppT, the loop only posts asks, retried
   in order when BtAppT's queue is full). `BtSink::link()` publishes what
-  the link is doing: Off, Paging (the try and of how many: `connect_to()`
-  is overridden to count the library's retries and ours), Scanning,
-  Linked, PairScan, Pairing, and whether a device is remembered. The
-  listener's asks: **connect()** pages the remembered headphones at once
-  (then the library's retries; with none remembered, a scan by name);
+  the link is doing: Off, Paging (a burst: the try and of how many;
+  `connect_to()` is overridden to count every page, the planner's and a
+  pairing's library retries), Scanning (by name, none remembered),
+  Backoff, Resting, Linked, PairScan, Pairing, and whether a device is
+  remembered. The listener's asks: **connect()** pages the remembered
+  headphones at once (a full burst, then the back-off; with none
+  remembered, a scan by name for 2 min);
   **disconnect()** lets go (or stops a page) and stops trying: no paging,
   no scanning, not connectable, and the headphones coming back by
   themselves are refused, until the next connect(); **startPairScan()**
@@ -292,7 +339,13 @@ out what it returns.
   device: the rendering service or the Audio/Video major class; the name
   from the result or its EIR) into a `BtScanList` in PSRAM, under a
   spinlock, connecting to none (the library would connect to the first
-  that matches), while the background cycle is held off; **pairWith()**
+  that matches), while the background search is held off (the Pair page
+  stops it after 2 min, `PairSearch`, checked every UI pass so a dialog
+  over the page doesn't keep it running, or when the screen goes off, and
+  offers "Search again": **pausePairScan()**, which keeps the background
+  search held off while the page is up, so the old headphones aren't
+  paged while new ones are picked; closing the page without a pairing,
+  **stopPairScan()**, starts a burst); **pairWith()**
   lets go of the link that is up first, then pages the picked device with
   the usual tries: it becomes the remembered one (NVS) only once linked,
   and the sink name becomes its name (so a later scan by name finds it);
@@ -303,7 +356,7 @@ out what it returns.
   let them go), and picking them anyway just makes them the output.
   Forget from the screen forgets and disconnects, no restart, and **for
   good**: a saved flag (NVS `bt_forgot`) stops every scan by name (the
-  boot's, the background cycle's, a B hold's), so the forgotten headphones
+  boot's, the search's with none remembered, a B hold's), so the forgotten headphones
   can't come back by their name; the next pairing clears it (the
   console's `f` still restarts and scans by name). `BtSession` (main.cpp's)
   holds what the listener asked: **the audio stays on its output until the
@@ -311,7 +364,7 @@ out what it returns.
   only connect; the Connected event moves the audio, as it always did,
   and when it was asked for, a toast "Now playing on SPYDRONE" and two
   ticks say so), a connection whose tries run out (the link goes on to
-  Scanning or Off) is Failed, and so is a connect with none remembered (a
+  Backoff, Resting, Scanning or Off) is Failed, and so is a connect with none remembered (a
   scan by name) after 30 s; a link let go on purpose (Disconnect, Forget,
   a new pairing) drops without the "lost" dialog (expected for 10 s at
   most while the link stays up). A pairing started while other headphones
@@ -328,7 +381,7 @@ out what it returns.
 - **Play while the headphones aren't connected** (`PlayGate`, host-tested
   with the player, `BtSession` and `ButtonPolicy` in `test_play_gate`). The
   bug it fixes: the headphones dropped overnight while idle, the output
-  stayed Bluetooth with the background cycle scanning, and play went to
+  stayed Bluetooth with the old background cycle scanning, and play went to
   "Playing" at 0:00, "connecting...", for good (the decoder filled the
   ring, the stream stayed suspended; no explanation, timeout or way out).
   Now play from anywhere (the button, B, the Library's Play, the Queue's
@@ -336,26 +389,26 @@ out what it returns.
   is down makes the player **wait** (`PlayState::Waiting`: nothing starts,
   the position holds) and `PlayGate` (fed every loop pass after
   `BtSession`) **connects at once**: `BtSession::connect()` and
-  `BtSink::connect()`, the paging burst ("try 1 of 3"), not the background
-  cycle's next round. A background page still on its way (within the
-  page timeout, `kPageMs`) isn't paged over: it counts as try 1 of a full
-  burst (the retries restarted), so a wait that begins at the background
-  burst's last try doesn't fail with it. While the Pair screen has the
+  `BtSink::connect()`, the paging burst ("try 1 of 3"), not the back-off's
+  next page, and from resting too. A page still on its way (within the
+  page timeout, `ReconnectPlanner::kPageMs`, and not answered yet) isn't
+  paged over: it counts as try 1 of a full burst, so a wait that begins at
+  a burst's last try (or a back-off page) doesn't fail with it. While the Pair screen has the
   radio (its scan, or a pairing) only the session is asked (a pairing's
   own session is kept): the scan isn't stopped for a B click. The "lost"
   mark goes (the tab bar and the card say Connecting). The link comes up:
   the wait is released and plays on them, "Now playing on SPYDRONE"
   (said once: the Connected event's own toast is skipped while the gate
   waits). The tries run out (`BtSession::failed()`) or 20 s pass
-  (`kBackstopMs`, the listener's number: the burst itself takes 20-30 s, a
-  try at once and then one each ~10 s heartbeat, so this usually ends the
-  wait during the third try): the wait ends **paused**, and a notice says
+  (`kBackstopMs`, the listener's number: the burst itself takes ~25 s, a
+  try at once and then one 10 s after the last began, so this usually ends
+  the wait during the third try): the wait ends **paused**, and a notice says
   "Couldn't reach SPYDRONE. Are they on, out of the case, and not
   connected to your phone?" with Try again (a new wait and burst) and
   Play on speaker. The session's ask is **withdrawn** as failed
   (`BtSession::withdraw(true)`: no disconnect), so the card ("Couldn't
   connect") and the tab bar turn red with the notice while the tries left
-  and the background cycle go on quietly; a link they bring later closes
+  and the back-off go on quietly; a link they bring later closes
   the notice and is no answer to anything: nothing plays, no "Now playing
   on". A tap on the play button (a spinner while waiting) or a B click
   cancels the wait (paused); a B hold, Disconnect or Cancel on the card
@@ -376,13 +429,22 @@ out what it returns.
   report, the headphones' AVRCP features and notifications, and how long a
   stream took to start. The `s` stats add a `[stats] bt` line: volume and who
   applies it, gain, headroom, stream state, longest gap between data
-  callbacks, dropped events, BtAppT stack left.
+  callbacks, dropped events, BtAppT stack left, the search (`search=burst`,
+  `backoff`, `resting`, `scan`, `idle`) and `radio=N%/min`, the share of the
+  last minute spent paging or scanning (`RadioMeter`, sampled on BtAppT's
+  ticks: ~85-100% with the old cycle, ~0 resting). Unlinked and not the
+  output, the line shows only while the radio looks or did in the last
+  minute. Each page, scan and phase change logs a `[bt] reconnect:` line
+  (`paging ..., try 2 of 3`, `backing off`, `resting (why)`).
 
 ## Dancing crab (proof of concept)
 
 Each output copies what it plays into its own `AudioTap` (PSRAM, written only
 by that output's task: the Bluetooth data callback before its gain stage,
-the speaker pump after its read). The loop task feeds that to a
+the speaker pump after its read). The taps are on only while the Dance tab
+is up and tracking (`DanceMode` switches them; off from boot, off while the
+screen is off): a tap switched back on starts a new segment, so the tracker
+never splices audio across the time it didn't see. The loop task feeds that to a
 `BeatTracker` and draws the dancer for the frame being heard (the tap's
 clock minus the output's latency). The dancer is a skin (`DanceSkin`): a
 pixel-art crab by default (`CrabPose` maps the beat phase to layer frames
@@ -599,6 +661,35 @@ layer is suspended).
   `railtick`). `Haptics` plays patterns from a
   FreeRTOS timer, so a tick lasts its length whatever the loop does.
 
+- **The screen's wake** (`WakeLatch`, host-tested in test_ui_input with the
+  recognisers and in test_screen_power; [ENERGY.md](ENERGY.md) item 2). A
+  finger that lands while a touch doesn't act (dim, off, or lit by an
+  event nobody has answered yet) only wakes it: every event is dropped
+  (the path the input lab's suspension takes; the recognisers keep
+  following the finger) until no finger has been on the panel for 400 ms
+  (`kQuietMs`, StripButtons' swipe bounce window: the panel loses a finger
+  and finds it again, and a finger found again after a shorter window
+  would be a fresh press of B). So its lift is swallowed too (a button
+  clicks on its lift, a tap and a fling are made there), and so is any
+  other finger meanwhile: no tap, click, hold, volume repeat, swipe or
+  tick. It is a hearing-safety rule: a press of B in a pocket, with the
+  speaker as the output, can't start music. Each wake logs `[screen] wake
+  by touch at x,y (raw)` (and the button, on the strip). A finger already
+  resting on the panel as the screen dims is taken too (its glass touch
+  ends with a Cancel), but isn't a wake. The scripted finger isn't a
+  finger for it: it acts in the dark (and lights the screen).
+- **The pocket rule** (`ScreenPower::unattended()`, `ButtonPolicy::
+  Transport::startRefused()`). After any wake from Off (a touch, the PWR
+  key, an event, or something that keeps it lit) nobody may be looking:
+  until a touch lands on the glass (or the PWR key while lit, or the
+  console), a B click that would start playing on the speaker does
+  nothing but the inert buzz and a note, "Tap the screen first, then B
+  plays". A pause, A and C, the volume, the B hold (a move to the speaker
+  pauses first) and a play on the headphones act as ever. Going Off ends
+  it. An event's wake from Off also leaves the first touch only answering
+  it (swallowed, as a wake from Off would be), so a pocket's contact can't
+  tap the dialog's "Use speaker".
+
 The layer costs ~660 B of internal RAM (an 8-event queue, the tables, the
 recognisers); the calibration screen is in PSRAM.
 
@@ -625,6 +716,44 @@ Queue, Dance and Output (with its Pair and About pages).
   and it sleeps 1-5 ms every pass. The `Ui` object and all its sprites live
   in PSRAM (~340 KB: six 320x42 row sprites, a 320x56 strip, a 320x168 panel
   for sheets and dialogs, the rail); the fonts' glyph tables too.
+- **The screen's power** (`ScreenPower`, host-tested; `app/ScreenControl`
+  on the device; [ENERGY.md](ENERGY.md) item 2: the screen was ~15 mA of
+  the ~116 while streaming). Bright at the chosen brightness (Low 60,
+  **Medium 100**, High 160, Max 255), Dim (backlight 30) for the last 10 s
+  (from 7 s with 15 s), then Off (the backlight's DCDC3 off and the
+  panel's sleep-in) after the chosen time without input: 15 s, **30 s**,
+  1, 2 or 5 min, or Never; the same whether playing or not. Input is a
+  touch that acts as it lands or moves (a finger resting still stops
+  counting after 15 s, `FingerActivity`, so a pocket's pressure can't keep
+  it lit), or the PWR key. A touch
+  (glass or strip) or a PWR short press on a screen that isn't bright
+  only wakes it (the input layer swallows the touch: "The screen's wake"
+  above). A wake from Off with no input after it goes off again 10 s
+  later, without the dim step (the pocket guard; not with Never). What
+  needs the listener wakes it with the whole countdown: the headphones
+  lost (the dialog), "Couldn't reach", a track that failed (their
+  `Ui` calls, `UiHost::wakeScreen()`), USB plugged in or out (AXP192 reg
+  0x00, read once a second). Headphone keys, track changes and a link
+  coming up don't. It stays lit while the touch calibration or a spike
+  tool has the display, a play waits for the headphones, or a pairing is
+  under way (`BtSession::pairingUnderWay()`: not one whose failure the
+  card still shows). `ScreenControl` alone switches the backlight, and the
+  panel's sleep-in and sleep-out (under `LcdLock`, at least 120 ms apart;
+  5 ms after a sleep-out before anything is drawn). Going
+  off, the UI goes **dark** first (`Ui::setDark`): every `gfx` fill and
+  push is dropped (and the list's and the dancer's own pushes), the loop
+  keeps the snapshot, dialogs, toasts and their timers but draws nothing,
+  a fling stops, no cover job starts, the dancer stops, and the Pair
+  screen stops its scan. Waking, the UI draws everything (the list's
+  scroll registers sent again, the tab bar, the page, whatever was open
+  over it: a dialog opened in the dark is there) after the sleep-out and
+  its 5 ms, with the backlight still off, then the backlight. Nothing is
+  drawn into the sleeping panel: on the device, pixels written in
+  sleep-in landed garbled in its memory (rows shifted, colours
+  byte-swapped) and stayed so until drawn again. Each change logs
+  `[screen] <from> -> <to> (<why>)`. The Bluetooth search rests at once
+  after its burst while the screen is off and nothing plays or waits,
+  unless the headphones dropped while listening (`BtSink::setQuiet()`). NVS namespace `screen`: `off_after`, `bright`.
 - **Frames.** Only what changed is redrawn (each page keeps what it drew and
   compares the one `AppState` snapshot the host fills per pass). Animation
   (a moving list) is drawn on a **30 fps cap kept on deadlines**
@@ -850,7 +979,11 @@ Queue, Dance and Output (with its Pair and About pages).
   scrolls): the **Bluetooth card** (two rows; `OutputModel`'s view of the
   link and the session: No headphones paired [Pair new headphones], Not
   connected [Connect, Forget], Connecting... try 2 of 3 [Cancel], Looking
-  for SPYDRONE... [Cancel] (also a connect with none remembered),
+  for SPYDRONE... [Cancel] (the back-off, or a connect with none
+  remembered), Not connected with "They'll reconnect / when switched on."
+  beside [Connect] (resting: no spinner, not amber; red, with "Back in
+  range? / Tap Connect.", if they dropped while the output: they rest
+  then only after the whole back-off),
   Pairing... [Cancel], Connected "SBC 44.1 kHz, 175 ms" [Disconnect, "...",
   the volume chip], Couldn't connect [Try again, Forget] (a pairing that
   failed: [Try again, Connect], the headphones remembered before; none
@@ -864,14 +997,18 @@ Queue, Dance and Output (with its Pair and About pages).
   SPYDRONE" when that doesn't fit; a tap moves the output, pausing
   first), the **line-out** row
   (the 3.5 mm / RCA module's place, not fitted yet), **Pair new
-  headphones** (the **Pair** page: "Searching", the audio devices found,
+  headphones** (the **Pair** page: "Searching" (for 2 min, or until the
+  screen goes off, then "Search again", a tap on it), the audio devices found,
   their kind and 4 signal bars, in the order found so no row moves under a
   finger; a tap pairs, after a confirmation when it replaces the
   remembered pair, and goes back to the card), **Haptics** on/off (the
-  input layer's saved setting), **Touch calibration**, **About** (battery,
+  input layer's saved setting), **Screen off after** and **Brightness**
+  (the screen policy's; the value in a pill, a tap takes the next choice,
+  saved), **Touch calibration**, **About** (battery,
   storage, the library, the headphones, memory, the version, and "Show the
   tips again"). The tab bar's Output icon is amber while a connection the
-  listener asked for is on its way.
+  listener asked for is on its way, and while the link looks for them; the
+  plain icon while the search rests (`tabbar::outputFor()`, host-tested).
 - **States** (spec §7): no microSD card (and no music on the flash
   fallback): the Library, and the Queue and Now Playing while nothing is
   queued, show "No microSD card" and **Try again**, which looks for a card
@@ -885,8 +1022,10 @@ Queue, Dance and Output (with its Pair and About pages).
   a long buzz (80 ms), and the dialog of mockup 23 ("SPYDRONE
   disconnected. Paused, so the speaker doesn't suddenly play out loud.";
   a name too long for the title goes into the body; the reconnecting as a
-  live line: "Trying to reconnect: try 2 of 3"), Use speaker (paused: B
-  plays) or OK; it closes itself when they're back, and whatever it was
+  live line: "Trying to reconnect: try 2 of 3", then "Looking for
+  them...", and after the whole back-off "Stopped looking for them: Play
+  tries again"), Use speaker (paused: B plays) or OK; from a dark screen
+  its first touch only answers the wake (the pocket rule); it closes itself when they're back, and whatever it was
   over (the coach cards too) is drawn again. A play that waited for the
   headphones and failed: a buzz and the dialog "Couldn't reach SPYDRONE"
   (no icon: the title has its whole width; a name too long goes into the
@@ -960,9 +1099,9 @@ Queue, Dance and Output (with its Pair and About pages).
   overlays, the covers (above) and the loop task's unused stack. `ui0`-`ui4`
   tap a tab, `uib` goes back, `uic` shows the coach cards, `uiT` decodes
   the covers again (their timings), `uiV` shows the volume HUD, and
-  **`uiF<c/s/p/l/n/w>`** shows a faked state for screenshots of what a test
+  **`uiF<c/s/p/r/l/n/w>`** shows a faked state for screenshots of what a test
   can't safely cause (display only: the radio and the card are left
-  alone): the Bluetooth card connecting, searching or pairing, the
+  alone): the Bluetooth card connecting, searching, pairing or resting, the
   headphones lost (with the dialog), no card (on Now Playing), or a play
   waiting for the headphones (Now Playing's panel and spinner); `uiF0`
   the real state. **`uil<n>`**: the Library browses a synthetic
@@ -1057,7 +1196,13 @@ ACIN current, 0.625 mA; VBUS current, 0.375 mA; the chip's temperature,
 0.5 mA, 13 bits; APS, the system rail, 1.4 mV). Three I2C transactions,
 ~0.7 ms per sample. M5Unified already switches every ADC on (reg 0x82 =
 0xFF, 0x83 = 0x80) at 25 Hz; the probe checks and says so. Samples go into
-5 s windows: mean, min and max.
+5 s windows: mean, min and max. At 160 and 80 MHz the chip's ACIN current
+now and then reads 0-15 mA for a single sample on USB: such a sample is
+held until the next, and left out (counted as `glitches=N` on the line)
+when that one is back up; a drop that lasts counts (`power::Window`,
+host-tested). A window a console command starts is timed from that
+command's `millis()`, a moment after the loop's: it isn't taken as 2^32 ms
+old (`Pl`'s first line said "4294967.5 s: no samples").
 
 `P` prints one line at the end of a 5 s window; `Pl` prints one every 5 s;
 `Pw` appends every window to `/.player/power.csv` on the card; `Pm<name>`
@@ -1067,7 +1212,7 @@ line's format (one line on the console; `x` stands for the numbers):
 ```
 [power] 5.0 s n=50 in=x mA (min..max) x W (min..max) [<supplies>: ACIN x V x mA, VBUS x V x mA]
   bat=±x mA (min..max) ±x W x V aps=x V x C [cc=...] | bl=127 (DC3 2875 mV) screen=on cpu=240 MHz
-  play=playing out=bt link=<phase> stream=started amp=off exten=on led=0 imu=on taps=on dance=hidden bg=on loop=auto
+  play=playing out=bt link=<phase> stream=started amp=off exten=off led=0 imu=suspended taps=off dance=hidden bg=<search> radio=N% loop=auto
 ```
 
 `<supplies>` is what reg 0x00 says is present (ACIN, VBUS, both, none);
@@ -1091,23 +1236,28 @@ line's format (one line on the console; `x` stands for the numbers):
   against Bluetooth's TX bursts is noisy. The probe's own reads cost
   ~0.1 mA of CPU while it runs.
 
+**At boot** (app/BoardPower, docs/ENERGY.md item 9) the BMI270 is
+suspended and the 5 V boost is off (`cfg.output_power = false`); the green
+LED is off (M5Unified's default). One line says so: `[power] boot: IMU
+suspended, 5 V boost (EXTEN) off, green LED off`.
+
 **The knobs** (each says what it was and what it is now, and is undone by
 its opposite; only `Pcb` is saved):
 
 | Command | What it switches | Notes |
 |---|---|---|
-| `Pb<0-255>` | backlight (M5GFX: AXP192 DCDC3, 2.5-3.275 V; 0 = DCDC3 off) | default 127 (2.875 V) |
-| `Ps0` / `Ps1` | screen off (backlight off, ILI9342C sleep-in) / on | the UI still draws (into the panel's RAM); while off, the first touch wakes it and does nothing else |
+| `Pb<0-255>` | backlight while the screen is bright (M5GFX: AXP192 DCDC3, 2.5-3.275 V) | the screen policy's Bright level until restart, `Pb0` the setting's (Medium, 100; M5GFX's own default was 127, 2.875 V); refused while dim or off; it still dims and goes off (Screen off after: Never holds it) |
+| `Ps` / `Ps0` / `Ps1` | the screen policy: its state / Off now / on | Off is the policy's (backlight off, ILI9342C sleep-in, the UI draws nothing); a touch wakes it and does nothing else (`[screen] wake by touch at x,y (raw)`), and with no input after that it goes off again in 10 s (the pocket guard); off with nothing playing, the Bluetooth search rests after its burst (`setQuiet`) |
 | `Pc<mhz>` | CPU clock now | only 160 ↔ 80 (same 320 MHz PLL); 240 ↔ 160/80 retunes the BBPLL the Bluetooth radio runs from, refused. 80 not while audio runs, and back to 160 by itself when it starts |
 | `Pcb<mhz>` | CPU clock from boot (saved) | 160 or 240 (`Pcb0` the default, Arduino's 240), set before Bluetooth starts |
-| `Pt<min>,<max>` | Bluetooth BR/EDR TX power levels 0-7 (−12..+9 dBm) | default 4,5 (0..+3 dBm); from the next page, scan or connection |
-| `Pe0` / `Pe1` | the 5 V boost (EXTEN, M-Bus/Grove 5 V) | M5Unified's setExtOutput(), as at boot |
+| `Pt<min>,<max>` | Bluetooth BR/EDR TX power levels 0-7 (−12..+9 dBm) | default 4,5 (0..+3 dBm); from the next page, scan or connection (with a link up the controller reads back the old range: the line says "applies from the next connection") |
+| `Pe0` / `Pe1` | the 5 V boost (EXTEN, M-Bus/Grove 5 V) | M5Unified's setExtOutput(); off from boot (`cfg.output_power = false`) |
 | `Pg0` / `Pg1` | the green LED | off at boot |
-| `Pi0` / `Pi1` | the BMI270 IMU suspended / on | nothing reads it |
-| `Pa0` / `Pa1` | the speaker amp (NS4168 enable, AXP192 GPIO2) and M5.Speaker's I2S | once the speaker is quiet; the next speaker playback turns it on; `Pa1` clocks zeros, silent |
+| `Pi0` / `Pi1` | the BMI270 IMU suspended / on | suspended from boot (app/BoardPower); nothing reads it |
+| `Pa0` / `Pa1` | the speaker amp (NS4168 enable, AXP192 GPIO2) and M5.Speaker's I2S | by itself it goes off 2 s after the speaker goes quiet; `Pa0` off as soon as it is quiet (no 2 s wait); `Pa1` on (zeros, silent) and held on, through playing and pausing, until `Pa0` (`amp=held`) |
 | `Pd<ms>` | the loop's idle delay while nothing animates (1-100) | `Pd0` the UI's own (~5 ms); never while a list moves or the Dance tab is up |
-| `Pk0` / `Pk1` | the outputs' taps and the dance beat tracker | |
-| `Pr0` / `Pr1` | the background Bluetooth reconnect (pages, scans by name) | stays connectable; a connect, the Pair screen or a play waiting for the headphones resumes it |
+| `Pk0` / `Pk1` | the dance beat tracker (and so the outputs' taps) | the taps are on only while the Dance tab is up and the tracker is on |
+| `Pr0` / `Pr1` | the background Bluetooth search: rest now / a burst again | stays connectable; `link=resting`, `bg=resting`; a connect, the Pair screen or a play waiting for the headphones starts a burst |
 | `Pz` | plays `tone:silence` next | an hour of zeros: the output runs at its full rate (SBC over Bluetooth), nothing is heard |
 
 `tone:silence` is a built-in track (TrackCatalog) that isn't queued with

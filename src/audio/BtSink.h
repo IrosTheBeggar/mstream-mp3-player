@@ -27,11 +27,15 @@ class PlayerA2dp;  // BtSink.cpp: ESP32-A2DP's source with the fixes below
 // Which headphones: the first audio device whose name contains the sink name
 // (case-insensitive). Without a name, only a device practically touching the
 // Core2 — signal strength alone once picked a TV in the next room. Once
-// connected, that device is remembered: after a drop (or a boot) the Core2
-// tries it for ~30 s, then scans for a minute, then tries it again, and so
-// on; all along it stays connectable (not discoverable) so the headphones can
-// come back by themselves, as they do to a phone. Other devices can't connect
-// in. forgetDevice() clears it.
+// connected, that device is remembered: after a drop (or a boot, or a
+// listener's ask) the Core2 pages it 3 times (~25 s), then once at 30 s, 1,
+// 2 and 5 min and every 5 min, and rests after 15 min (at once after the 3
+// tries while nobody is around: setQuiet()); it never scans for remembered
+// headphones (ReconnectPlanner). All along it stays connectable (not
+// discoverable) so the headphones can come back by themselves, as they do
+// to a phone. Other devices can't connect in. forgetDevice() clears it.
+// With none remembered, a scan by name runs for 2 min after the boot or a
+// connect().
 //
 // Volume works like a phone's (AbsVolumePolicy): headphones that take AVRCP
 // absolute volume get the Bluetooth volume as their own, their buttons change
@@ -79,6 +83,8 @@ public:
   };
 
   struct Stats {
+    const char* reconnect;      // ReconnectPlanner's phase: "idle", "burst", "backoff", "resting", "scan"
+    int radioBusyPercent;       // the last minute's share paging or scanning, -1 before a minute
     uint8_t volume;             // percent, as the UI shows it
     const char* volumeControl;  // "headphones" (absolute volume), "asking", "software"
     int headsetVolume;          // last absolute volume the headphones reported (0-127), -1 unknown
@@ -149,27 +155,39 @@ public:
   // ---- the Output screen (loop task; carried out on BtAppT) ----
   // What the link is doing (published by BtAppT a few times a second).
   BtLink link() const;
-  // Page the remembered headphones now (3 tries, then the scan by name);
-  // with none remembered, scan by name. Undoes disconnect().
+  // Page the remembered headphones now (a burst of 3 tries, then the
+  // back-off); with none remembered, scan by name for 2 min. Undoes
+  // disconnect().
   void connect();
   // Let go of the link (or stop connecting) and stop trying: the
   // headphones can't come back by themselves until connect().
   void disconnect();
   // The Pair screen: scan and list audio devices, connecting to none;
-  // stopPairScan() goes back to what it was doing.
+  // stopPairScan() (the screen closed) goes back to what it was doing.
+  // pausePairScan(): the scan stopped by itself (2 min, the screen off)
+  // with the screen still up: nothing is tried until it closes (the
+  // remembered headphones would link while new ones are picked).
   void startPairScan();
   void stopPairScan();
+  void pausePairScan();
   // Pair with a device the scan listed (its address): the link that is up
   // goes first; it becomes the remembered headphones once linked.
   void pairWith(const uint8_t addr[6]);
-  // Power measurements (the console's Pr): pause the background search for
-  // the remembered headphones while unlinked (the heartbeat's pages and
-  // scans by name; a scan by name running is stopped, a page on its way
-  // ends by itself within ~5 s). The Core2 stays connectable, so the
-  // headphones can still come back by themselves. connect(), the Pair
-  // screen and pairWith() resume it (a listener's ask always wins).
+  // Power measurements (the console's Pr): false rests the background
+  // search for the remembered headphones now (ReconnectPlanner's Resting:
+  // no pages, a scan by name running is stopped, a page on its way ends by
+  // itself within ~5 s); true starts a burst again. The Core2 stays
+  // connectable, so the headphones can still come back by themselves.
+  // connect() and the Pair screen start the search again too.
   void setBackgroundReconnect(bool on);
-  bool backgroundReconnectPaused() const { return bgPaused_.load(std::memory_order_relaxed); }
+  // Nobody is around (the screen is off, nothing plays or waits): after a
+  // burst the search rests at once instead of backing off. Loop task,
+  // every pass (the screen policy's hook; today the probe's Ps0).
+  void setQuiet(bool quiet) { quiet_.store(quiet, std::memory_order_relaxed); }
+  // The search's phase (ReconnectPlanner::phaseName) and the share of the
+  // last minute the radio spent paging or scanning (-1: none measured yet).
+  const char* reconnectPhase() const;
+  int radioBusyPercent() const { return radioBusy_.load(std::memory_order_relaxed); }
   // The scan's list, copied; returns its version (bumped when it changes).
   uint32_t scanList(BtScanList& out) const;
   uint32_t scanVersion() const { return scanVersion_.load(std::memory_order_relaxed); }
@@ -185,6 +203,11 @@ public:
   // What the data callback played (before our gain stage), for the beat
   // tracker. nullptr if its PSRAM couldn't be had.
   const AudioTap* tap() const { return tap_; }
+  // Whether the data callback copies to its tap (only while the Dance tab
+  // is up). Any task.
+  void setTapOn(bool on) {
+    if (tap_) tap_->setEnabled(on);
+  }
   // The headphones' last delay report (AVDTP), in microseconds; 0 when they
   // haven't sent one on this link.
   uint32_t delayReportUs() const { return delayReport_.load(std::memory_order_relaxed) * 100u; }
@@ -224,7 +247,9 @@ private:
   std::atomic<uint8_t> linkAttempt_{0};
   std::atomic<uint8_t> linkAttempts_{0};
   std::atomic<bool> linkRemembered_{false};
-  std::atomic<bool> bgPaused_{false};  // setBackgroundReconnect(false), as BtAppT carried it out
+  std::atomic<uint8_t> reconnectPhase_{0};  // ReconnectPlanner::Phase, published by BtAppT
+  std::atomic<int8_t> radioBusy_{-1};       // RadioMeter's last minute, %
+  std::atomic<bool> quiet_{false};          // setQuiet()
   // The pairing scan's list (PSRAM), written on the BTC task, copied out
   // by the loop, under scanLock_.
   BtScanList* scan_ = nullptr;

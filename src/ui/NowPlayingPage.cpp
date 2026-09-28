@@ -280,7 +280,7 @@ void NowPlayingPage::drawWaiting() {
   if (l.phase == BtLink::Phase::Paging && l.attempt > 0) {
     snprintf(line, sizeof(line), "try %u of %u", static_cast<unsigned>(l.attempt),
              static_cast<unsigned>(l.attempts > l.attempt ? l.attempts : l.attempt));
-  } else if (l.phase == BtLink::Phase::Scanning) {
+  } else if (l.phase == BtLink::Phase::Scanning || l.phase == BtLink::Phase::Backoff) {
     snprintf(line, sizeof(line), "looking for them");
   } else {
     snprintf(line, sizeof(line), "connecting");

@@ -5,16 +5,16 @@
 #include "PlaybackController.h"
 
 // Play while Bluetooth is the output and the headphones aren't connected
-// (they dropped overnight, idle, and the background cycle is only scanning
-// for them). Without this, play went to "Playing" at 0:00 and waited for the
+// (they dropped overnight, idle, and the background search for them backs
+// off, or rests). Without this, play went to "Playing" at 0:00 and waited for the
 // link for good: no explanation, no timeout, no way out.
 //
 // PlaybackController holds such a play (PlayState::Waiting: nothing starts,
 // the position holds; main.cpp's Hold says when). PlayGate decides the rest,
 // fed every loop pass:
 //   - a wait begins: connect now (BtSession::connect() and BtSink::connect():
-//     the paging burst, "try 1 of 3", not the slow background cycle; a page
-//     of the background cycle's under way counts as the burst's first try,
+//     the paging burst, "try 1 of 3", not the back-off's next page, and
+//     from resting too; a page under way counts as the burst's first try,
 //     BtSink's doing). While the Pair screen has the radio (its scan, or a
 //     pairing) only the session is asked: that scan isn't stopped for it;
 //   - the headphones connect: the wait is released, play starts on them

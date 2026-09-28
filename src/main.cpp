@@ -23,13 +23,16 @@
 #include "QueueModel.h"
 #include "QueueView.h"
 #include "TrackCatalog.h"
+#include "UiText.h"
 #include "app/DanceMode.h"
+#include "app/BoardPower.h"
 #include "app/Diagnostics.h"
 #include "app/Haptics.h"
 #include "app/Library.h"
 #include "app/PowerLab.h"
 #include "app/Psram.h"
 #include "app/QueueStore.h"
+#include "app/ScreenControl.h"
 #include "app/Screenshot.h"
 #include "app/SerialConsole.h"
 #include "audio/Core2AudioBackend.h"
@@ -66,6 +69,11 @@ static Screenshot shot;
 static Haptics haptics;
 // The one input layer: the glass (corrected) and the button strip, as events.
 static Input input(haptics);
+// The screen policy (docs/ENERGY.md item 2; ScreenPower): lit, dim for the
+// last 10 s, then off after the chosen time without input; a touch or the
+// PWR key on a screen that isn't lit only wakes it (swallowed by the input
+// layer), and so do the events that need the listener.
+static ScreenControl screen(input);
 // What the touch buttons do, the same on every screen.
 static ButtonPolicy buttonPolicy;
 // The touch calibration screen (console a): in PSRAM, made on first use.
@@ -132,12 +140,17 @@ static std::vector<BootScreen::Row> diagnosticsRows() {
 
 // ---- actions shared by the touch buttons and the serial console ----
 
+// Console o: as the B hold does (ButtonTransport::selectOutput(), below):
+// to Bluetooth connects them when they aren't linked (it used to select
+// Bluetooth and page nothing after a Disconnect: "Not connected" until
+// Connect was tapped), and to the speaker pauses first.
+static bool selectOutputFromConsole();
 static void toggleOutput() {
   if (silent) {
     Serial.println("[test] silent mode: the output stays on the speaker");
     return;
   }
-  audio.setOutput(audio.output() == Output::Speaker ? Output::Bluetooth : Output::Speaker);
+  (void)selectOutputFromConsole();
 }
 
 static void enterSilentMode() {
@@ -241,6 +254,10 @@ struct ButtonTransport : ButtonPolicy::Transport {
   bool audioOnBluetooth() const override { return audio.output() == Output::Bluetooth; }
   // Nothing queued: the clicks are inert (the "inert" buzz, not the tick).
   bool idle() const override { return queue.size() == 0; }
+  // The screen woke from off and nobody has touched the glass since (a
+  // pocket, maybe): B doesn't start the speaker (ScreenPower's pocket rule).
+  // The headphones aren't out loud: B plays on them (or waits for them).
+  bool startRefused() const override { return audio.output() != Output::Bluetooth && screen.unattended(); }
   bool switchOutput() override {
     if (silent) {
       Serial.println("[test] silent mode: the output stays on the speaker");
@@ -252,6 +269,8 @@ struct ButtonTransport : ButtonPolicy::Transport {
   static bool selectOutput(bool bluetooth);
 };
 static ButtonTransport buttonTransport;
+
+static bool selectOutputFromConsole() { return ButtonTransport::selectOutput(!buttonTransport.onBluetooth()); }
 
 // The one way the output changes (the B hold, the Output tab):
 //   - to Bluetooth: at once if the headphones are linked; otherwise they
@@ -322,8 +341,9 @@ static void playOnSpeaker() {
 
 // uiF<k>: a state the UI is shown, for screenshots of the states a
 // test can't safely cause (the radio and the card are left alone): c
-// connecting, s searching, p pairing, l the headphones lost (the dialog
-// too), n no card (on Now Playing), w play waiting for the headphones (Now
+// connecting, s searching, p pairing, r resting (the search stopped: "They'll
+// reconnect when switched on"), l the headphones lost (the dialog too), n
+// no card (on Now Playing), w play waiting for the headphones (Now
 // Playing's panel); uiF0 (or uiF) the real state. Display only: a button
 // on a faked card still does what it does.
 static char uiFake = 0;
@@ -389,6 +409,8 @@ struct MainUiHost : ui::UiHost {
     s.underruns = audio.underrunsNow();
     s.ringMatters = audio.isPlaying() && audio.ringSteady();
     s.feedback = buttonPolicy.feedback();
+    s.screenTimeout = static_cast<uint8_t>(screen.timeoutChoice());
+    s.brightness = static_cast<uint8_t>(screen.brightnessChoice());
     fake(s);
   }
   static void fake(ui::AppState& s) {
@@ -407,8 +429,9 @@ struct MainUiHost : ui::UiHost {
     s.btLink.remembered = true;
     s.btLink.phase = uiFake == 's' ? BtLink::Phase::Scanning
                      : uiFake == 'p' ? BtLink::Phase::Pairing
+                     : uiFake == 'r' ? BtLink::Phase::Resting
                                      : BtLink::Phase::Paging;
-    s.btLink.attempt = 2;
+    s.btLink.attempt = uiFake == 'r' ? 0 : 2;
     s.btLink.attempts = 3;
     if (uiFake == 'w') {
       s.onBluetooth = true;
@@ -474,6 +497,7 @@ struct MainUiHost : ui::UiHost {
       bt.stopPairScan();
     }
   }
+  void btPairScanPause() override { audio.bluetooth().pausePairScan(); }
   uint32_t btScan(BtScanList& out) override { return audio.bluetooth().scanList(out); }
   bool btPairWith(const BtDevice& d) override {
     BtSink& bt = audio.bluetooth();
@@ -527,6 +551,9 @@ struct MainUiHost : ui::UiHost {
     a.ramMin = h.internalMin;
     a.psramFree = h.psramFree;
   }
+  void setScreenTimeout(int choice) override { screen.setTimeout(choice); }
+  void setBrightness(int choice) override { screen.setBrightness(choice); }
+  void wakeScreen(const char* why) override { screen.wake(why); }
 };
 static MainUiHost uiHost;
 
@@ -558,7 +585,7 @@ static const char* stateName() {
 
 // Power measurements and their A/B knobs (the console's P, app/PowerLab):
 // nothing runs until a P command.
-static PowerLab powerLab(audio, player, danceMode, storage,
+static PowerLab powerLab(audio, player, danceMode, storage, screen,
                          {[] { return stateName(); }, [] { return silent; }});
 
 static void printStats() {
@@ -579,23 +606,29 @@ static void printStats() {
   if (danceMode.active()) danceMode.printStats(millis());  // every 5 s while dancing
 
   BtSink& bt = audio.bluetooth();
-  if (!bt.connected() && audio.output() != Output::Bluetooth) return;
+  // Unlinked and not the output: only while the radio looks for them (a
+  // burst, the back-off, a scan) or did in the last minute.
+  const char* search = bt.reconnectPhase();
+  const bool looking = strcmp(search, "idle") != 0 && strcmp(search, "resting") != 0;
+  if (!bt.connected() && audio.output() != Output::Bluetooth && !looking && bt.radioBusyPercent() <= 0) return;
   // vol/control: the Bluetooth volume and who applies it (headphones = AVRCP
   // absolute volume, asking = waiting for them to accept it, software = the
   // Core2). headphones: their last reported volume. gain: the Core2's gain
   // stage (the headroom with absolute volume). headroom: its fixed
   // attenuation (-2.0dB unless set with h<n>). gap: longest wait between two
-  // data callbacks since the last line (~10-30 ms is healthy).
+  // data callbacks since the last line (~10-30 ms is healthy). search: how
+  // the Core2 looks for them while unlinked (burst, backoff, resting, scan,
+  // idle); radio: the share of the last minute spent paging or scanning.
   const BtSink::Stats b = bt.stats();
   char gain[12] = "mute";
   if (b.gainQ15 > 0) snprintf(gain, sizeof(gain), "%.1fdB", 20.0f * log10f(b.gainQ15 / 32768.0f));
   char headset[8] = "?";
   if (b.headsetVolume >= 0) snprintf(headset, sizeof(headset), "%d", b.headsetVolume);
   Serial.printf("[stats] bt vol=%u%% control=%s headphones=%s/127 gain=%s headroom=%.1fdB stream=%s gap=%lums "
-                "events_dropped=%lu btapp_stack_free=%lu\n",
+                "events_dropped=%lu btapp_stack_free=%lu search=%s radio=%d%%/min\n",
                 (unsigned)b.volume, b.volumeControl, headset, gain, 20.0f * log10f(b.headroomQ15 / 32768.0f),
                 b.stream, (unsigned long)b.maxGapMs, (unsigned long)b.eventsDropped,
-                (unsigned long)b.appTaskStackFree);
+                (unsigned long)b.appTaskStackFree, b.reconnect, b.radioBusyPercent);
 }
 
 static void listTracks() {
@@ -940,7 +973,16 @@ static void handleButton(const InputEvent& e) {
   input.buttonFeedback(e, acted);
   const char b = static_cast<char>('A' + e.button);
   if (!acted) {
-    if (e.type == InputEvent::Type::Click) Serial.printf("[button] %c click: nothing to play\n", b);
+    if (e.type != InputEvent::Type::Click) return;
+    if (e.button == ButtonPolicy::kButtonB && !buttonTransport.idle() && buttonTransport.startRefused()) {
+      // Not out loud from a pocket: the screen woke from off and nobody
+      // has touched the glass since. A tap on the glass, then B plays.
+      Serial.println("[button] B click: not played: the screen woke from off and nothing touched the glass since "
+                     "(a pocket?); the speaker would play out loud");
+      if (userInterface) userInterface->warn(uitext::kTouchFirst);
+      return;
+    }
+    Serial.printf("[button] %c click: nothing to play\n", b);
     return;
   }
   if (e.type == InputEvent::Type::Repeat) return;
@@ -957,10 +999,12 @@ static void handleButton(const InputEvent& e) {
 // spike screen, or the UI. The input lab reads the panel and the buttons
 // itself: no events while it's open.
 static void handleInput(uint32_t now) {
-  // The screen off for a power measurement: its waking touch does nothing else.
-  const bool powerHeld = powerLab.holdInput();
-  input.setSuspended(spike.ownsInput() || powerHeld);
+  // The screen: the PWR key, USB, and whether a touch now would only wake
+  // it (dim or off: the input layer swallows that touch through its lift).
+  screen.beginPass(now);
+  input.setSuspended(spike.ownsInput());
   input.update(now);
+  screen.afterInput(now);  // the wake it saw (logged), or input: the countdown again
   for (InputEvent e; input.poll(e);) {
     if (e.isButton()) {
       handleButton(e);
@@ -1147,9 +1191,14 @@ void setup() {
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;  // M5Unified leaves Serial off unless asked
   cfg.internal_mic = false;      // the mic shares GPIO0 with the speaker's I2S clock
+  // The 5 V boost (EXTEN, the M-Bus/Grove 5 V) off: nothing is plugged in,
+  // and the speaker amp isn't fed from it on USB (measured; ENERGY.md item
+  // 9, still to check by ear on battery). The console's Pe1 turns it on.
+  cfg.output_power = false;
   M5.begin(cfg);
   Serial.println("\nmstream-mp3-player");
   PowerLab::logBootClock();
+  board::applyBootPower();  // the IMU suspended: nothing reads it
   diag::logHeap("boot");
 
   bootScreen.begin();
@@ -1188,6 +1237,10 @@ void setup() {
   diag::logHeap("dance");
   haptics.begin();
   input.begin();
+  screen.begin(millis());
+  screen.onDark([](bool dark) {
+    if (userInterface) userInterface->setDark(dark);
+  });
   spike.onScreenReleased(uiResume);  // the UI draws again
   spike.onRebuild(rebuildLibrary);
   {
@@ -1212,11 +1265,11 @@ void setup() {
                  "ad default table, ah0/1 haptics, ar0/1 rail ticks), "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
                  "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid/uip scripted finger, "
-                 "uiF<c/s/p/l/n/w> show a faked Bluetooth or no-card state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
+                 "uiF<c/s/p/r/l/n/w> show a faked Bluetooth or no-card state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
                  "library of n tracks in the Library tab, uil0 the card's); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja); "
-                 "P power measurement (P a line, Pl log, P? the knobs)");
+                 "P power measurement (P a line, Pl log, P? the knobs; Ps the screen, Ps0/Ps1 off/on)");
 }
 
 void loop() {
@@ -1226,6 +1279,14 @@ void loop() {
   handleInput(now);
   console.poll();
   handleBluetooth();
+  // Nobody around: the screen is off and nothing plays or waits. After a
+  // burst the search for the headphones then rests at once (ENERGY.md item
+  // 1).
+  // Not after a drop while listening (btLost): the pause is the drop's,
+  // and the listener may still be wearing them: the back-off runs its 15
+  // minutes (a range drop is what it is for).
+  audio.bluetooth().setQuiet(screen.off() && player.state() != PlayState::Playing &&
+                             player.state() != PlayState::Waiting && !btLost);
   btSession.update(audio.bluetooth().link(), now);
   stepPlayGate(now);
   player.update(now);
@@ -1288,6 +1349,17 @@ void loop() {
     userInterface->loop(now);
   }
   shot.poll();
+  // The screen, last: the countdown, and what keeps it lit (a screen of its
+  // own, a play waiting for the headphones, a pairing). Going off, the UI
+  // goes dark first; waking, it draws everything before the panel's
+  // sleep-out.
+  {
+    const BtLink link = audio.bluetooth().link();
+    // (A pairing under way, not one whose failure the card still shows.)
+    const bool keepLit = screenTaken() || player.state() == PlayState::Waiting ||
+                         link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay();
+    screen.step(millis(), keepLit);
+  }
 
   static uint32_t lastStats = 0;
   static bool heapLoggedWhilePlaying = false;
@@ -1300,7 +1372,9 @@ void loop() {
     lastStats = now;
   }
   // Yield every pass (the decoder runs above the loop on this core), less
-  // while a list frame is due soon.
+  // while a list frame is due soon, 20 ms while the screen is off (the UI
+  // says so: nothing to draw, touches only wake; ENERGY.md item 9).
   // (A power measurement's Pd stretches the wait while nothing animates.)
-  delay(powerLab.loopDelayMs(userInterface ? userInterface->idleMs(millis()) : 5, danceMode.active()));
+  const uint32_t uiIdleMs = userInterface ? userInterface->idleMs(millis()) : screen.off() ? 20 : 5;
+  delay(powerLab.loopDelayMs(uiIdleMs, danceMode.active()));
 }

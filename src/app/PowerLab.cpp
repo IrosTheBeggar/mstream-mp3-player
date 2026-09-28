@@ -6,8 +6,9 @@
 #include <soc/rtc.h>
 
 #include "TrackCatalog.h"
+#include "app/BoardPower.h"
+#include "app/ScreenControl.h"
 #include "storage/LocalStorage.h"
-#include "ui/LcdLock.h"
 
 namespace {
 constexpr const char* kPrefs = "power";
@@ -17,16 +18,6 @@ constexpr const char* kPrefsBootMhz = "cpu_mhz";
 uint16_t bootSavedMhz = 0;
 uint32_t bootFromMhz = 0;
 bool bootApplied = false;
-
-// BMI270 (datasheet rev 1.x): chip id 0x24 at reg 0x00; PWR_CONF 0x7C
-// (bit 0 advanced power save), PWR_CTRL 0x7D (bit 3 temperature, 2 accel,
-// 1 gyro, 0 aux). Suspend: everything off, then power save on (~3.5 uA).
-constexpr uint8_t kBmiChipId = 0x24;
-constexpr uint8_t kBmiRegChipId = 0x00;
-constexpr uint8_t kBmiPwrConf = 0x7C;
-constexpr uint8_t kBmiPwrCtrl = 0x7D;
-constexpr uint8_t kBmiOnCtrl = 0x0E;  // as M5Unified leaves it: temperature, accel, gyro
-constexpr uint32_t kI2cHz = 400000;
 
 // M5GFX's Core2 backlight: brightness b > 0 sets DCDC3 to step (b >> 3) + 72
 // of 25 mV from 0.7 V (2.5-3.275 V); 0 switches DCDC3 off.
@@ -44,10 +35,11 @@ uint8_t ledLevel() { return static_cast<uint8_t>(255 - M5.Power.Axp192.readRegis
 }  // namespace
 
 PowerLab::PowerLab(Core2AudioBackend& audio, PlaybackController& player, DanceMode& dance, LocalStorage& storage,
-                   Hooks hooks)
+                   ScreenControl& screen, Hooks hooks)
     : audio_(audio),
       player_(player),
       dance_(dance),
+      screen_(screen),
       hooks_(std::move(hooks)),
       probe_(storage, [this](char* buf, size_t size) { describe(buf, size); }) {}
 
@@ -86,8 +78,12 @@ void PowerLab::command(const char* a) {
     case 'b': backlight(arg); return;
     case 's': {
       bool on;
+      if (!arg[0]) {
+        screen_.printStatus();  // Ps: the screen policy's state
+        return;
+      }
       if (!flag(arg, &on)) break;
-      screen(on, "console");
+      screen(on);
       return;
     }
     case 'c': cpu(arg); return;
@@ -107,27 +103,28 @@ void PowerLab::command(const char* a) {
 
 void PowerLab::help() const {
   Serial.println("[power] P line (5 s), Pl log every 5 s, Pw csv on the card, Pm<name> mark, Pq/Pq1/Pq0 coulomb "
-                 "counter; knobs: Pb<0-255> backlight, Ps0/Ps1 screen off/on, Pc<mhz> cpu now (160<->80), "
+                 "counter; knobs: Pb<0-255> backlight while bright (Pb0 the setting's), Ps0/Ps1 screen off/on (Ps its state), Pc<mhz> cpu now (160<->80), "
                  "Pcb<160|240|0> cpu from boot (saved), Pt<min>,<max> bt tx levels 0-7, Pe0/1 5V boost, Pg0/1 "
                  "green led, Pi0/1 imu, Pa0/1 speaker amp, Pd<ms> loop idle delay (0 auto), Pk0/1 dance tracker + "
-                 "taps, Pr0/1 bt background reconnect, Pz play tone:silence next");
+                 "taps, Pr0/1 bt background search rest now / a burst again, Pz play tone:silence next");
 }
 
 // The state after each line: the knobs and what the device is doing.
 void PowerLab::describe(char* buf, size_t size) {
   BtSink& bt = audio_.bluetooth();
   const bool onBt = audio_.output() == Core2AudioBackend::Output::Bluetooth;
-  const uint8_t b = M5.Display.getBrightness();
+  const uint8_t b = screen_.backlight();
   int n = snprintf(buf, size,
                    "bl=%u (DC3 %lu mV) screen=%s cpu=%lu MHz play=%s out=%s link=%s stream=%s amp=%s "
-                   "exten=%s led=%u imu=%s taps=%s dance=%s bg=%s loop=",
-                   (unsigned)b, (unsigned long)(screenOff_ ? 0 : dc3Mv(b)), screenOff_ ? "off" : "on",
+                   "exten=%s led=%u imu=%s taps=%s dance=%s bg=%s radio=%d%% loop=",
+                   (unsigned)b, (unsigned long)dc3Mv(b), screen_.levelName(),
                    (unsigned long)getCpuFrequencyMhz(), hooks_.playState ? hooks_.playState() : "?",
                    onBt ? "bt" : "speaker", btPhaseName(bt.link().phase), bt.streamState(),
-                   SpeakerSink::ampOn() ? "on" : "off", M5.Power.getExtOutput() ? "on" : "off", (unsigned)ledLevel(),
-                   imuSuspended_ ? "suspended" : "on", audio_.tapsOn() ? "on" : "off",
+                   SpeakerSink::ampOn() ? (audio_.speaker().ampHeld() ? "held" : "on") : "off",
+                   M5.Power.getExtOutput() ? "on" : "off", (unsigned)ledLevel(),
+                   board::imuSuspended() ? "suspended" : "on", audio_.tapsOn() ? "on" : "off",
                    dance_.active() ? (dance_.tracking() ? "shown" : "shown-untracked") : "hidden",
-                   bt.backgroundReconnectPaused() ? "paused" : "on");
+                   bt.reconnectPhase(), bt.radioBusyPercent());
   if (n < 0 || static_cast<size_t>(n) >= size) return;
   if (loopDelayMs_) {
     n += snprintf(buf + n, size - n, "%lums", (unsigned long)loopDelayMs_);
@@ -141,61 +138,46 @@ void PowerLab::describe(char* buf, size_t size) {
 // ---- the knobs ----
 
 void PowerLab::backlight(const char* a) {
-  const uint8_t before = M5.Display.getBrightness();
+  const uint8_t before = screen_.backlight();
   if (!a[0]) {
-    Serial.printf("[power] backlight %u (DC3 %lu mV)%s\n", (unsigned)before, (unsigned long)dc3Mv(before),
-                  screenOff_ ? ", screen off" : "");
+    Serial.printf("[power] backlight %u (DC3 %lu mV), screen %s\n", (unsigned)before, (unsigned long)dc3Mv(before),
+                  screen_.levelName());
     return;
   }
   const long v = atol(a);
   if (!isDigit(a[0]) || v < 0 || v > 255) {
-    Serial.println("[power] Pb<0-255>: the backlight");
+    Serial.println("[power] Pb<0-255>: the backlight while the screen is bright, until restart (Pb0: the setting's)");
     return;
   }
-  if (screenOff_) {
-    Serial.println("[power] backlight: the screen is off (Ps1 first)");
+  // The screen policy owns the backlight: this is its Bright level for now
+  // (it still dims and goes off; "Screen off after: Never" on the Output
+  // tab holds it for a long measurement).
+  if (!screen_.overrideBacklight(static_cast<uint8_t>(v))) {
+    Serial.printf("[power] backlight: the screen is %s (Ps1, or a touch, first)\n", screen_.levelName());
     return;
   }
-  M5.Display.setBrightness(static_cast<uint8_t>(v));
-  const uint8_t after = M5.Display.getBrightness();
-  Serial.printf("[power] backlight %u -> %u (DC3 %lu -> %lu mV%s)\n", (unsigned)before, (unsigned)after,
-                (unsigned long)dc3Mv(before), (unsigned long)dc3Mv(after), after ? "" : ": DCDC3 off");
+  screen_.step(millis(), false);  // applied now
+  const uint8_t after = screen_.backlight();
+  Serial.printf("[power] backlight %u -> %u (DC3 %lu -> %lu mV%s; until restart, Pb0 the setting's)\n",
+                (unsigned)before, (unsigned)after, (unsigned long)dc3Mv(before), (unsigned long)dc3Mv(after),
+                after ? "" : ": DCDC3 off");
 }
 
-void PowerLab::screen(bool on, const char* why) {
-  if (on != screenOff_) {
-    Serial.printf("[power] screen already %s\n", on ? "on" : "off");
+// The screen policy's own Off and wake (app/ScreenControl): the UI draws
+// nothing while it's off, and a touch wakes it and does nothing else (with
+// no input after that, it goes off again 10 s later: the pocket guard).
+void PowerLab::screen(bool on) {
+  if (on == !screen_.off()) {
+    Serial.printf("[power] screen already %s (%s)\n", on ? "on" : "off", screen_.levelName());
+    if (on) screen_.consoleOn();  // (dim: bright again)
     return;
   }
-  {
-    LcdLock lock;  // the LCD shares the SPI bus with the card
-    if (on) {
-      M5.Display.wakeup();  // sleep-out, then the backlight back at its level
-    } else {
-      M5.Display.sleep();  // backlight off (DCDC3), then sleep-in (the panel keeps its RAM)
-    }
+  if (on) {
+    screen_.consoleOn();
+  } else {
+    screen_.consoleOff();
   }
-  screenOff_ = !on;
-  Serial.printf("[power] screen %s -> %s (%s; backlight %u)%s\n", on ? "off" : "on", on ? "on" : "off", why,
-                (unsigned)M5.Display.getBrightness(),
-                on ? "" : ": the UI still draws into the panel's RAM; the first touch wakes it and does nothing else");
-}
-
-bool PowerLab::holdInput() {
-  if (!screenOff_ && !swallow_) return false;
-  const bool touched = M5.Touch.getCount() > 0;
-  if (screenOff_) {
-    if (!touched) return true;
-    screen(true, "woken by a touch, which is swallowed");
-    swallow_ = true;
-    quietPasses_ = 0;
-    return true;
-  }
-  // The finger that woke it: nothing it does counts, its lift included
-  // (a button clicks on the lift), so two passes without a touch first.
-  quietPasses_ = touched ? 0 : quietPasses_ + 1;
-  if (quietPasses_ >= 2) swallow_ = false;
-  return true;
+  Serial.printf("[power] screen %s asked (a [screen] line confirms)\n", on ? "on" : "off");
 }
 
 bool PowerLab::audioBusy() {
@@ -305,11 +287,18 @@ void PowerLab::txPower(const char* a) {
   }
   txMin_ = static_cast<int8_t>(mn);
   txMax_ = static_cast<int8_t>(mx);
+  if (audio_.bluetooth().connected()) {
+    // The controller reads back the old range while a link is up (seen on
+    // the device): what was asked is what counts, from the next connection.
+    Serial.printf("[power] bt tx power: %+d..%+d -> %+d..%+d dBm asked: applies from the next connection (the link "
+                  "that is up keeps its level)\n",
+                  dbm(lo), dbm(hi), dbm(mn), dbm(mx));
+    return;
+  }
   esp_power_level_t nlo = lo, nhi = hi;
   esp_bredr_tx_power_get(&nlo, &nhi);
-  Serial.printf("[power] bt tx power: %+d..%+d -> %+d..%+d dBm (from the next page, scan or connection: a link that "
-                "is up may keep its level until it reconnects)\n",
-                dbm(lo), dbm(hi), dbm(nlo), dbm(nhi));
+  Serial.printf("[power] bt tx power: %+d..%+d -> %+d..%+d dBm (from the next page, scan or connection)\n", dbm(lo),
+                dbm(hi), dbm(nlo), dbm(nhi));
 }
 
 void PowerLab::exten(const char* a) {
@@ -337,49 +326,33 @@ void PowerLab::led(const char* a) {
   Serial.printf("[power] green LED: %u -> %u/255\n", (unsigned)before, (unsigned)ledLevel());
 }
 
-int PowerLab::bmi270Address() {
-  if (M5.Imu.getType() != m5::imu_t::imu_bmi270) return -1;
-  for (uint8_t addr : {0x68, 0x69}) {
-    if (M5.In_I2C.readRegister8(addr, kBmiRegChipId, kI2cHz) == kBmiChipId) return addr;
-  }
-  return -1;
-}
-
 void PowerLab::imu(const char* a) {
   bool on;
-  const int addr = bmi270Address();
+  const int addr = board::bmi270Address();
   if (addr < 0) {
     Serial.println("[power] imu: no BMI270 found (only that one is handled)");
     return;
   }
-  const uint8_t conf0 = M5.In_I2C.readRegister8(addr, kBmiPwrConf, kI2cHz);
-  const uint8_t ctrl0 = M5.In_I2C.readRegister8(addr, kBmiPwrCtrl, kI2cHz);
+  const uint8_t conf0 = board::bmi270PwrConf(addr);
+  const uint8_t ctrl0 = board::bmi270PwrCtrl(addr);
   if (!flag(a, &on)) {
-    Serial.printf("[power] imu (BMI270 at 0x%02x): PWR_CTRL 0x%02x PWR_CONF 0x%02x: %s (Pi0 / Pi1)\n", addr, ctrl0,
-                  conf0, imuSuspended_ ? "suspended" : "on");
+    Serial.printf("[power] imu (BMI270 at 0x%02x): PWR_CTRL 0x%02x PWR_CONF 0x%02x: %s (Pi0 / Pi1; suspended from "
+                  "boot)\n",
+                  addr, ctrl0, conf0, board::imuSuspended() ? "suspended" : "on");
     return;
   }
-  if (on) {
-    M5.In_I2C.writeRegister8(addr, kBmiPwrConf, 0x00, kI2cHz);  // power save off first
-    delayMicroseconds(1000);                                     // (450 us before the next write)
-    M5.In_I2C.writeRegister8(addr, kBmiPwrCtrl, kBmiOnCtrl, kI2cHz);
-  } else {
-    M5.In_I2C.writeRegister8(addr, kBmiPwrCtrl, 0x00, kI2cHz);  // accel, gyro, temperature off
-    delayMicroseconds(1000);
-    M5.In_I2C.writeRegister8(addr, kBmiPwrConf, 0x01, kI2cHz);  // advanced power save: suspend
-  }
-  delayMicroseconds(1000);
-  imuSuspended_ = !on;
+  board::setImuSuspended(addr, !on);
   Serial.printf("[power] imu (BMI270 at 0x%02x): PWR_CTRL 0x%02x -> 0x%02x, PWR_CONF 0x%02x -> 0x%02x (%s)\n", addr,
-                ctrl0, M5.In_I2C.readRegister8(addr, kBmiPwrCtrl, kI2cHz), conf0,
-                M5.In_I2C.readRegister8(addr, kBmiPwrConf, kI2cHz), on ? "on" : "suspended");
+                ctrl0, board::bmi270PwrCtrl(addr), conf0, board::bmi270PwrConf(addr), on ? "on" : "suspended");
 }
 
 void PowerLab::amp(const char* a) {
   bool on;
   const bool before = SpeakerSink::ampOn();
   if (!flag(a, &on)) {
-    Serial.printf("[power] speaker amp: %s%s (Pa0 / Pa1)\n", before ? "on" : "off",
+    Serial.printf("[power] speaker amp: %s%s%s (Pa0 / Pa1; by itself it goes off 2 s after the speaker goes "
+                  "quiet)\n",
+                  before ? "on" : "off", audio_.speaker().ampHeld() ? ", held on by Pa1" : "",
                   audio_.speaker().ampPending() ? ", a switch pending" : "");
     return;
   }
@@ -392,7 +365,8 @@ void PowerLab::amp(const char* a) {
   ampBefore_ = before;
   Serial.printf("[power] speaker amp: %s -> %s asked (once the speaker is quiet)%s\n", before ? "on" : "off",
                 on ? "on" : "off",
-                on ? ": the I2S clocks zeros into it, nothing is heard" : "; the next speaker playback turns it on");
+                on ? ": the I2S clocks zeros into it, nothing is heard; held on until Pa0"
+                   : " without the 2 s wait; the next speaker playback turns it on");
 }
 
 void PowerLab::loopDelay(const char* a) {
@@ -424,24 +398,25 @@ void PowerLab::taps(const char* a) {
     return;
   }
   const bool taps0 = audio_.tapsOn(), track0 = dance_.tracking();
-  audio_.setTapsOn(on);
-  dance_.setTracking(on);
-  Serial.printf("[power] the outputs' taps %s -> %s, the dance beat tracker %s -> %s\n", taps0 ? "on" : "off",
-                on ? "on" : "off", track0 ? "on" : "off", on ? "on" : "off");
+  dance_.setTracking(on);  // the taps follow it: on only while the Dance tab is up and tracking
+  Serial.printf("[power] the dance beat tracker %s -> %s, the outputs' taps %s -> %s (on only while the Dance tab "
+                "is up)\n",
+                track0 ? "on" : "off", on ? "on" : "off", taps0 ? "on" : "off", audio_.tapsOn() ? "on" : "off");
 }
 
 void PowerLab::reconnect(const char* a) {
   bool on;
   BtSink& bt = audio_.bluetooth();
-  const bool paused = bt.backgroundReconnectPaused();
   if (!flag(a, &on)) {
-    Serial.printf("[power] bt background reconnect: %s (Pr0 / Pr1)\n", paused ? "paused" : "on");
+    Serial.printf("[power] bt background search: %s, radio busy %d%% of the last minute (Pr0 rest now / Pr1 a burst "
+                  "again)\n",
+                  bt.reconnectPhase(), bt.radioBusyPercent());
     return;
   }
   bt.setBackgroundReconnect(on);
-  Serial.printf("[power] bt background reconnect: %s -> %s asked (a [bt] line confirms; a connect or the Pair "
-                "screen resumes it)\n",
-                paused ? "paused" : "on", on ? "on" : "paused");
+  Serial.printf("[power] bt background search: %s -> %s asked (a [bt] line confirms; a connect or the Pair screen "
+                "starts it again)\n",
+                bt.reconnectPhase(), on ? "a burst" : "resting");
 }
 
 void PowerLab::playSilence() {

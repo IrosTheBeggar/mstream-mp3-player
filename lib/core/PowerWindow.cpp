@@ -46,11 +46,42 @@ Stat Window::Acc::stat(uint32_t n) const {
 }
 
 void Window::reset(uint32_t startMs) {
+  // The glitch filter carries over: a held sample is decided by the next.
+  const bool haveLast = haveLast_, held = held_;
+  const float lastInMa = lastInMa_;
+  const Sample heldSample = heldSample_;
   *this = Window{};
   startMs_ = startMs;
+  haveLast_ = haveLast;
+  lastInMa_ = lastInMa;
+  held_ = held;
+  heldSample_ = heldSample;
 }
 
+namespace {
+bool supplied(const Sample& s) { return (s.status & 0xA0) != 0; }  // ACIN or VBUS present
+}  // namespace
+
 void Window::add(const Sample& s) {
+  if (held_) {
+    held_ = false;
+    if (s.inMa() > 2.0f * Window::kGlitchMa) {
+      ++glitches_;  // back up at once: the held one was a glitch
+    } else {
+      accept(heldSample_);  // it stayed low: a real drop
+    }
+  }
+  if (supplied(s) && s.inMa() <= kGlitchMa && haveLast_ && lastInMa_ > 2.0f * kGlitchMa) {
+    held_ = true;
+    heldSample_ = s;
+    return;
+  }
+  accept(s);
+}
+
+void Window::accept(const Sample& s) {
+  haveLast_ = true;
+  lastInMa_ = s.inMa();
   const bool first = n_ == 0;
   inMa_.add(s.inMa(), first);
   inW_.add(s.inW(), first);

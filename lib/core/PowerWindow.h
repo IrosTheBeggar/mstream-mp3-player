@@ -45,13 +45,35 @@ struct Stat {
 
 // Samples since reset(): mean/min/max of the input current and power and
 // the battery current, means of the rest.
+//
+// ACIN glitches: at 160 and 80 MHz the chip's input current now and then
+// reads 0-15 mA for a single sample while USB is in (the device draws 20
+// mA or more). Such a sample is held back until the next one: when that
+// one is back up, it was a glitch, counted (glitches()) and kept out of the
+// mean, min and max; when it stays low, the drop was real and both count.
+// A held sample crosses reset() into the next window.
 class Window {
 public:
+  // A sample with a supply present and at most this much in, right after
+  // one of more than twice as much, is a possible glitch.
+  static constexpr float kGlitchMa = 15.0f;
+
   void reset(uint32_t startMs);
   void add(const Sample& s);
 
   uint32_t count() const { return n_; }
   uint32_t startMs() const { return startMs_; }
+  // Samples left out as ACIN glitches since reset().
+  uint32_t glitches() const { return glitches_; }
+  // How long the window has run at nowMs. 0 while nowMs is still before
+  // its start: a window started from a later millis() than the caller's
+  // (a console command's, read after the loop's) hasn't begun yet, and
+  // must not read as 2^32 ms old ("4294967.5 s: no samples").
+  uint32_t elapsedMs(uint32_t nowMs) const {
+    const int32_t d = static_cast<int32_t>(nowMs - startMs_);
+    return d > 0 ? static_cast<uint32_t>(d) : 0u;
+  }
+  bool over(uint32_t nowMs, uint32_t lengthMs) const { return elapsedMs(nowMs) >= lengthMs; }
 
   Stat inMa() const { return inMa_.stat(n_); }
   Stat inW() const { return inW_.stat(n_); }
@@ -75,9 +97,18 @@ private:
     Stat stat(uint32_t n) const;
   };
 
+  void accept(const Sample& s);
+
   uint32_t startMs_ = 0;
   uint32_t n_ = 0;
+  uint32_t glitches_ = 0;
   uint8_t status_ = 0;
+  // The glitch filter (kept across reset()): the last sample taken in, and
+  // a possible glitch held back until the next.
+  bool haveLast_ = false;
+  float lastInMa_ = 0.0f;
+  bool held_ = false;
+  Sample heldSample_;
   Acc inMa_, inW_, batMa_, batW_, acinV_, acinMa_, vbusV_, vbusMa_, batV_, apsV_, tempC_;
 };
 

@@ -40,7 +40,17 @@ inline int tabAt(int x, bool atRightEdge) {
   return x / kTabW;
 }
 
-enum class Output : uint8_t { Speaker, BtConnected, BtConnecting, BtLost };
+// BtIdle: Bluetooth is the output, not connected, and nothing is looking
+// for them (the background search rests; they come back by themselves):
+// the headphones in the plain icon colour, not amber.
+enum class Output : uint8_t { Speaker, BtConnected, BtConnecting, BtLost, BtIdle };
+
+// The Output icon's state. `lost`: dropped while the output (until back or
+// the output moves); `failed`: a connection the listener asked for failed;
+// `asked`: one is on its way (the audio waits on the speaker meanwhile);
+// `looking`: the link is trying (paging, scanning, backing off), not
+// resting or off.
+Output outputFor(bool onBluetooth, bool connected, bool lost, bool asked, bool failed, bool looking);
 enum class Play : uint8_t { Nothing, Stopped, Paused, Playing, Waiting };
 
 // Everything the bar shows. Two states compare cell by cell (dirty()).
@@ -87,6 +97,8 @@ void eqBars(uint8_t step, bool playing, uint8_t out[4]);
 
 // The badge's text: "7", "99", "99+" ("" for 0).
 void badgeText(uint32_t n, char out[4]);
+
+// (outputFor(): TabBarModel.cpp.)
 
 // The hairline's fill for a position in a track of `durationMs` (0: unknown).
 uint8_t progressPx(uint32_t positionMs, uint32_t durationMs);

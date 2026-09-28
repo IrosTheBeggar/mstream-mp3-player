@@ -1,6 +1,8 @@
 // Host test of the Bluetooth output chain as BtSink::onData composes it: the
 // DeclickReader (pause/skip/underrun/output-switch fades) and then the
-// GainRamp (volume), 128 frames per call. Run: pio test -e native
+// GainRamp (volume), 128 frames per call; and the speaker pump's amp gate
+// (AmpGate: the amp and I2S off 2 s after the speaker goes quiet).
+// Run: pio test -e native
 #include <unity.h>
 
 #include <cstdint>
@@ -8,6 +10,7 @@
 #include <random>
 #include <vector>
 
+#include "AmpGate.h"
 #include "DeclickReader.h"
 #include "GainRamp.h"
 #include "PcmRing.h"
@@ -96,10 +99,170 @@ void test_pause_keeps_the_ring_and_is_silent() {
   TEST_ASSERT_TRUE(before - c.ring.size() <= Declicker::kDefaultRampFrames);
 }
 
+
+// ---- the speaker amp (AmpGate), as SpeakerSink's pump drives it ----
+
+namespace {
+// The pump's side: M5.Speaker running or not, and what the gate made it do.
+struct Pump {
+  AmpGate gate;
+  bool running = false;
+  int starts = 0, stops = 0;
+  void apply(AmpGate::Do d) {
+    if (d == AmpGate::Do::Start) {
+      TEST_ASSERT_FALSE(running);
+      running = true;
+      ++starts;
+    } else if (d == AmpGate::Do::Stop) {
+      TEST_ASSERT_TRUE(running);
+      running = false;
+      ++stops;
+    }
+  }
+  // A buffer of audio queued at `t` (the amp on first if it was off).
+  void queue(uint32_t t) {
+    apply(gate.beforeQueue(running));
+    TEST_ASSERT_TRUE(running);
+    gate.queued(t);
+  }
+  // Nothing to queue at `t` (paused, stopped, or the output is Bluetooth).
+  void quiet(uint32_t t, bool drained = true) { apply(gate.quiet(t, running, drained)); }
+  // Play for `ms` from `t`, a buffer every 23 ms with quiet passes between
+  // them (the ring busy, a short wait): never switched off meanwhile.
+  uint32_t play(uint32_t t, uint32_t ms) {
+    for (uint32_t end = t + ms; t != end; ++t) {
+      if (t % 23 == 0) {
+        queue(t);
+      } else if (t % 10 == 0) {
+        quiet(t, false);
+      }
+    }
+    return t;
+  }
+};
+}  // namespace
+
+// At boot the amp is off, and quiet passes leave it so.
+void test_amp_stays_off_until_audio() {
+  Pump p;
+  for (uint32_t t = 0; t < 10000; t += 10) p.quiet(t);
+  TEST_ASSERT_FALSE(p.running);
+  TEST_ASSERT_EQUAL(0, p.starts + p.stops);
+}
+
+// Paused (or stopped, or moved to Bluetooth: all the same to the pump), it
+// goes off 2 s after the last buffer was queued, not a pass sooner; and on
+// again before the next buffer.
+void test_amp_off_two_seconds_after_the_speaker_goes_quiet() {
+  Pump p;
+  uint32_t t = p.play(1000, 5000);
+  TEST_ASSERT_EQUAL(1, p.starts);  // on before the first buffer
+  TEST_ASSERT_EQUAL(AmpGate::Why::Playing, p.gate.why());
+  const uint32_t last = t - 1 - (t - 1) % 23;  // the last buffer queued
+  for (; t - last < AmpGate::kQuietMs; t += 10) {
+    p.quiet(t);
+    TEST_ASSERT_TRUE(p.running);
+  }
+  p.quiet(last + AmpGate::kQuietMs);
+  TEST_ASSERT_FALSE(p.running);
+  TEST_ASSERT_EQUAL(1, p.stops);
+  TEST_ASSERT_EQUAL(AmpGate::Why::Quiet, p.gate.why());
+  for (t = last + AmpGate::kQuietMs; t < last + 60000; t += 10) p.quiet(t);  // stays off
+  TEST_ASSERT_EQUAL(1, p.stops);
+  p.queue(t);  // resume
+  TEST_ASSERT_EQUAL(2, p.starts);
+  TEST_ASSERT_EQUAL(AmpGate::Why::Playing, p.gate.why());
+  // A pause shorter than 2 s never switches it.
+  t = p.play(t, 3000);
+  for (uint32_t end = t + 1900; t < end; t += 10) p.quiet(t);
+  p.play(t, 1000);
+  TEST_ASSERT_EQUAL(2, p.starts);
+  TEST_ASSERT_EQUAL(1, p.stops);
+}
+
+// A buffer still queued (not released yet) holds it on: end() must not drop
+// one. It goes off at the first pass once all are back.
+void test_amp_waits_for_the_last_buffer() {
+  Pump p;
+  p.queue(0);
+  p.quiet(AmpGate::kQuietMs + 500, false);
+  TEST_ASSERT_TRUE(p.running);
+  p.quiet(AmpGate::kQuietMs + 510, true);
+  TEST_ASSERT_FALSE(p.running);
+}
+
+// Pa0: off as soon as the speaker is quiet, without the 2 s wait; while it
+// plays the request waits. With the amp already off it is only cleared.
+void test_amp_pa0_switches_off_once_quiet() {
+  Pump p;
+  uint32_t t = p.play(0, 1000);
+  p.gate.ask(AmpGate::Ask::Off);
+  p.quiet(t, false);  // still playing out what was queued
+  TEST_ASSERT_TRUE(p.running);
+  TEST_ASSERT_TRUE(p.gate.asking());
+  p.quiet(t + 10);
+  TEST_ASSERT_FALSE(p.running);
+  TEST_ASSERT_FALSE(p.gate.asking());
+  TEST_ASSERT_EQUAL(AmpGate::Why::Asked, p.gate.why());
+  p.gate.ask(AmpGate::Ask::Off);
+  p.quiet(t + 20);
+  TEST_ASSERT_FALSE(p.gate.asking());
+  TEST_ASSERT_EQUAL(1, p.stops);
+}
+
+// Pa1: on (zeros) and held on through playing and pausing, until Pa0.
+void test_amp_pa1_holds_it_on_until_pa0() {
+  Pump p;
+  p.gate.ask(AmpGate::Ask::On);
+  p.quiet(0);
+  TEST_ASSERT_TRUE(p.running);
+  TEST_ASSERT_TRUE(p.gate.held());
+  TEST_ASSERT_EQUAL(AmpGate::Why::Asked, p.gate.why());
+  uint32_t t = 10;
+  for (; t < 10000; t += 10) p.quiet(t);
+  t = p.play(t, 2000);
+  for (uint32_t end = t + 10000; t < end; t += 10) p.quiet(t);
+  TEST_ASSERT_TRUE(p.running);
+  TEST_ASSERT_EQUAL(1, p.starts);
+  p.gate.ask(AmpGate::Ask::Off);
+  p.quiet(t);
+  TEST_ASSERT_FALSE(p.running);
+  TEST_ASSERT_FALSE(p.gate.held());
+  // Back to the automatic gate.
+  t = p.play(t + 10, 1000);
+  p.quiet(t + AmpGate::kQuietMs);
+  TEST_ASSERT_FALSE(p.running);
+  TEST_ASSERT_EQUAL(2, p.stops);
+  // Pa1 with it already on only holds it.
+  t = p.play(t + AmpGate::kQuietMs + 10, 1000);
+  p.gate.ask(AmpGate::Ask::On);
+  p.quiet(t);
+  TEST_ASSERT_EQUAL(3, p.starts);
+  p.quiet(t + 60000);
+  TEST_ASSERT_TRUE(p.running);
+}
+
+// millis() wraps after ~49.7 days: the 2 s still counts across it.
+void test_amp_quiet_across_the_clock_wrap() {
+  Pump p;
+  const uint32_t t0 = 0xFFFFFFFFu - 500;
+  p.queue(t0);
+  p.quiet(t0 + 1000);  // wrapped
+  TEST_ASSERT_TRUE(p.running);
+  p.quiet(t0 + AmpGate::kQuietMs);
+  TEST_ASSERT_FALSE(p.running);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_never_adds_level);
   RUN_TEST(test_restart_starts_from_silence);
   RUN_TEST(test_pause_keeps_the_ring_and_is_silent);
+  RUN_TEST(test_amp_stays_off_until_audio);
+  RUN_TEST(test_amp_off_two_seconds_after_the_speaker_goes_quiet);
+  RUN_TEST(test_amp_waits_for_the_last_buffer);
+  RUN_TEST(test_amp_pa0_switches_off_once_quiet);
+  RUN_TEST(test_amp_pa1_holds_it_on_until_pa0);
+  RUN_TEST(test_amp_quiet_across_the_clock_wrap);
   return UNITY_END();
 }

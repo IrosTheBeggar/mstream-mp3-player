@@ -121,6 +121,32 @@ void Input::update(uint32_t nowMs) {
   // scripted finger's.
   TouchRecognizer::Sample s;
   int id = -1;
+  // Any real finger on the panel (a second one too): while one is, the
+  // wake's latch holds. The scripted finger doesn't count.
+  bool fingers = false;
+  int16_t firstRawX = 0, firstRawY = 0;
+  for (int i = 0; i < M5.Touch.getCount(); ++i) {
+    const auto& d = M5.Touch.getDetail(i);
+    if (!d.isPressed()) continue;
+    if (!fingers) {
+      firstRawX = d.x;
+      firstRawY = d.y;
+    }
+    fingers = true;
+  }
+  const WakeLatch::Result w = latch_.update(nowMs, fingers, lit_);
+  if (w.took && !suspended_) {
+    // A finger resting as the screen dimmed: taken, not a wake. Its touch
+    // ends here for the page (nothing more comes of it until it lifts).
+    const InputEvent c = glass_.cancel(nowMs);
+    if (c.type != InputEvent::Type::None) push(c);
+  }
+  if (w.woke) {
+    woke_ = true;
+    wakeX_ = firstRawX;
+    wakeY_ = firstRawY;
+  }
+  drop_ = suspended_ || w.hold;
   if (M5.Touch.getCount() > 0 && M5.Touch.getDetail(0).isPressed()) {
     m5gfx::touch_point_t tp = M5.Touch.getTouchPointRaw(0);
     M5.Display.convertRawXY(&tp, 1);
@@ -156,8 +182,25 @@ void Input::update(uint32_t nowMs) {
   // it is handed over: a drag from this very point).
   InputEvent out[TouchRecognizer::kMaxEvents];
   const int n = glass_.update(nowMs, s, out);
-  if (suspended_) return;
-  for (int i = 0; i < n; ++i) push(out[i]);
+  // Input for the screen's countdown: a finger that acts, landing or
+  // moving (one resting still stops counting: FingerActivity).
+  touching_ = still_.update(nowMs, s.pressed && !w.hold, s.rawX, s.rawY);
+  glassLanded_ = false;
+  if (drop_) return;
+  for (int i = 0; i < n; ++i) {
+    // A touch landing on the glass: the listener is looking (ends the
+    // screen's unattended state; a swipe from the strip isn't one).
+    if (out[i].type == InputEvent::Type::Down && !out[i].fromStrip) glassLanded_ = true;
+    push(out[i]);
+  }
+}
+
+bool Input::takeWake(int* rawX, int* rawY) {
+  if (!woke_) return false;
+  woke_ = false;
+  *rawX = wakeX_;
+  *rawY = wakeY_;
+  return true;
 }
 
 // Only the first touch point is followed (StripButtons, like the glass): a
@@ -173,7 +216,7 @@ void Input::logOtherFingers(int firstId) {
     // base: where that finger went down (screen pixels, as the first point's).
     if ((otherLogged_ & bit) || d.base_y < strip_.config().stripY) continue;
     otherLogged_ |= bit;
-    if (suspended_) continue;
+    if (drop_) continue;
     Serial.printf("[button] ignored: %c at %d,%d (raw): a second finger (only the first touch counts)\n",
                   static_cast<char>('A' + StripButtons::column(d.base_x)), d.base_x, d.base_y);
   }
@@ -189,12 +232,12 @@ void Input::updateButtons(uint32_t nowMs, const TouchRecognizer::Sample& s, bool
   const StripButtons::Result r = strip_.update(nowMs, s.pressed, s.rawX, s.rawY, newTouch);
   if (r.scroll) {
     glass_.fromStrip();
-    if (!suspended_) {
+    if (!drop_) {
       Serial.printf("[button] %c at %d,%d (raw): a swipe from the strip (%d px): scrolling%s\n",
                     static_cast<char>('A' + r.button), s.rawX, s.rawY, r.moved, scripted_ ? " (scripted)" : "");
     }
   }
-  if (r.ignored != StripButtons::Why::None && !suspended_) {
+  if (r.ignored != StripButtons::Why::None && !drop_) {
     char detail[80] = "";
     if (r.ignored == StripButtons::Why::Moved) {
       snprintf(detail, sizeof(detail), " (%d px): cancelled", r.moved);
@@ -223,7 +266,7 @@ void Input::updateButtons(uint32_t nowMs, const TouchRecognizer::Sample& s, bool
     e.ms = nowMs;
     const uint32_t rp = buttons_[b].repeats();
     e.repeat = static_cast<uint8_t>(rp > 255 ? 255 : rp);
-    if (suspended_) continue;
+    if (drop_) continue;
     push(e);  // its feedback once it's handled (buttonFeedback())
   }
 }
@@ -272,7 +315,7 @@ bool Input::simSample(uint32_t nowMs, TouchRecognizer::Sample& s) {
 
 void Input::cancelTouch(uint32_t nowMs) {
   const InputEvent e = glass_.cancel(nowMs);
-  if (e.type != InputEvent::Type::None && !suspended_) push(e);
+  if (e.type != InputEvent::Type::None && !suspended_ && !latch_.holding()) push(e);
 }
 
 void Input::saveFlag(const char* key, bool on) {

@@ -16,6 +16,7 @@ namespace {
 M5Canvas* strip_ = nullptr;  // PSRAM
 int coverY0_ = 0, coverY1_ = 0;
 SpiHoldStats holds_;
+bool dark_ = false;
 
 // Screen rows [y, y + h) as runs whose GRAM rows are consecutive (and not
 // covered, unless `over`), at most kBand long: fn(screenY, gramY, n).
@@ -54,6 +55,9 @@ bool begin() {
 
 M5Canvas& strip() { return *strip_; }
 
+void setDark(bool on) { dark_ = on; }
+bool dark() { return dark_; }
+
 void setCover(int y0, int y1) {
   coverY0_ = y0;
   coverY1_ = y1;
@@ -62,7 +66,7 @@ void setCover(int y0, int y1) {
 bool covered(int y) { return y >= coverY0_ && y < coverY1_; }
 
 void fill(int x, int y, int w, int h, uint16_t colour, bool over) {
-  if (w <= 0 || h <= 0) return;
+  if (w <= 0 || h <= 0 || dark_) return;
   auto& d = M5.Display;
   forRuns(y, h, over, [&](int, int g, int n) {
     LcdLock lock(&holds_);
@@ -71,7 +75,7 @@ void fill(int x, int y, int w, int h, uint16_t colour, bool over) {
 }
 
 void pushRows(M5Canvas& s, int x, int y, int w, int sy0, int sy1, bool over) {
-  if (w <= 0 || sy1 <= sy0) return;
+  if (w <= 0 || sy1 <= sy0 || dark_) return;
   auto& d = M5.Display;
   forRuns(y + sy0, sy1 - sy0, over, [&](int sy, int g, int n) {
     LcdLock lock(&holds_);

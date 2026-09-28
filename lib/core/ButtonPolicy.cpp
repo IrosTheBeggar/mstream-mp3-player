@@ -20,6 +20,8 @@ bool ButtonPolicy::handle(const InputEvent& e, Transport& t) {
   if (e.type == T::Click) {
     if (b > kButtonC) return false;
     if (t.idle()) return false;  // inert: nothing to play
+    // Not out loud from a pocket: pausing is fine, starting isn't.
+    if (b == kButtonB && !t.playing() && t.startRefused()) return false;
     if (b == kButtonA) {
       t.prev();
     } else if (b == kButtonB) {

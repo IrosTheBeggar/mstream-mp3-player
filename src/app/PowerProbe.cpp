@@ -89,7 +89,9 @@ void PowerProbe::loop(uint32_t nowMs) {
     power::Sample s;
     if (read(&s)) window_.add(s);
   }
-  if (nowMs - window_.startMs() < kWindowMs) return;
+  // (A window started by a console command began at a later millis() than
+  // this pass's `now`: not over, not 2^32 ms old.)
+  if (!window_.over(nowMs, kWindowMs)) return;
   emit(nowMs, false);
   oneShot_ = false;
   if (!wanted()) {
@@ -101,7 +103,7 @@ void PowerProbe::loop(uint32_t nowMs) {
 
 void PowerProbe::emit(uint32_t nowMs, bool partial) {
   const uint32_t n = window_.count();
-  const float secs = (nowMs - window_.startMs()) / 1000.0f;
+  const float secs = window_.elapsedMs(nowMs) / 1000.0f;
   char state[256] = "";
   if (describe_) describe_(state, sizeof(state));
   if (n == 0) {
@@ -113,14 +115,18 @@ void PowerProbe::emit(uint32_t nowMs, bool partial) {
   if (log_ || oneShot_ || partial) {
     char cc[96] = "";
     coulombText(cc, sizeof(cc), nowMs);
+    // ACIN glitches (a single sample of 0-15 mA on USB, at 160/80 MHz):
+    // left out of the numbers, counted here.
+    char gl[24] = "";
+    if (window_.glitches()) snprintf(gl, sizeof(gl), " glitches=%lu", (unsigned long)window_.glitches());
     // "in": what comes in from USB (ACIN and VBUS together; whichever the
     // cable is on reads it). "bat": + charging, - discharging.
     Serial.printf("[power] %.1f s%s n=%lu in=%.1f mA (%.1f..%.1f) %.3f W (%.3f..%.3f) [%s: ACIN %.2f V %.1f mA, "
-                  "VBUS %.2f V %.1f mA] bat=%+.1f mA (%+.1f..%+.1f) %+.3f W %.3f V aps=%.2f V %.1f C%s | %s\n",
+                  "VBUS %.2f V %.1f mA] bat=%+.1f mA (%+.1f..%+.1f) %+.3f W %.3f V aps=%.2f V %.1f C%s%s | %s\n",
                   secs, partial ? " (partial)" : "", (unsigned long)n, inMa.mean, inMa.min, inMa.max, inW.mean,
                   inW.min, inW.max, supplies(window_.status()), window_.acinV(), window_.acinMa(), window_.vbusV(),
                   window_.vbusMa(), bat.mean, bat.min, bat.max, window_.batW(), window_.batV(), window_.apsV(),
-                  window_.tempC(), cc, state);
+                  window_.tempC(), gl, cc, state);
   }
   if (csv_) {
     char row[512];

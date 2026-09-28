@@ -91,8 +91,17 @@ public:
   void suspend();
   void resume();
   bool suspended() const { return suspended_; }
-  // How long the loop may sleep (1-5 ms): less while a frame is due soon.
+  // How long the loop may sleep (1-5 ms): less while a frame is due soon;
+  // 20 ms while the screen is off.
   uint32_t idleMs(uint32_t nowMs) const;
+  // The screen went off (ScreenPower): nothing is drawn (gfx drops every
+  // push), but the logic goes on: the snapshot, dialogs, toasts, their
+  // timers. Any fling stops, no cover job starts, the dancer stops, the
+  // page stops what costs power (the Pair scan). setDark(false), on the
+  // wake, before the panel's sleep-out: everything drawn again (the tab
+  // bar, the page, what is over it), the list's hardware scroll sent again.
+  void setDark(bool on);
+  bool dark() const { return dark_; }
 
   // ---- events from the rest of the firmware ----
   void libraryChanged();       // the index was rebuilt (g0): the Library's ids are stale
@@ -268,6 +277,10 @@ private:
   ScrollGovernor::Budget budget_;
   bool started_ = false;
   bool suspended_ = false;
+  bool dark_ = false;         // the screen is off: nothing drawn
+  bool danceWasOn_ = false;   // the dancer was up when it went dark
+  // The screen woke: draw everything again.
+  void redrawAll();
   TouchOn touch_ = TouchOn::None;
   // The touch's long press did nothing (no hold there): its lift, where it
   // pressed, is a tap at hold_.

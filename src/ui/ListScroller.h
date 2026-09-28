@@ -95,6 +95,10 @@ public:
   // like" above). Returns the number of content lines pushed. `sendUs`
   // (optional) gets the time the address took on the bus (0 if unsent).
   int scrollTo(int32_t offset, Painter& painter, uint32_t* sendUs = nullptr);
+  // The scroll area and the start address sent again, as they are (the
+  // screen woke from the panel's sleep-in, which should keep them: this
+  // makes sure). Nothing moves.
+  void resend();
   // Something else drew over the band: the next scrollTo() redraws it all.
   void invalidate() { map_.invalidate(); }
   const VScrollMap& map() const { return map_; }

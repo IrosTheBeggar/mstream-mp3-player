@@ -20,6 +20,10 @@
 // for the moment the listener hears: the tap's clock minus the output's
 // latency, a little early for the LCD. On the click tracks the true beat is
 // known, so the tracker's phase error is measured as it plays.
+//
+// The outputs write their taps only while it is on and tracking: it
+// switches them (off from boot, on with the Dance tab, off with the tab,
+// the screen going dark, or Pk0; ENERGY.md item 9).
 class DanceMode {
 public:
   DanceMode(Core2AudioBackend& audio, PlaybackController& player) : audio_(audio), player_(player) {}
@@ -42,7 +46,8 @@ public:
   dance::Skin skin() const { return skin_; }
   void toggleVerbose();
   // Power measurements (the console's Pk): the beat tracker stops reading
-  // the tap (the dancer idles); on again it starts over from what plays.
+  // the tap and the taps stop (the dancer idles); on again it starts over
+  // from what plays.
   void setTracking(bool on);
   bool tracking() const { return tracking_; }
   // What the Dance page shows around the dancer.
@@ -59,6 +64,7 @@ public:
 private:
   void benchTracker();
   void follow(Core2AudioBackend::Output output);
+  void syncTaps();  // the outputs' taps on only while on and tracking
   void feed(const TapReader::Run& run);
   void restart(const TapReader::Run& run, const char* why);
   void scoreTruth(uint32_t frame);

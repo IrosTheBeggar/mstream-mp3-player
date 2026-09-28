@@ -20,11 +20,13 @@
 struct BtLink {
   enum class Phase : uint8_t {
     Off,       // not trying: the listener disconnected or cancelled, or forgot the pair
-    Paging,    // connecting to the remembered headphones (try `attempt` of `attempts`)
-    Scanning,  // looking for them by name (the background cycle, after the tries)
+    Paging,    // a burst of pages to the remembered headphones (try `attempt` of `attempts`)
+    Scanning,  // none remembered: looking for headphones by name (for 2 min)
     Linked,    // connected
     PairScan,  // the Pair screen's scan: listing devices, connecting to none
     Pairing,   // connecting to headphones picked on the Pair screen
+    Backoff,   // after a burst: a page now and then (30 s, 1, 2, 5 min...), no scan
+    Resting,   // stopped looking (15 min, or nobody around): connectable, they come back by themselves
   };
   Phase phase = Phase::Off;
   uint8_t attempt = 0;      // Paging / Pairing: this try (1..attempts)
@@ -48,6 +50,9 @@ enum class BtCard : uint8_t {
                // (a pairing: "Couldn't pair..." [Try again] [Connect]: the old ones;
                // none remembered: [Try again] [Pair new headphones])
   Lost,        // "Lost: trying to reconnect"    [Cancel]
+  Resting,     // "Not connected" + "They'll reconnect / when switched on."  [Connect]
+               // (the background search rests: no radio spent on them, but
+               // they come back by themselves once switched on)
 };
 const char* btCardName(BtCard c);
 
@@ -81,7 +86,7 @@ public:
   void cancel();
   // A play that waited for the headphones ended without them (PlayGate):
   // the ask is withdrawn but the link is left alone, so the radio carries
-  // on (the burst's last tries, then the background cycle) and a link it
+  // on (the burst's last tries, then the back-off) and a link it
   // brings later answers nothing (no "Now playing on"). `failed`: they
   // couldn't be reached, and the card says so as the notice does (red, Try
   // again); otherwise the listener cancelled the wait. A pairing the
@@ -107,7 +112,12 @@ public:
   bool wanted() const { return wanted_; }
   // A connection or pairing the listener asked for didn't come up.
   bool failed() const { return failed_; }
+  // The last ask was a pairing (kept after it failed: the Failed card
+  // says "pair failed").
   bool pairing() const { return pairing_; }
+  // A pairing still under way (asked, not failed, not linked): what keeps
+  // the screen lit. Not the failed one the card still shows.
+  bool pairingUnderWay() const { return wanted_ && pairing_; }
   // The link that is going down was let go on purpose (Disconnect,
   // Forget, a new pairing): no "headphones lost" dialog for it. Forgotten
   // by the next link, or when the link stays up kDropWaitMs.
@@ -142,6 +152,12 @@ struct BtCardView {
   int buttonCount = 0;
   bool spinner = false;     // something is under way (connecting, searching)
   bool pairFailed = false;  // Failed: it was a pairing
+  // Resting: two lines beside the one button (uitext::kBtHintLine1/2):
+  // "They'll reconnect" / "when switched on."
+  bool hint = false;
+  // ... dropped while the output (resting only after the whole back-off):
+  // "Back in range?" / "Tap Connect." (uitext::kBtLostHintLine1/2).
+  bool lostHint = false;
 };
 BtCardView btCardView(const BtLink& link, const BtSession& session, bool lost);
 // The status line: "Connecting... try 2 of 3". `name`: the headphones'
@@ -149,6 +165,29 @@ BtCardView btCardView(const BtLink& link, const BtSession& session, bool lost);
 // 44.1 kHz, 175 ms"), or "". Returns buf.
 char* btStatusLine(const BtCardView& v, const BtLink& link, const char* name, const char* detail, char* buf,
                    size_t size);
+
+// The Pair screen's scan: it stops by itself after kForMs (its inquiry
+// costs ~30 mA while it runs), and the screen offers "Search again".
+class PairSearch {
+public:
+  static constexpr uint32_t kForMs = 120000;
+  void start(uint32_t nowMs) {
+    searching_ = true;
+    sinceMs_ = nowMs;
+  }
+  // True once, when its time is up: stop the scan.
+  bool due(uint32_t nowMs) {
+    if (!searching_ || static_cast<int32_t>(nowMs - sinceMs_) < static_cast<int32_t>(kForMs)) return false;
+    searching_ = false;
+    return true;
+  }
+  void stop() { searching_ = false; }
+  bool searching() const { return searching_; }
+
+private:
+  bool searching_ = false;
+  uint32_t sinceMs_ = 0;
+};
 
 // A destructive control's second tap (Forget): the first arms it ("Tap
 // again" in red) for kWindowMs, a second within that confirms.

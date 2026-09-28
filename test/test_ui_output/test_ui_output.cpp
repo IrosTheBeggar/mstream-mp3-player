@@ -6,7 +6,11 @@
 
 #include <cstring>
 
+#include <cstdio>
+#include <initializer_list>
+
 #include "OutputModel.h"
+#include "UiText.h"
 
 void setUp() {}
 void tearDown() {}
@@ -176,9 +180,17 @@ void test_a_pairing_fails_when_it_stops_or_takes_too_long() {
   BtSession s;
   s.pairStarted(0);
   TEST_ASSERT_TRUE(s.pairing());
+  TEST_ASSERT_TRUE(s.pairingUnderWay());  // (keeps the screen lit)
   s.update(link(P::Pairing, true, 1, 3), 100);
+  TEST_ASSERT_TRUE(s.pairingUnderWay());
   s.update(link(P::Off), 30000);  // BtSink gave up
   TEST_ASSERT_TRUE(s.failed());
+  // The card still says it was a pairing, but none is under way: the screen
+  // may dim and go off (main.cpp's keepLit), however long the card is up.
+  TEST_ASSERT_TRUE(s.pairing());
+  TEST_ASSERT_FALSE(s.pairingUnderWay());
+  s.update(link(P::Off), 3600000);
+  TEST_ASSERT_FALSE(s.pairingUnderWay());
   BtCardView v = btCardView(link(P::Off), s, false);
   TEST_ASSERT_TRUE(v.pairFailed);
   // Try again (pick them again), or Connect: the old ones, still remembered.
@@ -194,6 +206,7 @@ void test_a_pairing_fails_when_it_stops_or_takes_too_long() {
   TEST_ASSERT_FALSE(t.failed());
   t.update(link(P::Pairing, true, 1, 3), 1000 + BtSession::kPairTimeoutMs);
   TEST_ASSERT_TRUE(t.failed());
+  TEST_ASSERT_FALSE(t.pairingUnderWay());  // (the 45 s backstop: not under way any more)
 }
 
 // A link let go on purpose (Disconnect, a new pairing): its drop is no
@@ -396,6 +409,91 @@ void test_signal_bars_and_device_kinds() {
   TEST_ASSERT_EQUAL(BtDevice::Kind::Headphones, BtScanList::kindOf(0x240404));
 }
 
+// The background search rests (15 min, or nobody around): the card says
+// they'll come back by themselves, offers Connect, spins nothing, and
+// isn't amber; "lost" doesn't claim it is still looking.
+void test_the_resting_card() {
+  using P = BtLink::Phase;
+  BtSession s;
+  char buf[64];
+  BtCardView v = btCardView(link(P::Resting), s, false);
+  TEST_ASSERT_EQUAL(BtCard::Resting, v.card);
+  TEST_ASSERT_EQUAL(BtTone::Dim, v.tone);
+  TEST_ASSERT_FALSE(v.spinner);
+  TEST_ASSERT_TRUE(v.hint);
+  TEST_ASSERT_EQUAL_INT(1, v.buttonCount);
+  TEST_ASSERT_EQUAL(BtButton::Connect, v.buttons[0]);
+  TEST_ASSERT_EQUAL_STRING("Not connected", btStatusLine(v, link(P::Resting), "SPYDRONE", "", buf, sizeof(buf)));
+  // With the hint: "Not connected. They'll reconnect when switched on."
+  char whole[96];
+  snprintf(whole, sizeof(whole), "%s. %s %s", buf, uitext::kBtHintLine1, uitext::kBtHintLine2);
+  TEST_ASSERT_EQUAL_STRING("Not connected. They'll reconnect when switched on.", whole);
+  // Dropped while the output: still the resting card (not "Lost: looking
+  // for them", a spinner and Cancel), red as the tab bar is.
+  TEST_ASSERT_FALSE(v.lostHint);
+  v = btCardView(link(P::Resting), s, true);
+  TEST_ASSERT_EQUAL(BtCard::Resting, v.card);
+  TEST_ASSERT_EQUAL(BtTone::Red, v.tone);
+  TEST_ASSERT_FALSE(v.spinner);
+  // ... resting only after the whole back-off (the quiet rule doesn't count
+  // the drop's pause): maybe back in range, their own reconnect given up.
+  TEST_ASSERT_TRUE(v.hint);
+  TEST_ASSERT_TRUE(v.lostHint);
+  snprintf(whole, sizeof(whole), "%s. %s %s", buf, uitext::kBtLostHintLine1, uitext::kBtLostHintLine2);
+  TEST_ASSERT_EQUAL_STRING("Not connected. Back in range? Tap Connect.", whole);
+  // Nothing remembered: nothing to rest for, the pairing card.
+  TEST_ASSERT_EQUAL(BtCard::NotPaired, btCardView(link(P::Resting, false), s, false).card);
+  // The back-off pages now and then: still looking.
+  v = btCardView(link(P::Backoff), s, false);
+  TEST_ASSERT_EQUAL(BtCard::Searching, v.card);
+  TEST_ASSERT_TRUE(v.spinner);
+  TEST_ASSERT_EQUAL_STRING("Looking for SPYDRONE...", btStatusLine(v, link(P::Backoff), "SPYDRONE", "", buf, sizeof(buf)));
+  v = btCardView(link(P::Backoff), s, true);
+  TEST_ASSERT_EQUAL(BtCard::Lost, v.card);
+  TEST_ASSERT_EQUAL_STRING("Lost: looking for SPYDRONE...",
+                           btStatusLine(v, link(P::Backoff), "SPYDRONE", "", buf, sizeof(buf)));
+}
+
+// A connect's burst that ends in the back-off (or resting) has failed, as
+// one that ended in a scan did.
+void test_a_burst_that_backs_off_has_failed() {
+  using P = BtLink::Phase;
+  for (P after : {P::Backoff, P::Resting}) {
+    BtSession s;
+    s.connect(0);
+    s.update(link(P::Paging, true, 1, 3), 100);
+    s.update(link(P::Paging, true, 3, 3), 20000);
+    TEST_ASSERT_TRUE(s.wanted());
+    s.update(link(after), 26000);
+    TEST_ASSERT_FALSE(s.wanted());
+    TEST_ASSERT_TRUE(s.failed());
+    TEST_ASSERT_EQUAL(BtCard::Failed, btCardView(link(after), s, false).card);
+  }
+  // Asked while resting, before the burst shows: not a failure yet.
+  BtSession r;
+  r.connect(0);
+  r.update(link(P::Resting), 10);
+  TEST_ASSERT_TRUE(r.wanted());
+  TEST_ASSERT_FALSE(r.failed());
+}
+
+// The Pair screen's scan stops by itself after 2 minutes, once.
+void test_the_pair_search_stops_after_2_minutes() {
+  PairSearch p;
+  TEST_ASSERT_FALSE(p.searching());
+  TEST_ASSERT_FALSE(p.due(5000));
+  p.start(1000);
+  TEST_ASSERT_TRUE(p.searching());
+  TEST_ASSERT_FALSE(p.due(1000 + PairSearch::kForMs - 1));
+  TEST_ASSERT_TRUE(p.due(1000 + PairSearch::kForMs));
+  TEST_ASSERT_FALSE(p.searching());
+  TEST_ASSERT_FALSE(p.due(1000 + 2 * PairSearch::kForMs));  // once
+  p.start(500000);  // Search again: another 2 minutes
+  TEST_ASSERT_FALSE(p.due(500000 + PairSearch::kForMs - 1));
+  p.stop();  // the page left
+  TEST_ASSERT_FALSE(p.due(500000 + PairSearch::kForMs));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_card_for_every_link_state);
@@ -412,5 +510,8 @@ int main(int, char**) {
   RUN_TEST(test_scan_list_keeps_each_device_once_in_the_order_found);
   RUN_TEST(test_scan_list_full_drops_the_weakest_for_a_stronger_one);
   RUN_TEST(test_signal_bars_and_device_kinds);
+  RUN_TEST(test_the_resting_card);
+  RUN_TEST(test_a_burst_that_backs_off_has_failed);
+  RUN_TEST(test_the_pair_search_stops_after_2_minutes);
   return UNITY_END();
 }

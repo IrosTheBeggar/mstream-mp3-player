@@ -59,6 +59,10 @@ struct AppState {
   uint32_t underruns = 0;
   bool ringMatters = false;      // playing, and the ring has filled once (a low ring is a risk)
   ButtonPolicy::Feedback feedback;  // the touch buttons' last hold (the HUD)
+  // The screen's settings (ScreenPower's choices: "Screen off after",
+  // "Brightness"), for the Output tab's rows.
+  uint8_t screenTimeout = 1;
+  uint8_t brightness = 1;
 };
 
 // About (the Output tab): what the device is and has.
@@ -103,7 +107,12 @@ public:
   virtual void btConnect() = 0;     // Connect, Try again
   virtual void btDisconnect() = 0;  // Disconnect, Cancel: the audio moves to the speaker, paused
   virtual void btForget() = 0;      // after Forget's second tap
+  // The Pair screen's scan: on (the screen opened, Search again), off
+  // (the screen closed: back to what it was doing).
   virtual void btPairScan(bool on) = 0;
+  // The scan stopped by itself (its 2 min, the screen off) while the Pair
+  // screen stays up: nothing else starts until it closes.
+  virtual void btPairScanPause() = 0;
   // The scan's list, copied; returns its version.
   virtual uint32_t btScan(BtScanList& out) = 0;
   // Pair with a device the scan listed (it replaces the remembered pair
@@ -120,6 +129,15 @@ public:
   // What the player learned of track lengths (the Queue's summary).
   virtual const queueview::DurationBook& durations() = 0;
   virtual void about(AboutInfo& a) = 0;
+
+  // ---- the screen (ScreenPower; saved) ----
+  // "Screen off after" and "Brightness": ScreenPower's choice indices.
+  virtual void setScreenTimeout(int choice) = 0;
+  virtual void setBrightness(int choice) = 0;
+  // Something needs the listener (the headphones lost, "Couldn't reach", a
+  // track that failed): the screen lights if it was dim or off, and the
+  // countdown starts again. `why` is logged.
+  virtual void wakeScreen(const char* why) = 0;
 
 protected:
   ~UiHost() = default;

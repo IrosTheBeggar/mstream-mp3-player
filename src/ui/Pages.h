@@ -395,7 +395,8 @@ private:
 //       (pausing first, like the B hold)
 //   line out: the 3.5 mm / RCA module's place (not fitted yet)
 //   + Pair new headphones  >  the Pair screen
-//   Haptics (on / off), Touch calibration >, About >
+//   Haptics (on / off), Screen off after (15 s ... Never), Brightness
+//   (Low ... Max), Touch calibration >, About >
 // Pair (mockup 21): "Searching", the audio devices found (their kind and a
 // signal of 4 bars); a tap pairs (after a confirmation when it replaces
 // the remembered headphones), and the card shows how it goes.
@@ -416,6 +417,8 @@ public:
   void onDialog(int button) override;
   void onSheet(int choice) override;
   void home() override;
+  void screenOff() override;
+  void tick(uint32_t nowMs) override;
   void describe(char* buf, size_t size) const override;
 
   // ListView::Source
@@ -428,7 +431,19 @@ public:
 private:
   // What the dialog or sheet up is asking.
   enum class Ask : uint8_t { None, Pair, More, Forget };
-  enum RootRow : uint8_t { BtTop, BtButtons, SpeakerRow, LineOut, PairNew, Haptics, Calibrate, AboutRow, kRootRows };
+  enum RootRow : uint8_t {
+    BtTop,
+    BtButtons,
+    SpeakerRow,
+    LineOut,
+    PairNew,
+    Haptics,
+    ScreenOff,
+    Brightness,
+    Calibrate,
+    AboutRow,
+    kRootRows
+  };
   enum AboutItem : uint8_t { Battery, Storage, LibraryInfo, Headphones, Memory, Version, Tips, kAboutRows };
 
   void drawBtTop(ListView::Row& r);
@@ -436,6 +451,10 @@ private:
   void drawSpeaker(ListView::Row& r);
   void drawSetting(ListView::Row& r, const icons::Icon& icon, const char* title, const char* sub, uint16_t ink,
                    bool chevron);
+  // "Screen off after" and "Brightness": the title, its line, and the
+  // value in a pill at the right; a tap takes the next choice.
+  void drawScreenSetting(ListView::Row& r, bool brightness);
+  static uint8_t screenSig(const AppState& s);
   void drawDevice(ListView::Row& r, const BtDevice& d);
   void drawPairStatus(ListView::Row& r);
   void drawAbout(ListView::Row& r);
@@ -457,10 +476,13 @@ private:
   ConfirmTap forget_;
   uint32_t drawnBt_ = 0, drawnSpeaker_ = 0;
   bool drawnHaptics_ = false;
+  uint8_t drawnScreen_ = 0xFF;  // the screen settings drawn (timeout * 16 + brightness)
   uint32_t nextSpinMs_ = 0;
   uint8_t spin_ = 0;  // the spinner's step (8 a turn)
   // Pair: the scan's list as last copied, and the device picked.
   BtScanList scan_;
+  PairSearch search_;  // its scan stops by itself after 2 min
+  bool searchEnded_ = false;  // ... just now (tick()): the status row to redraw
   uint32_t scanVersion_ = 0;
   uint32_t nextScanMs_ = 0;
   int picked_ = -1;

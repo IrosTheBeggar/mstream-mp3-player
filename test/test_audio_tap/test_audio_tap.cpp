@@ -151,6 +151,59 @@ void test_tap_segments_follow_the_track() {
   TEST_ASSERT_EQUAL_UINT32(limit, s.tapEnd);
 }
 
+// Switched off (the Dance tab not up), a write copies nothing and the count
+// stands still; switched back on, the next write starts a new segment even
+// where the track position follows on, and a reader gets it as its own run.
+void test_tap_switched_off_skips_and_starts_a_new_segment() {
+  Tap t;
+  auto in = stereoRamp(0, 128);
+  t.tap.write(in.data(), 128, 128, 3, 1000, 10);  // track 1000..1127
+  TapReader reader;
+  reader.attach(&t.tap, kRate);
+  t.tap.setEnabled(false);
+  TEST_ASSERT_FALSE(t.tap.enabled());
+  t.tap.write(in.data(), 128, 128, 3, 1128, 20);  // played, not copied
+  TEST_ASSERT_EQUAL_UINT32(128, t.tap.count());
+  uint32_t c, us;
+  t.tap.clock(&c, &us);
+  TEST_ASSERT_EQUAL_UINT32(10, us);  // not touched either
+  t.tap.setEnabled(true);
+  t.tap.write(in.data(), 128, 128, 3, 1128, 30);  // the position follows on, as if paused meanwhile
+  TEST_ASSERT_EQUAL_UINT32(256, t.tap.count());
+  AudioTap::Segment s;
+  TEST_ASSERT_TRUE(t.tap.segmentAt(10, t.tap.count(), &s));
+  TEST_ASSERT_EQUAL_UINT32(0, s.tapStart);
+  TEST_ASSERT_EQUAL_UINT32(128, s.tapEnd);  // the old one ends where the tap was off
+  TEST_ASSERT_TRUE(t.tap.segmentAt(128, t.tap.count(), &s));
+  TEST_ASSERT_EQUAL_UINT32(128, s.tapStart);
+  TEST_ASSERT_EQUAL_UINT32(1128, s.trackStart);
+  TEST_ASSERT_EQUAL_UINT32(3, s.epoch);
+  TEST_ASSERT_EQUAL_UINT32(256, s.tapEnd);
+
+  // Off and on around silence: the silence carries on, the audio after it is new.
+  t.tap.setEnabled(false);
+  t.tap.write(in.data(), 128, 0, 3, 0, 40);
+  t.tap.setEnabled(true);
+  t.tap.write(in.data(), 128, 0, 3, 0, 50);       // silence: a segment of its own after the audio
+  t.tap.write(in.data(), 128, 128, 3, 1256, 60);  // audio again
+  TEST_ASSERT_TRUE(t.tap.segmentAt(300, t.tap.count(), &s));
+  TEST_ASSERT_EQUAL_UINT32(AudioTap::kNoTrack, s.trackStart);
+  TEST_ASSERT_EQUAL_UINT32(256, s.tapStart);
+  TEST_ASSERT_EQUAL_UINT32(384, s.tapEnd);
+  TEST_ASSERT_TRUE(t.tap.segmentAt(400, t.tap.count(), &s));
+  TEST_ASSERT_EQUAL_UINT32(384, s.tapStart);
+  TEST_ASSERT_EQUAL_UINT32(1256, s.trackStart);
+
+  // The reader attached before the gap: the runs it gets never splice the
+  // two sides of it together.
+  std::vector<int16_t> scratch(1024);
+  std::vector<uint32_t> starts;
+  reader.poll(scratch.data(), 1024, [&](const TapReader::Run& r) { starts.push_back(r.trackFrame); });
+  TEST_ASSERT_EQUAL_UINT32(2, starts.size());
+  TEST_ASSERT_EQUAL_UINT32(1128, starts[0]);
+  TEST_ASSERT_EQUAL_UINT32(1256, starts[1]);
+}
+
 // Only the last kSegments segments are kept; older frames can't be placed.
 void test_tap_forgets_old_segments() {
   Tap t;
@@ -334,6 +387,7 @@ int main(int, char**) {
   RUN_TEST(test_tap_stores_mono_history);
   RUN_TEST(test_tap_mono_is_the_average);
   RUN_TEST(test_tap_segments_follow_the_track);
+  RUN_TEST(test_tap_switched_off_skips_and_starts_a_new_segment);
   RUN_TEST(test_tap_forgets_old_segments);
   RUN_TEST(test_tap_concurrent_writer_and_reader);
   RUN_TEST(test_reader_hands_over_real_audio_in_runs);

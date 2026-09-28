@@ -93,9 +93,16 @@ public:
   BtSink& bluetooth() { return bt_; }
   SpeakerSink& speaker() { return speaker_; }
   // Whether the outputs copy what they play to their taps (the beat
-  // tracker's input): on unless a power measurement turns it off (P).
-  void setTapsOn(bool on) { shared_.tapOn.store(on, std::memory_order_relaxed); }
-  bool tapsOn() const { return shared_.tapOn.load(std::memory_order_relaxed); }
+  // tracker's input): only while the Dance tab is up and tracking
+  // (DanceMode switches them; ENERGY.md item 9). Off from boot.
+  void setTapsOn(bool on) {
+    bt_.setTapOn(on);
+    speaker_.setTapOn(on);
+  }
+  bool tapsOn() const {
+    const AudioTap* t = speaker_.tap() ? speaker_.tap() : bt_.tap();
+    return t && t->enabled();
+  }
   // What an output just played, for the beat tracker (nullptr: no PSRAM).
   const AudioTap* tap(Output output) const { return output == Output::Bluetooth ? bt_.tap() : speaker_.tap(); }
   // How long after an output's tap write its audio is heard, and how that
@@ -258,6 +265,7 @@ private:
   std::atomic<int32_t> steadyMs_{-1};
   std::atomic<int32_t> fullMs_{-1};
   uint32_t loggedStartSeq_ = 0;  // loop task
+  uint32_t loggedAmpSwitches_ = 0;  // loop task
 
   // Loop task only.
   Output output_ = Output::Speaker;
