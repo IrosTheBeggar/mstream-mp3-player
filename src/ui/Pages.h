@@ -436,7 +436,7 @@ public:
 
 private:
   // What the dialog or sheet up is asking.
-  enum class Ask : uint8_t { None, Pair, More, Forget };
+  enum class Ask : uint8_t { None, Pair, More, Forget, CpuRestart };
   enum RootRow : uint8_t {
     BtTop,
     BtButtons,
@@ -447,11 +447,13 @@ private:
     ScreenOff,
     Brightness,
     IdleOff,
+    CpuSpeed,
+    BtPower,
     Calibrate,
     AboutRow,
     kRootRows
   };
-  enum AboutItem : uint8_t { Battery, Storage, LibraryInfo, Headphones, Memory, Version, Tips, kAboutRows };
+  enum AboutItem : uint8_t { Battery, Storage, LibraryInfo, Headphones, PowerInfo, Memory, Version, Tips, kAboutRows };
 
   void drawBtTop(ListView::Row& r);
   void drawBtButtons(ListView::Row& r);
@@ -463,7 +465,11 @@ private:
   void drawScreenSetting(ListView::Row& r, bool brightness);
   // "Turn off when idle" (IdlePolicy's choices, saved), the same way.
   void drawIdleSetting(ListView::Row& r);
-  static uint16_t screenSig(const AppState& s);
+  // "CPU speed" and "Bluetooth power" (PowerChoices', saved), the same way.
+  void drawPowerSetting(ListView::Row& r, bool bluetooth);
+  // A tap on "CPU speed": the restart asked first, or saved at once.
+  void onCpuSpeed();
+  static uint32_t screenSig(const AppState& s);
   void drawDevice(ListView::Row& r, const BtDevice& d);
   void drawPairStatus(ListView::Row& r);
   void drawAbout(ListView::Row& r);
@@ -485,7 +491,7 @@ private:
   ConfirmTap forget_;
   uint32_t drawnBt_ = 0, drawnSpeaker_ = 0;
   bool drawnHaptics_ = false;
-  uint16_t drawnScreen_ = 0xFFFF;  // the screen and idle settings drawn (screenSig())
+  uint32_t drawnScreen_ = 0xFFFFFFFFu;  // the screen, idle and power settings drawn (screenSig())
   uint32_t nextSpinMs_ = 0;
   uint8_t spin_ = 0;  // the spinner's step (8 a turn)
   // Pair: the scan's list as last copied, and the device picked.
@@ -496,6 +502,7 @@ private:
   uint32_t nextScanMs_ = 0;
   int picked_ = -1;
   Ask ask_ = Ask::None;
+  uint16_t askCpuMhz_ = 0;  // Ask::CpuRestart: the speed it restarts at
   // About: refreshed on the way in and every few seconds.
   AboutInfo about_;
   uint32_t nextAboutMs_ = 0;

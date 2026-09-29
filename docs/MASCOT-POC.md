@@ -347,8 +347,11 @@ line and the title bar. All device tests of this proof of concept run in it.
 The `[dance]` line has these fields:
 
 - `skin`: the dancer (`crab` or `stick`).
-- `fps`, `draw`, `push`: frame rate, and the smoothed drawing and SPI push
-  times in ms.
+- `fps`, `draw`, `push`: frame rate (measured over the last second / the
+  target, and the mode: `fps=23.8/24 (dancing)`), and the smoothed drawing
+  and SPI push times in ms. Since ENERGY.md item 8 the target is 10 fps
+  while the dancer idles and 30 (240 MHz) or 24 (below) while it dances;
+  each change is logged (`[dance] 10 fps (idle)`).
 - `bpm`, `conf`, `locked`, `lock_after`: the tracker's tempo, confidence and
   lock, and the time from the tracker's last reset to its first lock.
 - On click tracks, `err_med`, `err_p95` and `err_mean`: the phase error over

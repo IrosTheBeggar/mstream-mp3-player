@@ -8,7 +8,6 @@
 
 namespace {
 constexpr uint32_t kScratchFrames = 2048;  // mono frames handed to the tracker at a time (PSRAM)
-constexpr uint32_t kFrameMs = 33;          // ~30 frames a second
 // Aim the figure this much before the sound (then the LCD's own delay):
 // ahead of the beat looks right, behind it looks late.
 constexpr uint32_t kAimEarlyUs = 15000;
@@ -75,7 +74,9 @@ void DanceMode::setActive(bool on) {
   crab_.reset();
   follow(audio_.output());
   freshWhy_ = "dance screen on";
-  lastFrameMs_ = 0;
+  pacer_.restart();
+  scene_ = dancerate::Scene{};  // idle, as the dancer was reset
+  targetFps_ = 0;               // logs the rate at the first frame
   lastFrameUs_ = 0;
   frames_ = 0;
   trackerUs_ = 0;
@@ -283,15 +284,28 @@ void DanceMode::logBeat() {
 }
 
 void DanceMode::render(uint32_t nowMs) {
-  if (nowMs - lastFrameMs_ < kFrameMs) return;
+  // The rate for what the last frame showed, at the clock that runs (the
+  // console's Pc can change it).
+  const uint32_t mhz = getCpuFrequencyMhz();
+  const dancerate::Mode mode = dancerate::mode(scene_);
+  const uint32_t fps = dancerate::fps(mode, mhz);
+  if (fps != targetFps_) {
+    targetFps_ = fps;
+    if (mode == dancerate::Mode::Idle) {
+      Serial.printf("[dance] %lu fps (idle)\n", static_cast<unsigned long>(fps));
+    } else {
+      Serial.printf("[dance] %lu fps (dancing at %lu MHz)\n", static_cast<unsigned long>(fps),
+                    static_cast<unsigned long>(mhz));
+    }
+  }
+  // On deadlines (the loop's delay(5) and the rest would otherwise add a few
+  // ms to every frame); a new rate starts over from the last frame drawn.
+  if (!pacer_.due(nowMs, dancerate::periodMs(fps))) return;
   const auto nowUs = static_cast<uint32_t>(esp_timer_get_time());
   const float dt = lastFrameUs_ ? static_cast<int32_t>(nowUs - lastFrameUs_) * 1e-6f : 0.0f;
   lastFrameUs_ = nowUs;
-  // On schedule, not "33 ms after whenever the last one was drawn": the loop
-  // passes (delay(5) and the rest) would otherwise add a few ms to every frame.
-  lastFrameMs_ = nowMs - lastFrameMs_ < 2 * kFrameMs ? lastFrameMs_ + kFrameMs : nowMs;
 
-  bool flash = false, dancing = false;
+  bool flash = false, dancing = false, beat = false;
   const bool isCrab = skin_ == dance::Skin::Crab;
   dance::Pose pose;
   crab::Pose crabPose;
@@ -312,7 +326,7 @@ void DanceMode::render(uint32_t nowMs) {
     const auto lead = static_cast<uint32_t>(drawUs_ + pushUs_ / 2.0f) + kAimEarlyUs;
     const TapReader::Audible heard = reader_.audibleAt(nowUs + lead, latency);
     const BeatTracker::Grid g = tracker_.grid();
-    const bool beat = heard.valid && g.valid && !fresh_ && heard.epoch == epoch_;
+    beat = heard.valid && g.valid && !fresh_ && heard.epoch == epoch_;
     dance::Step step;
     if (beat) {
       const float bpm = tracker_.bpm();
@@ -325,9 +339,13 @@ void DanceMode::render(uint32_t nowMs) {
       pose = dancer_.update(step.phi, step.odd, tracker_.confidence(), beat, dt);
       weight = dancer_.weight();
     }
-    dancing = weight > 0.5f;
+    dancing = weight > dancerate::kIdleWeight;
     flash = beat && dancing && step.phi < kFlashBeats;
   }
+  scene_.frozen = frozen_ >= 0;
+  scene_.beat = beat;
+  scene_.locked = tracker_.locked();
+  scene_.weight = weight;
   const int64_t t0 = esp_timer_get_time();
   if (isCrab) {
     view_.drawCrab(crabPose, weight, flash);
@@ -359,9 +377,10 @@ void DanceMode::printStats(uint32_t nowMs) {
     }
   }
   const diag::Heap h = diag::heap();
-  Serial.printf("[dance] %s skin=%s fps=%.1f draw=%.1fms push=%.1fms | bpm=%.2f conf=%.2f %s lock_after=%s %s | "
-                "latency=%.1fms (%s) offset=%+dms | tracker=%.2f%% resets=%lu lost=%lu | ram=%luK min=%luK%s\n",
-                active_ ? "on" : "off", dance::skinName(skin_), fps_, drawUs_ / 1000.0f, pushUs_ / 1000.0f,
+  Serial.printf("[dance] %s skin=%s fps=%.1f/%lu (%s) draw=%.1fms push=%.1fms | "
+                "bpm=%.2f conf=%.2f %s lock_after=%s %s | latency=%.1fms (%s) offset=%+dms | tracker=%.2f%% resets=%lu lost=%lu | ram=%luK min=%luK%s\n",
+                active_ ? "on" : "off", dance::skinName(skin_), fps_, static_cast<unsigned long>(targetFps_),
+                dancerate::modeName(dancerate::mode(scene_)), drawUs_ / 1000.0f, pushUs_ / 1000.0f,
                 tracker_.bpm(), tracker_.confidence(), tracker_.locked() ? "locked" : "unlocked", lockAfter, error,
                 latency / 1000.0f, how, offsetMs_, trackerLoad_ * 100.0f, static_cast<unsigned long>(resets_),
                 static_cast<unsigned long>(reader_.lostFrames()), static_cast<unsigned long>(h.internalFree / 1024),

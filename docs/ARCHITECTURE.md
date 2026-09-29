@@ -18,7 +18,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  GainRamp  VolumeMath  StreamRestart  HeadsetKeys             |
               |  Declicker  DeclickReader  hal/*                              |
               |  AudioTap  TapReader  BeatTracker  ClickGen  DancePose        |
-              |  CrabPose  CrabArt (generated)  DanceSkin                     |
+              |  CrabPose  CrabArt (generated)  DanceSkin  DanceRate          |
               |  LibraryIndex  LibrarySynth  TextFold  TouchGesture           |
               |  KineticScroll  ScrollGovernor  VScrollMap  RefillPacer       |
               |  ByteStream  QueueModel  QueueText  TrackCatalog              |
@@ -30,6 +30,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  OutputModel  PlayGate  QueueView  PowerWindow                |
               |  ScreenPower (and WakeLatch)  AmpGate                         |
               |  SleepTimer  FadeStage  IdlePolicy  QueueSaver                |
+              |  PowerChoices                                                 |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -41,6 +42,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/ScreenControl (the screen policy: backlight, sleep)      |
               |  app/BoardPower (IMU suspended, EXTEN off at boot)            |
               |  app/IdlePower (the idle power-off: setting, note, power off) |
+              |  app/PowerSettings (CPU speed, Bluetooth power: NVS, restart) |
               |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
               |         Fonts (VLW DejaVu), Icons, Gfx, Thumbs (covers),      |
               |         EmptyState                                            |
@@ -148,7 +150,7 @@ The rules that keep it deadlock- and glitch-free:
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes/resamples to 44.1 kHz mono; runs only while the amp is on |
 | cover thumbnails (`thumbs`, ui/Thumbs) | 1 | 1, or 0 while a list moves | only while there are covers to make: made for the first, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device); reads the card in 4 KB pieces; level with the loop while nothing moves (at 0 it shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves, always below the decoder (below) |
-| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and ~30 dancer frames/s; sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms) |
+| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms) |
 
 ## Bluetooth
 
@@ -537,7 +539,10 @@ out:
    headphones let go the sleep timer's way (`releaseHeadphones()`: the
    drop expected, resting, still connectable, the output unchanged).
 3. **The power**, once they are unlinked (at most 3 s, so they see a clean
-   disconnect): the power status read once more (USB plugged in meanwhile:
+   disconnect; unlinked is `BtSink::linkUp()` false, the loop's link up
+   from CONNECTED until DISCONNECTED: the library's `connected()` goes
+   false as soon as the disconnect starts, the stack's DISCONNECTING,
+   0.15-1.5 s before the link is gone): the power status read once more (USB plugged in meanwhile:
    it stays on), haptics stopped, `Serial.flush()`, `M5.Power.powerOff()`
    (the AXP192's power-off bit; M5Unified then deep-sleeps with no wake
    source in case it didn't take). Input or a blocker during step 3's wait
@@ -555,6 +560,53 @@ USB it logs `USB power at the last moment: staying on` instead of turning
 off) and `Ib<sec>` leaves the note for the next boot's toast. Its log lines are `[power] idle: ...`, `[power] off after idle
 (...)`, `[power] off now (...)`.
 
+## CPU speed and Bluetooth power
+
+Two settings on the Output tab after "Turn off when idle" (docs/ENERGY.md
+items 6 and 7; the choices, lines and checks are `PowerChoices`,
+host-tested in test_power_choices; `app/PowerSettings` keeps them in NVS
+"power" and applies them):
+
+- **CPU speed**: **240** / 160 MHz (`powerchoice::kDefaultCpuMhz`: 240, as
+  ENERGY.md step 6a decided; 160 halves list scrolling with an MP3), NVS
+  "cpu_mhz" (160 or 240; absent or anything else: the default), the same
+  value as the console's `Pcb`. `PowerSettings::applyBootClock()` sets it
+  first thing in setup(), before Bluetooth: 240 <-> 160 retunes the PLL the
+  radio runs from, so it can't change at runtime. A tap opens a dialog
+  ("Restart at 160 MHz?", [Cancel] [Restart]); Restart saves it, pauses,
+  flushes the queue and its place (`QueueStore::flushNow()`), leaves a note
+  (NVS "boot_cpu"), lets go of the headphones the idle power-off's way and
+  asks the speaker's pump to switch the amp off (`requestAmp(Off)`, as
+  `Pa0`: the AXP192 isn't reset by `esp_restart()`, so a live amp would pop
+  as its clock pins are reconfigured); `stepCpuRestart()` then calls
+  `esp_restart()` (under the LCD lock) once the headphones are unlinked
+  (`BtSink::linkUp()` false: the disconnect done, as the idle power-off
+  waits) and the amp is off, at most 3 s later
+  (`powerchoice::cpuRestartDue(now, asked, ...)`: a restart asked during
+  the loop pass is stamped after the pass's `now`, which counts as 0 ms
+  waited, not a wrap). "Your place" is the queue's entry: the track starts
+  again from 0:00, as after any boot (the time in a track isn't saved). The
+  toast "Restarting at 160 MHz..." stays up until then. The next boot
+  shows "CPU speed: 160 MHz" for 6 s, stopped where it was: nothing plays
+  by itself. While a pairing is under way the restart isn't offered ("Wait
+  for the pairing to finish"; `CpuTap::WaitPairing`, and
+  `MainUiHost::setCpuSpeed()` refuses it too). After a `Pcb` that differs
+  from the clock the row reads "240 MHz until a restart", and a tap saves
+  the running speed back without a restart.
+- **Bluetooth power**: Low / **Normal** / High, the BR/EDR TX power
+  levels 0..2 / 0..5 / 0..7 (-12..-6 / -12..+3 / -12..+9 dBm), NVS "bt_tx".
+  A tap takes the next, saved and applied at once (`BtSink::setTxPower()`);
+  at every stack start `PlayerA2dp::bt_start()` sets it right after the
+  controller is enabled, before Bluedroid, so before any page, scan or page
+  scan. A link that is up keeps its level: after a change while linked the
+  row reads "From the next connection" until the link goes
+  (`BtLinkLevel`). No reconnect is forced.
+
+About's "CPU speed, Bluetooth power" row shows both as they run ("240 MHz;
+Normal (-12..+3 dBm)"). Boot log: `[power] CPU 240 MHz from boot (the
+default)`, `[power] bluetooth power: Normal (-12..+3 dBm)`, `[bt] tx power:
+-12..+3 dBm (levels 0..5), from the stack's start`.
+
 ## Dancing crab (proof of concept)
 
 Each output copies what it plays into its own `AudioTap` (PSRAM, written only
@@ -571,6 +623,20 @@ and offsets; its art, `CrabArt`, is generated by `tools/crab_art.py` from
 RGB565 sprite in PSRAM), or the first stick figure (`DancePose`, an 8-bit
 sprite). Console `m` or a tap on the dancer swaps them. Design, commands and
 results: [MASCOT-POC.md](MASCOT-POC.md).
+
+**Frame rate** (`DanceRate` in lib/core, host-tested: test_dance_rate;
+[ENERGY.md](ENERGY.md) item 8). The rate follows what the last frame
+showed: **10 fps** while the dancer idles (no beat heard, as when paused,
+stopped or starved, or no lock, with a dance weight of 0.5 or less);
+dancing, **30 fps** at 240 MHz and a steady **24** below it (the clock
+that runs, `getCpuFrequencyMhz()`, so the console's `Pc` counts too). A
+fade in or out runs at the dancing rate until the weight passes 0.5, and a
+locked beat that comes back is danced to from the next idle frame. Frames
+are kept on deadlines (`dancerate::Pacer`), and a new rate starts over from
+the last frame drawn, so there is no catch-up burst. With the screen off
+the UI turns `DanceMode` off: no frames at all. Each change is logged
+(`[dance] 10 fps (idle)`, `[dance] 24 fps (dancing at 160 MHz)`), and the
+5 s `[dance]` line reads `fps=23.8/24 (dancing)`: measured / target.
 
 ## Storage
 
@@ -1151,9 +1217,11 @@ Queue, Dance and Output (with its Pair and About pages).
   input layer's saved setting), **Screen off after** and **Brightness**
   (the screen policy's; the value in a pill, a tap takes the next choice,
   saved), **Turn off when idle** (the idle power-off's, the same way: 10 /
-  20 / 60 min / Never, a power symbol), **Touch calibration**, **About** (battery,
-  storage, the library, the headphones, memory, the version, and "Show the
-  tips again"). The tab bar's Output icon is amber while a connection the
+  20 / 60 min / Never, a power symbol), **CPU speed** (240 / 160 MHz, a
+  chip; a restart, asked first) and **Bluetooth power** (Low / Normal /
+  High, signal bars), **Touch calibration**, **About** (battery,
+  storage, the library, the headphones, the CPU speed and Bluetooth power,
+  memory, the version, and "Show the tips again"). The tab bar's Output icon is amber while a connection the
   listener asked for is on its way, and while the link looks for them; the
   plain icon while the search rests (`tabbar::outputFor()`, host-tested).
 - **States** (spec §7): no microSD card (and no music on the flash
@@ -1359,11 +1427,13 @@ line's format (one line on the console; `x` stands for the numbers):
 ```
 [power] 5.0 s n=50 in=x mA (min..max) x W (min..max) [<supplies>: ACIN x V x mA, VBUS x V x mA]
   bat=±x mA (min..max) ±x W x V aps=x V x C [cc=...] | bl=127 (DC3 2875 mV) screen=on cpu=240 MHz
-  play=playing out=bt link=<phase> stream=started amp=off exten=off led=0 imu=suspended taps=off dance=hidden bg=<search> radio=N% loop=auto
+  play=playing out=bt link=<phase> stream=started amp=off exten=off led=0 imu=suspended taps=off dance=hidden bg=<search> radio=N% loop=auto tx=-12..+3 dBm (Normal)
 ```
 
 `<supplies>` is what reg 0x00 says is present (ACIN, VBUS, both, none);
-`cc` appears while the coulomb counter runs; `tx=` appears once `Pt` set it.
+`cc` appears while the coulomb counter runs; `tx=` is the Bluetooth power
+setting's range, or `Pt`'s levels once it set them (`tx=+0..+3 dBm (Pt)`),
+until the Bluetooth power row is next tapped (it replaces them).
 
 - **in** is what comes in from USB. Which AXP192 pin USB-C reaches on this
   board isn't assumed: ACIN and VBUS are both read and added (the one
@@ -1396,8 +1466,8 @@ its opposite; only `Pcb` is saved):
 | `Pb<0-255>` | backlight while the screen is bright (M5GFX: AXP192 DCDC3, 2.5-3.275 V) | the screen policy's Bright level until restart, `Pb0` the setting's (Medium, 100; M5GFX's own default was 127, 2.875 V); refused while dim or off; it still dims and goes off (Screen off after: Never holds it) |
 | `Ps` / `Ps0` / `Ps1` | the screen policy: its state / Off now / on | Off is the policy's (backlight off, ILI9342C sleep-in, the UI draws nothing); a touch wakes it and does nothing else (`[screen] wake by touch at x,y (raw)`), and with no input after that it goes off again in 10 s (the pocket guard); off with nothing playing, the Bluetooth search rests after its burst (`setQuiet`) |
 | `Pc<mhz>` | CPU clock now | only 160 ↔ 80 (same 320 MHz PLL); 240 ↔ 160/80 retunes the BBPLL the Bluetooth radio runs from, refused. 80 not while audio runs, and back to 160 by itself when it starts |
-| `Pcb<mhz>` | CPU clock from boot (saved) | 160 or 240 (`Pcb0` the default, Arduino's 240), set before Bluetooth starts |
-| `Pt<min>,<max>` | Bluetooth BR/EDR TX power levels 0-7 (−12..+9 dBm) | default 4,5 (0..+3 dBm); from the next page, scan or connection (with a link up the controller reads back the old range: the line says "applies from the next connection") |
+| `Pcb<mhz>` | CPU clock from boot (saved) | 160 or 240 (`Pcb0` the default, 240), set before Bluetooth starts; the Output tab's CPU speed is the same NVS value |
+| `Pt<min>,<max>` | Bluetooth BR/EDR TX power levels 0-7 (−12..+9 dBm) | a test until restart, not saved (the Output tab's Bluetooth power is the setting, default 0,5: −12..+3 dBm; a change there wins); `Pt` alone reports the setting too; from the next page, scan or connection (with a link up the line says "applies from the next connection": the link keeps its level; `Pt` alone reads back the controller's setting, the new range at once, not the link's level) |
 | `Pe0` / `Pe1` | the 5 V boost (EXTEN, M-Bus/Grove 5 V) | M5Unified's setExtOutput(); off from boot (`cfg.output_power = false`) |
 | `Pg0` / `Pg1` | the green LED | off at boot |
 | `Pi0` / `Pi1` | the BMI270 IMU suspended / on | suspended from boot (app/BoardPower); nothing reads it |

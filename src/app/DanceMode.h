@@ -4,6 +4,7 @@
 #include "BeatTracker.h"
 #include "ClickGen.h"
 #include "CrabPose.h"
+#include "DanceRate.h"
 #include "DancePose.h"
 #include "DanceSkin.h"
 #include "PlaybackController.h"
@@ -16,10 +17,14 @@
 // tab's dancer (ui/DancePage draws the page around its box), on the loop task: the crab (the default) or the stick figure, swapped by
 // cycleSkin(). Every pass while it's on: the new audio from the active
 // output's tap goes to the BeatTracker (reset on an output switch, a track
-// change, a skip, or frames lost), and ~30 times a second the dancer is drawn
-// for the moment the listener hears: the tap's clock minus the output's
-// latency, a little early for the LCD. On the click tracks the true beat is
-// known, so the tracker's phase error is measured as it plays.
+// change, a skip, or frames lost), and the dancer is drawn for the moment
+// the listener hears: the tap's clock minus the output's latency, a little
+// early for the LCD. On the click tracks the true beat is known, so the
+// tracker's phase error is measured as it plays.
+//
+// Its frame rate (DanceRate, ENERGY.md item 8): 10 fps while it idles, 30
+// while it dances at 240 MHz, 24 below that; a change is logged ("[dance]
+// 24 fps (dancing at 160 MHz)").
 //
 // The outputs write their taps only while it is on and tracking: it
 // switches them (off from boot, on with the Dance tab, off with the tab,
@@ -56,6 +61,7 @@ public:
   bool locked() const { return tracker_.locked(); }
   bool frozen() const { return frozen_ >= 0; }
   float fps() const { return fps_; }
+  uint32_t targetFps() const { return targetFps_; }
   void printStats(uint32_t nowMs);   // the [dance] line
 
   // For screenshots of the figure's box.
@@ -107,7 +113,9 @@ private:
   RollingStats<64> errors_;     // phase error (ms), stamped with millis()
 
   // Drawing.
-  uint32_t lastFrameMs_ = 0;
+  dancerate::Pacer pacer_;
+  dancerate::Scene scene_;      // what the last frame showed: the next one's rate
+  uint32_t targetFps_ = 0;      // the rate now (0: none yet since on)
   uint32_t lastFrameUs_ = 0;
   int frozen_ = -1;
   int offsetMs_ = 0;

@@ -112,6 +112,13 @@ public:
   const char* sinkName() const { return sinkNames_[sinkNameIdx_.load()]; }
 
   bool connected() const;
+  // The link as the loop hears of it: up from CONNECTED until DISCONNECTED.
+  // connected() (the library's) goes false as soon as a disconnect starts
+  // (the stack's DISCONNECTING, right after esp_a2d_source_disconnect()),
+  // 0.15-1.5 s before the link is really gone (measured). A release that
+  // waits before a restart or a power-off (the CPU speed, the idle
+  // power-off) waits for this, so the headphones see the disconnect finish.
+  bool linkUp() const { return linked_.load(); }
   // The headphones' name: from discovery, or read after each connection.
   const char* deviceName() const { return deviceNames_[deviceNameIdx_.load()]; }
 
@@ -180,6 +187,14 @@ public:
   // connectable, so the headphones can still come back by themselves.
   // connect() and the Pair screen start the search again too.
   void setBackgroundReconnect(bool on);
+  // Bluetooth power (the Output tab's setting, ENERGY.md item 7): the BR/EDR
+  // TX power levels the controller may use, esp_power_level_t 0-7 (-12..+9
+  // dBm, 3 dB apart). Before begin(): applied as the controller comes up,
+  // before Bluedroid starts, so before any page, scan or page scan. After:
+  // at once, from the next page, scan or connection; a link that is up
+  // keeps its level (measured). Not called: the controller's default. False:
+  // the controller refused it. Loop task.
+  bool setTxPower(uint8_t minLevel, uint8_t maxLevel);
   // The sleep timer, 5 min after its pause (ENERGY.md section 3), and the
   // idle power-off before the power goes (item 4): let go of
   // the headphones and rest (no pages, no scans), still connectable, so
@@ -231,6 +246,7 @@ private:
   void post(Event e);                    // any task; never blocks
   void setForgotForGood(bool on);        // saves it (loop task, or BtAppT on a link)
   void setDeviceName(const char* name);  // Bluedroid's BTC task only
+  bool applyTxPower(const char* when);    // setTxPower()'s levels; `when` ends the log line
 
   PcmRing* ring_ = nullptr;
   AudioShared* shared_ = nullptr;
@@ -279,6 +295,7 @@ private:
   std::atomic<uint16_t> delayReport_{0};  // 1/10 ms, from BtAppT
 
   // Loop task only.
+  int8_t txMin_ = -1, txMax_ = -1;  // setTxPower()'s levels, -1: never set
   bool wantAudio_ = false;      // as last handed to BtAppT
   uint32_t nextTickMs_ = 0;
   int16_t unsentVolume_ = -1;   // a setVolume() BtAppT's queue had no room for yet

@@ -21,6 +21,7 @@
 #include "OutputModel.h"
 #include "PlayGate.h"
 #include "PlaybackController.h"
+#include "PowerChoices.h"
 #include "QueueModel.h"
 #include "QueueView.h"
 #include "SleepTimer.h"
@@ -33,6 +34,7 @@
 #include "app/IdlePower.h"
 #include "app/Library.h"
 #include "app/PowerLab.h"
+#include "app/PowerSettings.h"
 #include "app/Psram.h"
 #include "app/QueueStore.h"
 #include "app/ScreenControl.h"
@@ -115,6 +117,10 @@ static SleepTimer sleepTimer;
 // stepIdle() feeds it and carries it out (the queue flushed, the
 // headphones let go, then the power off).
 static IdlePower idlePower;
+// CPU speed and Bluetooth power (docs/ENERGY.md items 6 and 7; the Output
+// tab's, saved): the speed set at boot (a change restarts:
+// MainUiHost::setCpuSpeed()), the TX power handed to BtSink.
+static PowerSettings powerSettings;
 // Input this pass that the screen doesn't see: a headphone key that acted,
 // the console, the idle warning's Keep on (the idle countdown starts again).
 static bool idleInput = false;
@@ -454,6 +460,10 @@ struct MainUiHost : ui::UiHost {
     sleepTimer.shortText(now, s.sleepShort, sizeof(s.sleepShort));
     s.idleOff = static_cast<uint8_t>(idlePower.choice());
     s.idleWarnS = static_cast<uint8_t>(idlePower.policy().warnSeconds(now));
+    s.cpuMhz = powerSettings.cpuSaved();
+    s.cpuRunMhz = PowerSettings::cpuBootMhz();
+    s.btPower = static_cast<uint8_t>(powerSettings.btChoice());
+    s.btPowerPending = powerSettings.btPending();
     fake(s);
   }
   static void fake(ui::AppState& s) {
@@ -589,6 +599,7 @@ struct MainUiHost : ui::UiHost {
     const BtLink l = bt.link();
     snprintf(a.bluetooth, sizeof(a.bluetooth), "%s%s", l.remembered ? (bt.deviceName()[0] ? bt.deviceName() : "paired") : "none paired",
              bt.connected() ? ", connected" : "");
+    powerchoice::aboutText(PowerSettings::cpuBootMhz(), powerSettings.btChoice(), a.power, sizeof(a.power));
     const diag::Heap h = diag::heap();
     a.ramFree = h.internalFree;
     a.ramMin = h.internalMin;
@@ -608,6 +619,8 @@ struct MainUiHost : ui::UiHost {
   }
   void setScreenTimeout(int choice) override { screen.setTimeout(choice); }
   void setIdleOff(int choice) override { idlePower.setChoice(choice); }
+  bool setCpuSpeed(uint16_t mhz) override;
+  void setBtPower(int choice) override { powerSettings.setBt(choice, audio.bluetooth()); }
   bool touchLandedUnattended() const override { return screen.landedUnattended(); }
   void idleKeepOn() override {
     idleInput = true;
@@ -646,7 +659,7 @@ static const char* stateName() {
 
 // Power measurements and their A/B knobs (the console's P, app/PowerLab):
 // nothing runs until a P command.
-static PowerLab powerLab(audio, player, danceMode, storage, screen,
+static PowerLab powerLab(audio, player, danceMode, storage, screen, powerSettings,
                          {[] { return stateName(); }, [] { return silent; }});
 
 static void printStats() {
@@ -1519,23 +1532,28 @@ static void idleCommand(const char* a) {
   idlePower.printStatus(now);
 }
 
+// A pairing under way (the Pair screen's scan, or one picked there): the
+// idle power-off waits for it, and the CPU speed's restart isn't offered.
+static bool pairingUnderWay() {
+  const BtLink link = audio.bluetooth().link();
+  return link.phase == BtLink::Phase::PairScan || link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay();
+}
+
 // Every loop pass, after the player's (a pause this pass counts from now).
 // IdlePolicy decides; this carries it out: the warning (the UI reads it
 // from the snapshot), then the queue flushed, the note for the next boot,
 // the headphones let go, and once they are gone (at most 3 s) the power.
 static void stepIdle(uint32_t now, bool input) {
   BtSink& bt = audio.bluetooth();
-  const BtLink link = bt.link();
   IdlePolicy::In in;
   in.nowMs = now;
   in.play = player.state();
   in.usb = screen.externalPower() && !idleFakeBattery;
   in.input = input;
-  in.pairing = link.phase == BtLink::Phase::PairScan || link.phase == BtLink::Phase::Pairing ||
-               btSession.pairingUnderWay();
+  in.pairing = pairingUnderWay();
   in.queueWrite = queueStore.busy();
   in.busy = screenTaken();
-  in.linked = bt.connected();
+  in.linked = bt.linkUp();  // (until the disconnect is done: connected() drops as it starts)
   IdlePolicy& p = idlePower.policy();
   const IdlePolicy::Phase before = p.phase();
   const IdlePolicy::Out o = p.update(in);
@@ -1583,14 +1601,91 @@ static void stepIdle(uint32_t now, bool input) {
       Serial.println("[power] idle: USB power at the last moment: staying on");
       return;
     }
-    Serial.printf("[power] off now (%s)\n", bt.connected() ? "the headphones still linked after 3 s" : "headphones let go");
+    Serial.printf("[power] off now (%s)\n", bt.linkUp() ? "the headphones still linked after 3 s" : "headphones let go");
     haptics.stop();
     idlePower.powerOff();  // (doesn't return)
   }
 }
 
+// ---- the CPU speed (docs/ENERGY.md item 6) ----
+
+// A restart asked for at a new CPU speed (the Output tab's, after its
+// dialog): the speed (0: none), and when.
+static uint16_t cpuRestartMhz = 0;
+static uint32_t cpuRestartAskedMs = 0;
+
+// The Output tab's CPU speed. 240 <-> 160 retunes the PLL the Bluetooth
+// radio runs from, so the clock is set at boot only: the choice is saved,
+// and when it isn't the clock that runs, the player restarts at it, the
+// idle power-off's orderly way: paused first (after the restart nothing
+// plays by itself: the queue comes back stopped, as after any boot), the
+// queue and its place flushed, the note for the next boot's toast, the
+// headphones let go (a clean disconnect, no "lost" dialog). The speaker's
+// amp is switched off too, the orderly way (its enable before its I2S, once
+// the pause's fade has played out): esp_restart() doesn't reset the AXP192,
+// so the amp would otherwise stay live while the reset and M5.begin()
+// reconfigure its clock pins (a pop). stepCpuRestart() restarts once both
+// are done, at most 3 s later. Not while a pairing is under way: the
+// restart would drop it, maybe half-bonded (the UI says to wait).
+bool MainUiHost::setCpuSpeed(uint16_t mhz) {
+  if (cpuRestartMhz) {
+    // (Another tap on the row in the restart's last 3 s.)
+    Serial.printf("[power] CPU speed %u MHz: ignored, restarting at %u MHz already\n", (unsigned)mhz,
+                  (unsigned)cpuRestartMhz);
+    return false;
+  }
+  const bool restart = powerchoice::validCpuMhz(mhz) && mhz != PowerSettings::cpuBootMhz();
+  if (restart && pairingUnderWay()) {
+    Serial.printf("[power] CPU speed %u MHz: not now, a pairing is under way (nothing saved)\n", (unsigned)mhz);
+    return false;
+  }
+  const uint16_t before = powerSettings.cpuSaved();
+  if (!powerSettings.saveCpu(mhz)) {
+    Serial.printf("[power] CPU speed %u MHz: couldn't save it\n", (unsigned)mhz);
+    return false;
+  }
+  if (!restart) {
+    // (The console's Pcb had saved the other one since this boot.)
+    Serial.printf("[power] CPU speed: %u -> %u MHz (saved): it runs at that already, no restart\n",
+                  (unsigned)before, (unsigned)mhz);
+    return false;
+  }
+  const bool paused = pauseIfPlaying();
+  const bool amp = SpeakerSink::ampOn();
+  Serial.printf("[power] CPU speed: %u -> %u MHz (saved): restarting%s; saving the queue, letting go of the "
+                "headphones%s\n",
+                (unsigned)before, (unsigned)mhz, paused ? " (paused first)" : "",
+                amp ? ", the speaker's amp off" : "");
+  queueStore.flushNow();
+  powerSettings.noteRestart(mhz);
+  releaseHeadphones("[power] restarting");
+  // Carried out by the speaker's pump once its fade has played out (as Pa0).
+  if (amp) audio.speaker().requestAmp(SpeakerSink::Amp::Off);
+  cpuRestartMhz = mhz;
+  cpuRestartAskedMs = millis();
+  return true;
+}
+
+// Every loop pass: the restart setCpuSpeed() asked for, once the headphones
+// are gone and the speaker's amp is off (at most 3 s, as before the idle
+// power-off).
+static void stepCpuRestart(uint32_t now) {
+  if (!cpuRestartMhz) return;
+  // (Until the disconnect is done: connected() drops as soon as it starts.)
+  const bool linked = audio.bluetooth().linkUp();
+  const bool amp = SpeakerSink::ampOn();
+  if (!powerchoice::cpuRestartDue(now, cpuRestartAskedMs, linked, amp)) return;
+  if (queueStore.busy()) queueStore.flushNow();  // an edit meanwhile
+  Serial.printf("[power] restarting now at %u MHz (%s%s)\n", (unsigned)cpuRestartMhz,
+                linked ? "the headphones still linked after 3 s" : "headphones let go",
+                amp ? "; the speaker's amp still on after 3 s" : "");
+  haptics.stop();
+  powerSettings.restart();  // (doesn't return)
+}
+
 void setup() {
-  PowerLab::applyBootClock();  // the clock saved by Pcb (if any), before Bluetooth starts
+  // The CPU speed saved (or the default), before Bluetooth starts.
+  PowerSettings::applyBootClock();
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;  // M5Unified leaves Serial off unless asked
   cfg.internal_mic = false;      // the mic shares GPIO0 with the speaker's I2S clock
@@ -1600,7 +1695,7 @@ void setup() {
   cfg.output_power = false;
   M5.begin(cfg);
   Serial.println("\nmstream-mp3-player");
-  PowerLab::logBootClock();
+  powerSettings.begin();  // what the boot clock is, the Bluetooth power, and whether it restarted for the speed
   board::applyBootPower();  // the IMU suspended: nothing reads it
   diag::logHeap("boot");
 
@@ -1609,6 +1704,8 @@ void setup() {
   storage.begin();
   diag::logHeap("storage");
 
+  // The Bluetooth power, applied as the controller comes up (before any page).
+  powerSettings.beginBluetooth(audio.bluetooth());
   if (!audio.begin(storage.available() ? &storage.fs() : nullptr, BT_SINK_NAME)) {
     Serial.println("[audio] failed to start");
   }
@@ -1703,6 +1800,8 @@ void loop() {
   stepSleep(now);
   player.update(now);
   stepIdle(now, idleInput || touchedThisPass || screen.takeInput());
+  powerSettings.update(audio.bluetooth().connected());
+  stepCpuRestart(now);
   audio.loop(now);
   powerLab.loop(now);
   queueStore.loop(now);
@@ -1754,16 +1853,19 @@ void loop() {
   // while it's up: the UI is suspended, the dancer too.
   spike.loop(now);
   if (screenTaken() && danceMode.active()) danceMode.setActive(false);
-  // The dancer (the Dance tab) draws its own frames (~30/s) into its box.
+  // The dancer (the Dance tab) draws its own frames (10/s idle, 24-30
+  // dancing: DanceRate) into its box.
   danceMode.loop(now, silent);
   // The UI: the tab bar, overlays, the page (list frames on 30 fps deadlines).
   if (userInterface) {
     if (!userInterface->started() && now >= kDiagnosticsScreenMs && !screenTaken()) {
       userInterface->start(now);
-      // It turned itself off last time: say so, once (a PWR boot, stopped
-      // where it was).
+      // It turned itself off last time, or restarted for a new CPU speed:
+      // say so, once (stopped or paused where it was).
       char note[48];
-      if (idlePower.takeBootNote(note, sizeof(note))) userInterface->note(note, 6000);
+      if (idlePower.takeBootNote(note, sizeof(note)) || powerSettings.takeBootNote(note, sizeof(note))) {
+        userInterface->note(note, 6000);
+      }
     }
     userInterface->loop(now);
   }

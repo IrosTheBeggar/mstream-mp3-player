@@ -15,6 +15,7 @@
 
 #include "IdlePolicy.h"
 #include "LibraryIndex.h"
+#include "PowerChoices.h"
 #include "ScreenPower.h"
 #include "UiText.h"
 #include "ui/Fonts.h"
@@ -51,6 +52,13 @@ void spinner(M5Canvas& c, int cx, int cy, uint8_t step, uint16_t colour) {
     const uint16_t ink = age == 0 ? colour : age < 3 ? col::SOFT : col::FAINT;
     c.fillCircle(cx + kDx[i], cy + kDy[i], age == 0 ? 2 : 1, ink);
   }
+}
+
+// A pairing under way (as the idle power-off's blocker): a restart for the
+// CPU speed would drop it.
+bool pairingUnderWay(const AppState& s) {
+  return s.btLink.phase == BtLink::Phase::PairScan || s.btLink.phase == BtLink::Phase::Pairing ||
+         s.btSession.pairingUnderWay();
 }
 
 // Four signal bars, `lit` of them in the ink.
@@ -235,12 +243,14 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawnHaptics_ = ui_.input().hapticsOn();
       list.refreshRow(Haptics);
     }
-    const uint16_t sc = screenSig(ui_.state());
+    const uint32_t sc = screenSig(ui_.state());
     if (sc != drawnScreen_ && still) {
       drawnScreen_ = sc;
       list.refreshRow(ScreenOff);
       list.refreshRow(Brightness);
       list.refreshRow(IdleOff);
+      list.refreshRow(CpuSpeed);
+      list.refreshRow(BtPower);
     }
     // The spinner, while something is under way.
     const AppState& s = ui_.state();
@@ -373,6 +383,8 @@ void OutputPage::drawRow(ListView::Row& r) {
     case ScreenOff: drawScreenSetting(r, false); break;
     case Brightness: drawScreenSetting(r, true); break;
     case IdleOff: drawIdleSetting(r); break;
+    case CpuSpeed: drawPowerSetting(r, false); break;
+    case BtPower: drawPowerSetting(r, true); break;
     case Calibrate:
       drawSetting(r, icons::kGear, "Touch calibration", "if taps land off target", col::TXT, true);
       break;
@@ -450,8 +462,52 @@ void OutputPage::drawIdleSetting(ListView::Row& r) {
                          kSettingPillW - kSettingPillPad, col::TXT, pill, Fonts::Align::Centre);
 }
 
-uint16_t OutputPage::screenSig(const AppState& s) {
-  return static_cast<uint16_t>((s.idleOff & 0x0F) << 8 | (s.screenTimeout & 0x0F) << 4 | (s.brightness & 0x0F));
+// "CPU speed" and "Bluetooth power" (PowerChoices, saved: ENERGY.md items
+// 6 and 7): as the screen's rows. Their icons are drawn here: a chip (a
+// square with 3 pins a side), and 4 signal bars, as many lit as the
+// choice reaches (2, 3, 4).
+void OutputPage::drawPowerSetting(ListView::Row& r, bool bluetooth) {
+  using namespace uitext;
+  namespace pc = powerchoice;
+  const AppState& s = ui_.state();
+  const int cx = r.x + 22;
+  char line[32];
+  const char* title;
+  const char* sub;
+  const char* value;
+  if (bluetooth) {
+    bars(r.c, cx - 9, 28, s.btPower + 2, col::SOFT);
+    title = kBtPowerTitle;
+    sub = pc::btSub(s.btPower, s.btPowerPending);
+    value = pc::btLabel(s.btPower);
+  } else {
+    r.c.drawRect(cx - 6, 15, 13, 13, col::SOFT);
+    r.c.fillRect(cx - 3, 18, 7, 7, col::FAINT);
+    for (int i = 0; i < 3; ++i) {
+      const int at = i * 4 - 4;  // -4, 0, +4 from the middle
+      r.c.drawFastHLine(cx - 9, 21 + at, 3, col::SOFT);
+      r.c.drawFastHLine(cx + 7, 21 + at, 3, col::SOFT);
+      r.c.drawFastVLine(cx + at, 12, 3, col::SOFT);
+      r.c.drawFastVLine(cx + at, 28, 3, col::SOFT);
+    }
+    title = kCpuTitle;
+    sub = pc::cpuSub(s.cpuMhz, s.cpuRunMhz, line, sizeof(line));
+    value = pc::cpuLabel(s.cpuMhz);
+  }
+  const int x = r.x + 44;
+  const int pillX = r.right - 8 - kSettingPillW;
+  ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
+  const uint16_t pill = r.pressed ? col::BTN_HI : col::BTN;
+  r.c.fillRoundRect(pillX, 9, kSettingPillW, 24, 8, pill);
+  Fonts::instance().draw(r.c, Font::Body, value, pillX + kSettingPillW / 2, 21, kSettingPillW - kSettingPillPad,
+                         col::TXT, pill, Fonts::Align::Centre);
+}
+
+uint32_t OutputPage::screenSig(const AppState& s) {
+  uint32_t h = static_cast<uint32_t>((s.idleOff & 0x0F) << 8 | (s.screenTimeout & 0x0F) << 4 | (s.brightness & 0x0F));
+  h |= static_cast<uint32_t>(s.btPower & 0x03) << 12 | (s.btPowerPending ? 1u : 0u) << 14;
+  h |= (s.cpuMhz == 240 ? 1u : 0u) << 15 | (s.cpuRunMhz == 240 ? 1u : 0u) << 16 | (s.cpuRunMhz != s.cpuMhz ? 1u : 0u) << 17;
+  return h;
 }
 
 // The Bluetooth card's top row: the headphones in the state's colour, the
@@ -645,6 +701,10 @@ void OutputPage::drawAbout(ListView::Row& r) {
       snprintf(value, sizeof(value), "%s", about_.bluetooth);
       icon = &icons::kHeadphones;
       break;
+    case PowerInfo:
+      label = uitext::kAboutPower;
+      snprintf(value, sizeof(value), "%s", about_.power);
+      break;
     case Memory:
       label = "Memory free";
       snprintf(value, sizeof(value), uitext::kAboutMemory, static_cast<unsigned long>(about_.ramFree / 1024),
@@ -736,6 +796,12 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
     case IdleOff:
       // The next choice (after Never, 10 min again); the countdown restarts.
       ui_.host().setIdleOff((s.idleOff + 1) % IdlePolicy::kChoices);
+      break;
+    case CpuSpeed: onCpuSpeed(); break;
+    case BtPower:
+      // The next choice (after High, Low again), saved and applied at once;
+      // with the headphones linked, from the next connection (the line says).
+      ui_.host().setBtPower(powerchoice::nextBt(s.btPower));
       break;
     case Calibrate: ui_.host().openCalibration(); break;
     case AboutRow: ui_.push(page(PageKind::About)); break;
@@ -838,6 +904,28 @@ void OutputPage::onSheet(int choice) {
   }
 }
 
+// "CPU speed": the other choice. 240 <-> 160 can't switch while Bluetooth
+// runs, so it takes a restart, asked first (Cancel saves nothing). When the
+// console's Pcb saved the other one since this boot, the choice asked for
+// is the clock that runs: saved, nothing restarts. While a pairing is under
+// way the restart isn't offered (it would drop the pairing): a toast.
+void OutputPage::onCpuSpeed() {
+  namespace pc = powerchoice;
+  const AppState& s = ui_.state();
+  const uint16_t to = pc::otherCpuMhz(s.cpuMhz);
+  switch (pc::cpuTap(s.cpuMhz, s.cpuRunMhz, pairingUnderWay(s))) {
+    case pc::CpuTap::SaveOnly: ui_.host().setCpuSpeed(to); return;
+    case pc::CpuTap::WaitPairing: ui_.toast(uitext::kCpuWaitPairing, false); return;
+    case pc::CpuTap::AskRestart: break;
+  }
+  static const char* const kButtons[2] = {"Cancel", uitext::kCpuRestart};
+  char title[48];
+  pc::cpuDialogTitle(to, title, sizeof(title));
+  ask_ = Ask::CpuRestart;
+  askCpuMhz_ = to;
+  ui_.openDialog(this, title, uitext::kCpuDialogBody, kButtons, 2);
+}
+
 // A device on the Pair screen: pair (asked first when it replaces the
 // headphones remembered now).
 void OutputPage::pick(int device) {
@@ -863,6 +951,22 @@ void OutputPage::onDialog(int button) {
   ask_ = Ask::None;
   if (ask == Ask::Forget) {
     if (button == 1 && kind_ == PageKind::Output) forget();
+    return;
+  }
+  if (ask == Ask::CpuRestart) {
+    // Cancel saves nothing.
+    if (button != 1 || kind_ != PageKind::Output || !askCpuMhz_) return;
+    const uint16_t mhz = askCpuMhz_;
+    askCpuMhz_ = 0;
+    if (ui_.host().setCpuSpeed(mhz)) {
+      // Up until the restart (at most 3 s: the headphones let go, the amp
+      // off), so the screen never goes dark without it.
+      char text[48];
+      powerchoice::cpuRestartingText(mhz, text, sizeof(text));
+      ui_.note(text, powerchoice::kRestartToastMs);
+    } else if (pairingUnderWay(ui_.state())) {
+      ui_.toast(uitext::kCpuWaitPairing, false);  // (one began while the dialog was up: nothing saved)
+    }
     return;
   }
   if (ask != Ask::Pair || kind_ != PageKind::Pair || button != 1 || picked_ < 0 || picked_ >= scan_.count()) return;

@@ -9,14 +9,16 @@
 #include "audio/Core2AudioBackend.h"
 
 class LocalStorage;
+class PowerSettings;
 class ScreenControl;
 
 // The console's P commands (with Enter): measuring what the Core2 draws
 // (PowerProbe) and A/B knobs that switch one consumer at a time, for
 // finding what each one costs. Every knob says what it was and what it is
 // now, is undone by its opposite, and nothing of it is saved except the
-// boot clock (Pcb). All off by default: until a P command, this costs a
-// few comparisons per loop pass.
+// boot clock (Pcb, the Output tab's CPU speed: app/PowerSettings). All off
+// by default: until a P command, this costs a few comparisons per loop
+// pass.
 //
 //   P          one [power] line at the end of a 5 s window
 //   Pl         a [power] line every 5 s, on / off
@@ -28,8 +30,11 @@ class ScreenControl;
 //   Ps0 / Ps1  the screen off (the screen policy's Off: backlight off,
 //              ILI9342C sleep-in) / on; a touch wakes it and does nothing else
 //   Pc<mhz>    the CPU clock now: 160 <-> 80 (same PLL; 80 not while audio runs)
-//   Pcb<mhz>   the CPU clock from boot, saved: 160 or 240 (Pcb0: the default)
-//   Pt<min>,<max>  Bluetooth BR/EDR TX power levels 0-7 (-12..+9 dBm, 3 dB steps)
+//   Pcb<mhz>   the CPU clock from boot, saved: 160 or 240 (Pcb0: the default,
+//              240); the Output tab's CPU speed, the same NVS value
+//   Pt<min>,<max>  Bluetooth BR/EDR TX power levels 0-7 (-12..+9 dBm, 3 dB
+//              steps), a test until restart (not saved: the Output tab's
+//              Bluetooth power is the setting, and a change there wins)
 //   Pe0 / Pe1  the 5 V boost (EXTEN, the M-Bus/Grove 5 V) off / on (off from boot)
 //   Pg0 / Pg1  the green LED off / on (off from boot)
 //   Pi0 / Pi1  the IMU (BMI270) suspended / on (suspended from boot)
@@ -48,12 +53,7 @@ public:
   };
 
   PowerLab(Core2AudioBackend& audio, PlaybackController& player, DanceMode& dance, LocalStorage& storage,
-           ScreenControl& screen, Hooks hooks);
-
-  // setup(), before M5.begin() and Bluetooth: the boot clock saved by Pcb.
-  static void applyBootClock();
-  // setup(), once Serial is up: says what applyBootClock() did.
-  static void logBootClock();
+           ScreenControl& screen, PowerSettings& settings, Hooks hooks);
 
   // The console: the text after 'P', as typed.
   void command(const char* arg);
@@ -70,6 +70,9 @@ private:
   void screen(bool on);
   void cpu(const char* a);
   void txPower(const char* a);
+  // Pt's levels forgotten once the Output tab's Bluetooth power has been
+  // set since (it replaced them in the controller).
+  void dropReplacedTx();
   void exten(const char* a);
   void led(const char* a);
   void imu(const char* a);
@@ -84,11 +87,13 @@ private:
   PlaybackController& player_;
   DanceMode& dance_;
   ScreenControl& screen_;
+  PowerSettings& settings_;
   Hooks hooks_;
   PowerProbe probe_;
 
   uint32_t loopDelayMs_ = 0;  // 0: the UI's own
   int8_t txMin_ = -1, txMax_ = -1;  // set by Pt, -1: the default
+  uint32_t txChanges_ = 0;          // PowerSettings::btChanges() at that Pt
   uint32_t cpuReturnMhz_ = 0;       // Pc80: the clock to go back to once audio runs
   bool ampWatch_ = false;           // a Pa request to report once done
   bool ampBefore_ = false;

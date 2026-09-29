@@ -132,9 +132,13 @@ pages do:
   **Pair new headphones** lists the audio devices in pairing mode nearby
   (with their signal); tap one to pair it, in place of the ones paired
   before (they stay if the new pairing fails). Then the line-out module's
-  place (not fitted yet), **Haptics** on/off, **Touch calibration**, and
-  **About** (battery, storage, library, headphones, memory, version, and
-  the tips again).
+  place (not fitted yet), **Haptics** on/off, **Screen off after**,
+  **Brightness**, **Turn off when idle**, **CPU speed** (160 MHz saves
+  battery, 240 MHz is smoother; it takes a restart, asked first, and the
+  music stays paused after it) and **Bluetooth power** (Low, Normal,
+  High), **Touch calibration**, and **About** (battery, storage, library,
+  headphones, CPU speed and Bluetooth power, memory, version, and the tips
+  again).
 
 The first time, two tips show what the three red buttons do and that
 tapping the tab you're on goes back to its start (console `uic` shows them
@@ -243,6 +247,7 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   CrabPose, CrabArt   The crab's layer frames and offsets per beat phase; its
                       pixel art (generated from tools/art/crab.json)
   DanceSkin           Which dancer is on screen (crab, stick)
+  DanceRate           The Dance tab's frame rate: 10 fps idle, 24-30 dancing
   LibraryIndex        The library in a few PSRAM blocks: string arena, records,
                       sorted views, A-Z buckets, folder tree; saved and loaded
                       as one file (LibrarySynth: made-up libraries of any size)

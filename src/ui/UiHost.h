@@ -83,6 +83,15 @@ struct AppState {
   // seconds left (0: no warning).
   uint8_t idleOff = 1;
   uint8_t idleWarnS = 0;
+  // CPU speed and Bluetooth power (PowerChoices; ENERGY.md items 6 and 7):
+  // the speed saved (the next boot's) and the clock set at boot (they
+  // differ after the console's Pcb, until a restart), the Bluetooth power choice, and
+  // whether the link that is up still has another choice's levels (the new
+  // one applies from the next connection).
+  uint16_t cpuMhz = 160;
+  uint16_t cpuRunMhz = 160;
+  uint8_t btPower = 1;
+  bool btPowerPending = false;
 };
 
 // About (the Output tab): what the device is and has.
@@ -90,6 +99,7 @@ struct AboutInfo {
   char storage[48] = "";   // "microSD card, 29.7 GB"
   char version[48] = "";   // "mstream-mp3-player 0.4, built Sep 27 2026"
   char bluetooth[48] = ""; // "SPYDRONE (12:34:56:78:9A:BC)"
+  char power[48] = "";     // "160 MHz; Normal (-12..+3 dBm)" (PowerChoices::aboutText())
   uint32_t ramFree = 0, ramMin = 0, psramFree = 0;
 };
 
@@ -170,6 +180,19 @@ public:
   virtual void setIdleOff(int choice) = 0;
   // The warning's Keep on (any touch keeps it on as well: logged).
   virtual void idleKeepOn() = 0;
+
+  // ---- CPU speed and Bluetooth power (PowerChoices; saved) ----
+  // "CPU speed": saves `mhz` (160 or 240). When that isn't the clock set
+  // at boot, the player restarts at it (the UI asked first): paused, the queue and
+  // its place saved, the headphones let go and the speaker's amp switched
+  // off, then the restart (at most 3 s later); after it nothing plays by
+  // itself. True: that restart is under way. False: saved with no restart
+  // needed, or refused and nothing saved (a pairing under way, which the
+  // restart would drop; NVS failed; a restart under way already).
+  virtual bool setCpuSpeed(uint16_t mhz) = 0;
+  // "Bluetooth power": PowerChoices' choice, saved and applied at once (a
+  // link that is up keeps its level until the next connection).
+  virtual void setBtPower(int choice) = 0;
 
   // ---- the screen's pocket rule (ScreenPower) ----
   // The touch on the glass now landed on a screen woken from off that

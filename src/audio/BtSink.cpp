@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Preferences.h>
+#include <esp_bt.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 
@@ -212,6 +213,16 @@ protected:
   // stage: BtSink::onData applies ours. (The library would run
   // its A2DPVolumeControl, BluetoothA2DPSource.cpp:188-192.)
   int32_t get_audio_data_volume(uint8_t* data, int32_t len) override { return get_audio_data(data, len); }
+
+  // The library's controller start (BluetoothA2DPCommon.cpp:403), then the
+  // TX power (BtSink::setTxPower()): the controller is enabled and Bluedroid
+  // isn't yet, so it comes before any page, scan or page scan (the first
+  // page is the stack-up event's, 10 s later: av_hdl_stack_evt()).
+  bool bt_start() override {
+    if (!BluetoothA2DPSource::bt_start()) return false;
+    sink->applyTxPower("from the stack's start");
+    return true;
+  }
 
   // connect_to() calls this before paging (BluetoothA2DPCommon.cpp:100); the
   // library makes us non-connectable there (BluetoothA2DPSource.h:374-376).
@@ -1529,6 +1540,28 @@ BtLink BtSink::link() const {
   l.attempts = linkAttempts_.load(std::memory_order_relaxed);
   l.remembered = linkRemembered_.load(std::memory_order_relaxed);
   return l;
+}
+
+bool BtSink::setTxPower(uint8_t minLevel, uint8_t maxLevel) {
+  txMin_ = static_cast<int8_t>(std::min<uint8_t>(minLevel, 7));
+  txMax_ = static_cast<int8_t>(std::min<uint8_t>(std::max(minLevel, maxLevel), 7));
+  // Before the controller is up: PlayerA2dp::bt_start() applies it.
+  if (esp_bt_controller_get_status() != ESP_BT_CONTROLLER_STATUS_ENABLED) return true;
+  return applyTxPower(connected() ? "from the next connection (the link that is up keeps its level)"
+                                  : "from the next page, scan or connection");
+}
+
+bool BtSink::applyTxPower(const char* when) {
+  if (txMin_ < 0) return true;  // never set: the controller's default
+  const esp_err_t err =
+      esp_bredr_tx_power_set(static_cast<esp_power_level_t>(txMin_), static_cast<esp_power_level_t>(txMax_));
+  if (err != ESP_OK) {
+    Serial.printf("[bt] tx power: levels %d..%d refused (%s)\n", txMin_, txMax_, esp_err_to_name(err));
+    return false;
+  }
+  Serial.printf("[bt] tx power: %+d..%+d dBm (levels %d..%d), %s\n", -12 + 3 * txMin_, -12 + 3 * txMax_, txMin_,
+                txMax_, when);
+  return true;
 }
 
 void BtSink::setBackgroundReconnect(bool on) {

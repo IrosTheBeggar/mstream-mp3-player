@@ -192,7 +192,7 @@ inline constexpr const char* kLineOutSub = "3.5 mm / RCA: not fitted yet";
 // Settings rows with a value (Screen off after, Brightness: ScreenPower's
 // choices): the value (Body) in a pill at the row's right (8 px from its
 // right end), the title and its line (Small) up to 8 px before the pill.
-inline constexpr int kSettingPillW = 76;
+inline constexpr int kSettingPillW = 78;  // "160 MHz" (69 px) in its pill
 inline constexpr int kSettingPillPad = 8;  // a value has the pill less this
 inline constexpr int kSettingValueSubW = 312 - 8 - kSettingPillW - 8 - 44;  // from x 44, the row's right 312
 inline constexpr const char* kScreenOffTitle = "Screen off after";
@@ -204,6 +204,29 @@ inline constexpr const char* kBrightnessSub = "higher uses more battery";
 inline constexpr const char* kIdleOffTitle = "Turn off when idle";
 inline constexpr const char* kIdleOffSub = "paused, on battery";
 inline constexpr const char* kIdleNeverSub = "stays on: more battery";
+// "CPU speed" and "Bluetooth power" (PowerChoices' choices, the same row:
+// ENERGY.md items 6 and 7). The CPU's line while the clock isn't the saved
+// choice yet (the console's Pcb): "240 MHz until a restart".
+inline constexpr const char* kCpuTitle = "CPU speed";
+inline constexpr const char* kCpu240Sub = "Smoothest lists, dancing";
+inline constexpr const char* kCpu160Sub = "Saves battery, a bit slower";
+inline constexpr const char* kCpuPendingSub = "%u MHz until a restart";
+inline constexpr const char* kBtPowerTitle = "Bluetooth power";
+inline constexpr const char* kBtLowSub = "Saves battery; stay close";
+inline constexpr const char* kBtNormalSub = "Adjusts to the distance";
+inline constexpr const char* kBtHighSub = "More range, more battery";
+inline constexpr const char* kBtPendingSub = "From the next connection";
+// A CPU speed change: the dialog (ui/Overlays' Dialog, no icon: the title
+// in Bold over kDialogTitleW, the body in Small over the same 260 px, 3
+// lines), [Cancel] and [Restart] (kDialogButtonTextW). PowerChoices has
+// the title ("Restart at 160 MHz?"), the toast while it restarts and the
+// next boot's toast (Body on one line, kToastTextX to kToastTextRight).
+inline constexpr const char* kCpuDialogBody =
+    "The speed changes at a restart. The music pauses; the queue and your place are kept.";
+inline constexpr const char* kCpuRestart = "Restart";
+// A tap on "CPU speed" while a pairing is under way (the restart would drop
+// it): a toast, nothing saved.
+inline constexpr const char* kCpuWaitPairing = "Wait for the pairing to finish";
 
 // ---- the idle power-off (IdlePolicy; ENERGY.md item 4) ----
 // The warning toast (ui/Overlays' Toast), its last 30 s: "Turning off in
@@ -219,5 +242,8 @@ inline constexpr int kIdleToastPad = 8;  // a label has its pill less this
 inline constexpr int kAboutValueW = 260;
 inline constexpr const char* kAboutMemory = "RAM %lu KB (low %lu), PSRAM %.1f MB";
 inline constexpr const char* kAboutLibrary = "%lu tracks, %lu artists, %lu albums";
+// About's power row: the two settings as they run (PowerChoices::aboutText():
+// "160 MHz; Normal (-12..+3 dBm)").
+inline constexpr const char* kAboutPower = "CPU speed, Bluetooth power";
 
 }  // namespace uitext

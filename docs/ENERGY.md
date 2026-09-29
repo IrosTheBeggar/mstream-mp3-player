@@ -89,6 +89,10 @@ headphones gone, reconnect cycling = 85.7 USB mA, flat in ~3.3 h.
 Net: **+25% listening time**, and the idle and overnight cases go from
 "flat in 3 h" to "off with charge left".
 
+The "after the plan" column counts 160 MHz. The default stayed 240 (step
+6a: list scrolling halves at 160 with an MP3 playing), so ~5 USB mA of it
+(~0.1 h of listening) needs "CPU speed" set to 160 on the Output tab.
+
 ---
 
 ## 2. Ranked changes
@@ -379,11 +383,16 @@ test_output_chain); measured on the device: off 2.01 s after a pause,
 - MP3 decode rises from 37.5% to 49.4% of a core, with 0 underruns in
   66 s on the speaker and 45 s over Bluetooth.
 - The Dance tab drops from 29-31 to 20-24 fps with an MP3 over Bluetooth.
-- List scrolling will be slower too (not yet measured at 160).
+  Item 8 now aims for a steady 24 at 160 (and 10 while the dancer idles).
+- **List scrolling halves** (step 6a, measured): the scroll lab's stress
+  with an MP3 over Bluetooth runs at 7.8 fps against 15.9 at 240, a FLAC
+  at 15.5 against 24.7. **So the default stays 240**; 160 is the CPU speed
+  row's other choice.
 
 **The change:**
 
-1. **Fixed 160 from boot** (what `Pcb160` does, as the default), before
+1. **Fixed 160 from boot** (what `Pcb160` does, as the default; tried,
+   and back to 240 after step 6a: see **Default** below), before
    Bluetooth starts. 240 can't be switched to or from at runtime while
    Bluetooth runs: it retunes the 480/320 MHz PLL the radio uses.
 2. **A small governor, 160 to 80,** on the same PLL. It drops to 80 only
@@ -404,11 +413,63 @@ test_output_chain); measured on the device: off 2.01 s after a pause,
    sleep is not reachable with Bluetooth on: the Core2 has no 32 kHz
    crystal.
 
-**Default:** 160 once the soak passes. `Pcb240` stays as a console
-override. No UI setting, since it needs a reboot.
+**Default: 240** (`kDefaultCpuMhz` in lib/core/PowerChoices, one
+constant). Batch 3 shipped 160 as the default, pending the step 6a soak;
+the soak had 0 underruns and the bench held, but list scrolling with an
+MP3 playing ran at half the frame rate (outside the ~15% allowed), so the
+constant went back to 240 ("Device run: batch 3", step 6a). 160 saves ~5
+USB mA streaming for whoever picks it in the row.
+
+**Status: 1 is in the code (batch 3), as a setting; host-tested
+(test_power_choices, the texts in test_ui_library); checked on the device
+("Device run: batch 3", after step 8: the row, the dialog, restarts both
+ways on the headphones and on the speaker; two restart-wait bugs found and
+fixed there). Step 6a ran: the default is back to 240.** The user asked for it in the UI, so it is a setting after all,
+restart included:
+
+- **"CPU speed"** on the Output tab, after "Turn off when idle": **240 MHz**
+  "Smoothest lists, dancing" / **160 MHz** "Saves battery, a bit slower"
+  (the spec's "a little less smooth" doesn't fit beside the pill), the
+  value in a pill, a chip icon.
+- **A tap asks first**: the dialog "Restart at 160 MHz?", "The speed
+  changes at a restart. The music pauses; the queue and your place are
+  kept.", [Cancel] [Restart]. Cancel saves nothing.
+- **Restart**: the choice saved; paused first; then the idle power-off's
+  orderly way (`QueueStore::flushNow()`, a note for the next boot, the
+  headphones let go: no "lost" dialog), and the speaker's amp switched off
+  the orderly way (its enable before its I2S, once the pause's fade has
+  played out, as `Pa0`: `esp_restart()` doesn't reset the AXP192, so a
+  live amp would hear its clock pins reconfigured through the reset, a
+  pop). Once both are done (at most 3 s, `powerchoice::cpuRestartDue()`;
+  the link counts as gone at DISCONNECTED, `BtSink::linkUp()`, not when
+  the library's `connected()` drops as the disconnect starts)
+  `esp_restart()` with the panel's SPI lock held. A toast "Restarting at
+  160 MHz..." stays up until then (5 s). The next boot shows "CPU
+  speed: 160 MHz" for 6 s (the idle power-off's boot-toast path). After
+  the restart nothing plays by itself: the queue comes back stopped, at
+  the same entry, as after any boot (the track from 0:00: the time within
+  a track isn't saved, at any boot); the headphones reconnect as at any
+  boot, and take the output as at any boot.
+- **Storage**: NVS "power"/"cpu_mhz", shared with the console's `Pcb`: an
+  explicit 160 or 240; absent, or anything else, is the default. `Pcb160`
+  / `Pcb240` save it, `Pcb0` removes it (the default). `Pc` (runtime 160
+  <-> 80) is unchanged.
+- After a `Pcb` that differs from the clock, the row shows the saved
+  choice and the line "240 MHz until a restart"; a tap then saves the
+  running speed back, with no restart.
+- **Not during a pairing** (the Pair screen's scan, or one picked there):
+  the restart would drop it, maybe half-bonded (the idle power-off waits
+  for one too). A tap then shows "Wait for the pairing to finish" and
+  saves nothing; the host refuses it as well.
+
+**2, the 80 MHz idle governor (step 6b), is deferred**: the idle power-off
+(item 4) already caps idle time on battery, and 80 MHz would save ~4 mA
+only in the idle minutes before it. It comes back if the battery runs
+(step 9) show idle time that the power-off doesn't cover.
 
 | | |
 |---|---|
+| **Setting** | "CPU speed": **240** / 160 MHz (a restart) |
 | **Risk** | medium: UI smoothness (dance, lists, the stall at a track start); the governor's switches with a Bluetooth link up (soak it) |
 | **Effort** | S for 160 (mostly measuring); S-M for the governor; L for DFS |
 
@@ -432,11 +493,48 @@ ceiling to +9 as Tangara did without a dropout problem to fix. A fixed
 low ceiling is at most a later opt-in "battery saver", after a pocket
 and arm's-length dropout soak.
 
+**Status: in the code (batch 3), as a setting the user asked for;
+host-tested (test_power_choices, the texts in test_ui_library); checked
+on the device ("Device run: batch 3": every choice, the readback after a
+fresh connection, A/B streaming; the range soak is still to do).** The
+listener now picks the ceiling (every range
+starts at -12 dBm, so the headphones' power control can always turn it
+down):
+
+| Choice | Levels | dBm | The row's line |
+|---|---|---|---|
+| Low | 0..2 | -12..-6 | "Saves battery; stay close" |
+| **Normal** (the default) | 0..5 | -12..+3 | "Adjusts to the distance" |
+| High | 0..7 | -12..+9 | "More range, more battery" |
+
+(The spec's "keep the player close" and "uses more battery" don't fit
+beside the pill.)
+
+- **"Bluetooth power"** on the Output tab, after "CPU speed"; a tap takes
+  the next choice (after High, Low), saved at once in NVS
+  "power"/"bt_tx" (absent: Normal), 4 signal bars as its icon (2, 3 or 4
+  lit).
+- **Applied** at once (`BtSink::setTxPower()`), and at every stack start:
+  `PlayerA2dp::bt_start()` calls the library's controller start, then
+  sets the levels, before Bluedroid is enabled, so before any page, scan
+  or page scan (the boot's first page is the stack-up event's, 10 s
+  later; every later page is ReconnectPlanner's, after it). `[bt] tx
+  power: -12..+3 dBm (levels 0..5), from the stack's start` at boot.
+- **A link that is up keeps its level** (measured), so a change while
+  linked applies from the next connection: the row's line reads "From
+  the next connection" until the link goes (`BtLinkLevel`: the choice the
+  link was made with). Nothing reconnects by itself.
+- The console's `Pt` stays a test override until restart (not saved; a
+  change on the row wins) and reports the setting too; `P` lines show
+  `tx=-12..+3 dBm (Normal)`, or the `Pt` levels until the row is next
+  tapped (then a line says the row replaced them, and `P` shows the row's
+  range again).
+
 | | |
 |---|---|
-| **Default** | on |
-| **Setting** | no |
-| **Risk** | low with the ceiling unchanged; watch underruns and `gap=` at range |
+| **Default** | Normal (-12..+3 dBm) |
+| **Setting** | "Bluetooth power": Low / **Normal** / High |
+| **Risk** | low with the ceiling unchanged; watch underruns and `gap=` at range (Low: at arm's length and in a pocket) |
 | **Effort** | XS plus a soak |
 
 ### 8. Dance tab frame rate
@@ -453,10 +551,40 @@ dancing.
 - **Screen off:** stopped entirely (item 2).
 - Reset `lastFrameMs_` when the period changes, so there is no catch-up burst.
 
-**Default:** on, no setting.
+**Status: in the code (batch 3); host-tested (test_dance_rate); checked on
+the device ("Device run: batch 3"): the rates and switches as specified,
+but with an MP3 playing the dancer doesn't reach its target (~17/24 at
+160, ~25/30 at 240), and the idle rate's saving is below the noise at
+160.** As built:
+
+- **The policy** is `DanceRate` (lib/core). The mode comes from what the
+  last frame showed: **idle** when no beat was heard (paused, stopped, a
+  starved output: the tap reader has nothing audible) or the tracker isn't
+  locked, *and* the dance weight is 0.5 or less; otherwise **dancing**
+  (also the console's frozen pose, `k<n>`). So a fade-out after a pause
+  runs at the dancing rate until the weight is under 0.5, and a locked
+  beat is danced to, fade-in included, from the next idle frame (at most
+  100 ms). It applies to both skins (the crab, the stick figure).
+- **The rate:** idle 10 fps (100 ms); dancing 30 fps (33 ms) at 240 MHz,
+  24 fps (42 ms) below it, from `getCpuFrequencyMhz()` at each frame, so
+  the "CPU speed" row and the console's `Pc` both count.
+- **No catch-up burst:** `dancerate::Pacer` keeps the frames on deadlines
+  as before; a new period is counted from the last frame drawn, and its
+  first frame starts the new cadence (the `lastFrameMs_` of the plan is
+  gone).
+- **Screen off:** already no frames: `Ui` turns `DanceMode` off when the
+  screen goes dark (and on again at the wake, on the Dance tab), and
+  `DanceMode::loop()` draws nothing while off.
+- **Observable:** each change logs `[dance] 10 fps (idle)` or `[dance] 24
+  fps (dancing at 160 MHz)` (also once when the tab comes up), and the 5 s
+  `[dance]` line reads `fps=23.8/24 (dancing)`: measured over the last
+  second / the target, and the mode. The console's `ui` prints `[ui] page:
+  Dance: ... 24 fps (of 24)`.
 
 | | |
 |---|---|
+| **Default** | on |
+| **Setting** | no (it follows the "CPU speed" row's clock) |
 | **Risk** | low, visual only |
 | **Effort** | XS-S |
 
@@ -1605,7 +1733,14 @@ steps 0-3 run's 65.5: another track, MP3, and noise.) The headphones' ~110
 
 ### Step 6: CPU 160 by default, then the 80 MHz governor (item 6)
 
-**Step 6a: 160 by default.** Before changing the default, run at `Pcb160`:
+**Status: the setting is in the code (batch 3, below) and checked on the
+device ("Device run: batch 3", after step 8). Step 6a ran: 160 failed the
+scrolling check, so the default is 240 again (160 is the row's other
+choice); 6b is deferred.**
+
+**Step 6a: 160 by default?** Batch 3 made 160 the default
+(`powerchoice::kDefaultCpuMhz`), for the soak to confirm, or for that one
+constant to go back to 240. Run at 160 (the default, or the row):
 
 - the 60-min Bluetooth soak (0 underruns);
 - `w1`-`w3` scroll stress (fps, frame max, ring min);
@@ -1613,10 +1748,52 @@ steps 0-3 run's 65.5: another track, MP3, and noise.) The headphones' ~110
 - `[dance]` fps with an MP3;
 - `[audio] refill` times at a track start.
 
-If they hold, make 160 the default. **Device check:** `Pl` shows -5 USB mA
-streaming.
+If they hold, 160 stays the default. **Result (2026-09-29, "Device run:
+batch 3"):** the soak (0 underruns), the bench and the refills held, but
+the scroll stress with an MP3 ran at about half of 240's frame rate: **the
+default went back to 240.** **Device check:** `Pl` shows -5 USB
+mA streaming (at 160, when chosen).
 
-**Step 6b: the idle governor.** A CpuGovernor that switches 160 and 80.
+**As built (batch 3), the setting:**
+
+- `PowerChoices` (lib/core): the choices, labels and lines, the stored
+  value's check (`cpuMhzFromStored()`: 160 or 240, else the default),
+  what a tap does (`cpuTap()`: a restart asked for, or saved alone when
+  a `Pcb` since this boot means the other choice is what runs, or "wait"
+  while a pairing is under way), when the restart goes
+  (`cpuRestartDue()`: the headphones unlinked and the amp off, or 3 s),
+  the dialog's title, the toasts, About's text.
+- `app/PowerSettings`: NVS "power" ("cpu_mhz", "bt_tx", and "boot_cpu",
+  the restart's note); `applyBootClock()` first thing in setup(); the
+  restart (`Serial.flush()`, the LCD lock, `esp_restart()`). The boot log:
+  `[power] CPU 240 MHz from boot (the default)` (or `160 MHz from boot
+  (saved; Pcb0 goes back to the default)`).
+- main.cpp: `MainUiHost::setCpuSpeed()` (refused during a pairing;
+  saved; paused, the queue flushed, the note, the headphones let go, the
+  speaker's amp asked off) and `stepCpuRestart()` (the restart once they
+  are unlinked and the amp is off, at most 3 s).
+- The Output row (`OutputPage::drawPowerSetting()`, `onCpuSpeed()`), the
+  dialog (the Ui's dialog overlay), About's "CPU speed, Bluetooth power"
+  row ("160 MHz; Normal (-12..+3 dBm)", the clock that runs).
+- `PowerLab`: `Pcb` saves through PowerSettings (`Pcb0` the default, 240);
+  `Pc` alone says what the next boot runs.
+
+**On the device (to do):** the row's tap, Cancel (nothing saved: `Pc`
+still says the same), Restart while playing on the headphones (paused,
+`[queue] saved now`, `[power] restarting: letting go of the headphones`,
+`[bt] disconnected` with no "lost" dialog, `[power] restarting now at 160
+MHz` within 3 s), the boot toast "CPU speed: 160 MHz", the queue at the
+same entry, stopped; nothing plays until asked. Restart while playing on
+the speaker: no pop or click through the reset (the amp off first:
+`[power] restarting now ... (headphones let go)` with no "amp still on");
+the toast stays up until the screen goes dark. A tap during a pairing
+(Pair screen, a device picked): "Wait for the pairing to finish", nothing
+saved. `Pcb240` at 160: the
+pill says 240 MHz and the line "160 MHz until a restart"; a tap saves 160
+back, with no dialog and no restart.
+
+**Step 6b: the idle governor. Deferred** (item 6): the idle power-off
+already caps idle time on battery. A CpuGovernor that switches 160 and 80.
 Host tests cover when it may drop. **On the device:**
 
 - linked and paused, toggle every 5 s for 30 min: 0 disconnects, and
@@ -1626,21 +1803,318 @@ Host tests cover when it may drop. **On the device:**
 
 ### Step 7: TX floor (item 7)
 
-**Code:** `esp_bredr_tx_power_set(N12, P3)` at stack start.
+**Code:** `esp_bredr_tx_power_set(N12, P3)` at stack start. **As built
+(batch 3):** the "Bluetooth power" setting (Low 0..2, Normal 0..5, High
+0..7; item 7), its levels set by `PlayerA2dp::bt_start()` right after the
+controller is enabled, before Bluedroid and so before the first page, and
+at once on a change (`BtSink::setTxPower()`). `BtLinkLevel` (lib/core)
+keeps the row's "From the next connection" while the link that is up
+has another choice's levels.
 
 **On the device:**
 
 - 30 min streaming with the Core2 in a pocket and at 5 m: underruns and
   `gap=` unchanged;
-- `Pl` A/B against the default, each after a fresh connection.
+- `Pl` A/B against the default, each after a fresh connection;
+- `Pt4,5`, then a tap on the row, then `P`: the line "Pt's ... test
+  replaced by the Bluetooth power row" and `tx=` with the row's range, not
+  `(Pt)`.
 
 ### Step 8: Dance frame rate (item 8)
 
 **Code:** 10 fps idle, 24-30 fps dancing.
 
-**Device check:** `[dance]` fps and beat error on the click tracks
-unchanged while dancing; `Pl` on the Dance tab paused, 30 vs 10 fps
-(expect ~-3 USB mA).
+**Status: in the code (batch 3, item 8's "As built"); host-tested
+(test_dance_rate); checked on the device ("Device run: batch 3", below),
+except the click tracks' beat error and the stick figure.**
+
+**Device check:**
+
+- `[dance]` fps and beat error on the click tracks unchanged while
+  dancing: `fps=~30/30` at 240 MHz, `~24/24` at 160, with
+  the error medians of MASCOT-POC.md;
+- an MP3 at 160: a steady `~24/24`, where 30 landed at 20-24;
+- a pause: `[dance] 10 fps (idle)` within ~0.3 s (the fade), a play:
+  `[dance] 24 fps (dancing at 160 MHz)` once it locks; the crab's
+  breathing and blinking still read fine at 10;
+- `Pl` on the Dance tab paused, 30 vs 10 fps (expect ~-3 USB mA): `k0`
+  (a frozen pose draws at the dancing rate) against `k` (idle, 10);
+- the screen off on the Dance tab: `[dance] off`, and on the wake the
+  rate logged again.
+
+### Device run: batch 3 (2026-09-29)
+
+The working tree of batch 3 (steps 6-8, plus the two fixes below),
+flashed on the Core2 (COM3). On USB, the battery full, the screen bright
+at Medium (100; Screen off after set to Never for the run, 30 s again
+after). **The Powerbeats answered this time**: streaming is `tone:silence`
+over Bluetooth (`Pz`), at the default volume (30%); anything with music
+(the Dance tab) is on the speaker in silent test mode (`z`, volume 0),
+with the headphones disconnected (160) or linked but idle (240). USB mA,
+the mean of 13 five-second windows (65 s) after a `Pm` mark, each state
+settled 15 s or more. Screenshots: the scratchpad's `batch3_shots/`
+(LCD readback), all looked at.
+
+**Measured:**
+
+| State | USB mA | Notes |
+|---|---|---|
+| Streaming, 160, Normal | 99.1, 106.8, 98.5 (mean 101.5) | three connections: the boot's, then two fresh ones |
+| Streaming, 160, Low | 97.9, 95.1 (mean 96.5) | each after a fresh connection |
+| Streaming, 160, High | 109.9, 102.0 (mean 106.0) | each after a fresh connection |
+| Streaming, 240, Normal | 102.6, 102.0 (mean 102.3) | the boot's connection, then a fresh one |
+| Dance tab paused, 160, idle crab (10 fps) | 42.3, 39.4 | speaker, headphones disconnected; A/B/A |
+| Dance tab paused, 160, frozen pose `k0` (24 fps) | 42.4 | the same |
+| MP3 on the speaker, 160: Now Playing / Dance tab dancing | 54.0 / 56.7 (+2.7) | ~17 fps dancing (below) |
+| MP3 on the speaker, 240: Now Playing / Dance tab dancing | 59.2 / 63.0 (+3.8) | ~25 fps dancing; Now Playing without its 2 spike windows (81, 108 mA) |
+
+The order was Normal, Low, High, Normal, Low, High, Normal (160), then 240.
+**The spread between connections at the same setting is as large as
+the differences** (Normal 98.5 to 106.8), so:
+
+- **Bluetooth power:** the order Low < Normal < High holds on average
+  (-5.0 and +4.5 against Normal) but isn't resolved. Headphones on the
+  desk, a metre or so away.
+- **CPU 160 vs 240 streaming:** -0.8 (the means) or -3.2 (the medians):
+  not resolved here. Section 1's -5.2 stays the reference. The MP3 on the
+  speaker reads -5.2 at 160 (54.0 against 59.2), but with the headphones
+  linked (idle) only in the 240 run.
+- **The idle crab (10 fps) against 24 fps:** paused at 160 the difference
+  is within noise (≤~1.5 mA). The planned -3 mA was for 30 against 10 at
+  240.
+- **The paused Bluetooth link is a noisy baseline:** with the headphones
+  linked and paused, some windows jump to 66-92 mA (sd 17-19) with nothing
+  else changing. The Dance A/B on the link was unusable, so it was redone
+  on the speaker with them disconnected.
+
+**Dance frame rate, checked (log):**
+
+- Paused: `fps=10.0/10 (idle)`, draw 2.9 ms and push 4.4 ms. With `k0`,
+  `fps=23.7-24.0/24 (dancing)`.
+- **Playing an MP3 (Air, "Kelly Watch The Stars") on the muted speaker,
+  the target isn't reached**: at 160, `fps=16.0-17.4/24`, draw 12-17.5 ms
+  and push 11-15 ms; at 240, `fps=24.2-25.2/30`, draw 5-7.6 ms and push
+  10.7-12 ms. A FLAC ("Stronger") at 160 ran 13-15/24 in its first seconds.
+  So while the decoder runs, a frame takes 25-30 ms at 160 (the push
+  doubles too: the card's reads share the SPI bus). The pacer doesn't
+  burst, it just runs slower. Item 6's "20-24 at 160" was an MP3 over
+  Bluetooth, not the speaker.
+- A pause: `[dance] 10 fps (idle)` 0.42 s after it (the fade). A lock:
+  `[dance] 24 fps (dancing at 160 MHz)` (at 240, `30 fps (dancing at 240
+  MHz)`). A lost beat: `10 fps (idle)`, and 24 again on the relock. Before
+  the first lock of a track it can flip 24, 10, 24 within 0.5 s, as the
+  pose weight crosses 0.5.
+- The screen off on the Dance tab: `[dance] off`. Back on: `[dance] on
+  (crab)` and the rate logged again, awake in 76 ms.
+
+**CPU speed and Bluetooth power, checked (log and screenshots):**
+
+- **Boot, every time:** `[power] CPU 160 MHz from boot (the default)` (or
+  `(saved; Pcb0 goes back to the default)`), `[power] bluetooth power:
+  Normal (-12..+3 dBm)`, and `[bt] tx power: -12..+3 dBm (levels 0..5),
+  from the stack's start` 0.15-0.2 s after them, ~10 s before the first
+  page. `Pc`: `CPU 160 MHz (PLL 320 MHz); from boot: 160 MHz (the
+  default)`. `Pcb0` at the start: nothing was saved.
+- **The rows** (screenshots): "CPU speed / Saves battery, a bit slower /
+  [160 MHz]" and "Smoothest lists, dancing / [240 MHz]"; "Bluetooth power"
+  with 2, 3 or 4 bars lit: "Saves battery; stay close / [Low]", "Adjusts to
+  the distance / [Normal]", "More range, more battery / [High]" (all
+  unlinked or on the link's own choice). While linked after a change: "From
+  the next connection" (High and Low). Back on Normal, the link's choice,
+  it reads "Adjusts to the distance" again. Every text fits.
+- **The dialog** "Restart at 240 MHz?", with the body text, [Cancel]
+  [Restart] (screenshot). Cancel: nothing logged, `Pc` unchanged, the row
+  unchanged.
+- **Four restarts**: 160 -> 240 on the headphones (streaming), 240 -> 160
+  on the speaker (an MP3 playing, muted, the headphones linked), then both
+  again after the fixes:
+  - `[power] CPU speed: 160 -> 240 MHz (saved): restarting (paused first);
+    saving the queue, letting go of the headphones` (`, the speaker's amp
+    off` on the speaker), `[queue] saved now`, `[bt] release: letting go`.
+  - After the fixes, on the headphones: `[bt] A2DP down (closed)` 171 ms
+    later, then `[power] restarting now at 240 MHz (headphones let go)`.
+    On the speaker: `[speaker] amp off: I2S stopped, AXP192 GPIO2 low
+    (asked: Pa)` 62 ms after the tap, `A2DP down` 1.2 s after it, then the
+    restart.
+  - The next boot: `[power] restarted for the CPU speed: 240 MHz asked`,
+    `Last reset software`, and the toast "CPU speed: 160 MHz" over Now
+    Playing (screenshot).
+  - The queue at the same entry, `(stopped)`. On the headphones,
+    `stream=suspended`, nothing played. They reconnected by themselves 10 s
+    after the boot (once on the second page, ~20 s) and took the output, as
+    at any boot. The speaker's volume came back as it was (30%): silent
+    mode doesn't outlive a restart.
+  - **"Your place" is the queue entry:** the silence track was 33 s in and
+    started again from 0:00. QueueStore saves only the entry, at any boot.
+    The dialog's "the queue and your place are kept" may read as more.
+- **`Pcb240` at 160:** the pill reads "240 MHz", the line "160 MHz until a
+  restart" (screenshot). A tap: `CPU speed: 240 -> 160 MHz (saved): it
+  runs at that already, no restart`, no dialog.
+- **Bluetooth power readback:** after each fresh connection `Pt` reads the
+  choice (`levels 0..2`, `0..7`, `0..5`; the setting's label beside it).
+  Right after a change while linked it already reads the new levels, so
+  the readback shows the controller's setting, not the link's level.
+  (PowerLab's comment says it read back the old range with a link up; not
+  seen this run.)
+- **`Pt4,5` then a tap on the row:** `Pt ... asked: applies from the next
+  connection`, `Pt` reads `levels 4..5 ... (Pt, a test until restart)`. The
+  tap: `Normal -> High (saved)`, then at once `Pt's +0..+3 dBm test
+  replaced by the Bluetooth power row: High (-12..+9 dBm)`; the next P line
+  `tx=-12..+9 dBm (High)`.
+- **About:** "CPU speed, Bluetooth power / 160 MHz; Normal (-12..+3 dBm)"
+  (screenshot).
+
+**Found and fixed:**
+
+- **The restart never waited.** `loop()` takes `now` at the start of its
+  pass, and the dialog's Restart stamps `cpuRestartAskedMs = millis()` later
+  in the same pass. So `stepCpuRestart(now)` computed `now - asked` < 0,
+  which as a uint32 is ~49 days, and `cpuRestartDue()` restarted at once.
+  The speaker restart logged `(the headphones still linked after 3 s; the
+  speaker's amp still on after 3 s)`, with every line from the tap to the
+  ROM banner in one serial read. `cpuRestartDue(nowMs, askedMs, ...)` now
+  takes both times and counts a negative elapsed as 0. A host test covers
+  the case and a millis() wrap.
+- **The release wait ended as the disconnect began.** `BtSink::connected()`
+  is the library's `is_connected()`. It goes false on the stack's
+  DISCONNECTING, right after `esp_a2d_source_disconnect()`, where a clean
+  disconnect takes 0.15-1.5 s (the Disconnect button in this run). The
+  first restart logged `(headphones let go)` with no `A2DP down`.
+  `BtSink::linkUp()` (the loop's link: up from CONNECTED until
+  DISCONNECTED) now gates the CPU restart and the idle power-off's release
+  wait (`IdlePolicy`'s `linked`, the `[power] off now` line). PlayGate
+  keeps `connected()`.
+
+**Seen, not changed:**
+
+- The first boot after flashing (an RTS reset from the old firmware) found
+  no IMU (`[diag] IMU none found`, `imu=on` in P lines). Every later boot,
+  at 160 and at 240, found the BMI270 and suspended it. So it isn't the
+  clock; probably the IMU's state from before the flash.
+- The screenshot (`X`) holds the Bluetooth output while it reads back
+  (~17 s: `pos` stuck, `bt=0fps`, then `gap=120ms`). This is the test tool;
+  no screenshot was taken during a measured window.
+- "bt_tx" has no console command to remove it. After the run it is stored
+  as Normal, which acts the same as absent. "cpu_mhz" was removed with
+  `Pcb0`.
+- The Output list scrolls a different distance with the card linked or
+  not (the card's height). A scripted tap once opened Touch calibration;
+  it was closed with `aq` and the table was left unchanged (`as`: the
+  default).
+
+**Step 6a: 160 against 240, and the default (later the same day).**
+The same batch 3 build, then with the default changed (below). Everything
+over Bluetooth to the Powerbeats at the default volume (30%), USB power,
+160 and 240 each from a boot (`Pcb0` / `Pcb240`, then a reset), the same
+files at both speeds. MP3: Daft Punk, *Discovery* (added to the queue for
+the run and removed after); FLAC: Kanye West, "Stronger", and Emancipator,
+"Alligator".
+
+*The scroll lab's stress* (`w1` governor on, `w2` off, `w3` off and no
+cap; 30 s each, `wd30`; the build's defaults: `wm1` hardware scroll, `wp1`
+paced refill, 30 fps cap, flicks at 2,000 px/s; the 10,000-track synthetic
+library, `g10000`, artists view with the A-Z rail). fps is while moving,
+p10 / p50 / min; frame is the per-second means' p50 and the longest; ring
+min is the lowest steady ring fill. No underruns in any run; heap min
+60.2-62.7 K at both speeds.
+
+| Run | 160 MHz: fps | Frame p50 / max | Ring min | Decode p50 / max | 240 MHz: fps | Frame p50 / max | Ring min | Decode p50 / max | fps p50, 160 vs 240 |
+|---|---|---|---|---|---|---|---|---|---|
+| MP3, `w1` | 6.7 / 7.8 / 6.4 | 108 / 181 ms | 1,413 ms | 55 / 63 % | 12.9 / 15.9 / 12.8 | 46 / 115 ms | 1,410 ms | 42 / 47 % | **-51 %** |
+| MP3, `w2` | 6.6 / 7.8 / 6.3 | 106 / 179 ms | 1,413 ms | 54 / 63 % | 13.8 / 15.7 / 12.8 | 46 / 105 ms | 1,410 ms | 42 / 47 % | -50 % |
+| MP3, `w3` | 6.8 / 8.2 / 5.6 | 101 / 178 ms | 1,410 ms | 54 / 62 % | 13.6 / 17.9 / 12.0 | 43 / 105 ms | 1,410 ms | 43 / 46 % | -54 % |
+| FLAC, `w1` | 12.7 / 15.5 / 11.3 | 47 / 102 ms | 1,410 ms | 36 / 40 % | 21.4 / 24.7 / 19.7 | 24 / 81 ms | 1,410 ms | 30 / 33 % | **-37 %** |
+
+- 240 matches the earlier reference: UI-SPIKE.md's `w1` `wf30` `wm1` at
+  2,000 px/s with an MP3 (240, the muted speaker) read 14.5 / 16.5 fps.
+- At 160 a frame costs 2.3x as long with an MP3 (draw 55 against 19 ms,
+  push 47 against 25): the decoder takes 55 % of core 1 instead of 42 %
+  and preempts the loop mid-frame, and the SPI bus waits grow with it.
+  Uncapped (`w3`) doesn't help: the frame cap isn't the limit at 160.
+- The ring doesn't notice at either speed: the audio holds, the list
+  doesn't.
+
+*Decoding bench* (`b<n>`: 20 s of audio decoded flat out, output
+discarded):
+
+| File | 160 MHz | 240 MHz |
+|---|---|---|
+| MP3, "One More Time" | 3.1x realtime (32.3 % of a core) | 4.3x (23.2 %) |
+| MP3, "Harder, Better, Faster, Stronger" | 3.0x (33.7 %) | 4.1x (24.3 %) |
+| FLAC, "Stronger" | 3.6x (27.8 %) | 4.4x (22.9 %) |
+| FLAC, "Alligator" | 3.8x (26.2 %) | 4.6x (21.9 %) |
+
+At least 3x realtime at 160: the bench holds.
+
+*`[audio] refill` at a track start* (ms after the request: first audio /
+500 ms buffered / 1,000 ms, steady / full; `wp1` pacing at 1.5x from 500
+ms):
+
+| Start | 160 MHz | 240 MHz |
+|---|---|---|
+| MP3, from stopped (`i`) | 30 / 204 / 546 / 1,157; 38 / 260 / 609 / 919 | 25 / 157 / 505 / 928 |
+| MP3, a skip while playing (`n`, 3 each) | 34-43 / 554-596 / 1,653-1,715 / 2,615-2,698 | 29-38 / 333-348 / 1,379-1,418 / 2,370-2,371 |
+| FLAC, from stopped | 46 / 275 / 2,284 / 4,258 | 39 / 218 / 1,773 / 3,190 |
+| FLAC, a skip (2 each) | 50-51 / 249-322 / 2,040-2,088 / 3,585-3,954 | 46-47 / 206-249 / 1,660-1,665 / 2,950-3,100 |
+
+Slower at 160 (an MP3 skip reaches 500 ms buffered ~240 ms later, full
+~0.3 s later), no underruns, time to first audio within ~10 ms.
+
+*The Dance tab with an MP3 over Bluetooth* ("Harder, Better, Faster,
+Stronger"): 160 `fps=16.8-19.7/24`, draw 9-16 ms, push 8-14 ms; 240
+`fps=25.3-27.3/30`, draw 4.5-7 ms, push 8-14 ms.
+
+*The 60-minute Bluetooth soak at 160* (the default then, a fresh boot;
+`Pz`, an hour of `tone:silence`; the screen off after 30 s as normal; 718
+stats lines, 13:16-14:16): **0 underruns**; `gap=24ms` in every line; the
+ring 1,433-1,486 ms (p50 1,471); the pull rate 43,087-44,609 frames/s (p50
+44,312); internal RAM min 71 K; no disconnects, no `[bt]` events. At the
+end of the hour the queue moved on to the next entry, a Daft Punk MP3,
+which played at 30% for ~50 s over the headphones before it was paused
+(the test's queue order: silence was followed by the MP3s added for the
+run). Its fill after the change: 500 ms at 536 ms, full at 2,580 ms, no
+underruns.
+
+**The decision: the default goes back to 240.** The rule was: 160 stays
+only if the soak has 0 underruns, the scroll stress's fps is within ~15 %
+of 240 with a healthy ring minimum, and the bench holds. The soak (0
+underruns) and the bench (3.0x realtime or more) pass; the ring minimum
+is healthy (1,410 ms at both speeds); **the scroll fps is 51 % lower with
+an MP3 (7.8 against 15.9) and 37 % lower with a FLAC (15.5 against 24.7)**,
+far outside ~15 %. The Dance tab with an MP3 (~18 of 24 against ~26 of
+30) and the track-start fill point the same way. So
+`powerchoice::kDefaultCpuMhz` is 240 again. 160 stays on the Output tab
+("Saves battery, a bit slower", ~5 USB mA streaming) for anyone who
+prefers battery to smoothness.
+
+- Changed: `lib/core/PowerChoices.h` (`kDefaultCpuMhz = 240`, with the
+  reason), test_power_choices (the default, and an invalid stored value's
+  label, now 240), comments in `PowerLab.h` (`Pcb0`: 240) and
+  `DanceRate.h`; this file (item 6, step 6, the battery table's note) and
+  ARCHITECTURE.md (the CPU speed section, the boot log, `Pcb`).
+- `pio test -e native`: 633 of 633 pass. `pio run -e core2`: builds (RAM
+  53,672 B, flash 2,135,019 B, unchanged). Flashed; the boot log reads
+  `[power] CPU 240 MHz from boot (the default)`, `[power] bluetooth power:
+  Normal (-12..+3 dBm)`, `[bt] tx power: -12..+3 dBm (levels 0..5), from
+  the stack's start`; the queue came back at 8 of 27, stopped; the
+  headphones reconnected on the first page and nothing played.
+- "cpu_mhz" is absent (`Pcb0` before the last 160 boot), so the device
+  now runs the new default. A device that saved 160 (the row or `Pcb160`)
+  keeps it: the explicit choice wins.
+
+**Still to do:**
+
+- The Bluetooth power range soak (Low at arm's length and in a pocket;
+  underruns, `gap=`).
+- By ear: a restart while the speaker plays out loud, no pop. Here the
+  speaker was muted; the log shows the amp off before the reset.
+- A tap during a pairing ("Wait for the pairing to finish").
+- The "Restarting at 160 MHz..." toast on screen: it is up only until the
+  reset (≤1.5 s here), too short for the readback. The log has it.
+- The click tracks' beat error at 160/240; the stick figure's rates.
+- Whether the Dance tab should aim lower while the decoder runs (it gets
+  ~17 of 24 at 160 with an MP3 on the speaker).
+- On battery: everything in step 9.
 
 ### Step 9: battery-only validation
 

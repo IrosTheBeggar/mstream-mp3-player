@@ -1,23 +1,18 @@
 #include "app/PowerLab.h"
 
 #include <M5Unified.h>
-#include <Preferences.h>
 #include <esp_bt.h>
 #include <soc/rtc.h>
 
+#include "PowerChoices.h"
 #include "TrackCatalog.h"
 #include "app/BoardPower.h"
+#include "app/PowerSettings.h"
 #include "app/ScreenControl.h"
 #include "storage/LocalStorage.h"
 
 namespace {
-constexpr const char* kPrefs = "power";
-constexpr const char* kPrefsBootMhz = "cpu_mhz";
-
-// What applyBootClock() found and did, for logBootClock().
-uint16_t bootSavedMhz = 0;
-uint32_t bootFromMhz = 0;
-bool bootApplied = false;
+namespace pc = powerchoice;
 
 // M5GFX's Core2 backlight: brightness b > 0 sets DCDC3 to step (b >> 3) + 72
 // of 25 mV from 0.7 V (2.5-3.275 V); 0 switches DCDC3 off.
@@ -35,33 +30,14 @@ uint8_t ledLevel() { return static_cast<uint8_t>(255 - M5.Power.Axp192.readRegis
 }  // namespace
 
 PowerLab::PowerLab(Core2AudioBackend& audio, PlaybackController& player, DanceMode& dance, LocalStorage& storage,
-                   ScreenControl& screen, Hooks hooks)
+                   ScreenControl& screen, PowerSettings& settings, Hooks hooks)
     : audio_(audio),
       player_(player),
       dance_(dance),
       screen_(screen),
+      settings_(settings),
       hooks_(std::move(hooks)),
       probe_(storage, [this](char* buf, size_t size) { describe(buf, size); }) {}
-
-// ---- the boot clock (Pcb) ----
-
-void PowerLab::applyBootClock() {
-  Preferences p;
-  if (!p.begin(kPrefs, false)) return;
-  bootSavedMhz = p.getUShort(kPrefsBootMhz, 0);
-  p.end();
-  bootFromMhz = getCpuFrequencyMhz();
-  // Before Bluetooth starts: 240 <-> 160 retunes the PLL the radio runs
-  // from, which is only safe while the radio is off.
-  if (bootSavedMhz == 160 && bootFromMhz != 160) bootApplied = setCpuFrequencyMhz(160);
-}
-
-void PowerLab::logBootClock() {
-  if (!bootSavedMhz) return;
-  Serial.printf("[power] CPU %lu MHz from boot (saved by Pcb%u%s; Pcb0 goes back to the default)\n",
-                (unsigned long)getCpuFrequencyMhz(), (unsigned)bootSavedMhz,
-                bootApplied ? "" : bootFromMhz == bootSavedMhz ? ", already" : ": COULDN'T SET IT");
-}
 
 // ---- the console ----
 
@@ -104,7 +80,7 @@ void PowerLab::command(const char* a) {
 void PowerLab::help() const {
   Serial.println("[power] P line (5 s), Pl log every 5 s, Pw csv on the card, Pm<name> mark, Pq/Pq1/Pq0 coulomb "
                  "counter; knobs: Pb<0-255> backlight while bright (Pb0 the setting's), Ps0/Ps1 screen off/on (Ps its state), Pc<mhz> cpu now (160<->80), "
-                 "Pcb<160|240|0> cpu from boot (saved), Pt<min>,<max> bt tx levels 0-7, Pe0/1 5V boost, Pg0/1 "
+                 "Pcb<160|240|0> cpu from boot (saved; 0 the default), Pt<min>,<max> bt tx levels 0-7 (a test), Pe0/1 5V boost, Pg0/1 "
                  "green led, Pi0/1 imu, Pa0/1 speaker amp, Pd<ms> loop idle delay (0 auto), Pk0/1 dance tracker + "
                  "taps, Pr0/1 bt background search rest now / a burst again, Pz play tone:silence next");
 }
@@ -132,7 +108,14 @@ void PowerLab::describe(char* buf, size_t size) {
     n += snprintf(buf + n, size - n, "auto");
   }
   if (n < 0 || static_cast<size_t>(n) >= size) return;
-  if (txMin_ >= 0) snprintf(buf + n, size - n, " tx=%+d..%+d dBm", dbm(txMin_), dbm(txMax_));
+  dropReplacedTx();
+  if (txMin_ >= 0) {
+    snprintf(buf + n, size - n, " tx=%+d..%+d dBm (Pt)", dbm(txMin_), dbm(txMax_));
+  } else {
+    char range[16];
+    pc::btRangeText(settings_.btChoice(), range, sizeof(range));
+    snprintf(buf + n, size - n, " tx=%s (%s)", range, pc::btLabel(settings_.btChoice()));
+  }
 }
 
 // ---- the knobs ----
@@ -191,33 +174,30 @@ void PowerLab::cpu(const char* a) {
   if (a[0] == 'b') {
     const char* v = a + 1;
     const long mhz = atol(v);
-    if (!isDigit(v[0]) || (mhz != 0 && mhz != 160 && mhz != 240)) {
-      Serial.println("[power] Pcb<mhz>: the clock from boot, 160 or 240 (0: the default, 240); 80 only at runtime "
-                     "(Pc80): decoding needs more");
+    if (!isDigit(v[0]) || (mhz != 0 && !pc::validCpuMhz(static_cast<uint32_t>(mhz)))) {
+      Serial.printf("[power] Pcb<mhz>: the clock from boot, 160 or 240 (0: the default, %u); 80 only at runtime "
+                    "(Pc80): decoding needs more\n",
+                    (unsigned)pc::kDefaultCpuMhz);
       return;
     }
-    Preferences p;
-    if (!p.begin(kPrefs, false)) return;
-    const uint16_t before = p.getUShort(kPrefsBootMhz, 0);
-    if (mhz == 0 || mhz == 240) {
-      p.remove(kPrefsBootMhz);
-    } else {
-      p.putUShort(kPrefsBootMhz, static_cast<uint16_t>(mhz));
+    // The Output tab's CPU speed is the same value: its row follows ("240
+    // MHz until a restart" while the clock isn't the saved one yet).
+    const uint16_t before = PowerSettings::cpuStored();
+    if (mhz == 0) {
+      settings_.clearCpu();
+    } else if (!settings_.saveCpu(static_cast<uint16_t>(mhz))) {
+      Serial.println("[power] CPU from boot: couldn't save it");
+      return;
     }
-    p.end();
-    Serial.printf("[power] CPU from boot: %s -> %s (saved; restart to apply)\n", before ? String(before).c_str() : "default",
-                  mhz == 160 ? "160" : "default");
+    Serial.printf("[power] CPU from boot: %u MHz%s -> %u MHz%s (saved; restart to apply)\n",
+                  (unsigned)pc::cpuMhzFromStored(before), pc::validCpuMhz(before) ? "" : " (the default)",
+                  (unsigned)settings_.cpuSaved(), mhz ? "" : " (the default)");
     return;
   }
   if (!a[0]) {
-    Preferences p;
-    uint16_t boot = 0;
-    if (p.begin(kPrefs, false)) {
-      boot = p.getUShort(kPrefsBootMhz, 0);
-      p.end();
-    }
-    Serial.printf("[power] CPU %lu MHz (PLL %lu MHz); from boot: %s\n", (unsigned long)cur.freq_mhz,
-                  (unsigned long)cur.source_freq_mhz, boot ? String(boot).c_str() : "default (240, Arduino's F_CPU)");
+    Serial.printf("[power] CPU %lu MHz (PLL %lu MHz); from boot: %u MHz (%s)\n", (unsigned long)cur.freq_mhz,
+                  (unsigned long)cur.source_freq_mhz, (unsigned)settings_.cpuSaved(),
+                  pc::validCpuMhz(PowerSettings::cpuStored()) ? "saved" : "the default");
     return;
   }
   const long mhz = atol(a);
@@ -236,8 +216,8 @@ void PowerLab::cpu(const char* a) {
     // switch would stop and retune the BBPLL, which the Bluetooth radio
     // (on since boot, page scan included) runs from.
     Serial.printf("[power] CPU %lu -> %ld MHz refused: it retunes the PLL (%lu -> %lu MHz) that the Bluetooth radio "
-                  "runs from, and Bluetooth is on from boot. Pcb%ld sets it from the next boot instead (before "
-                  "Bluetooth starts); from 160, Pc80 and Pc160 switch at runtime\n",
+                  "runs from, and Bluetooth is on from boot. Pcb%ld (or the Output tab's CPU speed) sets "
+                  "it from the next boot instead (before Bluetooth starts); from 160, Pc80 and Pc160 switch at runtime\n",
                   (unsigned long)cur.freq_mhz, mhz, (unsigned long)cur.source_freq_mhz,
                   (unsigned long)want.source_freq_mhz, mhz == 80 ? 160L : mhz);
     return;
@@ -261,7 +241,17 @@ void PowerLab::cpu(const char* a) {
                 mhz == 80 ? ": back to 160 by itself when audio starts" : "");
 }
 
+void PowerLab::dropReplacedTx() {
+  if (txMin_ < 0 || settings_.btChanges() == txChanges_) return;
+  char range[16];
+  pc::btRangeText(settings_.btChoice(), range, sizeof(range));
+  Serial.printf("[power] bt tx power: Pt's %+d..%+d dBm test replaced by the Bluetooth power row: %s (%s)\n",
+                dbm(txMin_), dbm(txMax_), pc::btLabel(settings_.btChoice()), range);
+  txMin_ = txMax_ = -1;
+}
+
 void PowerLab::txPower(const char* a) {
+  dropReplacedTx();
   esp_power_level_t lo, hi;
   const esp_err_t got = esp_bredr_tx_power_get(&lo, &hi);
   if (!a[0]) {
@@ -269,14 +259,18 @@ void PowerLab::txPower(const char* a) {
       Serial.printf("[power] bt tx power: can't read it (%s)\n", esp_err_to_name(got));
       return;
     }
-    Serial.printf("[power] bt tx power: levels %d..%d (%+d..%+d dBm)%s\n", lo, hi, dbm(lo), dbm(hi),
-                  txMin_ < 0 ? " (the default)" : "");
+    char range[16];
+    pc::btRangeText(settings_.btChoice(), range, sizeof(range));
+    Serial.printf("[power] bt tx power: levels %d..%d (%+d..%+d dBm)%s; the setting: %s (%s)\n", lo, hi, dbm(lo),
+                  dbm(hi), txMin_ < 0 ? "" : " (Pt, a test until restart)", pc::btLabel(settings_.btChoice()), range);
     return;
   }
   int mn = -1, mx = -1;
   if (sscanf(a, "%d,%d", &mn, &mx) != 2 || mn < 0 || mx > 7 || mn > mx) {
-    Serial.println("[power] Pt<min>,<max>: BR/EDR TX power levels 0-7 (-12, -9, -6, -3, 0, +3, +6, +9 dBm); the "
-                   "default is 4,5 (0..+3 dBm)");
+    const pc::TxLevels l = pc::btLevels(settings_.btChoice());
+    Serial.printf("[power] Pt<min>,<max>: BR/EDR TX power levels 0-7 (-12, -9, -6, -3, 0, +3, +6, +9 dBm), a test "
+                  "until restart; the setting (Output tab: Bluetooth power) is %s, %u,%u\n",
+                  pc::btLabel(settings_.btChoice()), (unsigned)l.min, (unsigned)l.max);
     return;
   }
   const esp_err_t err =
@@ -287,6 +281,7 @@ void PowerLab::txPower(const char* a) {
   }
   txMin_ = static_cast<int8_t>(mn);
   txMax_ = static_cast<int8_t>(mx);
+  txChanges_ = settings_.btChanges();
   if (audio_.bluetooth().connected()) {
     // The controller reads back the old range while a link is up (seen on
     // the device): what was asked is what counts, from the next connection.
@@ -433,6 +428,7 @@ void PowerLab::playSilence() {
 }
 
 void PowerLab::loop(uint32_t nowMs) {
+  dropReplacedTx();  // (its line right after the row's tap, not at the next P)
   probe_.loop(nowMs);
   // Pc80 is for quiet spells: audio needs the clock back.
   if (cpuReturnMhz_ && getCpuFrequencyMhz() == 80 && audioBusy()) {

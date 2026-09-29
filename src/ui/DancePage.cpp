@@ -1,5 +1,5 @@
-// The Dance tab (spec §6.5): the dancer in its box (DanceMode draws it,
-// ~30 frames a second, only the rectangle that moved), with the beat on the
+// The Dance tab (spec §6.5): the dancer in its box (DanceMode draws it, 24-30
+// frames a second, 10 while it idles, only the rectangle that moved), with the beat on the
 // left, the dancer's name on the right and the track at the bottom, redrawn
 // only when a value changes, at most twice a second. A tap on the dancer
 // switches it (crab, stick figure). There is no tap zone at the bottom any
@@ -158,8 +158,8 @@ void DancePage::onEvent(const InputEvent& e) {
 
 void DancePage::describe(char* buf, size_t size) const {
   DanceMode& d = const_cast<Ui&>(ui_).dance();
-  snprintf(buf, size, "Dance: %s, %.1f BPM, confidence %.2f%s, %.0f fps", dance::skinName(d.skin()), d.bpm(),
-           d.confidence(), d.locked() ? ", locked" : "", d.fps());
+  snprintf(buf, size, "Dance: %s, %.1f BPM, confidence %.2f%s, %.0f fps (of %lu)", dance::skinName(d.skin()), d.bpm(),
+           d.confidence(), d.locked() ? ", locked" : "", d.fps(), static_cast<unsigned long>(d.targetFps()));
 }
 
 }  // namespace ui

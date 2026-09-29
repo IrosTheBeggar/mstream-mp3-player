@@ -19,10 +19,12 @@
 #include "LibrarySynth.h"
 #include "ListLayout.h"
 #include "OutputModel.h"
+#include "PowerChoices.h"
 #include "QueueView.h"
 #include "ScreenPower.h"
 #include "SleepTimer.h"
 #include "TabBarModel.h"
+#include "TextFit.h"
 #include "TextFold.h"
 #include "UiText.h"
 
@@ -636,6 +638,57 @@ void test_idle_power_off_texts_fit() {
   }
 }
 
+// CPU speed and Bluetooth power (PowerChoices; ENERGY.md items 6 and 7):
+// the rows (as the screen's), every choice in its pill and every line
+// beside it, the restart dialog, its toast, the next boot's toast, and
+// About's power row.
+void test_power_settings_texts_fit() {
+  using namespace uitext;
+  namespace pc = powerchoice;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
+  fits(body, kCpuTitle, kSettingValueSubW);
+  fits(body, kBtPowerTitle, kSettingValueSubW);
+  char buf[64];
+  for (uint16_t mhz : pc::kCpuMhz) {
+    fits(body, pc::cpuLabel(mhz), kSettingPillW - kSettingPillPad);
+    fits(small, pc::cpuSub(mhz, mhz, buf, sizeof(buf)), kSettingValueSubW);
+    // Saved, not running yet (the console's Pcb): what runs until a restart.
+    fits(small, pc::cpuSub(pc::otherCpuMhz(mhz), mhz, buf, sizeof(buf)), kSettingValueSubW);
+    pc::cpuDialogTitle(mhz, buf, sizeof(buf));
+    fits(bold, buf, kDialogTitleW);
+    pc::cpuRestartingText(mhz, buf, sizeof(buf));
+    fits(body, buf, kToastTextRight - kToastTextX);
+    pc::cpuBootText(mhz, buf, sizeof(buf));
+    fits(body, buf, kToastTextRight - kToastTextX);
+  }
+  for (int c = 0; c < pc::kBtChoices; ++c) {
+    fits(body, pc::btLabel(c), kSettingPillW - kSettingPillPad);
+    fits(small, pc::btSub(c, false), kSettingValueSubW);
+  }
+  fits(small, pc::btSub(pc::kBtNormal, true), kSettingValueSubW);
+  // The dialog's body: 3 lines of Small over 260 px, none cut.
+  textfit::Font f;
+  f.ctx = const_cast<Vlw*>(&small);
+  f.width = [](void* ctx, const char* s) { return static_cast<const Vlw*>(ctx)->width(s); };
+  char lines[4][96];
+  const int n = textfit::wrap(f, kCpuDialogBody, strlen(kCpuDialogBody), kDialogTitleW, 3, &lines[0][0], sizeof(lines[0]));
+  TEST_ASSERT_TRUE(n <= 3);
+  std::string joined;
+  for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
+  TEST_ASSERT_EQUAL_STRING(kCpuDialogBody, joined.c_str());
+  fits(bold, kCpuRestart, kDialogButtonTextW);
+  fits(body, kCpuWaitPairing, kToastTextRight - kToastTextX);
+  // About: its label (Small), and every value in Body (all fit; Small is
+  // the fallback).
+  fits(small, kAboutPower, kAboutValueW);
+  for (uint16_t mhz : pc::kCpuMhz) {
+    for (int c = 0; c < pc::kBtChoices; ++c) {
+      pc::aboutText(mhz, c, buf, sizeof(buf));
+      fits(body, buf, kAboutValueW);
+    }
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_jump_letters_match_the_index_buckets);
@@ -654,5 +707,6 @@ int main(int, char**) {
   RUN_TEST(test_waiting_texts_fit);
   RUN_TEST(test_sleep_timer_texts_fit);
   RUN_TEST(test_idle_power_off_texts_fit);
+  RUN_TEST(test_power_settings_texts_fit);
   return UNITY_END();
 }
