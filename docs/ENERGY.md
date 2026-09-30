@@ -146,7 +146,12 @@ the Pair screen's scan while it stays open.
    The Powerbeats do that.
 4. **No background inquiry while a device is remembered.** Scans by name
    are limited to 2 min after boot or after a listener ask, and only when
-   nothing is remembered. The Pair screen's scan stops after 2 min and
+   nothing is remembered and there is a name to look for: a developer
+   build's `BT_SINK_NAME` (or the console's one-scan `Bs`). A release
+   build has none, so with nothing remembered it never scans by itself,
+   at the boot or on any ask: it rests at once, connectable only, and
+   pairing is the Pair screen's alone (`SinkSearch`).
+   The Pair screen's scan stops after 2 min and
    offers "Search again". It also stops when the page is left or the
    screen goes off. While the page stays up with its scan stopped, the
    background search stays held off (the old headphones would link while
@@ -857,8 +862,11 @@ on-device checks below are still to do.** As built:
   reads "Back in range? / Tap Connect.", and the lost dialog "Stopped
   looking for them: Play tries again", instead of "They'll reconnect
   when switched on" (they may be on, their own reconnect given up).
-- Scan deadlines: the scan by name (none remembered) runs 2 min after the
-  boot or an ask, then rests. The Pair page stops its scan after 2 min
+- Scan deadlines: the scan by name (none remembered, a build with
+  `BT_SINK_NAME`) runs 2 min after the boot or an ask, then rests. A
+  release build doesn't scan at all (`sinksearch::mayScan()`; the
+  library's own stack-up scan is held off too): `start()` with nothing
+  remembered and no name goes straight to Resting. The Pair page stops its scan after 2 min
   (`PairSearch`) and shows "Search again" (a tap starts another 2 min).
   Since step 2 it also stops when the screen goes off. Fixed in review:
   those stops (`BtSink::pausePairScan()`) keep the background search held
@@ -898,6 +906,8 @@ on-device checks below are still to do.** As built:
 - the burst restarts on each kind of ask;
 - a page in flight still counts as try 1 of a Play's burst;
 - the scan deadline with none remembered;
+- no scan at all with none remembered and no name (a release build), at
+  the boot and on every ask (added when pairing became the Pair screen's alone);
 - resting at once when the screen is off and nothing plays.
 
 test_play_gate stays green. test_ui_output checks the new card text and
@@ -913,6 +923,11 @@ that it fits.
 - The Pair screen stops at 2 min with "Search again".
 - Rerun the ARCHITECTURE.md reconnect checks, with the "switch them off
   for 2 minutes" case adjusted to the new schedule.
+- Checked on the device (2026-09-30): with nothing remembered and no name
+  (the console's `Bf` boot and `Bn` session, which leave the stored
+  pairing alone), no scan at the boot or on any ask for 6 min: no
+  `[stats] bt` line (search resting, radio 0 %). Details in
+  ARCHITECTURE.md (Developer tests).
 
 ### Step 2: screen policy and the swallowed wake (item 2)
 

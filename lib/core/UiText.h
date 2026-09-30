@@ -52,6 +52,12 @@ inline constexpr int kToastTextRight = 306;  // a note (Ui::warn) on one line, n
 // A B click refused by the pocket rule (the screen woke from off and
 // nothing touched the glass since; ScreenPower::unattended()).
 inline constexpr const char* kTouchFirst = "Tap the screen first, then B plays";
+// Headphones asked for with none paired (the B hold, a play on Bluetooth):
+// nothing scans for them, so the note says where pairing is. Ui::warn on
+// two lines (Toast's "what: where"): the part before ": " in Small over
+// the rest in Body, each from kToastTextX to 306 (no buttons).
+inline constexpr const char* kNoHeadphones = "No headphones paired: Output > Pair new headphones";
+inline constexpr int kToastTwoLineW = 306 - kToastTextX;
 
 // ---- the empty states (ui/EmptyState): two buttons ----
 // The primary (Bold, its icon 26 px + 8 before the text) and the second

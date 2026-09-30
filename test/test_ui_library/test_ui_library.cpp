@@ -449,6 +449,17 @@ void test_output_texts_fit() {
   fits(small, kBtLostHintLine2, kBtHintW);
   // The pocket rule's note (Ui::warn: Body on one line, no buttons).
   fits(body, kTouchFirst, kToastTextRight - kToastTextX);
+  // None paired (a B hold, a play on Bluetooth): too long for one line, so
+  // the toast takes its two ("No headphones paired" in Small over "Output
+  // > Pair new headphones" in Body).
+  {
+    const char* colon = strstr(kNoHeadphones, ": ");
+    TEST_ASSERT_NOT_NULL(colon);
+    TEST_ASSERT_TRUE(body.width(kNoHeadphones) > kToastTextRight - kToastTextX);
+    const std::string what(kNoHeadphones, colon);
+    fits(small, what.c_str(), kToastTwoLineW);
+    fits(body, colon + 2, kToastTwoLineW);
+  }
   // The Pair screen once its search stopped.
   fits(bold, kPairSearchAgain, 320 - 60);
   fits(small, kPairSearchStopped, kPairHintW);

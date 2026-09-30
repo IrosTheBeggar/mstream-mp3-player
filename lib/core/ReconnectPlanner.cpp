@@ -1,11 +1,13 @@
 #include "ReconnectPlanner.h"
 
-void ReconnectPlanner::start(Why, bool remembered, uint32_t nowMs) {
+void ReconnectPlanner::start(Why, bool remembered, bool canScan, uint32_t nowMs) {
   sinceMs_ = nowMs;
   step_ = 0;
   pages_ = 0;
   if (!remembered) {
-    phase_ = Phase::Scan;
+    // Nothing to page. No name to look for (a release build): quiet,
+    // connectable only; the Pair screen is the way to headphones.
+    phase_ = canScan ? Phase::Scan : Phase::Resting;
     return;
   }
   phase_ = Phase::Burst;
@@ -56,7 +58,7 @@ ReconnectPlanner::Do ReconnectPlanner::step(const In& in) {
         // paired meanwhile. No inquiry while remembered.
         if (scanning) return Do::StopScan;
         if (in.state != Lib::Unconnected) return Do::Nothing;  // still connecting to what it found
-        start(Why::Ask, true, in.nowMs);
+        start(Why::Ask, true, in.canScan, in.nowMs);
         return step(in);
       }
       if (!in.canScan || elapsed(in.nowMs, sinceMs_, kScanForMs)) {
@@ -74,9 +76,9 @@ ReconnectPlanner::Do ReconnectPlanner::step(const In& in) {
 
   // Burst, Backoff: remembered headphones are paged, never scanned for.
   if (!in.remembered) {
-    // Forgotten meanwhile: a scan by name instead (Resting if there is
-    // no name to look for).
-    phase_ = Phase::Scan;
+    // Forgotten meanwhile: a scan by name instead, or Resting with no
+    // name to look for.
+    phase_ = in.canScan ? Phase::Scan : Phase::Resting;
     sinceMs_ = in.nowMs;
     return step(in);
   }

@@ -140,7 +140,12 @@ headphones.
   needs PlatformIO Core ≥ 6.2.0, and links every library object unless
   `lib_archive = yes` is set.
 - **Picking headphones by signal strength is unsafe.** A TV in the next room
-  crossed a −70 dBm threshold and got paired. Pairing is now by name.
+  crossed a −70 dBm threshold and got paired. The PoC then paired by name
+  (and, with no name, only below −55 dBm). Today the Core2 never picks
+  headphones by itself: the listener pairs them on Output > Pair new
+  headphones, a release build never scans on its own, and only a developer
+  build's `BT_SINK_NAME` (or the console's one-scan `Bs`) is ever looked
+  for (`SinkSearch`, [ARCHITECTURE.md](ARCHITECTURE.md#bluetooth)).
 - **ESP32-A2DP defaults** needed changing: auto-reconnect is off by default,
   and when on it retries 1,000 times (hours) before scanning again.
 - **The stream can start late after a reconnect.** After an auto-reconnect the

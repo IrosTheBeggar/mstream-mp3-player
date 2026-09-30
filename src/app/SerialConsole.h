@@ -13,7 +13,7 @@
 //   v per-beat log on/off
 // and commands that take an argument, ended with Enter:
 //   i<n> play track n (0-based)   b<n> benchmark decoding track n
-//   c<name> connect to headphones whose name contains <name> (saved)
+//   c<name> the name a build with BT_SINK_NAME scans for, with none remembered (saved)
 //   h<n> Bluetooth headroom -n dB, 0-12 (a diagnostic, not saved; default 2)
 //   t<bpm> tempo prior for the beat tracker (t or t0 clears it; a track change does too)
 //   y<ms> dance latency offset, + later / - earlier (not saved)
@@ -32,6 +32,13 @@
 //        minutes, Is<sec> in seconds (until restart), I0 the setting's again; tests:
 //        Iu1/Iu0 pretend on battery (the last-moment USB read stays real), Ib<sec>
 //        the next boot's toast note
+//   B... Bluetooth tests that leave the listener's pairing alone: B status;
+//        Bs auto-pair by signal for the next scan (RAM only, off at boot, logged;
+//        starts that scan: none may be remembered, so Bn first), Bs0 off; Bf the next boot as a
+//        fresh unit (NVS flag cleared by that boot: as if nothing were remembered
+//        and there were no BT_SINK_NAME, the stored address and bond untouched;
+//        restarts now); Bn the same for this session (RAM only, not while linked
+//        or pairing), Bn0 back
 // and the UI spike's tools (docs/UI-SPIKE.md), also ended with Enter, the
 // text after the letter passed on as it is:
 //   u...  input lab (u toggles; u0-u3 modes; us summary)
@@ -79,6 +86,8 @@ public:
     std::function<void(const char*)> sleep;
     // The idle power-off: the argument as typed (may be "").
     std::function<void(const char*)> idle;
+    // Bluetooth tests (B): the argument as typed (may be "").
+    std::function<void(const char*)> bluetoothTest;
   };
 
   explicit SerialConsole(Actions actions) : actions_(std::move(actions)) {}
@@ -90,7 +99,7 @@ public:
 private:
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
-    InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle,
+    InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle, BluetoothTest,
   };
 
   Actions actions_;

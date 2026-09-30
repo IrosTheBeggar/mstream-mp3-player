@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "ReconnectPlanner.h"
+#include "SinkSearch.h"
 
 using Lib = ReconnectPlanner::Lib;
 using Do = ReconnectPlanner::Do;
@@ -97,7 +98,7 @@ void tearDown() {}
 void test_the_back_off_schedule() {
   Sim s;
   const uint32_t t0 = s.now;
-  s.p.start(Why::Drop, true, s.now);
+  s.p.start(Why::Drop, true, true, s.now);
   TEST_ASSERT_EQUAL(Do::Page, s.step());
   TEST_ASSERT_EQUAL(Phase::Burst, s.p.phase());
   TEST_ASSERT_EQUAL_INT(1, s.p.burstTry());
@@ -117,7 +118,7 @@ void test_the_back_off_schedule() {
 // answer (the page timeout), not before.
 void test_the_burst_ends_once_its_last_page_has_its_answer() {
   Sim s;
-  s.p.start(Why::Drop, true, s.now);
+  s.p.start(Why::Drop, true, true, s.now);
   s.step();
   s.run(20000);  // the third page, just made
   TEST_ASSERT_EQUAL_size_t(3, s.pages.size());
@@ -132,7 +133,7 @@ void test_the_burst_ends_once_its_last_page_has_its_answer() {
 // A burst's next page waits for the last one's answer, however slow.
 void test_a_page_on_its_way_is_never_paged_over() {
   Sim s;
-  s.p.start(Why::Drop, true, s.now);
+  s.p.start(Why::Drop, true, true, s.now);
   s.step();
   s.p.pageMade(s.now);  // (the step made it; again, as if still going)
   // No answer reported, but the page timeout passes: it no longer holds
@@ -148,7 +149,7 @@ void test_no_discovery_while_remembered() {
   Sim s;
   s.state = Lib::Discovering;  // e.g. left from before they were remembered
   s.discoveryActive = true;
-  s.p.start(Why::Drop, true, s.now);
+  s.p.start(Why::Drop, true, true, s.now);
   TEST_ASSERT_EQUAL(Do::StopScan, s.step());
   s.run(20 * 60000);
   TEST_ASSERT_EQUAL_INT(0, s.scans);
@@ -165,12 +166,12 @@ void test_no_discovery_while_remembered() {
 // (Opening the Output tab isn't one: the resting card must be seen.)
 void test_an_ask_restarts_the_burst() {
   Sim s;
-  s.p.start(Why::Drop, true, s.now);
+  s.p.start(Why::Drop, true, true, s.now);
   s.step();
   s.run(70000);  // in the back-off, its first page made and answered
   TEST_ASSERT_EQUAL(Phase::Backoff, s.p.phase());
   size_t before = s.pages.size();
-  s.p.start(Why::Ask, true, s.now);
+  s.p.start(Why::Ask, true, true, s.now);
   TEST_ASSERT_EQUAL(Phase::Burst, s.p.phase());
   TEST_ASSERT_EQUAL(Do::Page, s.step());
   TEST_ASSERT_EQUAL_INT(1, s.p.burstTry());
@@ -181,7 +182,7 @@ void test_an_ask_restarts_the_burst() {
   TEST_ASSERT_EQUAL(Phase::Resting, s.p.phase());
   before = s.pages.size();
   const uint32_t askMs = s.now;
-  s.p.start(Why::Ask, true, s.now);
+  s.p.start(Why::Ask, true, true, s.now);
   TEST_ASSERT_EQUAL(Do::Page, s.step());
   s.run(10 * 60000);
   TEST_ASSERT_EQUAL(Phase::Backoff, s.p.phase());
@@ -196,7 +197,7 @@ void test_an_ask_restarts_the_burst() {
 // two more follow, and only then the back-off.
 void test_a_page_in_flight_counts_as_try_1_of_a_plays_burst() {
   Sim s;
-  s.p.start(Why::Drop, true, s.now);
+  s.p.start(Why::Drop, true, true, s.now);
   s.step();
   s.run(49000);
   TEST_ASSERT_EQUAL(Phase::Backoff, s.p.phase());
@@ -204,7 +205,7 @@ void test_a_page_in_flight_counts_as_try_1_of_a_plays_burst() {
   TEST_ASSERT_EQUAL_size_t(4, s.pages.size());
   TEST_ASSERT_TRUE(s.p.pageOnItsWay(s.now));
   const size_t before = s.pages.size();
-  s.p.start(Why::Ask, true, s.now);  // the play waits: BtSink::connect()
+  s.p.start(Why::Ask, true, true, s.now);  // the play waits: BtSink::connect()
   TEST_ASSERT_EQUAL_INT(1, s.p.burstTry());
   TEST_ASSERT_EQUAL(Do::Nothing, s.step());  // not paged over
   s.run(kPageTimeoutMs);                     // its answer: none
@@ -214,7 +215,7 @@ void test_a_page_in_flight_counts_as_try_1_of_a_plays_burst() {
   // The same in the boot's case: the library's page at stack-up is try 1.
   Sim b;
   b.p.pageMade(b.now);  // av_hdl_stack_evt's connect_to(), before the planner starts
-  b.p.start(Why::Boot, true, b.now + 20);
+  b.p.start(Why::Boot, true, true, b.now + 20);
   TEST_ASSERT_EQUAL_INT(1, b.p.burstTry());
   b.now += 20;
   TEST_ASSERT_EQUAL(Do::Nothing, b.step());
@@ -224,7 +225,7 @@ void test_a_page_in_flight_counts_as_try_1_of_a_plays_burst() {
 void test_a_page_that_links_ends_the_search() {
   Sim s;
   s.answers = true;
-  s.p.start(Why::Ask, true, s.now);
+  s.p.start(Why::Ask, true, true, s.now);
   s.step();
   s.run(2000);
   TEST_ASSERT_TRUE(s.linked);
@@ -238,7 +239,7 @@ void test_a_page_that_links_ends_the_search() {
 void test_the_scan_deadline_with_none_remembered() {
   Sim s;
   s.remembered = false;
-  s.p.start(Why::Boot, false, s.now);
+  s.p.start(Why::Boot, false, true, s.now);
   TEST_ASSERT_EQUAL(Phase::Scan, s.p.phase());
   TEST_ASSERT_EQUAL(Do::Scan, s.step());
   const uint32_t t0 = s.now;
@@ -253,7 +254,7 @@ void test_the_scan_deadline_with_none_remembered() {
   TEST_ASSERT_EQUAL_INT(1, s.scans);
   TEST_ASSERT_EQUAL_size_t(0, s.pages.size());
   // An ask scans again, for as long.
-  s.p.start(Why::Ask, false, s.now);
+  s.p.start(Why::Ask, false, true, s.now);
   TEST_ASSERT_EQUAL(Do::Scan, s.step());
   // A scan stopped by someone else (the stack) while still in time: again.
   s.state = Lib::Unconnected;
@@ -263,9 +264,82 @@ void test_the_scan_deadline_with_none_remembered() {
   Sim f;
   f.remembered = false;
   f.canScan = false;
-  f.p.start(Why::Ask, false, f.now);
+  f.p.start(Why::Ask, false, false, f.now);
   TEST_ASSERT_EQUAL(Do::Nothing, f.step());
   TEST_ASSERT_EQUAL(Phase::Resting, f.p.phase());
+}
+
+// A release build (no BT_SINK_NAME: sinksearch::mayScan() says no) with
+// nothing remembered never scans: not at the boot, not on any ask (a play
+// waiting, Connect, a B hold, the console's o or Pr1, the Pair screen
+// closing: all start(Ask)), not in an hour. It rests at once, connectable
+// only; no page either (there is nobody to page).
+void test_no_name_nothing_remembered_never_scans() {
+  sinksearch::Setup release;  // no name, not forgotten, no Bs
+  Sim s;
+  s.remembered = false;
+  s.canScan = sinksearch::mayScan(false, release);
+  TEST_ASSERT_FALSE(s.canScan);
+  s.p.start(Why::Boot, false, s.canScan, s.now);
+  TEST_ASSERT_EQUAL(Phase::Resting, s.p.phase());  // straight away: never "scan" on the card
+  TEST_ASSERT_EQUAL(Do::Nothing, s.step());
+  s.run(60 * 60000);
+  for (int ask = 0; ask < 5; ++ask) {
+    s.p.start(Why::Ask, false, s.canScan, s.now);
+    TEST_ASSERT_EQUAL(Phase::Resting, s.p.phase());
+    s.run(10 * 60000);
+  }
+  TEST_ASSERT_EQUAL_INT(0, s.scans);
+  TEST_ASSERT_EQUAL_size_t(0, s.pages.size());
+  // A scan found running (the library's, at stack-up) is stopped, and
+  // none follows.
+  s.state = Lib::Discovering;
+  s.discoveryActive = true;
+  TEST_ASSERT_EQUAL(Do::StopScan, s.step());
+  s.run(10 * 60000);
+  TEST_ASSERT_EQUAL_INT(0, s.scans);
+  // A developer build (a name) scans, as before; so does Bs's one scan.
+  sinksearch::Setup dev;
+  dev.name = "SPYDRONE";
+  Sim d;
+  d.remembered = false;
+  d.canScan = sinksearch::mayScan(false, dev);
+  d.p.start(Why::Boot, false, d.canScan, d.now);
+  TEST_ASSERT_EQUAL(Phase::Scan, d.p.phase());
+  TEST_ASSERT_EQUAL(Do::Scan, d.step());
+  sinksearch::Setup bs;
+  bs.bySignal = true;
+  TEST_ASSERT_TRUE(sinksearch::mayScan(false, bs));
+}
+
+// The name taken away in the middle of a scan (the fresh-unit test, Bs
+// used up): the scan stops, Resting.
+void test_a_scan_stops_when_nothing_may_be_looked_for() {
+  Sim s;
+  s.remembered = false;
+  s.p.start(Why::Ask, false, true, s.now);
+  TEST_ASSERT_EQUAL(Do::Scan, s.step());
+  s.run(5000);
+  s.canScan = false;
+  TEST_ASSERT_EQUAL(Do::StopScan, s.step());
+  TEST_ASSERT_EQUAL(Phase::Resting, s.p.phase());
+  s.run(30 * 60000);
+  TEST_ASSERT_EQUAL_INT(1, s.scans);
+}
+
+// Remembered headphones: never an inquiry, whatever may be looked for
+// (a name, Bs): they are paged.
+void test_remembered_never_scans_whatever_the_setup() {
+  sinksearch::Setup any;
+  any.name = "SPYDRONE";
+  any.bySignal = true;
+  TEST_ASSERT_FALSE(sinksearch::mayScan(true, any));
+  Sim s;
+  s.canScan = sinksearch::mayScan(true, any);
+  s.p.start(Why::Boot, true, s.canScan, s.now);
+  TEST_ASSERT_EQUAL(Do::Page, s.step());
+  s.run(20 * 60000);
+  TEST_ASSERT_EQUAL_INT(0, s.scans);
 }
 
 // The scan found them by name and the connection failed: they're
@@ -273,7 +347,7 @@ void test_the_scan_deadline_with_none_remembered() {
 void test_a_failed_connection_to_what_the_scan_found_pages_it() {
   Sim s;
   s.remembered = false;
-  s.p.start(Why::Boot, false, s.now);
+  s.p.start(Why::Boot, false, true, s.now);
   s.step();
   s.run(5000);
   // Found: the library stops the scan and connects (DISCOVERED, CONNECTING).
@@ -297,14 +371,14 @@ void test_a_failed_connection_to_what_the_scan_found_pages_it() {
 void test_resting_at_once_when_the_screen_is_off_and_nothing_plays() {
   Sim s;
   s.quiet = true;
-  s.p.start(Why::Drop, true, s.now);
+  s.p.start(Why::Drop, true, true, s.now);
   s.step();
   s.run(60 * 60000);
   TEST_ASSERT_EQUAL_size_t(3, s.pages.size());
   TEST_ASSERT_EQUAL(Phase::Resting, s.p.phase());
   // Going quiet in the middle of the back-off rests at once too.
   Sim b;
-  b.p.start(Why::Drop, true, b.now);
+  b.p.start(Why::Drop, true, true, b.now);
   b.step();
   b.run(3 * 60000);
   TEST_ASSERT_EQUAL(Phase::Backoff, b.p.phase());
@@ -322,7 +396,7 @@ void test_resting_at_once_when_the_screen_is_off_and_nothing_plays() {
 void test_the_librarys_connection_is_waited_for() {
   Sim s;
   s.state = Lib::Connecting;
-  s.p.start(Why::Boot, true, s.now);
+  s.p.start(Why::Boot, true, true, s.now);
   s.run(20000);
   TEST_ASSERT_EQUAL_size_t(0, s.pages.size());
   s.state = Lib::Unconnected;  // its 2-heartbeat timeout, or the DISCONNECTED
@@ -333,7 +407,7 @@ void test_the_librarys_connection_is_waited_for() {
 // scan by name if there's a name to look for, else rest.
 void test_forgotten_mid_backoff() {
   Sim s;
-  s.p.start(Why::Drop, true, s.now);
+  s.p.start(Why::Drop, true, true, s.now);
   s.step();
   s.run(60000);
   s.remembered = false;
@@ -352,12 +426,12 @@ void test_idle_and_rest() {
   TEST_ASSERT_EQUAL(Phase::Idle, s.p.phase());
   s.run(60000);
   TEST_ASSERT_EQUAL_size_t(0, s.pages.size());
-  s.p.start(Why::Drop, true, s.now);
+  s.p.start(Why::Drop, true, true, s.now);
   s.step();
   s.p.rest();
   s.run(60 * 60000);
   TEST_ASSERT_EQUAL_size_t(1, s.pages.size());
-  s.p.start(Why::Ask, true, s.now);
+  s.p.start(Why::Ask, true, true, s.now);
   s.p.stop();
   s.run(60000);
   TEST_ASSERT_EQUAL_size_t(1, s.pages.size());
@@ -367,7 +441,7 @@ void test_the_schedule_survives_millis_wraparound() {
   Sim s;
   s.now = 0xFFFF0000u;
   const uint32_t t0 = s.now;
-  s.p.start(Why::Drop, true, s.now);
+  s.p.start(Why::Drop, true, true, s.now);
   s.step();
   s.run(20 * 60000);
   TEST_ASSERT_EQUAL_size_t(8, s.pages.size());
@@ -407,6 +481,9 @@ int main(int, char**) {
   RUN_TEST(test_a_page_in_flight_counts_as_try_1_of_a_plays_burst);
   RUN_TEST(test_a_page_that_links_ends_the_search);
   RUN_TEST(test_the_scan_deadline_with_none_remembered);
+  RUN_TEST(test_no_name_nothing_remembered_never_scans);
+  RUN_TEST(test_a_scan_stops_when_nothing_may_be_looked_for);
+  RUN_TEST(test_remembered_never_scans_whatever_the_setup);
   RUN_TEST(test_a_failed_connection_to_what_the_scan_found_pages_it);
   RUN_TEST(test_resting_at_once_when_the_screen_is_off_and_nothing_plays);
   RUN_TEST(test_the_librarys_connection_is_waited_for);

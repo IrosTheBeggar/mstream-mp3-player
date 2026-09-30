@@ -107,6 +107,10 @@ bool SerialConsole::poll() {
           Serial.printf("> idle power-off \"%s\"\n", arg_.c_str());
           if (actions_.idle) actions_.idle(arg_.c_str());
           break;
+        case Pending::BluetoothTest:
+          Serial.printf("> bluetooth test \"%s\"\n", arg_.c_str());
+          if (actions_.bluetoothTest) actions_.bluetoothTest(arg_.c_str());
+          break;
         case Pending::None:
           break;
       }
@@ -145,6 +149,7 @@ bool SerialConsole::poll() {
       case 'P': pending_ = Pending::Power; arg_ = ""; break;
       case 'T': pending_ = Pending::Sleep; arg_ = ""; break;
       case 'I': pending_ = Pending::Idle; arg_ = ""; break;
+      case 'B': pending_ = Pending::BluetoothTest; arg_ = ""; break;
       default: break;  // newlines etc.
     }
   }

@@ -30,7 +30,12 @@
 //     the queue emptied): the ask is withdrawn too, so a link that comes
 //     later says nothing ("Now playing on" while paused would be wrong);
 //   - the output isn't Bluetooth any more while waiting (silent test mode):
-//     the wait ends paused.
+//     the wait ends paused;
+//   - no headphones are paired and nothing could find any (a release build
+//     never scans by itself: SinkSearch): there is nothing to wait for. The
+//     wait ends paused at once, nothing is asked of the radio, and the UI
+//     says where pairing is. Not while the Pair screen has the radio: a
+//     play waits for the pairing under way there.
 // The listener's own ways out are the player's: a tap on play (or B) while
 // waiting cancels it (Paused), and playOnSpeaker() is the explicit choice of
 // the speaker. Nothing moves to the speaker by itself: every way out of a
@@ -59,6 +64,7 @@ public:
     bool linked = false;                  // the headphones are connected (BtSink::connected())
     BtLink link;                          // what the link is doing (BtSink::link())
     bool sessionFailed = false;           // BtSession::failed(): the tries ran out
+    bool nothingToFind = false;           // BtSink::nothingToFind(): none paired, no scan may find any
     uint32_t nowMs = 0;
   };
 
@@ -71,12 +77,15 @@ public:
     GiveUp,   // the burst failed: PlaybackController::cancelWait(), BtSession::withdraw(failed), the notice
     Cancel,   // the output isn't Bluetooth any more: PlaybackController::cancelWait(), BtSession::withdraw()
     Ended,    // the wait ended some other way (cancelled, the speaker, stopped): BtSession::withdraw()
+    NotPaired,  // nothing to wait for (none paired): PlaybackController::cancelWait(),
+                // BtSession::withdraw(); the UI points to Output > Pair new headphones
   };
 
   Do update(const In& in);
   // update(), with what it asks of the player and the session done here
   // (Connect/Track: session.connect(); Release: player.release(); GiveUp,
-  // Cancel: player.cancelWait(); GiveUp, Cancel, Ended: session.withdraw()).
+  // Cancel, NotPaired: player.cancelWait(); GiveUp, Cancel, Ended,
+  // NotPaired: session.withdraw()).
   // main.cpp is left the radio (Connect: BtSink::connect()) and what the UI
   // says.
   Do step(const In& in, PlaybackController& player, BtSession& session);

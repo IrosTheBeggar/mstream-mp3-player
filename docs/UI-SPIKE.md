@@ -1934,7 +1934,8 @@ the device yet either.
     finds the new ones (the saved name). Cancel during the change-over:
     the card says "Not connected", not "Pairing...".
 11. Forget (Output > "..." > Forget > Forget), reboot: nothing
-    reconnects; hold B: "No headphones paired yet". Pair them again:
+    reconnects; hold B: the note "No headphones paired: Output > Pair
+    new headphones" (the output stays on the speaker). Pair them again:
     back to normal.
 12. The play-next toast with a long title: two lines, the Undo arrow and
     the Queue icon at the right; both work, and a tap on the name only

@@ -797,12 +797,17 @@ void Ui::updateHud(uint32_t nowMs) {
     hudFollows_ = false;  // it shows where the button's step goes
     if (f.kind == ButtonPolicy::Hud::Volume) {
       hud_.showVolume(f.volume, state_.onBluetooth, nowMs);
+    } else if (f.kind == ButtonPolicy::Hud::Output && f.refused && !state_.silent) {
+      // Nothing to connect to (none paired; nothing scans for them): the
+      // note says where pairing is, rather than opening the Pair screen
+      // from a button that works on every tab and from a pocket (its scan
+      // would start from a press that asked for no such thing). The output
+      // stays on the speaker; nothing plays.
+      warn(uitext::kNoHeadphones);
     } else if (f.kind == ButtonPolicy::Hud::Output) {
       char line[48];
       if (f.refused) {
-        // Silent test mode, or nothing to connect to (forgotten, none paired since).
-        snprintf(line, sizeof(line), "%s",
-                 state_.silent ? "Stays on the speaker (silent test mode)" : "No headphones paired yet");
+        snprintf(line, sizeof(line), "%s", "Stays on the speaker (silent test mode)");
       } else if (f.toBluetooth) {
         snprintf(line, sizeof(line), "Bluetooth: %s", state_.btConnected ? state_.btName : "connecting...");
       } else {

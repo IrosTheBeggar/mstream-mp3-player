@@ -15,7 +15,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               +---------------------------------------------------------------+
   lib/core/   |  PlaybackController   PcmRing   TransportSync   ToneGen       |  portable C++17,
   (portable)  |  BtControl (StreamControl, AbsVolumePolicy)  ReconnectPlanner  |  host-tested
-              |  GainRamp  VolumeMath  StreamRestart  HeadsetKeys             |
+              |  GainRamp  VolumeMath  StreamRestart  HeadsetKeys  SinkSearch |
               |  Declicker  DeclickReader  hal/*                              |
               |  AudioTap  TapReader  BeatTracker  ClickGen  DancePose        |
               |  CrabPose  CrabArt (generated)  DanceSkin  DanceRate          |
@@ -209,10 +209,20 @@ The rules that keep it deadlock- and glitch-free:
 
 ## Bluetooth
 
-`BtSink` connects to the first headphones whose name contains the configured
-name (`BT_SINK_NAME` build flag, or the console's `c<name>`, saved in NVS).
-Without a name it only accepts a device practically touching the Core2;
-signal strength alone once picked a TV in the next room. It remembers the
+`BtSink` connects to the headphones the listener paired on the Pair screen
+(Output > Pair new headphones: the audio devices nearby, with their kind
+and signal, and only the one tapped is connected to). It never picks a
+device by itself (`SinkSearch`, lib/core, host-tested): with none
+remembered, a release build doesn't scan at all, at the boot or on any
+ask (a play waiting, Connect, a B hold, console `o` or `Pr1`, the Pair
+screen closing), and stays quiet, connectable only; a device a scan finds
+is taken only by the name a developer build was given (`BT_SINK_NAME`,
+changed with the console's `c<name>`), never by signal strength alone
+(that once picked a TV in the next room), but for one scan after the
+console's `Bs`. The library's stack-up, which scans whenever nothing is
+remembered, is kept from it then: while BtAppT is in that handler
+`has_last_connection()` answers yes, and the page of the zero address it
+then asks for isn't made. It remembers the
 device it connected to, and all along it stays connectable (never
 discoverable) so the headphones can reconnect by themselves; other devices
 are refused. How it looks for them while no link is up is
@@ -236,8 +246,11 @@ forever, cost +35.5 mA for as long as they were away):
   no scans: connectable only, so headphones
   that are switched on or taken out of their case come back by themselves.
   A listener's ask starts a burst again.
-- **Scan by name**: only with none remembered, for 2 min after the boot or
-  an ask, then resting. A device it finds and fails to connect to is
+- **Scan by name**: only with none remembered and a name to look for
+  (`sinksearch::mayScan()`: a developer build's `BT_SINK_NAME`, not after
+  Forget; or `Bs`), for 2 min after the boot or an ask, then resting. A
+  release build never gets here: with nothing remembered, `start()` goes
+  straight to Resting. A device it finds and fails to connect to is
   remembered by then: a burst pages it.
 
 The library's own auto-reconnect is kept disarmed outside a pairing (its
@@ -391,7 +404,11 @@ out what it returns.
   themselves; if not, the back-off's next page finds them: at most 30 s, 1,
   2 or 5 min after the last, and not at all once resting: then Play,
   Connect or a B hold); fresh NVS with pairing mode left mid-connect (the
-  device found is remembered by then: a burst pages it, no reboot needed); `f` then reboot (scans); while
+  device found is remembered by then: a burst pages it, no reboot needed); `f` then reboot (a build with
+  `BT_SINK_NAME` scans by name; a release build logs "no headphones paired ... not scanning" and the radio
+  meter stays at 0); `Bf` (the next boot as a fresh unit) and `Bn` / `Bn0` (this session): the card reads
+  "Bluetooth headphones / No headphones paired", a B hold and a play show "No headphones paired: Output > Pair new headphones"
+  and stay on the speaker, nothing scans, and the following boot pages the stored headphones as before; while
   playing, caps arriving late must log `came up after playback started:
   dipping`, the music must go silent for about a second and then fade
   back in over ~2 s with `control=headphones` in the stats (or `no answer`
@@ -406,9 +423,19 @@ out what it returns.
   `connect_to()` is overridden to count every page, the planner's and a
   pairing's library retries), Scanning (by name, none remembered),
   Backoff, Resting, Linked, PairScan, Pairing, and whether a device is
-  remembered. The listener's asks: **connect()** pages the remembered
+  remembered (Off too with none remembered and nothing to scan for: the
+  card's "No headphones paired" [Pair new headphones]; a tap on the card
+  opens the Pair screen too). The listener's asks: **connect()** pages the remembered
   headphones at once (a full burst, then the back-off; with none
-  remembered, a scan by name for 2 min);
+  remembered, a scan by name for 2 min if there is a name to look for,
+  else nothing: main.cpp doesn't even ask then, `nothingToFind()`: the B
+  hold is refused with the toast "No headphones paired: Output > Pair new
+  headphones" (a toast rather than the Pair screen: B works on every tab
+  and from a pocket, and the Pair screen's scan would start from a press
+  that asked for none; the card's Connect or Try again, refused the same
+  way, shows it too), and a play on Bluetooth doesn't wait
+  (`PlayGate`'s NotPaired: paused at once, the same toast, the output
+  left as it is));
   **disconnect()** lets go (or stops a page) and stops trying: no paging,
   no scanning, not connectable, and the headphones coming back by
   themselves are refused, until the next connect(); **startPairScan()**
@@ -425,17 +452,19 @@ out what it returns.
   **stopPairScan()**, starts a burst); **pairWith()**
   lets go of the link that is up first, then pages the picked device with
   the usual tries: it becomes the remembered one (NVS) only once linked,
-  and the sink name becomes its name (so a later scan by name finds it);
+  and the sink name becomes its name (the name shown until theirs is
+  read; in a build with `BT_SINK_NAME`, a later scan by name finds it);
   a pairing that fails puts the old address back in RAM (NVS still has
   it) and stops there; a Cancel while the old link is still being let go
   ends the pairing the same way. The Pair list leaves out the headphones
   linked now (multipoint sets stay discoverable; "pairing" with them only
   let them go), and picking them anyway just makes them the output.
   Forget from the screen forgets and disconnects, no restart, and **for
-  good**: a saved flag (NVS `bt_forgot`) stops every scan by name (the
-  boot's, the search's with none remembered, a B hold's), so the forgotten headphones
-  can't come back by their name; the next pairing clears it (the
-  console's `f` still restarts and scans by name). `BtSession` (main.cpp's)
+  good**: a saved flag (NVS `bt_forgot`) stops every scan by name in a
+  build with a name (the boot's, the search's with none remembered, a B
+  hold's), so the forgotten headphones can't come back by their name; the
+  next pairing clears it (the console's `f` still restarts and, in such a
+  build, scans by name). A release build never scans by name anyway. `BtSession` (main.cpp's)
   holds what the listener asked: **the audio stays on its output until the
   headphones they asked for are linked** (the card, Connect, the B hold
   only connect; the Connected event moves the audio, as it always did,
@@ -455,6 +484,40 @@ out what it returns.
   card's codec line comes from the SBC configuration ("SBC 44.1 kHz") and
   the delay report. A pairing scan while headphones stream costs airtime:
   the Pair screen is the only thing that runs one.
+- **Developer tests that leave the pairing alone** (the console's `B`):
+  `Bs` arms auto-pair by signal for the next scan (RAM only, off at boot,
+  logged; used up by the device it takes, a link, the scan's end, or
+  anything that ends or replaces that scan: a Disconnect, the Pair
+  screen, a pairing, the search resting) and starts that scan as a
+  connect would (refused while
+  headphones are remembered: they are only paged). The **fresh-unit test**
+  makes `BtSink` behave as if nothing were remembered and the build had
+  no `BT_SINK_NAME`, without reading, erasing or changing the stored
+  address or the stack's bond: `PlayerA2dp` overrides the library's
+  `read_address()` / `write_address()`, so the remembered address lives
+  in RAM meanwhile (the library's `start()` finds none; a pairing made
+  during the test is remembered in RAM only), and the sink name and
+  Forget aren't saved. `Bf` saves a flag (NVS `bt_fresh`) and restarts:
+  the next `begin()` uses it and clears it, so only that boot is the
+  test. `Bn` is the same for the running session (RAM only; refused while
+  linked, pairing or on the Pair screen), `Bn0` ends it and reads the
+  stored address, name and Forget again. With nothing to find, the card's
+  title is "Bluetooth headphones", not a name left in RAM or NVS
+  (`BtSink::shownName()`), as on a fresh unit.
+  **Checked on the device** (2026-09-30, a build with `BT_SINK_NAME`, the
+  stored headphones asleep): a `Bf` boot logged "no headphones paired, and
+  nothing to scan for: not scanning, connectable only", then no device
+  found and no `[stats] bt` line (search resting, radio 0 %) for 6 min; the
+  card read "Bluetooth headphones / No headphones paired" [Pair new
+  headphones]; a B hold showed the toast and stayed on the speaker, as did
+  console `o` (logged); a silent play played on the speaker, nothing
+  scanned. Pair new headphones from the card scanned (30 s, until the
+  screen went off and stopped it), listed nothing, and after it closed the search
+  rested and the radio went back to 0. The next boot paged the stored
+  headphones (the same address) with no inquiry; `Bn` behaved as `Bf`
+  (the same card and toast), `Bn0` remembered them again; `Bs` with them
+  remembered is refused. Not run: `Bs` scanning (it would take any device
+  at -55 dBm or closer).
 - **Play while the headphones aren't connected** (`PlayGate`, host-tested
   with the player, `BtSession` and `ButtonPolicy` in `test_play_gate`). The
   bug it fixes: the headphones dropped overnight while idle, the output
@@ -497,7 +560,13 @@ out what it returns.
   made the output as the Speaker row makes it (a connection on its way
   cancelled), then play, at the speaker's own volume
   (`PlayGate::playOnSpeaker()`). The output moving away by itself (silent
-  test mode) ends a wait paused. Headphones dropping while idle stay
+  test mode) ends a wait paused. With no headphones paired and nothing
+  that scans for any (`BtSink::nothingToFind()`: a release build, the
+  fresh-unit test) there is nothing to wait for: the wait ends paused at
+  once (`Do::NotPaired`), nothing is paged or scanned, the output stays,
+  and the toast says "No headphones paired: Output > Pair new
+  headphones" (not while the Pair screen scans or pairs: then the play
+  follows that). Headphones dropping while idle stay
   quiet (no dialog), but the Output tab shows them lost and Now Playing's
   output line says "SPYDRONE (not connected)". The name shown is the
   headphones' own (read at each link), or before any link the name

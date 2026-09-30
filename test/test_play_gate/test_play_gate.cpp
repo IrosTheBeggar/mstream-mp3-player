@@ -70,6 +70,7 @@ struct Rig : PlaybackController::Hold {
   bool onBluetooth = true;
   bool linked = false;
   BtLink link;
+  bool nothingToFind = false;  // BtSink::nothingToFind(): none paired, nothing scans for any
   int pages = 0;  // BtSink::connect() calls
   uint32_t now = 1000;
 
@@ -99,6 +100,7 @@ struct Rig : PlaybackController::Hold {
     in.linked = linked;
     in.link = link;
     in.sessionFailed = session.failed();
+    in.nothingToFind = nothingToFind;
     in.nowMs = now;
     const Do d = gate.step(in, player, session);
     if (d == Do::Connect) {
@@ -292,6 +294,59 @@ void test_the_pair_screens_scan_isnt_stopped_by_a_wait() {
   TEST_ASSERT_FALSE(r.upWithEvent());  // the release says it, once
   TEST_ASSERT_EQUAL(Do::Release, r.pass());
   TEST_ASSERT_EQUAL(PlayState::Playing, r.player.state());
+}
+
+// No headphones paired, and nothing scans for any (a release build): a
+// play on Bluetooth has nothing to wait for. It ends paused at once (not
+// 20 s later), nothing is paged or scanned, nothing plays, the output
+// stays, no "Couldn't reach" notice (main.cpp's note points to Output >
+// Pair new headphones instead). A B click again: the same.
+void test_no_headphones_paired_nothing_to_wait_for() {
+  Rig r;
+  r.link.phase = P::Off;
+  r.link.remembered = false;
+  r.nothingToFind = true;
+  for (int round = 0; round < 2; ++round) {
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());
+    TEST_ASSERT_EQUAL(Do::NotPaired, r.pass());
+    TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
+    TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+    TEST_ASSERT_FALSE(r.audio.isPlaying());
+    TEST_ASSERT_EQUAL_INT(0, r.pages);
+    TEST_ASSERT_FALSE(r.session.wanted());
+    TEST_ASSERT_FALSE(r.session.failed());
+    TEST_ASSERT_EQUAL(PlayGate::State::Idle, r.gate.state());
+    TEST_ASSERT_TRUE(r.onBluetooth);  // never moved to the speaker by itself
+    TEST_ASSERT_EQUAL(BtCard::NotPaired, r.card());
+    for (int i = 0; i < 10; ++i) TEST_ASSERT_EQUAL(Do::None, r.pass(1000));
+    TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
+  }
+  // Paired meanwhile on the Pair screen, a play waits for them as usual.
+  r.nothingToFind = false;
+  r.link.remembered = true;
+  r.link.phase = P::Resting;
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Connect, r.pass());
+}
+
+// ... but the Pair screen scanning, or a pairing under way, is something
+// to wait for: the play follows it.
+void test_no_headphones_paired_but_the_pair_screen_is_up() {
+  Rig r;
+  r.link.remembered = false;
+  r.nothingToFind = true;
+  r.link.phase = P::PairScan;
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL(Do::Track, r.pass());
+  TEST_ASSERT_EQUAL(PlayState::Waiting, r.player.state());
+  TEST_ASSERT_EQUAL_INT(0, r.pages);
+  // The Pair screen closes with nothing paired: the wait ends paused.
+  r.link.phase = P::Off;
+  TEST_ASSERT_EQUAL(Do::NotPaired, r.pass());
+  TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
+  TEST_ASSERT_FALSE(r.session.wanted());
+  TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
 }
 
 void test_a_wait_during_a_pairing_keeps_the_pairing() {
@@ -651,6 +706,8 @@ int main() {
   RUN_TEST(test_a_wait_during_a_background_burst_gets_a_full_burst);
   RUN_TEST(test_a_wait_while_resting_gets_a_full_burst);
   RUN_TEST(test_the_pair_screens_scan_isnt_stopped_by_a_wait);
+  RUN_TEST(test_no_headphones_paired_nothing_to_wait_for);
+  RUN_TEST(test_no_headphones_paired_but_the_pair_screen_is_up);
   RUN_TEST(test_a_wait_during_a_pairing_keeps_the_pairing);
   RUN_TEST(test_tries_run_out_ends_the_wait_paused_and_failed);
   RUN_TEST(test_the_backstop_during_the_last_try_settles_the_session);

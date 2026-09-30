@@ -31,6 +31,13 @@ PlayGate::Do PlayGate::update(const In& in) {
     state_ = State::Idle;
     return Do::Release;
   }
+  const bool pairScreen = in.link.phase == P::PairScan || in.link.phase == P::Pairing;
+  if (in.nothingToFind && !pairScreen) {
+    // None paired and nothing looks for any: no wait (it would only time
+    // out). Paused; the radio isn't asked for anything (no scan).
+    state_ = State::Idle;
+    return Do::NotPaired;
+  }
   if (state_ != State::Waiting) {
     // A new wait (or Try again): connect now. The failure checks start on
     // the next pass, once the session has been asked again (its old
@@ -41,7 +48,6 @@ PlayGate::Do PlayGate::update(const In& in) {
     // pairing isn't stopped for it: followed.
     state_ = State::Waiting;
     sinceMs_ = in.nowMs;
-    const bool pairScreen = in.link.phase == P::PairScan || in.link.phase == P::Pairing;
     return pairScreen ? Do::Track : Do::Connect;
   }
   const bool tooLong = static_cast<int32_t>(in.nowMs - sinceMs_) >= static_cast<int32_t>(kBackstopMs);
@@ -66,6 +72,7 @@ PlayGate::Do PlayGate::step(const In& in, PlaybackController& player, BtSession&
       session.withdraw(true);
       break;
     case Do::Cancel:
+    case Do::NotPaired:
       player.cancelWait();
       session.withdraw(false);
       break;

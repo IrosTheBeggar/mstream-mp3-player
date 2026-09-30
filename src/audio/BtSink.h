@@ -11,6 +11,7 @@
 #include "GainRamp.h"
 #include "OutputModel.h"
 #include "PcmRing.h"
+#include "SinkSearch.h"
 #include "StreamRestart.h"
 #include "VolumeMath.h"
 #include "audio/AudioShared.h"
@@ -24,9 +25,8 @@ class PlayerA2dp;  // BtSink.cpp: ESP32-A2DP's source with the fixes below
 // silence and applies our gain stage (GainRamp). A DeclickReader fades that in
 // and out (pause, skip, underrun, output switch) so none of it clicks.
 //
-// Which headphones: the first audio device whose name contains the sink name
-// (case-insensitive). Without a name, only a device practically touching the
-// Core2 — signal strength alone once picked a TV in the next room. Once
+// Which headphones: the ones the listener paired on the Pair screen
+// (Output > Pair new headphones: startPairScan(), pairWith()). Once
 // connected, that device is remembered: after a drop (or a boot, or a
 // listener's ask) the Core2 pages it 3 times (~25 s), then once at 30 s, 1,
 // 2 and 5 min and every 5 min, and rests after 15 min (at once after the 3
@@ -34,8 +34,12 @@ class PlayerA2dp;  // BtSink.cpp: ESP32-A2DP's source with the fixes below
 // headphones (ReconnectPlanner). All along it stays connectable (not
 // discoverable) so the headphones can come back by themselves, as they do
 // to a phone. Other devices can't connect in. forgetDevice() clears it.
-// With none remembered, a scan by name runs for 2 min after the boot or a
-// connect().
+// With none remembered it never picks a device by itself (SinkSearch): a
+// release build doesn't scan at all, at the boot or on any ask, and stays
+// quiet, connectable only. A developer build with a name (BT_SINK_NAME)
+// scans for a device whose name contains it for 2 min after the boot or a
+// connect(). Never by signal strength (once a TV in the next room was
+// paired that way), except for one scan after the console's Bs.
 //
 // Volume works like a phone's (AbsVolumePolicy): headphones that take AVRCP
 // absolute volume get the Bluetooth volume as their own, their buttons change
@@ -97,8 +101,10 @@ public:
   };
 
   // Starts the Bluetooth stack. Call early: it claims ~70 KB of internal RAM,
-  // best taken before the heap fragments. The sink name saved by setSinkName()
-  // wins over `defaultSinkName` (the BT_SINK_NAME build flag).
+  // best taken before the heap fragments. `defaultSinkName`: the BT_SINK_NAME
+  // build flag ("" in a release build: no scan by name, ever). With one, the
+  // name saved by setSinkName() wins over it. A fresh-unit test armed for
+  // this boot (armFreshBoot()) is used up here.
   void begin(PcmRing& ring, AudioShared& shared, const char* defaultSinkName);
 
   // Loop task, every pass. `wantAudio`: Bluetooth is the output and the player
@@ -107,9 +113,15 @@ public:
   void update(uint32_t nowMs, bool wantAudio);
 
   // Changes which headphones to look for and saves it; applies from the next
-  // device discovered. Empty = any very close device.
+  // device discovered. Only a build with BT_SINK_NAME scans by name
+  // (scansByName()); empty: nothing is looked for. The Pair screen's
+  // pairing saves the headphones' name here too (the name shown until
+  // their own is read). Not saved during a fresh-unit test.
   void setSinkName(const char* name);
   const char* sinkName() const { return sinkNames_[sinkNameIdx_.load()]; }
+  // A scan by name can run at all: a build with BT_SINK_NAME, not in a
+  // fresh-unit test (it still takes a name, and none remembered).
+  bool scansByName() const { return buildName_ && fresh() == Fresh::No; }
 
   bool connected() const;
   // The link as the loop hears of it: up from CONNECTED until DISCONNECTED.
@@ -141,19 +153,32 @@ public:
   // The media stream is running: the headphones are being sent audio.
   bool streaming() const { return streaming_.load(); }
 
-  // Drops the remembered device, so the next boot scans instead of
-  // reconnecting. Carried out on the Bluetooth task (which pages and re-arms
+  // Drops the remembered device, so the next boot doesn't page it (a build
+  // with BT_SINK_NAME scans by name instead; a release build stays quiet).
+  // Carried out on the Bluetooth task (which pages and re-arms
   // with that address); waits up to waitMs for it, and with a wait (for a
   // restart that follows) erases the stored copy itself if that task can't.
   // true: done. Without a wait it is posted by update().
   // `forGood` (the Output screen's Forget): nothing is looked for by name
   // either (saved), until new headphones link: the forgotten ones can't
   // come back by a scan for their name, at the next boot or a B hold.
-  // Without it (the console's f), the scan by name is back.
+  // Without it (the console's f), a build's scan by name is back.
   bool forgetDevice(uint32_t waitMs = 0, bool forGood = false);
-  // Nothing remembered and nothing to look for (forgotten for good): a
-  // connect can't find anything; pairing is the way.
-  bool nothingToFind() const { return !linkRemembered_.load(std::memory_order_relaxed) && forgotForGood_.load(); }
+  // Nothing remembered and nothing to look for (no name to scan by: a
+  // release build, a fresh-unit test; or forgotten for good), and Bs not
+  // armed: a connect can't find anything. Nothing is scanned for; pairing
+  // (Output > Pair new headphones) is the way.
+  bool nothingToFind() const {
+    return !linkRemembered_.load(std::memory_order_relaxed) && !scanAllowed(false);
+  }
+  // The headphones' name for the screen: their own (deviceName()), else
+  // the one saved or scanned for (sinkName()); none while nothingToFind(),
+  // so the card reads "Bluetooth headphones" then, as on a fresh unit (a
+  // fresh-unit test or a Forget leaves the old name in RAM or NVS).
+  const char* shownName() const {
+    if (nothingToFind()) return "";
+    return deviceName()[0] ? deviceName() : sinkName();
+  }
   // The device linked now has this address (the Pair screen's pick).
   bool isLinkedTo(const uint8_t addr[6]) const;
   // Next queued event, oldest first, or Event::None. Loop task.
@@ -163,7 +188,8 @@ public:
   // What the link is doing (published by BtAppT a few times a second).
   BtLink link() const;
   // Page the remembered headphones now (a burst of 3 tries, then the
-  // back-off); with none remembered, scan by name for 2 min. Undoes
+  // back-off); with none remembered, scan by name for 2 min if there is a
+  // name to look for (or Bs), else nothing (nothingToFind()). Undoes
   // disconnect().
   void connect();
   // Let go of the link (or stop connecting) and stop trying: the
@@ -235,6 +261,30 @@ public:
   // haven't sent one on this link.
   uint32_t delayReportUs() const { return delayReport_.load(std::memory_order_relaxed) * 100u; }
 
+  // ---- developer tests (the console's B; nothing saved but Bf's flag) ----
+  // Bs: the next scan may take an audio device at sinksearch::kMinRssi or
+  // closer, whatever its name (main.cpp starts one: connect()). RAM only,
+  // off at boot; used up by the device it takes, a link, the scan's end,
+  // or anything that ends that scan (a Disconnect, the Pair screen, a
+  // pairing, the search resting).
+  void setBySignal(bool on);
+  bool bySignal() const { return bySignal_.load(); }
+  // The fresh-unit test: BtSink behaves as if no headphones were
+  // remembered and the build had no BT_SINK_NAME, without reading,
+  // erasing or changing the stored address (NVS) or the stack's bond: the
+  // remembered address lives in RAM meanwhile (a pairing made during the
+  // test too), and the sink name and Forget aren't saved.
+  //   Boot: armFreshBoot() (Bf) saves a flag that the next begin() uses and
+  //     clears: that boot is the test, the one after is normal again.
+  //   Session: setFreshSession(true) (Bn), for the running session, RAM
+  //     only; refused (logged) while linked, pairing or on the Pair screen.
+  //     false (Bn0), or any restart, ends it: the stored address is read
+  //     again. Loop task.
+  enum class Fresh : uint8_t { No, Boot, Session };
+  Fresh fresh() const { return static_cast<Fresh>(fresh_.load()); }
+  static void armFreshBoot();
+  void setFreshSession(bool on);
+
 private:
   friend class PlayerA2dp;
 
@@ -244,7 +294,12 @@ private:
   static void onKey(uint8_t key, bool released);
 
   void post(Event e);                    // any task; never blocks
-  void setForgotForGood(bool on);        // saves it (loop task, or BtAppT on a link)
+  void setForgotForGood(bool on);        // saves it (loop task, or BtAppT on a link); RAM only in a fresh-unit test
+  // What a scan may look for (SinkSearch): the name only in a build with
+  // one, outside a fresh-unit test; Forget; Bs. Any task.
+  sinksearch::Setup searchSetup() const;
+  bool scanAllowed(bool remembered) const { return sinksearch::mayScan(remembered, searchSetup()); }
+  void reloadSaved();                    // the saved name and Forget, from NVS again (loop task)
   void setDeviceName(const char* name);  // Bluedroid's BTC task only
   bool applyTxPower(const char* when);    // setTxPower()'s levels; `when` ends the log line
 
@@ -313,6 +368,9 @@ private:
 
   std::atomic<bool> forgotten_{false};  // set by BtAppT once it forgot the device
   std::atomic<bool> forgotForGood_{false};  // forgetDevice(forGood): no scan by name (NVS "bt_forgot")
+  bool buildName_ = false;                  // begin()'s defaultSinkName isn't empty (a developer build)
+  std::atomic<bool> bySignal_{false};       // Bs: the next scan takes a device close enough
+  std::atomic<uint8_t> fresh_{0};           // Fresh: set by begin() (Boot) or BtAppT (Session)
 
   // Data callback only, apart from the atomics.
   DeclickReader reader_{kConsumerId};

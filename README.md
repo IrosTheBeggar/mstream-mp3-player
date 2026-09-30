@@ -44,20 +44,33 @@ use Bluetooth headphones, the speaker, or (later) M5Stack's RCA/3.5 mm module.
    pio run -e core2 -t uploadfs
    ```
 
-4. **Headphones.** Tell the Core2 their Bluetooth name, either in a gitignored
-   `local.ini`:
+4. **Headphones.** Pair them on the device: put them in pairing mode, open
+   **Output > Pair new headphones**, and tap them in the list (each audio
+   device nearby with its kind and signal). The Core2 connects, moves the
+   music to them and remembers them: after a drop or a restart it pages
+   them (3 tries, then now and then, resting after 15 min), and they can
+   also reconnect by themselves whenever they wake up. Until some are
+   paired the Bluetooth card says "No headphones paired", and a B hold or a
+   play on Bluetooth only points there.
+
+   **It never pairs by itself.** With no headphones paired the Core2 doesn't
+   scan at all (at the boot, on Connect, a B hold or a play): it stays
+   quiet, connectable only, and never picks a device for you, by name or by
+   signal strength. (An early build took the strongest audio device when
+   no name was set, and once paired a TV in the next room.) Remembered
+   headphones are only ever paged, never scanned for.
+
+   For development, a build can scan by name while none are remembered:
+   set the name in a gitignored `local.ini`
 
    ```ini
    [local]
    build_flags = -DBT_SINK_NAME=\"My Headphones\"
    ```
 
-   or at runtime with the serial console command `c<name>` (saved on the
-   device). Put the headphones in pairing mode near the Core2; it connects,
-   switches its output to Bluetooth and remembers them: after a drop or a
-   restart it tries them for ~30 s, then scans for a minute, then tries them
-   again, and the headphones can also reconnect by themselves whenever they
-   wake up.
+   and put the headphones in pairing mode near the Core2 (the console's
+   `c<name>` changes the name in such a build, saved on the device).
+   Release builds have no name.
 
 5. **Host unit tests** for the portable core (needs a host C++ compiler, e.g.
    MinGW-w64): `pio test -e native`.
@@ -130,7 +143,8 @@ pages do:
   make it the output: the music stays where it is until the headphones
   are connected ("Now playing on ..." says when), and it pauses whenever
   it leaves them. Forgotten headphones stay forgotten (not even looked
-  for by name) until you pair some again.
+  for by name) until you pair some again. With none paired the card reads
+  "No headphones paired": tap it, or its button, for the Pair screen.
   **Pair new headphones** lists the audio devices in pairing mode nearby
   (with their signal); tap one to pair it, in place of the ones paired
   before (they stay if the new pairing fails). Then the line-out module's
@@ -249,7 +263,7 @@ The serial console (115200 baud) is there for scripted testing:
 |---|---|---|---|
 | `n` / `p` | next / previous (past 3 s: the track's start) | `i<n>` | play queue entry n (0-based) |
 | space | play / pause | `b<n>` | benchmark decoding track n |
-| `o` | switch output | `c<name>` | headphones to connect to |
+| `o` | switch output | `c<name>` | the name a build with `BT_SINK_NAME` scans for while none are remembered (saved) |
 | `+` / `-` | volume | `h<n>` | Bluetooth headroom -n dB, 0-12 (default 2, not saved) |
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
 | `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
@@ -258,6 +272,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none) |
 | | | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
+| | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
 
 The UI spike's tools ([docs/UI-SPIKE.md](docs/UI-SPIKE.md)) measure the
@@ -339,6 +354,9 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   RefillPacer         The decoder's gentle refill after a track start (on)
   BtControl           Bluetooth decisions: media stream (StreamControl), volume
                       (AbsVolumePolicy, GainRamp), reconnect (ReconnectPlanner)
+  SinkSearch          When the Core2 may scan for headphones by itself (never
+                      in a release build) and which find it may take (by the
+                      build's name only; never by signal but for console Bs)
   hal/                IAudioBackend, IStorage
 src/                  Core2 firmware
   audio/              Core2AudioBackend (decode task), RingOutput, BtSink, SpeakerSink

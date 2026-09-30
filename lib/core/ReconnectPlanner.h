@@ -28,8 +28,12 @@
 //     headphones that are switched on or taken out of their case come back
 //     by themselves (the user's do). A listener's ask starts a burst again.
 //   - Scan: with nothing remembered, a scan by name (inquiry) for
-//     kScanForMs after the boot or an ask, then Resting. Never while
-//     headphones are remembered: a scan running then is stopped.
+//     kScanForMs after the boot or an ask, then Resting, only when
+//     sinksearch::mayScan() allows one (In::canScan: a developer build's
+//     BT_SINK_NAME, or the console's Bs). A release build has no name: with
+//     nothing remembered it goes straight to Resting, at the boot and on
+//     every ask, and never scans (pairing is the Pair screen's). Never
+//     while headphones are remembered: a scan running then is stopped.
 //
 // The library's own auto-reconnect is kept disarmed outside a pairing (its
 // "retries exhausted: start discovery" branch must never run): every
@@ -48,7 +52,7 @@ public:
     Burst,    // paging, kBurstPages times
     Backoff,  // a page now and then, no inquiry
     Resting,  // connectable only: no pages, no scans
-    Scan,     // nothing remembered: a scan by name
+    Scan,     // nothing remembered, a name to look for: a scan by name
   };
 
   // Why a burst starts (for the log).
@@ -59,7 +63,7 @@ public:
     Lib state;
     bool discoveryActive;  // the stack reports a scan running
     bool remembered;       // a device address is remembered
-    bool canScan;          // a scan by name may find something (a name to look for, not forgotten for good)
+    bool canScan;          // a scan may run (sinksearch::mayScan() with nothing remembered: a name, or Bs)
     bool quiet;            // nobody is around: the screen is off and nothing plays or waits
     uint32_t nowMs;
   };
@@ -81,8 +85,9 @@ public:
   static constexpr uint32_t kGiveUpMs = 15u * 60u * 1000u;  // from the burst's start: then Resting
   static constexpr uint32_t kScanForMs = 120000;            // a scan by name, from the boot or the ask
 
-  // A burst from now (or, with nothing remembered, a scan by name).
-  void start(Why why, bool remembered, uint32_t nowMs);
+  // A burst from now; with nothing remembered, a scan by name if
+  // `canScan` (as In::canScan), else Resting.
+  void start(Why why, bool remembered, bool canScan, uint32_t nowMs);
   // Every page made, ours or the library's (the boot's, a pairing's).
   void pageMade(uint32_t nowMs);
   // The page got its answer without a link (refused, timed out).

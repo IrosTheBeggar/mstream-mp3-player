@@ -317,7 +317,8 @@ struct ButtonTransport : ButtonPolicy::Transport {
     }
     return selectOutput(!onBluetooth());
   }
-  // False: refused (no headphones paired since Forget: nothing to connect to).
+  // False: refused (no headphones paired, and nothing scans for any:
+  // BtSink::nothingToFind()). The output stays; nothing is scanned.
   static bool selectOutput(bool bluetooth);
 };
 static ButtonTransport buttonTransport;
@@ -340,7 +341,9 @@ bool ButtonTransport::selectOutput(bool bluetooth) {
       return true;
     }
     if (bt.nothingToFind()) {
-      Serial.println("[output] bluetooth: no headphones paired (forgotten): pair them on the Output tab");
+      // (The UI's note says where: uitext::kNoHeadphones.)
+      Serial.println("[output] bluetooth: no headphones paired: pair them on Output > Pair new headphones (nothing is "
+                     "scanned for); the output stays on the speaker");
       return false;
     }
     btSession.connect(millis());
@@ -449,8 +452,9 @@ struct MainUiHost : ui::UiHost {
     s.onBluetooth = audio.output() == Output::Bluetooth;
     s.btConnected = bt.connected();
     s.btLost = btLost && s.onBluetooth && !s.btConnected;
-    // Their name (read at each link; before the first, the name looked for).
-    snprintf(s.btName, sizeof(s.btName), "%s", bt.deviceName()[0] ? bt.deviceName() : bt.sinkName());
+    // Their name (read at each link; before the first, the name looked for;
+    // none with nothing paired: BtSink::shownName()).
+    snprintf(s.btName, sizeof(s.btName), "%s", bt.shownName());
     s.volume = audio.volume();
     s.speakerVolume = audio.speakerVolume();
     s.btVolume = bt.volume();
@@ -563,7 +567,12 @@ struct MainUiHost : ui::UiHost {
       return false;
     }
     Serial.printf("[ui] output: %s\n", bluetooth ? "bluetooth" : "the speaker");
-    return ButtonTransport::selectOutput(bluetooth);
+    const bool ok = ButtonTransport::selectOutput(bluetooth);
+    // Refused: none paired (the card's Connect or Try again after the
+    // fresh-unit test, say). Nothing is scanned: the note says where
+    // pairing is, as for a B hold.
+    if (!ok && userInterface) userInterface->warn(uitext::kNoHeadphones);
+    return ok;
   }
   void openCalibration(bool check) override;
   void btConnect() override {
@@ -573,6 +582,7 @@ struct MainUiHost : ui::UiHost {
     }
     if (audio.bluetooth().nothingToFind()) {
       Serial.println("[ui] bluetooth: connect: no headphones paired");
+      if (userInterface) userInterface->warn(uitext::kNoHeadphones);
       return;
     }
     btSession.connect(millis());
@@ -1046,6 +1056,62 @@ static void sleepCommand(const char* a);
 // The idle power-off's (I; below, with stepIdle()).
 static void idleCommand(const char* a);
 
+// B...: Bluetooth tests for developers that leave the listener's pairing
+// alone (BtSink's developer tests):
+//   B    what the Core2 may look for now
+//   Bs   auto-pair by signal for the next scan (RAM only, off at boot,
+//        logged), and that scan starts now (none may be remembered); Bs0 off
+//   Bf   the next boot is a fresh unit (a flag in NVS that boot clears: as
+//        if nothing were remembered and there were no BT_SINK_NAME; the
+//        stored address and the bond are left alone): restarts now
+//   Bn   the same for this session (RAM only; not while linked or
+//        pairing); Bn0 ends it (so does any restart)
+static void bluetoothTestCommand(const char* a) {
+  BtSink& bt = audio.bluetooth();
+  const BtLink l = bt.link();
+  switch (a[0]) {
+    case 's':
+      if (a[1] == '0') {
+        bt.setBySignal(false);
+        return;
+      }
+      if (l.remembered || bt.connected()) {
+        Serial.println("[bt] Bs: headphones are remembered: they are paged, never scanned for (Bn first: a "
+                       "fresh-unit session, the pairing left alone)");
+        return;
+      }
+      if (silent) {
+        Serial.println("[test] silent mode: bluetooth stays off");
+        return;
+      }
+      bt.setBySignal(true);
+      // The scan, as a connect asks for it (the audio moves once linked).
+      (void)ButtonTransport::selectOutput(true);
+      return;
+    case 'f':
+      BtSink::armFreshBoot();
+      Serial.println("[bt] Bf: the next boot is a fresh unit (that boot only; the stored pairing is left alone): "
+                     "restarting");
+      restartAtMs = millis() + 500;
+      return;
+    case 'n':
+      bt.setFreshSession(a[1] != '0');
+      return;
+    default:
+      break;
+  }
+  const char* fresh = bt.fresh() == BtSink::Fresh::Boot      ? "this boot (Bf)"
+                      : bt.fresh() == BtSink::Fresh::Session ? "this session (Bn)"
+                                                             : "off";
+  Serial.printf("[bt] headphones %s; scan by name: %s; auto-pair by signal (Bs): %s; fresh-unit test: %s%s\n",
+                l.remembered ? "remembered" : "none remembered",
+                bt.scansByName() ? bt.sinkName() : "no (no BT_SINK_NAME in this build, or the fresh-unit test)",
+                bt.bySignal() ? "armed" : "off", fresh,
+                bt.nothingToFind() ? "; nothing is scanned for: pairing is Output > Pair new headphones" : "");
+  Serial.println("[bt] B status, Bs / Bs0 auto-pair by signal for the next scan (starts it) / off, Bf the next boot "
+                 "as a fresh unit (restarts), Bn / Bn0 this session as one / back");
+}
+
 static SerialConsole console({
     [] { player.next(); },
     prevTrack,
@@ -1067,14 +1133,21 @@ static SerialConsole console({
     },
     [] {
       audio.bluetooth().forgetDevice(/*waitMs=*/3000);  // before the restart
-      Serial.println("[bt] forgot the remembered device; restarting to scan");
+      Serial.printf("[bt] forgot the remembered device; restarting (%s)\n",
+                    audio.bluetooth().scansByName() ? "it scans by name" : "no name to scan by: pair on the Output tab");
       Serial.flush();
       ESP.restart();
     },
     [](const char* name) {
-      audio.bluetooth().setSinkName(name);
-      Serial.printf("[bt] headphones: %s (saved)\n",
-                    name[0] ? ("name contains \"" + String(name) + "\"").c_str() : "any very close device");
+      BtSink& bt = audio.bluetooth();
+      bt.setSinkName(name);
+      Serial.printf("[bt] headphones: %s (%s)%s\n",
+                    name[0] ? ("name contains \"" + String(name) + "\"").c_str() : "no name: nothing scanned for",
+                    bt.fresh() == BtSink::Fresh::No ? "saved" : "the fresh-unit test: not saved",
+                    bt.scansByName() || !name[0]
+                        ? ""
+                        : ": not scanned for (no BT_SINK_NAME in this build, or the fresh-unit test); pair on the "
+                          "Output tab");
     },
     [](int db) {
       audio.bluetooth().setHeadroomDb(static_cast<uint8_t>(db));
@@ -1142,6 +1215,7 @@ static SerialConsole console({
     [](const char* a) { powerLab.command(a); },
     sleepCommand,
     idleCommand,
+    bluetoothTestCommand,
 });
 
 // Touch buttons: the same on every screen (ButtonPolicy). Each click and
@@ -1385,10 +1459,11 @@ static void stepPlayGate(uint32_t now) {
   in.linked = bt.connected();
   in.link = bt.link();
   in.sessionFailed = btSession.failed();
+  in.nothingToFind = bt.nothingToFind();
   in.nowMs = now;
   const PlayGate::Do d = playGate.step(in, player, btSession);
   if (d == PlayGate::Do::None) return;
-  const char* name = bt.deviceName()[0] ? bt.deviceName() : bt.sinkName();
+  const char* name = bt.shownName();
   if (!name[0]) name = "the headphones";
   switch (d) {
     case PlayGate::Do::Connect:
@@ -1414,6 +1489,11 @@ static void stepPlayGate(uint32_t now) {
       break;
     case PlayGate::Do::Cancel:
       Serial.println("[play] the output isn't bluetooth any more: the wait ends, paused");
+      break;
+    case PlayGate::Do::NotPaired:
+      // Nothing to wait for: paused, the output left as it is, no scan.
+      Serial.println("[play] no headphones paired: not waiting (paused); pair them on Output > Pair new headphones");
+      if (userInterface) userInterface->warn(uitext::kNoHeadphones);
       break;
     case PlayGate::Do::Ended:
       // Cancelled (or the speaker, or stopped): a link that comes later
@@ -1854,9 +1934,14 @@ void setup() {
   const auto rows = diagnosticsRows();
   for (const auto& row : rows) Serial.printf("[diag] %-10s %s\n", row.label.c_str(), row.value.c_str());
   bootScreen.show(rows);
-  const char* headphones = audio.bluetooth().sinkName();
-  Serial.printf("[bt] headphones: %s\n",
-                headphones[0] ? ("name contains \"" + String(headphones) + "\"").c_str() : "any very close device");
+  {
+    BtSink& bt = audio.bluetooth();
+    const char* headphones = bt.sinkName();
+    Serial.printf("[bt] headphones: %s\n",
+                  bt.scansByName() && headphones[0]
+                      ? ("with none remembered, a scan for a name containing \"" + String(headphones) + "\"").c_str()
+                      : "paired on Output > Pair new headphones only (never picked by the Core2 itself)");
+  }
   player.setHold(&outputHold);  // a play waits while the headphones aren't connected (PlayGate)
   danceMode.begin();
   diag::logHeap("dance");
