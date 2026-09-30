@@ -203,6 +203,14 @@ panel shares SPI with the SD card.
   - the calibration or spike screens own the display;
   - a play waits for the headphones (PlayGate Waiting, at most its 20 s backstop);
   - a pairing is under way.
+- **Held lit** (added after batch 3, `holdLit`): while a toast with a
+  countdown is up (the idle power-off's warning, item 4; the sleep
+  timer's fade while it counts down to the pause, section 3: not a
+  track's fade held after a skip), a lit screen (bright or dim) goes bright and
+  stays lit until it ends; an off one stays off (it may be night). A
+  screen woken during it is held from the wake, except that a touch's or
+  PWR's wake from Off keeps its pocket guard until input follows. For the
+  idle warning that wake is input anyway, which ends the warning.
 - **What wakes it:** a touch on the glass or the strip, and a PWR short
   press (M5.BtnPWR is already polled). Events that need the listener also
   wake it:
@@ -317,10 +325,13 @@ Default **20 min**. The sequence:
 It does not light the screen: it may be night. (As built, added since the
 plan: for its last 30 s a toast "Turning off in 30 s" with **Keep on**
 is up, seen on a lit screen, for example with Screen off after: Never; any
-input keeps it on.) At the next boot a toast says "Turned off after 20
+input keeps it on. Since batch 3 a screen lit when it appears stays lit,
+brightened, until it ends, rather than dimming and going dark partway
+through its countdown: item 2's "held lit".) At the next boot a toast says "Turned off after 20
 minutes idle". PWR boots
-the device, stopped, where it was, as today. Resuming inside the track is
-already on the roadmap and fits here.
+the device, stopped, where it was, as today, and (since the resume point,
+"The resume point" in section 4) at the second it paused at: play picks
+up there.
 
 **On USB** it doesn't power off (it can't: ACIN would power it back on,
 to be verified). The screen goes off and the reconnect rests, which is
@@ -428,12 +439,20 @@ fixed there). Step 6a ran: the default is back to 240.** The user asked for it i
 restart included:
 
 - **"CPU speed"** on the Output tab, after "Turn off when idle": **240 MHz**
-  "Smoothest lists, dancing" / **160 MHz** "Saves battery, a bit slower"
-  (the spec's "a little less smooth" doesn't fit beside the pill), the
-  value in a pill, a chip icon.
-- **A tap asks first**: the dialog "Restart at 160 MHz?", "The speed
-  changes at a restart. The music pauses; the queue and your place are
-  kept.", [Cancel] [Restart]. Cancel saves nothing.
+  "Smoothest lists, dancing" / **160 MHz** "Slower lists, saves a little"
+  (167 of the line's 174 px), the value in a pill, a chip icon. Batch 3's
+  "Saves battery, a bit slower" was too rosy: at 160 a list scrolls at
+  about half the frame rate with an MP3 playing (~8 against ~16 fps), the
+  Dance tab runs ~18 of its 24 fps, and the saving (-5.2 USB mA streaming
+  in the audit) was lost in the noise of the batch 3 run.
+- **A tap asks first**: the dialog "Restart at 160 MHz?", "Saves a little
+  battery; lists scroll at half speed while music plays. Music pauses and
+  picks up at the same second." (to 160: the cost as well; the title says
+  it restarts), or "Restart at 240 MHz?", "The speed changes at a restart.
+  The music pauses and picks up at the same second." (to 240); [Cancel]
+  [Restart]. Both bodies fit the dialog's 3 lines (test_ui_library).
+  Cancel saves nothing. (Batch 3 said "the queue and your place are
+  kept", and only the entry was: see "The resume point" in section 4.)
 - **Restart**: the choice saved; paused first; then the idle power-off's
   orderly way (`QueueStore::flushNow()`, a note for the next boot, the
   headphones let go: no "lost" dialog), and the speaker's amp switched off
@@ -447,9 +466,10 @@ restart included:
   160 MHz..." stays up until then (5 s). The next boot shows "CPU
   speed: 160 MHz" for 6 s (the idle power-off's boot-toast path). After
   the restart nothing plays by itself: the queue comes back stopped, at
-  the same entry, as after any boot (the track from 0:00: the time within
-  a track isn't saved, at any boot); the headphones reconnect as at any
-  boot, and take the output as at any boot.
+  the same entry, as after any boot, and at the same second: the pause
+  before the flush saved the resume point, Now Playing shows it, and play
+  picks up there (section 4, "The resume point"); the headphones reconnect
+  as at any boot, and take the output as at any boot.
 - **Storage**: NVS "power"/"cpu_mhz", shared with the console's `Pcb`: an
   explicit 160 or 240; absent, or anything else, is the default. `Pcb160`
   / `Pcb240` save it, `Pcb0` removes it (the default). `Pc` (runtime 160
@@ -469,7 +489,7 @@ only in the idle minutes before it. It comes back if the battery runs
 
 | | |
 |---|---|
-| **Setting** | "CPU speed": **240** / 160 MHz (a restart) |
+| **Setting** | "CPU speed": **240 MHz** "Smoothest lists, dancing" / 160 MHz "Slower lists, saves a little" (a restart, asked first; to 160 the dialog says lists scroll at half speed while music plays) |
 | **Risk** | medium: UI smoothness (dance, lists, the stall at a track start); the governor's switches with a Bluetooth link up (soak it) |
 | **Effort** | S for 160 (mostly measuring); S-M for the governor; L for DFS |
 
@@ -912,7 +932,9 @@ on-device checks below are still to do.** As built:
   is under way (`link.phase == Pairing` or `btSession.pairingUnderWay()`).
   Fixed in review: it read `btSession.pairing()`, which stays set after a
   pairing fails (the Failed card says so), so a failed pairing kept the
-  screen Bright for good, and the latch never armed.
+  screen Bright for good, and the latch never armed. Since batch 3 a lit
+  screen is also held Bright (never woken) while a countdown toast is up:
+  `step(now, keepLit, holdLit)`, "The 160 MHz texts and the held screen".
 - The countdown's input from a finger (`FingerActivity`, fixed in
   review): its landing and its moves (more than 8 px); a finger resting
   still stops counting after 15 s, so a pocket's pressure can't keep the
@@ -1327,7 +1349,14 @@ a finger or an ear is still to do.** As built:
     in Body, Turn off to the screen's edge): shown when the fade starts
     and again on any touch, strip press or PWR wake during it (a wake is
     swallowed as usual: `ScreenControl::takeWoken()`, the pass's Down or
-    button event); it stays up until the fade ends. A tap elsewhere on it
+    button event); it stays up until the fade ends. (Since batch 3 a screen
+    lit when the fade starts stays lit through it, brightened, and one
+    woken during it too, except that a wake from Off keeps its pocket
+    guard until input follows: `ScreenPower`'s `holdLit`. The pause's
+    screen off still turns it off. Only while the fade counts down to the
+    pause, `SleepTimer::fadeCountingDown()`: a track's fade held after a
+    skip lasts until the new track's last 10 s, or the album's end, and
+    the screen times out as ever meanwhile.) A tap elsewhere on it
     only hides it. Its buttons take a tap to y 77 (42 px; the toast is
     drawn 36 px) while no sheet is up, and they come first even over an
     open sheet (the "..." sheet, the volume sheet, the Sleep timer sheet:
@@ -1493,13 +1522,18 @@ power-off on battery is still to do.** As built:
   on`), and the rest of that touch is the toast's; a touch elsewhere keeps
   it on too and acts as usual. It doesn't light a dark screen (the spec's
   "it may be night"), and a wake is input anyway (it ends the warning).
-  **So it is only ever seen with Screen off after set to Never**: the
+  A lit screen stays lit while it is up (since batch 3: `holdLit`, item
+  2; before, it could dim and go dark partway through, seen by hand).
+  **So it is mostly seen with Screen off after set to Never**: the
   shortest idle length (10 min) is longer than the longest screen
   timeout (5 min), and everything that keeps the screen lit (a play
   waiting, a pairing, a screen of its own, USB) also blocks the idle
   countdown. With the other settings the device turns off with the
   screen dark and no warning, as the plan had it; the warning is for a
-  screen left on (a desk, a dock without power).
+  screen left on (a desk, a dock without power). The exceptions: a test
+  length (`Is<sec>`) shorter than the screen's timeout, and an event's
+  wake (a failed track, the lost dialog) late in the countdown: an event
+  isn't input.
 - **At the end**, in order: `QueueStore::flushNow()` (below); the note
   (NVS "power"/"off_idle": the idle length in ms); the headphones let go
   the sleep timer's way (`releaseHeadphones("[power] turning off")`: the
@@ -1947,6 +1981,7 @@ the differences** (Normal 98.5 to 106.8), so:
   - **"Your place" is the queue entry:** the silence track was 33 s in and
     started again from 0:00. QueueStore saves only the entry, at any boot.
     The dialog's "the queue and your place are kept" may read as more.
+    (Since fixed: "The resume point", below.)
 - **`Pcb240` at 160:** the pill reads "240 MHz", the line "160 MHz until a
   restart" (screenshot). A tap: `CPU speed: 240 -> 160 MHz (saved): it
   runs at that already, no restart`, no dialog.
@@ -1954,8 +1989,8 @@ the differences** (Normal 98.5 to 106.8), so:
   choice (`levels 0..2`, `0..7`, `0..5`; the setting's label beside it).
   Right after a change while linked it already reads the new levels, so
   the readback shows the controller's setting, not the link's level.
-  (PowerLab's comment says it read back the old range with a link up; not
-  seen this run.)
+  (PowerLab's comment said it read back the old range with a link up; not
+  seen this run. The comment is fixed since.)
 - **`Pt4,5` then a tap on the row:** `Pt ... asked: applies from the next
   connection`, `Pt` reads `levels 4..5 ... (Pt, a test until restart)`. The
   tap: `Normal -> High (saved)`, then at once `Pt's +0..+3 dBm test
@@ -2084,8 +2119,9 @@ an MP3 (7.8 against 15.9) and 37 % lower with a FLAC (15.5 against 24.7)**,
 far outside ~15 %. The Dance tab with an MP3 (~18 of 24 against ~26 of
 30) and the track-start fill point the same way. So
 `powerchoice::kDefaultCpuMhz` is 240 again. 160 stays on the Output tab
-("Saves battery, a bit slower", ~5 USB mA streaming) for anyone who
-prefers battery to smoothness.
+("Saves battery, a bit slower", ~5 USB mA streaming; since then "Slower
+lists, saves a little", and its dialog says so: "The 160 MHz texts and
+the held screen" below) for anyone who prefers battery to smoothness.
 
 - Changed: `lib/core/PowerChoices.h` (`kDefaultCpuMhz = 240`, with the
   reason), test_power_choices (the default, and an invalid stored value's
@@ -2115,6 +2151,350 @@ prefers battery to smoothness.
 - Whether the Dance tab should aim lower while the decoder runs (it gets
   ~17 of 24 at 160 with an MP3 on the speaker).
 - On battery: everything in step 9.
+
+### The resume point (after batch 3)
+
+The user asked for the CPU speed's restart to pick up at the same second,
+as its dialog promised. As built (host-tested; the on-device checks
+below are still to do):
+
+- **What is saved:** NVS "queue"/"resume", one blob (the queue file's
+  generation, the entry's line, its path's FNV-1a hash, the ms, the length
+  then), at every pause and so at every orderly shutdown: the CPU speed's
+  restart (paused first), the idle power-off (only paused or stopped), the
+  sleep timer's pause. It is removed when playback moves on: a play, a
+  skip, another entry, an edit that changes the current entry (one that
+  only moves it saves it again at its new line). Nothing while playing:
+  no writes every second, and a power cut while playing starts the entry
+  at 0:00, as before. `QueueSaver` decides (test_queue), `QueueStore`
+  writes it; like the position, it pairs with the file of its generation.
+- **At boot:** a point saved for the restored file's current line, whose
+  track still has that path, becomes the player's start point
+  (`PlaybackController::setStartPoint()`, test_playback). The player comes
+  up stopped: nothing plays. Now Playing and the tab bar show that second
+  and the saved length; play starts there, faded in as any start.
+  Next, another entry, or an edit that changes the current entry drops it;
+  prev on it goes to 0:00 of the same entry. (The design said "as prev
+  does after 3 s of play today": prev doesn't do that yet, it is on the
+  roadmap; only a waiting start point makes prev restart the entry.) It
+  applies after any boot with one saved, the power key while paused too.
+- **Where it starts** (`TrackSeek`, test_track_seek; ARCHITECTURE.md,
+  "Audio pipeline"): an MP3 from its Xing or VBRI TOC, else its average
+  or its first frame's bitrate, on a clean frame, without the ID3 reader;
+  a FLAC through libFLAC's own seek (a subclass reaches the decoder; no
+  change under .pio/libdeps); a built-in track counts from there. (Since
+  the review below: a headerless VBR MP3 by the saved length, and a byte
+  that doesn't check out starts at 0:00.) The
+  last 5 s and past the end start at 0:00 (chosen over "treat as ended":
+  nothing is skipped by itself); a file whose track is gone or renamed
+  doesn't match and starts at 0:00; a file replaced under the same name
+  starts at the second if it is long enough. A 48 kHz file on Bluetooth
+  is still refused. `positionMs()` counts from the start, and the
+  read-rate length estimate adds it.
+- **Texts:** the dialog's body (UiText's `kCpuDialogBody`, 3 lines of
+  Small, measured in test_ui_library; to 160 it is `kCpuDialogBody160`
+  since, with the same resume wording: the next section); the boot toast
+  "CPU speed: 160 MHz" is unchanged.
+- **Console:** `q` / `l` print the saved point and a waiting start point;
+  `qs<sec>` starts the current entry that far in (playing: now), `qs0`
+  clears it; `[queue] resume point saved: 1:23 into 5` / `cleared`, and
+  `[audio] MP3: starting 1:23 in, of 5:20 (Xing TOC): byte ..., a frame
+  +N` or `[audio] FLAC: starting 1:23 in (libFLAC's seek, N ms)`.
+- `pio test -e native`: 647 of 647 pass. `pio run -e core2`: builds (RAM
+  53,720 B, +48; flash 2,143,147 B, +8,128: libFLAC's seek is linked now).
+
+**To check on the device** (what was checked, and what is still open:
+"Device run: batch 3 follow-ups", below):
+
+- Accuracy with `qs<sec>` against the file's own time (a player on the
+  PC): a CBR MP3 and a FLAC within ~0.5 s; a LAME VBR MP3 (Xing TOC)
+  within 1-2% of its length; a VBR file without a TOC (if the card has
+  one). The log's byte and frame lines for each.
+- The FLAC seek's time (`libFLAC's seek, N ms`) on a long FLAC without a
+  SEEKTABLE, and the decode task's `stack_free` after seeks (the seek adds
+  libFLAC's bisection and a few small buffers to its stack).
+- The CPU restart both ways, playing on the headphones and on the
+  speaker: after the boot Now Playing shows the second, nothing plays,
+  play picks up there (by ear: no burst of the track's start, the fade-in).
+- A pause, then the power key off; a pause, then the idle power-off
+  (`Is<sec>`, `Iu1`): the second after the boot. A power cut while
+  playing: 0:00. Prev and next on a waiting point.
+- A big ID3 tag (the Moon Safari tracks) resumed mid-way.
+
+### The 160 MHz texts and the held screen (after batch 3)
+
+Two more of the user's fixes from the batch 3 run, host-tested; the
+on-device checks below are still to do.
+
+- **The 160 MHz texts** (item 6). The row's line was "Saves battery, a
+  bit slower"; measured, 160 halves list scrolling with an MP3 playing
+  (~8 against ~16 fps), the Dance tab runs ~18 of 24 fps, and the saving
+  didn't show above the batch 3 run's noise (the audit's -5.2 USB mA
+  streaming). Now "Slower lists, saves a little" (UiText's `kCpu160Sub`,
+  167 of 174 px; "Half-speed lists, less power" is 180 px, too wide). To
+  160 the dialog's body is "Saves a little battery; lists scroll at half
+  speed while music plays. Music pauses and picks up at the same second."
+  (`kCpuDialogBody160`, 3 lines of Small: 256, 255 and 218 of 260 px);
+  `powerchoice::cpuDialogBody()` picks it, and to 240 the body stays "The
+  speed changes at a restart. The music pauses and picks up at the same
+  second." 240's line stays "Smoothest lists, dancing". Tests:
+  test_power_choices (which body), test_ui_library (both bodies fit, under
+  the dialog's 128 bytes).
+- **The held screen** (item 2). The idle power-off's warning let a lit
+  screen dim 1 s after it appeared and go dark 10 s later, 20 s before
+  the power-off (seen by hand): the screen's countdown ran on under it.
+  `ScreenPower::step()` has a third input, `holdLit`, which main.cpp sets
+  while `IdlePolicy` is in Warning or the sleep timer's fade counts down
+  to the pause (`fadeCountingDown()`, since the review below):
+  - a lit screen (Bright or Dim) goes Bright (`Why::HoldLit`, "held lit
+    for a countdown toast") and stays so until it ends; the countdown
+    then runs from its end, so Keep on (input) gives the whole timeout
+    from the tap;
+  - an Off screen stays off (the night rule), and the sleep timer's
+    screen off at its pause still turns a held screen off;
+  - a screen woken during it is held from the wake: an event's wake at
+    once; a touch's or PWR's wake from Off keeps the pocket guard (off 10
+    s later) until input follows, then is held. For the idle warning that
+    wake is input itself: `ScreenControl::takeInput()` ends the warning in
+    the same pass (stepIdle runs before the screen's step), so the screen
+    follows the guard and then the normal timeout. The swallowed wake
+    and the pocket rule are untouched;
+  - `keepLit` still wins (it lights an Off screen).
+
+  `ScreenControl::step()` logs `[screen] held lit while the toast counts
+  down` and `[screen] the toast is gone: the countdown again (dims in
+  N s)`; the warning's line says `the warning is up, and the screen stays
+  lit until it ends`. Tests: test_screen_power (3 new: a lit screen held
+  and the countdown after, a dim one brightened, Never; an off one left
+  off, the timer's screen off, keepLit; the wakes during it).
+- `PowerLab`'s `Pt` comment now says what the device showed: the
+  controller reads the new range back at once while linked; it is the
+  controller's setting, and the link keeps its level until the next
+  connection.
+
+**To check on the device** (what was checked, and what is still open:
+"Device run: batch 3 follow-ups", below):
+
+- The row's line at 160 and the dialog to 160 (screenshots: 3 lines, none
+  cut); the dialog to 240 unchanged.
+- The idle warning on a lit screen (Screen off after 30 s, `Iu1`, a tap,
+  then `Is40`: the warning comes up ~10 s in, while the screen is still
+  bright): it stays bright to the power-off (on USB: "USB power at the
+  last moment", then the countdown again: dims 20 s later). From Dim (a
+  tap, then `Is55`: the warning ~25 s in, the screen dim from 20 s):
+  bright again at once, and Keep on acts on the first tap. The screen off when it appears: stays off (a tap then wakes
+  it, swallowed, and keeps the device on: the pocket guard's 10 s, then
+  dark).
+- The sleep fade on a lit screen (`Ts40` with Screen off after 30 s: the
+  fade starts 10 s in): lit through the fade, off at the pause. Woken by
+  a tap during the fade (from off): off again 10 s later unless tapped
+  again; a second tap holds it to the end.
+
+### Review fixes (the resume point and the held screen)
+
+A review of the two changes above found six real faults; each is fixed
+and host-tested (`pio test -e native`: 655 of 655, 5 new).
+
+- **A VBR MP3 without a Xing or VBRI header** was placed by its first
+  frame's bitrate: a silent 32 kbit/s first frame put 3:00 of a 4:00
+  file at about 0:30 while Now Playing said 3:00. The start point's
+  length now goes to the backend with the play (`play()`'s
+  `durationHintMs`, from `PlaybackController`; it was the catalog's hint,
+  0 for files, and the backend ignored it). `TrackSeek` checks the frames
+  in its 4 KB read: if they differ in bitrate, or the handed length
+  differs from the first-frame one by over 3%, the start is placed by the
+  average bitrate over the handed length; a plain CBR file whose length
+  agrees keeps the exact first-frame bitrate; a VBR file with no length
+  handed starts at 0:00 (`[audio] MP3: 3:00 asked: VBR, no table of
+  contents, no length: from 0:00`). test_track_seek.
+- **A FLAC with an ID3v2 tag in front** never resumed: its STREAMINFO
+  was read at byte 0, so it had no rate and the seek wasn't tried (and
+  the log blamed libFLAC). The backend now reads STREAMINFO past the tag,
+  as libFLAC does; such files also get their length on Now Playing. A
+  FLAC with no STREAMINFO found logs that instead.
+- **A start byte that didn't check out was used anyway**: in a file
+  shorter than its header says, the byte clamped to the file's last one,
+  the decoder ended at once and the player moved on to the next entry.
+  No clean frame in the 4 KB read, or 5 s or less of audio after it at
+  its bitrate (`trackseek::mp3MsLeft()`), is now a failed seek: from
+  0:00, as a FLAC seek that fails.
+- **A dropped start point could come back**: removing the current entry
+  (or clearing the queue) only hid it behind the entry's key, so an undo
+  followed by prev or a tap on that entry started it at the old second.
+  `PlaybackController` now drops it whenever the current entry changes
+  under it (`currentMoved()`, `remove()` of the current entry,
+  `clearQueue()`, `playNow()`); `QueueStore::remap` still carries it
+  across a rebuild. test_playback.
+- **The fade toast's hold could last a whole track or album**: after a
+  skip during a track's fade (End of track, album, queue) the timer stays
+  Fading, with its toast, until the new track's last 10 s or the album's
+  end, and `holdLit` kept the screen bright all that time.
+  `SleepTimer::fadeCountingDown()` is true only for a timed fade or a
+  track's fade in the boundary track's last 10 s; main.cpp holds the
+  screen by it. test_sleep_timer.
+- **`qs<sec>` dropped the track's length** (Now Playing showed `--:--`
+  and a dotted bar, and the saved point had no length):
+  `setStartPoint(ms, 0)` now takes the length as known, a waiting start
+  point's, the held track's (paused or playing), else the catalog's hint.
+
+`pio run -e core2`: builds, no warnings (RAM 53,728 B, +8; flash
+2,144,595 B, +872). Nothing new runs on the decode task's stack beyond a
+42-byte re-read and a scan of the 4 KB PSRAM buffer already read.
+
+**To check on the device** (what was checked, and what is still open:
+"Device run: batch 3 follow-ups", below):
+
+- A VBR MP3 without a Xing frame, if the card has one (or one made with
+  `ffmpeg -write_xing 0`): paused mid-way, the CPU speed's restart (the
+  Output tab) or a power key off: the log says `average bitrate` and the time heard matches the
+  time shown within a few percent. `qs<sec>` on it while stopped with
+  nothing played since the boot: `from 0:00`.
+- A FLAC with an ID3v2 tag in front (`metaflac` won't make one; some
+  taggers do): its length on Now Playing, and `qs<sec>` resumes there.
+- End of track with the screen lit, a skip during the last 10 s: the
+  toast stays, the screen dims and goes off on its usual timeout.
+- `qs120` on a paused track: Now Playing keeps its length.
+
+### Device run: batch 3 follow-ups (2026-09-29)
+
+The three fixes above (the resume point, the 160 MHz texts, the held
+screen) with the review's fixes, flashed on the Core2 (COM3). On USB, the
+speaker in silent test mode (`z`); the headphones were on the table and
+never answered their pages, so nothing ran over Bluetooth. The queue was
+lengthened for the run (Moon Safari, Discovery, then `tone:silence` last)
+and put back after. Screenshots (LCD readback, all looked at): the
+scratchpad's `resume_shots/`.
+
+**How the accuracy was measured.** A temporary console command (`qe`,
+removed after the run) dumped the speaker tap's level, RMS per 10 ms, each
+block labelled with the time the device claims (`startOffsetMs()` plus
+the frames played). On the PC each file was decoded on the device's
+timeline (ESP8266Audio's libmad built for the PC, `devmad`; libsndfile for
+FLAC), and each run was aligned to it at the sample. A run from 0:00 of
+every file matched the PC decode at 0.0 ms, so the reference is the
+device's own timeline, Xing frame and decoder delay included. Error = the
+time shown minus the time heard (negative: the audio is behind the
+display).
+
+| File | Kind | Placed by | Error at 1:00 / 2:30 (others) |
+|---|---|---|---|
+| Air, "Kelly Watch The Stars" | CBR 192, LAME "Info" header with a TOC | the TOC (as first built) | -186 / +5 ms (1:41 -91, 2:01 +279) |
+| the same, after the fix below | | `CBR, Info header` | -29 / -47 ms (1:41 -42, 2:01 -51, 3:20 -46) |
+| Air, "Le voyage de Penelope" | CBR 192, no header, a 351 KB ID3 tag (skipped) | the first frame's bitrate | -29 / -47 ms |
+| Daft Punk, "Harder, Better, Faster, Stronger" | LAME VBR, Xing TOC | Xing TOC | -291 / +345 ms (0.13-0.15% of 3:44) |
+| Kanye West, "Stronger" | FLAC with a SEEKTABLE | libFLAC's seek, 88-92 ms | 0 / 0 ms |
+| Emancipator, "Awakenings" (7:00) | FLAC, no SEEKTABLE | libFLAC's seek, 75-112 ms | 0 / 0 ms (6:40: 0 ms, 112 ms) |
+
+- All inside the targets (FLAC and CBR within 0.5 s, VBR with a TOC
+  within 1-2%). A CBR MP3 lands 30-50 ms behind: the frame after the byte,
+  and libmad drops the first frame (no bit reservoir). The card has no VBR
+  file without a TOC and no FLAC with an ID3 tag in front.
+- **No audio from before the start:** in every run the first 10 ms block
+  is the fade-in, and from the second or third block the level matches
+  the file at the landed second.
+- **Now Playing before play** (`qs<sec>` while paused, screenshots): 1:00
+  of 3:46 with the bar at 26% (78 of 296 px); 2:30 of 3:46; 1:00 of 3:08
+  (Penelope: the held track's read-rate estimate after 6 s; the file is
+  3:10, which the backend's seek line says); 2:30 of 3:44; 1:00 of 5:11.
+- The decode task's `stack_free` low-water mark stayed 13,712 B through
+  20-odd seeks (an MP3 played from 0:00 reaches it before any seek); no
+  underruns.
+- Edge cases: `qs222` on a 3:46 track and `qs300` both log `in its last
+  5 s or past its end: from 0:00`; `qs1800` on `tone:silence` counts from
+  30:00 (paused at 30:04).
+
+**The CPU speed's restart, end to end** (the scripted finger on the
+Output tab's row and the dialog's Restart):
+
+- 240 -> 160, paused at 101.0 s: the boot logs `[queue] resume point:
+  1:41 into 31 (stopped: play starts there)`, `restarted for the CPU
+  speed` and the toast; Now Playing shows 1:41 of 3:46, Stopped
+  (screenshot); nothing played. Play: `starting 1:41 in`, landed at
+  1:41.029.
+- 160 -> 240, the Restart tapped while playing: `restarting (paused
+  first)`, `resume point saved: 2:01 into 31`, the same boot, 2:01 on Now
+  Playing, play picks up there (+279 ms by the TOC then; the fix below).
+- A hard reset (`!reset`, like a power cut) while paused at 2:12.8: the
+  boot applies 2:12, stopped. Playing, then `!reset`: `resume point saved:
+  none`, 0:00 and `--:--`, stopped. After every boot nothing played.
+- On a waiting 1:00: prev plays the same entry from 0:00 (as prev from
+  Stopped does); next and `i<n>` (another entry) drop it (`resume point
+  cleared`). The sleep timer's pause saved one (`31:55 into 52`), and the
+  flash's reset after it brought it back at boot.
+
+**The texts** (screenshots): the row at 240 "Smoothest lists, dancing /
+240 MHz" and at 160 "Slower lists, saves a little / 160 MHz", inside the
+row; "Restart at 160 MHz?" with its 3-line body, and "Restart at 240 MHz?"
+with "The speed changes at a restart. The music pauses and picks up at the
+same second.", nothing cut.
+
+**The held screen** (`Iu1`; the log, no screenshots: the console's `X` is
+input and ends the warning):
+
+- Lit: `Is32` right after a console wake: the warning at 2 s, `[screen]
+  held lit while the toast counts down`, no dim for its 30 s (the dim was
+  due 19 s after the wake).
+- Dim: a wake, then `Is32` 23 s later: `dim -> bright (held lit for a
+  countdown toast)` at the warning, lit to its end.
+- Keep on: a scripted tap on it 10 s into the warning: `[power] idle: kept
+  on (input)`, `[screen] the toast is gone: the countdown again (dims in
+  19 s)`, then dim 20 s and off 30 s after the tap: the normal timeout.
+  (The console bytes that carry a scripted tap are input themselves and
+  end the warning in the same pass, so this shows the ending, not the
+  button's own hit; a finger on it is still to do.)
+- Off: `Is70` after the screen went off: `turning off in 30 s (the screen
+  is off and stays off: it may be night)`, no screen line through it.
+- The sleep fade: `Ts10` 1 s after a wake: the fade from 10 s held the
+  screen bright for its 30 s, then at the pause `bright -> off (the sleep
+  timer)`. `Ts40`: the screen was off when the fade began and stayed off.
+- On USB each power-off ends in `USB power at the last moment: staying
+  on` and the countdown starts again, so with `Is32` (shorter than the
+  screen's timeout) the next warning comes 2 s later and holds the screen
+  again, over and over. A test length's artefact: a real length (10 min
+  or more) outlasts the screen's timeout.
+- After the run: `Iu0`, `I0`.
+
+**Found and fixed:**
+
+- **A LAME CBR file was placed by its TOC** (its "Info" header has one):
+  up to +279 ms at 2:01 of "Kelly Watch The Stars", where TrackSeek.h
+  promised a CBR file to the frame. An "Info" header whose first frames
+  agree on their bitrate now places the byte by that bitrate
+  (`Mp3Seek::CbrInfo`, logged `CBR, Info header`); a file whose frames
+  differ still goes by its TOC. test_track_seek's `test_mp3_info_cbr`.
+  Measured after: -29 to -51 ms (the table).
+- **Every boot without a resume point logged an error**,
+  `[E][Preferences.cpp:539] getBytesLength(): nvs_get_blob len fail:
+  resume NOT_FOUND`: `QueueStore`'s `readResume()` asks `isKey()` first.
+  Gone from the boot log since.
+- `pio test -e native`: 656 of 656 pass. `pio run -e core2`: RAM 53,728 B
+  (unchanged), flash 2,144,691 B (+96). Flashed; the temporary dump is out
+  of the tree.
+
+**Seen, not changed:**
+
+- Each pause writes the resume point to NVS and the next play removes it:
+  two writes a pause (`qs` saves one too); 45 over this run. NVS spreads
+  its writes; at a listener's rate of pauses this is nothing.
+- A screenshot (`X`) of an off screen returns what it last showed (here
+  the queue from before the run's edits): `Ps1` first.
+
+**Still to do (a hand, the headphones or other files needed):**
+
+- The power key off while paused, and the idle power-off to its end (on
+  USB it stays on at the last moment; `Iu1` doesn't change that read):
+  the second after the boot. (The same saved point as the pause's, which
+  the hard reset above applied.)
+- A finger on Keep on; a tap from Off during the sleep fade (the pocket
+  guard; the scripted finger bypasses the wake latch).
+- Over the headphones: a restart while streaming; a 48 kHz file refused.
+- A file changed on the card since its point was saved; a VBR MP3 without
+  a TOC; a FLAC with an ID3 tag in front.
+
+The device was left on a normal boot at the defaults (`Pcb0`: "cpu_mhz"
+removed, `CPU 240 MHz from boot (the default)`), the queue as found (27
+tracks, at 8, stopped, no resume point: a `!reset` while playing), and the
+serial daemon running.
 
 ### Step 9: battery-only validation
 

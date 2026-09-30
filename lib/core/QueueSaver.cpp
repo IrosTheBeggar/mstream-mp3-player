@@ -1,9 +1,23 @@
 #include "QueueSaver.h"
 
+#include <cstring>
+
 namespace {
 bool timeFor(uint32_t now, uint32_t since, uint32_t delay) { return now - since >= delay; }
 constexpr uint32_t kAllLines = 0xFFFFFFFFu;
 }  // namespace
+
+uint32_t QueueSaver::pathHash(const char* path) {
+  uint32_t h = 2166136261u;
+  for (const char* p = path; p && *p; ++p) h = (h ^ static_cast<uint8_t>(*p)) * 16777619u;
+  return h;
+}
+
+bool QueueSaver::resumeApplies(const QueueResume& r, uint32_t fileGeneration, int32_t line, bool kept,
+                               const char* path) {
+  return r.valid && r.positionMs > 0 && kept && line >= 0 && r.generation == fileGeneration && r.entry == line &&
+         path && path[0] && r.pathHash == pathHash(path);
+}
 
 void QueueSaver::loaded(uint32_t generation, bool rewrite, uint32_t nowMs) {
   generation_ = generation;
@@ -44,6 +58,7 @@ bool QueueSaver::busy() const {
 
 void QueueSaver::loop(uint32_t nowMs) {
   noteChanges(nowMs);
+  stepResume();
   if (writing_) {
     stepWrite(nowMs, kLinesPerPass);
     return;
@@ -65,6 +80,7 @@ bool QueueSaver::flushNow(uint32_t nowMs) {
   // An edit not on the card yet: now, without its delay or a retry's wait.
   if (contentDirty_ && startWrite(nowMs)) stepWrite(nowMs, kAllLines);
   if (positionDirty_ && !contentDirty_) savePosition();
+  stepResume();
   return !writing_ && !contentDirty_ && !positionDirty_;
 }
 
@@ -115,6 +131,7 @@ void QueueSaver::finishWrite(uint32_t nowMs) {
   ++writes_;
   lastWriteMs_ = nowMs - writeStartMs_;
   savePosition();  // paired with this generation from now on
+  stepResume();    // (the same: a resume point waiting for the file, or one of the old generation)
 }
 
 void QueueSaver::dropWrite() {
@@ -133,4 +150,38 @@ void QueueSaver::savePosition() {
   store_.savePosition(generation_, queue_.current());
   savedPosition_ = queue_.positionVersion();
   positionDirty_ = false;
+}
+
+void QueueSaver::stepResume() {
+  const int32_t cur = queue_.current();
+  if (!transport_.have || cur < 0) {
+    // Playback moved on (or nothing to pick up): cleared at once, whatever
+    // the file holds.
+    if (resume_.valid) {
+      resume_ = QueueResume{};
+      store_.saveResume(resume_);
+      ++resumeWrites_;
+    }
+    return;
+  }
+  // Paired with a file only once it holds the queue as it is (an edit
+  // waiting its write: after it, with the new generation).
+  if (contentDirty_ || writing_) return;
+  const uint32_t pos = transport_.positionMs;
+  if (resume_.valid && resume_.generation == generation_ && resume_.entry == cur) {
+    const uint32_t moved = pos > resume_.positionMs ? pos - resume_.positionMs : resume_.positionMs - pos;
+    if (moved < kResumeSlackMs) return;  // saved already
+  }
+  char path[TrackCatalog::kMaxPath];
+  catalog_.path(queue_.currentTrack(), path, sizeof(path));
+  QueueResume r;
+  r.valid = true;
+  r.generation = generation_;
+  r.entry = cur;
+  r.pathHash = pathHash(path);
+  r.positionMs = pos;
+  r.durationMs = transport_.durationMs;
+  resume_ = r;
+  store_.saveResume(resume_);
+  ++resumeWrites_;
 }

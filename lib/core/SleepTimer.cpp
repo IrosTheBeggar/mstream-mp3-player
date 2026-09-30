@@ -216,6 +216,7 @@ SleepTimer::Out SleepTimer::update(const In& in) {
 
   atBoundary_ = atBoundaryTrack(in);
   knownLength_ = knownLength;
+  trackFadeLive_ = atBoundary_ && knownLength && left <= kTrackFadeMs;
   out.pauseAfterTrack = (phase_ == Phase::Armed || (phase_ == Phase::Fading && trackFade_)) && atBoundaryTrack(in);
   out.fadeQ15 = held_;
   return out;

@@ -54,6 +54,10 @@ void test_cpu_labels_and_lines() {
   TEST_ASSERT_EQUAL_STRING("Restart at 160 MHz?", buf);
   pc::cpuDialogTitle(240, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING("Restart at 240 MHz?", buf);
+  // To 160 the dialog says what it costs; to 240 only what the restart does.
+  TEST_ASSERT_EQUAL_STRING(uitext::kCpuDialogBody160, pc::cpuDialogBody(160));
+  TEST_ASSERT_EQUAL_STRING(uitext::kCpuDialogBody, pc::cpuDialogBody(240));
+  TEST_ASSERT_EQUAL_STRING(uitext::kCpuDialogBody, pc::cpuDialogBody(80));  // (the default's)
   pc::cpuRestartingText(240, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING("Restarting at 240 MHz\xE2\x80\xA6", buf);
   pc::cpuBootText(160, buf, sizeof(buf));

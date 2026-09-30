@@ -6,6 +6,17 @@
 #include "QueueText.h"
 #include "TrackCatalog.h"
 
+// A resume point: `positionMs` into the entry at line `entry` of the queue
+// file of `generation`, whose path hashes to `pathHash` (pathHash()).
+struct QueueResume {
+  bool valid = false;
+  uint32_t generation = 0;
+  int32_t entry = -1;
+  uint32_t pathHash = 0;
+  uint32_t positionMs = 0;
+  uint32_t durationMs = 0;  // the track's length then (0: not known), for Now Playing's bar before it plays
+};
+
 // When and how the queue is saved, without the card (app/QueueStore gives
 // it the card and NVS; the host tests memory):
 //
@@ -19,12 +30,24 @@
 //   for a newer queue than the file holds (an edit not yet written) is
 //   never paired with the older file.
 //
+// - The resume point (the second the current entry picks up at after a
+//   boot; ENERGY.md item 6): saved at every pause, so at every orderly
+//   shutdown too (the CPU speed's restart pauses first, the idle power-off
+//   only comes paused or stopped, the sleep timer's end is a pause), and
+//   cleared as soon as playback moves on (a play, a skip, another entry,
+//   an edit that changes the current entry). Never while playing: no
+//   writes every second (flash wear), and a power cut while playing finds
+//   none (the entry starts at 0:00, as before). It pairs with the file of
+//   its generation, as the position does: saved only once the file holds
+//   the queue as it is, and saved again (at the entry's new line) after an
+//   edit that only moved it. A clear is written at once.
+//
 // flushNow() does all of it at once, for a power-off (ENERGY.md item 4): a
 // write under way is finished (or, if the queue changed since it began,
 // dropped and the queue written again whole), an edit not yet written is
-// written without its 2 s, and the position is saved. The temporary file
-// only ever replaces the queue file once complete, so a flush that fails
-// leaves the last good file.
+// written without its 2 s, and the position and the resume point are
+// saved. The temporary file only ever replaces the queue file once
+// complete, so a flush that fails leaves the last good file.
 //
 // Portable (host-tested: test_queue). Loop task only.
 class QueueSaver {
@@ -43,6 +66,8 @@ public:
     virtual void discardTemp() = 0;
     // The position (the current entry) of the file of this generation.
     virtual void savePosition(uint32_t generation, int32_t current) = 0;
+    // The resume point (below); !valid: none (removed).
+    virtual void saveResume(const QueueResume& r) = 0;
 
   protected:
     ~Store() = default;
@@ -52,6 +77,26 @@ public:
   static constexpr uint32_t kPositionDelayMs = 1000;  // after the last move
   static constexpr uint32_t kRetryMs = 10000;         // after a failed write
   static constexpr uint32_t kLinesPerPass = 32;       // ~2 KB of paths
+  // A resume point that moved less than this since it was saved isn't
+  // saved again (a paused output reads a few ms more as its fade ends).
+  static constexpr uint32_t kResumeSlackMs = 250;
+
+  // What the player says each pass (PlaybackController::resumePoint()):
+  // where the current entry would pick up after a boot; `have` false while
+  // it plays, or when it would start at 0:00 anyway.
+  struct Transport {
+    bool have = false;
+    uint32_t positionMs = 0;
+    uint32_t durationMs = 0;
+  };
+
+  // FNV-1a of a track's path: the resume point's check that the entry is
+  // still the same file after a boot (ids change with a library rebuild).
+  static uint32_t pathHash(const char* path);
+  // Whether the resume point `r` read at boot is the current entry's: the
+  // queue came from the file of `fileGeneration` with line `line` current,
+  // that line's track is still there (`kept`) and its path is `path`.
+  static bool resumeApplies(const QueueResume& r, uint32_t fileGeneration, int32_t line, bool kept, const char* path);
 
   QueueSaver(Store& store, const QueueModel& queue, const TrackCatalog& catalog)
       : store_(store), queue_(queue), catalog_(catalog) {}
@@ -65,6 +110,12 @@ public:
   // The queue as it is now counts as saved (it isn't the listener's edit:
   // a rebuild that left no library).
   void markSaved();
+  // What the store holds as the resume point (at boot, applied or not: one
+  // that doesn't apply is cleared at the next pass).
+  void loadedResume(const QueueResume& r) { resume_ = r; }
+  // Before each loop() and flushNow().
+  void noteTransport(const Transport& t) { transport_ = t; }
+  const QueueResume& resume() const { return resume_; }
 
   // Every loop pass.
   void loop(uint32_t nowMs);
@@ -81,6 +132,7 @@ public:
   // retry, maybe forever with the card gone): that's no reason to stay on.
   bool busy() const;
   uint32_t writes() const { return writes_; }
+  uint32_t resumeWrites() const { return resumeWrites_; }
   uint32_t failures() const { return failures_; }
   uint32_t lastWriteMs() const { return lastWriteMs_; }
 
@@ -93,6 +145,9 @@ private:
   void dropWrite();
   void failed(uint32_t nowMs);
   void savePosition();
+  // The resume point: cleared at once when there is none; saved when the
+  // file holds the queue as it is.
+  void stepResume();
 
   Store& store_;
   const QueueModel& queue_;
@@ -116,4 +171,8 @@ private:
   uint32_t nextTryMs_ = 0;
   uint32_t lastWriteMs_ = 0;
   uint32_t writes_ = 0, failures_ = 0;
+
+  Transport transport_;
+  QueueResume resume_;  // what the store holds
+  uint32_t resumeWrites_ = 0;
 };

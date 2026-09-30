@@ -108,8 +108,25 @@ void ScreenControl::wake(const char* why) {
   if (power_.wake(now, ScreenPower::Why::Event)) wakeWhy_ = why;  // (logged by step())
 }
 
-void ScreenControl::step(uint32_t nowMs, bool keepLit) {
-  if (power_.step(nowMs, keepLit)) logChange(nowMs);
+void ScreenControl::step(uint32_t nowMs, bool keepLit, bool holdLit) {
+  if (power_.step(nowMs, keepLit, holdLit)) logChange(nowMs);
+  // The hold's start and end, on a screen it holds (a dim one brightening
+  // is logged as a change too).
+  const bool held = holdLit && !power_.off() && !power_.pocketGuard();
+  if (held != held_) {
+    if (held) {
+      Serial.println("[screen] held lit while the toast counts down");
+    } else if (!power_.off()) {
+      const uint32_t next = power_.msUntilNext(nowMs);  // (0: Never)
+      if (next) {
+        Serial.printf("[screen] the toast is gone: the countdown again (%s in %lu s)\n",
+                      power_.pocketGuard() ? "off" : "dims", (unsigned long)(next / 1000));
+      } else {
+        Serial.println("[screen] the toast is gone (screen off after: Never)");
+      }
+    }
+    held_ = held;
+  }
   apply(nowMs);
 }
 
@@ -117,7 +134,9 @@ void ScreenControl::logChange(uint32_t nowMs) {
   const ScreenPower::Level l = power_.level();
   char after[64] = "";
   const uint32_t next = power_.msUntilNext(nowMs);
-  if (l == ScreenPower::Level::Bright && power_.pocketGuard()) {
+  if (power_.why() == ScreenPower::Why::HoldLit) {
+    // (until the toast ends: step() logs that)
+  } else if (l == ScreenPower::Level::Bright && power_.pocketGuard()) {
     snprintf(after, sizeof(after), "; off again in %lu s without input", (unsigned long)(next / 1000));
   } else if (l == ScreenPower::Level::Bright && next) {
     snprintf(after, sizeof(after), "; dims in %lu s", (unsigned long)(next / 1000));
@@ -204,6 +223,7 @@ void ScreenControl::consoleOn() { power_.wake(millis(), ScreenPower::Why::Consol
 bool ScreenControl::overrideBacklight(uint8_t level) {
   if (!power_.bright() || asleep_) return false;
   power_.overrideBacklight(level);
+  apply(millis());  // now (bright, awake: only the backlight)
   return true;
 }
 

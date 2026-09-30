@@ -1,6 +1,7 @@
 // Host tests for the screen policy (ScreenPower, docs/ENERGY.md item 2): the
-// dim and off timings for each choice, what keeps it lit, the wakes, the
-// pocket guard, and the backlight levels. The wake latch's own cases (with
+// dim and off timings for each choice, what keeps it lit, what holds a
+// lit one lit (a countdown toast), the wakes, the pocket guard, and the
+// backlight levels. The wake latch's own cases (with
 // the real recognisers) are in test_ui_input.
 // Run: pio test -e native
 #include <unity.h>
@@ -21,10 +22,10 @@ using W = ScreenPower::Why;
 
 // Steps every 50 ms from `from` to `to` (as the loop would), no input.
 // Returns how many level changes it saw.
-int run(ScreenPower& s, uint32_t from, uint32_t to, bool keepLit = false) {
+int run(ScreenPower& s, uint32_t from, uint32_t to, bool keepLit = false, bool holdLit = false) {
   int changes = 0;
   for (uint32_t t = from; t - from <= to - from; t += 50) {
-    if (s.step(t, keepLit)) ++changes;
+    if (s.step(t, keepLit, holdLit)) ++changes;
     if (t == to) break;
   }
   return changes;
@@ -473,6 +474,7 @@ void test_names() {
   TEST_ASSERT_EQUAL_STRING("dim", ScreenPower::name(L::Dim));
   TEST_ASSERT_EQUAL_STRING("off", ScreenPower::name(L::Off));
   TEST_ASSERT_TRUE(std::strlen(ScreenPower::name(W::PocketGuard)) > 0);
+  TEST_ASSERT_TRUE(std::strlen(ScreenPower::name(W::HoldLit)) > 0);
 }
 
 // The touch that attends a screen woken from off is remembered for that
@@ -510,6 +512,138 @@ void test_the_touch_that_attends_is_remembered() {
   TEST_ASSERT_FALSE(s.landedUnattended());
 }
 
+// Held lit (a countdown toast: the idle power-off's warning, the sleep
+// timer's fade): a lit screen stays Bright until it ends, then the whole
+// countdown from there. The bug it fixes: the warning came up 1 s before
+// the dim, and the screen went off 20 s before the power-off.
+void test_hold_lit_keeps_a_lit_screen_lit() {
+  ScreenPower s;
+  s.begin(0);
+  // The warning at 19 s (the dim was due at 20 s), 30 s long.
+  TEST_ASSERT_EQUAL_INT(0, run(s, 0, 19000));
+  TEST_ASSERT_EQUAL_INT(0, run(s, 19050, 49000, false, /*holdLit=*/true));
+  TEST_ASSERT_TRUE(s.bright());
+  // Gone (the power-off didn't come: USB, say): the countdown from its end.
+  TEST_ASSERT_EQUAL_INT(0, run(s, 49050, 68950));
+  TEST_ASSERT_TRUE(s.bright());
+  s.step(69000, false);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Dim), static_cast<int>(s.level()));
+  s.step(79000, false);
+  TEST_ASSERT_TRUE(s.off());
+
+  // Dim when it comes up: Bright at once (a tap on Keep on then acts), and
+  // held.
+  ScreenPower d;
+  d.begin(0);
+  d.step(25000, false);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Dim), static_cast<int>(d.level()));
+  TEST_ASSERT_TRUE(d.step(25050, false, true));
+  TEST_ASSERT_TRUE(d.bright());
+  TEST_ASSERT_TRUE(d.touchActs());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::HoldLit), static_cast<int>(d.why()));
+  TEST_ASSERT_EQUAL_INT(0, run(d, 25100, 40000, false, true));
+  // Keep on: input, which ends the warning; the countdown from the tap.
+  d.activity(40000);
+  d.step(40050, false);
+  TEST_ASSERT_TRUE(d.bright());
+  d.step(59999, false);
+  TEST_ASSERT_TRUE(d.bright());
+  d.step(60000, false);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Dim), static_cast<int>(d.level()));
+
+  // Never: nothing to hold, Bright either way.
+  ScreenPower n;
+  n.begin(0);
+  n.setTimeout(ScreenPower::kNever, 0);
+  n.step(0, false);
+  TEST_ASSERT_EQUAL_INT(0, run(n, 0, 60000, false, true));
+  TEST_ASSERT_TRUE(n.bright());
+}
+
+// An Off screen stays off through it (it may be night), the sleep timer's
+// turnOff() at its pause turns a held screen off, and keepLit still lights
+// one from Off.
+void test_hold_lit_leaves_an_off_screen_off() {
+  ScreenPower s;
+  s.begin(0);
+  s.step(30000, false);
+  TEST_ASSERT_TRUE(s.off());
+  TEST_ASSERT_EQUAL_INT(0, run(s, 30050, 60050, false, true));
+  TEST_ASSERT_TRUE(s.off());
+
+  ScreenPower t;
+  t.begin(0);
+  run(t, 0, 40000, false, true);  // the fade, on a lit screen
+  TEST_ASSERT_TRUE(t.bright());
+  t.turnOff(W::SleepTimer);  // its pause
+  TEST_ASSERT_TRUE(t.step(40050, false, true));
+  TEST_ASSERT_TRUE(t.off());
+  TEST_ASSERT_EQUAL_INT(0, run(t, 40100, 50000, false, true));
+  TEST_ASSERT_TRUE(t.off());
+  TEST_ASSERT_TRUE(t.step(50050, true, true));
+  TEST_ASSERT_TRUE(t.bright());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(W::KeepLit), static_cast<int>(t.why()));
+}
+
+// Woken during it. By an event (no input): held from the wake. By a touch
+// or the key from Off: the pocket guard stands, held or not (off 10 s
+// later); input after the wake ends the guard and the hold takes over.
+// For the idle warning the swallowed wake is input itself: the warning
+// (and the hold) ends in that pass, and the screen follows the guard,
+// then the normal countdown once input follows.
+void test_hold_lit_and_a_wake_during_it() {
+  ScreenPower e;
+  e.begin(0);
+  e.step(30000, false);
+  TEST_ASSERT_TRUE(e.wake(40000, W::Event));
+  TEST_ASSERT_TRUE(e.step(40000, false, true));
+  TEST_ASSERT_EQUAL_INT(0, run(e, 40050, 100000, false, true));  // past its own 30 s
+  TEST_ASSERT_TRUE(e.bright());
+  TEST_ASSERT_FALSE(e.touchActs());  // (still only answered by a touch: the event rule)
+
+  for (W why : {W::Touch, W::PowerKey}) {
+    ScreenPower p;
+    p.begin(0);
+    p.step(30000, false);
+    TEST_ASSERT_TRUE(p.wake(40000, why));
+    TEST_ASSERT_TRUE(p.step(40000, false, true));
+    TEST_ASSERT_TRUE(p.pocketGuard());
+    TEST_ASSERT_TRUE(p.unattended());
+    TEST_ASSERT_EQUAL_INT(0, run(p, 40050, 49950, false, true));
+    TEST_ASSERT_TRUE(p.step(50000, false, true));
+    TEST_ASSERT_TRUE(p.off());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(W::PocketGuard), static_cast<int>(p.why()));
+    // Woken again, and this time a tap follows: held until it ends.
+    p.wake(60000, why);
+    p.step(60000, false, true);
+    p.activity(62000);
+    TEST_ASSERT_FALSE(p.pocketGuard());
+    TEST_ASSERT_EQUAL_INT(0, run(p, 62050, 120000, false, true));
+    TEST_ASSERT_TRUE(p.bright());
+    p.step(139999, false);  // the countdown from the hold's last pass
+    TEST_ASSERT_TRUE(p.bright());
+    p.step(140000, false);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Dim), static_cast<int>(p.level()));
+  }
+
+  // The idle warning, off screen: the swallowed wake ends it (input).
+  ScreenPower w;
+  w.begin(0);
+  w.step(30000, false);
+  run(w, 30050, 40000, false, true);
+  TEST_ASSERT_TRUE(w.off());
+  w.wake(40050, W::Touch);
+  w.step(40050, false, /*holdLit=*/false);
+  TEST_ASSERT_TRUE(w.pocketGuard());
+  w.activity(45000);  // a tap on the lit screen: the guard ends
+  w.step(64999, false);
+  TEST_ASSERT_TRUE(w.bright());
+  w.step(65000, false);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Dim), static_cast<int>(w.level()));
+  w.step(75000, false);
+  TEST_ASSERT_TRUE(w.off());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_tables_and_defaults);
@@ -527,5 +661,8 @@ int main(int, char**) {
   RUN_TEST(test_wake_latch_timing);
   RUN_TEST(test_finger_activity);
   RUN_TEST(test_the_touch_that_attends_is_remembered);
+  RUN_TEST(test_hold_lit_keeps_a_lit_screen_lit);
+  RUN_TEST(test_hold_lit_leaves_an_off_screen_off);
+  RUN_TEST(test_hold_lit_and_a_wake_during_it);
   return UNITY_END();
 }

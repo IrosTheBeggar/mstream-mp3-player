@@ -130,6 +130,13 @@ public:
   // Counting, Armed or Fading: the moon is shown, and +10 min / Turn off.
   bool running() const { return phase_ == Phase::Counting || phase_ == Phase::Armed || phase_ == Phase::Fading; }
   bool fading() const { return phase_ == Phase::Fading; }
+  // The fade counts down to the pause now: a timed fade (its 30 s), or a
+  // track's in the boundary track's last 10 s (the last update()'s). Not a
+  // track's fade held after a skip (to a track that isn't the boundary's,
+  // or one with more than 10 s left): that can last a whole track or an
+  // album, with the toast still up. What holds a lit screen lit (main.cpp:
+  // ScreenPower's holdLit), never longer than the fade itself.
+  bool fadeCountingDown() const { return phase_ == Phase::Fading && (!trackFade_ || trackFadeLive_); }
   // The headphones' release is still to come (Ended).
   bool releasePending() const { return phase_ == Phase::Ended; }
   // Counting: ms to expiry (0 otherwise).
@@ -193,6 +200,7 @@ private:
   uint32_t endedAtMs_ = 0;   // Ended: since when
   bool atBoundary_ = false;  // the last update(): the current track is the boundary's
   bool knownLength_ = false; // ... and its length is known
+  bool trackFadeLive_ = false; // ... and in its last kTrackFadeMs (fadeCountingDown())
 };
 
 // Whether the backend's position and length are the current queue entry's

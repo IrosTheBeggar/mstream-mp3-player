@@ -21,10 +21,10 @@
 class AudioFileSourceFS;
 class AudioFileSourceID3;
 class AudioGenerator;
-class AudioGeneratorFLAC;
 class AudioGeneratorMP3;
 class AudioOutput;
 class RingOutput;
+class SeekableFlac;
 
 // IAudioBackend for the Core2. A decode task turns the current track into PCM
 // in a PSRAM ring (PcmRing); the active output, Bluetooth headphones or the
@@ -38,6 +38,12 @@ class RingOutput;
 // "tone:click<bpm>off" (first beat 0.37 of a period in; see ClickGen), and
 // an hour of digital silence, "tone:silence" (power measurements: the
 // output runs at its full rate, nothing is heard).
+//
+// A play can start part of the way in (the resume point: play()'s
+// `startMs`; lib/core TrackSeek, docs/ARCHITECTURE.md "Audio pipeline"): an
+// MP3 at a byte from its Xing or VBRI table of contents or its bitrate, on
+// a clean frame; a FLAC through libFLAC's own seek; a built-in track just
+// counts from there. positionMs() and durationMs() count from the start.
 class Core2AudioBackend : public IAudioBackend {
 public:
   enum class Output : uint8_t { Speaker, Bluetooth };
@@ -59,7 +65,7 @@ public:
   bool begin(fs::FS* fs, const char* btSinkName);
 
   // IAudioBackend
-  bool play(const std::string& path, uint32_t durationHintMs) override;
+  bool play(const std::string& path, uint32_t durationHintMs, uint32_t startMs) override;
   void pause() override;
   void resume() override;
   void stop() override;
@@ -180,9 +186,14 @@ public:
   // The current track's length (ms), for the UI's progress: exact for the
   // built-in tracks; for a file, estimated from how fast the decoder goes
   // through it (lib/core TrackProgress: exact for a constant-bitrate MP3,
-  // settling within seconds otherwise). 0: not known yet (the first ~1 s).
-  // Any task.
-  uint32_t durationMs() const;
+  // settling within seconds otherwise; a track started part of the way in
+  // adds its start to the estimate of what is left). 0: not known yet (the
+  // first ~1 s). Any task.
+  uint32_t durationMs() const override;
+  // Where the current track started (ms into it; 0: its beginning): a
+  // resume point, as it really landed (the last 5 s and past the end start
+  // at 0). positionMs() includes it. Any task.
+  uint32_t startOffsetMs() const { return startMs_.load(std::memory_order_relaxed); }
   // durationMs() was read from the file (or is a built-in track's), not
   // estimated.
   bool durationKnown() const { return knownDurationMs_.load(std::memory_order_relaxed) > 0; }
@@ -195,15 +206,27 @@ private:
     std::string path;
     Kind kind = Kind::Stop;
     uint32_t pauses = 0;  // pauses_ when it was made
+    uint32_t startMs = 0; // Play: this far in
+    uint32_t hintMs = 0;  // Play: its length as known elsewhere (play()'s durationHintMs)
   };
 
   static void taskEntry(void* self);
   static void onMetadata(void* self, const char* type, bool isUnicode, const char* value);
-  void request(const std::string& path, Kind kind);
+  void request(const std::string& path, Kind kind, uint32_t startMs = 0, uint32_t hintMs = 0);
   void decodeTask();
   Work start(uint32_t generation);
   Work fail(uint32_t generation, const std::string& why);
-  bool openDecoder(const std::string& path, AudioOutput* out);
+  // `startMs` > 0: part of the way in (sets startMs_ to where it landed),
+  // `hintMs` its length as known elsewhere (0: none).
+  bool openDecoder(const std::string& path, AudioOutput* out, uint32_t startMs, uint32_t hintMs);
+  // An MP3 at `startMs`: the byte to hand the decoder from (a frame's), and
+  // where that lands (`landedMs`), found through `probe` (PSRAM, holding
+  // `got` bytes from `audioStart`, the end of the tags; reused for the
+  // frame search). 0: from the top (the last 5 s, past the end, a VBR file
+  // with nothing to place it by, no clean frame there, or too little after
+  // it); `landedMs` is then left alone.
+  uint32_t mp3StartByte(uint8_t* probe, uint32_t got, uint32_t audioStart, uint32_t startMs, uint32_t hintMs,
+                        uint32_t* landedMs);
   void closeDecoder();
   Produced produceTone();
   Produced produceDecoded();
@@ -225,7 +248,7 @@ private:
   std::unique_ptr<AudioFileSourceFS> file_;
   std::unique_ptr<AudioFileSourceID3> id3_;  // per MP3 track
   std::unique_ptr<AudioGeneratorMP3> mp3_;   // created fresh for each track
-  std::unique_ptr<AudioGeneratorFLAC> flac_;
+  std::unique_ptr<SeekableFlac> flac_;
   AudioGenerator* decoder_ = nullptr;        // the one decoding now, or null
   const char* codec_ = "";
   bool toneTrack_ = false;
@@ -254,6 +277,8 @@ private:
   std::atomic<uint32_t> srcPos_{0};
   std::atomic<uint32_t> srcSize_{0};
   std::atomic<uint32_t> knownDurationMs_{0};
+  // Where the current track started, ms into it (startOffsetMs()).
+  std::atomic<uint32_t> startMs_{0};
 
   // Counts pause() calls. The decode task un-pauses a newly started track
   // (start()) only if the player hasn't paused since asking for it: a Next

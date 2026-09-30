@@ -83,7 +83,7 @@ void ScreenPower::turnOff(Why why) {
   set(Level::Off, why);
 }
 
-bool ScreenPower::step(uint32_t nowMs, bool keepLit) {
+bool ScreenPower::step(uint32_t nowMs, bool keepLit, bool holdLit) {
   if (keepLit) {
     sinceMs_ = nowMs;
     pocket_ = false;
@@ -93,7 +93,12 @@ bool ScreenPower::step(uint32_t nowMs, bool keepLit) {
     set(Level::Bright, Why::KeepLit);
   } else if (level_ != Level::Off) {
     const uint32_t offAfter = timeoutMs(timeout_);
-    if (pocket_) {
+    if (holdLit && !pocket_) {
+      // A countdown toast is up on a lit screen: Bright until it ends (not
+      // input: the pocket guard's screen isn't held, above).
+      sinceMs_ = nowMs;
+      set(Level::Bright, Why::HoldLit);
+    } else if (pocket_) {
       // Woken in a pocket, maybe: no dim step, off again 10 s after the wake.
       if (reached(nowMs, sinceMs_, kPocketMs)) {
         pocket_ = false;
@@ -150,6 +155,7 @@ const char* ScreenPower::name(Why w) {
     case Why::PowerKey: return "the power key";
     case Why::Event: return "an event for the listener";
     case Why::KeepLit: return "kept lit";
+    case Why::HoldLit: return "held lit for a countdown toast";
     case Why::Setting: return "the setting";
     case Why::SleepTimer: return "the sleep timer";
   }

@@ -21,9 +21,16 @@ public:
   bool failedFlag = false;
   bool failEverything = false;  // every track played from now on fails
   int stopCount = 0;
+  uint32_t lastStartMs = 0;  // where the last play() asked to start
+  uint32_t lastHintMs = 0;   // the length it was handed
+  uint32_t position = 0;     // what positionMs() says
+  uint32_t duration = 0;
 
-  bool play(const std::string& p, uint32_t) override {
+  bool play(const std::string& p, uint32_t hintMs, uint32_t startMs) override {
     lastPath = p;
+    lastStartMs = startMs;
+    lastHintMs = hintMs;
+    position = startMs;
     ++playCount;
     playing = true;
     paused = false;
@@ -40,7 +47,8 @@ public:
   }
   void loop(uint32_t) override {}
   bool isPlaying() const override { return playing && !paused; }
-  uint32_t positionMs() const override { return 0; }
+  uint32_t positionMs() const override { return position; }
+  uint32_t durationMs() const override { return duration; }
   bool finished() const override { return finishedFlag; }
   bool failed() const override { return failedFlag; }
 };
@@ -524,6 +532,221 @@ void test_pause_by_timer_marks_the_pause() {
   TEST_ASSERT_FALSE(r.player.pausedByTimer());
 }
 
+
+// ---- start points (the resume point after a boot) ----
+
+// Set while stopped (as QueueStore does at boot): nothing plays by itself;
+// the next play starts there, once; Now Playing reads it meanwhile.
+void test_a_start_point_waits_for_the_next_play() {
+  Rig r(3);
+  r.queue.setCurrent(1);
+  r.player.setStartPoint(83000, 240000);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  uint32_t ms = 0, dur = 0;
+  TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur));
+  TEST_ASSERT_EQUAL_UINT32(83000, ms);
+  TEST_ASSERT_EQUAL_UINT32(240000, dur);
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur));  // what QueueSaver keeps
+  TEST_ASSERT_EQUAL_UINT32(83000, ms);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);
+  TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+  TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));  // playing: nothing to save
+  // Played again later (a tap on it): from its start.
+  r.player.play(1);
+  TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+}
+
+// Next, another entry, or an edit that changes the current entry drops it;
+// prev on it goes to 0:00 of the same entry (and plays, as prev does).
+void test_a_start_point_belongs_to_its_entry() {
+  {
+    Rig r(3);
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0);
+    r.player.next();
+    TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+  }
+  {
+    Rig r(3);
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0);
+    r.player.prev();
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());  // the same entry
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+    r.player.prev();  // then prev as ever
+    TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+  }
+  {
+    Rig r(3);
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0);
+    r.player.play(2);  // another entry
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+    r.player.stop();
+    r.queue.setCurrent(1);  // back to it: the point was dropped
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+  }
+  {
+    // The current entry removed: its point goes with it.
+    Rig r(3);
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0);
+    const uint32_t pos = 1;
+    r.player.remove(&pos, 1);
+    uint32_t ms, dur;
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+    // An edit that leaves it current (an entry before it removed) keeps it.
+    r.player.setStartPoint(5000, 0);
+    const uint32_t first = 0;
+    r.player.remove(&first, 1);
+    TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur));
+    TEST_ASSERT_EQUAL_UINT32(5000, ms);
+  }
+  {
+    // The headphones' cues while stopped: prev on it goes to 0:00 and
+    // stays stopped; next moves on.
+    Rig r(3);
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0);
+    r.player.cuePrev();
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+    uint32_t ms, dur;
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+    r.player.setStartPoint(83000, 0);
+    r.player.cueNext();
+    TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+    TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  }
+}
+
+// Set while playing (the console's qs): it starts there now. Set while
+// paused: the held track is let go, and play starts there.
+void test_a_start_point_while_playing_or_paused() {
+  Rig r(2);
+  r.player.play(0);
+  r.player.setStartPoint(30000, 0);
+  TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+  TEST_ASSERT_EQUAL_UINT32(30000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  r.player.togglePlayPause();  // paused on the held track
+  r.player.setStartPoint(60000, 0);
+  TEST_ASSERT_EQUAL_INT(1, r.audio.stopCount);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT(3, r.audio.playCount);
+  TEST_ASSERT_EQUAL_UINT32(60000, r.audio.lastStartMs);
+  // 0: none.
+  r.player.stop();
+  r.player.setStartPoint(60000, 0);
+  r.player.setStartPoint(0, 0);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+}
+
+// A dropped start point stays dropped: the current entry removed (or the
+// queue cleared), then an undo that brings the entry back, then prev or a
+// tap on it: from 0:00, and nothing for QueueSaver to save again.
+void test_a_dropped_start_point_doesnt_come_back_with_an_undo() {
+  uint32_t ms = 0, dur = 0;
+  for (int how = 0; how < 3; ++how) {
+    Rig r(3);
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(130000, 240000);
+    if (how < 2) {
+      const uint32_t pos = 1;
+      r.player.remove(&pos, 1);  // current: the old entry 2 (now at 1)
+      TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+      TEST_ASSERT_TRUE(r.player.undo());  // the entry back, still current elsewhere
+      TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+      if (how == 0) {
+        r.player.prev();  // to the restored entry
+      } else {
+        r.player.play(1);  // a tap on it
+      }
+      TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+      TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+    } else {
+      r.player.clearQueue();
+      TEST_ASSERT_TRUE(r.player.undo());
+      TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+      TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+      TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));
+      r.player.togglePlayPause();
+      TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+    }
+  }
+  {
+    // The last entry removed while current (stopped on the new last one),
+    // then an undo: the same.
+    Rig r(3);
+    r.queue.setCurrent(2);
+    r.player.setStartPoint(130000, 240000);
+    const uint32_t pos = 2;
+    r.player.remove(&pos, 1);
+    TEST_ASSERT_TRUE(r.player.undo());
+    r.queue.setCurrent(2);
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+  }
+}
+
+// The start point's length: the one given; else a waiting start point's,
+// the held track's (the console's qs while paused), or the catalog's hint.
+// It goes to the backend with the play (a VBR file without a table of
+// contents is placed by it); a play from 0:00 gets the catalog's hint.
+void test_a_start_point_keeps_its_length() {
+  uint32_t ms = 0, dur = 0;
+  Rig r(2);
+  r.player.play(0);
+  r.audio.duration = 245000;
+  r.audio.position = 60000;
+  r.player.togglePlayPause();
+  r.player.setStartPoint(120000, 0);  // qs120, paused
+  TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur));
+  TEST_ASSERT_EQUAL_UINT32(120000, ms);
+  TEST_ASSERT_EQUAL_UINT32(245000, dur);
+  r.audio.duration = 0;               // (the backend let it go)
+  r.player.setStartPoint(90000, 0);   // qs again: the waiting one's length
+  TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur));
+  TEST_ASSERT_EQUAL_UINT32(245000, dur);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(90000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(245000, r.audio.lastHintMs);
+  r.player.play(0);                   // from 0:00: the catalog's hint (none for a file)
+  TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastHintMs);
+  // Stopped, nothing held: the catalog's hint.
+  r.player.stop();
+  r.player.setStartPoint(30000, 0);
+  TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur));
+  TEST_ASSERT_EQUAL_UINT32(0, dur);
+}
+
+// What QueueSaver saves: a paused track's position (the backend holds it),
+// none while playing, stopped at 0:00, or cued.
+void test_the_resume_point_is_a_paused_tracks_position() {
+  Rig r(2);
+  uint32_t ms = 0, dur = 0;
+  TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));  // stopped
+  r.player.play(0);
+  r.audio.position = 42500;
+  r.audio.duration = 200000;
+  TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));  // playing
+  r.player.togglePlayPause();
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur));
+  TEST_ASSERT_EQUAL_UINT32(42500, ms);
+  TEST_ASSERT_EQUAL_UINT32(200000, dur);
+  r.player.cueNext();  // the next entry, cued at 0:00
+  TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
@@ -559,5 +782,11 @@ int main(int, char**) {
   RUN_TEST(test_pause_after_this_track_survives_a_skip_and_a_failure);
   RUN_TEST(test_pause_after_the_last_track_without_repeat_stops);
   RUN_TEST(test_pause_by_timer_marks_the_pause);
+  RUN_TEST(test_a_start_point_waits_for_the_next_play);
+  RUN_TEST(test_a_start_point_belongs_to_its_entry);
+  RUN_TEST(test_a_start_point_while_playing_or_paused);
+  RUN_TEST(test_the_resume_point_is_a_paused_tracks_position);
+  RUN_TEST(test_a_dropped_start_point_doesnt_come_back_with_an_undo);
+  RUN_TEST(test_a_start_point_keeps_its_length);
   return UNITY_END();
 }

@@ -923,7 +923,7 @@ void OutputPage::onCpuSpeed() {
   pc::cpuDialogTitle(to, title, sizeof(title));
   ask_ = Ask::CpuRestart;
   askCpuMhz_ = to;
-  ui_.openDialog(this, title, uitext::kCpuDialogBody, kButtons, 2);
+  ui_.openDialog(this, title, pc::cpuDialogBody(to), kButtons, 2);
 }
 
 // A device on the Pair screen: pair (asked first when it replaces the

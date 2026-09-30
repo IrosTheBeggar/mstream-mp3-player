@@ -32,6 +32,20 @@ uint32_t id3v2Size(const uint8_t* head, size_t n);
 // constant bitrate file: estimateDurationMs() is exact for those).
 uint32_t mp3HeaderDurationMs(const uint8_t* buf, size_t n);
 
+// A Layer III frame header (MPEG-1, 2 or 2.5): what TrackSeek needs too.
+struct Mp3Frame {
+  int version;    // the header's 2 bits: 3 MPEG-1, 2 MPEG-2, 0 MPEG-2.5
+  int rateIndex;  // the header's 2 bits
+  int rate;       // Hz
+  int samples;    // per frame: 1152 or 576
+  int sideInfo;   // bytes after the header
+  int kbps;
+  int length;     // bytes, the header included
+};
+// The header at p (4 bytes), or false if it isn't one (free format, a bad
+// bitrate or rate, another layer).
+bool parseMp3Frame(const uint8_t* p, Mp3Frame* f);
+
 // A FLAC file's length from its STREAMINFO (the first metadata block, right
 // after "fLaC"): `buf` holds the file's first bytes (42 are enough). 0 if
 // it isn't one, or the encoder didn't know the total.

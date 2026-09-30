@@ -24,7 +24,9 @@ class Input;
 //                 the countdown starts again; the console's scripted
 //                 finger, which acts in the dark, also lights it); a touch
 //                 landing on the glass ends the pocket rule;
-//   step()        the countdown and what keeps it lit; a change is applied
+//   step()        the countdown, what keeps it lit, and what holds a lit
+//                 screen lit (a countdown toast: the idle power-off's
+//                 warning, the sleep timer's fade); a change is applied
 //                 and logged. Off: onDark(true) (the UI stops drawing),
 //                 then the backlight off and sleep-in. Awake again:
 //                 sleep-out with the backlight still off, 5 ms (the
@@ -52,7 +54,9 @@ public:
 
   void beginPass(uint32_t nowMs);
   void afterInput(uint32_t nowMs);
-  void step(uint32_t nowMs, bool keepLit);
+  // `holdLit`: a toast with a countdown is up (ScreenPower's holdLit: a
+  // lit screen stays bright until it ends, an off one stays off).
+  void step(uint32_t nowMs, bool keepLit, bool holdLit);
 
   // Something needs the listener: lit (if dim or off), and the whole
   // countdown again. Logged when it was a wake.
@@ -106,8 +110,8 @@ public:
   void consoleOff();
   // Ps1: on, as the PWR key does.
   void consoleOn();
-  // Pb<n>: the Bright level until restart (not saved; 0: the setting's).
-  // False: the screen isn't bright now (nothing changed).
+  // Pb<n>: the Bright level until restart (not saved; 0: the setting's),
+  // applied at once. False: the screen isn't bright now (nothing changed).
   bool overrideBacklight(uint8_t level);
   // "[screen] ..." status.
   void printStatus() const;
@@ -128,4 +132,5 @@ private:
   int8_t usb_ = -1;              // USB power present (ACIN or VBUS); -1 not read yet
   bool woken_ = false;           // takeWoken()
   bool inputSeen_ = false;      // takeInput()
+  bool held_ = false;           // held lit by a countdown toast (for the log)
 };

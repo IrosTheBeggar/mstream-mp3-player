@@ -406,6 +406,14 @@ struct MainUiHost : ui::UiHost {
     s.positionVersion = queue.positionVersion();
     s.positionMs = s.current >= 0 ? audio.positionMs() : 0;
     s.durationMs = s.current >= 0 ? audio.durationMs() : 0;
+    // A start point waiting (the resume point after a boot, or qs): Now
+    // Playing shows that second, and the length as it was then, until the
+    // play that starts there.
+    uint32_t startMs = 0, startDurationMs = 0;
+    if (s.current >= 0 && player.startPoint(&startMs, &startDurationMs)) {
+      s.positionMs = startMs;
+      s.durationMs = startDurationMs;
+    }
     BtSink& bt = audio.bluetooth();
     s.onBluetooth = audio.output() == Output::Bluetooth;
     s.btConnected = bt.connected();
@@ -799,9 +807,26 @@ static void queueCommand(const char* a) {
     case 'u':
       Serial.printf("[queue] undo: %s\n", player.undo() ? "done" : "nothing to undo");
       break;
+    case 's': {
+      // A test of the resume point without a restart: the current entry
+      // starts n s in at its next play, as after a boot with that second
+      // saved (playing: now; paused: the held track is let go), with the
+      // length as known (the held track's, else the catalog's). qs0 (or
+      // qs) clears it. The backend logs where it really landed.
+      if (queue.current() < 0) {
+        Serial.println("[queue] qs<sec>: nothing is current");
+        break;
+      }
+      const uint32_t ms = n > 0 ? static_cast<uint32_t>(n) * 1000u : 0;
+      player.setStartPoint(ms, 0);
+      Serial.printf("[queue] start point: %s (%s)\n", ms ? (String(n) + " s into the current entry").c_str() : "none",
+                    stateName());
+      break;
+    }
     default:
       Serial.println("[queue] q status, qa play all, qb built-ins, ql albums, qp<n>/qn<n>/q+<n> album n: play / "
-                     "play next / add, qr<pos> remove, qc clear up next, qx clear, qu undo");
+                     "play next / add, qr<pos> remove, qc clear up next, qx clear, qu undo, qs<sec> start the "
+                     "current entry that far in (as a resume point; qs0 none)");
       return;
   }
   queueStore.printStatus();
@@ -1571,7 +1596,8 @@ static void stepIdle(uint32_t now, bool input) {
   if (o.warn) {
     Serial.printf("[power] idle: turning off in %lu s (%s); any input keeps it on\n",
                   (unsigned long)p.warnSeconds(now),
-                  screen.off() ? "the screen is off and stays off: it may be night" : "the warning is up");
+                  screen.off() ? "the screen is off and stays off: it may be night"
+                               : "the warning is up, and the screen stays lit until it ends");
   }
   if (o.warnEnd) {
     Serial.printf("[power] idle: kept on (%s)\n", p.blocker() != IdlePolicy::Blocker::None
@@ -1618,8 +1644,9 @@ static uint32_t cpuRestartAskedMs = 0;
 // radio runs from, so the clock is set at boot only: the choice is saved,
 // and when it isn't the clock that runs, the player restarts at it, the
 // idle power-off's orderly way: paused first (after the restart nothing
-// plays by itself: the queue comes back stopped, as after any boot), the
-// queue and its place flushed, the note for the next boot's toast, the
+// plays by itself: the queue comes back stopped, as after any boot, at the
+// second it paused at: the flush saves the resume point), the queue and its
+// place flushed, the note for the next boot's toast, the
 // headphones let go (a clean disconnect, no "lost" dialog). The speaker's
 // amp is switched off too, the orderly way (its enable before its I2S, once
 // the pause's fade has played out): esp_restart() doesn't reset the AXP192,
@@ -1762,7 +1789,7 @@ void setup() {
   Serial.println("[console] n/p next/prev, space play/pause, o output, +/- volume, s stats, l list, "
                  "f forget bt, z silent test mode, d dance tab, m next dancer, x/X screenshot dancer/screen, v beat log; "
                  "with Enter: i<n> play, b<n> bench, c<name> headphones name, h<n> bt headroom -n dB, "
-                 "q queue (q? for its commands), a touch calibration (a5-a9 fewer crosshairs, ac check, as status, "
+                 "q queue (q? for its commands; qs<sec> a resume point), a touch calibration (a5-a9 fewer crosshairs, ac check, as status, "
                  "ad default table, ah0/1 haptics, ar0/1 rail ticks), "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
                  "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid/uip scripted finger, "
@@ -1812,12 +1839,15 @@ void loop() {
   // later: until then the position and length are the last track's. So a
   // length is noted only once this entry has started: a start since the
   // change, the position gone back, or a change right at a track's start.
+  // (Counted from where the track started: a resume point starts it part
+  // of the way in.)
   if (queue.current() >= 0 && audio.isPlaying()) {
     static uint32_t lengthKey = QueueModel::kNone;
     static uint8_t lengthNoted = 0;  // 1 the estimate, 2 the file's
     static uint32_t startSeqAtKey = 0, posAtKey = 0;
     static bool started = false;
-    const uint32_t pos = audio.positionMs();
+    const uint32_t at = audio.positionMs(), from = audio.startOffsetMs();
+    const uint32_t pos = at > from ? at - from : 0;
     const uint32_t seq = audio.startTiming().seq;
     if (queue.currentKey() != lengthKey) {
       lengthKey = queue.currentKey();
@@ -1873,13 +1903,18 @@ void loop() {
   // The screen, last: the countdown, and what keeps it lit (a screen of its
   // own, a play waiting for the headphones, a pairing). Going off, the UI
   // goes dark first; waking, it draws everything before the panel's
-  // sleep-out.
+  // sleep-out. A toast with a countdown (the idle power-off's warning, the
+  // sleep timer's fade while it counts down to the pause) holds a lit screen
+  // lit until it ends, and leaves an off one off (it may be night). A
+  // track's fade held after a skip (until the new track's last 10 s, or the
+  // album's end) keeps its toast but not the screen: that can be minutes.
   {
     const BtLink link = audio.bluetooth().link();
     // (A pairing under way, not one whose failure the card still shows.)
     const bool keepLit = screenTaken() || player.state() == PlayState::Waiting ||
                          link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay();
-    screen.step(millis(), keepLit);
+    const bool holdLit = idlePower.policy().phase() == IdlePolicy::Phase::Warning || sleepTimer.fadeCountingDown();
+    screen.step(millis(), keepLit, holdLit);
   }
 
   static uint32_t lastStats = 0;

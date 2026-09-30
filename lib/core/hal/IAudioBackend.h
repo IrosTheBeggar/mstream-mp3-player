@@ -10,9 +10,13 @@ class IAudioBackend {
 public:
   virtual ~IAudioBackend() = default;
 
-  // Begin playing `path`. `durationHintMs` may be ignored: the backend learns
-  // the real end of the track from the decoder.
-  virtual bool play(const std::string& path, uint32_t durationHintMs) = 0;
+  // Begin playing `path`, `startMs` into it (0: from its start; a resume
+  // point: the backend decides where that really lands, and positionMs()
+  // counts from there). `durationHintMs`: its length as known elsewhere (a
+  // resume point's, as the backend had it), 0: none; a hint for placing a
+  // start part of the way in (a VBR MP3 without a table of contents): the
+  // backend learns the real end of the track from the decoder.
+  virtual bool play(const std::string& path, uint32_t durationHintMs, uint32_t startMs) = 0;
   virtual void pause() = 0;
   virtual void resume() = 0;
   virtual void stop() = 0;
@@ -22,6 +26,8 @@ public:
 
   virtual bool isPlaying() const = 0;     // playing and not paused
   virtual uint32_t positionMs() const = 0;
+  // The current track's length (0: not known).
+  virtual uint32_t durationMs() const { return 0; }
   virtual bool finished() const = 0;      // reached end of the current track
   // The current track can't be played (missing file, unsupported format, or a
   // sample rate the active output can't take).

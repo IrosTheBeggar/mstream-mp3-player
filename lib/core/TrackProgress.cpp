@@ -21,16 +21,9 @@ uint32_t be32(const uint8_t* p) {
          (static_cast<uint32_t>(p[2]) << 8) | p[3];
 }
 
-// A Layer III frame header at p: its sample rate, samples per frame, side
-// information size and frame length. False if it isn't one.
-struct Frame {
-  int rate;
-  int samples;
-  int sideInfo;
-  int length;
-};
+}  // namespace
 
-bool parseFrame(const uint8_t* p, Frame* f) {
+bool parseMp3Frame(const uint8_t* p, Mp3Frame* f) {
   if (p[0] != 0xFF || (p[1] & 0xE0) != 0xE0) return false;
   const int version = (p[1] >> 3) & 3;  // 3 MPEG-1, 2 MPEG-2, 0 MPEG-2.5
   const int layer = (p[1] >> 1) & 3;    // 1: Layer III
@@ -42,16 +35,16 @@ bool parseFrame(const uint8_t* p, Frame* f) {
   static const int kKbps2[15] = {0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160};
   const bool mpeg1 = version == 3;
   const bool mono = (p[3] >> 6) == 3;
+  f->version = version;
+  f->rateIndex = rateIndex;
   f->rate = kRates[rateIndex] >> (mpeg1 ? 0 : version == 2 ? 1 : 2);
   f->samples = mpeg1 ? 1152 : 576;
   f->sideInfo = mpeg1 ? (mono ? 17 : 32) : (mono ? 9 : 17);
-  const int kbps = mpeg1 ? kKbps1[bitrateIndex] : kKbps2[bitrateIndex];
+  f->kbps = mpeg1 ? kKbps1[bitrateIndex] : kKbps2[bitrateIndex];
   const int padding = (p[2] >> 1) & 1;
-  f->length = (mpeg1 ? 144 : 72) * kbps * 1000 / f->rate + padding;
+  f->length = (mpeg1 ? 144 : 72) * f->kbps * 1000 / f->rate + padding;
   return f->length > 4;
 }
-
-}  // namespace
 
 uint32_t id3v2Size(const uint8_t* h, size_t n) {
   if (n < 10 || h[0] != 'I' || h[1] != 'D' || h[2] != '3') return 0;
@@ -67,11 +60,11 @@ uint32_t mp3HeaderDurationMs(const uint8_t* buf, size_t n) {
   // too (or runs past the buffer), so a stray 0xFF in junk before the audio
   // doesn't count.
   for (size_t i = 0; i + 4 <= n; ++i) {
-    Frame f;
-    if (!parseFrame(buf + i, &f)) continue;
+    Mp3Frame f;
+    if (!parseMp3Frame(buf + i, &f)) continue;
     const size_t next = i + static_cast<size_t>(f.length);
-    Frame g;
-    if (next + 4 <= n && !parseFrame(buf + next, &g)) continue;
+    Mp3Frame g;
+    if (next + 4 <= n && !parseMp3Frame(buf + next, &g)) continue;
     uint32_t frames = 0;
     const size_t xing = i + 4 + static_cast<size_t>(f.sideInfo);
     const size_t vbri = i + 4 + 32;

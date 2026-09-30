@@ -68,11 +68,14 @@ bool cpuRestartDue(uint32_t nowMs, uint32_t askedMs, bool linked, bool ampOn);
 // The "Restarting at 160 MHz..." toast stays up this long: until the
 // restart, which comes at most kRestartWaitMs after it.
 inline constexpr uint32_t kRestartToastMs = kRestartWaitMs + 2000;
-// The row's line: the choice's ("Smoothest lists and dancing"), or while
+// The row's line: the choice's ("Smoothest lists, dancing"), or while
 // the clock isn't the saved choice yet, what runs until a restart.
 const char* cpuSub(uint16_t saved, uint16_t running, char* buf, size_t size);
 // The dialog's title: "Restart at 160 MHz?"
 void cpuDialogTitle(uint16_t mhz, char* buf, size_t size);
+// Its body for a restart at `mhz`: to 160 what it costs as well
+// (kCpuDialogBody160), to 240 only what the restart does.
+const char* cpuDialogBody(uint16_t mhz);
 // The toast while it restarts: "Restarting at 160 MHz..."
 void cpuRestartingText(uint16_t mhz, char* buf, size_t size);
 // The next boot's toast: "CPU speed: 160 MHz".

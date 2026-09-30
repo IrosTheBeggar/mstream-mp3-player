@@ -106,6 +106,55 @@ The rules that keep it deadlock- and glitch-free:
   returns false when the ring is full or the pass's budget (1024 frames) is
   spent; the generator keeps that sample and retries it on its next `loop()`.
   The decode task re-checks requests and yields between passes.
+- **A track can start part of the way in** (`play()`'s `startMs`: the
+  resume point, below under Library and queue; `lib/core/TrackSeek`,
+  host-tested in test_track_seek). Where it lands first: in the last 5 s,
+  at the end or past it (a file that got shorter), it starts at 0:00
+  (`trackseek::startMs()`; an unknown length starts where asked). An MP3
+  with LAME's "Info" header (its CBR marker) whose first frames agree on
+  their bitrate starts at a byte by that bitrate (its TOC's 256ths of the
+  bytes put a 4 min file up to ~0.3 s off on the device); else at a byte
+  from its Xing TOC (100 points), else its VBRI TOC, else its average
+  bitrate (the header's length over its bytes). One without a
+  header: the first frame's bitrate (a plain CBR file, exact) when its
+  first frames (the 4 KB read) agree on it and the length `play()` was
+  handed (`durationHintMs`: the resume point's, as the backend had it)
+  agrees with the length that gives, within 3%; else the average bitrate
+  by that handed length (a VBR file whose Xing frame was stripped, a
+  silent 32 kbit/s start); with no length handed, a VBR file can't be
+  placed and starts at 0:00. From that byte the decoder is
+  handed the first frame whose next frame's header follows (a clean
+  start: libmad would resync, maybe on a false sync first), without the ID3
+  reader (the library has the tags; a big tag is skipped either way). No
+  such frame in the 4 KB read, or one with 5 s or less of audio after it
+  at its bitrate (a file shorter than its header says): the seek failed,
+  and it starts at 0:00 (never a start that ends at once: the player would
+  move on to the next entry). A FLAC's rate and length come from its
+  STREAMINFO, past an ID3v2 tag in front of "fLaC" if a tagger put one
+  there (libFLAC skips it too). A
+  FLAC seeks through libFLAC (`FLAC__stream_decoder_seek_absolute()`: its
+  SEEKTABLE, else a bisection on frame headers), reached through a
+  subclass (`SeekableFlac`: the decoder is AudioGeneratorFLAC's protected
+  member) that also sets the stream's format, which the generator would
+  otherwise learn only from a frame of its own (the first frame, handed
+  over from the target sample, would be read as 8-bit); a seek that fails
+  opens the file again from the top. A built-in track only counts from
+  there (the same sound, what is left of its length). `positionMs()` is
+  the start plus what was played, so Now Playing is right from the first
+  frame; the read-rate length estimate adds the start to what it
+  estimates is left. The ring was emptied as for any start, so nothing
+  from before the start plays, and the DeclickReader fades it in; a rate
+  Bluetooth can't take is still refused. Accuracy: a CBR MP3 to the frame,
+  a FLAC to the sample, a VBR MP3 with a TOC within about 1% of its length,
+  one without by its average bitrate; the time shown is the time asked for.
+  Measured on the device (ENERGY.md, "Device run: batch 3 follow-ups"):
+  FLAC 0 ms; CBR MP3 30-50 ms behind (it lands on the next clean frame, and
+  libmad drops the first one, which lacks its bit reservoir); a LAME VBR
+  MP3 by its TOC -0.29 to +0.35 s of a 3:44 track (0.15%). Each start logs
+  `[audio] MP3: starting 1:23 in, of 5:20 (Xing TOC): byte ...` (or `CBR,
+  Info header`, `the first frame's bitrate`, ...) or `[audio] FLAC:
+  starting 1:23 in (libFLAC's seek, N ms)` (75-112 ms, with or without a
+  SEEKTABLE).
 - **Requests are generations.** `play()`/`stop()` post a new generation to
   `TransportSync`; the decode task's progress reports for anything older are
   dropped, so a stale "ended" can't skip the track that was just requested.
@@ -496,7 +545,13 @@ left, so +10 min is dim and does nothing there.
 During the fade any touch, strip press or PWR wake (swallowed as usual)
 shows the toast "Sleep timer: fading" with +10 min and Turn off, the only
 controls that act on it; they come before an open sheet's (the toast is
-drawn over it) and take a tap to y 77. Both raise the level, so neither
+drawn over it) and take a tap to y 77. A screen lit when the fade starts
+stays lit while it counts down to the pause (the screen's `holdLit`,
+below; `SleepTimer::fadeCountingDown()`: a timed fade's 30 s, a track's
+fade in the boundary track's last 10 s); the pause's screen off still
+turns it off. A track's fade held after a skip (until the new track's
+last 10 s, or the album's end: minutes) keeps its toast but doesn't hold
+the screen, which times out as ever. Both raise the level, so neither
 acts on a clamped edge reading or on the touch that attended a screen
 woken from off (`SleepTimer::toastTap()`, `ScreenPower::
 landedUnattended()`): a pocket's second contact lands on a lit toast;
@@ -528,10 +583,14 @@ out:
 1. **The warning**, the last 30 s: the toast "Turning off in 30 s" (counting
    down) with **Keep on** (`Toast::showIdle`). Any input ends it, the
    button included; so does anything that blocks. It is drawn on a lit
-   screen only: it doesn't light a dark one (it may be night). In practice
-   that means only with Screen off after: Never: the shortest idle length
-   (10 min) outlasts the longest screen timeout (5 min), and what keeps
-   the screen lit also blocks the countdown.
+   screen only: it doesn't light a dark one (it may be night). A screen
+   lit when it appears stays lit, brightened, until it ends (the screen's
+   `holdLit`, below), so it can't go dark partway through the countdown
+   (checked on the device from bright and from dim; an off screen stays
+   off: ENERGY.md, "Device run: batch 3 follow-ups").
+   In practice it is seen mostly with Screen off after: Never: the
+   shortest idle length (10 min) outlasts the longest screen timeout (5
+   min), and what keeps the screen lit also blocks the countdown.
 2. **At the end:** `QueueStore::flushNow()` (a piece-wise write under way
    finished, or the queue written again whole if it changed since it
    began; an edit inside its 2 s written at once; the position), the note
@@ -549,7 +608,8 @@ out:
    cancels it: the note is cleared, the headphones stay let go (a play
    pages them).
 
-PWR boots it again, stopped where it was (the queue and position from the
+PWR boots it again, stopped where it was, at the second it paused at (the
+resume point) if it was paused (the queue and position from the
 card and NVS). The next boot reads and removes the note and, once the UI is
 up, shows "Turned off after 20 minutes idle" for 6 s. Console: `I` status
 (`[power] idle: off after 20 min; counting, off in 1142 s`, or what it waits
@@ -572,8 +632,14 @@ host-tested in test_power_choices; `app/PowerSettings` keeps them in NVS
   "cpu_mhz" (160 or 240; absent or anything else: the default), the same
   value as the console's `Pcb`. `PowerSettings::applyBootClock()` sets it
   first thing in setup(), before Bluetooth: 240 <-> 160 retunes the PLL the
-  radio runs from, so it can't change at runtime. A tap opens a dialog
-  ("Restart at 160 MHz?", [Cancel] [Restart]); Restart saves it, pauses,
+  radio runs from, so it can't change at runtime. The row's line says what
+  each costs: 240 "Smoothest lists, dancing", 160 "Slower lists, saves a
+  little" (UiText). A tap opens a dialog ("Restart at 160 MHz?", [Cancel]
+  [Restart]; its body from `powerchoice::cpuDialogBody()`: to 160 "Saves
+  a little battery; lists scroll at half speed while music plays. Music
+  pauses and picks up at the same second.", to 240 "The speed changes at
+  a restart. The music pauses and picks up at the same second."); Restart
+  saves it, pauses,
   flushes the queue and its place (`QueueStore::flushNow()`), leaves a note
   (NVS "boot_cpu"), lets go of the headphones the idle power-off's way and
   asks the speaker's pump to switch the amp off (`requestAmp(Off)`, as
@@ -584,8 +650,9 @@ host-tested in test_power_choices; `app/PowerSettings` keeps them in NVS
   waits) and the amp is off, at most 3 s later
   (`powerchoice::cpuRestartDue(now, asked, ...)`: a restart asked during
   the loop pass is stamped after the pass's `now`, which counts as 0 ms
-  waited, not a wrap). "Your place" is the queue's entry: the track starts
-  again from 0:00, as after any boot (the time in a track isn't saved). The
+  waited, not a wrap). The pause before the flush saves the resume point,
+  so after the boot the entry waits, stopped, at the same second (as both
+  dialogs say). The
   toast "Restarting at 160 MHz..." stays up until then. The next boot
   shows "CPU speed: 160 MHz" for 6 s, stopped where it was: nothing plays
   by itself. While a pairing is under way the restart isn't offered ("Wait
@@ -722,7 +789,36 @@ the browsing UI hold its **track ids**, never strings.
   holds the loop), into `queue.tmp`, then renamed over `queue.txt`. The
   position goes to NVS (at most once a second), tagged with the file's
   generation, so a track change doesn't rewrite the file and a position is
-  never paired with an older file. After a restart the queue is where it
+  never paired with an older file. The **resume point** goes to NVS too
+  ("queue"/"resume", one blob: generation, line, the path's FNV-1a hash,
+  ms, the length then): written at every pause (the player's
+  `resumePoint()`: a paused track's position, or a start point that
+  waits), so at every orderly shutdown (the CPU speed's restart pauses
+  first; the idle power-off comes only paused or stopped; the sleep
+  timer's end is a pause), and removed as soon as playback moves on (a
+  play, a skip, another entry, an edit that changes the current entry).
+  Nothing is written while playing (flash wear), so a power cut while
+  playing finds none and the entry starts at 0:00. Like the position it
+  pairs with the file of its generation: saved once the file holds the
+  queue as it is, and again (at its new line) after an edit that only
+  moved the entry. At boot one saved for the restored file's current line,
+  whose track still has that path, becomes the player's **start point**
+  (`setStartPoint()`): stopped, nothing plays, Now Playing shows that second
+  and the length saved with it, and the next play starts there (the fade-in
+  as always). It belongs to that entry's key: next, another entry, or an
+  edit that changes the current entry drops it; prev on it goes to 0:00 of
+  the same entry (and plays, as prev does), the headphones' prev while
+  stopped only drops it. `g0` carries it across the rebuild. It applies
+  after any boot with one saved: the CPU speed's restart, the idle
+  power-off, the power key while paused. Console: `q` and `l` print it
+  (`[queue] resume point saved: 1:23 into 5 (generation 12); start point
+  waiting: none`);
+  `qs<sec>` sets a start point on the current entry (playing: it starts
+  there now), with the length as known (the held track's, else the
+  catalog's), to check the seek without a restart; `qs0` clears it. A
+  dropped start point stays dropped: an undo that brings its entry back
+  doesn't bring the second back.
+  After a restart the queue is where it
   was, stopped. `g0` carries the queue across the rebuild the same way, in a
   PSRAM buffer: the track that plays keeps playing if it's still there. A
   rebuild that leaves no library (out of PSRAM, or a card that went away)
@@ -733,7 +829,7 @@ the browsing UI hold its **track ids**, never strings.
   gives it the card and NVS. `flushNow()` does it all synchronously, for
   the idle power-off: a write under way finished (or, if the queue changed
   since it began, dropped and written again whole), an edit not yet written
-  written without its 2 s, then the position. `queue.tmp` only replaces
+  written without its 2 s, then the position and the resume point. `queue.tmp` only replaces
   `queue.txt` complete, so a flush that fails leaves the last good file.
 - **SD access while playing**: the index cache and the queue file are
   written and read in pieces of at most 4 KB (`storage/FileStream`): one
@@ -933,7 +1029,14 @@ Queue, Dance and Output (with its Pair and About pages).
   coming up don't. It stays lit while the touch calibration or a spike
   tool has the display, a play waits for the headphones, or a pairing is
   under way (`BtSession::pairingUnderWay()`: not one whose failure the
-  card still shows). `ScreenControl` alone switches the backlight, and the
+  card still shows). While a toast with a countdown is up (the idle
+  power-off's warning, the sleep timer's fade while it counts down to the
+  pause: `holdLit`) a lit screen
+  (bright or dim) goes bright and stays lit until it ends, then counts
+  down from there; an off one stays off (it may be night). One woken
+  during it is held from the wake, except that a touch's or PWR's wake
+  from Off keeps its pocket guard until input follows (for the idle
+  warning that wake is input, which ends the warning). `ScreenControl` alone switches the backlight, and the
   panel's sleep-in and sleep-out (under `LcdLock`, at least 120 ms apart;
   5 ms after a sleep-out before anything is drawn). Going
   off, the UI goes **dark** first (`Ui::setDark`): every `gfx` fill and
@@ -1218,7 +1321,8 @@ Queue, Dance and Output (with its Pair and About pages).
   (the screen policy's; the value in a pill, a tap takes the next choice,
   saved), **Turn off when idle** (the idle power-off's, the same way: 10 /
   20 / 60 min / Never, a power symbol), **CPU speed** (240 / 160 MHz, a
-  chip; a restart, asked first) and **Bluetooth power** (Low / Normal /
+  chip, "Smoothest lists, dancing" / "Slower lists, saves a little"; a
+  restart, asked first) and **Bluetooth power** (Low / Normal /
   High, signal bars), **Touch calibration**, **About** (battery,
   storage, the library, the headphones, the CPU speed and Bluetooth power,
   memory, the version, and "Show the tips again"). The tab bar's Output icon is amber while a connection the
@@ -1505,8 +1609,7 @@ the others: only `Pz` plays it.
 2. **UI follow-ups**: covers from mStream's thumbnails at sync (the
    device's own decode stays the fallback), track lengths from the sync's
    metadata (the Queue's minutes are learned as tracks play until then);
-   A-click restarting a track after 3 s, a double buzz for inert buttons;
-   resume within a track after power-off.
+   A-click restarting a track after 3 s, a double buzz for inert buttons.
 3. **AutoDJ:** mStream precomputes a similar-tracks table (top-K neighbours per
    synced track, from its 1280-d embeddings) that the player walks with
    mStream's session-centroid scoring plus its BPM/key/artist filters.

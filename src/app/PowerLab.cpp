@@ -139,7 +139,6 @@ void PowerLab::backlight(const char* a) {
     Serial.printf("[power] backlight: the screen is %s (Ps1, or a touch, first)\n", screen_.levelName());
     return;
   }
-  screen_.step(millis(), false);  // applied now
   const uint8_t after = screen_.backlight();
   Serial.printf("[power] backlight %u -> %u (DC3 %lu -> %lu mV%s; until restart, Pb0 the setting's)\n",
                 (unsigned)before, (unsigned)after, (unsigned long)dc3Mv(before), (unsigned long)dc3Mv(after),
@@ -283,8 +282,9 @@ void PowerLab::txPower(const char* a) {
   txMax_ = static_cast<int8_t>(mx);
   txChanges_ = settings_.btChanges();
   if (audio_.bluetooth().connected()) {
-    // The controller reads back the old range while a link is up (seen on
-    // the device): what was asked is what counts, from the next connection.
+    // The controller reads back the new range at once (seen on the device,
+    // batch 3), but that is its setting, not the level of the link that is
+    // up, which keeps its own: the new range counts from the next connection.
     Serial.printf("[power] bt tx power: %+d..%+d -> %+d..%+d dBm asked: applies from the next connection (the link "
                   "that is up keeps its level)\n",
                   dbm(lo), dbm(hi), dbm(mn), dbm(mx));

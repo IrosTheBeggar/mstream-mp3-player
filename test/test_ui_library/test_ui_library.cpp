@@ -666,16 +666,21 @@ void test_power_settings_texts_fit() {
     fits(small, pc::btSub(c, false), kSettingValueSubW);
   }
   fits(small, pc::btSub(pc::kBtNormal, true), kSettingValueSubW);
-  // The dialog's body: 3 lines of Small over 260 px, none cut.
+  // The dialog's bodies (to 240, and to 160 with its cost): 3 lines of
+  // Small over 260 px, none cut, within the dialog's 128 bytes.
   textfit::Font f;
   f.ctx = const_cast<Vlw*>(&small);
   f.width = [](void* ctx, const char* s) { return static_cast<const Vlw*>(ctx)->width(s); };
-  char lines[4][96];
-  const int n = textfit::wrap(f, kCpuDialogBody, strlen(kCpuDialogBody), kDialogTitleW, 3, &lines[0][0], sizeof(lines[0]));
-  TEST_ASSERT_TRUE(n <= 3);
-  std::string joined;
-  for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
-  TEST_ASSERT_EQUAL_STRING(kCpuDialogBody, joined.c_str());
+  for (uint16_t mhz : pc::kCpuMhz) {
+    const char* dialogBody = pc::cpuDialogBody(mhz);
+    TEST_ASSERT_TRUE(strlen(dialogBody) < 128);
+    char lines[4][96];
+    const int n = textfit::wrap(f, dialogBody, strlen(dialogBody), kDialogTitleW, 3, &lines[0][0], sizeof(lines[0]));
+    TEST_ASSERT_TRUE(n <= 3);
+    std::string joined;
+    for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
+    TEST_ASSERT_EQUAL_STRING(dialogBody, joined.c_str());
+  }
   fits(bold, kCpuRestart, kDialogButtonTextW);
   fits(body, kCpuWaitPairing, kToastTextRight - kToastTextX);
   // About: its label (Small), and every value in Body (all fit; Small is

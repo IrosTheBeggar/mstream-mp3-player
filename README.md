@@ -133,9 +133,11 @@ pages do:
   (with their signal); tap one to pair it, in place of the ones paired
   before (they stay if the new pairing fails). Then the line-out module's
   place (not fitted yet), **Haptics** on/off, **Screen off after**,
-  **Brightness**, **Turn off when idle**, **CPU speed** (160 MHz saves
-  battery, 240 MHz is smoother; it takes a restart, asked first, and the
-  music stays paused after it) and **Bluetooth power** (Low, Normal,
+  **Brightness**, **Turn off when idle**, **CPU speed** (240 MHz, the default,
+  is the smooth one; 160 MHz saves a little battery, but lists scroll at
+  about half speed while music plays; it takes a restart, asked first: the
+  music pauses, and after it waits at the same second until you play) and
+  **Bluetooth power** (Low, Normal,
   High), **Touch calibration**, and **About** (battery, storage, library,
   headphones, CPU speed and Bluetooth power, memory, version, and the tips
   again).
@@ -172,7 +174,12 @@ instead.
 The first time, the queue is the whole library (artist, album, track order)
 followed by three built-in test tones and six click tracks (60 s at 90-174
 BPM, for the beat tracker). The queue and its position are saved on the card:
-after a restart it's where it was, stopped. The Library and Queue tabs edit
+after a restart it's where it was, stopped. A pause also saves the second
+it paused at: after the boot that follows (the CPU speed's restart, the
+idle power-off, the power key while paused) Now Playing shows that second
+and play picks up there; next, previous or another track start from the
+top. (A power cut while playing starts the track from its beginning:
+nothing is written while it plays.) The Library and Queue tabs edit
 it, and so do the console's `q` commands (play an album, play it next, add
 it, remove, clear, undo).
 
@@ -208,7 +215,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
 | `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/l/n>` show a faked Bluetooth (connecting, searching, pairing, lost) or no-card state for screenshots, `uiF0` the real one |
 | `m` | next dancer: crab (default) / stick figure | | |
-| `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo |
+| `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none) |
 | | | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosshairs; `a5`-`a9` for fewer), `ac` check the touch, `as` status, `ad` the default table, `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
 
@@ -236,6 +243,12 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   QueueText           The queue saved as paths (survives a library rebuild)
   TrackCatalog        Track ids to paths and names: the index's tracks and
                       the built-in ones
+  QueueSaver          When the queue, its position and the resume point
+                      (the second a paused track picks up at) are saved
+  TrackProgress, TrackSeek
+                      A track's length (headers, read rate); starting part
+                      of the way in (an MP3's byte from its bitrate or TOC,
+                      a clean frame, a FLAC's STREAMINFO)
   ByteStream          Byte sinks and sources for what is saved and loaded
   HeadsetKeys         What the headphones' transport keys do (never start music)
   PcmRing             PCM ring between the decode task and the active output

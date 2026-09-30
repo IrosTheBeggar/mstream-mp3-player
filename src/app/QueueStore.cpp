@@ -32,6 +32,42 @@ int32_t pickCurrent(const queuetext::Header& h, void* ctx) {
   return s.have && s.generation == h.generation ? s.position : h.current;
 }
 
+// The resume point as NVS keeps it: one blob, so it is written (or
+// removed) in one go.
+constexpr const char* kResumeKey = "resume";
+struct ResumeBlob {
+  uint32_t generation;
+  int32_t entry;
+  uint32_t pathHash;
+  uint32_t positionMs;
+  uint32_t durationMs;
+};
+
+QueueResume readResume() {
+  QueueResume r;
+  Preferences p;
+  if (!p.begin(kNvsNamespace, true)) return r;
+  ResumeBlob b;
+  // (isKey() first: getBytesLength() of a missing key logs an [E] line at
+  // every boot without a resume point.)
+  if (p.isKey(kResumeKey) && p.getBytesLength(kResumeKey) == sizeof(b) &&
+      p.getBytes(kResumeKey, &b, sizeof(b)) == sizeof(b)) {
+    r.valid = true;
+    r.generation = b.generation;
+    r.entry = b.entry;
+    r.pathHash = b.pathHash;
+    r.positionMs = b.positionMs;
+    r.durationMs = b.durationMs;
+  }
+  p.end();
+  return r;
+}
+
+void mmss(uint32_t ms, char* buf, size_t size) {
+  const uint32_t s = ms / 1000;
+  snprintf(buf, size, "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+}
+
 }  // namespace
 
 QueueStore::QueueStore(LocalStorage& storage, QueueModel& queue, PlaybackController& player,
@@ -49,7 +85,9 @@ bool QueueStore::restore() {
   char file[48], temp[48];
   paths(file, temp, sizeof(file));
   SavedPosition saved = readPosition();
+  const QueueResume resume = readResume();
   saver_.setGeneration(saved.generation);
+  saver_.loadedResume(resume);  // (one that doesn't apply is removed at the first pass)
   // queue.tmp is only ever a whole file if power went between removing
   // queue.txt and renaming it: then it's the newest.
   for (const char* path : {file, temp}) {
@@ -75,6 +113,21 @@ bool QueueStore::restore() {
     Serial.printf("[queue] restored %lu of %lu tracks from %s (%lu no longer there), at %d of %lu (position from %s)\n",
                   (unsigned long)r.entries, (unsigned long)r.lines, path, (unsigned long)r.dropped,
                   queue_.current() + 1, (unsigned long)queue_.size(), fromNvs ? "NVS" : "the file");
+    // The second it paused at: for this file's current line, if that track
+    // is still the same file. Only shown and waiting: nothing plays.
+    if (resume.valid) {
+      char current[TrackCatalog::kMaxPath];
+      catalog_.path(queue_.currentTrack(), current, sizeof(current));
+      const int32_t line = fromNvs ? saved.position : r.header.current;
+      char at[12];
+      mmss(resume.positionMs, at, sizeof(at));
+      if (QueueSaver::resumeApplies(resume, r.header.generation, line, r.currentKept, current)) {
+        player_.setStartPoint(resume.positionMs, resume.durationMs);
+        Serial.printf("[queue] resume point: %s into %d (stopped: play starts there)\n", at, queue_.current() + 1);
+      } else {
+        Serial.printf("[queue] resume point %s: not this queue's current track any more (dropped)\n", at);
+      }
+    }
     return true;
   }
   return false;
@@ -82,13 +135,21 @@ bool QueueStore::restore() {
 
 void QueueStore::loop(uint32_t nowMs) {
   if (!storage_.available()) return;
+  noteTransport();
   saver_.loop(nowMs);
   noteFailures();
+}
+
+void QueueStore::noteTransport() {
+  QueueSaver::Transport t;
+  t.have = player_.resumePoint(&t.positionMs, &t.durationMs);
+  saver_.noteTransport(t);
 }
 
 bool QueueStore::flushNow() {
   if (!storage_.available()) return true;  // nothing is saved without storage
   const uint32_t t0 = millis();
+  noteTransport();
   const bool wasWriting = saver_.writing(), wasDirty = saver_.contentDirty();
   const uint32_t writes = saver_.writes();
   const bool ok = saver_.flushNow(t0);
@@ -151,8 +212,31 @@ void QueueStore::savePosition(uint32_t generation, int32_t current) {
   p.end();
 }
 
+void QueueStore::saveResume(const QueueResume& r) {
+  Preferences p;
+  if (!p.begin(kNvsNamespace, false)) return;
+  if (r.valid) {
+    const ResumeBlob b{r.generation, r.entry, r.pathHash, r.positionMs, r.durationMs};
+    p.putBytes(kResumeKey, &b, sizeof(b));
+  } else if (p.isKey(kResumeKey)) {
+    p.remove(kResumeKey);
+  }
+  p.end();
+  char at[12];
+  mmss(r.positionMs, at, sizeof(at));
+  if (r.valid) {
+    Serial.printf("[queue] resume point saved: %s into %d\n", at, r.entry + 1);
+  } else {
+    Serial.println("[queue] resume point cleared (playback moved on)");
+  }
+}
+
 bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
   saver_.abort();  // its lines would mix old ids and new
+  // A start point waiting (the resume point after a boot) belongs to the
+  // entry's key, which the read below gives afresh: carried across.
+  uint32_t startMs = 0, startDurationMs = 0;
+  const bool hadStart = player_.startPoint(&startMs, &startDurationMs);
   // The queue as paths while the old index can still name them.
   MemorySink text(psramAlloc, psramFree);
   const bool saved = queuetext::write(queue_, catalog_, saver_.generation(), text) && !text.failed();
@@ -183,6 +267,7 @@ bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
   if (!index || !index->ready() || index->trackCount() == 0) {
     if (r.currentKept) {
       player_.queueReplaced(true);
+      if (hadStart) player_.setStartPoint(startMs, startDurationMs);
     } else {
       player_.stop();
     }
@@ -193,6 +278,7 @@ bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
     return ok;
   }
   player_.queueReplaced(r.currentKept);
+  if (hadStart && r.currentKept) player_.setStartPoint(startMs, startDurationMs);
   Serial.printf("[queue] after the rebuild: %lu of %lu tracks still there, at %d%s\n", (unsigned long)r.entries,
                 (unsigned long)r.lines, queue_.current() + 1, r.currentKept ? "" : " (the current one is gone)");
   return ok;
@@ -207,4 +293,17 @@ void QueueStore::printStatus() const {
                 kEdits[static_cast<int>(queue_.undoable())], (unsigned long)saver_.generation(),
                 saver_.writing() ? " (writing)" : saver_.contentDirty() ? " (to write)" : "",
                 (unsigned long)saver_.writes(), (unsigned long)saver_.lastWriteMs(), (unsigned long)saver_.failures());
+  // The resume point in NVS, and the player's start point (qs<sec>).
+  const QueueResume& r = saver_.resume();
+  char saved[48] = "none";
+  if (r.valid) {
+    char at[12];
+    mmss(r.positionMs, at, sizeof(at));
+    snprintf(saved, sizeof(saved), "%s into %d (generation %lu)", at, r.entry + 1, (unsigned long)r.generation);
+  }
+  uint32_t ms = 0, dur = 0;
+  char start[24] = "none";
+  if (player_.startPoint(&ms, &dur)) mmss(ms, start, sizeof(start));
+  Serial.printf("[queue] resume point saved: %s; start point waiting: %s; %lu resume writes\n", saved, start,
+                (unsigned long)saver_.resumeWrites());
 }

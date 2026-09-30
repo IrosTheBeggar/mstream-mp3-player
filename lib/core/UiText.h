@@ -208,8 +208,11 @@ inline constexpr const char* kIdleNeverSub = "stays on: more battery";
 // ENERGY.md items 6 and 7). The CPU's line while the clock isn't the saved
 // choice yet (the console's Pcb): "240 MHz until a restart".
 inline constexpr const char* kCpuTitle = "CPU speed";
+// 160's line says what it costs: lists scrolled at about half the frame
+// rate with an MP3 playing (8 against 16 fps), the dancer at ~18 of 24,
+// for ~5 mA (ENERGY.md step 6a).
 inline constexpr const char* kCpu240Sub = "Smoothest lists, dancing";
-inline constexpr const char* kCpu160Sub = "Saves battery, a bit slower";
+inline constexpr const char* kCpu160Sub = "Slower lists, saves a little";
 inline constexpr const char* kCpuPendingSub = "%u MHz until a restart";
 inline constexpr const char* kBtPowerTitle = "Bluetooth power";
 inline constexpr const char* kBtLowSub = "Saves battery; stay close";
@@ -221,8 +224,15 @@ inline constexpr const char* kBtPendingSub = "From the next connection";
 // lines), [Cancel] and [Restart] (kDialogButtonTextW). PowerChoices has
 // the title ("Restart at 160 MHz?"), the toast while it restarts and the
 // next boot's toast (Body on one line, kToastTextX to kToastTextRight).
+// What the restart really does: it pauses, and after the boot the entry
+// waits at that second (the resume point: QueueSaver), stopped until play.
+// To 160 it says the cost too (the title already says it restarts);
+// PowerChoices' cpuDialogBody() picks one.
 inline constexpr const char* kCpuDialogBody =
-    "The speed changes at a restart. The music pauses; the queue and your place are kept.";
+    "The speed changes at a restart. The music pauses and picks up at the same second.";
+inline constexpr const char* kCpuDialogBody160 =
+    "Saves a little battery; lists scroll at half speed while music plays. "
+    "Music pauses and picks up at the same second.";
 inline constexpr const char* kCpuRestart = "Restart";
 // A tap on "CPU speed" while a pairing is under way (the restart would drop
 // it): a toast, nothing saved.

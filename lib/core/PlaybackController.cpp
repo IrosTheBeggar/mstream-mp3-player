@@ -21,7 +21,13 @@ void PlaybackController::startNow() {
   char path[TrackCatalog::kMaxPath];
   const uint32_t id = queue_.currentTrack();
   catalog_.path(id, path, sizeof(path));
-  audio_.play(std::string(path), catalog_.durationHintMs(id));
+  const uint32_t at = hasStartPoint() ? startMs_ : 0;
+  // Its length: a start point's (the resume point's, as the backend had it:
+  // a VBR file without a table of contents is placed by it), else the
+  // catalog's hint.
+  const uint32_t hint = at > 0 && startDurationMs_ > 0 ? startDurationMs_ : catalog_.durationHintMs(id);
+  clearStartPoint();  // once: a later start of the entry is from its beginning
+  audio_.play(std::string(path), hint, at);
   setPlaying(PlayState::Playing);
   cued_ = false;
 }
@@ -77,6 +83,7 @@ void PlaybackController::cancelWait() {
 void PlaybackController::next() {
   if (queue_.empty()) return;
   failuresInARow_ = 0;
+  clearStartPoint();  // (a queue of one wraps to the same entry: from its start)
   advance();
 }
 
@@ -91,7 +98,11 @@ void PlaybackController::advance() {
 void PlaybackController::prev() {
   if (queue_.empty()) return;
   failuresInARow_ = 0;
-  queue_.step(-1, repeat_);  // at the start without repeat: the first track again
+  if (hasStartPoint()) {
+    clearStartPoint();  // the entry it would pick up in, from 0:00
+  } else {
+    queue_.step(-1, repeat_);  // at the start without repeat: the first track again
+  }
   startCurrent();
 }
 
@@ -105,6 +116,11 @@ void PlaybackController::cue(int delta) {
   }
   if (queue_.empty()) return;
   failuresInARow_ = 0;
+  if (delta < 0 && hasStartPoint()) {
+    clearStartPoint();  // as prev(): the same entry, at 0:00 (the backend holds nothing of it)
+    return;
+  }
+  clearStartPoint();
   queue_.step(delta, repeat_);
   if (state_ == PlayState::Paused && !cued_) {
     audio_.stop();  // the paused track can't be resumed any more
@@ -117,6 +133,59 @@ void PlaybackController::stop() {
   state_ = PlayState::Stopped;
   cued_ = false;
   pausedByTimer_ = false;  // (stopped: headphone Play starts nothing anyway)
+}
+
+void PlaybackController::setStartPoint(uint32_t ms, uint32_t durationMs) {
+  if (!hasTrack() || ms == 0) {
+    clearStartPoint();
+    return;
+  }
+  if (durationMs == 0) {
+    // Not said (the console's qs): the length as known here, so Now
+    // Playing keeps it and the backend can place the start by it.
+    if (hasStartPoint()) {
+      durationMs = startDurationMs_;
+    } else if (state_ != PlayState::Stopped && !cued_) {
+      durationMs = audio_.durationMs();  // the backend holds this entry's track
+    } else {
+      durationMs = catalog_.durationHintMs(queue_.currentTrack());
+    }
+  }
+  startMs_ = ms;
+  startDurationMs_ = durationMs;
+  startKey_ = queue_.currentKey();
+  switch (state_) {
+    case PlayState::Playing:
+      failuresInARow_ = 0;
+      startCurrent();  // there, now
+      break;
+    case PlayState::Paused:
+    case PlayState::Waiting:
+      // A held track (paused, or waiting to resume) is let go: the next
+      // play starts the entry again, there.
+      if (!cued_) {
+        audio_.stop();
+        cued_ = true;
+      }
+      break;
+    case PlayState::Stopped:
+      break;
+  }
+}
+
+bool PlaybackController::startPoint(uint32_t* ms, uint32_t* durationMs) const {
+  if (!hasStartPoint()) return false;
+  *ms = startMs_;
+  *durationMs = startDurationMs_;
+  return true;
+}
+
+bool PlaybackController::resumePoint(uint32_t* ms, uint32_t* durationMs) const {
+  if (startPoint(ms, durationMs)) return true;
+  if ((state_ != PlayState::Paused && state_ != PlayState::Waiting) || cued_ || !hasTrack()) return false;
+  *ms = audio_.positionMs();
+  *durationMs = audio_.durationMs();
+  return *ms > 0;
 }
 
 void PlaybackController::pauseByTimer() {
@@ -173,6 +242,9 @@ void PlaybackController::update(uint32_t nowMs) {
 
 void PlaybackController::currentMoved() {
   failuresInARow_ = 0;
+  // The start point was the old entry's: dropped, not only hidden (an undo
+  // that brings that entry back must not bring its second back too).
+  clearStartPoint();
   if (!hasTrack()) {
     stop();
     return;
@@ -196,6 +268,7 @@ void PlaybackController::currentMoved() {
 bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start) {
   if (!queue_.replace(tracks, n, start)) return false;
   failuresInARow_ = 0;
+  clearStartPoint();
   if (hasTrack()) {
     startCurrent();
   } else {
@@ -207,6 +280,7 @@ bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t st
 QueueModel::Removed PlaybackController::remove(const uint32_t* positions, uint32_t n) {
   const QueueModel::Removed r = queue_.remove(positions, n);
   if (!r.current) return r;
+  clearStartPoint();  // (as currentMoved(); stop() doesn't)
   if (r.pastEnd) {
     stop();  // nothing after it stayed: stopped, on the last track
   } else {
@@ -216,6 +290,7 @@ QueueModel::Removed PlaybackController::remove(const uint32_t* positions, uint32
 }
 
 void PlaybackController::clearQueue() {
+  clearStartPoint();  // an undo brings the queue back, not the second
   stop();
   queue_.clear();
 }

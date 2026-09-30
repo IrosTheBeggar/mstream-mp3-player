@@ -47,6 +47,10 @@ const char* cpuSub(uint16_t saved, uint16_t running, char* buf, size_t size) {
 
 void cpuDialogTitle(uint16_t mhz, char* buf, size_t size) { snprintf(buf, size, "Restart at %s?", cpuLabel(mhz)); }
 
+const char* cpuDialogBody(uint16_t mhz) {
+  return cpuMhzFromStored(mhz) == 160 ? uitext::kCpuDialogBody160 : uitext::kCpuDialogBody;
+}
+
 void cpuRestartingText(uint16_t mhz, char* buf, size_t size) {
   snprintf(buf, size, "Restarting at %s\xE2\x80\xA6", cpuLabel(mhz));
 }

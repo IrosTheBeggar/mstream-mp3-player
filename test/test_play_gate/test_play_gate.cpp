@@ -32,7 +32,7 @@ public:
   bool playing = false;
   bool paused = false;
 
-  bool play(const std::string& p, uint32_t) override {
+  bool play(const std::string& p, uint32_t, uint32_t) override {
     lastPath = p;
     ++playCount;
     playing = true;

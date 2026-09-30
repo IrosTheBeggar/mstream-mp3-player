@@ -14,6 +14,7 @@
 #include <cstring>
 
 #include "TrackProgress.h"
+#include "TrackSeek.h"
 #include "audio/RingOutput.h"
 
 namespace {
@@ -31,6 +32,16 @@ constexpr uint32_t kBtDefaultReportUs = 150000;
 // The speaker before its first buffer has been timed: ~3 buffers + DMA.
 constexpr uint32_t kSpeakerDefaultUs = 115000;
 constexpr uint32_t kBenchSeconds = 20;
+// An MP3's first bytes after its tags (its Xing/VBRI header, PSRAM), and
+// after a seek a frame and the next one's header (a frame is at most 1,441
+// bytes).
+constexpr uint32_t kMp3Probe = 4096;
+
+// "1:23" (m:ss).
+void mmss(uint32_t ms, char* buf, size_t size) {
+  const uint32_t s = ms / 1000;
+  snprintf(buf, size, "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+}
 
 std::string extensionOf(const std::string& path) {
   const size_t dot = path.find_last_of('.');
@@ -64,6 +75,30 @@ public:
 };
 }  // namespace
 
+// libFLAC's seek (its SEEKTABLE when the file has one, else a bisection on
+// the frames' headers), which AudioGeneratorFLAC doesn't expose: its decoder
+// is a protected member.
+class SeekableFlac : public AudioGeneratorFLAC {
+public:
+  // After begin(): to `sample`. The seek reads the metadata, then decodes
+  // the frame the sample is in and hands it over from that sample (write_cb
+  // keeps it for loop()). loop() learns the stream's format only after a
+  // frame of its own, so it is set here: otherwise that first frame would
+  // be read as 8-bit. (A rate the output refuses, 48 kHz on Bluetooth,
+  // fails the track at its first loop(), as it would from the top.) False:
+  // not there; the decoder is then in its seek error state: start again.
+  bool seekTo(uint64_t sample) {
+    if (!flac || !FLAC__stream_decoder_seek_absolute(flac, sample)) return false;
+    sampleRate = FLAC__stream_decoder_get_sample_rate(flac);
+    channels = static_cast<uint16_t>(FLAC__stream_decoder_get_channels(flac));
+    bitsPerSample = static_cast<uint16_t>(FLAC__stream_decoder_get_bits_per_sample(flac));
+    if (sampleRate == 0 || channels == 0) return false;
+    output->SetRate(static_cast<int>(sampleRate));
+    output->SetChannels(channels);
+    return true;
+  }
+};
+
 Core2AudioBackend::Core2AudioBackend() = default;
 Core2AudioBackend::~Core2AudioBackend() = default;
 
@@ -91,22 +126,22 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
 
 // ---- control side (loop task) ----
 
-void Core2AudioBackend::request(const std::string& path, Kind kind) {
+void Core2AudioBackend::request(const std::string& path, Kind kind, uint32_t startMs, uint32_t hintMs) {
   if (!task_) return;  // begin() failed
   {
     std::lock_guard<std::mutex> guard(lock_);
-    request_ = {path, kind, pauses_.load()};
+    request_ = {path, kind, pauses_.load(), startMs, hintMs};
   }
   requestMs_.store(millis(), std::memory_order_relaxed);
   sync_.post(kind == Kind::Play ? Phase::Pending : Phase::Idle);
   xTaskNotifyGive(task_);
 }
 
-bool Core2AudioBackend::play(const std::string& path, uint32_t) {
+bool Core2AudioBackend::play(const std::string& path, uint32_t durationHintMs, uint32_t startMs) {
   // Un-paused by the decode task once the old track is discarded (start()), so
   // a paused ring never plays a burst of the previous track first.
   transportPlaying_ = true;
-  request(path, Kind::Play);
+  request(path, Kind::Play, startMs, durationHintMs);
   return true;
 }
 
@@ -140,15 +175,20 @@ bool Core2AudioBackend::isPlaying() const {
 uint32_t Core2AudioBackend::durationMs() const {
   const uint32_t known = knownDurationMs_.load(std::memory_order_relaxed);
   if (known) return known;
-  return progress::estimateDurationMs(producedFrames_.load(std::memory_order_relaxed), shared_.rate,
-                                      srcPos0_.load(std::memory_order_relaxed), srcPos_.load(std::memory_order_relaxed),
-                                      srcSize_.load(std::memory_order_relaxed));
+  // The estimate is of what is left from where the decoder began (the
+  // first audio's file position): a start part of the way in adds its time.
+  const uint32_t left =
+      progress::estimateDurationMs(producedFrames_.load(std::memory_order_relaxed), shared_.rate,
+                                   srcPos0_.load(std::memory_order_relaxed), srcPos_.load(std::memory_order_relaxed),
+                                   srcSize_.load(std::memory_order_relaxed));
+  return left ? startMs_.load(std::memory_order_relaxed) + left : 0;
 }
 
 uint32_t Core2AudioBackend::positionMs() const {
   const int rate = shared_.rate;
   const uint32_t frames = ring_->readPos() - trackStart_;
-  return rate > 0 ? static_cast<uint32_t>(static_cast<uint64_t>(frames) * 1000 / rate) : 0;
+  const uint32_t played = rate > 0 ? static_cast<uint32_t>(static_cast<uint64_t>(frames) * 1000 / rate) : 0;
+  return startMs_.load(std::memory_order_relaxed) + played;
 }
 
 bool Core2AudioBackend::finished() const { return sync_.phase() == Phase::Ended; }
@@ -395,6 +435,9 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   producedFrames_ = 0;
   srcPos0_ = srcPos_ = srcSize_ = 0;
   knownDurationMs_ = 0;
+  // Where it was asked to start, so Now Playing shows that second from the
+  // request on; corrected below once the track says where it really lands.
+  startMs_ = req.kind == Kind::Play ? req.startMs : 0;
   setText(description_, "");
   setText(title_, "");
   setText(artist_, "");
@@ -414,10 +457,24 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
 
   if (req.path.rfind("tone:", 0) == 0) {
     const std::string what = req.path.substr(5);
+    // A built-in track started part of the way in counts from there: the
+    // same sound, only what is left of its length (a click track's grid
+    // starts again at the start, so the dancer's truth, in track frames
+    // from the start, holds).
+    auto framesFrom = [&](uint32_t seconds) {
+      const uint32_t at = trackseek::startMs(req.startMs, seconds * 1000);
+      startMs_ = at;
+      if (req.startMs > 0) {
+        char asked[12];
+        mmss(req.startMs, asked, sizeof(asked));
+        Serial.printf("[audio] built-in track: %s asked: %s\n", asked, at ? "counting from there" : "from 0:00");
+      }
+      return kToneRate * seconds - static_cast<uint32_t>(static_cast<uint64_t>(at) * kToneRate / 1000);
+    };
     ClickGen::Spec click;
     if (ClickGen::parse(what, &click)) {
       shared_.rate = kToneRate;
-      click_.start(kToneRate, click, kToneRate * kClickSeconds);
+      click_.start(kToneRate, click, framesFrom(kClickSeconds));
       knownDurationMs_ = kClickSeconds * 1000;
       toneTrack_ = clickTrack_ = true;
       char text[48];
@@ -428,7 +485,7 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
     }
     if (what == "silence") {
       shared_.rate = kToneRate;
-      tone_.startSilence(kToneRate, kToneRate * kSilenceSeconds);
+      tone_.startSilence(kToneRate, framesFrom(kSilenceSeconds));
       knownDurationMs_ = kSilenceSeconds * 1000;
       toneTrack_ = true;
       setText(description_, "silence (zeros, for power tests), 44100 Hz");
@@ -440,8 +497,7 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
     if (hz <= 0) return fail(generation, "unknown tone " + req.path);
     shared_.rate = kToneRate;
     tone_.start(kToneRate, static_cast<float>(hz), -18.0f,
-                leftOnly ? ToneGen::Channels::LeftOnly : ToneGen::Channels::Both,
-                kToneRate * kToneSeconds);
+                leftOnly ? ToneGen::Channels::LeftOnly : ToneGen::Channels::Both, framesFrom(kToneSeconds));
     knownDurationMs_ = kToneSeconds * 1000;
     toneTrack_ = true;
     setText(description_, "tone " + std::to_string(hz) + " Hz" + (leftOnly ? ", left only" : "") +
@@ -451,7 +507,7 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   }
 
   out_->reset(output_ == Output::Bluetooth);
-  if (!openDecoder(req.path, out_.get())) return fail(generation, "can't play " + req.path);
+  if (!openDecoder(req.path, out_.get(), req.startMs, req.hintMs)) return fail(generation, "can't play " + req.path);
   sync_.report(generation, Phase::Decoding);
   return Work::Producing;
 }
@@ -464,22 +520,25 @@ Core2AudioBackend::Work Core2AudioBackend::fail(uint32_t generation, const std::
   return Work::Idle;
 }
 
-bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out) {
+bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out, uint32_t startMs, uint32_t hintMs) {
   const std::string ext = extensionOf(path);
   const bool isMp3 = ext == ".mp3";
   if (!fs_ || (!isMp3 && ext != ".flac")) return false;
   if (!file_->open(path.c_str())) return false;
+  const uint32_t size = file_->getSize();
+  uint32_t landed = 0;  // where it starts, ms in (startMs_)
 
   // A fresh generator per track: both keep state across begin() (FLAC its
   // sample buffer, which can replay freed memory; MP3 its last sample). Their
   // big buffers are allocated in begin() anyway, so this costs little.
   AudioGenerator* decoder;
   AudioFileSource* source = file_.get();
+  uint32_t flacRate = 0;
   if (isMp3) {  // MP3 reads its title/artist from ID3 tags on the way in
     // A VBR file's length, from the Xing/Info or VBRI header in its first
     // frame (after the ID3v2 tag): the read-rate estimate is only exact for
-    // constant bitrates. A buffer in PSRAM (under 4 KB would be internal).
-    constexpr uint32_t kProbe = 2048;
+    // constant bitrates. The same buffer (PSRAM) finds the byte a start part
+    // of the way in begins at (mp3StartByte()).
     // ESP8266Audio's ID3 reader goes through the whole tag a byte per read.
     // Through an embedded picture that is seconds of CPU on this task,
     // above the loop: on the device two Moon Safari tracks started 4 s late
@@ -487,16 +546,21 @@ bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out) {
     // title and artist aren't used: the library has them).
     constexpr uint32_t kMaxTagParsed = 16 * 1024;
     uint32_t start = 0;
-    auto* probe = static_cast<uint8_t*>(heap_caps_malloc(kProbe, MALLOC_CAP_SPIRAM));
+    uint32_t from = 0;  // a start part of the way in: the byte the decoder begins at
+    auto* probe = static_cast<uint8_t*>(heap_caps_malloc(kMp3Probe, MALLOC_CAP_SPIRAM));
     if (probe) {
       if (file_->read(probe, 10) == 10) start = progress::id3v2Size(probe, 10);
-      if (start < file_->getSize() && file_->seek(static_cast<int32_t>(start), SEEK_SET)) {
-        const uint32_t got = file_->read(probe, kProbe);
+      if (start < size && file_->seek(static_cast<int32_t>(start), SEEK_SET)) {
+        const uint32_t got = file_->read(probe, kMp3Probe);
         knownDurationMs_.store(progress::mp3HeaderDurationMs(probe, got), std::memory_order_relaxed);
+        if (startMs > 0) from = mp3StartByte(probe, got, start, startMs, hintMs, &landed);
       }
       heap_caps_free(probe);
     }
-    if (probe && start > kMaxTagParsed && start < file_->getSize()) {
+    if (from > 0) {
+      // Past the tags: no ID3 reader (the library has the title and artist).
+      file_->seek(static_cast<int32_t>(from), SEEK_SET);
+    } else if (probe && start > kMaxTagParsed && start < size) {
       file_->seek(static_cast<int32_t>(start), SEEK_SET);
       Serial.printf("[audio] ID3 tag of %lu KB (a picture?): skipped, not read\n", (unsigned long)(start / 1024));
     } else {
@@ -508,13 +572,22 @@ bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out) {
     mp3_.reset(new AudioGeneratorMP3());
     decoder = mp3_.get();
   } else {
-    // Its length from STREAMINFO (the decoder doesn't expose it).
+    // Its length and rate from STREAMINFO (the decoder doesn't expose them
+    // before its first frame). Some taggers put an ID3v2 tag in front of
+    // "fLaC": libFLAC skips it, and so does this.
     uint8_t head[42];
     if (file_->read(head, sizeof(head)) == sizeof(head)) {
+      const uint32_t tag = progress::id3v2Size(head, sizeof(head));
+      if (tag > 0 && !(tag < size && file_->seek(static_cast<int32_t>(tag), SEEK_SET) &&
+                       file_->read(head, sizeof(head)) == sizeof(head))) {
+        std::memset(head, 0, sizeof(head));
+      }
       knownDurationMs_.store(progress::flacDurationMs(head, sizeof(head)), std::memory_order_relaxed);
+      uint64_t total = 0;
+      if (!trackseek::flacStreamInfo(head, sizeof(head), &flacRate, &total)) flacRate = 0;
     }
     file_->seek(0, SEEK_SET);
-    flac_.reset(new AudioGeneratorFLAC());
+    flac_.reset(new SeekableFlac());
     decoder = flac_.get();
   }
   if (!decoder->begin(source, out)) {
@@ -522,10 +595,81 @@ bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out) {
     return false;
   }
   decoder_ = decoder;
+  if (!isMp3 && startMs > 0) {
+    // libFLAC's own seek, by sample: exact.
+    const uint32_t at = trackseek::startMs(startMs, knownDurationMs_.load(std::memory_order_relaxed));
+    char asked[12];
+    mmss(startMs, asked, sizeof(asked));
+    if (at == 0) {
+      Serial.printf("[audio] FLAC: %s asked: in its last %lu s or past its end: from 0:00\n", asked,
+                    (unsigned long)(trackseek::kTailMs / 1000));
+    } else if (flacRate == 0) {
+      // (Nothing is sought: the decoder is as begin() left it.)
+      Serial.printf("[audio] FLAC: %s asked: no STREAMINFO found to go by: from 0:00\n", asked);
+    } else {
+      const int64_t t0 = esp_timer_get_time();
+      const bool ok = flac_->seekTo(static_cast<uint64_t>(at) * flacRate / 1000);
+      const auto ms = static_cast<unsigned long>((esp_timer_get_time() - t0) / 1000);
+      if (!ok) {
+        // (Past the end of a file without a length, say.) libFLAC is left
+        // in its seek error state: again from the top.
+        Serial.printf("[audio] FLAC: %s asked: libFLAC couldn't seek there (%lu ms): from 0:00\n", asked, ms);
+        closeDecoder();
+        return openDecoder(path, out, 0, 0);
+      }
+      landed = at;
+      Serial.printf("[audio] FLAC: starting %s in (libFLAC's seek, %lu ms)\n", asked, ms);
+    }
+  }
   codec_ = isMp3 ? "MP3" : "FLAC";
   sourceDone_ = false;
   described_ = false;
+  startMs_.store(landed, std::memory_order_relaxed);
   return true;
+}
+
+uint32_t Core2AudioBackend::mp3StartByte(uint8_t* probe, uint32_t got, uint32_t audioStart, uint32_t startMs,
+                                         uint32_t hintMs, uint32_t* landedMs) {
+  const uint32_t size = file_->getSize();
+  const uint32_t known = knownDurationMs_.load(std::memory_order_relaxed);
+  const uint32_t length = known ? known : trackseek::mp3LengthMs(probe, got, audioStart, size, hintMs);
+  const uint32_t at = trackseek::startMs(startMs, length);
+  char asked[12], of[12];
+  mmss(startMs, asked, sizeof(asked));
+  mmss(length, of, sizeof(of));
+  if (at == 0) {
+    Serial.printf("[audio] MP3: %s asked, of %s: in its last %lu s or past its end: from 0:00\n", asked, of,
+                  (unsigned long)(trackseek::kTailMs / 1000));
+    return 0;
+  }
+  uint32_t byte = 0;
+  const trackseek::Mp3Seek how = trackseek::mp3SeekByte(probe, got, audioStart, size, hintMs, at, &byte);
+  if (how == trackseek::Mp3Seek::Unplaced) {
+    Serial.printf("[audio] MP3: %s asked: %s: from 0:00\n", asked, trackseek::mp3SeekName(how));
+    return 0;
+  }
+  if (how == trackseek::Mp3Seek::None || !file_->seek(static_cast<int32_t>(byte), SEEK_SET)) {
+    Serial.printf("[audio] MP3: %s asked: no frame found to go on: from 0:00\n", asked);
+    return 0;
+  }
+  // A clean frame from there: libmad would resync by itself, but maybe on
+  // a false sync in the audio data first. None near it, or one with the
+  // tail or less after it (a file shorter than its header says): from the
+  // top, never a start that ends at once (the player would move on).
+  const uint32_t n = file_->read(probe, kMp3Probe);
+  const int32_t frame = trackseek::mp3FrameAt(probe, n);
+  const uint32_t from = byte + static_cast<uint32_t>(frame > 0 ? frame : 0);
+  const uint32_t leftMs = frame >= 0 && from < size ? trackseek::mp3MsLeft(probe + frame, size - from) : 0;
+  if (leftMs <= trackseek::kTailMs) {
+    Serial.printf("[audio] MP3: %s asked, of %s (%s): byte %lu: %s: from 0:00\n", asked, of,
+                  trackseek::mp3SeekName(how), (unsigned long)byte,
+                  frame < 0 ? "no clean frame near it" : "the file ends right after it");
+    return 0;
+  }
+  *landedMs = at;
+  Serial.printf("[audio] MP3: starting %s in, of %s (%s): byte %lu, a frame +%ld\n", asked, of,
+                trackseek::mp3SeekName(how), (unsigned long)byte, (long)frame);
+  return from;
 }
 
 void Core2AudioBackend::closeDecoder() {
@@ -635,7 +779,7 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
 
 void Core2AudioBackend::runBench(const std::string& path) {
   CountingOutput counter;
-  if (!openDecoder(path, &counter)) {
+  if (!openDecoder(path, &counter, 0, 0)) {
     Serial.printf("[bench] can't decode %s\n", path.c_str());
     return;
   }

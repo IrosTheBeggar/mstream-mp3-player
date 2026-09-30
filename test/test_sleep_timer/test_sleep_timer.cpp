@@ -31,7 +31,7 @@ public:
   bool playing = false, paused = false, finishedFlag = false;
   uint32_t position = 0;
   int plays = 0;
-  bool play(const std::string&, uint32_t) override {
+  bool play(const std::string&, uint32_t, uint32_t) override {
     playing = true;
     paused = false;
     finishedFlag = false;
@@ -398,6 +398,63 @@ void test_skip_during_a_track_fade_holds_it_for_the_new_track() {
   r.endTrack();
   TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
   TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+}
+
+// What holds a lit screen lit (fadeCountingDown()): a timed fade for its
+// 30 s; a track's fade in the boundary track's last 10 s. A skip during a
+// track's fade keeps the fade (and its toast) until the new track's own
+// last 10 s, or the album's end: the screen isn't held meanwhile, so it
+// times out as ever (it could be minutes, in a pocket).
+void test_only_a_fade_that_counts_down_holds_the_screen() {
+  {
+    Rig r;
+    r.player.play(0);
+    r.timer.setTimed(1000, r.now);
+    r.run(1000);
+    TEST_ASSERT_TRUE(r.timer.fading());
+    TEST_ASSERT_TRUE(r.timer.fadeCountingDown());
+    r.run(15000);
+    TEST_ASSERT_TRUE(r.timer.fadeCountingDown());
+    r.player.next();  // a timed fade runs on through a skip: still 30 s at most
+    r.run(20);
+    TEST_ASSERT_TRUE(r.timer.fadeCountingDown());
+  }
+  {
+    // End of track: a skip in its last 10 s, to a 60 s track.
+    Rig r;
+    r.durationMs = 60000;
+    r.player.play(0);
+    r.timer.setEnd(Choice::EndOfTrack);
+    r.run(49000);
+    TEST_ASSERT_FALSE(r.timer.fading());
+    TEST_ASSERT_FALSE(r.timer.fadeCountingDown());
+    r.run(3000);
+    TEST_ASSERT_TRUE(r.timer.fadeCountingDown());
+    r.player.next();
+    r.run(20);
+    TEST_ASSERT_TRUE(r.timer.fading());  // the toast stays, the level held
+    TEST_ASSERT_FALSE(r.timer.fadeCountingDown());
+    r.run(40000);
+    TEST_ASSERT_TRUE(r.timer.fading());
+    TEST_ASSERT_FALSE(r.timer.fadeCountingDown());
+    r.run(12000);  // the new track's own last 10 s
+    TEST_ASSERT_TRUE(r.timer.fadeCountingDown());
+  }
+  {
+    // End of album: a skip from the album's last track to the next album.
+    Rig r;
+    r.durationMs = 60000;
+    r.player.play(0);
+    r.timer.setEnd(Choice::EndOfAlbum);
+    r.lastOfAlbum = true;
+    r.run(55000);
+    TEST_ASSERT_TRUE(r.timer.fadeCountingDown());
+    r.lastOfAlbum = false;
+    r.player.next();
+    r.run(58000);  // the whole next track (even its last 10 s: not the album's end)
+    TEST_ASSERT_TRUE(r.timer.fading());
+    TEST_ASSERT_FALSE(r.timer.fadeCountingDown());
+  }
 }
 
 // A pause during the fade (the listener's, a drop, a move to the speaker)
@@ -825,6 +882,7 @@ int main(int, char**) {
   RUN_TEST(test_end_of_queue_with_repeat_pauses_on_the_first_entry);
   RUN_TEST(test_skip_during_the_fade_keeps_its_level);
   RUN_TEST(test_skip_during_a_track_fade_holds_it_for_the_new_track);
+  RUN_TEST(test_only_a_fade_that_counts_down_holds_the_screen);
   RUN_TEST(test_a_pause_during_the_fade_finishes_it);
   RUN_TEST(test_the_fade_never_rises_by_itself);
   RUN_TEST(test_extend_during_the_fade_ramps_up_slowly);

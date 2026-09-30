@@ -47,6 +47,17 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // headphone Play (HeadsetKeys) doesn't resume it, since in-ear detection
 // sends Play when a sleeper turns over. Any play clears the mark (the
 // Core2's own buttons, the screen, the console: the headphones can't).
+//
+// A start point (QueueStore's resume point after a boot, the console's qs):
+// the current entry's next start begins that far in. Nothing plays by
+// itself: it only waits for the next play (or, set while playing, starts
+// there at once). It belongs to that entry: next, another entry, or an
+// edit that changes the current entry drops it for good (an undo that
+// brings the entry back doesn't bring the second back); prev on it goes to
+// 0:00 of the same entry. Its length goes to the backend with the play (it
+// places a VBR MP3 without a table of contents by it). resumePoint() is
+// what QueueSaver saves: a start point that waits, or a paused track's
+// position.
 class PlaybackController {
 public:
   // Whether a play must wait for the output (read at every start).
@@ -83,6 +94,24 @@ public:
   // (or Waiting) the same as next()/prev().
   void cueNext();
   void cuePrev();
+
+  // ---- starting part of the way in ----
+  // The current entry's next start begins `ms` in (a track `durationMs`
+  // long then: what Now Playing shows until it plays, and the backend's
+  // hint; 0: the length as known here, a waiting start point's, the held
+  // track's, else the catalog's hint).
+  // Stopped: it waits. Playing: it starts there now (a wait for the
+  // headphones: it starts there when they connect). Paused on a track the
+  // backend holds: that track is let go, the next play starts there.
+  // 0: none.
+  void setStartPoint(uint32_t ms, uint32_t durationMs);
+  // The current entry's start point, if one waits.
+  bool startPoint(uint32_t* ms, uint32_t* durationMs) const;
+  // Where the current entry would pick up after a boot: a start point that
+  // waits, or the position of a paused track (Paused, or Waiting to resume
+  // it). False while it plays (a second saved now would be stale at once)
+  // and when it would start at 0:00 anyway (stopped, cued).
+  bool resumePoint(uint32_t* ms, uint32_t* durationMs) const;
 
   // ---- the sleep timer ----
   // At the current track's natural end: the next entry, paused at 0:00.
@@ -152,6 +181,13 @@ private:
   void currentMoved();
   // The track ended with "pause after this track": the next entry, cued.
   void pauseAtBoundary();
+  bool hasStartPoint() const {
+    return startMs_ > 0 && startKey_ != QueueModel::kNone && startKey_ == queue_.currentKey();
+  }
+  void clearStartPoint() {
+    startMs_ = 0;
+    startKey_ = QueueModel::kNone;
+  }
   // Playing or Waiting from now: any play clears the timer's mark.
   void setPlaying(PlayState s) {
     state_ = s;
@@ -174,4 +210,8 @@ private:
   bool pauseAfter_ = false;
   bool pausedByTimer_ = false;
   uint32_t timerStops_ = 0;
+  // The start point: this far into the entry with key startKey_.
+  uint32_t startMs_ = 0;
+  uint32_t startDurationMs_ = 0;
+  uint32_t startKey_ = QueueModel::kNone;
 };

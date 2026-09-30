@@ -696,6 +696,12 @@ struct MemStore : QueueSaver::Store {
     posGeneration = generation;
     pos = current;
   }
+  QueueResume resume;
+  int resumes = 0;
+  void saveResume(const QueueResume& r) override {
+    ++resumes;
+    resume = r;
+  }
 };
 
 std::string wholeText(const QueueModel& q, const TrackCatalog& c, uint32_t generation) {
@@ -903,6 +909,173 @@ void test_saver_abort_and_mark_saved() {
   TEST_ASSERT_EQUAL_INT(0, st.commits);
 }
 
+
+// ---- the resume point (QueueSaver, the second an entry picks up at) ----
+
+QueueSaver::Transport pausedAt(uint32_t ms, uint32_t dur = 0) {
+  QueueSaver::Transport t;
+  t.have = true;
+  t.positionMs = ms;
+  t.durationMs = dur;
+  return t;
+}
+
+// Saved at a pause, once (a few ms more as the fade ends don't count),
+// cleared as soon as it plays on, once; nothing while it plays.
+void test_resume_point_saved_at_a_pause_and_cleared_when_it_plays() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  fillLong(q);  // current 5
+  saver.loaded(7, false, 0);
+  for (uint32_t t = 0; t < 3000; t += 100) saver.loop(t);  // playing: nothing
+  TEST_ASSERT_EQUAL_INT(0, st.resumes);
+  saver.noteTransport(pausedAt(83000, 240000));
+  saver.loop(3100);
+  TEST_ASSERT_EQUAL_INT(1, st.resumes);
+  TEST_ASSERT_TRUE(st.resume.valid);
+  TEST_ASSERT_EQUAL_UINT32(7, st.resume.generation);
+  TEST_ASSERT_EQUAL_INT(5, st.resume.entry);
+  TEST_ASSERT_EQUAL_UINT32(QueueSaver::pathHash(pathOf(c, q.currentTrack()).c_str()), st.resume.pathHash);
+  TEST_ASSERT_EQUAL_UINT32(83000, st.resume.positionMs);
+  TEST_ASSERT_EQUAL_UINT32(240000, st.resume.durationMs);
+  saver.noteTransport(pausedAt(83012, 240000));
+  for (uint32_t t = 3200; t < 6000; t += 100) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(1, st.resumes);
+  TEST_ASSERT_FALSE(saver.busy());  // (nothing on its way: the idle power-off needn't wait)
+  // It plays again: cleared at once, and only once.
+  saver.noteTransport(QueueSaver::Transport{});
+  saver.loop(6100);
+  TEST_ASSERT_EQUAL_INT(2, st.resumes);
+  TEST_ASSERT_FALSE(st.resume.valid);
+  for (uint32_t t = 6200; t < 9000; t += 100) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(2, st.resumes);
+  // Paused again later: the new second.
+  saver.noteTransport(pausedAt(95000));
+  saver.loop(9100);
+  TEST_ASSERT_EQUAL_INT(3, st.resumes);
+  TEST_ASSERT_EQUAL_UINT32(95000, st.resume.positionMs);
+}
+
+// An edit while paused: the point pairs with the file only once the file
+// holds the queue; an entry that only moved (one before it removed) is
+// saved again at its new line. A clear never waits.
+void test_resume_point_waits_for_the_file_and_follows_its_entry() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  fillLong(q);
+  saver.loaded(2, false, 0);
+  const uint32_t first = 0;
+  q.remove(&first, 1);  // current 5 -> 4, the same entry
+  saver.noteTransport(pausedAt(30000));
+  saver.loop(10);
+  TEST_ASSERT_EQUAL_INT(0, st.resumes);  // the file still has the old queue
+  for (uint32_t t = 2100; saver.contentDirty() || saver.writing(); t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(1, st.resumes);
+  TEST_ASSERT_EQUAL_UINT32(3, st.resume.generation);
+  TEST_ASSERT_EQUAL_INT(4, st.resume.entry);
+  TEST_ASSERT_EQUAL_UINT32(3, st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(4, st.pos);
+  // Another edit, then it plays before the file is written: cleared now.
+  const uint32_t more[] = {1};
+  q.append(more, 1);
+  saver.loop(9000);
+  TEST_ASSERT_TRUE(saver.contentDirty());
+  saver.noteTransport(QueueSaver::Transport{});
+  saver.loop(9020);
+  TEST_ASSERT_EQUAL_INT(2, st.resumes);
+  TEST_ASSERT_FALSE(st.resume.valid);
+}
+
+// flushNow() (the CPU speed's restart pauses, then flushes; the idle
+// power-off): the point saved with everything else, after the file.
+void test_flush_now_saves_the_resume_point() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  fillLong(q);
+  saver.loaded(4, false, 0);
+  const uint32_t more[] = {1, 2};
+  q.append(more, 2);
+  saver.loop(10);  // an edit inside its 2 s
+  saver.noteTransport(pausedAt(61000, 180000));
+  TEST_ASSERT_TRUE(saver.flushNow(20));
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_INT(1, st.resumes);
+  TEST_ASSERT_EQUAL_UINT32(5, st.resume.generation);
+  TEST_ASSERT_EQUAL_INT(5, st.resume.entry);
+  TEST_ASSERT_EQUAL_UINT32(61000, st.resume.positionMs);
+  // Stopped (nothing to pick up): a flush clears it.
+  saver.noteTransport(QueueSaver::Transport{});
+  TEST_ASSERT_TRUE(saver.flushNow(30));
+  TEST_ASSERT_FALSE(st.resume.valid);
+}
+
+// At boot: a point applies only to the entry it was saved for, in the file
+// it was saved with, if that track is still there; one that doesn't apply
+// is cleared at the first pass, one that does isn't written again.
+void test_resume_point_at_boot() {
+  QueueResume r;
+  r.valid = true;
+  r.generation = 9;
+  r.entry = 3;
+  r.positionMs = 83000;
+  const char* path = "/music/Kavinsky/OutRun/08 - Nightcall.mp3";
+  r.pathHash = QueueSaver::pathHash(path);
+  TEST_ASSERT_TRUE(QueueSaver::resumeApplies(r, 9, 3, true, path));
+  TEST_ASSERT_FALSE(QueueSaver::resumeApplies(r, 8, 3, true, path));   // another file
+  TEST_ASSERT_FALSE(QueueSaver::resumeApplies(r, 9, 4, true, path));   // another entry current
+  TEST_ASSERT_FALSE(QueueSaver::resumeApplies(r, 9, 3, false, path));  // its track is gone
+  TEST_ASSERT_FALSE(QueueSaver::resumeApplies(r, 9, 3, true, "/music/Kavinsky/OutRun/09 - Odd Look.mp3"));
+  TEST_ASSERT_FALSE(QueueSaver::resumeApplies(r, 9, 3, true, ""));
+  QueueResume none = r;
+  none.valid = false;
+  TEST_ASSERT_FALSE(QueueSaver::resumeApplies(none, 9, 3, true, path));
+  QueueResume zero = r;
+  zero.positionMs = 0;
+  TEST_ASSERT_FALSE(QueueSaver::resumeApplies(zero, 9, 3, true, path));
+  TEST_ASSERT_NOT_EQUAL(QueueSaver::pathHash("a"), QueueSaver::pathHash("b"));
+
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  fillLong(q);
+  {
+    // Applied: the player's start point is what the store has.
+    MemStore st;
+    QueueSaver saver(st, q, c);
+    saver.loaded(9, false, 0);
+    QueueResume saved = r;
+    saved.entry = 5;
+    saved.pathHash = QueueSaver::pathHash(pathOf(c, q.currentTrack()).c_str());
+    saver.loadedResume(saved);
+    saver.noteTransport(pausedAt(83000));
+    for (uint32_t t = 0; t < 3000; t += 100) saver.loop(t);
+    TEST_ASSERT_EQUAL_INT(0, st.resumes);
+  }
+  {
+    // Not applied (the player has no start point): cleared.
+    MemStore st;
+    QueueSaver saver(st, q, c);
+    saver.loaded(9, false, 0);
+    saver.loadedResume(r);
+    saver.loop(0);
+    TEST_ASSERT_EQUAL_INT(1, st.resumes);
+    TEST_ASSERT_FALSE(st.resume.valid);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -934,5 +1107,9 @@ int main(int, char**) {
   RUN_TEST(test_flush_now_writes_an_edit_at_once);
   RUN_TEST(test_flush_now_that_fails_keeps_the_last_file);
   RUN_TEST(test_saver_abort_and_mark_saved);
+  RUN_TEST(test_resume_point_saved_at_a_pause_and_cleared_when_it_plays);
+  RUN_TEST(test_resume_point_waits_for_the_file_and_follows_its_entry);
+  RUN_TEST(test_flush_now_saves_the_resume_point);
+  RUN_TEST(test_resume_point_at_boot);
   return UNITY_END();
 }
