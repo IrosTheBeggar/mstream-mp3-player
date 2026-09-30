@@ -140,9 +140,9 @@ pages do:
   about half speed while music plays; it takes a restart, asked first: the
   music pauses, and after it waits at the same second until you play) and
   **Bluetooth power** (Low, Normal,
-  High), **Touch calibration**, and **About** (battery, storage, library,
-  headphones, CPU speed and Bluetooth power, memory, version, and the tips
-  again).
+  High), **Touch calibration** ("Not calibrated", or "Calibrated on this
+  Core2": below), and **About** (battery, storage, library, headphones,
+  CPU speed and Bluetooth power, memory, version, and the tips again).
 
 The first time, two tips show what the three red buttons do and that
 tapping the tab you're on goes back to its start (console `uic` shows them
@@ -187,13 +187,47 @@ nothing is written while it plays.) The Library and Queue tabs edit
 it, and so do the console's `q` commands (play an album, play it next, add
 it, remove, clear, undo).
 
-**Touch correction.** The Core2's touch panel reads touches on the right
-half of the screen too far right (about 20 px at x 190, 35-45 px from x 240,
-and it stops at 319), the same with any finger. Every touch is corrected
-before anything looks at it, with a table fitted to measured taps. If the
-default doesn't suit your Core2, `a` + Enter opens a calibration screen: tap
-9 crosshairs (`a5` for 5), then Save; `ac` checks the result (a dot where the
-Core2 reads each tap), `ad` goes back to the default table.
+**Touch calibration.** Core2 touch panels differ: one measured reads
+touches on the right half of the screen too far right (about 20 px at x
+190, 35-45 px from x 240, and it stops at 319), the same with any finger;
+another may read true. Out of the box nothing is corrected. Every button
+in the calibration is a full-width bar, which works however far off the
+taps land sideways, and the red **A** dot under the screen is the way out
+of every step ("A: Cancel" over it says what it does there; tapping that
+label on the screen does the same).
+
+- **The touch check.** The first start with nothing calibrated shows three
+  dots, one at a time, before the tips: tap the centre of each. Each tap
+  leaves a mark where the Core2 read it. If they land off ("Taps land
+  about 40 px to the right of your finger. Calibrate now?"), **Calibrate**
+  goes on to the crosses and **Not now** leaves it (it's in Output > Touch
+  calibration any time); else "Touch is accurate", and a tap goes on. It
+  asks once: skipped, answered or left alone for a minute, it doesn't come
+  back.
+- **Output > Touch calibration** opens a sheet: **Calibrate** (9 crosses,
+  about 20 s), **Test taps** (tap anywhere and see where each tap lands),
+  and, once calibrated, **Remove calibration** (asked first; taps are then
+  read as the panel reports them).
+- **Calibrate**: tap the centre of each cross with the finger you usually
+  use (a buzz: missed, tap again; a tick and a green flash: taken). Then
+  it compares: "Now: up to 42 px off, average 21" against "Calibrated: up
+  to 12 px off, average 6", with **Save**, **Try again** and **Discard**.
+  The calibrated figures are honest: each tap is measured with a
+  calibration made from the other taps, so finger wobble can't flatter
+  it. Save comes first only when the calibration is clearly better (3 px
+  or more on average); when the touch is already accurate (or the new
+  calibration is no better) it says there's no need to save, and Discard
+  comes first. After Save, the Test taps page: tap anywhere, and the ring
+  should land under your finger; A undoes the Save there.
+- **The rescue.** If the taps are too far off to reach the Output tab,
+  switch the Core2 off and on, and once the start-up screen shows (it says
+  "Touch trouble? Hold a finger on the screen."), hold a finger anywhere
+  on the screen for 2 s: the calibration opens. Put the finger on after
+  the screen lights, not while switching on.
+
+On the console: `a` + Enter opens the crosses (`a5` for 5), `ac` the check
+page, `ab` the first-start touch check (`ab0` has it ask again at the next
+start), `ad` removes the calibration.
 
 **Dancing crab** (proof of concept, [docs/MASCOT-POC.md](docs/MASCOT-POC.md)):
 on the Dance tab (or send `d`), a pixel-art crab
@@ -217,11 +251,11 @@ The serial console (115200 baud) is there for scripted testing:
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
 | `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
-| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/l/n>` show a faked Bluetooth (connecting, searching, pairing, lost) or no-card state for screenshots, `uiF0` the real one |
+| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/l/n>` show a faked Bluetooth (connecting, searching, pairing, lost) or no-card state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none) |
 | | | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
-| | | `a...` | touch and haptics: `a` touch calibration (9 crosshairs; `a5`-`a9` for fewer), `ac` check the touch, `as` status, `ad` the default table, `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
+| | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
 
 The UI spike's tools ([docs/UI-SPIKE.md](docs/UI-SPIKE.md)) measure the
 browsing UI's risks before its screens are built. Each is a letter, an
@@ -277,6 +311,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       a JPEG's size and whether it is progressive
   TouchCalibration    The touch correction: a monotonic piecewise-linear table
                       per axis, its fit to taps, and its bytes for NVS
+  TouchCheck          The first-start touch check's verdict and when it
+                      shows; the calibration's crosses, misses and result
   TouchRecognizer, StripButtons, ButtonGesture, ButtonPolicy, InputEvent
                       The glass's tap/hold/drag/fling events; the touch
                       buttons (only a touch that went down on one, and

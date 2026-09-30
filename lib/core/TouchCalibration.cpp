@@ -11,8 +11,9 @@ namespace {
 // fitAxis() on the input lab's target practice (targets_thumb.log and
 // targets_index.log: 72 taps on 10 targets, thumb and index finger; the
 // "last list row" taps left out, as that target spans the whole width),
-// rounded to 0.1 px. test_touch_input checks that the fit still gives these.
-constexpr float kDefaultX[TouchCalibration::kXKnots] = {25.6f, 43.2f, 78.5f, 122.7f, 154.4f,
+// rounded to 0.1 px: labFitX(), no longer the default (other panels read
+// differently). test_touch_input checks that the fit still gives these.
+constexpr float kLabX[TouchCalibration::kXKnots] = {25.6f, 43.2f, 78.5f, 122.7f, 154.4f,
                                                         181.9f, 212.3f, 253.1f, 281.3f};
 
 constexpr uint8_t kMagic[4] = {'T', 'C', 'A', 'L'};
@@ -60,6 +61,16 @@ TouchCalibration::Axis identityAxis(const int16_t* raw, int n) {
 
 }  // namespace
 
+float TouchCalibration::Axis::unmap(float v) const {
+  if (n == 0) return v;
+  if (v <= value[0]) return raw[0] + (v - value[0]);
+  if (v >= value[n - 1]) return raw[n - 1] + (v - value[n - 1]);
+  int j = 1;
+  while (j < n - 1 && v > value[j]) ++j;
+  const float a = (v - value[j - 1]) / (value[j] - value[j - 1]);
+  return raw[j - 1] + a * static_cast<float>(raw[j] - raw[j - 1]);
+}
+
 float TouchCalibration::Axis::map(float r) const {
   if (n == 0) return r;
   if (r <= raw[0]) return value[0] + (r - raw[0]);
@@ -89,12 +100,9 @@ bool TouchCalibration::Axis::operator==(const Axis& o) const {
   return true;
 }
 
-TouchCalibration TouchCalibration::defaults() {
-  TouchCalibration c;
-  c.x = makeAxis(kXKnotRaw, kDefaultX, kXKnots);
-  c.y = identityAxis(kYKnotRaw, kYKnots);
-  return c;
-}
+TouchCalibration TouchCalibration::defaults() { return identity(); }
+
+TouchCalibration::Axis TouchCalibration::labFitX() { return makeAxis(kXKnotRaw, kLabX, kXKnots); }
 
 TouchCalibration TouchCalibration::identity() {
   TouchCalibration c;

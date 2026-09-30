@@ -81,9 +81,24 @@ static Input input(haptics);
 static ScreenControl screen(input);
 // What the touch buttons do, the same on every screen.
 static ButtonPolicy buttonPolicy;
-// The touch calibration screen (console a): in PSRAM, made on first use.
+// The touch check and calibration (Output > Touch calibration, the first
+// boot's check, the rescue hold, console a): in PSRAM, made on first use.
 static CalibrationScreen* calibration = nullptr;
 static bool calibrationUp() { return calibration && calibration->active(); }
+// The rescue (README: touch trouble): while the start-up screen shows (the
+// UI not started, the glass's events going nowhere), a finger held anywhere
+// on the glass for kRescueHoldMs opens the calibration, which needs no
+// accuracy to reach. The UI's start waits while that finger is down. (A
+// strip press isn't one: B's hold would switch the output at 500 ms.)
+// The start-up screen stays at least kRescueWindowMs after its line about
+// it shows (at the end of setup(), which may outlast kDiagnosticsScreenMs).
+static constexpr uint32_t kRescueHoldMs = 2000;
+static constexpr uint32_t kRescueWindowMs = 1500;
+static bool rescueFinger = false;
+static uint32_t rescueDownMs = 0;
+static uint32_t bootHintMs = 0;
+// The first boot's touch check was offered (or the rescue used) this boot.
+static bool touchCheckOffered = false;
 // UI spike tools (docs/UI-SPIKE.md): input lab, scroll lab, library index,
 // font and thumbnail probes. Created in PSRAM on first use.
 static Spike spike(audio, haptics, storage, library, input);
@@ -550,7 +565,7 @@ struct MainUiHost : ui::UiHost {
     Serial.printf("[ui] output: %s\n", bluetooth ? "bluetooth" : "the speaker");
     return ButtonTransport::selectOutput(bluetooth);
   }
-  void openCalibration() override;
+  void openCalibration(bool check) override;
   void btConnect() override {
     if (silent) {
       Serial.println("[test] silent mode: bluetooth stays off");
@@ -848,7 +863,30 @@ static void queueCommand(const char* a) {
   queueStore.printStatus();
 }
 
-static void openCalibration(int targets, bool check) {
+// A calibration asked for while the screen is off (the console's a, ac,
+// ab): the screen is woken and it opens once the panel is awake (loop()).
+// Nothing may be drawn into a sleeping panel (ScreenControl: the pixels
+// land garbled), and Ui::suspend() lets the screen that takes over draw at
+// once: measured, the A hint band drawn in sleep-in came out shifted and
+// in the wrong colours.
+static bool calibrationPending = false;
+static CalibrationScreen::Start pendingHow = CalibrationScreen::Start::Crosses;
+static int pendingTargets = CalibrationScreen::kMaxTargets;
+
+static void openCalibration(CalibrationScreen::Start how, int targets = CalibrationScreen::kMaxTargets) {
+  if (!userInterface) {
+    Serial.println("[input] the calibration draws with the UI's sprites: not without the UI (no PSRAM)");
+    return;
+  }
+  if (screen.off() || screen.panelAsleep()) {
+    calibrationPending = true;
+    pendingHow = how;
+    pendingTargets = targets;
+    screen.wake("the touch calibration");
+    Serial.println("[cal] the screen is off: it opens once the screen is awake");
+    return;
+  }
+  calibrationPending = false;
   if (!calibration) {
     calibration = psramNew<CalibrationScreen>(input);
     if (!calibration) {
@@ -862,16 +900,15 @@ static void openCalibration(int targets, bool check) {
   spike.closeAll();
   if (danceMode.active()) danceMode.setActive(false);
   input.cancelTouch(millis());
-  if (check) {
-    calibration->openCheck();
-  } else {
-    calibration->open(targets);
-  }
+  calibration->open(how, targets);
 }
 
-void MainUiHost::openCalibration() { ::openCalibration(CalibrationScreen::kMaxTargets, false); }
+void MainUiHost::openCalibration(bool check) {
+  ::openCalibration(check ? CalibrationScreen::Start::Check : CalibrationScreen::Start::Crosses);
+}
 
 static void closeCalibration() {
+  calibrationPending = false;
   if (calibration) calibration->close();
 }
 
@@ -884,7 +921,7 @@ static void touchCommand(const char* a) {
     if (calibrationUp()) {
       closeCalibration();
     } else {
-      openCalibration(CalibrationScreen::kMaxTargets, false);
+      openCalibration(CalibrationScreen::Start::Crosses);
     }
     return;
   }
@@ -894,7 +931,7 @@ static void touchCommand(const char* a) {
       Serial.println("[input] a<n>: 5-9 crosshairs");
       return;
     }
-    openCalibration(n, false);
+    openCalibration(CalibrationScreen::Start::Crosses, n);
     return;
   }
   if (c == 'q') {
@@ -902,19 +939,30 @@ static void touchCommand(const char* a) {
     return;
   }
   if (c == 'c') {
-    openCalibration(0, true);
+    openCalibration(CalibrationScreen::Start::Check);
     return;
   }
-  if (c == 'd') {
+  if (c == 'b') {
+    if (a[1] == '0') {
+      // The next boot asks again (if nothing is calibrated then).
+      input.setTouchCheckAnswered(false);
+      Serial.println("[input] the first-boot touch check: not answered (it shows at the next boot with no "
+                     "calibration saved)");
+    } else {
+      openCalibration(CalibrationScreen::Start::FirstBoot);
+      return;
+    }
+  } else if (c == 'd') {
     input.resetCalibration();
-    Serial.println("[input] touch: back to the default table (saved)");
+    Serial.println("[input] touch: calibration removed: no correction (saved)");
   } else if (c == 'h' && flag) {
     input.setHapticsOn(on);
   } else if (c == 'r' && flag) {
     input.setRailTicksOn(on);
   } else if (c != 's') {
-    Serial.println("[input] a calibrate (9 crosshairs; a5-a9: fewer), ac check the touch, as status, ad default "
-                   "table, ah0/ah1 haptics off/on, ar0/ar1 rail ticks off/on, aq close");
+    Serial.println("[input] a calibrate (9 crosses; a5-a9: fewer), ac test taps, ab the first-boot touch "
+                   "check (ab0: ask again at the next boot), as status, ad remove the calibration (no correction), "
+                   "ah0/ah1 haptics off/on, ar0/ar1 rail ticks off/on, aq close");
     return;
   }
   input.printStatus();
@@ -1053,6 +1101,16 @@ static SerialConsole console({
     },
     [](int n) { danceMode.freeze(n); },
     [](const char* a) {
+      // uk0/uk1/uk2: the scripted finger on a skewed panel (Input::setSimSkew).
+      if (a[0] == 'k') {
+        input.setSimSkew(static_cast<uint8_t>(a[1] == '1' ? 1 : a[1] == '2' ? 2 : 0));
+        Serial.printf("[input] scripted finger: %s\n",
+                      input.simSkew() == 2 ? "skewed like the input lab's panel (x reads up to ~40 px right), with "
+                                             "up to 4 px of jitter a touch"
+                      : input.simSkew()    ? "skewed like the input lab's panel (x reads up to ~40 px right)"
+                                           : "where it's told (already corrected)");
+        return;
+      }
       // ui (u + "i"): the UI's navigation state; ui0-ui4 a tab, uib back.
       if (a[0] == 'i') {
         if (a[1] == 'l') {
@@ -1134,9 +1192,30 @@ static void handleInput(uint32_t now) {
   touchedThisPass = false;
   for (InputEvent e; input.poll(e);) {
     if (e.type == InputEvent::Type::Down || e.isButton()) touchedThisPass = true;
+    // The one exception to "the buttons do the same everywhere": while the
+    // touch check or calibration is up, A's click is its way out (Cancel,
+    // Not now, Discard, Done), which works however far off the glass reads.
+    // A's hold, and all of B and C, stay ButtonPolicy's.
+    if (e.isButton() && e.type == InputEvent::Type::Click && e.button == ButtonPolicy::kButtonA && calibrationUp()) {
+      Serial.println("[button] A click: the calibration's way out");
+      calibration->leave();
+      continue;
+    }
     if (e.isButton()) {
       handleButton(e);
       continue;
+    }
+    // The rescue hold: a glass finger while the start-up screen shows.
+    if (!(userInterface && userInterface->started()) && !calibrationUp()) {
+      using T = InputEvent::Type;
+      if (e.type == T::Down) {
+        rescueFinger = true;
+        rescueDownMs = e.ms;
+      } else if (e.type == T::Tap || e.type == T::Release || e.type == T::DragEnd || e.type == T::Cancel) {
+        rescueFinger = false;
+      }
+    } else {
+      rescueFinger = false;
     }
     if (calibrationUp()) {
       calibration->onEvent(e);
@@ -1148,7 +1227,7 @@ static void handleInput(uint32_t now) {
     using T = InputEvent::Type;
     if (e.type == T::Down || e.type == T::Tap || e.type == T::LongPress || e.type == T::Fling) {
       Serial.printf("[touch] %s %d,%d (raw %d,%d)%s%s\n", InputEvent::name(e.type), e.x, e.y, e.rawX, e.rawY,
-                    e.fromStrip ? " from the strip" : "", input.scriptedTouch() ? " scripted" : "");
+                    e.fromStrip ? " from the strip" : "", input.scriptedNote());
     }
     if (userInterface) userInterface->onEvent(e);
   }
@@ -1804,14 +1883,21 @@ void setup() {
   }
   Serial.printf("[ui] internal RAM %lu B free before the UI, %lu B after\n", (unsigned long)freeBeforeUi,
                 (unsigned long)diag::heap().internalFree);
+  // The rescue hold, on the start-up screen (with the UI's fonts, now loaded).
+  if (userInterface) {
+    bootScreen.hint(uitext::kBootTouchHint);
+    bootHintMs = millis();
+  }
   diag::logHeap("ui");
   Serial.println("[console] n/p next/prev, space play/pause, o output, +/- volume, s stats, l list, "
                  "f forget bt, z silent test mode, d dance tab, m next dancer, x/X screenshot dancer/screen, v beat log; "
                  "with Enter: i<n> play, b<n> bench, c<name> headphones name, h<n> bt headroom -n dB, "
-                 "q queue (q? for its commands; qs<sec> a resume point), a touch calibration (a5-a9 fewer crosshairs, ac check, as status, "
-                 "ad default table, ah0/1 haptics, ar0/1 rail ticks), "
+                 "q queue (q? for its commands; qs<sec> a resume point), "
+                 "a touch calibration (a5-a9 fewer crosses, ac check, ab first-boot check, ab0 ask it again, "
+                 "as status, ad remove it, ah0/1 haptics, ar0/1 rail ticks), "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
                  "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid/uip scripted finger, "
+                 "uk1/uk2/uk0 the scripted finger on a skewed panel (uk2 with jitter) or not, "
                  "uiF<c/s/p/r/l/n/w> show a faked Bluetooth or no-card state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
                  "library of n tracks in the Library tab, uil0 the card's); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
@@ -1901,13 +1987,31 @@ void loop() {
   // A screen of its own (calibration, a spike screen) owns the display
   // while it's up: the UI is suspended, the dancer too.
   spike.loop(now);
+  if (calibration) calibration->loop(now);
   if (screenTaken() && danceMode.active()) danceMode.setActive(false);
   // The dancer (the Dance tab) draws its own frames (10/s idle, 24-30
   // dancing: DanceRate) into its box.
   danceMode.loop(now, silent);
   // The UI: the tab bar, overlays, the page (list frames on 30 fps deadlines).
+  if (rescueFinger && !calibrationUp() && now - rescueDownMs >= kRescueHoldMs) {
+    rescueFinger = false;
+    touchCheckOffered = true;  // (the calibration is what it would offer)
+    Serial.println("[cal] a finger held on the start-up screen: the calibration (the rescue)");
+    input.tapTick();
+    openCalibration(CalibrationScreen::Start::Crosses);
+  }
   if (userInterface) {
-    if (!userInterface->started() && now >= kDiagnosticsScreenMs && !screenTaken()) {
+    // The first boot with nothing calibrated: the touch check, before the
+    // UI (and so before its tips). The UI waits for it, and for a finger
+    // resting on the start-up screen (the rescue hold).
+    const bool bootShown = now >= kDiagnosticsScreenMs && now - bootHintMs >= kRescueWindowMs;
+    if (!userInterface->started() && bootShown && !screenTaken() && !rescueFinger && !touchCheckOffered) {
+      touchCheckOffered = true;
+      if (touchcheck::due(input.calibrated(), input.touchCheckAnswered())) {
+        openCalibration(CalibrationScreen::Start::FirstBoot);
+      }
+    }
+    if (!userInterface->started() && bootShown && !screenTaken() && !rescueFinger) {
       userInterface->start(now);
       // It turned itself off last time, or restarted for a new CPU speed:
       // say so, once (stopped or paused where it was).
@@ -1934,6 +2038,10 @@ void loop() {
                          link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay();
     const bool holdLit = idlePower.policy().phase() == IdlePolicy::Phase::Warning || sleepTimer.fadeCountingDown();
     screen.step(millis(), keepLit, holdLit);
+  }
+  // A calibration asked for in the dark: now that the panel is awake.
+  if (calibrationPending && !screen.off() && !screen.panelAsleep()) {
+    openCalibration(pendingHow, pendingTargets);
   }
 
   static uint32_t lastStats = 0;

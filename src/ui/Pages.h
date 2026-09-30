@@ -436,7 +436,7 @@ public:
 
 private:
   // What the dialog or sheet up is asking.
-  enum class Ask : uint8_t { None, Pair, More, Forget, CpuRestart };
+  enum class Ask : uint8_t { None, Pair, More, Forget, CpuRestart, Touch, RemoveCal };
   enum RootRow : uint8_t {
     BtTop,
     BtButtons,
@@ -469,6 +469,9 @@ private:
   void drawPowerSetting(ListView::Row& r, bool bluetooth);
   // A tap on "CPU speed": the restart asked first, or saved at once.
   void onCpuSpeed();
+  // A tap on "Touch calibration": its sheet (Calibrate, Test taps,
+  // and Remove while a table is saved).
+  void onTouch();
   static uint32_t screenSig(const AppState& s);
   void drawDevice(ListView::Row& r, const BtDevice& d);
   void drawPairStatus(ListView::Row& r);
@@ -491,6 +494,7 @@ private:
   ConfirmTap forget_;
   uint32_t drawnBt_ = 0, drawnSpeaker_ = 0;
   bool drawnHaptics_ = false;
+  bool drawnCalibrated_ = false;
   uint32_t drawnScreen_ = 0xFFFFFFFFu;  // the screen, idle and power settings drawn (screenSig())
   uint32_t nextSpinMs_ = 0;
   uint8_t spin_ = 0;  // the spinner's step (8 a turn)

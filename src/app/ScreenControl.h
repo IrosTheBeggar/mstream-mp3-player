@@ -64,6 +64,10 @@ public:
 
   // Off: nobody is looking (the reconnect's quiet rule, the probe).
   bool off() const { return power_.off(); }
+  // The panel is in sleep-in: nothing may be drawn (it lands garbled). It
+  // can lag off() by a pass or two after a wake (sleep-out waits 120 ms
+  // after a sleep-in).
+  bool panelAsleep() const { return asleep_; }
   // Woken from off and nobody has touched the glass since (maybe a pocket):
   // a B click doesn't start the speaker (ScreenPower's pocket rule).
   bool unattended() const { return power_.unattended(); }

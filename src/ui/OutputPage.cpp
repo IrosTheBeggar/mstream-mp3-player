@@ -32,9 +32,10 @@ namespace {
 constexpr uint32_t kSpinMs = 125;   // the spinner: 8 steps a second
 constexpr uint32_t kScanPollMs = 250;
 constexpr uint32_t kAboutMs = 3000;
-// The speaker card's volume chip: its hit area around the chip.
-constexpr int kSpeakerChipHitX = uitext::kSpeakerChipX - 6;
-constexpr int kSpeakerChipHitEnd = uitext::kSpeakerChipX + uitext::kSpeakerChipW + 2;
+// The speaker card's volume chip: its hit area around the chip (UiText's,
+// host-tested against a panel that reads right).
+constexpr int kSpeakerChipHitX = uitext::kSpeakerChipHitX;
+constexpr int kSpeakerChipHitEnd = uitext::kSpeakerChipHitEnd;
 
 void radio(M5Canvas& c, int cx, int cy, bool on, uint16_t acc, uint16_t bg) {
   c.fillCircle(cx, cy, 10, bg);
@@ -121,6 +122,7 @@ void OutputPage::enter(NavModel::PageRef& ref) {
   drawnBt_ = btSig();
   drawnSpeaker_ = speakerSig();
   drawnHaptics_ = ui_.input().hapticsOn();
+  drawnCalibrated_ = ui_.input().calibrated();
   drawnScreen_ = screenSig(ui_.state());
   if (kind_ == PageKind::Pair) {
     scan_.clear();
@@ -242,6 +244,11 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     if (ui_.input().hapticsOn() != drawnHaptics_ && still) {
       drawnHaptics_ = ui_.input().hapticsOn();
       list.refreshRow(Haptics);
+    }
+    // (Removed here, or from the console: ad.)
+    if (ui_.input().calibrated() != drawnCalibrated_ && still) {
+      drawnCalibrated_ = ui_.input().calibrated();
+      list.refreshRow(Calibrate);
     }
     const uint32_t sc = screenSig(ui_.state());
     if (sc != drawnScreen_ && still) {
@@ -386,7 +393,8 @@ void OutputPage::drawRow(ListView::Row& r) {
     case CpuSpeed: drawPowerSetting(r, false); break;
     case BtPower: drawPowerSetting(r, true); break;
     case Calibrate:
-      drawSetting(r, icons::kGear, "Touch calibration", "if taps land off target", col::TXT, true);
+      drawSetting(r, icons::kGear, uitext::kCalRowTitle,
+                  ui_.input().calibrated() ? uitext::kCalSubOn : uitext::kCalSubOff, col::TXT, true);
       break;
     case AboutRow:
       drawSetting(r, icons::kInfo, "About", "battery, storage, library, version", col::TXT, true);
@@ -803,7 +811,7 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
       // with the headphones linked, from the next connection (the line says).
       ui_.host().setBtPower(powerchoice::nextBt(s.btPower));
       break;
-    case Calibrate: ui_.host().openCalibration(); break;
+    case Calibrate: onTouch(); break;
     case AboutRow: ui_.push(page(PageKind::About)); break;
     default: break;
   }
@@ -882,7 +890,31 @@ void OutputPage::forget() {
   ui_.toast(text, false);
 }
 
+// "Touch calibration": the choices as full-width rows (y is what the panel
+// reads true, so a stack of rows works whatever x does).
+void OutputPage::onTouch() {
+  using namespace uitext;
+  const bool saved = ui_.input().calibrated();
+  const char* rows[3] = {kCalCalibrate, kCalCheckTitle, kCalRemoveRow};
+  const char* details[3] = {kCalCalibrateDetail, "", ""};
+  ask_ = Ask::Touch;
+  ui_.openSheet(this, kCalRowTitle, rows, saved ? 3 : 2, details, /*primary=*/0, /*danger=*/saved ? 2 : -1);
+}
+
 void OutputPage::onSheet(int choice) {
+  if (ask_ == Ask::Touch) {
+    ask_ = Ask::None;
+    if (choice == 0 || choice == 1) {
+      ui_.host().openCalibration(choice == 1);
+    } else if (choice == 2) {
+      // Remove, from the sheet: a dialog (as Forget: a second tap on a row
+      // that isn't there any more can't confirm it).
+      static const char* const kButtons[2] = {"Cancel", uitext::kCalRemove};
+      ask_ = Ask::RemoveCal;
+      ui_.openDialog(this, uitext::kCalRemoveTitle, uitext::kCalRemoveBody, kButtons, 2, /*danger=*/true);
+    }
+    return;
+  }
   if (ask_ != Ask::More) return;
   ask_ = Ask::None;
   const AppState& s = ui_.state();
@@ -951,6 +983,13 @@ void OutputPage::onDialog(int button) {
   ask_ = Ask::None;
   if (ask == Ask::Forget) {
     if (button == 1 && kind_ == PageKind::Output) forget();
+    return;
+  }
+  if (ask == Ask::RemoveCal) {
+    if (button != 1 || kind_ != PageKind::Output) return;
+    ui_.input().resetCalibration();
+    Serial.println("[ui] touch calibration removed: no correction");
+    ui_.toast(uitext::kCalRemoved, false);  // (its row follows: tick())
     return;
   }
   if (ask == Ask::CpuRestart) {

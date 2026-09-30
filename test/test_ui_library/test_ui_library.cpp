@@ -7,6 +7,8 @@
 #include <unity.h>
 
 #include <algorithm>
+#include <cmath>
+#include <functional>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -26,6 +28,8 @@
 #include "TabBarModel.h"
 #include "TextFit.h"
 #include "TextFold.h"
+#include "TouchCalibration.h"
+#include "TouchCheck.h"
 #include "UiText.h"
 
 // The fonts' data, as the firmware has it (src/ui/VlwFonts.cpp: arrays only).
@@ -694,6 +698,160 @@ void test_power_settings_texts_fit() {
   }
 }
 
+// The touch calibration: its Output row, sheet, dialog and toast; the
+// calibration screen's header, lines, rows and A hints; the first-boot
+// check's; the boot screen's rescue line (docs: README's touch section).
+void test_touch_calibration_texts_fit() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  // Output: the row, its sheet (Calibrate the primary, its detail beside
+  // it), the dialog, the toast.
+  fits(body, kCalRowTitle, kSettingSubW);
+  fits(small, kCalSubOff, kSettingSubW);
+  fits(small, kCalSubOn, kSettingSubW);
+  const int sheetLabelW = 320 - 32;
+  fits(bold, kCalCalibrate, sheetLabelW);
+  fits(small, kCalCalibrateDetail, 320 - 16 - (16 + bold.width(kCalCalibrate) + 16));
+  fits(body, kCalCheckTitle, sheetLabelW);
+  fits(body, kCalRemoveRow, sheetLabelW);
+  fits(bold, kCalRemoveTitle, kDialogTitleW);
+  textfit::Font f;
+  f.ctx = const_cast<Vlw*>(&small);
+  f.width = [](void* ctx, const char* t) { return static_cast<const Vlw*>(ctx)->width(t); };
+  {
+    TEST_ASSERT_TRUE(strlen(kCalRemoveBody) < 128);
+    char lines[4][96];
+    const int n = textfit::wrap(f, kCalRemoveBody, strlen(kCalRemoveBody), kDialogTitleW, 3, &lines[0][0],
+                                sizeof(lines[0]));
+    TEST_ASSERT_TRUE(n <= 3);
+    std::string joined;
+    for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
+    TEST_ASSERT_EQUAL_STRING(kCalRemoveBody, joined.c_str());
+  }
+  fits(bold, kCalRemove, kDialogButtonTextW);
+  fits(body, kCalRemoved, kToastTextRight - kToastTextX);
+
+  // The header: each pill before the title, the titles, the progress.
+  for (const char* pill : {kCalCancel, kCalSkip}) {
+    TEST_ASSERT_TRUE(kCalPillX + bold.width(pill) + kCalPillPad <= kCalTitleX - 4);
+  }
+  fits(bold, kCalTitle, kCalTitleW);
+  fits(bold, kCheckTitle, kCalTitleW);
+  fits(bold, kCalCheckTitle, kCalTitleW);
+  fits(small, "9 of 9", kCalProgressW);
+  fits(small, kCalSaved, kCalProgressW);
+  fits(small, kCalUndone, kCalProgressW);
+  TEST_ASSERT_TRUE(kCalTitleX + kCalTitleW + 6 + kCalProgressW <= 312);
+  // The Cancel pill's hit area covers it.
+  TEST_ASSERT_TRUE(kCalPillX + bold.width(kCalCancel) + kCalPillPad <= touchcheck::kCancelW);
+  TEST_ASSERT_EQUAL_INT(kCalHeaderH, touchcheck::kCancelH);
+
+  // The lines (Body; the result's numbers fall back to Small).
+  char buf[96];
+  fits(body, kCalFirstHint[0], kCalLineW);
+  snprintf(buf, sizeof(buf), kCalFirstHint[1], 9);
+  fits(body, buf, kCalLineW);
+  for (const char* t : {kCalHint, kCalMissed, kCheckHint, kCheckMissed, kCheckFirstHint[0], kCheckFirstHint[1],
+                        kCalCheckLines[0], kCalCheckLines[1], kCalSaveLine, kCalAccurate, kCalNoBetter,
+                        kCalDisagree[0], kCalDisagree[1], kCheckGoOn}) {
+    fits(body, t, kCalLineW);
+  }
+  fits(small, kCalCheckKey, kCalLineW);
+  fits(bold, kCheckAsk, kCalLineW);
+  fits(title, kCheckAccurate, kCalLineW);
+  // Typical results in Body; the widest possible in Small.
+  touchcheck::errorText(kCalNow, touchcheck::Error{42, 21}, buf, sizeof(buf));
+  fits(body, buf, kCalLineW);
+  touchcheck::errorText(kCalNew, touchcheck::Error{5, 3}, buf, sizeof(buf));
+  fits(body, buf, kCalLineW);
+  touchcheck::errorText(kCalNew, touchcheck::Error{999, 999}, buf, sizeof(buf));
+  fits(small, buf, kCalLineW);
+  // The check's verdict: two Body lines at most, the longest way and size.
+  f.ctx = const_cast<Vlw*>(&body);
+  for (touchcheck::Dir d : {touchcheck::Dir::Right, touchcheck::Dir::Left, touchcheck::Dir::Below,
+                            touchcheck::Dir::Above, touchcheck::Dir::None}) {
+    touchcheck::verdictText(touchcheck::Verdict{true, 300, d}, buf, sizeof(buf));
+    char lines[3][64];
+    const int n = textfit::wrap(f, buf, strlen(buf), kCalLineW, 3, &lines[0][0], sizeof(lines[0]));
+    TEST_ASSERT_TRUE(n <= 2);
+  }
+
+  // The rows: centred labels, and labels with their details.
+  const int rowText = kCalRowW - 2 * kCalRowPad;
+  for (const char* t : {kCalSave, kCalTryAgain, kCalDiscard, kCalDone}) {
+    fits(bold, t, rowText);
+    fits(body, t, rowText);
+  }
+  TEST_ASSERT_TRUE(bold.width(kCalCalibrate) + small.width(kCalCalibrateDetail) + 3 * kCalRowPad <= kCalRowW);
+  TEST_ASSERT_TRUE(body.width(kCheckNotNow) + small.width(kCheckLater) + 3 * kCalRowPad <= kCalRowW);
+  // Three rows, the lines above them, and the A hint under them.
+  TEST_ASSERT_TRUE(kCalRowsBottom - 3 * 40 >= 86 + 11 && kCalRowsBottom <= kCalHintY);
+
+  // The A hints: "A: " and each page's verb.
+  for (const char* verb : {kCalCancel, kCalSkip, kCheckNotNow, kCalDiscard, kCalDone, kCalUndo}) {
+    snprintf(buf, sizeof(buf), "A: %s", verb);
+    fits(small, buf, kCalAHintW);
+  }
+  // The boot screen's rescue line.
+  fits(small, kBootTouchHint, kCalLineW);
+}
+
+// With no correction (the default, until the owner calibrates), a panel
+// that reads x too far right like the lab's (TouchCalibration::labFitX():
+// +20 px at x 190, +35-45 from 240) must still hit the left one of two
+// controls side by side on the right half when the finger is on its
+// centre: that is the "taps are off" state the calibration is for, and
+// View -> Undo takes an add back. On a panel that reads true, each centre
+// is its own control too.
+void test_right_half_neighbours_survive_the_lab_panel() {
+  using namespace uitext;
+  const TouchCalibration::Axis lab = TouchCalibration::labFitX();
+  struct Reading {
+    int x;
+    bool edge;
+  };
+  auto lab_ = [&](int x) {
+    const long r = std::lround(lab.unmap(static_cast<float>(x)));
+    return r >= 319 ? Reading{319, true} : Reading{static_cast<int>(r), false};
+  };
+  auto truth = [](int x) { return Reading{x, x >= 319}; };
+  for (auto read : {std::function<Reading(int)>(lab_), std::function<Reading(int)>(truth)}) {
+    // The toast's View and Undo, on one line and on two.
+    for (bool compact : {false, true}) {
+      const int viewC = compact ? kToastViewCX + kToastViewCW / 2 : kToastViewX + kToastViewW / 2;
+      const int undoC = compact ? kToastUndoCX + kToastUndoCW / 2 : kToastUndoX + kToastUndoW / 2;
+      Reading r = read(viewC);
+      char msg[64];
+      snprintf(msg, sizeof(msg), "View (%s) at %d reads %d", compact ? "icons" : "words", viewC, r.x);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(3, toastButtonAt(r.x, r.edge, compact, true, true), msg);
+      r = read(undoC);
+      TEST_ASSERT_EQUAL_INT(2, toastButtonAt(r.x, r.edge, compact, true, true));
+      // The text never runs under View.
+      TEST_ASSERT_TRUE((compact ? kToastCompactTextRight : kToastViewX - 6) <= (compact ? kToastViewCX : kToastViewX));
+    }
+    // The sleep timer's fade toast: +10 min next to Turn off.
+    Reading r = read(kSleepToastPlusX + kSleepToastPlusW / 2);
+    TEST_ASSERT_EQUAL_INT((int)SleepTimer::ToastButton::Extend, (int)SleepTimer::toastTap(r.x, r.edge, false));
+    r = read(kSleepToastOffX + kSleepToastOffW / 2);
+    TEST_ASSERT_TRUE(SleepTimer::toastTap(r.x, r.edge, false) != SleepTimer::ToastButton::Extend);
+    // The tab bar: every tab's centre (Dance next to Output at 216).
+    for (int t = 0; t < tabbar::kTabs; ++t) {
+      const int centre = (tabbar::cellX0(t) + tabbar::cellX1(t)) / 2;
+      r = read(centre);
+      TEST_ASSERT_EQUAL_INT(t, tabbar::tabAt(r.x, r.edge));
+    }
+    // The speaker card: its volume chip's centre is the chip, its radio
+    // (x 290) isn't.
+    r = read(kSpeakerChipX + kSpeakerChipW / 2);
+    TEST_ASSERT_TRUE(!r.edge && r.x >= kSpeakerChipHitX && r.x < kSpeakerChipHitEnd);
+    r = read(290);
+    TEST_ASSERT_TRUE(r.edge || r.x >= kSpeakerChipHitEnd);
+  }
+  // The compact toast still has the room its long names need (Small).
+  const Vlw small(kVlwSans13);
+  fits(small, "Harder, Better, Faster, Stronger", kToastCompactTextRight - kToastTextX);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_jump_letters_match_the_index_buckets);
@@ -713,5 +871,7 @@ int main(int, char**) {
   RUN_TEST(test_sleep_timer_texts_fit);
   RUN_TEST(test_idle_power_off_texts_fit);
   RUN_TEST(test_power_settings_texts_fit);
+  RUN_TEST(test_touch_calibration_texts_fit);
+  RUN_TEST(test_right_half_neighbours_survive_the_lab_panel);
   return UNITY_END();
 }

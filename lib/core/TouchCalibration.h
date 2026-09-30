@@ -18,23 +18,28 @@ struct TouchFitOptions {
 };
 
 // Where the finger really was, from where the Core2's touch panel says it
-// was. The FT6336U on the user's Core2 reads x too far right, more so the
-// further right the finger is (the input lab's target practice, thumb and
-// index finger alike, so it's the sensor): about 0 at x 60-150, about +20 px
-// at x 190, +35-45 px from x 240 on, and it saturates at 319 (a target at
-// x 273 read 302-319, one at 299 read 319). At the left edge it saturates at
-// 0 (a target at x 27 read 0). y is right (identity for now).
+// was. Panels differ: the default is no correction at all (identity()), and
+// the calibration screen (ui/CalibrationScreen) fits a table to the owner's
+// own taps. The one panel measured, the user's (the input lab's target
+// practice, thumb and index finger alike, so it's the sensor), reads x too
+// far right, more so the further right the finger is: about 0 at x 60-150,
+// about +20 px at x 190, +35-45 px from x 240 on, and it saturates at 319
+// (a target at x 273 read 302-319, one at 299 read 319). At the left edge
+// it saturates at 0 (a target at x 27 read 0). y is right. labFitX() is
+// that panel's table: fitAxis() on those logs (the host tests check the two
+// agree, and use it as a skewed panel: Axis::unmap()).
 //
 // The correction is one monotonic piecewise-linear table per axis: knots at
 // raw positions, each with the true position it stands for; in between,
-// linear; outside the knots, slope 1 (the offset of the end knot). The
-// default x table is fitted to those logs by fitAxis() below, the same fit
-// the calibration screen uses on its own taps (the host test checks the
-// two agree). A clamped reading can't say how far past the clamp the finger
-// was: the fit puts raw 319 at about x 282, the average of where the fingers
-// that read 319 were aimed. So a control at the right edge needs a hit area
-// that reaches the screen's edge and at least ~40 px wide, or a check of the
-// saturation flag (clampedHighX(), InputEvent::atRightEdge()).
+// linear; outside the knots, slope 1 (the offset of the end knot). A
+// clamped reading can't say how far past the clamp the finger was: the lab
+// fit puts raw 319 at about x 282, the average of where the fingers that
+// read 319 were aimed. So a control at the right edge needs a hit area that
+// reaches the screen's edge and at least ~40 px wide, or a check of the
+// saturation flag (clampedHighX(), InputEvent::atRightEdge()); and two
+// controls side by side at the right need their split well right of the
+// left one's centre, so that an uncalibrated panel like the lab's still
+// hits the left one (test_ui_library audits them).
 //
 // Portable: no clock, no storage; save()/load() give the bytes NVS keeps.
 class TouchCalibration {
@@ -52,6 +57,9 @@ public:
 
     // The true position for a raw reading.
     float map(float r) const;
+    // The raw reading for a true position: map()'s inverse (the table is
+    // monotonic). A skewed panel for tests: what it reads for a finger.
+    float unmap(float v) const;
     // Knots strictly increasing on both sides, 2..kMaxKnots of them, values
     // finite and within -64..kRawMaxX+64.
     bool valid() const;
@@ -80,10 +88,13 @@ public:
   static const int16_t kXKnotRaw[kXKnots];
   static const int16_t kYKnotRaw[kYKnots];
 
-  // The default: x fitted to the user's logs, y identity.
+  // The default, until a table is saved: no correction (identity()).
   static TouchCalibration defaults();
   // No correction at all.
   static TouchCalibration identity();
+  // The x table fitted to the input lab's logs (the user's panel): a test
+  // fixture, and the console's skewed scripted finger (its unmap()).
+  static Axis labFitX();
 
   // A monotonic table for the knots `knotRaw` (strictly increasing, 2 to
   // kMaxKnots) that fits the samples in the least-squares sense, smoothed

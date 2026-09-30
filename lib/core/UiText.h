@@ -26,10 +26,28 @@ inline constexpr const char* kCoachTabMore[3] = {"The Library goes back to its l
                                                   "These tips are in Output > About."};
 
 // ---- the toast (ui/Overlays) ----
+// Undo at the screen's edge (its hit area to the edge, a clamped reading
+// too), View left of it; on two lines ("Plays next" over a long name) both
+// as icons. The split between them sits well right of View's centre: with
+// no correction (the default), a panel that reads right like the lab's
+// (+28 px at x 214, +27 at 244: TouchCalibration::labFitX()) still hits
+// View there, never Undo, which would take the add back (test_ui_library).
+inline constexpr int kToastUndoX = 256, kToastUndoW = 54, kToastUndoHitX = 250;
+inline constexpr int kToastViewX = 186, kToastViewW = 56, kToastViewHitX = 180;
+inline constexpr int kToastUndoCX = 282, kToastUndoCW = 30, kToastUndoCHitX = 278;
+inline constexpr int kToastViewCX = 230, kToastViewCW = 28, kToastViewCHitX = 214;
+// What a tap on the toast is: 2 Undo, 3 View, 1 elsewhere on it.
+constexpr int toastButtonAt(int x, bool rightEdge, bool compact, bool undo, bool view) {
+  const int undoHit = compact ? kToastUndoCHitX : kToastUndoHitX;
+  const int viewHit = compact ? kToastViewCHitX : kToastViewHitX;
+  if (undo && (rightEdge || x >= undoHit)) return 2;
+  if (view && !rightEdge && x >= viewHit && x < undoHit) return 3;
+  return 1;
+}
 // "Plays next: <name>" on two lines: the name (Body, else Small) from x 22
 // to the View icon's pill.
 inline constexpr int kToastTextX = 22;
-inline constexpr int kToastCompactTextRight = 238;
+inline constexpr int kToastCompactTextRight = kToastViewCX - 4;
 inline constexpr int kToastTextRight = 306;  // a note (Ui::warn) on one line, no buttons
 // A B click refused by the pocket rule (the screen woke from off and
 // nothing touched the glass since; ScreenPower::unattended()).
@@ -177,6 +195,11 @@ inline constexpr const char* kBtLostRestingLine = "Stopped looking for them: Pla
 // The speaker card: its status line (Small), before the volume chip.
 inline constexpr int kSpeakerLineW = 160;
 inline constexpr int kSpeakerChipX = 218, kSpeakerChipW = 48;
+// Its hit area: 6 px before it, and 10 px past it (the radio is at 280-300:
+// a tap on the chip's centre that reads ~27 px right, as on the lab's panel
+// with no correction, is still the chip, not the row's "to the speaker").
+inline constexpr int kSpeakerChipHitX = kSpeakerChipX - 6;
+inline constexpr int kSpeakerChipHitEnd = kSpeakerChipX + kSpeakerChipW + 10;
 inline constexpr const char* kSilentMode = "Silent test mode";
 inline constexpr const char* kForgetArmed = "Tap again";
 // The Pair screen's hint (Small, x 48 to 312).
@@ -238,6 +261,26 @@ inline constexpr const char* kCpuRestart = "Restart";
 // it): a toast, nothing saved.
 inline constexpr const char* kCpuWaitPairing = "Wait for the pairing to finish";
 
+// Touch calibration (its row; the calibration itself: below): the line
+// under its title (Small, kSettingSubW), and a tap's sheet: Calibrate (the
+// primary, its detail dim), the check page, and while a table is saved
+// Remove (red), asked in a dialog (kDialogTitleW; its body in Small, 3
+// lines over the same 260 px; [Cancel] [Remove]), then a toast (Body).
+inline constexpr const char* kCalRowTitle = "Touch calibration";
+inline constexpr const char* kCalSubOff = "Not calibrated";
+inline constexpr const char* kCalSubOn = "Calibrated on this Core2";
+inline constexpr const char* kCalCalibrate = "Calibrate";
+inline constexpr const char* kCalCalibrateDetail = "9 crosses, 20 s";
+// (One name for one thing: "Touch check" is the first-boot dots, "Test
+// taps" the tap-anywhere page.)
+inline constexpr const char* kCalCheckTitle = "Test taps";
+inline constexpr const char* kCalRemoveRow = "Remove calibration";
+inline constexpr const char* kCalRemoveTitle = "Remove the calibration?";
+inline constexpr const char* kCalRemoveBody =
+    "Then taps are read as the panel reports them. Calibrate again here any time.";
+inline constexpr const char* kCalRemove = "Remove";
+inline constexpr const char* kCalRemoved = "Calibration removed";
+
 // ---- the idle power-off (IdlePolicy; ENERGY.md item 4) ----
 // The warning toast (ui/Overlays' Toast), its last 30 s: "Turning off in
 // 30 s" (Body) from kToastTextX to the button, then [Keep on] (Body) to the
@@ -255,5 +298,76 @@ inline constexpr const char* kAboutLibrary = "%lu tracks, %lu artists, %lu album
 // About's power row: the two settings as they run (PowerChoices::aboutText():
 // "160 MHz; Normal (-12..+3 dBm)").
 inline constexpr const char* kAboutPower = "CPU speed, Bluetooth power";
+
+// ---- the touch check and calibration (ui/CalibrationScreen; TouchCheck) ----
+// The whole screen. A 26 px header: at its left, on the pages that have one,
+// the way out on the glass as a pill (Bold, kCalPillPad wider than its
+// label; its hit area x < 110, TouchCheck's kCancelW); the title (Bold)
+// after the widest pill; the progress ("3 of 9", Small) right-aligned at
+// x 312.
+inline constexpr int kCalHeaderH = 26;
+inline constexpr int kCalPillX = 4, kCalPillPad = 20;
+inline constexpr int kCalTitleX = 92;
+inline constexpr int kCalProgressW = 52;
+inline constexpr int kCalTitleW = 312 - kCalProgressW - 6 - kCalTitleX;
+inline constexpr const char* kCalCancel = "Cancel";
+inline constexpr const char* kCalSkip = "Skip";
+inline constexpr const char* kCalTitle = "Touch calibration";
+inline constexpr const char* kCheckTitle = "Touch check";
+// Every line (Body, else Small when Body doesn't fit) across x 8-312.
+inline constexpr int kCalLineW = 304;
+// The crosses: the first one's hint on two lines ("%d": how many), then
+// one; a miss (amber).
+inline constexpr const char* kCalFirstHint[2] = {"Tap the centre of each cross",
+                                                 "with the finger you use. %d crosses."};
+inline constexpr const char* kCalHint = "Tap the centre of the cross";
+inline constexpr const char* kCalMissed = "Missed: tap the cross itself";
+// The result (TouchCheck's errorText(): "Now" with the table in use,
+// "Calibrated" with the new one), then a line on what to do.
+inline constexpr const char* kCalNow = "Now";
+inline constexpr const char* kCalNew = "Calibrated";
+inline constexpr const char* kCalSaveLine = "Save it to use it from now on.";
+inline constexpr const char* kCalAccurate = "Already accurate: no need to save";
+inline constexpr const char* kCalNoBetter = "No better than now: no need to save";
+inline constexpr const char* kCalDisagree[2] = {"The taps didn't agree. Try again,",
+                                                "tapping the centre of each cross."};
+// The rows (full width, 40 px, stacked up to y 220: hit tested by y alone,
+// which the panel reads true). A label (Bold for the primary, else Body)
+// centred; or, with a detail, the label at the left and the detail (Small,
+// dim) right-aligned in what it leaves (kCalRowPad in from each end, a
+// kCalRowPad gap).
+inline constexpr int kCalRowX = 8, kCalRowW = 304, kCalRowPad = 12, kCalRowsBottom = 220;
+inline constexpr const char* kCalSave = "Save";
+inline constexpr const char* kCalTryAgain = "Try again";
+inline constexpr const char* kCalDiscard = "Discard";
+inline constexpr const char* kCalDone = "Done";
+// The test taps page: two lines, and the grey mark's key when a table is
+// saved (Small); after a Save the header says so (Small, right).
+inline constexpr const char* kCalCheckLines[2] = {"Tap anywhere. The ring should land", "right under your finger."};
+inline constexpr const char* kCalCheckKey = "grey: without calibration";
+inline constexpr const char* kCalSaved = "Saved";
+inline constexpr const char* kCalUndone = "Undone";
+// The first-boot check: its first dot's hint on two lines, then one; a miss.
+inline constexpr const char* kCheckFirstHint[2] = {"Is the touch right? Tap the centre",
+                                                   "of each dot, one at a time."};
+inline constexpr const char* kCheckHint = "Tap the centre of the dot";
+inline constexpr const char* kCheckMissed = "Missed: tap the dot itself";
+// Its result: the verdict (TouchCheck's verdictText(), wrapped over two
+// Body lines), the question (Bold), then [Calibrate] [Not now] with their
+// details; or, accurate, two lines (Title, Body) and a tap anywhere goes on.
+inline constexpr const char* kCheckAsk = "Calibrate now?";
+inline constexpr const char* kCheckNotNow = "Not now";
+inline constexpr const char* kCheckLater = "Output > Touch calibration";  // where it is later
+inline constexpr const char* kCheckAccurate = "Touch is accurate.";
+inline constexpr const char* kCheckGoOn = "Tap anywhere to go on.";
+// The strip's A is the way out on every page ("A: Cancel": Small, after a
+// red arrow down to the A dot at x 54), in the band under the rows (y 222
+// to 239). The verbs are the pages' (the pill's, a row's, or these).
+inline constexpr int kCalHintY = 222;
+inline constexpr int kCalAHintX = 68, kCalAHintW = 120;
+inline constexpr const char* kCalUndo = "Undo";
+// The boot screen's last line (Small, across x 8-312): the rescue when the
+// glass is too far off to reach the Output tab (main.cpp).
+inline constexpr const char* kBootTouchHint = "Touch trouble? Hold a finger on the screen.";
 
 }  // namespace uitext

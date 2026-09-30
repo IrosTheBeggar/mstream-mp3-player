@@ -16,4 +16,7 @@ public:
   void begin();
   // Draws (or redraws) the rows.
   void show(const std::vector<Row>& rows);
+  // A line at the bottom (the UI's Small font once it is loaded: after
+  // Ui::begin()): the rescue hold (uitext::kBootTouchHint).
+  void hint(const char* text);
 };

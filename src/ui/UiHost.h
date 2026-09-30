@@ -130,8 +130,8 @@ public:
   // (silent test mode; no headphones paired since Forget).
   virtual bool selectOutput(bool bluetooth) = 0;
   // The touch calibration screen (it takes the display; the UI resumes
-  // when it closes).
-  virtual void openCalibration() = 0;
+  // when it closes): the crosses, or (`check`) the check page.
+  virtual void openCalibration(bool check) = 0;
 
   // ---- Bluetooth (the Output card and the Pair screen) ----
   virtual void btConnect() = 0;     // Connect, Try again

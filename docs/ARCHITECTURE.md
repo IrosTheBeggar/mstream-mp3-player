@@ -22,7 +22,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  LibraryIndex  LibrarySynth  TextFold  TouchGesture           |
               |  KineticScroll  ScrollGovernor  VScrollMap  RefillPacer       |
               |  ByteStream  QueueModel  QueueText  TrackCatalog              |
-              |  TouchCalibration  TouchRecognizer  ButtonGesture             |
+              |  TouchCalibration  TouchCheck  TouchRecognizer  ButtonGesture |
               |  ButtonPolicy  InputEvent                                     |
               |  NavModel  FrameClock  ListLayout  BitSet  TextFit            |
               |  TabBarModel  TrackProgress  JumpIndex                        |
@@ -881,28 +881,159 @@ else reads the hardware
 (the input lab, a measuring tool, is the one exception: while it is open the
 layer is suspended).
 
-- **Touch correction** (`TouchCalibration`, host-tested). The user's Core2
-  reads x too far right, more so further right: ~0 at x 60-150, ~+20 px at
-  x 190, +35-45 px from x 240, and it stops at 319 (thumb and index finger
-  alike: the sensor). Every touch point goes through a monotonic
-  piecewise-linear table per axis (x knots every 40 px, y every 60; y is the
-  identity for now) before anything hit tests it. The default x table is
-  the least-squares fit (smoothed, slopes kept between 0.25 and 4) of the
-  input lab's 72 target-practice taps; the host test fits the same logs and
-  checks the default still matches. A reading clamped at 319 can't say how
-  far out the finger was: the table puts it at ~282, where the fingers that
-  read 319 were aimed on average. So **a control at the right edge must have
-  a hit area that reaches the screen's edge and is at least ~40 px wide**;
-  events also flag a clamped reading (`InputEvent::atRightEdge()`,
-  `inRightEdgeZone(left)`). The table is saved in NVS (namespace `input`,
-  key `cal`), checked by a checksum when loaded; without it, the default.
-- **Calibration screen** (`ui/CalibrationScreen`, console `a`): 5-9
-  crosshairs with distinct x and y each; a tap on each (raw reading, where
-  the finger landed) is a sample, one too far from the cross is asked
-  again. The same fit makes a new table, shown with the error before and
-  after; Save stores it, then a check page shows where each tap now lands.
-  It is made in PSRAM on first use, owns the screen while up (like the spike
-  screens), and opens from the Output tab ("Touch calibration") or the console.
+- **Touch correction** (`TouchCalibration`, host-tested). Every touch
+  point goes through a monotonic piecewise-linear table per axis (x knots
+  every 40 px, y every 60) before anything hit tests it. **The default is
+  no correction** (identity): panels differ, and a stranger's Core2 must
+  not get a table fitted to one unit's panel. The one panel measured, the
+  user's, reads x too far right, more so further right: ~0 at x 60-150,
+  ~+20 px at x 190, +35-45 px from x 240, and it stops at 319 (thumb and
+  index finger alike: the sensor); y reads true. Its table, the
+  least-squares fit (smoothed, slopes kept between 0.25 and 4) of the input
+  lab's 72 target-practice taps, is kept as `TouchCalibration::labFitX()`:
+  the host tests fit the same logs and check it still matches, and use its
+  inverse (`Axis::unmap()`) as a skewed panel. A reading clamped at 319
+  can't say how far out the finger was (the lab table puts it at ~282). So
+  **a control at the right edge must have a hit area that reaches the
+  screen's edge and is at least ~40 px wide**, and **two controls side by
+  side on the right half need their split well right of the left one's
+  centre**: uncorrected, the lab's panel reads a tap on View's centre in
+  the toast (x 214) at 242, and one on the speaker card's volume chip (242)
+  at 269. `test_ui_library` audits those pairs (the toast's View / Undo,
+  the sleep toast's +10 min / Turn off, the tabs, the speaker chip / radio)
+  against the lab panel and a true one. (The jump grid's 44 px cells can't
+  be: uncorrected, a right-half letter lands one cell right; that is what
+  calibrating is for.) Events also flag a clamped reading
+  (`InputEvent::atRightEdge()`, `inRightEdgeZone(left)`). A table is saved
+  in NVS (namespace `input`, key `cal`), checked by a checksum when loaded;
+  without it, no correction.
+- **The touch check and calibration** (`ui/CalibrationScreen`, the rules
+  in `TouchCheck`, host-tested; texts and rooms in `UiText`). One screen,
+  made in PSRAM on first use, that owns the display while up (main.cpp
+  suspends the UI and the dancer; the screen stays lit, and the idle
+  power-off waits for it), drawn with the UI's fonts, colours and the
+  Output accent. Every button is a **full-width 40 px row hit tested by y
+  alone** (the panel reads y true), the glass's way out is a pill at the
+  top **left** (x < 110: a panel that reads right carries taps away from
+  it), and the strip's **A click is the way out on every page** (Skip, Not
+  now, Cancel, Discard, Done; Undo right after a Save), with a red arrow
+  and "A: Cancel" over the A dot. That is the one exception to
+  `ButtonPolicy`'s "the same on every screen": main.cpp routes A's click
+  to the screen only while it is up (A's hold and all of B and C stay the
+  policy's). A touch that went down before a page or cross was drawn, or
+  within 300 ms of it, is ignored (a bounce is never the next cross's
+  sample), and after 60 s with no touch it closes as its way out (nothing
+  saved). It opens four ways:
+  - **The first-boot check**: with no table saved and NVS `input`/`cal_ask`
+    unset (`TouchCheck::due()`), before the UI starts (so before the tips).
+    Three dots, one at a time, at x 50, 190 and 280 (where the lab's panel
+    was 0, +20 and +40 px off), each tap leaving a mark; one more than 90 px
+    off is asked again, once. The verdict (`TouchCheck::verdict()`):
+    calibrate when a dot is more than 30 px off, two of three more than
+    15, or a dot away from the edges read the clamp; it says which way
+    ("Taps land about 40 px to the right of your finger"), with
+    [Calibrate] [Not now]; else "Touch is accurate", a tap goes on. Any
+    answer, a skip or walking away stores `cal_ask`. **The user's own unit
+    has no saved table and no `cal_ask`, so it shows the check at its next
+    boot**: that is the intended first device test, not a regression.
+  - **Output > Touch calibration** (its line: "Not calibrated" /
+    "Calibrated on this Core2"): a sheet with Calibrate, Test taps,
+    and Remove calibration (red, while a table is saved; a dialog asks).
+  - **The rescue**: while the start-up screen shows (the UI not started,
+    glass events going nowhere), a finger held anywhere on the glass for
+    2 s opens the crosses, and the UI's start waits while that finger is
+    down. The screen's last line says so, and it stays at least 1.5 s after
+    that line shows (setup() can outlast the screen's 3 s). It needs no accuracy, and a glass hold has no other meaning
+    there (a B hold would switch the output at 500 ms). The finger goes on
+    once the screen lights: the FT6336U likely takes its baseline at power
+    up (still to check on the device).
+  - The console: `a` (`a5`-`a9`), `ac`, `ab` (`ab0` forgets `cal_ask`).
+    With the screen off, these wake it and the screen opens once the panel
+    is awake: nothing may be drawn into a sleeping panel (below).
+
+  The crosses (`TouchCheck::kCross`: 9, distinct x and y each; no cross's
+  sample window reaches the Cancel pill, and none is drawn in the A
+  hint's corner): a tap within 70 px (x) and 50 (y) of the cross, from the
+  raw reading, is a sample (a tick and a green flash); a miss buzzes (the
+  inert double buzz) and asks again (a retap counts after 150 ms, not the
+  page's 300: only a bounce of the miss is ignored), and after two misses
+  a third tap within 20 px of the last is taken, up to 120 px from the
+  cross (two taps that agree are the panel's reading, not the finger's).
+  The glass's two ways out are judged first: the header's Cancel, and the
+  "A: Cancel" label over the A dot (x < 200, y >= 222, at least 22 px
+  below every cross; on the other pages that band alone is the A label,
+  as the A click). Then the fit (as above) and the result: "Now: up to 42
+  px off, average 21" (the table in use) / "Calibrated: up to 12 px off,
+  average 6" (2D distances), with [Save] [Try again] [Discard]. The new
+  table's figures are leave-one-out (`TouchCheck::measureUnseen()`: each
+  tap against a table fitted to the others, 2n small fits): measured on
+  the taps it was fitted to, 9 x knots follow 9 taps' finger scatter, and
+  a panel that reads true was told to save a table worse than none (a
+  simulation of a true panel with 5 px of scatter per axis: "better" in
+  44% of runs). `TouchCheck::outcome()` puts Save first only when the new
+  table is at least 3 px closer on average (the same simulation: 0.1% of
+  runs on a true panel, 95% on the lab's); else Discard first, "already
+  accurate" when the taps average within 8 px with the table in use, "no
+  better" otherwise: a table fitted to finger scatter helps nothing. A fit whose rms is over 15 px on either axis is
+  "the taps didn't agree", with Try again first. After Save the check page
+  (a coral ring where the Core2 reads each tap, a grey dot where it would
+  without the table), where A undoes the Save (the table before is kept in
+  RAM).
+- **The scripted finger on a skewed panel** (console `uk1`, `uk2` with up
+  to 4 px of deterministic jitter a touch, `uk0` off): the scripted finger
+  (`uit`, `uih`...) then reads x as the lab's panel did (its table's
+  inverse, clamped, the edge flags from that), and the table in use
+  corrects it as a real touch's, so a run can take the check, the crosses,
+  the fit, the Save and the check page end to end and see the fit recover
+  roughly the lab table (`test_touch_input` does the same on the host).
+- **Checked on the device** (2026-09-30, the user's Core2, scripted finger
+  only: no hand, so the FT6336U's behaviour with a finger already down at
+  power-up is still open):
+  - Boot with nothing saved: "[input] touch: no correction (default), the
+    touch check is due", and the check opened ~1.4 s after the console line.
+  - The check with `uk1`: the dots read 2, 21 and 37 px off, "Taps land
+    about 35 px to the right of your finger. Calibrate now?"; Calibrate
+    opens the crosses. With `uk0` (an exact finger): "Touch is accurate",
+    a tap goes on.
+  - The crosses with `uk2`: progress "n of 9", a miss (a tap 140 px away)
+    buzzes and shows "Missed: tap the cross itself", then a tap on the
+    cross counts. Cancel by the top-left pill, by the strip's A (from
+    Output's sheet, back to the same scrolled Output list), Discard, Try
+    again, Save, the test taps page (rings, grey uncorrected dots), Done by
+    its bar and by A, A's Undo right after a Save ("Undone", no correction
+    again), and a deliberately scattered run: "The taps didn't agree".
+  - Four fits of 9 jittered taps: "better", now up to 27-34 px off
+    (average 15-16), the new table up to 15-20 (average 7-10) on taps it
+    wasn't fitted to, 4-7 on its own. The leave-one-out took 393 ms on the
+    loop task. One saved table: x 40->45.0, 80->78.5, 120->117.2,
+    160->151.1, 200->181.7, 240->215.1, 280->254.5 (the lab's: 43.2, 78.5,
+    122.7, 154.4, 181.9, 212.3, 253.1); the ends differ (0->17.8, 319->297.9
+    against 25.6 and 281.3) because the crosses at x 20 and 300 read at the
+    clamps. The unseen "up to" figure is set by those two edge crosses
+    (left out, the edge is extrapolated), so it reads worse than the saved
+    table does at the edges.
+  - Output: the row reads "Not calibrated" / "Calibrated on this Core2";
+    the sheet shows Remove calibration only when calibrated; its dialog's
+    Cancel keeps the table, Remove takes it off with a "Calibration
+    removed" toast.
+  - The rescue: a glass hold at boot opened the crosses at 2.0 s with the
+    UI waiting; A left them and the UI started. A strip B hold in the same
+    window switched the output (to Bluetooth) and did not open them; a B
+    hold after start switched it back.
+  - The screen stayed lit with the check up and untouched, which closed
+    itself at 60 s; then the usual dim (20 s) and off (30 s).
+  - Two bugs found and fixed. (1) Opened while the screen was off (the
+    console), the screen drew into the sleeping panel (Ui::suspend() lets
+    the screen that takes over draw at once): its last piece, the A hint,
+    came out shifted ~118 px, in the wrong colours. Now it wakes the screen
+    and opens once the panel is awake. (2) A B click refused by the pocket
+    rule while the calibration was up drew the UI's "Tap the screen first,
+    then B plays" toast over it: `Ui::warn()` and `Ui::toast()` drew while
+    the UI was suspended (`note()` already didn't). Both now log and skip.
+  - Not wired, by design: B isn't Done on the check page (A and the Done
+    bar are), and a B click while the calibration is up plays or pauses as
+    ever. The first-boot check's 60 s close counts as an answer, so a
+    Core2 put down on its first boot won't ask again (Output has it).
 - **The glass** (`TouchRecognizer`, host-tested): Down, Tap (within 12 px
   and 500 ms; its position is where the finger landed), LongPress (500 ms,
   while still down), Release, DragStart / DragMove / DragEnd, and Fling.
@@ -961,7 +1092,8 @@ layer is suspended).
   509-2383 ms) all still count (the host test replays them).
 - **The buttons** (`ButtonGesture`, `ButtonPolicy`, host-tested): Click,
   Hold at **500 ms** (the user's clicks lasted 17-143 ms, holds 509-2383 ms),
-  Repeat every 200 ms for A and C, HoldEnd. The same on every screen: A
+  Repeat every 200 ms for A and C, HoldEnd. The same on every screen (but
+  A's click while the touch calibration is up: its way out, above): A
   click previous (past a track's first 3 s: the same track from 0:00,
   paused still paused) / hold volume -5 % (repeating); B click play/pause / hold
   switch the output, and switching **to the speaker always pauses first**;

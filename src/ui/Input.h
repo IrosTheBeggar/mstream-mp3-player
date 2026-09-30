@@ -12,9 +12,9 @@
 // The one input layer (the tab bar spec's dispatcher, §10.1). It alone reads
 // the touch panel; everything downstream gets InputEvents from poll():
 //
-//   - the glass: every touch point is corrected (TouchCalibration: the
-//     user's panel reads x up to ~45 px too far right) before anything hit
-//     tests it, then TouchRecognizer makes Down, Tap, LongPress, Release,
+//   - the glass: every touch point is corrected (TouchCalibration: none
+//     until the owner calibrates; the user's panel reads x up to ~45 px
+//     too far right) before anything hit tests it, then TouchRecognizer makes Down, Tap, LongPress, Release,
 //     DragStart/Move/End and Fling (capped at 2,000 px/s) of it;
 //   - the buttons (the strip below the LCD, raw y >= 240): StripButtons
 //     makes their presses from the same touch point (only a touch that
@@ -52,7 +52,8 @@
 // here: it acts in the dark.
 //
 // Saved in NVS (namespace "input"): the touch calibration ("cal", the
-// TouchCalibration bytes; the default table when absent), "haptics" and
+// TouchCalibration bytes; no correction when absent), whether the first
+// boot's touch check was answered ("cal_ask": TouchCheck), "haptics" and
 // "railtick". Loop task only.
 class Input {
 public:
@@ -107,6 +108,9 @@ public:
   void tapTick();
   // A long press did something (it has a hold action): the double tick.
   void holdTick();
+  // A tap that missed what it was asked for (the calibration's crosses):
+  // the inert buzz, two short softer pulses (buttonFeedback()'s).
+  void missBuzz();
   // A touch button's event once ButtonPolicy has handled it: the tick for
   // a click, the double tick for a hold; `acted` false (a click with
   // nothing to play): the inert buzz.
@@ -121,12 +125,16 @@ public:
 
   // ---- touch calibration ----
   const TouchCalibration& calibration() const { return cal_; }
-  bool calibrated() const { return custom_; }  // a table of the user's, not the default
+  bool calibrated() const { return custom_; }  // a table saved on this device, not the default
   // Applies and saves a table; false (nothing changed) if it isn't valid or
   // can't be saved.
   bool setCalibration(const TouchCalibration& c);
-  // Back to the default table (the saved one is erased).
+  // Back to the default, no correction (the saved table is erased).
   void resetCalibration();
+  // The first boot's touch check was answered (done, skipped, walked away
+  // from): not asked again. Saved; false forgets it (console ab0).
+  bool touchCheckAnswered() const { return checkAnswered_; }
+  void setTouchCheckAnswered(bool on = true);
 
   // "[input] ..." lines: the tables, the settings, events dropped.
   void printStatus() const;
@@ -143,6 +151,17 @@ public:
   bool simulating() const { return sim_.on; }
   // The last touch was the scripted finger's (for the log).
   bool scriptedTouch() const { return scripted_; }
+  // The scripted finger on a skewed panel (console uk0/uk1/uk2), to run the
+  // touch check and the calibration end to end without a hand: its points
+  // are where the finger is, and the panel reads x as the input lab's did
+  // (TouchCalibration::labFitX()'s unmap(), clamped to 0-319, the edge
+  // flags from that), then the table in use corrects it as a real touch's.
+  // 2 adds a jitter of up to 4 px per touch (deterministic), so the fit
+  // isn't judged on perfect taps. 0: off (its points are already corrected).
+  void setSimSkew(uint8_t mode) { simSkew_ = mode > 2 ? 2 : mode; }
+  uint8_t simSkew() const { return simSkew_; }
+  // For the log: " scripted", " (scripted, skewed)" or "".
+  const char* scriptedNote() const;
 
 private:
   static constexpr int kQueue = 8;
@@ -173,6 +192,7 @@ private:
   int16_t wakeX_ = 0, wakeY_ = 0;
   bool hapticsOn_ = true;
   bool railTicks_ = true;
+  bool checkAnswered_ = false;
   bool holdUsed_ = false;
   struct Sim {
     bool on = false;
@@ -182,6 +202,9 @@ private:
     uint32_t dwell = 0, move = 0, rest = 0;
   } sim_;
   bool scripted_ = false;
+  uint8_t simSkew_ = 0;
+  uint8_t simTouches_ = 0;            // the jitter's step
+  int8_t jitterX_ = 0, jitterY_ = 0;  // this scripted touch's
   // The finger of the first touch point last pass (the panel's id;
   // kScriptedId for the scripted finger; -1 none), and the other fingers
   // whose strip press was logged as ignored (a bit per id).

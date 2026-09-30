@@ -2,6 +2,10 @@
 
 #include <M5Unified.h>
 
+#include "UiText.h"
+#include "ui/Fonts.h"
+#include "ui/LcdLock.h"
+
 namespace {
 constexpr uint16_t kBg = 0x0862;      // the UI's background
 constexpr uint16_t kFg = 0xF79F;
@@ -41,4 +45,10 @@ void BootScreen::show(const std::vector<Row>& rows) {
     d.drawString(rows[i].value, kValueX, y);
   }
   d.setTextDatum(textdatum_t::top_left);
+}
+
+void BootScreen::hint(const char* text) {
+  LcdLock lock;
+  ui::Fonts::instance().draw(M5.Display, ui::Font::Small, text, kW / 2, 229, uitext::kCalLineW, kDim, kBg,
+                             ui::Fonts::Align::Centre);
 }

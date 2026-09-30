@@ -49,15 +49,17 @@ bool overlaysBegin() {
 // ---- Toast ----
 
 namespace {
-// Undo at x 256-309 (its hit area 250 to the edge); View at 196-249 (its
-// hit area 190-249). The text has what's left of them.
-constexpr int kUndoX = 256, kUndoW = 54, kUndoHitX = 250;
-constexpr int kViewX = 196, kViewW = 54, kViewHitX = 190;
+// Undo at x 256-309 (its hit area 250 to the edge); View at 186-241 (its
+// hit area 180-249: a tap on its centre that reads ~28 px right, as on the
+// lab's panel uncorrected, is still View). The text has what's left of them.
 // Two lines ("Plays next" over a long name): the buttons as icons (Undo's
 // arrow, View as the Queue tab's icon), so the name has most of the width
-// (uitext::kToastCompactTextRight; test_ui_library measures).
-constexpr int kUndoCX = 280, kUndoCW = 32, kUndoCHitX = 264;
-constexpr int kViewCX = 244, kViewCW = 32, kViewCHitX = 228;
+// (uitext::kToastCompactTextRight; test_ui_library measures). The geometry
+// and the hit test are UiText's (toastButtonAt(), host-tested).
+constexpr int kUndoX = uitext::kToastUndoX, kUndoW = uitext::kToastUndoW;
+constexpr int kViewX = uitext::kToastViewX, kViewW = uitext::kToastViewW;
+constexpr int kUndoCX = uitext::kToastUndoCX, kUndoCW = uitext::kToastUndoCW;
+constexpr int kViewCX = uitext::kToastViewCX, kViewCW = uitext::kToastViewCW;
 constexpr int kTextX = uitext::kToastTextX;
 constexpr int kBackZone = 56;  // the page header's ‹ (Header::hit)
 
@@ -202,12 +204,8 @@ int Toast::hit(const InputEvent& e, bool slop) const {
     return 1;
   }
   if (idle_) return e.x >= uitext::kIdleToastKeepX - 6 || e.inRightEdgeZone(uitext::kIdleToastKeepX) ? kHitKeepOn : 1;
-  const int undoHit = compact_ ? kUndoCHitX : kUndoHitX;
-  const int viewHit = compact_ ? kViewCHitX : kViewHitX;
   // Undo reaches the screen's edge (and takes a clamped reading).
-  if (undo_ && e.inRightEdgeZone(undoHit)) return 2;
-  if (view_ && e.x >= viewHit && e.x < undoHit) return 3;
-  return 1;
+  return uitext::toastButtonAt(e.x, e.atRightEdge(), compact_, undo_, view_);
 }
 
 bool Toast::passesThrough(const InputEvent& e) const {

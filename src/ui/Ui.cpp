@@ -435,6 +435,12 @@ void Ui::toast(const char* text, bool undo, uint32_t viewKey) {
   viewKey_ = viewKey;
   // An add: the next visit to the Queue shows it (the review's graft).
   if (viewKey != QueueModel::kNone) added_.noteAdded(viewKey);
+  // Not over the start-up screen or a screen of its own (the calibration):
+  // Toast::show() draws at once.
+  if (!started_ || suspended_) {
+    Serial.printf("[ui] toast not shown (the UI isn't on screen): %s\n", text);
+    return;
+  }
   const int was = toast_.bottom();
   toast_.show(text, undo, viewKey != QueueModel::kNone, accent(), nowMs_);
   uncover(was);
@@ -443,6 +449,12 @@ void Ui::toast(const char* text, bool undo, uint32_t viewKey) {
 }
 
 void Ui::warn(const char* text) {
+  // (As toast(): the pocket guard's note for a B click while the
+  // calibration is up drew over it.)
+  if (!started_ || suspended_) {
+    Serial.printf("[ui] note not shown (the UI isn't on screen): %s\n", text);
+    return;
+  }
   viewKey_ = QueueModel::kNone;
   const int was = toast_.bottom();
   toast_.show(text, false, false, col::AMBER, nowMs_);

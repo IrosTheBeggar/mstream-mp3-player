@@ -3,12 +3,15 @@
 #include <M5Unified.h>
 #include <Preferences.h>
 
+#include <cmath>
+
 #include "ButtonPolicy.h"
 
 namespace {
 
 constexpr const char* kNvsNamespace = "input";
 constexpr const char* kKeyCal = "cal";
+constexpr const char* kKeyCalAsk = "cal_ask";
 constexpr const char* kKeyHaptics = "haptics";
 constexpr const char* kKeyRailTick = "railtick";
 
@@ -31,11 +34,12 @@ void Input::begin() {
   Preferences p;
   // Read-write: a read-only open of a namespace never written logs an error.
   if (!p.begin(kNvsNamespace, false)) {
-    Serial.println("[input] NVS unavailable: the default touch table, haptics on");
+    Serial.println("[input] NVS unavailable: no touch correction, haptics on");
     return;
   }
   hapticsOn_ = p.getBool(kKeyHaptics, true);
   railTicks_ = p.getBool(kKeyRailTick, true);
+  checkAnswered_ = p.getBool(kKeyCalAsk, false);
   uint8_t blob[TouchCalibration::kMaxBlob];
   const size_t len = p.isKey(kKeyCal) ? p.getBytesLength(kKeyCal) : 0;
   if (len > 0 && len <= sizeof(blob) && p.getBytes(kKeyCal, blob, len) == len) {
@@ -44,12 +48,14 @@ void Input::begin() {
       cal_ = c;
       custom_ = true;
     } else {
-      Serial.println("[input] the saved touch calibration is damaged: the default table instead");
+      Serial.println("[input] the saved touch calibration is damaged: no correction instead");
     }
   }
   p.end();
-  Serial.printf("[input] touch table: %s; haptics %s, rail ticks %s\n", custom_ ? "calibrated" : "default",
-                hapticsOn_ ? "on" : "off", railTicks_ ? "on" : "off");
+  Serial.printf("[input] touch: %s%s; haptics %s, rail ticks %s\n",
+                custom_ ? "calibrated on this device" : "no correction (default)",
+                custom_ || checkAnswered_ ? "" : ", the touch check is due", hapticsOn_ ? "on" : "off",
+                railTicks_ ? "on" : "off");
 }
 
 void Input::push(const InputEvent& e) {
@@ -80,8 +86,7 @@ void Input::buttonFeedback(const InputEvent& e, bool acted) {
       if (acted) {
         haptics_.tap();
       } else {
-        // Inert: two short, softer pulses, quicker than the hold's.
-        haptics_.pulses(20, Haptics::kMedium, 2, 50);
+        missBuzz();
       }
       break;
     case T::Hold:
@@ -102,6 +107,11 @@ void Input::alertBuzz() {
 
 void Input::tapTick() {
   if (hapticsOn_) haptics_.tap();
+}
+
+// Inert: two short, softer pulses, quicker than the hold's.
+void Input::missBuzz() {
+  if (hapticsOn_) haptics_.pulses(20, Haptics::kMedium, 2, 50);
 }
 
 void Input::holdTick() {
@@ -272,6 +282,12 @@ void Input::updateButtons(uint32_t nowMs, const TouchRecognizer::Sample& s, bool
 }
 
 void Input::simulate(int x0, int y0, int x1, int y1, uint32_t dwellMs, uint32_t moveMs, uint32_t restMs) {
+  // uk2's jitter: a fixed walk, so a run can be repeated.
+  static const int8_t kJitter[] = {3, -2, 4, -4, 1, -3, 2, 0, -1, 4, -2, 3, -4, 1};
+  constexpr int kJitterN = sizeof(kJitter);
+  jitterX_ = simSkew_ == 2 ? kJitter[simTouches_ % kJitterN] : 0;
+  jitterY_ = simSkew_ == 2 ? kJitter[(simTouches_ + 5) % kJitterN] : 0;
+  ++simTouches_;
   sim_ = Sim{};
   sim_.on = true;
   sim_.x0 = static_cast<int16_t>(x0);
@@ -306,11 +322,32 @@ bool Input::simSample(uint32_t nowMs, TouchRecognizer::Sample& s) {
     y = sim_.y0 + static_cast<int>((sim_.y1 - sim_.y0) * f);
   }
   s.pressed = true;
-  s.x = s.rawX = static_cast<int16_t>(x);
-  s.y = s.rawY = static_cast<int16_t>(y);
-  if (x >= 319) s.edges |= InputEvent::kEdgeRight;
-  if (x <= 0) s.edges |= InputEvent::kEdgeLeft;
+  if (simSkew_ == 0) {
+    s.x = s.rawX = static_cast<int16_t>(x);
+    s.y = s.rawY = static_cast<int16_t>(y);
+    if (x >= 319) s.edges |= InputEvent::kEdgeRight;
+    if (x <= 0) s.edges |= InputEvent::kEdgeLeft;
+    return true;
+  }
+  // A skewed panel: what the lab's panel reads for a finger at (x, y) (y
+  // reads true), then the same path as a real touch's.
+  const TouchCalibration::Axis lab = TouchCalibration::labFitX();
+  long rx = std::lround(lab.unmap(static_cast<float>(x))) + jitterX_;
+  long ry = static_cast<long>(y) + jitterY_;
+  rx = rx < 0 ? 0 : rx > TouchCalibration::kRawMaxX ? TouchCalibration::kRawMaxX : rx;
+  ry = ry < 0 ? 0 : ry > TouchCalibration::kRawMaxY ? TouchCalibration::kRawMaxY : ry;
+  s.rawX = static_cast<int16_t>(rx);
+  s.rawY = static_cast<int16_t>(ry);
+  s.x = static_cast<int16_t>(cal_.mapX(s.rawX));
+  s.y = static_cast<int16_t>(cal_.mapY(s.rawY));
+  if (TouchCalibration::clampedLow(s.rawX)) s.edges |= InputEvent::kEdgeLeft;
+  if (TouchCalibration::clampedHighX(s.rawX)) s.edges |= InputEvent::kEdgeRight;
   return true;
+}
+
+const char* Input::scriptedNote() const {
+  if (!scripted_) return "";
+  return simSkew_ ? " (scripted, skewed)" : " scripted";
 }
 
 void Input::cancelTouch(uint32_t nowMs) {
@@ -363,9 +400,18 @@ void Input::resetCalibration() {
   custom_ = false;
 }
 
+void Input::setTouchCheckAnswered(bool on) {
+  checkAnswered_ = on;
+  saveFlag(kKeyCalAsk, on);
+}
+
 void Input::printStatus() const {
-  Serial.printf("[input] touch table: %s (raw -> screen px)\n",
-                custom_ ? "calibrated on this device" : "the default, fitted to the input lab's logs");
+  Serial.printf("[input] touch table: %s (raw -> screen px); the first-boot touch check %s%s\n",
+                custom_ ? "calibrated on this device" : "no correction (default)",
+                checkAnswered_ ? "answered" : custom_ ? "not needed" : "due at the next boot",
+                simSkew_ == 2 ? "; the scripted finger is skewed, with jitter (uk2)"
+                : simSkew_    ? "; the scripted finger is skewed (uk1)"
+                              : "");
   printAxis("x", cal_.x);
   printAxis("y", cal_.y);
   Serial.printf("[input] haptics %s (tap %u ms at %u, hold: double tick), rail ticks %s; buttons: hold %lu ms, "
