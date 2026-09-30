@@ -232,6 +232,22 @@ static void stepBluetoothVolume(int delta) {
   Serial.printf("[bt] volume %d%%\n", constrain(bt.volume() + delta, 0, 100));
 }
 
+// Prev from the Core2 (the A click, Now Playing's, the console's p):
+// PlaybackController's rule, past a track's first 3 s the same track from
+// 0:00 (paused: still paused), said in the log.
+static void prevTrack() {
+  const bool restart = player.prevAction() == PlaybackController::Prev::Restart;
+  player.prev();
+  if (restart) {
+    // (Said after: a restart that must wait for the headphones waits.)
+    const PlayState s = player.state();
+    Serial.printf("[player] prev: this track again from 0:00 (%s)\n",
+                  s == PlayState::Playing   ? "playing"
+                  : s == PlayState::Waiting ? "waiting for the headphones"
+                                            : "nothing starts");
+  }
+}
+
 // Playing, or waiting for the headphones (the wait counts as playing on
 // them: a move to the speaker ends it paused, never playing out loud).
 static bool pauseIfPlaying() {
@@ -256,7 +272,7 @@ static OutputHold outputHold;
 
 // What the touch buttons drive (ButtonPolicy decides which button does what).
 struct ButtonTransport : ButtonPolicy::Transport {
-  void prev() override { player.prev(); }
+  void prev() override { prevTrack(); }
   void next() override { player.next(); }
   // (Waiting: cancels the wait, paused.)
   void playPause() override { player.togglePlayPause(); }
@@ -511,7 +527,7 @@ struct MainUiHost : ui::UiHost {
   }
   void playOnSpeaker() override { ::playOnSpeaker(); }
   void next() override { player.next(); }
-  void prev() override { player.prev(); }
+  void prev() override { prevTrack(); }
   void stepVolume(int delta) override { ::stepVolume(delta); }
   void stepOutputVolume(bool bluetooth, int delta) override {
     if (bluetooth == (audio.output() == Output::Bluetooth)) {
@@ -984,7 +1000,7 @@ static void idleCommand(const char* a);
 
 static SerialConsole console({
     [] { player.next(); },
-    [] { player.prev(); },
+    prevTrack,
     [] { player.togglePlayPause(); },
     toggleOutput,
     stepVolume,
@@ -1251,12 +1267,15 @@ static void handleBluetooth() {
       case BtSink::Event::Prev: {
         const bool next = e == BtSink::Event::Next;
         const bool byTimer = player.pausedByTimer();
+        // (Past a track's first 3 s their PREV restarts it, as every prev does.)
+        const bool restart = !next && player.prevAction() == PlaybackController::Prev::Restart;
         const HeadsetKeys::Action a =
             HeadsetKeys::apply(player, next ? HeadsetKeys::Key::Next : HeadsetKeys::Key::Prev);
         // (A cue after the sleep timer's pause isn't input: a bud adjusted
         // in bed sends these too.)
         if (HeadsetKeys::isInput(a, byTimer)) idleInput = true;
-        Serial.printf("[bt] headphones: %s (track %d, %s)\n", next ? "next" : "previous", player.currentIndex(),
+        Serial.printf("[bt] headphones: %s (track %d, %s)\n",
+                      next ? "next" : restart ? "previous: this track from 0:00" : "previous", player.currentIndex(),
                       a == HeadsetKeys::Action::Skip ? "playing" : "selected, not started");
         break;
       }

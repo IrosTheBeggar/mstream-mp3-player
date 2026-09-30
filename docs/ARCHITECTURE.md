@@ -158,6 +158,12 @@ The rules that keep it deadlock- and glitch-free:
 - **Requests are generations.** `play()`/`stop()` post a new generation to
   `TransportSync`; the decode task's progress reports for anything older are
   dropped, so a stale "ended" can't skip the track that was just requested.
+  Until the decode task takes a play up (`Pending`), `positionMs()` may
+  still count the track before: `positionKnown()` says so, and the
+  player's prev doesn't read the position then but where that play asked
+  to start (a quick second prev goes to the entry before, not to the
+  start of the one just asked for; one right after a resume point's start
+  at 2:30 restarts it).
 - **Bluetooth is 44.1 kHz only.** ESP-IDF's SBC source takes nothing else, so
   other rates fail on Bluetooth (the player skips them) until a resampler lands.
   The speaker takes any rate: `RingOutput` keeps the rate in an `int` because
@@ -374,7 +380,9 @@ out what it returns.
   isInput()`: not an ignored Play or Pause, nor a cue after the timer's
   pause). Next and previous skip while playing; paused or stopped
   they only select the next or previous track, which the screen shows and a
-  later play starts from its beginning. The Core2's own buttons and the
+  later play starts from its beginning. Previous past a track's first 3 s
+  restarts it, as every prev does (see Transport): playing, from 0:00;
+  paused, at 0:00 and still paused. The Core2's own buttons and the
   console keep toggling and skip-and-play.
 - **On-device checks** the host tests can't cover (the glue in `BtSink.cpp`:
   event and address filters, what the library does between our hooks): boot
@@ -763,8 +771,26 @@ the browsing UI hold its **track ids**, never strings.
   the catalog and keeps its rules: prev/next and a track's end wrap around the
   queue (`setRepeat(false)` stops at the end instead), a track that can't be
   played is skipped, and once every track in the queue has failed in a row it
-  stops. The edits that touch what plays go through it: Play starts the new
-  queue; removing the current entry plays the next one that stayed (paused: it
+  stops. **Prev restarts a track past its first 3 s** (`prevRule()`,
+  host-tested in test_playback; every prev: the A click, Now Playing's, the
+  console's `p`, the headphones'): more than 3 s in, the same entry from
+  0:00 in the same state. Playing, it starts again (a start like any, faded
+  in); paused, it stays paused at 0:00 (the backend lets the track go, Now
+  Playing reads 0:00, no resume point is left to save), so nothing starts
+  out loud from a paused prev; waiting for the headphones, it waits for
+  the entry's 0:00. At 3 s or less the entry before, as ever (and it plays,
+  as prev always did), and so while stopped, on a cued entry (at 0:00
+  already) and on a track that failed. Until the backend has taken a start
+  up (`IAudioBackend::positionKnown()`) the position is where that play
+  asked to start: a quick second prev after a restart or a skip is at 0:00
+  (the entry before), one right after a resume point's start at 2:30 at
+  2:30 (a restart). A built-in track restarts like any. A restart is no
+  skip and no edit: the queue, its undo and the sleep timer's "pause after
+  this track" (and its count of boundary pauses) stay as they were. The
+  log says `[player] prev: this track again from 0:00 (playing)` (or
+  `waiting for the headphones`, or `nothing starts`); the headphones'
+  `previous: this track from 0:00`. The edits that touch what plays go
+  through it: Play starts the new queue; removing the current entry plays the next one that stayed (paused: it
   is cued; none left after it: stop); Clear stops; undo returns to the entry
   that was current if the one playing isn't in the restored queue. Play next,
   + Queue and Clear up next change nothing that plays. `HeadsetKeys` works
@@ -806,9 +832,11 @@ the browsing UI hold its **track ids**, never strings.
   (`setStartPoint()`): stopped, nothing plays, Now Playing shows that second
   and the length saved with it, and the next play starts there (the fade-in
   as always). It belongs to that entry's key: next, another entry, or an
-  edit that changes the current entry drops it; prev on it goes to 0:00 of
-  the same entry (and plays, as prev does), the headphones' prev while
-  stopped only drops it. `g0` carries it across the rebuild. It applies
+  edit that changes the current entry drops it; prev on it (the Core2's or
+  the headphones') goes to 0:00 of the same entry, whatever the second, and
+  starts nothing: stopped stays stopped, as a paused track's restart does
+  (a second prev is the entry before, and plays, as from stopped). `g0`
+  carries it across the rebuild. It applies
   after any boot with one saved: the CPU speed's restart, the idle
   power-off, the power key while paused. Console: `q` and `l` print it
   (`[queue] resume point saved: 1:23 into 5 (generation 12); start point
@@ -934,7 +962,8 @@ layer is suspended).
 - **The buttons** (`ButtonGesture`, `ButtonPolicy`, host-tested): Click,
   Hold at **500 ms** (the user's clicks lasted 17-143 ms, holds 509-2383 ms),
   Repeat every 200 ms for A and C, HoldEnd. The same on every screen: A
-  click previous / hold volume -5 % (repeating); B click play/pause / hold
+  click previous (past a track's first 3 s: the same track from 0:00,
+  paused still paused) / hold volume -5 % (repeating); B click play/pause / hold
   switch the output, and switching **to the speaker always pauses first**;
   C click next / hold volume +5 % (repeating). Each hold leaves a
   `Feedback` (the new volume, or the new output and whether it paused) for
@@ -1609,7 +1638,7 @@ the others: only `Pz` plays it.
 2. **UI follow-ups**: covers from mStream's thumbnails at sync (the
    device's own decode stays the fallback), track lengths from the sync's
    metadata (the Queue's minutes are learned as tracks play until then);
-   A-click restarting a track after 3 s, a double buzz for inert buttons.
+   a double buzz for inert buttons.
 3. **AutoDJ:** mStream precomputes a similar-tracks table (top-K neighbours per
    synced track, from its 1280-d embeddings) that the player walks with
    mStream's session-centroid scoring plus its BPM/key/artist filters.

@@ -12,6 +12,9 @@
 //   B  click: play / pause          hold: switch the output (Bluetooth <-> speaker)
 //   C  click: next track            hold: volume up 5 %, again every 200 ms
 //
+// (A's previous track is PlaybackController's prev: past a track's first
+// 3 s the same track from 0:00, paused still paused.)
+//
 // Holds act at 500 ms (the user's presses: clicks 17-143 ms, holds from
 // 509 ms). Switching TO the speaker always pauses first, so a slow press on
 // B meant as a pause never moves the music out loud; B plays it again.

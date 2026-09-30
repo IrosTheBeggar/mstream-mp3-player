@@ -65,7 +65,9 @@ use Bluetooth headphones, the speaker, or (later) M5Stack's RCA/3.5 mm module.
 ## Using it
 
 The three touch buttons under the screen do the same on every screen:
-**prev** (hold: volume down 5 %, again every 0.2 s while held),
+**prev** (past a track's first 3 s: back to its start, and paused it
+stays paused; within them: the track before) (hold: volume down 5 %, again
+every 0.2 s while held),
 **play/pause** (hold: switch between speaker and Bluetooth; switching to the
 speaker pauses first, so a slow press meant as a pause never moves the music
 out loud: play/pause starts it again), **next** (hold: volume up). A hold
@@ -154,7 +156,8 @@ The headphones' own buttons work too (play, pause, next, previous, volume),
 but never start music that wasn't playing: their play resumes paused
 playback (not from stopped), and their next/previous while paused or stopped
 only select the track: the Core2's play starts it, or the headphones' play
-when paused.
+when paused. Their previous past a track's first 3 s goes back to its start,
+as the Core2's does.
 Headphones with AVRCP absolute volume (most current ones) take over the
 Bluetooth volume when they connect: the Core2 and the headphones show the same
 value, and changing it on either side changes both. (Headphones whose remote
@@ -177,8 +180,9 @@ BPM, for the beat tracker). The queue and its position are saved on the card:
 after a restart it's where it was, stopped. A pause also saves the second
 it paused at: after the boot that follows (the CPU speed's restart, the
 idle power-off, the power key while paused) Now Playing shows that second
-and play picks up there; next, previous or another track start from the
-top. (A power cut while playing starts the track from its beginning:
+and play picks up there; next or another track start from the top, and
+previous goes to the top of that track without starting it. (A power cut
+while playing starts the track from its beginning:
 nothing is written while it plays.) The Library and Queue tabs edit
 it, and so do the console's `q` commands (play an album, play it next, add
 it, remove, clear, undo).
@@ -206,7 +210,7 @@ The serial console (115200 baud) is there for scripted testing:
 
 | Key | Action | Key + Enter | Action |
 |---|---|---|---|
-| `n` / `p` | next / previous | `i<n>` | play queue entry n (0-based) |
+| `n` / `p` | next / previous (past 3 s: the track's start) | `i<n>` | play queue entry n (0-based) |
 | space | play / pause | `b<n>` | benchmark decoding track n |
 | `o` | switch output | `c<name>` | headphones to connect to |
 | `+` / `-` | volume | `h<n>` | Bluetooth headroom -n dB, 0-12 (default 2, not saved) |

@@ -24,12 +24,14 @@ public:
   int resumeCount = 0;
   bool playing = false;
   bool paused = false;
+  uint32_t position = 0;  // what positionMs() says
 
-  bool play(const std::string& p, uint32_t, uint32_t) override {
+  bool play(const std::string& p, uint32_t, uint32_t startMs) override {
     lastPath = p;
     ++playCount;
     playing = true;
     paused = false;
+    position = startMs;
     return true;
   }
   void pause() override { paused = true; }
@@ -40,7 +42,7 @@ public:
   void stop() override { playing = false; paused = false; }
   void loop(uint32_t) override {}
   bool isPlaying() const override { return playing && !paused; }
-  uint32_t positionMs() const override { return 0; }
+  uint32_t positionMs() const override { return position; }
   bool finished() const override { return false; }
   bool failed() const override { return false; }
 };
@@ -169,6 +171,7 @@ void test_no_key_sequence_starts_music_that_was_not_playing() {
       continue;
     }
     const Key k = keys[(x >> 8) % 4];
+    a.position = (x >> 12) % 8000;  // PREV restarts past 3 s: that mustn't start anything either
     const PlayState before = p.state();
     HeadsetKeys::apply(p, k);
     if (before != PlayState::Playing && !(before == PlayState::Paused && k == Key::Play)) {
@@ -202,6 +205,30 @@ void test_play_does_not_resume_a_sleep_timer_pause() {
   TEST_ASSERT_EQUAL(Action::Resume, HeadsetKeys::apply(r.player, Key::Play));  // their own pause
 }
 
+// After the sleep timer's pause 20 min into a track, a bud adjusted in bed
+// sends PREV: the track goes to 0:00 (a restart, still paused), the mark
+// stays, their PLAY still resumes nothing, and none of it is input.
+void test_prev_past_3_s_after_the_timers_pause_starts_nothing() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(1);
+  a.position = 1200000;
+  p.pauseByTimer();
+  for (int i = 0; i < 3; ++i) {
+    const bool byTimer = p.pausedByTimer();
+    const Action act = HeadsetKeys::apply(p, Key::Prev);
+    TEST_ASSERT_EQUAL(Action::Cue, act);
+    TEST_ASSERT_FALSE(HeadsetKeys::isInput(act, byTimer));
+    TEST_ASSERT_TRUE(p.pausedByTimer());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
+    TEST_ASSERT_EQUAL(Action::Ignore, HeadsetKeys::apply(p, Key::Play));
+    TEST_ASSERT_FALSE(audible(a));
+    TEST_ASSERT_EQUAL_INT(1, a.playCount);
+  }
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());  // 0:00 of b, then a, then c (wrapped)
+}
+
 // Which keys are someone's input for the idle power-off: only a key that
 // acted. In-ear detection's PLAY and PAUSE while paused (by the timer or
 // not) do nothing and don't count, so a sleeper's buds can't keep the
@@ -233,6 +260,35 @@ void test_only_a_key_that_acts_is_idle_input() {
   }
 }
 
+// PREV past a track's first 3 s restarts it, as every prev does: playing,
+// from 0:00 (still a skip); paused, at 0:00 and still paused (a cue:
+// nothing starts). The next PREV, within 3 s, is the track before.
+void test_prev_past_3_s_restarts_the_track() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(1);
+  a.position = 42000;
+  TEST_ASSERT_EQUAL(Action::Skip, HeadsetKeys::apply(p, Key::Prev));
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT(2, a.playCount);
+  TEST_ASSERT_TRUE(audible(a));
+  a.position = 42000;
+  TEST_ASSERT_EQUAL(Action::Pause, HeadsetKeys::apply(p, Key::Pause));
+  TEST_ASSERT_EQUAL(Action::Cue, HeadsetKeys::apply(p, Key::Prev));
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
+  TEST_ASSERT_FALSE(audible(a));
+  TEST_ASSERT_EQUAL(Action::Cue, HeadsetKeys::apply(p, Key::Prev));
+  TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT(2, a.playCount);
+  TEST_ASSERT_FALSE(audible(a));
+  // Their PLAY: the selected track from its start.
+  TEST_ASSERT_EQUAL(Action::Resume, HeadsetKeys::apply(p, Key::Play));
+  TEST_ASSERT_EQUAL_STRING("/music/a.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_INT(0, a.resumeCount);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_rule);
@@ -240,8 +296,10 @@ int main(int, char**) {
   RUN_TEST(test_next_and_prev_while_paused_select_without_playing);
   RUN_TEST(test_play_and_pause_are_commands_not_toggles);
   RUN_TEST(test_next_and_prev_while_playing_skip);
+  RUN_TEST(test_prev_past_3_s_restarts_the_track);
   RUN_TEST(test_no_key_sequence_starts_music_that_was_not_playing);
   RUN_TEST(test_play_does_not_resume_a_sleep_timer_pause);
+  RUN_TEST(test_prev_past_3_s_after_the_timers_pause_starts_nothing);
   RUN_TEST(test_only_a_key_that_acts_is_idle_input);
   return UNITY_END();
 }

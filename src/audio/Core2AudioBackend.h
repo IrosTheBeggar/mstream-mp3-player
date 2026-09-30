@@ -72,6 +72,9 @@ public:
   void loop(uint32_t nowMs) override;
   bool isPlaying() const override;
   uint32_t positionMs() const override;
+  // False while the decode task hasn't taken the last play() up (Pending):
+  // until then positionMs() may still count the track before.
+  bool positionKnown() const override;
   bool finished() const override;
   bool failed() const override;
 

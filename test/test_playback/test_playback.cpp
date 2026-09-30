@@ -1,6 +1,7 @@
 // Host unit tests for PlaybackController. Run: pio test -e native
 #include <unity.h>
 
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -25,12 +26,20 @@ public:
   uint32_t lastHintMs = 0;   // the length it was handed
   uint32_t position = 0;     // what positionMs() says
   uint32_t duration = 0;
+  // Starts are taken up later, as on the Core2 (its decode task): until
+  // take(), positionKnown() is false and the position is the last track's.
+  bool asyncStarts = false;
+  bool pending = false;
 
   bool play(const std::string& p, uint32_t hintMs, uint32_t startMs) override {
     lastPath = p;
     lastStartMs = startMs;
     lastHintMs = hintMs;
-    position = startMs;
+    if (asyncStarts) {
+      pending = true;
+    } else {
+      position = startMs;
+    }
     ++playCount;
     playing = true;
     paused = false;
@@ -48,7 +57,14 @@ public:
   void loop(uint32_t) override {}
   bool isPlaying() const override { return playing && !paused; }
   uint32_t positionMs() const override { return position; }
+  bool positionKnown() const override { return !pending; }
   uint32_t durationMs() const override { return duration; }
+  // The pending start taken up (asyncStarts).
+  void take() {
+    if (!pending) return;
+    pending = false;
+    position = lastStartMs;
+  }
   bool finished() const override { return finishedFlag; }
   bool failed() const override { return failedFlag; }
 };
@@ -56,6 +72,13 @@ public:
 // A library of up to three tracks at the root ("/music/a.mp3" is id 0, b 1,
 // c 2: ids are in the order the files were added), a queue of all of them,
 // and the player.
+// A play must wait while `hold` (the Core2's: Bluetooth is the output and
+// the headphones aren't connected).
+struct TestHold : PlaybackController::Hold {
+  bool hold = false;
+  bool holdPlay() const override { return hold; }
+};
+
 struct Rig {
   LibraryIndex index;
   TrackCatalog catalog{&index};
@@ -561,7 +584,8 @@ void test_a_start_point_waits_for_the_next_play() {
 }
 
 // Next, another entry, or an edit that changes the current entry drops it;
-// prev on it goes to 0:00 of the same entry (and plays, as prev does).
+// prev on it goes to 0:00 of the same entry, and nothing starts (as a
+// paused track's restart).
 void test_a_start_point_belongs_to_its_entry() {
   {
     Rig r(3);
@@ -577,10 +601,17 @@ void test_a_start_point_belongs_to_its_entry() {
     r.player.setStartPoint(83000, 0);
     r.player.prev();
     TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());  // the same entry
-    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+    TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+    uint32_t ms, dur;
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+    r.player.togglePlayPause();  // a play: from 0:00
+    TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
     TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
-    r.player.prev();  // then prev as ever
+    r.player.stop();
+    r.player.prev();  // then prev as ever (stopped: the entry before, and it plays)
     TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
   }
   {
     Rig r(3);
@@ -747,6 +778,392 @@ void test_the_resume_point_is_a_paused_tracks_position() {
   TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));
 }
 
+// ---- prev: this track again past 3 s, else the one before ----
+
+void test_the_prev_rule() {
+  using P = PlaybackController::Prev;
+  const uint32_t k = PlaybackController::kRestartAfterMs;
+  for (PlayState st : {PlayState::Playing, PlayState::Paused, PlayState::Waiting}) {
+    TEST_ASSERT_EQUAL(P::Previous, PlaybackController::prevRule(st, false, true, 0));
+    TEST_ASSERT_EQUAL(P::Previous, PlaybackController::prevRule(st, false, true, k));  // 3 s or less
+    TEST_ASSERT_EQUAL(P::Restart, PlaybackController::prevRule(st, false, true, k + 1));
+    TEST_ASSERT_EQUAL(P::Restart, PlaybackController::prevRule(st, false, true, 3600000));
+    TEST_ASSERT_EQUAL(P::Previous, PlaybackController::prevRule(st, false, false, 200000));  // not known
+    TEST_ASSERT_EQUAL(P::Restart, PlaybackController::prevRule(st, true, true, 0));  // a start point: its 0:00
+  }
+  // Stopped: the entry before, whatever the backend says; a start point
+  // waiting (after a boot): its entry's 0:00, whatever the second.
+  TEST_ASSERT_EQUAL(P::Previous, PlaybackController::prevRule(PlayState::Stopped, false, true, 200000));
+  TEST_ASSERT_EQUAL(P::Restart, PlaybackController::prevRule(PlayState::Stopped, true, true, 0));
+  TEST_ASSERT_EQUAL(P::Restart, PlaybackController::prevRule(PlayState::Stopped, true, false, 2000));
+}
+
+// Playing past 3 s: the same entry from 0:00, playing (a start like any:
+// the backend fades it in). At 3 s or less: the entry before.
+void test_prev_while_playing_past_3_s_restarts_the_track() {
+  Rig r(3);
+  r.player.play(1);
+  r.audio.position = 3001;
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(0, r.audio.position);
+  r.player.prev();  // within the first 3 s: the entry before
+  TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_STRING("/music/a.mp3", r.audio.lastPath.c_str());
+  r.audio.position = PlaybackController::kRestartAfterMs;  // 3 s exactly: still the entry before
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());  // (wrapped)
+}
+
+// Paused past 3 s: 0:00 of the same entry, still paused. Nothing starts
+// (the speaker: nobody may be listening at that level); the backend lets
+// the track go, so Now Playing reads 0:00 and there is no resume point to
+// save. A play then starts it from its beginning.
+void test_prev_while_paused_past_3_s_goes_to_0_and_stays_paused() {
+  Rig r(3);
+  r.player.play(1);
+  r.audio.position = 95000;
+  r.audio.duration = 240000;
+  r.player.togglePlayPause();
+  uint32_t ms = 0, dur = 0;
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur));
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);  // nothing started
+  TEST_ASSERT_EQUAL_INT(1, r.audio.stopCount);  // the paused track let go
+  TEST_ASSERT_FALSE(r.audio.playing);
+  TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));  // at 0:00: nothing to pick up in
+  TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+  r.player.update(0);  // nothing moves while paused
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  r.player.togglePlayPause();  // not a resume at 1:35: the entry from its start
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+}
+
+// A second prev on the paused track now at 0:00 (cued: whatever the
+// backend last said): the entry before, as prev at 3 s or less always did
+// (it plays).
+void test_a_second_prev_while_paused_goes_to_the_entry_before() {
+  Rig r(3);
+  r.player.play(1);
+  r.audio.position = 95000;
+  r.player.togglePlayPause();
+  r.player.prev();
+  TEST_ASSERT_EQUAL(PlaybackController::Prev::Previous, r.player.prevAction());
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_STRING("/music/a.mp3", r.audio.lastPath.c_str());
+  // Paused within the first 3 s: the entry before, as ever.
+  r.audio.position = 2000;
+  r.player.togglePlayPause();
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+}
+
+// The headphones' PREV while paused (cuePrev()): the same rule, and still
+// nothing starts: past 3 s, 0:00 of the same entry; then the entry before,
+// cued.
+void test_cue_prev_while_paused_past_3_s_restarts_paused() {
+  Rig r(3);
+  r.player.play(1);
+  r.audio.position = 95000;
+  r.player.togglePlayPause();
+  r.player.cuePrev();
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_FALSE(r.audio.playing);
+  r.player.cuePrev();
+  TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  // Playing, the headphones' PREV is prev(): past 3 s, from 0:00.
+  r.player.togglePlayPause();
+  r.audio.position = 60000;
+  r.player.cuePrev();
+  TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(3, r.audio.playCount);
+}
+
+// Stopped (a track's position means nothing then): the entry before, as
+// ever, and it plays.
+void test_prev_while_stopped_goes_to_the_entry_before() {
+  Rig r(3);
+  r.player.play(1);
+  r.audio.position = 95000;
+  r.player.stop();
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+}
+
+// The first entry at 3 s or less: as ever (with repeat, the last entry;
+// without, the first again from its start). Past 3 s: the first from 0:00.
+void test_prev_on_the_first_entry() {
+  {
+    Rig r(3);
+    r.player.play(0);
+    r.audio.position = 1500;
+    r.player.prev();
+    TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+  }
+  {
+    Rig r(3);
+    r.player.setRepeat(false);
+    r.player.play(0);
+    r.audio.position = 1500;
+    r.player.prev();
+    TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+    TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+    r.audio.position = 50000;
+    r.player.prev();
+    TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_INT(3, r.audio.playCount);
+  }
+  {
+    // A queue of one: the same either way.
+    Rig r(1);
+    r.player.play(0);
+    r.audio.position = 50000;
+    r.player.prev();
+    TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+    r.player.prev();
+    TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_INT(3, r.audio.playCount);
+  }
+}
+
+// The position isn't known while the backend hasn't taken a start up: it
+// may still count the track before. A quick second prev after a restart
+// (or a prev right after a skip) then goes to the entry before, not back
+// to the start of the one just asked for.
+void test_prev_before_the_backend_takes_a_start_goes_to_the_entry_before() {
+  Rig r(3);
+  r.audio.asyncStarts = true;
+  r.player.play(2);
+  r.audio.take();
+  r.audio.position = 200000;
+  r.player.prev();  // restart: the backend still counts 3:20 for a moment
+  TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(200000, r.audio.position);
+  r.player.prev();  // the second press: the entry before
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+  r.audio.take();
+  r.audio.position = 5000;  // once it counts this track's: the rule as ever
+  TEST_ASSERT_EQUAL(PlaybackController::Prev::Restart, r.player.prevAction());
+  // After next near a track's end, the same.
+  r.audio.position = 230000;
+  r.player.next();
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+}
+
+// A start part of the way in (a resume point after a boot, qs while
+// playing) is that far in from the moment it is asked for, as Now Playing
+// shows it: a prev before the backend takes it up restarts the entry
+// (the backend's position is still the track before's, near its start).
+// The restart's own start is at 0:00: a second quick prev is the entry
+// before.
+void test_prev_right_after_a_start_part_of_the_way_in_restarts() {
+  {
+    Rig r(3);
+    r.audio.asyncStarts = true;
+    r.queue.setCurrent(2);
+    r.player.setStartPoint(150000, 240000);  // the resume point, after a boot
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL_UINT32(150000, r.audio.lastStartMs);
+    TEST_ASSERT_FALSE(r.audio.positionKnown());
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.position);  // nothing of it counted yet
+    TEST_ASSERT_EQUAL(PlaybackController::Prev::Restart, r.player.prevAction());
+    r.player.prev();
+    TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+    TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+    r.player.prev();  // the restart not taken up yet: at 0:00, the entry before
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  }
+  {
+    Rig r(3);
+    r.audio.asyncStarts = true;
+    r.player.play(0);
+    r.audio.take();
+    r.audio.position = 1200;
+    r.player.setStartPoint(83000, 0);  // qs while playing: there, now
+    TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);
+    r.player.prev();
+    TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+    TEST_ASSERT_EQUAL_INT(3, r.audio.playCount);
+  }
+  {
+    // Paused before the backend took it up: 0:00 of the entry, still paused.
+    Rig r(3);
+    r.audio.asyncStarts = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(60000, 240000);
+    r.player.togglePlayPause();
+    r.player.togglePlayPause();
+    r.player.cuePrev();
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+    TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+    TEST_ASSERT_FALSE(r.audio.playing);
+  }
+}
+
+// A track that failed (a file that won't open) has no place to go back
+// to, whatever its position says (a resume point it was asked to start
+// at): prev goes to the entry before.
+void test_prev_on_a_failed_track_goes_to_the_entry_before() {
+  Rig r(3);
+  r.player.play(2);
+  r.audio.position = 83000;
+  r.audio.failedFlag = true;
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+}
+
+// The built-in tracks (tones, click tracks: their position is counted as
+// any track's) follow the same rule.
+void test_prev_restarts_a_builtin_track() {
+  Rig r(0);
+  const LibraryIndex::Span b = TrackCatalog::builtins();
+  r.player.playNow(b.ids, b.count, 4);
+  r.audio.position = 20000;
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(4, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("tone:click120", r.audio.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(3, r.player.currentIndex());
+}
+
+// Waiting for the headphones: resuming a paused track past 3 s, prev
+// makes it wait for the entry's 0:00 (the backend lets the track go);
+// waiting on a cued entry, prev is the entry before, still waiting.
+// Nothing plays until the wait is released.
+void test_prev_while_waiting() {
+  Rig r(3);
+  TestHold hold;
+  r.player.setHold(&hold);
+  r.player.play(1);
+  r.audio.position = 95000;
+  r.player.togglePlayPause();
+  hold.hold = true;
+  r.player.togglePlayPause();  // waits to resume the paused track
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Waiting, (int)r.player.state());
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Waiting, (int)r.player.state());
+  TEST_ASSERT_FALSE(r.audio.playing);
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  r.player.prev();  // cued at 0:00: the entry before, still waiting
+  TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Waiting, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  hold.hold = false;
+  r.player.release();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_STRING("/music/a.mp3", r.audio.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+}
+
+// A restart is no skip, no end and no edit: "pause after this track"
+// stays for the track's natural end (then the next entry, paused), and
+// the timer's count of boundary pauses doesn't move.
+void test_a_restart_keeps_the_sleep_timers_pause_after_this_track() {
+  Rig r(3);
+  r.player.play(0);
+  r.player.setPauseAfterTrack(true);
+  r.audio.position = 230000;
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+  TEST_ASSERT_TRUE(r.player.pauseAfterTrack());
+  TEST_ASSERT_EQUAL_UINT32(0, r.player.timerStops());
+  r.player.update(0);  // not an end
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_UINT32(0, r.player.timerStops());
+  r.audio.finishedFlag = true;
+  r.player.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(1, r.player.timerStops());
+  // Paused by the timer, a restart keeps the mark (nothing played).
+  Rig q(3);
+  q.player.play(0);
+  q.audio.position = 60000;
+  q.player.pauseByTimer();
+  q.player.cuePrev();
+  TEST_ASSERT_TRUE(q.player.pausedByTimer());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)q.player.state());
+  TEST_ASSERT_EQUAL_INT(0, q.player.currentIndex());
+}
+
+// The queue's undo: a restart doesn't touch the queue, so the last edit
+// is still the one undone, and undoing it leaves the restarted entry
+// playing (it was in the queue then).
+void test_a_restart_leaves_the_queues_undo_alone() {
+  Rig r(3);
+  r.player.play(1);
+  const uint32_t more[] = {0, 2};
+  TEST_ASSERT_TRUE(r.player.addToQueue(more, 2));
+  const QueueModel::Edit edit = r.queue.undoable();
+  r.audio.position = 60000;
+  r.player.prev();
+  TEST_ASSERT_EQUAL((int)edit, (int)r.queue.undoable());
+  TEST_ASSERT_EQUAL_UINT32(5, r.queue.size());
+  const int plays = r.audio.playCount;
+  TEST_ASSERT_TRUE(r.player.undo());
+  TEST_ASSERT_EQUAL_UINT32(3, r.queue.size());
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT(plays, r.audio.playCount);  // what plays carries on
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+}
+
+// A start point waiting (the resume point after a boot, qs): prev goes to
+// the entry's 0:00 whatever the second (2 s too), and starts nothing,
+// stopped or paused; a second prev is the entry before.
+void test_prev_on_a_start_point_goes_to_0_and_starts_nothing() {
+  uint32_t ms = 0, dur = 0;
+  {
+    Rig r(3);
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(2000, 240000);
+    r.player.prev();
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+    TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));
+    TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  }
+  {
+    Rig r(3);
+    r.player.play(1);
+    r.player.togglePlayPause();
+    r.player.setStartPoint(83000, 0);  // qs while paused: the held track let go
+    r.player.prev();
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+    TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
@@ -788,5 +1205,20 @@ int main(int, char**) {
   RUN_TEST(test_the_resume_point_is_a_paused_tracks_position);
   RUN_TEST(test_a_dropped_start_point_doesnt_come_back_with_an_undo);
   RUN_TEST(test_a_start_point_keeps_its_length);
+  RUN_TEST(test_the_prev_rule);
+  RUN_TEST(test_prev_while_playing_past_3_s_restarts_the_track);
+  RUN_TEST(test_prev_while_paused_past_3_s_goes_to_0_and_stays_paused);
+  RUN_TEST(test_a_second_prev_while_paused_goes_to_the_entry_before);
+  RUN_TEST(test_cue_prev_while_paused_past_3_s_restarts_paused);
+  RUN_TEST(test_prev_while_stopped_goes_to_the_entry_before);
+  RUN_TEST(test_prev_on_the_first_entry);
+  RUN_TEST(test_prev_before_the_backend_takes_a_start_goes_to_the_entry_before);
+  RUN_TEST(test_prev_right_after_a_start_part_of_the_way_in_restarts);
+  RUN_TEST(test_prev_on_a_failed_track_goes_to_the_entry_before);
+  RUN_TEST(test_prev_restarts_a_builtin_track);
+  RUN_TEST(test_prev_while_waiting);
+  RUN_TEST(test_a_restart_keeps_the_sleep_timers_pause_after_this_track);
+  RUN_TEST(test_a_restart_leaves_the_queues_undo_alone);
+  RUN_TEST(test_prev_on_a_start_point_goes_to_0_and_starts_nothing);
   return UNITY_END();
 }

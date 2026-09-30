@@ -19,7 +19,9 @@
 //   - NEXT/PREV skip while playing. Paused or stopped, they only move to the
 //     next or previous track (PlaybackController::cueNext()/cuePrev()): the
 //     screen shows it, the player stays paused or stopped, and a later play
-//     starts it.
+//     starts it. PREV past a track's first 3 s restarts it instead, as every
+//     prev does (PlaybackController::prevRule()): playing, from 0:00;
+//     paused, at 0:00 and still paused.
 // Play and pause are commands, never a toggle: a repeat must not undo the
 // first. The Core2's own buttons and the console are not headphone input and
 // keep their toggle and skip-and-play behaviour.
@@ -30,7 +32,7 @@ public:
     Ignore,  // nothing happens
     Resume,  // paused -> playing (a cued track starts from its beginning)
     Pause,   // playing -> paused
-    Skip,    // playing: next()/prev(), which plays the new track
+    Skip,    // playing: next()/prev(), which plays the new track (or this one again)
     Cue,     // paused or stopped: cueNext()/cuePrev(), nothing starts
   };
 

@@ -191,6 +191,8 @@ uint32_t Core2AudioBackend::positionMs() const {
   return startMs_.load(std::memory_order_relaxed) + played;
 }
 
+bool Core2AudioBackend::positionKnown() const { return sync_.phase() != Phase::Pending; }
+
 bool Core2AudioBackend::finished() const { return sync_.phase() == Phase::Ended; }
 bool Core2AudioBackend::failed() const { return sync_.phase() == Phase::Failed; }
 

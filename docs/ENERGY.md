@@ -2175,8 +2175,10 @@ below are still to do):
   and the saved length; play starts there, faded in as any start.
   Next, another entry, or an edit that changes the current entry drops it;
   prev on it goes to 0:00 of the same entry. (The design said "as prev
-  does after 3 s of play today": prev doesn't do that yet, it is on the
-  roadmap; only a waiting start point makes prev restart the entry.) It
+  does after 3 s of play today": prev didn't do that yet then. It does
+  now, ARCHITECTURE.md "Transport": past a track's first 3 s prev restarts
+  it, paused it stays paused; on a waiting start point, whatever the
+  second, it goes to 0:00 and starts nothing, stopped staying stopped.) It
   applies after any boot with one saved, the power key while paused too.
 - **Where it starts** (`TrackSeek`, test_track_seek; ARCHITECTURE.md,
   "Audio pipeline"): an MP3 from its Xing or VBRI TOC, else its average

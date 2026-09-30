@@ -27,6 +27,7 @@ void PlaybackController::startNow() {
   // catalog's hint.
   const uint32_t hint = at > 0 && startDurationMs_ > 0 ? startDurationMs_ : catalog_.durationHintMs(id);
   clearStartPoint();  // once: a later start of the entry is from its beginning
+  playedFromMs_ = at;
   audio_.play(std::string(path), hint, at);
   setPlaying(PlayState::Playing);
   cued_ = false;
@@ -95,15 +96,56 @@ void PlaybackController::advance() {
   startCurrent();
 }
 
+PlaybackController::Prev PlaybackController::prevRule(PlayState state, bool startPointWaits, bool positionKnown,
+                                                      uint32_t positionMs) {
+  if (startPointWaits) return Prev::Restart;  // the entry it would pick up in, from 0:00
+  if (state == PlayState::Stopped) return Prev::Previous;
+  return positionKnown && positionMs > kRestartAfterMs ? Prev::Restart : Prev::Previous;
+}
+
+PlaybackController::Prev PlaybackController::prevAction() const {
+  if (!hasTrack()) return Prev::Previous;
+  // Stopped or cued, the backend holds nothing of this entry: at 0:00.
+  // A start it hasn't taken up yet may still count the track before: it
+  // is where that play asked to start (a resume point's 2:30 is 2:30 at
+  // once, a restart's or a skip's 0:00 is 0:00). A track that failed has
+  // no place to go back to.
+  const bool holding = state_ != PlayState::Stopped && !cued_;
+  if (!holding) return prevRule(state_, hasStartPoint(), true, 0);
+  const uint32_t at = audio_.positionKnown() ? audio_.positionMs() : playedFromMs_;
+  return prevRule(state_, hasStartPoint(), !audio_.failed(), at);
+}
+
 void PlaybackController::prev() {
   if (queue_.empty()) return;
   failuresInARow_ = 0;
-  if (hasStartPoint()) {
-    clearStartPoint();  // the entry it would pick up in, from 0:00
-  } else {
-    queue_.step(-1, repeat_);  // at the start without repeat: the first track again
+  if (prevAction() == Prev::Restart) {
+    restart();
+    return;
   }
+  clearStartPoint();
+  queue_.step(-1, repeat_);  // at the start without repeat: the first track again
   startCurrent();
+}
+
+void PlaybackController::restart() {
+  clearStartPoint();
+  switch (state_) {
+    case PlayState::Playing:
+      startCurrent();  // from 0:00: a start like any (faded in; held: it waits)
+      break;
+    case PlayState::Paused:
+    case PlayState::Waiting:
+      // Nothing starts: the held track is let go and the next play (or the
+      // wait's release) starts the entry from its beginning.
+      if (!cued_) {
+        audio_.stop();
+        cued_ = true;
+      }
+      break;
+    case PlayState::Stopped:
+      break;
+  }
 }
 
 void PlaybackController::cueNext() { cue(+1); }
@@ -116,8 +158,8 @@ void PlaybackController::cue(int delta) {
   }
   if (queue_.empty()) return;
   failuresInARow_ = 0;
-  if (delta < 0 && hasStartPoint()) {
-    clearStartPoint();  // as prev(): the same entry, at 0:00 (the backend holds nothing of it)
+  if (delta < 0 && prevAction() == Prev::Restart) {
+    restart();  // as prev(): the same entry, at 0:00, still paused (or stopped)
     return;
   }
   clearStartPoint();

@@ -28,6 +28,20 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // At either end of the queue next() and prev() wrap around, as does a
 // track ending (setRepeat(false): the end of the last track stops there).
 //
+// Prev restarts a track past its first 3 s (prevRule(), for every prev: the
+// A click, Now Playing's, the console's p, the headphones'): back to 0:00
+// of the same entry in the same state (playing: it starts again, faded in
+// as any start; paused: it stays paused at 0:00, the backend letting go of
+// the track, so nothing starts out loud). A second prev within the first
+// 3 s goes to the entry before, as does one while stopped, on a cued entry
+// (at 0:00 already) or on a track that failed. Until the backend has taken
+// a start up (IAudioBackend::positionKnown()) its position may be the
+// track before's: the position is then where that play asked to start (a
+// quick second prev after a restart or a skip is at 0:00, the entry
+// before; one right after a resume point's start at 2:30 is at 2:30, a
+// restart). A restart is no skip and no edit: the queue, its undo and the
+// sleep timer's "pause after this track" stay as they were.
+//
 // A Hold (main.cpp's: Bluetooth is the output and the headphones aren't
 // connected) turns every play into a wait (PlayState::Waiting): a new track
 // (play, playNow, next, prev, a resume of a cued entry) is only selected, the
@@ -54,10 +68,11 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // there at once). It belongs to that entry: next, another entry, or an
 // edit that changes the current entry drops it for good (an undo that
 // brings the entry back doesn't bring the second back); prev on it goes to
-// 0:00 of the same entry. Its length goes to the backend with the play (it
-// places a VBR MP3 without a table of contents by it). resumePoint() is
-// what QueueSaver saves: a start point that waits, or a paused track's
-// position.
+// 0:00 of the same entry, whatever the second, and starts nothing (as a
+// paused track's restart: stopped after a boot stays stopped). Its length
+// goes to the backend with the play (it places a VBR MP3 without a table
+// of contents by it). resumePoint() is what QueueSaver saves: a start
+// point that waits, or a paused track's position.
 class PlaybackController {
 public:
   // Whether a play must wait for the output (read at every start).
@@ -86,14 +101,33 @@ public:
   // the wait (Paused).
   void togglePlayPause();
   void next();
+  // prevAction()'s: the entry before (and it plays, or waits), or this one
+  // from 0:00 in the same state.
   void prev();
   void stop();
   // Move to the next or previous track without starting it: Stopped stays
   // Stopped; Paused stays Paused, on the new track from its start (the old
   // one is dropped), and the next togglePlayPause() starts it. While Playing
   // (or Waiting) the same as next()/prev().
+  // cuePrev() restarts as prev() does (paused: at 0:00, still paused).
   void cueNext();
   void cuePrev();
+
+  // ---- prev: this track again, or the one before ----
+  static constexpr uint32_t kRestartAfterMs = 3000;
+  enum class Prev : uint8_t {
+    Previous,  // the entry before (at the first, without repeat: the first again)
+    Restart,   // this entry from 0:00, in the same state (a start point dropped)
+  };
+  // The rule. A start point waiting: Restart (its 0:00, whatever the
+  // second). Stopped: Previous. Otherwise Restart once more than
+  // kRestartAfterMs in, Previous at kRestartAfterMs or less, or when the
+  // position means nothing (`positionKnown` false: a track that failed; a
+  // cued entry is at 0, known; a start the backend hasn't taken up yet is
+  // where it was asked to start).
+  static Prev prevRule(PlayState state, bool startPointWaits, bool positionKnown, uint32_t positionMs);
+  // prevRule() for the player as it is now: what prev() or cuePrev() would do.
+  Prev prevAction() const;
 
   // ---- starting part of the way in ----
   // The current entry's next start begins `ms` in (a track `durationMs`
@@ -176,6 +210,8 @@ private:
   void startNow();
   void advance();  // next track without counting as a user action
   void cue(int delta);
+  // Prev::Restart: the current entry from 0:00, in the same state.
+  void restart();
   // The current entry changed under the backend: carry on from the new one
   // in the same state (Playing starts it, Paused cues it, Stopped waits).
   void currentMoved();
@@ -214,4 +250,7 @@ private:
   uint32_t startMs_ = 0;
   uint32_t startDurationMs_ = 0;
   uint32_t startKey_ = QueueModel::kNone;
+  // Where the last play() asked to start (prevAction(): the position until
+  // the backend takes that start up).
+  uint32_t playedFromMs_ = 0;
 };

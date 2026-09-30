@@ -26,6 +26,11 @@ public:
 
   virtual bool isPlaying() const = 0;     // playing and not paused
   virtual uint32_t positionMs() const = 0;
+  // positionMs() is the last play()'s track: false while that start hasn't
+  // been taken up yet (a backend that starts asynchronously may still count
+  // the track before). PlaybackController's prev reads the position only
+  // then; before, it goes by where it asked that play to start.
+  virtual bool positionKnown() const { return true; }
   // The current track's length (0: not known).
   virtual uint32_t durationMs() const { return 0; }
   virtual bool finished() const = 0;      // reached end of the current track
