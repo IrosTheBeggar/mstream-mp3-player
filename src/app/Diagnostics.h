@@ -22,4 +22,13 @@ const char* pmicName();
 const char* imuName();
 const char* resetReason();
 
+// The flash layout (partitions.csv), so a device run and bug reports can
+// confirm it. At boot, one line: "[flash] running ota_0 at 0x10000 (6144K,
+// OTA state undefined), next update ota_1 at 0x610000" after a serial or
+// single-file install.
+void logRunningPartition();
+// The console's L: every partition as flashed (esp_partition_find), the
+// running one marked, and how full NVS is.
+void printPartitionTable();
+
 }  // namespace diag

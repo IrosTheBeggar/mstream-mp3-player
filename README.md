@@ -34,8 +34,15 @@ use Bluetooth headphones, the speaker, or (later) M5Stack's RCA/3.5 mm module.
    pio run -e core2 -t upload
    ```
 
+   Each build ends with a `flash_guard: ok` line (see
+   [Installing and updating](#installing-and-updating)). A Core2 flashed
+   before the current layout (a 4 MB `factory` app, settings at 0x9000)
+   needs [moving to it](docs/ARCHITECTURE.md#moving-an-existing-unit-to-the-new-layout)
+   once, or it loses its settings.
+
 3. **Test audio.** Make known-pitch test files, plus optional excerpts of your
-   own tracks, then write them to the Core2's flash filesystem:
+   own tracks, then write them to the Core2's flash filesystem (3.8 MB; a
+   real library goes on the SD card):
 
    ```powershell
    python -m venv .venv-tools
@@ -74,6 +81,35 @@ use Bluetooth headphones, the speaker, or (later) M5Stack's RCA/3.5 mm module.
 
 5. **Host unit tests** for the portable core (needs a host C++ compiler, e.g.
    MinGW-w64): `pio test -e native`.
+
+## Installing and updating
+
+A build makes two ways to install:
+
+- `pio run -e core2 -t upload` writes the pieces: the bootloader, the
+  partition table, otadata and the app.
+- `.pio/build/core2/firmware.factory.bin` is the same in one file, written
+  at **0x0** (what a web installer, M5Burner or
+  `esptool write-flash 0x0 firmware.factory.bin` do). It ends far below the
+  settings (NVS at 0xC10000), so an update this way **keeps** them: the
+  settings, the touch calibration, the paired headphones and the resume
+  point. Leave "erase" unticked for updates. Tick it (`esptool erase-flash`
+  first) only for the first install over other firmware (M5Stack's demo,
+  UIFlow), whose leftovers would sit where the settings and the filesystem
+  go.
+
+`pio run -e core2 -t uploadfs` writes `data/` to the 3.8 MB LittleFS
+partition (test audio; the player uses it when no SD card is in). It is
+separate from the app: an update keeps it, and uploadfs replaces all of it.
+
+The layout ([partitions.csv](partitions.csv),
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#flash-layout)) is two 6 MB app
+slots for later WiFi updates from mStream, then NVS, then LittleFS. It can
+never change after release, and `tools/flash_guard.py` fails the build if
+the app outgrows its slot (a warning at 80 %), the merged image is missing
+or would reach NVS, or the table isn't the one the firmware expects. On
+the device, the boot log's `[flash]` line and the console's `L` show the
+layout as flashed.
 
 ## Using it
 
@@ -271,7 +307,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/l/n>` show a faked Bluetooth (connecting, searching, pairing, lost) or no-card state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none) |
-| | | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
+| `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
 | | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
 
@@ -291,7 +327,9 @@ optional argument and Enter:
 
 ```
 platformio.ini        Build envs: core2 | native; local*.ini holds per-developer overrides
-partitions.csv        4 MB app + ~11.9 MB LittleFS (test audio) + coredump
+partitions.csv        Two 6 MB OTA app slots, NVS above anything a single-file
+                      install writes, 3.8 MB LittleFS (test audio), coredump;
+                      never changes after release (docs/ARCHITECTURE.md#flash-layout)
 lib/core/             Portable logic, framework-agnostic (also compiled for native)
   PlaybackController  Transport over the queue; skips tracks that fail
   QueueModel          The play queue: track ids in PSRAM, current position,
@@ -386,7 +424,8 @@ src/                  Core2 firmware
                       Bluetooth events, what the UI reads (UiHost), the
                       console's queue and touch commands
 data/                 LittleFS image source (data/music is gitignored)
-tools/                make_test_audio.py; iram_diet.py (build post-script);
+tools/                make_test_audio.py; iram_diet.py and flash_guard.py (build
+                      post-scripts: IRAM; the app's slot, the merged image, NVS);
                       crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*);
                       vlw_font.py (the UI's DejaVu VLW fonts -> src/ui/VlwFonts.cpp);
                       ui_icons.py (the UI's 1-bit icons -> src/ui/IconData.cpp)

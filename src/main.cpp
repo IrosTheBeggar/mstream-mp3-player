@@ -10,6 +10,7 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <esp_chip_info.h>
+#include <nvs_flash.h>
 
 #include <cmath>
 #include <vector>
@@ -1216,6 +1217,7 @@ static SerialConsole console({
     sleepCommand,
     idleCommand,
     bluetoothTestCommand,
+    diag::printPartitionTable,
 });
 
 // Touch buttons: the same on every screen (ButtonPolicy). Each click and
@@ -1888,7 +1890,47 @@ static void stepCpuRestart(uint32_t now) {
   powerSettings.restart();  // (doesn't return)
 }
 
+// NVS (Preferences: the settings, the touch calibration, the Bluetooth
+// pairing and bond, the resume point) must work before the first read, the
+// boot clock's. initArduino() erases and retries it only for NO_FREE_PAGES
+// and NEW_VERSION_FOUND. Foreign bytes in the region (a unit moved to this
+// flash layout, where NVS sits on old LittleFS blocks) are normally no
+// problem: NVS treats them as corrupt pages and erases each before use. This
+// is the net for anything else, which would otherwise leave every
+// Preferences call failing, silently, until the flash is erased. A second
+// nvs_flash_init() is ESP_OK at once when the first worked (Preferences
+// calls it on every labelled begin()). Out of memory or no partition: no
+// erase, nothing unreadable to fix. Logged once Serial is up.
+static esp_err_t nvsBootErr = ESP_OK;    // the first init's failure, if any
+static esp_err_t nvsRetryErr = ESP_OK;   // after the erase
+static bool nvsErased = false;
+
+static void ensureNvs() {
+  nvsBootErr = nvs_flash_init();
+  if (nvsBootErr == ESP_OK || nvsBootErr == ESP_ERR_NO_MEM || nvsBootErr == ESP_ERR_NOT_FOUND) return;
+  nvsRetryErr = nvs_flash_erase();
+  if (nvsRetryErr != ESP_OK) return;
+  nvsErased = true;
+  nvsRetryErr = nvs_flash_init();
+}
+
+static void logNvs() {
+  if (nvsBootErr == ESP_OK) return;
+  if (nvsErased && nvsRetryErr == ESP_OK) {
+    Serial.printf("[nvs] %s: erased, now ok (the settings, calibration and pairing start over)\n",
+                  esp_err_to_name(nvsBootErr));
+  } else if (nvsErased) {
+    Serial.printf("[nvs] FAILED: %s, and %s after an erase: settings won't be saved\n",
+                  esp_err_to_name(nvsBootErr), esp_err_to_name(nvsRetryErr));
+  } else {
+    Serial.printf("[nvs] FAILED: %s (%s%s): settings won't be saved\n", esp_err_to_name(nvsBootErr),
+                  nvsRetryErr == ESP_OK ? "not erased: it wouldn't help" : "the erase failed: ",
+                  nvsRetryErr == ESP_OK ? "" : esp_err_to_name(nvsRetryErr));
+  }
+}
+
 void setup() {
+  ensureNvs();  // before the first Preferences read
   // The CPU speed saved (or the default), before Bluetooth starts.
   PowerSettings::applyBootClock();
   auto cfg = M5.config();
@@ -1900,6 +1942,8 @@ void setup() {
   cfg.output_power = false;
   M5.begin(cfg);
   Serial.println("\nmstream-mp3-player");
+  diag::logRunningPartition();  // the flash layout (console L: the whole table)
+  logNvs();  // only when NVS needed ensureNvs()
   powerSettings.begin();  // what the boot clock is, the Bluetooth power, and whether it restarted for the speed
   board::applyBootPower();  // the IMU suspended: nothing reads it
   diag::logHeap("boot");

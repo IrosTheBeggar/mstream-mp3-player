@@ -1,10 +1,32 @@
-# M5Stack Core2, 16MB flash.
-# One 4MB app slot (no OTA yet) + ~11.9MB LittleFS holding test audio until the
-# player reads from the SD card. The filesystem partition keeps the "spiffs"
-# label/subtype because that is what LittleFS.begin() and `pio run -t uploadfs`
-# look for. coredump keeps crash evidence across resets.
+# M5Stack Core2, 16MB flash. THIS TABLE CAN NEVER CHANGE AFTER THE FIRST
+# RELEASE: an OTA update rewrites an app slot, never the table at 0x8000, so
+# every unit keeps the layout it was first installed with. Grow things inside
+# their slots; don't move them.
+#
+# Why each piece is where it is:
+# - otadata at 0xE000: where the merged image (firmware.factory.bin) already
+#   writes boot_app0.bin (one otadata entry: sequence 1, i.e. ota_0), so a
+#   single-file install at 0x0 always starts the app it just wrote.
+# - ota_0 / ota_1, 6MB each: two slots for later WiFi updates from mStream
+#   (the new app goes to the other slot; the running one stays until it
+#   boots). The app is ~2.2MB: room for WiFi, HTTP and TLS. ota_0 sits at
+#   0x10000, where the merged image and `pio run -t upload` put the app.
+# - nvs at 0xC10000, 64KB: settings, the touch calibration, the Bluetooth
+#   pairing and bond, the resume point. It sits above anything a merged image
+#   reaches (bootloader, table, otadata, and an app no bigger than ota_0), so
+#   a single-file install at 0x0 (the web installer, M5Burner, esptool) keeps
+#   them. At 0x9000, as before, the image's 0xFF padding wiped them.
+#   0x9000-0xDFFF is left unused for that reason.
+# - spiffs, 3.8MB LittleFS: the internal-flash fallback when no SD card is in
+#   (test audio). It keeps the "spiffs" label/subtype because that is what
+#   LittleFS.begin() and `pio run -t uploadfs` look for.
+# - coredump: crash evidence across resets.
+#
+# tools/flash_guard.py checks all of this after every build.
 # Name,   Type, SubType,  Offset,   Size
-nvs,      data, nvs,      0x9000,   0x5000
-factory,  app,  factory,  0x10000,  0x400000
-spiffs,   data, spiffs,   0x410000, 0xBE0000
+otadata,  data, ota,      0xE000,   0x2000
+ota_0,    app,  ota_0,    0x10000,  0x600000
+ota_1,    app,  ota_1,    0x610000, 0x600000
+nvs,      data, nvs,      0xC10000, 0x10000
+spiffs,   data, spiffs,   0xC20000, 0x3D0000
 coredump, data, coredump, 0xFF0000, 0x10000

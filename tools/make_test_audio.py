@@ -3,7 +3,8 @@
 
 Makes tones of known pitch (to check playback speed and channel order, and the
 48 kHz / hi-res paths) and, optionally, short excerpts of real tracks, sized to
-fit the ~11.9 MB filesystem partition. Needs ffmpeg; if none is on PATH it uses
+fit the 3.8 MB filesystem partition (its size is read from partitions.csv;
+a real library goes on the SD card). Needs ffmpeg; if none is on PATH it uses
 the portable build from the imageio-ffmpeg package:
 
     python -m venv .venv-tools
@@ -18,9 +19,20 @@ import subprocess
 import sys
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent.parent / "data" / "music"
-PARTITION_BYTES = 0xBE0000  # the "spiffs" partition in partitions.csv
-BUDGET_BYTES = int(PARTITION_BYTES * 0.9)  # leave room for LittleFS metadata
+ROOT = Path(__file__).resolve().parent.parent
+OUT = ROOT / "data" / "music"
+
+
+def partition_bytes(label: str = "spiffs") -> int:
+    """The size of a partition in partitions.csv (the one uploadfs writes)."""
+    for line in (ROOT / "partitions.csv").read_text(encoding="utf-8").splitlines():
+        fields = [f.strip() for f in line.split(",")]
+        if not line.lstrip().startswith("#") and len(fields) >= 5 and fields[0] == label:
+            return int(fields[4], 0)
+    sys.exit(f"No '{label}' partition in partitions.csv.")
+
+
+BUDGET_BYTES = int(partition_bytes() * 0.9)  # leave room for LittleFS metadata
 
 # ffmpeg's sine source is 1/8 of full scale, i.e. about -18 dBFS: loud enough
 # to hear, safe at any volume setting.
@@ -31,7 +43,7 @@ TONES = [
     ("03_tone_left_only_44k.mp3", 440, 44100, 10,
      ["-af", "pan=stereo|c0=c0|c1=0*c0", "-c:a", "libmp3lame", "-b:a", "128k"]),
     ("04_tone_440Hz_48k.mp3", 440, 48000, 10, ["-ac", "2", "-c:a", "libmp3lame", "-b:a", "128k"]),
-    ("05_tone_1kHz_96k_24bit.flac", 1000, 96000, 10,
+    ("05_tone_1kHz_96k_24bit.flac", 1000, 96000, 5,
      ["-ac", "2", "-c:a", "flac", "-sample_fmt", "s32", "-bits_per_raw_sample", "24"]),
 ]
 
@@ -53,8 +65,8 @@ def run(ffmpeg: str, args: list) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--mp3", type=Path, help="MP3 to excerpt (first 60 s, tags kept)")
-    parser.add_argument("--flac", type=Path, help="FLAC to excerpt (first 30 s, tags kept)")
+    parser.add_argument("--mp3", type=Path, help="MP3 to excerpt (first 30 s, tags kept)")
+    parser.add_argument("--flac", type=Path, help="FLAC to excerpt (first 8 s, tags kept)")
     opts = parser.parse_args()
 
     ffmpeg = find_ffmpeg()
@@ -69,10 +81,10 @@ def main() -> None:
 
     # Excerpts: audio stream only (drops embedded cover art), tags kept.
     if opts.mp3:
-        run(ffmpeg, ["-i", str(opts.mp3), "-t", "60", "-map", "0:a", "-map_metadata", "0",
+        run(ffmpeg, ["-i", str(opts.mp3), "-t", "30", "-map", "0:a", "-map_metadata", "0",
                      "-c", "copy", str(OUT / "10_excerpt.mp3")])
     if opts.flac:
-        run(ffmpeg, ["-i", str(opts.flac), "-t", "30", "-map", "0:a", "-map_metadata", "0",
+        run(ffmpeg, ["-i", str(opts.flac), "-t", "8", "-map", "0:a", "-map_metadata", "0",
                      "-c:a", "flac", str(OUT / "11_excerpt.flac")])
 
     total = 0

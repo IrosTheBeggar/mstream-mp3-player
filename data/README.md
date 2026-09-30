@@ -1,7 +1,7 @@
 # LittleFS image
 
 Everything in this folder is written to the Core2's internal-flash filesystem
-(~11.9 MB, the `spiffs` partition in `partitions.csv`) by:
+(3.8 MB, the `spiffs` partition in `partitions.csv`) by:
 
 ```powershell
 pio run -e core2 -t uploadfs

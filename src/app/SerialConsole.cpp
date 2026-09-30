@@ -136,6 +136,7 @@ bool SerialConsole::poll() {
       case 'x': Serial.println("> screenshot of the dancer"); actions_.screenshot(false); break;
       case 'X': Serial.println("> screenshot of the screen"); actions_.screenshot(true); break;
       case 'v': actions_.toggleBeatLog(); break;
+      case 'L': if (actions_.partitionTable) actions_.partitionTable(); break;
       case 't': pending_ = Pending::TempoPrior; arg_ = ""; break;
       case 'y': pending_ = Pending::DanceOffset; arg_ = ""; break;
       case 'k': pending_ = Pending::Freeze; arg_ = ""; break;

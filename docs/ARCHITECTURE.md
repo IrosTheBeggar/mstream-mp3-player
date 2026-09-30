@@ -785,7 +785,7 @@ the UI turns `DanceMode` off: no frames at all. Each change is logged
 ## Storage
 
 `LocalStorage` mounts the SD card (shared SPI bus with the LCD, 25 MHz) if one
-is present, otherwise the ~11.9 MB LittleFS partition. It walks `/music` for
+is present, otherwise the 3.8 MB LittleFS partition ([Flash layout](#flash-layout)). It walks `/music` for
 the library (up to 8 folders deep, no cap, hidden names skipped) through the
 VFS's `readdir`, which names each entry and says whether it's a folder, rather
 than Arduino's `File::openNextFile()`, which opens every entry and so searches
@@ -793,6 +793,150 @@ its directory again for each file (the UI spike measured that walk at ~5.7 ms a
 file). The player's own files live in `/.player` on the same volume:
 `library.idx` (the index's cache), `queue.txt`, and `thumbs/` (the album
 covers' thumbnails, below).
+
+## Flash layout
+
+The 16 MB flash, as `partitions.csv` lays it out. **The table can never
+change after the first release**: an OTA update rewrites an app slot, never
+the table at 0x8000, so every unit keeps the layout it was installed with.
+
+| Offset | Size | What | Why there |
+|---|---|---|---|
+| 0x1000 | ~24 KB | bootloader | fixed by the ESP32 |
+| 0x8000 | 3 KB | partition table | fixed (the bootloader looks there) |
+| 0x9000 | 20 KB | *unused* | the old NVS; a merged image pads it with 0xFF |
+| 0xE000 | 8 KB | `otadata` | where the merged image writes `boot_app0.bin` |
+| 0x10000 | 6 MB | `ota_0` | where the merged image and `upload` write the app |
+| 0x610000 | 6 MB | `ota_1` | the second slot, for WiFi updates from mStream |
+| 0xC10000 | 64 KB | `nvs` | above anything a merged image reaches |
+| 0xC20000 | 3.8 MB | `spiffs` (LittleFS) | the rest; label kept for `LittleFS.begin()` and uploadfs |
+| 0xFF0000 | 64 KB | `coredump` | crash evidence across resets |
+
+- **Single-file installs keep the settings.** pioarduino's merged
+  `firmware.factory.bin` (bootloader, table, `boot_app0.bin`, app) is what a
+  web installer, M5Burner or `esptool write-flash 0x0` writes. It is 0xFF
+  wherever it has nothing, so it erased whatever it covered: with NVS at
+  0x9000, as before, every such install wiped the settings, the touch
+  calibration, the Bluetooth pairing and bond, and the resume point. NVS
+  now sits above both app slots, so no image of an app that fits ota_0 can
+  reach it, and it grew to 64 KB (16 pages) while it could.
+- **Two slots for later.** `boot_app0.bin` is an otadata with one entry,
+  sequence 1 with no state (0xFFFFFFFF, `ESP_OTA_IMG_UNDEFINED`), which the
+  bootloader reads as ota_0: the slot the image just wrote, even on a unit
+  that had moved to ota_1 by OTA (`upload` writes it too). An OTA update
+  writes the slot that isn't running and switches otadata. 6 MB each: the
+  app is ~2.2 MB, and WiFi, HTTP and TLS are still to come (and the IRAM
+  work they need, [Build notes](#build-notes)).
+- **LittleFS shrank** from ~11.9 MB to 3.8 MB: it only holds test audio when
+  no SD card is in (`tools/make_test_audio.py` reads its size from the table).
+- **Old bytes where NVS and LittleFS now sit** (a unit moved from the old
+  layout, or from other firmware, without an erase). NVS takes a page it
+  can't read (a bad header CRC) as corrupt and erases it before use;
+  Arduino's `initArduino()` also erases the whole partition on
+  `NO_FREE_PAGES` / `NEW_VERSION_FOUND`, and `setup()` starts with
+  `ensureNvs()`, which erases and retries on any other failure (not out of
+  memory or no partition) before the first `Preferences` read, logging
+  `[nvs] ...` when it did. LittleFS finds no superblock at 0xC20000,
+  so `LittleFS.begin(true)` formats it at the first mount.
+- **The build checks it.** `tools/flash_guard.py` (a post-script) runs on
+  every build and before every upload, after the merge. It reads the table
+  from the build's `partitions.bin` and fails the build if
+  `firmware.factory.bin` is missing or stale (pioarduino's merge only
+  prints a message when esptool fails) or doesn't hold this build's table
+  and app; if otadata, ota_0 or ota_1 is missing or not where the merged
+  image writes, or a factory app is there; if the `nvs` or `spiffs` label
+  is missing; if anything a merged image writes reaches NVS; or if the app
+  fills more than 90 % of its slot (a warning from 80 %). A build ends
+  with `flash_guard: ok: app 2.12 MB = 35% of the 6.00 MB slot; ...`.
+  It also makes `firmware.bin` depend on the merged pieces: pioarduino
+  merges in a post-action of `firmware.bin`, which a table-only change
+  didn't rebuild, so the merged image kept the old table (found while
+  testing the guard with the old table put back).
+- **On the device.** The boot log's first `[flash]` line names the running
+  slot, its OTA state (`undefined` after a serial or single-file install:
+  `boot_app0.bin`'s entry) and the next update slot
+  (`esp_ota_get_running_partition()`, `esp_ota_get_next_update_partition()`);
+  the console's `L` prints the table as flashed (`esp_partition_find()`),
+  which slot boots next, and how full NVS is.
+- **Rollback, for the OTA work.** The prebuilt bootloader has
+  `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`, and Arduino's `initArduino()`
+  (before `setup()`) marks a freshly updated app valid at once: the weak
+  `verifyRollbackLater()` returns false and the weak `verifyOta()` true.
+  That is left as it is for now (serial and single-file installs leave the
+  state undefined, which the bootloader never rolls back, so there is
+  nothing to verify yet). The OTA work should
+  override `verifyRollbackLater()` to return true and call
+  `esp_ota_mark_app_valid_cancel_rollback()` once the new app has shown it
+  works (the UI up, audio started, the next sync reachable), so a build that
+  crashes at boot rolls back to the old slot by itself.
+
+### Moving an existing unit to the new layout
+
+A unit flashed before this layout has NVS at 0x9000 and LittleFS from
+0x410000 to 0xFF0000. A plain `pio run -t upload` writes the new table and
+app but leaves the old NVS at 0x9000 (now unused) and old LittleFS bytes
+where the new NVS sits. So either carry the settings over or start clean.
+
+**Carry them over** (the pairing, the calibration, the settings). Raw NVS
+pages carry no addresses, so they work anywhere in an NVS partition: copy
+the old 20 KB (5 pages) to 0xC10000, padded to 64 KB with erased pages.
+Do it before the new firmware first boots, from PowerShell, with the
+Core2 on COM3:
+
+```powershell
+Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue
+$esptool = "$env:USERPROFILE\.platformio\penv\Scripts\esptool.exe"
+# 1. The old NVS, before anything is written. no-reset (here and in 3)
+#    keeps the old firmware from running (and writing NVS or its LittleFS)
+#    between the steps.
+& $esptool --port COM3 --after no-reset read-flash 0x9000 0x5000 nvs-old.bin
+# 2. Padded to the new 64 KB with erased (0xFF) pages.
+python -c "d = open('nvs-old.bin', 'rb').read(); open('nvs-new.bin', 'wb').write(d + b'\xff' * (0x10000 - len(d)))"
+# 3. Where the new NVS is (write-flash erases the region first).
+& $esptool --port COM3 --after no-reset write-flash 0xC10000 nvs-new.bin
+# 4. The new bootloader, table, otadata and app.
+pio run -e core2 -t upload
+```
+
+The old copy at 0x9000 stays, unused, until a single-file install writes
+its 0xFF padding over it. The flash's LittleFS starts empty: the firmware
+formats it at the first mount, which happens only when there is no SD card
+(with a card in, LittleFS is never mounted and the old bytes just sit
+there). `pio run -e core2 -t uploadfs` for the test audio; the SD card isn't
+touched. The boot log's `[flash] running ota_0 ...` line and `L` confirm
+the layout, and the Output tab should show the headphones still paired.
+
+The order can also be upload first, then steps 1-3 (read the old NVS
+before the upload, `esptool erase-region 0xC10000 0x10000`, write it, then
+reset): the new firmware boots once in between on whatever sits at
+0xC10000, and the erase and rewrite undo anything it saved there.
+
+**Done on the developer's Core2 (2026-09-30)**, upload first as just
+described, after a full 16 MB `read-flash` backup (checked with
+`verify-flash`, the chip's own MD5). The NVS read back from 0xC10000 was
+the old 20 KB byte for byte, then 44 KB of 0xFF; the new firmware loaded
+it with no `[nvs]` line (110 of 2016 entries used, 11 namespaces). Every
+key (dumped offline from the raw pages: the input calibration, `cal_ask`,
+the Bluedroid `bt_config.conf` bond blob, `connected_bda` (the headphones' address),
+`bt_name`, the Bluetooth power, the screen settings, the queue position,
+the PHY calibration) matched the old image. On the console, `as` (the
+whole touch table), `B`, `q`, `T`, `I`, `Ps` and the boot's settings lines
+were identical to before, and the stack paged (the headphones' address) by itself.
+The headphones were asleep, so no link proved the bond keys work; they are
+the same bytes. LittleFS wasn't mounted (a card was in); a host-side mount
+of the old bytes now under `spiffs` (littlefs-python) fails with
+LFS_ERR_CORRUPT, which is what makes `LittleFS.begin(true)` format.
+
+**The single-file install keeps the settings (measured the same day).** The
+merged `firmware.factory.bin` (2,288,048 bytes, so it writes 0x0 to
+0x22E9B0; esptool erases 0x0-0x22EFFF) was written with `esptool
+write-flash 0x0 firmware.factory.bin`, no erase. The 64 KB at 0xC10000
+read back byte-identical before and after, and after the reboot `as`, `B`,
+`q`, the settings and `L` matched the lines from before the migration.
+
+**Or start clean:** `esptool --port COM3 erase-flash`, then `upload` (and
+`uploadfs`): the unit starts as new (the touch check, pairing, the coach
+cards).
 
 ## Library and queue
 
@@ -1868,6 +2012,9 @@ the others: only `Pz` plays it.
   workaround pins in IRAM back to flash (this rev-3 chip doesn't need it).
   About 7 KB of IRAM is left. Adding WiFi will need more: likely pioarduino's
   `custom_sdkconfig` to rebuild the framework without the workaround.
+- **`tools/flash_guard.py`** checks the flash layout after every build: the
+  app's room in its slot, the merged `firmware.factory.bin`, NVS above it
+  ([Flash layout](#flash-layout)).
 
 ## Roadmap
 

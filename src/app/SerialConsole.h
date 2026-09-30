@@ -11,6 +11,7 @@
 //   d dance screen on/off   m next dancer (crab, stick)
 //   x / X screenshot of the dancer's box / the whole screen
 //   v per-beat log on/off
+//   L the partition table as flashed, the running app slot, NVS use (bug reports)
 // and commands that take an argument, ended with Enter:
 //   i<n> play track n (0-based)   b<n> benchmark decoding track n
 //   c<name> the name a build with BT_SINK_NAME scans for, with none remembered (saved)
@@ -88,6 +89,8 @@ public:
     std::function<void(const char*)> idle;
     // Bluetooth tests (B): the argument as typed (may be "").
     std::function<void(const char*)> bluetoothTest;
+    // The partition table as flashed (L).
+    std::function<void()> partitionTable;
   };
 
   explicit SerialConsole(Actions actions) : actions_(std::move(actions)) {}
