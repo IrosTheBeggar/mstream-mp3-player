@@ -131,8 +131,9 @@ public:
   bool setCalibration(const TouchCalibration& c);
   // Back to the default, no correction (the saved table is erased).
   void resetCalibration();
-  // The first boot's touch check was answered (done, skipped, walked away
-  // from): not asked again. Saved; false forgets it (console ab0).
+  // The first boot's touch check was answered (done, skipped, not now;
+  // never by its 60 s close: TouchCheck's answers()): not asked again.
+  // Saved; false forgets it (console ab0).
   bool touchCheckAnswered() const { return checkAnswered_; }
   void setTouchCheckAnswered(bool on = true);
 

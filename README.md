@@ -201,9 +201,9 @@ label on the screen does the same).
   leaves a mark where the Core2 read it. If they land off ("Taps land
   about 40 px to the right of your finger. Calibrate now?"), **Calibrate**
   goes on to the crosses and **Not now** leaves it (it's in Output > Touch
-  calibration any time); else "Touch is accurate", and a tap goes on. It
-  asks once: skipped, answered or left alone for a minute, it doesn't come
-  back.
+  calibration any time); else "Touch is accurate", and a tap goes on. Once
+  skipped or answered, it doesn't come back; left alone, it closes after a
+  minute and asks again at the next start.
 - **Output > Touch calibration** opens a sheet: **Calibrate** (9 crosses,
   about 20 s), **Test taps** (tap anywhere and see where each tap lands),
   and, once calibrated, **Remove calibration** (asked first; taps are then
@@ -214,11 +214,14 @@ label on the screen does the same).
   to 12 px off, average 6", with **Save**, **Try again** and **Discard**.
   The calibrated figures are honest: each tap is measured with a
   calibration made from the other taps, so finger wobble can't flatter
-  it. Save comes first only when the calibration is clearly better (3 px
-  or more on average); when the touch is already accurate (or the new
-  calibration is no better) it says there's no need to save, and Discard
-  comes first. After Save, the Test taps page: tap anywhere, and the ring
-  should land under your finger; A undoes the Save there.
+  it (on a panel that is off, a tap it reads at its very edge, where every
+  finger further out reads the same, is measured with the calibration
+  itself). Save comes first only when the calibration is clearly better
+  (3 px or more on average); when the touch is already accurate (or the
+  new calibration is no better) it says there's no need to save, and
+  Discard comes first. After Save, the Test taps page: tap anywhere, and
+  the ring should land under your finger (a grey dot: where it would land
+  without the calibration); A undoes the Save there.
 - **The rescue.** If the taps are too far off to reach the Output tab,
   switch the Core2 off and on, and once the start-up screen shows (it says
   "Touch trouble? Hold a finger on the screen."), hold a finger anywhere

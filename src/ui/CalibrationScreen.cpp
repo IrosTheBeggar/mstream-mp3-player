@@ -29,8 +29,8 @@ constexpr uint32_t kFlashMs = 150;
 // The check page starts over after this many taps (the rings pile up).
 constexpr int kCheckTapsPerPage = 16;
 constexpr int kRowH = sheet::kRowH;  // 40, the touch minimum
-// The check page's taps draw above its Done row; the probe's result shows
-// the dots and marks in their band only.
+// The check page's taps draw above its Done row, the header included (its
+// lines go at the first tap); the probe's result shows the dots and marks in their band only.
 constexpr int kCheckMarksBottom = uitext::kCalRowsBottom - kRowH;  // 180: the Done row's top
 constexpr int kDotsBandY = 94, kDotsBandH = 45;
 // The two places a hint goes (hintY()), cleared as each cross comes up.
@@ -113,8 +113,9 @@ void CalibrationScreen::drawHintBand(int y, int lines) {
 }
 
 // "A: Cancel" over the A dot: a red arrow down to it (as the tips draw
-// them), the page's verb beside it.
-void CalibrationScreen::drawAHint(const char* verb) {
+// them), the page's verb beside it; on the test taps page, the grey mark's
+// key to the right (a grey dot, "without calibration").
+void CalibrationScreen::drawAHint(const char* verb, const char* key) {
   M5Canvas& s = ui::gfx::strip();
   Fonts& f = Fonts::instance();
   constexpr int kBandH = kH - uitext::kCalHintY;  // 18
@@ -124,6 +125,10 @@ void CalibrationScreen::drawAHint(const char* verb) {
   char t[32];
   snprintf(t, sizeof(t), "A: %s", verb);
   f.draw(s, Font::Small, t, uitext::kCalAHintX, kBandH / 2, uitext::kCalAHintW, col::SOFT, col::BG);
+  if (key) {
+    s.fillCircle(uitext::kCalKeyX + 3, kBandH / 2, 3, col::DIM);
+    f.draw(s, Font::Small, key, uitext::kCalKeyTextX, kBandH / 2, uitext::kCalKeyTextW, col::DIM, col::BG);
+  }
   ui::gfx::push(s, 0, uitext::kCalHintY, kW, kBandH, true);
 }
 
@@ -170,7 +175,6 @@ int CalibrationScreen::rowAt(int y) const {
 
 void CalibrationScreen::open(Start how, int targets) {
   count_ = targets < kMinTargets ? kMinTargets : targets > kMaxTargets ? kMaxTargets : targets;
-  firstBoot_ = how == Start::FirstBoot;
   justSaved_ = undone_ = false;
   flashing_ = false;
   lastInputMs_ = millis();
@@ -205,11 +209,12 @@ void CalibrationScreen::leave() {
   input_.tapTick();
   switch (page_) {
     case Page::Probe:
-      input_.setTouchCheckAnswered();
+      answer(touchcheck::CheckEnd::Skip);
       Serial.println("[cal] A: the touch check skipped (Output > Touch calibration has it)");
       close();
       break;
     case Page::ProbeResult:
+      answer(verdict_.calibrate ? touchcheck::CheckEnd::NotNow : touchcheck::CheckEnd::GoOn);
       Serial.println(verdict_.calibrate ? "[cal] A: not now (Output > Touch calibration has it)" : "[cal] A: go on");
       close();
       break;
@@ -246,7 +251,8 @@ void CalibrationScreen::loop(uint32_t nowMs) {
   if (static_cast<int32_t>(nowMs - lastInputMs_) >= static_cast<int32_t>(kIdleCloseMs)) {
     Serial.printf("[cal] abandoned: no touch for %lu s (%s)\n", (unsigned long)(kIdleCloseMs / 1000),
                   justSaved_ ? "the new table stays" : "nothing saved");
-    if (firstBoot_ && (page_ == Page::Probe || page_ == Page::ProbeResult)) input_.setTouchCheckAnswered();
+    // Not an answer: a check nobody touched shows again at the next boot.
+    answer(touchcheck::CheckEnd::TimedOut);
     close();
   }
 }
@@ -254,10 +260,12 @@ void CalibrationScreen::loop(uint32_t nowMs) {
 void CalibrationScreen::act(Act a) {
   switch (a) {
     case Act::Calibrate:
+      answer(touchcheck::CheckEnd::Calibrate);
       Serial.println("[cal] calibrate");
       startTargets();
       break;
     case Act::NotNow:
+      answer(touchcheck::CheckEnd::NotNow);
       Serial.println("[cal] not now (Output > Touch calibration has it)");
       close();
       break;
@@ -273,6 +281,19 @@ void CalibrationScreen::act(Act a) {
     case Act::Done: close(); break;
     case Act::None: break;
   }
+}
+
+// The first-boot check's answer, stored once (TouchCheck's answers():
+// never the 60 s close).
+void CalibrationScreen::answer(touchcheck::CheckEnd end) {
+  if (input_.touchCheckAnswered()) return;
+  if (!touchcheck::answers(end)) {
+    if (page_ == Page::Probe || page_ == Page::ProbeResult) {
+      Serial.println("[cal] the touch check isn't answered: it shows again at the next boot");
+    }
+    return;
+  }
+  input_.setTouchCheckAnswered();
 }
 
 // ---- touches ----
@@ -318,6 +339,7 @@ void CalibrationScreen::onEvent(const InputEvent& e) {
     case Page::ProbeResult:
       if (!verdict_.calibrate) {
         input_.tapTick();
+        answer(touchcheck::CheckEnd::GoOn);
         Serial.println("[cal] the touch is accurate: go on");
         close();
         return;
@@ -343,11 +365,19 @@ void CalibrationScreen::onEvent(const InputEvent& e) {
   // the fingertip once it lifts), and with a table saved, where it would
   // without one (grey).
   input_.tapTick();
-  if (++checkTaps_ > kCheckTapsPerPage) drawCheckPage();
+  // The page's first tap clears its lines (so no mark draws over them, and
+  // none is hidden: every tap shows where it landed, on the header too); a
+  // page full of rings starts over, its header drawn again.
+  if (checkTaps_ == 0 || checkTaps_ >= kCheckTapsPerPage) {
+    if (checkTaps_ > 0) drawCheckHeader();
+    ui::gfx::fill(0, kHeaderH, kW, kCheckMarksBottom - kHeaderH, col::BG, true);
+    checkTaps_ = 0;
+  }
+  ++checkTaps_;
   Serial.printf("[cal] check: raw (%d,%d) -> (%d,%d)%s%s\n", e.rawX, e.rawY, e.x, e.y,
                 e.atRightEdge() ? " (at the right clamp)" : "", input_.scriptedNote());
   LcdLock lock;
-  lcd().setClipRect(0, kHeaderH, kW, kCheckMarksBottom - kHeaderH);
+  lcd().setClipRect(0, 0, kW, kCheckMarksBottom);
   if (input_.calibrated()) lcd().fillCircle(e.rawX, e.rawY, 3, col::DIM);
   lcd().drawCircle(e.x, e.y, 10, col::CORAL);
   lcd().drawCircle(e.x, e.y, 9, col::CORAL);
@@ -397,7 +427,7 @@ void CalibrationScreen::onProbeTap(const InputEvent& e) {
       std::abs(e.rawX - d.x) <= touchcheck::kAcceptDx && std::abs(e.rawY - d.y) <= touchcheck::kAcceptDy;
   if (!plausible && e.x < touchcheck::kCancelW && e.y < touchcheck::kCancelH) {
     input_.tapTick();
-    input_.setTouchCheckAnswered();
+    answer(touchcheck::CheckEnd::Skip);
     Serial.println("[cal] the touch check skipped (Output > Touch calibration has it)");
     close();
     return;
@@ -440,8 +470,8 @@ void CalibrationScreen::onProbeTap(const InputEvent& e) {
 }
 
 void CalibrationScreen::finishProbe() {
+  // (Not answered yet: the verdict page's buttons answer it.)
   verdict_ = touchcheck::verdict(dotTaps_);
-  input_.setTouchCheckAnswered();
   if (verdict_.calibrate) {
     char text[80];
     touchcheck::verdictText(verdict_, text, sizeof(text));
@@ -585,6 +615,7 @@ void CalibrationScreen::onTargetTap(const InputEvent& e) {
 }
 
 void CalibrationScreen::finish() {
+  answer(touchcheck::CheckEnd::Calibrated);
   const bool fitOk = TouchCalibration::fitAxis(sx_, count_, TouchCalibration::kXKnotRaw, TouchCalibration::kXKnots,
                                                &fitted_.x, &repX_) &&
                      TouchCalibration::fitAxis(sy_, count_, TouchCalibration::kYKnotRaw, TouchCalibration::kYKnots,
@@ -595,14 +626,15 @@ void CalibrationScreen::finish() {
   // The new table judged (and shown) on taps it wasn't fitted to: on its
   // own taps it always looks better (TouchCheck's measureUnseen()).
   const uint32_t t0 = millis();
-  newErr_ = agree ? touchcheck::measureUnseen(sx_, sy_, count_) : touchcheck::Error{};
+  newErr_ = agree ? touchcheck::measureUnseen(input_.calibration(), sx_, sy_, count_) : touchcheck::Error{};
   const uint32_t unseenMs = millis() - t0;
   const touchcheck::Error own = agree ? touchcheck::measure(fitted_, sx_, sy_, count_) : touchcheck::Error{};
   outcome_ = touchcheck::outcome(agree, nowErr_, newErr_);
   static const char* const kOutcome[] = {"the taps don't agree", "already accurate", "no better", "better"};
   Serial.printf("[cal] fit %s (%s): x off by %.1f px rms (max %.1f) raw, %.1f (max %.1f) fitted; y %.1f (max %.1f) "
                 "raw, %.1f (max %.1f) fitted; with the table in use up to %.0f px (average %.0f), with the new one "
-                "up to %.0f (average %.0f) on taps it wasn't fitted to (%lu ms), %.0f (average %.0f) on its own\n",
+                "up to %.0f (average %.0f) on taps it wasn't fitted to (a skewed panel's clamped readings on the "
+                "fit; %lu ms), %.0f (average %.0f) on its own\n",
                 !fitOk ? "FAILED" : agree ? "ok" : "rejected", kOutcome[static_cast<int>(outcome_)], repX_.rmsBefore,
                 repX_.maxBefore, repX_.rmsAfter, repX_.maxAfter, repY_.rmsBefore, repY_.maxBefore, repY_.rmsAfter,
                 repY_.maxAfter, nowErr_.max, nowErr_.mean, newErr_.max, newErr_.mean, (unsigned long)unseenMs, own.max,
@@ -655,17 +687,22 @@ void CalibrationScreen::openCheck() {
   drawCheckPage();
 }
 
+// (Its taps' marks draw on it too: a tap on the header shows.)
+void CalibrationScreen::drawCheckHeader() {
+  using namespace uitext;
+  drawHeader(kCalCheckTitle, nullptr, justSaved_ ? kCalSaved : undone_ ? kCalUndone : nullptr,
+             justSaved_ ? col::GREEN : col::DIM);
+}
+
 void CalibrationScreen::drawCheckPage() {
   using namespace uitext;
   clear();
-  drawHeader(kCalCheckTitle, nullptr, justSaved_ ? kCalSaved : undone_ ? kCalUndone : nullptr,
-             justSaved_ ? col::GREEN : col::DIM);
+  drawCheckHeader();
   drawLine(42, kCalCheckLines[0], col::SOFT);
   drawLine(62, kCalCheckLines[1], col::SOFT);
-  if (input_.calibrated()) drawLine(84, kCalCheckKey, col::DIM, static_cast<int>(Font::Small));
   const Row done[1] = {{kCalDone, nullptr, Act::Done, true}};
   setRows(done, 1);
-  drawAHint(justSaved_ ? kCalUndo : kCalDone);
+  drawAHint(justSaved_ ? kCalUndo : kCalDone, input_.calibrated() ? kCalCheckKey : nullptr);
   checkTaps_ = 0;
   shown();
 }

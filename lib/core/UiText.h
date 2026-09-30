@@ -341,10 +341,14 @@ inline constexpr const char* kCalSave = "Save";
 inline constexpr const char* kCalTryAgain = "Try again";
 inline constexpr const char* kCalDiscard = "Discard";
 inline constexpr const char* kCalDone = "Done";
-// The test taps page: two lines, and the grey mark's key when a table is
-// saved (Small); after a Save the header says so (Small, right).
+// The test taps page: two lines (gone at the first tap: the marks draw
+// there), and while a table is saved the grey mark's key in the A hint's
+// band, after the page's "A: Done" / "A: Undo": a grey dot (r 3) at
+// kCalKeyX, then the text (Small, dim). After a Save the header says so
+// (Small, right).
 inline constexpr const char* kCalCheckLines[2] = {"Tap anywhere. The ring should land", "right under your finger."};
-inline constexpr const char* kCalCheckKey = "grey: without calibration";
+inline constexpr const char* kCalCheckKey = "without calibration";
+inline constexpr int kCalKeyX = 170, kCalKeyTextX = kCalKeyX + 12, kCalKeyTextW = 312 - kCalKeyTextX;
 inline constexpr const char* kCalSaved = "Saved";
 inline constexpr const char* kCalUndone = "Undone";
 // The first-boot check: its first dot's hint on two lines, then one; a miss.

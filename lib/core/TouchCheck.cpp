@@ -13,6 +13,9 @@ float dist(float dx, float dy) { return std::sqrt(dx * dx + dy * dy); }
 
 int round5(float v) { return static_cast<int>(std::lround(v / 5.0f)) * 5; }
 
+// At the panel's clamp on its axis (`max`: kRawMaxX or kRawMaxY).
+bool atClamp(int raw, int max) { return TouchCalibration::clampedLow(raw) || raw >= max; }
+
 }  // namespace
 
 int offBy(const Dot& d, const Tap& t) {
@@ -73,6 +76,20 @@ void verdictText(const Verdict& v, char* buf, size_t size) {
 
 bool due(bool calibrated, bool answered) { return !calibrated && !answered; }
 
+bool answers(CheckEnd end) {
+  switch (end) {
+    case CheckEnd::Skip:
+    case CheckEnd::NotNow:
+    case CheckEnd::Calibrate:
+    case CheckEnd::GoOn:
+    case CheckEnd::Calibrated: return true;
+    case CheckEnd::TimedOut:
+    case CheckEnd::Cancelled:
+    case CheckEnd::Closed: return false;
+  }
+  return false;
+}
+
 Take judgeCross(CrossTries& tries, int tx, int ty, int rawX, int rawY, int x, int y) {
   if ((x < kCancelW && y < kCancelH) || (x < kAHintW && y >= kAHintY)) return Take::Cancel;
   if (std::abs(rawX - tx) <= kAcceptDx && std::abs(rawY - ty) <= kAcceptDy) return Take::Sample;
@@ -100,11 +117,16 @@ Error measure(const TouchCalibration& table, const TouchCalibration::Sample* sx,
   return e;
 }
 
-Error measureUnseen(const TouchCalibration::Sample* sx, const TouchCalibration::Sample* sy, int n) {
+Error measureUnseen(const TouchCalibration& inUse, const TouchCalibration::Sample* sx,
+                    const TouchCalibration::Sample* sy, int n) {
   Error e;
   if (!sx || !sy || n <= 1 || n > kCrosses) return e;
   TouchCalibration::Sample ox[kCrosses], oy[kCrosses];
-  float sum = 0;
+  // Each tap's leave-one-out miss per axis, whether it read a clamp.
+  float dx[kCrosses], dy[kCrosses];
+  bool cx[kCrosses], cy[kCrosses];
+  float innerUnseen = 0, innerNow = 0;
+  int inner = 0;
   for (int k = 0; k < n; ++k) {
     int m = 0;
     for (int i = 0; i < n; ++i) {
@@ -117,7 +139,29 @@ Error measureUnseen(const TouchCalibration::Sample* sx, const TouchCalibration::
     TouchCalibration t = TouchCalibration::identity();
     TouchCalibration::fitAxis(ox, m, TouchCalibration::kXKnotRaw, TouchCalibration::kXKnots, &t.x);
     TouchCalibration::fitAxis(oy, m, TouchCalibration::kYKnotRaw, TouchCalibration::kYKnots, &t.y);
-    const float d = dist(t.x.map(sx[k].raw) - sx[k].target, t.y.map(sy[k].raw) - sy[k].target);
+    dx[k] = t.x.map(sx[k].raw) - sx[k].target;
+    dy[k] = t.y.map(sy[k].raw) - sy[k].target;
+    cx[k] = atClamp(sx[k].raw, TouchCalibration::kRawMaxX);
+    cy[k] = atClamp(sy[k].raw, TouchCalibration::kRawMaxY);
+    if (!cx[k] && !cy[k]) {
+      innerUnseen += dist(dx[k], dy[k]);
+      innerNow += dist(inUse.x.map(sx[k].raw) - sx[k].target, inUse.y.map(sy[k].raw) - sy[k].target);
+      ++inner;
+    }
+  }
+  // The clamped readings are judged on the fit only on a panel the taps
+  // inside the clamps show is off (the new table clearly better there).
+  const bool skewed = inner > 0 && innerUnseen <= innerNow - kMinGainPx * static_cast<float>(inner);
+  TouchCalibration all = TouchCalibration::identity();
+  if (skewed) {
+    TouchCalibration::fitAxis(sx, n, TouchCalibration::kXKnotRaw, TouchCalibration::kXKnots, &all.x);
+    TouchCalibration::fitAxis(sy, n, TouchCalibration::kYKnotRaw, TouchCalibration::kYKnots, &all.y);
+  }
+  float sum = 0;
+  for (int k = 0; k < n; ++k) {
+    const float ex = skewed && cx[k] ? all.x.map(sx[k].raw) - sx[k].target : dx[k];
+    const float ey = skewed && cy[k] ? all.y.map(sy[k].raw) - sy[k].target : dy[k];
+    const float d = dist(ex, ey);
     sum += d;
     if (d > e.max) e.max = d;
   }

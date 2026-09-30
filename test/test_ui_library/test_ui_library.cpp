@@ -756,7 +756,6 @@ void test_touch_calibration_texts_fit() {
                         kCalDisagree[0], kCalDisagree[1], kCheckGoOn}) {
     fits(body, t, kCalLineW);
   }
-  fits(small, kCalCheckKey, kCalLineW);
   fits(bold, kCheckAsk, kCalLineW);
   fits(title, kCheckAccurate, kCalLineW);
   // Typical results in Body; the widest possible in Small.
@@ -792,6 +791,15 @@ void test_touch_calibration_texts_fit() {
     snprintf(buf, sizeof(buf), "A: %s", verb);
     fits(small, buf, kCalAHintW);
   }
+  // The test taps page's key, after its A hint (Done, or Undo after a
+  // Save; 6 px clear of it) and its dot, to the band's end.
+  for (const char* verb : {kCalDone, kCalUndo}) {
+    snprintf(buf, sizeof(buf), "A: %s", verb);
+    TEST_ASSERT_TRUE(kCalAHintX + small.width(buf) + 6 <= kCalKeyX);
+  }
+  TEST_ASSERT_TRUE(kCalKeyX + 6 < kCalKeyTextX);
+  fits(small, kCalCheckKey, kCalKeyTextW);
+  TEST_ASSERT_EQUAL_INT(312, kCalKeyTextX + kCalKeyTextW);
   // The boot screen's rescue line.
   fits(small, kBootTouchHint, kCalLineW);
 }

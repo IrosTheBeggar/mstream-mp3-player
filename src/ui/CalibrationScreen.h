@@ -18,7 +18,9 @@
 //     more than 90 px off is asked again, once). Then the verdict: "Taps
 //     land about 40 px to the right of your finger. Calibrate now?" with
 //     [Calibrate] [Not now], or "Touch is accurate. Tap anywhere to go on".
-//     Any way out answers it (Skip, Not now, the verdict, walking away).
+//     Only an answer stores it (Skip, Not now, Calibrate, going on, or A
+//     for them: TouchCheck's answers()): the 60 s close of a check nobody
+//     answered doesn't, so it shows again at the next boot.
 //   - Crosses (Output > Touch calibration > Calibrate; the rescue hold on
 //     the boot screen; console a, a5-a9): 5-9 crosses, one at a time,
 //     spread over the screen (distinct x and y each, so both axes get as
@@ -29,7 +31,8 @@
 //     (TouchCheck::judgeCross). Each sample ticks and flashes the cross
 //     green. Then the result: "Now: up to 42 px off, average 21" (the table
 //     in use) and "Calibrated: up to 12 px off, average 6" (the new table,
-//     on taps it wasn't fitted to: TouchCheck's measureUnseen()), with
+//     on taps it wasn't fitted to, a clamped reading on the fit:
+//     TouchCheck's measureUnseen()), with
 //     [Save] [Try again] [Discard]; Save first only when the new table is
 //     clearly better, else Discard (the touch already accurate, or no
 //     better: TouchCheck's outcome()); Try again first when the taps didn't
@@ -37,7 +40,9 @@
 //     table before is kept in RAM until the page closes).
 //   - Check (Output > Touch calibration > Test taps; console ac): each tap
 //     draws a coral ring where the Core2 reads it, and with a table saved a
-//     grey dot where it would read without one. [Done].
+//     grey dot where it would read without one (its key beside the A hint).
+//     The two lines on top go at the first tap: no mark draws over them,
+//     and none is hidden (a tap on the header shows there). [Done].
 //
 // Every button is a full-width 40 px row, hit tested by y alone (the panel
 // reads y true: a stack survives any x error). The glass's way out is a
@@ -104,11 +109,12 @@ private:
   // doesn't fit; or `font` as given).
   void drawLine(int y, const char* text, uint16_t colour, int font = -1);
   void drawHintBand(int y, int lines);
-  void drawAHint(const char* verb);
+  void drawAHint(const char* verb, const char* key = nullptr);
   void setRows(const Row* rows, int n);
   void drawRow(int i, bool pressed);
   int rowAt(int y) const;
   void act(Act a);
+  void answer(touchcheck::CheckEnd end);
 
   void startProbe();
   void drawProbeDot();
@@ -127,6 +133,7 @@ private:
   void drawResult();
 
   void openCheck();
+  void drawCheckHeader();
   void drawCheckPage();
   void save();
   void undo();
@@ -134,7 +141,6 @@ private:
   Input& input_;
   void (*closed_)() = nullptr;
   Page page_ = Page::Closed;
-  bool firstBoot_ = false;
   // Touches: the page's drawing time (the settle guard), whether the touch
   // down now counts, the row under it, the last input (the timeout).
   uint32_t shownMs_ = 0;

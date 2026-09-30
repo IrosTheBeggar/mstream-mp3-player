@@ -923,7 +923,7 @@ layer is suspended).
   policy's). A touch that went down before a page or cross was drawn, or
   within 300 ms of it, is ignored (a bounce is never the next cross's
   sample), and after 60 s with no touch it closes as its way out (nothing
-  saved). It opens four ways:
+  saved, and the first-boot check not answered). It opens four ways:
   - **The first-boot check**: with no table saved and NVS `input`/`cal_ask`
     unset (`TouchCheck::due()`), before the UI starts (so before the tips).
     Three dots, one at a time, at x 50, 190 and 280 (where the lab's panel
@@ -932,8 +932,13 @@ layer is suspended).
     calibrate when a dot is more than 30 px off, two of three more than
     15, or a dot away from the edges read the clamp; it says which way
     ("Taps land about 40 px to the right of your finger"), with
-    [Calibrate] [Not now]; else "Touch is accurate", a tap goes on. Any
-    answer, a skip or walking away stores `cal_ask`. **The user's own unit
+    [Calibrate] [Not now]; else "Touch is accurate", a tap goes on. Only
+    an answer stores `cal_ask` (`TouchCheck::answers()`): Skip, Not now,
+    Calibrate, going on from "Touch is accurate" (A for any of them), or a
+    calibration tapped through to its result, however it was opened. The
+    60 s close doesn't (nor a Cancel on the crosses, or `aq`): a Core2
+    switched on and put down for a minute asks again at its next boot,
+    until someone answers. **The user's own unit
     has no saved table and no `cal_ask`, so it shows the check at its next
     boot**: that is the intended first device test, not a regression.
   - **Output > Touch calibration** (its line: "Not calibrated" /
@@ -966,19 +971,44 @@ layer is suspended).
   px off, average 21" (the table in use) / "Calibrated: up to 12 px off,
   average 6" (2D distances), with [Save] [Try again] [Discard]. The new
   table's figures are leave-one-out (`TouchCheck::measureUnseen()`: each
-  tap against a table fitted to the others, 2n small fits): measured on
+  tap against a table fitted to the others, 2n+2 small fits): measured on
   the taps it was fitted to, 9 x knots follow 9 taps' finger scatter, and
   a panel that reads true was told to save a table worse than none (a
   simulation of a true panel with 5 px of scatter per axis: "better" in
-  44% of runs). `TouchCheck::outcome()` puts Save first only when the new
-  table is at least 3 px closer on average (the same simulation: 0.1% of
-  runs on a true panel, 95% on the lab's); else Discard first, "already
-  accurate" when the taps average within 8 px with the table in use, "no
-  better" otherwise: a table fitted to finger scatter helps nothing. A fit whose rms is over 15 px on either axis is
+  44% of runs). **A reading at the panel's clamp on a skewed panel is the
+  exception**: on that axis it is judged on the table fitted to all the
+  taps. Every finger past the clamp reads the same, so the other taps
+  can't predict it: left out, the table's end was extrapolated from the
+  taps inside, which the saved table never does (it puts the clamp where
+  the taps that read it were aimed). On the lab's panel the crosses at x
+  20 and 300 read 0 and 319, and they set the "up to" figure (up to 15-23
+  px in the host simulation, 15-20 on the device, against 27-35 with no
+  table): it undersold a good fit. With the rule it reads up to 8-14
+  (average 5-8), and it is still never better than the table on its own
+  taps. Skewed: on the taps inside the clamps, leave-one-out beats the
+  table in use by 3 px on average. A panel that reads true reads the
+  clamps too when an edge cross is tapped 20 px towards the bezel, and
+  judged on the fit those two taps flattered its table into "better" (37
+  of 588 simulated runs with both edge crosses so); its taps inside show
+  nothing to gain, so there, as on a panel already corrected by its
+  table, the figures stay plain leave-one-out (`test_touch_input` checks
+  them against it). `TouchCheck::outcome()` judges the figure shown
+  against the one with the table in use: Save first only when the new
+  table is at least 3 px closer on average (the same simulation, before
+  the clamp rule: 0.1% of runs on a true panel, 95% on the lab's); else
+  Discard first, "already accurate" when the taps average within 8 px
+  with the table in use, "no better" otherwise: a table fitted to finger
+  scatter helps nothing. A fit whose rms is over 15 px on either axis is
   "the taps didn't agree", with Try again first. After Save the check page
   (a coral ring where the Core2 reads each tap, a grey dot where it would
-  without the table), where A undoes the Save (the table before is kept in
-  RAM).
+  without the table; its key, a grey dot and "without calibration", in
+  the A hint's band), where A undoes the Save (the table before is kept in
+  RAM). Its two lines of instructions go at the first tap: the marks draw
+  anywhere from the top of the screen (the header too) to the Done bar,
+  never under or over the instructions, so a tap near the top shows where
+  it landed like any other (they drew over the lines before, and a tap on
+  the header showed nothing). After 16 taps the marks clear, the header is
+  drawn again, and it goes on.
 - **The scripted finger on a skewed panel** (console `uk1`, `uk2` with up
   to 4 px of deterministic jitter a touch, `uk0` off): the scripted finger
   (`uit`, `uih`...) then reads x as the lab's panel did (its table's
@@ -1011,7 +1041,8 @@ layer is suspended).
     against 25.6 and 281.3) because the crosses at x 20 and 300 read at the
     clamps. The unseen "up to" figure is set by those two edge crosses
     (left out, the edge is extrapolated), so it reads worse than the saved
-    table does at the edges.
+    table does at the edges. (Fixed since: on a skewed panel, clamped
+    readings are judged on the fit, above; rechecked below.)
   - Output: the row reads "Not calibrated" / "Calibrated on this Core2";
     the sheet shows Remove calibration only when calibrated; its dialog's
     Cancel keeps the table, Remove takes it off with a "Calibration
@@ -1022,6 +1053,18 @@ layer is suspended).
     hold after start switched it back.
   - The screen stayed lit with the check up and untouched, which closed
     itself at 60 s; then the usual dim (20 s) and off (30 s).
+  - The user then calibrated with a real finger: it worked well. Three
+    follow-ups, rechecked on the device (scripted finger, the user's own
+    table in use): `ab` left untouched closed at 60 s with "the touch
+    check isn't answered", and `as` no longer said "answered"; opened
+    again, Skip stored it. Four `uk2` runs of 9 crosses: "better", now up
+    to 14-19 px off (average 10, the user's table on the lab's skew), the
+    new table up to 9-13 (average 5-7) on taps it wasn't fitted to, 5-8
+    on its own, the leave-one-out 435-486 ms (against 15-20 by plain
+    leave-one-out in the run above). The test taps page lost its two lines at the first tap; rings and
+    grey dots then showed near the top (one on the header, clipped at the
+    screen's edge), and the 17th tap cleared the marks with the header
+    drawn again. The "without calibration" key sits in the A band.
   - Two bugs found and fixed. (1) Opened while the screen was off (the
     console), the screen drew into the sleeping panel (Ui::suspend() lets
     the screen that takes over draw at once): its last piece, the A hint,
@@ -1032,8 +1075,7 @@ layer is suspended).
     the UI was suspended (`note()` already didn't). Both now log and skip.
   - Not wired, by design: B isn't Done on the check page (A and the Done
     bar are), and a B click while the calibration is up plays or pauses as
-    ever. The first-boot check's 60 s close counts as an answer, so a
-    Core2 put down on its first boot won't ask again (Output has it).
+    ever.
 - **The glass** (`TouchRecognizer`, host-tested): Down, Tap (within 12 px
   and 500 ms; its position is where the finger landed), LongPress (500 ms,
   while still down), Release, DragStart / DragMove / DragEnd, and Fling.

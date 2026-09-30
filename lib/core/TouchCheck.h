@@ -60,8 +60,19 @@ Verdict verdict(const Tap* taps, int n = kDots);
 void verdictText(const Verdict& v, char* buf, size_t size);
 
 // Whether the check shows after this boot: no table saved, and it hasn't
-// been answered (NVS "input"/"cal_ask": done, skipped, or walked away from).
+// been answered (NVS "input"/"cal_ask": answers(), below).
 bool due(bool calibrated, bool answered);
+
+// How the check (or the calibration) closed. Only an answer stores
+// "cal_ask": Skip (its pill, or A on the dots), Not now (its row, or A on
+// the verdict), Calibrate, going on from "Touch is accurate" (a tap, or
+// A), or a calibration tapped through to its result (whichever way it was
+// opened). The 60 s close with no touch doesn't (TimedOut: a Core2
+// switched on and put down is asked again at its next boot), nor does a
+// calibration cancelled, or a close from outside (the console's aq, a
+// spike screen): Cancelled, Closed.
+enum class CheckEnd : uint8_t { Skip, NotNow, Calibrate, GoOn, Calibrated, TimedOut, Cancelled, Closed };
+bool answers(CheckEnd end);
 
 // ---- the calibration (9 crosses) ----
 
@@ -116,14 +127,32 @@ Error measure(const TouchCalibration& table, const TouchCalibration::Sample* sx,
 // these taps does on a tap it didn't see. Measured on the taps it was
 // fitted to, a new table always looks better: 9 x knots follow 9 taps'
 // finger scatter, and a panel that reads true would be told to save a
-// table fitted to noise (worse than none on the next taps). 2n small fits,
-// once, on the loop task (the log says how long they took).
-Error measureUnseen(const TouchCalibration::Sample* sx, const TouchCalibration::Sample* sy, int n);
+// table fitted to noise (worse than none on the next taps).
+//
+// But on a skewed panel, not a reading at the panel's clamp (raw 0, or the
+// axis's max: kRawMaxX, kRawMaxY): on that axis it is judged on the table
+// fitted to all the taps. Every finger past the clamp reads the same, so
+// the others can't predict it: left out, the table's end is extrapolated
+// from the taps inside, which the saved table never does (it puts the
+// clamp where the taps that read it were aimed; that residual is what it
+// does for such a finger). On the lab's panel the crosses at x 20 and 300
+// read 0 and 319, and left out they set the "up to" figure (15-23 px,
+// against 8-14 with the rule). Skewed: on the taps inside the clamps (both
+// axes), leave-one-out beats the table in use (`inUse`) by kMinGainPx on
+// average. A panel that reads true can read a clamp too (a finger 20 px
+// past an edge cross, towards the bezel), and judged on the fit those
+// taps would flatter the table into "better" (1 run in 25 with both edge
+// crosses so, in the host simulation); there the taps inside show nothing
+// to gain, so its figures, and outcome() on them, stay pure leave-one-out.
+// 2n+2 small fits at most, once, on the loop task (the log says how long
+// they took).
+Error measureUnseen(const TouchCalibration& inUse, const TouchCalibration::Sample* sx,
+                    const TouchCalibration::Sample* sy, int n);
 
 // What the result page says, from the table in use (`now`) and the new one
-// on taps it didn't see (`unseen`: measureUnseen()). The fit is kept only
-// if its rms is within kMaxRmsAfter on both axes (else Disagree: "the taps
-// didn't agree"). Better only when the new table is at least kMinGainPx
+// on taps it didn't see (`unseen`: measureUnseen(), the figure it shows).
+// The fit is kept only if its rms is within kMaxRmsAfter on both axes
+// (else Disagree: "the taps didn't agree"). Better only when the new table is at least kMinGainPx
 // closer on average; else Accurate when the taps land within
 // kAccurateMeanPx on average with the table in use (a panel that reads
 // true: ordinary finger scatter), or NoBetter. Only Better puts Save first.

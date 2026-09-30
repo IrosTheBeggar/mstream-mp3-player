@@ -270,7 +270,7 @@ void test_calibration_save_and_load() {
 
 void test_check_is_due_once_and_only_uncalibrated() {
   TEST_ASSERT_TRUE(touchcheck::due(false, false));
-  TEST_ASSERT_FALSE(touchcheck::due(false, true));   // answered (done, skipped, walked away)
+  TEST_ASSERT_FALSE(touchcheck::due(false, true));   // answered (done, skipped, not now)
   TEST_ASSERT_FALSE(touchcheck::due(true, false));   // a table saved: nothing to ask
   TEST_ASSERT_FALSE(touchcheck::due(true, true));
   // The dots: at x ~50, ~190, ~280 (the lab's 0, +20, +40 px), y 60-180,
@@ -281,6 +281,28 @@ void test_check_is_due_once_and_only_uncalibrated() {
     TEST_ASSERT_INT_WITHIN(10, xs[i], touchcheck::kDot[i].x);
     TEST_ASSERT_TRUE(touchcheck::kDot[i].y >= 94 + 9 && touchcheck::kDot[i].y + 9 <= 139);
   }
+}
+
+// Only an answer stores "cal_ask": a Core2 switched on and put down (the
+// check closes itself after 60 s untouched) asks again at its next boot.
+void test_check_answered_only_by_an_answer() {
+  using E = touchcheck::CheckEnd;
+  for (E e : {E::Skip, E::NotNow, E::Calibrate, E::GoOn, E::Calibrated}) {
+    TEST_ASSERT_TRUE(touchcheck::answers(e));
+    TEST_ASSERT_FALSE(touchcheck::due(false, touchcheck::answers(e)));
+  }
+  for (E e : {E::TimedOut, E::Cancelled, E::Closed}) {
+    TEST_ASSERT_FALSE(touchcheck::answers(e));
+    TEST_ASSERT_TRUE(touchcheck::due(false, touchcheck::answers(e)));
+  }
+  // Boot after boot left untouched: asked every time, until answered.
+  bool answered = false;
+  for (int boot = 0; boot < 3; ++boot) {
+    TEST_ASSERT_TRUE(touchcheck::due(false, answered));
+    answered = answered || touchcheck::answers(E::TimedOut);
+  }
+  answered = answered || touchcheck::answers(E::NotNow);
+  TEST_ASSERT_FALSE(touchcheck::due(false, answered));
 }
 
 namespace {
@@ -443,27 +465,59 @@ void test_cross_judging() {
   }
 }
 
+namespace {
+const int kJitter[] = {3, -2, 4, -4, 1, -3, 2, 0, -1, 4, -2, 3, -4, 1};
+
+// The 9 crosses as the lab's panel reads them (x skewed and clamped, y
+// true), with up to 4 px of jitter from kJitter, starting at `offset`.
+void labCrosses(TouchCalibration::Sample* sx, TouchCalibration::Sample* sy, int offset) {
+  const TouchCalibration::Axis lab = TouchCalibration::labFitX();
+  for (int i = 0; i < 9; ++i) {
+    const touchcheck::Dot& c = touchcheck::kCross[i];
+    long r = std::lround(lab.unmap(c.x)) + kJitter[(i + offset) % 14];
+    r = r < 0 ? 0 : r > 319 ? 319 : r;
+    sx[i] = {static_cast<int16_t>(r), c.x};
+    sy[i] = {static_cast<int16_t>(c.y + kJitter[(i + offset + 5) % 14]), c.y};
+  }
+}
+
+// Plain leave-one-out, the clamped readings too (what measureUnseen() did
+// before it judged those on the fit).
+touchcheck::Error plainLeaveOneOut(const TouchCalibration::Sample* sx, const TouchCalibration::Sample* sy, int n) {
+  touchcheck::Error e;
+  float sum = 0;
+  for (int k = 0; k < n; ++k) {
+    TouchCalibration::Sample ox[9], oy[9];
+    int m = 0;
+    for (int i = 0; i < n; ++i) {
+      if (i == k) continue;
+      ox[m] = sx[i];
+      oy[m++] = sy[i];
+    }
+    TouchCalibration t = TouchCalibration::identity();
+    TouchCalibration::fitAxis(ox, m, TouchCalibration::kXKnotRaw, TouchCalibration::kXKnots, &t.x);
+    TouchCalibration::fitAxis(oy, m, TouchCalibration::kYKnotRaw, TouchCalibration::kYKnots, &t.y);
+    const float dx = t.x.map(sx[k].raw) - sx[k].target, dy = t.y.map(sy[k].raw) - sy[k].target;
+    const float d = std::sqrt(dx * dx + dy * dy);
+    sum += d;
+    if (d > e.max) e.max = d;
+  }
+  e.mean = sum / static_cast<float>(n);
+  return e;
+}
+}  // namespace
+
 // The whole calibration on the lab's panel, uncorrected (the default): the
 // 9 crosses, read as that panel reads them with up to 4 px of jitter, the
 // fit, and its result: the new table recovers roughly the lab's.
 void test_calibration_run_on_the_lab_panel() {
-  int16_t kCrossX[9], kCrossY[9];
-  for (int i = 0; i < 9; ++i) {
-    kCrossX[i] = touchcheck::kCross[i].x;
-    kCrossY[i] = touchcheck::kCross[i].y;
-  }
-  const int kJitter[] = {3, -2, 4, -4, 1, -3, 2, 0, -1, 4, -2, 3, -4, 1};
-  const TouchCalibration::Axis lab = TouchCalibration::labFitX();
   TouchCalibration::Sample sx[9], sy[9];
+  labCrosses(sx, sy, 0);
   for (int i = 0; i < 9; ++i) {
-    long r = std::lround(lab.unmap(kCrossX[i])) + kJitter[i];
-    r = r < 0 ? 0 : r > 319 ? 319 : r;
-    sx[i] = {static_cast<int16_t>(r), kCrossX[i]};
-    sy[i] = {static_cast<int16_t>(kCrossY[i] + kJitter[(i + 5) % 14]), kCrossY[i]};
     touchcheck::CrossTries tries;
     TEST_ASSERT_EQUAL_INT((int)touchcheck::Take::Sample,
-                          (int)touchcheck::judgeCross(tries, kCrossX[i], kCrossY[i], sx[i].raw, sy[i].raw, sx[i].raw,
-                                                      sy[i].raw));
+                          (int)touchcheck::judgeCross(tries, touchcheck::kCross[i].x, touchcheck::kCross[i].y, sx[i].raw,
+                                                      sy[i].raw, sx[i].raw, sy[i].raw));
   }
   TouchCalibration fitted;
   TouchCalibration::FitReport rx, ry;
@@ -474,7 +528,7 @@ void test_calibration_run_on_the_lab_panel() {
   TEST_ASSERT_TRUE(rx.rmsAfter <= touchcheck::kMaxRmsAfter && ry.rmsAfter <= touchcheck::kMaxRmsAfter);
   const touchcheck::Error now = touchcheck::measure(TouchCalibration::identity(), sx, sy, 9);
   const touchcheck::Error after = touchcheck::measure(fitted, sx, sy, 9);
-  const touchcheck::Error unseen = touchcheck::measureUnseen(sx, sy, 9);
+  const touchcheck::Error unseen = touchcheck::measureUnseen(TouchCalibration::identity(), sx, sy, 9);
   TEST_ASSERT_TRUE(now.max > 30);
   TEST_ASSERT_TRUE(after.max < now.max / 2);
   // On taps it wasn't fitted to it does worse than on its own, and still
@@ -483,6 +537,7 @@ void test_calibration_run_on_the_lab_panel() {
   TEST_ASSERT_TRUE(unseen.mean <= now.mean - touchcheck::kMinGainPx);
   TEST_ASSERT_EQUAL_INT((int)touchcheck::Outcome::Better, (int)touchcheck::outcome(true, now, unseen));
   // Roughly the lab's table, below the clamp.
+  const TouchCalibration::Axis lab = TouchCalibration::labFitX();
   for (int r = 40; r <= 280; r += 40) {
     char msg[48];
     snprintf(msg, sizeof(msg), "raw %d: %.1f vs the lab's %.1f", r, fitted.x.map(r), lab.map(r));
@@ -493,12 +548,66 @@ void test_calibration_run_on_the_lab_panel() {
   TEST_ASSERT_EQUAL_STRING("Now: up to 42 px off, average 21", line);
 }
 
+// The result page's "Calibrated" figure on the lab's panel, every jitter:
+// representative, not set by the two edge crosses, which read at the
+// clamps (x 20 reads 0, x 300 reads 319). Plain leave-one-out
+// extrapolated the table's ends past them (up to 15-23 px, as on the
+// device: "up to 15-20" against "Now: up to 27-34"); judged on the fit
+// there, the figure is within 15 px, at most half the one with no table,
+// and still no better than the new table on the taps it was fitted to.
+void test_calibration_figure_on_the_lab_panel_is_representative() {
+  for (int o = 0; o < 14; ++o) {
+    TouchCalibration::Sample sx[9], sy[9];
+    labCrosses(sx, sy, o);
+    TEST_ASSERT_EQUAL_INT16(0, sx[1].raw);
+    TEST_ASSERT_EQUAL_INT16(319, sx[2].raw);
+    TouchCalibration fitted;
+    TEST_ASSERT_TRUE(TouchCalibration::fitAxis(sx, 9, TouchCalibration::kXKnotRaw, TouchCalibration::kXKnots,
+                                               &fitted.x));
+    TEST_ASSERT_TRUE(TouchCalibration::fitAxis(sy, 9, TouchCalibration::kYKnotRaw, TouchCalibration::kYKnots,
+                                               &fitted.y));
+    const touchcheck::Error now = touchcheck::measure(TouchCalibration::identity(), sx, sy, 9);
+    const touchcheck::Error own = touchcheck::measure(fitted, sx, sy, 9);
+    const touchcheck::Error unseen = touchcheck::measureUnseen(TouchCalibration::identity(), sx, sy, 9);
+    const touchcheck::Error plain = plainLeaveOneOut(sx, sy, 9);
+    char msg[128];
+    snprintf(msg, sizeof(msg), "jitter %d: now %.1f/%.1f, figure %.1f/%.1f, plain %.1f/%.1f, own %.1f/%.1f", o, now.max,
+             now.mean, unseen.max, unseen.mean, plain.max, plain.mean, own.max, own.mean);
+    TEST_ASSERT_TRUE_MESSAGE(plain.max >= 15.0f, msg);
+    TEST_ASSERT_TRUE_MESSAGE(unseen.max <= 15.0f, msg);
+    TEST_ASSERT_TRUE_MESSAGE(unseen.max <= plain.max - 3.0f, msg);
+    TEST_ASSERT_TRUE_MESSAGE(unseen.max <= now.max / 2, msg);
+    TEST_ASSERT_TRUE_MESSAGE(unseen.mean >= own.mean && unseen.mean <= plain.mean, msg);
+    TEST_ASSERT_EQUAL_INT_MESSAGE((int)touchcheck::Outcome::Better, (int)touchcheck::outcome(true, now, unseen), msg);
+  }
+}
+
+// The lab's panel already corrected by its own table: calibrating again
+// finds nothing to gain inside the clamps, so the clamped crosses aren't
+// judged on the fit (plain leave-one-out), and nothing flatters the new
+// table into "better".
+void test_calibration_on_a_corrected_panel_is_not_better() {
+  const TouchCalibration table = labTable();
+  for (int o = 0; o < 14; ++o) {
+    TouchCalibration::Sample sx[9], sy[9];
+    labCrosses(sx, sy, o);
+    const touchcheck::Error now = touchcheck::measure(table, sx, sy, 9);
+    const touchcheck::Error unseen = touchcheck::measureUnseen(table, sx, sy, 9);
+    const touchcheck::Error plain = plainLeaveOneOut(sx, sy, 9);
+    char msg[96];
+    snprintf(msg, sizeof(msg), "jitter %d: now %.1f (max %.1f), new %.1f (max %.1f)", o, now.mean, now.max, unseen.mean,
+             unseen.max);
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(plain.mean, unseen.mean, msg);
+    TEST_ASSERT_EQUAL_FLOAT_MESSAGE(plain.max, unseen.max, msg);
+    TEST_ASSERT_TRUE_MESSAGE(touchcheck::outcome(true, now, unseen) != touchcheck::Outcome::Better, msg);
+  }
+}
+
 // A panel that reads true, tapped with ordinary finger scatter (up to 6 px
 // a tap, deterministic): the table fitted to that scatter looks better on
 // its own taps, but not on taps it wasn't fitted to, so Save is never the
 // first choice. Every pairing of the jitter walk for x and y.
 void test_calibration_on_a_true_panel_is_not_better() {
-  const int kJitter[] = {3, -2, 4, -4, 1, -3, 2, 0, -1, 4, -2, 3, -4, 1};
   int flattered = 0;
   for (int ox = 0; ox < 14; ++ox) {
     for (int oy = 0; oy < 14; ++oy) {
@@ -516,8 +625,12 @@ void test_calibration_on_a_true_panel_is_not_better() {
                                                  &fitted.y, &ry));
       const touchcheck::Error now = touchcheck::measure(TouchCalibration::identity(), sx, sy, 9);
       const touchcheck::Error own = touchcheck::measure(fitted, sx, sy, 9);
-      const touchcheck::Error unseen = touchcheck::measureUnseen(sx, sy, 9);
+      const touchcheck::Error unseen = touchcheck::measureUnseen(TouchCalibration::identity(), sx, sy, 9);
       if (own.mean < now.mean) ++flattered;
+      // (No reading at a clamp: exactly plain leave-one-out.)
+      const touchcheck::Error plain = plainLeaveOneOut(sx, sy, 9);
+      TEST_ASSERT_EQUAL_FLOAT(plain.mean, unseen.mean);
+      TEST_ASSERT_EQUAL_FLOAT(plain.max, unseen.max);
       char msg[96];
       snprintf(msg, sizeof(msg), "jitter %d/%d: now %.1f (max %.1f), unseen %.1f (max %.1f)", ox, oy, now.mean,
                now.max, unseen.mean, unseen.max);
@@ -528,6 +641,60 @@ void test_calibration_on_a_true_panel_is_not_better() {
   }
   // (What the figures on its own taps said: nearly always "better".)
   TEST_ASSERT_TRUE(flattered > 14 * 14 * 9 / 10);
+}
+
+// The same panel tapped carelessly (up to 12 px a tap per axis): off by
+// more than 8 px on average, and a table fitted to that scatter is never
+// "better": no better than now.
+void test_calibration_on_a_true_panel_tapped_carelessly_is_no_better() {
+  for (int ox = 0; ox < 14; ++ox) {
+    for (int oy = 0; oy < 14; ++oy) {
+      TouchCalibration::Sample sx[9], sy[9];
+      for (int i = 0; i < 9; ++i) {
+        const touchcheck::Dot& c = touchcheck::kCross[i];
+        sx[i] = {static_cast<int16_t>(c.x + kJitter[(i + ox) % 14] * 3), c.x};
+        sy[i] = {static_cast<int16_t>(c.y + kJitter[(i + oy) % 14] * 3), c.y};
+      }
+      const touchcheck::Error now = touchcheck::measure(TouchCalibration::identity(), sx, sy, 9);
+      const touchcheck::Error unseen = touchcheck::measureUnseen(TouchCalibration::identity(), sx, sy, 9);
+      char msg[96];
+      snprintf(msg, sizeof(msg), "jitter %d/%d: now %.1f (max %.1f), new %.1f (max %.1f)", ox, oy, now.mean, now.max,
+               unseen.mean, unseen.max);
+      TEST_ASSERT_TRUE_MESSAGE(now.mean > touchcheck::kAccurateMeanPx, msg);
+      TEST_ASSERT_EQUAL_INT_MESSAGE((int)touchcheck::Outcome::NoBetter, (int)touchcheck::outcome(true, now, unseen),
+                                    msg);
+    }
+  }
+}
+
+// A panel that reads true, its two edge crosses tapped 20 px towards the
+// bezel (x 20 reads 0, x 300 reads 319: the clamps), the others with 4-12
+// px of scatter: the taps inside the clamps show nothing to gain, so the
+// clamped ones aren't judged on the fit (that flattered the table into
+// "better" in 37 of these 588 runs): plain leave-one-out, never better.
+void test_calibration_on_a_true_panel_read_at_the_clamps_is_not_better() {
+  for (int mult = 1; mult <= 3; ++mult) {
+    for (int ox = 0; ox < 14; ++ox) {
+      for (int oy = 0; oy < 14; ++oy) {
+        TouchCalibration::Sample sx[9], sy[9];
+        for (int i = 0; i < 9; ++i) {
+          const touchcheck::Dot& c = touchcheck::kCross[i];
+          const int r = i == 1 ? 0 : i == 2 ? 319 : c.x + kJitter[(i + ox) % 14] * mult;
+          sx[i] = {static_cast<int16_t>(r), c.x};
+          sy[i] = {static_cast<int16_t>(c.y + kJitter[(i + oy) % 14] * mult), c.y};
+        }
+        const touchcheck::Error now = touchcheck::measure(TouchCalibration::identity(), sx, sy, 9);
+        const touchcheck::Error unseen = touchcheck::measureUnseen(TouchCalibration::identity(), sx, sy, 9);
+        const touchcheck::Error plain = plainLeaveOneOut(sx, sy, 9);
+        char msg[112];
+        snprintf(msg, sizeof(msg), "scatter x%d, jitter %d/%d: now %.1f (max %.1f), new %.1f (max %.1f)", mult, ox, oy,
+                 now.mean, now.max, unseen.mean, unseen.max);
+        TEST_ASSERT_EQUAL_FLOAT_MESSAGE(plain.mean, unseen.mean, msg);
+        TEST_ASSERT_EQUAL_FLOAT_MESSAGE(plain.max, unseen.max, msg);
+        TEST_ASSERT_TRUE_MESSAGE(touchcheck::outcome(true, now, unseen) != touchcheck::Outcome::Better, msg);
+      }
+    }
+  }
 }
 
 void test_calibration_outcomes() {
@@ -1678,13 +1845,18 @@ int main(int, char**) {
   RUN_TEST(test_lab_table_puts_each_target_where_it_was);
   RUN_TEST(test_axis_unmap_is_the_inverse);
   RUN_TEST(test_check_is_due_once_and_only_uncalibrated);
+  RUN_TEST(test_check_answered_only_by_an_answer);
   RUN_TEST(test_check_verdict_on_an_accurate_panel);
   RUN_TEST(test_check_verdict_on_the_lab_panel);
   RUN_TEST(test_check_verdict_rules);
   RUN_TEST(test_check_asks_a_far_tap_again);
   RUN_TEST(test_cross_judging);
   RUN_TEST(test_calibration_run_on_the_lab_panel);
+  RUN_TEST(test_calibration_figure_on_the_lab_panel_is_representative);
+  RUN_TEST(test_calibration_on_a_corrected_panel_is_not_better);
   RUN_TEST(test_calibration_on_a_true_panel_is_not_better);
+  RUN_TEST(test_calibration_on_a_true_panel_tapped_carelessly_is_no_better);
+  RUN_TEST(test_calibration_on_a_true_panel_read_at_the_clamps_is_not_better);
   RUN_TEST(test_calibration_outcomes);
   RUN_TEST(test_fit_recovers_a_distortion_from_nine_taps);
   RUN_TEST(test_fit_stays_monotonic_on_contradictory_taps);
