@@ -185,10 +185,18 @@ public:
   // (docs/RESAMPLER.md, section 10).
   static void useTables(const int16_t (*d147)[resampler::kTaps], const int16_t (*u12)[resampler::kTaps]);
   static bool tablesCopied();
-  // Called on the converter's task just before a stream at another rate
-  // than 44.1 kHz is configured (the firmware makes its copy there, the
-  // first time one is needed). nullptr: none.
-  static void setTablesWanted(void (*hook)());
+  // Called on the converter's task from setRate(), before the route is
+  // configured (TableCopy makes or frees the firmware's copy here):
+  // - wanted = true: the route reads the polyphase tables (every rate but
+  //   44.1 and 88.2 kHz), at a stream's first rate or a change mid-stream;
+  // - wanted = false: only at a stream's first rate after reset(), for a
+  //   route that doesn't read them (44.1 kHz, the usual track) or a refused
+  //   one. Nothing of the stream before can run after reset(), so with one
+  //   converter (the firmware's) no one reads the tables until the next
+  //   call with true: a copy can be freed here (useTables(nullptr, ...)
+  //   first). A change to 44.1 kHz mid-stream never calls it.
+  // nullptr: none.
+  static void setTablesWanted(void (*hook)(bool wanted));
 
 private:
   enum class State : uint8_t { Unconfigured, Configured, Refused };

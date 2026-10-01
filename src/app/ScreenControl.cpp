@@ -18,9 +18,6 @@ constexpr const char* kKeyBrightness = "bright";
 constexpr uint32_t kPanelSettleMs = 120;
 constexpr uint32_t kSleepOutMs = 5;
 constexpr uint32_t kUsbPollMs = 1000;
-// AXP192 reg 0x00 (power status): bit 7 ACIN present, bit 5 VBUS present.
-constexpr uint8_t kAxpStatus = 0x00;
-constexpr uint8_t kAxpUsbBits = 0xA0;
 }  // namespace
 
 void ScreenControl::begin(uint32_t nowMs) {
@@ -44,7 +41,14 @@ void ScreenControl::begin(uint32_t nowMs) {
 }
 
 bool ScreenControl::readExternalPower() {
-  return (M5.Power.Axp192.readRegister8(kAxpStatus) & kAxpUsbBits) != 0;
+  // By the power chip M5Unified found: an AXP192 (USB on ACIN or VBUS) or
+  // an AXP2101 (the Core2 v1.1: VBUS only, it has no ACIN). Any other:
+  // present, so the idle power-off never turns off a board it can't read.
+  switch (M5.Power.getType()) {
+    case m5::Power_Class::pmic_axp192: return M5.Power.Axp192.isACIN() || M5.Power.Axp192.isVBUS();
+    case m5::Power_Class::pmic_axp2101: return M5.Power.Axp2101.isVBUS();
+    default: return true;
+  }
 }
 
 uint8_t ScreenControl::backlight() const { return asleep_ ? 0 : M5.Display.getBrightness(); }

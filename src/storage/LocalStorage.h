@@ -4,6 +4,7 @@
 #pragma once
 #include <FS.h>
 
+#include "CardFormat.h"
 #include "hal/IStorage.h"
 
 // The player's local storage: the SD card if one is inserted, otherwise the
@@ -37,7 +38,14 @@ public:
   // again". The firmware restarts to use it: the audio backend, the
   // library and the queue were all set up on the flash.) Loop task, never
   // inside an LcdLock (the card shares the LCD's bus and its lock).
+  // False: cardKind() read again.
   bool probeCard();
+  // When the card didn't mount, what its first sectors say it is
+  // (cardformat: read at begin() and at each failed probeCard()).
+  // cardNotFat32(): a card is in, but exFAT, NTFS or a GPT: the empty
+  // state says "This card isn't FAT32" instead of "No microSD card".
+  cardformat::Kind cardKind() const { return cardKind_; }
+  bool cardNotFat32() const { return cardformat::notFat32(cardKind_); }
   // The mounted volume's size in bytes (0: none), for About.
   uint64_t totalBytes() const;
   // The VFS mount point ("/sd", "/littlefs"): a path the fs sees as
@@ -50,4 +58,9 @@ private:
   const char* name_ = "none";
   const char* mount_ = "";  // the VFS mount point: "/sd", "/littlefs"
   bool stateDirMade_ = false;
+  cardformat::Kind cardKind_ = cardformat::Kind::Unreadable;
+
+  // SD.begin() failed: the card's sectors 0 (and its type 0x07 partition's
+  // first), read raw, into cardKind_.
+  void lookAtCard(int cs);
 };

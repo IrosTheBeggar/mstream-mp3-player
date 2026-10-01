@@ -62,7 +62,9 @@ Where the numbers come from:
   app grew by about 28 KB (2.12 to 2.15 MB, 36 % of a 6 MB slot); all of the
   converter's code is in flash (no IRAM: iram_diet unchanged, IRAM 124,867
   bytes as before the converter) and its tables in flash data, copied into
-  internal RAM the first time a track at another rate plays (section 10).
+  internal RAM the first time a track at another rate plays (section 10;
+  since v0.5.0 the copy is freed when a 44.1 kHz track starts and made
+  again at the next track at another rate: section 10c).
 
 ## 1. Decisions
 
@@ -432,9 +434,9 @@ MAC16's 16 x 16 multiply, and in C it saves no instructions.
 
 - **Tables in flash**: 7,874 bytes in all (D147 7,104, U12 672, HB96 36,
   HB88 62). A 6 MB slot is 36 % used. The firmware copies D147 and U12
-  into internal RAM (7,776 bytes) the first time a track at another rate
-  plays, and keeps them: read from flash, D147 evicts the decoder from the
-  cache (section 10).
+  into internal RAM (7,776 bytes) when a track at another rate starts, and
+  frees them when a 44.1 kHz track starts (section 10c): read from flash,
+  D147 evicts the decoder from the cache (section 10).
 - **Code**: 8.1 KB at `-Os` for `RateConverter` (4.3 KB before section
   10: now the block path with each kernel, the MAC16 kernel and its
   self-test) and 1.5 KB for `RingFeed`, all in flash.
@@ -1153,11 +1155,11 @@ with the block path; as built it differs from the plan below (section
 - **Measurements of an MP3's load depend on what ran since boot** (up to
   6 points after the scroll lab: section 10b, 6): an A/B starts each run
   from a fresh boot with the same sequence.
-- **The tables' copy in internal RAM** (7,776 bytes, kept from the first
-  track at another rate until a restart): 57 K of internal heap free while
-  an MP3 plays, against 65-66 K without it. It could be freed when a
-  44.1 kHz track starts, at the cost of a 7.6 KB allocation at each change
-  of rate.
+- **The tables' copy in internal RAM** (7,776 bytes): 57 K of internal
+  heap free while an MP3 plays, against 65-66 K without it, when it was
+  kept until a restart. Since v0.5.0 it is freed when a 44.1 kHz track
+  starts, at the cost of a 7.6 KB allocation at each change of rate; when
+  that allocation fails the tables are read from flash (section 10c).
 - **Why the 441-row table went.** The first design had a direct 441-row
   upsampling table for 8/16/32 kHz (21.2 KB). That is larger than one 16 KB
   way of the 2-way 32 KB cache that the decoder's code and PSRAM data share
@@ -1353,7 +1355,8 @@ is ELF 3bdea34d (v0.5.0-dev+771f8ae-dirty).
   copies; the firmware makes them the first time a stream at another rate
   is configured (`setTablesWanted()`, on the decode task) and keeps them
   until a restart: 7,776 bytes of internal heap. Without the room they
-  stay in flash (the same bits, slower).
+  stay in flash (the same bits, slower). (v0.5.0 frees them at a 44.1 kHz
+  track's start: section 10c.)
 - **Test tones are paced like files** (`produceTone()` uses
   `RefillPacer`): flat out to 500 ms, then at most 1.5x realtime until the
   ring is first full, so a 32 or 8 kHz tone's start no longer takes most
@@ -1591,7 +1594,8 @@ converter's of a 48 kHz MP3 at the same bitrate.
   `new` in internal RAM (asserted).
 - The tables' copy: 7,776 bytes of internal heap from the first track at
   another rate until a restart. Internal RAM free while an MP3 plays: 57 K
-  with it, 65-66 K without (the old build: 67-69 K).
+  with it, 65-66 K without (the old build: 67-69 K). (v0.5.0: freed at a
+  44.1 kHz track's start, section 10c.)
 - The app grew by about 8 KB (2.15 MB, 36 % of a 6 MB slot). IRAM is
   124,867 bytes, as before the converter; static DRAM grew by 96 bytes.
 
@@ -1799,3 +1803,59 @@ a core more (2.3 %), a FLAC 0.3-0.4 more, and scrolling with the MP3 is
   44.1 kHz (no plan copy in `roomFor()`, `publishRate()` only on a change)
   and then the same counters again. The +0.8 points is 2.3 % of an MP3's
   load; whether that is worth it is the user's call.
+
+## 10c. v0.5.0: the tables' copy freed at a 44.1 kHz track
+
+Decided for v0.5.0: the 7,776-byte copy of D147 and U12 in internal RAM
+lives only while a track at another rate plays, so the usual library
+(44.1 kHz throughout) gets those 7.6 KB back for everything else.
+
+- **When.** `RateConverter::setRate()` calls the tables-wanted hook before
+  it configures a route: `wanted = true` for a route that reads the tables
+  (every rate but 44.1 and 88.2 kHz, at a stream's first rate or a change
+  mid-stream), `wanted = false` only at a stream's first rate after
+  `reset()` (44.1 kHz, 88.2 kHz's halfband alone, a refused rate).
+  `TableCopy` (lib/core) makes the copy on `true` if there is none, and on
+  `false` points the converter back at flash (`useTables(nullptr, ...)`)
+  and then frees it. A change to 44.1 kHz mid-stream never frees: a block
+  of the old rate may still be on its way through.
+- **No track reads a freed copy.** The firmware has one converter
+  (RingOutput's), on the decode task, which also runs the hook. `reset()`
+  comes first at every start, skip, seek and stop (after the ring's
+  `discardAll()`), and after it nothing of the stream before can run; the
+  hook runs before `configure()` reads the table pointers, and a stage
+  that doesn't read a table holds none (`polyA_.rows` is cleared). The
+  bench (`Rb`) uses the same converter with nothing playing, so it copies
+  and frees as its routes come.
+- **No room** (a fragmented heap: no 7,776-byte block): the flash tables,
+  the same bits, only slower (a 48 kHz MP3 then costs about 59 % of a core
+  at 240 MHz instead of 45 %: section 10). The log says so once per boot
+  (`[rate] no 7776 B block of internal RAM ...`, with the largest block);
+  each later converted track tries again, quietly; the console's `R`
+  says where the tables are read from now and how many copies found no
+  room since boot. A copy made or freed is logged too, with the internal
+  heap free and its largest block after it.
+- **The cost of freeing.** Kept from the first converted track to the
+  restart (beta.1), the copy could not be lost to fragmentation; freed at
+  every 44.1 kHz track, it must find a 7,776-byte block again at the next
+  48 kHz one. At 240 MHz the flash path (59 % of a core) leaves room. At
+  160 MHz (Battery saver) a 48 kHz MP3 already takes about 64 % of core 1
+  with the RAM tables (section 10b), so on the flash path it could
+  underrun. The
+  user decided to free it for v0.5.0; the logs and `R` above make it
+  visible if it happens.
+- **Host tests:** test_rate_converter checks when the hook is called and
+  with what, at every kind of start and change; runs ten tracks of mixed
+  rates through `TableCopy` with an allocator that poisons what it frees
+  (a read of a freed copy would change the bits) against the flash
+  tables' output; and fails the allocation, and hands out an unaligned
+  block, to check the flash fallback and the one log. test_ring_feed plays
+  tracks through the feed in both call orders (an MP3's frames before its
+  rate) with the copy swapped between them.
+- **Not measured on the device yet**: the allocation's cost at a change of
+  rate (a 7.6 KB `heap_caps_malloc` and `memcpy` from flash: well under a
+  millisecond expected) and the heap after a long mixed session (44.1 and
+  48 kHz tracks, Bluetooth reconnecting, at 160 MHz): the largest block
+  at each "copied" and "freed" line. If it ever comes near 7,776 bytes,
+  keep the copy while the CPU is at 160 MHz, or free it only when the
+  internal heap is short.

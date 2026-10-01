@@ -54,6 +54,7 @@ struct AppState {
   char btDetail[40] = "";        // "SBC 44.1 kHz, 175 ms" while connected
   // Storage and the library.
   bool card = false;             // a microSD card is mounted (not the flash fallback)
+  bool cardNotFat32 = false;     // none mounted, but one is in that isn't FAT32 (LocalStorage::cardNotFat32())
   uint32_t libraryTracks = 0;
   // The rest.
   uint8_t battery = 0;
@@ -156,8 +157,9 @@ public:
   virtual bool btPairWith(const BtDevice& d) = 0;
 
   // ---- the card, the library ----
-  // "Try again" with no card: false if there still is none (with one, the
-  // firmware restarts to use it).
+  // "Try again" with no card: false if there still is none, or it still
+  // doesn't mount (the next snapshot's cardNotFat32 says which); with one
+  // the firmware restarts to use it.
   virtual bool retryCard() = 0;
   // "Try again" with no music: walks /music again (the queue follows).
   virtual void rescanLibrary() = 0;

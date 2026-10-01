@@ -123,6 +123,15 @@ public:
     uint32_t taken, made, clamped;
   };
   RateStatus rateStatus() const;
+  // Where the converter's tables are read from (the console's R; any task):
+  // the internal-RAM copy, or flash (none wanted, or no room for one), and
+  // the copies that found no room since boot (logged only the first time:
+  // a converted track that stutters after it shows here).
+  struct TableStatus {
+    bool inRam;
+    uint32_t noRoom;
+  };
+  static TableStatus tableStatus();
 
   void setOutput(Output output);
   Output output() const { return output_; }

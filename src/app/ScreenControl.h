@@ -106,8 +106,9 @@ public:
     return i;
   }
   // External power: USB (ACIN) or VBUS present, as read once a second (the
-  // AXP192's power status). Not read yet counts as present: the idle
-  // power-off never acts on a guess.
+  // power chip's status: the AXP192's ACIN or VBUS, the AXP2101's VBUS; a
+  // chip M5Unified doesn't name counts as present). Not read yet counts as
+  // present: the idle power-off never acts on a guess.
   bool externalPower() const { return usb_ != 0; }
   // The same, read now (the idle power-off's last check).
   static bool readExternalPower();

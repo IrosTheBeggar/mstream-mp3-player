@@ -15,6 +15,7 @@
 #include "PcmRing.h"
 #include "RateConverter.h"
 #include "RingFeed.h"
+#include "TableCopy.h"
 
 namespace {
 using Frames = std::vector<int16_t>;  // interleaved stereo
@@ -578,6 +579,58 @@ void test_held_frames_keep_their_rate_and_channels() {
   assertSame(want, out);
 }
 
+// The firmware's table copy (TableCopy) across tracks played through the
+// feed in both call orders: made when a converted track starts, freed when
+// a 44.1 kHz one does, after the feed's reset(); a freed block is poisoned
+// and kept, so a track reading it would differ from the flash tables' bits.
+namespace pool {
+std::vector<std::vector<uint32_t>> blocks;
+int live = 0;
+void* alloc(size_t bytes) {
+  blocks.emplace_back(bytes / 4 + 1, 0u);
+  ++live;
+  return blocks.back().data();
+}
+void release(void* p) {
+  for (auto& b : blocks) {
+    if (b.data() == p) std::fill(b.begin(), b.end(), 0x7FFF7FFFu);
+  }
+  --live;
+}
+}  // namespace pool
+TableCopy gCopy(pool::alloc, pool::release);
+int gFreed = 0, gCopied = 0;
+void copyHook(bool wanted) {
+  const TableCopy::Event e = gCopy.want(wanted);
+  gFreed += e == TableCopy::Event::Freed;
+  gCopied += e == TableCopy::Event::Copied;
+}
+
+void test_the_table_copy_is_swapped_only_at_a_track_start() {
+  const uint32_t tracks[] = {48000, 44100, 22050, 44100, 8000, 32000, 44100, 48000};
+  std::vector<Frames> src, want[2];
+  for (uint32_t hz : tracks) {
+    src.push_back(noise(hz / 6 + 11, hz + 3, 30000));
+    want[0].push_back(reference(hz, src.back()));  // (no hook yet: the flash tables)
+    Frames withZero(2, 0);
+    withZero.insert(withZero.end(), src.back().begin(), src.back().end());
+    want[1].push_back(reference(hz, withZero));
+  }
+  RateConverter::setTablesWanted(copyHook);
+  for (int mp3 = 0; mp3 < 2; ++mp3) {
+    for (size_t t = 0; t < sizeof(tracks) / sizeof(tracks[0]); ++t) {
+      assertSame(want[mp3][t], play(tracks[t], src[t], 900 + t, mp3 == 1));
+      TEST_ASSERT_EQUAL(tracks[t] != 44100, gCopy.copied());
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(6, gFreed);   // each 44.1 kHz track after a converted one
+  TEST_ASSERT_EQUAL_INT(7, gCopied);  // each converted track after a 44.1 kHz one (and the first)
+  gCopy.want(false);
+  RateConverter::setTablesWanted(nullptr);
+  TEST_ASSERT_EQUAL_INT(0, pool::live);
+  TEST_ASSERT_FALSE(RateConverter::tablesCopied());
+}
+
 void test_it_is_small() {
   // Inside RingOutput, which must stay under 4 KB (internal RAM).
   // (The converter ~1.9 KB, the stage 1 KB, the block 128 B.)
@@ -604,6 +657,7 @@ int main(int, char**) {
   RUN_TEST(test_silence_gives_exact_zeros);
   RUN_TEST(test_the_passthrough_goes_straight_to_the_stage);
   RUN_TEST(test_held_frames_keep_their_rate_and_channels);
+  RUN_TEST(test_the_table_copy_is_swapped_only_at_a_track_start);
   RUN_TEST(test_it_is_small);
   return UNITY_END();
 }

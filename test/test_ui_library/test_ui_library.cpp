@@ -338,6 +338,50 @@ void test_empty_state_texts_fit() {
   fits(small, kPickInLibrary, kEmptyLineW);
 }
 
+// No card, and a card that isn't FAT32: the empty state's title and lines,
+// and Try again's note when it still fails (Small before ": ", Body after).
+void test_no_card_texts_fit() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  fits(title, kNoCardTitle, kEmptyTitleW);
+  fits(title, kNotFat32Title, kEmptyTitleW);
+  for (const char* t : kNoCardLines) fits(small, t, kEmptyLineW);
+  for (const char* t : kNotFat32Lines) fits(small, t, kEmptyLineW);
+  fits(bold, kTryAgain, 320 - 140 - 12);  // the one button: x 70, 180 px, 6 px in at each end
+  for (const char* note : {kStillNoCard, kStillNotFat32}) {
+    const std::string n(note);
+    const size_t colon = n.find(": ");
+    TEST_ASSERT_TRUE(colon != std::string::npos);
+    fits(small, n.substr(0, colon).c_str(), kToastTwoLineW);
+    fits(body, note + colon + 2, kToastTwoLineW);
+  }
+  char msg[200];
+  snprintf(msg, sizeof(msg), "widths: titles %d, %d; lines %d, %d, %d, %d; notes %d, %d", title.width(kNoCardTitle),
+           title.width(kNotFat32Title), small.width(kNoCardLines[0]), small.width(kNoCardLines[1]),
+           small.width(kNotFat32Lines[0]), small.width(kNotFat32Lines[1]), body.width(kStillNoCard),
+           body.width(kStillNotFat32));
+  TEST_MESSAGE(msg);
+}
+
+// The board guard's screen (Font2, no wrap): every line at Font2's widest
+// glyph per character, printable ASCII only (Font2 has nothing else), the
+// "found: " line with the longest name BoardGuard allows.
+void test_board_guard_texts_fit() {
+  using namespace uitext;
+  auto fitsFont2 = [](const char* text, size_t extraChars) {
+    for (const char* p = text; *p; ++p) TEST_ASSERT_TRUE(*p >= 0x20 && *p < 0x7f);
+    const int w = static_cast<int>(strlen(text) + extraChars) * kFont2MaxAdvance;
+    char msg[120];
+    snprintf(msg, sizeof(msg), "\"%s\" (+%u chars): at most %d px in %d", text, (unsigned)extraChars, w,
+             kBoardGuardW);
+    TEST_ASSERT_TRUE_MESSAGE(w <= kBoardGuardW, msg);
+  };
+  for (const char* t : kBoardGuardTop) fitsFont2(t, 0);
+  fitsFont2(kBoardGuardFound, static_cast<size_t>(kBoardNameMaxChars));
+  for (const char* t : kBoardGuardStop) fitsFont2(t, 0);
+  fitsFont2(kBoardGuardToughHint, 0);
+}
+
 // The Queue's selection bar: Remove shows its count (with the icon up to
 // 99, without it beyond), and its header keeps the position.
 void test_queue_texts_fit() {
@@ -918,6 +962,8 @@ int main(int, char**) {
   RUN_TEST(test_coach_texts_fit);
   RUN_TEST(test_toast_names_fit);
   RUN_TEST(test_empty_state_texts_fit);
+  RUN_TEST(test_no_card_texts_fit);
+  RUN_TEST(test_board_guard_texts_fit);
   RUN_TEST(test_queue_texts_fit);
   RUN_TEST(test_output_texts_fit);
   RUN_TEST(test_waiting_texts_fit);

@@ -545,11 +545,7 @@ bool LibraryPage::emptyState(EmptyState& e) {
   if (!root() || !real()) return false;
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
-    e.icon = &icons::kSdCard;
-    e.title = "No microSD card";
-    e.line1 = "Insert a card with your music in /music,";
-    e.line2 = "as /music/Artist/Album/01 - Title.mp3";
-    e.buttons[0] = "Try again";
+    noCardState(e, s.cardNotFat32);
     return true;
   }
   if (s.libraryTracks == 0) {
@@ -568,11 +564,7 @@ void LibraryPage::onEmptyAction(int i) {
   (void)i;
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
-    if (ui_.host().retryCard()) {
-      ui_.toast("Card found: starting again", false);
-    } else {
-      ui_.warn("Still no card: is it all the way in?");
-    }
+    ui_.retryCard();
     return;
   }
   ui_.toast("Looking in /music again...", false);

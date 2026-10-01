@@ -8,9 +8,13 @@
 #include <SD.h>
 #include <SPI.h>
 #include <dirent.h>
+#include <sd_diskio.h>
 #include <sys/stat.h>
 
 #include <cstring>
+
+#include "diskio.h"  // FatFs: disk_initialize(), disk_read() (after ff.h's ffconf names them)
+#include "ff.h"
 
 namespace {
 constexpr const char* kMusicDir = "/music";
@@ -19,6 +23,13 @@ constexpr const char* kSdMount = "/sd";
 constexpr const char* kFlashMount = "/littlefs";
 // The VFS path: the mount point, then what the callback sees ("/music/...").
 constexpr size_t kPathMax = 300;
+constexpr uint32_t kSdHz = 25000000;
+
+// One sector of a card that didn't mount, through the SD driver's FatFs
+// disk (cardformat's reader; ctx: the drive number).
+bool readRawSector(uint32_t lba, uint8_t* out, void* ctx) {
+  return disk_read(*static_cast<const uint8_t*>(ctx), out, lba, 1) == RES_OK;
+}
 
 struct Walk {
   char path[kPathMax];
@@ -85,11 +96,14 @@ bool LocalStorage::begin() {
   const int cs = M5.getPin(m5::pin_name_t::sd_spi_cs);
   SPI.begin(M5.getPin(m5::pin_name_t::sd_spi_sclk), M5.getPin(m5::pin_name_t::sd_spi_miso),
             M5.getPin(m5::pin_name_t::sd_spi_mosi), cs);
-  if (SD.begin(cs, SPI, 25000000, kSdMount)) {
+  if (SD.begin(cs, SPI, kSdHz, kSdMount)) {
     fs_ = &SD;
     name_ = "SD";
     mount_ = kSdMount;
-  } else if (LittleFS.begin(true /* format the partition if it has never been used */, kFlashMount)) {
+    return true;
+  }
+  lookAtCard(cs);  // a card that isn't FAT32 says so (the empty state)
+  if (LittleFS.begin(true /* format the partition if it has never been used */, kFlashMount)) {
     fs_ = &LittleFS;
     name_ = "flash";
     mount_ = kFlashMount;
@@ -100,9 +114,30 @@ bool LocalStorage::begin() {
 bool LocalStorage::probeCard() {
   if (onCard()) return true;
   const int cs = M5.getPin(m5::pin_name_t::sd_spi_cs);
-  if (!SD.begin(cs, SPI, 25000000, kSdMount)) return false;
+  if (!SD.begin(cs, SPI, kSdHz, kSdMount)) {
+    lookAtCard(cs);
+    return false;
+  }
   SD.end();  // only a look: the restart mounts it properly
   return true;
+}
+
+void LocalStorage::lookAtCard(int cs) {
+  const uint32_t t0 = millis();
+  cardKind_ = cardformat::Kind::Unreadable;
+  // The same driver SD.begin() used (it let go of its drive when the mount
+  // failed), without the mount: the card initialised, its sectors read.
+  uint8_t pdrv = sdcard_init(static_cast<uint8_t>(cs), &SPI, kSdHz);
+  if (pdrv != 0xFF) {
+    if ((disk_initialize(pdrv) & STA_NOINIT) == 0) {
+      uint8_t sector[cardformat::kSectorBytes];
+      cardKind_ = cardformat::classify(readRawSector, &pdrv, sector);
+    }
+    sdcard_uninit(pdrv);
+  }
+  Serial.printf("[storage] no card mounted; its first sectors: %s%s (%lu ms)\n", cardformat::name(cardKind_),
+                cardformat::notFat32(cardKind_) ? ": not FAT32 (MBR), the pages say so" : "",
+                (unsigned long)(millis() - t0));
 }
 
 uint64_t LocalStorage::totalBytes() const {

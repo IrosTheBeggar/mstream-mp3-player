@@ -41,6 +41,8 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/PowerProbe + app/PowerLab (power measurement, console P) |
               |  app/ScreenControl (the screen policy: backlight, sleep)      |
               |  app/BoardPower (IMU suspended, EXTEN off at boot)            |
+              |  app/BoardGuard (not a Core2: says so, stops)                 |
+              |  app/NvsSchema (the NVS layout's number, migrations)          |
               |  app/IdlePower (the idle power-off: setting, note, power off) |
               |  app/PowerSettings (CPU speed, Bluetooth power: NVS, restart) |
               |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
@@ -208,8 +210,10 @@ The rules that keep it deadlock- and glitch-free:
   goes straight into the stage, as before the converter; frames at another
   rate are held 32 at a time and converted as a block, on the ESP32 by a
   MAC16 assembly kernel that a self-test at boot checks against the C one,
-  bit for bit, with the filter tables copied into internal RAM the first
-  time a track at another rate plays (7.6 KB, kept). `RingOutput`
+  bit for bit, with the filter tables copied into internal RAM while a
+  track at another rate plays (7.6 KB: copied when one starts, freed when
+  a 44.1 kHz track starts, read from flash when there's no room;
+  RESAMPLER.md section 10c). `RingOutput`
   (3.1 KB) must stay in internal RAM, so it is asserted under 4 KB (the
   framework puts a `new` of 4 KB or more in PSRAM). The console's `R` shows
   the current track's conversion (source frames taken, ring frames made,
@@ -692,9 +696,11 @@ The device turns itself off after N minutes idle (docs/ENERGY.md item 4;
 `IdlePolicy`, host-tested in test_idle_policy): "Turn off when idle" on the
 Output tab, 10 / **20** / 60 min / Never, saved (NVS "power"/"idle_after",
 `app/IdlePower`). Idle means all of these: the player Stopped or Paused
-(not Playing, not Waiting for the headphones); not on USB (the AXP192's
-power status, ACIN or VBUS, read once a second by `ScreenControl`; not read
-yet counts as USB); no Pair screen scan or pairing; no queue write under way
+(not Playing, not Waiting for the headphones); not on USB (the power
+chip's status, read once a second by `ScreenControl`: by
+`M5.Power.getType()`, the AXP192's ACIN or VBUS, the AXP2101's VBUS (the
+Core2 v1.1 has no ACIN), and any other chip counts as USB, so a board it
+can't read never powers itself off; not read yet counts as USB); no Pair screen scan or pairing; no queue write under way
 or edit waiting (`QueueStore::busy()`; not a write that failed and waits its
 retry); no screen of its own (calibration, a spike tool). Anything that
 blocks restarts the countdown when it goes, and so does any input: a touch
@@ -843,6 +849,53 @@ file). The player's own files live in `/.player` on the same volume:
 `library.idx` (the index's cache), `queue.txt`, and `thumbs/` (the album
 covers' thumbnails, below).
 
+**A card that isn't FAT32.** The framework's FatFs is built without exFAT
+and without GPT (`FF_FS_EXFAT 0`, `FF_LBA64 0`), so such a card doesn't
+mount, and most cards of 64 GB and up come exFAT. When `SD.begin()` fails,
+`LocalStorage` initialises the card through the same SD driver
+(`sdcard_init()`, FatFs's `disk_initialize()`) and reads sector 0 raw;
+`cardformat` (lib/core, host-tested in test_card_format on synthetic
+sectors) says what it is: an exFAT boot sector at LBA 0, an MBR partition
+of type 0x07 whose first sector is exFAT's ("EXFAT   ") or NTFS's, or a
+GPT's protective MBR (a partition of type 0xEE). Any of those and the
+no-card state of Now Playing, the Library and the Queue reads "This card
+isn't FAT32" ("Format it FAT32 (MBR) on a computer, then put your music in
+/music and tap Try again."), not "No microSD card"; with no card, or
+nothing recognised (a FAT card that failed for another reason), the plain
+message stays. Try again reads the sectors again when the card still
+doesn't mount, so its note follows what is in ("Still not FAT32: ..." or
+"Still no card: ..."). The texts are measured in test_ui_library. The log:
+`[storage] no card mounted; its first sectors: exFAT: not FAT32 (MBR), the
+pages say so (<n> ms)`. Console `uiFf` shows the state without such a card.
+
+## The board guard
+
+The firmware assumes a Core2 everywhere (pins, power chip, panel, speaker).
+`board::requireCore2()` (app/BoardGuard), right after `M5.begin()`: when
+`M5.getBoard()` isn't `board_M5StackCore2` (any Core2: the AXP192 units and
+the AXP2101 v1.1), it draws "This firmware is for the M5Stack Core2" and
+"found: <board>" on whatever display M5Unified gave that board, logs it
+(with the power chip), and stops there, before the SD card, the audio and
+Bluetooth start: a loop that sleeps and repeats the log line every 10 s,
+never a reboot loop. With a power chip M5Unified drives (an AXP192 or
+AXP2101: a Tough, or a misread Core2) it powers off after a minute on
+battery, so a stopped unit doesn't drain it; on USB it stays on.
+
+- **The screen's text** is in UiText, in Font2 (M5GFX's bitmap font: the
+  VLW fonts need PSRAM, which a Basic lacks), one line per piece with no
+  wrap on a 320 px display; test_ui_library measures every line at Font2's
+  widest glyph per character, the "found:" line with the longest board
+  name BoardGuard allows (a static_assert there). A narrower display (a
+  StickC) gets the 6x8 font, wrapped.
+- **A Core2 M5GFX misreads** (both rare): with a module on the M-Bus that
+  answers at I2C 0x2E, the Tough's touch address, it reads as a Tough
+  (the screen adds "A Core2? Take off its modules."); when its panel
+  doesn't answer the probe at boot, M5Unified guesses a TimerCam from the
+  ESP32's package, and there is no display (the log says to power it off
+  and on). The guard stops both: neither could be used as it was (the
+  Tough's touch driver, no screen), and a Tough is told apart from a
+  misread Core2 by nothing M5Unified offers.
+
 ## Flash layout
 
 The 16 MB flash, as `partitions.csv` lays it out. **The table can never
@@ -919,6 +972,52 @@ the table at 0x8000, so every unit keeps the layout it was installed with.
   `esp_ota_mark_app_valid_cancel_rollback()` once the new app has shown it
   works (the UI up, audio started, the next sync reachable), so a build that
   crashes at boot rolls back to the old slot by itself.
+
+### NVS: the rules
+
+What the firmware keeps in NVS survives every update (it sits above
+anything an image writes), so its layout is versioned like a file format.
+The schema number is `"meta"/"schema"`, a u16 (`nvslayout` in lib/core,
+host-tested in test_nvs_layout; `app/NvsSchema`). At every boot, right
+after `ensureNvs()` and before anything else reads NVS, it is checked:
+absent (a fresh NVS, or v0.5.0-beta.1's, which had no number and whose
+layout is schema 1's) it is written; older, `migrate(from, to)` runs and
+then the number is written (a failed step leaves the old number, so the next
+boot tries again); newer (a downgrade) it is left alone. The boot log says
+which (`[nvs] schema 1`). Schema 1 is v0.5.0's layout, which is
+beta.1's plus one change that a version byte covers, not the number: the
+resume point (`queue`/`resume`) is a 24-byte version-1 blob once v0.5.0
+has saved one, and until then may still be beta.1's 20-byte one. So a
+schema-1 unit holds either form, and every reader of schema 1 (and any
+`migrate(1, ...)` step) must take both. `migrate()` has no step yet. The
+rules:
+
+- **Never reuse a key name** (or a namespace) for anything else, even after
+  the key is gone: an old unit may still hold the old value under it. A
+  new meaning gets a new name; a retired key is removed by a migration
+  step, and its name stays retired.
+- **Bump the schema for any layout change**: a key's type, size or
+  meaning, a blob's fields, a key moved between namespaces. Add the step
+  to `migrate()`; a step must leave NVS readable by the firmware that wrote
+  the old layout where it can (a downgrade happens). The one exception is
+  the next rule's: a blob that carries its own version byte may gain a
+  version without a bump, as long as readers keep reading every older
+  version; the schema text says which versions it allows.
+- **Blobs carry their own version** and are read by size and version, old
+  ones too: the touch calibration (`"TCAL"`, a version byte) and the resume
+  point (since v0.5.0 a version byte first, 24 bytes; beta.1's
+  unversioned 20 bytes are still read; anything else is ignored, as if
+  none were saved). A downgrade loses what it can't read: beta.1 reads
+  only the 20-byte form, so going back from v0.5.0 to beta.1 starts with
+  no resume point (nothing else is lost).
+- Keys are at most 15 characters (NVS's limit).
+
+The keys of schema 1, by namespace: `meta` (schema); `input` (cal,
+cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
+ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu_mhz,
+bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
+(coach); `queue` (gen, pos, resume). The Bluetooth stack keeps its bonds in
+its own namespace, which the firmware never touches.
 
 ### Moving an existing unit to the new layout
 
@@ -1754,7 +1853,9 @@ Queue, Dance and Output (with its Pair and About pages).
   shows its source's empty state (a disc and icon, a title, a line or two,
   up to two buttons, drawn in strips through the scroll mapping): the
   Queue's "Your queue is empty" (Open Library, Shuffle all), the Library's
-  "No music found" and, with no card, "No microSD card" (Try again). A
+  "No music found" and, with no card, "No microSD card" (Try again), or
+  "This card isn't FAT32" when one is in that doesn't mount (exFAT, NTFS,
+  a GPT). A
   row can have buttons of its own (the Output card's): the source gets
   where on the row it was tapped (`onTapAt()`) and where a finger presses
   (`Row::pressX`).
@@ -1883,7 +1984,8 @@ Queue, Dance and Output (with its Pair and About pages).
   plain icon while the search rests (`tabbar::outputFor()`, host-tested).
 - **States** (spec §7): no microSD card (and no music on the flash
   fallback): the Library, and the Queue and Now Playing while nothing is
-  queued, show "No microSD card" and **Try again**, which looks for a card
+  queued, show "No microSD card" (or "This card isn't FAT32" when one is
+  in that doesn't mount: exFAT, NTFS, a GPT) and **Try again**, which looks for a card
   (`LocalStorage::probeCard()`, never inside an LCD hold) and restarts the
   player to use it (the backend, the library and the queue were set up on
   the flash); no automatic re-check (an SD init with no card could hold
@@ -1972,10 +2074,11 @@ Queue, Dance and Output (with its Pair and About pages).
   overlays, the covers (above) and the loop task's unused stack. `ui0`-`ui4`
   tap a tab, `uib` goes back, `uic` shows the coach cards, `uiT` decodes
   the covers again (their timings), `uiV` shows the volume HUD, and
-  **`uiF<c/s/p/r/l/n/w>`** shows a faked state for screenshots of what a test
+  **`uiF<c/s/p/r/l/n/f/w>`** shows a faked state for screenshots of what a test
   can't safely cause (display only: the radio and the card are left
   alone): the Bluetooth card connecting, searching, pairing or resting, the
-  headphones lost (with the dialog), no card (on Now Playing), or a play
+  headphones lost (with the dialog), no card or a card that isn't FAT32
+  (on Now Playing), or a play
   waiting for the headphones (Now Playing's panel and spinner); `uiF0`
   the real state. **`uil<n>`**: the Library browses a synthetic
   library of n tracks (the spike's `g<n>`: 6 artists and 15 albums per 100
@@ -2150,7 +2253,10 @@ their own (the player stopped first, so nothing follows them).
   `lib_archive = yes` (pioarduino otherwise links every library object), and
   `tools/iram_diet.py`, which moves the libc functions that the rev-1 PSRAM
   workaround pins in IRAM back to flash (this rev-3 chip doesn't need it).
-  About 7 KB of IRAM is left. Adding WiFi will need more: likely pioarduino's
+  It fails the build when it moves nothing (a toolchain or framework update
+  changed the objects: its docstring says what to do) and warns about any
+  name that no longer matches; a build logs `iram_diet: 51 of 51 libc
+  objects moved to flash`. About 7 KB of IRAM is left. Adding WiFi will need more: likely pioarduino's
   `custom_sdkconfig` to rebuild the framework without the workaround.
 - **`tools/flash_guard.py`** checks the flash layout after every build: the
   app's room in its slot, the merged `firmware.factory.bin`, NVS above it
