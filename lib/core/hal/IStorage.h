@@ -1,19 +1,15 @@
-#pragma once
-#include <vector>
-#include "Track.h"
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
 
-// HAL seam for the music library source. On-device this is the SD card; when
-// docked, the card is handed to the host as USB mass-storage and `available()`
-// goes false until it is reclaimed.
+#pragma once
+
+// HAL seam for local storage. On the Core2 this is the SD card, or the
+// internal-flash filesystem when no card is inserted. What's on it is read
+// into the LibraryIndex (the library's single store), not listed here.
 class IStorage {
 public:
   virtual ~IStorage() = default;
 
   virtual bool begin() = 0;
-  virtual std::vector<Track> listTracks() = 0;
   virtual bool available() const = 0;
-
-  // Release/reclaim the card around a USB-MSC dock handoff.
-  virtual void releaseToHost() = 0;
-  virtual void reclaim() = 0;
 };

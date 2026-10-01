@@ -1,0 +1,221 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
+#pragma once
+#include <cstdint>
+
+#include "ButtonGesture.h"
+#include "InputEvent.h"
+#include "ScreenPower.h"
+#include "StripButtons.h"
+#include "TouchCalibration.h"
+#include "TouchRecognizer.h"
+#include "app/Haptics.h"
+
+// The one input layer (the tab bar spec's dispatcher, §10.1). It alone reads
+// the touch panel; everything downstream gets InputEvents from poll():
+//
+//   - the glass: every touch point is corrected (TouchCalibration: none
+//     until the owner calibrates; the user's panel reads x up to ~45 px
+//     too far right) before anything hit tests it, then TouchRecognizer makes Down, Tap, LongPress, Release,
+//     DragStart/Move/End and Fling (capped at 2,000 px/s) of it;
+//   - the buttons (the strip below the LCD, raw y >= 240): StripButtons
+//     makes their presses from the same touch point (only a touch that
+//     went down there, and stays put; never a swipe from the glass; a
+//     swipe UP from the strip is handed to the glass as a drag, so a scroll
+//     that starts on the strip scrolls: InputEvent::fromStrip), then
+//     ButtonGesture makes Click, Hold (500 ms), Repeat (A and C, every
+//     200 ms) and HoldEnd; ButtonPolicy (main.cpp) decides what they do.
+//     M5Unified's BtnA/B/C are not read (they press for any point in the
+//     strip, a swipe's end too); only the input lab looks at them. Like the
+//     glass, only the panel's first touch point counts: a second finger
+//     pressing the strip does nothing (and is logged).
+//
+// A strip touch that doesn't count is logged ("[button] ignored: ..."), and
+// so is a swipe handed over ("[button] B at x,y (raw): a swipe from the
+// strip (n px): scrolling").
+//
+// The feedback, as the user chose it: a tap tick (33 ms, strong) and, the
+// moment a hold is recognised, a double tick. The buttons' is played once
+// ButtonPolicy has acted (buttonFeedback()): a click with nothing to play
+// gets a short double buzz instead ("inert", spec §4 and §7). The glass's is played by
+// whatever acts on the touch (tapTick(), holdTick()), so a tap on nothing,
+// or a long press on a control that has no hold, doesn't confirm anything.
+// Nothing on scroll frames; the A-Z rail asks for a tick per new letter
+// (railTick()). Both can be turned off (saved).
+//
+// The screen's wake (docs/ENERGY.md item 2): a finger that lands while a
+// touch doesn't act (setLit(false): dim, off, or lit by an event nobody
+// has answered) only wakes it. The latch (WakeLatch) drops every event of
+// that touch, its lift included, and of any other finger until none has
+// been on for 400 ms; the recognisers keep following, so nothing fires
+// afterwards. takeWake() hands the wake to the screen policy. A finger
+// already resting as the screen dimmed is taken too (its touch ends with
+// a Cancel), but it isn't a wake. The scripted finger isn't a finger
+// here: it acts in the dark.
+//
+// Saved in NVS (namespace "input"): the touch calibration ("cal", the
+// TouchCalibration bytes; no correction when absent), whether the first
+// boot's touch check was answered ("cal_ask": TouchCheck), "haptics" and
+// "railtick". Loop task only.
+class Input {
+public:
+  explicit Input(Haptics& haptics) : haptics_(haptics) {}
+
+  // Loads the settings and the calibration.
+  void begin();
+  // Every loop pass, after M5.update(): samples the touch panel (the glass
+  // and the button strip), queues their events.
+  void update(uint32_t nowMs);
+  // The next event, oldest first. False when there is none.
+  bool poll(InputEvent& e);
+
+  // Something else reads the panel and the buttons itself (the input lab):
+  // no events, no feedback. The recognisers keep following the finger and
+  // the buttons, so a press that began before doesn't fire afterwards.
+  void setSuspended(bool on) { suspended_ = on; }
+  bool suspended() const { return suspended_; }
+  // Before update(), every pass: whether a touch acts now
+  // (ScreenPower::touchActs()). A finger landing while it doesn't is a wake.
+  void setLit(bool lit) { lit_ = lit; }
+  // A finger woke the screen in the last update(): where it landed (what
+  // the panel read), once. Its events, and every other finger's until all
+  // lift, are dropped.
+  bool takeWake(int* rawX, int* rawY);
+  // The wake's touch is still being swallowed.
+  bool swallowing() const { return latch_.holding(); }
+  // A finger that acts is on the panel (a real one not being swallowed, or
+  // the scripted finger) and has just landed or moved (FingerActivity: one
+  // resting still for 15 s stops counting): input for the screen's
+  // countdown.
+  bool touching() const { return touching_; }
+  // A touch landed on the glass in the last update() and acts (not a
+  // swallowed one, not a swipe from the strip): the listener is looking
+  // (ScreenPower::attend()).
+  bool glassLanded() const { return glassLanded_; }
+  // A screen changed under the finger: the touch ends with a Cancel event,
+  // and nothing more comes of it until it lifts.
+  void cancelTouch(uint32_t nowMs);
+  // The touch in progress has nothing to hold (the A-Z rail): no LongPress
+  // for it (TouchRecognizer::noHold()).
+  void noHold() { glass_.noHold(); }
+
+  // ---- settings (saved) ----
+  bool hapticsOn() const { return hapticsOn_; }
+  void setHapticsOn(bool on);
+  bool railTicksOn() const { return railTicks_; }
+  void setRailTicksOn(bool on);
+  // The A-Z rail reached a new letter: a tap tick if both are on.
+  void railTick();
+  // A glass tap did something: the tap tick.
+  void tapTick();
+  // A long press did something (it has a hold action): the double tick.
+  void holdTick();
+  // A tap that missed what it was asked for (the calibration's crosses):
+  // the inert buzz, two short softer pulses (buttonFeedback()'s).
+  void missBuzz();
+  // A touch button's event once ButtonPolicy has handled it: the tick for
+  // a click, the double tick for a hold; `acted` false (a click with
+  // nothing to play): the inert buzz.
+  void buttonFeedback(const InputEvent& e, bool acted);
+  // Not a touch's: the headphones asked for are connected (the double
+  // tick), or dropped while playing (one long buzz, 80 ms).
+  void connectedTick();
+  void alertBuzz();
+  // Whether holdTick() was called since the last call (the Ui: a long press
+  // nobody used ends as a tap).
+  bool takeHoldUsed();
+
+  // ---- touch calibration ----
+  const TouchCalibration& calibration() const { return cal_; }
+  bool calibrated() const { return custom_; }  // a table saved on this device, not the default
+  // Applies and saves a table; false (nothing changed) if it isn't valid or
+  // can't be saved.
+  bool setCalibration(const TouchCalibration& c);
+  // Back to the default, no correction (the saved table is erased).
+  void resetCalibration();
+  // The first boot's touch check was answered (done, skipped, not now;
+  // never by its 60 s close: TouchCheck's answers()): not asked again.
+  // Saved; false forgets it (console ab0).
+  bool touchCheckAnswered() const { return checkAnswered_; }
+  void setTouchCheckAnswered(bool on = true);
+
+  // "[input] ..." lines: the tables, the settings, events dropped.
+  void printStatus() const;
+
+  // ---- a scripted finger, for tests over the console (ui t/h/s/d/p) ----
+  // Replaces the panel until it lifts: lands on (x0, y0) (screen pixels,
+  // already corrected), rests there dwellMs, slides to (x1, y1) in moveMs,
+  // rests restMs, lifts. A fast slide that lifts at once is a fling (the
+  // recogniser measures its speed as a finger's). Points at y >= 240 are on
+  // the button strip and go through StripButtons like a finger's (a press
+  // there is a click or a hold; a swipe up from there scrolls). A real
+  // touch cancels it.
+  void simulate(int x0, int y0, int x1, int y1, uint32_t dwellMs, uint32_t moveMs, uint32_t restMs);
+  bool simulating() const { return sim_.on; }
+  // The last touch was the scripted finger's (for the log).
+  bool scriptedTouch() const { return scripted_; }
+  // The scripted finger on a skewed panel (console uk0/uk1/uk2), to run the
+  // touch check and the calibration end to end without a hand: its points
+  // are where the finger is, and the panel reads x as the input lab's did
+  // (TouchCalibration::labFitX()'s unmap(), clamped to 0-319, the edge
+  // flags from that), then the table in use corrects it as a real touch's.
+  // 2 adds a jitter of up to 4 px per touch (deterministic), so the fit
+  // isn't judged on perfect taps. 0: off (its points are already corrected).
+  void setSimSkew(uint8_t mode) { simSkew_ = mode > 2 ? 2 : mode; }
+  uint8_t simSkew() const { return simSkew_; }
+  // For the log: " scripted", " (scripted, skewed)" or "".
+  const char* scriptedNote() const;
+
+private:
+  static constexpr int kQueue = 8;
+
+  void push(const InputEvent& e);
+  void saveFlag(const char* key, bool on);
+
+  Haptics& haptics_;
+  TouchCalibration cal_ = TouchCalibration::defaults();
+  bool custom_ = false;
+  TouchRecognizer glass_;
+  StripButtons strip_;
+  ButtonGesture buttons_[3];
+  InputEvent queue_[kQueue];
+  uint8_t head_ = 0;
+  uint8_t count_ = 0;
+  uint32_t dropped_ = 0;
+  bool suspended_ = false;
+  // The screen's wake: the latch, whether the screen is lit, this pass's
+  // drop (suspended, or the latch holding), and the wake to hand over.
+  WakeLatch latch_;
+  bool lit_ = true;
+  bool drop_ = false;
+  bool touching_ = false;
+  bool glassLanded_ = false;
+  FingerActivity still_;
+  bool woke_ = false;
+  int16_t wakeX_ = 0, wakeY_ = 0;
+  bool hapticsOn_ = true;
+  bool railTicks_ = true;
+  bool checkAnswered_ = false;
+  bool holdUsed_ = false;
+  struct Sim {
+    bool on = false;
+    bool started = false;
+    uint32_t t0 = 0;
+    int16_t x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+    uint32_t dwell = 0, move = 0, rest = 0;
+  } sim_;
+  bool scripted_ = false;
+  uint8_t simSkew_ = 0;
+  uint8_t simTouches_ = 0;            // the jitter's step
+  int8_t jitterX_ = 0, jitterY_ = 0;  // this scripted touch's
+  // The finger of the first touch point last pass (the panel's id;
+  // kScriptedId for the scripted finger; -1 none), and the other fingers
+  // whose strip press was logged as ignored (a bit per id).
+  static constexpr int kScriptedId = 0x7f;
+  int touchId_ = -1;
+  uint8_t otherLogged_ = 0;
+  bool simSample(uint32_t nowMs, TouchRecognizer::Sample& s);
+  void updateButtons(uint32_t nowMs, const TouchRecognizer::Sample& s, bool newTouch);
+  void logOtherFingers(int firstId);
+};

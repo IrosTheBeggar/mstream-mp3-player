@@ -1,0 +1,669 @@
+{
+ "name": "crab (final: kawaii base, grafts from arcade and party)",
+ "license": "GPL-3.0-or-later",
+ "chars": ".kdrohwpbmltysga",
+ "transparent_index": 0,
+ "palette": [
+  {
+   "index": 0,
+   "char": ".",
+   "name": "transparent",
+   "rgb": "#000000"
+  },
+  {
+   "index": 1,
+   "char": "k",
+   "name": "outline",
+   "rgb": "#4a1624"
+  },
+  {
+   "index": 2,
+   "char": "d",
+   "name": "shade",
+   "rgb": "#b8303c"
+  },
+  {
+   "index": 3,
+   "char": "r",
+   "name": "red",
+   "rgb": "#ee5540"
+  },
+  {
+   "index": 4,
+   "char": "o",
+   "name": "orange",
+   "rgb": "#ff8648"
+  },
+  {
+   "index": 5,
+   "char": "h",
+   "name": "highlight",
+   "rgb": "#ffc48c"
+  },
+  {
+   "index": 6,
+   "char": "w",
+   "name": "white",
+   "rgb": "#fff8f0"
+  },
+  {
+   "index": 7,
+   "char": "p",
+   "name": "pupil",
+   "rgb": "#2a162c"
+  },
+  {
+   "index": 8,
+   "char": "b",
+   "name": "blush",
+   "rgb": "#ff8cb4"
+  },
+  {
+   "index": 9,
+   "char": "m",
+   "name": "mouth",
+   "rgb": "#8a1c30"
+  },
+  {
+   "index": 10,
+   "char": "l",
+   "name": "leg",
+   "rgb": "#d64838"
+  },
+  {
+   "index": 11,
+   "char": "t",
+   "name": "tongue",
+   "rgb": "#ff6e7e"
+  },
+  {
+   "index": 12,
+   "char": "y",
+   "name": "gold",
+   "rgb": "#ffd040"
+  },
+  {
+   "index": 13,
+   "char": "s",
+   "name": "shadow",
+   "rgb": "#3a2234"
+  },
+  {
+   "index": 14,
+   "char": "g",
+   "name": "ground",
+   "rgb": "#424142"
+  },
+  {
+   "index": 15,
+   "char": "a",
+   "name": "beat_dot",
+   "rgb": "#00ffff"
+  }
+ ],
+ "palette_idle": [
+  "#000000",
+  "#331920",
+  "#7c373d",
+  "#a5574c",
+  "#ba7c5c",
+  "#c9aa8e",
+  "#d7d3cf",
+  "#201621",
+  "#bf8499",
+  "#5c242e",
+  "#934b43",
+  "#b76d75",
+  "#c8b067",
+  "#3a2234",
+  "#424142",
+  "#00ffff"
+ ],
+ "scale": 3,
+ "box": {
+  "w": 120,
+  "h": 150,
+  "groundY": 142,
+  "origin": [
+   60,
+   145
+  ],
+  "note": "crab-native coords: x right from the box centre, y up from ORIGIN_Y (negative = up)"
+ },
+ "rig": {
+  "legs": [
+   -17,
+   -7
+  ],
+  "body": {
+   "body": [
+    -12,
+    -19
+   ],
+   "body_squash": [
+    -13,
+    -16
+   ],
+   "body_stretch": [
+    -11,
+    -21
+   ]
+  },
+  "eyes_dx": -8,
+  "eyes_above_body_top": 11,
+  "claw_right_x": 6,
+  "claw_left_x": -18,
+  "claw_left_flipped": true,
+  "claw_top_below_body_top": 9,
+  "claw_w": 12,
+  "claw_h": 11,
+  "arm_col_in_claw": 2,
+  "arm_w": 4,
+  "arm_end_below_body_top": 8,
+  "fx_w": 11,
+  "fx_above_claw_top": 6,
+  "shadow": {
+   "w": 66,
+   "shrink_per_px": 2.0,
+   "rows": [
+    144,
+    147
+   ]
+  }
+ },
+ "frames": {
+  "body": [
+   "........kkkkkkkk........",
+   ".....kkkrrrrrrrrkkk.....",
+   "....krrrrooorrrrrrrk....",
+   "...krhhrrrrrrrrrrrrrk...",
+   "..krhhorrrrrrrrrrrrrrk..",
+   ".krrhorrrrrrrrrrrrrrrrk.",
+   ".krrrrrrrrrrrrrrrrrrrrk.",
+   "krrrrrrrrrrrrrrrrrrrrrrk",
+   "krrbbrrrrrkrrkrrrrrbbrrk",
+   "krrrrrrrrrrkkrrrrrrrrrrk",
+   "krrrrrrrrrrrrrrrrrrrrrrk",
+   "kdrrrrrrrrrrrrrrrrrrrrdk",
+   ".kddrrrrrrrrrrrrrrrrddk.",
+   "..kkddddddddddddddddkk..",
+   "....kkkkkkkkkkkkkkkk...."
+  ],
+  "body_squash": [
+   ".........kkkkkkkk.........",
+   ".....kkkkrooorrrrkkkk.....",
+   "...kkhhrrrrrrrrrrrrrrkk...",
+   "..krhhorrrrrrrrrrrrrrrrk..",
+   ".krhorrrrrrrrrrrrrrrrrrrk.",
+   "krrrrrrrrrrrrrrrrrrrrrrrrk",
+   "krrrrrrrrrkmmmmkrrrrrrrrrk",
+   "krrbbbrrrrrmttmrrrrrbbbrrk",
+   "krrrrrrrrrrrkkrrrrrrrrrrrk",
+   "kdrrrrrrrrrrrrrrrrrrrrrrdk",
+   ".kddrrrrrrrrrrrrrrrrrrddk.",
+   "..kkddddddddddddddddddkk..",
+   "....kkkkkkkkkkkkkkkkkk...."
+  ],
+  "body_stretch": [
+   ".......kkkkkkkk.......",
+   "....kkkrooorrrrkkk....",
+   "...krhhrrrrrrrrrrrk...",
+   "..krhhorrrrrrrrrrrrk..",
+   "..khorrrrrrrrrrrrrrk..",
+   ".krrrrrrrrrrrrrrrrrrk.",
+   ".krrrrrrrrrrrrrrrrrrk.",
+   "krrrrrrrrrrrrrrrrrrrrk",
+   "krrrrrrrrrrrrrrrrrrrrk",
+   "krbbrrrrrrkkrrrrrrbbrk",
+   "krrrrrrrrkmmkrrrrrrrrk",
+   "krrrrrrrrrkkrrrrrrrrrk",
+   "kdrrrrrrrrrrrrrrrrrrdk",
+   ".kddrrrrrrrrrrrrrrddk.",
+   "..kkddddddddddddddkk..",
+   "....kkkkkkkkkkkkkk...."
+  ],
+  "eyes": [
+   "..www......www..",
+   ".wpppw....wpppw.",
+   "wpwwppw..wpwwppw",
+   "wpwwppw..wpwwppw",
+   "wpppppw..wpppppw",
+   "wpppwpw..wpppwpw",
+   ".wpppw....wpppw.",
+   "..www......www..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok.."
+  ],
+  "eyes_happy": [
+   "................",
+   "................",
+   "..www......www..",
+   ".wwkww....wwkww.",
+   "wwk.kww..wwk.kww",
+   "wk...kw..wk...kw",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok.."
+  ],
+  "eyes_look": [
+   "..www......www..",
+   ".wwwpw....wwwpw.",
+   "wwwpwpw..wwwpwpw",
+   "wwwpppw..wwwpppw",
+   "wwwpppw..wwwpppw",
+   "wwwpppw..wwwpppw",
+   ".wwwpw....wwwpw.",
+   "..www......www..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok..",
+   "..kok......kok.."
+  ],
+  "claw_open": [
+   ".......kkk..",
+   "..k...kohhk.",
+   ".kok..krrrhk",
+   ".krk..krrrhk",
+   ".krk..krrrrk",
+   ".krk.korrrrk",
+   "korokorrrrrk",
+   "kdrrorrrrrdk",
+   "kddddddddddk",
+   ".kddddddddk.",
+   "..kkkkkkkk.."
+  ],
+  "claw_closed": [
+   "......kkkk..",
+   "....kkoohhk.",
+   "...kokrrrrhk",
+   "..kokrrrrrhk",
+   ".kokrrrrrrrk",
+   "korkrrrrrrrk",
+   "krrrrrrrrrrk",
+   "kdrrrrrrrrdk",
+   "kddddddddddk",
+   ".kddddddddk.",
+   "..kkkkkkkk.."
+  ],
+  "arm": [
+   "krdk"
+  ],
+  "legs": [
+   "......kkkkk.kkkkkkkkkk.kkkkk......",
+   "....kklllllkllllkkllllklllllkk....",
+   "...kllkkkkllkkkk..kkkkllkkkkllk...",
+   "..kllk..kllk..........kllk..kllk..",
+   "..klk...klk............klk...klk..",
+   "..klk...klk............klk...klk..",
+   "...k.....k..............k.....k..."
+  ],
+  "legs_splay": [
+   "..................................",
+   "......kkkkk.kkkkkkkkkk.kkkkk......",
+   "...kkklllllkllllkkllllklllllkkk...",
+   ".kkllkkkkkllkkkk..kkkkllkkkkkllkk.",
+   "kllkk..kkllk..........kllkk..kkllk",
+   "klk...kllk..............kllk...klk",
+   "kk....kk..................kk....kk"
+  ],
+  "legs_air": [
+   "......kkkkk.kkkkkkkkkk.kkkkk......",
+   "....kklllllkllllkkllllklllllkk....",
+   "...kllkkkkllkkkk..kkkkllkkkkllk...",
+   "...klk..kllk..........kllk..klk...",
+   "...klk...klk..........klk...klk...",
+   "....klk..klk..........klk..klk....",
+   ".....k....k............k....k....."
+  ],
+  "fx_snap": [
+   "w....y....w",
+   ".w...y...w.",
+   "..w..w..w..",
+   "...........",
+   "y.........y"
+  ]
+ },
+ "animation": {
+  "cycle": "two beats; parity 0 = even beat, 1 = odd beat; phi in [0,1) within a beat; u = parity + phi",
+  "global_offset_screen_px": {
+   "bob": "idle only: 1.5 sin(2 pi t / 2.6 s) screen px on every layer but the legs (the feet stay on the ground)",
+   "hop": "dy = -9 * 4a(1-a), a = max(0, (phi-0.12)/0.88): on the ground (squashed) for phi < 0.12, a ballistic hop peaking 9 px at phi 0.56, landing hard at phi 1",
+   "side_step": "dx = 6 * (from + (to-from) * smoothstep(0.12, 0.92, phi)); even beat travels left->right (-6 -> +6), odd beat right->left, so the crab is at a side extreme on every beat and slides sideways in the air"
+  },
+  "body_frame": {
+   "body_squash": "phi < 0.12 (contact)",
+   "body": "0.12 <= phi < 0.84",
+   "body_stretch": "phi >= 0.84 (anticipation, reaching for the ground)"
+  },
+  "legs_frame": {
+   "legs_splay": "phi < 0.12",
+   "legs_air": "0.3 <= phi < 0.7",
+   "legs": "otherwise"
+  },
+  "claws": "left claw punches on even beats, right on odd. lift = 1 + round(8 * pulse(v)), v = beats from its own beat; pulse rises as ((v+0.22)/0.22)^2 over the last 0.22 beat (anticipation), is 1 on the beat, falls with smoothstep over 0.7 beat. The beat claw is claw_closed (snap) for phi < 0.16, else claw_open. Arms: the 4x1 arm tile (red, not the orange of the eye stalks) repeated from under the pincer to body top + 8 (hidden behind the body).",
+  "snap_fx": "fx_snap (white and gold spark) over the beat claw for phi < 0.12: centred on the claw, 6 native px above its top.",
+  "eyes": "eyes offset = round((body offset 0.12 beat ago - body offset now) / 3), clamped to +-2 native px: the stalks trail the hop and the side-step. Frame: eyes_happy (^ ^) during the squash of odd beats only, so the face alternates wide-eyed / squint each beat; eyes_look for phi 0.2-0.8 with the pupils toward the travel (flipped on odd beats); eyes otherwise.",
+  "shadow": "contact shadow (palette index 13) drawn first, over the ground line, rows groundY+2 .. groundY+4: 66 px wide on the ground, 2 px narrower per 2 px of hop, centred under the crab.",
+  "mouth": "baked into the body frames: smile (body), open grin (squash), \"o\" (stretch)",
+  "draw_order": "shadow, legs, right arm+claw, left arm+claw (flipped), eyes, body, fx_snap",
+  "idle (confidence < 0.3)": "body frame only; bob = 1.5 sin(2 pi t / 2.6 s) breathing (feet stay planted); claws tucked low (lift -3), each twitches up 1 px and snaps for 0.25 s on its own 2.9 s / 3.3 s cycle; eyes glance on a 5.3 s cycle (eyes_look, flipped for left, and +-1 px) and sink 1 px on the out-breath; blink (eyes_happy) 0.16 s every 3.7 s; palette_idle (half-desaturated, dimmed).",
+  "blend": "w eases 0<->1 over ~0.4 s like the stick figure: offsets and lifts lerp idle->dance, frames switch at w = 0.5, palette lerps palette_idle->palette (16 entries per frame).",
+  "phases_k0_k15": {
+   "k0": {
+    "phi": 0.0,
+    "parity": 0,
+    "dx": -6.0,
+    "dy": -0.0,
+    "body": "body_squash",
+    "legs": "legs_splay",
+    "eyes": "eyes",
+    "eyes_flip": false,
+    "eye_off": [
+     0,
+     -1
+    ],
+    "fx": "L",
+    "liftL": 9,
+    "liftR": 1,
+    "clawL": "closed",
+    "clawR": "open"
+   },
+   "k1": {
+    "phi": 0.125,
+    "parity": 0,
+    "dx": -6.0,
+    "dy": -0.2,
+    "body": "body",
+    "legs": "legs",
+    "eyes": "eyes",
+    "eyes_flip": false,
+    "eye_off": [
+     0,
+     0
+    ],
+    "fx": null,
+    "liftL": 8,
+    "liftR": 1,
+    "clawL": "closed",
+    "clawR": "open"
+   },
+   "k2": {
+    "phi": 0.25,
+    "parity": 0,
+    "dx": -5.2,
+    "dy": -4.5,
+    "body": "body",
+    "legs": "legs",
+    "eyes": "eyes_look",
+    "eyes_flip": false,
+    "eye_off": [
+     0,
+     1
+    ],
+    "fx": null,
+    "liftL": 7,
+    "liftR": 1,
+    "clawL": "open",
+    "clawR": "open"
+   },
+   "k3": {
+    "phi": 0.375,
+    "parity": 0,
+    "dx": -3.1,
+    "dy": -7.4,
+    "body": "body",
+    "legs": "legs_air",
+    "eyes": "eyes_look",
+    "eyes_flip": false,
+    "eye_off": [
+     -1,
+     1
+    ],
+    "fx": null,
+    "liftL": 5,
+    "liftR": 1,
+    "clawL": "open",
+    "clawR": "open"
+   },
+   "k4": {
+    "phi": 0.5,
+    "parity": 0,
+    "dx": -0.4,
+    "dy": -8.8,
+    "body": "body",
+    "legs": "legs_air",
+    "eyes": "eyes_look",
+    "eyes_flip": false,
+    "eye_off": [
+     -1,
+     0
+    ],
+    "fx": null,
+    "liftL": 3,
+    "liftR": 1,
+    "clawL": "open",
+    "clawR": "open"
+   },
+   "k5": {
+    "phi": 0.625,
+    "parity": 0,
+    "dx": 2.3,
+    "dy": -8.8,
+    "body": "body",
+    "legs": "legs_air",
+    "eyes": "eyes_look",
+    "eyes_flip": false,
+    "eye_off": [
+     -1,
+     0
+    ],
+    "fx": null,
+    "liftL": 1,
+    "liftR": 1,
+    "clawL": "open",
+    "clawR": "open"
+   },
+   "k6": {
+    "phi": 0.75,
+    "parity": 0,
+    "dx": 4.6,
+    "dy": -7.3,
+    "body": "body",
+    "legs": "legs",
+    "eyes": "eyes_look",
+    "eyes_flip": false,
+    "eye_off": [
+     -1,
+     0
+    ],
+    "fx": null,
+    "liftL": 1,
+    "liftR": 1,
+    "clawL": "open",
+    "clawR": "open"
+   },
+   "k7": {
+    "phi": 0.875,
+    "parity": 0,
+    "dx": 5.9,
+    "dy": -4.4,
+    "body": "body_stretch",
+    "legs": "legs",
+    "eyes": "eyes",
+    "eyes_flip": false,
+    "eye_off": [
+     0,
+     -1
+    ],
+    "fx": null,
+    "liftL": 1,
+    "liftR": 2,
+    "clawL": "open",
+    "clawR": "open"
+   },
+   "k8": {
+    "phi": 0.0,
+    "parity": 1,
+    "dx": 6.0,
+    "dy": -0.0,
+    "body": "body_squash",
+    "legs": "legs_splay",
+    "eyes": "eyes_happy",
+    "eyes_flip": false,
+    "eye_off": [
+     0,
+     -1
+    ],
+    "fx": "R",
+    "liftL": 1,
+    "liftR": 9,
+    "clawL": "open",
+    "clawR": "closed"
+   },
+   "k9": {
+    "phi": 0.125,
+    "parity": 1,
+    "dx": 6.0,
+    "dy": -0.2,
+    "body": "body",
+    "legs": "legs",
+    "eyes": "eyes",
+    "eyes_flip": false,
+    "eye_off": [
+     0,
+     0
+    ],
+    "fx": null,
+    "liftL": 1,
+    "liftR": 8,
+    "clawL": "open",
+    "clawR": "closed"
+   },
+   "k10": {
+    "phi": 0.25,
+    "parity": 1,
+    "dx": 5.2,
+    "dy": -4.5,
+    "body": "body",
+    "legs": "legs",
+    "eyes": "eyes_look",
+    "eyes_flip": true,
+    "eye_off": [
+     0,
+     1
+    ],
+    "fx": null,
+    "liftL": 1,
+    "liftR": 7,
+    "clawL": "open",
+    "clawR": "open"
+   },
+   "k11": {
+    "phi": 0.375,
+    "parity": 1,
+    "dx": 3.1,
+    "dy": -7.4,
+    "body": "body",
+    "legs": "legs_air",
+    "eyes": "eyes_look",
+    "eyes_flip": true,
+    "eye_off": [
+     1,
+     1
+    ],
+    "fx": null,
+    "liftL": 1,
+    "liftR": 5,
+    "clawL": "open",
+    "clawR": "open"
+   },
+   "k12": {
+    "phi": 0.5,
+    "parity": 1,
+    "dx": 0.4,
+    "dy": -8.8,
+    "body": "body",
+    "legs": "legs_air",
+    "eyes": "eyes_look",
+    "eyes_flip": true,
+    "eye_off": [
+     1,
+     0
+    ],
+    "fx": null,
+    "liftL": 1,
+    "liftR": 3,
+    "clawL": "open",
+    "clawR": "open"
+   },
+   "k13": {
+    "phi": 0.625,
+    "parity": 1,
+    "dx": -2.3,
+    "dy": -8.8,
+    "body": "body",
+    "legs": "legs_air",
+    "eyes": "eyes_look",
+    "eyes_flip": true,
+    "eye_off": [
+     1,
+     0
+    ],
+    "fx": null,
+    "liftL": 1,
+    "liftR": 1,
+    "clawL": "open",
+    "clawR": "open"
+   },
+   "k14": {
+    "phi": 0.75,
+    "parity": 1,
+    "dx": -4.6,
+    "dy": -7.3,
+    "body": "body",
+    "legs": "legs",
+    "eyes": "eyes_look",
+    "eyes_flip": true,
+    "eye_off": [
+     1,
+     0
+    ],
+    "fx": null,
+    "liftL": 1,
+    "liftR": 1,
+    "clawL": "open",
+    "clawR": "open"
+   },
+   "k15": {
+    "phi": 0.875,
+    "parity": 1,
+    "dx": -5.9,
+    "dy": -4.4,
+    "body": "body_stretch",
+    "legs": "legs",
+    "eyes": "eyes",
+    "eyes_flip": false,
+    "eye_off": [
+     0,
+     -1
+    ],
+    "fx": null,
+    "liftL": 2,
+    "liftR": 1,
+    "clawL": "open",
+    "clawR": "open"
+   }
+  }
+ }
+}
