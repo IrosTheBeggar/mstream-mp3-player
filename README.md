@@ -84,6 +84,11 @@ use Bluetooth headphones, the speaker, or (later) M5Stack's RCA/3.5 mm module.
 
 ## Installing and updating
 
+A release installs from the browser with the web installer, or from the
+files on its GitHub Release page with esptool
+([Releases and the install page](#releases-and-the-install-page)). Either
+way the image is the merged one below.
+
 A build makes two ways to install:
 
 - `pio run -e core2 -t upload` writes the pieces: the bootloader, the
@@ -110,6 +115,128 @@ the app outgrows its slot (a warning at 80 %), the merged image is missing
 or would reach NVS, or the table isn't the one the firmware expects. On
 the device, the boot log's `[flash]` line and the console's `L` show the
 layout as flashed.
+
+## Versions and releases
+
+Versions are git tags, SemVer with a `v`: `vMAJOR.MINOR.PATCH`. The first
+release is **v0.5.0**, a beta (while the major version is 0, anything may
+still change). `tools/version.py` names every build from git
+(`git describe`) and prints a `version:` line:
+
+| The build | Reads |
+|---|---|
+| From the tag | `v0.5.0` |
+| 3 commits past it, with uncommitted changes | `v0.5.0-3-gabc1234-dirty` |
+| No `v*` tag reachable (before the first release, or a clone without its tags: `git fetch --tags`) | `v0.5.0-dev+abc1234` (`-dirty` too) |
+
+The `0.5.0` in the last one is `NEXT_RELEASE`, at the top of
+`tools/version.py`: the one place the next version is written. The date a
+build shows is its commit's, not the day it was built.
+
+The version shows in **About** (the Version row: the version, under the
+commit's date and `ELF` with the first 8 hex digits of the firmware's ELF
+SHA-256), in the boot screen's title, in the first serial line
+(`mstream-mp3-player v0.5.0 (commit abc1234, 2026-10-01), ELF 1a2b3c4d`), and
+in the console's `L`, which shows the image's app description, the version
+a later WiFi update will compare. With a crash report, the ELF digits say
+which `firmware.elf` decodes its backtrace.
+
+A build with `RELEASE=1` in the environment (CI sets it for a tag) fails
+unless HEAD is exactly a SemVer `v*` tag, the tree is clean (untracked
+files too: they would be built but aren't in the tag), `BT_SINK_NAME` is
+empty, and no `local*.ini` sets build flags. So a release's binary is
+exactly the tagged source, the one its licence offer points to. With
+`RELEASE_TAG` set too (CI sets it to the tag that started the run), that tag
+must be HEAD and is the version, even when the commit has another tag that
+`git describe` would pick (an annotated `v0.5.0-rc.1` wins over a
+lightweight `v0.5.0`). Releases are built by CI only
+([below](#releases-and-the-install-page)); to try a release build locally,
+from a clean checkout of a tag (PowerShell):
+
+```powershell
+Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue
+$env:RELEASE = "1"; $env:RELEASE_TAG = "v0.5.0"; pio run -e core2
+```
+
+## Releases and the install page
+
+[`.github/workflows/firmware.yml`](.github/workflows/firmware.yml) runs on
+every push, pull request and `v*` tag: `pio test -e native`, then
+`pio run -e core2` (its `flash_guard` and `version` checks fail a bad
+image), then [`tools/package_release.py`](tools/package_release.py), which
+packages the build. The packaged files are kept as the run's artifact
+(`mstream-player-core2-<version>`, for 90 days), so any commit's firmware
+can be downloaded from its run. A `v*` tag also:
+
+1. builds with `RELEASE=1`;
+2. makes a **GitHub Release** with the files below and the notes from
+   [`.github/release-notes.md`](.github/release-notes.md), the version
+   filled in (hardware, install and update commands, the SD card, drivers,
+   known limits, and "Source for this binary: …/tree/<tag>"). A tag with a
+   hyphen (`v0.5.0-rc.1`) is marked pre-release. Only the highest
+   `vX.Y.Z` tag is marked **Latest**, so a fix tagged on an older line
+   doesn't take it. Re-running the workflow finishes a release an
+   interrupted run left as a draft (its files replaced, its notes kept,
+   then published); a published release is left as it is;
+3. puts the **web installer** on GitHub Pages,
+   <https://irosthebeggar.github.io/mstream-mp3-player/>: ESP Web Tools'
+   install button ([`site/index.html`](site/index.html)), `manifest.json`
+   and the firmware, all on the same origin (release files have no CORS
+   headers, so the browser can't fetch them from GitHub). Only for the
+   newest full release, the highest `vX.Y.Z` tag: not for a pre-release,
+   and not for an older tag (pushed together with a newer one, a fix on an
+   old line, a re-run, or Run workflow on it), so the installer never goes
+   back to older firmware. Pages holds that one version; older ones are on
+   the Releases page.
+
+| Release file | What it is |
+|---|---|
+| `mstream-player-core2-<v>-full.bin` | `firmware.factory.bin`: everything, written at 0x0 (install, or update without erasing) |
+| `…-app.bin` | `firmware.bin`, at 0x10000 |
+| `…-parts.zip` | bootloader 0x1000, partitions 0x8000, boot_app0 0xe000, app 0x10000, and `flash_args.txt` (`esptool --chip esp32 write-flash @flash_args.txt`) |
+| `…-elf.zip` | `firmware.elf` and `firmware.map`, to decode a crash's backtrace (match the ELF digits in About) |
+| `…-licenses.zip`, `LICENSE`, `THIRD-PARTY-NOTICES.md` | The licences (`LICENSES/` is in the zip) |
+| `…-source.tar.gz` | The source the binary was built from: this repository's files, the git-pinned `lib_deps` checkouts (ESP8266Audio, ESP32-A2DP) and the parts of the Arduino core the build compiled, so the GPL and LGPL source stays available beside the binary even if an upstream download goes away |
+| `SHA256SUMS` | `sha256sum -c SHA256SUMS` |
+
+The filesystem image (`littlefs.bin`, `data/music`) is never packaged.
+
+**Cutting a release:**
+
+1. On `main`, on the commit to release: CI is green, and `NEXT_RELEASE` in
+   `tools/version.py` is the version (a release build warns when it
+   isn't).
+2. Tag and push the tag:
+
+   ```
+   git tag -a v0.5.0 -m "v0.5.0 (beta)"
+   git push origin v0.5.0
+   ```
+
+3. Watch the run (Actions > firmware). When it's green, check the release
+   page and the installer, and install it once with the installer.
+4. Set `NEXT_RELEASE` to the next planned version, so a clone without tags
+   doesn't read as the one just released.
+
+**Once, in the repository's settings on GitHub:**
+
+- **Pages > Build and deployment > Source: GitHub Actions.** (Pages needs
+  the repository to be public on a free plan.)
+- **Environments > github-pages > Deployment branches and tags:** add a
+  tag rule `v*`. Pages creates that environment allowing only the default
+  branch, and the deploy runs from the tag; without the rule it is refused.
+- **Actions > General > Workflow permissions** can stay at the read-only
+  default: the workflow asks for what each job needs (`contents: write`
+  for the release, `pages: write` and `id-token: write` for the deploy).
+  If the organisation caps them lower, the release and deploy jobs fail.
+
+**Locally:** after `pio run -e core2`, `python tools/package_release.py`
+writes the same files to `dist/` (`dist/release/`, `dist/site/`,
+`dist/release-notes.md`). `--release --tag v0.5.0` packages only a release
+build: one made with `RELEASE=1` that passed its checks (a plain build of
+the tag, with a `local.ini` say, is refused), from a checkout still clean
+and at that commit. To try the page, serve `dist/site` over
+`http://localhost` (Web Serial needs HTTPS or localhost).
 
 ## Using it
 
@@ -192,7 +319,8 @@ pages do:
   **Bluetooth power** (Low, Normal,
   High), **Touch calibration** ("Not calibrated", or "Calibrated on this
   Core2": below), and **About** (battery, storage, library, headphones,
-  CPU speed and Bluetooth power, memory, version, and the tips again).
+  CPU speed and Bluetooth power, memory, version, the licence and where
+  the source is, and the tips again).
 
 The first time, two tips show what the three red buttons do and that
 tapping the tab you're on goes back to its start (console `uic` shows them
@@ -417,27 +545,65 @@ src/                  Core2 firmware
   app/                Library (the index at boot: cache or build), QueueStore
                       (the queue on the card, its position in NVS), Psram,
                       SerialConsole, Diagnostics, DanceMode, Screenshot, Haptics,
-                      PowerProbe + PowerLab (power measurement and its knobs)
+                      PowerProbe + PowerLab (power measurement and its knobs),
+                      Version (the build's version and ELF hash; the image's
+                      app description)
   spike/              UI spike tools: input lab, scroll lab, font and thumbnail
                       probes (docs/UI-SPIKE.md)
   main.cpp            Wires it together; input events (the buttons' policy),
                       Bluetooth events, what the UI reads (UiHost), the
                       console's queue and touch commands
 data/                 LittleFS image source (data/music is gitignored)
-tools/                make_test_audio.py; iram_diet.py and flash_guard.py (build
-                      post-scripts: IRAM; the app's slot, the merged image, NVS);
+tools/                make_test_audio.py; version.py (build pre-script: the
+                      version from git, the release checks); iram_diet.py and
+                      flash_guard.py (build post-scripts: IRAM; the app's slot,
+                      the merged image, NVS, the pieces' list);
+                      package_release.py (a build's release files, install
+                      page and release notes -> dist/);
                       crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*);
                       vlw_font.py (the UI's DejaVu VLW fonts -> src/ui/VlwFonts.cpp);
                       ui_icons.py (the UI's 1-bit icons -> src/ui/IconData.cpp)
 test/                 Host unit tests (Unity)
+site/                 The web installer's page (filled in by package_release.py)
+.github/              workflows/firmware.yml (CI, releases, the install page);
+                      release-notes.md (the release notes' template)
 docker/               mStream dev server
 docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.md
-LICENSES/             DejaVu-Fonts.txt (the fonts' licence)
+LICENSES/             The licence texts THIRD-PARTY-NOTICES.md refers to
+THIRD-PARTY-NOTICES.md What else is in the firmware binary, and its licences
 ```
 
 ## License
 
-GPL-3.0 (see [LICENSE](LICENSE)), matching mStream and the audio libraries
-this builds on. The UI's fonts are rasterised from DejaVu Sans, under the
-Bitstream Vera fonts licence (DejaVu's changes are public domain): see
-[LICENSES/DejaVu-Fonts.txt](LICENSES/DejaVu-Fonts.txt).
+Copyright (C) 2026 IrosTheBeggar.
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option)
+any later version (GPL-3.0-or-later; the text is [LICENSE](LICENSE)). It is
+distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+Every source file says so in its first lines (`SPDX-License-Identifier`).
+
+The firmware binary also contains other people's code, fonts and binary
+libraries under their own licences, not all of them the GPL:
+ESP8266Audio (GPL-3.0-or-later) with libmad (GPL-2.0-or-later) and libFLAC
+(BSD-3-Clause), ESP32-A2DP (Apache-2.0), M5Unified and M5GFX (MIT, with
+LovyanGFX and fonts under BSD-style licences), the Arduino-ESP32 core
+(LGPL-2.1-or-later and Apache-2.0), ESP-IDF with Espressif's binary
+Bluetooth and radio libraries (Apache-2.0, with BSD- and MIT-licensed parts
+such as TinyCrypt, TLSF and littlefs), newlib and the GCC runtime, and
+the DejaVu fonts the UI is drawn in (Bitstream Vera licence). Each is listed
+with its version, copyright and licence in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md); the licence texts are in
+[LICENSES/](LICENSES). The Core2 shows the licence in Output > About and
+prints it on the serial console at boot. Each release carries its source
+as `…-source.tar.gz`, the GPL and LGPL libraries it was built with
+included.
+
+M5Stack is a trademark of M5Stack Technology Co., Ltd.; Bluetooth
+is a registered trademark of Bluetooth SIG, Inc.; Beats and Powerbeats are
+trademarks of Apple Inc. They are named only to say what this runs on and
+what it was tested with. This project is not affiliated with, sponsored or
+endorsed by any of them, and makes no Bluetooth qualification claim.

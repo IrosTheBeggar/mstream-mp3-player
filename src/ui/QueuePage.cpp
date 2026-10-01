@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // The Queue (the tab bar spec §6.4, mockups 16-18, with the review's grafts
 // and the usability fixes; the page's shape is in Pages.h):
 //

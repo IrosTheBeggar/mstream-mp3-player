@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host unit tests for BtControl: the media stream and the headphones' volume
 // together, as PlayerA2dp drives them from the Bluetooth stack's events.
 // Run: pio test -e native

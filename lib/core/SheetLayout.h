@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #pragma once
 
 // Where a sheet sits (ui/Overlays' Sheet: a title with a close pill, then

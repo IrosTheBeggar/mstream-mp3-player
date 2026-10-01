@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for ClickGen, the click tracks with a known beat grid.
 // Run: pio test -e native
 #include <unity.h>

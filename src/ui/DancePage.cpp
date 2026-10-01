@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // The Dance tab (spec §6.5): the dancer in its box (DanceMode draws it, 24-30
 // frames a second, 10 while it idles, only the rectangle that moved), with the beat on the
 // left, the dancer's name on the right and the track at the bottom, redrawn

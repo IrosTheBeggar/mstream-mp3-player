@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Now Playing (the tab bar spec §6.1, mockups 01-04, with the review's
 // grafts): the cover, the title, the artist and the album as 40 px bands
 // that open them in the Library at the playing track, the progress and

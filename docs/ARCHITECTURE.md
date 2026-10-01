@@ -47,6 +47,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |         Fonts (VLW DejaVu), Icons, Gfx, Thumbs (covers),      |
               |         EmptyState                                            |
               |  ui/BootScreen                                                |
+              |  app/Version (the version from git, the app description)      |
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
@@ -857,7 +858,8 @@ the table at 0x8000, so every unit keeps the layout it was installed with.
   `boot_app0.bin`'s entry) and the next update slot
   (`esp_ota_get_running_partition()`, `esp_ota_get_next_update_partition()`);
   the console's `L` prints the table as flashed (`esp_partition_find()`),
-  which slot boots next, and how full NVS is.
+  which slot boots next, the running app's version
+  ([Versions](#versions)), and how full NVS is.
 - **Rollback, for the OTA work.** The prebuilt bootloader has
   `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`, and Arduino's `initArduino()`
   (before `setup()`) marks a freshly updated app valid at once: the weak
@@ -937,6 +939,90 @@ read back byte-identical before and after, and after the reboot `as`, `B`,
 **Or start clean:** `esptool --port COM3 erase-flash`, then `upload` (and
 `uploadfs`): the unit starts as new (the touch check, pairing, the coach
 cards).
+
+## Versions
+
+Versions are SemVer git tags, `vMAJOR.MINOR.PATCH` (v0.5.0 is the first,
+a beta); the README has how to cut one.
+
+- **From git, at every build.** `tools/version.py`, a pre-script, runs
+  `git describe --tags --match "v[0-9]*" --always --dirty`: `v0.5.0` on
+  the tag, `v0.5.0-3-gabc1234-dirty` past it (`-dirty`: tracked files
+  changed). With no `v*` tag reachable, `--always` gives only a hash, and
+  the build reads `v<NEXT_RELEASE>-dev+abc1234[-dirty]`; `NEXT_RELEASE`, at
+  the top of the script, is the only place a version is written by hand.
+  Without git at all: `v0.5.0-dev+nogit`.
+- **One file recompiles.** The script writes
+  `$BUILD_DIR/generated/PlayerVersion.h` (`PLAYER_VERSION`, the commit,
+  its date and time in UTC), rewritten only when its text changes, and
+  puts that directory on the include path of `src/` only (a build
+  middleware: the libraries' command lines don't change). Only
+  `src/app/Version.cpp` includes it; the rest asks `app/Version.h`. A
+  global `-D` would have changed every command line at every commit and
+  rebuilt the framework and libraries each time.
+- **The commit's date, not the build's.** About used to show `__DATE__`;
+  now everything ours that names the build (the version, the date, the
+  app description's time and date) comes from the commit, so building the
+  same commit again doesn't change them. (Whether the whole image is
+  byte-for-byte reproducible hasn't been checked: that's the framework's
+  and libraries' business too.)
+- **The image's app description.** `esp_app_desc` (256 bytes, first in
+  the flash rodata: what the bootloader, `esptool image-info` and
+  `esp_ota_get_partition_description()` read) carried the prebuilt Arduino
+  libs' version ("6671d0b", project "arduino-lib-builder"): pioarduino's
+  Arduino builder has no `PROJECT_VER`. IDF defines it weak, so
+  `Version.cpp` defines its own with our version (cut to the field's 31
+  characters; a release tag must fit), project "mstream-mp3-player", the
+  commit's time and date, and every other field as IDF's
+  `esp_app_desc.c` fills it for this sdkconfig (`IDF_VER`, the eFuse block
+  revisions 0-99, the 64 KB MMU page). The linker map shows it at
+  0x3f400020 and IDF's in the discarded sections. esptool still writes the
+  ELF's SHA-256 into it (pioarduino's `--elf-sha256-offset 0xb0`), and
+  `esp_app_get_elf_sha256()` reads it from there. A WiFi update will
+  compare this version.
+- **Checked after every build.** The script also reads `firmware.bin`'s
+  app description and fails the build (and an upload) unless it holds
+  the magic word, this build's version and `firmware.elf`'s SHA-256: if a
+  framework update ever stopped the override from winning, the build
+  would say so. A build ends with `version: the image says
+  v0.5.0-dev+ac93229-dirty, ELF a12e6cfd`.
+- **Where it shows.** About's Version row: the version (Body, Small when a
+  long dev version doesn't fit) under "Version (2026-09-30, ELF
+  1a2b3c4d)": the commit's date and the first 8 hex digits of the ELF's
+  SHA-256 (`uitext::kAboutVersionLabel`, measured by test_ui_library with
+  every hex digit and the longest versions). The boot screen's title,
+  "mStream Player v0.5.0 - starting" (without "- starting" when a dev
+  version is too long for the bar, measured at run time: it is the
+  TFT_eSPI Font2, not a UiText font). The first serial line,
+  `mstream-mp3-player v0.5.0 (commit abc1234, 2026-10-01), ELF 1a2b3c4d`.
+  The console's `L`, the running image's app description. The ELF digits
+  match a crash report to the `firmware.elf` that decodes its backtrace.
+- **`RELEASE=1`** (set by CI when it builds a tag) fails the build, before
+  anything compiles, unless: HEAD is exactly a `v*` tag
+  (`git describe --exact-match`) that is SemVer and fits the app
+  description; `git status --porcelain` is empty, untracked files
+  included (they would be built but aren't in the tag); no `-DBT_SINK_NAME`
+  with a name, in the environment's build flags (`local.ini`'s `[local]`
+  arrives through them) or `PLATFORMIO_BUILD_FLAGS`; and no `local*.ini`
+  sets a `*flags` option. It warns when the tag isn't `v<NEXT_RELEASE>`.
+  Tried on a throwaway clone tagged v0.5.0: the release build passed and
+  read v0.5.0; a changed README plus an untracked file, a `local.ini` with
+  a name, the name in `PLATFORMIO_BUILD_FLAGS`, a tag `v0.5`, and a commit
+  past the tag each failed it with their reason.
+- **`RELEASE_TAG`** (CI sets it with `RELEASE=1`, to the tag that started
+  the run) names the tag instead of `git describe`, which prefers an
+  annotated tag over a lightweight one on the same commit (and breaks ties
+  by name, so `rc.10` over `rc.2`): promoting `v0.5.0-rc.1` to `v0.5.0`
+  would otherwise build an image labelled rc.1. It must point at HEAD.
+- **CI** checks out with the tags (`fetch-depth: 0`), or every build
+  would read as `-dev+hash`. The header also has `PLAYER_TAG`: the tag
+  when the build is exactly one with no tracked file changed, else "",
+  and `PLAYER_RELEASE`: 1 only when `RELEASE=1` was set and every check
+  above passed. `tools/package_release.py` names the source and the
+  release after the tag (a `v0.5.0-3-gabc1234` describe is valid SemVer
+  too, so the version alone can't say), and `--release` takes only a
+  `PLAYER_RELEASE` build: a plain build of a clean tag checkout can still
+  carry a gitignored `local.ini`'s headphone name.
 
 ## Library and queue
 
@@ -1741,7 +1827,9 @@ Queue, Dance and Output (with its Pair and About pages).
   restart, asked first) and **Bluetooth power** (Low / Normal /
   High, signal bars), **Touch calibration**, **About** (battery,
   storage, the library, the headphones, the CPU speed and Bluetooth power,
-  memory, the version, and "Show the tips again"). The tab bar's Output icon is amber while a connection the
+  memory, the version (under the commit's date and the ELF's hash:
+  [Versions](#versions)), the licence and the source URL (GPLv3 section
+  5(d); UiText's texts, measured by test_ui_library), and "Show the tips again"). The tab bar's Output icon is amber while a connection the
   listener asked for is on its way, and while the link looks for them; the
   plain icon while the search rests (`tabbar::outputFor()`, host-tested).
 - **States** (spec §7): no microSD card (and no music on the flash
@@ -2015,6 +2103,55 @@ the others: only `Pz` plays it.
 - **`tools/flash_guard.py`** checks the flash layout after every build: the
   app's room in its slot, the merged `firmware.factory.bin`, NVS above it
   ([Flash layout](#flash-layout)).
+- **`tools/version.py`** (a pre-script) names the build from git, and with
+  `RELEASE=1` refuses anything but a clean tagged tree
+  ([Versions](#versions)).
+- **CI** (`.github/workflows/firmware.yml`, GitHub Actions on
+  ubuntu-24.04): every push, pull request and `v*` tag runs the host
+  tests, the core2 build (`RELEASE=1` on a tag) and
+  `tools/package_release.py`, and keeps `dist/` as the run's artifact. A
+  tag then makes the GitHub Release and, when it is the newest full
+  release (the highest `vX.Y.Z` tag; not a `-rc.1`), marks it Latest and
+  deploys the install page to Pages: an older tag's run, from two tags
+  pushed together, a fix on an old line or a re-run, never takes either
+  back. The `pages` concurrency group only orders deployments; this
+  decides which one may happen. A re-run publishes a release an
+  interrupted run left as a draft (`gh release create` makes a draft,
+  uploads, then publishes) and leaves a published one alone. The YAML is
+  plumbing only: what to package and how to check it is in the script,
+  which runs the same locally. Pinned: PlatformIO Core 6.2.0 (pioarduino
+  needs at least that; it is what the local builds use), Python 3.12, each
+  action by commit, ESP Web Tools 10.4.0 by version and the entry script's
+  SRI hash.
+  Caches: `~/.platformio` (the toolchain, ~1 GB; PlatformIO reinstalls
+  what `platformio.ini` pins whatever was restored) and `.pio/libdeps`
+  (only for the exact `platformio.ini`).
+- **Packaging** reads only the build's outputs: the version from
+  `generated/PlayerVersion.h`, and the pieces from `firmware.parts.json`,
+  which `flash_guard` writes once it has checked each piece (bootloader,
+  table, boot_app0 from the framework, app) is byte for byte the merged
+  image at its offset. It refuses a build whose `firmware.bin` app
+  description doesn't hold that version and `firmware.elf`'s SHA-256 (a
+  stale build directory). It also packs the source tarball: the
+  repository's files (`git ls-files`), each git-pinned `lib_deps` checkout
+  (its `.git/HEAD` must be the `platformio.ini` pin) and, found through the
+  build's `.d` files, the Arduino core's `cores/esp32`, the board variant
+  and each framework library compiled, whole: the GPL (ESP8266Audio) and
+  LGPL (the core) source a binary must stay available with, from the same
+  place. The zips and the tarball carry the commit's time, so packaging
+  a build twice gives the same bytes and the same `SHA256SUMS`. The page
+  and the notes are templates (`site/index.html`,
+  `.github/release-notes.md`) with `{{NAME}}` placeholders; an unknown one
+  fails the packaging.
+- **The install page** is ESP Web Tools with one part, the merged image at
+  0x0: safe for updates because NVS sits above anything it writes ([Flash
+  layout](#flash-layout)). `new_install_prompt_erase` makes the dialog ask
+  whether to erase (yes for a first install over other firmware, no to
+  update), and `new_install_improv_wait_time: 0` skips its Improv probe
+  (no WiFi to provision), so no Improv packets reach the serial console.
+  The firmware is served from Pages next to the manifest: the installer
+  fetches it from the page's origin, and GitHub release files have no
+  CORS headers.
 
 ## Roadmap
 

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 IrosTheBeggar
 """PlatformIO post-script: check the flash layout after every firmware build.
 
 The partition table can never change after release (an OTA update rewrites an
@@ -15,7 +17,12 @@ built, this fails the build (and any upload) if:
 - nvs isn't above everything a merged image reaches (its own length, and an
   app as big as ota_0);
 - the app fills more than FAIL_AT of its slot (a warning from WARN_AT): the
-  slots can't grow later, so a release needs room for the next one.
+  slots can't grow later, so a release needs room for the next one;
+- a piece of the merged image (bootloader, table, boot_app0, app) isn't the
+  file a release also ships on its own.
+
+Once the check passes it writes firmware.parts.json next to the image: each
+piece's offset and file, which tools/package_release.py packages.
 
 The table is read from the build's partitions.bin (made from partitions.csv),
 not written down here a second time; this file only names what the firmware
@@ -23,6 +30,7 @@ relies on. The check runs on every build, even with nothing rebuilt, and it
 makes firmware.bin (whose post-action is the merge) depend on the merged
 pieces, so a table-only change remerges the image.
 """
+import json
 import os
 import struct
 import sys
@@ -101,6 +109,12 @@ def check(env, fw_path, factory_path, table_path):
         errors.append(f"the merged image's table at {table_offset:#x} isn't this build's partitions.bin")
     if factory[app_offset:app_offset + len(fw)] != fw:
         errors.append(f"the merged image's app at {app_offset:#x} isn't this build's firmware.bin")
+    for off, p in extras:
+        with open(p, "rb") as f:
+            piece = f.read()
+        if factory[off:off + len(piece)] != piece:
+            errors.append(f"the merged image at {off:#x} isn't {os.path.basename(p)} (the pieces a release "
+                          "also ships separately)")
 
     # --- the table is the one the firmware expects ---
     def find(ptype, subtype, label=None):
@@ -186,8 +200,30 @@ def flash_guard(source, target, env):
             sys.stderr.write(f"flash_guard: ERROR: {e}\n")
         sys.stderr.write("flash_guard: the flash layout check failed (partitions.csv, tools/flash_guard.py)\n")
         return 1
+    write_parts(env, fw_path, factory_path)
     print(f"flash_guard: ok: {summary}")
     return 0
+
+
+def write_parts(env, fw_path, factory_path):
+    """$BUILD_DIR/${PROGNAME}.parts.json: where each piece of the merged image
+    goes, for tools/package_release.py (boot_app0.bin lives in the framework,
+    not the build directory). Written only once the pieces are checked."""
+    parts = [{"offset": f"{int(str(off), 0):#x}", "path": os.path.abspath(env.subst(p))}
+             for off, p in env.get("FLASH_EXTRA_IMAGES", [])]
+    parts.append({"offset": f"{int(env.subst('$ESP32_APP_OFFSET') or '0x10000', 0):#x}",
+                  "path": os.path.abspath(fw_path)})
+    text = json.dumps({"merged": os.path.abspath(factory_path),
+                       "parts": sorted(parts, key=lambda p: int(p["offset"], 16))}, indent=2) + "\n"
+    out = os.path.splitext(fw_path)[0] + ".parts.json"
+    try:
+        with open(out, encoding="utf-8") as f:
+            if f.read() == text:
+                return
+    except OSError:
+        pass
+    with open(out, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text)
 
 
 FS_TARGETS = {"buildfs", "uploadfs", "uploadfsota", "nobuild"}

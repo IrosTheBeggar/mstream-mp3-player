@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the Output screen's decisions (OutputModel): the
 // Bluetooth card for every link state, when a connection the listener
 // asked for has failed, Forget's second tap, and the pairing scan's list.

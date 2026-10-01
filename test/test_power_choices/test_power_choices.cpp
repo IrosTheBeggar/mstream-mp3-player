@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the CPU speed and Bluetooth power settings (PowerChoices,
 // docs/ENERGY.md items 6 and 7): the stored values' checks and defaults,
 // what a tap on the CPU row does, when its restart goes, the TX power

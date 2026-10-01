@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host unit tests for TransportSync. Run: pio test -e native
 #include <unity.h>
 

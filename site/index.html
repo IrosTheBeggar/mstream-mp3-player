@@ -1,0 +1,178 @@
+<!doctype html>
+<!--
+  SPDX-License-Identifier: GPL-3.0-or-later
+  Copyright (C) 2026 IrosTheBeggar
+
+  The web installer's page (GitHub Pages). A template: tools/package_release.py
+  fills in the placeholders and writes it next to manifest.json and the
+  firmware, which must be on this same origin (GitHub release files have no
+  CORS headers, so the installer can't fetch them from there).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>mStream Player installer</title>
+<meta name="description" content="Install the mStream Player firmware ({{VERSION}}) on an M5Stack Core2 from the browser.">
+<!-- ESP Web Tools (Apache-2.0), pinned. The integrity hash covers this entry
+     file; the pieces it loads come from the same versioned, immutable path. -->
+<script type="module" src="https://cdn.jsdelivr.net/npm/esp-web-tools@10.4.0/dist/web/install-button.js"
+        integrity="sha384-9XfyvAabgkISlB/Xb3OpshGKpZx0TOt5Mmu78SeiNU3so/p4o2s9m66vy6Utdnom"
+        crossorigin="anonymous"></script>
+<style>
+  :root {
+    --bg: #fbfaf8;
+    --fg: #1d1c1a;
+    --muted: #5d5a55;
+    --line: #dedad3;
+    --card: #ffffff;
+    --accent: #0b6bcb;
+    --accent-fg: #ffffff;
+    --warn-bg: #fff4dc;
+    --warn-line: #e7c46d;
+    --code-bg: #f0eee9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161615;
+      --fg: #ecebe8;
+      --muted: #a9a59e;
+      --line: #34322f;
+      --card: #1f1e1c;
+      --accent: #5aa6f0;
+      --accent-fg: #0b1622;
+      --warn-bg: #2d2615;
+      --warn-line: #7a6326;
+      --code-bg: #2a2927;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 42rem; margin: 0 auto; padding: 2rem 16px 3rem; }
+  h1 { font-size: 1.75rem; line-height: 1.2; margin: 0 0 .25rem; }
+  h2 { font-size: 1.15rem; margin: 2rem 0 .5rem; }
+  p, li { overflow-wrap: anywhere; }
+  .sub { color: var(--muted); margin: 0 0 1.5rem; }
+  a { color: var(--accent); }
+  code { background: var(--code-bg); border-radius: 4px; padding: .05em .3em; font-size: .92em; }
+  .install {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 1.25rem;
+  }
+  .install p { margin: .75rem 0 0; }
+  esp-web-install-button {
+    --esp-tools-button-color: var(--accent);
+    --esp-tools-button-text-color: var(--accent-fg);
+    --esp-tools-button-border-radius: 8px;
+  }
+  button.go {
+    font: inherit;
+    font-weight: 600;
+    color: var(--accent-fg);
+    background: var(--accent);
+    border: 0;
+    border-radius: 8px;
+    padding: .7rem 1.4rem;
+    cursor: pointer;
+  }
+  button.go:focus-visible { outline: 3px solid var(--fg); outline-offset: 2px; }
+  .note {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-line);
+    border-radius: 8px;
+    padding: .75rem 1rem;
+  }
+  ol, ul { padding-left: 1.4rem; }
+  li { margin: .35rem 0; }
+  footer { color: var(--muted); font-size: .88rem; border-top: 1px solid var(--line); margin-top: 2.5rem; padding-top: 1rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>mStream Player</h1>
+  <p class="sub">for the M5Stack Core2 &middot; {{VERSION}} ({{CHANNEL}})</p>
+
+  <div class="install">
+    <esp-web-install-button manifest="manifest.json">
+      <button slot="activate" class="go">Install on a Core2</button>
+      <p slot="unsupported" class="note">This browser can't reach USB serial
+        ports. Open this page in <strong>Chrome</strong> or <strong>Edge</strong>
+        on a computer (Windows, macOS, Linux or ChromeOS).</p>
+      <p slot="not-allowed" class="note">The installer only works over HTTPS.</p>
+    </esp-web-install-button>
+    <p>Connect the Core2 with a USB-C cable, press the button and pick its
+      port. Installing takes about a minute; the Core2 restarts into the
+      player.</p>
+  </div>
+
+  <h2>Erase, or not</h2>
+  <p>The installer asks whether to erase the device:</p>
+  <ul>
+    <li><strong>First install</strong> over other firmware (M5Stack's demo,
+      UIFlow): tick <strong>Erase device</strong>. That firmware's leftovers
+      would otherwise sit where the player keeps its settings.</li>
+    <li><strong>Updating</strong> the player: leave it <strong>unticked</strong>.
+      The settings, the paired headphones, the touch calibration and where you
+      were are kept.</li>
+  </ul>
+
+  <h2>No port shows up?</h2>
+  <ul>
+    <li>Use a cable that carries data: some USB-C cables only charge.</li>
+    <li>Install the USB serial driver. A Core2 has a CH9102 or a CP2104
+      chip, depending on when it was made; both drivers are under
+      &ldquo;USB Driver&rdquo; on
+      <a href="https://docs.m5stack.com/en/download">M5Stack's download page</a>.
+      If unsure, install both.</li>
+    <li>On Linux, add yourself to the <code>dialout</code> group.</li>
+  </ul>
+
+  <h2>Browsers</h2>
+  <p>Chrome or Edge on a computer. Other browsers that can reach USB serial
+    ports may work but haven't been tried. Safari, phones and tablets can't
+    install.</p>
+
+  <h2>The microSD card</h2>
+  <ul>
+    <li>Format it <strong>FAT32</strong>. exFAT cards (how most cards of
+      64&nbsp;GB and up come) don't mount: the player says there's no card.</li>
+    <li>Put the music under <code>/music</code>, e.g.
+      <code>/music/Artist/Album/01 - Title.mp3</code> (MP3 or FLAC), with the
+      album's <code>cover.jpg</code> next to its tracks.</li>
+    <li>Pair headphones from <strong>Output &gt; Pair new headphones</strong>.</li>
+  </ul>
+
+  <h2>Hardware</h2>
+  <p>Tested on the Core2 <strong>v1.3</strong>. The original Core2 (v1.0),
+    the Core2 for AWS and the Core2 v1.1 are untested: reports are welcome.
+    Other M5Stack devices aren't supported.</p>
+
+  <h2>More</h2>
+  <ul>
+    <li><a href="{{RELEASE_URL}}">Release notes and files</a> (the esptool
+      commands, known limits, checksums)</li>
+    <li><a href="{{SOURCE_URL}}">Source for this firmware</a></li>
+    <li><a href="{{REPO_URL}}/issues">Report a problem</a> (with the Version
+      row from Output &gt; About)</li>
+  </ul>
+
+  <footer>
+    <p>Copyright &copy; 2026 IrosTheBeggar. mStream Player is free software under
+      the <a href="{{LICENSE_URL}}">GNU GPL, version 3 or later</a>,
+      with NO WARRANTY. The firmware also contains other people's code under
+      their own licences: <a href="{{NOTICES_URL}}">third-party notices</a>.</p>
+    <p>M5Stack is a trademark of M5Stack Technology Co., Ltd., named only to say
+      what this runs on. This project is not affiliated with or endorsed by
+      M5Stack.</p>
+  </footer>
+</main>
+</body>
+</html>

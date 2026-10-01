@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the idle power-off (IdlePolicy, docs/ENERGY.md item 4 and
 // step 5): the countdown for each choice, every condition that blocks it,
 // input restarting it, the 30 s warning, the release before the power

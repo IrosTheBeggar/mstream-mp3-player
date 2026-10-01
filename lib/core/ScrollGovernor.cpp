@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #include "ScrollGovernor.h"
 
 ScrollGovernor::Level ScrollGovernor::fromRing(uint32_t ringMs, uint32_t margin) const {

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #pragma once
 #include <BluetoothA2DPSource.h>
 #include <freertos/FreeRTOS.h>

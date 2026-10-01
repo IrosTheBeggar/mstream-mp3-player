@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #include "ui/BootScreen.h"
 
 #include <M5Unified.h>
@@ -19,7 +22,7 @@ constexpr int kRowH = 17;
 constexpr int kValueX = 112;
 }  // namespace
 
-void BootScreen::begin() {
+void BootScreen::begin(const char* version) {
   auto& d = M5.Display;  // M5.begin() already set the Core2's landscape rotation
   d.fillScreen(kBg);
   d.fillRect(0, 0, kW, kHeaderH, kHeader);
@@ -28,7 +31,11 @@ void BootScreen::begin() {
   d.setTextColor(kFg, kHeader);
   d.setTextPadding(0);
   d.setTextDatum(textdatum_t::middle_left);
-  d.drawString("mStream Player - starting", 8, kHeaderH / 2 - 1);
+  // "mStream Player v0.5.0 - starting"; a long dev build's version
+  // ("v0.5.0-12-gabc1234-dirty") without "- starting".
+  String title = String("mStream Player ") + version;
+  if (d.textWidth((title + " - starting").c_str()) <= kW - 16) title += " - starting";
+  d.drawString(title.c_str(), 8, kHeaderH / 2 - 1);
 }
 
 void BootScreen::show(const std::vector<Row>& rows) {

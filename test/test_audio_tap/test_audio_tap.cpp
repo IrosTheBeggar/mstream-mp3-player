@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the output tap: PcmRing/DeclickReader reporting where the
 // frames they read sit in the track, AudioTap's history and segments, and
 // TapReader's runs and audible-time clock. Run: pio test -e native

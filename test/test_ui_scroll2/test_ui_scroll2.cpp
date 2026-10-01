@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the UI spike's scroll round 2 (docs/UI-SPIKE.md): the
 // hardware vertical scroll's bookkeeping (VScrollMap) and the decoder's
 // gentle refill (RefillPacer). (The interaction boost, UiBoost, measured

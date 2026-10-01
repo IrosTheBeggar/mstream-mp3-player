@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #pragma once
 // Synthetic test audio for the beat tracker's host tests: click trains
 // (ClickGen), drum patterns with loud off-beat hi-hats, noise, silence, and

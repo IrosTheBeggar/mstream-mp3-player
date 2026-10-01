@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for TrackSeek: where a start part of the way into a track
 // lands (the resume point), an MP3's byte for a time (Xing and VBRI tables
 // of contents, average and frame bitrates), the frame-sync check, and a

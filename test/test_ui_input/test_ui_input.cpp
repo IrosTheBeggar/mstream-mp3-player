@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the UI spike's portable pieces: touch gesture
 // classification, kinetic scrolling, the scroll governor and percentiles;
 // and the screen's wake latch (WakeLatch) with the real recognisers.

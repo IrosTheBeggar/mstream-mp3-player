@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #include "BtControl.h"
 
 // Carries out what StreamControl decided. Only this issues media control, so

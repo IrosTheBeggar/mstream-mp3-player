@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for BeatTracker on synthetic audio (Signals.h). The phase
 // error is the grid's prediction against the true beats, taken when the
 // audio up to each beat has been fed, modulo the true period (a grid at half

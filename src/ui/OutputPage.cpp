@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // The Output tab (the tab bar spec §6.6, mockups 19-21 and 23, with the
 // review's grafts; the page's shape is in Pages.h): where the music plays,
 // each output's volume, the Pair screen, the settings and About. One page
@@ -680,6 +683,7 @@ void OutputPage::drawDevice(ListView::Row& r, const BtDevice& d) {
 void OutputPage::drawAbout(ListView::Row& r) {
   const AppState& s = ui_.state();
   char value[80] = "";
+  char labelText[64];
   const char* label = "";
   const icons::Icon* icon = &icons::kInfo;
   switch (static_cast<AboutItem>(r.row)) {
@@ -719,8 +723,17 @@ void OutputPage::drawAbout(ListView::Row& r) {
                static_cast<unsigned long>(about_.ramMin / 1024), about_.psramFree / (1024.0f * 1024.0f));
       break;
     case Version:
-      label = "Version";
+      snprintf(labelText, sizeof(labelText), uitext::kAboutVersionLabel, about_.built, about_.elf);
+      label = labelText;
       snprintf(value, sizeof(value), "%s", about_.version);
+      break;
+    case LicenceInfo:
+      label = uitext::kAboutLicenceLabel;
+      snprintf(value, sizeof(value), "%s", uitext::kAboutLicence);
+      break;
+    case SourceInfo:
+      label = uitext::kAboutSourceLabel;
+      snprintf(value, sizeof(value), "%s", uitext::kAboutSourceRepo);
       break;
     case Tips: {
       const int x = ListView::icon(r, icons::kInfo, accent::Output);

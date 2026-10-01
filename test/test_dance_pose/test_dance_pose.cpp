@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the dancing figure's pose math (DancePose), plus the small
 // helpers of the dance diagnostics (RollingStats, Base64). Run: pio test -e native
 #include <unity.h>

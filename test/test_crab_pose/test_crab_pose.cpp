@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the dancing crab: the generated art (CrabArt), the mapping
 // from beat phase to frames and offsets (CrabPose), the palette blend, and
 // the skin cycle. Run: pio test -e native

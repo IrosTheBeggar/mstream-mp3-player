@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #include "ListLayout.h"
 
 void ListLayout::set(uint32_t rows, bool topBar) {

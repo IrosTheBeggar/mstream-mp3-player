@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #pragma once
 #include <Arduino.h>
 
@@ -13,7 +16,8 @@ public:
     String value;
   };
 
-  void begin();
+  // The title bar: "mStream Player <version>" (app/Version).
+  void begin(const char* version);
   // Draws (or redraws) the rows.
   void show(const std::vector<Row>& rows);
   // A line at the bottom (the UI's Small font once it is loaded: after

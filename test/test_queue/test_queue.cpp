@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the play queue: QueueModel (edits, positions, keys, undo),
 // TrackCatalog (library and built-in ids) and QueueText (the queue saved as
 // paths, and read back after a library rebuild). Run: pio test -e native

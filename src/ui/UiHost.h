@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #pragma once
 #include <cstdint>
 
@@ -97,7 +100,9 @@ struct AppState {
 // About (the Output tab): what the device is and has.
 struct AboutInfo {
   char storage[48] = "";   // "microSD card, 29.7 GB"
-  char version[48] = "";   // "mstream-mp3-player 0.4, built Sep 27 2026"
+  char version[40] = "";   // "v0.5.0", "v0.5.0-3-gabc1234-dirty" (app/Version)
+  char built[12] = "";     // the commit's date, "2026-09-30"
+  char elf[12] = "";       // the ELF's SHA-256, 8 hex digits
   char bluetooth[48] = ""; // "SPYDRONE (12:34:56:78:9A:BC)"
   char power[48] = "";     // "160 MHz; Normal (-12..+3 dBm)" (PowerChoices::aboutText())
   uint32_t ramFree = 0, ramMin = 0, psramFree = 0;

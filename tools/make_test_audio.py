@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 IrosTheBeggar
 """Generate test audio for the player's LittleFS image (data/music/).
 
 Makes tones of known pitch (to check playback speed and channel order, and the

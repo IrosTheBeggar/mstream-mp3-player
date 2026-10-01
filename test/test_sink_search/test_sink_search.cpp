@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for SinkSearch: when the Core2 may scan for headphones by
 // itself, and which device a scan may take. Pairing is the Pair screen's;
 // nothing is ever taken by signal strength alone (a TV in the next room

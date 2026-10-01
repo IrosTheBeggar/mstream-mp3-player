@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #include "app/Diagnostics.h"
 
 #include <M5Unified.h>
@@ -6,6 +9,8 @@
 #include <esp_partition.h>
 #include <esp_system.h>
 #include <nvs.h>
+
+#include "app/Version.h"
 
 namespace diag {
 
@@ -145,6 +150,9 @@ void printPartitionTable() {
   }
   Serial.printf("[flash] * running %s (OTA state %s); boots %s; next update %s\n", running ? running->label : "?",
                 otaStateName(running), boot ? boot->label : "?", next ? next->label : "none");
+  // What an OTA update will compare: the running image's app description.
+  Serial.printf("[flash] running app: version \"%s\" (app description), ELF %s\n", version::appDesc(),
+                version::elfSha());
   nvs_stats_t nvs;
   if (nvs_get_stats(nullptr, &nvs) == ESP_OK) {
     Serial.printf("[flash] nvs: %u of %u entries used, %u namespaces\n", (unsigned)nvs.used_entries,

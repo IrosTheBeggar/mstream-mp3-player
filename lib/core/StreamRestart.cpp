@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #include "StreamRestart.h"
 
 bool StreamRestart::callback(int64_t nowUs, int32_t count, uint32_t epoch) {

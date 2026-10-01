@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #include "ReconnectPlanner.h"
 
 void ReconnectPlanner::start(Why, bool remembered, bool canScan, uint32_t nowMs) {

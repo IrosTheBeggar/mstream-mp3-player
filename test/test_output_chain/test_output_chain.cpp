@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host test of the Bluetooth output chain as BtSink::onData composes it: the
 // DeclickReader (pause/skip/underrun/output-switch fades), the GainRamp
 // (volume), then the sleep timer's FadeStage, 128 frames per call; and the

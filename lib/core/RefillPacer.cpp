@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #include "RefillPacer.h"
 
 uint32_t RefillPacer::sleepMs(const Config& c, uint32_t ringMs, uint32_t frames, uint32_t rate, uint32_t passUs) {

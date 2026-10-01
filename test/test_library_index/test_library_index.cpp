@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for LibraryIndex (the compact library store) and the synthetic
 // library generator. Run: pio test -e native
 #include <unity.h>

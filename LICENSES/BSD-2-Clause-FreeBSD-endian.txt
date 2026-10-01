@@ -1,0 +1,44 @@
+The licence notice at the top of ESP-IDF 5.5.5 (framework-arduinoespressif32-libs),
+include/newlib/platform_include/endian.h (byte-order macros and inline
+functions, reworked from FreeBSD's sys/endian.h), copied verbatim (lines 1-40):
+
+/*
+ * All the code below is a rework of
+ * https://github.com/freebsd/freebsd/blob/master/sys/sys/endian.h
+ * to import symbols defining non-standard endian handling functions.
+ * The aforementioned source code license terms are included here.
+ * For further license info, please look at https://github.com/freebsd/freebsd
+ */
+
+/*-
+ * SPDX-FileCopyrightText: 2018-2024 Espressif Systems (Shanghai) CO LTD
+ * SPDX-FileCopyrightText: 2020 Francesco Giancane <francesco.giancane@accenture.com>
+ * SPDX-FileCopyrightText: 2002 Thomas Moestl <tmm@FreeBSD.org>
+ * SPDX-License-Identifier: BSD-2-Clause-FreeBSD AND Apache-2.0
+ *
+ * Copyright (c) 2002 Thomas Moestl <tmm@FreeBSD.org>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ * $FreeBSD$
+ */

@@ -1,8 +1,10 @@
 The UI's fonts (src/ui/VlwFonts.cpp) are rasterised by tools/vlw_font.py from
-DejaVu Sans and DejaVu Sans Bold (https://dejavu-fonts.github.io). Their licence
-follows, as the DejaVu project distributes it (the LICENSE file of
-github.com/dejavu-fonts/dejavu-fonts). The rest of this repository is GPL-3.0
-(see LICENSE).
+DejaVu Sans and DejaVu Sans Bold 2.37 (https://dejavu-fonts.github.io). Their
+licence follows, as the DejaVu project distributes it (the LICENSE file of
+github.com/dejavu-fonts/dejavu-fonts); the Bitstream Vera and Arev parts match
+the licence text inside the TTF files used (their name table, ID 13). The
+rest of this repository is GPL-3.0-or-later (see LICENSE and
+THIRD-PARTY-NOTICES.md).
 
 --------------------------------------------------------------------------------
 

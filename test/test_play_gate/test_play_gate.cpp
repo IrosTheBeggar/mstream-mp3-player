@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for play while Bluetooth is the output and the headphones
 // aren't connected (PlayGate, with PlaybackController's Waiting and
 // BtSession): the overnight bug, where play waited as "Playing" for good.

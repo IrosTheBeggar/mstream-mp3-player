@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for TextFold: the ASCII folding the GFX fonts need, and the
 // library's sort order and A-Z keys. Run: pio test -e native
 #include <unity.h>

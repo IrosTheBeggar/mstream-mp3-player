@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the UI framework's portable pieces: the tab bar design's
 // navigation (NavModel), the frame cap on deadlines (FrameClock), a list's
 // items with its top bar and inline action bar (ListLayout), the selection

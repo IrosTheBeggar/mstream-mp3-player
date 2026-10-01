@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the input layer's portable pieces: the touch correction
 // (TouchCalibration, with the user's own target-practice logs), the touch
 // check and the calibration's rules (TouchCheck), the touch

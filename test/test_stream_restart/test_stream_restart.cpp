@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host unit tests for StreamRestart: when the Bluetooth data callback's audio
 // fades in from 0, against the callback sequences ESP-IDF produces.
 // Run: pio test -e native

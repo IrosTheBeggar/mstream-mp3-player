@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the cover thumbnails' portable pieces: the JPEG header
 // probe (JpegInfo), the box-filter scaler (ThumbScaler), the PSRAM LRU and
 // its requests (ThumbCache) and the card's thumbnail files (thumbfile).

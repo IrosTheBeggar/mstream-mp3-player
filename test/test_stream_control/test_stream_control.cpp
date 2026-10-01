@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host unit tests for StreamControl (when the A2DP media stream starts and
 // suspends), including the event orderings ESP-IDF can produce.
 // Run: pio test -e native

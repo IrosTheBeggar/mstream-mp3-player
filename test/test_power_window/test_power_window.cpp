@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host unit tests for power::decode / power::Window (the AXP192's ADC
 // registers, and their statistics for the console's P line).
 // Run: pio test -e native

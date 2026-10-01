@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the Dance tab's frame rate (DanceRate, docs/ENERGY.md item
 // 8): the mode, the rate at a CPU clock, and the pacer's deadlines, alone
 // and driven the way DanceMode::render() drives them, with the real crab.

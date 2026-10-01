@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host unit tests for ReconnectPlanner (finding the headphones again while no
 // Bluetooth link is up: burst, back-off, resting, the scan by name) and
 // RadioMeter, against a model of what PlayerA2dp does with its answers and

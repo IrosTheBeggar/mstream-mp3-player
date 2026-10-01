@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // mstream-mp3-player — firmware entry point (M5Stack Core2).
 //
 // Wires the portable core (PlaybackController over the queue and the
@@ -41,6 +44,7 @@
 #include "app/ScreenControl.h"
 #include "app/Screenshot.h"
 #include "app/SerialConsole.h"
+#include "app/Version.h"
 #include "audio/Core2AudioBackend.h"
 #include "spike/Spike.h"
 #include "storage/LocalStorage.h"
@@ -53,10 +57,6 @@
 // Headphones to connect to; set in a gitignored local.ini (see platformio.ini).
 #ifndef BT_SINK_NAME
 #define BT_SINK_NAME ""
-#endif
-// Shown in About.
-#ifndef PLAYER_VERSION
-#define PLAYER_VERSION "0.4-dev"
 #endif
 
 using Output = Core2AudioBackend::Output;
@@ -644,7 +644,9 @@ struct MainUiHost : ui::UiHost {
     } else {
       snprintf(a.storage, sizeof(a.storage), "Internal flash, %.1f MB (no card)", bytes / 1e6);
     }
-    snprintf(a.version, sizeof(a.version), "%s, built %s", PLAYER_VERSION, __DATE__);
+    snprintf(a.version, sizeof(a.version), "%s", version::player());
+    snprintf(a.built, sizeof(a.built), "%s", version::commitDate());
+    snprintf(a.elf, sizeof(a.elf), "%s", version::elfSha());
     BtSink& bt = audio.bluetooth();
     const BtLink l = bt.link();
     snprintf(a.bluetooth, sizeof(a.bluetooth), "%s%s", l.remembered ? (bt.deviceName()[0] ? bt.deviceName() : "paired") : "none paired",
@@ -1941,14 +1943,18 @@ void setup() {
   // 9, still to check by ear on battery). The console's Pe1 turns it on.
   cfg.output_power = false;
   M5.begin(cfg);
-  Serial.println("\nmstream-mp3-player");
+  Serial.printf("\nmstream-mp3-player %s (commit %s, %s), ELF %s\n", version::player(),
+                version::commit()[0] ? version::commit() : "none", version::commitDate(), version::elfSha());
+  // The licence notice once (GPLv3 section 5(d); About shows it too).
+  Serial.printf("Copyright (C) 2026 IrosTheBeggar. Licence: %s.\n", uitext::kAboutLicence);
+  Serial.printf("Source, licence texts and third-party notices: %s\n", uitext::kSourceUrl);
   diag::logRunningPartition();  // the flash layout (console L: the whole table)
   logNvs();  // only when NVS needed ensureNvs()
   powerSettings.begin();  // what the boot clock is, the Bluetooth power, and whether it restarted for the speed
   board::applyBootPower();  // the IMU suspended: nothing reads it
   diag::logHeap("boot");
 
-  bootScreen.begin();
+  bootScreen.begin(version::player());
 
   storage.begin();
   diag::logHeap("storage");

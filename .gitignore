@@ -24,3 +24,6 @@ local*.ini
 
 # Throwaway venv for the test-audio tool
 .venv-tools/
+
+# Release files and the install page, from tools/package_release.py
+dist/

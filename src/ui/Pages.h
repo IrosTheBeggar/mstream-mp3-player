@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #pragma once
 #include <cstdint>
 
@@ -407,7 +410,8 @@ private:
 // signal of 4 bars); a tap pairs (after a confirmation when it replaces
 // the remembered headphones), and the card shows how it goes.
 // About: the battery, storage, the library, the headphones, memory, the
-// version, and "Show the tips again" (the coach cards).
+// version, the licence and where the source is, and "Show the tips again"
+// (the coach cards).
 class OutputPage : public Page, public ListView::Source {
 public:
   explicit OutputPage(Ui& ui) : Page(ui) {}
@@ -453,7 +457,19 @@ private:
     AboutRow,
     kRootRows
   };
-  enum AboutItem : uint8_t { Battery, Storage, LibraryInfo, Headphones, PowerInfo, Memory, Version, Tips, kAboutRows };
+  enum AboutItem : uint8_t {
+    Battery,
+    Storage,
+    LibraryInfo,
+    Headphones,
+    PowerInfo,
+    Memory,
+    Version,
+    LicenceInfo,
+    SourceInfo,
+    Tips,
+    kAboutRows
+  };
 
   void drawBtTop(ListView::Row& r);
   void drawBtButtons(ListView::Row& r);

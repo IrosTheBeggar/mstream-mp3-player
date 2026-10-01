@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #pragma once
 #include <Arduino.h>
 
@@ -11,7 +14,7 @@
 //   d dance screen on/off   m next dancer (crab, stick)
 //   x / X screenshot of the dancer's box / the whole screen
 //   v per-beat log on/off
-//   L the partition table as flashed, the running app slot, NVS use (bug reports)
+//   L the partition table as flashed, the running app slot and its version, NVS use (bug reports)
 // and commands that take an argument, ended with Enter:
 //   i<n> play track n (0-based)   b<n> benchmark decoding track n
 //   c<name> the name a build with BT_SINK_NAME scans for, with none remembered (saved)

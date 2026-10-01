@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the screen policy (ScreenPower, docs/ENERGY.md item 2): the
 // dim and off timings for each choice, what keeps it lit, what holds a
 // lit one lit (a countdown toast), the wakes, the pocket guard, and the

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the sleep timer (SleepTimer, docs/ENERGY.md section 3) with
 // the real PlaybackController and FadeStage, carried out the way main.cpp's
 // stepSleep() does it. Run: pio test -e native

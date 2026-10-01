@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 IrosTheBeggar
 """PlatformIO post-script: move PSRAM-workaround libc functions out of IRAM.
 
 The prebuilt Arduino-ESP32 libs are built with CONFIG_SPIRAM_CACHE_WORKAROUND

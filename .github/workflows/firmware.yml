@@ -1,0 +1,195 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (C) 2026 IrosTheBeggar
+#
+# Every push and pull request: the host tests, the Core2 firmware (its
+# flash_guard and version checks), and the release files packaged by
+# tools/package_release.py, kept as a workflow artifact.
+# A v* tag also: a release build (RELEASE=1, tools/version.py), a GitHub
+# Release with those files, and the web installer on GitHub Pages (only for
+# the newest full release: not for a pre-release tag such as v0.5.0-rc.1, nor
+# an older tag, so the installer stays on the newest). Anything that isn't
+# plumbing lives in tools/, so it runs locally.
+#
+# One-time repository settings (README, "Releases and the install page"):
+# Pages source = GitHub Actions, and the github-pages environment allowing
+# v* tags to deploy.
+#
+# Third-party actions are pinned by commit; the comment names its tag.
+name: firmware
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to a branch or PR replaces its run; a tag's run always finishes.
+concurrency:
+  group: firmware-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type != 'tag' }}
+
+env:
+  # PlatformIO Core, pinned so a release is built the way it was tested:
+  # pioarduino (platformio.ini) needs at least 6.2.0, and 6.2.0 is the
+  # version every local build and the release checks were made with.
+  PLATFORMIO_VERSION: "6.2.0"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.pkg.outputs.version }}
+      prerelease: ${{ steps.pkg.outputs.prerelease }}
+      title: ${{ steps.pkg.outputs.title }}
+      artifact: ${{ steps.pkg.outputs.artifact }}
+      newest: ${{ steps.newest.outputs.newest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # All history and tags: tools/version.py names the build with
+          # git describe, which needs them (else every build is -dev+hash).
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Is this tag the newest full release (vX.Y.Z, the highest)? Only that
+      # one is marked Latest and goes on the installer, so an older tag's
+      # run (pushed with a newer one, a hotfix on an old line, a re-run or
+      # Run workflow) never puts the installer back on older firmware.
+      - name: Newest release?
+        id: newest
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          newest=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+          if [ -n "$TAG" ] && [ "$TAG" = "$newest" ]; then echo "newest=true"; else echo "newest=false"; fi >> "$GITHUB_OUTPUT"
+          echo "the newest full release tag is ${newest:-none}"
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install PlatformIO
+        run: python -m pip install "platformio==${PLATFORMIO_VERSION}"
+
+      # The platform, toolchain and framework (~1 GB). PlatformIO installs
+      # what platformio.ini pins, whatever an older cache restored.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.platformio
+          key: platformio-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: platformio-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-
+
+      # The libraries: only ever this exact platformio.ini's.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .pio/libdeps
+          key: libdeps-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('platformio.ini') }}
+
+      - name: Host tests
+        run: pio test -e native
+
+      # On a tag, RELEASE=1: the build fails unless HEAD is exactly that tag,
+      # the tree is clean and no local flags are set (tools/version.py).
+      # RELEASE_TAG makes the version the tag that triggered the run, not
+      # whichever tag on the commit git describe prefers.
+      # flash_guard fails it if the merged image is missing or wrong.
+      - name: Firmware
+        env:
+          RELEASE: ${{ github.ref_type == 'tag' && '1' || '' }}
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: pio run -e core2
+
+      - name: Package
+        id: pkg
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: |
+          if [ -n "$TAG" ]; then
+            python tools/package_release.py --out dist --release --tag "$TAG"
+          else
+            python tools/package_release.py --out dist
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.pkg.outputs.artifact }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Install page artifact
+        if: github.ref_type == 'tag' && steps.pkg.outputs.prerelease == 'false' && steps.newest.outputs.newest == 'true'
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: dist/site
+
+  release:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: dist
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+          TITLE: ${{ needs.build.outputs.title }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+          NEWEST: ${{ needs.build.outputs.newest }}
+        run: |
+          # Latest only for the newest full release (an older tag's release
+          # would otherwise take it: GitHub marks the last one published).
+          latest=false
+          if [ "$PRERELEASE" = false ] && [ "$NEWEST" = true ]; then latest=true; fi
+          draft=$(gh release view "$TAG" --json isDraft --jq .isDraft 2> /dev/null || echo none)
+          if [ "$draft" = none ]; then
+            # gh creates it as a draft, uploads, then publishes it.
+            gh release create "$TAG" dist/release/* --verify-tag --title "$TITLE" \
+              --notes-file dist/release-notes.md --prerelease="$PRERELEASE" --latest="$latest"
+          elif [ "$draft" = true ]; then
+            # A draft an interrupted run left: its files may be partial.
+            # Replace them, keep its notes, then publish it.
+            gh release upload "$TAG" dist/release/* --clobber
+            gh release edit "$TAG" --draft=false --title "$TITLE" \
+              --prerelease="$PRERELEASE" --latest="$latest"
+          else
+            # Already published, so complete (gh publishes only after every
+            # upload); its files stay as released (an immutable release
+            # can't change them anyway).
+            echo "::notice::$TAG is already published; its files are left as they are"
+          fi
+
+  pages:
+    needs: [build, release]
+    # The newest full release only (the build job's "Newest release?").
+    if: github.ref_type == 'tag' && needs.build.outputs.prerelease == 'false' && needs.build.outputs.newest == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    # One deployment at a time, and never cancel one halfway.
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1

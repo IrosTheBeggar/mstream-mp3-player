@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #pragma once
 
 // Fixed texts of the UI that have a fixed room, next to that room, so the
@@ -304,6 +307,19 @@ inline constexpr const char* kAboutLibrary = "%lu tracks, %lu artists, %lu album
 // About's power row: the two settings as they run (PowerChoices::aboutText():
 // "160 MHz; Normal (-12..+3 dBm)").
 inline constexpr const char* kAboutPower = "CPU speed, Bluetooth power";
+// About's licence rows (GPLv3 section 5(d); main.cpp prints the same once
+// at boot): the copyright and licence (Small) over "no warranty" (Body),
+// then the source. The URL is 314 px in Small, too wide for a line, so it
+// breaks after the owner: the label (Small) over the repo (Body).
+inline constexpr const char* kAboutLicenceLabel = "Licence (\xC2\xA9 2026 IrosTheBeggar)";
+inline constexpr const char* kAboutLicence = "GPL-3.0-or-later, no warranty";
+inline constexpr const char* kAboutSourceLabel = "Source: github.com/IrosTheBeggar/";
+inline constexpr const char* kAboutSourceRepo = "mstream-mp3-player";
+inline constexpr const char* kSourceUrl = "https://github.com/IrosTheBeggar/mstream-mp3-player";
+// About's version row: the commit's date and the first 8 hex digits of the
+// ELF's SHA-256 (for crash reports) in the label (Small), over the version
+// (Body, or Small for a long dev build's "v0.5.0-12-gabc1234-dirty").
+inline constexpr const char* kAboutVersionLabel = "Version (%s, ELF %s)";
 
 // ---- the touch check and calibration (ui/CalibrationScreen; TouchCheck) ----
 // The whole screen. A 26 px header: at its left, on the pages that have one,

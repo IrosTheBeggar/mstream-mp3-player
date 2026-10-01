@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // Host tests for the Library screens' portable pieces: the A-Z jump grid
 // and its second level (JumpIndex, textfold::secondKey), a list's step a
 // frame (ListLayout::stepToward), and every text the tab bar can show
@@ -481,6 +484,25 @@ void test_output_texts_fit() {
   fits(small, v, kAboutValueW);
   snprintf(v, sizeof(v), kAboutLibrary, 10000ul, 600ul, 1500ul);
   fits(small, v, kAboutValueW);
+  // The licence rows, each line in the font it's drawn in (the values fit
+  // in Body), and the source row's two lines put back together are the URL.
+  fits(small, kAboutLicenceLabel, kAboutValueW);
+  fits(body, kAboutLicence, kAboutValueW);
+  fits(small, kAboutSourceLabel, kAboutValueW);
+  fits(body, kAboutSourceRepo, kAboutValueW);
+  const std::string url = std::string("https://") + (kAboutSourceLabel + strlen("Source: ")) + kAboutSourceRepo;
+  TEST_ASSERT_EQUAL_STRING(kSourceUrl, url.c_str());
+  // The version row: the label with the date and any 8 hex digits of the
+  // ELF's hash; a release's version in Body, a long dev build's in Small
+  // (tools/version.py: git describe, at most 31 characters in the image).
+  for (const char* hex = "0123456789abcdef"; *hex; ++hex) {
+    snprintf(v, sizeof(v), kAboutVersionLabel, "2026-09-30", std::string(8, *hex).c_str());
+    fits(small, v, kAboutValueW);
+  }
+  fits(body, "v10.10.10", kAboutValueW);
+  fits(body, "v0.5.0-beta.10", kAboutValueW);
+  fits(small, "v0.5.0-dev+abcdef1-dirty", kAboutValueW);
+  fits(small, "v10.10.10-rc.10-9999-gabcdef12-dirty", kAboutValueW);
 }
 
 // Now Playing while play waits for the headphones (PlayGate): the panel's

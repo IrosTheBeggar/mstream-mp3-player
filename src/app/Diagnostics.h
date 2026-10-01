@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #pragma once
 #include <cstdint>
 
@@ -28,7 +31,8 @@ const char* resetReason();
 // single-file install.
 void logRunningPartition();
 // The console's L: every partition as flashed (esp_partition_find), the
-// running one marked, and how full NVS is.
+// running one marked, the version in the running app's description (what
+// OTA compares), and how full NVS is.
 void printPartitionTable();
 
 }  // namespace diag

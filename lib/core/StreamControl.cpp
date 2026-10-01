@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 #include "StreamControl.h"
 
 void StreamControl::send(Actions& a, Cmd c, State next, uint32_t nowMs) {

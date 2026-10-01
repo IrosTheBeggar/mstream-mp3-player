@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
 // The Library (the tab bar spec §6.2, mockups 07-15, with the review's
 // grafts; the page's shape is in Pages.h). Every action shows a toast with
 // Undo (and View after an add: the Queue at the added tracks). Browsing a
