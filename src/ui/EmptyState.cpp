@@ -50,6 +50,16 @@ void buttonBox(const EmptyState& e, int i, int* x, int* w) {
 
 }  // namespace
 
+void noCardState(EmptyState& e, bool notFat32) {
+  e.icon = &icons::kSdCard;
+  if (notFat32) e.iconColour = col::AMBER;
+  e.title = notFat32 ? uitext::kNotFat32Title : uitext::kNoCardTitle;
+  const char* const* lines = notFat32 ? uitext::kNotFat32Lines : uitext::kNoCardLines;
+  e.line1 = lines[0];
+  e.line2 = lines[1];
+  e.buttons[0] = uitext::kTryAgain;
+}
+
 void drawEmptyState(const EmptyState& e, int y0, int h, uint16_t accent, int pressed) {
   M5Canvas& s = gfx::strip();
   Fonts& f = Fonts::instance();

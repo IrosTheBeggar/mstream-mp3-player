@@ -646,11 +646,7 @@ void QueuePage::onHold(uint32_t row) {
 
 bool QueuePage::emptyState(EmptyState& e) {
   if (noCard()) {
-    e.icon = &icons::kSdCard;
-    e.title = "No microSD card";
-    e.line1 = "Insert a card with your music in /music,";
-    e.line2 = "as /music/Artist/Album/01 - Title.mp3";
-    e.buttons[0] = "Try again";
+    noCardState(e, ui_.state().cardNotFat32);
     return true;
   }
   e.icon = &icons::kQueue;
@@ -667,11 +663,7 @@ bool QueuePage::emptyState(EmptyState& e) {
 
 void QueuePage::onEmptyAction(int i) {
   if (noCard()) {
-    if (!ui_.host().retryCard()) {
-      ui_.warn("Still no card: is it all the way in?");
-    } else {
-      ui_.toast("Card found: starting again", false);
-    }
+    ui_.retryCard();
     return;
   }
   if (i == 0) {

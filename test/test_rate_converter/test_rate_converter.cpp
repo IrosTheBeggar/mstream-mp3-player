@@ -11,12 +11,14 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <random>
 #include <utility>
 #include <vector>
 
 #include "RateConverter.h"
 #include "ResamplerTables.h"
+#include "TableCopy.h"
 
 namespace {
 using Frames = std::vector<int16_t>;  // interleaved stereo
@@ -1115,33 +1117,211 @@ void test_the_kernel_and_its_self_test() {
 
 // The tables read from a copy (the firmware copies them into internal RAM):
 // the same bits, from the next setRate() on; the hook that makes the copy
-// is called before a stream at another rate is configured, never for
-// 44.1 kHz.
-int gWanted = 0;
+// is told a stream at another rate wants them, never 44.1 kHz.
+std::vector<int> gWanted;  // the hook's calls: 1 wanted, 0 not
 alignas(4) int16_t gD147Copy[resampler::kD147Stored][K];
 alignas(4) int16_t gU12Copy[resampler::kU12Stored][K];
+
+void wantedHook(bool w) { gWanted.push_back(w ? 1 : 0); }
 
 void test_tables_from_a_copy() {
   std::memcpy(gD147Copy, resampler::kD147, sizeof(gD147Copy));
   std::memcpy(gU12Copy, resampler::kU12, sizeof(gU12Copy));
   const Frames in = noise(3000, 61, 30000);
-  RateConverter::setTablesWanted([] { ++gWanted; });
-  gWanted = 0;
+  RateConverter::setTablesWanted(wantedHook);
+  gWanted.clear();
   const Frames pass = convert(gConv, 44100, in);
-  TEST_ASSERT_EQUAL_INT(0, gWanted);
+  TEST_ASSERT_EQUAL_UINT32(1, gWanted.size());
+  TEST_ASSERT_EQUAL_INT(0, gWanted[0]);
   for (uint32_t hz : {48000u, 8000u, 22050u}) {
     const Frames flash = convert(gConv, hz, in);
     TEST_ASSERT_FALSE(RateConverter::tablesCopied());
     RateConverter::useTables(gD147Copy, gU12Copy);
     TEST_ASSERT_TRUE(RateConverter::tablesCopied());
-    gWanted = 0;
+    gWanted.clear();
     assertSame(flash, convert(gConv, hz, in));
-    TEST_ASSERT_EQUAL_INT(1, gWanted);
+    TEST_ASSERT_EQUAL_UINT32(1, gWanted.size());
+    TEST_ASSERT_EQUAL_INT(1, gWanted[0]);
     RateConverter::useTables(nullptr, nullptr);
   }
   RateConverter::setTablesWanted(nullptr);
   TEST_ASSERT_FALSE(RateConverter::tablesCopied());
   TEST_ASSERT_EQUAL_UINT32(in.size(), pass.size());
+}
+
+// The hook's calls since the last check, against `want`.
+void wantedCalls(std::initializer_list<int> want) {
+  TEST_ASSERT_EQUAL_UINT32(want.size(), gWanted.size());
+  size_t i = 0;
+  for (int w : want) TEST_ASSERT_EQUAL_INT(w, gWanted[i++]);
+  gWanted.clear();
+}
+
+// When the hook is told what: wanted for any route that reads the tables,
+// at a stream's first rate or a change mid-stream; not wanted only at a
+// stream's first rate after reset() (44.1 kHz, 88.2 kHz's halfband alone,
+// a refused rate), never mid-stream, where a block of the old rate may
+// still be on its way through.
+void test_tables_wanted_only_at_a_start() {
+  RateConverter::setTablesWanted(wantedHook);
+  RateConverter& c = gConv;
+  gWanted.clear();
+  c.reset();
+  TEST_ASSERT_TRUE(c.setRate(44100, kCpu, kHiRes));
+  wantedCalls({0});
+  TEST_ASSERT_TRUE(c.setRate(44100, kCpu, kHiRes));  // the same rate: nothing
+  TEST_ASSERT_TRUE(c.setRate(0, kCpu, kHiRes));      // FLAC before its header: nothing
+  wantedCalls({});
+  TEST_ASSERT_TRUE(c.setRate(48000, kCpu, kHiRes));  // mid-stream, to a converted rate
+  wantedCalls({1});
+  TEST_ASSERT_TRUE(c.setRate(44100, kCpu, kHiRes));  // mid-stream, back: never freed here
+  TEST_ASSERT_TRUE(c.setRate(88200, kCpu, kHiRes));
+  wantedCalls({});
+  TEST_ASSERT_TRUE(c.setRate(22050, kCpu, kHiRes));
+  wantedCalls({1});
+  c.reset();
+  TEST_ASSERT_TRUE(c.setRate(8000, kCpu, kHiRes));
+  wantedCalls({1});
+  c.reset();
+  TEST_ASSERT_TRUE(c.setRate(88200, kCpu, kHiRes));  // the halfband alone reads no table
+  wantedCalls({0});
+  c.reset();
+  TEST_ASSERT_TRUE(c.setRate(96000, kCpu, kHiRes));  // its halfband, then 147/160
+  wantedCalls({1});
+  c.reset();
+  TEST_ASSERT_FALSE(c.setRate(37800, kCpu, kHiRes));  // refused: nothing reads them
+  wantedCalls({0});
+  TEST_ASSERT_TRUE(c.setRate(48000, kCpu, kHiRes));  // another rate after all: a route that reads them
+  wantedCalls({1});
+  // An MP3's two frames before its rate: still the stream's first rate.
+  c.reset();
+  const int16_t f[2] = {100, -100};
+  int16_t out[RateConverter::kMaxOut * 2];
+  c.push(f, out);
+  c.push(f, out);
+  TEST_ASSERT_TRUE(c.setRate(44100, kCpu, kHiRes));
+  wantedCalls({0});
+  RateConverter::setTablesWanted(nullptr);
+}
+
+// TableCopy, the firmware's hook, over a run of tracks: the copy made at a
+// converted track's start, freed at a 44.1 kHz one's, made again at the
+// next converted one; never read once freed. The allocator poisons what is
+// freed and keeps it (so a read of it gives wrong bits, not a crash), and
+// every track must match the flash tables' bits.
+namespace pool {
+constexpr size_t kWords = (TableCopy::kBytes + 3) / 4 + 1;
+std::vector<std::vector<uint32_t>> blocks;  // every block handed out, freed or not
+int allocs = 0, frees = 0, live = 0;
+bool fail = false, misalign = false;
+void* alloc(size_t bytes) {
+  TEST_ASSERT_TRUE(bytes <= (kWords - 1) * 4);
+  if (fail) return nullptr;
+  blocks.emplace_back(kWords, 0u);  // (a vector of vectors: a block's data never moves)
+  ++allocs;
+  ++live;
+  auto* p = reinterpret_cast<uint8_t*>(blocks.back().data());
+  return misalign ? p + 2 : p;
+}
+void release(void* p) {
+  for (auto& b : blocks) {
+    auto* base = reinterpret_cast<uint8_t*>(b.data());
+    if (p == base || p == base + 2) {
+      std::fill(b.begin(), b.end(), 0x7FFF7FFFu);  // loud taps: any read of it shows
+      ++frees;
+      --live;
+      return;
+    }
+  }
+  TEST_FAIL_MESSAGE("freed a block that wasn't handed out");
+}
+void clear() {
+  blocks.clear();
+  allocs = frees = live = 0;
+  fail = misalign = false;
+}
+}  // namespace pool
+
+TableCopy* gCopy = nullptr;
+std::vector<TableCopy::Event> gEvents;
+void copyHook(bool w) { gEvents.push_back(gCopy->want(w)); }
+
+void assertEvents(std::initializer_list<TableCopy::Event> want) {
+  TEST_ASSERT_EQUAL_UINT32(want.size(), gEvents.size());
+  size_t i = 0;
+  for (TableCopy::Event e : want) {
+    TEST_ASSERT_EQUAL_STRING(TableCopy::eventName(e), TableCopy::eventName(gEvents[i]));
+    ++i;
+  }
+  gEvents.clear();
+}
+
+void test_table_copy_follows_the_tracks() {
+  pool::clear();
+  TableCopy copy(pool::alloc, pool::release);
+  const Frames in = noise(2500, 67, 32000);
+  const uint32_t tracks[] = {48000, 44100, 22050, 8000, 44100, 44100, 32000, 11025, 44100, 48000};
+  std::vector<Frames> flash;
+  for (uint32_t hz : tracks) flash.push_back(convert(gConv, hz, in));  // no hook: the flash tables
+  gCopy = &copy;
+  gEvents.clear();
+  RateConverter::setTablesWanted(copyHook);
+  for (size_t t = 0; t < sizeof(tracks) / sizeof(tracks[0]); ++t) {
+    assertSame(flash[t], convert(gConv, tracks[t], in));
+    TEST_ASSERT_EQUAL(tracks[t] != 44100, copy.copied());
+    TEST_ASSERT_EQUAL(tracks[t] != 44100, RateConverter::tablesCopied());
+    TEST_ASSERT_EQUAL_INT(copy.copied() ? 1 : 0, pool::live);
+  }
+  using E = TableCopy::Event;
+  assertEvents({E::Copied, E::Freed, E::Copied, E::None, E::Freed, E::None, E::Copied, E::None, E::Freed, E::Copied});
+  TEST_ASSERT_EQUAL_INT(4, pool::allocs);
+  TEST_ASSERT_EQUAL_INT(3, pool::frees);
+  // A change to 44.1 kHz mid-stream keeps the copy: the stream may still
+  // have a block of 48 kHz frames to convert.
+  gConv.reset();
+  TEST_ASSERT_TRUE(gConv.setRate(48000, kCpu, kHiRes));
+  TEST_ASSERT_TRUE(gConv.setRate(44100, kCpu, kHiRes));
+  TEST_ASSERT_TRUE(copy.copied());
+  assertEvents({E::None});
+  TEST_ASSERT_EQUAL_STRING("freed", TableCopy::eventName(copy.want(false)));  // (flash again for the tests after)
+  RateConverter::setTablesWanted(nullptr);
+  TEST_ASSERT_FALSE(RateConverter::tablesCopied());
+  TEST_ASSERT_EQUAL_INT(0, pool::live);
+  gCopy = nullptr;
+}
+
+// No room for the copy (a fragmented heap): the flash tables, the same
+// bits; NoRoom once (the firmware logs that), StillNoRoom after; a later
+// track tries again and gets it. An unaligned block counts as none.
+void test_table_copy_without_room_reads_flash() {
+  pool::clear();
+  TableCopy copy(pool::alloc, pool::release);
+  const Frames in = noise(2000, 71, 32000);
+  const Frames flash = convert(gConv, 48000, in);
+  gCopy = &copy;
+  gEvents.clear();
+  RateConverter::setTablesWanted(copyHook);
+  pool::fail = true;
+  assertSame(flash, convert(gConv, 48000, in));
+  assertSame(flash, convert(gConv, 48000, in));
+  TEST_ASSERT_FALSE(copy.copied());
+  TEST_ASSERT_FALSE(RateConverter::tablesCopied());
+  pool::fail = false;
+  pool::misalign = true;
+  assertSame(flash, convert(gConv, 48000, in));
+  TEST_ASSERT_FALSE(copy.copied());
+  TEST_ASSERT_EQUAL_INT(1, pool::frees);  // the unaligned block given back at once
+  pool::misalign = false;
+  assertSame(flash, convert(gConv, 48000, in));
+  TEST_ASSERT_TRUE(copy.copied());
+  TEST_ASSERT_TRUE(RateConverter::tablesCopied());
+  using E = TableCopy::Event;
+  assertEvents({E::NoRoom, E::StillNoRoom, E::StillNoRoom, E::Copied});
+  TEST_ASSERT_EQUAL_UINT32(3, copy.failures());
+  copy.want(false);
+  RateConverter::setTablesWanted(nullptr);
+  TEST_ASSERT_EQUAL_INT(0, pool::live);
+  gCopy = nullptr;
 }
 
 void test_it_is_small() {
@@ -1183,6 +1363,9 @@ int main(int, char**) {
   RUN_TEST(test_convert_blocks_match_push);
   RUN_TEST(test_the_kernel_and_its_self_test);
   RUN_TEST(test_tables_from_a_copy);
+  RUN_TEST(test_tables_wanted_only_at_a_start);
+  RUN_TEST(test_table_copy_follows_the_tracks);
+  RUN_TEST(test_table_copy_without_room_reads_flash);
   RUN_TEST(test_it_is_small);
   return UNITY_END();
 }

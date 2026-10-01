@@ -289,11 +289,14 @@ using FastKernel = CKernel;  // no fast kernel off the ESP32
 std::atomic<bool> gFast{false};
 
 // The polyphase tables the stages read: flash, or the caller's copy
-// (RateConverter::useTables()), and who makes that copy when a stream at
-// another rate first needs it.
+// (RateConverter::useTables()), and who makes that copy when a stream needs
+// it, or frees it when a stream starts without (setTablesWanted()).
 const int16_t (*gD147)[resampler::kTaps] = resampler::kD147;
 const int16_t (*gU12)[resampler::kTaps] = resampler::kU12;
-void (*gTablesWanted)() = nullptr;
+void (*gTablesWanted)(bool) = nullptr;
+
+// The route reads the polyphase tables (88.2 kHz is a halfband alone).
+bool readsTables(const Route& rt) { return rt.stageA == kPoly || rt.thenD147; }
 
 }  // namespace
 
@@ -381,7 +384,10 @@ bool RateConverter::setRate(uint32_t hz, uint32_t cpuMhz, bool hiRes) {
   if (hz == 0) return state_ != State::Refused;
   if (state_ == State::Configured && hz == rate_) return true;  // a FLAC seek, a reopen: nothing changes
   const Plan p = plan(hz, cpuMhz, hiRes);
-  if (p.ok && kRoutes[p.index].stageA != kNone && gTablesWanted) gTablesWanted();  // before configure() reads them
+  if (gTablesWanted) {  // before configure() reads them
+    const bool reads = p.ok && readsTables(kRoutes[p.index]);
+    if (reads || state_ == State::Unconfigured) gTablesWanted(reads);  // (none mid-stream: see the header)
+  }
   rate_ = hz;
   if (!p.ok) {
     state_ = State::Refused;
@@ -401,6 +407,7 @@ void RateConverter::configure(const Plan& p) {
   state_ = State::Configured;
   stageA_ = rt.stageA;
   thenD147_ = rt.thenD147;
+  polyA_.rows = nullptr;  // (no stale table: a freed copy, after a route that read it)
   if (rt.stageA == kPoly && rt.upL == 0) {
     polyA_.rows = gD147;
     polyA_.tableRows = resampler::kD147Rows;
@@ -706,7 +713,7 @@ void RateConverter::useTables(const int16_t (*d147)[resampler::kTaps], const int
 
 bool RateConverter::tablesCopied() { return gD147 != resampler::kD147; }
 
-void RateConverter::setTablesWanted(void (*hook)()) { gTablesWanted = hook; }
+void RateConverter::setTablesWanted(void (*hook)(bool)) { gTablesWanted = hook; }
 
 void RateConverter::useFastKernel(bool on) { gFast.store(on && RC_FAST_KERNEL != 0, std::memory_order_relaxed); }
 

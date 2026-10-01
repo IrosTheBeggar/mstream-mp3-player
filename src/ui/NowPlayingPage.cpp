@@ -385,11 +385,7 @@ void NowPlayingPage::drawPlayZone() {
 bool NowPlayingPage::emptyState(EmptyState& e) const {
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
-    e.icon = &icons::kSdCard;
-    e.title = "No microSD card";
-    e.line1 = "Insert a card with your music in /music,";
-    e.line2 = "as /music/Artist/Album/01 - Title.mp3";
-    e.buttons[0] = "Try again";
+    noCardState(e, s.cardNotFat32);
     return true;
   }
   e.icon = &icons::kNote;
@@ -422,11 +418,7 @@ void NowPlayingPage::onEmptyEvent(const InputEvent& e) {
   ui_.tick();
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
-    if (ui_.host().retryCard()) {
-      ui_.toast("Card found: starting again", false);
-    } else {
-      ui_.warn("Still no card: is it all the way in?");
-    }
+    ui_.retryCard();
   } else if (was == 0) {
     ui_.showTab(NavModel::Tab::Library);
   } else {
@@ -443,7 +435,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   const bool empty = s.current < 0;
   const bool noCard = !s.card && s.libraryTracks == 0;
   if (empty) {
-    if (!drawn_.valid || !drawn_.empty || drawn_.noCard != noCard) {
+    if (!drawn_.valid || !drawn_.empty || drawn_.noCard != noCard || drawn_.notFat32 != s.cardNotFat32) {
       EmptyState es;
       emptyState(es);
       drawEmptyState(es, kContentY, kH - kContentY, accent::NowPlaying, emptyPressed_);
@@ -451,6 +443,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawn_.valid = true;
       drawn_.empty = true;
       drawn_.noCard = noCard;
+      drawn_.notFat32 = s.cardNotFat32;
     }
     return false;
   }

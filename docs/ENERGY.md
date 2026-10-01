@@ -636,6 +636,10 @@ but with an MP3 playing the dancer doesn't reach its target (~17/24 at
 
 - **IMU:** suspend the BMI270 at boot (`Pi0`). Nothing reads it. Streaming
   showed -3.3 once, idle ~0; treat it as ≤1 mA. **Do it**: it costs nothing.
+  (Since v0.5.0 an older unit's MPU6886, the Core2 v1.0 and the Core2 for
+  AWS, is put to sleep at boot too, with M5Unified's `M5.Imu.sleep()`; the
+  `[power] boot:` line names which IMU and what was done. Not measured: no
+  such unit here.)
 - **5 V boost:** EXTEN off at boot (`cfg.output_power = false`). The amp
   isn't fed from it (measured). **Do it** after an ear check that the
   speaker still plays on battery with EXTEN off. Turn it on only for a
@@ -1548,7 +1552,11 @@ power-off on battery is still to do.** As built:
   plug/unplug: `externalPower()`, with not-read-yet counting as present.
   The Core2's USB-C feeds ACIN (the probe's 5.13 V); VBUS counts too. It
   is read again right before `powerOff()`: plugged in during the release,
-  it stays on (`IdlePolicy::cancel()`).
+  it stays on (`IdlePolicy::cancel()`). Since v0.5.0 it is read by the
+  chip M5Unified found (`M5.Power.getType()`): the AXP192's `isACIN() ||
+  isVBUS()`, the AXP2101's `isVBUS()` (the Core2 v1.1: no ACIN; the old
+  read assumed the AXP192's register bits), and on any other chip
+  it counts as present, so a board it can't read never powers itself off.
 - **The warning** (added since the plan): for the last 30 s
   the toast "Turning off in 30 s" (Body, counting down) with **Keep on**
   (`Toast::showIdle`, `AppState::idleWarnS`). It replaces any toast up.

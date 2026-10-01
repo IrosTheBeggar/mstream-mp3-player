@@ -49,8 +49,9 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
 ## The microSD card
 
 - Format it **FAT32** (MBR). exFAT cards, which is how most cards of 64 GB
-  and up come, don't mount: the player says there's no card. Windows only
-  offers FAT32 up to 32 GB; for a bigger card use a FAT32 formatting tool.
+  and up come, and GPT cards don't mount: the player says "This card isn't
+  FAT32". Windows only offers FAT32 up to 32 GB; for a bigger card use a
+  FAT32 formatting tool.
 - Put the music under **`/music`**, e.g. `/music/Artist/Album/01 - Title.mp3`.
   An album's cover is the `cover.jpg` (or `folder.jpg`) next to its tracks.
 - Pair headphones from **Output > Pair new headphones**. The player never
