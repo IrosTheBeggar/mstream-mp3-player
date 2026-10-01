@@ -108,6 +108,12 @@ public:
   // from 0:00 in the same state.
   void prev();
   void stop();
+  // stop(), keeping the listener's place in the current entry: a paused (or
+  // waiting-to-resume) track's position, or a playing one's, becomes a
+  // start point (a waiting one stays), so the next play, or the next boot's
+  // resume point, picks up there. For the console's tests that borrow the
+  // backend (Rt, Rb, b<n>). True when a place was kept.
+  bool stopKeepingPlace();
   // Move to the next or previous track without starting it: Stopped stays
   // Stopped; Paused stays Paused, on the new track from its start (the old
   // one is dropped), and the next togglePlayPause() starts it. While Playing
@@ -184,12 +190,14 @@ public:
   void queueReplaced(bool currentKept);
 
   // The last track that couldn't be played (skipped by update()), for the
-  // UI's note ("Skipped 07 - x.flac: can't play it") and the Queue's mark
-  // on its row. `count` goes up by one per failure.
+  // UI's note ("Skipped 07 - x.flac: can't play it", or why its sample rate
+  // was refused) and the Queue's mark on its row. `count` goes up by one
+  // per failure.
   struct Failure {
     uint32_t count = 0;
     uint32_t track = QueueModel::kNone;  // its TrackCatalog id
     uint32_t key = QueueModel::kNone;    // its queue entry's key
+    IAudioBackend::RateRefusal rate;     // hz 0: not its rate
   };
   const Failure& lastFailure() const { return failure_; }
 

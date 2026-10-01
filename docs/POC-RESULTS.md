@@ -190,7 +190,14 @@ e944373); 7 is open:
 6. Log the negotiated SBC settings, the live volume and gaps between Bluetooth
    callbacks, so listening tests can be interpreted.
 7. A 48 → 44.1 kHz resampler for Bluetooth (speexdsp or polyphase), and
-   shrinking the decode stack from 16 KB to 8 KB.
+   shrinking the decode stack from 16 KB to 8 KB. The resampler is now
+   built, as our own polyphase filter for both outputs, host-tested
+   (`lib/core/RateConverter`, `RingFeed`) and wired into `RingOutput`: every
+   track reaches the ring at 44.1 kHz, so 48 kHz files play over Bluetooth.
+   On the device it is exact (pitch, level, frame counts, 0 underruns in
+   40 minutes), but a 48 kHz track costs 22 % of a core at 240 MHz and
+   32 % at 160, so a faster kernel is next: [RESAMPLER.md](RESAMPLER.md)
+   section 6b.
 
 Known follow-up (volume): the absolute-mode UI race. The volume shown
 follows the headphones' reports, so one that overtakes a command of ours

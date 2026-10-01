@@ -180,6 +180,28 @@ void PlaybackController::stop() {
   pausedByTimer_ = false;  // (stopped: headphone Play starts nothing anyway)
 }
 
+bool PlaybackController::stopKeepingPlace() {
+  uint32_t ms = 0, dur = 0;
+  // A start point waiting (after a boot, qs): stop() leaves it as it is.
+  if (hasStartPoint()) {
+    stop();
+    return true;
+  }
+  // The backend holds this entry's track: where it is, as prevAction()
+  // reads it (a start not taken up yet: where it was asked to start; a
+  // failed track has no place).
+  const bool holding = hasTrack() && state_ != PlayState::Stopped && !cued_ && !audio_.failed();
+  if (holding) {
+    const bool known = audio_.positionKnown();
+    ms = known ? audio_.positionMs() : playedFromMs_;
+    dur = known ? audio_.durationMs() : 0;
+  }
+  stop();
+  if (ms == 0) return false;
+  setStartPoint(ms, dur);  // stopped: it waits for the next play
+  return true;
+}
+
 void PlaybackController::setStartPoint(uint32_t ms, uint32_t durationMs) {
   if (!hasTrack() || ms == 0) {
     clearStartPoint();
@@ -270,6 +292,7 @@ void PlaybackController::update(uint32_t nowMs) {
     ++failure_.count;
     failure_.track = queue_.currentTrack();
     failure_.key = queue_.currentKey();
+    failure_.rate = audio_.rateRefusal();
     if (++failuresInARow_ >= queue_.size()) {
       stop();  // every track failed in a row: nothing here plays
       return;

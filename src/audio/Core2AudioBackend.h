@@ -26,12 +26,15 @@ class AudioFileSourceID3;
 class AudioGenerator;
 class AudioGeneratorMP3;
 class AudioOutput;
+class RingFeed;
 class RingOutput;
 class SeekableFlac;
 
 // IAudioBackend for the Core2. A decode task turns the current track into PCM
-// in a PSRAM ring (PcmRing); the active output, Bluetooth headphones or the
-// internal speaker, plays from the ring. play() and stop() are requests: they
+// in a PSRAM ring (PcmRing), converted to 44.1 kHz on the way in (RingOutput;
+// docs/RESAMPLER.md: 8-48 kHz, and 88.2/96 kHz at the 240 MHz CPU speed;
+// any other rate fails the track, on both outputs); the active output,
+// Bluetooth headphones or the internal speaker, plays from the ring. play() and stop() are requests: they
 // post a new generation to TransportSync and wake the decode task, and
 // finished()/failed() only ever describe the latest request.
 //
@@ -40,13 +43,17 @@ class SeekableFlac;
 // and 60 s click tracks with a known beat, "tone:click<bpm>" and
 // "tone:click<bpm>off" (first beat 0.37 of a period in; see ClickGen), and
 // an hour of digital silence, "tone:silence" (power measurements: the
-// output runs at its full rate, nothing is heard).
+// output runs at its full rate, nothing is heard). A tone or the silence
+// can be made at another rate and converted like a file,
+// "tone:1000@48000", "tone:silence@96000" (lib/core ToneTrack; the
+// converter's test tracks).
 //
 // A play can start part of the way in (the resume point: play()'s
 // `startMs`; lib/core TrackSeek, docs/ARCHITECTURE.md "Audio pipeline"): an
 // MP3 at a byte from its Xing or VBRI table of contents or its bitrate, on
 // a clean frame; a FLAC through libFLAC's own seek; a built-in track just
-// counts from there. positionMs() and durationMs() count from the start.
+// counts from there. positionMs() and durationMs() count from the start, in
+// 44.1 kHz ring frames whatever the track's rate.
 class Core2AudioBackend : public IAudioBackend {
 public:
   enum class Output : uint8_t { Speaker, Bluetooth };
@@ -80,10 +87,36 @@ public:
   bool positionKnown() const override;
   bool finished() const override;
   bool failed() const override;
+  RateRefusal rateRefusal() const override;
 
   // Decodes up to 20 s of `path` as fast as possible, output discarded, and
-  // prints how many times faster than realtime that was. Stops playback.
+  // prints how many times faster than realtime that was; a file at another
+  // rate than 44.1 kHz is then decoded again through the converter, for
+  // decode plus convert. Stops playback.
   void bench(const std::string& path);
+  // The converter's bench (the console's Rb): 10 s of a fixed stereo signal
+  // at each supported rate through RingOutput's own converter on the decode
+  // task, output dropped; prints its cycles per second of audio and the
+  // share of a core at the clock running now. Stops playback.
+  void rateBench();
+  // The CPU speed set at boot (PowerSettings::cpuBootMhz()): 88.2/96 kHz
+  // tracks need 240 MHz. The setting, not the clock right now: the
+  // console's Pc80 lowers that for quiet spells. 0 (until set): the clock.
+  void setCpuMhz(uint16_t mhz) { cpuMhz_.store(mhz, std::memory_order_relaxed); }
+
+  // The current track's conversion (the console's R; any task, a snapshot):
+  // the source rate (0: not known yet), the route, ring frames per source
+  // frame (num/den, exactly), and since the start or the last rate change
+  // the source frames taken, the ring frames made and the samples clamped.
+  // Once a track has ended, made == ceil(taken * num / den) exactly; until
+  // then the filter holds back up to its delay's worth.
+  struct RateStatus {
+    uint32_t rate;
+    const char* route;  // "147/160", "passthrough", "" (none yet)
+    uint32_t num, den;
+    uint32_t taken, made, clamped;
+  };
+  RateStatus rateStatus() const;
 
   void setOutput(Output output);
   Output output() const { return output_; }
@@ -130,11 +163,11 @@ public:
   // ~25 ms for ESP-IDF's queue and the radio; the speaker, its measured queue
   // plus the I2S DMA. Loop task.
   uint32_t outputLatencyUs(Output output, char* how, size_t howLen) const;
-  // Sample rate of the audio in the ring (the speaker plays at it).
-  int sampleRate() const { return shared_.rate; }
+  // Sample rate of the audio in the ring: 44.1 kHz, every track converted.
+  int sampleRate() const { return AudioShared::kRingRate; }
   const Stats& stats() const { return stats_; }  // refreshed by loop() once a second
   // Live numbers for the UI (any task; stats() is once a second):
-  // audio waiting in the ring now, in ms of the ring's sample rate. The
+  // audio waiting in the ring now, in ms. The
   // scrolling lists back off when it runs low (ScrollGovernor).
   uint32_t bufferedMsNow() const;
   // The outputs' underrun count (free-running).
@@ -207,7 +240,7 @@ public:
 private:
   enum class Work : uint8_t { Idle, Producing, Draining };
   enum class Produced : uint8_t { More, Done, Failed };
-  enum class Kind : uint8_t { Play, Stop, Bench };
+  enum class Kind : uint8_t { Play, Stop, Bench, RateBench };
   struct Request {
     std::string path;
     Kind kind = Kind::Stop;
@@ -221,7 +254,15 @@ private:
   void request(const std::string& path, Kind kind, uint32_t startMs = 0, uint32_t hintMs = 0);
   void decodeTask();
   Work start(uint32_t generation);
+  // A built-in track (lib/core ToneTrack), through RingOutput like a file.
+  Work startTone(uint32_t generation, const Request& req);
   Work fail(uint32_t generation, const std::string& why);
+  // fail() for a rate the converter refused, kept for rateRefusal().
+  Work failRate(uint32_t generation);
+  RingFeed& feed();
+  uint32_t cpuMhz() const;
+  // Why the track's rate was refused: "37800 Hz isn't supported (...)".
+  std::string refusalText();
   // `startMs` > 0: part of the way in (sets startMs_ to where it landed),
   // `hintMs` its length as known elsewhere (0: none).
   bool openDecoder(const std::string& path, AudioOutput* out, uint32_t startMs, uint32_t hintMs);
@@ -236,9 +277,13 @@ private:
   void closeDecoder();
   Produced produceTone();
   Produced produceDecoded();
-  void noteRingFill(int rate);  // decode task: ringSteady_ once the ring holds kSteadyMs
-  void noteStartProgress(int rate, bool full);  // decode task: fills in startTiming()
+  // The end of the source: the converter's tail into the ring, then Done.
+  Produced finishSource();
+  void noteRingFill();  // decode task: ringSteady_ once the ring holds kSteadyMs
+  void noteStartProgress(bool full);  // decode task: fills in startTiming()
+  void publishRate();   // decode task: rateStatus()'s snapshot
   void runBench(const std::string& path);
+  void runRateBench();
   void setText(std::string& field, const std::string& value);
 
   std::unique_ptr<PcmRing> ring_;
@@ -259,11 +304,27 @@ private:
   const char* codec_ = "";
   bool toneTrack_ = false;
   bool clickTrack_ = false;                  // a tone: track made by click_, not tone_
-  bool sourceDone_ = false;                  // decoder reached the end of the file
+  bool sourceDone_ = false;                  // the decoder (or tone) reached its end
+  uint32_t toneN_ = 0;                       // frames in chunk_ (a built-in track's)
+  uint32_t toneAt_ = 0;                      // of which RingOutput has taken this many
   bool described_ = false;
   ToneGen tone_;
   ClickGen click_;
   int16_t* chunk_ = nullptr;  // tone scratch buffer (PSRAM)
+  std::atomic<uint16_t> cpuMhz_{0};  // setCpuMhz()
+
+  // rateStatus()'s snapshot (decode task -> any).
+  std::atomic<uint32_t> convRate_{0};
+  std::atomic<const char*> convRoute_{""};
+  std::atomic<uint32_t> convNum_{1};
+  std::atomic<uint32_t> convDen_{1};
+  std::atomic<uint32_t> convTaken_{0};
+  std::atomic<uint32_t> convMade_{0};
+  std::atomic<uint32_t> convClamped_{0};
+  // rateRefusal(): the refused rate (0: none) and whether a setting would
+  // take it. Written before the Failed report, cleared at every start.
+  std::atomic<uint32_t> refusedHz_{0};
+  std::atomic<bool> refusedForCpu_{false};
 
   mutable std::mutex lock_;  // guards request_ and the strings below
   Request request_;
@@ -276,7 +337,7 @@ private:
   std::atomic<uint64_t> busyUs_{0};      // decode task time spent producing, current track
   std::atomic<uint64_t> busyTotalUs_{0}; // the same, since boot
   std::atomic<bool> ringSteady_{false};  // see ringSteady()
-  std::atomic<uint64_t> producedFrames_{0};
+  std::atomic<uint64_t> producedFrames_{0};  // ring frames (44.1 kHz) of the current track
   // For durationMs(): the file's position when the first audio came and
   // now, its size (decode task; 0 for a tone), or a tone's known length.
   std::atomic<uint32_t> srcPos0_{0};

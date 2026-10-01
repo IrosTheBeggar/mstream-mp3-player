@@ -56,11 +56,13 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
 
 ```
  source:  /music on LittleFS (SD card later: same fs::FS code)  |  built-in tone: tracks
-            └ AudioFileSourceFS (+ID3 for MP3)                   |    └ ToneGen
-                └ AudioGeneratorMP3 (libmad) | AudioGeneratorFLAC (libFLAC)
- decode task (core 1, prio 2, 16 KB internal stack) ─► RingOutput ─► PcmRing (PSRAM, 64k frames ≈ 1.5 s)
-                                                                        ├─► BtSink: ESP32-A2DP data callback (Bluedroid's BTC task, 44.1 kHz)
-                                                                        └─► SpeakerSink: pump task ─► M5.Speaker.playRaw (44.1 kHz out, mono)
+            └ AudioFileSourceFS (+ID3 for MP3)                   |    └ ToneGen, ClickGen (at their own rate)
+                └ AudioGeneratorMP3 (libmad) | AudioGeneratorFLAC (libFLAC)     (any rate: 8-96 kHz)
+ decode task (core 1, prio 2, 16 KB internal stack)
+   ─► RingOutput (RingFeed: RateConverter to 44.1 kHz, a 256-frame stage)
+   ─► PcmRing (PSRAM, 64k frames ≈ 1.5 s, always 44.1 kHz)
+        ├─► BtSink: ESP32-A2DP data callback (Bluedroid's BTC task, 44.1 kHz)
+        └─► SpeakerSink: pump task ─► M5.Speaker.playRaw (44.1 kHz in and out, mono)
 ```
 
 ESP8266Audio's ID3 reader walks the whole ID3v2 tag a byte per read. An
@@ -100,12 +102,16 @@ The rules that keep it deadlock- and glitch-free:
   ESP-IDF's flush, the first callback, a wait of 1 s or more, or a START of
   ours or a new link followed by a wait of 100 ms or more. A shorter stall
   without a START is only a late callback, and the audio goes on.
-- **Track changes don't wait for the outputs.** A skip calls `discardAll()`;
-  a natural end drains the ring first (`finished()` = end of file *and* ring
-  empty), so a new track's sample rate never plays into the old track's tail.
+- **Track changes don't wait for the outputs.** A skip calls `discardAll()`
+  (and resets the converter: nothing of the old track's filter history comes
+  out after it); a natural end drains the ring first (`finished()` = end of
+  file, the converter's tail, *and* the ring empty).
 - **The decoder never blocks inside an output.** `RingOutput::ConsumeSample`
-  returns false when the ring is full or the pass's budget (1024 frames) is
-  spent; the generator keeps that sample and retries it on its next `loop()`.
+  returns false when the ring is full or the pass's budget (1024 source
+  frames, or 1024 ring frames made: a low rate's pass converts no more than
+  a 44.1 kHz one's) is spent; the generator keeps that sample and retries it on its
+  next `loop()`. With the converter in between, a source frame is taken only
+  when the stage has room for everything it can make (`RingFeed`, below).
   The decode task re-checks requests and yields between passes.
 - **A track can start part of the way in** (`play()`'s `startMs`: the
   resume point, below under Library and queue; `lib/core/TrackSeek`,
@@ -145,7 +151,7 @@ The rules that keep it deadlock- and glitch-free:
   frame; the read-rate length estimate adds the start to what it
   estimates is left. The ring was emptied as for any start, so nothing
   from before the start plays, and the DeclickReader fades it in; a rate
-  Bluetooth can't take is still refused. Accuracy: a CBR MP3 to the frame,
+  the converter refuses fails it as it would from the top. Accuracy: a CBR MP3 to the frame,
   a FLAC to the sample, a VBR MP3 with a TOC within about 1% of its length,
   one without by its average bitrate; the time shown is the time asked for.
   Measured on the device (ENERGY.md, "Device run: batch 3 follow-ups"):
@@ -165,10 +171,46 @@ The rules that keep it deadlock- and glitch-free:
   to start (a quick second prev goes to the entry before, not to the
   start of the one just asked for; one right after a resume point's start
   at 2:30 restarts it).
-- **Bluetooth is 44.1 kHz only.** ESP-IDF's SBC source takes nothing else, so
-  other rates fail on Bluetooth (the player skips them) until a resampler lands.
-  The speaker takes any rate: `RingOutput` keeps the rate in an `int` because
-  ESP8266Audio's base class stores it in a `uint16_t`.
+- **The ring is always 44.1 kHz.** ESP-IDF's SBC source takes nothing else,
+  so every track at another rate is converted on its way in, for both
+  outputs ([RESAMPLER.md](RESAMPLER.md)): `RingOutput` wraps `RingFeed`
+  (host-tested in test_ring_feed), which runs `RateConverter` (our own Q15
+  polyphase and halfband FIRs, host-tested in test_rate_converter) on the
+  decode task. 44.1 kHz passes through bit-exact; 8, 11.025, 12, 16,
+  22.05, 24, 32 and 48 kHz are converted at either CPU speed; 88.2 and
+  96 kHz are off until a 24/96 FLAC has played 10 minutes on the speaker
+  without an underrun (`RateConverter::kHiResOn`, set by
+  `-DMSTREAM_HIRES_RATES=1`), and then only when the CPU was set to 240 MHz
+  at boot (`setCpuMhz()`, the setting, not the clock of the moment);
+  anything else fails the track on both outputs, logged as `[audio] 37800
+  Hz isn't supported (8-48 kHz, 88.2 and 96 kHz)` (or "is off in this
+  build", "needs the 240 MHz CPU speed"), and the player skips it with a
+  note that says why ("Skipped ...: 37.8 kHz isn't supported",
+  `IAudioBackend::rateRefusal()`). A converted track logs its route at
+  the start (`[audio] 48000 Hz -> 44100 Hz (147/160)`). Because the ring
+  has one rate, an output switch mid-track can't change the speed (a 48 kHz
+  track started on the speaker used to go on 8.8 % slow on Bluetooth), the
+  speaker's M5.Speaker no longer interpolates a 48 kHz input, and the
+  dancer's taps are always the 44.1 kHz its beat tracker assumes. Everything
+  after `RingOutput` counts 44.1 kHz ring frames (positions, durations, the
+  decode load, the refill pacing); only the decoders' own seeks (an MP3's
+  byte, a FLAC's sample) stay in the source's units, and ring frame n sits
+  at exactly n / 44100 s of the source, so positions and resume starts stay
+  exact. The ring-full rule: a source frame is taken whole only if the stage
+  has room for all it can make (1 frame at 44.1 kHz and above, up to 6 at
+  8 kHz), the per-pass budget counts source frames and caps the ring frames
+  made, and at the end of a file
+  `finish()` pushes the converter's tail, so a track ends with exactly
+  ceil(source frames x 44100 / rate) frames. The converter is reset with
+  the ring's `discardAll()` at every request (start, skip, seek, stop,
+  bench). A built-in track goes through it too, at its own rate (its
+  chunk's frames that didn't fit wait for the next pass). `RingOutput`
+  (~2.6 KB) must stay in internal RAM, so it is asserted under 4 KB (the
+  framework puts a `new` of 4 KB or more in PSRAM). The console's `R` shows
+  the current track's conversion (source frames taken, ring frames made,
+  the exact ratio, clamped samples); `Rt` plays the converter's test tracks
+  (`tone:1000@48000`, `tone:silence@96000`, ...) on their own, outside the
+  queue; `Rb` benches the converter at each rate.
 - **The sleep timer's fade is one more stage, after the gain** (`FadeStage`,
   in `AudioShared`, host-tested in test_output_chain; docs/ENERGY.md
   section 3): on Bluetooth after `gain_.process`, on the speaker after the
@@ -202,9 +244,9 @@ The rules that keep it deadlock- and glitch-free:
 | Bluetooth controller + host (Bluedroid) | 0 | high | ~70 KB internal RAM, claimed at boot |
 | A2DP data callback | 0 (Bluedroid's BTC task, BTC_TASK) | high | 128 frames at a time, several per ~30 ms tick; applies the volume ramp; never blocks or logs. ESP-IDF 5.5's A2DP source has no media task of its own: this is the task that also runs the GAP and AVRCP callbacks, which queue their events to BtAppT (below). If BtAppT's queue (20 entries) is full, each such event blocks BTC_TASK, and the audio, for up to 10 ms |
 | ESP32-A2DP app task (BtAppT) | 0 | 15 | connection, stream and AVRCP handlers (`PlayerA2dp`); 6 KB stack; blocks 10 s at stack-up; must keep its queue drained (no long work in a handler) |
-| decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start) |
+| decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 3 % of a core at 240 MHz for 44.1 kHz's passthrough, 22 % for 48 kHz, 32 % at 160 MHz; too slow for 48 kHz at 160, so the faster kernel is next: RESAMPLER.md section 6b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start) |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
-| M5.Speaker | 1 | 2 | mixes/resamples to 44.1 kHz mono; runs only while the amp is on |
+| M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
 | cover thumbnails (`thumbs`, ui/Thumbs) | 1 | 1, or 0 while a list moves | only while there are covers to make: made for the first, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device); reads the card in 4 KB pieces; level with the loop while nothing moves (at 0 it shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves, always below the decoder (below) |
 | Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms) |
 
@@ -1840,8 +1882,9 @@ Queue, Dance and Output (with its Pair and About pages).
   the flash); no automatic re-check (an SD init with no card could hold
   the loop). A card without music: "No music found", Try again walks
   /music again (the `g0` path). A track that can't be played: an amber
-  note ("Skipped 07 - x: can't play it", from `PlaybackController`'s
-  failure record) and its "!". The headphones lost while playing: paused,
+  note ("Skipped 07 - x: can't play it", or for a refused sample rate
+  "...: 96 kHz isn't supported" / "...: needs the 240 MHz CPU speed", from
+  `PlaybackController`'s failure record) and its "!". The headphones lost while playing: paused,
   a long buzz (80 ms), and the dialog of mockup 23 ("SPYDRONE
   disconnected. Paused, so the speaker doesn't suddenly play out loud.";
   a name too long for the title goes into the body; the reconnecting as a
@@ -2086,7 +2129,9 @@ its opposite; only `Pcb` is saved):
 | `Pz` | plays `tone:silence` next | an hour of zeros: the output runs at its full rate (SBC over Bluetooth), nothing is heard |
 
 `tone:silence` is a built-in track (TrackCatalog) that isn't queued with
-the others: only `Pz` plays it.
+the others: only `Pz` plays it. Nor are the rate converter's test tracks
+(`TrackCatalog::rateTests()`): only the console's `Rt` plays them, on
+their own (the player stopped first, so nothing follows them).
 
 ## Build notes
 
@@ -2171,5 +2216,8 @@ the others: only `Pz` plays it.
    mStream's session-centroid scoring plus its BPM/key/artist filters.
 4. **Server discovery without mDNS** (it doesn't work in Docker installs), then
    the device-code pairing flow.
-5. A resampler for 48 kHz on Bluetooth, the RCA/3.5 mm module
+5. The rate converter's faster kernel and block path (built, wired in and
+   checked on the device: correct, but 22-32 % of a core for 48 kHz;
+   [RESAMPLER.md](RESAMPLER.md) section 6b and section 7, step 5), then the
+   Bluetooth switch check and the 88.2/96 kHz gate, the RCA/3.5 mm module
    (`cfg.external_speaker.module_rca`), SD card verification, power management.

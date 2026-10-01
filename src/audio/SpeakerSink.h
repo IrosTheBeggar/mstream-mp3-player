@@ -100,5 +100,4 @@ private:
   // Pump task only.
   DeclickReader reader_{kConsumerId};
   AmpGate gate_;
-  int lastRate_ = 44100;  // of the last buffer queued
 };

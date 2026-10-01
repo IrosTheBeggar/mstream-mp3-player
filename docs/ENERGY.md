@@ -404,6 +404,15 @@ test_output_chain); measured on the device: off 2.01 s after a pause,
   with an MP3 over Bluetooth runs at 7.8 fps against 15.9 at 240, a FLAC
   at 15.5 against 24.7. **So the default stays 240**; 160 is the CPU speed
   row's other choice.
+- **Tracks at other rates** (since the rate converter, RESAMPLER.md): a
+  44.1 kHz track costs what it did; a 48 kHz one adds the conversion on
+  the decode task, measured at 22 % of a core at 240 MHz and 32 % at 160
+  (`Rb`, RESAMPLER.md section 6b). At 160 a 48 kHz tone alone took list
+  scrolling from 29 fps to 9, so the faster kernel comes before 48 kHz is
+  comfortable at 160.
+  88.2/96 kHz files are refused at 160 MHz (an estimated 63-79 % of core 1
+  for a 24/96 FLAC there), provisionally until measured; for now they are
+  off at any speed until the device check (RESAMPLER.md, section 6).
 
 **The change:**
 

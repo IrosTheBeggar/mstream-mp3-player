@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 IrosTheBeggar
 
-// Host unit tests for ToneGen. Run: pio test -e native
+// Host unit tests for ToneGen and ToneTrack (the built-in tracks' paths).
+// Run: pio test -e native
 #include <unity.h>
 
 #include <algorithm>
@@ -10,6 +11,7 @@
 #include <vector>
 
 #include "ToneGen.h"
+#include "ToneTrack.h"
 
 void setUp() {}
 void tearDown() {}
@@ -113,6 +115,60 @@ void test_silence_is_zeros_for_its_duration() {
   TEST_ASSERT_TRUE(signal);
 }
 
+// The built-in tracks' paths, as the backend reads them.
+void test_tone_paths() {
+  ToneTrack t;
+  TEST_ASSERT_TRUE(ToneTrack::parse("tone:440", &t));
+  TEST_ASSERT_TRUE(t.kind == ToneTrack::Kind::Sine);
+  TEST_ASSERT_EQUAL_FLOAT(440.0f, t.hz);
+  TEST_ASSERT_FALSE(t.leftOnly);
+  TEST_ASSERT_EQUAL_UINT32(44100, t.rate);
+  TEST_ASSERT_EQUAL_UINT32(30, t.seconds);
+  TEST_ASSERT_TRUE(ToneTrack::parse("tone:left", &t));
+  TEST_ASSERT_TRUE(t.leftOnly);
+  TEST_ASSERT_EQUAL_FLOAT(440.0f, t.hz);
+  TEST_ASSERT_TRUE(ToneTrack::parse("tone:silence", &t));
+  TEST_ASSERT_TRUE(t.kind == ToneTrack::Kind::Silence);
+  TEST_ASSERT_EQUAL_UINT32(3600, t.seconds);
+  TEST_ASSERT_EQUAL_UINT32(44100, t.rate);
+  TEST_ASSERT_TRUE(ToneTrack::parse("tone:click120off", &t));
+  TEST_ASSERT_TRUE(t.kind == ToneTrack::Kind::Clicks);
+  TEST_ASSERT_EQUAL_FLOAT(120.0f, t.click.bpm);
+  TEST_ASSERT_TRUE(t.click.offsetBeats > 0.0f);
+  TEST_ASSERT_EQUAL_UINT32(60, t.seconds);
+  TEST_ASSERT_EQUAL_UINT32(44100, t.rate);
+}
+
+// "@<rate>": made at another rate, converted like a file. Any rate parses
+// (the converter decides what plays); the clicks stay at 44.1 kHz.
+void test_tone_paths_at_other_rates() {
+  ToneTrack t;
+  TEST_ASSERT_TRUE(ToneTrack::parse("tone:1000@48000", &t));
+  TEST_ASSERT_TRUE(t.kind == ToneTrack::Kind::Sine);
+  TEST_ASSERT_EQUAL_FLOAT(1000.0f, t.hz);
+  TEST_ASSERT_EQUAL_UINT32(48000, t.rate);
+  TEST_ASSERT_TRUE(ToneTrack::parse("tone:silence@96000", &t));
+  TEST_ASSERT_TRUE(t.kind == ToneTrack::Kind::Silence);
+  TEST_ASSERT_EQUAL_UINT32(96000, t.rate);
+  TEST_ASSERT_TRUE(ToneTrack::parse("tone:silence@37800", &t));  // parses; the converter refuses it
+  TEST_ASSERT_EQUAL_UINT32(37800, t.rate);
+  TEST_ASSERT_TRUE(ToneTrack::parse("tone:left@8000", &t));
+  TEST_ASSERT_EQUAL_UINT32(8000, t.rate);
+  TEST_ASSERT_TRUE(ToneTrack::parse("tone:1000@8000", &t));
+  TEST_ASSERT_FALSE(ToneTrack::parse("tone:4000@8000", &t));  // at Nyquist: not a tone it can make
+  TEST_ASSERT_FALSE(ToneTrack::parse("tone:click120@48000", &t));
+  for (const char* bad : {"tone:1000@", "tone:1000@0", "tone:1000@048000", "tone:1000@48k", "tone:1000@-1",
+                          "tone:1000@1000000", "tone:@48000", "tone:", "tone:nope", "tone:1000abc", "tone:0",
+                          "tone:silence@", "tone:-5", "1000@48000", "/music/a.mp3"}) {
+    TEST_ASSERT_FALSE_MESSAGE(ToneTrack::parse(bad, &t), bad);
+  }
+  // Nothing written on a failure.
+  t.rate = 1234;
+  TEST_ASSERT_FALSE(ToneTrack::parse("tone:nope@48000", &t));
+  TEST_ASSERT_EQUAL_UINT32(1234, t.rate);
+  TEST_ASSERT_TRUE(ToneTrack::parse("tone:440", nullptr));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_chunked_output_matches_one_call);
@@ -122,5 +178,7 @@ int main(int, char**) {
   RUN_TEST(test_fades_in_and_out_over_5_ms);
   RUN_TEST(test_very_short_tone_is_all_ramp);
   RUN_TEST(test_silence_is_zeros_for_its_duration);
+  RUN_TEST(test_tone_paths);
+  RUN_TEST(test_tone_paths_at_other_rates);
   return UNITY_END();
 }

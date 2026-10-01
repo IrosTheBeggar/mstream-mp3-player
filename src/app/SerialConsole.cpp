@@ -114,6 +114,10 @@ bool SerialConsole::poll() {
           Serial.printf("> bluetooth test \"%s\"\n", arg_.c_str());
           if (actions_.bluetoothTest) actions_.bluetoothTest(arg_.c_str());
           break;
+        case Pending::Rate:
+          Serial.printf("> rate converter \"%s\"\n", arg_.c_str());
+          if (actions_.rate) actions_.rate(arg_.c_str());
+          break;
         case Pending::None:
           break;
       }
@@ -154,6 +158,7 @@ bool SerialConsole::poll() {
       case 'T': pending_ = Pending::Sleep; arg_ = ""; break;
       case 'I': pending_ = Pending::Idle; arg_ = ""; break;
       case 'B': pending_ = Pending::BluetoothTest; arg_ = ""; break;
+      case 'R': pending_ = Pending::Rate; arg_ = ""; break;
       default: break;  // newlines etc.
     }
   }

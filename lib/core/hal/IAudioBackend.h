@@ -38,6 +38,13 @@ public:
   virtual uint32_t durationMs() const { return 0; }
   virtual bool finished() const = 0;      // reached end of the current track
   // The current track can't be played (missing file, unsupported format, or a
-  // sample rate the active output can't take).
+  // sample rate the backend doesn't take).
   virtual bool failed() const { return false; }
+  // While failed(): whether its sample rate was why. hz: that rate (0: some
+  // other reason); needsCpu: a setting would take it (the 240 MHz CPU speed).
+  struct RateRefusal {
+    uint32_t hz = 0;
+    bool needsCpu = false;
+  };
+  virtual RateRefusal rateRefusal() const { return {}; }
 };

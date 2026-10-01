@@ -16,8 +16,11 @@
 //   kBuiltin + n          a built-in track: the test tones and the click
 //                         tracks with a known beat (paths "tone:..."), the
 //                         "Built-in" pseudo-folder, always there, card or not;
-//                         and, last and not listed by builtins(), an hour of
-//                         silence for power measurements (kSilencePath)
+//                         and, after them and not listed by builtins(), an
+//                         hour of silence for power measurements
+//                         (kSilencePath) and the rate converter's test tracks
+//                         ("tone:1000@48000", "tone:silence@96000", ...:
+//                         rateTests())
 // Anything else, or a library id while the index isn't ready (a rebuild),
 // is unknown: path() gives "", and the player skips it as a track that
 // can't be played.
@@ -39,8 +42,13 @@ public:
   static uint32_t builtinCount();
   static bool isBuiltin(uint32_t id) { return id >= kBuiltin && id - kBuiltin < builtinCount(); }
   // The built-in tracks queued with the library (the tones, the click
-  // tracks), in order (a Span, like the index's views): not the silence.
+  // tracks), in order (a Span, like the index's views): not the silence,
+  // not the rate test tracks.
   static LibraryIndex::Span builtins();
+  // The rate converter's test tracks (the console's Rt plays them on their
+  // own, outside the queue; docs/RESAMPLER.md section 6): a 1 kHz tone and
+  // silence made at other rates. Never queued with the others.
+  static LibraryIndex::Span rateTests();
 
   bool valid(uint32_t id) const;
   // The path to play ("/music/.../06 - Title.mp3", "tone:click120"); the

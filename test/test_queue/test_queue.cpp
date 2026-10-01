@@ -514,8 +514,22 @@ void test_catalog_library_and_builtin_ids() {
   TEST_ASSERT_TRUE(c.valid(silence));
   TEST_ASSERT_EQUAL_UINT32(3600000, c.durationHintMs(silence));
   for (uint32_t i = 0; i < b.count; ++i) TEST_ASSERT_NOT_EQUAL(silence, b[i]);
-  TEST_ASSERT_EQUAL_UINT32(10, TrackCatalog::builtinCount());
-  TEST_ASSERT_FALSE(c.valid(TrackCatalog::kBuiltin + 10));
+  // The rate converter's test tracks: known, after the silence, never listed.
+  const LibraryIndex::Span rt = TrackCatalog::rateTests();
+  TEST_ASSERT_EQUAL_UINT32(9, rt.count);
+  TEST_ASSERT_EQUAL_STRING("tone:1000@48000", pathOf(c, rt[0]).c_str());
+  TEST_ASSERT_EQUAL_STRING("tone:silence@22050", pathOf(c, rt[8]).c_str());
+  TEST_ASSERT_EQUAL_UINT32(rt[6], c.find("tone:silence@48000"));
+  TEST_ASSERT_EQUAL_UINT32(3600000, c.durationHintMs(rt[6]));
+  for (uint32_t i = 0; i < rt.count; ++i) {
+    TEST_ASSERT_TRUE(c.valid(rt[i]));
+    TEST_ASSERT_TRUE(TrackCatalog::isBuiltin(rt[i]));
+    TEST_ASSERT_NOT_EQUAL(silence, rt[i]);
+    for (uint32_t j = 0; j < b.count; ++j) TEST_ASSERT_NOT_EQUAL(b[j], rt[i]);
+    TEST_ASSERT_TRUE(pathOf(c, rt[i]).find('@') != std::string::npos);
+  }
+  TEST_ASSERT_EQUAL_UINT32(10 + rt.count, TrackCatalog::builtinCount());
+  TEST_ASSERT_FALSE(c.valid(TrackCatalog::kBuiltin + 10 + rt.count));
   TEST_ASSERT_EQUAL_STRING("", pathOf(c, 1234).c_str());
   TEST_ASSERT_EQUAL_STRING("", c.artist(1234));
   TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kNone, c.find("tone:nope"));

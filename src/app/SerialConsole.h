@@ -43,6 +43,9 @@
 //        and there were no BT_SINK_NAME, the stored address and bond untouched;
 //        restarts now); Bn the same for this session (RAM only, not while linked
 //        or pairing), Bn0 back
+//   R... the rate converter (docs/RESAMPLER.md): R status, Rt the test tracks, Rt<n> or
+//        Rt<tone:...> play one on its own (the player stopped: nothing follows it;
+//        silence only on Bluetooth, a tone only in silent mode), Rb its bench
 // and the UI spike's tools (docs/UI-SPIKE.md), also ended with Enter, the
 // text after the letter passed on as it is:
 //   u...  input lab (u toggles; u0-u3 modes; us summary)
@@ -94,6 +97,8 @@ public:
     std::function<void(const char*)> bluetoothTest;
     // The partition table as flashed (L).
     std::function<void()> partitionTable;
+    // The rate converter (R): the argument as typed (may be "").
+    std::function<void(const char*)> rate;
   };
 
   explicit SerialConsole(Actions actions) : actions_(std::move(actions)) {}
@@ -106,6 +111,7 @@ private:
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
     InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle, BluetoothTest,
+    Rate,
   };
 
   Actions actions_;

@@ -61,6 +61,14 @@ inline constexpr const char* kTouchFirst = "Tap the screen first, then B plays";
 // the rest in Body, each from kToastTextX to 306 (no buttons).
 inline constexpr const char* kNoHeadphones = "No headphones paired: Output > Pair new headphones";
 inline constexpr int kToastTwoLineW = 306 - kToastTextX;
+// A track skipped (Ui::noteFailures): "Skipped <title>: <why>", on Toast's
+// two lines when long (the why in Body). Why: kSkipped, or for a sample
+// rate the converter refused, kSkippedRate (its %s: RateConverter::
+// rateText(), "96 kHz", "37.8 kHz", "44056 Hz") or kSkippedCpu (88.2/96 kHz
+// at 160 MHz: a setting would play it, on the Output tab).
+inline constexpr const char* kSkipped = "can't play it";
+inline constexpr const char* kSkippedRate = "%s isn't supported";
+inline constexpr const char* kSkippedCpu = "needs the 240 MHz CPU speed";
 
 // ---- the empty states (ui/EmptyState): two buttons ----
 // The primary (Bold, its icon 26 px + 8 before the text) and the second

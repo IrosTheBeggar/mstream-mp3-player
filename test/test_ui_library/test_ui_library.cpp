@@ -26,6 +26,7 @@
 #include "OutputModel.h"
 #include "PowerChoices.h"
 #include "QueueView.h"
+#include "RateConverter.h"
 #include "ScreenPower.h"
 #include "SleepTimer.h"
 #include "TabBarModel.h"
@@ -462,6 +463,17 @@ void test_output_texts_fit() {
     const std::string what(kNoHeadphones, colon);
     fits(small, what.c_str(), kToastTwoLineW);
     fits(body, colon + 2, kToastTwoLineW);
+  }
+  // A skipped track's why ("Skipped <title>: <why>"; a long title takes
+  // the toast's two lines, the why in Body): each, with the widest rates
+  // a refusal can name (RateConverter::rateText()).
+  fits(body, kSkipped, kToastTwoLineW);
+  fits(body, kSkippedCpu, kToastTwoLineW);
+  for (uint32_t hz : {96000u, 88200u, 176400u, 352800u, 705600u, 44056u, 655350u, 1048575u}) {
+    char rate[16], why[48];
+    RateConverter::rateText(hz, rate, sizeof(rate));
+    snprintf(why, sizeof(why), kSkippedRate, rate);
+    fits(body, why, kToastTwoLineW);
   }
   // The Pair screen once its search stopped.
   fits(bold, kPairSearchAgain, 320 - 60);

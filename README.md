@@ -344,7 +344,14 @@ goes silent for about a second, then fades back in over ~2 s, so the
 change of their level is never heard as a jump.)
 
 The music is the `.mp3` and `.flac` files under `/music`
-(`/music/Artist/Album/NN - Title.mp3`), indexed at boot; the index is cached
+(`/music/Artist/Album/NN - Title.mp3`). Any sample rate from 8 to 48 kHz
+plays, on the headphones and on the speaker alike (48 kHz files too, over
+Bluetooth): the Core2 converts everything that isn't 44.1 kHz to 44.1 kHz
+as it decodes ([docs/RESAMPLER.md](docs/RESAMPLER.md)). 88.2 and 96 kHz
+files are skipped for now ("96 kHz isn't supported"): they are turned on
+once measured on the device, and will then need the 240 MHz CPU speed
+(Output > CPU speed). Anything else (176.4/192 kHz, odd rates) is skipped
+with a note that names the rate. The files are indexed at boot; the index is cached
 in `/.player` on the card and rebuilt when anything under `/music` changes.
 An album's cover is the `cover.jpg` in its folder (else `folder.jpg`,
 `front.jpg`, or the largest `.jpg` there). It is made into thumbnails the
@@ -426,7 +433,7 @@ The serial console (115200 baud) is there for scripted testing:
 | Key | Action | Key + Enter | Action |
 |---|---|---|---|
 | `n` / `p` | next / previous (past 3 s: the track's start) | `i<n>` | play queue entry n (0-based) |
-| space | play / pause | `b<n>` | benchmark decoding track n |
+| space | play / pause | `b<n>` | benchmark decoding track n (and, at another rate than 44.1 kHz, decode + convert) |
 | `o` | switch output | `c<name>` | the name a build with `BT_SINK_NAME` scans for while none are remembered (saved) |
 | `+` / `-` | volume | `h<n>` | Bluetooth headroom -n dB, 0-12 (default 2, not saved) |
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
@@ -436,6 +443,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none) |
 | `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
+| | | `R...` | the rate converter ([docs/RESAMPLER.md](docs/RESAMPLER.md)): `R` the current track's conversion (the exact ratio, source frames taken, ring frames made, clamped samples); `Rt` lists its test tracks (a 1 kHz tone and silence at other rates), `Rt<n>` or `Rt<tone:...@rate>` plays one on its own (the player is stopped first, keeping your place in the track: nothing follows it; only silence on Bluetooth, a tone only in silent mode `z`); `Rb` its bench (10 s of audio per rate: cycles and share of a core at the clock running; 88.2/96 kHz too, though they don't play yet) |
 | | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
 
@@ -474,8 +482,14 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   ByteStream          Byte sinks and sources for what is saved and loaded
   HeadsetKeys         What the headphones' transport keys do (never start music)
   PcmRing             PCM ring between the decode task and the active output
+  RateConverter, ResamplerTables
+                      Any supported rate to 44.1 kHz: Q15 polyphase and
+                      halfband FIRs, exact counts (docs/RESAMPLER.md)
+  RingFeed            The decode side of the ring: the converter, the stage,
+                      the ring-full rule (RingOutput wraps it)
   TransportSync       Generation-tagged decode progress (no stale "track ended")
   ToneGen, ClickGen   Built-in test tones; click tracks with a known beat
+  ToneTrack           What a built-in track's path asks for ("tone:1000@48000")
   AudioTap, TapReader What an output played, placed in its track; audible-time clock
   BeatTracker         Tempo, phase and confidence from the audio (onsets, ACF, PLL)
   DancePose           The stick figure's joints as functions of the beat phase
@@ -562,13 +576,16 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       page and release notes -> dist/);
                       crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*);
                       vlw_font.py (the UI's DejaVu VLW fonts -> src/ui/VlwFonts.cpp);
-                      ui_icons.py (the UI's 1-bit icons -> src/ui/IconData.cpp)
+                      ui_icons.py (the UI's 1-bit icons -> src/ui/IconData.cpp);
+                      gen_resampler_tables.py (the rate converter's filters ->
+                      lib/core/ResamplerTables.cpp)
 test/                 Host unit tests (Unity)
 site/                 The web installer's page (filled in by package_release.py)
 .github/              workflows/firmware.yml (CI, releases, the install page);
                       release-notes.md (the release notes' template)
 docker/               mStream dev server
-docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.md
+docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.md,
+                      RESAMPLER.md
 LICENSES/             The licence texts THIRD-PARTY-NOTICES.md refers to
 THIRD-PARTY-NOTICES.md What else is in the firmware binary, and its licences
 ```

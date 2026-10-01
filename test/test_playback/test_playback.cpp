@@ -24,6 +24,7 @@ public:
   bool finishedFlag = false;
   bool failedFlag = false;
   bool failEverything = false;  // every track played from now on fails
+  RateRefusal refusal;          // why it failed, when its rate was why
   int stopCount = 0;
   uint32_t lastStartMs = 0;  // where the last play() asked to start
   uint32_t lastHintMs = 0;   // the length it was handed
@@ -70,6 +71,7 @@ public:
   }
   bool finished() const override { return finishedFlag; }
   bool failed() const override { return failedFlag; }
+  RateRefusal rateRefusal() const override { return failedFlag ? refusal : RateRefusal{}; }
 };
 
 // A library of up to three tracks at the root ("/music/a.mp3" is id 0, b 1,
@@ -188,6 +190,30 @@ void test_a_failure_is_recorded_with_its_entry() {
   // The next one plays: nothing new is recorded.
   p.update(0);
   TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().count);
+  TEST_ASSERT_EQUAL_UINT32(0, p.lastFailure().rate.hz);  // not its rate: "can't play it"
+}
+
+// A sample rate the backend refused goes with the record, for the note's
+// why ("96 kHz isn't supported", "needs the 240 MHz CPU speed"); the next
+// failure for another reason clears it.
+void test_a_rate_refusal_is_recorded_with_the_failure() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  a.refusal.hz = 96000;
+  a.refusal.needsCpu = true;
+  a.failedFlag = true;
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().count);
+  TEST_ASSERT_EQUAL_UINT32(96000, p.lastFailure().rate.hz);
+  TEST_ASSERT_TRUE(p.lastFailure().rate.needsCpu);
+  a.refusal = {};
+  a.failedFlag = true;
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(2, p.lastFailure().count);
+  TEST_ASSERT_EQUAL_UINT32(0, p.lastFailure().rate.hz);
+  TEST_ASSERT_FALSE(p.lastFailure().rate.needsCpu);
 }
 
 void test_all_tracks_failing_stops_after_one_pass() {
@@ -781,6 +807,90 @@ void test_the_resume_point_is_a_paused_tracks_position() {
   TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));
 }
 
+// The console's tests that borrow the backend (Rt, Rb, b<n>) stop the
+// player keeping the listener's place: a paused or playing track's second
+// becomes a start point, so QueueSaver keeps it and the next play picks up
+// there; nothing plays by itself.
+void test_stop_keeping_place_keeps_a_paused_tracks_second() {
+  Rig r(2);
+  r.player.play(1);
+  r.audio.position = 1380000;  // 23:00 into an audiobook
+  r.audio.duration = 3600000;
+  r.player.togglePlayPause();
+  TEST_ASSERT_TRUE(r.player.stopKeepingPlace());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+  TEST_ASSERT_FALSE(r.audio.playing);
+  uint32_t ms = 0, dur = 0;
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur));  // what QueueSaver keeps
+  TEST_ASSERT_EQUAL_UINT32(1380000, ms);
+  TEST_ASSERT_EQUAL_UINT32(3600000, dur);
+  r.audio.position = 0;  // the test's own track came and went
+  r.player.update(0);
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);  // nothing started
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(1380000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(3600000, r.audio.lastHintMs);
+}
+
+void test_stop_keeping_place_keeps_a_playing_tracks_second() {
+  Rig r(2);
+  r.player.play(0);
+  r.audio.position = 61000;
+  r.audio.duration = 200000;
+  TEST_ASSERT_TRUE(r.player.stopKeepingPlace());
+  uint32_t ms = 0, dur = 0;
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur));
+  TEST_ASSERT_EQUAL_UINT32(61000, ms);
+  TEST_ASSERT_EQUAL_UINT32(200000, dur);
+  // A start the backend hasn't taken up yet: where it was asked to start
+  // (its length from the catalog, as after a boot).
+  Rig q(2);
+  q.audio.asyncStarts = true;
+  q.player.play(0);
+  q.audio.take();
+  q.player.setStartPoint(90000, 0);  // playing: starts there now (pending)
+  q.audio.position = 5;              // still the last start's
+  TEST_ASSERT_TRUE(q.player.stopKeepingPlace());
+  TEST_ASSERT_TRUE(q.player.resumePoint(&ms, &dur));
+  TEST_ASSERT_EQUAL_UINT32(90000, ms);
+}
+
+void test_stop_keeping_place_has_nothing_to_keep() {
+  uint32_t ms = 0, dur = 0;
+  {
+    Rig r(2);  // stopped: at 0:00 anyway
+    TEST_ASSERT_FALSE(r.player.stopKeepingPlace());
+    TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));
+  }
+  {
+    Rig r(2);  // a failed track has no place
+    r.player.play(0);
+    r.audio.position = 30000;
+    r.audio.failedFlag = true;
+    TEST_ASSERT_FALSE(r.player.stopKeepingPlace());
+    TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));
+  }
+  {
+    Rig r(2);  // cued: the next entry at 0:00
+    r.player.play(0);
+    r.audio.position = 30000;
+    r.player.togglePlayPause();
+    r.player.cueNext();
+    TEST_ASSERT_FALSE(r.player.stopKeepingPlace());
+    TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));
+  }
+  {
+    Rig r(2);  // a start point waiting (after a boot) stays as it was
+    r.player.setStartPoint(45000, 120000);
+    TEST_ASSERT_TRUE(r.player.stopKeepingPlace());
+    TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur));
+    TEST_ASSERT_EQUAL_UINT32(45000, ms);
+    TEST_ASSERT_EQUAL_UINT32(120000, dur);
+  }
+}
+
 // ---- prev: this track again past 3 s, else the one before ----
 
 void test_the_prev_rule() {
@@ -1176,6 +1286,7 @@ int main(int, char**) {
   RUN_TEST(test_auto_advance_when_track_finishes);
   RUN_TEST(test_failed_track_is_skipped);
   RUN_TEST(test_a_failure_is_recorded_with_its_entry);
+  RUN_TEST(test_a_rate_refusal_is_recorded_with_the_failure);
   RUN_TEST(test_all_tracks_failing_stops_after_one_pass);
   RUN_TEST(test_a_finished_track_resets_the_failure_count);
   RUN_TEST(test_user_skip_resets_the_failure_count);
@@ -1206,6 +1317,9 @@ int main(int, char**) {
   RUN_TEST(test_a_start_point_belongs_to_its_entry);
   RUN_TEST(test_a_start_point_while_playing_or_paused);
   RUN_TEST(test_the_resume_point_is_a_paused_tracks_position);
+  RUN_TEST(test_stop_keeping_place_keeps_a_paused_tracks_second);
+  RUN_TEST(test_stop_keeping_place_keeps_a_playing_tracks_second);
+  RUN_TEST(test_stop_keeping_place_has_nothing_to_keep);
   RUN_TEST(test_a_dropped_start_point_doesnt_come_back_with_an_undo);
   RUN_TEST(test_a_start_point_keeps_its_length);
   RUN_TEST(test_the_prev_rule);

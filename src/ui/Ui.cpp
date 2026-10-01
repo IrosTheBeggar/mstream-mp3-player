@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "RateConverter.h"
 #include "SleepTimer.h"
 #include "TextFold.h"
 #include "UiText.h"
@@ -786,8 +787,20 @@ void Ui::noteFailures() {
   failedKeys_.add(f.key);
   char title[64];
   if (!player_.catalog().title(f.track, title, sizeof(title))) snprintf(title, sizeof(title), "a track");
+  // Why, when it was the track's sample rate: a refused rate isn't a
+  // broken file, and at 160 MHz a setting would play it.
+  char why[48];
+  if (f.rate.hz != 0 && f.rate.needsCpu) {
+    snprintf(why, sizeof(why), "%s", uitext::kSkippedCpu);
+  } else if (f.rate.hz != 0) {
+    char rate[16];
+    RateConverter::rateText(f.rate.hz, rate, sizeof(rate));
+    snprintf(why, sizeof(why), uitext::kSkippedRate, rate);
+  } else {
+    snprintf(why, sizeof(why), "%s", uitext::kSkipped);
+  }
   char text[112];
-  snprintf(text, sizeof(text), "Skipped %s: can't play it", title);
+  snprintf(text, sizeof(text), "Skipped %s: %s", title, why);
   warn(text);
   host_.wakeScreen("a track couldn't be played");
   if (page_ == &queuePage_) list_.refreshAll();

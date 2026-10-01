@@ -8,6 +8,7 @@
 #include <AudioFileSourceID3.h>
 #include <AudioGeneratorFLAC.h>
 #include <AudioGeneratorMP3.h>
+#include <esp_cpu.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 
@@ -16,18 +17,17 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "RateConverter.h"
+#include "ToneTrack.h"
 #include "TrackProgress.h"
 #include "TrackSeek.h"
 #include "audio/RingOutput.h"
 
 namespace {
-constexpr uint32_t kRingFrames = 65536;  // ~1.5 s at 44.1 kHz, 256 KB of PSRAM
-constexpr uint32_t kChunkFrames = 1024;  // produced per pass of the decode task
+constexpr uint32_t kRingFrames = 65536;  // ~1.5 s at 44.1 kHz (every track's rate in the ring), 256 KB of PSRAM
+constexpr uint32_t kChunkFrames = 1024;  // source frames taken per pass of the decode task
 constexpr uint32_t kDecodeStack = 16384;
-constexpr uint32_t kToneRate = 44100;
-constexpr uint32_t kToneSeconds = 30;
-constexpr uint32_t kClickSeconds = 60;
-constexpr uint32_t kSilenceSeconds = 3600;  // "tone:silence", for power measurements
+constexpr uint32_t kRingRate = AudioShared::kRingRate;
 // Bluetooth: what the headphones report plus ESP-IDF's frame queue and the
 // air (an estimate); without a report, what the Powerbeats Pro report.
 constexpr uint32_t kBtExtraUs = 25000;
@@ -35,6 +35,9 @@ constexpr uint32_t kBtDefaultReportUs = 150000;
 // The speaker before its first buffer has been timed: ~3 buffers + DMA.
 constexpr uint32_t kSpeakerDefaultUs = 115000;
 constexpr uint32_t kBenchSeconds = 20;
+// The converter's bench (Rb): seconds of audio per rate, and the rates.
+constexpr uint32_t kRateBenchSeconds = 10;
+constexpr uint32_t kRateBenchRates[] = {48000, 96000, 88200, 32000, 24000, 22050, 16000, 12000, 11025, 8000, 44100};
 // An MP3's first bytes after its tags (its Xing/VBRI header, PSRAM), and
 // after a seek a frame and the next one's header (a frame is at most 1,441
 // bytes).
@@ -87,9 +90,9 @@ public:
   // the frame the sample is in and hands it over from that sample (write_cb
   // keeps it for loop()). loop() learns the stream's format only after a
   // frame of its own, so it is set here: otherwise that first frame would
-  // be read as 8-bit. (A rate the output refuses, 48 kHz on Bluetooth,
-  // fails the track at its first loop(), as it would from the top.) False:
-  // not there; the decoder is then in its seek error state: start again.
+  // be read as 8-bit. (A rate the converter refuses fails the track at its
+  // first loop(), as it would from the top.) False: not there; the decoder
+  // is then in its seek error state: start again.
   bool seekTo(uint64_t sample) {
     if (!flac || !FLAC__stream_decoder_seek_absolute(flac, sample)) return false;
     sampleRate = FLAC__stream_decoder_get_sample_rate(flac);
@@ -114,7 +117,7 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
   ring_.reset(new PcmRing(ringBuffer, kRingFrames));
 
   fs_ = fs;
-  out_.reset(new RingOutput(*ring_, shared_));
+  out_.reset(new RingOutput(*ring_));  // under 4 KB: internal RAM (RingOutput.h)
   if (fs_) file_.reset(new AudioFileSourceFS(*fs_));
 
   bt_.begin(*ring_, shared_, btSinkName);
@@ -158,6 +161,23 @@ void Core2AudioBackend::bench(const std::string& path) {
   request(path, Kind::Bench);
 }
 
+void Core2AudioBackend::rateBench() {
+  transportPlaying_ = false;
+  request("", Kind::RateBench);
+}
+
+Core2AudioBackend::RateStatus Core2AudioBackend::rateStatus() const {
+  RateStatus r;
+  r.rate = convRate_.load(std::memory_order_relaxed);
+  r.route = convRoute_.load(std::memory_order_relaxed);
+  r.num = convNum_.load(std::memory_order_relaxed);
+  r.den = convDen_.load(std::memory_order_relaxed);
+  r.taken = convTaken_.load(std::memory_order_relaxed);
+  r.made = convMade_.load(std::memory_order_relaxed);
+  r.clamped = convClamped_.load(std::memory_order_relaxed);
+  return r;
+}
+
 void Core2AudioBackend::pause() {
   pauses_.fetch_add(1);  // before paused: see start()
   shared_.paused = true;
@@ -181,16 +201,18 @@ uint32_t Core2AudioBackend::durationMs() const {
   // The estimate is of what is left from where the decoder began (the
   // first audio's file position): a start part of the way in adds its time.
   const uint32_t left =
-      progress::estimateDurationMs(producedFrames_.load(std::memory_order_relaxed), shared_.rate,
+      progress::estimateDurationMs(producedFrames_.load(std::memory_order_relaxed), kRingRate,
                                    srcPos0_.load(std::memory_order_relaxed), srcPos_.load(std::memory_order_relaxed),
                                    srcSize_.load(std::memory_order_relaxed));
   return left ? startMs_.load(std::memory_order_relaxed) + left : 0;
 }
 
 uint32_t Core2AudioBackend::positionMs() const {
-  const int rate = shared_.rate;
+  // Ring frames are 44.1 kHz whatever the track's rate, and ring frame n
+  // sits at exactly n / 44100 s of the source (the converter's delay is
+  // compensated): exact from the first frame.
   const uint32_t frames = ring_->readPos() - trackStart_;
-  const uint32_t played = rate > 0 ? static_cast<uint32_t>(static_cast<uint64_t>(frames) * 1000 / rate) : 0;
+  const auto played = static_cast<uint32_t>(static_cast<uint64_t>(frames) * 1000 / kRingRate);
   return startMs_.load(std::memory_order_relaxed) + played;
 }
 
@@ -198,6 +220,14 @@ bool Core2AudioBackend::positionKnown() const { return sync_.phase() != Phase::P
 
 bool Core2AudioBackend::finished() const { return sync_.phase() == Phase::Ended; }
 bool Core2AudioBackend::failed() const { return sync_.phase() == Phase::Failed; }
+
+IAudioBackend::RateRefusal Core2AudioBackend::rateRefusal() const {
+  RateRefusal r;
+  if (!failed()) return r;
+  r.hz = refusedHz_.load(std::memory_order_relaxed);
+  r.needsCpu = r.hz != 0 && refusedForCpu_.load(std::memory_order_relaxed);
+  return r;
+}
 
 void Core2AudioBackend::setOutput(Output output) {
   output_ = output;
@@ -293,21 +323,18 @@ void Core2AudioBackend::loop(uint32_t nowMs) {
   lastBtFrames_ = pulled;
   lastStatsMs_ = nowMs;
 
-  const int rate = shared_.rate;
-  stats_.bufferedMs = rate > 0 ? static_cast<uint32_t>(static_cast<uint64_t>(ring_->size()) * 1000 / rate) : 0;
+  stats_.bufferedMs = bufferedMsNow();
   stats_.underruns = shared_.underruns;
+  // Producing (decode and convert) against the audio produced, in ring frames.
   const uint64_t frames = producedFrames_.load();
   const uint64_t busyUs = busyUs_.load();
-  stats_.decodeLoad = frames && rate > 0
-      ? static_cast<float>(busyUs) / (static_cast<float>(frames) * 1e6f / static_cast<float>(rate))
-      : 0.0f;
+  stats_.decodeLoad = frames ? static_cast<float>(busyUs) / (static_cast<float>(frames) * 1e6f / kRingRate) : 0.0f;
   stats_.decodeStackFree = uxTaskGetStackHighWaterMark(task_);
 }
 
 uint32_t Core2AudioBackend::bufferedMsNow() const {
-  const int rate = shared_.rate;
-  if (!ring_ || rate <= 0) return 0;
-  return static_cast<uint32_t>(static_cast<uint64_t>(ring_->size()) * 1000 / rate);
+  if (!ring_) return 0;
+  return static_cast<uint32_t>(static_cast<uint64_t>(ring_->size()) * 1000 / kRingRate);
 }
 
 // ---- sharing core 1 with the UI (see the header) ----
@@ -397,8 +424,7 @@ void Core2AudioBackend::decodeTask() {
             sync_.report(generation, Phase::Draining);
             break;
           case Produced::Failed:
-            work = fail(generation, std::to_string(out_->rate()) +
-                                        " Hz can't play over Bluetooth yet (only 44100 Hz)");
+            work = failRate(generation);
             break;
         }
         break;
@@ -426,9 +452,16 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   closeDecoder();
   toneTrack_ = false;
   clickTrack_ = false;
+  sourceDone_ = false;
+  toneN_ = toneAt_ = 0;
   shared_.expectingAudio = false;
   ringSteady_ = false;  // filling from empty until kSteadyMs
+  refusedHz_ = 0;
   trackStart_ = ring_->discardAll();  // nothing of the previous track plays after this
+  // ...nor of its converter's history (up to 24 frames), whatever comes
+  // next: a file, a built-in track, a stop or a bench.
+  feed().reset(cpuMhz());
+  publishRate();
   if (req.kind == Kind::Play) {  // a new start to time (startTiming())
     firstAudioMs_ = -1;
     ring500Ms_ = -1;
@@ -447,8 +480,11 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   setText(title_, "");
   setText(artist_, "");
   if (req.kind == Kind::Stop) return Work::Idle;
-  if (req.kind == Kind::Bench) {
-    runBench(req.path);
+  if (req.kind == Kind::Bench || req.kind == Kind::RateBench) {
+    if (req.kind == Kind::Bench) runBench(req.path);
+    if (req.kind == Kind::RateBench) runRateBench();
+    feed().reset(cpuMhz());
+    publishRate();
     return Work::Idle;
   }
   // A newly started track plays, unless the player paused since asking. A
@@ -460,61 +496,94 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   }
   setText(note_, "");
 
-  if (req.path.rfind("tone:", 0) == 0) {
-    const std::string what = req.path.substr(5);
-    // A built-in track started part of the way in counts from there: the
-    // same sound, only what is left of its length (a click track's grid
-    // starts again at the start, so the dancer's truth, in track frames
-    // from the start, holds).
-    auto framesFrom = [&](uint32_t seconds) {
-      const uint32_t at = trackseek::startMs(req.startMs, seconds * 1000);
-      startMs_ = at;
-      if (req.startMs > 0) {
-        char asked[12];
-        mmss(req.startMs, asked, sizeof(asked));
-        Serial.printf("[audio] built-in track: %s asked: %s\n", asked, at ? "counting from there" : "from 0:00");
-      }
-      return kToneRate * seconds - static_cast<uint32_t>(static_cast<uint64_t>(at) * kToneRate / 1000);
-    };
-    ClickGen::Spec click;
-    if (ClickGen::parse(what, &click)) {
-      shared_.rate = kToneRate;
-      click_.start(kToneRate, click, framesFrom(kClickSeconds));
-      knownDurationMs_ = kClickSeconds * 1000;
-      toneTrack_ = clickTrack_ = true;
-      char text[48];
-      snprintf(text, sizeof(text), "clicks %.0f BPM%s, 44100 Hz", click.bpm, click.offsetBeats > 0 ? ", off-beat start" : "");
-      setText(description_, text);
-      sync_.report(generation, Phase::Decoding);
-      return Work::Producing;
-    }
-    if (what == "silence") {
-      shared_.rate = kToneRate;
-      tone_.startSilence(kToneRate, framesFrom(kSilenceSeconds));
-      knownDurationMs_ = kSilenceSeconds * 1000;
-      toneTrack_ = true;
-      setText(description_, "silence (zeros, for power tests), 44100 Hz");
-      sync_.report(generation, Phase::Decoding);
-      return Work::Producing;
-    }
-    const bool leftOnly = what == "left";
-    const int hz = leftOnly ? 440 : std::atoi(what.c_str());
-    if (hz <= 0) return fail(generation, "unknown tone " + req.path);
-    shared_.rate = kToneRate;
-    tone_.start(kToneRate, static_cast<float>(hz), -18.0f,
-                leftOnly ? ToneGen::Channels::LeftOnly : ToneGen::Channels::Both, framesFrom(kToneSeconds));
-    knownDurationMs_ = kToneSeconds * 1000;
-    toneTrack_ = true;
-    setText(description_, "tone " + std::to_string(hz) + " Hz" + (leftOnly ? ", left only" : "") +
-                              ", 44100 Hz");
-    sync_.report(generation, Phase::Decoding);
-    return Work::Producing;
-  }
+  if (req.path.rfind("tone:", 0) == 0) return startTone(generation, req);
 
-  out_->reset(output_ == Output::Bluetooth);
   if (!openDecoder(req.path, out_.get(), req.startMs, req.hintMs)) return fail(generation, "can't play " + req.path);
   sync_.report(generation, Phase::Decoding);
   return Work::Producing;
+}
+
+Core2AudioBackend::Work Core2AudioBackend::startTone(uint32_t generation, const Request& req) {
+  ToneTrack t;
+  if (!ToneTrack::parse(req.path, &t)) return fail(generation, "unknown tone " + req.path);
+  // Made at its own rate and converted like a file: the test tracks at
+  // other rates go through the converter (and its refusals) as a file would.
+  if (!feed().setRate(static_cast<int>(t.rate))) return failRate(generation);
+  publishRate();
+  // A built-in track started part of the way in counts from there: the
+  // same sound, only what is left of its length (a click track's grid
+  // starts again at the start, so the dancer's truth, in track frames
+  // from the start, holds).
+  const uint32_t at = trackseek::startMs(req.startMs, t.seconds * 1000);
+  startMs_ = at;
+  if (req.startMs > 0) {
+    char asked[12];
+    mmss(req.startMs, asked, sizeof(asked));
+    Serial.printf("[audio] built-in track: %s asked: %s\n", asked, at ? "counting from there" : "from 0:00");
+  }
+  const uint32_t frames = t.rate * t.seconds - static_cast<uint32_t>(static_cast<uint64_t>(at) * t.rate / 1000);
+  knownDurationMs_ = t.seconds * 1000;
+  toneTrack_ = true;
+  char text[64];
+  switch (t.kind) {
+    case ToneTrack::Kind::Clicks:
+      click_.start(t.rate, t.click, frames);
+      clickTrack_ = true;
+      snprintf(text, sizeof(text), "clicks %.0f BPM%s, %lu Hz", t.click.bpm,
+               t.click.offsetBeats > 0 ? ", off-beat start" : "", (unsigned long)t.rate);
+      break;
+    case ToneTrack::Kind::Silence:
+      tone_.startSilence(t.rate, frames);
+      snprintf(text, sizeof(text), "silence (zeros, for power tests), %lu Hz", (unsigned long)t.rate);
+      break;
+    case ToneTrack::Kind::Sine:
+    default:
+      tone_.start(t.rate, t.hz, -18.0f, t.leftOnly ? ToneGen::Channels::LeftOnly : ToneGen::Channels::Both, frames);
+      snprintf(text, sizeof(text), "tone %.0f Hz%s, %lu Hz", t.hz, t.leftOnly ? ", left only" : "",
+               (unsigned long)t.rate);
+      break;
+  }
+  setText(description_, text);
+  if (t.rate != kRingRate) {
+    Serial.printf("[audio] %s: %lu Hz -> %lu Hz (%s)\n", req.path.c_str(), (unsigned long)t.rate,
+                  (unsigned long)kRingRate, feed().converter().currentPlan().route);
+  }
+  sync_.report(generation, Phase::Decoding);
+  return Work::Producing;
+}
+
+RingFeed& Core2AudioBackend::feed() { return out_->feed(); }
+
+uint32_t Core2AudioBackend::cpuMhz() const {
+  const uint16_t set = cpuMhz_.load(std::memory_order_relaxed);
+  return set ? set : getCpuFrequencyMhz();
+}
+
+std::string Core2AudioBackend::refusalText() {
+  return std::to_string(feed().rate()) + " Hz " + feed().refusal();
+}
+
+void Core2AudioBackend::publishRate() {
+  const RingFeed& f = feed();
+  const RateConverter& c = f.converter();
+  const RateConverter::Plan& p = c.currentPlan();
+  convRate_.store(static_cast<uint32_t>(f.rate()), std::memory_order_relaxed);
+  convRoute_.store(c.configured() ? p.route : "", std::memory_order_relaxed);
+  convNum_.store(p.num, std::memory_order_relaxed);
+  convDen_.store(p.den, std::memory_order_relaxed);
+  convTaken_.store(static_cast<uint32_t>(c.taken()), std::memory_order_relaxed);
+  convMade_.store(static_cast<uint32_t>(c.produced()), std::memory_order_relaxed);
+  convClamped_.store(c.clamped(), std::memory_order_relaxed);
+}
+
+Core2AudioBackend::Work Core2AudioBackend::failRate(uint32_t generation) {
+  // Stored before fail()'s report, so whoever sees the failure sees why.
+  refusedForCpu_.store(feed().refusalKind() == RateConverter::Refusal::NeedsCpu, std::memory_order_relaxed);
+  refusedHz_.store(static_cast<uint32_t>(feed().rate()), std::memory_order_relaxed);
+  // The console's R reports the refused rate (a built-in track at another
+  // rate is refused before any pass publishes it).
+  publishRate();
+  return fail(generation, refusalText());
 }
 
 Core2AudioBackend::Work Core2AudioBackend::fail(uint32_t generation, const std::string& why) {
@@ -689,96 +758,128 @@ void Core2AudioBackend::closeDecoder() {
 }
 
 Core2AudioBackend::Produced Core2AudioBackend::produceTone() {
-  if (ring_->space() < kChunkFrames) {  // ring full: the output is ~1.5 s behind us
-    noteStartProgress(kToneRate, true);
-    vTaskDelay(pdMS_TO_TICKS(10));
-    return Produced::More;
+  if (sourceDone_) return finishSource();
+  RingFeed& f = feed();
+  if (toneAt_ == toneN_) {  // the last chunk is all in: a new one
+    if (ring_->space() < f.roomFor(kChunkFrames)) {  // ring full: the output is ~1.5 s behind us
+      noteStartProgress(true);
+      vTaskDelay(pdMS_TO_TICKS(10));
+      return Produced::More;
+    }
+    toneN_ = clickTrack_ ? click_.generate(chunk_, kChunkFrames) : tone_.generate(chunk_, kChunkFrames);
+    toneAt_ = 0;
+    if (toneN_ == 0) {
+      sourceDone_ = true;
+      return Produced::More;
+    }
   }
+  // Through RingOutput's converter at the tone's rate. What the ring has no
+  // room for stays in chunk_ for the next pass (the generators have moved
+  // past it), the way a decoder keeps the sample it couldn't hand over. A
+  // pass makes at most kChunkFrames ring frames, as a file's does: an 8 kHz
+  // tone's whole chunk would be 5.5 times that.
   const int64_t t0 = esp_timer_get_time();
-  const uint32_t n = clickTrack_ ? click_.generate(chunk_, kChunkFrames) : tone_.generate(chunk_, kChunkFrames);
-  if (n == 0) return Produced::Done;
-  ring_->write(chunk_, n);
+  const uint64_t before = f.made();
+  const uint32_t taken = f.write(chunk_ + 2 * toneAt_, toneN_ - toneAt_, kChunkFrames);
+  toneAt_ += taken;
+  f.commit();
   const auto toneUs = static_cast<uint64_t>(esp_timer_get_time() - t0);
   busyUs_ += toneUs;
   busyTotalUs_ += toneUs;
-  producedFrames_ += n;
-  if (!shared_.expectingAudio && producedFrames_ >= kToneRate / 4) shared_.expectingAudio = true;
-  noteRingFill(kToneRate);
-  noteStartProgress(kToneRate, false);
-  vTaskDelay(1);  // share core 1 with the UI loop
+  producedFrames_ += f.made() - before;
+  publishRate();
+  if (!shared_.expectingAudio && producedFrames_ >= kRingRate / 4) shared_.expectingAudio = true;
+  noteRingFill();
+  noteStartProgress(taken == 0);
+  vTaskDelay(taken == 0 ? pdMS_TO_TICKS(10) : 1);  // share core 1 with the UI loop
   return Produced::More;
 }
 
-void Core2AudioBackend::noteStartProgress(int rate, bool full) {
-  if (fullMs_.load(std::memory_order_relaxed) >= 0 || rate <= 0) return;  // done for this start
+Core2AudioBackend::Produced Core2AudioBackend::finishSource() {
+  // The converter's tail (its delay's worth, so the track ends with exactly
+  // ceil(source frames x 44100 / rate) ring frames) and the staged frames.
+  const uint64_t before = feed().made();
+  const bool done = feed().finish();
+  producedFrames_ += feed().made() - before;
+  publishRate();
+  if (done) {
+    closeDecoder();
+    return Produced::Done;
+  }
+  vTaskDelay(pdMS_TO_TICKS(10));
+  return Produced::More;
+}
+
+void Core2AudioBackend::noteStartProgress(bool full) {
+  if (fullMs_.load(std::memory_order_relaxed) >= 0) return;  // done for this start
   const auto since = static_cast<int32_t>(millis() - requestMs_.load(std::memory_order_relaxed));
-  const uint64_t bufferedMs = static_cast<uint64_t>(ring_->size()) * 1000 / static_cast<uint64_t>(rate);
+  const uint32_t bufferedMs = bufferedMsNow();
   if (firstAudioMs_.load(std::memory_order_relaxed) < 0 && producedFrames_ > 0) firstAudioMs_ = since;
   if (ring500Ms_.load(std::memory_order_relaxed) < 0 && bufferedMs >= 500) ring500Ms_ = since;
   if (steadyMs_.load(std::memory_order_relaxed) < 0 && bufferedMs >= kSteadyMs) steadyMs_ = since;
   if (full) fullMs_ = since;
 }
 
-void Core2AudioBackend::noteRingFill(int rate) {
-  if (ringSteady_.load(std::memory_order_relaxed) || rate <= 0) return;
-  if (static_cast<uint64_t>(ring_->size()) * 1000 >= static_cast<uint64_t>(kSteadyMs) * static_cast<uint64_t>(rate)) {
-    ringSteady_ = true;
-  }
+void Core2AudioBackend::noteRingFill() {
+  if (ringSteady_.load(std::memory_order_relaxed)) return;
+  if (static_cast<uint64_t>(ring_->size()) * 1000 >= static_cast<uint64_t>(kSteadyMs) * kRingRate) ringSteady_ = true;
 }
 
 Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
-  if (sourceDone_) {  // end of file: push out the last staged frames, then drain
-    if (out_->commit()) {
-      closeDecoder();
-      return Produced::Done;
-    }
-    vTaskDelay(pdMS_TO_TICKS(10));
-    return Produced::More;
-  }
-  // Room for a full pass plus what RingOutput may already be holding.
-  if (ring_->space() < 2 * kChunkFrames) {
-    noteStartProgress(out_->rate(), true);
+  if (sourceDone_) return finishSource();  // end of file: the converter's tail, the staged frames, then drain
+  RingFeed& f = feed();
+  // Room for a full pass, in ring frames (at the track's ratio), plus what
+  // RingOutput may already be holding.
+  if (ring_->space() < f.roomFor(2 * kChunkFrames)) {
+    noteStartProgress(true);
     vTaskDelay(pdMS_TO_TICKS(10));
     return Produced::More;
   }
 
   const int64_t t0 = esp_timer_get_time();
   const uint64_t before = producedFrames_;
+  const uint64_t madeBefore = f.made();
   // Where the file was when the first audio came (the tags in front are
   // left out of the length estimate), and where it is now.
   if (before == 0) srcPos0_.store(file_->getPos(), std::memory_order_relaxed);
-  out_->setBudget(kChunkFrames);
+  // At most kChunkFrames source frames (the decode work per pass as at
+  // 44.1 kHz) and kChunkFrames ring frames (the conversion's: an 8 kHz
+  // file's 1024 source frames would make 5,645, ~20 ms above the UI loop).
+  f.setBudget(kChunkFrames);
   const bool running = decoder_->loop();
-  out_->commit();
+  f.commit();
   srcPos_.store(file_->getPos(), std::memory_order_relaxed);
   srcSize_.store(file_->getSize(), std::memory_order_relaxed);
   const auto passUs = static_cast<uint64_t>(esp_timer_get_time() - t0);
   busyUs_ += passUs;
   busyTotalUs_ += passUs;
-  producedFrames_ = before + kChunkFrames - out_->budgetLeft();
+  producedFrames_ = before + (f.made() - madeBefore);  // ring frames, 44.1 kHz
+  publishRate();
 
-  if (out_->rateRejected()) return Produced::Failed;
-  if (!described_ && out_->rate() > 0) {
-    setText(description_, std::string(codec_) + ", " + std::to_string(out_->rate()) + " Hz");
+  if (f.rejected()) return Produced::Failed;
+  if (!described_ && f.rate() > 0) {
+    setText(description_, std::string(codec_) + ", " + std::to_string(f.rate()) + " Hz");
     described_ = true;
+    if (f.rate() != static_cast<int>(kRingRate)) {
+      Serial.printf("[audio] %d Hz -> %lu Hz (%s)\n", f.rate(), (unsigned long)kRingRate,
+                    f.converter().currentPlan().route);
+    }
   }
-  if (!shared_.expectingAudio && out_->rate() > 0 &&
-      producedFrames_ >= static_cast<uint64_t>(out_->rate()) / 4) {
+  if (!shared_.expectingAudio && producedFrames_ >= kRingRate / 4) {
     shared_.expectingAudio = true;  // past the pre-roll
   }
-  noteRingFill(out_->rate());
-  noteStartProgress(out_->rate(), false);
+  noteRingFill();
+  noteStartProgress(false);
   if (!running) sourceDone_ = true;
   // Share core 1 with the UI loop: 1 ms, or, with refill pacing on, during
   // the fill after a start or skip (until the ring is first full: fullMs_
   // is -1 until then) and past 500 ms, long enough to keep this track under
   // the rate cap (see setRefillPacing()). Later dips (an SD stall, a
   // Bluetooth burst) refill flat out, as without pacing.
-  const int rate = out_->rate();
   RefillPacer::Config pace = refillPacing();
   pace.enabled = pace.enabled && fullMs_.load(std::memory_order_relaxed) < 0;
-  vTaskDelay(RefillPacer::sleepMs(pace, bufferedMsNow(), static_cast<uint32_t>(producedFrames_ - before),
-                                  rate > 0 ? static_cast<uint32_t>(rate) : 0, static_cast<uint32_t>(passUs)));
+  vTaskDelay(RefillPacer::sleepMs(pace, bufferedMsNow(), static_cast<uint32_t>(producedFrames_ - before), kRingRate,
+                                  static_cast<uint32_t>(passUs)));
   return Produced::More;
 }
 
@@ -807,4 +908,84 @@ void Core2AudioBackend::runBench(const std::string& path) {
                 path.c_str(), audio, counter.rate, seconds, seconds > 0 ? audio / seconds : 0.0,
                 audio > 0 ? 100.0 * seconds / audio : 0.0,
                 (unsigned long)uxTaskGetStackHighWaterMark(nullptr));
+  if (counter.rate <= 0 || counter.rate == static_cast<int>(kRingRate) || audio <= 0) return;
+
+  // Another rate: the same stretch again, decoded and converted through
+  // RingOutput (its output dropped), for what the two cost together, cache
+  // misses included (Rb times the converter alone).
+  RingFeed& f = feed();
+  f.reset(cpuMhz(), /*hiRes=*/true);  // measured even while 88.2/96 kHz don't play (RateConverter::kHiResOn)
+  if (!openDecoder(path, out_.get(), 0, 0)) return;
+  f.setDiscard(true);
+  const uint64_t want = counter.frames;
+  uint64_t taken = 0;
+  busyUs = 0;
+  for (;;) {
+    f.setBudget(CountingOutput::kBurst);
+    const int64_t t0 = esp_timer_get_time();
+    const bool more = decoder_->loop();
+    f.commit();
+    busyUs += esp_timer_get_time() - t0;
+    taken += CountingOutput::kBurst - f.budgetLeft();
+    if (!more || f.rejected() || taken >= want) break;
+    vTaskDelay(1);
+  }
+  f.setDiscard(false);
+  closeDecoder();
+  if (f.rejected()) {
+    Serial.printf("[bench] %s: not converted: %s\n", path.c_str(), refusalText().c_str());
+    return;
+  }
+  const double both = busyUs / 1e6;
+  const double audio2 = static_cast<double>(taken) / counter.rate;
+  if (audio2 <= 0) return;
+  Serial.printf("[bench] %s: decode + convert to %lu Hz (%s) in %.2f s = %.1f%% of a core at %lu MHz: the converter "
+                "%.1f%% in the decoder's company\n",
+                path.c_str(), (unsigned long)kRingRate, f.converter().currentPlan().route, both, 100.0 * both / audio2,
+                (unsigned long)getCpuFrequencyMhz(), 100.0 * both / audio2 - 100.0 * seconds / audio);
+}
+
+void Core2AudioBackend::runRateBench() {
+  RingFeed& f = feed();
+  // A fixed stereo signal (noise at about -12 dBFS, the same every run):
+  // the kernel's cost doesn't depend on the values.
+  uint32_t seed = 12345;
+  for (uint32_t i = 0; i < 2 * kChunkFrames; ++i) {
+    seed = seed * 1664525u + 1013904223u;
+    chunk_[i] = static_cast<int16_t>(static_cast<int32_t>(seed >> 16) / 4 - 8192);
+  }
+  const uint32_t mhz = getCpuFrequencyMhz();
+  const uint32_t setting = cpuMhz();
+  Serial.printf("[rate bench] %lu s of stereo audio per rate through RingOutput's converter on the decode task, "
+                "output dropped; CPU %lu MHz now (set at boot: %lu MHz)\n",
+                (unsigned long)kRateBenchSeconds, (unsigned long)mhz, (unsigned long)setting);
+  for (const uint32_t hz : kRateBenchRates) {
+    // Every route is measured, the hi-res ones at 160 MHz too (to settle
+    // that rule) and while they don't play (kHiResOn): planned as at 240 MHz.
+    f.reset(RateConverter::kHiResMinMhz, /*hiRes=*/true);
+    f.setDiscard(true);
+    if (!f.setRate(static_cast<int>(hz))) continue;
+    uint64_t cycles = 0;
+    uint32_t left = hz * kRateBenchSeconds;
+    uint32_t blocks = 0;
+    while (left > 0) {
+      const uint32_t n = left < kChunkFrames ? left : kChunkFrames;
+      const uint32_t c0 = esp_cpu_get_cycle_count();
+      const uint32_t taken = f.write(chunk_, n);
+      f.commit();
+      cycles += esp_cpu_get_cycle_count() - c0;  // per block: no 32-bit wrap
+      left -= taken;
+      if (taken == 0) break;  // (can't happen: discarding, the stage always has room)
+      if (++blocks % 4 == 0) vTaskDelay(1);  // the UI loop runs between
+    }
+    const double perSecond = static_cast<double>(cycles) / kRateBenchSeconds;
+    const RateConverter::Plan p = RateConverter::plan(hz, setting);
+    Serial.printf("[rate bench] %6lu Hz (%s): %5.1f M cycles per second of audio = %4.1f%% of a core at %lu MHz%s%s%s\n",
+                  (unsigned long)hz, f.converter().currentPlan().route, perSecond / 1e6,
+                  100.0 * perSecond / (mhz * 1e6), (unsigned long)mhz, p.ok ? "" : " (not played: it ",
+                  p.ok ? "" : p.reason, p.ok ? "" : ")");
+  }
+  f.setDiscard(false);
+  Serial.println("[rate bench] cycles include interrupts and anything that preempted the decode task; "
+                 "b<n> on a file at another rate gives decode + convert together");
 }

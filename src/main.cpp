@@ -28,7 +28,9 @@
 #include "PowerChoices.h"
 #include "QueueModel.h"
 #include "QueueView.h"
+#include "RateConverter.h"
 #include "SleepTimer.h"
+#include "ToneTrack.h"
 #include "TrackCatalog.h"
 #include "UiText.h"
 #include "app/DanceMode.h"
@@ -1069,6 +1071,110 @@ static void idleCommand(const char* a);
 //        stored address and the bond are left alone): restarts now
 //   Bn   the same for this session (RAM only; not while linked or
 //        pairing); Bn0 ends it (so does any restart)
+// R...: the rate converter (docs/RESAMPLER.md section 6; every track goes
+// to the ring at 44.1 kHz):
+//   R      the current track's conversion (its exact ratio, source frames
+//          taken against ring frames made, clamped samples), and the help
+//   Rt     the test tracks (a 1 kHz tone and silence made at other rates:
+//          TrackCatalog::rateTests()); Rt<n> plays one, Rt<tone:...> any
+//          built-in path ("tone:silence@37800" shows a refusal). It plays on
+//          its own: the player is stopped first, so when it ends or fails
+//          nothing follows it (the queue's music never starts by itself).
+//          On Bluetooth only silence (headphones may be on someone's ears);
+//          a tone only in silent mode (z: the speaker at volume 0).
+//   Rb     the converter's bench: playback stopped, ~10 s of audio per rate
+// Rt, Rb (and b<n>) stop the player keeping the listener's place: the
+// paused or playing track's second waits as a start point (and stays the
+// saved resume point), so a play afterwards picks up there.
+
+// The player stopped for a test that borrows the backend; logs the place kept.
+static void stopForTest(const char* what) {
+  const bool kept = player.stopKeepingPlace();
+  uint32_t ms = 0, dur = 0;
+  if (kept && player.startPoint(&ms, &dur)) {
+    Serial.printf("[%s] playback stopped; the current entry picks up %.1f s in at its next play\n", what, ms / 1000.0);
+  } else {
+    Serial.printf("[%s] playback stopped\n", what);
+  }
+}
+
+static void rateCommand(const char* a) {
+  const char c = a[0];
+  if (c == 'b') {
+    stopForTest("rate");
+    Serial.println("[rate] bench: 10 s of audio per rate (about half a minute in all)");
+    audio.rateBench();
+    return;
+  }
+  if (c == 't') {
+    const LibraryIndex::Span tests = TrackCatalog::rateTests();
+    const TrackCatalog& catalog = library.catalog();
+    char path[TrackCatalog::kMaxPath] = "";
+    if (!a[1]) {
+      for (uint32_t i = 0; i < tests.count; ++i) {
+        catalog.path(tests[i], path, sizeof(path));
+        Serial.printf("  Rt%lu  %s\n", (unsigned long)i, path);
+      }
+      Serial.println("[rate] Rt<n> plays one on its own (the player stopped: nothing follows it); Rt<tone:...@<rate>> "
+                     "any built-in path; silence only on Bluetooth, a tone only in silent mode (z)");
+      return;
+    }
+    if (isDigit(a[1])) {
+      const long n = atol(a + 1);
+      if (n < 0 || static_cast<uint32_t>(n) >= tests.count) {
+        Serial.println("[rate] Rt: no such test track (Rt lists them)");
+        return;
+      }
+      catalog.path(tests[n], path, sizeof(path));
+    } else {
+      snprintf(path, sizeof(path), "%s", a + 1);
+    }
+    ToneTrack t;
+    if (!ToneTrack::parse(path, &t)) {
+      Serial.printf("[rate] Rt: \"%s\" isn't a built-in track (tone:1000@48000, tone:silence@96000, ...)\n", path);
+      return;
+    }
+    const bool quiet = t.kind == ToneTrack::Kind::Silence;
+    if (!quiet && audio.output() == Output::Bluetooth) {
+      Serial.println("[rate] Rt: only silence on Bluetooth (headphones may be on someone's ears): tone:silence@<rate>");
+      return;
+    }
+    if (!quiet && !silent) {
+      Serial.println("[rate] Rt: a tone only in silent mode (z: the speaker at volume 0); silence plays anywhere");
+      return;
+    }
+    // On its own: the player stopped, so PlaybackController::update() has
+    // nothing to advance when it ends or fails (Pz's way would queue it
+    // ahead of the listener's music). The listener's place is kept.
+    stopForTest("rate");
+    audio.play(path, 0, 0);
+    Serial.printf("[rate] playing %s on its own (%s; the player is stopped: nothing follows it)\n", path,
+                  audio.output() == Output::Bluetooth ? "bluetooth"
+                  : silent                            ? "the speaker, silent test mode"
+                                                      : "the speaker");
+    return;
+  }
+  const Core2AudioBackend::RateStatus r = audio.rateStatus();
+  if (r.rate == 0) {
+    Serial.println("[rate] no track at a known rate");
+  } else if (!r.route[0]) {
+    Serial.printf("[rate] %lu Hz: refused (%s)\n", (unsigned long)r.rate, audio.note().c_str());
+  } else {
+    const uint64_t want = (static_cast<uint64_t>(r.taken) * r.num + r.den - 1) / r.den;
+    Serial.printf("[rate] %lu Hz -> %d Hz (%s): %lu/%lu ring frames per source frame; %lu source frames taken, %lu ring "
+                  "frames made, ceil(taken x %lu/%lu) = %lu (%ld still in the filter: 0 once the track has ended); "
+                  "%lu samples clamped; position %.3f s\n",
+                  (unsigned long)r.rate, audio.sampleRate(), r.route, (unsigned long)r.num, (unsigned long)r.den,
+                  (unsigned long)r.taken, (unsigned long)r.made, (unsigned long)r.num, (unsigned long)r.den,
+                  (unsigned long)want, (long)(static_cast<int64_t>(want) - r.made), (unsigned long)r.clamped,
+                  audio.positionMs() / 1000.0);
+  }
+  Serial.printf("[rate] CPU set at boot: %u MHz; 88.2/96 kHz %s; R status, Rt the test tracks (Rt<n> plays one "
+                "on its own), Rb the converter's bench (stops playback, keeps your place)\n",
+                (unsigned)PowerSettings::cpuBootMhz(),
+                RateConverter::kHiResOn ? "need 240 MHz" : "off in this build (MSTREAM_HIRES_RATES=1 turns them on)");
+}
+
 static void bluetoothTestCommand(const char* a) {
   BtSink& bt = audio.bluetooth();
   const BtLink l = bt.link();
@@ -1131,7 +1237,7 @@ static SerialConsole console({
       if (i < 0 || static_cast<uint32_t>(i) >= queue.size()) return;
       char path[TrackCatalog::kMaxPath];
       library.catalog().path(queue.trackAt(i), path, sizeof(path));
-      player.stop();
+      stopForTest("bench");
       audio.bench(path);
     },
     [] {
@@ -1220,6 +1326,7 @@ static SerialConsole console({
     idleCommand,
     bluetoothTestCommand,
     diag::printPartitionTable,
+    rateCommand,
 });
 
 // Touch buttons: the same on every screen (ButtonPolicy). Each click and
@@ -1964,6 +2071,9 @@ void setup() {
   if (!audio.begin(storage.available() ? &storage.fs() : nullptr, BT_SINK_NAME)) {
     Serial.println("[audio] failed to start");
   }
+  // 88.2/96 kHz tracks need 240 MHz: the speed set at boot, not the clock
+  // of the moment (the console's Pc80 lowers that for quiet spells).
+  audio.setCpuMhz(PowerSettings::cpuBootMhz());
   diag::logHeap("audio");
 
   // The library (from the card's cache when /music is unchanged) and the
@@ -2039,7 +2149,8 @@ void setup() {
                  "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja); "
                  "P power measurement (P a line, Pl log, P? the knobs; Ps the screen, Ps0/Ps1 off/on); "
                  "T sleep timer (T status, T<min>, Ts<sec> for tests, Tt/Ta/Tq end of track/album/queue, T+ +10 min, "
-                 "T0 off); I idle power-off (I status, I<min>/Is<sec> a test length, I0 the setting's)");
+                 "T0 off); I idle power-off (I status, I<min>/Is<sec> a test length, I0 the setting's); "
+                 "R rate converter (R status, Rt test tracks, Rt<n> play one on its own, Rb bench)");
 }
 
 void loop() {
@@ -2081,7 +2192,9 @@ void loop() {
   // change, the position gone back, or a change right at a track's start.
   // (Counted from where the track started: a resume point starts it part
   // of the way in.)
-  if (queue.current() >= 0 && audio.isPlaying()) {
+  // (The player playing it: a track the console's Rt plays on its own,
+  // with the player stopped, isn't the current entry's.)
+  if (queue.current() >= 0 && player.state() == PlayState::Playing && audio.isPlaying()) {
     static uint32_t lengthKey = QueueModel::kNone;
     static uint8_t lengthNoted = 0;  // 1 the estimate, 2 the file's
     static uint32_t startSeqAtKey = 0, posAtKey = 0;

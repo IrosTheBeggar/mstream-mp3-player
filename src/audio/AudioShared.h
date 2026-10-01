@@ -10,9 +10,11 @@
 // State the decode task shares with the two outputs (the Bluetooth callback
 // and the speaker pump). All three run on different tasks.
 struct AudioShared {
-  // Sample rate of the frames in the ring. Set before the first frame of a
-  // track is written, so an output that has read a frame sees its rate.
-  std::atomic<int> rate{44100};
+  // The rate of every frame in the ring: RingOutput converts each track to
+  // it (docs/RESAMPLER.md), so Bluetooth's SBC (44.1 kHz only) and the
+  // speaker take any track, and an output switch mid-track can't change
+  // its speed.
+  static constexpr int kRingRate = 44100;
   // Outputs fade the next 64 frames out, then play silence without reading:
   // pausing takes ~1.5 ms and the ring keeps its audio for resume.
   std::atomic<bool> paused{false};

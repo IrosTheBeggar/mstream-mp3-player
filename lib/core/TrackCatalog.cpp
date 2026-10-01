@@ -29,13 +29,29 @@ constexpr Builtin kBuiltins[] = {
     // Pz): the outputs run at their full rate and nothing is heard. Known
     // (a path, a title) but not listed: never queued with the others.
     {TrackCatalog::kSilencePath, "Silence (power test)", 3600000},
+    // The rate converter's test tracks (the console's Rt; docs/RESAMPLER.md
+    // section 6): made at another rate and converted to 44.1 kHz like a
+    // file. Known but not listed either: never queued, Rt plays them on
+    // their own.
+    {"tone:1000@48000", "Test tone 1 kHz, 48 kHz", 0},
+    {"tone:1000@96000", "Test tone 1 kHz, 96 kHz", 0},
+    {"tone:1000@88200", "Test tone 1 kHz, 88.2 kHz", 0},
+    {"tone:1000@32000", "Test tone 1 kHz, 32 kHz", 0},
+    {"tone:1000@22050", "Test tone 1 kHz, 22.05 kHz", 0},
+    {"tone:1000@8000", "Test tone 1 kHz, 8 kHz", 0},
+    {"tone:silence@48000", "Silence, 48 kHz", 3600000},
+    {"tone:silence@96000", "Silence, 96 kHz", 3600000},
+    {"tone:silence@22050", "Silence, 22.05 kHz", 3600000},
 };
 constexpr uint32_t kCount = sizeof(kBuiltins) / sizeof(kBuiltins[0]);
-constexpr uint32_t kListed = kCount - 1;  // all but the silence
+constexpr uint32_t kListed = 9;      // the tones and the click tracks
+constexpr uint32_t kRateTests = 10;  // the first of the rate test tracks (after the silence)
 
 constexpr uint32_t B = TrackCatalog::kBuiltin;
 constexpr uint32_t kIds[] = {B + 0, B + 1, B + 2, B + 3, B + 4, B + 5, B + 6, B + 7, B + 8};
 static_assert(sizeof(kIds) / sizeof(kIds[0]) == kListed, "one id per listed built-in track");
+constexpr uint32_t kTestIds[] = {B + 10, B + 11, B + 12, B + 13, B + 14, B + 15, B + 16, B + 17, B + 18};
+static_assert(sizeof(kTestIds) / sizeof(kTestIds[0]) == kCount - kRateTests, "one id per rate test track");
 
 // Copies `len` bytes and a NUL, or writes "" and returns 0 if it won't fit.
 size_t copyOut(const char* s, size_t len, char* buf, size_t size) {
@@ -64,6 +80,8 @@ size_t copyCut(const char* s, size_t len, char* buf, size_t size) {
 uint32_t TrackCatalog::builtinCount() { return kCount; }
 
 LibraryIndex::Span TrackCatalog::builtins() { return {kIds, kListed}; }
+
+LibraryIndex::Span TrackCatalog::rateTests() { return {kTestIds, kCount - kRateTests}; }
 
 bool TrackCatalog::valid(uint32_t id) const { return isBuiltin(id) || inIndex(id); }
 

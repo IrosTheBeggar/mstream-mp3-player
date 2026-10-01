@@ -68,7 +68,7 @@ void SpeakerSink::begin(PcmRing& ring, AudioShared& shared) {
   }
 
   auto cfg = M5.Speaker.config();
-  cfg.sample_rate = 44100;             // most music needs no resampling
+  cfg.sample_rate = AudioShared::kRingRate;  // the ring's: every track is converted to it
   cfg.task_pinned_core = APP_CPU_NUM;  // keep it off the Bluetooth core
   M5.Speaker.config(cfg);
   // The I2S DMA holds this much after M5.Speaker has mixed a buffer in.
@@ -194,9 +194,6 @@ void SpeakerSink::pump() {
     }
     // The amp on again (after a quiet spell) before any audio reaches it.
     switchAmp(gate_.beforeQueue(running));
-    // Read the rate after the frames: it is published before a track's first
-    // frame. A fade-only buffer keeps the rate of the audio it ends.
-    if (r.read > 0) lastRate_ = shared_->rate;
     // A copy of the real audio for the beat tracker (never the fade after
     // it; nothing while the Dance tab isn't up), and when this buffer was
     // filled, to time its release.
@@ -208,7 +205,7 @@ void SpeakerSink::pump() {
     shared_->fade.process(buffers_[idx], r.total, ring_->consumer() == kConsumerId);
     filledUs_[idx].store(r.read == kFrames ? (nowUs | 1u) : 0u, std::memory_order_relaxed);
     busy_[idx] = true;  // before playRaw(): the release can only come after it's queued
-    if (!M5.Speaker.playRaw(buffers_[idx], r.total * 2, lastRate_, true, 1, kChannel)) {
+    if (!M5.Speaker.playRaw(buffers_[idx], r.total * 2, AudioShared::kRingRate, true, 1, kChannel)) {
       busy_[idx] = false;
     }
     gate_.queued(millis());
