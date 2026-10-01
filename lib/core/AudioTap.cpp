@@ -48,6 +48,10 @@ void AudioTap::write(const int16_t* stereo, uint32_t frames, uint32_t realFrames
     startSegment(c + realFrames, kNoTrack, epoch_);
     real_ = false;
   }
+  // Claim the frames first: a reader copying the ones they overwrite must
+  // see it (read()).
+  head_.store(c + frames, std::memory_order_relaxed);
+  std::atomic_thread_fence(std::memory_order_release);
   for (uint32_t i = 0; i < frames; ++i) {
     const int32_t mono = (static_cast<int32_t>(stereo[2 * i]) + stereo[2 * i + 1]) >> 1;
     buf_[(c + i) & mask_] = static_cast<int16_t>(mono);
@@ -78,8 +82,9 @@ bool AudioTap::read(uint32_t from, int16_t* out, uint32_t n) const {
   if (count_.load(std::memory_order_acquire) - from > cap_) return false;
   for (uint32_t i = 0; i < n; ++i) out[i] = buf_[(from + i) & mask_];
   std::atomic_thread_fence(std::memory_order_acquire);
-  // Still there after the copy: the writer didn't lap us meanwhile.
-  return count_.load(std::memory_order_relaxed) - from <= cap_;
+  // Still there after the copy: the writer didn't lap us meanwhile, counting
+  // the write in progress (it overwrites before count() moves).
+  return head_.load(std::memory_order_relaxed) - from <= cap_;
 }
 
 bool AudioTap::segmentAt(uint32_t frame, uint32_t limit, Segment* out) const {

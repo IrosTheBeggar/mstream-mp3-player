@@ -15,7 +15,9 @@
 // Tap frames are counted by a free-running 32-bit counter (count(),
 // release/acquire), with a 32-bit microsecond timestamp of the last write.
 // Both wrap harmlessly; nothing here is 64-bit, which isn't lock-free on
-// the ESP32.
+// the ESP32. A second counter runs ahead of it by the write in progress:
+// that write is already overwriting the oldest frames before count() moves,
+// so read() checks against it, not count().
 //
 // Each write also says where its audio came from: how many of its frames
 // are real (from the ring; the rest are fades or silence), the ring's epoch
@@ -79,6 +81,7 @@ private:
   const uint32_t cap_;
   const uint32_t mask_;
   std::atomic<uint32_t> count_{0};
+  std::atomic<uint32_t> head_{0};  // count_ plus the write in progress
   std::atomic<uint32_t> us_{0};
   // Segment table under a sequence lock: odd while the writer changes it.
   std::atomic<uint32_t> seq_{0};

@@ -219,7 +219,11 @@ void test_tap_forgets_old_segments() {
 }
 
 // A writer on another thread and a reader polling: every run the reader gets
-// holds exactly the frames written at those track positions, in order.
+// holds exactly the frames written at those track positions, in order, and
+// every frame is either handed over or counted lost. A lap is counted before
+// the runs after it, often in the same poll, so the check reads lostFrames()
+// at each run: a run follows on from the last by exactly the frames lost
+// in between.
 void test_tap_concurrent_writer_and_reader() {
   std::vector<int16_t> buf(4096);
   AudioTap tap(buf.data(), 4096);
@@ -243,27 +247,30 @@ void test_tap_concurrent_writer_and_reader() {
   TapReader reader;
   reader.attach(&tap, kRate);
   std::vector<int16_t> scratch(700);
-  uint32_t expected = 0;
-  bool first = true, ok = true;
+  uint32_t expected = 0, lostSeen = 0;
+  bool first = true, inOrder = true, samplesOk = true;
   auto check = [&](const TapReader::Run& r) {
+    const uint32_t lost = reader.lostFrames();
     if (first) {
       expected = r.trackFrame;
       first = false;
+    } else {
+      expected += lost - lostSeen;
     }
-    if (r.trackFrame != expected) ok = false;
+    lostSeen = lost;
+    if (r.trackFrame != expected) inOrder = false;
     for (uint32_t i = 0; i < r.frames; ++i) {
-      if (r.samples[i] != static_cast<int16_t>((r.trackFrame + i) & 0x7FFF)) ok = false;
+      if (r.samples[i] != static_cast<int16_t>((r.trackFrame + i) & 0x7FFF)) samplesOk = false;
     }
     expected = r.trackFrame + r.frames;
   };
-  while (!done) {
-    const uint32_t lost = reader.lostFrames();
-    reader.poll(scratch.data(), 700, check);
-    if (reader.lostFrames() != lost) first = true;  // lapped: the next run starts over
-  }
+  while (!done) reader.poll(scratch.data(), 700, check);
   reader.poll(scratch.data(), 700, check);
   writer.join();
-  TEST_ASSERT_TRUE(ok);
+  TEST_ASSERT_FALSE(first);
+  TEST_ASSERT_TRUE(inOrder);
+  TEST_ASSERT_TRUE(samplesOk);
+  TEST_ASSERT_EQUAL_UINT32(kTotal, expected + (reader.lostFrames() - lostSeen));  // nothing unaccounted for
 }
 
 // ---- TapReader ----
