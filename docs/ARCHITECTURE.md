@@ -1211,8 +1211,9 @@ the browsing UI hold its **track ids**, never strings.
   `f_write` holds the FAT volume's lock for its whole length, and the decoder
   reads the playing track through that lock, so a g0 rebuild's cache save
   (blocks of hundreds of KB at 10,000 tracks) never makes it wait long.
-  With no saved queue, it's the whole library (artist, album, track order)
-  followed by the built-in tracks.
+  With no saved queue, it's the whole library (artist, album, track order),
+  without the built-in test tracks (`qb` queues those); with no card, it's
+  empty.
 - **Internal RAM**: the old `std::vector<Track>` library and its playlist copy
   cost ~86 B of internal RAM per track per copy (13 KB for 77 tracks, and
   impossible at a few thousand). Now the library, the queue and its undo are

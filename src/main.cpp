@@ -769,17 +769,23 @@ static void listTracks() {
   queueStore.printStatus();
 }
 
-// The whole library, then the built-in tracks, from the first: played now,
-// or (start false) only queued, stopped, the way the playlist always was.
+// The whole library from the first track: played now, or (start false) only
+// queued, stopped. The built-in test tones and click tracks stay out (the
+// console's qb queues them): a new player's first queue is its music only,
+// and with no card it is empty (Now Playing shows the no-card state).
 static bool queueEverything(bool start) {
   const LibraryIndex* index = library.index();
   const LibraryIndex::Span lib = index && index->ready() ? index->allTracks() : LibraryIndex::Span{};
-  const LibraryIndex::Span builtins = TrackCatalog::builtins();
-  const uint32_t n = lib.count + builtins.count;
+  const uint32_t n = lib.count;
+  if (n == 0) {
+    if (start) return false;
+    const bool ok = queue.assign(nullptr, 0, 0);
+    player.queueReplaced(false);
+    return ok;
+  }
   auto* ids = static_cast<uint32_t*>(psramAlloc(n * sizeof(uint32_t)));
   if (!ids) return false;
-  if (lib.count) memcpy(ids, lib.ids, lib.count * sizeof(uint32_t));
-  memcpy(ids + lib.count, builtins.ids, builtins.count * sizeof(uint32_t));
+  memcpy(ids, lib.ids, n * sizeof(uint32_t));
   bool ok;
   if (start) {
     ok = player.playNow(ids, n, 0);
@@ -2129,7 +2135,7 @@ void setup() {
   library.begin();
   if (!queueStore.restore()) {
     queueEverything(false);
-    Serial.printf("[queue] no saved queue: the whole library, %lu tracks with the built-in ones\n",
+    Serial.printf("[queue] no saved queue: the whole library, %lu tracks\n",
                   (unsigned long)queue.size());
   }
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",

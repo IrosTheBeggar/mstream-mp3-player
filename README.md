@@ -160,6 +160,12 @@ $env:RELEASE = "1"; $env:RELEASE_TAG = "v0.5.0"; pio run -e core2
 
 ## Releases and the install page
 
+**The web installer is off for now:** installing is planned in
+mstream-terminal. The workflow builds and packages the install page
+(`dist/site/`) but deploys it to GitHub Pages only when the repository
+variable `WEB_INSTALLER` is `true`; until then the release notes point to
+esptool.
+
 [`.github/workflows/firmware.yml`](.github/workflows/firmware.yml) runs on
 every push, pull request and `v*` tag: `pio test -e native`, then
 `pio run -e core2` (its `flash_guard` and `version` checks fail a bad
@@ -359,9 +365,9 @@ first time it shows, which are kept in `/.player/thumbs` (delete that folder
 to have them made again, after replacing a cover under the same name). A
 progressive JPEG can't be decoded on the Core2: its album shows a note
 instead.
-The first time, the queue is the whole library (artist, album, track order)
-followed by three built-in test tones and six click tracks (60 s at 90-174
-BPM, for the beat tracker). The queue and its position are saved on the card:
+The first time, the queue is the whole library (artist, album, track order).
+The built-in test tones and click tracks (60 s at 90-174 BPM, for the beat
+tracker) stay out of it; the console's `qb` queues them. The queue and its position are saved on the card:
 after a restart it's where it was, stopped. A pause also saves the second
 it paused at: after the boot that follows (the CPU speed's restart, the
 idle power-off, the power key while paused) Now Playing shows that second

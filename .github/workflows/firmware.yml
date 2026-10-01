@@ -5,14 +5,16 @@
 # flash_guard and version checks), and the release files packaged by
 # tools/package_release.py, kept as a workflow artifact.
 # A v* tag also: a release build (RELEASE=1, tools/version.py), a GitHub
-# Release with those files, and the web installer on GitHub Pages (only for
-# the newest full release: not for a pre-release tag such as v0.5.0-rc.1, nor
-# an older tag, so the installer stays on the newest). Anything that isn't
-# plumbing lives in tools/, so it runs locally.
+# Release with those files, and, only when the repository variable
+# WEB_INSTALLER is "true", the web installer on GitHub Pages (for the newest
+# full release only: not for a pre-release tag such as v0.5.0-rc.1, nor an
+# older tag, so the installer stays on the newest). It is off for now:
+# installing is planned in mstream-terminal. Anything that isn't plumbing
+# lives in tools/, so it runs locally.
 #
-# One-time repository settings (README, "Releases and the install page"):
-# Pages source = GitHub Actions, and the github-pages environment allowing
-# v* tags to deploy.
+# To turn the installer on (README, "Releases and the install page"): Pages
+# source = GitHub Actions, the github-pages environment allowing v* tags to
+# deploy, and the repository variable WEB_INSTALLER = true.
 #
 # Third-party actions are pinned by commit; the comment names its tag.
 name: firmware
@@ -108,6 +110,7 @@ jobs:
         id: pkg
         env:
           TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+          WEB_INSTALLER: ${{ vars.WEB_INSTALLER }}
         run: |
           if [ -n "$TAG" ]; then
             python tools/package_release.py --out dist --release --tag "$TAG"
@@ -122,7 +125,7 @@ jobs:
           if-no-files-found: error
 
       - name: Install page artifact
-        if: github.ref_type == 'tag' && steps.pkg.outputs.prerelease == 'false' && steps.newest.outputs.newest == 'true'
+        if: vars.WEB_INSTALLER == 'true' && github.ref_type == 'tag' && steps.pkg.outputs.prerelease == 'false' && steps.newest.outputs.newest == 'true'
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: dist/site
@@ -174,7 +177,7 @@ jobs:
   pages:
     needs: [build, release]
     # The newest full release only (the build job's "Newest release?").
-    if: github.ref_type == 'tag' && needs.build.outputs.prerelease == 'false' && needs.build.outputs.newest == 'true'
+    if: vars.WEB_INSTALLER == 'true' && github.ref_type == 'tag' && needs.build.outputs.prerelease == 'false' && needs.build.outputs.newest == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

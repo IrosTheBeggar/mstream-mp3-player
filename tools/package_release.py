@@ -320,7 +320,7 @@ def html_escape(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
-def package(build_dir, out_dir, release, tag, repo):
+def package(build_dir, out_dir, release, tag, repo, web_installer=False):
     v = read_version(build_dir)
     version, commit = v["PLAYER_VERSION"], v["PLAYER_COMMIT"]
     semver = SEMVER.match(version)
@@ -370,10 +370,13 @@ def package(build_dir, out_dir, release, tag, repo):
         "LICENSES_ZIP": f"{base}-licenses.zip",
         "SOURCE_TAR": f"{base}-source.tar.gz",
     }
-    values["INSTALL_LINE"] = (
-        "This pre-release isn't on the web installer, which stays on the last full release: "
-        "flash it with esptool (below)." if prerelease else
-        f"In Chrome or Edge on a computer: [the web installer]({values['INSTALL_URL']}).")
+    # The web installer (GitHub Pages) is off unless the repository variable
+    # WEB_INSTALLER is "true" (the workflow passes it on): installing is
+    # planned in mstream-terminal instead.
+    if web_installer and not prerelease:
+        values["INSTALL_LINE"] = f"In Chrome or Edge on a computer: [the web installer]({values['INSTALL_URL']})."
+    else:
+        values["INSTALL_LINE"] = "Flash it with esptool (below)."
 
     if os.path.isdir(out_dir):
         shutil.rmtree(out_dir)
@@ -465,9 +468,13 @@ def main():
     ap.add_argument("--release", action="store_true", help="require a clean SemVer tagged build")
     ap.add_argument("--tag", help="with --release: the tag the build must be")
     ap.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY") or REPO, help="owner/name on GitHub")
+    ap.add_argument("--web-installer", action="store_true",
+                    default=os.environ.get("WEB_INSTALLER", "").lower() == "true",
+                    help="point the release notes at the GitHub Pages installer (env WEB_INSTALLER=true)")
     args = ap.parse_args()
     try:
-        outputs, manifest = package(args.build_dir, args.out, args.release, args.tag, args.repo)
+        outputs, manifest = package(args.build_dir, args.out, args.release, args.tag, args.repo,
+                                    args.web_installer)
     except PackageError as e:
         sys.stderr.write(f"package_release: ERROR: {e}\n")
         return 1
