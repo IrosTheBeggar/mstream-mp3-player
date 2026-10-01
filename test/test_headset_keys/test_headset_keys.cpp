@@ -208,6 +208,36 @@ void test_play_does_not_resume_a_sleep_timer_pause() {
   TEST_ASSERT_EQUAL(Action::Resume, HeadsetKeys::apply(r.player, Key::Play));  // their own pause
 }
 
+// The USB visualizer paused the Core2's music (pauseByComputer()): the
+// listener took the buds out meanwhile, and putting them back in sends
+// PLAY. It resumes nothing (the computer paused it, not them), nor does
+// a later PLAY; next and prev only cue, and none of it is input. The
+// Core2's own play button resumes it, and from then on their keys work.
+void test_play_does_not_resume_the_computers_pause() {
+  Rig r(3);
+  r.player.play(0);
+  TEST_ASSERT_EQUAL(Action::Ignore, HeadsetKeys::decide(PlayState::Paused, Key::Play, true));
+  r.player.pauseByComputer();
+  for (int i = 0; i < 3; ++i) {
+    const bool notTheirs = r.player.pausedNotByListener();
+    TEST_ASSERT_TRUE(notTheirs);
+    const Action a = HeadsetKeys::apply(r.player, Key::Play);
+    TEST_ASSERT_EQUAL(Action::Ignore, a);
+    TEST_ASSERT_FALSE(HeadsetKeys::isInput(a, notTheirs));
+    TEST_ASSERT_FALSE(audible(r.audio));
+  }
+  const bool notTheirs = r.player.pausedNotByListener();
+  const Action cue = HeadsetKeys::apply(r.player, Key::Next);
+  TEST_ASSERT_EQUAL(Action::Cue, cue);
+  TEST_ASSERT_FALSE(HeadsetKeys::isInput(cue, notTheirs));
+  TEST_ASSERT_EQUAL(Action::Ignore, HeadsetKeys::apply(r.player, Key::Play));
+  TEST_ASSERT_FALSE(audible(r.audio));
+  r.player.togglePlayPause();  // the Core2's play button
+  TEST_ASSERT_TRUE(audible(r.audio));
+  TEST_ASSERT_EQUAL(Action::Pause, HeadsetKeys::apply(r.player, Key::Pause));
+  TEST_ASSERT_EQUAL(Action::Resume, HeadsetKeys::apply(r.player, Key::Play));  // their own pause
+}
+
 // After the sleep timer's pause 20 min into a track, a bud adjusted in bed
 // sends PREV: the track goes to 0:00 (a restart, still paused), the mark
 // stays, their PLAY still resumes nothing, and none of it is input.
@@ -302,6 +332,7 @@ int main(int, char**) {
   RUN_TEST(test_prev_past_3_s_restarts_the_track);
   RUN_TEST(test_no_key_sequence_starts_music_that_was_not_playing);
   RUN_TEST(test_play_does_not_resume_a_sleep_timer_pause);
+  RUN_TEST(test_play_does_not_resume_the_computers_pause);
   RUN_TEST(test_prev_past_3_s_after_the_timers_pause_starts_nothing);
   RUN_TEST(test_only_a_key_that_acts_is_idle_input);
   return UNITY_END();

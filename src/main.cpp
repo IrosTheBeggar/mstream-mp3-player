@@ -8,7 +8,8 @@
 // tab bar and its pages, the one owner of the display), the input layer
 // (touch buttons and glass) and a serial console. The queue is restored
 // from the card at boot; the first time it's the whole library followed by
-// the built-in test tones.
+// the built-in test tones. A computer can drive the Dance tab's dancer over
+// the same USB serial port (app/UsbViz: the USB visualizer).
 
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -46,6 +47,7 @@
 #include "app/ScreenControl.h"
 #include "app/Screenshot.h"
 #include "app/SerialConsole.h"
+#include "app/UsbViz.h"
 #include "app/Version.h"
 #include "audio/Core2AudioBackend.h"
 #include "spike/Spike.h"
@@ -1272,6 +1274,44 @@ static void bluetoothTestCommand(const char* a) {
                  "as a fresh unit (restarts), Bn / Bn0 this session as one / back");
 }
 
+// ---- the USB visualizer (docs/USB-VISUALIZER.md; app/UsbViz) ----
+
+// A pairing under way (below, with the idle power-off).
+static bool pairingUnderWay();
+
+// Why a computer's @hello can't start host mode now.
+static HostLink::Busy vizBusy() {
+  if (!userInterface || !userInterface->started()) return HostLink::Busy::Ui;  // the start-up screen
+  if (screenTaken() || uiHeld || userInterface->suspended()) return HostLink::Busy::Screen;
+  if (pairingUnderWay()) return HostLink::Busy::Pairing;
+  if (!danceMode.ready()) return HostLink::Busy::Dance;  // no PSRAM for the dancer: for good
+  return HostLink::Busy::None;
+}
+
+// Host mode starts: the player paused (Playing pauses, a wait for the
+// headphones ends paused; nothing resumes by itself afterwards), a track
+// the console's Rt/Rf plays on its own stopped, the screen woken, the
+// Dance tab up. True: something was playing.
+static bool vizEnter() {
+  const PlayState was = player.state();
+  player.pauseByComputer();  // (marked: headphone Play won't resume it, HeadsetKeys)
+  bool test = false;
+  if (player.state() == PlayState::Stopped && audio.isPlaying()) {
+    audio.stop();  // (the player is stopped already: nothing to keep)
+    test = true;
+  }
+  screen.wake("the computer's visualizer");
+  if (userInterface) userInterface->showDance();
+  return was == PlayState::Playing || was == PlayState::Waiting || test;
+}
+
+// The Dance tab isn't up any more: another screen took the display, or the
+// console moved the UI (d, ui<n>). Not while the screen is dark: the dancer
+// stops then, and comes back when it wakes (host mode wakes it, keeps it lit).
+static bool vizDanceGone() { return !danceMode.active() && !(userInterface && userInterface->dark()); }
+
+static UsbViz usbViz(danceMode, {vizBusy, vizEnter, vizDanceGone});
+
 static SerialConsole console({
     [] { player.next(); },
     prevTrack,
@@ -1378,6 +1418,7 @@ static SerialConsole console({
     bluetoothTestCommand,
     diag::printPartitionTable,
     rateCommand,
+    [](char* line, HostLine::Byte kind) { usbViz.onLine(line, kind); },
 });
 
 // Touch buttons: the same on every screen (ButtonPolicy). Each click and
@@ -1418,16 +1459,59 @@ static void handleButton(const InputEvent& e) {
 // the sleep timer's fade shows its toast.
 static bool touchedThisPass = false;
 
+// While a computer drives the dancer (the USB visualizer), the listener's
+// first touch outside the dancer's box, or any button (the PWR key too),
+// ends it, and does nothing else: the rest of that touch, or of that
+// button's hold, is dropped. A tap on the dancer still switches it.
+static bool vizSwallowTouch = false;  // until the next touch lands
+static int vizSwallowButton = -1;     // until this button's HoldEnd
+
+// True: the event is taken (it ended host mode, or belongs to what did).
+static bool vizInput(const InputEvent& e) {
+  using T = InputEvent::Type;
+  if (e.isButton()) {
+    if (vizSwallowButton == e.button) {
+      if (e.type == T::HoldEnd) vizSwallowButton = -1;
+      return true;
+    }
+    if (!usbViz.active()) return false;
+    Serial.printf("[button] %c %s: ends the computer's visualizer\n", static_cast<char>('A' + e.button),
+                  InputEvent::name(e.type));
+    usbViz.userEnded(HostLink::Why::Button);
+    input.tapTick();
+    if (e.type == T::Hold || e.type == T::Repeat) vizSwallowButton = e.button;
+    return true;
+  }
+  const bool lands = e.type == T::Down || (e.type == T::DragStart && e.fromStrip);
+  if (lands) vizSwallowTouch = false;  // a new touch
+  if (vizSwallowTouch) return true;
+  if (!usbViz.active() || !lands) return false;
+  if (e.type == T::Down && DanceView::inBox(e.x, e.y)) return false;  // the dancer: switches it
+  Serial.printf("[touch] %s %d,%d (raw %d,%d): ends the computer's visualizer\n", InputEvent::name(e.type), e.x,
+                e.y, e.rawX, e.rawY);
+  usbViz.userEnded(HostLink::Why::Touch);
+  input.tapTick();
+  vizSwallowTouch = true;
+  return true;
+}
+
 static void handleInput(uint32_t now) {
   // The screen: the PWR key, USB, and whether a touch now would only wake
   // it (dim or off: the input layer swallows that touch through its lift).
   screen.beginPass(now);
+  // (The PWR key only wakes the screen or counts as input there: ending
+  // the visualizer is all it does here.)
+  if (usbViz.active() && M5.BtnPWR.wasClicked()) {
+    Serial.println("[button] PWR click: ends the computer's visualizer");
+    usbViz.userEnded(HostLink::Why::Button);
+  }
   input.setSuspended(spike.ownsInput());
   input.update(now);
   screen.afterInput(now);  // the wake it saw (logged), or input: the countdown again
   touchedThisPass = false;
   for (InputEvent e; input.poll(e);) {
     if (e.type == InputEvent::Type::Down || e.isButton()) touchedThisPass = true;
+    if (vizInput(e)) continue;
     // The one exception to "the buttons do the same everywhere": while the
     // touch check or calibration is up, A's click is its way out (Cancel,
     // Not now, Discard, Done), which works however far off the glass reads.
@@ -1547,12 +1631,19 @@ static void handleBluetooth() {
       // Transport keys: HeadsetKeys decides (headphone input never starts
       // music that wasn't playing); this adds the output and the stream.
       case BtSink::Event::Play:
-        if (HeadsetKeys::decide(player.state(), HeadsetKeys::Key::Play, player.pausedByTimer()) !=
+        // The computer's visualizer ends first (a key on the headphones is
+        // someone there). What played before it stays paused: the computer
+        // paused it, not them, and in-ear detection sends Play as a bud goes
+        // back in (pausedByComputer(); the Core2's play button resumes it).
+        if (usbViz.active()) usbViz.userEnded(HostLink::Why::HeadsetKey);
+        if (HeadsetKeys::decide(player.state(), HeadsetKeys::Key::Play, player.pausedNotByListener()) !=
             HeadsetKeys::Action::Resume) {
           // (Paused by the sleep timer: in-ear detection sends Play when a
           // sleeper turns over. The Core2's play button resumes it.)
           Serial.printf("[bt] headphones: play (ignored: %s%s)\n", stateName(),
-                        player.pausedByTimer() ? ", paused by the sleep timer" : "");
+                        player.pausedByTimer()      ? ", paused by the sleep timer"
+                        : player.pausedByComputer() ? ", paused for the computer's visualizer"
+                                                    : "");
           break;
         }
         Serial.println("[bt] headphones: play");
@@ -1567,10 +1658,10 @@ static void handleBluetooth() {
         }
         // Only a pause that acted is someone's input for the idle power-off
         // (a bud taken out sends PAUSE while paused too).
-        const bool byTimer = player.pausedByTimer();
+        const bool notTheirs = player.pausedNotByListener();
         const HeadsetKeys::Action a = HeadsetKeys::apply(player, HeadsetKeys::Key::Pause);
         Serial.printf("[bt] headphones: pause%s\n", a == HeadsetKeys::Action::Ignore ? " (nothing plays)" : "");
-        if (HeadsetKeys::isInput(a, byTimer)) idleInput = true;
+        if (HeadsetKeys::isInput(a, notTheirs)) idleInput = true;
         // They pick their next key from the stream: suspend it now, so the
         // next press is PLAY. Also when we were paused already (paused on the
         // Core2, the stream still in its 3 s tail): this press did nothing,
@@ -1581,14 +1672,14 @@ static void handleBluetooth() {
       case BtSink::Event::Next:
       case BtSink::Event::Prev: {
         const bool next = e == BtSink::Event::Next;
-        const bool byTimer = player.pausedByTimer();
+        const bool notTheirs = player.pausedNotByListener();
         // (Past a track's first 3 s their PREV restarts it, as every prev does.)
         const bool restart = !next && player.prevAction() == PlaybackController::Prev::Restart;
         const HeadsetKeys::Action a =
             HeadsetKeys::apply(player, next ? HeadsetKeys::Key::Next : HeadsetKeys::Key::Prev);
-        // (A cue after the sleep timer's pause isn't input: a bud adjusted
-        // in bed sends these too.)
-        if (HeadsetKeys::isInput(a, byTimer)) idleInput = true;
+        // (A cue after the sleep timer's or the computer's pause isn't
+        // input: a bud adjusted in bed sends these too.)
+        if (HeadsetKeys::isInput(a, notTheirs)) idleInput = true;
         Serial.printf("[bt] headphones: %s (track %d, %s)\n",
                       next ? "next" : restart ? "previous: this track from 0:00" : "previous", player.currentIndex(),
                       a == HeadsetKeys::Action::Skip ? "playing" : "selected, not started");
@@ -1917,7 +2008,7 @@ static void stepIdle(uint32_t now, bool input) {
   in.input = input;
   in.pairing = pairingUnderWay();
   in.queueWrite = queueStore.busy();
-  in.busy = screenTaken();
+  in.busy = screenTaken() || usbViz.active();  // (the visualizer: someone is watching)
   in.linked = bt.linkUp();  // (until the disconnect is done: connected() drops as it starts)
   IdlePolicy& p = idlePower.policy();
   const IdlePolicy::Phase before = p.phase();
@@ -2093,6 +2184,10 @@ void setup() {
   ensureNvs();  // before the first Preferences read
   // The CPU speed saved (or the default), before Bluetooth starts.
   PowerSettings::applyBootClock();
+  // The computer's visualizer lines (docs/USB-VISUALIZER.md: ~3.7 KB/s)
+  // must outlast a slow loop pass: 1 KB (270 ms of them) instead of 256 B.
+  // Only before begin(), which M5.begin() calls.
+  Serial.setRxBufferSize(SerialConsole::kRxBuffer);
   auto cfg = M5.config();
   cfg.serial_baudrate = 115200;  // M5Unified leaves Serial off unless asked
   cfg.internal_mic = false;      // the mic shares GPIO0 with the speaker's I2S clock
@@ -2101,6 +2196,9 @@ void setup() {
   // 9, still to check by ear on battery). The console's Pe1 turns it on.
   cfg.output_power = false;
   M5.begin(cfg);
+  // Before the banner (a sender waits for it): was a computer's line under
+  // way as Serial started? (HostLine's Sync: its tail is no key.)
+  console.begin();
   Serial.printf("\nmstream-mp3-player %s (commit %s, %s), ELF %s\n", version::player(),
                 version::commit()[0] ? version::commit() : "none", version::commitDate(), version::elfSha());
   // The licence notice once (GPLv3 section 5(d); About shows it too).
@@ -2155,6 +2253,7 @@ void setup() {
   }
   player.setHold(&outputHold);  // a play waits while the headphones aren't connected (PlayGate)
   danceMode.begin();
+  usbViz.begin(version::player());
   diag::logHeap("dance");
   haptics.begin();
   input.begin();
@@ -2202,7 +2301,8 @@ void setup() {
                  "T sleep timer (T status, T<min>, Ts<sec> for tests, Tt/Ta/Tq end of track/album/queue, T+ +10 min, "
                  "T0 off); I idle power-off (I status, I<min>/Is<sec> a test length, I0 the setting's); "
                  "R rate converter (R status, Rt test tracks, Rt<n> play one on its own, Rf</music/...> a file on its own "
-                 "(silent mode), Rx stop it, Rb bench)");
+                 "(silent mode), Rx stop it, Rb bench); "
+                 "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md), never commands");
 }
 
 void loop() {
@@ -2219,8 +2319,10 @@ void loop() {
   // Not after a drop while listening (btLost): the pause is the drop's,
   // and the listener may still be wearing them: the back-off runs its 15
   // minutes (a range drop is what it is for).
-  audio.bluetooth().setQuiet(screen.off() && player.state() != PlayState::Playing &&
-                             player.state() != PlayState::Waiting && !btLost);
+  // (And while a computer drives the dancer: the player is paused for it.)
+  audio.bluetooth().setQuiet((screen.off() && player.state() != PlayState::Playing &&
+                              player.state() != PlayState::Waiting && !btLost) ||
+                             usbViz.active());
   btSession.update(audio.bluetooth().link(), now);
   stepPlayGate(now);
   // The fade's toast: a touch (swallowed as a wake, or on a lit screen) or
@@ -2322,9 +2424,12 @@ void loop() {
     }
     userInterface->loop(now);
   }
+  // The computer's visualizer: its timeout, USB unplugged, the Dance tab gone.
+  usbViz.loop(now, screen.externalPower());
   shot.poll();
   // The screen, last: the countdown, and what keeps it lit (a screen of its
-  // own, a play waiting for the headphones, a pairing). Going off, the UI
+  // own, a play waiting for the headphones, a pairing, a computer driving the
+// dancer). Going off, the UI
   // goes dark first; waking, it draws everything before the panel's
   // sleep-out. A toast with a countdown (the idle power-off's warning, the
   // sleep timer's fade while it counts down to the pause) holds a lit screen
@@ -2335,7 +2440,7 @@ void loop() {
     const BtLink link = audio.bluetooth().link();
     // (A pairing under way, not one whose failure the card still shows.)
     const bool keepLit = screenTaken() || player.state() == PlayState::Waiting ||
-                         link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay();
+                         link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay() || usbViz.active();
     const bool holdLit = idlePower.policy().phase() == IdlePolicy::Phase::Warning || sleepTimer.fadeCountingDown();
     screen.step(millis(), keepLit, holdLit);
   }

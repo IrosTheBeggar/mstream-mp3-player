@@ -782,6 +782,12 @@ the tracker's round 1, has 2.4 / 5.7 ms.)
 
 ### Not done
 
+- **A computer driving the dancer** (its music, over USB): the USB
+  visualizer, [USB-VISUALIZER.md](USB-VISUALIZER.md). The firmware side is
+  in (host mode on the Dance tab), and so is its reference sender
+  (`tools/usb_viz.py`). Checked on the device: the same lock times and
+  phase errors as the table above, at 44.1 and 48 kHz
+  ([USB-VISUALIZER.md](USB-VISUALIZER.md#checked-on-the-device-october-2026)).
 - **The crab, by hand:** a tap on the dancer's box (the skin switch was
   tested with `m` only; nobody was there to touch the screen), and whether
   the crab looks on the beat and free of tearing to someone watching it.

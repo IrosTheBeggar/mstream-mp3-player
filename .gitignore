@@ -25,5 +25,8 @@ local*.ini
 # Throwaway venv for the test-audio tool
 .venv-tools/
 
+# Python's bytecode caches (the tools and their tests)
+__pycache__/
+
 # Release files and the install page, from tools/package_release.py
 dist/

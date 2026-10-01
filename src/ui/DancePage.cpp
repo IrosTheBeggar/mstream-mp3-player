@@ -13,12 +13,15 @@
 //   box 100-219    x y 44-193, the dancer
 //   right 220-319  "dancer", its name, "tap the dancer to switch"
 //   196-239        the title and artist; a 2 px progress line at the bottom
+//                  (while a computer drives the dancer, the USB visualizer:
+//                  "Dancing to your computer" over how to stop it, no line)
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
 
 #include "DanceSkin.h"
+#include "UiText.h"
 #include "ui/DanceView.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
@@ -66,6 +69,7 @@ void DancePage::drawPanels(bool all) {
   const int lock = d.locked() ? 2 : bpm > 0.0f ? 1 : 0;
   const int conf = static_cast<int>(std::lround(d.confidence() * 100.0f));
   const int skin = static_cast<int>(d.skin());
+  const int host = d.host() ? 1 : 0;
   // The left panel: the beat.
   if (all || bpmX10 / 10 != bpmX10_ / 10) {
     c.fillRect(0, 0, 100, 56, col::BG);
@@ -117,21 +121,29 @@ void DancePage::drawPanels(bool all) {
     f.draw(c, Font::Small, "to switch", 50, 46, 98, col::FAINT, col::BG, Fonts::Align::Centre);
     gfx::push(c, 220, 102, 100, 56);
   }
-  // The bottom: the track.
-  if (all || s.trackId != track_) {
+  // The bottom: the track, or the computer that drives the dancer.
+  if (all || s.trackId != track_ || host != host_) {
     c.fillRect(0, 0, kW, 40, col::BG);
-    char title[96] = "Nothing playing";
-    if (s.current >= 0) ui_.player().catalog().title(s.trackId, title, sizeof(title));
-    f.draw(c, Font::Bold, title, kW / 2, 12, kW - 16, col::TXT, col::BG, Fonts::Align::Centre);
-    const char* artist = s.current >= 0 ? ui_.player().catalog().artist(s.trackId) : "";
-    f.draw(c, Font::Small, artist, kW / 2, 31, kW - 16, col::DIM, col::BG, Fonts::Align::Centre);
+    if (host) {
+      f.draw(c, Font::Bold, uitext::kVizTitle, kW / 2, 12, uitext::kDanceBottomW, col::TXT, col::BG,
+             Fonts::Align::Centre);
+      f.draw(c, Font::Small, uitext::kVizHint, kW / 2, 31, uitext::kDanceBottomW, col::DIM, col::BG,
+             Fonts::Align::Centre);
+    } else {
+      char title[96] = "Nothing playing";
+      if (s.current >= 0) ui_.player().catalog().title(s.trackId, title, sizeof(title));
+      f.draw(c, Font::Bold, title, kW / 2, 12, kW - 16, col::TXT, col::BG, Fonts::Align::Centre);
+      const char* artist = s.current >= 0 ? ui_.player().catalog().artist(s.trackId) : "";
+      f.draw(c, Font::Small, artist, kW / 2, 31, kW - 16, col::DIM, col::BG, Fonts::Align::Centre);
+    }
     gfx::push(c, 0, kBottomY, kW, 40);
   }
-  const int progress = s.durationMs ? static_cast<int>(static_cast<uint64_t>(std::min(s.positionMs, s.durationMs)) *
-                                                       kW / s.durationMs)
-                                    : 0;
-  if (all || progress != progress_) {
-    c.fillRect(0, 0, kW, 2, col::DIV);
+  const int progress = host || !s.durationMs
+                           ? 0
+                           : static_cast<int>(static_cast<uint64_t>(std::min(s.positionMs, s.durationMs)) * kW /
+                                              s.durationMs);
+  if (all || progress != progress_ || host != host_) {
+    c.fillRect(0, 0, kW, 2, host ? col::BG : col::DIV);  // (the computer's track: no line)
     if (progress > 0) c.fillRect(0, 0, progress, 2, accent::Dance);
     gfx::push(c, 0, kH - 2, kW, 2);
   }
@@ -141,6 +153,7 @@ void DancePage::drawPanels(bool all) {
   skin_ = skin;
   track_ = s.trackId;
   progress_ = progress;
+  host_ = host;
 }
 
 bool DancePage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
@@ -161,8 +174,9 @@ void DancePage::onEvent(const InputEvent& e) {
 
 void DancePage::describe(char* buf, size_t size) const {
   DanceMode& d = const_cast<Ui&>(ui_).dance();
-  snprintf(buf, size, "Dance: %s, %.1f BPM, confidence %.2f%s, %.0f fps (of %lu)", dance::skinName(d.skin()), d.bpm(),
-           d.confidence(), d.locked() ? ", locked" : "", d.fps(), static_cast<unsigned long>(d.targetFps()));
+  snprintf(buf, size, "Dance: %s, %.1f BPM, confidence %.2f%s, %.0f fps (of %lu)%s", dance::skinName(d.skin()),
+           d.bpm(), d.confidence(), d.locked() ? ", locked" : "", d.fps(), static_cast<unsigned long>(d.targetFps()),
+           d.host() ? ", the computer's music (USB visualizer)" : "");
 }
 
 }  // namespace ui

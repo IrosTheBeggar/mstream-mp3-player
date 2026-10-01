@@ -70,6 +70,16 @@ void PlaybackController::togglePlayPause() {
   }
 }
 
+void PlaybackController::pauseByComputer() {
+  if (state_ == PlayState::Playing) {
+    audio_.pause();
+  } else if (state_ != PlayState::Waiting) {
+    return;  // Stopped, Paused: as they are
+  }
+  state_ = PlayState::Paused;  // (Waiting: a cued entry stays cued, a paused track paused)
+  pausedByComputer_ = true;
+}
+
 void PlaybackController::release() {
   if (state_ != PlayState::Waiting) return;
   if (cued_) {
@@ -177,7 +187,7 @@ void PlaybackController::stop() {
   audio_.stop();
   state_ = PlayState::Stopped;
   cued_ = false;
-  pausedByTimer_ = false;  // (stopped: headphone Play starts nothing anyway)
+  pausedByTimer_ = pausedByComputer_ = false;  // (stopped: headphone Play starts nothing anyway)
 }
 
 bool PlaybackController::stopKeepingPlace() {

@@ -31,6 +31,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  ScreenPower (and WakeLatch)  AmpGate                         |
               |  SleepTimer  FadeStage  IdlePolicy  QueueSaver                |
               |  PowerChoices                                                 |
+              |  HopFrontEnd  HostLine  HostLink  HostClock (USB visualizer)  |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -48,6 +49,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |         EmptyState                                            |
               |  ui/BootScreen                                                |
               |  app/Version (the version from git, the app description)      |
+              |  app/UsbViz (the USB visualizer: a computer drives the dancer)|
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
@@ -830,6 +832,81 @@ the last frame drawn, so there is no catch-up burst. With the screen off
 the UI turns `DanceMode` off: no frames at all. Each change is logged
 (`[dance] 10 fps (idle)`, `[dance] 24 fps (dancing at 160 MHz)`), and the
 5 s `[dance]` line reads `fps=23.8/24 (dancing)`: measured / target.
+
+## USB visualizer
+
+While a computer plays music (mstream-terminal-player, or the reference
+sender `tools/usb_viz.py`), it can drive the Dance tab's dancer over the USB
+serial port. The spec, the plan and the tests: [USB-VISUALIZER.md](USB-VISUALIZER.md).
+
+- **The split.** The computer runs only the beat tracker's front end
+  (`HopFrontEnd`, lib/core: the 8x box average, the DC blocker, two 150 Hz
+  biquads, the low and mid band energy per hop of 512 frames, moved out of
+  `BeatTracker` with no change in its output, bit for bit) and sends the two
+  energies per hop. The Core2 feeds them to its own `BeatTracker`
+  (`feedHop()`, at the epoch's rate: `setSampleRate()` rebuilds its tables
+  for 48 kHz and back), so tempo, phase and confidence come from the one
+  tracker tuned on the device. About 10 times a second the computer also
+  says which frame of the track its listener hears now; `HostClock` follows
+  the least delayed of those samples (a 2 s window's leading edge, snapped
+  past 100 ms, otherwise slewed at up to 5 %) and stands in for
+  `TapReader::audibleAt()` in `DanceMode::render()`.
+- **The protocol.** ASCII lines that start with `@`, at the console's 115200
+  baud: `@hello`/`@ok`/`@err`/`@bye` for the session, `@e` (an epoch: a
+  track, a seek; its rate and BPM prior), `@h` (a hop's energies), `@c` (the
+  heard clock), `@log`. `HostLine` (lib/core) routes the console's bytes:
+  every byte from an `@` to the end of its line is the line's, never a
+  single-key command (`f` forgets the headphones and restarts!), and an `@`
+  abandons a half-typed command. Reading that starts mid-line (a boot while
+  the computer sends, or bytes lost to a full receive buffer) would miss
+  the `@`, so the console starts in Sync and goes back to it on a nearly
+  full buffer: outside a line, a byte followed by more before 20 ms of
+  quiet is a line's tail and is dropped to its terminator; a lone byte and
+  then quiet is a keypress; 20 ms of quiet ends Sync. `HostLink` (lib/core, in the style of
+  `IdlePolicy`) decides what each line means and what to answer: sessions,
+  epochs, hop numbering (duplicates dropped, a gap restarts the tracker),
+  the 3 s timeout, the decline after the listener ended it, the `@err` rate
+  limit. Its timeout and decline compare times signed: the loop reads its
+  clock before the console stamps that pass's lines. The framing is shared with the terminal player's later Wi-Fi and
+  pairing setup (reserved verbs, `@hello` features).
+- **Host mode** (`app/UsbViz` carries `HostLink`'s events out; `main.cpp`
+  has the hooks). On `@hello ... viz`, never on USB power alone: the player
+  pauses (`PlaybackController::pauseByComputer()`, which never starts
+  anything and marks the pause the computer's: as after the sleep timer's,
+  the headphones' play doesn't resume it, since in-ear detection sends play
+  as a bud goes back in), a
+  test track the console started stops, the screen wakes and stays lit, the
+  Dance tab comes up with "Dancing to your computer" at the bottom, the
+  headphones' background search goes quiet (a burst under way finishes,
+  then it rests) and the idle power-off counts it as busy. The taps are off; the tracker takes the computer's hops. It ends on
+  `@bye`, 3 s without a valid line, USB unplugged, the listener's first touch
+  outside the dancer or any button (the PWR key and the headphones' play key
+  too: that touch or press does nothing else, and the computer is declined
+  until it stops for 3 s), or the Dance tab going away. The player stays
+  paused. One line on entry and one on exit (`[viz] on: ...`, `[viz] off
+  (a touch): ...`); the 5 s `[dance]` line carries the session's counters
+  and the clock's state in place of the output latency.
+- **Cost.** Internal RAM: the serial receive buffer 256 B -> 1 KB (set
+  before `M5.begin()`), the line buffer 256 B, `HostLink`/`HostClock` about
+  0.6 KB: about 1.6 KB in all. No `IRAM_ATTR`.
+- **The reference sender** (`tools/usb_viz.py`, Python 3 + pyserial): a
+  float32 port of `HopFrontEnd` and `ClickGen` (bit-exact on
+  `test/test_hop_feed/hop_golden.h`, which `--selftest` checks), the session
+  (`@hello` every second until `@ok`, a new session after a reboot,
+  nothing written from the ROM's boot lines until the firmware's banner), hops
+  paced to a virtual play clock, `@c` at 10 Hz, `@bye` on the way out.
+  Silent unless `--play`. It opens the port with DTR and RTS low and writes
+  only through a guard that refuses anything but a whole `@` line.
+  `--measure` asks for the Core2's `[beat]` log and scores it against the
+  click track's beats (by the epoch each line names; lines stamped as they
+  arrive, not when a read times out); `--dry-run` prints the lines with a fake Core2
+  answering. Its tests (`tools/test_usb_viz.py`, `python -m unittest`) run the
+  session in virtual time.
+- **On the device** (October 2026): lock 2.5-2.9 s and a median phase
+  error of 1.9-2.8 ms on click tracks at 44.1 and 48 kHz, the tap path's
+  own numbers; 0 gaps with the 1 KB buffer; bad lines answered `@err` with
+  no console command run; a reset mid-session back to dancing in ~8 s
+  ([USB-VISUALIZER.md](USB-VISUALIZER.md#checked-on-the-device-october-2026)).
 
 ## Storage
 

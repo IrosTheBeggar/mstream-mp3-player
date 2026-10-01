@@ -316,6 +316,32 @@ void Ui::toggleDance() {
   showTab(nav_.tab() == NavModel::Tab::Dance ? beforeDance_ : NavModel::Tab::Dance);
 }
 
+bool Ui::showDance() {
+  if (!started_ || suspended_) return false;
+  bool uncovered = closeModal(true);
+  if (coach_.up()) {
+    coach_.close();  // shown again at the next boot (not marked seen)
+    uncovered = true;
+  }
+  if (toast_.up()) {
+    if (toast_.undo()) queue_.dropUndo();  // (its Undo goes with it)
+    toast_.hide();
+    uncovered = true;
+  }
+  if (hud_.up()) {
+    hud_.hide();
+    uncovered = true;
+  }
+  if (uncovered) applyCover();
+  if (nav_.tab() != NavModel::Tab::Dance) {
+    Serial.println("[ui] tab: Dance (the computer's visualizer)");
+    showTab(NavModel::Tab::Dance);
+  } else if (uncovered && page_) {
+    page_->repaint();
+  }
+  return true;
+}
+
 // The Library tab back at its root, on the segment it was on (its pages'
 // ids may mean nothing now).
 void Ui::resetLibraryTab() {

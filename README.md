@@ -432,6 +432,22 @@ blinking, glancing around, in dimmed colours) when there's no beat to follow.
 A tap on the crab, or `m`, swaps it for the first proof of concept, a stick
 figure, and back.
 
+**USB visualizer** (a demo, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md)):
+a computer playing music can make the crab dance to it over the USB cable.
+The Core2 pauses its own player, shows the Dance tab and keeps it lit; a
+touch beside the crab or any button hands it back. The mStream terminal
+player will send the beats later; for now `tools/usb_viz.py` (Python 3 and
+pyserial; close `pio monitor` first, it needs the port) does:
+
+```
+python tools/usb_viz.py --port COM3 --click 120              # a click track's beats, silent
+python tools/usb_viz.py --port COM3 --file song.flac --play   # plays it here too (WAV; MP3/FLAC need ffmpeg)
+python tools/usb_viz.py --selftest                            # no Core2 needed
+```
+
+It plays nothing on the computer unless `--play` is given, and nothing
+plays on the Core2.
+
 ![The crab over two beats, phase 0/8 to 7/8 of each](docs/img/crab-phases.png)
 
 The serial console (115200 baud) is there for scripted testing:
@@ -452,6 +468,7 @@ The serial console (115200 baud) is there for scripted testing:
 | | | `R...` | the rate converter ([docs/RESAMPLER.md](docs/RESAMPLER.md)): `R` the current track's conversion (the exact ratio, source frames taken, ring frames made, clamped samples); `Rt` lists its test tracks (a 1 kHz tone and silence at other rates), `Rt<n>` or `Rt<tone:...@rate>` plays one on its own (the player is stopped first, keeping your place in the track: nothing follows it; only silence on Bluetooth, a tone only in silent mode `z`); `Rf</music/...>` plays a file on its own (silent mode only; `Rf48000</music/...>` converts it as if it were 48 kHz, a load test), `Rx` stops what `Rt` or `Rf` started; `Rb` its bench (the MAC16 kernel's self-test and route check, then 10 s of audio per rate with each kernel: cycles and share of a core at the clock running; 88.2/96 kHz too, though they don't play yet) |
 | | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
+| | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else. `tools/usb_viz.py` sends them (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
 
 The UI spike's tools ([docs/UI-SPIKE.md](docs/UI-SPIKE.md)) measure the
 browsing UI's risks before its screens are built. Each is a letter, an
@@ -584,7 +601,10 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       vlw_font.py (the UI's DejaVu VLW fonts -> src/ui/VlwFonts.cpp);
                       ui_icons.py (the UI's 1-bit icons -> src/ui/IconData.cpp);
                       gen_resampler_tables.py (the rate converter's filters ->
-                      lib/core/ResamplerTables.cpp)
+                      lib/core/ResamplerTables.cpp);
+                      usb_viz.py + test_usb_viz.py (the USB visualizer's
+                      reference sender, and its tests: python -m unittest
+                      discover -s tools -p "test_usb_viz.py")
 test/                 Host unit tests (Unity)
 site/                 The web installer's page (filled in by package_release.py)
 .github/              workflows/firmware.yml (CI, releases, the install page);

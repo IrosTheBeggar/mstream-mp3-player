@@ -5,6 +5,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "HopFrontEnd.h"
+
 // Finds the beat in mono audio as it plays, for the dancing figure: tempo,
 // where the beats fall, and how sure it is. Portable, allocation only in
 // begin() (through a hook, so the firmware can use PSRAM), no locks; about
@@ -12,7 +14,8 @@
 //
 //   1. Onset signal: the audio is box-averaged down 8x and split at 150 Hz
 //      (two biquads) into a low band (kick drums, bass) and the rest; each
-//      band's energy is summed per hop of 512 frames (86 Hz at 44.1 kHz).
+//      band's energy is summed per hop of 512 frames (86 Hz at 44.1 kHz):
+//      HopFrontEnd, or the same numbers from a computer (feedHop()).
 //      The onset strength is the rise in log energy from one hop to the next
 //      (low band, plus half the mid band's, plus a little of the low band's
 //      linear rise so the loudest hit stays the beat).
@@ -86,6 +89,17 @@ public:
   float prior() const { return prior_; }
   // Mono samples, contiguous with what came before (since reset()).
   void process(const int16_t* mono, uint32_t frames);
+  // Hop energies worked out elsewhere (a HopFrontEnd's port on the computer:
+  // docs/USB-VISUALIZER.md), instead of process(): the next hop since
+  // reset(), standing for frames origin + hops * hop. Counted in
+  // framesSinceReset() as a hop of frames. Don't mix with process() between
+  // resets.
+  void feedHop(float low, float mid);
+  // Rebuilds the tables and filters for another rate (the computer's 48
+  // kHz) with begin()'s allocator, keeping the prior; reset(0) after. At the
+  // rate it has: nothing (nothing allocated, nothing reset). False: out of
+  // memory (it tracks nothing until a later call succeeds).
+  bool setSampleRate(uint32_t rate);
 
   float bpm() const;                    // tempo tracked, 0 when none
   float confidence() const { return conf_; }  // 0..1
@@ -106,17 +120,6 @@ public:
   static constexpr float kOnsetDelayFrames = 0.0f;
 
 private:
-  struct Biquad {
-    float b0 = 1, b1 = 0, b2 = 0, a1 = 0, a2 = 0;
-    float z1 = 0, z2 = 0;
-    float run(float x) {
-      const float y = b0 * x + z1;
-      z1 = b1 * x - a1 * y + z2;
-      z2 = b2 * x - a2 * y;
-      return y;
-    }
-  };
-
   void onHop(float energy, float midEnergy);
   float rise(float energy, float prev, float level) const;
   void updateAcf(float centred);
@@ -137,6 +140,7 @@ private:
   double lagOf(float bpm) const { return 60.0 * hopRate_ / bpm; }
 
   Config cfg_;
+  void* (*alloc_)(size_t) = nullptr;  // begin()'s, for setSampleRate()
   void (*release_)(void*) = nullptr;
   double hopRate_ = 86.13;
   uint32_t maxLag_ = 0;
@@ -154,14 +158,7 @@ private:
   // Per sample.
   uint32_t origin_ = 0;
   uint32_t fed_ = 0;
-  int32_t decimSum_ = 0;
-  uint32_t decimCount_ = 0;
-  uint32_t hopFill_ = 0;       // decimated samples in the hop so far
-  uint32_t hopLen_ = 64;       // decimated samples per hop
-  float hopEnergy_ = 0.0f;
-  float midEnergy_ = 0.0f;     // the rest of the decimated band, above the low-pass
-  float dcX_ = 0.0f, dcY_ = 0.0f;
-  Biquad lp1_, lp2_;
+  HopFrontEnd fe_;
 
   // Per hop.
   uint32_t hops_ = 0;          // onset values so far

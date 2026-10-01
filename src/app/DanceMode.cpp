@@ -7,6 +7,9 @@
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 
+#include <cmath>
+#include <cstdint>
+
 #include "app/Diagnostics.h"
 
 namespace {
@@ -75,8 +78,10 @@ void DanceMode::setActive(bool on) {
   view_.enter();
   dancer_.reset();
   crab_.reset();
-  follow(audio_.output());
-  freshWhy_ = "dance screen on";
+  if (!host_) {  // (in host mode the computer's hops feed the tracker, on or off)
+    follow(audio_.output());
+    freshWhy_ = "dance screen on";
+  }
   pacer_.restart();
   scene_ = dancerate::Scene{};  // idle, as the dancer was reset
   targetFps_ = 0;               // logs the rate at the first frame
@@ -99,7 +104,7 @@ void DanceMode::setPrior(float bpm) {
 void DanceMode::onTrackChanged() {
   if (prior_ > 0.0f) Serial.println("[dance] track changed: tempo prior cleared");
   prior_ = 0.0f;
-  tracker_.setPrior(0.0f);
+  if (!host_) tracker_.setPrior(0.0f);  // (in host mode the tracker has the computer's epoch's)
 }
 
 void DanceMode::freeze(int n) {
@@ -144,7 +149,7 @@ void DanceMode::setTracking(bool on) {
   syncTaps();
 }
 
-void DanceMode::syncTaps() { audio_.setTapsOn(ready_ && active_ && tracking_); }
+void DanceMode::syncTaps() { audio_.setTapsOn(ready_ && active_ && tracking_ && !host_); }
 
 void DanceMode::toggleVerbose() {
   verbose_ = !verbose_;
@@ -166,7 +171,7 @@ uint32_t DanceMode::latencyUs(char* how, size_t howLen) const {
 void DanceMode::loop(uint32_t nowMs, bool silent) {
   silent_ = silent;
   if (!active_ || !ready_) return;
-  if (tracking_) {
+  if (tracking_ && !host_) {
     const Core2AudioBackend::Output out = audio_.output();
     if (refollow_ || out != followed_ || reader_.tap() != audio_.tap(out)) {
       refollow_ = false;
@@ -250,18 +255,23 @@ void DanceMode::feed(const TapReader::Run& run) {
   }
   trackerUs_ += static_cast<uint32_t>(esp_timer_get_time() - t0);
   nextFrame_ = run.trackFrame + run.frames;
-
-  if (tracker_.locked() != wasLocked_) {
-    wasLocked_ = tracker_.locked();
-    const float rate = static_cast<float>(audio_.sampleRate());
-    if (wasLocked_) {
-      Serial.printf("[dance] locked: %.2f BPM, %.2f s after the reset\n", tracker_.bpm(),
-                    tracker_.framesSinceReset() / rate);
-    } else {
-      Serial.printf("[dance] lost the beat (confidence %.2f)\n", tracker_.confidence());
-    }
-  }
+  lockChanged(static_cast<float>(audio_.sampleRate()));
   if (verbose_) logBeat();
+}
+
+// "locked" or "lost the beat", when that changes.
+void DanceMode::lockChanged(float rate) {
+  if (tracker_.locked() == wasLocked_) return;
+  wasLocked_ = tracker_.locked();
+  if (wasLocked_) {
+    // (In host mode with the epoch: tools/usb_viz.py --measure scores it there.)
+    char epoch[32] = "";
+    if (host_) snprintf(epoch, sizeof(epoch), " (computer: epoch %lu)", static_cast<unsigned long>(hostEpoch_));
+    Serial.printf("[dance] locked: %.2f BPM, %.2f s after the reset%s\n", tracker_.bpm(),
+                  tracker_.framesSinceReset() / rate, epoch);
+  } else {
+    Serial.printf("[dance] lost the beat (confidence %.2f)\n", tracker_.confidence());
+  }
 }
 
 void DanceMode::scoreTruth(uint32_t frame) {
@@ -274,16 +284,139 @@ void DanceMode::scoreTruth(uint32_t frame) {
   haveError_ = true;
 }
 
-// Verbose: a line per beat of the tracker's grid.
+// Verbose: a line per beat of the tracker's grid. In host mode with the
+// epoch, the next beat's frame in it (to a tenth) and the hop it was
+// predicted at, so the computer can score it against its own truth
+// (tools/usb_viz.py --measure).
 void DanceMode::logBeat() {
   const BeatTracker::Grid g = tracker_.grid();
   if (!g.valid || g.beatIndex == lastBeatIndex_) return;
   lastBeatIndex_ = g.beatIndex;
   char err[24] = "";
   if (truth_ && haveError_) snprintf(err, sizeof(err), " err=%+.1fms", lastErrorMs_);
+  if (host_) {
+    const double frame = static_cast<int32_t>(g.beatFrame) + static_cast<double>(g.beatFrac);  // (may be negative)
+    Serial.printf("[beat] #%ld next at %.3fs (epoch %lu, frame %.1f, hop %lu) bpm=%.2f conf=%.2f%s\n",
+                  static_cast<long>(g.beatIndex), frame / hostRate_, static_cast<unsigned long>(hostEpoch_), frame,
+                  static_cast<unsigned long>(lastHop_), tracker_.bpm(), tracker_.confidence(),
+                  tracker_.locked() ? " locked" : "");
+    return;
+  }
   Serial.printf("[beat] #%ld next at %.3fs bpm=%.2f conf=%.2f%s%s\n", static_cast<long>(g.beatIndex),
                 g.beatFrame / static_cast<float>(audio_.sampleRate()), tracker_.bpm(), tracker_.confidence(),
                 tracker_.locked() ? " locked" : "", err);
+}
+
+// ---- host mode (the USB visualizer: docs/USB-VISUALIZER.md) ----
+
+void DanceMode::setHost(bool on, const HostStats* stats) {
+  if (on == host_) return;
+  host_ = on;
+  hostStats_ = on ? stats : nullptr;
+  hostEpochOn_ = false;
+  hostLog_ = 0;
+  resetLogged_ = false;
+  resetsUnlogged_ = 0;
+  wasLocked_ = false;
+  fresh_ = true;
+  if (on) {
+    if (frozen_ >= 0) Serial.println("[dance] unfrozen: the computer drives the dancer");
+    frozen_ = -1;
+    truth_ = false;  // (the computer measures: tools/usb_viz.py --measure)
+    freshWhy_ = "the computer";
+    clock_.start(hostRate_);
+    syncTaps();  // off: the hops come from the computer
+    return;
+  }
+  // Back to the Core2's own audio: its rate (the rate converter's 44.1
+  // kHz), the console's prior, the taps on (if the tab is up) and followed
+  // afresh.
+  if (!tracker_.setSampleRate(static_cast<uint32_t>(audio_.sampleRate()))) {
+    Serial.printf("[dance] no PSRAM for the tracker at %d Hz: the dancer idles\n", audio_.sampleRate());
+  }
+  tracker_.setPrior(prior_);
+  syncTaps();
+  if (active_) follow(audio_.output());
+  freshWhy_ = "the computer's visualizer ended";
+}
+
+void DanceMode::hostEpoch(uint32_t epoch, uint32_t rate, float prior) {
+  if (!host_) return;
+  if (!tracker_.setSampleRate(rate)) {
+    Serial.printf("[dance] no PSRAM for the tracker at %lu Hz: the dancer idles\n", static_cast<unsigned long>(rate));
+  }
+  tracker_.setPrior(prior);
+  clock_.start(rate);
+  hostEpoch_ = epoch;
+  hostRate_ = rate;
+  hostPrior_ = prior;
+  hostEpochOn_ = true;
+  fresh_ = true;  // idle until the epoch's first hop resets the tracker
+  freshWhy_ = "the computer: a new epoch";
+}
+
+void DanceMode::hostPrior(float prior) {
+  if (!host_) return;
+  hostPrior_ = prior;
+  tracker_.setPrior(prior);
+  Serial.printf("[dance] tempo prior %.1f BPM (the computer's, for this epoch)\n", prior);
+}
+
+void DanceMode::hostForget() {
+  hostEpochOn_ = false;
+  fresh_ = true;
+  freshWhy_ = "the computer started over";
+  clock_.start(hostRate_);
+}
+
+void DanceMode::hostRestart(uint32_t hop, bool gap) {
+  tracker_.reset(hop * tracker_.config().hop);
+  fold_.reset();
+  fresh_ = false;
+  wasLocked_ = false;
+  lastBeatIndex_ = 0;
+  ++resets_;
+  // A gap's at most a line a second (a sender losing lines would reset on
+  // each); an epoch's first hop always (one per epoch: a seek, a new track).
+  const uint32_t now = millis();
+  if (gap && resetLogged_ && now - resetLogMs_ < 1000) {
+    ++resetsUnlogged_;
+    return;
+  }
+  char more[40] = "";
+  if (resetsUnlogged_) snprintf(more, sizeof(more), "; %lu more not logged", static_cast<unsigned long>(resetsUnlogged_));
+  Serial.printf("[dance] tracker reset (computer: epoch %lu, %s) at hop %lu, %lu Hz%s%s\n",
+                static_cast<unsigned long>(hostEpoch_), gap ? "a gap in its hops" : "its first hop",
+                static_cast<unsigned long>(hop), static_cast<unsigned long>(hostRate_),
+                hostPrior_ > 0.0f ? ", with a tempo prior" : "", more);
+  if (gap) {
+    resetLogged_ = true;
+    resetLogMs_ = now;
+  }
+  resetsUnlogged_ = 0;
+}
+
+void DanceMode::hostHop(uint32_t hop, float low, float mid, bool restart, bool gap) {
+  if (!host_ || !hostEpochOn_ || !ready_) return;
+  if (restart || fresh_) hostRestart(hop, gap);
+  const int64_t t0 = esp_timer_get_time();
+  tracker_.feedHop(low, mid);
+  trackerUs_ += static_cast<uint32_t>(esp_timer_get_time() - t0);
+  lastHop_ = hop;
+  lockChanged(static_cast<float>(hostRate_));
+  if (verbose_ || hostLog_ >= 1) logBeat();
+}
+
+void DanceMode::hostClock(uint32_t nowUs, int32_t heard, bool playing) {
+  if (!host_ || !hostEpochOn_) return;
+  clock_.sample(nowUs, heard, playing);
+}
+
+void DanceMode::setHostLog(uint8_t level) {
+  hostLog_ = level;
+  flashBeat_ = INT64_MIN;  // the next beat drawn gets a [flash] line
+  lastBeatIndex_ = tracker_.grid().beatIndex;  // from the next beat on
+  Serial.printf("[dance] the computer's beat log: %s\n", level >= 2 ? "beats and flashes" : level ? "beats" : "off");
 }
 
 void DanceMode::render(uint32_t nowMs) {
@@ -323,17 +456,38 @@ void DanceMode::render(uint32_t nowMs) {
     flash = phi < kFlashBeats;
     dancing = true;
   } else {
-    char how[48];
-    const uint32_t latency = latencyUs(how, sizeof(how));
     // The moment this frame will be on the LCD: after drawing and half the push.
     const auto lead = static_cast<uint32_t>(drawUs_ + pushUs_ / 2.0f) + kAimEarlyUs;
-    const TapReader::Audible heard = reader_.audibleAt(nowUs + lead, latency);
     const BeatTracker::Grid g = tracker_.grid();
-    beat = heard.valid && g.valid && !fresh_ && heard.epoch == epoch_;
+    double beats = 0.0;
+    if (host_) {
+      // The computer's heard frame at that moment (its output's latency is
+      // in what it sends; the console's y<ms> moves it, + later).
+      const HostClock::Heard heard = clock_.at(nowUs, static_cast<int32_t>(lead) - offsetMs_ * 1000);
+      beat = heard.valid && g.valid && !fresh_ && hostEpochOn_;
+      if (beat) beats = g.beatIndex + g.beatsAt(static_cast<uint32_t>(heard.frame), heard.frac);
+      if (beat && hostLog_ >= 2) {
+        // A [flash] line per beat drawn: the clock's frame now (and the one
+        // aimed at), for the computer to set against its own clock.
+        const auto n = static_cast<int64_t>(std::floor(beats));
+        if (n != flashBeat_) {
+          flashBeat_ = n;
+          const HostClock::Heard now = clock_.at(nowUs);
+          Serial.printf("[flash] #%lld heard=%ld aim=%ld\n", static_cast<long long>(n), static_cast<long>(now.frame),
+                        static_cast<long>(heard.frame));
+        }
+      }
+    } else {
+      char how[48];
+      const uint32_t latency = latencyUs(how, sizeof(how));
+      const TapReader::Audible heard = reader_.audibleAt(nowUs + lead, latency);
+      beat = heard.valid && g.valid && !fresh_ && heard.epoch == epoch_;
+      if (beat) beats = g.beatIndex + g.beatsAt(heard.trackFrame, heard.frac);
+    }
     dance::Step step;
     if (beat) {
       const float bpm = tracker_.bpm();
-      step = dance::danceStep(g.beatIndex + g.beatsAt(heard.trackFrame, heard.frac), bpm, fold_.apply(bpm));
+      step = dance::danceStep(beats, bpm, fold_.apply(bpm));
     }
     if (isCrab) {
       crabPose = crab_.update(step.phi, step.odd, tracker_.confidence(), beat, dt);
@@ -366,10 +520,32 @@ void DanceMode::render(uint32_t nowMs) {
 void DanceMode::printStats(uint32_t nowMs) {
   char how[48];
   const uint32_t latency = latencyUs(how, sizeof(how));
-  const float rate = static_cast<float>(audio_.sampleRate());
+  const float rate = static_cast<float>(host_ ? hostRate_ : audio_.sampleRate());
+  // Where the dancer's time comes from: the output's latency, or in host
+  // mode the computer's session and its heard clock.
+  char source[260];
+  if (host_) {
+    const HostStats st = hostStats_ ? *hostStats_ : HostStats{};
+    const HostClock::Stats c = clock_.stats(static_cast<uint32_t>(esp_timer_get_time()));
+    char epoch[48] = "no epoch yet";
+    if (hostEpochOn_) {
+      snprintf(epoch, sizeof(epoch), "epoch=%lu %luHz prior=%.0f", static_cast<unsigned long>(hostEpoch_),
+               static_cast<unsigned long>(hostRate_), hostPrior_);
+    }
+    snprintf(source, sizeof(source),
+             "viz %s hops=%lu gaps=%lu dup=%lu stale=%lu bad=%lu errs=%lu | clock %s age=%lums snaps=%lu "
+             "slew=%+.1f%% spread=%.1fms offset=%+dms",
+             epoch, static_cast<unsigned long>(st.hops), static_cast<unsigned long>(st.gaps),
+             static_cast<unsigned long>(st.dup), static_cast<unsigned long>(st.stale), static_cast<unsigned long>(st.bad),
+             static_cast<unsigned long>(st.errors), c.valid ? "ok" : "idle", static_cast<unsigned long>(c.ageMs),
+             static_cast<unsigned long>(c.snaps), c.slew * 100.0f, c.spreadMs, offsetMs_);
+  } else {
+    snprintf(source, sizeof(source), "latency=%.1fms (%s) offset=%+dms", latency / 1000.0f, how, offsetMs_);
+  }
   char lockAfter[16] = "-";
   if (tracker_.framesToLock() >= 0) snprintf(lockAfter, sizeof(lockAfter), "%.2fs", tracker_.framesToLock() / rate);
   char error[80] = "err=n/a (not a click track)";
+  if (host_) snprintf(error, sizeof(error), "err=n/a (the computer measures it)");
   if (truth_) {
     const auto s = errors_.summary(nowMs, kErrorWindowMs);
     if (s.count > 0) {
@@ -381,11 +557,11 @@ void DanceMode::printStats(uint32_t nowMs) {
   }
   const diag::Heap h = diag::heap();
   Serial.printf("[dance] %s skin=%s fps=%.1f/%lu (%s) draw=%.1fms push=%.1fms | "
-                "bpm=%.2f conf=%.2f %s lock_after=%s %s | latency=%.1fms (%s) offset=%+dms | tracker=%.2f%% resets=%lu lost=%lu | ram=%luK min=%luK%s\n",
+                "bpm=%.2f conf=%.2f %s lock_after=%s %s | %s | tracker=%.2f%% resets=%lu lost=%lu | ram=%luK min=%luK%s\n",
                 active_ ? "on" : "off", dance::skinName(skin_), fps_, static_cast<unsigned long>(targetFps_),
                 dancerate::modeName(dancerate::mode(scene_)), drawUs_ / 1000.0f, pushUs_ / 1000.0f,
                 tracker_.bpm(), tracker_.confidence(), tracker_.locked() ? "locked" : "unlocked", lockAfter, error,
-                latency / 1000.0f, how, offsetMs_, trackerLoad_ * 100.0f, static_cast<unsigned long>(resets_),
+                source, trackerLoad_ * 100.0f, static_cast<unsigned long>(resets_),
                 static_cast<unsigned long>(reader_.lostFrames()), static_cast<unsigned long>(h.internalFree / 1024),
                 static_cast<unsigned long>(h.internalMin / 1024), silent_ ? " | silent" : "");
 }

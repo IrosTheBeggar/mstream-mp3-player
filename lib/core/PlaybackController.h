@@ -64,6 +64,8 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // headphone Play (HeadsetKeys) doesn't resume it, since in-ear detection
 // sends Play when a sleeper turns over. Any play clears the mark (the
 // Core2's own buttons, the screen, the console: the headphones can't).
+// The USB visualizer's pause (pauseByComputer()) is marked the same way
+// (pausedByComputer()), for the same reason: a bud put back in sends Play.
 //
 // A start point (QueueStore's resume point after a boot, the console's qs):
 // the current entry's next start begins that far in. Nothing plays by
@@ -103,6 +105,12 @@ public:
   // Stopped or Paused: plays (or waits); Playing: pauses; Waiting: cancels
   // the wait (Paused).
   void togglePlayPause();
+  // The USB visualizer's entry. Playing: pauses; Waiting: the wait ends
+  // paused (as cancelWait()); either way the pause is marked the
+  // computer's (pausedByComputer()). Stopped and Paused stay as they are,
+  // and so does their mark: it never starts anything (togglePlayPause()
+  // would play from Paused or Stopped).
+  void pauseByComputer();
   void next();
   // prevAction()'s: the entry before (and it plays, or waits), or this one
   // from 0:00 in the same state.
@@ -164,6 +172,11 @@ public:
   void pauseByTimer();
   // Paused by the timer and not played since: headphone Play doesn't resume.
   bool pausedByTimer() const { return pausedByTimer_; }
+  // Paused by pauseByComputer() and not played since: the same (in-ear
+  // detection's Play isn't the listener asking for the Core2's music back).
+  bool pausedByComputer() const { return pausedByComputer_; }
+  // Either: a pause the listener didn't make (HeadsetKeys).
+  bool pausedNotByListener() const { return pausedByTimer_ || pausedByComputer_; }
   // The pauses (or the stop, at the queue's end) setPauseAfterTrack() made,
   // free-running.
   uint32_t timerStops() const { return timerStops_; }
@@ -235,10 +248,11 @@ private:
     startMs_ = 0;
     startKey_ = QueueModel::kNone;
   }
-  // Playing or Waiting from now: any play clears the timer's mark.
+  // Playing or Waiting from now: any play clears the timer's and the
+  // computer's marks.
   void setPlaying(PlayState s) {
     state_ = s;
-    pausedByTimer_ = false;
+    pausedByTimer_ = pausedByComputer_ = false;
   }
 
   IAudioBackend& audio_;
@@ -256,6 +270,7 @@ private:
   Failure failure_;
   bool pauseAfter_ = false;
   bool pausedByTimer_ = false;
+  bool pausedByComputer_ = false;
   uint32_t timerStops_ = 0;
   // The start point: this far into the entry with key startKey_.
   uint32_t startMs_ = 0;

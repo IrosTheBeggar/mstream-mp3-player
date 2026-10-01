@@ -14,7 +14,6 @@ constexpr double kPi = 3.14159265358979;
 constexpr float kLevelSeconds = 1.5f;   // the level a rise must reach to count in full
 constexpr float kMeanSeconds = 3.0f;    // the onset signal's mean (removed before correlating)
 constexpr float kFloorDbfs = -50.0f;    // quieter than this counts as silence
-constexpr float kDcHz = 5.0f;
 constexpr float kMidWeight = 0.5f;      // the mid band's onsets, relative to the low band's
 constexpr float kLinearWeight = 0.05f;  // the low band's linear rise (units of its level), added
 
@@ -63,17 +62,6 @@ float clamp01(float x) { return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); }
 // Leaky-average coefficient for a time constant, per step at `rate` steps/s.
 float alphaFor(float seconds, double rate) { return static_cast<float>(1.0 - std::exp(-1.0 / (seconds * rate))); }
 
-void lowpass(float fs, float hz, float q, float* b0, float* b1, float* b2, float* a1, float* a2) {
-  const double w0 = 2.0 * kPi * hz / fs;
-  const double alpha = std::sin(w0) / (2.0 * q);
-  const double c = std::cos(w0);
-  const double a0 = 1.0 + alpha;
-  *b0 = static_cast<float>((1.0 - c) / 2.0 / a0);
-  *b1 = static_cast<float>((1.0 - c) / a0);
-  *b2 = *b0;
-  *a1 = static_cast<float>(-2.0 * c / a0);
-  *a2 = static_cast<float>((1.0 - alpha) / a0);
-}
 }  // namespace
 
 double BeatTracker::Grid::offsetFromNearestBeat(uint32_t frame) const {
@@ -105,9 +93,10 @@ bool BeatTracker::begin(const Config& config, void* (*alloc)(size_t), void (*rel
   if (hist_) return true;  // once
   cfg_ = config;
   if (!alloc) alloc = std::malloc;
+  alloc_ = alloc;
   release_ = release ? release : std::free;
   hopRate_ = static_cast<double>(cfg_.sampleRate) / cfg_.hop;
-  hopLen_ = cfg_.hop / cfg_.decimation;
+  fe_.begin(cfg_.sampleRate, cfg_.hop, cfg_.decimation, cfg_.lowpassHz);
   // kHarmonics times the longest period: each tempo is scored at its multiples.
   maxLag_ = static_cast<uint32_t>(std::ceil(kHarmonics * lagOf(cfg_.minBpm))) + 2;
   const auto acquireHops = static_cast<uint32_t>(kAcquireSeconds * hopRate_) + 1;
@@ -132,12 +121,8 @@ bool BeatTracker::begin(const Config& config, void* (*alloc)(size_t), void (*rel
   fadeDecay_ = 1.0f - alphaFor(1.0f, hopRate_);
   confDecay_ = 1.0f - alphaFor(kConfSeconds, hopRate_);
 
-  const float fs = static_cast<float>(cfg_.sampleRate) / cfg_.decimation;
-  // Fourth-order Butterworth as two biquads.
-  lowpass(fs, cfg_.lowpassHz, 0.5412f, &lp1_.b0, &lp1_.b1, &lp1_.b2, &lp1_.a1, &lp1_.a2);
-  lowpass(fs, cfg_.lowpassHz, 1.3066f, &lp2_.b0, &lp2_.b1, &lp2_.b2, &lp2_.a1, &lp2_.a2);
   const float floorAmp = std::pow(10.0f, kFloorDbfs / 20.0f);
-  energyFloor_ = static_cast<float>(hopLen_) * floorAmp * floorAmp;
+  energyFloor_ = static_cast<float>(fe_.hopLength()) * floorAmp * floorAmp;
   reset(0);
   return true;
 }
@@ -145,12 +130,7 @@ bool BeatTracker::begin(const Config& config, void* (*alloc)(size_t), void (*rel
 void BeatTracker::reset(uint32_t originFrame) {
   origin_ = originFrame;
   fed_ = 0;
-  decimSum_ = 0;
-  decimCount_ = 0;
-  hopFill_ = 0;
-  hopEnergy_ = midEnergy_ = 0.0f;
-  dcX_ = dcY_ = 0.0f;
-  lp1_.z1 = lp1_.z2 = lp2_.z1 = lp2_.z2 = 0.0f;
+  fe_.reset();
   hops_ = 0;
   prevEnergy_ = prevMid_ = 0.0f;
   level_ = midLevel_ = 0.0f;
@@ -195,30 +175,25 @@ BeatTracker::Grid BeatTracker::grid() const {
   return g;
 }
 
+bool BeatTracker::setSampleRate(uint32_t rate) {
+  if (hist_ && rate == cfg_.sampleRate) return true;
+  if (!alloc_ || rate == 0) return false;  // (never begun)
+  Config c = cfg_;
+  c.sampleRate = rate;
+  freeBuffers();
+  return begin(c, alloc_, release_);  // (keeps prior_: fillCandidates() reads it)
+}
+
 void BeatTracker::process(const int16_t* mono, uint32_t frames) {
   if (!hist_) return;
-  const float scale = 1.0f / (32768.0f * static_cast<float>(cfg_.decimation));
-  const float dcPole = 1.0f - 2.0f * static_cast<float>(kPi) * kDcHz * cfg_.decimation / cfg_.sampleRate;
-  for (uint32_t i = 0; i < frames; ++i) {
-    decimSum_ += mono[i];
-    if (++decimCount_ < cfg_.decimation) continue;
-    const float x = static_cast<float>(decimSum_) * scale;
-    decimSum_ = 0;
-    decimCount_ = 0;
-    const float dc = x - dcX_ + dcPole * dcY_;  // DC blocker
-    dcX_ = x;
-    dcY_ = dc;
-    const float y = lp2_.run(lp1_.run(dc));
-    const float mid = dc - y;  // above the low band, up to the decimated Nyquist
-    hopEnergy_ += y * y;
-    midEnergy_ += mid * mid;
-    if (++hopFill_ == hopLen_) {
-      onHop(hopEnergy_, midEnergy_);
-      hopEnergy_ = midEnergy_ = 0.0f;
-      hopFill_ = 0;
-    }
-  }
+  fe_.process(mono, frames, [this](float low, float mid) { onHop(low, mid); });
   fed_ += frames;
+}
+
+void BeatTracker::feedHop(float low, float mid) {
+  if (!hist_) return;
+  onHop(low, mid);
+  fed_ += cfg_.hop;
 }
 
 // The rise in log energy from one hop to the next. The first hop of a rise

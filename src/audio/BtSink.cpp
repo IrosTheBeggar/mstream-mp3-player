@@ -722,9 +722,12 @@ void PlayerA2dp::notePhase(ReconnectPlanner::Phase before, uint32_t nowMs) {
                   "scans)\n",
                   ReconnectPlanner::kBurstPages, static_cast<unsigned long>(reconnect_.nextPageInMs(nowMs) / 1000));
   } else if (now == Ph::Resting) {
-    const char* why = before == Ph::Scan                                ? "the scan by name is over"
-                      : sink->quiet_.load(std::memory_order_relaxed) ? "nobody around (the screen off, nothing playing)"
-                                                                     : "15 min without an answer";
+    // (Quiet: the screen off and nothing playing, or a computer driving the
+    // dancer with the player paused for it: main.cpp's setQuiet.)
+    const char* why = before == Ph::Scan ? "the scan by name is over"
+                      : sink->quiet_.load(std::memory_order_relaxed)
+                          ? "nobody around (the screen off and nothing playing, or the computer's visualizer)"
+                          : "15 min without an answer";
     Serial.printf("[bt] reconnect: resting (%s): no pages or scans, still connectable: they come back by "
                   "themselves when switched on\n",
                   why);

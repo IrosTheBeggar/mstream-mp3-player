@@ -585,6 +585,66 @@ void test_pause_by_timer_marks_the_pause() {
 }
 
 
+// pauseByComputer() (the USB visualizer's entry) never starts anything:
+// Playing pauses, Waiting ends paused (both marked the computer's), Paused
+// and Stopped stay as they are with their marks, a cued entry stays cued.
+// Any play clears the mark.
+void test_pause_by_computer_never_starts_playback() {
+  Rig r(3);
+  r.player.pauseByComputer();  // stopped: stays stopped
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  TEST_ASSERT_FALSE(r.player.pausedByComputer());
+  r.player.play(1);
+  r.player.pauseByComputer();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_TRUE(r.audio.paused);
+  TEST_ASSERT_TRUE(r.player.pausedByComputer());
+  TEST_ASSERT_TRUE(r.player.pausedNotByListener());
+  TEST_ASSERT_FALSE(r.player.pausedByTimer());
+  r.player.pauseByComputer();  // paused: stays paused (togglePlayPause() would resume)
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_TRUE(r.audio.paused);
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  r.player.cueNext();  // paused on a cued entry: stays cued, nothing starts, still the computer's
+  r.player.pauseByComputer();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+  TEST_ASSERT_TRUE(r.player.pausedByComputer());
+  r.player.togglePlayPause();  // the Core2's play: cleared
+  TEST_ASSERT_FALSE(r.player.pausedByComputer());
+  r.player.togglePlayPause();  // the listener's own pause: not the computer's
+  r.player.pauseByComputer();  // ... and stays theirs
+  TEST_ASSERT_FALSE(r.player.pausedByComputer());
+  TEST_ASSERT_FALSE(r.player.pausedNotByListener());
+
+  // Waiting for the headphones: ends paused, and nothing played meanwhile.
+  TestHold hold;
+  r.player.setHold(&hold);
+  hold.hold = true;
+  r.player.play(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Waiting, (int)r.player.state());
+  const int plays = r.audio.playCount;
+  r.player.pauseByComputer();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_TRUE(r.player.pausedByComputer());
+  hold.hold = false;
+  r.player.release();  // (a release after it: nothing waits any more)
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(plays, r.audio.playCount);
+  r.player.stop();  // stopped: no mark
+  TEST_ASSERT_FALSE(r.player.pausedByComputer());
+
+  // The sleep timer's pause stays the timer's.
+  r.player.play(0);
+  r.player.pauseByTimer();
+  r.player.pauseByComputer();
+  TEST_ASSERT_TRUE(r.player.pausedByTimer());
+  TEST_ASSERT_FALSE(r.player.pausedByComputer());
+  TEST_ASSERT_TRUE(r.player.pausedNotByListener());
+}
+
 // ---- start points (the resume point after a boot) ----
 
 // Set while stopped (as QueueStore does at boot): nothing plays by itself;
@@ -1313,6 +1373,7 @@ int main(int, char**) {
   RUN_TEST(test_pause_after_this_track_survives_a_skip_and_a_failure);
   RUN_TEST(test_pause_after_the_last_track_without_repeat_stops);
   RUN_TEST(test_pause_by_timer_marks_the_pause);
+  RUN_TEST(test_pause_by_computer_never_starts_playback);
   RUN_TEST(test_a_start_point_waits_for_the_next_play);
   RUN_TEST(test_a_start_point_belongs_to_its_entry);
   RUN_TEST(test_a_start_point_while_playing_or_paused);

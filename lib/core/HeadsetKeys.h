@@ -16,8 +16,10 @@
 //   - PLAY resumes only what was paused. Stopped (after a boot and an
 //     automatic reconnect, say), it does nothing. Paused by the sleep timer
 //     (PlaybackController::pausedByTimer()) it does nothing either: in-ear
-//     detection sends PLAY when a sleeper turns over. The Core2's own play
-//     button resumes it (and clears the mark).
+//     detection sends PLAY when a sleeper turns over. Nor when the USB
+//     visualizer paused it (pausedByComputer()): a bud put back in sends
+//     PLAY too, and the computer, not the listener, paused the Core2. The
+//     Core2's own play button resumes either (and clears the mark).
 //   - PAUSE pauses what plays; otherwise nothing.
 //   - NEXT/PREV skip while playing. Paused or stopped, they only move to the
 //     next or previous track (PlaybackController::cueNext()/cuePrev()): the
@@ -39,8 +41,9 @@ public:
     Cue,     // paused or stopped: cueNext()/cuePrev(), nothing starts
   };
 
-  // `pausedByTimer`: the pause is the sleep timer's (PLAY is ignored).
-  static Action decide(PlayState state, Key key, bool pausedByTimer = false);
+  // `notTheirPause`: the pause is the sleep timer's or the computer's
+  // (PlaybackController::pausedNotByListener(): PLAY is ignored).
+  static Action decide(PlayState state, Key key, bool notTheirPause = false);
   // decide(), carried out on `player`. Returns what it did.
   static Action apply(PlaybackController& player, Key key);
   // Whether a key that did `a` is someone's input for the idle power-off
@@ -48,7 +51,7 @@ public:
   // ignored PLAY or PAUSE is what in-ear detection sends when a bud moves,
   // and a sleeper's buds could keep the device on all night. A cue (NEXT or
   // PREV while paused) counts, except after the sleep timer's pause
-  // (`pausedByTimer`, as it was before the key): a bud adjusted in bed
-  // sends those too (a Powerbeats double-press).
-  static bool isInput(Action a, bool pausedByTimer);
+  // (`notTheirPause`, as it was before the key; the computer's pause too):
+  // a bud adjusted in bed sends those too (a Powerbeats double-press).
+  static bool isInput(Action a, bool notTheirPause);
 };
