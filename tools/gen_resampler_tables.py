@@ -211,14 +211,14 @@ namespace resampler {{
 
 // D147: 48 kHz -> 44.1 kHz. Kaiser-windowed sinc, passband 20 kHz, stopband
 // from 25.95 kHz, A {d_a:.1f} dB (beta {d_beta:.3f}). Worst half-row sum of |c|: {d_half}.
-const int16_t kD147[kD147Stored][kTaps] = {{
+alignas(4) const int16_t kD147[kD147Stored][kTaps] = {{
 {fmt_rows(d147)}
 }};
 
 // U12: the upsampling prototype, normalised to the source rate: passband
 // 0.875 of its Nyquist, stopband from 0.5575 of its rate, A {u_a:.1f} dB
 // (beta {u_beta:.3f}). Worst half-row sum of |c|: {u_half}.
-const int16_t kU12[kU12Stored][kTaps] = {{
+alignas(4) const int16_t kU12[kU12Stored][kTaps] = {{
 {fmt_rows(u12)}
 }};
 

@@ -405,11 +405,21 @@ test_output_chain); measured on the device: off 2.01 s after a pause,
   at 15.5 against 24.7. **So the default stays 240**; 160 is the CPU speed
   row's other choice.
 - **Tracks at other rates** (since the rate converter, RESAMPLER.md): a
-  44.1 kHz track costs what it did; a 48 kHz one adds the conversion on
-  the decode task, measured at 22 % of a core at 240 MHz and 32 % at 160
-  (`Rb`, RESAMPLER.md section 6b). At 160 a 48 kHz tone alone took list
-  scrolling from 29 fps to 9, so the faster kernel comes before 48 kHz is
-  comfortable at 160.
+  44.1 kHz track's passthrough is the old path again, 5 cycles a frame
+  cheaper, but against the build before the converter an MP3 measured
+  0.8 points of a core more at 240 MHz (the MP3 decoder's loop runs 2 %
+  slower in the new image, the cache) and a FLAC 0.3-0.4 more
+  (RESAMPLER.md section 10b); a 48 kHz one adds the conversion on the
+  decode task, 5.8-5.9 % of a core at 240 MHz and 8.8 % at 160 since the
+  MAC16 kernel (`Rb`, RESAMPLER.md sections 10 and 10b; with the C
+  kernel, the fallback if the boot self-test fails, about 16 % and 25 %;
+  22 % and 32 % were 771f8ae's per-frame path). With a 48 kHz tone list
+  scrolling runs at 26.6-26.9 fps at 160 (29.0-29.6 with 44.1 kHz; 9
+  before). A 48 kHz MP3 (a proxy) at 160 played 14.1 minutes without an
+  underrun, but its start refills about twice as slowly as a 44.1 kHz
+  MP3's and stalls the UI 2.5 times as long, and while it plays the
+  scroll lab runs at about 11 fps against 27: its decoding alone takes
+  about 51 % of the core there, the whole track about 64 %.
   88.2/96 kHz files are refused at 160 MHz (an estimated 63-79 % of core 1
   for a 24/96 FLAC there), provisionally until measured; for now they are
   off at any speed until the device check (RESAMPLER.md, section 6).

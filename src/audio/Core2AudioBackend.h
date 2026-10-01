@@ -99,6 +99,12 @@ public:
   // task, output dropped; prints its cycles per second of audio and the
   // share of a core at the clock running now. Stops playback.
   void rateBench();
+  // A test (the console's Rf<hz>, silent mode): plays `path` as if its rate
+  // were `asHz`, so a 44.1 kHz MP3 is decoded and converted as a 48 kHz
+  // one would be (the decoder's work per source frame and the
+  // converter's): the load of a 48 kHz track where the card has none. The
+  // pitch is wrong; nothing follows it.
+  void playAsRate(const std::string& path, uint32_t asHz);
   // The CPU speed set at boot (PowerSettings::cpuBootMhz()): 88.2/96 kHz
   // tracks need 240 MHz. The setting, not the clock right now: the
   // console's Pc80 lowers that for quiet spells. 0 (until set): the clock.
@@ -247,11 +253,12 @@ private:
     uint32_t pauses = 0;  // pauses_ when it was made
     uint32_t startMs = 0; // Play: this far in
     uint32_t hintMs = 0;  // Play: its length as known elsewhere (play()'s durationHintMs)
+    uint32_t asHz = 0;    // Play: the rate it is converted from whatever it says (playAsRate(), a test)
   };
 
   static void taskEntry(void* self);
   static void onMetadata(void* self, const char* type, bool isUnicode, const char* value);
-  void request(const std::string& path, Kind kind, uint32_t startMs = 0, uint32_t hintMs = 0);
+  void request(const std::string& path, Kind kind, uint32_t startMs = 0, uint32_t hintMs = 0, uint32_t asHz = 0);
   void decodeTask();
   Work start(uint32_t generation);
   // A built-in track (lib/core ToneTrack), through RingOutput like a file.
@@ -284,6 +291,19 @@ private:
   void publishRate();   // decode task: rateStatus()'s snapshot
   void runBench(const std::string& path);
   void runRateBench();
+  // The converter's fast kernel (MAC16) against the C kernel, bit for bit
+  // (RateConverter::kernelSelfTest()): on at boot only if they agree, and
+  // never again after a mismatch. Logs the result; true: the fast kernel.
+  bool checkKernel(const char* when);
+  // Rb: every route through RingOutput's converter with each kernel, the
+  // same input in blocks of varying size; the outputs must be identical.
+  bool checkRoutes();
+  // Rb: cycles per source frame through RingOutput::ConsumeSample(), the
+  // generators' path, one frame at a time.
+  void benchConsume(uint32_t hz);
+  // Rb: cycles per dot product (48 taps, one channel) for each kernel, the
+  // row in flash (walked through the table, or one row) or in internal RAM.
+  void benchKernel();
   void setText(std::string& field, const std::string& value);
 
   std::unique_ptr<PcmRing> ring_;
@@ -296,6 +316,7 @@ private:
   // Owned by the decode task.
   fs::FS* fs_ = nullptr;
   std::unique_ptr<RingOutput> out_;
+  bool kernelFailed_ = false;  // the fast kernel failed a self-test: the C kernel until a restart
   std::unique_ptr<AudioFileSourceFS> file_;
   std::unique_ptr<AudioFileSourceID3> id3_;  // per MP3 track
   std::unique_ptr<AudioGeneratorMP3> mp3_;   // created fresh for each track

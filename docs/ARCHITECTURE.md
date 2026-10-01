@@ -204,13 +204,19 @@ The rules that keep it deadlock- and glitch-free:
   ceil(source frames x 44100 / rate) frames. The converter is reset with
   the ring's `discardAll()` at every request (start, skip, seek, stop,
   bench). A built-in track goes through it too, at its own rate (its
-  chunk's frames that didn't fit wait for the next pass). `RingOutput`
-  (~2.6 KB) must stay in internal RAM, so it is asserted under 4 KB (the
+  chunk's frames that didn't fit wait for the next pass). A 44.1 kHz frame
+  goes straight into the stage, as before the converter; frames at another
+  rate are held 32 at a time and converted as a block, on the ESP32 by a
+  MAC16 assembly kernel that a self-test at boot checks against the C one,
+  bit for bit, with the filter tables copied into internal RAM the first
+  time a track at another rate plays (7.6 KB, kept). `RingOutput`
+  (3.1 KB) must stay in internal RAM, so it is asserted under 4 KB (the
   framework puts a `new` of 4 KB or more in PSRAM). The console's `R` shows
   the current track's conversion (source frames taken, ring frames made,
   the exact ratio, clamped samples); `Rt` plays the converter's test tracks
   (`tone:1000@48000`, `tone:silence@96000`, ...) on their own, outside the
-  queue; `Rb` benches the converter at each rate.
+  queue (`Rf</music/...>` a file, in silent mode; `Rx` stops either); `Rb`
+  benches the converter at each rate and checks the MAC16 kernel.
 - **The sleep timer's fade is one more stage, after the gain** (`FadeStage`,
   in `AudioShared`, host-tested in test_output_chain; docs/ENERGY.md
   section 3): on Bluetooth after `gain_.process`, on the speaker after the
@@ -244,7 +250,7 @@ The rules that keep it deadlock- and glitch-free:
 | Bluetooth controller + host (Bluedroid) | 0 | high | ~70 KB internal RAM, claimed at boot |
 | A2DP data callback | 0 (Bluedroid's BTC task, BTC_TASK) | high | 128 frames at a time, several per ~30 ms tick; applies the volume ramp; never blocks or logs. ESP-IDF 5.5's A2DP source has no media task of its own: this is the task that also runs the GAP and AVRCP callbacks, which queue their events to BtAppT (below). If BtAppT's queue (20 entries) is full, each such event blocks BTC_TASK, and the audio, for up to 10 ms |
 | ESP32-A2DP app task (BtAppT) | 0 | 15 | connection, stream and AVRCP handlers (`PlayerA2dp`); 6 KB stack; blocks 10 s at stack-up; must keep its queue drained (no long work in a handler) |
-| decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 3 % of a core at 240 MHz for 44.1 kHz's passthrough, 22 % for 48 kHz, 32 % at 160 MHz; too slow for 48 kHz at 160, so the faster kernel is next: RESAMPLER.md section 6b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start) |
+| decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 1.4 M cycles per second of audio for 44.1 kHz's passthrough, the old path, 5 cycles a frame cheaper (an MP3 still measures 0.8 points above the build before the converter, its decoder's loop 2 % slower in the new image: RESAMPLER.md section 10b); 5.8-5.9 % of a core at 240 MHz for 48 kHz, 8.8 % at 160: RESAMPLER.md sections 10 and 10b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start) |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
 | cover thumbnails (`thumbs`, ui/Thumbs) | 1 | 1, or 0 while a list moves | only while there are covers to make: made for the first, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device); reads the card in 4 KB pieces; level with the loop while nothing moves (at 0 it shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves, always below the decoder (below) |
@@ -2216,8 +2222,9 @@ their own (the player stopped first, so nothing follows them).
    mStream's session-centroid scoring plus its BPM/key/artist filters.
 4. **Server discovery without mDNS** (it doesn't work in Docker installs), then
    the device-code pairing flow.
-5. The rate converter's faster kernel and block path (built, wired in and
-   checked on the device: correct, but 22-32 % of a core for 48 kHz;
-   [RESAMPLER.md](RESAMPLER.md) section 6b and section 7, step 5), then the
-   Bluetooth switch check and the 88.2/96 kHz gate, the RCA/3.5 mm module
+5. The rate converter's Bluetooth switch check and the 88.2/96 kHz gate
+   (its block path and MAC16 kernel are done: 5.9 % of a core at 240 MHz
+   for 48 kHz; at 160 MHz a 48 kHz MP3's start still refills twice as
+   long as a 44.1 kHz one's, a refill-pacing question:
+   [RESAMPLER.md](RESAMPLER.md) section 10), the RCA/3.5 mm module
    (`cfg.external_speaker.module_rca`), SD card verification, power management.

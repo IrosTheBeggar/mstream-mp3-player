@@ -10,6 +10,7 @@
 #include <complex>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <random>
 #include <utility>
 #include <vector>
@@ -1034,8 +1035,117 @@ void test_time_alignment() {
   }
 }
 
+// ---- The block path and the kernel ----
+
+// convert() over random block sizes gives the same bits as one push() per
+// frame, writes no more than maxOutFor(n), and clamps the same samples;
+// in stereo and mono, at full scale (the saturation too).
+void test_convert_blocks_match_push() {
+  std::mt19937 rng(41);
+  std::vector<int16_t> buf(2 * (300 * 6 + RateConverter::kMaxOut));
+  for (uint32_t hz : kRates) {
+    for (bool mono : {false, true}) {
+      const Frames in = noise(5000, hz + 5, 32767);
+      const Frames once = convert(gConv, hz, in, mono);
+      RateConverter& c = gConv2;
+      c.reset();
+      TEST_ASSERT_TRUE(c.setRate(hz, kCpu, kHiRes));
+      c.setMono(mono);
+      TEST_ASSERT_EQUAL_UINT32(c.maxOut(), c.maxOutFor(1));
+      Frames out;
+      size_t at = 0;
+      const size_t frames = in.size() / 2;
+      while (at < frames) {
+        const uint32_t n = std::min<uint32_t>(1 + rng() % 300, static_cast<uint32_t>(frames - at));
+        const uint32_t bound = c.maxOutFor(n);
+        TEST_ASSERT_EQUAL_UINT32(c.perFrameMax() * n, bound);
+        const uint32_t k = c.convert(&in[2 * at], n, buf.data());
+        TEST_ASSERT_TRUE(k <= bound);
+        append(out, buf.data(), k);
+        at += n;
+      }
+      int16_t tail[RateConverter::kMaxOut * 2];
+      while (!c.finished()) append(out, tail, c.finishPush(tail));
+      assertSame(once, out);
+      TEST_ASSERT_EQUAL_UINT32(gConv.clamped(), c.clamped());
+      TEST_ASSERT_EQUAL_UINT64(frames, c.taken());
+    }
+  }
+}
+
+// The kernel's own interface: the C kernel (the specification) is the
+// direct 64-bit sum rounded half up, for every stored row forwards and
+// backwards, at full scale and at each row's worst case. The self-test the
+// firmware runs at boot and in Rb compares the fast kernel with it (on the
+// host both are the C kernel, and there is none to turn on).
+void test_the_kernel_and_its_self_test() {
+  std::mt19937 rng(9);
+  alignas(4) int16_t window[K + 2];
+  int16_t* x = window + 1;  // as the converter's windows: 2 bytes past a 4-byte boundary
+  struct Table {
+    const int16_t (*rows)[K];
+    int count;
+  };
+  for (const Table& tb : {Table{resampler::kD147, resampler::kD147Stored}, Table{resampler::kU12, resampler::kU12Stored}}) {
+    for (int r = 0; r < tb.count; ++r) {
+      const int16_t* row = tb.rows[r];
+      for (int rev = 0; rev < 2; ++rev) {
+        for (int w = 0; w < 12; ++w) {
+          int64_t sum = 0;
+          for (int j = 0; j < K; ++j) {
+            const int16_t c = rev ? row[K - 1 - j] : row[j];
+            x[j] = w == 0 ? (c >= 0 ? 32767 : -32768) : w == 1 ? (c >= 0 ? -32768 : 32767) : static_cast<int16_t>(rng());
+            sum += static_cast<int64_t>(c) * x[j];
+          }
+          const int64_t want = floorDiv32768(sum + 16384);
+          TEST_ASSERT_EQUAL_INT64(want, rev ? RateConverter::dotRevC(row + K, x) : RateConverter::dotC(row, x));
+          TEST_ASSERT_EQUAL_INT64(want, rev ? RateConverter::dotRevFast(row + K, x) : RateConverter::dotFast(row, x));
+        }
+      }
+    }
+  }
+  const RateConverter::SelfTest t = RateConverter::kernelSelfTest(12345, 4);
+  TEST_ASSERT_EQUAL_UINT32((resampler::kD147Stored + resampler::kU12Stored) * 2 * 6, t.dots);
+  TEST_ASSERT_EQUAL_UINT32(0, t.mismatches);
+  TEST_ASSERT_FALSE(RateConverter::fastKernelBuilt());
+  RateConverter::useFastKernel(true);
+  TEST_ASSERT_FALSE(RateConverter::fastKernel());
+  RateConverter::useFastKernel(false);
+}
+
+// The tables read from a copy (the firmware copies them into internal RAM):
+// the same bits, from the next setRate() on; the hook that makes the copy
+// is called before a stream at another rate is configured, never for
+// 44.1 kHz.
+int gWanted = 0;
+alignas(4) int16_t gD147Copy[resampler::kD147Stored][K];
+alignas(4) int16_t gU12Copy[resampler::kU12Stored][K];
+
+void test_tables_from_a_copy() {
+  std::memcpy(gD147Copy, resampler::kD147, sizeof(gD147Copy));
+  std::memcpy(gU12Copy, resampler::kU12, sizeof(gU12Copy));
+  const Frames in = noise(3000, 61, 30000);
+  RateConverter::setTablesWanted([] { ++gWanted; });
+  gWanted = 0;
+  const Frames pass = convert(gConv, 44100, in);
+  TEST_ASSERT_EQUAL_INT(0, gWanted);
+  for (uint32_t hz : {48000u, 8000u, 22050u}) {
+    const Frames flash = convert(gConv, hz, in);
+    TEST_ASSERT_FALSE(RateConverter::tablesCopied());
+    RateConverter::useTables(gD147Copy, gU12Copy);
+    TEST_ASSERT_TRUE(RateConverter::tablesCopied());
+    gWanted = 0;
+    assertSame(flash, convert(gConv, hz, in));
+    TEST_ASSERT_EQUAL_INT(1, gWanted);
+    RateConverter::useTables(nullptr, nullptr);
+  }
+  RateConverter::setTablesWanted(nullptr);
+  TEST_ASSERT_FALSE(RateConverter::tablesCopied());
+  TEST_ASSERT_EQUAL_UINT32(in.size(), pass.size());
+}
+
 void test_it_is_small() {
-  TEST_ASSERT_TRUE(sizeof(RateConverter) <= 2048);  // internal RAM, inside RingOutput (~1.5 KB on the ESP32)
+  TEST_ASSERT_TRUE(sizeof(RateConverter) <= 2048);  // internal RAM, inside RingOutput (~1.9 KB on the ESP32)
   TEST_ASSERT_TRUE(RateConverter::kMaxOut <= 16);
 }
 
@@ -1070,6 +1180,9 @@ int main(int, char**) {
   RUN_TEST(test_thd_n_and_spurs);
   RUN_TEST(test_aliasing_of_content_above_22k);
   RUN_TEST(test_time_alignment);
+  RUN_TEST(test_convert_blocks_match_push);
+  RUN_TEST(test_the_kernel_and_its_self_test);
+  RUN_TEST(test_tables_from_a_copy);
   RUN_TEST(test_it_is_small);
   return UNITY_END();
 }

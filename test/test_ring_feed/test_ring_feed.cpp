@@ -301,6 +301,8 @@ void test_the_budget_counts_source_frames() {
   TEST_ASSERT_EQUAL_UINT32(0, gFeed.budgetLeft());
   // 30 frames at 8 kHz, less the 6x stage's delay (24 frames): 36 at
   // 48 kHz, all inside the 147/160 stage's delay (24 of them) and then 12.
+  // (Held for the block path until the pass's commit() converts them.)
+  gFeed.commit();
   TEST_ASSERT_EQUAL_UINT64((12 * 147 + 159) / 160, gFeed.made());
 }
 
@@ -348,6 +350,53 @@ void test_the_budget_caps_ring_frames_too() {
   while (gFeed.consume(&src[2 * taken])) ++taken;
   TEST_ASSERT_TRUE(gFeed.made() < kPass + 6);
   TEST_ASSERT_TRUE(taken > 180 && taken < 230);  // 1024 x 80 / 441 = 186, and the delays' ~28
+  gFeed.setDiscard(false);
+}
+
+// The ring budget holds across a rate change mid-pass into or out of
+// 44.1 kHz: the passthrough's frames count against it (a pass that passed
+// 600 frames and then goes to 12 kHz has 424 left, not 1024), and a pass
+// that spent it at 12 kHz takes nothing more at 44.1. The last frame taken
+// may still add up to perFrameMax() - 1 (6 at most: 8 kHz's) more.
+void test_the_ring_budget_holds_across_a_rate_change() {
+  const Frames src = noise(40000, 12, 20000);
+  const uint32_t pairs[][2] = {{44100, 12000}, {12000, 44100}, {44100, 8000}, {8000, 44100},
+                               {44100, 48000}, {48000, 44100}, {22050, 44100}, {44100, 22050}};
+  for (const auto& p : pairs) {
+    for (uint32_t switchAt : {1u, 40u, 333u, 600u, 1000u}) {
+      fresh();
+      gFeed.setDiscard(true);  // the ring never refuses: only the budgets stop a pass
+      TEST_ASSERT_TRUE(gFeed.setRate(static_cast<int>(p[0])));
+      uint32_t at = 0;
+      // Past the first route's delay, so the pass with the switch is a full one.
+      for (int pass = 0; pass < 3; ++pass) {
+        gFeed.setBudget(kPass);
+        while (gFeed.consume(&src[2 * at])) ++at;
+        gFeed.commit();
+      }
+      for (int pass = 0; pass < 3; ++pass) {  // the switch, then two passes at the new rate
+        gFeed.setBudget(kPass);
+        const uint64_t before = gFeed.made();
+        uint32_t taken = 0;
+        for (;;) {
+          if (pass == 0 && taken == switchAt) TEST_ASSERT_TRUE(gFeed.setRate(static_cast<int>(p[1])));
+          if (!gFeed.consume(&src[2 * at])) break;
+          ++at;
+          ++taken;
+        }
+        gFeed.commit();
+        const uint64_t made = gFeed.made() - before;
+        char msg[96];
+        snprintf(msg, sizeof(msg), "%u -> %u Hz after %u frames, pass %d: %u made, %u taken",
+                 static_cast<unsigned>(p[0]), static_cast<unsigned>(p[1]), static_cast<unsigned>(switchAt), pass,
+                 static_cast<unsigned>(made), static_cast<unsigned>(taken));
+        TEST_ASSERT_TRUE_MESSAGE(taken <= kPass, msg);
+        TEST_ASSERT_TRUE_MESSAGE(made <= kPass + 5, msg);
+        // Not stopped early either: one budget or the other is spent.
+        TEST_ASSERT_TRUE_MESSAGE(taken == kPass || made + 6 > kPass, msg);
+      }
+    }
+  }
   gFeed.setDiscard(false);
 }
 
@@ -460,9 +509,79 @@ void test_silence_gives_exact_zeros() {
   }
 }
 
+// 44.1 kHz takes the fast path: each frame is in the stage at once (none
+// held), the converter's counters stay exact, and the ring gets the frames
+// as they came, in mono too.
+void test_the_passthrough_goes_straight_to_the_stage() {
+  for (bool mono : {false, true}) {
+    fresh();
+    TEST_ASSERT_TRUE(gFeed.setRate(44100));
+    gFeed.setChannels(mono ? 1 : 2);
+    gFeed.setBudget(kPass);
+    const Frames src = noise(600, 5, 20000);
+    for (size_t i = 0; i < src.size() / 2; ++i) {
+      TEST_ASSERT_TRUE(gFeed.consume(&src[2 * i]));
+      TEST_ASSERT_EQUAL_UINT64(i + 1, gFeed.made());
+    }
+    gFeed.commit();
+    TEST_ASSERT_EQUAL_UINT64(600, gFeed.converter().taken());
+    TEST_ASSERT_EQUAL_UINT64(600, gFeed.converter().produced());
+    TEST_ASSERT_TRUE(gFeed.finish());
+    Frames out;
+    drain(out, kRingCap);
+    Frames want = src;
+    if (mono) {
+      for (size_t i = 0; i < want.size(); i += 2) want[i + 1] = want[i];
+    }
+    assertSame(want, out);
+  }
+}
+
+// Frames held for the block path go out as they were taken: a rate change
+// (a new route, the filters restarted) or a channel change mid-block
+// converts them first, and a full ring never splits or loses one.
+void test_held_frames_keep_their_rate_and_channels() {
+  std::mt19937 rng(17);
+  const Frames src = noise(3000, 23, 20000);
+  // The reference: the converter frame by frame, 48 kHz for 1000 frames,
+  // then 22.05 kHz, mono from frame 2000.
+  RateConverter& c = gRef;
+  c.reset();
+  TEST_ASSERT_TRUE(c.setRate(48000, kCpu, kHiRes));
+  Frames want;
+  int16_t buf[RateConverter::kMaxOut * 2];
+  for (size_t i = 0; i < 3000; ++i) {
+    if (i == 1000) TEST_ASSERT_TRUE(c.setRate(22050, kCpu, kHiRes));
+    if (i == 2000) c.setMono(true);
+    const uint32_t n = c.push(&src[2 * i], buf);
+    want.insert(want.end(), buf, buf + 2 * n);
+  }
+  while (!c.finished()) {
+    const uint32_t n = c.finishPush(buf);
+    want.insert(want.end(), buf, buf + 2 * n);
+  }
+  fresh();
+  TEST_ASSERT_TRUE(gFeed.setRate(48000));
+  Frames out;
+  gFeed.setBudget(kPass);
+  for (size_t i = 0; i < 3000; ++i) {
+    if (i == 1000) TEST_ASSERT_TRUE(gFeed.setRate(22050));
+    if (i == 2000) gFeed.setChannels(1);
+    while (!gFeed.consume(&src[2 * i])) {
+      gFeed.commit();
+      drain(out, rng() % 3 == 0 ? 0 : rng() % 400);
+      gFeed.setBudget(kPass);
+    }
+  }
+  while (!gFeed.finish()) drain(out, 700);
+  drain(out, kRingCap);
+  assertSame(want, out);
+}
+
 void test_it_is_small() {
   // Inside RingOutput, which must stay under 4 KB (internal RAM).
-  TEST_ASSERT_TRUE(sizeof(RingFeed) < 3072);
+  // (The converter ~1.9 KB, the stage 1 KB, the block 128 B.)
+  TEST_ASSERT_TRUE(sizeof(RingFeed) < 3584);
 }
 
 int main(int, char**) {
@@ -476,12 +595,15 @@ int main(int, char**) {
   RUN_TEST(test_mono_copies_the_left_channel);
   RUN_TEST(test_the_budget_counts_source_frames);
   RUN_TEST(test_the_budget_caps_ring_frames_too);
+  RUN_TEST(test_the_ring_budget_holds_across_a_rate_change);
   RUN_TEST(test_a_block_makes_at_most_max_made);
   RUN_TEST(test_hi_res_is_off_by_default);
   RUN_TEST(test_the_same_rate_again_changes_nothing);
   RUN_TEST(test_room_for_a_pass);
   RUN_TEST(test_discard_drops_everything);
   RUN_TEST(test_silence_gives_exact_zeros);
+  RUN_TEST(test_the_passthrough_goes_straight_to_the_stage);
+  RUN_TEST(test_held_frames_keep_their_rate_and_channels);
   RUN_TEST(test_it_is_small);
   return UNITY_END();
 }

@@ -9,7 +9,7 @@ namespace resampler {
 
 // D147: 48 kHz -> 44.1 kHz. Kaiser-windowed sinc, passband 20 kHz, stopband
 // from 25.95 kHz, A 93.4 dB (beta 9.337). Worst half-row sum of |c|: 42280.
-const int16_t kD147[kD147Stored][kTaps] = {
+alignas(4) const int16_t kD147[kD147Stored][kTaps] = {
     {
           0,     -1,      2,     -5,     11,    -21,     36,    -59,     92,   -137,    195,   -268,
         355,   -456,    570,   -692,    820,   -947,   1069,  -1179,   1271,  -1341,   1385,  31368,
@@ -385,7 +385,7 @@ const int16_t kD147[kD147Stored][kTaps] = {
 // U12: the upsampling prototype, normalised to the source rate: passband
 // 0.875 of its Nyquist, stopband from 0.5575 of its rate, A 90.7 dB
 // (beta 9.036). Worst half-row sum of |c|: 46696.
-const int16_t kU12[kU12Stored][kTaps] = {
+alignas(4) const int16_t kU12[kU12Stored][kTaps] = {
     {
           0,     -1,      2,     -4,      6,     -9,     13,    -19,     25,    -33,     42,    -52,
          63,    -75,     88,   -100,    113,   -125,    136,   -145,    153,   -159,    163,  32604,

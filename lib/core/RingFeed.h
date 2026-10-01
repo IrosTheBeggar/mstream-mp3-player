@@ -27,11 +27,27 @@
 // positions, durations and the decode load. The decoders' own seeks stay in
 // their source units.
 //
-// One task (the decode task). ~2.6 KB, all in the object: keep it in
+// Three paths for the generator's one-frame-at-a-time calls
+// (docs/RESAMPLER.md, section 10):
+// - 44.1 kHz, the passthrough (every normal track): the frame goes straight
+//   into the stage, as the old RingOutput did, inline, with no converter
+//   call and no 64-bit counting per frame;
+// - another rate, the block path: frames are held in a small block and
+//   converted kBlockFrames at a time (RateConverter::convert()). A frame is
+//   taken only while the stage has room for the worst case of every frame
+//   held plus it (perFrameMax() each), so the rule above holds: what is
+//   taken always fits, nothing is lost or duplicated. commit(), flush and
+//   finish() convert what is held first;
+// - before the rate is known (an MP3's first frames), or refused: one at a
+//   time through the converter, as before.
+//
+// One task (the decode task). ~3.2 KB, all in the object: keep it in
 // internal RAM (the converter reads its histories 96 times per output).
 class RingFeed {
 public:
   static constexpr uint32_t kStageFrames = 256;
+  // Source frames held for the block path before they are converted.
+  static constexpr uint32_t kBlockFrames = 32;
 
   explicit RingFeed(PcmRing& ring) : ring_(ring) {}
 
@@ -49,18 +65,49 @@ public:
   // nothing more is taken and the caller fails the track.
   bool setRate(int hz);
   // 1: mono (the left channel, copied). Never resets anything.
-  void setChannels(int channels) { conv_.setMono(channels == 1); }
+  void setChannels(int channels);
+  // A test: every rate the stream says is taken as `hz` (a 44.1 kHz file
+  // decoded and converted as a 48 kHz one would be); 0: off. reset() turns
+  // it off.
+  void forceRate(int hz) { forced_ = hz; }
   // A pass: the generator may hand over up to `frames` source frames, and
   // none once the pass has made `frames` ring frames (the last one taken may
-  // add up to maxOut() - 1 more). Then its loop() returns.
+  // add up to maxOut() - 1 more; frames held for the block path count at
+  // the most they can make until they are converted). Then its loop()
+  // returns. At 44.1 kHz the source frames are the ring frames: the
+  // passthrough counts only budget_ per frame, and its frames come off the
+  // ring budget when they are counted (countPassed()), so the pass's cap
+  // holds across a rate change into or out of 44.1 kHz too.
   void setBudget(uint32_t frames) {
+    countPassed();  // (the last pass's, if it had no commit(): not this one's)
     budget_ = frames;
     ringBudget_ = frames;
   }
   uint32_t budgetLeft() const { return budget_; }
   // One source frame; false: not taken (refused rate, budget spent, or the
   // ring full), the generator keeps it and offers it again.
-  bool consume(const int16_t sample[2]);
+  bool consume(const int16_t sample[2]) {
+    if (mode_ == Mode::Pass) {  // 44.1 kHz: the old RingOutput's path
+      if (budget_ == 0) return false;
+      if (staged_ == kStageFrames) {
+        commit();
+        if (staged_ == kStageFrames) return false;
+      }
+      storeFrame(stage_ + 2 * staged_, sample[0], mono_ ? sample[0] : sample[1]);
+      ++staged_;
+      ++passed_;
+      --budget_;
+      return true;
+    }
+    if (mode_ == Mode::Block && accept_ != 0 && budget_ != 0) {  // (accept_ keeps to the ring budget too)
+      storeFrame(held_ + 2 * heldN_, sample[0], sample[1]);
+      ++heldN_;
+      --accept_;
+      --budget_;
+      return true;
+    }
+    return consumeSlow(sample);
+  }
 
   // ---- a block (the built-in tracks, the bench) ----
   // Takes as many of `frames` source frames as fit (no budget), making at
@@ -68,7 +115,8 @@ public:
   // and offers them again.
   uint32_t write(const int16_t* frames, uint32_t n, uint32_t maxMade = UINT32_MAX);
 
-  // Pushes staged frames into the ring; true when nothing is left staged.
+  // Converts what is held, then pushes staged frames into the ring; true
+  // when nothing is left staged.
   bool commit();
   // The end of the stream: pushes the converter's tail (its last K/2
   // frames' worth) through the same rule. True once all of it is in the
@@ -89,24 +137,73 @@ public:
   RateConverter::Refusal refusalKind() const {
     return conv_.refused() ? conv_.currentPlan().refusal : RateConverter::Refusal::None;
   }
-  // Ring frames made since reset() (staged or in the ring).
-  uint64_t made() const { return made_; }
+  // Ring frames made since reset() (staged or in the ring). Frames held for
+  // the block path aren't made until commit() (or finish()) converts them.
+  uint64_t made() const { return made_ + staged_; }
   const RateConverter& converter() const { return conv_; }
+  // The bench's own runs (the kernel check, Rb): RingOutput's converter,
+  // with nothing playing (reset() after).
+  RateConverter& benchConverter() { return conv_; }
 
 private:
+  // One frame into the stage or the block (4-byte aligned): a single 32-bit
+  // store on the ESP32, without the PSRAM workaround's MEMW after each
+  // 16-bit one (both are in internal RAM: RingOutput stays under 4 KB for
+  // that).
+  static void storeFrame(int16_t* d, int16_t l, int16_t r) {
+#if defined(__XTENSA__)
+    const uint32_t v = static_cast<uint16_t>(l) | static_cast<uint32_t>(static_cast<uint16_t>(r)) << 16;
+    asm volatile("s32i %[v], %[d], 0" : : [v] "r"(v), [d] "r"(d) : "memory");
+#else
+    d[0] = l;
+    d[1] = r;
+#endif
+  }
+
+  // Pass: 44.1 kHz with nothing waiting in the converter. Block: another
+  // rate, configured. Hold: no rate yet (the converter holds the frames).
+  // Refused: nothing is taken.
+  enum class Mode : uint8_t { Hold, Pass, Block, Refused };
+
+  bool consumeSlow(const int16_t sample[2]);
+  // The block path's room: converts what is held, pushes the stage into the
+  // ring if a block's worst case doesn't fit, and sets how many frames may
+  // be taken next (accept_), at the most each can make, within the stage's
+  // room and the pass's ring budget. False: not even one (the ring is full,
+  // or the ring budget is spent).
+  bool reserve();
+  // Converts the held frames into the stage (their room was kept for them).
+  void convertHeld();
+  // The passthrough frames copied here, counted in the converter and
+  // against the pass's ring budget.
+  void countPassed() {
+    if (passed_ == 0) return;
+    conv_.countPassthrough(passed_);
+    ringBudget_ -= passed_ < ringBudget_ ? passed_ : ringBudget_;
+    passed_ = 0;
+  }
+  void updateMode();
   // Room in the stage for the converter's next push(), pushing the stage
   // into the ring first if it hasn't.
   bool room();
 
   PcmRing& ring_;
   RateConverter conv_;
-  int16_t stage_[kStageFrames * 2];
+  alignas(4) int16_t stage_[kStageFrames * 2];
+  alignas(4) int16_t held_[kBlockFrames * 2];
+  Mode mode_ = Mode::Hold;
+  bool mono_ = false;
+  bool discard_ = false;
+  bool hiRes_ = RateConverter::kHiResOn;
   uint32_t staged_ = 0;
+  uint32_t heldN_ = 0;
+  uint32_t accept_ = 0;    // frames the block path may take before reserve() again
+  uint32_t perFrame_ = 1;  // the route's perFrameMax()
+  uint32_t passed_ = 0;    // passthrough frames not yet counted in conv_
   uint32_t budget_ = 0;
   uint32_t ringBudget_ = 0;
   uint32_t cpuMhz_ = 0;
-  bool hiRes_ = RateConverter::kHiResOn;
   int rate_ = 0;
-  uint64_t made_ = 0;
-  bool discard_ = false;
+  int forced_ = 0;
+  uint64_t made_ = 0;      // frames that have left the stage (to the ring, or dropped)
 };

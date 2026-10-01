@@ -12,7 +12,9 @@
 // first (x[kTaps - 1] is the newest input). Row L - p is row p reversed, so
 // only rows 0..L/2 are stored. Every row sums to exactly 32768 (unity DC
 // gain), and each half of a row (elements 0..23, 24..47) has a sum of |c|
-// under 65536, so the kernel's two int32 sums can't overflow.
+// under 65536, so the kernel's two int32 sums can't overflow. The two
+// polyphase tables are 4-byte aligned (a row is 96 bytes): the MAC16 kernel
+// loads two taps at a time.
 //
 // Halfbands: the centre tap is 16384 (implicit), the taps at even distances
 // are 0, and the nonzero side taps are stored once, outermost first; both
@@ -24,13 +26,13 @@ constexpr int kTaps = 48;
 // 147/160, 48 kHz -> 44.1 kHz: 147 rows, rows 0..73 stored.
 constexpr int kD147Rows = 147;
 constexpr int kD147Stored = kD147Rows / 2 + 1;
-extern const int16_t kD147[kD147Stored][kTaps];
+alignas(4) extern const int16_t kD147[kD147Stored][kTaps];
 
 // The upsampling prototype: 12 rows, 0..6 stored. Rows 0, 12/L, 2*12/L, ...
 // are the filter for an upsampling by L = 2, 3, 4 or 6.
 constexpr int kU12Rows = 12;
 constexpr int kU12Stored = kU12Rows / 2 + 1;
-extern const int16_t kU12[kU12Stored][kTaps];
+alignas(4) extern const int16_t kU12[kU12Stored][kTaps];
 
 // Halfbands: 71 taps (96 -> 48 kHz) and 123 taps (88.2 -> 44.1 kHz).
 constexpr int kHb96Taps = 71;

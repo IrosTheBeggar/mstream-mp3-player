@@ -45,7 +45,8 @@
 //        or pairing), Bn0 back
 //   R... the rate converter (docs/RESAMPLER.md): R status, Rt the test tracks, Rt<n> or
 //        Rt<tone:...> play one on its own (the player stopped: nothing follows it;
-//        silence only on Bluetooth, a tone only in silent mode), Rb its bench
+//        silence only on Bluetooth, a tone only in silent mode), Rf</music/...> a file
+//        the same way (silent mode only), Rx stops either, Rb its bench
 // and the UI spike's tools (docs/UI-SPIKE.md), also ended with Enter, the
 // text after the letter passed on as it is:
 //   u...  input lab (u toggles; u0-u3 modes; us summary)

@@ -50,7 +50,14 @@
 // mid-stream restarts the filters (a possible click, never louder).
 // setMono() never resets: both channels' histories are always written.
 //
-// Pure: no allocation, no Arduino. ~1.5 KB, all of it in the object; place
+// The block path: convert() takes many frames in one call (the stages run
+// over the whole block, the per-frame calls and 64-bit counters go), with
+// output bit-identical to as many push() calls; push() and process() are
+// built on it. The kernel is the portable C one (the reference: the host
+// tests run it) or, on the ESP32, MAC16 assembly that must give the same
+// bits (useFastKernel(), after kernelSelfTest() has compared the two).
+//
+// Pure: no allocation, no Arduino. ~1.9 KB, all of it in the object; place
 // it in internal RAM (docs/RESAMPLER.md, section 5). One task at a time.
 class RateConverter {
 public:
@@ -96,11 +103,32 @@ public:
 
   // The most frames the next push() or finishPush() can write.
   uint32_t maxOut() const;
+  // The most `frames` source frames can write (convert(), or that many
+  // push() calls): what is still waiting to come out plus perFrameMax()
+  // each once the rate is known.
+  uint32_t maxOutFor(uint32_t frames) const;
+  // The most one source frame can make on this route (1 at 44.1 kHz and
+  // above, up to 6 at 8 kHz); 0 when refused.
+  uint32_t perFrameMax() const { return state_ == State::Refused ? 0 : routeMaxOut_; }
   // Takes one source frame; writes 0..maxOut() frames to `out`.
   uint32_t push(const int16_t in[2], int16_t* out);
+  // The block path, once the rate is known (configured()): takes all `n`
+  // frames and writes at most maxOutFor(n) to `out`; returns how many.
+  // The same bits as n push() calls.
+  uint32_t convert(const int16_t* in, uint32_t n, int16_t* out);
   // As many frames of `in` as fit, taking each only while `room` has space
   // for maxOut() more; returns the frames taken, *written the frames out.
   uint32_t process(const int16_t* in, uint32_t frames, int16_t* out, uint32_t room, uint32_t* written);
+  // At 44.1 kHz with nothing waiting (passthrough(), carried() == 0) a
+  // caller may copy frames itself (RingFeed's fast path) and count them
+  // here, so taken(), produced() and the tail stay exact.
+  void countPassthrough(uint32_t frames) {
+    taken_ += frames;
+    produced_ += frames;
+  }
+  // Frames replayed after a late rate, still waiting to come out at 44.1 kHz.
+  uint32_t carried() const { return carryN_; }
+  bool mono() const { return mono_; }
 
   // The end of the stream: pushes one frame of the tail (zeros); writes
   // 0..maxOut() frames. Repeat until finished().
@@ -117,6 +145,50 @@ public:
   uint64_t produced() const { return produced_; }
   // Output samples that were clamped to int16 since reset().
   uint32_t clamped() const { return clamped_; }
+
+  // ---- the kernel (docs/RESAMPLER.md, section 10) ----
+  // One output: a 48-tap row (4-byte aligned) against a 48-sample window
+  // (2 bytes past a 4-byte boundary, as the converter's are), rounded half
+  // up (+16384, >> 15) but not yet saturated. The C kernel is the
+  // specification; on an ESP32 (Xtensa with MAC16) the fast kernel is
+  // assembly using the 40-bit accumulator, two samples or taps per load.
+  static int32_t dotC(const int16_t* row, const int16_t* x);
+  static int32_t dotRevC(const int16_t* rowEnd, const int16_t* x);  // the row read backwards from rowEnd - 1
+  static int32_t dotFast(const int16_t* row, const int16_t* x);
+  static int32_t dotRevFast(const int16_t* rowEnd, const int16_t* x);
+  // True when this build has a fast kernel (an ESP32); elsewhere the fast
+  // functions are the C ones.
+  static bool fastKernelBuilt();
+  // Which kernel convert() uses, for every converter: the C one until the
+  // caller turns the fast one on (after kernelSelfTest()). Ignored when
+  // there is no fast kernel.
+  static void useFastKernel(bool on);
+  static bool fastKernel();
+  // Every stored row of every table, forwards and backwards, against
+  // `windows` windows each (random, full-scale noise, the row's worst case
+  // for each sign: the accumulator's top bits), through both kernels, and
+  // the saturation (CLAMPS on the ESP32) against plain C, at its edges too.
+  struct SelfTest {
+    uint32_t dots = 0;        // dot products compared
+    uint32_t mismatches = 0;  // 0: bit-identical
+    int32_t wantC = 0;        // the first mismatch, if any
+    int32_t gotFast = 0;
+  };
+  static SelfTest kernelSelfTest(uint32_t seed, uint32_t windows = 4);
+
+  // ---- where the tables are read from ----
+  // The polyphase tables (resampler::kD147, kU12) are in flash; a caller
+  // may hand over copies (4-byte aligned) in faster memory, used by every
+  // converter from its next setRate() on; nullptr: flash again. The same
+  // bits either way. On the ESP32 a flash table shares the cache with the
+  // decoder, and 147/160's 7 KB, read every 3.3 ms, evicts it
+  // (docs/RESAMPLER.md, section 10).
+  static void useTables(const int16_t (*d147)[resampler::kTaps], const int16_t (*u12)[resampler::kTaps]);
+  static bool tablesCopied();
+  // Called on the converter's task just before a stream at another rate
+  // than 44.1 kHz is configured (the firmware makes its copy there, the
+  // first time one is needed). nullptr: none.
+  static void setTablesWanted(void (*hook)());
 
 private:
   enum class State : uint8_t { Unconfigured, Configured, Refused };
@@ -140,10 +212,25 @@ private:
     bool skip = false;
   };
 
+  // A polyphase stage's history: per channel two copies, each written twice
+  // so a window is contiguous. Copy 0 holds input p at [p] and [p + 48],
+  // copy 1 at [p + 1] and [p + 49], so the window that starts at w starts
+  // at an odd index in one of them: copy 0 at [w] for an odd w, copy 1 at
+  // [w + 1] for an even one (what the MAC16 kernel wants).
+  static constexpr int kPolyHist = 2 * resampler::kTaps + 2;
+  using PolyHist = int16_t[2][2][kPolyHist];  // [channel][copy][sample]
+
   void configure(const Plan& p);
   void restartFilters();
+  // One frame through the route (the replay of held frames, the tail).
   uint32_t runRoute(int16_t l, int16_t r, int16_t* out);
-  uint32_t pushPoly(PolyStage& s, int16_t* h0, int16_t* h1, int16_t l, int16_t r, int16_t* out);
+  // `n` frames through the route; monoIn: take the left channel for both.
+  template <class K>
+  uint32_t route(const int16_t* in, uint32_t n, int16_t* out, bool monoIn);
+  uint32_t routeAny(const int16_t* in, uint32_t n, int16_t* out, bool monoIn);
+  template <class K>
+  uint32_t polyBlock(PolyStage& s, PolyHist& h, const int16_t* in, uint32_t n, int16_t* out, bool monoIn);
+  uint32_t halfbandBlock(const int16_t* in, uint32_t n, int16_t* out, bool monoIn);
   uint32_t pushHalfband(int16_t l, int16_t r, int16_t* out);
   uint32_t drainCarry(int16_t* out);
 
@@ -166,8 +253,12 @@ private:
   int16_t carry_[kMaxPending][2];
   uint8_t pendingN_ = 0;
   uint8_t carryN_ = 0;
-  // Planar histories, each written twice so a window is contiguous. Stage A
-  // is a halfband (up to 123 taps) or a 48-tap polyphase; stage B is 147/160.
-  int16_t histA_[2][2 * kMaxHbTaps];
-  int16_t histB_[2][2 * kTaps];
+  // Planar histories. Stage A is a halfband (up to 123 taps, one copy,
+  // written twice) or a 48-tap polyphase (PolyHist); stage B is 147/160.
+  union HistA {
+    int16_t hb[2][2 * kMaxHbTaps];
+    PolyHist poly;
+  };
+  alignas(4) HistA histA_;
+  alignas(4) PolyHist histB_;
 };

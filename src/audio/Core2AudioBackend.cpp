@@ -9,6 +9,7 @@
 #include <AudioGeneratorFLAC.h>
 #include <AudioGeneratorMP3.h>
 #include <esp_cpu.h>
+#include <esp_random.h>
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 
@@ -18,6 +19,7 @@
 #include <cstring>
 
 #include "RateConverter.h"
+#include "ResamplerTables.h"
 #include "ToneTrack.h"
 #include "TrackProgress.h"
 #include "TrackSeek.h"
@@ -105,6 +107,30 @@ public:
   }
 };
 
+// The converter's polyphase tables in internal RAM, copied the first time a
+// track at another rate than 44.1 kHz needs them, and kept (7.8 KB). Read
+// from flash they share the cache with the decoder, and 147/160's 7 KB,
+// read every 3.3 ms, evicts it: docs/RESAMPLER.md, section 10. Without the
+// room they stay in flash (the same bits, slower). On the decode task.
+static void copyTablesToRam() {
+  if (RateConverter::tablesCopied()) return;
+  constexpr size_t kD147Bytes = sizeof(resampler::kD147);
+  constexpr size_t kU12Bytes = sizeof(resampler::kU12);
+  static_assert(kD147Bytes % 4 == 0, "the U12 copy must start 4-byte aligned");
+  auto* p = static_cast<int16_t*>(heap_caps_malloc(kD147Bytes + kU12Bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (!p) {
+    Serial.printf("[rate] no %u B of internal RAM for the filter tables: read from flash (slower)\n",
+                  (unsigned)(kD147Bytes + kU12Bytes));
+    return;
+  }
+  std::memcpy(p, resampler::kD147, kD147Bytes);
+  std::memcpy(p + kD147Bytes / 2, resampler::kU12, kU12Bytes);
+  RateConverter::useTables(reinterpret_cast<const int16_t(*)[resampler::kTaps]>(p),
+                           reinterpret_cast<const int16_t(*)[resampler::kTaps]>(p + kD147Bytes / 2));
+  Serial.printf("[rate] the filter tables copied into internal RAM (%u B, kept until a restart): internal free %u B\n",
+                (unsigned)(kD147Bytes + kU12Bytes), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+}
+
 Core2AudioBackend::Core2AudioBackend() = default;
 Core2AudioBackend::~Core2AudioBackend() = default;
 
@@ -118,6 +144,8 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
 
   fs_ = fs;
   out_.reset(new RingOutput(*ring_));  // under 4 KB: internal RAM (RingOutput.h)
+  checkKernel("at boot");  // the converter's fast kernel, only if it gives the C kernel's bits
+  RateConverter::setTablesWanted(copyTablesToRam);
   if (fs_) file_.reset(new AudioFileSourceFS(*fs_));
 
   bt_.begin(*ring_, shared_, btSinkName);
@@ -132,11 +160,11 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
 
 // ---- control side (loop task) ----
 
-void Core2AudioBackend::request(const std::string& path, Kind kind, uint32_t startMs, uint32_t hintMs) {
+void Core2AudioBackend::request(const std::string& path, Kind kind, uint32_t startMs, uint32_t hintMs, uint32_t asHz) {
   if (!task_) return;  // begin() failed
   {
     std::lock_guard<std::mutex> guard(lock_);
-    request_ = {path, kind, pauses_.load(), startMs, hintMs};
+    request_ = {path, kind, pauses_.load(), startMs, hintMs, asHz};
   }
   requestMs_.store(millis(), std::memory_order_relaxed);
   sync_.post(kind == Kind::Play ? Phase::Pending : Phase::Idle);
@@ -159,6 +187,11 @@ void Core2AudioBackend::stop() {
 void Core2AudioBackend::bench(const std::string& path) {
   transportPlaying_ = false;
   request(path, Kind::Bench);
+}
+
+void Core2AudioBackend::playAsRate(const std::string& path, uint32_t asHz) {
+  transportPlaying_ = true;
+  request(path, Kind::Play, 0, 0, asHz);
 }
 
 void Core2AudioBackend::rateBench() {
@@ -497,6 +530,7 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   setText(note_, "");
 
   if (req.path.rfind("tone:", 0) == 0) return startTone(generation, req);
+  feed().forceRate(static_cast<int>(req.asHz));  // (a test: 0 almost always)
 
   if (!openDecoder(req.path, out_.get(), req.startMs, req.hintMs)) return fail(generation, "can't play " + req.path);
   sync_.report(generation, Phase::Decoding);
@@ -791,7 +825,14 @@ Core2AudioBackend::Produced Core2AudioBackend::produceTone() {
   if (!shared_.expectingAudio && producedFrames_ >= kRingRate / 4) shared_.expectingAudio = true;
   noteRingFill();
   noteStartProgress(taken == 0);
-  vTaskDelay(taken == 0 ? pdMS_TO_TICKS(10) : 1);  // share core 1 with the UI loop
+  // Share core 1 with the UI loop, paced like a file (produceDecoded()):
+  // flat out up to 500 ms of ring, then at most 1.5x realtime until the
+  // ring is first full, so a test tone's start can't starve the UI.
+  RefillPacer::Config pace = refillPacing();
+  pace.enabled = pace.enabled && fullMs_.load(std::memory_order_relaxed) < 0;
+  vTaskDelay(taken == 0 ? pdMS_TO_TICKS(10)
+                        : RefillPacer::sleepMs(pace, bufferedMsNow(), static_cast<uint32_t>(f.made() - before),
+                                               kRingRate, static_cast<uint32_t>(toneUs)));
   return Produced::More;
 }
 
@@ -945,8 +986,184 @@ void Core2AudioBackend::runBench(const std::string& path) {
                 (unsigned long)getCpuFrequencyMhz(), 100.0 * both / audio2 - 100.0 * seconds / audio);
 }
 
+bool Core2AudioBackend::checkKernel(const char* when) {
+  if (!RateConverter::fastKernelBuilt()) {
+    Serial.println("[rate] kernel: C (this build has no fast kernel)");
+    return false;
+  }
+  const uint32_t seed = esp_random();
+  const uint32_t c0 = esp_cpu_get_cycle_count();
+  const RateConverter::SelfTest t = RateConverter::kernelSelfTest(seed, 4);
+  const uint32_t us = (esp_cpu_get_cycle_count() - c0) / getCpuFrequencyMhz();
+  if (t.mismatches != 0) kernelFailed_ = true;
+  RateConverter::useFastKernel(!kernelFailed_);
+  if (t.mismatches == 0) {
+    Serial.printf("[rate] kernel: %s; the MAC16 self-test %s gave the C kernel's bits in all %lu dot products "
+                  "(seed %08lx, %lu us)\n",
+                  kernelFailed_ ? "C (MAC16 failed before: until a restart)" : "MAC16", when, (unsigned long)t.dots,
+                  (unsigned long)seed, (unsigned long)us);
+  } else {
+    Serial.printf("[rate] kernel: MAC16 FAILED its self-test %s: %lu of %lu dot products differ from the C kernel "
+                  "(the first: C %ld, MAC16 %ld; seed %08lx). The C kernel from now on, until a restart\n",
+                  when, (unsigned long)t.mismatches, (unsigned long)t.dots, (long)t.wantC, (long)t.gotFast,
+                  (unsigned long)seed);
+  }
+  return !kernelFailed_;
+}
+
+bool Core2AudioBackend::checkRoutes() {
+  if (!RateConverter::fastKernelBuilt()) return true;
+  RateConverter& c = feed().benchConverter();
+  // Full-scale noise (the clamps too) in chunk_'s first half, the output
+  // in its second: blocks of 1-64 frames make at most 64 x 6 + 8 frames.
+  constexpr uint32_t kIn = kChunkFrames / 2;
+  constexpr uint32_t kFrames = 8192;
+  int16_t* out = chunk_ + 2 * kIn;
+  uint32_t seed = 4321;
+  for (uint32_t i = 0; i < 2 * kIn; ++i) {
+    seed = seed * 1664525u + 1013904223u;
+    chunk_[i] = static_cast<int16_t>(seed >> 16);
+  }
+  const bool fast = RateConverter::fastKernel();
+  bool same = true;
+  uint32_t routes = 0;
+  // About 260 M cycles in all (the C kernel at the low rates most of it):
+  // the UI loop runs every 5 ms of it, as between the bench's blocks.
+  const uint32_t sliceCycles = getCpuFrequencyMhz() * 5000;
+  uint32_t sliceStart = esp_cpu_get_cycle_count();
+  for (const uint32_t hz : kRateBenchRates) {
+    uint32_t hash[2] = {0, 0}, made[2] = {0, 0}, clamped[2] = {0, 0};
+    for (int k = 0; k < 2; ++k) {
+      RateConverter::useFastKernel(k == 1);
+      c.reset();
+      if (!c.setRate(hz, RateConverter::kHiResMinMhz, /*hiRes=*/true)) break;
+      uint32_t h = 2166136261u, total = 0, blocks = 77;
+      auto mix = [&h](const int16_t* p, uint32_t frames) {
+        for (uint32_t i = 0; i < 2 * frames; ++i) h = (h ^ static_cast<uint16_t>(p[i])) * 16777619u;
+      };
+      for (uint32_t done = 0; done < kFrames;) {
+        blocks = blocks * 1664525u + 1013904223u;
+        const uint32_t n = 1 + (blocks >> 26);  // 1..64
+        const uint32_t w = c.convert(chunk_ + 2 * (done % (kIn - 64)), n, out);
+        mix(out, w);
+        total += w;
+        done += n;
+        if (esp_cpu_get_cycle_count() - sliceStart >= sliceCycles) {
+          vTaskDelay(1);
+          sliceStart = esp_cpu_get_cycle_count();
+        }
+      }
+      while (!c.finished()) {
+        const uint32_t w = c.finishPush(out);
+        mix(out, w);
+        total += w;
+      }
+      hash[k] = h;
+      made[k] = total;
+      clamped[k] = c.clamped();
+    }
+    ++routes;
+    if (hash[0] != hash[1] || made[0] != made[1] || clamped[0] != clamped[1]) {
+      same = false;
+      Serial.printf("[rate bench] route check: %lu Hz DIFFERS: C %08lx (%lu frames, %lu clamped), MAC16 %08lx (%lu, %lu)\n",
+                    (unsigned long)hz, (unsigned long)hash[0], (unsigned long)made[0], (unsigned long)clamped[0],
+                    (unsigned long)hash[1], (unsigned long)made[1], (unsigned long)clamped[1]);
+    }
+  }
+  c.reset();
+  if (!same) kernelFailed_ = true;
+  RateConverter::useFastKernel(fast && !kernelFailed_);
+  Serial.printf("[rate bench] route check: %lu routes, %lu frames each in blocks of 1-64, full-scale noise: MAC16 %s\n",
+                (unsigned long)routes, (unsigned long)kFrames,
+                same ? "identical to C, bit for bit" : "DIFFERS: the C kernel until a restart");
+  return same;
+}
+
+void Core2AudioBackend::benchConsume(uint32_t hz) {
+  RingFeed& f = feed();
+  f.reset(RateConverter::kHiResMinMhz, /*hiRes=*/true);
+  f.setDiscard(true);
+  if (!f.setRate(static_cast<int>(hz))) return;
+  AudioOutput* o = out_.get();  // the generators' virtual call, as they make it
+  const uint32_t frames = 2 * hz;  // 2 s of audio
+  uint32_t cycles = 0, done = 0, blocks = 0;
+  int16_t s[2];
+  while (done < frames) {
+    f.setBudget(kChunkFrames);
+    const uint32_t c0 = esp_cpu_get_cycle_count();
+    uint32_t i = 0;
+    for (; i < kChunkFrames; ++i) {
+      const uint32_t at = 2 * ((done + i) % kChunkFrames);
+      s[0] = chunk_[at];
+      s[1] = chunk_[at + 1];
+      if (!o->ConsumeSample(s)) break;
+    }
+    f.commit();
+    cycles += esp_cpu_get_cycle_count() - c0;
+    done += i;
+    if (i == 0) break;  // (can't happen: discarding)
+    if (++blocks % 8 == 0) vTaskDelay(1);
+  }
+  f.setDiscard(false);
+  Serial.printf("[rate bench] ConsumeSample() a frame at a time at %6lu Hz (%s): %.0f cycles per source frame "
+                "(the copy from PSRAM included), %.1f M cycles per second of audio = %.1f%% of a core at %lu MHz\n",
+                (unsigned long)hz, f.converter().currentPlan().route, done ? static_cast<double>(cycles) / done : 0.0,
+                static_cast<double>(cycles) / 2 / 1e6, 100.0 * cycles / 2 / (getCpuFrequencyMhz() * 1e6),
+                (unsigned long)getCpuFrequencyMhz());
+}
+
+void Core2AudioBackend::benchKernel() {
+  alignas(4) int16_t window[resampler::kTaps + 2];
+  int16_t* x = window + 1;  // as the converter's windows: 2 bytes past a 4-byte boundary
+  alignas(4) int16_t rowRam[resampler::kTaps];
+  for (int j = 0; j < resampler::kTaps; ++j) x[j] = chunk_[j];
+  std::memcpy(rowRam, resampler::kD147[37], sizeof(rowRam));
+  constexpr uint32_t kDots = 20000;
+  struct Case {
+    const char* what;
+    int32_t (*dot)(const int16_t*, const int16_t*);
+    int rows;  // 0: rowRam; 1: one flash row; else walk the stored rows like 147/160
+  };
+  const Case cases[] = {
+      {"C, flash, the table walked", RateConverter::dotC, resampler::kD147Stored},
+      {"C, internal RAM row", RateConverter::dotC, 0},
+      {"MAC16, flash, the table walked", RateConverter::dotFast, resampler::kD147Stored},
+      {"MAC16, flash, one row", RateConverter::dotFast, 1},
+      {"MAC16, internal RAM row", RateConverter::dotFast, 0},
+  };
+  int32_t sink = 0;
+  for (const Case& k : cases) {
+    if (k.dot == RateConverter::dotFast && !RateConverter::fastKernelBuilt()) continue;
+    uint32_t row = 0;
+    const uint32_t c0 = esp_cpu_get_cycle_count();
+    for (uint32_t i = 0; i < kDots; ++i) {
+      const int16_t* c = k.rows == 0 ? rowRam : resampler::kD147[k.rows == 1 ? 37 : row];
+      sink += k.dot(c, x);
+      row += 13;  // 160 mod 147: the order 147/160 visits its rows in
+      if (row >= static_cast<uint32_t>(resampler::kD147Stored)) row -= resampler::kD147Stored;
+    }
+    const uint32_t cycles = esp_cpu_get_cycle_count() - c0;
+    Serial.printf("[rate bench] kernel: %-32s %5.1f cycles per 48-tap dot product (%.2f per multiply, the call "
+                  "included)\n",
+                  k.what, static_cast<double>(cycles) / kDots, static_cast<double>(cycles) / kDots / resampler::kTaps);
+    vTaskDelay(1);
+  }
+  if (sink == 0x7fffffff) Serial.println("");  // keeps the loops
+}
+
 void Core2AudioBackend::runRateBench() {
   RingFeed& f = feed();
+  const uint32_t mhz = getCpuFrequencyMhz();
+  const uint32_t setting = cpuMhz();
+  Serial.printf("[rate bench] %lu s of stereo audio per rate through RingOutput's converter on the decode task, "
+                "output dropped; CPU %lu MHz now (set at boot: %lu MHz)\n",
+                (unsigned long)kRateBenchSeconds, (unsigned long)mhz, (unsigned long)setting);
+  // First the fast kernel against the C one: the dot products, then whole
+  // routes. A mismatch turns the fast kernel off.
+  checkKernel("in Rb");
+  checkRoutes();
+  benchKernel();
+  const bool fast = RateConverter::fastKernel();
   // A fixed stereo signal (noise at about -12 dBFS, the same every run):
   // the kernel's cost doesn't depend on the values.
   uint32_t seed = 12345;
@@ -954,38 +1171,50 @@ void Core2AudioBackend::runRateBench() {
     seed = seed * 1664525u + 1013904223u;
     chunk_[i] = static_cast<int16_t>(static_cast<int32_t>(seed >> 16) / 4 - 8192);
   }
-  const uint32_t mhz = getCpuFrequencyMhz();
-  const uint32_t setting = cpuMhz();
-  Serial.printf("[rate bench] %lu s of stereo audio per rate through RingOutput's converter on the decode task, "
-                "output dropped; CPU %lu MHz now (set at boot: %lu MHz)\n",
-                (unsigned long)kRateBenchSeconds, (unsigned long)mhz, (unsigned long)setting);
   for (const uint32_t hz : kRateBenchRates) {
     // Every route is measured, the hi-res ones at 160 MHz too (to settle
     // that rule) and while they don't play (kHiResOn): planned as at 240 MHz.
-    f.reset(RateConverter::kHiResMinMhz, /*hiRes=*/true);
-    f.setDiscard(true);
-    if (!f.setRate(static_cast<int>(hz))) continue;
-    uint64_t cycles = 0;
-    uint32_t left = hz * kRateBenchSeconds;
-    uint32_t blocks = 0;
-    while (left > 0) {
-      const uint32_t n = left < kChunkFrames ? left : kChunkFrames;
-      const uint32_t c0 = esp_cpu_get_cycle_count();
-      const uint32_t taken = f.write(chunk_, n);
-      f.commit();
-      cycles += esp_cpu_get_cycle_count() - c0;  // per block: no 32-bit wrap
-      left -= taken;
-      if (taken == 0) break;  // (can't happen: discarding, the stage always has room)
-      if (++blocks % 4 == 0) vTaskDelay(1);  // the UI loop runs between
+    // With each kernel: C, then MAC16 when it is on.
+    double perSecond[2] = {0, 0};
+    for (int k = 0; k < (fast ? 2 : 1); ++k) {
+      RateConverter::useFastKernel(k == 1);
+      f.reset(RateConverter::kHiResMinMhz, /*hiRes=*/true);
+      f.setDiscard(true);
+      if (!f.setRate(static_cast<int>(hz))) break;
+      uint64_t cycles = 0;
+      uint32_t left = hz * kRateBenchSeconds;
+      uint32_t blocks = 0;
+      while (left > 0) {
+        const uint32_t n = left < kChunkFrames ? left : kChunkFrames;
+        const uint32_t c0 = esp_cpu_get_cycle_count();
+        const uint32_t taken = f.write(chunk_, n);
+        f.commit();
+        cycles += esp_cpu_get_cycle_count() - c0;  // per block: no 32-bit wrap
+        left -= taken;
+        if (taken == 0) break;  // (can't happen: discarding, the stage always has room)
+        if (++blocks % 4 == 0) vTaskDelay(1);  // the UI loop runs between
+      }
+      perSecond[k] = static_cast<double>(cycles) / kRateBenchSeconds;
     }
-    const double perSecond = static_cast<double>(cycles) / kRateBenchSeconds;
+    RateConverter::useFastKernel(fast);
     const RateConverter::Plan p = RateConverter::plan(hz, setting);
-    Serial.printf("[rate bench] %6lu Hz (%s): %5.1f M cycles per second of audio = %4.1f%% of a core at %lu MHz%s%s%s\n",
-                  (unsigned long)hz, f.converter().currentPlan().route, perSecond / 1e6,
-                  100.0 * perSecond / (mhz * 1e6), (unsigned long)mhz, p.ok ? "" : " (not played: it ",
+    char fastText[48] = "";
+    if (fast) {
+      snprintf(fastText, sizeof(fastText), "; MAC16 %5.1f M = %4.1f%%", perSecond[1] / 1e6,
+               100.0 * perSecond[1] / (mhz * 1e6));
+    }
+    Serial.printf("[rate bench] %6lu Hz (%s): C %5.1f M cycles per second of audio = %4.1f%%%s of a core at %lu MHz%s%s%s\n",
+                  (unsigned long)hz, f.converter().currentPlan().route, perSecond[0] / 1e6,
+                  100.0 * perSecond[0] / (mhz * 1e6), fastText, (unsigned long)mhz, p.ok ? "" : " (not played: it ",
                   p.ok ? "" : p.reason, p.ok ? "" : ")");
   }
   f.setDiscard(false);
-  Serial.println("[rate bench] cycles include interrupts and anything that preempted the decode task; "
-                 "b<n> on a file at another rate gives decode + convert together");
+  // The generators' own path, a frame per call: the passthrough every
+  // 44.1 kHz track takes, and the block path at 48 kHz.
+  benchConsume(44100);
+  benchConsume(48000);
+  RateConverter::useFastKernel(fast);
+  Serial.printf("[rate bench] cycles include interrupts and anything that preempted the decode task; "
+                "b<n> on a file at another rate gives decode + convert together. The kernel now: %s\n",
+                RateConverter::fastKernel() ? "MAC16" : "C");
 }

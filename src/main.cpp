@@ -1082,6 +1082,11 @@ static void idleCommand(const char* a);
 //          nothing follows it (the queue's music never starts by itself).
 //          On Bluetooth only silence (headphones may be on someone's ears);
 //          a tone only in silent mode (z: the speaker at volume 0).
+//   Rf</music/...>  a file on its own, the same way (silent mode z only:
+//          it may be music); for the converter's measurements on real tracks.
+//          Rf48000</music/...> converts it as if it were 48 kHz: a 44.1 kHz
+//          MP3 then costs what a 48 kHz one would (the pitch is wrong)
+//   Rx     stops what Rt or Rf started (the player is stopped already)
 //   Rb     the converter's bench: playback stopped, ~10 s of audio per rate
 // Rt, Rb (and b<n>) stop the player keeping the listener's place: the
 // paused or playing track's second waits as a start point (and stays the
@@ -1104,6 +1109,46 @@ static void rateCommand(const char* a) {
     stopForTest("rate");
     Serial.println("[rate] bench: 10 s of audio per rate (about half a minute in all)");
     audio.rateBench();
+    return;
+  }
+  if (c == 'f') {
+    // A file on its own, for the converter's measurements on real tracks
+    // (a 44.1 kHz MP3's load against the old path, a 48 kHz file's). Only
+    // in silent mode: it may be music.
+    if (!silent) {
+      Serial.println("[rate] Rf: only in silent mode (z: the speaker at volume 0)");
+      return;
+    }
+    // Rf<hz></music/...>: converted as if it were at that rate (a 44.1 kHz
+    // MP3 as a 48 kHz one: the decoder's and the converter's work of a
+    // 48 kHz track, where the card has none; the pitch is wrong).
+    const char* path = a + 1;
+    uint32_t asHz = 0;
+    while (isDigit(*path)) asHz = asHz * 10 + static_cast<uint32_t>(*path++ - '0');
+    if (*path != '/') {
+      Serial.println("[rate] Rf</music/...>: plays that file on its own (silent mode only); Rf48000</music/...> "
+                     "converts it as if it were 48 kHz (a load test); Rx stops it");
+      return;
+    }
+    stopForTest("rate");
+    if (asHz != 0) {
+      audio.playAsRate(path, asHz);
+    } else {
+      audio.play(path, 0, 0);
+    }
+    Serial.printf("[rate] playing %s on its own%s (the speaker, silent test mode; the player is stopped: nothing "
+                  "follows it)\n",
+                  path, asHz ? ", converted as if at the rate asked" : "");
+    return;
+  }
+  if (c == 'x') {
+    // Whatever Rt or Rf started (the player is stopped already: nothing to keep).
+    if (player.state() != PlayState::Stopped) {
+      Serial.println("[rate] Rx: the player isn't stopped: its own controls stop it");
+      return;
+    }
+    audio.stop();
+    Serial.println("[rate] stopped");
     return;
   }
   if (c == 't') {
@@ -2150,7 +2195,8 @@ void setup() {
                  "P power measurement (P a line, Pl log, P? the knobs; Ps the screen, Ps0/Ps1 off/on); "
                  "T sleep timer (T status, T<min>, Ts<sec> for tests, Tt/Ta/Tq end of track/album/queue, T+ +10 min, "
                  "T0 off); I idle power-off (I status, I<min>/Is<sec> a test length, I0 the setting's); "
-                 "R rate converter (R status, Rt test tracks, Rt<n> play one on its own, Rb bench)");
+                 "R rate converter (R status, Rt test tracks, Rt<n> play one on its own, Rf</music/...> a file on its own "
+                 "(silent mode), Rx stop it, Rb bench)");
 }
 
 void loop() {
