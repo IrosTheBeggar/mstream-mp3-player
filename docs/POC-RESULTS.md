@@ -135,7 +135,9 @@ headphones.
   `tools/iram_diet.py`. WiFi's IRAM needs won't fit in the 7 KB left:
   rebuilding the framework with pioarduino's `custom_sdkconfig`
   (`CONFIG_SPIRAM_CACHE_WORKAROUND=n`, FreeRTOS/heap functions in flash) is
-  the likely next step.
+  the likely next step. (The code PlatformIO compiles has been built
+  without the workaround's flags since ENERGY.md section 5, P3a; the
+  prebuilt libs and their IRAM copies wait for that rebuild, P3b.)
 - **pioarduino on Windows** must be run from PowerShell with `MSYSTEM` unset,
   needs PlatformIO Core ≥ 6.2.0, and links every library object unless
   `lib_archive = yes` is set.

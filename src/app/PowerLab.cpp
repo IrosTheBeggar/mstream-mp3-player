@@ -70,6 +70,7 @@ void PowerLab::command(const char* a) {
     case 'e': exten(arg); return;
     case 'g': led(arg); return;
     case 'i': imu(arg); return;
+    case 'f': touch(arg); return;
     case 'a': amp(arg); return;
     case 'd': loopDelay(arg); return;
     case 'k': taps(arg); return;
@@ -84,7 +85,7 @@ void PowerLab::help() const {
   Serial.println("[power] P line (5 s), Pl log every 5 s, Pw csv on the card, Pm<name> mark, Pq/Pq1/Pq0 coulomb "
                  "counter; knobs: Pb<0-255> backlight while bright (Pb0 the setting's), Ps0/Ps1 screen off/on (Ps its state), Pc<mhz> cpu now (160<->80), "
                  "Pcb<160|240|0> cpu from boot (saved; 0 the default), Pt<min>,<max> bt tx levels 0-7 (a test), Pe0/1 5V boost, Pg0/1 "
-                 "green led, Pi0/1 imu, Pa0/1 speaker amp, Pd<ms> loop idle delay (0 auto), Pk0/1 dance tracker + "
+                 "green led, Pi0/1 imu, Pf touch controller (Pf0/1 Active/Monitor now), Pa0/1 speaker amp, Pd<ms> loop idle delay (0 auto), Pk0/1 dance tracker + "
                  "taps, Pr0/1 bt background search rest now / a burst again, Pz play tone:silence next");
 }
 
@@ -95,13 +96,14 @@ void PowerLab::describe(char* buf, size_t size) {
   const uint8_t b = screen_.backlight();
   int n = snprintf(buf, size,
                    "bl=%u (DC3 %lu mV) screen=%s cpu=%lu MHz play=%s out=%s link=%s stream=%s amp=%s "
-                   "exten=%s led=%u imu=%s taps=%s dance=%s bg=%s radio=%d%% loop=",
+                   "exten=%s led=%u imu=%s touch=%s taps=%s dance=%s bg=%s radio=%d%% loop=",
                    (unsigned)b, (unsigned long)dc3Mv(b), screen_.levelName(),
                    (unsigned long)getCpuFrequencyMhz(), hooks_.playState ? hooks_.playState() : "?",
                    onBt ? "bt" : "speaker", btPhaseName(bt.link().phase), bt.streamState(),
                    SpeakerSink::ampOn() ? (audio_.speaker().ampHeld() ? "held" : "on") : "off",
                    M5.Power.getExtOutput() ? "on" : "off", (unsigned)ledLevel(),
-                   board::imuSuspended() ? "suspended" : "on", audio_.tapsOn() ? "on" : "off",
+                   board::imuSuspended() ? "suspended" : "on", touchpower::modeName(board::touchModeKnown()),
+                   audio_.tapsOn() ? "on" : "off",
                    dance_.active() ? (dance_.tracking() ? "shown" : "shown-untracked") : "hidden",
                    bt.reconnectPhase(), bt.radioBusyPercent());
   if (n < 0 || static_cast<size_t>(n) >= size) return;
@@ -342,6 +344,46 @@ void PowerLab::imu(const char* a) {
   board::setImuSuspended(addr, !on);
   Serial.printf("[power] imu (BMI270 at 0x%02x): PWR_CTRL 0x%02x -> 0x%02x, PWR_CONF 0x%02x -> 0x%02x (%s)\n", addr,
                 ctrl0, board::bmi270PwrCtrl(addr), conf0, board::bmi270PwrConf(addr), on ? "on" : "suspended");
+}
+
+// The FT6336U touch controller's power mode (ENERGY.md section 5, P1). This
+// chip goes back to Monitor by itself 30 s after the last touch (0x86 = 1,
+// 0x87 = 30), so an A/B holds Active by repeating Pf0 (every 10 s) against
+// Pf1, the screen off (Ps0), with Pl.
+void PowerLab::touch(const char* a) {
+  namespace tp = touchpower;
+  switch (tp::parsePf(a)) {
+    case tp::Pf::Report: {
+      tp::Regs r;
+      if (!board::readTouchPower(&r)) {
+        Serial.println("[power] touch: no answer at 0x38");
+        return;
+      }
+      char line[160];
+      tp::describe(r, line, sizeof(line));
+      Serial.printf("[power] touch: %s (Pf0 / Pf1 Active / Monitor now)\n", line);
+      return;
+    }
+    case tp::Pf::Active:
+    case tp::Pf::Monitor: {
+      const uint8_t want = tp::parsePf(a) == tp::Pf::Active ? tp::kActive : tp::kMonitor;
+      const int before = board::readTouchMode();
+      if (!board::setTouchMode(want)) {
+        Serial.println("[power] touch: no answer at 0x38");
+        return;
+      }
+      const int after = board::readTouchMode();
+      Serial.printf("[power] touch: %s -> %s (reads back %s)%s\n", tp::modeName(before), tp::modeName(want),
+                    tp::modeName(after),
+                    want == tp::kMonitor ? ": until a touch takes it back to Active"
+                                         : ": until it goes back to Monitor by itself (Pf: after how long untouched)");
+      return;
+    }
+    case tp::Pf::Refused: break;
+  }
+  Serial.println("[power] Pf: the touch controller's registers; Pf0 Active, Pf1 Monitor (its slow scan; a touch "
+                 "takes it back to Active, and with ctrl=1 it returns to Monitor by itself once untouched). "
+                 "Hibernate (3) is refused: only a reset brings the chip out of it, and its reset line is the LCD's");
 }
 
 void PowerLab::amp(const char* a) {

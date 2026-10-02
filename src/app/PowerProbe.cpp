@@ -107,7 +107,7 @@ void PowerProbe::loop(uint32_t nowMs) {
 void PowerProbe::emit(uint32_t nowMs, bool partial) {
   const uint32_t n = window_.count();
   const float secs = window_.elapsedMs(nowMs) / 1000.0f;
-  char state[256] = "";
+  char state[320] = "";
   if (describe_) describe_(state, sizeof(state));
   if (n == 0) {
     Serial.printf("[power] %.1f s: no samples (the power chip didn't answer %lu times) | %s\n", secs,

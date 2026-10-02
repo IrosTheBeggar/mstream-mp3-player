@@ -2562,3 +2562,578 @@ rebuild (item 6.3).
 - **The Powerbeats stopped answering pages and inquiry for ~40 min** in
   the measuring run, then connected at a later boot. It is probably the
   headphones, but step 1's on-device checks should note it if it recurs.
+
+---
+
+## 5. Audit 2 (Fable), triage
+
+A second audit (2026-10-01, at 9d25cf9: v0.5.0-beta.1 plus the rate
+converter and the USB visualizer) made no changes. It looked for what
+sections 1-4 don't cover. Its four findings were then checked against:
+
+- the code;
+- the libraries in `.pio/libdeps/core2`;
+- the pioarduino platform;
+- the shipped `framework-arduinoespressif32-libs/esp32`: the sdkconfig,
+  the flags, and the per-mode `dio_qspi`/`qio_qspi` libs.
+
+Nothing was built or flashed for this triage.
+
+**The headline is the auditor's own: there is no second 35 mA item.**
+
+- The ~29 USB mA screen-off floor is the ESP32 with the BT controller on,
+  plus the PMIC, PSRAM, SD and touch.
+- The touch controller is the only part of that floor the code can still
+  reach.
+- The rest is CPU time. It is worth a few points of a core, which shows on
+  the benches and the scroll lab but not on the probe (it can't resolve
+  under ~2.5 mA, section 1).
+
+### What the check found
+
+| Id | Finding | Verdict | Decision |
+|---|---|---|---|
+| P1 | Nothing sets the FT6336U touch controller's power mode | real | implement: the diagnostics, then Monitor while the screen is Off |
+| P2 | Flash runs DIO; try QIO | real; the auditor's check is wrong | implement on this branch, kept only if it measures; shipping it in a release is the user's call |
+| P3 | The rev-1 PSRAM workaround (`-mfix-esp32-psram-cache-issue`) isn't needed on rev 3 silicon | real; "only with the rebuild" is wrong for the code we compile | implement now for the code we compile (P3a); the prebuilt IDF libs wait for the rebuild (P3b, later) |
+| P4 | libmad's `FPM_64BIT` costs decode CPU | real; the saving is probably smaller than estimated | the user's call (audio quality) |
+
+### P1: the touch controller
+
+Confirmed:
+
+- **Nothing writes the power register (0xA5).** M5GFX's
+  `Touch_FT5x06::_check_init()` writes only 0xA4=0 (INT polling).
+  - Its `wakeup()` (0xA5=1, Monitor) and `sleep()` (0xA5=3) are never
+    called.
+  - `M5.Display.sleep()` is `LGFXBase::sleep()` (LGFXBase.hpp:1436): the
+    backlight to 0 and the panel's sleep-in, nothing more.
+  - `ScreenControl::apply()` talks to the panel only.
+- **The chip starts in Active.** The Core2's touch config has no reset pin
+  (M5GFX.cpp:1531-1545). The chip is reset along with the LCD (AXP192
+  GPIO4) at `M5.begin()`, and the datasheet says it comes out of a reset
+  in Active.
+- **A slower scan costs the ESP32 nothing.** The host reads the chip over
+  I2C only while INT (GPIO39) is low (`getTouchRaw`).
+- **Monitor is a safe value to write.** LovyanGFX's own `wakeup()` writes
+  it, so the library treats Monitor as the normal awake state.
+
+Corrections to the auditor:
+
+- **The ceiling is ~3 USB mA, not ~4.**
+  - The datasheet's 4.32 mA is at the chip's supply, which is 3.3 V here.
+  - Through the AXP192 to the 5.13 V USB side: 4.3 x 3.3 / 5.13 / 0.9 =
+    ~3 USB mA. That is ~10% of the 29.2 mA screen-off floor.
+  - It is ~0 if the chip's firmware already drops to Monitor by itself.
+    Reg 0x86 = 1 is the default on many FocalTech parts, and this one was
+    never read.
+- **Monitor only while the screen is Off, not the 0x86/0x87 auto-switch
+  while lit.**
+  - While Off, the first touch is swallowed anyway, so the extra latency
+    (up to 40 ms at 25 Hz) can't be seen.
+  - While lit, the auto-switch would delay the first tap after a few idle
+    seconds.
+  - A lit screen goes untouched for at most the 30 s before it goes off,
+    so there is little to gain. That part waits for the read-back (below).
+- **Hibernate (0xA5=3) is rejected,** as the auditor said: the touch could
+  no longer wake the screen, and leaving Hibernate means resetting the LCD
+  as well.
+
+The plan:
+
+1. **Read and report.**
+   - At boot, read 0x86, 0x87, 0x88, 0x89 and 0xA5, and log them on one
+     `[power] touch:` line.
+   - Add `Pf` to the power console: `Pf` reports, `Pf0` writes Active,
+     `Pf1` writes Monitor, and 3 is refused.
+   - Show the mode on the `P` line.
+   - Make every write from the loop task, where the touch is read: the
+     I2C port is shared with the AXP192.
+2. **A/B on the device with `Pl`.** Screen off (`Ps0`), idle, `Pf0`
+   against `Pf1`, A/B/A, 60 s each, from a fresh boot.
+3. **The Off policy, only if step 2 shows a difference or the read-back
+   shows 0x86 = 0.**
+   - Write 0xA5=1 in the wantOff branch of `ScreenControl::apply()`, after
+     the panel's sleep-in.
+   - Nothing at the wake: a touch takes the chip back to Active by itself.
+
+The device checks for step 3:
+
+- a touch, a strip press and PWR each still wake the screen from Off;
+- the waking touch is still swallowed;
+- a finger resting on the glass through the dim countdown still reads;
+- a scripted finger (`uit`) still works.
+
+If INT doesn't assert in Monitor mode on this panel, drop step 3.
+
+### P2: QIO flash
+
+Confirmed:
+
+- **The build asks for DIO at 40 MHz.** That comes from the board JSON;
+  platformio.ini sets neither.
+- **The flash actually runs at 80 MHz DIO.** The shipped libs are built
+  for 80 MHz flash and 80 MHz PSRAM (`CONFIG_ESPTOOLPY_FLASHFREQ_80M`,
+  `CONFIG_SPIRAM_SPEED_80M`), so after the PSRAM init the flash runs at
+  80 MHz. RESAMPLER.md says the same ("about 400 cycles each at DIO
+  80 MHz").
+- **QIO moves 4 bits a clock instead of 2,** so a cache-line fill takes
+  fewer clocks.
+
+Corrections to the auditor:
+
+- **The app image's header won't show QIO; the bootloader's will.**
+  - pioarduino maps `qio` to `dio` in the app header (`builder/main.py` in
+    the platform, `_get_board_flash_mode`).
+  - M5's own Arduino boards.txt does the same for the Core2's QIO menu
+    entry (`build.flash_mode=dio`, `build.boot=qio`).
+  - What changes is the bootloader (`bootloader_qio_<freq>.elf`) and the
+    `qio_qspi/libspi_flash.a` linked into the app.
+  - So check the bootloader, not `firmware.bin`. This triage first said
+    byte 2 of `bootloader.bin` would read 0x00 (QIO); the build (batch 4,
+    below) showed it reads 0x02 (DIO) too. pioarduino converts
+    `bootloader_qio_80m.elf` with `--flash-mode dio`, as IDF does for
+    QIO: the ROM loads the bootloader in DIO, and the bootloader switches
+    the flash to quad itself (`bootloader_enable_qio_mode()`). The check
+    is the ELF the build log names, and byte 3 (0x4F: 16 MB, 80 MHz).
+- **Add `board_build.f_flash = 80000000L` too.** It is M5's own default
+  for the Core2 and what the libs assume. It only speeds up the bootloader
+  stage, and it makes the headers honest.
+
+The data lines QIO needs are wired: the PSRAM already runs quad on the
+same SD0-SD3 pins.
+
+**The release question remains.**
+
+- M5 ships the Core2 as DIO.
+- Only this one Core2 (v1.3) will have been tried.
+- A unit whose flash doesn't take QIO boot-loops until it is reflashed
+  over USB.
+- The web installer's factory bin carries the bootloader, so a release
+  would put QIO on every unit installed from it.
+
+So QIO can be kept on this branch on a measured gain, but putting it in a
+release is for the user to decide (below).
+
+**Saving:** CPU time only. Fewer clocks per cache miss help the decoders,
+Bluedroid, and the fonts and UI code run from flash. It could be ~0 if the
+hot loops aren't miss-bound. The benches decide; the probe can't.
+
+### P3: the PSRAM cache workaround
+
+Confirmed:
+
+- **Every compile and link carries it.** c_flags, cpp_flags, S_flags and
+  ld_flags all have `-mfix-esp32-psram-cache-issue
+  -mfix-esp32-psram-cache-strategy=memw`, from
+  `CONFIG_SPIRAM_CACHE_WORKAROUND=y`.
+- **It costs a `memw` after every 8- and 16-bit store** (RESAMPLER.md).
+  The converter already avoids it with inline `s16i`.
+- **This Core2 doesn't need it.** It is rev 3.1, and IDF needs the
+  workaround only below rev 3: the Kconfig option depends on
+  `ESP32_REV_MIN_FULL < 300`, and ECO3 fixed the bug in silicon.
+
+Corrections to the auditor:
+
+- **The code we compile doesn't need the rebuild (P3a).**
+  - The flags apply per object, and on rev 3 silicon objects built with
+    and without them mix safely.
+  - Everything PlatformIO compiles can drop them now: src/, lib/core,
+    M5GFX, ESP8266Audio (libmad, libFLAC), ESP32-A2DP and the Arduino
+    core's sources.
+  - The UI may gain more than the decoders. M5GFX writes pixels and glyphs
+    into the PSRAM canvases (`Gfx.cpp`'s strip, `DanceView`) as 16-bit
+    stores, each followed by a `memw`. libmad and libFLAC mostly store 32
+    bits.
+  - How: a `pre:` script removes the two flags from CCFLAGS, CFLAGS,
+    CXXFLAGS and ASFLAGS, and **keeps them in LINKFLAGS**. The toolchain
+    then picks the same libc/libgcc multilib as today, so the IRAM layout
+    doesn't move; only our code shrinks.
+- **`ESP32_REV_MIN` is 0 in the shipped sdkconfig, not 3,** so "keep it at
+  3" is wrong.
+  - Without the rebuild, nothing in the build refuses an older chip.
+  - So P3a adds a boot guard. Below revision 3 (from `esp_chip_info`,
+    already printed at boot), say so on the screen and the console, and
+    halt before PSRAM is used.
+  - M5Stack lists every Core2 as ESP32-D0WDQ6-V3, so the guard is for a
+    board that shouldn't exist. The auditor's "v1.0 units with rev 1"
+    wasn't backed by anything.
+- **P3b, the prebuilt IDF libs, stays with the rebuild** (item 6.3). It
+  means:
+  - `CONFIG_SPIRAM_CACHE_WORKAROUND=n`;
+  - `ESP32_REV_MIN_3`;
+  - the `SPIRAM_CACHE_LIB*_IN_IRAM` libc copies freed (~11 KB of IRAM,
+    POC-RESULTS.md).
+
+### P4: libmad's precision
+
+Confirmed:
+
+- `-DFPM_64BIT` (platformio.ini) wins over config.h's `FPM_DEFAULT`,
+  because fixed.h tests `FPM_64BIT` first.
+
+Corrections to the auditor:
+
+- **The saving is probably smaller than "10-25% of decode".**
+  - On the LX6, `FPM_64BIT`'s multiply is `mull` + `mulsh` plus a funnel
+    shift. `FPM_DEFAULT`'s is two pre-shifts and one `mull`.
+  - The 64-bit accumulations add a carry.
+  - Only `b<n>` with each build can say how much.
+
+POC-RESULTS.md measured the end-to-end difference at about 1 dB, and the
+user chose 64-bit anyway. This is a quality choice, so it isn't changed
+here.
+
+### Decisions
+
+**Implement now.** Each is its own commit, measured from fresh boots, A/B:
+
+1. **P1:** the touch read-back and `Pf`, then Monitor while the screen is
+   Off, if the A/B shows a difference.
+2. **P3a:** drop the PSRAM workaround from the code we compile, with the
+   revision guard.
+3. **P2:** QIO at 80 MHz. Keep it on this branch only if:
+   - it boots;
+   - it survives the soak;
+   - it survives the flash-heavy paths: ID3, seek, and NVS and LittleFS
+     writes;
+   - `b<n>`/`Rb` or the scroll lab show a gain.
+
+   Otherwise revert it.
+
+P3a and P2 both move CPU time, so measure them separately: P3a first, then
+P2 on top. Keep each only if no bench regresses.
+
+**For the user to decide:**
+
+- **QIO in a release** (if P2 is kept). M5's default is DIO, only one
+  Core2 (v1.3) will have been tried, and a unit that can't take QIO
+  boot-loops until it is reflashed over USB. Ship QIO, or keep releases on
+  DIO?
+- **libmad's precision (P4).** A "battery saver" build, or `FPM_DEFAULT`,
+  would trade decode CPU for a higher decoder noise floor: -55 dB instead
+  of -81 dB, about 1 dB end to end over SBC (POC-RESULTS.md). Run a `b<n>`
+  A/B first, to put a number on the CPU saving?
+
+**Later:**
+
+- **P3b,** with the `custom_sdkconfig` rebuild (item 6.3), alongside the
+  DFS/PM locks and the WiFi IRAM.
+- **The touch controller's auto-switch while lit** (P1's 0x86/0x87). Only
+  if the read-back shows the auto-switch off, and a device check finds the
+  first tap's latency can't be felt.
+
+**Rejected:**
+
+- **Touch Hibernate (0xA5=3) while Off.** The touch couldn't wake the
+  screen, and leaving Hibernate resets the LCD.
+
+### Batch 4: P1, P3a and P2 implemented (2026-10-01), to measure
+
+(Measured the same day: "Audit 2: measured", below. The text here is the
+plan as built; where the run changed it, it says so.)
+
+Implemented on this branch from the decisions above. Built and host-tested
+only: nothing has been flashed or measured yet, so each item below ends
+with what the device run has to record here, and the condition for
+keeping it. Each has a switch for the A/B. P3a is on in `[env:core2]`;
+P1's Off policy and P2 are not, until their device runs pass (a review
+of the batch: an unmeasured change that can leave the screen dark to
+touches, or a unit boot-looping, shouldn't reach a routine flash or a
+release first).
+
+**P1: the touch controller.**
+
+- **The read-back.** At boot, after the IMU line, `app/BoardPower` reads
+  0x86-0x89 (one burst) and 0xA5 over `M5.In_I2C` (I2C_NUM_1 at 400 kHz:
+  the port M5GFX's touch driver uses). One line:
+  `[power] touch: ctrl=.. monitor_after=..s period_active=..
+  period_monitor=.. mode=Active (...)`, with what it means ("to Monitor by
+  itself after N s untouched", or "no auto-switch"). The decoding and the line are portable
+  (`lib/core/TouchPower`, host-tested: `test_touch_power`).
+- **`Pf`** reads them again. `Pf0` / `Pf1` write Active / Monitor and read
+  the mode back; anything else (3, Hibernate) is refused with the reason.
+  The `P` line shows `touch=<mode>`: the mode as last read or written, not read every 5 s, so the probe's lines don't
+  touch the chip during an A/B. (The P line's buffer went from 256 to 320
+  bytes for it.)
+- **The Off policy** (Monitor while the screen is off, behind `Pfo0` /
+  `Pfo1`, off from boot) **was taken out after the device run** ("Audit 2:
+  measured", below): the chip already goes to Monitor by itself 30 s after
+  the last touch (0x86 = 1, 0x87 = 30), which is as soon as the screen
+  goes off, and Monitor against Active measured under 1 USB mA. Its wake
+  handling (`touchScreenOn()`, the `[screen] awake` note) went with it;
+  the read-back and `Pf` / `Pf0` / `Pf1` stay.
+- The boot line's 0x88 / 0x89 were first labelled `active=..Hz
+  monitor=..Hz`. The chip reads 10 and 40, which can't both be rates (the
+  slow scan would be the faster one); FocalTech's documents call them a
+  period or a rate without a unit, so the line now shows them raw:
+  `period_active=10 period_monitor=40`.
+
+**P3a: no PSRAM workaround in the code we compile.**
+
+- `tools/no_psram_fix.py`, a `pre:` script, registers a build middleware
+  that drops `-mfix-esp32-psram-cache-issue` and
+  `-mfix-esp32-psram-cache-strategy=memw` from CCFLAGS, CFLAGS, CXXFLAGS,
+  ASFLAGS and ASPPFLAGS of every environment that compiles sources. It
+  strips them in place rather than returning objects with overrides,
+  because `tools/version.py`'s middleware already does that for src/.
+  LINKFLAGS keep them (the same libc/libgcc multilib).
+- Checked with `pio run -e core2 -v`: none of the 423 compile commands
+  (src/, lib/core, M5GFX, M5Unified, ESP8266Audio, ESP32-A2DP, the
+  Arduino core and its libraries) has the flags; the link command still
+  has both.
+- **The boot guard:** the first thing `setup()` does is
+  `haltOnOldChip()`. Below revision 3.0 (`lib/core/ChipRevision`,
+  host-tested: `test_chip_revision`), it starts M5Unified only to say
+  `[boot] this ESP32 is revision X.Y; this firmware needs revision 3 or
+  later` on the screen, then repeats it on the console every 5 s and goes
+  no further. It runs before anything in `setup()` uses PSRAM.
+- **The A/B switch** is a build option: `custom_psram_cache_fix = keep`
+  leaves the flags in. `[env:core2-psramfix]` builds the image from
+  before batch 4 that way (DIO, the workaround kept).
+- **The build**, the same tree as `[env:core2-psramfix]` (kept) and
+  `[env:core2]` (dropped; it was built as `core2-dio` then), both DIO:
+  - `.flash.text` 1,498,084 -> 1,484,476 bytes (-13.6 KB, -0.9%); the
+    app 2,269,168 -> 2,255,504 bytes;
+  - `memw` in `.flash.text`: 12,151 -> 7,213 (4,938 fewer; the rest are
+    the prebuilt libs' and volatile accesses);
+  - IRAM unchanged: `.iram0.text` 124,867 bytes, `.iram0.vectors`
+    1,028, the same in all three builds; `.dram0` unchanged;
+  - `iram_diet` (51 libc objects to flash), `flash_guard` and the version
+    check pass in each.
+- **The device run records here** (each image from a fresh boot, the same
+  sequence; RESAMPLER.md notes that load depends on what ran since boot):
+  - `b<n>` on the same MP3 and FLAC, cycles and % of a core, at 240 and
+    160 MHz; `Rb`;
+  - the scroll lab `w1`-`w3` with an MP3 over Bluetooth at 240 and 160
+    (fps, frame max, ring min); the `[dance]` fps; the `[audio]` refill
+    times at a track start;
+  - a 60 min Bluetooth soak with 0 underruns, and a pass through the UI
+    (lists, Now Playing, Dance, dialogs) looking for drawing corruption;
+  - the boot log still says rev 3.1, and the guard doesn't fire.
+- **Keep it if** no bench regresses and the soak and the UI pass are
+  clean. Otherwise `custom_psram_cache_fix = keep` in `[env:core2]` puts
+  the flags back.
+
+**P2: QIO at 80 MHz.**
+
+- `board_build.flash_mode = qio` and `board_build.f_flash = 80000000L`
+  in `[env:core2-qio]`, which extends `[env:core2]`; `[env:core2]` stays
+  DIO at 40 MHz. (First put in `[env:core2]` itself, with a `core2-dio`
+  env for the "before"; the review moved it out, because CI, the web
+  installer and the everyday `pio run -e core2 -t upload` all build
+  `core2`, and any of them would have shipped an untested bootloader.)
+- **What the build shows:**
+  - the bootloader is made from `bootloader_qio_80m.elf`;
+  - the app links `qio_qspi` (its `sdkconfig.h` and `libspi_flash.a`);
+  - both headers say DIO (byte 2 = 0x02, see the correction in P2 above)
+    at 80 MHz, 16 MB (byte 3 = 0x4F; it was 0x40, 40 MHz, before);
+  - `flash_guard` passes; against the DIO build the code is the same size
+    (`.flash.text` 1,484,476 bytes in both) and IRAM unchanged.
+- **The risk is probably smaller than the triage said, but untested.** The
+  ROM still reads the bootloader in DIO, and a bootloader that can't set
+  the flash's QE bit logs `Failed to set QIE bit, not enabling QIO mode`
+  and goes on in DIO, so a QIO-shy flash shouldn't keep the bootloader
+  from running. Whether the app's QIO flash driver then copes is unknown.
+  If the Core2 doesn't boot, `pio run -e core2 -t upload` reflashes the
+  DIO build over USB (the download mode is in the ROM).
+- **The A/B switch** is the env: `pio run -e core2-qio -t upload` for
+  QIO, `pio run -e core2 -t upload` for DIO at 40 MHz (the bootloader too:
+  the upload writes the whole image).
+- **The device run records here** (`core2-qio` against `core2`, from fresh
+  boots):
+  - `b<n>` (MP3 and FLAC) at 240 and 160; `Rb`; the scroll lab `w1`-`w3`
+    fps with an MP3 over Bluetooth; the `[audio]` refill times at a track
+    start; boot-to-UI time on the console;
+  - the flash-heavy paths: a library scan and ID3 reads, a seek in a VBR
+    MP3 and a FLAC, an NVS write that survives a reboot, LittleFS writes
+    (the queue's save, and `flushNow` via the idle path or the CPU-speed
+    restart), thumbnails;
+  - a 60 min Bluetooth soak with 0 underruns.
+- **Move it into `[env:core2]` if** it boots, passes the soak and the
+  flash-heavy paths, and shows a bench gain: the two lines, in the commit
+  that records those results here. Otherwise delete `[env:core2-qio]`.
+- **Releases:** CI builds `[env:core2]`, which is DIO, so no release
+  picks up QIO by accident. Moving it there is still the user's decision
+  (Decisions, above).
+
+### Audit 2: measured (2026-10-01)
+
+The batch 4 tree on this Core2 (v1.3, ESP32-D0WDQ6-V3 rev 3.1, COM3), on
+USB with the battery full (`bat=+0.0`). Nothing was played out loud:
+speaker states in silent mode (`z`, volume 0); Bluetooth only
+`tone:silence` (`Rt`). The Powerbeats ("SPYDRONE") answered fewer than
+half the boots, so the Bluetooth states have one connection per image. Every
+image ran the same sequence from a fresh boot (RTS reset):
+
+1. the power states with `Pl`, each settled 15 s, then 60-65 s of 5 s
+   windows after a `Pm` mark (USB mA, mean and median); the lit states
+   kept lit by `Ps1` every 12 s;
+2. `b27` (MP3, Daft Punk, "One More Time") and `b2` (FLAC, Kanye West,
+   "Stronger"), twice each (the two runs agree to 0.1 %); `Rb`;
+3. `g10000`, the MP3 on its own on the muted speaker (`Rf`, its `[audio]
+   refill` line), the scroll lab's `w1` (30 s, `wd30`), then the Dance
+   tab for 25 s with the MP3;
+4. `Pcb160`, a boot, steps 2-3 again at 160, then `Pcb0` and a boot (NVS
+   written and read back each time).
+
+The Daft Punk album was added to the end of the queue for `b27` (entries
+27-40) and removed after the run.
+
+The images (all DIO with a 40 MHz header unless named):
+
+| Image | What | ELF |
+|---|---|---|
+| A | `core2-psramfix`: the workaround kept in every compile (HEAD's flags; P1's code inert, its policy off) | 5fdc8662 |
+| B | `core2`: P3a (the workaround dropped) | 38b3573b |
+| C | `core2-qio`: P3a + QIO at 80 MHz | 654abcb8 |
+| A2 / E | A and B rebuilt after P1's policy came out (below) | fdf1c2d5 / ea1963e8 |
+| D | `core2-dio80`: E with an 80 MHz header, DIO (P2's control) | 9a398847 |
+
+`b` and `w1` were repeated on A2, D and E (three `w1` each) once `w1`'s
+spread showed (A's single 19.0 fps was its high end).
+
+**P1, the touch controller.** The boot line, on every boot:
+
+```
+[power] touch: ctrl=1 monitor_after=30s period_active=10 period_monitor=40 mode=Active (to Monitor by itself after 30 s untouched)
+```
+
+- **The chip already does it by itself.** `Pf` read every 15 s from a
+  boot with nobody touching: `mode=Active` at boot, `mode=Monitor` from
+  ~30 s on. After `Pf0` it read Active at +11 and +22 s, Monitor at +33
+  and +44 s: the 30 s count starts again from the write, and a read
+  doesn't reset it. The screen goes off 30 s after the last input, so by
+  then the chip is in Monitor (or within seconds of it).
+- **Active against Monitor, the screen off, idle, no link (resting), 240
+  MHz:** A/B/A/B/A/B, 60 s each, `Pf0` or `Pf1` repeated every 10 s
+  (Active has to be held: it lapses after 30 s).
+
+  | Pair | Active (`Pf0`) | Monitor (`Pf1`) |
+  |---|---|---|
+  | 1 | 31.7 (median 31.3) | 31.8 (32.4) |
+  | 2 | 32.0 (31.7) | 30.5 (29.6) |
+  | 3 | 33.1 (32.3) | 31.9 (32.7) |
+  | mean | **32.3** | **31.4** |
+
+  -0.9 USB mA for Monitor, with a window sd of 1.2-2.8: under the probe's
+  ~2.5 mA resolution and under the plan's 1.5 mA gate. The triage's ~3 mA
+  ceiling (the datasheet's 4.3 mA at 3.3 V) isn't what this chip draws in
+  Active at its settings.
+- **So the Off policy (`Pfo`) was taken out** (its gate: 1.5 USB mA, or
+  0x86 = 0; neither holds), and with it the question whether INT asserts
+  in Monitor. The read-back and `Pf` stay; a wake writes nothing.
+- The physical wake checks (a finger, a strip press, a light tap, PWR)
+  weren't run: nobody was at the device. With the policy gone the touch
+  path is HEAD's (`ScreenControl` is back to HEAD; the only touch I2C
+  traffic added is the boot read and `Pf`).
+- Not done: a shorter 0x87 for the lit screen. Under 1 mA for at most
+  30 s per touch isn't worth a slower first tap.
+
+**The power states (USB mA, mean / median).** P3a and P2 change CPU time
+only; the probe doesn't see it, as expected:
+
+| State | A | B (P3a) | C (P3a + QIO) |
+|---|---|---|---|
+| Idle (stopped), screen bright | 44.1 / 45.2 | 43.9 / 44.7 | 43.4 / 43.7 |
+| Idle, screen off | 29.8 / 29.6 | 30.4 / 30.4 | 31.6 / 31.4 |
+| Silence on the muted speaker, screen bright | 51.4 / 52.5 | 51.7 / 52.3 | 51.4 / 51.8 |
+| Silence on the muted speaker, screen off | 38.0 / 37.8 | 38.5 / 38.4 | 37.4 / 37.3 |
+| Dance tab, stopped, idle crab (10 fps) | 45.1 / 45.6 | 46.6 / 47.5 | 46.7 / 46.5 |
+| `tone:silence` over Bluetooth, screen off (one connection each) | 92.3 / 92.8 | 88.9 / 88.7 | 91.5 / 91.5 |
+
+- A's idle and speaker states had the headphones linked and idle; B's and
+  C's had them resting (they didn't answer those boots). Section 1
+  measured the idle link at ~0.
+- Every difference is within ~2 mA either way, in no consistent
+  direction: nothing to resolve. Bluetooth varies by more than that
+  between connections (section 1).
+
+**P3a and P2, the CPU** (% of a core; the decode bench, 20.1 s of audio):
+
+| | A (workaround) | B / E (P3a) | D (P3a, 80 MHz DIO header) | C (P3a + QIO) |
+|---|---|---|---|---|
+| MP3, 240 | 23.9 (A2 24.0) | 22.6 / 22.5 | 22.6 | **20.6** |
+| MP3, 160 | 33.3 | 31.3 | | **29.2** |
+| FLAC, 240 | 23.3 (A2 23.3) | 21.7 / 21.6 | 21.6 | **21.3** |
+| FLAC, 160 | 28.4 | 26.0 | | **25.6** |
+
+`Rb`, the converter (M cycles per second of audio; the same at both
+speeds within 1 %):
+
+| | A | B | C |
+|---|---|---|---|
+| 48 kHz, MAC16 | 14.0 | 13.4 | 13.3 |
+| 48 kHz, C kernel | 38.9 | 37.2 | 37.1 |
+| 96 kHz (halfband, then 147/160), MAC16 | 62.6 | 58.9 | 58.7 |
+| `ConsumeSample()` at 48 / 44.1 kHz (cycles per frame) | 415 / 106 | 383 / 90 | 382 / 89 |
+
+The kernels' own cycles per dot product didn't move (MAC16 140-142,
+internal RAM 108.6): they store no bytes or halves.
+
+The UI and the start of a track:
+
+| | A | B / E / D | C (QIO) |
+|---|---|---|---|
+| `w1` with the MP3 at 240, fps while moving, p50 (each run) | 19.0; A2 15.9, 14.6, 14.7 | B 17.8, 18.6, 16.4, 16.0; E 17.0, 15.8, 16.6; D 18.0, 15.7, 15.9 | **28.5, 28.7, 26.9, 27.9** |
+| `w1` at 160 | 8.4 | 8.8 | **11.7** |
+| `w1` at 240: frame max / decode p50 | 114 ms / 38 % | 95-108 ms / 38-40 % | 74-84 ms / 33-34 % |
+| Dance tab with the MP3, fps (target): 240 / 160 | 28-31 (30) / 17-21 (24) | 28-30 / 20-22 | 31 / **23-24** |
+| `[audio] refill`, MP3 from stopped, 240: 500 ms buffered / steady / full | 239 / 1,292 / 2,219 | 239 / 1,317 / 2,219 | 193 / 1,221 / 2,121 |
+| the same at 160 | 406 / 1,507 / 2,477 | 370 / 1,503 / 2,475 | 315 / 1,389 / 2,316 |
+| Reset to `[ui] up` | 4.66 s | 4.64 s (D 4.50) | 4.40 s |
+
+No underruns in any run; ring min 1,416 ms in every `w1`.
+
+- **P3a: kept.** MP3 decode -5.5 % (240) and -6 % (160), FLAC -7 % and
+  -8.5 %, the converter -4 to -8 %, `ConsumeSample()` -8 % and -15 %.
+  `w1` is noisy run to run (A2 14.6-15.9 against B/E/D 15.7-18.6: if
+  anything a little faster); nothing regressed. IRAM unchanged
+  (`.iram0.text` 124,867 bytes in every build). Every boot said `rev
+  3.1`, and the guard never fired.
+- **P2: QIO is the big one, and it is the 4 data lines, not the clock.**
+  D (DIO with an 80 MHz header) benches exactly as B/E, which confirms
+  the triage: the app already runs the flash at 80 MHz after the PSRAM
+  init, and the header's 40 MHz only slows the bootloader. QIO halves the
+  clocks per cache-line fill, and everything that runs from flash gains:
+  - the list scroll with an MP3 at 240 goes from ~16.5 to ~28 fps (+65-70
+    %, close to the 30 fps cap), at 160 from 8.8 to 11.7 (+33 %);
+  - the Dance tab holds its 24 fps at 160 with an MP3 playing (20-22
+    without QIO): batch 3's open question;
+  - MP3 decode a further -9 % (240) and -7 % (160); FLAC, whose hot loops
+    stay in the cache, -2 %;
+  - a track reaches 500 ms buffered 46-55 ms sooner; the boot to the UI
+    is 0.24 s shorter.
+  - The probe doesn't see it, but at 160 the UI now does about what 240
+    did without QIO, which makes the 160 MHz setting (-5 USB mA, section
+    1) much less of a trade.
+- **QIO on this unit:** it booted every time (7 boots, with the `Pcb160`
+  / `Pcb0` restarts: NVS written and read back); the ROM line reads
+  `mode:DIO, clock div:1` (the bootloader at 80 MHz); the library index
+  loaded from its cache, the queue file was read and written on the card.
+  Not run on QIO: the 60 min soak, a seek in a VBR MP3 and a FLAC (no
+  console seek that leaves the listener's resume point alone), and
+  LittleFS writes.
+- **So `[env:core2]` stays DIO,** and `[env:core2-qio]` stays an A/B env:
+  whether releases ship QIO is the user's decision (Decisions, above).
+  The measured case for it is now strong; the risk is the one stated
+  there (one unit tried; a unit whose flash can't take QIO needs a USB
+  reflash). `[env:core2-dio80]` is kept as P2's control.
+
+**The final image on the device** is E: `[env:core2]` (P3a, DIO), P1's
+read-back and `Pf`, no Off policy. On it (screenshots read back from the
+LCD): Now Playing with the cover, Library (Artists), Queue, the Dance tab
+and Output drew cleanly, and the volume HUD; `Pf`, `Pf0`, `Pf1` answered,
+`Pf3` and the old `Pfo1` were refused with the help line.
+
+**The soak, on E:** 58 min of `tone:silence` over Bluetooth to the
+Powerbeats (a fresh boot's connection, the screen off by its own
+timeout, 240 MHz): 696 stats lines, **0 underruns**, the ring 1,430-1,483
+ms, `gap=26ms`, connected throughout, no `[bt]` events.
+
+**Left on the device:** E, booted normally; the queue as found (27
+tracks, at 9, the resume point 0:55 into 9; the added album removed), the
+touch table, the remembered headphones, the sleep timer off, the idle
+power-off at 20 min, CPU 240 (the default, nothing saved), Bluetooth
+power Normal. (The device had been running another worktree's v0.5.0
+build before this run.)

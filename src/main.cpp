@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "ButtonPolicy.h"
+#include "ChipRevision.h"
 #include "HeadsetKeys.h"
 #include "IdlePolicy.h"
 #include "InputEvent.h"
@@ -2180,7 +2181,38 @@ static void logNvs() {
   }
 }
 
+// The build leaves the rev-1 PSRAM cache workaround out of the code it
+// compiles (tools/no_psram_fix.py, docs/ENERGY.md section 5, P3a), which is
+// safe only from revision 3 (every Core2 is an ESP32-D0WDQ6-V3), and the
+// shipped sdkconfig doesn't refuse an older chip. So on one, say so on the
+// console and the screen and stop, before anything here uses PSRAM.
+static void haltOnOldChip() {
+  esp_chip_info_t chip;
+  esp_chip_info(&chip);
+  if (chiprev::supported(chip.revision)) return;
+  char rev[8];
+  chiprev::text(chip.revision, rev, sizeof(rev));
+  char line[96];
+  snprintf(line, sizeof(line), "this ESP32 is revision %s; this firmware needs revision 3 or later", rev);
+  auto cfg = M5.config();
+  cfg.serial_baudrate = 115200;
+  cfg.internal_mic = false;
+  cfg.output_power = false;
+  M5.begin(cfg);
+  M5.Display.setBrightness(128);
+  M5.Display.fillScreen(TFT_BLACK);
+  M5.Display.setTextColor(TFT_WHITE, TFT_BLACK);
+  M5.Display.setTextSize(2);
+  M5.Display.setCursor(0, 8);
+  M5.Display.println(line);
+  for (;;) {
+    Serial.printf("[boot] %s\n", line);  // again every 5 s, for a console opened later
+    delay(5000);
+  }
+}
+
 void setup() {
+  haltOnOldChip();  // first: no PSRAM used yet
   ensureNvs();  // before the first Preferences read
   // The CPU speed saved (or the default), before Bluetooth starts.
   PowerSettings::applyBootClock();

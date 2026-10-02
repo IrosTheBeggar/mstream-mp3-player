@@ -2191,7 +2191,12 @@ until the Bluetooth power row is next tapped (it replaces them).
 **At boot** (app/BoardPower, docs/ENERGY.md item 9) the BMI270 is
 suspended and the 5 V boost is off (`cfg.output_power = false`); the green
 LED is off (M5Unified's default). One line says so: `[power] boot: IMU
-suspended, 5 V boost (EXTEN) off, green LED off`.
+suspended, 5 V boost (EXTEN) off, green LED off`. A second one reads the
+touch controller's power registers: `[power] touch: ctrl=1 monitor_after=30s
+period_active=10 period_monitor=40 mode=Active (to Monitor by itself after
+30 s untouched)` on this Core2. The chip drops to Monitor, its slow scan,
+by itself, so the firmware doesn't set it (docs/ENERGY.md section 5, Audit
+2: measured).
 
 **The knobs** (each says what it was and what it is now, and is undone by
 its opposite; only `Pcb` is saved):
@@ -2206,6 +2211,7 @@ its opposite; only `Pcb` is saved):
 | `Pe0` / `Pe1` | the 5 V boost (EXTEN, M-Bus/Grove 5 V) | M5Unified's setExtOutput(); off from boot (`cfg.output_power = false`) |
 | `Pg0` / `Pg1` | the green LED | off at boot |
 | `Pi0` / `Pi1` | the BMI270 IMU suspended / on | suspended from boot (app/BoardPower); nothing reads it |
+| `Pf` / `Pf0` / `Pf1` | the FT6336U touch controller: its power registers / Active / Monitor now | Monitor is its slow scan (a touch takes it back to Active); 3, Hibernate, is refused (only a reset brings it out, and its reset line is the LCD's); with `ctrl=1` the chip returns to Monitor by itself 30 s after the last touch, so an Active A/B repeats `Pf0`; the P line's `touch=` is the mode last read or written |
 | `Pa0` / `Pa1` | the speaker amp (NS4168 enable, AXP192 GPIO2) and M5.Speaker's I2S | by itself it goes off 2 s after the speaker goes quiet; `Pa0` off as soon as it is quiet (no 2 s wait); `Pa1` on (zeros, silent) and held on, through playing and pausing, until `Pa0` (`amp=held`) |
 | `Pd<ms>` | the loop's idle delay while nothing animates (1-100) | `Pd0` the UI's own (~5 ms); never while a list moves or the Dance tab is up |
 | `Pk0` / `Pk1` | the dance beat tracker (and so the outputs' taps) | the taps are on only while the Dance tab is up and the tracker is on |
@@ -2229,6 +2235,23 @@ their own (the player stopped first, so nothing follows them).
   workaround pins in IRAM back to flash (this rev-3 chip doesn't need it).
   About 7 KB of IRAM is left. Adding WiFi will need more: likely pioarduino's
   `custom_sdkconfig` to rebuild the framework without the workaround.
+- **`tools/no_psram_fix.py`** (a pre-script) compiles everything
+  PlatformIO builds (src/, lib/core, the libraries, the Arduino core)
+  without that workaround's `-mfix-esp32-psram-cache-issue`, a `memw`
+  after every 8- and 16-bit store; the link keeps it, so the prebuilt
+  libs and the IRAM layout don't move. It needs a rev-3 chip, so
+  `setup()` halts first on an older one (docs/ENERGY.md section 5, P3a).
+- **Flash: DIO at 40 MHz,** as M5 ships the Core2. `[env:core2-qio]`
+  builds QIO at 80 MHz for its A/B (docs/ENERGY.md section 5, P2): the
+  QIO bootloader switches the flash to quad itself (its header, like the
+  app's, says DIO, which the ROM reads it with). It moves into
+  `[env:core2]` only once its device run passes, and whether a release
+  ships QIO is the user's call (measured: list scrolling with an MP3
+  +65 % at 240, MP3 decode -9 %; docs/ENERGY.md section 5, "Audit 2:
+  measured"). `[env:core2-dio80]` is its control (DIO with an 80 MHz
+  header: no change, the app already runs the flash at 80 MHz).
+  `[env:core2-psramfix]` builds the image with the PSRAM workaround kept
+  (P3a's "before").
 - **`tools/flash_guard.py`** checks the flash layout after every build: the
   app's room in its slot, the merged `firmware.factory.bin`, NVS above it
   ([Flash layout](#flash-layout)).

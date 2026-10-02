@@ -53,7 +53,9 @@ Where the numbers come from:
 - **Static instruction counts**: `RateConverter.cpp` compiled with the
   firmware's own compiler and flags (xtensa-esp32-elf-g++ 14.2.0, `-Os`,
   `-mfix-esp32-psram-cache-issue`), its inner loops counted in the
-  disassembly.
+  disassembly. (Since ENERGY.md section 5, P3a, the code PlatformIO
+  compiles is built without that flag: `tools/no_psram_fix.py`. The
+  counts here are from before.)
 - **The device: sections 6b, 10 and 10b** (2026-10-01). The CPU figures in
   section 3 ("The kernel and the CPU") are the static estimates made
   before them; section 6b measured the C kernel at two to three times
@@ -1324,9 +1326,12 @@ is ELF 3bdea34d (v0.5.0-dev+771f8ae-dirty).
   two copies it had (one shifted by a sample), and the window is taken
   from the one where it starts at an odd index. Rows past the table's
   middle are read backwards with `LDDEC`, hi*hi and lo*lo.
-- **Stores without `memw`.** The firmware is built with the PSRAM
+- **Stores without `memw`.** The firmware was built with the PSRAM
   workaround (`-mfix-esp32-psram-cache-issue`), which puts a `memw` after
-  every 8- and 16-bit store, 8 per input frame for the histories. The
+  every 8- and 16-bit store, 8 per input frame for the histories. (Since
+  ENERGY.md section 5, P3a, the code PlatformIO compiles drops it, so
+  plain C stores no longer pay it either; the inline stores stay, and
+  are what the measurements here ran.) The
   histories, the stage and the block are in internal RAM (RingOutput is
   kept under 4 KB for that), so they are written with plain `s16i` in
   inline assembly, and a stereo frame with one 32-bit store; the MAC16
