@@ -24,6 +24,13 @@
 // frames don't count against the feed's pass budget (at most 4,095 + 530
 // frames at a track's start, once).
 //
+// The generator's first word on its format since arm() goes straight to
+// the feed, frames held or not: everything it handed over before it is in
+// that format already. MP3's generator says its rate and channels only
+// after its first decoded frame, so a start after a seek (a skip of 1)
+// already holds frames when it does. (Taken for a change, that word used to
+// turn the end trim off for every seek and resume start.)
+//
 // A rate or channel change in the middle of a track (setRate()/
 // setChannels() with frames held) waits: the held frames go into the feed
 // at the old format first, then the change, and the end trim is off for
@@ -102,6 +109,8 @@ private:
   int pendingChannels_ = 0;
   bool pending_ = false;
   bool active_ = false;
+  bool firstWord_ = false;  // since arm(), no frame consumed after a rate was said
+  bool rateSaid_ = false;   // since arm()
   uint64_t skipped_ = 0;
   uint64_t dropped_ = 0;
 };

@@ -15,6 +15,8 @@ void TrimFeed::arm(uint32_t skip, uint32_t hold) {
   pendingChannels_ = 0;
   skipped_ = 0;
   dropped_ = 0;
+  firstWord_ = true;
+  rateSaid_ = false;
   updateActive();
 }
 
@@ -30,6 +32,7 @@ void TrimFeed::disarm() {
 }
 
 bool TrimFeed::consumeTrimmed(const int16_t sample[2]) {
+  if (rateSaid_) firstWord_ = false;  // the generator's first word is behind us
   if (pending_ && !applyPending()) return false;
   if (skip_ > 0) {
     --skip_;
@@ -81,6 +84,13 @@ bool TrimFeed::applyPending() {
 
 bool TrimFeed::setRate(int hz) {
   if (hz <= 0) return feed_.setRate(hz);  // (ignored there)
+  // The generator's first word: the format of everything since arm(),
+  // held frames included (MP3's comes after its first frame).
+  if (firstWord_ && !pending_) {
+    rateSaid_ = true;
+    lastHz_ = hz;
+    return feed_.setRate(hz);
+  }
   // A change with frames held, or another while one waits: after them.
   if (pending_ || (count_ > 0 && hz != lastHz_)) {
     lastHz_ = hz;
@@ -94,6 +104,11 @@ bool TrimFeed::setRate(int hz) {
 }
 
 void TrimFeed::setChannels(int channels) {
+  if (firstWord_ && !pending_) {  // as setRate()'s first word (MP3's comes with it)
+    lastChannels_ = channels;
+    feed_.setChannels(channels);
+    return;
+  }
   if (pending_ || (count_ > 0 && channels != lastChannels_)) {
     lastChannels_ = channels;
     pendingChannels_ = channels;

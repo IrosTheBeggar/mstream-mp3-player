@@ -9,9 +9,11 @@ sources, what happens when the listener changes something while the next
 track is already decoded, the portable pieces and the firmware wiring, and
 the host and device test plans.
 
-**Status: built, host-tested, not yet run on the device** (the commit
+**Status: built, host-tested and checked on the device** (the commit
 "Gapless playback", after the design at 5d7d6ba and its review; section 2a
-lists the review's amendments and what became of each). Sections 1 and 2
+lists the review's amendments and what became of each; section 11.7 the
+device run of 2026-10-02 and the two bugs it found, fixed in "Gapless:
+device fixes"). Sections 1 and 2
 are the design as it was reviewed; from section 3 on the text describes
 what was built. `G0` on the console turns all of it off (section 9): that
 is the v0.5.0 behaviour, for the A/B and as a safety valve.
@@ -24,8 +26,10 @@ Where the facts come from:
   (section 4) and listed in section 14. The LAME tag's layout and its CRC
   were also checked against 13 real LAME 3.99r files on the development
   PC (section 4.1).
-- **Nothing here is measured on the device yet.** Section 11 says what to
-  measure there and what would change the design.
+- **The device run** (section 11.7): 71 joins on six real albums with a
+  temporary probe on the speaker's buffers, the changes in a join's last
+  1.5 s, the sleep timer and a 20-minute run. Section 11 is the plan it
+  followed; what it didn't cover is listed at the end of 11.7.
 
 ## 1. What happened before (v0.5.0)
 
@@ -706,9 +710,18 @@ branch per frame.
 - **A rate or channel change in the middle**, with frames held (MP3's
   generator says a new rate once and ignores the answer): the change
   waits, the held frames go into the feed at the old format first, then
-  the change, and the end trim is off for the rest of that track. The
-  first `setRate()` of every track comes during its start skip, with
-  nothing held, and passes straight through.
+  the change, and the end trim is off for the rest of that track.
+- **The generator's first word is not a change.** The first
+  `setRate()`/`setChannels()` since `arm()` goes straight to the feed,
+  frames held or not: everything handed over before it is in that format
+  already. MP3's generator says its rate only after its first decoded
+  frame. From the top that is inside the start skip, with nothing held;
+  after a seek start (a skip of 1) a frame is already held. As built, that
+  first word was taken for a mid-track change and turned the end hold off,
+  so every seeked or resumed MP3 joined its next with its padding still
+  in (20-45 ms of codec silence). Found on the device (section 11.7),
+  fixed in "Gapless: device fixes", host-tested
+  (`test_a_seek_start_holds_the_end_when_the_rate_comes_after_a_frame`).
 - **Why a hold and not a count to the end.** A count needs the absolute
   sample index, and after a seek start (a resume point) that index isn't
   known. The byte comes from a TOC, and libmad drops the frame after a
@@ -1153,7 +1166,7 @@ streams).
 - a cut after a rate-change join goes back to A's end with its tail in;
 - a rewind across a table copy made in between gives the same bits.
 
-**test_trim_feed** (new, 9)
+**test_trim_feed** (new, 10)
 
 - exactly the kept frames come out, bit for bit, for seven skip/hold
   cases (a hold as long as the rest of the track, a skip longer than the
@@ -1162,6 +1175,9 @@ streams).
   converter);
 - a zero skip and hold is a passthrough (inactive);
 - a seek start skips only the lead and holds the end;
+- the same with the rate and channels said only after the first frame,
+  as MP3's generator does (the device fix of section 11.7), and from the
+  top with the word inside the start skip;
 - an early end flushes the hold;
 - a rate change in the middle releases the hold first (the same output as
   the feed alone given the same change), said again while it waits it
@@ -1428,12 +1444,195 @@ Run with a queue of `tone:silence@48000`, then `tone:silence`, then
 - 0 underruns.
 - The rate-change joins logged as resets.
 
+### 11.7 Checked on the device (2026-10-02)
+
+The run on the user's Core2 (COM3), with this branch's default build
+(QIO at 80 MHz) and, for the run only, a join probe. Everything played in
+silent mode `z` on the speaker; nothing went to the headphones. The probe
+and its hooks were removed afterwards, and every touched file was
+md5-checked against the commit before it.
+
+**The probe as built** (`Gp`, not the one sketched above). The speaker
+pump copied every buffer it queued (after the sleep fade, stereo) into a
+3 s PSRAM ring, with one record per buffer: the ring index of its first
+real frame, its real and total frames, the epoch, and how long
+M5.Speaker's queue had been dry before it. At every `trackSeq()` change
+the loop logged the entry and position on the pass before and on the pass
+of the change, then, 0.75 s after the new track's first frame (B), one
+line: frames inserted between the last real frame before B and B (fade
+frames plus the dry time), whether the ring indices run on (B − 1 then
+B), how far back N's tail is contiguous, the silence run around B (both
+channels within ±8), a click figure (the largest second difference
+within ±64 frames of B over the 99.9th percentile from 1.5 s before to
+0.75 s after), the onsets either side, the levels, and how long after the
+pump queued B the loop took the advance. `Gpl` listed the last 16
+records. A temporary log line also said how each source ended (`early`).
+
+**Two bugs found, fixed in "Gapless: device fixes":**
+
+1. **The end hold was off for every seek and resume start of an MP3.**
+   `TrimFeed` took the generator's first `setRate()` for a mid-track
+   change: MP3's generator says its rate after its first decoded frame,
+   and after a seek start (a skip of 1) that frame is already held. The
+   end trim was then turned off for the track (section 4.4). Seen as
+   Discovery's 1→2 and 2→3 joins keeping 711 and 1,381 frames of codec
+   silence with `G1`, the same as with `Gt0`. Fixed: the first word since
+   `arm()` goes straight through; a new host test fails without the fix.
+   After it, those two joins have no silence at all (below).
+2. **A FLAC started part of the way in counted its position from 0.**
+   `prepare()` set the FLAC seek but not `landedMs`, so `positionMs()`,
+   the frozen length and the resume point saved at the next pause were
+   all short by the start (a `qs174` showed `pos=0.2s`). A regression of
+   the gapless refactor (v0.5.0 set it); the user's own queue is FLAC
+   with a resume point. Fixed (one line); checked on the device: `qs100`
+   then 100,121 ms.
+
+**QIO.** The default build boots every time (eight flashes and resets in
+this run; `[ui] up` 4.4 s after the reset, against 4.6 s for the DIO
+v0.5.0 in an earlier session), and the converter's MAC16 self-test passes
+at boot. A scroll check with an MP3 playing, on the final build: the
+scroll lab's stress on the tracks view (`wv2`, `w1`, 10 s of 2,000 px/s
+flicks) ran at 24.5 fps while moving (p10 22.3, min 20.8), the ring never
+under 1,416 ms, 0 underruns.
+
+**Decode speed depends on the memory layout, not on gapless.** `b0`
+(One More Time, 20 s flat out): 4.8-4.9x realtime on the final build
+(FLAC: Stronger 4.7x), against 4.5x for the build before gapless
+(e29d26a's QIO env, flashed for the A/B). The probe's builds were slower
+(3.8x fresh, 2.8-3.0x once `Gp` had taken its 1.3 MB of PSRAM, with the
+player stopped and the probe idle): the same libmad code, its hot state
+(frame, synth, overlap: about 23 KB, PSRAM) at other addresses. So a
+bench or a `load=` figure is only comparable on the same image; the
+probe runs' `load=` (44-49 %) say nothing about gapless. Section 12.
+
+**Real album joins.** All six albums on the card, each join reached by a
+start point 10 s before the track's end (`qs`, so every N was a seek
+start and its end hold after a seek was checked too), with `G1`, with
+`G0` (v0.5.0's ends) and, for Discovery, `G1` with `Gt0` (no trimming):
+
+| Album | Files | Joins | `G1`: inserted, ring runs on | `G1` click figure max | `G0`: extra gap per join |
+|---|---|---|---|---|---|
+| Daft Punk, *Discovery* | MP3, LAME 3.97b | 13 | 0 frames, yes (13/13) | 1.59 | 49-96 ms |
+| Air, *Moon Safari* | MP3, LAME 3.92; one with no tag | 9 | 0, yes (9/9) | 2.75 | 32-89 ms |
+| Aphex Twin, *SAW 85-92* | MP3, LAME 3.98 | 12 | 0, yes (12/12) | 0.29 | 74-96 ms |
+| Kanye West, *Graduation* | FLAC | 12 | 0, yes (12/12) | 0.05 | 0-29 ms |
+| Emancipator, *Mountain of Memory* | FLAC | 13 | 0, yes (13/13) | 0.25 | 0-20 ms |
+| Kavinsky, *OutRun* | FLAC | 12 | 0, yes (12/12) | 0.67 | 48-84 ms |
+
+- **`G1`, 71 joins:** no frame inserted, no fade, no dry time at any of
+  them; N's tail contiguous in the speaker's buffers for the last 1.5 s
+  every time; one stream (no new epoch, no refill line).
+- **Continuous segues are seamless.** Where the albums run into each
+  other the silence run across B is 0 frames and the level the same either
+  side: Discovery 1→2 (−16.5 → −17.6 dBFS) and 2→3 (−23.2 → −23.9),
+  Graduation 4→5, 8→9 (−16.0 → −16.8) and 11→12, OutRun 1→2, 2→3 and 5→6.
+  The click figure stays at the music's own level (≤ 1.6; a step shows
+  as 5-10 or more). The two figures above 1 are quiet joins whose
+  baseline is near silence: Air 6→7 ends at about −60 dBFS (samples of
+  23 and 8) into digital silence, a step of 23 LSB.
+- **The trimming lands on the music's start.** With `Gt0` the untrimmed
+  joined track's first sample above 1,024 came at exactly +1,105 frames
+  after B on Discovery 1→2 (+1,106 on 2→3); with `G1` at +0 and +1. A
+  track that starts on a hard attack (split from a continuous CD) thus
+  starts within a frame of where LAME's delay plus 529 says. Every other
+  join moved by exactly 1,105 between `Gt0` and `G1`. This supports the
+  lead (1) + 529 constant (section 12) without the made-up files of
+  11.1; the end hold is confirmed by the segues above (a wrong decoder
+  delay would leave a hole of that many samples in a continuous wave).
+- **`Gt0`**, the trimming's share: 22-65 ms per Discovery join.
+- **`G0`** (v0.5.0), measured for the first time: the extra gap per join
+  is the codec silence (for these LAME files the Info frame, the delay
+  and 529 at the start, the padding less 529 at the end: about 75-95 ms)
+  plus fades and the time M5.Speaker ran dry. For fast opens (MP3, the
+  small FLACs) M5.Speaker's queue (3 × 23 ms) usually covers the drain,
+  the request and the open, so FLAC albums lost only 0-29 ms; Kavinsky's
+  FLACs ran it dry for 48-84 ms. A buffer list of one `G0` end shows the
+  last short buffer (257 frames, no fade: the music had ended on digital
+  silence) and the next track's first 23 ms later.
+- **The decode-ahead's open** came with 1,396-1,456 ms of N left in the
+  ring and took 13-16 ms (MP3), 10-12 ms (Graduation, Mountain of
+  Memory) and 17-19 ms (OutRun). No FLAC on the card has metadata over
+  256 KB, so 11.3's big-picture case wasn't met.
+
+**The heard moment.** The loop took the advance 0.2-40 ms (median 10)
+after the outputs read B's first frame, and 3-30 ms (median 18) after
+the pump queued it: within a loop pass or two, never before. On the pass
+that took it the entry and the position changed together: the pass
+before showed N at its exact end, the pass of the change the new entry
+at 0-40 ms. (Checked at the controller, which the UI reads in the same
+pass; no screenshots were taken.)
+
+**Changes in the last 1.5 s** (Discovery 1→2; the console command sent
+a measured time before the join; the device's own log says when it cut):
+
+| Change | What happened |
+|---|---|
+| `qn4` (Play next OutRun) | cut 909 ms before the join, 1.7 ms after the word; OutRun's first track decoded ahead and joined: 0 inserted, N's tail contiguous |
+| `qr` the next entry | cut 862 ms before, 1.7 ms after the word; Digital Love joined, 0 inserted, 0 silence |
+| `n` | a request: new epoch, the 64-frame crossfade, Aerodynamic from 0 |
+| `p` | a request: N from its start (more than 3 s in), crossfade |
+| `G0` | cut 885 ms before; then v0.5.0's end (a start with fades) |
+| `Tt` (End of track) | cut 862 ms before; paused at the boundary, the next entry cued at 0:00; the speaker's last buffer read the ring up to J exactly (`Gpl`), nothing of N+1 |
+| `Tt` early | no word at all (`G`: nothing follows); N drained, paused at its end, nothing of N+1 decoded |
+| pause 1 s before, resume 10 s later | the join gapless (0 inserted, 0 silence) |
+| The race, `Tt` × 5 | cut 26, 3, 3 and 3 ms before the join (paused there); once the join was heard first (14 ms of N+1 read): paused at once by the boundary check, the next entry cued, `paused at the boundary` counted |
+| The race, `qr` × 5 | cut 49, 55, 3 and 3 ms before; once heard first: then the removal of the current entry (a request) |
+
+- No cut was ever too late (`too late 0`, `retried 0`): at 3 ms before
+  the join the cut still succeeded, so the Crossed window is under that.
+  The cut took 1.7-2.1 ms from the word.
+- Cuts with 3 ms of N left leave too little time for the new next track's
+  open (13 ms): the ring ran dry once for 13.7 ms (and a fade), the
+  documented v0.5.0-like gap at that one join (section 12).
+- Cosmetic: `G`'s "last cut N us after its word" measures from the last
+  `setNext()`, so a cut caused by `G0` (no new word) shows the time since
+  an older word (5.8 s here).
+
+**The sleep timer's End of track** paused exactly at the boundary in every
+case above; its fade ran over what was left of N and the pause was
+confirmed silent.
+
+**A 20-minute run** (Discovery from its first track, `G1`, silent mode,
+with the probe): 240 stats lines, 0 new underruns (the counter stayed
+at the 4 the race cases had caused), the ring 1,416-1,458 ms throughout,
+one `[audio] refill` (the album's start) and none at the four joins, all
+four joins 0 inserted with the ring running on (1→2 and 2→3 with no
+silence at all), the decode stack at least 13,776 B free, the internal
+heap's minimum 57 K.
+
+**Before the shifted race run** a first one landed every command 150-250
+ms late (after the join: the serial path's delay), so all ten were edits
+after a heard join: End of track then applied to the joined track, and
+the removal hit the now-current entry (a request). Both as designed.
+
+**Memory and the stack** across all of the above (292 stats lines while
+playing): the decode task's stack never had less than 13,776 B free (of
+16 KB; earlier builds' logs show 13,652 at least), the internal heap's
+minimum 55-57 K, `[heap] playing` 62 K free with a 55 K largest block.
+
+**Not run:** the made-up calibration files of 11.1 (no `lame`/`flac` on
+this PC, and the card can't be written while it is in the Core2: the
+real-music onset above stands in for the burst); Bluetooth (11.6: the
+headphones weren't linked, and silent mode keeps the speaker); a missing
+next file (it needs a file renamed on the card); the hold's cost by
+`b<n>` and the 160 MHz album; screenshots of the switch.
+
 ## 12. Risks and open questions
 
-- **The 529 and the lead are from sources and from reading the code, not
-  from this decoder's output.** ESP8266Audio's libmad is a modified fork.
-  Section 11.1's impulse file decides the constant; until it passes, `G1`
-  can still decode ahead with `Gt0`.
+- **The 529 and the lead are from sources and from reading the code; the
+  device supports them with real music, not yet with made-up files.**
+  ESP8266Audio's libmad is a modified fork. On the device (section 11.7)
+  untrimmed tracks that start on a hard attack put it at exactly +1,105
+  (+1,106) frames, and the trimmed continuous segues of Discovery and
+  OutRun join with no hole and no step. Section 11.1's burst files would
+  pin it to the sample; until then `Gt0` stays the fallback.
+- **MP3 decode speed swings with the memory layout** (section 11.7: 2.8x
+  to 4.9x realtime for the same file on images that differ only in
+  unrelated code and PSRAM allocations). libmad's hot state lives in
+  PSRAM and goes through the same cache as the code. Not gapless's doing,
+  but it makes benches fragile; pinning that state (one PSRAM block
+  allocated at boot, or internal RAM if ~23 KB can be spared) would make
+  it deterministic. For the user to decide.
 - **The last-frame fix (`GuardedSource`) changes every MP3's end, also
   with `G0`.** It adds up to 26 ms of real audio that was lost before.
   `G0` turns it off too, to keep the A/B honest.

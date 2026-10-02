@@ -85,6 +85,7 @@ struct Gen {
   uint32_t hz2 = 0;
   size_t changeAt = 0;
   bool early = false;
+  size_t rateAfter = 0;  // > 0: the rate (and channels) said only before this frame, as MP3's generator does
 };
 
 Frames run(const Frames& src, uint32_t skip, uint32_t hold, const Gen& g, uint32_t seed) {
@@ -95,14 +96,20 @@ Frames run(const Frames& src, uint32_t skip, uint32_t hold, const Gen& g, uint32
   gTrim.setHoldBuffer(gHold, TrimFeed::kMaxHold);
   gTrim.arm(skip, hold);
   gTrim.setChannels(2);
-  gTrim.setRate(static_cast<int>(g.hz));
+  if (g.rateAfter == 0) gTrim.setRate(static_cast<int>(g.hz));
   Frames out;
   const size_t frames = src.size() / 2;
   size_t next = 0;
   bool changed = false;
+  bool said = false;
   while (next < frames) {
     gFeed.setBudget(kPass);
     while (next < frames) {
+      if (g.rateAfter && next == g.rateAfter && !said) {  // MP3's first word, after its first frame
+        gTrim.setRate(static_cast<int>(g.hz));
+        gTrim.setChannels(2);
+        said = true;
+      }
       if (g.hz2 && next == g.changeAt && !changed) {  // said once, before the frame (MP3's GetOneSample())
         gTrim.setRate(static_cast<int>(g.hz2));
         changed = true;
@@ -182,6 +189,23 @@ void test_a_seek_start_skips_only_the_lead_and_holds_the_end() {
   assertSame(slice(src, 1, 15000 - 779), run(src, 1, 779, g, 8));
   TEST_ASSERT_EQUAL_UINT64(1, gTrim.skipped());
   TEST_ASSERT_EQUAL_UINT64(779, gTrim.dropped());
+}
+
+// The same as MP3's generator does it: its rate and channels said only
+// after its first frame, when a seek start's one-frame skip is already
+// behind it and a frame is held. That first word is the format of the
+// frames before it, not a change: the end hold stays (it used to be turned
+// off, so every resumed or seeked MP3 joined its next with the padding).
+void test_a_seek_start_holds_the_end_when_the_rate_comes_after_a_frame() {
+  const Frames src = noise(15000, 15);
+  Gen g;
+  g.rateAfter = 2;
+  assertSame(slice(src, 1, 15000 - 779), run(src, 1, 779, g, 16));
+  TEST_ASSERT_EQUAL_UINT64(1, gTrim.skipped());
+  TEST_ASSERT_EQUAL_UINT64(779, gTrim.dropped());
+  // From the top the word comes inside the start skip: the same.
+  g.rateAfter = 600;
+  assertSame(slice(src, 1105, 15000 - 779), run(src, 1105, 779, g, 17));
 }
 
 // An early end (a decode error, the file cut short): the held frames are
@@ -282,6 +306,7 @@ int main(int, char**) {
   RUN_TEST(test_the_trim_is_at_the_source_rate);
   RUN_TEST(test_zero_skip_and_hold_is_a_passthrough);
   RUN_TEST(test_a_seek_start_skips_only_the_lead_and_holds_the_end);
+  RUN_TEST(test_a_seek_start_holds_the_end_when_the_rate_comes_after_a_frame);
   RUN_TEST(test_an_early_end_flushes_the_hold);
   RUN_TEST(test_a_rate_change_mid_track_releases_the_hold);
   RUN_TEST(test_a_change_said_again_still_waits);

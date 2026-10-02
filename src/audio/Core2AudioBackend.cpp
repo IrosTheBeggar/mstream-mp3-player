@@ -879,6 +879,7 @@ bool Core2AudioBackend::prepare(const std::string& path, uint32_t startMs, uint3
       Serial.printf("[audio] FLAC: %s asked: no STREAMINFO found to go by: from 0:00\n", asked);
     } else {
       p->flacSeekMs = landed;
+      p->landedMs = landed;  // positionMs() and the resume point count from there
       p->fromTop = false;
     }
   }
