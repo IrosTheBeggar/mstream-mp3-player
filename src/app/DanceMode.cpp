@@ -494,11 +494,15 @@ void DanceMode::render(uint32_t nowMs) {
       const float bpm = tracker_.bpm();
       step = dance::danceStep(beats, bpm, fold_.apply(bpm));
     }
+    // Danced only while the tracker is locked: an unlocked grid is a guess
+    // (its confidence may sit just under the lock for a while), and the
+    // dance weight's scale is the locked one (dance::danceWeight).
+    const bool lockedBeat = beat && tracker_.locked();
     if (isCrab) {
-      crabPose = crab_.update(step.phi, step.odd, tracker_.confidence(), beat, dt);
+      crabPose = crab_.update(step.phi, step.odd, tracker_.confidence(), lockedBeat, dt);
       weight = crab_.weight();
     } else {
-      pose = dancer_.update(step.phi, step.odd, tracker_.confidence(), beat, dt);
+      pose = dancer_.update(step.phi, step.odd, tracker_.confidence(), lockedBeat, dt);
       weight = dancer_.weight();
     }
     dancing = weight > dancerate::kIdleWeight;

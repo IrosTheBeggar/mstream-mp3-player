@@ -54,7 +54,16 @@ Why this split:
 - **One tracker.** The tempo, PLL and confidence code stays the one that
   was tuned and measured on the device (MASCOT-POC.md: lock in 2.5-2.9 s,
   median error 2.4-2.8 ms on click tracks). A full Rust port would be two
-  trackers to keep in step.
+  trackers to keep in step. (The October 2026 rework of the tracker's
+  confidence, lock and onset start, and its review, BEAT-TRACKER-EVAL.md,
+  are on the Core2's side of this split: the front end, the `@h` line and
+  protocol 1 are unchanged, and `feedHop()` still gives what `process()`
+  gives, bit for bit, on all 275 harness cases: the 77 library tracks, the
+  mid-song and join suites, and the 53 synthetic cases. On the device,
+  `usb_viz.py --measure` with the reworked tracker locks the click tracks
+  at the same times as before, 2.50-2.81 s, with a median error of
+  2.5-3.6 ms: BEAT-TRACKER-EVAL.md, "Checked on the device". The tap's
+  lead-in silence added then is on the Core2's own tap, not in host mode.)
 - **Little to port.** Step 1 is about 80 lines with no tables.
 - **Little to send.** Two floats 86 times a second, about 3.5 KB/s with
   the rest, a third of 115200 baud. Raw decimated audio would be 11 KB/s

@@ -260,7 +260,8 @@ void test_tap_concurrent_writer_and_reader() {
     lostSeen = lost;
     if (r.trackFrame != expected) inOrder = false;
     for (uint32_t i = 0; i < r.frames; ++i) {
-      if (r.samples[i] != static_cast<int16_t>((r.trackFrame + i) & 0x7FFF)) samplesOk = false;
+      const uint32_t f = r.trackFrame + i;  // (the lead-in is silence)
+      if (r.samples[i] != static_cast<int16_t>(f < TapReader::kLeadInFrames ? 0 : f & 0x7FFF)) samplesOk = false;
     }
     expected = r.trackFrame + r.frames;
   };
@@ -308,6 +309,50 @@ void test_reader_hands_over_real_audio_in_runs() {
   TEST_ASSERT_EQUAL_UINT32(0, reader.lostFrames());
   // Nothing new: nothing handed over.
   TEST_ASSERT_EQUAL_UINT32(0, reader.poll(scratch, 100, [](const TapReader::Run&) {}));
+}
+
+// A skip through the real chain (PcmRing -> DeclickReader -> AudioTap ->
+// TapReader): the Declicker crossfades the old track's last frame (here
+// full scale) into the new one's first 64 frames. The reader hands those over
+// as silence and the rest of the new track exactly; a run that starts inside
+// the lead-in is silenced only up to its end, and later frames never are.
+void test_reader_silences_the_crossfade_after_a_skip() {
+  std::vector<int16_t> ringBuf(1024 * 2);
+  PcmRing ring(ringBuf.data(), 1024);
+  ring.setConsumer(kBt);
+  DeclickReader declick(kBt);
+  declick.bind(ring);
+  std::vector<int16_t> tapBuf(4096);
+  AudioTap tap(tapBuf.data(), 4096);
+  TapReader reader;
+  reader.attach(&tap, kRate);
+  std::vector<int16_t> loud(2 * 256, 30000);  // the old track, ending at full scale
+  ring.write(loud.data(), 256);
+  int16_t out[2 * 512];
+  DeclickReader::Result r = declick.fill(out, 256, true);
+  tap.write(out, 256, r.read, r.epoch, r.position, 0);
+  ring.discardAll();  // the skip
+  auto next = stereoRamp(1000, 300);  // the new track: mono 1001, 1002, ...
+  ring.write(next.data(), 300);
+  for (uint32_t got = 0; got < 300; got += 40) {  // in small pulls: runs start inside the lead-in
+    r = declick.fill(out, 40, true);
+    tap.write(out, 40, r.read, r.epoch, r.position, 0);
+  }
+  int16_t raw[300];
+  TEST_ASSERT_TRUE(tap.read(256, raw, 64));
+  TEST_ASSERT_TRUE(raw[0] > 15000);  // what the tap holds: the old track's frame, fading under the new one
+  std::vector<int16_t> heard;
+  bool order = true;
+  int16_t scratch[32];
+  reader.poll(scratch, 32, [&](const TapReader::Run& run) {
+    if (run.epoch != 1) return;
+    if (run.trackFrame != heard.size()) order = false;
+    heard.insert(heard.end(), run.samples, run.samples + run.frames);
+  });
+  TEST_ASSERT_TRUE(order);
+  TEST_ASSERT_EQUAL_UINT32(300, heard.size());
+  for (uint32_t i = 0; i < TapReader::kLeadInFrames; ++i) TEST_ASSERT_EQUAL_INT16(0, heard[i]);
+  for (uint32_t i = TapReader::kLeadInFrames; i < 300; ++i) TEST_ASSERT_EQUAL_INT16(1001 + i, heard[i]);
 }
 
 void test_reader_counts_what_it_lost() {
@@ -401,6 +446,7 @@ int main(int, char**) {
   RUN_TEST(test_tap_forgets_old_segments);
   RUN_TEST(test_tap_concurrent_writer_and_reader);
   RUN_TEST(test_reader_hands_over_real_audio_in_runs);
+  RUN_TEST(test_reader_silences_the_crossfade_after_a_skip);
   RUN_TEST(test_reader_counts_what_it_lost);
   RUN_TEST(test_audible_clock_smooths_bursts);
   RUN_TEST(test_audible_clock_stops_at_the_last_frame);

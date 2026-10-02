@@ -10,15 +10,17 @@
 // Finds the beat in mono audio as it plays, for the dancing figure: tempo,
 // where the beats fall, and how sure it is. Portable, allocation only in
 // begin() (through a hook, so the firmware can use PSRAM), no locks; about
-// 13 ms per second of audio on the Core2, 0.2 ms on a laptop.
+// 13 ms per second of audio on the Core2, 0.15 ms on a laptop.
 //
 //   1. Onset signal: the audio is box-averaged down 8x and split at 150 Hz
 //      (two biquads) into a low band (kick drums, bass) and the rest; each
 //      band's energy is summed per hop of 512 frames (86 Hz at 44.1 kHz):
 //      HopFrontEnd, or the same numbers from a computer (feedHop()).
 //      The onset strength is the rise in log energy from one hop to the next
-//      (low band, plus half the mid band's, plus a little of the low band's
-//      linear rise so the loudest hit stays the beat).
+//      (low band plus mid band, plus a little of the low band's linear rise
+//      so the loudest hit stays the beat). The levels and the onset's mean
+//      are true means until their leaky ones have settled, so the first
+//      seconds after a reset aren't biased.
 //   2. Tempo: a running autocorrelation of the onset signal (~3 s memory),
 //      scored at each candidate tempo (60-200 BPM) at its lag and the next 7
 //      multiples (so 4:3 and 3:2 relatives lose), weighted towards 120 BPM,
@@ -29,11 +31,15 @@
 //   4. A PLL moves each predicted beat by the centroid of the onsets in a
 //      window around it (phase and period gains), the period clamped to
 //      +-4 % of the tempo it was acquired at. A tempo that keeps scoring
-//      clearly better than the one tracked re-acquires.
-//   5. Confidence: how far the onsets on the beat stand out from those at an
-//      average phase (noise: about 1), how steady the PLL's corrections
-//      are, and how clear the tempo peak is. Locked uses hysteresis (on
-//      above 0.55 from the second beat, off below 0.3).
+//      clearly better than the one tracked re-acquires, and so does a grid
+//      whose confidence stays near zero for 12 beats.
+//   5. Confidence, from a leaky histogram of the onsets by phase of the
+//      beat: how far the grid's phase dominates the strongest other quarter
+//      phase, the share of recent PLL beats with an onset in their window,
+//      and how far the beat's onsets stand out from an average phase (noise:
+//      about 1). Locked uses hysteresis: on at 0.35 or more for two beats
+//      in a row (from the second beat after acquiring), off below 0.12.
+//      factors() shows the three.
 //
 // Time is counted in the caller's frames: reset() gives the frame index of
 // the next sample, and the grid comes back in those units (the firmware uses
@@ -112,6 +118,19 @@ public:
   // Last tempo estimate (the autocorrelation's pick) and its clarity, for logs.
   float estimatedBpm() const { return estBpm_; }
   float tempoClarity() const { return clarity_; }
+  // The confidence's factors as they stand (each 0..1), for logs and the
+  // evaluation harness.
+  struct Factors {
+    float dominance = 0.0f;  // the beat phase's onsets over the strongest quarter phase's (raw ratio)
+    float hitRate = 0.0f;    // share of recent PLL beats whose window held the beat's onsets
+    float pulse = 0.0f;      // the beat phase's onsets over an average phase's (raw ratio, noise ~1)
+    float steady = 0.0f;     // RMS PLL correction, in periods (raw; for logs)
+  };
+  Factors factors() const;
+  // Onset values (and beats) the last acquisition went through: the fold,
+  // the centroid and the seeds. Bounded by its 3 s window, however long
+  // since reset(); for the host test.
+  uint32_t acquireReads() const { return acquireReads_; }
   const Config& config() const { return cfg_; }
 
   // The onset signal's delay: an onset in the audio shows up this many frames
@@ -134,6 +153,9 @@ private:
   bool acquire(double periodHops);
   void pll(double t, float onset);
   void closeBeat();
+  float binsAt(const float* hist, int k) const;
+  void seedBeatStats(double phase, double periodHops, uint32_t first);
+  bool isHit(float inWindow) const;
   void updateConfidence(double t, float onset);
   float rawConfidence() const;
   float onsetAt(uint32_t hop) const { return hist_[hop & histMask_]; }
@@ -185,10 +207,13 @@ private:
   // Confidence.
   static constexpr int kSalienceBins = 16;
   float phaseHist_[kSalienceBins] = {};  // leaky onset energy per phase of the beat
+  float hitRate_ = 0.0f;                 // leaky share of PLL beats with an onset
+  uint32_t acquireReads_ = 0;
   float jitter_ = 0.0f;        // leaky mean of (correction / period)^2
   float conf_ = 0.0f;
   bool locked_ = false;
   int beatsSinceAcquire_ = 0;
+  int beatsAbove_ = 0;          // consecutive beats at kLockOn or more
   int weakBeats_ = 0;          // consecutive beats at low confidence
   int32_t lockAt_ = -1;
 };
