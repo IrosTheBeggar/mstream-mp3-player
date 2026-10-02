@@ -1116,6 +1116,75 @@ void test_resume_point_at_boot() {
   }
 }
 
+// The resume point's anchor (docs/SEEK.md section 5.2): saved with it;
+// saved again once when only its sample moves (the pause's fade reads 64
+// frames more: 1.5 ms, under the 250 ms slack), not again after; gone with
+// the point; flushNow() writes the newest.
+QueueSaver::Transport anchoredAt(uint32_t ms, uint64_t sample) {
+  QueueSaver::Transport t = pausedAt(ms, 240000);
+  t.anchor.kind = ResumeAnchor::Kind::Mp3;
+  t.anchor.exact = true;
+  t.anchor.rate = 44100;
+  t.anchor.sample = sample;
+  t.anchor.fileSize = 9000000;
+  t.anchor.prerollByte = 1000000;
+  t.anchor.frameByte = 1003000;
+  t.anchor.skip = static_cast<uint32_t>(sample % 1152);
+  t.anchor.frameHash = 0x1234;
+  return t;
+}
+
+void test_resume_anchor_saved_with_the_point() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  fillLong(q);
+  saver.loaded(7, false, 0);
+  // The pause: saved with its anchor in the same pass.
+  saver.noteTransport(anchoredAt(83000, 3660300));
+  saver.loop(100);
+  TEST_ASSERT_EQUAL_INT(1, st.resumes);
+  TEST_ASSERT_TRUE(st.resume.anchor == anchoredAt(83000, 3660300).anchor);
+  // The fade: 64 frames more, the same ms: saved again, once.
+  saver.noteTransport(anchoredAt(83001, 3660364));
+  for (uint32_t t = 200; t < 3000; t += 100) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(2, st.resumes);
+  TEST_ASSERT_EQUAL_UINT64(3660364, st.resume.anchor.sample);
+  TEST_ASSERT_EQUAL_UINT32(83001, st.resume.positionMs);
+  // An anchor that goes (gapless trimming turned off while paused): saved
+  // without one.
+  saver.noteTransport(pausedAt(83001, 240000));
+  saver.loop(3100);
+  TEST_ASSERT_EQUAL_INT(3, st.resumes);
+  TEST_ASSERT_FALSE(st.resume.anchor.valid());
+  // It plays: the point goes, anchor and all.
+  saver.noteTransport(QueueSaver::Transport{});
+  saver.loop(3200);
+  TEST_ASSERT_EQUAL_INT(4, st.resumes);
+  TEST_ASSERT_FALSE(st.resume.valid);
+  TEST_ASSERT_FALSE(saver.resume().anchor.valid());
+  // Paused again, then the power-off's flush: the newest.
+  saver.noteTransport(anchoredAt(90000, 3969000));
+  saver.loop(3300);
+  saver.noteTransport(anchoredAt(90001, 3969064));
+  TEST_ASSERT_TRUE(saver.flushNow(3310));
+  TEST_ASSERT_EQUAL_INT(6, st.resumes);
+  TEST_ASSERT_EQUAL_UINT64(3969064, st.resume.anchor.sample);
+  // A boot that restored it: the player's start point carries the same
+  // anchor: nothing written; resumeApplies() doesn't look at the anchor.
+  MemStore st2;
+  QueueSaver boot(st2, q, c);
+  boot.loaded(7, false, 0);
+  boot.loadedResume(st.resume);
+  TEST_ASSERT_TRUE(QueueSaver::resumeApplies(st.resume, 7, 5, true, pathOf(c, q.currentTrack()).c_str()));
+  boot.noteTransport(anchoredAt(90001, 3969064));
+  for (uint32_t t = 0; t < 2000; t += 100) boot.loop(t);
+  TEST_ASSERT_EQUAL_INT(0, st2.resumes);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -1152,5 +1221,6 @@ int main(int, char**) {
   RUN_TEST(test_resume_point_waits_for_the_file_and_follows_its_entry);
   RUN_TEST(test_flush_now_saves_the_resume_point);
   RUN_TEST(test_resume_point_at_boot);
+  RUN_TEST(test_resume_anchor_saved_with_the_point);
   return UNITY_END();
 }

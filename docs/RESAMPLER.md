@@ -708,13 +708,18 @@ too.
 | `progress::estimateDurationMs()` | frames at `shared_.rate` | ring frames at 44100 (bytes per ring frame is exact) |
 | `noteRingFill` / `noteStartProgress` / `RefillPacer` rate | `out_->rate()` | 44100 |
 | MP3 resume byte, FLAC seek sample | source rate (STREAMINFO) | unchanged: the decoder's own units |
+| a resume anchor's sample (SEEK.md section 5.1) | - | the run's base + floor(ring frames x rate / 44100): exact at 44.1 kHz, within one source sample otherwise |
 | a built-in tone's length at a resume start | 44100 x seconds | the tone's own rate x seconds, as source frames |
 | `description()` | "FLAC, 96000 Hz" | unchanged; the start logs "[audio] 96000 Hz -> 44100 Hz (halfband /2, then 147/160)" |
 | `AudioShared::rate` | the source rate, published before a track's first frame | gone: `AudioShared::kRingRate` (44100), a constant; `SpeakerSink` plays at it, `sampleRate()` returns it |
 
 Because output frame n sits exactly at source time n/44100, `positionMs()`
 is exact from the first frame. A resume start lands exactly where the
-decoder put it. With gapless joins the heard track's numbers are kept
+decoder put it, and a pause's resume anchor names the source sample the
+outputs read next: ring frame n of a track is its source sample
+floor(n x rate / 44100) past where it started (`SeekIndex::sampleAt()`,
+host-tested), so a 48 kHz file resumes within one source sample (21 us),
+a 44.1 kHz one on the very sample. With gapless joins the heard track's numbers are kept
 apart from the decoding track's (GAPLESS.md section 3.5): positions count
 from the heard track's first ring frame, held at its exact end until the
 join is heard, and a track's length becomes exact (to the ring frame) at

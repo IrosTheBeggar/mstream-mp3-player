@@ -15,6 +15,7 @@
 #include "PcmRing.h"
 #include "RateConverter.h"
 #include "RingFeed.h"
+#include "FrameCursor.h"
 #include "TrimFeed.h"
 
 namespace {
@@ -300,6 +301,225 @@ void test_the_hold_is_clamped_to_its_buffer() {
   (void)src;
 }
 
+// ---- a planned start: the landing phase (docs/SEEK.md section 4.2) ----
+
+namespace {
+
+// The cursor a scripted generator moves: the frame of the sample it offers.
+class ScriptCursor : public FrameCursor {
+public:
+  bool at(uint32_t* frameByte, uint32_t* sampleInFrame) const override {
+    if (!valid) return false;
+    *frameByte = byte;
+    *sampleInFrame = index;
+    return true;
+  }
+  bool valid = false;
+  uint32_t byte = 0;
+  uint32_t index = 0;
+};
+
+// The frames a decoder outputs, in order (a lost one is simply not there).
+struct Seg {
+  uint32_t byte;
+  uint32_t n;
+};
+
+constexpr uint32_t kSpf = 1152;
+
+// Frames of kSpf samples at bytes 1000, 1400, ... (`count` of them).
+std::vector<Seg> frames(uint32_t count, uint32_t first = 1000, uint32_t step = 400) {
+  std::vector<Seg> v;
+  for (uint32_t i = 0; i < count; ++i) v.push_back({first + i * step, kSpf});
+  return v;
+}
+
+// The generator's lead {0,0} (no frame yet), then every frame's samples
+// (`src`, in order), its rate said before the first frame's first sample
+// (MP3's first word), through the trim armed by armAt(); refused samples
+// offered again; the end natural. What the reader got.
+Frames runLanding(const std::vector<Seg>& segs, const Frames& src, uint32_t landByte, uint32_t skip,
+                  uint32_t hold, uint32_t seed, ScriptCursor& cur) {
+  std::mt19937 rng(seed);
+  gRing.discardAll();
+  gRing.setConsumer(kReader);
+  gFeed.reset(240, true);
+  gTrim.setHoldBuffer(gHold, TrimFeed::kMaxHold);
+  gTrim.armAt(&cur, landByte, 400, kSpf, skip, hold);
+  gTrim.setChannels(2);  // (begin()'s SetChannels(2))
+  // Where each offered sample comes from: -1 the lead.
+  std::vector<std::pair<int, uint32_t>> order;
+  order.push_back({-1, 0});
+  for (size_t s = 0; s < segs.size(); ++s) {
+    for (uint32_t i = 0; i < segs[s].n; ++i) order.push_back({static_cast<int>(s), i});
+  }
+  Frames out;
+  size_t next = 0, at = 0;  // offered, and the sample index into src
+  bool said = false;
+  const int16_t lead[2] = {0, 0};
+  while (next < order.size()) {
+    gFeed.setBudget(kPass);
+    while (next < order.size()) {
+      const auto& o = order[next];
+      cur.valid = o.first >= 0;
+      if (cur.valid) {
+        cur.byte = segs[static_cast<size_t>(o.first)].byte;
+        cur.index = o.second;
+        if (!said) {
+          gTrim.setRate(44100);
+          gTrim.setChannels(2);
+          said = true;
+        }
+      }
+      if (!gTrim.consume(cur.valid ? &src[2 * at] : lead)) break;
+      if (cur.valid) ++at;
+      ++next;
+    }
+    gFeed.commit();
+    drain(out, rng() % 3 == 0 ? 0 : rng() % 700);
+  }
+  gFeed.setBudget(kPass);
+  while (!gTrim.end(false)) {
+    gFeed.commit();
+    drain(out, rng() % 700 + 1);
+    gFeed.setBudget(kPass);
+  }
+  while (!gFeed.finish()) drain(out, rng() % 700 + 1);
+  drain(out, kRingCap);
+  return out;
+}
+
+}  // namespace
+
+// The lead and the preroll frames are dropped; the landing frame's sample
+// `skip` is the first kept; the end held as any start's (the padding
+// dropped); kept() counts every sample taken after the skip.
+void test_a_planned_start_lands_on_its_frame() {
+  const std::vector<Seg> segs = frames(12);  // 3 preroll frames, the landing frame at 2200, 8 after
+  const Frames src = noise(12 * kSpf, 21);
+  for (uint32_t seed = 0; seed < 4; ++seed) {
+    ScriptCursor cur;
+    const Frames got = runLanding(segs, src, 2200, 517, 779, seed, cur);
+    assertSame(slice(src, 3 * kSpf + 517, 12 * kSpf - 779), got);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(TrimFeed::Landing::Exact), static_cast<int>(gTrim.landing()));
+    TEST_ASSERT_EQUAL_UINT32(0, gTrim.lateBy());
+    TEST_ASSERT_EQUAL_UINT64(1 + 3 * kSpf + 517, gTrim.skipped());  // the lead, the preroll, the skip
+    TEST_ASSERT_EQUAL_UINT64(779, gTrim.dropped());
+    TEST_ASSERT_EQUAL_UINT32(12 * kSpf - 3 * kSpf - 517, gTrim.kept());
+  }
+}
+
+// A skip past the landing frame (the run index's entries are every 4th
+// frame): it runs on into the frames after it.
+void test_a_skip_past_the_landing_frame() {
+  const std::vector<Seg> segs = frames(12);
+  const Frames src = noise(12 * kSpf, 22);
+  ScriptCursor cur;
+  const Frames got = runLanding(segs, src, 2200, 3 * kSpf + 100, 0, 5, cur);
+  assertSame(slice(src, 6 * kSpf + 100, 12 * kSpf), got);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(TrimFeed::Landing::Exact), static_cast<int>(gTrim.landing()));
+}
+
+// The landing frame lost (bad data, a reservoir the preroll didn't
+// cover): the cursor says the frame after it. A skip under a frame: the
+// start lands there, lateBy() later; a skip of a frame or more: still
+// exactly there.
+void test_a_lost_landing_frame_lands_on_the_next() {
+  std::vector<Seg> segs = frames(12);
+  segs.erase(segs.begin() + 3);  // 2200 never comes out
+  const Frames src = noise(11 * kSpf, 23);
+  ScriptCursor cur;
+  Frames got = runLanding(segs, src, 2200, 517, 0, 6, cur);
+  assertSame(slice(src, 3 * kSpf, 11 * kSpf), got);  // from the next frame's first sample
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(TrimFeed::Landing::NextFrame), static_cast<int>(gTrim.landing()));
+  TEST_ASSERT_EQUAL_UINT32(kSpf - 517, gTrim.lateBy());
+  got = runLanding(segs, src, 2200, kSpf + 40, 0, 7, cur);
+  assertSame(slice(src, 3 * kSpf + 40, 11 * kSpf), got);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(TrimFeed::Landing::NextFrame), static_cast<int>(gTrim.landing()));
+  TEST_ASSERT_EQUAL_UINT32(0, gTrim.lateBy());
+}
+
+// A resync elsewhere (junk, the library's offset quirk): it lands where
+// the cursor is, inexact, nothing skipped.
+void test_a_resync_elsewhere_lands_inexact() {
+  std::vector<Seg> segs = frames(12);
+  segs.erase(segs.begin() + 3, segs.begin() + 5);  // 2200 and 2600 lost: 3000 next
+  const Frames src = noise(10 * kSpf, 24);
+  ScriptCursor cur;
+  const Frames got = runLanding(segs, src, 2200, 517, 0, 8, cur);
+  assertSame(slice(src, 3 * kSpf, 10 * kSpf), got);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(TrimFeed::Landing::Elsewhere), static_cast<int>(gTrim.landing()));
+  TEST_ASSERT_EQUAL_UINT32(0, gTrim.lateBy());
+}
+
+// A cursor that never says a frame (the lead, nothing decoded): everything
+// is dropped, nothing lands.
+void test_no_frame_yet_drops() {
+  gRing.discardAll();
+  gFeed.reset(240, true);
+  ScriptCursor cur;
+  gTrim.armAt(&cur, 2200, 400, kSpf, 0, 0);
+  gFeed.setBudget(kPass);
+  const int16_t s[2] = {5, 5};
+  for (int i = 0; i < 5000; ++i) TEST_ASSERT_TRUE(gTrim.consume(s));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(TrimFeed::Landing::Waiting), static_cast<int>(gTrim.landing()));
+  TEST_ASSERT_EQUAL_UINT32(0, gTrim.kept());
+  TEST_ASSERT_FALSE(gTrim.landed());
+  TEST_ASSERT_EQUAL_UINT32(0, gRing.size());
+  TEST_ASSERT_TRUE(gTrim.active());
+}
+
+// The generator's first word comes with the first preroll frame, while
+// nothing is held: it goes to the feed, and the end hold stays on, so a
+// resumed track's end drops its padding (the "Gapless: device fixes" bug,
+// through the landing).
+void test_the_first_word_during_the_landing_keeps_the_end_hold() {
+  const std::vector<Seg> segs = frames(10);
+  const Frames src = noise(10 * kSpf, 25);
+  ScriptCursor cur;
+  const Frames got = runLanding(segs, src, 1800, 0, 1200, 9, cur);
+  assertSame(slice(src, 2 * kSpf, 10 * kSpf - 1200), got);
+  TEST_ASSERT_EQUAL_UINT64(1200, gTrim.dropped());
+  TEST_ASSERT_EQUAL_INT(44100, gFeed.rate());
+}
+
+// kept() counts in the inactive path too (nothing to trim), and after the
+// landing with nothing held the trim is as cheap as after arm(0, 0).
+void test_kept_counts_with_nothing_to_trim() {
+  gRing.discardAll();
+  gRing.setConsumer(kReader);
+  gFeed.reset(240, true);
+  gTrim.arm(0, 0);
+  gTrim.setRate(44100);
+  TEST_ASSERT_FALSE(gTrim.active());
+  gFeed.setBudget(kPass);
+  const Frames src = noise(600, 26);
+  for (int i = 0; i < 600; ++i) TEST_ASSERT_TRUE(gTrim.consume(&src[2 * i]));
+  TEST_ASSERT_EQUAL_UINT32(600, gTrim.kept());
+  TEST_ASSERT_TRUE(gTrim.landed());
+  // A start skip of 5: kept from after it.
+  gTrim.arm(5, 0);
+  gFeed.setBudget(kPass);
+  for (int i = 0; i < 300; ++i) TEST_ASSERT_TRUE(gTrim.consume(&src[2 * i]));
+  TEST_ASSERT_EQUAL_UINT32(295, gTrim.kept());
+  TEST_ASSERT_FALSE(gTrim.active());
+  // A landing with no hold: inactive once landed and skipped.
+  ScriptCursor cur;
+  cur.valid = true;
+  cur.byte = 2200;
+  cur.index = 0;
+  gTrim.armAt(&cur, 2200, 400, kSpf, 3, 0);
+  TEST_ASSERT_TRUE(gTrim.active());
+  gFeed.setBudget(kPass);
+  for (int i = 0; i < 10; ++i) TEST_ASSERT_TRUE(gTrim.consume(&src[2 * i]));
+  TEST_ASSERT_FALSE(gTrim.active());
+  TEST_ASSERT_EQUAL_UINT32(7, gTrim.kept());
+  // A refused sample isn't counted.
+  gFeed.setBudget(0);
+  TEST_ASSERT_FALSE(gTrim.consume(&src[0]));
+  TEST_ASSERT_EQUAL_UINT32(7, gTrim.kept());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_exactly_the_kept_frames_come_out);
@@ -312,5 +532,12 @@ int main(int, char**) {
   RUN_TEST(test_a_change_said_again_still_waits);
   RUN_TEST(test_a_change_with_nothing_held_passes_through);
   RUN_TEST(test_the_hold_is_clamped_to_its_buffer);
+  RUN_TEST(test_a_planned_start_lands_on_its_frame);
+  RUN_TEST(test_a_skip_past_the_landing_frame);
+  RUN_TEST(test_a_lost_landing_frame_lands_on_the_next);
+  RUN_TEST(test_a_resync_elsewhere_lands_inexact);
+  RUN_TEST(test_no_frame_yet_drops);
+  RUN_TEST(test_the_first_word_during_the_landing_keeps_the_end_hold);
+  RUN_TEST(test_kept_counts_with_nothing_to_trim);
   return UNITY_END();
 }

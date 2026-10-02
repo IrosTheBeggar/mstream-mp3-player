@@ -34,6 +34,25 @@ public:
   // take(), positionKnown() is false and the position is the last track's.
   bool asyncStarts = false;
   bool pending = false;
+  // Resume anchors (docs/SEEK.md): off, this fake has none, as the others
+  // (IAudioBackend's defaults). The anchor the last play() was handed, and
+  // the one resumeAnchor() gives for the held track.
+  bool anchorsOn = false;
+  ResumeAnchor lastAnchor;
+  int anchoredPlays = 0;
+  ResumeAnchor held;
+
+  bool play(const std::string& p, const StartAt& at) override {
+    if (!anchorsOn) return IAudioBackend::play(p, at);
+    lastAnchor = at.anchor;
+    if (at.anchor.valid()) ++anchoredPlays;
+    return play(p, at.hintMs, at.ms);
+  }
+  bool resumeAnchor(ResumeAnchor* out) const override {
+    if (!anchorsOn || !held.valid()) return false;
+    *out = held;
+    return true;
+  }
 
   bool play(const std::string& p, uint32_t hintMs, uint32_t startMs) override {
     lastPath = p;
@@ -1498,6 +1517,197 @@ void test_gapless_a_failure_after_an_advance_is_the_new_entry_s() {
   TEST_ASSERT_EQUAL_INT(2, p.currentIndex());          // skipped to c
 }
 
+// ---- resume anchors (docs/SEEK.md section 5) ----
+
+namespace {
+ResumeAnchor anchorAt(uint64_t sample) {
+  ResumeAnchor a;
+  a.kind = ResumeAnchor::Kind::Mp3;
+  a.exact = true;
+  a.rate = 44100;
+  a.sample = sample;
+  a.fileSize = 5000000;
+  a.prerollByte = 100000;
+  a.frameByte = 103000;
+  a.skip = 77;
+  a.frameHash = 0xBEEF;
+  return a;
+}
+}  // namespace
+
+// A start point with an anchor (the resume point after a boot): it reaches
+// the backend with the play, once; QueueSaver reads it back meanwhile.
+void test_a_start_points_anchor_reaches_the_play_once() {
+  Rig r(3);
+  r.audio.anchorsOn = true;
+  r.queue.setCurrent(1);
+  const ResumeAnchor a = anchorAt(3660300);
+  r.player.setStartPoint(83000, 240000, &a);
+  uint32_t ms = 0, dur = 0;
+  ResumeAnchor got;
+  TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur, &got));
+  TEST_ASSERT_TRUE(got == a);
+  got = ResumeAnchor{};
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_TRUE(got == a);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(240000, r.audio.lastHintMs);
+  TEST_ASSERT_TRUE(r.audio.lastAnchor == a);
+  TEST_ASSERT_EQUAL_INT(1, r.audio.anchoredPlays);
+  // Played again: from its start, no anchor.
+  r.player.play(1);
+  TEST_ASSERT_FALSE(r.audio.lastAnchor.valid());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.anchoredPlays);
+}
+
+// The anchor goes with its start point: next, another entry, an edit that
+// changes the entry, prev's restart; a qs (a second without one) replaces
+// an older anchor.
+void test_a_start_points_anchor_goes_with_it() {
+  const ResumeAnchor a = anchorAt(3660300);
+  {
+    Rig r(3);
+    r.audio.anchorsOn = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0, &a);
+    r.player.next();
+    TEST_ASSERT_FALSE(r.audio.lastAnchor.valid());
+    TEST_ASSERT_EQUAL_INT(0, r.audio.anchoredPlays);
+  }
+  {
+    Rig r(3);
+    r.audio.anchorsOn = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0, &a);
+    r.player.play(2);
+    TEST_ASSERT_EQUAL_INT(0, r.audio.anchoredPlays);
+  }
+  {
+    Rig r(3);
+    r.audio.anchorsOn = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0, &a);
+    const uint32_t pos = 1;
+    r.player.remove(&pos, 1);
+    TEST_ASSERT_TRUE(r.player.undo());
+    uint32_t ms, dur;
+    ResumeAnchor got;
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur, &got));
+    r.player.play(1);
+    TEST_ASSERT_EQUAL_INT(0, r.audio.anchoredPlays);
+  }
+  {
+    Rig r(3);
+    r.audio.anchorsOn = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0, &a);
+    r.player.setStartPoint(90000, 0);  // qs90: no anchor
+    uint32_t ms, dur;
+    ResumeAnchor got = a;
+    TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur, &got));
+    TEST_ASSERT_EQUAL_UINT32(90000, ms);
+    TEST_ASSERT_FALSE(got.valid());
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL_UINT32(90000, r.audio.lastStartMs);
+    TEST_ASSERT_FALSE(r.audio.lastAnchor.valid());
+  }
+  {
+    Rig r(3);
+    r.audio.anchorsOn = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0, &a);
+    r.player.prev();  // its 0:00
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+    TEST_ASSERT_EQUAL_INT(0, r.audio.anchoredPlays);
+  }
+}
+
+// resumePoint(): while paused, the backend's anchor for the held track
+// (none from a backend without anchors); while a start point waits, its
+// own; playing: nothing.
+void test_the_resume_point_carries_the_held_tracks_anchor() {
+  Rig r(2);
+  r.audio.anchorsOn = true;
+  r.player.play(0);
+  r.audio.position = 42500;
+  r.audio.duration = 200000;
+  r.audio.held = anchorAt(1874250);
+  uint32_t ms = 0, dur = 0;
+  ResumeAnchor got;
+  TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur, &got));  // playing
+  r.player.togglePlayPause();
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_EQUAL_UINT32(42500, ms);
+  TEST_ASSERT_TRUE(got == r.audio.held);
+  r.audio.held = ResumeAnchor{};  // (G0, a built-in track: none)
+  got = anchorAt(1);
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_FALSE(got.valid());
+  // A start point while paused (qs): its own, none.
+  r.audio.held = anchorAt(1874250);
+  r.player.setStartPoint(60000, 0);
+  got = anchorAt(1);
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_EQUAL_UINT32(60000, ms);
+  TEST_ASSERT_FALSE(got.valid());
+}
+
+// stopKeepingPlace() (the benches borrow the backend): the start point it
+// sets keeps the backend's anchor, which the next play gets; none while
+// the backend hasn't taken its start up yet.
+void test_stop_keeping_place_keeps_the_backends_anchor() {
+  {
+    Rig r(2);
+    r.audio.anchorsOn = true;
+    r.player.play(0);
+    r.audio.position = 42500;
+    r.audio.held = anchorAt(1874250);
+    r.player.togglePlayPause();
+    TEST_ASSERT_TRUE(r.player.stopKeepingPlace());
+    uint32_t ms = 0, dur = 0;
+    ResumeAnchor got;
+    TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur, &got));
+    TEST_ASSERT_EQUAL_UINT32(42500, ms);
+    TEST_ASSERT_TRUE(got == r.audio.held);
+    r.player.togglePlayPause();
+    TEST_ASSERT_TRUE(r.audio.lastAnchor == anchorAt(1874250));
+  }
+  {
+    Rig r(2);
+    r.audio.anchorsOn = true;
+    r.audio.asyncStarts = true;
+    r.audio.held = anchorAt(1874250);
+    r.player.play(0);
+    r.player.setStartPoint(30000, 0);  // playing: starts there (not taken up yet)
+    TEST_ASSERT_TRUE(r.player.stopKeepingPlace());
+    uint32_t ms = 0, dur = 0;
+    ResumeAnchor got = anchorAt(1);
+    TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur, &got));
+    TEST_ASSERT_EQUAL_UINT32(30000, ms);
+    TEST_ASSERT_FALSE(got.valid());
+  }
+}
+
+// A backend without anchors (every fake but this one's anchorsOn): starts
+// and resume points as before, by the millisecond.
+void test_a_backend_without_anchors_is_as_before() {
+  Rig r(2);
+  const ResumeAnchor a = anchorAt(3660300);
+  r.player.setStartPoint(83000, 240000, &a);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);  // the 3-argument play()
+  TEST_ASSERT_EQUAL_UINT32(240000, r.audio.lastHintMs);
+  r.audio.position = 90000;
+  r.player.togglePlayPause();
+  uint32_t ms = 0, dur = 0;
+  ResumeAnchor got = a;
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_EQUAL_UINT32(90000, ms);
+  TEST_ASSERT_FALSE(got.valid());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
@@ -1566,5 +1776,10 @@ int main(int, char**) {
   RUN_TEST(test_gapless_actions_take_the_advance_first);
   RUN_TEST(test_gapless_an_advance_with_pause_after_pauses_at_once);
   RUN_TEST(test_gapless_a_failure_after_an_advance_is_the_new_entry_s);
+  RUN_TEST(test_a_start_points_anchor_reaches_the_play_once);
+  RUN_TEST(test_a_start_points_anchor_goes_with_it);
+  RUN_TEST(test_the_resume_point_carries_the_held_tracks_anchor);
+  RUN_TEST(test_stop_keeping_place_keeps_the_backends_anchor);
+  RUN_TEST(test_a_backend_without_anchors_is_as_before);
   return UNITY_END();
 }

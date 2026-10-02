@@ -34,8 +34,19 @@ uint32_t id3v2Size(const uint8_t* head, size_t n);
 // `buf` holds the bytes after the ID3v2 tag. 0 when it has none (a plain
 // constant bitrate file: estimateDurationMs() is exact for those). With
 // LAME's extension, the trimmed length: frames x spf less its delay and
-// padding (LameTag, docs/GAPLESS.md section 4.6).
-uint32_t mp3HeaderDurationMs(const uint8_t* buf, size_t n);
+// padding (LameTag, docs/GAPLESS.md section 4.6). With the file's size and
+// where `buf` starts in it (`audioStart`), a file shorter than its header's
+// byte count says has its length scaled down (truncatedMs(), as the tail
+// rule's: docs/SEEK.md section 7).
+uint32_t mp3HeaderDurationMs(const uint8_t* buf, size_t n, uint32_t fileSize = 0, uint32_t audioStart = 0);
+
+// A file shorter than its header says (docs/SEEK.md section 7): the header
+// counts `headerBytes` from its first frame, the file holds `haveBytes`
+// from there. More than kTruncatedSlack short: `lengthMs` scaled by the
+// share it holds; else as is (Daft Punk's Discovery, edited after
+// encoding, says 380-404 bytes more than its stream holds).
+constexpr uint32_t kTruncatedSlack = 4096;
+uint32_t truncatedMs(uint32_t lengthMs, uint32_t headerBytes, uint32_t haveBytes);
 
 // A Layer III frame header (MPEG-1, 2 or 2.5): what TrackSeek needs too.
 struct Mp3Frame {

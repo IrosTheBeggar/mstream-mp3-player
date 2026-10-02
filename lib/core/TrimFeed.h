@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 
+#include "FrameCursor.h"
 #include "RingFeed.h"
 
 // Gapless trimming (docs/GAPLESS.md section 4.4), in front of RingFeed, at
@@ -38,11 +39,36 @@
 // file that changes its rate isn't LAME's). MP3's generator makes such a
 // call once and ignores its result, so it can't be refused.
 //
-// One task (the decode task). ~48 B; the FIFO is the caller's (PSRAM).
+// A start by a plan (docs/SEEK.md section 4.2: a resume point's anchor, a
+// seek): armAt(). The decoder was handed a preroll frame before the
+// landing frame, so that the landing frame decodes bit for bit (its bit
+// reservoir and the filterbank's history come from the frames before it).
+// Until the cursor (FrameCursor: the generator's own state) says the
+// landing frame, every sample is dropped: the generator's lead, the
+// preroll frames. Then `skip` more, then as arm(0, hold). The landing frame
+// lost (bad data, a reservoir the preroll didn't cover): the cursor says
+// the frame after it, and the start lands a frame late (lateBy()); any
+// other frame: it lands there, inexact (Elsewhere). Once landed, nothing
+// changes for the rest of the track: the cursor isn't asked again.
+//
+// kept() counts the samples taken after the start's skip (into the feed or
+// the hold), also with nothing to trim: SeekIndex's clock (the trimmed
+// timeline's sample of the next one is the run's base + kept()).
+//
+// One task (the decode task). ~100 B; the FIFO is the caller's (PSRAM).
 class TrimFeed {
 public:
   // The most an MP3's padding can hold back: its 12-bit field.
   static constexpr uint32_t kMaxHold = 4095;
+
+  // A planned start's landing (armAt()).
+  enum class Landing : uint8_t {
+    None,       // arm(): no landing (from the top, or a FLAC)
+    Waiting,    // dropping until the cursor says the landing frame
+    Exact,      // landed on the landing frame
+    NextFrame,  // on the frame after it (the landing frame was lost): lateBy() later
+    Elsewhere,  // on another frame: the plan's timeline is lost
+  };
 
   explicit TrimFeed(RingFeed& feed) : feed_(feed) {}
 
@@ -57,6 +83,11 @@ public:
   // `skip`, keep the last `hold` back (clamped to the FIFO). Forgets
   // anything held for the track before.
   void arm(uint32_t skip, uint32_t hold);
+  // A start by a plan (see the class): every frame dropped until `cursor`
+  // says the frame at `landByte` (`landLength` bytes, `spf` samples), then
+  // `skip` more, then as arm(0, hold). The cursor must outlive the landing.
+  void armAt(const FrameCursor* cursor, uint32_t landByte, uint32_t landLength, uint32_t spf, uint32_t skip,
+             uint32_t hold);
   // Nothing trimmed: every frame straight into the feed.
   void disarm();
   // Whether consume() has anything to do (else RingOutput calls the feed
@@ -65,7 +96,11 @@ public:
 
   // ---- the generator's side (RingOutput) ----
   bool consume(const int16_t sample[2]) {
-    if (!active_) return feed_.consume(sample);
+    if (!active_) {
+      if (!feed_.consume(sample)) return false;
+      ++kept_;
+      return true;
+    }
     return consumeTrimmed(sample);
   }
   bool setRate(int hz);
@@ -79,6 +114,17 @@ public:
   // call again. A format change still waiting is real audio too: flushed
   // the same way. True: done, disarmed.
   bool end(bool early);
+
+  // ---- a planned start (armAt()) and the run index ----
+  // How the last planned start landed (kept through end() and disarm(),
+  // for the console; arm() clears it).
+  Landing landing() const { return landing_; }
+  // NextFrame: samples later than planned (the start moves by that).
+  uint32_t lateBy() const { return lateBy_; }
+  // Past the landing and the start's skip: kept() counts from the start.
+  bool landed() const { return landing_ != Landing::Waiting && skip_ == 0; }
+  // Samples taken since the start's skip (into the feed or the hold).
+  uint32_t kept() const { return kept_; }
 
   // ---- for the console (G) ----
   uint32_t skipLeft() const { return skip_; }
@@ -94,7 +140,12 @@ private:
   bool releaseHeld();
   // A waiting format change: the held frames first, then the change.
   bool applyPending();
-  void updateActive() { active_ = skip_ > 0 || hold_ > 0 || count_ > 0 || pending_; }
+  // The landing phase: true once the cursor says the landing frame (or
+  // after it): this sample is the first past the preroll.
+  bool land();
+  void updateActive() {
+    active_ = landing_ == Landing::Waiting || skip_ > 0 || hold_ > 0 || count_ > 0 || pending_;
+  }
 
   RingFeed& feed_;
   int16_t* buf_ = nullptr;
@@ -113,4 +164,13 @@ private:
   bool rateSaid_ = false;   // since arm()
   uint64_t skipped_ = 0;
   uint64_t dropped_ = 0;
+  uint32_t kept_ = 0;
+  // A planned start (armAt()).
+  const FrameCursor* cursor_ = nullptr;
+  uint32_t landByte_ = 0;
+  uint32_t landLength_ = 0;
+  uint32_t spf_ = 0;
+  uint32_t landSkip_ = 0;
+  uint32_t lateBy_ = 0;
+  Landing landing_ = Landing::None;
 };

@@ -20,7 +20,10 @@ This document is the design that fixes all three. It covers what happens
 today, the measurements it rests on, the mechanism, how it fits gapless
 playback and the queue saver, and the host and device test plans.
 
-**Status: design, not built.** Section 12 is the build order.
+**Status: built and host-tested (sections 4-10), not yet run on the
+device (section 11).** Section 16 says where the build differs from the
+design, most of all the preroll rule (section 2.4: "1 KB before frame *k*"
+was not enough by construction; the rule is 1 KB before frame *k* − 1).
 
 Where the facts come from:
 
@@ -240,12 +243,27 @@ The test with `seekmad`, on all 37 MP3s:
   behind (ARCHITECTURE.md).
 - The 22 failures at a fixed *p* = 2-4 are frames in near-silence at low
   bitrates, whose reservoir reaches over more frames.
-- **The rule "2 frames and 1 KB" is also sufficient by construction.**
-  - Frame *k* − 1's reservoir is at most 511 main-data bytes before it.
-  - The smallest MPEG-1 frame (32 kbit/s) has 104 bytes, of which 64 are
-    main data. 511 bytes then lie within 8 frames, 832 bytes, which with
-    frame *k* − 1 is still under 1,024.
-  - MPEG-2/2.5's reservoir is at most 255 bytes.
+- **As designed, the rule "2 frames and 1 KB before frame *k*" was
+  claimed sufficient by construction. It isn't** (found by the host
+  tests' model of libmad's reservoir, section 16):
+  - Frame *k* − 1's reservoir is at most 511 main-data bytes before it,
+    and the smallest MPEG-1 frame (32 kbit/s, 104 bytes) holds 68 bytes
+    of main data, so 511 bytes lie within 8 frames, 832 bytes, **before
+    frame *k* − 1**.
+  - 1,024 bytes before frame *k* include frame *k* − 1 itself, up to
+    1,441 bytes. A loud frame *k* − 1 after a quiet stretch (an onset
+    after near-silence) can take 511 bytes of reservoir from small frames
+    that a 1 KB window before *k* no longer reaches: then *k* − 1 isn't
+    decoded and *k* comes out without its overlap. The 8,000 random trials
+    on real files didn't hit such a case.
+  - **The rule as built:** the latest frame at least *h* + 1 frames before
+    *k* and 1,024 bytes before frame *k* − *h*, where *h* = 1 for MPEG-1
+    and 2 for MPEG-2/2.5 (their one-granule frames take the filterbank's
+    history from two frames). 1,024 bytes of whole frames hold at least
+    669 bytes of main data, and libmad keeps the payload of frames it
+    can't decode as reservoir, so frame *k* − *h* and those after it
+    decode. (An 8 kbit/s stereo MPEG-2 stream, 3 bytes of main data a
+    frame, would need more; such files aren't made.)
 
 ### 2.5 The cursor: which frame a sample comes from
 
@@ -309,8 +327,8 @@ of each of the 27 VBR files: 1,323 starts, all of which should start.
    - The plan comes from the first source that can give one: a checked
      anchor, the run's index, CBR arithmetic, LAME's TOC inverted, the
      Xing or VBRI TOC, the average bitrate (section 4.5).
-   - Every plan has a preroll of at least 2 frames and 1 KB, clamped at
-     the first audio frame. So the landing frame is decoded and is
+   - Every plan has a preroll by the rule of section 2.4 (as built: 1 KB
+     before frame *k* − 1), clamped at the first audio frame. So the landing frame is decoded and is
      bit-exact (section 2.4).
 3. **The run index.** While a track plays, the decode task records every
    4th frame: its byte, its first sample on the timeline and a hash of its
@@ -494,8 +512,10 @@ plan or anchor) to its end, a request or a cut.
 
 - **`plan(t)`**, a start at `t` inside what the run has decoded:
   - the landing is the entry with the largest `t0 ≤ t`, skip `t − t0`;
-  - the preroll is the latest entry at least 2 frames and 1,024 bytes
-    before it;
+  - the preroll is the latest entry at least 2 frames (3 for MPEG-2/2.5)
+    and 1,024 + 1,442 bytes before it (as built: the frames between the
+    entries aren't known, so the two frames before the landing one are
+    taken at their largest);
   - if there is none, use the run's own plan's preroll when it lies
     before the landing, or the first audio byte when the run started from
     the top;
@@ -769,7 +789,8 @@ x         = (t + delay + 529) / spf                       (frames into the decod
 estimate  = firstAudio + the straight line through the points at x
 ```
 
-- **The chain walk.** Read 4 KB from `estimate − 2,560` (clamped at the
+- **The chain walk.** Read 4 KB from `estimate − 2,560` (as built: 8 KB
+  from `estimate − 4,096`, for the preroll rule of 2.4; clamped at the
   first audio byte). Find the first clean frame (a header followed by
   another), and walk headers from there.
   - The landing is the first frame at or after the estimate.
@@ -1331,3 +1352,81 @@ user's call.
    design's scripts (`seek/`: `toc_error.py`, `toc_variants*.py`,
    `cbr_preroll.py`, `tail_rule.py`, `seekmad.c`, `run_seekmad.py`,
    `cursor_check.py`).
+
+## 16. As built (2026-10-02)
+
+Built as sections 4-10 describe, in one commit ("MP3: exact resume and
+better VBR seeks"), host-tested: test_track_seek, test_trim_feed,
+test_seek_index (new), test_nvs_layout, test_queue, test_playback; 983 of
+983 host tests pass. The firmware builds (QIO, iram_diet, flash_guard).
+Nothing has run on the device yet: section 11, with its temporary `Sp` and
+`Sa!` probes, is still to do, and so is keeping the PC harness as
+`tools/seek_check/` (section 12).
+
+**Where the build differs from the design:**
+
+- **The preroll rule** (section 2.4): 1,024 bytes before frame *k* − *h*,
+  not before frame *k* (*h* = 1 for MPEG-1, 2 for MPEG-2/2.5), and *h* + 1
+  frames back. The design's rule failed in the host model on a loud frame
+  after a quiet stretch (test_seek_index,
+  `test_the_model_needs_the_preroll`: the old rule misses there, the new
+  one is exact). Costs: CBR at 128 kbit/s prerolls 4 frames instead of 3;
+  the chain walk reads 8 KB from 4 KB before the estimate (was 4 KB from
+  2.5 KB); the run index, which doesn't know the frames between its
+  entries, takes 1,024 + 1,442 bytes before the landing entry (usually the
+  entry two back, 8 frames: about 40 ms more decoding at a resume, at 5x
+  realtime).
+- **The recording is portable**: `SeekRecorder` (lib/core, with
+  `SeekIndex`) settles a planned start's landing (a frame late: the base
+  moves by `lateBy()`, still exact; elsewhere: inexact, the run loses its
+  origin) and notes the cursor's frame after each pass. The backend and
+  the tests' model decoder run the same code.
+- **The run's origin**: each MP3 run keeps the frame it started on (the
+  first audio frame from the top, at t0 = −(delay + 529); a plan's
+  landing frame, with the plan's preroll) as an entry the ring can't
+  overwrite. Lookups use it before the first entry; a lookup whose
+  landing is more than 16 frames before the time asked finds nothing (an
+  overwritten ring can't send a resume through minutes of preroll), nor
+  one whose preroll is 64 KB or more back.
+- **A chain starts on three linked headers** (or two and the end of the
+  read), so a false sync in the audio data can't start one; junk breaks a
+  chain and the walk looks for the next.
+- **From the top, with `G1`**, the decoder is handed the first frame found
+  (after the header frame, as before), also in a file without a header,
+  where it used to start at the end of the ID3 tags: the run's origin is
+  then that frame's byte, whatever junk lies before it.
+- **`PinnedMp3` without the arena** mallocs libmad's frame and synthesis
+  state itself (PSRAM, as ESP8266Audio's malloc put them), so the cursor
+  is there for every MP3.
+- **FLAC anchors** are checked by the file's size, STREAMINFO's rate and
+  total samples, and the tail rule; one that fails logs `[audio] FLAC: the
+  resume anchor isn't this file's (...): by its second`.
+- **`TrimFeed::landing()`** keeps how the last planned start landed
+  through `end()`, for `G`, which also prints the heard run (`[gapless]
+  run index: heard MP3 run from sample N (exact), N entries`).
+- **Memory, measured at the build:** static RAM 56,024 B against 55,448
+  at 2742f3d (+576 B: the index's run headers and mutex, the anchors in
+  the request, the start point, the saver and `Prepared`'s plan); PSRAM
+  2 x 24 KB at `begin()`, and 8 KB per planned start, freed after it.
+
+**What the host tests show** (synthetic streams: test/support/Mp3Synth.h,
+a model of the generator over libmad's reservoir rule, through the real
+TrimFeed, RingFeed and PcmRing):
+
+- 1,200 pauses on six streams (LAME VBR and CBR at 44.1 and 48 kHz,
+  MPEG-2 VBR at 22.05 kHz, no header, quiet stretches, onsets): every
+  anchor passes its check, and the restart gives the paused sample and
+  the next 10,000 bit for bit.
+- A chain of five resumes; a pause in a TOC start's run (the audio
+  continues exactly, the shown time is kept, the anchor says inexact); a
+  lost landing frame (a frame late, anchors still exact); seeks back into
+  a run (`qs30` after 90 s); a pause in a track's tail while the next is
+  decoded ahead, and after the advance.
+- CBR plans exact to the sample for every millisecond of 30 s at 32, 44.1
+  and 48 kHz and MPEG-2/2.5; LAME's TOC inverted within 1/256 of the
+  stream at every 1 % point and closer than the straight lines on six
+  synthetic streams (the 27 real files' figures stay section 2.2's); the
+  bag's closed form against LAME's loop for N = 1..200,000; the tail rule
+  starting every 100 ms from 10 s to 5.2 s before the end of a VBR file
+  whose end is at 320 kbit/s; the truncated-file scale and Discovery's
+  404 bytes.

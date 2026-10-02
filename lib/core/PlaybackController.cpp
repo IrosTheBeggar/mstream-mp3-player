@@ -29,9 +29,13 @@ void PlaybackController::startNow() {
   // a VBR file without a table of contents is placed by it), else the
   // catalog's hint.
   const uint32_t hint = at > 0 && startDurationMs_ > 0 ? startDurationMs_ : catalog_.durationHintMs(id);
+  IAudioBackend::StartAt start;
+  start.ms = at;
+  start.hintMs = hint;
+  if (at > 0) start.anchor = startAnchor_;  // (it goes with the start point)
   clearStartPoint();  // once: a later start of the entry is from its beginning
   playedFromMs_ = at;
-  audio_.play(std::string(path), hint, at);
+  audio_.play(std::string(path), start);
   setPlaying(PlayState::Playing);
   cued_ = false;
   // A new request: the backend's track is this play's (token 0), and the
@@ -213,6 +217,7 @@ void PlaybackController::stop() {
 bool PlaybackController::stopKeepingPlace() {
   Act act(*this);
   uint32_t ms = 0, dur = 0;
+  ResumeAnchor anchor;
   // A start point waiting (after a boot, qs): stop() leaves it as it is.
   if (hasStartPoint()) {
     stop();
@@ -220,20 +225,21 @@ bool PlaybackController::stopKeepingPlace() {
   }
   // The backend holds this entry's track: where it is, as prevAction()
   // reads it (a start not taken up yet: where it was asked to start; a
-  // failed track has no place).
+  // failed track has no place), with its anchor when it has one.
   const bool holding = hasTrack() && state_ != PlayState::Stopped && !cued_ && !audio_.failed();
   if (holding) {
     const bool known = audio_.positionKnown();
     ms = known ? audio_.positionMs() : playedFromMs_;
     dur = known ? audio_.durationMs() : 0;
+    if (!known || !audio_.resumeAnchor(&anchor)) anchor = ResumeAnchor{};
   }
   stop();
   if (ms == 0) return false;
-  setStartPoint(ms, dur);  // stopped: it waits for the next play
+  setStartPoint(ms, dur, &anchor);  // stopped: it waits for the next play
   return true;
 }
 
-void PlaybackController::setStartPoint(uint32_t ms, uint32_t durationMs) {
+void PlaybackController::setStartPoint(uint32_t ms, uint32_t durationMs, const ResumeAnchor* anchor) {
   Act act(*this);
   if (!hasTrack() || ms == 0) {
     clearStartPoint();
@@ -253,6 +259,7 @@ void PlaybackController::setStartPoint(uint32_t ms, uint32_t durationMs) {
   startMs_ = ms;
   startDurationMs_ = durationMs;
   startKey_ = queue_.currentKey();
+  startAnchor_ = anchor ? *anchor : ResumeAnchor{};
   switch (state_) {
     case PlayState::Playing:
       failuresInARow_ = 0;
@@ -272,18 +279,20 @@ void PlaybackController::setStartPoint(uint32_t ms, uint32_t durationMs) {
   }
 }
 
-bool PlaybackController::startPoint(uint32_t* ms, uint32_t* durationMs) const {
+bool PlaybackController::startPoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor) const {
   if (!hasStartPoint()) return false;
   *ms = startMs_;
   *durationMs = startDurationMs_;
+  if (anchor) *anchor = startAnchor_;
   return true;
 }
 
-bool PlaybackController::resumePoint(uint32_t* ms, uint32_t* durationMs) const {
-  if (startPoint(ms, durationMs)) return true;
+bool PlaybackController::resumePoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor) const {
+  if (startPoint(ms, durationMs, anchor)) return true;
   if ((state_ != PlayState::Paused && state_ != PlayState::Waiting) || cued_ || !hasTrack()) return false;
   *ms = audio_.positionMs();
   *durationMs = audio_.durationMs();
+  if (anchor && !audio_.resumeAnchor(anchor)) *anchor = ResumeAnchor{};
   return *ms > 0;
 }
 

@@ -60,11 +60,12 @@ uint32_t id3v2Size(const uint8_t* h, size_t n) {
   return 10 + body + (footer ? 10 : 0);
 }
 
-uint32_t mp3HeaderDurationMs(const uint8_t* buf, size_t n) {
-  // LAME's extension says what the encoder was given: the trimmed length,
-  // the one gapless playback plays (docs/GAPLESS.md section 4.6).
-  lametag::Info lame;
-  if (lametag::parse(buf, n, &lame) && lame.lame) return lametag::lengthMs(lame);
+uint32_t truncatedMs(uint32_t lengthMs, uint32_t headerBytes, uint32_t haveBytes) {
+  if (headerBytes <= kTruncatedSlack || haveBytes + kTruncatedSlack >= headerBytes) return lengthMs;
+  return static_cast<uint32_t>(static_cast<uint64_t>(lengthMs) * haveBytes / headerBytes);
+}
+
+uint32_t mp3HeaderDurationMs(const uint8_t* buf, size_t n, uint32_t fileSize, uint32_t audioStart) {
   // The first frame: the first header whose next frame starts with a header
   // too (or runs past the buffer), so a stray 0xFF in junk before the audio
   // doesn't count.
@@ -74,17 +75,35 @@ uint32_t mp3HeaderDurationMs(const uint8_t* buf, size_t n) {
     const size_t next = i + static_cast<size_t>(f.length);
     Mp3Frame g;
     if (next + 4 <= n && !parseMp3Frame(buf + next, &g)) continue;
-    uint32_t frames = 0;
+    uint32_t frames = 0, bytes = 0;
     const size_t xing = i + 4 + static_cast<size_t>(f.sideInfo);
     const size_t vbri = i + 4 + 32;
     if (xing + 12 <= n && (std::memcmp(buf + xing, "Xing", 4) == 0 || std::memcmp(buf + xing, "Info", 4) == 0)) {
-      if (be32(buf + xing + 4) & 1) frames = be32(buf + xing + 8);  // the frame count is there
+      const uint32_t flags = be32(buf + xing + 4);
+      size_t p = xing + 8;
+      if (flags & 1) {  // the frame count is there
+        frames = be32(buf + p);
+        p += 4;
+      }
+      if ((flags & 2) && p + 4 <= n) bytes = be32(buf + p);
     } else if (vbri + 18 <= n && std::memcmp(buf + vbri, "VBRI", 4) == 0) {
+      bytes = be32(buf + vbri + 10);
       frames = be32(buf + vbri + 14);
     }
-    // The header frame itself is silent: not counted.
-    return static_cast<uint32_t>(static_cast<uint64_t>(frames) * static_cast<uint64_t>(f.samples) * 1000 /
+    // LAME's extension says what the encoder was given: the trimmed length,
+    // the one gapless playback plays (docs/GAPLESS.md section 4.6). The
+    // header frame itself is silent: not counted.
+    lametag::Info lame;
+    uint32_t ms = 0;
+    if (lametag::parse(buf, n, &lame) && lame.lame) {
+      ms = lametag::lengthMs(lame);
+    } else {
+      ms = static_cast<uint32_t>(static_cast<uint64_t>(frames) * static_cast<uint64_t>(f.samples) * 1000 /
                                  static_cast<uint64_t>(f.rate));
+    }
+    const uint32_t first = audioStart + static_cast<uint32_t>(i);
+    if (fileSize > 0 && bytes > 0) ms = truncatedMs(ms, bytes, fileSize > first ? fileSize - first : 0);
+    return ms;
   }
   return 0;
 }

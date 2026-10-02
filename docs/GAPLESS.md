@@ -739,8 +739,22 @@ branch per frame.
   pass budget, but they are bounded (at most 4,095 + 529 + 1 at a start,
   4,095 held). A pass decodes at most about 7 extra MP3 frames, once per
   track.
+- **A planned start's landing phase** (`armAt()`, SEEK.md section 4.2):
+  an MP3 started part of the way in is handed a preroll frame, and every
+  sample is dropped until the generator's cursor (`FrameCursor`:
+  `PinnedMp3` reads the frame's file offset from ESP8266Audio's state)
+  says the landing frame; then the plan's skip, then as `arm(0, hold)`.
+  The lead is dropped there too (the cursor has no frame yet). The
+  generator's first word comes with the first preroll frame, while
+  nothing is held, so it goes straight to the feed and the end hold stays
+  on (host-tested through this path too). The landing frame lost: the
+  cursor says the frame after it, and the start lands a frame late
+  (`lateBy()`, still exact on the timeline); another frame: it lands
+  there, inexact. Once landed the cursor isn't asked again. `kept()`
+  counts the samples taken after the start's skip, also on the inactive
+  path (one increment per sample): the run index's clock.
 
-`TrimFeed` is about 64 B. It goes into `RingOutput`, which stays under
+`TrimFeed` is about 100 B. It goes into `RingOutput`, which stays under
 its 4 KB `static_assert`. `G` shows the decoding track's trim (the tag's
 delay and padding, the skip and the hold, a CRC mismatch).
 
@@ -776,19 +790,22 @@ sample.
   `frames × spf / rate`, as before. Now Playing, the Queue,
   `trackseek::startMs()`'s last-5-s rule and the resume point's saved
   length all use it.
-- **The byte for a start at T.** With a trusted LAME tag the time is moved
-  onto the decoded stream first: `T + (delay + 529) / rate`
-  (`lametag::untrimmedMs()`), and a CBR Info file's byte is counted from
-  the first audio frame (the Info frame isn't decoded). A TOC or the
-  average bitrate maps that untrimmed time too. This removes a fixed
-  +25 ms bias from MP3 seeks, which were measured 30-50 ms behind
-  (ARCHITECTURE.md). The rest is the frame libmad drops for its bit
-  reservoir, as before. Without a trusted tag, nothing changes (and with
-  `G0` a CBR Info file's seek is one frame off: the Info frame is decoded
-  again there).
-- **The trim after a seek start.** Only the lead is skipped (the decoder
-  warm-up was played and faded in before too), and the end hold applies,
-  so a resumed track joins its next gaplessly.
+- **A start at T is a plan** (SEEK.md): with a trusted LAME tag and
+  trimming on (`G1`, `Gt1`), T is moved onto the decoded stream first:
+  `D = T + delay + 529` samples from the first audio frame (the Info frame
+  is never decoded by a plan; a preroll is at or after the first audio
+  frame). CBR arithmetic finds the frame `D / spf` exactly and skips
+  `D mod spf` in it; LAME's TOC inverted, another TOC or the average
+  bitrate map D to an estimate, and the chain walk lands on the first
+  frame at or after it. Either way the decoder starts on a preroll frame,
+  so the landing frame isn't the one libmad drops for its bit reservoir
+  (the 26-52 ms CBR seeks were behind). A resume point's anchor and the
+  run index give the plan directly, on the same timeline. Without a
+  trusted tag D is T. (With `G0` the top decodes the Info frame again, so
+  a plan start in a CBR Info file is one frame off that timeline.)
+- **The trim after a seek start.** The landing phase drops the lead and
+  the preroll (section 4.4), and the end hold applies, so a resumed
+  track joins its next gaplessly.
 - **A FLAC seek**: the lead (1) is skipped. That is one sample
   (22.7 µs), which makes positions after a FLAC seek exact to the sample.
 - **`positionMs()` after any start** is the start plus the kept frames,
@@ -1011,7 +1028,11 @@ applies to the track that now plays.
 - **PSRAM**, allocated once at `begin()`:
   - two feed marks (`RingFeed::Mark`: a `RateConverter` image and a few
     scalars), about 2 KB each;
-  - the `TrimFeed` hold: 16 KB.
+  - the `TrimFeed` hold: 16 KB;
+  - the run index's two slots (SEEK.md section 4.3), 24 KB each: the heard
+    track's run and the one decoded ahead. A join records into the other
+    slot, the advance makes it the heard one (with the book's), a cut
+    clears it, a request resets both after its own lookup.
 - **The decode stack (16 KB).** The join's path, `decodeTask →
   GaplessEngine::step → Tracks::probe/start → prepare/beginPrepared →
   AudioGenerator*::begin`, is no deeper than the request's `decodeTask →
@@ -1684,10 +1705,14 @@ next file (it needs a file renamed on the card); the hold's cost by
   SPI card a multi-MB picture may not. Logged (section 3.2), measured in
   section 11.3; if it bites, such a file could be joined after the ring
   has refilled, or its picture block seeked over.
-- **`G0`'s seeks in a CBR Info file are one frame off**: the seek byte is
-  counted from the first audio frame (the Info frame not decoded), while
-  `G0` decodes the Info frame again. `G0` is for the A/B of ends, not of
-  seeks.
+- **`G0`'s seeks in a CBR Info file are one frame off**: a plan counts
+  from the first audio frame (the Info frame not decoded), while `G0`
+  decodes the Info frame again from the top. `G0` is for the A/B of ends,
+  not of seeks; anchors and the run index are off with `G0` or `Gt0`.
+- **Seeks and resume starts** are SEEK.md's (exact resume by an anchor,
+  CBR to the sample, LAME VBR by its TOC inverted, the tail rule by the
+  exact length). Their risks are its section 13; the device run (its
+  section 11) is still to do.
 
 ## 13. The other docs
 

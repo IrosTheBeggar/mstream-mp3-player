@@ -100,7 +100,10 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // paused track's restart: stopped after a boot stays stopped). Its length
 // goes to the backend with the play (it places a VBR MP3 without a table
 // of contents by it). resumePoint() is what QueueSaver saves: a start
-// point that waits, or a paused track's position.
+// point that waits, or a paused track's position. Either may carry a resume
+// anchor (docs/SEEK.md section 5): the bytes that start the track on the
+// very sample it paused at. The start point owns its anchor: both go
+// together, and a start point set without one (qs) has none.
 class PlaybackController {
 public:
   // Whether a play must wait for the output (read at every start).
@@ -208,14 +211,18 @@ public:
   // headphones: it starts there when they connect). Paused on a track the
   // backend holds: that track is let go, the next play starts there.
   // 0: none.
-  void setStartPoint(uint32_t ms, uint32_t durationMs);
-  // The current entry's start point, if one waits.
-  bool startPoint(uint32_t* ms, uint32_t* durationMs) const;
+  // `anchor`: the resume point's (nullptr or kind None: none); it goes to
+  // the backend with the play (IAudioBackend::StartAt).
+  void setStartPoint(uint32_t ms, uint32_t durationMs, const ResumeAnchor* anchor = nullptr);
+  // The current entry's start point, if one waits (and its anchor).
+  bool startPoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor = nullptr) const;
   // Where the current entry would pick up after a boot: a start point that
   // waits, or the position of a paused track (Paused, or Waiting to resume
   // it). False while it plays (a second saved now would be stale at once)
-  // and when it would start at 0:00 anyway (stopped, cued).
-  bool resumePoint(uint32_t* ms, uint32_t* durationMs) const;
+  // and when it would start at 0:00 anyway (stopped, cued). `anchor`: the
+  // start point's, or the backend's for the paused track
+  // (IAudioBackend::resumeAnchor(); kind None: none).
+  bool resumePoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor = nullptr) const;
 
   // ---- the sleep timer ----
   // At the current track's natural end: the next entry, paused at 0:00.
@@ -333,6 +340,7 @@ private:
   void clearStartPoint() {
     startMs_ = 0;
     startKey_ = QueueModel::kNone;
+    startAnchor_ = ResumeAnchor{};
   }
   // Playing or Waiting from now: any play clears the timer's and the
   // computer's marks.
@@ -362,6 +370,7 @@ private:
   uint32_t startMs_ = 0;
   uint32_t startDurationMs_ = 0;
   uint32_t startKey_ = QueueModel::kNone;
+  ResumeAnchor startAnchor_;
   // Where the last play() asked to start (prevAction(): the position until
   // the backend takes that start up).
   uint32_t playedFromMs_ = 0;

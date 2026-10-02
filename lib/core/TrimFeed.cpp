@@ -15,12 +15,55 @@ void TrimFeed::arm(uint32_t skip, uint32_t hold) {
   pendingChannels_ = 0;
   skipped_ = 0;
   dropped_ = 0;
+  kept_ = 0;
   firstWord_ = true;
   rateSaid_ = false;
+  cursor_ = nullptr;
+  landing_ = Landing::None;
+  lateBy_ = 0;
   updateActive();
 }
 
+void TrimFeed::armAt(const FrameCursor* cursor, uint32_t landByte, uint32_t landLength, uint32_t spf, uint32_t skip,
+                     uint32_t hold) {
+  arm(0, hold);
+  cursor_ = cursor;
+  landByte_ = landByte;
+  landLength_ = landLength;
+  spf_ = spf;
+  landSkip_ = skip;
+  landing_ = Landing::Waiting;
+  updateActive();
+}
+
+bool TrimFeed::land() {
+  uint32_t byte = 0, in = 0;
+  if (cursor_ && !cursor_->at(&byte, &in)) return false;  // the lead: no frame yet
+  if (cursor_ && byte < landByte_) return false;           // a preroll frame
+  if (cursor_ && byte == landByte_ && in <= landSkip_) {
+    landing_ = Landing::Exact;
+    skip_ = landSkip_ - in;  // (in is 0: a frame's first sample is always offered)
+  } else if (cursor_ && byte == landByte_ + landLength_ && in == 0) {
+    // The landing frame was lost: its samples come from this one on.
+    landing_ = Landing::NextFrame;
+    if (landSkip_ >= spf_) {
+      skip_ = landSkip_ - spf_;  // still exactly there
+    } else {
+      lateBy_ = spf_ - landSkip_;
+      skip_ = 0;
+    }
+  } else {
+    landing_ = Landing::Elsewhere;  // a resync somewhere else: here, inexact
+    skip_ = 0;
+  }
+  cursor_ = nullptr;
+  updateActive();
+  return true;
+}
+
 void TrimFeed::disarm() {
+  if (landing_ == Landing::Waiting) landing_ = Landing::None;  // (how a start landed stays, for the console)
+  cursor_ = nullptr;
   skip_ = 0;
   hold_ = 0;
   head_ = 0;
@@ -33,6 +76,10 @@ void TrimFeed::disarm() {
 
 bool TrimFeed::consumeTrimmed(const int16_t sample[2]) {
   if (rateSaid_) firstWord_ = false;  // the generator's first word is behind us
+  if (landing_ == Landing::Waiting && !land()) {
+    ++skipped_;  // the lead, a preroll frame: dropped
+    return true;
+  }
   if (pending_ && !applyPending()) return false;
   if (skip_ > 0) {
     --skip_;
@@ -41,7 +88,9 @@ bool TrimFeed::consumeTrimmed(const int16_t sample[2]) {
     return true;
   }
   if (hold_ == 0) {
-    return feed_.consume(sample);
+    if (!feed_.consume(sample)) return false;
+    ++kept_;
+    return true;
   }
   if (count_ < hold_) {  // the FIFO fills
     uint32_t at = head_ + count_;
@@ -49,6 +98,7 @@ bool TrimFeed::consumeTrimmed(const int16_t sample[2]) {
     buf_[2 * at] = sample[0];
     buf_[2 * at + 1] = sample[1];
     ++count_;
+    ++kept_;
     return true;
   }
   // Full: the oldest goes into the feed first; refused, nothing changes.
@@ -57,6 +107,7 @@ bool TrimFeed::consumeTrimmed(const int16_t sample[2]) {
   oldest[0] = sample[0];  // the newest in its place
   oldest[1] = sample[1];
   if (++head_ == hold_) head_ = 0;
+  ++kept_;
   return true;
 }
 

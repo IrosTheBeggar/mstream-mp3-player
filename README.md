@@ -539,11 +539,18 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   TrackCatalog        Track ids to paths and names: the index's tracks and
                       the built-in ones
   QueueSaver          When the queue, its position and the resume point
-                      (the second a paused track picks up at) are saved
+                      (the second a paused track picks up at, and its
+                      anchor) are saved
   TrackProgress, TrackSeek
-                      A track's length (headers, read rate); starting part
-                      of the way in (an MP3's byte from its bitrate or TOC,
-                      a clean frame, a FLAC's STREAMINFO)
+                      A track's length (headers, read rate, a truncated
+                      file's share); starting part of the way in: an MP3's
+                      start plan (CBR arithmetic, LAME's TOC inverted, a
+                      chain of frames; a preroll before the landing frame),
+                      an anchor's check, a FLAC's STREAMINFO (docs/SEEK.md)
+  SeekIndex           The run index: every 4th MP3 frame decoded, for a
+                      pause's resume anchor and exact seeks back into a run
+  ResumeAnchor        The bytes that start a track on the sample it paused at
+  FrameCursor         Which frame the sample a decoder offers comes from
   ByteStream          Byte sinks and sources for what is saved and loaded
   HeadsetKeys         What the headphones' transport keys do (never start music)
   PcmRing             PCM ring between the decode task and the active output

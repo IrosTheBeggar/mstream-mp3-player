@@ -159,59 +159,73 @@ The rules that keep it deadlock- and glitch-free:
   next `loop()`. With the converter in between, a source frame is taken only
   when the stage has room for everything it can make (`RingFeed`, below).
   The decode task re-checks requests and yields between passes.
-- **A track can start part of the way in** (`play()`'s `startMs`: the
-  resume point, below under Library and queue; `lib/core/TrackSeek`,
-  host-tested in test_track_seek). Where it lands first: in the last 5 s,
-  at the end or past it (a file that got shorter), it starts at 0:00
-  (`trackseek::startMs()`; an unknown length starts where asked). An MP3
-  with LAME's "Info" header (its CBR marker) whose first frames agree on
-  their bitrate starts at a byte by that bitrate (its TOC's 256ths of the
-  bytes put a 4 min file up to ~0.3 s off on the device); else at a byte
-  from its Xing TOC (100 points), else its VBRI TOC, else its average
-  bitrate (the header's length over its bytes). One without a
-  header: the first frame's bitrate (a plain CBR file, exact) when its
-  first frames (the 4 KB read) agree on it and the length `play()` was
-  handed (`durationHintMs`: the resume point's, as the backend had it)
-  agrees with the length that gives, within 3%; else the average bitrate
-  by that handed length (a VBR file whose Xing frame was stripped, a
-  silent 32 kbit/s start); with no length handed, a VBR file can't be
-  placed and starts at 0:00. From that byte the decoder is
-  handed the first frame whose next frame's header follows (a clean
-  start: libmad would resync, maybe on a false sync first). With LAME's
-  tag the time asked for is on the trimmed timeline that gapless playback
-  plays: the byte is the encoder delay and libmad's 529 samples later, and
-  a CBR Info file's counts from the first audio frame (GAPLESS.md section
-  4.6); after such a start only the generator's lead is skipped, and the
-  end is still trimmed. No
-  such frame in the 4 KB read, or one with 5 s or less of audio after it
-  at its bitrate (a file shorter than its header says): the seek failed,
-  and it starts at 0:00 (never a start that ends at once: the player would
-  move on to the next entry). A FLAC's rate and length come from its
-  STREAMINFO, past an ID3v2 tag in front of "fLaC" if a tagger put one
-  there (libFLAC skips it too). A
-  FLAC seeks through libFLAC (`FLAC__stream_decoder_seek_absolute()`: its
-  SEEKTABLE, else a bisection on frame headers), reached through a
-  subclass (`SeekableFlac`: the decoder is AudioGeneratorFLAC's protected
-  member) that also sets the stream's format, which the generator would
-  otherwise learn only from a frame of its own (the first frame, handed
-  over from the target sample, would be read as 8-bit); a seek that fails
-  opens the file again from the top. A built-in track only counts from
-  there (the same sound, what is left of its length). `positionMs()` is
-  the start plus what was played, so Now Playing is right from the first
-  frame; the read-rate length estimate adds the start to what it
-  estimates is left. The ring was emptied as for any start, so nothing
-  from before the start plays, and the DeclickReader fades it in; a rate
-  the converter refuses fails it as it would from the top. Accuracy: a CBR MP3 to the frame,
-  a FLAC to the sample, a VBR MP3 with a TOC within about 1% of its length,
-  one without by its average bitrate; the time shown is the time asked for.
-  Measured on the device (ENERGY.md, "Device run: batch 3 follow-ups"):
-  FLAC 0 ms; CBR MP3 30-50 ms behind (it lands on the next clean frame, and
-  libmad drops the first one, which lacks its bit reservoir); a LAME VBR
-  MP3 by its TOC -0.29 to +0.35 s of a 3:44 track (0.15%). Each start logs
-  `[audio] MP3: starting 1:23 in, of 5:20 (Xing TOC): byte ...` (or `CBR,
-  Info header`, `the first frame's bitrate`, ...) or `[audio] FLAC:
-  starting 1:23 in (libFLAC's seek, N ms)` (75-112 ms, with or without a
-  SEEKTABLE).
+- **A track can start part of the way in** (`play()`'s `StartAt`: the
+  resume point, below under Library and queue, or a seek: the console's
+  `qs`; [SEEK.md](SEEK.md) is the design and its measurements;
+  `lib/core/TrackSeek`, `SeekIndex`, `ResumeAnchor`, host-tested in
+  test_track_seek and test_seek_index). The tail rule first: a start in
+  the last 5 s, at the end or past it (a file that got shorter) starts at
+  0:00 (`trackseek::startMs()`; an unknown length starts where asked),
+  by the exact length: an MP3's Xing or VBRI frames x spf less LAME's
+  delay and padding, scaled down by the share it holds for a file more
+  than 4 KB shorter than its header's byte count, never one frame's
+  bitrate. An MP3 then starts by a **plan**: the decoder is handed a
+  preroll frame, `TrimFeed::armAt()` drops everything until the
+  generator's own state (`PinnedMp3`'s cursor: the file offset of the
+  frame each sample comes from) says the landing frame, then the plan's
+  skip. The preroll is at least 2 frames back (3 for MPEG-2/2.5) and 1 KB
+  before the frame before the landing one, so the landing frame decodes
+  bit for bit: its bit reservoir and the IMDCT and filterbank history (a
+  cold start on the landing frame itself loses it: libmad drops a frame
+  whose reservoir it never saw). The plan comes from the first source
+  that gives one: the resume point's anchor, checked against the file
+  (its size, the landing frame's header and a hash of its first 32
+  bytes, the preroll's header); the **run index** of what this run
+  decoded (`SeekIndex`: every 4th frame's byte, first sample and hash,
+  two 24 KB PSRAM slots, the heard track and the one decoded ahead), for
+  a seek back into it; CBR arithmetic (an Info header, or none, and
+  frames that agree on their bitrate: frame k is at the first audio
+  frame + floor(k x L), exact to the sample); LAME's TOC inverted (a LAME
+  VBR file: point i is the byte share after (floor(i x pos / 100) + 1) x
+  want frames of LAME's bag, truncated to 1/256); another encoder's Xing
+  TOC, VBRI's, or the average bitrate (by the header, or the length
+  `play()` was handed for a VBR file without a header), each an estimate
+  then a chain of frame headers read around it (the first frame at or
+  after it). A VBR file with nothing to place it by, or no chain there,
+  starts at 0:00 (never a start that ends at once: the player would move
+  on). All on the trimmed timeline that gapless playback plays (GAPLESS.md
+  section 4.6: LAME's delay + 529 samples into the decoded stream); a
+  plan's preroll never decodes the Info frame; the end is held and
+  trimmed as for any start. A FLAC's rate, length and total samples come
+  from its STREAMINFO, past an ID3v2 tag in front of "fLaC" if a tagger
+  put one there (libFLAC skips it too). A FLAC seeks through libFLAC
+  (`FLAC__stream_decoder_seek_absolute()`: its SEEKTABLE, else a
+  bisection on frame headers), by sample: its anchor's, else the
+  millisecond's, reached through a subclass (`SeekableFlac`: the decoder
+  is AudioGeneratorFLAC's protected member) that also sets the stream's
+  format, which the generator would otherwise learn only from a frame of
+  its own (the first frame, handed over from the target sample, would be
+  read as 8-bit); a seek that fails opens the file again from the top. A
+  built-in track only counts from there (the same sound, what is left of
+  its length). `positionMs()` is the start plus what was played, so Now
+  Playing is right from the first frame; the read-rate length estimate
+  adds the start to what it estimates is left. The ring was emptied as for
+  any start, so nothing from before the start plays, and the DeclickReader
+  fades it in; a rate the converter refuses fails it as it would from the
+  top. Accuracy: an anchor, the index of an exact run, a CBR MP3 and a
+  FLAC to the sample (the time shown is the sample's); a LAME VBR MP3 by
+  its TOC inverted p95 0.74 s, max 1.6 s (27 files on the PC: 1.3 and 2.4 s
+  by straight lines), other VBR files about 1% of their length, the time
+  shown the time asked. Each start logs `[audio] MP3: starting 1:23.456
+  in, of 5:20 (the run's index; exact): byte 2343590, frame 2345678 + 517
+  samples` (the preroll's byte, the landing frame's, the skip) or why it
+  starts at 0:00, an anchor that isn't the file's `[audio] MP3: the
+  resume anchor isn't this file's (the size: 8737445 -> 8737060): by its
+  second`, a FLAC `[audio] FLAC: starting 1:23.456 in (libFLAC's seek to
+  sample N, N ms)` (75-112 ms, with or without a SEEKTABLE). Not measured
+  on the device yet (SEEK.md section 11); before this the device measured
+  FLAC 0 ms, CBR MP3 30-50 ms behind (a cold start's lost frame) and a LAME
+  VBR MP3 by its TOC -0.29 to +0.35 s of a 3:44 track.
 - **Requests are generations.** `play()`/`stop()` post a new generation to
   `TransportSync`; the decode task's progress reports for anything older are
   dropped, so a stale "ended" can't skip the track that was just requested.
@@ -1124,12 +1138,13 @@ layout is schema 1's) it is written; older, `migrate(from, to)` runs and
 then the number is written (a failed step leaves the old number, so the next
 boot tries again); newer (a downgrade) it is left alone. The boot log says
 which (`[nvs] schema 1`). Schema 1 is v0.5.0's layout, which is
-beta.1's plus one change that a version byte covers, not the number: the
-resume point (`queue`/`resume`) is a 24-byte version-1 blob once v0.5.0
-has saved one, and until then may still be beta.1's 20-byte one. So a
-schema-1 unit holds either form, and every reader of schema 1 (and any
-`migrate(1, ...)` step) must take both. `migrate()` has no step yet. The
-rules:
+beta.1's plus one blob that its own version byte covers, not the number:
+the resume point (`queue`/`resume`) is beta.1's 20-byte form (version
+0) until v0.5.0 first saves, then version 1's 24 bytes, and since its
+resume anchor (SEEK.md section 5.2) version 2's 64 bytes. So a schema-1
+unit holds any of the three, and every reader of schema 1 (and any
+`migrate(1, ...)` step) must take them all. `migrate()` has no step yet.
+The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
   the key is gone: an old unit may still hold the old value under it. A
@@ -1144,11 +1159,14 @@ rules:
   version; the schema text says which versions it allows.
 - **Blobs carry their own version** and are read by size and version, old
   ones too: the touch calibration (`"TCAL"`, a version byte) and the resume
-  point (since v0.5.0 a version byte first, 24 bytes; beta.1's
-  unversioned 20 bytes are still read; anything else is ignored, as if
-  none were saved). A downgrade loses what it can't read: beta.1 reads
-  only the 20-byte form, so going back from v0.5.0 to beta.1 starts with
-  no resume point (nothing else is lost).
+  point (a version byte first: version 2, 64 bytes, with its anchor;
+  v0.5.0's version 1, 24 bytes, and beta.1's unversioned 20 bytes are
+  still read, without an anchor; anything else is ignored, as if none were
+  saved). A downgrade loses what it can't read: v0.5.0 reads only versions
+  0 and 1, and beta.1 only the 20-byte form, so going back starts once with
+  no resume point (nothing else is lost). A second key for the anchor
+  would have kept v0.5.0's millisecond, but two writes per pause aren't
+  atomic.
 - Keys are at most 15 characters (NVS's limit).
 
 The keys of schema 1, by namespace: `meta` (schema); `input` (cal,
@@ -1416,9 +1434,13 @@ the browsing UI hold its **track ids**, never strings.
   generation, so a track change doesn't rewrite the file and a position is
   never paired with an older file. The **resume point** goes to NVS too
   ("queue"/"resume", one blob: generation, line, the path's FNV-1a hash,
-  ms, the length then): written at every pause (the player's
-  `resumePoint()`: a paused track's position, or a start point that
-  waits), so at every orderly shutdown (the CPU speed's restart pauses
+  ms, the length then, and its **anchor**: the bytes that start the track
+  on the very sample it paused at, SEEK.md section 5): written at every
+  pause (the player's `resumePoint()`: a paused track's position and the
+  backend's anchor for it, `resumeAnchor()`, from the run index at the
+  read position; or a start point that waits, with its own), and once
+  more if only the anchor's sample moved (the pause's fade reads 64 frames
+  more), so at every orderly shutdown (the CPU speed's restart pauses
   first; the idle power-off comes only paused or stopped; the sleep
   timer's end is a pause), and removed as soon as playback moves on (a
   play, a skip, another entry, an edit that changes the current entry).
@@ -1428,9 +1450,10 @@ the browsing UI hold its **track ids**, never strings.
   queue as it is, and again (at its new line) after an edit that only
   moved the entry. At boot one saved for the restored file's current line,
   whose track still has that path, becomes the player's **start point**
-  (`setStartPoint()`): stopped, nothing plays, Now Playing shows that second
-  and the length saved with it, and the next play starts there (the fade-in
-  as always). It belongs to that entry's key: next, another entry, or an
+  (`setStartPoint()`, with its anchor): stopped, nothing plays, Now Playing
+  shows that second and the length saved with it, and the next play
+  starts there (the fade-in as always): by the anchor when it is still
+  this file's, else by the second. It belongs to that entry's key: next, another entry, or an
   edit that changes the current entry drops it; prev on it (the Core2's or
   the headphones') goes to 0:00 of the same entry, whatever the second, and
   starts nothing: stopped stays stopped, as a paused track's restart does
@@ -1438,11 +1461,13 @@ the browsing UI hold its **track ids**, never strings.
   carries it across the rebuild. It applies
   after any boot with one saved: the CPU speed's restart, the idle
   power-off, the power key while paused. Console: `q` and `l` print it
-  (`[queue] resume point saved: 1:23 into 5 (generation 12); start point
-  waiting: none`);
+  (`[queue] resume point saved: 1:23.456 into 5 (generation 12): MP3 frame
+  at 2345678 + 517 samples, preroll 2343590, exact; start point waiting:
+  none`);
   `qs<sec>` sets a start point on the current entry (playing: it starts
   there now), with the length as known (the held track's, else the
-  catalog's), to check the seek without a restart; `qs0` clears it. A
+  catalog's) and no anchor (a seek: a second the run decoded is exact by
+  its index), to check the seek without a restart; `qs0` clears it. A
   dropped start point stays dropped: an undo that brings its entry back
   doesn't bring the second back.
   After a restart the queue is where it
