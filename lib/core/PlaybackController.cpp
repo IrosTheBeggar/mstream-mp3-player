@@ -169,7 +169,9 @@ void PlaybackController::prev() {
 void PlaybackController::restart() {
   // The length it had stays shown at 0:00 (paused: "0:00 / 4:05", not
   // "--:--", while the backend holds nothing), and the seek bar with it.
-  if (state_ != PlayState::Stopped && !cued_) noteLength(audio_.durationMs());
+  // Not while a start is pending: the backend's length may still be the
+  // track before's (a seek to 0:00 then has noted the bar's already).
+  if (state_ != PlayState::Stopped && !cued_ && audio_.positionKnown()) noteLength(audio_.durationMs());
   clearStartPoint();
   switch (state_) {
     case PlayState::Playing:
@@ -343,6 +345,29 @@ bool PlaybackController::pendingStart(uint32_t* ms) const {
   if (!hasTrack() || state_ == PlayState::Stopped || cued_ || audio_.positionKnown()) return false;
   *ms = playedFromMs_;
   return true;
+}
+
+void PlaybackController::shownTime(uint32_t* positionMs, uint32_t* durationMs) const {
+  *positionMs = 0;
+  *durationMs = 0;
+  if (!hasTrack()) return;
+  uint32_t ms = 0, length = 0;
+  if (startPoint(&ms, &length)) {
+    *positionMs = ms;
+    *durationMs = length;
+    return;
+  }
+  if (pendingStart(&ms)) {
+    // Never the backend's length here: a skip's is the track before's until
+    // the decode task takes the request up. A library track has no hint: no
+    // length for that moment, and the seek bar is inert.
+    *positionMs = ms;
+    *durationMs = lengthHint();
+    return;
+  }
+  *positionMs = audio_.positionMs();
+  *durationMs = audio_.durationMs();
+  if (*durationMs == 0 && !audio_.failed()) *durationMs = lengthHint();
 }
 
 void PlaybackController::pauseByTimer() {

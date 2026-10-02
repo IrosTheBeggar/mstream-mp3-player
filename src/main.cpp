@@ -462,30 +462,15 @@ struct MainUiHost : ui::UiHost {
     s.upNext = queue.upNext();
     s.contentVersion = queue.contentVersion();
     s.positionVersion = queue.positionVersion();
-    s.positionMs = s.current >= 0 ? audio.positionMs() : 0;
-    s.durationMs = s.current >= 0 ? audio.durationMs() : 0;
-    // A start point waiting (the resume point after a boot, or qs): Now
-    // Playing shows that second, and the length as it was then, until the
-    // play that starts there.
-    uint32_t startMs = 0, startDurationMs = 0;
-    if (s.current >= 0 && player.startPoint(&startMs, &startDurationMs)) {
-      s.positionMs = startMs;
-      s.durationMs = startDurationMs;
-    } else if (s.current >= 0) {
-      // A start the backend hasn't taken up yet: where it was asked to start
-      // (its position may still be the track before's), with the length it
-      // went with; and while the backend knows no length (the file not open
-      // yet, a header-less file's first second, a track let go at 0:00), the
-      // one the player was told: a seek (Now Playing's seek bar,
-      // docs/SEEK-BAR.md) never shows the old second or a dotted line.
-      const uint32_t hint = player.lengthHint();
-      if (player.pendingStart(&startMs)) {
-        s.positionMs = startMs;
-        if (hint) s.durationMs = hint;
-      } else if (s.durationMs == 0 && !s.failed) {
-        s.durationMs = hint;
-      }
-    }
+    // Where it is and how long (PlaybackController::shownTime()): a start
+    // point's second and length until the play that starts there (the
+    // resume point after a boot, qs, a paused seek); a start the backend
+    // hasn't taken up yet, where it was asked to start with the length the
+    // player was told (never the backend's, which may still be the track
+    // before's: Now Playing's seek bar, docs/SEEK-BAR.md, would seek the
+    // new entry by it); else the backend's, with the told length while it
+    // knows none.
+    player.shownTime(&s.positionMs, &s.durationMs);
     BtSink& bt = audio.bluetooth();
     s.onBluetooth = audio.output() == Output::Bluetooth;
     s.btConnected = bt.connected();

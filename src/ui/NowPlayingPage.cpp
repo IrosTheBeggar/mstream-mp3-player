@@ -60,19 +60,13 @@ constexpr int kReadoutY = 137, kReadoutH = 33;
 static_assert(SeekBar::kLineX + SeekBar::kLineW == kW - 12, "the seek bar's line is drawProgress()'s");
 static_assert(kReadoutY == kCoverY + kCoverPx + 1, "the readout row starts under the cover's frame");
 static_assert(kReadoutY + kReadoutH == kProgressY, "the readout row ends at the band");
+static_assert(SeekBar::kLineX + uitext::kSeekReadoutW < SeekBar::kReadoutLeftX &&
+                  SeekBar::kLineX + SeekBar::kLineW - uitext::kSeekReadoutW > SeekBar::kReadoutRightX,
+              "the readout at its widest ends short of where the knob sends it across");
 
-void mmss(uint32_t ms, char* buf, size_t size) {
-  snprintf(buf, size, "%lu:%02lu", static_cast<unsigned long>(ms / 60000), static_cast<unsigned long>(ms / 1000 % 60));
-}
-
-// The readout's change from where it plays, in whole seconds: "+1:21",
-// "−0:45" (U+2212; folded to "-" where a font lacks it).
-void change(uint32_t targetMs, uint32_t liveMs, char* buf, size_t size) {
-  const int32_t d = static_cast<int32_t>(targetMs / 1000) - static_cast<int32_t>(liveMs / 1000);
-  const uint32_t a = static_cast<uint32_t>(d < 0 ? -d : d);
-  snprintf(buf, size, "%s%lu:%02lu", d < 0 ? "\xE2\x88\x92" : "+", static_cast<unsigned long>(a / 60),
-           static_cast<unsigned long>(a % 60));
-}
+// m:ss, as the seek bar's readout has it (what the finger read is what the
+// band shows after the lift).
+void mmss(uint32_t ms, char* buf, size_t size) { SeekBar::timeText(ms, buf, size); }
 
 // The last line of a wrap was cut ("…" added): the text needs more room.
 bool cutShort(const char* line, const char* text) {
@@ -361,15 +355,6 @@ void NowPlayingPage::drawProgressText(M5Canvas& c, bool paused) {
   }
 }
 
-uint32_t NowPlayingPage::readoutSig() const {
-  // What drawReadout() shows: off; staying (where it plays); or the
-  // finger's second and the change from where it plays; and the side.
-  if (bar_.phase() == SeekBar::Phase::Off) return 1;
-  uint32_t h = bar_.readoutLeft() ? 2u : 3u;
-  if (bar_.staying()) return h * 31u + 7u + bar_.liveMs() / 1000 * 131u;
-  return (h * 31u + bar_.targetMs() / 1000) * 131u + bar_.liveMs() / 1000;
-}
-
 void NowPlayingPage::drawReadout() {
   using namespace uitext;
   M5Canvas& c = gfx::strip();
@@ -390,7 +375,7 @@ void NowPlayingPage::drawReadout() {
       snprintf(small, sizeof(small), "%s", kSeekStay);
     } else {
       mmss(bar_.targetMs(), big, sizeof(big));
-      change(bar_.targetMs(), bar_.liveMs(), small, sizeof(small));
+      SeekBar::changeText(bar_.targetMs(), bar_.liveMs(), small, sizeof(small));
     }
     const int bw = std::min(f.width(Font::Title, big), kSeekReadoutW);
     const int sw = std::max(0, std::min(f.width(Font::Small, small), kSeekReadoutW - bw - kSeekReadoutGap));
@@ -404,7 +389,7 @@ void NowPlayingPage::drawReadout() {
   if (!drawn_.scrubUp) gfx::fill(kColumnX, kAlbumY, kW - kColumnX, kReadoutY - kAlbumY, col::BG);
   gfx::push(c, 0, kReadoutY, kW, kReadoutH);
   drawn_.scrubUp = true;
-  drawn_.readout = readoutSig();
+  drawn_.readout = bar_.readout();
 }
 
 void NowPlayingPage::endScrub() {
@@ -414,7 +399,7 @@ void NowPlayingPage::endScrub() {
   drawMiddle();
   gfx::fill(0, kReadoutY, kColumnX, kReadoutH, col::BG);
   drawn_.scrubUp = false;
-  drawn_.readout = 0;
+  drawn_.readout = SeekBar::Readout{};
 }
 
 const char* NowPlayingPage::outputName(char* buf, size_t size) const {
@@ -655,7 +640,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     // A finger scrubs: a frame (the band, and the readout when its text or
     // side changed) only on the frame deadlines, when the look, the knob,
     // the marker or the readout moved.
-    const bool text = !drawn_.scrubUp || readoutSig() != drawn_.readout;
+    const bool text = !drawn_.scrubUp || bar_.readout() != drawn_.readout;
     const bool moved = static_cast<uint8_t>(look) != drawn_.bar || bar_.knobX() != drawn_.knobX ||
                        bar_.markerX() != drawn_.markerX;
     if (all || ((text || moved) && frameDue)) {

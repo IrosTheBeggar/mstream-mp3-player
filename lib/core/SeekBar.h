@@ -2,6 +2,7 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 #include "InputEvent.h"
@@ -19,7 +20,9 @@
 //   and the lift seeks once, to the second the readout showed. A drag that
 //   isn't sideways is let go: nothing, then or at the lift.
 // - The grab. A Down within kGrabPx of the knob (a reading that wasn't
-//   clamped) grabs it: from the DragStart the knob moves by the finger's
+//   clamped) grabs it: it stays where it is at the DragStart (where it
+//   plays then: a finger that rested on it while the music played on
+//   doesn't pull it back to the Down's x), then moves by the finger's
 //   movement, with no jump (only differences count, so the panel's few px
 //   of calibration error don't matter). Anywhere else the knob comes to
 //   the finger.
@@ -71,11 +74,35 @@ public:
     uint32_t ms = 0;    // Seek: the target
   };
 
+  // What the readout row shows (docs/SEEK-BAR.md section 4.2), field by
+  // field: the page draws it again whenever this changes. Off: "Release to
+  // cancel" (nothing else counts). Otherwise its side, and staying: the
+  // live second and "no change"; or the finger's second and the change from
+  // the live one.
+  struct Readout {
+    bool off = false;
+    bool staying = false;
+    bool left = false;
+    uint32_t targetS = 0;  // the finger's second (0 while staying or off)
+    uint32_t liveS = 0;    // where it plays (0 while off)
+    bool operator==(const Readout& o) const {
+      return off == o.off && staying == o.staying && left == o.left && targetS == o.targetS && liveS == o.liveS;
+    }
+    bool operator!=(const Readout& o) const { return !(*this == o); }
+  };
+
   static bool seekable(uint32_t durationMs) { return durationMs >= kMinLengthMs; }
   // Where `ms` is on the line, 0..kLineW (0: no length): the fill's width.
   static int xOf(uint32_t ms, uint32_t durationMs);
   // The second at screen x (whole seconds, 0..seekLimitMs()).
   static uint32_t msAt(int x, uint8_t edges, uint32_t durationMs);
+  // The readout's texts, and the band's times: a second as m:ss ("2:31";
+  // a mix of 100 min or more, "100:00"); the change from where it plays
+  // in whole seconds ("+1:21", "-0:45"). The minus is ASCII: none of the
+  // fonts has U+2212, and the width measured would not be the one drawn
+  // (TextFit folds it).
+  static void timeText(uint32_t ms, char* buf, size_t size);
+  static void changeText(uint32_t targetMs, uint32_t liveMs, char* buf, size_t size);
 
   // A Down in the bar's zone, on entry `key` playing at `liveMs` of
   // `durationMs` (frozen for the touch). False (inert, Idle): not seekable.
@@ -101,6 +128,8 @@ public:
   bool staying() const { return phase_ == Phase::Scrubbing && staying_; }
   bool knobGrab() const { return knobGrab_; }
   bool readoutLeft() const { return readoutLeft_; }
+  // While scrubbing or off: what the readout shows.
+  Readout readout() const;
   // Screen x: the knob (the target's; the marker's while pressed, staying
   // or off) and the marker (where it plays).
   int knobX() const;
@@ -125,6 +154,5 @@ private:
   bool staying_ = false;
   bool knobGrab_ = false;
   bool readoutLeft_ = false;
-  int downKnobX_ = 0;  // the knob's screen x at the Down
-  int grabDx_ = 0;     // a knob grab: the knob's x at the Down less the finger's at the DragStart
+  int grabDx_ = 0;  // a knob grab: the knob's x at the DragStart (where it plays) less the finger's
 };

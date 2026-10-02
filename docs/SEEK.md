@@ -911,9 +911,12 @@ seek is a start part of the way in, on the same path as `qs`.
     run's index, because a stop keeps it (4.3).
   - A paused seek to 0:00 clears the resume point.
 - **While a start is pending** (`positionKnown()` false):
-  - Now Playing shows where the start was asked for (`pendingStart()`);
-  - while the backend knows no length, Now Playing shows the length the
-    player was told (`lengthHint()`);
+  - Now Playing shows where the start was asked for (`pendingStart()`),
+    with the length the player was told (`lengthHint()`; both through
+    `shownTime()`). Never the backend's length, which may still be the
+    track before's: a skip with no hint shows no length for that moment;
+  - after it, while the backend knows no length, Now Playing shows the
+    length the player was told;
   - `resumePoint()` gives the pending start, without an anchor.
 - **Unchanged:**
   - the plans, the anchors, the index, and the tail rule;

@@ -274,8 +274,13 @@ landed decides how the knob follows.
 - **From the knob.** The Down landed within `kGrabPx` (16 px) of the
   knob, and its reading wasn't clamped.
   - The knob stays where it is at the DragStart, then moves by the
-    finger's movement from there: `vx = x + (the knob's x at the Down −
-    x at the DragStart)`.
+    finger's movement from there: `vx = x + (the knob's x at the
+    DragStart − x at the DragStart)`. The knob's x at the DragStart is
+    where it plays then, not where it was at the Down: `noHold()` lets a
+    finger rest on the knob, and the pressed knob follows the music
+    meanwhile. Anchored at the Down, a 1.5 s rest on a 1:00 track pulled
+    the knob 13 px back at the first frame, and the lift sought behind
+    where it played.
   - There is no jump on the first frame.
   - Only differences count, so the calibration's few px don't matter.
   - A nudge of a few seconds needs no aim.
@@ -385,7 +390,7 @@ While scrubbing, the finger's y decides:
 | `kOffAboveY` / `kBackAboveY` | 130 / 138 | SeekBar | off above the first; back from the second down |
 | `kOffBelowY` / `kBackBelowY` | 240 / 232 | SeekBar | off on the strip; back above the second |
 | `kReadoutLeftX` / `kReadoutRightX` / `kReadoutStartX` | 184 / 136 / 160 | SeekBar | the knob right of 184: the readout goes left; left of 136: right; in between, it stays where it was (at the scrub's start: left from 160) |
-| `uitext::kSeekReadoutW`, `kSeekReadoutGap` | 150, 8 | UiText.h | the readout group's width at most, and the gap between its two texts |
+| `uitext::kSeekReadoutW`, `kSeekReadoutGap` | 160, 8 | UiText.h | the readout group's width at most (a mix's "999:59 no change" is 159 px), and the gap between its two texts |
 | `kReadoutY`, `kReadoutH` | 137, 33 | NowPlayingPage | the readout row: y 137-169, the full width |
 | the slop, the hold | 12 px, none | TouchRecognizer, `noHold()` | the slop as everywhere; no LongPress on the bar |
 
@@ -456,7 +461,7 @@ It is up only while Scrubbing or Off.
 
 | State | Text | Where |
 |---|---|---|
-| Scrubbing | The target ("2:31") in Font::Title, TXT; 8 px; then the change from the live position ("+1:21", "−0:45") in Font::Small, DIM. The minus is U+2212; TextFold folds it to "-" if the font lacks it | Left-aligned at x 12 when the knob is right of x 184; right-aligned to x 308 when it is left of x 136; in between, where it was. At the scrub's start: left if the knob is at x 160 or right of it |
+| Scrubbing | The target ("2:31") in Font::Title, TXT; 8 px; then the change from the live position ("+1:21", "-0:45") in Font::Small, DIM. The minus is an ASCII "-": none of the four fonts has U+2212 (`tools/vlw_font.py`'s ranges), and one it lacks is measured as a space (4 px in Sans 13) but drawn folded to "-" (5 px), so every backward change was cut to "-0:…" | Left-aligned at x 12 when the knob is right of x 184; right-aligned to x 308 when it is left of x 136; in between, where it was. At the scrub's start: left if the knob is at x 160 or right of it |
 | Staying | The live second ("1:10") in Title, TXT; then "no change" in Small, DIM (`uitext::kSeekStay`) | as above |
 | Off | "Release to cancel" in Font::Bold, AMBER (`uitext::kSeekCancel`) | centred |
 
@@ -464,7 +469,19 @@ It is up only while Scrubbing or Off.
   (y 156), so that their baselines roughly agree. Check it on the
   device's screenshot.
 - The change is in whole seconds: `target/1000 − live/1000`.
-- The readout group is at most 150 px wide (`uitext::kSeekReadoutW`).
+- The times are m:ss, as the band's: a mix of 100 min or more reads
+  "100:00" (84 px in Title, as any three-digit minute: the figures are
+  tabular).
+- The readout group is at most 160 px wide (`uitext::kSeekReadoutW`):
+  "999:59 no change" is 84 + 8 + 67 = 159 px. (150 cut "no change" from
+  100 min on.) From x 12, or to x 308, the widest group still ends 12 px
+  short of where the knob sends it across (x 184 and 136); a
+  `static_assert` in the page holds that.
+- It is drawn again whenever what it shows changes: off, its side,
+  staying, the target's second or the live second
+  (`SeekBar::Readout`, compared field by field). A hash of those let two
+  different readouts pass for one (a flip of side with a 31 s step, or
+  "no change" and a sweep to 0:07), and the row kept the old text.
 
 **Entering** the scrub look:
 
@@ -610,6 +627,11 @@ In `PlaybackController.h`, under "starting part of the way in":
   // play's hint, the held track's at a restart); 0: none. Now Playing shows
   // it while the backend knows none.
   uint32_t lengthHint() const;
+  // Where the current entry is and how long it is, as Now Playing shows
+  // them (the snapshot's, 5.3): a start point's; a pending start's, with
+  // lengthHint() alone; else the backend's, with lengthHint() while it
+  // knows none, unless the track failed.
+  void shownTime(uint32_t* positionMs, uint32_t* durationMs) const;
 ```
 
 Private:
@@ -660,8 +682,11 @@ PlaybackController::Seek PlaybackController::seek(uint32_t key, uint32_t ms, uin
   - `startNow()`, with its hint when it is above 0 (a resume point's
     length, or a built-in track's);
   - `restart()`, at its top, with `audio_.durationMs()` when the backend
-    holds the track. Prev's restart while paused then keeps "0:00 / 4:05"
-    instead of "0:00 / --:--", and the bar stays seekable.
+    holds the track and has taken its start up (`positionKnown()`). Prev's
+    restart while paused then keeps "0:00 / 4:05" instead of "0:00 /
+    --:--", and the bar stays seekable. Not while a start is pending: the
+    backend's length may still be the track before's, and a seek to 0:00
+    then (an entry with a hint, right after a skip) has noted the bar's.
 - `static_assert(trackseek::kSeekGuardMs > trackseek::kTailMs)` goes in
   `PC.cpp`.
 - **`resumePoint()` while a start is pending** (a pause within ~150 ms of
@@ -709,33 +734,44 @@ What a seek never does (none of `placeStart()`, `restart()` and
 
 ### 5.3 The snapshot (`src/main.cpp`, `MainUiHost::snapshot()`)
 
+The snapshot's position and length are the player's
+(`player.shownTime(&s.positionMs, &s.durationMs)`), so the rule is
+host-tested with the fake backend's late starts:
+
 ```cpp
-    s.positionMs = s.current >= 0 ? audio.positionMs() : 0;
-    s.durationMs = s.current >= 0 ? audio.durationMs() : 0;
-    uint32_t startMs = 0, startDurationMs = 0;
-    if (s.current >= 0 && player.startPoint(&startMs, &startDurationMs)) {
-      s.positionMs = startMs;  // (as today)
-      s.durationMs = startDurationMs;
-    } else if (s.current >= 0) {
-      // A start the backend hasn't taken up yet: where it was asked to start
-      // (its position may still be the track before's), with the length it
-      // went with; and while the backend knows no length (the file not open
-      // yet, a header-less file's first second, a track let go at 0:00), the
-      // one the player was told: a seek never shows the old second or a
-      // dotted line.
-      const uint32_t hint = player.lengthHint();
-      if (player.pendingStart(&startMs)) {
-        s.positionMs = startMs;
-        if (hint) s.durationMs = hint;
-      } else if (s.durationMs == 0 && !s.failed) {
-        s.durationMs = hint;
-      }
-    }
+void PlaybackController::shownTime(uint32_t* positionMs, uint32_t* durationMs) const {
+  *positionMs = 0;
+  *durationMs = 0;
+  if (!hasTrack()) return;
+  uint32_t ms = 0, length = 0;
+  if (startPoint(&ms, &length)) {  // (as before the bar)
+    *positionMs = ms;
+    *durationMs = length;
+    return;
+  }
+  if (pendingStart(&ms)) {  // never the backend's length here
+    *positionMs = ms;
+    *durationMs = lengthHint();
+    return;
+  }
+  *positionMs = audio_.positionMs();
+  *durationMs = audio_.durationMs();
+  if (*durationMs == 0 && !audio_.failed()) *durationMs = lengthHint();
+}
 ```
 
-A skip's pending start now shows 0:00 at once too. It keeps the old
-track's length, as today, unless the entry has a hint (a built-in
-track's). That is a small improvement, not a change of meaning.
+- A seek's pending start shows its target and the bar's length, so a seek
+  never shows the old second or a dotted line.
+- A skip's pending start shows 0:00 at once, and **no length** unless
+  the entry has a hint (a built-in track's, a resume point's, one told
+  before). Until the decode task takes the request up (`start()`, which
+  clears `knownDurationMs_` and the frozen length), the backend's length
+  is still the track before's. The first version of the snapshot kept it
+  (`if (hint) s.durationMs = hint;`), and a finger landing on the bar in
+  that pass made the new entry seekable at the old length: the seek went
+  by it, and `noteLength()` kept it as the entry's `lengthHint()`. Now the
+  bar is inert for that moment, as it already was through `prepare()`
+  (where the backend's length is 0).
 
 ## 6. The races
 
@@ -744,7 +780,7 @@ outputs read the ring on their own tasks.
 
 | | What happens | Handled by |
 |---|---|---|
-| R1 | A stale position while Pending: until the book restarts, the position is the old run's second. That includes a produce pass already under way | `pendingStart()` in the snapshot (5.3) |
+| R1 | A stale position and length while Pending: until the book restarts, the position is the old run's second, and until `start()` the length is the old track's (frozen or known). That includes a produce pass already under way | `pendingStart()` and `lengthHint()` alone in the snapshot (`shownTime()`, 5.3): a skip with no hint shows no length, so the bar is inert, never seekable at the old track's length |
 | R2 | A length of 0 while `prepare()` reads the card (`C2AB.cpp:742` to `1040`). A header-less file has none for about 1 s more | `lengthHint()` in the snapshot |
 | R3 | A join heard between the page's look at the snapshot and the action. `takeAdvance()` depends on the output's `readPos`, which moves on another task, and the page's snapshot is a pass old anyway | the key check inside `seek()`'s `Act`, after `syncHeard()`, with no nested `Act` (5.1) |
 | R4 | A boundary pending in the book at the request (the next track decoded ahead) | It goes with the request's book restart and is never taken (`GaplessJoin.cpp:18, 52-63`). `startNow()` resets the offer. The next track is offered again with a new token, and decoded ahead again near the new end. A few ms of the next track may be heard in the µs between `syncHeard()` and `play()`, as with Next pressed at that moment |
@@ -832,10 +868,12 @@ player logs nothing new; the backend's own start lines follow, as for
 1. **`lib/core/TrackSeek.h`**: `kSeekGuardMs` and `seekLimitMs()` (5.1),
    in the tail rule's paragraph.
 2. **`lib/core/PlaybackController.h/.cpp`**:
-   - public: `Seek`, `seek()`, `pendingStart()`, `lengthHint()`;
+   - public: `Seek`, `seek()`, `pendingStart()`, `lengthHint()`,
+     `shownTime()` (the snapshot's position and length, 5.3);
    - private: `placeStart()` (split from `setStartPoint()`),
      `noteLength()`, `lengthKey_`, `lengthMs_`;
-   - `noteLength()` calls in `startNow()` and `restart()`;
+   - `noteLength()` calls in `startNow()` and `restart()` (not while a
+     start is pending);
    - `resumePoint()`'s pending case;
    - the `static_assert`;
    - a class-comment paragraph after the start point's, "A seek (Now
@@ -865,10 +903,21 @@ player logs nothing new; the backend's own start lines follow, as for
        bool tap = false;   // the Seek was a tap's (its tick waits for the player)
        uint32_t ms = 0;    // Seek: the target
      };
+     // What the readout shows, field by field (4.2): the page draws it
+     // again whenever it changes.
+     struct Readout {
+       bool off, staying, left;
+       uint32_t targetS, liveS;
+       bool operator==(const Readout& o) const;
+       bool operator!=(const Readout& o) const;
+     };
 
      static bool seekable(uint32_t durationMs) { return durationMs >= kMinLengthMs; }
      static int xOf(uint32_t ms, uint32_t durationMs);                 // 0..kLineW (0: no length)
      static uint32_t msAt(int x, uint8_t edges, uint32_t durationMs);  // whole s, 0..seekLimitMs()
+     // m:ss ("100:00" past 99 min), and "+1:21" / "-0:45" (an ASCII minus)
+     static void timeText(uint32_t ms, char* buf, size_t size);
+     static void changeText(uint32_t targetMs, uint32_t liveMs, char* buf, size_t size);
 
      // A Down in the bar's zone, on entry `key` playing at `liveMs` of
      // `durationMs` (frozen for the touch). False (inert, Idle): not seekable.
@@ -890,6 +939,7 @@ player logs nothing new; the backend's own start lines follow, as for
      bool staying() const;
      bool knobGrab() const;
      bool readoutLeft() const;
+     Readout readout() const;  // while scrubbing or off
      int knobX() const;    // screen x: the target's (the marker's while staying or off)
      int markerX() const;  // screen x: where it plays
      uint32_t heldMs(uint32_t nowMs) const;  // since the target's second last changed
@@ -912,9 +962,10 @@ player logs nothing new; the backend's own start lines follow, as for
    - **Release, Cancel:** ends Cancel.
    - Anything while Idle: nothing.
 4. **`lib/core/UiText.h`**: `kSeekCancel` "Release to cancel",
-   `kSeekStay` "no change", and the readout's `kSeekReadoutW` (150) and
+   `kSeekStay` "no change", and the readout's `kSeekReadoutW` (160) and
    `kSeekReadoutGap` (8), which test_ui_library measures.
-5. **`src/main.cpp`**: the snapshot (5.3), and nothing else.
+5. **`src/main.cpp`**: the snapshot (5.3: `player.shownTime()`), and
+   nothing else.
    - No new console command: the scripted finger drives the bar, and `qs`
      stays the start point's test.
    - No UiHost change: the UI reaches the player directly.
@@ -933,8 +984,8 @@ player logs nothing new; the backend's own start lines follow, as for
      column, the band); `void seekTo(const SeekBar::Out& o, uint32_t
      nowMs);`; `bool seekable() const;`.
    - `Drawn` gains: `uint8_t bar` (the look), `int16_t knobX`, `int16_t
-     markerX`, `uint32_t readout` (its text and side, hashed) and `bool
-     scrubUp`.
+     markerX`, `SeekBar::Readout readout` (what the readout shows, its
+     fields: a hash let two readouts collide) and `bool scrubUp`.
    - A member `SeekBar bar_;`.
 7. **`src/ui/NowPlayingPage.cpp`**:
    - the header comment: the seek bar;
@@ -1047,6 +1098,28 @@ fields, the player's 8 B); no IRAM.
     - resting 900 ms, then lifting: a Tap, and a Seek;
     - a flick from 50 to 250: a DragEnd, then a Fling, and one Seek.
 
+Added by the review: the grab after a rest, every threshold on both
+sides (a test on one side passes a threshold moved the other way), and
+what the readout shows:
+
+17. `test_a_knob_grab_after_a_rest_doesnt_jump_back`: a 1:00 track at
+    20 s, a Down on the knob (x 110), 1.5 s of rest (the pressed knob at
+    x 118), a DragStart at 123: staying, the knob still at 118; 10 px on,
+    23,000 (forward); the lift seeks there.
+18. `test_off_and_back_at_their_rows`: y 130 still on, 129 off; 137 still
+    off, 138 back; 239 still on, 240 off; 232 still off, 231 back.
+19. `test_the_grab_reaches_16_px`: Downs 16 px either side of the knob
+    grab it, 17 px don't.
+20. `test_the_readout_sides_at_their_edges`: the knob at 184 keeps the
+    readout right, 185 sends it left; 136 keeps it left, 135 sends it
+    right; at the start, 159 is right (160 left: test 13).
+21. `test_the_readout_changes_with_what_it_shows`: the two pairs a hash
+    once collided on (a 51:00 mix, x 184 to 187: 29:38 right, then 30:09
+    left; 4:05 at 1:40: staying, then a sweep to 0:07) give different
+    `readout()`s, and off differs from both.
+22. `test_the_readout_texts`: "0:00", "2:31", "100:00"; "+1:21", "-0:45"
+    (ASCII), "+0:00".
+
 **test_playback** (the Rig; `FakeAudioBackend` with `asyncStarts` and
 `anchorsOn`; `TestHold`):
 
@@ -1096,6 +1169,15 @@ fields, the player's 8 B); no IRAM.
 13. `test_the_resume_point_while_a_start_is_pending`: with `asyncStarts`,
     a seek to 90,000, then `togglePlayPause()` before `take()`:
     `resumePoint()` gives 90,000, with no anchor.
+14. `test_the_shown_time_never_lends_the_track_befores_length`
+    (`shownTime()`, 5.3): playing 300,000 at 120 s, `next()` before
+    `take()`: 0 and no length (the backend still says 300,000); taken up:
+    its 180,000; a seek's pending start: 90,000 and the bar's 180,000;
+    a backend that knows no length: 180,000; failed: none.
+15. `test_a_seek_to_0_while_a_start_is_pending_keeps_the_bars_length`:
+    entry 1 told 180,000, on to entry 2 (300,000), prev back to entry 1
+    (pending): it shows 180,000, and a seek to 0:00 then keeps
+    `lengthHint()` at 180,000 (`restart()` doesn't note the backend's).
 
 **test_gapless_player** (`World`, the real engine; its backend starts
 every play from 0, which is enough for the words and the joins):
@@ -1117,8 +1199,12 @@ decision in section 7).
 **test_ui_library**:
 
 - `fits()` for `kSeekCancel` (Bold, in 296 px);
-- the widest readout group (Title "59:59", 8 px, Small "no change")
-  within `kSeekReadoutW` (150 px).
+- the readout group for lengths up to 999:59 (Title from
+  `SeekBar::timeText()`, 8 px, Small "no change" and the widest changes
+  from `SeekBar::changeText()`, both ways) within `kSeekReadoutW`
+  (160 px), the figures all as wide; every character one the font has
+  (`Vlw::hasAll()`: a missing one is measured as a space and drawn
+  folded), and "-0:45" whole.
 
 **test_queue**: nothing new. `test_resume_anchor_saved_with_the_point`
 already saves a point whose anchor went, and a clear.

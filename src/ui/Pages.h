@@ -136,7 +136,6 @@ private:
   bool seekable() const;
   BarLook barLook() const;
   void drawReadout();
-  uint32_t readoutSig() const;
   void endScrub();
   void seekTo(const SeekBar::Out& o, uint32_t nowMs);
   void drawTransport();
@@ -175,12 +174,13 @@ private:
     uint32_t waitSig = 0;     // waitSig()
     uint32_t sleep = 0;       // the sleep timer's text on the progress line (a hash)
     // The seek bar: its look (BarLook; 0xFF none), the knob's and the
-    // marker's screen x (-1: none), the readout's text and side (a hash),
-    // and whether the readout row is up (the scrub's look).
+    // marker's screen x (-1: none), what the readout shows (its fields, not
+    // a hash: a readout that moved must never pass for the one drawn), and
+    // whether the readout row is up (the scrub's look).
     uint8_t bar = 0xFF;
     int16_t knobX = -1;
     int16_t markerX = -1;
-    uint32_t readout = 0;
+    SeekBar::Readout readout;
     bool scrubUp = false;
   } drawn_;
   SeekBar bar_;

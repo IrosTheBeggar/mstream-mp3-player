@@ -106,9 +106,12 @@ inline constexpr int kNowPlayingMidW = 190;
 // the line while a finger scrubs, on the side away from the knob: the
 // finger's second ("2:31", Title) and, kSeekReadoutGap px after it, the
 // change ("+1:21", Small), or "no change" back where it plays; the group
-// at most kSeekReadoutW wide. Slid off the bar: kSeekCancel (Bold, amber),
-// centred in the line's 296 px.
-inline constexpr int kSeekReadoutW = 150;
+// at most kSeekReadoutW wide: a mix's "999:59 no change" is 159 px (150
+// cut "no change" from 100 min on), and from x 12 (or to x 308) it still
+// ends 12 px short of where the knob sends it across (SeekBar's
+// kReadoutLeftX, kReadoutRightX). Slid off the bar: kSeekCancel (Bold,
+// amber), centred in the line's 296 px.
+inline constexpr int kSeekReadoutW = 160;
 inline constexpr int kSeekReadoutGap = 8;
 inline constexpr const char* kSeekStay = "no change";
 inline constexpr const char* kSeekCancel = "Release to cancel";

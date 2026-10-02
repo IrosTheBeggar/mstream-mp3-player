@@ -4,6 +4,7 @@
 #include "SeekBar.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 
 #include "TrackSeek.h"
@@ -25,6 +26,17 @@ uint32_t SeekBar::msAt(int x, uint8_t edges, uint32_t durationMs) {
   return std::min(static_cast<uint32_t>(ms / 1000 * 1000), reach);
 }
 
+void SeekBar::timeText(uint32_t ms, char* buf, size_t size) {
+  snprintf(buf, size, "%lu:%02lu", static_cast<unsigned long>(ms / 60000), static_cast<unsigned long>(ms / 1000 % 60));
+}
+
+void SeekBar::changeText(uint32_t targetMs, uint32_t liveMs, char* buf, size_t size) {
+  const int32_t d = static_cast<int32_t>(targetMs / 1000) - static_cast<int32_t>(liveMs / 1000);
+  const uint32_t a = static_cast<uint32_t>(d < 0 ? -d : d);
+  snprintf(buf, size, "%c%lu:%02lu", d < 0 ? '-' : '+', static_cast<unsigned long>(a / 60),
+           static_cast<unsigned long>(a % 60));
+}
+
 bool SeekBar::down(const InputEvent& e, uint32_t key, uint32_t liveMs, uint32_t durationMs) {
   phase_ = Phase::Idle;
   if (!seekable(durationMs)) return false;
@@ -35,12 +47,25 @@ bool SeekBar::down(const InputEvent& e, uint32_t key, uint32_t liveMs, uint32_t 
   targetMs_ = liveMs;
   targetSinceMs_ = e.ms;
   staying_ = false;
-  downKnobX_ = markerX();
+  const int knob = markerX();
   // (A clamped reading's x is no place: never a grab.)
-  knobGrab_ = e.edges == 0 && std::abs(e.x - downKnobX_) <= kGrabPx;
+  knobGrab_ = e.edges == 0 && std::abs(e.x - knob) <= kGrabPx;
   grabDx_ = 0;
-  readoutLeft_ = downKnobX_ >= kReadoutStartX;
+  readoutLeft_ = knob >= kReadoutStartX;
   return true;
+}
+
+SeekBar::Readout SeekBar::readout() const {
+  Readout r;
+  if (phase_ == Phase::Off) {
+    r.off = true;
+    return r;
+  }
+  r.left = readoutLeft_;
+  r.staying = staying();
+  r.liveS = liveMs_ / 1000;
+  if (!r.staying) r.targetS = targetMs_ / 1000;
+  return r;
 }
 
 bool SeekBar::stays(uint32_t targetMs) const {
@@ -105,9 +130,11 @@ SeekBar::Out SeekBar::onEvent(const InputEvent& e, uint32_t liveMs) {
     case T::DragStart: {
       if (phase_ != Phase::Pressed) return o;
       if (std::abs(e.dx) < std::abs(e.dy)) return end(End::Let);  // not sideways: not the bar's
-      // From the knob: it stays where it was at the Down and moves by the
+      // From the knob: it stays where it is now (where it plays: not where
+      // it was at the Down, which a finger that rested on it while the
+      // music played on would see it jump back to) and moves by the
       // finger's movement from here. Anywhere else: it comes to the finger.
-      grabDx_ = knobGrab_ ? downKnobX_ - e.x : 0;
+      grabDx_ = knobGrab_ ? markerX() - e.x : 0;
       phase_ = e.y < kOffAboveY || e.y >= kOffBelowY ? Phase::Off : Phase::Scrubbing;  // (a steep, fast start)
       aim(e);  // (staying here is no tick of its own: the scrub's is enough)
       targetSinceMs_ = e.ms;

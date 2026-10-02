@@ -3,8 +3,9 @@
 
 // Host tests for Now Playing's seek bar (SeekBar, docs/SEEK-BAR.md): x to
 // time and back, the ends and the reach, the tap, the drag and its grabs,
-// the stay detent, sliding off, the readout's side, and one seek per touch,
-// also with a real TouchRecognizer. Run: pio test -e native
+// the stay detent, sliding off, the readout's side, what it shows and its
+// texts, every threshold on both sides, and one seek per touch, also with
+// a real TouchRecognizer. Run: pio test -e native
 #include <unity.h>
 
 #include <algorithm>
@@ -212,6 +213,29 @@ void test_a_knob_grab_doesnt_jump() {
   TEST_ASSERT_FALSE(c.knobGrab());
 }
 
+// A finger that rests on the knob (noHold() lets it) while the music plays
+// on, then slides: the knob stays where it is at the DragStart (where it
+// plays then), not where it was at the Down, and follows the finger from
+// there: no jump back, no seek behind where it plays.
+void test_a_knob_grab_after_a_rest_doesnt_jump_back() {
+  constexpr uint32_t len = 60000;  // a 1:00 click track: 4.9 px a second
+  SeekBar b = pressed(110, 20000, len);  // the knob at x 110
+  TEST_ASSERT_TRUE(b.knobGrab());
+  b.live(21500);  // 1.5 s on the knob: the pressed knob at x 118
+  TEST_ASSERT_EQUAL_INT(118, b.knobX());
+  SeekBar::Out o = b.onEvent(ev(T::DragStart, 123, kY, 1500, 13, 0), 21500);
+  TEST_ASSERT_TRUE(o.tick);
+  TEST_ASSERT_TRUE(b.staying());
+  TEST_ASSERT_EQUAL_INT(118, b.knobX());
+  o = b.onEvent(ev(T::DragMove, 133, kY, 1600, 10, 0), 21600);  // 10 px on: vx 128
+  TEST_ASSERT_FALSE(b.staying());
+  TEST_ASSERT_EQUAL_UINT32(23000, b.targetMs());
+  TEST_ASSERT_TRUE(b.knobX() > 118);
+  o = b.onEvent(ev(T::DragEnd, 133, kY, 1700), 21700);
+  TEST_ASSERT_EQUAL(End::Seek, o.end);
+  TEST_ASSERT_EQUAL_UINT32(23000, o.ms);  // forward, as the finger went
+}
+
 void test_a_vertical_drag_is_let_go() {
   SeekBar b = pressed(160, 60000);
   SeekBar::Out o = b.onEvent(ev(T::DragStart, 163, kY - 13, 0, 3, -13), 60000);
@@ -313,6 +337,127 @@ void test_the_readout_changes_side_with_hysteresis() {
   SeekBar c = pressed(147, 0, len);
   c.onEvent(ev(T::DragStart, 160, kY, 0, 13, 0), 0);
   TEST_ASSERT_TRUE(c.readoutLeft());
+}
+
+// ---- every threshold, on both sides ----
+
+// y: off above 130 (130 still on), back from 138 (137 still off); off on
+// the strip from 240 (239 still on), back above 232 (232 still off).
+void test_off_and_back_at_their_rows() {
+  SeekBar b = pressed(200, 60000);
+  b.onEvent(ev(T::DragStart, 214, kY, 0, 14, 0), 60000);
+  SeekBar::Out o = b.onEvent(ev(T::DragMove, 214, 130), 60000);
+  TEST_ASSERT_FALSE(o.tick);
+  TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
+  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 129), 60000).tick);
+  TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
+  TEST_ASSERT_FALSE(b.onEvent(ev(T::DragMove, 214, 137), 60000).tick);
+  TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
+  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 138), 60000).tick);
+  TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
+  TEST_ASSERT_FALSE(b.onEvent(ev(T::DragMove, 214, 239), 60000).tick);
+  TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
+  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 240), 60000).tick);
+  TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
+  TEST_ASSERT_FALSE(b.onEvent(ev(T::DragMove, 214, 232), 60000).tick);
+  TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
+  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 231), 60000).tick);
+  TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
+}
+
+// The grab: a Down 16 px from the knob (x 84) grabs it, 17 px doesn't.
+void test_the_grab_reaches_16_px() {
+  const int grab[] = {68, 100}, far[] = {67, 101};
+  for (int x : grab) TEST_ASSERT_TRUE(pressed(x, 60000).knobGrab());
+  for (int x : far) TEST_ASSERT_FALSE(pressed(x, 60000).knobGrab());
+}
+
+// The readout's side at its exact edges (296 s: the knob is where the
+// finger is): the knob at 184 keeps it right, 185 sends it left; at 136
+// keeps it left, 135 sends it right; at the scrub's start, 159 is right and
+// 160 left.
+void test_the_readout_sides_at_their_edges() {
+  constexpr uint32_t len = 296000;
+  SeekBar b = pressed(137, 0, len);
+  b.onEvent(ev(T::DragStart, 150, kY, 0, 13, 0), 0);
+  b.onEvent(ev(T::DragMove, 184, kY), 0);
+  TEST_ASSERT_EQUAL_INT(184, b.knobX());
+  TEST_ASSERT_FALSE(b.readoutLeft());
+  b.onEvent(ev(T::DragMove, 185, kY), 0);
+  TEST_ASSERT_TRUE(b.readoutLeft());
+  b.onEvent(ev(T::DragMove, 136, kY), 0);
+  TEST_ASSERT_EQUAL_INT(136, b.knobX());
+  TEST_ASSERT_TRUE(b.readoutLeft());
+  b.onEvent(ev(T::DragMove, 135, kY), 0);
+  TEST_ASSERT_FALSE(b.readoutLeft());
+  SeekBar c = pressed(146, 0, len);
+  c.onEvent(ev(T::DragStart, 159, kY, 0, 13, 0), 0);
+  TEST_ASSERT_EQUAL_INT(159, c.knobX());
+  TEST_ASSERT_FALSE(c.readoutLeft());
+}
+
+// ---- the readout ----
+
+// What the readout shows changes whenever its side, its second or "no
+// change" does: the page draws it again exactly then. Two cases a hash of
+// those once gave the same number for, so the row kept the old text:
+void test_the_readout_changes_with_what_it_shows() {
+  {
+    // A 51:00 mix paused at 10:00, a slow drag right: at x 184 the knob is
+    // at 183 (29:38, the readout right); 3 px on, at 186 (30:09) and the
+    // readout goes left, 31 s on.
+    SeekBar b = pressed(100, 600000, 3060000);
+    TEST_ASSERT_FALSE(b.knobGrab());
+    b.onEvent(ev(T::DragStart, 113, kY, 0, 13, 0), 600000);
+    b.onEvent(ev(T::DragMove, 184, kY), 600000);
+    const SeekBar::Readout before = b.readout();
+    TEST_ASSERT_FALSE(before.left);
+    TEST_ASSERT_EQUAL_UINT32(1778, before.targetS);
+    b.onEvent(ev(T::DragMove, 187, kY), 600000);
+    const SeekBar::Readout after = b.readout();
+    TEST_ASSERT_TRUE(after.left);
+    TEST_ASSERT_EQUAL_UINT32(1809, after.targetS);
+    TEST_ASSERT_TRUE(before != after);
+  }
+  {
+    // 4:05 playing at 1:40: staying ("1:40 no change"), then swept in one
+    // frame to 0:07, the readout on the right both times.
+    SeekBar b = pressed(60, 100000);
+    b.onEvent(ev(T::DragStart, 47, kY, 0, -13, 0), 100000);
+    b.onEvent(ev(T::DragMove, 132, kY), 100000);
+    const SeekBar::Readout stay = b.readout();
+    TEST_ASSERT_TRUE(stay.staying);
+    TEST_ASSERT_FALSE(stay.left);
+    TEST_ASSERT_EQUAL_UINT32(100, stay.liveS);
+    b.onEvent(ev(T::DragMove, 21, kY), 100000);
+    const SeekBar::Readout moved = b.readout();
+    TEST_ASSERT_FALSE(moved.staying);
+    TEST_ASSERT_FALSE(moved.left);
+    TEST_ASSERT_EQUAL_UINT32(7, moved.targetS);
+    TEST_ASSERT_TRUE(stay != moved);
+    // Off: "Release to cancel", whatever else.
+    b.onEvent(ev(T::DragMove, 21, 100), 100000);
+    TEST_ASSERT_TRUE(b.readout().off);
+    TEST_ASSERT_TRUE(b.readout() != moved);
+  }
+}
+
+// The readout's texts: m:ss (100 min and more: "100:00"), and the change in
+// whole seconds with an ASCII minus (no font has U+2212).
+void test_the_readout_texts() {
+  char t[24];
+  SeekBar::timeText(0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("0:00", t);
+  SeekBar::timeText(151999, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("2:31", t);
+  SeekBar::timeText(6000000, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("100:00", t);
+  SeekBar::changeText(151000, 70000, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("+1:21", t);
+  SeekBar::changeText(25000, 70999, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("-0:45", t);
+  SeekBar::changeText(70000, 70999, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("+0:00", t);
 }
 
 // The length is the one at the Down for the whole touch: an estimate that
@@ -439,10 +584,16 @@ int main(int, char**) {
   RUN_TEST(test_a_tap_on_the_knob_seeks_nothing);
   RUN_TEST(test_a_drag_seeks_once_at_the_lift);
   RUN_TEST(test_a_knob_grab_doesnt_jump);
+  RUN_TEST(test_a_knob_grab_after_a_rest_doesnt_jump_back);
   RUN_TEST(test_a_vertical_drag_is_let_go);
   RUN_TEST(test_the_detent_snaps_and_ticks);
   RUN_TEST(test_off_and_back);
   RUN_TEST(test_the_readout_changes_side_with_hysteresis);
+  RUN_TEST(test_off_and_back_at_their_rows);
+  RUN_TEST(test_the_grab_reaches_16_px);
+  RUN_TEST(test_the_readout_sides_at_their_edges);
+  RUN_TEST(test_the_readout_changes_with_what_it_shows);
+  RUN_TEST(test_the_readout_texts);
   RUN_TEST(test_the_length_is_frozen_for_the_touch);
   RUN_TEST(test_a_cancel_or_release_seeks_nothing);
   RUN_TEST(test_with_the_recognizer);

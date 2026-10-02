@@ -2078,6 +2078,82 @@ void test_the_resume_point_while_a_start_is_pending() {
   TEST_ASSERT_TRUE(got == r.audio.held);
 }
 
+// What Now Playing shows (shownTime(), the snapshot's): a skip's start the
+// backend hasn't taken up yet is 0:00 with no length, never the track
+// before's, which the backend still gives until its decode task takes the
+// request up (the seek bar would seek the new entry by it); then the
+// backend's. A seek's pending start: its target and the bar's length. A
+// backend that knows no length: the one told, unless the track failed.
+void test_the_shown_time_never_lends_the_track_befores_length() {
+  Rig r(2);
+  uint32_t pos = 1, len = 1;
+  r.player.shownTime(&pos, &len);  // (stopped at entry 0, nothing held)
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(0, len);
+  r.audio.asyncStarts = true;
+  r.player.play(0);
+  r.audio.take();
+  r.audio.position = 120000;
+  r.audio.duration = 300000;
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(120000, pos);
+  TEST_ASSERT_EQUAL_UINT32(300000, len);
+  r.player.next();  // pending: the backend still says the last track's
+  TEST_ASSERT_EQUAL_UINT32(300000, r.audio.durationMs());
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(0, len);  // not known: the bar is inert
+  r.audio.take();
+  r.audio.duration = 180000;
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(180000, len);
+  // A seek: its target and the bar's length until taken up.
+  r.audio.position = 30000;
+  r.audio.duration = 179000;  // (an estimate that moved meanwhile)
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, r.player.seek(r.queue.keyAt(1), 90000, 180000));
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(90000, pos);
+  TEST_ASSERT_EQUAL_UINT32(180000, len);
+  r.audio.take();
+  r.audio.duration = 0;  // a header-less file's first second
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(90000, pos);
+  TEST_ASSERT_EQUAL_UINT32(180000, len);
+  r.audio.failedFlag = true;
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, len);
+}
+
+// A seek to 0:00 while a start is pending (an entry whose length was told
+// before, come round again by prev) keeps the bar's length: restart()
+// doesn't note the backend's, which is still the track before's.
+void test_a_seek_to_0_while_a_start_is_pending_keeps_the_bars_length() {
+  Rig r(3);
+  r.audio.asyncStarts = true;
+  r.player.play(0);
+  r.audio.take();
+  r.player.next();  // entry 1
+  r.audio.take();
+  r.audio.duration = 180000;
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, r.player.seek(r.queue.keyAt(1), 60000, 180000));
+  r.audio.take();
+  r.player.next();  // entry 2 (no hint: entry 1's length stays told)
+  r.audio.take();
+  r.audio.duration = 300000;
+  r.audio.position = 0;
+  r.player.prev();  // entry 1 again, pending: the backend still says entry 2's
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  uint32_t pos = 1, len = 1;
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(0, pos);
+  TEST_ASSERT_EQUAL_UINT32(180000, len);
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, r.player.seek(r.queue.keyAt(1), 0, 180000));
+  TEST_ASSERT_EQUAL_UINT32(180000, r.player.lengthHint());
+  r.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(180000, len);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
@@ -2164,5 +2240,7 @@ int main(int, char**) {
   RUN_TEST(test_the_length_hint_follows_its_entry);
   RUN_TEST(test_prev_restart_while_paused_keeps_the_length);
   RUN_TEST(test_the_resume_point_while_a_start_is_pending);
+  RUN_TEST(test_the_shown_time_never_lends_the_track_befores_length);
+  RUN_TEST(test_a_seek_to_0_while_a_start_is_pending_keeps_the_bars_length);
   return UNITY_END();
 }
