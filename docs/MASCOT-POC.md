@@ -158,6 +158,11 @@ behind the beat on most of the rest. The design below is the rework.
 Cost: 13.3 ms per second of audio on the Core2 (1.3 % of a core, measured
 at boot by `[dance] tracker bench`), 0.19 ms on the laptop.
 
+How well it does on real music, track by track, is measured by the
+evaluation harness in [BEAT-TRACKER-EVAL.md](BEAT-TRACKER-EVAL.md): the
+same tracker on the whole of the 77 library tracks, the click tracks,
+mid-song starts and gapless joins, scored against the reference beats.
+
 The output is `bpm()`, `confidence()`, `locked()`, and the `grid()`: a beat
 at frame + fraction, its index, and the period in frames. The renderer turns
 that into a beat count at any audible frame. The dance rate is the tracked

@@ -656,13 +656,16 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       usb_viz.py + test_usb_viz.py (the USB visualizer's
                       reference sender, and its tests: python -m unittest
                       discover -s tools -p "test_usb_viz.py")
+                      beat_eval/ (the beat tracker's evaluation harness: the
+                      firmware's tracker on a music corpus, scored against
+                      reference beats; docs/BEAT-TRACKER-EVAL.md)
 test/                 Host unit tests (Unity)
 site/                 The web installer's page (filled in by package_release.py)
 .github/              workflows/firmware.yml (CI, releases, the install page);
                       release-notes.md (the release notes' template)
 docker/               mStream dev server
 docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.md,
-                      RESAMPLER.md
+                      RESAMPLER.md, BEAT-TRACKER-EVAL.md
 LICENSES/             The licence texts THIRD-PARTY-NOTICES.md refers to
 THIRD-PARTY-NOTICES.md What else is in the firmware binary, and its licences
 ```
