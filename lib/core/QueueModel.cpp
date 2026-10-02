@@ -225,16 +225,22 @@ bool QueueModel::setCurrent(uint32_t pos) {
 }
 
 bool QueueModel::step(int delta, bool wrap) {
-  if (current_ < 0) return false;
-  const int64_t n = q_.size;
-  int64_t next = static_cast<int64_t>(current_) + delta;
-  if (next < 0 || next >= n) {
-    if (!wrap) return false;
-    next = ((next % n) + n) % n;
-  }
+  const uint32_t next = peek(delta, wrap);
+  if (next == kNone) return false;
   current_ = static_cast<int32_t>(next);
   ++positionVersion_;
   return true;
+}
+
+uint32_t QueueModel::peek(int delta, bool wrap) const {
+  if (current_ < 0) return kNone;
+  const int64_t n = q_.size;
+  int64_t next = static_cast<int64_t>(current_) + delta;
+  if (next < 0 || next >= n) {
+    if (!wrap) return kNone;
+    next = ((next % n) + n) % n;
+  }
+  return static_cast<uint32_t>(next);
 }
 
 bool QueueModel::undo() {

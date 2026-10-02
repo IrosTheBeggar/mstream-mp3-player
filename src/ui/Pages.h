@@ -384,6 +384,7 @@ private:
   int skin_ = -1;
   uint32_t track_ = 0xFFFFFFFFu;
   int progress_ = -1;
+  int host_ = -1;  // a computer drives the dancer (the USB visualizer): its texts at the bottom
 };
 
 // ---- Output (spec §6.6, mockups 19-21, with the review's grafts) ----

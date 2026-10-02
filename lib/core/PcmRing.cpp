@@ -42,21 +42,52 @@ uint32_t PcmRing::read(uint8_t id, int16_t* out, uint32_t count, uint32_t* epoch
   // Under the lock, so it can't change between here and the frames below.
   if (epoch) *epoch = epoch_.load(std::memory_order_relaxed);
 
+  // The read is marked before the fence is looked at (both seq_cst): a
+  // cutBack() either sees this read under way or this read sees its fence.
+  reading_.store(true, std::memory_order_seq_cst);
+  const bool fenced = fenced_.load(std::memory_order_seq_cst);
   const uint32_t r = readIdx_.load(std::memory_order_relaxed);
   if (position) *position = r - epochStart_;
-  const uint32_t n = std::min(count, writeIdx_.load(std::memory_order_acquire) - r);
+  uint32_t w = writeIdx_.load(std::memory_order_acquire);
+  if (fenced) {
+    // Never past a fence that is ahead of us (r <= fence < w).
+    const uint32_t f = fenceIdx_.load(std::memory_order_relaxed);
+    if (static_cast<int32_t>(f - r) >= 0 && static_cast<int32_t>(w - f) > 0) w = f;
+  }
+  const uint32_t n = std::min(count, w - r);
   const uint32_t start = r & mask_;
   const uint32_t first = std::min(n, cap_ - start);
   std::memcpy(out, buf_ + start * kChannels, first * kChannels * sizeof(int16_t));
   std::memcpy(out + first * kChannels, buf_, (n - first) * kChannels * sizeof(int16_t));
   readIdx_.store(r + n, std::memory_order_release);
+  reading_.store(false, std::memory_order_release);
   return n;
+}
+
+PcmRing::Cut PcmRing::cutBack(uint32_t index) {
+  if (!fenced_.load(std::memory_order_relaxed)) {
+    fenceIdx_.store(index, std::memory_order_relaxed);
+    fenced_.store(true, std::memory_order_seq_cst);  // (publishes fenceIdx_ too)
+  }
+  // A read under way may have looked before the fence went up: wait for it.
+  if (reading_.load(std::memory_order_seq_cst)) return Cut::Pending;
+  // Every read from here on sees the fence: none can pass `index`.
+  const uint32_t r = readIdx_.load(std::memory_order_acquire);
+  if (static_cast<int32_t>(index - r) < 0) {
+    fenced_.store(false, std::memory_order_release);
+    return Cut::Crossed;
+  }
+  writeIdx_.store(index, std::memory_order_release);
+  // After the write index: a read that sees no fence sees the cut too.
+  fenced_.store(false, std::memory_order_release);
+  return Cut::Done;
 }
 
 uint32_t PcmRing::discardAll() {
   std::lock_guard<std::mutex> lock(lock_);
   const uint32_t w = writeIdx_.load(std::memory_order_relaxed);
   readIdx_.store(w, std::memory_order_release);
+  fenced_.store(false, std::memory_order_release);  // (a cut still pending is moot)
   epochStart_ = w;
   epoch_.store(epoch_.load(std::memory_order_relaxed) + 1, std::memory_order_release);
   return w;

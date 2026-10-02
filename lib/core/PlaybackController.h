@@ -64,6 +64,31 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // headphone Play (HeadsetKeys) doesn't resume it, since in-ear detection
 // sends Play when a sleeper turns over. Any play clears the mark (the
 // Core2's own buttons, the screen, the console: the headphones can't).
+// The USB visualizer's pause (pauseByComputer()) is marked the same way
+// (pausedByComputer()), for the same reason: a bud put back in sends Play.
+//
+// Gapless playback (docs/GAPLESS.md, setGapless(): on by default): while
+// the backend holds the current entry's track (playing, paused, or waiting
+// to resume it), the player tells it what advance() would start next
+// (IAudioBackend::setNext(): the entry QueueModel::peek(+1, repeat) names,
+// its token kept while the same track stays next, a new one otherwise),
+// or that nothing follows: gapless off, "pause after this track" set, the
+// sleep timer ending at this entry (NextGate), or the end of the queue
+// without repeat. Worked out again only when one of those changes (a
+// signature of them), every update() and at the end of every action, so an
+// edit's new word reaches the backend at once. When the backend reports
+// that a joined track is heard (takeAdvance(), at the top of update() and
+// of every action, so a next pressed just after a join skips the track
+// that is heard), the player does what update() would do at its natural
+// end right now:
+//   - "pause after this track" or the timer ending here: the boundary's
+//     pause (the next entry cued at 0:00), as at any natural end;
+//   - what advance() would start isn't the joined track any more (an edit
+//     that came too late to cut it out: Play next, a remove, repeat): that
+//     is started (advance(); paused: cued);
+//   - otherwise the joined entry becomes current without a play(): the
+//     state, the queue and the backend stay as they are, the start point
+//     goes and the failure count starts again.
 //
 // A start point (QueueStore's resume point after a boot, the console's qs):
 // the current entry's next start begins that far in. Nothing plays by
@@ -75,7 +100,10 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // paused track's restart: stopped after a boot stays stopped). Its length
 // goes to the backend with the play (it places a VBR MP3 without a table
 // of contents by it). resumePoint() is what QueueSaver saves: a start
-// point that waits, or a paused track's position.
+// point that waits, or a paused track's position. Either may carry a resume
+// anchor (docs/SEEK.md section 5): the bytes that start the track on the
+// very sample it paused at. The start point owns its anchor: both go
+// together, and a start point set without one (qs) has none.
 class PlaybackController {
 public:
   // Whether a play must wait for the output (read at every start).
@@ -87,11 +115,41 @@ public:
     ~Hold() = default;
   };
 
+  // Whether the sleep timer ends at the current entry (main.cpp's: End of
+  // track always; End of album or queue on its last track): the track
+  // after it is never decoded ahead, so the pause at the boundary hears
+  // nothing of it.
+  class NextGate {
+  public:
+    virtual bool endsHere() const = 0;
+
+  protected:
+    ~NextGate() = default;
+  };
+
   PlaybackController(IAudioBackend& audio, QueueModel& queue, const TrackCatalog& catalog)
       : audio_(audio), queue_(queue), catalog_(catalog) {}
 
   // nullptr (the default): nothing waits.
   void setHold(const Hold* hold) { hold_ = hold; }
+  // nullptr (the default): no sleep timer.
+  void setNextGate(const NextGate* gate) { gate_ = gate; }
+  // Gapless playback (the console's G0/G1): off, the backend is told that
+  // nothing follows (a track decoded ahead is cut back out if not heard
+  // yet) and every track ends as before.
+  void setGapless(bool on);
+  bool gapless() const { return gapless_; }
+  // The console's G: what the player has done with joins since boot.
+  struct GaplessStats {
+    uint32_t offers = 0;     // words sent (setNext())
+    uint32_t adopted = 0;    // joined tracks taken as the current entry
+    uint32_t restarted = 0;  // joined tracks that weren't what came next any more: started again
+    uint32_t paused = 0;     // the boundary's pause, at a joined track
+  };
+  const GaplessStats& gaplessStats() const { return gaplessStats_; }
+  // The word sent last: the token (0: nothing follows) and the entry's key.
+  uint32_t offeredToken() const { return sentToken_; }
+  uint32_t offeredKey() const { return offer_.key; }
   // Waiting: plays now, whatever the hold says (the headphones connected, or
   // the listener chose the speaker). Anything else: nothing.
   void release();
@@ -103,6 +161,12 @@ public:
   // Stopped or Paused: plays (or waits); Playing: pauses; Waiting: cancels
   // the wait (Paused).
   void togglePlayPause();
+  // The USB visualizer's entry. Playing: pauses; Waiting: the wait ends
+  // paused (as cancelWait()); either way the pause is marked the
+  // computer's (pausedByComputer()). Stopped and Paused stay as they are,
+  // and so does their mark: it never starts anything (togglePlayPause()
+  // would play from Paused or Stopped).
+  void pauseByComputer();
   void next();
   // prevAction()'s: the entry before (and it plays, or waits), or this one
   // from 0:00 in the same state.
@@ -147,14 +211,18 @@ public:
   // headphones: it starts there when they connect). Paused on a track the
   // backend holds: that track is let go, the next play starts there.
   // 0: none.
-  void setStartPoint(uint32_t ms, uint32_t durationMs);
-  // The current entry's start point, if one waits.
-  bool startPoint(uint32_t* ms, uint32_t* durationMs) const;
+  // `anchor`: the resume point's (nullptr or kind None: none); it goes to
+  // the backend with the play (IAudioBackend::StartAt).
+  void setStartPoint(uint32_t ms, uint32_t durationMs, const ResumeAnchor* anchor = nullptr);
+  // The current entry's start point, if one waits (and its anchor).
+  bool startPoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor = nullptr) const;
   // Where the current entry would pick up after a boot: a start point that
   // waits, or the position of a paused track (Paused, or Waiting to resume
   // it). False while it plays (a second saved now would be stale at once)
-  // and when it would start at 0:00 anyway (stopped, cued).
-  bool resumePoint(uint32_t* ms, uint32_t* durationMs) const;
+  // and when it would start at 0:00 anyway (stopped, cued). `anchor`: the
+  // start point's, or the backend's for the paused track
+  // (IAudioBackend::resumeAnchor(); kind None: none).
+  bool resumePoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor = nullptr) const;
 
   // ---- the sleep timer ----
   // At the current track's natural end: the next entry, paused at 0:00.
@@ -164,6 +232,11 @@ public:
   void pauseByTimer();
   // Paused by the timer and not played since: headphone Play doesn't resume.
   bool pausedByTimer() const { return pausedByTimer_; }
+  // Paused by pauseByComputer() and not played since: the same (in-ear
+  // detection's Play isn't the listener asking for the Core2's music back).
+  bool pausedByComputer() const { return pausedByComputer_; }
+  // Either: a pause the listener didn't make (HeadsetKeys).
+  bool pausedNotByListener() const { return pausedByTimer_ || pausedByComputer_; }
   // The pauses (or the stop, at the queue's end) setPauseAfterTrack() made,
   // free-running.
   uint32_t timerStops() const { return timerStops_; }
@@ -176,11 +249,11 @@ public:
   // ---- the queue's edits, with what they do to playback ----
   // Play: the queue becomes `tracks`, and the one at `start` plays.
   bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start);
-  bool playNext(const uint32_t* tracks, uint32_t n) { return queue_.insertNext(tracks, n); }
-  bool addToQueue(const uint32_t* tracks, uint32_t n) { return queue_.append(tracks, n); }
+  bool playNext(const uint32_t* tracks, uint32_t n);
+  bool addToQueue(const uint32_t* tracks, uint32_t n);
   QueueModel::Removed remove(const uint32_t* positions, uint32_t n);
-  bool moveNext(const uint32_t* positions, uint32_t n) { return queue_.moveNext(positions, n); }
-  bool clearUpNext() { return queue_.clearUpNext(); }
+  bool moveNext(const uint32_t* positions, uint32_t n);
+  bool clearUpNext();
   void clearQueue();
   bool undo();
   // The queue was replaced behind our back (restored from the card, or
@@ -215,7 +288,40 @@ public:
   uint32_t positionMs() const { return audio_.positionMs(); }
 
 private:
+  // Every public action: the heard advance first, the word to the backend
+  // after (nested actions do it again: harmless).
+  class Act {
+  public:
+    explicit Act(PlaybackController& p) : p_(p) { p_.syncHeard(); }
+    ~Act() { p_.refreshOffer(); }
+
+  private:
+    PlaybackController& p_;
+  };
+  // An entry offered (its token's), for the advance.
+  struct Offered {
+    uint32_t token = 0;
+    uint32_t key = QueueModel::kNone;
+    uint32_t track = QueueModel::kNone;
+  };
+  struct Signature {
+    uint32_t position = 0, content = 0, heard = 0;
+    bool repeat = false, pauseAfter = false, gapless = false, gate = false;
+    bool operator==(const Signature& o) const {
+      return position == o.position && content == o.content && heard == o.heard && repeat == o.repeat &&
+             pauseAfter == o.pauseAfter && gapless == o.gapless && gate == o.gate;
+    }
+  };
+
   bool held() const { return hold_ && hold_->holdPlay(); }
+  // The backend reports joined tracks heard (see the class).
+  void syncHeard();
+  // The word on what follows, sent when it changed.
+  void refreshOffer();
+  void remember(const Offered& o);
+  const Offered* offered(uint32_t token) const;
+  // update()'s natural end and failure handling.
+  void checkEnd();
   // The current entry plays, or (held) waits.
   void startCurrent();
   void startNow();
@@ -234,11 +340,13 @@ private:
   void clearStartPoint() {
     startMs_ = 0;
     startKey_ = QueueModel::kNone;
+    startAnchor_ = ResumeAnchor{};
   }
-  // Playing or Waiting from now: any play clears the timer's mark.
+  // Playing or Waiting from now: any play clears the timer's and the
+  // computer's marks.
   void setPlaying(PlayState s) {
     state_ = s;
-    pausedByTimer_ = false;
+    pausedByTimer_ = pausedByComputer_ = false;
   }
 
   IAudioBackend& audio_;
@@ -256,12 +364,28 @@ private:
   Failure failure_;
   bool pauseAfter_ = false;
   bool pausedByTimer_ = false;
+  bool pausedByComputer_ = false;
   uint32_t timerStops_ = 0;
   // The start point: this far into the entry with key startKey_.
   uint32_t startMs_ = 0;
   uint32_t startDurationMs_ = 0;
   uint32_t startKey_ = QueueModel::kNone;
+  ResumeAnchor startAnchor_;
   // Where the last play() asked to start (prevAction(): the position until
   // the backend takes that start up).
   uint32_t playedFromMs_ = 0;
+
+  // Gapless playback.
+  const NextGate* gate_ = nullptr;
+  bool gapless_ = true;
+  uint32_t heardToken_ = 0;  // the backend's track: 0 the last play()'s, else a joined one's
+  uint32_t nextToken_ = 0;   // the last token given
+  Offered offer_;            // the entry offered now (token 0: none)
+  Offered history_[4];       // the last offers, for an advance that comes late
+  uint8_t historyAt_ = 0;
+  bool sent_ = false;        // a word went to the backend since its last play()
+  uint32_t sentToken_ = 0;
+  uint32_t sentAfter_ = 0;
+  Signature signature_;
+  GaplessStats gaplessStats_;
 };

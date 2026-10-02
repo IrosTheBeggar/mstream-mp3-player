@@ -631,6 +631,224 @@ void test_the_table_copy_is_swapped_only_at_a_track_start() {
   TEST_ASSERT_FALSE(RateConverter::tablesCopied());
 }
 
+// ---- gapless joins (docs/GAPLESS.md sections 3.2 and 5.1) ----
+
+// A generator handing `src` over through the feed, pass by pass (a refused
+// sample offered again), the reader taking a random amount between passes
+// (`drainTo`: never past that ring index; nullptr: anywhere). Returns once
+// every frame is taken; nothing is finished. With `noDrain` it stops at the
+// first pass that leaves frames behind (the ring full) instead.
+size_t offer(const Frames& src, std::mt19937& rng, Frames& out, const uint32_t* drainTo = nullptr,
+             bool noDrain = false) {
+  const size_t frames = src.size() / 2;
+  size_t next = 0;
+  while (next < frames) {
+    gFeed.setBudget(kPass);
+    while (next < frames && gFeed.consume(&src[2 * next])) ++next;
+    gFeed.commit();
+    const bool full = next < frames && gFeed.budgetLeft() > 0;
+    if (noDrain) {
+      if (full) break;
+      continue;
+    }
+    uint32_t n = rng() % 3 == 0 ? 0 : rng() % 900;
+    if (drainTo) {
+      const uint32_t room = *drainTo - gRing.readPos();
+      if (full && room == 0) break;  // the reader is at J and the ring full: as far as it goes
+      n = std::min<uint32_t>(n, room);
+    }
+    drain(out, n);
+  }
+  return next;
+}
+
+// Everything taken is in the ring (a track's end: commit() until done).
+void commitAll(std::mt19937& rng, Frames& out) {
+  while (!gFeed.commit()) drain(out, rng() % 900 + 1);
+}
+void finishAll(std::mt19937& rng, Frames& out) {
+  while (!gFeed.finish()) drain(out, rng() % 900 + 1);
+}
+
+Frames concat(const Frames& a, const Frames& b) {
+  Frames v = a;
+  v.insert(v.end(), b.begin(), b.end());
+  return v;
+}
+
+// A same-rate join is one stream: track B's frames go on through the same
+// converter state, and the ring holds exactly what converting A then B as
+// one file would give. B's first frame lands tailFrames() past the ring's
+// write index at A's end: ceil(len(A) x num / den) from the stream's start.
+void test_a_same_rate_join_is_the_concatenated_stream() {
+  for (const uint32_t hz : kRates) {
+    std::mt19937 rng(hz + 1);
+    const Frames a = noise(hz / 7 + 13, hz + 5, 30000), b = noise(hz / 5 + 7, hz + 6, 30000);
+    fresh();
+    const uint32_t start = gRing.writePos();
+    TEST_ASSERT_TRUE(gFeed.setRate(static_cast<int>(hz)));
+    Frames out;
+    offer(a, rng, out);
+    commitAll(rng, out);
+    TEST_ASSERT_TRUE(gFeed.continues(static_cast<int>(hz)));
+    TEST_ASSERT_FALSE(gFeed.continues(hz == 48000 ? 44100 : 48000));
+    const RateConverter::Plan p = RateConverter::plan(hz, kCpu, kHiRes);
+    const uint32_t boundary = gRing.writePos() + gFeed.tailFrames();
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(p.ringFrames(a.size() / 2)), boundary - start);
+    if (hz == 44100) TEST_ASSERT_EQUAL_UINT32(0, gFeed.tailFrames());  // the passthrough: B starts right there
+    TEST_ASSERT_TRUE(gFeed.setRate(static_cast<int>(hz)));  // B's decoder says the same rate: nothing changes
+    offer(b, rng, out);
+    finishAll(rng, out);
+    drain(out, kRingCap);
+    assertSame(reference(hz, concat(a, b)), out);
+  }
+}
+
+// At another rate the first stream's tail goes in (finish()), then a new
+// stream starts at the same ring position: A converted alone, then B
+// converted alone, each with its exact count.
+void test_a_rate_change_join_is_two_streams() {
+  const uint32_t pairs[][2] = {{48000, 44100}, {44100, 22050}, {44100, 48000}, {32000, 96000}, {8000, 44100}};
+  for (const auto& pr : pairs) {
+    std::mt19937 rng(pr[0] + pr[1]);
+    const Frames a = noise(pr[0] / 9 + 3, pr[0], 30000), b = noise(pr[1] / 8 + 5, pr[1] + 1, 30000);
+    fresh();
+    const uint32_t start = gRing.writePos();
+    TEST_ASSERT_TRUE(gFeed.setRate(static_cast<int>(pr[0])));
+    Frames out;
+    offer(a, rng, out);
+    finishAll(rng, out);
+    const RateConverter::Plan p = RateConverter::plan(pr[0], kCpu, kHiRes);
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(p.ringFrames(a.size() / 2)), gRing.writePos() - start);
+    const uint64_t made = gFeed.made();
+    gFeed.restartStream();
+    TEST_ASSERT_EQUAL_UINT64(made, gFeed.made());  // runs on
+    TEST_ASSERT_EQUAL_INT(0, gFeed.rate());
+    TEST_ASSERT_TRUE(gFeed.setRate(static_cast<int>(pr[1])));
+    offer(b, rng, out);
+    finishAll(rng, out);
+    drain(out, kRingCap);
+    assertSame(concat(reference(pr[0], a), reference(pr[1], b)), out);
+  }
+}
+
+// A track decoded ahead and cut back out (PcmRing::cutBack() before the
+// reader got there): with the feed rewound to its mark, what follows is
+// bit for bit what it would have been had the cut track never been fed:
+// at every route, cut at random points, with the ring full in between.
+void test_a_cut_and_rewind_leaves_no_trace() {
+  RingFeed::Mark* m = new RingFeed::Mark;
+  for (const uint32_t hz : kRates) {
+    for (uint32_t trial = 0; trial < 3; ++trial) {
+      std::mt19937 rng(hz * 3 + trial);
+      const Frames a = noise(hz / 9 + 11 * trial + 1, hz + trial, 30000);
+      const Frames x = noise(hz / 6 + 3, hz + 77, 30000);  // decoded ahead, then cut
+      const Frames y = noise(hz / 8 + 5 * trial + 2, hz + 99, 30000);
+      fresh();
+      TEST_ASSERT_TRUE(gFeed.setRate(static_cast<int>(hz)));
+      Frames out;
+      offer(a, rng, out);
+      commitAll(rng, out);
+      const uint32_t j = gRing.writePos();
+      TEST_ASSERT_TRUE(gFeed.mark(m));
+      // Some of X in: the reader never past J meanwhile, the ring left full.
+      offer(x, rng, out, &j, trial == 0);
+      TEST_ASSERT_EQUAL_INT(static_cast<int>(PcmRing::Cut::Done), static_cast<int>(gRing.cutBack(j)));
+      gFeed.rewind(*m);
+      TEST_ASSERT_TRUE(gFeed.continues(static_cast<int>(hz)));
+      offer(y, rng, out);
+      finishAll(rng, out);
+      drain(out, kRingCap);
+      assertSame(reference(hz, concat(a, y)), out);
+    }
+  }
+  delete m;
+}
+
+// The mark refuses while frames are staged or held; a cut that comes too
+// late (the reader passed J) leaves the stream as it was: A then X.
+void test_a_mark_needs_everything_committed_and_a_late_cut_changes_nothing() {
+  RingFeed::Mark* m = new RingFeed::Mark;
+  std::mt19937 rng(5);
+  const Frames a = noise(3000, 1, 30000), x = noise(2000, 2, 30000);
+  fresh();
+  TEST_ASSERT_TRUE(gFeed.setRate(48000));
+  gFeed.setBudget(kPass);
+  gFeed.consume(&a[0]);
+  TEST_ASSERT_FALSE(gFeed.mark(m));  // one frame held for the block path
+  Frames out;
+  offer(Frames(a.begin() + 2, a.end()), rng, out);
+  commitAll(rng, out);
+  const uint32_t j = gRing.writePos();
+  TEST_ASSERT_TRUE(gFeed.mark(m));
+  offer(x, rng, out);  // the reader goes on past J
+  while (static_cast<int32_t>(gRing.readPos() - j) <= 0) drain(out, 10);
+  TEST_ASSERT_TRUE(static_cast<int32_t>(gRing.readPos() - j) > 0);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(PcmRing::Cut::Crossed), static_cast<int>(gRing.cutBack(j)));
+  finishAll(rng, out);
+  drain(out, kRingCap);
+  assertSame(reference(48000, concat(a, x)), out);
+  delete m;
+}
+
+// A cut after a rate-change join goes back to the first stream's end with
+// its tail in: the mark taken after finish(), and the next stream started
+// again from it.
+void test_a_cut_after_a_rate_change_join() {
+  RingFeed::Mark* m = new RingFeed::Mark;
+  std::mt19937 rng(9);
+  const Frames a = noise(4000, 3, 30000), x = noise(3000, 4, 30000), y = noise(2500, 5, 30000);
+  fresh();
+  TEST_ASSERT_TRUE(gFeed.setRate(48000));
+  Frames out;
+  offer(a, rng, out);
+  finishAll(rng, out);
+  const uint32_t j = gRing.writePos();
+  TEST_ASSERT_TRUE(gFeed.mark(m));
+  gFeed.restartStream();
+  TEST_ASSERT_TRUE(gFeed.setRate(22050));
+  offer(x, rng, out, &j, true);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(PcmRing::Cut::Done), static_cast<int>(gRing.cutBack(j)));
+  gFeed.rewind(*m);
+  gFeed.restartStream();
+  TEST_ASSERT_TRUE(gFeed.setRate(32000));
+  offer(y, rng, out);
+  finishAll(rng, out);
+  drain(out, kRingCap);
+  assertSame(concat(reference(48000, a), reference(32000, y)), out);
+  delete m;
+}
+
+// The firmware keeps the tables' copy for a whole chain of joins (it frees
+// it only at a request's start): a mark taken while the converter read the
+// tables in flash and rewound after the copy was made gives the same bits.
+void test_a_rewind_across_a_table_copy_gives_the_same_bits() {
+  RingFeed::Mark* m = new RingFeed::Mark;
+  std::mt19937 rng(21);
+  const Frames a = noise(5000, 6, 30000), x = noise(1500, 7, 30000), y = noise(4000, 8, 30000);
+  fresh();
+  TEST_ASSERT_TRUE(gFeed.setRate(48000));  // (no hook: the flash tables)
+  Frames out;
+  offer(a, rng, out);
+  commitAll(rng, out);
+  const uint32_t j = gRing.writePos();
+  TEST_ASSERT_TRUE(gFeed.mark(m));
+  RateConverter::setTablesWanted(copyHook);
+  gCopy.want(true);  // a later track in the chain made the copy
+  TEST_ASSERT_TRUE(RateConverter::tablesCopied());
+  offer(x, rng, out, &j, true);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(PcmRing::Cut::Done), static_cast<int>(gRing.cutBack(j)));
+  gFeed.rewind(*m);
+  offer(y, rng, out);
+  finishAll(rng, out);
+  drain(out, kRingCap);
+  assertSame(reference(48000, concat(a, y)), out);
+  gCopy.want(false);
+  RateConverter::setTablesWanted(nullptr);
+  TEST_ASSERT_EQUAL_INT(0, pool::live);
+  delete m;
+}
+
 void test_it_is_small() {
   // Inside RingOutput, which must stay under 4 KB (internal RAM).
   // (The converter ~1.9 KB, the stage 1 KB, the block 128 B.)
@@ -658,6 +876,12 @@ int main(int, char**) {
   RUN_TEST(test_the_passthrough_goes_straight_to_the_stage);
   RUN_TEST(test_held_frames_keep_their_rate_and_channels);
   RUN_TEST(test_the_table_copy_is_swapped_only_at_a_track_start);
+  RUN_TEST(test_a_same_rate_join_is_the_concatenated_stream);
+  RUN_TEST(test_a_rate_change_join_is_two_streams);
+  RUN_TEST(test_a_cut_and_rewind_leaves_no_trace);
+  RUN_TEST(test_a_mark_needs_everything_committed_and_a_late_cut_changes_nothing);
+  RUN_TEST(test_a_cut_after_a_rate_change_join);
+  RUN_TEST(test_a_rewind_across_a_table_copy_gives_the_same_bits);
   RUN_TEST(test_it_is_small);
   return UNITY_END();
 }

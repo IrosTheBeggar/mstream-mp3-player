@@ -7,10 +7,13 @@
 #include "ByteStream.h"
 #include "QueueModel.h"
 #include "QueueText.h"
+#include "ResumeAnchor.h"
 #include "TrackCatalog.h"
 
 // A resume point: `positionMs` into the entry at line `entry` of the queue
-// file of `generation`, whose path hashes to `pathHash` (pathHash()).
+// file of `generation`, whose path hashes to `pathHash` (pathHash()), and
+// the anchor that starts it on the very sample it paused at (docs/SEEK.md
+// section 5; kind None: by the millisecond).
 struct QueueResume {
   bool valid = false;
   uint32_t generation = 0;
@@ -18,6 +21,7 @@ struct QueueResume {
   uint32_t pathHash = 0;
   uint32_t positionMs = 0;
   uint32_t durationMs = 0;  // the track's length then (0: not known), for Now Playing's bar before it plays
+  ResumeAnchor anchor;
 };
 
 // When and how the queue is saved, without the card (app/QueueStore gives
@@ -43,7 +47,11 @@ struct QueueResume {
 //   none (the entry starts at 0:00, as before). It pairs with the file of
 //   its generation, as the position does: saved only once the file holds
 //   the queue as it is, and saved again (at the entry's new line) after an
-//   edit that only moved it. A clear is written at once.
+//   edit that only moved it. A clear is written at once. Its anchor (the
+//   bytes that start it exactly) is saved with it, and a resume point whose
+//   anchor changed is saved again however little it moved: a pause's fade
+//   reads 64 frames more, so at most one more write per pause, and the
+//   saved sample is the one the in-RAM resume would continue from.
 //
 // flushNow() does all of it at once, for a power-off (ENERGY.md item 4): a
 // write under way is finished (or, if the queue changed since it began,
@@ -81,7 +89,8 @@ public:
   static constexpr uint32_t kRetryMs = 10000;         // after a failed write
   static constexpr uint32_t kLinesPerPass = 32;       // ~2 KB of paths
   // A resume point that moved less than this since it was saved isn't
-  // saved again (a paused output reads a few ms more as its fade ends).
+  // saved again (a paused output reads a few ms more as its fade ends),
+  // unless its anchor changed.
   static constexpr uint32_t kResumeSlackMs = 250;
 
   // What the player says each pass (PlaybackController::resumePoint()):
@@ -91,6 +100,7 @@ public:
     bool have = false;
     uint32_t positionMs = 0;
     uint32_t durationMs = 0;
+    ResumeAnchor anchor;  // kind None: none (a built-in track, gapless trimming off)
   };
 
   // FNV-1a of a track's path: the resume point's check that the entry is

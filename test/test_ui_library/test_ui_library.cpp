@@ -949,6 +949,19 @@ void test_right_half_neighbours_survive_the_lab_panel() {
   fits(small, "Harder, Better, Faster, Stronger", kToastCompactTextRight - kToastTextX);
 }
 
+// The Dance tab's bottom line while a computer drives the dancer (the USB
+// visualizer): the title in Bold, the hint in Small, each in kW - 16.
+void test_dance_texts_fit() {
+  using namespace uitext;
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
+  fits(bold, kVizTitle, kDanceBottomW);
+  fits(small, kVizHint, kDanceBottomW);
+  char msg[96];
+  snprintf(msg, sizeof(msg), "\"%s\" %d px, \"%s\" %d px, in %d", kVizTitle, bold.width(kVizTitle), kVizHint,
+           small.width(kVizHint), kDanceBottomW);
+  TEST_MESSAGE(msg);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_jump_letters_match_the_index_buckets);
@@ -971,6 +984,7 @@ int main(int, char**) {
   RUN_TEST(test_idle_power_off_texts_fit);
   RUN_TEST(test_power_settings_texts_fit);
   RUN_TEST(test_touch_calibration_texts_fit);
+  RUN_TEST(test_dance_texts_fit);
   RUN_TEST(test_right_half_neighbours_survive_the_lab_panel);
   return UNITY_END();
 }

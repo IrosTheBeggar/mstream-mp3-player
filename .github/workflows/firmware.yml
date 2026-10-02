@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 IrosTheBeggar
 #
-# Every push and pull request: the host tests, the Core2 firmware (its
-# flash_guard and version checks), and the release files packaged by
-# tools/package_release.py, kept as a workflow artifact.
+# Every push and pull request: the host tests, the Core2 firmware twice from
+# the same source (core2: the flash in QIO; core2-dio: the DIO fallback, each
+# with its flash_guard and version checks), and the release files packaged
+# by tools/package_release.py, kept as a workflow artifact.
 # A v* tag also: a release build (RELEASE=1, tools/version.py), a GitHub
 # Release with those files, and, only when the repository variable
 # WEB_INSTALLER is "true", the web installer on GitHub Pages (for the newest
@@ -99,13 +100,19 @@ jobs:
       # the tree is clean and no local flags are set (tools/version.py).
       # RELEASE_TAG makes the version the tag that triggered the run, not
       # whichever tag on the commit git describe prefers.
-      # flash_guard fails it if the merged image is missing or wrong.
+      # flash_guard fails it if the merged image is missing or wrong, or
+      # isn't in the env's flash mode. core2 is the firmware (QIO); core2-dio
+      # the same in DIO, released as -dio-full.bin for a Core2 that keeps
+      # restarting on QIO.
       - name: Firmware
         env:
           RELEASE: ${{ github.ref_type == 'tag' && '1' || '' }}
           RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
-        run: pio run -e core2
+        run: pio run -e core2 -e core2-dio
 
+      # Both builds: package_release.py checks they are the same source, each
+      # in its flash mode, and checks the DIO image against its own merged
+      # pieces as it does the main one. The install page keeps the QIO image.
       - name: Package
         id: pkg
         env:

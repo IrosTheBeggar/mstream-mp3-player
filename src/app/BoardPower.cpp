@@ -18,6 +18,9 @@ constexpr uint8_t kBmiOnCtrl = 0x0E;  // as M5Unified leaves it: temperature, ac
 constexpr uint32_t kI2cHz = 400000;
 
 bool suspended = false;
+
+// The touch controller's 0xA5, as last read or written.
+int touchMode = -1;
 }  // namespace
 
 int bmi270Address() {
@@ -47,6 +50,38 @@ void setImuSuspended(int addr, bool suspend) {
 
 bool imuSuspended() { return suspended; }
 
+bool readTouchPower(touchpower::Regs* out) {
+  uint8_t block[4] = {};
+  uint8_t mode = 0;
+  // (The chip's register pointer moves on by itself: 0x86-0x89 in one read.)
+  if (!M5.In_I2C.readRegister(touchpower::kAddress, touchpower::kRegCtrl, block, sizeof(block), kI2cHz) ||
+      !M5.In_I2C.readRegister(touchpower::kAddress, touchpower::kRegMode, &mode, 1, kI2cHz)) {
+    touchMode = -1;
+    return false;
+  }
+  *out = touchpower::fromBytes(block, mode);
+  touchMode = mode;
+  return true;
+}
+
+int readTouchMode() {
+  uint8_t mode = 0;
+  touchMode = M5.In_I2C.readRegister(touchpower::kAddress, touchpower::kRegMode, &mode, 1, kI2cHz) ? mode : -1;
+  return touchMode;
+}
+
+bool setTouchMode(uint8_t mode) {
+  if (mode != touchpower::kActive && mode != touchpower::kMonitor) return false;
+  if (!M5.In_I2C.writeRegister8(touchpower::kAddress, touchpower::kRegMode, mode, kI2cHz)) {
+    touchMode = -1;
+    return false;
+  }
+  touchMode = mode;
+  return true;
+}
+
+int touchModeKnown() { return touchMode; }
+
 void applyBootPower() {
   const int addr = bmi270Address();
   const char* imu = "none found";
@@ -65,6 +100,14 @@ void applyBootPower() {
   Serial.printf("[power] boot: IMU %s, 5 V boost (EXTEN) %s, green LED %s\n", imu,
                 M5.Power.getExtOutput() ? "ON" : "off",
                 !axp192 ? "?" : M5.Power.Axp192.readRegister8(0x9A) == 255 ? "off" : "on");
+  touchpower::Regs touch;
+  if (readTouchPower(&touch)) {
+    char line[160];
+    touchpower::describe(touch, line, sizeof(line));
+    Serial.printf("[power] touch: %s (Pf)\n", line);
+  } else {
+    Serial.println("[power] touch: no answer at 0x38");
+  }
 }
 
 }  // namespace board

@@ -372,14 +372,14 @@ void test_blend() {
   }
 }
 
-// The stateful side: confidence below 0.3 stays idle, a clear beat fades in
+// The stateful side: confidence at 0.12 or less stays idle, a clear beat fades in
 // over ~0.4 s, a lost beat fades out holding its last pose, reset() hands a
 // weight over.
 void test_crab_state() {
   crab::Crab c;
-  for (int i = 0; i < 90; ++i) c.update(0.3f, false, 0.2f, true, 1.0f / 30.0f);
+  for (int i = 0; i < 90; ++i) c.update(0.3f, false, 0.12f, true, 1.0f / 30.0f);
   TEST_ASSERT_EQUAL_FLOAT(0.0f, c.weight());
-  const Pose idle = c.update(0.3f, false, 0.2f, true, 1.0f / 30.0f);
+  const Pose idle = c.update(0.3f, false, 0.12f, true, 1.0f / 30.0f);
   TEST_ASSERT_EQUAL_INT(crab::kLegs, idle.legs);
   TEST_ASSERT_EQUAL_FLOAT(0.0f, idle.dy);
   // A clear beat: 1 - e^-1 of the way after 0.4 s, nearly all after 2 s.

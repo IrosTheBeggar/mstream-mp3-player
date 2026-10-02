@@ -21,8 +21,10 @@
 //
 // Each write also says where its audio came from: how many of its frames
 // are real (from the ring; the rest are fades or silence), the ring's epoch
-// and the first real frame's position in it (the track frame, the counter
-// positionMs() is made of). The tap keeps that as segments: a new one
+// and the first real frame's position in it (the frame in its epoch: since
+// the ring's last discardAll(); a gapless join keeps the epoch, so the
+// count runs on into the next track, and positionMs() subtracts the heard
+// track's start in it). The tap keeps that as segments: a new one
 // starts wherever the track position doesn't follow on (a skip, a pause,
 // an underrun, silence), so any recent tap frame can be placed in its track.
 //

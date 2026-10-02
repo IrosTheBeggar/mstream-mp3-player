@@ -179,6 +179,13 @@ public:
   // The fade curve: `p` 0..1 of the way, linear in dB from 0 to -40 dB (Q15).
   static uint16_t curveQ15(float p);
 
+  // Whether `choice` ends at the current entry: End of track always, End
+  // of album on the album's last track (`lastOfAlbum`), End of queue on the
+  // queue's last entry; Off and the timed choices never. main.cpp's
+  // PlaybackController::NextGate (with choice()): the track after it is
+  // never decoded ahead (docs/GAPLESS.md section 5.4).
+  static bool endsAt(Choice choice, bool lastOfAlbum, bool lastOfQueue);
+
   // End of album: the next queue entry's track `b` is on another album
   // than `a`: the album's; with no album information (the "loose tracks",
   // album ""), the folder. A built-in track, or one the index doesn't
@@ -213,14 +220,18 @@ private:
 // it there: the fade never rises by itself). main.cpp feeds it every pass
 // and hands the timer a length of 0 (unknown) until it says started.
 // Started: the entry changed while the position was under 1 s (its own
-// start already, or the last one barely begun), or since the change the
-// backend started a track (its start count moved) or the position went
-// back. Portable, host-tested (test_sleep_timer).
+// start already, or the last one barely begun), or since the pass before
+// the change the backend started a track (its start count moved) or the
+// position went back. A gapless advance counts as a start (the backend's
+// trackSeq()): the entry and the count change in the same pass, and the
+// position may already be past 1 s (a loop pass that came late after the
+// join). Portable, host-tested (test_sleep_timer).
 class EntryStart {
 public:
   static constexpr uint32_t kFreshMs = 1000;
   // `key`: the current entry (QueueModel's key); `startSeq`: the backend's
-  // start count; `positionMs`: its position. True: they are this entry's.
+  // start count (its starts and gapless advances); `positionMs`: its
+  // position. True: they are this entry's.
   bool update(uint32_t key, uint32_t startSeq, uint32_t positionMs);
   bool started() const { return started_; }
 
@@ -229,5 +240,6 @@ private:
   bool started_ = false;
   uint32_t key_ = 0;
   uint32_t seq_ = 0;
+  uint32_t lastSeq_ = 0;  // the count at the last update
   uint32_t pos_ = 0;
 };

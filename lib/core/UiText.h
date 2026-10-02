@@ -422,6 +422,14 @@ inline constexpr const char* kCalUndo = "Undo";
 // glass is too far off to reach the Output tab (main.cpp).
 inline constexpr const char* kBootTouchHint = "Touch trouble? Hold a finger on the screen.";
 
+// ---- the Dance tab (ui/DancePage) ----
+// The USB visualizer (docs/USB-VISUALIZER.md): while a computer drives the
+// dancer, the bottom line (y 196-239, where the track's title and artist
+// go, centred, kW - 16 px) says so, the title in Bold over the hint in Small.
+inline constexpr int kDanceBottomW = 320 - 16;
+inline constexpr const char* kVizTitle = "Dancing to your computer";
+inline constexpr const char* kVizHint = "Tap a button or a tab to stop";
+
 // ---- another board than the Core2 (app/BoardGuard) ----
 // Drawn in Font2, M5GFX's built-in 16 px bitmap font (the VLW fonts need
 // PSRAM, which an M5Stack Basic lacks), one line each from x 4 on a

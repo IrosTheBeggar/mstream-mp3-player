@@ -173,7 +173,7 @@ void QueueSaver::stepResume() {
   const uint32_t pos = transport_.positionMs;
   if (resume_.valid && resume_.generation == generation_ && resume_.entry == cur) {
     const uint32_t moved = pos > resume_.positionMs ? pos - resume_.positionMs : resume_.positionMs - pos;
-    if (moved < kResumeSlackMs) return;  // saved already
+    if (moved < kResumeSlackMs && resume_.anchor == transport_.anchor) return;  // saved already
   }
   char path[TrackCatalog::kMaxPath];
   catalog_.path(queue_.currentTrack(), path, sizeof(path));
@@ -184,6 +184,7 @@ void QueueSaver::stepResume() {
   r.pathHash = pathHash(path);
   r.positionMs = pos;
   r.durationMs = transport_.durationMs;
+  r.anchor = transport_.anchor;
   resume_ = r;
   store_.saveResume(resume_);
   ++resumeWrites_;

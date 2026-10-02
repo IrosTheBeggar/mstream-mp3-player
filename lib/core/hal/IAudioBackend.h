@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <string>
 
+#include "ResumeAnchor.h"
+
 // HAL seam for audio. The portable PlaybackController drives transport through
 // this interface and never touches a decoder or an output directly. On the
 // Core2 it is Core2AudioBackend (decode task -> PCM ring -> Bluetooth or the
@@ -20,6 +22,24 @@ public:
   // start part of the way in (a VBR MP3 without a table of contents): the
   // backend learns the real end of the track from the decoder.
   virtual bool play(const std::string& path, uint32_t durationHintMs, uint32_t startMs) = 0;
+  // Where a start begins (docs/SEEK.md section 4.4): `ms` in (0: the top),
+  // `hintMs` its length as known elsewhere, and a resume point's anchor
+  // (kind None: none), which a backend that can checks against the file
+  // and starts by, on the very sample it paused at; one that doesn't
+  // match, or a backend without anchors, starts by `ms`.
+  struct StartAt {
+    uint32_t ms = 0;
+    uint32_t hintMs = 0;
+    ResumeAnchor anchor;
+  };
+  virtual bool play(const std::string& path, const StartAt& at) { return play(path, at.hintMs, at.ms); }
+  // The heard track's anchor at the read position: what a paused track's
+  // resume point saves. False: none (a built-in track, gapless trimming
+  // off, a start not taken up yet, a backend without anchors).
+  virtual bool resumeAnchor(ResumeAnchor* out) const {
+    (void)out;
+    return false;
+  }
   virtual void pause() = 0;
   virtual void resume() = 0;
   virtual void stop() = 0;
@@ -47,4 +67,30 @@ public:
     bool needsCpu = false;
   };
   virtual RateRefusal rateRefusal() const { return {}; }
+
+  // ---- gapless playback (docs/GAPLESS.md) ----
+  // The player's word on what follows a track: the track with token
+  // `after` (0: the one the last play() started; a joined track has the
+  // token its Next had) is followed by `path` (`token`: unique, never 0;
+  // `hintMs` its length as known elsewhere), or by nothing (`token` 0: it
+  // ends as before gapless playback). A backend that can may decode it
+  // ahead and join it on without a gap. A newer word replaces this one:
+  // one that names another track, or nothing, takes what was decoded ahead
+  // back out, unless it has already been heard (then takeAdvance() still
+  // reports it, and the player sorts it out). Backends without gapless
+  // playback ignore it.
+  struct Next {
+    uint32_t after = 0;
+    uint32_t token = 0;
+    std::string path;
+    uint32_t hintMs = 0;
+  };
+  virtual void setNext(const Next& next) { (void)next; }
+  // A joined track is being heard (the outputs have read past its first
+  // frame): its token, once per join. positionMs(), durationMs() and the
+  // rest are its own from the same call on. False: none.
+  virtual bool takeAdvance(uint32_t* token) {
+    (void)token;
+    return false;
+  }
 };

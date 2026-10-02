@@ -44,6 +44,11 @@
 // One task (the decode task). ~3.2 KB, all in the object: keep it in
 // internal RAM (the converter reads its histories 96 times per output).
 class RingFeed {
+  // Pass: 44.1 kHz with nothing waiting in the converter. Block: another
+  // rate, configured. Hold: no rate yet (the converter holds the frames).
+  // Refused: nothing is taken.
+  enum class Mode : uint8_t { Hold, Pass, Block, Refused };
+
 public:
   static constexpr uint32_t kStageFrames = 256;
   // Source frames held for the block path before they are converted.
@@ -127,6 +132,49 @@ public:
   // staged (before the rate is known: at the largest ratio, 8 kHz's).
   uint32_t roomFor(uint32_t srcFrames) const;
 
+  // ---- gapless joins (docs/GAPLESS.md sections 3.2 and 5.1) ----
+  // The next track can follow in the same stream: its frames go on through
+  // the converter as if the two files were one (no reset, no tail). Or,
+  // at another rate, the tail goes in (finish()) and a new stream starts
+  // at the same ring position (restartStream()). Either way the feed as it
+  // was at the end of the first track is kept (mark()), so that what was
+  // decoded after it can be taken back out of the ring (PcmRing::cutBack())
+  // and the feed put back as it was (rewind()), the same bits as if the
+  // cut track had never been fed.
+  struct Mark {
+    RateConverter conv;
+    uint64_t made = 0;
+    int rate = 0;
+    int forced = 0;
+    uint32_t perFrame = 1;
+    Mode mode = Mode::Hold;
+    bool mono = false;
+  };
+  // The feed now, into `m` (~2 KB: the firmware keeps two in PSRAM). Only
+  // with nothing staged or held (commit() or finish() returned true): false
+  // otherwise, `m` untouched.
+  bool mark(Mark* m) const;
+  // Back to `m`: nothing staged or held, the converter and the counters as
+  // they were. The converter's table pointers are kept as they were too:
+  // the firmware never frees the tables' copy while a track decoded ahead
+  // could be cut (Core2AudioBackend, RESAMPLER.md section 10c).
+  void rewind(const Mark& m);
+  // Whether a stream at `hz` can carry on from here as one stream: the
+  // converter configured at that rate (not refused, not forced by a test).
+  // Never after finish(), which the caller knows: its tail is in the ring
+  // (restartStream() then).
+  bool continues(int hz) const {
+    return hz > 0 && forced_ == 0 && conv_.configured() && rate_ == hz;
+  }
+  // The ring frames the converter still owes for what it took
+  // (RateConverter::tailFrames()): a stream that carries on has its next
+  // source frame that many frames past what is in the ring (0 at the
+  // passthrough). With nothing staged or held.
+  uint32_t tailFrames() const { return conv_.tailFrames(); }
+  // After finish() (nothing staged): a new stream from here, as reset() but
+  // with made() running on and the test's forced rate kept.
+  void restartStream();
+
   // The bench: committed frames are dropped instead of written.
   void setDiscard(bool discard) { discard_ = discard; }
 
@@ -159,11 +207,6 @@ private:
     d[1] = r;
 #endif
   }
-
-  // Pass: 44.1 kHz with nothing waiting in the converter. Block: another
-  // rate, configured. Hold: no rate yet (the converter holds the frames).
-  // Refused: nothing is taken.
-  enum class Mode : uint8_t { Hold, Pass, Block, Refused };
 
   bool consumeSlow(const int16_t sample[2]);
   // The block path's room: converts what is held, pushes the stage into the

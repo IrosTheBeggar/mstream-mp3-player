@@ -7,6 +7,8 @@
 #include <functional>
 #include <utility>
 
+#include "HostLine.h"
+
 // Single-key commands over USB serial, so tests can be scripted from the host:
 //   n next   p prev   <space> play/pause   o switch output   + / - volume
 //   s stats  l list tracks   f forget the remembered Bluetooth device and restart
@@ -47,6 +49,19 @@
 //        Rt<tone:...> play one on its own (the player stopped: nothing follows it;
 //        silence only on Bluetooth, a tone only in silent mode), Rf</music/...> a file
 //        the same way (silent mode only), Rx stops either, Rb its bench
+//   G... gapless playback (docs/GAPLESS.md): G status, G0/G1 off/on, Gt0/Gt1
+//        trimming by the LAME tag off/on, Gx<n> the ring's cut against a reader
+//        on the other core (stops the player)
+// '@' lines are a computer's, not commands (docs/USB-VISUALIZER.md: the USB
+// visualizer's protocol; HostLine): every byte from an '@' to the end of
+// its line goes to hostLine, never to the keys above, and is never echoed.
+// An '@' abandons a command still waiting for its argument (logged), except
+// inside an R argument that has text ("Rttone:1000@48000"). Typed by hand
+// such a line gets an "@err" reply and does nothing else. Reading that
+// starts mid-line (a boot while a computer sends, input lost to an
+// overflow) drops the line's tail instead of running it as keys (HostLine's
+// Sync, logged): the first key after a boot, sent with its Enter, may need
+// sending again.
 // and the UI spike's tools (docs/UI-SPIKE.md), also ended with Enter, the
 // text after the letter passed on as it is:
 //   u...  input lab (u toggles; u0-u3 modes; us summary)
@@ -100,22 +115,40 @@ public:
     std::function<void()> partitionTable;
     // The rate converter (R): the argument as typed (may be "").
     std::function<void(const char*)> rate;
+    // Gapless playback (G): the argument as typed (may be "").
+    std::function<void(const char*)> gapless;
+    // A computer's '@' line: complete (HostLine::Byte::Line: `line` is its
+    // text from the '@', writable) or not one (Bad, Long, Restart: `line`
+    // nullptr).
+    std::function<void(char* line, HostLine::Byte kind)> hostLine;
   };
+
+  // The receive buffer setup() gives Serial before it starts (the
+  // visualizer's lines must outlast a slow loop pass: docs/USB-VISUALIZER.md).
+  static constexpr size_t kRxBuffer = 1024;
 
   explicit SerialConsole(Actions actions) : actions_(std::move(actions)) {}
 
+  // Right after Serial starts (setup(), before the banner): waits up to
+  // HostLine::kQuietMs for input. None: no computer's line was under way
+  // as Serial started, and keys are keys from the first byte.
+  void begin();
   // Handles whatever has arrived; call from the main loop. True: something
   // arrived (someone is at the console: the idle power-off waits).
   bool poll();
 
 private:
+  void key(char c);  // a byte that is the console's
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
     InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle, BluetoothTest,
-    Rate,
+    Rate, Gapless,
   };
 
   Actions actions_;
   Pending pending_ = Pending::None;  // a command waiting for its argument
+  char pendingKey_ = 0;              // ... its letter (for the log when it is abandoned)
   String arg_;
+  HostLine host_;                    // a computer's '@' line being read (256 B)
+  bool syncLogged_ = true;           // Sync's end logged (or nothing to log)
 };

@@ -697,6 +697,21 @@ bool RateConverter::finished() const {
   }
 }
 
+uint32_t RateConverter::tailFrames() const {
+  switch (state_) {
+    case State::Refused:
+      return 0;
+    case State::Unconfigured:
+      return pendingN_;  // finishPush() plays them at 44.1 kHz
+    case State::Configured:
+    default: {
+      // (The carried frames are taken and not yet produced: counted here.)
+      const uint64_t target = plan_.ringFrames(taken_);
+      return target > produced_ ? static_cast<uint32_t>(target - produced_) : 0;
+    }
+  }
+}
+
 // ---- the kernel ----
 
 int32_t RateConverter::dotC(const int16_t* row, const int16_t* x) { return CKernel::dot(row, x); }

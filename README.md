@@ -47,7 +47,9 @@ stops there (on battery it powers off after a minute).
    ```
 
    Each build ends with a `flash_guard: ok` line (see
-   [Installing and updating](#installing-and-updating)). A Core2 flashed
+   [Installing and updating](#installing-and-updating)). `core2` runs the
+   flash in QIO; if the Core2 keeps restarting after the upload, flash the
+   DIO build instead: `pio run -e core2-dio -t upload`. A Core2 flashed
    before the current layout (a 4 MB `factory` app, settings at 0x9000)
    needs [moving to it](docs/ARCHITECTURE.md#moving-an-existing-unit-to-the-new-layout)
    once, or it loses its settings.
@@ -101,10 +103,22 @@ files on its GitHub Release page with esptool
 ([Releases and the install page](#releases-and-the-install-page)). Either
 way the image is the merged one below.
 
+**If your Core2 keeps restarting after installing, flash the
+`-dio-full.bin` instead (same firmware, slower flash mode):**
+`esptool --chip esp32 -b 921600 write-flash 0x0 mstream-player-core2-<v>-dio-full.bin`,
+from the same release page, without erasing (the settings stay). From
+0.6.0 the firmware runs the flash in **QIO** at 80 MHz, 4 data lines
+instead of 2: list scrolling with an MP3 playing is ~65 % faster and MP3
+decoding ~9 % cheaper ([docs/ENERGY.md](docs/ENERGY.md) section 5, "Audit
+2: measured"). M5Stack ships the Core2 in DIO at 40 MHz and only one
+Core2 (v1.3) has been tried in QIO, so every release also carries the
+same firmware in DIO, built from `[env:core2-dio]`. A Core2 that can't
+take QIO still takes a USB flash: the download mode is in the chip's ROM.
+
 A build makes two ways to install:
 
 - `pio run -e core2 -t upload` writes the pieces: the bootloader, the
-  partition table, otadata and the app.
+  partition table, otadata and the app (QIO; `-e core2-dio` for DIO).
 - `.pio/build/core2/firmware.factory.bin` is the same in one file, written
   at **0x0** (what a web installer, M5Burner or
   `esptool write-flash 0x0 firmware.factory.bin` do). It ends far below the
@@ -139,9 +153,9 @@ still change). `tools/version.py` names every build from git
 |---|---|
 | From the tag | `v0.5.0` |
 | 3 commits past it, with uncommitted changes | `v0.5.0-3-gabc1234-dirty` |
-| No `v*` tag reachable (before the first release, or a clone without its tags: `git fetch --tags`) | `v0.5.0-dev+abc1234` (`-dirty` too) |
+| No `v*` tag reachable (before the first release, or a clone without its tags: `git fetch --tags`) | `v0.6.0-dev+abc1234` (`-dirty` too) |
 
-The `0.5.0` in the last one is `NEXT_RELEASE`, at the top of
+The `0.6.0` in the last one is `NEXT_RELEASE`, at the top of
 `tools/version.py`: the one place the next version is written. The date a
 build shows is its commit's, not the day it was built.
 
@@ -167,7 +181,7 @@ from a clean checkout of a tag (PowerShell):
 
 ```powershell
 Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue
-$env:RELEASE = "1"; $env:RELEASE_TAG = "v0.5.0"; pio run -e core2
+$env:RELEASE = "1"; $env:RELEASE_TAG = "v0.5.0"; pio run -e core2 -e core2-dio
 ```
 
 ## Releases and the install page
@@ -180,9 +194,10 @@ esptool.
 
 [`.github/workflows/firmware.yml`](.github/workflows/firmware.yml) runs on
 every push, pull request and `v*` tag: `pio test -e native`, then
-`pio run -e core2` (its `flash_guard` and `version` checks fail a bad
-image), then [`tools/package_release.py`](tools/package_release.py), which
-packages the build. The packaged files are kept as the run's artifact
+`pio run -e core2 -e core2-dio` (the QIO firmware and its DIO fallback;
+their `flash_guard` and `version` checks fail a bad image), then
+[`tools/package_release.py`](tools/package_release.py), which packages the
+builds (checking they are the same source, each in its flash mode). The packaged files are kept as the run's artifact
 (`mstream-player-core2-<version>`, for 90 days), so any commit's firmware
 can be downloaded from its run. A `v*` tag also:
 
@@ -199,8 +214,8 @@ can be downloaded from its run. A `v*` tag also:
 3. puts the **web installer** on GitHub Pages,
    <https://irosthebeggar.github.io/mstream-mp3-player/>: ESP Web Tools'
    install button ([`site/index.html`](site/index.html)), `manifest.json`
-   and the firmware, all on the same origin (release files have no CORS
-   headers, so the browser can't fetch them from GitHub). Only for the
+   and the firmware (the QIO image), all on the same origin (release files
+   have no CORS headers, so the browser can't fetch them from GitHub). Only for the
    newest full release, the highest `vX.Y.Z` tag: not for a pre-release,
    and not for an older tag (pushed together with a newer one, a fix on an
    old line, a re-run, or Run workflow on it), so the installer never goes
@@ -210,9 +225,11 @@ can be downloaded from its run. A `v*` tag also:
 | Release file | What it is |
 |---|---|
 | `mstream-player-core2-<v>-full.bin` | `firmware.factory.bin`: everything, written at 0x0 (install, or update without erasing) |
+| `…-dio-full.bin` | the same from `[env:core2-dio]`: the same firmware with the flash in DIO, for a Core2 that keeps restarting with the one above |
 | `…-app.bin` | `firmware.bin`, at 0x10000 |
 | `…-parts.zip` | bootloader 0x1000, partitions 0x8000, boot_app0 0xe000, app 0x10000, and `flash_args.txt` (`esptool --chip esp32 write-flash @flash_args.txt`) |
 | `…-elf.zip` | `firmware.elf` and `firmware.map`, to decode a crash's backtrace (match the ELF digits in About) |
+| `…-dio-elf.zip` | the same for `…-dio-full.bin` (its own ELF) |
 | `…-licenses.zip`, `LICENSE`, `THIRD-PARTY-NOTICES.md` | The licences (`LICENSES/` is in the zip) |
 | `…-source.tar.gz` | The source the binary was built from: this repository's files, the git-pinned `lib_deps` checkouts (ESP8266Audio, ESP32-A2DP) and the parts of the Arduino core the build compiled, so the GPL and LGPL source stays available beside the binary even if an upstream download goes away |
 | `SHA256SUMS` | `sha256sum -c SHA256SUMS` |
@@ -248,8 +265,8 @@ The filesystem image (`littlefs.bin`, `data/music`) is never packaged.
   for the release, `pages: write` and `id-token: write` for the deploy).
   If the organisation caps them lower, the release and deploy jobs fail.
 
-**Locally:** after `pio run -e core2`, `python tools/package_release.py`
-writes the same files to `dist/` (`dist/release/`, `dist/site/`,
+**Locally:** after `pio run -e core2 -e core2-dio`,
+`python tools/package_release.py` writes the same files to `dist/` (`dist/release/`, `dist/site/`,
 `dist/release-notes.md`). `--release --tag v0.5.0` packages only a release
 build: one made with `RELEASE=1` that passed its checks (a plain build of
 the tag, with a `local.ini` say, is refused), from a checkout still clean
@@ -272,6 +289,15 @@ console `ah0` turns that off). A slow press on anything else on the screen
 still counts as a tap. Volume is per output: the speaker and
 Bluetooth keep their own. A hold shows the volume (or where the output
 went) over the tab bar for a moment.
+
+**Gapless playback**: when a track ends by itself the next one starts on
+the very next sample, with no gap and no fade, so albums whose tracks run
+into each other (live albums, mixes, classical movements) play as one
+piece. MP3s are trimmed by their LAME tag (the encoder's silence at both
+ends); an MP3 without one keeps that silence (about 50 ms). A change to
+what comes next in the last second and a half is taken into account; the
+sleep timer's End of track still pauses exactly at the end. Details:
+[docs/GAPLESS.md](docs/GAPLESS.md).
 
 **The screen** has a tab bar at the top, on every page: **Now Playing** (its
 icon's bars move while playing, with a progress line under them),
@@ -446,6 +472,22 @@ blinking, glancing around, in dimmed colours) when there's no beat to follow.
 A tap on the crab, or `m`, swaps it for the first proof of concept, a stick
 figure, and back.
 
+**USB visualizer** (a demo, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md)):
+a computer playing music can make the crab dance to it over the USB cable.
+The Core2 pauses its own player, shows the Dance tab and keeps it lit; a
+touch beside the crab or any button hands it back. The mStream terminal
+player will send the beats later; for now `tools/usb_viz.py` (Python 3 and
+pyserial; close `pio monitor` first, it needs the port) does:
+
+```
+python tools/usb_viz.py --port COM3 --click 120              # a click track's beats, silent
+python tools/usb_viz.py --port COM3 --file song.flac --play   # plays it here too (WAV; MP3/FLAC need ffmpeg)
+python tools/usb_viz.py --selftest                            # no Core2 needed
+```
+
+It plays nothing on the computer unless `--play` is given, and nothing
+plays on the Core2.
+
 ![The crab over two beats, phase 0/8 to 7/8 of each](docs/img/crab-phases.png)
 
 The serial console (115200 baud) is there for scripted testing:
@@ -464,8 +506,10 @@ The serial console (115200 baud) is there for scripted testing:
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none) |
 | `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
 | | | `R...` | the rate converter ([docs/RESAMPLER.md](docs/RESAMPLER.md)): `R` the current track's conversion (the exact ratio, source frames taken, ring frames made, clamped samples); `Rt` lists its test tracks (a 1 kHz tone and silence at other rates), `Rt<n>` or `Rt<tone:...@rate>` plays one on its own (the player is stopped first, keeping your place in the track: nothing follows it; only silence on Bluetooth, a tone only in silent mode `z`); `Rf</music/...>` plays a file on its own (silent mode only; `Rf48000</music/...>` converts it as if it were 48 kHz, a load test), `Rx` stops what `Rt` or `Rf` started; `Rb` its bench (the MAC16 kernel's self-test and route check, then 10 s of audio per rate with each kernel: cycles and share of a core at the clock running; 88.2/96 kHz too, though they don't play yet) |
+| | | `G...` | gapless playback ([docs/GAPLESS.md](docs/GAPLESS.md)): `G` its status (what the player says comes next, the join waiting to be heard, joins, cuts and failed opens since boot, the decoding track's LAME trim); `G0` / `G1` off / on (off: tracks end as before 0.6.0, for an A/B; RAM only); `Gt0` / `Gt1` trimming by the LAME tag off / on from the next track; `Gx<n>` the ring's cut against a reader on the other core (a stress test: stops the player, keeping your place) |
 | | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
+| | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else. `tools/usb_viz.py` sends them (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
 
 The UI spike's tools ([docs/UI-SPIKE.md](docs/UI-SPIKE.md)) measure the
 browsing UI's risks before its screens are built. Each is a letter, an
@@ -482,7 +526,8 @@ optional argument and Enter:
 ## Layout
 
 ```
-platformio.ini        Build envs: core2 | native; local*.ini holds per-developer overrides
+platformio.ini        Build envs: core2 (QIO) | core2-dio (the DIO fallback) | native
+                      (+ core2-psramfix, an A/B); local*.ini holds per-developer overrides
 partitions.csv        Two 6 MB OTA app slots, NVS above anything a single-file
                       install writes, 3.8 MB LittleFS (test audio), coredump;
                       never changes after release (docs/ARCHITECTURE.md#flash-layout)
@@ -494,11 +539,18 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   TrackCatalog        Track ids to paths and names: the index's tracks and
                       the built-in ones
   QueueSaver          When the queue, its position and the resume point
-                      (the second a paused track picks up at) are saved
+                      (the second a paused track picks up at, and its
+                      anchor) are saved
   TrackProgress, TrackSeek
-                      A track's length (headers, read rate); starting part
-                      of the way in (an MP3's byte from its bitrate or TOC,
-                      a clean frame, a FLAC's STREAMINFO)
+                      A track's length (headers, read rate, a truncated
+                      file's share); starting part of the way in: an MP3's
+                      start plan (CBR arithmetic, LAME's TOC inverted, a
+                      chain of frames; a preroll before the landing frame),
+                      an anchor's check, a FLAC's STREAMINFO (docs/SEEK.md)
+  SeekIndex           The run index: every 4th MP3 frame decoded, for a
+                      pause's resume anchor and exact seeks back into a run
+  ResumeAnchor        The bytes that start a track on the sample it paused at
+  FrameCursor         Which frame the sample a decoder offers comes from
   ByteStream          Byte sinks and sources for what is saved and loaded
   HeadsetKeys         What the headphones' transport keys do (never start music)
   PcmRing             PCM ring between the decode task and the active output
@@ -509,6 +561,10 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       the ring-full rule (RingOutput wraps it)
   TableCopy           The converter's tables in internal RAM while a track
                       at another rate plays (freed at a 44.1 kHz one)
+  DecoderArena        One block for libmad's state, lent to one MP3 decoder
+                      at a time (pinned in the PSRAM's fast lower 2 MB)
+  DecoderParts        One decoder's state and who frees each part: given
+                      back once, when the decoder stops
   TransportSync       Generation-tagged decode progress (no stale "track ended")
   ToneGen, ClickGen   Built-in test tones; click tracks with a known beat
   ToneTrack           What a built-in track's path asks for ("tone:1000@48000")
@@ -598,21 +654,27 @@ data/                 LittleFS image source (data/music is gitignored)
 tools/                make_test_audio.py; version.py (build pre-script: the
                       version from git, the release checks); iram_diet.py and
                       flash_guard.py (build post-scripts: IRAM; the app's slot,
-                      the merged image, NVS, the pieces' list);
-                      package_release.py (a build's release files, install
-                      page and release notes -> dist/);
+                      the merged image, NVS, the flash mode, the pieces' list);
+                      package_release.py (the QIO and DIO builds' release
+                      files, install page and release notes -> dist/);
                       crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*);
                       vlw_font.py (the UI's DejaVu VLW fonts -> src/ui/VlwFonts.cpp);
                       ui_icons.py (the UI's 1-bit icons -> src/ui/IconData.cpp);
                       gen_resampler_tables.py (the rate converter's filters ->
-                      lib/core/ResamplerTables.cpp)
+                      lib/core/ResamplerTables.cpp);
+                      usb_viz.py + test_usb_viz.py (the USB visualizer's
+                      reference sender, and its tests: python -m unittest
+                      discover -s tools -p "test_usb_viz.py")
+                      beat_eval/ (the beat tracker's evaluation harness: the
+                      firmware's tracker on a music corpus, scored against
+                      reference beats; docs/BEAT-TRACKER-EVAL.md)
 test/                 Host unit tests (Unity)
 site/                 The web installer's page (filled in by package_release.py)
 .github/              workflows/firmware.yml (CI, releases, the install page);
                       release-notes.md (the release notes' template)
 docker/               mStream dev server
 docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.md,
-                      RESAMPLER.md
+                      RESAMPLER.md, BEAT-TRACKER-EVAL.md
 LICENSES/             The licence texts THIRD-PARTY-NOTICES.md refers to
 THIRD-PARTY-NOTICES.md What else is in the firmware binary, and its licences
 ```

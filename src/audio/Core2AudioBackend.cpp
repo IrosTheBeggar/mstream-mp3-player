@@ -5,7 +5,6 @@
 
 #include <Arduino.h>
 #include <AudioFileSourceFS.h>
-#include <AudioFileSourceID3.h>
 #include <AudioGeneratorFLAC.h>
 #include <AudioGeneratorMP3.h>
 #include <esp_cpu.h>
@@ -18,13 +17,17 @@
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 
 #include "RateConverter.h"
 #include "ResamplerTables.h"
+#include "ResumeAnchor.h"
 #include "TableCopy.h"
 #include "ToneTrack.h"
 #include "TrackProgress.h"
 #include "TrackSeek.h"
+#include "audio/GuardedSource.h"
+#include "audio/PinnedMp3.h"
 #include "audio/RingOutput.h"
 
 namespace {
@@ -52,6 +55,38 @@ void mmss(uint32_t ms, char* buf, size_t size) {
   const uint32_t s = ms / 1000;
   snprintf(buf, size, "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
 }
+
+// "1:23.456" (m:ss.mmm).
+void mmssms(uint32_t ms, char* buf, size_t size) {
+  const uint32_t s = ms / 1000;
+  snprintf(buf, size, "%lu:%02lu.%03lu", (unsigned long)(s / 60), (unsigned long)(s % 60), (unsigned long)(ms % 1000));
+}
+
+// FNV-1a of a track's path: the run index's check that a run is this file's.
+uint32_t pathHash(const std::string& path) {
+  uint32_t h = 2166136261u;
+  for (const char c : path) h = (h ^ static_cast<uint8_t>(c)) * 16777619u;
+  return h;
+}
+
+// trackseek's reads, from the decode task's open file.
+class SourceReader : public trackseek::FileReader {
+public:
+  explicit SourceReader(AudioFileSource* f) : f_(f) {}
+  uint32_t readAt(uint32_t offset, uint8_t* buf, uint32_t n) override {
+    if (!f_->seek(static_cast<int32_t>(offset), SEEK_SET)) return 0;
+    uint32_t got = 0;
+    while (got < n) {
+      const uint32_t r = f_->read(buf + got, n - got);
+      if (r == 0) break;
+      got += r;
+    }
+    return got;
+  }
+
+private:
+  AudioFileSource* f_;
+};
 
 std::string extensionOf(const std::string& path) {
   const size_t dot = path.find_last_of('.');
@@ -123,8 +158,15 @@ static TableCopy tableCopy(tableAlloc, tableFree);
 // tableCopy's state for tableStatus() (written on the decode task only).
 static std::atomic<bool> tablesInRam{false};
 static std::atomic<uint32_t> tableNoRoom{0};
+// A chain of gapless joins is under way (decode task): the copy isn't
+// freed until the next request's start, even at a join to a 44.1 kHz
+// track. A cut rewinds the converter to a state saved earlier in the chain
+// (RingFeed::mark()), whose rows may point into the copy: kept, every row
+// ever saved stays valid (docs/GAPLESS.md section 5.1).
+static bool tablesKeep = false;
 
 static void tablesWanted(bool wanted) {
+  if (!wanted && tablesKeep) return;
   const TableCopy::Event e = tableCopy.want(wanted);
   tablesInRam.store(tableCopy.copied(), std::memory_order_relaxed);
   tableNoRoom.store(tableCopy.failures(), std::memory_order_relaxed);
@@ -159,10 +201,25 @@ Core2AudioBackend::TableStatus Core2AudioBackend::tableStatus() {
   return {tablesInRam.load(std::memory_order_relaxed), tableNoRoom.load(std::memory_order_relaxed)};
 }
 
-Core2AudioBackend::Core2AudioBackend() = default;
+Core2AudioBackend::Core2AudioBackend() : mp3Arena_(PinnedMp3::kArenaParts, 2) {}
 Core2AudioBackend::~Core2AudioBackend() = default;
 
 bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
+  // libmad's state first, while the PSRAM window's fast lower 2 MB is free
+  // (docs/RESAMPLER.md section 10d). Without it MP3s decode as before.
+  mp3Arena_.attach(heap_caps_aligned_alloc(DecoderArena::kAlign, mp3Arena_.bytes(), MALLOC_CAP_SPIRAM));
+  {
+    char where[96];
+    describeMp3State(where, sizeof(where));
+    Serial.printf("[audio] MP3 decoder state: %u B %s\n", (unsigned)mp3Arena_.bytes(), where);
+  }
+  // The run index's two slots (docs/SEEK.md section 4.3; 2 x 24 KB). Without
+  // them: no seeks back into a run, and a pause's anchor only for a FLAC.
+  for (SeekIndex::Entry*& e : indexSlots_) {
+    e = static_cast<SeekIndex::Entry*>(
+        heap_caps_malloc(SeekIndex::kCapacity * sizeof(SeekIndex::Entry), MALLOC_CAP_SPIRAM));
+  }
+  index_.setStorage(indexSlots_[0], indexSlots_[1], SeekIndex::kCapacity);
   auto* ringBuffer = static_cast<int16_t*>(
       heap_caps_malloc(kRingFrames * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM));
   chunk_ = static_cast<int16_t*>(
@@ -175,6 +232,19 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
   checkKernel("at boot");  // the converter's fast kernel, only if it gives the C kernel's bits
   RateConverter::setTablesWanted(tablesWanted);
   if (fs_) file_.reset(new AudioFileSourceFS(*fs_));
+  guard_.reset(new GuardedSource());
+  // Gapless playback's PSRAM (docs/GAPLESS.md section 6): the trim's hold
+  // (16 KB) and two marks of the feed (~2 KB each: a cut's way back). Without
+  // them tracks end as before (no hold: no end trim; no marks: no joins).
+  holdBuf_ = static_cast<int16_t*>(heap_caps_malloc(TrimFeed::kMaxHold * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM));
+  out_->trim().setHoldBuffer(holdBuf_, holdBuf_ ? TrimFeed::kMaxHold : 0);
+  for (RingFeed::Mark*& m : marks_) {
+    void* mem = heap_caps_malloc(sizeof(RingFeed::Mark), MALLOC_CAP_SPIRAM);
+    m = mem ? new (mem) RingFeed::Mark : nullptr;
+  }
+  engine_.reset(new GaplessEngine(*ring_, feed(), out_->trim(), book_, *this));
+  engine_->setMarks(marks_[0], marks_[1]);
+  engine_->setEnabled(gapless_.load(std::memory_order_relaxed));
 
   bt_.begin(*ring_, shared_, btSinkName);
   speaker_.begin(*ring_, shared_);
@@ -188,11 +258,12 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
 
 // ---- control side (loop task) ----
 
-void Core2AudioBackend::request(const std::string& path, Kind kind, uint32_t startMs, uint32_t hintMs, uint32_t asHz) {
+void Core2AudioBackend::request(const std::string& path, Kind kind, uint32_t startMs, uint32_t hintMs, uint32_t asHz,
+                                const ResumeAnchor& anchor) {
   if (!task_) return;  // begin() failed
   {
     std::lock_guard<std::mutex> guard(lock_);
-    request_ = {path, kind, pauses_.load(), startMs, hintMs, asHz};
+    request_ = {path, kind, pauses_.load(), startMs, hintMs, asHz, anchor};
   }
   requestMs_.store(millis(), std::memory_order_relaxed);
   sync_.post(kind == Kind::Play ? Phase::Pending : Phase::Idle);
@@ -200,11 +271,32 @@ void Core2AudioBackend::request(const std::string& path, Kind kind, uint32_t sta
 }
 
 bool Core2AudioBackend::play(const std::string& path, uint32_t durationHintMs, uint32_t startMs) {
+  StartAt at;
+  at.ms = startMs;
+  at.hintMs = durationHintMs;
+  return play(path, at);
+}
+
+bool Core2AudioBackend::play(const std::string& path, const StartAt& at) {
   // Un-paused by the decode task once the old track is discarded (start()), so
   // a paused ring never plays a burst of the previous track first.
   transportPlaying_ = true;
-  request(path, Kind::Play, startMs, durationHintMs);
+  request(path, Kind::Play, at.ms, at.hintMs, 0, at.anchor);
   return true;
+}
+
+bool Core2AudioBackend::resumeAnchor(ResumeAnchor* out) const {
+  // Anchors are on the trimmed timeline: only with gapless trimming on.
+  if (!ring_ || !gapless() || !gaplessTrim() || sync_.phase() == Phase::Pending) return false;
+  // The heard track's ring frames played, as positionMs() counts them (held
+  // at B while a join waits), and its run in the index: the request's now
+  // (a request under way gives none).
+  const uint32_t gen = sync_.generation();
+  const GaplessJoin::Status st = book_.status();
+  uint32_t r = ring_->readPos();
+  if (st.boundary && st.b.gen == gen && static_cast<int32_t>(r - st.b.heardAt) > 0) r = st.b.heardAt;
+  const int32_t frames = static_cast<int32_t>(r - st.heardStart);
+  return index_.anchorAt(gen, frames > 0 ? static_cast<uint32_t>(frames) : 0, kRingRate, out);
 }
 
 void Core2AudioBackend::stop() {
@@ -257,6 +349,10 @@ bool Core2AudioBackend::isPlaying() const {
 }
 
 uint32_t Core2AudioBackend::durationMs() const {
+  // The heard track's: exact once its file has ended (GaplessJoin's frozen
+  // length); before that it is the decoding track, read as before.
+  uint32_t exact = 0;
+  if (book_.frozenLength(&exact)) return exact;
   const uint32_t known = knownDurationMs_.load(std::memory_order_relaxed);
   if (known) return known;
   // The estimate is of what is left from where the decoder began (the
@@ -271,10 +367,11 @@ uint32_t Core2AudioBackend::durationMs() const {
 uint32_t Core2AudioBackend::positionMs() const {
   // Ring frames are 44.1 kHz whatever the track's rate, and ring frame n
   // sits at exactly n / 44100 s of the source (the converter's delay is
-  // compensated): exact from the first frame.
-  const uint32_t frames = ring_->readPos() - trackStart_;
-  const auto played = static_cast<uint32_t>(static_cast<uint64_t>(frames) * 1000 / kRingRate);
-  return startMs_.load(std::memory_order_relaxed) + played;
+  // compensated): exact from the first frame. The heard track's, from its
+  // first frame in the ring; held at its exact end while a join after it
+  // waits to be taken (takeAdvance()).
+  if (!ring_) return 0;
+  return book_.positionMs(sync_.generation(), ring_->readPos());
 }
 
 bool Core2AudioBackend::positionKnown() const { return sync_.phase() != Phase::Pending; }
@@ -426,17 +523,7 @@ Core2AudioBackend::StartTiming Core2AudioBackend::startTiming() const {
 
 std::string Core2AudioBackend::description() const {
   std::lock_guard<std::mutex> guard(lock_);
-  return description_;
-}
-
-std::string Core2AudioBackend::trackTitle() const {
-  std::lock_guard<std::mutex> guard(lock_);
-  return title_;
-}
-
-std::string Core2AudioBackend::trackArtist() const {
-  std::lock_guard<std::mutex> guard(lock_);
-  return artist_;
+  return heardOverride_ ? heardDescription_ : description_;
 }
 
 std::string Core2AudioBackend::note() const {
@@ -449,62 +536,175 @@ void Core2AudioBackend::setText(std::string& field, const std::string& value) {
   field = value;
 }
 
+// ---- gapless playback: the loop's side ----
+
+void Core2AudioBackend::setNext(const Next& next) {
+  book_.setOffer(sync_.generation(), next.after, next.token, next.path, next.hintMs);
+  nextAtUs_.store(esp_timer_get_time(), std::memory_order_relaxed);
+  if (task_) xTaskNotifyGive(task_);  // a cut at once, not after a 10 ms rest on a full ring
+}
+
+bool Core2AudioBackend::takeAdvance(uint32_t* token) {
+  const uint32_t readPos = ring_ ? ring_->readPos() : 0;
+  if (!ring_ || !book_.takeAdvance(sync_.generation(), readPos, token)) return false;
+  index_.advance();  // the joined track's run is the heard one (its anchors)
+  {
+    // The joined track is the heard one: its description (nothing decodes
+    // after it until now), and why it ended early, if it did.
+    std::lock_guard<std::mutex> guard(lock_);
+    heardOverride_ = false;
+    note_ = aheadNote_;
+    aheadNote_.clear();
+  }
+  trackSeq_.fetch_add(1, std::memory_order_release);
+  advances_.fetch_add(1, std::memory_order_relaxed);
+  Serial.printf("[gapless] heard: the joined track plays (taken %.1f ms after its first frame was read)\n",
+                (readPos - book_.status().heardStart) * 1000.0f / kRingRate);
+  return true;
+}
+
+void Core2AudioBackend::setGapless(bool on) {
+  gapless_.store(on, std::memory_order_relaxed);
+  if (engine_) engine_->setEnabled(on);
+  if (task_) xTaskNotifyGive(task_);
+}
+
+bool Core2AudioBackend::durationKnown() const {
+  uint32_t exact = 0;
+  return book_.frozenLength(&exact) || knownDurationMs_.load(std::memory_order_relaxed) > 0;
+}
+
+void Core2AudioBackend::printGapless() const {
+  const GaplessJoin::Status st = book_.status();
+  const uint32_t r = ring_ ? ring_->readPos() : 0;
+  Serial.printf("[gapless] %s; trimming by the LAME tag %s (G0/G1, Gt0/Gt1)\n", gapless() ? "on" : "off (v0.5.0's ends)",
+                gaplessTrim() ? "on" : "off");
+  if (!st.offer) {
+    Serial.println("[gapless] word: none for this request yet");
+  } else if (st.offerNow.token == 0) {
+    Serial.printf("[gapless] word: nothing follows track %lu\n", (unsigned long)st.offerNow.after);
+  } else {
+    Serial.printf("[gapless] word: track %lu is followed by %lu, %s%s\n", (unsigned long)st.offerNow.after,
+                  (unsigned long)st.offerNow.token, st.offerNow.path.c_str(),
+                  st.offerNow.token == st.lastTaken ? " (taken)" : "");
+  }
+  if (st.boundary) {
+    const char* state = st.state == GaplessJoin::State::Pending   ? "cuttable"
+                        : st.state == GaplessJoin::State::Cutting ? "being cut"
+                                                                  : "too late to cut";
+    Serial.printf("[gapless] boundary: track %lu at ring frame %lu (J %lu, %+.0f ms from the reader), %s\n",
+                  (unsigned long)st.b.token, (unsigned long)st.b.heardAt, (unsigned long)st.b.cutAt,
+                  static_cast<int32_t>(st.b.heardAt - r) * 1000.0f / kRingRate, state);
+  } else {
+    Serial.println("[gapless] boundary: none");
+  }
+  if (st.frozen) Serial.printf("[gapless] the heard track's file has ended: exactly %lu ms\n", (unsigned long)st.frozenMs);
+  if (engine_) {
+    const GaplessEngine::Counters& c = engine_->counters();  // (the decode task's: a snapshot)
+    Serial.printf("[gapless] since boot: joins %lu continuous, %lu after the tail (%lu late); heard %lu; cuts %lu, too "
+                  "late %lu, retried %lu; opens failed %lu, empty %lu; last cut %lu us after its word (max %lu)\n",
+                  (unsigned long)c.joins, (unsigned long)c.resets, (unsigned long)c.late,
+                  (unsigned long)advances_.load(std::memory_order_relaxed), (unsigned long)c.cuts,
+                  (unsigned long)c.tooLate, (unsigned long)c.retries, (unsigned long)c.failedOpens,
+                  (unsigned long)c.emptyAhead, (unsigned long)cutLatencyUs_.load(std::memory_order_relaxed),
+                  (unsigned long)cutLatencyMaxUs_.load(std::memory_order_relaxed));
+  }
+  const uint32_t trim = trimNow_.load(std::memory_order_relaxed);
+  if (trim & kTrimLame) {
+    Serial.printf("[gapless] decoding track's trim: LAME delay %lu, padding %lu: skipping %lu, holding %lu%s\n",
+                  (unsigned long)trimDelay_.load(std::memory_order_relaxed),
+                  (unsigned long)trimPadding_.load(std::memory_order_relaxed),
+                  (unsigned long)trimSkip_.load(std::memory_order_relaxed),
+                  (unsigned long)trimHold_.load(std::memory_order_relaxed),
+                  (trim & kTrimCrcBad) ? " (the tag's CRC doesn't match: trimmed anyway)" : "");
+  } else if (trim & kTrimMp3) {
+    Serial.printf("[gapless] decoding track's trim: no LAME tag: not trimmed (skipping the decoder's lead, %lu)\n",
+                  (unsigned long)trimSkip_.load(std::memory_order_relaxed));
+  }
+  // The run index (docs/SEEK.md section 4.3): the heard track's run.
+  SeekIndex::Run run;
+  if (index_.heardRun(&run)) {
+    Serial.printf("[gapless] run index: heard %s run from sample %llu (%s), %lu entries; decoding slot %lu entries\n",
+                  run.kind == SeekIndex::Kind::Flac ? "FLAC" : "MP3", (unsigned long long)run.base,
+                  run.exact ? "exact" : "a TOC start's time", (unsigned long)index_.entries(index_.heardSlot()),
+                  (unsigned long)index_.entries(index_.decodingSlot()));
+  } else {
+    Serial.println("[gapless] run index: no heard run (a built-in track, G0 or Gt0, or nothing played)");
+  }
+}
+
 // ---- decode task ----
 
 void Core2AudioBackend::taskEntry(void* self) { static_cast<Core2AudioBackend*>(self)->decodeTask(); }
 
-// ID3 tags, on the decode task while a track opens.
-void Core2AudioBackend::onMetadata(void* self, const char* type, bool isUnicode, const char* value) {
-  // ESP8266Audio hands UTF-16 text over raw, cut short at its first zero byte:
-  // keep the file name instead. (Library metadata will come from mStream.)
-  if (isUnicode) return;
-  auto* b = static_cast<Core2AudioBackend*>(self);
-  if (std::strcmp(type, "Title") == 0) b->setText(b->title_, value);
-  if (std::strcmp(type, "Performer") == 0) b->setText(b->artist_, value);
+void Core2AudioBackend::rest(uint32_t ms) {
+  // Not vTaskDelay(): play()/stop()/setNext() wake us (xTaskNotifyGive),
+  // so a cut or a new request never waits out a rest.
+  ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(ms));
 }
 
 void Core2AudioBackend::decodeTask() {
   uint32_t generation = sync_.generation();
-  Work work = Work::Idle;
   for (;;) {
     const uint32_t latest = sync_.generation();
     if (latest != generation) {
       generation = latest;
-      work = start(generation);
+      start(generation);
       continue;
     }
-    switch (work) {
-      case Work::Producing:
-        switch (toneTrack_ ? produceTone() : produceDecoded()) {
-          case Produced::More:
-            break;
-          case Produced::Done:
-            work = Work::Draining;
-            ringSteady_ = false;  // the ring empties on purpose now
-            shared_.expectingAudio = false;
-            sync_.report(generation, Phase::Draining);
-            break;
-          case Produced::Failed:
-            work = failRate(generation);
-            break;
-        }
+    GaplessEngine& e = *engine_;
+    const GaplessEngine::Phase p = e.phase();
+    if (p == GaplessEngine::Phase::Idle || p == GaplessEngine::Phase::Ended) {
+      ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));  // play()/stop() wake us early
+      continue;
+    }
+    if (e.cutDue() || p != GaplessEngine::Phase::Producing) {
+      // A source's end, the word on what follows, a join, the tail, the
+      // drain, a cut: one step at a time, the generation checked between.
+      const uint32_t ms = e.step(bufferedMsNow());
+      reportPhase(generation);
+      if (ms) rest(ms);
+      continue;
+    }
+    switch (toneTrack_ ? produceTone() : produceDecoded()) {
+      case Produced::More:
         break;
-      case Work::Draining:
-        if (ring_->size() == 0) {
-          work = Work::Idle;
-          sync_.report(generation, Phase::Ended);
-        } else {
-          vTaskDelay(pdMS_TO_TICKS(10));
-        }
+      case Produced::Done:
+        e.sourceEnded(early_);
         break;
-      case Work::Idle:
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(100));  // play()/stop() wake us early
+      case Produced::Failed:
+        failRate(generation);
         break;
     }
   }
 }
 
-Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
+void Core2AudioBackend::reportPhase(uint32_t generation) {
+  Phase want = Phase::Decoding;
+  switch (engine_->phase()) {
+    case GaplessEngine::Phase::Draining:
+      want = Phase::Draining;
+      break;
+    case GaplessEngine::Phase::Ended:
+      want = Phase::Ended;
+      break;
+    case GaplessEngine::Phase::Idle:
+      return;
+    default:
+      break;
+  }
+  if (want == reported_) return;
+  if (want == Phase::Draining) {
+    ringSteady_ = false;  // the ring empties on purpose now
+    shared_.expectingAudio = false;
+  } else if (want == Phase::Decoding) {
+    shared_.expectingAudio = true;  // a late join (or a cut back from a drain): audio from here on
+  }
+  reported_ = want;
+  sync_.report(generation, want);
+}
+
+void Core2AudioBackend::start(uint32_t generation) {
   Request req;
   {
     std::lock_guard<std::mutex> guard(lock_);
@@ -513,14 +713,20 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   closeDecoder();
   toneTrack_ = false;
   clickTrack_ = false;
-  sourceDone_ = false;
+  early_ = false;
   toneN_ = toneAt_ = 0;
   shared_.expectingAudio = false;
   ringSteady_ = false;  // filling from empty until kSteadyMs
   refusedHz_ = 0;
-  trackStart_ = ring_->discardAll();  // nothing of the previous track plays after this
+  out_->trim().disarm();
+  // Nothing of the previous track plays after this, nor of one decoded
+  // ahead of it (its boundary goes with the book's restart below)...
+  const uint32_t at = ring_->discardAll();
   // ...nor of its converter's history (up to 24 frames), whatever comes
-  // next: a file, a built-in track, a stop or a bench.
+  // next: a file, a built-in track, a stop or a bench. A request is where
+  // the tables' copy may go (a 44.1 kHz track); never during a chain of
+  // joins (tablesKeep: a cut's rewind may need its rows).
+  tablesKeep = false;
   feed().reset(cpuMhz());
   publishRate();
   if (req.kind == Kind::Play) {  // a new start to time (startTiming())
@@ -537,17 +743,28 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
   // Where it was asked to start, so Now Playing shows that second from the
   // request on; corrected below once the track says where it really lands.
   startMs_ = req.kind == Kind::Play ? req.startMs : 0;
-  setText(description_, "");
-  setText(title_, "");
-  setText(artist_, "");
-  if (req.kind == Kind::Stop) return Work::Idle;
-  if (req.kind == Kind::Bench || req.kind == Kind::RateBench) {
-    if (req.kind == Kind::Bench) runBench(req.path);
-    if (req.kind == Kind::RateBench) runRateBench();
-    feed().reset(cpuMhz());
-    publishRate();
-    return Work::Idle;
+  {
+    std::lock_guard<std::mutex> guard(lock_);
+    description_.clear();
+    heardOverride_ = false;
+    aheadNote_.clear();
   }
+  trimNow_ = 0;
+  reported_ = Phase::Idle;
+  if (req.kind != Kind::Play) {
+    engine_->idle(generation);
+    if (req.kind == Kind::Bench || req.kind == Kind::RateBench) {
+      if (req.kind == Kind::Bench) runBench(req.path);
+      if (req.kind == Kind::RateBench) runRateBench();
+      feed().reset(cpuMhz());
+      publishRate();
+    }
+    return;
+  }
+  // A test play at a forced rate (Rf) is never joined: the next track would
+  // play at that rate too.
+  engine_->begin(generation, at, req.startMs, req.asHz == 0);
+  trackSeq_.fetch_add(1, std::memory_order_release);  // (after the book's restart: the new position with it)
   // A newly started track plays, unless the player paused since asking. A
   // pause() racing with this counts first and sets paused itself, so checking
   // again after un-pausing leaves it paused whichever store lands last.
@@ -556,62 +773,31 @@ Core2AudioBackend::Work Core2AudioBackend::start(uint32_t generation) {
     if (pauses_.load() != req.pauses) shared_.paused = true;
   }
   setText(note_, "");
-
-  if (req.path.rfind("tone:", 0) == 0) return startTone(generation, req);
   feed().forceRate(static_cast<int>(req.asHz));  // (a test: 0 almost always)
 
-  if (!openDecoder(req.path, out_.get(), req.startMs, req.hintMs)) return fail(generation, "can't play " + req.path);
+  Prepared& p = prepared_;
+  StartAt startAt;
+  startAt.ms = req.startMs;
+  startAt.hintMs = req.hintMs;
+  startAt.anchor = req.anchor;
+  runGen_ = generation;
+  const bool prepared = prepare(req.path, startAt, &p);  // (a seek back into a run looks it up first)
+  index_.reset();                                    // then the request's track records afresh
+  if (!prepared) {
+    fail(generation, (req.path.rfind("tone:", 0) == 0 ? "unknown tone " : "can't play ") + req.path);
+    return;
+  }
+  if (!beginPrepared(p, out_.get(), true)) {
+    if (feed().rejected()) {
+      failRate(generation);
+    } else {
+      fail(generation, "can't play " + req.path);
+    }
+    return;
+  }
+  engine_->setStartMs(startMs_.load(std::memory_order_relaxed));
+  reported_ = Phase::Decoding;
   sync_.report(generation, Phase::Decoding);
-  return Work::Producing;
-}
-
-Core2AudioBackend::Work Core2AudioBackend::startTone(uint32_t generation, const Request& req) {
-  ToneTrack t;
-  if (!ToneTrack::parse(req.path, &t)) return fail(generation, "unknown tone " + req.path);
-  // Made at its own rate and converted like a file: the test tracks at
-  // other rates go through the converter (and its refusals) as a file would.
-  if (!feed().setRate(static_cast<int>(t.rate))) return failRate(generation);
-  publishRate();
-  // A built-in track started part of the way in counts from there: the
-  // same sound, only what is left of its length (a click track's grid
-  // starts again at the start, so the dancer's truth, in track frames
-  // from the start, holds).
-  const uint32_t at = trackseek::startMs(req.startMs, t.seconds * 1000);
-  startMs_ = at;
-  if (req.startMs > 0) {
-    char asked[12];
-    mmss(req.startMs, asked, sizeof(asked));
-    Serial.printf("[audio] built-in track: %s asked: %s\n", asked, at ? "counting from there" : "from 0:00");
-  }
-  const uint32_t frames = t.rate * t.seconds - static_cast<uint32_t>(static_cast<uint64_t>(at) * t.rate / 1000);
-  knownDurationMs_ = t.seconds * 1000;
-  toneTrack_ = true;
-  char text[64];
-  switch (t.kind) {
-    case ToneTrack::Kind::Clicks:
-      click_.start(t.rate, t.click, frames);
-      clickTrack_ = true;
-      snprintf(text, sizeof(text), "clicks %.0f BPM%s, %lu Hz", t.click.bpm,
-               t.click.offsetBeats > 0 ? ", off-beat start" : "", (unsigned long)t.rate);
-      break;
-    case ToneTrack::Kind::Silence:
-      tone_.startSilence(t.rate, frames);
-      snprintf(text, sizeof(text), "silence (zeros, for power tests), %lu Hz", (unsigned long)t.rate);
-      break;
-    case ToneTrack::Kind::Sine:
-    default:
-      tone_.start(t.rate, t.hz, -18.0f, t.leftOnly ? ToneGen::Channels::LeftOnly : ToneGen::Channels::Both, frames);
-      snprintf(text, sizeof(text), "tone %.0f Hz%s, %lu Hz", t.hz, t.leftOnly ? ", left only" : "",
-               (unsigned long)t.rate);
-      break;
-  }
-  setText(description_, text);
-  if (t.rate != kRingRate) {
-    Serial.printf("[audio] %s: %lu Hz -> %lu Hz (%s)\n", req.path.c_str(), (unsigned long)t.rate,
-                  (unsigned long)kRingRate, feed().converter().currentPlan().route);
-  }
-  sync_.report(generation, Phase::Decoding);
-  return Work::Producing;
 }
 
 RingFeed& Core2AudioBackend::feed() { return out_->feed(); }
@@ -638,90 +824,304 @@ void Core2AudioBackend::publishRate() {
   convClamped_.store(c.clamped(), std::memory_order_relaxed);
 }
 
-Core2AudioBackend::Work Core2AudioBackend::failRate(uint32_t generation) {
+void Core2AudioBackend::failRate(uint32_t generation) {
   // Stored before fail()'s report, so whoever sees the failure sees why.
   refusedForCpu_.store(feed().refusalKind() == RateConverter::Refusal::NeedsCpu, std::memory_order_relaxed);
   refusedHz_.store(static_cast<uint32_t>(feed().rate()), std::memory_order_relaxed);
   // The console's R reports the refused rate (a built-in track at another
   // rate is refused before any pass publishes it).
   publishRate();
-  return fail(generation, refusalText());
+  fail(generation, refusalText());
 }
 
-Core2AudioBackend::Work Core2AudioBackend::fail(uint32_t generation, const std::string& why) {
+void Core2AudioBackend::fail(uint32_t generation, const std::string& why) {
   Serial.printf("[audio] %s\n", why.c_str());
   closeDecoder();
   setText(note_, why);
+  engine_->idle(generation);
+  reported_ = Phase::Failed;
   sync_.report(generation, Phase::Failed);
-  return Work::Idle;
 }
 
-bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out, uint32_t startMs, uint32_t hintMs) {
+void Core2AudioBackend::endedEarly(const std::string& why) {
+  early_ = true;
+  Serial.printf("[gapless] %s ended early: %s\n", prepared_.path.c_str(), why.c_str());
+  // Its note shows once it is the heard track.
+  const bool ahead = book_.status().boundary;
+  setText(ahead ? aheadNote_ : note_, why);
+}
+
+bool Core2AudioBackend::prepare(const std::string& path, const StartAt& at, Prepared* p) {
+  *p = Prepared{};
+  p->path = path;
+  const uint32_t startMs = at.ms;
+  const bool gapless = gapless_.load(std::memory_order_relaxed);
+  const bool anchorsOn = gapless && gaplessTrim_.load(std::memory_order_relaxed);
+  if (path.rfind("tone:", 0) == 0) {
+    // A built-in track (lib/core ToneTrack): made at its own rate and
+    // converted like a file, so the test tracks at other rates go through
+    // the converter (and its refusals) as a file would. Sample-exact: no
+    // trim. Part of the way in it counts from there: the same sound, only
+    // what is left of its length (a click track's grid starts again at the
+    // start, so the dancer's truth, in track frames from the start, holds).
+    if (!ToneTrack::parse(path, &p->toneSpec)) return false;
+    p->tone = true;
+    p->rate = p->toneSpec.rate;
+    p->knownMs = p->toneSpec.seconds * 1000;
+    p->landedMs = trackseek::startMs(startMs, p->knownMs);
+    if (startMs > 0) {
+      char asked[12];
+      mmss(startMs, asked, sizeof(asked));
+      Serial.printf("[audio] built-in track: %s asked: %s\n", asked, p->landedMs ? "counting from there" : "from 0:00");
+    }
+    return true;
+  }
   const std::string ext = extensionOf(path);
-  const bool isMp3 = ext == ".mp3";
-  if (!fs_ || (!isMp3 && ext != ".flac")) return false;
+  p->mp3 = ext == ".mp3";
+  if (!fs_ || (!p->mp3 && ext != ".flac")) return false;
   if (!file_->open(path.c_str())) return false;
   const uint32_t size = file_->getSize();
-  uint32_t landed = 0;  // where it starts, ms in (startMs_)
+  p->pathHash = pathHash(path);
+  p->fileSize = size;
+
+  if (p->mp3) {
+    // Past the ID3v2 tags (one after another, as some taggers leave them)
+    // to the first frame: no ID3 reader (the library has the title and the
+    // artist; ESP8266Audio's reads a tag a byte at a time, above the UI,
+    // and at a join that would be while the track before plays).
+    uint32_t start = 0;
+    for (int i = 0; i < 4; ++i) {
+      uint8_t head[10];
+      if (!file_->seek(static_cast<int32_t>(start), SEEK_SET) || file_->read(head, sizeof(head)) != sizeof(head)) break;
+      const uint32_t tag = progress::id3v2Size(head, sizeof(head));
+      if (tag == 0 || start + tag >= size) break;
+      start += tag;
+    }
+    if (start > 16 * 1024) {
+      Serial.printf("[audio] ID3 tag of %lu KB (a picture?): skipped, not read\n", (unsigned long)(start / 1024));
+    }
+    p->from = start;
+    // The first frame (PSRAM): its Xing/Info or VBRI header (the length,
+    // trimmed by LAME's tag and scaled down for a file shorter than its
+    // header says; a frame with no audio, not decoded), its rate (a join's
+    // continuity is decided before any frame), and a start part of the way
+    // in (planMp3()).
+    auto* buf = static_cast<uint8_t*>(heap_caps_malloc(kMp3Probe, MALLOC_CAP_SPIRAM));
+    if (buf) {
+      if (start < size && file_->seek(static_cast<int32_t>(start), SEEK_SET)) {
+        const uint32_t got = file_->read(buf, kMp3Probe);
+        lametag::parse(buf, got, &p->lame);
+        p->knownMs = progress::mp3HeaderDurationMs(buf, got, size, start);
+        p->rate = p->lame.frame ? p->lame.rate : 0;
+        // From the top the decoder is handed the first audio frame (G1:
+        // never the header frame, nor junk before the first frame).
+        p->firstAudio = trackseek::firstAudioByte(buf, got, start);
+        if (gapless && p->lame.frame) p->from = p->firstAudio;
+        if (p->lame.frame && p->firstAudio >= start && p->firstAudio - start < got) {
+          p->firstHash = resumeanchor::frameHash(buf + (p->firstAudio - start), got - (p->firstAudio - start));
+        }
+        const bool useTag = anchorsOn && p->lame.lame;
+        p->topT0 = useTag ? -static_cast<int32_t>(p->lame.delay + lametag::kDecoderDelay) : 0;
+        if (startMs > 0 || at.anchor.valid()) {
+          auto* scratch = static_cast<uint8_t*>(heap_caps_malloc(trackseek::kScratchBytes, MALLOC_CAP_SPIRAM));
+          if (scratch) {
+            planMp3(buf, got, start, at, scratch, p);
+            heap_caps_free(scratch);
+          } else {
+            Serial.println("[audio] MP3: no PSRAM to plan the start: from 0:00");
+          }
+        }
+      }
+      heap_caps_free(buf);
+    }
+    // The trim: the generator's lead always (its constructor's {0,0}, not
+    // in the file), LAME's delay + 529 from the top and its padding - 529
+    // at the end (Gt0: neither). G0: nothing, as v0.5.0. A planned start's
+    // lead and preroll are the landing phase's (TrimFeed::armAt()).
+    if (gapless) p->trim = lametag::trim(p->lame, 1, p->fromTop, gaplessTrim_.load(std::memory_order_relaxed));
+    p->guard = gapless;
+    return true;
+  }
+
+  // FLAC: its length and rate from STREAMINFO (the decoder doesn't expose
+  // them before its first frame). Some taggers put an ID3v2 tag in front of
+  // "fLaC": libFLAC skips it, and so does this.
+  uint8_t head[42];
+  uint32_t tag = 0;
+  if (file_->read(head, sizeof(head)) == sizeof(head)) {
+    tag = progress::id3v2Size(head, sizeof(head));
+    if (tag > 0 && !(tag < size && file_->seek(static_cast<int32_t>(tag), SEEK_SET) &&
+                     file_->read(head, sizeof(head)) == sizeof(head))) {
+      std::memset(head, 0, sizeof(head));
+    }
+    p->knownMs = progress::flacDurationMs(head, sizeof(head));
+    if (!trackseek::flacStreamInfo(head, sizeof(head), &p->rate, &p->flacTotal)) p->rate = 0;
+  }
+  // Its metadata blocks: libFLAC reads through the ones it doesn't keep (an
+  // embedded picture: megabytes) before the first frame, so at a join a big
+  // one must fit in what the ring holds (logged; docs/GAPLESS.md section 12).
+  if (p->rate) {
+    uint32_t at = tag + 4;
+    for (int i = 0; i < 64 && at + 4 <= size; ++i) {
+      uint8_t h[4];
+      if (!file_->seek(static_cast<int32_t>(at), SEEK_SET) || file_->read(h, sizeof(h)) != sizeof(h)) break;
+      const uint32_t len = (static_cast<uint32_t>(h[1]) << 16) | (static_cast<uint32_t>(h[2]) << 8) | h[3];
+      p->metadataBytes += 4 + len;
+      at += 4 + len;
+      if (h[0] & 0x80) break;  // the last block
+    }
+  }
+  if (startMs > 0 || at.anchor.valid()) {
+    // libFLAC's own seek, by sample (exact), after begin(): the resume
+    // anchor's sample when it is this file's (its size, rate and total
+    // samples), else the millisecond's.
+    bool byAnchor = false;
+    const ResumeAnchor& a = at.anchor;
+    if (a.valid()) {
+      const char* why = !anchorsOn                              ? "gapless trimming off"
+                        : a.kind != ResumeAnchor::Kind::Flac    ? "an MP3's"
+                        : a.fileSize != size                    ? "the size"
+                        : p->rate == 0 || a.rate != p->rate     ? "the rate"
+                        : a.frameHash != static_cast<uint32_t>(p->flacTotal) ? "the length"
+                        : resumeanchor::ms(a) > 0 && trackseek::startMs(resumeanchor::ms(a), p->knownMs) == 0
+                            ? "in its last 5 s"
+                            : nullptr;
+      if (why) {
+        Serial.printf("[audio] FLAC: the resume anchor isn't this file's (%s): by its second\n", why);
+      } else {
+        byAnchor = true;
+        p->flacSeek = a.sample > 0;
+        p->flacSample = a.sample;
+      }
+    }
+    char asked[12];
+    mmss(startMs, asked, sizeof(asked));
+    const uint32_t landed = trackseek::startMs(startMs, p->knownMs);
+    if (byAnchor) {
+      // (sample 0: from the top, as asked)
+    } else if (landed == 0) {
+      Serial.printf("[audio] FLAC: %s asked: in its last %lu s or past its end: from 0:00\n", asked,
+                    (unsigned long)(trackseek::kTailMs / 1000));
+    } else if (p->rate == 0) {
+      Serial.printf("[audio] FLAC: %s asked: no STREAMINFO found to go by: from 0:00\n", asked);
+    } else {
+      p->flacSeek = true;
+      p->flacSample = static_cast<uint64_t>(landed) * p->rate / 1000;
+    }
+    if (p->flacSeek) {
+      // positionMs() and the resume point count from there.
+      p->landedMs = static_cast<uint32_t>(p->flacSample * 1000 / p->rate);
+      p->startSample = p->flacSample;
+      p->fromTop = false;
+    }
+  }
+  // The trim: after a seek the generator's lead ({0,0}, once it knows its
+  // channels); from the top there is none. FLAC is sample-exact.
+  if (gapless && !p->fromTop) p->trim.skip = 1;
+  return true;
+}
+
+bool Core2AudioBackend::beginPrepared(const Prepared& p, AudioOutput* out, bool trimmed) {
+  recorder_.stop();
+  if (trimmed) {
+    // (A planned start is armed once its generator, the cursor, exists.)
+    out_->trim().arm(p.trim.skip, p.trim.hold);
+  } else {
+    out_->trim().disarm();
+  }
+  busyUs_ = 0;
+  producedFrames_ = 0;
+  srcPos0_ = srcPos_ = srcSize_ = 0;
+  described_ = false;
+  early_ = false;
+  toneTrack_ = false;
+  clickTrack_ = false;
+  toneN_ = toneAt_ = 0;
+  knownDurationMs_.store(p.knownMs, std::memory_order_relaxed);
+  startMs_.store(p.landedMs, std::memory_order_relaxed);
+  if (trimmed) {
+    uint32_t trim = 0;
+    if (p.mp3) trim |= kTrimMp3;
+    if (p.mp3 && p.lame.lame && p.trim.hold + p.trim.skip > 1) trim |= kTrimLame;
+    if (p.lame.crcChecked && !p.lame.crcOk) trim |= kTrimCrcBad;
+    trimDelay_.store(p.lame.delay, std::memory_order_relaxed);
+    trimPadding_.store(p.lame.padding, std::memory_order_relaxed);
+    trimSkip_.store(p.trim.skip, std::memory_order_relaxed);
+    trimHold_.store(p.trim.hold, std::memory_order_relaxed);
+    trimNow_.store(trim, std::memory_order_relaxed);
+  }
+
+  if (p.tone) {
+    const ToneTrack& t = p.toneSpec;
+    if (!feed().setRate(static_cast<int>(t.rate))) return false;
+    publishRate();
+    const uint32_t frames =
+        t.rate * t.seconds - static_cast<uint32_t>(static_cast<uint64_t>(p.landedMs) * t.rate / 1000);
+    toneTrack_ = true;
+    char text[64];
+    switch (t.kind) {
+      case ToneTrack::Kind::Clicks:
+        click_.start(t.rate, t.click, frames);
+        clickTrack_ = true;
+        snprintf(text, sizeof(text), "clicks %.0f BPM%s, %lu Hz", t.click.bpm,
+                 t.click.offsetBeats > 0 ? ", off-beat start" : "", (unsigned long)t.rate);
+        break;
+      case ToneTrack::Kind::Silence:
+        tone_.startSilence(t.rate, frames);
+        snprintf(text, sizeof(text), "silence (zeros, for power tests), %lu Hz", (unsigned long)t.rate);
+        break;
+      case ToneTrack::Kind::Sine:
+      default:
+        tone_.start(t.rate, t.hz, -18.0f, t.leftOnly ? ToneGen::Channels::LeftOnly : ToneGen::Channels::Both, frames);
+        snprintf(text, sizeof(text), "tone %.0f Hz%s, %lu Hz", t.hz, t.leftOnly ? ", left only" : "",
+                 (unsigned long)t.rate);
+        break;
+    }
+    setText(description_, text);
+    if (t.rate != kRingRate) {
+      Serial.printf("[audio] %s: %lu Hz -> %lu Hz (%s)\n", p.path.c_str(), (unsigned long)t.rate,
+                    (unsigned long)kRingRate, feed().converter().currentPlan().route);
+    }
+    return true;
+  }
 
   // A fresh generator per track: both keep state across begin() (FLAC its
   // sample buffer, which can replay freed memory; MP3 its last sample). Their
   // big buffers are allocated in begin() anyway, so this costs little.
   AudioGenerator* decoder;
   AudioFileSource* source = file_.get();
-  uint32_t flacRate = 0;
-  if (isMp3) {  // MP3 reads its title/artist from ID3 tags on the way in
-    // A VBR file's length, from the Xing/Info or VBRI header in its first
-    // frame (after the ID3v2 tag): the read-rate estimate is only exact for
-    // constant bitrates. The same buffer (PSRAM) finds the byte a start part
-    // of the way in begins at (mp3StartByte()).
-    // ESP8266Audio's ID3 reader goes through the whole tag a byte per read.
-    // Through an embedded picture that is seconds of CPU on this task,
-    // above the loop: on the device two Moon Safari tracks started 4 s late
-    // and froze the UI for as long. A tag this big is skipped instead (its
-    // title and artist aren't used: the library has them).
-    constexpr uint32_t kMaxTagParsed = 16 * 1024;
-    uint32_t start = 0;
-    uint32_t from = 0;  // a start part of the way in: the byte the decoder begins at
-    auto* probe = static_cast<uint8_t*>(heap_caps_malloc(kMp3Probe, MALLOC_CAP_SPIRAM));
-    if (probe) {
-      if (file_->read(probe, 10) == 10) start = progress::id3v2Size(probe, 10);
-      if (start < size && file_->seek(static_cast<int32_t>(start), SEEK_SET)) {
-        const uint32_t got = file_->read(probe, kMp3Probe);
-        knownDurationMs_.store(progress::mp3HeaderDurationMs(probe, got), std::memory_order_relaxed);
-        if (startMs > 0) from = mp3StartByte(probe, got, start, startMs, hintMs, &landed);
-      }
-      heap_caps_free(probe);
+  if (p.mp3) {
+    if (!file_->seek(static_cast<int32_t>(p.from), SEEK_SET)) {
+      closeDecoder();
+      return false;
     }
-    if (from > 0) {
-      // Past the tags: no ID3 reader (the library has the title and artist).
-      file_->seek(static_cast<int32_t>(from), SEEK_SET);
-    } else if (probe && start > kMaxTagParsed && start < size) {
-      file_->seek(static_cast<int32_t>(start), SEEK_SET);
-      Serial.printf("[audio] ID3 tag of %lu KB (a picture?): skipped, not read\n", (unsigned long)(start / 1024));
-    } else {
-      file_->seek(0, SEEK_SET);
-      id3_.reset(new AudioFileSourceID3(file_.get()));
-      id3_->RegisterMetadataCB(onMetadata, this);
-      source = id3_.get();
+    if (p.guard) {
+      guard_->attach(file_.get());
+      source = guard_.get();
     }
-    mp3_.reset(new AudioGeneratorMP3());
+    mp3_.reset(makeMp3());
+    if (!mp3_) {
+      closeDecoder();
+      return false;
+    }
     decoder = mp3_.get();
-  } else {
-    // Its length and rate from STREAMINFO (the decoder doesn't expose them
-    // before its first frame). Some taggers put an ID3v2 tag in front of
-    // "fLaC": libFLAC skips it, and so does this.
-    uint8_t head[42];
-    if (file_->read(head, sizeof(head)) == sizeof(head)) {
-      const uint32_t tag = progress::id3v2Size(head, sizeof(head));
-      if (tag > 0 && !(tag < size && file_->seek(static_cast<int32_t>(tag), SEEK_SET) &&
-                       file_->read(head, sizeof(head)) == sizeof(head))) {
-        std::memset(head, 0, sizeof(head));
-      }
-      knownDurationMs_.store(progress::flacDurationMs(head, sizeof(head)), std::memory_order_relaxed);
-      uint64_t total = 0;
-      if (!trackseek::flacStreamInfo(head, sizeof(head), &flacRate, &total)) flacRate = 0;
+    if (trimmed && p.planned) {
+      // The landing phase: the lead and the preroll dropped until the cursor
+      // says the landing frame, then the plan's skip; the end held as any
+      // start's.
+      const trackseek::Plan& pl = p.plan;
+      out_->trim().armAt(mp3_.get(), pl.landByte, pl.landLength, pl.spf, pl.skip, p.trim.hold);
     }
+    if (trimmed && gapless_.load(std::memory_order_relaxed)) {
+      if (p.lame.lame && gaplessTrim_.load(std::memory_order_relaxed)) {
+        Serial.printf("[gapless] trim: %s delay %u, padding %u: skipping %lu, holding %lu%s\n", p.lame.encoder,
+                      (unsigned)p.lame.delay, (unsigned)p.lame.padding, (unsigned long)p.trim.skip,
+                      (unsigned long)p.trim.hold, p.lame.crcChecked && !p.lame.crcOk ? " (tag CRC mismatch)" : "");
+      } else if (!p.lame.lame) {
+        Serial.printf("[gapless] %s: no LAME tag: not trimmed\n", p.lame.header ? "a header frame (skipped)" : "no header");
+      }
+    }
+  } else {
     file_->seek(0, SEEK_SET);
     flac_.reset(new SeekableFlac());
     decoder = flac_.get();
@@ -731,81 +1131,217 @@ bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out, u
     return false;
   }
   decoder_ = decoder;
-  if (!isMp3 && startMs > 0) {
-    // libFLAC's own seek, by sample: exact.
-    const uint32_t at = trackseek::startMs(startMs, knownDurationMs_.load(std::memory_order_relaxed));
-    char asked[12];
-    mmss(startMs, asked, sizeof(asked));
-    if (at == 0) {
-      Serial.printf("[audio] FLAC: %s asked: in its last %lu s or past its end: from 0:00\n", asked,
-                    (unsigned long)(trackseek::kTailMs / 1000));
-    } else if (flacRate == 0) {
-      // (Nothing is sought: the decoder is as begin() left it.)
-      Serial.printf("[audio] FLAC: %s asked: no STREAMINFO found to go by: from 0:00\n", asked);
-    } else {
-      const int64_t t0 = esp_timer_get_time();
-      const bool ok = flac_->seekTo(static_cast<uint64_t>(at) * flacRate / 1000);
-      const auto ms = static_cast<unsigned long>((esp_timer_get_time() - t0) / 1000);
-      if (!ok) {
-        // (Past the end of a file without a length, say.) libFLAC is left
-        // in its seek error state: again from the top.
-        Serial.printf("[audio] FLAC: %s asked: libFLAC couldn't seek there (%lu ms): from 0:00\n", asked, ms);
-        closeDecoder();
-        return openDecoder(path, out, 0, 0);
-      }
-      landed = at;
-      Serial.printf("[audio] FLAC: starting %s in (libFLAC's seek, %lu ms)\n", asked, ms);
-    }
+  codec_ = p.mp3 ? "MP3" : "FLAC";
+  if (trimmed) beginRun(p);
+  if (!p.mp3 && p.metadataBytes > 256 * 1024) {
+    Serial.printf("[audio] FLAC: %lu KB of metadata (a picture?) read through before its first frame\n",
+                  (unsigned long)(p.metadataBytes / 1024));
   }
-  codec_ = isMp3 ? "MP3" : "FLAC";
-  sourceDone_ = false;
-  described_ = false;
-  startMs_.store(landed, std::memory_order_relaxed);
+  if (p.flacSeek) {
+    char asked[16];
+    mmssms(p.landedMs, asked, sizeof(asked));
+    const int64_t t0 = esp_timer_get_time();
+    const bool ok = flac_->seekTo(p.flacSample);
+    const auto ms = static_cast<unsigned long>((esp_timer_get_time() - t0) / 1000);
+    if (!ok) {
+      // (Past the end of a file without a length, say.) libFLAC is left
+      // in its seek error state: again from the top.
+      Serial.printf("[audio] FLAC: %s asked: libFLAC couldn't seek there (%lu ms): from 0:00\n", asked, ms);
+      closeDecoder();
+      Prepared top;
+      const std::string path = p.path;  // (p may be prepared_ itself)
+      return prepare(path, StartAt{}, &top) && beginPrepared(top, out, trimmed);
+    }
+    Serial.printf("[audio] FLAC: starting %s in (libFLAC's seek to sample %llu, %lu ms)\n", asked,
+                  (unsigned long long)p.flacSample, ms);
+  }
   return true;
 }
 
-uint32_t Core2AudioBackend::mp3StartByte(uint8_t* probe, uint32_t got, uint32_t audioStart, uint32_t startMs,
-                                         uint32_t hintMs, uint32_t* landedMs) {
-  const uint32_t size = file_->getSize();
-  const uint32_t known = knownDurationMs_.load(std::memory_order_relaxed);
-  const uint32_t length = known ? known : trackseek::mp3LengthMs(probe, got, audioStart, size, hintMs);
-  const uint32_t at = trackseek::startMs(startMs, length);
-  char asked[12], of[12];
-  mmss(startMs, asked, sizeof(asked));
+bool Core2AudioBackend::openDecoder(const std::string& path, AudioOutput* out, uint32_t startMs, uint32_t hintMs,
+                                    bool trimmed) {
+  Prepared& p = prepared_;
+  StartAt at;
+  at.ms = startMs;
+  at.hintMs = hintMs;
+  return prepare(path, at, &p) && !p.tone && beginPrepared(p, out, trimmed);
+}
+
+void Core2AudioBackend::planMp3(const uint8_t* probe, uint32_t got, uint32_t audioStart, const StartAt& at,
+                                uint8_t* scratch, Prepared* p) {
+  const uint32_t size = p->fileSize;
+  const bool anchorsOn = gapless_.load(std::memory_order_relaxed) && gaplessTrim_.load(std::memory_order_relaxed);
+  // The tail rule's length: the header's, exact (scaled down for a file
+  // shorter than it says), else the bytes at the bitrate, else the hint.
+  const uint32_t length =
+      p->knownMs ? p->knownMs : trackseek::mp3LengthMs(probe, got, audioStart, size, at.hintMs);
+  SourceReader reader(file_.get());
+  trackseek::Plan plan;
+  char asked[16], of[16];
+  mmssms(at.ms, asked, sizeof(asked));
   mmss(length, of, sizeof(of));
-  if (at == 0) {
-    Serial.printf("[audio] MP3: %s asked, of %s: in its last %lu s or past its end: from 0:00\n", asked, of,
-                  (unsigned long)(trackseek::kTailMs / 1000));
-    return 0;
+  // 1. The resume point's anchor, checked against the file.
+  const ResumeAnchor& a = at.anchor;
+  if (a.valid()) {
+    char why[64] = "";
+    if (!anchorsOn) {
+      snprintf(why, sizeof(why), "gapless trimming off");
+    } else if (a.kind != ResumeAnchor::Kind::Mp3) {
+      snprintf(why, sizeof(why), "a FLAC's");
+    } else {
+      const trackseek::AnchorCheck c = trackseek::checkAnchor(a, reader, size, p->firstAudio, length, scratch, &plan);
+      switch (c) {
+        case trackseek::AnchorCheck::Ok:
+          break;
+        case trackseek::AnchorCheck::Size:
+          snprintf(why, sizeof(why), "the size: %lu -> %lu", (unsigned long)a.fileSize, (unsigned long)size);
+          break;
+        case trackseek::AnchorCheck::Frame:
+          snprintf(why, sizeof(why), "the frame at %lu", (unsigned long)a.frameByte);
+          break;
+        case trackseek::AnchorCheck::Preroll:
+          snprintf(why, sizeof(why), "the preroll at %lu", (unsigned long)a.prerollByte);
+          break;
+        default:
+          snprintf(why, sizeof(why), "%s", trackseek::anchorCheckName(c));
+          break;
+      }
+    }
+    if (why[0]) Serial.printf("[audio] MP3: the resume anchor isn't this file's (%s): by its second\n", why);
   }
-  uint32_t byte = 0;
-  const trackseek::Mp3Seek how = trackseek::mp3SeekByte(probe, got, audioStart, size, hintMs, at, &byte);
-  if (how == trackseek::Mp3Seek::Unplaced) {
-    Serial.printf("[audio] MP3: %s asked: %s: from 0:00\n", asked, trackseek::mp3SeekName(how));
-    return 0;
+  // 2. The run index: a seek into what a run of this file decoded.
+  if (!plan.ok() && anchorsOn && at.ms > 0 && p->lame.rate > 0 && trackseek::startMs(at.ms, length) != 0) {
+    ResumeAnchor r;
+    const uint64_t t = static_cast<uint64_t>(at.ms) * p->lame.rate / 1000;
+    if (index_.find(p->pathHash, size, t, &r) &&
+        trackseek::checkAnchor(r, reader, size, p->firstAudio, length, scratch, &plan) ==
+            trackseek::AnchorCheck::Ok) {
+      plan.source = trackseek::Source::Index;
+    } else {
+      plan = trackseek::Plan{};
+    }
   }
-  if (how == trackseek::Mp3Seek::None || !file_->seek(static_cast<int32_t>(byte), SEEK_SET)) {
-    Serial.printf("[audio] MP3: %s asked: no frame found to go on: from 0:00\n", asked);
-    return 0;
+  // 3-7. From the file: CBR arithmetic, LAME's TOC, another TOC or the
+  // average bitrate and a chain of headers.
+  if (!plan.ok() && at.ms > 0) {
+    trackseek::PlanIn in;
+    in.probe = probe;
+    in.probeBytes = got;
+    in.audioStart = audioStart;
+    in.fileSize = size;
+    in.hintMs = at.hintMs;
+    in.targetMs = at.ms;
+    in.lengthMs = length;
+    in.useTag = anchorsOn && p->lame.lame;
+    plan = trackseek::plan(in, reader, scratch);
   }
-  // A clean frame from there: libmad would resync by itself, but maybe on
-  // a false sync in the audio data first. None near it, or one with the
-  // tail or less after it (a file shorter than its header says): from the
-  // top, never a start that ends at once (the player would move on).
-  const uint32_t n = file_->read(probe, kMp3Probe);
-  const int32_t frame = trackseek::mp3FrameAt(probe, n);
-  const uint32_t from = byte + static_cast<uint32_t>(frame > 0 ? frame : 0);
-  const uint32_t leftMs = frame >= 0 && from < size ? trackseek::mp3MsLeft(probe + frame, size - from) : 0;
-  if (leftMs <= trackseek::kTailMs) {
-    Serial.printf("[audio] MP3: %s asked, of %s (%s): byte %lu: %s: from 0:00\n", asked, of,
-                  trackseek::mp3SeekName(how), (unsigned long)byte,
-                  frame < 0 ? "no clean frame near it" : "the file ends right after it");
-    return 0;
+  if (!plan.ok()) {
+    Serial.printf("[audio] MP3: %s asked, of %s: %s: from 0:00\n", asked, of,
+                  trackseek::noPlanName(plan.why == trackseek::NoPlan::None ? trackseek::NoPlan::NoFrame : plan.why));
+    return;
   }
-  *landedMs = at;
-  Serial.printf("[audio] MP3: starting %s in, of %s (%s): byte %lu, a frame +%ld\n", asked, of,
-                trackseek::mp3SeekName(how), (unsigned long)byte, (long)frame);
-  return from;
+  p->planned = true;
+  p->plan = plan;
+  p->from = plan.prerollByte;
+  p->fromTop = false;
+  p->landedMs = static_cast<uint32_t>(plan.sample * 1000 / plan.rate);
+  p->startSample = plan.sample;
+  p->startExact = plan.exact;
+  char start[16];
+  mmssms(p->landedMs, start, sizeof(start));
+  Serial.printf("[audio] MP3: starting %s in, of %s (%s; %s): byte %lu, frame %lu + %lu samples\n", start, of,
+                trackseek::sourceName(plan.source), plan.exact ? "exact" : "the time asked", (unsigned long)plan.prerollByte,
+                (unsigned long)plan.landByte, (unsigned long)plan.skip);
+}
+
+void Core2AudioBackend::beginRun(const Prepared& p) {
+  recorder_.stop();
+  // The trimmed timeline only with gapless trimming on (G1, Gt1); a
+  // built-in track has none (it counts exactly from its ms).
+  if (p.tone || !gapless_.load(std::memory_order_relaxed) || !gaplessTrim_.load(std::memory_order_relaxed)) return;
+  SeekIndex::Run r;
+  r.gen = runGen_;
+  r.pathHash = p.pathHash;
+  r.fileSize = p.fileSize;
+  r.base = p.startSample;
+  r.exact = p.startExact;
+  if (!p.mp3) {
+    if (p.rate == 0) return;
+    r.kind = SeekIndex::Kind::Flac;
+    r.rate = p.rate;
+    r.totalSamples = p.flacTotal;
+    index_.begin(r);
+    return;
+  }
+  if (!p.lame.frame || p.lame.rate == 0) return;
+  r.kind = SeekIndex::Kind::Mp3;
+  r.rate = p.lame.rate;
+  r.spf = p.lame.spf;
+  if (p.planned) {
+    // Its origin: the landing frame (the preroll the plan's), where the
+    // plan's sample less its skip begins.
+    r.origin = true;
+    r.originByte = p.plan.landByte;
+    r.originT0 = static_cast<int64_t>(p.plan.sample) - static_cast<int64_t>(p.plan.skip);
+    r.originPreroll = p.plan.prerollByte;
+    r.originHash = p.plan.landHash;
+  } else if (p.from == p.firstAudio && p.firstAudio > 0) {
+    // From the top: the first audio frame, inside the start trim.
+    r.origin = true;
+    r.originByte = p.firstAudio;
+    r.originT0 = p.topT0;
+    r.originPreroll = p.firstAudio;
+    r.originHash = p.firstHash;
+  }
+  index_.begin(r);
+  recorder_.begin(&index_, r.base, r.exact, p.planned);
+}
+
+void Core2AudioBackend::noteRun() {
+  if (!recorder_.active() || !mp3_) return;
+  switch (recorder_.afterPass(out_->trim(), *mp3_)) {
+    case SeekRecorder::Settled::Late: {
+      // The landing frame was lost: the start (and the time shown) a frame
+      // later.
+      const auto ms = static_cast<uint32_t>(recorder_.base() * 1000 / prepared_.lame.rate);
+      startMs_.store(ms, std::memory_order_relaxed);
+      if (engine_->decodingToken() == 0) engine_->setStartMs(ms);
+      Serial.printf("[audio] MP3: the landing frame was lost: started %lu samples later\n",
+                    (unsigned long)out_->trim().lateBy());
+      break;
+    }
+    case SeekRecorder::Settled::Elsewhere:
+      Serial.println("[audio] MP3: the start landed on another frame than planned (damaged data?): not exact");
+      break;
+    case SeekRecorder::Settled::None:
+      break;
+  }
+}
+
+PinnedMp3* Core2AudioBackend::makeMp3() {
+  mp3_.reset();  // the track before's generator (it gave its state back when it stopped; else here)
+  const char* why = !mp3Arena_.attached() ? "no pinned block" : mp3Arena_.inUse() ? "the pinned block is in use" : "";
+  bool pinned = false;
+  PinnedMp3* g = PinnedMp3::make(mp3Arena_, &pinned);
+  mp3Pinned_ = g && pinned;
+  if (g && !pinned) {
+    ++mp3Unpinned_;
+    Serial.printf("[audio] MP3: libmad's state malloc'd for this track (%s; %lu so far): its speed depends on "
+                  "where it lands\n",
+                  why, (unsigned long)mp3Unpinned_);
+  }
+  if (!g) Serial.println("[audio] MP3: no RAM for libmad's state");
+  return g;
+}
+
+void Core2AudioBackend::describeMp3State(char* buf, size_t size) const {
+  if (!mp3Arena_.attached()) {
+    snprintf(buf, size, "not pinned (no PSRAM block): malloc'd per track");
+    return;
+  }
+  const void* b = mp3Arena_.block();
+  snprintf(buf, size, "pinned at %p, %s", b,
+           DecoderArena::whereName(DecoderArena::where(b, mp3Arena_.bytes())));
 }
 
 void Core2AudioBackend::closeDecoder() {
@@ -815,25 +1351,95 @@ void Core2AudioBackend::closeDecoder() {
   // stop() is safe to repeat for both the MP3 and FLAC generators.
   if (decoder_) decoder_->stop();
   decoder_ = nullptr;
-  id3_.reset();
+  recorder_.stop();
+  toneTrack_ = false;
+  clickTrack_ = false;
   if (file_) file_->close();
 }
 
+// ---- gapless playback: the decode task's side (GaplessEngine::Tracks) ----
+
+bool Core2AudioBackend::probe(const GaplessJoin::Offer& next, uint32_t* rate) {
+  probeUs_ = esp_timer_get_time();
+  StartAt at;
+  at.hintMs = next.hintMs;
+  if (!prepare(next.path, at, &prepared_)) return false;
+  *rate = prepared_.rate;
+  return true;
+}
+
+bool Core2AudioBackend::start() {
+  // The heard track's description stays until the join is heard.
+  {
+    std::lock_guard<std::mutex> guard(lock_);
+    if (!heardOverride_) {
+      heardDescription_ = description_;
+      heardOverride_ = true;
+    }
+  }
+  tablesKeep = true;  // a chain of joins: the tables' copy stays until the next request
+  index_.beginJoin();  // its run in the other slot: the heard one's stays until the advance
+  if (!beginPrepared(prepared_, out_.get(), true)) {
+    index_.cut();
+    return false;
+  }
+  openMs_ = static_cast<uint32_t>((esp_timer_get_time() - probeUs_) / 1000);
+  return true;
+}
+
+void Core2AudioBackend::close() { closeDecoder(); }
+
+void Core2AudioBackend::note(const GaplessEngine::Note& n) {
+  const float ms = static_cast<int32_t>(n.ringFrames) * 1000.0f / kRingRate;
+  switch (n.event) {
+    case GaplessEngine::Event::Joined:
+    case GaplessEngine::Event::JoinedReset:
+      Serial.printf("[gapless] decoding ahead: %s (%lu Hz, %s) with %.0f ms of the track before left; opened in %lu "
+                    "ms\n",
+                    prepared_.path.c_str(), (unsigned long)n.rate,
+                    n.event == GaplessEngine::Event::Joined ? "the same rate: one stream"
+                    : n.late                                ? "late: after the tail"
+                                                            : "another rate: after the tail",
+                    ms, (unsigned long)openMs_);
+      if (prepared_.metadataBytes > 1024 * 1024) {
+        Serial.printf("[gapless] (its %lu KB of metadata were read through at the open: an underrun risk)\n",
+                      (unsigned long)(prepared_.metadataBytes / 1024));
+      }
+      break;
+    case GaplessEngine::Event::OpenFailed:
+      Serial.printf("[gapless] can't decode ahead %s; the track before ends as before\n", prepared_.path.c_str());
+      break;
+    case GaplessEngine::Event::EmptyAhead:
+      Serial.printf("[gapless] %s gave no audio: taken back out\n", prepared_.path.c_str());
+      break;
+    case GaplessEngine::Event::Cut: {
+      index_.cut();  // the cut track's run goes with it
+      const int64_t asked = nextAtUs_.load(std::memory_order_relaxed);
+      const uint32_t us = asked > 0 ? static_cast<uint32_t>(esp_timer_get_time() - asked) : 0;
+      cutLatencyUs_.store(us, std::memory_order_relaxed);
+      if (us > cutLatencyMaxUs_.load(std::memory_order_relaxed)) cutLatencyMaxUs_.store(us, std::memory_order_relaxed);
+      Serial.printf("[gapless] cut: what comes next changed: the track decoded ahead taken back out, %.0f ms before "
+                    "the join (%lu us after the word)\n",
+                    ms, (unsigned long)us);
+      break;
+    }
+    case GaplessEngine::Event::CutTooLate:
+      Serial.println("[gapless] too late to cut: the outputs are past the join; the change applies once it is heard");
+      break;
+  }
+}
+
 Core2AudioBackend::Produced Core2AudioBackend::produceTone() {
-  if (sourceDone_) return finishSource();
   RingFeed& f = feed();
   if (toneAt_ == toneN_) {  // the last chunk is all in: a new one
     if (ring_->space() < f.roomFor(kChunkFrames)) {  // ring full: the output is ~1.5 s behind us
       noteStartProgress(true);
-      vTaskDelay(pdMS_TO_TICKS(10));
+      rest(10);
       return Produced::More;
     }
     toneN_ = clickTrack_ ? click_.generate(chunk_, kChunkFrames) : tone_.generate(chunk_, kChunkFrames);
     toneAt_ = 0;
-    if (toneN_ == 0) {
-      sourceDone_ = true;
-      return Produced::More;
-    }
+    if (toneN_ == 0) return Produced::Done;  // its end
   }
   // Through RingOutput's converter at the tone's rate. What the ring has no
   // room for stays in chunk_ for the next pass (the generators have moved
@@ -858,24 +1464,9 @@ Core2AudioBackend::Produced Core2AudioBackend::produceTone() {
   // ring is first full, so a test tone's start can't starve the UI.
   RefillPacer::Config pace = refillPacing();
   pace.enabled = pace.enabled && fullMs_.load(std::memory_order_relaxed) < 0;
-  vTaskDelay(taken == 0 ? pdMS_TO_TICKS(10)
-                        : RefillPacer::sleepMs(pace, bufferedMsNow(), static_cast<uint32_t>(f.made() - before),
-                                               kRingRate, static_cast<uint32_t>(toneUs)));
-  return Produced::More;
-}
-
-Core2AudioBackend::Produced Core2AudioBackend::finishSource() {
-  // The converter's tail (its delay's worth, so the track ends with exactly
-  // ceil(source frames x 44100 / rate) ring frames) and the staged frames.
-  const uint64_t before = feed().made();
-  const bool done = feed().finish();
-  producedFrames_ += feed().made() - before;
-  publishRate();
-  if (done) {
-    closeDecoder();
-    return Produced::Done;
-  }
-  vTaskDelay(pdMS_TO_TICKS(10));
+  rest(taken == 0 ? 10
+                  : RefillPacer::sleepMs(pace, bufferedMsNow(), static_cast<uint32_t>(f.made() - before), kRingRate,
+                                         static_cast<uint32_t>(toneUs)));
   return Produced::More;
 }
 
@@ -895,13 +1486,12 @@ void Core2AudioBackend::noteRingFill() {
 }
 
 Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
-  if (sourceDone_) return finishSource();  // end of file: the converter's tail, the staged frames, then drain
   RingFeed& f = feed();
   // Room for a full pass, in ring frames (at the track's ratio), plus what
   // RingOutput may already be holding.
   if (ring_->space() < f.roomFor(2 * kChunkFrames)) {
     noteStartProgress(true);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    rest(10);
     return Produced::More;
   }
 
@@ -925,7 +1515,14 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
   producedFrames_ = before + (f.made() - madeBefore);  // ring frames, 44.1 kHz
   publishRate();
 
-  if (f.rejected()) return Produced::Failed;
+  if (f.rejected()) {
+    // The request's own track refused before its first frame: it fails, as
+    // before. A track joined, or one that has played: an early end (what
+    // it gave plays; docs/GAPLESS.md section 5.3).
+    if (engine_->decodingToken() == 0 && producedFrames_ == 0) return Produced::Failed;
+    endedEarly(refusalText());
+    return Produced::Done;
+  }
   if (!described_ && f.rate() > 0) {
     setText(description_, std::string(codec_) + ", " + std::to_string(f.rate()) + " Hz");
     described_ = true;
@@ -939,7 +1536,14 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
   }
   noteRingFill();
   noteStartProgress(false);
-  if (!running) sourceDone_ = true;
+  if (running) noteRun();  // (the pass ended on a refused sample: the cursor's)
+  if (!running) {
+    // Its end. Before the file's (a decode error the generator gave up on:
+    // libmad's, which closes the file too): what the trim holds is real
+    // audio, not the padding.
+    early_ = !file_->isOpen() || file_->getPos() < file_->getSize();
+    return Produced::Done;
+  }
   // Share core 1 with the UI loop: 1 ms, or, with refill pacing on, during
   // the fill after a start or skip (until the ring is first full: fullMs_
   // is -1 until then) and past 500 ms, long enough to keep this track under
@@ -947,14 +1551,14 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
   // Bluetooth burst) refill flat out, as without pacing.
   RefillPacer::Config pace = refillPacing();
   pace.enabled = pace.enabled && fullMs_.load(std::memory_order_relaxed) < 0;
-  vTaskDelay(RefillPacer::sleepMs(pace, bufferedMsNow(), static_cast<uint32_t>(producedFrames_ - before), kRingRate,
-                                  static_cast<uint32_t>(passUs)));
+  rest(RefillPacer::sleepMs(pace, bufferedMsNow(), static_cast<uint32_t>(producedFrames_ - before), kRingRate,
+                            static_cast<uint32_t>(passUs)));
   return Produced::More;
 }
 
 void Core2AudioBackend::runBench(const std::string& path) {
   CountingOutput counter;
-  if (!openDecoder(path, &counter, 0, 0)) {
+  if (!openDecoder(path, &counter, 0, 0, false)) {
     Serial.printf("[bench] can't decode %s\n", path.c_str());
     return;
   }
@@ -977,6 +1581,13 @@ void Core2AudioBackend::runBench(const std::string& path) {
                 path.c_str(), audio, counter.rate, seconds, seconds > 0 ? audio / seconds : 0.0,
                 audio > 0 ? 100.0 * seconds / audio : 0.0,
                 (unsigned long)uxTaskGetStackHighWaterMark(nullptr));
+  if (std::strcmp(codec_, "MP3") == 0) {
+    // Its speed depends on where libmad's state is (RESAMPLER.md section 10d).
+    char where[96];
+    describeMp3State(where, sizeof(where));
+    if (!mp3Pinned_) snprintf(where, sizeof(where), "malloc'd for this track, not pinned");
+    Serial.printf("[bench] libmad's state: %s\n", where);
+  }
   if (counter.rate <= 0 || counter.rate == static_cast<int>(kRingRate) || audio <= 0) return;
 
   // Another rate: the same stretch again, decoded and converted through
@@ -984,7 +1595,7 @@ void Core2AudioBackend::runBench(const std::string& path) {
   // misses included (Rb times the converter alone).
   RingFeed& f = feed();
   f.reset(cpuMhz(), /*hiRes=*/true);  // measured even while 88.2/96 kHz don't play (RateConverter::kHiResOn)
-  if (!openDecoder(path, out_.get(), 0, 0)) return;
+  if (!openDecoder(path, out_.get(), 0, 0, false)) return;
   f.setDiscard(true);
   const uint64_t want = counter.frames;
   uint64_t taken = 0;

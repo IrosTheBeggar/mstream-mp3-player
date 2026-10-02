@@ -31,6 +31,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  ScreenPower (and WakeLatch)  AmpGate                         |
               |  SleepTimer  FadeStage  IdlePolicy  QueueSaver                |
               |  PowerChoices                                                 |
+              |  HopFrontEnd  HostLine  HostLink  HostClock (USB visualizer)  |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -50,6 +51,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |         EmptyState                                            |
               |  ui/BootScreen                                                |
               |  app/Version (the version from git, the app description)      |
+              |  app/UsbViz (the USB visualizer: a computer drives the dancer)|
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
@@ -58,10 +60,10 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
 
 ```
  source:  /music on LittleFS (SD card later: same fs::FS code)  |  built-in tone: tracks
-            └ AudioFileSourceFS (+ID3 for MP3)                   |    └ ToneGen, ClickGen (at their own rate)
-                └ AudioGeneratorMP3 (libmad) | AudioGeneratorFLAC (libFLAC)     (any rate: 8-96 kHz)
- decode task (core 1, prio 2, 16 KB internal stack)
-   ─► RingOutput (RingFeed: RateConverter to 44.1 kHz, a 256-frame stage)
+            └ AudioFileSourceFS (+GuardedSource for MP3)         |    └ ToneGen, ClickGen (at their own rate)
+                └ PinnedMp3 (libmad, its state pinned) | AudioGeneratorFLAC (libFLAC)  (any rate: 8-96 kHz)
+ decode task (core 1, prio 2, 16 KB internal stack; GaplessEngine at a file's end)
+   ─► RingOutput (TrimFeed: gapless trim; RingFeed: RateConverter to 44.1 kHz, a 256-frame stage)
    ─► PcmRing (PSRAM, 64k frames ≈ 1.5 s, always 44.1 kHz)
         ├─► BtSink: ESP32-A2DP data callback (Bluedroid's BTC task, 44.1 kHz)
         └─► SpeakerSink: pump task ─► M5.Speaker.playRaw (44.1 kHz in and out, mono)
@@ -71,10 +73,32 @@ ESP8266Audio's ID3 reader walks the whole ID3v2 tag a byte per read. An
 MP3 with an embedded picture (two Moon Safari tracks on the test card have
 351 KB tags) then took 4 s of CPU on the decode task, above the loop: the
 track started 4 s late and the UI froze as long (seen in the stage-2 device
-soak). A tag over 16 KB is now skipped (the file handed to the decoder
-from its first frame, `[audio] ID3 tag of N KB (a picture?): skipped`); its
-title and artist aren't needed (the library has them). Both tracks now
-start in 23-30 ms.
+soak). A tag over 16 KB was then skipped, and since gapless playback the
+reader is gone altogether: every MP3 is handed to the decoder from its
+first audio frame, past its ID3v2 tags (one after another too) and past a
+Xing/Info/VBRI header frame, which has no audio (`[audio] ID3 tag of N KB
+(a picture?): skipped, not read` for a big one). Its title and artist
+aren't needed (the library has them). Those tracks start in 23-30 ms.
+`GuardedSource` adds 8 zero bytes after an MP3's end, so libmad decodes
+its last frame (it needs `MAD_BUFFER_GUARD` bytes after a frame;
+[GAPLESS.md](GAPLESS.md) section 4.3).
+
+libmad's frame and synthesis state (25 KB) is one PSRAM block, allocated
+first thing in `Core2AudioBackend::begin()` while the lower 2 MB of the
+PSRAM window are free, and lent to one MP3 generator at a time
+(`PinnedMp3`, src/audio; `DecoderArena`, lib/core, host-tested in
+test_decoder_arena; the generator gives it back when it stops, with its
+internal-RAM buffer and stream state (`DecoderParts`, test_decoder_parts),
+and the generator before is destroyed before the next is made, so a
+gapless join or a seek reuses it the same way). ESP8266Audio
+used to malloc it per track: above 0x3FA00000 the same file decoded at
+1.7-3.6x realtime instead of 4.7-5.0x, depending on the address and the
+image ([RESAMPLER.md](RESAMPLER.md) section 10d). Its input buffer and
+stream state (4.1 KB) stay per-track allocations in internal RAM, as
+before. The boot log says where the block is (`[audio] MP3 decoder
+state: 25056 B pinned at 0x3f808e80, PSRAM, its lower 2 MB`), and so
+does every MP3 bench (`b<n>`); a track that can't have it (none at boot)
+decodes on ESP8266Audio's own malloc, logged.
 
 The rules that keep it deadlock- and glitch-free:
 
@@ -106,8 +130,30 @@ The rules that keep it deadlock- and glitch-free:
   without a START is only a late callback, and the audio goes on.
 - **Track changes don't wait for the outputs.** A skip calls `discardAll()`
   (and resets the converter: nothing of the old track's filter history comes
-  out after it); a natural end drains the ring first (`finished()` = end of
-  file, the converter's tail, *and* the ring empty).
+  out after it). A natural end is a gapless join, below; only the queue's
+  real end (or a track the player says nothing follows) drains the ring
+  first (`finished()` = end of file, the converter's tail, *and* the ring
+  empty).
+- **Gapless playback** ([GAPLESS.md](GAPLESS.md)). The player names what
+  `advance()` would start next (`IAudioBackend::setNext()`: the entry, a
+  token, the token of the track it follows). At a file's end the decode
+  task (`GaplessEngine`, lib/core, host-tested in test_gapless and
+  test_gapless_player) opens it at once and writes on into the same ring:
+  no `discardAll()`, no new generation, no fade; the same rate goes on
+  through the same converter state, another rate pushes the tail and
+  starts a new stream at the same ring position. MP3s are trimmed by
+  their LAME tag (`TrimFeed`: the encoder delay and libmad's 529 samples
+  at the start, the padding less 529 at the end; the generator's own
+  leading zero frame always). The heard track switches when the outputs
+  read past the join (`takeAdvance()`, at the top of the player's
+  `update()` and of every action): the queue's entry, Now Playing, the
+  position (held at the track's exact end until then), the length, the
+  resume point and the sleep timer all follow it. A change to what comes
+  next while it is decoded ahead takes it back out of the ring
+  (`PcmRing::cutBack()`: a fence and a reading mark, so a read never
+  fails) unless the outputs are past the join; then the player sorts it
+  out at the advance. The console's `G` shows it all; `G0` is v0.5.0's
+  ends.
 - **The decoder never blocks inside an output.** `RingOutput::ConsumeSample`
   returns false when the ring is full or the pass's budget (1024 source
   frames, or 1024 ring frames made: a low rate's pass converts no more than
@@ -115,55 +161,83 @@ The rules that keep it deadlock- and glitch-free:
   next `loop()`. With the converter in between, a source frame is taken only
   when the stage has room for everything it can make (`RingFeed`, below).
   The decode task re-checks requests and yields between passes.
-- **A track can start part of the way in** (`play()`'s `startMs`: the
-  resume point, below under Library and queue; `lib/core/TrackSeek`,
-  host-tested in test_track_seek). Where it lands first: in the last 5 s,
-  at the end or past it (a file that got shorter), it starts at 0:00
-  (`trackseek::startMs()`; an unknown length starts where asked). An MP3
-  with LAME's "Info" header (its CBR marker) whose first frames agree on
-  their bitrate starts at a byte by that bitrate (its TOC's 256ths of the
-  bytes put a 4 min file up to ~0.3 s off on the device); else at a byte
-  from its Xing TOC (100 points), else its VBRI TOC, else its average
-  bitrate (the header's length over its bytes). One without a
-  header: the first frame's bitrate (a plain CBR file, exact) when its
-  first frames (the 4 KB read) agree on it and the length `play()` was
-  handed (`durationHintMs`: the resume point's, as the backend had it)
-  agrees with the length that gives, within 3%; else the average bitrate
-  by that handed length (a VBR file whose Xing frame was stripped, a
-  silent 32 kbit/s start); with no length handed, a VBR file can't be
-  placed and starts at 0:00. From that byte the decoder is
-  handed the first frame whose next frame's header follows (a clean
-  start: libmad would resync, maybe on a false sync first), without the ID3
-  reader (the library has the tags; a big tag is skipped either way). No
-  such frame in the 4 KB read, or one with 5 s or less of audio after it
-  at its bitrate (a file shorter than its header says): the seek failed,
-  and it starts at 0:00 (never a start that ends at once: the player would
-  move on to the next entry). A FLAC's rate and length come from its
-  STREAMINFO, past an ID3v2 tag in front of "fLaC" if a tagger put one
-  there (libFLAC skips it too). A
-  FLAC seeks through libFLAC (`FLAC__stream_decoder_seek_absolute()`: its
-  SEEKTABLE, else a bisection on frame headers), reached through a
-  subclass (`SeekableFlac`: the decoder is AudioGeneratorFLAC's protected
-  member) that also sets the stream's format, which the generator would
-  otherwise learn only from a frame of its own (the first frame, handed
-  over from the target sample, would be read as 8-bit); a seek that fails
-  opens the file again from the top. A built-in track only counts from
-  there (the same sound, what is left of its length). `positionMs()` is
-  the start plus what was played, so Now Playing is right from the first
-  frame; the read-rate length estimate adds the start to what it
-  estimates is left. The ring was emptied as for any start, so nothing
-  from before the start plays, and the DeclickReader fades it in; a rate
-  the converter refuses fails it as it would from the top. Accuracy: a CBR MP3 to the frame,
-  a FLAC to the sample, a VBR MP3 with a TOC within about 1% of its length,
-  one without by its average bitrate; the time shown is the time asked for.
-  Measured on the device (ENERGY.md, "Device run: batch 3 follow-ups"):
-  FLAC 0 ms; CBR MP3 30-50 ms behind (it lands on the next clean frame, and
-  libmad drops the first one, which lacks its bit reservoir); a LAME VBR
-  MP3 by its TOC -0.29 to +0.35 s of a 3:44 track (0.15%). Each start logs
-  `[audio] MP3: starting 1:23 in, of 5:20 (Xing TOC): byte ...` (or `CBR,
-  Info header`, `the first frame's bitrate`, ...) or `[audio] FLAC:
-  starting 1:23 in (libFLAC's seek, N ms)` (75-112 ms, with or without a
-  SEEKTABLE).
+- **A track can start part of the way in** (`play()`'s `StartAt`: the
+  resume point, below under Library and queue, or a seek: the console's
+  `qs`; [SEEK.md](SEEK.md) is the design and its measurements;
+  `lib/core/TrackSeek`, `SeekIndex`, `ResumeAnchor`, host-tested in
+  test_track_seek and test_seek_index). The tail rule first: a start in
+  the last 5 s, at the end or past it (a file that got shorter) starts at
+  0:00 (`trackseek::startMs()`; an unknown length starts where asked),
+  by the exact length: an MP3's Xing or VBRI frames x spf less LAME's
+  delay and padding, scaled down by the share it holds for a file more
+  than 4 KB shorter than its header's byte count, never one frame's
+  bitrate. An MP3 then starts by a **plan**: the decoder is handed a
+  preroll frame, `TrimFeed::armAt()` drops everything until the
+  generator's own state (`PinnedMp3`'s cursor: the file offset of the
+  frame each sample comes from) says the landing frame, then the plan's
+  skip. The preroll is at least 2 frames back (3 for MPEG-2/2.5) and 1 KB
+  before the frame before the landing one, so the landing frame decodes
+  bit for bit: its bit reservoir and the IMDCT and filterbank history (a
+  cold start on the landing frame itself loses it: libmad drops a frame
+  whose reservoir it never saw). The plan comes from the first source
+  that gives one: the resume point's anchor, checked against the file
+  (its size, the landing frame's header and a hash of its first 32
+  bytes, the preroll's header); the **run index** of what this run
+  decoded (`SeekIndex`: every 4th frame's byte, first sample and hash,
+  two 24 KB PSRAM slots, the heard track and the one decoded ahead), for
+  a seek back into it; CBR arithmetic (an Info header, or none, and
+  frames that agree on their bitrate: frame k is at the first audio
+  frame + floor(k x L), exact to the sample); LAME's TOC inverted (a LAME
+  VBR file: point i is the byte share after (floor(i / 100 x pos) + 1) x
+  want frames of LAME's bag, in float as LAME computes it, truncated to
+  1/256); another encoder's Xing
+  TOC, VBRI's, or the average bitrate (by the header, or the length
+  `play()` was handed for a VBR file without a header), each an estimate
+  then a chain of frame headers read around it (the first frame at or
+  after it). A VBR file with nothing to place it by, or no chain there,
+  starts at 0:00 (never a start that ends at once: the player would move
+  on). All on the trimmed timeline that gapless playback plays (GAPLESS.md
+  section 4.6: LAME's delay + 529 samples into the decoded stream); a
+  plan's preroll never decodes the Info frame; the end is held and
+  trimmed as for any start. A FLAC's rate, length and total samples come
+  from its STREAMINFO, past an ID3v2 tag in front of "fLaC" if a tagger
+  put one there (libFLAC skips it too). A FLAC seeks through libFLAC
+  (`FLAC__stream_decoder_seek_absolute()`: its SEEKTABLE, else a
+  bisection on frame headers), by sample: its anchor's, else the
+  millisecond's, reached through a subclass (`SeekableFlac`: the decoder
+  is AudioGeneratorFLAC's protected member) that also sets the stream's
+  format, which the generator would otherwise learn only from a frame of
+  its own (the first frame, handed over from the target sample, would be
+  read as 8-bit); a seek that fails opens the file again from the top. A
+  built-in track only counts from there (the same sound, what is left of
+  its length). `positionMs()` is the start plus what was played, so Now
+  Playing is right from the first frame; the read-rate length estimate
+  adds the start to what it estimates is left. The ring was emptied as for
+  any start, so nothing from before the start plays, and the DeclickReader
+  fades it in; a rate the converter refuses fails it as it would from the
+  top. Accuracy: an anchor, the index of an exact run, a CBR MP3 and a
+  FLAC to the sample (the time shown is the sample's); a LAME VBR MP3 by
+  its TOC inverted p95 0.74 s, max 1.6 s (27 files on the PC: 1.3 and 2.4 s
+  by straight lines), other VBR files about 1% of their length, the time
+  shown the time asked. Each start logs `[audio] MP3: starting 1:23.456
+  in, of 5:20 (the run's index; exact): byte 2343590, frame 2345678 + 517
+  samples` (the preroll's byte, the landing frame's, the skip) or why it
+  starts at 0:00, an anchor that isn't the file's `[audio] MP3: the
+  resume anchor isn't this file's (the size: 8737445 -> 8737060): by its
+  second`, a FLAC `[audio] FLAC: starting 1:23.456 in (libFLAC's seek to
+  sample N, N ms)` (75-112 ms, with or without a SEEKTABLE). On the
+  device (SEEK.md section 17, the speaker's tap against a PC decode by
+  the same libmad): every resume by its anchor and every CBR, run-index
+  and FLAC start bit-exact at the sample shown (39 starts); a resume in a
+  run that a TOC start began picks up on its very frame and keeps that
+  start's shown time; `qs` on *One More Time* by LAME's TOC inverted
+  |error| p50 255 ms, p95 465 ms, max 504 ms at 20 points (the old
+  straight lines: 515, 1,261, 1,285 ms at the same points); the landing
+  frame never lost. Such a start's first audio reaches the ring 75-150 ms
+  after the request (a start from the top: ~35 ms): the chain walk's
+  reads and the preroll. Before this the device measured FLAC 0 ms, CBR
+  MP3 30-50 ms behind (a cold start's lost frame) and a LAME VBR MP3 by
+  its TOC -0.29 to +0.35 s of a 3:44 track.
 - **Requests are generations.** `play()`/`stop()` post a new generation to
   `TransportSync`; the decode task's progress reports for anything older are
   dropped, so a stale "ended" can't skip the track that was just requested.
@@ -201,18 +275,21 @@ The rules that keep it deadlock- and glitch-free:
   exact. The ring-full rule: a source frame is taken whole only if the stage
   has room for all it can make (1 frame at 44.1 kHz and above, up to 6 at
   8 kHz), the per-pass budget counts source frames and caps the ring frames
-  made, and at the end of a file
+  made, and at the end of a file nothing follows (or another rate does)
   `finish()` pushes the converter's tail, so a track ends with exactly
   ceil(source frames x 44100 / rate) frames. The converter is reset with
   the ring's `discardAll()` at every request (start, skip, seek, stop,
-  bench). A built-in track goes through it too, at its own rate (its
+  bench), and never at a gapless join: at the same rate the next track's
+  frames go on through the same state, and a cut back to a join restores
+  the state saved there (`RingFeed::mark()`/`rewind()`). A built-in track goes through it too, at its own rate (its
   chunk's frames that didn't fit wait for the next pass). A 44.1 kHz frame
   goes straight into the stage, as before the converter; frames at another
   rate are held 32 at a time and converted as a block, on the ESP32 by a
   MAC16 assembly kernel that a self-test at boot checks against the C one,
   bit for bit, with the filter tables copied into internal RAM while a
   track at another rate plays (7.6 KB: copied when one starts, freed when
-  a 44.1 kHz track starts, read from flash when there's no room;
+  a request starts a 44.1 kHz track, never during a chain of gapless joins
+  (a cut's rewind may need its rows), read from flash when there's no room;
   RESAMPLER.md section 10c). `RingOutput`
   (3.1 KB) must stay in internal RAM, so it is asserted under 4 KB (the
   framework puts a `new` of 4 KB or more in PSRAM). The console's `R` shows
@@ -254,7 +331,7 @@ The rules that keep it deadlock- and glitch-free:
 | Bluetooth controller + host (Bluedroid) | 0 | high | ~70 KB internal RAM, claimed at boot |
 | A2DP data callback | 0 (Bluedroid's BTC task, BTC_TASK) | high | 128 frames at a time, several per ~30 ms tick; applies the volume ramp; never blocks or logs. ESP-IDF 5.5's A2DP source has no media task of its own: this is the task that also runs the GAP and AVRCP callbacks, which queue their events to BtAppT (below). If BtAppT's queue (20 entries) is full, each such event blocks BTC_TASK, and the audio, for up to 10 ms |
 | ESP32-A2DP app task (BtAppT) | 0 | 15 | connection, stream and AVRCP handlers (`PlayerA2dp`); 6 KB stack; blocks 10 s at stack-up; must keep its queue drained (no long work in a handler) |
-| decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 1.4 M cycles per second of audio for 44.1 kHz's passthrough, the old path, 5 cycles a frame cheaper (an MP3 still measures 0.8 points above the build before the converter, its decoder's loop 2 % slower in the new image: RESAMPLER.md section 10b); 5.8-5.9 % of a core at 240 MHz for 48 kHz, 8.8 % at 160: RESAMPLER.md sections 10 and 10b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start) |
+| decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 1.4 M cycles per second of audio for 44.1 kHz's passthrough, the old path, 5 cycles a frame cheaper (an MP3 still measures 0.8 points above the build before the converter, its decoder's loop 2 % slower in the new image: RESAMPLER.md section 10b); 5.8-5.9 % of a core at 240 MHz for 48 kHz, 8.8 % at 160: RESAMPLER.md sections 10 and 10b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start); at a file's end it opens the next track with the ring still full (a gapless join: no refill from empty at natural ends, GAPLESS.md). Its rests are `ulTaskNotifyTake()`, so a request or a new word (`setNext()`) wakes it |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
 | cover thumbnails (`thumbs`, ui/Thumbs) | 1 | 1, or 0 while a list moves | only while there are covers to make: made for the first, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device); reads the card in 4 KB pieces; level with the loop while nothing moves (at 0 it shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves, always below the decoder (below) |
@@ -653,7 +730,9 @@ every pass before the player and carries out what it says:
    skip keeps it, and only +10 min, Turn off or another choice bring it
    back, at the slow rate. After a skip the length counts only once the
    backend has started the new track (`EntryStart`: until then it reports
-   the old one's end, which would fade the new track at once);
+   the old one's end, which would fade the new track at once; the
+   backend's `trackSeq()` counts its starts and its gapless advances, so a
+   join counts as the new entry's start however late the loop takes it);
 2. the pause (`pauseByTimer()`, or the player's own at the boundary:
    `setPauseAfterTrack()`), never a stop, the output never moved; a pause
    during the fade, or an expiry while paused or waiting for the
@@ -667,6 +746,15 @@ every pass before the player and carries out what it says:
    up) is paused when the drop comes (`BtSession::onDisconnected()`), so
    nothing "plays" without a link and the headphones never start music
    when they come back.
+
+The player's `NextGate` (main.cpp's `SleepGate`: `SleepTimer::endsAt()`,
+End of track always, End of album or queue on its last track) keeps the
+track after the boundary from being decoded ahead for a gapless join, so
+the pause at the boundary hears nothing of it; it is decided in the same
+update that makes an album's last track current (GAPLESS.md section 5.4).
+Chosen too late to take the next track back out of the ring, the player
+pauses at the advance instead, with at most the cut's latency and the
+pause's 1.5 ms fade of it heard.
 
 +10 min never leaves less time than before (`SleepTimer::canExtend()`):
 End of album or End of queue before its last track can't say what is
@@ -837,6 +925,83 @@ the UI turns `DanceMode` off: no frames at all. Each change is logged
 (`[dance] 10 fps (idle)`, `[dance] 24 fps (dancing at 160 MHz)`), and the
 5 s `[dance]` line reads `fps=23.8/24 (dancing)`: measured / target.
 
+## USB visualizer
+
+While a computer plays music (mstream-terminal-player, or the reference
+sender `tools/usb_viz.py`), it can drive the Dance tab's dancer over the USB
+serial port. The spec, the plan and the tests: [USB-VISUALIZER.md](USB-VISUALIZER.md).
+(Host mode pauses the player, `pauseByComputer()`, so no gapless join
+happens during a session: its epochs are the computer's alone.)
+
+- **The split.** The computer runs only the beat tracker's front end
+  (`HopFrontEnd`, lib/core: the 8x box average, the DC blocker, two 150 Hz
+  biquads, the low and mid band energy per hop of 512 frames, moved out of
+  `BeatTracker` with no change in its output, bit for bit) and sends the two
+  energies per hop. The Core2 feeds them to its own `BeatTracker`
+  (`feedHop()`, at the epoch's rate: `setSampleRate()` rebuilds its tables
+  for 48 kHz and back), so tempo, phase and confidence come from the one
+  tracker tuned on the device. About 10 times a second the computer also
+  says which frame of the track its listener hears now; `HostClock` follows
+  the least delayed of those samples (a 2 s window's leading edge, snapped
+  past 100 ms, otherwise slewed at up to 5 %) and stands in for
+  `TapReader::audibleAt()` in `DanceMode::render()`.
+- **The protocol.** ASCII lines that start with `@`, at the console's 115200
+  baud: `@hello`/`@ok`/`@err`/`@bye` for the session, `@e` (an epoch: a
+  track, a seek; its rate and BPM prior), `@h` (a hop's energies), `@c` (the
+  heard clock), `@log`. `HostLine` (lib/core) routes the console's bytes:
+  every byte from an `@` to the end of its line is the line's, never a
+  single-key command (`f` forgets the headphones and restarts!), and an `@`
+  abandons a half-typed command. Reading that starts mid-line (a boot while
+  the computer sends, or bytes lost to a full receive buffer) would miss
+  the `@`, so the console starts in Sync and goes back to it on a nearly
+  full buffer: outside a line, a byte followed by more before 20 ms of
+  quiet is a line's tail and is dropped to its terminator; a lone byte and
+  then quiet is a keypress; 20 ms of quiet ends Sync. `HostLink` (lib/core, in the style of
+  `IdlePolicy`) decides what each line means and what to answer: sessions,
+  epochs, hop numbering (duplicates dropped, a gap restarts the tracker),
+  the 3 s timeout, the decline after the listener ended it, the `@err` rate
+  limit. Its timeout and decline compare times signed: the loop reads its
+  clock before the console stamps that pass's lines. The framing is shared with the terminal player's later Wi-Fi and
+  pairing setup (reserved verbs, `@hello` features).
+- **Host mode** (`app/UsbViz` carries `HostLink`'s events out; `main.cpp`
+  has the hooks). On `@hello ... viz`, never on USB power alone: the player
+  pauses (`PlaybackController::pauseByComputer()`, which never starts
+  anything and marks the pause the computer's: as after the sleep timer's,
+  the headphones' play doesn't resume it, since in-ear detection sends play
+  as a bud goes back in), a
+  test track the console started stops, the screen wakes and stays lit, the
+  Dance tab comes up with "Dancing to your computer" at the bottom, the
+  headphones' background search goes quiet (a burst under way finishes,
+  then it rests) and the idle power-off counts it as busy. The taps are off; the tracker takes the computer's hops. It ends on
+  `@bye`, 3 s without a valid line, USB unplugged, the listener's first touch
+  outside the dancer or any button (the PWR key and the headphones' play key
+  too: that touch or press does nothing else, and the computer is declined
+  until it stops for 3 s), or the Dance tab going away. The player stays
+  paused. One line on entry and one on exit (`[viz] on: ...`, `[viz] off
+  (a touch): ...`); the 5 s `[dance]` line carries the session's counters
+  and the clock's state in place of the output latency.
+- **Cost.** Internal RAM: the serial receive buffer 256 B -> 1 KB (set
+  before `M5.begin()`), the line buffer 256 B, `HostLink`/`HostClock` about
+  0.6 KB: about 1.6 KB in all. No `IRAM_ATTR`.
+- **The reference sender** (`tools/usb_viz.py`, Python 3 + pyserial): a
+  float32 port of `HopFrontEnd` and `ClickGen` (bit-exact on
+  `test/test_hop_feed/hop_golden.h`, which `--selftest` checks), the session
+  (`@hello` every second until `@ok`, a new session after a reboot,
+  nothing written from the ROM's boot lines until the firmware's banner), hops
+  paced to a virtual play clock, `@c` at 10 Hz, `@bye` on the way out.
+  Silent unless `--play`. It opens the port with DTR and RTS low and writes
+  only through a guard that refuses anything but a whole `@` line.
+  `--measure` asks for the Core2's `[beat]` log and scores it against the
+  click track's beats (by the epoch each line names; lines stamped as they
+  arrive, not when a read times out); `--dry-run` prints the lines with a fake Core2
+  answering. Its tests (`tools/test_usb_viz.py`, `python -m unittest`) run the
+  session in virtual time.
+- **On the device** (October 2026): lock 2.5-2.9 s and a median phase
+  error of 1.9-2.8 ms on click tracks at 44.1 and 48 kHz, the tap path's
+  own numbers; 0 gaps with the 1 KB buffer; bad lines answered `@err` with
+  no console command run; a reset mid-session back to dancing in ~8 s
+  ([USB-VISUALIZER.md](USB-VISUALIZER.md#checked-on-the-device-october-2026)).
+
 ## Storage
 
 `LocalStorage` mounts the SD card (shared SPI bus with the LCD, 25 MHz) if one
@@ -985,12 +1150,13 @@ layout is schema 1's) it is written; older, `migrate(from, to)` runs and
 then the number is written (a failed step leaves the old number, so the next
 boot tries again); newer (a downgrade) it is left alone. The boot log says
 which (`[nvs] schema 1`). Schema 1 is v0.5.0's layout, which is
-beta.1's plus one change that a version byte covers, not the number: the
-resume point (`queue`/`resume`) is a 24-byte version-1 blob once v0.5.0
-has saved one, and until then may still be beta.1's 20-byte one. So a
-schema-1 unit holds either form, and every reader of schema 1 (and any
-`migrate(1, ...)` step) must take both. `migrate()` has no step yet. The
-rules:
+beta.1's plus one blob that its own version byte covers, not the number:
+the resume point (`queue`/`resume`) is beta.1's 20-byte form (version
+0) until v0.5.0 first saves, then version 1's 24 bytes, and since its
+resume anchor (SEEK.md section 5.2) version 2's 64 bytes. So a schema-1
+unit holds any of the three, and every reader of schema 1 (and any
+`migrate(1, ...)` step) must take them all. `migrate()` has no step yet.
+The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
   the key is gone: an old unit may still hold the old value under it. A
@@ -1005,11 +1171,14 @@ rules:
   version; the schema text says which versions it allows.
 - **Blobs carry their own version** and are read by size and version, old
   ones too: the touch calibration (`"TCAL"`, a version byte) and the resume
-  point (since v0.5.0 a version byte first, 24 bytes; beta.1's
-  unversioned 20 bytes are still read; anything else is ignored, as if
-  none were saved). A downgrade loses what it can't read: beta.1 reads
-  only the 20-byte form, so going back from v0.5.0 to beta.1 starts with
-  no resume point (nothing else is lost).
+  point (a version byte first: version 2, 64 bytes, with its anchor;
+  v0.5.0's version 1, 24 bytes, and beta.1's unversioned 20 bytes are
+  still read, without an anchor; anything else is ignored, as if none were
+  saved). A downgrade loses what it can't read: v0.5.0 reads only versions
+  0 and 1, and beta.1 only the 20-byte form, so going back starts once with
+  no resume point (nothing else is lost). A second key for the anchor
+  would have kept v0.5.0's millisecond, but two writes per pause aren't
+  atomic.
 - Keys are at most 15 characters (NVS's limit).
 
 The keys of schema 1, by namespace: `meta` (schema); `input` (cal,
@@ -1098,7 +1267,7 @@ a beta); the README has how to cut one.
   changed). With no `v*` tag reachable, `--always` gives only a hash, and
   the build reads `v<NEXT_RELEASE>-dev+abc1234[-dirty]`; `NEXT_RELEASE`, at
   the top of the script, is the only place a version is written by hand.
-  Without git at all: `v0.5.0-dev+nogit`.
+  Without git at all: `v0.6.0-dev+nogit`.
 - **One file recompiles.** The script writes
   `$BUILD_DIR/generated/PlayerVersion.h` (`PLAYER_VERSION`, the commit,
   its date and time in UTC), rewritten only when its text changes, and
@@ -1239,7 +1408,21 @@ the browsing UI hold its **track ids**, never strings.
   through it: Play starts the new queue; removing the current entry plays the next one that stayed (paused: it
   is cued; none left after it: stop); Clear stops; undo returns to the entry
   that was current if the one playing isn't in the restored queue. Play next,
-  + Queue and Clear up next change nothing that plays. `HeadsetKeys` works
+  + Queue and Clear up next change nothing that plays, though they may
+  change what comes next. **Gapless playback** ([GAPLESS.md](GAPLESS.md)):
+  while the backend holds the current entry's track the player tells it
+  what `advance()` would start next (`setNext()`: worked out again only
+  when the queue, repeat, "pause after this track", the gapless switch or
+  the sleep timer's gate change; the same track still next keeps its
+  token, even when a library rebuild gives it a new key), and the backend
+  joins it on at the file's end. When the backend reports that the join
+  is heard (`takeAdvance()`, at the top of `update()` and of every
+  action), the player does what `update()` would do at the track's natural
+  end right then: the boundary's pause if "pause after this track" or the
+  timer ends here; `advance()` if the joined track isn't what comes next
+  any more (an edit that came too late to take it back out: Play next's
+  track still plays next); otherwise the joined entry becomes current with
+  no `play()`. A next pressed just after a join skips the track heard. `HeadsetKeys` works
   unchanged on top (`cueNext()`/`cuePrev()` move the current entry). A
   `Hold` (main.cpp's: Bluetooth is the output and the headphones aren't
   connected) turns every play into **Waiting**, a state of its own (not
@@ -1263,9 +1446,13 @@ the browsing UI hold its **track ids**, never strings.
   generation, so a track change doesn't rewrite the file and a position is
   never paired with an older file. The **resume point** goes to NVS too
   ("queue"/"resume", one blob: generation, line, the path's FNV-1a hash,
-  ms, the length then): written at every pause (the player's
-  `resumePoint()`: a paused track's position, or a start point that
-  waits), so at every orderly shutdown (the CPU speed's restart pauses
+  ms, the length then, and its **anchor**: the bytes that start the track
+  on the very sample it paused at, SEEK.md section 5): written at every
+  pause (the player's `resumePoint()`: a paused track's position and the
+  backend's anchor for it, `resumeAnchor()`, from the run index at the
+  read position; or a start point that waits, with its own), and once
+  more if only the anchor's sample moved (the pause's fade reads 64 frames
+  more), so at every orderly shutdown (the CPU speed's restart pauses
   first; the idle power-off comes only paused or stopped; the sleep
   timer's end is a pause), and removed as soon as playback moves on (a
   play, a skip, another entry, an edit that changes the current entry).
@@ -1275,9 +1462,10 @@ the browsing UI hold its **track ids**, never strings.
   queue as it is, and again (at its new line) after an edit that only
   moved the entry. At boot one saved for the restored file's current line,
   whose track still has that path, becomes the player's **start point**
-  (`setStartPoint()`): stopped, nothing plays, Now Playing shows that second
-  and the length saved with it, and the next play starts there (the fade-in
-  as always). It belongs to that entry's key: next, another entry, or an
+  (`setStartPoint()`, with its anchor): stopped, nothing plays, Now Playing
+  shows that second and the length saved with it, and the next play
+  starts there (the fade-in as always): by the anchor when it is still
+  this file's, else by the second. It belongs to that entry's key: next, another entry, or an
   edit that changes the current entry drops it; prev on it (the Core2's or
   the headphones') goes to 0:00 of the same entry, whatever the second, and
   starts nothing: stopped stays stopped, as a paused track's restart does
@@ -1285,11 +1473,13 @@ the browsing UI hold its **track ids**, never strings.
   carries it across the rebuild. It applies
   after any boot with one saved: the CPU speed's restart, the idle
   power-off, the power key while paused. Console: `q` and `l` print it
-  (`[queue] resume point saved: 1:23 into 5 (generation 12); start point
-  waiting: none`);
+  (`[queue] resume point saved: 1:23.456 into 5 (generation 12): MP3 frame
+  at 2345678 + 517 samples, preroll 2343590, exact; start point waiting:
+  none`);
   `qs<sec>` sets a start point on the current entry (playing: it starts
   there now), with the length as known (the held track's, else the
-  catalog's), to check the seek without a restart; `qs0` clears it. A
+  catalog's) and no anchor (a seek: a second the run decoded is exact by
+  its index), to check the seek without a restart; `qs0` clears it. A
   dropped start point stays dropped: an undo that brings its entry back
   doesn't bring the second back.
   After a restart the queue is where it
@@ -2217,7 +2407,12 @@ until the Bluetooth power row is next tapped (it replaces them).
 **At boot** (app/BoardPower, docs/ENERGY.md item 9) the BMI270 is
 suspended and the 5 V boost is off (`cfg.output_power = false`); the green
 LED is off (M5Unified's default). One line says so: `[power] boot: IMU
-suspended, 5 V boost (EXTEN) off, green LED off`.
+suspended, 5 V boost (EXTEN) off, green LED off`. A second one reads the
+touch controller's power registers: `[power] touch: ctrl=1 monitor_after=30s
+period_active=10 period_monitor=40 mode=Active (to Monitor by itself after
+30 s untouched)` on this Core2. The chip drops to Monitor, its slow scan,
+by itself, so the firmware doesn't set it (docs/ENERGY.md section 5, Audit
+2: measured).
 
 **The knobs** (each says what it was and what it is now, and is undone by
 its opposite; only `Pcb` is saved):
@@ -2232,6 +2427,7 @@ its opposite; only `Pcb` is saved):
 | `Pe0` / `Pe1` | the 5 V boost (EXTEN, M-Bus/Grove 5 V) | M5Unified's setExtOutput(); off from boot (`cfg.output_power = false`) |
 | `Pg0` / `Pg1` | the green LED | off at boot |
 | `Pi0` / `Pi1` | the BMI270 IMU suspended / on | suspended from boot (app/BoardPower); nothing reads it |
+| `Pf` / `Pf0` / `Pf1` | the FT6336U touch controller: its power registers / Active / Monitor now | Monitor is its slow scan (a touch takes it back to Active); 3, Hibernate, is refused (only a reset brings it out, and its reset line is the LCD's); with `ctrl=1` the chip returns to Monitor by itself 30 s after the last touch, so an Active A/B repeats `Pf0`; the P line's `touch=` is the mode last read or written |
 | `Pa0` / `Pa1` | the speaker amp (NS4168 enable, AXP192 GPIO2) and M5.Speaker's I2S | by itself it goes off 2 s after the speaker goes quiet; `Pa0` off as soon as it is quiet (no 2 s wait); `Pa1` on (zeros, silent) and held on, through playing and pausing, until `Pa0` (`amp=held`) |
 | `Pd<ms>` | the loop's idle delay while nothing animates (1-100) | `Pd0` the UI's own (~5 ms); never while a list moves or the Dance tab is up |
 | `Pk0` / `Pk1` | the dance beat tracker (and so the outputs' taps) | the taps are on only while the Dance tab is up and the tracker is on |
@@ -2258,6 +2454,30 @@ their own (the player stopped first, so nothing follows them).
   name that no longer matches; a build logs `iram_diet: 51 of 51 libc
   objects moved to flash`. About 7 KB of IRAM is left. Adding WiFi will need more: likely pioarduino's
   `custom_sdkconfig` to rebuild the framework without the workaround.
+- **`tools/no_psram_fix.py`** (a pre-script) compiles everything
+  PlatformIO builds (src/, lib/core, the libraries, the Arduino core)
+  without that workaround's `-mfix-esp32-psram-cache-issue`, a `memw`
+  after every 8- and 16-bit store; the link keeps it, so the prebuilt
+  libs and the IRAM layout don't move. It needs a rev-3 chip, so
+  `setup()` halts first on an older one (docs/ENERGY.md section 5, P3a).
+- **Flash: QIO at 80 MHz** from 0.6.0 (`[env:core2]`; docs/ENERGY.md
+  section 5, P2; measured: list scrolling with an MP3 +65 % at 240, MP3
+  decode -9 %). The QIO bootloader (`bootloader_qio_80m.elf`) switches
+  the flash to quad itself; its header, like the app's, says DIO, which
+  the ROM reads it with, and the app links the `qio_qspi` libs.
+  **`[env:core2-dio]`** is the same firmware in DIO at 40 MHz, as M5
+  ships the Core2 and as v0.5.0 was released: CI builds it beside core2
+  and every release carries it as `…-dio-full.bin`, for a Core2 whose
+  flash can't take QIO (it keeps restarting; the ROM's download mode
+  still takes a USB flash). The web installer writes the QIO image.
+  `flash_guard` checks the bootloader against the env (its header's
+  frequency; the QIO code only in a QIO build) and records the mode in
+  `firmware.parts.json`; `tools/package_release.py` refuses a core2 that
+  isn't QIO, a core2-dio that isn't DIO, or two builds of different
+  sources. DIO at 80 MHz (the old `[env:core2-dio80]`, dropped) benched
+  the same as at 40: the app runs the flash at 80 MHz after the PSRAM
+  init either way. `[env:core2-psramfix]` builds the image with the PSRAM
+  workaround kept (P3a's "before"), QIO like core2.
 - **`tools/flash_guard.py`** checks the flash layout after every build: the
   app's room in its slot, the merged `firmware.factory.bin`, NVS above it
   ([Flash layout](#flash-layout)).
@@ -2266,7 +2486,7 @@ their own (the player stopped first, so nothing follows them).
   ([Versions](#versions)).
 - **CI** (`.github/workflows/firmware.yml`, GitHub Actions on
   ubuntu-24.04): every push, pull request and `v*` tag runs the host
-  tests, the core2 build (`RELEASE=1` on a tag) and
+  tests, the core2 and core2-dio builds (`RELEASE=1` on a tag) and
   `tools/package_release.py`, and keeps `dist/` as the run's artifact. A
   tag then makes the GitHub Release and, when it is the newest full
   release (the highest `vX.Y.Z` tag; not a `-rc.1`), marks it Latest and
@@ -2288,9 +2508,16 @@ their own (the player stopped first, so nothing follows them).
   `generated/PlayerVersion.h`, and the pieces from `firmware.parts.json`,
   which `flash_guard` writes once it has checked each piece (bootloader,
   table, boot_app0 from the framework, app) is byte for byte the merged
-  image at its offset. It refuses a build whose `firmware.bin` app
-  description doesn't hold that version and `firmware.elf`'s SHA-256 (a
-  stale build directory). It also packs the source tarball: the
+  image at its offset, with the env's flash mode. It refuses a build whose
+  `firmware.bin` app description doesn't hold that version and
+  `firmware.elf`'s SHA-256 (a stale build directory). It packages two
+  builds: core2 (QIO: every file but one) and core2-dio, whose merged
+  image is the release's `…-dio-full.bin` (with its own `…-dio-elf.zip`:
+  the ELFs differ). The DIO build gets the same checks against its own
+  pieces, and must be the same source as core2 (version, tag, commit,
+  release flag, its `lib_deps` checkouts at the same pins); core2 must be
+  QIO and core2-dio DIO (`firmware.parts.json`'s mode and the QIO code in
+  the bootloader), so swapped or stale builds are refused. It also packs the source tarball: the
   repository's files (`git ls-files`), each git-pinned `lib_deps` checkout
   (its `.git/HEAD` must be the `platformio.ini` pin) and, found through the
   build's `.d` files, the Arduino core's `cores/esp32`, the board variant
@@ -2301,8 +2528,9 @@ their own (the player stopped first, so nothing follows them).
   and the notes are templates (`site/index.html`,
   `.github/release-notes.md`) with `{{NAME}}` placeholders; an unknown one
   fails the packaging.
-- **The install page** is ESP Web Tools with one part, the merged image at
-  0x0: safe for updates because NVS sits above anything it writes ([Flash
+- **The install page** is ESP Web Tools with one part, the merged QIO
+  image at 0x0 (the page and the release notes name the
+  `…-dio-full.bin` for a Core2 that keeps restarting): safe for updates because NVS sits above anything it writes ([Flash
   layout](#flash-layout)). `new_install_prompt_erase` makes the dialog ask
   whether to erase (yes for a first install over other firmware, no to
   update), and `new_install_improv_wait_time: 0` skips its Improv probe

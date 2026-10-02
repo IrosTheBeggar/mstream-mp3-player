@@ -41,6 +41,11 @@ class ScreenControl;
 //   Pe0 / Pe1  the 5 V boost (EXTEN, the M-Bus/Grove 5 V) off / on (off from boot)
 //   Pg0 / Pg1  the green LED off / on (off from boot)
 //   Pi0 / Pi1  the IMU (BMI270) suspended / on (suspended from boot)
+//   Pf         the touch controller (FT6336U): its power registers, read now
+//   Pf0 / Pf1  its mode Active / Monitor now (Monitor: the slow scan; a touch
+//              takes it back to Active); 3, Hibernate, is refused
+//              (this Core2's chip goes back to Monitor by itself 30 s after
+//              the last touch: 0x86 = 1, 0x87 = 30)
 //   Pa0 / Pa1  the speaker amp (and M5.Speaker's I2S) off once quiet, without
 //              the 2 s wait / on and held on until Pa0 (zeros: silent)
 //   Pd<ms>     the loop's idle delay when nothing animates, 1-100 (Pd0: the UI's own)
@@ -79,6 +84,7 @@ private:
   void exten(const char* a);
   void led(const char* a);
   void imu(const char* a);
+  void touch(const char* a);
   void amp(const char* a);
   void loopDelay(const char* a);
   void taps(const char* a);

@@ -25,10 +25,12 @@
 //   for a newer queue than the file holds (an edit not yet written) is
 //   never paired with the older file.
 // - The resume point: NVS ("queue"/"resume": generation, line, path hash,
-//   ms, length), written at a pause and removed when playback moves on
-//   (QueueSaver says when). At boot, one saved for the restored file's
-//   current line, whose track is still that file, becomes the player's
-//   start point: Now Playing shows that second, and play starts there.
+//   ms, length, and its anchor: nvslayout's version 2), written at a pause
+//   and removed when playback moves on (QueueSaver says when). At boot, one
+//   saved for the restored file's current line, whose track is still that
+//   file, becomes the player's start point with its anchor: Now Playing
+//   shows that second, and play starts there, on the very sample when the
+//   anchor is still the file's (docs/SEEK.md section 5).
 // When and what to write is QueueSaver's (lib/core, host-tested); this is
 // its card and NVS. After a boot the queue is where it was, stopped (at
 // the second it paused at, if it did): nothing starts by itself.

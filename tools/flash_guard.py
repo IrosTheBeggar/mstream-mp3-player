@@ -19,10 +19,17 @@ built, this fails the build (and any upload) if:
 - the app fills more than FAIL_AT of its slot (a warning from WARN_AT): the
   slots can't grow later, so a release needs room for the next one;
 - a piece of the merged image (bootloader, table, boot_app0, app) isn't the
-  file a release also ships on its own.
+  file a release also ships on its own;
+- the bootloader isn't the one the env's flash settings ask for: its header
+  must say board_build.f_flash's frequency, and DIO for a qio or dio env
+  (the ROM reads the bootloader in DIO; a QIO bootloader turns quad on
+  itself, so its header says DIO too), and only a qio env's bootloader
+  holds the code that turns quad on (QIO_MARKER: the header can't tell
+  them apart).
 
 Once the check passes it writes firmware.parts.json next to the image: each
-piece's offset and file, which tools/package_release.py packages.
+piece's offset and file, and the env's flash mode and frequency, which
+tools/package_release.py packages and checks (core2 QIO, core2-dio DIO).
 
 The table is read from the build's partitions.bin (made from partitions.csv),
 not written down here a second time; this file only names what the firmware
@@ -47,6 +54,14 @@ APP, DATA = 0x00, 0x01
 APP_FACTORY, APP_OTA_0, APP_OTA_1 = 0x00, 0x10, 0x11
 DATA_OTA, DATA_NVS, DATA_COREDUMP, DATA_SPIFFS = 0x00, 0x02, 0x03, 0x82
 
+# An image header's byte 2 (the SPI mode) and byte 3's low nibble (the
+# frequency), in esptool's ESP32 image format.
+HEADER_MODES = {0: "qio", 1: "qout", 2: "dio", 3: "dout"}
+HEADER_FREQS = {0x0: "40m", 0x1: "26m", 0x2: "20m", 0xF: "80m"}
+# A log string of bootloader_enable_qio_mode(), which only a QIO bootloader
+# (bootloader_qio_<freq>.elf) links. tools/package_release.py checks it too.
+QIO_MARKER = b"not enabling QIO mode"
+
 ENTRY = struct.Struct("<HBBII16sI")  # magic, type, subtype, offset, size, label, flags
 ENTRY_MAGIC = 0x50AA
 MD5_MAGIC = 0xEBEB
@@ -70,6 +85,14 @@ def parse_table(blob):
             "size": size,
         })
     return parts
+
+
+def flash_config(env):
+    """(mode, frequency) the env builds for: ("qio", "80m"), ("dio", "40m")."""
+    board = env.BoardConfig()
+    mode = str(board.get("build.flash_mode", "dio")).lower()
+    hz = int(str(board.get("build.f_flash", "40000000L")).rstrip("Ll"))
+    return mode, f"{hz // 1000000}m"
 
 
 def mb(n):
@@ -115,6 +138,29 @@ def check(env, fw_path, factory_path, table_path):
         if factory[off:off + len(piece)] != piece:
             errors.append(f"the merged image at {off:#x} isn't {os.path.basename(p)} (the pieces a release "
                           "also ships separately)")
+
+    # --- the bootloader is the one the env's flash settings ask for ---
+    mode, freq = flash_config(env)
+    boot = next((off for off, p in extras if os.path.basename(p) == "bootloader.bin"), None)
+    if boot is None:
+        errors.append("the merged image has no bootloader.bin (FLASH_EXTRA_IMAGES)")
+    elif len(factory) < boot + 4 or factory[boot] != 0xE9:
+        errors.append(f"the merged image has no image header at {boot:#x} (the bootloader)")
+    else:
+        hdr_mode = HEADER_MODES.get(factory[boot + 2], f"{factory[boot + 2]:#04x}")
+        hdr_freq = HEADER_FREQS.get(factory[boot + 3] & 0x0F, f"{factory[boot + 3] & 0x0F:#x}")
+        if hdr_freq != freq:
+            errors.append(f"the bootloader's header says {hdr_freq} flash but the env asks for {freq} "
+                          "(board_build.f_flash)")
+        if mode in ("qio", "dio") and hdr_mode != "dio":
+            errors.append(f"the bootloader's header says {hdr_mode}, not dio, for a {mode} build")
+        boot_path = next(p for off, p in extras if off == boot)
+        with open(boot_path, "rb") as f:
+            has_qio = QIO_MARKER in f.read()
+        if mode == "qio" and not has_qio:
+            errors.append("a qio build, but the bootloader has no QIO code (not bootloader_qio_*.elf)")
+        elif mode != "qio" and has_qio:
+            errors.append(f"a {mode} build, but the bootloader has QIO code (bootloader_qio_*.elf)")
 
     # --- the table is the one the firmware expects ---
     def find(ptype, subtype, label=None):
@@ -201,19 +247,23 @@ def flash_guard(source, target, env):
         sys.stderr.write("flash_guard: the flash layout check failed (partitions.csv, tools/flash_guard.py)\n")
         return 1
     write_parts(env, fw_path, factory_path)
-    print(f"flash_guard: ok: {summary}")
+    mode, freq = flash_config(env)
+    print(f"flash_guard: ok: {summary}; flash {mode.upper()} at {freq[:-1]} MHz")
     return 0
 
 
 def write_parts(env, fw_path, factory_path):
     """$BUILD_DIR/${PROGNAME}.parts.json: where each piece of the merged image
-    goes, for tools/package_release.py (boot_app0.bin lives in the framework,
-    not the build directory). Written only once the pieces are checked."""
+    goes, and the flash mode and frequency, for tools/package_release.py
+    (boot_app0.bin lives in the framework, not the build directory). Written
+    only once the pieces are checked."""
     parts = [{"offset": f"{int(str(off), 0):#x}", "path": os.path.abspath(env.subst(p))}
              for off, p in env.get("FLASH_EXTRA_IMAGES", [])]
     parts.append({"offset": f"{int(env.subst('$ESP32_APP_OFFSET') or '0x10000', 0):#x}",
                   "path": os.path.abspath(fw_path)})
+    mode, freq = flash_config(env)
     text = json.dumps({"merged": os.path.abspath(factory_path),
+                       "flash_mode": mode, "flash_freq": freq,
                        "parts": sorted(parts, key=lambda p: int(p["offset"], 16))}, indent=2) + "\n"
     out = os.path.splitext(fw_path)[0] + ".parts.json"
     try:

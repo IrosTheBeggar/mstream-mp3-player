@@ -124,6 +124,16 @@
       were are kept.</li>
   </ul>
 
+  <h2>Keeps restarting?</h2>
+  <p>If your Core2 keeps restarting after installing, flash the
+    <code>-dio-full.bin</code> instead (same firmware, slower flash mode):
+    <code>{{DIO_FULL_BIN}}</code> from the
+    <a href="{{RELEASE_URL}}">release's files</a>, with
+    <code>esptool --chip esp32 -b 921600 write-flash 0x0 {{DIO_FULL_BIN}}</code>.
+    The settings are kept. This installer writes the faster QIO flash mode,
+    which only one Core2 has been tried with; M5Stack ships the Core2 in
+    DIO.</p>
+
   <h2>No port shows up?</h2>
   <ul>
     <li>Use a cable that carries data: some USB-C cables only charge.</li>

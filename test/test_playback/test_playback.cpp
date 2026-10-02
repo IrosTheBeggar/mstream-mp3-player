@@ -34,6 +34,25 @@ public:
   // take(), positionKnown() is false and the position is the last track's.
   bool asyncStarts = false;
   bool pending = false;
+  // Resume anchors (docs/SEEK.md): off, this fake has none, as the others
+  // (IAudioBackend's defaults). The anchor the last play() was handed, and
+  // the one resumeAnchor() gives for the held track.
+  bool anchorsOn = false;
+  ResumeAnchor lastAnchor;
+  int anchoredPlays = 0;
+  ResumeAnchor held;
+
+  bool play(const std::string& p, const StartAt& at) override {
+    if (!anchorsOn) return IAudioBackend::play(p, at);
+    lastAnchor = at.anchor;
+    if (at.anchor.valid()) ++anchoredPlays;
+    return play(p, at.hintMs, at.ms);
+  }
+  bool resumeAnchor(ResumeAnchor* out) const override {
+    if (!anchorsOn || !held.valid()) return false;
+    *out = held;
+    return true;
+  }
 
   bool play(const std::string& p, uint32_t hintMs, uint32_t startMs) override {
     lastPath = p;
@@ -72,6 +91,18 @@ public:
   bool finished() const override { return finishedFlag; }
   bool failed() const override { return failedFlag; }
   RateRefusal rateRefusal() const override { return failedFlag ? refusal : RateRefusal{}; }
+  // Gapless playback: the words the player sends, and joins it is told
+  // were heard (advances, taken once each).
+  std::vector<Next> nexts;
+  std::vector<uint32_t> advances;
+  void setNext(const Next& n) override { nexts.push_back(n); }
+  bool takeAdvance(uint32_t* token) override {
+    if (advances.empty()) return false;
+    *token = advances.front();
+    advances.erase(advances.begin());
+    position = 0;  // the joined track's, from its start
+    return true;
+  }
 };
 
 // A library of up to three tracks at the root ("/music/a.mp3" is id 0, b 1,
@@ -584,6 +615,66 @@ void test_pause_by_timer_marks_the_pause() {
   TEST_ASSERT_FALSE(r.player.pausedByTimer());
 }
 
+
+// pauseByComputer() (the USB visualizer's entry) never starts anything:
+// Playing pauses, Waiting ends paused (both marked the computer's), Paused
+// and Stopped stay as they are with their marks, a cued entry stays cued.
+// Any play clears the mark.
+void test_pause_by_computer_never_starts_playback() {
+  Rig r(3);
+  r.player.pauseByComputer();  // stopped: stays stopped
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  TEST_ASSERT_FALSE(r.player.pausedByComputer());
+  r.player.play(1);
+  r.player.pauseByComputer();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_TRUE(r.audio.paused);
+  TEST_ASSERT_TRUE(r.player.pausedByComputer());
+  TEST_ASSERT_TRUE(r.player.pausedNotByListener());
+  TEST_ASSERT_FALSE(r.player.pausedByTimer());
+  r.player.pauseByComputer();  // paused: stays paused (togglePlayPause() would resume)
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_TRUE(r.audio.paused);
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  r.player.cueNext();  // paused on a cued entry: stays cued, nothing starts, still the computer's
+  r.player.pauseByComputer();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
+  TEST_ASSERT_TRUE(r.player.pausedByComputer());
+  r.player.togglePlayPause();  // the Core2's play: cleared
+  TEST_ASSERT_FALSE(r.player.pausedByComputer());
+  r.player.togglePlayPause();  // the listener's own pause: not the computer's
+  r.player.pauseByComputer();  // ... and stays theirs
+  TEST_ASSERT_FALSE(r.player.pausedByComputer());
+  TEST_ASSERT_FALSE(r.player.pausedNotByListener());
+
+  // Waiting for the headphones: ends paused, and nothing played meanwhile.
+  TestHold hold;
+  r.player.setHold(&hold);
+  hold.hold = true;
+  r.player.play(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Waiting, (int)r.player.state());
+  const int plays = r.audio.playCount;
+  r.player.pauseByComputer();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_TRUE(r.player.pausedByComputer());
+  hold.hold = false;
+  r.player.release();  // (a release after it: nothing waits any more)
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(plays, r.audio.playCount);
+  r.player.stop();  // stopped: no mark
+  TEST_ASSERT_FALSE(r.player.pausedByComputer());
+
+  // The sleep timer's pause stays the timer's.
+  r.player.play(0);
+  r.player.pauseByTimer();
+  r.player.pauseByComputer();
+  TEST_ASSERT_TRUE(r.player.pausedByTimer());
+  TEST_ASSERT_FALSE(r.player.pausedByComputer());
+  TEST_ASSERT_TRUE(r.player.pausedNotByListener());
+}
 
 // ---- start points (the resume point after a boot) ----
 
@@ -1277,6 +1368,346 @@ void test_prev_on_a_start_point_goes_to_0_and_starts_nothing() {
   }
 }
 
+// ---- gapless playback: the word on what follows, the heard advance ----
+
+// The word names what advance() would start: the next entry; none at the
+// end without repeat; the same entry in a queue of one with repeat; none
+// while stopped (nothing is sent), with "pause after this track", with the
+// gate shut, or with gapless off.
+void test_gapless_the_word_is_what_advance_would_start() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.update(0);
+  TEST_ASSERT_TRUE(a.nexts.empty());  // stopped: nothing
+  p.play(0);
+  TEST_ASSERT_EQUAL_UINT32(1, a.nexts.size());
+  TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().after);
+  TEST_ASSERT_TRUE(a.nexts.back().token != 0);
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", a.nexts.back().path.c_str());
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(1, a.nexts.size());  // unchanged: not sent again
+  p.play(2);
+  TEST_ASSERT_EQUAL_STRING("/music/a.mp3", a.nexts.back().path.c_str());  // repeat: wraps
+  p.setRepeat(false);
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().token);  // the end: nothing follows
+  p.setRepeat(true);
+  p.setPauseAfterTrack(true);
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().token);
+  p.setPauseAfterTrack(false);
+  p.update(0);
+  TEST_ASSERT_TRUE(a.nexts.back().token != 0);
+  p.setGapless(false);
+  TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().token);
+  p.setGapless(true);
+  TEST_ASSERT_TRUE(a.nexts.back().token != 0);
+  struct Shut : PlaybackController::NextGate {
+    bool endsHere() const override { return true; }
+  } shut;
+  p.setNextGate(&shut);
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().token);
+  p.setNextGate(nullptr);
+  Rig one(1);
+  one.player.play(0);
+  TEST_ASSERT_EQUAL_STRING("/music/a.mp3", one.audio.nexts.back().path.c_str());  // itself, repeated
+}
+
+// The same track still next keeps its token (no cut); another track, or
+// a new play(), gets a new one.
+void test_gapless_tokens() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  const uint32_t t1 = a.nexts.back().token;
+  const uint32_t c = 2;
+  p.addToQueue(&c, 1);  // a, b, c, c: b still next
+  TEST_ASSERT_EQUAL_UINT32(t1, a.nexts.back().token);
+  p.playNext(&c, 1);  // a, c, b, c, c
+  TEST_ASSERT_TRUE(a.nexts.back().token != t1);
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.nexts.back().path.c_str());
+  const uint32_t t2 = a.nexts.back().token;
+  p.play(0);  // a new request: a new token for the same next track
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.nexts.back().path.c_str());
+  TEST_ASSERT_TRUE(a.nexts.back().token != t2);
+}
+
+// A heard advance moves the entry without a play(), keeps the state,
+// drops the start point and names the next one after it.
+void test_gapless_an_advance_moves_the_entry_without_a_play() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  const uint32_t t1 = a.nexts.back().token;
+  a.advances.push_back(t1);
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT(1, a.playCount);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  TEST_ASSERT_EQUAL_UINT32(t1, a.nexts.back().after);  // the word after b
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.nexts.back().path.c_str());
+  TEST_ASSERT_EQUAL_UINT32(1, p.gaplessStats().adopted);
+}
+
+// An advance that isn't what comes next any more (an edit too late to cut
+// it out): what advance() would start is started.
+void test_gapless_a_stale_advance_starts_what_comes_next() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  const uint32_t t1 = a.nexts.back().token;  // b
+  const uint32_t c = 2;
+  p.playNext(&c, 1);  // a, c, b, c
+  a.advances.push_back(t1);
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());  // c (entry 1)
+  TEST_ASSERT_EQUAL_INT(2, a.playCount);
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(1, p.gaplessStats().restarted);
+}
+
+// An advance comes before an action's own work: a next just after a join
+// skips the joined track.
+void test_gapless_actions_take_the_advance_first() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  a.advances.push_back(a.nexts.back().token);
+  p.next();
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.lastPath.c_str());
+}
+
+// With "pause after this track" at the advance (chosen too late to cut
+// the joined track out): the boundary's pause, the joined entry cued.
+void test_gapless_an_advance_with_pause_after_pauses_at_once() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  const uint32_t t1 = a.nexts.back().token;
+  p.setPauseAfterTrack(true);
+  a.advances.push_back(t1);
+  const int stops = a.stopCount;
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT(stops + 1, a.stopCount);
+  TEST_ASSERT_TRUE(p.pausedByTimer());
+  TEST_ASSERT_FALSE(p.pauseAfterTrack());
+}
+
+// A failure after an advance is the joined entry's: the note names it.
+void test_gapless_a_failure_after_an_advance_is_the_new_entry_s() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  a.advances.push_back(a.nexts.back().token);
+  p.update(0);
+  a.failedFlag = true;
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().track);  // b's id
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());          // skipped to c
+}
+
+// ---- resume anchors (docs/SEEK.md section 5) ----
+
+namespace {
+ResumeAnchor anchorAt(uint64_t sample) {
+  ResumeAnchor a;
+  a.kind = ResumeAnchor::Kind::Mp3;
+  a.exact = true;
+  a.rate = 44100;
+  a.sample = sample;
+  a.fileSize = 5000000;
+  a.prerollByte = 100000;
+  a.frameByte = 103000;
+  a.skip = 77;
+  a.frameHash = 0xBEEF;
+  return a;
+}
+}  // namespace
+
+// A start point with an anchor (the resume point after a boot): it reaches
+// the backend with the play, once; QueueSaver reads it back meanwhile.
+void test_a_start_points_anchor_reaches_the_play_once() {
+  Rig r(3);
+  r.audio.anchorsOn = true;
+  r.queue.setCurrent(1);
+  const ResumeAnchor a = anchorAt(3660300);
+  r.player.setStartPoint(83000, 240000, &a);
+  uint32_t ms = 0, dur = 0;
+  ResumeAnchor got;
+  TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur, &got));
+  TEST_ASSERT_TRUE(got == a);
+  got = ResumeAnchor{};
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_TRUE(got == a);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(240000, r.audio.lastHintMs);
+  TEST_ASSERT_TRUE(r.audio.lastAnchor == a);
+  TEST_ASSERT_EQUAL_INT(1, r.audio.anchoredPlays);
+  // Played again: from its start, no anchor.
+  r.player.play(1);
+  TEST_ASSERT_FALSE(r.audio.lastAnchor.valid());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.anchoredPlays);
+}
+
+// The anchor goes with its start point: next, another entry, an edit that
+// changes the entry, prev's restart; a qs (a second without one) replaces
+// an older anchor.
+void test_a_start_points_anchor_goes_with_it() {
+  const ResumeAnchor a = anchorAt(3660300);
+  {
+    Rig r(3);
+    r.audio.anchorsOn = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0, &a);
+    r.player.next();
+    TEST_ASSERT_FALSE(r.audio.lastAnchor.valid());
+    TEST_ASSERT_EQUAL_INT(0, r.audio.anchoredPlays);
+  }
+  {
+    Rig r(3);
+    r.audio.anchorsOn = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0, &a);
+    r.player.play(2);
+    TEST_ASSERT_EQUAL_INT(0, r.audio.anchoredPlays);
+  }
+  {
+    Rig r(3);
+    r.audio.anchorsOn = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0, &a);
+    const uint32_t pos = 1;
+    r.player.remove(&pos, 1);
+    TEST_ASSERT_TRUE(r.player.undo());
+    uint32_t ms, dur;
+    ResumeAnchor got;
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur, &got));
+    r.player.play(1);
+    TEST_ASSERT_EQUAL_INT(0, r.audio.anchoredPlays);
+  }
+  {
+    Rig r(3);
+    r.audio.anchorsOn = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0, &a);
+    r.player.setStartPoint(90000, 0);  // qs90: no anchor
+    uint32_t ms, dur;
+    ResumeAnchor got = a;
+    TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur, &got));
+    TEST_ASSERT_EQUAL_UINT32(90000, ms);
+    TEST_ASSERT_FALSE(got.valid());
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL_UINT32(90000, r.audio.lastStartMs);
+    TEST_ASSERT_FALSE(r.audio.lastAnchor.valid());
+  }
+  {
+    Rig r(3);
+    r.audio.anchorsOn = true;
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, 0, &a);
+    r.player.prev();  // its 0:00
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+    TEST_ASSERT_EQUAL_INT(0, r.audio.anchoredPlays);
+  }
+}
+
+// resumePoint(): while paused, the backend's anchor for the held track
+// (none from a backend without anchors); while a start point waits, its
+// own; playing: nothing.
+void test_the_resume_point_carries_the_held_tracks_anchor() {
+  Rig r(2);
+  r.audio.anchorsOn = true;
+  r.player.play(0);
+  r.audio.position = 42500;
+  r.audio.duration = 200000;
+  r.audio.held = anchorAt(1874250);
+  uint32_t ms = 0, dur = 0;
+  ResumeAnchor got;
+  TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur, &got));  // playing
+  r.player.togglePlayPause();
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_EQUAL_UINT32(42500, ms);
+  TEST_ASSERT_TRUE(got == r.audio.held);
+  r.audio.held = ResumeAnchor{};  // (G0, a built-in track: none)
+  got = anchorAt(1);
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_FALSE(got.valid());
+  // A start point while paused (qs): its own, none.
+  r.audio.held = anchorAt(1874250);
+  r.player.setStartPoint(60000, 0);
+  got = anchorAt(1);
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_EQUAL_UINT32(60000, ms);
+  TEST_ASSERT_FALSE(got.valid());
+}
+
+// stopKeepingPlace() (the benches borrow the backend): the start point it
+// sets keeps the backend's anchor, which the next play gets; none while
+// the backend hasn't taken its start up yet.
+void test_stop_keeping_place_keeps_the_backends_anchor() {
+  {
+    Rig r(2);
+    r.audio.anchorsOn = true;
+    r.player.play(0);
+    r.audio.position = 42500;
+    r.audio.held = anchorAt(1874250);
+    r.player.togglePlayPause();
+    TEST_ASSERT_TRUE(r.player.stopKeepingPlace());
+    uint32_t ms = 0, dur = 0;
+    ResumeAnchor got;
+    TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur, &got));
+    TEST_ASSERT_EQUAL_UINT32(42500, ms);
+    TEST_ASSERT_TRUE(got == r.audio.held);
+    r.player.togglePlayPause();
+    TEST_ASSERT_TRUE(r.audio.lastAnchor == anchorAt(1874250));
+  }
+  {
+    Rig r(2);
+    r.audio.anchorsOn = true;
+    r.audio.asyncStarts = true;
+    r.audio.held = anchorAt(1874250);
+    r.player.play(0);
+    r.player.setStartPoint(30000, 0);  // playing: starts there (not taken up yet)
+    TEST_ASSERT_TRUE(r.player.stopKeepingPlace());
+    uint32_t ms = 0, dur = 0;
+    ResumeAnchor got = anchorAt(1);
+    TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur, &got));
+    TEST_ASSERT_EQUAL_UINT32(30000, ms);
+    TEST_ASSERT_FALSE(got.valid());
+  }
+}
+
+// A backend without anchors (every fake but this one's anchorsOn): starts
+// and resume points as before, by the millisecond.
+void test_a_backend_without_anchors_is_as_before() {
+  Rig r(2);
+  const ResumeAnchor a = anchorAt(3660300);
+  r.player.setStartPoint(83000, 240000, &a);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(83000, r.audio.lastStartMs);  // the 3-argument play()
+  TEST_ASSERT_EQUAL_UINT32(240000, r.audio.lastHintMs);
+  r.audio.position = 90000;
+  r.player.togglePlayPause();
+  uint32_t ms = 0, dur = 0;
+  ResumeAnchor got = a;
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_EQUAL_UINT32(90000, ms);
+  TEST_ASSERT_FALSE(got.valid());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
@@ -1313,6 +1744,7 @@ int main(int, char**) {
   RUN_TEST(test_pause_after_this_track_survives_a_skip_and_a_failure);
   RUN_TEST(test_pause_after_the_last_track_without_repeat_stops);
   RUN_TEST(test_pause_by_timer_marks_the_pause);
+  RUN_TEST(test_pause_by_computer_never_starts_playback);
   RUN_TEST(test_a_start_point_waits_for_the_next_play);
   RUN_TEST(test_a_start_point_belongs_to_its_entry);
   RUN_TEST(test_a_start_point_while_playing_or_paused);
@@ -1337,5 +1769,17 @@ int main(int, char**) {
   RUN_TEST(test_a_restart_keeps_the_sleep_timers_pause_after_this_track);
   RUN_TEST(test_a_restart_leaves_the_queues_undo_alone);
   RUN_TEST(test_prev_on_a_start_point_goes_to_0_and_starts_nothing);
+  RUN_TEST(test_gapless_the_word_is_what_advance_would_start);
+  RUN_TEST(test_gapless_tokens);
+  RUN_TEST(test_gapless_an_advance_moves_the_entry_without_a_play);
+  RUN_TEST(test_gapless_a_stale_advance_starts_what_comes_next);
+  RUN_TEST(test_gapless_actions_take_the_advance_first);
+  RUN_TEST(test_gapless_an_advance_with_pause_after_pauses_at_once);
+  RUN_TEST(test_gapless_a_failure_after_an_advance_is_the_new_entry_s);
+  RUN_TEST(test_a_start_points_anchor_reaches_the_play_once);
+  RUN_TEST(test_a_start_points_anchor_goes_with_it);
+  RUN_TEST(test_the_resume_point_carries_the_held_tracks_anchor);
+  RUN_TEST(test_stop_keeping_place_keeps_the_backends_anchor);
+  RUN_TEST(test_a_backend_without_anchors_is_as_before);
   return UNITY_END();
 }

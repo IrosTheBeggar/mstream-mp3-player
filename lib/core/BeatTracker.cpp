@@ -14,8 +14,7 @@ constexpr double kPi = 3.14159265358979;
 constexpr float kLevelSeconds = 1.5f;   // the level a rise must reach to count in full
 constexpr float kMeanSeconds = 3.0f;    // the onset signal's mean (removed before correlating)
 constexpr float kFloorDbfs = -50.0f;    // quieter than this counts as silence
-constexpr float kDcHz = 5.0f;
-constexpr float kMidWeight = 0.5f;      // the mid band's onsets, relative to the low band's
+constexpr float kMidWeight = 1.0f;      // the mid band's onsets, relative to the low band's
 constexpr float kLinearWeight = 0.05f;  // the low band's linear rise (units of its level), added
 
 // Tempo.
@@ -47,15 +46,20 @@ constexpr double kPeriodClamp = 0.04;
 
 // Confidence.
 constexpr float kConfSeconds = 3.0f;
-constexpr float kSalienceLow = 2.2f;    // onsets on the beat vs an average phase: noise ~1
-constexpr float kSalienceHigh = 3.5f;
-constexpr float kJitterLow = 0.03f;     // RMS PLL correction, in periods
-constexpr float kJitterHigh = 0.08f;
-constexpr float kClarityFull = 0.2f;
-constexpr float kLockOn = 0.55f;
-constexpr float kLockOff = 0.3f;
+constexpr float kDominanceLow = 1.0f;   // the beat phase's onsets vs the strongest quarter phase
+constexpr float kDominanceHigh = 1.8f;
+constexpr float kHitLow = 0.3f;         // share of recent PLL beats with an onset
+constexpr float kHitHigh = 0.8f;
+constexpr float kHitRise = 0.2f;        // per beat; a miss counts faster than a hit
+constexpr float kHitFall = 0.35f;
+constexpr float kPulseLow = 1.2f;       // the beat phase (3 bins) vs an average bin
+constexpr float kPulseHigh = 2.5f;
+constexpr float kLockOn = 0.35f;
+constexpr float kLockOff = 0.12f;
+constexpr float kWeak = 0.1f;
 constexpr int kWeakBeatsToDrop = 12;
 constexpr int kBeatsToLock = 2;         // PLL beats after acquiring before it may lock
+constexpr int kAboveToLock = 2;         // ... and beats in a row at kLockOn or more
 constexpr float kMissJitter = 0.1f;     // a beat with no onset counts as this far off
 
 float clamp01(float x) { return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); }
@@ -63,17 +67,6 @@ float clamp01(float x) { return x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x); }
 // Leaky-average coefficient for a time constant, per step at `rate` steps/s.
 float alphaFor(float seconds, double rate) { return static_cast<float>(1.0 - std::exp(-1.0 / (seconds * rate))); }
 
-void lowpass(float fs, float hz, float q, float* b0, float* b1, float* b2, float* a1, float* a2) {
-  const double w0 = 2.0 * kPi * hz / fs;
-  const double alpha = std::sin(w0) / (2.0 * q);
-  const double c = std::cos(w0);
-  const double a0 = 1.0 + alpha;
-  *b0 = static_cast<float>((1.0 - c) / 2.0 / a0);
-  *b1 = static_cast<float>((1.0 - c) / a0);
-  *b2 = *b0;
-  *a1 = static_cast<float>(-2.0 * c / a0);
-  *a2 = static_cast<float>((1.0 - alpha) / a0);
-}
 }  // namespace
 
 double BeatTracker::Grid::offsetFromNearestBeat(uint32_t frame) const {
@@ -105,9 +98,10 @@ bool BeatTracker::begin(const Config& config, void* (*alloc)(size_t), void (*rel
   if (hist_) return true;  // once
   cfg_ = config;
   if (!alloc) alloc = std::malloc;
+  alloc_ = alloc;
   release_ = release ? release : std::free;
   hopRate_ = static_cast<double>(cfg_.sampleRate) / cfg_.hop;
-  hopLen_ = cfg_.hop / cfg_.decimation;
+  fe_.begin(cfg_.sampleRate, cfg_.hop, cfg_.decimation, cfg_.lowpassHz);
   // kHarmonics times the longest period: each tempo is scored at its multiples.
   maxLag_ = static_cast<uint32_t>(std::ceil(kHarmonics * lagOf(cfg_.minBpm))) + 2;
   const auto acquireHops = static_cast<uint32_t>(kAcquireSeconds * hopRate_) + 1;
@@ -132,12 +126,8 @@ bool BeatTracker::begin(const Config& config, void* (*alloc)(size_t), void (*rel
   fadeDecay_ = 1.0f - alphaFor(1.0f, hopRate_);
   confDecay_ = 1.0f - alphaFor(kConfSeconds, hopRate_);
 
-  const float fs = static_cast<float>(cfg_.sampleRate) / cfg_.decimation;
-  // Fourth-order Butterworth as two biquads.
-  lowpass(fs, cfg_.lowpassHz, 0.5412f, &lp1_.b0, &lp1_.b1, &lp1_.b2, &lp1_.a1, &lp1_.a2);
-  lowpass(fs, cfg_.lowpassHz, 1.3066f, &lp2_.b0, &lp2_.b1, &lp2_.b2, &lp2_.a1, &lp2_.a2);
   const float floorAmp = std::pow(10.0f, kFloorDbfs / 20.0f);
-  energyFloor_ = static_cast<float>(hopLen_) * floorAmp * floorAmp;
+  energyFloor_ = static_cast<float>(fe_.hopLength()) * floorAmp * floorAmp;
   reset(0);
   return true;
 }
@@ -145,12 +135,7 @@ bool BeatTracker::begin(const Config& config, void* (*alloc)(size_t), void (*rel
 void BeatTracker::reset(uint32_t originFrame) {
   origin_ = originFrame;
   fed_ = 0;
-  decimSum_ = 0;
-  decimCount_ = 0;
-  hopFill_ = 0;
-  hopEnergy_ = midEnergy_ = 0.0f;
-  dcX_ = dcY_ = 0.0f;
-  lp1_.z1 = lp1_.z2 = lp2_.z1 = lp2_.z2 = 0.0f;
+  fe_.reset();
   hops_ = 0;
   prevEnergy_ = prevMid_ = 0.0f;
   level_ = midLevel_ = 0.0f;
@@ -167,6 +152,9 @@ void BeatTracker::reset(uint32_t originFrame) {
   winSum_ = winMoment_ = 0.0f;
   beatEnergyAvg_ = 0.0f;
   for (float& b : phaseHist_) b = 0.0f;
+  hitRate_ = 0.0f;
+  beatsAbove_ = 0;
+  acquireReads_ = 0;
   jitter_ = 0.0f;
   conf_ = 0.0f;
   locked_ = false;
@@ -195,30 +183,25 @@ BeatTracker::Grid BeatTracker::grid() const {
   return g;
 }
 
+bool BeatTracker::setSampleRate(uint32_t rate) {
+  if (hist_ && rate == cfg_.sampleRate) return true;
+  if (!alloc_ || rate == 0) return false;  // (never begun)
+  Config c = cfg_;
+  c.sampleRate = rate;
+  freeBuffers();
+  return begin(c, alloc_, release_);  // (keeps prior_: fillCandidates() reads it)
+}
+
 void BeatTracker::process(const int16_t* mono, uint32_t frames) {
   if (!hist_) return;
-  const float scale = 1.0f / (32768.0f * static_cast<float>(cfg_.decimation));
-  const float dcPole = 1.0f - 2.0f * static_cast<float>(kPi) * kDcHz * cfg_.decimation / cfg_.sampleRate;
-  for (uint32_t i = 0; i < frames; ++i) {
-    decimSum_ += mono[i];
-    if (++decimCount_ < cfg_.decimation) continue;
-    const float x = static_cast<float>(decimSum_) * scale;
-    decimSum_ = 0;
-    decimCount_ = 0;
-    const float dc = x - dcX_ + dcPole * dcY_;  // DC blocker
-    dcX_ = x;
-    dcY_ = dc;
-    const float y = lp2_.run(lp1_.run(dc));
-    const float mid = dc - y;  // above the low band, up to the decimated Nyquist
-    hopEnergy_ += y * y;
-    midEnergy_ += mid * mid;
-    if (++hopFill_ == hopLen_) {
-      onHop(hopEnergy_, midEnergy_);
-      hopEnergy_ = midEnergy_ = 0.0f;
-      hopFill_ = 0;
-    }
-  }
+  fe_.process(mono, frames, [this](float low, float mid) { onHop(low, mid); });
   fed_ += frames;
+}
+
+void BeatTracker::feedHop(float low, float mid) {
+  if (!hist_) return;
+  onHop(low, mid);
+  fed_ += cfg_.hop;
 }
 
 // The rise in log energy from one hop to the next. The first hop of a rise
@@ -233,8 +216,15 @@ float BeatTracker::rise(float energy, float prev, float level) const {
 }
 
 void BeatTracker::onHop(float energy, float midEnergy) {
-  level_ += (energy - level_) * levelAlpha_;
-  midLevel_ += (midEnergy - midLevel_) * levelAlpha_;
+  // The levels and the onset mean are true means until the leaky ones have
+  // settled: started from zero, a leaky mean sits low for its first seconds,
+  // the centred onsets then come out positive on average, and the
+  // autocorrelation of that is positive at every lag, which the comb
+  // rewards at the shortest lags (noise acquired 185 BPM at 1.9 s, every time).
+  const float fresh = 1.0f / static_cast<float>(hops_ + 1);
+  const float levelAlpha = fresh > levelAlpha_ ? fresh : levelAlpha_;
+  level_ += (energy - level_) * levelAlpha;
+  midLevel_ += (midEnergy - midLevel_) * levelAlpha;
   // Mostly the low band (kick drums, bass); the mid band adds snares and
   // chords, which carry the beat in music with soft kicks. A log rise hardly
   // tells a kick from a quieter note, so a little of the linear rise (in
@@ -246,7 +236,7 @@ void BeatTracker::onHop(float energy, float midEnergy) {
   prevEnergy_ = energy;
   prevMid_ = midEnergy;
   hist_[hops_ & histMask_] = onset;
-  onsetMean_ += (onset - onsetMean_) * meanAlpha_;
+  onsetMean_ += (onset - onsetMean_) * (fresh > meanAlpha_ ? fresh : meanAlpha_);
   updateAcf(onset - onsetMean_);
 
   const double t = hops_;
@@ -381,6 +371,7 @@ bool BeatTracker::acquire(double periodHops) {
   const uint32_t n = hops_ < window ? hops_ : window;
   if (n < 2 || periodHops <= 1.0) return false;
   const uint32_t first = hops_ - n;
+  acquireReads_ = 2 * n;  // the fold and the centroid; the seeds add theirs
   float bins[kPhaseBins] = {};
   for (uint32_t j = first; j < hops_; ++j) {
     const float o = onsetAt(j) - onsetMean_;
@@ -426,43 +417,96 @@ bool BeatTracker::acquire(double periodHops) {
   betterEstimates_ = 0;
   weakBeats_ = 0;
 
-  // Confidence seeded from the last 2 s against this grid.
+  // Confidence seeded from the last 2 s against this grid, so a clear beat
+  // can lock at its second PLL beat. (The fold picked the strongest phase of
+  // this very window, so the seed always vouches for the grid a little;
+  // what keeps noise out is that noise no longer acquires a grid at all,
+  // see onHop().)
   for (float& b : phaseHist_) b = 0.0f;
-  float windowEnergy = 0.0f;
   const auto seedHops = static_cast<uint32_t>(2.0 * hopRate_);
   for (uint32_t j = hops_ - (n < seedHops ? n : seedHops); j < hops_; ++j) {
+    ++acquireReads_;
     const float o = onsetAt(j) - onsetMean_;
     updateConfidence(j, o > 0.0f ? o : 0.0f);
   }
-  // The typical onset energy of a beat window, for telling hits from misses.
-  const double beatsInWindow = n / periodHops;
-  for (uint32_t j = first; j < hops_; ++j) {
-    const float o = onsetAt(j) - onsetMean_;
-    if (o <= 0.0f) continue;
-    double d = std::fmod(static_cast<double>(j) - phase, periodHops);
-    if (d < 0.0) d += periodHops;
-    if (d >= periodHops / 2) d -= periodHops;
-    if (std::fabs(d) <= kWindow * periodHops) windowEnergy += o;
-  }
-  beatEnergyAvg_ = beatsInWindow > 0.0 ? static_cast<float>(windowEnergy / beatsInWindow) : 0.0f;
+  seedBeatStats(phase, periodHops, first);
+  beatsAbove_ = 0;
   jitter_ = 0.02f * 0.02f;
   conf_ = rawConfidence();
   return true;
 }
 
-// The three signs of a real beat, each 0..1, multiplied: onsets gathered on
-// the beat (the grid's phase holds several times the onset energy of an
-// average phase; noise gives about 1, and eighths or sixteenths between the
-// beats still leave the beat standing out), small PLL corrections, and a
-// clear tempo peak.
-float BeatTracker::rawConfidence() const {
+// The typical onset energy of a beat window and the share of beats with
+// one, from the acquisition window on the grid just found: what the PLL
+// would have measured, so the lock needn't wait for it.
+void BeatTracker::seedBeatStats(double phase, double periodHops, uint32_t first) {
+  constexpr int kMaxBeats = 16;  // 3 s at 200 BPM is 10
+  float in[kMaxBeats] = {};
+  int beats = 0;
+  // Straight to the first beat whose window reaches the acquisition window
+  // (`phase` is within a beat of hop 0, and a gapless album never resets:
+  // stepping there a beat at a time cost more with every hour played), and
+  // only the hops inside each beat's window.
+  const double w = kWindow * periodHops;
+  const double skip = std::ceil((static_cast<double>(first) - w - phase) / periodHops);
+  for (double b = phase + (skip > 0.0 ? skip : 0.0) * periodHops;
+       b < static_cast<double>(hops_) && beats < kMaxBeats; b += periodHops) {
+    ++acquireReads_;
+    if (b + w < static_cast<double>(first)) continue;  // (rounding)
+    const double lo = std::ceil(b - w);
+    for (uint32_t j = lo > first ? static_cast<uint32_t>(lo) : first; j < hops_ && j <= b + w; ++j) {
+      ++acquireReads_;
+      const float o = onsetAt(j) - onsetMean_;
+      if (o > 0.0f) in[beats] += o;
+    }
+    ++beats;
+  }
+  float total = 0.0f;
+  for (int i = 0; i < beats; ++i) total += in[i];
+  beatEnergyAvg_ = beats > 0 ? total / static_cast<float>(beats) : 0.0f;
+  int hits = 0;
+  for (int i = 0; i < beats; ++i) hits += isHit(in[i]) ? 1 : 0;
+  hitRate_ = beats > 0 ? static_cast<float>(hits) / static_cast<float>(beats) : 0.0f;
+}
+
+// A beat with an onset: its window gathered something against the typical beat.
+bool BeatTracker::isHit(float inWindow) const { return inWindow > 1e-4f && inWindow > 0.25f * beatEnergyAvg_; }
+
+// The histogram's energy in the bin `k` and its neighbours (a sixteenth of
+// a beat each side of a phase).
+float BeatTracker::binsAt(const float* hist, int k) const {
+  return hist[(k + kSalienceBins - 1) % kSalienceBins] + hist[k % kSalienceBins] + hist[(k + 1) % kSalienceBins];
+}
+
+// The three signs of a real beat, from the phase histogram and the PLL's
+// bookkeeping: the grid's phase (three sixteenths) dominates the strongest
+// of the quarter, half and three-quarter phases (an off-beat or sixteenth
+// lock sees the real beat out-gather it; a wrong tempo drifts through the
+// phases and gathers nothing in particular), the recent beats were hit,
+// and the beat's onsets stand out from an average phase (noise gives about
+// 1; eighths and sixteenths between the beats leave the beat standing out).
+// rawConfidence() scales each 0..1 and multiplies them.
+BeatTracker::Factors BeatTracker::factors() const {
+  Factors f;
   float sum = 0.0f;
   for (float b : phaseHist_) sum += b;
-  const float salience = sum > 1e-9f ? phaseHist_[0] * kSalienceBins / sum : 0.0f;
-  const float grid = clamp01((salience - kSalienceLow) / (kSalienceHigh - kSalienceLow));
-  const float steady = clamp01((kJitterHigh - std::sqrt(jitter_)) / (kJitterHigh - kJitterLow));
-  const float clear = clamp01(clarity_ / kClarityFull);
-  return grid * steady * clear;
+  const float e0 = binsAt(phaseHist_, 0);
+  float other = binsAt(phaseHist_, 4);
+  if (binsAt(phaseHist_, 8) > other) other = binsAt(phaseHist_, 8);
+  if (binsAt(phaseHist_, 12) > other) other = binsAt(phaseHist_, 12);
+  f.dominance = other > 1e-9f ? e0 / other : (e0 > 1e-9f ? 10.0f : 0.0f);
+  f.hitRate = hitRate_;
+  f.pulse = sum > 1e-9f ? e0 / 3.0f * kSalienceBins / sum : 0.0f;
+  f.steady = std::sqrt(jitter_);
+  return f;
+}
+
+float BeatTracker::rawConfidence() const {
+  const Factors f = factors();
+  const float dominant = clamp01((f.dominance - kDominanceLow) / (kDominanceHigh - kDominanceLow));
+  const float hitting = clamp01((f.hitRate - kHitLow) / (kHitHigh - kHitLow));
+  const float pulse = clamp01((f.pulse - kPulseLow) / (kPulseHigh - kPulseLow));
+  return dominant * hitting * pulse;
 }
 
 // Leaky onset energy per phase of the beat, in kSalienceBins bins (the first
@@ -495,11 +539,12 @@ void BeatTracker::pll(double t, float onset) {
 }
 
 void BeatTracker::closeBeat() {
-  const bool hit = winSum_ > 1e-4f && winSum_ > 0.25f * beatEnergyAvg_;
+  const bool hit = isHit(winSum_);
   const double e = hit ? winMoment_ / winSum_ : 0.0;
   beatEnergyAvg_ += (winSum_ - beatEnergyAvg_) * 0.2f;
   const float rel = hit ? static_cast<float>(e / period_) : kMissJitter;
   jitter_ += (rel * rel - jitter_) * 0.3f;
+  hitRate_ += ((hit ? 1.0f : 0.0f) - hitRate_) * (hit ? kHitRise : kHitFall);
 
   period_ += kPeriodGain * e;
   const double lo = acqPeriod_ * (1.0 - kPeriodClamp), hi = acqPeriod_ * (1.0 + kPeriodClamp);
@@ -510,15 +555,20 @@ void BeatTracker::closeBeat() {
   winSum_ = winMoment_ = 0.0f;
   ++beatsSinceAcquire_;
 
- const float raw = rawConfidence();
+  const float raw = rawConfidence();
   conf_ += (raw - conf_) * (raw < conf_ ? 0.6f : 0.4f);  // falls faster than it rises
-  if (!locked_ && conf_ >= kLockOn && beatsSinceAcquire_ >= kBeatsToLock) {
+  // Locks once the confidence has held for kAboveToLock beats in a row: a
+  // single good beat on a wrong grid (or between two bad ones on a right
+  // one) doesn't start a lock, and a lock that has just gone doesn't flap
+  // straight back.
+  beatsAbove_ = conf_ >= kLockOn ? beatsAbove_ + 1 : 0;
+  if (!locked_ && beatsAbove_ >= kAboveToLock && beatsSinceAcquire_ >= kBeatsToLock) {
     locked_ = true;
     if (lockAt_ < 0) lockAt_ = static_cast<int32_t>((hops_ + 1) * cfg_.hop);
   } else if (locked_ && conf_ < kLockOff) {
     locked_ = false;
   }
-  weakBeats_ = conf_ < 0.2f ? weakBeats_ + 1 : 0;
+  weakBeats_ = conf_ < kWeak ? weakBeats_ + 1 : 0;
   if (weakBeats_ >= kWeakBeatsToDrop) {  // lost it: look for the tempo again
     acquired_ = false;
     locked_ = false;

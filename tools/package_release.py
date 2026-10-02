@@ -1,20 +1,28 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 IrosTheBeggar
 """Package a core2 build for release: the release files, the install page and
-the release notes. CI runs it after `pio run -e core2`; it runs the same way
-locally (Python 3.8+, standard library only, and git):
+the release notes. CI runs it after `pio run -e core2 -e core2-dio`; it runs
+the same way locally (Python 3.8+, standard library only, and git):
 
-    python tools/package_release.py                  # .pio/build/core2 -> dist/
+    python tools/package_release.py                  # .pio/build/core2 + core2-dio -> dist/
     python tools/package_release.py --release --tag v0.5.0
 
-It reads the build's own outputs: the version tools/version.py wrote
-(generated/PlayerVersion.h) and the pieces tools/flash_guard.py checked and
-listed (firmware.parts.json). Before writing anything it checks they are one
-build: the app description in firmware.bin holds that version and
-firmware.elf's SHA-256, and the merged image holds every piece. With
---release the build must be a release build (RELEASE=1, every check in
-tools/version.py passed: PLAYER_RELEASE), still the checkout's clean HEAD,
-and --tag's version, if given.
+Two builds of the same source: core2 (the flash in QIO at 80 MHz, the
+firmware everything installs) and core2-dio (DIO at 40 MHz, as M5 ships the
+Core2: the fallback for a unit that keeps restarting on QIO, released as
+NAME-dio-full.bin).
+
+It reads each build's own outputs: the version tools/version.py wrote
+(generated/PlayerVersion.h) and the pieces and flash mode
+tools/flash_guard.py checked and listed (firmware.parts.json). Before
+writing anything it checks each is one build: the app description in
+firmware.bin holds that version and firmware.elf's SHA-256, and the merged
+image holds every piece. Then that the two are the same source (version,
+tag, commit, release flag) in the flash modes their names say, and that the
+fallback's git-pinned libraries were the same commits. With --release the
+build must be a release build (RELEASE=1, every check in tools/version.py
+passed: PLAYER_RELEASE), still the checkout's clean HEAD, and --tag's
+version, if given.
 
 The source tarball is what the binary was built from, kept beside it (GPLv3
 section 6, LGPL-2.1 section 6): this repository's files (git ls-files: the
@@ -25,11 +33,14 @@ core (LGPL) the build compiled, found from the build's .d files.
 
 dist/release/  the files a GitHub Release carries (NAME = mstream-player-core2-<version>):
   NAME-full.bin       firmware.factory.bin, written at 0x0 (install or update)
+  NAME-dio-full.bin   core2-dio's firmware.factory.bin, the same at 0x0: the
+                      same firmware with the flash in DIO
   NAME-app.bin        firmware.bin, at 0x10000
   NAME-parts.zip      bootloader 0x1000, partitions 0x8000, boot_app0 0xe000,
                       firmware 0x10000, and flash_args.txt for
                       `esptool --chip esp32 write-flash @flash_args.txt`
   NAME-elf.zip        firmware.elf and firmware.map (decoding a backtrace)
+  NAME-dio-elf.zip    the same for NAME-dio-full.bin (its own ELF)
   NAME-licenses.zip   LICENSE, THIRD-PARTY-NOTICES.md and LICENSES/
   NAME-source.tar.gz  the source (below): mstream-mp3-player/ (this
                       repository), lib_deps/<name>/, framework-arduinoespressif32/
@@ -37,7 +48,8 @@ dist/release/  the files a GitHub Release carries (NAME = mstream-player-core2-<
   SHA256SUMS          `sha256sum -c SHA256SUMS` checks every file above
 dist/site/     the install page (GitHub Pages): site/index.html filled in,
                manifest.json for ESP Web Tools, firmware/<version>/NAME-full.bin
-               (same origin: release files have no CORS headers)
+               (the QIO image only; same origin: release files have no CORS
+               headers)
 dist/release-notes.md  .github/release-notes.md filled in
 
 The filesystem image (littlefs.bin, data/music: test audio, maybe excerpts
@@ -75,10 +87,23 @@ APP_DESC_MAGIC = 0xABCD5432
 DESC_VERSION_MAX = 31
 # What goes in the -parts.zip, by offset: the names flash_args.txt uses.
 PART_NAMES = {0x1000: "bootloader.bin", 0x8000: "partitions.bin", 0xE000: "boot_app0.bin", 0x10000: "firmware.bin"}
+# The flash mode of each build (platformio.ini; flash_guard records it in
+# firmware.parts.json): the main image QIO, the fallback DIO.
+MAIN_FLASH, FALLBACK_FLASH = "qio", "dio"
+# A log string only a QIO bootloader links (tools/flash_guard.py's QIO_MARKER).
+QIO_MARKER = b"not enabling QIO mode"
+# What two builds of the same source share (read_version).
+VERSION_KEYS = ("PLAYER_VERSION", "PLAYER_TAG", "PLAYER_RELEASE", "PLAYER_COMMIT", "PLAYER_COMMIT_DATE",
+                "PLAYER_COMMIT_TIME")
 
 
 class PackageError(Exception):
     pass
+
+
+def env_name(build_dir):
+    """The PlatformIO env a build directory belongs to (.pio/build/<env>)."""
+    return os.path.basename(os.path.normpath(build_dir))
 
 
 def read_version(build_dir):
@@ -89,13 +114,12 @@ def read_version(build_dir):
         with open(path, encoding="utf-8") as f:
             text = f.read()
     except OSError:
-        raise PackageError(f"{path} is missing: build first (pio run -e core2)")
+        raise PackageError(f"{path} is missing: build first (pio run -e {env_name(build_dir)})")
     defs = dict(re.findall(r'^#define (PLAYER_\w+) "((?:[^"\\]|\\.)*)"', text, re.M))
     defs.update(re.findall(r'^#define (PLAYER_RELEASE) ([01])\b', text, re.M))
-    for key in ("PLAYER_VERSION", "PLAYER_TAG", "PLAYER_RELEASE", "PLAYER_COMMIT", "PLAYER_COMMIT_DATE",
-                "PLAYER_COMMIT_TIME"):
+    for key in VERSION_KEYS:
         if key not in defs:
-            raise PackageError(f"{path} has no {key}: rebuild (pio run -e core2)")
+            raise PackageError(f"{path} has no {key}: rebuild (pio run -e {env_name(build_dir)})")
     return defs
 
 
@@ -108,16 +132,24 @@ def git(*args):
     return out.stdout.decode("utf-8", "replace").strip()
 
 
-def check_build(build_dir, version):
-    """The parts list, after checking the build's files belong together."""
+def check_build(build_dir, version, flash_mode):
+    """The merged image, the parts list and the ELF's first 8 hex digits,
+    after checking the build's files belong together and its flash mode is
+    flash_mode."""
+    env = env_name(build_dir)
     fw = os.path.join(build_dir, "firmware.bin")
     elf = os.path.join(build_dir, "firmware.elf")
     parts_path = os.path.join(build_dir, "firmware.parts.json")
     for p in (fw, elf, parts_path, os.path.join(build_dir, "firmware.map")):
         if not os.path.isfile(p):
-            raise PackageError(f"{p} is missing: build first (pio run -e core2; flash_guard writes the parts list)")
+            raise PackageError(f"{p} is missing: build first (pio run -e {env}; flash_guard writes the parts list)")
     with open(parts_path, encoding="utf-8") as f:
         layout = json.load(f)
+    if "flash_mode" not in layout:
+        raise PackageError(f"{parts_path} has no flash mode (an older flash_guard): rebuild (pio run -e {env})")
+    if layout["flash_mode"] != flash_mode:
+        raise PackageError(f"{env} was built with the flash in {layout['flash_mode'].upper()}, not "
+                           f"{flash_mode.upper()} (platformio.ini)")
 
     with open(fw, "rb") as f:
         desc = f.read(0x20 + 256)[0x20:]
@@ -146,6 +178,10 @@ def check_build(build_dir, version):
         parts.append((offset, name, data))
     if sorted(o for o, _n, _d in parts) != sorted(PART_NAMES):
         raise PackageError(f"the parts list has {[hex(o) for o, _n, _d in parts]}, not {list(map(hex, PART_NAMES))}")
+    bootloader = next(data for o, _n, data in parts if o == 0x1000)
+    if (QIO_MARKER in bootloader) != (flash_mode == "qio"):
+        raise PackageError(f"{env}'s bootloader {'has' if QIO_MARKER in bootloader else 'lacks'} the QIO code, "
+                           f"for a {flash_mode.upper()} build: rebuild")
     return layout["merged"], parts, elf_sha.hex()[:8]
 
 
@@ -216,6 +252,22 @@ def git_head(checkout):
     return head.lower()
 
 
+def checked_libdeps(build_dir):
+    """[(name, pin, checkout folder)]: the git-pinned lib_deps the build in
+    build_dir used (.pio/libdeps/<env>), each checked at its pin."""
+    env = env_name(build_dir)
+    libdeps = os.path.join(ROOT, ".pio", "libdeps", env)
+    found = []
+    for name, pin in sorted(pinned_libdeps().items()):
+        checkout = os.path.join(libdeps, name)
+        head = git_head(checkout)
+        if head != pin:
+            raise PackageError(f"{checkout} is at {head or 'no git checkout'}, not platformio.ini's {pin}: "
+                               f"rebuild (pio run -e {env} fetches the pinned commit)")
+        found.append((name, pin, checkout))
+    return found
+
+
 def depfile_paths(build_dir):
     """Every file path the build's .d files list (its sources and headers)."""
     paths = set()
@@ -253,13 +305,7 @@ def source_files(build_dir, release, commit):
     about = [f"{top}/: this repository's files at commit {commit or 'unknown'}" +
              ("" if release else " (as built: the working tree, uncommitted and untracked files included)")]
 
-    libdeps = os.path.join(ROOT, ".pio", "libdeps", "core2")
-    for name, pin in sorted(pinned_libdeps().items()):
-        checkout = os.path.join(libdeps, name)
-        head = git_head(checkout)
-        if head != pin:
-            raise PackageError(f"{checkout} is at {head or 'no git checkout'}, not platformio.ini's {pin}: "
-                               "rebuild (pio run -e core2 fetches the pinned commit)")
+    for name, pin, checkout in checked_libdeps(build_dir):
         members += [(f"lib_deps/{name}/{rel}", p) for rel, p in tree_files(checkout)]
         about.append(f"lib_deps/{name}/: the checkout the build used, commit {pin} (platformio.ini)")
 
@@ -320,7 +366,21 @@ def html_escape(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
-def package(build_dir, out_dir, release, tag, repo, web_installer=False):
+def check_fallback(dio_dir, v, version):
+    """core2-dio's merged image and ELF digits, after checking it is the same
+    source as the main build (v) and a DIO build that belongs together."""
+    dv = read_version(dio_dir)
+    differ = [k for k in VERSION_KEYS if dv[k] != v[k]]
+    if differ:
+        raise PackageError(f"{env_name(dio_dir)} isn't the same source as the main build ({', '.join(differ)}: "
+                           f"{dv['PLAYER_VERSION']!r} against {version!r}): build both from this checkout "
+                           "(pio run -e core2 -e core2-dio)")
+    merged_path, _parts, elf8 = check_build(dio_dir, version, FALLBACK_FLASH)
+    checked_libdeps(dio_dir)
+    return merged_path, elf8
+
+
+def package(build_dir, dio_dir, out_dir, release, tag, repo, web_installer=False):
     v = read_version(build_dir)
     version, commit = v["PLAYER_VERSION"], v["PLAYER_COMMIT"]
     semver = SEMVER.match(version)
@@ -338,7 +398,8 @@ def package(build_dir, out_dir, release, tag, repo, web_installer=False):
                                "(local flags, BT_SINK_NAME) never ran: rebuild with RELEASE=1")
         if tag and tag != version:
             raise PackageError(f"--release: the build is {version!r} but the tag is {tag!r}")
-    merged_path, parts, elf8 = check_build(build_dir, version)
+    merged_path, parts, elf8 = check_build(build_dir, version, MAIN_FLASH)
+    dio_merged, dio_elf8 = check_fallback(dio_dir, v, version)
     sources, sources_about = source_files(build_dir, release, commit)
 
     file_version = re.sub(r"[^0-9A-Za-z._-]", "_", version)  # "+" (dev builds) out of names and URLs
@@ -357,6 +418,7 @@ def package(build_dir, out_dir, release, tag, repo, web_installer=False):
         "COMMIT": commit[:7] or "unknown",
         "DATE": v["PLAYER_COMMIT_DATE"] or "unknown",
         "ELF": elf8,
+        "DIO_ELF": dio_elf8,
         "REPO_URL": repo_url,
         "SOURCE_URL": f"{repo_url}/tree/{ref}",
         "LICENSE_URL": f"{repo_url}/blob/{ref}/LICENSE",
@@ -364,9 +426,11 @@ def package(build_dir, out_dir, release, tag, repo, web_installer=False):
         "RELEASE_URL": f"{repo_url}/releases/tag/{version}" if is_release else f"{repo_url}/releases",
         "INSTALL_URL": f"https://{owner.lower()}.github.io/{name}/",
         "FULL_BIN": f"{base}-full.bin",
+        "DIO_FULL_BIN": f"{base}-dio-full.bin",
         "APP_BIN": f"{base}-app.bin",
         "PARTS_ZIP": f"{base}-parts.zip",
         "ELF_ZIP": f"{base}-elf.zip",
+        "DIO_ELF_ZIP": f"{base}-dio-elf.zip",
         "LICENSES_ZIP": f"{base}-licenses.zip",
         "SOURCE_TAR": f"{base}-source.tar.gz",
     }
@@ -387,6 +451,7 @@ def package(build_dir, out_dir, release, tag, repo, web_installer=False):
 
     # --- the release files ---
     shutil.copyfile(merged_path, os.path.join(rel_dir, values["FULL_BIN"]))
+    shutil.copyfile(dio_merged, os.path.join(rel_dir, values["DIO_FULL_BIN"]))
     app = next(data for off, _n, data in parts if off == 0x10000)
     with open(os.path.join(rel_dir, values["APP_BIN"]), "wb") as f:
         f.write(app)
@@ -396,6 +461,9 @@ def package(build_dir, out_dir, release, tag, repo, web_installer=False):
     zip_files(os.path.join(rel_dir, values["ELF_ZIP"]),
               [("firmware.elf", read(os.path.join(build_dir, "firmware.elf"))),
                ("firmware.map", read(os.path.join(build_dir, "firmware.map")))], date, time)
+    zip_files(os.path.join(rel_dir, values["DIO_ELF_ZIP"]),
+              [("firmware.elf", read(os.path.join(dio_dir, "firmware.elf"))),
+               ("firmware.map", read(os.path.join(dio_dir, "firmware.map")))], date, time)
     licences = licence_files()
     zip_files(os.path.join(rel_dir, values["LICENSES_ZIP"]), licences, date, time)
     for rel, data in licences[:2]:  # LICENSE, THIRD-PARTY-NOTICES.md on their own too
@@ -408,7 +476,7 @@ def package(build_dir, out_dir, release, tag, repo, web_installer=False):
     with open(os.path.join(rel_dir, "SHA256SUMS"), "w", encoding="utf-8", newline="\n") as f:
         f.write(sums)
 
-    # --- the install page ---
+    # --- the install page: the main (QIO) image only ---
     fw_rel = f"firmware/{file_version}/{values['FULL_BIN']}"
     os.makedirs(os.path.join(site_dir, os.path.dirname(fw_rel)))
     shutil.copyfile(merged_path, os.path.join(site_dir, fw_rel))
@@ -463,7 +531,10 @@ def package(build_dir, out_dir, release, tag, repo, web_installer=False):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--build-dir", default=os.path.join(ROOT, ".pio", "build", "core2"))
+    ap.add_argument("--build-dir", default=os.path.join(ROOT, ".pio", "build", "core2"),
+                    help="the main build (QIO): pio run -e core2")
+    ap.add_argument("--dio-build-dir", default=os.path.join(ROOT, ".pio", "build", "core2-dio"),
+                    help="the fallback build of the same source (DIO): pio run -e core2-dio")
     ap.add_argument("--out", default=os.path.join(ROOT, "dist"))
     ap.add_argument("--release", action="store_true", help="require a clean SemVer tagged build")
     ap.add_argument("--tag", help="with --release: the tag the build must be")
@@ -473,7 +544,7 @@ def main():
                     help="point the release notes at the GitHub Pages installer (env WEB_INSTALLER=true)")
     args = ap.parse_args()
     try:
-        outputs, manifest = package(args.build_dir, args.out, args.release, args.tag, args.repo,
+        outputs, manifest = package(args.build_dir, args.dio_build_dir, args.out, args.release, args.tag, args.repo,
                                     args.web_installer)
     except PackageError as e:
         sys.stderr.write(f"package_release: ERROR: {e}\n")

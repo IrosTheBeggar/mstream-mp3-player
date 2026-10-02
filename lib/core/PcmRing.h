@@ -20,9 +20,23 @@
 // (it plays silence for that tick). The mutex is taken for real only by
 // setConsumer() and discardAll(), which are rare and hold it for a few index
 // updates, and it serializes them against an in-progress read.
+//
+// cutBack() (docs/GAPLESS.md section 5.1) takes the frames written after an
+// index back out, if the consumer hasn't read past it: a track decoded
+// ahead that is no longer what comes next. It takes no lock, so a read never
+// fails for it. Instead the producer raises a fence at the index and the
+// consumer marks each read (reading_): a sequentially consistent pair
+// (Dekker's), so either the read sees the fence and stops at it, or the
+// producer sees the read under way and tries again later (Pending).
 class PcmRing {
 public:
   static constexpr uint8_t kNoConsumer = 0;
+  // cutBack()'s outcome.
+  enum class Cut : uint8_t {
+    Done,     // the write index is back at the cut: nothing after it is read
+    Pending,  // a read is under way: the fence stays up, call again
+    Crossed,  // the consumer has read past the cut: nothing changed
+  };
 
   // `initialIndex` exists so tests can start the counters near the 2^32 wrap.
   PcmRing(int16_t* buffer, uint32_t capacityFrames, uint32_t initialIndex = 0);
@@ -35,6 +49,16 @@ public:
   // index the next written frame will get, i.e. the start of the new track in
   // readPos() terms.
   uint32_t discardAll();
+  // The index the next written frame gets (free-running, as readPos()).
+  uint32_t writePos() const { return writeIdx_.load(std::memory_order_acquire); }
+  // Takes back every frame written at `index` or after it (an index this
+  // producer wrote, at most writePos()), if the consumer hasn't read past
+  // `index`. Pending: a read was under way; the fence stays up at `index`
+  // (reads stop there) until the next call, which must be for the same
+  // index; discardAll() takes it down too. Never blocks, never makes a read
+  // fail: only a read that reaches `index` while the fence is up is cut
+  // short there.
+  Cut cutBack(uint32_t index);
 
   // ---- control ----
   // Hands the right to read to `id` (kNoConsumer: nobody). Waits for a read
@@ -63,6 +87,8 @@ public:
   uint32_t capacity() const { return cap_; }
 
 private:
+  friend class PcmRingProbe;  // the host tests' look at the reading mark
+
   int16_t* const buf_;
   const uint32_t cap_;
   const uint32_t mask_;
@@ -72,4 +98,8 @@ private:
   std::atomic<uint32_t> epoch_{0};  // written only under lock_
   uint32_t epochStart_;             // readIdx_ when epoch_ began; under lock_
   std::mutex lock_;
+  // cutBack()'s fence and the consumer's mark (seq_cst: see the class).
+  std::atomic<bool> fenced_{false};
+  std::atomic<uint32_t> fenceIdx_{0};
+  std::atomic<bool> reading_{false};
 };

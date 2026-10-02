@@ -115,6 +115,11 @@ public:
   // started on them: a toast says where, two ticks.
   void headphonesConnected();
   void toggleDance();          // console d
+  // The USB visualizer started (app/UsbViz): the Dance tab, whatever was
+  // over the page closed (a sheet, a dialog, a toast, the HUD, the first-boot
+  // tips: shown again at the next boot). False: the UI isn't up (not started,
+  // or another screen has the display).
+  bool showDance();
   // The sleep timer's fade runs and the listener touched the device (or
   // the fade just began): the toast "Sleep timer: fading" with +10 min and
   // Turn off, the only controls that act on the timer. It goes when the

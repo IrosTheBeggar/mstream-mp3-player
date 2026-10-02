@@ -134,6 +134,13 @@ public:
   // 0..maxOut() frames. Repeat until finished().
   uint32_t finishPush(int16_t* out);
   bool finished() const;
+  // The frames finishPush() would still write for what has been taken: the
+  // stream's ceil(taken * num / den) less what came out (0 at the
+  // passthrough with nothing carried). A stream that went on instead (a
+  // gapless join, docs/GAPLESS.md section 3.2) has its next source frame
+  // exactly that many frames on: that frame sits at the source time of the
+  // next frame taken.
+  uint32_t tailFrames() const;
 
   bool configured() const { return state_ == State::Configured; }
   bool refused() const { return state_ == State::Refused; }
