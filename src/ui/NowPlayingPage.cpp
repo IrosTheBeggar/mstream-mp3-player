@@ -8,11 +8,21 @@
 // play waits for the headphones, a spinner for play and the waiting panel
 // (PlayGate). The layout is in Pages.h. The "..." zone reaches the
 // screen's edge.
+//
+// The progress line is a seek bar (docs/SEEK-BAR.md): SeekBar has the
+// mapping and the touch, this page the drawing and the one call to the
+// player at the end of a touch (ui_.player().seek(), as the Queue page
+// edits: a seek never starts or raises sound, so neither PlayGate nor the
+// pocket rule is asked). onEvent() only moves the model and plays the
+// touch's ticks; update() draws, the pressed look and the end of a scrub at
+// once, a scrub's frames only on the frame deadlines. One log line per
+// touch on the bar, when it ends.
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
 
 #include "TrackCatalog.h"
+#include "TrackSeek.h"
 #include "UiText.h"
 #include "app/Psram.h"
 #include "ui/Fonts.h"
@@ -39,9 +49,29 @@ constexpr int kZoneW = 64;
 // artist band, its buttons in the album band.
 constexpr int kWaitButtonsY = kAlbumY;
 constexpr uint32_t kSpinMs = 125;  // the waiting spinner: 8 steps a second
+// The seek bar's touch reaches this far above the band (y 162): the line is
+// drawn at the band's top (y 172-175), so a tap aimed at it lands on both
+// sides of y 170. Not while play waits: Play on speaker and Cancel keep
+// their whole area (y 170 then).
+constexpr int kSeekReachPx = 8;
+// The readout row while a finger scrubs: the 33 rows between the cover's
+// frame and the band, the full width (the album band's lower rows).
+constexpr int kReadoutY = 137, kReadoutH = 33;
+static_assert(SeekBar::kLineX + SeekBar::kLineW == kW - 12, "the seek bar's line is drawProgress()'s");
+static_assert(kReadoutY == kCoverY + kCoverPx + 1, "the readout row starts under the cover's frame");
+static_assert(kReadoutY + kReadoutH == kProgressY, "the readout row ends at the band");
 
 void mmss(uint32_t ms, char* buf, size_t size) {
   snprintf(buf, size, "%lu:%02lu", static_cast<unsigned long>(ms / 60000), static_cast<unsigned long>(ms / 1000 % 60));
+}
+
+// The readout's change from where it plays, in whole seconds: "+1:21",
+// "−0:45" (U+2212; folded to "-" where a font lacks it).
+void change(uint32_t targetMs, uint32_t liveMs, char* buf, size_t size) {
+  const int32_t d = static_cast<int32_t>(targetMs / 1000) - static_cast<int32_t>(liveMs / 1000);
+  const uint32_t a = static_cast<uint32_t>(d < 0 ? -d : d);
+  snprintf(buf, size, "%s%lu:%02lu", d < 0 ? "\xE2\x88\x92" : "+", static_cast<unsigned long>(a / 60),
+           static_cast<unsigned long>(a % 60));
 }
 
 // The last line of a wrap was cut ("…" added): the text needs more room.
@@ -64,6 +94,7 @@ void NowPlayingPage::enter(NavModel::PageRef& ref) {
   (void)ref;
   pressed_ = None;
   emptyPressed_ = -1;
+  bar_.cancel();
   if (!cover_) {
     cover_ = psramNew<M5Canvas>();
     if (cover_) {
@@ -76,6 +107,13 @@ void NowPlayingPage::enter(NavModel::PageRef& ref) {
     }
   }
   repaint();
+}
+
+void NowPlayingPage::leave() {
+  // (The page went, or another screen took the display: a scrub ends with
+  // nothing, unlogged. The next enter() paints it all.)
+  bar_.cancel();
+  pressed_ = None;
 }
 
 void NowPlayingPage::repaint() {
@@ -172,20 +210,90 @@ void NowPlayingPage::drawArtistAlbum() {
   gfx::push(c, kColumnX, kAlbumY, w, kAlbumH);
 }
 
+bool NowPlayingPage::seekable() const {
+  const AppState& s = ui_.state();
+  return s.current >= 0 && !s.failed && SeekBar::seekable(s.durationMs);
+}
+
+NowPlayingPage::BarLook NowPlayingPage::barLook() const {
+  switch (bar_.phase()) {
+    case SeekBar::Phase::Pressed: return BarLook::Pressed;
+    case SeekBar::Phase::Scrubbing: return BarLook::Scrubbing;
+    case SeekBar::Phase::Off: return BarLook::Off;
+    default: return seekable() ? BarLook::Rest : BarLook::Inert;
+  }
+}
+
 void NowPlayingPage::drawProgress() {
   const AppState& s = ui_.state();
   M5Canvas& c = gfx::strip();
-  Fonts& f = Fonts::instance();
   c.fillRect(0, 0, kW, kProgressH, col::BG);
   const bool paused = s.play != PlayState::Playing;
-  const int x0 = 12, w = kW - 24;
-  if (s.durationMs > 0) {
-    c.fillRoundRect(x0, 2, w, 4, 2, col::DIV);
-    const int fill = static_cast<int>(static_cast<uint64_t>(std::min(s.positionMs, s.durationMs)) * w / s.durationMs);
-    if (fill > 0) c.fillRoundRect(x0, 2, fill, 4, 2, paused ? col::DIM : accent::NowPlaying);
+  const int x0 = SeekBar::kLineX, w = SeekBar::kLineW;
+  const BarLook look = barLook();
+  const bool scrub = look == BarLook::Scrubbing || look == BarLook::Off;
+  constexpr int kKnobY = 4;  // the knob's centre, on the line (band rows)
+  int knob = -1, marker = -1;
+  uint16_t knobInk = col::TXT;
+  if (look == BarLook::Inert || look == BarLook::Rest) {
+    if (s.durationMs > 0) {
+      c.fillRoundRect(x0, 2, w, 4, 2, col::DIV);
+      const int fill = SeekBar::xOf(s.positionMs, s.durationMs);
+      knobInk = paused ? col::DIM : accent::NowPlaying;
+      if (fill > 0) c.fillRoundRect(x0, 2, fill, 4, 2, knobInk);
+      if (look == BarLook::Rest) knob = x0 + fill;  // (it can be moved)
+    } else {
+      for (int x = x0; x < x0 + w; x += 6) c.fillRect(x, 3, 3, 2, col::DIV);  // unknown length: dotted
+    }
   } else {
-    for (int x = x0; x < x0 + w; x += 6) c.fillRect(x, 3, 3, 2, col::DIV);  // unknown length: dotted
+    // A finger on it (pressed, scrubbing, off): the line thickens to 6 px.
+    const uint32_t len = bar_.lengthMs();
+    knob = bar_.knobX();
+    if (look == BarLook::Scrubbing) {
+      // To the reach (the length less 6 s); past it, faint dots: the knob
+      // stops there, and the dots say why. The marker shows where it plays
+      // (hidden while the knob is on it).
+      const int reach = SeekBar::xOf(trackseek::seekLimitMs(len), len);
+      c.fillRoundRect(x0, 1, reach, 6, 3, col::DIV);
+      for (int x = x0 + reach + 3; x + 3 <= x0 + w; x += 6) c.fillRect(x, 3, 3, 2, col::FAINT);
+      if (knob > x0) c.fillRoundRect(x0, 1, knob - x0, 6, 3, accent::NowPlaying);
+      if (!bar_.staying()) marker = bar_.markerX();
+    } else {
+      // Pressed: the accent, even paused (it is the active control); off:
+      // dim, to where it plays.
+      c.fillRoundRect(x0, 1, w, 6, 3, col::DIV);
+      const uint16_t ink = look == BarLook::Pressed ? accent::NowPlaying : col::DIM;
+      if (knob > x0) c.fillRoundRect(x0, 1, knob - x0, 6, 3, ink);
+      if (look == BarLook::Off) knobInk = col::DIM;
+    }
   }
+  if (scrub) {
+    // The text row stays blank: the readout above says it all.
+    if (marker >= 0) c.fillRect(marker - 1, 0, 2, 9, col::DIM);
+  } else {
+    drawProgressText(c, paused);
+  }
+  // The knob last (the text's background fills its rows).
+  if (knob >= 0) {
+    if (look == BarLook::Rest) {
+      c.fillCircle(knob, kKnobY, 3, knobInk);
+    } else {
+      c.fillCircle(knob, kKnobY, 4, knobInk);
+      if (knobInk == col::TXT) c.fillCircle(knob, kKnobY, 2, accent::NowPlaying);
+    }
+  }
+  gfx::push(c, 0, kProgressY, kW, kProgressH);
+  drawn_.bar = static_cast<uint8_t>(look);
+  drawn_.knobX = static_cast<int16_t>(knob);
+  drawn_.markerX = static_cast<int16_t>(scrub ? bar_.markerX() : -1);
+}
+
+// The band's text row: the elapsed time, "Paused, 4 of 16 · SPYDRONE" and
+// the sleep timer's moon, the length.
+void NowPlayingPage::drawProgressText(M5Canvas& c, bool paused) {
+  const AppState& s = ui_.state();
+  Fonts& f = Fonts::instance();
+  const int x0 = SeekBar::kLineX, w = SeekBar::kLineW;
   constexpr int kTextY = 14;
   char t[24];
   if (s.current >= 0) {
@@ -251,7 +359,62 @@ void NowPlayingPage::drawProgress() {
   } else {
     f.draw(c, Font::Small, mid, kW / 2, kTextY, kMidW, mc, col::BG, Fonts::Align::Centre);
   }
-  gfx::push(c, 0, kProgressY, kW, kProgressH);
+}
+
+uint32_t NowPlayingPage::readoutSig() const {
+  // What drawReadout() shows: off; staying (where it plays); or the
+  // finger's second and the change from where it plays; and the side.
+  if (bar_.phase() == SeekBar::Phase::Off) return 1;
+  uint32_t h = bar_.readoutLeft() ? 2u : 3u;
+  if (bar_.staying()) return h * 31u + 7u + bar_.liveMs() / 1000 * 131u;
+  return (h * 31u + bar_.targetMs() / 1000) * 131u + bar_.liveMs() / 1000;
+}
+
+void NowPlayingPage::drawReadout() {
+  using namespace uitext;
+  M5Canvas& c = gfx::strip();
+  Fonts& f = Fonts::instance();
+  c.fillRect(0, 0, kW, kReadoutH, col::BG);
+  // Title centred on the row's row 16, Small on row 19: their baselines
+  // roughly agree.
+  constexpr int kBigY = 16, kSmallY = 19;
+  if (bar_.phase() == SeekBar::Phase::Off) {
+    f.draw(c, Font::Bold, kSeekCancel, kW / 2, kBigY, SeekBar::kLineW, col::AMBER, col::BG, Fonts::Align::Centre);
+  } else {
+    // The finger's second and the change; back where it plays, that second
+    // and "no change". On the side away from the knob (a finger on the bar
+    // covers what is above it).
+    char big[16], small[24];
+    if (bar_.staying()) {
+      mmss(bar_.liveMs(), big, sizeof(big));
+      snprintf(small, sizeof(small), "%s", kSeekStay);
+    } else {
+      mmss(bar_.targetMs(), big, sizeof(big));
+      change(bar_.targetMs(), bar_.liveMs(), small, sizeof(small));
+    }
+    const int bw = std::min(f.width(Font::Title, big), kSeekReadoutW);
+    const int sw = std::max(0, std::min(f.width(Font::Small, small), kSeekReadoutW - bw - kSeekReadoutGap));
+    const int x = bar_.readoutLeft() ? SeekBar::kLineX
+                                     : SeekBar::kLineX + SeekBar::kLineW - (bw + kSeekReadoutGap + sw);
+    f.draw(c, Font::Title, big, x, kBigY, bw, col::TXT, col::BG);
+    if (sw > 0) f.draw(c, Font::Small, small, x + bw + kSeekReadoutGap, kSmallY, sw, col::DIM, col::BG);
+  }
+  // Entering the scrub's look (or after the middle was drawn again): the
+  // album band's top rows too, which Waiting's buttons reach into (y 133).
+  if (!drawn_.scrubUp) gfx::fill(kColumnX, kAlbumY, kW - kColumnX, kReadoutY - kAlbumY, col::BG);
+  gfx::push(c, 0, kReadoutY, kW, kReadoutH);
+  drawn_.scrubUp = true;
+  drawn_.readout = readoutSig();
+}
+
+void NowPlayingPage::endScrub() {
+  // The artist and album bands (or the waiting panel) and the left column
+  // under the cover, as repaint() has them; the band follows in its rest
+  // look (update()).
+  drawMiddle();
+  gfx::fill(0, kReadoutY, kColumnX, kReadoutH, col::BG);
+  drawn_.scrubUp = false;
+  drawn_.readout = 0;
 }
 
 const char* NowPlayingPage::outputName(char* buf, size_t size) const {
@@ -427,10 +590,19 @@ void NowPlayingPage::onEmptyEvent(const InputEvent& e) {
 }
 
 bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
-  (void)nowMs;
-  (void)frameDue;
   (void)wholeRows;
   const AppState& s = ui_.state();
+  // The seek bar's touch, on an entry that isn't current any more (a join
+  // heard, a natural end, a skip from the headphones or the console, an
+  // edit): it ends with nothing, and the rest of the touch goes nowhere (a
+  // lift before this sees it is seek()'s Moved).
+  if (bar_.active() && (s.current < 0 || s.currentKey != bar_.key())) {
+    bar_.cancel();
+    pressed_ = None;
+    ui_.input().cancelTouch(nowMs);
+    Serial.println("[ui] now playing: no seek (the track changed under the finger)");
+  }
+  if (bar_.active()) bar_.live(s.positionMs);  // the marker follows where it plays
   // Nothing queued: the empty state, drawn when it (or the card) changes.
   const bool empty = s.current < 0;
   const bool noCard = !s.card && s.libraryTracks == 0;
@@ -456,8 +628,21 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   const bool waiting = s.play == PlayState::Waiting;
   const uint32_t wsig = waiting ? waitSig() : 0;
   if (!waiting && (pressed_ == WaitSpeaker || pressed_ == WaitCancel)) pressed_ = None;
+  const BarLook look = barLook();
+  const bool scrub = look == BarLook::Scrubbing || look == BarLook::Off;
   if (newTrack) drawTitle();
-  if (newTrack || waiting != drawn_.waiting || wsig != drawn_.waitSig) drawMiddle();
+  if (newTrack || waiting != drawn_.waiting || wsig != drawn_.waitSig) {
+    drawMiddle();
+    if (scrub) {
+      // (A repaint after a toast, the waiting panel's "try 2 of 3"): the
+      // readout goes back over the album band in the same pass.
+      drawn_.scrubUp = false;
+      drawReadout();
+    }
+  }
+  // A scrub ended (a lift, a cancel): the middle and the left column back
+  // at once; the band below, in its rest look.
+  if (drawn_.scrubUp && !scrub) endScrub();
   // The cover: when the album changes (a track of the same album keeps it).
   if (all || (newTrack && playingAlbum() != drawn_.coverAlbum)) drawCover();
   const uint32_t second = s.positionMs / 1000;
@@ -465,9 +650,23 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   const uint32_t output = outputSig();
   uint32_t sleep = s.sleepFading ? 1u : 0u;
   for (const char* p = s.sleepShort; *p; ++p) sleep = sleep * 31u + static_cast<unsigned char>(*p);
-  if (all || second != drawn_.second || durS != drawn_.durationS || s.play != drawn_.play ||
-      s.current != drawn_.current || s.queueSize != drawn_.size || output != drawn_.output || sleep != drawn_.sleep) {
-    drawProgress();
+  bool frame = false;
+  if (scrub) {
+    // A finger scrubs: a frame (the band, and the readout when its text or
+    // side changed) only on the frame deadlines, when the look, the knob,
+    // the marker or the readout moved.
+    const bool text = !drawn_.scrubUp || readoutSig() != drawn_.readout;
+    const bool moved = static_cast<uint8_t>(look) != drawn_.bar || bar_.knobX() != drawn_.knobX ||
+                       bar_.markerX() != drawn_.markerX;
+    if (all || ((text || moved) && frameDue)) {
+      if (text) drawReadout();
+      drawProgress();
+      frame = !all;
+    }
+  } else if (all || static_cast<uint8_t>(look) != drawn_.bar || second != drawn_.second || durS != drawn_.durationS ||
+             s.play != drawn_.play || s.current != drawn_.current || s.queueSize != drawn_.size ||
+             output != drawn_.output || sleep != drawn_.sleep) {
+    drawProgress();  // (a new look at once: the pressed one on a Down, the rest after a touch)
   }
   if (all || s.play != drawn_.play || s.volume != drawn_.volume || s.onBluetooth != drawn_.bluetooth ||
       output != drawn_.output) {
@@ -492,7 +691,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   drawn_.bluetooth = s.onBluetooth;
   drawn_.output = output;
   drawn_.sleep = sleep;
-  return false;
+  return frame;
 }
 
 NowPlayingPage::Zone NowPlayingPage::zoneAt(const InputEvent& e) const {
@@ -501,6 +700,11 @@ NowPlayingPage::Zone NowPlayingPage::zoneAt(const InputEvent& e) const {
     const int z = e.x / kZoneW;
     return static_cast<Zone>(Volume + (z < 0 ? 0 : z > 4 ? 4 : z));
   }
+  // The seek bar: the full width, from 8 px above the band (the album's
+  // last rows: the line is drawn at the band's top); while play waits,
+  // from the band (the waiting buttons keep their whole area). Before the
+  // waiting panel's branch, which has no bar.
+  if (e.y >= kProgressY - (ui_.state().play == PlayState::Waiting ? 0 : kSeekReachPx)) return Bar;
   if (e.x < kColumnX && e.y >= kCoverY - 4 && e.y < kCoverY + kCoverPx + 4) return Cover;
   if (ui_.state().play == PlayState::Waiting && e.x >= kColumnX && e.y >= kArtistY) {
     // The waiting panel: its text is inert; Cancel reaches the edge.
@@ -568,6 +772,41 @@ void NowPlayingPage::goToLibrary(Go where) {
   }
 }
 
+void NowPlayingPage::seekTo(const SeekBar::Out& o, uint32_t nowMs) {
+  using S = PlaybackController::Seek;
+  PlaybackController& player = ui_.player();
+  // The entry the finger landed on, at the length the bar showed then.
+  const S r = player.seek(bar_.key(), o.ms, bar_.lengthMs());
+  if (r == S::Moved) {
+    Serial.println("[ui] now playing: no seek (the track changed under the finger)");
+    return;
+  }
+  if (r == S::NoPlace) {
+    Serial.println("[ui] now playing: no seek (nothing to seek in)");
+    return;
+  }
+  // A tap that acted ticks (a drag's lift doesn't: the audio's jump says it).
+  if (o.tap) ui_.tick();
+  char from[16], to[16], of[16], how[48];
+  mmss(bar_.liveMs(), from, sizeof(from));
+  mmss(o.ms, to, sizeof(to));
+  mmss(bar_.lengthMs(), of, sizeof(of));
+  if (o.tap) {
+    snprintf(how, sizeof(how), "tap");
+  } else {
+    // How long the last second had been shown before the lift: the measure
+    // for a lift guard (docs/SEEK-BAR.md section 13).
+    snprintf(how, sizeof(how), "%s, held %lu ms", bar_.knobGrab() ? "drag from the knob" : "drag",
+             static_cast<unsigned long>(bar_.heldMs(nowMs)));
+  }
+  const PlayState st = player.state();
+  const char* then = r == S::Started              ? "plays from there"
+                     : st == PlayState::Waiting ? "waiting, it starts there when they connect"
+                     : st == PlayState::Stopped ? "stopped, the next play starts there"
+                                                : "paused, the next play starts there";
+  Serial.printf("[ui] now playing: seek %s -> %s of %s (%s): %s\n", from, to, of, how, then);
+}
+
 void NowPlayingPage::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   // A swipe up from the button strip: nothing here scrolls, and it presses
@@ -577,9 +816,37 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
     onEmptyEvent(e);
     return;
   }
+  const AppState& s = ui_.state();
+  // A touch the seek bar took is all its own until it ends (a thumb that
+  // dips into the transport presses nothing there). update() draws.
+  if (bar_.active() && e.type != T::Down) {
+    const SeekBar::Out o = bar_.onEvent(e, s.positionMs);
+    if (o.tick) ui_.tick();  // the scrub began, into the detent, off or back
+    switch (o.end) {
+      case SeekBar::End::Seek: seekTo(o, e.ms); break;
+      case SeekBar::End::Stay: Serial.println("[ui] now playing: no seek (back where it plays)"); break;
+      case SeekBar::End::Off: Serial.println("[ui] now playing: no seek (slid off the bar)"); break;
+      case SeekBar::End::Cancel: Serial.println("[ui] now playing: no seek (cancelled)"); break;
+      default: break;  // still on it; or a drag that wasn't sideways, let go
+    }
+    if (!bar_.active()) pressed_ = None;
+    return;
+  }
+  bar_.cancel();  // (a Down: a touch whose end never came is over)
   const Zone z = zoneAt(e);
   if (e.type == T::Down) {
     pressed_ = z;
+    if (z == Bar) {
+      // Taken only when it can seek (no tick either way: a Down only
+      // highlights); a finger that rests on it, then slides, still scrubs,
+      // and one that rests, then lifts, is a tap: never a long press.
+      if (seekable() && bar_.down(e, s.currentKey, s.positionMs, s.durationMs)) {
+        ui_.input().noHold();
+      } else {
+        pressed_ = None;
+      }
+      return;
+    }
     if (z == Artist || z == Album) drawArtistAlbum();
     if (z == WaitSpeaker || z == WaitCancel) drawWaiting();
     if (z >= Volume) drawTransport();
@@ -658,11 +925,37 @@ void NowPlayingPage::onSheet(int choice) {
 
 void NowPlayingPage::describe(char* buf, size_t size) const {
   const AppState& s = ui_.state();
-  snprintf(buf, size, "Now Playing: track id %lu, entry %ld of %lu, %lu / %lu ms, cover of album %ld %s",
-           static_cast<unsigned long>(s.trackId), static_cast<long>(s.current), static_cast<unsigned long>(s.queueSize),
-           static_cast<unsigned long>(s.positionMs), static_cast<unsigned long>(s.durationMs),
-           static_cast<long>(drawn_.coverAlbum == LibraryIndex::kNone ? -1 : static_cast<long>(drawn_.coverAlbum)),
-           drawn_.coverShown ? "(its thumbnail)" : "(the placeholder)");
+  const int n = snprintf(buf, size, "Now Playing: track id %lu, entry %ld of %lu, %lu / %lu ms, cover of album %ld %s",
+                         static_cast<unsigned long>(s.trackId), static_cast<long>(s.current),
+                         static_cast<unsigned long>(s.queueSize), static_cast<unsigned long>(s.positionMs),
+                         static_cast<unsigned long>(s.durationMs),
+                         static_cast<long>(drawn_.coverAlbum == LibraryIndex::kNone ? -1
+                                                                                    : static_cast<long>(drawn_.coverAlbum)),
+                         drawn_.coverShown ? "(its thumbnail)" : "(the placeholder)");
+  if (n < 0 || static_cast<size_t>(n) >= size) return;
+  // The seek bar (docs/SEEK-BAR.md section 8).
+  char* rest = buf + n;
+  const size_t room = size - static_cast<size_t>(n);
+  switch (barLook()) {
+    case BarLook::Inert: snprintf(rest, room, "; the bar: inert"); break;
+    case BarLook::Rest:
+      snprintf(rest, room, "; the bar: rest, the knob at x %d", SeekBar::kLineX + SeekBar::xOf(s.positionMs, s.durationMs));
+      break;
+    case BarLook::Pressed: snprintf(rest, room, "; the bar: pressed"); break;
+    case BarLook::Off: snprintf(rest, room, "; the bar: off"); break;
+    case BarLook::Scrubbing: {
+      if (bar_.staying()) {
+        snprintf(rest, room, "; the bar: staying");
+        break;
+      }
+      char to[16], live[16];
+      mmss(bar_.targetMs(), to, sizeof(to));
+      mmss(bar_.liveMs(), live, sizeof(live));
+      snprintf(rest, room, "; the bar: scrubbing to %s (%s; readout %s; %s plays)", to,
+               bar_.knobGrab() ? "drag from the knob" : "drag", bar_.readoutLeft() ? "left" : "right", live);
+      break;
+    }
+  }
 }
 
 }  // namespace ui

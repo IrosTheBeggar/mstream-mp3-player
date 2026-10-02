@@ -1046,12 +1046,14 @@ void Ui::loop(uint32_t nowMs) {
 // A list moving (a drag, a fling, a snap) is a "motion": its frames, how
 // long they took to draw, the audio ring's low point and new underruns are
 // logged when it settles ("[ui] scroll: ..."), the numbers the scroll lab
-// printed for its stress runs.
+// printed for its stress runs. So is any other page that animates (Now
+// Playing while a finger scrubs its seek bar: "[ui] scrub: ...").
 void Ui::trackMotion(uint32_t nowMs) {
-  const bool moving = page_ && list_.attached() && page_->animating();
+  const bool moving = page_ && page_->animating();
   if (moving && !motion_.on) {
     motion_ = Motion{};
     motion_.on = true;
+    motion_.list = list_.attached();
     motion_.startMs = nowMs;
     motion_.underruns = state_.underruns;
     motion_.ringMin = UINT32_MAX;
@@ -1064,10 +1066,10 @@ void Ui::trackMotion(uint32_t nowMs) {
   if (motion_.frames < 2) return;  // a tap's highlight, not a scroll
   char ring[24] = "n/a (not playing)";
   if (motion_.ringMin != UINT32_MAX) snprintf(ring, sizeof(ring), "%lu ms", (unsigned long)motion_.ringMin);
-  Serial.printf("[ui] scroll: %lu ms, %lu frames (%.1f fps), draw mean %.1f max %.1f ms (%lu over 35), ring min %s, underruns +%lu, "
+  Serial.printf("[ui] %s: %lu ms, %lu frames (%.1f fps), draw mean %.1f max %.1f ms (%lu over 35), ring min %s, underruns +%lu, "
                 "governor %s\n",
-                (unsigned long)ms, (unsigned long)motion_.frames, ms ? motion_.frames * 1000.0f / ms : 0.0f,
-                motion_.sumUs / 1000.0f / motion_.frames, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
+                motion_.list ? "scroll" : "scrub", (unsigned long)ms, (unsigned long)motion_.frames,
+                ms ? motion_.frames * 1000.0f / ms : 0.0f, motion_.sumUs / 1000.0f / motion_.frames, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
                 (unsigned long)(state_.underruns - motion_.underruns), ScrollGovernor::name(budget_.level));
 }
 
@@ -1482,7 +1484,7 @@ void Ui::printState() const {
     Serial.println(line);
   }
   if (page_) {
-    char desc[160];
+    char desc[256];  // (Now Playing's with its seek bar: up to ~180)
     page_->describe(desc, sizeof(desc));
     Serial.printf("[ui] page: %s\n", desc);
   }

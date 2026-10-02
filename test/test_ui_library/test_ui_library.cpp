@@ -561,6 +561,20 @@ void test_output_texts_fit() {
   fits(small, "v10.10.10-rc.10-9999-gabcdef12-dirty", kAboutValueW);
 }
 
+// The seek bar's readout (docs/SEEK-BAR.md section 4.2): "Release to
+// cancel" in the line's width, and the widest group (an hour's second in
+// Title, the gap, "no change" or a change of most of an hour in Small)
+// within its 150 px.
+void test_seek_bar_texts_fit() {
+  using namespace uitext;
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  fits(bold, kSeekCancel, 296);
+  const int big = title.width("59:59");
+  TEST_ASSERT_TRUE(big + kSeekReadoutGap + small.width(kSeekStay) <= kSeekReadoutW);
+  TEST_ASSERT_TRUE(big + kSeekReadoutGap + small.width("+59:59") <= kSeekReadoutW);
+  TEST_ASSERT_TRUE(big + kSeekReadoutGap + small.width("-59:59") <= kSeekReadoutW);
+}
+
 // Now Playing while play waits for the headphones (PlayGate): the panel's
 // lines and buttons, the notice's buttons, and the output line that says
 // they aren't connected.
@@ -980,6 +994,7 @@ int main(int, char**) {
   RUN_TEST(test_queue_texts_fit);
   RUN_TEST(test_output_texts_fit);
   RUN_TEST(test_waiting_texts_fit);
+  RUN_TEST(test_seek_bar_texts_fit);
   RUN_TEST(test_sleep_timer_texts_fit);
   RUN_TEST(test_idle_power_off_texts_fit);
   RUN_TEST(test_power_settings_texts_fit);

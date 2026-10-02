@@ -163,7 +163,7 @@ The rules that keep it deadlock- and glitch-free:
   The decode task re-checks requests and yields between passes.
 - **A track can start part of the way in** (`play()`'s `StartAt`: the
   resume point, below under Library and queue, or a seek: the console's
-  `qs`, and Now Playing's seek bar once it is built ([SEEK-BAR.md](SEEK-BAR.md));
+  `qs`, and Now Playing's seek bar ([SEEK-BAR.md](SEEK-BAR.md));
   [SEEK.md](SEEK.md) is the design and its measurements;
   `lib/core/TrackSeek`, `SeekIndex`, `ResumeAnchor`, host-tested in
   test_track_seek and test_seek_index). The tail rule first: a start in
@@ -2090,8 +2090,10 @@ Queue, Dance and Output (with its Pair and About pages).
   does, the times once a second, the transport on a change, and the bar on
   the 30 fps frame deadlines while a finger scrubs it.
 
-  **The progress line is a seek bar.** It is designed in
-  [SEEK-BAR.md](SEEK-BAR.md) and not built yet.
+  **The progress line is a seek bar.** Its design is
+  [SEEK-BAR.md](SEEK-BAR.md); the mapping and the touch are
+  `lib/core/SeekBar` (host-tested in test_seek_bar), the player's side
+  `PlaybackController::seek()`.
   - **Where it takes touches:** the full width, from y 162 down to the
     transport (y 191).
     - The 8 rows above the band (y 162-169) are the album band's last
@@ -2335,7 +2337,8 @@ Queue, Dance and Output (with its Pair and About pages).
   ends there and presses nothing, and `uis160,265,160,100,120` is a swipe
   up from the strip that flings the list (`uid...` the same as a drag).
   Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max
-  (n over 35 ms), ring min, underruns +n, governor` when it settles, and a
+  (n over 35 ms), ring min, underruns +n, governor` when it settles (a scrub
+  of Now Playing's seek bar the same as `[ui] scrub: ...`), and a
   frame over 50 ms logs `[ui] slow frame` with its move and its renders; every touch logs
   `[touch] down/tap/long press/fling x,y (raw x,y)` (with `scripted` for
   the scripted finger's), every move of the queue's current entry

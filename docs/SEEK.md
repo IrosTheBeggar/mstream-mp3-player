@@ -852,9 +852,9 @@ was.
   written as tracks end, with an invalidation of its own. It would make
   seeks into a track played before exact. It means writes during
   playback, which the queue saver avoids on purpose. Its value is mostly
-  the seek bar's (6.7), which is designed but not built yet. Before
-  building the index, the device run should measure how often the bar's
-  seeks miss the run's index on a LAME VBR file.
+  the seek bar's (6.7). Before building the index, the device run should
+  measure how often the bar's seeks miss the run's index on a LAME VBR
+  file.
 - **A header walk of the whole file** (an exact index of any track before a
   seek). It reads almost every sector: a 9 MB file is about 7 s of SD time
   at ~1.2 MB/s, competing with the decoder's reads and the battery, for
@@ -867,12 +867,12 @@ was.
 
 ### 6.7 The seek bar
 
-Now Playing's progress line will seek: a tap goes to the second under
-the finger, and a drag seeks once, when the finger lifts.
+Now Playing's progress line seeks: a tap goes to the second under the
+finger, and a drag seeks once, when the finger lifts.
 [SEEK-BAR.md](SEEK-BAR.md) is its design: the gesture, the drawing, the
-races, the host tests and the device check. It is designed, not built
-yet. For the player, a seek is a start part of the way in, on the same
-path as `qs`.
+races, the host tests and the device check (`lib/core/SeekBar`,
+test_seek_bar; the device check is still to be run). For the player, a
+seek is a start part of the way in, on the same path as `qs`.
 
 - **`PlaybackController::seek(key, ms, durationMs)`.**
   - It takes the heard join first (`Act`). Then it acts only if the

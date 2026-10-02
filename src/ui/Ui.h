@@ -333,9 +333,11 @@ private:
   uint32_t framesWindowStart_ = 0;
   uint32_t framesInWindow_ = 0;
   float fps_ = 0;
-  // The list's current motion, for its "[ui] scroll:" line.
+  // The list's current motion, for its "[ui] scroll:" line (a page without
+  // a list, Now Playing's seek bar: "[ui] scrub:").
   struct Motion {
     bool on = false;
+    bool list = false;  // a list moved (else a page's own animation: a scrub)
     uint32_t startMs = 0;
     uint32_t frames = 0;
     uint64_t sumUs = 0;

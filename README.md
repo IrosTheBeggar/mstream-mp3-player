@@ -316,7 +316,10 @@ pages do:
 
 - **Now Playing**: the album's cover, the title, the artist and the album
   (tap either, or the cover, to open it in the Library, scrolled to the
-  playing track), the progress, the volume (tap: a slider), prev /
+  playing track), the progress line: tap it, or drag along it and lift,
+  to move in the track (never into its last 6 s; slide off it, or back
+  onto where it plays, to leave it; paused, it stays paused, and play, or
+  the next boot, starts there), the volume (tap: a slider), prev /
   play-pause / next, and "..." for Go to artist, Go to album, Show in
   folders.
 - **Library**: three lists at the top: **Artists**, **Albums** (with their
@@ -408,10 +411,11 @@ instead.
 The first time, the queue is the whole library (artist, album, track order).
 The built-in test tones and click tracks (60 s at 90-174 BPM, for the beat
 tracker) stay out of it; the console's `qb` queues them. The queue and its position are saved on the card:
-after a restart it's where it was, stopped. A pause also saves the second
-it paused at: after the boot that follows (the CPU speed's restart, the
-idle power-off, the power key while paused) Now Playing shows that second
-and play picks up there; next or another track start from the top, and
+after a restart it's where it was, stopped. A pause, or a seek while
+paused, also saves the second it is at: after the boot that follows (the
+CPU speed's restart, the idle power-off, the power key while paused) Now
+Playing shows that second and play picks up there; next or another track
+start from the top, and
 previous goes to the top of that track without starting it. (A power cut
 while playing starts the track from its beginning:
 nothing is written while it plays.) The Library and Queue tabs edit
@@ -593,6 +597,9 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       The glass's tap/hold/drag/fling events; the touch
                       buttons (only a touch that went down on one, and
                       stays), their click/hold/repeat, and what they do
+  SeekBar             Now Playing's seek bar: x to whole seconds and back,
+                      the ends and the reach, one touch's tap or scrub, the
+                      stay detent and sliding off (docs/SEEK-BAR.md)
   PowerWindow         The power chip's (AXP192) ADC registers decoded, and
                       their mean/min/max over a window (console P)
   OutputModel         The Output tab's Bluetooth card (its state for every

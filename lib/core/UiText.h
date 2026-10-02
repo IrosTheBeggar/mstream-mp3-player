@@ -102,6 +102,16 @@ inline constexpr const char* kTryAgain = "Try again";
 // x 12 and to 308): "4 of 16 · SPYDRONE", or the headphones' "SPYDRONE (not
 // connected)" (177 px: 170 cut it).
 inline constexpr int kNowPlayingMidW = 190;
+// The seek bar's readout (docs/SEEK-BAR.md section 4.2), in the row above
+// the line while a finger scrubs, on the side away from the knob: the
+// finger's second ("2:31", Title) and, kSeekReadoutGap px after it, the
+// change ("+1:21", Small), or "no change" back where it plays; the group
+// at most kSeekReadoutW wide. Slid off the bar: kSeekCancel (Bold, amber),
+// centred in the line's 296 px.
+inline constexpr int kSeekReadoutW = 150;
+inline constexpr int kSeekReadoutGap = 8;
+inline constexpr const char* kSeekStay = "no change";
+inline constexpr const char* kSeekCancel = "Release to cancel";
 
 // ---- play waiting for the headphones (ui/NowPlayingPage, ui/Ui) ----
 // Now Playing's panel over the artist and album bands (x 112-319, y 90-169):

@@ -7,7 +7,10 @@ area, what is drawn, what a seek does in each player state, the races
 with the decode task and with gapless joins, the edge cases, the files
 and functions, the host tests, the log lines and the device check.
 
-**Status: designed (2026-10-02, at 439148d), not built.** Three designs
+**Status: designed (2026-10-02, at 439148d), and built on
+feature/seek-bar** (section 12's commits 1-3, host-tested; the firmware
+builds with every guard). **The device check (section 11) hasn't been
+run yet**, so there is no "On the device" section. Three designs
 were written for it: one for the touch (the gesture and its feedback),
 one for the player and the engine (the semantics and the races), and one
 for the smallest safe change (the scope and the tests). They were read
@@ -381,7 +384,8 @@ While scrubbing, the finger's y decides:
 | `kStayPx` | 4 px | SeekBar | the detent around where it plays |
 | `kOffAboveY` / `kBackAboveY` | 130 / 138 | SeekBar | off above the first; back from the second down |
 | `kOffBelowY` / `kBackBelowY` | 240 / 232 | SeekBar | off on the strip; back above the second |
-| `kReadoutLeftX` / `kReadoutRightX` | 184 / 136 | SeekBar | the knob right of 184: the readout goes left; left of 136: right; in between, it stays where it was |
+| `kReadoutLeftX` / `kReadoutRightX` / `kReadoutStartX` | 184 / 136 / 160 | SeekBar | the knob right of 184: the readout goes left; left of 136: right; in between, it stays where it was (at the scrub's start: left from 160) |
+| `uitext::kSeekReadoutW`, `kSeekReadoutGap` | 150, 8 | UiText.h | the readout group's width at most, and the gap between its two texts |
 | `kReadoutY`, `kReadoutH` | 137, 33 | NowPlayingPage | the readout row: y 137-169, the full width |
 | the slop, the hold | 12 px, none | TouchRecognizer, `noHold()` | the slop as everywhere; no LongPress on the bar |
 
@@ -460,7 +464,7 @@ It is up only while Scrubbing or Off.
   (y 156), so that their baselines roughly agree. Check it on the
   device's screenshot.
 - The change is in whole seconds: `target/1000 − live/1000`.
-- The readout group is at most 150 px wide (`kReadoutW`).
+- The readout group is at most 150 px wide (`uitext::kSeekReadoutW`).
 
 **Entering** the scrub look:
 
@@ -850,7 +854,7 @@ player logs nothing new; the backend's own start lines follow, as for
      static constexpr uint32_t kMinLengthMs = 10000;
      static constexpr int kGrabPx = 16, kStayPx = 4;
      static constexpr int kOffAboveY = 130, kBackAboveY = 138, kOffBelowY = 240, kBackBelowY = 232;
-     static constexpr int kReadoutLeftX = 184, kReadoutRightX = 136;
+     static constexpr int kReadoutLeftX = 184, kReadoutRightX = 136, kReadoutStartX = 160;
      enum class Phase : uint8_t { Idle, Pressed, Scrubbing, Off };
      // How a touch on the bar ended (None: it hasn't). Let: a drag that
      // wasn't sideways, let go.
@@ -907,8 +911,9 @@ player logs nothing new; the backend's own start lines follow, as for
    - **DragEnd**, after that update: ends Off, Stay or Seek.
    - **Release, Cancel:** ends Cancel.
    - Anything while Idle: nothing.
-4. **`lib/core/UiText.h`**: `kSeekCancel` "Release to cancel" and
-   `kSeekStay` "no change".
+4. **`lib/core/UiText.h`**: `kSeekCancel` "Release to cancel",
+   `kSeekStay` "no change", and the readout's `kSeekReadoutW` (150) and
+   `kSeekReadoutGap` (8), which test_ui_library measures.
 5. **`src/main.cpp`**: the snapshot (5.3), and nothing else.
    - No new console command: the scripted finger drives the bar, and `qs`
      stays the start point's test.
@@ -1113,7 +1118,7 @@ decision in section 7).
 
 - `fits()` for `kSeekCancel` (Bold, in 296 px);
 - the widest readout group (Title "59:59", 8 px, Small "no change")
-  within `kReadoutW` (150 px).
+  within `kSeekReadoutW` (150 px).
 
 **test_queue**: nothing new. `test_resume_anchor_saved_with_the_point`
 already saves a point whose anchor went, and a clear.
