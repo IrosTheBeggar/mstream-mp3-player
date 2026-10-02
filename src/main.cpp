@@ -471,6 +471,20 @@ struct MainUiHost : ui::UiHost {
     if (s.current >= 0 && player.startPoint(&startMs, &startDurationMs)) {
       s.positionMs = startMs;
       s.durationMs = startDurationMs;
+    } else if (s.current >= 0) {
+      // A start the backend hasn't taken up yet: where it was asked to start
+      // (its position may still be the track before's), with the length it
+      // went with; and while the backend knows no length (the file not open
+      // yet, a header-less file's first second, a track let go at 0:00), the
+      // one the player was told: a seek (Now Playing's seek bar,
+      // docs/SEEK-BAR.md) never shows the old second or a dotted line.
+      const uint32_t hint = player.lengthHint();
+      if (player.pendingStart(&startMs)) {
+        s.positionMs = startMs;
+        if (hint) s.durationMs = hint;
+      } else if (s.durationMs == 0 && !s.failed) {
+        s.durationMs = hint;
+      }
     }
     BtSink& bt = audio.bluetooth();
     s.onBluetooth = audio.output() == Output::Bluetooth;

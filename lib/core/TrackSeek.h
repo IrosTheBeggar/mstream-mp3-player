@@ -8,7 +8,8 @@
 #include "ResumeAnchor.h"
 
 // Starting a track part of the way in (docs/SEEK.md): a resume point after
-// a restart or a power-off, a seek (the console's qs). What that needs from
+// a restart or a power-off, a seek (the console's qs, Now Playing's seek
+// bar: docs/SEEK-BAR.md). What that needs from
 // the file, through a reader (FileReader) and no decoder:
 //
 // - where a start really lands: startMs(), the tail rule (the last 5 s and
@@ -50,6 +51,15 @@ namespace trackseek {
 // 0:00 instead: nobody wants the last 2 s of a song, and a file that got
 // shorter since the second was saved plays from its start.
 constexpr uint32_t kTailMs = 5000;
+// A seek (Now Playing's seek bar) never asks for the tail rule's last 5 s,
+// where a start goes to 0:00: it stops this far before the end (a second
+// more covers a length known from an estimate or a saved start point).
+constexpr uint32_t kSeekGuardMs = kTailMs + 1000;
+// The furthest a seek goes in a track `durationMs` long, a whole second (0:
+// only its start).
+inline uint32_t seekLimitMs(uint32_t durationMs) {
+  return durationMs > kSeekGuardMs ? (durationMs - kSeekGuardMs) / 1000 * 1000 : 0;
+}
 
 // Where a start asked for at `requestMs` begins, in a track `durationMs`
 // long (0: not known: as asked; a seek past the end then fails, and the

@@ -12,6 +12,7 @@
 #include "PlaybackController.h"
 #include "QueueModel.h"
 #include "TrackCatalog.h"
+#include "TrackSeek.h"
 #include "hal/IAudioBackend.h"
 
 namespace {
@@ -1708,6 +1709,375 @@ void test_a_backend_without_anchors_is_as_before() {
   TEST_ASSERT_FALSE(got.valid());
 }
 
+// ---- Now Playing's seek bar: seek() (docs/SEEK-BAR.md section 5) ----
+
+namespace {
+constexpr uint32_t kL = 245000;  // 4:05
+}  // namespace
+
+// Playing: it starts there now (one play, with the bar's length as the
+// hint); until the backend takes it up, where it was asked to start is the
+// position (and prev restarts the entry).
+void test_a_seek_while_playing_starts_there_now() {
+  Rig r(2);
+  r.player.play(0);
+  r.audio.position = 30000;
+  r.audio.duration = kL;
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, r.player.seek(r.queue.keyAt(0), 90000, kL));
+  TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+  TEST_ASSERT_EQUAL_UINT32(90000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(kL, r.audio.lastHintMs);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  uint32_t ms = 0, dur = 0;
+  TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+  TEST_ASSERT_FALSE(r.player.pendingStart(&ms));  // (this fake takes every start at once)
+  // A backend that takes the start up later (the Core2's decode task).
+  Rig q(2);
+  q.audio.asyncStarts = true;
+  q.player.play(0);
+  q.audio.take();
+  q.audio.position = 30000;
+  q.audio.duration = kL;
+  TEST_ASSERT_FALSE(q.player.pendingStart(&ms));
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, q.player.seek(q.queue.keyAt(0), 90000, kL));
+  TEST_ASSERT_TRUE(q.player.pendingStart(&ms));
+  TEST_ASSERT_EQUAL_UINT32(90000, ms);
+  TEST_ASSERT_EQUAL_UINT32(30000, q.audio.positionMs());  // still the run before's
+  TEST_ASSERT_EQUAL(PlaybackController::Prev::Restart, q.player.prevAction());
+  q.audio.take();
+  TEST_ASSERT_FALSE(q.player.pendingStart(&ms));
+  TEST_ASSERT_EQUAL_UINT32(90000, q.audio.positionMs());
+}
+
+// 0:00 is prev's restart in every state (a start point of 0 only clears
+// one): playing, a play from 0:00; paused, still paused at 0:00, the held
+// track let go, nothing to resume at; stopped on a start point, it goes.
+void test_a_seek_to_0_is_prevs_restart_in_every_state() {
+  uint32_t ms = 0, dur = 0;
+  {
+    Rig r(2);
+    r.player.play(0);
+    r.audio.position = 60000;
+    TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, r.player.seek(r.queue.keyAt(0), 0, kL));
+    TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  }
+  {
+    Rig r(2);
+    r.player.play(0);
+    r.audio.position = 60000;
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(0), 0, kL));
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+    TEST_ASSERT_EQUAL_INT(1, r.audio.stopCount);
+    TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+    TEST_ASSERT_FALSE(r.player.resumePoint(&ms, &dur));
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+    TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+  }
+  {
+    Rig r(2);
+    r.queue.setCurrent(1);
+    r.player.setStartPoint(83000, kL);  // the resume point, after a boot
+    TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(1), 0, kL));
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+    TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  }
+  {
+    // The contrast: setStartPoint(0) while playing starts nothing.
+    Rig r(2);
+    r.player.play(0);
+    r.audio.position = 60000;
+    r.player.setStartPoint(0, kL);
+    TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  }
+}
+
+// Paused: the held track is let go once (the stop keeps the run's index),
+// the state stays Paused, and the seek is the resume point (no anchor: the
+// old one was the paused sample's), which QueueSaver saves in the same pass
+// (its anchor changed). Play starts there, by the second.
+void test_a_seek_while_paused_lets_the_track_go_and_is_the_resume_point() {
+  Rig r(2);
+  r.audio.anchorsOn = true;
+  r.player.play(0);
+  r.audio.position = 30000;
+  r.audio.duration = kL;
+  r.audio.held = anchorAt(1323000);
+  r.player.togglePlayPause();
+  uint32_t ms = 0, dur = 0;
+  ResumeAnchor got;
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_EQUAL_UINT32(30000, ms);
+  TEST_ASSERT_TRUE(got == r.audio.held);
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(0), 120000, kL));
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.audio.stopCount);
+  got = anchorAt(1);
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_EQUAL_UINT32(120000, ms);
+  TEST_ASSERT_EQUAL_UINT32(kL, dur);
+  TEST_ASSERT_FALSE(got.valid());
+  // A second paused seek: no second stop.
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(0), 150000, kL));
+  TEST_ASSERT_EQUAL_INT(1, r.audio.stopCount);
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(0), 120000, kL));
+  TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+  TEST_ASSERT_EQUAL_UINT32(120000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(kL, r.audio.lastHintMs);
+  TEST_ASSERT_EQUAL_INT(0, r.audio.anchoredPlays);
+}
+
+// Waiting for the headphones: the start point waits with it; the release
+// (they connected, or Play on speaker) starts there, and so does a play
+// after the wait was cancelled.
+void test_a_seek_while_waiting_starts_there_when_they_connect() {
+  {
+    Rig r(2);
+    TestHold hold;
+    r.player.setHold(&hold);
+    hold.hold = true;
+    r.player.play(0);
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Waiting, (int)r.player.state());
+    TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(0), 60000, kL));
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Waiting, (int)r.player.state());
+    uint32_t ms = 0, dur = 0;
+    TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur));
+    TEST_ASSERT_EQUAL_UINT32(60000, ms);
+    TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+    r.player.release();
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+    TEST_ASSERT_EQUAL_UINT32(60000, r.audio.lastStartMs);
+  }
+  {
+    Rig r(2);
+    TestHold hold;
+    r.player.setHold(&hold);
+    hold.hold = true;
+    r.player.play(0);
+    TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(0), 60000, kL));
+    r.player.cancelWait();
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+    hold.hold = false;
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+    TEST_ASSERT_EQUAL_UINT32(60000, r.audio.lastStartMs);
+  }
+  {
+    // Playing when the hold comes (the headphones dropped): it waits there.
+    Rig r(2);
+    TestHold hold;
+    r.player.setHold(&hold);
+    r.player.play(0);
+    hold.hold = true;
+    TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(0), 60000, kL));
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Waiting, (int)r.player.state());
+    TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+    hold.hold = false;
+    r.player.release();
+    TEST_ASSERT_EQUAL_UINT32(60000, r.audio.lastStartMs);
+  }
+}
+
+// Stopped: the start point waits for the next play, with the bar's length.
+void test_a_seek_while_stopped_waits() {
+  Rig r(3);
+  r.queue.setCurrent(1);
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(1), 60000, kL));
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  uint32_t ms = 0, dur = 0;
+  TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur));
+  TEST_ASSERT_EQUAL_UINT32(60000, ms);
+  TEST_ASSERT_EQUAL_UINT32(kL, dur);
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur));
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(60000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(kL, r.audio.lastHintMs);
+}
+
+// The finger's entry isn't current any more: a join heard since (taken
+// first, inside seek()), a skip, an empty queue. Nothing is done.
+void test_a_seek_for_an_entry_that_moved_does_nothing() {
+  uint32_t ms = 0, dur = 0;
+  {
+    Rig r(3);
+    r.player.play(0);
+    const uint32_t key0 = r.queue.keyAt(0);
+    r.audio.advances.push_back(r.audio.nexts.back().token);  // the join is heard
+    TEST_ASSERT_EQUAL(PlaybackController::Seek::Moved, r.player.seek(key0, 120000, kL));
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+  }
+  {
+    Rig r(3);
+    r.player.play(0);
+    const uint32_t key0 = r.queue.keyAt(0);
+    r.player.next();
+    TEST_ASSERT_EQUAL(PlaybackController::Seek::Moved, r.player.seek(key0, 120000, kL));
+    TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+    TEST_ASSERT_EQUAL_INT(2, r.audio.playCount);
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+  }
+  {
+    Rig r(0);
+    TEST_ASSERT_EQUAL(PlaybackController::Seek::NoPlace, r.player.seek(QueueModel::kNone, 120000, kL));
+    TEST_ASSERT_EQUAL_INT(0, r.audio.playCount);
+  }
+}
+
+// Never into the tail (a start in the last 5 s would go to 0:00): the
+// length less 6 s, a whole second; a track of 6 s or less: its 0:00.
+void test_a_seek_never_asks_the_tail() {
+  Rig r(2);
+  r.player.play(0);
+  r.player.seek(r.queue.keyAt(0), 243000, kL);
+  TEST_ASSERT_EQUAL_UINT32(239000, r.audio.lastStartMs);
+  r.player.seek(r.queue.keyAt(0), 300000, kL);
+  TEST_ASSERT_EQUAL_UINT32(239000, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(239000, trackseek::seekLimitMs(kL));
+  TEST_ASSERT_EQUAL_UINT32(kL - 239000 - 1000, trackseek::kTailMs);
+  r.player.seek(r.queue.keyAt(0), 3000, 5000);
+  TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastStartMs);
+  TEST_ASSERT_EQUAL_INT(4, r.audio.playCount);
+  TEST_ASSERT_EQUAL_UINT32(0, trackseek::seekLimitMs(6000));
+  TEST_ASSERT_EQUAL_UINT32(1000, trackseek::seekLimitMs(7999));
+}
+
+// A track that failed, or a length of 0 (the dotted line): nothing at all.
+void test_a_seek_on_a_failed_or_unknown_length_track_does_nothing() {
+  {
+    Rig r(2);
+    r.player.play(0);
+    r.audio.failedFlag = true;  // (before the update that would skip it)
+    TEST_ASSERT_EQUAL(PlaybackController::Seek::NoPlace, r.player.seek(r.queue.keyAt(0), 60000, kL));
+    TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+    TEST_ASSERT_EQUAL_INT(0, r.audio.stopCount);
+  }
+  {
+    Rig r(2);
+    r.player.play(0);
+    r.player.togglePlayPause();
+    TEST_ASSERT_EQUAL(PlaybackController::Seek::NoPlace, r.player.seek(r.queue.keyAt(0), 60000, 0));
+    TEST_ASSERT_EQUAL_INT(1, r.audio.playCount);
+    TEST_ASSERT_EQUAL_INT(0, r.audio.stopCount);
+    uint32_t ms = 0, dur = 0;
+    TEST_ASSERT_FALSE(r.player.startPoint(&ms, &dur));
+  }
+}
+
+// The sleep timer's marks and "pause after this track" stay: a seek is no
+// play from a pause, no skip and no end.
+void test_a_seek_keeps_the_timers_marks_and_pause_after() {
+  Rig r(3);
+  r.player.play(0);
+  r.player.setPauseAfterTrack(true);
+  r.audio.position = 60000;
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, r.player.seek(r.queue.keyAt(0), 120000, kL));
+  TEST_ASSERT_TRUE(r.player.pauseAfterTrack());
+  r.player.pauseByTimer();
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(0), 30000, kL));
+  TEST_ASSERT_TRUE(r.player.pausedByTimer());
+  TEST_ASSERT_TRUE(r.player.pauseAfterTrack());
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, r.player.seek(r.queue.keyAt(0), 0, kL));
+  TEST_ASSERT_TRUE(r.player.pausedByTimer());
+  TEST_ASSERT_EQUAL_UINT32(0, r.player.timerStops());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  // The computer's pause too (the USB visualizer).
+  Rig q(2);
+  q.player.play(0);
+  q.player.pauseByComputer();
+  q.player.seek(q.queue.keyAt(0), 30000, kL);
+  TEST_ASSERT_TRUE(q.player.pausedByComputer());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)q.player.state());
+}
+
+// A seek is a listener's action: the count of failures in a row starts over
+// (as after next or prev), so a queue that fails again isn't given up early.
+void test_a_seek_resets_the_failures_in_a_row() {
+  Rig r(2);
+  r.player.play(0);
+  r.audio.failedFlag = true;
+  r.player.update(0);  // 0 failed: 1 plays (one failure in a row)
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, r.player.seek(r.queue.keyAt(1), 60000, kL));
+  r.audio.failedFlag = true;
+  r.player.update(0);  // 1 failed: one in a row again, not two (which would stop)
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+  TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+}
+
+// lengthHint() belongs to its entry: another entry current, none; the same
+// entry again (its track never changes), the same length.
+void test_the_length_hint_follows_its_entry() {
+  Rig r(3);
+  r.player.play(0);
+  TEST_ASSERT_EQUAL_UINT32(0, r.player.lengthHint());
+  r.audio.position = 60000;
+  r.player.seek(r.queue.keyAt(0), 120000, kL);
+  TEST_ASSERT_EQUAL_UINT32(kL, r.player.lengthHint());
+  r.player.next();
+  TEST_ASSERT_EQUAL_UINT32(0, r.player.lengthHint());
+  r.player.prev();  // (at 0:00: the entry before)
+  TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(kL, r.player.lengthHint());
+  // A play's hint (a resume point's length) is noted too.
+  r.player.stop();
+  r.queue.setCurrent(2);
+  r.player.setStartPoint(30000, 180000);
+  r.player.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(180000, r.player.lengthHint());
+}
+
+// Prev's restart while paused lets the track go (the backend knows no
+// length then): the length it had stays the hint, so Now Playing keeps
+// "0:00 / 4:05" and the seek bar.
+void test_prev_restart_while_paused_keeps_the_length() {
+  Rig r(2);
+  r.player.play(0);
+  r.audio.duration = kL;
+  r.audio.position = 30000;
+  r.player.togglePlayPause();
+  r.player.prev();
+  TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
+  TEST_ASSERT_EQUAL_UINT32(kL, r.player.lengthHint());
+}
+
+// Paused before the backend took a seek's start up: the resume point is
+// where it was asked to start (not the run before's second), no anchor.
+void test_the_resume_point_while_a_start_is_pending() {
+  Rig r(2);
+  r.audio.asyncStarts = true;
+  r.audio.anchorsOn = true;
+  r.player.play(0);
+  r.audio.take();
+  r.audio.position = 30000;
+  r.audio.duration = kL;
+  r.audio.held = anchorAt(1323000);
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, r.player.seek(r.queue.keyAt(0), 90000, kL));
+  r.player.togglePlayPause();
+  uint32_t ms = 0, dur = 0;
+  ResumeAnchor got = anchorAt(1);
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_EQUAL_UINT32(90000, ms);
+  TEST_ASSERT_EQUAL_UINT32(kL, dur);
+  TEST_ASSERT_FALSE(got.valid());
+  r.audio.take();  // taken up (paused): the backend's own again
+  r.audio.position = 90000;
+  TEST_ASSERT_TRUE(r.player.resumePoint(&ms, &dur, &got));
+  TEST_ASSERT_TRUE(got == r.audio.held);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
@@ -1781,5 +2151,18 @@ int main(int, char**) {
   RUN_TEST(test_the_resume_point_carries_the_held_tracks_anchor);
   RUN_TEST(test_stop_keeping_place_keeps_the_backends_anchor);
   RUN_TEST(test_a_backend_without_anchors_is_as_before);
+  RUN_TEST(test_a_seek_while_playing_starts_there_now);
+  RUN_TEST(test_a_seek_to_0_is_prevs_restart_in_every_state);
+  RUN_TEST(test_a_seek_while_paused_lets_the_track_go_and_is_the_resume_point);
+  RUN_TEST(test_a_seek_while_waiting_starts_there_when_they_connect);
+  RUN_TEST(test_a_seek_while_stopped_waits);
+  RUN_TEST(test_a_seek_for_an_entry_that_moved_does_nothing);
+  RUN_TEST(test_a_seek_never_asks_the_tail);
+  RUN_TEST(test_a_seek_on_a_failed_or_unknown_length_track_does_nothing);
+  RUN_TEST(test_a_seek_keeps_the_timers_marks_and_pause_after);
+  RUN_TEST(test_a_seek_resets_the_failures_in_a_row);
+  RUN_TEST(test_the_length_hint_follows_its_entry);
+  RUN_TEST(test_prev_restart_while_paused_keeps_the_length);
+  RUN_TEST(test_the_resume_point_while_a_start_is_pending);
   return UNITY_END();
 }

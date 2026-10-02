@@ -702,6 +702,86 @@ void test_the_word_goes_only_when_it_changes() {
   TEST_ASSERT_EQUAL_UINT32(sent, w.player.gaplessStats().offers);
 }
 
+// ---- Now Playing's seek bar (docs/SEEK-BAR.md section 6) ----
+
+// A seek just after the reader passed the join (before the player's
+// update): the heard join is taken inside seek() first, so the finger's
+// entry isn't current any more: Moved, nothing done; the joined track plays
+// on as one stream (this backend starts every play from 0, which is enough
+// for the words and the joins).
+void test_a_seek_right_after_a_join_is_dropped() {
+  World w({"a", "b", "c"}, {"a", "b", "c"});
+  w.put("a", track(44100, 60000, 41));
+  w.put("b", track(44100, 30000, 42));
+  w.put("c", track(44100, 30000, 43));
+  w.player.setRepeat(false);
+  w.player.play(0);
+  const uint32_t keyA = w.queue.keyAt(0);
+  w.untilDecodedAhead();
+  w.audio.read(w.heardAt() + 100 - w.audio.ring.readPos());
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Moved, w.player.seek(keyA, 30000, 245000));
+  TEST_ASSERT_EQUAL_INT(1, w.player.currentIndex());
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+  w.audio.consumerPaused = false;
+  w.runToStop();
+  assertSame(concat({w.get("a").kept(), w.get("b").kept(), w.get("c").kept()}), w.audio.heard);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+}
+
+// A seek while the next track is decoded ahead: the request takes the
+// pending boundary out with it (the old word's token is never taken); the
+// word goes again with a new token after the request, and the album still
+// ends as one stream from the seek on.
+void test_a_seek_while_the_next_is_decoded_ahead_takes_it_back_out() {
+  World w({"a", "b", "c"}, {"a", "b", "c"});
+  w.put("a", track(44100, 60000, 44));
+  w.put("b", track(44100, 30000, 45));
+  w.put("c", track(44100, 30000, 46));
+  w.player.setRepeat(false);
+  w.player.play(0);
+  w.untilDecodedAhead();
+  const uint32_t old = w.player.offeredToken();
+  TEST_ASSERT_TRUE(old != 0);
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, w.player.seek(w.queue.keyAt(0), 30000, 245000));
+  TEST_ASSERT_EQUAL_INT(2, w.audio.plays);
+  TEST_ASSERT_EQUAL_INT(0, w.player.currentIndex());
+  const uint32_t fresh = w.player.offeredToken();
+  TEST_ASSERT_TRUE(fresh != 0 && fresh != old);
+  TEST_ASSERT_EQUAL_UINT32(w.queue.keyAt(1), w.player.offeredKey());
+  w.audio.consumerPaused = false;
+  w.runToStop();
+  // Nothing was heard before the seek (the reader was held): a from its
+  // start again (this backend's), then b and c joined.
+  assertSame(concat({w.get("a").kept(), w.get("b").kept(), w.get("c").kept()}), w.audio.heard);
+  TEST_ASSERT_EQUAL_INT(2, w.audio.plays);
+  TEST_ASSERT_EQUAL_UINT32(2, w.audio.advances.size());
+  for (const auto& a : w.audio.advances) TEST_ASSERT_TRUE(a.token != old);
+  TEST_ASSERT_EQUAL_UINT32(fresh, w.audio.advances[0].token);
+}
+
+// The sleep timer's End of track with its gate up: the word after a seek is
+// still "nothing follows", and the pause at the boundary hears nothing of
+// the next track.
+void test_end_of_track_still_names_nothing_after_a_seek() {
+  World w({"a", "b"}, {"a", "b"});
+  w.put("a", track(44100, 60000, 47));
+  w.put("b", track(44100, 30000, 48));
+  w.gate.ends = [] { return true; };
+  w.player.setPauseAfterTrack(true);
+  w.player.play(0);
+  for (int i = 0; i < 50; ++i) w.tick();
+  TEST_ASSERT_EQUAL_UINT32(0, w.player.offeredToken());
+  const uint32_t offers = w.player.gaplessStats().offers;
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, w.player.seek(w.queue.keyAt(0), 30000, 245000));
+  TEST_ASSERT_EQUAL_UINT32(offers + 1, w.player.gaplessStats().offers);  // the word again, after the request
+  TEST_ASSERT_EQUAL_UINT32(0, w.player.offeredToken());
+  TEST_ASSERT_TRUE(w.player.pauseAfterTrack());
+  w.runUntil([&w] { return w.player.state() == PlayState::Paused; });
+  TEST_ASSERT_TRUE(w.audio.probes.empty());
+  TEST_ASSERT_EQUAL_INT(1, w.player.currentIndex());
+  TEST_ASSERT_TRUE(w.player.pausedByTimer());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_an_album_plays_as_one_stream);
@@ -720,5 +800,8 @@ int main(int, char**) {
   RUN_TEST(test_a_next_track_that_cannot_be_opened_is_skipped_as_before);
   RUN_TEST(test_a_late_advance_still_counts_as_the_entry_s_start);
   RUN_TEST(test_the_word_goes_only_when_it_changes);
+  RUN_TEST(test_a_seek_right_after_a_join_is_dropped);
+  RUN_TEST(test_a_seek_while_the_next_is_decoded_ahead_takes_it_back_out);
+  RUN_TEST(test_end_of_track_still_names_nothing_after_a_seek);
   return UNITY_END();
 }

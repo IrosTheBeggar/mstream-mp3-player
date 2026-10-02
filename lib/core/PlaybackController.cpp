@@ -3,7 +3,14 @@
 
 #include "PlaybackController.h"
 
+#include <algorithm>
 #include <string>
+
+#include "TrackSeek.h"
+
+// The seek bar's reach stops short of the tail rule (a start there would go
+// to 0:00).
+static_assert(trackseek::kSeekGuardMs > trackseek::kTailMs, "a seek must never land in the tail");
 
 void PlaybackController::startCurrent() {
   if (!hasTrack()) return;
@@ -35,6 +42,7 @@ void PlaybackController::startNow() {
   if (at > 0) start.anchor = startAnchor_;  // (it goes with the start point)
   clearStartPoint();  // once: a later start of the entry is from its beginning
   playedFromMs_ = at;
+  noteLength(hint);  // (a resume point's length, a seek's, a built-in track's)
   audio_.play(std::string(path), start);
   setPlaying(PlayState::Playing);
   cued_ = false;
@@ -159,6 +167,9 @@ void PlaybackController::prev() {
 }
 
 void PlaybackController::restart() {
+  // The length it had stays shown at 0:00 (paused: "0:00 / 4:05", not
+  // "--:--", while the backend holds nothing), and the seek bar with it.
+  if (state_ != PlayState::Stopped && !cued_) noteLength(audio_.durationMs());
   clearStartPoint();
   switch (state_) {
     case PlayState::Playing:
@@ -241,6 +252,10 @@ bool PlaybackController::stopKeepingPlace() {
 
 void PlaybackController::setStartPoint(uint32_t ms, uint32_t durationMs, const ResumeAnchor* anchor) {
   Act act(*this);
+  placeStart(ms, durationMs, anchor);
+}
+
+void PlaybackController::placeStart(uint32_t ms, uint32_t durationMs, const ResumeAnchor* anchor) {
   if (!hasTrack() || ms == 0) {
     clearStartPoint();
     return;
@@ -290,10 +305,44 @@ bool PlaybackController::startPoint(uint32_t* ms, uint32_t* durationMs, ResumeAn
 bool PlaybackController::resumePoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor) const {
   if (startPoint(ms, durationMs, anchor)) return true;
   if ((state_ != PlayState::Paused && state_ != PlayState::Waiting) || cued_ || !hasTrack()) return false;
+  if (!audio_.positionKnown()) {
+    // Paused before the backend took the start up (within ~150 ms of a
+    // seek): its position may still be the run before's. Where that start
+    // was asked for, as stopKeepingPlace() reads it, with no anchor.
+    *ms = playedFromMs_;
+    *durationMs = lengthHint();
+    if (anchor) *anchor = ResumeAnchor{};
+    return *ms > 0;
+  }
   *ms = audio_.positionMs();
   *durationMs = audio_.durationMs();
   if (anchor && !audio_.resumeAnchor(anchor)) *anchor = ResumeAnchor{};
   return *ms > 0;
+}
+
+PlaybackController::Seek PlaybackController::seek(uint32_t key, uint32_t ms, uint32_t durationMs) {
+  Act act(*this);  // the heard join first: the entry may not be the one the finger was on
+  if (!hasTrack()) return Seek::NoPlace;
+  if (queue_.currentKey() != key) return Seek::Moved;
+  const bool holding = state_ != PlayState::Stopped && !cued_;
+  if (durationMs == 0 || (holding && audio_.failed())) return Seek::NoPlace;
+  failuresInARow_ = 0;  // a listener's action, as next and prev
+  noteLength(durationMs);
+  ms = std::min(ms, trackseek::seekLimitMs(durationMs));  // never into the tail (it would start at 0:00)
+  if (ms == 0) {
+    restart();  // (a start point of 0 only clears one)
+  } else {
+    placeStart(ms, durationMs, nullptr);  // (no nested Act between the check and the start)
+  }
+  return state_ == PlayState::Playing ? Seek::Started : Seek::Waits;
+}
+
+bool PlaybackController::pendingStart(uint32_t* ms) const {
+  // As prevAction() reads it: only while the backend holds this entry's
+  // track (the play it was asked for) and hasn't taken that start up.
+  if (!hasTrack() || state_ == PlayState::Stopped || cued_ || audio_.positionKnown()) return false;
+  *ms = playedFromMs_;
+  return true;
 }
 
 void PlaybackController::pauseByTimer() {
