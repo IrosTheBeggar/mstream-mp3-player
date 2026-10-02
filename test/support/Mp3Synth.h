@@ -122,8 +122,9 @@ inline void putBe32(uint8_t* p, uint32_t v) {
 
 // LAME's TOC (VbrTag.c): AddVbrFrame()'s bag of sums every `want` frames
 // (400 slots, halved when full, want doubled), then Xing_seek_table() with
-// its float index.
-inline void lameToc(const std::vector<uint32_t>& kbps, uint8_t toc[100]) {
+// its float index. `frames` (if given): for each point i, the frames whose
+// sum its byte share is (0: none, pos 0).
+inline void lameToc(const std::vector<uint32_t>& kbps, uint8_t toc[100], uint32_t* frames = nullptr) {
   std::vector<uint64_t> bag(400, 0);
   uint64_t sum = 0;
   uint32_t want = 1, seen = 0, pos = 0;
@@ -142,14 +143,17 @@ inline void lameToc(const std::vector<uint32_t>& kbps, uint8_t toc[100]) {
     }
   }
   toc[0] = 0;
+  if (frames) frames[0] = 0;
   for (int i = 1; i < 100; ++i) {
     if (pos == 0) {
       toc[i] = 0;
+      if (frames) frames[i] = 0;
       continue;
     }
     const float j = static_cast<float>(i) / 100.0f;
     int indx = static_cast<int>(j * static_cast<float>(pos));
     if (indx > static_cast<int>(pos) - 1) indx = static_cast<int>(pos) - 1;
+    if (frames) frames[i] = (static_cast<uint32_t>(indx) + 1) * want;
     int seek = static_cast<int>(256.0 * static_cast<double>(bag[indx]) / static_cast<double>(sum));
     if (seek > 255) seek = 255;
     toc[i] = static_cast<uint8_t>(seek);

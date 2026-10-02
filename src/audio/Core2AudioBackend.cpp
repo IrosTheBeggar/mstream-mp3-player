@@ -1319,7 +1319,7 @@ void Core2AudioBackend::noteRun() {
 }
 
 PinnedMp3* Core2AudioBackend::makeMp3() {
-  mp3_.reset();  // the track before's generator gives the block back first
+  mp3_.reset();  // the track before's generator (it gave its state back when it stopped; else here)
   const char* why = !mp3Arena_.attached() ? "no pinned block" : mp3Arena_.inUse() ? "the pinned block is in use" : "";
   bool pinned = false;
   PinnedMp3* g = PinnedMp3::make(mp3Arena_, &pinned);

@@ -87,8 +87,10 @@ libmad's frame and synthesis state (25 KB) is one PSRAM block, allocated
 first thing in `Core2AudioBackend::begin()` while the lower 2 MB of the
 PSRAM window are free, and lent to one MP3 generator at a time
 (`PinnedMp3`, src/audio; `DecoderArena`, lib/core, host-tested in
-test_decoder_arena; the generator before is destroyed before the next is
-made, so a gapless join or a seek reuses it the same way). ESP8266Audio
+test_decoder_arena; the generator gives it back when it stops, with its
+internal-RAM buffer and stream state (`DecoderParts`, test_decoder_parts),
+and the generator before is destroyed before the next is made, so a
+gapless join or a seek reuses it the same way). ESP8266Audio
 used to malloc it per track: above 0x3FA00000 the same file decoded at
 1.7-3.6x realtime instead of 4.7-5.0x, depending on the address and the
 image ([RESAMPLER.md](RESAMPLER.md) section 10d). Its input buffer and
@@ -186,8 +188,9 @@ The rules that keep it deadlock- and glitch-free:
   a seek back into it; CBR arithmetic (an Info header, or none, and
   frames that agree on their bitrate: frame k is at the first audio
   frame + floor(k x L), exact to the sample); LAME's TOC inverted (a LAME
-  VBR file: point i is the byte share after (floor(i x pos / 100) + 1) x
-  want frames of LAME's bag, truncated to 1/256); another encoder's Xing
+  VBR file: point i is the byte share after (floor(i / 100 x pos) + 1) x
+  want frames of LAME's bag, in float as LAME computes it, truncated to
+  1/256); another encoder's Xing
   TOC, VBRI's, or the average bitrate (by the header, or the length
   `play()` was handed for a VBR file without a header), each an estimate
   then a chain of frame headers read around it (the first frame at or

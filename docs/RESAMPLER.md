@@ -1954,8 +1954,9 @@ measured and not taken: all of it would buy 2-4 % for 25 KB, the synth
 alone 0-2 % for 4.2 KB.
 
 - **One track at a time.** `DecoderArena` lends the block to one
-  generator, from its creation to its destruction; `makeMp3()` destroys
-  the track before's generator before it makes the next one. Gapless
+  generator, from its creation until it stops (or its destruction);
+  `makeMp3()` destroys the track before's generator before it makes the
+  next one. Gapless
   playback's decode-ahead opens the next track only after the one before
   is closed (GAPLESS.md section 3.2), so a join, a cut's restart, a seek
   start and the bench all reuse it the same way. Should a generator ever
@@ -1969,8 +1970,17 @@ alone 0-2 % for 4.2 KB.
 - **Untouched:** the converter's internal table copy (7.6 KB, freed at
   44.1 kHz: section 10c) and the visualizer use internal RAM and nothing
   of this; FLAC is unchanged.
+- **Given back on stop.** ESP8266Audio frees nothing it was handed, so
+  `PinnedMp3` gives its state back itself (`lib/core/DecoderParts`) when
+  it stops, as the library's `stop()` frees what it malloc'd: the block,
+  and the buffer and stream state (4.1 KB of internal RAM). The backend
+  keeps a stopped generator until the next MP3 track, so without this a
+  FLAC track after an MP3, or a stopped player (a headphone connection's
+  allocations), would have had 4.1 KB less internal RAM than at
+  d3c9b91 (found in review). A `begin()` that fails gives it back too.
 - **Host tests:** test_decoder_arena (the layout, the alignment, one
-  claim at a time, a block across the 0x3FA00000 line).
+  claim at a time, a block across the 0x3FA00000 line), test_decoder_parts
+  (given back once, on stop; a failed part; a move).
 
 **Checked (2026-10-02).** The final image (ELF 879fea54) and three
 variants built only for this, each flashed and benched from a boot:

@@ -10,6 +10,7 @@
 // Run: pio test -e native -f test_track_seek
 #include <unity.h>
 
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -400,6 +401,46 @@ void test_lame_toc_inverted_beats_straight_lines() {
   }
 }
 
+// Each TOC point sits at the frame LAME took its byte share from: LAME's
+// index is float (i / 100.0f x pos), and for 20 (pos, i) pairs that is one
+// lower than the exact i x pos / 100 (pos 300, i 21: 62, not 63). At x =
+// that frame's first sample the model gives the point's byte exactly; one
+// bag step off, it would interpolate from the point before. Every pos
+// (want 1), and the large pos values with want 32 (pos 300: 9,600 frames,
+// the case found in review).
+void test_lame_toc_points_use_lames_float_index() {
+  std::vector<uint32_t> sizes;
+  for (uint32_t n = 1; n < 400; ++n) sizes.push_back(n);
+  for (uint32_t pos : {200u, 225u, 300u, 340u, 360u, 380u, 383u}) {
+    sizes.push_back(pos * 32);
+    sizes.push_back(pos * 32 + 31);
+  }
+  const uint32_t spf = 1152;
+  int checked = 0;
+  for (const uint32_t n : sizes) {
+    const std::vector<uint32_t> kbps = mp3synth::vbrRates(3, n, n);
+    uint8_t toc[100];
+    uint32_t frames[100];
+    mp3synth::lameToc(kbps, toc, frames);
+    const uint32_t audio = n * 417;
+    for (int i = 1; i < 100; ++i) {
+      // (A point the next one replaces, or the end's, isn't one.)
+      if (frames[i] == 0 || frames[i] >= n || (i < 99 && frames[i + 1] == frames[i])) continue;
+      uint32_t byte = 0;
+      TEST_ASSERT_TRUE(trackseek::lameTocByte(toc, n, audio, spf, static_cast<uint64_t>(frames[i]) * spf, &byte));
+      const uint32_t want = static_cast<uint32_t>((2 * static_cast<uint64_t>(toc[i]) + 1) * audio / 512);
+      if (byte != want) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "%u frames, point %d (frame %u): byte %u, not %u", (unsigned)n, i,
+                 (unsigned)frames[i], (unsigned)byte, (unsigned)want);
+        TEST_FAIL_MESSAGE(msg);
+      }
+      ++checked;
+    }
+  }
+  TEST_ASSERT_TRUE(checked > 20000);
+}
+
 // plan(): a LAME VBR file by its TOC inverted, landing on a frame of the
 // chain at or after the estimate, inexact (the time asked); another
 // encoder, no LAME tag or a decreasing TOC: the straight lines; no TOC: the
@@ -733,6 +774,7 @@ int main(int, char**) {
   RUN_TEST(test_flac_stream_info);
   RUN_TEST(test_lame_bag_closed_form);
   RUN_TEST(test_lame_toc_inverted_beats_straight_lines);
+  RUN_TEST(test_lame_toc_points_use_lames_float_index);
   RUN_TEST(test_plan_sources_for_vbr);
   RUN_TEST(test_cbr_plans_are_exact_to_the_sample);
   RUN_TEST(test_a_cbr_stream_that_turns_vbr_falls_through);

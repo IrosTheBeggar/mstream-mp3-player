@@ -563,6 +563,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       at another rate plays (freed at a 44.1 kHz one)
   DecoderArena        One block for libmad's state, lent to one MP3 decoder
                       at a time (pinned in the PSRAM's fast lower 2 MB)
+  DecoderParts        One decoder's state and who frees each part: given
+                      back once, when the decoder stops
   TransportSync       Generation-tagged decode progress (no stale "track ended")
   ToneGen, ClickGen   Built-in test tones; click tracks with a known beat
   ToneTrack           What a built-in track's path asks for ("tone:1000@48000")

@@ -27,8 +27,8 @@
 //      their bitrate): frame k is at firstAudio + floor(k x L) or a byte
 //      later: exact;
 //   4. LAME's TOC inverted (a LAME VBR file's Xing TOC as LAME computed it:
-//      point i is the byte share after (floor(i x pos / 100) + 1) x want
-//      frames, truncated to 1/256; section 6.3);
+//      point i is the byte share after (floor(i / 100 x pos) + 1) x want
+//      frames, in float as LAME has it, truncated to 1/256; section 6.3);
 //   5. other encoders' Xing TOC (point i at i% of the time), 6. VBRI's TOC,
 //      7. the average bitrate (the header's, or the hint's), each an
 //      estimate, then the chain walk: the first frame at or after it, in a

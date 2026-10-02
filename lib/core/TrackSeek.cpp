@@ -3,6 +3,7 @@
 
 #include "TrackSeek.h"
 
+#include <cmath>
 #include <cstring>
 
 #include "LameTag.h"
@@ -324,7 +325,7 @@ bool lameTocByte(const uint8_t toc[100], uint32_t frames, uint32_t audioBytes, u
   if (frames == 0 || audioBytes == 0 || spf == 0) return false;
   const LameBag bag = lameBag(frames);
   // The points (frames, bytes x 512), (0, 0) first and (frames, all) last.
-  // Point i is the byte share after (floor(i x pos / 100) + 1) x want
+  // Point i is the byte share after (floor(i / 100 x pos) + 1) x want
   // frames, truncated to 1/256 by LAME: + 0.5/256 undoes it on average.
   // A point whose frames don't grow replaces the one before.
   uint32_t f[101];
@@ -342,7 +343,13 @@ bool lameTocByte(const uint8_t toc[100], uint32_t frames, uint32_t audioBytes, u
   add(0, 0);
   if (bag.pos > 0) {
     for (uint32_t i = 1; i < 100; ++i) {
-      const uint32_t indx = i * bag.pos / 100;
+      // In float, as LAME's Xing_seek_table() has it: i / 100.0f is
+      // rounded, so its product with pos can fall just under a whole
+      // number the exact i x pos / 100 is (pos 300, i 21: 62.99998, not
+      // 63): the point then sits a bag step earlier.
+      const float j = static_cast<float>(i) / 100.0f;
+      uint32_t indx = static_cast<uint32_t>(std::floor(j * static_cast<float>(bag.pos)));
+      if (indx > bag.pos - 1) indx = bag.pos - 1;
       add((indx + 1) * bag.want, (2 * static_cast<uint64_t>(toc[i]) + 1) * audioBytes);
     }
   }

@@ -781,7 +781,8 @@ whose encoder string starts with "LAME", and a TOC that doesn't decrease:
 N         = the Xing frame count (audio frames)
 want      = 2^m, the smallest with ⌊N / 2^m⌋ < 400        (LAME's bag after N frames)
 pos       = ⌊N / want⌋
-F_i       = (⌊i · pos / 100⌋ + 1) · want,  i = 1..99      (frames before TOC point i's byte)
+F_i       = (⌊fl(fl(i / 100) · pos)⌋ + 1) · want,  i = 1..99   (frames before TOC point i's byte;
+                                                          fl: rounded to float, as LAME computes it)
 audio     = the Xing byte count − the header frame's length
 B_i       = (toc[i] + 0.5) / 256 · audio                  (the truncation undone)
 points    = (0, 0), (F_i, B_i)..., (N, audio); a point whose F doesn't grow replaces the one before
@@ -805,6 +806,13 @@ estimate  = firstAudio + the straight line through the points at x
   and 2.4 s today (2.2).
 - `want`'s closed form matches LAME's loop (2.3: *One More Time* 12,284
   frames gives want 32, pos 383; *Nightvision* 4,001 gives 16, 250).
+- `F_i`'s index is computed in float, as LAME's `Xing_seek_table()` does
+  (`j = i / 100.0f`, `floor(j · pos)`). `i / 100` isn't exact in float, so
+  for 20 (pos, i) pairs the product falls just under the whole number
+  `i · pos / 100` is (pos 300, i 21: 62.99998, not 63). The integer form
+  placed those points one bag step late (pos 300: 32 frames, 0.84 s);
+  found in review, test_track_seek checks every point against LAME's code
+  for pos 1-399.
 
 **For other encoders.** FFmpeg's encoder ("Lavf"/"Lavc") is believed to
 fill its TOC the same way. That wasn't checked: the card has no such file.

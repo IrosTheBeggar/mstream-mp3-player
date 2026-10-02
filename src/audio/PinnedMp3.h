@@ -6,8 +6,10 @@
 #include <esp_heap_caps.h>
 
 #include <cstdlib>
+#include <utility>
 
 #include "DecoderArena.h"
+#include "DecoderParts.h"
 #include "FrameCursor.h"
 
 // ESP8266Audio's MP3 generator with two additions: libmad's state where it
@@ -24,9 +26,14 @@
 // are allocated per track in internal RAM, as ESP8266Audio's malloc put
 // them (each under the framework's 4 KB threshold), and PSRAM only without
 // room there. Through ESP8266Audio's constructor for separately
-// preallocated parts: it then frees none of them, so this frees what it
-// allocated and lets the block go. The backend resets the generator before
-// it makes the next one, so a track never shares the block with another.
+// preallocated parts: it then frees none of them, so this gives them back
+// itself (DecoderParts) when it stops, as ESP8266Audio's stop() frees what
+// it malloc'd: the backend keeps a stopped generator until the next MP3
+// track, and a FLAC track or an idle player after it gets the 4.1 KB of
+// internal RAM back. Also after a begin() that failed. One begin() per
+// generator (the backend makes one per track). The block is back on stop(),
+// and the backend resets the generator before it makes the next one
+// anyway, so a track never shares it with another.
 //
 // The cursor (docs/SEEK.md section 4.1), from the generator's protected
 // state: the frame's file offset is lastReadPos + (stream->this_frame -
@@ -44,42 +51,43 @@
 // update (lastReadPos, buff, stream, samplePtr, nsCount, nsCountMax).
 class PinnedMp3 : public AudioGeneratorMP3, public FrameCursor {
 public:
-  static constexpr size_t kFrame = 0;  // the arena's parts
+  static constexpr size_t kFrame = 0;  // the arena's parts (or malloc'd in their place)
   static constexpr size_t kSynth = 1;
+  static constexpr size_t kBuff = 2;  // per track, internal RAM first
+  static constexpr size_t kStream = 3;
   static constexpr size_t kArenaParts[] = {static_cast<size_t>(preAllocFrameSize()),
                                            static_cast<size_t>(preAllocSynthSize())};
 
   // A generator on the arena's block (`pinned` true), or, without it, on
   // state of its own. Null: no RAM.
   static PinnedMp3* make(DecoderArena& arena, bool* pinned) {
-    *pinned = arena.claim();
-    void* frame = *pinned ? arena.part(kFrame) : std::malloc(preAllocFrameSize());
-    void* synth = *pinned ? arena.part(kSynth) : std::malloc(preAllocSynthSize());
-    void* buf = allocSmall(preAllocBuffSize());
-    void* stream = allocSmall(preAllocStreamSize());
-    if (!buf || !stream || !frame || !synth) {
-      heap_caps_free(buf);
-      heap_caps_free(stream);
-      if (*pinned) {
-        arena.release();
-      } else {
-        std::free(frame);
-        std::free(synth);
-      }
-      return nullptr;
+    DecoderParts parts;
+    *pinned = parts.claim(arena);
+    if (!*pinned) {
+      parts.add(std::malloc(preAllocFrameSize()), freeMalloc);
+      parts.add(std::malloc(preAllocSynthSize()), freeMalloc);
     }
-    return new PinnedMp3(*pinned ? &arena : nullptr, buf, stream, frame, synth);
+    parts.add(allocSmall(preAllocBuffSize()), freeCaps);
+    parts.add(allocSmall(preAllocStreamSize()), freeCaps);
+    if (!parts.ok()) return nullptr;  // (what there is goes back)
+    return new PinnedMp3(std::move(parts));
   }
 
-  ~PinnedMp3() override {
-    heap_caps_free(buf_);
-    heap_caps_free(stream_);
-    if (arena_) {
-      arena_->release();
-    } else {
-      std::free(frame_);
-      std::free(synth_);
-    }
+  bool begin(AudioFileSource* source, AudioOutput* output) override {
+    if (!parts_.ok()) return false;  // stopped: its state is gone
+    if (AudioGeneratorMP3::begin(source, output)) return true;
+    // (It sets libmad's pointers only on success: nothing points at them.)
+    parts_.release();
+    return false;
+  }
+
+  // ESP8266Audio's stop() (libmad finished, its pointers null; also the
+  // one loop() calls after three MAD_ERROR_BUFLEN), then the state given
+  // back. Safe to repeat. The cursor stays valid: at() says no frame.
+  bool stop() override {
+    const bool closed = AudioGeneratorMP3::stop();
+    parts_.release();
+    return closed;
   }
 
   // FrameCursor: the sample offered now (or refused last).
@@ -94,22 +102,17 @@ public:
   const uint8_t* frameBytes() const override { return stream ? stream->this_frame : nullptr; }
 
 private:
-  PinnedMp3(DecoderArena* arena, void* buf, void* stream, void* frame, void* synth)
-      : AudioGeneratorMP3(buf, preAllocBuffSize(), stream, preAllocStreamSize(), frame, preAllocFrameSize(), synth,
-                          preAllocSynthSize()),
-        arena_(arena),
-        buf_(buf),
-        stream_(stream),
-        frame_(frame),
-        synth_(synth) {}
+  // (The base is built before parts_ takes them over.)
+  explicit PinnedMp3(DecoderParts&& parts)
+      : AudioGeneratorMP3(parts.part(kBuff), preAllocBuffSize(), parts.part(kStream), preAllocStreamSize(),
+                          parts.part(kFrame), preAllocFrameSize(), parts.part(kSynth), preAllocSynthSize()),
+        parts_(std::move(parts)) {}
 
   static void* allocSmall(size_t bytes) {
     return heap_caps_malloc_prefer(bytes, 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT, MALLOC_CAP_SPIRAM);
   }
+  static void freeMalloc(void* p) { std::free(p); }
+  static void freeCaps(void* p) { heap_caps_free(p); }
 
-  DecoderArena* arena_;  // null: frame_ and synth_ are this generator's own
-  void* buf_;
-  void* stream_;
-  void* frame_;
-  void* synth_;
+  DecoderParts parts_;  // given back by stop(), a failed begin(), or the destructor
 };

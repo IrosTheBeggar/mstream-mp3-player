@@ -444,7 +444,7 @@ private:
   bool kernelFailed_ = false;  // the fast kernel failed a self-test: the C kernel until a restart
   std::unique_ptr<AudioFileSourceFS> file_;
   std::unique_ptr<GuardedSource> guard_;     // file_ with 8 zero bytes after it (MP3)
-  std::unique_ptr<PinnedMp3> mp3_;           // created fresh for each track (makeMp3())
+  std::unique_ptr<PinnedMp3> mp3_;           // created fresh for each track (makeMp3()); stopped: holds no state
   // libmad's frame and synth state (25 KB): one PSRAM block from boot, in
   // the window's fast lower 2 MB, lent to one MP3 generator at a time
   // (src/audio/PinnedMp3.h; docs/RESAMPLER.md section 10d).
