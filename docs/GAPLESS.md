@@ -292,8 +292,11 @@ Next { after, token, path, hintMs }
   output reading, and a drop pauses the player anyway.
 - **The same track still next keeps its token** (no cut), whether its
   entry stays or its key is gone and the same track took its place (a
-  library rebuild's fresh keys, one of two duplicates removed). Anything
-  else next gets a new token. The player keeps its last four offers
+  library rebuild's fresh keys, one of two duplicates removed). Never the
+  heard token, though: the backend took it already and would answer
+  "nothing follows", so a queue of one on repeat (the same entry after
+  itself) gets a new token every time round. Anything else next gets a
+  new token. The player keeps its last four offers
   (token, key, track) for the advance.
 - **Worked out only when something it depends on changed**: a signature of
   the queue's position and content versions, repeat, "pause after", the
@@ -399,7 +402,7 @@ read the ring). It holds:
 | Call | Task | What it does |
 |---|---|---|
 | `setOffer()` | loop | `setNext()`: replaces the word (the backend then wakes the decode task, `xTaskNotifyGive`) |
-| `restart()` | decode | every request (play, stop, the benches): the boundary, the heard record and other generations' words go |
+| `restart()` | decode | every request (play, stop, the benches): the boundary, the heard record and older generations' words go (a newer one stays: the loop may post a second request and its word while the decode task still starts the first) |
 | `take(gen, after)` | decode | NoWord, Nothing, or Next (taken once) |
 | `freeze(gen, ms)` | decode | the decoding track's file ended at exactly that length |
 | `joined(b)` | decode | records the boundary (Pending) |

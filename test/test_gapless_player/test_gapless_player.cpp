@@ -452,6 +452,27 @@ void test_repeat_turned_off_on_the_last_entry() {
   TEST_ASSERT_EQUAL_UINT32(1, w.audio.engine.counters().cuts);
 }
 
+// A queue of one with repeat (the firmware's default) loops without a gap
+// every time round, not only the first: each loop's word has a new token
+// (the heard one was taken already). Then repeat off: it stops.
+void test_a_queue_of_one_on_repeat_loops_as_one_stream() {
+  World w({"a"}, {"a"});
+  w.put("a", track(44100, 30000, 60));
+  w.player.setRepeat(true);
+  w.player.play(0);
+  w.runUntil([&w] { return w.audio.advances.size() == 3; });
+  w.player.setRepeat(false);
+  w.runToStop();
+  const Frames a = w.get("a").kept();
+  assertSame(concat({a, a, a, a}), w.audio.heard);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+  TEST_ASSERT_EQUAL_UINT32(3, w.player.gaplessStats().adopted);
+  TEST_ASSERT_EQUAL_UINT32(0, w.player.gaplessStats().restarted);
+  TEST_ASSERT_EQUAL_UINT32(3, w.audio.advances.size());
+  TEST_ASSERT_TRUE(w.audio.advances[0].token != w.audio.advances[1].token);
+  TEST_ASSERT_TRUE(w.audio.advances[1].token != w.audio.advances[2].token);
+}
+
 // The sleep timer's End of track, chosen early: the next track is never
 // decoded ahead; the player pauses at the boundary with nothing of it
 // heard, the next entry cued.
@@ -688,6 +709,7 @@ int main(int, char**) {
   RUN_TEST(test_play_next_too_late_to_cut_still_plays_y_next);
   RUN_TEST(test_queue_edits_while_decoded_ahead);
   RUN_TEST(test_repeat_turned_off_on_the_last_entry);
+  RUN_TEST(test_a_queue_of_one_on_repeat_loops_as_one_stream);
   RUN_TEST(test_end_of_track_never_decodes_the_next);
   RUN_TEST(test_end_of_track_chosen_late);
   RUN_TEST(test_end_of_album_is_decided_in_the_advance_s_update);

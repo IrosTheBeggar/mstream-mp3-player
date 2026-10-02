@@ -493,8 +493,11 @@ void PlaybackController::refreshOffer() {
     const uint32_t key = queue_.keyAt(pos);
     // The same track still next keeps its token (no cut): its own entry,
     // or the entry that took its place when its key went (a library
-    // rebuild's fresh keys, one of two duplicates removed).
-    const bool same = offer_.token != 0 && offer_.track == track &&
+    // rebuild's fresh keys, one of two duplicates removed). Never the
+    // heard token: the backend took it already, and would answer a word
+    // with it "nothing follows" (a queue of one on repeat: the same entry
+    // after itself, a new token each time round).
+    const bool same = offer_.token != 0 && offer_.token != heardToken_ && offer_.track == track &&
                       (offer_.key == key || queue_.positionOf(offer_.key) == QueueModel::kNone);
     if (same) {
       offer_.key = key;

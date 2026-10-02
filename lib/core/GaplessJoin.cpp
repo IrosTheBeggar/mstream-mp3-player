@@ -57,7 +57,9 @@ void GaplessJoin::restart(uint32_t gen, uint32_t startIdx, uint32_t startMs) {
   frozen_ = false;
   heardStart_ = startIdx;
   heardStartMs_ = startMs;
-  if (offerSet_ && offer_.gen != gen) offerSet_ = false;
+  // Only an older request's word goes (across the 2^32 wrap): a newer one
+  // waits for its generation.
+  if (offerSet_ && static_cast<int32_t>(offer_.gen - gen) < 0) offerSet_ = false;
 }
 
 void GaplessJoin::setStartMs(uint32_t ms) {

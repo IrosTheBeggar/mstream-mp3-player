@@ -74,7 +74,10 @@ public:
 
   // ---- the decode task ----
   // A request starts at ring index `startIdx`, `startMs` in: the boundary,
-  // the heard record and any older generation's offer go.
+  // the heard record and any older generation's offer go. A newer one
+  // stays: the loop can post a second request (and its word) while the
+  // decode task is still starting the first, and the word is matched once
+  // the task reaches that generation (take() and cutCheck() want it equal).
   void restart(uint32_t gen, uint32_t startIdx, uint32_t startMs);
   // Where the request's track really landed.
   void setStartMs(uint32_t ms);

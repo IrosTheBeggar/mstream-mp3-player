@@ -826,6 +826,34 @@ void test_a_taken_word_is_taken_once() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(GaplessJoin::Answer::NoWord), static_cast<int>(book.take(2, 0, &o)));
 }
 
+// Two requests in a row, the second's word given while the decode task
+// still starts the first: the first's restart keeps the newer word, and
+// the second's request takes it. Older words go, across the 2^32 wrap.
+void test_a_newer_request_s_word_survives_the_restart_before_it() {
+  GaplessJoin book;
+  GaplessJoin::Offer o;
+  book.restart(1, 0, 0);
+  book.setOffer(3, 0, 8, "/c", 0);  // g+2's word...
+  book.restart(2, 0, 0);            // ...before g+1's start
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(GaplessJoin::Answer::NoWord), static_cast<int>(book.take(2, 0, &o)));
+  book.restart(3, 0, 0);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(GaplessJoin::Answer::Next), static_cast<int>(book.take(3, 0, &o)));
+  TEST_ASSERT_EQUAL_STRING("/c", o.path.c_str());
+
+  GaplessJoin w;
+  w.restart(0xFFFFFFFEu, 0, 0);
+  w.setOffer(0xFFFFFFFFu, 0, 9, "/d", 0);
+  w.restart(0xFFFFFFFFu, 0, 0);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(GaplessJoin::Answer::Next), static_cast<int>(w.take(0xFFFFFFFFu, 0, &o)));
+  w.setOffer(0xFFFFFFFFu, 0, 10, "/e", 0);  // the old request's...
+  w.restart(0, 0, 0);                       // ...gone past the wrap
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(GaplessJoin::Answer::NoWord), static_cast<int>(w.take(0, 0, &o)));
+  w.setOffer(1, 0, 11, "/f", 0);  // the next one's, before 0's start...
+  w.restart(0, 0, 0);
+  w.restart(1, 0, 0);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(GaplessJoin::Answer::Next), static_cast<int>(w.take(1, 0, &o)));
+}
+
 // A cut under way is never taken as an advance, even with the reader past
 // B; once it comes back too late (Committed) it is.
 void test_no_advance_while_cutting() {
@@ -874,6 +902,7 @@ int main(int, char**) {
   RUN_TEST(test_an_early_end_in_a_joined_track);
   RUN_TEST(test_words_and_boundaries_belong_to_their_request);
   RUN_TEST(test_a_taken_word_is_taken_once);
+  RUN_TEST(test_a_newer_request_s_word_survives_the_restart_before_it);
   RUN_TEST(test_no_advance_while_cutting);
   return UNITY_END();
 }
