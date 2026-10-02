@@ -47,7 +47,9 @@ stops there (on battery it powers off after a minute).
    ```
 
    Each build ends with a `flash_guard: ok` line (see
-   [Installing and updating](#installing-and-updating)). A Core2 flashed
+   [Installing and updating](#installing-and-updating)). `core2` runs the
+   flash in QIO; if the Core2 keeps restarting after the upload, flash the
+   DIO build instead: `pio run -e core2-dio -t upload`. A Core2 flashed
    before the current layout (a 4 MB `factory` app, settings at 0x9000)
    needs [moving to it](docs/ARCHITECTURE.md#moving-an-existing-unit-to-the-new-layout)
    once, or it loses its settings.
@@ -101,10 +103,22 @@ files on its GitHub Release page with esptool
 ([Releases and the install page](#releases-and-the-install-page)). Either
 way the image is the merged one below.
 
+**If your Core2 keeps restarting after installing, flash the
+`-dio-full.bin` instead (same firmware, slower flash mode):**
+`esptool --chip esp32 -b 921600 write-flash 0x0 mstream-player-core2-<v>-dio-full.bin`,
+from the same release page, without erasing (the settings stay). From
+0.6.0 the firmware runs the flash in **QIO** at 80 MHz, 4 data lines
+instead of 2: list scrolling with an MP3 playing is ~65 % faster and MP3
+decoding ~9 % cheaper ([docs/ENERGY.md](docs/ENERGY.md) section 5, "Audit
+2: measured"). M5Stack ships the Core2 in DIO at 40 MHz and only one
+Core2 (v1.3) has been tried in QIO, so every release also carries the
+same firmware in DIO, built from `[env:core2-dio]`. A Core2 that can't
+take QIO still takes a USB flash: the download mode is in the chip's ROM.
+
 A build makes two ways to install:
 
 - `pio run -e core2 -t upload` writes the pieces: the bootloader, the
-  partition table, otadata and the app.
+  partition table, otadata and the app (QIO; `-e core2-dio` for DIO).
 - `.pio/build/core2/firmware.factory.bin` is the same in one file, written
   at **0x0** (what a web installer, M5Burner or
   `esptool write-flash 0x0 firmware.factory.bin` do). It ends far below the
@@ -167,7 +181,7 @@ from a clean checkout of a tag (PowerShell):
 
 ```powershell
 Remove-Item Env:MSYSTEM -ErrorAction SilentlyContinue
-$env:RELEASE = "1"; $env:RELEASE_TAG = "v0.5.0"; pio run -e core2
+$env:RELEASE = "1"; $env:RELEASE_TAG = "v0.5.0"; pio run -e core2 -e core2-dio
 ```
 
 ## Releases and the install page
@@ -180,9 +194,10 @@ esptool.
 
 [`.github/workflows/firmware.yml`](.github/workflows/firmware.yml) runs on
 every push, pull request and `v*` tag: `pio test -e native`, then
-`pio run -e core2` (its `flash_guard` and `version` checks fail a bad
-image), then [`tools/package_release.py`](tools/package_release.py), which
-packages the build. The packaged files are kept as the run's artifact
+`pio run -e core2 -e core2-dio` (the QIO firmware and its DIO fallback;
+their `flash_guard` and `version` checks fail a bad image), then
+[`tools/package_release.py`](tools/package_release.py), which packages the
+builds (checking they are the same source, each in its flash mode). The packaged files are kept as the run's artifact
 (`mstream-player-core2-<version>`, for 90 days), so any commit's firmware
 can be downloaded from its run. A `v*` tag also:
 
@@ -199,8 +214,8 @@ can be downloaded from its run. A `v*` tag also:
 3. puts the **web installer** on GitHub Pages,
    <https://irosthebeggar.github.io/mstream-mp3-player/>: ESP Web Tools'
    install button ([`site/index.html`](site/index.html)), `manifest.json`
-   and the firmware, all on the same origin (release files have no CORS
-   headers, so the browser can't fetch them from GitHub). Only for the
+   and the firmware (the QIO image), all on the same origin (release files
+   have no CORS headers, so the browser can't fetch them from GitHub). Only for the
    newest full release, the highest `vX.Y.Z` tag: not for a pre-release,
    and not for an older tag (pushed together with a newer one, a fix on an
    old line, a re-run, or Run workflow on it), so the installer never goes
@@ -210,9 +225,11 @@ can be downloaded from its run. A `v*` tag also:
 | Release file | What it is |
 |---|---|
 | `mstream-player-core2-<v>-full.bin` | `firmware.factory.bin`: everything, written at 0x0 (install, or update without erasing) |
+| `…-dio-full.bin` | the same from `[env:core2-dio]`: the same firmware with the flash in DIO, for a Core2 that keeps restarting with the one above |
 | `…-app.bin` | `firmware.bin`, at 0x10000 |
 | `…-parts.zip` | bootloader 0x1000, partitions 0x8000, boot_app0 0xe000, app 0x10000, and `flash_args.txt` (`esptool --chip esp32 write-flash @flash_args.txt`) |
 | `…-elf.zip` | `firmware.elf` and `firmware.map`, to decode a crash's backtrace (match the ELF digits in About) |
+| `…-dio-elf.zip` | the same for `…-dio-full.bin` (its own ELF) |
 | `…-licenses.zip`, `LICENSE`, `THIRD-PARTY-NOTICES.md` | The licences (`LICENSES/` is in the zip) |
 | `…-source.tar.gz` | The source the binary was built from: this repository's files, the git-pinned `lib_deps` checkouts (ESP8266Audio, ESP32-A2DP) and the parts of the Arduino core the build compiled, so the GPL and LGPL source stays available beside the binary even if an upstream download goes away |
 | `SHA256SUMS` | `sha256sum -c SHA256SUMS` |
@@ -248,8 +265,8 @@ The filesystem image (`littlefs.bin`, `data/music`) is never packaged.
   for the release, `pages: write` and `id-token: write` for the deploy).
   If the organisation caps them lower, the release and deploy jobs fail.
 
-**Locally:** after `pio run -e core2`, `python tools/package_release.py`
-writes the same files to `dist/` (`dist/release/`, `dist/site/`,
+**Locally:** after `pio run -e core2 -e core2-dio`,
+`python tools/package_release.py` writes the same files to `dist/` (`dist/release/`, `dist/site/`,
 `dist/release-notes.md`). `--release --tag v0.5.0` packages only a release
 build: one made with `RELEASE=1` that passed its checks (a plain build of
 the tag, with a `local.ini` say, is refused), from a checkout still clean
@@ -499,7 +516,8 @@ optional argument and Enter:
 ## Layout
 
 ```
-platformio.ini        Build envs: core2 | native; local*.ini holds per-developer overrides
+platformio.ini        Build envs: core2 (QIO) | core2-dio (the DIO fallback) | native
+                      (+ core2-psramfix, an A/B); local*.ini holds per-developer overrides
 partitions.csv        Two 6 MB OTA app slots, NVS above anything a single-file
                       install writes, 3.8 MB LittleFS (test audio), coredump;
                       never changes after release (docs/ARCHITECTURE.md#flash-layout)
@@ -615,9 +633,9 @@ data/                 LittleFS image source (data/music is gitignored)
 tools/                make_test_audio.py; version.py (build pre-script: the
                       version from git, the release checks); iram_diet.py and
                       flash_guard.py (build post-scripts: IRAM; the app's slot,
-                      the merged image, NVS, the pieces' list);
-                      package_release.py (a build's release files, install
-                      page and release notes -> dist/);
+                      the merged image, NVS, the flash mode, the pieces' list);
+                      package_release.py (the QIO and DIO builds' release
+                      files, install page and release notes -> dist/);
                       crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*);
                       vlw_font.py (the UI's DejaVu VLW fonts -> src/ui/VlwFonts.cpp);
                       ui_icons.py (the UI's 1-bit icons -> src/ui/IconData.cpp);

@@ -2602,9 +2602,9 @@ Nothing was built or flashed for this triage.
 | Id | Finding | Verdict | Decision |
 |---|---|---|---|
 | P1 | Nothing sets the FT6336U touch controller's power mode | real | implement: the diagnostics, then Monitor while the screen is Off |
-| P2 | Flash runs DIO; try QIO | real; the auditor's check is wrong | implement on this branch, kept only if it measures; shipping it in a release is the user's call |
+| P2 | Flash runs DIO; try QIO | real; the auditor's check is wrong | implement on this branch, kept only if it measures; shipping it in a release is the user's call. **The user chose QIO: the default from 0.6.0**, with a DIO image in every release ("Audit 2: the user's decisions", below) |
 | P3 | The rev-1 PSRAM workaround (`-mfix-esp32-psram-cache-issue`) isn't needed on rev 3 silicon | real; "only with the rebuild" is wrong for the code we compile | implement now for the code we compile (P3a); the prebuilt IDF libs wait for the rebuild (P3b, later) |
-| P4 | libmad's `FPM_64BIT` costs decode CPU | real; the saving is probably smaller than estimated | the user's call (audio quality) |
+| P4 | libmad's `FPM_64BIT` costs decode CPU | real; the saving is probably smaller than estimated | the user's call (audio quality). **Declined by the user:** MP3 decoding stays as is |
 
 ### P1: the touch controller
 
@@ -2812,7 +2812,8 @@ here.
 P3a and P2 both move CPU time, so measure them separately: P3a first, then
 P2 on top. Keep each only if no bench regresses.
 
-**For the user to decide:**
+**For the user to decide** (decided: QIO ships, P4 declined; "Audit 2:
+the user's decisions", at the end of this section):
 
 - **QIO in a release** (if P2 is kept). M5's default is DIO, only one
   Core2 (v1.3) will have been tried, and a unit that can't take QIO
@@ -2963,7 +2964,8 @@ release first).
   that records those results here. Otherwise delete `[env:core2-qio]`.
 - **Releases:** CI builds `[env:core2]`, which is DIO, so no release
   picks up QIO by accident. Moving it there is still the user's decision
-  (Decisions, above).
+  (Decisions, above). (Since moved, with a DIO fallback image: "Audit 2:
+  the user's decisions".)
 
 ### Audit 2: measured (2026-10-01)
 
@@ -3124,6 +3126,7 @@ No underruns in any run; ring min 1,416 ms in every `w1`.
   LittleFS writes.
 - **So `[env:core2]` stays DIO,** and `[env:core2-qio]` stays an A/B env:
   whether releases ship QIO is the user's decision (Decisions, above).
+  (Decided since: QIO is `[env:core2]` from 0.6.0, below.)
   The measured case for it is now strong; the risk is the one stated
   there (one unit tried; a unit whose flash can't take QIO needs a USB
   reflash). `[env:core2-dio80]` is kept as P2's control.
@@ -3145,3 +3148,50 @@ touch table, the remembered headphones, the sleep timer off, the idle
 power-off at 20 min, CPU 240 (the default, nothing saved), Bluetooth
 power Normal. (The device had been running another worktree's v0.5.0
 build before this run.)
+
+### Audit 2: the user's decisions (2026-10-01)
+
+The two questions under "For the user to decide" (Decisions, above):
+
+- **QIO in a release: yes.** "Let's use the faster flash mode." From
+  0.6.0, `[env:core2]` is QIO at 80 MHz (`board_build.flash_mode = qio`,
+  `board_build.f_flash = 80000000L`): the image `pio run -e core2 -t
+  upload`, CI, every release's `-full.bin` and the web installer write.
+  The gain is the one measured above (C against B/E): list scrolling
+  with an MP3 at 240 ~16.5 -> ~28 fps, MP3 decode -9 %, the Dance tab
+  holding 24 fps at 160.
+  - **The fallback:** `[env:core2-dio]` builds the same firmware in DIO
+    at 40 MHz, as M5 ships the Core2 and as v0.5.0 was released. CI
+    builds it beside core2, and every release carries its merged image as
+    `mstream-player-core2-<version>-dio-full.bin` (and its own
+    `-dio-elf.zip`; the two ELFs differ), in `SHA256SUMS`. The release
+    notes, the README and the install page say: if your Core2 keeps
+    restarting after installing, flash the `-dio-full.bin` instead (same
+    firmware, slower flash mode). It is written at 0x0 like any update,
+    so the settings stay, and a boot-looping unit still takes it over
+    USB (the download mode is in the ROM).
+  - **The checks:** `flash_guard` now checks the bootloader against the
+    env (its header's frequency nibble: 0x4F for QIO at 80 MHz, 0x40 for
+    DIO at 40; byte 2 = 0x02, DIO, in both) and that only a QIO build's
+    bootloader links the QIO code (`bootloader_enable_qio_mode()`'s log
+    string, absent from the DIO bootloader), and records the mode in
+    `firmware.parts.json`. `tools/package_release.py` refuses a core2
+    that isn't QIO, a core2-dio that isn't DIO, or a core2-dio built from
+    other source (version, tag, commit, release flag, `lib_deps` pins),
+    and checks the DIO image against its own pieces as it does the main
+    one. The install page's manifest keeps the QIO image.
+  - **What QIO still hasn't had on this unit** (from "Audit 2:
+    measured"): the 60 min soak, a seek in a VBR MP3 and a FLAC, and
+    LittleFS writes. They go on 0.6.0's device checks before its tag.
+  - **The envs:** `[env:core2-qio]` is gone (it is `[env:core2]` now), and
+    `[env:core2-dio80]` is dropped: its question is answered (D benched as
+    B/E: the gain is the 4 data lines, not the header's clock).
+    `[env:core2-psramfix]` stays for P3a's A/B, QIO like core2.
+  - The build (this change's tree, before its commit): core2 ELF
+    b2ae9109, core2-dio ELF 1ef8d03b; the same code size in both
+    (`.flash.text` 1,486,612 bytes, `.iram0.text` 124,867, the app
+    2,259,776 / 2,259,840 bytes); `iram_diet` (51 of 51), `flash_guard`
+    and the version check pass in both.
+- **libmad's precision (P4): declined by the user.** "Keep mp3 decoding
+  as is." libmad stays `FPM_64BIT` (decoder SNR ~81 dB; POC-RESULTS.md).
+  No "battery saver" build and no `b<n>` A/B of `FPM_DEFAULT`.

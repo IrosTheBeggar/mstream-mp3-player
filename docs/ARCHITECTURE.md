@@ -2347,17 +2347,24 @@ their own (the player stopped first, so nothing follows them).
   after every 8- and 16-bit store; the link keeps it, so the prebuilt
   libs and the IRAM layout don't move. It needs a rev-3 chip, so
   `setup()` halts first on an older one (docs/ENERGY.md section 5, P3a).
-- **Flash: DIO at 40 MHz,** as M5 ships the Core2. `[env:core2-qio]`
-  builds QIO at 80 MHz for its A/B (docs/ENERGY.md section 5, P2): the
-  QIO bootloader switches the flash to quad itself (its header, like the
-  app's, says DIO, which the ROM reads it with). It moves into
-  `[env:core2]` only once its device run passes, and whether a release
-  ships QIO is the user's call (measured: list scrolling with an MP3
-  +65 % at 240, MP3 decode -9 %; docs/ENERGY.md section 5, "Audit 2:
-  measured"). `[env:core2-dio80]` is its control (DIO with an 80 MHz
-  header: no change, the app already runs the flash at 80 MHz).
-  `[env:core2-psramfix]` builds the image with the PSRAM workaround kept
-  (P3a's "before").
+- **Flash: QIO at 80 MHz** from 0.6.0 (`[env:core2]`; docs/ENERGY.md
+  section 5, P2; measured: list scrolling with an MP3 +65 % at 240, MP3
+  decode -9 %). The QIO bootloader (`bootloader_qio_80m.elf`) switches
+  the flash to quad itself; its header, like the app's, says DIO, which
+  the ROM reads it with, and the app links the `qio_qspi` libs.
+  **`[env:core2-dio]`** is the same firmware in DIO at 40 MHz, as M5
+  ships the Core2 and as v0.5.0 was released: CI builds it beside core2
+  and every release carries it as `…-dio-full.bin`, for a Core2 whose
+  flash can't take QIO (it keeps restarting; the ROM's download mode
+  still takes a USB flash). The web installer writes the QIO image.
+  `flash_guard` checks the bootloader against the env (its header's
+  frequency; the QIO code only in a QIO build) and records the mode in
+  `firmware.parts.json`; `tools/package_release.py` refuses a core2 that
+  isn't QIO, a core2-dio that isn't DIO, or two builds of different
+  sources. DIO at 80 MHz (the old `[env:core2-dio80]`, dropped) benched
+  the same as at 40: the app runs the flash at 80 MHz after the PSRAM
+  init either way. `[env:core2-psramfix]` builds the image with the PSRAM
+  workaround kept (P3a's "before"), QIO like core2.
 - **`tools/flash_guard.py`** checks the flash layout after every build: the
   app's room in its slot, the merged `firmware.factory.bin`, NVS above it
   ([Flash layout](#flash-layout)).
@@ -2366,7 +2373,7 @@ their own (the player stopped first, so nothing follows them).
   ([Versions](#versions)).
 - **CI** (`.github/workflows/firmware.yml`, GitHub Actions on
   ubuntu-24.04): every push, pull request and `v*` tag runs the host
-  tests, the core2 build (`RELEASE=1` on a tag) and
+  tests, the core2 and core2-dio builds (`RELEASE=1` on a tag) and
   `tools/package_release.py`, and keeps `dist/` as the run's artifact. A
   tag then makes the GitHub Release and, when it is the newest full
   release (the highest `vX.Y.Z` tag; not a `-rc.1`), marks it Latest and
@@ -2388,9 +2395,16 @@ their own (the player stopped first, so nothing follows them).
   `generated/PlayerVersion.h`, and the pieces from `firmware.parts.json`,
   which `flash_guard` writes once it has checked each piece (bootloader,
   table, boot_app0 from the framework, app) is byte for byte the merged
-  image at its offset. It refuses a build whose `firmware.bin` app
-  description doesn't hold that version and `firmware.elf`'s SHA-256 (a
-  stale build directory). It also packs the source tarball: the
+  image at its offset, with the env's flash mode. It refuses a build whose
+  `firmware.bin` app description doesn't hold that version and
+  `firmware.elf`'s SHA-256 (a stale build directory). It packages two
+  builds: core2 (QIO: every file but one) and core2-dio, whose merged
+  image is the release's `…-dio-full.bin` (with its own `…-dio-elf.zip`:
+  the ELFs differ). The DIO build gets the same checks against its own
+  pieces, and must be the same source as core2 (version, tag, commit,
+  release flag, its `lib_deps` checkouts at the same pins); core2 must be
+  QIO and core2-dio DIO (`firmware.parts.json`'s mode and the QIO code in
+  the bootloader), so swapped or stale builds are refused. It also packs the source tarball: the
   repository's files (`git ls-files`), each git-pinned `lib_deps` checkout
   (its `.git/HEAD` must be the `platformio.ini` pin) and, found through the
   build's `.d` files, the Arduino core's `cores/esp32`, the board variant
@@ -2401,8 +2415,9 @@ their own (the player stopped first, so nothing follows them).
   and the notes are templates (`site/index.html`,
   `.github/release-notes.md`) with `{{NAME}}` placeholders; an unknown one
   fails the packaging.
-- **The install page** is ESP Web Tools with one part, the merged image at
-  0x0: safe for updates because NVS sits above anything it writes ([Flash
+- **The install page** is ESP Web Tools with one part, the merged QIO
+  image at 0x0 (the page and the release notes name the
+  `…-dio-full.bin` for a Core2 that keeps restarting): safe for updates because NVS sits above anything it writes ([Flash
   layout](#flash-layout)). `new_install_prompt_erase` makes the dialog ask
   whether to erase (yes for a first install over other firmware, no to
   update), and `new_install_improv_wait_time: 0` skips its Improv probe

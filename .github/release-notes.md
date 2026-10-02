@@ -2,7 +2,7 @@
 may still change between versions, including what it saves on the device.
 Bug reports are welcome in the [issues]({{REPO_URL}}/issues): please
 include the Version row from **Output > About** (it reads {{VERSION}},
-ELF {{ELF}} for this build).
+ELF {{ELF}} for this build; ELF {{DIO_ELF}} for the `-dio-full.bin`).
 
 Source for this binary: {{SOURCE_URL}}, and with its libraries in
 `{{SOURCE_TAR}}` below.
@@ -40,6 +40,21 @@ Or with [esptool](https://docs.espressif.com/projects/esptool/)
 The settings sit above everything the image writes, so an update never
 touches them.
 
+**If your Core2 keeps restarting after installing, flash the
+`-dio-full.bin` instead (same firmware, slower flash mode):**
+
+```
+esptool --chip esp32 -b 921600 write-flash 0x0 {{DIO_FULL_BIN}}
+```
+
+The firmware runs the flash in QIO, 4 data lines instead of 2, which
+makes the lists, the dance and MP3 decoding faster. M5Stack ships the
+Core2 in DIO, and only one Core2 (v1.3) has been tried in QIO. A unit
+whose flash can't take it restarts over and over, but it still takes a
+USB flash (the download mode is in the chip's ROM), and the DIO image
+keeps the settings like any update. Please say so in the issues, with
+which Core2 it is.
+
 **No port shows up?** Use a USB-C cable that carries data (some only
 charge), and install the USB serial driver: a Core2 has a CH9102 or a
 CP2104 chip, depending on when it was made. Both drivers are under "USB
@@ -73,9 +88,11 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
 | File | What it is |
 |---|---|
 | `{{FULL_BIN}}` | Everything in one image, written at 0x0: install or update |
+| `{{DIO_FULL_BIN}}` | The same firmware with the flash in DIO (slower): only if the Core2 keeps restarting with the one above |
 | `{{APP_BIN}}` | The app alone, at 0x10000 |
 | `{{PARTS_ZIP}}` | The pieces (bootloader 0x1000, partition table 0x8000, boot_app0 0xe000, app 0x10000): unzip, then `esptool --chip esp32 write-flash @flash_args.txt` |
 | `{{ELF_ZIP}}` | `firmware.elf` and `firmware.map`, for decoding a crash's backtrace |
+| `{{DIO_ELF_ZIP}}` | The same for `{{DIO_FULL_BIN}}` |
 | `LICENSE`, `THIRD-PARTY-NOTICES.md`, `{{LICENSES_ZIP}}` | The licences: below |
 | `{{SOURCE_TAR}}` | The source this binary was built from: below |
 | `SHA256SUMS` | `sha256sum -c SHA256SUMS` |
