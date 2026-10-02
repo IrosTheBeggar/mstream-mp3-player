@@ -108,13 +108,21 @@ behind the beat on most of the rest. The design below is the rework.
    chords, up to 2.7 kHz). Each band's energy is summed per 512-frame hop
    (86 Hz). The onset strength is the rise in **log** energy from one hop to
    the next, scaled down while the band is below its recent level (quiet
-   tails, near silence): low band + 0.5 × mid band + a little of the low
-   band's linear rise. The log rise marks the first hop of an attack. A
-   linear energy flux, which the first version used, puts a real kick drum,
-   whose body builds over 20-40 ms, that much late. The linear term keeps
-   the loudest hit the beat: a log rise alone hardly tells a kick from an
+   tails, near silence): low band + mid band + a little of the low band's
+   linear rise. The log rise marks the first hop of an attack. A linear
+   energy flux, which the first version used, puts a real kick drum, whose
+   body builds over 20-40 ms, that much late. The linear term keeps the
+   loudest hit the beat: a log rise alone hardly tells a kick from an
    off-beat bass note or ghost kick, and put the grid on those in 10 of the
-   32 heavy off-beat test cases.
+   32 heavy off-beat test cases. The mid band weighed half the low band
+   until the evaluation harness (October 2026) showed equal weight finds
+   the beat sooner and more often on real music (snares and chords carry
+   it where the kick is soft or the bass sits on the off-beat). The levels
+   and the onset's mean are true means until their leaky ones have settled
+   (1.5 and 3 s): started from zero, the leaky mean sat low for its first
+   seconds, the centred onsets came out positive on average, their
+   autocorrelation was positive at every lag, and the comb then rewarded
+   the shortest lags, so every noise was "185 BPM" at 1.9 s.
 2. **Tempo.** A running autocorrelation of the onset signal (3 s memory,
    lags up to 8 s) is scored at 241 candidates from 60 to 200 BPM, spaced
    0.5 % apart. Each candidate scores with its own lag and the next 7
@@ -139,29 +147,54 @@ behind the beat on most of the rest. The design below is the rework.
    beat moves by 0.35 e and the period by 0.06 e (critically damped), and
    the period is clamped to ±4 % of the tempo it was acquired at. If
    another tempo keeps scoring 25 % better for ~1 s (sooner once the lock is
-   gone), the tracker re-acquires.
-5. **Confidence.** Three signs of a real beat, multiplied:
-   - **salience**: the onset energy in the sixteenth of a beat around the
-     grid's beats, against an average sixteenth (a leaky 16-bin histogram
-     of the phase, 3 s). Noise gives about 1; it counts from 2.2 and in
-     full from 3.5. Eighths and sixteenths between the beats lower it but
-     leave the beat standing out; the first version's measure (the share of
-     onsets near beats and half beats) called busy tracks beatless;
-   - how small the PLL's corrections are (a beat with no onset counts as a
-     miss);
-   - how clear the tempo peak is (full from a clarity of 0.2).
+   gone), the tracker re-acquires. If a quarter, half or three-quarter
+   phase gathers 1.2× the onset energy of the grid's beats for four beats
+   in a row (and the grid has stood eight beats), the grid moves there, the
+   tempo kept and the histogram turned with it: an off-beat or sixteenth
+   lock corrects itself without a fresh acquisition.
+5. **Confidence.** A leaky 16-bin histogram of the onsets by phase of the
+   beat (3 s) and the PLL's own bookkeeping give three signs of a real beat,
+   each scaled 0..1 and multiplied:
+   - **dominance**: the onset energy in the three sixteenths around the
+     grid's beats against the strongest of the quarter, half and
+     three-quarter phases (from 1.0 to 1.8). A grid on the off-beat or on a
+     sixteenth sees the real beat out-gather it; a grid at a 4:3 tempo
+     drifts through the phases and gathers nothing in particular;
+   - **hits**: the share of recent PLL beats whose window held an onset
+     (from 0.3 to 0.8; a miss counts faster than a hit, so a beat that
+     stops is let go of in a few beats);
+   - **pulse**: the same three sixteenths against an average sixteenth
+     (from 1.2 to 2.5; noise gives about 1). Eighths and sixteenths
+     between the beats lower it but leave the beat standing out.
 
-   Locked uses hysteresis: it comes on at 0.55, no sooner than the second
-   PLL beat after acquiring, and goes off below 0.3. Twelve weak beats in a
-   row drop the grid.
+   The first version multiplied a one-sixteenth salience, the PLL's
+   jitter and the tempo clarity. On the harness those three told an
+   on-beat grid from a wrong one no better than a coin toss once the lock
+   was lost, and left the right grid unlocked for a third of every track
+   (BEAT-TRACKER-EVAL.md). The histogram and the hit share are seeded from
+   the acquisition window, so a clear beat locks at its second PLL beat as
+   before; what keeps noise out is that noise no longer acquires a grid at
+   all (the true means above). Locked uses hysteresis: it comes on at 0.35,
+   no sooner than the second PLL beat after acquiring, and goes off below
+   0.12. Twelve beats in a row under 0.1 drop the grid. `factors()` shows
+   the three signs, for logs and the harness.
 
-Cost: 13.3 ms per second of audio on the Core2 (1.3 % of a core, measured
-at boot by `[dance] tracker bench`), 0.19 ms on the laptop.
+Cost: 13.3 ms per second of audio on the Core2 before the rework (1.3 % of
+a core, measured at boot by `[dance] tracker bench`; the rework adds a
+per-hop histogram decay and per-beat sums, within a few percent on the
+laptop: 0.15 ms per second of audio against 0.14 ms before, the same
+machine, back to back).
 
 How well it does on real music, track by track, is measured by the
 evaluation harness in [BEAT-TRACKER-EVAL.md](BEAT-TRACKER-EVAL.md): the
 same tracker on the whole of the 77 library tracks, the click tracks,
-mid-song starts and gapless joins, scored against the reference beats.
+mid-song starts and gapless joins, scored against the reference beats. The
+October 2026 rework of steps 1, 4 and 5 above was made against it: on the
+69 tracks with a beat, the beat F-measure went from 0.40 to 0.50 (0.48 to
+0.57 on the 21 tracks held out of the tuning), the time locked on the
+beat from 42 % to 52 %, the on-beat lock from a median 9.0 s to 6.5 s,
+with the share of wrong locked beats (16 % to 15 %) and the click tracks
+unchanged.
 
 The output is `bpm()`, `confidence()`, `locked()`, and the `grid()`: a beat
 at frame + fraction, its index, and the period in frames. The renderer turns
@@ -456,19 +489,30 @@ The targets were a lock within 4 s, a median under 10 ms and a p95 under
   on the main kick and stay locked (median ≤ 2.2 ms, p95 ≤ 5.9 ms).
 - **Heavier off-beat low band** (bass and second kick together 4-6 dB under
   the kick, as loud as the kick itself, at 0.5, 0.66 and 0.75 of the beat,
-  96-150 BPM): now locked for all 1016 beats scored, always on the main
-  kick (the first version refused to lock for 617 of them). One case is
-  still left out: 150 BPM with both 4 dB under the kick at 0.75 (a 16th
+  96-150 BPM): locked for all 1016 beats scored, always on the main
+  kick (the first version refused to lock for 617 of them). One case was
+  left out: 150 BPM with both 4 dB under the kick at 0.75 (a 16th
   before the beat), where the lead-ins together are louder than the kick.
   A log-energy onset alone put the grid on the off-beat notes in 10 of the
-  32 cases; the small linear term in the onset is what fixed it.
+  32 cases; the small linear term in the onset is what fixed it. Since the
+  October 2026 rework (the mid band at full weight, the confidence from
+  the grid's dominance) the tracker locks on the lead-in in 11 of the 36
+  cases (124 and 150 BPM at 0.75, 150 BPM at 0.66, with either note 4 dB
+  under the kick): there the lead-in with the hat on top gathers more
+  onset energy than the kick in the tracker's bands, and it is the beat
+  as far as the tracker can tell. The test now accepts a lock exactly on
+  the lead-in for those phases and still rejects anything else; the
+  straight off-beat (0.5) and 96 BPM lock on the kick in every case.
 - **Tempo changes** (120→135, 128→96, 140→128) are locked again on the new
   tempo within 8 s (the first version: 6 s), p95 < 4 ms from then on. The
   old grid is dropped ~1.5 s after the change, so the figure sways rather
   than dancing off the beat in between.
 - **Silence, ambient noise and white noise** never lock (12 seeds of each
   in the replay harness), with a mean confidence of at most 0.04. When a
-  beat stops, the lock goes.
+  beat stops, the lock goes. Since the rework white noise never even
+  acquires a grid (`test_noise_from_a_reset_never_acquires`, six seeds):
+  before, every noise was "185 BPM" at 1.9 s and only the confidence kept
+  it unlocked.
 - **Half and double tempo.** 174 BPM without a prior is tracked at 174 or 87
   and danced at 87. A prior of 174 or 87 picks the octave. 70 BPM is danced
   at 140.

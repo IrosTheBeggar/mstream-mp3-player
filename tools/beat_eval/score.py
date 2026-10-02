@@ -32,6 +32,12 @@ BEAT_CLASSES = ("good", "ok")
 RATE = 44100
 
 
+def held_out(index):
+    """The tracks the tracker is NOT tuned on: every third one (26 of 77), so each
+    album contributes to both halves. Changes are judged on the rest, then checked here."""
+    return index % 3 == 2
+
+
 # ---- parsing ----
 
 def parse_output(path):
@@ -53,7 +59,9 @@ def parse_output(path):
                 for kv in p[1:]:
                     k, v = kv.split("=", 1)
                     d[k] = float(v)
-    return dict(meta=meta, end=end, T=np.array(T).reshape(-1, 7), B=np.array(B).reshape(-1, 6), R=np.array(R))
+    # T: t bpm est clarity conf locked valid [salience steady clear]; B: t period bpm conf locked index
+    return dict(meta=meta, end=end, T=np.array(T).reshape(len(T), -1) if T else np.zeros((0, 7)),
+                B=np.array(B).reshape(-1, 6), R=np.array(R))
 
 
 # ---- reference helpers ----
@@ -584,7 +592,11 @@ def score_run(corpus, work, name, quiet=False):
         "no-clear-beat": summarize([r for r in corpus_rows if r["cls"] == "no-clear-beat"]),
         "all 77": summarize(corpus_rows),
         "beat tracks, clean reference": summarize([r for r in beat_rows if not r["ref_flags"]]),
+        "beat tracks, dev (tuned on)": summarize([r for r in beat_rows if not held_out(r["index"])]),
+        "beat tracks, held out": summarize([r for r in beat_rows if held_out(r["index"])]),
         "mid-track start (60 s in), beat tracks": summarize([r for r in result["mid"].values() if r["cls"] in BEAT_CLASSES]),
+        "mid-track start, held out": summarize([r for r in result["mid"].values()
+                                                if r["cls"] in BEAT_CLASSES and held_out(r["index"])]),
         "gapless joins": summarize(list(result["joins"].values())),
     }
     result["by_album"] = {a: summarize([r for r in beat_rows if r["album"] == a])

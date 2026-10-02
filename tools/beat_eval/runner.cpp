@@ -170,6 +170,21 @@ void buildSynth(const Options& o, std::vector<int16_t>* mono, std::vector<double
       appendClicks(mono, truth, static_cast<float>(std::atof(bpmText.c_str())), secs, offset);
     } else if (f[0] == "silence" && f.size() == 2) {
       mono->resize(mono->size() + static_cast<size_t>(std::atof(f[1].c_str()) * kRate), 0);
+    } else if (f[0] == "ambient" && f.size() >= 3) {  // low-passed noise with a slow swell (test_beat_tracker's)
+      const size_t base = mono->size();
+      const auto n = static_cast<size_t>(std::atof(f[2].c_str()) * kRate);
+      mono->resize(base + n, 0);
+      std::mt19937 arng(f.size() >= 4 ? static_cast<uint32_t>(std::atoi(f[3].c_str())) : 5u);
+      std::normal_distribution<double> gauss(0.0, 1.0);
+      double y1 = 0, y2 = 0;
+      const double a = std::exp(-2 * 3.14159265358979 * 300.0 / kRate);
+      const double amp = 32768 * std::pow(10.0, std::atof(f[1].c_str()) / 20.0) * 12.0;
+      for (size_t i = 0; i < n; ++i) {
+        y1 = a * y1 + (1 - a) * gauss(arng);
+        y2 = a * y2 + (1 - a) * y1;
+        const double swell = 0.6 + 0.4 * std::sin(2 * 3.14159265358979 * 0.13 * static_cast<double>(i) / kRate);
+        (*mono)[base + i] = clip(amp * swell * y2);
+      }
     } else if (f[0] == "noise" && f.size() == 3) {
       const size_t base = mono->size();
       const auto n = static_cast<size_t>(std::atof(f[2].c_str()) * kRate);
@@ -330,18 +345,21 @@ int main(int argc, char** argv) {
     }
     if (tracker.locked()) ++lockedHops;
     if (hops % static_cast<uint32_t>(o.every) == 0) {
-      std::printf("T %.4f %.4f %.4f %.4f %.4f %d %d\n", fedTo / kRate, tracker.bpm(), tracker.estimatedBpm(),
-                  tracker.tempoClarity(), tracker.confidence(), tracker.locked() ? 1 : 0, g.valid ? 1 : 0);
+      const BeatTracker::Factors f = tracker.factors();
+      std::printf("T %.4f %.4f %.4f %.4f %.4f %d %d %.3f %.3f %.3f %.3f\n", fedTo / kRate, tracker.bpm(),
+                  tracker.estimatedBpm(), tracker.tempoClarity(), tracker.confidence(), tracker.locked() ? 1 : 0,
+                  g.valid ? 1 : 0, f.dominance, f.hitRate, f.pulse, f.steady);
     }
   }
   if (hopsFile) std::fclose(hopsFile);
   const int32_t lockFrames = tracker.framesToLock();
+  const uint32_t shifts = tracker.phaseShifts();
 
   // CPU: the same audio again, timed, in the firmware's chunk size.
   const double ns = timedPass(&tracker, &feeder, audio, n, startFrame);
   const double audioSeconds = static_cast<double>(n) / kRate;
-  std::printf("end hops=%u lock_s=%.4f locked_share=%.4f ns_per_audio_s=%.0f\n", hops,
+  std::printf("end hops=%u lock_s=%.4f locked_share=%.4f phase_shifts=%u ns_per_audio_s=%.0f\n", hops,
               lockFrames < 0 ? -1.0 : static_cast<double>(lockFrames) / kRate,
-              hops ? static_cast<double>(lockedHops) / hops : 0.0, audioSeconds > 0 ? ns / audioSeconds : 0.0);
+              hops ? static_cast<double>(lockedHops) / hops : 0.0, shifts, audioSeconds > 0 ? ns / audioSeconds : 0.0);
   return 0;
 }

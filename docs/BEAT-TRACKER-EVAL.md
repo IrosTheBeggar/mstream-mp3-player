@@ -1,19 +1,25 @@
-# Beat tracker: evaluation harness and baseline
+# Beat tracker: evaluation harness, baseline and rework
 
 The dancing crab follows `BeatTracker` (lib/core; design in
-[MASCOT-POC.md](MASCOT-POC.md#beat-tracker-beattracker)). Until now it was
-tuned on click tracks and spot-checked on a few songs. This document
-describes a harness that scores the firmware's own tracker on the user's
-77-track library, and the baseline it measured (October 2026, tracker as of
-2742f3d). Improvements to the tracker are judged against these numbers.
+[MASCOT-POC.md](MASCOT-POC.md#beat-tracker-beattracker)). Until October
+2026 it was tuned on click tracks and spot-checked on a few songs. This
+document describes a harness that scores the firmware's own tracker on the
+user's 77-track library, the baseline it measured (tracker as of 2742f3d),
+and the [rework](#the-rework-october-2026) made against it. Further
+changes to the tracker are judged against the rework's numbers.
 
-In short: the tracker is exact on click tracks and good on French house.
-Across all 69 tracks with a beat, it is locked on the beat for well under
-half of each track. When it fails, the cause is one of these, in this order:
-
-1. It never gets confident enough to acquire.
-2. It picks the off-beat or a sixteenth-note phase.
-3. It picks a 4:3 or 3:2 tempo.
+In short: the baseline tracker was exact on click tracks and good on
+French house, but across the 69 tracks with a beat it was locked on the
+beat for well under half of each track, and its confidence told a right
+grid from a wrong one no better than chance. The rework changed what the
+confidence measures (how the grid's phase dominates the others, and
+whether its beats are hit), let the mid band count in full, and fixed a
+bias that had every noise "acquired" at 185 BPM. On the 69 beat tracks the
+beat F-measure went from 0.40 to 0.50 (0.48 to 0.57 on the 21 tracks held
+out of the tuning), with the share of wrong locked beats and the click
+tracks unchanged. What is left is in the music the tracker's two bands
+can't resolve: off-beats as strong as the beat, syncopated kicks, 4:3
+metres, and sparse beats under sustained sound.
 
 ## Method
 
@@ -47,9 +53,13 @@ half of each track. When it fails, the cause is one of these, in this order:
     and `feedHop()`, the USB visualizer's path. The output is identical to
     `process()`'s on all 77 tracks and the 17 synthetic cases.
   - **Other modes:** `--synth` builds ClickGen cases (`click:BPM[off]:S`,
-    `silence:S`, `noise:DBFS:S`, joined with commas). `--bench` and
+    `silence:S`, `noise:DBFS:S`, `ambient:DBFS:S[:SEED]`, the native
+    tests' low-passed swelling noise, joined with commas). `--bench` and
     `--time-only` are the CPU measures. `--hops-out` dumps the front end's
     energies.
+  - **The tracker's factors:** each `T` line also carries
+    `BeatTracker::factors()` (dominance, hit rate, pulse, and the PLL's RMS
+    correction), so a run shows why the confidence was what it was.
 - **`beat_eval.py`**: the driver, with the commands `build`, `decode`, `run`,
   `score`, `compare` and `all`.
   - **Decoding:** MP3s go through the corpus's `maddec/devmad.exe`, a PC
@@ -173,6 +183,10 @@ tempo:
 - **Joins and tempo changes:** the time from the next track's first beat (or
   the change) to an on-beat lock, and the not-on beats in the 10 s after the
   change.
+- **Dev and held out:** every third track by index (26 of 77, 21 of them
+  beat tracks) is held out of any tuning; the summary has a row for each
+  half. A change is judged on the dev rows and then checked on the held-out
+  ones.
 - **By genre and album:** the genre comes from the album (the files' genre
   tags are missing or vague):
 
@@ -309,7 +323,7 @@ By genre the same split shows:
 
 The full per-track table is in the run's `report.md`.
 
-## The worst 15 tracks, and why
+## The worst 15 tracks of the baseline, and why
 
 These are ranked by F, with the no-clear-beat tracks left out. The evidence
 column comes from `diagnose.py`:
@@ -407,8 +421,212 @@ acquire.
    is ±10 ms. The dancer is aimed 15 ms early, so this isn't where the work
    is.
 
-The tracker's real problems are recall (it locks too seldom) and the phase
-choice (beat vs off-beat vs sixteenth). Timing and tempo precision are fine
-once it is on the beat. A change should be judged on F and on-beat lock
+The tracker's real problems were recall (it locked too seldom) and the
+phase choice (beat vs off-beat vs sixteenth). Timing and tempo precision
+were fine once it was on the beat. A change is judged on F and on-beat lock
 first, with false beats and false episodes held at or below the baseline,
-the clicks unchanged, and the host CPU within about 2× of ~155 µs/s (compare runs made on the same machine).
+the clicks unchanged, and the host CPU within about 2× of ~155 µs/s
+(compare runs made on the same machine).
+
+## The rework (October 2026)
+
+### What the baseline's traces showed
+
+Before changing anything, the baseline's own `T` and `B` lines were split
+by what the grid was doing (`lockstate.py`, `unlocked.py`, `factors.py` in
+the scratch folder; the numbers are over the 69 beat tracks):
+
+- The grid was **acquired but unlocked for 31 % of the span**, not
+  acquired for 28 %, and locked for 42 %.
+- Of the 10,432 unlocked grid beats inside the reference spans, **49 %
+  were on the beat**. On some tracks nearly all of them: Talisman (263
+  unlocked beats, 100 % on), Le voyage de Penelope (100 %), Dodo (592,
+  85 %), Grand Canyon (85 %), Tha (566, 75 %), Alligator (83 %). On others
+  nearly none: Music Makers (711 beats, 87 % at 4:3), Forged (96 % on a
+  sixteenth), Good Morning (89 %), The Glory (85 %), Ageispolis (94 % on
+  the off-beat).
+- **None of the confidence's three factors told the two apart.** Among
+  the unlocked beats, salience ≥ 0.1 kept 68 % of the on-beat ones and
+  60 % of the wrong ones; the tempo-clarity factor was 0.93 for both; the
+  jitter factor 0.55 against 0.43. The lock threshold wasn't the problem,
+  the measure was.
+
+So two candidate measures were computed from the same histogram and the
+PLL's bookkeeping, and read off the traces per grid beat:
+
+| Measure | On-beat grid beats, median | Wrong grid beats, median | ≥ threshold keeps on / wrong |
+|---|---|---|---|
+| **dominance**: the beat's three sixteenths over the strongest of the quarter, half and three-quarter phases | 2.9 | 1.27 | ≥ 1.5: 84 % / 36 %; ≥ 2.0: 72 % / 19 % |
+| **hit rate**: recent PLL beats with an onset in their window | 0.97 | 0.69 | ≥ 0.7: 81 % / 49 % |
+| dominance ≥ 1.5 and hit rate ≥ 0.7 | | | 71 % / 17 % |
+| the baseline's lock (for comparison) | | | 66 % / 31 % |
+
+An offline sweep of lock rules over the baseline's grids (`sweep.py`: a
+rule applied per grid beat, no hysteresis, scored as beat F and false
+share) ranked a product of dominance, hit rate and a three-sixteenth pulse
+above every threshold on the old confidence, on the dev and the held-out
+tracks alike.
+
+### What changed, step by step
+
+Each step was a hypothesis, a change to the tracker, and a full harness
+run (about 25 s), judged on the dev tracks and checked on the held-out
+ones. The clicks were watched on every run.
+
+1. **Confidence = dominance × hits × pulse** (each scaled 0..1), the lock
+   at 0.4 / 0.2. F 0.40 → 0.46, false beats 16 → 12 %, false episodes 199
+   → 129; but the first lock came a median 16 s in (the hit rate started
+   at 0.5 and rose slowly) and the tempo changes carried six wrong beats.
+2. **Seed the hit rate from the acquisition window, let a miss count
+   faster than a hit (0.35 against 0.2).** The clicks were back to their
+   baseline lock times to the hundredth of a second; F 0.46, lock median
+   8 s.
+3. **A phase shift**: a quarter, half or three-quarter phase that gathers
+   1.3× the beat's onsets for four beats becomes the grid. It never fired:
+   on the tracks locked a sixteenth off (I Wonder, The Glory, Heliosphan)
+   the tracker's own bands genuinely peak where it locked, and on the
+   beat/off-beat ambiguous ones (Kelly Watch the Stars, Digital Love,
+   Aerodynamic) the two phases are within a few percent. At 1.2 it fires
+   on some, and is kept for the on-beat lock time it buys (dev median
+   11.3 → 9.6 s, on the beat within 10 s 42 → 45 %); F is unchanged by it.
+4. **Mid band at weight 1.0** (the numpy prototype of the tempo stage had
+   predicted it): F 0.46 → 0.48, on-beat lock 10.7 → 6.8 s, false beats
+   15 → 13 %. A 6 s autocorrelation memory, which the same prototype
+   favoured, gained nothing on F and slowed the tempo-change relock to
+   7-9 s, so it stays at 3 s.
+5. **Noise.** The new confidence let ambient and white noise lock for a
+   few seconds on some seeds, where the old jitter factor had refused.
+   Three honest rejectors were tried and each cost real music: a window
+   share per beat (F → 0.41), the jitter factor back (F → 0.39-0.43), no
+   seeding of the histogram at acquisition (F 0.44, locks 15 s late). The
+   traces then showed every noise acquired at exactly 1.86 s and 185 BPM:
+   the onset mean removed before correlating is a leaky mean started from
+   zero, so for its first three seconds the centred onsets are positive on
+   average, their autocorrelation positive at every lag, and the comb
+   rewards the shortest lags with the best preference weight. **True
+   means until the leaky ones have settled** fixed it: white noise never
+   acquires a grid now (12 seeds), ambient noise never locks, and the
+   clicks and the music are unchanged.
+6. **Lock at 0.35 / 0.12.** F 0.49 → 0.50 at the same false share, fewer
+   false episodes than at 0.35 / 0.18 (the deeper hysteresis holds the
+   good locks through a weak bar).
+7. Tried and rejected: the linear onset term at 0.1 and 0.2 (F equal,
+   locks later), a clarity factor (noise reaches the music's clarity), the
+   mid-band-only dominance (no better than the combined one).
+
+### Results
+
+The 69 beat tracks, baseline against the rework (`final`; the full tables
+are the two runs' `report.md`):
+
+| | baseline | rework | |
+|---|---|---|---|
+| Beat F (±70 ms) | 0.40 | **0.50** | |
+| F, octave-tolerant | 0.42 | 0.51 | |
+| Precision / recall | 0.69 / 0.34 | 0.70 / 0.44 | the gain is recall at the same precision |
+| Tempo exact / octave-tolerant (per track) | 74 % / 86 % | 74 % / 84 % | |
+| Locked, share of the reference span | 42 % | 52 % | |
+| First lock, median | 4.4 s | 7.6 s | the first lock is a real one more often |
+| On-beat lock after the first beat, median | 9.0 s | **6.5 s** | |
+| On the beat within 10 s | 41 % | 45 % | |
+| Never on the beat | 16 | 15 | |
+| Phase error, median / p95 | 10.5 / 218 ms | 11.2 / 166 ms | |
+| Bias | +8.9 ms | +9.9 ms | |
+| Locked beats that aren't on the beat | 16 % | 15 % | |
+| False-lock episodes | 199 | 186 | |
+| Intro false locks (tracks / seconds) | 6 of 22 / 42 s | 5 of 22 / 37 s | |
+| Lock held past the last beat, median | 0.3 s | 1.3 s | the hit rate takes a few beats to fall |
+| Break recovery, median / never | 7.8 s / 19 of 46 | 3.8 s / 18 of 46 | |
+
+- **Locked beats:** 15,027 on (82 %), 526 off-beat (3 %), 1,550 off (8 %),
+  608 at the wrong tempo (3 %), against 11,074 / 714 / 952 / 444 before:
+  5,000 more beats locked, and the extra ones are 79 % on.
+- **Dev and held out:**
+
+  | | F | locked | on-beat ≤ 10 s | never on | false beats | episodes |
+  |---|---|---|---|---|---|---|
+  | dev (48 beat tracks), baseline → rework | 0.37 → 0.46 | 40 → 50 % | 40 → 40 % | 12 → 11 | 18 → 17 % | 134 → 114 |
+  | **held out** (21 beat tracks), baseline → rework | 0.48 → **0.57** | 45 → 57 % | 43 → 57 % | 4 → 4 | 12 → 10 % | 65 → 72 |
+  | mid-track start, held out | 0.47 → 0.55 | 43 → 52 % | 38 → 48 % | 6 → 6 | 6 → 6 % | 11 → 9 |
+
+  The held-out gain is as large as the dev one, so the changes aren't
+  fitted to the tracks they were tuned on.
+- **By class and album:**
+
+  | | F before | F after |
+  |---|---|---|
+  | good (36) | 0.50 | 0.62 |
+  | ok (33) | 0.29 | 0.36 |
+  | hard (6) | 0.04 | 0.17 |
+  | clean reference (34) | 0.50 | 0.65 |
+  | Daft Punk | 0.77 | 0.77 |
+  | Kavinsky | 0.57 | 0.71 |
+  | Aphex Twin | 0.35 | 0.43 |
+  | Air | 0.25 | 0.37 |
+  | Emancipator | 0.15 | 0.30 |
+  | Kanye | 0.14 | 0.22 (phase median still 104 ms: the sixteenth-note kicks) |
+
+- **Other suites:**
+
+  | Suite | F before → after | on-beat lock, median | never on |
+  |---|---|---|---|
+  | Opened 60 s into the song | 0.39 → 0.47 | 9.1 → 6.5 s | 25 → 23 of 67 |
+  | Gapless joins (no reset) | 0.36 → 0.42 | 9.9 → 13.3 s | 27 → 19 of 71 |
+
+  At the joins, 45 of 71 relock on the next track within its first 60 s
+  (37 before); the median relock is 7.6 s (7.2 s) because the harder joins
+  now count, and eight joins still carry 4-12 wrong beats into the next
+  track.
+- **With the reference tempo as a prior:** F 0.48, tempo exact 87 %, false
+  beats 12 %, never on 14. As before, the prior helps the octave and the
+  false share, and costs a little recall.
+- **Click tracks:** lock times unchanged to the hundredth of a second
+  (2.50-3.26 s), tempo error ≤ 0.01 %, phase median 2.7-3.6 ms, p95 ≤ 8.5
+  ms, bias about −3.2 ms (−2.8 before: the mid band's rise comes a hop
+  earlier on a click). The tempo changes relock in the same 4.4-6.9 s but
+  carry 5-6 wrong beats in the 10 s after the change instead of 2-3: the
+  hit rate takes three misses to fall. Noise and silence never lock, and
+  white noise never acquires.
+- **The USB visualizer's path:** `--via-hops` gives output identical to
+  `process()` on all 77 tracks and the 17 synthetic cases; the front end
+  and protocol are untouched.
+- **CPU (host, serial, same machine, back to back, best of 7):** the
+  baseline 156-178 µs per second of audio over the bench and five tracks,
+  the rework 161-181 µs/s: within the run-to-run noise. The rework adds a
+  16-bin decay per hop and a few sums per beat; its memory is the same
+  (the allocation test's 12 KB bound holds, nothing new in internal RAM).
+  The device bench (`[dance] tracker bench`) still has the last word.
+
+### What is left
+
+The worst 15 after the rework are, by F: Nightvision, Pollo Sneeps, Blue
+Dream, Good Morning, Champion, Can't Tell Me Nothing, Barry Bonds,
+Prélude, New Star in the Sky, Ce matin la, La femme d'argent, The Glory,
+Delphium, Drunk and Hot Girls, Remember. Nine of them never lock at all
+(no steady pulse in the tracker's bands, or a beat too sparse for a 3 s
+memory), and the rest lock on a pulse the reference doesn't call the beat:
+
+1. **Beat vs off-beat.** Nightvision now never locks (it sat on the
+   off-beat before): with equal pulses on both, no phase dominates. Kelly
+   Watch the Stars, Ageispolis and Digital Love still spend stretches on
+   the off-beat where the low band favours it. The mid band at full weight
+   helped (off-beat beats fell from 714 to 526); the next step would be a
+   third band above the decimated rate (hats and snares, which favour the
+   beat in every fold measured), which changes the hop protocol.
+2. **Sixteenth-note phases.** The Glory, I Wonder, Good Morning,
+   Heliosphan: the tracker's bands peak a sixteenth off the reference beat,
+   and the dominance measure agrees with the tracker. These need the same
+   third band, or the reference needs a listen.
+3. **4:3 and 3:2 metres.** Music Makers (137 for 93 s), Waxin, Deadcruiser,
+   Prélude: now locked with confidence where the baseline flapped. The
+   reference's own runner-up is the tracker's tempo on three of them.
+4. **Sparse beats under sustained sound** (Remember, Endless, Blue Dream):
+   the right tempo estimate, clarity under the 0.15 acquisition gate. A
+   longer memory for sparse material, switched in when the onset signal
+   is quiet, is the obvious next experiment.
+5. **The lead-in.** On the synthetic heavy off-beat cases the tracker now
+   locks on a lead-in a sixteenth or a swung eighth before the kick in 11
+   of 36 cases (124 and 150 BPM, both notes within 4-6 dB of the kick with
+   the hat on top), where before it sat on the kick by a thin margin. The
+   test accepts exactly that lead-in and nothing else; MASCOT-POC.md has
+   the detail.

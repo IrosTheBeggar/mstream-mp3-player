@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <string>
 
 #include "BeatTracker.h"
 #include "DancePose.h"
@@ -97,14 +98,18 @@ void test_offbeat_hats_and_bass_do_not_pull_it_off_the_beat() {
 }
 
 // Heavier low-band content between the beats (bass and ghost kick 4-6 dB
-// under the kick together, as loud as the kick itself): the tracker may
-// refuse to lock (the figure sways), but whenever it is locked it is on the
-// beat, never on the swung or off-beat notes.
-void test_heavy_offbeat_low_band_never_locks_off_the_beat() {
-  int locked = 0, scored = 0;
+// under the kick together, as loud as the kick itself): whenever the
+// tracker is locked it is on the kick, or, when the notes come as a lead-in
+// (0.66 or 0.75 of the beat: a swung eighth or a sixteenth before the next
+// kick, with the hat on top louder than the kick in the tracker's bands),
+// exactly on that lead-in, which gathers more onset energy than the kick
+// and is the beat as far as the tracker can tell (docs/MASCOT-POC.md). It
+// never locks anywhere else, and never on the straight off-beat (0.5).
+void test_heavy_offbeat_low_band_locks_on_the_kick_or_a_lead_in() {
+  int locked = 0, scored = 0, leadIns = 0;
+  std::string failed;
   for (float bpm : {96.0f, 124.0f, 150.0f}) {
     for (double phase : {0.5, 0.66, 0.75}) {
-      if (bpm == 150.0f && phase == 0.75) continue;  // a lead-in a 16th early: see docs/MASCOT-POC.md
       for (double bass : {-4.0, -6.0}) {
         for (double ghost : {-4.0, -6.0}) {
           BeatTracker bt;
@@ -114,18 +119,27 @@ void test_heavy_offbeat_low_band_never_locks_off_the_beat() {
           locked += r.lockedBeats;
           scored += r.scoredBeats;
           if (r.errorsMs.empty()) continue;
+          // Signed errors against the kick: a lead-in grid sits (1 - phase)
+          // of a beat early, every beat.
+          const double med = sig::percentile(r.signedMs, 0.5);
+          const double leadInMs = -(1.0 - phase) * 60000.0 / bpm;
+          const bool onKick = std::fabs(med) < kMedianMs && sig::percentile(r.errorsMs, 0.95) < kP95Ms;
+          const bool onLeadIn = phase > 0.5 && std::fabs(med - leadInMs) < kMedianMs &&
+                                sig::percentile(r.signedMs, 0.95) - sig::percentile(r.signedMs, 0.05) < 2 * kP95Ms;
+          leadIns += onLeadIn ? 1 : 0;
           char msg[160];
-          snprintf(msg, sizeof(msg), "%.0f BPM, phase %.2f, bass %.0f dB, ghost %.0f dB: bpm %.2f, median %.1f ms, p95 %.1f ms",
-                   bpm, phase, bass, ghost, r.bpm, sig::percentile(r.errorsMs, 0.5), sig::percentile(r.errorsMs, 0.95));
-          TEST_ASSERT_TRUE_MESSAGE(sig::percentile(r.errorsMs, 0.5) < kMedianMs, msg);
-          TEST_ASSERT_TRUE_MESSAGE(sig::percentile(r.errorsMs, 0.95) < kP95Ms, msg);
+          snprintf(msg, sizeof(msg), "%.0f BPM, phase %.2f, bass %.0f dB, ghost %.0f dB: bpm %.2f, median %+.1f ms, p95 %.1f ms",
+                   bpm, phase, bass, ghost, r.bpm, med, sig::percentile(r.errorsMs, 0.95));
+          if (!onKick && !onLeadIn) failed += std::string(msg) + "; ";
         }
       }
     }
   }
-  char msg[80];
-  snprintf(msg, sizeof(msg), "locked for %d of %d beats scored", locked, scored);
+  char msg[120];
+  snprintf(msg, sizeof(msg), "locked for %d of %d beats scored; %d of 36 cases on the lead-in", locked, scored, leadIns);
   TEST_MESSAGE(msg);
+  TEST_ASSERT_TRUE_MESSAGE(failed.empty(), failed.c_str());
+  TEST_ASSERT_TRUE_MESSAGE(leadIns <= 12, msg);  // 11 in October 2026: 124 and 150 BPM at 0.75, 150 at 0.66
 }
 
 // Without a prior a 174 BPM train may be tracked at 174 or 87; either way
@@ -289,17 +303,82 @@ void test_allocator_hook() {
   TEST_ASSERT_EQUAL_INT(0, blocks);  // all freed through the hook
 }
 
+// White noise from a reset never even gets a grid: the first seconds' means
+// are true means, not leaky ones started from zero (which left the centred
+// onsets positive, the autocorrelation positive at every lag, and the comb
+// picking 185 BPM at 1.9 s on every noise).
+void test_noise_from_a_reset_never_acquires() {
+  BeatTracker bt;
+  bt.begin(BeatTracker::Config{});
+  for (uint32_t seed = 1; seed <= 6; ++seed) {
+    Track noise;
+    noise.mono.assign(sig::frames(12.0), 0);
+    sig::addNoise(noise, -20.0, seed);
+    bt.reset(0);
+    for (uint32_t at = 0; at < noise.mono.size(); at += 1024) {
+      const uint32_t n = std::min<uint32_t>(1024, static_cast<uint32_t>(noise.mono.size()) - at);
+      bt.process(noise.mono.data() + at, n);
+      char msg[64];
+      snprintf(msg, sizeof(msg), "seed %u acquired a grid at %.2f s", seed, (at + n) / 44100.0);
+      TEST_ASSERT_FALSE_MESSAGE(bt.grid().valid, msg);
+    }
+  }
+}
+
+// The confidence's factors: decisive on a click track, nothing on silence.
+void test_factors_are_decisive_on_clicks() {
+  BeatTracker bt;
+  bt.begin(BeatTracker::Config{});
+  bt.reset(0);
+  sig::run(bt, sig::clicks(120.0f, 10.0), 0.0);
+  TEST_ASSERT_TRUE(bt.locked());
+  const BeatTracker::Factors f = bt.factors();
+  TEST_ASSERT_TRUE(f.dominance >= 3.0f);
+  TEST_ASSERT_TRUE(f.hitRate >= 0.9f);
+  TEST_ASSERT_TRUE(f.pulse >= 3.0f);
+  TEST_ASSERT_TRUE(f.steady < 0.03f);
+  TEST_ASSERT_EQUAL_FLOAT(1.0f, bt.confidence());
+  bt.reset(0);
+  const BeatTracker::Factors z = bt.factors();
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, z.dominance);
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, z.hitRate);
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, z.pulse);
+}
+
+// The grid moves to the phase that gathers the onsets, without a fresh
+// acquisition: 8 s with a ghost kick 6 dB above the kick on the off-beat,
+// then the ghost 10 dB under it. Within 6 s of the change the grid is on
+// the kick, locked, and it got there by a phase shift (the first grid sat
+// on one of the two; the shift ratio needs a clear winner).
+void test_grid_moves_to_the_dominant_phase() {
+  Track t = sig::concat(sig::drums(120.0f, 8.0, 0.5, -200.0, -200.0, 6.0), sig::drums(120.0f, 14.0, 0.5, -200.0, -200.0, -10.0));
+  BeatTracker bt;
+  bt.begin(BeatTracker::Config{});
+  bt.reset(0);
+  const Result r = sig::run(bt, t, 14.0);
+  char msg[160];
+  snprintf(msg, sizeof(msg), "bpm %.2f, locked %d/%d, median %.1f ms, p95 %.1f ms, shifts %u", r.bpm, r.lockedBeats,
+           r.scoredBeats, sig::percentile(r.errorsMs, 0.5), sig::percentile(r.errorsMs, 0.95), bt.phaseShifts());
+  TEST_MESSAGE(msg);
+  TEST_ASSERT_TRUE_MESSAGE(r.lockedBeats >= r.scoredBeats - 2, msg);
+  TEST_ASSERT_TRUE_MESSAGE(sig::percentile(r.errorsMs, 0.5) < kMedianMs, msg);
+  TEST_ASSERT_TRUE_MESSAGE(bt.phaseShifts() >= 1, msg);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_click_trains_lock_and_stay_on_the_beat);
   RUN_TEST(test_block_size_does_not_matter);
   RUN_TEST(test_offbeat_hats_and_bass_do_not_pull_it_off_the_beat);
-  RUN_TEST(test_heavy_offbeat_low_band_never_locks_off_the_beat);
+  RUN_TEST(test_heavy_offbeat_low_band_locks_on_the_kick_or_a_lead_in);
   RUN_TEST(test_half_and_double_tempo);
   RUN_TEST(test_no_beat_gives_low_confidence);
   RUN_TEST(test_beat_then_silence_unlocks);
   RUN_TEST(test_tempo_change_relocks);
   RUN_TEST(test_reset_and_origin);
   RUN_TEST(test_allocator_hook);
+  RUN_TEST(test_noise_from_a_reset_never_acquires);
+  RUN_TEST(test_factors_are_decisive_on_clicks);
+  RUN_TEST(test_grid_moves_to_the_dominant_phase);
   return UNITY_END();
 }
