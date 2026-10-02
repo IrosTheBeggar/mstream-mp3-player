@@ -60,10 +60,10 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
 
 ```
  source:  /music on LittleFS (SD card later: same fs::FS code)  |  built-in tone: tracks
-            └ AudioFileSourceFS (+ID3 for MP3)                   |    └ ToneGen, ClickGen (at their own rate)
+            └ AudioFileSourceFS (+GuardedSource for MP3)         |    └ ToneGen, ClickGen (at their own rate)
                 └ AudioGeneratorMP3 (libmad) | AudioGeneratorFLAC (libFLAC)     (any rate: 8-96 kHz)
- decode task (core 1, prio 2, 16 KB internal stack)
-   ─► RingOutput (RingFeed: RateConverter to 44.1 kHz, a 256-frame stage)
+ decode task (core 1, prio 2, 16 KB internal stack; GaplessEngine at a file's end)
+   ─► RingOutput (TrimFeed: gapless trim; RingFeed: RateConverter to 44.1 kHz, a 256-frame stage)
    ─► PcmRing (PSRAM, 64k frames ≈ 1.5 s, always 44.1 kHz)
         ├─► BtSink: ESP32-A2DP data callback (Bluedroid's BTC task, 44.1 kHz)
         └─► SpeakerSink: pump task ─► M5.Speaker.playRaw (44.1 kHz in and out, mono)
@@ -73,10 +73,15 @@ ESP8266Audio's ID3 reader walks the whole ID3v2 tag a byte per read. An
 MP3 with an embedded picture (two Moon Safari tracks on the test card have
 351 KB tags) then took 4 s of CPU on the decode task, above the loop: the
 track started 4 s late and the UI froze as long (seen in the stage-2 device
-soak). A tag over 16 KB is now skipped (the file handed to the decoder
-from its first frame, `[audio] ID3 tag of N KB (a picture?): skipped`); its
-title and artist aren't needed (the library has them). Both tracks now
-start in 23-30 ms.
+soak). A tag over 16 KB was then skipped, and since gapless playback the
+reader is gone altogether: every MP3 is handed to the decoder from its
+first audio frame, past its ID3v2 tags (one after another too) and past a
+Xing/Info/VBRI header frame, which has no audio (`[audio] ID3 tag of N KB
+(a picture?): skipped, not read` for a big one). Its title and artist
+aren't needed (the library has them). Those tracks start in 23-30 ms.
+`GuardedSource` adds 8 zero bytes after an MP3's end, so libmad decodes
+its last frame (it needs `MAD_BUFFER_GUARD` bytes after a frame;
+[GAPLESS.md](GAPLESS.md) section 4.3).
 
 The rules that keep it deadlock- and glitch-free:
 
@@ -108,8 +113,30 @@ The rules that keep it deadlock- and glitch-free:
   without a START is only a late callback, and the audio goes on.
 - **Track changes don't wait for the outputs.** A skip calls `discardAll()`
   (and resets the converter: nothing of the old track's filter history comes
-  out after it); a natural end drains the ring first (`finished()` = end of
-  file, the converter's tail, *and* the ring empty).
+  out after it). A natural end is a gapless join, below; only the queue's
+  real end (or a track the player says nothing follows) drains the ring
+  first (`finished()` = end of file, the converter's tail, *and* the ring
+  empty).
+- **Gapless playback** ([GAPLESS.md](GAPLESS.md)). The player names what
+  `advance()` would start next (`IAudioBackend::setNext()`: the entry, a
+  token, the token of the track it follows). At a file's end the decode
+  task (`GaplessEngine`, lib/core, host-tested in test_gapless and
+  test_gapless_player) opens it at once and writes on into the same ring:
+  no `discardAll()`, no new generation, no fade; the same rate goes on
+  through the same converter state, another rate pushes the tail and
+  starts a new stream at the same ring position. MP3s are trimmed by
+  their LAME tag (`TrimFeed`: the encoder delay and libmad's 529 samples
+  at the start, the padding less 529 at the end; the generator's own
+  leading zero frame always). The heard track switches when the outputs
+  read past the join (`takeAdvance()`, at the top of the player's
+  `update()` and of every action): the queue's entry, Now Playing, the
+  position (held at the track's exact end until then), the length, the
+  resume point and the sleep timer all follow it. A change to what comes
+  next while it is decoded ahead takes it back out of the ring
+  (`PcmRing::cutBack()`: a fence and a reading mark, so a read never
+  fails) unless the outputs are past the join; then the player sorts it
+  out at the advance. The console's `G` shows it all; `G0` is v0.5.0's
+  ends.
 - **The decoder never blocks inside an output.** `RingOutput::ConsumeSample`
   returns false when the ring is full or the pass's budget (1024 source
   frames, or 1024 ring frames made: a low rate's pass converts no more than
@@ -135,8 +162,12 @@ The rules that keep it deadlock- and glitch-free:
   silent 32 kbit/s start); with no length handed, a VBR file can't be
   placed and starts at 0:00. From that byte the decoder is
   handed the first frame whose next frame's header follows (a clean
-  start: libmad would resync, maybe on a false sync first), without the ID3
-  reader (the library has the tags; a big tag is skipped either way). No
+  start: libmad would resync, maybe on a false sync first). With LAME's
+  tag the time asked for is on the trimmed timeline that gapless playback
+  plays: the byte is the encoder delay and libmad's 529 samples later, and
+  a CBR Info file's counts from the first audio frame (GAPLESS.md section
+  4.6); after such a start only the generator's lead is skipped, and the
+  end is still trimmed. No
   such frame in the 4 KB read, or one with 5 s or less of audio after it
   at its bitrate (a file shorter than its header says): the seek failed,
   and it starts at 0:00 (never a start that ends at once: the player would
@@ -203,18 +234,21 @@ The rules that keep it deadlock- and glitch-free:
   exact. The ring-full rule: a source frame is taken whole only if the stage
   has room for all it can make (1 frame at 44.1 kHz and above, up to 6 at
   8 kHz), the per-pass budget counts source frames and caps the ring frames
-  made, and at the end of a file
+  made, and at the end of a file nothing follows (or another rate does)
   `finish()` pushes the converter's tail, so a track ends with exactly
   ceil(source frames x 44100 / rate) frames. The converter is reset with
   the ring's `discardAll()` at every request (start, skip, seek, stop,
-  bench). A built-in track goes through it too, at its own rate (its
+  bench), and never at a gapless join: at the same rate the next track's
+  frames go on through the same state, and a cut back to a join restores
+  the state saved there (`RingFeed::mark()`/`rewind()`). A built-in track goes through it too, at its own rate (its
   chunk's frames that didn't fit wait for the next pass). A 44.1 kHz frame
   goes straight into the stage, as before the converter; frames at another
   rate are held 32 at a time and converted as a block, on the ESP32 by a
   MAC16 assembly kernel that a self-test at boot checks against the C one,
   bit for bit, with the filter tables copied into internal RAM while a
   track at another rate plays (7.6 KB: copied when one starts, freed when
-  a 44.1 kHz track starts, read from flash when there's no room;
+  a request starts a 44.1 kHz track, never during a chain of gapless joins
+  (a cut's rewind may need its rows), read from flash when there's no room;
   RESAMPLER.md section 10c). `RingOutput`
   (3.1 KB) must stay in internal RAM, so it is asserted under 4 KB (the
   framework puts a `new` of 4 KB or more in PSRAM). The console's `R` shows
@@ -256,7 +290,7 @@ The rules that keep it deadlock- and glitch-free:
 | Bluetooth controller + host (Bluedroid) | 0 | high | ~70 KB internal RAM, claimed at boot |
 | A2DP data callback | 0 (Bluedroid's BTC task, BTC_TASK) | high | 128 frames at a time, several per ~30 ms tick; applies the volume ramp; never blocks or logs. ESP-IDF 5.5's A2DP source has no media task of its own: this is the task that also runs the GAP and AVRCP callbacks, which queue their events to BtAppT (below). If BtAppT's queue (20 entries) is full, each such event blocks BTC_TASK, and the audio, for up to 10 ms |
 | ESP32-A2DP app task (BtAppT) | 0 | 15 | connection, stream and AVRCP handlers (`PlayerA2dp`); 6 KB stack; blocks 10 s at stack-up; must keep its queue drained (no long work in a handler) |
-| decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 1.4 M cycles per second of audio for 44.1 kHz's passthrough, the old path, 5 cycles a frame cheaper (an MP3 still measures 0.8 points above the build before the converter, its decoder's loop 2 % slower in the new image: RESAMPLER.md section 10b); 5.8-5.9 % of a core at 240 MHz for 48 kHz, 8.8 % at 160: RESAMPLER.md sections 10 and 10b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start) |
+| decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 1.4 M cycles per second of audio for 44.1 kHz's passthrough, the old path, 5 cycles a frame cheaper (an MP3 still measures 0.8 points above the build before the converter, its decoder's loop 2 % slower in the new image: RESAMPLER.md section 10b); 5.8-5.9 % of a core at 240 MHz for 48 kHz, 8.8 % at 160: RESAMPLER.md sections 10 and 10b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start); at a file's end it opens the next track with the ring still full (a gapless join: no refill from empty at natural ends, GAPLESS.md). Its rests are `ulTaskNotifyTake()`, so a request or a new word (`setNext()`) wakes it |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
 | cover thumbnails (`thumbs`, ui/Thumbs) | 1 | 1, or 0 while a list moves | only while there are covers to make: made for the first, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device); reads the card in 4 KB pieces; level with the loop while nothing moves (at 0 it shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves, always below the decoder (below) |
@@ -655,7 +689,9 @@ every pass before the player and carries out what it says:
    skip keeps it, and only +10 min, Turn off or another choice bring it
    back, at the slow rate. After a skip the length counts only once the
    backend has started the new track (`EntryStart`: until then it reports
-   the old one's end, which would fade the new track at once);
+   the old one's end, which would fade the new track at once; the
+   backend's `trackSeq()` counts its starts and its gapless advances, so a
+   join counts as the new entry's start however late the loop takes it);
 2. the pause (`pauseByTimer()`, or the player's own at the boundary:
    `setPauseAfterTrack()`), never a stop, the output never moved; a pause
    during the fade, or an expiry while paused or waiting for the
@@ -669,6 +705,15 @@ every pass before the player and carries out what it says:
    up) is paused when the drop comes (`BtSession::onDisconnected()`), so
    nothing "plays" without a link and the headphones never start music
    when they come back.
+
+The player's `NextGate` (main.cpp's `SleepGate`: `SleepTimer::endsAt()`,
+End of track always, End of album or queue on its last track) keeps the
+track after the boundary from being decoded ahead for a gapless join, so
+the pause at the boundary hears nothing of it; it is decided in the same
+update that makes an album's last track current (GAPLESS.md section 5.4).
+Chosen too late to take the next track back out of the ring, the player
+pauses at the advance instead, with at most the cut's latency and the
+pause's 1.5 ms fade of it heard.
 
 +10 min never leaves less time than before (`SleepTimer::canExtend()`):
 End of album or End of queue before its last track can't say what is
@@ -844,6 +889,8 @@ the UI turns `DanceMode` off: no frames at all. Each change is logged
 While a computer plays music (mstream-terminal-player, or the reference
 sender `tools/usb_viz.py`), it can drive the Dance tab's dancer over the USB
 serial port. The spec, the plan and the tests: [USB-VISUALIZER.md](USB-VISUALIZER.md).
+(Host mode pauses the player, `pauseByComputer()`, so no gapless join
+happens during a session: its epochs are the computer's alone.)
 
 - **The split.** The computer runs only the beat tracker's front end
   (`HopFrontEnd`, lib/core: the 8x box average, the DC blocker, two 150 Hz
@@ -1316,7 +1363,21 @@ the browsing UI hold its **track ids**, never strings.
   through it: Play starts the new queue; removing the current entry plays the next one that stayed (paused: it
   is cued; none left after it: stop); Clear stops; undo returns to the entry
   that was current if the one playing isn't in the restored queue. Play next,
-  + Queue and Clear up next change nothing that plays. `HeadsetKeys` works
+  + Queue and Clear up next change nothing that plays, though they may
+  change what comes next. **Gapless playback** ([GAPLESS.md](GAPLESS.md)):
+  while the backend holds the current entry's track the player tells it
+  what `advance()` would start next (`setNext()`: worked out again only
+  when the queue, repeat, "pause after this track", the gapless switch or
+  the sleep timer's gate change; the same track still next keeps its
+  token, even when a library rebuild gives it a new key), and the backend
+  joins it on at the file's end. When the backend reports that the join
+  is heard (`takeAdvance()`, at the top of `update()` and of every
+  action), the player does what `update()` would do at the track's natural
+  end right then: the boundary's pause if "pause after this track" or the
+  timer ends here; `advance()` if the joined track isn't what comes next
+  any more (an edit that came too late to take it back out: Play next's
+  track still plays next); otherwise the joined entry becomes current with
+  no `play()`. A next pressed just after a join skips the track heard. `HeadsetKeys` works
   unchanged on top (`cueNext()`/`cuePrev()` move the current entry). A
   `Hold` (main.cpp's: Bluetooth is the output and the headphones aren't
   connected) turns every play into **Waiting**, a state of its own (not

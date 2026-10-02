@@ -12,8 +12,13 @@
 #include <string>
 
 #include "ClickGen.h"
+#include "GaplessEngine.h"
+#include "GaplessJoin.h"
+#include "LameTag.h"
 #include "PcmRing.h"
+#include "RingFeed.h"
 #include "ToneGen.h"
+#include "ToneTrack.h"
 #include "TransportSync.h"
 #include "RefillPacer.h"
 #include "audio/AudioShared.h"
@@ -21,12 +26,17 @@
 #include "audio/SpeakerSink.h"
 #include "hal/IAudioBackend.h"
 
+// Gapless playback on at boot (docs/GAPLESS.md); -DMSTREAM_GAPLESS=0 builds
+// it off (the console's G1 turns it on).
+#ifndef MSTREAM_GAPLESS
+#define MSTREAM_GAPLESS 1
+#endif
+
 class AudioFileSourceFS;
-class AudioFileSourceID3;
 class AudioGenerator;
 class AudioGeneratorMP3;
 class AudioOutput;
-class RingFeed;
+class GuardedSource;
 class RingOutput;
 class SeekableFlac;
 
@@ -54,7 +64,16 @@ class SeekableFlac;
 // a clean frame; a FLAC through libFLAC's own seek; a built-in track just
 // counts from there. positionMs() and durationMs() count from the start, in
 // 44.1 kHz ring frames whatever the track's rate.
-class Core2AudioBackend : public IAudioBackend {
+//
+// Gapless playback (docs/GAPLESS.md): the player names what follows
+// (setNext()); at the end of a file the decode task opens it at once and
+// writes on into the same ring (lib/core GaplessEngine), no discardAll(),
+// no new generation, MP3s trimmed by their LAME tag (TrimFeed). The track
+// heard (positionMs(), durationMs(), description()...) switches when the
+// outputs read past the join (takeAdvance()), not when the decoder gets
+// there. A word that changes while the next track is decoded ahead takes
+// it back out of the ring (PcmRing::cutBack()) unless it has been heard.
+class Core2AudioBackend : public IAudioBackend, private GaplessEngine::Tracks {
 public:
   enum class Output : uint8_t { Speaker, Bluetooth };
 
@@ -88,6 +107,8 @@ public:
   bool finished() const override;
   bool failed() const override;
   RateRefusal rateRefusal() const override;
+  void setNext(const Next& next) override;
+  bool takeAdvance(uint32_t* token) override;
 
   // Decodes up to 20 s of `path` as fast as possible, output discarded, and
   // prints how many times faster than realtime that was; a file at another
@@ -231,29 +252,47 @@ public:
     int32_t fullMs;        // the ring full (the decoder waits for room)
   };
   StartTiming startTiming() const;
-  // For the UI; set by the decode task. Title/artist come from ID3 tags and are
-  // empty when the file has none.
+  // For the UI; set by the decode task: the heard track's (a track decoded
+  // ahead has its own once its join is heard).
   std::string description() const;  // e.g. "MP3, 44100 Hz"
-  std::string trackTitle() const;
-  std::string trackArtist() const;
-  std::string note() const;  // why the last track failed, or ""
-  // The current track's length (ms), for the UI's progress: exact for the
-  // built-in tracks; for a file, estimated from how fast the decoder goes
-  // through it (lib/core TrackProgress: exact for a constant-bitrate MP3,
-  // settling within seconds otherwise; a track started part of the way in
-  // adds its start to the estimate of what is left). 0: not known yet (the
-  // first ~1 s). Any task.
+  std::string note() const;  // why the last track failed (or ended early), or ""
+  // The heard track's length (ms), for the UI's progress: exact once its
+  // file has ended (to the frame: where the next stream begins), and for
+  // the built-in tracks; before, the file's header (an MP3's Xing/VBRI,
+  // trimmed by its LAME tag; a FLAC's STREAMINFO) or an estimate from how
+  // fast the decoder goes through it (lib/core TrackProgress: exact for a
+  // constant-bitrate MP3, settling within seconds otherwise; a track
+  // started part of the way in adds its start to the estimate of what is
+  // left). 0: not known yet (the first ~1 s). Any task.
   uint32_t durationMs() const override;
-  // Where the current track started (ms into it; 0: its beginning): a
-  // resume point, as it really landed (the last 5 s and past the end start
-  // at 0). positionMs() includes it. Any task.
-  uint32_t startOffsetMs() const { return startMs_.load(std::memory_order_relaxed); }
-  // durationMs() was read from the file (or is a built-in track's), not
-  // estimated.
-  bool durationKnown() const { return knownDurationMs_.load(std::memory_order_relaxed) > 0; }
+  // Where the heard track started (ms into it; 0: its beginning, and every
+  // joined track): a resume point, as it really landed (the last 5 s and
+  // past the end start at 0). positionMs() includes it. Any task.
+  uint32_t startOffsetMs() const { return book_.startMs(); }
+  // durationMs() was read from the file, or is exact (the file has ended,
+  // or a built-in track), not estimated.
+  bool durationKnown() const;
+  // Counts the tracks the outputs begin: every start (play()), and every
+  // join heard (takeAdvance()). The sleep timer's EntryStart and the
+  // Queue's learned lengths go by it: at a gapless advance the entry and
+  // the count change together. Loop task.
+  uint32_t trackSeq() const { return trackSeq_.load(std::memory_order_acquire); }
+
+  // ---- gapless playback (the console's G) ----
+  // Off (G0): no word is taken, a track decoded ahead is cut back out, and
+  // from the next open no trimming, no header-frame skip, no guard bytes:
+  // v0.5.0's ends, for the A/B (the player stops naming what follows too:
+  // PlaybackController::setGapless()). Loop task; RAM only.
+  void setGapless(bool on);
+  bool gapless() const { return gapless_.load(std::memory_order_relaxed); }
+  // Trimming by the LAME tag (Gt0/Gt1), from the next open: off, an MP3 is
+  // played as decoded (the generator's lead still skipped).
+  void setGaplessTrim(bool on) { gaplessTrim_.store(on, std::memory_order_relaxed); }
+  bool gaplessTrim() const { return gaplessTrim_.load(std::memory_order_relaxed); }
+  // G: the word, the boundary, the counters, the decoding track's trim.
+  void printGapless() const;
 
 private:
-  enum class Work : uint8_t { Idle, Producing, Draining };
   enum class Produced : uint8_t { More, Done, Failed };
   enum class Kind : uint8_t { Play, Stop, Bench, RateBench };
   struct Request {
@@ -265,36 +304,72 @@ private:
     uint32_t asHz = 0;    // Play: the rate it is converted from whatever it says (playAsRate(), a test)
   };
 
+  // A track opened: what its file (or a built-in track's name) says before
+  // any frame, and where its decoder begins (decode task).
+  struct Prepared {
+    std::string path;
+    bool tone = false;
+    ToneTrack toneSpec;
+    bool mp3 = false;
+    uint32_t rate = 0;        // what it says before its first frame (0: nothing)
+    uint32_t from = 0;        // MP3: the byte the decoder begins at
+    bool fromTop = true;      // ... the first audio frame (not a seek)
+    uint32_t landedMs = 0;    // where it starts (a resume point)
+    uint32_t knownMs = 0;     // its length, if it says (an MP3's trimmed)
+    uint32_t flacSeekMs = 0;  // FLAC: libFLAC's seek after begin()
+    uint32_t metadataBytes = 0;  // FLAC: its metadata blocks (a big picture is read through at the open)
+    lametag::Info lame;
+    lametag::Trim trim;
+    bool guard = false;       // MP3: GuardedSource
+  };
+
   static void taskEntry(void* self);
-  static void onMetadata(void* self, const char* type, bool isUnicode, const char* value);
   void request(const std::string& path, Kind kind, uint32_t startMs = 0, uint32_t hintMs = 0, uint32_t asHz = 0);
   void decodeTask();
-  Work start(uint32_t generation);
-  // A built-in track (lib/core ToneTrack), through RingOutput like a file.
-  Work startTone(uint32_t generation, const Request& req);
-  Work fail(uint32_t generation, const std::string& why);
+  void start(uint32_t generation);
+  void fail(uint32_t generation, const std::string& why);
   // fail() for a rate the converter refused, kept for rateRefusal().
-  Work failRate(uint32_t generation);
+  void failRate(uint32_t generation);
+  // The engine's phase as TransportSync's (Decoding, Draining, Ended) and
+  // the outputs' flags, after a step.
+  void reportPhase(uint32_t generation);
+  // Sleeps up to `ms`, woken early by play()/stop()/setNext()
+  // (xTaskNotifyGive): a cut or a new request never waits a whole pause.
+  void rest(uint32_t ms);
   RingFeed& feed();
   uint32_t cpuMhz() const;
   // Why the track's rate was refused: "37800 Hz isn't supported (...)".
   std::string refusalText();
-  // `startMs` > 0: part of the way in (sets startMs_ to where it landed),
-  // `hintMs` its length as known elsewhere (0: none).
-  bool openDecoder(const std::string& path, AudioOutput* out, uint32_t startMs, uint32_t hintMs);
-  // An MP3 at `startMs`: the byte to hand the decoder from (a frame's), and
-  // where that lands (`landedMs`), found through `probe` (PSRAM, holding
-  // `got` bytes from `audioStart`, the end of the tags; reused for the
-  // frame search). 0: from the top (the last 5 s, past the end, a VBR file
-  // with nothing to place it by, no clean frame there, or too little after
-  // it); `landedMs` is then left alone.
+  // Opens `path` (a file into file_, or a built-in track's name) and reads
+  // what it says: its rate, length, LAME tag, the byte to begin at.
+  // `startMs` > 0: part of the way in; `hintMs` its length as known
+  // elsewhere (0: none). Nothing is fed. False: it can't be played.
+  bool prepare(const std::string& path, uint32_t startMs, uint32_t hintMs, Prepared* p);
+  // The prepared track's decoder begins into `out` (its trim armed when
+  // `trimmed`: RingOutput's own), the per-track counters start again.
+  bool beginPrepared(const Prepared& p, AudioOutput* out, bool trimmed);
+  // prepare() + beginPrepared() (a start, the bench).
+  bool openDecoder(const std::string& path, AudioOutput* out, uint32_t startMs, uint32_t hintMs, bool trimmed);
+  // An MP3 at `startMs`, a track `known` ms long (0: not said): the byte to
+  // hand the decoder from (a frame's), and where that lands (`landedMs`),
+  // found through `probe` (PSRAM, holding `got` bytes from `audioStart`,
+  // the end of the tags; reused for the frame search). 0: from the top
+  // (the last 5 s, past the end, a VBR file with nothing to place it by,
+  // no clean frame there, or too little after it); `landedMs` is then left
+  // alone.
   uint32_t mp3StartByte(uint8_t* probe, uint32_t got, uint32_t audioStart, uint32_t startMs, uint32_t hintMs,
-                        uint32_t* landedMs);
+                        uint32_t known, uint32_t* landedMs);
   void closeDecoder();
   Produced produceTone();
   Produced produceDecoded();
-  // The end of the source: the converter's tail into the ring, then Done.
-  Produced finishSource();
+  // An early end of the decoding track (a rate refused mid-stream): why,
+  // for note() when it is heard.
+  void endedEarly(const std::string& why);
+  // GaplessEngine::Tracks (the decode task's side of a join).
+  bool probe(const GaplessJoin::Offer& next, uint32_t* rate) override;
+  bool start() override;
+  void close() override;
+  void note(const GaplessEngine::Note& n) override;
   void noteRingFill();  // decode task: ringSteady_ once the ring holds kSteadyMs
   void noteStartProgress(bool full);  // decode task: fills in startTiming()
   void publishRate();   // decode task: rateStatus()'s snapshot
@@ -327,14 +402,14 @@ private:
   std::unique_ptr<RingOutput> out_;
   bool kernelFailed_ = false;  // the fast kernel failed a self-test: the C kernel until a restart
   std::unique_ptr<AudioFileSourceFS> file_;
-  std::unique_ptr<AudioFileSourceID3> id3_;  // per MP3 track
+  std::unique_ptr<GuardedSource> guard_;     // file_ with 8 zero bytes after it (MP3)
   std::unique_ptr<AudioGeneratorMP3> mp3_;   // created fresh for each track
   std::unique_ptr<SeekableFlac> flac_;
   AudioGenerator* decoder_ = nullptr;        // the one decoding now, or null
   const char* codec_ = "";
   bool toneTrack_ = false;
   bool clickTrack_ = false;                  // a tone: track made by click_, not tone_
-  bool sourceDone_ = false;                  // the decoder (or tone) reached its end
+  bool early_ = false;                        // the decoding track ended early (an error)
   uint32_t toneN_ = 0;                       // frames in chunk_ (a built-in track's)
   uint32_t toneAt_ = 0;                      // of which RingOutput has taken this many
   bool described_ = false;
@@ -342,6 +417,23 @@ private:
   ClickGen click_;
   int16_t* chunk_ = nullptr;  // tone scratch buffer (PSRAM)
   std::atomic<uint16_t> cpuMhz_{0};  // setCpuMhz()
+  // Gapless playback: the boundary book (any task), the decode task's
+  // state machine, the track prepared for a join, the PSRAM it uses (two
+  // feed marks ~2 KB each, the trim's 16 KB hold).
+  GaplessJoin book_;
+  std::unique_ptr<GaplessEngine> engine_;
+  Prepared prepared_;
+  RingFeed::Mark* marks_[2] = {nullptr, nullptr};
+  int16_t* holdBuf_ = nullptr;
+  Phase reported_ = Phase::Idle;  // what reportPhase() said last (decode task)
+  std::atomic<bool> gapless_{MSTREAM_GAPLESS != 0};
+  std::atomic<bool> gaplessTrim_{true};
+  int64_t probeUs_ = 0;           // decode task: the join's open began
+  uint32_t openMs_ = 0;           // ... and took (the log)
+  std::atomic<int64_t> nextAtUs_{0};      // the last setNext() (edit-to-cut, for G)
+  std::atomic<uint32_t> cutLatencyUs_{0}; // the last cut's, from the word that asked for it
+  std::atomic<uint32_t> cutLatencyMaxUs_{0};
+  std::atomic<uint32_t> advances_{0};     // joins heard (G)
 
   // rateStatus()'s snapshot (decode task -> any).
   std::atomic<uint32_t> convRate_{0};
@@ -358,12 +450,12 @@ private:
 
   mutable std::mutex lock_;  // guards request_ and the strings below
   Request request_;
-  std::string description_;
-  std::string title_;
-  std::string artist_;
-  std::string note_;
+  std::string description_;       // the decoding track's
+  std::string heardDescription_;  // the heard track's while another decodes after it (heardOverride_)
+  bool heardOverride_ = false;
+  std::string note_;              // the heard track's
+  std::string aheadNote_;         // a track decoded ahead's, for when it is heard
 
-  std::atomic<uint32_t> trackStart_{0};  // ring readPos() where the current track begins
   std::atomic<uint64_t> busyUs_{0};      // decode task time spent producing, current track
   std::atomic<uint64_t> busyTotalUs_{0}; // the same, since boot
   std::atomic<bool> ringSteady_{false};  // see ringSteady()
@@ -374,8 +466,14 @@ private:
   std::atomic<uint32_t> srcPos_{0};
   std::atomic<uint32_t> srcSize_{0};
   std::atomic<uint32_t> knownDurationMs_{0};
-  // Where the current track started, ms into it (startOffsetMs()).
+  // Where the decoding track started, ms into it (the heard one's is the
+  // book's: startOffsetMs()).
   std::atomic<uint32_t> startMs_{0};
+  std::atomic<uint32_t> trackSeq_{0};  // trackSeq(): the decode task's starts, the loop's advances
+  // The decoding track's trim, for G (decode task -> any).
+  static constexpr uint32_t kTrimMp3 = 1, kTrimLame = 2, kTrimCrcBad = 4;
+  std::atomic<uint32_t> trimNow_{0};
+  std::atomic<uint32_t> trimDelay_{0}, trimPadding_{0}, trimSkip_{0}, trimHold_{0};
 
   // Counts pause() calls. The decode task un-pauses a newly started track
   // (start()) only if the player hasn't paused since asking for it: a Next

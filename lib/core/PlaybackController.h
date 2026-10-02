@@ -67,6 +67,29 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // The USB visualizer's pause (pauseByComputer()) is marked the same way
 // (pausedByComputer()), for the same reason: a bud put back in sends Play.
 //
+// Gapless playback (docs/GAPLESS.md, setGapless(): on by default): while
+// the backend holds the current entry's track (playing, paused, or waiting
+// to resume it), the player tells it what advance() would start next
+// (IAudioBackend::setNext(): the entry QueueModel::peek(+1, repeat) names,
+// its token kept while the same track stays next, a new one otherwise),
+// or that nothing follows: gapless off, "pause after this track" set, the
+// sleep timer ending at this entry (NextGate), or the end of the queue
+// without repeat. Worked out again only when one of those changes (a
+// signature of them), every update() and at the end of every action, so an
+// edit's new word reaches the backend at once. When the backend reports
+// that a joined track is heard (takeAdvance(), at the top of update() and
+// of every action, so a next pressed just after a join skips the track
+// that is heard), the player does what update() would do at its natural
+// end right now:
+//   - "pause after this track" or the timer ending here: the boundary's
+//     pause (the next entry cued at 0:00), as at any natural end;
+//   - what advance() would start isn't the joined track any more (an edit
+//     that came too late to cut it out: Play next, a remove, repeat): that
+//     is started (advance(); paused: cued);
+//   - otherwise the joined entry becomes current without a play(): the
+//     state, the queue and the backend stay as they are, the start point
+//     goes and the failure count starts again.
+//
 // A start point (QueueStore's resume point after a boot, the console's qs):
 // the current entry's next start begins that far in. Nothing plays by
 // itself: it only waits for the next play (or, set while playing, starts
@@ -89,11 +112,41 @@ public:
     ~Hold() = default;
   };
 
+  // Whether the sleep timer ends at the current entry (main.cpp's: End of
+  // track always; End of album or queue on its last track): the track
+  // after it is never decoded ahead, so the pause at the boundary hears
+  // nothing of it.
+  class NextGate {
+  public:
+    virtual bool endsHere() const = 0;
+
+  protected:
+    ~NextGate() = default;
+  };
+
   PlaybackController(IAudioBackend& audio, QueueModel& queue, const TrackCatalog& catalog)
       : audio_(audio), queue_(queue), catalog_(catalog) {}
 
   // nullptr (the default): nothing waits.
   void setHold(const Hold* hold) { hold_ = hold; }
+  // nullptr (the default): no sleep timer.
+  void setNextGate(const NextGate* gate) { gate_ = gate; }
+  // Gapless playback (the console's G0/G1): off, the backend is told that
+  // nothing follows (a track decoded ahead is cut back out if not heard
+  // yet) and every track ends as before.
+  void setGapless(bool on);
+  bool gapless() const { return gapless_; }
+  // The console's G: what the player has done with joins since boot.
+  struct GaplessStats {
+    uint32_t offers = 0;     // words sent (setNext())
+    uint32_t adopted = 0;    // joined tracks taken as the current entry
+    uint32_t restarted = 0;  // joined tracks that weren't what came next any more: started again
+    uint32_t paused = 0;     // the boundary's pause, at a joined track
+  };
+  const GaplessStats& gaplessStats() const { return gaplessStats_; }
+  // The word sent last: the token (0: nothing follows) and the entry's key.
+  uint32_t offeredToken() const { return sentToken_; }
+  uint32_t offeredKey() const { return offer_.key; }
   // Waiting: plays now, whatever the hold says (the headphones connected, or
   // the listener chose the speaker). Anything else: nothing.
   void release();
@@ -189,11 +242,11 @@ public:
   // ---- the queue's edits, with what they do to playback ----
   // Play: the queue becomes `tracks`, and the one at `start` plays.
   bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start);
-  bool playNext(const uint32_t* tracks, uint32_t n) { return queue_.insertNext(tracks, n); }
-  bool addToQueue(const uint32_t* tracks, uint32_t n) { return queue_.append(tracks, n); }
+  bool playNext(const uint32_t* tracks, uint32_t n);
+  bool addToQueue(const uint32_t* tracks, uint32_t n);
   QueueModel::Removed remove(const uint32_t* positions, uint32_t n);
-  bool moveNext(const uint32_t* positions, uint32_t n) { return queue_.moveNext(positions, n); }
-  bool clearUpNext() { return queue_.clearUpNext(); }
+  bool moveNext(const uint32_t* positions, uint32_t n);
+  bool clearUpNext();
   void clearQueue();
   bool undo();
   // The queue was replaced behind our back (restored from the card, or
@@ -228,7 +281,40 @@ public:
   uint32_t positionMs() const { return audio_.positionMs(); }
 
 private:
+  // Every public action: the heard advance first, the word to the backend
+  // after (nested actions do it again: harmless).
+  class Act {
+  public:
+    explicit Act(PlaybackController& p) : p_(p) { p_.syncHeard(); }
+    ~Act() { p_.refreshOffer(); }
+
+  private:
+    PlaybackController& p_;
+  };
+  // An entry offered (its token's), for the advance.
+  struct Offered {
+    uint32_t token = 0;
+    uint32_t key = QueueModel::kNone;
+    uint32_t track = QueueModel::kNone;
+  };
+  struct Signature {
+    uint32_t position = 0, content = 0, heard = 0;
+    bool repeat = false, pauseAfter = false, gapless = false, gate = false;
+    bool operator==(const Signature& o) const {
+      return position == o.position && content == o.content && heard == o.heard && repeat == o.repeat &&
+             pauseAfter == o.pauseAfter && gapless == o.gapless && gate == o.gate;
+    }
+  };
+
   bool held() const { return hold_ && hold_->holdPlay(); }
+  // The backend reports joined tracks heard (see the class).
+  void syncHeard();
+  // The word on what follows, sent when it changed.
+  void refreshOffer();
+  void remember(const Offered& o);
+  const Offered* offered(uint32_t token) const;
+  // update()'s natural end and failure handling.
+  void checkEnd();
   // The current entry plays, or (held) waits.
   void startCurrent();
   void startNow();
@@ -279,4 +365,18 @@ private:
   // Where the last play() asked to start (prevAction(): the position until
   // the backend takes that start up).
   uint32_t playedFromMs_ = 0;
+
+  // Gapless playback.
+  const NextGate* gate_ = nullptr;
+  bool gapless_ = true;
+  uint32_t heardToken_ = 0;  // the backend's track: 0 the last play()'s, else a joined one's
+  uint32_t nextToken_ = 0;   // the last token given
+  Offered offer_;            // the entry offered now (token 0: none)
+  Offered history_[4];       // the last offers, for an advance that comes late
+  uint8_t historyAt_ = 0;
+  bool sent_ = false;        // a word went to the backend since its last play()
+  uint32_t sentToken_ = 0;
+  uint32_t sentAfter_ = 0;
+  Signature signature_;
+  GaplessStats gaplessStats_;
 };

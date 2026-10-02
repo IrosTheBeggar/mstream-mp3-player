@@ -645,7 +645,7 @@ as ESP8266Audio's outputs assume. Rate 0 is ignored.
 
 - **`RingFeed::reset()` resets the converter** (zeroed histories, phases,
   delays, counters, no rate). It runs right after
-  `trackStart_ = ring_->discardAll()` in `start()` (`Core2AudioBackend.cpp`),
+  `ring_->discardAll()` in `start()` (`Core2AudioBackend.cpp`),
   for every kind of request, and again after a bench. Today `out_->reset()` sits at
   line 514, after the `tone:` branch and after `Kind::Stop` and
   `Kind::Bench` have returned. Once tones go through `RingOutput`, a tone
@@ -662,6 +662,21 @@ as ESP8266Audio's outputs assume. Rate 0 is ignored.
 - **`SetChannels()` never resets**: MP3's `begin()` says 2 and
   `GetOneSample()` says 1 two frames into every mono file. A reset there
   would clip the start of every mono track.
+- **Never at a gapless join** ([GAPLESS.md](GAPLESS.md) section 3.2). At
+  the same rate the next track's frames go on through the same converter
+  state, as if the two files were one (no reset, no tail); its first
+  source frame is `tailFrames()` ring frames past the write index at the
+  join (`RateConverter::tailFrames()`: `ringFrames(taken) - produced`).
+  At another rate the tail goes in (`finish()`) and `RingFeed::
+  restartStream()` starts a new stream at the same ring position (a reset
+  that keeps `made()` running): a fresh filter, a discontinuity of at most
+  the filter's length. Before either, the feed is saved
+  (`RingFeed::mark()`: the converter is a plain copy, ~1.9 KB, into
+  PSRAM), and a cut of the joined track restores it (`rewind()`), bit for
+  bit as if the cut track had never been fed (test_ring_feed). The
+  internal-RAM copy of the tables is never freed during such a chain
+  (section 10c's hook ignores "not wanted" from the first join to the next
+  request), so every row pointer a mark saved stays valid.
 
 The bench (section 6) uses `RingOutput`'s converter (`start()` has stopped
 playback anyway), never one on the decode task's 16 KB stack, which also
@@ -683,7 +698,7 @@ too.
 
 | counter | today | with the converter |
 |---|---|---|
-| ring frames, `positionMs()` (`readPos() - trackStart_`) | source frames at the source rate | **44.1 kHz ring frames**, divided by 44100 |
+| ring frames, `positionMs()` (`readPos()` less the heard track's first frame: `GaplessJoin`) | source frames at the source rate | **44.1 kHz ring frames**, divided by 44100 |
 | `AudioShared::rate`, `sampleRate()` | the source rate | **always 44100** (kept as a field; the speaker's `playRaw` rate and the dancer read it) |
 | `producedFrames_` (durations, decode load, `expectingAudio`, pacing) | source frames (`budgetLeft()`) | **ring frames** made this pass (a `RingOutput` counter) |
 | `progress::estimateDurationMs()` | frames at `shared_.rate` | ring frames at 44100 (bytes per ring frame is exact) |
@@ -695,7 +710,11 @@ too.
 
 Because output frame n sits exactly at source time n/44100, `positionMs()`
 is exact from the first frame. A resume start lands exactly where the
-decoder put it.
+decoder put it. With gapless joins the heard track's numbers are kept
+apart from the decoding track's (GAPLESS.md section 3.5): positions count
+from the heard track's first ring frame, held at its exact end until the
+join is heard, and a track's length becomes exact (to the ring frame) at
+its end of file.
 
 A side benefit: the ring's 65,536 frames hold 1.49 s at every rate, where a
 96 kHz track holds only 0.68 s today.

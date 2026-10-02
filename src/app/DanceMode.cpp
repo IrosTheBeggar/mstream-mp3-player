@@ -104,6 +104,11 @@ void DanceMode::setPrior(float bpm) {
 void DanceMode::onTrackChanged() {
   if (prior_ > 0.0f) Serial.println("[dance] track changed: tempo prior cleared");
   prior_ = 0.0f;
+  // A click track's truth is armed from the track that starts an epoch
+  // (restart()). A gapless join keeps the epoch (the beat runs on through a
+  // segue), so the truth would be measured against the wrong track: off
+  // until the next epoch (a skip, a seek, a start).
+  truth_ = false;
   if (!host_) tracker_.setPrior(0.0f);  // (in host mode the tracker has the computer's epoch's)
 }
 

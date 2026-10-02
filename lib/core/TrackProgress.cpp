@@ -5,6 +5,8 @@
 
 #include <cstring>
 
+#include "LameTag.h"
+
 namespace progress {
 
 uint32_t estimateDurationMs(uint64_t frames, int rate, uint32_t pos0, uint32_t pos, uint32_t size,
@@ -59,6 +61,10 @@ uint32_t id3v2Size(const uint8_t* h, size_t n) {
 }
 
 uint32_t mp3HeaderDurationMs(const uint8_t* buf, size_t n) {
+  // LAME's extension says what the encoder was given: the trimmed length,
+  // the one gapless playback plays (docs/GAPLESS.md section 4.6).
+  lametag::Info lame;
+  if (lametag::parse(buf, n, &lame) && lame.lame) return lametag::lengthMs(lame);
   // The first frame: the first header whose next frame starts with a header
   // too (or runs past the buffer), so a stray 0xFF in junk before the audio
   // doesn't count.

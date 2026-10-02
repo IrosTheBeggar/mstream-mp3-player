@@ -72,6 +72,18 @@ public:
   bool finished() const override { return finishedFlag; }
   bool failed() const override { return failedFlag; }
   RateRefusal rateRefusal() const override { return failedFlag ? refusal : RateRefusal{}; }
+  // Gapless playback: the words the player sends, and joins it is told
+  // were heard (advances, taken once each).
+  std::vector<Next> nexts;
+  std::vector<uint32_t> advances;
+  void setNext(const Next& n) override { nexts.push_back(n); }
+  bool takeAdvance(uint32_t* token) override {
+    if (advances.empty()) return false;
+    *token = advances.front();
+    advances.erase(advances.begin());
+    position = 0;  // the joined track's, from its start
+    return true;
+  }
 };
 
 // A library of up to three tracks at the root ("/music/a.mp3" is id 0, b 1,
@@ -1337,6 +1349,155 @@ void test_prev_on_a_start_point_goes_to_0_and_starts_nothing() {
   }
 }
 
+// ---- gapless playback: the word on what follows, the heard advance ----
+
+// The word names what advance() would start: the next entry; none at the
+// end without repeat; the same entry in a queue of one with repeat; none
+// while stopped (nothing is sent), with "pause after this track", with the
+// gate shut, or with gapless off.
+void test_gapless_the_word_is_what_advance_would_start() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.update(0);
+  TEST_ASSERT_TRUE(a.nexts.empty());  // stopped: nothing
+  p.play(0);
+  TEST_ASSERT_EQUAL_UINT32(1, a.nexts.size());
+  TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().after);
+  TEST_ASSERT_TRUE(a.nexts.back().token != 0);
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", a.nexts.back().path.c_str());
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(1, a.nexts.size());  // unchanged: not sent again
+  p.play(2);
+  TEST_ASSERT_EQUAL_STRING("/music/a.mp3", a.nexts.back().path.c_str());  // repeat: wraps
+  p.setRepeat(false);
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().token);  // the end: nothing follows
+  p.setRepeat(true);
+  p.setPauseAfterTrack(true);
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().token);
+  p.setPauseAfterTrack(false);
+  p.update(0);
+  TEST_ASSERT_TRUE(a.nexts.back().token != 0);
+  p.setGapless(false);
+  TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().token);
+  p.setGapless(true);
+  TEST_ASSERT_TRUE(a.nexts.back().token != 0);
+  struct Shut : PlaybackController::NextGate {
+    bool endsHere() const override { return true; }
+  } shut;
+  p.setNextGate(&shut);
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().token);
+  p.setNextGate(nullptr);
+  Rig one(1);
+  one.player.play(0);
+  TEST_ASSERT_EQUAL_STRING("/music/a.mp3", one.audio.nexts.back().path.c_str());  // itself, repeated
+}
+
+// The same track still next keeps its token (no cut); another track, or
+// a new play(), gets a new one.
+void test_gapless_tokens() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  const uint32_t t1 = a.nexts.back().token;
+  const uint32_t c = 2;
+  p.addToQueue(&c, 1);  // a, b, c, c: b still next
+  TEST_ASSERT_EQUAL_UINT32(t1, a.nexts.back().token);
+  p.playNext(&c, 1);  // a, c, b, c, c
+  TEST_ASSERT_TRUE(a.nexts.back().token != t1);
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.nexts.back().path.c_str());
+  const uint32_t t2 = a.nexts.back().token;
+  p.play(0);  // a new request: a new token for the same next track
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.nexts.back().path.c_str());
+  TEST_ASSERT_TRUE(a.nexts.back().token != t2);
+}
+
+// A heard advance moves the entry without a play(), keeps the state,
+// drops the start point and names the next one after it.
+void test_gapless_an_advance_moves_the_entry_without_a_play() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  const uint32_t t1 = a.nexts.back().token;
+  a.advances.push_back(t1);
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT(1, a.playCount);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  TEST_ASSERT_EQUAL_UINT32(t1, a.nexts.back().after);  // the word after b
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.nexts.back().path.c_str());
+  TEST_ASSERT_EQUAL_UINT32(1, p.gaplessStats().adopted);
+}
+
+// An advance that isn't what comes next any more (an edit too late to cut
+// it out): what advance() would start is started.
+void test_gapless_a_stale_advance_starts_what_comes_next() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  const uint32_t t1 = a.nexts.back().token;  // b
+  const uint32_t c = 2;
+  p.playNext(&c, 1);  // a, c, b, c
+  a.advances.push_back(t1);
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());  // c (entry 1)
+  TEST_ASSERT_EQUAL_INT(2, a.playCount);
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(1, p.gaplessStats().restarted);
+}
+
+// An advance comes before an action's own work: a next just after a join
+// skips the joined track.
+void test_gapless_actions_take_the_advance_first() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  a.advances.push_back(a.nexts.back().token);
+  p.next();
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.lastPath.c_str());
+}
+
+// With "pause after this track" at the advance (chosen too late to cut
+// the joined track out): the boundary's pause, the joined entry cued.
+void test_gapless_an_advance_with_pause_after_pauses_at_once() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  const uint32_t t1 = a.nexts.back().token;
+  p.setPauseAfterTrack(true);
+  a.advances.push_back(t1);
+  const int stops = a.stopCount;
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT(stops + 1, a.stopCount);
+  TEST_ASSERT_TRUE(p.pausedByTimer());
+  TEST_ASSERT_FALSE(p.pauseAfterTrack());
+}
+
+// A failure after an advance is the joined entry's: the note names it.
+void test_gapless_a_failure_after_an_advance_is_the_new_entry_s() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  a.advances.push_back(a.nexts.back().token);
+  p.update(0);
+  a.failedFlag = true;
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().track);  // b's id
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());          // skipped to c
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
@@ -1398,5 +1559,12 @@ int main(int, char**) {
   RUN_TEST(test_a_restart_keeps_the_sleep_timers_pause_after_this_track);
   RUN_TEST(test_a_restart_leaves_the_queues_undo_alone);
   RUN_TEST(test_prev_on_a_start_point_goes_to_0_and_starts_nothing);
+  RUN_TEST(test_gapless_the_word_is_what_advance_would_start);
+  RUN_TEST(test_gapless_tokens);
+  RUN_TEST(test_gapless_an_advance_moves_the_entry_without_a_play);
+  RUN_TEST(test_gapless_a_stale_advance_starts_what_comes_next);
+  RUN_TEST(test_gapless_actions_take_the_advance_first);
+  RUN_TEST(test_gapless_an_advance_with_pause_after_pauses_at_once);
+  RUN_TEST(test_gapless_a_failure_after_an_advance_is_the_new_entry_s);
   return UNITY_END();
 }

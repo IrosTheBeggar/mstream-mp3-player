@@ -15,6 +15,7 @@
 #include <M5Unified.h>
 #include <esp_chip_info.h>
 #include <esp_heap_caps.h>
+#include <esp_random.h>
 #include <nvs_flash.h>
 
 #include <cmath>
@@ -32,6 +33,7 @@
 #include "QueueModel.h"
 #include "QueueView.h"
 #include "RateConverter.h"
+#include "RingCutStress.h"
 #include "SleepTimer.h"
 #include "ToneTrack.h"
 #include "TrackCatalog.h"
@@ -293,6 +295,18 @@ struct OutputHold : PlaybackController::Hold {
   }
 };
 static OutputHold outputHold;
+
+// The player's NextGate: the sleep timer ends at the current entry (End of
+// track; End of album or queue on its last track), so the next track is
+// never decoded ahead and the pause at the boundary hears nothing of it
+// (docs/GAPLESS.md section 5.4). Worked out from the current entry when
+// the player asks: in the same update that makes an album's last track
+// current, not a pass later (below, with the rest of the timer).
+static bool sleepEndsAtCurrent();
+struct SleepGate : PlaybackController::NextGate {
+  bool endsHere() const override { return sleepEndsAtCurrent(); }
+};
+static SleepGate sleepGate;
 
 // What the touch buttons drive (ButtonPolicy decides which button does what).
 struct ButtonTransport : ButtonPolicy::Transport {
@@ -1073,6 +1087,8 @@ static bool simulatedTouch(const char* a) {
 
 // The sleep timer's console command (T; below, with the rest of the timer).
 static void sleepCommand(const char* a);
+// Gapless playback's (G; below, after the rate converter's).
+static void gaplessCommand(const char* a);
 // The idle power-off's (I; below, with stepIdle()).
 static void idleCommand(const char* a);
 
@@ -1239,6 +1255,110 @@ static void rateCommand(const char* a) {
                 "on its own), Rb the converter's bench (stops playback, keeps your place)\n",
                 (unsigned)PowerSettings::cpuBootMhz(),
                 RateConverter::kHiResOn ? "need 240 MHz" : "off in this build (MSTREAM_HIRES_RATES=1 turns them on)");
+}
+
+// Gx<tracks>: PcmRing::cutBack() against a reader on the other core
+// (lib/core RingCutStress; docs/GAPLESS.md section 11.3): the fence and the
+// reading mark are a Dekker pair, and the ESP32's memory model is the one
+// that matters. A test ring of its own (16 KB of PSRAM), the player stopped
+// first: the producer on the loop task (core 1, as the decode task), the
+// reader in a task on core 0 (as the Bluetooth callback). Both sleep a tick
+// now and then (the idle tasks' watchdog).
+struct CutStressRun {
+  PcmRing ring;
+  RingCutStress stress;
+  std::atomic<bool> stop{false};
+  std::atomic<bool> done{false};
+  CutStressRun(int16_t* buf, uint32_t frames, uint32_t seed, uint32_t tracks)
+      : ring(buf, frames), stress(ring, 1, seed, tracks) {}
+};
+
+static void gaplessCutStress(uint32_t tracks) {
+  stopForTest("gapless");
+  constexpr uint32_t kFrames = 4096;
+  auto* buf = static_cast<int16_t*>(psramAlloc(kFrames * 2 * sizeof(int16_t)));
+  CutStressRun* run = buf ? psramNew<CutStressRun>(buf, kFrames, esp_random(), tracks) : nullptr;
+  if (!run) {
+    Serial.println("[gapless] Gx: no PSRAM for the test ring");
+    psramFree(buf);
+    return;
+  }
+  run->ring.setConsumer(1);
+  Serial.printf("[gapless] Gx: %lu tracks through a test ring, the reader on core 0...\n", (unsigned long)tracks);
+  const uint32_t t0 = millis();
+  TaskHandle_t reader = nullptr;
+  xTaskCreatePinnedToCore(
+      [](void* p) {
+        auto* r = static_cast<CutStressRun*>(p);
+        uint32_t reads = 0;
+        while (!r->stop.load()) {
+          r->stress.consume(400);
+          if (++reads % 64 == 0) vTaskDelay(1);
+        }
+        r->done = true;
+        vTaskDelete(nullptr);
+      },
+      "gx-read", 4096, run, 2, &reader, PRO_CPU_NUM);
+  if (!reader) {
+    Serial.println("[gapless] Gx: no reader task");
+    psramDelete(run);
+    psramFree(buf);
+    return;
+  }
+  uint32_t steps = 0;
+  while (run->stress.produce()) {
+    if (++steps % 256 == 0) vTaskDelay(1);
+  }
+  while (run->ring.size() > 0) vTaskDelay(1);
+  run->stop = true;
+  while (!run->done.load()) vTaskDelay(1);
+  const RingCutStress::Result r = run->stress.result();
+  Serial.printf("[gapless] Gx: %s in %lu ms: %lu tracks, %llu frames read; cuts %lu, too late %lu, retried %lu; "
+                "errors %lu (a gap, a repeat, out of order), cut tracks heard %lu\n",
+                r.ok() ? "PASSED" : "FAILED", (unsigned long)(millis() - t0), (unsigned long)r.tracks,
+                (unsigned long long)r.frames, (unsigned long)r.cuts, (unsigned long)r.tooLate,
+                (unsigned long)r.retries, (unsigned long)r.errors, (unsigned long)r.cutHeard);
+  psramDelete(run);
+  psramFree(buf);
+}
+
+// G...: gapless playback (docs/GAPLESS.md section 9):
+//   G        the status: the word on what follows, the boundary, the joins,
+//            cuts and failed opens since boot, the decoding track's trim
+//   G0/G1    off (v0.5.0's ends: nothing named, a track decoded ahead taken
+//            back out, from the next open no trimming, no header-frame skip,
+//            no guard bytes) / on; RAM only, for the A/B and as a safety valve
+//   Gt0/Gt1  trimming by the LAME tag off / on, from the next open (the
+//            joins stay): the trimming's share of a join
+//   Gx<n>    the cut's stress test on the two cores (n tracks, 20000 if
+//            not said): stops the player
+static void gaplessCommand(const char* a) {
+  if (a[0] == 'x') {
+    const long n = a[1] ? atol(a + 1) : 20000;
+    gaplessCutStress(n > 0 ? static_cast<uint32_t>(n) : 20000);
+    return;
+  }
+  if (a[0] == '0' || a[0] == '1') {
+    const bool on = a[0] == '1';
+    audio.setGapless(on);
+    player.setGapless(on);
+    Serial.printf("[gapless] %s\n",
+                  on ? "on" : "off: tracks end as in v0.5.0 (a track decoded ahead is taken back out)");
+    return;
+  }
+  if (a[0] == 't' && (a[1] == '0' || a[1] == '1')) {
+    audio.setGaplessTrim(a[1] == '1');
+    Serial.printf("[gapless] trimming by the LAME tag %s from the next track opened\n", a[1] == '1' ? "on" : "off");
+    return;
+  }
+  if (a[0]) Serial.println("[gapless] G status, G0/G1 off/on, Gt0/Gt1 trimming by the LAME tag off/on, Gx<n> the cut's stress test");
+  audio.printGapless();
+  const PlaybackController::GaplessStats& g = player.gaplessStats();
+  Serial.printf("[gapless] player: %s; words sent %lu (now: %s), joins taken as the next entry %lu, started again "
+                "(no longer next) %lu, paused at the boundary %lu\n",
+                player.gapless() ? "on" : "off", (unsigned long)g.offers,
+                player.offeredToken() ? "a track follows" : "nothing follows", (unsigned long)g.adopted,
+                (unsigned long)g.restarted, (unsigned long)g.paused);
 }
 
 static void bluetoothTestCommand(const char* a) {
@@ -1431,6 +1551,7 @@ static SerialConsole console({
     bluetoothTestCommand,
     diag::printPartitionTable,
     rateCommand,
+    gaplessCommand,
     [](char* line, HostLine::Byte kind) { usbViz.onLine(line, kind); },
 });
 
@@ -1783,6 +1904,22 @@ static const char* sleepEndName(SleepTimer::Choice c) {
 // (stepSleep() feeds it every pass).
 static EntryStart sleepEntry;
 
+static bool sleepEndsAtCurrent() {
+  const SleepTimer::Choice c = sleepTimer.choice();
+  if (c != SleepTimer::Choice::EndOfTrack && c != SleepTimer::Choice::EndOfAlbum &&
+      c != SleepTimer::Choice::EndOfQueue) {
+    return false;
+  }
+  const int cur = queue.current();
+  if (cur < 0) return false;
+  const bool last = static_cast<uint32_t>(cur) + 1 >= queue.size();
+  // (The queue's end is an album's end too, as stepSleep() has it.)
+  const bool lastOfAlbum = c == SleepTimer::Choice::EndOfAlbum &&
+                           (last || SleepTimer::albumEndsBetween(library.index(), queue.currentTrack(),
+                                                                 queue.trackAt(static_cast<uint32_t>(cur) + 1)));
+  return SleepTimer::endsAt(c, lastOfAlbum, last);
+}
+
 // What is left of the playing track (0: not known).
 static uint32_t trackLeftMs() {
   if (queue.current() < 0 || !sleepEntry.started()) return 0;
@@ -1904,8 +2041,8 @@ static void stepSleep(uint32_t now) {
   // The position and length are this entry's only once it has started
   // (EntryStart: after a skip the backend reports the last track's for a
   // moment). Unknown (0) until then, as the lengths the Queue learns (in
-  // loop()).
-  const bool started = sleepEntry.update(queue.currentKey(), audio.startTiming().seq, audio.positionMs());
+  // loop()). A gapless advance is a start too (trackSeq() counts it).
+  const bool started = sleepEntry.update(queue.currentKey(), audio.trackSeq(), audio.positionMs());
   if (cur >= 0) {
     in.positionMs = audio.positionMs();
     in.durationMs = started ? audio.durationMs() : 0;
@@ -2299,6 +2436,10 @@ void setup() {
                       : "paired on Output > Pair new headphones only (never picked by the Core2 itself)");
   }
   player.setHold(&outputHold);  // a play waits while the headphones aren't connected (PlayGate)
+  // Gapless playback (docs/GAPLESS.md): the player names what follows, the
+  // backend joins it; never past the sleep timer's end.
+  player.setNextGate(&sleepGate);
+  player.setGapless(audio.gapless());
   danceMode.begin();
   usbViz.begin(version::player());
   diag::logHeap("dance");
@@ -2348,7 +2489,8 @@ void setup() {
                  "T sleep timer (T status, T<min>, Ts<sec> for tests, Tt/Ta/Tq end of track/album/queue, T+ +10 min, "
                  "T0 off); I idle power-off (I status, I<min>/Is<sec> a test length, I0 the setting's); "
                  "R rate converter (R status, Rt test tracks, Rt<n> play one on its own, Rf</music/...> a file on its own "
-                 "(silent mode), Rx stop it, Rb bench); "
+                 "(silent mode), Rx stop it, Rb bench); G gapless playback (G status, G0/G1 off/on, Gt0/Gt1 trimming, Gx<n> "
+                 "the cut's stress test); "
                  "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md), never commands");
 }
 
@@ -2395,22 +2537,19 @@ void loop() {
   // of the way in.)
   // (The player playing it: a track the console's Rt plays on its own,
   // with the player stopped, isn't the current entry's.)
+  // (EntryStart, as the sleep timer's: a gapless advance counts as a start,
+  // taken however late the pass that takes it comes.)
   if (queue.current() >= 0 && player.state() == PlayState::Playing && audio.isPlaying()) {
     static uint32_t lengthKey = QueueModel::kNone;
     static uint8_t lengthNoted = 0;  // 1 the estimate, 2 the file's
-    static uint32_t startSeqAtKey = 0, posAtKey = 0;
-    static bool started = false;
+    static EntryStart lengthEntry;
     const uint32_t at = audio.positionMs(), from = audio.startOffsetMs();
     const uint32_t pos = at > from ? at - from : 0;
-    const uint32_t seq = audio.startTiming().seq;
     if (queue.currentKey() != lengthKey) {
       lengthKey = queue.currentKey();
       lengthNoted = 0;
-      startSeqAtKey = seq;
-      posAtKey = pos;
-      started = pos < 1000;  // this entry's start already, or the last one barely begun
     }
-    if (!started && (seq != startSeqAtKey || pos < posAtKey)) started = true;
+    const bool started = lengthEntry.update(queue.currentKey(), audio.trackSeq(), pos);
     if (!started) {
       // not this entry's position yet
     } else if (lengthNoted < 2 && audio.durationKnown() && pos > 3000) {

@@ -49,6 +49,9 @@
 //        Rt<tone:...> play one on its own (the player stopped: nothing follows it;
 //        silence only on Bluetooth, a tone only in silent mode), Rf</music/...> a file
 //        the same way (silent mode only), Rx stops either, Rb its bench
+//   G... gapless playback (docs/GAPLESS.md): G status, G0/G1 off/on, Gt0/Gt1
+//        trimming by the LAME tag off/on, Gx<n> the ring's cut against a reader
+//        on the other core (stops the player)
 // '@' lines are a computer's, not commands (docs/USB-VISUALIZER.md: the USB
 // visualizer's protocol; HostLine): every byte from an '@' to the end of
 // its line goes to hostLine, never to the keys above, and is never echoed.
@@ -112,6 +115,8 @@ public:
     std::function<void()> partitionTable;
     // The rate converter (R): the argument as typed (may be "").
     std::function<void(const char*)> rate;
+    // Gapless playback (G): the argument as typed (may be "").
+    std::function<void(const char*)> gapless;
     // A computer's '@' line: complete (HostLine::Byte::Line: `line` is its
     // text from the '@', writable) or not one (Bad, Long, Restart: `line`
     // nullptr).
@@ -137,7 +142,7 @@ private:
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
     InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle, BluetoothTest,
-    Rate,
+    Rate, Gapless,
   };
 
   Actions actions_;

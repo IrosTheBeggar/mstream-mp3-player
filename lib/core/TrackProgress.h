@@ -32,7 +32,9 @@ uint32_t id3v2Size(const uint8_t* head, size_t n);
 
 // An MP3's length from the Xing/Info or VBRI header in its first frame:
 // `buf` holds the bytes after the ID3v2 tag. 0 when it has none (a plain
-// constant bitrate file: estimateDurationMs() is exact for those).
+// constant bitrate file: estimateDurationMs() is exact for those). With
+// LAME's extension, the trimmed length: frames x spf less its delay and
+// padding (LameTag, docs/GAPLESS.md section 4.6).
 uint32_t mp3HeaderDurationMs(const uint8_t* buf, size_t n);
 
 // A Layer III frame header (MPEG-1, 2 or 2.5): what TrackSeek needs too.

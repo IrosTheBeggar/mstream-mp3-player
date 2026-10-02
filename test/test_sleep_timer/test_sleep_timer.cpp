@@ -739,6 +739,33 @@ void test_entry_start_waits_for_the_backend() {
   TEST_ASSERT_TRUE(e.update(13, 6, 400));
 }
 
+// Where each choice ends: what PlaybackController's NextGate asks (the
+// track after it is never decoded ahead: docs/GAPLESS.md section 5.4).
+void test_ends_at_for_each_choice() {
+  TEST_ASSERT_TRUE(SleepTimer::endsAt(Choice::EndOfTrack, false, false));
+  TEST_ASSERT_FALSE(SleepTimer::endsAt(Choice::EndOfAlbum, false, false));
+  TEST_ASSERT_TRUE(SleepTimer::endsAt(Choice::EndOfAlbum, true, false));
+  TEST_ASSERT_FALSE(SleepTimer::endsAt(Choice::EndOfQueue, true, false));
+  TEST_ASSERT_TRUE(SleepTimer::endsAt(Choice::EndOfQueue, false, true));
+  TEST_ASSERT_FALSE(SleepTimer::endsAt(Choice::Off, true, true));
+  TEST_ASSERT_FALSE(SleepTimer::endsAt(Choice::Timed, true, true));
+}
+
+// A gapless advance: the entry and the backend's count (its trackSeq())
+// change in the same pass, the position maybe already past 1 s (the loop
+// took the advance late: a library rebuild, a screenshot): started all the
+// same, so the timer gets the new track's length at once.
+void test_entry_start_after_a_late_gapless_advance() {
+  EntryStart e;
+  TEST_ASSERT_TRUE(e.update(20, 3, 200));
+  TEST_ASSERT_TRUE(e.update(20, 3, 240000));
+  TEST_ASSERT_TRUE(e.update(21, 4, 1300));  // the advance, 1.3 s after the join was heard
+  // Without the count moving it would have waited: a skip's stale position.
+  EntryStart f;
+  f.update(20, 3, 240000);
+  TEST_ASSERT_FALSE(f.update(21, 3, 1300));
+}
+
 // End of track armed, 15 s before the end; a skip. The backend reports
 // the old track's last seconds for a while: with EntryStart the timer sees
 // an unknown length (no fade) until the new track has started, then its
@@ -898,6 +925,8 @@ int main(int, char**) {
   RUN_TEST(test_extend_never_shortens_an_end_of_choice);
   RUN_TEST(test_extend_after_a_skip_away_from_the_boundary_rearms);
   RUN_TEST(test_entry_start_waits_for_the_backend);
+  RUN_TEST(test_entry_start_after_a_late_gapless_advance);
+  RUN_TEST(test_ends_at_for_each_choice);
   RUN_TEST(test_end_of_track_after_a_skip_near_the_end_does_not_fade_the_new_track);
   RUN_TEST(test_the_fade_toast_buttons);
   RUN_TEST(test_texts);

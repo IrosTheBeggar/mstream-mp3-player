@@ -161,3 +161,39 @@ uint32_t RingFeed::roomFor(uint32_t srcFrames) const {
   const RateConverter::Plan p = conv_.configured() ? conv_.currentPlan() : RateConverter::plan(8000, 0);
   return staged_ + heldN_ * perFrame_ + static_cast<uint32_t>(p.ringFrames(srcFrames)) + RateConverter::kMaxOut;
 }
+
+bool RingFeed::mark(Mark* m) const {
+  if (staged_ != 0 || heldN_ != 0 || passed_ != 0) return false;
+  m->conv = conv_;
+  m->made = made_;
+  m->rate = rate_;
+  m->forced = forced_;
+  m->perFrame = perFrame_;
+  m->mode = mode_;
+  m->mono = mono_;
+  return true;
+}
+
+void RingFeed::rewind(const Mark& m) {
+  conv_ = m.conv;
+  made_ = m.made;
+  rate_ = m.rate;
+  forced_ = m.forced;
+  perFrame_ = m.perFrame;
+  mode_ = m.mode;
+  mono_ = m.mono;
+  staged_ = 0;
+  heldN_ = 0;
+  accept_ = 0;
+  passed_ = 0;
+  budget_ = 0;
+  ringBudget_ = 0;
+}
+
+void RingFeed::restartStream() {
+  const uint64_t made = made_;  // (nothing staged after finish())
+  const int forced = forced_;
+  reset(cpuMhz_, hiRes_);
+  made_ = made;
+  forced_ = forced;
+}

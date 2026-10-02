@@ -3,29 +3,34 @@
 When a track ends by itself, the next one should start on the very next
 sample: no gap, no fade, no click. Albums whose tracks run into each other
 (Daft Punk's *Discovery*, live albums, DJ mixes, classical movements) then
-play as one piece. This document is the design: what happens today, the
-mechanism, the MP3 trimming rules with their sources, what happens when
-the listener changes something while the next track is already decoded,
-the portable pieces and the firmware wiring, and the host and device test
-plans.
+play as one piece. This document is the design and how it was built:
+what happened before, the mechanism, the MP3 trimming rules with their
+sources, what happens when the listener changes something while the next
+track is already decoded, the portable pieces and the firmware wiring, and
+the host and device test plans.
 
-**Status: design only, nothing built.** Read from the code at 6e2bbe8
-(v0.5.0 merged, NEXT_RELEASE 0.6.0). `G0` on the console turns all of it
-off (section 9): that is the v0.5.0 behaviour, for the A/B and as a safety
-valve.
+**Status: built, host-tested, not yet run on the device** (the commit
+"Gapless playback", after the design at 5d7d6ba and its review; section 2a
+lists the review's amendments and what became of each). Sections 1 and 2
+are the design as it was reviewed; from section 3 on the text describes
+what was built. `G0` on the console turns all of it off (section 9): that
+is the v0.5.0 behaviour, for the A/B and as a safety valve.
 
 Where the facts come from:
 
 - **The code**, by file and function. Line numbers drift, so they're given
   only where they help.
 - **Primary sources for the MP3 rules**, cited where they are used
-  (section 4) and listed in section 14.
-- **Nothing here is measured yet.** Section 11 says what to measure on the
-  device and what would change the design.
+  (section 4) and listed in section 14. The LAME tag's layout and its CRC
+  were also checked against 13 real LAME 3.99r files on the development
+  PC (section 4.1).
+- **Nothing here is measured on the device yet.** Section 11 says what to
+  measure there and what would change the design.
 
-## 1. What happens today
+## 1. What happened before (v0.5.0)
 
-Here is what happens at a natural end, step by step:
+Here is what happened at a natural end, step by step (and still does
+with `G0`):
 
 1. The decoder reaches the end of the file. `produceDecoded()` sees
    `loop()` return false and sets `sourceDone_`. `finishSource()` pushes
@@ -75,7 +80,8 @@ knows what comes next.
    decoder at a time, as today: N's generator is closed before N+1's
    opens. There is at most one pending boundary. If N+1 reaches its own
    end before N's boundary is heard (a track shorter than the ring), the
-   decoder waits.
+   decoder waits (as built: for the word about N+1, while the ring holds
+   more than 250 ms; section 3.2).
 2. **The boundary is heard, not decoded.** The ring frame where N+1
    begins is recorded (the boundary, B). The current entry, Now Playing,
    the progress, the durations, the resume point, the sleep timer and the
@@ -120,248 +126,373 @@ knows what comes next.
    for the default) and a separate trimming switch (`Gt0`/`Gt1`) for the
    A/B (section 9).
 
+## 2a. The review's amendments, and what was built
+
+The design was reviewed before it was built. Each amendment, and what
+became of it:
+
+1. **The advance against a cut at the boundary.** Applied.
+   `GaplessJoin::takeAdvance()` fires only strictly past B (`readPos - B >
+   0`: a frame of the next track read); every transition of the boundary
+   is under the book's lock; the decode task puts the boundary in
+   `Cutting` before it raises the fence, and `takeAdvance()` ignores a
+   boundary in `Cutting`; on Done the boundary goes before anything more is
+   written, and a new one is recorded before its track's first frame.
+   Host-tested with the reader at J = B exactly during a cut.
+2. **A wakeable decode task.** Applied: every rest on the producing paths
+   (the ring-full waits, the pacing, the drain's poll, the word's wait, a
+   cut's retry) is `ulTaskNotifyTake()`, so `setNext()`'s notify ends it.
+   The race window is restated in section 5.1; `G` shows each cut's time
+   from its word.
+3. **An advance is checked against what would happen now.** Applied, and
+   it replaces the design's separate handling of a removed or a moved key
+   (section 5.2): "pause after this track" or the timer ending here: the
+   boundary's pause; what `advance()` would start isn't the joined entry
+   any more: that is started; else the joined entry becomes current.
+4. **A track count for the advance.** Applied: `Core2AudioBackend::
+   trackSeq()` (every start taken up, every advance) feeds the sleep timer's
+   `EntryStart` and the Queue's learned lengths; `EntryStart` compares the
+   count with the one of the pass before the entry changed, so a count that
+   moves in the same pass (an advance) counts. `startOffsetMs()`,
+   `durationKnown()`, `description()` and `note()` are the heard track's.
+   `trackTitle()`/`trackArtist()` had no callers and went with the ID3
+   reader (8).
+5. **The book cleared at every request; generations checked; no joins for
+   a forced rate.** Applied: `GaplessEngine::begin()`/`idle()` restart the
+   book for every request kind (play, stop, the benches); the position
+   clamp and the advance check the boundary's generation; a play at a
+   forced rate (the console's `Rf`) is never joined.
+6. **Token to entry, and re-keying.** Applied in a simpler form: the
+   player keeps its last four offers (token, key, track). The same track
+   still next keeps its token when its key is gone (a library rebuild's
+   fresh keys, one of two duplicates removed), so nothing is cut; at the
+   advance the entry is matched by key, or by the track when the key is
+   gone. Host-tested (a rebuild and a duplicate removed while decoded
+   ahead).
+7. **A resumable state machine; a cut from Draining.** Applied: the decode
+   side of a join is `GaplessEngine` (lib/core), one step per call, the
+   generation checked between steps; a cut runs from any phase while a
+   boundary waits, Draining included (host-tested).
+8. **The lead skipped on every start; the ID3 reader removed.** Applied:
+   1 frame for every MP3 open and every FLAC seek, 0 for a FLAC from the
+   top, except with `G0`; the ID3v2 tags (one after another too) are
+   skipped to the first frame and the Info frame after them.
+9. **The tables' copy never freed during a chain.** Applied: the firmware's
+   hook ignores "not wanted" from the first join until the next request's
+   start, so a mark's saved rows stay valid and `rewind()` is a plain copy.
+10. **B from the converter's counts.** Applied: `B = J + tailFrames()`,
+   `RateConverter::tailFrames()` being `ringFrames(taken) - produced` (the
+   carried frames included; the held frames before a rate is known).
+11. **A rate change in the middle with frames held.** Applied as the
+   alternative: the held frames go into the feed at the old format first,
+   then the change, and the end trim is off for the rest of that track.
+12. **Failures after a join.** Applied: a joined track that fails after
+   giving frames ends early (its note shown once it is heard); one that
+   gives none is cut back out and the track before ends as before.
+13. **A late word only with 250 ms left; the flags back.** Applied
+   (`GaplessEngine::kWaitMinMs`); a late join reports `Decoding` again and
+   sets `expectingAudio`.
+14. **`held()` not a reason to withhold the word.** Applied: only Stopped
+   and cued withhold it; an advance taken while held starts the entry as
+   `advance()` would (Waiting).
+15. **Depth one as "one unheard boundary", with a two-entry book.**
+   Rejected: the player names the track after a joined one only once it
+   has heard the join (the word carries the token of the track it
+   follows), so the decoder can never be two boundaries ahead and a second
+   entry could never fill. A track shorter than the ring waits at its end
+   for the word while the ring holds more than 250 ms; under that it ends
+   as before (host-tested both ways). A loop stall during such a short
+   track can still cost that one join (section 12).
+16. **The tag's CRC range per mode, and CRC-protected header frames.**
+   Applied: the CRC covers every byte of the frame before it (190 for
+   MPEG-1 stereo with all four Xing fields, 175 for MPEG-1 mono and
+   MPEG-2/2.5 stereo, 167 for MPEG-2/2.5 mono); a protected header frame
+   is accepted, its side information 2 bytes later. CRC-16/ARC and the
+   190-byte range were confirmed on 13 real LAME 3.99r files.
+17. **The word worked out only when its inputs change.** Applied: a
+   signature of the queue's versions, repeat, "pause after", gapless, the
+   gate and the heard token.
+18. **FLAC with a big embedded picture at a join.** Applied: the open
+   walks the metadata block headers and logs their size (over 256 KB at
+   any open; over 1 MB at a join as an underrun risk); added to the
+   device plan.
+19. **More tests.** Applied on the host: a Crossed Play next (the inserted
+   track plays next), a Crossed End of track (the pause comes at once), an
+   advance taken late (`EntryStart` and the learned length still work), a
+   re-key with a boundary waiting, and a two-thread stress test of the cut.
+   On the device: the console's `Gx` runs the same stress test (lib/core
+   `RingCutStress`) with the reader on core 0; and the build's
+   disassembly was checked: GCC puts `memw` between the reading mark's
+   store and the fence's load in `PcmRing::read()`, and between the
+   fence's store and the mark's load in `cutBack()`. The impulse
+   calibration aligns by cross-correlating a broadband burst (section
+   11.1).
+20. **Optional simplifications.** (a) Cutting the padding out of the ring
+   at the passthrough instead of holding it: not taken for now (one
+   mechanism, measured first; it stays the fallback if the hold's cost
+   shows). (b) Flushing the hold at an early end: taken. (c) DanceMode's
+   click truth turned off at a track change instead of re-armed at the
+   join: taken. (d) The heard record under a lock: taken (the book's).
+
 ## 3. The mechanism, end to end
 
 ```
- loop task                                   decode task                          consumer (BtSink / SpeakerSink)
- ─────────                                   ───────────                          ──────────────────────────────
+ loop task                                   decode task (GaplessEngine)          consumer (BtSink / SpeakerSink)
+ ─────────                                   ───────────────────────────          ──────────────────────────────
  PlaybackController::update()                produceDecoded(): N decoding          reads N from the ring
    syncHeard(): takeAdvance()?                 ...
-   refreshOffer(): the entry after             N's EOF ──► atSourceEnd():
-   the current one ──setNext(offer)──►           commit the stage, J = write index
-                                                 mark() the converter (PSRAM)
-                                                 offer for this generation,
-                                                 not taken, no boundary pending?
-                                                   open N+1 (same file_ object)
-                                                   same rate: carry on
-                                                   another rate: finish(), reset
-                                                   boundary {gen, token, J, B}
+   refreshOffer(): the entry after             N's EOF ──► Ending:
+   N ──setNext({after N, token, path})──►        TrimFeed::end(), commit, J = write index
+                                                 freeze N's exact length
+                                                 take(gen, N's token): Next
+                                                   probe N+1's rate
+                                                   same rate: mark(), B = J + tail
+                                                   another rate: finish(), mark(),
+                                                     restartStream(), B = write index
+                                                   start N+1 (same file_ object)
+                                                   joined({gen, after, token, J, B})
                                                produceDecoded(): N+1 decoding     ... still reading N
-                                               (each pass: offer still the
-                                                same token? else cutBack(J))
+                                               (each pass: cutCheck(): the word
+                                                for N changed? cutBack(J))
                                                                                    readPos passes B
-   takeAdvance(): readPos >= B ◄──────────── (boundary book, under lock_)
-   current := the offered entry,
-   no play(): Now Playing switches
-   refreshOffer(): the entry after N+1
+   takeAdvance(): readPos > B ◄───────────── (GaplessJoin, its own lock)
+   checked against what advance() would do:
+   current := the joined entry, no play():
+   Now Playing switches
+   refreshOffer(): {after N+1, ...}
 ```
 
-### 3.1 The offer: the controller says what comes next
+### 3.1 The word: the player says what comes next
 
 `PlaybackController` (lib/core) is the only place that knows the queue's
-real next entry. It works it out the same way `advance()` would, without
-moving anything. Every `update()`, and at the end of every public action,
-`refreshOffer()` works out the offer:
+real next entry. It works it out the way `advance()` would, without
+moving anything (`QueueModel::peek(+1, repeat_)`), and hands it to the
+backend as a word (`IAudioBackend::setNext()`):
 
-- **There is no offer** when any of these is true:
-  - gapless is off (`setGapless(false)`, the console's `G0`);
-  - the backend doesn't hold the current entry's track (`Stopped`, or
-    `cued_`: nothing decodes);
-  - the next start would wait for the output (`held()`: Bluetooth is the
-    output and the headphones aren't connected, so `advance()` would turn
-    the play into a wait; `PlayGate` decides it, as today);
-  - "pause after this track" is set (`pauseAfter_`), or the new
-    `NextGate` hook says the sleep timer ends at the current entry
-    (section 5.4);
-  - the queue ends after the current entry without repeat
-    (`QueueModel::peek(+1, repeat_)`, new, returns `kNone`).
-- **Otherwise the offer is that entry.** That includes the same entry
-  again in a one-entry queue with repeat, which loops it gaplessly. The
-  offer carries the entry's path (`TrackCatalog::path()`), its length
-  hint (`durationHintMs()`), its queue key and a fresh token.
+```
+Next { after, token, path, hintMs }
+```
 
-The offer is sent to the backend (`IAudioBackend::setNext()`, new) only
-when it changes. It changes when the next track changes (its path) or
-when it appears or goes away. A key change alone, such as a library
-rebuild's `assign()` (fresh keys, same tracks), only re-keys it, with no
-cut. `play()` and `stop()` clear the backend's offer synchronously, on the
-loop task, and the controller then sends its offer again. Shuffle,
-repeat, the queue edits and the sleep timer therefore need no hooks of
-their own: anything that changes the next entry changes the offer.
+- **`after`** names the track the word is about: 0 for the track the last
+  `play()` started, else the token of the joined track the player has
+  heard (`heardToken_`). The decode task takes a word only for the track
+  it is at the end of, so a word about the track before is never taken
+  for the track after it.
+- **`token`** names the entry offered: unique, never 0. Token 0 means
+  nothing follows: the track ends as before gapless playback.
+- **Only while the backend holds the current entry's track** (Playing,
+  Paused, or Waiting to resume it). Stopped or cued, nothing is sent; the
+  next `play()` comes first, and the word after a `play()` always has a
+  new token (a token taken before that play is never taken again).
+- **Nothing follows** when gapless is off (`setGapless(false)`, the
+  console's `G0`), "pause after this track" is set (`pauseAfter_`), the
+  `NextGate` says the sleep timer ends at the current entry (section 5.4),
+  the queue ends without repeat, or the next id has no path. `held()` is
+  no reason (the review's amendment 14): nothing is heard without an
+  output reading, and a drop pauses the player anyway.
+- **The same track still next keeps its token** (no cut), whether its
+  entry stays or its key is gone and the same track took its place (a
+  library rebuild's fresh keys, one of two duplicates removed). Anything
+  else next gets a new token. The player keeps its last four offers
+  (token, key, track) for the advance.
+- **Worked out only when something it depends on changed**: a signature of
+  the queue's position and content versions, repeat, "pause after", the
+  gapless switch, the gate and the heard token. It is checked at the end
+  of every `update()` and of every public action (an `Act` guard that also
+  takes the heard advance first, section 3.5), and sent only when the word
+  changed. Shuffle, repeat, the queue edits and the sleep timer need no
+  hooks of their own: anything that changes the next entry changes the
+  word.
 
 There is no shuffle mode today. "Shuffle all" (`Ui::shuffleAll()`)
 replaces the queue (`playNow()`), which is a new generation, and repeat
 has no UI (`setRepeat()` is never called; it is on). If either is added
 later, it only has to change what `peek()` returns.
 
-### 3.2 Decode-ahead at the end of a file (decode task)
+### 3.2 Decode-ahead at the end of a file: `GaplessEngine`
 
-`produceDecoded()` and `produceTone()` reach the end of their source
-(`sourceDone_`). Instead of going straight to `finishSource()`, they call
-`atSourceEnd()`, which does the following:
+The decode task's side is a portable, resumable state machine
+(`lib/core/GaplessEngine`). `Core2AudioBackend::decodeTask()` drives it
+through `GaplessEngine::Tracks` (probe, start, close: ESP8266Audio and the
+files on the device; synthetic tracks in the host tests). When the
+decoder or a built-in track reaches its end (`sourceEnded()`), each pass
+is one `step()`, and the decode task looks at the request generation
+between any two:
 
-1. **Commit everything.** It converts the held block, pushes the stage
-   into the ring (waiting for room, as `finish()` does) and drops the
-   `TrimFeed`'s end hold (N's padding; section 4.4). J is now the ring's
-   write index, the frame after N's last committed frame.
-2. **Mark.** `RingFeed::mark()` saves the converter (about 1.9 KB) and the
-   feed's scalars into a PSRAM buffer allocated once at `begin()`. The
-   passthrough has no converter state, so a 44.1 kHz mark is a few words.
-3. **Take the offer** (under `lock_`) if all of these hold:
-   - gapless is on;
-   - the offer's generation is this generation's (`setNext()` stamps it
-     with `sync_.generation()`, so an offer made before the newest
-     `play()` is never taken);
-   - its token hasn't been taken before (an offer is taken once);
-   - no boundary is pending.
-4. **Probe N+1's rate before any of its frames** with what `openDecoder()`
-   already reads:
-   - an MP3's first frame header after its tags (`progress::parseMp3Frame`);
-   - a FLAC's STREAMINFO (`trackseek::flacStreamInfo`);
-   - a built-in track's rate (`ToneTrack::parse`).
+1. **Ending: the commit.** `TrimFeed::end()` (the padding dropped; at an
+   early end the held frames go in instead), the stage into the ring
+   (waiting for room), the decoder closed. J (`cutAt`) is the ring's write
+   index. The track's exact length is frozen in the book: its start plus
+   `(J + tailFrames() - its first ring frame) / 44.1`, which is where the
+   next stream begins whether it joins or not.
+2. **Ending: the word** (`GaplessJoin::take()`, for this track's token):
+   - **Next**: the file is probed (`Tracks::probe()`: an MP3's first frame
+     header, a FLAC's STREAMINFO, a built-in track's name) for its rate.
+     If the converter is configured at that rate (`RingFeed::continues()`),
+     a continuous join right away: the feed is marked (`RingFeed::mark()`)
+     and B = J + `tailFrames()` (`RateConverter::tailFrames()`: the
+     stream's `ringFrames(taken) - produced`; 0 at the passthrough). At
+     another rate, or a rate the file doesn't say: Flushing first.
+   - **Nothing**, or a probe that failed: Flushing, then Draining.
+   - **NoWord**: the player hasn't spoken about this track yet (it speaks
+     of a joined track only once it has heard it begin, section 3.5). It
+     waits, 5 ms at a time and woken by `setNext()`, while the ring holds
+     more than `kWaitMinMs` (250 ms); after that, as Nothing.
+3. **Flushing**: `finish()` pushes the converter's tail, and the feed is
+   marked with it in. For a join: `restartStream()` (a new stream at the
+   same ring position, `made()` running on) and B = the write index. Else
+   Draining.
+4. **The join**: `Tracks::start()` begins the decoder with its trim armed,
+   the boundary {generation, after, token, J, B} goes into the book before
+   the track's first frame, and the engine is Producing again. There is no
+   `discardAll()`, no new generation and no `startTiming()`; the decode
+   task's per-track counters (`producedFrames_`, `srcPos0_`, `srcPos_`,
+   `busyUs_`, `described_`, `knownDurationMs_`, `startMs_`) start again for
+   the joined track, while the heard track's values are the book's
+   (section 3.5).
+5. **Draining**: until the ring is empty, then `Ended`. A late word for
+   this track (+ Queue onto the last entry, the sleep timer turned off in
+   the last second) is still taken while the ring holds 250 ms or more: a
+   join after the tail. At 44.1 kHz that is seamless (the passthrough has
+   no history); at a converting rate it is a fresh filter (section 12).
+   `Decoding` is reported again and `expectingAudio` set.
 
-   If `RateConverter::plan()` refuses the rate, that is a failed open
-   (section 5.3).
-5. **Choose the join.**
-   - **Same rate and same route** (almost every album): nothing changes in
-     the feed. N+1's frames continue N's stream through the same converter
-     state. B is computed: `B = streamStart + ceil(taken × num / den)`.
-     Here `taken` is the converter's source frames since the stream began
-     (`RateConverter::taken()`), and `streamStart` is the ring index of
-     that stream's first frame. That is exactly the frame count
-     `finishPush()` would have stopped at, so ring frame B is N+1's first
-     source sample on the 44.1 kHz grid (to within one ring frame, 22.7 µs,
-     at a converting route). For the passthrough, B = J.
-   - **Another rate:** `finish()` pushes N's tail (waiting for room), so
-     N ends with exactly ceil(N's frames × num / den) frames. Then the
-     converter is reset (a new stream: `streamStart` = the write index) and
-     N+1's frames come in on `Hold` until its decoder says its rate, as at
-     any start. B is the write index after the tail.
-6. **Open N+1**, from its start and from the same `file_` object
-   (`closeDecoder()` has already run for N). This is `openDecoder()` as
-   at any start, with the trimming armed (section 4). There is no
-   `discardAll()`, no `start()`, no new generation and no
-   `startTiming()`. The decode task's per-track counters
-   (`producedFrames_`, `srcPos0_`, `srcPos_`, `srcSize_`, `busyUs_`,
-   `described_`) restart for N+1, the decoding track. The heard track's
-   values are kept apart (section 3.5).
-7. **Record the boundary** in the boundary book (section 3.4) under
-   `lock_`. Then go on producing. The phase stays `Decoding`.
-
-With no offer, nothing changes from today: `finish()`, `closeDecoder()`,
-`Draining`, `Ended`. In `Draining` the decode task looks for an offer each
-time it polls the ring. A late one, such as + Queue onto the last entry
-or the sleep timer turned off in the last second, is taken while the ring
-still has N in it. N's tail was already flushed, so that join resets the
-converter (a converting route only).
+The engine keeps two marks (`RingFeed::Mark`, ~2 KB each, in PSRAM): one
+for the boundary that waits to be heard, one for the decoding track's own
+end, since a short joined track can end before its join is heard.
 
 Timing: the open happens with up to 1.49 s of N still in the ring, while
 the decoder would otherwise only wait for room. An MP3 opens in 23-30 ms
-(the ID3 skip, ARCHITECTURE.md), and a FLAC's libFLAC init is of the same
-order. After the open, the ring is still nearly full, so there is no
-refill from empty. There is no `RefillPacer` window (`fullMs_` is already
-set) and none of today's 0.6-0.8 s UI stall at a natural end.
+(ARCHITECTURE.md; less now that no ID3 tag is parsed), and a FLAC's
+libFLAC init is of the same order unless it has a big embedded picture
+(section 12). After the open, the ring is still nearly full, so there is
+no refill from empty: no `RefillPacer` window (`fullMs_` is already set)
+and none of the old 0.6-0.8 s UI stall at a natural end.
 
 ### 3.3 Built-in tracks
 
 A tone or click track ends when `ToneGen`/`ClickGen` returns 0 frames
-(`produceTone()`, `sourceDone_`), and the same `atSourceEnd()` runs. The
+(`produceTone()`), and the same end of source runs (section 3.2). The
 built-in tracks are made sample-exact at their own rate, so no trimming
-applies. A file to a tone, or a tone to a file, at different rates takes
+applies; the probe of a `tone:` word is its name (`ToneTrack::parse()`). A file to a tone, or a tone to a file, at different rates takes
 the rate-change join. The test tones' own 5 ms attack and release make
 their joins click-free by content.
 
 ### 3.4 The boundary book (lib/core `GaplessJoin`)
 
-The shared state between the loop and the decode task fits in one small
-portable class, `GaplessJoin`. It is guarded by the backend's `lock_`,
-never by the consumer, and both tasks may wait on it briefly. It holds:
+The state the loop and the decode task share fits in one small portable
+class, `GaplessJoin`, with its own mutex (never the outputs': they only
+read the ring). It holds:
 
-- **the offer slot**: path, length hint, token, generation (loop writes;
-  decode takes);
-- **the last token taken**, so an offer is never taken twice;
-- **at most one pending boundary**: generation, token, J (where a cut
-  goes back to), B (where the listener's track changes), and N+1's known
-  length if the file says it;
-- **N's frozen record**, from its end of file: its ring start, its start
-  offset (`startMs_`) and its exact length,
-  `(B − start) / 44.1 + startMs`;
-- **the join's state**: `Pending` (cuttable), `Cutting` (fence set, the
-  cut not finished yet), `Committed` (the consumer passed J: too late to
-  cut).
-
-The calls on it:
+- **the word**: generation, after, token, path, length hint (the loop
+  writes it; the decode task takes it), and the last token taken, so a
+  word is taken once;
+- **at most one boundary**: generation, after, token, J (`cutAt`: where a
+  cut goes back to), B (`heardAt`: where the listener's track changes), and
+  its state: `Pending` (cuttable), `Cutting` (the decode task is cutting
+  it), `Committed` (a cut came too late);
+- **the heard track**: its first ring frame, where it started (ms: a
+  resume point's landing, 0 for a joined track), and its exact length once
+  its file has ended; the joined track's exact length waits with the
+  boundary if its file ends before it is heard.
 
 | Call | Task | What it does |
 |---|---|---|
-| `setNext(offer)` | loop | replaces the slot; wakes the decode task (`xTaskNotifyGive`) so a cut happens at once, not after its 10 ms sleep on a full ring |
-| `clear()` | loop | from `play()`/`stop()`: slot and boundary dropped (the decode task's `discardAll()` drops their frames) |
-| `takeOffer(gen)` | decode | step 3 of section 3.2 |
-| `joined(...)` | decode | records the boundary |
-| `wantsCut(gen)` | decode | a pending boundary whose token isn't the slot's any more (changed, withdrawn, gapless off) |
-| `takeAdvance(readPos, gen)` | loop | `readPos − B` as a signed 32-bit difference (the ring's counters wrap) ≥ 0, and the boundary's generation is the newest: pops it and returns its token |
-| `positionLimit()` | loop | B while a boundary is pending, so `positionMs()` never runs past N's end |
+| `setOffer()` | loop | `setNext()`: replaces the word (the backend then wakes the decode task, `xTaskNotifyGive`) |
+| `restart()` | decode | every request (play, stop, the benches): the boundary, the heard record and other generations' words go |
+| `take(gen, after)` | decode | NoWord, Nothing, or Next (taken once) |
+| `freeze(gen, ms)` | decode | the decoding track's file ended at exactly that length |
+| `joined(b)` | decode | records the boundary (Pending) |
+| `cutCheck(gen)` | decode | a boundary of this generation waits; it is cuttable; the word for the track before it now names another track or nothing |
+| `beginCut()`, `cutDone()`, `cutCrossed()` | decode | Pending to Cutting; the boundary removed; Cutting to Committed |
+| `takeAdvance(gen, readPos)` | loop | strictly past B, not Cutting: the heard record becomes the joined track's (start B, 0 ms, its length if frozen), the boundary goes, its token is returned, once |
+| `positionMs(gen, readPos)` | any | the heard track's, held at B while a boundary of this generation waits |
+| `startMs()`, `frozenLength()` | any | the heard track's start and exact length |
+| `status()` | any | the console's `G` |
 
 ### 3.5 Positions, durations and what switches when
 
-The backend keeps the **heard** track's numbers apart from the
-**decoding** track's. While no boundary is pending they are the same
-track, as today.
+The backend keeps the **heard** track's numbers (the book's) apart from
+the **decoding** track's (its atomics). While no boundary waits and the
+heard track's file hasn't ended they are the same track, as before.
 
-- `positionMs()` is `heardStartMs + (min(readPos, B) − heardStart) / 44.1`.
-  The `min` holds N at its exact end for the moment between the consumer
-  passing B and the loop taking the advance (at most one loop pass).
-- `durationMs()` is the heard track's: the frozen exact length once its
-  file has ended, else its known length (header, STREAMINFO), else
-  `TrackProgress`'s estimate from the decoding counters, which belong to
-  the heard track while it is the one decoding. A benefit: every track's
-  length becomes exact at its end of file, so the sleep timer's
-  last-10-s fade is placed exactly.
-- `description()` (and `note()`) switch at the advance.
-- `takeAdvance()` rebases `heardStart` to B and `heardStartMs` to 0, and
-  makes N+1's length the heard one. All of this happens in the call that
-  tells the controller, on the loop task. So the queue entry and the
+- `positionMs()` is `GaplessJoin::positionMs()`: the heard track's start
+  (ms) plus `(min(readPos, B) − its first frame) / 44.1`. The `min` holds
+  N at its exact end for the moment between the outputs passing B and the
+  loop taking the advance (one loop pass, or longer if the loop stalls).
+- `durationMs()` is the heard track's: its frozen exact length once its
+  file has ended, else its known length (the MP3 header, trimmed by its
+  LAME tag; STREAMINFO), else `TrackProgress`'s estimate from the decoding
+  counters, which belong to the heard track while it is the one decoding.
+  A benefit: every track's length becomes exact at its end of file, so the
+  sleep timer's last-10-s fade is placed exactly.
+- `startOffsetMs()` and `durationKnown()` are the heard track's too (the
+  book's start, and its frozen length or the decoding track's known one).
+- `description()` stays the heard track's: at a join the decoding track's
+  text is kept aside (`heardDescription_`) until the advance. `note()` is
+  the heard track's; a joined track that ends early keeps its reason
+  aside until it is heard.
+- `takeAdvance()` (strictly past B, not while a cut is under way) rebases
+  the heard record to B and 0 ms and makes the joined track's frozen
+  length the heard one if its file has ended too. It happens in the call
+  that tells the player, on the loop task, so the queue entry and the
   backend's position change together, in the same `player.update()`.
-  Nothing on the loop can see the new entry with the old position, or the
-  other way round.
+  It also counts the advance in `trackSeq()` (section 3.5's followers).
 
-On the controller's side (`PlaybackController::syncHeard()`, new), a
-token that matches the offer means:
+On the player's side (`PlaybackController::syncHeard()`), each token the
+backend reports is checked against what `update()` would do at N's
+natural end right now (the review's amendment 3):
 
-- the entry with the offer's key becomes current (`queue_.setCurrent()`,
-  by `positionOf(key)`), with no `play()`;
-- `failuresInARow_` goes to 0 (N played through), the start point and
-  `playedFromMs_` are cleared, `cued_` is false, and the state is
-  unchanged;
-- if the key is gone (an edit after the consumer passed J; section 5),
-  the controller does `advance()` from N: a normal start of what follows
-  now.
+- "pause after this track" set, or the `NextGate` says the timer ends at
+  N: `pauseAtBoundary()` (the backend stops, the next entry is cued at
+  0:00, the pause is the timer's). This is the too-late End of track: at
+  most the cut's latency plus the pause's 1.5 ms fade of N+1 is heard.
+- what `advance()` would start (`peek(+1, repeat_)` from N) is the token's
+  entry (by its key, or by its track when its key is gone): it becomes
+  current with no `play()` (`queue_.setCurrent()`); the state stays.
+- otherwise (an edit that came too late to cut N+1 out: Play next, a
+  remove, repeat changed): `advance()`, a request that starts what follows
+  now; while paused (a pause's fade read past B), the entry after N is
+  cued instead, so nothing starts by itself.
+- in every case the heard token becomes the track the next word is about,
+  `failuresInARow_` goes to 0 (N played through), and the start point and
+  `playedFromMs_` are cleared.
 
-`syncHeard()` runs at the top of `update()`, before its "not Playing:
-return", and at the top of every public action (next, prev,
-`togglePlayPause()`, `cue*`, the edits, `setStartPoint`,
-`stopKeepingPlace`). A next pressed 20 ms into N+1 therefore skips N+1,
-not N. A prev there goes to N, which is what `prevRule()` would say.
+`syncHeard()` runs at the top of `update()` (before the natural-end and
+failure checks) and of every public action (an `Act` guard). A next
+pressed 20 ms into N+1 therefore skips N+1, not N; a prev there goes to N,
+which is what `prevRule()` would say.
 
 Who follows:
 
 - **Now Playing, the Queue's mark, `[queue] now at ...`, `danceMode.
   onTrackChanged()`** read the queue's current entry, so they switch at
   the advance (main.cpp's loop, after `player.update()`).
-- **The sleep timer's `EntryStart`** sees the key change with the position
-  under 1 s. That is "started", so the timer gets N+1's length at once,
-  never N's end.
-- **The Queue's learned lengths** (main.cpp: `started = pos < 1000` at the
-  key change) work the same way.
+- **The sleep timer's `EntryStart`** goes by `trackSeq()`: the backend
+  counts every start it takes up and every advance. `EntryStart` compares
+  the count with the one of the pass before the entry changed, so an
+  advance counts as the entry's start however late the loop takes it (a
+  library rebuild, a screenshot), and the timer gets N+1's length at once.
+- **The Queue's learned lengths** (main.cpp) use an `EntryStart` the same
+  way.
 - **`QueueSaver`/`QueueStore`** see the current position move: the
   position is saved within a second, and the resume point is removed
-  (playback moved on), as after an advance today.
+  (playback moved on), as after any advance.
 - **The resume point** (`resumePoint()`, at a pause) is the heard track's
   position.
 - **The dancer.** `AudioTap` positions are in the ring's epoch, and a
   join doesn't change the epoch. The beat tracker therefore keeps its
   lock through a join, which is what a segue wants: the beat runs on.
-  `onTrackChanged()` still clears the tempo prior at the advance. For the
-  click-track truth, `DanceMode` takes the boundary's frame in the epoch
-  (`B − epochStart`, new: `Core2AudioBackend::heardEpochFrame()`) and
-  re-arms its truth from the new path with that offset.
+  `onTrackChanged()` clears the tempo prior at the advance, and turns a
+  click track's truth off until the next epoch (a skip, a seek, a start
+  re-arms it): the review's simpler option (20c), instead of re-arming it
+  from the boundary's frame.
 - **HostLink's epochs** are the computer's. Host mode pauses the player
   (`pauseByComputer()`), so no join can happen during a session.
   Nothing changes there.
 
 `AudioTap`'s comment ("the track frame, the counter positionMs() is made
-of") becomes "the frame in its epoch; `positionMs()` subtracts the heard
-track's start in it".
+of") now reads "the frame in its epoch".
 
 ### 3.6 TransportSync's rules
 
@@ -371,18 +502,19 @@ track's start in it".
   started N, so the phase stays `Decoding` across it.
 - **`finished()` and `failed()` still describe only the newest
   generation.** `Ended` comes only after the last track (one with no
-  offer) has drained. A failure of the decoded-ahead track is never
-  reported while N is still heard (section 5.3). It surfaces only when
-  that track becomes the heard one, or as today through `play()`.
-- **Stale reports are dropped, and so are stale joins.** Offers and
-  boundaries carry their generation. `takeOffer()` and `takeAdvance()`
-  ignore every other generation, and `play()`/`stop()` clear both on the
-  loop task before posting. A boundary the decode task records for an old
-  generation after that (it was mid-pass) is never taken.
+  word) has drained. A failure of a joined track is never reported as
+  `Failed` (section 5.3).
+- **Stale reports are dropped, and so are stale joins.** Words and
+  boundaries carry their generation. `take()`, `takeAdvance()` and the
+  position clamp ignore every other generation, and the decode task's
+  `begin()`/`idle()` restart the book for every request kind (play, stop,
+  the benches), so a boundary recorded for an old generation is never
+  taken.
 - **`positionKnown()`** is unchanged (`Pending` only after a `play()`).
   Advances never pass through `Pending`.
 - **`isPlaying()`** (`Pending`, `Decoding`, `Draining`, not paused) is
-  true across a join without a blink.
+  true across a join without a blink. A late join from `Draining` reports
+  `Decoding` again.
 
 ### 3.7 The outputs
 
@@ -409,9 +541,9 @@ padding, among other fields [1][2]. The parts that matter here:
 
 - **Where it is.** The tag starts right after the frame header and its
   side information: 4 + 32 bytes (MPEG-1 stereo), 4 + 17 (MPEG-1 mono or
-  MPEG-2/2.5 stereo), 4 + 9 (MPEG-2/2.5 mono). This is what
-  `TrackProgress.cpp`/`TrackSeek.cpp` already compute as
-  `i + 4 + f.sideInfo`.
+  MPEG-2/2.5 stereo), 4 + 9 (MPEG-2/2.5 mono), 2 bytes later in a frame
+  with a CRC (the protection bit 0; LAME doesn't write one, but
+  `lametag::parse()` accepts it).
 - **The Xing part.** It holds "Xing"/"Info", then 4 bytes of flags (big
   endian), then, only if their flag is set:
   - the frame count (0x1), 4 bytes;
@@ -437,7 +569,16 @@ padding, among other fields [1][2]. The parts that matter here:
   - +26: the preset and surround;
   - +28: the music length;
   - +32: the music CRC;
-  - +34: the tag's CRC-16, over the frame's first 190 bytes.
+  - +34: the tag's CRC-16 (CRC-16/ARC: the polynomial 0x8005 reflected,
+    starting at 0) over every byte of the frame before it: 190 for MPEG-1
+    stereo with all four Xing fields, 175 for MPEG-1 mono and MPEG-2/2.5
+    stereo, 167 for MPEG-2/2.5 mono.
+- **Checked on real files.** On 13 LAME 3.99r files from the development
+  PC (CBR 128 kbit/s, joint stereo, the ID3v2 tag in front skipped), the
+  header was "Xing" with all four flags, the extension at +120, the
+  delay 576 and paddings 648-1,669 at +21, and the stored CRC equal to
+  CRC-16/ARC over the first 190 bytes in every file. One of those headers
+  is written out in test_lame_tag.
 - **The frame count excludes the Info frame.** LAME writes the number of
   audio frames. Some other tools (mp3splt) counted the Info frame too [6],
   and a decoder that decodes the Info frame gets one frame more than the
@@ -494,17 +635,17 @@ relies on it.
   After `SeekableFlac::seekTo()` (which sets `channels`), one {0,0} goes
   first (RESAMPLER.md section 5 noted it). Call this the lead: 1 for every
   MP3 start and every FLAC seek, 0 for a FLAC from the top.
-- **The Info frame is decoded as audio** if the decoder is handed it. The
-  backend hands the decoder byte 0 (through the ID3 reader) or the end of
-  a big ID3 tag, so today the Info frame comes out as 1,152 samples of
-  exact silence: its side information is all zeros [7]. That is 26 ms of
-  extra silence at every LAME-encoded track's start. **From now on, when
-  the probe finds a Xing/Info (or VBRI) frame, the decoder is handed the
-  byte after it** (the probe knows its offset and length), without the ID3
-  reader. The library has the title and artist: `trackTitle()` and
-  `trackArtist()` have no reader outside the backend (grep), and a big
-  tag is already skipped that way. The same applies without a LAME
-  extension: a header frame is never audio.
+- **The Info frame is decoded as audio** if the decoder is handed it.
+  v0.5.0 handed the decoder byte 0 (through the ID3 reader) or the end of
+  a big ID3 tag, so the Info frame came out as 1,152 samples of exact
+  silence: its side information is all zeros [7]. That is 26 ms of extra
+  silence at every LAME-encoded track's start. **Now, when the probe finds
+  a Xing/Info (or VBRI) frame, the decoder is handed the byte after it**
+  (the probe knows its offset and length). The ID3 reader is gone: the
+  ID3v2 tags (one after another too) are skipped to the first frame (the
+  library has the title and artist; `trackTitle()`/`trackArtist()` had no
+  callers). The same applies without a LAME extension: a header frame is
+  never audio. With `G0` the header frame is decoded again, as in v0.5.0.
 - **The last frame is lost without guard bytes.** libmad's
   `mad_header_decode()` refuses a frame unless `MAD_BUFFER_GUARD` (8)
   bytes follow it (`N + MAD_BUFFER_GUARD > end - this_frame` gives
@@ -532,6 +673,12 @@ hold  = max(0, padding − 529)       (cut at the end)
 kept  = frames × spf − delay − padding
 ```
 
+The lead is skipped on every start whatever the tag (the review's
+amendment 8): 1 for every MP3 open and every FLAC seek, 0 for a FLAC from
+the top. Without that, an MP3 with no LAME tag (or any MP3 with `Gt0`)
+would put a stray zero frame into the stream at every same-rate join.
+Only `G0` keeps it, as v0.5.0 did. (`lametag::trim()` works these out.)
+
 ### 4.4 Where trimming runs: `TrimFeed` (lib/core)
 
 `RingOutput::ConsumeSample()` hands the sample to `TrimFeed` when the
@@ -539,7 +686,9 @@ track has a trim, and straight to `RingFeed` otherwise. A FLAC pays one
 branch per frame.
 
 - **The start: a count.** While `skip > 0`, the frame is taken and
-  dropped (`return true`, so the generator moves on).
+  dropped (`return true`, so the generator moves on). Once it is done and
+  nothing is held, `TrimFeed` is inactive and `RingOutput` pays one branch
+  per frame.
 - **The end: a hold of `hold` frames** in a FIFO in PSRAM. It is
   allocated once at `begin()`: 4,095 frames is 16 KB, the largest padding
   the 12-bit field can say. Once the FIFO is full, a new frame can only
@@ -547,7 +696,16 @@ branch per frame.
   the oldest (ring full, budget spent), `TrimFeed` refuses the new frame
   and changes nothing, so the generator's "offer the same sample again"
   contract holds exactly as in `RingFeed`. At the end of the file
-  (`atSourceEnd()`), whatever is held is dropped: that is the padding.
+  (`TrimFeed::end()`, the engine's commit), whatever is held is dropped:
+  that is the padding. At an early end (a decode error the generator gave
+  up on, the file not read to its end) it goes into the feed instead: it
+  is real audio (the review's 20b).
+- **A rate or channel change in the middle**, with frames held (MP3's
+  generator says a new rate once and ignores the answer): the change
+  waits, the held frames go into the feed at the old format first, then
+  the change, and the end trim is off for the rest of that track. The
+  first `setRate()` of every track comes during its start skip, with
+  nothing held, and passes straight through.
 - **Why a hold and not a count to the end.** A count needs the absolute
   sample index, and after a seek start (a resume point) that index isn't
   known. The byte comes from a TOC, and libmad drops the frame after a
@@ -566,8 +724,9 @@ branch per frame.
   4,095 held). A pass decodes at most about 7 extra MP3 frames, once per
   track.
 
-`TrimFeed` holds a pointer and four counters (about 24 B). It goes into
-`RingOutput`, which stays under its 4 KB `static_assert`.
+`TrimFeed` is about 64 B. It goes into `RingOutput`, which stays under
+its 4 KB `static_assert`. `G` shows the decoding track's trim (the tag's
+delay and padding, the skip and the hold, a CRC mismatch).
 
 ### 4.5 Files without a LAME tag
 
@@ -583,7 +742,8 @@ about 1,000) it is roughly 576 + 529 + 1,000 − 529 + 529 ≈ 2,100 samples,
 about 48 ms. It sounds like a short dropout in a segue. There is no fade
 and no click, because the samples are codec silence, not a cut. Its
 length depends on the files, and `[gapless]` logs "no LAME tag: not
-trimmed" at the open.
+trimmed" at the open (the generator's lead is still skipped, and a
+Xing/VBRI header frame from another encoder still isn't decoded).
 
 FLAC is sample-exact: libFLAC outputs STREAMINFO's total, and the
 generator adds nothing from the top. The built-in tracks are made to the
@@ -595,17 +755,21 @@ There is one timeline: the trimmed one, where 0:00 is the first kept
 sample.
 
 - **Lengths.** `progress::mp3HeaderDurationMs()` and
-  `trackseek::mp3LengthMs()` return `kept / rate` when a LAME tag says
-  delay and padding. Without one, they return `frames × spf / rate`, as
-  today. Now Playing, the Queue, `trackseek::startMs()`'s last-5-s rule
-  and the resume point's saved length all use it.
-- **The byte for a start at T.** The untrimmed sample is
-  `T × rate + delay + 529`, so the frame index is that over spf. For a
-  CBR Info file the byte is computed from that frame index. A TOC or the
-  average bitrate maps the untrimmed time (T plus 25 ms or so) instead
-  of T. This removes a fixed +25 ms bias from MP3 seeks, which were
-  measured 30-50 ms behind (ARCHITECTURE.md). The rest is the frame
-  libmad drops for its bit reservoir, as before.
+  `trackseek::mp3LengthMs()` return `kept / rate` when a trusted LAME tag
+  says delay and padding (`lametag::lengthMs()`). Without one, they return
+  `frames × spf / rate`, as before. Now Playing, the Queue,
+  `trackseek::startMs()`'s last-5-s rule and the resume point's saved
+  length all use it.
+- **The byte for a start at T.** With a trusted LAME tag the time is moved
+  onto the decoded stream first: `T + (delay + 529) / rate`
+  (`lametag::untrimmedMs()`), and a CBR Info file's byte is counted from
+  the first audio frame (the Info frame isn't decoded). A TOC or the
+  average bitrate maps that untrimmed time too. This removes a fixed
+  +25 ms bias from MP3 seeks, which were measured 30-50 ms behind
+  (ARCHITECTURE.md). The rest is the frame libmad drops for its bit
+  reservoir, as before. Without a trusted tag, nothing changes (and with
+  `G0` a CBR Info file's seek is one frame off: the Info frame is decoded
+  again there).
 - **The trim after a seek start.** Only the lead is skipped (the decoder
   warm-up was played and faded in before too), and the end hold applies,
   so a resumed track joins its next gaplessly.
@@ -616,8 +780,9 @@ sample.
 
 ## 5. Changes while the next track is already decoded
 
-Most edits change the offer (section 3.1). That is noticed in the same
-loop pass, and the decode task acts on it at once.
+Most edits change the word (section 3.1). That is noticed at the end of
+the action (or of the next `update()`), and the decode task is woken to
+act on it.
 
 ### 5.1 The cut
 
@@ -676,34 +841,49 @@ clears the fence under its lock. The cost on the consumer's side is two
 stores and one load per read. The new fields (`fenced_`, `fenceIdx_`,
 `reading_`) add 12 B to the `PcmRing` object, which is in internal RAM.
 
-**Then the decode task** finishes the cut:
+**On the ESP32.** GCC's code for the build was checked: in
+`PcmRing::read()` the store of `reading_` is followed by `memw` before the
+load of `fenced_`, and in `cutBack()` the store of `fenced_` by `memw`
+before the load of `reading_` (Xtensa's `memw` waits for every access
+before it). The pair is also run on the two cores by the console's `Gx`
+(lib/core `RingCutStress`, the same harness as the host's two-thread
+test): the reader on core 0, as the Bluetooth callback, the producer on
+core 1.
+
+**Then the decode task** finishes the cut (`GaplessEngine::stepCut()`):
+before it raises the fence it moves the boundary to `Cutting` under the
+book's lock (`beginCut()`); a boundary the loop has already taken can't be
+cut, and one in `Cutting` is never taken.
 
 - **Done:**
-  - `RingFeed::rewind()`: the converter and feed scalars come back from
-    the mark. Staged and held frames are dropped. The table pointers are
-    re-pointed through the current plan, and the internal-RAM copy is
-    wanted again if the route converts, because N+1 at 44.1 kHz may have
-    freed it (`TableCopy`, RESAMPLER.md section 10c).
-  - N+1's decoder is closed and the boundary dropped.
-  - The decode task is back at "N at its end of file" and goes to step 3
-    of section 3.2 with the offer as it is now: a new next entry, or
-    none, which means `finish()` → `Draining`.
-- **Pending:** the fence stays and the cut is tried again on the next
-  pass. Nothing is decoded meanwhile.
+  - N+1's decoder is closed, the feed rewound to the mark
+    (`RingFeed::rewind()`: the converter and the feed's scalars as they
+    were at J, nothing staged or held; a plain copy, since the tables'
+    copy is never freed during a chain of joins), the trim disarmed, and
+    the boundary removed (`cutDone()`) before anything more is written.
+  - The engine is back at N's end with the word as it is now (section 3.2,
+    step 2): a new next entry, or none (`finish()`, `Draining`).
+- **Pending:** the fence stays and the cut is tried again 1 ms later.
+  Nothing is decoded meanwhile.
 - **Crossed:** the boundary becomes `Committed` and is never cut. The
-  listener is about to hear N+1's start (the consumer is in [J, B) or
-  past it). The advance comes at B, and the controller then treats the
-  change as an edit to what plays (sections 3.5 and 5.2).
+  listener is about to hear N+1's start (the outputs are in [J, B] or
+  past it). The advance comes past B, and the player then sorts the
+  change out (section 3.5).
 
-**The race windows.** An edit reaches the decode task within about 1 ms
-(it is woken). A cut is too late only if the consumer passes J in that
-millisecond. A re-decode after a cut has the time the consumer still
-needs to reach J. That is usually more than a second, and at least an
-open (23-30 ms for an MP3, more for a FLAC's init). An edit in the last
-~30-100 ms before the join can leave a short gap between N's end and the
-new next track: N's tail is whole, then the new track starts as any start
-does (faded in after the gap). That is the v0.5.0 behaviour at that one
-join.
+**The race windows.** `setNext()` wakes the decode task
+(`xTaskNotifyGive()`, and every rest on its producing paths is
+`ulTaskNotifyTake()`, the review's amendment 2), so an edit reaches it
+within a pass: about 3-5 ms if it is decoding, sooner if it is waiting
+for room. If the edit lands while it is opening N+1 (the join itself), it
+waits for the open: 30-100 ms or more (a FLAC's init, a big picture). A
+cut is too late only if the outputs pass J within that time. `G` shows
+each cut's time from its word (the last and the largest), so the device
+run measures it. A re-decode after a cut has the time the outputs still
+need to reach J: usually more than a second, at least an open. An edit in
+the last ~30-100 ms before the join can leave a short gap between N's end
+and the new next track: N's tail is whole, then the new track starts
+(a converting rate: a fresh filter). That is the v0.5.0 behaviour at that
+one join.
 
 ### 5.2 The cases
 
@@ -714,72 +894,74 @@ applies to the track that now plays.
 
 | Change while N+1 is decoded ahead | What happens |
 |---|---|
-| Next, prev, `play(pos)` (another entry), Play (`playNow`), Shuffle all, `setStartPoint` while playing, a restart by prev, stop, Clear | a request, as today: `play()` or `stop()` clears the offer and the boundary, the decode task's `start()` calls `discardAll()` (the epoch bumps, so the outputs crossfade) and resets the converter. `syncHeard()` ran first, so the action is on the entry the listener hears (section 3.5) |
-| Play next / `insertNext`, `moveNext`, + Queue onto the last entry, `remove` of the next entry, Clear up next, undo that changes the next entry | the offer changes. Consumer before J: cut, then the new next is decoded. Passed J: the advance is heard, then a removed key makes the controller `advance()` from N (a start of the new next, crossfaded), and a moved one is simply found where it went |
-| `remove` of the current entry (N) | `currentMoved()`: a request, as today |
-| A library rebuild (`queueReplaced(true)`: fresh keys, same tracks) | the offer is re-keyed, no cut (section 3.1) |
-| Repeat changed (no UI today) | at the queue's last entry the offer appears or goes; a cut if needed |
-| Gapless turned off (`G0`) | the offer goes: cut, and N ends as in v0.5.0. Trimming stays as it was for tracks already open (`Gt` applies at the next open) |
+| Next, prev, `play(pos)` (another entry), Play (`playNow`), Shuffle all, `setStartPoint` while playing, a restart by prev, stop, Clear | a request, as before: a new generation; the decode task's `start()` calls `discardAll()` (the epoch bumps, so the outputs crossfade), resets the converter and restarts the book (the boundary and the old word go). `syncHeard()` ran first, so the action is on the entry the listener hears (section 3.5) |
+| Play next / `insertNext`, `moveNext`, + Queue onto the last entry, `remove` of the next entry, Clear up next, an undo that changes the next entry | the word changes. Outputs before J: cut, then the new next is joined. Passed J: the advance is heard, and since what `advance()` would start isn't N+1 any more, it is started (a request): Play next's track plays next. Host-tested (test_gapless_player) |
+| `remove` of the current entry (N) | `currentMoved()`: a request, as before |
+| A library rebuild (`queueReplaced(true)`: fresh keys, same tracks), or one of two adjacent duplicates removed | the same track stays next: the word keeps its token, no cut; the advance finds the entry by its track (section 3.1) |
+| Repeat changed (no UI today) | at the queue's last entry a word appears or goes; a cut if needed |
+| Gapless turned off (`G0`) | nothing follows any more, and the engine is off: cut, and N ends as in v0.5.0. Trimming stays as it was for tracks already open (`Gt` applies at the next open) |
 | The sleep timer's end chosen or its kind changed (End of track, album, queue) | section 5.4 |
-| "Pause after this track" (`setPauseAfterTrack(true)`) | the offer goes: cut, N drains, `Ended`, `pauseAtBoundary()` as today |
+| "Pause after this track" (`setPauseAfterTrack(true)`) | nothing follows: cut, N drains, `Ended`, `pauseAtBoundary()` as before |
 | Pause | nothing to cut: decoding ahead while paused is harmless, because nothing reads. Resume plays the join gaplessly |
 | The output switched (speaker ⇄ Bluetooth) | a consumer handover (`setConsumer()`); the read index continues, the boundary stays valid |
-| A `Hold` appears (headphones gone) | the drop pauses the player (`BtSession`), so the offer goes with the pause. If the controller is still Playing, `held()` makes the offer go: cut |
+| A `Hold` appears (headphones gone) | the drop pauses the player (`BtSession`); the word stays (nothing is heard without an output reading). An advance taken while held starts the entry as `advance()` would: a wait |
 | The USB visualizer starts | `pauseByComputer()`: a pause, as above |
 
 ### 5.3 Failures
 
 - **The next track can't be opened** (missing file, not an MP3 or FLAC,
   a rate the converter refuses, an unknown `tone:`, a decoder that won't
-  begin): the decode task marks the offer's token as failed and logs
-  `[gapless] can't decode ahead ...: <why>; N ends as before`. Then it
-  does what it does with no offer: `finish()`, `Draining`, `Ended`. The
-  controller's `advance()` then calls `play()` on that entry, which fails
-  as today (`Failed`, the note "Skipped ...", the Queue's mark, the next
-  one). The file is opened twice, which costs milliseconds. A transient
-  error gets its second chance, and the failure path is the one that
-  exists and is tested. N ends cleanly. The decode task never waits on
-  the failed track.
-- **The decoded-ahead track fails while N is still heard.** The decoder
-  starts N+1 fine and then fails, for example with a mid-stream rate
-  change to a rate that is refused (`f.rejected()`; rare). The decode
-  task tries the cut first. Done means N ends cleanly and the failure
-  comes again through `play()`. Crossed means the decode task stops
-  producing, waits until the boundary has been taken
-  (`GaplessJoin::pending()` false), then reports `Failed` for the
-  generation. `failed()` then describes N+1, the heard entry, never N.
-- **A decode error in the middle of N+1** (a corrupt file) ends it early,
-  as libmad's errors do today. It is a short track, and the next join
-  follows.
+  begin): the word was taken, so it isn't tried again; the decode task
+  logs `[gapless] can't decode ahead ...; the track before ends as
+  before` and does what it does with nothing following: `finish()`,
+  `Draining`, `Ended`. The player's `advance()` then calls `play()` on
+  that entry, which fails as before (`Failed`, the note "Skipped ...",
+  the Queue's mark, the next one). The file is opened twice, which costs
+  milliseconds; a transient error gets its second chance, and the failure
+  path is the one that exists and is tested. N ends cleanly; the decode
+  task never waits on the failed track. Host-tested at both ends (the
+  engine, and the player skipping it).
+- **A joined track that gives no audio** (it ends before its first frame
+  reaches the ring: an MP3 libmad can't decode, a rate refused at once):
+  the engine cuts it back out (`EmptyAhead`, then Done; the outputs can't
+  have read past J, nothing was written after it) and N ends as before;
+  `play()` on that entry then fails or ends as before.
+- **A joined track that fails after giving audio** (a rate refused in
+  the middle, a decode error libmad gives up on): an early end (the
+  review's amendment 12). What the trim holds goes in (real audio), its
+  reason (`[gapless] ... ended early: ...`) becomes `note()` once it is
+  heard, and the next join follows. `Failed` is reported only for a
+  request's own track that fails before its first frame, as before, so
+  `failed()` never describes N while N is heard.
 - **An underrun at the join** (an SD stall during the open) is counted
   and faded like any underrun (`expectingAudio` stays true).
 
 ### 5.4 The sleep timer
 
-- **The predicate.** `NextGate` (new, like `PlaybackController::Hold`)
-  asks whether the timer ends at the current entry. main.cpp implements
-  it with a pure `SleepTimer::endsAt(choice, lastOfAlbum, lastOfQueue)`,
-  taken from `atBoundaryTrack()`:
+- **The predicate.** `PlaybackController::NextGate` (like `Hold`) asks
+  whether the timer ends at the current entry. main.cpp implements it
+  (`SleepGate`) with the pure `SleepTimer::endsAt(choice, lastOfAlbum,
+  lastOfQueue)`, which `atBoundaryTrack()` now uses too:
   - End of track: always;
   - End of album: `albumEndsBetween(current, next)` or the last entry;
   - End of queue: the last entry.
 
-  The offer is withheld whenever it says yes. N+1 is then never decoded
-  ahead of the track the timer ends at, and that stays true right after
-  an advance. In the same `update()` that makes A9 (an album's last
-  track) current, the next offer is computed with A9 as the boundary
-  track. It doesn't wait for `stepSleep()` to set `pauseAfter_` in the
-  next pass.
-- **The pause.** With no offer, N drains, `Ended`, `pauseAtBoundary()`:
-  exactly today's End of track. The ring empties with N's last frame,
+  Nothing follows whenever it says yes. N+1 is then never decoded ahead
+  of the track the timer ends at, and that stays true right after an
+  advance: in the same `update()` that makes A9 (an album's last track)
+  current, the next word is worked out with A9 as the boundary track. It
+  doesn't wait for `stepSleep()` to set `pauseAfter_` in the next pass
+  (host-tested: the next album's first track is never even probed).
+- **The pause.** With nothing following, N drains, `Ended`, `pauseAtBoundary()`:
+  exactly v0.5.0's End of track. The ring empties with N's last frame,
   nothing of N+1 is decoded, and the next entry is cued at 0:00.
-- **Chosen late** (N+1 already decoded): the gate changes the offer, so
+- **Chosen late** (N+1 already decoded): the gate changes the word, so
   the cut happens. If the cut is Done, it pauses exactly at the boundary.
-  If it is Crossed (the choice landed within a millisecond of the
-  consumer passing J), N+1 is the heard track, and End of track applies
-  to it ("a skip during the countdown: End of track then applies to the
-  new track", SleepTimer.h). That is the one way N+1 is heard, and it is
-  the same as choosing a moment after the track changed.
+  If it is Crossed (the choice landed within a cut's latency of the
+  outputs passing J), the advance is checked against "pause after this
+  track" (the review's amendment 3): the player pauses at once, the next
+  entry cued at 0:00, and at most the cut's latency plus the pause's
+  1.5 ms fade of N+1 is heard. Host-tested both ways.
 - **The fade** is computed from the heard track's position and length.
   N's length is exact once its file has ended (section 3.5). The fade
   over the last 10 s ends at the boundary, and `FadeStage` is one level
@@ -791,49 +973,57 @@ applies to the track that now plays.
 
 - **Decoders.** There is still one at a time. N's generator is
   `stop()`ped (libFLAC's ~100 KB PSRAM and 2.5 KB internal freed, as
-  `closeDecoder()` does today) before N+1's is made. The peak is today's
-  per-track peak.
-- **Internal RAM** (all estimates; `[heap] playing` measures it):
-  - `GaplessJoin`: about 64 B plus the offer's path string. It sits in
-    `Core2AudioBackend` (a global, .bss). The `std::string` path is
-    allocated internally (under 4 KB), up to `TrackCatalog::kMaxPath`.
+  `closeDecoder()` always did) at N's commit, before N+1's file is even
+  probed. The peak is the old per-track peak.
+- **Internal RAM** (estimates; `[heap] playing` measures it):
+  - `GaplessJoin` in `Core2AudioBackend` (a global, .bss): about 100 B
+    plus the word's path string (heap, internal, up to
+    `TrackCatalog::kMaxPath`); the backend's `Prepared` (the track opened
+    for a join, with its LAME info) about 150 B more.
+  - `GaplessEngine` (`new` at `begin()`): about 120 B, plus the word it
+    took (another path string).
   - `PcmRing`: +12 B.
-  - `TrimFeed` in `RingOutput`: +24 B. `static_assert(sizeof(RingOutput)
-    < 4096)` still holds (3,192 B today).
+  - `TrimFeed` in `RingOutput`: about 64 B. `static_assert(sizeof(
+    RingOutput) < 4096)` still holds (about 3.3 KB).
+  - The tables' 7.6 KB copy stays while a chain of joins goes from a
+    converted track to 44.1 kHz ones (the review's amendment 9); it is
+    freed at the next request's start, as before.
   - There is no `IRAM_ATTR` anywhere.
-- **PSRAM:**
-  - the converter's mark: one `RateConverter` image, about 1.9 KB
-    (`sizeof`, asserted);
-  - the `TrimFeed` hold: 16 KB;
-  - both allocated once at `begin()`.
+- **PSRAM**, allocated once at `begin()`:
+  - two feed marks (`RingFeed::Mark`: a `RateConverter` image and a few
+    scalars), about 2 KB each;
+  - the `TrimFeed` hold: 16 KB.
 - **The decode stack (16 KB).** The join's path, `decodeTask →
-  produceDecoded → atSourceEnd → openDecoder → AudioGenerator*::begin`,
-  is no deeper than today's `decodeTask → start → openDecoder → begin`.
-  The deepest frames stay libFLAC's and libmad's inside `loop()`, which
-  doesn't run during an open. The probes stay in PSRAM. The device run
-  watches `decodeStackFree` (`s`) across joins of each kind.
+  GaplessEngine::step → Tracks::probe/start → prepare/beginPrepared →
+  AudioGenerator*::begin`, is no deeper than the request's `decodeTask →
+  start → prepare/beginPrepared → begin`. The deepest frames stay
+  libFLAC's and libmad's inside `loop()`, which doesn't run during an
+  open. The MP3 probe buffer stays in PSRAM. The device run watches
+  `decodeStackFree` (`s`) across joins of each kind.
 - **CPU:**
   - The open moves from a moment when the ring is empty and the UI waits
     to a moment when the ring is full and the decoder would otherwise
     sleep.
   - The refill from empty disappears at natural ends, which saves about
     0.7 s of flat-out decoding per track.
-  - The hold costs under 0.5 % of a core for LAME MP3s (estimated;
-    measured in section 11.4).
-  - A mark is a 1.9 KB copy once per join, and only at a converting
-    route.
+  - The hold costs two PSRAM accesses per frame for LAME MP3s (estimated
+    under 0.5 % of a core; measured in section 11.4).
+  - A mark is a ~2 KB copy once per join.
+  - The consumer's read gained the reading mark and the fence check
+    (a few `memw` per read of 128-1024 frames).
 
 ## 7. Hearing safety
 
-- **Nothing starts by itself beyond the normal auto-advance.** Offers
-  exist only while the controller holds a track that plays or is paused,
-  and only for the entry `advance()` would start. An offer decodes into
-  the ring; only the consumer reading makes anything heard.
+- **Nothing starts by itself beyond the normal auto-advance.** A word
+  exists only while the player holds a track that plays or is paused,
+  and only for the entry `advance()` would start. A word decodes into
+  the ring; only the outputs reading make anything heard.
 - **A paused player never advances.** Paused outputs don't read, so
   `readPos()` can't pass B. One edge: a pause within 64 frames (1.5 ms)
   of B. The pause's own 64-frame fade-out reads across B, so the player
-  ends paused at N+1's 0:00. That is what was heard, nothing plays, and
-  a resume continues N+1.
+  ends paused at N+1's 0:00 (if N+1 is still what comes next; otherwise
+  the next entry is cued). That is what was heard, nothing plays, and a
+  resume continues N+1. Host-tested (a pause 10 frames before B).
 - **Never louder.**
   - A same-rate join is the converter's normal running.
   - A rate-change join is a `finish()` (the tail decays) followed by a
@@ -853,196 +1043,213 @@ applies to the track that now plays.
 | Piece | What |
 |---|---|
 | `PcmRing` | `cutBack(index)` → Done/Pending/Crossed (section 5.1); `writePos()`; the fence in `read()` |
-| `RingFeed` | `mark(buffer)` (stage committed, converter and scalars saved), `rewind(buffer)` (restore, drop staged/held, re-point tables); `boundary()` = `streamStart + plan.ringFrames(taken)`; `endStream()` = `finish()` then a converter reset that keeps `made()` running (a rate-change join) |
-| `RateConverter` | copy-out/copy-in of its state (`save()`/`restore()`), with `restore()` re-pointing the polyphase rows to the tables in use now (`useTables()` may have moved them) and wanting the copy if the route converts |
-| `LameTag` (new) | `lametag::parse(buf, n, &Info)`: the first frame's Xing/Info header and LAME extension (frames, spf, rate, delay, padding, CRC ok, the header frame's offset and length) per section 4.1 |
-| `GaplessTrim` (new, in LameTag) | `skip`/`hold`/`kept` per section 4.2-4.3, the lead per decoder and start kind; the trimmed length; the untrimmed time for a seek |
+| `RateConverter` | `tailFrames()`: what `finishPush()` still owes (B's offset at a continuous join) |
+| `RingFeed` | `Mark`, `mark()` (nothing staged or held: the converter and the scalars saved), `rewind()` (a plain copy back), `continues(hz)`, `tailFrames()`, `restartStream()` (after `finish()`: a new stream, `made()` running on) |
+| `LameTag` (new) | `lametag::parse()`: the first frame's Xing/Info or VBRI header and LAME extension (frames, spf, rate, delay, padding, the CRC and its range, the header frame's offset and length); `trim()` (skip, hold), `keptSamples()`, `lengthMs()`, `untrimmedMs()`, `crc16()` |
 | `TrimFeed` (new) | the start skip and the end hold in front of `RingFeed` (section 4.4) |
-| `GaplessJoin` (new) | the offer slot, the boundary book, the heard record, the join's states (section 3.4) |
+| `GaplessJoin` (new) | the word, the boundary, the heard record (section 3.4) |
+| `GaplessEngine` (new) | the decode task's state machine from a source's end: the commit, the word, the join, the tail, the drain, the late word, the cut (sections 3.2, 5.1) |
+| `RingCutStress` (new) | the cut against a reader on another task, step by step (the host's two-thread test, the device's `Gx`) |
 | `QueueModel` | `peek(delta, wrap)` |
-| `PlaybackController` | `setGapless()`, `NextGate`, `refreshOffer()`, `syncHeard()` (section 3.1, 3.5) |
-| `IAudioBackend` | `setNext(const Next*)` and `takeAdvance(uint32_t* token)`, with default bodies (the five fakes in test/ compile unchanged) |
-| `SleepTimer` | `endsAt(choice, lastOfAlbum, lastOfQueue)` |
+| `PlaybackController` | `setGapless()`, `NextGate`, `refreshOffer()`, `syncHeard()`, `gaplessStats()` (sections 3.1, 3.5) |
+| `IAudioBackend` | `setNext(const Next&)` and `takeAdvance(uint32_t*)`, with default bodies (the test fakes compile unchanged) |
+| `SleepTimer` | `endsAt(choice, lastOfAlbum, lastOfQueue)`; `EntryStart` counts a start in the pass of the entry's change |
 | `TrackProgress`, `TrackSeek` | the trimmed lengths, the delay in the seek byte (section 4.6) |
 
 ### The firmware (src)
 
 | Where | What |
 |---|---|
-| `audio/Core2AudioBackend` | `atSourceEnd()`, the join (section 3.2), the cut each pass (`wantsCut()`), the heard and decoding records, `positionMs()`/`durationMs()`/`description()` from the heard one, `setNext()`/`takeAdvance()`, `heardEpochFrame()`, the mark and hold buffers at `begin()`, the `[gapless]` log lines, counters for `G` |
-| `audio/Core2AudioBackend::openDecoder()` | the LAME tag from the probe it reads already; the decoder handed the byte after a Xing/Info/VBRI frame; `GuardedSource` for MP3; the trim armed in `RingOutput` |
+| `audio/Core2AudioBackend` | the decode task driving `GaplessEngine` (and reporting its phases), `GaplessEngine::Tracks` (probe, start, close, the `[gapless]` log), `prepare()`/`beginPrepared()` (the file's rate, length, LAME tag and trim, the header frame skipped, `GuardedSource`, the ID3 tags skipped, a FLAC's metadata size), the heard record through `GaplessJoin` (`positionMs()`, `durationMs()`, `startOffsetMs()`, `durationKnown()`, `description()`, `note()`), `setNext()`/`takeAdvance()`, `trackSeq()`, the PSRAM at `begin()`, the tables' copy kept during a chain, `setGapless()`/`setGaplessTrim()`, `printGapless()` |
 | `audio/GuardedSource` (new) | 8 zero bytes at the end of the file (section 4.3) |
 | `audio/RingOutput` | `TrimFeed` in front of `RingFeed` |
-| `main.cpp` | the `NextGate` (the sleep timer), the console `G`, `DanceMode`'s truth re-armed at the advance |
+| `main.cpp` | the `NextGate` (`SleepGate`), `trackSeq()` for the sleep timer's and the learned lengths' `EntryStart`, the console's `G` and `Gx` |
 | `app/SerialConsole` | `Pending::Gapless` on `G` |
-| `app/DanceMode` | the click truth re-armed from `heardEpochFrame()` at a gapless advance; no tracker reset there |
+| `app/DanceMode` | a click track's truth off at a track change (until the next epoch) |
 
 The log, one line per event:
 
-- `[gapless] decoding ahead: 06 - Digital Love.mp3 (MP3, 44100 Hz, same rate: continuous) with 1,472 ms of 05 left; opened in 27 ms`
-- `[gapless] trim: LAME delay 576, padding 1,308: skipping 1,106, holding 779` (or `no LAME tag: not trimmed`)
-- `[gapless] heard: 05 -> 06 at ring frame N (taken 3 ms after the consumer passed it)`
-- `[gapless] cut: the next entry changed: 1.21 s of 06 dropped, 05 ends at frame N` (or `too late to cut: 06 already heard`)
-- `[gapless] can't decode ahead 07 - x.flac: <why>; 06 ends as before`
+- `[gapless] decoding ahead: /music/.../06 - Digital Love.mp3 (44100 Hz, the same rate: one stream) with 1472 ms of the track before left; opened in 27 ms` (or `another rate: after the tail`, `late: after the tail`)
+- `[gapless] trim: LAME3.100 delay 576, padding 1308: skipping 1106, holding 779` (or `no header: no LAME tag: not trimmed`)
+- `[gapless] heard: the joined track plays (taken 3.0 ms after its first frame was read)`
+- `[gapless] cut: what comes next changed: the track decoded ahead taken back out, 1210 ms before the join (2400 us after the word)` (or `too late to cut: ...`)
+- `[gapless] can't decode ahead /music/.../07 - x.flac; the track before ends as before`
+- `[gapless] /music/... ended early: <why>`, `[gapless] ... gave no audio: taken back out`
 
 ## 9. The console switch: `G`
 
-`G` is free (SerialConsole.cpp's key list). It takes an argument up to
+`G` was free (SerialConsole.cpp's key list). It takes an argument up to
 Enter, as `T` and `R` do.
 
-- **`G`**: the status. It shows on or off, trimming on or off, the offer
-  (the entry, its path), the pending boundary (J, B, ms of ring to it,
-  the join's kind and state), and the counters since boot: joins
-  continuous, joins with a reset, cuts, too-late cuts, failed opens. It
-  also shows the current track's trim (delay, padding, skip, hold, CRC)
-  or "no LAME tag".
-- **`G0`**: gapless off. That is v0.5.0 at the next end: no offers (a
-  pending decode-ahead is cut at once), and from the next open no
-  trimming, no skipping of the header frame and no guard bytes. It is
-  RAM only, for the A/B and as the safety valve.
+- **`G`**: the status: on or off, trimming on or off; the word (the track
+  it is about, the token, the path, taken or not); the boundary (its
+  token, B and J, ms from the reader to it, cuttable, being cut or too
+  late); the heard track's exact length once its file has ended; the
+  counters since boot (joins continuous, after the tail, late; advances
+  heard; cuts, too late, retried; failed opens, empty tracks; the last and
+  the largest cut's time from its word); the decoding track's trim (the
+  tag's delay and padding, the skip and the hold, a CRC mismatch, or "no
+  LAME tag"); and the player's side (words sent, joins taken as the next
+  entry, started again, paused at the boundary).
+- **`G0`**: gapless off. That is v0.5.0 at the next end: nothing named
+  (the player's `setGapless(false)`), the engine off (a track decoded
+  ahead is cut at once), and from the next open no trimming, no skipping
+  of the header frame, no lead skip and no guard bytes. RAM only, for the
+  A/B and as the safety valve.
 - **`G1`**: on (the default; `-DMSTREAM_GAPLESS=0` builds it off by
-  default).
-- **`Gt0` / `Gt1`**: trimming and the header-frame skip off or on with
-  decode-ahead left as it is. This measures the trimming's share of a
-  join.
-- **`Gp<sec>`** (temporary, for the device run only, removed after it
-  like RESAMPLER.md's `Rp`): the join probe of section 11.
+  default, and both the player and the backend start from the backend's
+  setting).
+- **`Gt0` / `Gt1`**: trimming by the LAME tag off or on, from the next
+  open, with decode-ahead (and the header-frame and lead skips) left as
+  they are. This measures the trimming's share of a join.
+- **`Gx<n>`**: the cut's stress test on the two cores (section 5.1),
+  `n` tracks (20,000 if not said), on a test ring of its own; it stops
+  the player first (keeping its place, as `Rt` does) and logs
+  `[gapless] Gx: PASSED ...` with its counts.
+- **`Gp<sec>`** (the join probe of section 11): not built yet. It is
+  temporary, for the device run only, and goes after it like
+  RESAMPLER.md's `Rp`.
 
 ## 10. Host tests (`pio test -e native`)
 
-Everything here runs with synthetic decoders. A **fake source** is an
-array of frames at a given rate. It can be given a fake lead, a fake
-delay and padding (junk values), a failure at open or after k frames,
-and the "ring full" refusals of the existing `test_ring_feed` harness.
-A **fake consumer** reads random chunks (0-1,500 frames, nothing a third
-of the time), as `test_long_runs_through_a_full_ring_are_exact` does.
+Everything here runs with synthetic tracks: arrays of noise frames at a
+given rate, with the trim they arm (a lead, a delay, a padding), and
+failures at the probe, at the start, before the first frame or in the
+middle. The outputs are a reader that takes random amounts (0-1,500
+frames, nothing a third of the time), so the ring is often full and
+frames are refused. "Exact" below means frame for frame against the
+converter alone (`RateConverter` on the concatenated or separate
+streams).
 
-**test_pcm_ring**
+**test_pcm_ring** (7 new)
 
-- `cutBack()`: basic (write 100, read 10, cut to 50, size 40, the next
-  write lands at 50);
-- refused when the reader is past the cut;
-- equal to the read index;
-- near the 2^32 wrap;
-- `discardAll()` clears a fence;
-- a read clamped by a fence;
-- a stress test with two `std::thread`s. Frames are tagged with
-  (sequence, track). The consumer must never see a frame of a cut track
-  after a Done, never a short read except at a fence, and never a
-  negative size.
+- `cutBack()`: the frames after the index taken out, the next write lands
+  there; refused (Crossed) once the reader is past it, nothing changed;
+  to the read index and to the write index; across the 2^32 wrap;
+- a read under way (the reading mark set by a probe): Pending, the fence
+  up, a read stops at the fence, then Done;
+- `discardAll()` takes a pending fence down;
+- two threads: tracks tagged (track, index), part of the next one
+  written past each end and cut at random: every track starts at its
+  first frame and runs on without a gap or a repeat, in order, and no
+  frame of a cut track is ever read (both outcomes exercised, hundreds of
+  Done and tens of Crossed); and the same through `RingCutStress` (the
+  `Gx` harness).
 
-**test_ring_feed**
+**test_ring_feed** (6 new)
 
-- `mark()`, feed X, `rewind()`, feed Y gives the same bits as feeding Y
-  right after `mark()`. This is checked at every route, at random points,
-  with random refusals.
-- A tables move (`useTables()` to a copy) between mark and rewind changes
-  nothing.
-- A same-rate join is bit-identical to the concatenated stream converted
-  in one go, at every rate, and `boundary()` is `ceil(taken × num / den)`.
-- A rate-change join gives N converted alone followed by N+1 converted
-  alone, with N's exact frame count.
+- a same-rate join is the concatenated stream converted in one go, at
+  every rate, and B (the write index plus `tailFrames()`) is
+  `ceil(len(A) × num / den)` from the stream's start;
+- a rate-change join is A converted alone, then B alone, each exact;
+- a cut and `rewind()` leave no trace: A, then Y, bit for bit as if X had
+  never been fed, at every route, three cut points each, with the ring
+  full in between;
+- `mark()` refuses while frames are staged or held; a cut that comes too
+  late (Crossed) leaves A then X;
+- a cut after a rate-change join goes back to A's end with its tail in;
+- a rewind across a table copy made in between gives the same bits.
 
-**test_lame_tag** (new)
+**test_trim_feed** (new, 9)
 
-- Synthetic first frames:
-  - MPEG-1 stereo and mono, MPEG-2 and 2.5 LSF;
-  - every subset of the Xing flags, so the LAME extension moves;
-  - "Xing" and "Info";
-  - "LAME", "Lavf" and "Lavc" accepted; another string, a Xing header
-    without the extension, and a VBRI header give no trim.
-- The delay and padding are read from `[xxxxxxxx][xxxxyyyy][yyyyyyyy]`,
-  including 0 and 4,095.
-- The CRC is computed over 190 bytes.
-- The sanity rejections.
-- The header frame's length is reported.
-- The trim maths: skip, hold (and the `padding < 529` clamp), kept, the
-  trimmed length in ms, the untrimmed time for a seek. There is one
-  worked example from a real LAME 3.100 file's header bytes, written out
-  by hand in the test.
+- exactly the kept frames come out, bit for bit, for seven skip/hold
+  cases (a hold as long as the rest of the track, a skip longer than the
+  track) and three reader seeds;
+- the trim is at the source rate (48 and 22.05 kHz, against the
+  converter);
+- a zero skip and hold is a passthrough (inactive);
+- a seek start skips only the lead and holds the end;
+- an early end flushes the hold;
+- a rate change in the middle releases the hold first (the same output as
+  the feed alone given the same change), said again while it waits it
+  still waits, and with nothing held it passes straight through;
+- the hold is clamped to its buffer.
 
-**test_trim_feed** (new)
+**test_lame_tag** (new, 10)
 
-- Through `RingFeed` and the real `PcmRing` with random refusals: exactly
-  `kept` frames come out, bit-identical to the source's middle.
-- A refusal never loses or repeats a frame (the hold's retry).
-- A start after a seek skips only the lead.
-- The hold is dropped at the end.
-- A hold of 0 and a skip of 0 are pure passthrough.
+- MPEG-1 stereo with all four Xing fields; MPEG-1 mono, MPEG-2 and
+  MPEG-2.5 (the CRC over 190, 175 or 167 bytes); every subset of the
+  Xing flags (the extension moves; without the frame count not trusted);
+- the 12-bit delay and padding at their edges (0, 4,095, single bits);
+- "LAME", "Lavf", "Lavc" trusted; another string, no extension, VBRI, no
+  header, no frame: no trim (a header frame still reported);
+- a wrong CRC reported and trusted anyway; the sanity checks; an
+  extension cut off by the buffer;
+- a CRC-protected header frame;
+- a real LAME 3.99r header, byte for byte (delay 576, padding 701, CRC
+  0x1856 over 190 bytes);
+- the trim rules (skip, hold, the padding-under-529 clamp, a seek start,
+  `Gt0`, an untrusted tag), kept, the length, the untrimmed time;
+- `TrackProgress`/`TrackSeek` on the trimmed timeline: the header's
+  length, and a CBR Info file's seek byte (+25 ms, after the Info frame),
+  unchanged without the extension.
 
-**test_gapless** (new; `GaplessJoin` plus a host model of the decode task
-built from the same pieces)
+**test_gapless** (new, 24): `GaplessEngine` and `GaplessJoin` with a
+stand-in for the player that names the next track once each join is
+heard.
 
-- Sample-exact joins: the consumer's output equals the concatenation of
-  the trimmed tracks, frame for frame, at:
-  - 44.1 → 44.1;
-  - 48 → 48 (equal to converting the concatenated 48 kHz stream);
-  - 48 → 44.1 and 44.1 → 22.05 (rate-change joins: the tail, then a
-    fresh filter);
-  - a tone between two files;
-  - a one-entry repeat (the same track twice);
-  - a track shorter than the ring (the depth-1 wait), with no frame lost
-    or added.
-- Boundary-heard timing:
-  - `takeAdvance()` is false until `readPos ≥ B` and true at the first
-    read past it, once;
-  - `positionMs()` runs to N's exact length and stays there until the
-    advance, then reads from 0;
-  - `durationMs()` is N's exact length after its end of file;
-  - wrap-safe near 2^32.
-- Each edit case of section 5.2, at three moments:
-  1. before N's end of file (no cut: the new offer is simply taken);
-  2. after the join with the consumer before J (a cut: the output is N
-     then the new next, sample-exact, with nothing of the old N+1 in it);
-  3. with the consumer past J (Crossed: N+1 heard; the advance taken;
-     the controller then acts on it).
-- `G0` during a pending join: the cut, then `Draining`, `Ended`.
-- A late offer during `Draining` is taken (a reset join).
-- Failures: an open failure gives N whole, then `Ended`, and no `Failed`
-  for N. A failure after the join gives a cut (Done) or a `Failed` only
-  after the advance (Crossed).
-- Generations: an offer stamped with an old generation is never taken; a
-  boundary recorded after a newer `play()` is never taken; `play()` and
-  `stop()` clear both.
+- Sample-exact joins: three tracks at one rate are one stream (44.1, 48,
+  22.05, 32 and 8 kHz, with trims); rate changes are streams back to back
+  (48 → 44.1 → 22.05 → 22.05); a rate the probe can't say resets, MP3's
+  call order (the rate after the 2nd frame) continues; the same track
+  three times; a track shorter than the ring (the word waited for: still
+  one stream) and one under 250 ms (it ends as before).
+- The heard boundary: no advance at B exactly, the first read past it
+  gives it once, the position held at A's exact end until it is taken,
+  then from 0; A's length frozen at its end; another generation's never
+  comes; near the 2^32 wrap; at a converting rate B is the converter's
+  frame for B's first source frame, after J.
+- Changes: before A's end (just taken, no cut); after the join with the
+  reader before J (cut, A then Y exact, nothing of X, at 44.1 and 48 kHz
+  with trims); the reader one frame past J (too late: X stays, its advance
+  comes); nothing follows or gapless off (cut, A ends, Ended); two changes
+  in a row; a cut while the joined track drains; the reader at J = B
+  during a cut (no advance, Done, and the advance that comes is Y's); a
+  pending cut (the reading mark set) retried, nothing taken meanwhile.
+- A late word while draining with 250 ms or more (a join after the tail),
+  and one too close to the end (not taken).
+- Failures: a probe that fails, a start that fails at the same rate and
+  after a tail (A whole, Ended, no advance); a joined track with no frames
+  (cut back out); an early end in a joined track (its hold flushed, the
+  next join follows).
+- Generations: a word for another request never taken; a new request
+  drops the boundary; a taken word is "nothing" from then on; no advance
+  while cutting, and after a too-late cut there is.
 
-**test_playback** (the fake backend gains `setNext`/`takeAdvance`)
+**test_gapless_player** (new, 15): the real `PlaybackController` and
+`QueueModel` over a backend made of the same pieces (`HostBackend`).
 
-- The offer is the entry `advance()` would start:
-  - none at the end without repeat;
-  - the same entry in a one-entry queue with repeat;
-  - none while Stopped, cued, `held()`, with `pauseAfter_` set, when
-    `NextGate` says so, or with gapless off.
-- It is re-sent after every edit that changes the next entry (`insertNext`,
-  `append` at the end, `remove` of the next, `moveNext`, `clearUpNext`,
-  `undo`) and not after edits that don't. A re-key doesn't count as a
-  change.
-- The advance moves the current entry without a `play()` and clears the
-  start point; a removed key leads to `advance()`; a moved key is found.
-- `syncHeard()` runs before `next()`, `prev()` and `togglePlayPause()`: a
-  next right after an advance skips the new entry.
-- `failed()` after an advance is the new entry's: the note, the skip.
+- An album plays as one stream with one `play()`; each advance taken when
+  the reader passes the join, and the entry changes in that same pass.
+- Play next while decoded ahead (cut: A, Y, B, C); Play next too late to
+  cut at 48 kHz (a little of B's start, then Y plays next, then B again);
+  remove the next entry, move another before it, Clear up next, an undo
+  (each cut and joined again, exact); repeat turned off on the last entry.
+- The sleep timer: End of track never decodes the next track (nothing
+  probed; paused at the next entry, cued, the timer's pause); chosen late
+  (cut, the exact pause) and too late (paused at once, at most a read of
+  B heard, nothing more after); End of album decided in the advance's own
+  update (the next album's first track never probed).
+- A next just after the reader passed the join skips the joined track; a
+  paused player never advances and resumes gaplessly; gapless turned off
+  ends tracks as before (requests); a library rebuild's new keys and a
+  removed duplicate keep the join (no cut); a next track that can't be
+  opened is skipped as before; an advance taken 1.13 s late still counts
+  as the entry's start (`EntryStart` with the track count); the word goes
+  only when it changes, never while stopped.
 
-**test_sleep_timer**
+**test_playback** (7 new): the word is what `advance()` would start (the
+end without repeat, a queue of one, "pause after", the gate, gapless off,
+stopped); tokens (kept for the same track, new after an edit or a play);
+an advance moves the entry without a `play()`; a stale advance starts
+what comes next; actions take the advance first; an advance with "pause
+after" pauses at once; a failure after an advance is the new entry's.
 
-- `endsAt()` for each choice.
-- End of track: no offer on the boundary track, and the pause at
-  `Ended`, with `timerStops()` counted.
-- End of album: offers inside the album, none on its last track, decided
-  in the same update as the advance.
-- Chosen late: the offer withdrawn (the cut happens in the backend).
-- `EntryStart` is started at once on an advance (the key changes with the
-  position under 1 s).
-- The fade is placed by the exact length.
+**test_queue** (1 new): `peek()` at both ends, with and without wrap, a
+queue of one, empty.
 
-**test_queue**
-
-- `peek()` at both ends, with and without wrap, and on an empty queue.
-
-**test_track_seek**
-
-- With a LAME tag, the lengths are trimmed and the CBR Info byte includes
-  `delay + 529`.
-- Without one, they are unchanged (the existing tests pass as they are).
+**test_sleep_timer** (2 new): `endsAt()` for each choice; `EntryStart`
+after a late gapless advance (and not without the count moving).
 
 ## 11. Device test plan (silent mode `z`, the speaker)
 
@@ -1051,11 +1258,12 @@ The setup:
 - **Silent mode.** Everything runs in silent mode `z`, on the speaker,
   so nothing is heard (RESAMPLER.md section 6). Bluetooth is item 6, with
   silence tracks only.
-- **The probe.** A temporary `Gp<sec>` probe is built in and removed
-  after the run, like RESAMPLER.md's `Rp`. It turns the speaker's tap on
-  (`setTapsOn(true)`) and, at each advance, reads the tap ±100 ms around
-  the boundary's epoch frame (`heardEpochFrame()`). It logs one
-  `[gapless probe]` line per join with:
+- **The probe** (not built yet: it comes with the device run, and goes
+  after it). A temporary `Gp<sec>` probe, like RESAMPLER.md's `Rp`. It
+  turns the speaker's tap on (`setTapsOn(true)`) and, at each advance,
+  reads the tap ±100 ms around the boundary's frame in the ring's epoch
+  (B less the epoch's start: a `heardEpochFrame()` the probe adds to the
+  backend). It logs one `[gapless probe]` line per join with:
   - **frames inserted**: how many frames between N's last real frame and
     N+1's first. With gapless on, the tap's segment must run on (0
     inserted). With `G0`, the tap holds only real frames, so the gap is
@@ -1078,21 +1286,24 @@ The setup:
 
 ### 11.1 Calibration with made-up files (first: the rest relies on it)
 
-`tools/gapless_files.py` (new, on the PC, with `lame` 3.100 and `flac`)
-writes `/music/zz gapless test/`:
+`tools/gapless_files.py` (to be written for the run, on the PC, with
+`lame` 3.100 and `flac`) writes `/music/zz gapless test/`:
 
-1. **An impulse.** A single full-scale sample at frame 10,000 of 3 s of
-   silence. It is encoded as LAME CBR 128 and as LAME V2. The probe finds
-   the impulse's peak in the kept timeline. It must be at frame 10,000,
-   ±1 for the MP3's smearing (it is a lowpassed pulse; its peak). If it
-   isn't, the constant in `skip` is wrong by that much: the lead, the
-   Info frame, or libmad's 529. Fix the constant before anything else.
-   The kept length must be exactly 132,300 frames. The trim stage counts
-   them, and `G` shows it.
+1. **A burst.** 3 s of silence with a 2,048-sample burst of broadband
+   noise starting at frame 10,000, encoded as LAME CBR 128 and as LAME
+   V2. The probe cross-correlates the tap's kept timeline with the
+   original burst (the review's amendment 19: an MP3's lowpassed impulse
+   can put its peak a sample off, a correlation's peak can't): the lag
+   must be 0. If it isn't, the constant in `skip` is wrong by that much:
+   the lead, the Info frame, or libmad's 529. Fix the constant before
+   anything else (`Gt0` keeps the joins meanwhile). Played on its own
+   (`Rf`), the converter's `taken` (`R`, after its end) is the kept count:
+   it must be exactly 132,300 frames, and `G` shows the tag's delay and
+   padding and the trim.
 2. **The last frame.** A file of k × 1152 samples with no ID3v1 tag, so
-   it ends right after its last frame. Its kept count must be exact.
-   Without `GuardedSource` (a `Gt`-style switch for the run only) it
-   should come out 1 frame short, which confirms section 4.3.
+   it ends right after its last frame. Its kept count must be exact; a
+   lost last frame (no guard bytes) shows as 1,152 short, which would
+   confirm section 4.3's reading.
 3. **A sine split across files.** A continuous 441 Hz sine at −12 dBFS,
    cut at frames 100,003, 177,780 and 301,236 (not frame-aligned) into
    four files, made in four sets:
@@ -1109,7 +1320,7 @@ writes `/music/zz gapless test/`:
    - MP3: within ±0.5 sample. Lossy edges add some noise, but a k-sample
      misalignment shows as k samples.
    - With `Gt0`, the MP3 joins show the encoder silence (about 2,100
-     frames); with `G0`, the gap of today.
+     frames); with `G0`, v0.5.0's gap.
 4. **The untagged gap.** The same sine set encoded with `lame -t` (no
    Xing/Info tag): it must play with the gap section 4.5 predicts, and no
    click.
@@ -1136,7 +1347,7 @@ writes `/music/zz gapless test/`:
      music's own (compare with the same files decoded on the PC by
      `ffmpeg`, which trims by the same rules [4]), and the click figure
      near 1.
-   - With `G0`: today's gap, which this measures for the first time:
+   - With `G0`: v0.5.0's gap, which this measures for the first time:
      tens of ms plus the 1.5 ms fades and the encoder silence.
 4. **Whole albums, start to finish.** For at least one MP3 album and one
    FLAC album, played through with `G1`: 0 underruns (`s`). The ring
@@ -1153,19 +1364,29 @@ path was taken:
   N's tail contiguous in the tap (0 inserted before J), then the new
   next. Nothing of the old next is in the tap.
 - `n` (next) and `p` (prev): a request. The epoch bumps and the outputs
-  crossfade, as today.
+  crossfade, as before.
 - `G0`: a cut, then a v0.5.0 end.
 - `Tt` (End of track) at 1 s before the end: the cut. The tap's last real
   frame is N's last, the player is paused at the next entry's 0:00
   (`[sleep]` lines), and no frame of N+1 has been read.
-- `Tt` well before the end: no decode-ahead at all (`G` shows no offer).
+- `Tt` well before the end: no decode-ahead at all (`G`'s word says nothing follows).
 - The timing race, on purpose: `Tt` and `qr` at about 20 ms before the
   join, repeated. Count Done, Crossed and Pending, and check that a
   Crossed always leaves the timer acting on the new track and the
   controller on the right entry.
 - A missing file as the next entry (renamed on the card): `[gapless]
-  can't decode ahead`, N plays out whole, then today's "Skipped ...".
+  can't decode ahead`, N plays out whole, then the usual "Skipped ...".
 - Pause in the last second, resume after 10 s: the join is gapless.
+- **The cut's latency:** `G` after each change shows the last cut's time
+  from its word and the largest; repeat the changes while the decoder is
+  mid-open (a FLAC next) for the worst case (section 5.1).
+- **The fence on the two cores:** `Gx` (20,000 tracks, then `Gx200000`),
+  silent or not (it has a ring of its own): `PASSED`, with hundreds of
+  cuts and some too late, errors 0, cut tracks heard 0.
+- **A FLAC with a big embedded picture** (1-3 MB) as the next track:
+  `[audio] FLAC: N KB of metadata` and the ring's level at the join
+  (`s`'s `buf=` just after the open): it must not run dry (the review's
+  amendment 18).
 
 ### 11.4 Cost and limits
 
@@ -1175,7 +1396,7 @@ path was taken:
   - a tone → a file;
   - a cut followed by a FLAC.
 
-  Check the decode stack free (today's margin, no drop), the internal
+  Check the decode stack free (v0.5.0's margin, no drop), the internal
   heap minimum (`[heap] playing`, no drop beyond the bytes in section 6),
   and the largest free block.
 - The hold's cost: `b<n>` on a LAME MP3 with `Gt1` and `Gt0`. The
@@ -1221,42 +1442,59 @@ Run with a queue of `tone:silence@48000`, then `tone:silence`, then
   out, because positions would then disagree with the dancer's taps and
   with everything else that reads `positionMs()`.
 - **The fence protocol is new concurrency in the hottest path.** The
-  stress test (section 10) and an `Rb`-style microbench of `read()` before
-  and after are the gates.
+  host's two-thread tests, the build's disassembly (`memw` between each
+  side's store and load) and the device's `Gx` are the gates; a
+  microbench of `read()` before and after is still to do (the consumer
+  read gained a few `memw`).
 - **Files without a LAME tag** keep about 50 ms of encoder silence at a
   join (section 4.5). iTunes' `iTunSMPB` could be added later; it is an
-  ID3 comment that the backend doesn't read today.
+  ID3 comment, and the backend reads no ID3 frames at all now.
 - **Rate-change joins** have a discontinuity of up to 0.5 ms (a fresh
   filter). Albums rarely change rate mid-album.
-- **The late-offer join** (taken in `Draining`, after the tail was
+- **The late-word join** (taken in `Draining`, after the tail was
   flushed) has the same 0.5 ms discontinuity at converting routes.
   Deferring `finish()` until the ring is nearly dry would remove it, at
   the cost of one more state. Not planned.
 - **A skip during a pending join re-decodes N+1 from its file.** It
   could instead jump the read index to B (the frames are there),
   crossfaded. That is an optimisation for later.
-- **A track shorter than about 30-100 ms** (the open time) can't be
-  joined gaplessly to its next one (the depth-1 wait). Such tracks are
-  rare, and a gap is all that happens.
+- **A track shorter than about 250 ms** can't be joined gaplessly to its
+  next one: the player names what follows a track only once it has heard
+  it begin, and the decoder can't wait for that word with less than
+  250 ms in the ring (section 3.2; the review's amendment 15 was rejected
+  for this reason). A loop pass that comes late (a library rebuild, a
+  screenshot) during a track shorter than the ring can cost that one join
+  the same way. Such tracks are rare, and v0.5.0's gap is all that
+  happens.
+- **A FLAC with a big embedded picture** is read through at its open
+  (libFLAC skips metadata it doesn't keep through the read callback). At
+  a join that must finish within the ~1.4 s of N left in the ring; on an
+  SPI card a multi-MB picture may not. Logged (section 3.2), measured in
+  section 11.3; if it bites, such a file could be joined after the ring
+  has refilled, or its picture block seeked over.
+- **`G0`'s seeks in a CBR Info file are one frame off**: the seek byte is
+  counted from the first audio frame (the Info frame not decoded), while
+  `G0` decodes the Info frame again. `G0` is for the A/B of ends, not of
+  seeks.
 
-## 13. Docs to update when it is built
+## 13. The other docs
 
-- **ARCHITECTURE.md, "Audio pipeline":**
-  - "a natural end drains the ring first" becomes the join;
-  - the `discardAll()` and converter-reset rule ("at every request")
-    gets "and never at a join";
-  - the start-part-of-the-way-in paragraph gets the trimmed timeline;
-  - the Tasks table's decode row gets the open at the join.
-- **ARCHITECTURE.md**, the other sections:
-  - "Library and queue" gets the offer and the advance;
-  - "Sleep timer" gets the `NextGate`;
-  - "USB visualizer" gets a sentence (no change in host mode).
-- **RESAMPLER.md, section 5:** "Resets" (same-rate joins don't reset; the
-  mark and rewind) and "Positions and durations" (the heard record).
+Updated with the build:
+
+- **ARCHITECTURE.md, "Audio pipeline":** the diagram (`GuardedSource`,
+  `TrimFeed`), the ID3 paragraph (the reader is gone), "a natural end
+  drains the ring first" became the join, the converter's reset "at every
+  request, never at a join", the trimmed timeline for starts part of the
+  way in, and the Tasks table's decode row.
+- **ARCHITECTURE.md**, the other sections: "Library and queue" (the word
+  and the advance), "Sleep timer" (the `NextGate`), "USB visualizer" (no
+  change in host mode).
+- **RESAMPLER.md, section 5:** resets (same-rate joins don't reset; the
+  mark and the rewind) and positions and durations (the heard record).
 - **ENERGY.md:** the refill at natural ends is gone; the hold's cost.
 - **Header comments:** `AudioTap.h` ("the frame in its epoch"),
   `PcmRing.h` (`cutBack()`, the fence), `IAudioBackend.h` (`setNext()`,
-  `takeAdvance()`).
+  `takeAdvance()`), `Core2AudioBackend.h`, `RingOutput.h`.
 
 ## 14. Sources
 

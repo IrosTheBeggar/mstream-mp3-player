@@ -47,4 +47,30 @@ public:
     bool needsCpu = false;
   };
   virtual RateRefusal rateRefusal() const { return {}; }
+
+  // ---- gapless playback (docs/GAPLESS.md) ----
+  // The player's word on what follows a track: the track with token
+  // `after` (0: the one the last play() started; a joined track has the
+  // token its Next had) is followed by `path` (`token`: unique, never 0;
+  // `hintMs` its length as known elsewhere), or by nothing (`token` 0: it
+  // ends as before gapless playback). A backend that can may decode it
+  // ahead and join it on without a gap. A newer word replaces this one:
+  // one that names another track, or nothing, takes what was decoded ahead
+  // back out, unless it has already been heard (then takeAdvance() still
+  // reports it, and the player sorts it out). Backends without gapless
+  // playback ignore it.
+  struct Next {
+    uint32_t after = 0;
+    uint32_t token = 0;
+    std::string path;
+    uint32_t hintMs = 0;
+  };
+  virtual void setNext(const Next& next) { (void)next; }
+  // A joined track is being heard (the outputs have read past its first
+  // frame): its token, once per join. positionMs(), durationMs() and the
+  // rest are its own from the same call on. False: none.
+  virtual bool takeAdvance(uint32_t* token) {
+    (void)token;
+    return false;
+  }
 };

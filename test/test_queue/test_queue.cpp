@@ -294,6 +294,29 @@ void test_step_and_set_current() {
   TEST_ASSERT_EQUAL_UINT32(c, q.contentVersion());  // moving isn't an edit
 }
 
+// peek(): where step() would go, without going (the player's word on what
+// follows: docs/GAPLESS.md section 3.1).
+void test_peek_is_step_without_the_step() {
+  QueueModel q;
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, q.peek(+1, true));  // empty
+  fill(q, 3, 0);
+  const uint32_t v = q.positionVersion();
+  TEST_ASSERT_EQUAL_UINT32(1, q.peek(+1, false));
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, q.peek(-1, false));
+  TEST_ASSERT_EQUAL_UINT32(2, q.peek(-1, true));
+  q.setCurrent(2);
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, q.peek(+1, false));  // the end, no repeat
+  TEST_ASSERT_EQUAL_UINT32(0, q.peek(+1, true));
+  TEST_ASSERT_EQUAL_UINT32(1, q.peek(-1, false));
+  TEST_ASSERT_EQUAL_INT(2, q.current());
+  // A queue of one with repeat: itself.
+  QueueModel one;
+  fill(one, 1, 0);
+  TEST_ASSERT_EQUAL_UINT32(0, one.peek(+1, true));
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, one.peek(+1, false));
+  (void)v;
+}
+
 void test_memory_from_the_hooks_and_out_of_memory() {
   {
     QueueModel q(Heap::alloc, Heap::release);
@@ -1110,6 +1133,7 @@ int main(int, char**) {
   RUN_TEST(test_clear_and_undo);
   RUN_TEST(test_undo_keeps_what_plays_current);
   RUN_TEST(test_step_and_set_current);
+  RUN_TEST(test_peek_is_step_without_the_step);
   RUN_TEST(test_memory_from_the_hooks_and_out_of_memory);
   RUN_TEST(test_an_edit_without_memory_for_its_snapshot_is_not_undoable);
   RUN_TEST(test_random_edits_match_a_simple_model);

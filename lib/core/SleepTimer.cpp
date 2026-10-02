@@ -87,14 +87,16 @@ void SleepTimer::cancel() {
   held_ = kUnity;
 }
 
-bool SleepTimer::atBoundaryTrack(const In& in) const {
-  switch (choice_) {
+bool SleepTimer::endsAt(Choice choice, bool lastOfAlbum, bool lastOfQueue) {
+  switch (choice) {
     case Choice::EndOfTrack: return true;
-    case Choice::EndOfAlbum: return in.lastOfAlbum;
-    case Choice::EndOfQueue: return in.lastOfQueue;
+    case Choice::EndOfAlbum: return lastOfAlbum;
+    case Choice::EndOfQueue: return lastOfQueue;
     default: return false;
   }
 }
+
+bool SleepTimer::atBoundaryTrack(const In& in) const { return endsAt(choice_, in.lastOfAlbum, in.lastOfQueue); }
 
 void SleepTimer::beginEnding(bool faded) {
   phase_ = Phase::Ending;
@@ -342,12 +344,16 @@ bool SleepTimer::albumEndsBetween(const LibraryIndex* index, uint32_t a, uint32_
 
 bool EntryStart::update(uint32_t key, uint32_t startSeq, uint32_t positionMs) {
   if (!seen_ || key != key_) {
+    // The count as it was before this pass: a start counted in the same
+    // pass as the change (a gapless advance: the entry and the count move
+    // together, maybe long after the join was heard) is this entry's.
+    seq_ = seen_ ? lastSeq_ : startSeq;
     seen_ = true;
     key_ = key;
-    seq_ = startSeq;
     pos_ = positionMs;
     started_ = positionMs < kFreshMs;  // this entry's start already, or the last one barely begun
   }
+  lastSeq_ = startSeq;
   if (!started_ && (startSeq != seq_ || positionMs < pos_)) started_ = true;
   return started_;
 }

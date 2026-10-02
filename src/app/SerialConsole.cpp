@@ -185,6 +185,10 @@ void SerialConsole::key(char c) {
         Serial.printf("> rate converter \"%s\"\n", arg_.c_str());
         if (actions_.rate) actions_.rate(arg_.c_str());
         break;
+      case Pending::Gapless:
+        Serial.printf("> gapless \"%s\"\n", arg_.c_str());
+        if (actions_.gapless) actions_.gapless(arg_.c_str());
+        break;
       case Pending::None:
         break;
     }
@@ -226,6 +230,7 @@ void SerialConsole::key(char c) {
     case 'I': pending_ = Pending::Idle; arg_ = ""; break;
     case 'B': pending_ = Pending::BluetoothTest; arg_ = ""; break;
     case 'R': pending_ = Pending::Rate; arg_ = ""; break;
+    case 'G': pending_ = Pending::Gapless; arg_ = ""; break;
     default: break;  // newlines etc.
   }
   if (pending_ != Pending::None) pendingKey_ = c;

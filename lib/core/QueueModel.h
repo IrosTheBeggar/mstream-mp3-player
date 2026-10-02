@@ -90,6 +90,9 @@ public:
   // By `delta`; past either end it wraps when `wrap`, otherwise it stays
   // and returns false.
   bool step(int delta, bool wrap);
+  // Where step(delta, wrap) would go, without going: a position, or kNone
+  // (an empty queue, or past an end without `wrap`).
+  uint32_t peek(int delta, bool wrap) const;
 
   // ---- undo (one level) ----
   // The last edit, if it can be undone (None after undo(), a restore, or a

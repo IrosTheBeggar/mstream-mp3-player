@@ -3195,3 +3195,29 @@ The two questions under "For the user to decide" (Decisions, above):
 - **libmad's precision (P4): declined by the user.** "Keep mp3 decoding
   as is." libmad stays `FPM_64BIT` (decoder SNR ~81 dB; POC-RESULTS.md).
   No "battery saver" build and no `b<n>` A/B of `FPM_DEFAULT`.
+
+## 6. Gapless playback (0.6.0): its share
+
+Gapless playback ([GAPLESS.md](GAPLESS.md)) changes when the decoder
+works, not how much, except for these (estimates; the device run measures
+them, GAPLESS.md section 11.4):
+
+- **No refill from empty at a natural end.** The next track opens while
+  the ring is still nearly full (the decoder would only have waited for
+  room), so the ~0.7 s of flat-out decoding and the UI's stall that every
+  track start cost (`[audio] refill`, section 4's batch 3) happen once, at
+  an album's start, and at skips, not at every track. A track's file is
+  read once as before; one probe more of 4 KB per MP3 join (its first
+  frame), and the metadata block headers for a FLAC.
+- **The trim's hold.** For an MP3 with a LAME tag, every frame passes a
+  16 KB FIFO in PSRAM: two PSRAM accesses per frame, estimated under 0.5 %
+  of a core at 240 MHz (the `b<n>` A/B with `Gt1`/`Gt0`). FLAC, the
+  built-in tracks and untagged MP3s pay one branch per frame after their
+  start.
+- **The consumer's read** gained a reading mark and a fence check: a few
+  `memw` per read (128 frames per Bluetooth callback, 1,024 per speaker
+  buffer), well below the noise.
+- **The tables' copy** (7.6 KB of internal RAM) stays through a chain of
+  joins from a converted track to 44.1 kHz ones, freed at the next
+  request; nothing more is allocated per join (the two 2 KB feed marks and
+  the hold are allocated once at boot, in PSRAM).

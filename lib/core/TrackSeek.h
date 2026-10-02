@@ -59,6 +59,12 @@ const char* mp3SeekName(Mp3Seek how);
 // elsewhere (the resume point's, as the backend had it), 0: none; only
 // read for a file without a header.
 //
+// With LAME's extension (LameTag) both are on the trimmed timeline that
+// gapless playback plays (docs/GAPLESS.md section 4.6): the length is what
+// the encoder was given, and a time's byte is the encoder delay and
+// libmad's 529 samples later in the stream (a CBR Info file's counted from
+// the first audio frame: the Info frame isn't decoded).
+//
 // The length: the Xing/VBRI header's; else the audio bytes at the first
 // frame's bitrate (exact for a CBR file), or the hint when that is VBR
 // (see above). 0: no frame found, or a VBR file without a hint.

@@ -5,6 +5,7 @@
 
 #include <cstring>
 
+#include "LameTag.h"
 #include "TrackProgress.h"
 
 namespace trackseek {
@@ -29,7 +30,9 @@ struct Header {
   const uint8_t* vbriToc = nullptr;  // vbriEntries of vbriEntrySize bytes, in buf
   uint32_t vbriEntries = 0, vbriScale = 0, vbriEntrySize = 0, vbriFramesPerEntry = 0;
   bool info = false;                 // "Info": LAME's header for a CBR file
+  lametag::Info lame;                // its LAME extension (lame.lame: trusted)
 
+  // The decoded stream's length (the header frame not counted).
   uint32_t durationMs() const {
     return static_cast<uint32_t>(static_cast<uint64_t>(frames) * static_cast<uint64_t>(f.samples) * 1000 /
                                  static_cast<uint64_t>(f.rate));
@@ -45,6 +48,7 @@ bool findHeader(const uint8_t* buf, size_t n, Header* h) {
     if (next + 4 <= n && !progress::parseMp3Frame(buf + next, &g)) continue;
     h->f = f;
     h->at = i;
+    lametag::parse(buf, n, &h->lame);  // (the same first frame)
     const size_t xing = i + 4 + static_cast<size_t>(f.sideInfo);
     const size_t vbri = i + 4 + 32;
     if (xing + 8 <= n && (std::memcmp(buf + xing, "Xing", 4) == 0 || std::memcmp(buf + xing, "Info", 4) == 0)) {
@@ -158,6 +162,7 @@ const char* mp3SeekName(Mp3Seek how) {
 uint32_t mp3LengthMs(const uint8_t* buf, size_t n, uint32_t audioStart, uint32_t fileSize, uint32_t hintMs) {
   Header h;
   if (!findHeader(buf, n, &h)) return 0;
+  if (h.lame.lame) return lametag::lengthMs(h.lame);  // the trimmed length
   if (h.frames) return h.durationMs();
   // No header: the audio bytes at the first frame's bitrate (bits per ms),
   // or the hint.
@@ -175,11 +180,18 @@ Mp3Seek mp3SeekByte(const uint8_t* buf, size_t n, uint32_t audioStart, uint32_t 
   const uint32_t dur = h.frames ? h.durationMs() : 0;
   uint64_t at = 0;  // from the first frame
   Mp3Seek how;
+  // With LAME's extension the time asked for is on the trimmed timeline
+  // (docs/GAPLESS.md section 4.6): in the decoded stream it is the encoder
+  // delay and libmad's 529 samples later.
+  targetMs = lametag::untrimmedMs(h.lame, targetMs);
   if (h.info && !bitratesDiffer(buf, n, h)) {
     // LAME's CBR header: its TOC's 256ths of the bytes are up to ~0.4 s
-    // off in a 4 min file; the bitrate is exact. From the Info frame's
-    // start: it decodes to a frame of silence, counted in the time too.
+    // off in a 4 min file; the bitrate is exact. With LAME's extension the
+    // Info frame isn't decoded (gapless playback hands the decoder the
+    // frame after it): from the first audio frame. Without, from the Info
+    // frame's start: it decodes to a frame of silence, counted in the time.
     at = static_cast<uint64_t>(targetMs) * static_cast<uint64_t>(h.f.kbps) / 8;
+    if (h.lame.lame) at += h.lame.headerLength;
     how = Mp3Seek::CbrInfo;
   } else if (h.xingToc && dur > 0 && total > 0) {
     // Point i is where i% of the time starts, in 256ths of the bytes;
