@@ -163,7 +163,8 @@ The rules that keep it deadlock- and glitch-free:
   The decode task re-checks requests and yields between passes.
 - **A track can start part of the way in** (`play()`'s `StartAt`: the
   resume point, below under Library and queue, or a seek: the console's
-  `qs`; [SEEK.md](SEEK.md) is the design and its measurements;
+  `qs`, and Now Playing's seek bar once it is built ([SEEK-BAR.md](SEEK-BAR.md));
+  [SEEK.md](SEEK.md) is the design and its measurements;
   `lib/core/TrackSeek`, `SeekIndex`, `ResumeAnchor`, host-tested in
   test_track_seek and test_seek_index). The tail rule first: a start in
   the last 5 s, at the end or past it (a file that got shorter) starts at
@@ -2086,7 +2087,54 @@ Queue, Dance and Output (with its Pair and About pages).
   track's, one Back apart, the playing file tinted. The volume
   button opens the volume sheet. Only what changed is redrawn: the cover
   when the album changes or its thumbnail arrives, the text when the track
-  does, the times once a second, the transport on a change.
+  does, the times once a second, the transport on a change, and the bar on
+  the 30 fps frame deadlines while a finger scrubs it.
+
+  **The progress line is a seek bar.** It is designed in
+  [SEEK-BAR.md](SEEK-BAR.md) and not built yet.
+  - **Where it takes touches:** the full width, from y 162 down to the
+    transport (y 191).
+    - The 8 rows above the band (y 162-169) are the album band's last
+      ones. The line is drawn at the band's top (y 172-175), so a tap
+      aimed at it lands on both sides of y 170.
+    - The album's hit area is then y 130-161. Its drawn band and its
+      highlight stay y 130-169.
+    - While play waits, the bar starts at y 170, so Play on speaker and
+      Cancel keep their whole area.
+  - **A tap** goes to the second under the finger.
+  - **A sideways drag** scrubs, with a tick as it starts.
+    - From within 16 px of the knob, the knob moves with the finger
+      without a jump. From anywhere else, it comes to the finger.
+    - The music plays on meanwhile, and the drag seeks **once, at the
+      lift**.
+  - **Where it can go:** whole seconds, from 0:00 to the length less 6 s
+    (the tail rule's 5 s and a second). The panel's clamped readings at
+    either edge reach both ends.
+  - **While a finger scrubs:**
+    - the line thickens;
+    - a marker shows where it plays;
+    - a large readout ("2:31 +1:21") takes the row above the line
+      (y 137-169), on the side away from the finger.
+  - **Nothing is seeked when:**
+    - the knob ends within 4 px of the marker. It snaps there with a
+      tick, and the readout says "no change". A tap there does nothing
+      too;
+    - the finger slid off the bar, above y 130 or onto the strip. The
+      readout says "Release to cancel", with a tick;
+    - the track changed under the finger.
+  - **What a seek does** (`PlaybackController::seek()`, SEEK.md 6.7):
+    - playing, it starts there at once;
+    - paused or waiting, it stays so, and the next play and the next
+      boot's resume point start there.
+    - Until the backend has taken a start up, Now Playing (and the tab
+      bar) show where it was asked to start, with the length the player
+      was told. So the old second never comes back, and no dotted line
+      flashes.
+  - **The knob:** a resting knob (r 3) shows that the line can be moved.
+    There is none, and the line takes no touch, when:
+    - the length isn't known (the dotted line);
+    - the track failed;
+    - the track is under 10 s.
 - **The Library** (spec §6.2, mockups 07-15, with the grafts): the root's
   header is the segmented control **Artists | Albums | Folders** (the root
   PageRef's id is the segment; each keeps its own scroll; the Library opens
