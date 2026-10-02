@@ -61,7 +61,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
 ```
  source:  /music on LittleFS (SD card later: same fs::FS code)  |  built-in tone: tracks
             └ AudioFileSourceFS (+GuardedSource for MP3)         |    └ ToneGen, ClickGen (at their own rate)
-                └ AudioGeneratorMP3 (libmad) | AudioGeneratorFLAC (libFLAC)     (any rate: 8-96 kHz)
+                └ PinnedMp3 (libmad, its state pinned) | AudioGeneratorFLAC (libFLAC)  (any rate: 8-96 kHz)
  decode task (core 1, prio 2, 16 KB internal stack; GaplessEngine at a file's end)
    ─► RingOutput (TrimFeed: gapless trim; RingFeed: RateConverter to 44.1 kHz, a 256-frame stage)
    ─► PcmRing (PSRAM, 64k frames ≈ 1.5 s, always 44.1 kHz)
@@ -82,6 +82,21 @@ aren't needed (the library has them). Those tracks start in 23-30 ms.
 `GuardedSource` adds 8 zero bytes after an MP3's end, so libmad decodes
 its last frame (it needs `MAD_BUFFER_GUARD` bytes after a frame;
 [GAPLESS.md](GAPLESS.md) section 4.3).
+
+libmad's frame and synthesis state (25 KB) is one PSRAM block, allocated
+first thing in `Core2AudioBackend::begin()` while the lower 2 MB of the
+PSRAM window are free, and lent to one MP3 generator at a time
+(`PinnedMp3`, src/audio; `DecoderArena`, lib/core, host-tested in
+test_decoder_arena; the generator before is destroyed before the next is
+made, so a gapless join or a seek reuses it the same way). ESP8266Audio
+used to malloc it per track: above 0x3FA00000 the same file decoded at
+1.7-3.6x realtime instead of 4.7-5.0x, depending on the address and the
+image ([RESAMPLER.md](RESAMPLER.md) section 10d). Its input buffer and
+stream state (4.1 KB) stay per-track allocations in internal RAM, as
+before. The boot log says where the block is (`[audio] MP3 decoder
+state: 25056 B pinned at 0x3f808e80, PSRAM, its lower 2 MB`), and so
+does every MP3 bench (`b<n>`); a track that can't have it (none at boot)
+decodes on ESP8266Audio's own malloc, logged.
 
 The rules that keep it deadlock- and glitch-free:
 

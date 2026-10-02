@@ -990,7 +990,10 @@ applies to the track that now plays.
 - **Decoders.** There is still one at a time. N's generator is
   `stop()`ped (libFLAC's ~100 KB PSRAM and 2.5 KB internal freed, as
   `closeDecoder()` always did) at N's commit, before N+1's file is even
-  probed. The peak is the old per-track peak.
+  probed. The peak is the old per-track peak. An MP3's libmad state
+  (25 KB) is one PSRAM block from boot, lent to one generator at a
+  time: N's generator is destroyed before N+1's is made, which gives it
+  back (RESAMPLER.md section 10d).
 - **Internal RAM** (estimates; `[heap] playing` measures it):
   - `GaplessJoin` in `Core2AudioBackend` (a global, .bss): about 100 B
     plus the word's path string (heap, internal, up to
@@ -1504,6 +1507,10 @@ player stopped and the probe idle): the same libmad code, its hot state
 (frame, synth, overlap: about 23 KB, PSRAM) at other addresses. So a
 bench or a `load=` figure is only comparable on the same image; the
 probe runs' `load=` (44-49 %) say nothing about gapless. Section 12.
+(Found and fixed later the same day: state above 0x3FA00000, in the
+upper 2 MB of the PSRAM window, decodes at 1.7-3.6x; libmad's state is
+now one block allocated at boot below that line: RESAMPLER.md section
+10d.)
 
 **Real album joins.** All six albums on the card, each join reached by a
 start point 10 s before the track's end (`qs`, so every N was a seek
@@ -1626,13 +1633,16 @@ next file (it needs a file renamed on the card); the hold's cost by
   (+1,106) frames, and the trimmed continuous segues of Discovery and
   OutRun join with no hole and no step. Section 11.1's burst files would
   pin it to the sample; until then `Gt0` stays the fallback.
-- **MP3 decode speed swings with the memory layout** (section 11.7: 2.8x
+- **MP3 decode speed swung with the memory layout** (section 11.7: 2.8x
   to 4.9x realtime for the same file on images that differ only in
-  unrelated code and PSRAM allocations). libmad's hot state lives in
-  PSRAM and goes through the same cache as the code. Not gapless's doing,
-  but it makes benches fragile; pinning that state (one PSRAM block
-  allocated at boot, or internal RAM if ~23 KB can be spared) would make
-  it deterministic. For the user to decide.
+  unrelated code and PSRAM allocations). Fixed: the per-track state had
+  landed above 0x3FA00000 (1.7-3.6x there, 4.7-5.0x below); it is now
+  one block allocated at boot in the lower 2 MB, shared by every MP3
+  track one at a time, decode-ahead included (RESAMPLER.md section 10d).
+  Left: about ±3 % from the code layout (pinning ESP8266Audio's code and
+  tables at the front of flash could take that too), and FLAC, whose
+  state libFLAC allocates itself, shows the same effect, smaller
+  (4.3-4.5x against 4.7-4.9x with 1.3 MB of PSRAM held).
 - **The last-frame fix (`GuardedSource`) changes every MP3's end, also
   with `G0`.** It adds up to 26 ms of real audio that was lost before.
   `G0` turns it off too, to keep the A/B honest.

@@ -554,6 +554,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       the ring-full rule (RingOutput wraps it)
   TableCopy           The converter's tables in internal RAM while a track
                       at another rate plays (freed at a 44.1 kHz one)
+  DecoderArena        One block for libmad's state, lent to one MP3 decoder
+                      at a time (pinned in the PSRAM's fast lower 2 MB)
   TransportSync       Generation-tagged decode progress (no stale "track ended")
   ToneGen, ClickGen   Built-in test tones; click tracks with a known beat
   ToneTrack           What a built-in track's path asks for ("tone:1000@48000")

@@ -12,6 +12,7 @@
 #include <string>
 
 #include "ClickGen.h"
+#include "DecoderArena.h"
 #include "GaplessEngine.h"
 #include "GaplessJoin.h"
 #include "LameTag.h"
@@ -360,6 +361,12 @@ private:
   uint32_t mp3StartByte(uint8_t* probe, uint32_t got, uint32_t audioStart, uint32_t startMs, uint32_t hintMs,
                         uint32_t known, uint32_t* landedMs);
   void closeDecoder();
+  // A new MP3 generator for the next track, the one before destroyed first
+  // (it gives the state block back): on the pinned block, or, without it,
+  // ESP8266Audio's own per-track malloc (logged).
+  AudioGeneratorMP3* makeMp3();
+  // Where libmad's state is, for the logs: "at 0x3f8..., PSRAM, its lower 2 MB".
+  void describeMp3State(char* buf, size_t size) const;
   Produced produceTone();
   Produced produceDecoded();
   // An early end of the decoding track (a rate refused mid-stream): why,
@@ -403,7 +410,13 @@ private:
   bool kernelFailed_ = false;  // the fast kernel failed a self-test: the C kernel until a restart
   std::unique_ptr<AudioFileSourceFS> file_;
   std::unique_ptr<GuardedSource> guard_;     // file_ with 8 zero bytes after it (MP3)
-  std::unique_ptr<AudioGeneratorMP3> mp3_;   // created fresh for each track
+  std::unique_ptr<AudioGeneratorMP3> mp3_;   // created fresh for each track (makeMp3())
+  // libmad's frame and synth state (25 KB): one PSRAM block from boot, in
+  // the window's fast lower 2 MB, lent to one MP3 generator at a time
+  // (src/audio/PinnedMp3.h; docs/RESAMPLER.md section 10d).
+  DecoderArena mp3Arena_;
+  bool mp3Pinned_ = false;    // mp3_ decodes on it
+  uint32_t mp3Unpinned_ = 0;  // MP3 tracks decoded without it (no block, or lent out)
   std::unique_ptr<SeekableFlac> flac_;
   AudioGenerator* decoder_ = nullptr;        // the one decoding now, or null
   const char* codec_ = "";

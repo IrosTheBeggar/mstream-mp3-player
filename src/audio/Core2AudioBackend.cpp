@@ -26,6 +26,7 @@
 #include "TrackProgress.h"
 #include "TrackSeek.h"
 #include "audio/GuardedSource.h"
+#include "audio/PinnedMp3.h"
 #include "audio/RingOutput.h"
 
 namespace {
@@ -167,10 +168,18 @@ Core2AudioBackend::TableStatus Core2AudioBackend::tableStatus() {
   return {tablesInRam.load(std::memory_order_relaxed), tableNoRoom.load(std::memory_order_relaxed)};
 }
 
-Core2AudioBackend::Core2AudioBackend() = default;
+Core2AudioBackend::Core2AudioBackend() : mp3Arena_(PinnedMp3::kArenaParts, 2) {}
 Core2AudioBackend::~Core2AudioBackend() = default;
 
 bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
+  // libmad's state first, while the PSRAM window's fast lower 2 MB is free
+  // (docs/RESAMPLER.md section 10d). Without it MP3s decode as before.
+  mp3Arena_.attach(heap_caps_aligned_alloc(DecoderArena::kAlign, mp3Arena_.bytes(), MALLOC_CAP_SPIRAM));
+  {
+    char where[96];
+    describeMp3State(where, sizeof(where));
+    Serial.printf("[audio] MP3 decoder state: %u B %s\n", (unsigned)mp3Arena_.bytes(), where);
+  }
   auto* ringBuffer = static_cast<int16_t*>(
       heap_caps_malloc(kRingFrames * 2 * sizeof(int16_t), MALLOC_CAP_SPIRAM));
   chunk_ = static_cast<int16_t*>(
@@ -965,7 +974,7 @@ bool Core2AudioBackend::beginPrepared(const Prepared& p, AudioOutput* out, bool 
       guard_->attach(file_.get());
       source = guard_.get();
     }
-    mp3_.reset(new AudioGeneratorMP3());
+    mp3_.reset(makeMp3());
     decoder = mp3_.get();
     if (trimmed && gapless_.load(std::memory_order_relaxed)) {
       if (p.lame.lame && gaplessTrim_.load(std::memory_order_relaxed)) {
@@ -1057,6 +1066,29 @@ uint32_t Core2AudioBackend::mp3StartByte(uint8_t* probe, uint32_t got, uint32_t 
   Serial.printf("[audio] MP3: starting %s in, of %s (%s): byte %lu, a frame +%ld\n", asked, of,
                 trackseek::mp3SeekName(how), (unsigned long)byte, (long)frame);
   return from;
+}
+
+AudioGeneratorMP3* Core2AudioBackend::makeMp3() {
+  mp3_.reset();  // the track before's generator gives the block back first
+  mp3Pinned_ = true;
+  if (AudioGeneratorMP3* g = PinnedMp3::make(mp3Arena_)) return g;
+  mp3Pinned_ = false;
+  ++mp3Unpinned_;
+  Serial.printf("[audio] MP3: libmad's state malloc'd for this track (%s; %lu so far): its speed depends on where "
+                "it lands\n",
+                !mp3Arena_.attached() ? "no pinned block" : mp3Arena_.inUse() ? "the pinned block is in use" : "no RAM",
+                (unsigned long)mp3Unpinned_);
+  return new AudioGeneratorMP3();
+}
+
+void Core2AudioBackend::describeMp3State(char* buf, size_t size) const {
+  if (!mp3Arena_.attached()) {
+    snprintf(buf, size, "not pinned (no PSRAM block): malloc'd per track");
+    return;
+  }
+  const void* b = mp3Arena_.block();
+  snprintf(buf, size, "pinned at %p, %s", b,
+           DecoderArena::whereName(DecoderArena::where(b, mp3Arena_.bytes())));
 }
 
 void Core2AudioBackend::closeDecoder() {
@@ -1287,6 +1319,13 @@ void Core2AudioBackend::runBench(const std::string& path) {
                 path.c_str(), audio, counter.rate, seconds, seconds > 0 ? audio / seconds : 0.0,
                 audio > 0 ? 100.0 * seconds / audio : 0.0,
                 (unsigned long)uxTaskGetStackHighWaterMark(nullptr));
+  if (std::strcmp(codec_, "MP3") == 0) {
+    // Its speed depends on where libmad's state is (RESAMPLER.md section 10d).
+    char where[96];
+    describeMp3State(where, sizeof(where));
+    if (!mp3Pinned_) snprintf(where, sizeof(where), "malloc'd for this track, not pinned");
+    Serial.printf("[bench] libmad's state: %s\n", where);
+  }
   if (counter.rate <= 0 || counter.rate == static_cast<int>(kRingRate) || audio <= 0) return;
 
   // Another rate: the same stretch again, decoded and converted through
