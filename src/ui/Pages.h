@@ -8,6 +8,7 @@
 #include "LibraryIndex.h"
 #include "OutputModel.h"
 #include "PlaybackController.h"
+#include "SeekBar.h"
 #include "UiText.h"
 #include "ui/ListView.h"
 #include "ui/UiHost.h"
@@ -47,12 +48,29 @@ struct Header {
 //            Bold 16 on up to 3
 //   90-129   the artist ›   } 40 px bands (the review: a tap meant for one
 //   130-169  the album ›    } never opens the other), x 112 to the edge
+//                             (the album's touch: 130-161)
+//   137-169  the seek bar's readout while a finger scrubs, the full width
+//   162-191  the seek bar's touch, the full width (170 while play waits)
 //   170-191  the progress line, elapsed / "4 of 16 · SPYDRONE" / length
 //            (where it plays, when it fits: mockup 01's output line; the
 //            headphones not connected, "SPYDRONE (not connected)" even
 //            when the rest doesn't fit, so a play that waits for them
 //            is no surprise)
 //   192-239  [volume] [prev] [play/pause] [next] [...]   64 px zones
+//
+// The progress line is a seek bar (docs/SEEK-BAR.md; lib/core/SeekBar): a
+// knob at where it plays. A tap goes to the second under the finger (not a
+// tap on the knob); a sideways drag scrubs (from the knob without a jump,
+// from anywhere else the knob comes to the finger): the line thickens, a
+// marker shows where it plays, the readout ("2:31 +1:21") takes the row
+// above on the side away from the knob, and the music plays on until the
+// lift, which seeks once (PlaybackController::seek()). Lifting with the
+// knob back on the marker (it snaps there with a tick), or slid off the
+// bar (above y 130, or onto the strip: "Release to cancel"), seeks
+// nothing, and so does a touch a sheet or a dialog takes. Seeks are whole
+// seconds, from 0:00 to the length less 6 s (the edge readings reach
+// both). Inert (no knob) while the length isn't known, the track failed,
+// or it is under 10 s.
 //
 // While play waits for the headphones (PlayState::Waiting, PlayGate): the
 // play button is a spinner (a tap, or B, cancels the wait: paused), and the
@@ -66,7 +84,8 @@ struct Header {
 // "fading"; seconds in the last minute) after "4 of 16 · SPYDRONE", or in
 // its place when both don't fit. Only what changed is redrawn: the
 // cover when the album changes or its thumbnail arrives, the text when the
-// track does, the times once a second, the transport on a state change.
+// track does, the times once a second, the transport on a state change,
+// and the seek bar's frames on the 30 fps deadlines while a finger scrubs.
 // Nothing queued: "Nothing playing" with Open Library and Shuffle all (or,
 // with no card and no music, "No microSD card" and Try again).
 class NowPlayingPage : public Page {
@@ -75,16 +94,24 @@ public:
   const char* name() const override { return "Now Playing"; }
   bool hasHeader() const override { return false; }
   void enter(NavModel::PageRef& ref) override;
+  void leave() override;
   void repaint() override;
   bool update(uint32_t nowMs, bool frameDue, bool wholeRows) override;
+  // A finger scrubs the seek bar: the frame cadence (and the motion log).
+  bool animating() const override { return bar_.scrubbing(); }
   void onEvent(const InputEvent& e) override;
   void onSheet(int choice) override;
   void thumbReady(uint32_t album) override;
   void describe(char* buf, size_t size) const override;
 
 private:
-  // (The transport's zones last, from Volume: `Volume + z`.)
-  enum Zone : int8_t { None = -1, Cover, Artist, Album, WaitSpeaker, WaitCancel, Volume, Prev, PlayPause, Next, More };
+  // (The transport's zones last, from Volume: `Volume + z`. Bar: the seek
+  // bar, not "Seek", which PlaybackController has.)
+  enum Zone : int8_t {
+    None = -1, Cover, Artist, Album, WaitSpeaker, WaitCancel, Bar, Volume, Prev, PlayPause, Next, More
+  };
+  // How the seek bar is drawn (docs/SEEK-BAR.md section 4.1).
+  enum class BarLook : uint8_t { Inert, Rest, Pressed, Scrubbing, Off };
   enum class Go : uint8_t { Artist, Album, Folders };
   Zone zoneAt(const InputEvent& e) const;
   // The playing track's album in the library index (kNone: none, or a
@@ -96,7 +123,21 @@ private:
   // The artist and album bands, or (waiting) the waiting panel in their place.
   void drawMiddle();
   void drawWaiting();
+  // The progress band, in the seek bar's look (the knob drawn last: the
+  // text's background would cut it), and its text row (not while a finger
+  // scrubs: the readout above says it all).
   void drawProgress();
+  void drawProgressText(M5Canvas& c, bool paused);
+  // The seek bar: seekable now (a track that hasn't failed, 10 s or more);
+  // its look; the readout row above the line (and the album band's top
+  // rows cleared, the first time); the end of a scrub (the middle, the
+  // left column under the cover; the band follows); a touch's seek, its
+  // tick and its log line.
+  bool seekable() const;
+  BarLook barLook() const;
+  void drawReadout();
+  void endScrub();
+  void seekTo(const SeekBar::Out& o, uint32_t nowMs);
   void drawTransport();
   // The play button (a spinner while waiting) into `c`, centred at (cx, cy).
   void drawPlayButton(M5Canvas& c, int cx, int cy, bool down);
@@ -132,7 +173,17 @@ private:
     bool waiting = false;     // the waiting panel is what's drawn
     uint32_t waitSig = 0;     // waitSig()
     uint32_t sleep = 0;       // the sleep timer's text on the progress line (a hash)
+    // The seek bar: its look (BarLook; 0xFF none), the knob's and the
+    // marker's screen x (-1: none), what the readout shows (its fields, not
+    // a hash: a readout that moved must never pass for the one drawn), and
+    // whether the readout row is up (the scrub's look).
+    uint8_t bar = 0xFF;
+    int16_t knobX = -1;
+    int16_t markerX = -1;
+    SeekBar::Readout readout;
+    bool scrubUp = false;
   } drawn_;
+  SeekBar bar_;
   Zone pressed_ = None;
   uint8_t spin_ = 0;          // the waiting spinner's step (8 a turn)
   uint32_t nextSpinMs_ = 0;

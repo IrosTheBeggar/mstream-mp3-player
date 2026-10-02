@@ -462,16 +462,15 @@ struct MainUiHost : ui::UiHost {
     s.upNext = queue.upNext();
     s.contentVersion = queue.contentVersion();
     s.positionVersion = queue.positionVersion();
-    s.positionMs = s.current >= 0 ? audio.positionMs() : 0;
-    s.durationMs = s.current >= 0 ? audio.durationMs() : 0;
-    // A start point waiting (the resume point after a boot, or qs): Now
-    // Playing shows that second, and the length as it was then, until the
-    // play that starts there.
-    uint32_t startMs = 0, startDurationMs = 0;
-    if (s.current >= 0 && player.startPoint(&startMs, &startDurationMs)) {
-      s.positionMs = startMs;
-      s.durationMs = startDurationMs;
-    }
+    // Where it is and how long (PlaybackController::shownTime()): a start
+    // point's second and length until the play that starts there (the
+    // resume point after a boot, qs, a paused seek); a start the backend
+    // hasn't taken up yet, where it was asked to start with the length the
+    // player was told (never the backend's, which may still be the track
+    // before's: Now Playing's seek bar, docs/SEEK-BAR.md, would seek the
+    // new entry by it); else the backend's, with the told length while it
+    // knows none.
+    player.shownTime(&s.positionMs, &s.durationMs);
     BtSink& bt = audio.bluetooth();
     s.onBluetooth = audio.output() == Output::Bluetooth;
     s.btConnected = bt.connected();

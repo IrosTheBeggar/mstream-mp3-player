@@ -104,6 +104,24 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // anchor (docs/SEEK.md section 5): the bytes that start the track on the
 // very sample it paused at. The start point owns its anchor: both go
 // together, and a start point set without one (qs) has none.
+//
+// A seek (Now Playing's seek bar, docs/SEEK-BAR.md: seek()) is a start
+// point without an anchor, by the same rules: playing, it starts there at
+// once (the ring cut, faded in, as a skip); paused or waiting, the held
+// track is let go and the next play (or the wait's release) starts there,
+// still paused or waiting; stopped, it waits. 0:00 is prev's restart (a
+// start point of 0 only clears one). It acts only on the entry the finger
+// landed on (its key), checked after the heard join is taken, with nothing
+// between the check and the start that could take another: a join heard
+// under the finger is never a seek of the next track to this one's second.
+// It never asks for the tail rule's last 5 s (trackseek::seekLimitMs(): the
+// length less 6 s). It never plays from a pause, never clears the timer's
+// or the computer's marks, and leaves the queue, its undo and "pause after
+// this track" as they are. Until the backend takes a start up, what Now
+// Playing shows is where it asked to start (pendingStart()), with the
+// length the player was told (lengthHint(); a skip's, none: never the
+// track before's); after, the backend's, with that length while the
+// backend knows none (shownTime()).
 class PlaybackController {
 public:
   // Whether a play must wait for the output (read at every start).
@@ -221,8 +239,45 @@ public:
   // it). False while it plays (a second saved now would be stale at once)
   // and when it would start at 0:00 anyway (stopped, cued). `anchor`: the
   // start point's, or the backend's for the paused track
-  // (IAudioBackend::resumeAnchor(); kind None: none).
+  // (IAudioBackend::resumeAnchor(); kind None: none). Paused before the
+  // backend took a start up (within ~150 ms of a seek): where that start
+  // was asked for, with lengthHint(), and no anchor.
   bool resumePoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor = nullptr) const;
+  // Now Playing's seek bar: what seek() did.
+  enum class Seek : uint8_t {
+    Started,  // playing: it starts there now (the ring cut, faded in, as a skip)
+    Waits,    // paused, waiting, stopped or held: the next play (or the release) starts there
+    Moved,    // the current entry isn't `key` any more (a join heard, an end, a skip): nothing done
+    NoPlace,  // no track, no length, or the backend's track failed: nothing done
+  };
+  // The current entry from `ms` in (at most trackseek::seekLimitMs()), a
+  // track `durationMs` long (the bar's: the backend's hint), if it is still
+  // the entry `key` (the one the finger landed on). The heard join is taken
+  // first, so one heard since is Moved, never a seek of the next track. ms
+  // 0: prev's restart (playing: from 0:00 again; paused or waiting: the
+  // held track let go, cued at 0:00; stopped: a start point dropped).
+  // Otherwise as setStartPoint() with no anchor. Never plays from a pause
+  // and never clears the timer's or the computer's marks; the queue, its
+  // undo and "pause after this track" stay as they are.
+  Seek seek(uint32_t key, uint32_t ms, uint32_t durationMs);
+  // A play the backend hasn't taken up yet (IAudioBackend::positionKnown()
+  // false, while the player holds the entry's track): where it asked to
+  // start. The backend's position may still be the track before's.
+  bool pendingStart(uint32_t* ms) const;
+  // The current entry's length as the player was last told it (a seek's, a
+  // play's hint, the held track's at a restart); 0: none. Now Playing shows
+  // it while the backend knows none.
+  uint32_t lengthHint() const { return lengthKey_ == queue_.currentKey() ? lengthMs_ : 0; }
+  // Where the current entry is and how long it is, as Now Playing shows
+  // them (MainUiHost::snapshot(); 0 and 0 with no entry). A start point
+  // that waits: its second and the length it went with. A start the
+  // backend hasn't taken up yet (pendingStart()): where it was asked to
+  // start, and lengthHint() alone: the backend's length may still be the
+  // track before's (a skip's request before the decode task takes it up),
+  // and the seek bar would take it for this entry's. Otherwise the
+  // backend's, with lengthHint() while it knows none (a header-less file's
+  // first second, a track let go at 0:00) unless the track failed.
+  void shownTime(uint32_t* positionMs, uint32_t* durationMs) const;
 
   // ---- the sleep timer ----
   // At the current track's natural end: the next entry, paused at 0:00.
@@ -329,6 +384,16 @@ private:
   void cue(int delta);
   // Prev::Restart: the current entry from 0:00, in the same state.
   void restart();
+  // setStartPoint()'s work, without an Act of its own (seek(): nothing may
+  // take a join between its key check and the start).
+  void placeStart(uint32_t ms, uint32_t durationMs, const ResumeAnchor* anchor);
+  // The current entry's length as told (lengthHint()); 0 changes nothing.
+  void noteLength(uint32_t ms) {
+    if (ms > 0 && hasTrack()) {
+      lengthKey_ = queue_.currentKey();
+      lengthMs_ = ms;
+    }
+  }
   // The current entry changed under the backend: carry on from the new one
   // in the same state (Playing starts it, Paused cues it, Stopped waits).
   void currentMoved();
@@ -374,6 +439,11 @@ private:
   // Where the last play() asked to start (prevAction(): the position until
   // the backend takes that start up).
   uint32_t playedFromMs_ = 0;
+  // lengthHint(): the length last told for the entry with key lengthKey_
+  // (another entry current: none, with no bookkeeping; an entry never
+  // changes its track, so the same key coming round again still has it).
+  uint32_t lengthKey_ = QueueModel::kNone;
+  uint32_t lengthMs_ = 0;
 
   // Gapless playback.
   const NextGate* gate_ = nullptr;

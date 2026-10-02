@@ -28,6 +28,7 @@
 #include "QueueView.h"
 #include "RateConverter.h"
 #include "ScreenPower.h"
+#include "SeekBar.h"
 #include "SleepTimer.h"
 #include "TabBarModel.h"
 #include "TextFit.h"
@@ -72,6 +73,17 @@ struct Vlw {
       const size_t g = 24 + static_cast<size_t>(i) * 28;
       advance.push_back({be32(g), static_cast<int>(be32(g + 12))});
     }
+  }
+  // Every character has a glyph (width() counts a missing one as nothing;
+  // the firmware draws it folded, and measures it as a space).
+  bool hasAll(const char* s) const {
+    for (const char* p = s; *p;) {
+      const uint32_t cp = textfold::decode(p);
+      bool found = false;
+      for (const auto& a : advance) found = found || a.first == cp;
+      if (!found) return false;
+    }
+    return true;
   }
   int width(const char* s) const {
     int w = 0;
@@ -561,6 +573,47 @@ void test_output_texts_fit() {
   fits(small, "v10.10.10-rc.10-9999-gabcdef12-dirty", kAboutValueW);
 }
 
+// The seek bar's readout (docs/SEEK-BAR.md section 4.2): "Release to
+// cancel" in the line's width, and the group (the finger's second in
+// Title, the gap, "no change" or the change in Small) within its
+// kSeekReadoutW for any length up to 999:59 (a 16-hour mix), with the
+// texts as SeekBar writes them. Every character is one the font has: one
+// it lacks is measured as a space and drawn folded ("−" as a wider "-"),
+// and the change came out "-0:…".
+void test_seek_bar_texts_fit() {
+  using namespace uitext;
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  fits(bold, kSeekCancel, 296);
+  // The figures are all as wide (in both fonts), so the extremes below
+  // stand for every time of as many digits.
+  for (char d = '1'; d <= '9'; ++d) {
+    const char one[2] = {d, 0};
+    TEST_ASSERT_EQUAL_INT(title.width("0"), title.width(one));
+    TEST_ASSERT_EQUAL_INT(small.width("0"), small.width(one));
+  }
+  // 4:05, 59:59, 99:59, 100:00 and 999:59: the second shown, and the
+  // change all the way back or on.
+  const uint32_t lengths[] = {245000, 3599000, 5999000, 6000000, 59999000};
+  for (uint32_t len : lengths) {
+    char big[16], change[24];
+    SeekBar::timeText(len, big, sizeof(big));
+    TEST_ASSERT_TRUE_MESSAGE(title.hasAll(big), big);
+    const int room = kSeekReadoutW - title.width(big) - kSeekReadoutGap;
+    fits(small, kSeekStay, room);
+    SeekBar::changeText(len, 0, change, sizeof(change));
+    TEST_ASSERT_TRUE_MESSAGE(small.hasAll(change), change);
+    fits(small, change, room);
+    SeekBar::changeText(0, len, change, sizeof(change));
+    TEST_ASSERT_TRUE_MESSAGE(small.hasAll(change), change);
+    fits(small, change, room);
+  }
+  // "-0:45" whole, as drawn (it was cut to "-0:…").
+  char change[24];
+  SeekBar::changeText(25000, 70000, change, sizeof(change));
+  TEST_ASSERT_EQUAL_STRING("-0:45", change);
+  TEST_ASSERT_TRUE(small.hasAll(change));
+}
+
 // Now Playing while play waits for the headphones (PlayGate): the panel's
 // lines and buttons, the notice's buttons, and the output line that says
 // they aren't connected.
@@ -980,6 +1033,7 @@ int main(int, char**) {
   RUN_TEST(test_queue_texts_fit);
   RUN_TEST(test_output_texts_fit);
   RUN_TEST(test_waiting_texts_fit);
+  RUN_TEST(test_seek_bar_texts_fit);
   RUN_TEST(test_sleep_timer_texts_fit);
   RUN_TEST(test_idle_power_off_texts_fit);
   RUN_TEST(test_power_settings_texts_fit);

@@ -4,9 +4,9 @@ A track that starts part of the way in should start where it was asked to:
 
 - **A resume point** (after a pause and a restart, the power-off, the CPU
   speed's restart) should pick up on the very sample it paused at.
-- **A seek** (the console's `qs`, a future scrubber) should land as close
-  to the time asked as the file allows. The time shown should be the time
-  that plays.
+- **A seek** (the console's `qs`, Now Playing's seek bar: 6.7 and
+  [SEEK-BAR.md](SEEK-BAR.md)) should land as close to the time asked as
+  the file allows. The time shown should be the time that plays.
 
 Today neither holds for MP3s:
 
@@ -747,14 +747,17 @@ the file again from the top, as today.
   as at every start.
 - **The time shown:** the sample in ms, rounded down: under 1 ms.
 
-## 6. Other seeks (`qs`, a scrubber)
+## 6. Other seeks (`qs`, the seek bar)
 
 ### 6.1 Inside the run: the index
 
-A start at `t` that the run's index covers (4.3) is exact. With `qs` that
+A start at `t` that the run's index covers (4.3) is as exact as the run:
+exact in a run that started exactly, and on the TOC's timeline in one a
+TOC start began (6.5: `(the run's index; the time asked)`). With `qs` that
 means a second earlier in what has played, or a second already decoded
-ahead. With a scrubber it is any position the run has passed in its last
-3.6 min.
+ahead. With the seek bar (6.7) it is any position the run has passed in
+its last 3.6 min. That still holds after seeks while paused: each is only
+a stop, and a stop keeps the index.
 
 ### 6.2 CBR: arithmetic
 
@@ -850,8 +853,10 @@ was.
 - **A seek index per path, cached on the card.** 5-25 KB per track played,
   written as tracks end, with an invalidation of its own. It would make
   seeks into a track played before exact. It means writes during
-  playback, which the queue saver avoids on purpose, and its value is
-  mostly a scrubber's, which doesn't exist yet.
+  playback, which the queue saver avoids on purpose. Its value is mostly
+  the seek bar's (6.7). Before building the index, the device run should
+  measure how often the bar's seeks miss the run's index on a LAME VBR
+  file.
 - **A header walk of the whole file** (an exact index of any track before a
   seek). It reads almost every sector: a 9 MB file is about 7 s of SD time
   at ~1.2 MB/s, competing with the decoder's reads and the battery, for
@@ -861,6 +866,68 @@ was.
 - **iTunes' `iTunSMPB`**, a TOC for VBRI (its entries already count frames
   exactly), and Lavf/Lavc's TOC model (6.3): later, each with a file to
   check it on.
+
+### 6.7 The seek bar
+
+Now Playing's progress line seeks: a tap goes to the second under the
+finger, and a drag seeks once, when the finger lifts.
+[SEEK-BAR.md](SEEK-BAR.md) is its design: the gesture, the drawing, the
+races, the host tests and the device check (`lib/core/SeekBar`,
+test_seek_bar; the device run is its section 16). For the player, a
+seek is a start part of the way in, on the same path as `qs`.
+
+- **`PlaybackController::seek(key, ms, durationMs)`.**
+  - It takes the heard join first (`Act`). Then it acts only if the
+    current entry is still `key`, the one the finger landed on.
+  - So a join heard under the finger gives `Moved`: never a seek of the
+    next track to this one's second.
+  - Nothing comes between the check and the start that could take
+    another join: the body of `setStartPoint()` is split out as
+    `placeStart()`, which has no `Act` of its own.
+- **What it does, by state:**
+  - **Playing:** it starts there now. That is one request: the ring cut,
+    a plan as in 6.1-6.4, first audio in 74-150 ms for an MP3 (section
+    17; a FLAC 99-180 ms, SEEK-BAR.md 16), faded in.
+  - **Paused or Waiting:** the held track is let go, and the next play
+    (or the wait's release) starts there. The state stays as it was.
+  - **Stopped:** it waits.
+  - **0:00** is prev's restart, because `setStartPoint(0)` only clears a
+    start point.
+- **Never into the tail.** The target is at most
+  `trackseek::seekLimitMs(L)`: the length less 6 s, floored to a second.
+  That is `kTailMs` plus a second for a length known from an estimate. A
+  start in the last 5 s would go to 0:00 (section 7).
+- **Whole seconds.** The bar asks for the second it showed, and the time
+  shown afterwards is the time asked (6.5). So what the finger read is
+  what plays:
+  - to the sample for CBR, FLAC, built-in tracks and the run's index of
+    an exact run;
+  - within 0.74 s (p95) for a start by LAME's TOC, and with the same
+    error for later seeks into that run by its index.
+- **The resume point.**
+  - A paused seek's start point is what `resumePoint()` returns, without
+    an anchor. Its anchor changed, so `QueueSaver` saves it in the same
+    pass.
+  - A boot resumes it by the second: exactly for CBR, FLAC and built-in
+    tracks; by the TOC for a LAME VBR file, since the run's index doesn't
+    survive a reboot.
+  - Before a reboot, a play after paused seeks still finds the paused
+    run's index, because a stop keeps it (4.3).
+  - A paused seek to 0:00 clears the resume point.
+- **While a start is pending** (`positionKnown()` false):
+  - Now Playing shows where the start was asked for (`pendingStart()`),
+    with the length the player was told (`lengthHint()`; both through
+    `shownTime()`). Never the backend's length, which may still be the
+    track before's: a skip with no hint shows no length for that moment;
+  - after it, while the backend knows no length, Now Playing shows the
+    length the player was told;
+  - `resumePoint()` gives the pending start, without an anchor.
+- **Unchanged:**
+  - the plans, the anchors, the index, and the tail rule;
+  - the fades;
+  - the sleep timer: a seek is neither a skip nor an end;
+  - the dancer: a start is a new epoch, while the entry, and so the
+    tempo prior, stay.
 
 ## 7. The tail rule
 

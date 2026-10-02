@@ -403,6 +403,36 @@ void test_skip_during_a_track_fade_holds_it_for_the_new_track() {
   TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
 }
 
+// End of track: a seek back out of the track's fade (Now Playing's seek
+// bar, docs/SEEK-BAR.md section 7) keeps the faded level, as a skip does:
+// the fade only falls by itself (+10 min and Turn off raise it). "Pause
+// after this track" stays, and the track's end still pauses on the next
+// entry.
+void test_a_position_that_jumps_back_in_a_track_fade_keeps_its_level() {
+  Rig r;
+  r.durationMs = 100000;
+  r.player.play(0);
+  r.timer.setEnd(Choice::EndOfTrack);
+  r.run(95000);  // 5 s left: -20 dB
+  TEST_ASSERT_EQUAL(Phase::Fading, r.timer.phase());
+  const uint16_t held = r.fade.target();
+  TEST_ASSERT_TRUE(held < SleepTimer::kUnity);
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, r.player.seek(r.queue.keyAt(0), 60000, r.durationMs));
+  r.audio.position = 60000;  // (the backend counts from the start asked)
+  const size_t from = r.targets.size();
+  r.run(20000);  // 80 s: not in the last 10 s any more
+  TEST_ASSERT_EQUAL(Phase::Fading, r.timer.phase());
+  TEST_ASSERT_TRUE(r.player.pauseAfterTrack());
+  TEST_ASSERT_EQUAL(PlayState::Playing, r.player.state());
+  for (size_t i = from; i < r.targets.size(); ++i) TEST_ASSERT_TRUE(r.targets[i] <= held);
+  r.run(19000);  // the last 10 s again: it falls on from the held level
+  TEST_ASSERT_TRUE(r.fade.target() < held);
+  r.endTrack();
+  TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
+  TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
+  TEST_ASSERT_TRUE(r.player.pausedByTimer());
+}
+
 // What holds a lit screen lit (fadeCountingDown()): a timed fade for its
 // 30 s; a track's fade in the boundary track's last 10 s. A skip during a
 // track's fade keeps the fade (and its toast) until the new track's own
@@ -912,6 +942,7 @@ int main(int, char**) {
   RUN_TEST(test_end_of_queue_with_repeat_pauses_on_the_first_entry);
   RUN_TEST(test_skip_during_the_fade_keeps_its_level);
   RUN_TEST(test_skip_during_a_track_fade_holds_it_for_the_new_track);
+  RUN_TEST(test_a_position_that_jumps_back_in_a_track_fade_keeps_its_level);
   RUN_TEST(test_only_a_fade_that_counts_down_holds_the_screen);
   RUN_TEST(test_a_pause_during_the_fade_finishes_it);
   RUN_TEST(test_the_fade_never_rises_by_itself);
