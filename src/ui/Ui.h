@@ -198,6 +198,10 @@ public:
   const queueview::KeyRing& failedKeys() const { return failedKeys_; }
   // Shuffle all: the whole library, shuffled, playing (the empty states).
   void shuffleAll();
+  // Try again on a no-card page: a card that mounts restarts the player
+  // (a toast first); else the note, "Still no card" or "Still not FAT32",
+  // and the page drawn again if that changed.
+  void retryCard();
   bool toastUp() const { return toast_.up(); }
   void drawHeader(const Header& h);
 

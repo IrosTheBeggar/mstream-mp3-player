@@ -14,12 +14,14 @@
 #include <esp_timer.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
 
 #include "RateConverter.h"
 #include "ResamplerTables.h"
+#include "TableCopy.h"
 #include "ToneTrack.h"
 #include "TrackProgress.h"
 #include "TrackSeek.h"
@@ -107,28 +109,54 @@ public:
   }
 };
 
-// The converter's polyphase tables in internal RAM, copied the first time a
-// track at another rate than 44.1 kHz needs them, and kept (7.8 KB). Read
-// from flash they share the cache with the decoder, and 147/160's 7 KB,
-// read every 3.3 ms, evicts it: docs/RESAMPLER.md, section 10. Without the
-// room they stay in flash (the same bits, slower). On the decode task.
-static void copyTablesToRam() {
-  if (RateConverter::tablesCopied()) return;
-  constexpr size_t kD147Bytes = sizeof(resampler::kD147);
-  constexpr size_t kU12Bytes = sizeof(resampler::kU12);
-  static_assert(kD147Bytes % 4 == 0, "the U12 copy must start 4-byte aligned");
-  auto* p = static_cast<int16_t*>(heap_caps_malloc(kD147Bytes + kU12Bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
-  if (!p) {
-    Serial.printf("[rate] no %u B of internal RAM for the filter tables: read from flash (slower)\n",
-                  (unsigned)(kD147Bytes + kU12Bytes));
-    return;
+// The converter's polyphase tables in internal RAM (7.6 KB) while a track
+// at another rate than 44.1 kHz plays: copied when one starts, freed when
+// a 44.1 kHz one starts (TableCopy; RateConverter calls this from
+// setRate(), after the reset, so no track reads a freed copy). Read from
+// flash they share the cache with the decoder, and 147/160's 7 KB, read
+// every 3.3 ms, evicts it: docs/RESAMPLER.md, section 10. Without the room
+// they stay in flash (the same bits, slower), logged once. On the decode
+// task.
+static void* tableAlloc(size_t bytes) { return heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); }
+static void tableFree(void* p) { heap_caps_free(p); }
+static TableCopy tableCopy(tableAlloc, tableFree);
+// tableCopy's state for tableStatus() (written on the decode task only).
+static std::atomic<bool> tablesInRam{false};
+static std::atomic<uint32_t> tableNoRoom{0};
+
+static void tablesWanted(bool wanted) {
+  const TableCopy::Event e = tableCopy.want(wanted);
+  tablesInRam.store(tableCopy.copied(), std::memory_order_relaxed);
+  tableNoRoom.store(tableCopy.failures(), std::memory_order_relaxed);
+  const unsigned bytes = (unsigned)TableCopy::kBytes;
+  const unsigned freeNow = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  // The largest block too: the next copy needs one 7,776 B block, so a long
+  // mixed session's fragmentation shows here before it bites.
+  const unsigned largest = (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+  switch (e) {
+    case TableCopy::Event::Copied:
+      Serial.printf("[rate] the filter tables copied into internal RAM (%u B): internal free %u B, largest block "
+                    "%u B\n",
+                    bytes, freeNow, largest);
+      break;
+    case TableCopy::Event::Freed:
+      Serial.printf("[rate] a 44.1 kHz track: the filter tables' copy freed (%u B): internal free %u B, largest "
+                    "block %u B\n",
+                    bytes, freeNow, largest);
+      break;
+    case TableCopy::Event::NoRoom:
+      Serial.printf("[rate] no %u B block of internal RAM for the filter tables (largest %u B): read from flash, "
+                    "the same bits, slower (logged once; each converted track tries again; R counts them)\n",
+                    bytes, largest);
+      break;
+    case TableCopy::Event::StillNoRoom:
+    case TableCopy::Event::None:
+      break;
   }
-  std::memcpy(p, resampler::kD147, kD147Bytes);
-  std::memcpy(p + kD147Bytes / 2, resampler::kU12, kU12Bytes);
-  RateConverter::useTables(reinterpret_cast<const int16_t(*)[resampler::kTaps]>(p),
-                           reinterpret_cast<const int16_t(*)[resampler::kTaps]>(p + kD147Bytes / 2));
-  Serial.printf("[rate] the filter tables copied into internal RAM (%u B, kept until a restart): internal free %u B\n",
-                (unsigned)(kD147Bytes + kU12Bytes), (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+}
+
+Core2AudioBackend::TableStatus Core2AudioBackend::tableStatus() {
+  return {tablesInRam.load(std::memory_order_relaxed), tableNoRoom.load(std::memory_order_relaxed)};
 }
 
 Core2AudioBackend::Core2AudioBackend() = default;
@@ -145,7 +173,7 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
   fs_ = fs;
   out_.reset(new RingOutput(*ring_));  // under 4 KB: internal RAM (RingOutput.h)
   checkKernel("at boot");  // the converter's fast kernel, only if it gives the C kernel's bits
-  RateConverter::setTablesWanted(copyTablesToRam);
+  RateConverter::setTablesWanted(tablesWanted);
   if (fs_) file_.reset(new AudioFileSourceFS(*fs_));
 
   bt_.begin(*ring_, shared_, btSinkName);

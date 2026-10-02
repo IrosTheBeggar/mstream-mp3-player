@@ -14,6 +14,7 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 #include <esp_chip_info.h>
+#include <esp_heap_caps.h>
 #include <nvs_flash.h>
 
 #include <cmath>
@@ -36,11 +37,13 @@
 #include "TrackCatalog.h"
 #include "UiText.h"
 #include "app/DanceMode.h"
+#include "app/BoardGuard.h"
 #include "app/BoardPower.h"
 #include "app/Diagnostics.h"
 #include "app/Haptics.h"
 #include "app/IdlePower.h"
 #include "app/Library.h"
+#include "app/NvsSchema.h"
 #include "app/PowerLab.h"
 #include "app/PowerSettings.h"
 #include "app/Psram.h"
@@ -423,8 +426,9 @@ static void playOnSpeaker() {
 // test can't safely cause (the radio and the card are left alone): c
 // connecting, s searching, p pairing, r resting (the search stopped: "They'll
 // reconnect when switched on"), l the headphones lost (the dialog too), n
-// no card (on Now Playing), w play waiting for the headphones (Now
-// Playing's panel); uiF0 (or uiF) the real state. Display only: a button
+// no card (on Now Playing), f a card that isn't FAT32 (the same), w play
+// waiting for the headphones (Now Playing's panel); uiF0 (or uiF) the real
+// state. Display only: a button
 // on a faked card still does what it does.
 static char uiFake = 0;
 
@@ -483,6 +487,7 @@ struct MainUiHost : ui::UiHost {
       }
     }
     s.card = storage.onCard();
+    s.cardNotFat32 = !s.card && storage.cardNotFat32();
     const LibraryIndex* index = library.index();
     s.libraryTracks = index && index->ready() ? index->trackCount() : 0;
     // The battery is an I2C read of the power chip: every 10 s is plenty.
@@ -517,11 +522,12 @@ struct MainUiHost : ui::UiHost {
   }
   static void fake(ui::AppState& s) {
     if (!uiFake) return;
-    if (uiFake == 'n') {
-      // As after a boot with no card: nothing indexed, nothing queued (Now
-      // Playing shows it; the Library and Queue lists read the real index
-      // and queue, so they don't).
+    if (uiFake == 'n' || uiFake == 'f') {
+      // As after a boot with no card (f: with one that isn't FAT32):
+      // nothing indexed, nothing queued (Now Playing shows it; the Library
+      // and Queue lists read the real index and queue, so they don't).
       s.card = false;
+      s.cardNotFat32 = uiFake == 'f';
       s.libraryTracks = 0;
       s.current = -1;
       return;
@@ -631,7 +637,7 @@ struct MainUiHost : ui::UiHost {
   }
   bool retryCard() override {
     if (!storage.probeCard()) {
-      Serial.println("[storage] try again: still no card");
+      Serial.printf("[storage] try again: %s\n", storage.cardNotFat32() ? "the card still isn't FAT32" : "still no card");
       return false;
     }
     Serial.println("[storage] try again: a card is in: restarting to use it");
@@ -1223,6 +1229,12 @@ static void rateCommand(const char* a) {
                   (unsigned long)want, (long)(static_cast<int64_t>(want) - r.made), (unsigned long)r.clamped,
                   audio.positionMs() / 1000.0);
   }
+  const Core2AudioBackend::TableStatus t = Core2AudioBackend::tableStatus();
+  Serial.printf("[rate] filter tables: %s; %lu copies found no room since boot; internal free %u B, largest block "
+                "%u B\n",
+                t.inRam ? "the internal-RAM copy" : "flash (no copy now)", (unsigned long)t.noRoom,
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   Serial.printf("[rate] CPU set at boot: %u MHz; 88.2/96 kHz %s; R status, Rt the test tracks (Rt<n> plays one "
                 "on its own), Rb the converter's bench (stops playback, keeps your place)\n",
                 (unsigned)PowerSettings::cpuBootMhz(),
@@ -2214,6 +2226,7 @@ static void haltOnOldChip() {
 void setup() {
   haltOnOldChip();  // first: no PSRAM used yet
   ensureNvs();  // before the first Preferences read
+  nvsschema::check();  // the layout's number, migrated if older, before anything reads a key
   // The CPU speed saved (or the default), before Bluetooth starts.
   PowerSettings::applyBootClock();
   // The computer's visualizer lines (docs/USB-VISUALIZER.md: ~3.7 KB/s)
@@ -2236,8 +2249,10 @@ void setup() {
   // The licence notice once (GPLv3 section 5(d); About shows it too).
   Serial.printf("Copyright (C) 2026 IrosTheBeggar. Licence: %s.\n", uitext::kAboutLicence);
   Serial.printf("Source, licence texts and third-party notices: %s\n", uitext::kSourceUrl);
+  board::requireCore2();  // another board: says so and stops here, before the card, audio and Bluetooth
   diag::logRunningPartition();  // the flash layout (console L: the whole table)
   logNvs();  // only when NVS needed ensureNvs()
+  nvsschema::log();
   powerSettings.begin();  // what the boot clock is, the Bluetooth power, and whether it restarted for the speed
   board::applyBootPower();  // the IMU suspended: nothing reads it
   diag::logHeap("boot");
@@ -2325,7 +2340,7 @@ void setup() {
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
                  "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid/uip scripted finger, "
                  "uk1/uk2/uk0 the scripted finger on a skewed panel (uk2 with jitter) or not, "
-                 "uiF<c/s/p/r/l/n/w> show a faked Bluetooth or no-card state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
+                 "uiF<c/s/p/r/l/n/f/w> show a faked Bluetooth, no-card or not-FAT32 state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
                  "library of n tracks in the Library tab, uil0 the card's); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja); "

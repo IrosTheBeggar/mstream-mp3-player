@@ -84,11 +84,20 @@ int touchModeKnown() { return touchMode; }
 
 void applyBootPower() {
   const int addr = bmi270Address();
-  if (addr >= 0) setImuSuspended(addr, true);
+  const char* imu = "none found";
+  if (addr >= 0) {
+    setImuSuspended(addr, true);
+    imu = "BMI270 suspended";
+  } else if (M5.Imu.getType() == m5::imu_t::imu_mpu6886) {
+    // The Core2 v1.0 and the Core2 for AWS: M5Unified's sleep (PWR_MGMT_1's
+    // SLEEP bit: everything off but the registers, a few uA).
+    imu = M5.Imu.sleep() ? "MPU6886 asleep" : "MPU6886: its sleep FAILED (left on)";
+  } else if (M5.Imu.getType() != m5::imu_t::imu_none) {
+    imu = "not a BMI270 or an MPU6886: left as it is";
+  }
   const bool axp192 = M5.Power.getType() == m5::Power_Class::pmic_axp192;
   // The LED is the AXP192's PWM1: duty register 0x9A, 255 = off.
-  Serial.printf("[power] boot: IMU %s, 5 V boost (EXTEN) %s, green LED %s\n",
-                addr < 0 ? "not a BMI270: left as it is" : suspended ? "suspended" : "on",
+  Serial.printf("[power] boot: IMU %s, 5 V boost (EXTEN) %s, green LED %s\n", imu,
                 M5.Power.getExtOutput() ? "ON" : "off",
                 !axp192 ? "?" : M5.Power.Axp192.readRegister8(0x9A) == 255 ? "off" : "on");
   touchpower::Regs touch;

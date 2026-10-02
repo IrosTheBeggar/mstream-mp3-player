@@ -78,6 +78,24 @@ inline constexpr int kEmptySecondX = 184, kEmptySecondW = 124;
 inline constexpr int kEmptyIconW[2] = {26, 20};  // the Library's and Shuffle's icons (ui/IconData.cpp)
 inline constexpr int kEmptyLineW = 304;  // a line (Small), centred
 inline constexpr const char* kPickInLibrary = "Pick an album, folder or track in the Library.";
+// The title (Title, centred in kW - 16).
+inline constexpr int kEmptyTitleW = 304;
+// No card (Now Playing, the Library and the Queue with no card and no
+// music on the flash): the title, two lines and [Try again]; its note when
+// the card still isn't there (Ui::warn, Toast's "what: where" on two lines:
+// the part before ": " in Small over the rest in Body, kToastTwoLineW).
+inline constexpr const char* kNoCardTitle = "No microSD card";
+inline constexpr const char* kNoCardLines[2] = {"Insert a card with your music in /music,",
+                                                "as /music/Artist/Album/01 - Title.mp3"};
+inline constexpr const char* kStillNoCard = "Still no card: is it all the way in?";
+// ... and when a card is in that isn't FAT32 (exFAT, NTFS, a GPT:
+// cardformat, read when it didn't mount). README's and the release notes'
+// microSD card sections say the same.
+inline constexpr const char* kNotFat32Title = "This card isn't FAT32";
+inline constexpr const char* kNotFat32Lines[2] = {"Format it FAT32 (MBR) on a computer, then",
+                                                  "put your music in /music and tap Try again."};
+inline constexpr const char* kStillNotFat32 = "Still not FAT32: format it FAT32 (MBR)";
+inline constexpr const char* kTryAgain = "Try again";
 
 // ---- Now Playing (ui/NowPlayingPage) ----
 // The progress line's middle (Small), centred between the times (from
@@ -411,5 +429,23 @@ inline constexpr const char* kBootTouchHint = "Touch trouble? Hold a finger on t
 inline constexpr int kDanceBottomW = 320 - 16;
 inline constexpr const char* kVizTitle = "Dancing to your computer";
 inline constexpr const char* kVizHint = "Tap a button or a tab to stop";
+
+// ---- another board than the Core2 (app/BoardGuard) ----
+// Drawn in Font2, M5GFX's built-in 16 px bitmap font (the VLW fonts need
+// PSRAM, which an M5Stack Basic lacks), one line each from x 4 on a
+// 320 px display, with no wrap. Measured in test_ui_library against Font2's
+// widest glyph (kFont2MaxAdvance, 'M' and 'W' in M5GFX's Font16.h) for
+// every character, so a line fits whatever its letters. The board's name
+// (BoardGuard's table, at most kBoardNameMaxChars: a static_assert there)
+// follows kBoardGuardFound on its own line.
+inline constexpr int kFont2MaxAdvance = 10;
+inline constexpr int kBoardGuardW = 312;
+inline constexpr int kBoardNameMaxChars = 23;
+inline constexpr const char* kBoardGuardTop[2] = {"This firmware is for the", "M5Stack Core2."};
+inline constexpr const char* kBoardGuardFound = "found: ";
+inline constexpr const char* kBoardGuardStop[2] = {"Stopped: nothing else starts.", "Flash this board's firmware."};
+// Under a Tough: M5GFX reads a Core2 as one when something on its internal
+// I2C (the M-Bus) answers at the Tough's touch address, 0x2E.
+inline constexpr const char* kBoardGuardToughHint = "A Core2? Take off its modules.";
 
 }  // namespace uitext

@@ -193,6 +193,19 @@ void Ui::setListBand(int height) {
   list_.setHeight(height);
 }
 
+void Ui::retryCard() {
+  if (host_.retryCard()) {
+    toast("Card found: starting again", false);
+    return;
+  }
+  // What is in may have changed (a card that isn't FAT32 taken out, or
+  // put in): the snapshot now, not at the next pass, for the note.
+  const bool was = state_.cardNotFat32;
+  host_.snapshot(state_);
+  if (state_.cardNotFat32 != was && page_ && !modalUp()) page_->repaint();
+  warn(state_.cardNotFat32 ? uitext::kStillNotFat32 : uitext::kStillNoCard);
+}
+
 void Ui::shuffleAll() {
   const LibraryIndex* index = library_.index();
   if (browse_ || !index || !index->ready() || index->trackCount() == 0) {

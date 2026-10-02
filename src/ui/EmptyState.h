@@ -12,6 +12,7 @@
 // first is the primary, in the section's colour):
 //
 //   No microSD card     "Insert a card with your music in /music, ..."  [Try again]
+//   This card isn't FAT32 "Format it FAT32 (MBR) on a computer, ..."    [Try again]
 //   No music found      "Put folders in /music/Artist/Album/"           [Try again]
 //   Your queue is empty "Pick an album, folder or track in the Library." [Open Library] [Shuffle all]
 //   Nothing playing     ...                                             [Open Library] [Shuffle all]
@@ -31,6 +32,11 @@ struct EmptyState {
   const icons::Icon* buttonIcons[2] = {nullptr, nullptr};
   int buttonCount() const { return (buttons[0] ? 1 : 0) + (buttons[1] ? 1 : 0); }
 };
+
+// No card (and no music on the flash): "No microSD card", or with
+// `notFat32` (a card is in that isn't: AppState::cardNotFat32) "This card
+// isn't FAT32"; both with Try again (Ui::retryCard()).
+void noCardState(EmptyState& e, bool notFat32);
 
 // Draws `e` over screen lines [y0, y0 + h); `pressed`: the button under a
 // finger (-1 none).

@@ -21,6 +21,18 @@ M5Stack Core2 (tested on v1.3): original ESP32 (dual core, 240 MHz), 16 MB
 flash, 8 MB PSRAM (4 MB usable), AXP192 power chip, 320×240 touch LCD with
 three touch buttons, 1 W mono speaker, microSD. There is no headphone jack:
 use Bluetooth headphones, the speaker, or (later) M5Stack's RCA/3.5 mm module.
+The firmware is for the Core2 only: flashed onto another M5Stack board it
+says "This firmware is for the M5Stack Core2" and which board it found, and
+stops there (on battery it powers off after a minute).
+
+### The microSD card
+
+- Format it **FAT32** (MBR). exFAT cards, which is how most cards of 64 GB
+  and up come, and GPT cards don't mount: the player says "This card isn't
+  FAT32". Windows only offers FAT32 up to 32 GB; for a bigger card use a
+  FAT32 formatting tool.
+- Put the music under **`/music`**, e.g. `/music/Artist/Album/01 - Title.mp3`.
+  An album's cover is the `cover.jpg` (or `folder.jpg`) next to its tracks.
 
 ## Quick start (Windows)
 
@@ -332,7 +344,9 @@ The first time, two tips show what the three red buttons do and that
 tapping the tab you're on goes back to its start (console `uic` shows them
 again). With no microSD card (and no music on the flash), the pages say so
 and offer **Try again** (with a card in, the player restarts to use it);
-a card without music offers the same, which looks through `/music` again.
+a card that is in but isn't FAT32 (exFAT, a GPT) is named as such, "This
+card isn't FAT32"; a card without music offers the same, which looks
+through `/music` again.
 If the headphones drop out while playing, the music pauses (it never
 carries on out loud) and a message follows their reconnecting, with **Use
 speaker** or **OK** to keep waiting.
@@ -461,7 +475,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
 | `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
-| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/l/n>` show a faked Bluetooth (connecting, searching, pairing, lost) or no-card state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
+| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, not-FAT32 or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none) |
 | `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
@@ -510,6 +524,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       halfband FIRs, exact counts (docs/RESAMPLER.md)
   RingFeed            The decode side of the ring: the converter, the stage,
                       the ring-full rule (RingOutput wraps it)
+  TableCopy           The converter's tables in internal RAM while a track
+                      at another rate plays (freed at a 44.1 kHz one)
   TransportSync       Generation-tagged decode progress (no stale "track ended")
   ToneGen, ClickGen   Built-in test tones; click tracks with a known beat
   ToneTrack           What a built-in track's path asks for ("tone:1000@48000")
@@ -560,6 +576,10 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   SinkSearch          When the Core2 may scan for headphones by itself (never
                       in a release build) and which find it may take (by the
                       build's name only; never by signal but for console Bs)
+  CardFormat          What a card that didn't mount is (exFAT, NTFS, GPT),
+                      from its first sectors
+  NvsLayout           The NVS schema number's boot step; the resume point's
+                      versioned blob
   hal/                IAudioBackend, IStorage
 src/                  Core2 firmware
   audio/              Core2AudioBackend (decode task), RingOutput, BtSink, SpeakerSink
@@ -584,7 +604,8 @@ src/                  Core2 firmware
                       SerialConsole, Diagnostics, DanceMode, Screenshot, Haptics,
                       PowerProbe + PowerLab (power measurement and its knobs),
                       Version (the build's version and ELF hash; the image's
-                      app description)
+                      app description), BoardGuard (not a Core2: says so
+                      and stops), NvsSchema (the NVS layout's number)
   spike/              UI spike tools: input lab, scroll lab, font and thumbnail
                       probes (docs/UI-SPIKE.md)
   main.cpp            Wires it together; input events (the buttons' policy),

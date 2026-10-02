@@ -5,6 +5,7 @@
 
 #include <Preferences.h>
 
+#include "NvsLayout.h"
 #include "app/Psram.h"
 
 namespace {
@@ -36,31 +37,21 @@ int32_t pickCurrent(const queuetext::Header& h, void* ctx) {
 }
 
 // The resume point as NVS keeps it: one blob, so it is written (or
-// removed) in one go.
+// removed) in one go; versioned (nvslayout: v0.5.0-beta.1's unversioned
+// 20 bytes are still read).
 constexpr const char* kResumeKey = "resume";
-struct ResumeBlob {
-  uint32_t generation;
-  int32_t entry;
-  uint32_t pathHash;
-  uint32_t positionMs;
-  uint32_t durationMs;
-};
 
 QueueResume readResume() {
   QueueResume r;
   Preferences p;
   if (!p.begin(kNvsNamespace, true)) return r;
-  ResumeBlob b;
+  uint8_t b[nvslayout::kResumeMaxBytes];
   // (isKey() first: getBytesLength() of a missing key logs an [E] line at
   // every boot without a resume point.)
-  if (p.isKey(kResumeKey) && p.getBytesLength(kResumeKey) == sizeof(b) &&
-      p.getBytes(kResumeKey, &b, sizeof(b)) == sizeof(b)) {
-    r.valid = true;
-    r.generation = b.generation;
-    r.entry = b.entry;
-    r.pathHash = b.pathHash;
-    r.positionMs = b.positionMs;
-    r.durationMs = b.durationMs;
+  const size_t n = p.isKey(kResumeKey) ? p.getBytesLength(kResumeKey) : 0;
+  if (n > 0 && n <= sizeof(b) && p.getBytes(kResumeKey, b, n) == n && !nvslayout::decodeResume(b, n, &r)) {
+    Serial.printf("[queue] resume point not read: a blob of %u bytes (version %u) this firmware doesn't know\n",
+                  (unsigned)n, (unsigned)b[0]);
   }
   p.end();
   return r;
@@ -219,8 +210,8 @@ void QueueStore::saveResume(const QueueResume& r) {
   Preferences p;
   if (!p.begin(kNvsNamespace, false)) return;
   if (r.valid) {
-    const ResumeBlob b{r.generation, r.entry, r.pathHash, r.positionMs, r.durationMs};
-    p.putBytes(kResumeKey, &b, sizeof(b));
+    uint8_t b[nvslayout::kResumeBytes];
+    p.putBytes(kResumeKey, b, nvslayout::encodeResume(r, b));
   } else if (p.isKey(kResumeKey)) {
     p.remove(kResumeKey);
   }
