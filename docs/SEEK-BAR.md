@@ -7,17 +7,20 @@ area, what is drawn, what a seek does in each player state, the races
 with the decode task and with gapless joins, the edge cases, the files
 and functions, the host tests, the log lines and the device check.
 
-**Status: designed (2026-10-02, at 439148d), and built on
-feature/seek-bar** (section 12's commits 1-3, host-tested; the firmware
-builds with every guard). **The device check (section 11) hasn't been
-run yet**, so there is no "On the device" section. Three designs
-were written for it: one for the touch (the gesture and its feedback),
-one for the player and the engine (the semantics and the races), and one
-for the smallest safe change (the scope and the tests). They were read
-against the code. This one takes the first's gesture and feedback, the
-second's semantics and race analysis, and the third's scope and tests.
-Section 15 says what was dropped, and which of their claims the code
-didn't bear out.
+**Status: designed (2026-10-02, at 439148d), built on feature/seek-bar**
+(section 12's commits 1-3, host-tested; the firmware builds with every
+guard), **and checked on the device** (section 16: section 11's scripted
+steps on 68c342b found no firmware defect). Still to do: 11.6's
+slow-motion video, 11.10 (Waiting, once headphones are paired again),
+11.12 (the sleep timer), and the user's checks by hand, 11.13-11.15.
+
+Three designs were written for it: one for the touch (the gesture and
+its feedback), one for the player and the engine (the semantics and the
+races), and one for the smallest safe change (the scope and the tests).
+They were read against the code. This one takes the first's gesture and
+feedback, the second's semantics and race analysis, and the third's
+scope and tests. Section 15 says what was dropped, and which of their
+claims the code didn't bear out.
 
 Where the facts come from:
 
@@ -192,8 +195,10 @@ Where the facts come from:
   - 101-149 ms by the run's index;
   - 35 ms from the top.
 - A stop keeps the run's index ("A stop doesn't clear the slots", SEEK.md
-  4.3). So a seek back into what played is exact, even after paused
-  seeks.
+  4.3). So a seek back into what played goes by it, even after paused
+  seeks: exact in a run that started exactly (from the top, by CBR or an
+  exact anchor), and on the TOC's timeline in one a TOC start began
+  (SEEK.md 6.5).
 
 **The tail rule** (`lib/core/TrackSeek.h:49-57`,
 `TrackSeek.cpp:144-148`). A start in the last `kTailMs` (5 s), or at or
@@ -299,9 +304,11 @@ landed decides how the knob follows.
     second**, and at most `seekLimitMs(L)`.
 - **Whole seconds.** The readout and the times show m:ss, and the seek
   asks for exactly that second. The backend shows the time asked:
-  - exactly, for CBR, FLAC, the run's index and built-in tracks;
+  - exactly, for CBR, FLAC, built-in tracks and the run's index of an
+    exact run;
   - for a LAME VBR start by its TOC, within 0.74 s (p95) of the time
-    asked, which is still what it shows (SEEK.md 6.5).
+    asked, which is still what it shows (SEEK.md 6.5); later seeks into
+    that run, by its index, keep the same error.
   - So what the finger read is what Now Playing shows after the lift.
 - **The reach.**
   - `trackseek::seekLimitMs(L) = L > 6000 ? (L − 6000) / 1000 · 1000 : 0`,
@@ -562,17 +569,36 @@ The tab bar's hairline and the Dance tab's line read the same snapshot
     frame each pass.
 - **Drawn at once:** the Pressed look on a Down, and the end of a scrub
   (the middle and the band put back), as the other zones' presses are.
-- **Costs.** A push is ~0.43 µs per pixel, and a row of anti-aliased
-  text takes ~8 ms while an MP3 decodes (UI-SPIKE.md).
+- **Costs, as estimated.** A push is ~0.43 µs per pixel, and a row of
+  anti-aliased text takes ~8 ms while an MP3 decodes (UI-SPIKE.md).
   - A scrub frame where only the knob or the marker moved: the whole
     band, 320 x 22 = 7,040 px, ~3.0 ms on the bus, plus fills and circles
     (no text). About 3.5 ms in all.
   - When the readout's text changes (the second under the finger; while
     playing, also the change, once a second): the row, 320 x 33 = 10,560
     px, ~4.5 ms, plus a Title string and a Small one, ~4-8 ms.
-  - The worst frame is ~16 ms, against a 40-60 ms pass.
+  - The worst frame is ~16 ms of drawing, against a 40-60 ms pass.
   - Every push is 33 rows or fewer, under the 40-line bus hold, so the SD
     card never waits long.
+- **Costs, as measured** (section 16, 25 scrubs). The `[ui] scrub:`
+  line's draw times are wall time: the decode task, above the loop on
+  the same core, counts in them whenever it runs during a frame.
+  - Nothing decoding (paused): a mean of 9.3-9.6 ms a frame, at most
+    10.9 ms. That is the estimate: nearly every frame of a scripted drag
+    draws the readout's new second.
+  - A built-in click track playing: a mean of 7.8 ms, at most 13.4 ms.
+  - A FLAC playing: a mean of 14.3 ms, at most 33.2 ms.
+  - An MP3 playing, its ring steady: means of 19.3-22.4 ms, at most
+    38.6 ms.
+  - An MP3 in the refill after a seek (flat out to 500 ms, then paced at
+    1.5x realtime until the ring is full, ~2.5 s in): means of 26-37 ms,
+    at most 58.6 ms. The line's ring minimum reads `n/a (not playing)`
+    for a scrub that ends before the ring is steady again (1000 ms): it
+    only counts a steady ring.
+  - So with an MP3 a frame takes 2-4 times the estimate, and the worst
+    one about a pass. The cadence held all the same: 10 s across an MP3
+    (11.7) drew 269 frames at 27.8 fps, the ring never below 1416 ms.
+    No scrub had an underrun, and the governor stayed normal.
 - **A scrub counts as a motion** in the UI's frame log.
   - `Ui::trackMotion()` takes any animating page, not only one with a list
     attached.
@@ -804,8 +830,8 @@ outputs read the ring on their own tasks.
 | Paused by the timer | A paused seek keeps the timer's mark: headphone Play still won't resume it |
 | A gapless join | A seek lands at most at the reach (6 s before the end), outside the ~1.4 s decode-ahead window. A join heard during a drag ends the drag (R8); one heard at the lift gives Moved (R3) |
 | A second seek within the first's 150 ms | The newer request replaces the older one (R5), and `pendingStart()` follows the newer |
-| LAME VBR, by its TOC | It lands within 0.74 s (p95; 0.47 s on the device's 20 points), showing the time asked. Later seeks back into what played are exact (the run's index) |
-| A paused seek and the resume anchor | The exact paused-sample anchor goes. The next play (and a boot) starts by the second: exact for CBR, FLAC, built-in tracks, and inside the paused run's index (which the stop keeps); by the TOC for a LAME VBR file after a reboot |
+| LAME VBR, by its TOC | It lands within 0.74 s (p95; 0.47 s on the device's 20 points), showing the time asked. Later seeks back into what played go by the run's index and keep that start's timeline, error and all (`the run's index; the time asked`); in a run from the top they are exact |
+| A paused seek and the resume anchor | The exact paused-sample anchor goes. The next play (and a boot) starts by the second: exact for CBR, FLAC, built-in tracks, and inside the paused run's index (which the stop keeps) when that run was exact; by the TOC for a LAME VBR file after a reboot |
 | The screen dim or off | The first touch only wakes it, swallowed through its lift, so a scrub can't begin from Dim or Off. A moving finger keeps the screen lit. One held still for 15 s stops counting; if the screen dims under it, the touch ends with a Cancel: no seek |
 | A toast going away mid-scrub | The page repaints. The scrub's look is part of what `update()` draws, so the readout and the band come back as they were (4.2) |
 | A sheet or dialog opening mid-scrub | Cancel (`endPageTouch()`): no seek. When the modal closes, the repaint shows the rest look |
@@ -855,7 +881,9 @@ player logs nothing new; the backend's own start lines follow, as for
 - Paused, the saver's line follows: `[queue] resume point saved: ...
   anchor: none`, or, for 0:00, `[queue] resume point cleared (playback
   moved on)`.
-- `ui` (`describe()`) adds the bar to Now Playing's line, one of:
+- `ui` (`describe()`) adds the bar to Now Playing's line, from the
+  snapshot the page last drew with (so a `ui` read in a seek's own loop
+  pass still shows the second before it: 11.6), one of:
   - `; the bar: inert`
   - `; the bar: rest, the knob at x 159`
   - `; the bar: pressed`
@@ -1224,6 +1252,10 @@ Env:MSYSTEM -ErrorAction SilentlyContinue; pio run -e core2`.
 - Silent mode `z` on the speaker.
 - Now Playing up (`ui0`).
 - Note the user's queue first, and restore it afterwards.
+- The console takes every byte outside a command's argument as a key,
+  at once: a script must send nothing but commands. A stray `-f` steps
+  the volume down, then forgets the headphones (`f`), which then have to
+  be paired again on the Output tab.
 
 **The scripted finger** works in screen pixels; the line is at y ~174.
 For a track of length L:
@@ -1272,12 +1304,21 @@ The examples are for a 4:05 CBR MP3.
    - The time and the knob go straight to 2:02: never back to the old
      second, never dotted. Watch it, and film it with a phone's
      slow-motion video for the record.
+   - The console can't show this. `ui` describes the snapshot the page
+     last drew with, and the console reads every byte waiting after the
+     touch is handled and before `Ui::loop()` takes the next snapshot. So
+     a `ui` read in the seek's own loop pass (sent with the tap, or
+     arriving while the start stalls the loop) shows the old second; one
+     sent alone after the seek's log line shows the target. Neither
+     sees the frames in between.
 7. **A long scrub while an MP3 plays.** `uid20,180,300,180,10000`. The
    `[ui] scrub:` line gives the fps, the draw maximum, the ring's
    minimum and underruns (expect +0). `[heap] playing` is unchanged.
 8. **LAME VBR, FLAC, a built-in track.**
    - *One More Time*: `(LAME's TOC inverted; the time asked)`. A seek
-     back into what played: `(the run's index; exact)`.
+     back into what played goes by the run's index, as exact as the
+     run: `(the run's index; the time asked)` after that TOC start, and
+     `(the run's index; exact)` after a seek to 0:00.
    - A FLAC: `[audio] FLAC: starting 2:02.000 in (libFLAC's seek to
      sample ...)`.
    - `qb`, a click track: `uit319,180` gives `-> 0:54 of 1:00` and
@@ -1340,8 +1381,8 @@ One commit each on feature/seek-bar, with the host tests in each:
    - the page, Pages.h, UiText, and Ui.cpp's motion log;
    - test_ui_library;
    - the README, and ARCHITECTURE.md's "not built yet" dropped.
-4. **The device run** (section 11), with its results appended here as
-   "On the device".
+4. **The device run** (section 11), with its results appended as
+   section 16, "On the device".
 
 ## 13. Not built (later, each with what would bring it)
 
@@ -1483,3 +1524,72 @@ One commit each on feature/seek-bar, with the host tests in each:
   whole-row pushes: about 1.5 ms more a frame, for one code path.
 - **The touch design's hint toast for a tap: not needed**, since a tap
   seeks.
+
+## 16. On the device (2026-10-02)
+
+Section 11's scripted steps on the Core2 (COM3, through the serial
+daemon), with 68c342b's build (`v0.5.0-26-g68c342b`, ELF 606c6cdf),
+silent mode (`z`) on the speaker throughout. The tracks: Air's *Moon
+Safari* (CBR MP3s of 7:09, 4:58 and 4:28), Daft Punk's *One More Time*
+(LAME VBR, 5:20), Kavinsky's *OutRun* (FLACs of 1:54 and 3:27) and the
+built-in click tracks (`qb`); section 11's x values were worked out again
+for each length. Every line matched sections 2-8: **no firmware
+defect**. The user's queue (27 tracks, at 9) and its start point (0:55)
+were put back.
+
+- **11.2-11.4, paused, on the 7:09 track** (`qs60`: the knob at x 53):
+  - a tap at x 55: `no seek (back where it plays)`; at x 70: `seek 1:00
+    -> 1:24 of 7:09 (tap): paused, the next play starts there`, then
+    `resume point saved: 1:24 into 1; anchor: none`;
+  - drags, each with one line at the lift and none during the move: x
+    200 to 250, `-> 5:45 (drag, held 144 ms)`; from the knob, x 53 to
+    153, `-> 3:05 (drag from the knob, ...)`, short of x 153's 3:24 by
+    the DragStart's slop; x 200 back to 53, `no seek (back where it
+    plays)`; upward, no line; above y 130 and onto the strip, `no seek
+    (slid off the bar)`;
+  - a hold (`uih`) on the bar ends as a tap, never a long press;
+  - x 319 gives `-> 7:03` (L − 6 s); x 0 gives `-> 0:00` and `resume
+    point cleared (playback moved on)`, `ui` then shows `0 / 429897 ms`
+    with the knob at x 12, and x 160 still seeks (`-> 3:34`). With `uk1`,
+    x 290 gives 7:03 and x 20 gives 0:00. On the 1:54 FLAC, x 319 gives
+    1:48.
+- **11.5, the resume.** Paused at 2:07 after a seek, then reset: `resume
+  point: 2:07 into 1 (stopped: play starts there)`, Now Playing at
+  127000 / 429897 ms. A tap while stopped: `-> 2:51 ...: stopped, the
+  next play starts there`; then play: `MP3: starting 2:51.000 in, of
+  7:09 (CBR; exact)`. The 1:54 FLAC paused at 1:12 and reset: `FLAC:
+  starting 1:12.000 in`. A paused seek to 0:00, then a reset, leaves an
+  entry never held: `0 / 0 ms; the bar: inert`, the dotted line (section
+  7).
+- **11.6-11.8, playing.** Every seek logged `plays from there` and its
+  start line:
+  - `(CBR; exact)` on *Moon Safari*. Five drags 0.8 s apart gave five
+    seeks and five starts, with no underrun;
+  - `(LAME's TOC inverted; the time asked)` on *One More Time*; back into
+    that run, `(the run's index; the time asked)`; back into a run from
+    0:00, `(the run's index; exact)` (7 and 11.8 said exact for both;
+    they now say which);
+  - `libFLAC's seek to sample N` (78-140 ms) on the FLACs;
+  - on a click track, x 319 gives the length less 6 s (`0:24 of 0:30`,
+    `0:54 of 1:00`) and `built-in track: 0:54 asked: counting from
+    there`; it joined the next track 6 s later (`G`: joins continuous).
+  - First audio in the ring after a seek: CBR 80-85 ms, the TOC 74-75 ms,
+    the run's index 117-133 ms, a FLAC 99-180 ms, a click track 3-14 ms.
+- **11.7 and the frames:** 4.5's measured costs; 25 scrubs, no underrun.
+- **11.9, the zone** (x 160): y 163 seeks and y 191 is still the bar;
+  y 161 opens the album; y 192 and 195 are play/pause.
+- **11.11, a join under the finger:** `qs50` on a click track, then a
+  15 s drag. The join came ~10 s in: `no seek (the track changed under the
+  finger)`, and no start after the lift.
+- **The console's `ui` right after a seek** shows the old second when it
+  is read in the seek's own loop pass (11.6 now says why). So Now
+  Playing's frames in the pending window are still the slow-motion
+  video's to check.
+- **Not run:** 11.10 (Waiting) and 11.12 (the sleep timer); the user's
+  11.13-11.15. The `held N ms` values (113-162 ms) are the scripted
+  finger's, not data for a lift guard.
+- **Not a firmware matter:** a stray `-f` from the test script, 51 s in,
+  made the Core2 forget the remembered headphones (`[bt] forgot the
+  remembered headphones`, and the restart that follows it). They have to
+  be paired again (Output > Pair new headphones); 11's setup now warns
+  of it.

@@ -751,7 +751,9 @@ the file again from the top, as today.
 
 ### 6.1 Inside the run: the index
 
-A start at `t` that the run's index covers (4.3) is exact. With `qs` that
+A start at `t` that the run's index covers (4.3) is as exact as the run:
+exact in a run that started exactly, and on the TOC's timeline in one a
+TOC start began (6.5: `(the run's index; the time asked)`). With `qs` that
 means a second earlier in what has played, or a second already decoded
 ahead. With the seek bar (6.7) it is any position the run has passed in
 its last 3.6 min. That still holds after seeks while paused: each is only
@@ -871,7 +873,7 @@ Now Playing's progress line seeks: a tap goes to the second under the
 finger, and a drag seeks once, when the finger lifts.
 [SEEK-BAR.md](SEEK-BAR.md) is its design: the gesture, the drawing, the
 races, the host tests and the device check (`lib/core/SeekBar`,
-test_seek_bar; the device check is still to be run). For the player, a
+test_seek_bar; the device run is its section 16). For the player, a
 seek is a start part of the way in, on the same path as `qs`.
 
 - **`PlaybackController::seek(key, ms, durationMs)`.**
@@ -884,8 +886,8 @@ seek is a start part of the way in, on the same path as `qs`.
     `placeStart()`, which has no `Act` of its own.
 - **What it does, by state:**
   - **Playing:** it starts there now. That is one request: the ring cut,
-    a plan as in 6.1-6.4, first audio in 74-150 ms (section 17), faded
-    in.
+    a plan as in 6.1-6.4, first audio in 74-150 ms for an MP3 (section
+    17; a FLAC 99-180 ms, SEEK-BAR.md 16), faded in.
   - **Paused or Waiting:** the held track is let go, and the next play
     (or the wait's release) starts there. The state stays as it was.
   - **Stopped:** it waits.
@@ -898,8 +900,10 @@ seek is a start part of the way in, on the same path as `qs`.
 - **Whole seconds.** The bar asks for the second it showed, and the time
   shown afterwards is the time asked (6.5). So what the finger read is
   what plays:
-  - to the sample for CBR, FLAC, built-in tracks and the run's index;
-  - within 0.74 s (p95) for a start by LAME's TOC.
+  - to the sample for CBR, FLAC, built-in tracks and the run's index of
+    an exact run;
+  - within 0.74 s (p95) for a start by LAME's TOC, and with the same
+    error for later seeks into that run by its index.
 - **The resume point.**
   - A paused seek's start point is what `resumePoint()` returns, without
     an anchor. Its anchor changed, so `QueueSaver` saves it in the same
