@@ -55,8 +55,11 @@ Pose dancePose(float phi, bool odd, const Box& box = Box());
 Pose idlePose(float seconds, const Box& box = Box());
 // Joint by joint: a at t = 0, b at t = 1.
 Pose blend(const Pose& a, const Pose& b, float t);
-// How much of the dance to show for a tracker confidence: 0 below 0.3,
-// 1 above 0.7, smooth between.
+// How much of the dance to show for the tracker's confidence while it is
+// locked (BeatTracker: on at 0.35 for two beats, off below 0.12): 0 at 0.12
+// and below, 1 at 0.5 and above, smooth between. A fresh lock shows more
+// than half the dance (0.65 at 0.35: DanceRate's dancing), and a fading
+// one goes idle before it unlocks.
 float danceWeight(float confidence);
 // A leg with the hip and foot given: the knee, bending outwards (sign -1 to
 // the left of the screen, +1 to the right). Thigh and shin keep their length.
@@ -98,7 +101,9 @@ private:
 class Dancer {
 public:
   explicit Dancer(const Box& box = Box()) : box_(box) {}
-  // One frame, dt seconds after the last. `beat`: phi/odd are meaningful.
+  // One frame, dt seconds after the last. `beat`: phi/odd are meaningful,
+  // the tracker locked on them (DanceMode passes a grid it isn't locked on
+  // as no beat).
   Pose update(float phi, bool odd, float confidence, bool beat, float dt);
   // A fixed pose for screenshots: full dance weight, no smoothing.
   Pose frozen(float phi, bool odd) const { return dancePose(phi, odd, box_); }

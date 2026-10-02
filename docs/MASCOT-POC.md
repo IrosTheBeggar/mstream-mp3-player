@@ -147,11 +147,10 @@ behind the beat on most of the rest. The design below is the rework.
    beat moves by 0.35 e and the period by 0.06 e (critically damped), and
    the period is clamped to ±4 % of the tempo it was acquired at. If
    another tempo keeps scoring 25 % better for ~1 s (sooner once the lock is
-   gone), the tracker re-acquires. If a quarter, half or three-quarter
-   phase gathers 1.2× the onset energy of the grid's beats for four beats
-   in a row (and the grid has stood eight beats), the grid moves there, the
-   tempo kept and the histogram turned with it: an off-beat or sixteenth
-   lock corrects itself without a fresh acquisition.
+   gone), the tracker re-acquires. (The October 2026 rework also moved the
+   grid to a quarter, half or three-quarter phase that kept out-gathering
+   it; its review measured no gain in F and more false locks, and took it
+   out.)
 5. **Confidence.** A leaky 16-bin histogram of the onsets by phase of the
    beat (3 s) and the PLL's own bookkeeping give three signs of a real beat,
    each scaled 0..1 and multiplied:
@@ -174,27 +173,35 @@ behind the beat on most of the rest. The design below is the rework.
    (BEAT-TRACKER-EVAL.md). The histogram and the hit share are seeded from
    the acquisition window, so a clear beat locks at its second PLL beat as
    before; what keeps noise out is that noise no longer acquires a grid at
-   all (the true means above). Locked uses hysteresis: it comes on at 0.35,
-   no sooner than the second PLL beat after acquiring, and goes off below
-   0.12. Twelve beats in a row under 0.1 drop the grid. `factors()` shows
-   the three signs, for logs and the harness.
+   all (the true means above). Locked uses hysteresis: it comes on once
+   the confidence has been at 0.35 or more for two PLL beats in a row (no
+   sooner than the second after acquiring), and goes off below 0.12. The
+   two beats keep a lock from flapping on and off on a grid at the wrong
+   phase, the commonest false lock on the harness. Twelve beats in a row
+   under 0.1 drop the grid. `factors()` shows the three signs, for logs
+   and the harness.
 
 Cost: 13.3 ms per second of audio on the Core2 before the rework (1.3 % of
 a core, measured at boot by `[dance] tracker bench`; the rework adds a
-per-hop histogram decay and per-beat sums, within a few percent on the
-laptop: 0.15 ms per second of audio against 0.14 ms before, the same
-machine, back to back).
+per-hop histogram decay and per-beat sums, within the noise on the laptop
+once the build's code alignment is pinned; not yet measured on the
+device). An acquisition reads only its 3 s window, however long since the
+last reset (a gapless album never resets).
 
 How well it does on real music, track by track, is measured by the
 evaluation harness in [BEAT-TRACKER-EVAL.md](BEAT-TRACKER-EVAL.md): the
 same tracker on the whole of the 77 library tracks, the click tracks,
 mid-song starts and gapless joins, scored against the reference beats. The
-October 2026 rework of steps 1, 4 and 5 above was made against it: on the
-69 tracks with a beat, the beat F-measure went from 0.40 to 0.50 (0.48 to
-0.57 on the 21 tracks held out of the tuning), the time locked on the
-beat from 42 % to 52 %, the on-beat lock from a median 9.0 s to 6.5 s,
-with the share of wrong locked beats (16 % to 15 %) and the click tracks
-unchanged.
+October 2026 rework of steps 1, 4 and 5 above, and its review, were made
+against it: on the 69 tracks with a beat, the beat F-measure went from
+0.40 to 0.49 (0.48 to 0.56 on a monitored third of the tracks), the time
+locked from 42 % to 50 % and the time the figure dances from 41 % to 46 %,
+the on-beat lock from a median 9.0 s to 6.6 s, the wrong locked beats from
+16 % to 13.5 % and the false-lock episodes from 199 to 141, with the click
+tracks unchanged. Opened mid-song the wrong locked beats are 14.5 %
+against 13.9 %, and the gapless joins have 81 false episodes against 69;
+four tracks got worse where the off-beat is as strong as the beat
+(BEAT-TRACKER-EVAL.md).
 
 The output is `bpm()`, `confidence()`, `locked()`, and the `grid()`: a beat
 at frame + fraction, its index, and the period in frames. The renderer turns
@@ -240,9 +247,11 @@ and the extreme poses land on the beat:
   raised fist straight up, the shoulders wide enough that the raised arm
   clears the head), and the hips swaying with them.
 
-The pose is continuous across beats. Legs use two-bone IK. A confidence
-below 0.3 blends over ~0.4 s into an idle sway, with the figure drawn in
-grey. A lost beat holds its last pose while it fades.
+The pose is continuous across beats. Legs use two-bone IK. Unless the
+tracker is locked, or as its confidence nears the unlock level (the dance
+weight is 0 at 0.12 and 1 at 0.5; a fresh lock at 0.35 shows 0.65), the
+figure blends over ~0.4 s into an idle sway, drawn in grey. A lost beat
+holds its last pose while it fades.
 
 The figure is drawn with anti-aliased `drawWideLine` (5 px) and smooth
 circles into a 120×150 8-bit `M5Canvas`. `setPsram(true)` comes before
@@ -321,8 +330,9 @@ a 0.16 s blink every 3.7 s. It is drawn in the idle palette: the same indices,
 half grey and dimmed.
 
 **Blending** (`crab::Crab`, the crab's `Dancer`): the dance weight follows
-the tracker's confidence exactly as the stick figure's does (0 below 0.3,
-1 above 0.7, over ~0.4 s; a lost beat holds its last pose while it fades).
+the tracker's confidence exactly as the stick figure's does (only while it
+is locked: 0 at 0.12, 1 at 0.5, over ~0.4 s; a lost beat holds its last
+pose while it fades).
 Offsets and claw lifts lerp from the idle to the dance, the frames switch at
 a weight of 0.5, and the palette fades channel by channel in 32 steps.
 
@@ -499,10 +509,12 @@ The targets were a lock within 4 s, a median under 10 ms and a p95 under
   the grid's dominance) the tracker locks on the lead-in in 11 of the 36
   cases (124 and 150 BPM at 0.75, 150 BPM at 0.66, with either note 4 dB
   under the kick): there the lead-in with the hat on top gathers more
-  onset energy than the kick in the tracker's bands, and it is the beat
-  as far as the tracker can tell. The test now accepts a lock exactly on
-  the lead-in for those phases and still rejects anything else; the
-  straight off-beat (0.5) and 96 BPM lock on the kick in every case.
+  onset energy than the kick in the tracker's bands. These are known
+  failures: the test lists the 11 and stays strict on the rest (a case
+  that leaves or joins the list fails it). In 9 more it doesn't lock at
+  all (the straight off-beat as loud as the kick at 124 and 150 BPM, and
+  96 BPM at 0.75): with the two phases equal, no phase dominates. The
+  harness runs the same 36 cases (`drums_*`).
 - **Tempo changes** (120→135, 128→96, 140→128) are locked again on the new
   tempo within 8 s (the first version: 6 s), p95 < 4 ms from then on. The
   old grid is dropped ~1.5 s after the change, so the figure sways rather

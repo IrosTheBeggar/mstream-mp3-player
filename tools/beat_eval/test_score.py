@@ -152,6 +152,41 @@ class ScoreCase(unittest.TestCase):
         self.assertAlmostEqual(steady["changes"][0]["relock_s"], 0.0, places=2)
 
 
+    def test_dance_share_reads_the_weight(self):
+        out = fake_output(grid(120, 1.0, 61.0), 120.0)
+        w = np.where(out["T"][:, 0] < 31.0, 0.9, 0.3)  # dancing for the first half of the span only
+        out["T"] = np.column_stack([out["T"], np.zeros((len(w), 4)), w])
+        s = score.score_case(out, self.ref)
+        self.assertAlmostEqual(s["dance_share_span"], 0.5, delta=0.02)
+        self.assertNotIn("dance_share_span", score.score_case(fake_output(grid(120, 1.0, 61.0), 120.0), self.ref))
+
+
+class Drums(unittest.TestCase):
+    def test_kick_lead_in_elsewhere_never(self):
+        kicks = grid(124, 0.2, 20.0)
+        p = 60.0 / 124
+
+        def run(shift_beats, locked=True):
+            out = fake_output(kicks + shift_beats * p, 124.0, locked_from=0.0 if locked else 99.0)
+            out["R"] = kicks
+            return score.drum_lock(out, 0.75)["where"]
+        self.assertEqual(run(0.01), "kick")
+        self.assertEqual(run(-0.25), "lead-in")
+        self.assertEqual(run(0.5), "elsewhere")
+        self.assertEqual(run(-0.34), "elsewhere")  # a 0.66 lead-in isn't this case's
+        self.assertEqual(run(0.0, locked=False), "never")
+
+
+class Flags(unittest.TestCase):
+    def test_clean_reference_ignores_the_tracker(self):
+        t = dict(sync_test_case="good", clarity=0.8, clarity_detail={}, timing_qa={}, beat_source="grid",
+                 tempo_stability={}, tempo_candidates=[], tempo_bpm=120.0)
+        self.assertEqual(score.ref_flags(t, {}), [])
+        ref = score.Ref(grid(120, 1.0, 61.0), 62.0)
+        s = score.score_case(fake_output(grid(120, 1.0, 61.0, phase=0.5), 120.0), ref)
+        self.assertEqual(score.tracker_flags(s), ["tracker locked on the reference's off-beat for most beats"])
+
+
 class DeviceTimeline(unittest.TestCase):
     def test_gapless_trim(self):
         lame = dict(codec="mp3", decode=dict(tag="Info", encoder="LAME3.92", enc_delay=576, xing_frame_samples=1152))

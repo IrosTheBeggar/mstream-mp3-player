@@ -30,11 +30,15 @@ RATIOS = [(1.0, "1"), (2.0, "2"), (0.5, "1/2"), (1.5, "3/2"), (2 / 3, "2/3"), (4
 OCTAVE_OK = ("1", "2", "1/2")
 BEAT_CLASSES = ("good", "ok")
 RATE = 44100
+IDLE_WEIGHT = 0.5    # dancerate::kIdleWeight: a dance weight above it is drawn dancing
+DRUM_TOL = 0.05      # drum cases: the grid's median offset from the kick (or the lead-in), in beats
 
 
-def held_out(index):
-    """The tracks the tracker is NOT tuned on: every third one (26 of 77), so each
-    album contributes to both halves. Changes are judged on the rest, then checked here."""
+def monitored(index):
+    """The monitored split: every third track (26 of 77), so each album contributes to both halves.
+    Thresholds are chosen on the other two thirds, but these tracks' numbers are in every report
+    and were seen while tuning: a check on fitting, not an independent test (that needs tracks
+    nobody has looked at)."""
     return index % 3 == 2
 
 
@@ -59,7 +63,7 @@ def parse_output(path):
                 for kv in p[1:]:
                     k, v = kv.split("=", 1)
                     d[k] = float(v)
-    # T: t bpm est clarity conf locked valid [salience steady clear]; B: t period bpm conf locked index
+    # T: t bpm est clarity conf locked valid [dominance hits pulse steady [weight]]; B: t period bpm conf locked index
     return dict(meta=meta, end=end, T=np.array(T).reshape(len(T), -1) if T else np.zeros((0, 7)),
                 B=np.array(B).reshape(-1, 6), R=np.array(R))
 
@@ -289,6 +293,9 @@ def score_case(out, ref, expect_beat=True):
         sel = span & lk
         rel_t = [relation(T[i, 1], 60.0 / ref.period_at(T[i, 0])) for i in np.where(sel)[0]]
         s["locked_share_span"] = float(np.mean(lk[span])) if span.any() else None
+        # what the dancer shows: the runner's dance weight (column 11), dancing above IDLE_WEIGHT
+        if T.shape[1] >= 12:
+            s["dance_share_span"] = float(np.mean(T[span, 11] > IDLE_WEIGHT)) if span.any() else None
         s["acc1_time"] = rel_t.count("1") / len(rel_t) if rel_t else None
         s["acc2_time"] = sum(r in OCTAVE_OK for r in rel_t) / len(rel_t) if rel_t else None
         s["rel_time"] = {r: round(rel_t.count(r) * dt, 2) for r in sorted(set(rel_t))}
@@ -345,6 +352,28 @@ def score_case(out, ref, expect_beat=True):
     return s
 
 
+def drum_lock(out, phase):
+    """Where a drum case's grid sat while locked: the median offset of its locked beats from the nearest
+    kick (the truth), in beats; 'kick' within DRUM_TOL of 0, 'lead-in' within DRUM_TOL of -(1 - phase)
+    (the notes at `phase` before the next kick), else 'elsewhere'."""
+    B, R = out["B"], out["R"]
+    lock = out["end"].get("lock_s", -1.0)
+    locked = B[B[:, 4] > 0.5] if len(B) else B
+    x = dict(lock_s=None if lock < 0 else lock, locked_beats=int(len(locked)), median_frac=None, where="never")
+    if len(locked) == 0 or len(R) < 2:
+        return x
+    period = float(np.median(np.diff(R)))
+    frac = float(np.median([nearest(R, t) / period for t in locked[:, 0]]))
+    x["median_frac"] = frac
+    if abs(frac) <= DRUM_TOL:
+        x["where"] = "kick"
+    elif phase > 0.5 and abs(frac + (1.0 - phase)) <= DRUM_TOL:
+        x["where"] = "lead-in"
+    else:
+        x["where"] = "elsewhere"
+    return x
+
+
 # ---- the corpus reference ----
 
 def corpus_ref(t, meta, start=0.0, seconds=None):
@@ -357,8 +386,9 @@ def corpus_ref(t, meta, start=0.0, seconds=None):
     return Ref(beats, end, start=start, weak=weak)
 
 
-def ref_flags(t, meta, s):
-    """Reasons to doubt the reference itself (the tracker isn't the only suspect)."""
+def ref_flags(t, meta):
+    """Reasons to doubt the reference itself, from the reference and the file alone (never from the
+    tracker's output: the clean-reference subset must be the same tracks for every run compared)."""
     f = []
     if t["sync_test_case"] in ("hard", "no-clear-beat"):
         f.append(t["sync_test_case"])
@@ -392,7 +422,13 @@ def ref_flags(t, meta, s):
     tag = meta.get("tag_bpm")
     if tag and relation(tag, t["tempo_bpm"]) not in OCTAVE_OK:
         f.append(f"tag BPM {tag:g} disagrees")
-    # the tracker disagrees confidently
+    return f
+
+
+def tracker_flags(s):
+    """Where the tracker disagrees with the reference confidently: worth a listen, but it depends on the
+    run, so it is reported next to the reference's flags and never used to pick tracks."""
+    f = []
     if s.get("locked_beats_in_span", 0) >= 32:
         n = s["locked_beats_in_span"]
         if s["beats"]["wrong_tempo"] > 0.5 * n:
@@ -423,6 +459,7 @@ def summarize(rows, key="corpus"):
     out["tracks_never_locked"] = sum(r["lock_s"] is None for r in rows)
     out["tracks_never_on"] = sum(r.get("on_lock_s") is None for r in rows)
     out["locked_share_span"] = mean("locked_share_span")
+    out["dance_share_span"] = mean("dance_share_span")
     lt = [r["on_lock_after_first_s"] for r in rows if r.get("on_lock_after_first_s") is not None]
     out["on_lock_after_first_med_s"] = med(lt)
     out["on_lock_within_5s"] = sum(1 for x in lt if x <= 5.0) / len(rows)
@@ -483,6 +520,7 @@ def summary_table(groups):
             ("tempo exact", lambda s: pc(s.get("tracks_acc1"))),
             ("tempo oct.", lambda s: pc(s.get("tracks_acc2"))),
             ("locked (span)", lambda s: pc(s.get("locked_share_span"))),
+            ("dancing (span)", lambda s: pc(s.get("dance_share_span"))),
             ("lock, med", lambda s: fmt(s.get("lock_med_s"), 1, " s")),
             ("on-beat lock after 1st beat, med", lambda s: fmt(s.get("on_lock_after_first_med_s"), 1, " s")),
             ("on-beat ≤10 s", lambda s: pc(s.get("on_lock_within_10s"))),
@@ -524,7 +562,8 @@ def score_run(corpus, work, name, quiet=False):
         s.update(index=i, title=title_of(t), album=metas[i]["album"], genre=metas[i]["genre"],
                  cls=t["sync_test_case"], ref_bpm=t["tempo_bpm"], clarity=t["clarity"],
                  first_beat_s=ref.first, duration_s=ref.duration, tag_bpm=metas[i].get("tag_bpm"))
-        s["ref_flags"] = ref_flags(t, metas[i], s)
+        s["ref_flags"] = ref_flags(t, metas[i])
+        s["tracker_flags"] = tracker_flags(s)
         result["corpus"][f"{i:02d}"] = s
     # mid-track starts
     for i, t in tracks.items():
@@ -559,12 +598,16 @@ def score_run(corpus, work, name, quiet=False):
                  relock_s=ch.get("relock_s"), false_beats_10s=ch.get("false_beats_10s"),
                  tempo_a=ta["tempo_bpm"], tempo_b=tb["tempo_bpm"])
         result["joins"][p.stem] = s
-    # clicks
-    expect = {c[0]: c[3] for c in beat_eval.CLICK_CASES}
+    # clicks, and the drum patterns
+    expect = {c[0]: c[3] for c in beat_eval.CLICK_CASES + beat_eval.DRUM_CASES}
+    result["drums"] = {}
     cdir = run_dir / "clicks"
     for p in sorted(cdir.glob("*.txt")) if cdir.exists() else []:
         out = parse_output(p)
         R = out["R"]
+        if p.stem.startswith("drums_"):
+            result["drums"][p.stem] = drum_lock(out, float(p.stem.split("_")[2]))
+            continue
         changes = []
         if len(R) > 2:
             # a tempo change, or the beat coming back after a gap
@@ -592,13 +635,15 @@ def score_run(corpus, work, name, quiet=False):
         "no-clear-beat": summarize([r for r in corpus_rows if r["cls"] == "no-clear-beat"]),
         "all 77": summarize(corpus_rows),
         "beat tracks, clean reference": summarize([r for r in beat_rows if not r["ref_flags"]]),
-        "beat tracks, dev (tuned on)": summarize([r for r in beat_rows if not held_out(r["index"])]),
-        "beat tracks, held out": summarize([r for r in beat_rows if held_out(r["index"])]),
+        "beat tracks, tuning split": summarize([r for r in beat_rows if not monitored(r["index"])]),
+        "beat tracks, monitored split": summarize([r for r in beat_rows if monitored(r["index"])]),
         "mid-track start (60 s in), beat tracks": summarize([r for r in result["mid"].values() if r["cls"] in BEAT_CLASSES]),
-        "mid-track start, held out": summarize([r for r in result["mid"].values()
-                                                if r["cls"] in BEAT_CLASSES and held_out(r["index"])]),
+        "mid-track start, monitored split": summarize([r for r in result["mid"].values()
+                                                if r["cls"] in BEAT_CLASSES and monitored(r["index"])]),
         "gapless joins": summarize(list(result["joins"].values())),
     }
+    d = list(result["drums"].values())
+    result["drum_summary"] = {w: sum(x["where"] == w for x in d) for w in ("kick", "lead-in", "elsewhere", "never")}
     result["by_album"] = {a: summarize([r for r in beat_rows if r["album"] == a])
                           for a in sorted({r["album"] for r in corpus_rows})}
     result["by_genre"] = {g: summarize([r for r in beat_rows if r["genre"] == g])
@@ -650,6 +695,19 @@ def make_report(result):
                  f"{fmt(c['phase_med_ms'], 1)} / {fmt(c['phase_p95_ms'], 1)} ms | {fmt(c['bias_ms'], 1)} | "
                  f"{c['locked_beats_in_span'] - c['beats']['on']} + {c['beats']['no_ref']} outside | {chs} |")
     L.append("")
+    if result.get("drums"):
+        ds = result["drum_summary"]
+        L.append("## Drum patterns (the host tests' heavy off-beat cases)\n")
+        L.append(f"Kick on every beat; bass and ghost kick 4-6 dB under it at PHASE of the beat (0.66 and 0.75: a "
+                 f"lead-in to the next kick), a hat on top. Where the locked grid sits (median over its locked beats, "
+                 f"±{DRUM_TOL} beat): on the kick {ds['kick']}, on the lead-in {ds['lead-in']}, elsewhere "
+                 f"{ds['elsewhere']}, never locked {ds['never']} (of {len(result['drums'])}).\n")
+        L.append("| case | lock | locked beats | median offset from the kick (beats) | where |")
+        L.append("|---|---|---|---|---|")
+        for k, x in result["drums"].items():
+            L.append(f"| {k} | {fmt(x['lock_s'], 2, ' s')} | {x['locked_beats']} | {fmt(x['median_frac'], 3)} | "
+                     f"{x['where']} |")
+        L.append("")
     L.append("## Gapless joins (last 30 s of a track, first 60 s of the next, no reset)\n")
     L.append("| join | tempi | F | F, next track only | relock after the next track's first beat | "
              "false beats in the 10 s after |")
@@ -674,7 +732,7 @@ def make_report(result):
                  f"{fmt(r.get('bpm_median'), 1)} ({r.get('bpm_relation', '-')}) | {fmt(r['lock_s'], 1, ' s')} | "
                  f"{fmt(r.get('on_lock_s'), 1, ' s')} | {fmt(r['f'])} | {fmt(r['f_oct'])} | "
                  f"{fmt(r['phase_med_ms'], 0)} / {fmt(r['phase_p95_ms'], 0)} | {pc(r['false_share'])} | "
-                 f"{'; '.join(r['ref_flags'])} |")
+                 f"{'; '.join(r['ref_flags'] + r.get('tracker_flags', []))} |")
     L.append("")
     L.append("## Worst 15 (by F; no-clear-beat tracks left out)\n")
     L.append("| # | track | class | F | F oct. | ref / tracked BPM | estimate (rel.), clarity, conf p90 | "
@@ -691,7 +749,7 @@ def make_report(result):
                  f"{b['on']} / {b['offbeat']} / {b['off']} / {b['wrong_tempo']} / {b['no_ref']} | "
                  f"{' '.join(str(x) for x in r.get('phase_eighths', []))} | "
                  f"{fmt(r['first_beat_s'], 1, ' s')} | {fmt(r.get('on_lock_s'), 1, ' s')} | "
-                 f"{'; '.join(r['ref_flags'])} |")
+                 f"{'; '.join(r['ref_flags'] + r.get('tracker_flags', []))} |")
     L.append("")
     return "\n".join(L)
 
@@ -708,9 +766,9 @@ def pool_rel(result):
 def compare(work, a, b):
     A = json.loads((work / "runs" / a / "score.json").read_text(encoding="utf-8"))
     B = json.loads((work / "runs" / b / "score.json").read_text(encoding="utf-8"))
-    keys = ["f", "f_oct", "tracks_acc1", "tracks_acc2", "locked_share_span", "lock_med_s", "on_lock_after_first_med_s",
-            "on_lock_within_10s", "tracks_never_on", "phase_med_ms", "phase_p95_ms", "bias_ms", "false_share",
-            "false_episodes"]
+    keys = ["f", "f_oct", "tracks_acc1", "tracks_acc2", "locked_share_span", "dance_share_span", "lock_med_s",
+            "on_lock_after_first_med_s", "on_lock_within_10s", "tracks_never_on", "phase_med_ms", "phase_p95_ms",
+            "bias_ms", "false_share", "false_episodes", "false_episode_s"]
     for group in A["summary"]:
         sa, sb = A["summary"][group], B["summary"].get(group, {})
         print(f"\n{group}  ({a} vs {b})")
@@ -723,13 +781,27 @@ def compare(work, a, b):
         ca, cb = A["clicks"][k], B["clicks"].get(k, {})
         print(f"  {k:24s} {fmt(ca.get('lock_s'))}/{fmt(cb.get('lock_s'))}  {fmt(ca.get('phase_med_ms'), 1)}/"
               f"{fmt(cb.get('phase_med_ms'), 1)}  {fmt(ca.get('f'))}/{fmt(cb.get('f'))}")
-    print("\nper track F (largest changes):")
-    d = []
-    for k, ra in A["corpus"].items():
-        rb = B["corpus"].get(k)
-        if rb:
-            d.append(((ra["f"] or 0) - (rb["f"] or 0), k, ra, rb))
-    for delta, k, ra, rb in sorted(d, key=lambda x: x[0])[:10] + sorted(d, key=lambda x: -x[0])[:10]:
-        print(f"  {k} {ra['title'][:30]:30s} {fmt(ra['f'])} vs {fmt(rb['f'])} ({delta:+.2f})")
+    if A.get("drum_summary") or B.get("drum_summary"):
+        print(f"\ndrum patterns (kick / lead-in / elsewhere / never): {A.get('drum_summary')} vs {B.get('drum_summary')}")
+    for suite, label in (("corpus", "whole tracks"), ("mid", "mid-track starts")):
+        rows = [(k, ra, B[suite].get(k)) for k, ra in A[suite].items()
+                if ra["cls"] in BEAT_CLASSES and B[suite].get(k)]
+        # paired: each beat track's on-beat lock time in both runs (never: counted as worse / better)
+        da = [(ra.get("on_lock_after_first_s"), rb.get("on_lock_after_first_s")) for _, ra, rb in rows]
+        both = [a - b for a, b in da if a is not None and b is not None]
+        print(f"\n{label}, on-beat lock after the first beat, paired over {len(rows)} beat tracks ({a} minus {b}): "
+              f"median {fmt(med(both), 1, ' s')} over the {len(both)} on in both; earlier in {sum(x < -0.5 for x in both)}, "
+              f"later in {sum(x > 0.5 for x in both)}; on only in {a}: {sum(1 for x, y in da if x is not None and y is None)}, "
+              f"only in {b}: {sum(1 for x, y in da if x is None and y is not None)}")
+        # every regression and gain over 0.1 in F, with where the locked beats went
+        moved = sorted(((ra["f"] or 0) - (rb["f"] or 0), k, ra, rb) for k, ra, rb in rows)
+        moved = [m for m in moved if abs(m[0]) > 0.1]
+        print(f"{label}, F changed by more than 0.1: {sum(m[0] < 0 for m in moved)} down, {sum(m[0] > 0 for m in moved)} up "
+              f"(on / off-beat / off / wrong tempo, {a} vs {b})")
+        for delta, k, ra, rb in moved:
+            ba, bb = ra["beats"], rb["beats"]
+            print(f"  {k} {ra['title'][:30]:30s} {fmt(ra['f'])} vs {fmt(rb['f'])} ({delta:+.2f})  "
+                  f"{ba['on']}/{ba['offbeat']}/{ba['off']}/{ba['wrong_tempo']} vs "
+                  f"{bb['on']}/{bb['offbeat']}/{bb['off']}/{bb['wrong_tempo']}")
     ca, cb = A["cpu"], B["cpu"]
     print(f"\ncpu ns per audio s: {ca.get('median_ns_per_audio_s')} vs {cb.get('median_ns_per_audio_s')}")

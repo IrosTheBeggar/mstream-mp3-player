@@ -34,6 +34,7 @@ REPO = HERE.parent.parent
 RATE = 44100
 TRACKER_SOURCES = ["lib/core/BeatTracker.cpp", "lib/core/BeatTracker.h", "lib/core/HopFrontEnd.cpp",
                    "lib/core/HopFrontEnd.h", "lib/core/ClickGen.cpp", "lib/core/ClickGen.h",
+                   "lib/core/DancePose.cpp", "lib/core/DancePose.h", "test/test_beat_tracker/Signals.h",
                    "tools/beat_eval/runner.cpp"]
 EXE = "runner.exe" if os.name == "nt" else "runner"
 
@@ -68,6 +69,11 @@ CLICK_CASES = [
     ("noise_only", "noise:-30:30", [], False),
     ("silence_only", "silence:30", [], False),
 ]
+# The host tests' heavy off-beat drum patterns (test_heavy_offbeat_low_band_locks_on_the_kick): a kick on
+# every beat, and a bass note and a ghost kick 4-6 dB under it at PHASE of the beat, with a hat on top.
+# The beat is the kick by construction; at 0.66 and 0.75 the notes are a lead-in to the next kick.
+DRUM_CASES = [(f"drums_{bpm}_{phase:.2f}_b{-bass}_g{-ghost}", f"drums:{bpm}:20:{phase}:-6:{bass}:{ghost}:0.2", [], True)
+              for bpm in (96, 124, 150) for phase in (0.5, 0.66, 0.75) for bass in (-4, -6) for ghost in (-4, -6)]
 CPU_TRACKS = [23, 26, 37, 53, 70]  # One More Time, HBFS, Alligator, Stronger, Testarossa
 MID_START_S = 60.0
 MID_SECONDS = 60.0
@@ -115,9 +121,10 @@ def cmd_build(args):
     out = work / "bin" / EXE
     out.parent.mkdir(parents=True, exist_ok=True)
     cxx = args.cxx or os.environ.get("CXX", "g++")
-    cmd = [cxx, "-std=gnu++17", "-O2", "-Wall", "-Wextra", "-I", str(REPO / "lib/core"),
+    cmd = [cxx, "-std=gnu++17", "-O2", "-Wall", "-Wextra", "-I", str(REPO / "lib/core"), "-I",
+           str(REPO / "test/test_beat_tracker"),
            str(HERE / "runner.cpp"), str(REPO / "lib/core/BeatTracker.cpp"), str(REPO / "lib/core/HopFrontEnd.cpp"),
-           str(REPO / "lib/core/ClickGen.cpp"), "-o", str(out)]
+           str(REPO / "lib/core/ClickGen.cpp"), str(REPO / "lib/core/DancePose.cpp"), "-o", str(out)]
     if os.name == "nt":
         cmd.insert(1, "-static")  # MSYS2's libstdc++ DLLs aren't on every PATH
     print(" ".join(cmd))
@@ -310,7 +317,7 @@ def cmd_run(args):
                 jobs.append((["--pcm", short_path(pcm), *prior, *via],
                              run_dir / "joins" / f"{track_id(a)}-{track_id(b)}.txt"))
     if "clicks" in suites:
-        for name, spec, extra, _ in CLICK_CASES:
+        for name, spec, extra, _ in CLICK_CASES + DRUM_CASES:
             jobs.append((["--synth", spec, *extra, *via], run_dir / "clicks" / f"{name}.txt"))
     with concurrent.futures.ThreadPoolExecutor(args.jobs) as ex:
         list(ex.map(lambda j: run_runner(exe, *j), jobs))

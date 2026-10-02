@@ -107,12 +107,13 @@ template <class Canvas>
 void blit(Canvas& c, FrameId id, int x0, int y0, bool flip, int repeat = 1);
 
 // The state around the pure functions, as dance::Dancer: an idle clock and a
-// dance weight that follows the tracker's confidence (0 below 0.3, 1 above
-// 0.7) over ~0.4 s. Without a beat, the dance half holds its last pose while
-// it fades.
+// dance weight that follows the tracker's confidence (dance::danceWeight: 0
+// at 0.12, 1 at 0.5) over ~0.4 s. Without a beat, the dance half holds its
+// last pose while it fades.
 class Crab {
 public:
-  // One frame, dt seconds after the last. `beat`: phi/odd are meaningful.
+  // One frame, dt seconds after the last. `beat`: phi/odd are meaningful,
+  // the tracker locked on them.
   Pose update(float phi, bool odd, float confidence, bool beat, float dt);
   // A fixed pose for screenshots: full dance weight, no smoothing.
   static Pose frozen(float phi, bool odd) { return dancePose(phi, odd); }

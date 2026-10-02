@@ -55,10 +55,11 @@ Why this split:
   was tuned and measured on the device (MASCOT-POC.md: lock in 2.5-2.9 s,
   median error 2.4-2.8 ms on click tracks). A full Rust port would be two
   trackers to keep in step. (The October 2026 rework of the tracker's
-  confidence, lock and onset start, BEAT-TRACKER-EVAL.md, is on the Core2's
-  side of this split: the front end, the `@h` line and protocol 1 are
-  unchanged, and `feedHop()` still gives what `process()` gives, bit for
-  bit, on the 77 library tracks and the 17 synthetic cases.)
+  confidence, lock and onset start, and its review, BEAT-TRACKER-EVAL.md,
+  are on the Core2's side of this split: the front end, the `@h` line and
+  protocol 1 are unchanged, and `feedHop()` still gives what `process()`
+  gives, bit for bit, on all 275 harness cases: the 77 library tracks, the
+  mid-song and join suites, and the 53 synthetic cases.)
 - **Little to port.** Step 1 is about 80 lines with no tables.
 - **Little to send.** Two floats 86 times a second, about 3.5 KB/s with
   the rest, a third of 115200 baud. Raw decimated audio would be 11 KB/s

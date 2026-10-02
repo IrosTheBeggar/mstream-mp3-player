@@ -11,6 +11,7 @@
 
 #include "Base64Text.h"
 #include "DancePose.h"
+#include "DanceRate.h"
 #include "RollingStats.h"
 
 using dance::Point;
@@ -160,9 +161,15 @@ void test_bones_and_box() {
 // Low confidence: the idle sway (no hop); the Dancer fades between them
 // smoothly and holds the last dance pose while a lost beat fades out.
 void test_low_confidence_blends_to_idle() {
+  // On BeatTracker's scale: nothing at its unlock level, all from 0.5, and
+  // a fresh lock (0.35) past DanceRate's idle weight (test_beat_tracker
+  // checks the tracker's side).
   TEST_ASSERT_EQUAL_FLOAT(0.0f, dance::danceWeight(0.1f));
+  TEST_ASSERT_EQUAL_FLOAT(0.0f, dance::danceWeight(0.12f));
+  TEST_ASSERT_EQUAL_FLOAT(1.0f, dance::danceWeight(0.5f));
   TEST_ASSERT_EQUAL_FLOAT(1.0f, dance::danceWeight(0.9f));
-  TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.5f, dance::danceWeight(0.5f));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.5f, dance::danceWeight(0.31f));
+  TEST_ASSERT_TRUE(dance::danceWeight(0.35f) > dancerate::kIdleWeight + 0.1f);
   // Idle keeps both feet down.
   for (int i = 0; i < 40; ++i) {
     const Pose p = dance::idlePose(i * 0.1f);

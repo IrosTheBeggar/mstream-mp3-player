@@ -177,7 +177,7 @@ Step danceStep(double beats, float bpm, double scale) {
 }
 
 float danceWeight(float confidence) {
-  float x = (confidence - 0.3f) / 0.4f;
+  float x = (confidence - 0.12f) / 0.38f;
   if (x < 0.0f) x = 0.0f;
   if (x > 1.0f) x = 1.0f;
   return x * x * (3.0f - 2.0f * x);

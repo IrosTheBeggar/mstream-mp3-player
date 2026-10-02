@@ -10,6 +10,7 @@
 //
 //   runner --pcm track.s16 [--start S] [--seconds S] [--prior BPM] [--via-hops]
 //   runner --synth "click:120:60,silence:5,click:96:30" [--noise DBFS] [--seed N]
+//   runner --synth "drums:124:20:0.75:-6:-4:-4:0.2"   (the host tests' drum pattern)
 //   runner --bench [--seconds S] [--repeat N]
 //   runner --pcm track.s16 --time-only [--start S] [--seconds S] [--repeat N]
 //
@@ -21,7 +22,10 @@
 //
 // Output, one record per line (times in seconds of the input's timeline):
 //   meta key=value ...
-//   T t bpm est clarity conf locked valid      every --every hops (default 8)
+//   T t bpm est clarity conf locked valid dominance hits pulse steady weight
+//                                               every --every hops (default 8);
+//                                               weight: the dance weight shown
+//                                               (dance::danceWeight while locked)
 //   B t period bpm conf locked index            each grid beat, as it is reached
 //   R t                                         truth (synthetic input only)
 //   end key=value ...
@@ -48,7 +52,9 @@
 
 #include "BeatTracker.h"
 #include "ClickGen.h"
+#include "DancePose.h"
 #include "HopFrontEnd.h"
+#include "Signals.h"  // test/test_beat_tracker: the host tests' drum pattern, exactly
 
 namespace {
 
@@ -79,7 +85,8 @@ struct Options {
                "       runner --synth SPEC [--noise DBFS] [--seed N] [--prior BPM] [--via-hops]\n"
                "       runner --bench [--seconds S] [--repeat N]\n"
                "       runner --pcm FILE --time-only [--start S] [--seconds S] [--repeat N]\n"
-               "SPEC: comma-separated click:BPM[off][:SECONDS[:OFFSET_BEATS]] | silence:SECONDS | noise:DBFS:SECONDS\n");
+               "SPEC: comma-separated click:BPM[off][:SECONDS[:OFFSET_BEATS]] | silence:SECONDS | noise:DBFS:SECONDS\n"
+               "      | ambient:DBFS:SECONDS[:SEED] | drums:BPM:SECONDS:PHASE:HAT_DB[:BASS_DB[:GHOST_DB[:FIRST_BEAT]]]\n");
   std::exit(2);
 }
 
@@ -168,6 +175,13 @@ void buildSynth(const Options& o, std::vector<int16_t>* mono, std::vector<double
       const double secs = f.size() >= 3 ? std::atof(f[2].c_str()) : 60.0;
       if (f.size() >= 4) offset = static_cast<float>(std::atof(f[3].c_str()));
       appendClicks(mono, truth, static_cast<float>(std::atof(bpmText.c_str())), secs, offset);
+    } else if (f[0] == "drums" && f.size() >= 5) {  // sig::drums(): kick on the beat, hat/bass/ghost at PHASE
+      const auto num = [&](size_t i, double dflt) { return f.size() > i ? std::atof(f[i].c_str()) : dflt; };
+      const sig::Track d = sig::drums(static_cast<float>(num(1, 120)), num(2, 20), num(3, 0.5), num(4, -6), num(5, -200),
+                                      num(6, -200), num(7, 0.0));
+      const size_t base = mono->size();
+      mono->insert(mono->end(), d.mono.begin(), d.mono.end());
+      for (double b : d.beats) truth->push_back(static_cast<double>(base) + b);
     } else if (f[0] == "silence" && f.size() == 2) {
       mono->resize(mono->size() + static_cast<size_t>(std::atof(f[1].c_str()) * kRate), 0);
     } else if (f[0] == "ambient" && f.size() >= 3) {  // low-passed noise with a slow swell (test_beat_tracker's)
@@ -346,20 +360,21 @@ int main(int argc, char** argv) {
     if (tracker.locked()) ++lockedHops;
     if (hops % static_cast<uint32_t>(o.every) == 0) {
       const BeatTracker::Factors f = tracker.factors();
-      std::printf("T %.4f %.4f %.4f %.4f %.4f %d %d %.3f %.3f %.3f %.3f\n", fedTo / kRate, tracker.bpm(),
+      // What the dancer is shown (DanceMode: the weight's target, danced only while locked).
+      const float weight = tracker.locked() ? dance::danceWeight(tracker.confidence()) : 0.0f;
+      std::printf("T %.4f %.4f %.4f %.4f %.4f %d %d %.3f %.3f %.3f %.3f %.3f\n", fedTo / kRate, tracker.bpm(),
                   tracker.estimatedBpm(), tracker.tempoClarity(), tracker.confidence(), tracker.locked() ? 1 : 0,
-                  g.valid ? 1 : 0, f.dominance, f.hitRate, f.pulse, f.steady);
+                  g.valid ? 1 : 0, f.dominance, f.hitRate, f.pulse, f.steady, weight);
     }
   }
   if (hopsFile) std::fclose(hopsFile);
   const int32_t lockFrames = tracker.framesToLock();
-  const uint32_t shifts = tracker.phaseShifts();
 
   // CPU: the same audio again, timed, in the firmware's chunk size.
   const double ns = timedPass(&tracker, &feeder, audio, n, startFrame);
   const double audioSeconds = static_cast<double>(n) / kRate;
-  std::printf("end hops=%u lock_s=%.4f locked_share=%.4f phase_shifts=%u ns_per_audio_s=%.0f\n", hops,
+  std::printf("end hops=%u lock_s=%.4f locked_share=%.4f ns_per_audio_s=%.0f\n", hops,
               lockFrames < 0 ? -1.0 : static_cast<double>(lockFrames) / kRate,
-              hops ? static_cast<double>(lockedHops) / hops : 0.0, shifts, audioSeconds > 0 ? ns / audioSeconds : 0.0);
+              hops ? static_cast<double>(lockedHops) / hops : 0.0, audioSeconds > 0 ? ns / audioSeconds : 0.0);
   return 0;
 }

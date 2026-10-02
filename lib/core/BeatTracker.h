@@ -31,16 +31,15 @@
 //   4. A PLL moves each predicted beat by the centroid of the onsets in a
 //      window around it (phase and period gains), the period clamped to
 //      +-4 % of the tempo it was acquired at. A tempo that keeps scoring
-//      clearly better than the one tracked re-acquires. A quarter, half or
-//      three-quarter phase that keeps gathering clearly more onset energy
-//      than the grid's beats becomes the grid (a phase shift, the tempo
-//      kept).
+//      clearly better than the one tracked re-acquires, and so does a grid
+//      whose confidence stays near zero for 12 beats.
 //   5. Confidence, from a leaky histogram of the onsets by phase of the
 //      beat: how far the grid's phase dominates the strongest other quarter
 //      phase, the share of recent PLL beats with an onset in their window,
 //      and how far the beat's onsets stand out from an average phase (noise:
-//      about 1). Locked uses hysteresis (on above 0.35 from the second
-//      beat, off below 0.12). factors() shows the three.
+//      about 1). Locked uses hysteresis: on at 0.35 or more for two beats
+//      in a row (from the second beat after acquiring), off below 0.12.
+//      factors() shows the three.
 //
 // Time is counted in the caller's frames: reset() gives the frame index of
 // the next sample, and the grid comes back in those units (the firmware uses
@@ -128,8 +127,10 @@ public:
     float steady = 0.0f;     // RMS PLL correction, in periods (raw; for logs)
   };
   Factors factors() const;
-  // Grid moves to another quarter phase since reset(), for logs.
-  uint32_t phaseShifts() const { return shifts_; }
+  // Onset values (and beats) the last acquisition went through: the fold,
+  // the centroid and the seeds. Bounded by its 3 s window, however long
+  // since reset(); for the host test.
+  uint32_t acquireReads() const { return acquireReads_; }
   const Config& config() const { return cfg_; }
 
   // The onset signal's delay: an onset in the audio shows up this many frames
@@ -152,7 +153,6 @@ private:
   bool acquire(double periodHops);
   void pll(double t, float onset);
   void closeBeat();
-  void checkPhase();
   float binsAt(const float* hist, int k) const;
   void seedBeatStats(double phase, double periodHops, uint32_t first);
   bool isHit(float inWindow) const;
@@ -208,14 +208,12 @@ private:
   static constexpr int kSalienceBins = 16;
   float phaseHist_[kSalienceBins] = {};  // leaky onset energy per phase of the beat
   float hitRate_ = 0.0f;                 // leaky share of PLL beats with an onset
-  int shiftCandidate_ = 0;               // quarter phase (bins) that out-gathers the beat, and for how many beats
-  int shiftBeats_ = 0;
-  int beatsSinceShift_ = 0;
-  uint32_t shifts_ = 0;
+  uint32_t acquireReads_ = 0;
   float jitter_ = 0.0f;        // leaky mean of (correction / period)^2
   float conf_ = 0.0f;
   bool locked_ = false;
   int beatsSinceAcquire_ = 0;
+  int beatsAbove_ = 0;          // consecutive beats at kLockOn or more
   int weakBeats_ = 0;          // consecutive beats at low confidence
   int32_t lockAt_ = -1;
 };
