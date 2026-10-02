@@ -314,7 +314,8 @@ def cmd_run(args):
                     continue
                 pcm, _ = join_pcm(work, a, b)
                 prior = ["--prior", f"{prior_for(b, args.prior):.3f}"] if args.prior != "none" else []
-                jobs.append((["--pcm", short_path(pcm), *prior, *via],
+                # (--lead-in 0: the splice starts mid-track, not an epoch)
+                jobs.append((["--pcm", short_path(pcm), "--lead-in", "0", *prior, *via],
                              run_dir / "joins" / f"{track_id(a)}-{track_id(b)}.txt"))
     if "clicks" in suites:
         for name, spec, extra, _ in CLICK_CASES + DRUM_CASES:

@@ -3,8 +3,10 @@
 
 #pragma once
 #include <cstdint>
+#include <cstring>
 
 #include "AudioTap.h"
+#include "Declicker.h"
 
 // The loop task's side of an AudioTap: hands over the real audio written
 // since the last poll(), placed in its track, and says which track frame is
@@ -19,8 +21,20 @@
 // heard at time t is that clock at t minus the output latency, and never
 // later than the last frame written; more than the stall time (60 ms) past
 // it, nothing is being heard.
+//
+// The start of an epoch (a track started, a skip, a seek) is handed over as
+// silence for its first kLeadInFrames. The outputs' Declicker turns a skip
+// into a crossfade: the last frame before it is held and faded out over the
+// ramp (64 frames, 1.5 ms) under the new audio's fade-in, so those frames
+// carry a step from whatever played before, up to full scale, that isn't the
+// new track's. The beat tracker heard it as the new track's first onset, and
+// it threw the tracker's start off by up to 40 s (on the device, three of
+// eight starts in the middle of music: docs/BEAT-TRACKER-EVAL.md, "Checked
+// on the device"). Only the fade-in is lost.
 class TapReader {
 public:
+  static constexpr uint32_t kLeadInFrames = Declicker::kDefaultRampFrames;
+
   struct Run {
     const int16_t* samples;  // mono
     uint32_t frames;
@@ -95,7 +109,12 @@ uint32_t TapReader::poll(int16_t* scratch, uint32_t scratchFrames, F&& onRun) {
         next_ = count;
         break;
       }
-      onRun(Run{scratch, n, seg.trackStart + (next_ - seg.tapStart), seg.epoch});
+      const uint32_t track = seg.trackStart + (next_ - seg.tapStart);
+      if (track < kLeadInFrames) {
+        const uint32_t quiet = kLeadInFrames - track < n ? kLeadInFrames - track : n;
+        std::memset(scratch, 0, quiet * sizeof(int16_t));
+      }
+      onRun(Run{scratch, n, track, seg.epoch});
       handed += n;
     }
     next_ = end;

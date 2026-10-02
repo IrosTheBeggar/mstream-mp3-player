@@ -26,6 +26,15 @@ strong as the beat. What is left is in the music the tracker's two bands
 can't resolve: off-beats as strong as the beat, syncopated kicks, 4:3
 metres, and sparse beats under sustained sound.
 
+[On the Core2](#checked-on-the-device-october-2026) the tracker does what
+the harness predicts, beat for beat, on click tracks, eight library tracks
+(MP3 and FLAC) and through the USB visualizer, at about 1 % more CPU than
+the baseline (12.1 ms per second of audio). The check found one thing the
+harness didn't model: after a skip, the outputs' crossfade from the track
+before reached the tracker as the new track's first frames and could throw
+its start off by up to 40 s. `TapReader` now silences those 64
+frames, and the runner does the same.
+
 ## Method
 
 ```
@@ -57,6 +66,11 @@ metres, and sparse beats under sustained sound.
   - **`--via-hops`:** feeds the same audio through a separate `HopFrontEnd`
     and `feedHop()`, the USB visualizer's path. The output is identical to
     `process()`'s on all 275 cases.
+  - **`--lead-in N`:** the input's first N frames are silenced (default
+    64, `TapReader::kLeadInFrames`), as the Core2's tap does at the start
+    of every epoch, where the outputs' crossfade from the audio before a
+    skip sits ([Checked on the device](#checked-on-the-device-october-2026)).
+    The joins suite passes 0: its splices start mid-track.
   - **Other modes:** `--synth` builds synthetic cases (`click:BPM[off]:S`,
     `silence:S`, `noise:DBFS:S`, `ambient:DBFS:S[:SEED]`, the native
     tests' low-passed swelling noise, and
@@ -229,10 +243,12 @@ tempo:
 
 - **Not bit-exact with the device.** x86 `float` arithmetic is IEEE single
   precision, like the ESP32's FPU, but libm's `log`/`exp` may differ from
-  newlib's in the last ulp. The click tracks lock at the same times the
-  device logged: click90/120/128/140/174/120off lock at 2.81/2.61/2.93/2.67/
-  2.50/2.80 s here, against 2.83/2.62/2.93/2.67/2.51/2.81 s in MASCOT-POC.md's
-  round 1. So the difference is below anything measured.
+  newlib's in the last ulp. On the device the reworked tracker's `[beat]`
+  lines equal the runner's to the log's millisecond, with the same lock
+  states, on six click tracks and eight library tracks
+  ([Checked on the device](#checked-on-the-device-october-2026)), once the
+  start of an epoch is modelled (`--lead-in`). So the difference is below
+  anything measured.
 - **What it times.** The beats are those the tracker predicts as the audio
   reaches them. The dancer shows them ~115-175 ms later (output latency),
   only while the tracker is locked, with a weight from its confidence (0
@@ -718,8 +734,9 @@ and after the review fixes, all scored by the same `score.py`:
   -falign-jumps=16`) all three versions are within the noise (220-264
   µs/s), and the per-hop path is unchanged (the fixes touch the
   acquisition and a per-beat counter), so the default build's gap is code
-  layout. The memory is the same. The device bench (`[dance] tracker
-  bench`) has the last word and hasn't been run.
+  layout. The memory is the same. On the device the boot bench reads a
+  median 12.14 ms per second of audio against 11.99 for the baseline
+  tracker, about 1 % ([Checked on the device](#checked-on-the-device-october-2026)).
 
 ### What is left
 
@@ -764,5 +781,181 @@ on a pulse the reference doesn't call the beat:
    the PLL window for a few beats. A faster fall costs F and lock time (the
    numbers above); a detector for a beat that has moved, rather than
    stopped, is not written.
-7. **Not measured on the device:** the CPU, and how the dancer looks with
-   the new weight map (a listen on Digital Love and a hip-hop track).
+7. **Not checked on the device:** how the dancer looks with the new
+   weight map (a listen on Digital Love and a hip-hop track), and the
+   Bluetooth output. The CPU, the click tracks, eight tracks against the
+   harness, two joins and the USB path are in the next section.
+
+## Checked on the device (October 2026)
+
+The reworked tracker (5246599) on the Core2 v1.3 (COM3), with one fix the
+check found (below; the device ran its code, built as
+`v0.5.0-13-g5246599-dirty`). Everything played in silent test mode (`z`
+after every boot), on the speaker; the headphones were out of reach. The
+Dance tab was open with the per-beat log on (`v`), and the screen kept lit
+with `Ps1` every 15 s: the Dance tab stops tracking while the screen is
+dark (a `d` sent to a dark screen opens the tab and stops it again). The
+device's `[beat]` lines (the next beat's track frame as the grid predicted
+it, the BPM, confidence and lock) were compared with the harness's `B`
+lines for the same audio, and with the reference beats. The scripts and
+logs are in the session scratchpad (`bt_run.py`, `bt_clicks.py`,
+`bt_real.py`, `bt_sim/`, `dev.log`).
+
+### The tracker's cost and memory
+
+`[dance] tracker bench` at boot (the 10 s click120 bench; ms of the loop
+core per second of audio, 240 MHz):
+
+| Build | Boots | Min | Median | Max |
+|---|---|---|---|---|
+| The baseline tracker (288c41c and 67dd141, the same day: the tracker's source is 2742f3d's) | 39 | 11.83 | 11.99 | 12.37 |
+| The rework (5246599, with and without the fix) | 8 | 11.99 | 12.14 | 12.18 |
+
+The rework costs about 1 % more, inside the spread between builds of the
+same tracker (13.3 ms/s in MASCOT-POC.md was a September build). Memory:
+the `dance` step of the boot's heap log takes 1 KB of internal RAM and
+49 KB of PSRAM, as on the baseline build. While playing with the Dance tab
+up (418 `[stats]` lines over the click, track and join runs):
+0 underruns, internal RAM 58-72K free, the lowest 55K; the crab at a median
+30.3 fps (10th percentile 29.0), draw 4.2 ms, push 7.8 ms; the tap lost no
+frames.
+
+### Click tracks
+
+Each 30 s from its start, on the fixed firmware, scored live against the
+known grid (`[beat] ... err=`), next to the harness and to MASCOT-POC.md's
+round 1 (the tracker before the rework, on the device):
+
+| Track | Lock | BPM | Median / p95 | Mean | Harness: lock, median / p95 | Round 1 (Sept.): lock, median / p95 |
+|---|---|---|---|---|---|---|
+| click90 | 2.81 s | 90.00 | 3.5 / 5.0 ms | −3.5 ms | 2.81 s, 3.3 / 4.8 ms | 2.83 s, 2.6 / 3.5 ms |
+| click120 | 2.62 s | 120.01 | 3.8 / 5.9 ms | −3.6 ms | 2.61 s, 3.6 / 5.8 ms | 2.62 s, 2.4 / 5.7 ms |
+| click128 | 2.93 s | 128.00 | 3.2 / 4.0 ms | −3.2 ms | 2.93 s, 3.2 / 4.0 ms | 2.93 s, 2.6 / 3.5 ms |
+| click140 | 2.67 s | 140.00 | 3.4 / 6.0 ms | −3.5 ms | 2.67 s, 3.4 / 5.3 ms | 2.67 s, 2.8 / 4.9 ms |
+| click174 | 2.51 s | 174.00 | 3.2 / 4.2 ms | −3.3 ms | 2.50 s, 3.2 / 4.1 ms | 2.51 s, 2.8 / 3.5 ms |
+| click120off | 2.81 s | 120.02 | 3.7 / 5.8 ms | −3.6 ms | 2.80 s, 3.4 / 5.8 ms | 2.81 s, 2.4 / 5.7 ms |
+
+Every `[beat]` line (43-83 a track) is the harness's beat to within the
+log's millisecond, with the same lock state. The lock times are round 1's;
+the phase sits about 0.7 ms further early, as the harness said (the mid
+band's rise comes a hop earlier on a click). The same six on the firmware
+before the fix gave the same numbers, but for click90's p95 (5.5 ms).
+
+### Real tracks, and the fix: the start of a track after a skip
+
+Eight tracks, each played from its start for 75 s by `i<n>` while the
+track before it was playing: the user's queue's Kanye West album (FLAC),
+Kavinsky (FLAC) and Daft Punk (MP3: the device's timeline has the gapless
+trim, which the harness's cache already applies).
+
+The first pass matched the harness exactly on five tracks and not on three:
+
+| # | Track | Device, first pass | Harness |
+|---|---|---|---|
+| 53 | Stronger | locked 11.33 s; acquired at 3.5 s with confidence 0.00 for 12 beats | locked 3.85 s |
+| 54 | I Wonder | no tempo at all until 39.52 s (190 BPM) | locked 4.02 s (95 BPM) |
+| 59 | Flashing Lights | locked 8.41 s at 181 BPM | locked 32.00 s at 90.5 |
+
+The cause is the outputs' Declicker. A skip is a crossfade: the last frame
+of the track before is held and faded out over 64 frames (1.5 ms) under the
+new track's fade-in, and the tap records those frames as the new track's
+first. With loud music playing at the skip, the held frame can be most of
+full scale, and the tracker sees a step at frame 0 that isn't the track's.
+It enters the onset mean, the clarity and the acquisition's hit count, and
+in these three it threw the start off for seconds to more than half a
+minute. Putting that crossfade in front of the cached PCM reproduces the
+device to the hundredth of a second: a held frame of 16000 or more gives
+Stronger's 11.3313 s, 8000 or more I Wonder's 39.5088 s, and −8000 or
++16000 Flashing Lights' 8.4056 s. Over the first 90 s of all 77 tracks, a
+held frame of 4000 changes the beats of 68 tracks and the first lock time
+of 20 (the baseline tracker: 23), and one of 16000 the first lock of 29
+(33); the changes go both ways, but the start is no longer the track's. The
+baseline tracker is as sensitive (Stronger 11.34 s, I Wonder 40.15 s), so
+this is as old as the tap, not the rework's.
+
+The fix: `TapReader` hands over the first 64 frames of every epoch (a track
+started, a skip, a seek) as silence (`TapReader::kLeadInFrames`, the
+Declicker's ramp). Only the fade-in is lost: silencing them changes no
+first lock time of the 77 tracks, and the beats of 4 (the host test
+`test_reader_silences_the_crossfade_after_a_skip` runs a skip through the
+real PcmRing, DeclickReader, AudioTap and TapReader). The runner models it
+(`--lead-in`, 64 by default, 0 for the joins suite, whose splices start
+mid-track): 25 of the 275 cases' output moved, by fractions of a
+millisecond, and no lock time, phase or summary figure moved at the third
+decimal; `--via-hops` is still identical on all 275. After the fix, the
+three tracks started twice each after a skip from loud music: Stronger
+3.85 s, I Wonder 4.02 s, Flashing Lights 32.00 s, as the harness.
+
+The eight tracks on the fixed firmware, against the harness and the
+reference (the first 75 s; on the beat: locked beats within 70 ms of a
+reference beat, or of a half beat when locked at double tempo):
+
+| # | Track | Lock: device / harness | BPM (reference) | Locked beats: device / harness | `[beat]` lines equal to the harness's | On the beat | Median / mean error |
+|---|---|---|---|---|---|---|---|
+| 70 | Testarossa Autodrive | 2.94 / 2.93 s | 130.01 (130.0) | 158 / 158 | 159 of 159 | 100 % | 13.3 / +13.7 ms |
+| 71 | Nightcall | 15.56 / 15.56 s | 90.98 (91.0) | 92 / 92 | 93 of 93 | 100 % | 26.3 / +26.4 ms |
+| 53 | Stronger | 3.85 / 3.85 s | 103.99 (104.0) | 42 / 42 | 124 of 126 | 100 % | 4.0 / +6.6 ms |
+| 54 | I Wonder | 4.02 / 4.02 s | 191.22 (95.7, double) | 104 / 104 | 161 of 162 | 13 % | 54.6 / +47.3 ms |
+| 59 | Flashing Lights | 32.02 / 32.00 s | 90.52 (90.5) | 66 / 66 | 133 of 134 | 71 % | 11.1 / +18.7 ms |
+| 23 | One More Time | 3.02 / 3.02 s | 122.88 (122.88) | 149 / 149 | 150 of 150 | 100 % | 3.3 / +1.0 ms |
+| 26 | Harder, Better, Faster, Stronger | 9.85 / 9.85 s | 123.46 (123.5) | 126 / 126 | 149 of 151 | 100 % | 6.7 / +7.0 ms |
+| 29 | Superheroes | 3.65 / 3.65 s | 140.83 (140.9) | 167 / 166 | 167 of 168 | 100 % | 10.5 / +12.0 ms |
+
+"Equal" is the same beat time to within 2 ms (the harness writes 1 µs, the
+device 1 ms) and the same lock state; the one or two left over are the
+window's ends. So on the device the tracker does what the harness predicts,
+beat for beat, MP3 (with the gapless trim) and FLAC alike, and the
+harness's numbers stand for the device's. I Wonder is item 2 of "What is
+left" (locked at double tempo a sixteenth off the reference), and
+Nightcall's +26 ms is the soft kick MASCOT-POC.md describes.
+
+### Gapless joins
+
+Two album joins, each from a start point (`qs`) 40 s before the end:
+
+- **Grand Canyon → First Blood (FLAC):** no tracker reset at the join (the
+  epoch carries on). Locked 2.79 s after the start; the lock let go 38.6 s
+  in, 1.1 s after Grand Canyon's last reference beat (its last 3 s have
+  none), and came back 5.3 s after the join (4.5 s after First Blood's
+  first beat) at 110.99 BPM. The harness on the same splice, from the same
+  frame: 163 of the 165 `[beat]` lines equal, the same lock and unlock.
+- **One More Time → Aerodynamic (MP3, the gapless trim both sides):** no
+  reset. Locked through the join (21 of the 21 beats before it), let go
+  1.5 s after it (Aerodynamic's intro), back 13.2 s after, briefly, and
+  for good at 18.8 s. This branch's VBR seek landed about 1.3 s early (the
+  old method, docs/SEEK.md), and the audio just after a VBR seek isn't the
+  clean decode's, so the harness's model of the splice matches only 23 of
+  the first 36 beats; it shows the same course (21 of 21 locked before,
+  3 of 10 in the 5 s after, then partial).
+
+The tracker isn't reset at a join and its lock carries up to the join
+where the beat does; on these two (and on every join of the corpus: the
+best keeps 82 % of the beats in the 10 s around it) the music changes at
+the join, and it lets go and relocks as the harness predicts.
+
+### The USB visualizer's path
+
+`tools/usb_viz.py --port COM3 --silent --measure --expect
+"lock<=4,bpm<=0.5,med<=10,p95<=25"`, the same tracker fed hop energies
+from the computer (`feedHop()`), 60 s a track, one session per rate:
+
+| Track | Lock | BPM | Median / p95 | Mean | Before (USB-VISUALIZER.md) |
+|---|---|---|---|---|---|
+| click90, 44.1 kHz | 2.81 s | 90.00 | 3.3 / 4.8 ms | −3.4 ms | 2.81 s, 2.6 / 3.6 ms |
+| click120, 44.1 kHz | 2.61 s | 120.00 | 3.6 / 5.8 ms | −3.4 ms | 2.61 s, 2.4 / 5.7 ms |
+| click174, 44.1 kHz | 2.50 s | 174.00 | 3.2 / 4.1 ms | −3.3 ms | 2.50 s, 2.8 / 3.5 ms |
+| click120off, 48 kHz | 2.81 s | 119.99 | 2.5 / 3.9 ms | −2.5 ms | 2.81 s, 1.9 / 3.5 ms |
+| click174, 48 kHz | 2.50 s | 174.00 | 2.9 / 3.7 ms | −2.8 ms | 2.50 s, 2.3 / 3.3 ms |
+
+Both `--expect` runs pass, with 0 `@err`, 0 gaps and 0 bad lines, and the
+44.1 kHz numbers are the tap path's and the harness's. The protocol is
+unchanged (the lead-in is on the tap's side: the computer sends hops of
+its own audio, which has no Declicker).
+
+### Not checked
+
+- How the dancer looks with the new weight map, and the lock on hip-hop by
+  eye: nobody watched the screen (silent mode, unattended).
+- Bluetooth output: the headphones were out of reach. The tap and the fix
+  are the same for both outputs (both read through a 64-frame
+  DeclickReader).

@@ -8,7 +8,7 @@
 // `tools/beat_eval/beat_eval.py build`; not part of the firmware or the
 // native tests.
 //
-//   runner --pcm track.s16 [--start S] [--seconds S] [--prior BPM] [--via-hops]
+//   runner --pcm track.s16 [--start S] [--seconds S] [--prior BPM] [--via-hops] [--lead-in N]
 //   runner --synth "click:120:60,silence:5,click:96:30" [--noise DBFS] [--seed N]
 //   runner --synth "drums:124:20:0.75:-6:-4:-4:0.2"   (the host tests' drum pattern)
 //   runner --bench [--seconds S] [--repeat N]
@@ -18,7 +18,12 @@
 // as AudioTap mixes it). The tracker is reset to the start frame (the track
 // frame, as DanceMode::restart() does) and fed one 512-frame hop at a time:
 // the result doesn't depend on the chunking (test_beat_tracker), and a hop
-// at a time lets every state the grid passes through be seen.
+// at a time lets every state the grid passes through be seen. The input's
+// first --lead-in frames (default TapReader::kLeadInFrames, 64) are silenced,
+// as the Core2's TapReader silences the start of every epoch (a track
+// started, a skip, a seek: the Declicker's crossfade from what played before
+// is in them); --lead-in 0 for an input that doesn't start an epoch (the
+// joins suite's splices).
 //
 // Output, one record per line (times in seconds of the input's timeline):
 //   meta key=value ...
@@ -55,6 +60,7 @@
 #include "DancePose.h"
 #include "HopFrontEnd.h"
 #include "Signals.h"  // test/test_beat_tracker: the host tests' drum pattern, exactly
+#include "TapReader.h"
 
 namespace {
 
@@ -71,6 +77,7 @@ struct Options {
   double seconds = 0.0;  // 0: to the end
   float prior = 0.0f;
   bool viaHops = false;
+  uint32_t leadIn = TapReader::kLeadInFrames;  // input frames silenced at the start (an epoch's)
   double noiseDbfs = -999.0;
   uint32_t seed = 1;
   int every = 8;
@@ -81,7 +88,7 @@ struct Options {
   std::fprintf(stderr, "runner: %s\n", why);
   std::fprintf(stderr,
                "usage: runner --pcm FILE [--start S] [--seconds S] [--prior BPM] [--via-hops] [--every N]\n"
-               "              [--hops-out FILE]\n"
+               "              [--hops-out FILE] [--lead-in FRAMES]\n"
                "       runner --synth SPEC [--noise DBFS] [--seed N] [--prior BPM] [--via-hops]\n"
                "       runner --bench [--seconds S] [--repeat N]\n"
                "       runner --pcm FILE --time-only [--start S] [--seconds S] [--repeat N]\n"
@@ -106,6 +113,7 @@ Options parse(int argc, char** argv) {
     else if (a == "--seconds") o.seconds = std::atof(next());
     else if (a == "--prior") o.prior = static_cast<float>(std::atof(next()));
     else if (a == "--via-hops") o.viaHops = true;
+    else if (a == "--lead-in") o.leadIn = static_cast<uint32_t>(std::max(0, std::atoi(next())));
     else if (a == "--hops-out") o.hopsOut = next();
     else if (a == "--noise") o.noiseDbfs = std::atof(next());
     else if (a == "--seed") o.seed = static_cast<uint32_t>(std::atoi(next()));
@@ -286,6 +294,8 @@ int main(int argc, char** argv) {
   } else {
     buildSynth(o, &mono, &truth);
   }
+  // The start of the epoch, as the Core2's tap hands it to the tracker.
+  for (uint32_t i = 0; i < o.leadIn && i < mono.size(); ++i) mono[i] = 0;
   const auto total = static_cast<uint32_t>(mono.size());
   const auto startFrame = std::min(total, static_cast<uint32_t>(std::llround(o.start * kRate)));
   uint32_t endFrame = total;

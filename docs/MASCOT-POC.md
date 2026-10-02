@@ -63,6 +63,15 @@ On the loop task, `TapReader`:
   starved), so the frame is invalid and the figure fades to its idle sway
   instead of holding a pose mid-hop.
 
+The first 64 frames of every epoch (a track started, a skip, a seek) reach
+the tracker as silence (`TapReader::kLeadInFrames`). A skip is a crossfade
+in the outputs' Declicker: the last frame before it is held and faded out
+over those 64 frames under the new track's fade-in, and the tap records
+them as the new track's. With loud music playing at the skip that step
+could throw the tracker's start off by up to 40 s
+(BEAT-TRACKER-EVAL.md, "Checked on the device"); only 1.5 ms of fade-in is
+lost.
+
 The tracker starts over on an output switch, a new epoch (a skip or track
 change), or a gap in the track frames (frames lost because the loop fell a
 capacity behind). A pause or an underrun doesn't restart it: the tracker
@@ -181,11 +190,10 @@ behind the beat on most of the rest. The design below is the rework.
    under 0.1 drop the grid. `factors()` shows the three signs, for logs
    and the harness.
 
-Cost: 13.3 ms per second of audio on the Core2 before the rework (1.3 % of
-a core, measured at boot by `[dance] tracker bench`; the rework adds a
-per-hop histogram decay and per-beat sums, within the noise on the laptop
-once the build's code alignment is pinned; not yet measured on the
-device). An acquisition reads only its 3 s window, however long since the
+Cost: 13.3 ms per second of audio on the Core2 in September (1.3 % of a
+core, measured at boot by `[dance] tracker bench`). On the October builds
+the baseline tracker reads a median 11.99 ms and the rework 12.14 ms (the
+rework adds a per-hop histogram decay and per-beat sums: about 1 %). An acquisition reads only its 3 s window, however long since the
 last reset (a gapless album never resets).
 
 How well it does on real music, track by track, is measured by the
