@@ -20,10 +20,13 @@ This document is the design that fixes all three. It covers what happens
 today, the measurements it rests on, the mechanism, how it fits gapless
 playback and the queue saver, and the host and device test plans.
 
-**Status: built and host-tested (sections 4-10), not yet run on the
-device (section 11).** Section 16 says where the build differs from the
-design, most of all the preroll rule (section 2.4: "1 KB before frame *k*"
-was not enough by construction; the rule is 1 KB before frame *k* − 1).
+**Status: built, host-tested (sections 4-10) and run on the device
+(section 17: resumes and CBR seeks bit-exact, VBR seeks as the model
+says).** Section 16 says where the build differs from the design, most of
+all the preroll rule (section 2.4: "1 KB before frame *k*" was not enough
+by construction; the rule is 1 KB before frame *k* − 1). Section 17 also
+has a fix the run found in the speaker's output: a short first buffer at
+one start in three.
 
 Where the facts come from:
 
@@ -1313,10 +1316,10 @@ user's call.
   on, as `positionMs()` does today. Anchors stay exact, because they
   record what was output.
 - **A downgrade loses the resume point once** (5.2).
-- **Not measured on the device yet:** everything in section 11. The
-  exactness claim rests on the host build of the same libmad (2.4, 2.5).
-  The device run confirms the firmware's wiring and that the ESP32's
-  libmad behaves the same.
+- **Measured on the device** (section 17): the ESP32's libmad decodes
+  the same bits as the host build, and the firmware's wiring holds. Not
+  measured there: Bluetooth, a 48 kHz MP3, junk between frames, Lavf and
+  VBRI files (none on the card).
 
 ## 14. The other docs, when built
 
@@ -1367,9 +1370,8 @@ Built as sections 4-10 describe, in one commit ("MP3: exact resume and
 better VBR seeks"), host-tested: test_track_seek, test_trim_feed,
 test_seek_index (new), test_nvs_layout, test_queue, test_playback; 983 of
 983 host tests pass. The firmware builds (QIO, iram_diet, flash_guard).
-Nothing has run on the device yet: section 11, with its temporary `Sp` and
-`Sa!` probes, is still to do, and so is keeping the PC harness as
-`tools/seek_check/` (section 12).
+Section 17 is the device run (section 11). Keeping the PC harness as
+`tools/seek_check/` (section 12) is still the user's call.
 
 **Where the build differs from the design:**
 
@@ -1438,3 +1440,143 @@ TrimFeed, RingFeed and PcmRing):
   starting every 100 ms from 10 s to 5.2 s before the end of a VBR file
   whose end is at 320 kbit/s; the truncated-file scale and Discovery's
   404 bytes.
+
+## 17. On the device (2026-10-02)
+
+Section 11's run, on the Core2 (COM3), with the build of section 16
+(288c41c) and a temporary probe, removed afterwards (`src/main.cpp`'s md5
+the same as 288c41c's). Silent mode on the speaker throughout; nothing went
+to the headphones (they were out of reach).
+
+**The probe** (under the console's `G`, in place of section 11's `Sp` and
+`Sa!`):
+
+- `Gs` turned the speaker's tap on and, after the next start, dumped 8,192
+  tap frames (mono, `(L + R) >> 1`) from the start's ring frame 128 (past
+  the 64-frame fade-in), base64 over the console, with `G`'s line for the
+  run's base (`run from sample N`) and `startOffsetMs()`;
+- `Gsj` dumped 8,192 frames around the next track change (6,144 before
+  the tap count when `trackSeq()` moved), with the tap's segments;
+- `Gs!` flipped the waiting start point's anchor hash (the fallback);
+- `Gsq<ms>` was `qs` to the millisecond.
+
+**The reference.** The dump was looked up in a PC decode of the same file:
+
+- an MP3 by `devmad` (the tree's libmad, `FPM_64BIT`, behind
+  `AudioGeneratorMP3::Input()`), less 2,257 samples (the Info frame, delay
+  576, 529);
+- a FLAC by libsndfile.
+
+First exactly at the sample the device claimed (the run's base + 128),
+else anywhere within ±4 s. A header walk of the PC's copy placed each
+anchor's frame byte on the timeline independently. Every anchor's byte was
+a frame start there: the card's files are the PC's byte for byte.
+
+**Resumes** (a pause, a reset through the serial daemon, the play):
+
+| The pause | Starts | Result |
+|---|---|---|
+| In a run from the top or an exact plan: *One More Time*, *Aerodynamic*, Air's *La femme d'argent* (CBR), *Stronger*, *I Wonder*, *Flashing Lights* (FLAC) | MP3 8, FLAC 7 | bit-exact at the anchor's sample (one in digital silence: exact zeros) |
+| The resume point the user had: 0:55 into a FLAC, written by d3c9b91 (version 1, no anchor) | 1 | restored at boot (`anchor: none`), libFLAC's seek to sample 2,425,500: bit-exact |
+| In a run a TOC start began (`as a TOC start showed it`) | 6 | on the anchored frame + skip exactly (by the PC's header walk); the time shown keeps that start's error: -227, -463, +295, +295, +151, +151 ms (two pauses per run) |
+| In the last 1.4 s, the next track decoded ahead (MP3, FLAC) | 2 | `the resume anchor isn't this file's (in its last 5 s): by its second`, then the last-5-s rule: from 0:00 |
+| 0.2-0.9 s after a gapless advance (MP3, FLAC) | 3 | the joined track's anchor: bit-exact |
+| Corrupted (`Gs!`) | 1 | `the resume anchor isn't this file's (the frame at 7141): by its second`, then CBR: exact at the second's sample |
+
+The pauses covered 0.26-0.77 s after a start (from the top, and 0.3-0.5 s
+after a `qs`), the middle of tracks, 8.3 s before an end, the last 0.4 s,
+and just after a join. `positionMs()` at the start's first frame was
+`floor(sample × 1000 / rate)` every time (57,903 for sample 2,553,564).
+
+**`qs`:**
+
+- **CBR** (Air, 20 points): lag 0, bit-exact (`(CBR; exact)`).
+- **Back into the run** (*One More Time* from the top for 92 s, then
+  `qs85`; again, then `qs30`): `(the run's index; exact)`, bit-exact.
+- **LAME VBR by its TOC inverted** (*One More Time*, the same 20 points
+  twice, 41 starts): the landing frame was never lost (each dump bit-exact
+  from its landing frame on), and the lag equals the landing frame's
+  offset from the time asked on the PC at every point. A later `qs` into
+  such a run goes by the run's index and keeps its timeline
+  (*Crescendolls*: +257 ms three times).
+
+| The same 20 points | p50 | p95 | max | mean |
+|---|---|---|---|---|
+| d3c9b91's straight lines (the frame after the one found), computed on the PC | 515 ms | 1,261 ms | 1,285 ms | -528 ms |
+| The device now | 255 ms | 465 ms | 504 ms | +36 ms |
+
+**The tail rule** (*Crescendolls*, 211.640 s): `qs` 6.6, 6.0 and 5.3 s
+before the end starts there; 4.9 s before goes to 0:00 with the last-5-s
+line; a sweep every 0.4 s from 10 to 5.2 s before the end started there 13
+times out of 13.
+
+**Joins.** A resume 18.5 s before *One More Time*'s end (an anchor in a
+TOC run), and a `qs` 15 s before *Aerodynamic*'s end: each join dump is
+A's trimmed end followed by B's trimmed start, 8,192 of 8,192 samples,
+nothing inserted. `G`: joins continuous, none after the tail, no failed
+opens.
+
+**Found: a short first buffer at a start (fixed).** In 16 of about 50
+starts in the middle of music the dump matched the reference except for
+63 samples: a 64-frame fade-in from 0, 256-768 frames into the start, with
+nothing faded before it.
+
+- The cause is the speaker pump. It waits up to 20 ms (`kTopUpWaitMs`)
+  for a full 1,024-frame buffer, and while the ring was empty that wait
+  ran out and began again every ~21 ms.
+- The decoder writes its first frames 256 at a time (RingFeed's stage). A
+  wait that ran out between them sent a short buffer. DeclickReader then
+  faded its end to 0 (a few ms of silence) and faded the rest in again.
+- It isn't the seek code's: every start from silence had it (inaudible in
+  a track's own silence), and so did an underrun's refill.
+- **The fix** (`src/audio/SpeakerSink.cpp`): once the ring has run empty,
+  the wait begins again with the first frames back.
+- After it: 0 of 37 (30 seeks, 7 resumes).
+
+**Cost:**
+
+- **First audio in the ring** (`[audio] refill`, ms after the request):
+  - from the top: 35 ms;
+  - a `qs` plan (CBR or TOC): 74-91 ms;
+  - a resume by its anchor: 87-123 ms;
+  - by the run's index: 101-149 ms;
+  - d3c9b91's TOC and CBR seeks: 27-46 ms.
+
+  About 40-60 ms more: the chain walk's 8 KB around the estimate, the
+  anchor's reads and the preroll's frames. Section 11 expected ~20 ms.
+- **The decode stack's minimum free**: 13,268 B while playing with plans;
+  the bench's 13,196-13,260 B (2742f3d: 13,512-13,544). About 300 B more
+  in use; section 11 expected ±100 B. Still 13 KB to spare.
+- **Internal RAM**:
+  - `[heap] playing` 56-63K free; the session's low 52K (a start while
+    Bluetooth paged the absent headphones);
+  - boot: audio 84-85K (2742f3d: 86K), UI 80K (81K);
+  - PSRAM after the UI 2,797K (2,846K): 49 KB, the index's two slots.
+- **NVS**: two `[queue] resume point saved` lines per pause (the anchor's
+  sample moves through the 64-frame fade: the one extra write), one clear
+  at the play, none while playing.
+- **Decode speed** (`b<n>`, 240 MHz, the final image), libmad's state
+  pinned in the lower 2 MB:
+
+  | Track | Now | 2742f3d (F0) |
+  |---|---|---|
+  | *One More Time* | 4.8x, 4.8x | 4.9x, 4.9x |
+  | *La femme d'argent* | 4.8x | 4.9x |
+  | *Aerodynamic* | 4.5x | (d3c9b91: 4.7x) |
+  | *Stronger* (FLAC) | 4.7x, 4.7x | 4.7x |
+
+  Within RESAMPLER.md 10d's ±3-5 % of code layout.
+- **A 10-minute silent album run** (*Discovery* from track 1, the
+  speaker, gapless on):
+  - 0 underruns; the ring held 1,439-1,449 ms;
+  - 2 joins, opened in 14-15 ms;
+  - internal RAM 61-62K free; decode stack 13,196 B free;
+  - load 37.1-38.6 %. 2742f3d's run, the same tracks at the same
+    positions: 34.0-35.3 %. The bench moved 2 %, the load 3 points. The
+    difference was not traced (code layout, or the per-sample trim path;
+    the run index's bookkeeping after each pass is outside the load).
+
+**Not run:** Bluetooth (the headphones were out of reach, and only silence
+may go to them), so internal RAM over Bluetooth wasn't measured: the
+change adds 576 B of static RAM and nothing per track. Also not run: a
+48 kHz MP3, junk between frames, Lavf and VBRI files (none on the card).

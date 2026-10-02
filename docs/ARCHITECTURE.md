@@ -225,10 +225,19 @@ The rules that keep it deadlock- and glitch-free:
   starts at 0:00, an anchor that isn't the file's `[audio] MP3: the
   resume anchor isn't this file's (the size: 8737445 -> 8737060): by its
   second`, a FLAC `[audio] FLAC: starting 1:23.456 in (libFLAC's seek to
-  sample N, N ms)` (75-112 ms, with or without a SEEKTABLE). Not measured
-  on the device yet (SEEK.md section 11); before this the device measured
-  FLAC 0 ms, CBR MP3 30-50 ms behind (a cold start's lost frame) and a LAME
-  VBR MP3 by its TOC -0.29 to +0.35 s of a 3:44 track.
+  sample N, N ms)` (75-112 ms, with or without a SEEKTABLE). On the
+  device (SEEK.md section 17, the speaker's tap against a PC decode by
+  the same libmad): every resume by its anchor and every CBR, run-index
+  and FLAC start bit-exact at the sample shown (39 starts); a resume in a
+  run that a TOC start began picks up on its very frame and keeps that
+  start's shown time; `qs` on *One More Time* by LAME's TOC inverted
+  |error| p50 255 ms, p95 465 ms, max 504 ms at 20 points (the old
+  straight lines: 515, 1,261, 1,285 ms at the same points); the landing
+  frame never lost. Such a start's first audio reaches the ring 75-150 ms
+  after the request (a start from the top: ~35 ms): the chain walk's
+  reads and the preroll. Before this the device measured FLAC 0 ms, CBR
+  MP3 30-50 ms behind (a cold start's lost frame) and a LAME VBR MP3 by
+  its TOC -0.29 to +0.35 s of a 3:44 track.
 - **Requests are generations.** `play()`/`stop()` post a new generation to
   `TransportSync`; the decode task's progress reports for anything older are
   dropped, so a stale "ended" can't skip the track that was just requested.

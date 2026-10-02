@@ -1711,8 +1711,9 @@ next file (it needs a file renamed on the card); the hold's cost by
   not of seeks; anchors and the run index are off with `G0` or `Gt0`.
 - **Seeks and resume starts** are SEEK.md's (exact resume by an anchor,
   CBR to the sample, LAME VBR by its TOC inverted, the tail rule by the
-  exact length). Their risks are its section 13; the device run (its
-  section 11) is still to do.
+  exact length). Their risks are its section 13; its device run (its
+  section 17) found them as designed, and two joins probed after a
+  resume and after a seek bit-exact across the join, nothing inserted.
 
 ## 13. The other docs
 

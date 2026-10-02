@@ -149,6 +149,7 @@ void SpeakerSink::quietPass() {
 void SpeakerSink::pump() {
   size_t idx = 0;
   int waited = 0;
+  bool refilling = false;  // the ring was empty when last looked at
   for (;;) {
     takeAmpRequest();
     const bool paused = shared_->paused;
@@ -165,7 +166,19 @@ void SpeakerSink::pump() {
       continue;
     }
     // Send full buffers; a short one only once the track stops producing.
-    if (playing && ring_->size() < kFrames && waited < kTopUpWaitMs) {
+    // After the ring ran empty (a start, a seek, a resume point, an
+    // underrun) the wait begins with the first frames back, not before:
+    // the decoder writes 256 at a time (RingFeed's stage), and a wait that
+    // ran out while they came in sent a short buffer, faded out, and faded
+    // the rest in again 6-17 ms into the start (docs/SEEK.md section 17).
+    const uint32_t have = ring_->size();
+    if (have == 0) {
+      refilling = true;
+    } else if (refilling) {
+      refilling = false;
+      waited = 0;
+    }
+    if (playing && have < kFrames && waited < kTopUpWaitMs) {
       ++waited;
       vTaskDelay(1);
       continue;
