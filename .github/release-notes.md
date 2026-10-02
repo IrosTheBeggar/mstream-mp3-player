@@ -7,6 +7,23 @@ ELF {{ELF}} for this build; ELF {{DIO_ELF}} for the `-dio-full.bin`).
 Source for this binary: {{SOURCE_URL}}, and with its libraries in
 `{{SOURCE_TAR}}` below.
 
+## What's new in 0.6.0
+
+- **Gapless playback:** albums mixed without gaps (live sets, DJ mixes)
+  play straight through, MP3 (with a LAME header) and FLAC alike.
+- **Resume and seeks to the exact spot:** after a restart a track picks up
+  at the second it paused at, VBR MP3s included.
+- **Steadier MP3 decoding:** the decoder's working memory stays in the
+  faster half of the PSRAM, so its speed no longer varies from boot to boot.
+- **The dancer keeps the beat better:** the beat tracker was reworked and
+  scored on a 77-track library. It is on the beat more of the time and
+  locks onto a wrong beat less often.
+- **USB visualizer (a novelty):** with the Core2 plugged into a computer,
+  `tools/usb_viz.py` (in the source) plays a song on the computer and sends
+  the Core2 its beat, and the crab dances to it (docs/USB-VISUALIZER.md).
+- **Faster flash mode (QIO)** by default, with the `-dio-full.bin`
+  fallback below, and a second round of power savings.
+
 ## Hardware
 
 - **Tested:** M5Stack Core2 **v1.3** (AXP192 power chip).
@@ -75,12 +92,10 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
 ## Known limits
 
 - MP3 and FLAC only.
-- Over Bluetooth only 44.1 kHz files play (most music); a file at another
-  rate (48 kHz) is skipped with a message.
+- Files from 8 to 48 kHz play, on the headphones and the speaker alike;
+  88.2 kHz and higher are skipped with a message that names the rate.
 - Text is drawn in Latin scripts only.
 - Progressive JPEG covers aren't shown (the album shows a note instead).
-- The first queue is the whole library followed by nine built-in test
-  tones and click tracks.
 - No WiFi yet: syncing with an mStream server comes later.
 
 ## Files
