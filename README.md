@@ -659,9 +659,13 @@ src/                  Core2 firmware
                       console's queue and touch commands
 data/                 LittleFS image source (data/music is gitignored)
 tools/                make_test_audio.py; version.py (build pre-script: the
-                      version from git, the release checks); iram_diet.py and
-                      flash_guard.py (build post-scripts: IRAM; the app's slot,
-                      the merged image, NVS, the flash mode, the pieces' list);
+                      version from git, the release checks); iram_diet.py,
+                      cache_guard.py and flash_guard.py (build post-scripts:
+                      IRAM and the MP3 synth loop pinned at the front of flash;
+                      that loop's flash-cache sets, with test_cache_guard.py:
+                      python -m unittest discover -s tools -p
+                      "test_cache_guard.py"; the app's slot, the merged image,
+                      NVS, the flash mode, the pieces' list);
                       package_release.py (the QIO and DIO builds' release
                       files, install page and release notes -> dist/);
                       crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*);

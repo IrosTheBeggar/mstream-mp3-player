@@ -423,6 +423,17 @@ test_output_chain); measured on the device: off 2.01 s after a pause,
   88.2/96 kHz files are refused at 160 MHz (an estimated 63-79 % of core 1
   for a 24/96 FLAC there), provisionally until measured; for now they are
   off at any speed until the device check (RESAMPLER.md, section 6).
+- **MP3 decode's share moved with the code layout** until 2026-10-04
+  (RESAMPLER.md section 10e): where the linker put libmad's synth loop
+  decided how many of its lines shared a set of the flash cache. The
+  seek bar's build decoded One More Time at 26.0 % of a core at 240 MHz
+  against 0.6.0's 20.9 % (3.8x against 4.8x realtime), for no change to
+  the MP3 path, and real playback paid the same. So an MP3's `load=`
+  from an earlier build (and every figure above for an MP3 at 160)
+  carries that build's luck, up to a fifth of the decode. Since then the
+  loop's hot code and tables are pinned at the front of flash and the
+  build checks it (`cache_guard`); what still moves is layer III's, about
+  ±3 % (section 10d there).
 
 **The change:**
 

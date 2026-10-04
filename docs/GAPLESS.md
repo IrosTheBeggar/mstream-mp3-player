@@ -1660,8 +1660,14 @@ next file (it needs a file renamed on the card); the hold's cost by
   landed above 0x3FA00000 (1.7-3.6x there, 4.7-5.0x below); it is now
   one block allocated at boot in the lower 2 MB, shared by every MP3
   track one at a time, decode-ahead included (RESAMPLER.md section 10d).
-  Left: about ±3 % from the code layout (pinning ESP8266Audio's code and
-  tables at the front of flash could take that too), and FLAC, whose
+  Then the code layout: libmad's synth loop put three lines in 13-14 sets
+  of the flash cache in the seek bar's and Opus's builds (3.8x against
+  4.8x). Fixed: its code and tables are pinned at the front of flash, and
+  a build that would undo that fails (RESAMPLER.md section 10e). On
+  playback the trim's per-sample call (`TrimFeed::consumeTrimmed`, for
+  every MP3 with a LAME tag's padding to hold back) was one of the three
+  in 0.6.0's own layout; it is pinned with the rest. Left: about ±3 %
+  from layer III's code and tables, which still move, and FLAC, whose
   state libFLAC allocates itself, shows the same effect, smaller
   (4.3-4.5x against 4.7-4.9x with 1.3 MB of PSRAM held).
 - **The last-frame fix (`GuardedSource`) changes every MP3's end, also
