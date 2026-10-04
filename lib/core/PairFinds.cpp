@@ -54,6 +54,7 @@ bool PairFindRing::pop(PairFind& out) {
 
 void PairFinds::start(uint32_t nowMs) {
   n_ = 0;
+  told_ = 0;
   audio_ = 0;
   results_ = 0;
   untold_ = untoldAudio_ = 0;
@@ -61,41 +62,60 @@ void PairFinds::start(uint32_t nowMs) {
 }
 
 PairFinds::Say PairFinds::note(const PairFind& f) {
-  ++results_;
+  // A name alone (cod 0: Bluedroid's remote name request, once the inquiry
+  // round ends) is about a device an inquiry result showed: no class, no
+  // RSSI, nothing to count.
+  const bool nameAlone = f.cod == 0;
+  if (!nameAlone) ++results_;
   for (int i = 0; i < n_; ++i) {
-    Seen& s = seen_[i];
+    PairFind& s = seen_[i];
     if (std::memcmp(s.addr, f.addr, sizeof(s.addr)) != 0) continue;
-    if (!f.audio) return Say::Nothing;  // (a result without its class: nothing new)
-    if (!s.audio) {
-      // Seen before without a class that says audio: it is one now.
-      s.audio = true;
-      s.remembered = f.remembered;
-      s.linked = f.linked;
+    if (nameAlone) {
+      // The usual way a nameless one's name comes (its later inquiry
+      // results carry none either). Kept for a non-audio one too, quietly.
+      if (!f.name[0] || s.name[0]) return Say::Nothing;
       copyName(s.name, sizeof(s.name), f.name);
+      s.remembered = s.remembered || f.remembered;
+      s.linked = s.linked || f.linked;
+      if (!s.audio) return Say::Nothing;
+      told_ = i;
+      return Say::Named;
+    }
+    if (!f.audio) return Say::Nothing;  // (its class doesn't say audio: nothing new)
+    if (!s.audio) {
+      // Seen before with a class that didn't say audio: it is one now.
+      s.audio = true;
+      s.rssi = f.rssi;
+      s.cod = f.cod;
+      s.remembered = s.remembered || f.remembered;
+      s.linked = s.linked || f.linked;
+      if (f.name[0]) copyName(s.name, sizeof(s.name), f.name);
       ++audio_;
+      told_ = i;
       return Say::Found;
     }
     s.remembered = s.remembered || f.remembered;
     s.linked = s.linked || f.linked;
     if (!s.name[0] && f.name[0]) {
       copyName(s.name, sizeof(s.name), f.name);
+      told_ = i;
       return Say::Named;
     }
     return Say::Nothing;  // a repeat (a later round, a new signal or name: not news)
   }
+  if (nameAlone) return Say::Nothing;  // (its inquiry result: before this search, or lost on the way)
   if (n_ == kDevices) {
     ++untold_;
     if (f.audio) ++untoldAudio_;
     return Say::Nothing;
   }
-  Seen& s = seen_[n_++];
-  std::memcpy(s.addr, f.addr, sizeof(s.addr));
-  s.audio = f.audio;
-  s.remembered = f.remembered;
-  s.linked = f.linked;
-  copyName(s.name, sizeof(s.name), f.audio ? f.name : "");
+  PairFind& s = seen_[n_];
+  s = f;
+  s.search = 0;
+  ++n_;
   if (!f.audio) return Say::Nothing;
   ++audio_;
+  told_ = n_ - 1;
   return Say::Found;
 }
 
@@ -176,7 +196,7 @@ void PairFinds::summary(uint32_t nowMs, uint32_t lost, char* buf, size_t size) c
   // The audio devices in the order found, as far as they fit with the tail.
   bool first = true;
   for (int i = 0; i < n_; ++i) {
-    const Seen& s = seen_[i];
+    const PairFind& s = seen_[i];
     if (!s.audio) continue;
     char item[64];
     snprintf(item, sizeof(item), "%s%s%.31s%s%s", first ? "" : ", ", s.name[0] ? "\"" : "",

@@ -322,11 +322,12 @@ private:
   void flushAsks();                        // hands the Output screen's asks to BtAppT
   void noteScanResult(const uint8_t* addr, const char* name, int rssi, uint32_t cod);  // BTC task
   // The Pair screen's search in the log (PairFinds). postFind(): BTC task,
-  // every inquiry result of the search, into the ring. The rest: loop
-  // task. openFinds() starts a search's log (ending one still open);
-  // drainFinds() (update(), every pass) tells the results apart and says
-  // what is new; closeFinds() drains, then the summary. postFind() tags
-  // `f` with the search (its `search`) before the copy.
+  // every result of the search (an inquiry result or a name alone), into
+  // the ring. The rest: loop task. openFinds() starts a search's log
+  // (ending one still open); drainFinds() (update(), every pass) tells
+  // the results apart and says what is new; closeFinds() drains, then the
+  // summary. postFind() tags `f` with the search (its `search`) before
+  // the copy.
   void postFind(PairFind& f);
   void openFinds();
   void drainFinds();

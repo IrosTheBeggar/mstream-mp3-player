@@ -593,7 +593,7 @@ out what it returns.
   linked now (multipoint sets stay discoverable; "pairing" with them only
   let them go), and picking them anyway just makes them the output.
   **Each search is in the serial log** (`PairFinds`, host-tested): the
-  BTC task posts every inquiry result, audio or not, into a ring in PSRAM
+  BTC task posts every result, audio or not, into a ring in PSRAM
   (one copy under the scan's spinlock; it never prints: it runs the audio
   too), tagged with the loop's count of searches opened and closed, so a
   result the inquiry still delivers after its search ended is nobody's.
@@ -604,12 +604,17 @@ out what it returns.
   remembered headphones [<address>]` ("(no name)" without one; "linked
   now: not listed" for the headphones linked now), one more when a
   nameless one's name comes later, and nothing for repeats or other
-  devices. Whatever ends the scan ends its log with a summary
-  (startPairScan() opens it; pausePairScan(), stopPairScan(), pairWith(),
-  connect() and disconnect() close it): `[bt] pair: the search saw 9
-  devices in 81 s, 2 of them audio: "SPYDRONE" (remembered), (no name);
-  41 inquiry results`, or `the search saw nothing in 120 s (not one
-  inquiry result)`, with any results the ring lost. Before it, the
+  devices. That name mostly comes as a result of its own: a device that
+  answers the inquiry without its name in the EIR is asked for it once
+  the round ends (Bluedroid's remote name request), and the answer is a
+  result with the name only (no class, no RSSI); the line prints the class
+  and RSSI the device was found with. (The list keeps "(no name)" for it:
+  a name alone isn't listed.) Whatever ends the scan ends its log with a
+  summary (startPairScan() opens it; pausePairScan(), stopPairScan(),
+  pairWith(), connect() and disconnect() close it): `[bt] pair: the
+  search saw 9 devices in 81 s, 2 of them audio: "SPYDRONE" (remembered),
+  (no name); 41 inquiry results`, or `the search saw nothing in 120 s
+  (not one inquiry result)`, with any results the ring lost. Before it, the
   results only filled the list, and a search that failed couldn't tell
   "saw them and missed them" from "saw nothing" (2026-10-04).
   Forget from the screen forgets and disconnects, no restart, and **for

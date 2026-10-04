@@ -1424,8 +1424,13 @@ void PlayerA2dp::pairFailed(const char* why) {
 
 // BTC task: a scan result while the Pair screen scans. Every one goes to
 // the search's log (BtSink::postFind(): the loop says what is new, and
-// counts the rest); audio devices (the class of device's rendering service
-// or its Audio/Video major class) also go to the list the screen shows.
+// counts the rest), a name alone too: a result with no class (cod 0), the
+// answer to the name request Bluedroid sends, once an inquiry round ends,
+// to each device that answered without its name in the EIR (PairFind).
+// Audio devices (the class of device's rendering service or its
+// Audio/Video major class) also go to the list the screen shows; a name
+// alone doesn't (no class: it would read as not audio, and the list keeps
+// "(no name)" for that one).
 void PlayerA2dp::noteDiscovery(const esp_bt_gap_cb_param_t& param) {
   PairFind f;
   std::memcpy(f.addr, param.disc_res.bda, ESP_BD_ADDR_LEN);
@@ -1484,7 +1489,7 @@ void BtSink::begin(PcmRing& ring, AudioShared& shared, const char* defaultSinkNa
     tap_->setEnabled(false);  // until the Dance tab is up (DanceMode)
   }
   // The Pair screen's list: PSRAM (~0.5 KB). Its search's log: PSRAM too
-  // (~0.8 KB the ring, ~2 KB the record; none: no log, the list works).
+  // (~0.8 KB the ring, ~2.5 KB the record; none: no log, the list works).
   if (void* mem = heap_caps_malloc(sizeof(BtScanList), MALLOC_CAP_SPIRAM)) scan_ = new (mem) BtScanList();
   void* ringMem = heap_caps_malloc(sizeof(PairFindRing), MALLOC_CAP_SPIRAM);
   void* findsMem = heap_caps_malloc(sizeof(PairFinds), MALLOC_CAP_SPIRAM);
@@ -1898,9 +1903,11 @@ void BtSink::drainFinds() {
     if (f.search != search) continue;  // an earlier search's, late
     const PairFinds::Say say = finds_->note(f);
     if (say == PairFinds::Say::Nothing) continue;
+    // (The device as recorded: a name alone has no class or RSSI to print.)
+    const PairFind& told = finds_->told();
     char line[160], addr[18];
-    PairFinds::describe(f, say, line, sizeof(line));
-    Serial.printf("[bt] pair: %s [%s]\n", line, addrText(f.addr, addr, sizeof(addr)));
+    PairFinds::describe(told, say, line, sizeof(line));
+    Serial.printf("[bt] pair: %s [%s]\n", line, addrText(told.addr, addr, sizeof(addr)));
   }
 }
 

@@ -64,16 +64,83 @@ void test_each_audio_device_once_per_search() {
   TEST_ASSERT_EQUAL(Say::Found, p.note(find(1, "SPYDRONE", -62, kHeadset, true)));
 }
 
-// A device whose first result had no class that says audio, then one
-// that does: found then (once).
+// The usual way a nameless one's name comes (2026-10-04 review): once the
+// inquiry round ends, Bluedroid asks each device that answered without its
+// name in the EIR (a remote name request) and reports the answer as a
+// result of its own, the name alone: cod 0, no RSSI, not audio by its
+// class. One more line, from the record (the class and RSSI it was found
+// with); not an inquiry result; asked again a later round: not news.
+void test_a_name_that_comes_alone() {
+  PairFinds p;
+  p.start(0);
+  PairFind r = find(1, "", -60, kHeadset, true);
+  r.remembered = true;
+  TEST_ASSERT_EQUAL(Say::Found, p.note(r));
+  char buf[160];
+  PairFinds::describe(p.told(), Say::Found, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING("found (no name) (headphones, class 0x240404), rssi -60, the remembered headphones", buf);
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(1, "", -58, kHeadset, true)));  // the next round: still none
+  TEST_ASSERT_EQUAL(Say::Found, p.note(find(2, "JBL Flip 5", -81, kSpeaker, true)));
+  TEST_ASSERT_EQUAL(Say::Named, p.note(find(1, "SPYDRONE", -127, 0, false)));
+  PairFinds::describe(p.told(), Say::Named, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING(
+      "the one found with no name is \"SPYDRONE\" (headphones, class 0x240404), rssi -60, the remembered headphones",
+      buf);
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(1, "SPYDRONE", -127, 0, false)));
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(1, "", -127, 0, false)));
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(1, "", -59, kHeadset, true)));  // its inquiry results, named now
+  // One named in its EIR, asked anyway (or named another way): not news.
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(2, "JBL Flip 5 (2)", -127, 0, false)));
+  TEST_ASSERT_EQUAL_INT(2, p.devices());
+  TEST_ASSERT_EQUAL_INT(2, p.audioDevices());
+  TEST_ASSERT_EQUAL_UINT32(4, p.results());  // the names aren't inquiry results
+  // The summary has it by name.
+  char sum[256];
+  p.summary(30000, 0, sum, sizeof(sum));
+  TEST_ASSERT_EQUAL_STRING(
+      "the search saw 2 devices in 30 s, 2 of them audio: \"SPYDRONE\" (remembered), \"JBL Flip 5\"; 4 inquiry results",
+      sum);
+}
+
+// A name alone for a device that isn't audio: kept, never said. For an
+// address this search hasn't seen (its inquiry result came before the
+// search or the ring lost it): nothing, not even a device counted.
+void test_a_name_alone_says_nothing_else() {
+  PairFinds p;
+  p.start(0);
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(9, "Somebody's Phone", -127, 0, false)));
+  TEST_ASSERT_EQUAL_INT(0, p.devices());
+  TEST_ASSERT_EQUAL_UINT32(0, p.results());
+  char sum[256];
+  p.summary(5000, 0, sum, sizeof(sum));
+  TEST_ASSERT_EQUAL_STRING("the search saw nothing in 5 s (not one inquiry result)", sum);
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(3, "", -50, kPhone, false)));
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(3, "Pixel", -127, 0, false)));
+  TEST_ASSERT_EQUAL_INT(1, p.devices());
+  TEST_ASSERT_EQUAL_INT(0, p.audioDevices());
+  // Past the devices it tells apart: neither said nor counted.
+  p.start(0);
+  for (int i = 0; i < PairFinds::kDevices; ++i) p.note(find(static_cast<uint8_t>(i), "", -80, kPhone, false));
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(200, "Late Speaker", -127, 0, false)));
+  TEST_ASSERT_EQUAL_UINT32(0, p.untold());
+  TEST_ASSERT_EQUAL_UINT32(PairFinds::kDevices, p.results());
+}
+
+// A device whose first result had a class that doesn't say audio (here
+// "unclassified", what Bluedroid reports for a device that sends none),
+// then one that does: found then (once), with the name it got meanwhile.
 void test_a_class_that_comes_later() {
   PairFinds p;
   p.start(0);
-  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(1, "", -60, 0, false)));
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(1, "", -60, 0x001f00, false)));
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(1, "SPYDRONE", -127, 0, false)));  // its name, alone
   TEST_ASSERT_EQUAL_INT(0, p.audioDevices());
-  TEST_ASSERT_EQUAL(Say::Found, p.note(find(1, "SPYDRONE", -60, kHeadset, true)));
+  TEST_ASSERT_EQUAL(Say::Found, p.note(find(1, "", -64, kHeadset, true)));
+  char buf[160];
+  PairFinds::describe(p.told(), Say::Found, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING("found \"SPYDRONE\" (headphones, class 0x240404), rssi -64", buf);
   TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(1, "SPYDRONE", -60, kHeadset, true)));
-  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(1, "", -60, 0, false)));  // a classless repeat
+  TEST_ASSERT_EQUAL(Say::Nothing, p.note(find(1, "", -60, 0x001f00, false)));  // a class that doesn't say audio again
   TEST_ASSERT_EQUAL_INT(1, p.devices());
   TEST_ASSERT_EQUAL_INT(1, p.audioDevices());
 }
@@ -244,6 +311,8 @@ void test_the_ring() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_each_audio_device_once_per_search);
+  RUN_TEST(test_a_name_that_comes_alone);
+  RUN_TEST(test_a_name_alone_says_nothing_else);
   RUN_TEST(test_a_class_that_comes_later);
   RUN_TEST(test_the_lines);
   RUN_TEST(test_the_summary);

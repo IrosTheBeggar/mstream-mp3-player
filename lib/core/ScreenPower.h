@@ -66,7 +66,9 @@
 // under the pocket guard isn't held: it still goes off 10 s after the
 // wake unless input follows (the input then ends the guard, and it is
 // held from there). For the idle warning any input ends the warning too.
-// Held, a touch acts (touchActs()): none is swallowed as a wake.
+// Held, a touch acts (touchActs()) unless an event or keepLit lit the
+// screen from Off and no touch has answered that yet (above: the hold
+// leaves that as it is): the hold itself never swallows one.
 //
 // The settings are indices into the tables below (saved as such in NVS).
 // Portable: fed with timestamps, no clock of its own; wraparound-safe.
