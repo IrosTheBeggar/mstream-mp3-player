@@ -387,13 +387,15 @@ def check_pin(blocks, pieces, notes):
         if hi - lo > WAY:
             notes.errors.append(f"the pinned {what} is {hi - lo} B, over one way of the cache ({WAY} B): "
                                 "it can set against itself")
-    seen = set()
+    out = {}  # item -> its lowest address out of the pin (its code, data or a literal)
     for p in pieces:
-        if cached(p.addr) and (p.label, p.addr) not in seen:
-            seen.add((p.label, p.addr))
-            if not any(lo <= p.addr and p.addr + p.size <= hi for _what, lo, hi in blocks):
-                notes.errors.append(f"{p.label} at {p.addr:#x} is out of the pin: its input section isn't the "
-                                    "one tools/iram_diet.py pins (HOT/PATHS in tools/cache_guard.py)")
+        if cached(p.addr) and not any(lo <= p.addr and p.addr + p.size <= hi for _what, lo, hi in blocks):
+            item = p.label[:-len("'s literals")] if p.label.endswith("'s literals") else p.label
+            out[item] = min(out.get(item, p.addr), p.addr)
+    if out:
+        notes.errors.append("out of the pin (their input sections aren't the ones tools/iram_diet.py pins: "
+                            "HOT/PATHS in tools/cache_guard.py): "
+                            + ", ".join(f"{item} (at {addr:#x})" for item, addr in out.items()))
 
 
 def ranges(numbers):

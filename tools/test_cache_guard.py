@@ -246,12 +246,18 @@ class PinTest(unittest.TestCase):
             ok, lines = cg.check(image(moved, pin=((c0, c1), (d0 + step, d1 + step))), require_pin=True)
             self.assertTrue(ok, (step, lines))
 
-    def test_an_item_out_of_the_pin_fails(self):
+    def test_an_item_out_of_the_pin_fails_once(self):
+        # Where it was before (its pattern didn't match), with two literals
+        # out there too: one line names it once, at its lowest address.
         at, pin = pinned()
-        at["trimmed"] = 0x4014A0EC  # where it was before: its pattern didn't match
-        ok, lines = cg.check(image(at, pin=pin), require_pin=True)
+        at["trimmed"] = 0x4014A0EC
+        img = image(at, pin=pin, literals={"trimmed": [0x40111D44, 0x40111D48]})
+        ok, lines = cg.check(img, require_pin=True)
         self.assertFalse(ok)
-        self.assertIn("TrimFeed::consumeTrimmed at 0x4014a0ec is out of the pin", "\n".join(lines))
+        text = "\n".join(lines)
+        self.assertIn("out of the pin", text)
+        self.assertIn("TrimFeed::consumeTrimmed (at 0x40111d44)", text)
+        self.assertEqual(text.count("TrimFeed::consumeTrimmed"), 1)
 
     def test_a_block_over_one_way_fails(self):
         at, ((c0, _c1), data) = pinned()
