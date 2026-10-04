@@ -3,7 +3,8 @@
 
 // Host tests for the screen policy (ScreenPower, docs/ENERGY.md item 2): the
 // dim and off timings for each choice, what keeps it lit, what holds a
-// lit one lit (a countdown toast), the wakes, the pocket guard, and the
+// lit one lit (a countdown toast, the Pair screen's search), the wakes,
+// the pocket guard, and the
 // backlight levels. The wake latch's own cases (with
 // the real recognisers) are in test_ui_input.
 // Run: pio test -e native
@@ -647,6 +648,50 @@ void test_hold_lit_and_a_wake_during_it() {
   TEST_ASSERT_TRUE(w.off());
 }
 
+// The Pair screen's search (2 min at most) holds the screen as a toast
+// does (main.cpp, ScreenControl::Hold::PairSearch). The 2026-10-04 run
+// without it: the search began at a tap, the screen dimmed 20 s later,
+// each tap on the dim screen only woke it (swallowed), and at 81 s it went
+// off, which stopped the search. Held: Bright for the whole search with
+// every choice, every touch acts, then the normal countdown from its end.
+void test_hold_lit_through_the_pair_search() {
+  for (int choice : {0, ScreenPower::kDefaultTimeout, 4}) {
+    ScreenPower s;
+    s.begin(0);
+    s.setTimeout(choice, 0);
+    s.step(0, false);
+    s.activity(1000);  // the tap that opens the Pair screen
+    for (uint32_t t = 1000; t <= 121000; t += 50) {
+      TEST_ASSERT_FALSE(s.step(t, false, /*holdLit=*/true));  // no dim, no off
+      TEST_ASSERT_TRUE(s.touchActs());  // a tap on the list acts
+    }
+    TEST_ASSERT_TRUE(s.bright());
+    // The search stopped (its 2 minutes): the countdown from there.
+    const uint32_t off = ScreenPower::timeoutMs(choice);
+    s.step(121000 + ScreenPower::dimAtMs(off) - 50, false);
+    TEST_ASSERT_TRUE(s.bright());
+    s.step(121000 + ScreenPower::dimAtMs(off), false);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(L::Dim), static_cast<int>(s.level()));
+    s.step(121000 + off, false);
+    TEST_ASSERT_TRUE(s.off());
+  }
+  // The sleep timer's pause during the search: off (the page then stops
+  // the search). The wake after: a pocket guard, nothing held any more.
+  ScreenPower t;
+  t.begin(0);
+  run(t, 0, 30000, false, true);
+  t.turnOff(W::SleepTimer);
+  TEST_ASSERT_TRUE(t.step(30050, false, true));
+  TEST_ASSERT_TRUE(t.off());
+  TEST_ASSERT_EQUAL_INT(0, run(t, 30100, 31000, false, true));  // (until the page has stopped it)
+  TEST_ASSERT_TRUE(t.off());
+  t.wake(40000, W::Touch);
+  t.step(40000, false);
+  TEST_ASSERT_TRUE(t.pocketGuard());
+  t.step(50000, false);
+  TEST_ASSERT_TRUE(t.off());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_tables_and_defaults);
@@ -667,5 +712,6 @@ int main(int, char**) {
   RUN_TEST(test_hold_lit_keeps_a_lit_screen_lit);
   RUN_TEST(test_hold_lit_leaves_an_off_screen_off);
   RUN_TEST(test_hold_lit_and_a_wake_during_it);
+  RUN_TEST(test_hold_lit_through_the_pair_search);
   return UNITY_END();
 }

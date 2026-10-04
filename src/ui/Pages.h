@@ -483,6 +483,10 @@ public:
   void screenOff() override;
   void tick(uint32_t nowMs) override;
   void describe(char* buf, size_t size) const override;
+  // The Pair screen's search runs: from the page's entry or Search again
+  // until its 2 minutes, the screen off, a device picked or the page
+  // closed (leave() stops it). Ui::pairSearching().
+  bool pairSearching() const { return kind_ == PageKind::Pair && search_.searching(); }
 
   // ListView::Source
   uint32_t rows() override;

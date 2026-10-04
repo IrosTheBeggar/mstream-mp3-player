@@ -160,7 +160,12 @@ void OutputPage::home() { ui_.list().scrollTo(0); }
 
 // The screen went off: the Pair screen's scan (an inquiry, back to back)
 // stops, as after its 2 minutes; the row offers "Search again" on the wake.
-// A pairing under way keeps the screen lit, so it isn't one.
+// A pairing under way keeps the screen lit, so it isn't one, and the
+// search itself holds a lit screen lit (pairSearching(): main.cpp's
+// ScreenControl::Hold): what turns a held screen off still does (the
+// sleep timer's pause, the console's Ps0). Before, it dimmed and went off
+// as ever: the dim screen swallowed the listener's taps as wakes, and the
+// screen going off stopped the search (2026-10-04: three tries to pair).
 void OutputPage::screenOff() {
   if (kind_ != PageKind::Pair || !search_.searching()) return;
   if (ui_.state().btLink.phase == BtLink::Phase::Pairing) return;

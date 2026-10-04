@@ -57,13 +57,16 @@
 //
 // Held lit (`holdLit`, step()): a toast with a countdown is up, which the
 // listener may be reading (the idle power-off's "Turning off in 30 s"
-// [Keep on], the sleep timer's fade [+10 min] [Turn off]). A lit screen
+// [Keep on], the sleep timer's fade [+10 min] [Turn off]), or the Pair
+// screen's search runs (2 min at most), which the listener watches for
+// the headphones, tapping the list. A lit screen
 // (Bright or Dim) goes Bright and stays so until it ends, the countdown
 // running from then; an Off one stays off (it may be night: nobody is
 // reading it), and one woken during it is held from the wake. A screen
 // under the pocket guard isn't held: it still goes off 10 s after the
 // wake unless input follows (the input then ends the guard, and it is
 // held from there). For the idle warning any input ends the warning too.
+// Held, a touch acts (touchActs()): none is swallowed as a wake.
 //
 // The settings are indices into the tables below (saved as such in NVS).
 // Portable: fed with timestamps, no clock of its own; wraparound-safe.
@@ -144,7 +147,8 @@ public:
   // key's wake from it has the pocket guard.
   void turnOff(Why why);
 
-  // Every loop pass: the countdown, `keepLit` and `holdLit` (above). True
+  // Every loop pass: the countdown, `keepLit` and `holdLit` (above; what
+  // holds it is the caller's: ScreenControl::Hold). True
   // if the level changed since the last call (in here, or by wake() or
   // turnOff()).
   bool step(uint32_t nowMs, bool keepLit, bool holdLit = false);

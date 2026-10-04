@@ -1422,45 +1422,51 @@ void PlayerA2dp::pairFailed(const char* why) {
   publishLink();
 }
 
-// BTC task: a scan result while the Pair screen scans. Audio devices only
-// (the class of device's rendering service or its Audio/Video major class).
+// BTC task: a scan result while the Pair screen scans. Every one goes to
+// the search's log (BtSink::postFind(): the loop says what is new, and
+// counts the rest); audio devices (the class of device's rendering service
+// or its Audio/Video major class) also go to the list the screen shows.
 void PlayerA2dp::noteDiscovery(const esp_bt_gap_cb_param_t& param) {
-  // The headphones linked now aren't new (multipoint sets stay
-  // discoverable): pairing "with" them would only let them go.
-  if (isLinked(param.disc_res.bda)) return;
-  uint32_t cod = 0;
-  int rssi = -127;
+  PairFind f;
+  std::memcpy(f.addr, param.disc_res.bda, ESP_BD_ADDR_LEN);
   uint8_t* eir = nullptr;
-  char name[32] = "";
   for (int i = 0; i < param.disc_res.num_prop; ++i) {
     const esp_bt_gap_dev_prop_t& p = param.disc_res.prop[i];
     switch (p.type) {
-      case ESP_BT_GAP_DEV_PROP_COD: cod = *static_cast<const uint32_t*>(p.val); break;
-      case ESP_BT_GAP_DEV_PROP_RSSI: rssi = *static_cast<const int8_t*>(p.val); break;
+      case ESP_BT_GAP_DEV_PROP_COD: f.cod = *static_cast<const uint32_t*>(p.val); break;
+      case ESP_BT_GAP_DEV_PROP_RSSI: f.rssi = *static_cast<const int8_t*>(p.val); break;
       case ESP_BT_GAP_DEV_PROP_EIR: eir = static_cast<uint8_t*>(p.val); break;
       case ESP_BT_GAP_DEV_PROP_BDNAME: {
-        const int n = std::min<int>(p.len, static_cast<int>(sizeof(name)) - 1);
-        std::memcpy(name, p.val, n);
-        name[n] = 0;
+        const int n = std::min<int>(p.len, static_cast<int>(sizeof(f.name)) - 1);
+        std::memcpy(f.name, p.val, n);
+        f.name[n] = 0;
         break;
       }
       default: break;
     }
   }
-  const bool audio = esp_bt_gap_is_valid_cod(cod) && ((esp_bt_gap_get_cod_srvc(cod) & ESP_BT_COD_SRVC_RENDERING) ||
-                                                      esp_bt_gap_get_cod_major_dev(cod) == ESP_BT_COD_MAJOR_DEV_AV);
-  if (!audio) return;
-  if (!name[0] && eir) {
+  f.audio = esp_bt_gap_is_valid_cod(f.cod) && ((esp_bt_gap_get_cod_srvc(f.cod) & ESP_BT_COD_SRVC_RENDERING) ||
+                                               esp_bt_gap_get_cod_major_dev(f.cod) == ESP_BT_COD_MAJOR_DEV_AV);
+  if (f.audio && !f.name[0] && eir) {
     uint8_t len = 0;
     uint8_t* n = esp_bt_gap_resolve_eir_data(eir, ESP_BT_EIR_TYPE_CMPL_LOCAL_NAME, &len);
     if (!n) n = esp_bt_gap_resolve_eir_data(eir, ESP_BT_EIR_TYPE_SHORT_LOCAL_NAME, &len);
     if (n) {
-      const int k = std::min<int>(len, static_cast<int>(sizeof(name)) - 1);
-      std::memcpy(name, n, k);
-      name[k] = 0;
+      const int k = std::min<int>(len, static_cast<int>(sizeof(f.name)) - 1);
+      std::memcpy(f.name, n, k);
+      f.name[k] = 0;
     }
   }
-  sink->noteScanResult(param.disc_res.bda, name, rssi, cod);
+  // (BtAppT changes the remembered address only for a pairing, a Forget or
+  // the fresh-unit test, none of them while the Pair screen scans: read
+  // here as app_gap_callback's scan by name reads it.)
+  f.remembered = has_last_connection() && std::memcmp(last_connection, f.addr, ESP_BD_ADDR_LEN) == 0;
+  f.linked = isLinked(f.addr);
+  sink->postFind(f);
+  // The headphones linked now aren't new (multipoint sets stay
+  // discoverable): pairing "with" them would only let them go.
+  if (!f.audio || f.linked) return;
+  sink->noteScanResult(f.addr, f.name, f.rssi, f.cod);
 }
 
 // ---- BtSink ----
@@ -1477,8 +1483,18 @@ void BtSink::begin(PcmRing& ring, AudioShared& shared, const char* defaultSinkNa
     tap_ = new AudioTap(tapBuffer, kTapFrames);
     tap_->setEnabled(false);  // until the Dance tab is up (DanceMode)
   }
-  // The Pair screen's list: PSRAM (~0.5 KB).
+  // The Pair screen's list: PSRAM (~0.5 KB). Its search's log: PSRAM too
+  // (~0.8 KB the ring, ~2 KB the record; none: no log, the list works).
   if (void* mem = heap_caps_malloc(sizeof(BtScanList), MALLOC_CAP_SPIRAM)) scan_ = new (mem) BtScanList();
+  void* ringMem = heap_caps_malloc(sizeof(PairFindRing), MALLOC_CAP_SPIRAM);
+  void* findsMem = heap_caps_malloc(sizeof(PairFinds), MALLOC_CAP_SPIRAM);
+  if (ringMem && findsMem) {
+    findRing_ = new (ringMem) PairFindRing();
+    finds_ = new (findsMem) PairFinds();
+  } else {
+    heap_caps_free(ringMem);
+    heap_caps_free(findsMem);
+  }
 
   buildName_ = defaultSinkName && defaultSinkName[0];
   Preferences prefs;
@@ -1553,6 +1569,7 @@ void BtSink::update(uint32_t nowMs, bool wantAudio) {
   // Each is retried on the next pass when BtAppT's queue has no room.
   if (forgetPending_ && a2dp.requestForget()) forgetPending_ = false;
   flushAsks();
+  drainFinds();  // what the Pair screen's search found since the last pass
   if (unsentVolume_ >= 0 && a2dp.requestVolumeSet(static_cast<uint8_t>(unsentVolume_))) unsentVolume_ = -1;
   if (unsentVolume_ < 0 && unsentStep_ != 0 && a2dp.requestVolumeStep(unsentStep_)) unsentStep_ = 0;
   if (unsentHeadroom_ >= 0 && a2dp.requestHeadroom(static_cast<uint8_t>(unsentHeadroom_))) unsentHeadroom_ = -1;
@@ -1768,12 +1785,16 @@ void BtSink::setBackgroundReconnect(bool on) {
   flushAsks();
 }
 
+// (A connect or a disconnect ends the Pair screen's scan too: on BtAppT,
+// userConnect() and userDisconnect(). So does its log, here.)
 void BtSink::connect() {
+  closeFinds();
   askPending_ = static_cast<uint16_t>((askPending_ & ~(kAskDisconnect | kAskScanOn | kAskRelease)) | kAskConnect);
   flushAsks();
 }
 
 void BtSink::disconnect() {
+  closeFinds();
   askPending_ = static_cast<uint16_t>((askPending_ & ~(kAskConnect | kAskPair | kAskScanOn | kAskRelease)) | kAskDisconnect);
   flushAsks();
 }
@@ -1784,21 +1805,25 @@ void BtSink::releaseHeadphones() {
 }
 
 void BtSink::startPairScan() {
+  openFinds();
   askPending_ = static_cast<uint16_t>((askPending_ & ~(kAskScanOff | kAskScanPause)) | kAskScanOn);
   flushAsks();
 }
 
 void BtSink::stopPairScan() {
+  closeFinds();
   askPending_ = static_cast<uint16_t>((askPending_ & ~(kAskScanOn | kAskScanPause)) | kAskScanOff);
   flushAsks();
 }
 
 void BtSink::pausePairScan() {
+  closeFinds();
   askPending_ = static_cast<uint16_t>((askPending_ & ~kAskScanOn) | kAskScanPause);
   flushAsks();
 }
 
 void BtSink::pairWith(const uint8_t addr[6]) {
+  closeFinds();
   std::memcpy(pairAddr_, addr, sizeof(pairAddr_));
   askPending_ = static_cast<uint16_t>((askPending_ & ~(kAskScanOn | kAskConnect | kAskDisconnect)) | kAskPair);
   flushAsks();
@@ -1822,6 +1847,73 @@ void BtSink::noteScanResult(const uint8_t* addr, const char* name, int rssi, uin
   scan_->note(addr, name, rssi, cod);
   scanVersion_.fetch_add(1, std::memory_order_relaxed);
   portEXIT_CRITICAL(&scanLock_);
+}
+
+// ---- BtSink: the Pair screen's search in the log ----
+//
+// The BTC task never prints (it runs the audio too): it posts each result
+// into the ring, one copy under the scan's lock; the loop prints. A
+// search's log opens with startPairScan() and closes with whatever ends
+// the scan (the 2 minutes or the screen off: pausePairScan(); the page
+// closed: stopPairScan(); a device picked: pairWith(); a connect or a
+// disconnect), so a search that saw nothing still says so.
+
+namespace {
+// The serial log only: no address goes into the repository.
+const char* addrText(const uint8_t* a, char* buf, size_t size) {
+  snprintf(buf, size, "%02x:%02x:%02x:%02x:%02x:%02x", a[0], a[1], a[2], a[3], a[4], a[5]);
+  return buf;
+}
+}  // namespace
+
+void BtSink::postFind(PairFind& f) {
+  if (!findRing_) return;
+  f.search = findSearch_.load();
+  if (!(f.search & 1)) return;  // no search open (its log closed already): nobody's
+  portENTER_CRITICAL(&scanLock_);
+  findRing_->push(f);  // (full: dropped and counted; the summary says so)
+  portEXIT_CRITICAL(&scanLock_);
+}
+
+void BtSink::openFinds() {
+  if (!findRing_ || !finds_) return;
+  closeFinds();  // (one still open: its summary first)
+  portENTER_CRITICAL(&scanLock_);
+  findRing_->clear();
+  portEXIT_CRITICAL(&scanLock_);
+  finds_->start(millis());
+  findSearch_.fetch_add(1);  // odd: results are this search's from now
+}
+
+void BtSink::drainFinds() {
+  if (!findRing_ || !finds_) return;
+  const uint16_t search = findSearch_.load();
+  if (!(search & 1)) return;
+  for (;;) {
+    PairFind f;
+    portENTER_CRITICAL(&scanLock_);
+    const bool got = findRing_->pop(f);
+    portEXIT_CRITICAL(&scanLock_);
+    if (!got) return;
+    if (f.search != search) continue;  // an earlier search's, late
+    const PairFinds::Say say = finds_->note(f);
+    if (say == PairFinds::Say::Nothing) continue;
+    char line[160], addr[18];
+    PairFinds::describe(f, say, line, sizeof(line));
+    Serial.printf("[bt] pair: %s [%s]\n", line, addrText(f.addr, addr, sizeof(addr)));
+  }
+}
+
+void BtSink::closeFinds() {
+  if (!findRing_ || !finds_ || !(findSearch_.load() & 1)) return;
+  drainFinds();
+  portENTER_CRITICAL(&scanLock_);
+  const uint32_t lost = findRing_->dropped();
+  portEXIT_CRITICAL(&scanLock_);
+  findSearch_.fetch_add(1);  // even: what the inquiry still finds before it stops is nobody's
+  char line[256];  // (the names cut with ", ..." past it; the loop's stack had 4.3 KB spare at worst)
+  finds_->summary(millis(), lost, line, sizeof(line));
+  Serial.printf("[bt] pair: %s\n", line);
 }
 
 void BtSink::setCodec(const char* text) {

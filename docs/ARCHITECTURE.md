@@ -576,7 +576,9 @@ out what it returns.
   spinlock, connecting to none (the library would connect to the first
   that matches), while the background search is held off (the Pair page
   stops it after 2 min, `PairSearch`, checked every UI pass so a dialog
-  over the page doesn't keep it running, or when the screen goes off, and
+  over the page doesn't keep it running, or when the screen goes off; it
+  holds a lit screen lit meanwhile, `Ui::pairSearching()`, see "The
+  screen's power" under UI; then it
   offers "Search again": **pausePairScan()**, which keeps the background
   search held off while the page is up, so the old headphones aren't
   paged while new ones are picked; closing the page without a pairing,
@@ -590,6 +592,26 @@ out what it returns.
   ends the pairing the same way. The Pair list leaves out the headphones
   linked now (multipoint sets stay discoverable; "pairing" with them only
   let them go), and picking them anyway just makes them the output.
+  **Each search is in the serial log** (`PairFinds`, host-tested): the
+  BTC task posts every inquiry result, audio or not, into a ring in PSRAM
+  (one copy under the scan's spinlock; it never prints: it runs the audio
+  too), tagged with the loop's count of searches opened and closed, so a
+  result the inquiry still delivers after its search ended is nobody's.
+  The loop drains it every pass (`BtSink::update()`), tells the results
+  apart by address (48 devices a search; past those only counted), and
+  prints one line per audio device the first time the search sees it,
+  `[bt] pair: found "<name>" (headphones, class 0x240404), rssi -62, the
+  remembered headphones [<address>]` ("(no name)" without one; "linked
+  now: not listed" for the headphones linked now), one more when a
+  nameless one's name comes later, and nothing for repeats or other
+  devices. Whatever ends the scan ends its log with a summary
+  (startPairScan() opens it; pausePairScan(), stopPairScan(), pairWith(),
+  connect() and disconnect() close it): `[bt] pair: the search saw 9
+  devices in 81 s, 2 of them audio: "SPYDRONE" (remembered), (no name);
+  41 inquiry results`, or `the search saw nothing in 120 s (not one
+  inquiry result)`, with any results the ring lost. Before it, the
+  results only filled the list, and a search that failed couldn't tell
+  "saw them and missed them" from "saw nothing" (2026-10-04).
   Forget from the screen forgets and disconnects, no restart, and **for
   good**: a saved flag (NVS `bt_forgot`) stops every scan by name in a
   build with a name (the boot's, the search's with none remembered, a B
@@ -1874,7 +1896,16 @@ Queue, Dance and Output (with its Pair and About pages).
   power-off's warning, the sleep timer's fade while it counts down to the
   pause: `holdLit`) a lit screen
   (bright or dim) goes bright and stays lit until it ends, then counts
-  down from there; an off one stays off (it may be night). One woken
+  down from there; an off one stays off (it may be night). The Pair
+  screen's search holds it the same way (`ScreenControl::Hold`, from
+  `Ui::pairSearching()`: from the page's entry or Search again until its
+  2 minutes, a device picked, the page closed or the screen off), so the
+  listener's taps on the list act and the search isn't stopped by the
+  screen going off: on 2026-10-04 the screen dimmed 20 s into it, each tap
+  on the dim screen only woke it, and at 81 s it went off and stopped the
+  search; pairing took three tries. Logged as `[screen] held lit while the
+  Pair screen searches (2 min at most): no dim, no off` and `[screen] the
+  Pair screen's search stopped: the countdown again (dims in 19 s)`. One woken
   during it is held from the wake, except that a touch's or PWR's wake
   from Off keeps its pocket guard until input follows (for the idle
   warning that wake is input, which ends the warning). `ScreenControl` alone switches the backlight, and the

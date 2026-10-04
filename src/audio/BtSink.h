@@ -13,6 +13,7 @@
 #include "DeclickReader.h"
 #include "GainRamp.h"
 #include "OutputModel.h"
+#include "PairFinds.h"
 #include "PcmRing.h"
 #include "SinkSearch.h"
 #include "StreamRestart.h"
@@ -70,6 +71,9 @@ class PlayerA2dp;  // BtSink.cpp: ESP32-A2DP's source with the fixes below
 // listed, none is connected to) and pairs with one it picked (pairWith():
 // it replaces the remembered headphones once it is linked; a pairing that
 // fails keeps the old ones). link() says what it is doing, for the card.
+// Each such search is in the serial log (PairFinds): a line per audio
+// device it finds (one more when a nameless one's name comes), and when it
+// ends, what it saw (how many devices, how many of them audio, which).
 class BtSink {
 public:
   static constexpr uint8_t kConsumerId = 1;
@@ -203,6 +207,9 @@ public:
   // pausePairScan(): the scan stopped by itself (2 min, the screen off)
   // with the screen still up: nothing is tried until it closes (the
   // remembered headphones would link while new ones are picked).
+  // startPairScan() starts the search's log; stopPairScan(),
+  // pausePairScan(), pairWith(), connect() and disconnect() end it (each
+  // ends the scan), with its summary: "[bt] pair: the search saw ...".
   void startPairScan();
   void stopPairScan();
   void pausePairScan();
@@ -314,6 +321,16 @@ private:
   void setCodec(const char* text);        // BtAppT
   void flushAsks();                        // hands the Output screen's asks to BtAppT
   void noteScanResult(const uint8_t* addr, const char* name, int rssi, uint32_t cod);  // BTC task
+  // The Pair screen's search in the log (PairFinds). postFind(): BTC task,
+  // every inquiry result of the search, into the ring. The rest: loop
+  // task. openFinds() starts a search's log (ending one still open);
+  // drainFinds() (update(), every pass) tells the results apart and says
+  // what is new; closeFinds() drains, then the summary. postFind() tags
+  // `f` with the search (its `search`) before the copy.
+  void postFind(PairFind& f);
+  void openFinds();
+  void drainFinds();
+  void closeFinds();
 
   // Two copies each, so a writer never rewrites the one another task reads.
   char sinkNames_[2][64] = {"", ""};
@@ -337,6 +354,15 @@ private:
   BtScanList* scan_ = nullptr;
   mutable portMUX_TYPE scanLock_ = portMUX_INITIALIZER_UNLOCKED;
   std::atomic<uint32_t> scanVersion_{0};
+  // The search's log: the BTC task's results on their way (PSRAM, under
+  // scanLock_), and the loop's record of this search (PSRAM, loop only).
+  // findSearch_ counts searches opened and closed (the loop's): odd while
+  // one is open. A result is tagged with it as posted, so one that comes
+  // after its search closed (the inquiry stops a moment later, on BtAppT)
+  // isn't taken for the next search's.
+  PairFindRing* findRing_ = nullptr;
+  PairFinds* finds_ = nullptr;
+  std::atomic<uint16_t> findSearch_{0};
   uint8_t pairAddr_[6] = {};  // pairWith()'s, read by BtAppT after the work is posted
   // The Output screen's asks not handed to BtAppT yet (its queue was full).
   uint16_t askPending_ = 0;

@@ -97,8 +97,9 @@ bool ScreenPower::step(uint32_t nowMs, bool keepLit, bool holdLit) {
   } else if (level_ != Level::Off) {
     const uint32_t offAfter = timeoutMs(timeout_);
     if (holdLit && !pocket_) {
-      // A countdown toast is up on a lit screen: Bright until it ends (not
-      // input: the pocket guard's screen isn't held, above).
+      // A countdown toast is up, or the Pair screen searches, on a lit
+      // screen: Bright until it ends (not input: the pocket guard's screen
+      // isn't held, above).
       sinceMs_ = nowMs;
       set(Level::Bright, Why::HoldLit);
     } else if (pocket_) {

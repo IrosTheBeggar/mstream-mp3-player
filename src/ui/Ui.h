@@ -105,6 +105,11 @@ public:
   // bar, the page, what is over it), the list's hardware scroll sent again.
   void setDark(bool on);
   bool dark() const { return dark_; }
+  // The Pair screen's search runs (its 2 minutes at most; OutputPage):
+  // main.cpp holds a lit screen lit for it (ScreenControl::Hold), so the
+  // listener's taps on the list act instead of only waking a dim screen,
+  // and the screen doesn't go off and stop the search.
+  bool pairSearching() const { return started_ && !suspended_ && outputPage_.pairSearching(); }
 
   // ---- events from the rest of the firmware ----
   void libraryChanged();       // the index was rebuilt (g0): the Library's ids are stale
