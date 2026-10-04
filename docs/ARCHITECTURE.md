@@ -95,7 +95,9 @@ used to malloc it per track: above 0x3FA00000 the same file decoded at
 1.7-3.6x realtime instead of 4.7-5.0x, depending on the address and the
 image ([RESAMPLER.md](RESAMPLER.md) section 10d). Its input buffer and
 stream state (4.1 KB) stay per-track allocations in internal RAM, as
-before. The boot log says where the block is (`[audio] MP3 decoder
+before. Its synthesis loop's code and tables in flash have fixed places
+too, for the same reason ([Build notes](#build-notes); RESAMPLER.md
+section 10e). The boot log says where the block is (`[audio] MP3 decoder
 state: 25056 B pinned at 0x3f808e80, PSRAM, its lower 2 MB`), and so
 does every MP3 bench (`b<n>`); a track that can't have it (none at boot)
 decodes on ESP8266Audio's own malloc, logged.
@@ -2503,8 +2505,33 @@ their own (the player stopped first, so nothing follows them).
   It fails the build when it moves nothing (a toolchain or framework update
   changed the objects: its docstring says what to do) and warns about any
   name that no longer matches; a build logs `iram_diet: 51 of 51 libc
-  objects moved to flash`. About 7 KB of IRAM is left. Adding WiFi will need more: likely pioarduino's
-  `custom_sdkconfig` to rebuild the framework without the workaround.
+  objects moved to flash`. About 5 KB of IRAM is left (5,176 B from the
+  seek bar on; the MP3 pin below takes none). Adding WiFi will need
+  more: likely pioarduino's `custom_sdkconfig` to rebuild the framework
+  without the workaround.
+- **The MP3 synth loop is pinned at the front of flash.** The same
+  `tools/iram_diet.py` puts libmad's synthesis (`dct32`, `synth_full`,
+  `mad_synth_frame_onens`), AudioGeneratorMP3's per-sample `GetOneSample`
+  and `loop`, and the outputs' per-sample calls first in `.flash.text`,
+  each with its literal pool, and libmad's window `D` and the two outputs'
+  vtables first in `.flash.rodata`. Both sections start at the same
+  address in every build and each block is under 16 KB, so those lines
+  keep their sets of the 2-way flash cache whatever else changes, at most
+  two in a set. Left to the linker, the seek bar's build put three of
+  them in 13 sets and One More Time decoded at 3.8x realtime instead of
+  4.8x ([RESAMPLER.md](RESAMPLER.md) section 10e). It costs no RAM and no
+  flash. **`tools/cache_guard.py`** (a post-script) reads `firmware.elf`
+  after every link and fails the build when a set holds three of the
+  loop's lines on the bench's or playback's path, the pin is missing, or
+  a hot item is out of it; it prints which sets, what shares them and
+  where each item is. A build logs `cache_guard: ok: the MP3 synth loop's
+  hot lines, at most 2 in a set (bench), 2 in a set (playback); pinned:
+  ...`, then any warning (a hot function it reads only in part: a
+  switch's jump table, a landing pad). The hot set is one table there
+  (`HOT`, `PATHS`) for the pin and the check; `firmware.elf` depends on
+  the build's sections.ld, so a change to it relinks. It runs on any ELF
+  too (`python tools/cache_guard.py firmware.elf`); its tests: `python
+  -m unittest discover -s tools -p "test_cache_guard.py"`.
 - **`tools/no_psram_fix.py`** (a pre-script) compiles everything
   PlatformIO builds (src/, lib/core, the libraries, the Arduino core)
   without that workaround's `-mfix-esp32-psram-cache-issue`, a `memw`

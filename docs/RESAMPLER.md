@@ -30,7 +30,10 @@ image against step 5's gates:
 
 The MP3 decoder's own state is pinned in the fast lower 2 MB of the PSRAM
 since 2026-10-02 (section 10d): where it landed had swung the same file
-from 4.9x to 1.7x realtime.
+from 4.9x to 1.7x realtime. Its synth loop's code and tables are pinned
+at the front of flash since 2026-10-04, and the build checks it (section
+10e): where the linker put them had taken the same file from 4.8x to
+3.8x.
 
 - Built: `lib/core/RateConverter` (the converter: routes, the block path,
   the C kernel and the ESP32's MAC16 one with its self-test, the ring-full
@@ -2004,8 +2007,9 @@ Stronger and `b13` Alligator (FLAC):
   and d3c9b91 itself (state low by luck) 5.1-5.2x for One More Time
   (FLAC 4.8 and 4.9 there). Data placement can't move that; pinning
   ESP8266Audio's code and tables at the front of flash (a linker-script
-  edit like `tools/iram_diet.py`'s) could. Not done: section 12 of
-  GAPLESS.md.
+  edit like `tools/iram_diet.py`'s) could. Not done then: section 12 of
+  GAPLESS.md. (Done for the synth loop on 2026-10-04, after the seek bar's
+  layout had cost it a fifth: section 10e. Layer III's still move.)
 - **Ten minutes of Discovery** on the final image (silent mode `z`, the
   speaker, `G1`), from a boot while Bluetooth paged the absent
   headphones: 0 underruns, the ring at 1,439-1,449 ms throughout, two
@@ -2024,3 +2028,179 @@ Stronger and `b13` Alligator (FLAC):
   (an unrolled function, a `const` array, a held PSRAM block) and the
   placement knob a temporary console command; all removed, the touched
   files md5-checked against the commit.
+
+## 10e. The MP3 synth loop's cache sets: pinned at the front of flash
+
+Not the converter either, but the same cache as sections 10 and 10d.
+Found on 2026-10-04 with the console's `b<n>` at 240 MHz, from a boot
+(One More Time `b27`, twice; Stronger `b2`, a FLAC, as the control):
+
+| Image | One More Time | Stronger (FLAC) |
+|---|---|---|
+| v0.6.0 | 4.8, 4.8 | 4.7 |
+| dev at 9fd02e6 (0.6.0 and the seek bar) | 3.8, 3.8; rebuilt 3.9, 3.9 | 4.7 |
+| the same with 10 KB of unused rodata | 5.0, 5.0 | 4.7 |
+| feature/opus at b6415d3 | 3.8, 3.7 | 4.7 |
+
+Neither line had touched the MP3 path: the seek bar changed the UI and
+the player, Opus its own files and the decode stack.
+
+**The cause: three of the synth loop's lines in one set of a 2-way cache.**
+
+- The flash cache is 32 KB a CPU, two ways of 16 KB, 32-byte lines: a
+  line's set is (address mod 16 KB) / 32, for code (0x400Dxxxx) and flash
+  data (0x3F4xxxxx) alike, and a set keeps two lines.
+- libmad's synthesis runs 36 passes a frame (`mad_synth_frame_onens`,
+  `synth_full`, `dct32` for each channel, the window `D`), and between
+  two passes AudioGeneratorMP3 hands the output 32 samples one at a time
+  (`loop`, `GetOneSample`, the output's `ConsumeSample` through its
+  vtable). Every line of that is read on every pass.
+- ESP8266Audio's archive puts `GetOneSample` 30,716 B before `dct32` in
+  every build: in the 16 KB way that is `dct32` + 2,052, so
+  `GetOneSample` and `loop` (412 B) always share about 14 sets with
+  `dct32`'s 4,372 B. Two lines a set fit.
+- `D` (2,176 B) makes them three when (D - dct32) mod 16 KB is in about
+  [-190, 2,460]. The seek bar moved libmad's code 2,076 B forward and its
+  tables 704 B: D - dct32 went from 2,668 to 1,296, and 13-14 sets held
+  three lines. Opus moved them 4,552 and 3,048 B, to 1,164: 14 sets. The
+  10 KB of rodata took it to 11,508: none.
+- Three lines read in turn in a 2-way LRU set miss every time: about 3
+  line fills a set a pass, ~1,500 a frame, at most ~0.43 M cycles at
+  section 10d's 285 a miss. The bench measured +0.32 M (20.9 % to 26.0 %
+  of a core). FLAC doesn't run this loop.
+- **Playback has more to collide.** Its per-sample path is
+  `RingOutput::ConsumeSample` and, for a track whose LAME tag holds
+  padding back (most MP3s, for the whole track: GAPLESS.md),
+  `TrimFeed::consumeTrimmed` and the out-of-line `RingFeed::consume`; each
+  can land on those sets too, and so can the vtable word `loop()` reads
+  and the synthesis's literal pool (the constants Xtensa's L32R loads,
+  which the linker puts apart from the code). Counted that way, v0.6.0's
+  own layout (8fd7a78) held three lines in 8 sets on playback (D +
+  consumeTrimmed + dct32; 1 on the bench) and 67dd141, the seek work, in
+  6 (loop + consumeTrimmed + dct32; none on the bench). So the 0.6.0
+  soak's MP3 `load=` (RELEASE-0.6.0-CHECKS.md: ~39-43 % with the Dance
+  tab up) may carry some of it. Not measured.
+
+**The fix: the hot set pinned at the front of flash** (`tools/iram_diet.py`,
+which already writes the build's own sections.ld; the list is `HOT` and
+`PATHS` in `tools/cache_guard.py`).
+
+- First in `.flash.text`: `dct32`, `synth_full`, `mad_synth_frame_onens`,
+  `GetOneSample`, `loop`, `CountingOutput::ConsumeSample`,
+  `RingOutput::ConsumeSample`, `TrimFeed::consumeTrimmed` and
+  `RingFeed::consume`, each with its literal pool (`.literal.<name>`):
+  6,947 B at 0x400D0020-0x400D1B43, sets 1-218.
+- First in `.flash.rodata`: `D` and the two outputs' vtables: 2,296 B at
+  0x3F400120-0x3F400A18, sets 9-80.
+- Both sections start at the same address in every build (0x400D0020 is
+  memory.ld's; 0x3F400120 follows the 256-byte app descriptor; the same
+  in every image from 0.6.0 to Opus), and each block is under 16 KB. So
+  every hot line keeps its set whatever else changes, at most one of
+  each block in a set: two, which the cache keeps.
+- **It costs nothing.** Against dev at 9fd02e6 built the same way:
+  IRAM (124,867 B of `.iram0.text`), `.dram0.data`, `.dram0.bss` and
+  `.flash.rodata` the same to the byte, `.flash.text` and the app 64 B
+  smaller (the literal pools merge differently). The rest of the code
+  and data shifts once, so FLAC's and Opus's layouts re-roll.
+
+**Why not the investigation's three candidates.** Each was compared on
+10,000 layouts made up from the 9fd02e6 image with `cache_guard`'s
+model: the parts that move apart in real builds (libmad's code with
+GetOneSample and loop, its literal pool, `D`, each sink, each vtable
+word) each at a random offset in the 16 KB way.
+
+| Candidate | Costs | Layouts with a set of three: bench / playback / either |
+|---|---|---|
+| none (dev) | | 36 / 54 / 59 % |
+| A: GetOneSample and loop in IRAM | 412 B of the ~5 KB of IRAM left | 38 / 56 / 61 % |
+| A, with every other per-sample function | ~1 KB of IRAM | 33 / 33 / 37 % |
+| B: `D` in internal RAM | 2,176 B of internal RAM | 15 / 32 / 37 % |
+| A and B | both | 15 / 30 / 35 % |
+| C: libmad's blocks ALIGNed, `D` clear of its code | up to 32 KB of flash | 15 / 35 / 40 % |
+| the pin | nothing | none: no hot line moves |
+
+- A removes the 14-set case but not its cause: the sinks are app code,
+  and they, their vtable words and the literal pool land on `dct32` and
+  `D`'s shared sets in other layouts, up to 7-8 sets a sink. B and C leave
+  GetOneSample and loop on `dct32`'s sets for the same parts to make
+  three. Only a fixed address for every hot line takes the chance away,
+  and the two section starts are the fixed addresses there are.
+- The model counts GetOneSample's and loop's literals, which only their
+  error paths read: a little pessimistic for the candidates that keep
+  them in flash.
+
+**The guard (`tools/cache_guard.py`, a post-script in platformio.ini).**
+After every link it reads `firmware.elf` (its own ELF reader: no
+pyelftools, no toolchain call) and fails the build when:
+
+- a cache set holds 3 or more distinct lines of the hot set, on the
+  bench's path (CountingOutput) or playback's (RingOutput, TrimFeed,
+  RingFeed); it prints the sets, what shares them and where each item is
+  in the way;
+- the pin isn't in the link (no `_mp3_hot_*` symbols), or a hot item is
+  out of it (its input section no longer matches: a library update);
+- a hot item's symbol isn't in the ELF.
+
+A function counts with its literals, found by following its code from
+its entry along its branches (so the zero padding the assembler leaves
+after a jump isn't read as code: objdump's linear listing gets
+`TrimFeed::consumeTrimmed` wrong that way); a vtable by its word that
+holds the output's `ConsumeSample`. Bytes of a hot function its
+branches don't reach (a switch's cases behind a jump table, an
+exception's landing pad) and an instruction it can't decode are a
+warning, not a failure: the literals they load aren't counted, nor a
+jump table's rodata, so the result needs a look. None of today's hot
+set has any. A build logs `cache_guard: ok: the MP3 synth loop's hot
+lines, at most 2 in a set (bench), 2 in a set (playback); pinned: code
+0x400d0020-0x400d1b43 (6947 B), data 0x3f400120-0x3f400a18 (2296 B)`,
+then any warning. `firmware.elf` depends on the build's sections.ld (a
+linker script that only `-T` names isn't one SCons scans), so a change
+to `HOT` or `PATHS` alone relinks and the guard never reads an old
+image (checked: a change to the script alone relinked, an unchanged
+one didn't). It runs on any ELF too (`python
+tools/cache_guard.py [--require-pin] firmware.elf ...`); its tests:
+`python -m unittest discover -s tools -p "test_cache_guard.py"` (22, on
+made-up symbol tables and code; among them, candidates A and B's
+placements: an item in IRAM, internal DRAM or PSRAM counts for nothing,
+pinned or not).
+
+On the investigation's images (none pinned, so without `--require-pin`):
+
+| Image | Sets of three: bench | playback | Result |
+|---|---|---|---|
+| 8fd7a78 (v0.6.0's source) | 1 | 8 | fails |
+| 67dd141 (the seek work) | 0 | 6 | fails, on the trimmed playback path only (its 4.8x was the bench's path, which passes) |
+| 94d66f7 (the beat tracker's line) | 0 | 0 | passes |
+| 9fd02e6, the benched dev image | 14 | 14 | fails |
+| 9fd02e6, rebuilt | 13 | 13 | fails |
+| 9fd02e6 with 10 KB of rodata | 0 | 0 | passes |
+| b6415d3 (Opus), the benched image | 14 | 23 | fails |
+
+The fix, built five ways for this from an export of the commit (none
+of it committed):
+
+- as it is, with 10 KB of unused rodata, and with 1 KB and with 5 KB of
+  code in front of the libraries: every one passes, at most 2 in a set
+  on both paths, with the whole hot set at the same addresses (`dct32`
+  at 0x400D00E4, `D` at 0x3F400120). The rest moved: layer III and
+  libFLAC by 1,084 and 5,068 B, libmad's other tables by 10,240 B. (D -
+  dct32 is now 60, inside the old window; but GetOneSample and loop no
+  longer sit 30,716 B before `dct32`: they follow it, 5,688 B on, off
+  `D`'s sets.) The
+  investigation's own set model agrees: none on either path, all four.
+- with the pin's lines taken out of `tools/iram_diet.py`: the build
+  stopped at the guard, with the 13 sets and every hot item out of the
+  pin.
+
+**Still to do: the device.** `b27` twice and `b2` on the fix and on its
+three padded builds, each from a boot at 240 MHz: One More Time at 4.8x
+or better on all four and within 0.1x of each other; Stronger 4.7x
+± 0.2 (its layout re-rolls). Then ten minutes of Discovery (`z`, the
+speaker): `load=` at or below the seek work's 37-39 %. And Opus benched
+again (`b</bench/opus/ms128k.opus>` at 240 MHz) once the pin is on its
+branch: its layout re-rolls too.
+
+**Not pinned:** layer III's code and tables (section 10d's ±3 %), a
+track at another rate's converter (one block a pass), FLAC and Opus.
+The same pin and guard can take them (more rows in `HOT` and `PATHS`)
+once their hot sets are profiled.
