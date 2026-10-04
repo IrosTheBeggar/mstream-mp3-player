@@ -115,21 +115,29 @@ void ScreenControl::wake(const char* why) {
   if (power_.wake(now, ScreenPower::Why::Event)) wakeWhy_ = why;  // (logged by step())
 }
 
-void ScreenControl::step(uint32_t nowMs, bool keepLit, bool holdLit) {
-  if (power_.step(nowMs, keepLit, holdLit)) logChange(nowMs);
+void ScreenControl::step(uint32_t nowMs, bool keepLit, Hold hold) {
+  hold_ = hold;
+  if (power_.step(nowMs, keepLit, hold != Hold::None)) logChange(nowMs);
   // The hold's start and end, on a screen it holds (a dim one brightening
-  // is logged as a change too).
-  const bool held = holdLit && !power_.off() && !power_.pocketGuard();
+  // is logged as a change too); one that changes what holds it starts
+  // again. Ended on an off screen (the sleep timer's pause): nothing to say.
+  const Hold held = hold != Hold::None && !power_.off() && !power_.pocketGuard() ? hold : Hold::None;
   if (held != held_) {
-    if (held) {
+    if (held == Hold::Toast) {
       Serial.println("[screen] held lit while the toast counts down");
+    } else if (held == Hold::PairSearch) {
+      Serial.println("[screen] held lit while the Pair screen searches (2 min at most): no dim, no off");
     } else if (!power_.off()) {
+      const char* gone = held_ == Hold::Toast ? "the toast is gone" : "the Pair screen's search stopped";
       const uint32_t next = power_.msUntilNext(nowMs);  // (0: Never)
-      if (next) {
-        Serial.printf("[screen] the toast is gone: the countdown again (%s in %lu s)\n",
-                      power_.pocketGuard() ? "off" : "dims", (unsigned long)(next / 1000));
+      if (keepLit) {
+        // (A device picked: the pairing keeps it lit from here.)
+        Serial.printf("[screen] %s (still kept lit)\n", gone);
+      } else if (next) {
+        Serial.printf("[screen] %s: the countdown again (%s in %lu s)\n", gone, power_.pocketGuard() ? "off" : "dims",
+                      (unsigned long)(next / 1000));
       } else {
-        Serial.println("[screen] the toast is gone (screen off after: Never)");
+        Serial.printf("[screen] %s (screen off after: Never)\n", gone);
       }
     }
     held_ = held;
@@ -142,7 +150,7 @@ void ScreenControl::logChange(uint32_t nowMs) {
   char after[64] = "";
   const uint32_t next = power_.msUntilNext(nowMs);
   if (power_.why() == ScreenPower::Why::HoldLit) {
-    // (until the toast ends: step() logs that)
+    // (until the hold ends: step() logs that)
   } else if (l == ScreenPower::Level::Bright && power_.pocketGuard()) {
     snprintf(after, sizeof(after), "; off again in %lu s without input", (unsigned long)(next / 1000));
   } else if (l == ScreenPower::Level::Bright && next) {
@@ -151,8 +159,12 @@ void ScreenControl::logChange(uint32_t nowMs) {
     snprintf(after, sizeof(after), "; off in %lu s", (unsigned long)(next / 1000));
   }
   const bool event = power_.why() == ScreenPower::Why::Event && wakeWhy_;
-  Serial.printf("[screen] %s -> %s (%s%s%s)%s\n", ScreenPower::name(power_.previous()), ScreenPower::name(l),
-                ScreenPower::name(power_.why()), event ? ": " : "", event ? wakeWhy_ : "", after);
+  // (Held lit: ScreenPower names the toasts' hold; the search's is ours.)
+  const char* why = power_.why() == ScreenPower::Why::HoldLit && hold_ == Hold::PairSearch
+                        ? "held lit for the Pair screen's search"
+                        : ScreenPower::name(power_.why());
+  Serial.printf("[screen] %s -> %s (%s%s%s)%s\n", ScreenPower::name(power_.previous()), ScreenPower::name(l), why,
+                event ? ": " : "", event ? wakeWhy_ : "", after);
   wakeWhy_ = nullptr;
 }
 

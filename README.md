@@ -357,8 +357,12 @@ pages do:
   "No headphones paired": tap it, or its button, for the Pair screen.
   **Pair new headphones** lists the audio devices in pairing mode nearby
   (with their signal); tap one to pair it, in place of the ones paired
-  before (they stay if the new pairing fails). Then the line-out module's
-  place (not fitted yet), **Haptics** on/off, **Screen off after**,
+  before (they stay if the new pairing fails). Its search runs for 2
+  minutes and the screen stays lit meanwhile (no dim, no off, so a tap
+  always acts), then the normal screen timeout again; **Search again**
+  starts another. Each search is in the serial log: every audio device
+  it found, and at its end how many devices it saw. Then the line-out
+  module's place (not fitted yet), **Haptics** on/off, **Screen off after**,
   **Brightness**, **Turn off when idle**, **CPU speed** (240 MHz, the default,
   is the smooth one; 160 MHz saves a little battery, but lists scroll at
   about half speed while music plays; it takes a restart, asked first: the
@@ -606,6 +610,9 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       link state, a connection that failed), what the
                       listener asked for (BtSession), Forget's second
                       tap, the pairing scan's list
+  PairFinds           The Pair screen's search in the serial log: each audio
+                      device once per search, the rest counted, the summary
+                      at its end; the ring from the Bluetooth task
   UiText              The UI's fixed texts next to their room (the host
                       tests measure them with the firmware's fonts)
   QueueView           The Queue's summary from learned track lengths, the

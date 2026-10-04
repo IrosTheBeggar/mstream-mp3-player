@@ -2613,21 +2613,28 @@ void loop() {
   usbViz.loop(now, screen.externalPower());
   shot.poll();
   // The screen, last: the countdown, and what keeps it lit (a screen of its
-  // own, a play waiting for the headphones, a pairing, a computer driving the
-// dancer). Going off, the UI
-  // goes dark first; waking, it draws everything before the panel's
-  // sleep-out. A toast with a countdown (the idle power-off's warning, the
-  // sleep timer's fade while it counts down to the pause) holds a lit screen
-  // lit until it ends, and leaves an off one off (it may be night). A
-  // track's fade held after a skip (until the new track's last 10 s, or the
-  // album's end) keeps its toast but not the screen: that can be minutes.
+  // own, a play waiting for the headphones, a pairing, a computer driving
+  // the dancer). Going off, the UI goes dark first; waking, it draws
+  // everything before the panel's sleep-out. A toast with a countdown (the
+  // idle power-off's warning, the sleep timer's fade while it counts down
+  // to the pause) holds a lit screen lit until it ends, and leaves an off
+  // one off (it may be night). A track's fade held after a skip (until the
+  // new track's last 10 s, or the album's end) keeps its toast but not the
+  // screen: that can be minutes. The Pair screen's search holds it too
+  // (its 2 minutes at most; it ends with the page, a pick or the screen
+  // off): the listener watches for the headphones and taps the list, and a
+  // dim screen took those taps as wakes, an off one stopped the search.
   {
     const BtLink link = audio.bluetooth().link();
     // (A pairing under way, not one whose failure the card still shows.)
     const bool keepLit = screenTaken() || player.state() == PlayState::Waiting ||
                          link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay() || usbViz.active();
-    const bool holdLit = idlePower.policy().phase() == IdlePolicy::Phase::Warning || sleepTimer.fadeCountingDown();
-    screen.step(millis(), keepLit, holdLit);
+    using Hold = ScreenControl::Hold;
+    const Hold hold = idlePower.policy().phase() == IdlePolicy::Phase::Warning || sleepTimer.fadeCountingDown()
+                          ? Hold::Toast
+                      : userInterface && userInterface->pairSearching() ? Hold::PairSearch
+                                                                        : Hold::None;
+    screen.step(millis(), keepLit, hold);
   }
   // A calibration asked for in the dark: now that the panel is awake.
   if (calibrationPending && !screen.off() && !screen.panelAsleep()) {
