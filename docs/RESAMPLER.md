@@ -2145,20 +2145,31 @@ A function counts with its literals, found by following its code from
 its entry along its branches (so the zero padding the assembler leaves
 after a jump isn't read as code: objdump's linear listing gets
 `TrimFeed::consumeTrimmed` wrong that way); a vtable by its word that
-holds the output's `ConsumeSample`. A build logs `cache_guard: ok: the
-MP3 synth loop's hot lines, at most 2 in a set (bench), 2 in a set
-(playback); pinned: code 0x400d0020-0x400d1b43 (6947 B), data
-0x3f400120-0x3f400a18 (2296 B)`. It runs on any ELF too (`python
+holds the output's `ConsumeSample`. Bytes of a hot function its
+branches don't reach (a switch's cases behind a jump table, an
+exception's landing pad) and an instruction it can't decode are a
+warning, not a failure: the literals they load aren't counted, nor a
+jump table's rodata, so the result needs a look. None of today's hot
+set has any. A build logs `cache_guard: ok: the MP3 synth loop's hot
+lines, at most 2 in a set (bench), 2 in a set (playback); pinned: code
+0x400d0020-0x400d1b43 (6947 B), data 0x3f400120-0x3f400a18 (2296 B)`,
+then any warning. `firmware.elf` depends on the build's sections.ld (a
+linker script that only `-T` names isn't one SCons scans), so a change
+to `HOT` or `PATHS` alone relinks and the guard never reads an old
+image (checked: a change to the script alone relinked, an unchanged
+one didn't). It runs on any ELF too (`python
 tools/cache_guard.py [--require-pin] firmware.elf ...`); its tests:
-`python -m unittest discover -s tools -p "test_cache_guard.py"` (18, on
-made-up symbol tables and code).
+`python -m unittest discover -s tools -p "test_cache_guard.py"` (22, on
+made-up symbol tables and code; among them, candidates A and B's
+placements: an item in IRAM, internal DRAM or PSRAM counts for nothing,
+pinned or not).
 
 On the investigation's images (none pinned, so without `--require-pin`):
 
 | Image | Sets of three: bench | playback | Result |
 |---|---|---|---|
 | 8fd7a78 (v0.6.0's source) | 1 | 8 | fails |
-| 67dd141 (the seek work) | 0 | 6 | fails, on the trimmed playback path |
+| 67dd141 (the seek work) | 0 | 6 | fails, on the trimmed playback path only (its 4.8x was the bench's path, which passes) |
 | 94d66f7 (the beat tracker's line) | 0 | 0 | passes |
 | 9fd02e6, the benched dev image | 14 | 14 | fails |
 | 9fd02e6, rebuilt | 13 | 13 | fails |

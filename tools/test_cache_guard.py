@@ -208,6 +208,33 @@ class ModelTest(unittest.TestCase):
         self.assertIn("1 (bench), 1 (playback)", text)
         self.assertIn("set 170: D + dct32 + dct32's literals", text)
 
+    def test_d_in_internal_ram_or_psram_is_out(self):
+        # Candidate B: D in internal DRAM, or in PSRAM (cached, but not
+        # modelled), each at its offset in the way, so it would make the 13
+        # sets again if counted: only GetOneSample/loop + dct32 are left on
+        # them, two lines each.
+        for where in (0x3FFB1450, 0x3F80D450):
+            ok, lines = cg.check(image(dict(SEEK_BAR, D=where)))
+            self.assertTrue(ok, (hex(where), lines))
+            self.assertIn("at most 2 in a set (bench), 2 in a set (playback)", lines[0])
+        # Just below PSRAM it is flash data: the 13 sets again.
+        ok, lines = cg.check(image(dict(SEEK_BAR, D=SEEK_BAR["D"] + 0x00390000)))
+        self.assertFalse(ok)
+        self.assertIn("13 (bench), 13 (playback)", "\n".join(lines))
+
+    def test_mad_synth_frame_without_onens_is_found(self):
+        # An ESP8266Audio without the one-sample variant: the plain name.
+        img = image(drop=("mad_synth_frame_onens",))
+        img.add_code("mad_synth_frame", SEEK_BAR["mad_synth_frame_onens"], SIZES["mad_synth_frame_onens"])
+        notes = cg.Notes()
+        pieces = cg.pieces_of(img, cg.HOT[2], notes)
+        self.assertEqual(notes.errors, [])
+        self.assertEqual(pieces[0], cg.Piece("mad_synth_frame_onens", SEEK_BAR["mad_synth_frame_onens"],
+                                             SIZES["mad_synth_frame_onens"]))
+        ok, lines = cg.check(image(drop=("mad_synth_frame_onens",)))
+        self.assertFalse(ok)
+        self.assertIn("no symbol mad_synth_frame_onens or mad_synth_frame in the ELF", "\n".join(lines))
+
     def test_the_vtable_word_is_the_one_read(self):
         notes = cg.Notes()
         pieces = cg.pieces_of(image(), cg.PATHS[1][1][3], notes)
@@ -245,6 +272,37 @@ class PinTest(unittest.TestCase):
             moved = {k: (v + step if v < 0x40000000 else v) for k, v in at.items()}
             ok, lines = cg.check(image(moved, pin=((c0, c1), (d0 + step, d1 + step))), require_pin=True)
             self.assertTrue(ok, (step, lines))
+
+    def test_an_item_in_iram_is_not_out_of_the_pin(self):
+        # Candidate A on top of the pin: GetOneSample and loop in IRAM are
+        # outside the pinned blocks but not cached, so not out of the pin.
+        at, pin = pinned()
+        at.update(gos=0x40090000, loop=0x40090100)
+        ok, lines = cg.check(image(at, pin=pin), require_pin=True)
+        self.assertTrue(ok, lines)
+        self.assertNotIn("out of the pin", "\n".join(lines))
+        # In flash out of the pin, it is.
+        at.update(gos=0x40121760, loop=0x4012181C)
+        ok, lines = cg.check(image(at, pin=pin), require_pin=True)
+        self.assertFalse(ok)
+        self.assertIn("AudioGeneratorMP3::GetOneSample (at 0x40121760), AudioGeneratorMP3::loop (at 0x4012181c)",
+                      "\n".join(lines))
+
+    def test_a_jump_table_passes_with_a_warning(self):
+        # consumeTrimmed as a switch: jx a2, and case bodies only the
+        # table reaches. The result stands, but says what it couldn't read
+        # (the build prints every line, not just the first).
+        at, pin = pinned()
+        img = image(at, pin=pin, drop=("trimmed",))
+        addr, size = at["trimmed"], SIZES["trimmed"]
+        jx_a2 = bytes.fromhex("a00200")
+        cases = l32r(addr + 3, addr - 4) + fill(size - 8) + RETW_N
+        img.add("_ZN8TrimFeed14consumeTrimmedEPKs", addr, size, cg.STT_FUNC, None, jx_a2 + cases)
+        ok, lines = cg.check(img, require_pin=True)
+        self.assertTrue(ok, lines)
+        nonzero = sum(1 for b in cases if b)  # (the count leaves out zero bytes: padding)
+        self.assertIn(f"warning: TrimFeed::consumeTrimmed: {nonzero} B of it aren't reached from its entry",
+                      "\n".join(lines[1:]))
 
     def test_an_item_out_of_the_pin_fails_once(self):
         # Where it was before (its pattern didn't match), with two literals

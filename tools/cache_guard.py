@@ -31,6 +31,12 @@ after every link and fails the build when:
 - a hot item's symbol isn't in the ELF (a library update renamed it): update
   HOT below.
 
+It warns, in the build's log too, when it reads a hot function only in part:
+bytes its branches don't reach from the entry (a switch's jump table's
+cases, an exception's landing pad) or an instruction it can't decode. The
+literals those load aren't counted, nor is a jump table's own rodata: look
+at the function before trusting the result.
+
 The hot set, one table for both this check and the pin (HOT, PATHS):
 
 - libmad's synthesis: dct32, synth_full, mad_synth_frame_onens (or
@@ -488,8 +494,9 @@ if "Import" in globals():
 
     def cache_guard(source, target, env):
         ok, lines = check(Elf(env.subst("$BUILD_DIR/${PROGNAME}.elf")), require_pin=True)
-        if ok:
-            print(f"cache_guard: {lines[0]}")
+        if ok:  # the result, and any warning: a hot item the model reads only in part
+            for line in lines:
+                print(f"cache_guard: {line}")
             return 0
         for line in lines:
             sys.stderr.write(f"cache_guard: {line}\n")

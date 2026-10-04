@@ -2505,8 +2505,10 @@ their own (the player stopped first, so nothing follows them).
   It fails the build when it moves nothing (a toolchain or framework update
   changed the objects: its docstring says what to do) and warns about any
   name that no longer matches; a build logs `iram_diet: 51 of 51 libc
-  objects moved to flash`. About 7 KB of IRAM is left. Adding WiFi will need more: likely pioarduino's
-  `custom_sdkconfig` to rebuild the framework without the workaround.
+  objects moved to flash`. About 5 KB of IRAM is left (5,176 B from the
+  seek bar on; the MP3 pin below takes none). Adding WiFi will need
+  more: likely pioarduino's `custom_sdkconfig` to rebuild the framework
+  without the workaround.
 - **The MP3 synth loop is pinned at the front of flash.** The same
   `tools/iram_diet.py` puts libmad's synthesis (`dct32`, `synth_full`,
   `mad_synth_frame_onens`), AudioGeneratorMP3's per-sample `GetOneSample`
@@ -2524,10 +2526,12 @@ their own (the player stopped first, so nothing follows them).
   a hot item is out of it; it prints which sets, what shares them and
   where each item is. A build logs `cache_guard: ok: the MP3 synth loop's
   hot lines, at most 2 in a set (bench), 2 in a set (playback); pinned:
-  ...`. The hot set is one table there (`HOT`, `PATHS`) for the pin and
-  the check. It runs on any ELF too (`python tools/cache_guard.py
-  firmware.elf`); its tests: `python -m unittest discover -s tools -p
-  "test_cache_guard.py"`.
+  ...`, then any warning (a hot function it reads only in part: a
+  switch's jump table, a landing pad). The hot set is one table there
+  (`HOT`, `PATHS`) for the pin and the check; `firmware.elf` depends on
+  the build's sections.ld, so a change to it relinks. It runs on any ELF
+  too (`python tools/cache_guard.py firmware.elf`); its tests: `python
+  -m unittest discover -s tools -p "test_cache_guard.py"`.
 - **`tools/no_psram_fix.py`** (a pre-script) compiles everything
   PlatformIO builds (src/, lib/core, the libraries, the Arduino core)
   without that workaround's `-mfix-esp32-psram-cache-issue`, a `memw`

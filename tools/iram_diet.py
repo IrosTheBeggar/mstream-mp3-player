@@ -45,7 +45,8 @@ them all. Unpinned, the layout decided it: 13-14 sets held three of them in
 the seek bar's build and Opus's, and MP3 decoding lost a fifth of its speed
 (docs/RESAMPLER.md section 10e). The list is HOT/PATHS in
 tools/cache_guard.py, which checks the result after the link; it costs no
-RAM and no flash. If an anchor line below isn't in the framework's
+RAM and no flash. The ELF depends on the build's sections.ld, so a change
+to the list relinks. If an anchor line below isn't in the framework's
 sections.ld any more, the build stops here: find where .flash.text and
 .flash.rodata start their contents and update PIN_ANCHORS.
 """
@@ -121,7 +122,13 @@ for anchor, start, end, lines in PIN_ANCHORS:
         env.Exit(1)  # noqa: F821
 
 build_dir.mkdir(parents=True, exist_ok=True)
-(build_dir / "sections.ld").write_text(script, encoding="utf-8")
-env.Prepend(LIBPATH=[str(build_dir)])  # noqa: F821  (found before the package's copy)
+ld = build_dir / "sections.ld"
+if not ld.exists() or ld.read_text(encoding="utf-8") != script:
+    ld.write_text(script, encoding="utf-8")
+env.Prepend(LIBPATH=[str(ld.parent)])  # noqa: F821  (found before the package's copy)
+# The link names it as "-T sections.ld", which SCons doesn't scan: without
+# this, a change to the script alone (MOVE_TO_FLASH, HOT/PATHS) doesn't
+# relink, and cache_guard checks the old ELF.
+env.Depends("$BUILD_DIR/${PROGNAME}${PROGSUFFIX}", str(ld))  # noqa: F821
 print(f"iram_diet: {len(moved)} of {len(MOVE_TO_FLASH)} libc objects moved to flash, the MP3 hot set "
       f"pinned ({len(code_lines)} code and {len(data_lines)} data lines; sections.ld {before} -> {len(script)} bytes)")
