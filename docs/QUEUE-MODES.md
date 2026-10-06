@@ -1249,10 +1249,12 @@ Built on feature/np-menus in the order of section 11, one commit a step:
 helpers, the console, the logs), 0a89e5e (the sheets: the settle, the
 staying and followed rows, the undo toast; `cutPathLeft()`, the texts,
 `UiHost`), 03b9898 (Now Playing, the icons, the seek bar's rows, Shuffle
-all, the Library's `kAnyStart`), then these docs. 1,088 host tests pass
-(41 new); core2 and core2-dio build with every guard (iram_diet: 51 of
-51 objects moved, the hot set pinned; cache_guard ok; flash_guard: 2.20
-MB, 37 % of the slot). Nothing has run on the device yet (section 10).
+all, the Library's `kAnyStart`), 7d1c98a (these docs), 4e47b69 (a
+review fix: `repeats()` counts Repeat One's loops only). 1,088 host tests
+pass (41 new); at 4e47b69 core2 and core2-dio build with every guard
+(iram_diet: 51 of 51 objects moved, the hot set pinned; cache_guard ok;
+flash_guard: 2.20 MB, 37 % of the slot). Nothing has run on the device
+yet (section 10).
 
 Where the build differs from sections 1-13, and why:
 
@@ -1271,6 +1273,8 @@ Where the build differs from sections 1-13, and why:
 - **`repeats()`**: a Repeat One boundary pause (the sleep timer) is no
   loop (nothing played again), so it doesn't count; a loop taken while
   paused (a pause's fade read past the join, the entry cued again) does.
+  A queue of one on All joins its entry to itself too, but that is no
+  Repeat One loop: not counted, no `[queue] repeat one` line.
 - **The off line's ms** are measured with `micros()` and rounded.
 - **The scripted check** (section 10): the scripted finger runs one
   touch at a time, so the settle's double tap is two `uit`s about 150 ms
