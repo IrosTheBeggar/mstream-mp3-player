@@ -88,21 +88,27 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
   card: copy anything on it off first, and check the disk you pick is the
   card.
 - Up to 32 GB (and not GPT), the computer's own Format, FAT32, does it.
-  Over 32 GB:
+  Over 32 GB, or a GPT card:
   - **Windows 11** updated since May 2026 (KB5089549): in a Terminal run
     as administrator, `format X: /FS:FAT32 /Q /V:MUSIC` (`X:` the card's
     letter). File Explorer's Format still stops at 32 GB.
-  - **Windows 10** (or Windows 11 without that update): Ridgecrop's free
-    **FAT32 Format** (`guiformat.exe`, or
-    `winget install -e --id Ridgecrop.guiformat`). It keeps a GPT card
-    GPT, as `format` does: make that one on a Mac or Linux.
+  - **Windows 10**, or when `format` answers "The volume is too big for
+    FAT32": Ridgecrop's free **FAT32 Format** (`guiformat.exe`, or
+    `winget install -e --id Ridgecrop.guiformat`).
+  - **A GPT card on Windows** stays GPT through both: make it MBR first.
+    In that Terminal, `diskpart`, then `list disk` (the card by its size),
+    `select disk N`, `clean` (it erases the selected disk: check N twice),
+    `convert mbr`, `create partition primary`, `assign`, `exit`; cancel
+    Windows' offer to format it, then format it as above.
   - **macOS:** Disk Utility, View > Show All Devices, select the card
     itself, Erase: Format **MS-DOS (FAT)**, Scheme **Master Boot Record**.
     Or `sudo diskutil eraseDisk FAT32 MUSIC MBRFormat /dev/diskN`
     (`diskutil list` finds N).
-  - **Linux:** `sudo parted /dev/sdX --script mklabel msdos mkpart primary fat32 4MiB 100%`,
-    then `sudo mkfs.fat -F 32 -s 64 -n MUSIC /dev/sdX1` (`lsblk` finds
-    the card).
+  - **Linux:** `lsblk` to find the card (`/dev/sdX`, or `/dev/mmcblk0`
+    whose partition is `/dev/mmcblk0p1`), unmount it
+    (`sudo umount /dev/sdX1`), then
+    `sudo parted /dev/sdX --script mklabel msdos mkpart primary fat32 4MiB 100%`
+    and `sudo mkfs.fat -F 32 -s 64 -n MUSIC /dev/sdX1`.
   - Not the **SD Card Formatter**: over 32 GB it makes exFAT.
 - Put the music under **`/music`**, e.g. `/music/Artist/Album/01 - Title.mp3`.
   An album's cover is the `cover.jpg` (or `folder.jpg`) next to its tracks.

@@ -47,18 +47,24 @@ a GPT card:
   Terminal run as administrator, `format X: /FS:FAT32 /Q /V:MUSIC`, where
   `X:` is the card's drive letter. The command line now makes FAT32 up to
   2 TB; File Explorer's Format still offers it only up to 32 GB.
-- **Windows 10, and Windows 11 without that update:** Windows can't, so use
-  Ridgecrop's free **FAT32 Format** (`guiformat.exe`; or
-  `winget install -e --id Ridgecrop.guiformat`): pick the card's drive
-  letter, Start. Neither it nor `format` changes the partition table, so
-  a GPT card stays GPT: make that one MBR on a Mac or Linux (below).
+- **Windows 10, or when `format` answers "The volume is too big for
+  FAT32"** (a PC without the change yet): Ridgecrop's free **FAT32
+  Format** (`guiformat.exe`; or `winget install -e --id Ridgecrop.guiformat`):
+  pick the card's drive letter, Start.
+- **A GPT card on Windows:** neither of those changes the partition table,
+  so a GPT card stays GPT. Make it MBR first, in that administrator
+  Terminal: `diskpart`, then `list disk` (find the card by its size),
+  `select disk N`, `clean` (it erases whichever disk is selected: check N
+  twice), `convert mbr`, `create partition primary`, `assign`, `exit`.
+  Cancel Windows' offer to format it, then format it as above.
 - **macOS:** Disk Utility, **View > Show All Devices**, select the card
   itself (the device, not the volume under it), **Erase**: Format **MS-DOS
   (FAT)**, Scheme **Master Boot Record** (the default, GUID Partition Map,
   makes a GPT card). Or in Terminal: `diskutil list` to find the card's
   `/dev/diskN`, then `sudo diskutil eraseDisk FAT32 MUSIC MBRFormat /dev/diskN`.
 - **Linux:** `lsblk` to find the card (`/dev/sdX`, or `/dev/mmcblk0` in a
-  built-in reader: its partition is then `/dev/mmcblk0p1`), unmount it,
+  built-in reader: its partition is then `/dev/mmcblk0p1`), unmount it
+  (e.g. `sudo umount /dev/sdX1`: a desktop mounts a card as it goes in),
   then `sudo parted /dev/sdX --script mklabel msdos mkpart primary fat32 4MiB 100%`
   and `sudo mkfs.fat -F 32 -s 64 -n MUSIC /dev/sdX1` (mkfs.fat is in
   dosfstools).

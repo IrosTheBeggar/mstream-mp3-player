@@ -215,7 +215,8 @@ public:
   // goes at the next pass, and its line says so (UndoWatch).
   void queueUndone() { undoWatch_.undone(); }
   // Try again on a no-card page: a card that mounts restarts the player
-  // (a toast first); else the note, "Still no card" or "Still not FAT32",
+  // (a toast first); else the note, the kind's (uitext::cardMessage(kind)
+  // .still: "Still no card: ...", "Still exFAT: ...", "Still GPT: ..."),
   // and the page drawn again if that changed.
   void retryCard();
   bool toastUp() const { return toast_.up(); }

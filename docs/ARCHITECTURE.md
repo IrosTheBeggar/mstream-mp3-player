@@ -1073,8 +1073,9 @@ again when the card still doesn't mount, so its note follows what is in.
 The texts are measured in test_ui_library; test_card_format checks that
 each kind has its own. README's microSD section, the install page and the
 release notes give the steps per computer (Windows 11's `format` since
-KB5089549, FAT32 Format on Windows 10, Disk Utility or `diskutil`,
-`parted` and `mkfs.fat`). The log: `[storage] no card mounted; its first
+KB5089549, FAT32 Format on Windows 10 or where `format` still refuses,
+`diskpart` for a GPT card on Windows, Disk Utility or `diskutil`, `parted`
+and `mkfs.fat` after an unmount). The log: `[storage] no card mounted; its first
 sectors: exFAT: not FAT32 (MBR); the pages say "This card is exFAT" (<n>
 ms)`. Console `uiFf`, `uiFt`, `uiFg` and `uiFu` show the exFAT, NTFS, GPT
 and can't-read states without such a card (`uiFn`: no card).
