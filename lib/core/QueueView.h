@@ -110,9 +110,4 @@ private:
   int next_ = 0;
 };
 
-// ---- Shuffle all ----
-// Fisher-Yates with a xorshift32 from `seed` (0 is taken as 1): the same
-// seed gives the same order.
-void shuffle(uint32_t* ids, uint32_t n, uint32_t seed);
-
 }  // namespace queueview

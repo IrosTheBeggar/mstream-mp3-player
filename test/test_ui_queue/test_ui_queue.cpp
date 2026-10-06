@@ -3,8 +3,8 @@
 
 // Host tests for the Queue screen's portable pieces (QueueView): the
 // "12 up next · 49 min" summary from learned track lengths, the mark on
-// what a Library add put in the queue, the failed-track ring, and the
-// shuffle behind "Shuffle all".
+// what a Library add put in the queue, and the failed-track ring. (The
+// shuffle's loop moved to lib/core/Shuffle.h: test_queue.)
 // Run: pio test -e native
 #include <unity.h>
 
@@ -154,28 +154,6 @@ void test_failed_keys_ring() {
   TEST_ASSERT_FALSE(r.has(QueueModel::kNone));
 }
 
-void test_shuffle_is_a_permutation_and_repeatable() {
-  std::vector<uint32_t> a(500), b;
-  for (uint32_t i = 0; i < a.size(); ++i) a[i] = i;
-  b = a;
-  shuffle(a.data(), static_cast<uint32_t>(a.size()), 1234);
-  std::vector<uint32_t> sorted = a;
-  std::sort(sorted.begin(), sorted.end());
-  TEST_ASSERT_TRUE(sorted == b);  // every id once
-  int moved = 0;
-  for (uint32_t i = 0; i < a.size(); ++i) moved += a[i] != i;
-  TEST_ASSERT_TRUE(moved > 450);  // really shuffled
-  std::vector<uint32_t> c = b;
-  shuffle(c.data(), static_cast<uint32_t>(c.size()), 1234);
-  TEST_ASSERT_TRUE(c == a);       // the same seed, the same order
-  std::vector<uint32_t> d = b;
-  shuffle(d.data(), static_cast<uint32_t>(d.size()), 99);
-  TEST_ASSERT_FALSE(d == a);
-  uint32_t one = 7;
-  shuffle(&one, 1, 5);
-  TEST_ASSERT_EQUAL_UINT32(7, one);
-}
-
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_durations_are_learned_per_track);
@@ -183,6 +161,5 @@ int main(int, char**) {
   RUN_TEST(test_summary_texts);
   RUN_TEST(test_added_mark_finds_what_was_added);
   RUN_TEST(test_failed_keys_ring);
-  RUN_TEST(test_shuffle_is_a_permutation_and_repeatable);
   return UNITY_END();
 }

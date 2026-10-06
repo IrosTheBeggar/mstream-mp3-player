@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "RateConverter.h"
+#include "Shuffle.h"
 #include "SleepTimer.h"
 #include "TextFold.h"
 #include "UiText.h"
@@ -219,7 +220,7 @@ void Ui::shuffleAll() {
     return;
   }
   memcpy(ids, all.ids, all.count * sizeof(uint32_t));
-  queueview::shuffle(ids, all.count, esp_random());
+  shuffle::permute(ids, all.count, esp_random());
   const bool ok = player_.playNow(ids, all.count, 0);
   psramFree(ids);
   added_.clear();

@@ -124,20 +124,4 @@ bool KeyRing::has(uint32_t key) const {
   return false;
 }
 
-// ---- shuffle ----
-
-void shuffle(uint32_t* ids, uint32_t n, uint32_t seed) {
-  if (!ids || n < 2) return;
-  uint32_t x = seed ? seed : 1u;
-  for (uint32_t i = n - 1; i > 0; --i) {
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    const uint32_t j = static_cast<uint32_t>((static_cast<uint64_t>(x) * (i + 1)) >> 32);
-    const uint32_t t = ids[i];
-    ids[i] = ids[j];
-    ids[j] = t;
-  }
-}
-
 }  // namespace queueview
