@@ -27,12 +27,49 @@ stops there (on battery it powers off after a minute).
 
 ### The microSD card
 
-- Format it **FAT32** (MBR). exFAT cards, which is how most cards of 64 GB
-  and up come, and GPT cards don't mount: the player says "This card isn't
-  FAT32". Windows only offers FAT32 up to 32 GB; for a bigger card use a
-  FAT32 formatting tool.
+- Format it **FAT32**, with an **MBR** partition table ("Master Boot
+  Record"). Cards of 32 GB and less usually come that way. Cards of 64 GB
+  and up come **exFAT**, and a card a Mac erased whole gets a **GPT**
+  ("GUID Partition Map", Disk Utility's default scheme): the player
+  doesn't mount those and says what it found ("This card is exFAT", "This
+  card is NTFS", "This card uses GPT", or "Can't read this card" for one
+  it doesn't recognise, such as a blank card).
+- Formatting erases the card: copy anything on it off first, and check
+  the disk you pick is the card (by its size) before you erase.
 - Put the music under **`/music`**, e.g. `/music/Artist/Album/01 - Title.mp3`.
   An album's cover is the `cover.jpg` (or `folder.jpg`) next to its tracks.
+
+Making a FAT32 (MBR) card. One of 32 GB or less that isn't GPT: the
+computer's own Format, FAT32 (File Explorer's on Windows). Over 32 GB, or
+a GPT card:
+
+- **Windows 11, updated since May 2026** (KB5089549 or later): in a
+  Terminal run as administrator, `format X: /FS:FAT32 /Q /V:MUSIC`, where
+  `X:` is the card's drive letter. The command line now makes FAT32 up to
+  2 TB; File Explorer's Format still offers it only up to 32 GB.
+- **Windows 10, or when `format` answers "The volume is too big for
+  FAT32"** (a PC without the change yet): Ridgecrop's free **FAT32
+  Format** (`guiformat.exe`; or `winget install -e --id Ridgecrop.guiformat`):
+  pick the card's drive letter, Start.
+- **A GPT card on Windows:** neither of those changes the partition table,
+  so a GPT card stays GPT. Make it MBR first, in that administrator
+  Terminal: `diskpart`, then `list disk` (find the card by its size),
+  `select disk N`, `clean` (it erases whichever disk is selected: check N
+  twice), `convert mbr`, `create partition primary`, `assign`, `exit`.
+  Cancel Windows' offer to format it, then format it as above.
+- **macOS:** Disk Utility, **View > Show All Devices**, select the card
+  itself (the device, not the volume under it), **Erase**: Format **MS-DOS
+  (FAT)**, Scheme **Master Boot Record** (the default, GUID Partition Map,
+  makes a GPT card). Or in Terminal: `diskutil list` to find the card's
+  `/dev/diskN`, then `sudo diskutil eraseDisk FAT32 MUSIC MBRFormat /dev/diskN`.
+- **Linux:** `lsblk` to find the card (`/dev/sdX`, or `/dev/mmcblk0` in a
+  built-in reader: its partition is then `/dev/mmcblk0p1`), unmount it
+  (e.g. `sudo umount /dev/sdX1`: a desktop mounts a card as it goes in),
+  then `sudo parted /dev/sdX --script mklabel msdos mkpart primary fat32 4MiB 100%`
+  and `sudo mkfs.fat -F 32 -s 64 -n MUSIC /dev/sdX1` (mkfs.fat is in
+  dosfstools).
+- Not the SD Association's **SD Card Formatter** for cards over 32 GB: it
+  makes them exFAT (for 32 GB and less it's fine).
 
 ## Quick start (Windows)
 
@@ -380,9 +417,10 @@ The first time, two tips show what the three red buttons do and that
 tapping the tab you're on goes back to its start (console `uic` shows them
 again). With no microSD card (and no music on the flash), the pages say so
 and offer **Try again** (with a card in, the player restarts to use it);
-a card that is in but isn't FAT32 (exFAT, a GPT) is named as such, "This
-card isn't FAT32"; a card without music offers the same, which looks
-through `/music` again.
+a card that is in but doesn't mount is named as what it is ("This card is
+exFAT", "This card is NTFS", "This card uses GPT", "Can't read this card"),
+with what to do ([The microSD card](#the-microsd-card)); a card without
+music offers the same, which looks through `/music` again.
 If the headphones drop out while playing, the music pauses (it never
 carries on out loud) and a message follows their reconnecting, with **Use
 speaker** or **OK** to keep waiting.
@@ -527,7 +565,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
 | `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
-| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, not-FAT32 or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
+| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/t/g/u/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, exFAT-card, NTFS-card, GPT-card, can't-read-the-card or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none), `qS` shuffle on/off (`qS0` / `qS1`), `qR` repeat off / all / one in turn (`qR0`-`qR2`) |
 | `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |

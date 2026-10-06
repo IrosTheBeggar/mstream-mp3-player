@@ -545,7 +545,7 @@ bool LibraryPage::emptyState(EmptyState& e) {
   if (!root() || !real()) return false;
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
-    noCardState(e, s.cardNotFat32);
+    noCardState(e, s.cardKind);
     return true;
   }
   if (s.libraryTracks == 0) {

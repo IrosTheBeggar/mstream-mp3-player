@@ -199,12 +199,13 @@ void Ui::retryCard() {
     toast("Card found: starting again", false);
     return;
   }
-  // What is in may have changed (a card that isn't FAT32 taken out, or
-  // put in): the snapshot now, not at the next pass, for the note.
-  const bool was = state_.cardNotFat32;
+  // What is in may have changed (an exFAT card taken out, or put in, or
+  // swapped for another): the snapshot now, not at the next pass, for the
+  // note ("Still exFAT: ...", "Still no card: ...").
+  const cardformat::Kind was = state_.cardKind;
   host_.snapshot(state_);
-  if (state_.cardNotFat32 != was && page_ && !modalUp()) page_->repaint();
-  warn(state_.cardNotFat32 ? uitext::kStillNotFat32 : uitext::kStillNoCard);
+  if (state_.cardKind != was && page_ && !modalUp()) page_->repaint();
+  warn(uitext::cardMessage(state_.cardKind).still);
 }
 
 void Ui::shuffleAll() {

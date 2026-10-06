@@ -50,13 +50,13 @@ void buttonBox(const EmptyState& e, int i, int* x, int* w) {
 
 }  // namespace
 
-void noCardState(EmptyState& e, bool notFat32) {
+void noCardState(EmptyState& e, cardformat::Kind card) {
+  const uitext::CardMessage& m = uitext::cardMessage(card);
   e.icon = &icons::kSdCard;
-  if (notFat32) e.iconColour = col::AMBER;
-  e.title = notFat32 ? uitext::kNotFat32Title : uitext::kNoCardTitle;
-  const char* const* lines = notFat32 ? uitext::kNotFat32Lines : uitext::kNoCardLines;
-  e.line1 = lines[0];
-  e.line2 = lines[1];
+  if (card != cardformat::Kind::Unreadable) e.iconColour = col::AMBER;  // one is in: it's the card
+  e.title = m.title;
+  e.line1 = m.lines[0];
+  e.line2 = m.lines[1];
   e.buttons[0] = uitext::kTryAgain;
 }
 

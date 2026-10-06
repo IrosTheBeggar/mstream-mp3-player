@@ -2,7 +2,8 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host unit tests for cardformat: what a card that didn't mount is, from
-// synthetic first sectors. Run: pio test -e native
+// synthetic first sectors, and the message each kind gets (UiText; their
+// widths are test_ui_library's). Run: pio test -e native
 #include <unity.h>
 
 #include <cstdint>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include "CardFormat.h"
+#include "UiText.h"
 
 namespace {
 using Sector = std::vector<uint8_t>;
@@ -132,7 +134,7 @@ void test_gpt_protective_mbr() {
 // FAT32 in an MBR (type 0x0C), or as a whole-card volume whose boot code
 // happens to have 0xEE or 0x07 where a partition type would be: not
 // recognised as anything else (that card failed to mount for another
-// reason: the plain message).
+// reason: "Can't read this card", never "format it").
 void test_fat32_is_never_called_otherwise() {
   Card a;
   a.sectors[0] = mbr(0, 0x0C, 8192);
@@ -170,6 +172,75 @@ void test_what_isnt_recognised() {
   TEST_ASSERT_EQUAL_UINT32(1, e.reads.size());
 }
 
+// NTFS straight from LBA 0 (no partition table), as exFAT can be.
+void test_ntfs_at_lba_0() {
+  Card c;
+  c.sectors[0] = bootSector("NTFS    ");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Kind::Ntfs), static_cast<int>(classify(c)));
+  TEST_ASSERT_EQUAL_UINT32(1, c.reads.size());
+}
+
+// A hybrid MBR (Boot Camp's, some Linux tools'): the 0xEE entry beside
+// real ones, before or after a type 0x07: a GPT either way (its fix, an
+// MBR, is what the player needs), the 0x07 partition never read.
+void test_hybrid_mbr_is_gpt() {
+  Card a;
+  a.sectors[0] = mbr(0, 0x07, 2048);
+  a.sectors[0][446 + 16 + 4] = 0xEE;
+  a.sectors[2048] = bootSector("EXFAT   ");
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Kind::Gpt), static_cast<int>(classify(a)));
+  TEST_ASSERT_EQUAL_UINT32(1, a.reads.size());
+  Card b;
+  b.sectors[0] = mbr(1, 0x07, 2048);
+  b.sectors[0][446 + 4] = 0xEE;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Kind::Gpt), static_cast<int>(classify(b)));
+}
+
+// Cards that answer but hold nothing the player knows: Linux's (one type
+// 0x83 partition), an MBR with no partition (Windows' "Initialize disk"
+// and nothing after): Other, "Can't read this card", from sector 0 alone.
+void test_linux_and_empty_tables_arent_recognised() {
+  Card a;
+  a.sectors[0] = mbr(0, 0x83, 2048);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Kind::Other), static_cast<int>(classify(a)));
+  TEST_ASSERT_EQUAL_UINT32(1, a.reads.size());
+  Card b;
+  b.sectors[0] = mbr(0, 0x00, 0);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(Kind::Other), static_cast<int>(classify(b)));
+  TEST_ASSERT_EQUAL_UINT32(1, b.reads.size());
+}
+
+// Each kind its own message (uitext::cardMessage(), the empty state's and
+// Try again's): none the same title or note; no card is the plain "No
+// microSD card"; exFAT, NTFS and GPT name themselves; and a card nothing
+// was recognised on (it may be FAT32 that failed to mount once, music and
+// all) is never told to be formatted or erased.
+void test_each_kind_has_its_own_message() {
+  const Kind kinds[] = {Kind::Unreadable, Kind::Other, Kind::ExFat, Kind::Ntfs, Kind::Gpt};
+  for (Kind a : kinds) {
+    const uitext::CardMessage& m = uitext::cardMessage(a);
+    TEST_ASSERT_TRUE(m.title && m.title[0] && m.lines[0] && m.lines[0][0] && m.lines[1] && m.lines[1][0]);
+    TEST_ASSERT_NOT_NULL(std::strstr(m.still, ": "));  // Toast's "what: where"
+    for (Kind b : kinds) {
+      if (a == b) continue;
+      TEST_ASSERT_TRUE(std::strcmp(m.title, uitext::cardMessage(b).title) != 0);
+      TEST_ASSERT_TRUE(std::strcmp(m.still, uitext::cardMessage(b).still) != 0);
+    }
+  }
+  TEST_ASSERT_EQUAL_STRING("No microSD card", uitext::cardMessage(Kind::Unreadable).title);
+  TEST_ASSERT_NOT_NULL(std::strstr(uitext::cardMessage(Kind::ExFat).title, "exFAT"));
+  TEST_ASSERT_NOT_NULL(std::strstr(uitext::cardMessage(Kind::Ntfs).title, "NTFS"));
+  TEST_ASSERT_NOT_NULL(std::strstr(uitext::cardMessage(Kind::Gpt).title, "GPT"));
+  TEST_ASSERT_NOT_NULL(std::strstr(uitext::cardMessage(Kind::Gpt).lines[1], "Master Boot Record"));
+  const uitext::CardMessage& other = uitext::cardMessage(Kind::Other);
+  for (const char* t : {other.title, other.lines[0], other.lines[1], other.still}) {
+    TEST_ASSERT_NULL(std::strstr(t, "ormat it"));
+    TEST_ASSERT_NULL(std::strstr(t, "rase"));
+  }
+  // An unknown value (a newer Kind, a bad byte): the plain message.
+  TEST_ASSERT_EQUAL_STRING("No microSD card", uitext::cardMessage(static_cast<Kind>(200)).title);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_no_card_is_unreadable);
@@ -179,5 +250,9 @@ int main(int, char**) {
   RUN_TEST(test_gpt_protective_mbr);
   RUN_TEST(test_fat32_is_never_called_otherwise);
   RUN_TEST(test_what_isnt_recognised);
+  RUN_TEST(test_ntfs_at_lba_0);
+  RUN_TEST(test_hybrid_mbr_is_gpt);
+  RUN_TEST(test_linux_and_empty_tables_arent_recognised);
+  RUN_TEST(test_each_kind_has_its_own_message);
   return UNITY_END();
 }

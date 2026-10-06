@@ -482,10 +482,11 @@ static void applyRepeat(PlaybackController::Repeat r) {
 // test can't safely cause (the radio and the card are left alone): c
 // connecting, s searching, p pairing, r resting (the search stopped: "They'll
 // reconnect when switched on"), l the headphones lost (the dialog too), n
-// no card (on Now Playing), f a card that isn't FAT32 (the same), w play
-// waiting for the headphones (Now Playing's panel); uiF0 (or uiF) the real
-// state. Display only: a button
-// on a faked card still does what it does.
+// no card (on Now Playing), and a card that didn't mount, each kind's
+// page (the same): f exFAT, t NTFS, g a GPT, u nothing recognised ("Can't
+// read this card"); w play waiting for the headphones (Now Playing's
+// panel); uiF0 (or uiF) the real state. Display only: a button on a faked
+// card still does what it does.
 static char uiFake = 0;
 
 // What the UI reads and asks for (ui/UiHost.h).
@@ -544,7 +545,7 @@ struct MainUiHost : ui::UiHost {
       }
     }
     s.card = storage.onCard();
-    s.cardNotFat32 = !s.card && storage.cardNotFat32();
+    s.cardKind = s.card ? cardformat::Kind::Unreadable : storage.cardKind();
     const LibraryIndex* index = library.index();
     s.libraryTracks = index && index->ready() ? index->trackCount() : 0;
     // The battery is an I2C read of the power chip: every 10 s is plenty.
@@ -579,12 +580,18 @@ struct MainUiHost : ui::UiHost {
   }
   static void fake(ui::AppState& s) {
     if (!uiFake) return;
-    if (uiFake == 'n' || uiFake == 'f') {
-      // As after a boot with no card (f: with one that isn't FAT32):
-      // nothing indexed, nothing queued (Now Playing shows it; the Library
-      // and Queue lists read the real index and queue, so they don't).
+    if (strchr("nftgu", uiFake)) {
+      // As after a boot with no card (n), or with one that didn't mount:
+      // exFAT (f), NTFS (t), a GPT (g), nothing recognised (u): nothing
+      // indexed, nothing queued (Now Playing shows it; the Library and
+      // Queue lists read the real index and queue, so they don't).
+      using cardformat::Kind;
       s.card = false;
-      s.cardNotFat32 = uiFake == 'f';
+      s.cardKind = uiFake == 'f'   ? Kind::ExFat
+                   : uiFake == 't' ? Kind::Ntfs
+                   : uiFake == 'g' ? Kind::Gpt
+                   : uiFake == 'u' ? Kind::Other
+                                   : Kind::Unreadable;
       s.libraryTracks = 0;
       s.current = -1;
       return;
@@ -698,7 +705,8 @@ struct MainUiHost : ui::UiHost {
   }
   bool retryCard() override {
     if (!storage.probeCard()) {
-      Serial.printf("[storage] try again: %s\n", storage.cardNotFat32() ? "the card still isn't FAT32" : "still no card");
+      Serial.printf("[storage] try again: still %s (\"%s\")\n", cardformat::name(storage.cardKind()),
+                    uitext::cardMessage(storage.cardKind()).title);
       return false;
     }
     Serial.println("[storage] try again: a card is in: restarting to use it");
@@ -708,11 +716,18 @@ struct MainUiHost : ui::UiHost {
   void rescanLibrary() override;
   const queueview::DurationBook& durations() override { return ::durations; }
   void about(ui::AboutInfo& a) override {
+    // The card's size, kept since the mount: free to ask every 3 s while
+    // About is open (OutputPage's refresh). No free space: counting it can
+    // hold the card for minutes (LocalStorage::totalBytes()).
     const uint64_t bytes = storage.totalBytes();
     if (!storage.available()) {
       snprintf(a.storage, sizeof(a.storage), "No storage");
     } else if (storage.onCard()) {
-      snprintf(a.storage, sizeof(a.storage), "microSD card, %.1f GB", bytes / 1e9);
+      if (bytes) {
+        snprintf(a.storage, sizeof(a.storage), "microSD card, %.1f GB", bytes / 1e9);
+      } else {
+        snprintf(a.storage, sizeof(a.storage), "microSD card");  // its CSD didn't say (the driver's 0)
+      }
     } else {
       snprintf(a.storage, sizeof(a.storage), "Internal flash, %.1f MB (no card)", bytes / 1e6);
     }
@@ -2557,7 +2572,8 @@ void setup() {
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
                  "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid/uip scripted finger, "
                  "uk1/uk2/uk0 the scripted finger on a skewed panel (uk2 with jitter) or not, "
-                 "uiF<c/s/p/r/l/n/f/w> show a faked Bluetooth, no-card or not-FAT32 state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
+                 "uiF<c/s/p/r/l/n/f/t/g/u/w> show a faked Bluetooth, no-card, exFAT/NTFS/GPT/can't-read card or waiting state "
+                 "(uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
                  "library of n tracks in the Library tab, uil0 the card's); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja); "

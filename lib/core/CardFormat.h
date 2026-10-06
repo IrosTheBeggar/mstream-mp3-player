@@ -10,15 +10,18 @@
 // usual reason a card that is in won't mount: anything over 32 GB comes
 // exFAT from the factory, and a card formatted on a Mac or by some tools
 // gets a GPT. LocalStorage reads the sectors when SD.begin() fails; the
-// empty state then says "This card isn't FAT32" instead of "No microSD
-// card" (docs/ARCHITECTURE.md, Storage). Pure: the reads are handed in.
+// empty state then names what it found, one message per Kind
+// (uitext::cardMessage(): "This card is exFAT", "... NTFS", "This card
+// uses GPT", "Can't read this card"), instead of "No microSD card"
+// (docs/ARCHITECTURE.md, Storage). Pure: the reads are handed in.
 namespace cardformat {
 
 constexpr uint32_t kSectorBytes = 512;
 
 enum class Kind : uint8_t {
   Unreadable,  // no card, or sector 0 couldn't be read: "No microSD card"
-  Other,       // readable, nothing recognised (FAT that didn't mount, blank): "No microSD card"
+  Other,       // a card answered, nothing recognised (blank, unformatted, Linux's, a FAT
+               // that didn't mount): "Can't read this card", never "format it"
   ExFat,       // an exFAT boot sector, at LBA 0 or in an MBR partition of type 0x07
   Ntfs,        // an NTFS one in a type 0x07 partition (exFAT's type too)
   Gpt,         // a GPT: sector 0 is the protective MBR (a partition of type 0xEE)
@@ -31,7 +34,7 @@ using ReadSector = bool (*)(uint32_t lba, uint8_t* out, void* ctx);
 // first sector. `buf`: 512 bytes of the caller's.
 Kind classify(ReadSector read, void* ctx, uint8_t* buf);
 
-// The card is in but isn't FAT32: say so, not "No microSD card".
+// The card is in but isn't FAT32 (the log says so; each has its own message).
 constexpr bool notFat32(Kind k) { return k == Kind::ExFat || k == Kind::Ntfs || k == Kind::Gpt; }
 // For the log: "exFAT", "NTFS", "GPT", "unreadable", "not recognised".
 const char* name(Kind k);

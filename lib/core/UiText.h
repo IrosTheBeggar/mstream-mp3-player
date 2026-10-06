@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "CardFormat.h"
+
 // Fixed texts of the UI that have a fixed room, next to that room, so the
 // host tests (test_ui_library) can measure them with the firmware's own
 // DejaVu data: a text cut to "Remov…" or "Tap ag…" on the device is a
@@ -80,21 +82,54 @@ inline constexpr int kEmptyLineW = 304;  // a line (Small), centred
 inline constexpr const char* kPickInLibrary = "Pick an album, folder or track in the Library.";
 // The title (Title, centred in kW - 16).
 inline constexpr int kEmptyTitleW = 304;
-// No card (Now Playing, the Library and the Queue with no card and no
-// music on the flash): the title, two lines and [Try again]; its note when
-// the card still isn't there (Ui::warn, Toast's "what: where" on two lines:
-// the part before ": " in Small over the rest in Body, kToastTwoLineW).
-inline constexpr const char* kNoCardTitle = "No microSD card";
-inline constexpr const char* kNoCardLines[2] = {"Insert a card with your music in /music,",
-                                                "as /music/Artist/Album/01 - Title.mp3"};
-inline constexpr const char* kStillNoCard = "Still no card: is it all the way in?";
-// ... and when a card is in that isn't FAT32 (exFAT, NTFS, a GPT:
-// cardformat, read when it didn't mount). README's and the release notes'
-// microSD card sections say the same.
-inline constexpr const char* kNotFat32Title = "This card isn't FAT32";
-inline constexpr const char* kNotFat32Lines[2] = {"Format it FAT32 (MBR) on a computer, then",
-                                                  "put your music in /music and tap Try again."};
-inline constexpr const char* kStillNotFat32 = "Still not FAT32: format it FAT32 (MBR)";
+// No card it can use (Now Playing, the Library and the Queue with no card
+// mounted and no music on the flash): the title, two lines and [Try
+// again]; its note when it still fails (Ui::warn, Toast's "what: where" on
+// two lines: the part before ": " in Small over the rest in Body,
+// kToastTwoLineW). One message for each thing cardformat reads off a card
+// that didn't mount (cardMessage()): none at all; exFAT (anything over
+// 32 GB, as it comes); NTFS; a GPT (a Mac's Disk Utility's default
+// scheme, "GUID Partition Map": the fix is its "Master Boot Record"); and
+// a card that answered but held nothing it knows (blank, unformatted,
+// damaged, Linux's, or a FAT32 one whose mount failed for another reason:
+// so never "format it", which would erase music a Try again may find).
+// README's, the install page's and the release notes' microSD card
+// sections say how, per computer.
+struct CardMessage {
+  const char* title;
+  const char* lines[2];
+  const char* still;  // Try again's note
+};
+inline constexpr CardMessage kNoCard = {
+    "No microSD card",
+    {"Insert a card with your music in /music,", "as /music/Artist/Album/01 - Title.mp3"},
+    "Still no card: is it all the way in?"};
+inline constexpr CardMessage kExFatCard = {
+    "This card is exFAT",
+    {"Format it FAT32 (MBR) on a computer, then", "put your music in /music and tap Try again."},
+    "Still exFAT: format it FAT32 (MBR)"};
+inline constexpr CardMessage kNtfsCard = {
+    "This card is NTFS",
+    {"Format it FAT32 (MBR) on a computer, then", "put your music in /music and tap Try again."},
+    "Still NTFS: format it FAT32 (MBR)"};
+inline constexpr CardMessage kGptCard = {
+    "This card uses GPT",
+    {"Erase it on a computer as FAT32, with a", "Master Boot Record (MBR); then tap Try again."},
+    "Still GPT: erase it with an MBR"};
+inline constexpr CardMessage kUnknownCard = {
+    "Can't read this card",
+    {"Unformatted, damaged, or not FAT32 (MBR)?", "Check it on a computer, then tap Try again."},
+    "Still can't read it: check it on a computer"};
+constexpr const CardMessage& cardMessage(cardformat::Kind k) {
+  switch (k) {
+    case cardformat::Kind::ExFat: return kExFatCard;
+    case cardformat::Kind::Ntfs: return kNtfsCard;
+    case cardformat::Kind::Gpt: return kGptCard;
+    case cardformat::Kind::Other: return kUnknownCard;
+    case cardformat::Kind::Unreadable:
+    default: return kNoCard;
+  }
+}
 inline constexpr const char* kTryAgain = "Try again";
 
 // ---- Now Playing (ui/NowPlayingPage) ----

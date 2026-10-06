@@ -1052,16 +1052,55 @@ mount, and most cards of 64 GB and up come exFAT. When `SD.begin()` fails,
 `cardformat` (lib/core, host-tested in test_card_format on synthetic
 sectors) says what it is: an exFAT boot sector at LBA 0, an MBR partition
 of type 0x07 whose first sector is exFAT's ("EXFAT   ") or NTFS's, or a
-GPT's protective MBR (a partition of type 0xEE). Any of those and the
-no-card state of Now Playing, the Library and the Queue reads "This card
-isn't FAT32" ("Format it FAT32 (MBR) on a computer, then put your music in
-/music and tap Try again."), not "No microSD card"; with no card, or
-nothing recognised (a FAT card that failed for another reason), the plain
-message stays. Try again reads the sectors again when the card still
-doesn't mount, so its note follows what is in ("Still not FAT32: ..." or
-"Still no card: ..."). The texts are measured in test_ui_library. The log:
-`[storage] no card mounted; its first sectors: exFAT: not FAT32 (MBR), the
-pages say so (<n> ms)`. Console `uiFf` shows the state without such a card.
+GPT's protective MBR (a partition of type 0xEE). The no-card state of Now
+Playing, the Library and the Queue then names it, one message per kind
+(`uitext::cardMessage()`, the icon amber when a card is in):
+
+| What the sectors say | Title | Lines | Try again's note |
+|---|---|---|---|
+| nothing read: no card | No microSD card | Insert a card with your music in /music, as /music/Artist/Album/01 - Title.mp3 | Still no card: is it all the way in? |
+| exFAT | This card is exFAT | Format it FAT32 (MBR) on a computer, then put your music in /music and tap Try again. | Still exFAT: format it FAT32 (MBR) |
+| NTFS | This card is NTFS | (the same) | Still NTFS: format it FAT32 (MBR) |
+| GPT | This card uses GPT | Erase it on a computer as FAT32, with a Master Boot Record (MBR); then tap Try again. | Still GPT: erase it with an MBR |
+| read, nothing recognised | Can't read this card | Unformatted, damaged, or not FAT32 (MBR)? Check it on a computer, then tap Try again. | Still can't read it: check it on a computer |
+
+The last covers a blank or unformatted card, Linux's, and a FAT card that
+failed to mount for another reason (a flaky contact, say), so it never says
+"format it": that card may hold music a second Try again finds. GPT's text
+uses macOS Disk Utility's words ("Master Boot Record" is its Scheme), since
+a card a Mac erased whole is the usual GPT one. Try again reads the sectors
+again when the card still doesn't mount, so its note follows what is in.
+The texts are measured in test_ui_library; test_card_format checks that
+each kind has its own. README's microSD section, the install page and the
+release notes give the steps per computer (Windows 11's `format` since
+KB5089549, FAT32 Format on Windows 10 or where `format` still refuses,
+`diskpart` for a GPT card on Windows, Disk Utility or `diskutil`, `parted`
+and `mkfs.fat` after an unmount). The log: `[storage] no card mounted; its first
+sectors: exFAT: not FAT32 (MBR); the pages say "This card is exFAT" (<n>
+ms)`. Console `uiFf`, `uiFt`, `uiFg` and `uiFu` show the exFAT, NTFS, GPT
+and can't-read states without such a card (`uiFn`: no card).
+
+**Never `format_if_empty`.** `SD.begin()`'s last argument stays false:
+true makes the SD driver's `sdcard_mount()` run `f_mkfs(FM_ANY)` on any card
+FatFs finds no FAT volume on (`FR_NO_FILESYSTEM`), which is every exFAT,
+NTFS, GPT and blank card: someone's music wiped at boot without a word.
+
+**The card's size, not its free space.** About's "microSD card, <n> GB"
+is `SD.cardSize()`: the sector count from the card's CSD that the SD driver
+read at the mount and keeps, so About's 3 s refresh never touches the card.
+It used to be `SD.totalBytes()`, which (like `usedBytes()`) is FatFs's
+`f_getfree()`: on FAT32 it takes the free count the mount read from the
+FSINFO sector, but a card whose count is unset (0xFFFFFFFF, "unknown") or
+whose FSINFO is missing makes it count the free clusters, every FAT sector
+(~244k reads on a 1 TB card: minutes, estimated), holding the volume's lock
+throughout; the decode task's reads would fail after
+`CONFIG_FATFS_TIMEOUT_MS` (10 s, `FR_TIMEOUT`) and the music stop. The size
+shown is now the card's rather than the volume's data area, ~0.03% more on
+a big card. The flash fallback's size is its partition's
+(`esp_partition_find_first()`), not `LittleFS.totalBytes()`, which walks
+the whole file system for a used count it throws away. Nothing needs the
+free space yet; the WiFi sync will, and must count it once, in one
+controlled scan with progress, outside playback and never at boot.
 
 ## The board guard
 
@@ -2143,8 +2182,8 @@ Queue, Dance and Output (with its Pair and About pages).
   up to two buttons, drawn in strips through the scroll mapping): the
   Queue's "Your queue is empty" (Open Library, Shuffle all), the Library's
   "No music found" and, with no card, "No microSD card" (Try again), or
-  "This card isn't FAT32" when one is in that doesn't mount (exFAT, NTFS,
-  a GPT). A
+  what is in when one is in that doesn't mount ("This card is exFAT",
+  "... NTFS", "This card uses GPT", "Can't read this card": Storage). A
   row can have buttons of its own (the Output card's): the source gets
   where on the row it was tapped (`onTapAt()`) and where a finger presses
   (`Row::pressX`).
@@ -2448,8 +2487,9 @@ Queue, Dance and Output (with its Pair and About pages).
   plain icon while the search rests (`tabbar::outputFor()`, host-tested).
 - **States** (spec §7): no microSD card (and no music on the flash
   fallback): the Library, and the Queue and Now Playing while nothing is
-  queued, show "No microSD card" (or "This card isn't FAT32" when one is
-  in that doesn't mount: exFAT, NTFS, a GPT) and **Try again**, which looks for a card
+  queued, show "No microSD card" (or, when one is in that doesn't mount,
+  what it is: "This card is exFAT", "... NTFS", "This card uses GPT",
+  "Can't read this card": [Storage](#storage)) and **Try again**, which looks for a card
   (`LocalStorage::probeCard()`, never inside an LCD hold) and restarts the
   player to use it (the backend, the library and the queue were set up on
   the flash); no automatic re-check (an SD init with no card could hold
@@ -2538,11 +2578,11 @@ Queue, Dance and Output (with its Pair and About pages).
   overlays, the covers (above) and the loop task's unused stack. `ui0`-`ui4`
   tap a tab, `uib` goes back, `uic` shows the coach cards, `uiT` decodes
   the covers again (their timings), `uiV` shows the volume HUD, and
-  **`uiF<c/s/p/r/l/n/f/w>`** shows a faked state for screenshots of what a test
+  **`uiF<c/s/p/r/l/n/f/t/g/u/w>`** shows a faked state for screenshots of what a test
   can't safely cause (display only: the radio and the card are left
   alone): the Bluetooth card connecting, searching, pairing or resting, the
-  headphones lost (with the dialog), no card or a card that isn't FAT32
-  (on Now Playing), or a play
+  headphones lost (with the dialog), no card or one that didn't mount
+  (exFAT, NTFS, GPT, can't read: on Now Playing), or a play
   waiting for the headphones (Now Playing's panel and spinner); `uiF0`
   the real state. **`uil<n>`**: the Library browses a synthetic
   library of n tracks (the spike's `g<n>`: 6 artists and 15 albums per 100
