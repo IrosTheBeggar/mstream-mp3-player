@@ -896,7 +896,10 @@ version. Nothing here is IRAM code, and nothing gets `IRAM_ATTR`.
 - `test_shuffle_is_repeatable_and_uniform`: the same hook sequence, the
   same order; 5 up next x 20,000 shuffles: each entry in each slot within
   ±3 % of 1/5; the current entry never moves.
-- `test_a_toggle_allocates_nothing`: 10,000 entries, a counting alloc hook.
+- `test_a_toggle_allocates_nothing`: 10,000 entries, a counting alloc hook,
+  and a counting global operator new (the hooks can't see a
+  `std::stable_sort`'s buffer or a scratch `std::vector`; the test first
+  checks that the count sees a stable sort's).
 - `test_assign_with_ranks`; `test_a_rank_overflow_is_refused`.
 - `test_permute_is_a_permutation_and_repeatable`: test_ui_queue's
   `test_shuffle_is_a_permutation_and_repeatable` moved, on
@@ -1250,7 +1253,10 @@ helpers, the console, the logs), 0a89e5e (the sheets: the settle, the
 staying and followed rows, the undo toast; `cutPathLeft()`, the texts,
 `UiHost`), 03b9898 (Now Playing, the icons, the seek bar's rows, Shuffle
 all, the Library's `kAnyStart`), 7d1c98a (these docs), 4e47b69 (a
-review fix: `repeats()` counts Repeat One's loops only). 1,088 host tests
+review fix: `repeats()` counts Repeat One's loops only), then a second
+review's fixes (`test_a_toggle_allocates_nothing` counts the global heap
+too; comments and SEEK-BAR.md's lines that still had the old rows or
+missed the settle). 1,088 host tests
 pass (41 new); at 4e47b69 core2 and core2-dio build with every guard
 (iram_diet: 51 of 51 objects moved, the hot set pinned; cache_guard ok;
 flash_guard: 2.20 MB, 37 % of the slot). Nothing has run on the device

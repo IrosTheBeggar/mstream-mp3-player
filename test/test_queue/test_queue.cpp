@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
@@ -21,6 +22,38 @@
 #include "QueueText.h"
 #include "Shuffle.h"
 #include "TrackCatalog.h"
+
+namespace {
+// The global heap, counted while `counting` (test_a_toggle_allocates_nothing):
+// QueueModel's hooks can't see an operator new or a std::stable_sort's
+// buffer (get_temporary_buffer: a nothrow new), and on the device that
+// would land on the loop task's heap. The replacements below serve the whole
+// test program; they only count while asked to.
+struct GlobalNew {
+  static bool counting;
+  static long count;
+  static void* take(std::size_t n) {
+    if (counting) ++count;
+    return std::malloc(n ? n : 1);
+  }
+};
+bool GlobalNew::counting = false;
+long GlobalNew::count = 0;
+}  // namespace
+
+void* operator new(std::size_t n) {
+  if (void* p = GlobalNew::take(n)) return p;
+  throw std::bad_alloc();
+}
+void* operator new[](std::size_t n) { return ::operator new(n); }
+void* operator new(std::size_t n, const std::nothrow_t&) noexcept { return GlobalNew::take(n); }
+void* operator new[](std::size_t n, const std::nothrow_t&) noexcept { return GlobalNew::take(n); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); }
 
 namespace {
 
@@ -843,16 +876,31 @@ void test_shuffle_is_repeatable_and_uniform() {
 }
 
 void test_a_toggle_allocates_nothing() {
+  // The global count sees what it is for: a stable sort's buffer.
+  {
+    uint32_t probe[64] = {};
+    const long before = GlobalNew::count;
+    GlobalNew::counting = true;
+    std::stable_sort(probe, probe + 64);
+    GlobalNew::counting = false;
+    TEST_ASSERT_TRUE(GlobalNew::count > before);
+  }
   QueueModel q(Heap::alloc, Heap::release);
   fill(q, 10000, 5000);
   const uint32_t add[] = {1};
   q.append(add, 1);  // (the snapshot's memory exists)
   const long allocs = Heap::allocs;
+  const long news = GlobalNew::count;
   Heap::failing = true;  // and none could be had
-  TEST_ASSERT_TRUE(q.setShuffled(true));
-  TEST_ASSERT_TRUE(q.setShuffled(false));
+  GlobalNew::counting = true;  // nor taken from the global heap
+  const bool on = q.setShuffled(true);
+  const bool off = q.setShuffled(false);
+  GlobalNew::counting = false;
   Heap::failing = false;
+  TEST_ASSERT_TRUE(on);
+  TEST_ASSERT_TRUE(off);
   TEST_ASSERT_EQUAL_INT(allocs, Heap::allocs);
+  TEST_ASSERT_EQUAL_INT(news, GlobalNew::count);
   TEST_ASSERT_EQUAL_UINT32(10001, q.size());
   TEST_ASSERT_EQUAL_UINT32(5010, q.currentTrack());
 }

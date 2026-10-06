@@ -803,10 +803,6 @@ void test_ends_at_for_each_choice() {
   TEST_ASSERT_FALSE(SleepTimer::endsAt(Choice::Timed, true, true));
 }
 
-// A gapless advance: the entry and the backend's count (its trackSeq())
-// change in the same pass, the position maybe already past 1 s (the loop
-// took the advance late: a library rebuild, a screenshot): started all the
-// same, so the timer gets the new track's length at once.
 // Repeat One: the track that plays is the last of the queue (and so of
 // the album), wherever it is; Off and All as before.
 void test_last_of_queue_with_repeat_one() {
@@ -825,6 +821,10 @@ void test_last_of_queue_with_repeat_one() {
   TEST_ASSERT_FALSE(SleepTimer::endsAt(Choice::Timed, last, last));
 }
 
+// A gapless advance: the entry and the backend's count (its trackSeq())
+// change in the same pass, the position maybe already past 1 s (the loop
+// took the advance late: a library rebuild, a screenshot): started all the
+// same, so the timer gets the new track's length at once.
 void test_entry_start_after_a_late_gapless_advance() {
   EntryStart e;
   TEST_ASSERT_TRUE(e.update(20, 3, 200));

@@ -160,8 +160,8 @@ public:
   // Shows tab t (as a tab tap does, but never pops it).
   void showTab(NavModel::Tab t);
   // The Library tab showing `pages` above its root on segment `seg` (Now
-  // Playing's Go to artist / album / Show in folders); the stack it had
-  // is replaced.
+  // Playing's navigation menu: Go to artist / album / folder); the stack
+  // it had is replaced.
   void showLibrary(LibrarySegment seg, const NavModel::PageRef* pages, int n);
   // What the Library shows (the card's index, or a synthetic one).
   LibraryIndex* browseIndex() { return browse_ ? browse_ : library_.index(); }

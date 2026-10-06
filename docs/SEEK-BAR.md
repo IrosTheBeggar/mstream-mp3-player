@@ -435,7 +435,8 @@ y 168-239  transport (64 x 72 zones)          never the bar's
     about as unlikely to land on the other.
   - Touch y reads true on this panel; only x was skewed.
 - **Nothing below the band.** A sloppy tap on prev, play or next must
-  never seek. The line is 17 px above the transport's drawn strip anyway.
+  never seek. The line is 17 px above the transport's touch (y 168)
+  anyway, 25 above its drawn strip (y 176).
 - **While play waits** the zone starts at y 138 too: Play on speaker and
   Cancel are drawn y 94-129 and take y 90-137, so nothing is taken from
   them. `zoneAt()` tests the bar right after the transport, before the
@@ -1352,7 +1353,10 @@ The examples are for a 4:05 CBR MP3.
    - On the Dance tab after a seek: `[dance] tracker reset`, with the
      tempo prior kept.
 9. **The zone.** `uit160,139` seeks. `uit160,136` logs `[ui] now playing:
-   the navigation menu` (close it: `uit160,60`).
+   the navigation menu` (close it 400 ms later: `uit160,60`. Every sheet
+   ignores a touch within 300 ms of its opening, `[ui] sheet: a touch
+   right after it opened, ignored`, and the menu would stay up over
+   step 10's taps).
 10. **Waiting.** Only if the headphones are certainly off: nothing but
     silence may go to them. Otherwise skip it; the host tests cover
     Waiting.

@@ -466,7 +466,7 @@ void Ui::uncover(int oldBottom) {
   // the device: +10 min on the fade toast over the Sleep timer sheet left
   // its pills invisible over the transport, and a tap on "..." hit Turn off.
   const bool wholePage = !jumpGrid_.up() && !coach_.up() && page_ && !page_->hasHeader();
-  if (sheet_.up() && (wholePage || sheet_.top() < oldBottom)) sheet_.draw();  // the 4-row sheet reaches the header row
+  if (sheet_.up() && (wholePage || sheet_.top() < oldBottom)) sheet_.draw();  // a 4-row sheet would reach the header row
   if (wholePage && sleepSheet_.up()) sleepSheet_.draw();
   if (wholePage && volumeSheet_.up()) volumeSheet_.draw();
   if (dialog_.up()) dialog_.draw();
