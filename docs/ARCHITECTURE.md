@@ -2096,51 +2096,169 @@ Queue, Dance and Output (with its Pair and About pages).
   with "…". efont is out of the build (the font probe keeps it behind
   `UI_SPIKE_EFONT`). Licence: `LICENSES/DejaVu-Fonts.txt`.
 - **Icons**: 1-bit bitmaps in flash (`tools/ui_icons.py` -> `IconData.cpp`).
-- **Now Playing** (spec §6.1, mockups 01-04): the album's cover (96 x 96,
+- **Now Playing** (spec §6.1, mockups 01-04; its two menus, shuffle and
+  repeat: [QUEUE-MODES.md](QUEUE-MODES.md)): the album's cover (96 x 96,
   its thumbnail, a note until it's made), the title (Bold 22 on up to two
-  lines, else Bold 16 on up to three), the artist and the album as **40 px
-  bands** right of the cover (the review's graft: a tap meant for one never
-  opens the other; the cover is the album's too), the progress and times
-  (between them "4 of 16 · SPYDRONE": where it plays, mockup 01's output
-  line, when it fits; the headphones not connected, "SPYDRONE (not
-  connected)" alone when both don't fit), and the transport row (the
-  volume, prev, play/pause, next, "..."). While a play waits for the
-  headphones (`PlayGate`), the play button is a spinner (a tap cancels the
-  wait), "Waiting, 24 of 86" is the progress line, and the artist and
-  album bands give way to "Waiting for SPYDRONE..." over "try 2 of 3" and
-  two plain buttons, **Play on speaker** and **Cancel** (out loud is a
-  choice, not the way on: neither is the accent). While a sleep timer runs,
-  the progress line has a moon and "23 min" ("track", "45 s", "fading")
-  after "4 of 16 · Speaker"; when both don't fit the output's name goes
-  first ("4 of 16" and the moon), then the line (the moon alone), but the
-  amber "SPYDRONE (not connected)" never does (the moon, or nothing of the
-  timer, beside it: `uitext::sleepLineFit()`; see "Sleep timer" above). The
-  artist opens the Library at that artist, the album at the album (one Back
-  from its artist), each **scrolled to the playing item and tinted**; "..."
-  is a sheet of Sleep timer (its state), Go to artist, Go to album and
-  Show in folders (each with its name, dim, on the right; the Sleep timer
-  row's follows the timer while the sheet is up; four rows of 40 px, the
-  sheet rising into the header row from y 40: `SheetLayout.h`), the last
-  opening the chain of folders down to the
-  track's, one Back apart, the playing file tinted. The volume
-  button opens the volume sheet. Only what changed is redrawn: the cover
-  when the album changes or its thumbnail arrives, the text when the track
-  does, the times once a second, the transport on a change, and the bar on
-  the 30 fps frame deadlines while a finger scrubs it.
+  lines, else Bold 16 on up to three), the artist and the album as two
+  plain rows under it, the progress and times (between them "4 of 16 ·
+  SPYDRONE": where it plays, mockup 01's output line, when it fits; the
+  headphones not connected, "SPYDRONE (not connected)" alone when both
+  don't fit), and the transport row (the volume, prev, play/pause, next,
+  "..."), which has the room the old 40 px artist and album bands gave
+  up. **Two menus, one job each** (the user's split): a tap anywhere on
+  the cover, the title, the artist or the album opens the **navigation
+  menu** (Go to artist, Go to album, Go to folder); "..." opens the
+  **playback menu** (Shuffle, Repeat, Sleep timer). Neither row of text is
+  a control of its own any more, so neither has a "›".
+  - **The layout** (screen y; x 0-319 unless said; the constants and their
+    static_asserts are NowPlayingPage.cpp's, the picture Pages.h's):
+
+        36-37     background
+        39-136    the cover's 1 px frame; the cover 96 x 96 at (12, 40)
+        38-89     the title, x 120-310 (190 px): Bold 22, one line
+                  centred at y 64 or two at 51 and 77; else Bold 16,
+                  three at 47, 64 and 81
+        90-112    the artist (Body, soft), centred at y 101, x 120-310
+        113-135   the album (Body, dim), centred at y 124, x 120-310
+        136-145   background
+        146-167   the progress band: the line y 148-151 (the knob's centre
+                  y 150), the times and the middle (Small) centred at y 160
+        168-239   the transport's touch: five zones of 64 x 72
+        176-231   the transport as drawn: one 320 x 56 strip
+                  (gfx::kStripH; 168-175 and 232-239 are background), the
+                  zones' centres at x 32, 96, 160, 224, 288 and y 204
+
+    The rows are 23 px (a Body line and 4): the artist's starts where the
+    title strip ends and the album's ends on the cover's last row. Their
+    text has the title's 190 px (the "›" and its 16 px are gone):
+    "(no artist folder)" (130 px), "(loose tracks)" and "Built-in test
+    track" fit, a longer name is cut with "…". The band moved up 24 px
+    and the transport grew from 48 to 72 px. In it: the volume's icon
+    centred at y 195 over its "60%" (Small, dim) at y 218; prev and next at
+    y 204; play a disc of r 25 at (160, 204), y 179-229 (r 23 at y 216
+    touched the bezel); "..." its dots at y 195, and under them, at y 218,
+    the shuffle and repeat indicator; a pressed zone a circle of r 24
+    (BTN_HI; the play disc turns soft). The icons keep their sizes: the
+    room went to space, not to bigger glyphs.
+  - **Where it takes touches** (`zoneAt()`, tested in this order):
+
+    | y | x | Playing, paused, stopped | While a play waits |
+    |---|---|---|---|
+    | 168-239 | 64 px zones (a clamped right-edge reading is "...") | the transport | the transport |
+    | 138-167 | all | the seek bar (inert when it can't seek) | the same |
+    | 90-137 | 112-319 | the navigation menu | Play on speaker; Cancel from x 253, or a clamped right-edge reading |
+    | 36-89 | 112-319 | the navigation menu | nothing (the title and the wait's status) |
+    | 36-137 | 0-111 | the navigation menu | the navigation menu (the cover) |
+
+    The navigation area is everything above the seek bar, its margins
+    too: no dead pixels, and (no play waiting) no x test for the panel's
+    skew to fool.
+    While a play waits only the cover opens it, so a near miss above Play
+    on speaker never raises a sheet over the very buttons. A toast takes
+    y 36-71 first (to 77 for the sleep and idle toasts' buttons), as on
+    every page: a tap there dismisses it.
+  - **A Down on the navigation area lights it** (the house rule: a Down
+    highlights): ROW_SEL on x 0-319, y 36-136 around the cover's frame,
+    the title strip and both rows drawn on it, the cover as it is. A tap,
+    a drag, a release or a cancel puts it back. Not while a play waits
+    (the cover alone isn't lit). A drag that starts there does nothing; a
+    long press has no hold there, so `Ui` ends it as a slow tap (lifted
+    within 24 px): the menu, with the tap tick, never the double tick.
+  - **The navigation menu** (a 3-row sheet, from y 80), titled with the
+    track's title (Small, dim): **Go to artist** (its detail the artist,
+    or "(no artist folder)"), **Go to album** (the album, or "(loose
+    tracks)"), **Go to folder** (the track's folder, cut from the left by
+    whole folders, as the Folders header cuts its path: "…/Daft
+    Punk/Discovery"; "/music" for a track at the root). Each detail is
+    Small, dim, right-aligned in what its label leaves (183, 174 and 177
+    px). Go to artist opens the Library at the artist, Go to album at the
+    album (one Back from its artist), each **scrolled to the playing item
+    and tinted**; Go to folder opens the chain of folders from /music down
+    to the track's, one Back apart, on the Folders segment, the playing
+    file tinted (what "Show in folders" did). The sheet acts on the track
+    it was opened for: a track change under it still goes where its
+    details said. When nothing in it could act there is no sheet, only a
+    toast, with the tap's tick: a built-in track, "A built-in track isn't
+    in the Library"; the index not ready (a rebuild), "The Library isn't
+    ready yet" (the built-in text said that, wrongly, until now); a
+    synthetic browse (`uil<n>`), its refusal as before.
+  - **The playback menu** ("...": a 3-row sheet from y 80, titled
+    "Playback"): **Shuffle** ("On", "Off"), **Repeat** ("Off", "All",
+    "One") and **Sleep timer** ("Off", "23 min", "End of track": it
+    follows the timer while the sheet is up). Each state is its row's dim
+    detail on the right, as the Sleep timer row's always was. **A tap on
+    Shuffle or Repeat changes it in place**: the tick, the row's new
+    state, its highlight gone, and the sheet stays up (Repeat goes Off,
+    All, One, Off; a change from the console shows on it too). Sleep timer
+    closes it and opens the Sleep timer sheet, as before. Sleep timer is
+    the last row on purpose: a quick second tap on "..." (y 168-239) lands
+    on the sheet's lower rows (156-235), and the last of them opens a
+    sheet rather than changing anything. **Every sheet ignores a touch that
+    starts within 300 ms of its opening** (as the volume sheet does): what
+    keeps a double tap off Repeat, and a double tap on the album row off Go
+    to artist.
+  - **Shuffle and repeat** (the player's: [QUEUE-MODES.md](QUEUE-MODES.md)):
+    shuffle is a toggle that reorders the queue itself. On, what is up
+    next is shuffled and what plays plays on; off, the queue's own order
+    comes back, the playing entry in its place. The Queue tab shows the
+    order that plays. Repeat **All** goes from the last entry back to the
+    first, gaplessly; **One** plays the entry again at its natural end (a
+    gapless join to itself), and next and prev still move; **Off** (the
+    default) stops after the last entry. Both outlive a restart: shuffle
+    with the queue (`queue.txt` version 2), repeat in NVS
+    (`queue`/`repeat`). The sleep timer wins over Repeat One: End of
+    track, album or queue pauses at this track's end, the same entry cued
+    at 0:00. "Shuffle all" (the empty states) turns shuffle on and plays
+    the library from a random track.
+  - **The indicator**: in the "..." zone under its dots (centred at
+    (288, 218), in the Now Playing accent), as the volume zone has its
+    "60%" under its icon: a small shuffle glyph while shuffle is on, a
+    small repeat glyph for All (with a "1" in it for One), the two side by
+    side, 4 px apart, when both are on; nothing when neither is. It sits
+    on the control that changes it. It is drawn with the transport, which
+    is drawn again when either changes; the page under a sheet is frozen,
+    so a change made in the menu shows as the sheet closes.
+  - **While a play waits for the headphones** (`PlayGate`): the play
+    button is a spinner (a tap cancels the wait), "Waiting, 24 of 86" is
+    the progress line, the title strip has the title on one line (Bold 16,
+    y 47) over "Waiting for SPYDRONE…" (Small, amber, y 64) and "try 2 of
+    3" ("looking for them", "connecting": Small, dim, y 81), and the
+    artist and album rows give way to two plain buttons, **Play on
+    speaker** (x 116-251) and **Cancel** (x 256-317), drawn at y 94-129
+    and taking y 90-137 (out loud is a choice, not the way on: neither is
+    the accent).
+  - **While a sleep timer runs**, the progress line has a moon and "23
+    min" ("track", "45 s", "fading") after "4 of 16 · Speaker"; when both
+    don't fit the output's name goes first ("4 of 16" and the moon), then
+    the line (the moon alone), but the amber "SPYDRONE (not connected)"
+    never does (the moon, or nothing of the timer, beside it:
+    `uitext::sleepLineFit()`; see "Sleep timer" above). The indicator
+    isn't on that line, so nothing there gives way to it.
+  - **Haptics** (all `Ui::tick()`: 33 ms at 235, ruled by the haptics
+    setting; no hold anywhere here, so never the double tick): one tick
+    per tap that acts. The navigation tap (with its sheet or its toast),
+    each row of either menu (Shuffle and Repeat on every tap), ✕ and a tap
+    outside a sheet. Nothing on a Down, on a drag, or for a touch the
+    300 ms guard swallows. The transport, the waiting buttons and the seek
+    bar keep theirs (SEEK-BAR.md section 4.3).
+  - The volume button opens the volume sheet. Only what changed is
+    redrawn: the cover when the album changes or its thumbnail arrives,
+    the text when the track does (the title strip also when the wait's
+    status does), the times once a second, the transport on a change (the
+    play state, the volume, the output, shuffle, repeat), and the bar on
+    the 30 fps frame deadlines while a finger scrubs it.
 
   **The progress line is a seek bar.** Its design is
   [SEEK-BAR.md](SEEK-BAR.md); the mapping and the touch are
   `lib/core/SeekBar` (host-tested in test_seek_bar), the player's side
   `PlaybackController::seek()`.
-  - **Where it takes touches:** the full width, from y 162 down to the
-    transport (y 191).
-    - The 8 rows above the band (y 162-169) are the album band's last
-      ones. The line is drawn at the band's top (y 172-175), so a tap
-      aimed at it lands on both sides of y 170.
-    - The album's hit area is then y 130-161. Its drawn band and its
-      highlight stay y 130-169.
-    - While play waits, the bar starts at y 170, so Play on speaker and
-      Cancel keep their whole area.
+  - **Where it takes touches:** the full width, from y 138 down to the
+    transport (y 167), whether or not a play waits.
+    - The 8 rows above the band (y 138-145) are the gap under the album
+      row. The line is drawn at the band's top (y 148-151), so a tap
+      aimed at it lands on both sides of y 146.
+    - Above them is the navigation menu's area; while a play waits, Play
+      on speaker and Cancel, whose touch ends at y 137.
   - **A tap** goes to the second under the finger.
   - **A sideways drag** scrubs, with a tick as it starts.
     - From within 16 px of the knob, the knob moves with the finger
@@ -2154,13 +2272,16 @@ Queue, Dance and Output (with its Pair and About pages).
     - the line thickens;
     - a marker shows where it plays;
     - a large readout ("2:31 +1:21") takes the row above the line
-      (y 137-169), on the side away from the finger.
+      (y 113-145, the full width: over the album row, the cover's lowest
+      23 rows and its frame's last, which come back at the lift), on the
+      side away from the finger.
   - **Nothing is seeked when:**
     - the knob ends within 4 px of the marker. It snaps there with a
       tick, and the readout says "no change". A tap there does nothing
       too;
-    - the finger slid off the bar, above y 130 or onto the strip. The
-      readout says "Release to cancel", with a tick;
+    - the finger slid off the bar, above y 106 (onto the artist row or
+      higher) or onto the strip. The readout says "Release to cancel",
+      with a tick;
     - the track changed under the finger.
   - **What a seek does** (`PlaybackController::seek()`, SEEK.md 6.7):
     - playing, it starts there at once;
