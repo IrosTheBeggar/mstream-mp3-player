@@ -275,15 +275,22 @@ void Sheet::open(const char* title, const char* const* rows, int n, uint16_t acc
   accent_ = accent;
   pressed_ = -1;
   up_ = true;
-  // Every row 40 px: 4 rows rise into the header row (SheetLayout.h).
+  // Every row 40 px: 3 rows from y 80 (SheetLayout.h).
   y0_ = sheet::top(n_);
   draw();
 }
 
-void Sheet::setDetail(int i, const char* text) {
-  if (!up_ || i < 0 || i >= n_ || std::strcmp(details_[i], text ? text : "") == 0) return;
+bool Sheet::setDetail(int i, const char* text) {
+  if (!up_ || i < 0 || i >= n_ || std::strcmp(details_[i], text ? text : "") == 0) return false;
   copy(details_[i], sizeof(details_[i]), text);
-  if (!panel_) return;
+  if (!panel_) return false;
+  render();
+  pushRow(i);
+  return true;
+}
+
+void Sheet::drawRow(int i) {
+  if (!up_ || !panel_ || i < 0 || i >= n_) return;
   render();
   pushRow(i);
 }
@@ -313,7 +320,7 @@ void Sheet::render() {
     const uint16_t ink = primary ? accent_ : i == danger_ ? col::RED : col::TXT;
     const int w = f.draw(s, primary ? Font::Bold : Font::Body, rows_[i], 16, y + kRowH / 2, kW - 32, ink, bg);
     // The detail, right-aligned in what the label left.
-    const int room = kW - 16 - (16 + w + 16);
+    const int room = sheet::detailRoom(w);
     if (details_[i][0] && room > 24) {
       f.draw(s, Font::Small, details_[i], kW - 16, y + kRowH / 2, room, col::DIM, bg, Fonts::Align::Right);
     }

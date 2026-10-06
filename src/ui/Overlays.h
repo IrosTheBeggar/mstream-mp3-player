@@ -37,11 +37,15 @@
 //           and still switches the tab.
 //   Sheet   from the bottom: a title with a ✕ pill (its hit area x 250 to
 //           the edge) and up to 4 rows of 40 px (SheetLayout.h: up to 3
-//           in the list's band from y 72; 4, Now Playing's "...", from
-//           y 40, over the header row like the dialog), each
-//           with an optional dim detail on the right ("Go to artist   Daft
-//           Punk"); optionally one row the primary (Bold, the accent: the
-//           Library's Play) and one red (Forget); a tap outside closes it.
+//           in the list's band from y 72; a 4th would rise to y 40, over
+//           the header row like the dialog), each with an optional dim
+//           detail on the right ("Go to artist   Daft Punk"); optionally
+//           one row the primary (Bold, the accent: the Library's Play) and
+//           one red (Forget); a tap outside closes it. A touch that starts
+//           within kSettleMs of its opening goes nowhere (Ui::route(): a
+//           double tap on what opened it never picks a row). A row can
+//           stay (Ui::sheetStays(): Now Playing's Shuffle and Repeat change
+//           in place, the sheet up, the row's detail the new state).
 //   VolumeSheet  the active output's volume (spec §6.1, mockup 04): − and +,
 //           a slider to tap or drag (5 % steps), the value; from y 124,
 //           closes 3 s after the last change or on a tap above it. Nothing
@@ -67,7 +71,7 @@
 namespace ui {
 
 // The sprite sheets and dialogs are drawn in (320 x 204, PSRAM: the
-// content area, for the 4-row sheet; the others use its top 168 rows).
+// content area, room for a 4-row sheet; the others use its top 168 rows).
 bool overlaysBegin();
 
 class Toast {
@@ -156,11 +160,14 @@ private:
 
 class Sheet {
 public:
-  // Up to 4 rows, each 40 px (the touch minimum): 4 (Now Playing's "...",
-  // the sleep timer first) rise into the header row (SheetLayout.h).
+  // Up to 4 rows, each 40 px (the touch minimum): a 4th would rise into
+  // the header row (SheetLayout.h).
   static constexpr int kMaxRows = sheet::kMaxRows;
   static constexpr int kRowH = sheet::kRowH;
   static constexpr int kTitleH = sheet::kTitleH;
+  // A touch that starts this soon after the sheet opened goes nowhere (as
+  // the volume sheet's): the finger that opened it, coming back.
+  static constexpr uint32_t kSettleMs = 300;
   // `details`: nullptr, or a dim text per row (nullptr or "" for none).
   // `primary`: the row drawn as the main choice (-1 none); `danger`: the
   // row in red (-1 none).
@@ -173,9 +180,13 @@ public:
   // A glass event: the row index on a Tap on a row, -2 on a Tap outside
   // or on ✕ (close), -1 otherwise. Presses highlight what's under the finger.
   int onEvent(const InputEvent& e);
-  // Row `i`'s dim detail is now `text` (the "..." sheet's Sleep timer row
-  // follows the timer): drawn again only if it changed.
-  void setDetail(int i, const char* text);
+  // Row `i`'s dim detail is now `text` (the playback menu's rows follow
+  // the timer, shuffle and repeat): drawn again only if it changed. True:
+  // it was drawn.
+  bool setDetail(int i, const char* text);
+  // Row `i` drawn again as it is (a staying row's highlight gone after its
+  // tap: onEvent() clears it on a Tap without drawing).
+  void drawRow(int i);
 
 private:
   static constexpr int kCross = -3;  // pressed_: the ✕ pill

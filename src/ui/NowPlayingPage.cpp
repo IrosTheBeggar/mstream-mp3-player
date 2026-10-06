@@ -891,7 +891,7 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
       char title[128] = "Nothing playing";
       if (s.current >= 0) cat.title(s.trackId, title, sizeof(title));
       ui_.openSheet(this, title, kRows, 4, details);
-      ui_.sheetFollowsSleep(0);  // its detail follows the timer while it is up
+      ui_.sheetFollows(0, Ui::SheetFollow::Sleep);  // its detail follows the timer while it is up
       break;
     }
     default: break;

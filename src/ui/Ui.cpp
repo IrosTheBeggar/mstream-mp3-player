@@ -14,6 +14,7 @@
 #include "RateConverter.h"
 #include "Shuffle.h"
 #include "SleepTimer.h"
+#include "TextFit.h"
 #include "TextFold.h"
 #include "UiText.h"
 #include "app/Psram.h"
@@ -547,15 +548,37 @@ void Ui::openSheet(OverlayOwner* owner, const char* title, const char* const* ro
   endPageTouch();
   closeModal(true);
   sheetOwner_ = owner;
-  sheetSleepRow_ = -1;
+  for (SheetFollow& f : sheetFollow_) f = SheetFollow::None;
+  sheetStays_ = 0;
+  sheetOpenedMs_ = millis();
   sheet_.open(title, rows, n, accent(), details, primary, danger);
   applyCover();
-  // A 4-row sheet reaches the header row: a toast up stays on top.
+  // A 4-row sheet would reach the header row: a toast up stays on top.
   if (toast_.up() && sheet_.top() < toast_.bottom()) toast_.draw();
 }
 
-void Ui::sheetFollowsSleep(int row) {
-  if (sheet_.up()) sheetSleepRow_ = row;
+void Ui::sheetFollows(int row, SheetFollow what) {
+  if (sheet_.up() && row >= 0 && row < Sheet::kMaxRows) sheetFollow_[row] = what;
+}
+
+void Ui::sheetStays(int row) {
+  if (sheet_.up() && row >= 0 && row < Sheet::kMaxRows) sheetStays_ |= static_cast<uint8_t>(1u << row);
+}
+
+void Ui::followSheet(int pressed) {
+  if (!sheet_.up()) return;
+  bool pressedDrawn = false;
+  for (int i = 0; i < Sheet::kMaxRows; ++i) {
+    const char* text = nullptr;
+    switch (sheetFollow_[i]) {
+      case SheetFollow::Sleep: text = state_.sleepRow; break;
+      case SheetFollow::Shuffle: text = uitext::kOnOff[state_.shuffle ? 1 : 0]; break;
+      case SheetFollow::Repeat: text = uitext::kRepeatModes[state_.repeat < 3 ? state_.repeat : 0]; break;
+      default: continue;
+    }
+    if (sheet_.setDetail(i, text) && i == pressed) pressedDrawn = true;
+  }
+  if (pressed >= 0 && !pressedDrawn) sheet_.drawRow(pressed);
 }
 
 void Ui::sleepTitle(char* buf, size_t size) const {
@@ -569,6 +592,7 @@ void Ui::openSleepSheet() {
   closeModal(true);
   char title[40];
   sleepTitle(title, sizeof(title));
+  sheetOpenedMs_ = millis();  // (the settle, as every sheet's)
   sleepSheet_.open(state_.sleepPick, state_.sleepRunning, state_.sleepCanExtend, title, accent::NowPlaying);
   applyCover();
   Serial.printf("[ui] sleep timer sheet (%s)\n", state_.sleepRow);
@@ -957,7 +981,7 @@ void Ui::loop(uint32_t nowMs) {
   // The sleep timer: its sheet follows it, and the "..." sheet's row; the
   // fade's toast goes with the fade.
   refreshSleepSheet();
-  if (sheet_.up() && sheetSleepRow_ >= 0) sheet_.setDetail(sheetSleepRow_, state_.sleepRow);
+  followSheet();
   if (toast_.sleep() && !state_.sleepFading) {
     const int was = toast_.bottom();
     toast_.hide();
@@ -984,9 +1008,23 @@ void Ui::loop(uint32_t nowMs) {
   }
   // The page's deadlines (under a modal too, and in the dark).
   if (page_) page_->tick(nowMs);
+  // A shuffle toggle drops the queue's undo (docs/QUEUE-MODES.md 2.6): an
+  // Undo toast still up would answer "Nothing to undo", so it goes. (Shuffle
+  // all's toast stays: its Play, after the toggle, is undoable.) And no
+  // badge flash for it: Off can grow "up next" without adding anything.
+  const bool toggled = state_.shuffle != lastShuffle_;
+  if (toggled) {
+    lastShuffle_ = state_.shuffle;
+    if (toast_.up() && toast_.undo() && queue_.undoable() == QueueModel::Edit::None) {
+      const int was = toast_.bottom();
+      toast_.hide();
+      uncover(was);
+      Serial.println("[ui] the Undo toast went: a shuffle toggle took the undo");
+    }
+  }
   // Tracks added: the Queue badge flashes.
   if (state_.contentVersion != lastContent_) {
-    if (state_.upNext > lastUpNext_) badgeUntilMs_ = nowMs + 1500;
+    if (state_.upNext > lastUpNext_ && !toggled) badgeUntilMs_ = nowMs + 1500;
     lastContent_ = state_.contentVersion;
   }
   lastUpNext_ = state_.upNext;
@@ -1120,6 +1158,13 @@ void Ui::route(const InputEvent& e) {
       touch_ = TouchOn::Toast;
     } else if (dialog_.up()) {
       touch_ = TouchOn::Dialog;
+    } else if ((sheet_.up() || sleepSheet_.up()) &&
+               static_cast<int32_t>(e.ms - sheetOpenedMs_) < static_cast<int32_t>(Sheet::kSettleMs)) {
+      // The settle: a touch that starts this soon after a sheet opened is
+      // the finger that opened it coming back (a double tap on "..." or on
+      // the album row): the whole touch goes nowhere, no tick.
+      touch_ = TouchOn::None;
+      Serial.println("[ui] sheet: a touch right after it opened, ignored");
     } else if (sheet_.up()) {
       touch_ = TouchOn::Sheet;
     } else if (sleepSheet_.up()) {
@@ -1180,7 +1225,14 @@ void Ui::route(const InputEvent& e) {
     }
     case TouchOn::Sheet: {
       const int r = sheet_.onEvent(e);
-      if (r >= 0 || r == -2) {
+      if (r >= 0 && r < Sheet::kMaxRows && (sheetStays_ >> r) & 1u) {
+        // A staying row: its owner acts, the sheet stays up, the row shows
+        // the new state (the snapshot now, as retryCard() takes it).
+        tick();
+        if (sheetOwner_) sheetOwner_->onSheet(r);
+        host_.snapshot(state_);
+        followSheet(r);
+      } else if (r >= 0 || r == -2) {
         tick();
         OverlayOwner* owner = sheetOwner_;
         sheet_.close();
@@ -1434,19 +1486,9 @@ void Ui::drawHeader(const Header& h) {
       }
     }
     if (room >= kMinPathRoom) {
-      const char* p = h.path;
       char cut[160];
-      while (f.width(Font::Small, p) > room) {
-        const char* next = strchr(p + 1, '/');
-        if (!next) break;
-        snprintf(cut, sizeof(cut), "\xE2\x80\xA6%s", next);  // "…/the rest"
-        p = next;
-        if (f.width(Font::Small, cut) <= room) {
-          p = cut;
-          break;
-        }
-      }
-      f.draw(s, Font::Small, p, x, 26, room, col::DIM, col::HEAD);
+      textfit::cutPathLeft(f.fit(Font::Small), h.path, room, cut, sizeof(cut));  // "…/the rest"
+      f.draw(s, Font::Small, cut, x, 26, room, col::DIM, col::HEAD);
     }
     // The title last: the second line's background would cut its
     // descenders ("Discoverv" on the device).

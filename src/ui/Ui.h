@@ -177,12 +177,20 @@ public:
   // minutes idle").
   void note(const char* text, uint32_t ms);
   // `primary`: the row that is the main choice (-1 none); `danger`: the
-  // row in red (-1 none).
+  // row in red (-1 none). A touch that starts within Sheet::kSettleMs of
+  // its opening goes nowhere.
   void openSheet(OverlayOwner* owner, const char* title, const char* const* rows, int n,
                  const char* const* details = nullptr, int primary = -1, int danger = -1);
-  // The sheet just opened shows the sleep timer's state as row `row`'s
-  // detail ("23 min", "Fading", "Off"): it follows the timer while it is up.
-  void sheetFollowsSleep(int row);
+  // What a row of the sheet just opened shows as its detail, and follows
+  // while it is up: the sleep timer's state ("23 min", "Fading", "Off"),
+  // shuffle ("On", "Off") or repeat ("Off", "All", "One"), from the
+  // snapshot each pass (a change from the console shows too).
+  enum class SheetFollow : uint8_t { None, Sleep, Shuffle, Repeat };
+  void sheetFollows(int row, SheetFollow what);
+  // A tap on row `row` of the sheet just opened doesn't close it: the
+  // owner's onSheet(row) acts, the row's highlight goes and its followed
+  // detail shows the new state (Now Playing's Shuffle and Repeat).
+  void sheetStays(int row);
   // An output's volume, as a sheet: -1 the active one (Now Playing's
   // volume button), 0 the speaker's, 1 the headphones' (the Output cards).
   void openVolume(int output = -1);
@@ -242,8 +250,15 @@ private:
   }
   // The sleep timer's sheet: its state as the snapshot has it.
   void refreshSleepSheet();
-  // The "..." sheet's row that shows the timer's state (-1 none).
-  int sheetSleepRow_ = -1;
+  // The sheet's followed rows, each from the snapshot (`pressed`: a
+  // staying row just tapped, drawn again if its detail didn't change).
+  void followSheet(int pressed = -1);
+  SheetFollow sheetFollow_[Sheet::kMaxRows] = {};
+  uint8_t sheetStays_ = 0;      // a bit per row
+  uint32_t sheetOpenedMs_ = 0;  // (the settle: Sheet::kSettleMs; the Sleep timer sheet's too)
+  // The shuffle mode the last pass saw: a toggle drops the queue's undo,
+  // so an Undo toast up then goes.
+  bool lastShuffle_ = false;
   void sleepTitle(char* buf, size_t size) const;
   void coachDone();
   void updateLostDialog();

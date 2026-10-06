@@ -513,6 +513,8 @@ struct MainUiHost : ui::UiHost {
     // new entry by it); else the backend's, with the told length while it
     // knows none.
     player.shownTime(&s.positionMs, &s.durationMs);
+    s.shuffle = player.shuffle();
+    s.repeat = static_cast<uint8_t>(player.repeat());
     BtSink& bt = audio.bluetooth();
     s.onBluetooth = audio.output() == Output::Bluetooth;
     s.btConnected = bt.connected();
@@ -614,6 +616,10 @@ struct MainUiHost : ui::UiHost {
   void playOnSpeaker() override { ::playOnSpeaker(); }
   void next() override { player.next(); }
   void prev() override { prevTrack(); }
+  void setShuffle(bool on) override { applyShuffle(on); }
+  void setRepeat(uint8_t mode) override {
+    if (mode < 3) applyRepeat(static_cast<PlaybackController::Repeat>(mode));
+  }
   void stepVolume(int delta) override { ::stepVolume(delta); }
   void stepOutputVolume(bool bluetooth, int delta) override {
     if (bluetooth == (audio.output() == Output::Bluetooth)) {

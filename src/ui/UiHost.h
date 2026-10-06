@@ -32,6 +32,10 @@ struct AppState {
   uint32_t positionVersion = 0;
   uint32_t positionMs = 0;
   uint32_t durationMs = 0;       // 0: not known (yet)
+  // Shuffle and repeat (docs/QUEUE-MODES.md): the queue shuffled; repeat
+  // as PlaybackController::Repeat (0 Off, 1 All, 2 One).
+  bool shuffle = false;
+  uint8_t repeat = 0;
   // The outputs.
   bool onBluetooth = false;
   bool btConnected = false;
@@ -124,6 +128,11 @@ public:
   virtual void playOnSpeaker() = 0;
   virtual void next() = 0;
   virtual void prev() = 0;
+  // Now Playing's playback menu (docs/QUEUE-MODES.md): shuffle on or off,
+  // the repeat mode (PlaybackController::Repeat's value); applied, saved
+  // (repeat in NVS; shuffle with the queue's file) and logged.
+  virtual void setShuffle(bool on) = 0;
+  virtual void setRepeat(uint8_t mode) = 0;
   // The active output's volume, by `delta` %.
   virtual void stepVolume(int delta) = 0;
   // One output's volume, by `delta` % (the Output tab's per-output sheet),
