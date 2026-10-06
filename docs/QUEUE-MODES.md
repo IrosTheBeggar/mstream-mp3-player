@@ -14,7 +14,11 @@ and repeat are new modes of the player: there was no shuffle mode (only
 
 **Status: designed (2026-10-06, at 5e26eba, on feature/np-menus) and
 built** (section 14: host-tested, both images build with every guard);
-**not yet checked on the device** (section 10). What Now Playing looks like and how it takes touches is the spec
+**checked on the device once** (section 10, at 065ec1f). It found two
+faults, fixed since (section 14's last entry: Shuffle all's Undo left
+shuffle on; Repeat One's "1" didn't read), and two of section 10's
+expectations that were wrong; the fixes wait for their own device steps
+(section 10, steps 1, 9a and 14). What Now Playing looks like and how it takes touches is the spec
 in [ARCHITECTURE.md](ARCHITECTURE.md) ("Now Playing", under UI): the
 layout, the hit areas, the two menus and their texts, the indicator, the
 haptics. This document is the rest:
@@ -49,12 +53,15 @@ settles what they left open (section 13).
 
 - **Repeat's default is Off.** Until now the queue always wrapped
   (`setRepeat()` was never called). With All as the default, the
-  indicator would show on every unit from its first boot.
+  indicator would show on every unit from its first boot. The user
+  confirmed it after the device check.
 - **Off at the queue's end stops on the last entry**, as `setRepeat(false)`
   always has (host-tested); Play then plays that track again.
 - **Shuffle all turns shuffle on** and plays the library from a random
   track. As a one-shot it left the menu saying "Shuffle: Off" over a
   shuffled queue, and Off could never bring the library's order back.
+  It is one edit with the mode in it, so its toast's Undo puts back the
+  queue and the mode it found (section 2.6).
 - **While shuffled, a container's Play starts on a random track**; Play
   on a track starts on that track. The rest is shuffled after it.
 - **Play next and + Queue are never shuffled in.** The listener put them
@@ -222,21 +229,45 @@ Positions are play positions, as the Queue tab shows them.
   A tapped track plays first; a container's Play (an artist, an album, a
   folder, "Play all N") starts on a random track while shuffled, on the
   first while not.
-- **Shuffle all** (`Ui::shuffleAll()`): shuffle on if it is off
-  (`host_.setShuffle(true)`), then `playNow(the library A-Z, n,
-  kAnyStart)`. No PSRAM copy any more (`replace()` copies the ids) and
-  no `queueview::shuffle()`. Off afterwards gives the library A-Z,
-  from the track playing. The toast stays "Shuffling 77 tracks" with Undo
-  (the Replace is undoable; the toggle before it isn't an edit).
+- **Shuffle all** (`Ui::shuffleAll()`): `playNow(the library A-Z, n,
+  kAnyStart, /*shuffle*/ true)`, a Play that turns shuffle on as part of
+  the edit (`QueueModel::replace(.., shuffled)`; 2.6). No PSRAM copy any
+  more (`replace()` copies the ids) and no `queueview::shuffle()`. Off
+  afterwards gives the library A-Z, from the track playing. The toast
+  stays "Shuffling 77 tracks" with Undo, and the Undo puts back the queue
+  and the mode it found. Out of memory, neither changes.
+  - *As first built* it called `host_.setShuffle(true)` and then
+    `playNow()`: the toggle, then the Play. The Play's snapshot was taken
+    after the toggle, so its Undo brought the old queue back with shuffle
+    still on: the device check undid a Shuffle all from the empty state and
+    got `q`'s `shuffle on` over 0 tracks, the next album Play shuffled.
 
 ### 2.6 Undo
 
 A toggle is **not an edit and not undoable**: it drops the undo (keeping
 its memory). An undo across a toggle would bring back an order from the
 other mode, with ranks that mean nothing in it. Toggling again is the
-undo of a toggle, and Off restores the own order exactly. So a snapshot
-is always from the mode the queue is in now, and `undo()` needs nothing
-new.
+undo of a toggle, and Off restores the own order exactly.
+
+**A snapshot carries the mode it was taken in** (`undoShuffled_`), and
+`undo()` puts it back with the entries. For every edit but one that is
+the mode the queue is in now (a toggle drops the undo), so nothing
+changes for them. The one is a Play that sets the mode:
+`replace(tracks, n, start, shuffled)` takes the snapshot first, in the
+mode the queue was in, then sets the mode and lays the new queue out in
+it, as one edit. Shuffle all is its caller (shuffled true): its Undo
+gives back the queue as it was, in its own order when shuffle was off,
+and shuffle off. `replace()` without the mode keeps the queue's.
+`undoShuffled()` reads what an undo would put back (`q`'s line says
+`undo: play now (and shuffle off)` when it differs), and both undo log
+lines add `(shuffle off again)` when it did (section 6).
+
+What else Shuffle all changed stays as any Play's Undo leaves it
+(PlaybackController's rule, unchanged): the track that was current is
+current again from 0:00, in the player's state at the Undo (Shuffle all
+started playing, so it plays unless paused since, even if it was paused
+before), a start point it had is gone, and the Queue's "added" marks stay
+cleared. Repeat isn't touched by Shuffle all.
 
 An Undo toast still up after a toggle would answer "Nothing to undo"
 (Ui.cpp:1280). Ui hides it instead (section 4.5).
@@ -528,29 +559,42 @@ album band" becomes "onto the artist row or above".
 - **The indicator** (`drawModes(c, cx, cy)`): the glyphs that apply, in
   order shuffle then repeat, centred as a group (4 px between two), in
   `accent::NowPlaying`, drawn as bitmaps (transparent over the pressed
-  circle). Three new icons, 14 x 11, 1 px strokes, in
+  circle). Three new icons, 11 rows, 1 px strokes, in
   `tools/ui_icons.py` (then `IconData.cpp` regenerated, `Icons.h`
-  declares them): `kShuffleSmall` (two crossing arrows),
-  `kRepeatSmall` (the loop), `kRepeatOneSmall` (the loop with a "1"):
+  declares them): `kShuffleSmall` (two crossing arrows, 14 x 11),
+  `kRepeatSmall` (the loop, 14 x 11), `kRepeatOneSmall` (the same loop,
+  pixel for pixel, and a bold "1" beside it, 20 x 11):
 
   ```
   shuffle_small     repeat_small      repeat_one_small
-  ...........#..    .........#....    .........#....
-  ...........##.    .........##...    .........##...
-  ####.....#####    .###########..    .###########..
-  ....#...#..##.    .#.......##...    .#.....#.##...
-  .....#.#...#..    .#.......#..#.    .#....##.#..#.
-  ......#.......    .#..........#.    .#.....#....#.
-  .....#.#...#..    .#..#.......#.    .#..#..#....#.
-  ....#...#..##.    ...##.......#.    ...##.###...#.
-  ####.....#####    ..###########.    ..###########.
-  ...........##.    ...##.........    ...##.........
-  ...........#..    ....#.........    ....#.........
+  ...........#..    .........#....    .........#..........
+  ...........##.    .........##...    .........##.....##..
+  ####.....#####    .###########..    .###########...###..
+  ....#...#..##.    .#.......##...    .#.......##.....##..
+  .....#.#...#..    .#.......#..#.    .#.......#..#...##..
+  ......#.......    .#..........#.    .#..........#...##..
+  .....#.#...#..    .#..#.......#.    .#..#.......#...##..
+  ....#...#..##.    ...##.......#.    ...##.......#...##..
+  ####.....#####    ..###########.    ..###########...##..
+  ...........##.    ...##.........    ...##..........####.
+  ...........#..    ....#.........    ....#...............
   ```
 
   kShuffle (20 x 16, Shuffle all's) is too heavy under the 18 x 4 dots.
-  If the "1" doesn't read on the device, the fallback is the repeat glyph
-  with a Small "1" after it (8 px more).
+  The "1" is a digit of its own, 2 px clear of the loop: a 2 px stem, 9
+  rows (y 214-222, the loop's body and a row either side), a flag and a
+  foot; the glyph's last column is blank, as the loop's first is, so the
+  group centres on the dots. **The bounds**: every glyph 11 rows (y
+  213-223, under the dots at y 193-196); the widest group, shuffle and
+  One, 14 + 4 + 20 = 38 px at x 269-306, which is the pressed circle's
+  width (r 24 at y 204) at the indicator's middle row, well inside the
+  zone's x 256-319. `ui_icons.py` asserts all three: the 11 rows, the
+  loop the same as `repeat_small`'s, the 38 px.
+  - *As first built* the "1" was inside the loop, 1 px wide and 5 tall
+    between the arrowheads (`.#.....#.##...` ...). On the device it
+    didn't read (the check's 3x zoom, step 1). The fallback this section
+    named (a Small "1" after the loop, 8 px more) became this drawn one:
+    a bitmap like its siblings, bolder than the font's, and 6 px more.
 - **`Drawn`** gains `bool shuffle` and `uint8_t repeat` (0xFF: none yet);
   `update()` draws the transport again when either changed (the
   condition at NPP:656).
@@ -670,7 +714,7 @@ lowest 24 rows (113-136, its frame's last included).
     `queue_.undoable()` is None, the toast goes (`hide()`, `uncover()`);
     and that pass doesn't flash the Queue badge (Ui.cpp:988: Off can
     grow "up next" without adding anything). Shuffle all's toast stays:
-    its Replace is undoable.
+    its Replace is undoable, the mode with it (2.6).
 - **`UiHost`**: `virtual void setShuffle(bool on) = 0;` and `virtual void
   setRepeat(uint8_t mode) = 0;` (`PlaybackController::Repeat`'s value).
   `AppState`: `bool shuffle = false; uint8_t repeat = 0;`, filled by
@@ -722,10 +766,16 @@ uint32_t rankAt(uint32_t pos) const;          // shuffled: the entry's rank; els
 bool setShuffled(bool on);                    // false: it already was; allocates nothing; drops the undo
 bool assign(const uint32_t* tracks, uint32_t n, int32_t current, bool shuffled = false,
             const uint32_t* ranks = nullptr);  // ranks nullptr: the positions
+// Play in a mode, one edit: the snapshot (in the mode before), then the mode,
+// then the queue laid out in it; undo() puts both back (2.6). n 0: a Clear in
+// that mode. The three-argument replace() keeps the queue's mode.
+bool replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled);
+bool undoShuffled() const;                    // the mode undo() would put back
 
 // PlaybackController
 enum class Repeat : uint8_t { Off, All, One };
 static constexpr uint32_t kAnyStart = QueueModel::kAnyStart;  // playNow()
+bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle);  // Shuffle all's
 void setRepeat(Repeat r);   // an action: the word changes at once
 Repeat repeat() const;
 void setShuffle(bool on);   // an action: the same entry, in the same state
@@ -776,8 +826,13 @@ Now Playing (`[ui] now playing: ...`):
 - `shuffle on` / `shuffle off`, `repeat off` / `repeat all` /
   `repeat one` (at the tap; the player's lines follow).
 
-`[ui] shuffle all: 77 tracks (shuffle on)` (was `[ui] shuffle all: 77
-tracks`).
+`[ui] shuffle all: 77 tracks (shuffle on; was off)` (`was on` when it
+already was). It was `[ui] shuffle all: 77 tracks`, then, as first built,
+`(shuffle on)` after a `[player] shuffle on: ...` line from the toggle;
+there is no toggle now (the mode is part of the Play, 2.6), so no
+`[player]` line. Its Undo: `[ui] undo: done (shuffle off again)` (the
+console's `qu`: `[queue] undo: done (shuffle off again)`); an undo that
+leaves the mode as it is adds nothing.
 
 The player (main's helpers, shared by the host and the console):
 
@@ -801,7 +856,8 @@ Boot and status:
 - `[queue] restored 40 of 40 tracks from ... at 3 of 40 (position from
   NVS), shuffled` (`, shuffled` only then);
 - `q`: `[queue] 40 tracks, at 3, 37 up next; shuffle on, repeat all; undo:
-  none; file generation ...`;
+  none; file generation ...`; after a Shuffle all that turned shuffle on,
+  `undo: play now (and shuffle off)`;
 - `G`: `..., paused at the boundary 0, repeat-one loops 3`;
 - `ui`: Now Playing's line ends `; shuffle on, repeat one`.
 
@@ -893,6 +949,13 @@ version. Nothing here is IRAM code, and nothing gets `IRAM_ATTR`.
   and not (the first, not the last).
 - `test_an_add_to_an_empty_shuffled_queue`.
 - `test_undo_while_shuffled_restores_the_ranks`; `test_a_toggle_drops_the_undo`.
+- `test_a_play_that_sets_the_mode_undoes_it_too` (after the device
+  check): Shuffle all's `replace(.., true)` from an empty queue, off (the
+  undo leaves it empty and off), over a queue mid-way (its own order, its
+  current entry, ranks the positions, an add after it not shuffled in),
+  already on (stays on, its ranks), the other way (`false` over a
+  shuffled queue), a toggle after it (drops that undo), out of memory
+  (neither changes), and `n` 0 (a Clear in that mode).
 - `test_shuffle_is_repeatable_and_uniform`: the same hook sequence, the
   same order; 5 up next x 20,000 shuffles: each entry in each slot within
   ±3 % of 1/5; the current entry never moves.
@@ -917,6 +980,8 @@ version. Nothing here is IRAM code, and nothing gets `IRAM_ATTR`.
 - `test_v2_empty_shuffled_queue`.
 - `test_a_toggle_rewrites_the_file` (2 s later) and
   `test_a_toggle_during_a_write_restarts_it`.
+- `test_shuffle_alls_undo_writes_version_1_again`: version 2 after Shuffle
+  all, version 1 (the old queue whole) after its Undo.
 - `test_off_while_paused_pairs_the_resume_point_again`.
 
 **test_playback**:
@@ -930,6 +995,11 @@ version. Nothing here is IRAM code, and nothing gets `IRAM_ATTR`.
   still stops.
 - `test_repeat_one_with_pause_after_this_track`: the same entry cued at
   0:00, `pausedByTimer()`, `timerStops() + 1`.
+- `test_a_start_point_on_a_cued_entry_keeps_its_told_length` (after the
+  device check, step 14's note): `setStartPoint(60000, 0)` on that cued
+  entry keeps the length told for it, so the bar stays live; an entry
+  with none told keeps the catalog's hint. `test_a_start_point_keeps_its_length`
+  follows: stopped, nothing held, the told length before the catalog's.
 - `test_the_word_for_each_repeat_mode` (the block at :1375-1416): at the
   last entry Off nothing, All the first entry, One itself with a new
   token each loop.
@@ -938,6 +1008,10 @@ version. Nothing here is IRAM code, and nothing gets `IRAM_ATTR`.
   with a start point: the state, the key, `plays`, the start point and the
   length hint unchanged; the word moves to the new next.
 - `test_play_now_while_shuffled`: `kAnyStart`, and a start.
+- `test_shuffle_all_and_its_undo` (after the device check):
+  `playNow(.., kAnyStart, true)` over a queue that plays (the Undo: shuffle
+  off, the old current entry playing, the word its own next), from an
+  empty queue (empty, stopped, off) and already shuffled (stays on).
 - The 21 `setRepeat(bool)` calls become the enum (`false` Off, `true`
   All).
 
@@ -1011,8 +1085,12 @@ folder too wide alone); the waiting title's one line (Bold 16, 190).
 
 ## 10. Device check
 
-Not run yet (the build is ready: section 14). Every step but 11's
-listening, 14's slow scrub and 17 is scripted, in silent mode.
+Run once, at 065ec1f (2026-10-06). It found two faults, fixed since
+(section 14's last entry): Shuffle all's Undo left shuffle on (step 9),
+and Repeat One's "1" didn't read (step 1). It also found two of the
+expectations below wrong, corrected here (steps 11 and 14). Steps 1, 9a
+and 14 check the fixes. Every step but 11's listening, 14's slow scrub
+and 17 is scripted, in silent mode.
 
 **The build.** From PowerShell, with MSYSTEM removed: `Remove-Item
 Env:MSYSTEM -ErrorAction SilentlyContinue; pio run -e core2`, then `pio
@@ -1047,9 +1125,15 @@ Playing's line (it ends `; shuffle on, repeat one`).
    y 146-167, the transport drawn at y 176-231 with background above and
    below, the play disc (r 25) clear of the bezel, no indicator. `qS1`,
    `X`: the shuffle glyph under the dots, at (288, 218). `qR1`, `X`: both
-   glyphs, 4 px apart. `qS0`, `qR2`, `X`: the loop with its "1" alone (is
-   the "1" readable?). `qR0`. Each command logs its `[player]` line and
+   glyphs, 4 px apart. `qS0`, `qR2`, `X`: the loop and its bold "1"
+   beside it, alone (20 x 11 at x 278-297, y 213-223: the "1" a 2 px
+   stem, y 214-222, read at arm's length). `qS1` (still `qR2`), `X`: the
+   widest pair, 38 px at x 269-306, inside the dots' zone and clear of
+   the next button. `qS0`, `qR0`. Each command logs its `[player]` line and
    `q`'s line (`shuffle on, repeat all`, ...); `ui` agrees.
+   - *Found at 065ec1f*: the first Repeat One glyph's "1" was 1 px wide
+     and 5 tall inside the loop, between its arrowheads: unreadable (the
+     3x zoom). Redrawn (section 4.2).
 2. **The navigation area.** Each of `uit60,80` (the cover), `uit200,50`
    (the title), `uit200,101` (the artist), `uit200,124` (the album),
    `uit5,137` (the corner margin), `uit318,95` (the right edge) logs
@@ -1104,16 +1188,33 @@ Playing's line (it ends `; shuffle on, repeat one`).
    pos runs on.
 9. **Shuffle all.** `qS0`, `qx` (the empty state), `X`, then
    `uit246,189` (its Shuffle all button: x 184-307, y 172-205): `[ui]
-   shuffle all: N tracks (shuffle on)` after `[player] shuffle on:
-   nothing up next to shuffle`, the indicator on, `l`: `*` at 0 on a
-   random track, the rest shuffled. `qS0`: `l` is the library in its own
-   order from the playing track.
+   shuffle all: N tracks (shuffle on; was off)` (no `[player] shuffle
+   on` line: the mode is part of the Play), the toast "Shuffling N
+   tracks" with Undo, the indicator on, `l`: `*` at 0 on a random track,
+   the rest shuffled. `qS0`: `l` is the library in its own order from the
+   playing track.
+   - *Found at 065ec1f*: an Undo of it (from this empty state, shuffle
+     off) logged `[ui] undo: done` and emptied the queue, but `q` said
+     `shuffle on` over 0 tracks, and the next album played shuffled.
+     Fixed (section 2.6); step 9a checks it.
+   - **9a. Shuffle all's Undo.** `qS0`, `qx`, `uit246,189` (Shuffle
+     all): `q`: `shuffle on, ...; undo: play now (and shuffle off)`.
+     Within the toast's 4 s, `uit290,54` (its Undo, x 250 to the edge,
+     y 36-71): `[ui] undo: done (shuffle off again)`, the toast
+     "Undone"; `q`: `0 tracks, at 0, 0 up next; shuffle off`; Now
+     Playing's empty state. Then `qp<n>` (an album): `l` the album in
+     order, `*` at 0, nothing shuffled. The same with shuffle on before
+     (`qx`, `qS1`, Shuffle all): `(shuffle on; was on)`, `q`'s `undo:
+     play now` with no `(and ...)`, the Undo's line `[ui] undo: done`
+     alone, `q`: `shuffle on` over 0 tracks (as it was). The console's
+     `qu` instead of the toast gives `[queue] undo: done (shuffle off
+     again)`. `qS0` at the end.
 10. **Kept across a restart.** `qS1`, `qR2`, pause (`uit160,204`), `qs60`;
     reset. The boot: `[nvs] schema 2` (on the first boot of this
     firmware: `[nvs] schema 1 -> 2: migrated`), `[queue] repeat: one
     (saved)` (first boot: `off (none saved)`), `[queue] restored ...
     (position from NVS), shuffled`, `[queue] resume point: 1:00 into
-    ...`; `X`: the shuffle glyph and the "1" loop; `q`: `shuffle on,
+    ...`; `X`: the shuffle glyph and Repeat One's loop and "1"; `q`: `shuffle on,
     repeat one`. Then `qS0`, `qR0`, reset: `[queue] repeat: off (saved)`,
     no `, shuffled`.
 11. **Repeat at the end** (a short album: `qp<n>`; on its last track,
@@ -1124,8 +1225,14 @@ Playing's line (it ends `; shuffle on, repeat one`).
     (playing)` at each end and no `now at` line; `G`'s `repeat-one loops`
     counts them; next (`uit224,204`) moves on. **Listen at the seam** on
     an MP3 with a LAME tag and on a FLAC (the user's ears: no gap, no
-    click). `G0`: One starts the track again from 0:00 (an `[audio] ...
-    starting` line, faded in); `G1`. `qR0`.
+    click). `G0`: One starts the track again from 0:00, faded in: `[queue]
+    repeat one: M of M again (playing)`, then only the `[audio] refill:
+    first audio in the ring ...` line (a start at 0:00 logs no `[audio]
+    ... starting` line; only a start part of the way in does); `G1`.
+    `qR0`.
+    - *Corrected after 065ec1f*: this step expected an `[audio] ...
+      starting` line on the `G0` restart; the device logged the refill
+      line alone, which is right.
 12. **The sleep timer with One.** `qR2`, `Tt` near the end: `[sleep] this
     track is the last: pausing at its end`, the pause at its end, the
     same entry cued (`ui`: the same entry, 0 ms), the moon gone. Again
@@ -1143,6 +1250,22 @@ Playing's line (it ends `; shuffle on, repeat one`).
     hand: a slow scrub shows the readout over the album row and the
     cover's bottom, and the cover comes back whole at the lift (once with
     a thumbnail arriving mid-scrub: a new album's first scrub).
+    - *Found at 065ec1f, known* (the console's path only: no touch makes
+      a start point without a length): run straight after step 12, `qs60`
+      on the entry the sleep timer's end-of-track pause cued (Repeat One
+      cues the track that just played, its length told by step 12's
+      seek) left the bar inert, `ui`: `60000 / 0 ms ... the bar: inert`,
+      until a play/pause. `setStartPoint(ms, 0)` took the catalog's length
+      hint for a stopped or cued entry, 0 for a library track, over the
+      length told for the entry, which the bar showed until then. Fixed
+      (one branch in `PlaybackController::placeStart()`, the length the
+      bar already shows): `lengthHint()` (the length told for this
+      entry's key: a seek's, a start point's) before the catalog's. Check: `qR2`, a seek to a
+      track's last 10 s, `Tt`, the pause at its end, `qR0`, `qs60`: `ui`:
+      `60000 / <its length> ms ...; the bar: rest, the knob at x ...`;
+      `uit90,150` seeks (`seek 1:00 -> ...`). An entry with no length told
+      (one never played) has none to keep: `qs` gives it the catalog's
+      hint, as before.
 15. **The undo a toggle took.** An add from the Library with its toast:
     `ui1`, an album open (`X` to find its bar), Play next on its bar by
     the scripted finger; within the toast's 4 s, `qS1`: `[ui] the Undo
@@ -1259,8 +1382,38 @@ too; comments and SEEK-BAR.md's lines that still had the old rows or
 missed the settle). 1,088 host tests
 pass (41 new); at 4e47b69 core2 and core2-dio build with every guard
 (iram_diet: 51 of 51 objects moved, the hot set pinned; cache_guard ok;
-flash_guard: 2.20 MB, 37 % of the slot). Nothing has run on the device
-yet (section 10).
+flash_guard: 2.20 MB, 37 % of the slot). The device check ran at
+065ec1f (section 10).
+
+**After the device check** (the commit "Now Playing menus: Shuffle all's
+Undo keeps the mode; a readable Repeat One"):
+
+- **Shuffle all's Undo keeps the mode** (section 2.6): QueueModel's
+  snapshot carries the mode (`undoShuffled_`) and `undo()` restores it;
+  `replace(.., shuffled)` and `PlaybackController::playNow(.., shuffle)`
+  set the mode inside the edit; `Ui::shuffleAll()` calls that instead of
+  `host_.setShuffle(true)` then `playNow()`, and clears the "added" marks
+  only when the Play took. `undoShuffled()` feeds `q`'s `undo: play now
+  (and shuffle off)`; the toast's and `qu`'s undo lines add `(shuffle off
+  again)`; Shuffle all's line says `(shuffle on; was off)`.
+- **Repeat One's glyph**: the loop and a bold "1" beside it, 20 x 11
+  (section 4.2); `ui_icons.py` checks the indicator's bounds; every other
+  icon's bytes in `IconData.cpp` are unchanged.
+- **A start point on a cued entry keeps its told length** (section 10,
+  step 14's note): `placeStart()` falls back to `lengthHint()` before the
+  catalog's hint.
+- The doc's wrong expectations: step 11's `G0` restart (no `[audio] ...
+  starting` line at 0:00) and step 14's note.
+
+1,092 host tests pass (4 new: `test_a_play_that_sets_the_mode_undoes_it_too`,
+`test_shuffle_alls_undo_writes_version_1_again`,
+`test_shuffle_all_and_its_undo`,
+`test_a_start_point_on_a_cued_entry_keeps_its_told_length`; and
+`test_a_start_point_keeps_its_length` follows the told length). core2 and
+core2-dio build with every guard (iram_diet: 51 of 51 objects moved, the
+hot set pinned; cache_guard ok; flash_guard: 2.20 MB, 37 % of the slot;
+core2's app 2,243,247 B), no warnings. Not yet run on the device: section
+10's steps 1, 9a and 14 check it.
 
 Where the build differs from sections 1-13, and why:
 

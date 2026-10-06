@@ -84,6 +84,7 @@ bool QueueModel::snapshot(Edit edit) {
   if (q_.size) std::memcpy(undo_.data, q_.data, static_cast<size_t>(q_.size) * sizeof(Entry));
   undo_.size = q_.size;
   undoCurrent_ = current_;
+  undoShuffled_ = shuffled_;
   undoEdit_ = edit;
   return true;
 }
@@ -149,16 +150,21 @@ bool QueueModel::insertNext(const uint32_t* tracks, uint32_t n) {
 
 bool QueueModel::append(const uint32_t* tracks, uint32_t n) { return insertAt(q_.size, tracks, n, Edit::Append); }
 
-bool QueueModel::replace(const uint32_t* tracks, uint32_t n, uint32_t start) {
-  if (n == 0) return clear();
-  if (!tracks || !reserve(q_, n)) return false;
-  snapshot(Edit::Replace);
+bool QueueModel::replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled) {
+  if (n == 0 && shuffled == shuffled_) return clear();
+  if (n && (!tracks || !reserve(q_, n))) return false;
+  // The snapshot first: it holds the mode the queue was in (undo() puts it
+  // back with the entries), then the mode this Play is laid out in.
+  snapshot(n ? Edit::Replace : Edit::Clear);
+  shuffled_ = shuffled;
   for (uint32_t i = 0; i < n; ++i) {
     q_.data[i] = Entry{tracks[i], nextKey_++, i};
     if (nextKey_ == kNone) nextKey_ = 0;
   }
   q_.size = n;
-  if (shuffled_) {
+  if (n == 0) {
+    current_ = -1;
+  } else if (shuffled_) {
     // The chosen track first (kAnyStart: a random one), every other one
     // shuffled after it, those before it in the list too; the ranks the
     // given order.
@@ -318,6 +324,7 @@ bool QueueModel::undo() {
   const uint32_t key = currentKey();
   std::swap(q_, undo_);  // undo_ keeps the edited entries' memory for the next snapshot
   undoEdit_ = Edit::None;
+  shuffled_ = undoShuffled_;  // the snapshot's mode (a Play that set it: the one before)
   const uint32_t pos = positionOf(key);
   current_ = pos != kNone ? static_cast<int32_t>(pos) : undoCurrent_;
   if (current_ >= static_cast<int32_t>(q_.size)) current_ = static_cast<int32_t>(q_.size) - 1;

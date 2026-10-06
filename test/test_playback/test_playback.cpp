@@ -864,9 +864,10 @@ void test_a_dropped_start_point_doesnt_come_back_with_an_undo() {
 }
 
 // The start point's length: the one given; else a waiting start point's,
-// the held track's (the console's qs while paused), or the catalog's hint.
-// It goes to the backend with the play (a VBR file without a table of
-// contents is placed by it); a play from 0:00 gets the catalog's hint.
+// the held track's (the console's qs while paused), the one told for the
+// entry (lengthHint(): stopped or cued, nothing held), or the catalog's
+// hint. It goes to the backend with the play (a VBR file without a table
+// of contents is placed by it); a play from 0:00 gets the catalog's hint.
 void test_a_start_point_keeps_its_length() {
   uint32_t ms = 0, dur = 0;
   Rig r(2);
@@ -887,7 +888,15 @@ void test_a_start_point_keeps_its_length() {
   TEST_ASSERT_EQUAL_UINT32(245000, r.audio.lastHintMs);
   r.player.play(0);                   // from 0:00: the catalog's hint (none for a file)
   TEST_ASSERT_EQUAL_UINT32(0, r.audio.lastHintMs);
-  // Stopped, nothing held: the catalog's hint.
+  // Stopped, nothing held: the length told for the entry (its play from
+  // the start point above), as the bar shows it meanwhile.
+  r.player.stop();
+  TEST_ASSERT_EQUAL_UINT32(245000, r.player.lengthHint());
+  r.player.setStartPoint(30000, 0);
+  TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur));
+  TEST_ASSERT_EQUAL_UINT32(245000, dur);
+  // An entry with no length told: the catalog's hint (none for a file).
+  r.player.play(1);
   r.player.stop();
   r.player.setStartPoint(30000, 0);
   TEST_ASSERT_TRUE(r.player.startPoint(&ms, &dur));
@@ -1634,6 +1643,47 @@ void test_repeat_one_with_pause_after_this_track() {
   TEST_ASSERT_FALSE(p.pausedByTimer());
 }
 
+// A start point with no length said (the console's qs) on an entry the
+// sleep timer's end-of-track pause cued, Repeat One's (the device check,
+// QUEUE-MODES.md section 10 step 14): it takes the length told for the
+// entry, which the bar shows meanwhile, so the bar stays live; the
+// catalog's hint (0 for a library track) left it inert until a play. An
+// entry with no length told keeps the catalog's hint, as before.
+void test_a_start_point_on_a_cued_entry_keeps_its_told_length() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.setRepeat(Repeat::One);
+  p.play(1);
+  a.duration = 207000;
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, p.seek(r.queue.keyAt(1), 201000, 207000));
+  p.setPauseAfterTrack(true);
+  a.position = 207000;
+  a.finishedFlag = true;
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());  // the same entry, cued at 0:00
+  a.duration = 0;                              // (let go: the backend knows no length)
+  a.position = 0;
+  uint32_t pos = 1, len = 1;
+  p.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(207000, len);  // live before the start point
+  p.setStartPoint(60000, 0);              // qs60
+  p.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(60000, pos);
+  TEST_ASSERT_EQUAL_UINT32(207000, len);  // and after it
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Waits, p.seek(r.queue.keyAt(1), 90000, len));
+  p.togglePlayPause();
+  TEST_ASSERT_EQUAL_UINT32(90000, a.lastStartMs);
+  TEST_ASSERT_EQUAL_UINT32(207000, a.lastHintMs);
+  // Nothing told for the entry (the next one, never played): the catalog's.
+  Rig s(3);
+  s.player.setStartPoint(60000, 0);
+  s.player.shownTime(&pos, &len);
+  TEST_ASSERT_EQUAL_UINT32(60000, pos);
+  TEST_ASSERT_EQUAL_UINT32(0, len);
+}
+
 // The word at the last entry: Off nothing, All the first entry, One the
 // entry itself, with a new token each loop (never the heard one).
 void test_the_word_for_each_repeat_mode() {
@@ -1777,6 +1827,53 @@ void test_play_now_while_shuffled() {
   const uint32_t first = r.queue.currentTrack();
   p.setShuffle(false);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(first), p.currentIndex());  // the given order around it
+}
+
+// Shuffle all (Ui::shuffleAll()): a Play that turns shuffle on, one edit;
+// its Undo puts back the queue and the mode it found (docs/QUEUE-MODES.md
+// section 2.6).
+void test_shuffle_all_and_its_undo() {
+  const uint32_t ids[] = {0, 1, 2, 3, 4, 5, 6, 7};
+  {
+    // Over a queue that plays, shuffle off.
+    Rig r(8);
+    FakeAudioBackend& a = r.audio;
+    PlaybackController& p = r.player;
+    p.play(2);
+    TEST_ASSERT_TRUE(p.playNow(ids, 8, PlaybackController::kAnyStart, true));
+    TEST_ASSERT_TRUE(p.shuffle());
+    TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+    TEST_ASSERT_TRUE(p.undo());
+    TEST_ASSERT_FALSE(p.shuffle());
+    TEST_ASSERT_EQUAL_INT(2, p.currentIndex());  // the track that was current, in its own order
+    TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.lastPath.c_str());
+    TEST_ASSERT_EQUAL_STRING("/music/d.mp3", a.nexts.back().path.c_str());  // the word: the own order's next
+    for (uint32_t i = 0; i < 8; ++i) TEST_ASSERT_EQUAL_UINT32(i, r.queue.trackAt(i));
+  }
+  {
+    // From an empty queue (the empty states' button): empty, stopped and
+    // off again, not "shuffle on" over nothing.
+    Rig r(8);
+    PlaybackController& p = r.player;
+    p.clearQueue();
+    TEST_ASSERT_TRUE(p.playNow(ids, 8, PlaybackController::kAnyStart, true));
+    TEST_ASSERT_TRUE(p.shuffle());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+    TEST_ASSERT_TRUE(p.undo());
+    TEST_ASSERT_FALSE(p.shuffle());
+    TEST_ASSERT_FALSE(p.hasTrack());
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+  }
+  {
+    // Already shuffled: it stays on.
+    Rig r(8);
+    PlaybackController& p = r.player;
+    p.setShuffle(true);
+    TEST_ASSERT_TRUE(p.playNow(ids, 8, PlaybackController::kAnyStart, true));
+    TEST_ASSERT_TRUE(p.undo());
+    TEST_ASSERT_TRUE(p.shuffle());
+  }
 }
 
 // ---- resume anchors (docs/SEEK.md section 5) ----
@@ -2487,11 +2584,13 @@ int main(int, char**) {
   RUN_TEST(test_repeat_one_next_and_prev_move_and_wrap);
   RUN_TEST(test_repeat_one_moves_on_from_a_failure);
   RUN_TEST(test_repeat_one_with_pause_after_this_track);
+  RUN_TEST(test_a_start_point_on_a_cued_entry_keeps_its_told_length);
   RUN_TEST(test_the_word_for_each_repeat_mode);
   RUN_TEST(test_set_repeat_is_an_action);
   RUN_TEST(test_set_shuffle_changes_nothing_that_plays);
   RUN_TEST(test_shuffle_off_with_the_same_next_keeps_the_word);
   RUN_TEST(test_play_now_while_shuffled);
+  RUN_TEST(test_shuffle_all_and_its_undo);
   RUN_TEST(test_a_start_points_anchor_reaches_the_play_once);
   RUN_TEST(test_a_start_points_anchor_goes_with_it);
   RUN_TEST(test_the_resume_point_carries_the_held_tracks_anchor);

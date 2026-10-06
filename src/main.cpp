@@ -926,9 +926,14 @@ static void queueCommand(const char* a) {
     case 'x':
       player.clearQueue();
       break;
-    case 'u':
-      Serial.printf("[queue] undo: %s\n", player.undo() ? "done" : "nothing to undo");
+    case 'u': {
+      const bool shuffled = player.shuffle();
+      const bool undone = player.undo();
+      // (Shuffle all's: the mode it found comes back with the queue.)
+      Serial.printf("[queue] undo: %s%s\n", undone ? "done" : "nothing to undo",
+                    player.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)");
       break;
+    }
     case 'S':
       // qS toggles shuffle; qS0 / qS1 set it.
       applyShuffle(n < 0 ? !player.shuffle() : n != 0);

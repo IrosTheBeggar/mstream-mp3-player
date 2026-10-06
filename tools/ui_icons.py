@@ -354,20 +354,41 @@ REPEAT_SMALL = [
     "....#.........",
 ]
 
-# The loop with a "1" in it: Repeat One.
+# Repeat One: the same loop, pixel for pixel, and a bold "1" beside it (2 px
+# stem, 9 rows, a flag and a foot), 2 px clear of the loop. The device check
+# found the first try's "1" (1 px wide, 5 tall, squeezed between the
+# arrowheads inside the loop) unreadable; this one reads at arm's length.
 REPEAT_ONE_SMALL = [
-    ".........#....",
-    ".........##...",
-    ".###########..",
-    ".#.....#.##...",
-    ".#....##.#..#.",
-    ".#.....#....#.",
-    ".#..#..#....#.",
-    "...##.###...#.",
-    "..###########.",
-    "...##.........",
-    "....#.........",
+    ".........#..........",
+    ".........##.....##..",
+    ".###########...###..",
+    ".#.......##.....##..",
+    ".#.......#..#...##..",
+    ".#..........#...##..",
+    ".#..#.......#...##..",
+    "...##.......#...##..",
+    "..###########...##..",
+    "...##..........####.",
+    "....#...............",
 ]
+
+# The indicator's bounds (NowPlayingPage::drawModes(): the glyphs centred as
+# a group at (288, 218), 4 px apart, under the dots): 11 rows (y 213-223),
+# and the widest group, shuffle and Repeat One, no wider than the "..."
+# zone's pressed circle (r 24 at y 204) is at the indicator's middle row:
+# 2 * floor(sqrt(24^2 - 14^2)) = 38 (x 269-306).
+INDICATOR_H = 11
+INDICATOR_GAP = 4
+INDICATOR_MAX_W = 38
+
+
+def check_indicator():
+    for art in (SHUFFLE_SMALL, REPEAT_SMALL, REPEAT_ONE_SMALL):
+        assert len(art) == INDICATOR_H, len(art)
+    for one, loop in zip(REPEAT_ONE_SMALL, REPEAT_SMALL):
+        assert one[:13] == loop[:13], (one, loop)  # the same loop
+    widest = len(SHUFFLE_SMALL[0]) + INDICATOR_GAP + max(len(REPEAT_SMALL[0]), len(REPEAT_ONE_SMALL[0]))
+    assert widest <= INDICATOR_MAX_W, widest
 
 
 ICONS = [
@@ -431,6 +452,7 @@ def main():
     ap.add_argument("--out", default=os.path.join(os.path.dirname(__file__), "..", "src", "ui", "IconData.cpp"))
     ap.add_argument("--preview", action="store_true")
     args = ap.parse_args()
+    check_indicator()
     nl = chr(10)
     lines = [
         "// SPDX-License-Identifier: GPL-3.0-or-later",

@@ -324,7 +324,7 @@ pages do:
   and "..." for **Shuffle** (on, off), **Repeat** (off, all, one) and the
   **Sleep timer**: a tap on Shuffle or Repeat changes it there and then, the
   menu staying open. A small shuffle and repeat sign under the "..." shows
-  which is on (the loop with a "1" is Repeat One).
+  which is on (the loop with a "1" beside it is Repeat One).
 - **Library**: three lists at the top: **Artists**, **Albums** (with their
   covers) and **Folders** (the card's folders; only audio files are listed,
   the others counted: "14 audio files, 1 other"). An artist opens its
@@ -433,7 +433,8 @@ what's up next (the track that plays plays on, and the Queue tab shows the
 order that plays); off puts the queue's own order back. While it's on, an
 album's or an artist's Play starts on a random track; Play next and +
 Queue never shuffle what you add. **Shuffle all** (an empty queue's
-button) turns shuffle on. **Repeat is off by default: the queue stops at
+button) turns shuffle on; its Undo puts the queue and shuffle back as
+they were. **Repeat is off by default: the queue stops at
 its end** (before 0.7.0 it always started again from the top). All starts
 it again from the top, with no gap; One plays the track again at its end,
 and next and previous still move. The sleep timer's End of track, End of

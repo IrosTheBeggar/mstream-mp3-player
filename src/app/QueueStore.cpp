@@ -323,11 +323,15 @@ bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
 void QueueStore::printStatus() const {
   static const char* const kEdits[] = {"none",   "play now",      "play next", "add",
                                        "remove", "move to next", "clear up next", "clear"};
-  Serial.printf("[queue] %lu tracks, at %d, %lu up next; shuffle %s, repeat %s; undo: %s; file generation %lu%s, "
+  // An undo that would put the shuffle mode back too (Shuffle all's) says so.
+  const char* undoMode = queue_.undoShuffled() == queue_.shuffled() ? ""
+                         : queue_.undoShuffled()                    ? " (and shuffle on)"
+                                                                    : " (and shuffle off)";
+  Serial.printf("[queue] %lu tracks, at %d, %lu up next; shuffle %s, repeat %s; undo: %s%s; file generation %lu%s, "
                 "%lu writes (last %lu ms), %lu failures\n",
                 (unsigned long)queue_.size(), queue_.current() + 1, (unsigned long)queue_.upNext(),
                 queue_.shuffled() ? "on" : "off", repeatName(static_cast<uint8_t>(player_.repeat())),
-                kEdits[static_cast<int>(queue_.undoable())], (unsigned long)saver_.generation(),
+                kEdits[static_cast<int>(queue_.undoable())], undoMode, (unsigned long)saver_.generation(),
                 saver_.writing() ? " (writing)" : saver_.contentDirty() ? " (to write)" : "",
                 (unsigned long)saver_.writes(), (unsigned long)saver_.lastWriteMs(), (unsigned long)saver_.failures());
   // The resume point in NVS, and the player's start point (qs<sec>).

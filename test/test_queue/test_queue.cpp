@@ -833,6 +833,121 @@ void test_a_toggle_drops_the_undo() {
   TEST_ASSERT_FALSE(q.undo());
 }
 
+// Shuffle all: a Play that turns the mode on, one edit; its undo puts back
+// the queue and the mode it found (docs/QUEUE-MODES.md section 2.6).
+void test_a_play_that_sets_the_mode_undoes_it_too() {
+  const uint32_t lib[] = {50, 51, 52, 53, 54, 55, 56, 57, 58, 59};
+  {
+    // From an empty queue, shuffle off (the device's case): undo leaves it
+    // empty and off, not "shuffle on" over nothing.
+    QueueModel q;
+    TEST_ASSERT_TRUE(q.replace(lib, 10, QueueModel::kAnyStart, true));
+    TEST_ASSERT_TRUE(q.shuffled());
+    TEST_ASSERT_EQUAL_INT(0, q.current());
+    TEST_ASSERT_TRUE(ownOrder(q) == std::vector<uint32_t>(std::begin(lib), std::end(lib)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::Replace), static_cast<int>(q.undoable()));
+    TEST_ASSERT_FALSE(q.undoShuffled());  // what the undo puts back
+    const uint32_t v = q.contentVersion();
+    TEST_ASSERT_TRUE(q.undo());
+    TEST_ASSERT_FALSE(q.shuffled());
+    TEST_ASSERT_TRUE(q.empty());
+    TEST_ASSERT_EQUAL_INT(-1, q.current());
+    TEST_ASSERT_TRUE(q.contentVersion() != v);  // the saver writes the mode back
+    TEST_ASSERT_FALSE(q.undoShuffled());        // (no undo: the mode itself)
+  }
+  {
+    // Over a queue, off, mid-way: its own order and its current entry come
+    // back, unshuffled; an add after the undo is no shuffled add.
+    QueueModel q;
+    fill(q, 6, 3);
+    const std::vector<uint32_t> was = keys(q);
+    TEST_ASSERT_TRUE(q.replace(lib, 10, QueueModel::kAnyStart, true));
+    TEST_ASSERT_TRUE(q.undo());
+    TEST_ASSERT_FALSE(q.shuffled());
+    TEST_ASSERT_TRUE(keys(q) == was);
+    expectTracks(q, {10, 11, 12, 13, 14, 15});
+    TEST_ASSERT_EQUAL_INT(3, q.current());
+    for (uint32_t i = 0; i < q.size(); ++i) TEST_ASSERT_EQUAL_UINT32(i, q.rankAt(i));
+    const uint32_t two[] = {7, 8};
+    TEST_ASSERT_TRUE(q.append(two, 2));
+    expectTracks(q, {10, 11, 12, 13, 14, 15, 7, 8});
+  }
+  {
+    // Already on: the undo keeps it on, with the old order and its ranks.
+    QueueModel q;
+    fill(q, 10, 2);
+    q.setShuffled(true);
+    const std::vector<uint32_t> was = keys(q), own = ownOrder(q);
+    TEST_ASSERT_TRUE(q.replace(lib, 10, QueueModel::kAnyStart, true));
+    TEST_ASSERT_TRUE(q.undoShuffled());
+    TEST_ASSERT_TRUE(q.undo());
+    TEST_ASSERT_TRUE(q.shuffled());
+    TEST_ASSERT_TRUE(keys(q) == was);
+    TEST_ASSERT_TRUE(ownOrder(q) == own);
+  }
+  {
+    // The other way (a Play that turns it off): the same rule.
+    QueueModel q;
+    fill(q, 10, 2);
+    q.setShuffled(true);
+    const std::vector<uint32_t> was = keys(q);
+    TEST_ASSERT_TRUE(q.replace(lib, 10, 4, false));
+    TEST_ASSERT_FALSE(q.shuffled());
+    TEST_ASSERT_EQUAL_INT(4, q.current());
+    expectTracks(q, {std::begin(lib), std::end(lib)});
+    TEST_ASSERT_TRUE(q.undo());
+    TEST_ASSERT_TRUE(q.shuffled());
+    TEST_ASSERT_TRUE(keys(q) == was);
+  }
+  {
+    // A toggle after it is no edit: it drops that undo, as any.
+    QueueModel q;
+    fill(q, 6, 3);
+    q.replace(lib, 10, QueueModel::kAnyStart, true);
+    q.setShuffled(false);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::None), static_cast<int>(q.undoable()));
+    TEST_ASSERT_FALSE(q.undo());
+    TEST_ASSERT_EQUAL_UINT32(10, q.size());
+  }
+  {
+    // No memory for the Play: false, and neither the queue nor the mode
+    // changed.
+    QueueModel q(Heap::alloc, Heap::release);
+    fill(q, 6, 3);  // (room for 16)
+    const std::vector<uint32_t> was = keys(q);
+    const uint32_t v = q.contentVersion();
+    std::vector<uint32_t> big(40, 50);
+    Heap::failing = true;
+    TEST_ASSERT_FALSE(q.replace(big.data(), 40, QueueModel::kAnyStart, true));
+    Heap::failing = false;
+    TEST_ASSERT_FALSE(q.shuffled());
+    TEST_ASSERT_TRUE(keys(q) == was);
+    TEST_ASSERT_EQUAL_UINT32(v, q.contentVersion());
+  }
+  {
+    // Nothing to play: a Clear, in that mode, undone with it. In the same
+    // mode, clear() itself (an empty queue: no edit, the undo kept).
+    QueueModel q;
+    fill(q, 6, 3);
+    TEST_ASSERT_TRUE(q.replace(nullptr, 0, 0, true));
+    TEST_ASSERT_TRUE(q.empty());
+    TEST_ASSERT_TRUE(q.shuffled());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::Clear), static_cast<int>(q.undoable()));
+    TEST_ASSERT_TRUE(q.undo());
+    TEST_ASSERT_FALSE(q.shuffled());
+    expectTracks(q, {10, 11, 12, 13, 14, 15});
+    TEST_ASSERT_EQUAL_INT(3, q.current());
+    QueueModel e;
+    const uint32_t one[] = {9};
+    e.append(one, 1);
+    e.clear();
+    TEST_ASSERT_TRUE(e.replace(nullptr, 0, 0, false));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::Clear), static_cast<int>(e.undoable()));
+    TEST_ASSERT_TRUE(e.undo());
+    expectTracks(e, {9});
+  }
+}
+
 void test_shuffle_is_repeatable_and_uniform() {
   // The same hook sequence, the same order (no hook: the fixed one).
   {
@@ -2027,6 +2142,31 @@ void test_a_toggle_during_a_write_restarts_it() {
   TEST_ASSERT_EQUAL_STRING(wholeText(q, c, st.posGeneration).c_str(), st.file.c_str());
 }
 
+// Shuffle all, then its Undo: the file is version 2 after the Play and
+// version 1 again after the undo, the old queue whole (the mode is saved
+// with the queue, so the undo's mode reaches the card as any edit does).
+void test_shuffle_alls_undo_writes_version_1_again() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  fillLong(q);
+  saver.loaded(3, false, 0);
+  const uint32_t all[] = {0, 1, 2, 3, 4, 5};
+  TEST_ASSERT_TRUE(q.replace(all, 6, QueueModel::kAnyStart, true));
+  for (uint32_t t = 0; t < 4000; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 2 "));
+  TEST_ASSERT_TRUE(q.undo());
+  for (uint32_t t = 5000; t < 9000; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(2, st.commits);
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 1 "));
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, st.posGeneration).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(200, q.size());
+}
+
 // Off while paused moves the current entry to its own place: the resume
 // point is saved again at the new line once the file holds it (the
 // moved-only rule), with the new generation.
@@ -2093,6 +2233,7 @@ int main(int, char**) {
   RUN_TEST(test_an_add_to_an_empty_shuffled_queue);
   RUN_TEST(test_undo_while_shuffled_restores_the_ranks);
   RUN_TEST(test_a_toggle_drops_the_undo);
+  RUN_TEST(test_a_play_that_sets_the_mode_undoes_it_too);
   RUN_TEST(test_shuffle_is_repeatable_and_uniform);
   RUN_TEST(test_a_toggle_allocates_nothing);
   RUN_TEST(test_assign_with_ranks);
@@ -2123,6 +2264,7 @@ int main(int, char**) {
   RUN_TEST(test_resume_anchor_saved_with_the_point);
   RUN_TEST(test_a_toggle_rewrites_the_file);
   RUN_TEST(test_a_toggle_during_a_write_restarts_it);
+  RUN_TEST(test_shuffle_alls_undo_writes_version_1_again);
   RUN_TEST(test_off_while_paused_pairs_the_resume_point_again);
   return UNITY_END();
 }

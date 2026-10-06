@@ -47,8 +47,11 @@
 //                       it stay where they are
 //   setShuffled(false)  the entries sorted back by rank: the own order,
 //                       the current entry in its place there
-// A toggle is no edit: it drops the undo (a snapshot is always from the
-// mode the queue is in) and allocates nothing. While shuffled the edits
+// A toggle is no edit: it drops the undo and allocates nothing. Each
+// snapshot carries the mode it was taken in, and undo() puts it back with
+// the entries: the same mode for every edit but a Play that sets it
+// (replace(.., shuffled): Shuffle all's, which turns it on), whose undo
+// brings back the queue and the mode it had. While shuffled the edits
 // keep the ranks: Play (replace()) puts the chosen track first (kAnyStart:
 // a random one) and shuffles every other after it, the ranks the given
 // order; Play next ranks right after the current entry and + Queue after
@@ -121,7 +124,11 @@ public:
   bool setShuffled(bool on);
 
   // ---- editing: false when out of memory, the queue then unchanged ----
-  bool replace(const uint32_t* tracks, uint32_t n, uint32_t start);
+  bool replace(const uint32_t* tracks, uint32_t n, uint32_t start) { return replace(tracks, n, start, shuffled_); }
+  // Play in a mode (Shuffle all: shuffled): the mode set and the queue
+  // replaced as one edit, laid out as the mode's Play; undo() puts both
+  // back. Nothing to play (`n` 0) is a Clear, in that mode.
+  bool replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled);
   bool insertNext(const uint32_t* tracks, uint32_t n);
   bool append(const uint32_t* tracks, uint32_t n);
   // Positions out of range and repeats are ignored; any order.
@@ -143,9 +150,12 @@ public:
   // The last edit, if it can be undone (None after undo(), a restore, or a
   // snapshot that didn't fit in memory).
   Edit undoable() const { return undoEdit_; }
-  // The queue as it was before the last edit. The current entry is the one
-  // current now if it was there then (what plays keeps playing), otherwise
-  // the one that was current then.
+  // The mode undo() puts back: the one the last edit was made in (it
+  // differs from shuffled() only after a Play that set the mode).
+  bool undoShuffled() const { return undoEdit_ != Edit::None ? undoShuffled_ : shuffled_; }
+  // The queue as it was before the last edit, in the mode it was in then.
+  // The current entry is the one current now if it was there then (what
+  // plays keeps playing), otherwise the one that was current then.
   bool undo();
   void dropUndo();
 
@@ -171,8 +181,8 @@ private:
 
   bool reserve(Array& a, uint32_t n);
   void drop(Array& a);
-  // Copies the entries to the undo snapshot (the edit is then undoable);
-  // false: no memory for it (the edit goes ahead, not undoable).
+  // Copies the entries and the mode to the undo snapshot (the edit is then
+  // undoable); false: no memory for it (the edit goes ahead, not undoable).
   bool snapshot(Edit edit);
   // A bit per position in `positions` (in range), in a block from the
   // hooks; nullptr: no memory. `count`: how many distinct positions.
@@ -198,5 +208,6 @@ private:
 
   Array undo_;
   int32_t undoCurrent_ = -1;
+  bool undoShuffled_ = false;  // the mode the snapshot was taken in
   Edit undoEdit_ = Edit::None;
 };

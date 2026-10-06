@@ -1427,7 +1427,10 @@ the browsing UI hold its **track ids**, never strings.
   and the current entry and what played stay put; each entry's **rank** is
   its place in the queue's own order, and off sorts back by rank, the
   current entry in its own place. A toggle is no edit: it drops the undo
-  and allocates nothing. While shuffled, Play puts the chosen track first
+  and allocates nothing. A snapshot carries the mode it was taken in and
+  undo puts it back: Shuffle all's Play turns shuffle on as part of the
+  edit (`replace(.., shuffled)`), so its Undo puts back the old queue and
+  the mode it had. While shuffled, Play puts the chosen track first
   (a container's Play, `kAnyStart`, a random one) and shuffles the rest
   after it, the ranks the given order; Play next ranks right after the
   current entry and + Queue after the highest rank, never shuffled in (the
@@ -1549,7 +1552,8 @@ the browsing UI hold its **track ids**, never strings.
   at 2345678 + 517 samples, preroll 2343590, exact; start point waiting:
   none`);
   `qs<sec>` sets a start point on the current entry (playing: it starts
-  there now), with the length as known (the held track's, else the
+  there now), with the length as known (the held track's; stopped or
+  cued, the one told for the entry, as the bar shows it; else the
   catalog's) and no anchor (a seek: a second the run decoded is exact by
   its index), to check the seek without a restart; `qs0` clears it. A
   dropped start point stays dropped: an undo that brings its entry back
@@ -2265,12 +2269,16 @@ Queue, Dance and Output (with its Pair and About pages).
     (`queue`/`repeat`). The sleep timer wins over Repeat One: End of
     track, album or queue pauses at this track's end, the same entry cued
     at 0:00. "Shuffle all" (the empty states) turns shuffle on and plays
-    the library from a random track.
+    the library from a random track, as one edit: its toast's Undo puts
+    back the queue and the shuffle mode it found.
   - **The indicator**: in the "..." zone under its dots (centred at
     (288, 218), in the Now Playing accent), as the volume zone has its
     "60%" under its icon: a small shuffle glyph while shuffle is on, a
-    small repeat glyph for All (with a "1" in it for One), the two side by
-    side, 4 px apart, when both are on; nothing when neither is. It sits
+    small repeat glyph for All (the loop, 14 x 11), the same loop with a
+    bold "1" beside it for One (20 x 11: a 2 px stem, 9 rows; a "1"
+    squeezed inside the loop didn't read on the device), the two side by
+    side, 4 px apart, when both are on (38 x 11 at most, x 269-306, y
+    213-223); nothing when neither is. It sits
     on the control that changes it. It is drawn with the transport, which
     is drawn again when either changes; the page under a sheet is frozen,
     so a change made in the menu shows as the sheet closes.
@@ -2395,8 +2403,9 @@ Queue, Dance and Output (with its Pair and About pages).
   what played) or "Clear queue" (stops; a dialog with a red Clear asks
   first). Every edit has Undo on its toast. A track that failed keeps an
   amber "!" (`KeyRing`, the last 16 entries by key). Empty: "Your queue is
-  empty", Open Library, Shuffle all (shuffle on, then the whole library
-  from a random track: QUEUE-MODES.md section 2.5).
+  empty", Open Library, Shuffle all (the whole library from a random
+  track, shuffle on, one edit whose Undo puts the mode back too:
+  QUEUE-MODES.md sections 2.5 and 2.6).
 - **Output** (spec §6.6, mockups 19-21, with the grafts; a list, so it
   scrolls): the **Bluetooth card** (two rows; `OutputModel`'s view of the
   link and the session: No headphones paired [Pair new headphones], Not
@@ -2560,7 +2569,7 @@ Queue, Dance and Output (with its Pair and About pages).
   `[queue] now at n of N (state)`, every tab change (`[ui] tab: Queue`) and
   every action that plays something (`[ui] queue: play entry n (its row's
   bar)`, `[ui] now playing: next`, `[ui] library: play 14 tracks`, `[ui]
-  shuffle all: 77 tracks (shuffle on)`), every queue edit from the Queue (`[ui] queue:
+  shuffle all: 77 tracks (shuffle on; was off)`), every queue edit from the Queue (`[ui] queue:
   removed 2`, `... to play next`, `... clear up next`, `... cleared`) and
   every output change (`[output] ...`, `[ui] bluetooth: ...`). `ui` adds
   the Bluetooth link and session and the queue's marks.

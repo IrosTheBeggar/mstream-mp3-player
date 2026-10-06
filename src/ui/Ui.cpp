@@ -213,15 +213,18 @@ void Ui::shuffleAll() {
     warn("No music on the card to shuffle");
     return;
   }
-  // Shuffle on (the mode, not a one-shot: the menu then says what plays,
-  // and Off brings the library's own order back, A-Z, from the track that
-  // plays), then the whole library from a random track (QueueModel copies
-  // the ids and shuffles them: docs/QUEUE-MODES.md section 2.5).
+  // The whole library from a random track, with shuffle on (the mode, not
+  // a one-shot: the menu then says what plays, and Off brings the library's
+  // own order back, A-Z, from the track that plays). One edit, the mode in
+  // it, so the toast's Undo puts back the queue and the mode it found
+  // (QueueModel copies the ids and shuffles them: docs/QUEUE-MODES.md
+  // sections 2.5 and 2.6).
   const LibraryIndex::Span all = index->allTracks();
-  if (!player_.shuffle()) host_.setShuffle(true);
-  const bool ok = player_.playNow(all.ids, all.count, PlaybackController::kAnyStart);
-  added_.clear();
-  Serial.printf("[ui] shuffle all: %lu tracks (shuffle on)%s\n", (unsigned long)all.count, ok ? "" : ": NO MEMORY");
+  const bool was = player_.shuffle();
+  const bool ok = player_.playNow(all.ids, all.count, PlaybackController::kAnyStart, /*shuffle=*/true);
+  if (ok) added_.clear();  // a new queue: nothing "added" to show in it
+  Serial.printf("[ui] shuffle all: %lu tracks (shuffle on; was %s)%s\n", (unsigned long)all.count, was ? "on" : "off",
+                ok ? "" : ": NO MEMORY");
   char text[48];
   snprintf(text, sizeof(text), "Shuffling %lu tracks", (unsigned long)all.count);
   toast(ok ? text : "Not enough memory for that", ok);
@@ -1006,8 +1009,9 @@ void Ui::loop(uint32_t nowMs) {
   if (page_) page_->tick(nowMs);
   // A shuffle toggle drops the queue's undo (docs/QUEUE-MODES.md 2.6): an
   // Undo toast still up would answer "Nothing to undo", so it goes. (Shuffle
-  // all's toast stays: its Play, after the toggle, is undoable.) And no
-  // badge flash for it: Off can grow "up next" without adding anything.
+  // all's toast stays: its Play set the mode as part of the edit, and its
+  // Undo puts both back.) And no badge flash for it: Off can grow "up next"
+  // without adding anything.
   const bool toggled = state_.shuffle != lastShuffle_;
   if (toggled) {
     lastShuffle_ = state_.shuffle;
@@ -1326,8 +1330,11 @@ void Ui::route(const InputEvent& e) {
           uncover(was);
           host_.sleepChoose(hit == Toast::kHitExtend ? SleepSheet::kExtend : SleepSheet::kTurnOff);
         } else if (hit == 2) {
+          const bool shuffled = player_.shuffle();
           const bool undone = player_.undo();
-          Serial.printf("[ui] undo: %s\n", undone ? "done" : "nothing to undo");
+          // (Shuffle all's: the mode it found comes back with the queue.)
+          Serial.printf("[ui] undo: %s%s\n", undone ? "done" : "nothing to undo",
+                        player_.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)");
           toast_.show(undone ? "Undone" : "Nothing to undo", false, false, accent(), nowMs_);
           uncover(was);
         } else if (hit == 3) {

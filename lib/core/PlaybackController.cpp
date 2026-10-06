@@ -294,6 +294,12 @@ void PlaybackController::placeStart(uint32_t ms, uint32_t durationMs, const Resu
       durationMs = startDurationMs_;
     } else if (state_ != PlayState::Stopped && !cued_) {
       durationMs = audio_.durationMs();  // the backend holds this entry's track
+    } else if (lengthHint() > 0) {
+      // Stopped or cued (the sleep timer's end-of-track pause with Repeat
+      // One cues the entry that just played): the length told for this
+      // entry, which the bar shows meanwhile. The catalog's hint (0 for a
+      // library track) would leave the bar inert until a play.
+      durationMs = lengthHint();
     } else {
       durationMs = catalog_.durationHintMs(queue_.currentTrack());
     }
@@ -481,9 +487,9 @@ void PlaybackController::currentMoved() {
   }
 }
 
-bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start) {
+bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle) {
   Act act(*this);
-  if (!queue_.replace(tracks, n, start)) return false;
+  if (!queue_.replace(tracks, n, start, shuffle)) return false;
   failuresInARow_ = 0;
   clearStartPoint();
   if (hasTrack()) {

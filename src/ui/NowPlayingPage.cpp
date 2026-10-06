@@ -588,8 +588,11 @@ void NowPlayingPage::drawTransport() {
 }
 
 void NowPlayingPage::drawModes(M5Canvas& c, int cx, int cy) {
-  // Shuffle then repeat (the loop, with a "1" for One), centred as a group,
-  // in the accent; bitmaps, so a pressed zone's circle shows through.
+  // Shuffle then repeat (the loop; One's has a bold "1" beside it), centred
+  // as a group, in the accent; bitmaps, so a pressed zone's circle shows
+  // through. The widest group, shuffle and One, is 38 x 11 at x 269-306,
+  // y 213-223: the pressed circle's width at its middle row
+  // (tools/ui_icons.py checks it).
   const AppState& s = ui_.state();
   const icons::Icon* glyphs[2] = {};
   int n = 0;

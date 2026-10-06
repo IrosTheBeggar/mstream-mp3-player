@@ -25,8 +25,10 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // rules are QueueModel's): playNow() starts the new queue; removing the
 // current entry skips to the next one that stayed (or stops if none did);
 // clearQueue() stops; undo() goes back to the track that was current if
-// the one playing isn't in the restored queue. Edits that don't touch it
-// (Play next, + Queue, Clear up next) change nothing that plays.
+// the one playing isn't in the restored queue, in the shuffle mode the edit
+// was made in (Shuffle all's Play turns it on; its undo, off again). Edits
+// that don't touch it (Play next, + Queue, Clear up next) change nothing
+// that plays.
 //
 // Repeat (setRepeat(), docs/QUEUE-MODES.md section 3): Off, All or One.
 // The rule: a natural end follows the mode; a skip wraps unless the mode is
@@ -246,7 +248,8 @@ public:
   // The current entry's next start begins `ms` in (a track `durationMs`
   // long then: what Now Playing shows until it plays, and the backend's
   // hint; 0: the length as known here, a waiting start point's, the held
-  // track's, else the catalog's hint).
+  // track's, the one told for the entry (lengthHint()), else the catalog's
+  // hint).
   // Stopped: it waits. Playing: it starts there now (a wait for the
   // headphones: it starts there when they connect). Paused on a track the
   // backend holds: that track is let go, the next play starts there.
@@ -327,7 +330,11 @@ public:
   // Play: the queue becomes `tracks`, and the one at `start` plays
   // (shuffled: first, the rest shuffled after it; kAnyStart: a random one,
   // or the first when not shuffled).
-  bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start);
+  bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start) { return playNow(tracks, n, start, shuffle()); }
+  // Play with the shuffle mode set as part of it (Shuffle all: on): one
+  // edit (QueueModel::replace(.., shuffled)), so undo() puts the queue and
+  // the mode back. Out of memory: false, and neither changed.
+  bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle);
   bool playNext(const uint32_t* tracks, uint32_t n);
   bool addToQueue(const uint32_t* tracks, uint32_t n);
   QueueModel::Removed remove(const uint32_t* positions, uint32_t n);
