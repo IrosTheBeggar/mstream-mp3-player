@@ -19,12 +19,29 @@
 // `current` is the current entry's line (0-based, -1: none); `generation`
 // is the saver's own number, which tells whether a position saved elsewhere
 // (NVS on the firmware) belongs to this file. Portable, host-tested.
+//
+// Version 2 is a shuffled queue (docs/QUEUE-MODES.md section 2.9), and is
+// written only then: the lines in play order, each the entry's rank (its
+// place in the own order) in decimal, one space, then the path:
+//
+//   mstream-queue 2 <entries> <current> <generation>
+//   17 /music/Daft Punk/Discovery/01 - One More Time.mp3
+//   4 tone:click120
+//
+// Not shuffled, the file is version 1, byte for byte as before this: a
+// unit that never shuffles never changes format, and older firmware still
+// reads it. An id the catalog doesn't know writes "17 " (no path), dropped
+// at the read like version 1's empty line. A version 2 line that doesn't
+// start "<digits> ", or whose rank is past 4294967295, means the file isn't
+// whole (as a bad header): the queue is left alone. Older firmware reads
+// a version 2 file as not a queue file at all (the queue lost once).
 namespace queuetext {
 
 struct Header {
   uint32_t entries = 0;
   int32_t current = -1;
   uint32_t generation = 0;
+  bool shuffled = false;  // version 2
 };
 
 // Writes a queue a few lines at a time, so a long one (10,000 tracks is
@@ -59,7 +76,8 @@ struct Restored {
   Header header;
 };
 
-// Reads a queue file into `q` (assign(): fresh keys, no undo). Paths the
+// Reads a queue file into `q` (assign(): fresh keys, no undo; version 2:
+// shuffled, with the ranks of the lines that survived). Paths the
 // catalog doesn't know are dropped; if the current one is among them, the
 // next line that survived is current (the last one if none after it did).
 // `current` >= 0 overrides the file's own current line (a position saved

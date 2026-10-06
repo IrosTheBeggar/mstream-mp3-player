@@ -1248,6 +1248,198 @@ void test_text_writer_in_steps() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(queuetext::Writer::Step::More), static_cast<int>(w.step(q, c, partial, 8)));
 }
 
+// ---- queue.txt version 2: a shuffled queue (docs/QUEUE-MODES.md 2.9) ----
+
+std::string textOf(const QueueModel& q, const TrackCatalog& c, uint32_t generation) {
+  MemorySink out;
+  TEST_ASSERT_TRUE(queuetext::write(q, c, generation, out));
+  return std::string(reinterpret_cast<const char*>(out.data()), out.size());
+}
+
+void test_v1_unchanged_while_not_shuffled() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  const uint32_t ids[] = {3, 0, TrackCatalog::kBuiltin + 4, 5, 3};
+  q.assign(ids, 5, 2);
+  const std::string before = textOf(q, c, 7);
+  TEST_ASSERT_EQUAL_STRING(
+      "mstream-queue 1 5 2 7\n"
+      "/music/Kavinsky/OutRun/08 - Nightcall.mp3\n"
+      "/music/Daft Punk/Discovery/01 - One More Time.mp3\n"
+      "tone:click120\n"
+      "/music/Root Track.flac\n"
+      "/music/Kavinsky/OutRun/08 - Nightcall.mp3\n",
+      before.c_str());
+  // On and off again: byte for byte the same file.
+  q.setShuffled(true);
+  q.setShuffled(false);
+  TEST_ASSERT_EQUAL_STRING(before.c_str(), textOf(q, c, 7).c_str());
+  QueueModel back;
+  MemorySource in(before.data(), before.size());
+  const queuetext::Restored r = queuetext::read(in, c, back);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_FALSE(r.header.shuffled);
+  TEST_ASSERT_FALSE(back.shuffled());
+}
+
+void test_v2_round_trip() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  const uint32_t ids[] = {3, 0, TrackCatalog::kBuiltin + 4, 5, 3};
+  const uint32_t ranks[] = {4, 0, 2, 1, 3};
+  q.assign(ids, 5, 2, true, ranks);
+  const std::string text = textOf(q, c, 7);
+  TEST_ASSERT_EQUAL_STRING(
+      "mstream-queue 2 5 2 7\n"
+      "4 /music/Kavinsky/OutRun/08 - Nightcall.mp3\n"
+      "0 /music/Daft Punk/Discovery/01 - One More Time.mp3\n"
+      "2 tone:click120\n"
+      "1 /music/Root Track.flac\n"
+      "3 /music/Kavinsky/OutRun/08 - Nightcall.mp3\n",
+      text.c_str());
+  QueueModel back;
+  MemorySource in(text.data(), text.size(), 7);  // reads split mid-line
+  const queuetext::Restored r = queuetext::read(in, c, back);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_TRUE(r.header.shuffled);
+  TEST_ASSERT_TRUE(back.shuffled());
+  TEST_ASSERT_EQUAL_UINT32(0, r.dropped);
+  expectTracks(back, {3, 0, TrackCatalog::kBuiltin + 4, 5, 3});
+  for (uint32_t i = 0; i < 5; ++i) TEST_ASSERT_EQUAL_UINT32(ranks[i], back.rankAt(i));
+  TEST_ASSERT_EQUAL_INT(2, back.current());
+  // Off after the read: the own order, the current entry with it.
+  back.setShuffled(false);
+  expectTracks(back, {0, 5, TrackCatalog::kBuiltin + 4, 3, 3});
+  TEST_ASSERT_EQUAL_INT(2, back.current());
+  // A shuffled queue's own write reads back the same.
+  QueueModel s;
+  std::vector<uint32_t> many;
+  for (uint32_t i = 0; i < 30; ++i) many.push_back(i % 6);
+  s.assign(many.data(), 30, 4);
+  s.setShuffled(true);
+  const std::string st = textOf(s, c, 1);
+  QueueModel s2;
+  MemorySource in2(st.data(), st.size());
+  TEST_ASSERT_TRUE(queuetext::read(in2, c, s2).ok);
+  TEST_ASSERT_TRUE(tracks(s2) == tracks(s));
+  s.setShuffled(false);
+  s2.setShuffled(false);
+  TEST_ASSERT_TRUE(tracks(s2) == many);
+  TEST_ASSERT_EQUAL_INT(4, s2.current());
+}
+
+void test_v2_dropped_tracks_leave_rank_gaps() {
+  LibraryIndex before;
+  build(before, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&before);
+  QueueModel q;
+  const uint32_t ids[] = {3, 0, TrackCatalog::kBuiltin + 4, 5, 3};
+  const uint32_t ranks[] = {4, 0, 2, 1, 3};
+  q.assign(ids, 5, 3, true, ranks);  // current: Root Track, which goes
+  const std::string text = textOf(q, c, 2);
+  LibraryIndex after;  // no Root Track.flac, other ids
+  build(after, {"/music/Kavinsky/OutRun/08 - Nightcall.mp3", "/music/Daft Punk/Discovery/01 - One More Time.mp3"});
+  TrackCatalog c2(&after);
+  MemorySource in(text.data(), text.size());
+  const queuetext::Restored r = queuetext::read(in, c2, q);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_EQUAL_UINT32(1, r.dropped);
+  TEST_ASSERT_FALSE(r.currentKept);
+  TEST_ASSERT_EQUAL_UINT32(4, q.size());
+  TEST_ASSERT_TRUE(q.shuffled());
+  TEST_ASSERT_EQUAL_UINT32(4, q.rankAt(0));
+  TEST_ASSERT_EQUAL_UINT32(3, q.rankAt(3));  // rank 1 is a gap now
+  // The next survivor is current: the second Nightcall (rank 3).
+  TEST_ASSERT_EQUAL_INT(3, q.current());
+  q.setShuffled(false);
+  TEST_ASSERT_EQUAL_STRING("/music/Daft Punk/Discovery/01 - One More Time.mp3", pathOf(c2, q.trackAt(0)).c_str());
+  TEST_ASSERT_EQUAL_STRING("tone:click120", pathOf(c2, q.trackAt(1)).c_str());
+  TEST_ASSERT_EQUAL_STRING("/music/Kavinsky/OutRun/08 - Nightcall.mp3", pathOf(c2, q.trackAt(2)).c_str());
+  TEST_ASSERT_EQUAL_INT(2, q.current());
+}
+
+void test_v2_bad_lines_leave_the_queue_alone() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  const uint32_t ids[] = {5, 0};
+  q.assign(ids, 2, 1);
+  const char* bad[] = {
+      "mstream-queue 2 1 0 1\n/music/Root Track.flac\n",            // no rank
+      "mstream-queue 2 1 0 1\n7/music/Root Track.flac\n",           // no space
+      "mstream-queue 2 1 0 1\n4294967296 /music/Root Track.flac\n", // past 2^32 - 1
+      "mstream-queue 2 1 0 1\n99999999999999999999 tone:440\n",     // far past it
+      "mstream-queue 2 1 0 1\n 7 /music/Root Track.flac\n",         // a space first
+      "mstream-queue 2 2 0 1\n3 tone:440\n\n",                      // an empty line: no rank either
+      "mstream-queue 3 1 0 1\n7 /music/Root Track.flac\n",          // a version this firmware doesn't know
+      "mstream-queue 21 1 0 1\n7 /music/Root Track.flac\n",
+  };
+  for (const char* b : bad) {
+    MemorySource src(b, std::strlen(b));
+    TEST_ASSERT_FALSE(queuetext::read(src, c, q).ok);
+    expectTracks(q, {5, 0});
+    TEST_ASSERT_FALSE(q.shuffled());
+  }
+  // The top rank is a rank; a known rank before an unknown path is a
+  // dropped line, as version 1's.
+  const char* good = "mstream-queue 2 3 0 1\n4294967295 /music/Root Track.flac\n12 \n0 /music/gone.mp3\n";
+  MemorySource src(good, std::strlen(good));
+  const queuetext::Restored r = queuetext::read(src, c, q);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_EQUAL_UINT32(2, r.dropped);
+  expectTracks(q, {5});
+  TEST_ASSERT_EQUAL_UINT32(4294967295u, q.rankAt(0));
+}
+
+void test_v2_long_path_and_ten_digit_rank() {
+  // The longest path the catalog passes on (255 bytes) after the longest
+  // rank: its line still fits the reader (as version 1's did).
+  std::string path = "/music/";
+  path += std::string(120, 'a') + "/";
+  path += std::string(255 - path.size() - 4, 'b') + ".mp3";
+  TEST_ASSERT_EQUAL_size_t(255, path.size());
+  LibraryIndex idx;
+  build(idx, {path.c_str(), "/music/Root Track.flac"});
+  TrackCatalog c(&idx);
+  const uint32_t id = c.index()->trackCount() == 2 && pathOf(c, 0) == path ? 0 : 1;
+  TEST_ASSERT_EQUAL_STRING(path.c_str(), pathOf(c, id).c_str());
+  QueueModel q;
+  const uint32_t ids[] = {id, 1 - id};
+  const uint32_t ranks[] = {4294967295u, 0};
+  q.assign(ids, 2, 0, true, ranks);
+  const std::string text = textOf(q, c, 3);
+  TEST_ASSERT_TRUE(text.find("4294967295 " + path + "\n") != std::string::npos);
+  QueueModel back;
+  MemorySource in(text.data(), text.size(), 5);
+  const queuetext::Restored r = queuetext::read(in, c, back);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_EQUAL_UINT32(0, r.dropped);
+  expectTracks(back, {id, 1 - id});
+  TEST_ASSERT_EQUAL_UINT32(4294967295u, back.rankAt(0));
+}
+
+void test_v2_empty_shuffled_queue() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  q.setShuffled(true);
+  const std::string text = textOf(q, c, 7);
+  TEST_ASSERT_EQUAL_STRING("mstream-queue 2 0 -1 7\n", text.c_str());
+  QueueModel back;
+  const uint32_t one[] = {1};
+  back.assign(one, 1, 0);
+  MemorySource in(text.data(), text.size());
+  TEST_ASSERT_TRUE(queuetext::read(in, c, back).ok);
+  TEST_ASSERT_TRUE(back.empty());
+  TEST_ASSERT_TRUE(back.shuffled());
+}
+
 // ---- QueueSaver (app/QueueStore's timing, the card replaced by memory) ----
 
 // The card and NVS, in memory: the temporary file, the queue file, the
@@ -1736,6 +1928,93 @@ void test_resume_anchor_saved_with_the_point() {
   TEST_ASSERT_EQUAL_INT(0, st2.resumes);
 }
 
+// A toggle is a content change: the file 2 s later, version 2 while
+// shuffled and version 1 again after.
+void test_a_toggle_rewrites_the_file() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  fillLong(q);
+  saver.loaded(3, false, 0);
+  q.setShuffled(true);
+  saver.loop(100);
+  TEST_ASSERT_TRUE(saver.busy());
+  saver.loop(2000);
+  TEST_ASSERT_EQUAL_INT(0, st.opens);  // its 2 s, as any edit's
+  for (uint32_t t = 2100; t < 4000; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 4).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 2 "));
+  q.setShuffled(false);
+  for (uint32_t t = 5000; t < 9000; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(2, st.commits);
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 1 "));
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 5).c_str(), st.file.c_str());
+}
+
+// A toggle while a write is under way: that write (whose header said the
+// old version) is dropped, and the queue written again whole.
+void test_a_toggle_during_a_write_restarts_it() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  st.file = "old";
+  QueueSaver saver(st, q, c);
+  saver.loaded(8, false, 0);
+  fillLong(q);
+  saver.loop(10);
+  saver.loop(2100);  // the write begins: version 1's header and 31 lines
+  saver.loop(2120);
+  TEST_ASSERT_TRUE(saver.writing());
+  q.setShuffled(true);
+  for (uint32_t t = 2140; t < 8000; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_TRUE(st.discards >= 1);
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 2 "));
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, st.posGeneration).c_str(), st.file.c_str());
+}
+
+// Off while paused moves the current entry to its own place: the resume
+// point is saved again at the new line once the file holds it (the
+// moved-only rule), with the new generation.
+void test_off_while_paused_pairs_the_resume_point_again() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  fillLong(q);  // current 5
+  saver.loaded(2, false, 0);
+  q.setShuffled(true);
+  q.step(+3, false);  // a shuffled entry plays: position 8
+  for (uint32_t t = 0; t < 6000; t += 20) saver.loop(t);  // the shuffled file written
+  saver.noteTransport(pausedAt(30000));
+  saver.loop(6100);
+  TEST_ASSERT_EQUAL_INT(1, st.resumes);
+  TEST_ASSERT_EQUAL_INT(8, st.resume.entry);
+  const uint32_t gen = st.resume.generation;
+  const uint32_t key = q.currentKey();
+  q.setShuffled(false);
+  TEST_ASSERT_EQUAL_UINT32(key, q.currentKey());
+  const int32_t own = q.current();
+  TEST_ASSERT_TRUE(own != 8);
+  saver.loop(6200);
+  TEST_ASSERT_EQUAL_INT(1, st.resumes);  // the file doesn't hold the order yet
+  for (uint32_t t = 8300; saver.contentDirty() || saver.writing(); t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(2, st.resumes);
+  TEST_ASSERT_TRUE(st.resume.valid);
+  TEST_ASSERT_EQUAL_INT(own, st.resume.entry);
+  TEST_ASSERT_EQUAL_UINT32(gen + 1, st.resume.generation);
+  TEST_ASSERT_EQUAL_UINT32(30000, st.resume.positionMs);
+  TEST_ASSERT_EQUAL_INT(own, st.pos);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -1777,6 +2056,12 @@ int main(int, char**) {
   RUN_TEST(test_text_remaps_after_a_rebuild);
   RUN_TEST(test_text_current_override_and_bad_files);
   RUN_TEST(test_text_writer_in_steps);
+  RUN_TEST(test_v1_unchanged_while_not_shuffled);
+  RUN_TEST(test_v2_round_trip);
+  RUN_TEST(test_v2_dropped_tracks_leave_rank_gaps);
+  RUN_TEST(test_v2_bad_lines_leave_the_queue_alone);
+  RUN_TEST(test_v2_long_path_and_ten_digit_rank);
+  RUN_TEST(test_v2_empty_shuffled_queue);
   RUN_TEST(test_saver_writes_after_the_edits_settle);
   RUN_TEST(test_flush_now_in_the_middle_of_a_write);
   RUN_TEST(test_flush_now_after_an_edit_during_the_write);
@@ -1788,5 +2073,8 @@ int main(int, char**) {
   RUN_TEST(test_flush_now_saves_the_resume_point);
   RUN_TEST(test_resume_point_at_boot);
   RUN_TEST(test_resume_anchor_saved_with_the_point);
+  RUN_TEST(test_a_toggle_rewrites_the_file);
+  RUN_TEST(test_a_toggle_during_a_write_restarts_it);
+  RUN_TEST(test_off_while_paused_pairs_the_resume_point_again);
   return UNITY_END();
 }
