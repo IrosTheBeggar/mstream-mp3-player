@@ -31,6 +31,10 @@
 //   file, becomes the player's start point with its anchor: Now Playing
 //   shows that second, and play starts there, on the very sample when the
 //   anchor is still the file's (docs/SEEK.md section 5).
+// - Shuffle: with the queue, in the file (queue.txt version 2 while
+//   shuffled: docs/QUEUE-MODES.md section 2.9), so the mode and the ranks
+//   it needs are one write. Repeat: NVS ("queue"/"repeat", a u8; schema
+//   2), written at once on a change, read at boot before the queue.
 // When and what to write is QueueSaver's (lib/core, host-tested); this is
 // its card and NVS. After a boot the queue is where it was, stopped (at
 // the second it paused at, if it did): nothing starts by itself.
@@ -42,6 +46,11 @@ public:
   // resume point (the player's start point). False: none (or unreadable);
   // the caller sets up a default queue.
   bool restore();
+  // The repeat mode saved (Off when none is, or an unknown value), logged.
+  // At boot, before restore() and the first play.
+  PlaybackController::Repeat loadRepeat();
+  // A change of mode (the menu, the console): written at once.
+  void saveRepeat(PlaybackController::Repeat r);
   // Saves what changed; call every loop pass.
   void loop(uint32_t nowMs);
   // Everything now, synchronously (before a power-off: ENERGY.md item 4):
