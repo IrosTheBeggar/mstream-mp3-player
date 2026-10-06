@@ -12,8 +12,9 @@ That gives two menus, one for navigation and one for playback. Shuffle
 and repeat are new modes of the player: there was no shuffle mode (only
 "Shuffle all", a one-shot), and repeat was always on with no UI.
 
-**Status: designed (2026-10-06, at 5e26eba, on feature/np-menus); not
-built.** What Now Playing looks like and how it takes touches is the spec
+**Status: designed (2026-10-06, at 5e26eba, on feature/np-menus) and
+built** (section 14: host-tested, both images build with every guard);
+**not yet checked on the device** (section 10). What Now Playing looks like and how it takes touches is the spec
 in [ARCHITECTURE.md](ARCHITECTURE.md) ("Now Playing", under UI): the
 layout, the hit areas, the two menus and their texts, the indicator, the
 haptics. This document is the rest:
@@ -1007,102 +1008,151 @@ folder too wide alone); the waiting title's one line (Bold 16, 190).
 
 ## 10. Device check
 
+Not run yet (the build is ready: section 14). Every step but 11's
+listening, 14's slow scrub and 17 is scripted, in silent mode.
+
 **The build.** From PowerShell, with MSYSTEM removed: `Remove-Item
 Env:MSYSTEM -ErrorAction SilentlyContinue; pio run -e core2`, then `pio
 run -e core2-dio`. Every guard passes (iram_diet, cache_guard,
-flash_guard, version). Never with the host tests running.
+flash_guard, version). Never with the host tests running. Flash core2
+(`-t upload --upload-port COM3`, the serial daemon stopped first).
 
 **The setup.** COM3 through the serial daemon; silent mode `z`; Now
-Playing up (`ui0`). Note the user's queue, shuffle and repeat first and
-put them back after. A script sends nothing but commands (a stray byte is
-a key: SEEK-BAR.md section 11). The scripted finger is screen pixels:
-the cover x 12-107, y 40-135; the rows y 101 and 124; the line y 150; the
-transport y 204 (volume 32, prev 96, play 160, next 224, "..." 288); a
-3-row sheet's rows centred at y 136, 176 and 216.
+Playing up (`ui0`). First note the user's state: `q` (its line ends
+`shuffle off, repeat off` on a fresh flash) and `l` (the queue, `*` at
+the current entry); put both back at the end (`qS0` / `qR<n>`, and the
+queue as SEEK-BAR.md section 11 says). A script sends nothing but
+commands: a stray byte is a key, and never a `-` or an `f` (`f` forgets
+the headphones). The reset is `!reset` written raw into the daemon's
+command file.
 
-1. **The look.** `X` (the whole screen) playing, nothing on: the rows
-   without "›", the gap above the band, the transport with its margins,
-   the play disc off the bezel, no indicator. Then `qS1`, `X` (the shuffle
-   glyph under the dots); `qR1`, `X` (both); `qS0` and `qR2`, `X` (the
-   "1" loop alone: is the "1" readable?); `qR0`.
+**The scripted finger** is screen pixels and one touch at a time: a
+`uit` lands for 60 ms, and a second `uit` sent before the first has
+lifted replaces it. So send each tap after the line the one before
+logs, and wait 400 ms after a sheet opens before tapping it (the 300 ms
+settle swallows anything sooner: step 7 tests exactly that). The
+places: the cover x 12-107, y 40-135; the title y 38-89, the rows y 101
+and 124 (x 120-310); the line y 150; the transport y 204 (volume x 32,
+prev 96, play 160, next 224, "..." 288); a 3-row sheet from y 80, its
+✕ at (290, 98) and its rows centred at y 136, 176 and 216; a tap above
+it (y 60) closes it. `ui` prints the overlays (`sheet open`, `sleep
+timer sheet open`, `volume open (speaker)`, the toast's text) and Now
+Playing's line (it ends `; shuffle on, repeat one`).
+
+1. **The look.** `qS0`, `qR0`, then `X` (the whole screen) while
+   playing: the rows without "›", the background y 136-145, the band at
+   y 146-167, the transport drawn at y 176-231 with background above and
+   below, the play disc (r 25) clear of the bezel, no indicator. `qS1`,
+   `X`: the shuffle glyph under the dots, at (288, 218). `qR1`, `X`: both
+   glyphs, 4 px apart. `qS0`, `qR2`, `X`: the loop with its "1" alone (is
+   the "1" readable?). `qR0`. Each command logs its `[player]` line and
+   `q`'s line (`shuffle on, repeat all`, ...); `ui` agrees.
 2. **The navigation area.** Each of `uit60,80` (the cover), `uit200,50`
    (the title), `uit200,101` (the artist), `uit200,124` (the album),
-   `uit5,137` (the corner margin), `uit318,95`: `[ui] now playing: the
-   navigation menu`, the tick. `X` once: the track's title, the three rows,
-   the details, the folder cut from the left ("…/Album"). `uit160,60`
-   (above the sheet) and `uit290,98` (its ✕) each close it, with a tick.
-3. **Not the menu.** `uit200,140`: a seek line (`seek ... (tap)`), no
-   menu. `uit200,170` and `uit200,236`: the transport's zones.
-4. **The rows.** Open the menu, `uit160,136`: the Library at the artist,
-   scrolled to the playing album, tinted (`[ui] now playing: go to the
-   artist ...`). Again with `uit160,176` (the album, one Back from its
-   artist) and `uit160,216` (`go to the folder (N deep)`, the Folders
-   segment, the file tinted).
-5. **The refusals.** `qb` (the built-ins), `uit60,80`: the toast "A
-   built-in track isn't in the Library", no sheet; at once `uit200,50`:
-   the toast goes, and no menu (a toast takes y 36-71 first). `uil100`,
-   then the
-   cover: the synthetic toast; `uil0`. During `g0` (the rebuild), the
-   cover: "The Library isn't ready yet" (if it can be caught; the log
-   says which).
+   `uit5,137` (the corner margin), `uit318,95` (the right edge) logs
+   `[ui] now playing: the navigation menu` (and a tap tick), each closed
+   by `uit160,60` 400 ms later (`ui`: `sheet no`). Once, `X` with it open:
+   the track's title (Small, dim), Go to artist / Go to album / Go to
+   folder, each detail dim on the right, the folder cut from the left
+   ("…/Album"); then `uit290,98` (its ✕) closes it.
+3. **Not the menu.** `uit200,140`: a seek line (`[ui] now playing: seek
+   ... (tap)`), no menu. `uit32,170` (y 170, the transport's touch above
+   its drawing): the volume sheet (`ui`: `volume open (speaker)`); close
+   it with `uit160,60`. `uit288,236`: the playback menu; close it.
+4. **The rows.** `uit60,80`, 400 ms, `uit160,136`: `[ui] now playing: go
+   to the artist N`, the Library on that artist, the playing album tinted
+   (`X`). `ui0`; `uit60,80`, 400 ms, `uit160,176`: `go to the album N`
+   (one Back from its artist). `ui0`; `uit60,80`, 400 ms, `uit160,216`:
+   `go to the folder (N deep)`, the Folders segment, the file tinted.
+   `ui0`.
+5. **The refusals.** `qb` (a built-in tone plays, silent), `uit60,80`:
+   `no navigation menu (a built-in track)` then `[ui] toast: A built-in
+   track isn't in the Library`, and no sheet; at once `uit200,50`: the
+   toast goes (`ui`: `toast none`), no menu line (a toast takes y 36-71
+   first). Put a library queue back (`qp<n>`). `uil100`, then
+   `uit60,80`: `(a synthetic library)` and its toast; `uil0`. The "isn't
+   ready" case needs a tap during `g0`'s rebuild; it can't be scripted
+   while the rebuild holds the loop, so its text is only host-tested.
 6. **The playback menu.** `uit288,204`: `[ui] now playing: the playback
-   menu (...)`; `X`: "Playback", Shuffle, Repeat, Sleep timer and their
-   states. `uit160,136`: `shuffle on`, then the player's line, the sheet
-   still up, "On" on the row, no highlight left. `uit160,176` three times:
-   All, One, Off. `uit160,216`: the Sleep timer sheet. With the sheet up,
-   `qR` from the console: the row follows.
-7. **The settle.** `uit288,204` and `uit160,176` in one write: no
-   `repeat` line (the second touch swallowed). The same with the album
-   row and `uit160,136`.
-8. **Shuffle.** On a queue of 10 or more, mid-queue: `l`, `qS1`, `l`: the
-   entries up to the current one unchanged, the rest reordered; the
-   Queue tab (`ui2`, `X`) in that order. `qn3`, `q+4` (Play next, +
-   Queue), `l`: in place. `qS0`, `l`: the own order, the added tracks
-   after the current one and at the end. While playing, `qS1` changes
-   nothing heard (`[queue] now at` doesn't print).
-9. **Shuffle all.** `qS0`, `qx`, `X` (the empty state: where its Shuffle
-   all button is), then `uit` on that button: `[ui] shuffle all: N tracks
-   (shuffle on)`, the indicator on, a random first track. `qS0`: the
-   library A-Z from the playing track.
-10. **Kept across a restart.** Shuffle on and repeat One, paused at 1:00;
-    reset through the daemon. The boot: `[queue] repeat: one (saved)`,
-    `[queue] restored ..., shuffled`, the resume point at 1:00; Now
-    Playing shows the indicator; `q` shows both. Then `qS0`, `qR0`,
-    reset: `off (saved)`, no `shuffled`. Once, on a unit that never had
-    the key: `[nvs] schema 1 -> 2: migrated`, `[queue] repeat: off (none
-    saved)`.
-11. **Repeat at the end** (a short album: `qp<n>`; seek near the end with
-    `uit300,150`). Off: the last track ends, stopped on it. All: the last
-    into the first with no gap (`G`: one more join adopted). One: `[queue]
-    repeat one: N of M again (playing)` at each end, `[queue] now at`
-    silent; next (`uit224,204`) moves on. **Listen at the seam** on an MP3
-    with a LAME tag and on a FLAC (the user's ears: no gap, no click). `G0`:
-    One starts again from 0:00 (faded in); `G1`.
+   menu (shuffle off, repeat off, sleep timer Off)`; `X`: "Playback",
+   then Shuffle "Off", Repeat "Off", Sleep timer "Off". 400 ms later
+   `uit160,136`: `[ui] now playing: shuffle on`, then `[player] shuffle
+   on: ...`; `ui`: `sheet open`; `X`: "On" on the row, no highlight left.
+   `uit160,176` three times (each after the last's `[player]` line):
+   `repeat all`, `repeat one`, `repeat off`, the row following. With the
+   sheet up, `qR` on the console: `[player] repeat: all ...`, and `X`
+   shows "All" on the row. `uit160,216`: the sheet closes and the Sleep
+   timer sheet opens (`[ui] sleep timer sheet (Off)`); close it with
+   `uit160,50` 400 ms later. `qS0`, `qR0`.
+7. **The settle.** `uit288,204`, then 150 ms after its line `uit160,176`:
+   `[ui] sheet: a touch right after it opened, ignored`, no `repeat`
+   line, the sheet still up and still "Off". Close it. The same with
+   `uit200,124` then, 150 ms later, `uit160,136`: the ignored line, no
+   `go to the artist`.
+8. **Shuffle.** On a queue of 10 or more, mid-queue: `l`, `qS1`
+   (`[player] shuffle on: N up next shuffled; c of n plays on`), `l`: the
+   lines up to `*` unchanged, the rest reordered; `ui2`, `X`: the Queue
+   tab in that order; `ui0`. `qn<a>`, `q+<b>` (two short albums from
+   `ql`: Play next, + Queue), `l`: album a's tracks right after `*` in
+   their order, album b's at the end in theirs. `qS0`: `[player] shuffle
+   off: the queue's own order again, now c of n (u up next), in N ms`;
+   `l`: the own order, album a after the playing entry, album b at the
+   end. While playing, `qS1` prints no `[queue] now at` line and `s`'s
+   pos runs on.
+9. **Shuffle all.** `qS0`, `qx` (the empty state), `X`, then
+   `uit246,189` (its Shuffle all button: x 184-307, y 172-205): `[ui]
+   shuffle all: N tracks (shuffle on)` after `[player] shuffle on:
+   nothing up next to shuffle`, the indicator on, `l`: `*` at 0 on a
+   random track, the rest shuffled. `qS0`: `l` is the library in its own
+   order from the playing track.
+10. **Kept across a restart.** `qS1`, `qR2`, pause (`uit160,204`), `qs60`;
+    reset. The boot: `[nvs] schema 2` (on the first boot of this
+    firmware: `[nvs] schema 1 -> 2: migrated`), `[queue] repeat: one
+    (saved)` (first boot: `off (none saved)`), `[queue] restored ...
+    (position from NVS), shuffled`, `[queue] resume point: 1:00 into
+    ...`; `X`: the shuffle glyph and the "1" loop; `q`: `shuffle on,
+    repeat one`. Then `qS0`, `qR0`, reset: `[queue] repeat: off (saved)`,
+    no `, shuffled`.
+11. **Repeat at the end** (a short album: `qp<n>`; on its last track,
+    `uit300,150` seeks to its last 6 s). Off: the track ends, stopped on
+    it (`[queue]` / `ui`: the same entry, stopped). `qR1`, the same: the
+    last into the first with no request (`G`: joins taken +1; `[queue]
+    now at 1 of M`). `qR2`, the same: `[queue] repeat one: M of M again
+    (playing)` at each end and no `now at` line; `G`'s `repeat-one loops`
+    counts them; next (`uit224,204`) moves on. **Listen at the seam** on
+    an MP3 with a LAME tag and on a FLAC (the user's ears: no gap, no
+    click). `G0`: One starts the track again from 0:00 (an `[audio] ...
+    starting` line, faded in); `G1`. `qR0`.
 12. **The sleep timer with One.** `qR2`, `Tt` near the end: `[sleep] this
-    track is the last: pausing at its end`, the pause, the same entry
-    cued at 0:00 (`ui`: 0 ms), the moon gone. Again with `Ta` and `Tq`.
+    track is the last: pausing at its end`, the pause at its end, the
+    same entry cued (`ui`: the same entry, 0 ms), the moon gone. Again
+    with `Ta` and `Tq` on a track mid-album: the same pause at this
+    track's end. `qR0`.
 13. **The wait.** `uiFw`, `X`: the title on one line, "Waiting for ...…"
-    and "try ..." under it, the two buttons in the rows, the spinner in
-    the bigger disc; `uiF0`. With headphones paired (not now: SEEK-BAR.md
-    11.10's state), a real wait: `uit180,112` plays on the speaker,
-    `uit290,112` cancels, `uit60,80` the menu, `uit200,60` nothing.
+    (amber) and "try 2 of 3" in the title strip, Play on speaker and
+    Cancel in the rows, the spinner in the bigger disc. `uit200,60`:
+    nothing (the strip is inert while waiting); `uit60,80`: the
+    navigation menu (close it). `uiF0`. With headphones paired and off (a
+    real wait): `uit180,112` plays on the speaker, `uit290,112` cancels.
 14. **The seek bar moved.** Paused, `qs60`: `uit90,150` seeks (`seek 1:00
-    -> ...`); `uid100,150,250,100,400`: `no seek (slid off the bar)`
-    (off above 106); `uid100,150,250,120,400`: a seek (120 is still on).
-    By hand: a slow scrub shows the readout over the album row and the
-    cover's bottom, and the cover comes back whole at the lift (with the
-    thumbnail arriving mid-scrub, once: `uiT` then scrub).
-15. **The undo a toggle took.** An add from the Library (the console's
-    adds show no toast: Play next on an album's bar, by the scripted
-    finger from an `X` of it), then within its 4 s `qS`: the toast goes
-    (`ui`'s overlays line: no toast). `qS0` with tracks that played while
-    shuffled: no Queue badge flash.
-16. **The cost of Off.** A long queue: 400 x `q+<n>` of a 25-track album
-    (10,000 entries; `q` shows it), `qS1`, `qS0`: the `in N ms` of the
-    off line (expected tens of ms), the loop's `ui` fps unharmed after.
-    Clear it (`qx`, then put the user's queue back).
+    -> ...`); `uid100,150,250,100,400`: `no seek (slid off the bar)` (off
+    above 106); `uid100,150,250,120,400`: a seek (y 120 is still on). By
+    hand: a slow scrub shows the readout over the album row and the
+    cover's bottom, and the cover comes back whole at the lift (once with
+    a thumbnail arriving mid-scrub: a new album's first scrub).
+15. **The undo a toggle took.** An add from the Library with its toast:
+    `ui1`, an album open (`X` to find its bar), Play next on its bar by
+    the scripted finger; within the toast's 4 s, `qS1`: `[ui] the Undo
+    toast went: a shuffle toggle took the undo` (`ui`: `toast none`).
+    `qS0` after tracks played while shuffled: the Queue badge doesn't
+    flash (`X` of the tab bar).
+16. **The cost of Off.** A long queue: `q+<n>` of a 25-track album 400
+    times (10,000 entries; `q` shows it), `qS1`, `qS0`: the off line's
+    `in N ms` (expected tens of ms), and `ui`'s fps unharmed after. Clear
+    it (`qx`) and put the user's queue back.
 17. **The press look** (by hand): a finger resting on the cover or the
-    text lights the area; a slide off and lift does nothing.
+    text lights the area around the cover; a slide off and a lift does
+    nothing; a long press opens the menu at the lift, with one tick.
 
 ## 11. Build order
 
@@ -1189,3 +1239,44 @@ is 160 px in Small and "Waiting for the headphones…" 193, both in
   design left it to the UI). The menu's row order is the layout design's
   (Shuffle, Repeat, Sleep timer), not the player design's README wording
   (Sleep timer first).
+
+## 14. As built (2026-10-06)
+
+Built on feature/np-menus in the order of section 11, one commit a step:
+3f230d2 (QueueModel's shuffle and ranks, `lib/core/Shuffle.h`), a15a1a9
+(`queue.txt` version 2), 8e3d1bd (the player's repeat and shuffle,
+`SleepTimer::lastOfQueue()`), b7203cd (NVS schema 2, `QueueStore`, main's
+helpers, the console, the logs), 0a89e5e (the sheets: the settle, the
+staying and followed rows, the undo toast; `cutPathLeft()`, the texts,
+`UiHost`), 03b9898 (Now Playing, the icons, the seek bar's rows, Shuffle
+all, the Library's `kAnyStart`), then these docs. 1,088 host tests pass
+(41 new); core2 and core2-dio build with every guard (iram_diet: 51 of
+51 objects moved, the hot set pinned; cache_guard ok; flash_guard: 2.20
+MB, 37 % of the slot). Nothing has run on the device yet (section 10).
+
+Where the build differs from sections 1-13, and why:
+
+- **The settle covers the Sleep timer sheet too**, not only `Sheet`:
+  ARCHITECTURE.md's spec says "every sheet", and the Sleep timer sheet
+  opens from the playback menu's last row, so a quick second tap there
+  would land on its pills (Turn off, while a timer runs). One
+  `sheetOpenedMs_` (from `millis()` at the opening) serves both; the
+  ignored touch logs `[ui] sheet: a touch right after it opened,
+  ignored`.
+- **`cutPathLeft()` always marks a cut.** The Folders header's loop,
+  moved as it was, gave "/a/b/Album" (the root dropped, no "…") when
+  "/a/b/Album" fit but "…/a/b/Album" didn't. A cut path now always
+  starts with "…" ("…/b/Album"); a path that fits is whole, and "/<last>"
+  is still the fallback. The header gets the same fix.
+- **`repeats()`**: a Repeat One boundary pause (the sleep timer) is no
+  loop (nothing played again), so it doesn't count; a loop taken while
+  paused (a pause's fade read past the join, the entry cued again) does.
+- **The off line's ms** are measured with `micros()` and rounded.
+- **The scripted check** (section 10): the scripted finger runs one
+  touch at a time, so the settle's double tap is two `uit`s about 150 ms
+  apart, never in one write; and a tap on the transport at y 170 uses
+  the volume zone (x 32), not next, so the check doesn't skip the track.
+- **The "isn't ready" refusal** can't be reached by the scripted finger
+  (`g0`'s rebuild holds the loop); its text is host-tested.
+- `PlaybackController::kAnyStart` is declared next to `play()`; the
+  console's `qR` refuses a mode past 2 with its usage line.

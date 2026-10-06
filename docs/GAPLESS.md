@@ -44,7 +44,7 @@ with `G0`):
    Then it reports `Phase::Ended`.
 3. On the loop task, `PlaybackController::update()` sees `finished()`.
    It calls `advance()`, which steps the queue (`QueueModel::step(+1,
-   repeat_)`) and then `startCurrent()` and `audio_.play()`.
+   ...)`, by the repeat mode) and then `startCurrent()` and `audio_.play()`.
 4. `play()` posts a new generation (`TransportSync::post()`) and wakes the
    decode task.
 5. On the decode task, `start()` closes the decoder and calls
@@ -269,8 +269,9 @@ became of it:
 ### 3.1 The word: the player says what comes next
 
 `PlaybackController` (lib/core) is the only place that knows the queue's
-real next entry. It works it out the way `advance()` would, without
-moving anything (`QueueModel::peek(+1, repeat_)`), and hands it to the
+real next entry. It works it out the way `advance()` would at a natural
+end, without moving anything (`endNext()`: `QueueModel::peek(+1, wraps)`,
+or the current entry itself with Repeat One), and hands it to the
 backend as a word (`IAudioBackend::setNext()`):
 
 ```
@@ -291,15 +292,15 @@ Next { after, token, path, hintMs }
 - **Nothing follows** when gapless is off (`setGapless(false)`, the
   console's `G0`), "pause after this track" is set (`pauseAfter_`), the
   `NextGate` says the sleep timer ends at the current entry (section 5.4),
-  the queue ends without repeat, or the next id has no path. `held()` is
+  the queue ends with repeat Off, or the next id has no path. `held()` is
   no reason (the review's amendment 14): nothing is heard without an
   output reading, and a drop pauses the player anyway.
 - **The same track still next keeps its token** (no cut), whether its
   entry stays or its key is gone and the same track took its place (a
   library rebuild's fresh keys, one of two duplicates removed). Never the
   heard token, though: the backend took it already and would answer
-  "nothing follows", so a queue of one on repeat (the same entry after
-  itself) gets a new token every time round. Anything else next gets a
+  "nothing follows", so Repeat One, or a queue of one on repeat (the same
+  entry after itself), gets a new token every time round. Anything else next gets a
   new token. The player keeps its last four offers
   (token, key, track) for the advance.
 - **Worked out only when something it depends on changed**: a signature of
@@ -311,10 +312,16 @@ Next { after, token, path, hintMs }
   hooks of their own: anything that changes the next entry changes the
   word.
 
-There is no shuffle mode today. "Shuffle all" (`Ui::shuffleAll()`)
-replaces the queue (`playNow()`), which is a new generation, and repeat
-has no UI (`setRepeat()` is never called; it is on). If either is added
-later, it only has to change what `peek()` returns.
+Shuffle and repeat ([QUEUE-MODES.md](QUEUE-MODES.md), 2026-10-06) needed
+nothing of the engine. Shuffle reorders the queue's entries themselves,
+so not even `peek()` changed: a toggle is a content change, and the word
+follows it as it follows any edit. Repeat (Off, All, One; the playback
+menu, saved in NVS, Off by default) is a mode of the player: a natural
+end follows it (`endNext()`; One's word is the entry itself, the
+self-join a queue of one on repeat always had), a skip wraps unless it is
+Off. `setRepeat()` and `setShuffle()` are actions, so the word changes at
+once. "Shuffle all" turns shuffle on and replaces the queue
+(`playNow()`, a new generation).
 
 ### 3.2 Decode-ahead at the end of a file: `GaplessEngine`
 
@@ -454,11 +461,13 @@ natural end right now (the review's amendment 3):
   N: `pauseAtBoundary()` (the backend stops, the next entry is cued at
   0:00, the pause is the timer's). This is the too-late End of track: at
   most the cut's latency plus the pause's 1.5 ms fade of N+1 is heard.
-- what `advance()` would start (`peek(+1, repeat_)` from N) is the token's
-  entry (by its key, or by its track when its key is gone): it becomes
-  current with no `play()` (`queue_.setCurrent()`); the state stays.
+- what `advance()` would start at N's end (`endNext()` from N) is the
+  token's entry (by its key, or by its track when its key is gone): it
+  becomes current with no `play()` (`queue_.setCurrent()`; with Repeat
+  One, N itself, a loop: nothing bumps, `repeats()` counts it); the state
+  stays.
 - otherwise (an edit that came too late to cut N+1 out: Play next, a
-  remove, repeat changed): `advance()`, a request that starts what follows
+  remove, repeat changed, a shuffle toggle): `advance()`, a request that starts what follows
   now; while paused (a pause's fade read past B), the entry after N is
   cued instead, so nothing starts by itself.
 - in every case the heard token becomes the track the next word is about,
@@ -931,7 +940,8 @@ applies to the track that now plays.
 | Play next / `insertNext`, `moveNext`, + Queue onto the last entry, `remove` of the next entry, Clear up next, an undo that changes the next entry | the word changes. Outputs before J: cut, then the new next is joined. Passed J: the advance is heard, and since what `advance()` would start isn't N+1 any more, it is started (a request): Play next's track plays next. Host-tested (test_gapless_player) |
 | `remove` of the current entry (N) | `currentMoved()`: a request, as before |
 | A library rebuild (`queueReplaced(true)`: fresh keys, same tracks), or one of two adjacent duplicates removed | the same track stays next: the word keeps its token, no cut; the advance finds the entry by its track (section 3.1) |
-| Repeat changed (no UI today) | at the queue's last entry a word appears or goes; a cut if needed |
+| Repeat changed (the playback menu, `qR`) | `setRepeat()` is an action: the word changes at once. At the queue's last entry All's word (the first entry) appears or goes; with One the word is N itself on any entry, a new token each loop. Before J a cut; past J the advance starts what now comes next. Host-tested (test_gapless_player) |
+| A shuffle toggle (the playback menu, `qS`) | the entries reorder, the current one stays: if the next entry changed, the word changes (before J a cut and the new next joined; past J the advance starts what now comes next); the same next keeps its token. Host-tested (test_gapless_player) |
 | Gapless turned off (`G0`) | nothing follows any more, and the engine is off: cut, and N ends as in v0.5.0. Trimming stays as it was for tracks already open (`Gt` applies at the next open) |
 | The sleep timer's end chosen or its kind changed (End of track, album, queue) | section 5.4 |
 | "Pause after this track" (`setPauseAfterTrack(true)`) | nothing follows: cut, N drains, `Ended`, `pauseAtBoundary()` as before |

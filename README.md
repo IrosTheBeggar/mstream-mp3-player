@@ -314,14 +314,17 @@ list, or tap it for a grid of the letters; a letter with many entries
 opens a second grid of its two-letter starts ("Ka", "Ke", "Ki"...). What the
 pages do:
 
-- **Now Playing**: the album's cover, the title, the artist and the album
-  (tap either, or the cover, to open it in the Library, scrolled to the
-  playing track), the progress line: tap it, or drag along it and lift,
-  to move in the track (never into its last 6 s; slide off it, or back
-  onto where it plays, to leave it; paused, it stays paused, and play, or
-  the next boot, starts there), the volume (tap: a slider), prev /
-  play-pause / next, and "..." for Go to artist, Go to album, Show in
-  folders.
+- **Now Playing**: the album's cover, the title, the artist and the album.
+  Tap any of them for **Go to artist**, **Go to album** and **Go to
+  folder**, which open the Library there, scrolled to the playing track.
+  The progress line: tap it, or drag along it and lift, to move in the
+  track (never into its last 6 s; slide off it, or back onto where it
+  plays, to leave it; paused, it stays paused, and play, or the next boot,
+  starts there). Then the volume (tap: a slider), prev / play-pause / next,
+  and "..." for **Shuffle** (on, off), **Repeat** (off, all, one) and the
+  **Sleep timer**: a tap on Shuffle or Repeat changes it there and then, the
+  menu staying open. A small shuffle and repeat sign under the "..." shows
+  which is on (the loop with a "1" is Repeat One).
 - **Library**: three lists at the top: **Artists**, **Albums** (with their
   covers) and **Folders** (the card's folders; only audio files are listed,
   the others counted: "14 audio files, 1 other"). An artist opens its
@@ -425,6 +428,20 @@ while playing starts the track from its beginning:
 nothing is written while it plays.) The Library and Queue tabs edit
 it, and so do the console's `q` commands (play an album, play it next, add
 it, remove, clear, undo).
+**Shuffle and repeat** are kept across a restart too. Shuffle on shuffles
+what's up next (the track that plays plays on, and the Queue tab shows the
+order that plays); off puts the queue's own order back. While it's on, an
+album's or an artist's Play starts on a random track; Play next and +
+Queue never shuffle what you add. **Shuffle all** (an empty queue's
+button) turns shuffle on. **Repeat is off by default: the queue stops at
+its end** (before 0.7.0 it always started again from the top). All starts
+it again from the top, with no gap; One plays the track again at its end,
+and next and previous still move. The sleep timer's End of track, End of
+album and End of queue pause at the end of a track on Repeat One (it's the
+last one that would play); while shuffled, End of album means the album
+of the track that plays next in the shuffled order. Going back to a
+firmware from before 0.7.0 while shuffled loses the queue once (it can't
+read the shuffled file).
 
 **Touch calibration.** Core2 touch panels differ: one measured reads
 touches on the right half of the screen too far right (about 20 px at x
@@ -511,7 +528,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
 | `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, not-FAT32 or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
 | `m` | next dancer: crab (default) / stick figure | | |
-| `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none) |
+| `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none), `qS` shuffle on/off (`qS0` / `qS1`), `qR` repeat off / all / one in turn (`qR0`-`qR2`) |
 | `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
 | | | `R...` | the rate converter ([docs/RESAMPLER.md](docs/RESAMPLER.md)): `R` the current track's conversion (the exact ratio, source frames taken, ring frames made, clamped samples); `Rt` lists its test tracks (a 1 kHz tone and silence at other rates), `Rt<n>` or `Rt<tone:...@rate>` plays one on its own (the player is stopped first, keeping your place in the track: nothing follows it; only silence on Bluetooth, a tone only in silent mode `z`); `Rf</music/...>` plays a file on its own (silent mode only; `Rf48000</music/...>` converts it as if it were 48 kHz, a load test), `Rx` stops what `Rt` or `Rf` started; `Rb` its bench (the MAC16 kernel's self-test and route check, then 10 s of audio per rate with each kernel: cycles and share of a core at the clock running; 88.2/96 kHz too, though they don't play yet) |
 | | | `G...` | gapless playback ([docs/GAPLESS.md](docs/GAPLESS.md)): `G` its status (what the player says comes next, the join waiting to be heard, joins, cuts and failed opens since boot, the decoding track's LAME trim); `G0` / `G1` off / on (off: tracks end as before 0.6.0, for an A/B; RAM only); `Gt0` / `Gt1` trimming by the LAME tag off / on from the next track; `Gx<n>` the ring's cut against a reader on the other core (a stress test: stops the player, keeping your place) |
@@ -540,10 +557,14 @@ partitions.csv        Two 6 MB OTA app slots, NVS above anything a single-file
                       install writes, 3.8 MB LittleFS (test audio), coredump;
                       never changes after release (docs/ARCHITECTURE.md#flash-layout)
 lib/core/             Portable logic, framework-agnostic (also compiled for native)
-  PlaybackController  Transport over the queue; skips tracks that fail
+  PlaybackController  Transport over the queue; repeat Off / All / One;
+                      skips tracks that fail
   QueueModel          The play queue: track ids in PSRAM, current position,
-                      stable keys, one level of undo
-  QueueText           The queue saved as paths (survives a library rebuild)
+                      stable keys, one level of undo, shuffle (each entry's
+                      rank in the queue's own order)
+  Shuffle             The shuffle's Fisher-Yates loop (QueueModel's)
+  QueueText           The queue saved as paths (survives a library rebuild;
+                      version 2: a shuffled queue, with its ranks)
   TrackCatalog        Track ids to paths and names: the index's tracks and
                       the built-in ones
   QueueSaver          When the queue, its position and the resume point
@@ -617,7 +638,7 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       tests measure them with the firmware's fonts)
   QueueView           The Queue's summary from learned track lengths, the
                       mark on what a Library add put in, the failed-track
-                      ring, Shuffle all
+                      ring
   TouchGesture, KineticScroll, ScrollGovernor
                       Tap/hold/drag/flick; inertial list scrolling (flings
                       capped at 2,000 px/s); how hard a list may use the SPI
@@ -632,7 +653,7 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   CardFormat          What a card that didn't mount is (exFAT, NTFS, GPT),
                       from its first sectors
   NvsLayout           The NVS schema number's boot step; the resume point's
-                      versioned blob
+                      versioned blob; the repeat mode's key
   hal/                IAudioBackend, IStorage
 src/                  Core2 firmware
   audio/              Core2AudioBackend (decode task), RingOutput, BtSink, SpeakerSink

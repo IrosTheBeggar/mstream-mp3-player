@@ -1179,13 +1179,20 @@ absent (a fresh NVS, or v0.5.0-beta.1's, which had no number and whose
 layout is schema 1's) it is written; older, `migrate(from, to)` runs and
 then the number is written (a failed step leaves the old number, so the next
 boot tries again); newer (a downgrade) it is left alone. The boot log says
-which (`[nvs] schema 1`). Schema 1 is v0.5.0's layout, which is
+which (`[nvs] schema 2`; once, on a unit from before it, `[nvs] schema 1 ->
+2: migrated`). Schema 1 is v0.5.0's layout, which is
 beta.1's plus one blob that its own version byte covers, not the number:
 the resume point (`queue`/`resume`) is beta.1's 20-byte form (version
 0) until v0.5.0 first saves, then version 1's 24 bytes, and since its
 resume anchor (SEEK.md section 5.2) version 2's 64 bytes. So a schema-1
 unit holds any of the three, and every reader of schema 1 (and any
-`migrate(1, ...)` step) must take them all. `migrate()` has no step yet.
+`migrate(1, ...)` step) must take them all. Schema 2 (from 0.7.0) is
+schema 1's keys and `queue`/`repeat`, the repeat mode (a u8: 0 Off, 1 All,
+2 One; [QUEUE-MODES.md](QUEUE-MODES.md) section 3.6): a new key is a layout
+change, so the number moved. Its `migrate(1, 2)` step, the first, does
+nothing: an absent key reads as Off. Older firmware leaves a schema-2 NVS
+as it is (`... newer than this firmware's 1 (a downgrade)`), never reads
+the key, and its queue wraps at the end as it always did.
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
@@ -1211,11 +1218,12 @@ The rules:
   atomic.
 - Keys are at most 15 characters (NVS's limit).
 
-The keys of schema 1, by namespace: `meta` (schema); `input` (cal,
+The keys of schema 2, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
 ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu_mhz,
 bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
-(coach); `queue` (gen, pos, resume). The Bluetooth stack keeps its bonds in
+(coach); `queue` (gen, pos, resume, and schema 2's repeat). Schema 1's are
+the same without `queue`/`repeat`. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
 
 ### Moving an existing unit to the new layout
@@ -1403,18 +1411,43 @@ the browsing UI hold its **track ids**, never strings.
   (`treeTracks()`: its own files A-Z, then each subfolder's tree), which is
   what a folder's Play plays. (The cache file's version went to 2 with the
   36-byte folder record: an old cache is rebuilt once.)
-- **The queue** (`QueueModel`, host-tested): track ids in a PSRAM array (8 B an
-  entry with its key), a current position, and one level of undo. Its edits
+- **The queue** (`QueueModel`, host-tested): track ids in a PSRAM array (12 B an
+  entry with its key and its rank), a current position, and one level of undo. Its edits
   are the design's Library and Queue actions: Play (replace the queue, start at
   a track), Play next (after the current entry), + Queue (append), remove a
   selection, move a selection after the current entry, Clear up next (keeps
   what plays and what played), Clear. Each entry has a **key** given when it
   joins and never reused, so the UI can keep a selection or a row across edits.
   Each edit saves a snapshot first; undo puts the queue back, keeping what
-  plays current if it was in the queue then.
+  plays current if it was in the queue then. **Shuffle** ([QUEUE-MODES.md](QUEUE-MODES.md)
+  section 2) reorders the entries themselves, so a position is a play
+  position everywhere (the Queue tab shows the order that plays, the saver
+  writes it, `step()` and `peek()` walk it): on, what is up next is
+  shuffled (Fisher-Yates, `lib/core/Shuffle.h`, seeded from `esp_random()`)
+  and the current entry and what played stay put; each entry's **rank** is
+  its place in the queue's own order, and off sorts back by rank, the
+  current entry in its own place. A toggle is no edit: it drops the undo
+  and allocates nothing. While shuffled, Play puts the chosen track first
+  (a container's Play, `kAnyStart`, a random one) and shuffles the rest
+  after it, the ranks the given order; Play next ranks right after the
+  current entry and + Queue after the highest rank, never shuffled in (the
+  listener put them there); a move to play next ranks the moved right after
+  the current entry; an add to an empty queue is laid out as a Play from
+  its first.
 - **Transport** (`PlaybackController`) plays the queue's current entry through
-  the catalog and keeps its rules: prev/next and a track's end wrap around the
-  queue (`setRepeat(false)` stops at the end instead), a track that can't be
+  the catalog and keeps its rules. **Repeat** (`setRepeat()`: Off, All or
+  One; QUEUE-MODES.md section 3): a natural end follows the mode, a skip
+  wraps unless the mode is Off. All goes from the last entry to the first,
+  gaplessly; One plays the entry again at its natural end (gaplessly: the
+  word is the entry itself, the self-join a queue of one on repeat always
+  had, a new token each loop; `repeats()` counts them), and next, prev and
+  a failure still move; Off stops on the last entry at its end (and next
+  there stops too; prev at the first plays the first again). The firmware
+  sets the saved mode at boot (Off unless changed: an updated unit stops at
+  the end of its queue where it used to wrap); the engine's own default is
+  All, as the host tests have it. `setShuffle()` toggles the queue's order
+  as an action: the same entry stays current in the same state, the word
+  on what follows moves to the new next. A track that can't be
   played is skipped, and once every track in the queue has failed in a row it
   stops. **Prev restarts a track past its first 3 s** (`prevRule()`,
   host-tested in test_playback; every prev: the A click, Now Playing's, the
@@ -1461,15 +1494,24 @@ the browsing UI hold its **track ids**, never strings.
   track, play/pause cancels the wait (Paused); `release()` plays what waits,
   `cancelWait()` ends it paused (`PlayGate` decides which: see Bluetooth). For the sleep
   timer: `setPauseAfterTrack()` (at the track's natural end the next entry
-  is cued and it stays paused at 0:00; at the queue's end without repeat,
-  the natural stop; `timerStops()` counts them) and `pauseByTimer()`
+  is cued and it stays paused at 0:00; at the queue's end with repeat Off,
+  the natural stop; with Repeat One the same entry is cued at 0:00: the
+  timer wins, and `SleepTimer::lastOfQueue()` makes that track the
+  boundary for End of album and End of queue; `timerStops()` counts them) and `pauseByTimer()`
   (playing pauses, a wait ends paused); both mark the pause
   `pausedByTimer()` until any play.
 - **Persistence** (`app/QueueStore` over `QueueSaver`, `QueueText`): the queue is saved as paths,
   one a line (`queue.txt`, header `mstream-queue 1 <entries> <current>
   <generation>`), so a rebuilt library, whose ids differ, finds its tracks
   again; paths that are gone are dropped, and if the current one is among them
-  the next one that stayed is current. The file is rewritten 2 s after the
+  the next one that stayed is current. A shuffled queue is **version 2**
+  (`mstream-queue 2 ...`, each line `<rank> <path>`: QUEUE-MODES.md
+  section 2.9), written only while shuffled, so the mode and the own order
+  come back with the queue; not shuffled, the file is version 1 byte for
+  byte. Older firmware reads a version 2 file as no queue file at all
+  (`not a whole queue file, ignored`): a downgrade while shuffled loses the
+  queue once. The repeat mode is NVS's (`queue`/`repeat`, written at once
+  on a change, read at boot before the queue). The file is rewritten 2 s after the
   last edit, 32 lines a loop pass (a 10,000-track queue is ~700 KB and never
   holds the loop), into `queue.tmp`, then renamed over `queue.txt`. The
   position goes to NVS (at most once a second), tagged with the file's
@@ -1511,7 +1553,17 @@ the browsing UI hold its **track ids**, never strings.
   catalog's) and no anchor (a seek: a second the run decoded is exact by
   its index), to check the seek without a restart; `qs0` clears it. A
   dropped start point stays dropped: an undo that brings its entry back
-  doesn't bring the second back.
+  doesn't bring the second back. `qS` toggles shuffle (`qS0` / `qS1` set
+  it) and `qR` steps repeat Off, All, One (`qR0`-`qR2` set it), through the
+  same helpers as Now Playing's menu (applied, saved, logged: `[player]
+  shuffle on: 37 up next shuffled; 3 of 40 plays on`, `[player] shuffle
+  off: the queue's own order again, now 12 of 40 (28 up next), in 23 ms`,
+  `[player] repeat: one (this track again at its end; next and prev still
+  move)`); an open menu follows them. `q` says both (`...; shuffle on,
+  repeat all; undo: none; ...`), the boot `[queue] repeat: one (saved)`
+  and `[queue] restored ... , shuffled`; each Repeat One loop logs
+  `[queue] repeat one: 5 of 40 again (playing)` (the entry's key doesn't
+  change, so no `now at` line), and `G` counts them.
   After a restart the queue is where it
   was, stopped. `g0` carries the queue across the rebuild the same way, in a
   PSRAM buffer: the track that plays keeps playing if it's still there. A
@@ -1877,7 +1929,7 @@ Queue, Dance and Output (with its Pair and About pages).
   below the decoder on core 1 (priority 1 vs 2), so the audio goes first,
   and it sleeps 1-5 ms every pass. The `Ui` object and all its sprites live
   in PSRAM (~365 KB: six 320x42 row sprites, a 320x56 strip, a 320x204 panel
-  for sheets and dialogs (the content area: the 4-row sheet), the rail); the fonts' glyph tables too.
+  for sheets and dialogs (the content area: room for a 4-row sheet), the rail); the fonts' glyph tables too.
 - **The screen's power** (`ScreenPower`, host-tested; `app/ScreenControl`
   on the device; [ENERGY.md](ENERGY.md) item 2: the screen was ~15 mA of
   the ~116 while streaming). Bright at the chosen brightness (Low 60,
@@ -2021,7 +2073,11 @@ Queue, Dance and Output (with its Pair and About pages).
   you're on again: back to its start"; a tap anywhere goes on, a tab tap
   ends them. A **sheet**
   (from the bottom, rows of 40 px: up to 3 in the list's band from y 72,
-  the 4-row one from y 40, never onto the tab bar) and a **dialog** (modal, the tab bar
+  Now Playing's two menus 3 rows from y 80; a 4th would rise to y 40, never
+  onto the tab bar; a touch that starts within 300 ms of its opening goes
+  nowhere, as on the volume sheet, so a double tap never picks a row; a
+  row can stay up and show its new state, Now Playing's Shuffle and
+  Repeat) and a **dialog** (modal, the tab bar
   still works; optionally an icon, a live status line and a red primary
   button) freeze the page under them; one that opens while a finger is
   on the page (the headphones' drop dialog) ends that touch for the page (a
@@ -2339,8 +2395,8 @@ Queue, Dance and Output (with its Pair and About pages).
   what played) or "Clear queue" (stops; a dialog with a red Clear asks
   first). Every edit has Undo on its toast. A track that failed keeps an
   amber "!" (`KeyRing`, the last 16 entries by key). Empty: "Your queue is
-  empty", Open Library, Shuffle all (`queueview::shuffle()`: the whole
-  library, a random seed, playing).
+  empty", Open Library, Shuffle all (shuffle on, then the whole library
+  from a random track: QUEUE-MODES.md section 2.5).
 - **Output** (spec §6.6, mockups 19-21, with the grafts; a list, so it
   scrolls): the **Bluetooth card** (two rows; `OutputModel`'s view of the
   link and the session: No headphones paired [Pair new headphones], Not
@@ -2504,7 +2560,7 @@ Queue, Dance and Output (with its Pair and About pages).
   `[queue] now at n of N (state)`, every tab change (`[ui] tab: Queue`) and
   every action that plays something (`[ui] queue: play entry n (its row's
   bar)`, `[ui] now playing: next`, `[ui] library: play 14 tracks`, `[ui]
-  shuffle all: 77 tracks`), every queue edit from the Queue (`[ui] queue:
+  shuffle all: 77 tracks (shuffle on)`), every queue edit from the Queue (`[ui] queue:
   removed 2`, `... to play next`, `... clear up next`, `... cleared`) and
   every output change (`[output] ...`, `[ui] bluetooth: ...`). `ui` adds
   the Bluetooth link and session and the queue's marks.
