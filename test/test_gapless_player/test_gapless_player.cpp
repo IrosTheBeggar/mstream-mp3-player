@@ -468,6 +468,7 @@ void test_a_queue_of_one_on_repeat_loops_as_one_stream() {
   TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
   TEST_ASSERT_EQUAL_UINT32(3, w.player.gaplessStats().adopted);
   TEST_ASSERT_EQUAL_UINT32(0, w.player.gaplessStats().restarted);
+  TEST_ASSERT_EQUAL_UINT32(0, w.player.repeats());  // (All's loops: no Repeat One line)
   TEST_ASSERT_EQUAL_UINT32(3, w.audio.advances.size());
   TEST_ASSERT_TRUE(w.audio.advances[0].token != w.audio.advances[1].token);
   TEST_ASSERT_TRUE(w.audio.advances[1].token != w.audio.advances[2].token);

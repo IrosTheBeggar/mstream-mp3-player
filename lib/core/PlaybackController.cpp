@@ -662,8 +662,9 @@ void PlaybackController::syncHeard() {
     if (match && !(state_ == PlayState::Playing && held())) {
       // No play(): the backend plays it already. Repeat One: the same
       // position (nothing bumps; the heard token moved, so the next word
-      // gets a new one), a loop.
-      if (static_cast<int32_t>(expected) == queue_.current()) ++repeats_;
+      // gets a new one), a loop. (A queue of one on All loops the same
+      // way, but that is no Repeat One loop.)
+      if (repeat_ == Repeat::One && static_cast<int32_t>(expected) == queue_.current()) ++repeats_;
       queue_.setCurrent(expected);
       ++gaplessStats_.adopted;
       continue;
