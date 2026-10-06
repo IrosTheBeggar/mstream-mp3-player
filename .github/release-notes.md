@@ -80,10 +80,30 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
 
 ## The microSD card
 
-- Format it **FAT32** (MBR). exFAT cards, which is how most cards of 64 GB
-  and up come, and GPT cards don't mount: the player says "This card isn't
-  FAT32". Windows only offers FAT32 up to 32 GB; for a bigger card use a
-  FAT32 formatting tool.
+- Format it **FAT32**, with an **MBR** partition table ("Master Boot
+  Record"). Cards of 64 GB and up come exFAT, and a card a Mac erased
+  whole gets a GPT ("GUID Partition Map"): the player doesn't mount those
+  and says what it found ("This card is exFAT", "This card is NTFS",
+  "This card uses GPT", "Can't read this card"). Formatting erases the
+  card: copy anything on it off first, and check the disk you pick is the
+  card.
+- Up to 32 GB (and not GPT), the computer's own Format, FAT32, does it.
+  Over 32 GB:
+  - **Windows 11** updated since May 2026 (KB5089549): in a Terminal run
+    as administrator, `format X: /FS:FAT32 /Q /V:MUSIC` (`X:` the card's
+    letter). File Explorer's Format still stops at 32 GB.
+  - **Windows 10** (or Windows 11 without that update): Ridgecrop's free
+    **FAT32 Format** (`guiformat.exe`, or
+    `winget install -e --id Ridgecrop.guiformat`). It keeps a GPT card
+    GPT, as `format` does: make that one on a Mac or Linux.
+  - **macOS:** Disk Utility, View > Show All Devices, select the card
+    itself, Erase: Format **MS-DOS (FAT)**, Scheme **Master Boot Record**.
+    Or `sudo diskutil eraseDisk FAT32 MUSIC MBRFormat /dev/diskN`
+    (`diskutil list` finds N).
+  - **Linux:** `sudo parted /dev/sdX --script mklabel msdos mkpart primary fat32 4MiB 100%`,
+    then `sudo mkfs.fat -F 32 -s 64 -n MUSIC /dev/sdX1` (`lsblk` finds
+    the card).
+  - Not the **SD Card Formatter**: over 32 GB it makes exFAT.
 - Put the music under **`/music`**, e.g. `/music/Artist/Album/01 - Title.mp3`.
   An album's cover is the `cover.jpg` (or `folder.jpg`) next to its tracks.
 - Pair headphones from **Output > Pair new headphones**. The player never

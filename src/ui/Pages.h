@@ -211,7 +211,7 @@ private:
     bool coverShown = false;  // the thumbnail, not the placeholder
     bool empty = false;       // the empty state is what's drawn
     bool noCard = false;
-    bool notFat32 = false;
+    cardformat::Kind cardKind = cardformat::Kind::Unreadable;  // the no-card message drawn
     bool waiting = false;     // the waiting panel is what's drawn
     uint32_t waitSig = 0;     // waitSig()
     uint32_t sleep = 0;       // the sleep timer's text on the progress line (a hash)

@@ -351,29 +351,29 @@ void test_empty_state_texts_fit() {
   fits(small, kPickInLibrary, kEmptyLineW);
 }
 
-// No card, and a card that isn't FAT32: the empty state's title and lines,
-// and Try again's note when it still fails (Small before ": ", Body after).
+// No card, and each kind of card that didn't mount (cardMessage(): exFAT,
+// NTFS, a GPT, nothing recognised): the empty state's title and lines, and
+// Try again's note when it still fails (Small before ": ", Body after).
 void test_no_card_texts_fit() {
   using namespace uitext;
+  using cardformat::Kind;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
-  fits(title, kNoCardTitle, kEmptyTitleW);
-  fits(title, kNotFat32Title, kEmptyTitleW);
-  for (const char* t : kNoCardLines) fits(small, t, kEmptyLineW);
-  for (const char* t : kNotFat32Lines) fits(small, t, kEmptyLineW);
   fits(bold, kTryAgain, 320 - 140 - 12);  // the one button: x 70, 180 px, 6 px in at each end
-  for (const char* note : {kStillNoCard, kStillNotFat32}) {
-    const std::string n(note);
+  for (Kind k : {Kind::Unreadable, Kind::Other, Kind::ExFat, Kind::Ntfs, Kind::Gpt}) {
+    const CardMessage& m = cardMessage(k);
+    fits(title, m.title, kEmptyTitleW);
+    for (const char* t : m.lines) fits(small, t, kEmptyLineW);
+    const std::string n(m.still);
     const size_t colon = n.find(": ");
     TEST_ASSERT_TRUE(colon != std::string::npos);
     fits(small, n.substr(0, colon).c_str(), kToastTwoLineW);
-    fits(body, note + colon + 2, kToastTwoLineW);
+    fits(body, m.still + colon + 2, kToastTwoLineW);
+    char msg[200];
+    snprintf(msg, sizeof(msg), "%s: title %d; lines %d, %d; note %d, %d", cardformat::name(k), title.width(m.title),
+             small.width(m.lines[0]), small.width(m.lines[1]), small.width(n.substr(0, colon).c_str()),
+             body.width(m.still + colon + 2));
+    TEST_MESSAGE(msg);
   }
-  char msg[200];
-  snprintf(msg, sizeof(msg), "widths: titles %d, %d; lines %d, %d, %d, %d; notes %d, %d", title.width(kNoCardTitle),
-           title.width(kNotFat32Title), small.width(kNoCardLines[0]), small.width(kNoCardLines[1]),
-           small.width(kNotFat32Lines[0]), small.width(kNotFat32Lines[1]), body.width(kStillNoCard),
-           body.width(kStillNotFat32));
-  TEST_MESSAGE(msg);
 }
 
 // The board guard's screen (Font2, no wrap): every line at Font2's widest

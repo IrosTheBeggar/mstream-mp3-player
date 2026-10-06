@@ -41,12 +41,14 @@ public:
   // False: cardKind() read again.
   bool probeCard();
   // When the card didn't mount, what its first sectors say it is
-  // (cardformat: read at begin() and at each failed probeCard()).
-  // cardNotFat32(): a card is in, but exFAT, NTFS or a GPT: the empty
-  // state says "This card isn't FAT32" instead of "No microSD card".
+  // (cardformat: read at begin() and at each failed probeCard()): the
+  // empty state's message (uitext::cardMessage(): "No microSD card", "This
+  // card is exFAT", ... "Can't read this card").
   cardformat::Kind cardKind() const { return cardKind_; }
-  bool cardNotFat32() const { return cardformat::notFat32(cardKind_); }
-  // The mounted volume's size in bytes (0: none), for About.
+  // The storage's size in bytes (0: none), for About: the card's (its
+  // CSD's sector count, kept since the mount) or the flash partition's.
+  // Never reads the card or takes its lock (not SD.totalBytes(), a hidden
+  // free-space count: LocalStorage.cpp); there is no free space here.
   uint64_t totalBytes() const;
   // The VFS mount point ("/sd", "/littlefs"): a path the fs sees as
   // "/music/x" is "<vfsRoot>/music/x" to POSIX calls (open, stat, opendir),

@@ -637,7 +637,7 @@ void NowPlayingPage::drawPlayZone() {
 bool NowPlayingPage::emptyState(EmptyState& e) const {
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
-    noCardState(e, s.cardNotFat32);
+    noCardState(e, s.cardKind);
     return true;
   }
   e.icon = &icons::kNote;
@@ -696,7 +696,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   const bool empty = s.current < 0;
   const bool noCard = !s.card && s.libraryTracks == 0;
   if (empty) {
-    if (!drawn_.valid || !drawn_.empty || drawn_.noCard != noCard || drawn_.notFat32 != s.cardNotFat32) {
+    if (!drawn_.valid || !drawn_.empty || drawn_.noCard != noCard || drawn_.cardKind != s.cardKind) {
       EmptyState es;
       emptyState(es);
       drawEmptyState(es, kContentY, kH - kContentY, accent::NowPlaying, emptyPressed_);
@@ -704,7 +704,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawn_.valid = true;
       drawn_.empty = true;
       drawn_.noCard = noCard;
-      drawn_.notFat32 = s.cardNotFat32;
+      drawn_.cardKind = s.cardKind;
     }
     return false;
   }
