@@ -40,23 +40,41 @@ struct Header {
   int hit(const InputEvent& e) const;
 };
 
-// ---- Now Playing (spec §6.1, mockups 01-04) ----
+// ---- Now Playing (spec §6.1, mockups 01-04; docs/QUEUE-MODES.md) ----
 //
-//   40-135   the cover, 96 x 96 at (12, 40) (its thumbnail, ui/Thumbs; a
-//            note until it's made; tap: its album)
-//   38-89    the title, x 120-310: DejaVu Bold 22 on up to 2 lines, else
-//            Bold 16 on up to 3
-//   90-129   the artist ›   } 40 px bands (the review: a tap meant for one
-//   130-169  the album ›    } never opens the other), x 112 to the edge
-//                             (the album's touch: 130-161)
-//   137-169  the seek bar's readout while a finger scrubs, the full width
-//   162-191  the seek bar's touch, the full width (170 while play waits)
-//   170-191  the progress line, elapsed / "4 of 16 · SPYDRONE" / length
+//   36-37    background
+//   39-136   the cover's 1 px frame; the cover 96 x 96 at (12, 40) (its
+//            thumbnail, ui/Thumbs; a note until it's made)
+//   38-89    the title, x 120-310 (190 px): DejaVu Bold 22 on up to 2
+//            lines, else Bold 16 on up to 3
+//   90-112   the artist (Body, soft), x 120-310   } plain rows of 23 px:
+//   113-135  the album (Body, dim), x 120-310     } no "›", no taps of their own
+//   136-145  background
+//   113-145  the seek bar's readout while a finger scrubs, the full width
+//            (over the album row and the cover's lowest rows)
+//   138-167  the seek bar's touch, the full width, waiting or not
+//   146-167  the progress line, elapsed / "4 of 16 · SPYDRONE" / length
 //            (where it plays, when it fits: mockup 01's output line; the
 //            headphones not connected, "SPYDRONE (not connected)" even
 //            when the rest doesn't fit, so a play that waits for them
 //            is no surprise)
-//   192-239  [volume] [prev] [play/pause] [next] [...]   64 px zones
+//   168-239  [volume] [prev] [play/pause] [next] [...]   64 x 72 zones,
+//            drawn as one 56-row strip at y 176-231 (the play disc r 25;
+//            under the dots the shuffle and repeat indicator)
+//
+// Two menus, one job each (the user's split). A tap anywhere on the
+// navigation area (everything above the seek bar's touch: the cover, the
+// title, the artist, the album, their margins) opens the navigation menu,
+// a 3-row sheet titled with the track: Go to artist, Go to album, Go to
+// folder, each with its name dim on the right (the folder cut from the
+// left: "…/Daft Punk/Discovery"). It acts on the track it was opened for.
+// A built-in track, a Library not ready or a synthetic browse: a toast
+// instead. A Down lights the area (ROW_SEL around the cover, which stays as
+// it is). "..." opens the playback menu, "Playback": Shuffle (On/Off) and
+// Repeat (Off/All/One), which change in place with the sheet staying up,
+// then Sleep timer (its state; a tap opens the Sleep timer sheet). Every
+// sheet ignores a touch that starts within 300 ms of its opening, so a
+// double tap never picks a row.
 //
 // The progress line is a seek bar (docs/SEEK-BAR.md; lib/core/SeekBar): a
 // knob at where it plays. A tap goes to the second under the finger (not a
@@ -66,26 +84,27 @@ struct Header {
 // above on the side away from the knob, and the music plays on until the
 // lift, which seeks once (PlaybackController::seek()). Lifting with the
 // knob back on the marker (it snaps there with a tick), or slid off the
-// bar (above y 130, or onto the strip: "Release to cancel"), seeks
-// nothing, and so does a touch a sheet or a dialog takes. Seeks are whole
-// seconds, from 0:00 to the length less 6 s (the edge readings reach
-// both). Inert (no knob) while the length isn't known, the track failed,
-// or it is under 10 s.
+// bar (above y 106, onto the artist row, or onto the strip: "Release to
+// cancel"), seeks nothing, and so does a touch a sheet or a dialog takes.
+// Seeks are whole seconds, from 0:00 to the length less 6 s (the edge
+// readings reach both). Inert (no knob) while the length isn't known, the
+// track failed, or it is under 10 s.
 //
 // While play waits for the headphones (PlayState::Waiting, PlayGate): the
-// play button is a spinner (a tap, or B, cancels the wait: paused), and the
-// artist and album bands give way to "Waiting for SPYDRONE... try 2 of 3"
-// with [Play on speaker] (the explicit choice) and [Cancel].
+// play button is a spinner (a tap, or B, cancels the wait: paused), the
+// title strip has the title on one line over "Waiting for SPYDRONE..." and
+// "try 2 of 3", and the artist and album rows give way to [Play on
+// speaker] (the explicit choice) and [Cancel], drawn at y 94-129 and taking
+// y 90-137. Only the cover opens the navigation menu then.
 //
-// The volume zone opens the volume sheet; "..." the sheet with Sleep timer
-// (its state on the right: "Off", "23 min", "End of track"; a tap opens the
-// Sleep timer sheet), Go to artist, Go to album, Show in folders. While a
-// sleep timer runs, the progress line has a moon and "23 min" ("track",
-// "fading"; seconds in the last minute) after "4 of 16 · SPYDRONE", or in
-// its place when both don't fit. Only what changed is redrawn: the
-// cover when the album changes or its thumbnail arrives, the text when the
-// track does, the times once a second, the transport on a state change,
-// and the seek bar's frames on the 30 fps deadlines while a finger scrubs.
+// The volume zone opens the volume sheet. While a sleep timer runs, the
+// progress line has a moon and "23 min" ("track", "fading"; seconds in the
+// last minute) after "4 of 16 · SPYDRONE", or in its place when both don't
+// fit. Only what changed is redrawn: the cover when the album changes or
+// its thumbnail arrives, the text when the track does (the title strip also
+// when the wait's status does), the times once a second, the transport on
+// a change (the play state, the volume, the output, shuffle, repeat), and
+// the seek bar's frames on the 30 fps deadlines while a finger scrubs.
 // Nothing queued: "Nothing playing" with Open Library and Shuffle all (or,
 // with no card and no music, "No microSD card" and Try again).
 class NowPlayingPage : public Page {
@@ -106,39 +125,56 @@ public:
 
 private:
   // (The transport's zones last, from Volume: `Volume + z`. Bar: the seek
-  // bar, not "Seek", which PlaybackController has.)
-  enum Zone : int8_t {
-    None = -1, Cover, Artist, Album, WaitSpeaker, WaitCancel, Bar, Volume, Prev, PlayPause, Next, More
-  };
+  // bar, not "Seek", which PlaybackController has. Nav: the navigation
+  // area, the cover and the text.)
+  enum Zone : int8_t { None = -1, Nav, WaitSpeaker, WaitCancel, Bar, Volume, Prev, PlayPause, Next, More };
   // How the seek bar is drawn (docs/SEEK-BAR.md section 4.1).
   enum class BarLook : uint8_t { Inert, Rest, Pressed, Scrubbing, Off };
+  // The navigation menu's rows, in order.
   enum class Go : uint8_t { Artist, Album, Folders };
+  // Which menu the sheet up is (onSheet()).
+  enum class Ask : uint8_t { None, Nav, Playback };
   Zone zoneAt(const InputEvent& e) const;
   // The playing track's album in the library index (kNone: none, or a
   // built-in track).
   uint32_t playingAlbum() const;
   void drawCover();
+  // The title strip (while a play waits: the title on one line and the
+  // wait's status).
   void drawTitle();
   void drawArtistAlbum();
-  // The artist and album bands, or (waiting) the waiting panel in their place.
+  // The artist and album rows, or (waiting) the waiting panel's buttons in
+  // their place.
   void drawMiddle();
   void drawWaiting();
+  // The navigation area's background: ROW_SEL while a finger is down on it
+  // (not while a play waits), else BG.
+  uint16_t navBg() const;
+  // What the navigation area's pieces don't cover, in navBg().
+  void fillNav();
+  // The navigation area in its look (the press look on or off): the gaps,
+  // the title strip and the rows; the cover as it is.
+  void drawNav();
   // The progress band, in the seek bar's look (the knob drawn last: the
   // text's background would cut it), and its text row (not while a finger
   // scrubs: the readout above says it all).
   void drawProgress();
   void drawProgressText(M5Canvas& c, bool paused);
   // The seek bar: seekable now (a track that hasn't failed, 10 s or more);
-  // its look; the readout row above the line (and the album band's top
-  // rows cleared, the first time); the end of a scrub (the middle, the
-  // left column under the cover; the band follows); a touch's seek, its
-  // tick and its log line.
+  // its look; the readout row above the line (over the album row and the
+  // cover's lowest rows; while a play waits, the artist row cleared too,
+  // the first time); the end of a scrub (the rows, the cover's rows from
+  // its sprite; the band follows); a touch's seek, its tick and its log
+  // line.
   bool seekable() const;
   BarLook barLook() const;
   void drawReadout();
   void endScrub();
   void seekTo(const SeekBar::Out& o, uint32_t nowMs);
   void drawTransport();
+  // The shuffle and repeat indicator into `c`, centred at (cx, cy): the
+  // glyphs that apply, nothing when neither does.
+  void drawModes(M5Canvas& c, int cx, int cy);
   // The play button (a spinner while waiting) into `c`, centred at (cx, cy).
   void drawPlayButton(M5Canvas& c, int cx, int cy, bool down);
   // Only the play button's zone (the spinner's next step).
@@ -149,7 +185,13 @@ private:
   // "SPYDRONE", "Speaker", "SPYDRONE (not connected)" (into buf).
   const char* outputName(char* buf, size_t size) const;
   uint32_t outputSig() const;
-  void goToLibrary(Go where);
+  // The two menus: the navigation menu for the playing track (or a toast
+  // when nothing in it could act), and the playback menu.
+  void openNavMenu();
+  void openPlaybackMenu();
+  // The Library at `track`'s artist, album or folders (the checks again:
+  // the index may have gone while the menu was up).
+  void goToLibrary(Go where, uint32_t track);
   // Nothing queued: the empty (or no-card) state instead of the player.
   bool emptyState(EmptyState& e) const;
   void onEmptyEvent(const InputEvent& e);
@@ -182,6 +224,9 @@ private:
     int16_t markerX = -1;
     SeekBar::Readout readout;
     bool scrubUp = false;
+    // The indicator as drawn (repeat 0xFF: none yet).
+    bool shuffle = false;
+    uint8_t repeat = 0xFF;
   } drawn_;
   SeekBar bar_;
   Zone pressed_ = None;
@@ -189,7 +234,9 @@ private:
   uint32_t nextSpinMs_ = 0;
   int emptyPressed_ = -1;
   M5Canvas* cover_ = nullptr;  // PSRAM, 98 x 98 (the cover and its frame)
-  char moreFolder_[96] = "";   // the "..." sheet's folder line
+  Ask ask_ = Ask::None;
+  uint32_t navTrack_ = 0xFFFFFFFFu;  // the navigation menu's track (its TrackCatalog id)
+  char navFolder_[96] = "";          // its Go to folder detail, cut from the left
 };
 
 // ---- Library (spec §6.2, mockups 07-15, with the review's grafts) ----

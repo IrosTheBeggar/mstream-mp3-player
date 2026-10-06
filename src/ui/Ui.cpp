@@ -12,7 +12,6 @@
 #include <cstring>
 
 #include "RateConverter.h"
-#include "Shuffle.h"
 #include "SleepTimer.h"
 #include "TextFit.h"
 #include "TextFold.h"
@@ -214,18 +213,15 @@ void Ui::shuffleAll() {
     warn("No music on the card to shuffle");
     return;
   }
+  // Shuffle on (the mode, not a one-shot: the menu then says what plays,
+  // and Off brings the library's own order back, A-Z, from the track that
+  // plays), then the whole library from a random track (QueueModel copies
+  // the ids and shuffles them: docs/QUEUE-MODES.md section 2.5).
   const LibraryIndex::Span all = index->allTracks();
-  auto* ids = static_cast<uint32_t*>(psramAlloc(all.count * sizeof(uint32_t)));
-  if (!ids) {
-    toast("Not enough memory for that", false);
-    return;
-  }
-  memcpy(ids, all.ids, all.count * sizeof(uint32_t));
-  shuffle::permute(ids, all.count, esp_random());
-  const bool ok = player_.playNow(ids, all.count, 0);
-  psramFree(ids);
+  if (!player_.shuffle()) host_.setShuffle(true);
+  const bool ok = player_.playNow(all.ids, all.count, PlaybackController::kAnyStart);
   added_.clear();
-  Serial.printf("[ui] shuffle all: %lu tracks%s\n", (unsigned long)all.count, ok ? "" : ": NO MEMORY");
+  Serial.printf("[ui] shuffle all: %lu tracks (shuffle on)%s\n", (unsigned long)all.count, ok ? "" : ": NO MEMORY");
   char text[48];
   snprintf(text, sizeof(text), "Shuffling %lu tracks", (unsigned long)all.count);
   toast(ok ? text : "Not enough memory for that", ok);

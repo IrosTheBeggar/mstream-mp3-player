@@ -26,7 +26,7 @@ namespace {
 using T = InputEvent::Type;
 using End = SeekBar::End;
 constexpr uint32_t kL = 245000;  // 4:05: the reach is 3:59
-constexpr int kY = 174;          // the line's row
+constexpr int kY = 150;          // the line's row
 
 InputEvent ev(T type, int x, int y = kY, uint32_t ms = 0, int dx = 0, int dy = 0, uint8_t edges = 0) {
   InputEvent e;
@@ -284,21 +284,21 @@ void test_the_detent_snaps_and_ticks() {
   TEST_ASSERT_EQUAL(End::Stay, m.onEvent(ev(T::DragEnd, 120), 87000).end);
 }
 
-// Off the bar: above y 130 (past the album band) or onto the strip (y 240);
-// back from y 138, or above 232. A tick each way; a lift while off seeks
+// Off the bar: above y 106 (onto the artist row) or onto the strip (y 240);
+// back from y 114, or above 232. A tick each way; a lift while off seeks
 // nothing; while off the knob is back where it plays.
 void test_off_and_back() {
   SeekBar b = pressed(200, 60000);
   b.onEvent(ev(T::DragStart, 214, kY, 0, 14, 0), 60000);
-  SeekBar::Out o = b.onEvent(ev(T::DragMove, 214, 129), 60000);
+  SeekBar::Out o = b.onEvent(ev(T::DragMove, 214, 105), 60000);
   TEST_ASSERT_TRUE(o.tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
   TEST_ASSERT_EQUAL_INT(b.markerX(), b.knobX());
-  o = b.onEvent(ev(T::DragMove, 230, 135), 60000);
+  o = b.onEvent(ev(T::DragMove, 230, 111), 60000);
   TEST_ASSERT_FALSE(o.tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
   TEST_ASSERT_EQUAL_INT(b.markerX(), b.knobX());
-  o = b.onEvent(ev(T::DragMove, 230, 138), 60000);
+  o = b.onEvent(ev(T::DragMove, 230, 114), 60000);
   TEST_ASSERT_TRUE(o.tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
   TEST_ASSERT_EQUAL_UINT32(SeekBar::msAt(230, 0, kL), b.targetMs());  // back by the grab's mapping
@@ -341,19 +341,19 @@ void test_the_readout_changes_side_with_hysteresis() {
 
 // ---- every threshold, on both sides ----
 
-// y: off above 130 (130 still on), back from 138 (137 still off); off on
+// y: off above 106 (106 still on), back from 114 (113 still off); off on
 // the strip from 240 (239 still on), back above 232 (232 still off).
 void test_off_and_back_at_their_rows() {
   SeekBar b = pressed(200, 60000);
   b.onEvent(ev(T::DragStart, 214, kY, 0, 14, 0), 60000);
-  SeekBar::Out o = b.onEvent(ev(T::DragMove, 214, 130), 60000);
+  SeekBar::Out o = b.onEvent(ev(T::DragMove, 214, 106), 60000);
   TEST_ASSERT_FALSE(o.tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
-  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 129), 60000).tick);
+  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 105), 60000).tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
-  TEST_ASSERT_FALSE(b.onEvent(ev(T::DragMove, 214, 137), 60000).tick);
+  TEST_ASSERT_FALSE(b.onEvent(ev(T::DragMove, 214, 113), 60000).tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Off, b.phase());
-  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 138), 60000).tick);
+  TEST_ASSERT_TRUE(b.onEvent(ev(T::DragMove, 214, 114), 60000).tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());
   TEST_ASSERT_FALSE(b.onEvent(ev(T::DragMove, 214, 239), 60000).tick);
   TEST_ASSERT_EQUAL(SeekBar::Phase::Scrubbing, b.phase());

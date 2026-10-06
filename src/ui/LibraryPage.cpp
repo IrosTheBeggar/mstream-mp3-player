@@ -685,7 +685,11 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
   char text[128];
   switch (action) {
     case 0:
-      ok = p.playNow(span.ids, span.count, start >= 0 ? static_cast<uint32_t>(start) : 0);
+      // A tapped track plays first; a container's Play (an artist, an
+      // album, a folder, "Play all N") starts on the first, or, while
+      // shuffled, on a random track (docs/QUEUE-MODES.md section 2.5).
+      ok = p.playNow(span.ids, span.count,
+                     start >= 0 ? static_cast<uint32_t>(start) : PlaybackController::kAnyStart);
       if (ok) ui_.added().clear();  // a new queue: nothing "added" to show in it
       if (ok && p.state() == PlayState::Waiting) {
         // The headphones aren't connected: it plays once they are (Now

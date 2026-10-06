@@ -323,6 +323,53 @@ def vibrate():
     return img
 
 
+# Now Playing's shuffle and repeat indicator (docs/QUEUE-MODES.md section
+# 4.2): small enough to sit under the "..." dots (18 x 4), 1 px strokes.
+# kShuffle (20 x 16, Shuffle all's) is too heavy there.
+SHUFFLE_SMALL = [
+    "...........#..",
+    "...........##.",
+    "####.....#####",
+    "....#...#..##.",
+    ".....#.#...#..",
+    "......#.......",
+    ".....#.#...#..",
+    "....#...#..##.",
+    "####.....#####",
+    "...........##.",
+    "...........#..",
+]
+
+REPEAT_SMALL = [
+    ".........#....",
+    ".........##...",
+    ".###########..",
+    ".#.......##...",
+    ".#.......#..#.",
+    ".#..........#.",
+    ".#..#.......#.",
+    "...##.......#.",
+    "..###########.",
+    "...##.........",
+    "....#.........",
+]
+
+# The loop with a "1" in it: Repeat One.
+REPEAT_ONE_SMALL = [
+    ".........#....",
+    ".........##...",
+    ".###########..",
+    ".#.....#.##...",
+    ".#....##.#..#.",
+    ".#.....#....#.",
+    ".#..#..#....#.",
+    "...##.###...#.",
+    "..###########.",
+    "...##.........",
+    "....#.........",
+]
+
+
 ICONS = [
     ("Library", library),
     ("Queue", queue),
@@ -352,6 +399,9 @@ ICONS = [
     ("Gear", gear),
     ("Info", info),
     ("Vibrate", vibrate),
+    ("ShuffleSmall", lambda: from_art(SHUFFLE_SMALL)),
+    ("RepeatSmall", lambda: from_art(REPEAT_SMALL)),
+    ("RepeatOneSmall", lambda: from_art(REPEAT_ONE_SMALL)),
 ]
 
 

@@ -43,6 +43,10 @@ extern const Icon kWarn;          // a track that couldn't be played
 extern const Icon kGear;          // settings rows
 extern const Icon kInfo;          // About
 extern const Icon kVibrate;       // Haptics
+// Now Playing's shuffle and repeat indicator, under the "..." dots (14 x 11).
+extern const Icon kShuffleSmall;
+extern const Icon kRepeatSmall;
+extern const Icon kRepeatOneSmall;  // the loop with a "1": Repeat One
 
 // Draws `icon` with its top-left at (x, y), or centred on (cx, cy).
 inline void draw(lgfx::LovyanGFX& g, const Icon& icon, int x, int y, uint16_t colour) {
