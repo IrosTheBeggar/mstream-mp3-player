@@ -25,11 +25,29 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // rules are QueueModel's): playNow() starts the new queue; removing the
 // current entry skips to the next one that stayed (or stops if none did);
 // clearQueue() stops; undo() goes back to the track that was current if
-// the one playing isn't in the restored queue. Edits that don't touch it
-// (Play next, + Queue, Clear up next) change nothing that plays.
+// the one playing isn't in the restored queue, in the shuffle mode the edit
+// was made in (Shuffle all's Play turns it on; its undo, off again). Edits
+// that don't touch it (Play next, + Queue, Clear up next) change nothing
+// that plays.
 //
-// At either end of the queue next() and prev() wrap around, as does a
-// track ending (setRepeat(false): the end of the last track stops there).
+// Repeat (setRepeat(), docs/QUEUE-MODES.md section 3): Off, All or One.
+// The rule: a natural end follows the mode; a skip wraps unless the mode is
+// Off. All wraps from the last entry to the first, at an end as at a skip
+// (gaplessly: the first entry is the word while the last plays). One plays
+// the entry again at its natural end (gaplessly: its word is itself, a new
+// token each loop, the self-join a queue of one on repeat always had;
+// repeats() counts the loops); next, prev and a failure still move, and
+// wrap at the queue's ends as All's do. Off: the end of the last track
+// stops there, on it; next at the last entry stops too, and prev at the
+// first plays the first again. The engine's own default is All (the host
+// tests' wrapping); the firmware sets the saved mode at boot (Off unless
+// changed).
+//
+// Shuffle (setShuffle(): QueueModel::setShuffled(), which reorders the
+// entries) changes nothing that plays: the current entry is the same entry
+// in the same state, its start point and length kept. The word on what
+// follows moves to the new next entry (a cut, inside the decode-ahead
+// window, or past the join the heard advance starts what now comes next).
 //
 // Prev restarts a track past its first 3 s (prevRule(), for every prev: the
 // A click, Now Playing's, the console's p, the headphones'): back to 0:00
@@ -57,8 +75,11 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 //   - "pause after this track" (setPauseAfterTrack()): at the track's
 //     natural end the player moves to the next entry and stays paused there
 //     at 0:00 (cued: a later play starts it from its beginning); at the end
-//     of the queue without repeat it stops, as it would. timerStops() counts
-//     those. A skip or a failure is no end: the flag stays for the next track.
+//     of the queue with repeat Off it stops, as it would; with Repeat One
+//     the same entry is cued at 0:00 (the timer wins: it pauses, and a later
+//     play starts the track from the top, as One would have). timerStops()
+//     counts those. A skip or a failure is no end: the flag stays for the
+//     next track.
 //   - pauseByTimer(): Playing pauses, Waiting ends paused, Paused stays.
 // Either way the pause is marked "paused by the timer" (pausedByTimer()):
 // headphone Play (HeadsetKeys) doesn't resume it, since in-ear detection
@@ -70,11 +91,12 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // Gapless playback (docs/GAPLESS.md, setGapless(): on by default): while
 // the backend holds the current entry's track (playing, paused, or waiting
 // to resume it), the player tells it what advance() would start next
-// (IAudioBackend::setNext(): the entry QueueModel::peek(+1, repeat) names,
-// its token kept while the same track stays next, a new one otherwise),
-// or that nothing follows: gapless off, "pause after this track" set, the
-// sleep timer ending at this entry (NextGate), or the end of the queue
-// without repeat. Worked out again only when one of those changes (a
+// (IAudioBackend::setNext(): the entry a natural end would start, endNext():
+// the next one, wrapping unless repeat is Off, or the entry itself with
+// Repeat One; its token kept while the same track stays next, a new one
+// otherwise), or that nothing follows: gapless off, "pause after this
+// track" set, the sleep timer ending at this entry (NextGate), or the end
+// of the queue with repeat Off. Worked out again only when one of those changes (a
 // signature of them), every update() and at the end of every action, so an
 // edit's new word reaches the backend at once. When the backend reports
 // that a joined track is heard (takeAdvance(), at the top of update() and
@@ -84,8 +106,8 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 //   - "pause after this track" or the timer ending here: the boundary's
 //     pause (the next entry cued at 0:00), as at any natural end;
 //   - what advance() would start isn't the joined track any more (an edit
-//     that came too late to cut it out: Play next, a remove, repeat): that
-//     is started (advance(); paused: cued);
+//     that came too late to cut it out: Play next, a remove, repeat,
+//     shuffle): that is started (advance(); paused: cued);
 //   - otherwise the joined entry becomes current without a play(): the
 //     state, the queue and the backend stay as they are, the start point
 //     goes and the failure count starts again.
@@ -176,6 +198,8 @@ public:
   void cancelWait();
 
   void play(size_t position);  // start the queue entry at `position`
+  // playNow()'s start: shuffled, a random track first; not shuffled, the first.
+  static constexpr uint32_t kAnyStart = QueueModel::kAnyStart;
   // Stopped or Paused: plays (or waits); Playing: pauses; Waiting: cancels
   // the wait (Paused).
   void togglePlayPause();
@@ -224,7 +248,8 @@ public:
   // The current entry's next start begins `ms` in (a track `durationMs`
   // long then: what Now Playing shows until it plays, and the backend's
   // hint; 0: the length as known here, a waiting start point's, the held
-  // track's, else the catalog's hint).
+  // track's, the one told for the entry (lengthHint()), else the catalog's
+  // hint).
   // Stopped: it waits. Playing: it starts there now (a wait for the
   // headphones: it starts there when they connect). Paused on a track the
   // backend holds: that track is let go, the next play starts there.
@@ -302,8 +327,14 @@ public:
   void update(uint32_t nowMs);
 
   // ---- the queue's edits, with what they do to playback ----
-  // Play: the queue becomes `tracks`, and the one at `start` plays.
-  bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start);
+  // Play: the queue becomes `tracks`, and the one at `start` plays
+  // (shuffled: first, the rest shuffled after it; kAnyStart: a random one,
+  // or the first when not shuffled).
+  bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start) { return playNow(tracks, n, start, shuffle()); }
+  // Play with the shuffle mode set as part of it (Shuffle all: on): one
+  // edit (QueueModel::replace(.., shuffled)), so undo() puts the queue and
+  // the mode back. Out of memory: false, and neither changed.
+  bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle);
   bool playNext(const uint32_t* tracks, uint32_t n);
   bool addToQueue(const uint32_t* tracks, uint32_t n);
   QueueModel::Removed remove(const uint32_t* positions, uint32_t n);
@@ -329,8 +360,19 @@ public:
   };
   const Failure& lastFailure() const { return failure_; }
 
-  void setRepeat(bool on) { repeat_ = on; }
-  bool repeat() const { return repeat_; }
+  // ---- repeat and shuffle (docs/QUEUE-MODES.md) ----
+  enum class Repeat : uint8_t { Off, All, One };
+  // An action: the word on what follows changes at once, not at the next
+  // update().
+  void setRepeat(Repeat r);
+  Repeat repeat() const { return repeat_; }
+  // An action: the queue's order (QueueModel::setShuffled()); the same
+  // entry in the same state, nothing started, stopped or cued.
+  void setShuffle(bool on);
+  bool shuffle() const { return queue_.shuffled(); }
+  // Repeat One's loops (a natural end that played the entry again),
+  // free-running: main's "[queue] repeat one" line.
+  uint32_t repeats() const { return repeats_; }
 
   PlayState state() const { return state_; }
   int currentIndex() const { return queue_.current(); }
@@ -361,7 +403,8 @@ private:
   };
   struct Signature {
     uint32_t position = 0, content = 0, heard = 0;
-    bool repeat = false, pauseAfter = false, gapless = false, gate = false;
+    uint8_t repeat = 0xFF;  // Repeat
+    bool pauseAfter = false, gapless = false, gate = false;
     bool operator==(const Signature& o) const {
       return position == o.position && content == o.content && heard == o.heard && repeat == o.repeat &&
              pauseAfter == o.pauseAfter && gapless == o.gapless && gate == o.gate;
@@ -380,7 +423,17 @@ private:
   // The current entry plays, or (held) waits.
   void startCurrent();
   void startNow();
-  void advance();  // next track without counting as a user action
+  // A skip wraps unless repeat is Off; a natural end follows the mode.
+  bool wraps() const { return repeat_ != Repeat::Off; }
+  // What a natural end would start: the current position with One, else
+  // the next (wrapping unless Off); kNone: nothing (the end, Off).
+  uint32_t endNext() const;
+  // A natural end's step: One stays (and counts a loop), else the next.
+  // False: nothing to step to (the end, Off).
+  bool stepAtEnd();
+  // The next track without counting as a user action: at a natural end
+  // (`atEnd`) by the repeat mode, else as a skip; stopped when it can't.
+  void advance(bool atEnd);
   void cue(int delta);
   // Prev::Restart: the current entry from 0:00, in the same state.
   void restart();
@@ -419,7 +472,8 @@ private:
   const TrackCatalog& catalog_;
   const Hold* hold_ = nullptr;
   PlayState state_ = PlayState::Stopped;
-  bool repeat_ = true;
+  Repeat repeat_ = Repeat::All;
+  uint32_t repeats_ = 0;
   // Paused (or Waiting) on a cued track: the backend holds nothing, so a
   // resume starts it.
   bool cued_ = false;

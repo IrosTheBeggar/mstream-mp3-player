@@ -19,9 +19,10 @@ bool migrated = true;
 bool written = false;
 
 // One step per schema bump, from `from` up to `to` (each step the next
-// number's changes: a key moved, a blob rewritten). Schema 1 is the first:
-// nothing to do yet. False: a step failed; the number then stays where it
-// was, so the next boot tries again.
+// number's changes: a key moved, a blob rewritten). Schema 1 is the first.
+// The step from 1 to 2 is nothing: schema 2 only adds "queue"/"repeat",
+// and an absent key reads as Off (QueueStore::loadRepeat()). False: a step
+// failed; the number then stays where it was, so the next boot tries again.
 bool migrate(uint16_t from, uint16_t to) {
   (void)from;
   (void)to;

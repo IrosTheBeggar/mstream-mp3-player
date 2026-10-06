@@ -111,7 +111,9 @@ struct Rig {
     if (queue.current() >= 0) {
       in.positionMs = audio.position;
       in.durationMs = durationMs;
-      in.lastOfQueue = static_cast<uint32_t>(queue.current()) + 1 >= queue.size();
+      // (main.cpp's: Repeat One makes the track that plays the last.)
+      in.lastOfQueue = SleepTimer::lastOfQueue(queue.current(), queue.size(),
+                                               player.repeat() == PlaybackController::Repeat::One);
       in.lastOfAlbum = lastOfAlbum || in.lastOfQueue;
     }
     const SleepTimer::Out o = timer.update(in);
@@ -335,7 +337,7 @@ void test_end_of_album_pauses_only_at_the_album_end() {
 void test_end_of_queue_without_repeat_stops_at_the_end() {
   Rig r;
   r.durationMs = 30000;
-  r.player.setRepeat(false);
+  r.player.setRepeat(PlaybackController::Repeat::Off);
   r.player.play(1);
   r.timer.setEnd(Choice::EndOfQueue);
   r.run(1000);
@@ -362,6 +364,26 @@ void test_end_of_queue_with_repeat_pauses_on_the_first_entry() {
   r.endTrack();
   TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
   TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+}
+
+// With Repeat One, End of queue and End of album end at the track that
+// plays (nothing after it would ever play): the same entry cued at 0:00.
+void test_end_of_queue_and_album_with_repeat_one_pause_on_the_same_entry() {
+  for (int album = 0; album < 2; ++album) {
+    Rig r;
+    r.durationMs = 30000;
+    r.player.setRepeat(PlaybackController::Repeat::One);
+    r.player.play(0);
+    r.timer.setEnd(album ? Choice::EndOfAlbum : Choice::EndOfQueue);
+    r.run(1000);
+    TEST_ASSERT_TRUE(r.player.pauseAfterTrack());
+    r.endTrack();
+    TEST_ASSERT_EQUAL(PlayState::Paused, r.player.state());
+    TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());
+    TEST_ASSERT_TRUE(r.player.pausedByTimer());
+    r.run(1000);
+    TEST_ASSERT_TRUE(r.saw(Did::Expired));
+  }
 }
 
 // ---- during the fade ----
@@ -781,6 +803,24 @@ void test_ends_at_for_each_choice() {
   TEST_ASSERT_FALSE(SleepTimer::endsAt(Choice::Timed, true, true));
 }
 
+// Repeat One: the track that plays is the last of the queue (and so of
+// the album), wherever it is; Off and All as before.
+void test_last_of_queue_with_repeat_one() {
+  TEST_ASSERT_FALSE(SleepTimer::lastOfQueue(-1, 0, false));
+  TEST_ASSERT_FALSE(SleepTimer::lastOfQueue(-1, 0, true));  // nothing plays
+  TEST_ASSERT_FALSE(SleepTimer::lastOfQueue(1, 3, false));
+  TEST_ASSERT_TRUE(SleepTimer::lastOfQueue(2, 3, false));
+  TEST_ASSERT_TRUE(SleepTimer::lastOfQueue(0, 1, false));
+  TEST_ASSERT_TRUE(SleepTimer::lastOfQueue(0, 3, true));
+  TEST_ASSERT_TRUE(SleepTimer::lastOfQueue(1, 3, true));
+  // End of album and End of queue end at it (main's: the album's end is
+  // the queue's last, or albumEndsBetween()).
+  const bool last = SleepTimer::lastOfQueue(1, 3, true);
+  TEST_ASSERT_TRUE(SleepTimer::endsAt(Choice::EndOfQueue, false, last));
+  TEST_ASSERT_TRUE(SleepTimer::endsAt(Choice::EndOfAlbum, last, last));
+  TEST_ASSERT_FALSE(SleepTimer::endsAt(Choice::Timed, last, last));
+}
+
 // A gapless advance: the entry and the backend's count (its trackSeq())
 // change in the same pass, the position maybe already past 1 s (the loop
 // took the advance late: a library rebuild, a screenshot): started all the
@@ -940,6 +980,7 @@ int main(int, char**) {
   RUN_TEST(test_end_of_album_pauses_only_at_the_album_end);
   RUN_TEST(test_end_of_queue_without_repeat_stops_at_the_end);
   RUN_TEST(test_end_of_queue_with_repeat_pauses_on_the_first_entry);
+  RUN_TEST(test_end_of_queue_and_album_with_repeat_one_pause_on_the_same_entry);
   RUN_TEST(test_skip_during_the_fade_keeps_its_level);
   RUN_TEST(test_skip_during_a_track_fade_holds_it_for_the_new_track);
   RUN_TEST(test_a_position_that_jumps_back_in_a_track_fade_keeps_its_level);
@@ -958,6 +999,7 @@ int main(int, char**) {
   RUN_TEST(test_entry_start_waits_for_the_backend);
   RUN_TEST(test_entry_start_after_a_late_gapless_advance);
   RUN_TEST(test_ends_at_for_each_choice);
+  RUN_TEST(test_last_of_queue_with_repeat_one);
   RUN_TEST(test_end_of_track_after_a_skip_near_the_end_does_not_fade_the_new_track);
   RUN_TEST(test_the_fade_toast_buttons);
   RUN_TEST(test_texts);

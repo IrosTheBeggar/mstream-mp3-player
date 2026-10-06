@@ -334,7 +334,7 @@ void test_an_album_plays_as_one_stream() {
   w.put("a", track(44100, 80000, 1));
   w.put("b", track(44100, 30000, 2, 1106, 1300));
   w.put("c", track(44100, 60000, 3, 1, 0));
-  w.player.setRepeat(false);
+  w.player.setRepeat(PlaybackController::Repeat::Off);
   w.player.play(0);
   w.runToStop();
   assertSame(concat({w.get("a").kept(), w.get("b").kept(), w.get("c").kept()}), w.audio.heard);
@@ -358,7 +358,7 @@ void test_play_next_while_the_next_is_decoded_ahead() {
   w.put("b", track(44100, 30000, 5));
   w.put("c", track(44100, 30000, 6));
   w.put("y", track(44100, 30000, 7));
-  w.player.setRepeat(false);
+  w.player.setRepeat(PlaybackController::Repeat::Off);
   w.player.play(0);
   w.untilDecodedAhead();
   const uint32_t y = w.id("y");
@@ -379,7 +379,7 @@ void test_play_next_too_late_to_cut_still_plays_y_next() {
   w.put("b", track(48000, 30000, 9));
   w.put("c", track(48000, 30000, 10));
   w.put("y", track(48000, 30000, 11));
-  w.player.setRepeat(false);
+  w.player.setRepeat(PlaybackController::Repeat::Off);
   w.player.play(0);
   w.untilDecodedAhead();
   TEST_ASSERT_TRUE(static_cast<int32_t>(w.heardAt() - w.cutAt()) > 1);  // the filter's delay: J < B
@@ -410,7 +410,7 @@ void test_queue_edits_while_decoded_ahead() {
     w.put("a", track(44100, 60000, 12));
     w.put("b", track(44100, 30000, 13));
     w.put("c", track(44100, 30000, 14));
-    w.player.setRepeat(false);
+    w.player.setRepeat(PlaybackController::Repeat::Off);
     w.player.play(0);
     w.untilDecodedAhead();
     const uint32_t one = 1, two = 2;
@@ -445,29 +445,30 @@ void test_repeat_turned_off_on_the_last_entry() {
   w.put("a", track(44100, 60000, 15));
   w.player.play(0);
   w.untilDecodedAhead();
-  w.player.setRepeat(false);  // (no action: the next update sees it)
+  w.player.setRepeat(PlaybackController::Repeat::Off);  // (an action: the word changes at once)
   w.audio.consumerPaused = false;
   w.runToStop();
   assertSame(w.get("a").kept(), w.audio.heard);
   TEST_ASSERT_EQUAL_UINT32(1, w.audio.engine.counters().cuts);
 }
 
-// A queue of one with repeat (the firmware's default) loops without a gap
+// A queue of one with repeat (All; Repeat One's self-join) loops without a gap
 // every time round, not only the first: each loop's word has a new token
 // (the heard one was taken already). Then repeat off: it stops.
 void test_a_queue_of_one_on_repeat_loops_as_one_stream() {
   World w({"a"}, {"a"});
   w.put("a", track(44100, 30000, 60));
-  w.player.setRepeat(true);
+  w.player.setRepeat(PlaybackController::Repeat::All);
   w.player.play(0);
   w.runUntil([&w] { return w.audio.advances.size() == 3; });
-  w.player.setRepeat(false);
+  w.player.setRepeat(PlaybackController::Repeat::Off);
   w.runToStop();
   const Frames a = w.get("a").kept();
   assertSame(concat({a, a, a, a}), w.audio.heard);
   TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
   TEST_ASSERT_EQUAL_UINT32(3, w.player.gaplessStats().adopted);
   TEST_ASSERT_EQUAL_UINT32(0, w.player.gaplessStats().restarted);
+  TEST_ASSERT_EQUAL_UINT32(0, w.player.repeats());  // (All's loops: no Repeat One line)
   TEST_ASSERT_EQUAL_UINT32(3, w.audio.advances.size());
   TEST_ASSERT_TRUE(w.audio.advances[0].token != w.audio.advances[1].token);
   TEST_ASSERT_TRUE(w.audio.advances[1].token != w.audio.advances[2].token);
@@ -552,7 +553,7 @@ void test_next_right_after_a_join_skips_the_joined_track() {
   w.put("a", track(44100, 60000, 23));
   w.put("b", track(44100, 30000, 24));
   w.put("c", track(44100, 30000, 25));
-  w.player.setRepeat(false);
+  w.player.setRepeat(PlaybackController::Repeat::Off);
   w.player.play(0);
   w.untilDecodedAhead();
   w.audio.read(w.heardAt() + 100 - w.audio.ring.readPos());
@@ -570,7 +571,7 @@ void test_a_paused_player_never_advances() {
   World w({"a", "b"}, {"a", "b"});
   w.put("a", track(44100, 60000, 26));
   w.put("b", track(44100, 30000, 27));
-  w.player.setRepeat(false);
+  w.player.setRepeat(PlaybackController::Repeat::Off);
   w.player.play(0);
   w.untilDecodedAhead();
   w.audio.read(w.heardAt() - 10 - w.audio.ring.readPos());
@@ -593,7 +594,7 @@ void test_gapless_off_ends_tracks_as_before() {
   w.put("a", track(44100, 60000, 28));
   w.put("b", track(44100, 30000, 29));
   w.put("c", track(44100, 30000, 30));
-  w.player.setRepeat(false);
+  w.player.setRepeat(PlaybackController::Repeat::Off);
   w.player.play(0);
   w.untilDecodedAhead();
   w.player.setGapless(false);
@@ -614,7 +615,7 @@ void test_new_keys_for_the_same_track_keep_the_join() {
     w.put("a", track(44100, 60000, 31));
     w.put("b", track(44100, 30000, 32));
     w.put("c", track(44100, 30000, 33));
-    w.player.setRepeat(false);
+    w.player.setRepeat(PlaybackController::Repeat::Off);
     w.player.play(0);
     w.untilDecodedAhead();
     if (kind == 0) {
@@ -644,7 +645,7 @@ void test_a_next_track_that_cannot_be_opened_is_skipped_as_before() {
   World w({"a", "b", "c"}, {"a", "b", "c"});
   w.put("a", track(44100, 60000, 34));
   w.put("c", track(44100, 30000, 35));
-  w.player.setRepeat(false);
+  w.player.setRepeat(PlaybackController::Repeat::Off);
   w.player.play(0);
   w.runToStop();
   assertSame(concat({w.get("a").kept(), w.get("c").kept()}), w.audio.heard);
@@ -660,7 +661,7 @@ void test_a_late_advance_still_counts_as_the_entry_s_start() {
   World w({"a", "b"}, {"a", "b"});
   w.put("a", track(44100, 10000, 36));
   w.put("b", track(44100, 80000, 37));
-  w.player.setRepeat(false);
+  w.player.setRepeat(PlaybackController::Repeat::Off);
   EntryStart e;
   w.player.play(0);
   w.untilDecodedAhead(52000);
@@ -714,7 +715,7 @@ void test_a_seek_right_after_a_join_is_dropped() {
   w.put("a", track(44100, 60000, 41));
   w.put("b", track(44100, 30000, 42));
   w.put("c", track(44100, 30000, 43));
-  w.player.setRepeat(false);
+  w.player.setRepeat(PlaybackController::Repeat::Off);
   w.player.play(0);
   const uint32_t keyA = w.queue.keyAt(0);
   w.untilDecodedAhead();
@@ -737,7 +738,7 @@ void test_a_seek_while_the_next_is_decoded_ahead_takes_it_back_out() {
   w.put("a", track(44100, 60000, 44));
   w.put("b", track(44100, 30000, 45));
   w.put("c", track(44100, 30000, 46));
-  w.player.setRepeat(false);
+  w.player.setRepeat(PlaybackController::Repeat::Off);
   w.player.play(0);
   w.untilDecodedAhead();
   const uint32_t old = w.player.offeredToken();
@@ -782,6 +783,138 @@ void test_end_of_track_still_names_nothing_after_a_seek() {
   TEST_ASSERT_TRUE(w.player.pausedByTimer());
 }
 
+// ---- repeat and shuffle (docs/QUEUE-MODES.md) ----
+
+// Repeat One inside a queue: b joined to itself, a new token each loop,
+// then All: c follows, all one stream with one play().
+void test_repeat_one_loops_inside_a_queue() {
+  World w({"a", "b", "c"}, {"a", "b", "c"});
+  w.put("a", track(44100, 40000, 70));
+  w.put("b", track(44100, 30000, 71));
+  w.put("c", track(44100, 30000, 72));
+  PlaybackController& p = w.player;
+  p.play(0);
+  w.runUntil([&p] { return p.currentIndex() == 1; });
+  p.setRepeat(PlaybackController::Repeat::One);  // (c, decoded ahead after b, is cut)
+  w.runUntil([&w] { return w.audio.advances.size() == 3; });
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(2, p.repeats());
+  p.setRepeat(PlaybackController::Repeat::All);
+  w.runUntil([&p] { return p.currentIndex() == 2; });
+  p.setRepeat(PlaybackController::Repeat::Off);
+  w.runToStop();
+  const Frames b = w.get("b").kept();
+  assertSame(concat({w.get("a").kept(), b, b, b, w.get("c").kept()}), w.audio.heard);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+  TEST_ASSERT_EQUAL_UINT32(4, p.gaplessStats().adopted);
+  TEST_ASSERT_EQUAL_UINT32(0, p.gaplessStats().restarted);
+  TEST_ASSERT_EQUAL_UINT32(2, p.repeats());
+  TEST_ASSERT_TRUE(w.audio.advances[1].token != w.audio.advances[2].token);
+}
+
+// Repeat All: the last entry into the first, gaplessly.
+void test_repeat_all_wraps_gaplessly() {
+  World w({"a", "b"}, {"a", "b"});
+  w.put("a", track(44100, 40000, 73));
+  w.put("b", track(44100, 30000, 74));
+  PlaybackController& p = w.player;
+  p.setRepeat(PlaybackController::Repeat::All);
+  p.play(0);
+  w.runUntil([&w] { return w.audio.advances.size() == 2; });  // a -> b -> a
+  TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+  p.setRepeat(PlaybackController::Repeat::Off);
+  w.runToStop();
+  const Frames a = w.get("a").kept(), b = w.get("b").kept();
+  assertSame(concat({a, b, a, b}), w.audio.heard);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+  TEST_ASSERT_EQUAL_UINT32(3, p.gaplessStats().adopted);
+}
+
+// Repeat One turned off while its self-join is decoded ahead: cut, and c
+// follows.
+void test_repeat_one_turned_off_while_decoded_ahead() {
+  World w({"a", "b", "c"}, {"a", "b", "c"});
+  w.put("a", track(44100, 30000, 75));
+  w.put("b", track(44100, 60000, 76));
+  w.put("c", track(44100, 30000, 77));
+  PlaybackController& p = w.player;
+  p.setRepeat(PlaybackController::Repeat::One);
+  p.play(1);
+  w.untilDecodedAhead();
+  TEST_ASSERT_EQUAL_STRING(World::path("b").c_str(), w.audio.probes.back().c_str());  // itself
+  p.setRepeat(PlaybackController::Repeat::Off);
+  w.audio.consumerPaused = false;
+  w.runToStop();
+  assertSame(concat({w.get("b").kept(), w.get("c").kept()}), w.audio.heard);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+  TEST_ASSERT_EQUAL_UINT32(1, w.audio.engine.counters().cuts);
+  TEST_ASSERT_EQUAL_UINT32(0, p.repeats());
+}
+
+// A shuffle toggle while the next track is decoded ahead: before J, a cut
+// and the new next joined in its place; after J (too late to cut), the
+// heard advance starts what now comes next.
+void test_shuffle_toggled_while_the_next_is_decoded_ahead() {
+  for (int tooLate = 0; tooLate < 2; ++tooLate) {
+    World w({"a", "b", "c"}, {"a", "b", "c"});
+    const uint32_t hz = tooLate ? 48000 : 44100;
+    w.put("a", track(hz, 60000, 78));
+    w.put("b", track(hz, 30000, 79));
+    w.put("c", track(hz, 30000, 80));
+    // Shuffled a, c, b (the own order a, b, c).
+    const uint32_t ids[] = {w.id("a"), w.id("c"), w.id("b")};
+    const uint32_t ranks[] = {0, 2, 1};
+    w.queue.assign(ids, 3, 0, true, ranks);
+    PlaybackController& p = w.player;
+    p.setRepeat(PlaybackController::Repeat::Off);
+    p.play(0);
+    w.untilDecodedAhead();
+    TEST_ASSERT_EQUAL_STRING(World::path("c").c_str(), w.audio.probes.back().c_str());
+    if (tooLate) w.audio.read(w.cutAt() + 1 - w.audio.ring.readPos());
+    p.setShuffle(false);  // a, b, c: b next now
+    TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+    w.audio.decodeOnce();  // the cut: done, or too late
+    w.audio.consumerPaused = false;
+    w.runToStop();
+    const Frames a = w.get("a").kept(), b = w.get("b").kept(), c = w.get("c").kept();
+    if (!tooLate) {
+      assertSame(concat({a, b, c}), w.audio.heard);
+      TEST_ASSERT_EQUAL_UINT32(1, w.audio.engine.counters().cuts);
+      TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+    } else {
+      TEST_ASSERT_EQUAL_UINT32(1, w.audio.engine.counters().tooLate);
+      TEST_ASSERT_EQUAL_INT(2, w.audio.plays);  // a's, then b's
+      TEST_ASSERT_EQUAL_UINT32(1, p.gaplessStats().restarted);
+      const Frames ac = reference(48000, concat({a, c}));
+      const uint32_t k = w.audio.requestAt;
+      assertSame(concat({Frames(ac.begin(), ac.begin() + 2 * k), reference(48000, concat({b, c}))}), w.audio.heard);
+    }
+  }
+}
+
+// End of track with Repeat One: the self-join is never decoded ahead; the
+// pause at the boundary cues the same entry at 0:00, nothing of it heard
+// again.
+void test_end_of_track_with_repeat_one_never_decodes_itself_ahead() {
+  World w({"a", "b"}, {"a", "b"});
+  w.put("a", track(44100, 60000, 81));
+  w.put("b", track(44100, 30000, 82));
+  w.gate.ends = [] { return true; };
+  PlaybackController& p = w.player;
+  p.setRepeat(PlaybackController::Repeat::One);
+  p.setPauseAfterTrack(true);
+  p.play(0);
+  w.runUntil([&p] { return p.state() == PlayState::Paused; });
+  assertSame(w.get("a").kept(), w.audio.heard);
+  TEST_ASSERT_TRUE(w.audio.probes.empty());
+  TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+  TEST_ASSERT_TRUE(p.pausedByTimer());
+  TEST_ASSERT_EQUAL_UINT32(1, p.timerStops());
+  const size_t heard = w.audio.heard.size();
+  for (int i = 0; i < 2000; ++i) w.tick();
+  TEST_ASSERT_EQUAL_UINT32(heard, w.audio.heard.size());  // nothing plays by itself
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_an_album_plays_as_one_stream);
@@ -803,5 +936,10 @@ int main(int, char**) {
   RUN_TEST(test_a_seek_right_after_a_join_is_dropped);
   RUN_TEST(test_a_seek_while_the_next_is_decoded_ahead_takes_it_back_out);
   RUN_TEST(test_end_of_track_still_names_nothing_after_a_seek);
+  RUN_TEST(test_repeat_one_loops_inside_a_queue);
+  RUN_TEST(test_repeat_all_wraps_gaplessly);
+  RUN_TEST(test_repeat_one_turned_off_while_decoded_ahead);
+  RUN_TEST(test_shuffle_toggled_while_the_next_is_decoded_ahead);
+  RUN_TEST(test_end_of_track_with_repeat_one_never_decodes_itself_ahead);
   return UNITY_END();
 }

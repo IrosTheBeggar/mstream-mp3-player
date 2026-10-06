@@ -658,9 +658,10 @@ void test_progress_id3v2_size() {
 }
 
 // Every sheet row is at least 40 px, the touch minimum, however many rows
-// (Now Playing's "..." has 4: it rises into the header row, never onto
-// the tab bar, and keeps 4 px off the touch strip); up to 3 stay in the
-// list's band. The panel sprite holds the tallest.
+// (a 4th would rise into the header row, never onto the tab bar, and keep
+// 4 px off the touch strip); up to 3 stay in the list's band (Now
+// Playing's two menus: 3 rows from y 80). The panel sprite holds the
+// tallest. A row's detail has what its label leaves (Sheet::render()).
 void test_sheet_rows_are_never_under_40_px() {
   TEST_ASSERT_TRUE(sheet::kRowH >= 40);
   for (int n = 1; n <= sheet::kMaxRows; ++n) {
@@ -670,6 +671,12 @@ void test_sheet_rows_are_never_under_40_px() {
     if (n <= 3) TEST_ASSERT_TRUE(sheet::top(n) >= 72);
   }
   TEST_ASSERT_EQUAL_INT(40, sheet::top(4));
+  TEST_ASSERT_EQUAL_INT(80, sheet::top(3));
+  // The detail's room: the screen less 16 px each side, the label and 16
+  // between them.
+  TEST_ASSERT_EQUAL_INT(sheet::kScreenW - 16 - (16 + 89 + 16), sheet::detailRoom(89));
+  TEST_ASSERT_EQUAL_INT(183, sheet::detailRoom(89));
+  TEST_ASSERT_EQUAL_INT(272, sheet::detailRoom(0));
   // The sleep and idle toasts' buttons: 36 px drawn, 40 or more to touch.
   TEST_ASSERT_TRUE(36 + uitext::kToastButtonSlop >= 40);
 }

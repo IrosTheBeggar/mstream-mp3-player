@@ -122,15 +122,40 @@ void PlaybackController::next() {
   if (queue_.empty()) return;
   failuresInARow_ = 0;
   clearStartPoint();  // (a queue of one wraps to the same entry: from its start)
-  advance();
+  advance(false);
 }
 
-void PlaybackController::advance() {
-  if (!queue_.step(+1, repeat_)) {
-    stop();  // the end of the queue, and no repeat
+uint32_t PlaybackController::endNext() const {
+  return repeat_ == Repeat::One ? queue_.peek(0, false) : queue_.peek(+1, wraps());
+}
+
+bool PlaybackController::stepAtEnd() {
+  if (repeat_ == Repeat::One) {
+    if (!hasTrack()) return false;
+    ++repeats_;  // this entry again
+    return true;
+  }
+  return queue_.step(+1, wraps());
+}
+
+void PlaybackController::advance(bool atEnd) {
+  if (!(atEnd ? stepAtEnd() : queue_.step(+1, wraps()))) {
+    stop();  // the end of the queue, repeat Off
     return;
   }
   startCurrent();
+}
+
+void PlaybackController::setRepeat(Repeat r) {
+  Act act(*this);  // (the word follows at once: refreshOffer())
+  repeat_ = r;
+}
+
+void PlaybackController::setShuffle(bool on) {
+  Act act(*this);
+  // The same entry (its key) stays current in the same state: nothing to
+  // start, stop or cue, and its start point and length belong to the key.
+  queue_.setShuffled(on);
 }
 
 PlaybackController::Prev PlaybackController::prevRule(PlayState state, bool startPointWaits, bool positionKnown,
@@ -162,7 +187,7 @@ void PlaybackController::prev() {
     return;
   }
   clearStartPoint();
-  queue_.step(-1, repeat_);  // at the start without repeat: the first track again
+  queue_.step(-1, wraps());  // at the start with repeat Off: the first track again
   startCurrent();
 }
 
@@ -212,7 +237,7 @@ void PlaybackController::cue(int delta) {
     return;
   }
   clearStartPoint();
-  queue_.step(delta, repeat_);
+  queue_.step(delta, wraps());
   if (state_ == PlayState::Paused && !cued_) {
     audio_.stop();  // the paused track can't be resumed any more
     cued_ = true;
@@ -269,6 +294,12 @@ void PlaybackController::placeStart(uint32_t ms, uint32_t durationMs, const Resu
       durationMs = startDurationMs_;
     } else if (state_ != PlayState::Stopped && !cued_) {
       durationMs = audio_.durationMs();  // the backend holds this entry's track
+    } else if (lengthHint() > 0) {
+      // Stopped or cued (the sleep timer's end-of-track pause with Repeat
+      // One cues the entry that just played): the length told for this
+      // entry, which the bar shows meanwhile. The catalog's hint (0 for a
+      // library track) would leave the bar inert until a play.
+      durationMs = lengthHint();
     } else {
       durationMs = catalog_.durationHintMs(queue_.currentTrack());
     }
@@ -391,11 +422,13 @@ void PlaybackController::pauseByTimer() {
 void PlaybackController::pauseAtBoundary() {
   pauseAfter_ = false;
   ++timerStops_;
-  if (!queue_.step(+1, repeat_)) {
-    stop();  // the end of the queue, and no repeat: the natural stop
+  // Repeat One: no step, this entry is cued at 0:00 (the timer wins: a
+  // later play starts it from the top, as One would have).
+  if (repeat_ != Repeat::One && !queue_.step(+1, wraps())) {
+    stop();  // the end of the queue, repeat Off: the natural stop
     return;
   }
-  audio_.stop();  // the finished track lets go; the next one is cued
+  audio_.stop();  // the finished track lets go; the next one (or this one again) is cued
   state_ = PlayState::Paused;
   cued_ = true;
   pausedByTimer_ = true;
@@ -418,14 +451,14 @@ void PlaybackController::checkEnd() {
       stop();  // every track failed in a row: nothing here plays
       return;
     }
-    advance();
+    advance(false);  // a failure moves on (a skip), even with Repeat One
   } else if (audio_.finished()) {
     failuresInARow_ = 0;
     if (pauseAfter_) {
-      pauseAtBoundary();  // the sleep timer: the next entry, paused at 0:00
+      pauseAtBoundary();  // the sleep timer: the next entry (One: this one), paused at 0:00
       return;
     }
-    advance();  // wraps to the start of the queue at the end (with repeat)
+    advance(true);  // by the repeat mode: All wraps at the end, One plays it again
   }
 }
 
@@ -454,9 +487,9 @@ void PlaybackController::currentMoved() {
   }
 }
 
-bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start) {
+bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle) {
   Act act(*this);
-  if (!queue_.replace(tracks, n, start)) return false;
+  if (!queue_.replace(tracks, n, start, shuffle)) return false;
   failuresInARow_ = 0;
   clearStartPoint();
   if (hasTrack()) {
@@ -552,17 +585,18 @@ void PlaybackController::refreshOffer() {
   sig.position = queue_.positionVersion();
   sig.content = queue_.contentVersion();
   sig.heard = heardToken_;
-  sig.repeat = repeat_;
+  sig.repeat = static_cast<uint8_t>(repeat_);
   sig.pauseAfter = pauseAfter_;
   sig.gapless = gapless_;
   sig.gate = gate;
   if (sent_ && sig == signature_) return;
   signature_ = sig;
 
-  // What advance() would start, unless the track must end as it would
-  // without gapless playback.
+  // What advance() would start at the natural end (Repeat One: this entry
+  // itself, the self-join), unless the track must end as it would without
+  // gapless playback.
   uint32_t pos = QueueModel::kNone;
-  if (gapless_ && !pauseAfter_ && !gate) pos = queue_.peek(+1, repeat_);
+  if (gapless_ && !pauseAfter_ && !gate) pos = endNext();
   char path[TrackCatalog::kMaxPath];
   path[0] = 0;
   uint32_t track = QueueModel::kNone;
@@ -578,8 +612,8 @@ void PlaybackController::refreshOffer() {
     // or the entry that took its place when its key went (a library
     // rebuild's fresh keys, one of two duplicates removed). Never the
     // heard token: the backend took it already, and would answer a word
-    // with it "nothing follows" (a queue of one on repeat: the same entry
-    // after itself, a new token each time round).
+    // with it "nothing follows" (Repeat One, or a queue of one on repeat:
+    // the same entry after itself, a new token each time round).
     const bool same = offer_.token != 0 && offer_.token != heardToken_ && offer_.track == track &&
                       (offer_.key == key || queue_.positionOf(offer_.key) == QueueModel::kNone);
     if (same) {
@@ -627,12 +661,17 @@ void PlaybackController::syncHeard() {
       continue;
     }
     const Offered* o = offered(token);
-    const uint32_t expected = queue_.peek(+1, repeat_);
+    const uint32_t expected = endNext();
     const bool match = o && expected != QueueModel::kNone &&
                        (queue_.keyAt(expected) == o->key ||
                         (queue_.positionOf(o->key) == QueueModel::kNone && queue_.trackAt(expected) == o->track));
     if (match && !(state_ == PlayState::Playing && held())) {
-      queue_.setCurrent(expected);  // no play(): the backend plays it already
+      // No play(): the backend plays it already. Repeat One: the same
+      // position (nothing bumps; the heard token moved, so the next word
+      // gets a new one), a loop. (A queue of one on All loops the same
+      // way, but that is no Repeat One loop.)
+      if (repeat_ == Repeat::One && static_cast<int32_t>(expected) == queue_.current()) ++repeats_;
+      queue_.setCurrent(expected);
       ++gaplessStats_.adopted;
       continue;
     }
@@ -640,9 +679,9 @@ void PlaybackController::syncHeard() {
     // the output can't be heard: the entry advance() would start.
     ++gaplessStats_.restarted;
     if (state_ == PlayState::Playing) {
-      advance();
-    } else if (!queue_.step(+1, repeat_)) {
-      stop();  // (paused at the queue's end without repeat: stopped there, as an end would)
+      advance(true);
+    } else if (!stepAtEnd()) {
+      stop();  // (paused at the queue's end, repeat Off: stopped there, as an end would)
     } else {
       audio_.stop();  // paused (a pause's fade read past the join): the new entry cued
       cued_ = true;

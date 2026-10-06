@@ -116,10 +116,33 @@ inline constexpr int kSeekReadoutGap = 8;
 inline constexpr const char* kSeekStay = "no change";
 inline constexpr const char* kSeekCancel = "Release to cancel";
 
+// ---- Now Playing's two menus (ui/NowPlayingPage; docs/QUEUE-MODES.md) ----
+// The navigation menu (a tap on the cover, the title, the artist or the
+// album): a 3-row sheet titled with the track's title, each row's detail
+// (Small, dim) right-aligned in what its label (Body) leaves
+// (sheet::detailRoom(): 183, 174 and 177 px): the artist or
+// kNoArtistFolder, the album or kLooseTracks, the folder cut from the left
+// ("…/Daft Punk/Discovery").
+inline constexpr const char* kGoTo[3] = {"Go to artist", "Go to album", "Go to folder"};
+inline constexpr const char* kNoArtistFolder = "(no artist folder)";
+inline constexpr const char* kLooseTracks = "(loose tracks)";
+// When nothing in it could act, no menu but a toast (Body, one line: 264
+// and 209 px of kToastTextRight - kToastTextX).
+inline constexpr const char* kBuiltinNotInLibrary = "A built-in track isn't in the Library";
+inline constexpr const char* kLibraryNotReady = "The Library isn't ready yet";
+// The playback menu ("..."): a 3-row sheet titled kPlaybackTitle (Small),
+// the rows Shuffle, Repeat and Sleep timer, each state its row's detail.
+inline constexpr const char* kPlaybackTitle = "Playback";
+inline constexpr const char* kShuffleRow = "Shuffle";
+inline constexpr const char* kRepeatRow = "Repeat";
+inline constexpr const char* kOnOff[2] = {"Off", "On"};
+inline constexpr const char* kRepeatModes[3] = {"Off", "All", "One"};  // PlaybackController::Repeat's order
+
 // ---- play waiting for the headphones (ui/NowPlayingPage, ui/Ui) ----
-// Now Playing's panel over the artist and album bands (x 112-319, y 90-169):
-// "Waiting for SPYDRONE..." (Small, amber) over "try 2 of 3" (Small, dim),
-// then two buttons (Body), x from the band's left.
+// Now Playing's panel in the title strip and the rows under it (x 112-319,
+// y 38-137): the title on one line over "Waiting for SPYDRONE..." (Small,
+// amber) and "try 2 of 3" (Small, dim), then two buttons (Body) in the
+// artist and album rows, x from the column's left.
 inline constexpr int kWaitTextX = 8, kWaitTextW = 196;
 inline constexpr int kWaitSpeakerX = 4, kWaitSpeakerW = 136;
 inline constexpr int kWaitCancelX = 144, kWaitCancelW = 62;
@@ -135,8 +158,9 @@ inline constexpr int kDialogButtonTextW = 123;
 inline constexpr const char* kPlayFailedBody = "Are they on, out of the case, and not connected to your phone?";
 
 // ---- the sleep timer (SleepTimer; docs/ENERGY.md section 3) ----
-// Now Playing's "..." sheet: its first row (Body), the timer's state dim
-// on the right (SleepTimer::rowText(): "Off", "23 min", "End of queue").
+// Now Playing's "..." sheet (the playback menu): its last row (Body), the
+// timer's state dim on the right (SleepTimer::rowText(): "Off", "23 min",
+// "End of queue").
 inline constexpr const char* kSleepRow = "Sleep timer";
 // The Sleep timer sheet (ui/Overlays' SleepSheet, the sheet panel 320 x
 // 168 from y 72): its title (Small) left of the ✕ pill (x 16 to 242), then

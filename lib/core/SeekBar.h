@@ -42,8 +42,9 @@
 //   lift seeks nothing (a paused track keeps its exact resume anchor). A
 //   finger that moves into it ticks; a knob grab that starts in it, and
 //   the marker coming onto a still knob, don't.
-// - Off. Past the album band (y < kOffAboveY) or onto the button strip
-//   (y >= kOffBelowY) the knob goes back to where it plays and a lift
+// - Off. Onto the artist row or above (y < kOffAboveY: Now Playing's
+//   layout, its static_asserts tie these rows to it) or onto the button
+//   strip (y >= kOffBelowY) the knob goes back to where it plays and a lift
 //   seeks nothing; back from kBackAboveY down (or above kBackBelowY) it
 //   scrubs again. Off and back tick once each; the 8 px between stop it
 //   flapping.
@@ -57,7 +58,7 @@ public:
   static constexpr int kLineX = 12, kLineW = 296;  // the line: x 12-307
   static constexpr uint32_t kMinLengthMs = 10000;  // shorter tracks: inert
   static constexpr int kGrabPx = 16, kStayPx = 4;
-  static constexpr int kOffAboveY = 130, kBackAboveY = 138, kOffBelowY = 240, kBackBelowY = 232;
+  static constexpr int kOffAboveY = 106, kBackAboveY = 114, kOffBelowY = 240, kBackBelowY = 232;
   // The readout goes to the side away from the knob: left once the knob is
   // right of kReadoutLeftX, right once it is left of kReadoutRightX; in
   // between it stays (at the scrub's start: left from kReadoutStartX).

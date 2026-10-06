@@ -328,6 +328,10 @@ const char* SleepTimer::choiceName(Choice c) {
   return "?";
 }
 
+bool SleepTimer::lastOfQueue(int32_t current, uint32_t size, bool repeatOne) {
+  return current >= 0 && (repeatOne || static_cast<uint32_t>(current) + 1 >= size);
+}
+
 bool SleepTimer::albumEndsBetween(const LibraryIndex* index, uint32_t a, uint32_t b) {
   if (b == LibraryIndex::kNone) return true;
   const bool haveA = index && index->ready() && !TrackCatalog::isBuiltin(a) && a < index->trackCount();

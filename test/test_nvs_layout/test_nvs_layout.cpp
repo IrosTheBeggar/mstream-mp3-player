@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 IrosTheBeggar
 
-// Host unit tests for nvslayout: the NVS schema number's boot step and the
-// resume point's versioned blob. Run: pio test -e native
+// Host unit tests for nvslayout: the NVS schema number's boot step, the
+// resume point's versioned blob and the repeat mode's key. Run: pio test -e native
 #include <unity.h>
 
 #include <cstdint>
@@ -32,7 +32,10 @@ void test_schema_steps() {
   s = nvslayout::schemaStep(true, 2, 1);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(2, s.from);
-  TEST_ASSERT_EQUAL_UINT16(1, nvslayout::kCurrent);
+  TEST_ASSERT_EQUAL_UINT16(2, nvslayout::kCurrent);
+  s = nvslayout::schemaStep(true, 1);  // a schema-1 unit (v0.5.0 to v0.6.0): migrated to 2
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
+  TEST_ASSERT_EQUAL_UINT16(1, s.from);
   TEST_ASSERT_EQUAL_STRING("meta", nvslayout::kMetaNamespace);
   TEST_ASSERT_EQUAL_STRING("schema", nvslayout::kSchemaKey);  // (NVS keys: 15 characters at most)
 }
@@ -170,11 +173,26 @@ void test_resume_blob_unknown_is_ignored() {
 }
 
 // The blob gained its version 2 under schema 1 (its own version byte; every
-// older version still read): no schema bump, no migration.
-void test_the_schema_stays_one() {
-  TEST_ASSERT_EQUAL_UINT16(1, nvslayout::kCurrent);
+// older version still read): no schema bump for that. A new key is a
+// layout change: schema 2 is schema 1's keys and "queue"/"repeat".
+void test_the_schema_is_two() {
+  TEST_ASSERT_EQUAL_UINT16(2, nvslayout::kCurrent);
   TEST_ASSERT_EQUAL_UINT8(2, nvslayout::kResumeVersion);
   TEST_ASSERT_EQUAL_UINT32(64, nvslayout::kResumeMaxBytes);
+}
+
+// The repeat mode as saved: absent, or a value this firmware doesn't
+// know, is Off; 0-2 are themselves. The key fits NVS's 15 characters.
+void test_repeat_from_what_is_saved() {
+  TEST_ASSERT_EQUAL_UINT8(0, nvslayout::repeatFrom(false, 0));
+  TEST_ASSERT_EQUAL_UINT8(0, nvslayout::repeatFrom(false, 2));  // (absent: whatever was read)
+  TEST_ASSERT_EQUAL_UINT8(0, nvslayout::repeatFrom(true, 0));
+  TEST_ASSERT_EQUAL_UINT8(1, nvslayout::repeatFrom(true, 1));
+  TEST_ASSERT_EQUAL_UINT8(2, nvslayout::repeatFrom(true, 2));
+  TEST_ASSERT_EQUAL_UINT8(0, nvslayout::repeatFrom(true, 3));
+  TEST_ASSERT_EQUAL_UINT8(0, nvslayout::repeatFrom(true, 255));
+  TEST_ASSERT_EQUAL_STRING("repeat", nvslayout::kRepeatKey);
+  TEST_ASSERT_TRUE(std::strlen(nvslayout::kRepeatKey) <= 15);
 }
 
 int main(int, char**) {
@@ -184,6 +202,7 @@ int main(int, char**) {
   RUN_TEST(test_resume_blob_v1_still_read);
   RUN_TEST(test_resume_blob_v0_still_read);
   RUN_TEST(test_resume_blob_unknown_is_ignored);
-  RUN_TEST(test_the_schema_stays_one);
+  RUN_TEST(test_the_schema_is_two);
+  RUN_TEST(test_repeat_from_what_is_saved);
   return UNITY_END();
 }

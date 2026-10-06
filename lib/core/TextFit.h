@@ -49,4 +49,11 @@ bool ellipsize(const Font& f, char* text, size_t size, int maxW);
 // written (0 for an empty text).
 int wrap(const Font& f, const char* in, size_t inLen, int maxW, int maxLines, char* out, size_t lineSize);
 
+// `path` cut from the left by whole folders to fit `maxW` px, the nearest
+// kept: "…/Daft Punk/Discovery" (the Folders header's path, Now Playing's
+// Go to folder). A path that fits stays whole; a cut one always starts
+// with "…". If even "…/<last>" is too wide, "/<last>" (the draw cuts its
+// end). Into `out` (`size` > 0).
+void cutPathLeft(const Font& f, const char* path, int maxW, char* out, size_t size);
+
 }  // namespace textfit

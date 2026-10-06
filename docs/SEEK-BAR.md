@@ -14,6 +14,16 @@ steps on 68c342b found no firmware defect). Still to do: 11.6's
 slow-motion video, 11.10 (Waiting, once headphones are paired again),
 11.12 (the sleep timer), and the user's checks by hand, 11.13-11.15.
 
+**The layout moved (2026-10-06, feature/np-menus: [QUEUE-MODES.md](QUEUE-MODES.md)).**
+Now Playing's artist and album rows lost their taps (a tap anywhere on the
+cover or the text opens a navigation menu now) and shrank to 23 px each,
+so the band moved up 24 px. The bar's touch is y 138-167, whether or not a
+play waits; the line y 148-151; off above y 106 (onto the artist row) and
+back from 114; the readout row y 113-145, over the album row and the
+cover's lowest rows while a finger scrubs. Sections 0-4, 7 and 11 have the
+new rows. Sections 9, 10 and 12-16 are the bar as it was built and checked
+on 2026-10-02, with the old ones (the band y 170-191, off above 130).
+
 Three designs were written for it: one for the touch (the gesture and
 its feedback), one for the player and the engine (the semantics and the
 races), and one for the smallest safe change (the scope and the tests).
@@ -55,7 +65,7 @@ Where the facts come from:
 - **Three ways out without a seek:**
   - lift with the knob back on the marker that shows where it plays (it
     snaps there with a tick);
-  - slide off the bar (above y 130, or onto the strip), then lift;
+  - slide off the bar (above y 106, or onto the strip), then lift;
   - a sheet or a dialog takes the touch.
 - **The ends:**
   - the far right is the track's length less 6 s (the tail rule turns a
@@ -84,11 +94,14 @@ Where the facts come from:
 
 **The band** (`NPP:35`; the layout comment is `src/ui/Pages.h:42-71`).
 
-- The progress band is y 170-191.
-  - Above it is the album band, y 130-169, x 112 to the edge.
-  - Below it is the transport, y 192-239: five 64 px zones.
+- The progress band is y 146-167 (y 170-191 until 2026-10-06).
+  - Above it, y 136-145 is background, and above that the album row, y
+    113-135, x 112 to the edge: part of the navigation area, whose tap
+    opens Now Playing's navigation menu.
+  - Below it is the transport, y 168-239: five 64 x 72 zones (drawn as
+    one 56-row strip, y 176-231).
 - `drawProgress()` (`NPP:175-255`) draws, in band rows (0 is screen y
-  170):
+  146):
   - a 4 px rounded DIV line at rows 2-5, x 12-307 (`x0 = 12, w = 296`);
   - the fill to `min(pos, len) * 296 / len`, in the accent while playing,
     else DIM;
@@ -364,10 +377,10 @@ While scrubbing, the finger's y decides:
 
 | Where the finger is | Then |
 |---|---|
-| y 138-231 | Scrubbing: x maps as in 2.3. A thumb coming from below may dip into the transport; it presses nothing there, because the touch is the bar's. |
-| y < 130 (past the album band, onto the artist band or the cover) | **Off.** The knob goes back to where it plays, the readout says "Release to cancel" in amber, and a tick. |
+| y 114-231 | Scrubbing: x maps as in 2.3. A thumb coming from below may dip into the transport; it presses nothing there, because the touch is the bar's. |
+| y < 106 (onto the artist row, the title or the cover) | **Off.** The knob goes back to where it plays, the readout says "Release to cancel" in amber, and a tick. |
 | y >= 240 (onto the button strip: a glass touch keeps reporting there) | Off, the same way. |
-| Back in y 138-231 | Scrubbing again, with a tick. The knob comes back by the grab's mapping. The 8 px from 130 to 138 (and from 232 to 240) stop it flapping. |
+| Back in y 114-231 | Scrubbing again, with a tick. The knob comes back by the grab's mapping. The 8 px from 106 to 114 (and from 232 to 240) stop it flapping. |
 | A lift while off | No seek, no tick. |
 
 ### 2.7 Every end of a touch on the bar
@@ -389,44 +402,45 @@ While scrubbing, the finger's y decides:
 | Name | Value | Where | What |
 |---|---|---|---|
 | `kLineX`, `kLineW` | 12, 296 | SeekBar | the line, x 12-307 (`drawProgress()`'s; a `static_assert` ties them) |
-| `kSeekReachPx` | 8 | NowPlayingPage | how far above the band the zone starts: y 162 (y 170 while play waits) |
+| `kSeekReachPx` | 8 | NowPlayingPage | how far above the band the zone starts: y 138, whether or not a play waits |
 | `kMinLengthMs` | 10,000 ms | SeekBar | shorter tracks: inert |
 | `trackseek::kSeekGuardMs` | 6,000 ms | TrackSeek.h | `kTailMs` + 1 s. The reach is the length less this, floored to a second |
 | `kGrabPx` | 16 px | SeekBar | a Down this near the knob grabs it (no jump) |
 | `kStayPx` | 4 px | SeekBar | the detent around where it plays |
-| `kOffAboveY` / `kBackAboveY` | 130 / 138 | SeekBar | off above the first; back from the second down |
+| `kOffAboveY` / `kBackAboveY` | 106 / 114 | SeekBar | off above the first; back from the second down (`static_assert`s in the page tie them to the readout row: 113 - 7 and 113 + 1) |
 | `kOffBelowY` / `kBackBelowY` | 240 / 232 | SeekBar | off on the strip; back above the second |
 | `kReadoutLeftX` / `kReadoutRightX` / `kReadoutStartX` | 184 / 136 / 160 | SeekBar | the knob right of 184: the readout goes left; left of 136: right; in between, it stays where it was (at the scrub's start: left from 160) |
 | `uitext::kSeekReadoutW`, `kSeekReadoutGap` | 160, 8 | UiText.h | the readout group's width at most (a mix's "999:59 no change" is 159 px), and the gap between its two texts |
-| `kReadoutY`, `kReadoutH` | 137, 33 | NowPlayingPage | the readout row: y 137-169, the full width |
+| `kReadoutY`, `kReadoutH` | 113, 33 | NowPlayingPage | the readout row: y 113-145, the full width (over the album row and the cover's lowest rows) |
 | the slop, the hold | 12 px, none | TouchRecognizer, `noHold()` | the slop as everywhere; no LongPress on the bar |
 
 ## 3. The hit area
 
 ```
-y  90-129  artist band (x 112-319)            unchanged
-y 130-161  album band's hit area (x 112-319)  a tap opens the album (its drawn band
-                                              and its press highlight stay y 130-169)
-y 162-191  THE BAR (x 0-319)                  Down: the pressed look; Tap: a seek;
-                                              a sideways drag: a scrub.
-                                              While play waits: y 170-191 only
-y 192-239  transport (64 px zones)            unchanged: never the bar's
+y  36-137  the navigation area (x 0-319)      a tap opens the navigation menu (Go to
+                                              artist, album, folder); while play waits,
+                                              the cover only, and Play on speaker and
+                                              Cancel take x 112-319, y 90-137
+y 138-167  THE BAR (x 0-319)                  Down: the pressed look; Tap: a seek;
+                                              a sideways drag: a scrub. Waiting or not
+y 168-239  transport (64 x 72 zones)          never the bar's
 ```
 
 - **Why 8 px above the band.**
-  - The line is drawn at the band's top (screen y 172-175), so a finger
-    aimed at it lands on both sides of y 170. Without the extra rows, a
-    seek aimed a few px high would open the Library at the album.
-  - The boundary at y 162 sits halfway between the album's text (centred
-    at y 150) and the line (y 174). A tap aimed at either is about as
-    unlikely to land on the other.
+  - The line is drawn at the band's top (screen y 148-151), so a finger
+    aimed at it lands on both sides of y 146. Without the extra rows, a
+    seek aimed a few px high would open the navigation menu.
+  - The boundary at y 138 sits about halfway between the album's text
+    (centred at y 124) and the line (y 150). A tap aimed at either is
+    about as unlikely to land on the other.
   - Touch y reads true on this panel; only x was skewed.
 - **Nothing below the band.** A sloppy tap on prev, play or next must
-  never seek. The line is 17 px above the transport anyway.
-- **While play waits**, the zone starts at y 170, so Play on speaker and
-  Cancel (album band rows 3-36, screen y 133-166) keep their whole area.
-  `zoneAt()` tests the bar right after the transport, before the waiting
-  panel's branch. Today that branch returns None for the band.
+  never seek. The line is 17 px above the transport's touch (y 168)
+  anyway, 25 above its drawn strip (y 176).
+- **While play waits** the zone starts at y 138 too: Play on speaker and
+  Cancel are drawn y 94-129 and take y 90-137, so nothing is taken from
+  them. `zoneAt()` tests the bar right after the transport, before the
+  waiting buttons' branch.
 - **The full width.** x 0-11 maps to 0:00 and x 308-319 to the reach.
   The clamped readings (2.4) reach both ends on a panel that can't report
   them.
@@ -437,9 +451,9 @@ y 192-239  transport (64 px zones)            unchanged: never the bar's
 
 ## 4. What is drawn
 
-### 4.1 The band (y 170-191)
+### 4.1 The band (y 146-167)
 
-Rows are the band's (row 0 is screen y 170). Everything stays inside the
+Rows are the band's (row 0 is screen y 146). Everything stays inside the
 band. The knob is drawn last, after the text, whose background fill would
 cut it.
 
@@ -454,13 +468,14 @@ cut it.
 The fill and every x go through `SeekBar::xOf()`, which is today's
 arithmetic: `min(pos, len) · 296 / len`.
 
-### 4.2 The readout row (y 137-169, x 0-319)
+### 4.2 The readout row (y 113-145, x 0-319)
 
 It is up only while Scrubbing or Off.
 
-- It is the 33 rows between the cover's frame (whose last row is y 136)
-  and the band: BG under the cover, and the album band's lower 33 rows on
-  the right.
+- It is the 33 rows above the band, the full width: over the album row
+  (y 113-135) and the cover's lowest 24 rows (y 113-136, its frame's last
+  included), which come back at the lift. Legibility needs its
+  background, so it isn't drawn over the artwork.
 - A finger on the bar covers a 60-80 px patch around the contact, and a
   fingertip coming from below reaches 25-40 px above it. A bubble over
   the knob would be under the finger, so the readout goes to the side
@@ -472,8 +487,8 @@ It is up only while Scrubbing or Off.
 | Staying | The live second ("1:10") in Title, TXT; then "no change" in Small, DIM (`uitext::kSeekStay`) | as above |
 | Off | "Release to cancel" in Font::Bold, AMBER (`uitext::kSeekCancel`) | centred |
 
-- Title is centred on the row's row 16 (screen y 153) and Small on row 19
-  (y 156), so that their baselines roughly agree. Check it on the
+- Title is centred on the row's row 16 (screen y 129) and Small on row 19
+  (y 132), so that their baselines roughly agree. Check it on the
   device's screenshot.
 - The change is in whole seconds: `target/1000 − live/1000`.
 - The times are m:ss, as the band's: a mix of 100 min or more reads
@@ -492,22 +507,30 @@ It is up only while Scrubbing or Off.
 
 **Entering** the scrub look:
 
-- clears the album band's top rows (x 112-319, y 130-136), which
-  Waiting's buttons reach up to (y 133);
+- while a play waits, clears the artist row (x 112-319, y 90-112): the
+  waiting buttons' upper halves (y 94-112) would stick out above the
+  readout;
 - draws the readout row.
 
 **Leaving** it (any end):
 
-- draws the middle again (`drawMiddle()`: the artist and album bands, or
-  the waiting panel);
-- fills x 0-111, y 137-169 with BG, as `repaint()` does;
+- fills the readout row with BG;
+- pushes the cover's rows y 113-136 back from its sprite (no re-render,
+  no thumbnail lookup; with no sprite, the placeholder's CARD);
+- draws the middle again (`drawMiddle()`: the artist and album rows, or
+  the waiting buttons);
 - draws the band in its rest look.
 
+**The cover is never pushed over the readout.** `drawCover()` renders
+into its sprite as always, but while the readout is up it pushes only the
+rows above it (y 39-112), so a thumbnail that arrives mid-scrub can't cut
+it; the lift pushes the rest.
+
 **Whenever `drawMiddle()` draws while the scrub look is up**, the
-readout row is drawn again right after it, in the same pass, with the top
-rows cleared. That happens on a repaint after a toast went away, and
-when the waiting panel's "try 2 of 3" changes. So neither can leave the
-album band over the readout.
+readout row is drawn again right after it, in the same pass (and, while
+a play waits, the artist row cleared). That happens on a repaint after a
+toast went away, and when the waiting panel's "try 2 of 3" changes. So
+neither can leave the album row or a button over the readout.
 
 ### 4.3 Haptics
 
@@ -825,7 +848,7 @@ outputs read the ring on their own tasks.
 | Unknown length (the dotted line) | Inert. A header-less VBR file gets an estimate after about a second of frames. An entry never held (stopped after a boot with no resume point; cued by next while paused) has no bar until it plays |
 | Under 10 s | Inert |
 | Built-in tracks (tones, click tracks) | Seekable. Their length is the catalog's hint; they count from the start ms (`C2AB.cpp:861-875`), exactly, at no SD cost. A click track's grid starts again, and the Dance tab's tracker resets on the new epoch |
-| Waiting (PlayGate) | Seekable (5.2), from y 170. During a scrub the readout row covers the waiting buttons, and `drawMiddle()` puts them back. The spinner keeps turning in its own zone |
+| Waiting (PlayGate) | Seekable (5.2), from y 138 (as when not waiting). During a scrub the readout row covers the waiting buttons' lower halves and the artist row is cleared, and `drawMiddle()` puts them back. The spinner keeps turning in its own zone |
 | The sleep timer's End of track | "Pause after this track" survives a seek: it still pauses at the end of the seeked track. A seek into the last 10 s starts the track fade at once (the reach lands at about −16 dB). A seek back out of a running fade keeps the faded level: the fade only falls by itself (`SleepTimer.cpp:169-176`), as after a skip, and the fade toast's +10 min and Turn off raise it. This is unchanged on purpose (SEEK.md 8 lists the sleep timer as unchanged) and pinned by a test. The timed choices count by the clock, so seeks don't affect them |
 | Paused by the timer | A paused seek keeps the timer's mark: headphone Play still won't resume it |
 | A gapless join | A seek lands at most at the reach (6 s before the end), outside the ~1.4 s decode-ahead window. A join heard during a drag ends the drag (R8); one heard at the lift gives Moved (R3) |
@@ -1257,7 +1280,8 @@ Env:MSYSTEM -ErrorAction SilentlyContinue; pio run -e core2`.
   the volume down, then forgets the headphones (`f`), which then have to
   be paired again on the Output tab.
 
-**The scripted finger** works in screen pixels; the line is at y ~174.
+**The scripted finger** works in screen pixels; the line is at y ~150
+(it was ~174 when these steps were first run: section 16's lines).
 For a track of length L:
 
 - the second at x is `floor((x − 12) · L / 296 / 1000)`;
@@ -1267,28 +1291,30 @@ The examples are for a 4:05 CBR MP3.
 
 1. **The look.** `X` (the whole screen): the knob (r 3) at rest. A dotted
    line (an entry never held) has none.
-2. **Taps, paused (deterministic).** Pause (`uit160,216`), then `qs60`
+2. **Taps, paused (deterministic).** Pause (`uit160,204`), then `qs60`
    (`[queue] start point: 60 s into the current entry (paused)`).
-   - `uit85,180`: `no seek (back where it plays)`, and no tick.
-   - `uit90,180`: `seek 1:00 -> 1:04 of 4:05 (tap): paused, the next play
+   - `uit85,150`: `no seek (back where it plays)`, and no tick.
+   - `uit90,150`: `seek 1:00 -> 1:04 of 4:05 (tap): paused, the next play
      starts there`, then `[queue] resume point saved: ... anchor: none`.
      Still Paused.
 3. **Drags, paused.** `qs60` again before each.
-   - `uid200,180,250,180,600`: exactly one line, `seek 1:00 -> 3:16 of
+   - `uid200,150,250,150,600`: exactly one line, `seek 1:00 -> 3:16 of
      4:05 (drag, held N ms): paused, ...`, and none during the move.
-   - `uid84,180,184,180,600`: `(drag from the knob, ...)`. It lands short
+   - `uid84,150,184,150,600`: `(drag from the knob, ...)`. It lands short
      of x 184's 2:22 by the DragStart's slop: about 2:08-2:12.
-   - `uid200,180,84,180,600`: `no seek (back where it plays)`.
-   - `uid100,180,110,120,300` (upward): no line at all.
-   - `uid100,180,250,60,400`: `no seek (slid off the bar)`.
-   - `uid100,180,250,262,400` (onto the strip): the same.
+   - `uid200,150,84,150,600`: `no seek (back where it plays)`.
+   - `uid100,150,110,90,300` (upward): no line at all.
+   - `uid100,150,250,60,400`: `no seek (slid off the bar)`; so does
+     `uid100,150,250,100,400` (y 100: onto the artist row), while
+     `uid100,150,250,120,400` (y 120, the readout's rows) still seeks.
+   - `uid100,150,250,262,400` (onto the strip): the same.
 4. **The ends.**
-   - `uit319,180`: `-> 3:59` (L − 6 s).
-   - `uit0,180`: `-> 0:00`, then `[queue] resume point cleared (playback
+   - `uit319,150`: `-> 3:59` (L − 6 s).
+   - `uit0,150`: `-> 0:00`, then `[queue] resume point cleared (playback
      moved on)`. `ui` shows the length kept (`0 / 245000 ms`, not a
-     dotted line), and `uit160,180` still seeks.
-   - With the measured panel (`uk1`): `uit290,180` (raw 319, flagged)
-     gives `-> 3:59`; `uit20,180` (raw 0, flagged) gives `-> 0:00`. Then
+     dotted line), and `uit160,150` still seeks.
+   - With the measured panel (`uk1`): `uit290,150` (raw 319, flagged)
+     gives `-> 3:59`; `uit20,150` (raw 0, flagged) gives `-> 0:00`. Then
      `uk0`.
 5. **The resume.** Paused after a seek to 2:02, reset through the serial
    daemon.
@@ -1296,7 +1322,7 @@ The examples are for a 4:05 CBR MP3.
      shows 2:02 / 4:05.
    - Play logs `[audio] MP3: starting 2:02.000 in, of 4:05 (CBR;
      exact)`.
-6. **Playing, CBR.** Play, then `uit160,180`:
+6. **Playing, CBR.** Play, then `uit160,150`:
    - `seek a -> 2:02 of 4:05 (tap): plays from there`;
    - `[audio] MP3: starting 2:02.000 in ... (CBR; exact)`;
    - `[audio] refill: first audio in the ring N ms`, with N 74-150;
@@ -1311,7 +1337,7 @@ The examples are for a 4:05 CBR MP3.
      arriving while the start stalls the loop) shows the old second; one
      sent alone after the seek's log line shows the target. Neither
      sees the frames in between.
-7. **A long scrub while an MP3 plays.** `uid20,180,300,180,10000`. The
+7. **A long scrub while an MP3 plays.** `uid20,150,300,150,10000`. The
    `[ui] scrub:` line gives the fps, the draw maximum, the ring's
    minimum and underruns (expect +0). `[heap] playing` is unchanged.
 8. **LAME VBR, FLAC, a built-in track.**
@@ -1321,27 +1347,30 @@ The examples are for a 4:05 CBR MP3.
      `(the run's index; exact)` after a seek to 0:00.
    - A FLAC: `[audio] FLAC: starting 2:02.000 in (libFLAC's seek to
      sample ...)`.
-   - `qb`, a click track: `uit319,180` gives `-> 0:54 of 1:00` and
+   - `qb`, a click track: `uit319,150` gives `-> 0:54 of 1:00` and
      `[audio] built-in track: 0:54 asked: counting from there`. It joins
      the next track 6 s later (`G`: joins continuous).
    - On the Dance tab after a seek: `[dance] tracker reset`, with the
      tempo prior kept.
-9. **The zone.** `uit160,163` seeks. `uit160,160` logs `[ui] now playing:
-   go to the album N`.
+9. **The zone.** `uit160,139` seeks. `uit160,136` logs `[ui] now playing:
+   the navigation menu` (close it 400 ms later: `uit160,60`. Every sheet
+   ignores a touch within 300 ms of its opening, `[ui] sheet: a touch
+   right after it opened, ignored`, and the menu would stay up over
+   step 10's taps).
 10. **Waiting.** Only if the headphones are certainly off: nothing but
     silence may go to them. Otherwise skip it; the host tests cover
     Waiting.
     - Set the output to Bluetooth, turn `z` off (the hold needs it off),
       and play: Waiting.
-    - `uit160,180`: `... (tap): waiting, it starts there when they
+    - `uit160,150`: `... (tap): waiting, it starts there when they
       connect`.
-    - `uit300,165` logs `cancel the wait for the headphones`: Cancel's
-      area, not the bar's. The state is Paused, and `q` shows the start
-      point.
+    - `uit300,130` logs `cancel the wait for the headphones`: Cancel's
+      area, not the bar's (which starts at y 138). The state is Paused,
+      and `q` shows the start point.
     - Turn `z` back on, set the speaker as the output, and play:
       `[audio] MP3: starting 2:02.000 in`.
 11. **A join under the finger.** `qb`, play the first click track,
-    `qs50`, then at once `uid30,180,200,180,15000`.
+    `qs50`, then at once `uid30,150,200,150,15000`.
     - The join comes at ~10 s, during the drag: `no seek (the track
       changed under the finger)`.
     - No `[audio]` start follows the lift.

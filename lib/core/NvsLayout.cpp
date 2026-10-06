@@ -49,6 +49,8 @@ SchemaStep schemaStep(bool have, uint16_t stored, uint16_t current) {
   return s;
 }
 
+uint8_t repeatFrom(bool have, uint8_t stored) { return have && stored < kRepeatModes ? stored : 0; }
+
 size_t encodeResume(const QueueResume& r, uint8_t out[kResumeBytes]) {
   for (size_t i = 0; i < kResumeBytes; ++i) out[i] = 0;
   const ResumeAnchor& a = r.anchor;

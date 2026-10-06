@@ -29,6 +29,7 @@
 #include "RateConverter.h"
 #include "ScreenPower.h"
 #include "SeekBar.h"
+#include "SheetLayout.h"
 #include "SleepTimer.h"
 #include "TabBarModel.h"
 #include "TextFit.h"
@@ -620,7 +621,7 @@ void test_seek_bar_texts_fit() {
 void test_waiting_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  const int panelW = 320 - 112;  // the artist and album bands
+  const int panelW = 320 - 112;  // the title strip and the rows under it
   fits(small, "Waiting for SPYDRONE\xE2\x80\xA6", kWaitTextW);
   fits(small, "Waiting for WH-1000XM4\xE2\x80\xA6", kWaitTextW);
   fits(small, "Waiting for the headphones\xE2\x80\xA6", kWaitTextW);
@@ -645,15 +646,76 @@ void test_waiting_texts_fit() {
   TEST_ASSERT_TRUE(12 + small.width("88:88") + 4 <= 160 - kNowPlayingMidW / 2);
 }
 
+// Now Playing's two menus (docs/QUEUE-MODES.md section 4.6): the rows'
+// labels in a row, each state and detail in its row's room
+// (sheet::detailRoom(), as Sheet::render() has it), the toasts on one
+// line, "Playback" left of the ✕; the folder cut from the left by whole
+// folders; the waiting title on one line.
+void test_now_playing_menu_texts_fit() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
+  for (const char* l : {kGoTo[0], kGoTo[1], kGoTo[2], kShuffleRow, kRepeatRow, kSleepRow}) fits(body, l, 320 - 32);
+  // The rooms, as measured with the firmware's fonts.
+  TEST_ASSERT_EQUAL_INT(183, sheet::detailRoom(body.width(kGoTo[0])));
+  TEST_ASSERT_EQUAL_INT(174, sheet::detailRoom(body.width(kGoTo[1])));
+  TEST_ASSERT_EQUAL_INT(177, sheet::detailRoom(body.width(kGoTo[2])));
+  TEST_ASSERT_EQUAL_INT(216, sheet::detailRoom(body.width(kShuffleRow)));
+  TEST_ASSERT_EQUAL_INT(215, sheet::detailRoom(body.width(kRepeatRow)));
+  TEST_ASSERT_EQUAL_INT(180, sheet::detailRoom(body.width(kSleepRow)));
+  for (const char* s : kOnOff) fits(small, s, sheet::detailRoom(body.width(kShuffleRow)));
+  for (const char* s : kRepeatModes) fits(small, s, sheet::detailRoom(body.width(kRepeatRow)));
+  TEST_ASSERT_TRUE(small.width("One") <= 26);
+  // The sleep states as before, against the Sleep timer row's room.
+  for (const char* t : {"Off", "90 min", "59 s", "End of track", "End of album", "End of queue", "Fading"}) {
+    fits(small, t, sheet::detailRoom(body.width(kSleepRow)));
+  }
+  fits(small, kNoArtistFolder, sheet::detailRoom(body.width(kGoTo[0])));
+  fits(small, kLooseTracks, sheet::detailRoom(body.width(kGoTo[1])));
+  // The refusals' toasts, and the sheet's title.
+  fits(body, kBuiltinNotInLibrary, kToastTextRight - kToastTextX);
+  fits(body, kLibraryNotReady, kToastTextRight - kToastTextX);
+  fits(small, kPlaybackTitle, kSleepTitleW);
+  // The folder: cut from the left by whole folders to Go to folder's room.
+  textfit::Font f;
+  f.ctx = const_cast<Vlw*>(&small);
+  f.width = [](void* ctx, const char* s) { return static_cast<const Vlw*>(ctx)->width(s); };
+  const int room = sheet::detailRoom(body.width(kGoTo[2]));
+  char out[160];
+  TEST_ASSERT_TRUE(small.width("/music/Daft Punk/Discovery") > room);
+  textfit::cutPathLeft(f, "/music/Daft Punk/Discovery", room, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("\xE2\x80\xA6/Daft Punk/Discovery", out);
+  fits(small, out, room);
+  textfit::cutPathLeft(f, "/music/Kavinsky", room, out, sizeof(out));  // fits: whole
+  TEST_ASSERT_EQUAL_STRING("/music/Kavinsky", out);
+  textfit::cutPathLeft(f, "/music", room, out, sizeof(out));  // a track at the root
+  TEST_ASSERT_EQUAL_STRING("/music", out);
+  // A last folder too wide even alone: "/<last>" (the draw cuts its end).
+  const std::string wide(40, 'W');
+  textfit::cutPathLeft(f, ("/music/Some Artist/" + wide).c_str(), room, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING(("/" + wide).c_str(), out);
+  // A deep path keeps as many folders as fit.
+  textfit::cutPathLeft(f, "/music/a/b/c/Daft Punk/Discovery", room, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("\xE2\x80\xA6/b/c/Daft Punk/Discovery", out);  // (never "/a/b/c/...": a cut says so)
+  // The waiting title: one line of Bold 16 in the title's 190 px.
+  textfit::Font b;
+  b.ctx = const_cast<Vlw*>(&bold);
+  b.width = [](void* ctx, const char* s) { return static_cast<const Vlw*>(ctx)->width(s); };
+  const char* title = "Le voyage de P\xC3\xA9n\xC3\xA9lope (Remastered Edition)";
+  textfit::fit(b, title, strlen(title), out, sizeof(out), 190);
+  fits(bold, out, 190);
+  fits(bold, "One More Time", 190);
+}
+
 // The sleep timer (ENERGY.md section 3): the "..." row and its state, the
 // sheet's pills, the fade's toast, and the moon's text on Now Playing's
 // progress line.
 void test_sleep_timer_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  // The "..." sheet's row (Body from x 16), its state right-aligned (Small)
-  // in what the label leaves (Sheet::render: 16 px each side and between).
-  const int stateRoom = 320 - 16 - (16 + body.width(kSleepRow) + 16);
+  // The playback menu's row (Body from x 16), its state right-aligned
+  // (Small) in what the label leaves (Sheet::render: 16 px each side and
+  // between).
+  const int stateRoom = sheet::detailRoom(body.width(kSleepRow));
   for (const char* t : {"Off", "90 min", "59 s", "End of track", "End of album", "End of queue", "Fading"}) {
     fits(small, t, stateRoom);
   }
@@ -1033,6 +1095,7 @@ int main(int, char**) {
   RUN_TEST(test_queue_texts_fit);
   RUN_TEST(test_output_texts_fit);
   RUN_TEST(test_waiting_texts_fit);
+  RUN_TEST(test_now_playing_menu_texts_fit);
   RUN_TEST(test_seek_bar_texts_fit);
   RUN_TEST(test_sleep_timer_texts_fit);
   RUN_TEST(test_idle_power_off_texts_fit);

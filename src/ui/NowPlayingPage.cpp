@@ -2,12 +2,14 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Now Playing (the tab bar spec §6.1, mockups 01-04, with the review's
-// grafts): the cover, the title, the artist and the album as 40 px bands
-// that open them in the Library at the playing track, the progress and
-// times, and the transport with the volume sheet and a "..." sheet; while
-// play waits for the headphones, a spinner for play and the waiting panel
-// (PlayGate). The layout is in Pages.h. The "..." zone reaches the
-// screen's edge.
+// grafts): the cover, the title, the artist and the album as two plain
+// rows, the progress and times, and the transport. Two menus, one job
+// each (docs/QUEUE-MODES.md): a tap anywhere on the cover or the text
+// opens the navigation menu (Go to artist, album, folder), "..." the
+// playback menu (Shuffle, Repeat, Sleep timer); the volume button the
+// volume sheet. While play waits for the headphones, a spinner for play
+// and the waiting panel (PlayGate) in the title strip and the rows. The
+// layout is in Pages.h. The "..." zone reaches the screen's edge.
 //
 // The progress line is a seek bar (docs/SEEK-BAR.md): SeekBar has the
 // mapping and the touch, this page the drawing and the one call to the
@@ -21,6 +23,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "SheetLayout.h"
+#include "TextFit.h"
 #include "TrackCatalog.h"
 #include "TrackSeek.h"
 #include "UiText.h"
@@ -37,29 +41,56 @@ namespace ui {
 namespace {
 
 constexpr int kCoverX = 12, kCoverY = 40, kCoverPx = 96;
-constexpr int kTextX = 120;       // the title and the bands' text
+constexpr int kTextX = 120;       // the title's and the rows' text
 constexpr int kColumnX = 112;     // what's right of the cover (drawn and hit)
+constexpr int kTextW = 190;       // the title's and the rows' text: x 120-310
 constexpr int kTitleY = 38, kTitleH = 52;
-constexpr int kArtistY = 90, kArtistH = 40;
-constexpr int kAlbumY = 130, kAlbumH = 40;
-constexpr int kProgressY = 170, kProgressH = 22;
-constexpr int kTransportY = 192, kTransportH = 48;
+// The artist and the album: plain rows of a Body line and 4 px, the
+// artist's from where the title strip ends, the album's ending on the
+// cover's last row (the room the old 40 px bands gave up went to the
+// transport).
+constexpr int kArtistY = 90, kArtistH = 23;
+constexpr int kAlbumY = 113, kAlbumH = 23;
+constexpr int kProgressY = 146, kProgressH = 22;
+// The transport takes touches on y 168-239 (five zones of 64 x 72) but is
+// drawn as one 56-row strip (gfx::kStripH) from y 176, 8 px of background
+// each side.
+constexpr int kTransportY = 168, kTransportH = 72;
+constexpr int kTransportDrawY = 176, kTransportDrawH = 56;
 constexpr int kZoneW = 64;
-// The waiting panel (over the artist and album bands): its text in the
-// artist band, its buttons in the album band.
-constexpr int kWaitButtonsY = kAlbumY;
 constexpr uint32_t kSpinMs = 125;  // the waiting spinner: 8 steps a second
-// The seek bar's touch reaches this far above the band (y 162): the line is
-// drawn at the band's top (y 172-175), so a tap aimed at it lands on both
-// sides of y 170. Not while play waits: Play on speaker and Cancel keep
-// their whole area (y 170 then).
+// The seek bar's touch reaches this far above the band (y 138): the line is
+// drawn at the band's top (y 148-151), so a tap aimed at it lands on both
+// sides of y 146. Whether or not a play waits (the waiting buttons' touch
+// ends at y 137).
 constexpr int kSeekReachPx = 8;
-// The readout row while a finger scrubs: the 33 rows between the cover's
-// frame and the band, the full width (the album band's lower rows).
-constexpr int kReadoutY = 137, kReadoutH = 33;
+// The readout row while a finger scrubs: the 33 rows above the band, the
+// full width: over the album row and the cover's lowest 24 rows (its
+// frame's last included), which come back at the lift (endScrub()).
+constexpr int kReadoutY = 113, kReadoutH = 33;
+// The navigation area (the menu's touch, and its press look): everything
+// above the seek bar's reach; lit on x 0-319, y 36-136.
+constexpr int kNavBottom = kCoverY + kCoverPx + 1;  // 137: under the cover's frame
+// The indicator's glyphs under the "..." dots, 4 px apart when both show.
+constexpr int kModesGap = 4;
+
 static_assert(SeekBar::kLineX + SeekBar::kLineW == kW - 12, "the seek bar's line is drawProgress()'s");
-static_assert(kReadoutY == kCoverY + kCoverPx + 1, "the readout row starts under the cover's frame");
+static_assert(kArtistY == kTitleY + kTitleH, "the artist row starts where the title strip ends");
+static_assert(kAlbumY == kArtistY + kArtistH, "the album row follows the artist's");
+static_assert(kAlbumY + kAlbumH == kCoverY + kCoverPx, "the album row ends on the cover's last row");
+static_assert(kReadoutY == kAlbumY, "the readout row starts on the album row");
 static_assert(kReadoutY + kReadoutH == kProgressY, "the readout row ends at the band");
+static_assert(kProgressY + kProgressH == kTransportY, "the transport's touch starts under the band");
+static_assert(kTransportY + kTransportH == kH, "the transport's touch reaches the button strip");
+static_assert(kTransportDrawH == gfx::kStripH, "the transport is drawn as one strip");
+static_assert(kTransportDrawY - kTransportY == kTransportY + kTransportH - (kTransportDrawY + kTransportDrawH),
+              "the drawn transport sits in the middle of its touch");
+static_assert(kProgressY - kSeekReachPx == kNavBottom + 1, "the seek bar's touch starts under the navigation area");
+// The seek bar's off and back rows (SeekBar.h) follow the layout: back on
+// the bar from the readout's second row, off 7 rows above the readout
+// (onto the artist row).
+static_assert(SeekBar::kBackAboveY == kReadoutY + 1, "back on the bar from the readout's second row");
+static_assert(SeekBar::kOffAboveY == kReadoutY - 7, "off the bar onto the artist row");
 static_assert(SeekBar::kLineX + uitext::kSeekReadoutW < SeekBar::kReadoutLeftX &&
                   SeekBar::kLineX + SeekBar::kLineW - uitext::kSeekReadoutW > SeekBar::kReadoutRightX,
               "the readout at its widest ends short of where the knob sends it across");
@@ -74,6 +105,8 @@ bool cutShort(const char* line, const char* text) {
   const bool ends = (n >= 3 && strcmp(line + n - 3, "\xE2\x80\xA6") == 0) || (n >= 3 && strcmp(line + n - 3, "...") == 0);
   return ends && !(t >= 3 && strcmp(text + t - 3, line + n - 3) == 0);
 }
+
+const char* repeatName(uint8_t mode) { return mode == 2 ? "one" : mode == 1 ? "all" : "off"; }
 
 }  // namespace
 
@@ -110,19 +143,46 @@ void NowPlayingPage::leave() {
   pressed_ = None;
 }
 
+uint16_t NowPlayingPage::navBg() const {
+  // The press look (a Down highlights): not while a play waits (the cover
+  // alone takes the touch then, and isn't lit).
+  return pressed_ == Nav && ui_.state().play != PlayState::Waiting ? col::ROW_SEL : col::BG;
+}
+
+void NowPlayingPage::fillNav() {
+  // What the navigation area's pieces don't cover, in its look: the rows
+  // above the title, row 38 left of the column, beside the cover's frame,
+  // and the row under the album row right of it.
+  const uint16_t bg = navBg();
+  gfx::fill(0, kContentY, kW, kTitleY - kContentY, bg);
+  gfx::fill(0, kTitleY, kColumnX, kCoverY - 1 - kTitleY, bg);
+  gfx::fill(0, kCoverY - 1, kCoverX - 1, kCoverPx + 2, bg);
+  gfx::fill(kCoverX + kCoverPx + 1, kCoverY - 1, kColumnX - (kCoverX + kCoverPx + 1), kCoverPx + 2, bg);
+  gfx::fill(kColumnX, kAlbumY + kAlbumH, kW - kColumnX, kNavBottom - (kAlbumY + kAlbumH), bg);
+}
+
+void NowPlayingPage::drawNav() {
+  // The press look on or off: the cover is left as it is (no fill overlaps
+  // its frame). A scrub's readout still up (its lift not drawn yet) goes
+  // first.
+  if (drawn_.scrubUp) endScrub();
+  fillNav();
+  drawTitle();
+  drawMiddle();
+}
+
 void NowPlayingPage::repaint() {
   if (ui_.state().current < 0) {
     drawn_ = Drawn{};  // the empty state, all of it
     update(0, false, false);
     return;
   }
-  // What the pieces don't cover: the rows above the title, the left column
-  // under the cover.
-  gfx::fill(0, kContentY, kW, kTitleY - kContentY, col::BG);
-  gfx::fill(0, kTitleY, kColumnX, kCoverY - 1 - kTitleY, col::BG);
-  gfx::fill(0, kCoverY + kCoverPx + 1, kColumnX, kProgressY - (kCoverY + kCoverPx + 1), col::BG);
-  gfx::fill(0, kCoverY - 1, kCoverX - 1, kCoverPx + 2, col::BG);
-  gfx::fill(kCoverX + kCoverPx + 1, kCoverY - 1, kColumnX - (kCoverX + kCoverPx + 1), kCoverPx + 2, col::BG);
+  // What the pieces don't cover: the navigation area's gaps (in its look),
+  // the rows between it and the band, and the transport's margins.
+  fillNav();
+  gfx::fill(0, kNavBottom, kW, kProgressY - kNavBottom, col::BG);
+  gfx::fill(0, kTransportY, kW, kTransportDrawY - kTransportY, col::BG);
+  gfx::fill(0, kTransportDrawY + kTransportDrawH, kW, kH - (kTransportDrawY + kTransportDrawH), col::BG);
   drawn_ = Drawn{};
   update(0, false, false);
 }
@@ -136,8 +196,12 @@ void NowPlayingPage::drawCover() {
   const uint16_t* px = album != LibraryIndex::kNone ? ui_.thumbs().get(album, ThumbCache::Size::Large) : nullptr;
   drawn_.coverAlbum = album;
   drawn_.coverShown = px != nullptr;
+  // While a finger scrubs, the readout row covers the cover's lowest rows:
+  // only what is above it goes to the screen now, the rest at the lift
+  // (endScrub()). A thumbnail that arrives mid-scrub can't cut the readout.
+  const int shownRows = drawn_.scrubUp ? kReadoutY - (kCoverY - 1) : kCoverPx + 2;
   if (!cover_) {
-    gfx::fill(kCoverX, kCoverY, kCoverPx, kCoverPx, col::CARD);
+    gfx::fill(kCoverX, kCoverY, kCoverPx, drawn_.scrubUp ? kReadoutY - kCoverY : kCoverPx, col::CARD);
     return;
   }
   M5Canvas& c = *cover_;
@@ -150,28 +214,49 @@ void NowPlayingPage::drawCover() {
     c.fillCircle(1 + kCoverPx / 2, 1 + kCoverPx / 2, 28, col::BTN);
     icons::drawCentred(c, icons::kNote, 1 + kCoverPx / 2, 1 + kCoverPx / 2, ui_.state().current >= 0 ? col::DIM : col::FAINT);
   }
-  gfx::push(c, kCoverX - 1, kCoverY - 1, kCoverPx + 2, kCoverPx + 2);
+  gfx::pushRows(c, kCoverX - 1, kCoverY - 1, kCoverPx + 2, 0, shownRows);
 }
 
 void NowPlayingPage::drawTitle() {
+  using namespace uitext;
   const AppState& s = ui_.state();
   M5Canvas& c = gfx::strip();
   Fonts& f = Fonts::instance();
   const int w = kW - kColumnX;
-  const int textW = 310 - kTextX;
-  c.fillRect(0, 0, w, kTitleH, col::BG);
+  const uint16_t bg = navBg();
+  c.fillRect(0, 0, w, kTitleH, bg);
   char title[160] = "Nothing playing";
   if (s.current >= 0) ui_.player().catalog().title(s.trackId, title, sizeof(title));
   const uint16_t ink = s.current >= 0 ? col::TXT : col::DIM;
   const int x = kTextX - kColumnX;
+  if (s.play == PlayState::Waiting) {
+    // The wait's status takes the strip's lower lines: the title on one
+    // line over "Waiting for SPYDRONE…" (amber) and "try 2 of 3".
+    f.draw(c, Font::Bold, title, x, 9, kTextW, ink, bg);
+    char line[64];
+    snprintf(line, sizeof(line), "Waiting for %s\xE2\x80\xA6", s.btName[0] ? s.btName : "the headphones");
+    f.draw(c, Font::Small, line, kWaitTextX, 26, kWaitTextW, col::AMBER, bg);
+    const BtLink& l = s.btLink;
+    if (l.phase == BtLink::Phase::Paging && l.attempt > 0) {
+      snprintf(line, sizeof(line), "try %u of %u", static_cast<unsigned>(l.attempt),
+               static_cast<unsigned>(l.attempts > l.attempt ? l.attempts : l.attempt));
+    } else if (l.phase == BtLink::Phase::Scanning || l.phase == BtLink::Phase::Backoff) {
+      snprintf(line, sizeof(line), "looking for them");
+    } else {
+      snprintf(line, sizeof(line), "connecting");
+    }
+    f.draw(c, Font::Small, line, kWaitTextX, 43, kWaitTextW, col::DIM, bg);
+    gfx::push(c, kColumnX, kTitleY, w, kTitleH);
+    return;
+  }
   char lines[3][112];
-  int n = textfit::wrap(f.fit(Font::Title), title, strlen(title), textW, 2, &lines[0][0], sizeof(lines[0]));
+  int n = textfit::wrap(f.fit(Font::Title), title, strlen(title), kTextW, 2, &lines[0][0], sizeof(lines[0]));
   if (n == 2 && cutShort(lines[1], title)) {
     // Too long for two big lines: three smaller ones.
-    n = textfit::wrap(f.fit(Font::Bold), title, strlen(title), textW, 3, &lines[0][0], sizeof(lines[0]));
-    for (int i = 0; i < n; ++i) f.draw(c, Font::Bold, lines[i], x, 9 + i * 17, textW, ink, col::BG);
+    n = textfit::wrap(f.fit(Font::Bold), title, strlen(title), kTextW, 3, &lines[0][0], sizeof(lines[0]));
+    for (int i = 0; i < n; ++i) f.draw(c, Font::Bold, lines[i], x, 9 + i * 17, kTextW, ink, bg);
   } else {
-    for (int i = 0; i < n; ++i) f.draw(c, Font::Title, lines[i], x, n == 1 ? 26 : 13 + i * 26, textW, ink, col::BG);
+    for (int i = 0; i < n; ++i) f.draw(c, Font::Title, lines[i], x, n == 1 ? 26 : 13 + i * 26, kTextW, ink, bg);
   }
   gfx::push(c, kColumnX, kTitleY, w, kTitleH);
 }
@@ -184,24 +269,18 @@ void NowPlayingPage::drawArtistAlbum() {
   const bool lib = s.current >= 0 && !TrackCatalog::isBuiltin(s.trackId);
   const int w = kW - kColumnX;
   const int x = kTextX - kColumnX;
-  const int textW = w - x - 26;
-  // The artist band.
-  uint16_t bg = pressed_ == Artist ? col::ROW_SEL : col::BG;
-  c.fillRect(0, 0, w, kArtistH, bg);
-  const char* artist = s.current < 0 ? "Open the Library" : lib ? cat.artist(s.trackId) : "Built-in test track";
-  if (lib && !artist[0]) artist = "(no artist folder)";
-  f.draw(c, Font::Body, artist, x, kArtistH / 2, textW, s.current < 0 ? accent::Library : col::SOFT, bg);
-  if (lib || s.current < 0) icons::drawCentred(c, icons::kChevronRight, w - 14, kArtistH / 2, col::FAINT);
-  gfx::push(c, kColumnX, kArtistY, w, kArtistH);
-  // The album band.
-  bg = pressed_ == Album ? col::ROW_SEL : col::BG;
-  c.fillRect(0, 0, w, kAlbumH, bg);
+  const uint16_t bg = navBg();
+  // Both rows in one push: plain text, no "›" (neither is a control of its
+  // own: the whole area opens the navigation menu).
+  c.fillRect(0, 0, w, kArtistH + kAlbumH, bg);
+  const char* artist = lib ? cat.artist(s.trackId) : s.current >= 0 ? "Built-in test track" : "";
+  if (lib && !artist[0]) artist = uitext::kNoArtistFolder;
+  f.draw(c, Font::Body, artist, x, kArtistH / 2, kTextW, col::SOFT, bg);
   if (lib) {
     const char* album = cat.album(s.trackId);
-    f.draw(c, Font::Body, album[0] ? album : "(loose tracks)", x, kAlbumH / 2, textW, col::DIM, bg);
-    icons::drawCentred(c, icons::kChevronRight, w - 14, kAlbumH / 2, col::FAINT);
+    f.draw(c, Font::Body, album[0] ? album : uitext::kLooseTracks, x, kArtistH + kAlbumH / 2, kTextW, col::DIM, bg);
   }
-  gfx::push(c, kColumnX, kAlbumY, w, kAlbumH);
+  gfx::push(c, kColumnX, kArtistY, w, kArtistH + kAlbumH);
 }
 
 bool NowPlayingPage::seekable() const {
@@ -384,21 +463,31 @@ void NowPlayingPage::drawReadout() {
     f.draw(c, Font::Title, big, x, kBigY, bw, col::TXT, col::BG);
     if (sw > 0) f.draw(c, Font::Small, small, x + bw + kSeekReadoutGap, kSmallY, sw, col::DIM, col::BG);
   }
-  // Entering the scrub's look (or after the middle was drawn again): the
-  // album band's top rows too, which Waiting's buttons reach into (y 133).
-  if (!drawn_.scrubUp) gfx::fill(kColumnX, kAlbumY, kW - kColumnX, kReadoutY - kAlbumY, col::BG);
+  // Entering the scrub's look (or after the middle was drawn again) while
+  // a play waits: the buttons' upper halves (y 94-112) would stick out
+  // above the readout, so the artist row goes too.
+  if (!drawn_.scrubUp && ui_.state().play == PlayState::Waiting) {
+    gfx::fill(kColumnX, kArtistY, kW - kColumnX, kArtistH, col::BG);
+  }
   gfx::push(c, 0, kReadoutY, kW, kReadoutH);
   drawn_.scrubUp = true;
   drawn_.readout = bar_.readout();
 }
 
 void NowPlayingPage::endScrub() {
-  // The artist and album bands (or the waiting panel) and the left column
-  // under the cover, as repaint() has them; the band follows in its rest
-  // look (update()).
-  drawMiddle();
-  gfx::fill(0, kReadoutY, kColumnX, kReadoutH, col::BG);
+  // The rows the readout took back: their background, the cover's lowest
+  // rows from its sprite (no re-render, no thumbnail lookup), then the
+  // rows (or the waiting panel); the band follows in its rest look
+  // (update()).
+  gfx::fill(0, kReadoutY, kW, kReadoutH, col::BG);
   drawn_.scrubUp = false;
+  const int from = kReadoutY - (kCoverY - 1);  // the sprite's row on the readout's first
+  if (cover_) {
+    gfx::pushRows(*cover_, kCoverX - 1, kCoverY - 1, kCoverPx + 2, from, kCoverPx + 2);
+  } else {
+    gfx::fill(kCoverX, kReadoutY, kCoverPx, kCoverY + kCoverPx - kReadoutY, col::CARD);
+  }
+  drawMiddle();
   drawn_.readout = SeekBar::Readout{};
 }
 
@@ -438,77 +527,92 @@ void NowPlayingPage::drawMiddle() {
   }
 }
 
-// "Waiting for SPYDRONE..." over "try 2 of 3", then [Play on speaker] and
-// [Cancel] (Cancel reaches the screen's edge).
+// While a play waits: [Play on speaker] and [Cancel] in the artist and
+// album rows (Cancel reaches the screen's edge; the status is the title
+// strip's, drawTitle()).
 void NowPlayingPage::drawWaiting() {
   using namespace uitext;
-  const AppState& s = ui_.state();
   M5Canvas& c = gfx::strip();
   Fonts& f = Fonts::instance();
   const int w = kW - kColumnX;
-  // The text, in the artist band.
-  c.fillRect(0, 0, w, kArtistH, col::BG);
-  char line[64];
-  snprintf(line, sizeof(line), "Waiting for %s\xE2\x80\xA6", s.btName[0] ? s.btName : "the headphones");
-  f.draw(c, Font::Small, line, kWaitTextX, 12, kWaitTextW, col::AMBER, col::BG);
-  const BtLink& l = s.btLink;
-  if (l.phase == BtLink::Phase::Paging && l.attempt > 0) {
-    snprintf(line, sizeof(line), "try %u of %u", static_cast<unsigned>(l.attempt),
-             static_cast<unsigned>(l.attempts > l.attempt ? l.attempts : l.attempt));
-  } else if (l.phase == BtLink::Phase::Scanning || l.phase == BtLink::Phase::Backoff) {
-    snprintf(line, sizeof(line), "looking for them");
-  } else {
-    snprintf(line, sizeof(line), "connecting");
-  }
-  f.draw(c, Font::Small, line, kWaitTextX, 30, kWaitTextW, col::DIM, col::BG);
-  gfx::push(c, kColumnX, kArtistY, w, kArtistH);
-  // The buttons, in the album band. Neither is the accent: out loud is a
-  // choice, not the way on.
-  c.fillRect(0, 0, w, kAlbumH, col::BG);
+  const int h = kArtistH + kAlbumH;
+  // Neither is the accent: out loud is a choice, not the way on. Drawn
+  // y 94-129, each taking y 90-137 (zoneAt()).
+  c.fillRect(0, 0, w, h, col::BG);
   const uint16_t sp = pressed_ == WaitSpeaker ? col::BTN_HI : col::BTN;
-  c.fillRoundRect(kWaitSpeakerX, 3, kWaitSpeakerW, 34, 8, sp);
-  f.draw(c, Font::Body, kPlayOnSpeaker, kWaitSpeakerX + kWaitSpeakerW / 2, 20, kWaitSpeakerW - kWaitButtonPad,
+  c.fillRoundRect(kWaitSpeakerX, 4, kWaitSpeakerW, 36, 8, sp);
+  f.draw(c, Font::Body, kPlayOnSpeaker, kWaitSpeakerX + kWaitSpeakerW / 2, 22, kWaitSpeakerW - kWaitButtonPad,
          col::TXT, sp, Fonts::Align::Centre);
   const uint16_t cn = pressed_ == WaitCancel ? col::BTN_HI : col::BTN;
-  c.fillRoundRect(kWaitCancelX, 3, kWaitCancelW, 34, 8, cn);
-  f.draw(c, Font::Body, kWaitCancel, kWaitCancelX + kWaitCancelW / 2, 20, kWaitCancelW - kWaitButtonPad, col::TXT, cn,
+  c.fillRoundRect(kWaitCancelX, 4, kWaitCancelW, 36, 8, cn);
+  f.draw(c, Font::Body, kWaitCancel, kWaitCancelX + kWaitCancelW / 2, 22, kWaitCancelW - kWaitButtonPad, col::TXT, cn,
          Fonts::Align::Centre);
-  gfx::push(c, kColumnX, kWaitButtonsY, w, kAlbumH);
+  gfx::push(c, kColumnX, kArtistY, w, h);
 }
 
 void NowPlayingPage::drawTransport() {
   const AppState& s = ui_.state();
   M5Canvas& c = gfx::strip();
   Fonts& f = Fonts::instance();
-  c.fillRect(0, 0, kW, kTransportH, col::BG);
-  const int cy = kTransportH / 2;
+  c.fillRect(0, 0, kW, kTransportDrawH, col::BG);
+  const int cy = kTransportDrawH / 2;  // y 204
   for (int z = 0; z < 5; ++z) {
     const int cx = z * kZoneW + kZoneW / 2;
     const bool down = pressed_ == static_cast<Zone>(Volume + z);
-    if (down && z != 2) c.fillCircle(cx, cy, 22, col::BTN_HI);
+    if (down && z != 2) c.fillCircle(cx, cy, 24, col::BTN_HI);
     switch (z) {
       case 0: {  // the output and its volume: tap for the volume sheet
         const uint16_t off = s.btLost || s.btSession.failed() ? col::RED : col::AMBER;
         const uint16_t ic = s.onBluetooth ? (s.btConnected ? col::CYAN : off) : col::SOFT;
-        icons::drawCentred(c, s.onBluetooth ? icons::kHeadphones : icons::kSpeaker, cx, cy - 8, ic);
+        icons::drawCentred(c, s.onBluetooth ? icons::kHeadphones : icons::kSpeaker, cx, cy - 9, ic);
         char v[6];
         snprintf(v, sizeof(v), "%u%%", static_cast<unsigned>(s.volume));
-        f.draw(c, Font::Small, v, cx, cy + 13, kZoneW, col::DIM, down ? col::BTN_HI : col::BG, Fonts::Align::Centre);
+        f.draw(c, Font::Small, v, cx, cy + 14, kZoneW, col::DIM, down ? col::BTN_HI : col::BG, Fonts::Align::Centre);
         break;
       }
       case 1: icons::drawCentred(c, icons::kPrev, cx, cy, col::TXT); break;
       case 2: drawPlayButton(c, cx, cy, down); break;
       case 3: icons::drawCentred(c, icons::kNext, cx, cy, col::TXT); break;
-      default: icons::drawCentred(c, icons::kMore, cx, cy, col::SOFT); break;
+      default:
+        // The dots always at the same height (they don't jump when the
+        // indicator comes or goes); the indicator under them, on the
+        // control that changes it, as the volume's "60%" under its icon.
+        icons::drawCentred(c, icons::kMore, cx, cy - 9, col::SOFT);
+        drawModes(c, cx, cy + 14);
+        break;
     }
   }
-  gfx::push(c, 0, kTransportY, kW, kTransportH);
+  gfx::push(c, 0, kTransportDrawY, kW, kTransportDrawH);
+  drawn_.shuffle = s.shuffle;
+  drawn_.repeat = s.repeat;
+}
+
+void NowPlayingPage::drawModes(M5Canvas& c, int cx, int cy) {
+  // Shuffle then repeat (the loop; One's has a bold "1" beside it), centred
+  // as a group, in the accent; bitmaps, so a pressed zone's circle shows
+  // through. The widest group, shuffle and One, is 38 x 11 at x 269-306,
+  // y 213-223: the pressed circle's width at its middle row
+  // (tools/ui_icons.py checks it).
+  const AppState& s = ui_.state();
+  const icons::Icon* glyphs[2] = {};
+  int n = 0;
+  if (s.shuffle) glyphs[n++] = &icons::kShuffleSmall;
+  if (s.repeat == 1) glyphs[n++] = &icons::kRepeatSmall;
+  if (s.repeat == 2) glyphs[n++] = &icons::kRepeatOneSmall;
+  if (n == 0) return;
+  int width = (n - 1) * kModesGap;
+  for (int i = 0; i < n; ++i) width += glyphs[i]->w;
+  int x = cx - width / 2;
+  for (int i = 0; i < n; ++i) {
+    icons::draw(c, *glyphs[i], x, cy - glyphs[i]->h / 2, accent::NowPlaying);
+    x += glyphs[i]->w + kModesGap;
+  }
 }
 
 void NowPlayingPage::drawPlayButton(M5Canvas& c, int cx, int cy, bool down) {
   const PlayState play = ui_.state().play;
   const uint16_t disc = down ? col::SOFT : accent::NowPlaying;
-  c.fillCircle(cx, cy, 23, disc);
+  c.fillCircle(cx, cy, 25, disc);  // y 179-229: off the bezel
   if (play == PlayState::Waiting) {
     // A ring of 8 dots, one big (the step): waiting; a tap cancels.
     static const int8_t kDx[8] = {0, 8, 11, 8, 0, -8, -11, -8};
@@ -525,9 +629,9 @@ void NowPlayingPage::drawPlayButton(M5Canvas& c, int cx, int cy, bool down) {
 
 void NowPlayingPage::drawPlayZone() {
   M5Canvas& c = gfx::strip();
-  c.fillRect(0, 0, kZoneW, kTransportH, col::BG);
-  drawPlayButton(c, kZoneW / 2, kTransportH / 2, pressed_ == PlayPause);
-  gfx::push(c, 2 * kZoneW, kTransportY, kZoneW, kTransportH);
+  c.fillRect(0, 0, kZoneW, kTransportDrawH, col::BG);
+  drawPlayButton(c, kZoneW / 2, kTransportDrawH / 2, pressed_ == PlayPause);
+  gfx::push(c, 2 * kZoneW, kTransportDrawY, kZoneW, kTransportDrawH);
 }
 
 bool NowPlayingPage::emptyState(EmptyState& e) const {
@@ -615,18 +719,21 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   if (!waiting && (pressed_ == WaitSpeaker || pressed_ == WaitCancel)) pressed_ = None;
   const BarLook look = barLook();
   const bool scrub = look == BarLook::Scrubbing || look == BarLook::Off;
-  if (newTrack) drawTitle();
+  // The title strip with the rows under it: it holds the wait's status
+  // while a play waits, so it follows the wait too.
   if (newTrack || waiting != drawn_.waiting || wsig != drawn_.waitSig) {
+    if (waiting != drawn_.waiting) fillNav();  // (the press look can't outlive a wait's start)
+    drawTitle();
     drawMiddle();
     if (scrub) {
       // (A repaint after a toast, the waiting panel's "try 2 of 3"): the
-      // readout goes back over the album band in the same pass.
+      // readout goes back over the album row in the same pass.
       drawn_.scrubUp = false;
       drawReadout();
     }
   }
-  // A scrub ended (a lift, a cancel): the middle and the left column back
-  // at once; the band below, in its rest look.
+  // A scrub ended (a lift, a cancel): the rows and the cover's lowest rows
+  // back at once; the band below, in its rest look.
   if (drawn_.scrubUp && !scrub) endScrub();
   // The cover: when the album changes (a track of the same album keeps it).
   if (all || (newTrack && playingAlbum() != drawn_.coverAlbum)) drawCover();
@@ -654,7 +761,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     drawProgress();  // (a new look at once: the pressed one on a Down, the rest after a touch)
   }
   if (all || s.play != drawn_.play || s.volume != drawn_.volume || s.onBluetooth != drawn_.bluetooth ||
-      output != drawn_.output) {
+      output != drawn_.output || s.shuffle != drawn_.shuffle || s.repeat != drawn_.repeat) {
     drawTransport();
     nextSpinMs_ = nowMs + kSpinMs;
   } else if (waiting && static_cast<int32_t>(nowMs - nextSpinMs_) >= 0) {
@@ -680,44 +787,108 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
 }
 
 NowPlayingPage::Zone NowPlayingPage::zoneAt(const InputEvent& e) const {
+  // The transport: five zones of 64 x 72 ("..." reaches the edge).
   if (e.y >= kTransportY) {
-    if (e.atRightEdge()) return More;  // the "..." zone reaches the edge
+    if (e.atRightEdge()) return More;
     const int z = e.x / kZoneW;
     return static_cast<Zone>(Volume + (z < 0 ? 0 : z > 4 ? 4 : z));
   }
-  // The seek bar: the full width, from 8 px above the band (the album's
-  // last rows: the line is drawn at the band's top); while play waits,
-  // from the band (the waiting buttons keep their whole area). Before the
-  // waiting panel's branch, which has no bar.
-  if (e.y >= kProgressY - (ui_.state().play == PlayState::Waiting ? 0 : kSeekReachPx)) return Bar;
-  if (e.x < kColumnX && e.y >= kCoverY - 4 && e.y < kCoverY + kCoverPx + 4) return Cover;
-  if (ui_.state().play == PlayState::Waiting && e.x >= kColumnX && e.y >= kArtistY) {
-    // The waiting panel: its text is inert; Cancel reaches the edge.
-    if (e.y < kWaitButtonsY || e.y >= kAlbumY + kAlbumH) return None;
+  // The seek bar: the full width, from 8 px above the band (the line is
+  // drawn at the band's top), whether or not a play waits.
+  if (e.y >= kProgressY - kSeekReachPx) return Bar;
+  // The cover's column: the navigation menu, waiting or not.
+  if (e.x < kColumnX) return Nav;
+  if (ui_.state().play == PlayState::Waiting) {
+    // The title strip holds the wait's status (inert); the rows under it
+    // the buttons, which take y 90-137. Cancel reaches the edge.
+    if (e.y < kArtistY) return None;
     const bool cancel = e.atRightEdge() || e.x - kColumnX >= uitext::kWaitCancelX - 3;
     return cancel ? WaitCancel : WaitSpeaker;
   }
-  if (e.x >= kColumnX && e.y >= kArtistY && e.y < kArtistY + kArtistH) return Artist;
-  if (e.x >= kColumnX && e.y >= kAlbumY && e.y < kAlbumY + kAlbumH) return Album;
-  return None;
+  // Everything else above the bar, its margins too: no dead pixels, and no
+  // x test for the panel's skew to fool.
+  return Nav;
 }
 
-void NowPlayingPage::goToLibrary(Go where) {
+void NowPlayingPage::openNavMenu() {
+  using namespace uitext;
   const AppState& s = ui_.state();
-  if (s.current < 0) {
-    ui_.showTab(NavModel::Tab::Library);
+  navTrack_ = s.current >= 0 ? s.trackId : TrackCatalog::kNone;
+  const LibraryIndex* index = ui_.library().index();
+  // No sheet when nothing in it could act: a toast says why.
+  if (TrackCatalog::isBuiltin(navTrack_)) {
+    Serial.println("[ui] now playing: no navigation menu (a built-in track)");
+    ui_.toast(kBuiltinNotInLibrary, false);
     return;
   }
+  if (!index || !index->ready() || navTrack_ >= index->trackCount()) {
+    Serial.println("[ui] now playing: no navigation menu (the Library isn't ready)");
+    ui_.toast(kLibraryNotReady, false);
+    return;
+  }
+  if (ui_.browsingSynthetic()) {
+    Serial.println("[ui] now playing: no navigation menu (a synthetic library)");
+    ui_.toast("Browsing a synthetic library (uil0: the card's)", false);
+    return;
+  }
+  const TrackCatalog& cat = ui_.player().catalog();
+  // The folder, cut from the left by whole folders to Go to folder's room
+  // ("…/Daft Punk/Discovery"); "" if its path can't be had.
+  navFolder_[0] = 0;
+  char path[256];
+  if (index->folderPath(index->track(navTrack_).folder, path, sizeof(path))) {
+    Fonts& f = Fonts::instance();
+    const int room = sheet::detailRoom(f.width(Font::Body, kGoTo[2]));
+    textfit::cutPathLeft(f.fit(Font::Small), path, room, navFolder_, sizeof(navFolder_));
+  }
+  const char* artist = cat.artist(navTrack_);
+  const char* album = cat.album(navTrack_);
+  const char* details[3] = {artist[0] ? artist : kNoArtistFolder, album[0] ? album : kLooseTracks, navFolder_};
+  char title[128];
+  cat.title(navTrack_, title, sizeof(title));
+  Serial.println("[ui] now playing: the navigation menu");
+  ui_.openSheet(this, title, kGoTo, 3, details);
+  ask_ = Ask::Nav;
+}
+
+void NowPlayingPage::openPlaybackMenu() {
+  using namespace uitext;
+  const AppState& s = ui_.state();
+  static const char* const kRows[3] = {kShuffleRow, kRepeatRow, kSleepRow};
+  const uint8_t repeat = s.repeat < 3 ? s.repeat : 0;
+  const char* details[3] = {kOnOff[s.shuffle ? 1 : 0], kRepeatModes[repeat], s.sleepRow};
+  Serial.printf("[ui] now playing: the playback menu (shuffle %s, repeat %s, sleep timer %s)\n",
+                s.shuffle ? "on" : "off", repeatName(repeat), s.sleepRow);
+  ui_.openSheet(this, kPlaybackTitle, kRows, 3, details);
+  // Each row's state follows while it is up (a change from the console
+  // shows too); Shuffle and Repeat change in place, the sheet staying.
+  ui_.sheetFollows(0, Ui::SheetFollow::Shuffle);
+  ui_.sheetFollows(1, Ui::SheetFollow::Repeat);
+  ui_.sheetFollows(2, Ui::SheetFollow::Sleep);
+  ui_.sheetStays(0);
+  ui_.sheetStays(1);
+  ask_ = Ask::Playback;
+}
+
+void NowPlayingPage::goToLibrary(Go where, uint32_t track) {
+  // The track the menu was opened for (it acts on that one, even if
+  // another plays now), with the menu's checks again: the index may have
+  // gone while the sheet was up (a rebuild).
   const LibraryIndex* index = ui_.library().index();
-  if (TrackCatalog::isBuiltin(s.trackId) || !index || !index->ready() || s.trackId >= index->trackCount()) {
-    ui_.toast("A built-in track isn't in the Library", false);
+  if (track == TrackCatalog::kNone) return;
+  if (TrackCatalog::isBuiltin(track)) {
+    ui_.toast(uitext::kBuiltinNotInLibrary, false);
+    return;
+  }
+  if (!index || !index->ready() || track >= index->trackCount()) {
+    ui_.toast(uitext::kLibraryNotReady, false);
     return;
   }
   if (ui_.browsingSynthetic()) {
     ui_.toast("Browsing a synthetic library (uil0: the card's)", false);
     return;
   }
-  const LibraryIndex::Track& t = index->track(s.trackId);
+  const LibraryIndex::Track& t = index->track(track);
   NavModel::PageRef pages[NavModel::kMaxDepth];
   int n = 0;
   auto page = [&](PageKind kind, uint32_t id) {
@@ -750,7 +921,7 @@ void NowPlayingPage::goToLibrary(Go where) {
       }
       const int keep = std::min(depth, NavModel::kMaxDepth - 1);
       for (int i = keep - 1; i >= 0; --i) page(PageKind::Folder, chain[i]);
-      Serial.printf("[ui] now playing: show in folders (%d deep)\n", depth);
+      Serial.printf("[ui] now playing: go to the folder (%d deep)\n", depth);
       ui_.showLibrary(LibrarySegment::Folders, pages, n);
       break;
     }
@@ -819,6 +990,7 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
   }
   bar_.cancel();  // (a Down: a touch whose end never came is over)
   const Zone z = zoneAt(e);
+  const bool waiting = s.play == PlayState::Waiting;
   if (e.type == T::Down) {
     pressed_ = z;
     if (z == Bar) {
@@ -832,7 +1004,9 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
       }
       return;
     }
-    if (z == Artist || z == Album) drawArtistAlbum();
+    // The navigation area lights (not while a play waits). No hold here: a
+    // long press ends as a slow tap (Ui), the menu with the tap's tick.
+    if (z == Nav && !waiting) drawNav();
     if (z == WaitSpeaker || z == WaitCancel) drawWaiting();
     if (z >= Volume) drawTransport();
     return;
@@ -840,7 +1014,9 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
   if (e.type != T::Tap && e.type != T::DragStart && e.type != T::Release && e.type != T::Cancel) return;
   const Zone was = pressed_;
   pressed_ = None;
-  if (was == Artist || was == Album) drawArtistAlbum();
+  // The press look off first: before any sheet opens (it leaves y 36-79 in
+  // view), and for a drag or a lift that does nothing.
+  if (was == Nav && !waiting) drawNav();
   if (was == WaitSpeaker || was == WaitCancel) drawMiddle();  // (the wait may have ended meanwhile)
   if (was >= Volume) drawTransport();
   if (e.type != T::Tap || was == None) return;
@@ -854,9 +1030,7 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
       Serial.println("[ui] now playing: cancel the wait for the headphones");
       if (ui_.state().play == PlayState::Waiting) ui_.host().playPause();
       break;
-    case Cover:
-    case Album: goToLibrary(Go::Album); break;
-    case Artist: goToLibrary(Go::Artist); break;
+    case Nav: openNavMenu(); break;
     case Volume: ui_.openVolume(); break;
     case Prev:
       Serial.println("[ui] now playing: previous");
@@ -871,39 +1045,39 @@ void NowPlayingPage::onEvent(const InputEvent& e) {
       Serial.println("[ui] now playing: next");
       ui_.host().next();
       break;
-    case More: {
-      // The sleep timer first (ENERGY.md section 3), its state on the right.
-      static const char* const kRows[4] = {uitext::kSleepRow, "Go to artist", "Go to album", "Show in folders"};
-      const AppState& s = ui_.state();
-      const TrackCatalog& cat = ui_.player().catalog();
-      const bool lib = s.current >= 0 && !TrackCatalog::isBuiltin(s.trackId);
-      char* folder = moreFolder_;
-      folder[0] = 0;
-      const LibraryIndex* index = ui_.library().index();
-      if (lib && index && index->ready() && s.trackId < index->trackCount()) {
-        char path[256];
-        if (index->folderPath(index->track(s.trackId).folder, path, sizeof(path))) {
-          snprintf(folder, sizeof(moreFolder_), "%s", path);
-        }
-      }
-      const char* details[4] = {s.sleepRow, lib ? cat.artist(s.trackId) : "", lib ? cat.album(s.trackId) : "",
-                                folder};
-      char title[128] = "Nothing playing";
-      if (s.current >= 0) cat.title(s.trackId, title, sizeof(title));
-      ui_.openSheet(this, title, kRows, 4, details);
-      ui_.sheetFollowsSleep(0);  // its detail follows the timer while it is up
-      break;
-    }
+    case More: openPlaybackMenu(); break;
     default: break;
   }
 }
 
 void NowPlayingPage::onSheet(int choice) {
+  const AppState& s = ui_.state();
+  if (choice < 0) {
+    ask_ = Ask::None;  // ✕, a tap outside, or a modal that closed it
+    return;
+  }
+  if (ask_ == Ask::Nav) {
+    ask_ = Ask::None;
+    if (choice <= 2) goToLibrary(static_cast<Go>(choice), navTrack_);
+    return;
+  }
+  if (ask_ != Ask::Playback) return;
   switch (choice) {
-    case 0: ui_.openSleepSheet(); break;
-    case 1: goToLibrary(Go::Artist); break;
-    case 2: goToLibrary(Go::Album); break;
-    case 3: goToLibrary(Go::Folders); break;
+    case 0:
+      // In place: the sheet stays up (Ui::sheetStays()), its row follows.
+      Serial.printf("[ui] now playing: shuffle %s\n", s.shuffle ? "off" : "on");
+      ui_.host().setShuffle(!s.shuffle);
+      break;
+    case 1: {
+      const uint8_t next = static_cast<uint8_t>(((s.repeat < 3 ? s.repeat : 0) + 1) % 3);  // Off, All, One, Off
+      Serial.printf("[ui] now playing: repeat %s\n", repeatName(next));
+      ui_.host().setRepeat(next);
+      break;
+    }
+    case 2:
+      ask_ = Ask::None;
+      ui_.openSleepSheet();
+      break;
     default: break;
   }
 }
@@ -920,27 +1094,33 @@ void NowPlayingPage::describe(char* buf, size_t size) const {
   if (n < 0 || static_cast<size_t>(n) >= size) return;
   // The seek bar (docs/SEEK-BAR.md section 8).
   char* rest = buf + n;
-  const size_t room = size - static_cast<size_t>(n);
+  size_t room = size - static_cast<size_t>(n);
+  int m = 0;
   switch (barLook()) {
-    case BarLook::Inert: snprintf(rest, room, "; the bar: inert"); break;
+    case BarLook::Inert: m = snprintf(rest, room, "; the bar: inert"); break;
     case BarLook::Rest:
-      snprintf(rest, room, "; the bar: rest, the knob at x %d", SeekBar::kLineX + SeekBar::xOf(s.positionMs, s.durationMs));
+      m = snprintf(rest, room, "; the bar: rest, the knob at x %d",
+                   SeekBar::kLineX + SeekBar::xOf(s.positionMs, s.durationMs));
       break;
-    case BarLook::Pressed: snprintf(rest, room, "; the bar: pressed"); break;
-    case BarLook::Off: snprintf(rest, room, "; the bar: off"); break;
+    case BarLook::Pressed: m = snprintf(rest, room, "; the bar: pressed"); break;
+    case BarLook::Off: m = snprintf(rest, room, "; the bar: off"); break;
     case BarLook::Scrubbing: {
       if (bar_.staying()) {
-        snprintf(rest, room, "; the bar: staying");
+        m = snprintf(rest, room, "; the bar: staying");
         break;
       }
       char to[16], live[16];
       mmss(bar_.targetMs(), to, sizeof(to));
       mmss(bar_.liveMs(), live, sizeof(live));
-      snprintf(rest, room, "; the bar: scrubbing to %s (%s; readout %s; %s plays)", to,
-               bar_.knobGrab() ? "drag from the knob" : "drag", bar_.readoutLeft() ? "left" : "right", live);
+      m = snprintf(rest, room, "; the bar: scrubbing to %s (%s; readout %s; %s plays)", to,
+                   bar_.knobGrab() ? "drag from the knob" : "drag", bar_.readoutLeft() ? "left" : "right", live);
       break;
     }
   }
+  if (m < 0 || static_cast<size_t>(m) >= room) return;
+  // The playback modes (docs/QUEUE-MODES.md), as the indicator shows them.
+  snprintf(rest + m, room - static_cast<size_t>(m), "; shuffle %s, repeat %s", s.shuffle ? "on" : "off",
+           repeatName(s.repeat));
 }
 
 }  // namespace ui
