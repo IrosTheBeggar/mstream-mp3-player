@@ -932,6 +932,8 @@ static void queueCommand(const char* a) {
       // (Shuffle all's: the mode it found comes back with the queue.)
       Serial.printf("[queue] undo: %s%s\n", undone ? "done" : "nothing to undo",
                     player.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)");
+      // An Undo toast still up has nothing left to offer: Ui takes it away.
+      if (undone && userInterface) userInterface->queueUndone();
       break;
     }
     case 'S':

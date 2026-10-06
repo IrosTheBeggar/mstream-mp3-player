@@ -124,4 +124,16 @@ bool KeyRing::has(uint32_t key) const {
   return false;
 }
 
+// ---- UndoWatch ----
+
+UndoWatch::Gone UndoWatch::pass(bool shuffled, bool undoToast, QueueModel::Edit undoable) {
+  changed_ = shuffled != last_;
+  last_ = shuffled;
+  const bool undone = undone_;
+  undone_ = false;  // (told once: a later pass's toast is another's)
+  if (!undoToast || undoable != QueueModel::Edit::None) return Gone::Stays;
+  if (undone) return Gone::Undone;
+  return changed_ ? Gone::Toggle : Gone::Stays;
+}
+
 }  // namespace queueview

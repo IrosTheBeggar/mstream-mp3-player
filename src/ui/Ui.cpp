@@ -1007,21 +1007,24 @@ void Ui::loop(uint32_t nowMs) {
   }
   // The page's deadlines (under a modal too, and in the dark).
   if (page_) page_->tick(nowMs);
-  // A shuffle toggle drops the queue's undo (docs/QUEUE-MODES.md 2.6): an
-  // Undo toast still up would answer "Nothing to undo", so it goes. (Shuffle
-  // all's toast stays: its Play set the mode as part of the edit, and its
-  // Undo puts both back.) And no badge flash for it: Off can grow "up next"
-  // without adding anything.
-  const bool toggled = state_.shuffle != lastShuffle_;
-  if (toggled) {
-    lastShuffle_ = state_.shuffle;
-    if (toast_.up() && toast_.undo() && queue_.undoable() == QueueModel::Edit::None) {
-      const int was = toast_.bottom();
-      toast_.hide();
-      uncover(was);
-      Serial.println("[ui] the Undo toast went: a shuffle toggle took the undo");
-    }
+  // A shuffle toggle drops the queue's undo (docs/QUEUE-MODES.md 2.6), and
+  // the console's qu uses it: an Undo toast still up would answer "Nothing
+  // to undo", so it goes, its line saying which. (Shuffle all's toast
+  // stays: its Play set the mode as part of the edit, and its Undo puts
+  // both back; qu's undo of it changes the mode back, no toggle.) And no
+  // badge flash for a change of mode: Off can grow "up next" without
+  // adding anything.
+  const queueview::UndoWatch::Gone gone =
+      undoWatch_.pass(state_.shuffle, toast_.up() && toast_.undo(), queue_.undoable());
+  if (gone != queueview::UndoWatch::Gone::Stays) {
+    const int was = toast_.bottom();
+    toast_.hide();
+    uncover(was);
+    Serial.printf("[ui] the Undo toast went: %s\n", gone == queueview::UndoWatch::Gone::Undone
+                                                        ? "undone from the console"
+                                                        : "a shuffle toggle took the undo");
   }
+  const bool toggled = undoWatch_.modeChanged();
   // Tracks added: the Queue badge flashes.
   if (state_.contentVersion != lastContent_) {
     if (state_.upNext > lastUpNext_ && !toggled) badgeUntilMs_ = nowMs + 1500;

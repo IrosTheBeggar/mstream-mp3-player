@@ -270,7 +270,9 @@ before), a start point it had is gone, and the Queue's "added" marks stay
 cleared. Repeat isn't touched by Shuffle all.
 
 An Undo toast still up after a toggle would answer "Nothing to undo"
-(Ui.cpp:1280). Ui hides it instead (section 4.5).
+(Ui.cpp:1280). Ui hides it instead (section 4.5). So too after the
+console's `qu` (it used the undo); its undo of a Shuffle all changes the
+mode back, which is no toggle, and the log says which took the undo.
 
 ### 2.7 The generator
 
@@ -715,6 +717,18 @@ lowest 24 rows (113-136, its frame's last included).
     and that pass doesn't flash the Queue badge (Ui.cpp:988: Off can
     grow "up next" without adding anything). Shuffle all's toast stays:
     its Replace is undoable, the mode with it (2.6).
+    *As built after the review (review fixes 2)*: `lastShuffle_` became
+    `queueview::UndoWatch undoWatch_` (QueueView.h, host-tested), which
+    also hears the console's `qu`: main's `u` calls
+    `Ui::queueUndone()` when it undid something. Each pass,
+    `pass(state_.shuffle, toast up with Undo, queue_.undoable())` says
+    whether the toast goes and why: `Undone` (a `qu` since the last
+    pass) before `Toggle` (the mode changed since the last pass), and
+    `modeChanged()` keeps the badge quiet as before. Without it, `qu`
+    on Shuffle all's toast (the mode back off, the undo gone) read as a
+    toggle and logged `a shuffle toggle took the undo`; and `qu` on any
+    other edit's toast (no change of mode) left it up, its Undo then
+    answering "Nothing to undo".
 - **`UiHost`**: `virtual void setShuffle(bool on) = 0;` and `virtual void
   setRepeat(uint8_t mode) = 0;` (`PlaybackController::Repeat`'s value).
   `AppState`: `bool shuffle = false; uint8_t repeat = 0;`, filled by
@@ -834,6 +848,12 @@ there is no toggle now (the mode is part of the Play, 2.6), so no
 console's `qu`: `[queue] undo: done (shuffle off again)`); an undo that
 leaves the mode as it is adds nothing.
 
+An Undo toast taken away because its undo went (4.5): `[ui] the Undo
+toast went: a shuffle toggle took the undo` (a toggle while it was up),
+`[ui] the Undo toast went: undone from the console` (a `qu` that undid
+something while it was up, Shuffle all's included: its change of mode
+back is no toggle).
+
 The player (main's helpers, shared by the host and the console):
 
 - `[player] shuffle on: 37 up next shuffled; 3 of 40 plays on` (nothing up
@@ -879,7 +899,8 @@ case-sensitive, and `G0`, `Rt` are precedents):
   (`insertNext()`, `append()`), `moveNext()` keep ranks while shuffled
   (2.4); a private `draw(uint32_t bound)`; the header's comment (memory:
   12 B an entry; the shuffle rules).
-- **lib/core/QueueView.h/.cpp**: `shuffle()` goes.
+- **lib/core/QueueView.h/.cpp**: `shuffle()` goes. (Review fixes 2:
+  `UndoWatch`, 4.5.)
 - **lib/core/QueueText.h/.cpp**: `Header::shuffled`; version 2 (2.9);
   the buffers +11; the comment.
 - **lib/core/PlaybackController.h/.cpp**: `Repeat`, `setRepeat()` as an
@@ -903,7 +924,8 @@ case-sensitive, and `G0`, `Rt` are precedents):
   esp_random)`; setup's `setRepeat(loadRepeat())` before `restore()`;
   `applyShuffle(bool)` and `applyRepeat(Repeat)` (apply, save, log: the
   lines of section 6); `MainUiHost::setShuffle()`, `setRepeat()`,
-  `snapshot()`'s two fields; `queueCommand()`'s `S` and `R`;
+  `snapshot()`'s two fields; `queueCommand()`'s `S` and `R` (and `u`'s
+  `queueUndone()`, review fixes 2);
   `sleepEndsAtCurrent()` and `stepSleep()` through `lastOfQueue()`; the
   repeat-one line from `repeats()`; `G`'s count.
 - **src/ui/UiHost.h**: section 4.5.
@@ -911,7 +933,8 @@ case-sensitive, and `G0`, `Rt` are precedents):
   `drawRow()`, `render()` through `detailRoom()`; the comments (Overlays.h:
   38-44, 69-70, 159-160: no 4-row sheet now).
 - **src/ui/Ui.h/.cpp**: `SheetFollow`, `sheetFollows()`, `sheetStays()`,
-  `followSheet()`, the settle, the staying row, `lastShuffle_`;
+  `followSheet()`, the settle, the staying row, `lastShuffle_` (as
+  built: `undoWatch_` and `queueUndone()`, 4.5);
   `shuffleAll()` (2.5); `drawHeader()` through `cutPathLeft()`; the
   comments that name the 4-row sheet (Ui.cpp:471, 552).
 - **src/ui/Pages.h**: the layout comment (NPP's picture: the table of the
@@ -1045,7 +1068,15 @@ folder too wide alone); the waiting title's one line (Bold 16, 190).
 **test_seek_bar**: 129/130 become 105/106 and 137/138 become 113/114
 (:287-301, :344-356), the line's row `kY` 150; the comments.
 
-**test_ui_queue**: the shuffle test leaves (moved to test_queue).
+**test_ui_queue**: the shuffle test leaves (moved to test_queue). After
+the review (review fixes 2), `UndoWatch`:
+`test_undo_watch_a_toggle_takes_the_undo` (Play next's toast, then a
+toggle: `Toggle`; a toggle with no Undo toast up: nothing),
+`test_undo_watch_qu_of_shuffle_all_is_no_toggle` (the review's case:
+from empty and off, Shuffle all's toast stays, then `qu`: `Undone`, not
+`Toggle`), `test_undo_watch_qu_of_any_edit` (`qu` of Play next: `Undone`;
+`qu` with no toast up is told once; an undo still there keeps its
+toast).
 
 ## 9. Docs to update with the code
 
@@ -1207,8 +1238,11 @@ Playing's line (it ends `; shuffle on, repeat one`).
      (`qx`, `qS1`, Shuffle all): `(shuffle on; was on)`, `q`'s `undo:
      play now` with no `(and ...)`, the Undo's line `[ui] undo: done`
      alone, `q`: `shuffle on` over 0 tracks (as it was). The console's
-     `qu` instead of the toast gives `[queue] undo: done (shuffle off
-     again)`. `qS0` at the end.
+     `qu` instead of the toast (shuffle off before, within the toast's
+     4 s) gives `[queue] undo: done (shuffle off again)`, then `[ui] the
+     Undo toast went: undone from the console` (`ui`: `toast none`); no
+     `a shuffle toggle took the undo` line (the review found it there:
+     the mode put back read as a toggle). `qS0` at the end.
 10. **Kept across a restart.** `qS1`, `qR2`, pause (`uit160,204`), `qs60`;
     reset. The boot: `[nvs] schema 2` (on the first boot of this
     firmware: `[nvs] schema 1 -> 2: migrated`), `[queue] repeat: one
@@ -1271,7 +1305,10 @@ Playing's line (it ends `; shuffle on, repeat one`).
     the scripted finger; within the toast's 4 s, `qS1`: `[ui] the Undo
     toast went: a shuffle toggle took the undo` (`ui`: `toast none`).
     `qS0` after tracks played while shuffled: the Queue badge doesn't
-    flash (`X` of the tab bar).
+    flash (`X` of the tab bar). Again with `qu` in place of `qS1`
+    (review fixes 2): `[queue] undo: done`, `[ui] the Undo toast went:
+    undone from the console` (`ui`: `toast none`; before, the toast
+    stayed and its Undo said "Nothing to undo").
 16. **The cost of Off.** A long queue: `q+<n>` of a 25-track album 400
     times (10,000 entries; `q` shows it), `qS1`, `qS0`: the off line's
     `in N ms` (expected tens of ms), and `ui`'s fps unharmed after. Clear
@@ -1414,6 +1451,28 @@ core2-dio build with every guard (iram_diet: 51 of 51 objects moved, the
 hot set pinned; cache_guard ok; flash_guard: 2.20 MB, 37 % of the slot;
 core2's app 2,243,247 B), no warnings. Not yet run on the device: section
 10's steps 1, 9a and 14 check it.
+
+**The review after that** (the commit "Now Playing menus: review fixes
+2"):
+
+- **`qu` on Shuffle all's toast logged `a shuffle toggle took the
+  undo`**, though no toggle happened: the undo put the mode back, and
+  Ui read any change of mode with the undo gone as a toggle (the toast
+  going was right; the line was not). Ui's `lastShuffle_` is now
+  `queueview::UndoWatch` (QueueView.h, section 4.5), which main's `qu`
+  tells through `Ui::queueUndone()`; the line says `undone from the
+  console` then. `qu` on any other edit's toast now takes it away too
+  (it stayed, its Undo answering "Nothing to undo"). Section 6 lists
+  both lines; steps 9a and 15 check them.
+
+1,095 host tests pass (3 new, test_ui_queue:
+`test_undo_watch_a_toggle_takes_the_undo`,
+`test_undo_watch_qu_of_shuffle_all_is_no_toggle`,
+`test_undo_watch_qu_of_any_edit`). core2 and core2-dio build with every
+guard (iram_diet: 51 of 51 objects moved, the hot set pinned;
+cache_guard ok; flash_guard: 2.20 MB, 37 % of the slot; core2's app
+2,243,399 B), no warnings. Not yet run on the device: step 9a's `qu`
+variant and step 15's.
 
 Where the build differs from sections 1-13, and why:
 

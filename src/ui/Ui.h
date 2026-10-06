@@ -211,6 +211,9 @@ public:
   const queueview::KeyRing& failedKeys() const { return failedKeys_; }
   // Shuffle all: the whole library, shuffled, playing (the empty states).
   void shuffleAll();
+  // The console's qu undid the queue's last edit: an Undo toast still up
+  // goes at the next pass, and its line says so (UndoWatch).
+  void queueUndone() { undoWatch_.undone(); }
   // Try again on a no-card page: a card that mounts restarts the player
   // (a toast first); else the note, "Still no card" or "Still not FAT32",
   // and the page drawn again if that changed.
@@ -256,9 +259,9 @@ private:
   SheetFollow sheetFollow_[Sheet::kMaxRows] = {};
   uint8_t sheetStays_ = 0;      // a bit per row
   uint32_t sheetOpenedMs_ = 0;  // (the settle: Sheet::kSettleMs; the Sleep timer sheet's too)
-  // The shuffle mode the last pass saw: a toggle drops the queue's undo,
-  // so an Undo toast up then goes.
-  bool lastShuffle_ = false;
+  // The shuffle mode the last pass saw, and a qu since: when the queue's
+  // undo goes (a toggle drops it, qu uses it), an Undo toast up goes too.
+  queueview::UndoWatch undoWatch_;
   void sleepTitle(char* buf, size_t size) const;
   void coachDone();
   void updateLostDialog();

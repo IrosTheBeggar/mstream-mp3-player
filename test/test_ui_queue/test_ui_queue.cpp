@@ -3,7 +3,8 @@
 
 // Host tests for the Queue screen's portable pieces (QueueView): the
 // "12 up next · 49 min" summary from learned track lengths, the mark on
-// what a Library add put in the queue, and the failed-track ring. (The
+// what a Library add put in the queue, the failed-track ring, and when an
+// Undo toast goes because the undo went from under it (UndoWatch). (The
 // shuffle's loop moved to lib/core/Shuffle.h: test_queue.)
 // Run: pio test -e native
 #include <unity.h>
@@ -154,6 +155,88 @@ void test_failed_keys_ring() {
   TEST_ASSERT_FALSE(r.has(QueueModel::kNone));
 }
 
+// Ui's pass, as Ui::loop makes it: the mode, an Undo toast up, the undo.
+static UndoWatch::Gone pass(UndoWatch& w, const QueueModel& q, bool undoToast) {
+  return w.pass(q.shuffled(), undoToast, q.undoable());
+}
+
+// A shuffle toggle drops the undo a toast offers (docs/QUEUE-MODES.md
+// 2.6): the toast goes, "a shuffle toggle took the undo".
+void test_undo_watch_a_toggle_takes_the_undo() {
+  QueueModel q;
+  fill(q, 5, 1);
+  UndoWatch w;
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, false));
+  const uint32_t one[] = {12};
+  TEST_ASSERT_TRUE(q.insertNext(one, 1));  // Play next, its toast with Undo
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));
+  TEST_ASSERT_FALSE(w.modeChanged());
+  TEST_ASSERT_TRUE(q.setShuffled(true));
+  TEST_ASSERT_EQUAL(QueueModel::Edit::None, q.undoable());
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Toggle, pass(w, q, true));
+  TEST_ASSERT_TRUE(w.modeChanged());  // (no badge flash)
+  // The toast gone, the next pass sees no change.
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, false));
+  TEST_ASSERT_FALSE(w.modeChanged());
+  // A toggle with no Undo toast up: nothing to take away.
+  TEST_ASSERT_TRUE(q.setShuffled(false));
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, false));
+  TEST_ASSERT_TRUE(w.modeChanged());
+}
+
+// The review's case: shuffle off, an empty queue, Shuffle all (the mode
+// set inside the Play: its toast stays), then the console's qu within the
+// toast's 4 s. The undo puts the mode back, a change of mode that is no
+// toggle: the toast goes, "undone from the console".
+void test_undo_watch_qu_of_shuffle_all_is_no_toggle() {
+  QueueModel q;
+  UndoWatch w;
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, false));
+  const uint32_t ids[] = {0, 1, 2, 3, 4, 5, 6, 7};
+  TEST_ASSERT_TRUE(q.replace(ids, 8, QueueModel::kAnyStart, /*shuffled=*/true));
+  TEST_ASSERT_TRUE(q.shuffled());
+  // "Shuffling 8 tracks" with Undo: the mode changed, the undo is there.
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));
+  TEST_ASSERT_TRUE(w.modeChanged());
+  // qu.
+  TEST_ASSERT_TRUE(q.undo());
+  w.undone();
+  TEST_ASSERT_FALSE(q.shuffled());
+  TEST_ASSERT_EQUAL(QueueModel::Edit::None, q.undoable());
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Undone, pass(w, q, true));
+  TEST_ASSERT_TRUE(w.modeChanged());
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, false));
+}
+
+// qu of an edit that kept the mode (Play next) takes its toast away too;
+// the toast's own Undo replaces it ("Undone", no Undo), and qu's word is
+// told once: a later toast's undo taken by a toggle reads as a toggle.
+void test_undo_watch_qu_of_any_edit() {
+  QueueModel q;
+  fill(q, 5, 1);
+  UndoWatch w;
+  const uint32_t one[] = {12};
+  TEST_ASSERT_TRUE(q.insertNext(one, 1));
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));
+  TEST_ASSERT_TRUE(q.undo());
+  w.undone();
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Undone, pass(w, q, true));
+  TEST_ASSERT_FALSE(w.modeChanged());
+  // qu with no Undo toast up (it had gone): nothing to do, and the word goes.
+  TEST_ASSERT_TRUE(q.insertNext(one, 1));
+  TEST_ASSERT_TRUE(q.undo());
+  w.undone();
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, false));
+  TEST_ASSERT_TRUE(q.insertNext(one, 1));
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));
+  TEST_ASSERT_TRUE(q.setShuffled(true));
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Toggle, pass(w, q, true));
+  // An undo that is still there keeps its toast, whatever was said.
+  TEST_ASSERT_TRUE(q.insertNext(one, 1));
+  w.undone();
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_durations_are_learned_per_track);
@@ -161,5 +244,8 @@ int main(int, char**) {
   RUN_TEST(test_summary_texts);
   RUN_TEST(test_added_mark_finds_what_was_added);
   RUN_TEST(test_failed_keys_ring);
+  RUN_TEST(test_undo_watch_a_toggle_takes_the_undo);
+  RUN_TEST(test_undo_watch_qu_of_shuffle_all_is_no_toggle);
+  RUN_TEST(test_undo_watch_qu_of_any_edit);
   return UNITY_END();
 }

@@ -8,7 +8,8 @@
 #include "QueueModel.h"
 
 // The Queue screen's portable pieces (the tab bar spec §6.4, with the
-// review's grafts), host-tested; ui/QueuePage draws them.
+// review's grafts), host-tested; ui/QueuePage draws them. And the queue's
+// side of the Undo toast (UndoWatch: Ui's loop).
 namespace queueview {
 
 // ---- "12 up next · 49 min" ----
@@ -108,6 +109,36 @@ private:
   uint32_t k_[kSize] = {};
   int n_ = 0;
   int next_ = 0;
+};
+
+// ---- the Undo toast, when the undo goes from under it ----
+//
+// The queue's one undo can go while a toast still offers it: a shuffle
+// toggle drops it (docs/QUEUE-MODES.md 2.6), and the console's qu uses it.
+// That toast's Undo would then answer "Nothing to undo", so it goes, and
+// the log says why. Ui calls pass() once a loop. Shuffle all's Play sets
+// the mode inside the edit (still undoable: its toast stays), so qu's undo
+// of it puts the mode back: a change of mode that is no toggle, which
+// undone() tells apart.
+class UndoWatch {
+public:
+  enum class Gone : uint8_t { Stays, Toggle, Undone };
+  // The console's qu undid the queue's last edit (since the last pass).
+  void undone() { undone_ = true; }
+  // `shuffled`: the mode now; `undoToast`: a toast offering Undo is up;
+  // `undoable`: the queue's. Whether that toast goes, and why: Undone
+  // (qu undid since the last pass) before Toggle (the mode changed since
+  // the last pass); Stays while the undo is there, or nothing took it.
+  Gone pass(bool shuffled, bool undoToast, QueueModel::Edit undoable);
+  // The last pass saw the mode change (a toggle, or an undo that put it
+  // back): no Queue badge flash for it (Off can grow "up next" without
+  // adding anything).
+  bool modeChanged() const { return changed_; }
+
+private:
+  bool last_ = false;
+  bool undone_ = false;
+  bool changed_ = false;
 };
 
 }  // namespace queueview
