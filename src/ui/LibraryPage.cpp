@@ -626,7 +626,7 @@ void LibraryPage::drawRow(ListView::Row& r) {
       break;
     }
     case RowKind::Track: {
-      const uint8_t number = i->track(rr.id).number;
+      const uint16_t number = i->track(rr.id).number;
       const int x = now ? ListView::playing(r, accent::Library) : ListView::number(r, number ? number : r.row + 1, col::DIM);
       uint8_t len = 0;
       const char* title = i->trackTitle(rr.id, &len);

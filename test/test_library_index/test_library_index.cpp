@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 IrosTheBeggar
 
-// Host tests for LibraryIndex (the compact library store) and the synthetic
-// library generator. Run: pio test -e native
+// Host tests for LibraryIndex (the compact library store, library.idx v6)
+// and the synthetic library generator: the path index as it always was, and
+// tag records named by Stage A's rules (docs/METADATA.md 5.4).
+// Run: pio test -e native
 #include <unity.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -14,6 +17,7 @@
 #include <vector>
 
 #include "ByteStream.h"
+#include "CardContract.h"
 #include "LibraryIndex.h"
 #include "LibrarySynth.h"
 #include "TextFold.h"
@@ -1092,7 +1096,7 @@ void test_an_older_cache_version_is_rebuilt() {
   std::vector<uint8_t> bytes(file.data(), file.data() + file.size());
   uint32_t version;
   std::memcpy(&version, bytes.data() + 4, 4);  // the header's second word
-  TEST_ASSERT_EQUAL_UINT32(5, version);
+  TEST_ASSERT_EQUAL_UINT32(6, version);
   LibraryIndex back(Heap::alloc, Heap::release);
   {
     MemorySource in(bytes.data(), bytes.size());
@@ -1103,12 +1107,493 @@ void test_an_older_cache_version_is_rebuilt() {
     TEST_ASSERT_EQUAL_UINT8(1, back.track(first).disc);
     TEST_ASSERT_EQUAL_UINT8(1, back.track(first).number);
   }
-  for (const uint32_t old : {2u, 3u, 4u}) {
+  for (const uint32_t old : {1u, 2u, 3u, 4u, 5u}) {
     std::memcpy(bytes.data() + 4, &old, 4);
     MemorySource in(bytes.data(), bytes.size());
     TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), static_cast<int>(back.load(in, 9)));
     TEST_ASSERT_FALSE(back.ready());
   }
+}
+
+// ---- tag records (library.idx v6; docs/METADATA.md 5.4, Stage A) ----
+
+namespace {
+
+// A record's view with the fields a test gives (the rest absent).
+struct View {
+  LibraryIndex::TagView v;
+  View& title(const char* s) { return set(&v.title, &v.titleLen, s); }
+  View& artist(const char* s) { return set(&v.artist, &v.artistLen, s); }
+  View& album(const char* s) { return set(&v.album, &v.albumLen, s); }
+  View& albumArtist(const char* s) { return set(&v.albumArtist, &v.albumArtistLen, s); }
+  View& albumSort(const char* s) { return set(&v.albumSort, &v.albumSortLen, s); }
+  View& artistSort(const char* s) { return set(&v.artistSort, &v.artistSortLen, s); }
+  View& year(uint16_t y) {
+    v.year = y;
+    return *this;
+  }
+  View& track(uint16_t t) {
+    v.track = t;
+    return *this;
+  }
+  View& disc(uint16_t d) {
+    v.disc = d;
+    return *this;
+  }
+  View& compilation() {
+    v.compilation = 1;
+    return *this;
+  }
+  View& ms(uint32_t d) {
+    v.durationMs = d;
+    return *this;
+  }
+  View& set(const char** p, size_t* n, const char* s) {
+    *p = s;
+    *n = std::strlen(s);
+    return *this;
+  }
+};
+
+uint32_t trackAt(const LibraryIndex& idx, const char* path) { return idx.findTrack(path); }
+
+std::vector<std::string> albumOrder(const LibraryIndex& idx, uint32_t album) {
+  std::vector<std::string> out;
+  const LibraryIndex::Span t = idx.tracksOfAlbum(album);
+  for (uint32_t i = 0; i < t.count; ++i) out.push_back(idx.trackFileName(t[i]));
+  return out;
+}
+
+void expectOrder(const LibraryIndex& idx, uint32_t album, const std::vector<std::string>& want) {
+  const std::vector<std::string> got = albumOrder(idx, album);
+  TEST_ASSERT_EQUAL_UINT32(want.size(), got.size());
+  for (size_t i = 0; i < want.size(); ++i) TEST_ASSERT_EQUAL_STRING(want[i].c_str(), got[i].c_str());
+}
+
+}  // namespace
+
+// A folder album named by its tracks' records: the most common album value
+// (not the folder's "(2019)"), year and artist line; titles a slice of the
+// file name when they're inside it; the track artist shown only where it
+// differs from the line; a missing number last; a file with no record named
+// from its path in the same album.
+void test_records_name_an_album() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  const char* dir = "/music/Glass Orchard/Night Shift (2019)/";
+  auto add = [&](const char* name, const View& v) {
+    TEST_ASSERT_EQUAL_INT(0, static_cast<int>(idx.addRecord((std::string(dir) + name).c_str(), v.v)));
+  };
+  add("02 - Second.mp3", View().title("Second Song").artist("Glass Orchard").album("Night Shift").year(2019).track(2));
+  add("01 - Opening.mp3", View().title("Opening").artist("Glass Orchard").album("Night Shift").year(2019).track(1).ms(184600));
+  add("03 - Third.flac",
+      View().title("Third").artist("Glass Orchard\x1FMira Lune").album("Night Shift (Live)").year(2018).track(3));
+  TEST_ASSERT_EQUAL_INT(0, static_cast<int>(idx.addFile((std::string(dir) + "Bonus.mp3").c_str())));
+  TEST_ASSERT_TRUE(idx.finish());
+  TEST_ASSERT_EQUAL_UINT32(1, idx.albumCount());
+  TEST_ASSERT_EQUAL_STRING("Night Shift", idx.albumName(0));
+  TEST_ASSERT_EQUAL_UINT16(2019, idx.album(0).year);
+  TEST_ASSERT_EQUAL_STRING("Glass Orchard", idx.albumArtistLine(0));
+  TEST_ASSERT_EQUAL_UINT8(1, idx.album(0).discs);
+  TEST_ASSERT_TRUE(idx.album(0).flags & LibraryIndex::kTagged);
+  TEST_ASSERT_FALSE(idx.album(0).flags & LibraryIndex::kLoose);
+  // By number, the one with none (the record-less Bonus) last.
+  expectOrder(idx, 0, {"01 - Opening.mp3", "02 - Second.mp3", "03 - Third.flac", "Bonus.mp3"});
+  const uint32_t opening = trackAt(idx, "/music/Glass Orchard/Night Shift (2019)/01 - Opening.mp3");
+  const uint32_t second = trackAt(idx, "/music/Glass Orchard/Night Shift (2019)/02 - Second.mp3");
+  const uint32_t third = trackAt(idx, "/music/Glass Orchard/Night Shift (2019)/03 - Third.flac");
+  const uint32_t bonus = trackAt(idx, "/music/Glass Orchard/Night Shift (2019)/Bonus.mp3");
+  TEST_ASSERT_EQUAL_STRING("Opening", title(idx, opening).c_str());
+  // Inside the file name: its title is a slice of it.
+  TEST_ASSERT_TRUE(idx.track(opening).title >= idx.track(opening).name &&
+                   idx.track(opening).title < idx.track(opening).name + 20);
+  TEST_ASSERT_EQUAL_STRING("Second Song", title(idx, second).c_str());
+  TEST_ASSERT_EQUAL_UINT16(2, idx.track(second).number);
+  TEST_ASSERT_EQUAL_STRING("Bonus", title(idx, bonus).c_str());
+  TEST_ASSERT_EQUAL_UINT16(0, idx.track(bonus).number);
+  TEST_ASSERT_EQUAL_UINT32(LibraryIndex::kFromPath, idx.track(bonus).flags & LibraryIndex::kSourceMask);
+  TEST_ASSERT_EQUAL_UINT32(LibraryIndex::kFromDevice, idx.track(opening).flags & LibraryIndex::kSourceMask);
+  TEST_ASSERT_EQUAL_UINT16(185, idx.track(opening).durationS);
+  TEST_ASSERT_EQUAL_UINT16(0, idx.track(bonus).durationS);
+  TEST_ASSERT_EQUAL_UINT32(LibraryIndex::kNone, idx.track(opening).trackArtist);
+  TEST_ASSERT_EQUAL_STRING("Glass Orchard", idx.trackArtistName(opening));
+  TEST_ASSERT_EQUAL_STRING("Glass Orchard, Mira Lune", idx.trackArtistName(third));
+  TEST_ASSERT_EQUAL_STRING("Glass Orchard", idx.trackArtistName(bonus));
+  // The Folders view and the paths stay the files'.
+  TEST_ASSERT_EQUAL_STRING("Night Shift (2019)", idx.folderName(idx.album(0).folder));
+  char buf[200];
+  idx.trackPath(second, buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING("/music/Glass Orchard/Night Shift (2019)/02 - Second.mp3", buf);
+  // Saved and loaded: the same.
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, 3));
+  LibraryIndex back(Heap::alloc, Heap::release);
+  MemorySource in(file.data(), file.size(), 77);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(in, 3)));
+  expectSameIndex(idx, back);
+  TEST_ASSERT_EQUAL_STRING("Night Shift", back.albumName(0));
+  TEST_ASSERT_EQUAL_STRING("Glass Orchard, Mira Lune", back.trackArtistName(third));
+  TEST_ASSERT_EQUAL_UINT64(idx.buildStamp(), back.buildStamp());
+}
+
+// The artist line's chain (5.4): the album-artist display, else "Various
+// Artists" for a compilation, else the most common track-artist display,
+// else the artist folder. Ties go to the smallest bytes, years to the
+// earliest; an artist's own loose tracks keep "" and no year.
+void test_album_votes() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  auto add = [&](const char* path, const View& v) {
+    TEST_ASSERT_EQUAL_INT(0, static_cast<int>(idx.addRecord(path, v.v)));
+  };
+  add("/music/Act/One/01 - a.mp3", View().artist("Guest").albumArtist("Act Band").album("B Side").year(2004));
+  add("/music/Act/One/02 - b.mp3", View().artist("Act Band").album("A Side").year(2002));
+  add("/music/Act/Two/01 - a.mp3", View().artist("Somebody").compilation().album("Mix"));
+  add("/music/Act/Two/02 - b.mp3", View().artist("Else").album("Mix"));
+  add("/music/Act/Three/01 - a.mp3", View().artist("Act\x1F" "Act").album("Three"));
+  add("/music/Act/Three/02 - b.mp3", View().artist("Other"));
+  add("/music/Act/Three/03 - c.mp3", View().artist("Act"));
+  idx.addFile("/music/Act/Four/01 - a.mp3");
+  add("/music/Act/Loose.mp3", View().album("Some Album").year(1999));
+  TEST_ASSERT_TRUE(idx.finish());
+  auto albumOf = [&](const char* path) { return idx.track(trackAt(idx, path)).album; };
+  const uint32_t one = albumOf("/music/Act/One/01 - a.mp3");
+  TEST_ASSERT_EQUAL_STRING("A Side", idx.albumName(one));  // one vote each: the smallest bytes
+  TEST_ASSERT_EQUAL_UINT16(2002, idx.album(one).year);     // one each: the earliest
+  TEST_ASSERT_EQUAL_STRING("Act Band", idx.albumArtistLine(one));
+  TEST_ASSERT_EQUAL_STRING("Guest", idx.trackArtistName(trackAt(idx, "/music/Act/One/01 - a.mp3")));
+  const uint32_t two = albumOf("/music/Act/Two/01 - a.mp3");
+  TEST_ASSERT_EQUAL_STRING("Various Artists", idx.albumArtistLine(two));
+  TEST_ASSERT_EQUAL_STRING("Somebody", idx.trackArtistName(trackAt(idx, "/music/Act/Two/01 - a.mp3")));
+  const uint32_t three = albumOf("/music/Act/Three/01 - a.mp3");
+  TEST_ASSERT_EQUAL_STRING("Act", idx.albumArtistLine(three));  // "Act" (twice: the display dedups) against "Other"
+  TEST_ASSERT_EQUAL_STRING("Three", idx.albumName(three));
+  const uint32_t four = albumOf("/music/Act/Four/01 - a.mp3");
+  TEST_ASSERT_EQUAL_STRING("Four", idx.albumName(four));
+  TEST_ASSERT_EQUAL_STRING("Act", idx.albumArtistLine(four));  // the folder artist
+  TEST_ASSERT_FALSE(idx.album(four).flags & LibraryIndex::kTagged);
+  const uint32_t loose = albumOf("/music/Act/Loose.mp3");
+  TEST_ASSERT_EQUAL_STRING("", idx.albumName(loose));
+  TEST_ASSERT_TRUE(idx.album(loose).flags & LibraryIndex::kLoose);
+  TEST_ASSERT_EQUAL_UINT16(0, idx.album(loose).year);
+  // The artist: "Act" and "Act Band" tie (two tracks each); the smaller
+  // bytes win, and match the folder.
+  TEST_ASSERT_EQUAL_STRING("Act", idx.artistName(idx.album(one).artist));
+}
+
+// An album votes on its first 512 tracks: 300 say "Y" first, then 300 "X";
+// counted whole it would be a tie, which "X" wins by its bytes.
+void test_album_votes_on_its_first_512_tracks() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music", 600));
+  char path[96];
+  for (int i = 0; i < 600; ++i) {
+    snprintf(path, sizeof(path), "/music/Big/Box/%03d - t.mp3", i + 1);
+    TEST_ASSERT_EQUAL_INT(0, static_cast<int>(idx.addRecord(path, View().album(i < 300 ? "Y" : "X").v)));
+  }
+  TEST_ASSERT_TRUE(idx.finish());
+  TEST_ASSERT_EQUAL_UINT32(1, idx.albumCount());
+  TEST_ASSERT_EQUAL_STRING("Y", idx.albumName(0));
+  TEST_ASSERT_EQUAL_UINT32(600, idx.tracksOfAlbum(0).count);
+}
+
+// The artist folder shows its tracks' spelling when textfold::sameName()
+// matches it to the folder's (case, accents, a FAT-illegal character, "The");
+// another name leaves the folder's.
+void test_artist_display_names() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  idx.addRecord("/music/R_K Unit/Live/01 - a.mp3", View().albumArtist("R/K Unit").artist("R/K Unit feat. Guest").v);
+  idx.addRecord("/music/R_K Unit/Live/02 - b.mp3", View().albumArtist("R/K Unit").v);
+  idx.addRecord("/music/lantern choir/Hymns/01 - a.mp3", View().artist("The Lantern Choir").v);
+  idx.addRecord("/music/Unsorted/Mix/01 - a.mp3", View().artist("Someone Else").v);
+  idx.addFile("/music/Path Only/Album/01 - a.mp3");
+  TEST_ASSERT_TRUE(idx.finish());
+  const char* artists[] = {"The Lantern Choir", "Path Only", "R/K Unit", "Unsorted"};
+  const LibraryIndex::Span a = idx.artistsAZ();
+  TEST_ASSERT_EQUAL_UINT32(4, a.count);
+  for (uint32_t i = 0; i < a.count; ++i) TEST_ASSERT_EQUAL_STRING(artists[i], idx.artistName(a[i]));
+  // The Folders view keeps the folders' names.
+  const LibraryIndex::Span top = idx.subfolders(LibraryIndex::rootFolder());
+  TEST_ASSERT_EQUAL_STRING("lantern choir", idx.folderName(top[0]));
+  TEST_ASSERT_EQUAL_STRING("R_K Unit", idx.folderName(top[2]));
+  // The rail follows the names shown: "The Lantern Choir" under L.
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('L'), idx.bucketAt(LibraryIndex::View::Artists, 0));
+}
+
+// Inside an album with records: by disc (none is 1), then folder, then
+// number (none last). An artist's albums newest first, no year last; sort
+// tags order the A-Z lists and their rails.
+void test_stage_a_orders() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  idx.addRecord("/music/Band/Set/a.mp3", View().disc(2).track(1).v);
+  idx.addRecord("/music/Band/Set/b.mp3", View().disc(1).track(2).v);
+  idx.addRecord("/music/Band/Set/c.mp3", View().disc(1).track(1).v);
+  idx.addRecord("/music/Band/Set/d.mp3", View().disc(1).v);
+  idx.addRecord("/music/Band/Set/CD3/01 - e.mp3", View().disc(3).track(1).v);
+  idx.addRecord("/music/Band/Old/01 - x.mp3", View().year(1999).v);
+  idx.addRecord("/music/Band/New/01 - x.mp3", View().year(2011).v);
+  idx.addRecord("/music/Band/Zulu/01 - x.mp3", View().album("Zulu").albumSort("Alpha").v);
+  idx.addRecord("/music/Choir Lantern/Hymns/01 - x.mp3", View().artist("Choir Lantern").artistSort("Lantern Choir").v);
+  TEST_ASSERT_TRUE(idx.finish());
+  const uint32_t set = idx.track(trackAt(idx, "/music/Band/Set/a.mp3")).album;
+  expectOrder(idx, set, {"c.mp3", "b.mp3", "d.mp3", "a.mp3", "01 - e.mp3"});
+  TEST_ASSERT_EQUAL_UINT8(3, idx.album(set).discs);
+  const LibraryIndex::Span of = idx.albumsOf(idx.album(set).artist);
+  TEST_ASSERT_EQUAL_UINT32(4, of.count);
+  TEST_ASSERT_EQUAL_STRING("New", idx.albumName(of[0]));
+  TEST_ASSERT_EQUAL_STRING("Old", idx.albumName(of[1]));
+  TEST_ASSERT_EQUAL_STRING("Zulu", idx.albumName(of[2]));  // no year: by sort key, "Alpha" before "Set"
+  TEST_ASSERT_EQUAL_STRING("Set", idx.albumName(of[3]));
+  // Albums A-Z: "Zulu" under A, by its sort tag.
+  const LibraryIndex::Span az = idx.albumsAZ();
+  TEST_ASSERT_EQUAL_STRING("Zulu", idx.albumName(az[0]));
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('A'), idx.bucketAt(LibraryIndex::View::Albums, 0));
+  TEST_ASSERT_EQUAL_UINT32(0, idx.bucketStart(LibraryIndex::View::Albums, textfold::bucketOf('A')));
+  // Artists: "Choir Lantern" sorts as "Lantern Choir", after "Band".
+  const LibraryIndex::Span ar = idx.artistsAZ();
+  TEST_ASSERT_EQUAL_STRING("Band", idx.artistName(ar[0]));
+  TEST_ASSERT_EQUAL_STRING("Choir Lantern", idx.artistName(ar[1]));
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('L'), idx.bucketAt(LibraryIndex::View::Artists, 1));
+}
+
+// The library roots (the transfer's LIBR, 2.8.6): a file's artist and album
+// are its folders at depths 1 and 2 below the longest root that holds it.
+void test_library_roots() {
+  const char* roots[] = {"Lib B", "Lib A", "Lib A/Inner"};
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  LibraryIndex::Sizing s;
+  s.tracks = 8;
+  TEST_ASSERT_TRUE(idx.begin(s, "/music", roots, 3));
+  idx.addFile("/music/Lib A/Artist/Album/01 - x.mp3");
+  idx.addFile("/music/Lib A/Artist/Album/CD2/01 - y.mp3");
+  idx.addFile("/music/Lib A/Artist/loose.mp3");
+  idx.addFile("/music/Lib A/top.mp3");
+  idx.addFile("/music/Lib A/Inner/Other/Record/01 - z.mp3");
+  idx.addFile("/music/Lib AB/Artist/Album/01 - w.mp3");  // not under "Lib A"
+  idx.addFile("/music/root.mp3");
+  TEST_ASSERT_TRUE(idx.finish());
+  auto artistOf = [&](const char* p) { return std::string(idx.artistName(idx.track(trackAt(idx, p)).artist)); };
+  auto albumOf = [&](const char* p) { return std::string(idx.albumName(idx.track(trackAt(idx, p)).album)); };
+  TEST_ASSERT_EQUAL_STRING("Artist", artistOf("/music/Lib A/Artist/Album/01 - x.mp3").c_str());
+  TEST_ASSERT_EQUAL_STRING("Album", albumOf("/music/Lib A/Artist/Album/01 - x.mp3").c_str());
+  TEST_ASSERT_EQUAL_STRING("Album", albumOf("/music/Lib A/Artist/Album/CD2/01 - y.mp3").c_str());
+  TEST_ASSERT_EQUAL_STRING("", albumOf("/music/Lib A/Artist/loose.mp3").c_str());
+  TEST_ASSERT_EQUAL_STRING("", artistOf("/music/Lib A/top.mp3").c_str());
+  TEST_ASSERT_EQUAL_STRING("Other", artistOf("/music/Lib A/Inner/Other/Record/01 - z.mp3").c_str());
+  TEST_ASSERT_EQUAL_STRING("Record", albumOf("/music/Lib A/Inner/Other/Record/01 - z.mp3").c_str());
+  TEST_ASSERT_EQUAL_STRING("Lib AB", artistOf("/music/Lib AB/Artist/Album/01 - w.mp3").c_str());
+  TEST_ASSERT_EQUAL_STRING("Artist", albumOf("/music/Lib AB/Artist/Album/01 - w.mp3").c_str());
+  TEST_ASSERT_EQUAL_STRING("", artistOf("/music/root.mp3").c_str());
+  // The two loose albums of artist "" (the root's and Lib A's) stay apart:
+  // albums are their folders.
+  TEST_ASSERT_NOT_EQUAL(idx.track(trackAt(idx, "/music/root.mp3")).album,
+                        idx.track(trackAt(idx, "/music/Lib A/top.mp3")).album);
+  // Without the roots, Lib A is an artist.
+  LibraryIndex plain(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(plain.begin("/music"));
+  plain.addFile("/music/Lib A/Artist/Album/01 - x.mp3");
+  TEST_ASSERT_TRUE(plain.finish());
+  TEST_ASSERT_EQUAL_STRING("Lib A", plain.artistName(0));
+}
+
+// library.idx v6's header: the hard inputs (the transfer's identity, T used,
+// today's walk signature) must be equal to load (else Stale); the soft ones
+// (D's CRC, the journal) come back for the caller to compare. Another rules
+// version is Outdated.
+void test_inputs_of_the_cache() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  buildSample(idx);
+  LibraryIndex::Inputs in;
+  in.cardId = 0x5EEDC0DE0A1B2C3Dull;
+  in.generation = 42;
+  in.commitId = 0x1122334455667788ull;
+  in.tagsCrc = 0xCAFEF00Du;
+  in.transfer = true;
+  in.deviceCrc = 7;
+  in.journalSeq = 9;
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, in));
+  std::vector<uint8_t> bytes(file.data(), file.data() + file.size());
+  LibraryIndex back(Heap::alloc, Heap::release);
+  auto load = [&](const std::vector<uint8_t>& b, const LibraryIndex::Inputs& e) {
+    MemorySource src(b.data(), b.size());
+    return static_cast<int>(back.load(src, e));
+  };
+  LibraryIndex::Inputs expect = in;
+  expect.deviceCrc = 8;  // the scan went on: soft
+  expect.journalSeq = 10;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), load(bytes, expect));
+  TEST_ASSERT_TRUE(back.inputs().sameHard(in));
+  TEST_ASSERT_EQUAL_UINT32(7, back.inputs().deviceCrc);
+  TEST_ASSERT_EQUAL_UINT32(9, back.inputs().journalSeq);
+  TEST_ASSERT_FALSE(back.inputs().sameSoft(expect));
+  expectSameIndex(idx, back);
+  for (int k = 0; k < 6; ++k) {
+    LibraryIndex::Inputs other = in;
+    switch (k) {
+      case 0: other.cardId ^= 1; break;
+      case 1: ++other.generation; break;
+      case 2: other.commitId ^= 1; break;
+      case 3: other.tagsCrc ^= 1; break;
+      case 4: other.transfer = false; break;
+      default: other.walkSignature = 5; break;
+    }
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Stale), load(bytes, other));
+    TEST_ASSERT_FALSE(back.ready());
+  }
+  // Today's path signature alone is another hard input.
+  {
+    MemorySource src(bytes.data(), bytes.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Stale), static_cast<int>(back.load(src, uint64_t{0})));
+  }
+  // Another rules version (the header's fourth word): Outdated.
+  std::vector<uint8_t> rules = bytes;
+  rules[12] = static_cast<uint8_t>(LibraryIndex::kRulesVersion + 1);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), load(rules, in));
+  // The build stamp: what a track id means. Two builds of the same files
+  // agree; another file changes it.
+  LibraryIndex again(Heap::alloc, Heap::release);
+  buildSample(again);
+  TEST_ASSERT_EQUAL_UINT64(idx.buildStamp(), again.buildStamp());
+  LibraryIndex more(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(more.begin("/music"));
+  for (const char* f : kFiles) more.addFile(f);
+  more.addFile("/music/Zz/Extra/01 - more.mp3");
+  TEST_ASSERT_TRUE(more.finish());
+  TEST_ASSERT_TRUE(more.buildStamp() != idx.buildStamp());
+}
+
+// A folder's facts (D's DFLD: its best image, its counts) set its cover as
+// the files would have; an owned image doesn't beat a transfer thumbnail, a
+// hand-added one does (2.14.3).
+void test_folder_facts_and_thumbnails() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  LibraryIndex::FolderFacts own;
+  own.image = "cover.jpg";
+  own.imageCount = 2;
+  own.otherCount = 3;
+  own.imageOwned = true;
+  LibraryIndex::FolderFacts hand = own;
+  hand.image = "Folder.JPG";
+  hand.imageOwned = false;
+  TEST_ASSERT_TRUE(idx.setFolderFacts("/music/A/One", own));
+  idx.addRecord("/music/A/One/01 - x.mp3", View().title("x").v);
+  TEST_ASSERT_TRUE(idx.setFolderFacts("/music/A/Two", hand));
+  idx.addRecord("/music/A/Two/01 - x.mp3", View().title("x").v);
+  idx.addRecord("/music/A/Three/CD1/01 - x.mp3", View().title("x").v);
+  TEST_ASSERT_TRUE(idx.setFolderFacts("/music/A/Three/CD1", hand));
+  idx.addRecord("/music/A/Four/01 - x.mp3", View().title("x").v);
+  TEST_ASSERT_FALSE(idx.setFolderFacts("/elsewhere", own));
+  const uint64_t thumbs[] = {cardcontract::fnv1a64Str("/music/A/One"), cardcontract::fnv1a64Str("/music/A/Two"),
+                             cardcontract::fnv1a64Str("/music/A/Three"), cardcontract::fnv1a64Str("/music/A/Four")};
+  std::vector<uint64_t> sorted(thumbs, thumbs + 4);
+  std::sort(sorted.begin(), sorted.end());
+  idx.setThumbFolders(sorted.data(), 4);
+  TEST_ASSERT_TRUE(idx.finish());
+  auto albumOf = [&](const char* p) { return idx.track(trackAt(idx, p)).album; };
+  const uint32_t one = albumOf("/music/A/One/01 - x.mp3"), two = albumOf("/music/A/Two/01 - x.mp3");
+  const uint32_t three = albumOf("/music/A/Three/CD1/01 - x.mp3"), four = albumOf("/music/A/Four/01 - x.mp3");
+  char buf[128];
+  idx.imagePath(idx.albumCover(one), buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING("/music/A/One/cover.jpg", buf);
+  TEST_ASSERT_EQUAL_UINT16(3, idx.folder(idx.album(one).folder).otherCount);
+  TEST_ASSERT_EQUAL_UINT8(2, idx.folder(idx.album(one).folder).imageCount);
+  TEST_ASSERT_EQUAL_UINT8(1, idx.folder(idx.album(two).folder).imageRank);
+  TEST_ASSERT_TRUE(idx.album(one).flags & LibraryIndex::kTransferThumb);    // its image is the transfer's
+  TEST_ASSERT_FALSE(idx.album(two).flags & LibraryIndex::kTransferThumb);   // the listener's folder.jpg wins
+  TEST_ASSERT_FALSE(idx.album(three).flags & LibraryIndex::kTransferThumb); // so does one in its first disc
+  TEST_ASSERT_TRUE(idx.album(four).flags & LibraryIndex::kTransferThumb);   // nothing beats it
+}
+
+// A heap that shrinks blocks in place (the firmware's heap_caps_realloc)
+// trims with no copy: the same index, and a peak no higher.
+namespace {
+void* shrinkInPlace(void* p, size_t n) {
+  for (auto& b : Heap::blocks()) {
+    if (b.first == p) {
+      Heap::live -= b.second - n;
+      b.second = n;
+      return p;
+    }
+  }
+  return nullptr;
+}
+}  // namespace
+
+void test_trims_in_place() {
+  const synth::Spec spec = synth::specFor(5000);
+  MemorySink a, b;
+  size_t copyPeak, shrinkPeak;
+  {
+    Heap::reset();
+    LibraryIndex idx(Heap::alloc, Heap::release);
+    TEST_ASSERT_TRUE(idx.begin(spec.root, 6000));  // too many: the trims have work
+    synth::addTracks(idx, spec);
+    TEST_ASSERT_TRUE(idx.finish());
+    copyPeak = idx.memory().buildPeak;
+    TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+    idx.save(a, 1);
+  }
+  {
+    Heap::reset();
+    LibraryIndex idx(Heap::alloc, Heap::release, shrinkInPlace);
+    TEST_ASSERT_TRUE(idx.begin(spec.root, 6000));
+    synth::addTracks(idx, spec);
+    TEST_ASSERT_TRUE(idx.finish());
+    shrinkPeak = idx.memory().buildPeak;
+    TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+    TEST_ASSERT_EQUAL_size_t(Heap::peak, shrinkPeak);
+    idx.save(b, 1);
+  }
+  TEST_ASSERT_TRUE(shrinkPeak <= copyPeak);
+  TEST_ASSERT_EQUAL_size_t(a.size(), b.size());
+  TEST_ASSERT_EQUAL_MEMORY(a.data(), b.data(), a.size());
+}
+
+// The tagged synthetic library: deterministic, its rates as the constants
+// say, its folders unique (one album and one artist each).
+void test_tagged_synthetic_library() {
+  const synth::Spec spec = synth::userShape(5000);
+  TEST_ASSERT_EQUAL_UINT32(180, spec.artists);
+  TEST_ASSERT_EQUAL_UINT32(460, spec.albums);
+  synth::Tagged t, u;
+  uint32_t sameTitle = 0, withRecord = 0, albumArtist = 0, years = 0, discs = 0;
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music", spec.tracks));
+  for (uint32_t i = 0; i < spec.tracks; ++i) {
+    TEST_ASSERT_TRUE(synth::tagged(spec, i, &t));
+    TEST_ASSERT_TRUE(synth::tagged(spec, i, &u));
+    TEST_ASSERT_EQUAL_STRING(t.path, u.path);
+    TEST_ASSERT_EQUAL_STRING(t.title, u.title);
+    TEST_ASSERT_EQUAL_STRING(t.artist, u.artist);
+    TEST_ASSERT_EQUAL_STRING(t.album, u.album);
+    TEST_ASSERT_EQUAL_UINT32(t.fatTime, u.fatTime);
+    TEST_ASSERT_EQUAL_INT(0, static_cast<int>(idx.addFile(t.path)));
+    if (t.noTags) continue;
+    ++withRecord;
+    const char* leaf = std::strrchr(t.path, '/') + 1;
+    const char* dot = std::strrchr(leaf, '.');
+    const std::string stem(leaf, static_cast<size_t>(dot - leaf));
+    sameTitle += stem == t.title || (stem.size() > 5 && stem.substr(5) == t.title);
+    albumArtist += t.albumArtist[0] != 0;
+    years += t.year != 0;
+    discs += t.disc != 0;
+  }
+  TEST_ASSERT_TRUE(idx.finish());
+  TEST_ASSERT_EQUAL_UINT32(spec.tracks, idx.trackCount());
+  TEST_ASSERT_EQUAL_UINT32(spec.albums, idx.albumCount());
+  TEST_ASSERT_EQUAL_UINT32(spec.artists, idx.artistCount());
+  auto near = [&](uint32_t got, uint32_t pctWant) {
+    const double p = 100.0 * got / withRecord;
+    return p > pctWant - 6.0 && p < pctWant + 6.0;
+  };
+  TEST_ASSERT_TRUE(near(sameTitle, synth::kTitleSamePct));
+  TEST_ASSERT_TRUE(near(albumArtist, synth::kAlbumArtistPct));
+  TEST_ASSERT_TRUE(near(years, synth::kYearPct));
+  TEST_ASSERT_TRUE(near(discs, synth::kDiscPct));
 }
 
 int main(int, char**) {
@@ -1140,5 +1625,15 @@ int main(int, char**) {
   RUN_TEST(test_an_empty_library_round_trips);
   RUN_TEST(test_opus_names_are_read_like_the_others);
   RUN_TEST(test_an_older_cache_version_is_rebuilt);
+  RUN_TEST(test_records_name_an_album);
+  RUN_TEST(test_album_votes);
+  RUN_TEST(test_album_votes_on_its_first_512_tracks);
+  RUN_TEST(test_artist_display_names);
+  RUN_TEST(test_stage_a_orders);
+  RUN_TEST(test_library_roots);
+  RUN_TEST(test_inputs_of_the_cache);
+  RUN_TEST(test_folder_facts_and_thumbnails);
+  RUN_TEST(test_trims_in_place);
+  RUN_TEST(test_tagged_synthetic_library);
   return UNITY_END();
 }

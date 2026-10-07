@@ -20,7 +20,10 @@ cc13597 on `feature/metadata`, from dev with v0.7.0 released).** N1, the
 contract kit, is in `lib/core/CardContract*`, `CardContainer`, `CardTags`,
 `CardManifest` and `CardAutoDj`, with the shared fixtures of 2.17 in
 `test/fixtures/card/` (made by `tools/card_fixtures.py`, a second
-implementation, and frozen). N3, the queue's remap through `queue.txt`,
+implementation, and frozen). N2, `library.idx` v6 and the builder, is in
+`lib/core/LibraryIndex`, `LibraryBuilder` and `NameKey`, host-tested
+(3.4.4 says what it decided); the firmware builds v6 from its walk alone
+until N12 brings the builder in. N3, the queue's remap through `queue.txt`,
 is in `lib/core/QueueRemap` (with `QueueModel::release()`, the exact
 trim and `queuetext::read()`'s pre-sized blocks), built into
 `QueueStore::remap()` and not flashed. Part 2, the card
@@ -2534,6 +2537,54 @@ which fails at about 15k entries (metascan section 6.2).
   strings): **about 1.75-1.85 MB, 88-92 B per track** (75-79 B today,
   MEASURED).
 
+#### 3.4.4 As built (N2)
+
+What the code decided where the design left room, and what it measured on
+the host:
+
+- **The votes count as the records arrive**, over each album's and each
+  artist's run of tracks (the builder adds files in canonical order, so a
+  folder's tree is one run), in a fixed scratch from the index's hooks
+  (about 42 KB: 1,024 strings, 64 years, 512 artist candidates), not in
+  `buildViews()`: keeping every track's tag strings until `finish()` would
+  cost 0.4-1 MB at 20k. A record added out of that order still indexes; its
+  album takes the names its last run elected.
+- **The strings live in 64 KB chunks** (a loaded index: one block the
+  chunks point into), so their size needs no estimate, no doubling and no
+  copy. The record tables are sized from the headers' counts (upper
+  bounds) and trimmed by `finish()`, in place when the allocator gives a
+  shrink hook (`heap_caps_realloc` on the firmware: N12's glue), else by a
+  copy as before.
+- **Stage A's order inside an album applies to an album with a record**
+  (the album flag `kTagged`); an album of path names alone keeps today's
+  order (folder, disc, number with none first, name). So a card with no
+  records indexes exactly as today, to the byte apart from the version
+  and the record sizes: `test_library_index`'s path tests pass unchanged.
+  Track flags also say which of the title, the number and the disc are the
+  record's (`kTagTitle`, `kTagNumber`, `kTagDisc`).
+- **`load()` keeps `Stale`** for a hard-input mismatch, and today's walk
+  signature is one of the hard inputs until N12's boot stops computing it.
+- **Sort tags:** an album's `albumSort` comes with its winning album
+  value, an artist's with its winning display (`albumArtistSort` for an
+  album-artist display, else `artistSort`); the A-Z rails follow the sort
+  keys.
+- **The builder's inputs from N4 and N5** are interfaces: D's statuses
+  (DSTA) through `LibraryBuilder::DeviceRows`, the folders' cover facts
+  (DFLD) through `FolderFactsSource`; with no statuses every D record is a
+  full one. T's THUMB folders are collected from its folder steps (8 bytes
+  each).
+- **nameKey's tables are Rust's own** (`tools/unicode_case.rs`, Unicode
+  17.0 from rustc 1.98), checked against std code point by code point
+  (`test_name_key`).
+- **U8 and U9 (b)** keep the proposed defaults behind
+  `LibraryBuilder::kTransferBeatsRescan` and
+  `LibraryIndex::kHandCoverBeatsThumbnail`.
+- **Measured (host):** the tagged synthetic library (`LibrarySynth`) in
+  the user's shape, with the measured disagreement rates and name lengths,
+  at 20k: **1.77 MB, 88.6 B a track** (strings 0.78 MB); **a build peak of
+  1.98 MB**, the builder's own 58 KB included. Built from T and from D, the
+  same files give the same bytes once the tracks' sources are cleared.
+
 ### 3.5 Budgets
 
 **PSRAM at 20k tracks, with AutoDJ loaded** (ESTIMATED from MEASURED
@@ -2905,7 +2956,7 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 | # | Work | Days | Host proof |
 |---|---|---|---|
 | N1 | **Built.** **The contract kit** (`lib/core/CardContract`): CRC-32, FNV-1a 64, qfp, FAT time and the skew rule; MSMF, MPTG, MPDJ and MSPD readers and writers; the root election; `device.txt`; 2.4.3's structural checks; the fixtures of 2.17 (2.18's vectors, the JSON library descriptions and their golden files), frozen for the terminal's tests | 2.5-3 | Round trips; truncation at every byte and a flipped bit per section give "absent"; each structural check broken under valid CRCs gives "absent" (no endless loop); a newer major is absent, a newer minor reads; the golden bytes |
-| N2 | **`LibraryIndex` v6 and `LibraryBuilder`**: Stage A's election (5.4), the merge (2.9), exact sizing, the inputs, LIBR roots | 3.5-4.5 | `test_library_index` extended; `LibrarySynth` with synthetic tags at the measured disagreement rates; 20k memory and build-peak asserts; the same files from T and from D build byte-identical indexes |
+| N2 | **Built.** **`LibraryIndex` v6 and `LibraryBuilder`**: Stage A's election (5.4), the merge (2.9), exact sizing, the inputs, LIBR roots | 3.5-4.5 | `test_library_index` extended; `LibrarySynth` with synthetic tags at the measured disagreement rates; 20k memory and build-peak asserts; the same files from T and from D build byte-identical indexes |
 | N3 | **Built.** **The queue's remap through `queue.txt`**; `QueueModel::release()` and the exact trim | 1-1.5 | `test_queue`: a 20k remap within budget; shuffled; the current track gone; the resume point carried |
 | N4 | **`TagStore`**: D with its device sections, `tags.jnl` (sorted chunks), `walk.jnl`, the streaming k-way compaction, recovery, the cut-rename rule (2.12.6) | 2-2.5 | A power cut injected at every write, sync, remove and rename, a rename cut between its two directory writes included; the compaction's PSRAM bounded whatever the journal holds |
 | N5 | **`CardWalk`**: the lister interface, the canonical sort (with its passes for big folders), the digests, T's freshness (the skew, Doubtful entries through `walk.jnl`, qfp, confirmations) | 2-2.5 | Fake FAT trees: shuffled order, a 3,000-file folder through a small scratch, a retag at the same size, a renamed folder, a deleted album, every stamp shifted an hour, three files shifted, invalid and zero stamps |

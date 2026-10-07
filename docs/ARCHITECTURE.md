@@ -1465,7 +1465,7 @@ a beta); the README has how to cut one.
 
 Everything the player knows about the music is one `LibraryIndex` in PSRAM,
 the single store: a string arena, fixed-size records and sorted views
-(~70-80 B a track, nothing in internal RAM). The queue, the player and later
+(~80-90 B a track since `library.idx` v6, nothing in internal RAM). The queue, the player and later
 the browsing UI hold its **track ids**, never strings.
 
 - **Track ids** (`TrackCatalog`): `0 .. n-1` are the index's tracks, and
@@ -1586,6 +1586,16 @@ the browsing UI hold its **track ids**, never strings.
     runs over every track the extension list accepted, and
     test_library_index has each shape in the three formats, mixed in one
     folder.
+- **`library.idx` v6** (docs/METADATA.md 3.4.3, built in its N2): 32-byte
+  tracks (a title of their own when a tag's isn't inside the file name, the
+  record's artist, a 16-bit number, the length, where the names came
+  from), 28-byte albums (the elected artist line, year, discs, `kLoose`),
+  the strings in 64 KB chunks, and a header with what the index was built
+  from (the transfer's identity, D's checksum, and today's walk signature).
+  A cache of versions 1-5 is `Outdated` and rebuilt once. The firmware
+  still builds it from the walk alone, as before; `LibraryBuilder` (the
+  merge of the transfer's and the device's tag records, Stage A's names)
+  is host-tested and comes in with the boot's rework (METADATA.md, N12).
 - **The queue** (`QueueModel`, host-tested): track ids in a PSRAM array (12 B an
   entry with its key and its rank), a current position, and one level of undo. Its edits
   are the design's Library and Queue actions: Play (replace the queue, start at
