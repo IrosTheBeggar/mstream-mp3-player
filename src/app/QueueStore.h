@@ -63,8 +63,11 @@ public:
   // move waiting its delay; not a failed one waiting its retry).
   bool busy() const { return storage_.available() && saver_.busy(); }
   // Runs `rebuild` (a library rebuild: every library id changes) with the
-  // queue carried across it by its paths; the track that plays keeps
-  // playing if it's still there. Returns what `rebuild` returned.
+  // queue carried across it by its paths, through queue.txt: flushed, the
+  // queue's memory given to the rebuild, read back after
+  // (lib/core/QueueRemap; as text in PSRAM only when the card can't take
+  // the file). The track that plays keeps playing if it's still there.
+  // Returns what `rebuild` returned.
   bool remap(bool (*rebuild)(void* ctx), void* ctx);
   // "[queue] ..." for the console.
   void printStatus() const;

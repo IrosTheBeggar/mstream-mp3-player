@@ -6,6 +6,7 @@
 #include <Preferences.h>
 
 #include "NvsLayout.h"
+#include "QueueRemap.h"
 #include "app/Psram.h"
 
 namespace {
@@ -266,58 +267,57 @@ void QueueStore::saveResume(const QueueResume& r) {
 }
 
 bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
-  saver_.abort();  // its lines would mix old ids and new
-  // A start point waiting (the resume point after a boot) belongs to the
-  // entry's key, which the read below gives afresh: carried across.
-  uint32_t startMs = 0, startDurationMs = 0;
-  ResumeAnchor startAnchor;
-  const bool hadStart = player_.startPoint(&startMs, &startDurationMs, &startAnchor);
-  // The queue as paths while the old index can still name them.
-  MemorySink text(psramAlloc, psramFree);
-  const bool saved = queuetext::write(queue_, catalog_, saver_.generation(), text) && !text.failed();
-  const bool ok = rebuild(ctx);
-  if (!saved) {
-    // Its ids now name other tracks, or none: better no queue than a wrong
-    // one (the mode stays: shuffle is the listener's, not the queue's).
-    queue_.assign(nullptr, 0, -1, queue_.shuffled());
-    player_.queueReplaced(false);
-    Serial.println("[queue] no PSRAM to carry the queue across the rebuild: cleared");
-    return ok;
-  }
-  MemorySource in(text.data(), text.size());
-  const queuetext::Restored r = queuetext::read(in, catalog_, queue_, nullptr, nullptr, psramAlloc, psramFree);
-  if (!r.ok) {
-    queue_.assign(nullptr, 0, -1, queue_.shuffled());
-    player_.queueReplaced(false);
-    Serial.println("[queue] couldn't carry the queue across the rebuild: cleared");
-    return ok;
-  }
-  // No library came of the rebuild (it failed: no PSRAM; or the walk found
-  // nothing: the card went away): every library track was dropped. As in
-  // restore(), that's not the user's queue changing: the file keeps it for
-  // when the library is back (the next boot), and nothing else starts
-  // playing (a built-in tone that survived, say).
-  const LibraryIndex* index = catalog_.index();
-  // (A rebuild that failed before touching the index leaves the ids as they
-  // were: the queue reads back the same.)
-  if (!index || !index->ready() || index->trackCount() == 0) {
-    if (r.currentKept) {
-      player_.queueReplaced(true);
-      if (hadStart) player_.setStartPoint(startMs, startDurationMs, &startAnchor);
-    } else {
-      player_.stop();
+  // The card and the caller's rebuild, for the portable sequence (flush,
+  // free, rebuild, re-read: lib/core/QueueRemap, docs/METADATA.md 3.4.2).
+  struct Card : queueremap::Card {
+    Card(QueueStore& store, bool (*rebuild)(void*), void* ctx) : store_(store), rebuild_(rebuild), ctx_(ctx) {}
+    bool flush() override { return store_.storage_.available() && store_.flushNow(); }
+    ByteSource* openFile() override {
+      char file[48], temp[48];
+      store_.paths(file, temp, sizeof(file));
+      file_ = store_.storage_.fs().open(file, FILE_READ);
+      return file_ ? &source_ : nullptr;
     }
-    saver_.markSaved();
+    void closeFile() override { file_.close(); }
+    bool rebuild() override { return rebuild_(ctx_); }
+
+    QueueStore& store_;
+    bool (*rebuild_)(void*);
+    void* ctx_;
+    File file_;
+    FileSource source_{file_};
+  } card(*this, rebuild, ctx);
+
+  const queueremap::Result r =
+      queueremap::run(queue_, saver_, player_, catalog_, card, millis(), psramAlloc, psramFree);
+  noteFailures();
+  const queuetext::Restored& got = r.read;
+  if (!got.ok) {
+    const char* why = r.via == queueremap::Via::None ? "the card couldn't take queue.txt, and no PSRAM for its text"
+                      : r.via == queueremap::Via::File ? "queue.txt couldn't be read back"
+                                                       : "no PSRAM to read its text back";
+    Serial.printf("[queue] couldn't carry the queue across the rebuild (%s): cleared; queue.txt keeps the last one "
+                  "saved\n",
+                  why);
+    return r.rebuilt;
+  }
+  char via[96] = "through queue.txt";
+  if (r.via == queueremap::Via::Memory) {
+    snprintf(via, sizeof(via), "as %lu KB of text in PSRAM (the card couldn't take queue.txt)",
+             (unsigned long)((r.textBytes + 1023) / 1024));
+  }
+  if (r.noLibrary) {
     Serial.printf("[queue] the rebuild left no library: %lu of %lu tracks here until it's back (queue.txt stays as "
                   "it was last saved)%s\n",
-                  (unsigned long)r.entries, (unsigned long)r.lines, r.currentKept ? "" : "; stopped");
-    return ok;
+                  (unsigned long)got.entries, (unsigned long)got.lines, got.currentKept ? "" : "; stopped");
+    return r.rebuilt;
   }
-  player_.queueReplaced(r.currentKept);
-  if (hadStart && r.currentKept) player_.setStartPoint(startMs, startDurationMs, &startAnchor);
-  Serial.printf("[queue] after the rebuild: %lu of %lu tracks still there, at %d%s\n", (unsigned long)r.entries,
-                (unsigned long)r.lines, queue_.current() + 1, r.currentKept ? "" : " (the current one is gone)");
-  return ok;
+  Serial.printf("[queue] after the rebuild, carried %s: %lu of %lu tracks still there, at %d%s%s; the queue gave "
+                "%lu KB to the rebuild and holds %lu KB\n",
+                via, (unsigned long)got.entries, (unsigned long)got.lines, queue_.current() + 1,
+                got.currentKept ? "" : " (the current one is gone)", r.startCarried ? " (its start point kept)" : "",
+                (unsigned long)(r.freedBytes / 1024), (unsigned long)(queue_.memoryBytes() / 1024));
+  return r.rebuilt;
 }
 
 void QueueStore::printStatus() const {
@@ -327,9 +327,10 @@ void QueueStore::printStatus() const {
   const char* undoMode = queue_.undoShuffled() == queue_.shuffled() ? ""
                          : queue_.undoShuffled()                    ? " (and shuffle on)"
                                                                     : " (and shuffle off)";
-  Serial.printf("[queue] %lu tracks, at %d, %lu up next; shuffle %s, repeat %s; undo: %s%s; file generation %lu%s, "
-                "%lu writes (last %lu ms), %lu failures\n",
-                (unsigned long)queue_.size(), queue_.current() + 1, (unsigned long)queue_.upNext(),
+  Serial.printf("[queue] %lu tracks (%lu KB of PSRAM, the undo's included), at %d, %lu up next; shuffle %s, repeat "
+                "%s; undo: %s%s; file generation %lu%s, %lu writes (last %lu ms), %lu failures\n",
+                (unsigned long)queue_.size(), (unsigned long)((queue_.memoryBytes() + 1023) / 1024),
+                queue_.current() + 1, (unsigned long)queue_.upNext(),
                 queue_.shuffled() ? "on" : "off", repeatName(static_cast<uint8_t>(player_.repeat())),
                 kEdits[static_cast<int>(queue_.undoable())], undoMode, (unsigned long)saver_.generation(),
                 saver_.writing() ? " (writing)" : saver_.contentDirty() ? " (to write)" : "",

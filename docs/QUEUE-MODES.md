@@ -348,9 +348,11 @@ mstream-queue 2 <entries> <current> <generation>
   current entry to another line: the resume point is saved again at the
   new line once the file holds it (the moved-only rule).
 - **A library rebuild** (`QueueStore::remap()`) goes through the same
-  text, so the order, the ranks and the mode survive it. Its two paths
-  that clear the queue keep the mode: `assign(nullptr, 0, -1,
-  queue_.shuffled())`.
+  text, so the order, the ranks and the mode survive it: since
+  docs/METADATA.md's N3, through `queue.txt` itself (flushed, then read
+  back after the rebuild: `queueremap::run()`), not a copy in PSRAM. A
+  queue that can't come back is left empty by `QueueModel::release()`,
+  which keeps the mode.
 - **Why in the file and not NVS:** the mode is atomic with the ranks it
   needs, so a shuffled mode with a rankless file, or the reverse, can't
   happen. With no card there is no library to shuffle anyway.

@@ -84,6 +84,10 @@ struct Restored {
 // since, for this generation). Reads the header first and calls
 // `pickCurrent(header, ctx)` for that override; nullptr: the file's.
 // Nothing changes in `q` unless the result is ok (and memory allowed).
+// Memory, from `alloc`/`release` (nullptr: malloc/free): the surviving
+// ids and (version 2) their ranks, each a block of exactly the header's
+// line count, 4 bytes a line, held until assign() has copied them; a file
+// with more lines than its header says isn't whole either.
 Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q,
               int32_t (*pickCurrent)(const Header& h, void* ctx) = nullptr, void* ctx = nullptr,
               MemorySink::AllocFn alloc = nullptr, MemorySink::FreeFn release = nullptr);

@@ -1744,11 +1744,25 @@ the browsing UI hold its **track ids**, never strings.
   `[queue] repeat one: 5 of 40 again (playing)` (the entry's key doesn't
   change, so no `now at` line), and `G` counts them.
   After a restart the queue is where it
-  was, stopped. `g0` carries the queue across the rebuild the same way, in a
-  PSRAM buffer: the track that plays keeps playing if it's still there. A
+  was, stopped. `g0` carries the queue across the rebuild the same way,
+  through `queue.txt` (`QueueStore::remap()`, its sequence the portable
+  `queueremap::run()`, host-tested in test_queue; docs/METADATA.md 3.4.2):
+  flushed, the queue's entries and undo snapshot given to the rebuild
+  (`QueueModel::release()`), read back after into blocks of exactly the
+  file's line count. Nothing the size of the queue is held across the
+  rebuild, so a 20,000-entry queue goes across with a peak of about
+  0.32 MB after it (the old in-PSRAM text, about 1.5 MB in a doubling
+  buffer, ran out at about 15,000). The track that plays keeps playing if
+  it's still there, and a start point waiting (the resume point) stays
+  with it. A card that can't take the file falls back to that text in
+  PSRAM, sized exactly; past what PSRAM holds, the queue is cleared and
+  `queue.txt` keeps the last one. A
   rebuild that leaves no library (out of PSRAM, or a card that went away)
   isn't taken as the queue changing: what survives stays in memory,
   playback stops if its track is gone, and `queue.txt` isn't rewritten.
+  `assign()` gives the queue a block of exactly its size and no undo
+  snapshot (the boot's restore, the whole-library default), and blocks
+  past 4,096 entries grow by an eighth rather than doubling.
   When and what to write is `QueueSaver`'s (lib/core, host-tested in
   test_queue: the timing, a failure keeping the last file); `QueueStore`
   gives it the card and NVS. `flushNow()` does it all synchronously, for

@@ -15,8 +15,14 @@
 //
 // Memory: the entries (12 bytes each) and the undo snapshot (the same
 // again) are flat arrays from allocator hooks (the firmware points them at
-// PSRAM), growing by doubling. Nothing else is allocated, except a bit per
-// entry for the length of a remove() or moveNext().
+// PSRAM). They grow by doubling while small and by an eighth past
+// kGrowByEighth entries, and assign() (the boot's restore, the whole-library
+// queue, a remap's re-read) gives the entries a block of exactly their
+// count and no snapshot: a 20,000-entry queue is 240 KB, and 480 KB once an
+// edit takes its snapshot, not twice that (docs/METADATA.md section 3.5).
+// release() gives both back for a library rebuild. Nothing else is
+// allocated, except a bit per entry for the length of a remove() or
+// moveNext().
 //
 // The current position is -1 only when the queue is empty. The rules the
 // edits follow (the tab bar design's Library and Queue actions):
@@ -76,6 +82,12 @@ public:
   // replace()'s start: shuffled, a random first; not shuffled, the first
   // (0, not the clamp's last).
   static constexpr uint32_t kAnyStart = kNone;
+  // Past this many entries a block grows by an eighth, not by doubling: a
+  // whole-library queue of 20,000 (exact after assign()) that gains a track
+  // takes 2,500 entries more (30 KB), not 20,000 (240 KB). The copies stay
+  // amortized (the block moves once per eighth of its size added: about 8
+  // copies of each entry, against doubling's 2), and queue edits are taps.
+  static constexpr uint32_t kGrowByEighth = 4096;
 
   enum class Edit : uint8_t { None, Replace, InsertNext, Append, Remove, MoveNext, ClearUpNext, Clear };
 
@@ -109,6 +121,11 @@ public:
   uint32_t contentVersion() const { return contentVersion_; }
   // Bumped whenever the current position or the entries change.
   uint32_t positionVersion() const { return positionVersion_; }
+  // The bytes the queue holds from the hooks: the entries' block and the
+  // undo snapshot's, at their capacity (the console's q, the remap's log).
+  size_t memoryBytes() const {
+    return (static_cast<size_t>(q_.cap) + static_cast<size_t>(undo_.cap)) * sizeof(Entry);
+  }
   // Shuffled: the entries are in a shuffled order, each with its rank.
   bool shuffled() const { return shuffled_; }
   // Shuffled: the entry's rank (its place in the queue's own order);
@@ -163,9 +180,23 @@ public:
   // The queue becomes these tracks with `current` (clamped; -1 for an
   // empty queue), with fresh keys and no undo, shuffled or not, with
   // `ranks` (nullptr: the positions; read back from a shuffled file, they
-  // may have gaps where tracks were dropped).
+  // may have gaps where tracks were dropped). The entries' block is then
+  // exactly `n` long (a new block when it was any other size; if none can
+  // be had for a smaller `n`, the bigger block is kept and still filled)
+  // and the snapshot's is given back: the first edit after takes one of
+  // the queue's exact size.
   bool assign(const uint32_t* tracks, uint32_t n, int32_t current, bool shuffled = false,
               const uint32_t* ranks = nullptr);
+  // Gives back every block (the entries and the undo snapshot): the queue
+  // is empty (current -1, no undo) and holds no memory, its mode kept
+  // (shuffle is the listener's, not the queue's) and its keys never
+  // reused. Both versions are bumped. For a library rebuild
+  // (docs/METADATA.md section 3.4.2, step 3; queueremap::run()): the queue
+  // file holds the queue while the index is rebuilt in its memory, and an
+  // assign() reads it back after. Nothing may save the queue meanwhile (the
+  // saver would write it empty): the rebuild holds the loop today, and the
+  // update step's fence will (N12).
+  void release();
 
 private:
   struct Entry {

@@ -29,7 +29,9 @@ QueueModel::~QueueModel() {
 
 bool QueueModel::reserve(Array& a, uint32_t n) {
   if (n <= a.cap) return true;
-  uint32_t cap = a.cap ? a.cap * 2 : 16;
+  // Doubling while small, an eighth more once big (kGrowByEighth); never
+  // less than asked.
+  uint32_t cap = !a.cap ? 16 : a.cap < kGrowByEighth ? a.cap * 2 : a.cap + a.cap / 8;
   if (cap < n) cap = n;
   auto* p = static_cast<Entry*>(allocFn_(static_cast<size_t>(cap) * sizeof(Entry)));
   if (!p) return false;
@@ -362,7 +364,23 @@ bool QueueModel::setShuffled(bool on) {
 }
 
 bool QueueModel::assign(const uint32_t* tracks, uint32_t n, int32_t current, bool shuffled, const uint32_t* ranks) {
-  if (n && (!tracks || !reserve(q_, n))) return false;
+  if (n && !tracks) return false;
+  // A block of exactly n entries (docs/METADATA.md section 3.5): the new
+  // one first, so a failure leaves the queue as it was; what it held isn't
+  // copied (all of it is replaced). A smaller n with no new block to be had
+  // keeps the bigger one; nothing to hold gives the block back.
+  if (n == 0) {
+    drop(q_);
+  } else if (n != q_.cap) {
+    auto* p = static_cast<Entry*>(allocFn_(static_cast<size_t>(n) * sizeof(Entry)));
+    if (p) {
+      if (q_.data) freeFn_(q_.data);
+      q_.data = p;
+      q_.cap = n;
+    } else if (n > q_.cap) {
+      return false;
+    }
+  }
   for (uint32_t i = 0; i < n; ++i) {
     q_.data[i] = Entry{tracks[i], nextKey_++, ranks ? ranks[i] : i};
     if (nextKey_ == kNone) nextKey_ = 0;
@@ -377,4 +395,11 @@ bool QueueModel::assign(const uint32_t* tracks, uint32_t n, int32_t current, boo
   dropUndo();
   changed();
   return true;
+}
+
+void QueueModel::release() {
+  drop(q_);
+  current_ = -1;
+  dropUndo();
+  changed();
 }

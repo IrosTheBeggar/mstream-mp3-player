@@ -15,12 +15,15 @@ brings the tags in, two ways at once:
 One builder on the device merges both into the library index. A file
 reads the same whichever way it reached the card.
 
-**Status: a design, and its first milestone built (2026-10-07, at
+**Status: a design, and its first milestones built (2026-10-07, at
 cc13597 on `feature/metadata`, from dev with v0.7.0 released).** N1, the
 contract kit, is in `lib/core/CardContract*`, `CardContainer`, `CardTags`,
 `CardManifest` and `CardAutoDj`, with the shared fixtures of 2.17 in
 `test/fixtures/card/` (made by `tools/card_fixtures.py`, a second
-implementation, and frozen); nothing else is built. Part 2, the card
+implementation, and frozen). N3, the queue's remap through `queue.txt`,
+is in `lib/core/QueueRemap` (with `QueueModel::release()`, the exact
+trim and `queuetext::read()`'s pre-sized blocks), built into
+`QueueStore::remap()` and not flashed. Part 2, the card
 contract, is a **PROPOSAL (v1)** for the transfer software, whose own
 design is still being worked on in mstream-terminal; it is written so
 that side can implement it without reading the player's code, and every
@@ -2903,7 +2906,7 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 |---|---|---|---|
 | N1 | **Built.** **The contract kit** (`lib/core/CardContract`): CRC-32, FNV-1a 64, qfp, FAT time and the skew rule; MSMF, MPTG, MPDJ and MSPD readers and writers; the root election; `device.txt`; 2.4.3's structural checks; the fixtures of 2.17 (2.18's vectors, the JSON library descriptions and their golden files), frozen for the terminal's tests | 2.5-3 | Round trips; truncation at every byte and a flipped bit per section give "absent"; each structural check broken under valid CRCs gives "absent" (no endless loop); a newer major is absent, a newer minor reads; the golden bytes |
 | N2 | **`LibraryIndex` v6 and `LibraryBuilder`**: Stage A's election (5.4), the merge (2.9), exact sizing, the inputs, LIBR roots | 3.5-4.5 | `test_library_index` extended; `LibrarySynth` with synthetic tags at the measured disagreement rates; 20k memory and build-peak asserts; the same files from T and from D build byte-identical indexes |
-| N3 | **The queue's remap through `queue.txt`**; `QueueModel::release()` and the exact trim | 1-1.5 | `test_queue`: a 20k remap within budget; shuffled; the current track gone; the resume point carried |
+| N3 | **Built.** **The queue's remap through `queue.txt`**; `QueueModel::release()` and the exact trim | 1-1.5 | `test_queue`: a 20k remap within budget; shuffled; the current track gone; the resume point carried |
 | N4 | **`TagStore`**: D with its device sections, `tags.jnl` (sorted chunks), `walk.jnl`, the streaming k-way compaction, recovery, the cut-rename rule (2.12.6) | 2-2.5 | A power cut injected at every write, sync, remove and rename, a rename cut between its two directory writes included; the compaction's PSRAM bounded whatever the journal holds |
 | N5 | **`CardWalk`**: the lister interface, the canonical sort (with its passes for big folders), the digests, T's freshness (the skew, Doubtful entries through `walk.jnl`, qfp, confirmations) | 2-2.5 | Fake FAT trees: shuffled order, a 3,000-file folder through a small scratch, a retag at the same size, a renamed folder, a deleted album, every stamp shifted an hour, three files shifted, invalid and zero stamps |
 | N6 | **`TagScan`, the production port** with part 5's rules; the synthetic parity corpus (2.17, item 3) | 3-4 | The corpus and the crafted edge files; the fuzz harness (ASan only if a Linux toolchain is available); parity against a lofty reference (the terminal's S3, or a small host harness until it exists) |

@@ -2,26 +2,36 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host tests for the play queue: QueueModel (edits, positions, keys, undo,
-// shuffle and its ranks: docs/QUEUE-MODES.md),
-// TrackCatalog (library and built-in ids) and QueueText (the queue saved as
-// paths, and read back after a library rebuild). Run: pio test -e native
+// shuffle and its ranks: docs/QUEUE-MODES.md; its memory: release() and
+// the exact trim), TrackCatalog (library and built-in ids), QueueText (the
+// queue saved as paths, and read back after a library rebuild), QueueSaver
+// and QueueRemap (the queue carried across a rebuild through queue.txt:
+// docs/METADATA.md 3.4.2, milestone N3). Run: pio test -e native
 #include <unity.h>
 
 #include <algorithm>
+#include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
+#include <memory>
 #include <new>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "ByteStream.h"
 #include "LibraryIndex.h"
+#include "PlaybackController.h"
 #include "QueueModel.h"
+#include "QueueRemap.h"
 #include "QueueSaver.h"
 #include "QueueText.h"
 #include "Shuffle.h"
 #include "TrackCatalog.h"
+#include "hal/IAudioBackend.h"
 
 namespace {
 // The global heap, counted while `counting` (test_a_toggle_allocates_nothing):
@@ -78,6 +88,39 @@ long Heap::live = 0;
 long Heap::allocs = 0;
 bool Heap::failing = false;
 
+// An allocator that meters bytes, the firmware's PSRAM in miniature: what
+// is live, the most at once since mark(), and a ceiling (what PSRAM has
+// left) past which it fails; none by default.
+struct Meter {
+  static size_t live, peak, ceiling;
+  static constexpr size_t kHead = 16;  // the size, ahead of the block (keeps malloc's alignment)
+  static void* alloc(size_t n) {
+    if (n > ceiling || live > ceiling - n) return nullptr;
+    auto* p = static_cast<unsigned char*>(std::malloc(n + kHead));
+    if (!p) return nullptr;
+    std::memcpy(p, &n, sizeof(n));
+    live += n;
+    peak = std::max(peak, live);
+    return p + kHead;
+  }
+  static void release(void* block) {
+    if (!block) return;
+    unsigned char* p = static_cast<unsigned char*>(block) - kHead;
+    size_t n = 0;
+    std::memcpy(&n, p, sizeof(n));
+    live -= n;
+    std::free(p);
+  }
+  static void mark() { peak = live; }
+  static void reset() {
+    live = peak = 0;
+    ceiling = SIZE_MAX;
+  }
+};
+size_t Meter::live = 0;
+size_t Meter::peak = 0;
+size_t Meter::ceiling = SIZE_MAX;
+
 // The queue's tracks, in order.
 std::vector<uint32_t> tracks(const QueueModel& q) {
   std::vector<uint32_t> t;
@@ -124,6 +167,7 @@ std::string pathOf(const TrackCatalog& c, uint32_t id) {
 void setUp() {
   Heap::live = 0;
   Heap::failing = false;
+  Meter::reset();
 }
 void tearDown() {}
 
@@ -913,7 +957,7 @@ void test_a_play_that_sets_the_mode_undoes_it_too() {
     // No memory for the Play: false, and neither the queue nor the mode
     // changed.
     QueueModel q(Heap::alloc, Heap::release);
-    fill(q, 6, 3);  // (room for 16)
+    fill(q, 6, 3);  // (room for 6: assign() is exact)
     const std::vector<uint32_t> was = keys(q);
     const uint32_t v = q.contentVersion();
     std::vector<uint32_t> big(40, 50);
@@ -2203,6 +2247,636 @@ void test_off_while_paused_pairs_the_resume_point_again() {
   TEST_ASSERT_EQUAL_INT(own, st.pos);
 }
 
+// ---- QueueModel's memory: release() and the exact trim (docs/METADATA.md 3.5) ----
+
+void test_assign_is_exact_and_growth_is_bounded() {
+  QueueModel q(Meter::alloc, Meter::release);
+  std::vector<uint32_t> ids(20000);
+  for (uint32_t i = 0; i < 20000; ++i) ids[i] = i;
+  // The boot's whole-library queue: 12 bytes an entry, no snapshot.
+  TEST_ASSERT_TRUE(q.assign(ids.data(), 20000, 0));
+  TEST_ASSERT_EQUAL_size_t(240000, Meter::live);
+  TEST_ASSERT_EQUAL_size_t(240000, q.memoryBytes());
+  // The first edit takes its snapshot, exact; a track more grows the
+  // entries by an eighth (2,500), not by doubling (20,000).
+  const uint32_t one[] = {7};
+  TEST_ASSERT_TRUE(q.append(one, 1));
+  TEST_ASSERT_EQUAL_size_t((22500 + 20000) * 12, Meter::live);
+  TEST_ASSERT_EQUAL_size_t(Meter::live, q.memoryBytes());
+  // Another assign: exact again (a new block), the snapshot given back.
+  TEST_ASSERT_TRUE(q.assign(ids.data(), 500, 3));
+  TEST_ASSERT_EQUAL_size_t(500 * 12, Meter::live);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::None), static_cast<int>(q.undoable()));
+  // The same size: the same block, nothing asked of the hooks.
+  Meter::ceiling = Meter::live;
+  TEST_ASSERT_TRUE(q.assign(ids.data() + 100, 500, 3));
+  TEST_ASSERT_EQUAL_UINT32(103, q.currentTrack());
+  // Smaller with no memory for a new block: the bigger one kept, still filled.
+  TEST_ASSERT_TRUE(q.assign(ids.data(), 30, 29));
+  TEST_ASSERT_EQUAL_UINT32(30, q.size());
+  TEST_ASSERT_EQUAL_UINT32(29, q.currentTrack());
+  TEST_ASSERT_EQUAL_size_t(500 * 12, Meter::live);
+  // Bigger with no memory: false, the queue as it was.
+  TEST_ASSERT_FALSE(q.assign(ids.data(), 600, 0));
+  TEST_ASSERT_EQUAL_UINT32(30, q.size());
+  TEST_ASSERT_EQUAL_INT(29, q.current());
+  Meter::ceiling = SIZE_MAX;
+  // Nothing: the block given back, the mode as asked.
+  TEST_ASSERT_TRUE(q.assign(nullptr, 0, -1, true));
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+  TEST_ASSERT_TRUE(q.shuffled());
+  // Small queues grow as before: 16 at first, then doubling. (An add to
+  // an empty queue: its snapshot is of nothing, and holds nothing.)
+  QueueModel s(Meter::alloc, Meter::release);
+  TEST_ASSERT_TRUE(s.append(ids.data(), 3));
+  TEST_ASSERT_EQUAL_size_t(16 * 12, s.memoryBytes());
+  TEST_ASSERT_TRUE(s.append(ids.data(), 14));
+  TEST_ASSERT_EQUAL_size_t((32 + 16) * 12, s.memoryBytes());
+}
+
+void test_release_gives_everything_back() {
+  QueueModel q(Meter::alloc, Meter::release);
+  fill(q, 1000, 400);
+  const uint32_t at[] = {10};
+  q.remove(at, 1);  // a snapshot
+  q.setShuffled(true);
+  const uint32_t more[] = {1, 2};
+  q.append(more, 2);  // another snapshot, shuffled
+  TEST_ASSERT_TRUE(Meter::live > 1000 * 12);
+  std::set<uint32_t> keys;
+  for (uint32_t i = 0; i < q.size(); ++i) keys.insert(q.keyAt(i));
+  const uint32_t content = q.contentVersion(), position = q.positionVersion();
+  q.release();
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+  TEST_ASSERT_EQUAL_size_t(0, q.memoryBytes());
+  TEST_ASSERT_TRUE(q.empty());
+  TEST_ASSERT_EQUAL_INT(-1, q.current());
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, q.currentTrack());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::None), static_cast<int>(q.undoable()));
+  TEST_ASSERT_FALSE(q.undo());
+  TEST_ASSERT_TRUE(q.shuffled());  // the listener's mode
+  TEST_ASSERT_TRUE(q.contentVersion() != content);
+  TEST_ASSERT_TRUE(q.positionVersion() != position);
+  q.release();  // twice: nothing more
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+  // Read back after: fresh keys, never one from before.
+  fill(q, 50, 0);
+  for (uint32_t i = 0; i < q.size(); ++i) TEST_ASSERT_TRUE(keys.count(q.keyAt(i)) == 0);
+  TEST_ASSERT_EQUAL_size_t(50 * 12, Meter::live);
+}
+
+// ---- QueueText: the read's blocks, sized from the header ----
+
+void test_text_read_is_sized_by_its_header() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q(Meter::alloc, Meter::release);
+  const uint32_t ids[] = {0, 1, 2, 3, 4, 5, TrackCatalog::kBuiltin + 1, 2};
+  q.assign(ids, 8, 6);
+  q.setShuffled(true);
+  const std::string text = textOf(q, c, 4);
+  // The read's two blocks (ids and ranks, 4 bytes a line) next to the
+  // queue's own (12 an entry), and then only the queue's.
+  QueueModel back(Meter::alloc, Meter::release);
+  Meter::mark();
+  MemorySource in(text.data(), text.size(), 5);
+  TEST_ASSERT_TRUE(queuetext::read(in, c, back, nullptr, nullptr, Meter::alloc, Meter::release).ok);
+  TEST_ASSERT_EQUAL_size_t(8 * 12 + (8 * 12 + 8 * 4 + 8 * 4), Meter::peak);
+  TEST_ASSERT_EQUAL_size_t(8 * 12 * 2, Meter::live);
+  // More lines than the header says: not a whole file, the queue left alone.
+  const char* more = "mstream-queue 1 1 0 1\n/music/Root Track.flac\ntone:440\n";
+  MemorySource m(more, std::strlen(more));
+  TEST_ASSERT_FALSE(queuetext::read(m, c, back, nullptr, nullptr, Meter::alloc, Meter::release).ok);
+  TEST_ASSERT_EQUAL_UINT32(8, back.size());
+  // A header that claims more than memory holds: the same, nothing kept.
+  const char* huge = "mstream-queue 1 2000000000 0 1\n/music/Root Track.flac\n";
+  MemorySource h(huge, std::strlen(huge));
+  Meter::ceiling = 1 << 20;
+  TEST_ASSERT_FALSE(queuetext::read(h, c, back, nullptr, nullptr, Meter::alloc, Meter::release).ok);
+  TEST_ASSERT_EQUAL_UINT32(8, back.size());
+  TEST_ASSERT_EQUAL_size_t(8 * 12 * 2, Meter::live);
+}
+
+// ---- the remap through queue.txt (QueueRemap: docs/METADATA.md 3.4.2, N3) ----
+
+// The audio backend, for a player that stops, plays and pauses (the remap
+// tells it what became of its entry).
+class QuietBackend : public IAudioBackend {
+public:
+  std::string lastPath;
+  int plays = 0;
+  bool playing = false, paused = false;
+  bool play(const std::string& p, uint32_t, uint32_t) override {
+    lastPath = p;
+    ++plays;
+    playing = true;
+    paused = false;
+    return true;
+  }
+  void pause() override { paused = true; }
+  void resume() override { paused = false; }
+  void stop() override { playing = paused = false; }
+  void loop(uint32_t) override {}
+  bool isPlaying() const override { return playing && !paused; }
+  uint32_t positionMs() const override { return 0; }
+  bool finished() const override { return false; }
+};
+
+// A made-up library: 10 songs to an album, 10 albums to an artist; paths
+// about as long as a real library's (75 bytes: 1.5 MB of text at 20,000).
+std::string synthPath(uint32_t i) {
+  char b[128];
+  std::snprintf(b, sizeof(b), "/music/Made-up Artist %03u/A Made-up Album %02u/%02u - A Made-up Song %05u.mp3",
+                static_cast<unsigned>(i / 100), static_cast<unsigned>(i / 10 % 10), static_cast<unsigned>(i % 10 + 1),
+                static_cast<unsigned>(i));
+  return b;
+}
+
+// Builds `idx` again in place, as Library::rebuild() does: the first `n`
+// made-up paths but those in `gone`, and `extra` (which renumbers).
+bool buildSynth(LibraryIndex& idx, uint32_t n, const std::set<std::string>& gone = {},
+                const std::vector<std::string>& extra = {}) {
+  idx.clear();
+  if (!idx.begin("/music", n + static_cast<uint32_t>(extra.size()))) return false;
+  for (uint32_t i = 0; i < n; ++i) {
+    const std::string p = synthPath(i);
+    if (gone.count(p)) continue;
+    if (idx.addFile(p.c_str()) != LibraryIndex::Add::Added) return false;
+  }
+  for (const std::string& p : extra) {
+    if (idx.addFile(p.c_str()) != LibraryIndex::Add::Added) return false;
+  }
+  return idx.finish();
+}
+
+std::vector<std::string> paths(const QueueModel& q, const TrackCatalog& c) {
+  std::vector<std::string> p;
+  for (uint32_t i = 0; i < q.size(); ++i) p.push_back(pathOf(c, q.trackAt(i)));
+  return p;
+}
+
+// The card, in memory: queue.txt is the MemStore's file. flush() is
+// QueueStore's (the player's resume point to the saver, then its
+// flushNow()), or false as a card that can't take the file; the rebuild
+// is the test's. It notes what the queue held when the rebuild began and
+// marks the meter when it ends, so Meter::peak is the re-read's.
+struct MemCard : queueremap::Card {
+  MemCard(QueueSaver& s, MemStore& m, PlaybackController& p, std::function<bool()> r)
+      : saver(s), st(m), player(p), rebuildFn(std::move(r)) {}
+  QueueSaver& saver;
+  MemStore& st;
+  PlaybackController& player;
+  std::function<bool()> rebuildFn;
+  bool cantTake = false;  // the card can't take the file (none, full)
+  bool fileGone = false;  // ... nor give it back after the rebuild
+  uint32_t now = 0;
+  size_t liveAtRebuild = SIZE_MAX;
+  std::unique_ptr<MemorySource> src;
+
+  bool flush() override {
+    if (cantTake) return false;
+    QueueSaver::Transport t;
+    t.have = player.resumePoint(&t.positionMs, &t.durationMs, &t.anchor);
+    saver.noteTransport(t);
+    return saver.flushNow(now);
+  }
+  ByteSource* openFile() override {
+    if (fileGone) return nullptr;
+    src.reset(new MemorySource(st.file.data(), st.file.size(), 61));  // (reads split mid-line)
+    return src.get();
+  }
+  void closeFile() override { src.reset(); }
+  bool rebuild() override {
+    liveAtRebuild = Meter::live;
+    const bool ok = rebuildFn();
+    Meter::mark();
+    return ok;
+  }
+};
+
+// Runs the saver's passes until what it has to write is written (a pass
+// first: it notices an edit only in one).
+void settle(QueueSaver& saver, uint32_t from) {
+  uint32_t t = from;
+  do {
+    saver.loop(t);
+    t += 20;
+  } while (t < from + 60000 && (saver.contentDirty() || saver.writing() || saver.busy()));
+}
+
+// A whole-library queue of 20,000 (with its undo snapshot) across a
+// rebuild, under a ceiling of what it already holds: the rebuild has all
+// of its memory, and the re-read's peak is its two blocks, 16 bytes a line.
+// The same queue through memory (a card that can't take the file) needs
+// its text, about 1.5 MB: under that ceiling it can't come across, which is
+// how today's remap ran out at about 15,000.
+void test_remap_of_20k_entries_within_its_budget() {
+  constexpr uint32_t kN = 20000;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kN));
+  TrackCatalog c(&idx);
+  QueueModel q(Meter::alloc, Meter::release);
+  QuietBackend audio;
+  PlaybackController player(audio, q, c);
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  // The boot's default queue (queueEverything()), then an edit: 0.48 MB.
+  const LibraryIndex::Span all = idx.allTracks();
+  const std::vector<uint32_t> ids(all.ids, all.ids + all.count);
+  TEST_ASSERT_TRUE(q.assign(ids.data(), kN, 7000));
+  saver.loaded(3, true, 0);
+  const uint32_t first = 100;
+  q.remove(&first, 1);
+  TEST_ASSERT_EQUAL_size_t(2 * kN * 12, Meter::live);
+  const std::vector<std::string> before = paths(q, c);
+  std::vector<uint32_t> beforeIds;
+  for (uint32_t i = 0; i < q.size(); ++i) beforeIds.push_back(q.trackAt(i));
+  const std::string playing = before[6999];
+  const std::string gone = before[5000];
+
+  MemCard card(saver, st, player, [&] { return buildSynth(idx, kN, {gone}, {"/music/A Made-up Opener/01 - Intro.mp3"}); });
+  card.now = 5000;
+  Meter::ceiling = Meter::live + 4096;  // what PSRAM has left: the queue's own, and a little
+  const queueremap::Result r = queueremap::run(q, saver, player, c, card, 5000, Meter::alloc, Meter::release);
+  TEST_ASSERT_TRUE(r.rebuilt);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(queueremap::Via::File), static_cast<int>(r.via));
+  TEST_ASSERT_TRUE(r.read.ok);
+  TEST_ASSERT_FALSE(r.noLibrary);
+  const size_t lines = kN - 1, entries = kN - 2;
+  TEST_ASSERT_EQUAL_UINT32(lines, r.read.lines);
+  TEST_ASSERT_EQUAL_UINT32(1, r.read.dropped);
+  // The budget: everything to the rebuild; the re-read 16 bytes a line at
+  // its peak (0.32 MB), then the queue exact (12 an entry, no snapshot).
+  TEST_ASSERT_EQUAL_size_t(2 * kN * 12, r.freedBytes);
+  TEST_ASSERT_EQUAL_size_t(0, card.liveAtRebuild);
+  TEST_ASSERT_EQUAL_size_t(lines * 4 + entries * 12, Meter::peak);
+  TEST_ASSERT_EQUAL_size_t(entries * 12, Meter::live);
+  TEST_ASSERT_EQUAL_size_t(entries * 12, q.memoryBytes());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::None), static_cast<int>(q.undoable()));
+  // What today's remap held across the rebuild: the text (and twice that
+  // as it doubled). Several times the new peak.
+  TEST_ASSERT_TRUE(st.file.size() > 1400000);
+  TEST_ASSERT_TRUE(Meter::peak * 4 < st.file.size());
+  // The queue: the same paths in the same order, the one gone left out,
+  // the same track current; the ids are the new library's.
+  std::vector<std::string> want = before;
+  want.erase(want.begin() + 5000);
+  TEST_ASSERT_TRUE(paths(q, c) == want);
+  TEST_ASSERT_TRUE(r.read.currentKept);
+  TEST_ASSERT_EQUAL_STRING(playing.c_str(), pathOf(c, q.currentTrack()).c_str());
+  uint32_t renumbered = 0;
+  for (uint32_t i = 0; i < q.size(); ++i) renumbered += q.trackAt(i) != beforeIds[i < 5000 ? i : i + 1] ? 1 : 0;
+  TEST_ASSERT_TRUE(renumbered > 0);
+  // A track dropped: the file is written again 2 s later, a generation on.
+  TEST_ASSERT_TRUE(saver.contentDirty());
+  settle(saver, 5000);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 5).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  TEST_ASSERT_EQUAL_UINT32(5, st.posGeneration);
+
+  // The same through memory: its text doesn't fit. Cleared, and queue.txt
+  // keeps the last queue saved (the next boot restores it).
+  const uint32_t two = 2;
+  q.remove(&two, 1);
+  Meter::ceiling = Meter::live + 4096;
+  const std::string file = st.file;
+  const int commits = st.commits;
+  card.cantTake = true;
+  const queueremap::Result m = queueremap::run(q, saver, player, c, card, 70000, Meter::alloc, Meter::release);
+  TEST_ASSERT_TRUE(m.rebuilt);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(queueremap::Via::None), static_cast<int>(m.via));
+  TEST_ASSERT_FALSE(m.read.ok);
+  TEST_ASSERT_TRUE(q.empty());
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+  TEST_ASSERT_FALSE(saver.contentDirty());
+  for (uint32_t t = 70000; t < 90000; t += 100) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(commits, st.commits);
+  TEST_ASSERT_EQUAL_STRING(file.c_str(), st.file.c_str());
+}
+
+// Shuffled: the play order and every rank come back (a gap where a track
+// went), the mode too; off then lays out the own order without them.
+void test_remap_keeps_a_shuffled_queue_and_its_ranks() {
+  constexpr uint32_t kN = 300;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kN));
+  TrackCatalog c(&idx);
+  QueueModel q(Meter::alloc, Meter::release);
+  QuietBackend audio;
+  PlaybackController player(audio, q, c);
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  const LibraryIndex::Span all = idx.allTracks();
+  TEST_ASSERT_TRUE(q.assign(all.ids, all.count, 40));
+  q.setShuffled(true);
+  saver.loaded(8, true, 0);
+  const std::vector<std::string> order = paths(q, c);
+  std::vector<uint32_t> ranks;
+  for (uint32_t i = 0; i < q.size(); ++i) ranks.push_back(q.rankAt(i));
+  const std::string current = pathOf(c, q.currentTrack());
+  // One before the current entry and one after it go; one is new.
+  const std::set<std::string> gone = {order[12], order[200]};
+
+  MemCard card(saver, st, player, [&] { return buildSynth(idx, kN, gone, {"/music/A Made-up Opener/01 - Intro.mp3"}); });
+  Meter::ceiling = Meter::live + 4096;
+  const queueremap::Result r = queueremap::run(q, saver, player, c, card, 100, Meter::alloc, Meter::release);
+  TEST_ASSERT_TRUE(r.read.ok);
+  TEST_ASSERT_EQUAL_UINT32(2, r.read.dropped);
+  TEST_ASSERT_TRUE(r.read.header.shuffled);
+  TEST_ASSERT_TRUE(q.shuffled());
+  TEST_ASSERT_EQUAL_size_t(0, card.liveAtRebuild);
+  // Version 2's peak: the ids and the ranks, 8 bytes a line, then the queue.
+  TEST_ASSERT_EQUAL_size_t(kN * 8 + (kN - 2) * 12, Meter::peak);
+  TEST_ASSERT_EQUAL_size_t((kN - 2) * 12, Meter::live);
+  // The play order and the ranks, less the two.
+  std::vector<std::string> wantOrder;
+  std::vector<uint32_t> wantRanks;
+  for (uint32_t i = 0; i < order.size(); ++i) {
+    if (gone.count(order[i])) continue;
+    wantOrder.push_back(order[i]);
+    wantRanks.push_back(ranks[i]);
+  }
+  TEST_ASSERT_TRUE(paths(q, c) == wantOrder);
+  for (uint32_t i = 0; i < q.size(); ++i) TEST_ASSERT_EQUAL_UINT32(wantRanks[i], q.rankAt(i));
+  TEST_ASSERT_TRUE(r.read.currentKept);
+  TEST_ASSERT_EQUAL_STRING(current.c_str(), pathOf(c, q.currentTrack()).c_str());
+  TEST_ASSERT_EQUAL_INT(39, q.current());  // one before it went
+  // Off: the own order (the library's), the two left out, the same entry current.
+  TEST_ASSERT_TRUE(q.setShuffled(false));
+  std::vector<std::string> own;
+  for (uint32_t i = 0; i < kN; ++i) {
+    const std::string p = synthPath(i);
+    if (!gone.count(p)) own.push_back(p);
+  }
+  TEST_ASSERT_TRUE(paths(q, c) == own);
+  TEST_ASSERT_EQUAL_STRING(current.c_str(), pathOf(c, q.currentTrack()).c_str());
+  // The file follows: written again (version 2 while it was shuffled).
+  settle(saver, 100);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, saver.generation()).c_str(), st.file.c_str());
+}
+
+// The current track gone: the next entry that stayed is current (the last
+// one when none after it did), it plays if the player was playing, and the
+// file and the position follow. A rebuild that leaves no library keeps
+// the file as it is and stops.
+void test_remap_when_the_current_track_is_gone() {
+  constexpr uint32_t kN = 60;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kN));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  QuietBackend audio;
+  PlaybackController player(audio, q, c);
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  const LibraryIndex::Span all = idx.allTracks();
+  TEST_ASSERT_TRUE(q.assign(all.ids, all.count, 0));
+  saver.loaded(2, true, 0);
+  player.play(20);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(PlayState::Playing), static_cast<int>(player.state()));
+  const std::vector<std::string> before = paths(q, c);
+  TEST_ASSERT_EQUAL_STRING(before[20].c_str(), audio.lastPath.c_str());
+  const int plays = audio.plays;
+
+  std::set<std::string> gone = {before[20]};
+  MemCard card(saver, st, player, [&] { return buildSynth(idx, kN, gone); });
+  queueremap::Result r = queueremap::run(q, saver, player, c, card, 100);
+  TEST_ASSERT_TRUE(r.read.ok);
+  TEST_ASSERT_FALSE(r.read.currentKept);
+  TEST_ASSERT_EQUAL_INT(20, q.current());
+  TEST_ASSERT_EQUAL_STRING(before[21].c_str(), pathOf(c, q.currentTrack()).c_str());
+  // It was playing: the new current one starts.
+  TEST_ASSERT_EQUAL_INT(plays + 1, audio.plays);
+  TEST_ASSERT_EQUAL_STRING(before[21].c_str(), audio.lastPath.c_str());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(PlayState::Playing), static_cast<int>(player.state()));
+  settle(saver, 100);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, saver.generation()).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_INT(20, st.pos);
+  TEST_ASSERT_EQUAL_UINT32(saver.generation(), st.posGeneration);
+
+  // The last ones gone, the current among them: the last one that stayed.
+  player.play(57);
+  gone.insert(before[57]);
+  gone.insert(before[58]);
+  gone.insert(before[59]);
+  r = queueremap::run(q, saver, player, c, card, 70000);
+  TEST_ASSERT_FALSE(r.read.currentKept);
+  TEST_ASSERT_EQUAL_UINT32(56, q.size());
+  TEST_ASSERT_EQUAL_INT(55, q.current());
+  TEST_ASSERT_EQUAL_STRING(before[56].c_str(), pathOf(c, q.currentTrack()).c_str());
+  settle(saver, 70000);
+
+  // No library after it (the card went away): the built-in tracks stay,
+  // the file keeps the library's for the next boot, and it stops.
+  const uint32_t tones[] = {TrackCatalog::kBuiltin + 2, TrackCatalog::kBuiltin + 4};
+  q.append(tones, 2);  // (the queue: 56 library tracks, then two tones)
+  player.play(10);
+  settle(saver, 140000);
+  const std::string file = st.file;
+  MemCard gone2(saver, st, player, [&] {
+    idx.clear();
+    return false;
+  });
+  r = queueremap::run(q, saver, player, c, gone2, 200000);
+  TEST_ASSERT_FALSE(r.rebuilt);
+  TEST_ASSERT_TRUE(r.read.ok);
+  TEST_ASSERT_TRUE(r.noLibrary);
+  TEST_ASSERT_EQUAL_UINT32(56, r.read.dropped);
+  expectTracks(q, {TrackCatalog::kBuiltin + 2, TrackCatalog::kBuiltin + 4});
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(PlayState::Stopped), static_cast<int>(player.state()));
+  TEST_ASSERT_FALSE(saver.contentDirty());
+  for (uint32_t t = 200000; t < 220000; t += 100) saver.loop(t);
+  TEST_ASSERT_EQUAL_STRING(file.c_str(), st.file.c_str());
+}
+
+// The resume point after a boot (the player's start point, NVS's resume
+// point) goes across with its entry: kept as it was when nothing before it
+// went; at its new line, a generation on, when something did; gone with
+// the entry's track.
+void test_remap_carries_the_resume_point() {
+  constexpr uint32_t kN = 40;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kN));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  QuietBackend audio;
+  PlaybackController player(audio, q, c);
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  // As QueueStore::restore() leaves it: the file of generation 6, line 12
+  // current, stopped 1:23 into it with an anchor.
+  const LibraryIndex::Span all = idx.allTracks();
+  TEST_ASSERT_TRUE(q.assign(all.ids, all.count, 12));
+  st.file = wholeText(q, c, 6);
+  const std::string path = pathOf(c, q.currentTrack());
+  ResumeAnchor anchor;
+  anchor.kind = ResumeAnchor::Kind::Mp3;
+  anchor.exact = true;
+  anchor.rate = 44100;
+  anchor.sample = 83000ull * 441 / 10;
+  anchor.fileSize = 4000000;
+  anchor.frameByte = 1300000;
+  anchor.prerollByte = 1299000;
+  anchor.frameHash = 0x1234u;
+  QueueResume saved;
+  saved.valid = true;
+  saved.generation = 6;
+  saved.entry = 12;
+  saved.pathHash = QueueSaver::pathHash(path.c_str());
+  saved.positionMs = 83000;
+  saved.durationMs = 240000;
+  saved.anchor = anchor;
+  st.resume = saved;
+  saver.setGeneration(6);
+  saver.loadedResume(saved);
+  saver.loaded(6, false, 0);
+  player.setStartPoint(83000, 240000, &anchor);
+
+  // A rebuild that renumbers and drops nothing: the start point kept, and
+  // nothing written (the file and the resume point are still this queue's).
+  MemCard card(saver, st, player, [&] { return buildSynth(idx, kN, {}, {"/music/A Made-up Opener/01 - Intro.mp3"}); });
+  queueremap::Result r = queueremap::run(q, saver, player, c, card, 100);
+  TEST_ASSERT_TRUE(r.read.ok);
+  TEST_ASSERT_TRUE(r.startCarried);
+  uint32_t ms = 0, dur = 0;
+  ResumeAnchor a;
+  TEST_ASSERT_TRUE(player.startPoint(&ms, &dur, &a));
+  TEST_ASSERT_EQUAL_UINT32(83000, ms);
+  TEST_ASSERT_EQUAL_UINT32(240000, dur);
+  TEST_ASSERT_TRUE(a == anchor);
+  TEST_ASSERT_EQUAL_STRING(path.c_str(), pathOf(c, q.currentTrack()).c_str());
+  const int resumes = st.resumes, commits = st.commits;
+  QueueSaver::Transport t;
+  t.have = player.resumePoint(&t.positionMs, &t.durationMs, &t.anchor);
+  saver.noteTransport(t);
+  for (uint32_t now = 100; now < 20000; now += 100) saver.loop(now);
+  TEST_ASSERT_EQUAL_INT(commits, st.commits);
+  TEST_ASSERT_EQUAL_INT(resumes, st.resumes);
+  TEST_ASSERT_EQUAL_UINT32(6, st.resume.generation);
+
+  // Two tracks before it go: the same second on the same file, now line 10
+  // of the next generation's file.
+  const std::vector<std::string> before = paths(q, c);
+  MemCard card2(saver, st, player, [&] { return buildSynth(idx, kN, {before[0], before[5]}); });
+  r = queueremap::run(q, saver, player, c, card2, 30000);
+  TEST_ASSERT_TRUE(r.startCarried);
+  TEST_ASSERT_EQUAL_INT(10, q.current());
+  TEST_ASSERT_TRUE(player.startPoint(&ms, &dur, &a));
+  TEST_ASSERT_EQUAL_UINT32(83000, ms);
+  t.have = player.resumePoint(&t.positionMs, &t.durationMs, &t.anchor);
+  saver.noteTransport(t);
+  settle(saver, 30000);
+  TEST_ASSERT_EQUAL_UINT32(7, saver.generation());
+  TEST_ASSERT_TRUE(st.resume.valid);
+  TEST_ASSERT_EQUAL_UINT32(7, st.resume.generation);
+  TEST_ASSERT_EQUAL_INT(10, st.resume.entry);
+  TEST_ASSERT_EQUAL_UINT32(QueueSaver::pathHash(path.c_str()), st.resume.pathHash);
+  TEST_ASSERT_EQUAL_UINT32(83000, st.resume.positionMs);
+  TEST_ASSERT_TRUE(st.resume.anchor == anchor);
+  // ... which is what the next boot pairs with its file.
+  TEST_ASSERT_TRUE(QueueSaver::resumeApplies(st.resume, 7, 10, true, path.c_str()));
+
+  // Its own track gone: no start point any more, and the resume point is
+  // cleared at the saver's next pass.
+  MemCard card3(saver, st, player, [&] { return buildSynth(idx, kN, {before[0], before[5], path}); });
+  r = queueremap::run(q, saver, player, c, card3, 60000);
+  TEST_ASSERT_FALSE(r.startCarried);
+  TEST_ASSERT_FALSE(player.startPoint(&ms, &dur, &a));
+  t.have = player.resumePoint(&t.positionMs, &t.durationMs, &t.anchor);
+  TEST_ASSERT_FALSE(t.have);
+  saver.noteTransport(t);
+  saver.loop(60100);
+  TEST_ASSERT_FALSE(st.resume.valid);
+}
+
+// The undo snapshot: given to the rebuild with the entries, never brought
+// back (its keys are gone), and the first edit after takes one of the
+// queue's exact size.
+void test_remap_and_the_undo_snapshot() {
+  constexpr uint32_t kN = 1000;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kN));
+  TrackCatalog c(&idx);
+  QueueModel q(Meter::alloc, Meter::release);
+  QuietBackend audio;
+  PlaybackController player(audio, q, c);
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  const LibraryIndex::Span all = idx.allTracks();
+  TEST_ASSERT_TRUE(q.assign(all.ids, all.count, 500));
+  saver.loaded(1, true, 0);
+  const uint32_t at[] = {3, 4};
+  q.remove(at, 2);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::Remove), static_cast<int>(q.undoable()));
+  TEST_ASSERT_EQUAL_size_t(2 * kN * 12, Meter::live);
+  // A write under way when the rebuild is asked for: the flush finishes it
+  // (the file whole, nothing dropped) before anything is given back.
+  saver.loop(10);
+  saver.loop(2100);
+  TEST_ASSERT_TRUE(saver.writing());
+
+  MemCard card(saver, st, player, [&] { return buildSynth(idx, kN, {}, {"/music/A Made-up Opener/01 - Intro.mp3"}); });
+  card.now = 2120;
+  const queueremap::Result r = queueremap::run(q, saver, player, c, card, 2120, Meter::alloc, Meter::release);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_INT(0, st.discards);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(queueremap::Via::File), static_cast<int>(r.via));
+  TEST_ASSERT_TRUE(r.read.ok);
+  TEST_ASSERT_EQUAL_size_t(2 * kN * 12, r.freedBytes);
+  TEST_ASSERT_EQUAL_size_t(0, card.liveAtRebuild);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::None), static_cast<int>(q.undoable()));
+  TEST_ASSERT_FALSE(q.undo());
+  TEST_ASSERT_EQUAL_UINT32(kN - 2, q.size());
+  TEST_ASSERT_EQUAL_size_t((kN - 2) * 12, Meter::live);
+  // The first edit after: a snapshot exactly the queue's size.
+  const uint32_t first = 0;
+  q.remove(&first, 1);
+  TEST_ASSERT_EQUAL_size_t((kN - 2) * 12 * 2, Meter::live);
+  TEST_ASSERT_TRUE(q.undo());
+  TEST_ASSERT_EQUAL_UINT32(kN - 2, q.size());
+}
+
+// A card that can't take the file: the queue goes across as its text in
+// memory, sized exactly, and the saver keeps at writing it.
+void test_remap_through_memory_when_the_card_cant_take_the_file() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q(Meter::alloc, Meter::release);
+  QuietBackend audio;
+  PlaybackController player(audio, q, c);
+  MemStore st;
+  st.file = "the last one";
+  QueueSaver saver(st, q, c);
+  const uint32_t ids[] = {3, 0, TrackCatalog::kBuiltin + 4, 5, 1};
+  q.assign(ids, 5, 3);
+  saver.loaded(4, true, 0);
+  const std::vector<std::string> before = paths(q, c);
+  const size_t text = wholeText(q, c, 4).size();  // (the saver's generation: the file it last had)
+  // Another order of adding (other ids), and one file fewer that the queue
+  // doesn't hold.
+  MemCard card(saver, st, player, [&] {
+    build(idx, {kFiles[5], kFiles[4], kFiles[3], kFiles[1], kFiles[0]});
+    return true;
+  });
+  card.cantTake = true;
+  const queueremap::Result r = queueremap::run(q, saver, player, c, card, 100, Meter::alloc, Meter::release);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(queueremap::Via::Memory), static_cast<int>(r.via));
+  TEST_ASSERT_EQUAL_size_t(text, r.textBytes);  // exactly its size
+  TEST_ASSERT_TRUE(r.read.ok);
+  TEST_ASSERT_EQUAL_UINT32(5, r.read.lines);
+  TEST_ASSERT_EQUAL_UINT32(0, r.read.dropped);
+  TEST_ASSERT_TRUE(paths(q, c) == before);
+  TEST_ASSERT_EQUAL_INT(3, q.current());
+  TEST_ASSERT_EQUAL_size_t(5 * 12, Meter::live);  // the text given back
+  // The file doesn't hold it: still to write.
+  TEST_ASSERT_TRUE(saver.contentDirty());
+  TEST_ASSERT_EQUAL_STRING("the last one", st.file.c_str());
+  settle(saver, 100);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 5).c_str(), st.file.c_str());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -2266,5 +2940,14 @@ int main(int, char**) {
   RUN_TEST(test_a_toggle_during_a_write_restarts_it);
   RUN_TEST(test_shuffle_alls_undo_writes_version_1_again);
   RUN_TEST(test_off_while_paused_pairs_the_resume_point_again);
+  RUN_TEST(test_assign_is_exact_and_growth_is_bounded);
+  RUN_TEST(test_release_gives_everything_back);
+  RUN_TEST(test_text_read_is_sized_by_its_header);
+  RUN_TEST(test_remap_of_20k_entries_within_its_budget);
+  RUN_TEST(test_remap_keeps_a_shuffled_queue_and_its_ranks);
+  RUN_TEST(test_remap_when_the_current_track_is_gone);
+  RUN_TEST(test_remap_carries_the_resume_point);
+  RUN_TEST(test_remap_and_the_undo_snapshot);
+  RUN_TEST(test_remap_through_memory_when_the_card_cant_take_the_file);
   return UNITY_END();
 }
