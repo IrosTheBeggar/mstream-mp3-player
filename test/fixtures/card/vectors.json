@@ -200,9 +200,81 @@
    ],
    "skew": -3600,
    "matching": 10
+  },
+  {
+   "groups": [
+    {
+     "count": 8,
+     "delta": 3600
+    },
+    {
+     "count": 10,
+     "recorded": "0x00000000"
+    }
+   ],
+   "skew": 3600,
+   "matching": 8
+  },
+  {
+   "groups": [
+    {
+     "count": 8,
+     "delta": 3600
+    },
+    {
+     "count": 10,
+     "observed": "0x00000000"
+    }
+   ],
+   "skew": 3600,
+   "matching": 8
+  },
+  {
+   "groups": [
+    {
+     "count": 8,
+     "delta": 3600
+    },
+    {
+     "count": 10,
+     "recorded": "0x00000000",
+     "observed": "0x00000000"
+    }
+   ],
+   "skew": 3600,
+   "matching": 8
+  },
+  {
+   "groups": [
+    {
+     "count": 8,
+     "delta": 3600
+    },
+    {
+     "count": 10,
+     "observed": "0x5C0773D5"
+    }
+   ],
+   "skew": 3600,
+   "matching": 8
+  },
+  {
+   "groups": [
+    {
+     "count": 8,
+     "delta": 3600
+    },
+    {
+     "count": 10,
+     "recorded": "0x5C0773D5",
+     "observed": "0x5C0773D5"
+    }
+   ],
+   "skew": 3600,
+   "matching": 8
   }
  ],
- "skewNote": "pairs: recorded = 2026-10-07 14:30:42 + 2 days x i, observed = recorded + delta; 'matching' counts the pairs whose time matches under the skew. A pair with a 0 or invalid stamp is left out and never matches.",
+ "skewNote": "pairs: recorded = 2026-10-07 14:30:42 + 2 days x i, observed = recorded + delta (0 when the group gives none), unless the group pins 'recorded' or 'observed' to a stamp (0, or the invalid 0x5C0773D5, month 0); 'matching' counts the pairs whose time matches under the skew. A pair with a 0 or invalid stamp is left out of the pairs (so it doesn't count towards half) and never matches, even when its two stamps are equal.",
  "bytes": {
   "MPTG": "4D 50 54 47",
   "MPTGu32": "0x4754504D",

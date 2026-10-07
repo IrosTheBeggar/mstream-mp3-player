@@ -74,6 +74,20 @@ public:
   public:
     virtual ~DeviceRows() = default;
     virtual Row row(uint32_t record) = 0;
+    // How much of D isn't a Software row (DSTA's header, N4): its records
+    // of any other status, and the FOLD entries on their paths (folder 0
+    // among them when there are any). False: not known, and all of D
+    // counts. Asked once, before the build, to size the index when T lists
+    // too (no walk since its commit): a Software row is then one of T's
+    // files, counted in T's header, or is dropped (3.4.1). Without it, the
+    // boot's build after a transfer (D's Software rows for every file T
+    // lists) would be sized for twice the tracks: 0.9 MB over 3.5's build
+    // peak at 20k.
+    virtual bool ownCounts(uint32_t* records, uint32_t* folders) {
+      (void)records;
+      (void)folders;
+      return false;
+    }
   };
 
   // A folder's other files (`rel` relative to /music, "" for /music itself):

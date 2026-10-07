@@ -311,10 +311,11 @@ def fourcc(s: str) -> bytes:
     return s.encode("ascii")
 
 
-def build_container(magic, generation, card_id, type_header: bytes, sections, major=1, minor=0):
-    """sections: [(type, flags, count, stride, data)] in order."""
+def build_container(magic, generation, card_id, type_header: bytes, sections, major=1, minor=0, hardening=False):
+    """sections: [(type, flags, count, stride, data)] in order. `hardening`:
+    a header of any length (its fixtures break that rule on purpose)."""
     header_bytes = 40 + len(type_header)
-    assert header_bytes % 8 == 0
+    assert hardening or header_bytes % 8 == 0
     n = len(sections)
     at = header_bytes + 32 * n
     offsets = []
@@ -373,6 +374,19 @@ class Strs:
         off = len(self.b)
         self.b += b
         return off
+
+
+def reseal(b: bytearray) -> bytes:
+    """Every section's CRC (where its directory entry lies inside the file)
+    and the header's made right again, after a raw edit of the frame."""
+    hb, n = struct.unpack_from("<II", b, 8)
+    for i in range(n):
+        off, ln = struct.unpack_from("<II", b, hb + 32 * i + 8)
+        if off + ln <= len(b):
+            struct.pack_into("<I", b, hb + 32 * i + 24, crc(bytes(b[off:off + ln])))
+    struct.pack_into("<I", b, 32, 0)
+    struct.pack_into("<I", b, 32, crc(bytes(b[:hb + 32 * n])))
+    return bytes(b)
 
 
 def u64(v):
@@ -877,7 +891,12 @@ def pairs_for(groups):
     for g in groups:
         for i in range(g["count"]):
             rec = fat_from_wall(base + 2 * 86400 * len(out))
-            obs = fat_from_wall(fat_wall(rec) + g["delta"])
+            obs = fat_from_wall(fat_wall(rec) + g.get("delta", 0))
+            # A group may pin either stamp (a 0, or an invalid one).
+            if "recorded" in g:
+                rec = hexint(g["recorded"])
+            if "observed" in g:
+                obs = hexint(g["observed"])
             out.append((rec, obs))
     return out
 
@@ -923,10 +942,24 @@ def vectors():
         {"groups": [{"count": 10, "delta": 3600}, {"count": 20, "delta": 0}], "skew": 0, "matching": 20},
         {"groups": [{"count": 20, "delta": 2}], "skew": 0, "matching": 0},
         {"groups": [{"count": 10, "delta": 3600}, {"count": 10, "delta": -3600}], "skew": -3600, "matching": 10},
+        # Left out of the pairs: 8 of 8 is a skew (counted, 8 of 18 wouldn't
+        # be half), and the left-out pairs never match.
+        {"groups": [{"count": 8, "delta": 3600}, {"count": 10, "recorded": "0x00000000"}], "skew": 3600,
+         "matching": 8},
+        {"groups": [{"count": 8, "delta": 3600}, {"count": 10, "observed": "0x00000000"}], "skew": 3600,
+         "matching": 8},
+        {"groups": [{"count": 8, "delta": 3600}, {"count": 10, "recorded": "0x00000000", "observed": "0x00000000"}],
+         "skew": 3600, "matching": 8},
+        {"groups": [{"count": 8, "delta": 3600}, {"count": 10, "observed": "0x5C0773D5"}], "skew": 3600,
+         "matching": 8},
+        {"groups": [{"count": 8, "delta": 3600}, {"count": 10, "recorded": "0x5C0773D5", "observed": "0x5C0773D5"}],
+         "skew": 3600, "matching": 8},
     ]
-    v["skewNote"] = ("pairs: recorded = 2026-10-07 14:30:42 + 2 days x i, observed = recorded + delta; 'matching' "
-                     "counts the pairs whose time matches under the skew. A pair with a 0 or invalid stamp is "
-                     "left out and never matches.")
+    v["skewNote"] = ("pairs: recorded = 2026-10-07 14:30:42 + 2 days x i, observed = recorded + delta (0 when the "
+                     "group gives none), unless the group pins 'recorded' or 'observed' to a stamp (0, or the "
+                     "invalid 0x5C0773D5, month 0); 'matching' counts the pairs whose time matches under the skew. "
+                     "A pair with a 0 or invalid stamp is left out of the pairs (so it doesn't count towards half) "
+                     "and never matches, even when its two stamps are equal.")
     v["bytes"] = {
         "MPTG": "4D 50 54 47", "MPTGu32": "0x4754504D", "MPTHu32": "0x4854504D",
         "thumbPath": {"folder": "Artist/Album", "path": "/.mstream/thumbs/B/B1F7E69F.565", "bytes": 21656,
@@ -1403,6 +1436,118 @@ def hardening(golden: dict):
          mptg(dict(desc, minor=1), rec_stride=80, extra_header=b"newminor", extra_run_field="a newer field",
               extra_sections=[("XTRA", 0, 0, 0, b"new")]), same="tags-0000002a.bin")
 
+    # The rest of 2.4.3's frame and directory, one file each (the tags file
+    # otherwise whole, its CRCs right).
+    def with_header(th_bytes):
+        p = parse_container(tags)
+        return build_container("MPTG", p["generation"], p["card"], th_bytes, [tuple(s) for s in p["sections"]],
+                               hardening=True)
+
+    pt = parse_container(tags)
+    bad("mptg-header-bytes-odd", "MPTG", "headerBytes", "header: headerBytes 76, not a multiple of 8",
+        with_header(bytes(pt["th"]) + bytes(4)))
+    bad("mptg-header-bytes-short", "MPTG", "headerBytes", "header: headerBytes 64, below MPTG v1's 72",
+        with_header(bytes(pt["th"][:24])))
+
+    def many_sections(p):
+        # 61 empty optional sections more: 65 in all (each type once, the
+        # layout right).
+        for i in range(65 - len(p["sections"])):
+            p["sections"].append(["X%03d" % i, 0, 0, 0, bytearray()])
+
+    bad("mptg-section-count", "MPTG", "sectionCount", "header: 65 sections (at most 64)", edit(many_sections))
+    bad("mptg-file-bytes", "MPTG", "fileBytes", "header: fileBytes 8 bytes short of the file's length",
+        tags + bytes(8))
+
+    def raw_last(fn):
+        # An edit of the bytes and of the last directory entry, resealed.
+        b = bytearray(tags)
+        hb, n = struct.unpack_from("<II", b, 8)
+        fn(b, hb + 32 * (n - 1), hb + 32 * (n - 2))
+        struct.pack_into("<I", b, 16, len(b))
+        return reseal(b)
+
+    def misaligned(b, last, _prev):
+        off = struct.unpack_from("<I", b, last + 8)[0]
+        b[off:off] = bytes(4)
+        struct.pack_into("<I", b, last + 8, off + 4)
+
+    def overlap(b, last, prev):
+        # The last section starts 8 bytes into the one before it (and runs
+        # to the file's end).
+        poff = struct.unpack_from("<I", b, prev + 8)[0]
+        struct.pack_into("<II", b, last + 8, poff + 8, len(b) - poff - 8)
+
+    def short_end(b, _last, _prev):
+        b += bytes(8)
+
+    bad("mptg-layout-misaligned", "MPTG", "layout", "the directory: a section at an offset not a multiple of 8",
+        raw_last(misaligned))
+    bad("mptg-layout-overlap", "MPTG", "layout", "the directory: a section that starts inside the one before it",
+        raw_last(overlap))
+    bad("mptg-layout-end", "MPTG", "layout", "the directory: the last section ends 8 bytes before fileBytes",
+        raw_last(short_end))
+
+    def type_twice(p):
+        p["sections"].append(list(section(p, "OSTR")))
+
+    bad("mptg-layout-type-twice", "MPTG", "layout", "the directory: OSTR twice", edit(type_twice))
+
+    def drop_section(t):
+        def fn(p):
+            p["sections"] = [s for s in p["sections"] if s[0] != t]
+        return fn
+
+    bad("mptg-missing-strs", "MPTG", "missing", "the directory: no STRS (a REQUIRED section)",
+        edit(drop_section("STRS")))
+    bad("mptg-hidx-absent", "MPTG", "missing", "HIDX absent while recordCount > 0 (2.6.2)",
+        edit(drop_section("HIDX")))
+    good("mptg-hidx-absent-device", "MPTG", "HIDX absent, read by a reader that doesn't use it (the device's builder)",
+         edit(drop_section("HIDX")), uses="device")
+
+    def blob_count(p):
+        section(p, "STRS")[2] = 1
+
+    bad("mptg-blob-count", "MPTG", "shape", "STRS (a blob) with a count of 1", edit(blob_count))
+
+    def array_bytes(p):
+        section(p, "HIDX")[4] += bytes(4)
+
+    bad("mptg-array-bytes", "MPTG", "shape", "HIDX: bytes 4 more than count x stride", edit(array_bytes))
+    bad("mptg-folder-count", "MPTG", "counts", "header: folderCount isn't FOLD's count",
+        edit(header_field(52, section(pt, "FOLD")[2] + 1)))
+
+    def strs_first(p):
+        section(p, "STRS")[4][0] = ord("x")
+
+    bad("mptg-strs-first-byte", "MPTG", "string", "STRS: byte 0 isn't NUL (offset 0 must be the empty string)",
+        edit(strs_first))
+
+    def descending(p):
+        # Two records of one folder with names of one length swap their
+        # names' bytes: the names now decrease. HIDX follows (each entry's
+        # record is the one whose path now has its hash), so only the order
+        # is wrong.
+        s = recs(p)
+        strs = section(p, "STRS")[4]
+        rows = [struct.unpack_from("<II", s[4], 72 * i) for i in range(s[2])]
+        for i in range(len(rows) - 1):
+            (fa, na), (fb, nb) = rows[i], rows[i + 1]
+            a, b = bytes(strs[na:strs.index(0, na)]), bytes(strs[nb:strs.index(0, nb)])
+            if fa == fb and len(a) == len(b):
+                strs[na:na + len(a)] = b
+                strs[nb:nb + len(b)] = a
+                h = section(p, "HIDX")
+                e = [list(struct.unpack_from("<QI", h[4], 12 * k)) for k in range(h[2])]
+                for x in e:
+                    x[1] = i + 1 if x[1] == i else i if x[1] == i + 1 else x[1]
+                h[4] = bytearray(b"".join(struct.pack("<QI", *x) for x in e))
+                return
+        raise AssertionError("no pair")
+
+    bad("mptg-recs-descending", "MPTG", "recsOrder", "RECS: two records of one folder with their names decreasing",
+        edit(descending))
+
     # MSMF.
     man = golden["manifest.bin"]
     md = manifest_main()
@@ -1421,6 +1566,14 @@ def hardening(golden: dict):
     bad("msmf-libr-unsorted", "MSMF", "libr", "LIBR: roots not in byte order", msmf_raw(md, [t_row, d_row],
                                                                                       ["Lib B", "Lib A"]))
     bad("msmf-libr-absolute", "MSMF", "libr", "LIBR: an absolute root", msmf_raw(md, [t_row, d_row], ["/Lib A"]))
+    bad("msmf-libr-dot", "MSMF", "libr", "LIBR: a root through '.'", msmf_raw(md, [t_row, d_row], ["Lib A/."]))
+    bad("msmf-libr-dotdot", "MSMF", "libr", "LIBR: a root through '..'", msmf_raw(md, [t_row, d_row], ["Lib A/.."]))
+    bad("msmf-libr-empty-name", "MSMF", "libr", "LIBR: a root with an empty name ('Lib A//Inner')",
+        msmf_raw(md, [t_row, d_row], ["Lib A//Inner"]))
+    bad("msmf-libr-too-long", "MSMF", "libr", "LIBR: a root that makes '/music/' + root 256 bytes",
+        msmf_raw(md, [t_row, d_row], ["L" * 120 + "/" + "M" * 128]))
+    good("msmf-libr-longest", "MSMF", "LIBR: a root that makes '/music/' + root exactly 255 bytes",
+         msmf_raw(md, [t_row, d_row], ["L" * 120 + "/" + "M" * 127]))
     bad("msmf-major-2", "MSMF", "major", "a newer major", edit(major, man))
 
     # MPDJ.
@@ -1453,6 +1606,13 @@ def hardening(golden: dict):
 
     bad("mpdj-neighbour-range", "MPDJ", "djNeighbours", "DJNB: an index out of range (not the unused all-ones)",
         edit(dj_nb, dj))
+    pdj = parse_container(dj)
+    bad("mpdj-row-count", "MPDJ", "counts", "header: rowCount isn't DJRW's count",
+        edit(header_field(40, section(pdj, "DJRW")[2] + 1), dj))
+    bad("mpdj-path-count", "MPDJ", "counts", "header: pathCount isn't DJPH's count",
+        edit(header_field(44, section(pdj, "DJPH")[2] + 1), dj))
+    bad("mpdj-neighbour-stride", "MPDJ", "shape", "header: k 2, so DJNB's stride (9) isn't k x (indexBytes + 1)",
+        edit(header_field(48, 2, "<H"), dj))
 
     # MSPD.
     pd = pending_main()
@@ -1463,6 +1623,12 @@ def hardening(golden: dict):
     bad("mspd-absolute", "MSPD", "pendPath", "PEND: an absolute path", mspd_raw(pd, [(2, "/A/x.mp3", 0)]))
     bad("mspd-dotdot", "MSPD", "pendPath", "PEND: a path through '..'", mspd_raw(pd, [(2, "../x.mp3", 0)]))
     bad("mspd-op-0", "MSPD", "pendOp", "PEND: an op of 0", mspd_raw(pd, [(0, "A/x.mp3", 0)]))
+    bad("mspd-path-empty", "MSPD", "pendPath", "PEND: a path at offset 0 (the empty string)",
+        mspd_raw(pd, [(2, "", 0)]))
+    bad("mspd-path-too-long", "MSPD", "pathLength", "PEND: a path that makes '/music/' + path 256 bytes",
+        mspd_raw(pd, [(2, "L" * 120 + "/" + "M" * 124 + ".mp3", 0)]))
+    good("mspd-path-longest", "MSPD", "PEND: a path that makes '/music/' + path exactly 255 bytes",
+         mspd_raw(pd, [(2, "L" * 120 + "/" + "M" * 123 + ".mp3", 0)]))
     good("mspd-op-9", "MSPD", "PEND: an op above 3: the plan reads, and stops the software",
          mspd_raw(pd, [(2, "A/x.mp3", 0), (9, "Z/z.mp3", 0), (1, "A B/y.mp3", 77)]))
     return out
@@ -1500,11 +1666,12 @@ only, synthetic embeddings.
   byte (2.17, item 2). The MPTH pixels are the synthetic picture the
   description names: the scaling filter isn't pinned.
 - `hardening/`: files broken in one way each, with valid CRCs (2.17, item
-  4). `index.json` lists each with the reader's uses (`all`: every
-  section; `device`: FOLD, RECS and STRS only), whether it must read as
-  absent or present, the check it breaks, and the player's reason code.
-  A `present` file with `same` reads as the same records as that golden
-  file.
+  4), at least one for every check of 2.4.3, so a reader that skips a
+  check fails on its file. `index.json` lists each with the reader's uses
+  (`all`: every section; `device`: FOLD, RECS and STRS only), whether it
+  must read as absent or present, the check it breaks, and the player's
+  reason code. A `present` file with `same` reads as the same records as
+  that golden file.
 
 The player's tests: `test/test_card_contract` (the vectors) and
 `test/test_card_files` (the goldens, round trips, the hardening files,

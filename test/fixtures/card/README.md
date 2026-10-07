@@ -26,11 +26,12 @@ only, synthetic embeddings.
   byte (2.17, item 2). The MPTH pixels are the synthetic picture the
   description names: the scaling filter isn't pinned.
 - `hardening/`: files broken in one way each, with valid CRCs (2.17, item
-  4). `index.json` lists each with the reader's uses (`all`: every
-  section; `device`: FOLD, RECS and STRS only), whether it must read as
-  absent or present, the check it breaks, and the player's reason code.
-  A `present` file with `same` reads as the same records as that golden
-  file.
+  4), at least one for every check of 2.4.3, so a reader that skips a
+  check fails on its file. `index.json` lists each with the reader's uses
+  (`all`: every section; `device`: FOLD, RECS and STRS only), whether it
+  must read as absent or present, the check it breaks, and the player's
+  reason code. A `present` file with `same` reads as the same records as
+  that golden file.
 
 The player's tests: `test/test_card_contract` (the vectors) and
 `test/test_card_files` (the goldens, round trips, the hardening files,

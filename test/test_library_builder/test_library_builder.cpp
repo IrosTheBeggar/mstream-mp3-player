@@ -551,27 +551,38 @@ struct Built {
   LibraryIndex::Memory memory;
   size_t peak = 0;  // the heap's: the index's blocks and the builder's own
   uint32_t tracks = 0, albums = 0, artists = 0;
+  std::vector<uint16_t> lengths;  // each track's durationS, by id
   B::Result result;
   long ms = 0;
 };
 
-Built buildFrom(const synthcard::Card& card, bool fromTransfer, bool keepSources = false) {
+// How a build is made beyond its source.
+struct Extra {
+  bool lists = false;    // T lists: no walk since its commit (the boot after a transfer)
+  bool counts = true;    // D's statuses say how much of D is its own (DSTA's header, N4)
+  int32_t deviceMs = 0;  // ms added to D's lengths (the device trims an MP3's encoder delay)
+  bool keepLengths = true;
+};
+
+Built buildFrom(const synthcard::Card& card, bool fromTransfer, bool keepSources = false, const Extra& x = Extra()) {
   Built out;
   synthcard::Write tw;
   synthcard::Write dw;
   dw.source = mptg::kSourceDevice;
   dw.fullRecords = !fromTransfer;  // T's files: D's Software rows; else D's own records
+  dw.lengthMs = x.deviceMs;
   const std::vector<uint8_t> t = fromTransfer ? synthcard::tagsFile(card, tw) : std::vector<uint8_t>{};
   const std::vector<uint8_t> d = synthcard::tagsFile(card, dw);
   cc::MemSource ts(t.data(), static_cast<uint32_t>(t.size())), ds(d.data(), static_cast<uint32_t>(d.size()));
   synthcard::Facts facts(card, false);
-  synthcard::SameRows rows(fromTransfer ? B::Status::Software : B::Status::Scanned);
+  synthcard::SameRows rows(fromTransfer ? B::Status::Software : B::Status::Scanned, false, x.counts);
   Heap::reset();
   {
     LibraryIndex idx(Heap::alloc, Heap::release, Heap::shrink);
     B builder(Heap::alloc, Heap::release);
     B::Config c;
     c.transfer = fromTransfer ? &ts : nullptr;
+    c.transferLists = x.lists;
     c.device = &ds;
     c.rows = &rows;
     c.facts = &facts;
@@ -584,7 +595,9 @@ Built buildFrom(const synthcard::Card& card, bool fromTransfer, bool keepSources
     out.tracks = idx.trackCount();
     out.albums = idx.albumCount();
     out.artists = idx.artistCount();
+    for (uint32_t i = 0; i < idx.trackCount(); ++i) out.lengths.push_back(idx.track(i).durationS);
     if (!keepSources) idx.forgetSources();
+    if (!x.keepLengths) idx.forgetLengths();
     MemorySink file;
     LibraryIndex::Inputs in;
     in.cardId = 1;
@@ -650,11 +663,39 @@ void test_20k_memory_and_peak() {
   TEST_ASSERT_TRUE_MESSAGE(t.memory.total <= kIndexBytesPerTrack * 20000, "the index over 92 B a track");
   TEST_ASSERT_TRUE_MESSAGE(t.peak <= kBuildPeak20k, "the build peak over its budget");
   TEST_ASSERT_TRUE(t.memory.buildPeak <= t.peak);
+
+  // The boot after a transfer (3.2.2: the transfer's identity differs): no
+  // walk since the commit, so T lists, and D still has a Software row for
+  // every file T lists (review of N2). Sized from T and D's own rows (none
+  // here), the build stays in the same budget and makes the same index;
+  // sized from both headers, it would hold its blocks twice as big.
+  Extra lists;
+  lists.lists = true;
+  const Built l = buildFrom(card, true, false, lists);
+  TEST_ASSERT_TRUE(l.result.built);
+  TEST_ASSERT_EQUAL_UINT32(20000, l.result.fromTransfer);
+  TEST_ASSERT_EQUAL_UINT32(0, l.result.dropped);
+  printf("[builder] 20000 tracks from T listing, D's Software rows for them: build peak %u\n",
+         static_cast<unsigned>(l.peak));
+  TEST_ASSERT_TRUE_MESSAGE(l.peak <= kBuildPeak20k, "the build peak after a transfer over its budget");
+  TEST_ASSERT_TRUE(l.bytes == buildFrom(card, true).bytes);
+  Extra blind = lists;
+  blind.counts = false;
+  const Built b = buildFrom(card, true, false, blind);
+  printf("[builder] the same, D's own counts unknown (sized from both headers): build peak %u\n",
+         static_cast<unsigned>(b.peak));
+  TEST_ASSERT_TRUE(b.peak > l.peak + 500000);
+  TEST_ASSERT_TRUE(b.bytes == l.bytes);
 }
 
 // The same files from T and from D build the same index (2.17, item 5: the
 // research's M7 test on the host), byte for byte once the tracks' sources
-// (which differ by definition) are cleared.
+// (which differ by definition) are cleared, when the two records' lengths
+// are equal. Real ones may differ by up to 100 ms (2.17, item 3: the
+// software's reader keeps an MP3's encoder delay, the device trims it), so
+// a track's length in whole seconds may differ by one (review of N2): with
+// D's lengths 50 ms shorter, every length is within a second of T's, some
+// differ, and the rest is still the same bytes.
 void test_transfer_and_device_build_the_same_index() {
   const synth::Spec spec = synth::userShape(3000);
   const synthcard::Card card = synthcard::make(spec);
@@ -669,6 +710,25 @@ void test_transfer_and_device_build_the_same_index() {
   const Built ds = buildFrom(card, false, true);
   TEST_ASSERT_FALSE(ts.bytes == ds.bytes);
   TEST_ASSERT_EQUAL_size_t(ts.bytes.size(), ds.bytes.size());
+  // The device's lengths 50 ms shorter.
+  Extra trimmed;
+  trimmed.deviceMs = -50;
+  const Built dt = buildFrom(card, false, false, trimmed);
+  TEST_ASSERT_EQUAL_UINT32(t.lengths.size(), dt.lengths.size());
+  uint32_t differ = 0;
+  for (size_t i = 0; i < t.lengths.size(); ++i) {
+    const int gap = static_cast<int>(t.lengths[i]) - static_cast<int>(dt.lengths[i]);
+    TEST_ASSERT_TRUE(gap == 0 || gap == 1);
+    differ += gap ? 1 : 0;
+  }
+  printf("[builder] D's lengths 50 ms shorter: %u of %u tracks a second shorter\n", static_cast<unsigned>(differ),
+         static_cast<unsigned>(t.lengths.size()));
+  TEST_ASSERT_TRUE(differ > 0);
+  TEST_ASSERT_FALSE(t.bytes == dt.bytes);
+  Extra noLengths;
+  noLengths.keepLengths = false;
+  trimmed.keepLengths = false;
+  TEST_ASSERT_TRUE(buildFrom(card, true, false, noLengths).bytes == buildFrom(card, false, false, trimmed).bytes);
 }
 
 int main(int, char**) {

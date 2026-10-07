@@ -41,11 +41,20 @@
 // tracks went, and the mode); the current entry, or if its track is gone
 // the next one that stayed (the last one if none after it did), as at
 // boot; a start point that waited (the resume point after a boot, the
-// console's qs) when the current track stayed; nothing of the undo (the
-// keys are new: an undo can't name these entries). The saver is told what
-// the card now holds: the file is the queue unless tracks were dropped
-// (then it's written again, with the next generation, and the resume point
-// follows the entry's new line).
+// console's qs) when the current entry is still the same file (its path,
+// not its line, says so); nothing of the undo (the keys are new: an undo
+// can't name these entries). The saver is told what the card now holds:
+// the file is the queue unless tracks were dropped (then it's written
+// again, with the next generation, and the resume point follows the
+// entry's new line).
+//
+// The file can hold more than the queue (QueueSaver::keptFile()): after a
+// boot or a rebuild that found no library, which left its library tracks
+// out, or a queue that couldn't come across a rebuild. Its lines are then
+// not the queue's positions, so the read starts at the file's own line,
+// as the next boot would (the position saved for it, which the queue's
+// moves meanwhile didn't touch): "Try again" after a boot with no library
+// brings the whole queue back where it was.
 //
 // A card that can't take the file (none, full, a write that failed): the
 // queue is carried as that text in memory instead, sized exactly (two
@@ -53,9 +62,10 @@
 // what memory holds, the queue is cleared. A rebuild that leaves no
 // library (out of memory, a card that went away) isn't the listener's
 // queue changing: what survives (the built-in tracks) stays, the file
-// isn't rewritten (it keeps the library's tracks for the next boot), and
-// playback stops if its track is gone. A queue that can't come back
-// (cleared) keeps the mode, and the file keeps the last queue saved.
+// isn't rewritten (it keeps the library's tracks for the next boot, or the
+// next remap), and playback stops if its track is gone. A queue that can't
+// come back (cleared) keeps the mode, and the file keeps the last queue
+// saved (the next remap brings it back from its own line).
 //
 // Portable, host-tested (test_queue). Loop task only: nothing else may
 // touch the queue, the saver or the index while it runs.
@@ -91,8 +101,10 @@ struct Result {
   bool rebuilt = false;       // what Card::rebuild() returned
   Via via = Via::None;
   // The read back: ok, the queue came across (lines, entries, dropped,
-  // currentKept); not ok, it was cleared (Via::None; the file couldn't be
-  // opened or read whole after the rebuild; no memory for the read).
+  // currentKept: here, the current entry is the same file as before, by
+  // its path's hash, as a resume point is); not ok, it was cleared
+  // (Via::None; the file couldn't be opened or read whole after the
+  // rebuild; no memory for the read).
   queuetext::Restored read;
   bool noLibrary = false;     // the rebuild left no library (its tracks dropped, the file kept)
   bool startCarried = false;  // a start point waited and was set again

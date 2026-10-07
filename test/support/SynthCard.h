@@ -105,19 +105,22 @@ struct Write {
   bool ownedCovers = false;  // T: a record (container 255) for each album's cover.jpg
   bool thumbs = false;       // T: THUMB on each album folder
   int32_t shift = 0;         // seconds added to every recorded stamp (a PC's time zone)
+  int32_t lengthMs = 0;      // ms added to every record's length (the device trims an MP3's encoder delay)
   uint32_t generation = 42;
   uint64_t cardId = 0x5EEDC0DE0A1B2C3Dull;
   uint16_t parserVersion = 1;
 };
 
-inline mptg::RecordIn recordOf(const File& f, bool full, int32_t shift) {
+inline mptg::RecordIn recordOf(const File& f, bool full, int32_t shift, int32_t lengthMs = 0) {
   mptg::RecordIn r;
   r.path = f.rel.c_str();
   r.rec.size = f.size;
   r.rec.fatTime = shift ? cc::fatTimeFromWall(cc::fatWallSeconds(f.fatTime) + shift) : f.fatTime;
   r.rec.container = f.container;
   if (!full) return r;
-  r.rec.durationMs = f.durationMs;
+  r.rec.durationMs = f.durationMs && static_cast<int64_t>(f.durationMs) + lengthMs > 0
+                         ? static_cast<uint32_t>(static_cast<int64_t>(f.durationMs) + lengthMs)
+                         : f.durationMs;
   r.rec.qfp = cc::fnv1a64(f.rel.data(), f.rel.size());  // a stand-in: no file bytes here
   r.rec.known = mptg::kKnownRules1;
   if (f.noTags) {
@@ -150,7 +153,7 @@ inline mptg::RecordIn recordOf(const File& f, bool full, int32_t shift) {
 inline std::vector<uint8_t> tagsFile(const Card& c, const Write& w) {
   std::vector<mptg::RecordIn> recs;
   recs.reserve(c.files.size() + c.albumFolders.size());
-  for (const File& f : c.files) recs.push_back(recordOf(f, w.fullRecords, w.shift));
+  for (const File& f : c.files) recs.push_back(recordOf(f, w.fullRecords, w.shift, w.lengthMs));
   std::vector<std::string> covers;
   if (w.ownedCovers) {
     covers.reserve(c.albumFolders.size());
@@ -213,10 +216,11 @@ private:
   std::map<std::string, LibraryIndex::FolderFacts> map_;
 };
 
-// D's statuses, one for every record.
+// D's statuses, one for every record; with ownCounts(), what DSTA's header
+// would say of them (N4): every row Software, none of D its own.
 class SameRows : public LibraryBuilder::DeviceRows {
 public:
-  explicit SameRows(LibraryBuilder::Status s, bool confirmed = false) {
+  explicit SameRows(LibraryBuilder::Status s, bool confirmed = false, bool counts = false) : counts_(counts) {
     row_.status = s;
     row_.confirmed = confirmed;
   }
@@ -224,10 +228,16 @@ public:
     ++asked;
     return row_;
   }
+  bool ownCounts(uint32_t* records, uint32_t* folders) override {
+    if (!counts_ || row_.status != LibraryBuilder::Status::Software) return false;
+    *records = *folders = 0;
+    return true;
+  }
   uint32_t asked = 0;
 
 private:
   LibraryBuilder::Row row_;
+  bool counts_;
 };
 
 }  // namespace synthcard

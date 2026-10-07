@@ -359,6 +359,13 @@ public:
 
   Span artistsAZ() const { return {artistsAZ_, artistN_}; }
   Span albumsAZ() const { return {albumsAZ_, albumN_}; }
+  // What artistsAZ() and albumsAZ() sort an entry by (textfold::
+  // compareSorted() of these): its elected sort tag, else its name. Saved
+  // with the views, so a loaded index has them too. The A-Z rail, the row's
+  // letter and the jump grid key on textfold::sortName() of it, as the
+  // buckets do: "Bowery, Daniel" puts Daniel Bowery among the B's.
+  const char* artistSortKey(uint32_t id) const { return str(artistSortKeys_[id]); }
+  const char* albumSortKey(uint32_t id) const { return str(albumSortKeys_[id]); }
   Span albumsOf(uint32_t artist) const {
     return {albumsByArtist_ + artists_[artist].firstAlbum, artists_[artist].albumCount};
   }
@@ -414,8 +421,16 @@ public:
   uint64_t buildStamp() const { return buildStamp_; }
   // Clears every track's source (kSourceMask): two builds of the same files,
   // one from the transfer's records and one from the device's, are then
-  // the same bytes (the conformance test, 2.17 item 5).
+  // the same bytes (the conformance test, 2.17 item 5) when the two
+  // records' lengths fall in the same whole second.
   void forgetSources();
+  // Clears every track's length (durationS): the two producers' lengths of
+  // one file may differ by up to 100 ms (2.17 item 3: the software's reader
+  // doesn't trim an MP3's encoder delay, the device's does), so its length
+  // in whole seconds may differ by one. With forgetSources(), the two
+  // builds are then the same bytes whatever the lengths (the test compares
+  // the lengths apart).
+  void forgetLengths();
 
   // ---- the cache ----
   // Writes the finished index with what it was built from. False: not
@@ -493,6 +508,8 @@ private:
   bool votesReady();
   void dropVotes();
   uint64_t folderHash(uint32_t folder) const;
+  static size_t viewWords(uint32_t nT, uint32_t nA, uint32_t nB, uint32_t nF);
+  void placeViews(uint32_t nT, uint32_t nA, uint32_t nB, uint32_t nF);  // the views' pointers into viewsBlock_
   bool buildViews();
   void resetViews();
   void setReadPointers();
@@ -551,6 +568,8 @@ private:
   uint32_t* tracksByAlbum_ = nullptr;
   uint32_t* folderChildren_ = nullptr;
   uint32_t* folderTree_ = nullptr;   // tracks by folder: depth first, each folder's files A-Z
+  uint32_t* artistSortKeys_ = nullptr;  // per artist: its sort key's string (artistSortKey())
+  uint32_t* albumSortKeys_ = nullptr;   // per album
   uint32_t artistBuckets_[kBuckets + 1] = {};
   uint32_t albumBuckets_[kBuckets + 1] = {};
   Inputs inputs_;

@@ -18,6 +18,7 @@
 
 #include "ByteStream.h"
 #include "CardContract.h"
+#include "JumpIndex.h"
 #include "LibraryIndex.h"
 #include "LibrarySynth.h"
 #include "TextFold.h"
@@ -628,11 +629,13 @@ void expectSameIndex(const LibraryIndex& a, const LibraryIndex& b) {
   for (uint32_t i = 0; i < a.artistCount(); ++i) {
     TEST_ASSERT_EQUAL_UINT32(a.artistsAZ()[i], b.artistsAZ()[i]);
     TEST_ASSERT_EQUAL_STRING(a.artistName(i), b.artistName(i));
+    TEST_ASSERT_EQUAL_STRING(a.artistSortKey(i), b.artistSortKey(i));
     TEST_ASSERT_EQUAL_UINT32(a.albumsOf(i).count, b.albumsOf(i).count);
     TEST_ASSERT_EQUAL_UINT32(a.tracksOfArtist(i).count, b.tracksOfArtist(i).count);
   }
   for (uint32_t i = 0; i < a.albumCount(); ++i) {
     TEST_ASSERT_EQUAL_UINT32(a.albumsAZ()[i], b.albumsAZ()[i]);
+    TEST_ASSERT_EQUAL_STRING(a.albumSortKey(i), b.albumSortKey(i));
     TEST_ASSERT_EQUAL_UINT32(a.tracksOfAlbum(i).count, b.tracksOfAlbum(i).count);
   }
   for (uint32_t f = 0; f < a.folderCount(); ++f) {
@@ -1358,6 +1361,96 @@ void test_stage_a_orders() {
   TEST_ASSERT_EQUAL_INT(textfold::bucketOf('L'), idx.bucketAt(LibraryIndex::View::Artists, 1));
 }
 
+namespace {
+
+// The rail's name of a row, as LibraryPage::railName() gives it: the sort
+// name of the entry's sort key.
+struct RailOf {
+  const LibraryIndex* idx;
+  LibraryIndex::View view;
+};
+const char* railNameOf(void* ctx, uint32_t row) {
+  const RailOf& r = *static_cast<const RailOf*>(ctx);
+  return r.view == LibraryIndex::View::Artists ? textfold::sortName(r.idx->artistSortKey(r.idx->artistsAZ()[row]))
+                                               : textfold::sortName(r.idx->albumSortKey(r.idx->albumsAZ()[row]));
+}
+
+// Every row's rail letter (the UI's) is the bucket the index put it in.
+void expectRailAgrees(const LibraryIndex& idx, LibraryIndex::View view) {
+  RailOf ctx{&idx, view};
+  const uint32_t n = view == LibraryIndex::View::Artists ? idx.artistCount() : idx.albumCount();
+  for (uint32_t row = 0; row < n; ++row)
+    TEST_ASSERT_EQUAL_INT(idx.bucketAt(view, row), textfold::bucketOf(textfold::railKey(railNameOf(&ctx, row))));
+}
+
+}  // namespace
+
+// The sort keys (review of N2): what the A-Z lists sort by is kept with the
+// views, and saved, so the rail, a row's letter and the jump grid key on it
+// as the index's buckets do. Daniel Bowery tagged "Bowery, Daniel" sorts among
+// the B's, and the jump grid finds him there, at both of its levels (keyed
+// on the name shown, B would end at him and D would find none). A sort tag
+// of whitespace alone is no sort tag (5.4's orderName takes the sort tag's
+// nameKey only when it isn't empty), and whitespace around one is dropped.
+void test_sort_keys_are_kept_and_blank_ones_ignored() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  for (const char* a : {"Amber Fold", "Bartleby Pines", "Basalt", "Bayou Nine", "Brine Choir", "Burrow", "Copper Lane"})
+    TEST_ASSERT_EQUAL_INT(0, static_cast<int>(idx.addFile((std::string("/music/") + a + "/Album/01 - x.mp3").c_str())));
+  idx.addRecord("/music/Daniel Bowery/Night Ferry/01 - x.mp3",
+                View().artist("Daniel Bowery").artistSort("Bowery, Daniel").album("Night Ferry").v);
+  // A lone tab is stored as one space (2.3.6): not a sort tag.
+  idx.addRecord("/music/Zephyr Kite/Zebra/01 - x.mp3",
+                View().artist("Zephyr Kite").artistSort(" ").album("Zebra").albumSort(" ").v);
+  idx.addRecord("/music/Zephyr Kite/Yonder/01 - x.mp3",
+                View().artist("Zephyr Kite").album("Yonder").albumSort("  Alpha\t").v);
+  TEST_ASSERT_TRUE(idx.finish());
+
+  const char* artists[] = {"Amber Fold",  "Bartleby Pines", "Basalt",      "Bayou Nine", "Daniel Bowery",
+                           "Brine Choir", "Burrow",         "Copper Lane", "Zephyr Kite"};
+  const LibraryIndex::Span az = idx.artistsAZ();
+  TEST_ASSERT_EQUAL_UINT32(9, az.count);
+  for (uint32_t i = 0; i < az.count; ++i) TEST_ASSERT_EQUAL_STRING(artists[i], idx.artistName(az[i]));
+  TEST_ASSERT_EQUAL_STRING("Bowery, Daniel", idx.artistSortKey(az[4]));
+  TEST_ASSERT_EQUAL_STRING("Zephyr Kite", idx.artistSortKey(az[8]));  // not " ": not first, under '#'
+  TEST_ASSERT_EQUAL_STRING("Amber Fold", idx.artistSortKey(az[0]));
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('B'), idx.bucketAt(LibraryIndex::View::Artists, 4));
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('Z'), idx.bucketAt(LibraryIndex::View::Artists, 8));
+  const char* albums[] = {"Album", "Album", "Album",  "Album",       "Album",
+                          "Album", "Album", "Yonder", "Night Ferry", "Zebra"};
+  const LibraryIndex::Span bz = idx.albumsAZ();
+  TEST_ASSERT_EQUAL_UINT32(10, bz.count);
+  for (uint32_t i = 0; i < bz.count; ++i) TEST_ASSERT_EQUAL_STRING(albums[i], idx.albumName(bz[i]));
+  TEST_ASSERT_EQUAL_STRING("Alpha", idx.albumSortKey(bz[7]));  // "  Alpha\t": trimmed, under A
+  TEST_ASSERT_EQUAL_STRING("Zebra", idx.albumSortKey(bz[9]));  // " ": its name
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('A'), idx.bucketAt(LibraryIndex::View::Albums, 7));
+
+  // Saved and loaded: the keys come back, and the UI's letters, the jump
+  // grid and the buckets agree.
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, 5));
+  LibraryIndex back(Heap::alloc, Heap::release);
+  MemorySource in(file.data(), file.size());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(in, 5)));
+  expectSameIndex(idx, back);
+  for (const LibraryIndex* x : {static_cast<const LibraryIndex*>(&idx), static_cast<const LibraryIndex*>(&back)}) {
+    expectRailAgrees(*x, LibraryIndex::View::Artists);
+    expectRailAgrees(*x, LibraryIndex::View::Albums);
+    RailOf ctx{x, LibraryIndex::View::Artists};
+    int32_t first[jump::kCells], end[jump::kCells];
+    jump::letters(x->artistCount(), railNameOf, &ctx, first, end);
+    const int b = textfold::bucketOf('B'), c = textfold::bucketOf('C'), d = textfold::bucketOf('D');
+    TEST_ASSERT_EQUAL_INT32(1, first[b]);
+    TEST_ASSERT_EQUAL_INT32(7, end[b]);  // Bartleby Pines to Burrow, Bowery among them
+    TEST_ASSERT_EQUAL_INT32(static_cast<int32_t>(x->bucketStart(LibraryIndex::View::Artists, c)), first[c]);
+    TEST_ASSERT_EQUAL_INT32(-1, first[d]);
+    int32_t second[jump::kCells];
+    jump::seconds(1, 7, railNameOf, &ctx, second);
+    TEST_ASSERT_EQUAL_INT32(4, second['o' - 'a' + 1]);  // "Bo": Bowery
+    TEST_ASSERT_EQUAL_INT32(5, second['r' - 'a' + 1]);  // "Br": Brine Choir
+  }
+}
+
 // The library roots (the transfer's LIBR, 2.8.6): a file's artist and album
 // are its folders at depths 1 and 2 below the longest root that holds it.
 void test_library_roots() {
@@ -1630,6 +1723,7 @@ int main(int, char**) {
   RUN_TEST(test_album_votes_on_its_first_512_tracks);
   RUN_TEST(test_artist_display_names);
   RUN_TEST(test_stage_a_orders);
+  RUN_TEST(test_sort_keys_are_kept_and_blank_ones_ignored);
   RUN_TEST(test_library_roots);
   RUN_TEST(test_inputs_of_the_cache);
   RUN_TEST(test_folder_facts_and_thumbnails);

@@ -1590,6 +1590,8 @@ the browsing UI hold its **track ids**, never strings.
   tracks (a title of their own when a tag's isn't inside the file name, the
   record's artist, a 16-bit number, the length, where the names came
   from), 28-byte albums (the elected artist line, year, discs, `kLoose`),
+  each artist's and album's sort key with the views (the Library's rail,
+  row letters and jump grid key on it, as the A-Z order does),
   the strings in 64 KB chunks, and a header with what the index was built
   from (the transfer's identity, D's checksum, and today's walk signature).
   A cache of versions 1-5 is `Outdated` and rebuilt once. The firmware
@@ -1770,6 +1772,12 @@ the browsing UI hold its **track ids**, never strings.
   rebuild that leaves no library (out of PSRAM, or a card that went away)
   isn't taken as the queue changing: what survives stays in memory,
   playback stops if its track is gone, and `queue.txt` isn't rewritten.
+  The file then holds more than the queue (as after a boot with no
+  library, or a queue that couldn't come across), so the queue's moves
+  aren't saved as the file's position, and the next rebuild (Try again,
+  `g0`) reads the whole file back from its own line, as a boot would
+  (`QueueSaver::keptFile()`); whether the track that plays is still the
+  current one goes by its path.
   `assign()` gives the queue a block of exactly its size and no undo
   snapshot (the boot's restore, the whole-library default), and blocks
   past 4,096 entries grow by an eighth rather than doubling.

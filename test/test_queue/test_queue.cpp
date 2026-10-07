@@ -1649,6 +1649,9 @@ void test_v2_empty_shuffled_queue() {
 
 // ---- QueueSaver (app/QueueStore's timing, the card replaced by memory) ----
 
+void settle(QueueSaver& saver, uint32_t from);
+QueueSaver::Transport pausedAt(uint32_t ms, uint32_t dur = 0);
+
 // The card and NVS, in memory: the temporary file, the queue file, the
 // saved position; each can be told to fail.
 struct MemStore : QueueSaver::Store {
@@ -1877,9 +1880,11 @@ void test_flush_now_that_fails_keeps_the_last_file() {
   TEST_ASSERT_TRUE(saver.busy());
 }
 
-// A write dropped for a library rebuild (remap), and the queue then marked
-// saved: nothing is written.
-void test_saver_abort_and_mark_saved() {
+// A write dropped for a library rebuild (remap), and the queue then kept
+// as less than the file (a rebuild that left no library): nothing is
+// written, and its moves don't touch the file's line or the resume point
+// (they aren't the file's lines); an edit makes the queue the file's again.
+void test_saver_abort_and_kept_file() {
   LibraryIndex idx;
   build(idx, {std::begin(kFiles), std::end(kFiles)});
   TrackCatalog c(&idx);
@@ -1887,22 +1892,45 @@ void test_saver_abort_and_mark_saved() {
   MemStore st;
   QueueSaver saver(st, q, c);
   saver.loaded(1, false, 0);
+  TEST_ASSERT_TRUE(saver.fileIsQueue());
   fillLong(q);
   saver.loop(10);
   saver.loop(2100);
   saver.abort();
   TEST_ASSERT_FALSE(saver.writing());
   TEST_ASSERT_EQUAL_INT(1, st.discards);
-  saver.markSaved();
+  saver.keptFile(1, 37);
+  TEST_ASSERT_FALSE(saver.fileIsQueue());
+  TEST_ASSERT_EQUAL_INT(37, saver.fileLine());
   TEST_ASSERT_FALSE(saver.busy());
   TEST_ASSERT_TRUE(saver.flushNow(3000));
   TEST_ASSERT_EQUAL_INT(0, st.commits);
+  // A move, a pause: nothing saved, and nothing left waiting.
+  const int positions = st.positions, resumes = st.resumes;
+  q.step(1, true);
+  saver.noteTransport(pausedAt(42000));
+  for (uint32_t t = 3000; t < 8000; t += 100) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(positions, st.positions);
+  TEST_ASSERT_EQUAL_INT(resumes, st.resumes);
+  TEST_ASSERT_FALSE(saver.busy());
+  TEST_ASSERT_TRUE(saver.flushNow(8000));
+  TEST_ASSERT_EQUAL_INT(37, saver.fileLine());
+  // An edit: written (the listener's queue now), its position with it.
+  const uint32_t first = 0;
+  q.remove(&first, 1);
+  settle(saver, 9000);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_TRUE(saver.fileIsQueue());
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  TEST_ASSERT_EQUAL_INT(q.current(), saver.fileLine());
+  TEST_ASSERT_TRUE(st.resume.valid);  // and the resume point, paired with the new file
+  TEST_ASSERT_EQUAL_UINT32(2, st.resume.generation);
 }
 
 
 // ---- the resume point (QueueSaver, the second an entry picks up at) ----
 
-QueueSaver::Transport pausedAt(uint32_t ms, uint32_t dur = 0) {
+QueueSaver::Transport pausedAt(uint32_t ms, uint32_t dur) {
   QueueSaver::Transport t;
   t.have = true;
   t.positionMs = ms;
@@ -2877,6 +2905,165 @@ void test_remap_through_memory_when_the_card_cant_take_the_file() {
   TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 5).c_str(), st.file.c_str());
 }
 
+// ---- the file holding more than the queue (review of N3) ----
+
+// After a rebuild that left no library, the queue is the built-in tracks
+// and queue.txt keeps the whole queue. The listener plays the second tone:
+// a move of that queue, not of the file's lines, so the file's line (NVS)
+// stays at the library track that played. The next rebuild brings the
+// library back and reads the whole file from that line, as the next boot
+// would: the queue is back where it was, what plays is its current entry,
+// and the start point and NVS agree with it.
+void test_remap_after_a_rebuild_with_no_library() {
+  constexpr uint32_t kN = 60;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kN));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  QuietBackend audio;
+  PlaybackController player(audio, q, c);
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  const LibraryIndex::Span all = idx.allTracks();
+  TEST_ASSERT_TRUE(q.assign(all.ids, all.count, 0));
+  const uint32_t tones[] = {TrackCatalog::kBuiltin + 2, TrackCatalog::kBuiltin + 4};
+  q.append(tones, 2);  // lines 60 and 61
+  saver.loaded(2, true, 0);
+  settle(saver, 0);
+  player.play(10);
+  settle(saver, 10000);
+  const std::string file = st.file;
+  const std::vector<std::string> whole = paths(q, c);
+  TEST_ASSERT_EQUAL_INT(10, st.pos);
+
+  MemCard none(saver, st, player, [&] {
+    idx.clear();
+    return false;
+  });
+  queueremap::Result r = queueremap::run(q, saver, player, c, none, 20000);
+  TEST_ASSERT_TRUE(r.noLibrary);
+  TEST_ASSERT_EQUAL_UINT32(2, q.size());
+  TEST_ASSERT_FALSE(saver.fileIsQueue());
+  TEST_ASSERT_EQUAL_INT(10, saver.fileLine());
+  // The second tone plays (the queue's entry 1, the file's line 61).
+  player.play(1);
+  TEST_ASSERT_EQUAL_STRING(pathOf(c, q.currentTrack()).c_str(), audio.lastPath.c_str());
+  for (uint32_t t = 20000; t < 30000; t += 100) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(10, st.pos);  // not 1: that's library track 1's line
+  TEST_ASSERT_EQUAL_STRING(file.c_str(), st.file.c_str());
+
+  MemCard back(saver, st, player, [&] { return buildSynth(idx, kN); });
+  r = queueremap::run(q, saver, player, c, back, 40000);
+  TEST_ASSERT_TRUE(r.read.ok);
+  TEST_ASSERT_FALSE(r.noLibrary);
+  TEST_ASSERT_TRUE(paths(q, c) == whole);
+  TEST_ASSERT_EQUAL_INT(10, q.current());
+  // Not the tone any more: playing, the queue's current entry starts.
+  TEST_ASSERT_FALSE(r.read.currentKept);
+  TEST_ASSERT_EQUAL_STRING(whole[10].c_str(), pathOf(c, q.currentTrack()).c_str());
+  TEST_ASSERT_EQUAL_STRING(pathOf(c, q.currentTrack()).c_str(), audio.lastPath.c_str());
+  TEST_ASSERT_TRUE(saver.fileIsQueue());
+  settle(saver, 40000);
+  TEST_ASSERT_EQUAL_STRING(file.c_str(), st.file.c_str());  // the same queue: not written again
+  TEST_ASSERT_EQUAL_INT(10, st.pos);
+  TEST_ASSERT_EQUAL_UINT32(saver.generation(), st.posGeneration);
+}
+
+// "Try again" after a boot with no library: restore() left the queue empty
+// and the file whole, with its line from NVS (25, not the header's 0).
+// The rebuild reads the whole queue back at that line, as the boot would
+// have, and NVS still agrees.
+void test_remap_after_a_boot_with_no_library() {
+  constexpr uint32_t kN = 40;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kN));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  QuietBackend audio;
+  PlaybackController player(audio, q, c);
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  const LibraryIndex::Span all = idx.allTracks();
+  TEST_ASSERT_TRUE(q.assign(all.ids, all.count, 0));
+  st.file = wholeText(q, c, 6);  // its header: line 0
+  const std::vector<std::string> whole = paths(q, c);
+  st.posGeneration = 6;  // a move saved since: line 25
+  st.pos = 25;
+  // The boot: no library this time. QueueStore::restore() reads the file
+  // with the position from NVS, and keeps the file.
+  idx.clear();
+  struct Nvs {
+    uint32_t generation;
+    int32_t position;
+  } nvs{6, 25};
+  MemorySource in(st.file.data(), st.file.size());
+  const queuetext::Restored b = queuetext::read(
+      in, c, q,
+      [](const queuetext::Header& h, void* ctx) {
+        const Nvs& n = *static_cast<const Nvs*>(ctx);
+        return n.generation == h.generation ? n.position : h.current;
+      },
+      &nvs);
+  TEST_ASSERT_TRUE(b.ok);
+  TEST_ASSERT_EQUAL_UINT32(0, q.size());
+  saver.setGeneration(6);
+  saver.keptFile(6, 25);
+  player.queueReplaced(b.currentKept);
+  for (uint32_t t = 0; t < 5000; t += 100) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(25, st.pos);
+
+  MemCard card(saver, st, player, [&] { return buildSynth(idx, kN); });
+  const queueremap::Result r = queueremap::run(q, saver, player, c, card, 10000);
+  TEST_ASSERT_TRUE(r.read.ok);
+  TEST_ASSERT_TRUE(paths(q, c) == whole);
+  TEST_ASSERT_EQUAL_INT(25, q.current());
+  TEST_ASSERT_EQUAL_STRING(whole[25].c_str(), pathOf(c, q.currentTrack()).c_str());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(PlayState::Stopped), static_cast<int>(player.state()));
+  for (uint32_t t = 10000; t < 20000; t += 100) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(25, st.pos);
+  TEST_ASSERT_EQUAL_UINT32(6, st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(0, st.commits);  // the file was already this queue
+}
+
+// A queue that couldn't come back (the file gone during the rebuild) is
+// cleared, and the file keeps the last queue saved with its line (30). The
+// next rebuild that finds the file brings it back at that line, which is
+// where NVS says the next boot would start.
+void test_remap_after_a_cleared_queue() {
+  constexpr uint32_t kN = 40;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kN));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  QuietBackend audio;
+  PlaybackController player(audio, q, c);
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  const LibraryIndex::Span all = idx.allTracks();
+  TEST_ASSERT_TRUE(q.assign(all.ids, all.count, 0));
+  saver.loaded(2, true, 0);
+  settle(saver, 0);
+  q.setCurrent(30);
+  for (uint32_t t = 10000; t < 15000; t += 100) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(30, st.pos);
+  const std::vector<std::string> whole = paths(q, c);
+
+  MemCard gone(saver, st, player, [&] { return buildSynth(idx, kN); });
+  gone.fileGone = true;
+  queueremap::Result r = queueremap::run(q, saver, player, c, gone, 20000);
+  TEST_ASSERT_FALSE(r.read.ok);
+  TEST_ASSERT_TRUE(q.empty());
+  TEST_ASSERT_FALSE(saver.fileIsQueue());
+  TEST_ASSERT_EQUAL_INT(30, saver.fileLine());
+
+  MemCard back(saver, st, player, [&] { return buildSynth(idx, kN); });
+  r = queueremap::run(q, saver, player, c, back, 30000);
+  TEST_ASSERT_TRUE(r.read.ok);
+  TEST_ASSERT_TRUE(paths(q, c) == whole);
+  TEST_ASSERT_EQUAL_INT(30, q.current());
+  TEST_ASSERT_EQUAL_INT(st.pos, q.current());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -2930,7 +3117,7 @@ int main(int, char**) {
   RUN_TEST(test_flush_now_after_an_edit_during_the_write);
   RUN_TEST(test_flush_now_writes_an_edit_at_once);
   RUN_TEST(test_flush_now_that_fails_keeps_the_last_file);
-  RUN_TEST(test_saver_abort_and_mark_saved);
+  RUN_TEST(test_saver_abort_and_kept_file);
   RUN_TEST(test_resume_point_saved_at_a_pause_and_cleared_when_it_plays);
   RUN_TEST(test_resume_point_waits_for_the_file_and_follows_its_entry);
   RUN_TEST(test_flush_now_saves_the_resume_point);
@@ -2949,5 +3136,8 @@ int main(int, char**) {
   RUN_TEST(test_remap_carries_the_resume_point);
   RUN_TEST(test_remap_and_the_undo_snapshot);
   RUN_TEST(test_remap_through_memory_when_the_card_cant_take_the_file);
+  RUN_TEST(test_remap_after_a_rebuild_with_no_library);
+  RUN_TEST(test_remap_after_a_boot_with_no_library);
+  RUN_TEST(test_remap_after_a_cleared_queue);
   return UNITY_END();
 }

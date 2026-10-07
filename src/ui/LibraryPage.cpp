@@ -521,15 +521,17 @@ const char* LibraryPage::rowName(uint32_t row) const {
   }
 }
 
-// The artists and albums sort past a leading "The" (textfold::sortName():
-// "The Lantern Choir" under L), so their rail and jump grid go by that; the
+// The artists and albums sort by their sort keys (a sort tag, else the
+// name) past a leading "The" (textfold::sortName(): "The Lantern Choir"
+// under L, "Daniel Bowery" tagged "Bowery, Daniel" under B), so their rail, their
+// rows' letters and the jump grid go by that, as the index's buckets do; the
 // folders sort by their names as they are.
 const char* LibraryPage::railName(uint32_t row) {
   const LibraryIndex* i = index();
   if (!i) return "";
   const RowRef r = rowAt(row);
-  if (r.kind == RowKind::Artist) return textfold::sortName(i->artistName(r.id));
-  if (r.kind == RowKind::Album) return textfold::sortName(i->albumName(r.id));
+  if (r.kind == RowKind::Artist) return textfold::sortName(i->artistSortKey(r.id));
+  if (r.kind == RowKind::Album) return textfold::sortName(i->albumSortKey(r.id));
   return rowName(row);
 }
 
@@ -594,7 +596,7 @@ void LibraryPage::drawRow(ListView::Row& r) {
       const char* name = i->artistName(rr.id);
       const LibraryIndex::Artist& a = i->artist(rr.id);
       // The initial is the row's rail letter ("The Lantern Choir": L, among the L's).
-      const int x = ListView::disc(r, textfold::railKey(textfold::sortName(name)), discColour(name));
+      const int x = ListView::disc(r, textfold::railKey(textfold::sortName(i->artistSortKey(rr.id))), discColour(name));
       const int right = ListView::chevron(r);
       snprintf(sub, sizeof(sub), "%lu album%s, %lu tracks", static_cast<unsigned long>(a.albumCount),
                a.albumCount == 1 ? "" : "s", static_cast<unsigned long>(a.trackCount));

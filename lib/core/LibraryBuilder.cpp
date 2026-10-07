@@ -168,11 +168,21 @@ LibraryBuilder::Outcome LibraryBuilder::attempt(LibraryIndex& index, const Confi
   const bool parserOk = di && di->parserVersion >= c.minParser && di->readRules >= mptg::kReadRules;
 
   // The blocks from the headers' counts (upper bounds: T's records include
-  // its non-audio files, and when both list, their union is at most the
-  // sum). The strings take 64 KB chunks as they come.
+  // its non-audio files). When both list, the files are T's and D's rows
+  // that aren't Software rows (those are T's files, or dropped): D's own
+  // counts when its statuses give them, else all of D. The strings take
+  // 64 KB chunks as they come.
+  uint32_t dRecords = di ? di->recordCount : 0, dFolders = di ? di->folderCount : 0;
+  if (tLists && di && c.rows) {
+    uint32_t ownRecords = 0, ownFolders = 0;
+    if (c.rows->ownCounts(&ownRecords, &ownFolders)) {
+      dRecords = std::min(dRecords, ownRecords);
+      dFolders = std::min(dFolders, ownFolders);
+    }
+  }
   LibraryIndex::Sizing s;
-  s.tracks = (di ? di->recordCount : 0) + (tLists ? ti->recordCount : 0);
-  s.folders = (di ? di->folderCount : 0) + (tLists ? ti->folderCount : 0);
+  s.tracks = dRecords + (tLists ? ti->recordCount : 0);
+  s.folders = dFolders + (tLists ? ti->folderCount : 0);
   s.firstChunk = s.tracks * 40 + 1024;
   if (!index.begin(s, c.root, c.libraryRoots, c.libraryRootCount)) return Outcome::NoMemory;
   w.rootLen = std::strlen(c.root);

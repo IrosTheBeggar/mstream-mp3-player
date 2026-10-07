@@ -99,15 +99,21 @@ bool QueueStore::restore() {
       continue;
     }
     player_.queueReplaced(r.currentKept);
+    const bool fromNvs = saved.have && saved.generation == r.header.generation;
+    const int32_t line = fromNvs ? saved.position : r.header.current;  // the line pickCurrent() took
     // Tracks that are gone, or a file from the wrong name: write it again.
-    // (Not for tracks dropped because there's no library at all this time,
-    // a card that failed to read, say: the file keeps them for next time.)
+    // Not for tracks dropped because there's no library at all this time (a
+    // card that failed to read, say): the file keeps them, and its line,
+    // for when the library is back (the next boot, or the rebuild of "Try
+    // again", which reads the file again from that line: QueueRemap).
     const LibraryIndex* index = catalog_.index();
-    const bool rewrite = (r.dropped > 0 && index && index->ready()) || path == temp;
     const uint32_t generation =
         r.header.generation > saved.generation ? r.header.generation : saved.generation;
-    saver_.loaded(generation, rewrite, millis());
-    const bool fromNvs = saved.have && saved.generation == r.header.generation;
+    if (r.dropped > 0 && !(index && index->ready())) {
+      saver_.keptFile(generation, line);
+    } else {
+      saver_.loaded(generation, r.dropped > 0 || path == temp, millis());
+    }
     Serial.printf("[queue] restored %lu of %lu tracks from %s (%lu no longer there), at %d of %lu (position from %s)%s\n",
                   (unsigned long)r.entries, (unsigned long)r.lines, path, (unsigned long)r.dropped,
                   queue_.current() + 1, (unsigned long)queue_.size(), fromNvs ? "NVS" : "the file",
@@ -117,7 +123,6 @@ bool QueueStore::restore() {
     if (resume.valid) {
       char current[TrackCatalog::kMaxPath];
       catalog_.path(queue_.currentTrack(), current, sizeof(current));
-      const int32_t line = fromNvs ? saved.position : r.header.current;
       char at[12];
       mmss(resume.positionMs, at, sizeof(at));
       if (QueueSaver::resumeApplies(resume, r.header.generation, line, r.currentKept, current)) {
@@ -276,6 +281,9 @@ bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
       char file[48], temp[48];
       store_.paths(file, temp, sizeof(file));
       file_ = store_.storage_.fs().open(file, FILE_READ);
+      // Only queue.tmp: power went between removing queue.txt and the
+      // rename, and a boot with no library kept it as it was (restore()).
+      if (!file_) file_ = store_.storage_.fs().open(temp, FILE_READ);
       return file_ ? &source_ : nullptr;
     }
     void closeFile() override { file_.close(); }

@@ -13,8 +13,12 @@
 // Run: pio test -e native
 #include <unity.h>
 
+#include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <map>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -186,11 +190,24 @@ void test_skew_rule() {
     const Value& groups = v[i]["groups"];
     for (size_t g = 0; g < groups.size(); ++g)
       for (uint64_t k = 0; k < groups[g]["count"].u64(); ++k) {
-        const uint32_t rec = cc::fatTimeFromWall(base + 2 * 86400 * static_cast<int64_t>(pairs.size()));
-        pairs.emplace_back(rec, cc::fatTimeFromWall(cc::fatWallSeconds(rec) + groups[g]["delta"].i64()));
+        uint32_t rec = cc::fatTimeFromWall(base + 2 * 86400 * static_cast<int64_t>(pairs.size()));
+        const int64_t delta = groups[g].has("delta") ? groups[g]["delta"].i64() : 0;
+        uint32_t obs = cc::fatTimeFromWall(cc::fatWallSeconds(rec) + delta);
+        // A group may pin either stamp: a 0, or an invalid one.
+        if (groups[g].has("recorded")) rec = static_cast<uint32_t>(hexOf(groups[g]["recorded"]));
+        if (groups[g].has("observed")) obs = static_cast<uint32_t>(hexOf(groups[g]["observed"]));
+        pairs.emplace_back(rec, obs);
       }
     cc::SkewHistogram h;
-    for (auto& p : pairs) TEST_ASSERT_TRUE(h.add(p.first, p.second));
+    uint32_t counted = 0;
+    for (auto& p : pairs) {
+      // Left out (false) exactly when a stamp is 0 or invalid.
+      const bool valid = cc::fatTimeValid(p.first) && cc::fatTimeValid(p.second);
+      TEST_ASSERT_EQUAL(valid, h.add(p.first, p.second));
+      counted += valid ? 1 : 0;
+    }
+    TEST_ASSERT_EQUAL_UINT32(counted, h.pairs());
+    TEST_ASSERT_FALSE(h.needsRecount());
     TEST_ASSERT_EQUAL_INT32(v[i]["skew"].i64(), h.skew());
     int matching = 0;
     for (auto& p : pairs) matching += cc::timeMatches(p.first, p.second, h.skew()) ? 1 : 0;
@@ -217,17 +234,118 @@ void test_skew_rule() {
   TEST_ASSERT_EQUAL_INT32(86400, day.skew());
   for (int k = 0; k < 9; ++k) over.add(t, cc::fatTimeFromWall(cc::fatWallSeconds(t) + 87300));
   TEST_ASSERT_EQUAL_INT32(0, over.skew());
-  // Full histogram: a new delta counts only in the total, so a card of
-  // 300 distinct deltas and 10 at +3,600 has no skew (10 < half).
+  // More distinct deltas than the slots: 300 distinct and 10 at +3,600 has
+  // no skew (10 < half), recounted or not.
   cc::SkewHistogram full;
   for (int k = 0; k < 300; ++k) full.add(t, cc::fatTimeFromWall(cc::fatWallSeconds(t) + 2 * (k + 1)));
   for (int k = 0; k < 10; ++k) full.add(t, cc::fatTimeFromWall(cc::fatWallSeconds(t) + 3600));
   TEST_ASSERT_EQUAL_UINT32(310, full.pairs());
+  TEST_ASSERT_TRUE(full.needsRecount());
   TEST_ASSERT_EQUAL_INT32(0, full.skew());
   // A delta over FAT's whole range fits (delta / 2 in an i32).
   cc::SkewHistogram wide;
   TEST_ASSERT_TRUE(wide.add(cc::fatTime(1980, 1, 1, 0, 0, 0), cc::fatTime(2107, 12, 31, 23, 59, 58)));
   TEST_ASSERT_EQUAL_INT32(0, wide.skew());
+}
+
+namespace {
+
+// 2.3.4 as written, with no cap: the reference for the summary.
+int32_t skewReference(const std::vector<int64_t>& deltas, uint32_t pairs) {
+  std::map<int64_t, uint32_t> counts;
+  for (int64_t d : deltas)
+    if (d) ++counts[d];
+  int64_t best = 0;
+  uint32_t c = 0;
+  for (const auto& kv : counts) {
+    const int64_t d = kv.first, ad = d < 0 ? -d : d, ab = best < 0 ? -best : best;
+    if (kv.second > c || (kv.second == c && (ad < ab || (ad == ab && d < best)))) {
+      best = d;
+      c = kv.second;
+    }
+  }
+  if (c < 8 || static_cast<uint64_t>(c) * 2 < pairs || best > 86400 || best < -86400 || best % 900) return 0;
+  return static_cast<int32_t>(best);
+}
+
+// The deltas through a histogram: its skew with no second pass, and with one.
+struct SkewRun {
+  int32_t first = 0, recounted = 0;
+  bool needed = false;
+};
+SkewRun runSkew(const std::vector<int64_t>& deltas) {
+  const uint32_t t = cc::fatTime(2026, 3, 29, 1, 15, 0);
+  const int64_t w = cc::fatWallSeconds(t) + 200000;  // room either way
+  cc::SkewHistogram h;
+  for (int64_t d : deltas) TEST_ASSERT_TRUE(h.add(cc::fatTimeFromWall(w), cc::fatTimeFromWall(w + d)));
+  SkewRun r;
+  r.first = h.skew();
+  r.needed = h.needsRecount();
+  h.beginRecount();
+  for (int64_t d : deltas) h.recount(d);
+  TEST_ASSERT_FALSE(h.needsRecount());
+  r.recounted = h.skew();
+  return r;
+}
+
+}  // namespace
+
+// The histogram's 256 slots against 2.3.4 with no cap (review of N1): 256
+// retouched files with 256 different deltas, then 300 under a +3,600 shift,
+// give +3,600 in either order (a capped table that kept the first 256 deltas
+// it saw lost it); at exactly half the pairs, the order can hide it until the
+// recount; random cards agree with the rule after the recount, and without
+// one never give another skew.
+void test_skew_summary_is_order_free() {
+  std::vector<int64_t> retouched, shifted(300, 3600);
+  for (int k = 0; k < 256; ++k) retouched.push_back(2 * (k + 1) + 7200);
+  std::vector<int64_t> a = retouched, b = shifted;
+  a.insert(a.end(), shifted.begin(), shifted.end());
+  b.insert(b.end(), retouched.begin(), retouched.end());
+  for (const auto* d : {&a, &b}) {
+    TEST_ASSERT_EQUAL_INT32(3600, skewReference(*d, static_cast<uint32_t>(d->size())));
+    const SkewRun r = runSkew(*d);
+    TEST_ASSERT_EQUAL_INT32(3600, r.first);
+    TEST_ASSERT_EQUAL_INT32(3600, r.recounted);
+  }
+  // 300 at +3,600 and 300 distinct: exactly half. Shifted first, the 256th
+  // distinct delta takes one from its count (299 < 300): no skew until the
+  // recount counts it again.
+  std::vector<int64_t> c(300, 3600), d;
+  for (int k = 0; k < 300; ++k) d.push_back(2 * (k + 1) + 7200);
+  std::vector<int64_t> half = c;
+  half.insert(half.end(), d.begin(), d.end());
+  TEST_ASSERT_EQUAL_INT32(3600, skewReference(half, 600));
+  const SkewRun h = runSkew(half);
+  TEST_ASSERT_TRUE(h.needed);
+  TEST_ASSERT_EQUAL_INT32(0, h.first);
+  TEST_ASSERT_EQUAL_INT32(3600, h.recounted);
+  // Random cards: a shift (or none), retouched files, matches; every other
+  // one with the shift at about half the pairs and more than 256 distinct
+  // retouches, where the order matters to the summary.
+  std::mt19937 rng(20261007);
+  int found = 0, hidden = 0;
+  for (int iter = 0; iter < 400; ++iter) {
+    std::vector<int64_t> ds;
+    const int64_t shift = (static_cast<int64_t>(rng() % 9) - 4) * 900;
+    const bool edge = iter % 2 != 0;
+    const uint32_t nRetouch = edge ? 260 + rng() % 500 : rng() % 700, nSame = rng() % (edge ? 40 : 200);
+    const uint32_t spread = edge ? 5000 : 1 + rng() % 2000;
+    const uint32_t nShift = edge ? nRetouch + nSame + rng() % 7 - 3 : rng() % 700;
+    for (uint32_t k = 0; k < nShift; ++k) ds.push_back(shift);
+    for (uint32_t k = 0; k < nRetouch; ++k) ds.push_back(2 * (1 + static_cast<int64_t>(rng() % spread)) + 90000);
+    for (uint32_t k = 0; k < nSame; ++k) ds.push_back(0);
+    std::shuffle(ds.begin(), ds.end(), rng);
+    const int32_t want = skewReference(ds, static_cast<uint32_t>(ds.size()));
+    const SkewRun r = runSkew(ds);
+    TEST_ASSERT_EQUAL_INT32(want, r.recounted);
+    TEST_ASSERT_TRUE(r.first == want || r.first == 0);
+    if (!r.needed) TEST_ASSERT_EQUAL_INT32(want, r.first);
+    found += want != 0 ? 1 : 0;
+    hidden += want != 0 && r.first == 0 ? 1 : 0;
+  }
+  TEST_ASSERT_TRUE(found > 50);  // the cases are worth something
+  printf("[skew] 400 random cards: %d with a skew, %d of them settled only by the recount\n", found, hidden);
 }
 
 void test_number_rule() {
@@ -668,6 +786,7 @@ int main(int, char**) {
   RUN_TEST(test_qfp);
   RUN_TEST(test_fat_time);
   RUN_TEST(test_skew_rule);
+  RUN_TEST(test_skew_summary_is_order_free);
   RUN_TEST(test_number_rule);
   RUN_TEST(test_hash_sampled);
   RUN_TEST(test_text_decoders);

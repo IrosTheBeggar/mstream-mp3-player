@@ -276,14 +276,46 @@ bool SkewHistogram::add(uint32_t recorded, uint32_t observed) {
     half_[n_] = half;
     count_[n_] = 1;
     ++n_;
+    return true;
   }
+  // Every slot taken: one from each count, the slots at 0 freed, and this
+  // delta not kept (Misra-Gries). (add() is the first pass: it comes before
+  // any recount.)
+  summary_ = true;
+  uint32_t kept = 0;
+  for (uint32_t i = 0; i < n_; ++i) {
+    if (--count_[i] == 0) continue;
+    half_[kept] = half_[i];
+    count_[kept] = count_[i];
+    ++kept;
+  }
+  n_ = kept;
   return true;
+}
+
+void SkewHistogram::beginRecount() {
+  for (uint32_t i = 0; i < n_; ++i) count_[i] = 0;
+  recounted_ = true;
+}
+
+void SkewHistogram::recount(int64_t delta) {
+  if (!recounted_ || delta == 0) return;
+  const int32_t half = static_cast<int32_t>(delta / 2);
+  for (uint32_t i = 0; i < n_; ++i) {
+    if (half_[i] == half) {
+      ++count_[i];
+      return;
+    }
+  }
 }
 
 int32_t SkewHistogram::skew() const {
   // The most frequent non-zero delta; ties to the smaller |D|, then the
   // negative one. Only that one is tried: when it fails a condition there is
-  // no skew (a second choice would be a guess).
+  // no skew (a second choice would be a guess). On a summary not counted
+  // again, the counts are lower bounds, so a delta passing with its own is D
+  // (half the pairs: no other delta can tie it, more than 256 others came)
+  // and anything else is no skew.
   uint32_t best = n_;
   for (uint32_t i = 0; i < n_; ++i) {
     if (best == n_) {

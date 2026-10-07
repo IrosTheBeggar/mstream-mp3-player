@@ -124,11 +124,25 @@ uint32_t fatTimeFromWall(int64_t w);
 // match: add() each (recorded, observed) pair; skew() is D, or 0 for no skew.
 // D is the most frequent non-zero delta (ties: the smaller |D|, then the
 // negative one), and only when at least 8 pairs have it, they are at least
-// half of all the pairs, |D| <= 86,400 and D is a multiple of 900. At most
-// kMaxDeltas distinct deltas are kept (2 KB: a delta is even, so delta / 2
-// fits an i32 over FAT's 128 years); a delta first seen when they are all
-// taken counts only in the total, so a pathological card falls to qfp, never
-// to a wrong skew.
+// half of all the pairs, |D| <= 86,400 and D is a multiple of 900.
+//
+// In fixed memory (2 KB: kMaxDeltas slots, each a delta / 2, which fits an
+// i32 over FAT's 128 years since a delta is even, and its count), and the
+// same answer whatever order the pairs come in. While at most kMaxDeltas
+// distinct deltas have come, the counts are exact. Past that the slots are a
+// Misra-Gries summary: a new delta when every slot is taken takes one from
+// each slot's count (a slot at 0 is freed) and isn't kept itself. A delta
+// that more than 1/257 of the pairs have is then still in a slot, with a
+// count low by at most what was taken; D needs half the pairs, so it is
+// always there. Hence:
+//   - needsRecount() false: skew() is 2.3.4's exactly;
+//   - needsRecount() true and no second pass: skew() is D when its count, as
+//     low as it may be, still passes the rule (a delta that has half the
+//     pairs is the only one that can), else no skew. Never a wrong skew; a
+//     card the summary can't settle falls to qfp;
+//   - the second pass, beginRecount() then recount() with every pair's delta
+//     again (the walk's pass over its Doubtful entries, 3.2.3), counts the
+//     slots exactly, and skew() is then 2.3.4's exactly.
 class SkewHistogram {
 public:
   static constexpr uint32_t kMaxDeltas = 256;
@@ -140,13 +154,26 @@ public:
   bool add(uint32_t recorded, uint32_t observed);
   int32_t skew() const;
   uint32_t pairs() const { return pairs_; }
-  void clear() { n_ = pairs_ = 0; }
+  // More distinct deltas came than the slots hold, and no recount yet:
+  // skew() may say no skew where 2.3.4 finds one (never another skew).
+  bool needsRecount() const { return summary_ && !recounted_; }
+  // The second pass: every slot's count back to 0, then each pair add()
+  // took, as its delta in seconds (W(observed) - W(recorded): a Doubtful
+  // entry's delta; a 0 delta may be passed or not).
+  void beginRecount();
+  void recount(int64_t delta);
+  void clear() {
+    n_ = pairs_ = 0;
+    summary_ = recounted_ = false;
+  }
 
 private:
   int32_t half_[kMaxDeltas] = {};  // delta / 2
   uint32_t count_[kMaxDeltas] = {};
   uint32_t n_ = 0;
   uint32_t pairs_ = 0;
+  bool summary_ = false;    // a delta came when every slot was taken
+  bool recounted_ = false;  // beginRecount() since
 };
 // A file's time matches: both stamps valid and non-zero, and the delta is 0
 // or the tags file's skew (when it has one: skew != 0).

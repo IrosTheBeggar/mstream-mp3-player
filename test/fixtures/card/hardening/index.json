@@ -282,6 +282,134 @@
   "same": "tags-0000002a.bin"
  },
  {
+  "file": "mptg-header-bytes-odd.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "headerBytes",
+  "check": "header: headerBytes 76, not a multiple of 8"
+ },
+ {
+  "file": "mptg-header-bytes-short.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "headerBytes",
+  "check": "header: headerBytes 64, below MPTG v1's 72"
+ },
+ {
+  "file": "mptg-section-count.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "sectionCount",
+  "check": "header: 65 sections (at most 64)"
+ },
+ {
+  "file": "mptg-file-bytes.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "fileBytes",
+  "check": "header: fileBytes 8 bytes short of the file's length"
+ },
+ {
+  "file": "mptg-layout-misaligned.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "the directory: a section at an offset not a multiple of 8"
+ },
+ {
+  "file": "mptg-layout-overlap.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "the directory: a section that starts inside the one before it"
+ },
+ {
+  "file": "mptg-layout-end.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "the directory: the last section ends 8 bytes before fileBytes"
+ },
+ {
+  "file": "mptg-layout-type-twice.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "the directory: OSTR twice"
+ },
+ {
+  "file": "mptg-missing-strs.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "missing",
+  "check": "the directory: no STRS (a REQUIRED section)"
+ },
+ {
+  "file": "mptg-hidx-absent.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "missing",
+  "check": "HIDX absent while recordCount > 0 (2.6.2)"
+ },
+ {
+  "file": "mptg-hidx-absent-device.bin",
+  "format": "MPTG",
+  "uses": "device",
+  "expect": "present",
+  "why": "ok",
+  "check": "HIDX absent, read by a reader that doesn't use it (the device's builder)"
+ },
+ {
+  "file": "mptg-blob-count.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "shape",
+  "check": "STRS (a blob) with a count of 1"
+ },
+ {
+  "file": "mptg-array-bytes.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "shape",
+  "check": "HIDX: bytes 4 more than count x stride"
+ },
+ {
+  "file": "mptg-folder-count.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "counts",
+  "check": "header: folderCount isn't FOLD's count"
+ },
+ {
+  "file": "mptg-strs-first-byte.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "string",
+  "check": "STRS: byte 0 isn't NUL (offset 0 must be the empty string)"
+ },
+ {
+  "file": "mptg-recs-descending.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "recsOrder",
+  "check": "RECS: two records of one folder with their names decreasing"
+ },
+ {
   "file": "msmf-comp-order.bin",
   "format": "MSMF",
   "uses": "all",
@@ -344,6 +472,46 @@
   "expect": "absent",
   "why": "libr",
   "check": "LIBR: an absolute root"
+ },
+ {
+  "file": "msmf-libr-dot.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "libr",
+  "check": "LIBR: a root through '.'"
+ },
+ {
+  "file": "msmf-libr-dotdot.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "libr",
+  "check": "LIBR: a root through '..'"
+ },
+ {
+  "file": "msmf-libr-empty-name.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "libr",
+  "check": "LIBR: a root with an empty name ('Lib A//Inner')"
+ },
+ {
+  "file": "msmf-libr-too-long.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "libr",
+  "check": "LIBR: a root that makes '/music/' + root 256 bytes"
+ },
+ {
+  "file": "msmf-libr-longest.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "LIBR: a root that makes '/music/' + root exactly 255 bytes"
  },
  {
   "file": "msmf-major-2.bin",
@@ -410,6 +578,30 @@
   "check": "DJNB: an index out of range (not the unused all-ones)"
  },
  {
+  "file": "mpdj-row-count.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "counts",
+  "check": "header: rowCount isn't DJRW's count"
+ },
+ {
+  "file": "mpdj-path-count.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "counts",
+  "check": "header: pathCount isn't DJPH's count"
+ },
+ {
+  "file": "mpdj-neighbour-stride.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "shape",
+  "check": "header: k 2, so DJNB's stride (9) isn't k x (indexBytes + 1)"
+ },
+ {
   "file": "mspd-order.bin",
   "format": "MSPD",
   "uses": "all",
@@ -448,6 +640,30 @@
   "expect": "absent",
   "why": "pendOp",
   "check": "PEND: an op of 0"
+ },
+ {
+  "file": "mspd-path-empty.bin",
+  "format": "MSPD",
+  "uses": "all",
+  "expect": "absent",
+  "why": "pendPath",
+  "check": "PEND: a path at offset 0 (the empty string)"
+ },
+ {
+  "file": "mspd-path-too-long.bin",
+  "format": "MSPD",
+  "uses": "all",
+  "expect": "absent",
+  "why": "pathLength",
+  "check": "PEND: a path that makes '/music/' + path 256 bytes"
+ },
+ {
+  "file": "mspd-path-longest.bin",
+  "format": "MSPD",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "PEND: a path that makes '/music/' + path exactly 255 bytes"
  },
  {
   "file": "mspd-op-9.bin",

@@ -495,6 +495,7 @@ void LibraryIndex::resetViews() {
   viewsBlock_ = nullptr;
   viewsBytes_ = 0;
   artistsAZ_ = albumsAZ_ = albumsByArtist_ = tracksByAlbum_ = folderChildren_ = folderTree_ = nullptr;
+  artistSortKeys_ = albumSortKeys_ = nullptr;
   std::memset(artistBuckets_, 0, sizeof(artistBuckets_));
   std::memset(albumBuckets_, 0, sizeof(albumBuckets_));
 }
@@ -825,6 +826,16 @@ Entry* runSlot(Entry* slots, uint32_t cap, uint16_t* usedList, uint32_t* used, u
   }
 }
 
+// A sort tag as the lists use it (5.4's orderName takes the nameKey of the
+// sort tag only when that key isn't empty, else the name): without White_Space
+// at either end, and none (*len 0) when nothing else is left. 2.3.6 stores a
+// lone tab as one space, a valid value, which would otherwise sort its artist
+// or album first, under '#'.
+const char* sortTagOf(const char* s, size_t n, size_t* len) {
+  *len = 0;
+  return s && n ? namekey::trim(s, n, len) : nullptr;
+}
+
 }  // namespace
 
 bool LibraryIndex::enterRuns(uint32_t album, uint32_t artist) {
@@ -1038,8 +1049,10 @@ LibraryIndex::Add LibraryIndex::addRecord(const char* path, const TagView& tv) {
     if (off == kNone) return Add::NoMemory;
     if (e) {
       ++e->album;
-      if (e->sort == kNone && tv.albumSort && tv.albumSortLen) {
-        e->sort = intern(tv.albumSort, tv.albumSortLen);
+      size_t sortLen = 0;
+      const char* sortTag = sortTagOf(tv.albumSort, tv.albumSortLen, &sortLen);
+      if (e->sort == kNone && sortLen) {
+        e->sort = intern(sortTag, sortLen);
         if (e->sort == kNone) return Add::NoMemory;
       }
     }
@@ -1065,9 +1078,10 @@ LibraryIndex::Add LibraryIndex::addRecord(const char* path, const TagView& tv) {
         e->sort = kNone;
       }
       ++e->count;
-      const char* sortTag = albumArtistOff != kNone ? tv.albumArtistSort : tv.artistSort;
-      const size_t sortLen = albumArtistOff != kNone ? tv.albumArtistSortLen : tv.artistSortLen;
-      if (e->sort == kNone && sortTag && sortLen) {
+      size_t sortLen = 0;
+      const char* sortTag = albumArtistOff != kNone ? sortTagOf(tv.albumArtistSort, tv.albumArtistSortLen, &sortLen)
+                                                    : sortTagOf(tv.artistSort, tv.artistSortLen, &sortLen);
+      if (e->sort == kNone && sortLen) {
         e->sort = intern(sortTag, sortLen);
         if (e->sort == kNone) return Add::NoMemory;
       }
@@ -1137,9 +1151,26 @@ uint64_t LibraryIndex::folderHash(uint32_t folder) const {
   return h;
 }
 
+// The views' words: artistsAZ, albumsAZ, albumsByArtist, tracksByAlbum,
+// folderChildren, folderTree, then each artist's and each album's sort key.
+size_t LibraryIndex::viewWords(uint32_t nT, uint32_t nA, uint32_t nB, uint32_t nF) {
+  return static_cast<size_t>(nA) + nB + nB + nT + nF + nT + nA + nB;
+}
+
+void LibraryIndex::placeViews(uint32_t nT, uint32_t nA, uint32_t nB, uint32_t nF) {
+  artistsAZ_ = viewsBlock_;
+  albumsAZ_ = artistsAZ_ + nA;
+  albumsByArtist_ = albumsAZ_ + nB;
+  tracksByAlbum_ = albumsByArtist_ + nB;
+  folderChildren_ = tracksByAlbum_ + nT;
+  folderTree_ = folderChildren_ + nF;
+  artistSortKeys_ = folderTree_ + nT;
+  albumSortKeys_ = artistSortKeys_ + nA;
+}
+
 bool LibraryIndex::buildViews() {
   const uint32_t nT = tracksB_.size, nA = artistsB_.size, nB = albumsB_.size, nF = foldersB_.size;
-  const size_t words = static_cast<size_t>(nA) + nB + nB + nT + nF + nT;
+  const size_t words = viewWords(nT, nA, nB, nF);
   viewsBytes_ = (words ? words : 1) * sizeof(uint32_t);
   viewsBlock_ = static_cast<uint32_t*>(alloc(viewsBytes_));
   // Temporary, in one block: an artist's place in A-Z, an album's in
@@ -1156,21 +1187,24 @@ bool LibraryIndex::buildViews() {
   uint32_t* folderRank = albumPos + nB + 1;
   uint32_t* stack = folderRank + nF + 1;
   uint32_t* rankStart = stack + nF + 1;
-  artistsAZ_ = viewsBlock_;
-  albumsAZ_ = artistsAZ_ + nA;
-  albumsByArtist_ = albumsAZ_ + nB;
-  tracksByAlbum_ = albumsByArtist_ + nB;
-  folderChildren_ = tracksByAlbum_ + nT;
-  folderTree_ = folderChildren_ + nF;
+  placeViews(nT, nA, nB, nF);
 
   auto str = [&](uint32_t off) -> const char* { return at(off); };
   Track* tracks = tracksB_.data;
   Artist* artists = artistsB_.data;
   Album* albums = albumsB_.data;
   Folder* folders = foldersB_.data;
-  // What the lists sort by: the elected sort tag, else the name.
-  auto artistKey = [&](uint32_t a) { return at(artistSort_.data[a] != kNone ? artistSort_.data[a] : artists[a].name); };
-  auto albumKey = [&](uint32_t b) { return at(albumSort_.data[b] != kNone ? albumSort_.data[b] : albums[b].name); };
+  // What the lists sort by: the elected sort tag, else the name. Kept with
+  // the views (the UI's rail and jump grid key on it too), the build's own
+  // tags dropped after.
+  for (uint32_t a = 0; a < nA; ++a) {
+    artistSortKeys_[a] = artistSort_.data[a] != kNone ? artistSort_.data[a] : artists[a].name;
+  }
+  for (uint32_t b = 0; b < nB; ++b) {
+    albumSortKeys_[b] = albumSort_.data[b] != kNone ? albumSort_.data[b] : albums[b].name;
+  }
+  auto artistKey = [&](uint32_t a) { return at(artistSortKeys_[a]); };
+  auto albumKey = [&](uint32_t b) { return at(albumSortKeys_[b]); };
 
   // Artists A-Z, "The Lantern Choir" under L (textfold::sortName()).
   for (uint32_t i = 0; i < nA; ++i) artistsAZ_[i] = i;
@@ -1413,6 +1447,10 @@ void LibraryIndex::forgetSources() {
   for (uint32_t i = 0; i < tracksB_.size; ++i) tracksB_.data[i].flags &= static_cast<uint8_t>(~kSourceMask);
 }
 
+void LibraryIndex::forgetLengths() {
+  for (uint32_t i = 0; i < tracksB_.size; ++i) tracksB_.data[i].durationS = 0;
+}
+
 size_t LibraryIndex::folderPath(uint32_t id, char* buf, size_t size) const {
   if (size == 0) return 0;
   buf[0] = 0;
@@ -1620,7 +1658,7 @@ LibraryIndex::Load LibraryIndex::load(ByteSource& in, const Inputs& expect) {
       nB > kMaxRecords || nF == 0 || nF > kMaxRecords) {
     return Load::Corrupt;
   }
-  const size_t words = static_cast<size_t>(nA) + nB + nB + nT + nF + nT;
+  const size_t words = viewWords(nT, nA, nB, nF);
   const size_t viewsBytes = (words ? words : 1) * sizeof(uint32_t);
 
   // Into blocks of exactly the saved size; on any failure clear() gives
@@ -1657,12 +1695,7 @@ LibraryIndex::Load LibraryIndex::load(ByteSource& in, const Inputs& expect) {
 
   std::memcpy(artistBuckets_, h + kCountWords, sizeof(artistBuckets_));
   std::memcpy(albumBuckets_, h + kCountWords + kBuckets + 1, sizeof(albumBuckets_));
-  artistsAZ_ = viewsBlock_;
-  albumsAZ_ = artistsAZ_ + nA;
-  albumsByArtist_ = albumsAZ_ + nB;
-  tracksByAlbum_ = albumsByArtist_ + nB;
-  folderChildren_ = tracksByAlbum_ + nT;
-  folderTree_ = folderChildren_ + nF;
+  placeViews(nT, nA, nB, nF);
   setReadPointers();
   inputs_ = got;
   buildStamp_ = static_cast<uint64_t>(h[16]) << 32 | h[15];

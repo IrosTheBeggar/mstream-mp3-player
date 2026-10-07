@@ -401,6 +401,14 @@ The software applies the same rule to its previous ledger at the start of
 a run. A non-uniform error (macOS converting each stamp with its own
 date's DST, say) falls to the fingerprint: slower, never wrong.
 
+The rule's answer doesn't depend on the order the pairs come in, and an
+implementation that counts in bounded memory MUST give the same answer.
+The player's (`SkewHistogram`, 2 KB) keeps 256 deltas exactly, and past
+256 distinct ones becomes a Misra-Gries summary, which still holds any
+delta that half the pairs have; one more pass over the pairs then counts
+its candidates exactly (3.2.3). Without that pass it may find no skew
+where the rule finds one, never another skew.
+
 #### 2.3.5 Quick fingerprint (qfp)
 
 - **The value:** a u64, the FNV-1a 64 (2.3.3) of three parts in order:
@@ -1887,12 +1895,16 @@ on any difference. The folder's README says how to read them.
    (a folder that is its own parent, records in path-string order, a
    wrong firstRecord, an unsorted DJPH, an out-of-range neighbour): all
    make the file absent, with no crash and no endless loop. Fuzzed on the
-   host.
+   host. The shared `hardening/` folder has a file for each check of
+   2.4.3, so a reader that skips one fails there.
 5. **The builder** (host test): a walk listing plus T plus D gives the
    expected `library.idx` checksum; a card filled by the software and the
    same files scanned by the device give the same index (the research's
-   M7 test, on the host); the skew rule: every stamp shifted by +3,600 s
-   still matches, three shifted files don't make a skew.
+   M7 test, on the host) apart from each track's source and its length:
+   the two producers' lengths may differ by up to 100 ms (item 3), so a
+   track's length in whole seconds may differ by one; the skew rule:
+   every stamp shifted by +3,600 s still matches, three shifted files
+   don't make a skew.
 6. **Crash safety** (host, a fake file system that can stop at any
    write, whose rename is two directory writes, new entry first): every
    cut point of 2.12.1 leaves a card the device reads as the old or the
@@ -2186,10 +2198,14 @@ fallback keeps today's POSIX walk, with `st_mtime` packed into a FAT time.
 size equal and time different is *doubtful*. A doubtful file is written
 to `walk.jnl` as Doubtful (path, Δ), not held in RAM (all 20k files can
 be doubtful when a PC shifted every stamp), and its Δ goes into a
-histogram of at most 256 distinct values (2 KB; a Δ first seen when it
-is full counts only in the total, so a pathological card falls to qfp,
-never to a wrong skew). At the walk's end the skew (2.3.4) is computed;
-then one pass over the Doubtful entries matches those whose Δ is the
+histogram of 256 slots (2 KB, `cardcontract::SkewHistogram`): exact
+counts while at most 256 distinct values came, a Misra-Gries summary
+past that (any Δ that half the pairs have is still in it). At the walk's
+end the skew (2.3.4) is computed; when the summary was needed
+(`needsRecount()`, a card with more than 256 distinct retouches), one
+pass over the Doubtful entries first counts its candidates again exactly,
+so the skew is 2.3.4's whatever the walk's order. Then one pass over the
+Doubtful entries matches those whose Δ is the
 skew, and gives the rest a qfp check (an open and two 4 KB reads, about
 8 ms with the cache, ESTIMATED). A match is saved in D as a
 confirmation, so it is paid once per file, not per boot. Worst case (a PC
@@ -2287,7 +2303,7 @@ reading rules are part 5's.
 
 | Item | Rule |
 |---|---|
-| **`/.player/tags.bin`** | MPTG source 1 (2.6), in canonical order, one record per audio file the last walk saw, plus device-private sections (their layout is the device's own): `DSTA`, a status per record (**Software**: a T record confirmed at the current commit, the row carrying size and time only; **Scanned**: a full record; **Pending**; **Unreadable**), with a bit for "confirmed by qfp"; `DFLD`, per folder: the digest and the cover facts; `DHDR`: the commit the last walk compared against, T's skew, the rescan epoch. Size at 20k: about 2.3 MB if every file is Software, about 4.1 MB if every file is Scanned (HIDX included). |
+| **`/.player/tags.bin`** | MPTG source 1 (2.6), in canonical order, one record per audio file the last walk saw, plus device-private sections (their layout is the device's own): `DSTA`, a status per record (**Software**: a T record confirmed at the current commit, the row carrying size and time only; **Scanned**: a full record; **Pending**; **Unreadable**), with a bit for "confirmed by qfp", and in its own header the number of rows that aren't Software and of the folders on their paths (the builder sizes the index from them when T lists: 3.4.4); `DFLD`, per folder: the digest and the cover facts; `DHDR`: the commit the last walk compared against, T's skew, the rescan epoch. Size at 20k: about 2.3 MB if every file is Software, about 4.1 MB if every file is Scanned (HIDX included). |
 | **`tags.jnl`** | Chunks: a magic, a sequence, the headerCrc of the `tags.bin` it extends, a count, the records **sorted into canonical order** before the append, a CRC-32. One chunk every 100 files or 5 s: 15-20 ms per append (MEASURED for small writes). A torn last chunk fails its CRC and is dropped; a chunk for another `tags.bin` was already merged and is dropped. So the journal is a sequence of sorted runs, about 30 at 512 KB. |
 | **`walk.jnl`** | The last walk's changes, at most two sorted runs (3.2.3). |
 | **Compaction** | When `tags.jnl` reaches 512 KB (about 3,500 records), at a scan's end, and before any build: a **streaming k-way merge** into `tags.tmp` of `tags.bin`, `walk.jnl`'s runs and `tags.jnl`'s chunks, each run read through a 1 KB buffer (about 40-50 KB of PSRAM in all, nothing read whole); a path in several runs takes the newest (a later chunk over an earlier one, the scan's over the walk's over `tags.bin`'s, as before). A full 20k scan compacts about 6 times: about 12-24 s of writes at 0.5-1 MB/s, in the background (ESTIMATED). |
@@ -2531,8 +2547,13 @@ which fails at about 15k entries (metascan section 6.2).
   way: it rebuilds its own v5 from a walk and ignores `/.mstream` and
   D; this firmware then treats that v5 as Outdated: one rebuild each
   way, nothing lost); NoMemory as today.
+- **The views** keep each artist's and each album's sort key (the string
+  the A-Z lists sort it by: its elected sort tag, else its name), so a
+  loaded index can give the rail, a row's letter and the jump grid the key
+  the order and the buckets use (`artistSortKey()`, `albumSortKey()`).
 - **Size at 20k (ESTIMATED):** tracks 640 KB, albums (about 1.8k) 50 KB,
-  artists 14 KB, folders (about 2.6k) 94 KB, views about 190 KB, strings
+  artists 14 KB, folders (about 2.6k) 94 KB, views about 200 KB (the sort
+  keys about 10 KB of it), strings
   about 0.8 MB (today's names about 0.68 MB plus about 0.12 MB of tag
   strings): **about 1.75-1.85 MB, 88-92 B per track** (75-79 B today,
   MEASURED).
@@ -2567,12 +2588,23 @@ the host:
 - **Sort tags:** an album's `albumSort` comes with its winning album
   value, an artist's with its winning display (`albumArtistSort` for an
   album-artist display, else `artistSort`); the A-Z rails follow the sort
-  keys.
+  keys, which the views keep (3.4.3), so `LibraryPage`'s rail, its rows'
+  letters and the jump grid key on them too. A sort tag is trimmed of
+  White_Space, and one with nothing left (a lone tab, which 2.3.6 stores
+  as a space) is no sort tag, as 5.4's orderName says.
 - **The builder's inputs from N4 and N5** are interfaces: D's statuses
   (DSTA) through `LibraryBuilder::DeviceRows`, the folders' cover facts
   (DFLD) through `FolderFactsSource`; with no statuses every D record is a
   full one. T's THUMB folders are collected from its folder steps (8 bytes
   each).
+- **Sizing when T lists** (no walk since its commit: the boot after a
+  transfer): D's Software rows are T's files (counted in T's header) or are
+  dropped, so the index is sized from T's counts plus D's rows that aren't
+  Software and the folders on their paths, which DSTA's header carries
+  (`DeviceRows::ownCounts()`, N4). Without them every D row counts too,
+  and at 20k right after a transfer (a Software row for each file) every
+  block would be twice as big: a peak of 2.90 MB instead of 1.99 MB, and a
+  1.28 MB track table where 3.5 counts 640 KB.
 - **nameKey's tables are Rust's own** (`tools/unicode_case.rs`, Unicode
   17.0 from rustc 1.98), checked against std code point by code point
   (`test_name_key`).
@@ -2581,9 +2613,13 @@ the host:
   `LibraryIndex::kHandCoverBeatsThumbnail`.
 - **Measured (host):** the tagged synthetic library (`LibrarySynth`) in
   the user's shape, with the measured disagreement rates and name lengths,
-  at 20k: **1.77 MB, 88.6 B a track** (strings 0.78 MB); **a build peak of
-  1.98 MB**, the builder's own 58 KB included. Built from T and from D, the
-  same files give the same bytes once the tracks' sources are cleared.
+  at 20k: **1.78 MB, 89.1 B a track** (strings 0.78 MB, views 0.20 MB with
+  the sort keys); **a build peak of 1.99 MB**, the builder's own 58 KB
+  included, walked or with T listing after a transfer. Built from T and
+  from D, the same files give the same bytes once the tracks' sources are
+  cleared, when the two records' lengths are equal; with the device's
+  50 ms shorter (2.17 item 3's encoder delay), 133 of 3,000 tracks are a
+  second shorter, and the rest is the same bytes.
 
 ### 3.5 Budgets
 
@@ -2956,8 +2992,8 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 | # | Work | Days | Host proof |
 |---|---|---|---|
 | N1 | **Built.** **The contract kit** (`lib/core/CardContract`): CRC-32, FNV-1a 64, qfp, FAT time and the skew rule; MSMF, MPTG, MPDJ and MSPD readers and writers; the root election; `device.txt`; 2.4.3's structural checks; the fixtures of 2.17 (2.18's vectors, the JSON library descriptions and their golden files), frozen for the terminal's tests | 2.5-3 | Round trips; truncation at every byte and a flipped bit per section give "absent"; each structural check broken under valid CRCs gives "absent" (no endless loop); a newer major is absent, a newer minor reads; the golden bytes |
-| N2 | **Built.** **`LibraryIndex` v6 and `LibraryBuilder`**: Stage A's election (5.4), the merge (2.9), exact sizing, the inputs, LIBR roots | 3.5-4.5 | `test_library_index` extended; `LibrarySynth` with synthetic tags at the measured disagreement rates; 20k memory and build-peak asserts; the same files from T and from D build byte-identical indexes |
-| N3 | **Built.** **The queue's remap through `queue.txt`**; `QueueModel::release()` and the exact trim | 1-1.5 | `test_queue`: a 20k remap within budget; shuffled; the current track gone; the resume point carried |
+| N2 | **Built.** **`LibraryIndex` v6 and `LibraryBuilder`**: Stage A's election (5.4), the merge (2.9), exact sizing, the inputs, LIBR roots | 3.5-4.5 | `test_library_index` extended; `LibrarySynth` with synthetic tags at the measured disagreement rates; 20k memory and build-peak asserts (walked, and T listing after a transfer); the same files from T and from D build byte-identical indexes apart from the sources and lengths within a second |
+| N3 | **Built.** **The queue's remap through `queue.txt`**; `QueueModel::release()` and the exact trim | 1-1.5 | `test_queue`: a 20k remap within budget; shuffled; the current track gone; the resume point carried; the remap after a rebuild or a boot with no library, and after a cleared queue (the file read back from its own line) |
 | N4 | **`TagStore`**: D with its device sections, `tags.jnl` (sorted chunks), `walk.jnl`, the streaming k-way compaction, recovery, the cut-rename rule (2.12.6) | 2-2.5 | A power cut injected at every write, sync, remove and rename, a rename cut between its two directory writes included; the compaction's PSRAM bounded whatever the journal holds |
 | N5 | **`CardWalk`**: the lister interface, the canonical sort (with its passes for big folders), the digests, T's freshness (the skew, Doubtful entries through `walk.jnl`, qfp, confirmations) | 2-2.5 | Fake FAT trees: shuffled order, a 3,000-file folder through a small scratch, a retag at the same size, a renamed folder, a deleted album, every stamp shifted an hour, three files shifted, invalid and zero stamps |
 | N6 | **`TagScan`, the production port** with part 5's rules; the synthetic parity corpus (2.17, item 3) | 3-4 | The corpus and the crafted edge files; the fuzz harness (ASan only if a Linux toolchain is available); parity against a lofty reference (the terminal's S3, or a small host harness until it exists) |

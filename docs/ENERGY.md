@@ -1678,7 +1678,7 @@ that it never shuts down while blocked or within the length of an input;
 the texts). test_queue (6 cases: the saver's timing as QueueStore had it;
 `flushNow()` in the middle of a piece-wise write; after an edit during the
 write; an edit inside its 2 s and a position alone; a failed flush keeping
-the last file, not busy, retried 10 s later; abort and markSaved for
+the last file, not busy, retried 10 s later; abort and keptFile for
 remap). test_ui_library (the row's texts and every choice in its pill, the
 warning and Keep on, the boot toast for each length).
 
