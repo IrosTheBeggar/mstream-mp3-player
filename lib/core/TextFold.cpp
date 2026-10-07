@@ -266,6 +266,97 @@ int compare(const char* a, const char* b) {
   return raw < 0 ? -1 : raw > 0 ? 1 : 0;
 }
 
+const char* sortName(const char* s) {
+  if (!s) return s;
+  static const char* const kArticles[] = {"the", "el", "la", "los", "las", "le", "les"};
+  for (const char* a : kArticles) {
+    const size_t n = std::strlen(a);
+    size_t i = 0;
+    while (i < n && lower(s[i]) == a[i]) ++i;  // stops at the NUL too
+    if (i < n || s[n] != ' ') continue;
+    const char* p = s + n;
+    while (*p == ' ') ++p;
+    return *p ? p : s;
+  }
+  return s;
+}
+
+int compareSorted(const char* a, const char* b) {
+  const int c = compare(sortName(a), sortName(b));
+  return c != 0 ? c : compare(a, b);
+}
+
+namespace {
+
+bool isAlnum(char c) { return isAlpha(c) || isDigit(c); }
+
+// A slice's characters, Full-folded and lower-cased, one at a time; with
+// `article`, past a leading "the " that a letter or digit follows.
+struct SliceCursor {
+  const char* s;
+  const char* end;
+  const char* pending = nullptr;
+  SliceCursor(const char* str, size_t len, bool article) : s(str), end(str + len) {
+    if (!article) return;
+    const char* p = s;
+    while (p < end && *p == ' ') ++p;
+    if (end - p < 4 || lower(p[0]) != 't' || lower(p[1]) != 'h' || lower(p[2]) != 'e' || p[3] != ' ') return;
+    SliceCursor rest(p + 4, static_cast<size_t>(end - (p + 4)), false);
+    if (rest.nextKey()) s = p + 4;
+  }
+  // The next character, 0 at the end.
+  char next() {
+    for (;;) {
+      if (pending && *pending) return lower(*pending++);
+      if (s >= end) return 0;
+      const uint32_t cp = decode(s);
+      if (cp == 0 || s > end) {  // the string's end, or a sequence the slice cuts
+        s = end;
+        return 0;
+      }
+      if (cp < 0x80) return lower(static_cast<char>(cp));
+      pending = replacement(cp, Mode::Full);
+    }
+  }
+  // The next letter or digit, 0 at the end.
+  char nextKey() {
+    for (;;) {
+      const char c = next();
+      if (c == 0 || isAlnum(c)) return c;
+    }
+  }
+};
+
+}  // namespace
+
+bool sameName(const char* a, size_t aLen, const char* b, size_t bLen) {
+  if (!a || !b) return false;
+  SliceCursor x(a, aLen, true), y(b, bLen, true);
+  bool any = false;
+  for (;;) {
+    const char cx = x.nextKey();
+    const char cy = y.nextKey();
+    if (cx != cy) return false;
+    if (cx == 0) return any;
+    any = true;
+  }
+}
+
+bool startsWithName(const char* s, size_t sLen, const char* name, size_t nameLen) {
+  if (!s || !name) return false;
+  SliceCursor n(name, nameLen, true), x(s, sLen, true);
+  char want = n.nextKey();
+  if (want == 0) return false;
+  for (;;) {
+    const char c = x.next();
+    if (c == 0) return false;  // `s` ended first
+    if (!isAlnum(c)) continue;
+    if (c != want) return false;
+    want = n.nextKey();
+    if (want == 0) return !isAlnum(x.next());  // the word ends with the name
+  }
+}
+
 char railKey(const char* s) {
   Cursor c(s);
   const char first = c.next();

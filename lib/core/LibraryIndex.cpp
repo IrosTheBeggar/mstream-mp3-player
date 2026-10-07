@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "TextFold.h"
+#include "TrackName.h"
 
 namespace {
 
@@ -36,8 +37,6 @@ bool extIs(const char* ext, size_t len, const char* want) {
   }
   return true;
 }
-
-bool isSeparator(char c) { return c == ' ' || c == '-' || c == '.' || c == '_'; }
 
 // A case-insensitive match of the first `len` bytes of `s` with `want`.
 bool nameIs(const char* s, size_t len, const char* want) {
@@ -80,6 +79,41 @@ uint32_t findByName(const uint32_t* ids, uint32_t n, const char* name, NameOf na
   return lo < n && std::strcmp(nameOf(ids[lo]), name) == 0 ? ids[lo] : LibraryIndex::kNone;
 }
 
+// The disc, number and title of every track: each folder's files read
+// together (trackname::Folder), so a shape counts only when the folder is
+// written that way. `byFolder` has every folder's own files in one run.
+void readNames(const char* s, LibraryIndex::Track* tracks, const LibraryIndex::Artist* artists,
+               const uint32_t* byFolder, uint32_t n) {
+  auto stemOf = [&](const LibraryIndex::Track& t, size_t* len) {
+    const char* name = s + t.name;
+    const char* dot = std::strrchr(name, '.');
+    *len = dot && dot != name ? static_cast<size_t>(dot - name) : std::strlen(name);
+    return name;
+  };
+  for (uint32_t i = 0; i < n;) {
+    const uint32_t folder = tracks[byFolder[i]].folder;
+    trackname::Folder names(s + artists[tracks[byFolder[i]].artist].name);  // a folder has one artist
+    uint32_t j = i;
+    for (; j < n && tracks[byFolder[j]].folder == folder; ++j) {
+      size_t len;
+      const char* stem = stemOf(tracks[byFolder[j]], &len);
+      names.add(stem, len);
+    }
+    for (uint32_t k = i; k < j; ++k) {
+      LibraryIndex::Track& t = tracks[byFolder[k]];
+      size_t len;
+      const char* stem = stemOf(t, &len);
+      const trackname::Name r = names.read(stem, len);
+      const size_t titleLen = len - r.titleAt;
+      t.disc = r.disc;
+      t.number = r.number;
+      t.title = t.name + r.titleAt;
+      t.titleLen = static_cast<uint8_t>(titleLen > 255 ? 255 : titleLen);
+    }
+    i = j;
+  }
+}
+
 // ---- the cache file ----
 // Little-endian 32-bit words: the header, then the blocks as they are in
 // memory (the arena, the four record tables, the views), then an FNV-1a sum
@@ -87,7 +121,13 @@ uint32_t findByName(const uint32_t* ids, uint32_t n, const char* name, NameOf na
 // changed makes the file Corrupt, and the version is bumped when a record's
 // meaning changes.
 constexpr uint32_t kMagic = 0x494C504Du;  // "MPLI"
-constexpr uint32_t kVersion = 2;  // 2: folders count their other files and pick a cover
+// 2: folders count their other files and pick a cover. 4: names read with
+// their folder (discs, "Artist - 03 - Title", the artist off titles), and
+// artists and albums sorted past "The". Not 3: feature/opus writes 3 (for
+// .opus tracks) with the same record sizes and path signature, so a card
+// that ran one build would load the other's cache as its own. NOTE: the
+// dev -> opus merge must take 5, so every cache rebuilds once.
+constexpr uint32_t kVersion = 4;
 constexpr int kCountWords = 10;           // magic .. folders
 constexpr int kHeaderWords = kCountWords + 2 * (LibraryIndex::kBuckets + 1);
 constexpr uint32_t kMaxRecords = 1u << 22;  // a damaged header must not ask for gigabytes
@@ -469,31 +509,16 @@ LibraryIndex::Add LibraryIndex::addFile(const char* path) {
   const uint32_t name = intern(leaf, leafLen);
   if (name == kNone) return Add::NoMemory;
 
-  // "06 - Title.mp3": number 6, title "Title". Up to 3 leading digits count
-  // as the number when a separator follows them.
+  // No number and the whole stem for a title until finish() reads the
+  // names, each with its folder's (readNames()).
   const size_t stem = static_cast<size_t>(dot - leaf);
-  size_t i = 0;
-  uint32_t number = 0;
-  while (i < stem && i < 4 && leaf[i] >= '0' && leaf[i] <= '9') number = number * 10 + (leaf[i++] - '0');
-  size_t titleAt = 0;
-  if (i > 0 && i <= 3 && i < stem && isSeparator(leaf[i]) && number <= 255) {
-    titleAt = i;
-    while (titleAt < stem && isSeparator(leaf[titleAt])) ++titleAt;
-    if (titleAt == stem) titleAt = 0;  // "06.mp3": the whole stem is the title
-  } else {
-    number = 0;
-  }
-  size_t titleLen = stem - titleAt;
-  if (titleLen > 255) titleLen = 255;
-
   Track t{};
   t.name = name;
-  t.title = name + static_cast<uint32_t>(titleAt);
-  t.titleLen = static_cast<uint8_t>(titleLen);
+  t.title = name;
+  t.titleLen = static_cast<uint8_t>(stem > 255 ? 255 : stem);
   t.folder = folder;
   t.album = album;
   t.artist = artist;
-  t.number = static_cast<uint8_t>(number);
   t.format = format;
   if (!push(tracksB_, t)) return Add::NoMemory;
   return Add::Added;
@@ -531,10 +556,10 @@ bool LibraryIndex::buildViews() {
   Album* albums = albumsB_.data;
   Folder* folders = foldersB_.data;
 
-  // Artists A-Z.
+  // Artists A-Z, "The Lantern Choir" under L (textfold::sortName()).
   for (uint32_t i = 0; i < nA; ++i) artistsAZ_[i] = i;
   std::sort(artistsAZ_, artistsAZ_ + nA, [&](uint32_t a, uint32_t b) {
-    const int c = textfold::compare(s + artists[a].name, s + artists[b].name);
+    const int c = textfold::compareSorted(s + artists[a].name, s + artists[b].name);
     return c != 0 ? c < 0 : a < b;
   });
   for (uint32_t i = 0; i < nA; ++i) artistRank[artistsAZ_[i]] = i;
@@ -542,7 +567,7 @@ bool LibraryIndex::buildViews() {
   // Albums A-Z (ties: by artist), and by artist.
   for (uint32_t i = 0; i < nB; ++i) albumsAZ_[i] = albumsByArtist_[i] = i;
   std::sort(albumsAZ_, albumsAZ_ + nB, [&](uint32_t a, uint32_t b) {
-    const int c = textfold::compare(s + albums[a].name, s + albums[b].name);
+    const int c = textfold::compareSorted(s + albums[a].name, s + albums[b].name);
     if (c != 0) return c < 0;
     const uint32_t ra = artistRank[albums[a].artist], rb = artistRank[albums[b].artist];
     return ra != rb ? ra < rb : a < b;
@@ -550,7 +575,7 @@ bool LibraryIndex::buildViews() {
   std::sort(albumsByArtist_, albumsByArtist_ + nB, [&](uint32_t a, uint32_t b) {
     const uint32_t ra = artistRank[albums[a].artist], rb = artistRank[albums[b].artist];
     if (ra != rb) return ra < rb;
-    const int c = textfold::compare(s + albums[a].name, s + albums[b].name);
+    const int c = textfold::compareSorted(s + albums[a].name, s + albums[b].name);
     return c != 0 ? c < 0 : a < b;
   });
   for (uint32_t i = 0; i < nA; ++i) artists[i].firstAlbum = artists[i].albumCount = 0;
@@ -602,29 +627,6 @@ bool LibraryIndex::buildViews() {
     }
   }
 
-  // Tracks: album after album (so artist after artist); inside an album,
-  // folder by folder (discs in their own subfolders stay apart), then by
-  // number, then name.
-  for (uint32_t i = 0; i < nT; ++i) tracksByAlbum_[i] = i;
-  std::sort(tracksByAlbum_, tracksByAlbum_ + nT, [&](uint32_t a, uint32_t b) {
-    const Track& x = tracks[a];
-    const Track& y = tracks[b];
-    if (x.album != y.album) return albumPos[x.album] < albumPos[y.album];
-    if (x.folder != y.folder) return folderRank[x.folder] < folderRank[y.folder];
-    if (x.number != y.number) return x.number < y.number;
-    const int c = textfold::compare(s + x.name, s + y.name);
-    return c != 0 ? c < 0 : a < b;
-  });
-  for (uint32_t i = 0; i < nB; ++i) albums[i].firstTrack = albums[i].trackCount = 0;
-  for (uint32_t i = 0; i < nA; ++i) artists[i].firstTrack = artists[i].trackCount = 0;
-  for (uint32_t i = 0; i < nT; ++i) {
-    const Track& t = tracks[tracksByAlbum_[i]];
-    Album& al = albums[t.album];
-    if (al.trackCount++ == 0) al.firstTrack = i;
-    Artist& ar = artists[t.artist];
-    if (ar.trackCount++ == 0) ar.firstTrack = i;
-  }
-
   // The folder tree's tracks: folder by folder in that walk, each folder's
   // files A-Z. So a folder's own files (filesIn) and its whole tree
   // (treeTracks) are runs that start at the same place.
@@ -648,11 +650,39 @@ bool LibraryIndex::buildViews() {
     if (folderRank[i] != kNone) folders[i].firstFile = rankStart[folderRank[i]];
   }
 
-  // A-Z buckets: the keys are in order, since compare() sorts '#' first.
+  // The names: each folder's files are one run of the tree's tracks.
+  readNames(s, tracks, artists, folderTree_, nT);
+
+  // Tracks: album after album (so artist after artist); inside an album,
+  // folder by folder (discs in their own subfolders stay apart), then by
+  // the disc a name gives ("2-03 Title"), number, then name.
+  for (uint32_t i = 0; i < nT; ++i) tracksByAlbum_[i] = i;
+  std::sort(tracksByAlbum_, tracksByAlbum_ + nT, [&](uint32_t a, uint32_t b) {
+    const Track& x = tracks[a];
+    const Track& y = tracks[b];
+    if (x.album != y.album) return albumPos[x.album] < albumPos[y.album];
+    if (x.folder != y.folder) return folderRank[x.folder] < folderRank[y.folder];
+    if (x.disc != y.disc) return x.disc < y.disc;
+    if (x.number != y.number) return x.number < y.number;
+    const int c = textfold::compare(s + x.name, s + y.name);
+    return c != 0 ? c < 0 : a < b;
+  });
+  for (uint32_t i = 0; i < nB; ++i) albums[i].firstTrack = albums[i].trackCount = 0;
+  for (uint32_t i = 0; i < nA; ++i) artists[i].firstTrack = artists[i].trackCount = 0;
+  for (uint32_t i = 0; i < nT; ++i) {
+    const Track& t = tracks[tracksByAlbum_[i]];
+    Album& al = albums[t.album];
+    if (al.trackCount++ == 0) al.firstTrack = i;
+    Artist& ar = artists[t.artist];
+    if (ar.trackCount++ == 0) ar.firstTrack = i;
+  }
+
+  // A-Z buckets: the keys are in order, since compare() sorts '#' first
+  // (the sort names' keys: "The Lantern Choir" is an L).
   auto buckets = [&](const uint32_t* view, uint32_t n, uint32_t* out, auto nameOf) {
     int next = 0;
     for (uint32_t i = 0; i < n; ++i) {
-      const int b = textfold::bucketOf(textfold::railKey(nameOf(view[i])));
+      const int b = textfold::bucketOf(textfold::railKey(textfold::sortName(nameOf(view[i]))));
       while (next <= b) out[next++] = i;
     }
     while (next <= kBuckets) out[next++] = n;
@@ -776,10 +806,10 @@ uint32_t LibraryIndex::bucketStart(View view, int bucket) const {
 int LibraryIndex::bucketAt(View view, uint32_t position) const {
   if (view == View::Artists) {
     if (position >= artistN_) return kBuckets - 1;
-    return textfold::bucketOf(textfold::railKey(artistName(artistsAZ_[position])));
+    return textfold::bucketOf(textfold::railKey(textfold::sortName(artistName(artistsAZ_[position]))));
   }
   if (position >= albumN_) return kBuckets - 1;
-  return textfold::bucketOf(textfold::railKey(albumName(albumsAZ_[position])));
+  return textfold::bucketOf(textfold::railKey(textfold::sortName(albumName(albumsAZ_[position]))));
 }
 
 LibraryIndex::Memory LibraryIndex::memory() const {
