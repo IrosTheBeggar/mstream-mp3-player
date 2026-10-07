@@ -92,7 +92,7 @@ void readNames(const char* s, LibraryIndex::Track* tracks, const LibraryIndex::A
   };
   for (uint32_t i = 0; i < n;) {
     const uint32_t folder = tracks[byFolder[i]].folder;
-    trackname::Folder names;
+    trackname::Folder names(s + artists[tracks[byFolder[i]].artist].name);  // a folder has one artist
     uint32_t j = i;
     for (; j < n && tracks[byFolder[j]].folder == folder; ++j) {
       size_t len;
@@ -103,7 +103,7 @@ void readNames(const char* s, LibraryIndex::Track* tracks, const LibraryIndex::A
       LibraryIndex::Track& t = tracks[byFolder[k]];
       size_t len;
       const char* stem = stemOf(t, &len);
-      const trackname::Name r = names.read(stem, len, s + artists[t.artist].name);
+      const trackname::Name r = names.read(stem, len);
       const size_t titleLen = len - r.titleAt;
       t.disc = r.disc;
       t.number = r.number;
@@ -121,11 +121,13 @@ void readNames(const char* s, LibraryIndex::Track* tracks, const LibraryIndex::A
 // changed makes the file Corrupt, and the version is bumped when a record's
 // meaning changes.
 constexpr uint32_t kMagic = 0x494C504Du;  // "MPLI"
-// 2: folders count their other files and pick a cover. 3: names read with
+// 2: folders count their other files and pick a cover. 4: names read with
 // their folder (discs, "Artist - 03 - Title", the artist off titles), and
-// artists and albums sorted past "The". NOTE: feature/opus also took 3 (for
-// .opus tracks): merging this into it needs 4, so every cache rebuilds once.
-constexpr uint32_t kVersion = 3;
+// artists and albums sorted past "The". Not 3: feature/opus writes 3 (for
+// .opus tracks) with the same record sizes and path signature, so a card
+// that ran one build would load the other's cache as its own. NOTE: the
+// dev -> opus merge must take 5, so every cache rebuilds once.
+constexpr uint32_t kVersion = 4;
 constexpr int kCountWords = 10;           // magic .. folders
 constexpr int kHeaderWords = kCountWords + 2 * (LibraryIndex::kBuckets + 1);
 constexpr uint32_t kMaxRecords = 1u << 22;  // a damaged header must not ask for gigabytes

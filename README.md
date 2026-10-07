@@ -44,11 +44,15 @@ stops there (on battery it powers off after a minute).
   - `01 - Title`, `01. Title`, `01 Title`, `01_Title`, `(01) Title`: track 1.
   - `1-01 Title`, `2-03 - Title`, `2.03 Title`, `203 Title`: disc 2, track
     3, so an album plays disc after disc. Only in a folder where every file
-    that starts with a number is written that way: `1-800 Hotline` or
-    `1999 - Title` are left alone. Discs in subfolders (`CD1`, `CD2`) play
-    in order too.
-  - `Artist - 03 - Title`, `Artist - Album - 03 Title`, `CD2 - 03 - Title`:
-    track 3 (on disc 2).
+    that starts with a number is written that way: `1-800 Hotline` isn't
+    read as a disc and a track (it reads as track 1, "800 Hotline", as
+    before), and `1999 - Title` keeps its year. Discs in subfolders (`CD1`,
+    `CD2`) play in order too.
+  - `Artist - 03 - Title`, `Artist - Album - 03 Title`, `CD2 - 03 - Title`,
+    `Artist - Album (Disc 2) - 03 Title`: track 3 (on disc 2), when the
+    files in the folder name the same album and are numbered like a track
+    list. Two albums or works numbered from 01 in one folder play in their
+    file names' order. `Artist - 1-800 Lanterns` keeps its title.
   - `03 - Artist - Title`: the title shows without the artist when it is the
     folder's artist (in any case, with or without "The" or accents);
     a compilation's `03 - Other Artist - Title` shows as it is.

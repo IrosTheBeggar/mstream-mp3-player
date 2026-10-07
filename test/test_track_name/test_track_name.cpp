@@ -26,11 +26,11 @@ struct Read {
 // A folder of stems (file names without their extension), read as the
 // index reads them.
 std::vector<Read> readFolder(const char* artist, const std::vector<const char*>& stems) {
-  trackname::Folder f;
+  trackname::Folder f(artist);
   for (const char* s : stems) f.add(s, std::strlen(s));
   std::vector<Read> out;
   for (const char* s : stems) {
-    const trackname::Name n = f.read(s, std::strlen(s), artist);
+    const trackname::Name n = f.read(s, std::strlen(s));
     out.push_back({n.disc, n.number, std::string(s + n.titleAt)});
   }
   return out;
@@ -190,10 +190,53 @@ void test_prefixed_shape() {
       "Disc 12x - 01",
   };
   for (const char* s : no) TEST_ASSERT_FALSE_MESSAGE(trackname::prefixed(s, std::strlen(s), &p), s);
-  // A disc part is the whole first part: "CD2 Live" isn't one.
+  // A disc part is a whole " - " part, or in brackets at the end: "CD2
+  // Live" isn't one.
   const char* f = "CD2 Live - 04 - Opening";
   TEST_ASSERT_TRUE(trackname::prefixed(f, std::strlen(f), &p));
   TEST_ASSERT_EQUAL_INT(0, p.name.disc);
+  TEST_ASSERT_EQUAL_INT(8, p.keyLen);
+  struct Disc {
+    const char* stem;
+    int disc, keyLen;
+  } discs[] = {
+      {"CD2 - 04 - Opening", 2, 0},
+      {"Glass Orchard - CD2 - 04 - Opening", 2, 13},
+      {"Glass Orchard - Night Shift - Disc 2 - 04 Opening", 2, 27},
+      {"Glass Orchard - Night Shift (Disc 2) - 04 Opening", 2, 27},
+      {"Glass Orchard - Night Shift [cd 12] - 04 Opening", 12, 27},
+      {"Glass Orchard - Night Shift (Live) - 04 Opening", 0, 34},
+      {"Glass Orchard - Night Shift (Disc Two) - 04 Opening", 0, 38},
+      {"Glass Orchard - Night Shift Disc 2 - 04 Opening", 0, 34},  // not set apart
+  };
+  for (const Disc& d : discs) {
+    TEST_ASSERT_TRUE_MESSAGE(trackname::prefixed(d.stem, std::strlen(d.stem), &p), d.stem);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(d.disc, p.name.disc, d.stem);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(d.keyLen, p.keyLen, d.stem);
+    TEST_ASSERT_EQUAL_STRING("Opening", d.stem + p.name.titleAt);
+  }
+  // " - " after the number, and "0N".
+  const char* g = "Glass Orchard - 07-Opening";
+  TEST_ASSERT_TRUE(trackname::prefixed(g, std::strlen(g), &p));
+  TEST_ASSERT_FALSE(p.dash);  // a '-' with no spaces is no " - "
+  TEST_ASSERT_TRUE(p.padded);
+  const char* h = "Glass Orchard - 7 - Opening";
+  TEST_ASSERT_TRUE(trackname::prefixed(h, std::strlen(h), &p));
+  TEST_ASSERT_TRUE(p.dash);
+  TEST_ASSERT_FALSE(p.padded);
+  // A number that runs on is no track number.
+  const char* runOn[] = {"Lantern Choir - 1-800 Lanterns", "Lantern Choir - 24-7", "Lantern Choir - 2-4-6-8 Paper Road",
+                         "Lantern Choir - 1.5 Hours"};
+  for (const char* s : runOn) TEST_ASSERT_FALSE_MESSAGE(trackname::prefixed(s, std::strlen(s), &p), s);
+  const char* i = "Lantern Choir - 03 1999 Remix";  // a space: the title's own number
+  TEST_ASSERT_TRUE(trackname::prefixed(i, std::strlen(i), &p));
+  TEST_ASSERT_EQUAL_STRING("1999 Remix", i + p.name.titleAt);
+  // A digit lead only when asked (Folder: when the digits are the artist's).
+  const char* j = "10 Lanterns - 01 - Paper Kite";
+  TEST_ASSERT_FALSE(trackname::prefixed(j, std::strlen(j), &p));
+  TEST_ASSERT_TRUE(trackname::prefixed(j, std::strlen(j), &p, true));
+  TEST_ASSERT_EQUAL_INT(1, p.name.number);
+  TEST_ASSERT_EQUAL_INT(11, p.prefixLen);
 }
 
 void test_after_artist() {
@@ -209,6 +252,11 @@ void test_after_artist() {
   TEST_ASSERT_EQUAL_STRING("Opening - Live", after("Glass Orchard - Opening - Live", "Glass Orchard").c_str());
   // A self-titled song keeps its name.
   TEST_ASSERT_EQUAL_STRING("Glass Orchard", after("Glass Orchard - Glass Orchard", "Glass Orchard").c_str());
+  // An artist with " - " in its name.
+  TEST_ASSERT_EQUAL_STRING("Paper Kite", after("Lantern - Choir - Paper Kite", "Lantern - Choir").c_str());
+  TEST_ASSERT_EQUAL_STRING("Choir - Paper Kite", after("Lantern - Choir - Paper Kite", "Lantern").c_str());
+  TEST_ASSERT_EQUAL_STRING("Lantern - Choir", after("Lantern - Choir", "Lantern - Choir").c_str());
+  TEST_ASSERT_EQUAL_STRING("Paper - Moon - Choir", after("Paper - Moon - Choir", "Lantern - Choir").c_str());
   // Left whole.
   const char* whole[] = {
       "Other Act - Opening",                  // someone else (a compilation's track)
@@ -239,6 +287,16 @@ void test_disc_track_folder() {
   expectRead(again[0], 2, 4, "Opening");
   expectRead(again[1], 2, 5, "Second");
   expectRead(again[2], 2, 6, "07-Third");  // another number: the title's
+  // A title whose own number is the track's: a space joins it.
+  const auto years = readFolder("Glass Orchard", {"1-01 Paper Kite", "2-01 Glass Road", "1-10 10 Paper Kites"});
+  expectRead(years[2], 1, 10, "10 Paper Kites");
+  const auto mostly = readFolder("Glass Orchard", {"1-04 04-Opening", "1-05 05-Second", "1-10 10 Paper Kites"});
+  expectRead(mostly[0], 1, 4, "Opening");
+  expectRead(mostly[2], 1, 10, "10 Paper Kites");
+  // Only when the folder writes the number again: one name doing so is
+  // its title's.
+  const auto once = readFolder("Glass Orchard", {"1-01 Paper Kite", "1-02 Glass Road", "1-10 10-Mile Kite"});
+  expectRead(once[2], 1, 10, "10-Mile Kite");
   // Then the artist off the title too.
   const auto both = readFolder("Glass Orchard", {"2-12 Glass Orchard - Opening", "2-13 Glass Orchard - Second"});
   expectRead(both[0], 2, 12, "Opening");
@@ -337,6 +395,130 @@ void test_prefixed_left_alone() {
   expectRead(va[2], 0, 0, "Act Three - 03 - Air");
 }
 
+// Prefixes whose middle part differs: two works, albums or discs numbered
+// from 1 keep their names' order (no number) unless a disc sets them apart.
+void test_prefixed_parts_that_differ() {
+  // Two works, each from 1: no number, the artist off, the work kept.
+  const auto works = readFolder("Composer", {"Composer - Glass Suite No. 1 - 1. Morning",
+                                             "Composer - Glass Suite No. 1 - 2. Noon",
+                                             "Composer - Glass Suite No. 2 - 1. Evening",
+                                             "Composer - Glass Suite No. 2 - 2. Night"});
+  expectRead(works[0], 0, 0, "Glass Suite No. 1 - 1. Morning");
+  expectRead(works[3], 0, 0, "Glass Suite No. 2 - 2. Night");
+  // Two EPs in one folder.
+  const auto eps = readFolder("Lantern Choir", {"Lantern Choir - First EP - 01 Paper Kite",
+                                                "Lantern Choir - First EP - 02 Glass Road",
+                                                "Lantern Choir - Second EP - 01 Iron Kite"});
+  expectRead(eps[0], 0, 0, "First EP - 01 Paper Kite");
+  expectRead(eps[2], 0, 0, "Second EP - 01 Iron Kite");
+  // Two works without the artist: the old "same in every name" rule.
+  const auto bare = readFolder("Composer", {"Copper Suite No. 1 - 1. Overture", "Copper Suite No. 2 - 1. Overture"});
+  expectRead(bare[0], 0, 0, "Copper Suite No. 1 - 1. Overture");
+  // A disc part at the prefix's end: discs, so the numbers stay apart.
+  const auto paren = readFolder("Glass Orchard", {"Glass Orchard - Night Shift (Disc 1) - 01 Opening",
+                                                  "Glass Orchard - Night Shift (Disc 1) - 02 Second",
+                                                  "Glass Orchard - Night Shift (Disc 2) - 01 Return",
+                                                  "Glass Orchard - Night Shift (Disc 2) - 02 Last"});
+  expectRead(paren[0], 1, 1, "Opening");
+  expectRead(paren[1], 1, 2, "Second");
+  expectRead(paren[2], 2, 1, "Return");
+  expectRead(paren[3], 2, 2, "Last");
+  const auto cd = readFolder("Lantern Choir", {"Lantern Choir - CD1 - 01 - Paper Kite",
+                                               "Lantern Choir - CD2 - 01 - Iron Kite"});
+  expectRead(cd[0], 1, 1, "Paper Kite");
+  expectRead(cd[1], 2, 1, "Iron Kite");
+  const auto set = readFolder("Lantern Choir", {"Lantern Choir - Big Set (Disc 1) - 01 - Paper Kite",
+                                                "Lantern Choir - Big Set (Disc 2) - 01 - Iron Kite"});
+  expectRead(set[0], 1, 1, "Paper Kite");
+  expectRead(set[1], 2, 1, "Iron Kite");
+  // Without the artist, the same album part past the disc.
+  const auto noArtist = readFolder("Glass Orchard", {"Night Shift - Disc 1 - 01 - Opening",
+                                                     "Night Shift - Disc 2 - 01 - Return"});
+  expectRead(noArtist[1], 2, 1, "Return");
+  // A guest in the first part, the same album: still read.
+  const auto guest = readFolder("Glass Orchard", {"Glass Orchard - Night Shift - 01 Opening",
+                                                  "Glass Orchard & Mira Lune - Night Shift - 02 Second"});
+  expectRead(guest[1], 0, 2, "Second");
+  // An album part in a script folding can't spell: the same bytes.
+  const auto kana = readFolder("Glass Orchard", {"Glass Orchard - \xE3\x81\x82\xE3\x81\x84 - 01 Opening",
+                                                 "Glass Orchard - \xE3\x81\x82\xE3\x81\x84 - 02 Second"});
+  expectRead(kana[1], 0, 2, "Second");
+  // No album part next to one: not the same album.
+  const auto mixed = readFolder("Glass Orchard", {"Glass Orchard - 01 - Opening", "Glass Orchard - Demos - 01 - Opening"});
+  expectRead(mixed[0], 0, 0, "01 - Opening");
+  expectRead(mixed[1], 0, 0, "Demos - 01 - Opening");
+}
+
+// A '-' or '.' joined to the number: one number that runs on.
+void test_prefixed_numbers_that_run_on() {
+  const auto a = readFolder("Lantern Choir", {"Lantern Choir - 1-800 Lanterns", "Lantern Choir - Paper Kite",
+                                              "Lantern Choir - 24-7", "Lantern Choir - 2-4-6-8 Paper Road"});
+  expectRead(a[0], 0, 0, "1-800 Lanterns");
+  expectRead(a[1], 0, 0, "Paper Kite");
+  expectRead(a[2], 0, 0, "24-7");
+  expectRead(a[3], 0, 0, "2-4-6-8 Paper Road");
+  // Two of them alone in a folder.
+  const auto b = readFolder("Lantern Choir", {"Lantern Choir - 1-800 Lanterns", "Lantern Choir - 24-7"});
+  expectRead(b[0], 0, 0, "1-800 Lanterns");
+  // "07-Title" in a folder of them is a number still.
+  const auto c = readFolder("Lantern Choir", {"Lantern Choir - 01-Paper Kite", "Lantern Choir - 02-Glass Road"});
+  expectRead(c[1], 0, 2, "Glass Road");
+  // But not alone: no " - " after it.
+  expectRead(readOne("Lantern Choir", "Lantern Choir - 07-Lonely"), 0, 0, "07-Lonely");
+}
+
+// Names with the shape whose digits are a title's: they don't look like a
+// track list (a number twice, or none at 0 or 1 or written "0N").
+void test_prefixed_needs_track_numbers() {
+  // A single and its other version.
+  const auto single = readFolder("Lantern Choir", {"Lantern Choir - 7 Lanterns", "Lantern Choir - 7 Lanterns (Instrumental)"});
+  expectRead(single[0], 0, 0, "7 Lanterns");
+  expectRead(single[1], 0, 0, "7 Lanterns (Instrumental)");
+  const auto one = readFolder("Lantern Choir", {"Lantern Choir - 1 Kite", "Lantern Choir - 1 Kite (Remix)"});
+  expectRead(one[0], 0, 0, "1 Kite");
+  // Loose tracks whose titles start with numbers.
+  const auto loose = readFolder("Lantern Choir", {"Lantern Choir - 4 Bridges", "Lantern Choir - 2 Ravens"});
+  expectRead(loose[0], 0, 0, "4 Bridges");
+  expectRead(loose[1], 0, 0, "2 Ravens");
+  // Track lists: from 1, or written "0N", or " - " after the numbers.
+  const auto fromOne = readFolder("Lantern Choir", {"Lantern Choir - 1 Paper Kite", "Lantern Choir - 2 Glass Road"});
+  expectRead(fromOne[1], 0, 2, "Glass Road");
+  const auto padded = readFolder("Lantern Choir", {"Lantern Choir - Demos - 05 Paper Kite",
+                                                   "Lantern Choir - Demos - 07 Glass Road"});
+  expectRead(padded[0], 0, 5, "Paper Kite");
+  const auto dashed = readFolder("Lantern Choir", {"Lantern Choir - 7 - Rings", "Lantern Choir - 9 - Bells"});
+  expectRead(dashed[0], 0, 7, "Rings");
+  // A copy in another format (the same name twice) is no repeat.
+  const auto copies = readFolder("Lantern Choir", {"Lantern Choir - Demos - 01 Paper Kite",
+                                                   "Lantern Choir - Demos - 01 Paper Kite",
+                                                   "Lantern Choir - Demos - 02 Glass Road"});
+  expectRead(copies[1], 0, 1, "Paper Kite");
+  expectRead(copies[2], 0, 2, "Glass Road");
+}
+
+// An artist named with digits.
+void test_artists_named_with_digits() {
+  const auto a = readFolder("10 Lanterns", {"10 Lanterns - 01 - Paper Kite", "10 Lanterns - 02 - Glass Road"});
+  expectRead(a[0], 0, 1, "Paper Kite");
+  expectRead(a[1], 0, 2, "Glass Road");
+  const auto b = readFolder("9cc", {"9cc - 01 - Paper Kite", "9cc - 02 - Glass Road"});
+  expectRead(b[0], 0, 1, "Paper Kite");
+  // Three digits: not a disc and a number.
+  const auto c = readFolder("101", {"101 - 01 - Paper Kite", "101 - 02 - Glass Road", "101 - 03 - Iron Kite"});
+  expectRead(c[0], 0, 1, "Paper Kite");
+  expectRead(c[2], 0, 3, "Iron Kite");
+  // Its "NN - Artist - Title" names, as for any artist.
+  const auto d = readFolder("10 Lanterns", {"01 - 10 Lanterns - Paper Kite", "02 - 10 Lanterns - Glass Road"});
+  expectRead(d[1], 0, 2, "Glass Road");
+  // Digits that aren't the folder's artist: the plain rule.
+  const auto e = readFolder("Lantern Choir", {"10 Lanterns - 01 - Paper Kite", "10 Lanterns - 02 - Glass Road"});
+  expectRead(e[0], 0, 10, "Lanterns - 01 - Paper Kite");
+  // An artist folder whose name holds " - ".
+  const auto f = readFolder("Lantern - Choir", {"Lantern - Choir - 01 - Paper Kite", "Lantern - Choir - 02 - Glass Road"});
+  expectRead(f[1], 0, 2, "Glass Road");
+  expectRead(readOne("Lantern - Choir", "01 - Lantern - Choir - Paper Kite"), 0, 1, "Paper Kite");
+}
+
 void test_artist_off_titles() {
   const auto r = readFolder("Glass Orchard", {
                                                  "01 - Glass Orchard - Opening",
@@ -378,6 +560,10 @@ int main(int, char**) {
   RUN_TEST(test_hundreds_folder);
   RUN_TEST(test_prefixed_folder);
   RUN_TEST(test_prefixed_left_alone);
+  RUN_TEST(test_prefixed_parts_that_differ);
+  RUN_TEST(test_prefixed_numbers_that_run_on);
+  RUN_TEST(test_prefixed_needs_track_numbers);
+  RUN_TEST(test_artists_named_with_digits);
   RUN_TEST(test_artist_off_titles);
   return UNITY_END();
 }

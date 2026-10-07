@@ -777,7 +777,7 @@ void test_articles_sort_past_the() {
       "/music/Theory of Rain/Wet/01 - Drizzle.mp3",
       "/music/The Lantern Choir/The Long Road/01 - Mile One.mp3",
       "/music/Lantern/Long Division/01 - Remainder.mp3",
-      "/music/Le Ciel Bleu/A Paper Moon/01 - Crescent.mp3",
+      "/music/Le Ciel Bleu/A Paper Kite/01 - Crescent.mp3",
       "/music/Brass Arcade/The Zebra Years/01 - Stripes.mp3",
       "/music/Brass Arcade/Middle/01 - Centre.mp3",
       "/music/Brass Arcade/Alpha/01 - First.mp3",
@@ -798,9 +798,9 @@ void test_articles_sort_past_the() {
   TEST_ASSERT_EQUAL_UINT32(5, idx.bucketStart(V::Artists, textfold::bucketOf('U')));
   TEST_ASSERT_EQUAL_INT(textfold::bucketOf('L'), idx.bucketAt(V::Artists, 3));
   TEST_ASSERT_EQUAL_INT(textfold::bucketOf('C'), idx.bucketAt(V::Artists, 1));
-  // Albums: "A Paper Moon" stays under A ("A" is no article here), "The
+  // Albums: "A Paper Kite" stays under A ("A" is no article here), "The
   // Long Road" goes after "Long Division", "The Zebra Years" under Z.
-  const char* albums[] = {"A Paper Moon", "Alpha", "Long Division", "The Long Road", "Middle", "Wet", "The Zebra Years"};
+  const char* albums[] = {"A Paper Kite", "Alpha", "Long Division", "The Long Road", "Middle", "Wet", "The Zebra Years"};
   const LibraryIndex::Span z = idx.albumsAZ();
   TEST_ASSERT_EQUAL_UINT32(7, z.count);
   for (uint32_t i = 0; i < z.count; ++i) TEST_ASSERT_EQUAL_STRING(albums[i], idx.albumName(z[i]));
@@ -831,8 +831,9 @@ void test_disc_track_names_order_an_album() {
   LibraryIndex idx(Heap::alloc, Heap::release);
   TEST_ASSERT_TRUE(idx.begin("/music"));
   const char* files[] = {
-      // "1-01": disc then number; the number written again goes.
-      "/music/Glass Orchard/Night Shift/2-01 Return.mp3",
+      // "1-01": disc then number; the number written again goes (half
+      // the folder's names write it so).
+      "/music/Glass Orchard/Night Shift/2-01 01-Return.mp3",
       "/music/Glass Orchard/Night Shift/1-02. Second.mp3",
       "/music/Glass Orchard/Night Shift/2-02 - Glass Orchard - Last.flac",
       "/music/Glass Orchard/Night Shift/1-01 01-Opening.mp3",
@@ -921,8 +922,46 @@ void test_titles_lose_the_folders_artist() {
   TEST_ASSERT_TRUE(sawLoose && sawTop);
 }
 
-// A cache saved before the names were read this way (version 2) is refused
-// as Corrupt, so the Library builds the index again and saves version 3.
+// "Artist - Album - NN Title" whose album or work part differs from name
+// to name: each album, work or disc keeps its tracks together.
+void test_prefixes_that_differ_keep_their_order() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  const char* files[] = {
+      // A disc part at the album part's end: disc, then number.
+      "/music/Glass Orchard/Night Shift/Glass Orchard - Night Shift (Disc 2) - 02 Last.mp3",
+      "/music/Glass Orchard/Night Shift/Glass Orchard - Night Shift (Disc 1) - 01 Opening.mp3",
+      "/music/Glass Orchard/Night Shift/Glass Orchard - Night Shift (Disc 2) - 01 Return.mp3",
+      "/music/Glass Orchard/Night Shift/Glass Orchard - Night Shift (Disc 1) - 02 Second.mp3",
+      // Two works, each numbered from 1: the file names' order.
+      "/music/Composer/Suites/Composer - Glass Suite No. 2 - 1. Evening.mp3",
+      "/music/Composer/Suites/Composer - Glass Suite No. 1 - 2. Noon.mp3",
+      "/music/Composer/Suites/Composer - Glass Suite No. 1 - 1. Morning.mp3",
+      "/music/Composer/Suites/Composer - Glass Suite No. 2 - 2. Night.mp3",
+      // Two EPs in the artist's own folder.
+      "/music/Lantern Choir/Lantern Choir - Second EP - 01 Iron Kite.mp3",
+      "/music/Lantern Choir/Lantern Choir - First EP - 02 Glass Road.mp3",
+      "/music/Lantern Choir/Lantern Choir - First EP - 01 Paper Kite.mp3",
+  };
+  for (const char* f : files) idx.addFile(f);
+  TEST_ASSERT_TRUE(idx.finish());
+  expectTitles(idx, "Night Shift", {"1/1 Opening", "1/2 Second", "2/1 Return", "2/2 Last"});
+  expectTitles(idx, "Suites",
+               {"0/0 Glass Suite No. 1 - 1. Morning", "0/0 Glass Suite No. 1 - 2. Noon",
+                "0/0 Glass Suite No. 2 - 1. Evening", "0/0 Glass Suite No. 2 - 2. Night"});
+  const LibraryIndex::Span t = idx.tracksOfArtist(findArtist(idx, "Lantern Choir"));
+  const char* eps[] = {"First EP - 01 Paper Kite", "First EP - 02 Glass Road", "Second EP - 01 Iron Kite"};
+  TEST_ASSERT_EQUAL_UINT32(3, t.count);
+  for (uint32_t i = 0; i < t.count; ++i) {
+    TEST_ASSERT_EQUAL_STRING(eps[i], title(idx, t[i]).c_str());
+    TEST_ASSERT_EQUAL_UINT8(0, idx.track(t[i]).number);
+  }
+}
+
+// A cache saved before the names were read this way (version 2), or by
+// feature/opus (version 3: the same records, .opus tracks and the old
+// names), is refused as Corrupt, so the Library builds the index again and
+// saves version 4.
 void test_an_older_cache_version_is_rebuilt() {
   LibraryIndex idx(Heap::alloc, Heap::release);
   TEST_ASSERT_TRUE(idx.begin("/music"));
@@ -934,7 +973,7 @@ void test_an_older_cache_version_is_rebuilt() {
   std::vector<uint8_t> bytes(file.data(), file.data() + file.size());
   uint32_t version;
   std::memcpy(&version, bytes.data() + 4, 4);  // the header's second word
-  TEST_ASSERT_EQUAL_UINT32(3, version);
+  TEST_ASSERT_EQUAL_UINT32(4, version);
   LibraryIndex back(Heap::alloc, Heap::release);
   {
     MemorySource in(bytes.data(), bytes.size());
@@ -945,11 +984,12 @@ void test_an_older_cache_version_is_rebuilt() {
     TEST_ASSERT_EQUAL_UINT8(1, back.track(first).disc);
     TEST_ASSERT_EQUAL_UINT8(1, back.track(first).number);
   }
-  const uint32_t old = 2;
-  std::memcpy(bytes.data() + 4, &old, 4);
-  MemorySource in(bytes.data(), bytes.size());
-  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), static_cast<int>(back.load(in, 9)));
-  TEST_ASSERT_FALSE(back.ready());
+  for (const uint32_t old : {2u, 3u}) {
+    std::memcpy(bytes.data() + 4, &old, 4);
+    MemorySource in(bytes.data(), bytes.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), static_cast<int>(back.load(in, 9)));
+    TEST_ASSERT_FALSE(back.ready());
+  }
 }
 
 int main(int, char**) {
@@ -959,6 +999,7 @@ int main(int, char**) {
   RUN_TEST(test_articles_sort_past_the);
   RUN_TEST(test_disc_track_names_order_an_album);
   RUN_TEST(test_titles_lose_the_folders_artist);
+  RUN_TEST(test_prefixes_that_differ_keep_their_order);
   RUN_TEST(test_paths_round_trip);
   RUN_TEST(test_artist_and_album_views);
   RUN_TEST(test_folder_tree);

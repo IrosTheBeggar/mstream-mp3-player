@@ -1458,7 +1458,9 @@ the browsing UI hold its **track ids**, never strings.
   tracks-by-folder view). The title stays a slice of the file name, so the
   24-byte track record only gained `disc` (its spare byte). The shapes, and
   how many of a real library's 19,371 MP3 and FLAC names each one changed
-  (measured over the names only, by a mirror of these rules):
+  (measured over the names only, by a mirror of the first cut of these
+  rules; the review's fixes, marked "since", were not measured again, and
+  they make the artist-number rule read fewer names):
   - `06 - Title`, `06. Title`, `06_Title`: up to three digits (at most 255) and
     a separator, as before; now also `(06) Title` and `[06] Title` (72
     names). Four digits are no number (`1999 - Title`).
@@ -1467,28 +1469,48 @@ the browsing UI hold its **track ids**, never strings.
     number 1, titled "01 Title"). Only when every name in the folder that
     starts with a digit has this shape, two at least, so a lone `1-02
     Title`, `09-10 Live` among `01 Intro`s, `1-800 Hotline` and the
-    scene-style `01-404-name` read as before. `2-04 04-Title` drops the
-    number written again (20 names).
+    scene-style `01-404-name` read as before (`1-800 Hotline` as track 1,
+    "800 Hotline", by the plain rule). `2-04 04-Title` drops the number
+    written again (20 names, all joined by `-`); since, only when `-`, `_`
+    or `.` joins it and at least half the folder's disc-track names repeat
+    theirs, so `1-10 10 Paper Kites` keeps its title.
   - `101 Title`, `204-title`: disc and number from three digits (143 names
     in 7 folders), the same folder rule, and each disc's numbers start at 0
     or 1 (`365 Steps` beside `500 Stairs` is no box set). 301 and up had no
     number before, so a third disc played first.
   - `Artist - 03 - Title`, `Artist - Album - 03 Title`, `CD2 - 03 - Title`
-    (1,260 names): a name that doesn't start with a digit, its first ` - `
-    followed by 1-3 digits and a separator. Read when the part before it
-    starts with the folder's artist (`textfold::startsWithName()`: the
-    first ` - ` part, so `Artist feat. Guest - Album - 02 Title` counts),
-    is a disc part (`CD2`, `Disc 2`, `Disk 2`: 15 names whose numbers
-    restart), or is the same in every name of the folder; and the folder
-    has two such names and they are at least half of it, or a `-` follows
-    the number. `Artist - 99 Lanterns` among `Artist - Title` names keeps
-    its title.
+    (1,260 names in the first cut): the first ` - ` followed by 1-3 digits
+    and a separator, not a number that runs on (`Artist - 1-800 Lanterns`,
+    `- 24-7`, `- 1.5 Hours`). A disc comes from the end of the part before
+    it: the whole part (`CD2`, `Disc 2`, `Disk 2`: 15 names whose numbers
+    restart), its last ` - ` part (`Album - CD2`) or a bracketed one
+    (`Album (Disc 2)`, `Album [CD 2]`). Read when the part before it
+    - starts with the folder's artist (`textfold::startsWithName()` at one
+      of its ` - `s, so `Artist feat. Guest - Album - 02 Title` and an
+      artist `A - B` count; a name that starts with a digit only so:
+      `10 Lanterns - 01 - Title`, whose digits then never read as a
+      number) and the rest of it, past the artist and a disc, is the same
+      in every such name of the folder; or
+    - is a disc part alone, or is the same, past a disc, in every name of
+      the folder;
+    and the numbers are a track list's: ` - ` follows the number, or the
+    folder has two such names, at least half of it, with no number twice
+    on a disc (two names alike but for the extension are a copy, not a
+    repeat) and the lowest 0 or 1 or one written `0N`. Since: the "same
+    rest" part (two albums, EPs or works numbered from 1 in one folder,
+    `Artist - Suite No. 1 - 1. Overture` / `No. 2 - 1. Overture`,
+    interleaved before it; now they keep their file names' order, as
+    before this rule), the track-list test (a single's `Artist - 7 Kites`
+    beside `7 Kites (Instrumental)` lost its 7), ` - ` rather than any `-`
+    after the number, and the digit-led artists. `Artist - 99 Lanterns`
+    among `Artist - Title` names keeps its title.
   - The artist off the title: `03 - Artist - Title` shows "Title" when the
-    part before ` - ` is the folder's artist as `textfold::sameName()`
+    part before a ` - ` is the folder's artist as `textfold::sameName()`
     compares them (Full folding and lower case, letters and digits only,
     so the `/ : ? " * < > |` a FAT name can't hold don't count, and one
-    leading "The"), something follows, and it is the first ` - ` (2,667
-    names: 2,615 after a plain number, the rest after the other rules).
+    leading "The"), something follows, and no shorter part before a ` - `
+    is (2,667 names: 2,615 after a plain number, the rest after the other
+    rules; since, past later ` - `s too, for an artist named `A - B`).
     `Title - Live` and a compilation's `Other Artist - Title` stay whole:
     the index has no track artist to put "Other Artist" in (161 such names
     sit in "Various Artists"-like folders, 213 more start with the artist
@@ -1509,9 +1531,12 @@ the browsing UI hold its **track ids**, never strings.
     (`compareSorted()`). On that library: 59 of 705 artist folders, 126 of
     1,730 album folders. The Folders view, `findTrack()` and the tree keep
     the names as they are.
-  - The cache's version went to 3 for these: an old cache is refused and
-    rebuilt once. feature/opus took 3 for its `.opus` tracks, so the merge
-    of the two takes 4.
+  - The cache's version went to 4 for these: an old cache is refused and
+    rebuilt once. Not 3: feature/opus writes 3 for its `.opus` tracks, with
+    the same record sizes and path signature, so a card that ran one build
+    would load the other's cache as its own (the old names, or no `.opus`
+    tracks, and a rail out of step with the order). Each build refuses the
+    other's version. The merge of the two takes 5.
 - **The queue** (`QueueModel`, host-tested): track ids in a PSRAM array (12 B an
   entry with its key and its rank), a current position, and one level of undo. Its edits
   are the design's Library and Queue actions: Play (replace the queue, start at
