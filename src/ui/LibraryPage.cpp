@@ -521,9 +521,19 @@ const char* LibraryPage::rowName(uint32_t row) const {
   }
 }
 
-const char* LibraryPage::railName(uint32_t row) { return rowName(row); }
+// The artists and albums sort past a leading "The" (textfold::sortName():
+// "The Lantern Choir" under L), so their rail and jump grid go by that; the
+// folders sort by their names as they are.
+const char* LibraryPage::railName(uint32_t row) {
+  const LibraryIndex* i = index();
+  if (!i) return "";
+  const RowRef r = rowAt(row);
+  if (r.kind == RowKind::Artist) return textfold::sortName(i->artistName(r.id));
+  if (r.kind == RowKind::Album) return textfold::sortName(i->albumName(r.id));
+  return rowName(row);
+}
 
-char LibraryPage::railKey(uint32_t row) { return textfold::railKey(rowName(row)); }
+char LibraryPage::railKey(uint32_t row) { return textfold::railKey(railName(row)); }
 
 const char* LibraryPage::jumpTitle() {
   if (root()) return kSegments[static_cast<int>(segment())];
@@ -545,7 +555,7 @@ bool LibraryPage::emptyState(EmptyState& e) {
   if (!root() || !real()) return false;
   const AppState& s = ui_.state();
   if (!s.card && s.libraryTracks == 0) {
-    noCardState(e, s.cardNotFat32);
+    noCardState(e, s.cardKind);
     return true;
   }
   if (s.libraryTracks == 0) {
@@ -553,7 +563,7 @@ bool LibraryPage::emptyState(EmptyState& e) {
     e.iconColour = col::AMBER;
     e.title = "No music found";
     e.line1 = "Put folders in /music/Artist/Album/,";
-    e.line2 = "MP3 or FLAC, then tap Try again.";
+    e.line2 = "MP3, FLAC or Opus, then tap Try again.";
     e.buttons[0] = "Try again";
     return true;
   }
@@ -583,7 +593,8 @@ void LibraryPage::drawRow(ListView::Row& r) {
     case RowKind::Artist: {
       const char* name = i->artistName(rr.id);
       const LibraryIndex::Artist& a = i->artist(rr.id);
-      const int x = ListView::disc(r, textfold::railKey(name), discColour(name));
+      // The initial is the row's rail letter ("The Lantern Choir": L, among the L's).
+      const int x = ListView::disc(r, textfold::railKey(textfold::sortName(name)), discColour(name));
       const int right = ListView::chevron(r);
       snprintf(sub, sizeof(sub), "%lu album%s, %lu tracks", static_cast<unsigned long>(a.albumCount),
                a.albumCount == 1 ? "" : "s", static_cast<unsigned long>(a.trackCount));
@@ -638,7 +649,9 @@ void LibraryPage::drawRow(ListView::Row& r) {
     case RowKind::File: {
       const int x = now ? ListView::playing(r, accent::Library) : ListView::icon(r, icons::kFile, col::DIM);
       const LibraryIndex::Format fmt = i->track(rr.id).format;
-      const int right = ListView::badge(r, fmt == LibraryIndex::Format::Flac ? "FLAC" : "MP3");
+      const int right = ListView::badge(r, fmt == LibraryIndex::Format::Flac   ? "FLAC"
+                                           : fmt == LibraryIndex::Format::Opus ? "OPUS"
+                                                                               : "MP3");
       // The file's name as it is, less its extension ("08 - Nightcall").
       const char* name = i->trackFileName(rr.id);
       const char* dot = strrchr(name, '.');
@@ -685,7 +698,11 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
   char text[128];
   switch (action) {
     case 0:
-      ok = p.playNow(span.ids, span.count, start >= 0 ? static_cast<uint32_t>(start) : 0);
+      // A tapped track plays first; a container's Play (an artist, an
+      // album, a folder, "Play all N") starts on the first, or, while
+      // shuffled, on a random track (docs/QUEUE-MODES.md section 2.5).
+      ok = p.playNow(span.ids, span.count,
+                     start >= 0 ? static_cast<uint32_t>(start) : PlaybackController::kAnyStart);
       if (ok) ui_.added().clear();  // a new queue: nothing "added" to show in it
       if (ok && p.state() == PlayState::Waiting) {
         // The headphones aren't connected: it plays once they are (Now

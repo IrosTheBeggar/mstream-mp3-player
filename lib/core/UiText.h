@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "CardFormat.h"
+
 // Fixed texts of the UI that have a fixed room, next to that room, so the
 // host tests (test_ui_library) can measure them with the firmware's own
 // DejaVu data: a text cut to "Remov…" or "Tap ag…" on the device is a
@@ -62,10 +64,14 @@ inline constexpr const char* kTouchFirst = "Tap the screen first, then B plays";
 inline constexpr const char* kNoHeadphones = "No headphones paired: Output > Pair new headphones";
 inline constexpr int kToastTwoLineW = 306 - kToastTextX;
 // A track skipped (Ui::noteFailures): "Skipped <title>: <why>", on Toast's
-// two lines when long (the why in Body). Why: kSkipped, or for a sample
-// rate the converter refused, kSkippedRate (its %s: RateConverter::
-// rateText(), "96 kHz", "37.8 kHz", "44056 Hz") or kSkippedCpu (88.2/96 kHz
-// at 160 MHz: a setting would play it, on the Output tab).
+// two lines when long (the why in Body). Why: for a sample rate the
+// converter refused, kSkippedRate (its %s: RateConverter::rateText(),
+// "96 kHz", "37.8 kHz", "44056 Hz") or kSkippedCpu (88.2/96 kHz at 160 MHz:
+// a setting would play it, on the Output tab); else the backend's own few
+// words when it has them (PlaybackController::Failure::note: an Opus file
+// refused at its open, "surround Opus isn't supported", "Opus with 2.5 ms
+// frames isn't supported"; oggopus::Reader::refusalNote() keeps them under
+// 40 characters); else kSkipped.
 inline constexpr const char* kSkipped = "can't play it";
 inline constexpr const char* kSkippedRate = "%s isn't supported";
 inline constexpr const char* kSkippedCpu = "needs the 240 MHz CPU speed";
@@ -80,21 +86,54 @@ inline constexpr int kEmptyLineW = 304;  // a line (Small), centred
 inline constexpr const char* kPickInLibrary = "Pick an album, folder or track in the Library.";
 // The title (Title, centred in kW - 16).
 inline constexpr int kEmptyTitleW = 304;
-// No card (Now Playing, the Library and the Queue with no card and no
-// music on the flash): the title, two lines and [Try again]; its note when
-// the card still isn't there (Ui::warn, Toast's "what: where" on two lines:
-// the part before ": " in Small over the rest in Body, kToastTwoLineW).
-inline constexpr const char* kNoCardTitle = "No microSD card";
-inline constexpr const char* kNoCardLines[2] = {"Insert a card with your music in /music,",
-                                                "as /music/Artist/Album/01 - Title.mp3"};
-inline constexpr const char* kStillNoCard = "Still no card: is it all the way in?";
-// ... and when a card is in that isn't FAT32 (exFAT, NTFS, a GPT:
-// cardformat, read when it didn't mount). README's and the release notes'
-// microSD card sections say the same.
-inline constexpr const char* kNotFat32Title = "This card isn't FAT32";
-inline constexpr const char* kNotFat32Lines[2] = {"Format it FAT32 (MBR) on a computer, then",
-                                                  "put your music in /music and tap Try again."};
-inline constexpr const char* kStillNotFat32 = "Still not FAT32: format it FAT32 (MBR)";
+// No card it can use (Now Playing, the Library and the Queue with no card
+// mounted and no music on the flash): the title, two lines and [Try
+// again]; its note when it still fails (Ui::warn, Toast's "what: where" on
+// two lines: the part before ": " in Small over the rest in Body,
+// kToastTwoLineW). One message for each thing cardformat reads off a card
+// that didn't mount (cardMessage()): none at all; exFAT (anything over
+// 32 GB, as it comes); NTFS; a GPT (a Mac's Disk Utility's default
+// scheme, "GUID Partition Map": the fix is its "Master Boot Record"); and
+// a card that answered but held nothing it knows (blank, unformatted,
+// damaged, Linux's, or a FAT32 one whose mount failed for another reason:
+// so never "format it", which would erase music a Try again may find).
+// README's, the install page's and the release notes' microSD card
+// sections say how, per computer.
+struct CardMessage {
+  const char* title;
+  const char* lines[2];
+  const char* still;  // Try again's note
+};
+inline constexpr CardMessage kNoCard = {
+    "No microSD card",
+    {"Insert a card with your music in /music,", "as /music/Artist/Album/01 - Title.mp3"},
+    "Still no card: is it all the way in?"};
+inline constexpr CardMessage kExFatCard = {
+    "This card is exFAT",
+    {"Format it FAT32 (MBR) on a computer, then", "put your music in /music and tap Try again."},
+    "Still exFAT: format it FAT32 (MBR)"};
+inline constexpr CardMessage kNtfsCard = {
+    "This card is NTFS",
+    {"Format it FAT32 (MBR) on a computer, then", "put your music in /music and tap Try again."},
+    "Still NTFS: format it FAT32 (MBR)"};
+inline constexpr CardMessage kGptCard = {
+    "This card uses GPT",
+    {"Erase it on a computer as FAT32, with a", "Master Boot Record (MBR); then tap Try again."},
+    "Still GPT: erase it with an MBR"};
+inline constexpr CardMessage kUnknownCard = {
+    "Can't read this card",
+    {"Unformatted, damaged, or not FAT32 (MBR)?", "Check it on a computer, then tap Try again."},
+    "Still can't read it: check it on a computer"};
+constexpr const CardMessage& cardMessage(cardformat::Kind k) {
+  switch (k) {
+    case cardformat::Kind::ExFat: return kExFatCard;
+    case cardformat::Kind::Ntfs: return kNtfsCard;
+    case cardformat::Kind::Gpt: return kGptCard;
+    case cardformat::Kind::Other: return kUnknownCard;
+    case cardformat::Kind::Unreadable:
+    default: return kNoCard;
+  }
+}
 inline constexpr const char* kTryAgain = "Try again";
 
 // ---- Now Playing (ui/NowPlayingPage) ----
@@ -102,11 +141,47 @@ inline constexpr const char* kTryAgain = "Try again";
 // x 12 and to 308): "4 of 16 · SPYDRONE", or the headphones' "SPYDRONE (not
 // connected)" (177 px: 170 cut it).
 inline constexpr int kNowPlayingMidW = 190;
+// The seek bar's readout (docs/SEEK-BAR.md section 4.2), in the row above
+// the line while a finger scrubs, on the side away from the knob: the
+// finger's second ("2:31", Title) and, kSeekReadoutGap px after it, the
+// change ("+1:21", Small), or "no change" back where it plays; the group
+// at most kSeekReadoutW wide: a mix's "999:59 no change" is 159 px (150
+// cut "no change" from 100 min on), and from x 12 (or to x 308) it still
+// ends 12 px short of where the knob sends it across (SeekBar's
+// kReadoutLeftX, kReadoutRightX). Slid off the bar: kSeekCancel (Bold,
+// amber), centred in the line's 296 px.
+inline constexpr int kSeekReadoutW = 160;
+inline constexpr int kSeekReadoutGap = 8;
+inline constexpr const char* kSeekStay = "no change";
+inline constexpr const char* kSeekCancel = "Release to cancel";
+
+// ---- Now Playing's two menus (ui/NowPlayingPage; docs/QUEUE-MODES.md) ----
+// The navigation menu (a tap on the cover, the title, the artist or the
+// album): a 3-row sheet titled with the track's title, each row's detail
+// (Small, dim) right-aligned in what its label (Body) leaves
+// (sheet::detailRoom(): 183, 174 and 177 px): the artist or
+// kNoArtistFolder, the album or kLooseTracks, the folder cut from the left
+// ("…/Daft Punk/Discovery").
+inline constexpr const char* kGoTo[3] = {"Go to artist", "Go to album", "Go to folder"};
+inline constexpr const char* kNoArtistFolder = "(no artist folder)";
+inline constexpr const char* kLooseTracks = "(loose tracks)";
+// When nothing in it could act, no menu but a toast (Body, one line: 264
+// and 209 px of kToastTextRight - kToastTextX).
+inline constexpr const char* kBuiltinNotInLibrary = "A built-in track isn't in the Library";
+inline constexpr const char* kLibraryNotReady = "The Library isn't ready yet";
+// The playback menu ("..."): a 3-row sheet titled kPlaybackTitle (Small),
+// the rows Shuffle, Repeat and Sleep timer, each state its row's detail.
+inline constexpr const char* kPlaybackTitle = "Playback";
+inline constexpr const char* kShuffleRow = "Shuffle";
+inline constexpr const char* kRepeatRow = "Repeat";
+inline constexpr const char* kOnOff[2] = {"Off", "On"};
+inline constexpr const char* kRepeatModes[3] = {"Off", "All", "One"};  // PlaybackController::Repeat's order
 
 // ---- play waiting for the headphones (ui/NowPlayingPage, ui/Ui) ----
-// Now Playing's panel over the artist and album bands (x 112-319, y 90-169):
-// "Waiting for SPYDRONE..." (Small, amber) over "try 2 of 3" (Small, dim),
-// then two buttons (Body), x from the band's left.
+// Now Playing's panel in the title strip and the rows under it (x 112-319,
+// y 38-137): the title on one line over "Waiting for SPYDRONE..." (Small,
+// amber) and "try 2 of 3" (Small, dim), then two buttons (Body) in the
+// artist and album rows, x from the column's left.
 inline constexpr int kWaitTextX = 8, kWaitTextW = 196;
 inline constexpr int kWaitSpeakerX = 4, kWaitSpeakerW = 136;
 inline constexpr int kWaitCancelX = 144, kWaitCancelW = 62;
@@ -122,8 +197,9 @@ inline constexpr int kDialogButtonTextW = 123;
 inline constexpr const char* kPlayFailedBody = "Are they on, out of the case, and not connected to your phone?";
 
 // ---- the sleep timer (SleepTimer; docs/ENERGY.md section 3) ----
-// Now Playing's "..." sheet: its first row (Body), the timer's state dim
-// on the right (SleepTimer::rowText(): "Off", "23 min", "End of queue").
+// Now Playing's "..." sheet (the playback menu): its last row (Body), the
+// timer's state dim on the right (SleepTimer::rowText(): "Off", "23 min",
+// "End of queue").
 inline constexpr const char* kSleepRow = "Sleep timer";
 // The Sleep timer sheet (ui/Overlays' SleepSheet, the sheet panel 320 x
 // 168 from y 72): its title (Small) left of the ✕ pill (x 16 to 242), then

@@ -8,11 +8,13 @@
 #include <SD.h>
 #include <SPI.h>
 #include <dirent.h>
+#include <esp_partition.h>
 #include <sd_diskio.h>
 #include <sys/stat.h>
 
 #include <cstring>
 
+#include "UiText.h"
 #include "diskio.h"  // FatFs: disk_initialize(), disk_read() (after ff.h's ffconf names them)
 #include "ff.h"
 
@@ -21,6 +23,7 @@ constexpr const char* kMusicDir = "/music";
 constexpr const char* kStateDir = "/.player";
 constexpr const char* kSdMount = "/sd";
 constexpr const char* kFlashMount = "/littlefs";
+constexpr const char* kFlashLabel = "spiffs";  // LittleFS.begin()'s default partition (partitions.csv)
 // The VFS path: the mount point, then what the callback sees ("/music/...").
 constexpr size_t kPathMax = 300;
 constexpr uint32_t kSdHz = 25000000;
@@ -96,6 +99,12 @@ bool LocalStorage::begin() {
   const int cs = M5.getPin(m5::pin_name_t::sd_spi_cs);
   SPI.begin(M5.getPin(m5::pin_name_t::sd_spi_sclk), M5.getPin(m5::pin_name_t::sd_spi_miso),
             M5.getPin(m5::pin_name_t::sd_spi_mosi), cs);
+  // SD.begin()'s last argument, format_if_empty, stays false (the default),
+  // here and in probeCard(): true makes sdcard_mount() run f_mkfs(FM_ANY)
+  // on any card FatFs finds no FAT volume on (FR_NO_FILESYSTEM, in
+  // sd_diskio.cpp's sdcard_mount()), which is every exFAT, NTFS or GPT
+  // card and every blank one: a card with someone's music on it, wiped at
+  // boot without a word. Formatting is the listener's choice, asked first.
   if (SD.begin(cs, SPI, kSdHz, kSdMount)) {
     fs_ = &SD;
     name_ = "SD";
@@ -114,7 +123,7 @@ bool LocalStorage::begin() {
 bool LocalStorage::probeCard() {
   if (onCard()) return true;
   const int cs = M5.getPin(m5::pin_name_t::sd_spi_cs);
-  if (!SD.begin(cs, SPI, kSdHz, kSdMount)) {
+  if (!SD.begin(cs, SPI, kSdHz, kSdMount)) {  // never format_if_empty: begin()
     lookAtCard(cs);
     return false;
   }
@@ -135,12 +144,37 @@ void LocalStorage::lookAtCard(int cs) {
     }
     sdcard_uninit(pdrv);
   }
-  Serial.printf("[storage] no card mounted; its first sectors: %s%s (%lu ms)\n", cardformat::name(cardKind_),
-                cardformat::notFat32(cardKind_) ? ": not FAT32 (MBR), the pages say so" : "",
-                (unsigned long)(millis() - t0));
+  Serial.printf("[storage] no card mounted; its first sectors: %s%s; the pages say \"%s\" (%lu ms)\n",
+                cardformat::name(cardKind_), cardformat::notFat32(cardKind_) ? ": not FAT32 (MBR)" : "",
+                uitext::cardMessage(cardKind_).title, (unsigned long)(millis() - t0));
 }
 
 uint64_t LocalStorage::totalBytes() const {
   if (!available()) return 0;
-  return onCard() ? SD.totalBytes() : LittleFS.totalBytes();
+  if (onCard()) {
+    // The card's size: the sector count its CSD gave at the mount, kept
+    // by the SD driver (sdcard_num_sectors()): no card I/O, no lock. Not
+    // SD.totalBytes() (nor usedBytes()): both are f_getfree(), which on
+    // FAT32 takes the free count the mount read from the FSINFO sector;
+    // a card whose count is unset ("unknown", 0xFFFFFFFF) or whose FSINFO
+    // is missing makes it count the free clusters, every sector of the
+    // FAT: ~244k reads on a 1 TB card, minutes, holding the FatFs
+    // volume's lock all along, so the decode task's reads fail
+    // (FR_TIMEOUT, CONFIG_FATFS_TIMEOUT_MS: 10 s) and the music stops.
+    // About asked for it at its first open after each boot (the count is
+    // kept for the mount after that). The card's size is the volume's
+    // plus what comes before it and its FATs (~0.03% more on a big card).
+    // Nothing on the device needs the free space today. The WiFi sync
+    // will ("does it fit?"): it must count it once, in one controlled
+    // scan with progress, outside playback and never at boot; not
+    // through About, or a usedBytes() here.
+    return SD.cardSize();
+  }
+  // The flash's: its partition's size, which is the LittleFS's (its
+  // blocks fill the partition). Not LittleFS.totalBytes(): that is
+  // esp_littlefs_info(), which also counts the used blocks (lfs_fs_size(),
+  // a walk of the whole file system under its lock, while the decode task
+  // reads from it) for a number it throws away.
+  const esp_partition_t* p = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_ANY, kFlashLabel);
+  return p ? p->size : 0;
 }

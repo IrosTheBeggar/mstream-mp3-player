@@ -13,6 +13,7 @@
 
 #include "RateConverter.h"
 #include "SleepTimer.h"
+#include "TextFit.h"
 #include "TextFold.h"
 #include "UiText.h"
 #include "app/Psram.h"
@@ -198,12 +199,13 @@ void Ui::retryCard() {
     toast("Card found: starting again", false);
     return;
   }
-  // What is in may have changed (a card that isn't FAT32 taken out, or
-  // put in): the snapshot now, not at the next pass, for the note.
-  const bool was = state_.cardNotFat32;
+  // What is in may have changed (an exFAT card taken out, or put in, or
+  // swapped for another): the snapshot now, not at the next pass, for the
+  // note ("Still exFAT: ...", "Still no card: ...").
+  const cardformat::Kind was = state_.cardKind;
   host_.snapshot(state_);
-  if (state_.cardNotFat32 != was && page_ && !modalUp()) page_->repaint();
-  warn(state_.cardNotFat32 ? uitext::kStillNotFat32 : uitext::kStillNoCard);
+  if (state_.cardKind != was && page_ && !modalUp()) page_->repaint();
+  warn(uitext::cardMessage(state_.cardKind).still);
 }
 
 void Ui::shuffleAll() {
@@ -212,18 +214,18 @@ void Ui::shuffleAll() {
     warn("No music on the card to shuffle");
     return;
   }
+  // The whole library from a random track, with shuffle on (the mode, not
+  // a one-shot: the menu then says what plays, and Off brings the library's
+  // own order back, A-Z, from the track that plays). One edit, the mode in
+  // it, so the toast's Undo puts back the queue and the mode it found
+  // (QueueModel copies the ids and shuffles them: docs/QUEUE-MODES.md
+  // sections 2.5 and 2.6).
   const LibraryIndex::Span all = index->allTracks();
-  auto* ids = static_cast<uint32_t*>(psramAlloc(all.count * sizeof(uint32_t)));
-  if (!ids) {
-    toast("Not enough memory for that", false);
-    return;
-  }
-  memcpy(ids, all.ids, all.count * sizeof(uint32_t));
-  queueview::shuffle(ids, all.count, esp_random());
-  const bool ok = player_.playNow(ids, all.count, 0);
-  psramFree(ids);
-  added_.clear();
-  Serial.printf("[ui] shuffle all: %lu tracks%s\n", (unsigned long)all.count, ok ? "" : ": NO MEMORY");
+  const bool was = player_.shuffle();
+  const bool ok = player_.playNow(all.ids, all.count, PlaybackController::kAnyStart, /*shuffle=*/true);
+  if (ok) added_.clear();  // a new queue: nothing "added" to show in it
+  Serial.printf("[ui] shuffle all: %lu tracks (shuffle on; was %s)%s\n", (unsigned long)all.count, was ? "on" : "off",
+                ok ? "" : ": NO MEMORY");
   char text[48];
   snprintf(text, sizeof(text), "Shuffling %lu tracks", (unsigned long)all.count);
   toast(ok ? text : "Not enough memory for that", ok);
@@ -468,7 +470,7 @@ void Ui::uncover(int oldBottom) {
   // the device: +10 min on the fade toast over the Sleep timer sheet left
   // its pills invisible over the transport, and a tap on "..." hit Turn off.
   const bool wholePage = !jumpGrid_.up() && !coach_.up() && page_ && !page_->hasHeader();
-  if (sheet_.up() && (wholePage || sheet_.top() < oldBottom)) sheet_.draw();  // the 4-row sheet reaches the header row
+  if (sheet_.up() && (wholePage || sheet_.top() < oldBottom)) sheet_.draw();  // a 4-row sheet would reach the header row
   if (wholePage && sleepSheet_.up()) sleepSheet_.draw();
   if (wholePage && volumeSheet_.up()) volumeSheet_.draw();
   if (dialog_.up()) dialog_.draw();
@@ -546,15 +548,37 @@ void Ui::openSheet(OverlayOwner* owner, const char* title, const char* const* ro
   endPageTouch();
   closeModal(true);
   sheetOwner_ = owner;
-  sheetSleepRow_ = -1;
+  for (SheetFollow& f : sheetFollow_) f = SheetFollow::None;
+  sheetStays_ = 0;
+  sheetOpenedMs_ = millis();
   sheet_.open(title, rows, n, accent(), details, primary, danger);
   applyCover();
-  // A 4-row sheet reaches the header row: a toast up stays on top.
+  // A 4-row sheet would reach the header row: a toast up stays on top.
   if (toast_.up() && sheet_.top() < toast_.bottom()) toast_.draw();
 }
 
-void Ui::sheetFollowsSleep(int row) {
-  if (sheet_.up()) sheetSleepRow_ = row;
+void Ui::sheetFollows(int row, SheetFollow what) {
+  if (sheet_.up() && row >= 0 && row < Sheet::kMaxRows) sheetFollow_[row] = what;
+}
+
+void Ui::sheetStays(int row) {
+  if (sheet_.up() && row >= 0 && row < Sheet::kMaxRows) sheetStays_ |= static_cast<uint8_t>(1u << row);
+}
+
+void Ui::followSheet(int pressed) {
+  if (!sheet_.up()) return;
+  bool pressedDrawn = false;
+  for (int i = 0; i < Sheet::kMaxRows; ++i) {
+    const char* text = nullptr;
+    switch (sheetFollow_[i]) {
+      case SheetFollow::Sleep: text = state_.sleepRow; break;
+      case SheetFollow::Shuffle: text = uitext::kOnOff[state_.shuffle ? 1 : 0]; break;
+      case SheetFollow::Repeat: text = uitext::kRepeatModes[state_.repeat < 3 ? state_.repeat : 0]; break;
+      default: continue;
+    }
+    if (sheet_.setDetail(i, text) && i == pressed) pressedDrawn = true;
+  }
+  if (pressed >= 0 && !pressedDrawn) sheet_.drawRow(pressed);
 }
 
 void Ui::sleepTitle(char* buf, size_t size) const {
@@ -568,6 +592,7 @@ void Ui::openSleepSheet() {
   closeModal(true);
   char title[40];
   sleepTitle(title, sizeof(title));
+  sheetOpenedMs_ = millis();  // (the settle, as every sheet's)
   sleepSheet_.open(state_.sleepPick, state_.sleepRunning, state_.sleepCanExtend, title, accent::NowPlaying);
   applyCover();
   Serial.printf("[ui] sleep timer sheet (%s)\n", state_.sleepRow);
@@ -827,7 +852,9 @@ void Ui::noteFailures() {
   char title[64];
   if (!player_.catalog().title(f.track, title, sizeof(title))) snprintf(title, sizeof(title), "a track");
   // Why, when it was the track's sample rate: a refused rate isn't a
-  // broken file, and at 160 MHz a setting would play it.
+  // broken file, and at 160 MHz a setting would play it. Else the
+  // backend's own few words when it has them (an Opus file refused at its
+  // open: "surround Opus isn't supported"), else "can't play it".
   char why[48];
   if (f.rate.hz != 0 && f.rate.needsCpu) {
     snprintf(why, sizeof(why), "%s", uitext::kSkippedCpu);
@@ -835,6 +862,8 @@ void Ui::noteFailures() {
     char rate[16];
     RateConverter::rateText(f.rate.hz, rate, sizeof(rate));
     snprintf(why, sizeof(why), uitext::kSkippedRate, rate);
+  } else if (f.note[0]) {
+    snprintf(why, sizeof(why), "%s", f.note);
   } else {
     snprintf(why, sizeof(why), "%s", uitext::kSkipped);
   }
@@ -956,7 +985,7 @@ void Ui::loop(uint32_t nowMs) {
   // The sleep timer: its sheet follows it, and the "..." sheet's row; the
   // fade's toast goes with the fade.
   refreshSleepSheet();
-  if (sheet_.up() && sheetSleepRow_ >= 0) sheet_.setDetail(sheetSleepRow_, state_.sleepRow);
+  followSheet();
   if (toast_.sleep() && !state_.sleepFading) {
     const int was = toast_.bottom();
     toast_.hide();
@@ -983,9 +1012,27 @@ void Ui::loop(uint32_t nowMs) {
   }
   // The page's deadlines (under a modal too, and in the dark).
   if (page_) page_->tick(nowMs);
+  // A shuffle toggle drops the queue's undo (docs/QUEUE-MODES.md 2.6), and
+  // the console's qu uses it: an Undo toast still up would answer "Nothing
+  // to undo", so it goes, its line saying which. (Shuffle all's toast
+  // stays: its Play set the mode as part of the edit, and its Undo puts
+  // both back; qu's undo of it changes the mode back, no toggle.) And no
+  // badge flash for a change of mode: Off can grow "up next" without
+  // adding anything.
+  const queueview::UndoWatch::Gone gone =
+      undoWatch_.pass(state_.shuffle, toast_.up() && toast_.undo(), queue_.undoable());
+  if (gone != queueview::UndoWatch::Gone::Stays) {
+    const int was = toast_.bottom();
+    toast_.hide();
+    uncover(was);
+    Serial.printf("[ui] the Undo toast went: %s\n", gone == queueview::UndoWatch::Gone::Undone
+                                                        ? "undone from the console"
+                                                        : "a shuffle toggle took the undo");
+  }
+  const bool toggled = undoWatch_.modeChanged();
   // Tracks added: the Queue badge flashes.
   if (state_.contentVersion != lastContent_) {
-    if (state_.upNext > lastUpNext_) badgeUntilMs_ = nowMs + 1500;
+    if (state_.upNext > lastUpNext_ && !toggled) badgeUntilMs_ = nowMs + 1500;
     lastContent_ = state_.contentVersion;
   }
   lastUpNext_ = state_.upNext;
@@ -1046,12 +1093,14 @@ void Ui::loop(uint32_t nowMs) {
 // A list moving (a drag, a fling, a snap) is a "motion": its frames, how
 // long they took to draw, the audio ring's low point and new underruns are
 // logged when it settles ("[ui] scroll: ..."), the numbers the scroll lab
-// printed for its stress runs.
+// printed for its stress runs. So is any other page that animates (Now
+// Playing while a finger scrubs its seek bar: "[ui] scrub: ...").
 void Ui::trackMotion(uint32_t nowMs) {
-  const bool moving = page_ && list_.attached() && page_->animating();
+  const bool moving = page_ && page_->animating();
   if (moving && !motion_.on) {
     motion_ = Motion{};
     motion_.on = true;
+    motion_.list = list_.attached();
     motion_.startMs = nowMs;
     motion_.underruns = state_.underruns;
     motion_.ringMin = UINT32_MAX;
@@ -1064,10 +1113,10 @@ void Ui::trackMotion(uint32_t nowMs) {
   if (motion_.frames < 2) return;  // a tap's highlight, not a scroll
   char ring[24] = "n/a (not playing)";
   if (motion_.ringMin != UINT32_MAX) snprintf(ring, sizeof(ring), "%lu ms", (unsigned long)motion_.ringMin);
-  Serial.printf("[ui] scroll: %lu ms, %lu frames (%.1f fps), draw mean %.1f max %.1f ms (%lu over 35), ring min %s, underruns +%lu, "
+  Serial.printf("[ui] %s: %lu ms, %lu frames (%.1f fps), draw mean %.1f max %.1f ms (%lu over 35), ring min %s, underruns +%lu, "
                 "governor %s\n",
-                (unsigned long)ms, (unsigned long)motion_.frames, ms ? motion_.frames * 1000.0f / ms : 0.0f,
-                motion_.sumUs / 1000.0f / motion_.frames, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
+                motion_.list ? "scroll" : "scrub", (unsigned long)ms, (unsigned long)motion_.frames,
+                ms ? motion_.frames * 1000.0f / ms : 0.0f, motion_.sumUs / 1000.0f / motion_.frames, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
                 (unsigned long)(state_.underruns - motion_.underruns), ScrollGovernor::name(budget_.level));
 }
 
@@ -1117,6 +1166,13 @@ void Ui::route(const InputEvent& e) {
       touch_ = TouchOn::Toast;
     } else if (dialog_.up()) {
       touch_ = TouchOn::Dialog;
+    } else if ((sheet_.up() || sleepSheet_.up()) &&
+               static_cast<int32_t>(e.ms - sheetOpenedMs_) < static_cast<int32_t>(Sheet::kSettleMs)) {
+      // The settle: a touch that starts this soon after a sheet opened is
+      // the finger that opened it coming back (a double tap on "..." or on
+      // the album row): the whole touch goes nowhere, no tick.
+      touch_ = TouchOn::None;
+      Serial.println("[ui] sheet: a touch right after it opened, ignored");
     } else if (sheet_.up()) {
       touch_ = TouchOn::Sheet;
     } else if (sleepSheet_.up()) {
@@ -1177,7 +1233,14 @@ void Ui::route(const InputEvent& e) {
     }
     case TouchOn::Sheet: {
       const int r = sheet_.onEvent(e);
-      if (r >= 0 || r == -2) {
+      if (r >= 0 && r < Sheet::kMaxRows && (sheetStays_ >> r) & 1u) {
+        // A staying row: its owner acts, the sheet stays up, the row shows
+        // the new state (the snapshot now, as retryCard() takes it).
+        tick();
+        if (sheetOwner_) sheetOwner_->onSheet(r);
+        host_.snapshot(state_);
+        followSheet(r);
+      } else if (r >= 0 || r == -2) {
         tick();
         OverlayOwner* owner = sheetOwner_;
         sheet_.close();
@@ -1275,8 +1338,11 @@ void Ui::route(const InputEvent& e) {
           uncover(was);
           host_.sleepChoose(hit == Toast::kHitExtend ? SleepSheet::kExtend : SleepSheet::kTurnOff);
         } else if (hit == 2) {
+          const bool shuffled = player_.shuffle();
           const bool undone = player_.undo();
-          Serial.printf("[ui] undo: %s\n", undone ? "done" : "nothing to undo");
+          // (Shuffle all's: the mode it found comes back with the queue.)
+          Serial.printf("[ui] undo: %s%s\n", undone ? "done" : "nothing to undo",
+                        player_.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)");
           toast_.show(undone ? "Undone" : "Nothing to undo", false, false, accent(), nowMs_);
           uncover(was);
         } else if (hit == 3) {
@@ -1431,19 +1497,9 @@ void Ui::drawHeader(const Header& h) {
       }
     }
     if (room >= kMinPathRoom) {
-      const char* p = h.path;
       char cut[160];
-      while (f.width(Font::Small, p) > room) {
-        const char* next = strchr(p + 1, '/');
-        if (!next) break;
-        snprintf(cut, sizeof(cut), "\xE2\x80\xA6%s", next);  // "…/the rest"
-        p = next;
-        if (f.width(Font::Small, cut) <= room) {
-          p = cut;
-          break;
-        }
-      }
-      f.draw(s, Font::Small, p, x, 26, room, col::DIM, col::HEAD);
+      textfit::cutPathLeft(f.fit(Font::Small), h.path, room, cut, sizeof(cut));  // "…/the rest"
+      f.draw(s, Font::Small, cut, x, 26, room, col::DIM, col::HEAD);
     }
     // The title last: the second line's background would cut its
     // descenders ("Discoverv" on the device).
@@ -1482,7 +1538,7 @@ void Ui::printState() const {
     Serial.println(line);
   }
   if (page_) {
-    char desc[160];
+    char desc[256];  // (Now Playing's with its seek bar: up to ~180)
     page_->describe(desc, sizeof(desc));
     Serial.printf("[ui] page: %s\n", desc);
   }

@@ -192,6 +192,14 @@ public:
   // have, is an album of its own. `b` kNone (no next entry): true.
   static bool albumEndsBetween(const LibraryIndex* index, uint32_t a, uint32_t b);
 
+  // In::lastOfQueue: the current entry (`current`, -1 none, of `size`) is
+  // the queue's last, or Repeat One plays it (`repeatOne`): nothing after
+  // it would ever play, so it is the boundary for End of queue, and so of
+  // album, and the timer still ends (docs/QUEUE-MODES.md section 3.5).
+  // main.cpp's two readers (sleepEndsAtCurrent(), stepSleep()) must agree:
+  // both ask this.
+  static bool lastOfQueue(int32_t current, uint32_t size, bool repeatOne);
+
 private:
   bool atBoundaryTrack(const In& in) const;
   void beginEnding(bool faded);

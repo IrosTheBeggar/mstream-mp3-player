@@ -15,11 +15,15 @@
 // Samples are on the trimmed timeline (docs/GAPLESS.md section 4.6): 0 is
 // the track's first kept sample, at the file's own rate.
 struct ResumeAnchor {
-  enum class Kind : uint8_t { None, Mp3, Flac };
+  // Opus (3) is the FLAC model's (lib/core/OggOpus: makeAnchor(),
+  // checkAnchor(); SeekIndex::anchorAt() makes one from an Opus run's
+  // header, Core2AudioBackend::prepare() checks it and plans the start by
+  // it: docs/OPUS.md section 9).
+  enum class Kind : uint8_t { None, Mp3, Flac, Opus };
   Kind kind = Kind::None;
   bool exact = false;        // `sample` is the file's own time (else the time a TOC start showed)
   uint32_t rate = 0;         // the file's rate: the unit of `sample`
-  uint64_t sample = 0;       // where it picks up (FLAC: the absolute sample)
+  uint64_t sample = 0;       // where it picks up (FLAC: the absolute sample; Opus: the trimmed one)
   uint32_t fileSize = 0;
   // MP3:
   uint32_t prerollByte = 0;  // the decoder is handed this frame's start
@@ -27,7 +31,7 @@ struct ResumeAnchor {
   uint32_t skip = 0;         // samples from the landing frame's first one to `sample`
   uint32_t frameHash = 0;    // resumeanchor::frameHash() of the landing frame
   // FLAC: frameHash holds STREAMINFO's total samples (low 32 bits); the byte
-  // fields are 0.
+  // fields are 0. Opus: the exact trimmed length's low 32 bits, the same.
 
   bool valid() const { return kind != Kind::None; }
   bool operator==(const ResumeAnchor& o) const {
@@ -52,7 +56,7 @@ uint32_t frameHash(const uint8_t* frame, size_t avail);
 uint32_t ms(const ResumeAnchor& a);
 
 // For the logs: "MP3 frame at 2345678 + 517 samples, preroll 2343590,
-// exact", "FLAC sample 3674562", "none".
+// exact", "FLAC sample 3674562", "Opus sample 3674562", "none".
 void describe(const ResumeAnchor& a, char* buf, size_t size);
 
 }  // namespace resumeanchor

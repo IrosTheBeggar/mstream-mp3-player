@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "ButtonPolicy.h"
+#include "CardFormat.h"
 #include "OutputModel.h"
 #include "PlayGate.h"
 #include "PlaybackController.h"
@@ -23,6 +24,7 @@ struct AppState {
   // The player and the queue (Waiting: a play waits for the headphones).
   PlayState play = PlayState::Stopped;
   bool failed = false;           // the current track can't be played
+  bool seekable = true;          // ... can start part of the way in (PlaybackController::seekable(): the entry's path asked of the backend; the seek bar's knob)
   uint32_t trackId = 0xFFFFFFFFu;  // TrackCatalog id of the current entry
   uint32_t currentKey = 0xFFFFFFFFu;
   int32_t current = -1;          // queue position
@@ -32,6 +34,10 @@ struct AppState {
   uint32_t positionVersion = 0;
   uint32_t positionMs = 0;
   uint32_t durationMs = 0;       // 0: not known (yet)
+  // Shuffle and repeat (docs/QUEUE-MODES.md): the queue shuffled; repeat
+  // as PlaybackController::Repeat (0 Off, 1 All, 2 One).
+  bool shuffle = false;
+  uint8_t repeat = 0;
   // The outputs.
   bool onBluetooth = false;
   bool btConnected = false;
@@ -54,7 +60,9 @@ struct AppState {
   char btDetail[40] = "";        // "SBC 44.1 kHz, 175 ms" while connected
   // Storage and the library.
   bool card = false;             // a microSD card is mounted (not the flash fallback)
-  bool cardNotFat32 = false;     // none mounted, but one is in that isn't FAT32 (LocalStorage::cardNotFat32())
+  // None mounted: what the card that is in is (LocalStorage::cardKind(),
+  // the empty state's message); Unreadable with none in, or one mounted.
+  cardformat::Kind cardKind = cardformat::Kind::Unreadable;
   uint32_t libraryTracks = 0;
   // The rest.
   uint8_t battery = 0;
@@ -124,6 +132,11 @@ public:
   virtual void playOnSpeaker() = 0;
   virtual void next() = 0;
   virtual void prev() = 0;
+  // Now Playing's playback menu (docs/QUEUE-MODES.md): shuffle on or off,
+  // the repeat mode (PlaybackController::Repeat's value); applied, saved
+  // (repeat in NVS; shuffle with the queue's file) and logged.
+  virtual void setShuffle(bool on) = 0;
+  virtual void setRepeat(uint8_t mode) = 0;
   // The active output's volume, by `delta` %.
   virtual void stepVolume(int delta) = 0;
   // One output's volume, by `delta` % (the Output tab's per-output sheet),
@@ -158,7 +171,7 @@ public:
 
   // ---- the card, the library ----
   // "Try again" with no card: false if there still is none, or it still
-  // doesn't mount (the next snapshot's cardNotFat32 says which); with one
+  // doesn't mount (the next snapshot's cardKind says which); with one
   // the firmware restarts to use it.
   virtual bool retryCard() = 0;
   // "Try again" with no music: walks /music again (the queue follows).

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <string>
 
@@ -60,6 +61,19 @@ public:
   // The current track can't be played (missing file, unsupported format, or a
   // sample rate the backend doesn't take).
   virtual bool failed() const { return false; }
+  // Whether a start of `path` part of the way in lands there: false for a
+  // format whose seeks aren't built (none today: MP3, FLAC and Opus each
+  // start where asked, docs/SEEK.md and docs/OPUS.md section 9; an Opus
+  // track was refused here until M3, when a start asked part of the way in
+  // played from 0:00), so Now Playing's seek bar shows no knob and takes no
+  // touch on it. By the path alone, so the player asks it of its current
+  // entry (PlaybackController::seekable()) whichever way that became
+  // current (a play(), a gapless join heard, a cue, a boot's restore),
+  // never of the last request.
+  virtual bool seekable(const char* path) const {
+    (void)path;
+    return true;
+  }
   // While failed(): whether its sample rate was why. hz: that rate (0: some
   // other reason); needsCpu: a setting would take it (the 240 MHz CPU speed).
   struct RateRefusal {
@@ -67,6 +81,14 @@ public:
     bool needsCpu = false;
   };
   virtual RateRefusal rateRefusal() const { return {}; }
+  // While failed(): why, in a few words for Now Playing's note ("surround
+  // Opus isn't supported", "Opus with 2.5 ms frames isn't supported"),
+  // into `buf`; the length (0: nothing better than "can't play it": a
+  // missing file, a decoder giving up). A rate refusal says why first.
+  virtual size_t failureNote(char* buf, size_t size) const {
+    if (size) buf[0] = 0;
+    return 0;
+  }
 
   // ---- gapless playback (docs/GAPLESS.md) ----
   // The player's word on what follows a track: the track with token

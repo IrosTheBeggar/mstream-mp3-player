@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 
+#include "CardFormat.h"
 #include "InputEvent.h"
 #include "ui/Icons.h"
 
@@ -12,7 +13,8 @@
 // first is the primary, in the section's colour):
 //
 //   No microSD card     "Insert a card with your music in /music, ..."  [Try again]
-//   This card isn't FAT32 "Format it FAT32 (MBR) on a computer, ..."    [Try again]
+//   This card is exFAT  "Format it FAT32 (MBR) on a computer, ..."      [Try again]
+//     (and "... NTFS", "This card uses GPT", "Can't read this card")
 //   No music found      "Put folders in /music/Artist/Album/"           [Try again]
 //   Your queue is empty "Pick an album, folder or track in the Library." [Open Library] [Shuffle all]
 //   Nothing playing     ...                                             [Open Library] [Shuffle all]
@@ -33,10 +35,12 @@ struct EmptyState {
   int buttonCount() const { return (buttons[0] ? 1 : 0) + (buttons[1] ? 1 : 0); }
 };
 
-// No card (and no music on the flash): "No microSD card", or with
-// `notFat32` (a card is in that isn't: AppState::cardNotFat32) "This card
-// isn't FAT32"; both with Try again (Ui::retryCard()).
-void noCardState(EmptyState& e, bool notFat32);
+// No card mounted (and no music on the flash): what is in the slot
+// (AppState::cardKind) says which (uitext::cardMessage()): "No microSD
+// card", or for a card that is in but didn't mount (the icon amber) "This
+// card is exFAT", "This card is NTFS", "This card uses GPT" or "Can't read
+// this card"; each with Try again (Ui::retryCard()).
+void noCardState(EmptyState& e, cardformat::Kind card);
 
 // Draws `e` over screen lines [y0, y0 + h); `pressed`: the button under a
 // finger (-1 none).

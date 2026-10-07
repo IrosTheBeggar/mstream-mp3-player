@@ -3,7 +3,15 @@
 
 #include "PlaybackController.h"
 
+#include <algorithm>
+#include <cstdio>
 #include <string>
+
+#include "TrackSeek.h"
+
+// The seek bar's reach stops short of the tail rule (a start there would go
+// to 0:00).
+static_assert(trackseek::kSeekGuardMs > trackseek::kTailMs, "a seek must never land in the tail");
 
 void PlaybackController::startCurrent() {
   if (!hasTrack()) return;
@@ -35,6 +43,7 @@ void PlaybackController::startNow() {
   if (at > 0) start.anchor = startAnchor_;  // (it goes with the start point)
   clearStartPoint();  // once: a later start of the entry is from its beginning
   playedFromMs_ = at;
+  noteLength(hint);  // (a resume point's length, a seek's, a built-in track's)
   audio_.play(std::string(path), start);
   setPlaying(PlayState::Playing);
   cued_ = false;
@@ -114,15 +123,40 @@ void PlaybackController::next() {
   if (queue_.empty()) return;
   failuresInARow_ = 0;
   clearStartPoint();  // (a queue of one wraps to the same entry: from its start)
-  advance();
+  advance(false);
 }
 
-void PlaybackController::advance() {
-  if (!queue_.step(+1, repeat_)) {
-    stop();  // the end of the queue, and no repeat
+uint32_t PlaybackController::endNext() const {
+  return repeat_ == Repeat::One ? queue_.peek(0, false) : queue_.peek(+1, wraps());
+}
+
+bool PlaybackController::stepAtEnd() {
+  if (repeat_ == Repeat::One) {
+    if (!hasTrack()) return false;
+    ++repeats_;  // this entry again
+    return true;
+  }
+  return queue_.step(+1, wraps());
+}
+
+void PlaybackController::advance(bool atEnd) {
+  if (!(atEnd ? stepAtEnd() : queue_.step(+1, wraps()))) {
+    stop();  // the end of the queue, repeat Off
     return;
   }
   startCurrent();
+}
+
+void PlaybackController::setRepeat(Repeat r) {
+  Act act(*this);  // (the word follows at once: refreshOffer())
+  repeat_ = r;
+}
+
+void PlaybackController::setShuffle(bool on) {
+  Act act(*this);
+  // The same entry (its key) stays current in the same state: nothing to
+  // start, stop or cue, and its start point and length belong to the key.
+  queue_.setShuffled(on);
 }
 
 PlaybackController::Prev PlaybackController::prevRule(PlayState state, bool startPointWaits, bool positionKnown,
@@ -154,11 +188,16 @@ void PlaybackController::prev() {
     return;
   }
   clearStartPoint();
-  queue_.step(-1, repeat_);  // at the start without repeat: the first track again
+  queue_.step(-1, wraps());  // at the start with repeat Off: the first track again
   startCurrent();
 }
 
 void PlaybackController::restart() {
+  // The length it had stays shown at 0:00 (paused: "0:00 / 4:05", not
+  // "--:--", while the backend holds nothing), and the seek bar with it.
+  // Not while a start is pending: the backend's length may still be the
+  // track before's (a seek to 0:00 then has noted the bar's already).
+  if (state_ != PlayState::Stopped && !cued_ && audio_.positionKnown()) noteLength(audio_.durationMs());
   clearStartPoint();
   switch (state_) {
     case PlayState::Playing:
@@ -199,7 +238,7 @@ void PlaybackController::cue(int delta) {
     return;
   }
   clearStartPoint();
-  queue_.step(delta, repeat_);
+  queue_.step(delta, wraps());
   if (state_ == PlayState::Paused && !cued_) {
     audio_.stop();  // the paused track can't be resumed any more
     cued_ = true;
@@ -241,6 +280,10 @@ bool PlaybackController::stopKeepingPlace() {
 
 void PlaybackController::setStartPoint(uint32_t ms, uint32_t durationMs, const ResumeAnchor* anchor) {
   Act act(*this);
+  placeStart(ms, durationMs, anchor);
+}
+
+void PlaybackController::placeStart(uint32_t ms, uint32_t durationMs, const ResumeAnchor* anchor) {
   if (!hasTrack() || ms == 0) {
     clearStartPoint();
     return;
@@ -252,6 +295,12 @@ void PlaybackController::setStartPoint(uint32_t ms, uint32_t durationMs, const R
       durationMs = startDurationMs_;
     } else if (state_ != PlayState::Stopped && !cued_) {
       durationMs = audio_.durationMs();  // the backend holds this entry's track
+    } else if (lengthHint() > 0) {
+      // Stopped or cued (the sleep timer's end-of-track pause with Repeat
+      // One cues the entry that just played): the length told for this
+      // entry, which the bar shows meanwhile. The catalog's hint (0 for a
+      // library track) would leave the bar inert until a play.
+      durationMs = lengthHint();
     } else {
       durationMs = catalog_.durationHintMs(queue_.currentTrack());
     }
@@ -290,10 +339,76 @@ bool PlaybackController::startPoint(uint32_t* ms, uint32_t* durationMs, ResumeAn
 bool PlaybackController::resumePoint(uint32_t* ms, uint32_t* durationMs, ResumeAnchor* anchor) const {
   if (startPoint(ms, durationMs, anchor)) return true;
   if ((state_ != PlayState::Paused && state_ != PlayState::Waiting) || cued_ || !hasTrack()) return false;
+  if (!audio_.positionKnown()) {
+    // Paused before the backend took the start up (within ~150 ms of a
+    // seek): its position may still be the run before's. Where that start
+    // was asked for, as stopKeepingPlace() reads it, with no anchor.
+    *ms = playedFromMs_;
+    *durationMs = lengthHint();
+    if (anchor) *anchor = ResumeAnchor{};
+    return *ms > 0;
+  }
   *ms = audio_.positionMs();
   *durationMs = audio_.durationMs();
   if (anchor && !audio_.resumeAnchor(anchor)) *anchor = ResumeAnchor{};
   return *ms > 0;
+}
+
+PlaybackController::Seek PlaybackController::seek(uint32_t key, uint32_t ms, uint32_t durationMs) {
+  Act act(*this);  // the heard join first: the entry may not be the one the finger was on
+  if (!hasTrack()) return Seek::NoPlace;
+  if (queue_.currentKey() != key) return Seek::Moved;
+  const bool holding = state_ != PlayState::Stopped && !cued_;
+  if (durationMs == 0 || (holding && audio_.failed())) return Seek::NoPlace;
+  failuresInARow_ = 0;  // a listener's action, as next and prev
+  noteLength(durationMs);
+  ms = std::min(ms, trackseek::seekLimitMs(durationMs));  // never into the tail (it would start at 0:00)
+  if (ms == 0) {
+    restart();  // (a start point of 0 only clears one)
+  } else {
+    placeStart(ms, durationMs, nullptr);  // (no nested Act between the check and the start)
+  }
+  return state_ == PlayState::Playing ? Seek::Started : Seek::Waits;
+}
+
+bool PlaybackController::seekable() const {
+  // By the entry's path, not by what the backend was last asked to play:
+  // after a gapless join the heard track is the entry's without any play(),
+  // and after a boot the restored entry waits with none yet.
+  char path[TrackCatalog::kMaxPath];
+  if (currentPath(path, sizeof(path)) == 0) return false;
+  return audio_.seekable(path);
+}
+
+bool PlaybackController::pendingStart(uint32_t* ms) const {
+  // As prevAction() reads it: only while the backend holds this entry's
+  // track (the play it was asked for) and hasn't taken that start up.
+  if (!hasTrack() || state_ == PlayState::Stopped || cued_ || audio_.positionKnown()) return false;
+  *ms = playedFromMs_;
+  return true;
+}
+
+void PlaybackController::shownTime(uint32_t* positionMs, uint32_t* durationMs) const {
+  *positionMs = 0;
+  *durationMs = 0;
+  if (!hasTrack()) return;
+  uint32_t ms = 0, length = 0;
+  if (startPoint(&ms, &length)) {
+    *positionMs = ms;
+    *durationMs = length;
+    return;
+  }
+  if (pendingStart(&ms)) {
+    // Never the backend's length here: a skip's is the track before's until
+    // the decode task takes the request up. A library track has no hint: no
+    // length for that moment, and the seek bar is inert.
+    *positionMs = ms;
+    *durationMs = lengthHint();
+    return;
+  }
+  *positionMs = audio_.positionMs();
+  *durationMs = audio_.durationMs();
+  if (*durationMs == 0 && !audio_.failed()) *durationMs = lengthHint();
 }
 
 void PlaybackController::pauseByTimer() {
@@ -317,11 +432,13 @@ void PlaybackController::pauseByTimer() {
 void PlaybackController::pauseAtBoundary() {
   pauseAfter_ = false;
   ++timerStops_;
-  if (!queue_.step(+1, repeat_)) {
-    stop();  // the end of the queue, and no repeat: the natural stop
+  // Repeat One: no step, this entry is cued at 0:00 (the timer wins: a
+  // later play starts it from the top, as One would have).
+  if (repeat_ != Repeat::One && !queue_.step(+1, wraps())) {
+    stop();  // the end of the queue, repeat Off: the natural stop
     return;
   }
-  audio_.stop();  // the finished track lets go; the next one is cued
+  audio_.stop();  // the finished track lets go; the next one (or this one again) is cued
   state_ = PlayState::Paused;
   cued_ = true;
   pausedByTimer_ = true;
@@ -335,23 +452,39 @@ void PlaybackController::update(uint32_t nowMs) {
 
 void PlaybackController::checkEnd() {
   if (state_ != PlayState::Playing) return;
-  if (audio_.failed()) {
+  // A natural end with nothing heard (the position never left 0:00): a
+  // track with no samples to play, which every format can hold (an Opus
+  // file whose last granule is its pre-skip, an MP3 that is all encoder
+  // delay and padding, a FLAC of 0 samples; the Opus reader refuses the
+  // first at its open, the others end at once). Taken as a failure: by
+  // the repeat mode it would be started again at once, and Repeat One,
+  // or All with nothing else to play, would spin on it (an SD open and a
+  // log line fifty times a second, Now Playing frozen at 0:00) until the
+  // listener acted. A failure moves on even under Repeat One, and a
+  // queue of nothing but such entries stops (docs/QUEUE-MODES.md).
+  const bool empty = !audio_.failed() && audio_.finished() && audio_.positionKnown() && audio_.positionMs() == 0;
+  if (audio_.failed() || empty) {
     ++failure_.count;
     failure_.track = queue_.currentTrack();
     failure_.key = queue_.currentKey();
     failure_.rate = audio_.rateRefusal();
+    if (empty) {
+      snprintf(failure_.note, sizeof(failure_.note), "no audio in it");
+    } else {
+      audio_.failureNote(failure_.note, sizeof(failure_.note));
+    }
     if (++failuresInARow_ >= queue_.size()) {
       stop();  // every track failed in a row: nothing here plays
       return;
     }
-    advance();
+    advance(false);  // a failure moves on (a skip), even with Repeat One
   } else if (audio_.finished()) {
     failuresInARow_ = 0;
     if (pauseAfter_) {
-      pauseAtBoundary();  // the sleep timer: the next entry, paused at 0:00
+      pauseAtBoundary();  // the sleep timer: the next entry (One: this one), paused at 0:00
       return;
     }
-    advance();  // wraps to the start of the queue at the end (with repeat)
+    advance(true);  // by the repeat mode: All wraps at the end, One plays it again
   }
 }
 
@@ -380,9 +513,9 @@ void PlaybackController::currentMoved() {
   }
 }
 
-bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start) {
+bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle) {
   Act act(*this);
-  if (!queue_.replace(tracks, n, start)) return false;
+  if (!queue_.replace(tracks, n, start, shuffle)) return false;
   failuresInARow_ = 0;
   clearStartPoint();
   if (hasTrack()) {
@@ -478,17 +611,18 @@ void PlaybackController::refreshOffer() {
   sig.position = queue_.positionVersion();
   sig.content = queue_.contentVersion();
   sig.heard = heardToken_;
-  sig.repeat = repeat_;
+  sig.repeat = static_cast<uint8_t>(repeat_);
   sig.pauseAfter = pauseAfter_;
   sig.gapless = gapless_;
   sig.gate = gate;
   if (sent_ && sig == signature_) return;
   signature_ = sig;
 
-  // What advance() would start, unless the track must end as it would
-  // without gapless playback.
+  // What advance() would start at the natural end (Repeat One: this entry
+  // itself, the self-join), unless the track must end as it would without
+  // gapless playback.
   uint32_t pos = QueueModel::kNone;
-  if (gapless_ && !pauseAfter_ && !gate) pos = queue_.peek(+1, repeat_);
+  if (gapless_ && !pauseAfter_ && !gate) pos = endNext();
   char path[TrackCatalog::kMaxPath];
   path[0] = 0;
   uint32_t track = QueueModel::kNone;
@@ -504,8 +638,8 @@ void PlaybackController::refreshOffer() {
     // or the entry that took its place when its key went (a library
     // rebuild's fresh keys, one of two duplicates removed). Never the
     // heard token: the backend took it already, and would answer a word
-    // with it "nothing follows" (a queue of one on repeat: the same entry
-    // after itself, a new token each time round).
+    // with it "nothing follows" (Repeat One, or a queue of one on repeat:
+    // the same entry after itself, a new token each time round).
     const bool same = offer_.token != 0 && offer_.token != heardToken_ && offer_.track == track &&
                       (offer_.key == key || queue_.positionOf(offer_.key) == QueueModel::kNone);
     if (same) {
@@ -553,12 +687,17 @@ void PlaybackController::syncHeard() {
       continue;
     }
     const Offered* o = offered(token);
-    const uint32_t expected = queue_.peek(+1, repeat_);
+    const uint32_t expected = endNext();
     const bool match = o && expected != QueueModel::kNone &&
                        (queue_.keyAt(expected) == o->key ||
                         (queue_.positionOf(o->key) == QueueModel::kNone && queue_.trackAt(expected) == o->track));
     if (match && !(state_ == PlayState::Playing && held())) {
-      queue_.setCurrent(expected);  // no play(): the backend plays it already
+      // No play(): the backend plays it already. Repeat One: the same
+      // position (nothing bumps; the heard token moved, so the next word
+      // gets a new one), a loop. (A queue of one on All loops the same
+      // way, but that is no Repeat One loop.)
+      if (repeat_ == Repeat::One && static_cast<int32_t>(expected) == queue_.current()) ++repeats_;
+      queue_.setCurrent(expected);
       ++gaplessStats_.adopted;
       continue;
     }
@@ -566,9 +705,9 @@ void PlaybackController::syncHeard() {
     // the output can't be heard: the entry advance() would start.
     ++gaplessStats_.restarted;
     if (state_ == PlayState::Playing) {
-      advance();
-    } else if (!queue_.step(+1, repeat_)) {
-      stop();  // (paused at the queue's end without repeat: stopped there, as an end would)
+      advance(true);
+    } else if (!stepAtEnd()) {
+      stop();  // (paused at the queue's end, repeat Off: stopped there, as an end would)
     } else {
       audio_.stop();  // paused (a pause's fade read past the join): the new entry cued
       cued_ = true;

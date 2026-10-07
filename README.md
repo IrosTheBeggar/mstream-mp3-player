@@ -1,11 +1,11 @@
 # mstream-mp3-player
 
-An experimental portable MP3/FLAC player on the **M5Stack Core2** that will
+An experimental portable MP3/FLAC/Opus player on the **M5Stack Core2** that will
 keep a copy of part of your [mStream](https://mstream.io) library and sync it
 over WiFi. Listening is Bluetooth-first (A2DP headphones), with the built-in
 speaker as a fallback.
 
-> **Status:** proof of concept. Plays MP3 and FLAC from the SD card (or the
+> **Status:** proof of concept. Plays MP3, FLAC and Opus from the SD card (or the
 > Core2's internal flash) to Bluetooth headphones or the speaker. The UI is a
 > tab bar (Now Playing, Library, Queue, Dance, Output), all five built:
 > Now Playing with the album cover, the Library (artists, albums with
@@ -27,12 +27,73 @@ stops there (on battery it powers off after a minute).
 
 ### The microSD card
 
-- Format it **FAT32** (MBR). exFAT cards, which is how most cards of 64 GB
-  and up come, and GPT cards don't mount: the player says "This card isn't
-  FAT32". Windows only offers FAT32 up to 32 GB; for a bigger card use a
-  FAT32 formatting tool.
+- Format it **FAT32**, with an **MBR** partition table ("Master Boot
+  Record"). Cards of 32 GB and less usually come that way. Cards of 64 GB
+  and up come **exFAT**, and a card a Mac erased whole gets a **GPT**
+  ("GUID Partition Map", Disk Utility's default scheme): the player
+  doesn't mount those and says what it found ("This card is exFAT", "This
+  card is NTFS", "This card uses GPT", or "Can't read this card" for one
+  it doesn't recognise, such as a blank card).
+- Formatting erases the card: copy anything on it off first, and check
+  the disk you pick is the card (by its size) before you erase.
 - Put the music under **`/music`**, e.g. `/music/Artist/Album/01 - Title.mp3`.
   An album's cover is the `cover.jpg` (or `folder.jpg`) next to its tracks.
+- The player doesn't read tags yet: the artist and the album are the two
+  folders, and the number and the title come from the file name. These
+  names all work:
+  - `01 - Title`, `01. Title`, `01 Title`, `01_Title`, `(01) Title`: track 1.
+  - `1-01 Title`, `2-03 - Title`, `2.03 Title`, `203 Title`: disc 2, track
+    3, so an album plays disc after disc. Only in a folder where every file
+    that starts with a number is written that way: `1-800 Hotline` isn't
+    read as a disc and a track (it reads as track 1, "800 Hotline", as
+    before), and `1999 - Title` keeps its year. Discs in subfolders (`CD1`,
+    `CD2`) play in order too.
+  - `Artist - 03 - Title`, `Artist - Album - 03 Title`, `CD2 - 03 - Title`,
+    `Artist - Album (Disc 2) - 03 Title`: track 3 (on disc 2), when the
+    files in the folder name the same album and are numbered like a track
+    list. Two albums or works numbered from 01 in one folder play in their
+    file names' order. `Artist - 1-800 Lanterns` keeps its title.
+  - `03 - Artist - Title`: the title shows without the artist when it is the
+    folder's artist (in any case, with or without "The" or accents);
+    a compilation's `03 - Other Artist - Title` shows as it is.
+  - Artists and albums sort without a leading "The" ("The Lantern Choir"
+    under L, shown whole), or El, La, Las, Le, Les, Los, as mStream sorts
+    them. The Folders list shows the card as it is.
+  - Two discs in one folder whose numbers both start at 01, with nothing
+    else to tell them apart, play by number, the discs mixed: put each disc
+    in its own subfolder, or name them `1-01`, `2-01`.
+
+Making a FAT32 (MBR) card. One of 32 GB or less that isn't GPT: the
+computer's own Format, FAT32 (File Explorer's on Windows). Over 32 GB, or
+a GPT card:
+
+- **Windows 11, updated since May 2026** (KB5089549 or later): in a
+  Terminal run as administrator, `format X: /FS:FAT32 /Q /V:MUSIC`, where
+  `X:` is the card's drive letter. The command line now makes FAT32 up to
+  2 TB; File Explorer's Format still offers it only up to 32 GB.
+- **Windows 10, or when `format` answers "The volume is too big for
+  FAT32"** (a PC without the change yet): Ridgecrop's free **FAT32
+  Format** (`guiformat.exe`; or `winget install -e --id Ridgecrop.guiformat`):
+  pick the card's drive letter, Start.
+- **A GPT card on Windows:** neither of those changes the partition table,
+  so a GPT card stays GPT. Make it MBR first, in that administrator
+  Terminal: `diskpart`, then `list disk` (find the card by its size),
+  `select disk N`, `clean` (it erases whichever disk is selected: check N
+  twice), `convert mbr`, `create partition primary`, `assign`, `exit`.
+  Cancel Windows' offer to format it, then format it as above.
+- **macOS:** Disk Utility, **View > Show All Devices**, select the card
+  itself (the device, not the volume under it), **Erase**: Format **MS-DOS
+  (FAT)**, Scheme **Master Boot Record** (the default, GUID Partition Map,
+  makes a GPT card). Or in Terminal: `diskutil list` to find the card's
+  `/dev/diskN`, then `sudo diskutil eraseDisk FAT32 MUSIC MBRFormat /dev/diskN`.
+- **Linux:** `lsblk` to find the card (`/dev/sdX`, or `/dev/mmcblk0` in a
+  built-in reader: its partition is then `/dev/mmcblk0p1`), unmount it
+  (e.g. `sudo umount /dev/sdX1`: a desktop mounts a card as it goes in),
+  then `sudo parted /dev/sdX --script mklabel msdos mkpart primary fat32 4MiB 100%`
+  and `sudo mkfs.fat -F 32 -s 64 -n MUSIC /dev/sdX1` (mkfs.fat is in
+  dosfstools).
+- Not the SD Association's **SD Card Formatter** for cards over 32 GB: it
+  makes them exFAT (for 32 GB and less it's fine).
 
 ## Quick start (Windows)
 
@@ -153,9 +214,9 @@ still change). `tools/version.py` names every build from git
 |---|---|
 | From the tag | `v0.5.0` |
 | 3 commits past it, with uncommitted changes | `v0.5.0-3-gabc1234-dirty` |
-| No `v*` tag reachable (before the first release, or a clone without its tags: `git fetch --tags`) | `v0.6.0-dev+abc1234` (`-dirty` too) |
+| No `v*` tag reachable (before the first release, or a clone without its tags: `git fetch --tags`) | `v0.7.0-dev+abc1234` (`-dirty` too) |
 
-The `0.6.0` in the last one is `NEXT_RELEASE`, at the top of
+The `0.7.0` in the last one is `NEXT_RELEASE`, at the top of
 `tools/version.py`: the one place the next version is written. The date a
 build shows is its commit's, not the day it was built.
 
@@ -314,11 +375,17 @@ list, or tap it for a grid of the letters; a letter with many entries
 opens a second grid of its two-letter starts ("Ka", "Ke", "Ki"...). What the
 pages do:
 
-- **Now Playing**: the album's cover, the title, the artist and the album
-  (tap either, or the cover, to open it in the Library, scrolled to the
-  playing track), the progress, the volume (tap: a slider), prev /
-  play-pause / next, and "..." for Go to artist, Go to album, Show in
-  folders.
+- **Now Playing**: the album's cover, the title, the artist and the album.
+  Tap any of them for **Go to artist**, **Go to album** and **Go to
+  folder**, which open the Library there, scrolled to the playing track.
+  The progress line: tap it, or drag along it and lift, to move in the
+  track (never into its last 6 s; slide off it, or back onto where it
+  plays, to leave it; paused, it stays paused, and play, or the next boot,
+  starts there). Then the volume (tap: a slider), prev / play-pause / next,
+  and "..." for **Shuffle** (on, off), **Repeat** (off, all, one) and the
+  **Sleep timer**: a tap on Shuffle or Repeat changes it there and then, the
+  menu staying open. A small shuffle and repeat sign under the "..." shows
+  which is on (the loop with a "1" beside it is Repeat One).
 - **Library**: three lists at the top: **Artists**, **Albums** (with their
   covers) and **Folders** (the card's folders; only audio files are listed,
   the others counted: "14 audio files, 1 other"). An artist opens its
@@ -354,8 +421,12 @@ pages do:
   "No headphones paired": tap it, or its button, for the Pair screen.
   **Pair new headphones** lists the audio devices in pairing mode nearby
   (with their signal); tap one to pair it, in place of the ones paired
-  before (they stay if the new pairing fails). Then the line-out module's
-  place (not fitted yet), **Haptics** on/off, **Screen off after**,
+  before (they stay if the new pairing fails). Its search runs for 2
+  minutes and the screen stays lit meanwhile (no dim, no off, so a tap
+  always acts), then the normal screen timeout again; **Search again**
+  starts another. Each search is in the serial log: every audio device
+  it found, and at its end how many devices it saw. Then the line-out
+  module's place (not fitted yet), **Haptics** on/off, **Screen off after**,
   **Brightness**, **Turn off when idle**, **CPU speed** (240 MHz, the default,
   is the smooth one; 160 MHz saves a little battery, but lists scroll at
   about half speed while music plays; it takes a restart, asked first: the
@@ -370,9 +441,10 @@ The first time, two tips show what the three red buttons do and that
 tapping the tab you're on goes back to its start (console `uic` shows them
 again). With no microSD card (and no music on the flash), the pages say so
 and offer **Try again** (with a card in, the player restarts to use it);
-a card that is in but isn't FAT32 (exFAT, a GPT) is named as such, "This
-card isn't FAT32"; a card without music offers the same, which looks
-through `/music` again.
+a card that is in but doesn't mount is named as what it is ("This card is
+exFAT", "This card is NTFS", "This card uses GPT", "Can't read this card"),
+with what to do ([The microSD card](#the-microsd-card)); a card without
+music offers the same, which looks through `/music` again.
 If the headphones drop out while playing, the music pauses (it never
 carries on out loud) and a message follows their reconnecting, with **Use
 speaker** or **OK** to keep waiting.
@@ -389,7 +461,7 @@ control only comes up after playback started take over mid-song: the music
 goes silent for about a second, then fades back in over ~2 s, so the
 change of their level is never heard as a jump.)
 
-The music is the `.mp3` and `.flac` files under `/music`
+The music is the `.mp3`, `.flac` and `.opus` files under `/music`
 (`/music/Artist/Album/NN - Title.mp3`). Any sample rate from 8 to 48 kHz
 plays, on the headphones and on the speaker alike (48 kHz files too, over
 Bluetooth): the Core2 converts everything that isn't 44.1 kHz to 44.1 kHz
@@ -398,25 +470,86 @@ files are skipped for now ("96 kHz isn't supported"): they are turned on
 once measured on the device, and will then need the 240 MHz CPU speed
 (Output > CPU speed). Anything else (176.4/192 kHz, odd rates) is skipped
 with a note that names the rate. The files are indexed at boot; the index is cached
-in `/.player` on the card and rebuilt when anything under `/music` changes.
+in `/.player` on the card and rebuilt when anything under `/music` changes
+(and once after an update that changes what the index records: 0.6.0's
+cache knew no Opus, nor the discs and artists in file names).
 An album's cover is the `cover.jpg` in its folder (else `folder.jpg`,
 `front.jpg`, or the largest `.jpg` there). It is made into thumbnails the
 first time it shows, which are kept in `/.player/thumbs` (delete that folder
 to have them made again, after replacing a cover under the same name). A
 progressive JPEG can't be decoded on the Core2: its album shows a note
 instead.
+
+**Opus**: `.opus` files (Ogg Opus, [RFC 7845](https://www.rfc-editor.org/rfc/rfc7845):
+what mStream's `/transcode` makes and what yt-dlp downloads) play like any
+other track, in the Library with an OPUS badge, in the queue, over
+Bluetooth and on the speaker: mono or stereo, every bitrate, 10-120 ms
+frames, decoded with the libopus that ESP8266Audio bundles behind the
+player's own Ogg reader ([docs/OPUS.md](docs/OPUS.md)). Opus is always
+48 kHz, so a track costs what a 48 kHz MP3 does (about 37 % of a core at
+240 MHz for mStream's 128k, decoding and conversion together, with the
+converter's filter tables in a PSRAM block pinned beside the decoder's
+state so that 7.6 KB of internal RAM stay free; the console's `Ot0` puts
+them back in internal RAM for about 3 points less); it plays at the
+160 MHz CPU speed too (Output > CPU speed), at about 60 % of a core,
+where list scrolling is slower, as with a 48 kHz MP3. Tracks are sample
+exact from the file alone (the pre-skip and the end trim), so a gapless
+album transcoded by mStream joins without a gap, and an Opus track joins
+an MP3 or FLAC the way a 48 kHz track does. The track's artist, album and
+title come from its folder and file name, as for the other formats (the
+tags inside the file aren't read; the cover is the folder's `cover.jpg`).
+Not played, each skipped with a note on Now Playing ("Skipped <title>:
+...") and the full reason in the serial log: surround files (more than two
+channels: "surround Opus isn't supported"; the log adds the channel
+count), files with frames under 10 ms ("Opus with 2.5 ms frames isn't
+supported": too slow to decode here; encoders write 20 ms unless told
+otherwise), and the other Ogg codecs (an `.ogg` or `.oga` isn't indexed; a
+Vorbis stream renamed `.opus` says "Ogg Vorbis isn't supported"). A
+chained file plays its first stream. Seeks (the seek bar, the console's
+`qs`) and the resume point after a restart land on the exact sample, as
+on a FLAC: the player finds the page by the file's own sample counts and
+decodes a short run-in before the spot (200 ms for a seek, 600 ms for a
+resume point; [docs/OPUS.md](docs/OPUS.md) section 9). What it learns
+about a file at its open (its headers and its exact length) is kept in
+`/.player/opus.idx`, so a seek, a track played before and the resume
+point after a restart open with one read (section 10).
+
+Opus decoding uses libopus under the IETF royalty-free patent grants
+(Xiph.Org [#1524](https://datatracker.ietf.org/ipr/1524/), Microsoft
+[#1914](https://datatracker.ietf.org/ipr/1914/), Broadcom
+[#1526](https://datatracker.ietf.org/ipr/1526/)). Separately, members of
+the Vectis Opus patent pool (Dolby, Fraunhofer, NTT) assert patents against
+makers of hardware that decodes Opus. If you sell devices with this
+firmware installed, that may concern you.
+
 The first time, the queue is the whole library (artist, album, track order).
 The built-in test tones and click tracks (60 s at 90-174 BPM, for the beat
 tracker) stay out of it; the console's `qb` queues them. The queue and its position are saved on the card:
-after a restart it's where it was, stopped. A pause also saves the second
-it paused at: after the boot that follows (the CPU speed's restart, the
-idle power-off, the power key while paused) Now Playing shows that second
-and play picks up there; next or another track start from the top, and
+after a restart it's where it was, stopped. A pause, or a seek while
+paused, also saves the second it is at: after the boot that follows (the
+CPU speed's restart, the idle power-off, the power key while paused) Now
+Playing shows that second and play picks up there; next or another track
+start from the top, and
 previous goes to the top of that track without starting it. (A power cut
 while playing starts the track from its beginning:
 nothing is written while it plays.) The Library and Queue tabs edit
 it, and so do the console's `q` commands (play an album, play it next, add
 it, remove, clear, undo).
+**Shuffle and repeat** are kept across a restart too. Shuffle on shuffles
+what's up next (the track that plays plays on, and the Queue tab shows the
+order that plays); off puts the queue's own order back. While it's on, an
+album's or an artist's Play starts on a random track; Play next and +
+Queue never shuffle what you add. **Shuffle all** (an empty queue's
+button) turns shuffle on; its Undo puts the queue and shuffle back as
+they were. **Repeat is off by default: the queue stops at
+its end** (before 0.7.0 it always started again from the top). All starts
+it again from the top, with no gap; One plays the track again at its end,
+and next and previous still move. The sleep timer's End of track, End of
+album and End of queue pause at the end of a track on Repeat One (it's the
+last one that would play); while shuffled, End of album means the album
+of the track that plays next in the shuffled order. Going back to a
+firmware from before 0.7.0 while shuffled loses the queue once (it can't
+read the shuffled file).
 
 **Touch calibration.** Core2 touch panels differ: one measured reads
 touches on the right half of the screen too far right (about 20 px at x
@@ -495,18 +628,19 @@ The serial console (115200 baud) is there for scripted testing:
 | Key | Action | Key + Enter | Action |
 |---|---|---|---|
 | `n` / `p` | next / previous (past 3 s: the track's start) | `i<n>` | play queue entry n (0-based) |
-| space | play / pause | `b<n>` | benchmark decoding track n (and, at another rate than 44.1 kHz, decode + convert) |
+| space | play / pause | `b<n>` | benchmark decoding track n (and, at another rate than 44.1 kHz, decode + convert); `b</path>` a file by its path, one the library doesn't list (an `.opus` under `/bench/opus/`, say; [docs/OPUS.md](docs/OPUS.md)) |
 | `o` | switch output | `c<name>` | the name a build with `BT_SINK_NAME` scans for while none are remembered (saved) |
 | `+` / `-` | volume | `h<n>` | Bluetooth headroom -n dB, 0-12 (default 2, not saved) |
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
 | `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
-| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, not-FAT32 or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
+| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/t/g/u/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, exFAT-card, NTFS-card, GPT-card, can't-read-the-card or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
 | `m` | next dancer: crab (default) / stick figure | | |
-| `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none) |
+| `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none), `qS` shuffle on/off (`qS0` / `qS1`), `qR` repeat off / all / one in turn (`qR0`-`qR2`) |
 | `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
 | | | `R...` | the rate converter ([docs/RESAMPLER.md](docs/RESAMPLER.md)): `R` the current track's conversion (the exact ratio, source frames taken, ring frames made, clamped samples); `Rt` lists its test tracks (a 1 kHz tone and silence at other rates), `Rt<n>` or `Rt<tone:...@rate>` plays one on its own (the player is stopped first, keeping your place in the track: nothing follows it; only silence on Bluetooth, a tone only in silent mode `z`); `Rf</music/...>` plays a file on its own (silent mode only; `Rf48000</music/...>` converts it as if it were 48 kHz, a load test), `Rx` stops what `Rt` or `Rf` started; `Rb` its bench (the MAC16 kernel's self-test and route check, then 10 s of audio per rate with each kernel: cycles and share of a core at the clock running; 88.2/96 kHz too, though they don't play yet) |
 | | | `G...` | gapless playback ([docs/GAPLESS.md](docs/GAPLESS.md)): `G` its status (what the player says comes next, the join waiting to be heard, joins, cuts and failed opens since boot, the decoding track's LAME trim); `G0` / `G1` off / on (off: tracks end as before 0.6.0, for an A/B; RAM only); `Gt0` / `Gt1` trimming by the LAME tag off / on from the next track; `Gx<n>` the ring's cut against a reader on the other core (a stress test: stops the player, keeping your place) |
+| | | `O...` | Opus knobs for the device checks ([docs/OPUS.md](docs/OPUS.md); a file the library doesn't list plays by its path, `Rf</bench/opus/x.opus>` in silent mode, or benches by it, `b</bench/opus/x.opus>`): `O` status, `Ol` / `Oi` / `Oh` the decoder's state in the pinned PSRAM block / internal RAM / the PSRAM above 0x3FA00000 from the next open (an A/B of where it decodes fastest), `Ot1` / `Ot0` the rate converter's 7.6 KB table copy in a PSRAM block pinned next to it (the default: 7.6 KB of internal RAM stay free, for about 3 points of a core) / in internal RAM, from the next converted track |
 | | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
 | | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else. `tools/usb_viz.py` sends them (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
@@ -532,10 +666,14 @@ partitions.csv        Two 6 MB OTA app slots, NVS above anything a single-file
                       install writes, 3.8 MB LittleFS (test audio), coredump;
                       never changes after release (docs/ARCHITECTURE.md#flash-layout)
 lib/core/             Portable logic, framework-agnostic (also compiled for native)
-  PlaybackController  Transport over the queue; skips tracks that fail
+  PlaybackController  Transport over the queue; repeat Off / All / One;
+                      skips tracks that fail
   QueueModel          The play queue: track ids in PSRAM, current position,
-                      stable keys, one level of undo
-  QueueText           The queue saved as paths (survives a library rebuild)
+                      stable keys, one level of undo, shuffle (each entry's
+                      rank in the queue's own order)
+  Shuffle             The shuffle's Fisher-Yates loop (QueueModel's)
+  QueueText           The queue saved as paths (survives a library rebuild;
+                      version 2: a shuffled queue, with its ranks)
   TrackCatalog        Track ids to paths and names: the index's tracks and
                       the built-in ones
   QueueSaver          When the queue, its position and the resume point
@@ -550,6 +688,13 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   SeekIndex           The run index: every 4th MP3 frame decoded, for a
                       pause's resume anchor and exact seeks back into a run
   ResumeAnchor        The bytes that start a track on the sample it paused at
+  OggPage, OggOpus    An Ogg Opus file as a track (docs/OPUS.md): the pages
+                      and their CRC, the headers, the packets split into
+                      frames, the trims that make it sample-exact, a
+                      chained file's first link and its length, the gap
+                      after a damaged page, the plan for a start part of
+                      the way in (a bisection by granule, a preroll) and
+                      its resume anchor
   FrameCursor         Which frame the sample a decoder offers comes from
   ByteStream          Byte sinks and sources for what is saved and loaded
   HeadsetKeys         What the headphones' transport keys do (never start music)
@@ -559,8 +704,10 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       halfband FIRs, exact counts (docs/RESAMPLER.md)
   RingFeed            The decode side of the ring: the converter, the stage,
                       the ring-full rule (RingOutput wraps it)
-  TableCopy           The converter's tables in internal RAM while a track
-                      at another rate plays (freed at a 44.1 kHz one)
+  TableCopy           The converter's tables copied out of flash while a
+                      track at another rate plays (into a PSRAM block pinned
+                      beside the decoder's state; internal RAM with the
+                      console's Ot0; freed at a 44.1 kHz one)
   DecoderArena        One block for libmad's state, lent to one MP3 decoder
                       at a time (pinned in the PSRAM's fast lower 2 MB)
   DecoderParts        One decoder's state and who frees each part: given
@@ -579,6 +726,9 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       sorted views, A-Z buckets, folder tree; saved and loaded
                       as one file (LibrarySynth: made-up libraries of any size)
   TextFold            UTF-8 to ASCII for the GFX fonts; the library's sort order
+                      (and its sort names: "The Lantern Choir" under L)
+  TrackName           A track's disc, number and title from its file name,
+                      read with the other names in its folder
   JumpIndex           The A-Z jump grid: each letter's first row, and a big
                       letter's two-letter starts
   ThumbCache, ThumbScaler, JpegInfo
@@ -593,17 +743,23 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       The glass's tap/hold/drag/fling events; the touch
                       buttons (only a touch that went down on one, and
                       stays), their click/hold/repeat, and what they do
+  SeekBar             Now Playing's seek bar: x to whole seconds and back,
+                      the ends and the reach, one touch's tap or scrub, the
+                      stay detent and sliding off (docs/SEEK-BAR.md)
   PowerWindow         The power chip's (AXP192) ADC registers decoded, and
                       their mean/min/max over a window (console P)
   OutputModel         The Output tab's Bluetooth card (its state for every
                       link state, a connection that failed), what the
                       listener asked for (BtSession), Forget's second
                       tap, the pairing scan's list
+  PairFinds           The Pair screen's search in the serial log: each audio
+                      device once per search, the rest counted, the summary
+                      at its end; the ring from the Bluetooth task
   UiText              The UI's fixed texts next to their room (the host
                       tests measure them with the firmware's fonts)
   QueueView           The Queue's summary from learned track lengths, the
                       mark on what a Library add put in, the failed-track
-                      ring, Shuffle all
+                      ring
   TouchGesture, KineticScroll, ScrollGovernor
                       Tap/hold/drag/flick; inertial list scrolling (flings
                       capped at 2,000 px/s); how hard a list may use the SPI
@@ -618,7 +774,7 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   CardFormat          What a card that didn't mount is (exFAT, NTFS, GPT),
                       from its first sectors
   NvsLayout           The NVS schema number's boot step; the resume point's
-                      versioned blob
+                      versioned blob; the repeat mode's key
   hal/                IAudioBackend, IStorage
 src/                  Core2 firmware
   audio/              Core2AudioBackend (decode task), RingOutput, BtSink, SpeakerSink
@@ -652,9 +808,13 @@ src/                  Core2 firmware
                       console's queue and touch commands
 data/                 LittleFS image source (data/music is gitignored)
 tools/                make_test_audio.py; version.py (build pre-script: the
-                      version from git, the release checks); iram_diet.py and
-                      flash_guard.py (build post-scripts: IRAM; the app's slot,
-                      the merged image, NVS, the flash mode, the pieces' list);
+                      version from git, the release checks); iram_diet.py,
+                      cache_guard.py and flash_guard.py (build post-scripts:
+                      IRAM and the MP3 synth loop pinned at the front of flash;
+                      that loop's flash-cache sets, with test_cache_guard.py:
+                      python -m unittest discover -s tools -p
+                      "test_cache_guard.py"; the app's slot, the merged image,
+                      NVS, the flash mode, the pieces' list);
                       package_release.py (the QIO and DIO builds' release
                       files, install page and release notes -> dist/);
                       crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*);
@@ -694,8 +854,9 @@ Every source file says so in its first lines (`SPDX-License-Identifier`).
 
 The firmware binary also contains other people's code, fonts and binary
 libraries under their own licences, not all of them the GPL:
-ESP8266Audio (GPL-3.0-or-later) with libmad (GPL-2.0-or-later) and libFLAC
-(BSD-3-Clause), ESP32-A2DP (Apache-2.0), M5Unified and M5GFX (MIT, with
+ESP8266Audio (GPL-3.0-or-later) with libmad (GPL-2.0-or-later), libFLAC
+(BSD-3-Clause) and libopus (BSD-3-Clause, under the IETF patent grants:
+see "Opus" above), ESP32-A2DP (Apache-2.0), M5Unified and M5GFX (MIT, with
 LovyanGFX and fonts under BSD-style licences), the Arduino-ESP32 core
 (LGPL-2.1-or-later and Apache-2.0), ESP-IDF with Espressif's binary
 Bluetooth and radio libraries (Apache-2.0, with BSD- and MIT-licensed parts

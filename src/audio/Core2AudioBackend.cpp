@@ -19,6 +19,7 @@
 #include <cstring>
 #include <new>
 
+#include "ByteStream.h"
 #include "RateConverter.h"
 #include "ResamplerTables.h"
 #include "ResumeAnchor.h"
@@ -26,13 +27,25 @@
 #include "ToneTrack.h"
 #include "TrackProgress.h"
 #include "TrackSeek.h"
+#include "app/Psram.h"
 #include "audio/GuardedSource.h"
+#include "audio/OpusGenerator.h"
 #include "audio/PinnedMp3.h"
 #include "audio/RingOutput.h"
+#include "audio/SourceReader.h"
+#include "storage/FileStream.h"
 
 namespace {
 constexpr uint32_t kRingFrames = 65536;  // ~1.5 s at 44.1 kHz (every track's rate in the ring), 256 KB of PSRAM
 constexpr uint32_t kChunkFrames = 1024;  // source frames taken per pass of the decode task
+// Internal RAM. MP3 and FLAC use ~3 KB of it; libopus keeps its scratch on
+// the stack (VAR_ARRAYS). The M0 gate (docs/OPUS.md, G4) measured the most
+// the task ever used at 13,000 B, the fuzz file's (random packets in every
+// configuration) included, and 12,088 B on real files, so 16 KB, what
+// 0.6.0 had, leaves 3,384 B on hostile input and 4,296 B on real files:
+// the research's rule (the measured maximum + 3 KB, rounded up to 1 KB).
+// M0's gate build ran at 20,480 to measure that; the 4 KB came back for
+// the internal-RAM floor (G5).
 constexpr uint32_t kDecodeStack = 16384;
 constexpr uint32_t kRingRate = AudioShared::kRingRate;
 // Bluetooth: what the headphones report plus ESP-IDF's frame queue and the
@@ -69,30 +82,23 @@ uint32_t pathHash(const std::string& path) {
   return h;
 }
 
-// trackseek's reads, from the decode task's open file.
-class SourceReader : public trackseek::FileReader {
-public:
-  explicit SourceReader(AudioFileSource* f) : f_(f) {}
-  uint32_t readAt(uint32_t offset, uint8_t* buf, uint32_t n) override {
-    if (!f_->seek(static_cast<int32_t>(offset), SEEK_SET)) return 0;
-    uint32_t got = 0;
-    while (got < n) {
-      const uint32_t r = f_->read(buf + got, n - got);
-      if (r == 0) break;
-      got += r;
-    }
-    return got;
-  }
-
-private:
-  AudioFileSource* f_;
-};
-
 std::string extensionOf(const std::string& path) {
   const size_t dot = path.find_last_of('.');
   std::string ext = dot == std::string::npos ? "" : path.substr(dot);
   std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
   return ext;
+}
+
+// Whose a resume anchor is, for the line that refuses it on another kind
+// of file ("the resume anchor isn't this file's (a FLAC's): by its second").
+const char* anchorKindName(ResumeAnchor::Kind k) {
+  switch (k) {
+    case ResumeAnchor::Kind::Mp3: return "an MP3's";
+    case ResumeAnchor::Kind::Flac: return "a FLAC's";
+    case ResumeAnchor::Kind::Opus: return "an Opus track's";
+    case ResumeAnchor::Kind::None: break;
+  }
+  return "none";
 }
 
 // Swallows decoded audio and counts it, for bench(). Refuses a sample every
@@ -144,19 +150,51 @@ public:
   }
 };
 
-// The converter's polyphase tables in internal RAM (7.6 KB) while a track
-// at another rate than 44.1 kHz plays: copied when one starts, freed when
-// a 44.1 kHz one starts (TableCopy; RateConverter calls this from
+// The converter's polyphase tables copied out of flash (7.6 KB) while a
+// track at another rate than 44.1 kHz plays: copied when one starts, freed
+// when a 44.1 kHz one starts (TableCopy; RateConverter calls this from
 // setRate(), after the reset, so no track reads a freed copy). Read from
 // flash they share the cache with the decoder, and 147/160's 7 KB, read
 // every 3.3 ms, evicts it: docs/RESAMPLER.md, section 10. Without the room
 // they stay in flash (the same bits, slower), logged once. On the decode
 // task.
-static void* tableAlloc(size_t bytes) { return heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); }
-static void tableFree(void* p) { heap_caps_free(p); }
+//
+// Where the copy goes (the console's Ot1 / Ot0; docs/OPUS.md gate G5 and
+// section 8.11): by default a block of its own in the PSRAM's fast lower
+// half, pinned at boot next to the decoder arena's (tablesBlock), so the
+// 7,776 B of internal RAM stay free while it plays (every Opus track is
+// 48 kHz and holds the copy, and M0's gate measured 44 KB of internal RAM
+// free against the 50 KB floor); with Ot0, internal RAM, 0.5.0's and
+// 0.6.0's place. The bits are the same; the cost is in the cache, which
+// the PSRAM shares with the flash the decoder runs from (reading the
+// tables from flash cost +13.5 points of a core that way, RESAMPLER.md
+// section 10), so the PSRAM block was a knob, off, until the device said
+// what it costs: M2's check measured the converter at 8.3-8.5 % of a core
+// "in the decoder's company" against 5.6 % with the internal-RAM copy,
+// +2.8 points (the copy stays cached), and internal RAM at 56 KB steady
+// with an Opus track playing and the headphones linked against 48 KB, so
+// the default flipped. The knob applies from the next copy: a copy in the
+// other place is dropped at the next request's start (never inside a
+// chain of joins, below).
+static void* tablesBlock = nullptr;           // the pinned PSRAM block (begin()), or null
+static std::atomic<bool> tablesPinned{true};  // the knob: the next copy goes to tablesBlock (Ot0: internal RAM)
+static bool tablesCopyPinned = false;          // where the copy there is (decode task)
+static void* tableAlloc(size_t bytes) {
+  if (tablesPinned.load(std::memory_order_relaxed) && tablesBlock && bytes <= TableCopy::kBytes) {
+    tablesCopyPinned = true;
+    return tablesBlock;
+  }
+  tablesCopyPinned = false;
+  return heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+static void tableFree(void* p) {
+  if (p == tablesBlock) return;  // (pinned: kept for the next copy)
+  heap_caps_free(p);
+}
 static TableCopy tableCopy(tableAlloc, tableFree);
 // tableCopy's state for tableStatus() (written on the decode task only).
 static std::atomic<bool> tablesInRam{false};
+static std::atomic<bool> tablesInPsram{false};
 static std::atomic<uint32_t> tableNoRoom{0};
 // A chain of gapless joins is under way (decode task): the copy isn't
 // freed until the next request's start, even at a join to a 44.1 kHz
@@ -165,10 +203,10 @@ static std::atomic<uint32_t> tableNoRoom{0};
 // ever saved stays valid (docs/GAPLESS.md section 5.1).
 static bool tablesKeep = false;
 
-static void tablesWanted(bool wanted) {
-  if (!wanted && tablesKeep) return;
+static void tablesApply(bool wanted, const char* why) {
   const TableCopy::Event e = tableCopy.want(wanted);
-  tablesInRam.store(tableCopy.copied(), std::memory_order_relaxed);
+  tablesInRam.store(tableCopy.copied() && !tablesCopyPinned, std::memory_order_relaxed);
+  tablesInPsram.store(tableCopy.copied() && tablesCopyPinned, std::memory_order_relaxed);
   tableNoRoom.store(tableCopy.failures(), std::memory_order_relaxed);
   const unsigned bytes = (unsigned)TableCopy::kBytes;
   const unsigned freeNow = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
@@ -177,13 +215,11 @@ static void tablesWanted(bool wanted) {
   const unsigned largest = (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
   switch (e) {
     case TableCopy::Event::Copied:
-      Serial.printf("[rate] the filter tables copied into internal RAM (%u B): internal free %u B, largest block "
-                    "%u B\n",
-                    bytes, freeNow, largest);
+      Serial.printf("[rate] the filter tables copied into %s (%u B): internal free %u B, largest block %u B\n",
+                    tablesCopyPinned ? "the pinned PSRAM block (Ot1)" : "internal RAM", bytes, freeNow, largest);
       break;
     case TableCopy::Event::Freed:
-      Serial.printf("[rate] a 44.1 kHz track: the filter tables' copy freed (%u B): internal free %u B, largest "
-                    "block %u B\n",
+      Serial.printf("[rate] %s: the filter tables' copy freed (%u B): internal free %u B, largest block %u B\n", why,
                     bytes, freeNow, largest);
       break;
     case TableCopy::Event::NoRoom:
@@ -197,21 +233,58 @@ static void tablesWanted(bool wanted) {
   }
 }
 
+static void tablesWanted(bool wanted) {
+  if (!wanted && tablesKeep) return;
+  tablesApply(wanted, "a 44.1 kHz track");
+}
+
 Core2AudioBackend::TableStatus Core2AudioBackend::tableStatus() {
-  return {tablesInRam.load(std::memory_order_relaxed), tableNoRoom.load(std::memory_order_relaxed)};
+  return {tablesInRam.load(std::memory_order_relaxed), tablesInPsram.load(std::memory_order_relaxed),
+          tableNoRoom.load(std::memory_order_relaxed)};
+}
+
+void Core2AudioBackend::setOpusTablesPinned(bool pinned) { tablesPinned.store(pinned, std::memory_order_relaxed); }
+bool Core2AudioBackend::opusTablesPinned() const { return tablesPinned.load(std::memory_order_relaxed); }
+bool Core2AudioBackend::opusTablesBlock(char* buf, size_t size) const {
+  if (!tablesBlock) {
+    snprintf(buf, size, "none (no PSRAM block at boot)");
+    return false;
+  }
+  snprintf(buf, size, "at %p, %s", tablesBlock, DecoderArena::whereName(DecoderArena::where(tablesBlock, TableCopy::kBytes)));
+  return true;
 }
 
 Core2AudioBackend::Core2AudioBackend() : mp3Arena_(PinnedMp3::kArenaParts, 2) {}
 Core2AudioBackend::~Core2AudioBackend() = default;
 
-bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
-  // libmad's state first, while the PSRAM window's fast lower 2 MB is free
-  // (docs/RESAMPLER.md section 10d). Without it MP3s decode as before.
+bool Core2AudioBackend::begin(fs::FS* fs, const char* stateDir, const char* btSinkName) {
+  // The decoders' state first, while the PSRAM window's fast lower 2 MB is
+  // free (docs/RESAMPLER.md section 10d): one block, laid out for libmad
+  // (25 KB) or for the Opus decoder and its frame's PCM (38 KB; docs/OPUS.md),
+  // one track at a time. Without it they decode on per-track mallocs.
+  {
+    size_t opusParts[2];
+    OpusGenerator::layout(opusParts);
+    opusLayout_ = mp3Arena_.addLayout(opusParts, 2);
+  }
   mp3Arena_.attach(heap_caps_aligned_alloc(DecoderArena::kAlign, mp3Arena_.bytes(), MALLOC_CAP_SPIRAM));
   {
     char where[96];
     describeMp3State(where, sizeof(where));
-    Serial.printf("[audio] MP3 decoder state: %u B %s\n", (unsigned)mp3Arena_.bytes(), where);
+    Serial.printf("[audio] MP3 decoder state: %u B %s (the block is %u B: the Opus decoder's %u B layout shares it)\n",
+                  (unsigned)mp3Arena_.layoutBytes(0), where, (unsigned)mp3Arena_.bytes(),
+                  (unsigned)(opusLayout_ >= 0 ? mp3Arena_.layoutBytes(static_cast<size_t>(opusLayout_)) : 0));
+  }
+  // The converter's tables' pinned block, right after the arena's (the
+  // copy's home by default, tablesApply() above; the console's Ot0 puts
+  // the copy in internal RAM instead): allocated now so it lands in the
+  // fast lower half too.
+  tablesBlock = heap_caps_aligned_alloc(DecoderArena::kAlign, TableCopy::kBytes, MALLOC_CAP_SPIRAM);
+  {
+    char where[96];
+    opusTablesBlock(where, sizeof(where));
+    Serial.printf("[audio] the filter tables' pinned PSRAM block (Ot1, the default; Ot0: internal RAM): %u B %s\n",
+                  (unsigned)TableCopy::kBytes, where);
   }
   // The run index's two slots (docs/SEEK.md section 4.3; 2 x 24 KB). Without
   // them: no seeks back into a run, and a pause's anchor only for a FLAC.
@@ -233,6 +306,13 @@ bool Core2AudioBackend::begin(fs::FS* fs, const char* btSinkName) {
   RateConverter::setTablesWanted(tablesWanted);
   if (fs_) file_.reset(new AudioFileSourceFS(*fs_));
   guard_.reset(new GuardedSource());
+  // The Opus open cache (docs/OPUS.md section 10): its entries in PSRAM,
+  // loaded from the card now (the loop task, before any play).
+  if (fs_ && stateDir && stateDir[0]) opusCachePath_ = std::string(stateDir) + "/opus.idx";
+  if (!opusCache_.begin(OpusOpenCache::kDefaultEntries, psramAlloc, psramFree)) {
+    Serial.println("[opus] no PSRAM for the open cache: every open reads the file");
+  }
+  loadOpusCache();
   // Gapless playback's PSRAM (docs/GAPLESS.md section 6): the trim's hold
   // (16 KB) and two marks of the feed (~2 KB each: a cut's way back). Without
   // them tracks end as before (no hold: no end trim; no marks: no joins).
@@ -283,6 +363,15 @@ bool Core2AudioBackend::play(const std::string& path, const StartAt& at) {
   transportPlaying_ = true;
   request(path, Kind::Play, at.ms, at.hintMs, 0, at.anchor);
   return true;
+}
+
+size_t Core2AudioBackend::failureNote(char* buf, size_t size) const {
+  if (size == 0) return 0;
+  buf[0] = 0;
+  if (!failed()) return 0;
+  std::lock_guard<std::mutex> guard(lock_);
+  snprintf(buf, size, "%s", failNote_.c_str());
+  return std::strlen(buf);
 }
 
 bool Core2AudioBackend::resumeAnchor(ResumeAnchor* out) const {
@@ -474,6 +563,24 @@ void Core2AudioBackend::loop(uint32_t nowMs) {
                   (long)t.firstAudioMs, (long)t.ring500Ms, (unsigned long)kSteadyMs, (long)t.steadyMs, (long)t.fullMs,
                   paced);
   }
+  // The heard track's longest pass, read live, not with the once-a-second
+  // figures below: the device check reads `s` within a second of a request
+  // and wants the new track's (docs/OPUS.md 8.11).
+  stats_.maxPassUs = heardMaxPassUs_.load(std::memory_order_relaxed);
+  // The Opus open cache's save, once a second looked at: a few seconds
+  // after its last change (the decode task's put), so a run of opens (a
+  // boot's resume, a seek) saves once, from here (the loop task, as the
+  // queue is saved) and never on the decode task's start path; ten
+  // seconds after a write that failed.
+  if (nowMs - opusCacheCheckMs_ >= 1000) {
+    opusCacheCheckMs_ = nowMs;
+    bool due = false;
+    {
+      std::lock_guard<std::mutex> guard(opusCacheLock_);
+      due = opusCache_.dirty() && !opusCachePath_.empty() && static_cast<int32_t>(nowMs - opusCacheDueMs_) >= 0;
+    }
+    if (due) saveOpusCache();
+  }
   if (nowMs - lastStatsMs_ < 1000) return;
   const uint32_t pulled = bt_.framesPulled();
   stats_.btFramesPerSec =
@@ -544,6 +651,16 @@ void Core2AudioBackend::setNext(const Next& next) {
   if (task_) xTaskNotifyGive(task_);  // a cut at once, not after a 10 ms rest on a full ring
 }
 
+// A figure raised and never lowered, from either task: the heard track's
+// longest pass has two writers (takeAdvance() on the loop's side,
+// produceDecoded() on the decode task's), and a plain store from one could
+// put back a smaller value over the larger the other had just written.
+static void raiseTo(std::atomic<uint32_t>& figure, uint32_t value) {
+  uint32_t cur = figure.load();
+  while (cur < value && !figure.compare_exchange_weak(cur, value)) {
+  }
+}
+
 bool Core2AudioBackend::takeAdvance(uint32_t* token) {
   const uint32_t readPos = ring_ ? ring_->readPos() : 0;
   if (!ring_ || !book_.takeAdvance(sync_.generation(), readPos, token)) return false;
@@ -558,6 +675,20 @@ bool Core2AudioBackend::takeAdvance(uint32_t* token) {
   }
   trackSeq_.fetch_add(1, std::memory_order_release);
   advances_.fetch_add(1, std::memory_order_relaxed);
+  // The joined track's longest pass is the heard track's from here: what
+  // it made decoding ahead (maxPassUs_ is its figure: the decoder is at
+  // most one track ahead, the book's one boundary at a time) and its
+  // passes from now on (produceDecoded()). The token first, then the
+  // figure set (the track before's goes), then raised to the decoding
+  // figure once more: a pass of the joined track that ends between the
+  // load and the store here goes into the heard figure on the decode task
+  // (it sees the token) and the store would put the smaller value back
+  // over it; the raise after sees that pass in maxPassUs_ and restores it.
+  // Both sides raise by compare-exchange, so neither lowers what the other
+  // wrote: see produceDecoded().
+  heardToken_.store(*token);
+  heardMaxPassUs_.store(maxPassUs_.load());
+  raiseTo(heardMaxPassUs_, maxPassUs_.load());
   Serial.printf("[gapless] heard: the joined track plays (taken %.1f ms after its first frame was read)\n",
                 (readPos - book_.status().heardStart) * 1000.0f / kRingRate);
   return true;
@@ -625,7 +756,10 @@ void Core2AudioBackend::printGapless() const {
   SeekIndex::Run run;
   if (index_.heardRun(&run)) {
     Serial.printf("[gapless] run index: heard %s run from sample %llu (%s), %lu entries; decoding slot %lu entries\n",
-                  run.kind == SeekIndex::Kind::Flac ? "FLAC" : "MP3", (unsigned long long)run.base,
+                  run.kind == SeekIndex::Kind::Flac   ? "FLAC"
+                  : run.kind == SeekIndex::Kind::Opus ? "Opus"
+                                                      : "MP3",
+                  (unsigned long long)run.base,
                   run.exact ? "exact" : "a TOC start's time", (unsigned long)index_.entries(index_.heardSlot()),
                   (unsigned long)index_.entries(index_.decodingSlot()));
   } else {
@@ -662,6 +796,11 @@ void Core2AudioBackend::decodeTask() {
       // A source's end, the word on what follows, a join, the tail, the
       // drain, a cut: one step at a time, the generation checked between.
       const uint32_t ms = e.step(bufferedMsNow());
+      // The step may have pushed the converter's tail (the flush's
+      // finish()): the console's R counts it too, so after a track's end
+      // "ring frames made" is ceil(taken x 147/160) with nothing left in
+      // the filter (gate G9 reads that).
+      publishRate();
       reportPhase(generation);
       if (ms) rest(ms);
       continue;
@@ -725,10 +864,23 @@ void Core2AudioBackend::start(uint32_t generation) {
   // ...nor of its converter's history (up to 24 frames), whatever comes
   // next: a file, a built-in track, a stop or a bench. A request is where
   // the tables' copy may go (a 44.1 kHz track); never during a chain of
-  // joins (tablesKeep: a cut's rewind may need its rows).
+  // joins (tablesKeep: a cut's rewind may need its rows). The Ot knob
+  // moved since the copy was made: dropped here, so the next converted
+  // track copies afresh where the knob says.
   tablesKeep = false;
+  if (tableCopy.copied() && tablesCopyPinned != tablesPinned.load(std::memory_order_relaxed)) {
+    tablesApply(false, "the Ot knob moved");
+  }
   feed().reset(cpuMhz());
   publishRate();
+  // The longest pass: the request's track is the one decoded and the one
+  // heard from here (token 0: GaplessJoin), so both figures start over.
+  // beginPrepared() starts the decoding track's over at a join's begin as
+  // well; the heard track's then waits for the join to be heard
+  // (takeAdvance()).
+  maxPassUs_ = 0;
+  heardToken_ = 0;
+  heardMaxPassUs_ = 0;
   if (req.kind == Kind::Play) {  // a new start to time (startTiming())
     firstAudioMs_ = -1;
     ring500Ms_ = -1;
@@ -784,7 +936,14 @@ void Core2AudioBackend::start(uint32_t generation) {
   const bool prepared = prepare(req.path, startAt, &p);  // (a seek back into a run looks it up first)
   index_.reset();                                    // then the request's track records afresh
   if (!prepared) {
-    fail(generation, (req.path.rfind("tone:", 0) == 0 ? "unknown tone " : "can't play ") + req.path);
+    // With the reason when the file gave one (an Opus file refused: "Ogg
+    // Vorbis isn't supported (only Opus)" in the log and the track's note,
+    // and its few words, "Ogg Vorbis isn't supported", on Now Playing's
+    // toast through failureNote()).
+    fail(generation,
+         !prepareWhy_.empty() ? prepareWhy_
+                              : (req.path.rfind("tone:", 0) == 0 ? "unknown tone " : "can't play ") + req.path,
+         prepareNote_.c_str());
     return;
   }
   if (!beginPrepared(p, out_.get(), true)) {
@@ -834,10 +993,11 @@ void Core2AudioBackend::failRate(uint32_t generation) {
   fail(generation, refusalText());
 }
 
-void Core2AudioBackend::fail(uint32_t generation, const std::string& why) {
+void Core2AudioBackend::fail(uint32_t generation, const std::string& why, const char* note) {
   Serial.printf("[audio] %s\n", why.c_str());
   closeDecoder();
   setText(note_, why);
+  setText(failNote_, note);  // (before the Failed report: whoever sees the failure sees it)
   engine_->idle(generation);
   reported_ = Phase::Failed;
   sync_.report(generation, Phase::Failed);
@@ -854,6 +1014,8 @@ void Core2AudioBackend::endedEarly(const std::string& why) {
 bool Core2AudioBackend::prepare(const std::string& path, const StartAt& at, Prepared* p) {
   *p = Prepared{};
   p->path = path;
+  prepareWhy_.clear();
+  prepareNote_.clear();
   const uint32_t startMs = at.ms;
   const bool gapless = gapless_.load(std::memory_order_relaxed);
   const bool anchorsOn = gapless && gaplessTrim_.load(std::memory_order_relaxed);
@@ -878,11 +1040,55 @@ bool Core2AudioBackend::prepare(const std::string& path, const StartAt& at, Prep
   }
   const std::string ext = extensionOf(path);
   p->mp3 = ext == ".mp3";
-  if (!fs_ || (!p->mp3 && ext != ".flac")) return false;
+  p->opus = ext == ".opus";
+  if (!fs_ || (!p->mp3 && !p->opus && ext != ".flac")) return false;
   if (!file_->open(path.c_str())) return false;
   const uint32_t size = file_->getSize();
   p->pathHash = pathHash(path);
   p->fileSize = size;
+
+  if (p->opus) {
+    // Ogg Opus (docs/OPUS.md): the generator reads the headers and the
+    // last page now (~10 reads): its rate is always 48 kHz (a join's
+    // continuity is decided before any frame), its length is exact from
+    // the open, and a file it can't play fails here with the reason as the
+    // note. The generator does its own trimming (the pre-skip, the EOS
+    // trim): p->trim stays {0,0}. A start part of the way in is the
+    // reader's plan (planOpus()), begun by the generator (beginPrepared()).
+    OpusGenerator* g = opusGenerator();
+    if (!g) {
+      prepareWhy_ = prepareNote_ = "no RAM for the Opus decoder";
+      return false;
+    }
+    g->setPlacement(static_cast<OpusGenerator::Placement>(opusPlacement_.load(std::memory_order_relaxed)));
+    // The open cache's record for this path at this size (docs/OPUS.md
+    // section 10): the generator opens from it with one read when the
+    // file is still the one it describes; a fresh open's record goes in
+    // (replacing a stale one), and a file whose length can't be known
+    // (no last page found) leaves none.
+    oggopus::OpenRecord hint;
+    const bool haveHint = findOpusRecord(path, size, &hint);
+    if (!g->open(file_.get(), output_ == Output::Speaker, haveHint ? &hint : nullptr)) {
+      Serial.printf("[audio] %s: %s\n", path.c_str(), g->refusal());
+      prepareWhy_ = g->refusal();
+      prepareNote_ = g->refusalNote();
+      if (haveHint) forgetOpusRecord(path, size);
+      return false;
+    }
+    if (!g->openedFromRecord()) {
+      oggopus::OpenRecord rec;
+      if (g->record(&rec)) {
+        putOpusRecord(path, rec);
+      } else if (haveHint) {
+        forgetOpusRecord(path, size);
+      }
+    }
+    p->rate = oggopus::kRate;
+    p->knownMs = g->lengthMs();
+    p->totalSamples = g->lengthSamples();  // (the run's header: a pause's anchor carries it; 0: not known)
+    if (startMs > 0 || at.anchor.valid()) planOpus(g, at, p);
+    return true;
+  }
 
   if (p->mp3) {
     // Past the ID3v2 tags (one after another, as some taggers leave them)
@@ -955,7 +1161,7 @@ bool Core2AudioBackend::prepare(const std::string& path, const StartAt& at, Prep
       std::memset(head, 0, sizeof(head));
     }
     p->knownMs = progress::flacDurationMs(head, sizeof(head));
-    if (!trackseek::flacStreamInfo(head, sizeof(head), &p->rate, &p->flacTotal)) p->rate = 0;
+    if (!trackseek::flacStreamInfo(head, sizeof(head), &p->rate, &p->totalSamples)) p->rate = 0;
   }
   // Its metadata blocks: libFLAC reads through the ones it doesn't keep (an
   // embedded picture: megabytes) before the first frame, so at a join a big
@@ -979,10 +1185,10 @@ bool Core2AudioBackend::prepare(const std::string& path, const StartAt& at, Prep
     const ResumeAnchor& a = at.anchor;
     if (a.valid()) {
       const char* why = !anchorsOn                              ? "gapless trimming off"
-                        : a.kind != ResumeAnchor::Kind::Flac    ? "an MP3's"
+                        : a.kind != ResumeAnchor::Kind::Flac    ? anchorKindName(a.kind)
                         : a.fileSize != size                    ? "the size"
                         : p->rate == 0 || a.rate != p->rate     ? "the rate"
-                        : a.frameHash != static_cast<uint32_t>(p->flacTotal) ? "the length"
+                        : a.frameHash != static_cast<uint32_t>(p->totalSamples) ? "the length"
                         : resumeanchor::ms(a) > 0 && trackseek::startMs(resumeanchor::ms(a), p->knownMs) == 0
                             ? "in its last 5 s"
                             : nullptr;
@@ -1030,6 +1236,7 @@ bool Core2AudioBackend::beginPrepared(const Prepared& p, AudioOutput* out, bool 
     out_->trim().disarm();
   }
   busyUs_ = 0;
+  maxPassUs_ = 0;  // the decoding track's (at a join's begin the heard track's figure stays until the join is heard)
   producedFrames_ = 0;
   srcPos0_ = srcPos_ = srcSize_ = 0;
   described_ = false;
@@ -1121,6 +1328,16 @@ bool Core2AudioBackend::beginPrepared(const Prepared& p, AudioOutput* out, bool 
         Serial.printf("[gapless] %s: no LAME tag: not trimmed\n", p.lame.header ? "a header frame (skipped)" : "no header");
       }
     }
+  } else if (p.opus) {
+    // Opened by prepare() (the headers, the length, the plan of a start
+    // part of the way in); begin() puts the decoder on its state and the
+    // reader at the first audio packet, or at the plan's page.
+    decoder = opus_.get();
+    if (!decoder) {
+      closeDecoder();
+      return false;
+    }
+    opus_->setStartPlan(p.opusPlanned ? &p.opusPlan : nullptr);
   } else {
     file_->seek(0, SEEK_SET);
     flac_.reset(new SeekableFlac());
@@ -1131,9 +1348,16 @@ bool Core2AudioBackend::beginPrepared(const Prepared& p, AudioOutput* out, bool 
     return false;
   }
   decoder_ = decoder;
-  codec_ = p.mp3 ? "MP3" : "FLAC";
+  codec_ = p.mp3 ? "MP3" : p.opus ? "Opus" : "FLAC";
+  if (p.opus) {
+    char where[96];
+    opus_->describeState(where, sizeof(where));
+    Serial.printf("[opus] decoding: %s, %lu ms long; the state %s\n", p.path.c_str(), (unsigned long)p.knownMs, where);
+  }
+  // The run index: an MP3's entries, or a FLAC's or an Opus track's header
+  // alone (a pause's anchor comes from it: resumeAnchor()).
   if (trimmed) beginRun(p);
-  if (!p.mp3 && p.metadataBytes > 256 * 1024) {
+  if (!p.mp3 && !p.opus && p.metadataBytes > 256 * 1024) {
     Serial.printf("[audio] FLAC: %lu KB of metadata (a picture?) read through before its first frame\n",
                   (unsigned long)(p.metadataBytes / 1024));
   }
@@ -1187,7 +1411,7 @@ void Core2AudioBackend::planMp3(const uint8_t* probe, uint32_t got, uint32_t aud
     if (!anchorsOn) {
       snprintf(why, sizeof(why), "gapless trimming off");
     } else if (a.kind != ResumeAnchor::Kind::Mp3) {
-      snprintf(why, sizeof(why), "a FLAC's");
+      snprintf(why, sizeof(why), "%s", anchorKindName(a.kind));
     } else {
       const trackseek::AnchorCheck c = trackseek::checkAnchor(a, reader, size, p->firstAudio, length, scratch, &plan);
       switch (c) {
@@ -1254,6 +1478,112 @@ void Core2AudioBackend::planMp3(const uint8_t* probe, uint32_t got, uint32_t aud
                 (unsigned long)plan.landByte, (unsigned long)plan.skip);
 }
 
+void Core2AudioBackend::planOpus(OpusGenerator* g, const StartAt& at, Prepared* p) {
+  // The plan is the reader's (lib/core/OggOpus, its class comment): a
+  // bisection by page headers to the last page whose granule is at or
+  // under the target less the preroll, the packets before the preroll
+  // skipped by their TOCs, the preroll decoded and dropped, so the first
+  // sample kept is the one asked, as a FLAC's. Its sources, the first that
+  // gives one: the resume anchor (the FLAC model: the file's size, the
+  // exact length and the tail rule, oggopus::checkAnchor()), planned with
+  // the 600 ms resume preroll (the decoded PCM then matches a play from
+  // the top, docs/OPUS.md section 7.3); else the millisecond with the
+  // 200 ms seek preroll (oggopus::kSeekPrerollMs: section 10's measure),
+  // the tail rule first (planStartMs(): the last 5 s and past the end
+  // start at 0:00, as any start does). The plan reads page headers (a
+  // 4 KB chunk a probe) and Q whole, which stays in hand for the start
+  // (the device's seconds on the host, section 10: 4-7 probes and 8-20
+  // reads / 30-90 KB on an mStream 128k file against M3's 11-26 reads;
+  // ~37 reads / ~190 KB on the 510k file's 64 KB pages against 73 / 318),
+  // here on the decode task before the decoder begins; the generator
+  // decodes the preroll in its first passes (ten 20 ms frames: ~75 ms
+  // at 240 MHz), so the first audio reaches the ring ~165-215 ms after
+  // the request on a 128k file with the open from the cache (section
+  // 10's model; M3 measured 290-460), the same `[audio] refill` line as
+  // an MP3's seek measures it.
+  const bool anchorsOn = gapless_.load(std::memory_order_relaxed) && gaplessTrim_.load(std::memory_order_relaxed);
+  const uint32_t length = p->knownMs;
+  char asked[16], of[16];
+  mmssms(at.ms, asked, sizeof(asked));
+  mmss(length, of, sizeof(of));
+  oggopus::StartPlan plan;
+  bool planned = false;
+  const char* source = "the time asked";
+  uint32_t prerollMs = oggopus::kSeekPrerollMs;
+  // 1. The resume point's anchor, checked against the file as opened.
+  const ResumeAnchor& a = at.anchor;
+  if (a.valid()) {
+    char why[64] = "";
+    if (!anchorsOn) {
+      snprintf(why, sizeof(why), "gapless trimming off");
+    } else if (a.kind != ResumeAnchor::Kind::Opus) {
+      snprintf(why, sizeof(why), "%s", anchorKindName(a.kind));
+    } else {
+      const oggopus::AnchorCheck c = oggopus::checkAnchor(a, p->fileSize, p->totalSamples);
+      if (c == oggopus::AnchorCheck::Size) {
+        snprintf(why, sizeof(why), "the size: %lu -> %lu", (unsigned long)a.fileSize, (unsigned long)p->fileSize);
+      } else if (c == oggopus::AnchorCheck::Length) {
+        snprintf(why, sizeof(why), "the length: %lu -> %lu samples%s", (unsigned long)a.frameHash,
+                 (unsigned long)static_cast<uint32_t>(p->totalSamples), p->totalSamples == 0 ? " (not known)" : "");
+      } else if (c != oggopus::AnchorCheck::Ok) {
+        snprintf(why, sizeof(why), "%s", oggopus::anchorCheckName(c));
+      }
+    }
+    if (why[0]) {
+      Serial.printf("[audio] Opus: the resume anchor isn't this file's (%s): by its second\n", why);
+    } else if (a.sample == 0) {
+      return;  // (sample 0: from the top, as asked)
+    } else {
+      g->planStart(a.sample, oggopus::kResumePrerollSamples, &plan);
+      prerollMs = oggopus::kResumePrerollMs;
+      source = "its resume anchor";
+      planned = true;
+    }
+  }
+  // 2. The millisecond, the tail rule first.
+  if (!planned && at.ms > 0) {
+    if (length == 0) {
+      // No last page found (a junk tail beyond the scan's windows): a plan
+      // would land where asked and, past the end, end at once (the player
+      // would move on), so from the top, as a FLAC without STREAMINFO.
+      Serial.printf("[audio] Opus: %s asked: the length isn't known (no last page found): from 0:00\n", asked);
+      return;
+    }
+    if (g->planStartMs(at.ms, oggopus::kSeekPrerollMs, &plan) == 0) {
+      Serial.printf("[audio] Opus: %s asked, of %s: in its last %lu s or past its end: from 0:00\n", asked, of,
+                    (unsigned long)(trackseek::kTailMs / 1000));
+      return;
+    }
+    planned = true;
+  }
+  if (!planned || plan.target == 0) return;
+  p->opusPlanned = true;
+  p->opusPlan = plan;
+  p->fromTop = false;
+  p->landedMs = static_cast<uint32_t>(plan.target * 1000 / oggopus::kRate);
+  p->startSample = plan.target;
+  p->startExact = true;
+  char start[16];
+  mmssms(p->landedMs, start, sizeof(start));
+  // The line names the plan the host runner makes for the same file and
+  // second (tools/opus_check/opus_check.py plan: the same page, granule
+  // and decode point, the plan being a function of the file), so a
+  // device's landing can be compared with a PC decode without a PCM dump;
+  // the generator's end line then says the sample it landed on.
+  char where[96];
+  if (plan.fromTop) {
+    snprintf(where, sizeof(where), "from the first audio page (the target is inside its first second)");
+  } else {
+    snprintf(where, sizeof(where), "the page at byte %lu (granule %lld%s)", (unsigned long)plan.pageOffset,
+             (long long)plan.k, plan.skipPage ? ", its own packets stepped over" : "");
+  }
+  Serial.printf("[audio] Opus: starting %s in, of %s (%s; exact): %s, decoding from %lld ms before (the %lu ms "
+                "preroll), %lu probes, %lu reads / %lu KB in %lu ms\n",
+                start, of, source, where, (long long)((plan.keepFrom - plan.decodeFrom) / (oggopus::kRate / 1000)),
+                (unsigned long)prerollMs, (unsigned long)plan.probes, (unsigned long)plan.reads,
+                (unsigned long)(plan.bytes / 1024), (unsigned long)(g->planUs() / 1000));
+}
+
 void Core2AudioBackend::beginRun(const Prepared& p) {
   recorder_.stop();
   // The trimmed timeline only with gapless trimming on (G1, Gt1); a
@@ -1266,10 +1596,14 @@ void Core2AudioBackend::beginRun(const Prepared& p) {
   r.base = p.startSample;
   r.exact = p.startExact;
   if (!p.mp3) {
+    // A FLAC's or an Opus track's run is its header alone: the anchor a
+    // pause takes from it is the sample, the size and the length (the
+    // FLAC model; an Opus length not known gives 0, which the anchor's
+    // check then refuses).
     if (p.rate == 0) return;
-    r.kind = SeekIndex::Kind::Flac;
+    r.kind = p.opus ? SeekIndex::Kind::Opus : SeekIndex::Kind::Flac;
     r.rate = p.rate;
-    r.totalSamples = p.flacTotal;
+    r.totalSamples = p.totalSamples;
     index_.begin(r);
     return;
   }
@@ -1342,6 +1676,94 @@ void Core2AudioBackend::describeMp3State(char* buf, size_t size) const {
   const void* b = mp3Arena_.block();
   snprintf(buf, size, "pinned at %p, %s", b,
            DecoderArena::whereName(DecoderArena::where(b, mp3Arena_.bytes())));
+}
+
+OpusGenerator* Core2AudioBackend::opusGenerator() {
+  if (!opus_) opus_.reset(new OpusGenerator(mp3Arena_, opusLayout_));  // ~1 KB: internal RAM
+  return opus_.get();
+}
+
+// ---- the Opus open cache (docs/OPUS.md section 10) ----
+
+bool Core2AudioBackend::findOpusRecord(const std::string& path, uint32_t fileSize, oggopus::OpenRecord* out) {
+  std::lock_guard<std::mutex> guard(opusCacheLock_);
+  return opusCache_.find(OpusOpenCache::hashPath(path.c_str()), fileSize, out);
+}
+
+void Core2AudioBackend::putOpusRecord(const std::string& path, const oggopus::OpenRecord& rec) {
+  std::lock_guard<std::mutex> guard(opusCacheLock_);
+  opusCache_.put(OpusOpenCache::hashPath(path.c_str()), rec);
+  opusCacheDueMs_ = millis() + kOpusCacheSaveDelayMs;
+}
+
+void Core2AudioBackend::forgetOpusRecord(const std::string& path, uint32_t fileSize) {
+  std::lock_guard<std::mutex> guard(opusCacheLock_);
+  opusCache_.forget(OpusOpenCache::hashPath(path.c_str()), fileSize);
+  opusCacheDueMs_ = millis() + kOpusCacheSaveDelayMs;
+}
+
+void Core2AudioBackend::loadOpusCache() {
+  if (opusCachePath_.empty() || opusCache_.capacity() == 0) return;
+  const int64_t t0 = esp_timer_get_time();
+  OpusOpenCache::Load r = OpusOpenCache::Load::Empty;
+  File f = fs_->open(opusCachePath_.c_str(), FILE_READ);
+  if (f) {
+    FileSource src(f);
+    std::lock_guard<std::mutex> guard(opusCacheLock_);
+    r = opusCache_.load(src);
+    f.close();
+  }
+  Serial.printf("[opus] the open cache: %lu of %lu entries (%lu B of PSRAM) %s %s in %lu ms\n",
+                (unsigned long)opusCache_.size(), (unsigned long)opusCache_.capacity(),
+                (unsigned long)opusCache_.bytes(), OpusOpenCache::loadName(r), opusCachePath_.c_str(),
+                (unsigned long)((esp_timer_get_time() - t0) / 1000));
+}
+
+void Core2AudioBackend::saveOpusCache() {
+  // The blob made under the lock (microseconds, into PSRAM), the file
+  // written outside it: aside, then swapped in, so a cut-off write never
+  // leaves a cache that looks whole (and load() checks its sum anyway).
+  MemorySink blob(psramAlloc, psramFree);
+  uint32_t entries = 0;
+  {
+    std::lock_guard<std::mutex> guard(opusCacheLock_);
+    if (!opusCache_.save(blob)) return;  // (no memory: still dirty, tried again next time)
+    entries = opusCache_.size();
+  }
+  const int64_t t0 = esp_timer_get_time();
+  const std::string tmp = opusCachePath_ + ".tmp";
+  File f = fs_->open(tmp.c_str(), FILE_WRITE);
+  bool ok = static_cast<bool>(f);
+  if (ok) {
+    FileSink sink(f);
+    ok = sink.write(blob.data(), blob.size());
+    f.close();
+  }
+  if (ok) {
+    fs_->remove(opusCachePath_.c_str());
+    ok = fs_->rename(tmp.c_str(), opusCachePath_.c_str());
+  } else {
+    fs_->remove(tmp.c_str());
+  }
+  if (ok) {
+    ++opusCacheSaves_;
+  } else {
+    // save() cleaned the cache as it made the blob, which the card never
+    // got (the temp file wouldn't open: the mount's few file handles all
+    // taken by the track, the queue's write and the thumbnails; a short
+    // write; the rename): dirty again, and due in kOpusCacheRetryMs, so
+    // the record reaches the card before a boot needs it, without a
+    // further open to prompt it. A put meanwhile has dirtied it already
+    // and brought the time forward: either is fine.
+    ++opusCacheSaveFails_;
+    std::lock_guard<std::mutex> guard(opusCacheLock_);
+    opusCache_.markDirty();
+    opusCacheDueMs_ = millis() + kOpusCacheRetryMs;
+  }
+  Serial.printf("[opus] the open cache %s %s: %lu entries, %lu B, %lu ms (saves %lu, failed %lu)\n",
+                ok ? "saved to" : "couldn't be saved to", opusCachePath_.c_str(), (unsigned long)entries,
+                (unsigned long)blob.size(), (unsigned long)((esp_timer_get_time() - t0) / 1000),
+                (unsigned long)opusCacheSaves_, (unsigned long)opusCacheSaveFails_);
 }
 
 void Core2AudioBackend::closeDecoder() {
@@ -1512,6 +1934,21 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
   const auto passUs = static_cast<uint64_t>(esp_timer_get_time() - t0);
   busyUs_ += passUs;
   busyTotalUs_ += passUs;
+  if (passUs > maxPassUs_.load(std::memory_order_relaxed)) {
+    maxPassUs_.store(static_cast<uint32_t>(passUs));
+    // The heard track's figure too (the console's pass_max: docs/OPUS.md
+    // gate G6 wants a track's own) while this track is the one heard. A
+    // join's begin starts maxPassUs_ over while the track before is still
+    // heard, so the figure a track makes decoding ahead waits there until
+    // takeAdvance() takes it. The store above then the load here, against
+    // takeAdvance()'s store of the token then its load of the figure (both
+    // sequentially consistent): one side sees the other's write, so the
+    // pass reaches the heard figure from one side or the other. Raised, not
+    // stored: takeAdvance()'s own store of the figure can land after this
+    // write and lower it (its raise after undoes that), and this side must
+    // never lower what either wrote (the M3 review's finding).
+    if (engine_->decodingToken() == heardToken_.load()) raiseTo(heardMaxPassUs_, static_cast<uint32_t>(passUs));
+  }
   producedFrames_ = before + (f.made() - madeBefore);  // ring frames, 44.1 kHz
   publishRate();
 
@@ -1540,8 +1977,19 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
   if (!running) {
     // Its end. Before the file's (a decode error the generator gave up on:
     // libmad's, which closes the file too): what the trim holds is real
-    // audio, not the padding.
-    early_ = !file_->isOpen() || file_->getPos() < file_->getSize();
+    // audio, not the padding. The Opus generator knows its own end (the
+    // EOS trim, a file cut short, another stream after ours): the file's
+    // position says nothing there (a trailing stream, junk after the end).
+    if (prepared_.opus && opus_) {
+      opus_->logEnd("end");
+      if (opus_->endedEarly()) {
+        endedEarly(opus_->endText());
+      } else {
+        early_ = false;
+      }
+    } else {
+      early_ = !file_->isOpen() || file_->getPos() < file_->getSize();
+    }
     return Produced::Done;
   }
   // Share core 1 with the UI loop: 1 ms, or, with refill pacing on, during
@@ -1574,6 +2022,8 @@ void Core2AudioBackend::runBench(const std::string& path) {
     vTaskDelay(1);
   }
   const double seconds = busyUs / 1e6;
+  const bool opus = prepared_.opus && opus_;
+  if (opus) opus_->logEnd("bench, decode only");  // (its counters go with the close)
   closeDecoder();
   const double audio = counter.rate > 0 ? static_cast<double>(counter.frames) / counter.rate : 0;
   Serial.printf("[bench] %s: %.1f s of %d Hz audio in %.2f s = %.1fx realtime (%.1f%% of a core), "
@@ -1611,6 +2061,7 @@ void Core2AudioBackend::runBench(const std::string& path) {
     vTaskDelay(1);
   }
   f.setDiscard(false);
+  if (opus) opus_->logEnd("bench, decode + convert");
   closeDecoder();
   if (f.rejected()) {
     Serial.printf("[bench] %s: not converted: %s\n", path.c_str(), refusalText().c_str());

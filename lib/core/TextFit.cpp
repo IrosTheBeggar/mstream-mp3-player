@@ -3,6 +3,7 @@
 
 #include "TextFit.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include "TextFold.h"
@@ -143,6 +144,21 @@ Result fit(const Font& f, const char* in, size_t inLen, char* out, size_t outSiz
   }
   r.length = std::strlen(out);
   return r;
+}
+
+void cutPathLeft(const Font& f, const char* path, int maxW, char* out, size_t size) {
+  if (!out || size == 0) return;
+  const char* p = path ? path : "";
+  if (width(f, p) > maxW) {
+    // Whole folders off the left until "…/the rest" fits (a cut path
+    // always says so, even where the rest alone would fit without it).
+    for (const char* rest = std::strchr(p + 1, '/'); rest; rest = std::strchr(p + 1, '/')) {
+      std::snprintf(out, size, "\xE2\x80\xA6%s", rest);
+      if (width(f, out) <= maxW) return;
+      p = rest;
+    }
+  }
+  std::snprintf(out, size, "%s", p);  // whole, or "/<last>" (the draw cuts its end)
 }
 
 int wrap(const Font& f, const char* in, size_t inLen, int maxW, int maxLines, char* out, size_t lineSize) {

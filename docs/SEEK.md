@@ -4,9 +4,9 @@ A track that starts part of the way in should start where it was asked to:
 
 - **A resume point** (after a pause and a restart, the power-off, the CPU
   speed's restart) should pick up on the very sample it paused at.
-- **A seek** (the console's `qs`, a future scrubber) should land as close
-  to the time asked as the file allows. The time shown should be the time
-  that plays.
+- **A seek** (the console's `qs`, Now Playing's seek bar: 6.7 and
+  [SEEK-BAR.md](SEEK-BAR.md)) should land as close to the time asked as
+  the file allows. The time shown should be the time that plays.
 
 Today neither holds for MP3s:
 
@@ -472,7 +472,7 @@ A **run** is one decoder's pass through one file: from its start (top,
 plan or anchor) to its end, a request or a cut.
 
 - Each run has a header:
-  - the kind (MP3 or FLAC);
+  - the kind (MP3, FLAC or Opus);
   - the path hash and the file size;
   - the rate and spf;
   - the first audio byte;
@@ -541,14 +541,17 @@ plan or anchor) to its end, a request or a cut.
   while paused) keeps its index until the next play claims a slot, so
   that play can still use it.
 
-**FLAC runs** have the header only: libFLAC seeks by sample itself. A
-built-in track has no run (it counts exactly from its ms).
+**FLAC and Opus runs** have the header only: libFLAC seeks by sample
+itself, and the Opus reader plans a start by bisection on the pages'
+granule positions (OPUS.md 9), so neither needs entries; `anchorAt()`
+makes their anchors from the header alone (the base and the ring frames
+heard). A built-in track has no run (it counts exactly from its ms).
 
 ### 4.4 The resume anchor (lib/core `ResumeAnchor`)
 
 ```cpp
 struct ResumeAnchor {
-  enum class Kind : uint8_t { None, Mp3, Flac };
+  enum class Kind : uint8_t { None, Mp3, Flac, Opus };  // Opus (3) since OPUS.md's M3
   Kind kind = Kind::None;
   bool exact = false;       // `sample` is the file's own time (else the time a TOC start showed)
   uint32_t rate = 0;        // the file's rate: the unit of `sample`
@@ -560,6 +563,7 @@ struct ResumeAnchor {
   uint32_t skip = 0;        // samples from the landing frame's first one to `sample`
   uint32_t frameHash = 0;   // FNV-1a of the landing frame's first 32 bytes
   // FLAC: frameHash holds STREAMINFO's total samples (low 32 bits); the byte fields are 0.
+  // Opus: the same shape, frameHash the exact trimmed length's low 32 bits (OPUS.md section 9).
 };
 ```
 
@@ -655,7 +659,7 @@ saved again when its anchor's sample changed, however little.
 | Offset | Field |
 |---|---|
 | 0 | version: 2 |
-| 1 | the anchor's kind: 0 none, 1 MP3, 2 FLAC |
+| 1 | the anchor's kind: 0 none, 1 MP3, 2 FLAC, 3 Opus (OPUS.md M3) |
 | 2 | flags: bit 0 exact |
 | 3 | 0 |
 | 4-23 | generation, entry, path hash, position (ms), length (ms): version 1's five words |
@@ -665,12 +669,18 @@ saved again when its anchor's sample changed, however little.
 | 40 | preroll byte |
 | 44 | frame byte |
 | 48 | skip |
-| 52 | frame hash (FLAC: total samples, low 32 bits) |
+| 52 | frame hash (FLAC: total samples, low 32 bits; Opus: the exact trimmed length's) |
 | 56-63 | 0 (reserved) |
 
 - `kResumeVersion` becomes 2 and `kResumeMaxBytes` 64.
 - Versions 1 (24 bytes) and 0 (beta.1's 20 bytes) are still read, with no
   anchor. Any other size or version is not read, as today.
+- **A kind the firmware doesn't know** (4 and up: a later format's anchor)
+  keeps the five words and drops the anchor since OPUS.md's M3: the point
+  resumes by its second, which every anchor falls back to anyway. (0.6.0
+  refused the whole blob on a kind above FLAC, so a downgrade to it from a
+  pause saved on an Opus track finds no resume point, once: the pattern
+  below.)
 - **The schema stays 1.** NvsLayout's rule allows a blob that carries its
   own version byte to gain a version without a bump, as long as every
   older version is still read. The schema text (`NvsLayout.h`,
@@ -736,6 +746,13 @@ A FLAC anchor is checked by its size, its STREAMINFO rate and total
 samples. libFLAC's seek then goes to `sample`. A seek that fails opens
 the file again from the top, as today.
 
+An Opus anchor (OPUS.md section 9) is checked by its size, the exact
+length from the file's last page (`oggopus::checkAnchor()`) and the tail
+rule; the reader's plan then starts the track at `sample` with a 600 ms
+preroll, exact. One that fails logs `[audio] Opus: the resume anchor
+isn't this file's (...): by its second` and the millisecond is planned
+instead, exact too (with the 200 ms seek preroll).
+
 ### 5.5 How exact
 
 - **MP3, any bitrate mode:** the first sample after the start is the
@@ -743,18 +760,25 @@ the file again from the top, as today.
   same output as the decode from the top in 8,000 of 8,000 trials
   (section 2.4).
 - **FLAC:** exact to the sample (libFLAC's own seek).
+- **Opus:** exact to the sample (the reader's plan by the pages' granule
+  positions); the decoded PCM after the 600 ms resume preroll is bit for
+  bit a play from the top's on CELT files (SILK and hybrid frames settle
+  to 41-50 dB of it instead: OPUS.md 7.3, 9.5).
 - **What is heard:** the `DeclickReader` fades the start in over 64 frames,
   as at every start.
 - **The time shown:** the sample in ms, rounded down: under 1 ms.
 
-## 6. Other seeks (`qs`, a scrubber)
+## 6. Other seeks (`qs`, the seek bar)
 
 ### 6.1 Inside the run: the index
 
-A start at `t` that the run's index covers (4.3) is exact. With `qs` that
+A start at `t` that the run's index covers (4.3) is as exact as the run:
+exact in a run that started exactly, and on the TOC's timeline in one a
+TOC start began (6.5: `(the run's index; the time asked)`). With `qs` that
 means a second earlier in what has played, or a second already decoded
-ahead. With a scrubber it is any position the run has passed in its last
-3.6 min.
+ahead. With the seek bar (6.7) it is any position the run has passed in
+its last 3.6 min. That still holds after seeks while paused: each is only
+a stop, and a stop keeps the index.
 
 ### 6.2 CBR: arithmetic
 
@@ -836,6 +860,7 @@ one libmad drops.
 | inside the run, by its index | the time asked | 0 in an exact run |
 | CBR | the time asked | 0 |
 | FLAC | the time asked | 0 |
+| Opus (a seek, or a resume by its anchor or its second: OPUS.md 9) | the time asked | 0 |
 | VBR, LAME's TOC inverted | the time asked | p95 0.74 s, max 1.6 s (2.2) |
 | VBR, other TOCs, the average | the time asked | as today |
 
@@ -850,8 +875,10 @@ was.
 - **A seek index per path, cached on the card.** 5-25 KB per track played,
   written as tracks end, with an invalidation of its own. It would make
   seeks into a track played before exact. It means writes during
-  playback, which the queue saver avoids on purpose, and its value is
-  mostly a scrubber's, which doesn't exist yet.
+  playback, which the queue saver avoids on purpose. Its value is mostly
+  the seek bar's (6.7). Before building the index, the device run should
+  measure how often the bar's seeks miss the run's index on a LAME VBR
+  file.
 - **A header walk of the whole file** (an exact index of any track before a
   seek). It reads almost every sector: a 9 MB file is about 7 s of SD time
   at ~1.2 MB/s, competing with the decoder's reads and the battery, for
@@ -861,6 +888,72 @@ was.
 - **iTunes' `iTunSMPB`**, a TOC for VBRI (its entries already count frames
   exactly), and Lavf/Lavc's TOC model (6.3): later, each with a file to
   check it on.
+
+### 6.7 The seek bar
+
+Now Playing's progress line seeks: a tap goes to the second under the
+finger, and a drag seeks once, when the finger lifts.
+[SEEK-BAR.md](SEEK-BAR.md) is its design: the gesture, the drawing, the
+races, the host tests and the device check (`lib/core/SeekBar`,
+test_seek_bar; the device run is its section 16). For the player, a
+seek is a start part of the way in, on the same path as `qs`.
+
+- **`PlaybackController::seek(key, ms, durationMs)`.**
+  - It takes the heard join first (`Act`). Then it acts only if the
+    current entry is still `key`, the one the finger landed on.
+  - So a join heard under the finger gives `Moved`: never a seek of the
+    next track to this one's second.
+  - Nothing comes between the check and the start that could take
+    another join: the body of `setStartPoint()` is split out as
+    `placeStart()`, which has no `Act` of its own.
+- **What it does, by state:**
+  - **Playing:** it starts there now. That is one request: the ring cut,
+    a plan as in 6.1-6.4 (an Opus track's the reader's bisection, OPUS.md
+    section 9), first audio in 74-150 ms for an MP3 (section
+    17; a FLAC 99-180 ms, SEEK-BAR.md 16; an Opus track's ~165-215 ms
+    expected since OPUS.md M4, the file opened from the open cache and
+    the plan's reads cut, where M3 measured 287-453: OPUS.md 10.4, 10.5),
+    faded in.
+  - **Paused or Waiting:** the held track is let go, and the next play
+    (or the wait's release) starts there. The state stays as it was.
+  - **Stopped:** it waits.
+  - **0:00** is prev's restart, because `setStartPoint(0)` only clears a
+    start point.
+- **Never into the tail.** The target is at most
+  `trackseek::seekLimitMs(L)`: the length less 6 s, floored to a second.
+  That is `kTailMs` plus a second for a length known from an estimate. A
+  start in the last 5 s would go to 0:00 (section 7).
+- **Whole seconds.** The bar asks for the second it showed, and the time
+  shown afterwards is the time asked (6.5). So what the finger read is
+  what plays:
+  - to the sample for CBR, FLAC, Opus, built-in tracks and the run's
+    index of an exact run;
+  - within 0.74 s (p95) for a start by LAME's TOC, and with the same
+    error for later seeks into that run by its index.
+- **The resume point.**
+  - A paused seek's start point is what `resumePoint()` returns, without
+    an anchor. Its anchor changed, so `QueueSaver` saves it in the same
+    pass.
+  - A boot resumes it by the second: exactly for CBR, FLAC, Opus and
+    built-in tracks; by the TOC for a LAME VBR file, since the run's
+    index doesn't survive a reboot.
+  - Before a reboot, a play after paused seeks still finds the paused
+    run's index, because a stop keeps it (4.3).
+  - A paused seek to 0:00 clears the resume point.
+- **While a start is pending** (`positionKnown()` false):
+  - Now Playing shows where the start was asked for (`pendingStart()`),
+    with the length the player was told (`lengthHint()`; both through
+    `shownTime()`). Never the backend's length, which may still be the
+    track before's: a skip with no hint shows no length for that moment;
+  - after it, while the backend knows no length, Now Playing shows the
+    length the player was told;
+  - `resumePoint()` gives the pending start, without an anchor.
+- **Unchanged:**
+  - the plans, the anchors, the index, and the tail rule;
+  - the fades;
+  - the sleep timer: a seek is neither a skip nor an end;
+  - the dancer: a start is a new epoch, while the entry, and so the
+    tempo prior, stay.
 
 ## 7. The tail rule
 

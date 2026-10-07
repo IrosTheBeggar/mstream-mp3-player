@@ -236,7 +236,7 @@ void test_artist_and_album_views() {
   const LibraryIndex::Span z = idx.albumsAZ();
   TEST_ASSERT_EQUAL_UINT32(10, z.count);
   for (uint32_t i = 1; i < z.count; ++i) {
-    TEST_ASSERT_TRUE(textfold::compare(idx.albumName(z[i - 1]), idx.albumName(z[i])) <= 0);
+    TEST_ASSERT_TRUE(textfold::compareSorted(idx.albumName(z[i - 1]), idx.albumName(z[i])) <= 0);
   }
   TEST_ASSERT_EQUAL_STRING("Végétal", idx.albumName(z[z.count - 1]));
 }
@@ -458,7 +458,7 @@ void test_synthetic_10k() {
   std::vector<uint8_t> seen(idx.trackCount(), 0);
   const LibraryIndex::Span artists = idx.artistsAZ();
   for (uint32_t i = 0; i < artists.count; ++i) {
-    if (i) TEST_ASSERT_TRUE(textfold::compare(idx.artistName(artists[i - 1]), idx.artistName(artists[i])) < 0);
+    if (i) TEST_ASSERT_TRUE(textfold::compareSorted(idx.artistName(artists[i - 1]), idx.artistName(artists[i])) < 0);
     const LibraryIndex::Span albums = idx.albumsOf(artists[i]);
     uint32_t artistTracks = 0;
     for (uint32_t j = 0; j < albums.count; ++j) {
@@ -615,6 +615,9 @@ void expectSameIndex(const LibraryIndex& a, const LibraryIndex& b) {
     a.trackPath(t, pa, sizeof(pa));
     b.trackPath(t, pb, sizeof(pb));
     TEST_ASSERT_EQUAL_STRING(pa, pb);
+    TEST_ASSERT_EQUAL_STRING(title(a, t).c_str(), title(b, t).c_str());
+    TEST_ASSERT_EQUAL_UINT8(a.track(t).number, b.track(t).number);
+    TEST_ASSERT_EQUAL_UINT8(a.track(t).disc, b.track(t).disc);
     TEST_ASSERT_EQUAL_UINT32(a.allTracks()[t], b.allTracks()[t]);
     TEST_ASSERT_EQUAL_UINT32(t, b.findTrack(pa));
   }
@@ -730,6 +733,58 @@ void test_load_rejects_stale_and_damaged_files() {
   TEST_ASSERT_FALSE(none.save(nothing, 1));
 }
 
+// .opus files are tracks (docs/OPUS.md), whatever the case of the
+// extension; .ogg and .oga stay other files (counted in their folder, as
+// a text file is), as does an .opus with no name.
+void test_opus_files_are_tracks() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Added), static_cast<int>(idx.addFile("/music/Band/Record/01 - Opener.opus")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Added), static_cast<int>(idx.addFile("/music/Band/Record/02 - Second Song.OPUS")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Added), static_cast<int>(idx.addFile("/music/Band/Record/03 - Closer.mp3")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Other), static_cast<int>(idx.addFile("/music/Band/Record/04 - Vorbis.ogg")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Other), static_cast<int>(idx.addFile("/music/Band/Record/05 - Vorbis.oga")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Other), static_cast<int>(idx.addFile("/music/Band/Record/.opus")));
+  TEST_ASSERT_TRUE(idx.finish());
+  TEST_ASSERT_EQUAL_UINT32(3, idx.trackCount());
+  const uint32_t album = findAlbum(idx, "Record");
+  TEST_ASSERT_NOT_EQUAL(LibraryIndex::kNone, album);
+  const LibraryIndex::Span t = idx.tracksOfAlbum(album);
+  TEST_ASSERT_EQUAL_UINT32(3, t.count);
+  TEST_ASSERT_EQUAL_STRING("01 - Opener.opus", idx.trackFileName(t[0]));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Format::Opus), static_cast<int>(idx.track(t[0]).format));
+  TEST_ASSERT_EQUAL_STRING("Opener", title(idx, t[0]).c_str());
+  TEST_ASSERT_EQUAL_UINT8(1, idx.track(t[0]).number);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Format::Opus), static_cast<int>(idx.track(t[1]).format));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Format::Mp3), static_cast<int>(idx.track(t[2]).format));
+  TEST_ASSERT_EQUAL_UINT16(3, idx.folder(idx.album(album).folder).otherCount);
+  // The cache: a version-2 file (the one 0.6.0 wrote, in which an .opus
+  // was an other file) is Outdated, not Corrupt, and loads nothing; the
+  // version written now loads, formats and all.
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, 7));
+  std::vector<uint8_t> bytes(file.data(), file.data() + file.size());
+  LibraryIndex back(Heap::alloc, Heap::release);
+  {
+    MemorySource in(bytes.data(), bytes.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(in, 7)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Format::Opus), static_cast<int>(back.track(t[0]).format));
+  }
+  std::vector<uint8_t> v2 = bytes;
+  v2[4] = 2;  // the version word (little-endian, after the magic)
+  {
+    MemorySource in(v2.data(), v2.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), static_cast<int>(back.load(in, 7)));
+    TEST_ASSERT_FALSE(back.ready());
+  }
+  std::vector<uint8_t> v9 = bytes;
+  v9[4] = 9;  // a version from the future: foreign
+  {
+    MemorySource in(v9.data(), v9.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), static_cast<int>(back.load(in, 7)));
+  }
+}
+
 void test_an_empty_library_round_trips() {
   LibraryIndex idx(Heap::alloc, Heap::release);
   TEST_ASSERT_TRUE(idx.begin("/music"));
@@ -744,10 +799,326 @@ void test_an_empty_library_round_trips() {
   TEST_ASSERT_EQUAL_STRING("/music", back.folderName(0));
 }
 
+// ---- names (made-up artists and titles, in the shapes measured on a real
+// library; test_track_name has the rules one by one) ----
+
+namespace {
+std::vector<std::string> albumTitles(const LibraryIndex& idx, const char* album) {
+  std::vector<std::string> out;
+  const LibraryIndex::Span t = idx.tracksOfAlbum(findAlbum(idx, album));
+  for (uint32_t i = 0; i < t.count; ++i) {
+    const LibraryIndex::Track& r = idx.track(t[i]);
+    out.push_back(std::to_string(r.disc) + "/" + std::to_string(r.number) + " " + title(idx, t[i]));
+  }
+  return out;
+}
+
+void expectTitles(const LibraryIndex& idx, const char* album, const std::vector<std::string>& want) {
+  const std::vector<std::string> got = albumTitles(idx, album);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(want.size(), got.size(), album);
+  for (size_t i = 0; i < want.size(); ++i) TEST_ASSERT_EQUAL_STRING(want[i].c_str(), got[i].c_str());
+}
+}  // namespace
+
+// "The Lantern Choir" sorts under L, its name shown as it is; the Folders
+// view keeps the folders' own order.
+void test_articles_sort_past_the() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  const char* files[] = {
+      "/music/Theory of Rain/Wet/01 - Drizzle.mp3",
+      "/music/The Lantern Choir/The Long Road/01 - Mile One.mp3",
+      "/music/Lantern/Long Division/01 - Remainder.mp3",
+      "/music/Le Ciel Bleu/A Paper Kite/01 - Crescent.mp3",
+      "/music/Brass Arcade/The Zebra Years/01 - Stripes.mp3",
+      "/music/Brass Arcade/Middle/01 - Centre.mp3",
+      "/music/Brass Arcade/Alpha/01 - First.mp3",
+  };
+  for (const char* f : files) TEST_ASSERT_EQUAL_INT(0, static_cast<int>(idx.addFile(f)));
+  TEST_ASSERT_TRUE(idx.finish());
+  const char* artists[] = {"Brass Arcade", "Le Ciel Bleu", "Lantern", "The Lantern Choir", "Theory of Rain"};
+  const LibraryIndex::Span a = idx.artistsAZ();
+  TEST_ASSERT_EQUAL_UINT32(5, a.count);
+  for (uint32_t i = 0; i < a.count; ++i) TEST_ASSERT_EQUAL_STRING(artists[i], idx.artistName(a[i]));
+  // The rail: B, C, L L, T; "The Lantern Choir" is an L.
+  using V = LibraryIndex::View;
+  TEST_ASSERT_EQUAL_UINT32(0, idx.bucketStart(V::Artists, textfold::bucketOf('B')));
+  TEST_ASSERT_EQUAL_UINT32(1, idx.bucketStart(V::Artists, textfold::bucketOf('C')));
+  TEST_ASSERT_EQUAL_UINT32(2, idx.bucketStart(V::Artists, textfold::bucketOf('L')));
+  TEST_ASSERT_EQUAL_UINT32(4, idx.bucketStart(V::Artists, textfold::bucketOf('M')));
+  TEST_ASSERT_EQUAL_UINT32(4, idx.bucketStart(V::Artists, textfold::bucketOf('T')));
+  TEST_ASSERT_EQUAL_UINT32(5, idx.bucketStart(V::Artists, textfold::bucketOf('U')));
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('L'), idx.bucketAt(V::Artists, 3));
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('C'), idx.bucketAt(V::Artists, 1));
+  // Albums: "A Paper Kite" stays under A ("A" is no article here), "The
+  // Long Road" goes after "Long Division", "The Zebra Years" under Z.
+  const char* albums[] = {"A Paper Kite", "Alpha", "Long Division", "The Long Road", "Middle", "Wet", "The Zebra Years"};
+  const LibraryIndex::Span z = idx.albumsAZ();
+  TEST_ASSERT_EQUAL_UINT32(7, z.count);
+  for (uint32_t i = 0; i < z.count; ++i) TEST_ASSERT_EQUAL_STRING(albums[i], idx.albumName(z[i]));
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('L'), idx.bucketAt(V::Albums, 3));
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('Z'), idx.bucketAt(V::Albums, 6));
+  // An artist's albums too.
+  const LibraryIndex::Span of = idx.albumsOf(findArtist(idx, "Brass Arcade"));
+  TEST_ASSERT_EQUAL_UINT32(3, of.count);
+  TEST_ASSERT_EQUAL_STRING("Alpha", idx.albumName(of[0]));
+  TEST_ASSERT_EQUAL_STRING("Middle", idx.albumName(of[1]));
+  TEST_ASSERT_EQUAL_STRING("The Zebra Years", idx.albumName(of[2]));
+  // The Folders view: the names as they are.
+  const char* folders[] = {"Brass Arcade", "Lantern", "Le Ciel Bleu", "The Lantern Choir", "Theory of Rain"};
+  const LibraryIndex::Span top = idx.subfolders(LibraryIndex::rootFolder());
+  TEST_ASSERT_EQUAL_UINT32(5, top.count);
+  for (uint32_t i = 0; i < top.count; ++i) TEST_ASSERT_EQUAL_STRING(folders[i], idx.folderName(top[i]));
+  // Every path still found (findTrack searches the folders' order).
+  char buf[256];
+  for (uint32_t t = 0; t < idx.trackCount(); ++t) {
+    idx.trackPath(t, buf, sizeof(buf));
+    TEST_ASSERT_EQUAL_UINT32(t, idx.findTrack(buf));
+  }
+}
+
+// Discs and numbers from the names, read folder by folder; an album plays
+// disc by disc.
+void test_disc_track_names_order_an_album() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  const char* files[] = {
+      // "1-01": disc then number; the number written again goes (half
+      // the folder's names write it so).
+      "/music/Glass Orchard/Night Shift/2-01 01-Return.mp3",
+      "/music/Glass Orchard/Night Shift/1-02. Second.mp3",
+      "/music/Glass Orchard/Night Shift/2-02 - Glass Orchard - Last.flac",
+      "/music/Glass Orchard/Night Shift/1-01 01-Opening.mp3",
+      "/music/Glass Orchard/Night Shift/cover.jpg",
+      // "101": discs 1-3 (301 had no number before: it played first).
+      "/music/Glass Orchard/Box/301 - Encore.mp3",
+      "/music/Glass Orchard/Box/201 - Middle.mp3",
+      "/music/Glass Orchard/Box/101 - Start.mp3",
+      "/music/Glass Orchard/Box/102 - Next.mp3",
+      // "CD1 - 01 - Title": the restarted numbers stay apart.
+      "/music/Glass Orchard/Live/CD2 - 01 - Encore.mp3",
+      "/music/Glass Orchard/Live/CD1 - 02 - Song.mp3",
+      "/music/Glass Orchard/Live/CD1 - 01 - Hello.mp3",
+      // "Artist - Album - NN Title", a guest on one.
+      "/music/Glass Orchard/Demos/Glass Orchard - Demos - 10 Ten.mp3",
+      "/music/Glass Orchard/Demos/Glass Orchard - Demos - 09 Nine.mp3",
+      "/music/Glass Orchard/Demos/Glass Orchard feat. Mira Lune - Demos - 02 Two.mp3",
+      // Disc subfolders: folder by folder, as before.
+      "/music/Glass Orchard/Double/CD2/01 - Glass Orchard - Back.mp3",
+      "/music/Glass Orchard/Double/CD1/02 - Front Two.mp3",
+      "/music/Glass Orchard/Double/CD1/01 - Front One.mp3",
+      // A lone "1-02": the plain rule.
+      "/music/Glass Orchard/Single/1-02 Lonely.mp3",
+  };
+  for (const char* f : files) idx.addFile(f);
+  TEST_ASSERT_TRUE(idx.finish());
+  expectTitles(idx, "Night Shift", {"1/1 Opening", "1/2 Second", "2/1 Return", "2/2 Last"});
+  expectTitles(idx, "Box", {"1/1 Start", "1/2 Next", "2/1 Middle", "3/1 Encore"});
+  expectTitles(idx, "Live", {"1/1 Hello", "1/2 Song", "2/1 Encore"});
+  expectTitles(idx, "Demos", {"0/2 Two", "0/9 Nine", "0/10 Ten"});
+  expectTitles(idx, "Double", {"0/1 Front One", "0/2 Front Two", "0/1 Back"});
+  expectTitles(idx, "Single", {"0/1 02 Lonely"});
+  TEST_ASSERT_EQUAL_UINT32(18, idx.tracksOfArtist(findArtist(idx, "Glass Orchard")).count);
+  // The Folders view still lists the files by their names, and the paths
+  // are the files'.
+  const uint32_t ns = idx.album(findAlbum(idx, "Night Shift")).folder;
+  const LibraryIndex::Span f = idx.filesIn(ns);
+  TEST_ASSERT_EQUAL_UINT32(4, f.count);
+  TEST_ASSERT_EQUAL_STRING("1-01 01-Opening.mp3", idx.trackFileName(f[0]));
+  TEST_ASSERT_EQUAL_STRING("2-02 - Glass Orchard - Last.flac", idx.trackFileName(f[3]));
+  char buf[256];
+  idx.trackPath(f[3], buf, sizeof(buf));
+  TEST_ASSERT_EQUAL_STRING("/music/Glass Orchard/Night Shift/2-02 - Glass Orchard - Last.flac", buf);
+  TEST_ASSERT_EQUAL_UINT32(f[3], idx.findTrack(buf));
+  TEST_ASSERT_EQUAL_size_t(Heap::peak, idx.memory().buildPeak);
+}
+
+// The artist off the titles, only when it is the folder's; a compilation's
+// names stay whole; years stay in titles.
+void test_titles_lose_the_folders_artist() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  const char* files[] = {
+      "/music/The Lantern Choir/Hymns/01 - Lantern Choir - Mile One.mp3",
+      "/music/The Lantern Choir/Hymns/02 - The Lantern Choir - Mile Two.mp3",
+      "/music/The Lantern Choir/Hymns/03 - Mile Three - Live.mp3",
+      "/music/The Lantern Choir/Hymns/04 - Other Act - Duet.mp3",
+      "/music/The Lantern Choir/Hymns/05 - 1999 Remix.mp3",
+      "/music/The Lantern Choir/Lantern Choir - Loose One.mp3",  // in the artist's own folder
+      "/music/Various Artists/Mixtape/01 - Act One - Song.mp3",
+      "/music/Various Artists/Mixtape/02 - Act Two - Tune.mp3",
+      "/music/Various Artists/Mixtape/Act Three - 03 - Air.mp3",
+      "/music/Glass Orchard - Opening.mp3",  // the top of /music: no artist folder
+      "/music/R_K Unit/Signals/01 - R-K Unit - Static.mp3",
+      "/music/R_K Unit/Signals/1999 - Party Song.mp3",
+      "/music/R_K Unit/Signals/2001 - Odyssey.mp3",
+  };
+  for (const char* f : files) idx.addFile(f);
+  TEST_ASSERT_TRUE(idx.finish());
+  expectTitles(idx, "Hymns", {"0/1 Mile One", "0/2 Mile Two", "0/3 Mile Three - Live", "0/4 Other Act - Duet",
+                              "0/5 1999 Remix"});
+  expectTitles(idx, "Mixtape", {"0/0 Act Three - 03 - Air", "0/1 Act One - Song", "0/2 Act Two - Tune"});
+  expectTitles(idx, "Signals", {"0/0 1999 - Party Song", "0/0 2001 - Odyssey", "0/1 Static"});
+  bool sawLoose = false, sawTop = false;
+  for (uint32_t t = 0; t < idx.trackCount(); ++t) {
+    const std::string name = idx.trackFileName(t);
+    if (name == "Lantern Choir - Loose One.mp3") {
+      TEST_ASSERT_EQUAL_STRING("Loose One", title(idx, t).c_str());
+      sawLoose = true;
+    }
+    if (name == "Glass Orchard - Opening.mp3") {
+      TEST_ASSERT_EQUAL_STRING("Glass Orchard - Opening", title(idx, t).c_str());
+      sawTop = true;
+    }
+  }
+  TEST_ASSERT_TRUE(sawLoose && sawTop);
+}
+
+// "Artist - Album - NN Title" whose album or work part differs from name
+// to name: each album, work or disc keeps its tracks together.
+void test_prefixes_that_differ_keep_their_order() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  const char* files[] = {
+      // A disc part at the album part's end: disc, then number.
+      "/music/Glass Orchard/Night Shift/Glass Orchard - Night Shift (Disc 2) - 02 Last.mp3",
+      "/music/Glass Orchard/Night Shift/Glass Orchard - Night Shift (Disc 1) - 01 Opening.mp3",
+      "/music/Glass Orchard/Night Shift/Glass Orchard - Night Shift (Disc 2) - 01 Return.mp3",
+      "/music/Glass Orchard/Night Shift/Glass Orchard - Night Shift (Disc 1) - 02 Second.mp3",
+      // Two works, each numbered from 1: the file names' order.
+      "/music/Composer/Suites/Composer - Glass Suite No. 2 - 1. Evening.mp3",
+      "/music/Composer/Suites/Composer - Glass Suite No. 1 - 2. Noon.mp3",
+      "/music/Composer/Suites/Composer - Glass Suite No. 1 - 1. Morning.mp3",
+      "/music/Composer/Suites/Composer - Glass Suite No. 2 - 2. Night.mp3",
+      // Two EPs in the artist's own folder.
+      "/music/Lantern Choir/Lantern Choir - Second EP - 01 Iron Kite.mp3",
+      "/music/Lantern Choir/Lantern Choir - First EP - 02 Glass Road.mp3",
+      "/music/Lantern Choir/Lantern Choir - First EP - 01 Paper Kite.mp3",
+  };
+  for (const char* f : files) idx.addFile(f);
+  TEST_ASSERT_TRUE(idx.finish());
+  expectTitles(idx, "Night Shift", {"1/1 Opening", "1/2 Second", "2/1 Return", "2/2 Last"});
+  expectTitles(idx, "Suites",
+               {"0/0 Glass Suite No. 1 - 1. Morning", "0/0 Glass Suite No. 1 - 2. Noon",
+                "0/0 Glass Suite No. 2 - 1. Evening", "0/0 Glass Suite No. 2 - 2. Night"});
+  const LibraryIndex::Span t = idx.tracksOfArtist(findArtist(idx, "Lantern Choir"));
+  const char* eps[] = {"First EP - 01 Paper Kite", "First EP - 02 Glass Road", "Second EP - 01 Iron Kite"};
+  TEST_ASSERT_EQUAL_UINT32(3, t.count);
+  for (uint32_t i = 0; i < t.count; ++i) {
+    TEST_ASSERT_EQUAL_STRING(eps[i], title(idx, t[i]).c_str());
+    TEST_ASSERT_EQUAL_UINT8(0, idx.track(t[i]).number);
+  }
+}
+
+// An .opus file's name is read as an .mp3's or a .flac's is, in the one
+// pass over its folder: the disc-track and "Artist - NN - Title" shapes
+// count the folder's names whatever their extensions, the folder's artist
+// comes off a title, and an artist of .opus files sorts past its "The".
+void test_opus_names_are_read_like_the_others() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  const char* files[] = {
+      // Disc and number, in a folder of .opus files alone (either case).
+      "/music/Glass Orchard/Night Shift/2-01 Return.opus",
+      "/music/Glass Orchard/Night Shift/1-02 Second.OPUS",
+      "/music/Glass Orchard/Night Shift/1-01 Opening.opus",
+      // "101 Title": the folder rule counts the three formats together.
+      "/music/Glass Orchard/Box/201 - Middle.flac",
+      "/music/Glass Orchard/Box/102 - Next.mp3",
+      "/music/Glass Orchard/Box/101 - Start.opus",
+      // "Artist - NN - Title" across the formats; the artist off a title.
+      "/music/Glass Orchard/Demos/Glass Orchard - 03 - Three.opus",
+      "/music/Glass Orchard/Demos/Glass Orchard - 01 - One.mp3",
+      "/music/Glass Orchard/Demos/Glass Orchard - 02 - Two.flac",
+      "/music/Glass Orchard/Live/02 - Other Act - Duet.opus",
+      "/music/Glass Orchard/Live/01 - Glass Orchard - Mile One.opus",
+      // An artist of .opus files sorts past its "The"; an .ogg beside them
+      // is an other file.
+      "/music/The Lantern Choir/Hymns/01 - Mile One.opus",
+      "/music/The Lantern Choir/Hymns/02 - Mile Two.ogg",
+      "/music/Lantern/Long Division/01 - Remainder.opus",
+  };
+  for (const char* f : files) idx.addFile(f);
+  TEST_ASSERT_TRUE(idx.finish());
+  TEST_ASSERT_EQUAL_UINT32(13, idx.trackCount());
+  expectTitles(idx, "Night Shift", {"1/1 Opening", "1/2 Second", "2/1 Return"});
+  expectTitles(idx, "Box", {"1/1 Start", "1/2 Next", "2/1 Middle"});
+  expectTitles(idx, "Demos", {"0/1 One", "0/2 Two", "0/3 Three"});
+  expectTitles(idx, "Live", {"0/1 Mile One", "0/2 Other Act - Duet"});
+  // The formats stay the extensions'.
+  using F = LibraryIndex::Format;
+  const LibraryIndex::Span box = idx.tracksOfAlbum(findAlbum(idx, "Box"));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(F::Opus), static_cast<int>(idx.track(box[0]).format));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(F::Mp3), static_cast<int>(idx.track(box[1]).format));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(F::Flac), static_cast<int>(idx.track(box[2]).format));
+  const LibraryIndex::Span ns = idx.tracksOfAlbum(findAlbum(idx, "Night Shift"));
+  for (uint32_t i = 0; i < ns.count; ++i) {
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(F::Opus), static_cast<int>(idx.track(ns[i]).format));
+  }
+  TEST_ASSERT_EQUAL_STRING("1-02 Second.OPUS", idx.trackFileName(ns[1]));
+  // The artists: Glass Orchard, Lantern, The Lantern Choir (an L).
+  const char* artists[] = {"Glass Orchard", "Lantern", "The Lantern Choir"};
+  const LibraryIndex::Span a = idx.artistsAZ();
+  TEST_ASSERT_EQUAL_UINT32(3, a.count);
+  for (uint32_t i = 0; i < a.count; ++i) TEST_ASSERT_EQUAL_STRING(artists[i], idx.artistName(a[i]));
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('L'), idx.bucketAt(LibraryIndex::View::Artists, 2));
+  TEST_ASSERT_EQUAL_UINT16(1, idx.folder(idx.album(findAlbum(idx, "Hymns")).folder).otherCount);
+  // Saved and loaded: the names, discs and formats come back.
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, 11));
+  LibraryIndex back(Heap::alloc, Heap::release);
+  MemorySource in(file.data(), file.size());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(in, 11)));
+  expectSameIndex(idx, back);
+  expectTitles(back, "Night Shift", {"1/1 Opening", "1/2 Second", "2/1 Return"});
+  for (uint32_t t = 0; t < idx.trackCount(); ++t) {
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(idx.track(t).format), static_cast<int>(back.track(t).format));
+  }
+}
+
+// A cache saved before the names were read this way (version 2: 0.6.0's),
+// by feature/opus before the merge (version 3: the same records, .opus
+// tracks and the old names) or by dev before it (version 4: the names, no
+// .opus tracks) is Outdated, so the Library builds the index again and
+// saves version 5.
+void test_an_older_cache_version_is_rebuilt() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  idx.addFile("/music/Glass Orchard/Night Shift/1-01 Opening.mp3");
+  idx.addFile("/music/Glass Orchard/Night Shift/1-02 Second.mp3");
+  TEST_ASSERT_TRUE(idx.finish());
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, 9));
+  std::vector<uint8_t> bytes(file.data(), file.data() + file.size());
+  uint32_t version;
+  std::memcpy(&version, bytes.data() + 4, 4);  // the header's second word
+  TEST_ASSERT_EQUAL_UINT32(5, version);
+  LibraryIndex back(Heap::alloc, Heap::release);
+  {
+    MemorySource in(bytes.data(), bytes.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(in, 9)));
+    expectSameIndex(idx, back);
+    const uint32_t first = back.tracksOfAlbum(0)[0];
+    TEST_ASSERT_EQUAL_STRING("Opening", title(back, first).c_str());
+    TEST_ASSERT_EQUAL_UINT8(1, back.track(first).disc);
+    TEST_ASSERT_EQUAL_UINT8(1, back.track(first).number);
+  }
+  for (const uint32_t old : {2u, 3u, 4u}) {
+    std::memcpy(bytes.data() + 4, &old, 4);
+    MemorySource in(bytes.data(), bytes.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), static_cast<int>(back.load(in, 9)));
+    TEST_ASSERT_FALSE(back.ready());
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_counts_and_skips);
   RUN_TEST(test_titles_numbers_formats);
+  RUN_TEST(test_articles_sort_past_the);
+  RUN_TEST(test_disc_track_names_order_an_album);
+  RUN_TEST(test_titles_lose_the_folders_artist);
+  RUN_TEST(test_prefixes_that_differ_keep_their_order);
   RUN_TEST(test_paths_round_trip);
   RUN_TEST(test_artist_and_album_views);
   RUN_TEST(test_folder_tree);
@@ -765,6 +1136,9 @@ int main(int, char**) {
   RUN_TEST(test_save_and_load_round_trip);
   RUN_TEST(test_save_and_load_a_big_library);
   RUN_TEST(test_load_rejects_stale_and_damaged_files);
+  RUN_TEST(test_opus_files_are_tracks);
   RUN_TEST(test_an_empty_library_round_trips);
+  RUN_TEST(test_opus_names_are_read_like_the_others);
+  RUN_TEST(test_an_older_cache_version_is_rebuilt);
   return UNITY_END();
 }

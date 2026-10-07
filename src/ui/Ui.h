@@ -105,6 +105,11 @@ public:
   // bar, the page, what is over it), the list's hardware scroll sent again.
   void setDark(bool on);
   bool dark() const { return dark_; }
+  // The Pair screen's search runs (its 2 minutes at most; OutputPage):
+  // main.cpp holds a lit screen lit for it (ScreenControl::Hold), so the
+  // listener's taps on the list act instead of only waking a dim screen,
+  // and the screen doesn't go off and stop the search.
+  bool pairSearching() const { return started_ && !suspended_ && outputPage_.pairSearching(); }
 
   // ---- events from the rest of the firmware ----
   void libraryChanged();       // the index was rebuilt (g0): the Library's ids are stale
@@ -155,8 +160,8 @@ public:
   // Shows tab t (as a tab tap does, but never pops it).
   void showTab(NavModel::Tab t);
   // The Library tab showing `pages` above its root on segment `seg` (Now
-  // Playing's Go to artist / album / Show in folders); the stack it had
-  // is replaced.
+  // Playing's navigation menu: Go to artist / album / folder); the stack
+  // it had is replaced.
   void showLibrary(LibrarySegment seg, const NavModel::PageRef* pages, int n);
   // What the Library shows (the card's index, or a synthetic one).
   LibraryIndex* browseIndex() { return browse_ ? browse_ : library_.index(); }
@@ -172,12 +177,20 @@ public:
   // minutes idle").
   void note(const char* text, uint32_t ms);
   // `primary`: the row that is the main choice (-1 none); `danger`: the
-  // row in red (-1 none).
+  // row in red (-1 none). A touch that starts within Sheet::kSettleMs of
+  // its opening goes nowhere.
   void openSheet(OverlayOwner* owner, const char* title, const char* const* rows, int n,
                  const char* const* details = nullptr, int primary = -1, int danger = -1);
-  // The sheet just opened shows the sleep timer's state as row `row`'s
-  // detail ("23 min", "Fading", "Off"): it follows the timer while it is up.
-  void sheetFollowsSleep(int row);
+  // What a row of the sheet just opened shows as its detail, and follows
+  // while it is up: the sleep timer's state ("23 min", "Fading", "Off"),
+  // shuffle ("On", "Off") or repeat ("Off", "All", "One"), from the
+  // snapshot each pass (a change from the console shows too).
+  enum class SheetFollow : uint8_t { None, Sleep, Shuffle, Repeat };
+  void sheetFollows(int row, SheetFollow what);
+  // A tap on row `row` of the sheet just opened doesn't close it: the
+  // owner's onSheet(row) acts, the row's highlight goes and its followed
+  // detail shows the new state (Now Playing's Shuffle and Repeat).
+  void sheetStays(int row);
   // An output's volume, as a sheet: -1 the active one (Now Playing's
   // volume button), 0 the speaker's, 1 the headphones' (the Output cards).
   void openVolume(int output = -1);
@@ -198,8 +211,12 @@ public:
   const queueview::KeyRing& failedKeys() const { return failedKeys_; }
   // Shuffle all: the whole library, shuffled, playing (the empty states).
   void shuffleAll();
+  // The console's qu undid the queue's last edit: an Undo toast still up
+  // goes at the next pass, and its line says so (UndoWatch).
+  void queueUndone() { undoWatch_.undone(); }
   // Try again on a no-card page: a card that mounts restarts the player
-  // (a toast first); else the note, "Still no card" or "Still not FAT32",
+  // (a toast first); else the note, the kind's (uitext::cardMessage(kind)
+  // .still: "Still no card: ...", "Still exFAT: ...", "Still GPT: ..."),
   // and the page drawn again if that changed.
   void retryCard();
   bool toastUp() const { return toast_.up(); }
@@ -237,8 +254,15 @@ private:
   }
   // The sleep timer's sheet: its state as the snapshot has it.
   void refreshSleepSheet();
-  // The "..." sheet's row that shows the timer's state (-1 none).
-  int sheetSleepRow_ = -1;
+  // The sheet's followed rows, each from the snapshot (`pressed`: a
+  // staying row just tapped, drawn again if its detail didn't change).
+  void followSheet(int pressed = -1);
+  SheetFollow sheetFollow_[Sheet::kMaxRows] = {};
+  uint8_t sheetStays_ = 0;      // a bit per row
+  uint32_t sheetOpenedMs_ = 0;  // (the settle: Sheet::kSettleMs; the Sleep timer sheet's too)
+  // The shuffle mode the last pass saw, and a qu since: when the queue's
+  // undo goes (a toggle drops it, qu uses it), an Undo toast up goes too.
+  queueview::UndoWatch undoWatch_;
   void sleepTitle(char* buf, size_t size) const;
   void coachDone();
   void updateLostDialog();
@@ -333,9 +357,11 @@ private:
   uint32_t framesWindowStart_ = 0;
   uint32_t framesInWindow_ = 0;
   float fps_ = 0;
-  // The list's current motion, for its "[ui] scroll:" line.
+  // The list's current motion, for its "[ui] scroll:" line (a page without
+  // a list, Now Playing's seek bar: "[ui] scrub:").
   struct Motion {
     bool on = false;
+    bool list = false;  // a list moved (else a page's own animation: a scrub)
     uint32_t startMs = 0;
     uint32_t frames = 0;
     uint64_t sumUs = 0;

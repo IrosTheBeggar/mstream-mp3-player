@@ -152,9 +152,45 @@
 
   <h2>The microSD card</h2>
   <ul>
-    <li>Format it <strong>FAT32</strong> (MBR). exFAT cards (how most cards of
-      64&nbsp;GB and up come) and GPT cards don't mount: the player says
-      &ldquo;This card isn't FAT32&rdquo;.</li>
+    <li>Format it <strong>FAT32</strong>, with an <strong>MBR</strong>
+      partition table (&ldquo;Master Boot Record&rdquo;). Cards of
+      64&nbsp;GB and up come exFAT, and a card a Mac erased whole gets a GPT
+      (&ldquo;GUID Partition Map&rdquo;): the player doesn't mount those and
+      says what it found (&ldquo;This card is exFAT&rdquo;, &ldquo;This card
+      uses GPT&rdquo;&hellip;). Formatting erases the card: copy anything on
+      it off first, and check the disk you pick is the card.</li>
+    <li>Up to 32&nbsp;GB (and not GPT): the computer's own Format, FAT32.
+      Over 32&nbsp;GB, or a GPT card:
+      <ul>
+        <li><strong>Windows 11</strong> updated since May 2026 (KB5089549):
+          in a Terminal run as administrator,
+          <code>format X: /FS:FAT32 /Q /V:MUSIC</code> (<code>X:</code> the
+          card's letter). File Explorer's Format still stops at 32&nbsp;GB.</li>
+        <li><strong>Windows 10</strong>, or when <code>format</code> answers
+          &ldquo;The volume is too big for FAT32&rdquo;: Ridgecrop's free
+          <strong>FAT32 Format</strong> (<code>guiformat.exe</code>, or
+          <code>winget install -e --id Ridgecrop.guiformat</code>).</li>
+        <li><strong>A GPT card on Windows</strong> stays GPT through both:
+          make it MBR first. In that Terminal, <code>diskpart</code>, then
+          <code>list disk</code> (the card by its size), <code>select disk
+          N</code>, <code>clean</code> (it erases the selected disk: check N
+          twice), <code>convert mbr</code>, <code>create partition
+          primary</code>, <code>assign</code>, <code>exit</code>; cancel
+          Windows' offer to format it, then format it as above.</li>
+        <li><strong>macOS:</strong> Disk Utility, View &gt; Show All
+          Devices, select the card itself, Erase: Format <strong>MS-DOS
+          (FAT)</strong>, Scheme <strong>Master Boot Record</strong>. Or
+          <code>sudo diskutil eraseDisk FAT32 MUSIC MBRFormat /dev/diskN</code>
+          (<code>diskutil list</code> finds N).</li>
+        <li><strong>Linux:</strong> <code>lsblk</code> to find the card
+          (<code>/dev/sdX</code>, or <code>/dev/mmcblk0</code> whose
+          partition is <code>/dev/mmcblk0p1</code>), unmount it
+          (<code>sudo umount /dev/sdX1</code>), then
+          <code>sudo parted /dev/sdX --script mklabel msdos mkpart primary fat32 4MiB 100%</code>
+          and <code>sudo mkfs.fat -F 32 -s 64 -n MUSIC /dev/sdX1</code>.</li>
+        <li>Not the <strong>SD Card Formatter</strong>: over 32&nbsp;GB it
+          makes exFAT.</li>
+      </ul></li>
     <li>Put the music under <code>/music</code>, e.g.
       <code>/music/Artist/Album/01 - Title.mp3</code> (MP3 or FLAC), with the
       album's <code>cover.jpg</code> next to its tracks.</li>

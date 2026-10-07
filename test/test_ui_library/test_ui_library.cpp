@@ -28,6 +28,8 @@
 #include "QueueView.h"
 #include "RateConverter.h"
 #include "ScreenPower.h"
+#include "SeekBar.h"
+#include "SheetLayout.h"
 #include "SleepTimer.h"
 #include "TabBarModel.h"
 #include "TextFit.h"
@@ -73,6 +75,17 @@ struct Vlw {
       advance.push_back({be32(g), static_cast<int>(be32(g + 12))});
     }
   }
+  // Every character has a glyph (width() counts a missing one as nothing;
+  // the firmware draws it folded, and measures it as a space).
+  bool hasAll(const char* s) const {
+    for (const char* p = s; *p;) {
+      const uint32_t cp = textfold::decode(p);
+      bool found = false;
+      for (const auto& a : advance) found = found || a.first == cp;
+      if (!found) return false;
+    }
+    return true;
+  }
   int width(const char* s) const {
     int w = 0;
     for (const char* p = s; *p;) {
@@ -94,14 +107,17 @@ struct Vlw {
 
 void test_jump_letters_match_the_index_buckets() {
   // The synthetic library at 10,000 tracks: 600 artists, their accents,
-  // digits and "The " included.
+  // digits and "The " included. The rows' rail names are their sort names
+  // (LibraryPage::railName(): "The X" under X), as the index sorts them.
   LibraryIndex idx;
   const synth::Spec spec = synth::specFor(10000);
   TEST_ASSERT_TRUE(idx.begin(spec.root));
   synth::addTracks(idx, spec);
   TEST_ASSERT_TRUE(idx.finish());
   std::vector<std::string> names;
-  for (uint32_t i = 0; i < idx.artistCount(); ++i) names.push_back(idx.artistName(idx.artistsAZ()[i]));
+  for (uint32_t i = 0; i < idx.artistCount(); ++i) {
+    names.push_back(textfold::sortName(idx.artistName(idx.artistsAZ()[i])));
+  }
   int32_t first[jump::kCells], end[jump::kCells];
   jump::letters(static_cast<uint32_t>(names.size()), nameOf, &names, first, end);
   for (int b = 0; b < jump::kCells; ++b) {
@@ -167,7 +183,9 @@ void test_jump_second_level_on_a_big_library() {
   synth::addTracks(idx, spec);
   TEST_ASSERT_TRUE(idx.finish());
   std::vector<std::string> names;
-  for (uint32_t i = 0; i < idx.albumCount(); ++i) names.push_back(idx.albumName(idx.albumsAZ()[i]));
+  for (uint32_t i = 0; i < idx.albumCount(); ++i) {
+    names.push_back(textfold::sortName(idx.albumName(idx.albumsAZ()[i])));
+  }
   int32_t first[jump::kCells], end[jump::kCells], second[jump::kCells];
   jump::letters(static_cast<uint32_t>(names.size()), nameOf, &names, first, end);
   int big = 0;
@@ -338,29 +356,29 @@ void test_empty_state_texts_fit() {
   fits(small, kPickInLibrary, kEmptyLineW);
 }
 
-// No card, and a card that isn't FAT32: the empty state's title and lines,
-// and Try again's note when it still fails (Small before ": ", Body after).
+// No card, and each kind of card that didn't mount (cardMessage(): exFAT,
+// NTFS, a GPT, nothing recognised): the empty state's title and lines, and
+// Try again's note when it still fails (Small before ": ", Body after).
 void test_no_card_texts_fit() {
   using namespace uitext;
+  using cardformat::Kind;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
-  fits(title, kNoCardTitle, kEmptyTitleW);
-  fits(title, kNotFat32Title, kEmptyTitleW);
-  for (const char* t : kNoCardLines) fits(small, t, kEmptyLineW);
-  for (const char* t : kNotFat32Lines) fits(small, t, kEmptyLineW);
   fits(bold, kTryAgain, 320 - 140 - 12);  // the one button: x 70, 180 px, 6 px in at each end
-  for (const char* note : {kStillNoCard, kStillNotFat32}) {
-    const std::string n(note);
+  for (Kind k : {Kind::Unreadable, Kind::Other, Kind::ExFat, Kind::Ntfs, Kind::Gpt}) {
+    const CardMessage& m = cardMessage(k);
+    fits(title, m.title, kEmptyTitleW);
+    for (const char* t : m.lines) fits(small, t, kEmptyLineW);
+    const std::string n(m.still);
     const size_t colon = n.find(": ");
     TEST_ASSERT_TRUE(colon != std::string::npos);
     fits(small, n.substr(0, colon).c_str(), kToastTwoLineW);
-    fits(body, note + colon + 2, kToastTwoLineW);
+    fits(body, m.still + colon + 2, kToastTwoLineW);
+    char msg[200];
+    snprintf(msg, sizeof(msg), "%s: title %d; lines %d, %d; note %d, %d", cardformat::name(k), title.width(m.title),
+             small.width(m.lines[0]), small.width(m.lines[1]), small.width(n.substr(0, colon).c_str()),
+             body.width(m.still + colon + 2));
+    TEST_MESSAGE(msg);
   }
-  char msg[200];
-  snprintf(msg, sizeof(msg), "widths: titles %d, %d; lines %d, %d, %d, %d; notes %d, %d", title.width(kNoCardTitle),
-           title.width(kNotFat32Title), small.width(kNoCardLines[0]), small.width(kNoCardLines[1]),
-           small.width(kNotFat32Lines[0]), small.width(kNotFat32Lines[1]), body.width(kStillNoCard),
-           body.width(kStillNotFat32));
-  TEST_MESSAGE(msg);
 }
 
 // The board guard's screen (Font2, no wrap): every line at Font2's widest
@@ -561,13 +579,54 @@ void test_output_texts_fit() {
   fits(small, "v10.10.10-rc.10-9999-gabcdef12-dirty", kAboutValueW);
 }
 
+// The seek bar's readout (docs/SEEK-BAR.md section 4.2): "Release to
+// cancel" in the line's width, and the group (the finger's second in
+// Title, the gap, "no change" or the change in Small) within its
+// kSeekReadoutW for any length up to 999:59 (a 16-hour mix), with the
+// texts as SeekBar writes them. Every character is one the font has: one
+// it lacks is measured as a space and drawn folded ("−" as a wider "-"),
+// and the change came out "-0:…".
+void test_seek_bar_texts_fit() {
+  using namespace uitext;
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  fits(bold, kSeekCancel, 296);
+  // The figures are all as wide (in both fonts), so the extremes below
+  // stand for every time of as many digits.
+  for (char d = '1'; d <= '9'; ++d) {
+    const char one[2] = {d, 0};
+    TEST_ASSERT_EQUAL_INT(title.width("0"), title.width(one));
+    TEST_ASSERT_EQUAL_INT(small.width("0"), small.width(one));
+  }
+  // 4:05, 59:59, 99:59, 100:00 and 999:59: the second shown, and the
+  // change all the way back or on.
+  const uint32_t lengths[] = {245000, 3599000, 5999000, 6000000, 59999000};
+  for (uint32_t len : lengths) {
+    char big[16], change[24];
+    SeekBar::timeText(len, big, sizeof(big));
+    TEST_ASSERT_TRUE_MESSAGE(title.hasAll(big), big);
+    const int room = kSeekReadoutW - title.width(big) - kSeekReadoutGap;
+    fits(small, kSeekStay, room);
+    SeekBar::changeText(len, 0, change, sizeof(change));
+    TEST_ASSERT_TRUE_MESSAGE(small.hasAll(change), change);
+    fits(small, change, room);
+    SeekBar::changeText(0, len, change, sizeof(change));
+    TEST_ASSERT_TRUE_MESSAGE(small.hasAll(change), change);
+    fits(small, change, room);
+  }
+  // "-0:45" whole, as drawn (it was cut to "-0:…").
+  char change[24];
+  SeekBar::changeText(25000, 70000, change, sizeof(change));
+  TEST_ASSERT_EQUAL_STRING("-0:45", change);
+  TEST_ASSERT_TRUE(small.hasAll(change));
+}
+
 // Now Playing while play waits for the headphones (PlayGate): the panel's
 // lines and buttons, the notice's buttons, and the output line that says
 // they aren't connected.
 void test_waiting_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  const int panelW = 320 - 112;  // the artist and album bands
+  const int panelW = 320 - 112;  // the title strip and the rows under it
   fits(small, "Waiting for SPYDRONE\xE2\x80\xA6", kWaitTextW);
   fits(small, "Waiting for WH-1000XM4\xE2\x80\xA6", kWaitTextW);
   fits(small, "Waiting for the headphones\xE2\x80\xA6", kWaitTextW);
@@ -592,15 +651,76 @@ void test_waiting_texts_fit() {
   TEST_ASSERT_TRUE(12 + small.width("88:88") + 4 <= 160 - kNowPlayingMidW / 2);
 }
 
+// Now Playing's two menus (docs/QUEUE-MODES.md section 4.6): the rows'
+// labels in a row, each state and detail in its row's room
+// (sheet::detailRoom(), as Sheet::render() has it), the toasts on one
+// line, "Playback" left of the ✕; the folder cut from the left by whole
+// folders; the waiting title on one line.
+void test_now_playing_menu_texts_fit() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
+  for (const char* l : {kGoTo[0], kGoTo[1], kGoTo[2], kShuffleRow, kRepeatRow, kSleepRow}) fits(body, l, 320 - 32);
+  // The rooms, as measured with the firmware's fonts.
+  TEST_ASSERT_EQUAL_INT(183, sheet::detailRoom(body.width(kGoTo[0])));
+  TEST_ASSERT_EQUAL_INT(174, sheet::detailRoom(body.width(kGoTo[1])));
+  TEST_ASSERT_EQUAL_INT(177, sheet::detailRoom(body.width(kGoTo[2])));
+  TEST_ASSERT_EQUAL_INT(216, sheet::detailRoom(body.width(kShuffleRow)));
+  TEST_ASSERT_EQUAL_INT(215, sheet::detailRoom(body.width(kRepeatRow)));
+  TEST_ASSERT_EQUAL_INT(180, sheet::detailRoom(body.width(kSleepRow)));
+  for (const char* s : kOnOff) fits(small, s, sheet::detailRoom(body.width(kShuffleRow)));
+  for (const char* s : kRepeatModes) fits(small, s, sheet::detailRoom(body.width(kRepeatRow)));
+  TEST_ASSERT_TRUE(small.width("One") <= 26);
+  // The sleep states as before, against the Sleep timer row's room.
+  for (const char* t : {"Off", "90 min", "59 s", "End of track", "End of album", "End of queue", "Fading"}) {
+    fits(small, t, sheet::detailRoom(body.width(kSleepRow)));
+  }
+  fits(small, kNoArtistFolder, sheet::detailRoom(body.width(kGoTo[0])));
+  fits(small, kLooseTracks, sheet::detailRoom(body.width(kGoTo[1])));
+  // The refusals' toasts, and the sheet's title.
+  fits(body, kBuiltinNotInLibrary, kToastTextRight - kToastTextX);
+  fits(body, kLibraryNotReady, kToastTextRight - kToastTextX);
+  fits(small, kPlaybackTitle, kSleepTitleW);
+  // The folder: cut from the left by whole folders to Go to folder's room.
+  textfit::Font f;
+  f.ctx = const_cast<Vlw*>(&small);
+  f.width = [](void* ctx, const char* s) { return static_cast<const Vlw*>(ctx)->width(s); };
+  const int room = sheet::detailRoom(body.width(kGoTo[2]));
+  char out[160];
+  TEST_ASSERT_TRUE(small.width("/music/Daft Punk/Discovery") > room);
+  textfit::cutPathLeft(f, "/music/Daft Punk/Discovery", room, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("\xE2\x80\xA6/Daft Punk/Discovery", out);
+  fits(small, out, room);
+  textfit::cutPathLeft(f, "/music/Kavinsky", room, out, sizeof(out));  // fits: whole
+  TEST_ASSERT_EQUAL_STRING("/music/Kavinsky", out);
+  textfit::cutPathLeft(f, "/music", room, out, sizeof(out));  // a track at the root
+  TEST_ASSERT_EQUAL_STRING("/music", out);
+  // A last folder too wide even alone: "/<last>" (the draw cuts its end).
+  const std::string wide(40, 'W');
+  textfit::cutPathLeft(f, ("/music/Some Artist/" + wide).c_str(), room, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING(("/" + wide).c_str(), out);
+  // A deep path keeps as many folders as fit.
+  textfit::cutPathLeft(f, "/music/a/b/c/Daft Punk/Discovery", room, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("\xE2\x80\xA6/b/c/Daft Punk/Discovery", out);  // (never "/a/b/c/...": a cut says so)
+  // The waiting title: one line of Bold 16 in the title's 190 px.
+  textfit::Font b;
+  b.ctx = const_cast<Vlw*>(&bold);
+  b.width = [](void* ctx, const char* s) { return static_cast<const Vlw*>(ctx)->width(s); };
+  const char* title = "Le voyage de P\xC3\xA9n\xC3\xA9lope (Remastered Edition)";
+  textfit::fit(b, title, strlen(title), out, sizeof(out), 190);
+  fits(bold, out, 190);
+  fits(bold, "One More Time", 190);
+}
+
 // The sleep timer (ENERGY.md section 3): the "..." row and its state, the
 // sheet's pills, the fade's toast, and the moon's text on Now Playing's
 // progress line.
 void test_sleep_timer_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  // The "..." sheet's row (Body from x 16), its state right-aligned (Small)
-  // in what the label leaves (Sheet::render: 16 px each side and between).
-  const int stateRoom = 320 - 16 - (16 + body.width(kSleepRow) + 16);
+  // The playback menu's row (Body from x 16), its state right-aligned
+  // (Small) in what the label leaves (Sheet::render: 16 px each side and
+  // between).
+  const int stateRoom = sheet::detailRoom(body.width(kSleepRow));
   for (const char* t : {"Off", "90 min", "59 s", "End of track", "End of album", "End of queue", "Fading"}) {
     fits(small, t, stateRoom);
   }
@@ -980,6 +1100,8 @@ int main(int, char**) {
   RUN_TEST(test_queue_texts_fit);
   RUN_TEST(test_output_texts_fit);
   RUN_TEST(test_waiting_texts_fit);
+  RUN_TEST(test_now_playing_menu_texts_fit);
+  RUN_TEST(test_seek_bar_texts_fit);
   RUN_TEST(test_sleep_timer_texts_fit);
   RUN_TEST(test_idle_power_off_texts_fit);
   RUN_TEST(test_power_settings_texts_fit);

@@ -10,12 +10,13 @@
 //
 // Each entry is a track id and a key: a number given to the entry when it
 // joins the queue and never reused, so the UI can keep a selection (or the
-// row it shows) across edits that move positions. Positions are 0-based.
+// row it shows) across edits that move positions. Positions are 0-based,
+// and are the order that plays, shuffled or not.
 //
-// Memory: the entries (8 bytes each) and the undo snapshot (the same again)
-// are flat arrays from allocator hooks (the firmware points them at PSRAM),
-// growing by doubling. Nothing else is allocated, except a bit per entry
-// for the length of a remove() or moveNext().
+// Memory: the entries (12 bytes each) and the undo snapshot (the same
+// again) are flat arrays from allocator hooks (the firmware points them at
+// PSRAM), growing by doubling. Nothing else is allocated, except a bit per
+// entry for the length of a remove() or moveNext().
 //
 // The current position is -1 only when the queue is empty. The rules the
 // edits follow (the tab bar design's Library and Queue actions):
@@ -35,13 +36,46 @@
 // last one. What the player does about an edit (start the new current
 // track, stop) is PlaybackController's.
 //
+// Shuffle (docs/QUEUE-MODES.md section 2) reorders the entries themselves,
+// so a position is a play position everywhere (the Queue tab, the saver,
+// step() and peek()) and the Queue tab shows the order that plays. Each
+// entry carries a rank, its place in the queue's own order: while
+// shuffled, ranks are distinct and sort into that order (gaps are fine);
+// while not, they mean nothing (the own order is the positions).
+//   setShuffled(true)   what is up next (after the current entry) is
+//                       shuffled; the current entry and what played before
+//                       it stay where they are
+//   setShuffled(false)  the entries sorted back by rank: the own order,
+//                       the current entry in its place there
+// A toggle is no edit: it drops the undo and allocates nothing. Each
+// snapshot carries the mode it was taken in, and undo() puts it back with
+// the entries: the same mode for every edit but a Play that sets it
+// (replace(.., shuffled): Shuffle all's, which turns it on), whose undo
+// brings back the queue and the mode it had. While shuffled the edits
+// keep the ranks: Play (replace()) puts the chosen track first (kAnyStart:
+// a random one) and shuffles every other after it, the ranks the given
+// order; Play next ranks right after the current entry and + Queue after
+// the highest rank, each in the given order and never shuffled in (the
+// listener put them where they are); moveNext() ranks the moved right
+// after the current entry; an add to an empty queue is laid out as a Play
+// from its first. An add that would take a rank past 0xFFFFFFFF is refused
+// as out of memory is (four billion adds without a Play: never, but it
+// can't wrap silently). The generator is a hook (the firmware's
+// esp_random(): fresh entropy each time); without one a fixed sequence, so
+// the host tests repeat.
+//
 // Not thread-safe: the firmware's loop task owns it.
 class QueueModel {
 public:
   using AllocFn = void* (*)(size_t bytes);
   using FreeFn = void (*)(void* p);
+  // 32 random bits (esp_random on the firmware).
+  using RandomFn = uint32_t (*)();
 
   static constexpr uint32_t kNone = 0xFFFFFFFFu;
+  // replace()'s start: shuffled, a random first; not shuffled, the first
+  // (0, not the clamp's last).
+  static constexpr uint32_t kAnyStart = kNone;
 
   enum class Edit : uint8_t { None, Replace, InsertNext, Append, Remove, MoveNext, ClearUpNext, Clear };
 
@@ -51,8 +85,9 @@ public:
     bool pastEnd = false;  // ... and none after it stayed: current is now the last entry (or none)
   };
 
-  // nullptr hooks: malloc/free.
-  explicit QueueModel(AllocFn alloc = nullptr, FreeFn release = nullptr);
+  // nullptr hooks: malloc/free; no `random`: a fixed xorshift32 sequence
+  // (from 0x2545F491), so the host tests repeat.
+  explicit QueueModel(AllocFn alloc = nullptr, FreeFn release = nullptr, RandomFn random = nullptr);
   ~QueueModel();
   QueueModel(const QueueModel&) = delete;
   QueueModel& operator=(const QueueModel&) = delete;
@@ -74,9 +109,26 @@ public:
   uint32_t contentVersion() const { return contentVersion_; }
   // Bumped whenever the current position or the entries change.
   uint32_t positionVersion() const { return positionVersion_; }
+  // Shuffled: the entries are in a shuffled order, each with its rank.
+  bool shuffled() const { return shuffled_; }
+  // Shuffled: the entry's rank (its place in the queue's own order);
+  // otherwise `pos` itself. kNone out of range.
+  uint32_t rankAt(uint32_t pos) const {
+    return pos < q_.size ? (shuffled_ ? q_.data[pos].rank : pos) : kNone;
+  }
+
+  // ---- shuffle (see the class) ----
+  // False: it already was (nothing done). Allocates nothing; drops the
+  // undo (its memory kept for the next snapshot); bumps both versions even
+  // when nothing moves (nothing up next), so the saver writes the mode.
+  bool setShuffled(bool on);
 
   // ---- editing: false when out of memory, the queue then unchanged ----
-  bool replace(const uint32_t* tracks, uint32_t n, uint32_t start);
+  bool replace(const uint32_t* tracks, uint32_t n, uint32_t start) { return replace(tracks, n, start, shuffled_); }
+  // Play in a mode (Shuffle all: shuffled): the mode set and the queue
+  // replaced as one edit, laid out as the mode's Play; undo() puts both
+  // back. Nothing to play (`n` 0) is a Clear, in that mode.
+  bool replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled);
   bool insertNext(const uint32_t* tracks, uint32_t n);
   bool append(const uint32_t* tracks, uint32_t n);
   // Positions out of range and repeats are ignored; any order.
@@ -98,21 +150,28 @@ public:
   // The last edit, if it can be undone (None after undo(), a restore, or a
   // snapshot that didn't fit in memory).
   Edit undoable() const { return undoEdit_; }
-  // The queue as it was before the last edit. The current entry is the one
-  // current now if it was there then (what plays keeps playing), otherwise
-  // the one that was current then.
+  // The mode undo() puts back: the one the last edit was made in (it
+  // differs from shuffled() only after a Play that set the mode).
+  bool undoShuffled() const { return undoEdit_ != Edit::None ? undoShuffled_ : shuffled_; }
+  // The queue as it was before the last edit, in the mode it was in then.
+  // The current entry is the one current now if it was there then (what
+  // plays keeps playing), otherwise the one that was current then.
   bool undo();
   void dropUndo();
 
   // ---- restoring (persistence, a library rebuild) ----
   // The queue becomes these tracks with `current` (clamped; -1 for an
-  // empty queue), with fresh keys and no undo.
-  bool assign(const uint32_t* tracks, uint32_t n, int32_t current);
+  // empty queue), with fresh keys and no undo, shuffled or not, with
+  // `ranks` (nullptr: the positions; read back from a shuffled file, they
+  // may have gaps where tracks were dropped).
+  bool assign(const uint32_t* tracks, uint32_t n, int32_t current, bool shuffled = false,
+              const uint32_t* ranks = nullptr);
 
 private:
   struct Entry {
     uint32_t track;
     uint32_t key;
+    uint32_t rank;  // shuffled: its place in the own order; otherwise unused
   };
   struct Array {  // from the hooks
     Entry* data = nullptr;
@@ -122,17 +181,25 @@ private:
 
   bool reserve(Array& a, uint32_t n);
   void drop(Array& a);
-  // Copies the entries to the undo snapshot (the edit is then undoable);
-  // false: no memory for it (the edit goes ahead, not undoable).
+  // Copies the entries and the mode to the undo snapshot (the edit is then
+  // undoable); false: no memory for it (the edit goes ahead, not undoable).
   bool snapshot(Edit edit);
   // A bit per position in `positions` (in range), in a block from the
   // hooks; nullptr: no memory. `count`: how many distinct positions.
   uint32_t* selection(const uint32_t* positions, uint32_t n, uint32_t* count);
   void changed();
   bool insertAt(uint32_t at, const uint32_t* tracks, uint32_t n, Edit edit);
+  // The next draw from the hook (or the fixed sequence): its 32 bits for
+  // `bound` 0 (a seed), else in [0, bound) by multiply-shift.
+  uint32_t draw(uint32_t bound = 0);
+  // The highest rank (0 for an empty queue): O(n).
+  uint32_t maxRank() const;
 
   AllocFn allocFn_;
   FreeFn freeFn_;
+  RandomFn randomFn_;
+  uint32_t rng_ = 0x2545F491u;  // the fixed sequence's state (no hook)
+  bool shuffled_ = false;
   Array q_;  // the entries
   int32_t current_ = -1;
   uint32_t nextKey_ = 0;
@@ -141,5 +208,6 @@ private:
 
   Array undo_;
   int32_t undoCurrent_ = -1;
+  bool undoShuffled_ = false;  // the mode the snapshot was taken in
   Edit undoEdit_ = Edit::None;
 };

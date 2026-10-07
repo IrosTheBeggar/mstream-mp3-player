@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Copyright (C) 2026 IrosTheBeggar
 
-// Host tests for the play queue: QueueModel (edits, positions, keys, undo),
+// Host tests for the play queue: QueueModel (edits, positions, keys, undo,
+// shuffle and its ranks: docs/QUEUE-MODES.md),
 // TrackCatalog (library and built-in ids) and QueueText (the queue saved as
 // paths, and read back after a library rebuild). Run: pio test -e native
 #include <unity.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include <new>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "ByteStream.h"
@@ -16,15 +20,50 @@
 #include "QueueModel.h"
 #include "QueueSaver.h"
 #include "QueueText.h"
+#include "Shuffle.h"
 #include "TrackCatalog.h"
+
+namespace {
+// The global heap, counted while `counting` (test_a_toggle_allocates_nothing):
+// QueueModel's hooks can't see an operator new or a std::stable_sort's
+// buffer (get_temporary_buffer: a nothrow new), and on the device that
+// would land on the loop task's heap. The replacements below serve the whole
+// test program; they only count while asked to.
+struct GlobalNew {
+  static bool counting;
+  static long count;
+  static void* take(std::size_t n) {
+    if (counting) ++count;
+    return std::malloc(n ? n : 1);
+  }
+};
+bool GlobalNew::counting = false;
+long GlobalNew::count = 0;
+}  // namespace
+
+void* operator new(std::size_t n) {
+  if (void* p = GlobalNew::take(n)) return p;
+  throw std::bad_alloc();
+}
+void* operator new[](std::size_t n) { return ::operator new(n); }
+void* operator new(std::size_t n, const std::nothrow_t&) noexcept { return GlobalNew::take(n); }
+void* operator new[](std::size_t n, const std::nothrow_t&) noexcept { return GlobalNew::take(n); }
+void operator delete(void* p) noexcept { std::free(p); }
+void operator delete[](void* p) noexcept { std::free(p); }
+void operator delete(void* p, std::size_t) noexcept { std::free(p); }
+void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { std::free(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { std::free(p); }
 
 namespace {
 
 // An allocator that can be told to fail, and counts what's live.
 struct Heap {
   static long live;
+  static long allocs;  // every alloc asked for
   static bool failing;
   static void* alloc(size_t n) {
+    ++allocs;
     if (failing) return nullptr;
     ++live;
     return std::malloc(n ? n : 1);
@@ -36,6 +75,7 @@ struct Heap {
   }
 };
 long Heap::live = 0;
+long Heap::allocs = 0;
 bool Heap::failing = false;
 
 // The queue's tracks, in order.
@@ -493,6 +533,680 @@ void test_random_edits_match_a_simple_model() {
   }
 }
 
+// ---- shuffle (docs/QUEUE-MODES.md section 2) ----
+
+namespace {
+
+std::vector<uint32_t> keys(const QueueModel& q) {
+  std::vector<uint32_t> k;
+  for (uint32_t i = 0; i < q.size(); ++i) k.push_back(q.keyAt(i));
+  return k;
+}
+
+// The tracks in the queue's own order (by rank; as setShuffled(false)
+// would lay them out).
+std::vector<uint32_t> ownOrder(const QueueModel& q) {
+  std::vector<std::pair<uint64_t, uint32_t>> r;
+  for (uint32_t i = 0; i < q.size(); ++i) {
+    r.push_back({(static_cast<uint64_t>(q.rankAt(i)) << 32) | q.keyAt(i), q.trackAt(i)});
+  }
+  std::sort(r.begin(), r.end());
+  std::vector<uint32_t> t;
+  for (const auto& e : r) t.push_back(e.second);
+  return t;
+}
+
+bool samePermutation(std::vector<uint32_t> a, std::vector<uint32_t> b) {
+  std::sort(a.begin(), a.end());
+  std::sort(b.begin(), b.end());
+  return a == b;
+}
+
+// A hook that counts its draws (the firmware's esp_random()).
+uint32_t hookState = 1;
+uint32_t hookDraws = 0;
+uint32_t countingRandom() {
+  ++hookDraws;
+  hookState = hookState * 1664525u + 1013904223u;
+  return hookState;
+}
+
+}  // namespace
+
+void test_shuffle_on_keeps_what_played_and_what_plays() {
+  QueueModel q;
+  fill(q, 20, 5);  // 10 .. 29, at 15
+  const uint32_t add[] = {7};
+  q.append(add, 1);  // (an undo to drop)
+  const std::vector<uint32_t> before = keys(q), was = tracks(q);
+  const uint32_t cv = q.contentVersion(), pv = q.positionVersion();
+  TEST_ASSERT_TRUE(q.setShuffled(true));
+  TEST_ASSERT_TRUE(q.shuffled());
+  TEST_ASSERT_FALSE(q.setShuffled(true));  // already
+  TEST_ASSERT_EQUAL_INT(5, q.current());
+  TEST_ASSERT_EQUAL_UINT32(15, q.currentTrack());
+  const std::vector<uint32_t> after = keys(q);
+  for (uint32_t i = 0; i <= 5; ++i) {
+    TEST_ASSERT_EQUAL_UINT32(before[i], after[i]);  // what played, and what plays, stay
+    TEST_ASSERT_EQUAL_UINT32(i, q.rankAt(i));
+  }
+  const std::vector<uint32_t> upBefore(before.begin() + 6, before.end()), upAfter(after.begin() + 6, after.end());
+  TEST_ASSERT_TRUE(samePermutation(upBefore, upAfter));
+  TEST_ASSERT_FALSE(upBefore == upAfter);  // really shuffled
+  // Each entry's rank is where it was.
+  for (uint32_t i = 6; i < q.size(); ++i) {
+    const auto it = std::find(before.begin(), before.end(), q.keyAt(i));
+    TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(it - before.begin()), q.rankAt(i));
+  }
+  TEST_ASSERT_TRUE(ownOrder(q) == was);
+  TEST_ASSERT_TRUE(q.contentVersion() != cv);
+  TEST_ASSERT_TRUE(q.positionVersion() != pv);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::None), static_cast<int>(q.undoable()));
+}
+
+void test_shuffle_off_brings_the_own_order_back() {
+  QueueModel q;
+  fill(q, 30, 3);
+  const std::vector<uint32_t> was = tracks(q), wasKeys = keys(q);
+  // On, then straight off: the identity.
+  q.setShuffled(true);
+  TEST_ASSERT_TRUE(q.setShuffled(false));
+  TEST_ASSERT_FALSE(q.shuffled());
+  TEST_ASSERT_FALSE(q.setShuffled(false));  // already
+  TEST_ASSERT_TRUE(keys(q) == wasKeys);
+  TEST_ASSERT_EQUAL_INT(3, q.current());
+  TEST_ASSERT_EQUAL_UINT32(5, q.rankAt(5));  // not shuffled: the position
+  // On, two steps, off: the current entry at its own place, keys kept.
+  q.setShuffled(true);
+  q.step(+1, false);
+  q.step(+1, false);
+  const uint32_t key = q.currentKey(), track = q.currentTrack();
+  q.setShuffled(false);
+  TEST_ASSERT_TRUE(tracks(q) == was);
+  TEST_ASSERT_TRUE(keys(q) == wasKeys);
+  TEST_ASSERT_EQUAL_UINT32(key, q.currentKey());
+  TEST_ASSERT_EQUAL_UINT32(track, q.currentTrack());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(track - 10), q.current());
+}
+
+void test_shuffle_with_nothing_up_next() {
+  // Empty, 0 up next, 1 up next: the mode flips and the content version
+  // bumps (the saver writes the mode), nothing moves.
+  for (uint32_t n : {0u, 1u, 3u, 4u}) {
+    QueueModel q;
+    if (n) fill(q, n, n == 4 ? 2 : static_cast<int32_t>(n) - 1);
+    const std::vector<uint32_t> was = keys(q);
+    const int32_t cur = q.current();
+    uint32_t v = q.contentVersion();
+    TEST_ASSERT_TRUE(q.setShuffled(true));
+    TEST_ASSERT_TRUE(q.contentVersion() != v);
+    TEST_ASSERT_TRUE(keys(q) == was);
+    TEST_ASSERT_EQUAL_INT(cur, q.current());
+    v = q.contentVersion();
+    TEST_ASSERT_TRUE(q.setShuffled(false));
+    TEST_ASSERT_TRUE(q.contentVersion() != v);
+    TEST_ASSERT_TRUE(keys(q) == was);
+  }
+}
+
+void test_shuffled_adds_keep_their_place() {
+  QueueModel q;
+  fill(q, 10, 2);  // 10 11 [12] 13 .. 19
+  q.setShuffled(true);
+  const uint32_t pn[] = {100, 101};
+  TEST_ASSERT_TRUE(q.insertNext(pn, 2));
+  TEST_ASSERT_EQUAL_UINT32(100, q.trackAt(3));  // right after the current entry, in the given order
+  TEST_ASSERT_EQUAL_UINT32(101, q.trackAt(4));
+  const uint32_t aq[] = {200, 201, 202};
+  TEST_ASSERT_TRUE(q.append(aq, 3));
+  TEST_ASSERT_EQUAL_UINT32(200, q.trackAt(12));  // at the end, in the given order
+  TEST_ASSERT_EQUAL_UINT32(202, q.trackAt(14));
+  TEST_ASSERT_TRUE(q.setShuffled(false));
+  expectTracks(q, {10, 11, 12, 100, 101, 13, 14, 15, 16, 17, 18, 19, 200, 201, 202});
+  TEST_ASSERT_EQUAL_INT(2, q.current());
+  // Play next after a few steps: right after what plays, in its own place.
+  q.setShuffled(true);
+  q.step(+1, false);
+  q.step(+1, false);
+  const uint32_t playing = q.currentTrack();
+  const uint32_t one[] = {300};
+  TEST_ASSERT_TRUE(q.insertNext(one, 1));
+  q.setShuffled(false);
+  const std::vector<uint32_t> t = tracks(q);
+  const auto at = std::find(t.begin(), t.end(), playing);
+  TEST_ASSERT_TRUE(at + 1 < t.end());
+  TEST_ASSERT_EQUAL_UINT32(300, *(at + 1));
+  TEST_ASSERT_EQUAL_UINT32(playing, q.currentTrack());
+}
+
+void test_shuffled_move_remove_and_clear_up_next() {
+  {
+    // moveNext: right after the current entry, in play order, then too.
+    QueueModel q;
+    fill(q, 10, 0);
+    q.setShuffled(true);
+    const uint32_t a = q.trackAt(4), b = q.trackAt(7);
+    const uint32_t sel[] = {7, 4};
+    TEST_ASSERT_TRUE(q.moveNext(sel, 2));
+    TEST_ASSERT_EQUAL_UINT32(a, q.trackAt(1));
+    TEST_ASSERT_EQUAL_UINT32(b, q.trackAt(2));
+    q.setShuffled(false);
+    std::vector<uint32_t> want = {10, a, b};
+    for (uint32_t t = 11; t < 20; ++t) {
+      if (t != a && t != b) want.push_back(t);
+    }
+    expectTracks(q, want);
+    TEST_ASSERT_EQUAL_INT(0, q.current());
+  }
+  {
+    // remove: the others keep their places; a removed current entry gives
+    // way to the next in play order; off: what is left, in its own order.
+    QueueModel q;
+    fill(q, 10, 3);
+    q.setShuffled(true);
+    const uint32_t gone = q.trackAt(6), next = q.trackAt(4);
+    const uint32_t rm[] = {3, 6};
+    const QueueModel::Removed r = q.remove(rm, 2);
+    TEST_ASSERT_TRUE(r.current);
+    TEST_ASSERT_EQUAL_UINT32(next, q.currentTrack());
+    q.setShuffled(false);
+    std::vector<uint32_t> want;
+    for (uint32_t t = 10; t < 20; ++t) {
+      if (t != 13 && t != gone) want.push_back(t);
+    }
+    expectTracks(q, want);
+    TEST_ASSERT_EQUAL_UINT32(next, q.currentTrack());
+  }
+  {
+    // Clear up next: the play order's up next goes.
+    QueueModel q;
+    fill(q, 10, 4);
+    q.setShuffled(true);
+    q.step(+1, false);
+    const uint32_t playing = q.currentTrack();
+    TEST_ASSERT_TRUE(q.clearUpNext());
+    TEST_ASSERT_EQUAL_UINT32(6, q.size());
+    q.setShuffled(false);
+    std::vector<uint32_t> want = {10, 11, 12, 13, 14, playing};
+    std::sort(want.begin(), want.end());
+    expectTracks(q, want);
+    TEST_ASSERT_EQUAL_UINT32(playing, q.currentTrack());
+  }
+  {
+    // Clear: empty, and shuffle stays on.
+    QueueModel q;
+    fill(q, 4, 0);
+    q.setShuffled(true);
+    TEST_ASSERT_TRUE(q.clear());
+    TEST_ASSERT_TRUE(q.shuffled());
+  }
+}
+
+void test_shuffled_play_puts_the_chosen_track_first() {
+  QueueModel q;
+  TEST_ASSERT_TRUE(q.setShuffled(true));  // (an empty queue: only the mode)
+  const uint32_t album[] = {50, 51, 52, 53, 54, 55, 56, 57, 58, 59};
+  TEST_ASSERT_TRUE(q.replace(album, 10, 4));
+  TEST_ASSERT_EQUAL_INT(0, q.current());
+  TEST_ASSERT_EQUAL_UINT32(54, q.currentTrack());
+  TEST_ASSERT_TRUE(samePermutation(tracks(q), {std::begin(album), std::end(album)}));
+  TEST_ASSERT_TRUE(ownOrder(q) == std::vector<uint32_t>(std::begin(album), std::end(album)));
+  q.setShuffled(false);
+  expectTracks(q, {std::begin(album), std::end(album)});
+  TEST_ASSERT_EQUAL_INT(4, q.current());
+  // kAnyStart: shuffled, a random first; off, the given order around it.
+  q.setShuffled(true);
+  TEST_ASSERT_TRUE(q.replace(album, 10, QueueModel::kAnyStart));
+  TEST_ASSERT_EQUAL_INT(0, q.current());
+  const uint32_t first = q.currentTrack();
+  q.setShuffled(false);
+  expectTracks(q, {std::begin(album), std::end(album)});
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(first - 50), q.current());
+  // Not shuffled: the first (never the clamp's last).
+  TEST_ASSERT_TRUE(q.replace(album, 10, QueueModel::kAnyStart));
+  TEST_ASSERT_EQUAL_INT(0, q.current());
+  TEST_ASSERT_TRUE(q.replace(album, 10, 99));
+  TEST_ASSERT_EQUAL_INT(9, q.current());
+  // A random first is random: over a few Plays more than one track starts.
+  q.setShuffled(true);
+  std::vector<bool> seen(10, false);
+  int distinct = 0;
+  for (int i = 0; i < 40; ++i) {
+    q.replace(album, 10, QueueModel::kAnyStart);
+    const uint32_t t = q.currentTrack() - 50;
+    if (!seen[t]) ++distinct;
+    seen[t] = true;
+  }
+  TEST_ASSERT_TRUE(distinct >= 5);
+}
+
+void test_an_add_to_an_empty_shuffled_queue() {
+  QueueModel q;
+  q.setShuffled(true);
+  const uint32_t album[] = {50, 51, 52, 53, 54, 55, 56, 57};
+  TEST_ASSERT_TRUE(q.append(album, 8));
+  // As a Play from its first: the first current, the rest shuffled.
+  TEST_ASSERT_EQUAL_INT(0, q.current());
+  TEST_ASSERT_EQUAL_UINT32(50, q.currentTrack());
+  TEST_ASSERT_TRUE(samePermutation(tracks(q), {std::begin(album), std::end(album)}));
+  TEST_ASSERT_FALSE(tracks(q) == std::vector<uint32_t>(std::begin(album), std::end(album)));
+  q.setShuffled(false);
+  expectTracks(q, {std::begin(album), std::end(album)});
+  TEST_ASSERT_EQUAL_INT(0, q.current());
+  // Play next into an empty shuffled queue: the same.
+  QueueModel p;
+  p.setShuffled(true);
+  TEST_ASSERT_TRUE(p.insertNext(album, 8));
+  TEST_ASSERT_EQUAL_UINT32(50, p.currentTrack());
+  TEST_ASSERT_TRUE(ownOrder(p) == std::vector<uint32_t>(std::begin(album), std::end(album)));
+}
+
+void test_undo_while_shuffled_restores_the_ranks() {
+  QueueModel q;
+  fill(q, 10, 2);
+  q.setShuffled(true);
+  const std::vector<uint32_t> was = keys(q), own = ownOrder(q);
+  std::vector<uint32_t> ranks;
+  for (uint32_t i = 0; i < q.size(); ++i) ranks.push_back(q.rankAt(i));
+  const uint32_t pn[] = {100, 101};
+  q.insertNext(pn, 2);
+  TEST_ASSERT_TRUE(q.undo());
+  TEST_ASSERT_TRUE(keys(q) == was);
+  for (uint32_t i = 0; i < q.size(); ++i) TEST_ASSERT_EQUAL_UINT32(ranks[i], q.rankAt(i));
+  TEST_ASSERT_TRUE(ownOrder(q) == own);
+  q.setShuffled(false);
+  expectTracks(q, {10, 11, 12, 13, 14, 15, 16, 17, 18, 19});
+}
+
+void test_a_toggle_drops_the_undo() {
+  QueueModel q;
+  fill(q, 6, 1);
+  const uint32_t add[] = {7};
+  q.append(add, 1);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::Append), static_cast<int>(q.undoable()));
+  q.setShuffled(true);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::None), static_cast<int>(q.undoable()));
+  TEST_ASSERT_FALSE(q.undo());
+  q.append(add, 1);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::Append), static_cast<int>(q.undoable()));
+  q.setShuffled(false);
+  TEST_ASSERT_FALSE(q.undo());
+}
+
+// Shuffle all: a Play that turns the mode on, one edit; its undo puts back
+// the queue and the mode it found (docs/QUEUE-MODES.md section 2.6).
+void test_a_play_that_sets_the_mode_undoes_it_too() {
+  const uint32_t lib[] = {50, 51, 52, 53, 54, 55, 56, 57, 58, 59};
+  {
+    // From an empty queue, shuffle off (the device's case): undo leaves it
+    // empty and off, not "shuffle on" over nothing.
+    QueueModel q;
+    TEST_ASSERT_TRUE(q.replace(lib, 10, QueueModel::kAnyStart, true));
+    TEST_ASSERT_TRUE(q.shuffled());
+    TEST_ASSERT_EQUAL_INT(0, q.current());
+    TEST_ASSERT_TRUE(ownOrder(q) == std::vector<uint32_t>(std::begin(lib), std::end(lib)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::Replace), static_cast<int>(q.undoable()));
+    TEST_ASSERT_FALSE(q.undoShuffled());  // what the undo puts back
+    const uint32_t v = q.contentVersion();
+    TEST_ASSERT_TRUE(q.undo());
+    TEST_ASSERT_FALSE(q.shuffled());
+    TEST_ASSERT_TRUE(q.empty());
+    TEST_ASSERT_EQUAL_INT(-1, q.current());
+    TEST_ASSERT_TRUE(q.contentVersion() != v);  // the saver writes the mode back
+    TEST_ASSERT_FALSE(q.undoShuffled());        // (no undo: the mode itself)
+  }
+  {
+    // Over a queue, off, mid-way: its own order and its current entry come
+    // back, unshuffled; an add after the undo is no shuffled add.
+    QueueModel q;
+    fill(q, 6, 3);
+    const std::vector<uint32_t> was = keys(q);
+    TEST_ASSERT_TRUE(q.replace(lib, 10, QueueModel::kAnyStart, true));
+    TEST_ASSERT_TRUE(q.undo());
+    TEST_ASSERT_FALSE(q.shuffled());
+    TEST_ASSERT_TRUE(keys(q) == was);
+    expectTracks(q, {10, 11, 12, 13, 14, 15});
+    TEST_ASSERT_EQUAL_INT(3, q.current());
+    for (uint32_t i = 0; i < q.size(); ++i) TEST_ASSERT_EQUAL_UINT32(i, q.rankAt(i));
+    const uint32_t two[] = {7, 8};
+    TEST_ASSERT_TRUE(q.append(two, 2));
+    expectTracks(q, {10, 11, 12, 13, 14, 15, 7, 8});
+  }
+  {
+    // Already on: the undo keeps it on, with the old order and its ranks.
+    QueueModel q;
+    fill(q, 10, 2);
+    q.setShuffled(true);
+    const std::vector<uint32_t> was = keys(q), own = ownOrder(q);
+    TEST_ASSERT_TRUE(q.replace(lib, 10, QueueModel::kAnyStart, true));
+    TEST_ASSERT_TRUE(q.undoShuffled());
+    TEST_ASSERT_TRUE(q.undo());
+    TEST_ASSERT_TRUE(q.shuffled());
+    TEST_ASSERT_TRUE(keys(q) == was);
+    TEST_ASSERT_TRUE(ownOrder(q) == own);
+  }
+  {
+    // The other way (a Play that turns it off): the same rule.
+    QueueModel q;
+    fill(q, 10, 2);
+    q.setShuffled(true);
+    const std::vector<uint32_t> was = keys(q);
+    TEST_ASSERT_TRUE(q.replace(lib, 10, 4, false));
+    TEST_ASSERT_FALSE(q.shuffled());
+    TEST_ASSERT_EQUAL_INT(4, q.current());
+    expectTracks(q, {std::begin(lib), std::end(lib)});
+    TEST_ASSERT_TRUE(q.undo());
+    TEST_ASSERT_TRUE(q.shuffled());
+    TEST_ASSERT_TRUE(keys(q) == was);
+  }
+  {
+    // A toggle after it is no edit: it drops that undo, as any.
+    QueueModel q;
+    fill(q, 6, 3);
+    q.replace(lib, 10, QueueModel::kAnyStart, true);
+    q.setShuffled(false);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::None), static_cast<int>(q.undoable()));
+    TEST_ASSERT_FALSE(q.undo());
+    TEST_ASSERT_EQUAL_UINT32(10, q.size());
+  }
+  {
+    // No memory for the Play: false, and neither the queue nor the mode
+    // changed.
+    QueueModel q(Heap::alloc, Heap::release);
+    fill(q, 6, 3);  // (room for 16)
+    const std::vector<uint32_t> was = keys(q);
+    const uint32_t v = q.contentVersion();
+    std::vector<uint32_t> big(40, 50);
+    Heap::failing = true;
+    TEST_ASSERT_FALSE(q.replace(big.data(), 40, QueueModel::kAnyStart, true));
+    Heap::failing = false;
+    TEST_ASSERT_FALSE(q.shuffled());
+    TEST_ASSERT_TRUE(keys(q) == was);
+    TEST_ASSERT_EQUAL_UINT32(v, q.contentVersion());
+  }
+  {
+    // Nothing to play: a Clear, in that mode, undone with it. In the same
+    // mode, clear() itself (an empty queue: no edit, the undo kept).
+    QueueModel q;
+    fill(q, 6, 3);
+    TEST_ASSERT_TRUE(q.replace(nullptr, 0, 0, true));
+    TEST_ASSERT_TRUE(q.empty());
+    TEST_ASSERT_TRUE(q.shuffled());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::Clear), static_cast<int>(q.undoable()));
+    TEST_ASSERT_TRUE(q.undo());
+    TEST_ASSERT_FALSE(q.shuffled());
+    expectTracks(q, {10, 11, 12, 13, 14, 15});
+    TEST_ASSERT_EQUAL_INT(3, q.current());
+    QueueModel e;
+    const uint32_t one[] = {9};
+    e.append(one, 1);
+    e.clear();
+    TEST_ASSERT_TRUE(e.replace(nullptr, 0, 0, false));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(QueueModel::Edit::Clear), static_cast<int>(e.undoable()));
+    TEST_ASSERT_TRUE(e.undo());
+    expectTracks(e, {9});
+  }
+}
+
+void test_shuffle_is_repeatable_and_uniform() {
+  // The same hook sequence, the same order (no hook: the fixed one).
+  {
+    QueueModel a, b;
+    fill(a, 50, 0);
+    fill(b, 50, 0);
+    a.setShuffled(true);
+    b.setShuffled(true);
+    TEST_ASSERT_TRUE(tracks(a) == tracks(b));
+    hookState = 1;
+    hookDraws = 0;
+    QueueModel c(nullptr, nullptr, countingRandom);
+    fill(c, 50, 0);
+    c.setShuffled(true);
+    TEST_ASSERT_EQUAL_UINT32(1, hookDraws);  // one draw seeds a shuffle
+    const std::vector<uint32_t> first = tracks(c);
+    c.setShuffled(false);
+    hookState = 1;
+    c.setShuffled(true);
+    TEST_ASSERT_TRUE(tracks(c) == first);
+    c.replace(first.data(), 50, QueueModel::kAnyStart);
+    TEST_ASSERT_EQUAL_UINT32(4, hookDraws);  // a random first is one more
+  }
+  // 5 up next, 20,000 shuffles: each entry in each slot within 3 % of 1/5;
+  // the current entry never moves.
+  QueueModel q;
+  fill(q, 6, 0);
+  int count[5][5] = {};
+  constexpr int kRuns = 20000;
+  for (int r = 0; r < kRuns; ++r) {
+    q.setShuffled(true);
+    TEST_ASSERT_EQUAL_UINT32(10, q.trackAt(0));
+    for (uint32_t slot = 1; slot < 6; ++slot) ++count[slot - 1][q.trackAt(slot) - 11];
+    q.setShuffled(false);
+  }
+  for (auto& slot : count) {
+    for (int c : slot) {
+      TEST_ASSERT_INT_WITHIN(kRuns / 5 * 3 / 100, kRuns / 5, c);
+    }
+  }
+}
+
+void test_a_toggle_allocates_nothing() {
+  // The global count sees what it is for: a stable sort's buffer.
+  {
+    uint32_t probe[64] = {};
+    const long before = GlobalNew::count;
+    GlobalNew::counting = true;
+    std::stable_sort(probe, probe + 64);
+    GlobalNew::counting = false;
+    TEST_ASSERT_TRUE(GlobalNew::count > before);
+  }
+  QueueModel q(Heap::alloc, Heap::release);
+  fill(q, 10000, 5000);
+  const uint32_t add[] = {1};
+  q.append(add, 1);  // (the snapshot's memory exists)
+  const long allocs = Heap::allocs;
+  const long news = GlobalNew::count;
+  Heap::failing = true;  // and none could be had
+  GlobalNew::counting = true;  // nor taken from the global heap
+  const bool on = q.setShuffled(true);
+  const bool off = q.setShuffled(false);
+  GlobalNew::counting = false;
+  Heap::failing = false;
+  TEST_ASSERT_TRUE(on);
+  TEST_ASSERT_TRUE(off);
+  TEST_ASSERT_EQUAL_INT(allocs, Heap::allocs);
+  TEST_ASSERT_EQUAL_INT(news, GlobalNew::count);
+  TEST_ASSERT_EQUAL_UINT32(10001, q.size());
+  TEST_ASSERT_EQUAL_UINT32(5010, q.currentTrack());
+}
+
+void test_assign_with_ranks() {
+  QueueModel q;
+  const uint32_t ids[] = {1, 2, 3, 4, 5};
+  const uint32_t ranks[] = {40, 10, 30, 0, 20};
+  TEST_ASSERT_TRUE(q.assign(ids, 5, 2, true, ranks));
+  TEST_ASSERT_TRUE(q.shuffled());
+  TEST_ASSERT_EQUAL_UINT32(30, q.rankAt(2));
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, q.rankAt(5));
+  q.setShuffled(false);
+  expectTracks(q, {4, 2, 5, 3, 1});
+  TEST_ASSERT_EQUAL_UINT32(3, q.currentTrack());  // its key followed
+  // Not shuffled, ranks mean nothing: the positions.
+  TEST_ASSERT_TRUE(q.assign(ids, 5, 0, false, ranks));
+  TEST_ASSERT_FALSE(q.shuffled());
+  TEST_ASSERT_EQUAL_UINT32(2, q.rankAt(2));
+  // An empty shuffled queue keeps its mode.
+  TEST_ASSERT_TRUE(q.assign(nullptr, 0, -1, true));
+  TEST_ASSERT_TRUE(q.shuffled());
+  TEST_ASSERT_EQUAL_INT(-1, q.current());
+}
+
+void test_a_rank_overflow_is_refused() {
+  QueueModel q;
+  const uint32_t ids[] = {1, 2};
+  const uint32_t ranks[] = {0, 0xFFFFFFFEu};
+  q.assign(ids, 2, 0, true, ranks);
+  const uint32_t v = q.contentVersion();
+  const uint32_t two[] = {7, 8};
+  TEST_ASSERT_FALSE(q.append(two, 2));  // past 0xFFFFFFFF: refused, as out of memory is
+  TEST_ASSERT_FALSE(q.insertNext(two, 2));
+  TEST_ASSERT_EQUAL_UINT32(2, q.size());
+  TEST_ASSERT_EQUAL_UINT32(v, q.contentVersion());
+  TEST_ASSERT_TRUE(q.append(two, 1));  // to 0xFFFFFFFF exactly
+  TEST_ASSERT_EQUAL_UINT32(0xFFFFFFFFu, q.rankAt(2));
+  TEST_ASSERT_FALSE(q.insertNext(two, 1));
+  const uint32_t pos[] = {2};
+  TEST_ASSERT_FALSE(q.moveNext(pos, 1));
+  TEST_ASSERT_EQUAL_UINT32(3, q.size());
+  // A Play renumbers.
+  TEST_ASSERT_TRUE(q.replace(two, 2, 0));
+  TEST_ASSERT_TRUE(q.append(two, 2));
+}
+
+// A long random run while shuffled: after every edit, undo and toggle, the
+// ranks sort into the own order a plain model keeps (every edit's rule of
+// section 2.4), and off lays the queue out in it.
+void test_random_shuffled_edits_keep_the_own_order() {
+  QueueModel q;
+  std::vector<uint32_t> own, undoOwn;  // keys in the own order
+  bool canUndo = false;
+  uint32_t x = 7;
+  auto rnd = [&](uint32_t n) {
+    x = x * 1664525u + 1013904223u;
+    return n ? (x >> 8) % n : 0;
+  };
+  auto ownKeys = [&]() {
+    std::vector<std::pair<uint64_t, uint32_t>> r;
+    for (uint32_t i = 0; i < q.size(); ++i) r.push_back({(static_cast<uint64_t>(q.rankAt(i)) << 32) | q.keyAt(i), q.keyAt(i)});
+    std::sort(r.begin(), r.end());
+    std::vector<uint32_t> k;
+    for (const auto& e : r) k.push_back(e.second);
+    return k;
+  };
+  auto newKeys = [&](uint32_t from) {  // keys >= from, in key order (the given order)
+    std::vector<uint32_t> k;
+    for (uint32_t i = 0; i < q.size(); ++i) {
+      if (q.keyAt(i) >= from) k.push_back(q.keyAt(i));
+    }
+    std::sort(k.begin(), k.end());
+    return k;
+  };
+  auto maxKey = [&]() {
+    uint32_t m = 0;
+    for (uint32_t i = 0; i < q.size(); ++i) m = std::max(m, q.keyAt(i) + 1);
+    return m;
+  };
+  uint32_t nextKey = 0;  // at least every key given so far
+  q.setShuffled(true);
+  for (int it = 0; it < 3000; ++it) {
+    const uint32_t op = rnd(10);
+    std::vector<uint32_t> ids;
+    for (uint32_t i = rnd(4) + 1; i > 0; --i) ids.push_back(rnd(50));
+    const auto n = static_cast<uint32_t>(ids.size());
+    nextKey = std::max(nextKey, maxKey());
+    const auto save = [&] {
+      undoOwn = own;
+      canUndo = true;
+    };
+    if (op == 0) {
+      save();
+      q.replace(ids.data(), n, rnd(2) ? QueueModel::kAnyStart : rnd(n));
+      own = newKeys(nextKey);
+    } else if (op == 1 || op == 2) {
+      save();
+      const uint32_t cur = q.current() >= 0 ? q.currentKey() : QueueModel::kNone;
+      op == 1 ? q.insertNext(ids.data(), n) : q.append(ids.data(), n);
+      const std::vector<uint32_t> added = newKeys(nextKey);
+      if (cur == QueueModel::kNone) {
+        own = added;
+      } else if (op == 1) {
+        own.insert(std::find(own.begin(), own.end(), cur) + 1, added.begin(), added.end());
+      } else {
+        own.insert(own.end(), added.begin(), added.end());
+      }
+    } else if (op == 3 && !q.empty()) {
+      const uint32_t pos[] = {rnd(q.size()), rnd(q.size())};
+      std::vector<uint32_t> gone = {q.keyAt(pos[0]), q.keyAt(pos[1])};
+      save();
+      q.remove(pos, 2);
+      for (uint32_t k : gone) own.erase(std::remove(own.begin(), own.end(), k), own.end());
+    } else if (op == 4 && q.upNext() > 0) {
+      save();
+      std::vector<uint32_t> gone;
+      for (uint32_t i = static_cast<uint32_t>(q.current()) + 1; i < q.size(); ++i) gone.push_back(q.keyAt(i));
+      q.clearUpNext();
+      for (uint32_t k : gone) own.erase(std::remove(own.begin(), own.end(), k), own.end());
+    } else if (op == 5 && !q.empty()) {
+      q.step(static_cast<int>(rnd(5)) - 2, true);
+    } else if (op == 6) {
+      const bool did = q.undo();
+      TEST_ASSERT_EQUAL(canUndo, did);
+      if (did) own = undoOwn;
+      canUndo = false;
+    } else if (op == 7 && q.current() >= 0 && q.size() > 2) {
+      std::vector<uint32_t> pos = {rnd(q.size()), rnd(q.size()), rnd(q.size())};
+      std::sort(pos.begin(), pos.end());
+      pos.erase(std::unique(pos.begin(), pos.end()), pos.end());
+      std::vector<uint32_t> moved;
+      for (uint32_t p : pos) {
+        if (static_cast<int32_t>(p) != q.current()) moved.push_back(q.keyAt(p));
+      }
+      if (moved.empty()) continue;
+      const uint32_t cur = q.currentKey();
+      save();
+      q.moveNext(pos.data(), static_cast<uint32_t>(pos.size()));
+      for (uint32_t k : moved) own.erase(std::remove(own.begin(), own.end(), k), own.end());
+      own.insert(std::find(own.begin(), own.end(), cur) + 1, moved.begin(), moved.end());
+    } else if (op == 8 && !q.empty() && rnd(8) == 0) {
+      save();
+      q.clear();
+      own.clear();
+    } else if (op == 9 && rnd(4) == 0) {
+      // A toggle: off lays the queue out in the own order, on keeps it.
+      const uint32_t cur = q.currentKey();
+      q.setShuffled(false);
+      TEST_ASSERT_TRUE(keys(q) == own);
+      TEST_ASSERT_EQUAL_UINT32(cur, q.currentKey());
+      if (rnd(2)) q.step(+1, true);
+      own = keys(q);  // on: up next shuffled, the own order what it is now
+      q.setShuffled(true);
+      canUndo = false;
+    }
+    TEST_ASSERT_TRUE(ownKeys() == own);
+  }
+}
+
+void test_permute_is_a_permutation_and_repeatable() {
+  // (queueview::shuffle()'s test, moved with its loop: the same seed gives
+  // the same order as before.)
+  std::vector<uint32_t> a(500), b;
+  for (uint32_t i = 0; i < a.size(); ++i) a[i] = i;
+  b = a;
+  shuffle::permute(a.data(), static_cast<uint32_t>(a.size()), 1234);
+  std::vector<uint32_t> sorted = a;
+  std::sort(sorted.begin(), sorted.end());
+  TEST_ASSERT_TRUE(sorted == b);  // every id once
+  int moved = 0;
+  for (uint32_t i = 0; i < a.size(); ++i) moved += a[i] != i;
+  TEST_ASSERT_TRUE(moved > 450);  // really shuffled
+  const uint32_t head[] = {13, 263, 140, 414, 405, 499};  // Shuffle all's order, as it was
+  for (int i = 0; i < 6; ++i) TEST_ASSERT_EQUAL_UINT32(head[i], a[i]);
+  TEST_ASSERT_EQUAL_UINT32(38, a[499]);
+  std::vector<uint32_t> c = b;
+  shuffle::permute(c.data(), static_cast<uint32_t>(c.size()), 1234);
+  TEST_ASSERT_TRUE(c == a);  // the same seed, the same order
+  std::vector<uint32_t> d = b;
+  shuffle::permute(d.data(), static_cast<uint32_t>(d.size()), 99);
+  TEST_ASSERT_FALSE(d == a);
+  uint32_t one = 7;
+  shuffle::permute(&one, 1, 5);
+  TEST_ASSERT_EQUAL_UINT32(7, one);
+  std::vector<uint32_t> zero = b, seedOne = b;  // 0 is taken as 1
+  shuffle::permute(zero.data(), 500, 0);
+  shuffle::permute(seedOne.data(), 500, 1);
+  TEST_ASSERT_TRUE(zero == seedOne);
+}
+
 // ---- TrackCatalog ----
 
 void test_catalog_library_and_builtin_ids() {
@@ -695,6 +1409,198 @@ void test_text_writer_in_steps() {
   w.step(q, c, partial, 8);
   q.step(1, true);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(queuetext::Writer::Step::More), static_cast<int>(w.step(q, c, partial, 8)));
+}
+
+// ---- queue.txt version 2: a shuffled queue (docs/QUEUE-MODES.md 2.9) ----
+
+std::string textOf(const QueueModel& q, const TrackCatalog& c, uint32_t generation) {
+  MemorySink out;
+  TEST_ASSERT_TRUE(queuetext::write(q, c, generation, out));
+  return std::string(reinterpret_cast<const char*>(out.data()), out.size());
+}
+
+void test_v1_unchanged_while_not_shuffled() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  const uint32_t ids[] = {3, 0, TrackCatalog::kBuiltin + 4, 5, 3};
+  q.assign(ids, 5, 2);
+  const std::string before = textOf(q, c, 7);
+  TEST_ASSERT_EQUAL_STRING(
+      "mstream-queue 1 5 2 7\n"
+      "/music/Kavinsky/OutRun/08 - Nightcall.mp3\n"
+      "/music/Daft Punk/Discovery/01 - One More Time.mp3\n"
+      "tone:click120\n"
+      "/music/Root Track.flac\n"
+      "/music/Kavinsky/OutRun/08 - Nightcall.mp3\n",
+      before.c_str());
+  // On and off again: byte for byte the same file.
+  q.setShuffled(true);
+  q.setShuffled(false);
+  TEST_ASSERT_EQUAL_STRING(before.c_str(), textOf(q, c, 7).c_str());
+  QueueModel back;
+  MemorySource in(before.data(), before.size());
+  const queuetext::Restored r = queuetext::read(in, c, back);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_FALSE(r.header.shuffled);
+  TEST_ASSERT_FALSE(back.shuffled());
+}
+
+void test_v2_round_trip() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  const uint32_t ids[] = {3, 0, TrackCatalog::kBuiltin + 4, 5, 3};
+  const uint32_t ranks[] = {4, 0, 2, 1, 3};
+  q.assign(ids, 5, 2, true, ranks);
+  const std::string text = textOf(q, c, 7);
+  TEST_ASSERT_EQUAL_STRING(
+      "mstream-queue 2 5 2 7\n"
+      "4 /music/Kavinsky/OutRun/08 - Nightcall.mp3\n"
+      "0 /music/Daft Punk/Discovery/01 - One More Time.mp3\n"
+      "2 tone:click120\n"
+      "1 /music/Root Track.flac\n"
+      "3 /music/Kavinsky/OutRun/08 - Nightcall.mp3\n",
+      text.c_str());
+  QueueModel back;
+  MemorySource in(text.data(), text.size(), 7);  // reads split mid-line
+  const queuetext::Restored r = queuetext::read(in, c, back);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_TRUE(r.header.shuffled);
+  TEST_ASSERT_TRUE(back.shuffled());
+  TEST_ASSERT_EQUAL_UINT32(0, r.dropped);
+  expectTracks(back, {3, 0, TrackCatalog::kBuiltin + 4, 5, 3});
+  for (uint32_t i = 0; i < 5; ++i) TEST_ASSERT_EQUAL_UINT32(ranks[i], back.rankAt(i));
+  TEST_ASSERT_EQUAL_INT(2, back.current());
+  // Off after the read: the own order, the current entry with it.
+  back.setShuffled(false);
+  expectTracks(back, {0, 5, TrackCatalog::kBuiltin + 4, 3, 3});
+  TEST_ASSERT_EQUAL_INT(2, back.current());
+  // A shuffled queue's own write reads back the same.
+  QueueModel s;
+  std::vector<uint32_t> many;
+  for (uint32_t i = 0; i < 30; ++i) many.push_back(i % 6);
+  s.assign(many.data(), 30, 4);
+  s.setShuffled(true);
+  const std::string st = textOf(s, c, 1);
+  QueueModel s2;
+  MemorySource in2(st.data(), st.size());
+  TEST_ASSERT_TRUE(queuetext::read(in2, c, s2).ok);
+  TEST_ASSERT_TRUE(tracks(s2) == tracks(s));
+  s.setShuffled(false);
+  s2.setShuffled(false);
+  TEST_ASSERT_TRUE(tracks(s2) == many);
+  TEST_ASSERT_EQUAL_INT(4, s2.current());
+}
+
+void test_v2_dropped_tracks_leave_rank_gaps() {
+  LibraryIndex before;
+  build(before, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&before);
+  QueueModel q;
+  const uint32_t ids[] = {3, 0, TrackCatalog::kBuiltin + 4, 5, 3};
+  const uint32_t ranks[] = {4, 0, 2, 1, 3};
+  q.assign(ids, 5, 3, true, ranks);  // current: Root Track, which goes
+  const std::string text = textOf(q, c, 2);
+  LibraryIndex after;  // no Root Track.flac, other ids
+  build(after, {"/music/Kavinsky/OutRun/08 - Nightcall.mp3", "/music/Daft Punk/Discovery/01 - One More Time.mp3"});
+  TrackCatalog c2(&after);
+  MemorySource in(text.data(), text.size());
+  const queuetext::Restored r = queuetext::read(in, c2, q);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_EQUAL_UINT32(1, r.dropped);
+  TEST_ASSERT_FALSE(r.currentKept);
+  TEST_ASSERT_EQUAL_UINT32(4, q.size());
+  TEST_ASSERT_TRUE(q.shuffled());
+  TEST_ASSERT_EQUAL_UINT32(4, q.rankAt(0));
+  TEST_ASSERT_EQUAL_UINT32(3, q.rankAt(3));  // rank 1 is a gap now
+  // The next survivor is current: the second Nightcall (rank 3).
+  TEST_ASSERT_EQUAL_INT(3, q.current());
+  q.setShuffled(false);
+  TEST_ASSERT_EQUAL_STRING("/music/Daft Punk/Discovery/01 - One More Time.mp3", pathOf(c2, q.trackAt(0)).c_str());
+  TEST_ASSERT_EQUAL_STRING("tone:click120", pathOf(c2, q.trackAt(1)).c_str());
+  TEST_ASSERT_EQUAL_STRING("/music/Kavinsky/OutRun/08 - Nightcall.mp3", pathOf(c2, q.trackAt(2)).c_str());
+  TEST_ASSERT_EQUAL_INT(2, q.current());
+}
+
+void test_v2_bad_lines_leave_the_queue_alone() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  const uint32_t ids[] = {5, 0};
+  q.assign(ids, 2, 1);
+  const char* bad[] = {
+      "mstream-queue 2 1 0 1\n/music/Root Track.flac\n",            // no rank
+      "mstream-queue 2 1 0 1\n7/music/Root Track.flac\n",           // no space
+      "mstream-queue 2 1 0 1\n4294967296 /music/Root Track.flac\n", // past 2^32 - 1
+      "mstream-queue 2 1 0 1\n99999999999999999999 tone:440\n",     // far past it
+      "mstream-queue 2 1 0 1\n 7 /music/Root Track.flac\n",         // a space first
+      "mstream-queue 2 2 0 1\n3 tone:440\n\n",                      // an empty line: no rank either
+      "mstream-queue 3 1 0 1\n7 /music/Root Track.flac\n",          // a version this firmware doesn't know
+      "mstream-queue 21 1 0 1\n7 /music/Root Track.flac\n",
+  };
+  for (const char* b : bad) {
+    MemorySource src(b, std::strlen(b));
+    TEST_ASSERT_FALSE(queuetext::read(src, c, q).ok);
+    expectTracks(q, {5, 0});
+    TEST_ASSERT_FALSE(q.shuffled());
+  }
+  // The top rank is a rank; a known rank before an unknown path is a
+  // dropped line, as version 1's.
+  const char* good = "mstream-queue 2 3 0 1\n4294967295 /music/Root Track.flac\n12 \n0 /music/gone.mp3\n";
+  MemorySource src(good, std::strlen(good));
+  const queuetext::Restored r = queuetext::read(src, c, q);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_EQUAL_UINT32(2, r.dropped);
+  expectTracks(q, {5});
+  TEST_ASSERT_EQUAL_UINT32(4294967295u, q.rankAt(0));
+}
+
+void test_v2_long_path_and_ten_digit_rank() {
+  // The longest path the catalog passes on (255 bytes) after the longest
+  // rank: its line still fits the reader (as version 1's did).
+  std::string path = "/music/";
+  path += std::string(120, 'a') + "/";
+  path += std::string(255 - path.size() - 4, 'b') + ".mp3";
+  TEST_ASSERT_EQUAL_size_t(255, path.size());
+  LibraryIndex idx;
+  build(idx, {path.c_str(), "/music/Root Track.flac"});
+  TrackCatalog c(&idx);
+  const uint32_t id = c.index()->trackCount() == 2 && pathOf(c, 0) == path ? 0 : 1;
+  TEST_ASSERT_EQUAL_STRING(path.c_str(), pathOf(c, id).c_str());
+  QueueModel q;
+  const uint32_t ids[] = {id, 1 - id};
+  const uint32_t ranks[] = {4294967295u, 0};
+  q.assign(ids, 2, 0, true, ranks);
+  const std::string text = textOf(q, c, 3);
+  TEST_ASSERT_TRUE(text.find("4294967295 " + path + "\n") != std::string::npos);
+  QueueModel back;
+  MemorySource in(text.data(), text.size(), 5);
+  const queuetext::Restored r = queuetext::read(in, c, back);
+  TEST_ASSERT_TRUE(r.ok);
+  TEST_ASSERT_EQUAL_UINT32(0, r.dropped);
+  expectTracks(back, {id, 1 - id});
+  TEST_ASSERT_EQUAL_UINT32(4294967295u, back.rankAt(0));
+}
+
+void test_v2_empty_shuffled_queue() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  q.setShuffled(true);
+  const std::string text = textOf(q, c, 7);
+  TEST_ASSERT_EQUAL_STRING("mstream-queue 2 0 -1 7\n", text.c_str());
+  QueueModel back;
+  const uint32_t one[] = {1};
+  back.assign(one, 1, 0);
+  MemorySource in(text.data(), text.size());
+  TEST_ASSERT_TRUE(queuetext::read(in, c, back).ok);
+  TEST_ASSERT_TRUE(back.empty());
+  TEST_ASSERT_TRUE(back.shuffled());
 }
 
 // ---- QueueSaver (app/QueueStore's timing, the card replaced by memory) ----
@@ -1185,6 +2091,118 @@ void test_resume_anchor_saved_with_the_point() {
   TEST_ASSERT_EQUAL_INT(0, st2.resumes);
 }
 
+// A toggle is a content change: the file 2 s later, version 2 while
+// shuffled and version 1 again after.
+void test_a_toggle_rewrites_the_file() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  fillLong(q);
+  saver.loaded(3, false, 0);
+  q.setShuffled(true);
+  saver.loop(100);
+  TEST_ASSERT_TRUE(saver.busy());
+  saver.loop(2000);
+  TEST_ASSERT_EQUAL_INT(0, st.opens);  // its 2 s, as any edit's
+  for (uint32_t t = 2100; t < 4000; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 4).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 2 "));
+  q.setShuffled(false);
+  for (uint32_t t = 5000; t < 9000; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(2, st.commits);
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 1 "));
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 5).c_str(), st.file.c_str());
+}
+
+// A toggle while a write is under way: that write (whose header said the
+// old version) is dropped, and the queue written again whole.
+void test_a_toggle_during_a_write_restarts_it() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  st.file = "old";
+  QueueSaver saver(st, q, c);
+  saver.loaded(8, false, 0);
+  fillLong(q);
+  saver.loop(10);
+  saver.loop(2100);  // the write begins: version 1's header and 31 lines
+  saver.loop(2120);
+  TEST_ASSERT_TRUE(saver.writing());
+  q.setShuffled(true);
+  for (uint32_t t = 2140; t < 8000; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_TRUE(st.discards >= 1);
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 2 "));
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, st.posGeneration).c_str(), st.file.c_str());
+}
+
+// Shuffle all, then its Undo: the file is version 2 after the Play and
+// version 1 again after the undo, the old queue whole (the mode is saved
+// with the queue, so the undo's mode reaches the card as any edit does).
+void test_shuffle_alls_undo_writes_version_1_again() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  fillLong(q);
+  saver.loaded(3, false, 0);
+  const uint32_t all[] = {0, 1, 2, 3, 4, 5};
+  TEST_ASSERT_TRUE(q.replace(all, 6, QueueModel::kAnyStart, true));
+  for (uint32_t t = 0; t < 4000; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(1, st.commits);
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 2 "));
+  TEST_ASSERT_TRUE(q.undo());
+  for (uint32_t t = 5000; t < 9000; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(2, st.commits);
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 1 "));
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, st.posGeneration).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(200, q.size());
+}
+
+// Off while paused moves the current entry to its own place: the resume
+// point is saved again at the new line once the file holds it (the
+// moved-only rule), with the new generation.
+void test_off_while_paused_pairs_the_resume_point_again() {
+  LibraryIndex idx;
+  build(idx, {std::begin(kFiles), std::end(kFiles)});
+  TrackCatalog c(&idx);
+  QueueModel q;
+  MemStore st;
+  QueueSaver saver(st, q, c);
+  fillLong(q);  // current 5
+  saver.loaded(2, false, 0);
+  q.setShuffled(true);
+  q.step(+3, false);  // a shuffled entry plays: position 8
+  for (uint32_t t = 0; t < 6000; t += 20) saver.loop(t);  // the shuffled file written
+  saver.noteTransport(pausedAt(30000));
+  saver.loop(6100);
+  TEST_ASSERT_EQUAL_INT(1, st.resumes);
+  TEST_ASSERT_EQUAL_INT(8, st.resume.entry);
+  const uint32_t gen = st.resume.generation;
+  const uint32_t key = q.currentKey();
+  q.setShuffled(false);
+  TEST_ASSERT_EQUAL_UINT32(key, q.currentKey());
+  const int32_t own = q.current();
+  TEST_ASSERT_TRUE(own != 8);
+  saver.loop(6200);
+  TEST_ASSERT_EQUAL_INT(1, st.resumes);  // the file doesn't hold the order yet
+  for (uint32_t t = 8300; saver.contentDirty() || saver.writing(); t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(2, st.resumes);
+  TEST_ASSERT_TRUE(st.resume.valid);
+  TEST_ASSERT_EQUAL_INT(own, st.resume.entry);
+  TEST_ASSERT_EQUAL_UINT32(gen + 1, st.resume.generation);
+  TEST_ASSERT_EQUAL_UINT32(30000, st.resume.positionMs);
+  TEST_ASSERT_EQUAL_INT(own, st.pos);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -1206,11 +2224,33 @@ int main(int, char**) {
   RUN_TEST(test_memory_from_the_hooks_and_out_of_memory);
   RUN_TEST(test_an_edit_without_memory_for_its_snapshot_is_not_undoable);
   RUN_TEST(test_random_edits_match_a_simple_model);
+  RUN_TEST(test_shuffle_on_keeps_what_played_and_what_plays);
+  RUN_TEST(test_shuffle_off_brings_the_own_order_back);
+  RUN_TEST(test_shuffle_with_nothing_up_next);
+  RUN_TEST(test_shuffled_adds_keep_their_place);
+  RUN_TEST(test_shuffled_move_remove_and_clear_up_next);
+  RUN_TEST(test_shuffled_play_puts_the_chosen_track_first);
+  RUN_TEST(test_an_add_to_an_empty_shuffled_queue);
+  RUN_TEST(test_undo_while_shuffled_restores_the_ranks);
+  RUN_TEST(test_a_toggle_drops_the_undo);
+  RUN_TEST(test_a_play_that_sets_the_mode_undoes_it_too);
+  RUN_TEST(test_shuffle_is_repeatable_and_uniform);
+  RUN_TEST(test_a_toggle_allocates_nothing);
+  RUN_TEST(test_assign_with_ranks);
+  RUN_TEST(test_a_rank_overflow_is_refused);
+  RUN_TEST(test_random_shuffled_edits_keep_the_own_order);
+  RUN_TEST(test_permute_is_a_permutation_and_repeatable);
   RUN_TEST(test_catalog_library_and_builtin_ids);
   RUN_TEST(test_text_round_trip);
   RUN_TEST(test_text_remaps_after_a_rebuild);
   RUN_TEST(test_text_current_override_and_bad_files);
   RUN_TEST(test_text_writer_in_steps);
+  RUN_TEST(test_v1_unchanged_while_not_shuffled);
+  RUN_TEST(test_v2_round_trip);
+  RUN_TEST(test_v2_dropped_tracks_leave_rank_gaps);
+  RUN_TEST(test_v2_bad_lines_leave_the_queue_alone);
+  RUN_TEST(test_v2_long_path_and_ten_digit_rank);
+  RUN_TEST(test_v2_empty_shuffled_queue);
   RUN_TEST(test_saver_writes_after_the_edits_settle);
   RUN_TEST(test_flush_now_in_the_middle_of_a_write);
   RUN_TEST(test_flush_now_after_an_edit_during_the_write);
@@ -1222,5 +2262,9 @@ int main(int, char**) {
   RUN_TEST(test_flush_now_saves_the_resume_point);
   RUN_TEST(test_resume_point_at_boot);
   RUN_TEST(test_resume_anchor_saved_with_the_point);
+  RUN_TEST(test_a_toggle_rewrites_the_file);
+  RUN_TEST(test_a_toggle_during_a_write_restarts_it);
+  RUN_TEST(test_shuffle_alls_undo_writes_version_1_again);
+  RUN_TEST(test_off_while_paused_pairs_the_resume_point_again);
   return UNITY_END();
 }

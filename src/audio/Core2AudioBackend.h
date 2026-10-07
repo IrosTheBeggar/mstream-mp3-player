@@ -16,6 +16,8 @@
 #include "GaplessEngine.h"
 #include "GaplessJoin.h"
 #include "LameTag.h"
+#include "OggOpus.h"
+#include "OpusOpenCache.h"
 #include "PcmRing.h"
 #include "RingFeed.h"
 #include "SeekIndex.h"
@@ -39,6 +41,7 @@ class AudioFileSourceFS;
 class AudioGenerator;
 class AudioOutput;
 class GuardedSource;
+class OpusGenerator;
 class PinnedMp3;
 class RingOutput;
 class SeekableFlac;
@@ -51,7 +54,11 @@ class SeekableFlac;
 // post a new generation to TransportSync and wake the decode task, and
 // finished()/failed() only ever describe the latest request.
 //
-// Tracks are .mp3/.flac files on the library filesystem, or the built-in test
+// Tracks are .mp3, .flac and .opus files on the library filesystem (Ogg
+// Opus through OpusGenerator and the lib/core reader, docs/OPUS.md: always
+// 48 kHz, so it goes through the converter's block path; the generator
+// trims it itself, and a start part of the way in is the reader's plan,
+// exact, section 9), or the built-in test
 // tones "tone:440", "tone:1000" and "tone:left" (440 Hz, left channel only),
 // and 60 s click tracks with a known beat, "tone:click<bpm>" and
 // "tone:click<bpm>off" (first beat 0.37 of a period in; see ClickGen), and
@@ -69,12 +76,18 @@ class SeekableFlac;
 // the file; the run index of what was decoded (lib/core SeekIndex: a seek
 // back into this run); CBR arithmetic; LAME's TOC inverted; another TOC or
 // the average bitrate, then a chain of frame headers. A FLAC through
-// libFLAC's own seek, by sample; a built-in track just counts from there.
+// libFLAC's own seek, by sample; an Opus track by the reader's plan
+// (lib/core OggOpus: a bisection on the pages' granule positions to the
+// last page before the target less a preroll, 200 ms for a seek and 600 ms
+// for a resume anchor, the packets before it skipped undecoded, the
+// samples before the target dropped: exact, planOpus(); docs/OPUS.md
+// section 9); a built-in track just counts from there.
 // positionMs() and durationMs() count from the start, in 44.1 kHz ring
 // frames whatever the track's rate. While a track decodes, the run index
 // records every 4th MP3 frame (two 24 KB PSRAM slots: the heard track and
-// the one decoded ahead), and resumeAnchor() gives a pause's anchor from
-// it: the next start picks up on that very sample.
+// the one decoded ahead; a FLAC or Opus run is its header alone), and
+// resumeAnchor() gives a pause's anchor from it: the next start picks up
+// on that very sample.
 //
 // Gapless playback (docs/GAPLESS.md): the player names what follows
 // (setNext()); at the end of a file the decode task opens it at once and
@@ -94,6 +107,8 @@ public:
     uint32_t btFramesPerSec;   // pulled by the Bluetooth stack, ~44100 while streaming
     float decodeLoad;          // time spent producing / audio produced, current track
     uint32_t decodeStackFree;  // bytes never used by the decode task
+    uint32_t maxPassUs;        // the longest decode pass of the heard track (docs/OPUS.md gate G6; a track decoded
+                               // ahead has its own once its join is heard)
   };
 
   Core2AudioBackend();
@@ -101,8 +116,10 @@ public:
 
   // Allocates the ring, starts Bluetooth (headphones named `btSinkName`, see
   // BtSink), the speaker pump and the decode task. `fs` is the library
-  // (nullptr: tones only).
-  bool begin(fs::FS* fs, const char* btSinkName);
+  // (nullptr: tones only); `stateDir` the player's own folder on it
+  // ("/.player"; nullptr: none), where the Opus open cache is kept
+  // (opus.idx: docs/OPUS.md section 10).
+  bool begin(fs::FS* fs, const char* stateDir, const char* btSinkName);
 
   // IAudioBackend
   bool play(const std::string& path, uint32_t durationHintMs, uint32_t startMs) override;
@@ -121,7 +138,12 @@ public:
   bool positionKnown() const override;
   bool finished() const override;
   bool failed() const override;
+  // (IAudioBackend::seekable() stays the base's: every format starts part
+  // of the way in, an .opus since docs/OPUS.md section 9.)
   RateRefusal rateRefusal() const override;
+  // While failed(): the refusal in a few words (an Opus file refused at
+  // its open: OpusGenerator::refusalNote()); "" for the rest.
+  size_t failureNote(char* buf, size_t size) const override;
   void setNext(const Next& next) override;
   bool takeAdvance(uint32_t* token) override;
 
@@ -130,6 +152,22 @@ public:
   // rate than 44.1 kHz is then decoded again through the converter, for
   // decode plus convert. Stops playback.
   void bench(const std::string& path);
+  // Where an Opus track's decoder state goes from its next open (the
+  // console's O knob; docs/OPUS.md gate G1's A/B): 0 the pinned block (PSRAM,
+  // its lower 2 MB; the default), 1 internal RAM, 2 PSRAM above 0x3FA00000.
+  // Any task; the decode task reads it at the open.
+  void setOpusPlacement(uint8_t where) { opusPlacement_.store(where, std::memory_order_relaxed); }
+  uint8_t opusPlacement() const { return opusPlacement_.load(std::memory_order_relaxed); }
+  // Where the converter's table copy goes from the next converted track
+  // (the console's Ot1 / Ot0; docs/OPUS.md gate G5, section 8.11): the
+  // PSRAM block pinned at boot next to the decoder arena's (the default
+  // since M2's device check measured it; the .cpp's tablesApply() has the
+  // figures), or internal RAM (Ot0). Any task. A copy already made in the
+  // other place is dropped at the next request's start.
+  void setOpusTablesPinned(bool pinned);
+  bool opusTablesPinned() const;
+  // The block, for the logs ("at 0x3f8..., PSRAM, its lower 2 MB"); false: none.
+  bool opusTablesBlock(char* buf, size_t size) const;
   // The converter's bench (the console's Rb): 10 s of a fixed stereo signal
   // at each supported rate through RingOutput's own converter on the decode
   // task, output dropped; prints its cycles per second of audio and the
@@ -160,11 +198,13 @@ public:
   };
   RateStatus rateStatus() const;
   // Where the converter's tables are read from (the console's R; any task):
-  // the internal-RAM copy, or flash (none wanted, or no room for one), and
-  // the copies that found no room since boot (logged only the first time:
-  // a converted track that stutters after it shows here).
+  // the internal-RAM copy, the pinned PSRAM block's (Ot1), or flash (none
+  // wanted, or no room for one), and the copies that found no room since
+  // boot (logged only the first time: a converted track that stutters
+  // after it shows here).
   struct TableStatus {
     bool inRam;
+    bool inPsram;
     uint32_t noRoom;
   };
   static TableStatus tableStatus();
@@ -327,6 +367,7 @@ private:
     bool tone = false;
     ToneTrack toneSpec;
     bool mp3 = false;
+    bool opus = false;        // an Ogg Opus file (neither: a FLAC); opened in opus_, its length known
     uint32_t rate = 0;        // what it says before its first frame (0: nothing)
     uint32_t from = 0;        // MP3: the byte the decoder begins at
     bool fromTop = true;      // ... the first audio frame (not a seek)
@@ -341,15 +382,21 @@ private:
     // A start part of the way in (MP3: by its plan, TrimFeed::armAt()).
     bool planned = false;
     trackseek::Plan plan;
+    // Opus: the reader's plan (planOpus(); OpusGenerator::setStartPlan()):
+    // the page reading starts at, where decoding and keeping begin.
+    bool opusPlanned = false;
+    oggopus::StartPlan opusPlan;
     // The run index's header for this track (SeekIndex::Run): its file, the
     // first audio frame and its hash, the timeline's offset there
-    // (-(delay + 529) with LAME's tag), FLAC's rate and total samples.
+    // (-(delay + 529) with LAME's tag), a FLAC's or an Opus track's rate
+    // and total samples (STREAMINFO's; the Opus tail scan's exact length,
+    // 0 when no last page was found).
     uint32_t pathHash = 0;
     uint32_t fileSize = 0;
     uint32_t firstAudio = 0;
     uint32_t firstHash = 0;
     int32_t topT0 = 0;
-    uint64_t flacTotal = 0;
+    uint64_t totalSamples = 0;
     uint64_t startSample = 0;  // the run's base: where it starts on the timeline
     bool startExact = true;
   };
@@ -359,7 +406,9 @@ private:
                const ResumeAnchor& anchor = ResumeAnchor{});
   void decodeTask();
   void start(uint32_t generation);
-  void fail(uint32_t generation, const std::string& why);
+  // `note`: the same in a few words for Now Playing (failureNote()), when
+  // there is a better one than "can't play it".
+  void fail(uint32_t generation, const std::string& why, const char* note = "");
   // fail() for a rate the converter refused, kept for rateRefusal().
   void failRate(uint32_t generation);
   // The engine's phase as TransportSync's (Decoding, Draining, Ended) and
@@ -389,6 +438,13 @@ private:
   // (logged why).
   void planMp3(const uint8_t* probe, uint32_t got, uint32_t audioStart, const StartAt& at, uint8_t* scratch,
                Prepared* p);
+  // An Opus track started part of the way in: its plan (p->opusPlan,
+  // p->opusPlanned) from the generator's reader after the open (docs/OPUS.md
+  // section 9): the resume anchor, checked against the file (its size, the
+  // exact length, the tail rule) and planned with the 600 ms resume preroll;
+  // else the millisecond, the tail rule first, with the 200 ms seek preroll.
+  // Both land on the exact sample. Not planned: from the top (logged why).
+  void planOpus(OpusGenerator* g, const StartAt& at, Prepared* p);
   // The decoding track's run begins in the index (decode task).
   void beginRun(const Prepared& p);
   // After a pass: the landing settled (the run's base), and the frame the
@@ -401,6 +457,22 @@ private:
   PinnedMp3* makeMp3();
   // Where libmad's state is, for the logs: "at 0x3f8..., PSRAM, its lower 2 MB".
   void describeMp3State(char* buf, size_t size) const;
+  // The Opus generator, made at the first .opus and kept (its PSRAM buffers
+  // with it; docs/OPUS.md). Null: no RAM.
+  OpusGenerator* opusGenerator();
+  // The Opus open cache (OpusOpenCache, docs/OPUS.md section 10): what an
+  // open learnt about a file, by its path and size, so the next open of
+  // it (a seek on the playing track, a track played before, the resume
+  // point at a boot) is one read. The decode task finds and puts (under
+  // opusCacheLock_); the loop task loads it at begin() and saves it a few
+  // seconds after a change (saveOpusCache(): written aside, then swapped
+  // in, as the library's cache is; a write that fails is tried again
+  // kOpusCacheRetryMs later), to opusCachePath_.
+  bool findOpusRecord(const std::string& path, uint32_t fileSize, oggopus::OpenRecord* out);
+  void putOpusRecord(const std::string& path, const oggopus::OpenRecord& rec);
+  void forgetOpusRecord(const std::string& path, uint32_t fileSize);
+  void loadOpusCache();
+  void saveOpusCache();
   Produced produceTone();
   Produced produceDecoded();
   // An early end of the decoding track (a rate refused mid-stream): why,
@@ -445,15 +517,37 @@ private:
   std::unique_ptr<AudioFileSourceFS> file_;
   std::unique_ptr<GuardedSource> guard_;     // file_ with 8 zero bytes after it (MP3)
   std::unique_ptr<PinnedMp3> mp3_;           // created fresh for each track (makeMp3()); stopped: holds no state
-  // libmad's frame and synth state (25 KB): one PSRAM block from boot, in
-  // the window's fast lower 2 MB, lent to one MP3 generator at a time
-  // (src/audio/PinnedMp3.h; docs/RESAMPLER.md section 10d).
+  // libmad's frame and synth state (25 KB), or the Opus decoder's state and
+  // its frame's PCM (38 KB, layout opusLayout_): one PSRAM block from boot,
+  // in the window's fast lower 2 MB, lent to one generator at a time
+  // (src/audio/PinnedMp3.h, src/audio/OpusGenerator.h; docs/RESAMPLER.md
+  // section 10d, docs/OPUS.md).
   DecoderArena mp3Arena_;
+  int opusLayout_ = -1;
   bool mp3Pinned_ = false;    // mp3_ decodes on it
   uint32_t mp3Unpinned_ = 0;  // MP3 tracks decoded without it (no block, or lent out)
   std::unique_ptr<SeekableFlac> flac_;
+  std::unique_ptr<OpusGenerator> opus_;      // made at the first .opus, kept (opusGenerator())
+  std::atomic<uint8_t> opusPlacement_{0};    // setOpusPlacement()
+  // The Opus open cache (findOpusRecord() etc.): its entries in PSRAM, the
+  // lock both tasks take, the file it is saved to (empty: not saved), when
+  // its save is due (millis(); kOpusCacheSaveDelayMs after the last
+  // change, so a run of opens saves once; kOpusCacheRetryMs after a write
+  // that failed, the cache marked dirty again: the queue's saver's wait)
+  // and the save counts.
+  static constexpr uint32_t kOpusCacheSaveDelayMs = 3000;
+  static constexpr uint32_t kOpusCacheRetryMs = 10000;
+  OpusOpenCache opusCache_;
+  std::mutex opusCacheLock_;
+  std::string opusCachePath_;
+  uint32_t opusCacheDueMs_ = 0;  // under opusCacheLock_
+  uint32_t opusCacheCheckMs_ = 0;  // loop task: the last look at it
+  uint32_t opusCacheSaves_ = 0;
+  uint32_t opusCacheSaveFails_ = 0;
   AudioGenerator* decoder_ = nullptr;        // the one decoding now, or null
   const char* codec_ = "";
+  std::string prepareWhy_;                   // decode task: why prepare() refused the file ("" : no reason given)
+  std::string prepareNote_;                  // ... in a few words for the screen ("": none)
   bool toneTrack_ = false;
   bool clickTrack_ = false;                  // a tone: track made by click_, not tone_
   bool early_ = false;                        // the decoding track ended early (an error)
@@ -509,9 +603,15 @@ private:
   bool heardOverride_ = false;
   std::string note_;              // the heard track's
   std::string aheadNote_;         // a track decoded ahead's, for when it is heard
+  std::string failNote_;          // why the last request failed, in a few words (failureNote())
 
   std::atomic<uint64_t> busyUs_{0};      // decode task time spent producing, current track
   std::atomic<uint64_t> busyTotalUs_{0}; // the same, since boot
+  std::atomic<uint32_t> maxPassUs_{0};       // the longest pass, the decoding track's (reset at each begin)
+  std::atomic<uint32_t> heardMaxPassUs_{0};  // ... the heard track's (Stats::maxPassUs): the same while that is
+                                             // the track decoding, frozen while the next decodes ahead, the joined
+                                             // track's once its join is heard (takeAdvance())
+  std::atomic<uint32_t> heardToken_{0};      // the heard track's token (0: the request's own; GaplessJoin)
   std::atomic<bool> ringSteady_{false};  // see ringSteady()
   std::atomic<uint64_t> producedFrames_{0};  // ring frames (44.1 kHz) of the current track
   // For durationMs(): the file's position when the first audio came and

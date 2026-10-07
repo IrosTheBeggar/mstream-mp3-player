@@ -146,6 +146,48 @@ uint32_t RingFeed::write(const int16_t* frames, uint32_t n, uint32_t maxMade) {
   return taken;
 }
 
+uint32_t RingFeed::writeBudgeted(const int16_t* frames, uint32_t n) {
+  if (n > budget_) n = budget_;
+  if (n == 0 || ringBudget_ == 0) return 0;
+  if (mode_ == Mode::Pass) {
+    // 44.1 kHz: straight into the stage, as consume() does it, a block at
+    // a time (budget_ is already capped to the ring budget here).
+    uint32_t taken = 0;
+    while (taken < n) {
+      if (staged_ == kStageFrames) {
+        commit();
+        if (staged_ == kStageFrames) break;  // the ring is full
+      }
+      uint32_t k = kStageFrames - staged_;
+      if (k > n - taken) k = n - taken;
+      if (mono_) {
+        for (uint32_t i = 0; i < k; ++i) {
+          storeFrame(stage_ + 2 * (staged_ + i), frames[2 * (taken + i)], frames[2 * (taken + i)]);
+        }
+      } else {
+        std::memcpy(stage_ + 2 * staged_, frames + 2 * taken, k * 2 * sizeof(int16_t));
+      }
+      staged_ += k;
+      passed_ += k;
+      budget_ -= k;
+      taken += k;
+    }
+    return taken;
+  }
+  // Another rate (or none yet): write()'s block path. Frames held for the
+  // per-frame path and passthrough frames not yet counted go first, on
+  // their own (write() does the same), so that only this block's ring
+  // frames come off the ring budget below.
+  convertHeld();
+  countPassed();
+  const uint64_t before = made();
+  const uint32_t taken = write(frames, n, ringBudget_);
+  budget_ -= taken;
+  const uint64_t ringMade = made() - before;
+  ringBudget_ -= ringMade < ringBudget_ ? static_cast<uint32_t>(ringMade) : ringBudget_;
+  return taken;
+}
+
 bool RingFeed::finish() {
   convertHeld();
   countPassed();

@@ -18,7 +18,10 @@
 //   v per-beat log on/off
 //   L the partition table as flashed, the running app slot and its version, NVS use (bug reports)
 // and commands that take an argument, ended with Enter:
-//   i<n> play track n (0-based)   b<n> benchmark decoding track n
+//   i<n> play track n (0-based)   b<n> benchmark decoding track n, b</path> a file by its path
+//   O... Opus (docs/OPUS.md): O status, Ol/Oi/Oh the decoder's state in the pinned block /
+//        internal RAM / PSRAM above 0x3FA00000 from the next open (M0's A/B), Ot1/Ot0 the
+//        converter's table copy in the pinned PSRAM block (the default) / internal RAM (M2's G5 check)
 //   c<name> the name a build with BT_SINK_NAME scans for, with none remembered (saved)
 //   h<n> Bluetooth headroom -n dB, 0-12 (a diagnostic, not saved; default 2)
 //   t<bpm> tempo prior for the beat tracker (t or t0 clears it; a track change does too)
@@ -81,7 +84,8 @@ public:
     std::function<void()> printStats;
     std::function<void()> listTracks;
     std::function<void(int)> playIndex;
-    std::function<void(int)> bench;
+    // The bench: the argument as typed (a queue entry's number, or a path).
+    std::function<void(const char*)> bench;
     std::function<void()> forgetBluetooth;
     std::function<void(const char*)> setHeadphonesName;
     std::function<void(int)> setHeadroom;
@@ -117,6 +121,8 @@ public:
     std::function<void(const char*)> rate;
     // Gapless playback (G): the argument as typed (may be "").
     std::function<void(const char*)> gapless;
+    // Opus (O): the argument as typed (may be "").
+    std::function<void(const char*)> opus;
     // A computer's '@' line: complete (HostLine::Byte::Line: `line` is its
     // text from the '@', writable) or not one (Bad, Long, Restart: `line`
     // nullptr).
@@ -142,7 +148,7 @@ private:
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
     InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle, BluetoothTest,
-    Rate, Gapless,
+    Rate, Gapless, Opus,
   };
 
   Actions actions_;

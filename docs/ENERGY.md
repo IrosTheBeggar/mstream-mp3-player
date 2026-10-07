@@ -423,6 +423,17 @@ test_output_chain); measured on the device: off 2.01 s after a pause,
   88.2/96 kHz files are refused at 160 MHz (an estimated 63-79 % of core 1
   for a 24/96 FLAC there), provisionally until measured; for now they are
   off at any speed until the device check (RESAMPLER.md, section 6).
+- **MP3 decode's share moved with the code layout** until 2026-10-04
+  (RESAMPLER.md section 10e): where the linker put libmad's synth loop
+  decided how many of its lines shared a set of the flash cache. The
+  seek bar's build decoded One More Time at 26.0 % of a core at 240 MHz
+  against 0.6.0's 20.9 % (3.8x against 4.8x realtime), for no change to
+  the MP3 path, and real playback paid the same. So an MP3's `load=`
+  from an earlier build (and every figure above for an MP3 at 160)
+  carries that build's luck, up to a fifth of the decode. Since then the
+  loop's hot code and tables are pinned at the front of flash and the
+  build checks it (`cache_guard`); what still moves is layer III's, about
+  ±3 % (section 10d there).
 
 **The change:**
 
@@ -683,15 +694,27 @@ the Dance tab up. The battery ear check for EXTEN is still to do.**
 the next queue entry belongs to a different album; with no album
 information, the folder); **End of queue**.
 
+With repeat and shuffle ([QUEUE-MODES.md](QUEUE-MODES.md) section 3.5):
+on **Repeat One** the track that plays is the boundary for all three
+(nothing after it would ever play, so otherwise the timer would never
+end): at its end it pauses, the same entry cued at 0:00, and a later play
+starts it from the top, as One would have. The timer wins. With **Repeat
+All**, End of queue still ends at the queue's last entry (it doesn't wrap
+first). **While shuffled**, End of album reads the next entry in play
+order, the Queue tab's: a shuffled library pauses at the end of most
+tracks, a shuffled album at the queue's end.
+
 - The choice is never saved: RAM only, so a reboot or power-off clears it.
 - Nothing about it is persisted, because a device that reboots stopped
   has nothing to time.
 
 ### Where it lives
 
-**Now Playing's "..." sheet** gets a first row, "Sleep timer", with its
-state dim on the right: "Off", "23 min" or "End of track". A tap opens
-the **Sleep timer sheet**:
+**Now Playing's "..." sheet** (since 2026-10-06 the playback menu,
+"Playback": Shuffle, Repeat, Sleep timer, 3 rows from y 80) has a
+"Sleep timer" row, the last, with its state dim on the right: "Off",
+"23 min" or "End of track". (It was the first of four rows until then.)
+A tap opens the **Sleep timer sheet**:
 
 - a grid of pills in the sheet panel (320 x 168): "15", "30", "45",
   "60", "90 min" on one row, "End of track", "End of album", "End of
@@ -1311,15 +1334,18 @@ a finger or an ear is still to do.** As built:
   Bit-exact at 1.0. Never AVRCP: the headphones' own level is untouched.
 - "Pause, never stop": `PlaybackController::setPauseAfterTrack()` (at the
   natural end: the next entry, paused at 0:00, cued; at the end of the
-  queue without repeat, the natural stop; a skip or a failure isn't an
+  queue with repeat Off, the natural stop; with Repeat One, the same
+  entry, cued at 0:00; a skip or a failure isn't an
   end, the flag stays) and `pauseByTimer()` (playing pauses, a wait ends
   paused, a pause is marked; stopped: nothing). `timerStops()` counts the
   boundary pauses; the timer sees one the pass after it happens. End of
-  queue is End of track on the queue's last entry (with repeat: paused on
-  the first entry). End of album is the next entry on another album
+  queue is End of track on the queue's last entry (with repeat All: paused
+  on the first entry), or on any entry with Repeat One
+  (`SleepTimer::lastOfQueue()`, which main's two readers share). End of
+  album is the next entry on another album
   (`SleepTimer::albumEndsBetween()`: the album; the folder for the loose
-  tracks; a built-in track is an album of its own; the queue's end ends it
-  too).
+  tracks; a built-in track is an album of its own; the queue's end, and
+  Repeat One, end it too).
 - The mark: `pausedByTimer()`; `HeadsetKeys::decide(state, key,
   pausedByTimer)` ignores Play then (main.cpp logs `[bt] headphones: play
   (ignored: paused, paused by the sleep timer)`); their Next/Prev still
@@ -1350,14 +1376,16 @@ a finger or an ear is still to do.** As built:
   listener's ears. A play after the drop waits and pages them, as ever.
   `[bt] let go while a play had just started: paused (play pages them)`.
 - The UI:
-  - Now Playing's "..." sheet has 4 rows now (Sleep timer first, its state
+  - Now Playing's "..." sheet had 4 rows then (Sleep timer first, its state
     dim on the right: `rowText()`, which follows the timer while the sheet
     is up: `Sheet::setDetail()`). Every sheet row stays 40 px
     (`lib/core/SheetLayout.h`): a 4-row sheet rises into the header row
     (from y 40, as the dialog does), so the panel sprite is 320 x 204 (the
     content area) instead of 320 x 168; up to 3 rows stay in the list's
     band. A toast up draws over its title row, and when the toast goes the
-    sheet is drawn again.
+    sheet is drawn again. (Since 2026-10-06 it is the playback menu, 3
+    rows from y 80, Sleep timer the last: QUEUE-MODES.md; the row follows
+    the timer through `Ui::sheetFollows()`.)
   - The Sleep timer sheet (`ui/Overlays`' `SleepSheet`, the sheet panel
     from y 72): the title with the state ("Sleep timer: 23 min left",
     "Sleep timer: end of album", "Sleep timer: fading",
@@ -1506,7 +1534,7 @@ checked on the device (below).
   +10 min acts (it doesn't only close the sheet); the sheet's Sleep
   timer row counts down while it is open, reads "Fading", then "Off".
 - The "..." sheet's 4 rows are 40 px each, the sheet from y 40, clear of
-  the red dots.
+  the red dots. (Now 3 rows from y 80: the playback menu.)
 - End of album on the album's first track: the sheet's +10 min is dim and
   does nothing; on its last track it gives "what is left + 10 min".
 - After the release, a B press within a second of it (before the
@@ -3217,7 +3245,8 @@ them, GAPLESS.md section 11.4):
 - **The consumer's read** gained a reading mark and a fence check: a few
   `memw` per read (128 frames per Bluetooth callback, 1,024 per speaker
   buffer), well below the noise.
-- **The tables' copy** (7.6 KB of internal RAM) stays through a chain of
+- **The tables' copy** (7.6 KB; internal RAM then, a pinned PSRAM block
+  since OPUS.md section 8.11) stays through a chain of
   joins from a converted track to 44.1 kHz ones, freed at the next
   request; nothing more is allocated per join (the two 2 KB feed marks and
   the hold are allocated once at boot, in PSRAM).

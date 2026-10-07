@@ -77,7 +77,8 @@ static Core2AudioBackend audio;
 // The library (a LibraryIndex, the single store) and the play queue (track
 // ids): both in PSRAM, only these small objects in internal RAM.
 static Library library(storage);
-static QueueModel queue(psramAlloc, psramFree);
+// (Shuffles draw from esp_random(): fresh hardware entropy for each one.)
+static QueueModel queue(psramAlloc, psramFree, esp_random);
 static PlaybackController player(audio, queue, library.catalog());
 static QueueStore queueStore(storage, queue, player, library.catalog());
 static DanceMode danceMode(audio, player);
@@ -436,14 +437,56 @@ static void playOnSpeaker() {
   Serial.printf("[output] play on the speaker%s\n", playing ? "" : ": nothing to play");
 }
 
+// Shuffle and repeat (docs/QUEUE-MODES.md), the one way for Now Playing's
+// menu and the console's qS / qR: applied, saved and logged. Shuffle is
+// saved with the queue (the file follows by itself: a toggle is a content
+// change for QueueSaver); repeat in NVS at once.
+static void applyShuffle(bool on) {
+  if (player.shuffle() == on) {
+    Serial.printf("[player] shuffle %s: already\n", on ? "on" : "off");
+    return;
+  }
+  const uint32_t t0 = micros();
+  player.setShuffle(on);
+  const uint32_t ms = (micros() - t0 + 500) / 1000;
+  if (on && queue.upNext() == 0) {
+    Serial.println("[player] shuffle on: nothing up next to shuffle");
+  } else if (on) {
+    Serial.printf("[player] shuffle on: %lu up next shuffled; %d of %lu plays on\n", (unsigned long)queue.upNext(),
+                  queue.current() + 1, (unsigned long)queue.size());
+  } else {
+    Serial.printf("[player] shuffle off: the queue's own order again, now %d of %lu (%lu up next), in %lu ms\n",
+                  queue.current() + 1, (unsigned long)queue.size(), (unsigned long)queue.upNext(), (unsigned long)ms);
+  }
+}
+
+static const char* repeatName(PlaybackController::Repeat r) {
+  using R = PlaybackController::Repeat;
+  return r == R::One ? "one" : r == R::All ? "all" : "off";
+}
+
+static void applyRepeat(PlaybackController::Repeat r) {
+  using R = PlaybackController::Repeat;
+  if (player.repeat() == r) {
+    Serial.printf("[player] repeat: %s already\n", repeatName(r));
+    return;
+  }
+  player.setRepeat(r);
+  queueStore.saveRepeat(r);
+  Serial.printf("[player] repeat: %s\n", r == R::Off   ? "off (the queue stops after its last track)"
+                                          : r == R::All ? "all (the queue starts again after its last track)"
+                                                        : "one (this track again at its end; next and prev still move)");
+}
+
 // uiF<k>: a state the UI is shown, for screenshots of the states a
 // test can't safely cause (the radio and the card are left alone): c
 // connecting, s searching, p pairing, r resting (the search stopped: "They'll
 // reconnect when switched on"), l the headphones lost (the dialog too), n
-// no card (on Now Playing), f a card that isn't FAT32 (the same), w play
-// waiting for the headphones (Now Playing's panel); uiF0 (or uiF) the real
-// state. Display only: a button
-// on a faked card still does what it does.
+// no card (on Now Playing), and a card that didn't mount, each kind's
+// page (the same): f exFAT, t NTFS, g a GPT, u nothing recognised ("Can't
+// read this card"); w play waiting for the headphones (Now Playing's
+// panel); uiF0 (or uiF) the real state. Display only: a button on a faked
+// card still does what it does.
 static char uiFake = 0;
 
 // What the UI reads and asks for (ui/UiHost.h).
@@ -455,6 +498,7 @@ struct MainUiHost : ui::UiHost {
   void snapshot(ui::AppState& s) override {
     s.play = player.state();
     s.failed = audio.failed();
+    s.seekable = player.seekable();  // the current entry's, by its path (a joined track has no play() of its own)
     s.current = queue.current();
     s.trackId = queue.currentTrack();
     s.currentKey = queue.currentKey();
@@ -462,16 +506,17 @@ struct MainUiHost : ui::UiHost {
     s.upNext = queue.upNext();
     s.contentVersion = queue.contentVersion();
     s.positionVersion = queue.positionVersion();
-    s.positionMs = s.current >= 0 ? audio.positionMs() : 0;
-    s.durationMs = s.current >= 0 ? audio.durationMs() : 0;
-    // A start point waiting (the resume point after a boot, or qs): Now
-    // Playing shows that second, and the length as it was then, until the
-    // play that starts there.
-    uint32_t startMs = 0, startDurationMs = 0;
-    if (s.current >= 0 && player.startPoint(&startMs, &startDurationMs)) {
-      s.positionMs = startMs;
-      s.durationMs = startDurationMs;
-    }
+    // Where it is and how long (PlaybackController::shownTime()): a start
+    // point's second and length until the play that starts there (the
+    // resume point after a boot, qs, a paused seek); a start the backend
+    // hasn't taken up yet, where it was asked to start with the length the
+    // player was told (never the backend's, which may still be the track
+    // before's: Now Playing's seek bar, docs/SEEK-BAR.md, would seek the
+    // new entry by it); else the backend's, with the told length while it
+    // knows none.
+    player.shownTime(&s.positionMs, &s.durationMs);
+    s.shuffle = player.shuffle();
+    s.repeat = static_cast<uint8_t>(player.repeat());
     BtSink& bt = audio.bluetooth();
     s.onBluetooth = audio.output() == Output::Bluetooth;
     s.btConnected = bt.connected();
@@ -501,7 +546,7 @@ struct MainUiHost : ui::UiHost {
       }
     }
     s.card = storage.onCard();
-    s.cardNotFat32 = !s.card && storage.cardNotFat32();
+    s.cardKind = s.card ? cardformat::Kind::Unreadable : storage.cardKind();
     const LibraryIndex* index = library.index();
     s.libraryTracks = index && index->ready() ? index->trackCount() : 0;
     // The battery is an I2C read of the power chip: every 10 s is plenty.
@@ -536,12 +581,18 @@ struct MainUiHost : ui::UiHost {
   }
   static void fake(ui::AppState& s) {
     if (!uiFake) return;
-    if (uiFake == 'n' || uiFake == 'f') {
-      // As after a boot with no card (f: with one that isn't FAT32):
-      // nothing indexed, nothing queued (Now Playing shows it; the Library
-      // and Queue lists read the real index and queue, so they don't).
+    if (strchr("nftgu", uiFake)) {
+      // As after a boot with no card (n), or with one that didn't mount:
+      // exFAT (f), NTFS (t), a GPT (g), nothing recognised (u): nothing
+      // indexed, nothing queued (Now Playing shows it; the Library and
+      // Queue lists read the real index and queue, so they don't).
+      using cardformat::Kind;
       s.card = false;
-      s.cardNotFat32 = uiFake == 'f';
+      s.cardKind = uiFake == 'f'   ? Kind::ExFat
+                   : uiFake == 't' ? Kind::Ntfs
+                   : uiFake == 'g' ? Kind::Gpt
+                   : uiFake == 'u' ? Kind::Other
+                                   : Kind::Unreadable;
       s.libraryTracks = 0;
       s.current = -1;
       return;
@@ -573,6 +624,10 @@ struct MainUiHost : ui::UiHost {
   void playOnSpeaker() override { ::playOnSpeaker(); }
   void next() override { player.next(); }
   void prev() override { prevTrack(); }
+  void setShuffle(bool on) override { applyShuffle(on); }
+  void setRepeat(uint8_t mode) override {
+    if (mode < 3) applyRepeat(static_cast<PlaybackController::Repeat>(mode));
+  }
   void stepVolume(int delta) override { ::stepVolume(delta); }
   void stepOutputVolume(bool bluetooth, int delta) override {
     if (bluetooth == (audio.output() == Output::Bluetooth)) {
@@ -651,7 +706,8 @@ struct MainUiHost : ui::UiHost {
   }
   bool retryCard() override {
     if (!storage.probeCard()) {
-      Serial.printf("[storage] try again: %s\n", storage.cardNotFat32() ? "the card still isn't FAT32" : "still no card");
+      Serial.printf("[storage] try again: still %s (\"%s\")\n", cardformat::name(storage.cardKind()),
+                    uitext::cardMessage(storage.cardKind()).title);
       return false;
     }
     Serial.println("[storage] try again: a card is in: restarting to use it");
@@ -661,11 +717,18 @@ struct MainUiHost : ui::UiHost {
   void rescanLibrary() override;
   const queueview::DurationBook& durations() override { return ::durations; }
   void about(ui::AboutInfo& a) override {
+    // The card's size, kept since the mount: free to ask every 3 s while
+    // About is open (OutputPage's refresh). No free space: counting it can
+    // hold the card for minutes (LocalStorage::totalBytes()).
     const uint64_t bytes = storage.totalBytes();
     if (!storage.available()) {
       snprintf(a.storage, sizeof(a.storage), "No storage");
     } else if (storage.onCard()) {
-      snprintf(a.storage, sizeof(a.storage), "microSD card, %.1f GB", bytes / 1e9);
+      if (bytes) {
+        snprintf(a.storage, sizeof(a.storage), "microSD card, %.1f GB", bytes / 1e9);
+      } else {
+        snprintf(a.storage, sizeof(a.storage), "microSD card");  // its CSD didn't say (the driver's 0)
+      }
     } else {
       snprintf(a.storage, sizeof(a.storage), "Internal flash, %.1f MB (no card)", bytes / 1e6);
     }
@@ -744,16 +807,16 @@ static void printStats() {
   const diag::Heap h = diag::heap();
   Serial.printf(
       "[stats] track=%d/%lu %s pos=%.1fs out=%s%s buf=%lums underruns=%lu bt=%lufps load=%.1f%% "
-      "stack_free=%lu ram=%luK min=%luK psram=%luK bat=%d%%\n",
+      "stack_free=%lu pass_max=%luus ram=%luK min=%luK psram=%luK bat=%d%%\n",
       player.currentIndex() + 1, (unsigned long)queue.size(), stateName(), audio.positionMs() / 1000.0f,
       audio.output() == Output::Bluetooth ? "bt" : "speaker",
       audio.output() == Output::Bluetooth ? (audio.bluetooth().connected() ? "(connected)" : "(searching)")
       : silent                            ? "(silent test mode)"
                                           : "",
       (unsigned long)s.bufferedMs, (unsigned long)s.underruns, (unsigned long)s.btFramesPerSec,
-      s.decodeLoad * 100.0f, (unsigned long)s.decodeStackFree, (unsigned long)(h.internalFree / 1024),
-      (unsigned long)(h.internalMin / 1024), (unsigned long)(h.psramFree / 1024),
-      (int)M5.Power.getBatteryLevel());
+      s.decodeLoad * 100.0f, (unsigned long)s.decodeStackFree, (unsigned long)s.maxPassUs,
+      (unsigned long)(h.internalFree / 1024), (unsigned long)(h.internalMin / 1024),
+      (unsigned long)(h.psramFree / 1024), (int)M5.Power.getBatteryLevel());
   if (danceMode.active()) danceMode.printStats(millis());  // every 5 s while dancing
 
   BtSink& bt = audio.bluetooth();
@@ -879,9 +942,30 @@ static void queueCommand(const char* a) {
     case 'x':
       player.clearQueue();
       break;
-    case 'u':
-      Serial.printf("[queue] undo: %s\n", player.undo() ? "done" : "nothing to undo");
+    case 'u': {
+      const bool shuffled = player.shuffle();
+      const bool undone = player.undo();
+      // (Shuffle all's: the mode it found comes back with the queue.)
+      Serial.printf("[queue] undo: %s%s\n", undone ? "done" : "nothing to undo",
+                    player.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)");
+      // An Undo toast still up has nothing left to offer: Ui takes it away.
+      if (undone && userInterface) userInterface->queueUndone();
       break;
+    }
+    case 'S':
+      // qS toggles shuffle; qS0 / qS1 set it.
+      applyShuffle(n < 0 ? !player.shuffle() : n != 0);
+      break;
+    case 'R': {
+      // qR steps repeat (Off, All, One); qR0 / qR1 / qR2 set it.
+      const int mode = n < 0 ? (static_cast<int>(player.repeat()) + 1) % 3 : static_cast<int>(n);
+      if (mode > 2) {
+        Serial.println("[queue] qR<n>: 0 off, 1 all, 2 one (qR alone steps it)");
+        break;
+      }
+      applyRepeat(static_cast<PlaybackController::Repeat>(mode));
+      break;
+    }
     case 's': {
       // A test of the resume point without a restart: the current entry
       // starts n s in at its next play, as after a boot with that second
@@ -901,7 +985,8 @@ static void queueCommand(const char* a) {
     default:
       Serial.println("[queue] q status, qa play all, qb built-ins, ql albums, qp<n>/qn<n>/q+<n> album n: play / "
                      "play next / add, qr<pos> remove, qc clear up next, qx clear, qu undo, qs<sec> start the "
-                     "current entry that far in (as a resume point; qs0 none)");
+                     "current entry that far in (as a resume point; qs0 none), qS shuffle on/off (qS0/qS1), qR "
+                     "repeat off/all/one in turn (qR0/qR1/qR2)");
       return;
   }
   queueStore.printStatus();
@@ -1248,7 +1333,10 @@ static void rateCommand(const char* a) {
   const Core2AudioBackend::TableStatus t = Core2AudioBackend::tableStatus();
   Serial.printf("[rate] filter tables: %s; %lu copies found no room since boot; internal free %u B, largest block "
                 "%u B\n",
-                t.inRam ? "the internal-RAM copy" : "flash (no copy now)", (unsigned long)t.noRoom,
+                t.inRam     ? "the internal-RAM copy"
+                : t.inPsram ? "the pinned PSRAM block's copy (Ot1)"
+                            : "flash (no copy now)",
+                (unsigned long)t.noRoom,
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   Serial.printf("[rate] CPU set at boot: %u MHz; 88.2/96 kHz %s; R status, Rt the test tracks (Rt<n> plays one "
@@ -1355,10 +1443,47 @@ static void gaplessCommand(const char* a) {
   audio.printGapless();
   const PlaybackController::GaplessStats& g = player.gaplessStats();
   Serial.printf("[gapless] player: %s; words sent %lu (now: %s), joins taken as the next entry %lu, started again "
-                "(no longer next) %lu, paused at the boundary %lu\n",
+                "(no longer next) %lu, paused at the boundary %lu, repeat-one loops %lu\n",
                 player.gapless() ? "on" : "off", (unsigned long)g.offers,
                 player.offeredToken() ? "a track follows" : "nothing follows", (unsigned long)g.adopted,
-                (unsigned long)g.restarted, (unsigned long)g.paused);
+                (unsigned long)g.restarted, (unsigned long)g.paused, (unsigned long)player.repeats());
+}
+
+// O...: Opus (docs/OPUS.md): the device checks' knobs. An .opus file in
+// the library plays as any track; one the library doesn't list (the card
+// set under /bench/opus/) plays by its path, Rf</bench/opus/x.opus> in
+// silent mode, or benches by it, b</bench/opus/x.opus> (into nothing).
+//   O        the knobs' state
+//   Ol/Oi/Oh the decoder's state (and the frame's PCM) in the pinned block
+//            (PSRAM, its lower 2 MB: the default) / internal RAM / PSRAM
+//            above 0x3FA00000 from the next open (gate G1's A/B; a
+//            placement with no room falls back to the block, logged)
+//   Ot1/Ot0  the converter's 7,776 B table copy in a PSRAM block pinned
+//            next to the decoder's (the default since M2's device check:
+//            its internal RAM stays free, gate G5) / in internal RAM from
+//            the next converted track (a copy in the other place is
+//            dropped at the next request's start); `b` with each measures
+//            what the PSRAM copy costs the converter (the cache: +2.8
+//            points of a core measured, docs/OPUS.md 8.11)
+static void opusCommand(const char* a) {
+  static const char* const kWhere[] = {"the pinned block (PSRAM, its lower 2 MB)", "internal RAM",
+                                       "PSRAM above 0x3FA00000"};
+  if (a[0] == 'l' || a[0] == 'i' || a[0] == 'h') {
+    audio.setOpusPlacement(a[0] == 'l' ? 0 : a[0] == 'i' ? 1 : 2);
+  } else if (a[0] == 't') {
+    audio.setOpusTablesPinned(a[1] != '0');
+  } else if (a[0]) {
+    Serial.println("[opus] O status; Ol/Oi/Oh the decoder's state in the pinned block / internal RAM / high PSRAM "
+                   "from the next open; Ot1/Ot0 the converter's table copy in the pinned PSRAM block (the default) / "
+                   "internal RAM from the next converted track");
+  }
+  char block[96];
+  audio.opusTablesBlock(block, sizeof(block));
+  Serial.printf("[opus] the decoder's state goes to %s from the next open; the converter's table copy goes to %s "
+                "from the next converted track (the pinned block: %s); b</bench/opus/x.opus> benches a file (no "
+                "sound), Rf</bench/opus/x.opus> plays one on its own (silent mode z only)\n",
+                kWhere[audio.opusPlacement() < 3 ? audio.opusPlacement() : 0],
+                audio.opusTablesPinned() ? "the pinned PSRAM block (Ot1, the default)" : "internal RAM (Ot0)", block);
 }
 
 static void bluetoothTestCommand(const char* a) {
@@ -1457,10 +1582,21 @@ static SerialConsole console({
     },
     listTracks,
     [](int i) { player.play(static_cast<size_t>(i)); },
-    [](int i) {
-      if (i < 0 || static_cast<uint32_t>(i) >= queue.size()) return;
+    [](const char* a) {
+      // b<n>: queue entry n; b</path>: a file by its path (one the library
+      // doesn't list: the card set under /bench/opus/, docs/OPUS.md). The
+      // bench decodes into nothing: no sound either way.
       char path[TrackCatalog::kMaxPath];
-      library.catalog().path(queue.trackAt(i), path, sizeof(path));
+      if (a[0] == '/') {
+        snprintf(path, sizeof(path), "%s", a);
+      } else {
+        const long i = atol(a);
+        if (!isDigit(a[0]) || i < 0 || static_cast<uint32_t>(i) >= queue.size()) {
+          Serial.println("[bench] b<n> benches queue entry n (l lists them); b</path> a file by its path");
+          return;
+        }
+        library.catalog().path(queue.trackAt(static_cast<size_t>(i)), path, sizeof(path));
+      }
       stopForTest("bench");
       audio.bench(path);
     },
@@ -1552,6 +1688,7 @@ static SerialConsole console({
     diag::printPartitionTable,
     rateCommand,
     gaplessCommand,
+    opusCommand,
     [](char* line, HostLine::Byte kind) { usbViz.onLine(line, kind); },
 });
 
@@ -1912,7 +2049,8 @@ static bool sleepEndsAtCurrent() {
   }
   const int cur = queue.current();
   if (cur < 0) return false;
-  const bool last = static_cast<uint32_t>(cur) + 1 >= queue.size();
+  // (Repeat One: this track is the last; as stepSleep() has it.)
+  const bool last = SleepTimer::lastOfQueue(cur, queue.size(), player.repeat() == PlaybackController::Repeat::One);
   // (The queue's end is an album's end too, as stepSleep() has it.)
   const bool lastOfAlbum = c == SleepTimer::Choice::EndOfAlbum &&
                            (last || SleepTimer::albumEndsBetween(library.index(), queue.currentTrack(),
@@ -2046,7 +2184,10 @@ static void stepSleep(uint32_t now) {
   if (cur >= 0) {
     in.positionMs = audio.positionMs();
     in.durationMs = started ? audio.durationMs() : 0;
-    const bool last = static_cast<uint32_t>(cur) + 1 >= queue.size();
+    // Repeat One: nothing after this track would ever play, so it is the
+    // last (sleepEndsAtCurrent() asks the same: the two must agree).
+    const bool last =
+        SleepTimer::lastOfQueue(cur, queue.size(), player.repeat() == PlaybackController::Repeat::One);
     in.lastOfQueue = last;
     // The queue's end is an album's end too (with repeat, what comes next
     // may be the same album again: it still ends here).
@@ -2401,7 +2542,8 @@ void setup() {
 
   // The Bluetooth power, applied as the controller comes up (before any page).
   powerSettings.beginBluetooth(audio.bluetooth());
-  if (!audio.begin(storage.available() ? &storage.fs() : nullptr, BT_SINK_NAME)) {
+  if (!audio.begin(storage.available() ? &storage.fs() : nullptr, storage.available() ? storage.stateDir() : nullptr,
+                   BT_SINK_NAME)) {
     Serial.println("[audio] failed to start");
   }
   // 88.2/96 kHz tracks need 240 MHz: the speed set at boot, not the clock
@@ -2415,6 +2557,9 @@ void setup() {
   // ~13 KB for its two copies).
   const uint32_t freeBeforeLibrary = diag::heap().internalFree;
   library.begin();
+  // The repeat mode saved (Off unless changed), before the queue and the
+  // first play; shuffle comes back with the queue's file.
+  player.setRepeat(queueStore.loadRepeat());
   if (!queueStore.restore()) {
     queueEverything(false);
     Serial.printf("[queue] no saved queue: the whole library, %lu tracks\n",
@@ -2474,14 +2619,15 @@ void setup() {
   diag::logHeap("ui");
   Serial.println("[console] n/p next/prev, space play/pause, o output, +/- volume, s stats, l list, "
                  "f forget bt, z silent test mode, d dance tab, m next dancer, x/X screenshot dancer/screen, v beat log; "
-                 "with Enter: i<n> play, b<n> bench, c<name> headphones name, h<n> bt headroom -n dB, "
+                 "with Enter: i<n> play, b<n> bench (b</path> a file by its path), c<name> headphones name, h<n> bt headroom -n dB, "
                  "q queue (q? for its commands; qs<sec> a resume point), "
                  "a touch calibration (a5-a9 fewer crosses, ac check, ab first-boot check, ab0 ask it again, "
                  "as status, ad remove it, ah0/1 haptics, ar0/1 rail ticks), "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
                  "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid/uip scripted finger, "
                  "uk1/uk2/uk0 the scripted finger on a skewed panel (uk2 with jitter) or not, "
-                 "uiF<c/s/p/r/l/n/f/w> show a faked Bluetooth, no-card or not-FAT32 state (uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
+                 "uiF<c/s/p/r/l/n/f/t/g/u/w> show a faked Bluetooth, no-card, exFAT/NTFS/GPT/can't-read card or waiting state "
+                 "(uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
                  "library of n tracks in the Library tab, uil0 the card's); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja); "
@@ -2490,7 +2636,9 @@ void setup() {
                  "T0 off); I idle power-off (I status, I<min>/Is<sec> a test length, I0 the setting's); "
                  "R rate converter (R status, Rt test tracks, Rt<n> play one on its own, Rf</music/...> a file on its own "
                  "(silent mode), Rx stop it, Rb bench); G gapless playback (G status, G0/G1 off/on, Gt0/Gt1 trimming, Gx<n> "
-                 "the cut's stress test); "
+                 "the cut's stress test); O Opus (O status, Ol/Oi/Oh the decoder's state in the pinned block / internal "
+                 "RAM / high PSRAM, Ot1/Ot0 the converter's table copy in the pinned PSRAM block (the default) / "
+                 "internal RAM); "
                  "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md), never commands");
 }
 
@@ -2572,6 +2720,14 @@ void loop() {
     Serial.printf("[queue] now at %d of %lu (%s)\n", queue.current() + 1, (unsigned long)queue.size(), stateName());
     lastEntry = queue.currentKey();
   }
+  // Repeat One's loops: the same entry again (no new key, so no line above;
+  // the dancer keeps its tempo: the same song).
+  static uint32_t lastRepeats = 0;
+  if (player.repeats() != lastRepeats) {
+    lastRepeats = player.repeats();
+    Serial.printf("[queue] repeat one: %d of %lu again (%s)\n", queue.current() + 1, (unsigned long)queue.size(),
+                  stateName());
+  }
   // A screen of its own (calibration, a spike screen) owns the display
   // while it's up: the UI is suspended, the dancer too.
   spike.loop(now);
@@ -2614,21 +2770,28 @@ void loop() {
   usbViz.loop(now, screen.externalPower());
   shot.poll();
   // The screen, last: the countdown, and what keeps it lit (a screen of its
-  // own, a play waiting for the headphones, a pairing, a computer driving the
-// dancer). Going off, the UI
-  // goes dark first; waking, it draws everything before the panel's
-  // sleep-out. A toast with a countdown (the idle power-off's warning, the
-  // sleep timer's fade while it counts down to the pause) holds a lit screen
-  // lit until it ends, and leaves an off one off (it may be night). A
-  // track's fade held after a skip (until the new track's last 10 s, or the
-  // album's end) keeps its toast but not the screen: that can be minutes.
+  // own, a play waiting for the headphones, a pairing, a computer driving
+  // the dancer). Going off, the UI goes dark first; waking, it draws
+  // everything before the panel's sleep-out. A toast with a countdown (the
+  // idle power-off's warning, the sleep timer's fade while it counts down
+  // to the pause) holds a lit screen lit until it ends, and leaves an off
+  // one off (it may be night). A track's fade held after a skip (until the
+  // new track's last 10 s, or the album's end) keeps its toast but not the
+  // screen: that can be minutes. The Pair screen's search holds it too
+  // (its 2 minutes at most; it ends with the page, a pick or the screen
+  // off): the listener watches for the headphones and taps the list, and a
+  // dim screen took those taps as wakes, an off one stopped the search.
   {
     const BtLink link = audio.bluetooth().link();
     // (A pairing under way, not one whose failure the card still shows.)
     const bool keepLit = screenTaken() || player.state() == PlayState::Waiting ||
                          link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay() || usbViz.active();
-    const bool holdLit = idlePower.policy().phase() == IdlePolicy::Phase::Warning || sleepTimer.fadeCountingDown();
-    screen.step(millis(), keepLit, holdLit);
+    using Hold = ScreenControl::Hold;
+    const Hold hold = idlePower.policy().phase() == IdlePolicy::Phase::Warning || sleepTimer.fadeCountingDown()
+                          ? Hold::Toast
+                      : userInterface && userInterface->pairSearching() ? Hold::PairSearch
+                                                                        : Hold::None;
+    screen.step(millis(), keepLit, hold);
   }
   // A calibration asked for in the dark: now that the panel is awake.
   if (calibrationPending && !screen.off() && !screen.panelAsleep()) {

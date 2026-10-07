@@ -41,16 +41,18 @@ so only the objects the firmware uses are linked:
   come without their sources, so a notice only in a .c file would not show
   up this way.
 
-Linked and listed below: ESP8266Audio's MP3 (libmad) and FLAC (libFLAC)
-decoders, ID3 and file sources; ESP32-A2DP's source and common classes;
+Linked and listed below: ESP8266Audio's MP3 (libmad), FLAC (libFLAC) and
+Opus (libopus) decoders and file source; ESP32-A2DP's source and common classes;
 M5Unified; M5GFX (with LovyanGFX, five FreeFont faces, the TFT_eSPI fonts 2
 and 4, the Adafruit glcdfont, TJpgDec); the Arduino core with FS, SD,
 LittleFS, SPI, Wire and Preferences; ESP-IDF and its binary Bluetooth, PHY,
 RTC and coexistence libraries; newlib; the GCC runtime.
 
 Not in the binary (0 bytes, or no symbols): ESP8266Audio's Helix MP3/AAC
-(RealNetworks RPSL/RCSL), Opus, TinySoundFont, MOD, MIDI, WAV and HTTP
-sources; ESP32-A2DP's sink and the AudioTools parts; M5GFX's efont, IPA
+(RealNetworks RPSL/RCSL), its AudioGeneratorOpus (libopus itself is linked,
+below, behind our own Ogg reader), its ID3 tag source (AudioFileSourceID3:
+the player skips the tags by their size itself), TinySoundFont, MOD, MIDI,
+WAV and HTTP sources; ESP32-A2DP's sink and the AudioTools parts; M5GFX's efont, IPA
 fonts, PNG (pngle), QR code, QOI and miniz; the libhelix-mp3 component of
 the prebuilt ESP-IDF libraries; WiFi (net80211, pp, wpa_supplicant, lwIP,
 mesh, ESP-NOW: pulled into the link, then collected to 0 bytes); the Arduino
@@ -69,11 +71,11 @@ change this list: check the map again before a release.
   (its library.json still says 2.4.1).
 - Licence: GPL-3.0-or-later ([LICENSE](LICENSE)).
 - Copyright: "Copyright (C) 2017 Earle F. Philhower, III" (the headers of
-  AudioGeneratorMP3.cpp, AudioGeneratorFLAC.cpp, AudioFileSourceID3.cpp,
-  AudioFileSourceFS.cpp and the other linked files).
+  AudioGeneratorMP3.cpp, AudioGeneratorFLAC.cpp, AudioFileSourceFS.cpp and
+  the other linked files).
 - Source: https://github.com/earlephilhower/ESP8266Audio
 - Linked: AudioGeneratorMP3, AudioGeneratorFLAC, AudioFileSourceFS,
-  AudioFileSourceID3, AudioLogger, and the two decoders below.
+  AudioLogger, and the three decoders below.
 
 #### libmad 0.15.1b (inside ESP8266Audio, src/libmad)
 
@@ -101,6 +103,63 @@ change this list: check the map again before a release.
   src/libflac/README.ESP8266).
 - Linked: bitreader, cpu, crc, fixed, format, lpc, md5, memory,
   stream_decoder.
+
+#### libopus 1.5.1 (inside ESP8266Audio, src/libopus)
+
+- Version: the sources of libopus v1.5.1 (ESP8266Audio's `lib/opus`
+  submodule at `ab4e83598e7fc8b2ce82dc633a0fc0c452b629aa`, tag v1.5.1,
+  copied into src/libopus by its lib/install-opus.sh; the bundled
+  src/libopus/include/config.h claims 1.5.2, so `opus_get_version_string()`
+  says "libopus 1.5.2-fixed"). The decoder only (no encoder, no multistream
+  decoder, no repacketizer), fixed point (`FIXED_POINT`, `DISABLE_FLOAT_API`),
+  its scratch on the stack (`VAR_ARRAYS`), compiled as every ESP8266Audio
+  file is. Used through its public API alone (`libopus/include/opus.h`), by
+  src/audio/OpusGenerator and our own Ogg Opus reader (lib/core/OggPage,
+  OggOpus; docs/OPUS.md); ESP8266Audio's AudioGeneratorOpus is not linked.
+- Licence: BSD-3-Clause, the Xiph/IETF variant
+  ([LICENSES/BSD-3-Clause-libopus.txt](LICENSES/BSD-3-Clause-libopus.txt),
+  from src/libopus/COPYING; its third clause names the Internet Society,
+  IETF and IETF Trust). The same COPYING and src/libopus/LICENSE_PLEASE_READ.txt
+  point to the royalty-free patent licences the Opus format and this
+  implementation are subject to, the IPR statements filed with the IETF:
+  Xiph.Org Foundation https://datatracker.ietf.org/ipr/1524/, Microsoft
+  Corporation https://datatracker.ietf.org/ipr/1914/ (and Skype Limited's
+  https://datatracker.ietf.org/ipr/1602/, which it supersedes), Broadcom
+  Corporation https://datatracker.ietf.org/ipr/1526/. Patents asserted
+  against Opus decoders outside those grants are the README's Opus section.
+- Copyright: "Copyright 2001-2023 Xiph.Org, Skype Limited, Octasic,
+  Jean-Marc Valin, Timothy B. Terriberry, CSIRO, Gregory Maxwell, Mark
+  Borgerding, Erik de Castro Lopo, Mozilla, Amazon" (COPYING). In the linked
+  files: "Copyright (c) 2006-2011, Skype Limited. All rights reserved."
+  (silk/*), "Copyright (c) 2013, Koen Vos. All rights reserved."
+  (silk/LPC_fit.c), "Copyright (c) 2003-2004, Mark Borgerding"
+  (celt/kiss_fft.c), "Copyright (c) 2001-2011 Timothy B. Terriberry"
+  (celt/entcode.c, entdec.c, entenc.c, cwrs.c), "Copyright (c) 2007-2008
+  CSIRO", "Copyright (c) 2007-2009 Xiph.Org Foundation", "Copyright (c)
+  2008 Gregory Maxwell", "Copyright (c) 2002-2008 Jean-Marc Valin" and
+  similar year ranges (celt/*, src/*), "Copyright (C) 2001 Erik de Castro
+  Lopo" (celt/float_cast.h); in a header compiled with them, "Copyright (c)
+  2010 Xiph.Org Foundation / Copyright (c) 2013 Parrot" (celt/cpu_support.h).
+  (include/opus_projection.h's "Copyright (c) 2017 Google Inc." is not in
+  the binary: no linked object includes it.)
+- Source: https://gitlab.xiph.org/xiph/opus (upstream; https://opus-codec.org/),
+  the ESP8266Audio commit above (as built; the 172 bundled files that exist
+  upstream are byte for byte v1.5.1's but for install-opus.sh's
+  `HAVE_CONFIG_H` to `__STDC__` substitution).
+- Linked (63 objects, about 75 KB of code and tables, nothing in IRAM,
+  `.data` or `.bss`): src: opus, opus_decoder; celt: bands, celt,
+  celt_decoder, celt_lpc, cwrs, entcode, entdec, entenc, kiss_fft, laplace,
+  mathops, mdct, modes, pitch, quant_bands, rate, vq; silk: CNG,
+  LPC_analysis_filter, LPC_fit, LPC_inv_pred_gain, NLSF2A, NLSF_decode,
+  NLSF_stabilize, NLSF_unpack, PLC, bwexpander, bwexpander_32, code_signs,
+  dec_API, decode_core, decode_frame, decode_indices, decode_parameters,
+  decode_pitch, decode_pulses, decoder_set_fs, gain_quant, init_decoder,
+  lin2log, log2lin, pitch_est_tables, resampler, resampler_private_AR2,
+  resampler_private_IIR_FIR, resampler_private_down_FIR,
+  resampler_private_up2_HQ, resampler_rom, shell_coder, sort,
+  stereo_MS_to_LR, stereo_decode_pred, sum_sqr_shift, table_LSF_cos,
+  tables_LTP, tables_NLSF_CB_NB_MB, tables_NLSF_CB_WB, tables_gain,
+  tables_other, tables_pitch_lag, tables_pulses_per_block.
 
 ### ESP32-A2DP 1.8.11
 

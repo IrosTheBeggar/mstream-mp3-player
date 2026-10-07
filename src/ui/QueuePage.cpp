@@ -646,7 +646,7 @@ void QueuePage::onHold(uint32_t row) {
 
 bool QueuePage::emptyState(EmptyState& e) {
   if (noCard()) {
-    noCardState(e, ui_.state().cardNotFat32);
+    noCardState(e, ui_.state().cardKind);
     return true;
   }
   e.icon = &icons::kQueue;

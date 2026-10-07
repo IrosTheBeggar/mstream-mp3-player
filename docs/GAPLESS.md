@@ -44,7 +44,7 @@ with `G0`):
    Then it reports `Phase::Ended`.
 3. On the loop task, `PlaybackController::update()` sees `finished()`.
    It calls `advance()`, which steps the queue (`QueueModel::step(+1,
-   repeat_)`) and then `startCurrent()` and `audio_.play()`.
+   ...)`, by the repeat mode) and then `startCurrent()` and `audio_.play()`.
 4. `play()` posts a new generation (`TransportSync::post()`) and wakes the
    decode task.
 5. On the decode task, `start()` closes the decoder and calls
@@ -269,8 +269,9 @@ became of it:
 ### 3.1 The word: the player says what comes next
 
 `PlaybackController` (lib/core) is the only place that knows the queue's
-real next entry. It works it out the way `advance()` would, without
-moving anything (`QueueModel::peek(+1, repeat_)`), and hands it to the
+real next entry. It works it out the way `advance()` would at a natural
+end, without moving anything (`endNext()`: `QueueModel::peek(+1, wraps)`,
+or the current entry itself with Repeat One), and hands it to the
 backend as a word (`IAudioBackend::setNext()`):
 
 ```
@@ -291,15 +292,15 @@ Next { after, token, path, hintMs }
 - **Nothing follows** when gapless is off (`setGapless(false)`, the
   console's `G0`), "pause after this track" is set (`pauseAfter_`), the
   `NextGate` says the sleep timer ends at the current entry (section 5.4),
-  the queue ends without repeat, or the next id has no path. `held()` is
+  the queue ends with repeat Off, or the next id has no path. `held()` is
   no reason (the review's amendment 14): nothing is heard without an
   output reading, and a drop pauses the player anyway.
 - **The same track still next keeps its token** (no cut), whether its
   entry stays or its key is gone and the same track took its place (a
   library rebuild's fresh keys, one of two duplicates removed). Never the
   heard token, though: the backend took it already and would answer
-  "nothing follows", so a queue of one on repeat (the same entry after
-  itself) gets a new token every time round. Anything else next gets a
+  "nothing follows", so Repeat One, or a queue of one on repeat (the same
+  entry after itself), gets a new token every time round. Anything else next gets a
   new token. The player keeps its last four offers
   (token, key, track) for the advance.
 - **Worked out only when something it depends on changed**: a signature of
@@ -311,10 +312,16 @@ Next { after, token, path, hintMs }
   hooks of their own: anything that changes the next entry changes the
   word.
 
-There is no shuffle mode today. "Shuffle all" (`Ui::shuffleAll()`)
-replaces the queue (`playNow()`), which is a new generation, and repeat
-has no UI (`setRepeat()` is never called; it is on). If either is added
-later, it only has to change what `peek()` returns.
+Shuffle and repeat ([QUEUE-MODES.md](QUEUE-MODES.md), 2026-10-06) needed
+nothing of the engine. Shuffle reorders the queue's entries themselves,
+so not even `peek()` changed: a toggle is a content change, and the word
+follows it as it follows any edit. Repeat (Off, All, One; the playback
+menu, saved in NVS, Off by default) is a mode of the player: a natural
+end follows it (`endNext()`; One's word is the entry itself, the
+self-join a queue of one on repeat always had), a skip wraps unless it is
+Off. `setRepeat()` and `setShuffle()` are actions, so the word changes at
+once. "Shuffle all" turns shuffle on and replaces the queue
+(`playNow()`, a new generation).
 
 ### 3.2 Decode-ahead at the end of a file: `GaplessEngine`
 
@@ -454,11 +461,13 @@ natural end right now (the review's amendment 3):
   N: `pauseAtBoundary()` (the backend stops, the next entry is cued at
   0:00, the pause is the timer's). This is the too-late End of track: at
   most the cut's latency plus the pause's 1.5 ms fade of N+1 is heard.
-- what `advance()` would start (`peek(+1, repeat_)` from N) is the token's
-  entry (by its key, or by its track when its key is gone): it becomes
-  current with no `play()` (`queue_.setCurrent()`); the state stays.
+- what `advance()` would start at N's end (`endNext()` from N) is the
+  token's entry (by its key, or by its track when its key is gone): it
+  becomes current with no `play()` (`queue_.setCurrent()`; with Repeat
+  One, N itself, a loop: nothing bumps, `repeats()` counts it); the state
+  stays.
 - otherwise (an edit that came too late to cut N+1 out: Play next, a
-  remove, repeat changed): `advance()`, a request that starts what follows
+  remove, repeat changed, a shuffle toggle): `advance()`, a request that starts what follows
   now; while paused (a pause's fade read past B), the entry after N is
   cued instead, so nothing starts by itself.
 - in every case the heard token becomes the track the next word is about,
@@ -811,6 +820,44 @@ sample.
 - **`positionMs()` after any start** is the start plus the kept frames,
   as now.
 
+### 4.7 Opus
+
+An Ogg Opus track ([OPUS.md](OPUS.md)) is sample-exact from the file
+alone, and its generator does all the trimming itself: the pre-skip (the
+encoder's delay, in the OpusHead) is dropped from the top and the EOS
+page's granule position trims the encoder's padding at the end, so
+`TrimFeed` is armed `{0,0}` and never sees a lead sample (the generator
+hands over kept samples only, through `ConsumeSamples()` and
+`RingFeed::writeBudgeted()`). The length is exact from the open (the last
+page's granule, a tail scan), so Now Playing has it before the first
+frame. Every Opus track is 48 kHz, so the join rules above apply as to any
+48 kHz file: `Tracks::probe()` reads its headers and says 48,000 before
+any frame, and
+
+- **Opus to Opus** is a continuous join (`RingFeed::continues(48000)`): one
+  stream through the converter, the first track's EOS trim and the
+  second's pre-skip meeting sample for sample (an album transcoded by
+  mStream from a gapless source joins without a gap, as the source did:
+  mStream's transcode keeps the sample count exactly, OPUS.md);
+- **Opus to a 44.1 kHz MP3 or FLAC** (and back) is a rate change: the
+  tail, then a new stream, as between a 48 kHz MP3 and a 44.1 kHz one;
+  Opus to a 48 kHz MP3 or FLAC is continuous.
+
+A track that ends early (a file cut short, another stream after ours, a
+gap over 10 s after damaged pages) says so through the generator's own
+early-end hook, not the file position (a trailing stream or junk after the
+EOS page would fool that), and its note shows once it is heard. The host
+test for the shape: `test_self_trimming_48k_tracks_join_as_opus_does`
+(test_gapless). The repeat modes and shuffle
+([QUEUE-MODES.md](QUEUE-MODES.md)) know nothing of formats, so what they
+have to get right is these joins, which the player over the engine
+checks (test_gapless_player): Repeat One on an Opus track (its self-join
+one 48 kHz stream, the file's kept samples end to end, a new token each
+loop; All again, the MP3 after it a rate change), Repeat All's wrap from
+the last Opus entry (to an Opus first entry one stream round and round;
+to an MP3 a rate change at the wrap) and a shuffled MP3/FLAC/Opus queue
+(each join by the rates that meet, in the shuffled order).
+
 ## 5. Changes while the next track is already decoded
 
 Most edits change the word (section 3.1). That is noticed at the end of
@@ -931,7 +978,8 @@ applies to the track that now plays.
 | Play next / `insertNext`, `moveNext`, + Queue onto the last entry, `remove` of the next entry, Clear up next, an undo that changes the next entry | the word changes. Outputs before J: cut, then the new next is joined. Passed J: the advance is heard, and since what `advance()` would start isn't N+1 any more, it is started (a request): Play next's track plays next. Host-tested (test_gapless_player) |
 | `remove` of the current entry (N) | `currentMoved()`: a request, as before |
 | A library rebuild (`queueReplaced(true)`: fresh keys, same tracks), or one of two adjacent duplicates removed | the same track stays next: the word keeps its token, no cut; the advance finds the entry by its track (section 3.1) |
-| Repeat changed (no UI today) | at the queue's last entry a word appears or goes; a cut if needed |
+| Repeat changed (the playback menu, `qR`) | `setRepeat()` is an action: the word changes at once. At the queue's last entry All's word (the first entry) appears or goes; with One the word is N itself on any entry, a new token each loop. Before J a cut; past J the advance starts what now comes next. Host-tested (test_gapless_player) |
+| A shuffle toggle (the playback menu, `qS`) | the entries reorder, the current one stays: if the next entry changed, the word changes (before J a cut and the new next joined; past J the advance starts what now comes next); the same next keeps its token. Host-tested (test_gapless_player) |
 | Gapless turned off (`G0`) | nothing follows any more, and the engine is off: cut, and N ends as in v0.5.0. Trimming stays as it was for tracks already open (`Gt` applies at the next open) |
 | The sleep timer's end chosen or its kind changed (End of track, album, queue) | section 5.4 |
 | "Pause after this track" (`setPauseAfterTrack(true)`) | nothing follows: cut, N drains, `Ended`, `pauseAtBoundary()` as before |
@@ -1101,6 +1149,7 @@ applies to the track that now plays.
 | Where | What |
 |---|---|
 | `audio/Core2AudioBackend` | the decode task driving `GaplessEngine` (and reporting its phases), `GaplessEngine::Tracks` (probe, start, close, the `[gapless]` log), `prepare()`/`beginPrepared()` (the file's rate, length, LAME tag and trim, the header frame skipped, `GuardedSource`, the ID3 tags skipped, a FLAC's metadata size), the heard record through `GaplessJoin` (`positionMs()`, `durationMs()`, `startOffsetMs()`, `durationKnown()`, `description()`, `note()`), `setNext()`/`takeAdvance()`, `trackSeq()`, the PSRAM at `begin()`, the tables' copy kept during a chain, `setGapless()`/`setGaplessTrim()`, `printGapless()` |
+| `audio/OpusGenerator` | an Ogg Opus track that trims itself (section 4.7): `TrimFeed` armed `{0,0}`, the join's rate 48,000 from the open, its own early-end hook |
 | `audio/GuardedSource` (new) | 8 zero bytes at the end of the file (section 4.3) |
 | `audio/RingOutput` | `TrimFeed` in front of `RingFeed` |
 | `main.cpp` | the `NextGate` (`SleepGate`), `trackSeq()` for the sleep timer's and the learned lengths' `EntryStart`, the console's `G` and `Gx` |
@@ -1660,8 +1709,14 @@ next file (it needs a file renamed on the card); the hold's cost by
   landed above 0x3FA00000 (1.7-3.6x there, 4.7-5.0x below); it is now
   one block allocated at boot in the lower 2 MB, shared by every MP3
   track one at a time, decode-ahead included (RESAMPLER.md section 10d).
-  Left: about ±3 % from the code layout (pinning ESP8266Audio's code and
-  tables at the front of flash could take that too), and FLAC, whose
+  Then the code layout: libmad's synth loop put three lines in 13-14 sets
+  of the flash cache in the seek bar's and Opus's builds (3.8x against
+  4.8x). Fixed: its code and tables are pinned at the front of flash, and
+  a build that would undo that fails (RESAMPLER.md section 10e). On
+  playback the trim's per-sample call (`TrimFeed::consumeTrimmed`, for
+  every MP3 with a LAME tag's padding to hold back) was one of the three
+  in 0.6.0's own layout; it is pinned with the rest. Left: about ±3 %
+  from layer III's code and tables, which still move, and FLAC, whose
   state libFLAC allocates itself, shows the same effect, smaller
   (4.3-4.5x against 4.7-4.9x with 1.3 MB of PSRAM held).
 - **The last-frame fix (`GuardedSource`) changes every MP3's end, also

@@ -29,7 +29,8 @@ class Input;
 //                 landing on the glass ends the pocket rule;
 //   step()        the countdown, what keeps it lit, and what holds a lit
 //                 screen lit (a countdown toast: the idle power-off's
-//                 warning, the sleep timer's fade); a change is applied
+//                 warning, the sleep timer's fade; the Pair screen's
+//                 search, its 2 minutes at most); a change is applied
 //                 and logged. Off: onDark(true) (the UI stops drawing),
 //                 then the backlight off and sleep-in. Awake again:
 //                 sleep-out with the backlight still off, 5 ms (the
@@ -57,9 +58,18 @@ public:
 
   void beginPass(uint32_t nowMs);
   void afterInput(uint32_t nowMs);
-  // `holdLit`: a toast with a countdown is up (ScreenPower's holdLit: a
-  // lit screen stays bright until it ends, an off one stays off).
-  void step(uint32_t nowMs, bool keepLit, bool holdLit);
+  // What holds a lit screen lit (ScreenPower's holdLit: it stays bright
+  // until the hold ends, then the countdown from there; an off one stays
+  // off; one under the pocket guard isn't held). Which one, for the log.
+  //   Toast       a toast with a countdown is up (the idle power-off's
+  //               warning, the sleep timer's fade): the listener may be
+  //               reading it
+  //   PairSearch  the Pair screen's search runs (Ui::pairSearching(), 2
+  //               min at most): the listener watches the list for the
+  //               headphones, and taps it; dim, the screen swallowed
+  //               those taps as wakes, and off, it stopped the search
+  enum class Hold : uint8_t { None, Toast, PairSearch };
+  void step(uint32_t nowMs, bool keepLit, Hold hold);
 
   // Something needs the listener: lit (if dim or off), and the whole
   // countdown again. Logged when it was a wake.
@@ -140,5 +150,6 @@ private:
   int8_t usb_ = -1;              // USB power present (ACIN or VBUS); -1 not read yet
   bool woken_ = false;           // takeWoken()
   bool inputSeen_ = false;      // takeInput()
-  bool held_ = false;           // held lit by a countdown toast (for the log)
+  Hold hold_ = Hold::None;      // this pass's hold (for logChange())
+  Hold held_ = Hold::None;      // what holds the screen lit now (for the log)
 };

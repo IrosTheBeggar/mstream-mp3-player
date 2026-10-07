@@ -737,6 +737,14 @@ void test_an_anchor_is_checked_against_the_file() {
   x = a;
   x.kind = ResumeAnchor::Kind::Flac;
   TEST_ASSERT_EQUAL_INT(static_cast<int>(AnchorCheck::Kind), static_cast<int>(check(x)));
+  // An Opus track's anchor is the reader's to check (oggopus::checkAnchor(),
+  // test_ogg_opus): the MP3 check refuses it by its kind, however its
+  // fields read.
+  x = a;
+  x.kind = ResumeAnchor::Kind::Opus;
+  x.rate = 48000;
+  x.prerollByte = x.frameByte = x.skip = 0;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(AnchorCheck::Kind), static_cast<int>(check(x)));
 }
 
 // No plan: a VBR file without a header or a length (unplaced), bytes that

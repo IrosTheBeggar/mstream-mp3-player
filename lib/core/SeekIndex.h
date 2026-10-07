@@ -23,8 +23,11 @@ class TrimFeed;
 // decoded ahead. A request resets both (after its own lookup) and decodes
 // into one; a join decodes into the other (beginJoin()); the advance makes
 // it the heard one (advance(), with the boundary book's); a cut clears it
-// (cut()). A FLAC run has no entries (libFLAC seeks by sample itself): its
-// header makes its anchors.
+// (cut()). A FLAC or Opus run has no entries (libFLAC seeks by sample
+// itself; the Opus reader plans a start by a bisection on the pages'
+// granule positions, lib/core/OggOpus): its header makes its anchors, the
+// sample with the file's size and its length (docs/SEEK.md section 4.4,
+// docs/OPUS.md).
 //
 // Times are samples on the run's timeline at the file's rate: the trimmed
 // timeline (docs/GAPLESS.md section 4.6) for a run from the top or by an
@@ -48,7 +51,7 @@ public:
   // A preroll further back than this isn't used (trackseek's check).
   static constexpr uint32_t kMaxPrerollSpan = 65536;
 
-  enum class Kind : uint8_t { None, Mp3, Flac };
+  enum class Kind : uint8_t { None, Mp3, Flac, Opus };
   struct Run {
     Kind kind = Kind::None;
     uint32_t gen = 0;         // the request's generation (TransportSync)
@@ -58,7 +61,7 @@ public:
     uint32_t spf = 0;         // MP3
     uint64_t base = 0;        // the timeline's sample of the run's first kept sample
     bool exact = false;       // the timeline is the file's own (see the class)
-    uint64_t totalSamples = 0;  // FLAC: STREAMINFO's
+    uint64_t totalSamples = 0;  // FLAC: STREAMINFO's; Opus: the exact trimmed length (the tail scan's; 0: not known)
     // MP3: the frame the run started on, as an entry the ring can't
     // overwrite: the first audio frame from the top (t0 = -(delay + 529)
     // with LAME's tag, its preroll itself), or a plan's landing frame (its

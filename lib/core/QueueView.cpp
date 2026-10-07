@@ -124,20 +124,16 @@ bool KeyRing::has(uint32_t key) const {
   return false;
 }
 
-// ---- shuffle ----
+// ---- UndoWatch ----
 
-void shuffle(uint32_t* ids, uint32_t n, uint32_t seed) {
-  if (!ids || n < 2) return;
-  uint32_t x = seed ? seed : 1u;
-  for (uint32_t i = n - 1; i > 0; --i) {
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    const uint32_t j = static_cast<uint32_t>((static_cast<uint64_t>(x) * (i + 1)) >> 32);
-    const uint32_t t = ids[i];
-    ids[i] = ids[j];
-    ids[j] = t;
-  }
+UndoWatch::Gone UndoWatch::pass(bool shuffled, bool undoToast, QueueModel::Edit undoable) {
+  changed_ = shuffled != last_;
+  last_ = shuffled;
+  const bool undone = undone_;
+  undone_ = false;  // (told once: a later pass's toast is another's)
+  if (!undoToast || undoable != QueueModel::Edit::None) return Gone::Stays;
+  if (undone) return Gone::Undone;
+  return changed_ ? Gone::Toggle : Gone::Stays;
 }
 
 }  // namespace queueview

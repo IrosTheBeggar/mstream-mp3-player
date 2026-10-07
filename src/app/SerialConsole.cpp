@@ -91,8 +91,8 @@ void SerialConsole::key(char c) {
         actions_.playIndex(static_cast<int>(arg_.toInt()));
         break;
       case Pending::Bench:
-        Serial.printf("> bench %ld\n", arg_.toInt());
-        actions_.bench(static_cast<int>(arg_.toInt()));
+        Serial.printf("> bench %s\n", arg_.c_str());
+        actions_.bench(arg_.c_str());
         break;
       case Pending::HeadphonesName:
         Serial.printf("> headphones name \"%s\"\n", arg_.c_str());
@@ -189,6 +189,10 @@ void SerialConsole::key(char c) {
         Serial.printf("> gapless \"%s\"\n", arg_.c_str());
         if (actions_.gapless) actions_.gapless(arg_.c_str());
         break;
+      case Pending::Opus:
+        Serial.printf("> opus \"%s\"\n", arg_.c_str());
+        if (actions_.opus) actions_.opus(arg_.c_str());
+        break;
       case Pending::None:
         break;
     }
@@ -231,6 +235,7 @@ void SerialConsole::key(char c) {
     case 'B': pending_ = Pending::BluetoothTest; arg_ = ""; break;
     case 'R': pending_ = Pending::Rate; arg_ = ""; break;
     case 'G': pending_ = Pending::Gapless; arg_ = ""; break;
+    case 'O': pending_ = Pending::Opus; arg_ = ""; break;
     default: break;  // newlines etc.
   }
   if (pending_ != Pending::None) pendingKey_ = c;

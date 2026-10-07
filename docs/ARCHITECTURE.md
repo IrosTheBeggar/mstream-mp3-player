@@ -1,7 +1,7 @@
 # Architecture
 
 A portable music player on the M5Stack Core2 (original ESP32, 16 MB flash,
-8 MB PSRAM). It plays MP3 and FLAC from local storage to Bluetooth headphones
+8 MB PSRAM). It plays MP3, FLAC and Opus from local storage to Bluetooth headphones
 or the built-in speaker, and will keep its library in sync with an
 [mStream](https://mstream.io) server over WiFi.
 
@@ -25,12 +25,12 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  TouchCalibration  TouchCheck  TouchRecognizer  ButtonGesture |
               |  ButtonPolicy  InputEvent                                     |
               |  NavModel  FrameClock  ListLayout  BitSet  TextFit            |
-              |  TabBarModel  TrackProgress  JumpIndex                        |
+              |  TabBarModel  TrackProgress  JumpIndex  OggPage  OggOpus      |
               |  ThumbCache  ThumbScaler  JpegInfo                            |
               |  OutputModel  PlayGate  QueueView  PowerWindow                |
               |  ScreenPower (and WakeLatch)  AmpGate                         |
               |  SleepTimer  FadeStage  IdlePolicy  QueueSaver                |
-              |  PowerChoices                                                 |
+              |  PowerChoices  TrackName                                      |
               |  HopFrontEnd  HostLine  HostLink  HostClock (USB visualizer)  |
               +------------------------------+--------------------------------+
                                              |
@@ -95,7 +95,9 @@ used to malloc it per track: above 0x3FA00000 the same file decoded at
 1.7-3.6x realtime instead of 4.7-5.0x, depending on the address and the
 image ([RESAMPLER.md](RESAMPLER.md) section 10d). Its input buffer and
 stream state (4.1 KB) stay per-track allocations in internal RAM, as
-before. The boot log says where the block is (`[audio] MP3 decoder
+before. Its synthesis loop's code and tables in flash have fixed places
+too, for the same reason ([Build notes](#build-notes); RESAMPLER.md
+section 10e). The boot log says where the block is (`[audio] MP3 decoder
 state: 25056 B pinned at 0x3f808e80, PSRAM, its lower 2 MB`), and so
 does every MP3 bench (`b<n>`); a track that can't have it (none at boot)
 decodes on ESP8266Audio's own malloc, logged.
@@ -163,7 +165,8 @@ The rules that keep it deadlock- and glitch-free:
   The decode task re-checks requests and yields between passes.
 - **A track can start part of the way in** (`play()`'s `StartAt`: the
   resume point, below under Library and queue, or a seek: the console's
-  `qs`; [SEEK.md](SEEK.md) is the design and its measurements;
+  `qs`, and Now Playing's seek bar ([SEEK-BAR.md](SEEK-BAR.md));
+  [SEEK.md](SEEK.md) is the design and its measurements;
   `lib/core/TrackSeek`, `SeekIndex`, `ResumeAnchor`, host-tested in
   test_track_seek and test_seek_index). The tail rule first: a start in
   the last 5 s, at the end or past it (a file that got shorter) starts at
@@ -238,6 +241,46 @@ The rules that keep it deadlock- and glitch-free:
   reads and the preroll. Before this the device measured FLAC 0 ms, CBR
   MP3 30-50 ms behind (a cold start's lost frame) and a LAME VBR MP3 by
   its TOC -0.29 to +0.35 s of a 3:44 track.
+- **Opus** ([OPUS.md](OPUS.md)): an Ogg Opus file is read by our own
+  reader (`lib/core/OggPage`, `OggOpus`, host-tested in test_ogg_opus on
+  synthetic files, and on real files with the real decoder by
+  `tools/opus_check`) driving the libopus that ESP8266Audio bundles
+  (`src/audio/OpusGenerator`; its own `AudioGeneratorOpus` is never
+  linked). The reader checks every page's CRC, hands the packets over
+  split into frames (one decode call a frame), and keeps the track
+  sample-exact from the file alone: the pre-skip and the EOS page's trim
+  (its `Timeline`), the exact length at the open from the last page (a
+  tail scan, or a bisection by serial number for a chained file, whose
+  first link plays), a gap after a damaged page sized from the next
+  page's granule and filled by the generator (concealment, then silence)
+  so the count never slips. A start part of the way in is a plan
+  (`planStart()`: a bisection by granule to the last page before the
+  target less a preroll of 200 ms for a seek or 600 ms for a resume
+  point, the packets before it skipped undecoded, the samples before the
+  target dropped: exact, as a FLAC's) and its resume anchor is the FLAC
+  model's (`ResumeAnchor::Kind::Opus`, `oggopus::checkAnchor()`, the NVS
+  blob's kind 3); the backend plans in `prepare()`
+  (`Core2AudioBackend::planOpus()`: the anchor first, then the
+  millisecond with the tail rule) and the generator begins by the plan
+  (OPUS.md section 9), so `qs`, the seek bar and the boot's resume point
+  land on the sample asked and the seek bar shows its knob on an Opus
+  track as on an MP3. What an open learns (the headers, g0, the exact
+  length, the last page) is kept per path in the backend's open cache
+  (`lib/core/OpusOpenCache`, PSRAM, persisted as `/.player/opus.idx`), so
+  the next open of the file, a seek's or a boot's, is one read checked
+  against the BOS page (OPUS.md section 10). Every Opus track is
+  48 kHz, so it goes through the converter's block path
+  (`RingFeed::writeBudgeted()`), and joins the next track as a 48 kHz
+  track does (one stream to another Opus, the tail then a new stream to a
+  44.1 kHz MP3; GAPLESS.md section 4.7). The library lists `.opus` files
+  (`LibraryIndex::Format::Opus`; the cache's version went to 3 for them,
+  and to 5 when the file-name rules were merged in: "Names" under
+  "Library and queue", which read an `.opus` name as the other formats')
+  and refuses none at the index: surround files, frames under 10 ms and
+  other Ogg codecs are refused at the open, with a note. A decode pass
+  ends on time (15 ms,
+  with the audio pages read in 8 KB slices), so the UI loop keeps its turn
+  on the shared core (OPUS.md gate G6).
 - **Requests are generations.** `play()`/`stop()` post a new generation to
   `TransportSync`; the decode task's progress reports for anything older are
   dropped, so a stale "ended" can't skip the track that was just requested.
@@ -286,11 +329,13 @@ The rules that keep it deadlock- and glitch-free:
   goes straight into the stage, as before the converter; frames at another
   rate are held 32 at a time and converted as a block, on the ESP32 by a
   MAC16 assembly kernel that a self-test at boot checks against the C one,
-  bit for bit, with the filter tables copied into internal RAM while a
-  track at another rate plays (7.6 KB: copied when one starts, freed when
-  a request starts a 44.1 kHz track, never during a chain of gapless joins
-  (a cut's rewind may need its rows), read from flash when there's no room;
-  RESAMPLER.md section 10c). `RingOutput`
+  bit for bit, with the filter tables copied out of flash while a track at
+  another rate plays (7.6 KB, into a PSRAM block pinned beside the
+  decoder's state, or into internal RAM with the console's `Ot0`: OPUS.md
+  section 8.11; copied when one starts, freed when a request starts a
+  44.1 kHz track, never during a chain of gapless joins (a cut's rewind
+  may need its rows), read from flash when there's no room; RESAMPLER.md
+  section 10c). `RingOutput`
   (3.1 KB) must stay in internal RAM, so it is asserted under 4 KB (the
   framework puts a `new` of 4 KB or more in PSRAM). The console's `R` shows
   the current track's conversion (source frames taken, ring frames made,
@@ -575,7 +620,9 @@ out what it returns.
   spinlock, connecting to none (the library would connect to the first
   that matches), while the background search is held off (the Pair page
   stops it after 2 min, `PairSearch`, checked every UI pass so a dialog
-  over the page doesn't keep it running, or when the screen goes off, and
+  over the page doesn't keep it running, or when the screen goes off; it
+  holds a lit screen lit meanwhile, `Ui::pairSearching()`, see "The
+  screen's power" under UI; then it
   offers "Search again": **pausePairScan()**, which keeps the background
   search held off while the page is up, so the old headphones aren't
   paged while new ones are picked; closing the page without a pairing,
@@ -589,6 +636,31 @@ out what it returns.
   ends the pairing the same way. The Pair list leaves out the headphones
   linked now (multipoint sets stay discoverable; "pairing" with them only
   let them go), and picking them anyway just makes them the output.
+  **Each search is in the serial log** (`PairFinds`, host-tested): the
+  BTC task posts every result, audio or not, into a ring in PSRAM
+  (one copy under the scan's spinlock; it never prints: it runs the audio
+  too), tagged with the loop's count of searches opened and closed, so a
+  result the inquiry still delivers after its search ended is nobody's.
+  The loop drains it every pass (`BtSink::update()`), tells the results
+  apart by address (48 devices a search; past those only counted), and
+  prints one line per audio device the first time the search sees it,
+  `[bt] pair: found "<name>" (headphones, class 0x240404), rssi -62, the
+  remembered headphones [<address>]` ("(no name)" without one; "linked
+  now: not listed" for the headphones linked now), one more when a
+  nameless one's name comes later, and nothing for repeats or other
+  devices. That name mostly comes as a result of its own: a device that
+  answers the inquiry without its name in the EIR is asked for it once
+  the round ends (Bluedroid's remote name request), and the answer is a
+  result with the name only (no class, no RSSI); the line prints the class
+  and RSSI the device was found with. (The list keeps "(no name)" for it:
+  a name alone isn't listed.) Whatever ends the scan ends its log with a
+  summary (startPairScan() opens it; pausePairScan(), stopPairScan(),
+  pairWith(), connect() and disconnect() close it): `[bt] pair: the
+  search saw 9 devices in 81 s, 2 of them audio: "SPYDRONE" (remembered),
+  (no name); 41 inquiry results`, or `the search saw nothing in 120 s
+  (not one inquiry result)`, with any results the ring lost. Before it, the
+  results only filled the list, and a search that failed couldn't tell
+  "saw them and missed them" from "saw nothing" (2026-10-04).
   Forget from the screen forgets and disconnects, no restart, and **for
   good**: a saved flag (NVS `bt_forgot`) stops every scan by name in a
   build with a name (the boot's, the search's with none remembered, a B
@@ -1011,8 +1083,10 @@ VFS's `readdir`, which names each entry and says whether it's a folder, rather
 than Arduino's `File::openNextFile()`, which opens every entry and so searches
 its directory again for each file (the UI spike measured that walk at ~5.7 ms a
 file). The player's own files live in `/.player` on the same volume:
-`library.idx` (the index's cache), `queue.txt`, and `thumbs/` (the album
-covers' thumbnails, below).
+`library.idx` (the index's cache), `queue.txt`, `opus.idx` (the Opus open
+cache: what an open learnt about each `.opus` file, so the next open of it
+is one read; OPUS.md section 10) and `thumbs/` (the album covers'
+thumbnails, below).
 
 **A card that isn't FAT32.** The framework's FatFs is built without exFAT
 and without GPT (`FF_FS_EXFAT 0`, `FF_LBA64 0`), so such a card doesn't
@@ -1022,16 +1096,55 @@ mount, and most cards of 64 GB and up come exFAT. When `SD.begin()` fails,
 `cardformat` (lib/core, host-tested in test_card_format on synthetic
 sectors) says what it is: an exFAT boot sector at LBA 0, an MBR partition
 of type 0x07 whose first sector is exFAT's ("EXFAT   ") or NTFS's, or a
-GPT's protective MBR (a partition of type 0xEE). Any of those and the
-no-card state of Now Playing, the Library and the Queue reads "This card
-isn't FAT32" ("Format it FAT32 (MBR) on a computer, then put your music in
-/music and tap Try again."), not "No microSD card"; with no card, or
-nothing recognised (a FAT card that failed for another reason), the plain
-message stays. Try again reads the sectors again when the card still
-doesn't mount, so its note follows what is in ("Still not FAT32: ..." or
-"Still no card: ..."). The texts are measured in test_ui_library. The log:
-`[storage] no card mounted; its first sectors: exFAT: not FAT32 (MBR), the
-pages say so (<n> ms)`. Console `uiFf` shows the state without such a card.
+GPT's protective MBR (a partition of type 0xEE). The no-card state of Now
+Playing, the Library and the Queue then names it, one message per kind
+(`uitext::cardMessage()`, the icon amber when a card is in):
+
+| What the sectors say | Title | Lines | Try again's note |
+|---|---|---|---|
+| nothing read: no card | No microSD card | Insert a card with your music in /music, as /music/Artist/Album/01 - Title.mp3 | Still no card: is it all the way in? |
+| exFAT | This card is exFAT | Format it FAT32 (MBR) on a computer, then put your music in /music and tap Try again. | Still exFAT: format it FAT32 (MBR) |
+| NTFS | This card is NTFS | (the same) | Still NTFS: format it FAT32 (MBR) |
+| GPT | This card uses GPT | Erase it on a computer as FAT32, with a Master Boot Record (MBR); then tap Try again. | Still GPT: erase it with an MBR |
+| read, nothing recognised | Can't read this card | Unformatted, damaged, or not FAT32 (MBR)? Check it on a computer, then tap Try again. | Still can't read it: check it on a computer |
+
+The last covers a blank or unformatted card, Linux's, and a FAT card that
+failed to mount for another reason (a flaky contact, say), so it never says
+"format it": that card may hold music a second Try again finds. GPT's text
+uses macOS Disk Utility's words ("Master Boot Record" is its Scheme), since
+a card a Mac erased whole is the usual GPT one. Try again reads the sectors
+again when the card still doesn't mount, so its note follows what is in.
+The texts are measured in test_ui_library; test_card_format checks that
+each kind has its own. README's microSD section, the install page and the
+release notes give the steps per computer (Windows 11's `format` since
+KB5089549, FAT32 Format on Windows 10 or where `format` still refuses,
+`diskpart` for a GPT card on Windows, Disk Utility or `diskutil`, `parted`
+and `mkfs.fat` after an unmount). The log: `[storage] no card mounted; its first
+sectors: exFAT: not FAT32 (MBR); the pages say "This card is exFAT" (<n>
+ms)`. Console `uiFf`, `uiFt`, `uiFg` and `uiFu` show the exFAT, NTFS, GPT
+and can't-read states without such a card (`uiFn`: no card).
+
+**Never `format_if_empty`.** `SD.begin()`'s last argument stays false:
+true makes the SD driver's `sdcard_mount()` run `f_mkfs(FM_ANY)` on any card
+FatFs finds no FAT volume on (`FR_NO_FILESYSTEM`), which is every exFAT,
+NTFS, GPT and blank card: someone's music wiped at boot without a word.
+
+**The card's size, not its free space.** About's "microSD card, <n> GB"
+is `SD.cardSize()`: the sector count from the card's CSD that the SD driver
+read at the mount and keeps, so About's 3 s refresh never touches the card.
+It used to be `SD.totalBytes()`, which (like `usedBytes()`) is FatFs's
+`f_getfree()`: on FAT32 it takes the free count the mount read from the
+FSINFO sector, but a card whose count is unset (0xFFFFFFFF, "unknown") or
+whose FSINFO is missing makes it count the free clusters, every FAT sector
+(~244k reads on a 1 TB card: minutes, estimated), holding the volume's lock
+throughout; the decode task's reads would fail after
+`CONFIG_FATFS_TIMEOUT_MS` (10 s, `FR_TIMEOUT`) and the music stop. The size
+shown is now the card's rather than the volume's data area, ~0.03% more on
+a big card. The flash fallback's size is its partition's
+(`esp_partition_find_first()`), not `LittleFS.totalBytes()`, which walks
+the whole file system for a used count it throws away. Nothing needs the
+free space yet; the WiFi sync will, and must count it once, in one
+controlled scan with progress, outside playback and never at boot.
 
 ## The board guard
 
@@ -1149,13 +1262,20 @@ absent (a fresh NVS, or v0.5.0-beta.1's, which had no number and whose
 layout is schema 1's) it is written; older, `migrate(from, to)` runs and
 then the number is written (a failed step leaves the old number, so the next
 boot tries again); newer (a downgrade) it is left alone. The boot log says
-which (`[nvs] schema 1`). Schema 1 is v0.5.0's layout, which is
+which (`[nvs] schema 2`; once, on a unit from before it, `[nvs] schema 1 ->
+2: migrated`). Schema 1 is v0.5.0's layout, which is
 beta.1's plus one blob that its own version byte covers, not the number:
 the resume point (`queue`/`resume`) is beta.1's 20-byte form (version
 0) until v0.5.0 first saves, then version 1's 24 bytes, and since its
 resume anchor (SEEK.md section 5.2) version 2's 64 bytes. So a schema-1
 unit holds any of the three, and every reader of schema 1 (and any
-`migrate(1, ...)` step) must take them all. `migrate()` has no step yet.
+`migrate(1, ...)` step) must take them all. Schema 2 (from 0.7.0) is
+schema 1's keys and `queue`/`repeat`, the repeat mode (a u8: 0 Off, 1 All,
+2 One; [QUEUE-MODES.md](QUEUE-MODES.md) section 3.6): a new key is a layout
+change, so the number moved. Its `migrate(1, 2)` step, the first, does
+nothing: an absent key reads as Off. Older firmware leaves a schema-2 NVS
+as it is (`... newer than this firmware's 1 (a downgrade)`), never reads
+the key, and its queue wraps at the end as it always did.
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
@@ -1181,11 +1301,12 @@ The rules:
   atomic.
 - Keys are at most 15 characters (NVS's limit).
 
-The keys of schema 1, by namespace: `meta` (schema); `input` (cal,
+The keys of schema 2, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
 ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu_mhz,
 bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
-(coach); `queue` (gen, pos, resume). The Bluetooth stack keeps its bonds in
+(coach); `queue` (gen, pos, resume, and schema 2's repeat). Schema 1's are
+the same without `queue`/`repeat`. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
 
 ### Moving an existing unit to the new layout
@@ -1267,7 +1388,7 @@ a beta); the README has how to cut one.
   changed). With no `v*` tag reachable, `--always` gives only a hash, and
   the build reads `v<NEXT_RELEASE>-dev+abc1234[-dirty]`; `NEXT_RELEASE`, at
   the top of the script, is the only place a version is written by hand.
-  Without git at all: `v0.6.0-dev+nogit`.
+  Without git at all: `v0.7.0-dev+nogit`.
 - **One file recompiles.** The script writes
   `$BUILD_DIR/generated/PlayerVersion.h` (`PLAYER_VERSION`, the commit,
   its date and time in UTC), rewritten only when its text changes, and
@@ -1373,18 +1494,138 @@ the browsing UI hold its **track ids**, never strings.
   (`treeTracks()`: its own files A-Z, then each subfolder's tree), which is
   what a folder's Play plays. (The cache file's version went to 2 with the
   36-byte folder record: an old cache is rebuilt once.)
-- **The queue** (`QueueModel`, host-tested): track ids in a PSRAM array (8 B an
-  entry with its key), a current position, and one level of undo. Its edits
+- **Names** (no tags are read yet). The artist is the depth-1 folder, the
+  album the depth-2 one. A track's disc, number and title come from its
+  file name, read with the other names in its folder when the build
+  finishes (`trackname::Folder`, host-tested in test_track_name; the
+  index's `readNames()` gives it each folder's files, one run of the
+  tracks-by-folder view). The title stays a slice of the file name, so the
+  24-byte track record only gained `disc` (its spare byte). The shapes, and
+  how many of a real library's 19,371 MP3 and FLAC names each one changed
+  (measured over the names only, by a mirror of the first cut of these
+  rules; the review's fixes, marked "since", were not measured again, and
+  they make the artist-number rule read fewer names):
+  - `06 - Title`, `06. Title`, `06_Title`: up to three digits (at most 255) and
+    a separator, as before; now also `(06) Title` and `[06] Title` (72
+    names). Four digits are no number (`1999 - Title`).
+  - `1-01 Title`, `2-03 - Title`, `2.04 - Title`, `1-5. Title`: disc and
+    number (229 names in 16 folders; before, every disc-1 track read as
+    number 1, titled "01 Title"). Only when every name in the folder that
+    starts with a digit has this shape, two at least, so a lone `1-02
+    Title`, `09-10 Live` among `01 Intro`s, `1-800 Hotline` and the
+    scene-style `01-404-name` read as before (`1-800 Hotline` as track 1,
+    "800 Hotline", by the plain rule). `2-04 04-Title` drops the number
+    written again (20 names, all joined by `-`); since, only when `-`, `_`
+    or `.` joins it and at least half the folder's disc-track names repeat
+    theirs, so `1-10 10 Paper Kites` keeps its title.
+  - `101 Title`, `204-title`: disc and number from three digits (143 names
+    in 7 folders), the same folder rule, and each disc's numbers start at 0
+    or 1 (`365 Steps` beside `500 Stairs` is no box set). 301 and up had no
+    number before, so a third disc played first.
+  - `Artist - 03 - Title`, `Artist - Album - 03 Title`, `CD2 - 03 - Title`
+    (1,260 names in the first cut): the first ` - ` followed by 1-3 digits
+    and a separator, not a number that runs on (`Artist - 1-800 Lanterns`,
+    `- 24-7`, `- 1.5 Hours`). A disc comes from the end of the part before
+    it: the whole part (`CD2`, `Disc 2`, `Disk 2`: 15 names whose numbers
+    restart), its last ` - ` part (`Album - CD2`) or a bracketed one
+    (`Album (Disc 2)`, `Album [CD 2]`). Read when the part before it
+    - starts with the folder's artist (`textfold::startsWithName()` at one
+      of its ` - `s, so `Artist feat. Guest - Album - 02 Title` and an
+      artist `A - B` count; a name that starts with a digit only so:
+      `10 Lanterns - 01 - Title`, whose digits then never read as a
+      number) and the rest of it, past the artist and a disc, is the same
+      in every such name of the folder; or
+    - is a disc part alone, or is the same, past a disc, in every name of
+      the folder;
+    and the numbers are a track list's: ` - ` follows the number, or the
+    folder has two such names, at least half of it, with no number twice
+    on a disc (two names alike but for the extension are a copy, not a
+    repeat) and the lowest 0 or 1 or one written `0N`. Since: the "same
+    rest" part (two albums, EPs or works numbered from 1 in one folder,
+    `Artist - Suite No. 1 - 1. Overture` / `No. 2 - 1. Overture`,
+    interleaved before it; now they keep their file names' order, as
+    before this rule), the track-list test (a single's `Artist - 7 Kites`
+    beside `7 Kites (Instrumental)` lost its 7), ` - ` rather than any `-`
+    after the number, and the digit-led artists. `Artist - 99 Lanterns`
+    among `Artist - Title` names keeps its title.
+  - The artist off the title: `03 - Artist - Title` shows "Title" when the
+    part before a ` - ` is the folder's artist as `textfold::sameName()`
+    compares them (Full folding and lower case, letters and digits only,
+    so the `/ : ? " * < > |` a FAT name can't hold don't count, and one
+    leading "The"), something follows, and no shorter part before a ` - `
+    is (2,667 names: 2,615 after a plain number, the rest after the other
+    rules; since, past later ` - `s too, for an artist named `A - B`).
+    `Title - Live` and a compilation's `Other Artist - Title` stay whole:
+    the index has no track artist to put "Other Artist" in (161 such names
+    sit in "Various Artists"-like folders, 213 more start with the artist
+    and a guest), so that waits for the tags.
+  - In all, 4,319 names (22 %) read differently: 4,186 titles, 1,677
+    numbers, 387 now have a disc; 6 folders play in another order. Of the
+    24 folders where a number came twice, 12 are fixed; 6 hold two copies
+    of the same tracks, and 6 hold two discs numbered from 01 with nothing
+    in the names to tell them apart, which only the tags' disc numbers
+    can order. Disc subfolders (`CD1`, `CD2`: 30 albums, none past `CD9`)
+    already played folder by folder.
+  - **Sort names** (`textfold::sortName()`): the Artists and Albums lists,
+    an artist's albums, their A-Z rail buckets and jump grid
+    (`LibraryPage::railName()`) and an artist row's initial go by the name
+    past one leading article: mStream's list (its `orderName`), the, el,
+    la, los, las, le, les, not "A"/"An". "The Lantern Choir" is under L, its
+    name shown whole; names that sort alike go by their whole names
+    (`compareSorted()`). On that library: 59 of 705 artist folders, 126 of
+    1,730 album folders. The Folders view, `findTrack()` and the tree keep
+    the names as they are.
+  - The cache's version went to 4 for these on their branch, and to 5
+    when they merged with feature/opus, whose version 3 lists `.opus`
+    tracks: the two had the same record sizes and path signature, so a
+    card that ran one build would have loaded the other's cache as its
+    own (the old names, or no `.opus` tracks, and a rail out of step with
+    the order), and each refused the other's version. Now a cache of
+    version 2, 3 or 4 loads as `Outdated` and is rebuilt once. The rules
+    read an `.opus` name as an `.mp3`'s or a `.flac`'s: `readNames()`
+    runs over every track the extension list accepted, and
+    test_library_index has each shape in the three formats, mixed in one
+    folder.
+- **The queue** (`QueueModel`, host-tested): track ids in a PSRAM array (12 B an
+  entry with its key and its rank), a current position, and one level of undo. Its edits
   are the design's Library and Queue actions: Play (replace the queue, start at
   a track), Play next (after the current entry), + Queue (append), remove a
   selection, move a selection after the current entry, Clear up next (keeps
   what plays and what played), Clear. Each entry has a **key** given when it
   joins and never reused, so the UI can keep a selection or a row across edits.
   Each edit saves a snapshot first; undo puts the queue back, keeping what
-  plays current if it was in the queue then.
+  plays current if it was in the queue then. **Shuffle** ([QUEUE-MODES.md](QUEUE-MODES.md)
+  section 2) reorders the entries themselves, so a position is a play
+  position everywhere (the Queue tab shows the order that plays, the saver
+  writes it, `step()` and `peek()` walk it): on, what is up next is
+  shuffled (Fisher-Yates, `lib/core/Shuffle.h`, seeded from `esp_random()`)
+  and the current entry and what played stay put; each entry's **rank** is
+  its place in the queue's own order, and off sorts back by rank, the
+  current entry in its own place. A toggle is no edit: it drops the undo
+  and allocates nothing. A snapshot carries the mode it was taken in and
+  undo puts it back: Shuffle all's Play turns shuffle on as part of the
+  edit (`replace(.., shuffled)`), so its Undo puts back the old queue and
+  the mode it had. While shuffled, Play puts the chosen track first
+  (a container's Play, `kAnyStart`, a random one) and shuffles the rest
+  after it, the ranks the given order; Play next ranks right after the
+  current entry and + Queue after the highest rank, never shuffled in (the
+  listener put them there); a move to play next ranks the moved right after
+  the current entry; an add to an empty queue is laid out as a Play from
+  its first.
 - **Transport** (`PlaybackController`) plays the queue's current entry through
-  the catalog and keeps its rules: prev/next and a track's end wrap around the
-  queue (`setRepeat(false)` stops at the end instead), a track that can't be
+  the catalog and keeps its rules. **Repeat** (`setRepeat()`: Off, All or
+  One; QUEUE-MODES.md section 3): a natural end follows the mode, a skip
+  wraps unless the mode is Off. All goes from the last entry to the first,
+  gaplessly; One plays the entry again at its natural end (gaplessly: the
+  word is the entry itself, the self-join a queue of one on repeat always
+  had, a new token each loop; `repeats()` counts them), and next, prev and
+  a failure still move; Off stops on the last entry at its end (and next
+  there stops too; prev at the first plays the first again). The firmware
+  sets the saved mode at boot (Off unless changed: an updated unit stops at
+  the end of its queue where it used to wrap); the engine's own default is
+  All, as the host tests have it. `setShuffle()` toggles the queue's order
+  as an action: the same entry stays current in the same state, the word
+  on what follows moves to the new next. A track that can't be
   played is skipped, and once every track in the queue has failed in a row it
   stops. **Prev restarts a track past its first 3 s** (`prevRule()`,
   host-tested in test_playback; every prev: the A click, Now Playing's, the
@@ -1431,15 +1672,24 @@ the browsing UI hold its **track ids**, never strings.
   track, play/pause cancels the wait (Paused); `release()` plays what waits,
   `cancelWait()` ends it paused (`PlayGate` decides which: see Bluetooth). For the sleep
   timer: `setPauseAfterTrack()` (at the track's natural end the next entry
-  is cued and it stays paused at 0:00; at the queue's end without repeat,
-  the natural stop; `timerStops()` counts them) and `pauseByTimer()`
+  is cued and it stays paused at 0:00; at the queue's end with repeat Off,
+  the natural stop; with Repeat One the same entry is cued at 0:00: the
+  timer wins, and `SleepTimer::lastOfQueue()` makes that track the
+  boundary for End of album and End of queue; `timerStops()` counts them) and `pauseByTimer()`
   (playing pauses, a wait ends paused); both mark the pause
   `pausedByTimer()` until any play.
 - **Persistence** (`app/QueueStore` over `QueueSaver`, `QueueText`): the queue is saved as paths,
   one a line (`queue.txt`, header `mstream-queue 1 <entries> <current>
   <generation>`), so a rebuilt library, whose ids differ, finds its tracks
   again; paths that are gone are dropped, and if the current one is among them
-  the next one that stayed is current. The file is rewritten 2 s after the
+  the next one that stayed is current. A shuffled queue is **version 2**
+  (`mstream-queue 2 ...`, each line `<rank> <path>`: QUEUE-MODES.md
+  section 2.9), written only while shuffled, so the mode and the own order
+  come back with the queue; not shuffled, the file is version 1 byte for
+  byte. Older firmware reads a version 2 file as no queue file at all
+  (`not a whole queue file, ignored`): a downgrade while shuffled loses the
+  queue once. The repeat mode is NVS's (`queue`/`repeat`, written at once
+  on a change, read at boot before the queue). The file is rewritten 2 s after the
   last edit, 32 lines a loop pass (a 10,000-track queue is ~700 KB and never
   holds the loop), into `queue.tmp`, then renamed over `queue.txt`. The
   position goes to NVS (at most once a second), tagged with the file's
@@ -1477,11 +1727,22 @@ the browsing UI hold its **track ids**, never strings.
   at 2345678 + 517 samples, preroll 2343590, exact; start point waiting:
   none`);
   `qs<sec>` sets a start point on the current entry (playing: it starts
-  there now), with the length as known (the held track's, else the
+  there now), with the length as known (the held track's; stopped or
+  cued, the one told for the entry, as the bar shows it; else the
   catalog's) and no anchor (a seek: a second the run decoded is exact by
   its index), to check the seek without a restart; `qs0` clears it. A
   dropped start point stays dropped: an undo that brings its entry back
-  doesn't bring the second back.
+  doesn't bring the second back. `qS` toggles shuffle (`qS0` / `qS1` set
+  it) and `qR` steps repeat Off, All, One (`qR0`-`qR2` set it), through the
+  same helpers as Now Playing's menu (applied, saved, logged: `[player]
+  shuffle on: 37 up next shuffled; 3 of 40 plays on`, `[player] shuffle
+  off: the queue's own order again, now 12 of 40 (28 up next), in 23 ms`,
+  `[player] repeat: one (this track again at its end; next and prev still
+  move)`); an open menu follows them. `q` says both (`...; shuffle on,
+  repeat all; undo: none; ...`), the boot `[queue] repeat: one (saved)`
+  and `[queue] restored ... , shuffled`; each Repeat One loop logs
+  `[queue] repeat one: 5 of 40 again (playing)` (the entry's key doesn't
+  change, so no `now at` line), and `G` counts them.
   After a restart the queue is where it
   was, stopped. `g0` carries the queue across the rebuild the same way, in a
   PSRAM buffer: the track that plays keeps playing if it's still there. A
@@ -1847,7 +2108,7 @@ Queue, Dance and Output (with its Pair and About pages).
   below the decoder on core 1 (priority 1 vs 2), so the audio goes first,
   and it sleeps 1-5 ms every pass. The `Ui` object and all its sprites live
   in PSRAM (~365 KB: six 320x42 row sprites, a 320x56 strip, a 320x204 panel
-  for sheets and dialogs (the content area: the 4-row sheet), the rail); the fonts' glyph tables too.
+  for sheets and dialogs (the content area: room for a 4-row sheet), the rail); the fonts' glyph tables too.
 - **The screen's power** (`ScreenPower`, host-tested; `app/ScreenControl`
   on the device; [ENERGY.md](ENERGY.md) item 2: the screen was ~15 mA of
   the ~116 while streaming). Bright at the chosen brightness (Low 60,
@@ -1873,7 +2134,16 @@ Queue, Dance and Output (with its Pair and About pages).
   power-off's warning, the sleep timer's fade while it counts down to the
   pause: `holdLit`) a lit screen
   (bright or dim) goes bright and stays lit until it ends, then counts
-  down from there; an off one stays off (it may be night). One woken
+  down from there; an off one stays off (it may be night). The Pair
+  screen's search holds it the same way (`ScreenControl::Hold`, from
+  `Ui::pairSearching()`: from the page's entry or Search again until its
+  2 minutes, a device picked, the page closed or the screen off), so the
+  listener's taps on the list act and the search isn't stopped by the
+  screen going off: on 2026-10-04 the screen dimmed 20 s into it, each tap
+  on the dim screen only woke it, and at 81 s it went off and stopped the
+  search; pairing took three tries. Logged as `[screen] held lit while the
+  Pair screen searches (2 min at most): no dim, no off` and `[screen] the
+  Pair screen's search stopped: the countdown again (dims in 19 s)`. One woken
   during it is held from the wake, except that a touch's or PWR's wake
   from Off keeps its pocket guard until input follows (for the idle
   warning that wake is input, which ends the warning). `ScreenControl` alone switches the backlight, and the
@@ -1982,7 +2252,11 @@ Queue, Dance and Output (with its Pair and About pages).
   you're on again: back to its start"; a tap anywhere goes on, a tab tap
   ends them. A **sheet**
   (from the bottom, rows of 40 px: up to 3 in the list's band from y 72,
-  the 4-row one from y 40, never onto the tab bar) and a **dialog** (modal, the tab bar
+  Now Playing's two menus 3 rows from y 80; a 4th would rise to y 40, never
+  onto the tab bar; a touch that starts within 300 ms of its opening goes
+  nowhere, as on the volume sheet, so a double tap never picks a row; a
+  row can stay up and show its new state, Now Playing's Shuffle and
+  Repeat) and a **dialog** (modal, the tab bar
   still works; optionally an icon, a live status line and a red primary
   button) freeze the page under them; one that opens while a finger is
   on the page (the headphones' drop dialog) ends that touch for the page (a
@@ -2044,8 +2318,8 @@ Queue, Dance and Output (with its Pair and About pages).
   up to two buttons, drawn in strips through the scroll mapping): the
   Queue's "Your queue is empty" (Open Library, Shuffle all), the Library's
   "No music found" and, with no card, "No microSD card" (Try again), or
-  "This card isn't FAT32" when one is in that doesn't mount (exFAT, NTFS,
-  a GPT). A
+  what is in when one is in that doesn't mount ("This card is exFAT",
+  "... NTFS", "This card uses GPT", "Can't read this card": Storage). A
   row can have buttons of its own (the Output card's): the source gets
   where on the row it was tapped (`onTapAt()`) and where a finger presses
   (`Row::pressX`).
@@ -2057,36 +2331,215 @@ Queue, Dance and Output (with its Pair and About pages).
   with "…". efont is out of the build (the font probe keeps it behind
   `UI_SPIKE_EFONT`). Licence: `LICENSES/DejaVu-Fonts.txt`.
 - **Icons**: 1-bit bitmaps in flash (`tools/ui_icons.py` -> `IconData.cpp`).
-- **Now Playing** (spec §6.1, mockups 01-04): the album's cover (96 x 96,
+- **Now Playing** (spec §6.1, mockups 01-04; its two menus, shuffle and
+  repeat: [QUEUE-MODES.md](QUEUE-MODES.md)): the album's cover (96 x 96,
   its thumbnail, a note until it's made), the title (Bold 22 on up to two
-  lines, else Bold 16 on up to three), the artist and the album as **40 px
-  bands** right of the cover (the review's graft: a tap meant for one never
-  opens the other; the cover is the album's too), the progress and times
-  (between them "4 of 16 · SPYDRONE": where it plays, mockup 01's output
-  line, when it fits; the headphones not connected, "SPYDRONE (not
-  connected)" alone when both don't fit), and the transport row (the
-  volume, prev, play/pause, next, "..."). While a play waits for the
-  headphones (`PlayGate`), the play button is a spinner (a tap cancels the
-  wait), "Waiting, 24 of 86" is the progress line, and the artist and
-  album bands give way to "Waiting for SPYDRONE..." over "try 2 of 3" and
-  two plain buttons, **Play on speaker** and **Cancel** (out loud is a
-  choice, not the way on: neither is the accent). While a sleep timer runs,
-  the progress line has a moon and "23 min" ("track", "45 s", "fading")
-  after "4 of 16 · Speaker"; when both don't fit the output's name goes
-  first ("4 of 16" and the moon), then the line (the moon alone), but the
-  amber "SPYDRONE (not connected)" never does (the moon, or nothing of the
-  timer, beside it: `uitext::sleepLineFit()`; see "Sleep timer" above). The
-  artist opens the Library at that artist, the album at the album (one Back
-  from its artist), each **scrolled to the playing item and tinted**; "..."
-  is a sheet of Sleep timer (its state), Go to artist, Go to album and
-  Show in folders (each with its name, dim, on the right; the Sleep timer
-  row's follows the timer while the sheet is up; four rows of 40 px, the
-  sheet rising into the header row from y 40: `SheetLayout.h`), the last
-  opening the chain of folders down to the
-  track's, one Back apart, the playing file tinted. The volume
-  button opens the volume sheet. Only what changed is redrawn: the cover
-  when the album changes or its thumbnail arrives, the text when the track
-  does, the times once a second, the transport on a change.
+  lines, else Bold 16 on up to three), the artist and the album as two
+  plain rows under it, the progress and times (between them "4 of 16 ·
+  SPYDRONE": where it plays, mockup 01's output line, when it fits; the
+  headphones not connected, "SPYDRONE (not connected)" alone when both
+  don't fit), and the transport row (the volume, prev, play/pause, next,
+  "..."), which has the room the old 40 px artist and album bands gave
+  up. **Two menus, one job each** (the user's split): a tap anywhere on
+  the cover, the title, the artist or the album opens the **navigation
+  menu** (Go to artist, Go to album, Go to folder); "..." opens the
+  **playback menu** (Shuffle, Repeat, Sleep timer). Neither row of text is
+  a control of its own any more, so neither has a "›".
+  - **The layout** (screen y; x 0-319 unless said; the constants and their
+    static_asserts are NowPlayingPage.cpp's, the picture Pages.h's):
+
+        36-37     background
+        39-136    the cover's 1 px frame; the cover 96 x 96 at (12, 40)
+        38-89     the title, x 120-310 (190 px): Bold 22, one line
+                  centred at y 64 or two at 51 and 77; else Bold 16,
+                  three at 47, 64 and 81
+        90-112    the artist (Body, soft), centred at y 101, x 120-310
+        113-135   the album (Body, dim), centred at y 124, x 120-310
+        136-145   background
+        146-167   the progress band: the line y 148-151 (the knob's centre
+                  y 150), the times and the middle (Small) centred at y 160
+        168-239   the transport's touch: five zones of 64 x 72
+        176-231   the transport as drawn: one 320 x 56 strip
+                  (gfx::kStripH; 168-175 and 232-239 are background), the
+                  zones' centres at x 32, 96, 160, 224, 288 and y 204
+
+    The rows are 23 px (a Body line and 4): the artist's starts where the
+    title strip ends and the album's ends on the cover's last row. Their
+    text has the title's 190 px (the "›" and its 16 px are gone):
+    "(no artist folder)" (130 px), "(loose tracks)" and "Built-in test
+    track" fit, a longer name is cut with "…". The band moved up 24 px
+    and the transport grew from 48 to 72 px. In it: the volume's icon
+    centred at y 195 over its "60%" (Small, dim) at y 218; prev and next at
+    y 204; play a disc of r 25 at (160, 204), y 179-229 (r 23 at y 216
+    touched the bezel); "..." its dots at y 195, and under them, at y 218,
+    the shuffle and repeat indicator; a pressed zone a circle of r 24
+    (BTN_HI; the play disc turns soft). The icons keep their sizes: the
+    room went to space, not to bigger glyphs.
+  - **Where it takes touches** (`zoneAt()`, tested in this order):
+
+    | y | x | Playing, paused, stopped | While a play waits |
+    |---|---|---|---|
+    | 168-239 | 64 px zones (a clamped right-edge reading is "...") | the transport | the transport |
+    | 138-167 | all | the seek bar (inert when it can't seek) | the same |
+    | 90-137 | 112-319 | the navigation menu | Play on speaker; Cancel from x 253, or a clamped right-edge reading |
+    | 36-89 | 112-319 | the navigation menu | nothing (the title and the wait's status) |
+    | 36-137 | 0-111 | the navigation menu | the navigation menu (the cover) |
+
+    The navigation area is everything above the seek bar, its margins
+    too: no dead pixels, and (no play waiting) no x test for the panel's
+    skew to fool.
+    While a play waits only the cover opens it, so a near miss above Play
+    on speaker never raises a sheet over the very buttons. A toast takes
+    y 36-71 first (to 77 for the sleep and idle toasts' buttons), as on
+    every page: a tap there dismisses it.
+  - **A Down on the navigation area lights it** (the house rule: a Down
+    highlights): ROW_SEL on x 0-319, y 36-136 around the cover's frame,
+    the title strip and both rows drawn on it, the cover as it is. A tap,
+    a drag, a release or a cancel puts it back. Not while a play waits
+    (the cover alone isn't lit). A drag that starts there does nothing; a
+    long press has no hold there, so `Ui` ends it as a slow tap (lifted
+    within 24 px): the menu, with the tap tick, never the double tick.
+  - **The navigation menu** (a 3-row sheet, from y 80), titled with the
+    track's title (Small, dim): **Go to artist** (its detail the artist,
+    or "(no artist folder)"), **Go to album** (the album, or "(loose
+    tracks)"), **Go to folder** (the track's folder, cut from the left by
+    whole folders, as the Folders header cuts its path: "…/Daft
+    Punk/Discovery"; "/music" for a track at the root). Each detail is
+    Small, dim, right-aligned in what its label leaves (183, 174 and 177
+    px). Go to artist opens the Library at the artist, Go to album at the
+    album (one Back from its artist), each **scrolled to the playing item
+    and tinted**; Go to folder opens the chain of folders from /music down
+    to the track's, one Back apart, on the Folders segment, the playing
+    file tinted (what "Show in folders" did). The sheet acts on the track
+    it was opened for: a track change under it still goes where its
+    details said. When nothing in it could act there is no sheet, only a
+    toast, with the tap's tick: a built-in track, "A built-in track isn't
+    in the Library"; the index not ready (a rebuild), "The Library isn't
+    ready yet" (the built-in text said that, wrongly, until now); a
+    synthetic browse (`uil<n>`), its refusal as before.
+  - **The playback menu** ("...": a 3-row sheet from y 80, titled
+    "Playback"): **Shuffle** ("On", "Off"), **Repeat** ("Off", "All",
+    "One") and **Sleep timer** ("Off", "23 min", "End of track": it
+    follows the timer while the sheet is up). Each state is its row's dim
+    detail on the right, as the Sleep timer row's always was. **A tap on
+    Shuffle or Repeat changes it in place**: the tick, the row's new
+    state, its highlight gone, and the sheet stays up (Repeat goes Off,
+    All, One, Off; a change from the console shows on it too). Sleep timer
+    closes it and opens the Sleep timer sheet, as before. Sleep timer is
+    the last row on purpose: a quick second tap on "..." (y 168-239) lands
+    on the sheet's lower rows (156-235), and the last of them opens a
+    sheet rather than changing anything. **Every sheet ignores a touch that
+    starts within 300 ms of its opening** (as the volume sheet does): what
+    keeps a double tap off Repeat, and a double tap on the album row off Go
+    to artist.
+  - **Shuffle and repeat** (the player's: [QUEUE-MODES.md](QUEUE-MODES.md)):
+    shuffle is a toggle that reorders the queue itself. On, what is up
+    next is shuffled and what plays plays on; off, the queue's own order
+    comes back, the playing entry in its place. The Queue tab shows the
+    order that plays. Repeat **All** goes from the last entry back to the
+    first, gaplessly; **One** plays the entry again at its natural end (a
+    gapless join to itself), and next and prev still move; **Off** (the
+    default) stops after the last entry. Both outlive a restart: shuffle
+    with the queue (`queue.txt` version 2), repeat in NVS
+    (`queue`/`repeat`). The sleep timer wins over Repeat One: End of
+    track, album or queue pauses at this track's end, the same entry cued
+    at 0:00. "Shuffle all" (the empty states) turns shuffle on and plays
+    the library from a random track, as one edit: its toast's Undo puts
+    back the queue and the shuffle mode it found.
+  - **The indicator**: in the "..." zone under its dots (centred at
+    (288, 218), in the Now Playing accent), as the volume zone has its
+    "60%" under its icon: a small shuffle glyph while shuffle is on, a
+    small repeat glyph for All (the loop, 14 x 11), the same loop with a
+    bold "1" beside it for One (20 x 11: a 2 px stem, 9 rows; a "1"
+    squeezed inside the loop didn't read on the device), the two side by
+    side, 4 px apart, when both are on (38 x 11 at most, x 269-306, y
+    213-223); nothing when neither is. It sits
+    on the control that changes it. It is drawn with the transport, which
+    is drawn again when either changes; the page under a sheet is frozen,
+    so a change made in the menu shows as the sheet closes.
+  - **While a play waits for the headphones** (`PlayGate`): the play
+    button is a spinner (a tap cancels the wait), "Waiting, 24 of 86" is
+    the progress line, the title strip has the title on one line (Bold 16,
+    y 47) over "Waiting for SPYDRONE…" (Small, amber, y 64) and "try 2 of
+    3" ("looking for them", "connecting": Small, dim, y 81), and the
+    artist and album rows give way to two plain buttons, **Play on
+    speaker** (x 116-251) and **Cancel** (x 256-317), drawn at y 94-129
+    and taking y 90-137 (out loud is a choice, not the way on: neither is
+    the accent).
+  - **While a sleep timer runs**, the progress line has a moon and "23
+    min" ("track", "45 s", "fading") after "4 of 16 · Speaker"; when both
+    don't fit the output's name goes first ("4 of 16" and the moon), then
+    the line (the moon alone), but the amber "SPYDRONE (not connected)"
+    never does (the moon, or nothing of the timer, beside it:
+    `uitext::sleepLineFit()`; see "Sleep timer" above). The indicator
+    isn't on that line, so nothing there gives way to it.
+  - **Haptics** (all `Ui::tick()`: 33 ms at 235, ruled by the haptics
+    setting; no hold anywhere here, so never the double tick): one tick
+    per tap that acts. The navigation tap (with its sheet or its toast),
+    each row of either menu (Shuffle and Repeat on every tap), ✕ and a tap
+    outside a sheet. Nothing on a Down, on a drag, or for a touch the
+    300 ms guard swallows. The transport, the waiting buttons and the seek
+    bar keep theirs (SEEK-BAR.md section 4.3).
+  - The volume button opens the volume sheet. Only what changed is
+    redrawn: the cover when the album changes or its thumbnail arrives,
+    the text when the track does (the title strip also when the wait's
+    status does), the times once a second, the transport on a change (the
+    play state, the volume, the output, shuffle, repeat), and the bar on
+    the 30 fps frame deadlines while a finger scrubs it.
+
+  **The progress line is a seek bar.** Its design is
+  [SEEK-BAR.md](SEEK-BAR.md); the mapping and the touch are
+  `lib/core/SeekBar` (host-tested in test_seek_bar), the player's side
+  `PlaybackController::seek()`.
+  - **Where it takes touches:** the full width, from y 138 down to the
+    transport (y 167), whether or not a play waits.
+    - The 8 rows above the band (y 138-145) are the gap under the album
+      row. The line is drawn at the band's top (y 148-151), so a tap
+      aimed at it lands on both sides of y 146.
+    - Above them is the navigation menu's area; while a play waits, Play
+      on speaker and Cancel, whose touch ends at y 137.
+  - **A tap** goes to the second under the finger.
+  - **A sideways drag** scrubs, with a tick as it starts.
+    - From within 16 px of the knob, the knob moves with the finger
+      without a jump. From anywhere else, it comes to the finger.
+    - The music plays on meanwhile, and the drag seeks **once, at the
+      lift**.
+  - **Where it can go:** whole seconds, from 0:00 to the length less 6 s
+    (the tail rule's 5 s and a second). The panel's clamped readings at
+    either edge reach both ends.
+  - **While a finger scrubs:**
+    - the line thickens;
+    - a marker shows where it plays;
+    - a large readout ("2:31 +1:21") takes the row above the line
+      (y 113-145, the full width: over the album row, the cover's lowest
+      23 rows and its frame's last, which come back at the lift), on the
+      side away from the finger.
+  - **Nothing is seeked when:**
+    - the knob ends within 4 px of the marker, or on the second already
+      playing. It snaps there with a tick, and the readout says "no
+      change". A tap there does nothing too;
+    - the finger slid off the bar, above y 106 (onto the artist row or
+      higher) or onto the strip. The readout says "Release to cancel",
+      with a tick;
+    - the track changed under the finger.
+  - **What a seek does** (`PlaybackController::seek()`, SEEK.md 6.7):
+    - playing, it starts there at once;
+    - paused or waiting, it stays so, and the next play and the next
+      boot's resume point start there.
+    - Until the backend has taken a start up, Now Playing (and the tab
+      bar) show where it was asked to start, with the length the player
+      was told. So the old second never comes back, and no dotted line
+      flashes.
+  - **The knob:** a resting knob (r 3) shows that the line can be moved.
+    There is none, and the line takes no touch, when:
+    - the length isn't known (the dotted line);
+    - the track failed;
+    - the track is under 10 s;
+    - the backend can't start it part of the way in
+      (`IAudioBackend::seekable(path)`, asked of the current entry's path
+      by `PlaybackController::seekable()`, however it became current: no
+      format today; an Opus track was refused until its seeks were built,
+      [OPUS.md](OPUS.md) M3).
 - **The Library** (spec §6.2, mockups 07-15, with the grafts): the root's
   header is the segmented control **Artists | Albums | Folders** (the root
   PageRef's id is the segment; each keeps its own scroll; the Library opens
@@ -2095,7 +2548,7 @@ Queue, Dance and Output (with its Pair and About pages).
   its albums with covers) > an album's or all its tracks. **Albums**: every
   album A-Z with its 40 x 40 cover and artist. **Folders**: a folder's
   folders (amber icon, "1 folder, 13 files, 1 other"), then its audio files
-  (a file icon, the name, an MP3/FLAC badge); the header's second line is
+  (a file icon, the name, an MP3/FLAC/OPUS badge); the header's second line is
   its counts, whole ("14 audio files, 1 other"), and, when 60 px or more
   are left beside them, the folder's place cut from the left
   ("…/Kavinsky"; beside "‹ Library" there is no room, and "/Daft…" said
@@ -2130,8 +2583,9 @@ Queue, Dance and Output (with its Pair and About pages).
   what played) or "Clear queue" (stops; a dialog with a red Clear asks
   first). Every edit has Undo on its toast. A track that failed keeps an
   amber "!" (`KeyRing`, the last 16 entries by key). Empty: "Your queue is
-  empty", Open Library, Shuffle all (`queueview::shuffle()`: the whole
-  library, a random seed, playing).
+  empty", Open Library, Shuffle all (the whole library from a random
+  track, shuffle on, one edit whose Undo puts the mode back too:
+  QUEUE-MODES.md sections 2.5 and 2.6).
 - **Output** (spec §6.6, mockups 19-21, with the grafts; a list, so it
   scrolls): the **Bluetooth card** (two rows; `OutputModel`'s view of the
   link and the session: No headphones paired [Pair new headphones], Not
@@ -2174,8 +2628,9 @@ Queue, Dance and Output (with its Pair and About pages).
   plain icon while the search rests (`tabbar::outputFor()`, host-tested).
 - **States** (spec §7): no microSD card (and no music on the flash
   fallback): the Library, and the Queue and Now Playing while nothing is
-  queued, show "No microSD card" (or "This card isn't FAT32" when one is
-  in that doesn't mount: exFAT, NTFS, a GPT) and **Try again**, which looks for a card
+  queued, show "No microSD card" (or, when one is in that doesn't mount,
+  what it is: "This card is exFAT", "... NTFS", "This card uses GPT",
+  "Can't read this card": [Storage](#storage)) and **Try again**, which looks for a card
   (`LocalStorage::probeCard()`, never inside an LCD hold) and restarts the
   player to use it (the backend, the library and the queue were set up on
   the flash); no automatic re-check (an SD init with no card could hold
@@ -2264,11 +2719,11 @@ Queue, Dance and Output (with its Pair and About pages).
   overlays, the covers (above) and the loop task's unused stack. `ui0`-`ui4`
   tap a tab, `uib` goes back, `uic` shows the coach cards, `uiT` decodes
   the covers again (their timings), `uiV` shows the volume HUD, and
-  **`uiF<c/s/p/r/l/n/f/w>`** shows a faked state for screenshots of what a test
+  **`uiF<c/s/p/r/l/n/f/t/g/u/w>`** shows a faked state for screenshots of what a test
   can't safely cause (display only: the radio and the card are left
   alone): the Bluetooth card connecting, searching, pairing or resting, the
-  headphones lost (with the dialog), no card or a card that isn't FAT32
-  (on Now Playing), or a play
+  headphones lost (with the dialog), no card or one that didn't mount
+  (exFAT, NTFS, GPT, can't read: on Now Playing), or a play
   waiting for the headphones (Now Playing's panel and spinner); `uiF0`
   the real state. **`uil<n>`**: the Library browses a synthetic
   library of n tracks (the spike's `g<n>`: 6 artists and 15 albums per 100
@@ -2287,14 +2742,15 @@ Queue, Dance and Output (with its Pair and About pages).
   ends there and presses nothing, and `uis160,265,160,100,120` is a swipe
   up from the strip that flings the list (`uid...` the same as a drag).
   Every list motion logs `[ui] scroll: <ms>, <frames> (<fps>), draw mean/max
-  (n over 35 ms), ring min, underruns +n, governor` when it settles, and a
+  (n over 35 ms), ring min, underruns +n, governor` when it settles (a scrub
+  of Now Playing's seek bar the same as `[ui] scrub: ...`), and a
   frame over 50 ms logs `[ui] slow frame` with its move and its renders; every touch logs
   `[touch] down/tap/long press/fling x,y (raw x,y)` (with `scripted` for
   the scripted finger's), every move of the queue's current entry
   `[queue] now at n of N (state)`, every tab change (`[ui] tab: Queue`) and
   every action that plays something (`[ui] queue: play entry n (its row's
   bar)`, `[ui] now playing: next`, `[ui] library: play 14 tracks`, `[ui]
-  shuffle all: 77 tracks`), every queue edit from the Queue (`[ui] queue:
+  shuffle all: 77 tracks (shuffle on; was off)`), every queue edit from the Queue (`[ui] queue:
   removed 2`, `... to play next`, `... clear up next`, `... cleared`) and
   every output change (`[output] ...`, `[ui] bluetooth: ...`). `ui` adds
   the Bluetooth link and session and the queue's marks.
@@ -2452,8 +2908,33 @@ their own (the player stopped first, so nothing follows them).
   It fails the build when it moves nothing (a toolchain or framework update
   changed the objects: its docstring says what to do) and warns about any
   name that no longer matches; a build logs `iram_diet: 51 of 51 libc
-  objects moved to flash`. About 7 KB of IRAM is left. Adding WiFi will need more: likely pioarduino's
-  `custom_sdkconfig` to rebuild the framework without the workaround.
+  objects moved to flash`. About 5 KB of IRAM is left (5,176 B from the
+  seek bar on; the MP3 pin below takes none). Adding WiFi will need
+  more: likely pioarduino's `custom_sdkconfig` to rebuild the framework
+  without the workaround.
+- **The MP3 synth loop is pinned at the front of flash.** The same
+  `tools/iram_diet.py` puts libmad's synthesis (`dct32`, `synth_full`,
+  `mad_synth_frame_onens`), AudioGeneratorMP3's per-sample `GetOneSample`
+  and `loop`, and the outputs' per-sample calls first in `.flash.text`,
+  each with its literal pool, and libmad's window `D` and the two outputs'
+  vtables first in `.flash.rodata`. Both sections start at the same
+  address in every build and each block is under 16 KB, so those lines
+  keep their sets of the 2-way flash cache whatever else changes, at most
+  two in a set. Left to the linker, the seek bar's build put three of
+  them in 13 sets and One More Time decoded at 3.8x realtime instead of
+  4.8x ([RESAMPLER.md](RESAMPLER.md) section 10e). It costs no RAM and no
+  flash. **`tools/cache_guard.py`** (a post-script) reads `firmware.elf`
+  after every link and fails the build when a set holds three of the
+  loop's lines on the bench's or playback's path, the pin is missing, or
+  a hot item is out of it; it prints which sets, what shares them and
+  where each item is. A build logs `cache_guard: ok: the MP3 synth loop's
+  hot lines, at most 2 in a set (bench), 2 in a set (playback); pinned:
+  ...`, then any warning (a hot function it reads only in part: a
+  switch's jump table, a landing pad). The hot set is one table there
+  (`HOT`, `PATHS`) for the pin and the check; `firmware.elf` depends on
+  the build's sections.ld, so a change to it relinks. It runs on any ELF
+  too (`python tools/cache_guard.py firmware.elf`); its tests: `python
+  -m unittest discover -s tools -p "test_cache_guard.py"`.
 - **`tools/no_psram_fix.py`** (a pre-script) compiles everything
   PlatformIO builds (src/, lib/core, the libraries, the Arduino core)
   without that workaround's `-mfix-esp32-psram-cache-issue`, a `memw`

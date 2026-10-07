@@ -23,28 +23,37 @@
 //   <root>/Artist/NN - Title.ext         (album "", the artist's loose tracks)
 //   <root>/NN - Title.ext                (artist "", album "")
 // The artist and album names are the folder names (their strings are the
-// folders' own, not copies). The track number and title come from the file
-// name: leading digits, then separators (" - ", ". ", "_"), then the title
-// up to the extension. Only .mp3 and .flac are tracks. Every other file is
-// counted in its folder (the Folders view hides them but says how many:
-// "14 audio files, 1 other"), and the folder's cover image is picked from
-// them by name: cover.jpg, then folder.jpg, then front.jpg, then any other
-// .jpg (imageRank()). A folder with no audio anywhere under it (artwork
-// alone, say) is left out of the folder views.
+// folders' own, not copies). The disc, the track number and the title come
+// from the file name, read with the other names in its folder when the
+// build finishes (trackname::Folder): "06 - Title", "1-01 Title" (disc 1),
+// "101 Title" (disc 1), "Artist - 03 - Title", and a title's leading
+// "Artist - " dropped when it is the folder's artist. The title is a slice
+// of the file name, up to the extension. Only .mp3, .flac and .opus are
+// tracks (.ogg and .oga aren't: an Ogg file of another codec would only
+// fail at its open, docs/OPUS.md), and their names are read alike, whatever
+// the extension. Every other file is counted in its folder (the Folders
+// view hides them but says how many: "14 audio files, 1 other"), and the
+// folder's cover image is picked from them by name: cover.jpg, then
+// folder.jpg, then front.jpg, then any other .jpg (imageRank()). A folder
+// with no audio anywhere under it (artwork alone, say) is left out of the
+// folder views.
 //
 // Views (all sorted with textfold::compare: case- and accent-insensitive,
-// symbols and digits before letters):
+// symbols and digits before letters; the artists and albums by their
+// textfold::sortName(), so "The Lantern Choir" sorts under L):
 //   artistsAZ()           every artist
 //   albumsAZ()            every album (ties: by artist)
 //   albumsOf(artist)      an artist's albums, A-Z
 //   tracksOfAlbum(album)  an album's tracks folder by folder (its own files,
-//                         then disc subfolders A-Z), each by number, then name
+//                         then disc subfolders A-Z), each by disc, number,
+//                         then name
 //   tracksOfArtist(artist) the artist's albums' tracks, album after album
 //   subfolders(folder)    a folder's folders with audio under them, A-Z
 //   filesIn(folder)       a folder's audio files, A-Z
 //   treeTracks(folder)    every audio file under a folder: its own files A-Z,
 //                         then each subfolder's tree, A-Z (depth first)
-// plus the A-Z rail's buckets for the two long lists ('#', A..Z).
+// plus the A-Z rail's buckets for the two long lists ('#', A..Z), by the
+// sort names' first letters.
 //
 // save() writes the finished index as one file (its blocks as they are, a
 // header, a checksum) and load() reads it back into blocks of exactly that
@@ -61,7 +70,7 @@ public:
   static constexpr uint32_t kNone = 0xFFFFFFFFu;
   static constexpr int kBuckets = 27;  // '#', 'A'..'Z'
 
-  enum class Format : uint8_t { Unknown = 0, Mp3, Flac };
+  enum class Format : uint8_t { Unknown = 0, Mp3, Flac, Opus };
   // Added: a track. Other: a file that isn't audio, counted in its folder
   // (and a candidate for its cover). Skipped: outside the root, or no name.
   enum class Add : uint8_t { Added, Skipped, NoMemory, Other };
@@ -69,8 +78,10 @@ public:
   static constexpr uint8_t kNoImage = 0xFF;
   enum class View : uint8_t { Artists, Albums };
   // load(): Stale means a good file for another `signature` (the card
-  // changed); Corrupt a short, damaged or foreign one.
-  enum class Load : uint8_t { Loaded, Stale, Corrupt, NoMemory };
+  // changed); Outdated one saved by an earlier version of the index (a
+  // record's meaning changed: the cache's version, below, was bumped), so
+  // a rebuild follows; Corrupt a short, damaged or foreign one.
+  enum class Load : uint8_t { Loaded, Stale, Corrupt, NoMemory, Outdated };
 
   // String offsets are into the arena (str()); ids index the record tables.
   struct Track {             // 24 bytes
@@ -82,7 +93,7 @@ public:
     uint8_t titleLen;
     uint8_t number;          // 0: none
     Format format;
-    uint8_t reserved;
+    uint8_t disc;            // from the file name ("2-03 Title"); 0: none (disc subfolders order by folder)
   };
   struct Artist {            // 20 bytes; first*: positions in albumsOf/tracksOf views
     uint32_t name;

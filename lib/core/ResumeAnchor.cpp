@@ -35,6 +35,9 @@ void describe(const ResumeAnchor& a, char* buf, size_t size) {
     case ResumeAnchor::Kind::Flac:
       snprintf(buf, size, "FLAC sample %llu", (unsigned long long)a.sample);
       return;
+    case ResumeAnchor::Kind::Opus:
+      snprintf(buf, size, "Opus sample %llu", (unsigned long long)a.sample);
+      return;
     case ResumeAnchor::Kind::None:
       break;
   }

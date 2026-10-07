@@ -3,9 +3,12 @@
 
 #include "QueueModel.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
+
+#include "Shuffle.h"
 
 namespace {
 
@@ -16,8 +19,8 @@ bool isSet(const uint32_t* bits, uint32_t i) { return (bits[i >> 5] >> (i & 31))
 
 }  // namespace
 
-QueueModel::QueueModel(AllocFn alloc, FreeFn release)
-    : allocFn_(alloc ? alloc : defaultAlloc), freeFn_(release ? release : defaultFree) {}
+QueueModel::QueueModel(AllocFn alloc, FreeFn release, RandomFn random)
+    : allocFn_(alloc ? alloc : defaultAlloc), freeFn_(release ? release : defaultFree), randomFn_(random) {}
 
 QueueModel::~QueueModel() {
   drop(q_);
@@ -47,6 +50,26 @@ void QueueModel::changed() {
   ++positionVersion_;
 }
 
+uint32_t QueueModel::draw(uint32_t bound) {
+  uint32_t x;
+  if (randomFn_) {
+    x = randomFn_();
+  } else {
+    x = rng_;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    rng_ = x;
+  }
+  return bound ? static_cast<uint32_t>((static_cast<uint64_t>(x) * bound) >> 32) : x;
+}
+
+uint32_t QueueModel::maxRank() const {
+  uint32_t top = 0;
+  for (uint32_t i = 0; i < q_.size; ++i) top = std::max(top, q_.data[i].rank);
+  return top;
+}
+
 uint32_t QueueModel::positionOf(uint32_t key) const {
   if (key == kNone) return kNone;
   for (uint32_t i = 0; i < q_.size; ++i) {
@@ -61,6 +84,7 @@ bool QueueModel::snapshot(Edit edit) {
   if (q_.size) std::memcpy(undo_.data, q_.data, static_cast<size_t>(q_.size) * sizeof(Entry));
   undo_.size = q_.size;
   undoCurrent_ = current_;
+  undoShuffled_ = shuffled_;
   undoEdit_ = edit;
   return true;
 }
@@ -83,16 +107,35 @@ uint32_t* QueueModel::selection(const uint32_t* positions, uint32_t n, uint32_t*
 
 bool QueueModel::insertAt(uint32_t at, const uint32_t* tracks, uint32_t n, Edit edit) {
   if (n == 0) return true;
-  if (!tracks || q_.size + n < q_.size || !reserve(q_, q_.size + n)) return false;
+  if (!tracks || q_.size + n < q_.size) return false;
+  const bool wasEmpty = current_ < 0;
+  // Shuffled, the new entries' ranks: Play next's right after the current
+  // entry's (those above it go up by n), + Queue's after the highest. The
+  // highest rank grows by n either way: refused past 0xFFFFFFFF.
+  uint32_t base = 0;
+  if (shuffled_ && !wasEmpty) {
+    const uint32_t top = maxRank();
+    if (top > kNone - n) return false;
+    base = edit == Edit::InsertNext ? q_.data[current_].rank + 1 : top + 1;
+  }
+  if (!reserve(q_, q_.size + n)) return false;
   snapshot(edit);
+  if (shuffled_ && !wasEmpty && edit == Edit::InsertNext) {
+    for (uint32_t i = 0; i < q_.size; ++i) {
+      if (q_.data[i].rank >= base) q_.data[i].rank += n;
+    }
+  }
   std::memmove(q_.data + at + n, q_.data + at, static_cast<size_t>(q_.size - at) * sizeof(Entry));
   for (uint32_t i = 0; i < n; ++i) {
-    q_.data[at + i] = Entry{tracks[i], nextKey_++};
+    q_.data[at + i] = Entry{tracks[i], nextKey_++, base + i};
     if (nextKey_ == kNone) nextKey_ = 0;
   }
   q_.size += n;
-  if (current_ < 0) {
+  if (wasEmpty) {
     current_ = static_cast<int32_t>(at);  // the queue was empty: the first new entry
+    // Shuffled: laid out as a Play from its first (the ranks the given
+    // order), the rest shuffled after it.
+    if (shuffled_) shuffle::permute(q_.data + at + 1, n - 1, draw());
   } else if (static_cast<int32_t>(at) <= current_) {
     current_ += static_cast<int32_t>(n);
   }
@@ -107,16 +150,31 @@ bool QueueModel::insertNext(const uint32_t* tracks, uint32_t n) {
 
 bool QueueModel::append(const uint32_t* tracks, uint32_t n) { return insertAt(q_.size, tracks, n, Edit::Append); }
 
-bool QueueModel::replace(const uint32_t* tracks, uint32_t n, uint32_t start) {
-  if (n == 0) return clear();
-  if (!tracks || !reserve(q_, n)) return false;
-  snapshot(Edit::Replace);
+bool QueueModel::replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled) {
+  if (n == 0 && shuffled == shuffled_) return clear();
+  if (n && (!tracks || !reserve(q_, n))) return false;
+  // The snapshot first: it holds the mode the queue was in (undo() puts it
+  // back with the entries), then the mode this Play is laid out in.
+  snapshot(n ? Edit::Replace : Edit::Clear);
+  shuffled_ = shuffled;
   for (uint32_t i = 0; i < n; ++i) {
-    q_.data[i] = Entry{tracks[i], nextKey_++};
+    q_.data[i] = Entry{tracks[i], nextKey_++, i};
     if (nextKey_ == kNone) nextKey_ = 0;
   }
   q_.size = n;
-  current_ = static_cast<int32_t>(start < n ? start : n - 1);
+  if (n == 0) {
+    current_ = -1;
+  } else if (shuffled_) {
+    // The chosen track first (kAnyStart: a random one), every other one
+    // shuffled after it, those before it in the list too; the ranks the
+    // given order.
+    const uint32_t s = start == kAnyStart ? draw(n) : (start < n ? start : n - 1);
+    std::swap(q_.data[0], q_.data[s]);
+    shuffle::permute(q_.data + 1, n - 1, draw());
+    current_ = 0;
+  } else {
+    current_ = static_cast<int32_t>(start == kAnyStart ? 0 : start < n ? start : n - 1);
+  }
   changed();
   return true;
 }
@@ -178,6 +236,12 @@ bool QueueModel::moveNext(const uint32_t* positions, uint32_t n) {
     freeFn_(bits);
     return true;
   }
+  // Shuffled, the moved ones rank right after the current entry and the
+  // ranks above it go up by their count: refused past 0xFFFFFFFF.
+  if (shuffled_ && maxRank() > kNone - count) {
+    freeFn_(bits);
+    return false;
+  }
   // The snapshot is also the source: the queue is rebuilt from it.
   if (!snapshot(Edit::MoveNext)) {
     freeFn_(bits);
@@ -194,6 +258,18 @@ bool QueueModel::moveNext(const uint32_t* positions, uint32_t n) {
     }
   }
   freeFn_(bits);
+  if (shuffled_) {
+    // The moved ones are now right after the current entry, in play order.
+    const auto first = static_cast<uint32_t>(current_) + 1;
+    const uint32_t curRank = q_.data[current_].rank;
+    for (uint32_t i = 0; i < q_.size; ++i) {
+      if (i >= first && i < first + count) {
+        q_.data[i].rank = curRank + 1 + (i - first);
+      } else if (q_.data[i].rank > curRank) {
+        q_.data[i].rank += count;
+      }
+    }
+  }
   changed();
   return true;
 }
@@ -248,6 +324,7 @@ bool QueueModel::undo() {
   const uint32_t key = currentKey();
   std::swap(q_, undo_);  // undo_ keeps the edited entries' memory for the next snapshot
   undoEdit_ = Edit::None;
+  shuffled_ = undoShuffled_;  // the snapshot's mode (a Play that set it: the one before)
   const uint32_t pos = positionOf(key);
   current_ = pos != kNone ? static_cast<int32_t>(pos) : undoCurrent_;
   if (current_ >= static_cast<int32_t>(q_.size)) current_ = static_cast<int32_t>(q_.size) - 1;
@@ -260,12 +337,37 @@ void QueueModel::dropUndo() {
   drop(undo_);
 }
 
-bool QueueModel::assign(const uint32_t* tracks, uint32_t n, int32_t current) {
+bool QueueModel::setShuffled(bool on) {
+  if (on == shuffled_) return false;
+  if (on) {
+    // Every rank its position (the own order now), then what is up next
+    // shuffled: the current entry and what played before it stay.
+    for (uint32_t i = 0; i < q_.size; ++i) q_.data[i].rank = i;
+    const auto from = static_cast<uint32_t>(current_ + 1);  // (0 for an empty queue)
+    if (from < q_.size) shuffle::permute(q_.data + from, q_.size - from, draw());
+  } else {
+    // The own order back: by rank (the key breaks a tie, which only a
+    // hand-edited file can make). Introsort allocates nothing; a stable
+    // sort would ask the heap for a buffer.
+    const uint32_t key = currentKey();
+    std::sort(q_.data, q_.data + q_.size, [](const Entry& a, const Entry& b) {
+      return a.rank != b.rank ? a.rank < b.rank : a.key < b.key;
+    });
+    if (current_ >= 0) current_ = static_cast<int32_t>(positionOf(key));
+  }
+  shuffled_ = on;
+  undoEdit_ = Edit::None;  // a toggle is no edit (the snapshot's memory stays for the next one)
+  changed();
+  return true;
+}
+
+bool QueueModel::assign(const uint32_t* tracks, uint32_t n, int32_t current, bool shuffled, const uint32_t* ranks) {
   if (n && (!tracks || !reserve(q_, n))) return false;
   for (uint32_t i = 0; i < n; ++i) {
-    q_.data[i] = Entry{tracks[i], nextKey_++};
+    q_.data[i] = Entry{tracks[i], nextKey_++, ranks ? ranks[i] : i};
     if (nextKey_ == kNone) nextKey_ = 0;
   }
+  shuffled_ = shuffled;
   q_.size = n;
   if (n == 0) {
     current_ = -1;

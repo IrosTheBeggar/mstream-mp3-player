@@ -103,6 +103,21 @@ public:
     }
     return consumeTrimmed(sample);
   }
+  // A block of `n` frames (AudioOutput::ConsumeSamples(): the Opus
+  // generator's frame, which trims itself): with nothing to trim, the
+  // feed's budgeted block write (the same bits as the frames one by one);
+  // otherwise each frame in turn through the trim, stopping at the first
+  // refused. Returns how many were taken; the generator keeps the rest.
+  uint32_t consumeBlock(const int16_t* frames, uint32_t n) {
+    if (!active_) {
+      const uint32_t taken = feed_.writeBudgeted(frames, n);
+      kept_ += taken;
+      return taken;
+    }
+    uint32_t i = 0;
+    while (i < n && consumeTrimmed(frames + 2 * i)) ++i;
+    return i;
+  }
   bool setRate(int hz);
   void setChannels(int channels);
 

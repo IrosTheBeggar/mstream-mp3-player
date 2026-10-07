@@ -8,7 +8,8 @@
 #include "ResumeAnchor.h"
 
 // Starting a track part of the way in (docs/SEEK.md): a resume point after
-// a restart or a power-off, a seek (the console's qs). What that needs from
+// a restart or a power-off, a seek (the console's qs, Now Playing's seek
+// bar: docs/SEEK-BAR.md). What that needs from
 // the file, through a reader (FileReader) and no decoder:
 //
 // - where a start really lands: startMs(), the tail rule (the last 5 s and
@@ -50,11 +51,26 @@ namespace trackseek {
 // 0:00 instead: nobody wants the last 2 s of a song, and a file that got
 // shorter since the second was saved plays from its start.
 constexpr uint32_t kTailMs = 5000;
+// A seek (Now Playing's seek bar) never asks for the tail rule's last 5 s,
+// where a start goes to 0:00: it stops this far before the end (a second
+// more covers a length known from an estimate or a saved start point).
+constexpr uint32_t kSeekGuardMs = kTailMs + 1000;
+// The furthest a seek goes in a track `durationMs` long, a whole second (0:
+// only its start).
+inline uint32_t seekLimitMs(uint32_t durationMs) {
+  return durationMs > kSeekGuardMs ? (durationMs - kSeekGuardMs) / 1000 * 1000 : 0;
+}
 
 // Where a start asked for at `requestMs` begins, in a track `durationMs`
 // long (0: not known: as asked; a seek past the end then fails, and the
-// backend starts it at 0:00).
-uint32_t startMs(uint32_t requestMs, uint32_t durationMs);
+// backend starts it at 0:00). Inline: the Opus reader (OggOpus) applies
+// it too, and tools/opus_check links that reader without the rest of
+// this file.
+inline uint32_t startMs(uint32_t requestMs, uint32_t durationMs) {
+  if (durationMs == 0) return requestMs;
+  if (requestMs >= durationMs || durationMs - requestMs <= kTailMs) return 0;
+  return requestMs;
+}
 
 // How today's estimate of an MP3's byte was found (mp3SeekByte()).
 // Unplaced: a VBR file with no header and no length known: from 0:00.
@@ -176,14 +192,17 @@ uint32_t firstAudioByte(const uint8_t* probe, size_t n, uint32_t audioStart);
 // kScratchBytes.
 Plan plan(const PlanIn& in, FileReader& file, uint8_t* scratch);
 
-// An anchor (a resume point's, or one SeekIndex made for a seek into its
-// run) checked against the file (docs/SEEK.md section 5.4): the size; at
-// frameByte a Layer III header at its rate whose first bytes hash to
+// An MP3 anchor (a resume point's, or one SeekIndex made for a seek into
+// its run) checked against the file (docs/SEEK.md section 5.4): the size;
+// at frameByte a Layer III header at its rate whose first bytes hash to
 // frameHash, followed by a header of the same version and rate; at
 // prerollByte a header of the same version and rate, at or after the first
 // audio frame, before frameByte (or equal to it at the first audio frame)
 // and within kMaxPrerollSpan; the tail rule. Ok: `out` is its plan
-// (source Anchor).
+// (source Anchor). Any other kind is Kind here: a FLAC's is checked against
+// its STREAMINFO by the backend, an Opus track's by oggopus::checkAnchor()
+// (the reader has the exact length the anchor carries; lib/core/OggOpus),
+// each with its own start: libFLAC's seek, the reader's plan.
 enum class AnchorCheck : uint8_t { Ok, Kind, Size, Frame, Preroll, Tail };
 // For the log: "the size", "the frame at 2345678", ...
 const char* anchorCheckName(AnchorCheck c);
