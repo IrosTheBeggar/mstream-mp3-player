@@ -1388,7 +1388,7 @@ a beta); the README has how to cut one.
   changed). With no `v*` tag reachable, `--always` gives only a hash, and
   the build reads `v<NEXT_RELEASE>-dev+abc1234[-dirty]`; `NEXT_RELEASE`, at
   the top of the script, is the only place a version is written by hand.
-  Without git at all: `v0.7.0-dev+nogit`.
+  Without git at all: `v0.8.0-dev+nogit`.
 - **One file recompiles.** The script writes
   `$BUILD_DIR/generated/PlayerVersion.h` (`PLAYER_VERSION`, the commit,
   its date and time in UTC), rewritten only when its text changes, and
