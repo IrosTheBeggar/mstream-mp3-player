@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "../support/Mp3Synth.h"
+#include "OggOpus.h"  // oggopus::checkAnchor(): an Opus run's anchor read back
 #include "PcmRing.h"
 #include "RingFeed.h"
 #include "SeekIndex.h"
@@ -451,6 +452,57 @@ void test_a_flac_run_anchors_by_its_sample() {
   TEST_ASSERT_TRUE(a.exact);
 }
 
+// An Opus run the same way (docs/OPUS.md section 9): header only, no
+// entries whatever notePass() is fed, its anchor Kind::Opus at 48 kHz with
+// the exact length's low bits, which the reader's check then takes
+// (oggopus::checkAnchor(): the FLAC model, the same fields makeAnchor()
+// writes); a length not known (0) gives an anchor the check refuses; a
+// seek's lookup (find(): MP3 runs only) finds nothing in it.
+void test_an_opus_run_anchors_by_its_sample() {
+  SeekIndex::Run r;
+  r.kind = SeekIndex::Kind::Opus;
+  r.gen = kGen;
+  r.pathHash = 0x51;
+  r.fileSize = 3357890;
+  r.rate = 48000;
+  r.base = 48000 * 30;  // a run started 30 s in (a seek's plan)
+  r.exact = true;
+  r.totalSamples = 10076160;  // 3:30, mStream's transcode
+  gIndex.begin(r);
+  ResumeAnchor a;
+  TEST_ASSERT_TRUE(gIndex.anchorAt(kGen, 44100, 44100, &a));  // a second of ring frames: a second of the file
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(ResumeAnchor::Kind::Opus), static_cast<int>(a.kind));
+  TEST_ASSERT_EQUAL_UINT64(48000 * 31, a.sample);
+  TEST_ASSERT_EQUAL_UINT32(48000, a.rate);
+  TEST_ASSERT_EQUAL_UINT32(10076160, a.frameHash);
+  TEST_ASSERT_EQUAL_UINT32(3357890, a.fileSize);
+  TEST_ASSERT_TRUE(a.exact);
+  TEST_ASSERT_EQUAL_UINT32(0, a.prerollByte);
+  TEST_ASSERT_EQUAL_UINT32(0, a.frameByte);
+  TEST_ASSERT_EQUAL_UINT32(0, a.skip);
+  TEST_ASSERT_TRUE(a == oggopus::makeAnchor(48000 * 31, 3357890, 10076160));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(oggopus::AnchorCheck::Ok),
+                        static_cast<int>(oggopus::checkAnchor(a, 3357890, 10076160)));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(oggopus::AnchorCheck::Size),
+                        static_cast<int>(oggopus::checkAnchor(a, 3357891, 10076160)));
+  TEST_ASSERT_EQUAL_UINT32(0, gIndex.entries(gIndex.decodingSlot()));
+  TEST_ASSERT_FALSE(gIndex.find(0x51, 3357890, 48000 * 31, &a));  // (MP3 runs only)
+  // The run's header says it: G's line.
+  SeekIndex::Run heard;
+  TEST_ASSERT_TRUE(gIndex.heardRun(&heard));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(SeekIndex::Kind::Opus), static_cast<int>(heard.kind));
+  TEST_ASSERT_EQUAL_UINT64(48000 * 30, heard.base);
+  // A length not known: the anchor carries 0 and the check refuses it.
+  r.totalSamples = 0;
+  gIndex.begin(r);
+  TEST_ASSERT_TRUE(gIndex.anchorAt(kGen, 44100, 44100, &a));
+  TEST_ASSERT_EQUAL_UINT32(0, a.frameHash);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(oggopus::AnchorCheck::Length),
+                        static_cast<int>(oggopus::checkAnchor(a, 3357890, 0)));
+  // Another request's generation: none, as for every kind.
+  TEST_ASSERT_FALSE(gIndex.anchorAt(kGen + 1, 44100, 44100, &a));
+}
+
 // Ring frames (44.1 kHz) to the file's samples: exact at 44.1 kHz, within
 // one source sample otherwise.
 void test_ring_frames_to_samples() {
@@ -686,6 +738,7 @@ int main(int, char**) {
   RUN_TEST(test_a_pass_that_skips_a_frame);
   RUN_TEST(test_two_slots_follow_the_gapless_player);
   RUN_TEST(test_a_flac_run_anchors_by_its_sample);
+  RUN_TEST(test_an_opus_run_anchors_by_its_sample);
   RUN_TEST(test_ring_frames_to_samples);
   RUN_TEST(test_a_resume_continues_bit_for_bit);
   RUN_TEST(test_a_chain_of_resumes_never_drifts);

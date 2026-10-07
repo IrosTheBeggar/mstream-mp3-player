@@ -1,11 +1,11 @@
 # mstream-mp3-player
 
-An experimental portable MP3/FLAC player on the **M5Stack Core2** that will
+An experimental portable MP3/FLAC/Opus player on the **M5Stack Core2** that will
 keep a copy of part of your [mStream](https://mstream.io) library and sync it
 over WiFi. Listening is Bluetooth-first (A2DP headphones), with the built-in
 speaker as a fallback.
 
-> **Status:** proof of concept. Plays MP3 and FLAC from the SD card (or the
+> **Status:** proof of concept. Plays MP3, FLAC and Opus from the SD card (or the
 > Core2's internal flash) to Bluetooth headphones or the speaker. The UI is a
 > tab bar (Now Playing, Library, Queue, Dance, Output), all five built:
 > Now Playing with the album cover, the Library (artists, albums with
@@ -461,7 +461,7 @@ control only comes up after playback started take over mid-song: the music
 goes silent for about a second, then fades back in over ~2 s, so the
 change of their level is never heard as a jump.)
 
-The music is the `.mp3` and `.flac` files under `/music`
+The music is the `.mp3`, `.flac` and `.opus` files under `/music`
 (`/music/Artist/Album/NN - Title.mp3`). Any sample rate from 8 to 48 kHz
 plays, on the headphones and on the speaker alike (48 kHz files too, over
 Bluetooth): the Core2 converts everything that isn't 44.1 kHz to 44.1 kHz
@@ -470,13 +470,58 @@ files are skipped for now ("96 kHz isn't supported"): they are turned on
 once measured on the device, and will then need the 240 MHz CPU speed
 (Output > CPU speed). Anything else (176.4/192 kHz, odd rates) is skipped
 with a note that names the rate. The files are indexed at boot; the index is cached
-in `/.player` on the card and rebuilt when anything under `/music` changes.
+in `/.player` on the card and rebuilt when anything under `/music` changes
+(and once after an update that changes what the index records: 0.6.0's
+cache knew no Opus, nor the discs and artists in file names).
 An album's cover is the `cover.jpg` in its folder (else `folder.jpg`,
 `front.jpg`, or the largest `.jpg` there). It is made into thumbnails the
 first time it shows, which are kept in `/.player/thumbs` (delete that folder
 to have them made again, after replacing a cover under the same name). A
 progressive JPEG can't be decoded on the Core2: its album shows a note
 instead.
+
+**Opus**: `.opus` files (Ogg Opus, [RFC 7845](https://www.rfc-editor.org/rfc/rfc7845):
+what mStream's `/transcode` makes and what yt-dlp downloads) play like any
+other track, in the Library with an OPUS badge, in the queue, over
+Bluetooth and on the speaker: mono or stereo, every bitrate, 10-120 ms
+frames, decoded with the libopus that ESP8266Audio bundles behind the
+player's own Ogg reader ([docs/OPUS.md](docs/OPUS.md)). Opus is always
+48 kHz, so a track costs what a 48 kHz MP3 does (about 37 % of a core at
+240 MHz for mStream's 128k, decoding and conversion together, with the
+converter's filter tables in a PSRAM block pinned beside the decoder's
+state so that 7.6 KB of internal RAM stay free; the console's `Ot0` puts
+them back in internal RAM for about 3 points less); it plays at the
+160 MHz CPU speed too (Output > CPU speed), at about 60 % of a core,
+where list scrolling is slower, as with a 48 kHz MP3. Tracks are sample
+exact from the file alone (the pre-skip and the end trim), so a gapless
+album transcoded by mStream joins without a gap, and an Opus track joins
+an MP3 or FLAC the way a 48 kHz track does. The track's artist, album and
+title come from its folder and file name, as for the other formats (the
+tags inside the file aren't read; the cover is the folder's `cover.jpg`).
+Not played, each skipped with a note on Now Playing ("Skipped <title>:
+...") and the full reason in the serial log: surround files (more than two
+channels: "surround Opus isn't supported"; the log adds the channel
+count), files with frames under 10 ms ("Opus with 2.5 ms frames isn't
+supported": too slow to decode here; encoders write 20 ms unless told
+otherwise), and the other Ogg codecs (an `.ogg` or `.oga` isn't indexed; a
+Vorbis stream renamed `.opus` says "Ogg Vorbis isn't supported"). A
+chained file plays its first stream. Seeks (the seek bar, the console's
+`qs`) and the resume point after a restart land on the exact sample, as
+on a FLAC: the player finds the page by the file's own sample counts and
+decodes a short run-in before the spot (200 ms for a seek, 600 ms for a
+resume point; [docs/OPUS.md](docs/OPUS.md) section 9). What it learns
+about a file at its open (its headers and its exact length) is kept in
+`/.player/opus.idx`, so a seek, a track played before and the resume
+point after a restart open with one read (section 10).
+
+Opus decoding uses libopus under the IETF royalty-free patent grants
+(Xiph.Org [#1524](https://datatracker.ietf.org/ipr/1524/), Microsoft
+[#1914](https://datatracker.ietf.org/ipr/1914/), Broadcom
+[#1526](https://datatracker.ietf.org/ipr/1526/)). Separately, members of
+the Vectis Opus patent pool (Dolby, Fraunhofer, NTT) assert patents against
+makers of hardware that decodes Opus. If you sell devices with this
+firmware installed, that may concern you.
+
 The first time, the queue is the whole library (artist, album, track order).
 The built-in test tones and click tracks (60 s at 90-174 BPM, for the beat
 tracker) stay out of it; the console's `qb` queues them. The queue and its position are saved on the card:
@@ -583,7 +628,7 @@ The serial console (115200 baud) is there for scripted testing:
 | Key | Action | Key + Enter | Action |
 |---|---|---|---|
 | `n` / `p` | next / previous (past 3 s: the track's start) | `i<n>` | play queue entry n (0-based) |
-| space | play / pause | `b<n>` | benchmark decoding track n (and, at another rate than 44.1 kHz, decode + convert) |
+| space | play / pause | `b<n>` | benchmark decoding track n (and, at another rate than 44.1 kHz, decode + convert); `b</path>` a file by its path, one the library doesn't list (an `.opus` under `/bench/opus/`, say; [docs/OPUS.md](docs/OPUS.md)) |
 | `o` | switch output | `c<name>` | the name a build with `BT_SINK_NAME` scans for while none are remembered (saved) |
 | `+` / `-` | volume | `h<n>` | Bluetooth headroom -n dB, 0-12 (default 2, not saved) |
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
@@ -595,6 +640,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |
 | | | `R...` | the rate converter ([docs/RESAMPLER.md](docs/RESAMPLER.md)): `R` the current track's conversion (the exact ratio, source frames taken, ring frames made, clamped samples); `Rt` lists its test tracks (a 1 kHz tone and silence at other rates), `Rt<n>` or `Rt<tone:...@rate>` plays one on its own (the player is stopped first, keeping your place in the track: nothing follows it; only silence on Bluetooth, a tone only in silent mode `z`); `Rf</music/...>` plays a file on its own (silent mode only; `Rf48000</music/...>` converts it as if it were 48 kHz, a load test), `Rx` stops what `Rt` or `Rf` started; `Rb` its bench (the MAC16 kernel's self-test and route check, then 10 s of audio per rate with each kernel: cycles and share of a core at the clock running; 88.2/96 kHz too, though they don't play yet) |
 | | | `G...` | gapless playback ([docs/GAPLESS.md](docs/GAPLESS.md)): `G` its status (what the player says comes next, the join waiting to be heard, joins, cuts and failed opens since boot, the decoding track's LAME trim); `G0` / `G1` off / on (off: tracks end as before 0.6.0, for an A/B; RAM only); `Gt0` / `Gt1` trimming by the LAME tag off / on from the next track; `Gx<n>` the ring's cut against a reader on the other core (a stress test: stops the player, keeping your place) |
+| | | `O...` | Opus knobs for the device checks ([docs/OPUS.md](docs/OPUS.md); a file the library doesn't list plays by its path, `Rf</bench/opus/x.opus>` in silent mode, or benches by it, `b</bench/opus/x.opus>`): `O` status, `Ol` / `Oi` / `Oh` the decoder's state in the pinned PSRAM block / internal RAM / the PSRAM above 0x3FA00000 from the next open (an A/B of where it decodes fastest), `Ot1` / `Ot0` the rate converter's 7.6 KB table copy in a PSRAM block pinned next to it (the default: 7.6 KB of internal RAM stay free, for about 3 points of a core) / in internal RAM, from the next converted track |
 | | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
 | | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else. `tools/usb_viz.py` sends them (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
@@ -642,6 +688,13 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   SeekIndex           The run index: every 4th MP3 frame decoded, for a
                       pause's resume anchor and exact seeks back into a run
   ResumeAnchor        The bytes that start a track on the sample it paused at
+  OggPage, OggOpus    An Ogg Opus file as a track (docs/OPUS.md): the pages
+                      and their CRC, the headers, the packets split into
+                      frames, the trims that make it sample-exact, a
+                      chained file's first link and its length, the gap
+                      after a damaged page, the plan for a start part of
+                      the way in (a bisection by granule, a preroll) and
+                      its resume anchor
   FrameCursor         Which frame the sample a decoder offers comes from
   ByteStream          Byte sinks and sources for what is saved and loaded
   HeadsetKeys         What the headphones' transport keys do (never start music)
@@ -651,8 +704,10 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       halfband FIRs, exact counts (docs/RESAMPLER.md)
   RingFeed            The decode side of the ring: the converter, the stage,
                       the ring-full rule (RingOutput wraps it)
-  TableCopy           The converter's tables in internal RAM while a track
-                      at another rate plays (freed at a 44.1 kHz one)
+  TableCopy           The converter's tables copied out of flash while a
+                      track at another rate plays (into a PSRAM block pinned
+                      beside the decoder's state; internal RAM with the
+                      console's Ot0; freed at a 44.1 kHz one)
   DecoderArena        One block for libmad's state, lent to one MP3 decoder
                       at a time (pinned in the PSRAM's fast lower 2 MB)
   DecoderParts        One decoder's state and who frees each part: given
@@ -799,8 +854,9 @@ Every source file says so in its first lines (`SPDX-License-Identifier`).
 
 The firmware binary also contains other people's code, fonts and binary
 libraries under their own licences, not all of them the GPL:
-ESP8266Audio (GPL-3.0-or-later) with libmad (GPL-2.0-or-later) and libFLAC
-(BSD-3-Clause), ESP32-A2DP (Apache-2.0), M5Unified and M5GFX (MIT, with
+ESP8266Audio (GPL-3.0-or-later) with libmad (GPL-2.0-or-later), libFLAC
+(BSD-3-Clause) and libopus (BSD-3-Clause, under the IETF patent grants:
+see "Opus" above), ESP32-A2DP (Apache-2.0), M5Unified and M5GFX (MIT, with
 LovyanGFX and fonts under BSD-style licences), the Arduino-ESP32 core
 (LGPL-2.1-or-later and Apache-2.0), ESP-IDF with Espressif's binary
 Bluetooth and radio libraries (Apache-2.0, with BSD- and MIT-licensed parts

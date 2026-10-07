@@ -9,8 +9,8 @@
 
 // The player's local storage: the SD card if one is inserted, otherwise the
 // LittleFS partition on internal flash (test audio flashed with
-// `pio run -e core2 -t uploadfs`). The music is the .mp3/.flac files under
-// /music, read into the library index (app/Library); the player's own files
+// `pio run -e core2 -t uploadfs`). The music is the .mp3/.flac/.opus files
+// under /music, read into the library index (app/Library); the player's own files
 // (the index's cache, the queue) are in /.player.
 class LocalStorage : public IStorage {
 public:

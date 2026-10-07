@@ -18,7 +18,11 @@
 // is schema 1's keys and "queue"/"repeat" (the repeat mode, a u8:
 // docs/QUEUE-MODES.md section 3.6); its migrate(1, 2) step does nothing
 // (an absent key reads as Off), and older firmware leaves a schema-2 NVS
-// as it is (never reading the key: its queue wraps, as it always did). One blob
+// as it is (never reading the key: its queue wraps, as it always did). A
+// unit that ran the Opus work before it joined the queue modes (schema 1
+// with a kind-3 resume blob, no repeat key) takes the same step and keeps
+// its resume point: a blob's kinds are its own version's business
+// (test_nvs_layout's migration matrix has every such unit). One blob
 // is versioned by its own byte, not by this number: the resume point,
 // which on a schema-1 unit is beta.1's 20-byte form (version 0, until
 // v0.5.0 first saves), version 1's 24 bytes (v0.5.0), or version 2's 64
@@ -50,11 +54,18 @@ SchemaStep schemaStep(bool have, uint16_t stored, uint16_t current = kCurrent);
 
 // ---- the resume point's blob ("queue"/"resume") ----
 // Version 2 (64 bytes, little-endian): a version byte (2), the anchor's
-// kind (0 none, 1 MP3, 2 FLAC), flags (bit 0: exact), a 0; then version
-// 1's five words (generation, entry, pathHash, positionMs, durationMs);
-// then the anchor: the file's size, its rate, the sample (64 bits), the
-// preroll byte, the frame byte, the skip, the frame hash (FLAC: the total
-// samples' low 32 bits); 8 reserved zeros.
+// kind (0 none, 1 MP3, 2 FLAC, 3 Opus), flags (bit 0: exact), a 0; then
+// version 1's five words (generation, entry, pathHash, positionMs,
+// durationMs); then the anchor: the file's size, its rate, the sample (64
+// bits), the preroll byte, the frame byte, the skip, the frame hash (FLAC:
+// the total samples' low 32 bits; Opus: the exact trimmed length's, the
+// byte fields 0: docs/OPUS.md); 8 reserved zeros. A kind this firmware
+// doesn't know (a later format's anchor) keeps the five words and drops the
+// anchor: the point resumes by its second, which is what every anchor falls
+// back to anyway, instead of being lost. (0.6.0, which knew the kinds up to
+// FLAC, refused the whole blob on a kind above them: a downgrade to it from
+// a pause saved on an Opus track loses the resume point once, the
+// documented pattern of SEEK.md section 5.2.)
 // Version 1 (v0.5.0): the version byte, three reserved zeros, the five
 // words: 24 bytes. Version 0 (v0.5.0-beta.1): the five words with no
 // version, 20 bytes. Both still read, with no anchor. Any other size or

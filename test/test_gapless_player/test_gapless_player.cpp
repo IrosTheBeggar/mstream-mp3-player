@@ -285,7 +285,12 @@ struct World {
     queue.assign(ids.data(), static_cast<uint32_t>(ids.size()), 0);
     player.setNextGate(&gate);
   }
-  static std::string path(const std::string& name) { return "/music/" + name + ".mp3"; }
+  // "/music/<name>.mp3", or the name's own extension when it has one
+  // ("b.flac", "c.opus": a mixed queue; the backend here goes by the shape
+  // the test gives a track, never by its extension).
+  static std::string path(const std::string& name) {
+    return "/music/" + name + (name.find('.') == std::string::npos ? ".mp3" : "");
+  }
   uint32_t id(const std::string& name) const {
     return static_cast<uint32_t>(std::find(names.begin(), names.end(), name) - names.begin());
   }
@@ -915,6 +920,155 @@ void test_end_of_track_with_repeat_one_never_decodes_itself_ahead() {
   TEST_ASSERT_EQUAL_UINT32(heard, w.audio.heard.size());  // nothing plays by itself
 }
 
+// ---- the modes on Opus tracks (docs/OPUS.md; GAPLESS.md section 4.7) ----
+// An Opus track's shape: 48 kHz, and it trims itself (the generator drops
+// the pre-skip and the EOS trim: TrimFeed armed {0,0}, the file's kept
+// samples only). The repeat modes and shuffle know nothing of formats, so
+// what they have to get right is the joins: Opus to Opus one 48 kHz
+// stream through the converter, Opus to a 44.1 kHz track a rate change
+// (the tail, then a new stream), and the other way a new stream.
+Track opus(size_t frames, uint32_t seed) { return track(48000, frames, seed, 0, 0); }
+
+// Repeat One on an Opus track: its self-join is one 48 kHz stream, the
+// file's kept samples end to end with nothing trimmed between, the
+// converter running on across the loops, a new token each loop; All
+// again, the MP3 after it follows the converter's tail.
+void test_repeat_one_on_an_opus_track() {
+  World w({"a", "b.opus", "c"}, {"a", "b.opus", "c"});
+  w.put("a", track(44100, 40000, 83));
+  w.put("b.opus", opus(30000, 84));
+  w.put("c", track(44100, 30000, 85));
+  PlaybackController& p = w.player;
+  p.setRepeat(PlaybackController::Repeat::One);
+  p.play(1);
+  w.runUntil([&w] { return w.audio.advances.size() == 2; });  // b -> b, b -> b
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(2, p.repeats());
+  TEST_ASSERT_EQUAL_STRING(World::path("b.opus").c_str(), w.audio.probes.back().c_str());  // itself
+  TEST_ASSERT_TRUE(w.audio.advances[0].token != w.audio.advances[1].token);
+  p.setRepeat(PlaybackController::Repeat::All);  // (b again, decoded ahead, is cut: c joins)
+  w.runUntil([&p] { return p.currentIndex() == 2; });
+  p.setRepeat(PlaybackController::Repeat::Off);
+  w.runToStop();
+  const Frames b = w.get("b.opus").kept();
+  assertSame(concat({reference(48000, concat({b, b, b})), w.get("c").kept()}), w.audio.heard);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+  TEST_ASSERT_EQUAL_UINT32(3, p.gaplessStats().adopted);
+  TEST_ASSERT_EQUAL_UINT32(0, p.gaplessStats().restarted);
+  TEST_ASSERT_EQUAL_UINT32(2, p.repeats());
+}
+
+// Repeat All's wrap from the last Opus entry to the first: to an Opus
+// first entry one 48 kHz stream round and round (an album mStream
+// transcoded, on repeat: no gap at the wrap either); to an MP3 first
+// entry a rate change at the wrap, the converter's tail then the MP3 as
+// it is, and a new 48 kHz stream when the Opus comes round again.
+void test_repeat_all_wraps_from_the_last_opus_entry() {
+  for (int mp3First = 0; mp3First < 2; ++mp3First) {
+    const char* first = mp3First ? "a" : "a.opus";
+    World w({first, "b.opus"}, {first, "b.opus"});
+    w.put(first, mp3First ? track(44100, 40000, 86) : opus(40000, 86));
+    w.put("b.opus", opus(30000, 87));
+    PlaybackController& p = w.player;
+    p.setRepeat(PlaybackController::Repeat::All);
+    p.play(0);
+    w.runUntil([&w] { return w.audio.advances.size() == 2; });  // a -> b -> a
+    TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+    p.setRepeat(PlaybackController::Repeat::Off);
+    w.runToStop();
+    const Frames a = w.get(first).kept(), b = w.get("b.opus").kept();
+    if (mp3First) {
+      const Frames bb = reference(48000, b);
+      assertSame(concat({a, bb, a, bb}), w.audio.heard);
+    } else {
+      assertSame(reference(48000, concat({a, b, a, b})), w.audio.heard);
+    }
+    TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+    TEST_ASSERT_EQUAL_UINT32(3, p.gaplessStats().adopted);
+    TEST_ASSERT_EQUAL_UINT32(0, p.gaplessStats().restarted);
+  }
+}
+
+// An entry with nothing to play (a 0-sample track: an Opus file whose
+// last granule is its pre-skip, an MP3 that is all delay and padding)
+// ends before anything is heard: the engine probes its self-join, finds
+// nothing ahead, cuts, drains and ends. The player takes that end as a
+// failure (docs/QUEUE-MODES.md): alone in the queue, under Off, One or
+// All, one play and a stop, never a second request; inside a queue under
+// One, it moves on to b, which then loops as One does.
+void test_an_empty_entry_is_a_failure_under_repeat() {
+  using Repeat = PlaybackController::Repeat;
+  struct Case {
+    Repeat mode;
+    bool alone;
+  };
+  for (const Case c : {Case{Repeat::Off, true}, Case{Repeat::One, true}, Case{Repeat::All, true}, Case{Repeat::One, false}}) {
+    World w({"z.opus", "b"}, {"z.opus", "b"});
+    w.put("z.opus", opus(0, 92));
+    w.put("b", track(44100, 30000, 93));
+    if (c.alone) {
+      const uint32_t ids[] = {w.id("z.opus")};
+      w.queue.assign(ids, 1, 0);
+    }
+    PlaybackController& p = w.player;
+    p.setRepeat(c.mode);
+    p.play(0);
+    if (c.alone) {
+      w.runToStop();
+      TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+      TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().count);
+      TEST_ASSERT_EQUAL_STRING("no audio in it", p.lastFailure().note);
+      TEST_ASSERT_EQUAL_UINT32(0, w.audio.heard.size());
+      TEST_ASSERT_EQUAL_UINT32(0, p.repeats());
+      continue;
+    }
+    w.runUntil([&p] { return p.currentIndex() == 1; });
+    TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().count);
+    TEST_ASSERT_EQUAL_INT(2, w.audio.plays);
+    w.runUntil([&w] { return w.audio.advances.size() == 1; });  // b -> b
+    TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+    TEST_ASSERT_EQUAL_UINT32(1, p.repeats());
+    p.setRepeat(Repeat::Off);  // (the third b, decoded ahead, is cut)
+    w.runToStop();
+    const Frames b = w.get("b").kept();
+    assertSame(concat({b, b}), w.audio.heard);
+    TEST_ASSERT_EQUAL_INT(2, w.audio.plays);
+    TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().count);
+  }
+}
+
+// Shuffle with a mixed queue (an MP3, a FLAC, an Opus): the shuffled order
+// plays as one request, each join by the rates that meet (the FLAC to the
+// Opus a new stream, the Opus to the MP3 at the wrap a rate change), and
+// shuffle off puts the own order back around the entry that plays, the
+// same next kept (no cut).
+void test_shuffle_with_a_mixed_queue() {
+  World w({"a", "b.flac", "c.opus"}, {"a", "b.flac", "c.opus"});
+  w.put("a", track(44100, 30000, 90));
+  w.put("b.flac", track(44100, 40000, 91, 0, 0));  // a FLAC: sample-exact, nothing to trim
+  w.put("c.opus", opus(30000, 92));
+  // Shuffled b, c, a (the own order a, b, c).
+  const uint32_t ids[] = {w.id("b.flac"), w.id("c.opus"), w.id("a")};
+  const uint32_t ranks[] = {1, 2, 0};
+  w.queue.assign(ids, 3, 0, true, ranks);
+  PlaybackController& p = w.player;
+  p.setRepeat(PlaybackController::Repeat::All);
+  p.play(0);
+  w.runUntil([&w] { return w.audio.advances.size() == 3; });  // b -> c -> a -> b
+  TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+  p.setShuffle(false);  // a, b, c: b plays on at 1, c still next
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_FALSE(p.shuffle());
+  p.setRepeat(PlaybackController::Repeat::Off);
+  w.runToStop();
+  const Frames a = w.get("a").kept(), b = w.get("b.flac").kept(), c = reference(48000, w.get("c.opus").kept());
+  assertSame(concat({b, c, a, b, c}), w.audio.heard);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+  TEST_ASSERT_EQUAL_UINT32(4, p.gaplessStats().adopted);
+  TEST_ASSERT_EQUAL_UINT32(0, p.gaplessStats().restarted);
+  TEST_ASSERT_EQUAL_UINT32(0, w.audio.engine.counters().cuts);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_an_album_plays_as_one_stream);
@@ -941,5 +1095,9 @@ int main(int, char**) {
   RUN_TEST(test_repeat_one_turned_off_while_decoded_ahead);
   RUN_TEST(test_shuffle_toggled_while_the_next_is_decoded_ahead);
   RUN_TEST(test_end_of_track_with_repeat_one_never_decodes_itself_ahead);
+  RUN_TEST(test_repeat_one_on_an_opus_track);
+  RUN_TEST(test_repeat_all_wraps_from_the_last_opus_entry);
+  RUN_TEST(test_an_empty_entry_is_a_failure_under_repeat);
+  RUN_TEST(test_shuffle_with_a_mixed_queue);
   return UNITY_END();
 }

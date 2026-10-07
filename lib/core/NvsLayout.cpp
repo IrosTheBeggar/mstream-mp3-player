@@ -85,9 +85,15 @@ bool decodeResume(const uint8_t* b, size_t n, QueueResume* out) {
     return true;
   }
   if (n == kResumeBytes && b[0] == kResumeVersion) {
-    if (b[1] > static_cast<uint8_t>(ResumeAnchor::Kind::Flac)) return false;  // a kind this firmware doesn't know
     QueueResume r = words(b + 4);
     ResumeAnchor& a = r.anchor;
+    if (b[1] > static_cast<uint8_t>(ResumeAnchor::Kind::Opus)) {
+      // A kind this firmware doesn't know (a later format's anchor): the
+      // five words stand and the anchor goes (the header's rule), so the
+      // point resumes by its second.
+      *out = r;
+      return true;
+    }
     a.kind = static_cast<ResumeAnchor::Kind>(b[1]);
     if (a.kind != ResumeAnchor::Kind::None) {
       a.exact = (b[2] & kFlagExact) != 0;

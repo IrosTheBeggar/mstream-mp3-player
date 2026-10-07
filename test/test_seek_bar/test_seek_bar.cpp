@@ -140,22 +140,24 @@ void test_a_tap_seeks_where_it_landed() {
   TEST_ASSERT_EQUAL_UINT32(kL, b.lengthMs());
 }
 
-// The knob is at x 84 (60 s of 4:05): a tap within 4 line px of it is no seek.
+// The knob is at x 84 (60 s of 4:05): a tap within 4 line px of it, on
+// either side, is no seek. By the finger's x: by its second's start
+// instead (x 80's 0:56 starts at x 79, x 89's 1:03 at x 88) it was x 81-89.
 void test_a_tap_on_the_knob_seeks_nothing() {
-  const int stay[] = {81, 84, 89};
+  const int stay[] = {80, 81, 84, 88};
   for (int x : stay) {
     SeekBar b = pressed(x, 60000);
     TEST_ASSERT_EQUAL(End::Stay, b.onEvent(ev(T::Tap, x), 60000).end);
     TEST_ASSERT_FALSE(b.active());
   }
-  SeekBar b = pressed(80, 60000);
-  SeekBar::Out o = b.onEvent(ev(T::Tap, 80), 60000);
+  SeekBar b = pressed(79, 60000);
+  SeekBar::Out o = b.onEvent(ev(T::Tap, 79), 60000);
   TEST_ASSERT_EQUAL(End::Seek, o.end);
-  TEST_ASSERT_EQUAL_UINT32(56000, o.ms);
-  b = pressed(90, 60000);
-  o = b.onEvent(ev(T::Tap, 90), 60000);
+  TEST_ASSERT_EQUAL_UINT32(55000, o.ms);
+  b = pressed(89, 60000);
+  o = b.onEvent(ev(T::Tap, 89), 60000);
   TEST_ASSERT_EQUAL(End::Seek, o.end);
-  TEST_ASSERT_EQUAL_UINT32(64000, o.ms);
+  TEST_ASSERT_EQUAL_UINT32(63000, o.ms);
 }
 
 // ---- the drag ----
@@ -193,7 +195,8 @@ void test_a_drag_seeks_once_at_the_lift() {
 }
 
 // From the knob: no jump at the DragStart (the slop already moved the
-// finger 13 px), then the finger's movement from there.
+// finger 13 px), then the finger's movement from there: from the time at
+// the DragStart, 828 ms a px.
 void test_a_knob_grab_doesnt_jump() {
   SeekBar b = pressed(90, 60000);
   TEST_ASSERT_TRUE(b.knobGrab());
@@ -201,12 +204,14 @@ void test_a_knob_grab_doesnt_jump() {
   TEST_ASSERT_TRUE(o.tick);
   TEST_ASSERT_TRUE(b.staying());
   TEST_ASSERT_EQUAL_INT(84, b.knobX());
-  o = b.onEvent(ev(T::DragMove, 153, kY, 0, 50, 0), 60000);  // vx 134
-  TEST_ASSERT_EQUAL_UINT32(100000, b.targetMs());
+  // 50 px on: 1:00 + 41.4 s. (From the knob's pixel, x 84's 0:59.6, it
+  // was 1:40.)
+  o = b.onEvent(ev(T::DragMove, 153, kY, 0, 50, 0), 60000);
+  TEST_ASSERT_EQUAL_UINT32(101000, b.targetMs());
   TEST_ASSERT_FALSE(b.staying());
   o = b.onEvent(ev(T::DragEnd, 153), 60000);
   TEST_ASSERT_EQUAL(End::Seek, o.end);
-  TEST_ASSERT_EQUAL_UINT32(100000, o.ms);
+  TEST_ASSERT_EQUAL_UINT32(101000, o.ms);
   // A clamped reading at the Down is never a grab.
   SeekBar c;
   TEST_ASSERT_TRUE(c.down(ev(T::Down, 26, kY, 0, 0, 0, InputEvent::kEdgeLeft), 7, 0, kL));
@@ -259,8 +264,8 @@ void test_the_detent_snaps_and_ticks() {
   TEST_ASSERT_TRUE(b.staying());
   TEST_ASSERT_EQUAL_INT(84, b.knobX());  // snapped onto the marker
   ticks = 0;
-  for (int x = 85; x >= 80; --x) ticks += b.onEvent(ev(T::DragMove, x, kY, 0, -1, 0), 60000).tick;
-  TEST_ASSERT_EQUAL_INT(0, ticks);  // (inside it, then out: nothing)
+  for (int x = 85; x >= 79; --x) ticks += b.onEvent(ev(T::DragMove, x, kY, 0, -1, 0), 60000).tick;
+  TEST_ASSERT_EQUAL_INT(0, ticks);  // (inside it to x 80, then out: nothing)
   TEST_ASSERT_FALSE(b.staying());
   TEST_ASSERT_EQUAL_INT(1, b.onEvent(ev(T::DragMove, 86, kY), 60000).tick);  // in again
   TEST_ASSERT_EQUAL(End::Stay, b.onEvent(ev(T::DragEnd, 86), 60000).end);
@@ -282,6 +287,20 @@ void test_the_detent_snaps_and_ticks() {
   TEST_ASSERT_TRUE(m.staying());
   TEST_ASSERT_EQUAL_INT(m.markerX(), m.knobX());
   TEST_ASSERT_EQUAL(End::Stay, m.onEvent(ev(T::DragEnd, 120), 87000).end);
+
+  // The marker onto a still knob at an event, with no pass between: no
+  // tick either (the move or the lift is the finger's; where it plays now
+  // is measured first), and the lift seeks nothing.
+  SeekBar n = pressed(200, 60000);
+  n.onEvent(ev(T::DragStart, 120, kY, 0, -80, 0), 80000);
+  SeekBar::Out o2 = n.onEvent(ev(T::DragMove, 120, kY), 87000);
+  TEST_ASSERT_FALSE(o2.tick);
+  TEST_ASSERT_TRUE(n.staying());
+  SeekBar p = pressed(200, 60000);
+  p.onEvent(ev(T::DragStart, 120, kY, 0, -80, 0), 80000);
+  o2 = p.onEvent(ev(T::DragEnd, 120), 87000);
+  TEST_ASSERT_EQUAL(End::Stay, o2.end);
+  TEST_ASSERT_FALSE(o2.tick);
 }
 
 // Off the bar: above y 106 (onto the artist row) or onto the strip (y 240);
@@ -573,6 +592,206 @@ void test_with_the_recognizer() {
   }
 }
 
+// ---- a short track: a second wider than the detent ----
+
+namespace {
+
+// The track of the device's finding (OPUS.md's S4, an Opus track of 0:52):
+// 5.64 line px a second, a px 177 ms.
+constexpr uint32_t kShort = 52480;
+
+// The console's scripted drag, uid<x0>,150,<x1>,150,<moveMs>, as
+// Input::simulate() moves it (30 ms down, the move, 150 ms still, the
+// lift) and the UI loop samples it (every `frameMs`), through a real
+// recogniser, on a track playing from `live0` at the Down: the end, where
+// it played then, and the ticks.
+struct Script {
+  SeekBar::Out end;
+  uint32_t liveAtEnd = 0;
+  int ticks = 0;
+};
+
+Script scriptedDrag(uint32_t len, uint32_t live0, int x0, int x1, uint32_t moveMs, uint32_t frameMs) {
+  constexpr uint32_t kDwell = 30, kRest = 150;
+  TouchRecognizer rec;
+  SeekBar bar;
+  Script r;
+  for (uint32_t t = 0;; t += frameMs) {
+    const uint32_t live = live0 + t;
+    const bool lifted = t >= kDwell + moveMs + kRest;
+    int x = x0;
+    if (t >= kDwell + moveMs) {
+      x = x1;
+    } else if (t > kDwell) {
+      x = x0 + static_cast<int>((x1 - x0) * (static_cast<float>(t - kDwell) / static_cast<float>(moveMs)));
+    }
+    TouchRecognizer::Sample s;
+    s.pressed = !lifted;
+    s.x = s.rawX = static_cast<int16_t>(x);
+    s.y = s.rawY = static_cast<int16_t>(kY);
+    InputEvent out[TouchRecognizer::kMaxEvents];
+    const int n = rec.update(t, s, out);
+    for (int i = 0; i < n; ++i) {
+      if (out[i].type == T::Down) {
+        if (bar.down(out[i], 7, live, len)) rec.noHold();
+        continue;
+      }
+      const SeekBar::Out o = bar.onEvent(out[i], live);
+      r.ticks += o.tick;
+      if (o.end != End::None) {
+        r.end = o;
+        r.liveAtEnd = live;
+      }
+    }
+    if (bar.active()) bar.live(live);  // (the page's update(), every pass)
+    if (lifted) return r;
+  }
+}
+
+}  // namespace
+
+// The second already playing is no seek, though its start is more than
+// 4 px behind the marker; paused, the exact resume anchor stays. A seek
+// one second away still seeks.
+void test_the_second_playing_is_no_seek() {
+  // Paused at 0:42.99 (the knob at x 254): 0:42 starts at x 248.9, 5 px
+  // behind. A tap at x 249 (0:42, 5 px off): no seek (it was "seek 0:42
+  // -> 0:42"); at x 248 (0:41, 6 px off): the seek one second away.
+  SeekBar b = pressed(249, 42990, kShort);
+  TEST_ASSERT_EQUAL_INT(254, b.knobX());
+  TEST_ASSERT_EQUAL_UINT32(42000, SeekBar::msAt(249, 0, kShort));
+  TEST_ASSERT_EQUAL(End::Stay, b.onEvent(ev(T::Tap, 249), 42990).end);
+  b = pressed(248, 42990, kShort);
+  SeekBar::Out o = b.onEvent(ev(T::Tap, 248), 42990);
+  TEST_ASSERT_EQUAL(End::Seek, o.end);
+  TEST_ASSERT_EQUAL_UINT32(41000, o.ms);
+  // Paused at 0:42.01 (the knob at x 248, whose px begins in 0:41): a tap
+  // 1 px left of it (in 0:41, which starts 5 px behind) is on the knob, no
+  // seek back; 5 px left of it (0:40.96), a seek back.
+  b = pressed(247, 42010, kShort);
+  TEST_ASSERT_EQUAL_INT(248, b.knobX());
+  TEST_ASSERT_EQUAL(End::Stay, b.onEvent(ev(T::Tap, 247), 42010).end);
+  b = pressed(243, 42010, kShort);
+  o = b.onEvent(ev(T::Tap, 243), 42010);
+  TEST_ASSERT_EQUAL(End::Seek, o.end);
+  TEST_ASSERT_EQUAL_UINT32(40000, o.ms);
+  // Forward from 0:42.10 (the knob at x 249): 0:43 at x 255, 6 px on.
+  b = pressed(255, 42100, kShort);
+  o = b.onEvent(ev(T::Tap, 255), 42100);
+  TEST_ASSERT_EQUAL(End::Seek, o.end);
+  TEST_ASSERT_EQUAL_UINT32(43000, o.ms);
+
+  // Playing, a drag from away to x 249 (0:42) while 0:42.90-0:42.99
+  // plays: into the detent by the second (one tick), the knob on the
+  // marker, "0:42 no change", and the lift at 0:42.99 seeks nothing.
+  SeekBar d = pressed(100, 42900, kShort);
+  TEST_ASSERT_FALSE(d.knobGrab());
+  d.onEvent(ev(T::DragStart, 113, kY, 0, 13, 0), 42900);
+  int ticks = 0;
+  for (int x = 114; x <= 249; ++x) ticks += d.onEvent(ev(T::DragMove, x, kY), 42900).tick;
+  TEST_ASSERT_EQUAL_INT(1, ticks);
+  TEST_ASSERT_TRUE(d.staying());
+  TEST_ASSERT_EQUAL_INT(d.markerX(), d.knobX());
+  TEST_ASSERT_TRUE(d.readout().staying);
+  TEST_ASSERT_EQUAL_UINT32(42, d.readout().liveS);
+  d.live(42990);
+  TEST_ASSERT_TRUE(d.staying());
+  o = d.onEvent(ev(T::DragEnd, 249), 42990);
+  TEST_ASSERT_EQUAL(End::Stay, o.end);
+  TEST_ASSERT_FALSE(o.tick);
+  // The same drag lifted once 0:43 plays, 5 px on: the seek one second
+  // back (the readout said "0:42 -0:01").
+  SeekBar e = pressed(100, 42900, kShort);
+  e.onEvent(ev(T::DragStart, 113, kY, 0, 13, 0), 42900);
+  e.onEvent(ev(T::DragMove, 249, kY), 42900);
+  e.live(43050);
+  TEST_ASSERT_FALSE(e.staying());
+  TEST_ASSERT_EQUAL_UINT32(42, e.readout().targetS);
+  TEST_ASSERT_EQUAL_UINT32(43, e.readout().liveS);
+  o = e.onEvent(ev(T::DragEnd, 249), 43050);
+  TEST_ASSERT_EQUAL(End::Seek, o.end);
+  TEST_ASSERT_EQUAL_UINT32(42000, o.ms);
+
+  // A tap within 1 px of the knob at every phase, paused: no seek. By the
+  // target's x, 29 % of these sought on 0:52 (the second playing or the
+  // one before), and 8 % on 1:15 (the one before: a tap 1 px left early
+  // in a second, its start 5 px behind).
+  const uint32_t lengths[] = {kShort, 75000};
+  for (uint32_t len : lengths) {
+    for (uint32_t live = 41000; live < 44000; live += 7) {
+      const int knob = SeekBar::kLineX + SeekBar::xOf(live, len);
+      for (int x = knob - 1; x <= knob + 1; ++x) {
+        SeekBar t = pressed(x, live, len);
+        TEST_ASSERT_EQUAL(End::Stay, t.onEvent(ev(T::Tap, x), live).end);
+      }
+    }
+  }
+}
+
+// The drift: a grab from the knob while it plays on, the marker moving
+// 5.6 px a second under a still finger.
+void test_a_knob_grab_while_it_plays_on() {
+  // The device's (2026-10-06): uid249,150,263,150,300 from 0:42.25, the
+  // knob at x 250. The slop takes the 14 px: the DragStart comes at
+  // 0:42.59 (staying), the lift 168 ms later at 0:42.75, the finger's
+  // place 1 px from the marker, the second the same. It sought "0:42 ->
+  // 0:42 (drag from the knob, held 172 ms)": 0:42 starts 5 px behind the
+  // marker by then.
+  Script r = scriptedDrag(kShort, 42250, 249, 263, 300, 42);
+  TEST_ASSERT_EQUAL(End::Stay, r.end.end);
+  TEST_ASSERT_EQUAL_INT(1, r.ticks);  // the scrub's
+  TEST_ASSERT_EQUAL_UINT32(42754, r.liveAtEnd);
+  // Every phase, over three seconds, at 17-30 fps: from the knob, 14 px
+  // and lifted, never a seek (the marker drifts ~1 px from the DragStart
+  // to the lift, at times into the next second). On 1:15 too, where a
+  // second (3.95 px) is in the detent but the one before wasn't: by the
+  // knob's pixel, 15 % of these sought it.
+  const uint32_t lengths[] = {kShort, 75000};
+  const uint32_t frames[] = {33, 42, 50, 60};
+  for (uint32_t len : lengths) {
+    for (uint32_t f : frames) {
+      for (uint32_t live0 = 41000; live0 < 44000; live0 += 7) {
+        const int knob = SeekBar::kLineX + SeekBar::xOf(live0, len);
+        r = scriptedDrag(len, live0, knob, knob + 14, 300, f);
+        TEST_ASSERT_EQUAL(End::Stay, r.end.end);
+      }
+    }
+  }
+
+  // Held still on the knob while it plays on: staying while the marker is
+  // in the second grabbed or within 4 px; past both, the knob is left on
+  // that second ("-0:01") and the lift seeks back there. The grab began at
+  // 0:42.01, in a pixel that begins in 0:41: the second grabbed is 0:42
+  // (from the knob's pixel it was 0:41, and the knob dropped 5 px back at
+  // the DragStart).
+  SeekBar b = pressed(248, 42010, kShort);
+  TEST_ASSERT_TRUE(b.knobGrab());
+  b.onEvent(ev(T::DragStart, 261, kY, 300, 13, 0), 42010);
+  TEST_ASSERT_TRUE(b.staying());
+  TEST_ASSERT_EQUAL_UINT32(42000, b.targetMs());
+  TEST_ASSERT_EQUAL_INT(248, b.knobX());
+  b.live(42900);  // 5 px on, the same second
+  TEST_ASSERT_TRUE(b.staying());
+  b.live(43100);  // 7 px on, the next
+  TEST_ASSERT_FALSE(b.staying());
+  TEST_ASSERT_EQUAL_INT(248, b.knobX());
+  SeekBar::Out o = b.onEvent(ev(T::DragEnd, 261, kY, 1400), 43100);
+  TEST_ASSERT_EQUAL(End::Seek, o.end);
+  TEST_ASSERT_EQUAL_UINT32(42000, o.ms);
+  // Moved from there while paused: 5 px back, 0:41; 5 px on, still 0:42
+  // (staying); 6 px on, 0:43.
+  const int moves[] = {-5, 5, 6};
+  const End ends[] = {End::Seek, End::Stay, End::Seek};
+  const uint32_t to[] = {41000, 0, 43000};
+  for (int i = 0; i < 3; ++i) {
+    b = pressed(248, 42010, kShort);
+    b.onEvent(ev(T::DragStart, 261, kY, 0, 13, 0), 42010);
+    o = b.onEvent(ev(T::DragEnd, 261 + moves[i]), 42010);
+    TEST_ASSERT_EQUAL(ends[i], o.end);
+    TEST_ASSERT_EQUAL_UINT32(to[i], o.ms);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_ms_at_maps_the_line);
@@ -597,5 +816,7 @@ int main(int, char**) {
   RUN_TEST(test_the_length_is_frozen_for_the_touch);
   RUN_TEST(test_a_cancel_or_release_seeks_nothing);
   RUN_TEST(test_with_the_recognizer);
+  RUN_TEST(test_the_second_playing_is_no_seek);
+  RUN_TEST(test_a_knob_grab_while_it_plays_on);
   return UNITY_END();
 }

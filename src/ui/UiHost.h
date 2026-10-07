@@ -24,6 +24,7 @@ struct AppState {
   // The player and the queue (Waiting: a play waits for the headphones).
   PlayState play = PlayState::Stopped;
   bool failed = false;           // the current track can't be played
+  bool seekable = true;          // ... can start part of the way in (PlaybackController::seekable(): the entry's path asked of the backend; the seek bar's knob)
   uint32_t trackId = 0xFFFFFFFFu;  // TrackCatalog id of the current entry
   uint32_t currentKey = 0xFFFFFFFFu;
   int32_t current = -1;          // queue position

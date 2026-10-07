@@ -106,9 +106,12 @@ bool SeekIndex::anchorAt(uint32_t gen, uint32_t ringFrames, uint32_t ringRate, R
   const Run& r = s.run;
   if (r.kind == Kind::None || r.gen != gen || r.rate == 0) return false;
   const uint64_t t = sampleAt(r.base, ringFrames, r.rate, ringRate);
-  if (r.kind == Kind::Flac) {
+  if (r.kind == Kind::Flac || r.kind == Kind::Opus) {
+    // A header-only run: the anchor is the sample, the file's size and
+    // the length's low 32 bits (the FLAC model; oggopus::makeAnchor() makes
+    // an Opus one the same way, and oggopus::checkAnchor() takes this one).
     *out = ResumeAnchor{};
-    out->kind = ResumeAnchor::Kind::Flac;
+    out->kind = r.kind == Kind::Flac ? ResumeAnchor::Kind::Flac : ResumeAnchor::Kind::Opus;
     out->exact = r.exact;
     out->rate = r.rate;
     out->sample = t;

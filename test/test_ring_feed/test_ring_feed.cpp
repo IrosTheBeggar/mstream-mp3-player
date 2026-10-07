@@ -354,6 +354,82 @@ void test_the_budget_caps_ring_frames_too() {
   gFeed.setDiscard(false);
 }
 
+// The Opus generator's path (AudioOutput::ConsumeSamples(): a frame's
+// 120-2,880 samples handed over whole, docs/OPUS.md): writeBudgeted()
+// gives the same bits as consume() on each frame in turn, also mixed with
+// it (frames held for the per-frame path go first), exactly the converted
+// stream in the ring, and the pass's budgets hold as for consume(): at
+// most kPass source frames, and a pass makes under kPass + maxOut() ring
+// frames, whatever the block sizes and however often the ring is full.
+void test_the_budgeted_block_write_is_the_frames_one_by_one() {
+  const uint32_t rates[] = {48000, 44100, 8000, 96000};
+  const uint32_t sizes[] = {120, 480, 960, 2880, 1, 7, 2000};
+  for (int mono = 0; mono < 2; ++mono) {
+    for (uint32_t hz : rates) {
+      const Frames src = noise(hz / 3 + 11, hz + 5 + mono, 20000);
+      std::mt19937 rng(hz + mono);
+      fresh();
+      TEST_ASSERT_TRUE(gFeed.setRate(static_cast<int>(hz)));
+      gFeed.setChannels(mono ? 1 : 2);
+      Frames out;
+      const size_t frames = src.size() / 2;
+      size_t next = 0;
+      size_t blockAt = 0, blockLeft = 0;  // the frame in hand: its samples still to hand over
+      bool oneByOne = false;              // ... through consume() instead (a mix, as a trim would make)
+      uint64_t refused = 0;
+      while (next < frames || blockLeft > 0) {
+        gFeed.setBudget(kPass);
+        const uint64_t before = gFeed.made();
+        uint32_t taken = 0;
+        for (;;) {
+          if (blockLeft == 0) {
+            if (next >= frames) break;
+            blockLeft = std::min<size_t>(sizes[rng() % 7], frames - next);
+            blockAt = next;
+            next += blockLeft;
+            oneByOne = rng() % 4 == 0;
+          }
+          uint32_t got = 0;
+          if (oneByOne) {
+            while (got < blockLeft && gFeed.consume(&src[2 * (blockAt + got)])) ++got;
+          } else {
+            got = gFeed.writeBudgeted(&src[2 * blockAt], static_cast<uint32_t>(blockLeft));
+          }
+          taken += got;
+          blockAt += got;
+          blockLeft -= got;
+          if (blockLeft > 0) {  // refused (the ring full, or the budget spent): the rest next pass
+            ++refused;
+            break;
+          }
+        }
+        gFeed.commit();
+        TEST_ASSERT_TRUE(taken <= kPass);
+        TEST_ASSERT_TRUE(gFeed.made() - before < kPass + RateConverter::kMaxOut);
+        drain(out, rng() % 3 == 0 ? 0 : rng() % 900);
+      }
+      TEST_ASSERT_TRUE(refused > 0);
+      while (!gFeed.finish()) drain(out, rng() % 900 + 1);
+      drain(out, kRingCap);
+      assertSame(reference(hz, src, mono != 0), out);
+      TEST_ASSERT_EQUAL_UINT64(ringFrames(hz, frames), out.size() / 2);
+      TEST_ASSERT_EQUAL_UINT64(out.size() / 2, gFeed.made());
+    }
+  }
+  // A spent budget takes nothing; a refused rate takes nothing.
+  const Frames src = noise(100, 9, 1000);
+  fresh();
+  TEST_ASSERT_TRUE(gFeed.setRate(48000));
+  gFeed.setBudget(10);
+  TEST_ASSERT_EQUAL_UINT32(10, gFeed.writeBudgeted(src.data(), 50));
+  TEST_ASSERT_EQUAL_UINT32(0, gFeed.writeBudgeted(src.data(), 50));
+  TEST_ASSERT_EQUAL_UINT32(0, gFeed.budgetLeft());
+  fresh();
+  TEST_ASSERT_FALSE(gFeed.setRate(37800));
+  gFeed.setBudget(kPass);
+  TEST_ASSERT_EQUAL_UINT32(0, gFeed.writeBudgeted(src.data(), 50));
+}
+
 // The ring budget holds across a rate change mid-pass into or out of
 // 44.1 kHz: the passthrough's frames count against it (a pass that passed
 // 600 frames and then goes to 12 kHz has 424 left, not 1024), and a pass
@@ -867,6 +943,7 @@ int main(int, char**) {
   RUN_TEST(test_the_budget_counts_source_frames);
   RUN_TEST(test_the_budget_caps_ring_frames_too);
   RUN_TEST(test_the_ring_budget_holds_across_a_rate_change);
+  RUN_TEST(test_the_budgeted_block_write_is_the_frames_one_by_one);
   RUN_TEST(test_a_block_makes_at_most_max_made);
   RUN_TEST(test_hi_res_is_off_by_default);
   RUN_TEST(test_the_same_rate_again_changes_nothing);

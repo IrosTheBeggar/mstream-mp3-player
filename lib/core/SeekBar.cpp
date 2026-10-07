@@ -48,9 +48,11 @@ bool SeekBar::down(const InputEvent& e, uint32_t key, uint32_t liveMs, uint32_t 
   targetSinceMs_ = e.ms;
   staying_ = false;
   const int knob = markerX();
+  placePx_ = knob - kLineX;
   // (A clamped reading's x is no place: never a grab.)
   knobGrab_ = e.edges == 0 && std::abs(e.x - knob) <= kGrabPx;
-  grabDx_ = 0;
+  grabMs_ = 0;
+  grabX_ = 0;
   readoutLeft_ = knob >= kReadoutStartX;
   return true;
 }
@@ -68,17 +70,40 @@ SeekBar::Readout SeekBar::readout() const {
   return r;
 }
 
-bool SeekBar::stays(uint32_t targetMs) const {
-  return std::abs(xOf(targetMs, lengthMs_) - xOf(liveMs_, lengthMs_)) <= kStayPx;
+bool SeekBar::stays() const {
+  // The second playing: a seek there would only start it again.
+  if (targetMs_ / 1000 == liveMs_ / 1000) return true;
+  // The finger's place, not the target's x: that is its second's start, up
+  // to a second's px behind the finger (5.6 on a 52 s track).
+  return std::abs(placePx_ - xOf(liveMs_, lengthMs_)) <= kStayPx;
+}
+
+int SeekBar::placeAt(int px, uint8_t edges) const {
+  const int reach = xOf(trackseek::seekLimitMs(lengthMs_), lengthMs_);
+  if (edges & InputEvent::kEdgeLeft) return 0;
+  if (edges & InputEvent::kEdgeRight) return reach;
+  return std::max(0, std::min(px, reach));
+}
+
+uint32_t SeekBar::fromGrab(int dx) const {
+  const int64_t ms = static_cast<int64_t>(grabMs_) + static_cast<int64_t>(dx) * lengthMs_ / kLineW;
+  const uint32_t reach = trackseek::seekLimitMs(lengthMs_);
+  if (ms <= 0) return 0;
+  if (ms >= reach) return reach;
+  return static_cast<uint32_t>(ms) / 1000 * 1000;
 }
 
 void SeekBar::aim(const InputEvent& e) {
-  const uint32_t t = msAt(e.x + grabDx_, e.edges, lengthMs_);
+  // (A clamped reading reaches its end, grab or not.)
+  const bool grab = knobGrab_ && e.edges == 0;
+  const int dx = e.x - grabX_;
+  const uint32_t t = grab ? fromGrab(dx) : msAt(e.x, e.edges, lengthMs_);
   if (t != targetMs_) {
     targetMs_ = t;
     targetSinceMs_ = e.ms;
   }
-  staying_ = stays(t);
+  placePx_ = placeAt(grab ? xOf(grabMs_, lengthMs_) + dx : e.x - kLineX, e.edges);
+  staying_ = stays();
 }
 
 void SeekBar::side() {
@@ -106,7 +131,7 @@ SeekBar::Out SeekBar::end(End how, uint32_t ms) {
 void SeekBar::live(uint32_t liveMs) {
   liveMs_ = liveMs;
   if (phase_ != Phase::Scrubbing) return;
-  staying_ = stays(targetMs_);  // the marker onto a still knob: staying, no tick
+  staying_ = stays();  // the marker onto a still knob: staying, no tick
   side();
 }
 
@@ -122,7 +147,8 @@ SeekBar::Out SeekBar::onEvent(const InputEvent& e, uint32_t liveMs) {
       const uint32_t t = msAt(e.x, e.edges, lengthMs_);
       targetMs_ = t;
       targetSinceMs_ = e.ms;
-      if (stays(t)) return end(End::Stay);  // a tap on the knob
+      placePx_ = placeAt(e.x - kLineX, e.edges);
+      if (stays()) return end(End::Stay);  // a tap on the knob
       o = end(End::Seek, t);
       o.tap = true;
       return o;
@@ -133,8 +159,11 @@ SeekBar::Out SeekBar::onEvent(const InputEvent& e, uint32_t liveMs) {
       // From the knob: it stays where it is now (where it plays: not where
       // it was at the Down, which a finger that rested on it while the
       // music played on would see it jump back to) and moves by the
-      // finger's movement from here. Anywhere else: it comes to the finger.
-      grabDx_ = knobGrab_ ? markerX() - e.x : 0;
+      // finger's movement from here. The anchor is the time, not the
+      // knob's pixel, so the grab starts on the second playing. Anywhere
+      // else: it comes to the finger.
+      grabMs_ = liveMs_;
+      grabX_ = e.x;
       phase_ = e.y < kOffAboveY || e.y >= kOffBelowY ? Phase::Off : Phase::Scrubbing;  // (a steep, fast start)
       aim(e);  // (staying here is no tick of its own: the scrub's is enough)
       targetSinceMs_ = e.ms;
@@ -153,14 +182,18 @@ SeekBar::Out SeekBar::onEvent(const InputEvent& e, uint32_t liveMs) {
         aim(e);
         o.tick = true;
       } else if (phase_ == Phase::Scrubbing) {
-        const bool was = staying_;
+        // Where it plays now first: the marker onto a still knob is no
+        // tick (live()'s rule), here as at a pass; the finger's move is.
+        const bool was = stays();
         aim(e);
         if (staying_ && !was) o.tick = true;  // into the detent
       }
       side();
       if (e.type == T::DragMove) return o;
-      // The lift: nothing to feel (a seek's audio jump confirms it), and at
-      // most one seek, to the second the readout showed.
+      // The lift: nothing more to feel (a seek's audio jump confirms it),
+      // and at most one seek, to the second the readout showed; none while
+      // staying, just measured against where it plays at the lift (so
+      // never to the second playing).
       if (phase_ == Phase::Off) return end(End::Off);
       if (staying_) return end(End::Stay);
       return end(End::Seek, targetMs_);

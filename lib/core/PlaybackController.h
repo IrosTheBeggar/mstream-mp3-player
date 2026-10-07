@@ -349,16 +349,23 @@ public:
   void queueReplaced(bool currentKept);
 
   // The last track that couldn't be played (skipped by update()), for the
-  // UI's note ("Skipped 07 - x.flac: can't play it", or why its sample rate
-  // was refused) and the Queue's mark on its row. `count` goes up by one
+  // UI's note ("Skipped 07 - x.flac: can't play it", why its sample rate
+  // was refused, or the backend's own few words: "surround Opus isn't
+  // supported") and the Queue's mark on its row. `count` goes up by one
   // per failure.
   struct Failure {
     uint32_t count = 0;
     uint32_t track = QueueModel::kNone;  // its TrackCatalog id
     uint32_t key = QueueModel::kNone;    // its queue entry's key
     IAudioBackend::RateRefusal rate;     // hz 0: not its rate
+    char note[48] = "";                  // IAudioBackend::failureNote() ("": nothing better than "can't play it")
   };
   const Failure& lastFailure() const { return failure_; }
+  // The current entry can start part of the way in (IAudioBackend::
+  // seekable(), by its path: Now Playing's seek bar shows a knob), whichever
+  // way it became current: a play, a gapless join heard without a play(),
+  // a cue, a boot's restore. No entry: false.
+  bool seekable() const;
 
   // ---- repeat and shuffle (docs/QUEUE-MODES.md) ----
   enum class Repeat : uint8_t { Off, All, One };

@@ -331,6 +331,38 @@ void test_same_rate_joins_are_one_stream() {
   }
 }
 
+// An Opus track's shape (docs/OPUS.md): always 48 kHz, and it trims itself
+// (the pre-skip and the EOS trim are the generator's: TrimFeed armed {0,0}
+// gets kept samples only). Two of them join as one stream, sample-exact
+// (what is heard is the two files' kept samples converted as one), and
+// one against a 44.1 kHz MP3 is a rate change: the tail, then a new stream.
+void test_self_trimming_48k_tracks_join_as_opus_does() {
+  {
+    Rig r;
+    r.tracks["/a"] = track(48000, 2519040 / 24, 61);  // the card set's album parts, scaled down
+    r.tracks["/b"] = track(48000, 2519040 / 24, 62);
+    r.tracks["/c"] = track(48000, 60000, 63);
+    r.play({"/a", "/b", "/c"});
+    r.runToEnd();
+    assertSame(reference(48000, concat({r.tracks["/a"].kept(), r.tracks["/b"].kept(), r.tracks["/c"].kept()})), r.heard);
+    TEST_ASSERT_EQUAL_UINT32(2, r.engine.counters().joins);
+    TEST_ASSERT_EQUAL_UINT32(0, r.engine.counters().resets);
+  }
+  {
+    Rig r;
+    r.tracks["/opus"] = track(48000, 70000, 64);
+    r.tracks["/mp3"] = track(44100, 50000, 65, 1106, 700);
+    r.tracks["/opus2"] = track(48000, 40000, 66);
+    r.play({"/opus", "/mp3", "/opus2"});
+    r.runToEnd();
+    assertSame(concat({reference(48000, r.tracks["/opus"].kept()), r.tracks["/mp3"].kept(),
+                       reference(48000, r.tracks["/opus2"].kept())}),
+               r.heard);
+    TEST_ASSERT_EQUAL_UINT32(0, r.engine.counters().joins);
+    TEST_ASSERT_EQUAL_UINT32(2, r.engine.counters().resets);
+  }
+}
+
 // Another rate: the tail goes in first, then a new stream (a fresh
 // filter): each track converted alone, with its exact count.
 void test_rate_change_joins_are_streams_back_to_back() {
@@ -880,6 +912,7 @@ void test_no_advance_while_cutting() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_same_rate_joins_are_one_stream);
+  RUN_TEST(test_self_trimming_48k_tracks_join_as_opus_does);
   RUN_TEST(test_rate_change_joins_are_streams_back_to_back);
   RUN_TEST(test_an_unknown_rate_resets_and_the_mp3_order_continues);
   RUN_TEST(test_the_same_track_again);

@@ -4,6 +4,8 @@
 // Host unit tests for PlaybackController. Run: pio test -e native
 #include <unity.h>
 
+#include <cstdio>
+#include <cstring>
 #include <initializer_list>
 #include <string>
 #include <vector>
@@ -26,6 +28,8 @@ public:
   bool failedFlag = false;
   bool failEverything = false;  // every track played from now on fails
   RateRefusal refusal;          // why it failed, when its rate was why
+  std::string failureText;      // ... or its own few words for the note ("": none)
+  std::string unseekable;       // the one path seekable() is false for (an .opus, say)
   int stopCount = 0;
   uint32_t lastStartMs = 0;  // where the last play() asked to start
   uint32_t lastHintMs = 0;   // the length it was handed
@@ -90,8 +94,21 @@ public:
     position = lastStartMs;
   }
   bool finished() const override { return finishedFlag; }
+  // The track reaches its natural end: finished(), the position at the end
+  // it got to (the one a test set, else a second in: a natural end with
+  // the position still at 0:00 is an empty track, which the player takes
+  // for a failure, test_an_end_at_0_00_is_a_failure).
+  void finish() {
+    finishedFlag = true;
+    if (position == 0) position = 1000;
+  }
   bool failed() const override { return failedFlag; }
   RateRefusal rateRefusal() const override { return failedFlag ? refusal : RateRefusal{}; }
+  size_t failureNote(char* buf, size_t size) const override {
+    snprintf(buf, size, "%s", failedFlag ? failureText.c_str() : "");
+    return strlen(buf);
+  }
+  bool seekable(const char* path) const override { return unseekable != path; }
   // Gapless playback: the words the player sends, and joins it is told
   // were heard (advances, taken once each).
   std::vector<Next> nexts;
@@ -181,7 +198,7 @@ void test_repeat_all_wraps() {
   TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
   p.prev();  // wraps 0 -> 1
   TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
-  a.finishedFlag = true;
+  a.finish();
   p.update(0);  // the end of the last: the first, playing
   TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
@@ -192,7 +209,7 @@ void test_auto_advance_when_track_finishes() {
   FakeAudioBackend& a = r.audio;
   PlaybackController& p = r.player;
   p.play(0);
-  a.finishedFlag = true;
+  a.finish();
   p.update(0);
   TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
@@ -255,6 +272,54 @@ void test_a_rate_refusal_is_recorded_with_the_failure() {
   TEST_ASSERT_FALSE(p.lastFailure().rate.needsCpu);
 }
 
+// The backend's own few words go with the record too ("surround Opus isn't
+// supported": Now Playing's toast shows them instead of "can't play it");
+// a failure without any leaves the note empty.
+void test_the_backends_note_is_recorded_with_the_failure() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.play(0);
+  a.failureText = "surround Opus isn't supported";
+  a.failedFlag = true;
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().count);
+  TEST_ASSERT_EQUAL_STRING("surround Opus isn't supported", p.lastFailure().note);
+  TEST_ASSERT_EQUAL_UINT32(0, p.lastFailure().rate.hz);
+  a.failureText.clear();
+  a.failedFlag = true;
+  p.update(0);
+  TEST_ASSERT_EQUAL_UINT32(2, p.lastFailure().count);
+  TEST_ASSERT_EQUAL_STRING("", p.lastFailure().note);
+}
+
+// The seek bar's knob follows the current entry, not the last play(): the
+// backend is asked by the entry's path, so an entry waiting after a boot
+// (no play() yet), a track joined gaplessly (no play() of its own) and the
+// entry after a skip each get their own answer.
+void test_seekable_is_the_current_entrys() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  a.unseekable = "/music/b.mp3";
+  TEST_ASSERT_TRUE(p.seekable());  // stopped on a, as after a boot
+  r.queue.setCurrent(1);
+  TEST_ASSERT_FALSE(p.seekable());  // stopped on b: its own answer, no play() asked
+  p.play(0);
+  TEST_ASSERT_TRUE(p.seekable());
+  const uint32_t t1 = a.nexts.back().token;  // b joins a
+  a.advances.push_back(t1);
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT(1, a.playCount);  // heard, adopted: no play()
+  TEST_ASSERT_FALSE(p.seekable());
+  p.next();  // c
+  TEST_ASSERT_TRUE(p.seekable());
+  p.stop();
+  p.clearQueue();
+  TEST_ASSERT_FALSE(p.seekable());  // no entry
+}
+
 void test_all_tracks_failing_stops_after_one_pass() {
   Rig r(2);
   FakeAudioBackend& a = r.audio;
@@ -277,7 +342,7 @@ void test_a_finished_track_resets_the_failure_count() {
   p.play(0);
   a.failedFlag = true;
   p.update(0);  // 0 failed -> 1
-  a.finishedFlag = true;
+  a.finish();
   p.update(0);  // 1 played through -> 2
   TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
   a.failedFlag = true;
@@ -387,7 +452,7 @@ void test_play_now_replaces_the_queue_and_plays_from_start() {
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
   TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
   TEST_ASSERT_EQUAL_STRING("/music/a.mp3", r.audio.lastPath.c_str());
-  r.audio.finishedFlag = true;
+  r.audio.finish();
   r.player.update(0);  // the rest of the album follows
   TEST_ASSERT_EQUAL_STRING("/music/b.mp3", r.audio.lastPath.c_str());
 }
@@ -527,7 +592,7 @@ void test_repeat_off_stops_at_the_end() {
   Rig r(2);
   r.player.setRepeat(PlaybackController::Repeat::Off);
   r.player.play(1);
-  r.audio.finishedFlag = true;
+  r.audio.finish();
   r.player.update(0);
   TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
   TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
@@ -560,7 +625,7 @@ void test_pause_after_this_track_cues_the_next_entry() {
   Rig r(3);
   r.player.play(0);
   r.player.setPauseAfterTrack(true);
-  r.audio.finishedFlag = true;
+  r.audio.finish();
   r.player.update(0);
   TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
   TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
@@ -586,7 +651,7 @@ void test_pause_after_this_track_survives_a_skip_and_a_failure() {
   r.player.update(0);  // b fails: skipped to c
   TEST_ASSERT_EQUAL_INT(2, r.player.currentIndex());
   TEST_ASSERT_TRUE(r.player.pauseAfterTrack());
-  r.audio.finishedFlag = true;
+  r.audio.finish();
   r.player.update(0);
   TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
   TEST_ASSERT_EQUAL_INT(0, r.player.currentIndex());  // (repeat: the first entry)
@@ -598,7 +663,7 @@ void test_pause_after_the_last_track_without_repeat_stops() {
   r.player.setRepeat(PlaybackController::Repeat::Off);
   r.player.play(1);
   r.player.setPauseAfterTrack(true);
-  r.audio.finishedFlag = true;
+  r.audio.finish();
   r.player.update(0);
   TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)r.player.state());
   TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
@@ -1323,7 +1388,7 @@ void test_a_restart_keeps_the_sleep_timers_pause_after_this_track() {
   r.player.update(0);  // not an end
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
   TEST_ASSERT_EQUAL_UINT32(0, r.player.timerStops());
-  r.audio.finishedFlag = true;
+  r.audio.finish();
   r.player.update(0);
   TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)r.player.state());
   TEST_ASSERT_EQUAL_INT(1, r.player.currentIndex());
@@ -1555,7 +1620,7 @@ void test_repeat_one_plays_the_entry_again() {
   TEST_ASSERT_EQUAL_INT((int)Repeat::One, (int)p.repeat());
   p.play(1);
   const uint32_t key = r.queue.currentKey();
-  a.finishedFlag = true;
+  a.finish();
   p.update(0);
   TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
   TEST_ASSERT_EQUAL_UINT32(key, r.queue.currentKey());
@@ -1564,7 +1629,7 @@ void test_repeat_one_plays_the_entry_again() {
   TEST_ASSERT_EQUAL_STRING("/music/b.mp3", a.lastPath.c_str());
   TEST_ASSERT_EQUAL_UINT32(0, a.lastStartMs);
   TEST_ASSERT_EQUAL_UINT32(1, p.repeats());
-  a.finishedFlag = true;
+  a.finish();
   p.update(0);
   TEST_ASSERT_EQUAL_INT(3, a.playCount);
   TEST_ASSERT_EQUAL_UINT32(2, p.repeats());
@@ -1612,6 +1677,44 @@ void test_repeat_one_moves_on_from_a_failure() {
   TEST_ASSERT_EQUAL_INT(2, all.audio.playCount);
 }
 
+// A natural end with the position still at 0:00 is an empty track (no
+// samples to play: an MP3 that is all delay and padding, a FLAC of 0
+// samples; an empty Opus file is refused at its open): a failure, noted
+// "no audio in it", so One moves on instead of starting it again at once,
+// round and round; alone in the queue it stops, as every track failing
+// in a row does; a track that ends a second in loops as ever.
+void test_an_end_at_0_00_is_a_failure() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.setRepeat(Repeat::One);
+  p.play(0);
+  a.finishedFlag = true;  // (not finish(): the position stays at 0:00)
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().count);
+  TEST_ASSERT_EQUAL_UINT32(0, p.lastFailure().track);
+  TEST_ASSERT_EQUAL_STRING("no audio in it", p.lastFailure().note);
+  TEST_ASSERT_EQUAL_UINT32(0, p.repeats());  // a skip, not a loop
+  a.finish();  // b ends a second in: One plays it again
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT(3, a.playCount);
+  TEST_ASSERT_EQUAL_UINT32(1, p.repeats());
+  TEST_ASSERT_EQUAL_UINT32(1, p.lastFailure().count);
+  Rig one(1);
+  one.player.setRepeat(Repeat::One);
+  one.player.play(0);
+  one.audio.finishedFlag = true;
+  one.player.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)one.player.state());
+  TEST_ASSERT_EQUAL_INT(1, one.audio.playCount);
+  TEST_ASSERT_EQUAL_UINT32(1, one.player.lastFailure().count);
+  one.player.update(0);
+  TEST_ASSERT_EQUAL_INT(1, one.audio.playCount);
+}
+
 // The sleep timer wins: "pause after this track" with One cues this same
 // entry at 0:00, paused, the timer's; a later play starts it from the top.
 void test_repeat_one_with_pause_after_this_track() {
@@ -1624,7 +1727,7 @@ void test_repeat_one_with_pause_after_this_track() {
   p.update(0);
   TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().token);  // no self-join decoded ahead
   a.position = 200000;
-  a.finishedFlag = true;
+  a.finish();
   p.update(0);
   TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
   TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
@@ -1659,7 +1762,7 @@ void test_a_start_point_on_a_cued_entry_keeps_its_told_length() {
   TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, p.seek(r.queue.keyAt(1), 201000, 207000));
   p.setPauseAfterTrack(true);
   a.position = 207000;
-  a.finishedFlag = true;
+  a.finish();
   p.update(0);
   TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
   TEST_ASSERT_EQUAL_INT(1, p.currentIndex());  // the same entry, cued at 0:00
@@ -2522,6 +2625,8 @@ int main(int, char**) {
   RUN_TEST(test_failed_track_is_skipped);
   RUN_TEST(test_a_failure_is_recorded_with_its_entry);
   RUN_TEST(test_a_rate_refusal_is_recorded_with_the_failure);
+  RUN_TEST(test_the_backends_note_is_recorded_with_the_failure);
+  RUN_TEST(test_seekable_is_the_current_entrys);
   RUN_TEST(test_all_tracks_failing_stops_after_one_pass);
   RUN_TEST(test_a_finished_track_resets_the_failure_count);
   RUN_TEST(test_user_skip_resets_the_failure_count);
@@ -2583,6 +2688,7 @@ int main(int, char**) {
   RUN_TEST(test_repeat_one_plays_the_entry_again);
   RUN_TEST(test_repeat_one_next_and_prev_move_and_wrap);
   RUN_TEST(test_repeat_one_moves_on_from_a_failure);
+  RUN_TEST(test_an_end_at_0_00_is_a_failure);
   RUN_TEST(test_repeat_one_with_pause_after_this_track);
   RUN_TEST(test_a_start_point_on_a_cued_entry_keeps_its_told_length);
   RUN_TEST(test_the_word_for_each_repeat_mode);

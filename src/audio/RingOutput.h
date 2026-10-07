@@ -21,7 +21,10 @@
 // on its next loop(). A rate the converter doesn't take fails the track
 // (feed().rejected()), on both outputs. With nothing to trim (a FLAC from
 // its start, once an MP3's start is skipped and it holds no end) a frame
-// costs one branch more than straight into the feed.
+// costs one branch more than straight into the feed. A generator that
+// hands frames over in blocks (ConsumeSamples(): the Opus decoder, a
+// frame at a time, docs/OPUS.md) gets the feed's budgeted block write: the
+// same bits, the converter run once per block.
 class RingOutput : public AudioOutput {
 public:
   explicit RingOutput(PcmRing& ring) : feed_(ring), trim_(feed_) {}
@@ -38,6 +41,9 @@ public:
     return true;
   }
   bool ConsumeSample(int16_t sample[2]) override { return trim_.consume(sample); }
+  uint16_t ConsumeSamples(int16_t* samples, uint16_t count) override {
+    return static_cast<uint16_t>(trim_.consumeBlock(samples, count));
+  }
   void flush() override { feed_.commit(); }
   // generator->stop() calls this: keep what's buffered, the outputs play it out.
   bool stop() override { return true; }

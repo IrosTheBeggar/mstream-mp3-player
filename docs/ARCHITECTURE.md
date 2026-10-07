@@ -1,7 +1,7 @@
 # Architecture
 
 A portable music player on the M5Stack Core2 (original ESP32, 16 MB flash,
-8 MB PSRAM). It plays MP3 and FLAC from local storage to Bluetooth headphones
+8 MB PSRAM). It plays MP3, FLAC and Opus from local storage to Bluetooth headphones
 or the built-in speaker, and will keep its library in sync with an
 [mStream](https://mstream.io) server over WiFi.
 
@@ -25,7 +25,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  TouchCalibration  TouchCheck  TouchRecognizer  ButtonGesture |
               |  ButtonPolicy  InputEvent                                     |
               |  NavModel  FrameClock  ListLayout  BitSet  TextFit            |
-              |  TabBarModel  TrackProgress  JumpIndex                        |
+              |  TabBarModel  TrackProgress  JumpIndex  OggPage  OggOpus      |
               |  ThumbCache  ThumbScaler  JpegInfo                            |
               |  OutputModel  PlayGate  QueueView  PowerWindow                |
               |  ScreenPower (and WakeLatch)  AmpGate                         |
@@ -241,6 +241,46 @@ The rules that keep it deadlock- and glitch-free:
   reads and the preroll. Before this the device measured FLAC 0 ms, CBR
   MP3 30-50 ms behind (a cold start's lost frame) and a LAME VBR MP3 by
   its TOC -0.29 to +0.35 s of a 3:44 track.
+- **Opus** ([OPUS.md](OPUS.md)): an Ogg Opus file is read by our own
+  reader (`lib/core/OggPage`, `OggOpus`, host-tested in test_ogg_opus on
+  synthetic files, and on real files with the real decoder by
+  `tools/opus_check`) driving the libopus that ESP8266Audio bundles
+  (`src/audio/OpusGenerator`; its own `AudioGeneratorOpus` is never
+  linked). The reader checks every page's CRC, hands the packets over
+  split into frames (one decode call a frame), and keeps the track
+  sample-exact from the file alone: the pre-skip and the EOS page's trim
+  (its `Timeline`), the exact length at the open from the last page (a
+  tail scan, or a bisection by serial number for a chained file, whose
+  first link plays), a gap after a damaged page sized from the next
+  page's granule and filled by the generator (concealment, then silence)
+  so the count never slips. A start part of the way in is a plan
+  (`planStart()`: a bisection by granule to the last page before the
+  target less a preroll of 200 ms for a seek or 600 ms for a resume
+  point, the packets before it skipped undecoded, the samples before the
+  target dropped: exact, as a FLAC's) and its resume anchor is the FLAC
+  model's (`ResumeAnchor::Kind::Opus`, `oggopus::checkAnchor()`, the NVS
+  blob's kind 3); the backend plans in `prepare()`
+  (`Core2AudioBackend::planOpus()`: the anchor first, then the
+  millisecond with the tail rule) and the generator begins by the plan
+  (OPUS.md section 9), so `qs`, the seek bar and the boot's resume point
+  land on the sample asked and the seek bar shows its knob on an Opus
+  track as on an MP3. What an open learns (the headers, g0, the exact
+  length, the last page) is kept per path in the backend's open cache
+  (`lib/core/OpusOpenCache`, PSRAM, persisted as `/.player/opus.idx`), so
+  the next open of the file, a seek's or a boot's, is one read checked
+  against the BOS page (OPUS.md section 10). Every Opus track is
+  48 kHz, so it goes through the converter's block path
+  (`RingFeed::writeBudgeted()`), and joins the next track as a 48 kHz
+  track does (one stream to another Opus, the tail then a new stream to a
+  44.1 kHz MP3; GAPLESS.md section 4.7). The library lists `.opus` files
+  (`LibraryIndex::Format::Opus`; the cache's version went to 3 for them,
+  and to 5 when the file-name rules were merged in: "Names" under
+  "Library and queue", which read an `.opus` name as the other formats')
+  and refuses none at the index: surround files, frames under 10 ms and
+  other Ogg codecs are refused at the open, with a note. A decode pass
+  ends on time (15 ms,
+  with the audio pages read in 8 KB slices), so the UI loop keeps its turn
+  on the shared core (OPUS.md gate G6).
 - **Requests are generations.** `play()`/`stop()` post a new generation to
   `TransportSync`; the decode task's progress reports for anything older are
   dropped, so a stale "ended" can't skip the track that was just requested.
@@ -289,11 +329,13 @@ The rules that keep it deadlock- and glitch-free:
   goes straight into the stage, as before the converter; frames at another
   rate are held 32 at a time and converted as a block, on the ESP32 by a
   MAC16 assembly kernel that a self-test at boot checks against the C one,
-  bit for bit, with the filter tables copied into internal RAM while a
-  track at another rate plays (7.6 KB: copied when one starts, freed when
-  a request starts a 44.1 kHz track, never during a chain of gapless joins
-  (a cut's rewind may need its rows), read from flash when there's no room;
-  RESAMPLER.md section 10c). `RingOutput`
+  bit for bit, with the filter tables copied out of flash while a track at
+  another rate plays (7.6 KB, into a PSRAM block pinned beside the
+  decoder's state, or into internal RAM with the console's `Ot0`: OPUS.md
+  section 8.11; copied when one starts, freed when a request starts a
+  44.1 kHz track, never during a chain of gapless joins (a cut's rewind
+  may need its rows), read from flash when there's no room; RESAMPLER.md
+  section 10c). `RingOutput`
   (3.1 KB) must stay in internal RAM, so it is asserted under 4 KB (the
   framework puts a `new` of 4 KB or more in PSRAM). The console's `R` shows
   the current track's conversion (source frames taken, ring frames made,
@@ -1041,8 +1083,10 @@ VFS's `readdir`, which names each entry and says whether it's a folder, rather
 than Arduino's `File::openNextFile()`, which opens every entry and so searches
 its directory again for each file (the UI spike measured that walk at ~5.7 ms a
 file). The player's own files live in `/.player` on the same volume:
-`library.idx` (the index's cache), `queue.txt`, and `thumbs/` (the album
-covers' thumbnails, below).
+`library.idx` (the index's cache), `queue.txt`, `opus.idx` (the Opus open
+cache: what an open learnt about each `.opus` file, so the next open of it
+is one read; OPUS.md section 10) and `thumbs/` (the album covers'
+thumbnails, below).
 
 **A card that isn't FAT32.** The framework's FatFs is built without exFAT
 and without GPT (`FF_FS_EXFAT 0`, `FF_LBA64 0`), so such a card doesn't
@@ -1531,12 +1575,17 @@ the browsing UI hold its **track ids**, never strings.
     (`compareSorted()`). On that library: 59 of 705 artist folders, 126 of
     1,730 album folders. The Folders view, `findTrack()` and the tree keep
     the names as they are.
-  - The cache's version went to 4 for these: an old cache is refused and
-    rebuilt once. Not 3: feature/opus writes 3 for its `.opus` tracks, with
-    the same record sizes and path signature, so a card that ran one build
-    would load the other's cache as its own (the old names, or no `.opus`
-    tracks, and a rail out of step with the order). Each build refuses the
-    other's version. The merge of the two takes 5.
+  - The cache's version went to 4 for these on their branch, and to 5
+    when they merged with feature/opus, whose version 3 lists `.opus`
+    tracks: the two had the same record sizes and path signature, so a
+    card that ran one build would have loaded the other's cache as its
+    own (the old names, or no `.opus` tracks, and a rail out of step with
+    the order), and each refused the other's version. Now a cache of
+    version 2, 3 or 4 loads as `Outdated` and is rebuilt once. The rules
+    read an `.opus` name as an `.mp3`'s or a `.flac`'s: `readNames()`
+    runs over every track the extension list accepted, and
+    test_library_index has each shape in the three formats, mixed in one
+    folder.
 - **The queue** (`QueueModel`, host-tested): track ids in a PSRAM array (12 B an
   entry with its key and its rank), a current position, and one level of undo. Its edits
   are the design's Library and Queue actions: Play (replace the queue, start at
@@ -2466,9 +2515,9 @@ Queue, Dance and Output (with its Pair and About pages).
       23 rows and its frame's last, which come back at the lift), on the
       side away from the finger.
   - **Nothing is seeked when:**
-    - the knob ends within 4 px of the marker. It snaps there with a
-      tick, and the readout says "no change". A tap there does nothing
-      too;
+    - the knob ends within 4 px of the marker, or on the second already
+      playing. It snaps there with a tick, and the readout says "no
+      change". A tap there does nothing too;
     - the finger slid off the bar, above y 106 (onto the artist row or
       higher) or onto the strip. The readout says "Release to cancel",
       with a tick;
@@ -2485,7 +2534,12 @@ Queue, Dance and Output (with its Pair and About pages).
     There is none, and the line takes no touch, when:
     - the length isn't known (the dotted line);
     - the track failed;
-    - the track is under 10 s.
+    - the track is under 10 s;
+    - the backend can't start it part of the way in
+      (`IAudioBackend::seekable(path)`, asked of the current entry's path
+      by `PlaybackController::seekable()`, however it became current: no
+      format today; an Opus track was refused until its seeks were built,
+      [OPUS.md](OPUS.md) M3).
 - **The Library** (spec §6.2, mockups 07-15, with the grafts): the root's
   header is the segmented control **Artists | Albums | Folders** (the root
   PageRef's id is the segment; each keeps its own scroll; the Library opens
@@ -2494,7 +2548,7 @@ Queue, Dance and Output (with its Pair and About pages).
   its albums with covers) > an album's or all its tracks. **Albums**: every
   album A-Z with its 40 x 40 cover and artist. **Folders**: a folder's
   folders (amber icon, "1 folder, 13 files, 1 other"), then its audio files
-  (a file icon, the name, an MP3/FLAC badge); the header's second line is
+  (a file icon, the name, an MP3/FLAC/OPUS badge); the header's second line is
   its counts, whole ("14 audio files, 1 other"), and, when 60 px or more
   are left beside them, the folder's place cut from the left
   ("…/Kavinsky"; beside "‹ Library" there is no room, and "/Daft…" said

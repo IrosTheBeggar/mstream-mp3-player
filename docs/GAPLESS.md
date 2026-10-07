@@ -820,6 +820,44 @@ sample.
 - **`positionMs()` after any start** is the start plus the kept frames,
   as now.
 
+### 4.7 Opus
+
+An Ogg Opus track ([OPUS.md](OPUS.md)) is sample-exact from the file
+alone, and its generator does all the trimming itself: the pre-skip (the
+encoder's delay, in the OpusHead) is dropped from the top and the EOS
+page's granule position trims the encoder's padding at the end, so
+`TrimFeed` is armed `{0,0}` and never sees a lead sample (the generator
+hands over kept samples only, through `ConsumeSamples()` and
+`RingFeed::writeBudgeted()`). The length is exact from the open (the last
+page's granule, a tail scan), so Now Playing has it before the first
+frame. Every Opus track is 48 kHz, so the join rules above apply as to any
+48 kHz file: `Tracks::probe()` reads its headers and says 48,000 before
+any frame, and
+
+- **Opus to Opus** is a continuous join (`RingFeed::continues(48000)`): one
+  stream through the converter, the first track's EOS trim and the
+  second's pre-skip meeting sample for sample (an album transcoded by
+  mStream from a gapless source joins without a gap, as the source did:
+  mStream's transcode keeps the sample count exactly, OPUS.md);
+- **Opus to a 44.1 kHz MP3 or FLAC** (and back) is a rate change: the
+  tail, then a new stream, as between a 48 kHz MP3 and a 44.1 kHz one;
+  Opus to a 48 kHz MP3 or FLAC is continuous.
+
+A track that ends early (a file cut short, another stream after ours, a
+gap over 10 s after damaged pages) says so through the generator's own
+early-end hook, not the file position (a trailing stream or junk after the
+EOS page would fool that), and its note shows once it is heard. The host
+test for the shape: `test_self_trimming_48k_tracks_join_as_opus_does`
+(test_gapless). The repeat modes and shuffle
+([QUEUE-MODES.md](QUEUE-MODES.md)) know nothing of formats, so what they
+have to get right is these joins, which the player over the engine
+checks (test_gapless_player): Repeat One on an Opus track (its self-join
+one 48 kHz stream, the file's kept samples end to end, a new token each
+loop; All again, the MP3 after it a rate change), Repeat All's wrap from
+the last Opus entry (to an Opus first entry one stream round and round;
+to an MP3 a rate change at the wrap) and a shuffled MP3/FLAC/Opus queue
+(each join by the rates that meet, in the shuffled order).
+
 ## 5. Changes while the next track is already decoded
 
 Most edits change the word (section 3.1). That is noticed at the end of
@@ -1111,6 +1149,7 @@ applies to the track that now plays.
 | Where | What |
 |---|---|
 | `audio/Core2AudioBackend` | the decode task driving `GaplessEngine` (and reporting its phases), `GaplessEngine::Tracks` (probe, start, close, the `[gapless]` log), `prepare()`/`beginPrepared()` (the file's rate, length, LAME tag and trim, the header frame skipped, `GuardedSource`, the ID3 tags skipped, a FLAC's metadata size), the heard record through `GaplessJoin` (`positionMs()`, `durationMs()`, `startOffsetMs()`, `durationKnown()`, `description()`, `note()`), `setNext()`/`takeAdvance()`, `trackSeq()`, the PSRAM at `begin()`, the tables' copy kept during a chain, `setGapless()`/`setGaplessTrim()`, `printGapless()` |
+| `audio/OpusGenerator` | an Ogg Opus track that trims itself (section 4.7): `TrimFeed` armed `{0,0}`, the join's rate 48,000 from the open, its own early-end hook |
 | `audio/GuardedSource` (new) | 8 zero bytes at the end of the file (section 4.3) |
 | `audio/RingOutput` | `TrimFeed` in front of `RingFeed` |
 | `main.cpp` | the `NextGate` (`SleepGate`), `trackSeq()` for the sleep timer's and the learned lengths' `EntryStart`, the console's `G` and `Gx` |

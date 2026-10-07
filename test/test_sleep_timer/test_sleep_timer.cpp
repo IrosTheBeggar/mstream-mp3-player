@@ -148,9 +148,12 @@ struct Rig {
     }
   }
 
-  // The track ends (the ring drained): the backend says finished.
+  // The track ends (the ring drained): the backend says finished, the
+  // position at its length (one not known: where the play got to; an end
+  // with the position still at 0:00 is an empty track, which the player
+  // takes for a failure: test_playback's test_an_end_at_0_00_is_a_failure).
   void endTrack() {
-    audio.position = durationMs;
+    if (durationMs) audio.position = durationMs;
     audio.finishedFlag = true;
     now += 20;
     pass();

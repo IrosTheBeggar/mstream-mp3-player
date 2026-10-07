@@ -103,6 +103,7 @@ bool Library::loadCache(uint64_t signature) {
       stats_.fromCache = true;
       return true;
     case LibraryIndex::Load::Stale: stats_.cacheNote = "the card changed"; break;
+    case LibraryIndex::Load::Outdated: stats_.cacheNote = "the cache is an older version's: rebuilt once"; break;
     case LibraryIndex::Load::Corrupt: stats_.cacheNote = "the cache was unreadable"; break;
     case LibraryIndex::Load::NoMemory: stats_.cacheNote = "no PSRAM to load the cache"; break;
   }

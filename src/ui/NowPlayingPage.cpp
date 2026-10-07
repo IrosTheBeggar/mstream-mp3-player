@@ -285,7 +285,7 @@ void NowPlayingPage::drawArtistAlbum() {
 
 bool NowPlayingPage::seekable() const {
   const AppState& s = ui_.state();
-  return s.current >= 0 && !s.failed && SeekBar::seekable(s.durationMs);
+  return s.current >= 0 && !s.failed && s.seekable && SeekBar::seekable(s.durationMs);
 }
 
 NowPlayingPage::BarLook NowPlayingPage::barLook() const {

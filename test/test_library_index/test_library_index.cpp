@@ -733,6 +733,58 @@ void test_load_rejects_stale_and_damaged_files() {
   TEST_ASSERT_FALSE(none.save(nothing, 1));
 }
 
+// .opus files are tracks (docs/OPUS.md), whatever the case of the
+// extension; .ogg and .oga stay other files (counted in their folder, as
+// a text file is), as does an .opus with no name.
+void test_opus_files_are_tracks() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Added), static_cast<int>(idx.addFile("/music/Band/Record/01 - Opener.opus")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Added), static_cast<int>(idx.addFile("/music/Band/Record/02 - Second Song.OPUS")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Added), static_cast<int>(idx.addFile("/music/Band/Record/03 - Closer.mp3")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Other), static_cast<int>(idx.addFile("/music/Band/Record/04 - Vorbis.ogg")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Other), static_cast<int>(idx.addFile("/music/Band/Record/05 - Vorbis.oga")));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Add::Other), static_cast<int>(idx.addFile("/music/Band/Record/.opus")));
+  TEST_ASSERT_TRUE(idx.finish());
+  TEST_ASSERT_EQUAL_UINT32(3, idx.trackCount());
+  const uint32_t album = findAlbum(idx, "Record");
+  TEST_ASSERT_NOT_EQUAL(LibraryIndex::kNone, album);
+  const LibraryIndex::Span t = idx.tracksOfAlbum(album);
+  TEST_ASSERT_EQUAL_UINT32(3, t.count);
+  TEST_ASSERT_EQUAL_STRING("01 - Opener.opus", idx.trackFileName(t[0]));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Format::Opus), static_cast<int>(idx.track(t[0]).format));
+  TEST_ASSERT_EQUAL_STRING("Opener", title(idx, t[0]).c_str());
+  TEST_ASSERT_EQUAL_UINT8(1, idx.track(t[0]).number);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Format::Opus), static_cast<int>(idx.track(t[1]).format));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Format::Mp3), static_cast<int>(idx.track(t[2]).format));
+  TEST_ASSERT_EQUAL_UINT16(3, idx.folder(idx.album(album).folder).otherCount);
+  // The cache: a version-2 file (the one 0.6.0 wrote, in which an .opus
+  // was an other file) is Outdated, not Corrupt, and loads nothing; the
+  // version written now loads, formats and all.
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, 7));
+  std::vector<uint8_t> bytes(file.data(), file.data() + file.size());
+  LibraryIndex back(Heap::alloc, Heap::release);
+  {
+    MemorySource in(bytes.data(), bytes.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(in, 7)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Format::Opus), static_cast<int>(back.track(t[0]).format));
+  }
+  std::vector<uint8_t> v2 = bytes;
+  v2[4] = 2;  // the version word (little-endian, after the magic)
+  {
+    MemorySource in(v2.data(), v2.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), static_cast<int>(back.load(in, 7)));
+    TEST_ASSERT_FALSE(back.ready());
+  }
+  std::vector<uint8_t> v9 = bytes;
+  v9[4] = 9;  // a version from the future: foreign
+  {
+    MemorySource in(v9.data(), v9.size());
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), static_cast<int>(back.load(in, 7)));
+  }
+}
+
 void test_an_empty_library_round_trips() {
   LibraryIndex idx(Heap::alloc, Heap::release);
   TEST_ASSERT_TRUE(idx.begin("/music"));
@@ -958,10 +1010,77 @@ void test_prefixes_that_differ_keep_their_order() {
   }
 }
 
-// A cache saved before the names were read this way (version 2), or by
-// feature/opus (version 3: the same records, .opus tracks and the old
-// names), is refused as Corrupt, so the Library builds the index again and
-// saves version 4.
+// An .opus file's name is read as an .mp3's or a .flac's is, in the one
+// pass over its folder: the disc-track and "Artist - NN - Title" shapes
+// count the folder's names whatever their extensions, the folder's artist
+// comes off a title, and an artist of .opus files sorts past its "The".
+void test_opus_names_are_read_like_the_others() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  const char* files[] = {
+      // Disc and number, in a folder of .opus files alone (either case).
+      "/music/Glass Orchard/Night Shift/2-01 Return.opus",
+      "/music/Glass Orchard/Night Shift/1-02 Second.OPUS",
+      "/music/Glass Orchard/Night Shift/1-01 Opening.opus",
+      // "101 Title": the folder rule counts the three formats together.
+      "/music/Glass Orchard/Box/201 - Middle.flac",
+      "/music/Glass Orchard/Box/102 - Next.mp3",
+      "/music/Glass Orchard/Box/101 - Start.opus",
+      // "Artist - NN - Title" across the formats; the artist off a title.
+      "/music/Glass Orchard/Demos/Glass Orchard - 03 - Three.opus",
+      "/music/Glass Orchard/Demos/Glass Orchard - 01 - One.mp3",
+      "/music/Glass Orchard/Demos/Glass Orchard - 02 - Two.flac",
+      "/music/Glass Orchard/Live/02 - Other Act - Duet.opus",
+      "/music/Glass Orchard/Live/01 - Glass Orchard - Mile One.opus",
+      // An artist of .opus files sorts past its "The"; an .ogg beside them
+      // is an other file.
+      "/music/The Lantern Choir/Hymns/01 - Mile One.opus",
+      "/music/The Lantern Choir/Hymns/02 - Mile Two.ogg",
+      "/music/Lantern/Long Division/01 - Remainder.opus",
+  };
+  for (const char* f : files) idx.addFile(f);
+  TEST_ASSERT_TRUE(idx.finish());
+  TEST_ASSERT_EQUAL_UINT32(13, idx.trackCount());
+  expectTitles(idx, "Night Shift", {"1/1 Opening", "1/2 Second", "2/1 Return"});
+  expectTitles(idx, "Box", {"1/1 Start", "1/2 Next", "2/1 Middle"});
+  expectTitles(idx, "Demos", {"0/1 One", "0/2 Two", "0/3 Three"});
+  expectTitles(idx, "Live", {"0/1 Mile One", "0/2 Other Act - Duet"});
+  // The formats stay the extensions'.
+  using F = LibraryIndex::Format;
+  const LibraryIndex::Span box = idx.tracksOfAlbum(findAlbum(idx, "Box"));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(F::Opus), static_cast<int>(idx.track(box[0]).format));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(F::Mp3), static_cast<int>(idx.track(box[1]).format));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(F::Flac), static_cast<int>(idx.track(box[2]).format));
+  const LibraryIndex::Span ns = idx.tracksOfAlbum(findAlbum(idx, "Night Shift"));
+  for (uint32_t i = 0; i < ns.count; ++i) {
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(F::Opus), static_cast<int>(idx.track(ns[i]).format));
+  }
+  TEST_ASSERT_EQUAL_STRING("1-02 Second.OPUS", idx.trackFileName(ns[1]));
+  // The artists: Glass Orchard, Lantern, The Lantern Choir (an L).
+  const char* artists[] = {"Glass Orchard", "Lantern", "The Lantern Choir"};
+  const LibraryIndex::Span a = idx.artistsAZ();
+  TEST_ASSERT_EQUAL_UINT32(3, a.count);
+  for (uint32_t i = 0; i < a.count; ++i) TEST_ASSERT_EQUAL_STRING(artists[i], idx.artistName(a[i]));
+  TEST_ASSERT_EQUAL_INT(textfold::bucketOf('L'), idx.bucketAt(LibraryIndex::View::Artists, 2));
+  TEST_ASSERT_EQUAL_UINT16(1, idx.folder(idx.album(findAlbum(idx, "Hymns")).folder).otherCount);
+  // Saved and loaded: the names, discs and formats come back.
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, 11));
+  LibraryIndex back(Heap::alloc, Heap::release);
+  MemorySource in(file.data(), file.size());
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(back.load(in, 11)));
+  expectSameIndex(idx, back);
+  expectTitles(back, "Night Shift", {"1/1 Opening", "1/2 Second", "2/1 Return"});
+  for (uint32_t t = 0; t < idx.trackCount(); ++t) {
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(idx.track(t).format), static_cast<int>(back.track(t).format));
+  }
+}
+
+// A cache saved before the names were read this way (version 2: 0.6.0's),
+// by feature/opus before the merge (version 3: the same records, .opus
+// tracks and the old names) or by dev before it (version 4: the names, no
+// .opus tracks) is Outdated, so the Library builds the index again and
+// saves version 5.
 void test_an_older_cache_version_is_rebuilt() {
   LibraryIndex idx(Heap::alloc, Heap::release);
   TEST_ASSERT_TRUE(idx.begin("/music"));
@@ -973,7 +1092,7 @@ void test_an_older_cache_version_is_rebuilt() {
   std::vector<uint8_t> bytes(file.data(), file.data() + file.size());
   uint32_t version;
   std::memcpy(&version, bytes.data() + 4, 4);  // the header's second word
-  TEST_ASSERT_EQUAL_UINT32(4, version);
+  TEST_ASSERT_EQUAL_UINT32(5, version);
   LibraryIndex back(Heap::alloc, Heap::release);
   {
     MemorySource in(bytes.data(), bytes.size());
@@ -984,10 +1103,10 @@ void test_an_older_cache_version_is_rebuilt() {
     TEST_ASSERT_EQUAL_UINT8(1, back.track(first).disc);
     TEST_ASSERT_EQUAL_UINT8(1, back.track(first).number);
   }
-  for (const uint32_t old : {2u, 3u}) {
+  for (const uint32_t old : {2u, 3u, 4u}) {
     std::memcpy(bytes.data() + 4, &old, 4);
     MemorySource in(bytes.data(), bytes.size());
-    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), static_cast<int>(back.load(in, 9)));
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), static_cast<int>(back.load(in, 9)));
     TEST_ASSERT_FALSE(back.ready());
   }
 }
@@ -1017,7 +1136,9 @@ int main(int, char**) {
   RUN_TEST(test_save_and_load_round_trip);
   RUN_TEST(test_save_and_load_a_big_library);
   RUN_TEST(test_load_rejects_stale_and_damaged_files);
+  RUN_TEST(test_opus_files_are_tracks);
   RUN_TEST(test_an_empty_library_round_trips);
+  RUN_TEST(test_opus_names_are_read_like_the_others);
   RUN_TEST(test_an_older_cache_version_is_rebuilt);
   return UNITY_END();
 }

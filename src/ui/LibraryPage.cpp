@@ -563,7 +563,7 @@ bool LibraryPage::emptyState(EmptyState& e) {
     e.iconColour = col::AMBER;
     e.title = "No music found";
     e.line1 = "Put folders in /music/Artist/Album/,";
-    e.line2 = "MP3 or FLAC, then tap Try again.";
+    e.line2 = "MP3, FLAC or Opus, then tap Try again.";
     e.buttons[0] = "Try again";
     return true;
   }
@@ -649,7 +649,9 @@ void LibraryPage::drawRow(ListView::Row& r) {
     case RowKind::File: {
       const int x = now ? ListView::playing(r, accent::Library) : ListView::icon(r, icons::kFile, col::DIM);
       const LibraryIndex::Format fmt = i->track(rr.id).format;
-      const int right = ListView::badge(r, fmt == LibraryIndex::Format::Flac ? "FLAC" : "MP3");
+      const int right = ListView::badge(r, fmt == LibraryIndex::Format::Flac   ? "FLAC"
+                                           : fmt == LibraryIndex::Format::Opus ? "OPUS"
+                                                                               : "MP3");
       // The file's name as it is, less its extension ("08 - Nightcall").
       const char* name = i->trackFileName(rr.id);
       const char* dot = strrchr(name, '.');

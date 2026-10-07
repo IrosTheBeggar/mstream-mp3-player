@@ -520,6 +520,66 @@ void test_kept_counts_with_nothing_to_trim() {
   TEST_ASSERT_EQUAL_UINT32(7, gTrim.kept());
 }
 
+// The Opus generator hands a frame over whole (consumeBlock(), through
+// RingOutput::ConsumeSamples()): with nothing to trim it is the feed's
+// budgeted block write, the same bits as the frames one by one, and
+// kept() counts them; with a trim armed each frame goes through the trim
+// in turn, the same output as consume() would give, stopping at the first
+// refused frame (the rest offered again next pass).
+void test_a_block_is_the_frames_one_by_one() {
+  const Frames src = noise(9000, 27);
+  const uint32_t sizes[] = {120, 480, 960, 2880, 1, 13};
+  const uint32_t cases[][2] = {{0, 0}, {312, 0}, {1, 700}, {1105, 4095}};
+  for (const auto& c : cases) {
+    for (uint32_t hz : {44100u, 48000u}) {
+      // The per-frame run, as a reference, and the same trim in blocks.
+      Gen g;
+      g.hz = hz;
+      const Frames want = run(src, c[0], c[1], g, hz + c[0]);
+      const uint64_t keptWant = gTrim.kept();
+      std::mt19937 rng(hz + c[1]);
+      gRing.discardAll();
+      gRing.setConsumer(kReader);
+      gFeed.reset(240, true);
+      gTrim.setHoldBuffer(gHold, TrimFeed::kMaxHold);
+      gTrim.arm(c[0], c[1]);
+      gTrim.setChannels(2);
+      gTrim.setRate(static_cast<int>(hz));
+      TEST_ASSERT_EQUAL(c[0] + c[1] > 0, gTrim.active());
+      Frames out;
+      const size_t frames = src.size() / 2;
+      size_t next = 0, blockAt = 0, blockLeft = 0;
+      while (next < frames || blockLeft > 0) {
+        gFeed.setBudget(kPass);
+        for (;;) {
+          if (blockLeft == 0) {
+            if (next >= frames) break;
+            blockLeft = std::min<size_t>(sizes[rng() % 6], frames - next);
+            blockAt = next;
+            next += blockLeft;
+          }
+          const uint32_t got = gTrim.consumeBlock(&src[2 * blockAt], static_cast<uint32_t>(blockLeft));
+          blockAt += got;
+          blockLeft -= got;
+          if (blockLeft > 0) break;
+        }
+        gFeed.commit();
+        drain(out, rng() % 3 == 0 ? 0 : rng() % 700);
+      }
+      gFeed.setBudget(kPass);
+      while (!gTrim.end(false)) {
+        gFeed.commit();
+        drain(out, rng() % 700 + 1);
+        gFeed.setBudget(kPass);
+      }
+      while (!gFeed.finish()) drain(out, rng() % 700 + 1);
+      drain(out, kRingCap);
+      assertSame(want, out);
+      TEST_ASSERT_EQUAL_UINT64(keptWant, gTrim.kept());
+    }
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_exactly_the_kept_frames_come_out);
@@ -539,5 +599,6 @@ int main(int, char**) {
   RUN_TEST(test_no_frame_yet_drops);
   RUN_TEST(test_the_first_word_during_the_landing_keeps_the_end_hold);
   RUN_TEST(test_kept_counts_with_nothing_to_trim);
+  RUN_TEST(test_a_block_is_the_frames_one_by_one);
   return UNITY_END();
 }

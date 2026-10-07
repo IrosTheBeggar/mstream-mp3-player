@@ -852,7 +852,9 @@ void Ui::noteFailures() {
   char title[64];
   if (!player_.catalog().title(f.track, title, sizeof(title))) snprintf(title, sizeof(title), "a track");
   // Why, when it was the track's sample rate: a refused rate isn't a
-  // broken file, and at 160 MHz a setting would play it.
+  // broken file, and at 160 MHz a setting would play it. Else the
+  // backend's own few words when it has them (an Opus file refused at its
+  // open: "surround Opus isn't supported"), else "can't play it".
   char why[48];
   if (f.rate.hz != 0 && f.rate.needsCpu) {
     snprintf(why, sizeof(why), "%s", uitext::kSkippedCpu);
@@ -860,6 +862,8 @@ void Ui::noteFailures() {
     char rate[16];
     RateConverter::rateText(f.rate.hz, rate, sizeof(rate));
     snprintf(why, sizeof(why), uitext::kSkippedRate, rate);
+  } else if (f.note[0]) {
+    snprintf(why, sizeof(why), "%s", f.note);
   } else {
     snprintf(why, sizeof(why), "%s", uitext::kSkipped);
   }

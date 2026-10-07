@@ -119,6 +119,14 @@ public:
   // most `maxMade` ring frames; returns how many. The caller keeps the rest
   // and offers them again.
   uint32_t write(const int16_t* frames, uint32_t n, uint32_t maxMade = UINT32_MAX);
+  // A generator's block (AudioOutput::ConsumeSamples(): the Opus decoder
+  // hands a frame's PCM over whole, docs/OPUS.md): as write(), within the
+  // pass's budgets (setBudget(): the source frames, and the ring frames it
+  // may make). The same bits as consume() on each frame in turn (the
+  // converter's block path, docs/RESAMPLER.md section 10, without the
+  // per-frame hold), and the counters move the same way. Returns how many
+  // were taken; the generator keeps the rest and offers them again.
+  uint32_t writeBudgeted(const int16_t* frames, uint32_t n);
 
   // Converts what is held, then pushes staged frames into the ring; true
   // when nothing is left staged.

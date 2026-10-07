@@ -121,13 +121,17 @@ void readNames(const char* s, LibraryIndex::Track* tracks, const LibraryIndex::A
 // changed makes the file Corrupt, and the version is bumped when a record's
 // meaning changes.
 constexpr uint32_t kMagic = 0x494C504Du;  // "MPLI"
-// 2: folders count their other files and pick a cover. 4: names read with
-// their folder (discs, "Artist - 03 - Title", the artist off titles), and
-// artists and albums sorted past "The". Not 3: feature/opus writes 3 (for
-// .opus tracks) with the same record sizes and path signature, so a card
-// that ran one build would load the other's cache as its own. NOTE: the
-// dev -> opus merge must take 5, so every cache rebuilds once.
-constexpr uint32_t kVersion = 4;
+// 2: folders count their other files and pick a cover. 3: .opus files are
+// tracks (Format::Opus; a version-2 cache, built from the same paths, would
+// keep them as other files, since the signature hashes only the paths).
+// 4: names read with their folder (discs, "Artist - 03 - Title", the
+// artist off titles), and artists and albums sorted past "The". 3 and 4
+// were written by two branches (feature/opus and dev) with the same record
+// sizes and path signature, each refusing the other's; 5 is their merge,
+// both at once, so a cache of any earlier version (2: 0.6.0's; 3 or 4: a
+// card that ran one of the branches) is Outdated (load()) and the Library
+// rebuilds it once.
+constexpr uint32_t kVersion = 5;
 constexpr int kCountWords = 10;           // magic .. folders
 constexpr int kHeaderWords = kCountWords + 2 * (LibraryIndex::kBuckets + 1);
 constexpr uint32_t kMaxRecords = 1u << 22;  // a damaged header must not ask for gigabytes
@@ -491,6 +495,8 @@ LibraryIndex::Add LibraryIndex::addFile(const char* path) {
       format = Format::Mp3;
     } else if (extIs(dot + 1, extLen, "flac")) {
       format = Format::Flac;
+    } else if (extIs(dot + 1, extLen, "opus")) {
+      format = Format::Opus;
     }
   }
   if (format == Format::Unknown) return addOther(path, lastSlash, leaf, leafLen);
@@ -892,9 +898,9 @@ LibraryIndex::Load LibraryIndex::load(ByteSource& in, uint64_t signature) {
   clear();
   SummingSource s(in);
   uint32_t h[kHeaderWords];
-  if (!readFully(s, h, sizeof(h)) || h[0] != kMagic || h[1] != kVersion || h[2] != recordSizes()) {
-    return Load::Corrupt;
-  }
+  if (!readFully(s, h, sizeof(h)) || h[0] != kMagic) return Load::Corrupt;
+  if (h[1] != kVersion) return h[1] >= 1 && h[1] < kVersion ? Load::Outdated : Load::Corrupt;
+  if (h[2] != recordSizes()) return Load::Corrupt;
   if ((static_cast<uint64_t>(h[4]) << 32 | h[3]) != signature) return Load::Stale;
   const uint32_t arenaBytes = h[5], nT = h[6], nA = h[7], nB = h[8], nF = h[9];
   if (arenaBytes == 0 || arenaBytes > kMaxArena || nT > kMaxRecords || nA > kMaxRecords || nB > kMaxRecords ||

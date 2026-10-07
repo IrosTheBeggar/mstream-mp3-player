@@ -24,6 +24,17 @@ cover's lowest rows while a finger scrubs. Sections 0-4, 7 and 11 have the
 new rows. Sections 9, 10 and 12-16 are the bar as it was built and checked
 on 2026-10-02, with the old ones (the band y 170-191, off above 130).
 
+**The stay detent fixed (2026-10-07, feature/opus).** On the device, a
+drag from the knob of a 0:52 Opus track sought "0:42 -> 0:42": the second
+already playing, started again for nothing (a ~250 ms gap and a
+fade-in). The detent measured the target's x, its second's start, which
+on a track under 74 s can be more than 4 px behind the marker within the
+second playing. Now the second playing is always in the detent, the
+detent measures where the finger puts the knob, and a grab from the knob
+is anchored at the time, not the knob's pixel. Section 17 has the
+finding and its numbers; 2.3, 2.5, 7, 9, 10 and 11.16 the rules, the
+tests and the device step.
+
 Three designs were written for it: one for the touch (the gesture and
 its feedback), one for the player and the engine (the semantics and the
 races), and one for the smallest safe change (the scope and the tests).
@@ -53,7 +64,8 @@ Where the facts come from:
 ## 0. In short
 
 - **A tap on the line goes to the second under the finger.** A tap on
-  the knob (within 4 px of where it plays) does nothing.
+  the knob (within 4 px of where it plays, or on the second already
+  playing) does nothing.
 - **A sideways drag scrubs**, and you feel a tick as it starts.
   - A drag that starts within 16 px of the knob moves the knob with the
     finger, without a jump. One that starts anywhere else brings the
@@ -63,8 +75,8 @@ Where the facts come from:
   - The music plays on where it was. **The seek happens once, at the
     lift.**
 - **Three ways out without a seek:**
-  - lift with the knob back on the marker that shows where it plays (it
-    snaps there with a tick);
+  - lift with the knob back on the marker that shows where it plays, or
+    on the second it plays (it snaps there with a tick);
   - slide off the bar (above y 106, or onto the strip), then lift;
   - a sheet or a dialog takes the touch.
 - **The ends:**
@@ -88,7 +100,15 @@ Where the facts come from:
 - **The bar is inert** (no knob; taps and drags do nothing new) when:
   - the length is unknown (the dotted line);
   - the track failed;
-  - the track is under 10 s.
+  - the track is under 10 s;
+  - the backend can't start it part of the way in (`IAudioBackend::seekable(path)`,
+    asked of the current entry's path by `PlaybackController::seekable()`,
+    `AppState::seekable`: no format today; an Opus track was refused until
+    its seeks were built, M3 of [OPUS.md](OPUS.md), and the hook stays for
+    a format that can't. By the entry's path, so a track joined gaplessly
+    without a `play()` of its own, one cued, or the entry restored at a boot
+    has its own answer, never the track before's, and nothing of the backend's
+    state is read while a start is pending).
 
 ## 1. What the tree has
 
@@ -250,8 +270,9 @@ once.
 - A Tap in the bar's zone seeks to `msAt(x)` (2.4), where x is where the
   finger landed. The user asked for touch to seek, and every phone
   player jumps on a tap.
-- The exception is a tap within `kStayPx` of where it plays (2.5): a tap
-  on the knob is not a seek.
+- The exception is a tap in the stay detent (2.5): within `kStayPx` of
+  where it plays, or on the second already playing. A tap on the knob is
+  not a seek.
 - A tap that seeks ticks once the player has taken it, like any tap that
   acts.
 
@@ -292,13 +313,23 @@ landed decides how the knob follows.
 - **From the knob.** The Down landed within `kGrabPx` (16 px) of the
   knob, and its reading wasn't clamped.
   - The knob stays where it is at the DragStart, then moves by the
-    finger's movement from there: `vx = x + (the knob's x at the
-    DragStart − x at the DragStart)`. The knob's x at the DragStart is
-    where it plays then, not where it was at the Down: `noHold()` lets a
-    finger rest on the knob, and the pressed knob follows the music
-    meanwhile. Anchored at the Down, a 1.5 s rest on a 1:00 track pulled
-    the knob 13 px back at the first frame, and the lift sought behind
-    where it played.
+    finger's movement from there: the target is `the time at the
+    DragStart + (x − x at the DragStart) · L / 296`, floored to a second
+    (0 to the reach). The time at the DragStart is where it plays then,
+    not where it was at the Down: `noHold()` lets a finger rest on the
+    knob, and the pressed knob follows the music meanwhile. Anchored at
+    the Down, a 1.5 s rest on a 1:00 track pulled the knob 13 px back at
+    the first frame, and the lift sought behind where it played.
+  - The anchor is that time, not the knob's pixel (until 2026-10-07:
+    `vx = x + (the knob's x at the DragStart − x at the DragStart)`, then
+    `msAt(vx)`). A pixel is 1/296 of the length, 177 ms on a 0:52 track,
+    and the knob's is the one its time falls in. So a grab that began in
+    a second's first pixel aimed at the second before: the knob dropped
+    5 px back at the DragStart, and a finger held still there sought a
+    second further back than where it was grabbed. On 4:05, a grab at
+    1:00 moved 50 px aimed at 1:40 (x 84 is 0:59.6); it aims at 1:41 now.
+  - The finger's place (2.5) is the knob's px at the DragStart plus the
+    finger's movement since.
   - There is no jump on the first frame.
   - Only differences count, so the calibration's few px don't matter.
   - A nudge of a few seconds needs no aim.
@@ -317,12 +348,15 @@ landed decides how the knob follows.
     second**, and at most `seekLimitMs(L)`.
 - **Whole seconds.** The readout and the times show m:ss, and the seek
   asks for exactly that second. The backend shows the time asked:
-  - exactly, for CBR, FLAC, built-in tracks and the run's index of an
-    exact run;
+  - exactly, for CBR, FLAC, Opus (OPUS.md 9.5), built-in tracks and the
+    run's index of an exact run;
   - for a LAME VBR start by its TOC, within 0.74 s (p95) of the time
     asked, which is still what it shows (SEEK.md 6.5); later seeks into
     that run, by its index, keep the same error.
   - So what the finger read is what Now Playing shows after the lift.
+  - While scrubbing, the knob is drawn at its second's start: up to a
+    second's px behind the finger (5.6 px on a 0:52 track, 1.2 on 4:05).
+    The detent (2.5) measures the finger's place, not that.
 - **The reach.**
   - `trackseek::seekLimitMs(L) = L > 6000 ? (L − 6000) / 1000 · 1000 : 0`,
     from `kSeekGuardMs = kTailMs + 1000`.
@@ -352,24 +386,67 @@ landed decides how the knob follows.
 
 - During a scrub, a marker shows where it plays: the snapshot's position,
   which moves while playing.
-- **Staying** is `|xOf(target) − xOf(live)| <= kStayPx` (4 px, in line
-  px). While staying:
+- **Staying** is either of:
+  - **the target is the second already playing** (`target / 1000 ==
+    live / 1000`): a seek there would only start that second again;
+  - **the finger's place is within `kStayPx` of the marker**
+    (`|place − xOf(live)| <= 4`, in line px). The place is where the
+    finger puts the knob before the whole second: `x − 12` for a tap or
+    a drag from away, the knob's px at the DragStart plus the finger's
+    movement for a grab from the knob (2.3); 0 to the reach's px, and a
+    clamped reading's end.
+
+  Both are measured against where it plays at each event and each pass,
+  the lift's included (`onEvent()` takes the snapshot's position with the
+  event). While staying:
   - the knob snaps onto the marker;
   - the readout says "no change";
   - a lift seeks nothing. Nothing is buffered again, and a paused track
     keeps its exact resume anchor.
 
   It is the "never mind" that can be found by feel.
+- **Why the second and the place, not the target's x** (until
+  2026-10-07: `|xOf(target) − xOf(live)| <= 4`). The target's x is its
+  second's start; the marker is anywhere in its second. A second is
+  296 / L px wide: wider than the detent on a track under 74 s (5.64 px
+  on 0:52). By the target's x:
+  - the second playing could be outside the detent: from 0:42.73 on, a
+    0:52 track's 0:42 starts 5 px behind the marker, so a lift on the
+    knob sought "0:42 -> 0:42" (section 17), and a knob held there read
+    "0:42 +0:00";
+  - the detent leaned forward: x 81-89 around the knob at x 84 on 4:05
+    (x 89's 1:03 starts at x 88, x 80's 0:56 at x 79); on 0:52, a tap
+    1 px left of the knob in a second's first ~200 ms sought the second
+    before (its start 5-6 px behind);
+  - the second before starts a second and a px or two behind the marker
+    early in a second, so that lean reached past 74 s: up to about 1:39
+    (a second over 3 px), a tap 1 px left of the knob, or a grab from
+    the knob's pixel with 1 px of drift, could seek a second back (on
+    1:15, 8 % of the taps within 1 px of the knob and 15 % of the grabs
+    of section 17).
+
+  By the place, it is ±4 px around the knob as drawn: x 80-88 on 4:05.
 - When it ticks:
   - a finger that moves into the detent ticks, like a new letter on the
     A-Z rail;
   - a knob grab that starts in it doesn't;
-  - the marker moving onto a still knob doesn't.
-- The same rule decides a tap: a tap whose target is within 4 px of the
-  live position seeks nothing.
+  - the marker moving onto a still knob doesn't, at a pass or at an
+    event (an event measures where it plays now before the finger's
+    move).
+- The same rule decides a tap: a tap on the second playing, or within
+  4 px of the live position, seeks nothing.
 - How wide 4 px is:
   - on a 4 min track, about 3 s;
-  - on a 60 min mix, about 48 s. Fine scrubbing is in section 13.
+  - on a 60 min mix, about 48 s. Fine scrubbing is in section 13;
+  - on a 0:52 track, 0.7 s either side, and the whole second playing. A
+    second wholly within 4 px of the marker (0:41 from 0:42.01) can't be
+    tapped from there; a drag from the knob, 5 px back, reaches it.
+- **The marker moves on under a still knob.** After a grab the knob is
+  where the finger holds it, and the music plays on: 5.64 px a second on
+  a 0:52 track. A knob held still is staying while the marker is in its
+  second or within 4 px; after that the readout says "-0:01", and the
+  lift seeks back to the second grabbed. A grab from the knob lifted
+  within ~0.7 s of its DragStart without moving stays.
 
 ### 2.6 Off the bar: cancel
 
@@ -388,7 +465,7 @@ While scrubbing, the finger's y decides:
 | End | Seek? | Tick | Log (section 8) |
 |---|---|---|---|
 | Tap, outside the detent | yes, where it landed | the tap tick, once the player took it | `seek ... (tap)` |
-| Tap in the detent | no | none | `no seek (back where it plays)` |
+| Tap in the detent (on the second playing, or within 4 px) | no | none | `no seek (back where it plays)` |
 | DragEnd while scrubbing, outside the detent | yes, the readout's target | none (the audio's jump confirms it, as for the volume slider's drag) | `seek ... (drag ...)` |
 | DragEnd in the detent | no | none | `no seek (back where it plays)` |
 | DragEnd while off | no | none | `no seek (slid off the bar)` |
@@ -544,7 +621,7 @@ neither can leave the album row or a button over the readout.
 | A tap that seeks | one tick, once the player took it (Started or Waits) |
 | A tap in the detent; a tap on an inert bar | nothing (nothing acted) |
 | The drag becomes a scrub | one tick |
-| The finger moves into the detent | one tick (not at a knob grab's start, and not when the marker comes to the knob) |
+| The finger moves into the detent | one tick (not at a knob grab's start, and not when the marker comes to the knob, at a pass or at an event) |
 | Off, and back | one tick each |
 | The reach or 0:00 | nothing (the knob visibly stops) |
 | The lift (a seek, staying, or off) | nothing |
@@ -854,13 +931,15 @@ outputs read the ring on their own tasks.
 | A gapless join | A seek lands at most at the reach (6 s before the end), outside the ~1.4 s decode-ahead window. A join heard during a drag ends the drag (R8); one heard at the lift gives Moved (R3) |
 | A second seek within the first's 150 ms | The newer request replaces the older one (R5), and `pendingStart()` follows the newer |
 | LAME VBR, by its TOC | It lands within 0.74 s (p95; 0.47 s on the device's 20 points), showing the time asked. Later seeks back into what played go by the run's index and keep that start's timeline, error and all (`the run's index; the time asked`); in a run from the top they are exact |
-| A paused seek and the resume anchor | The exact paused-sample anchor goes. The next play (and a boot) starts by the second: exact for CBR, FLAC, built-in tracks, and inside the paused run's index (which the stop keeps) when that run was exact; by the TOC for a LAME VBR file after a reboot |
+| Opus | It lands on the sample asked (the reader's plan by the pages' granule positions, a 200 ms preroll decoded and dropped), showing the time asked; the file opens again from the open cache with one read and a plan costs ~10-17 reads / ~50-80 KB of header reads on a 128k file, so a seek's first audio is expected ~165-215 ms after the lift (OPUS.md section 10; M3 measured 287-453 with a full second open and the plan's wasted reads). A pause's anchor is its sample, resumed with a 600 ms preroll |
+| A paused seek and the resume anchor | The exact paused-sample anchor goes. The next play (and a boot) starts by the second: exact for CBR, FLAC, Opus, built-in tracks, and inside the paused run's index (which the stop keeps) when that run was exact; by the TOC for a LAME VBR file after a reboot |
 | The screen dim or off | The first touch only wakes it, swallowed through its lift, so a scrub can't begin from Dim or Off. A moving finger keeps the screen lit. One held still for 15 s stops counting; if the screen dims under it, the touch ends with a Cancel: no seek |
 | A toast going away mid-scrub | The page repaints. The scrub's look is part of what `update()` draws, so the readout and the band come back as they were (4.2) |
 | A sheet or dialog opening mid-scrub | Cancel (`endPageTouch()`): no seek. When the modal closes, the repaint shows the rest look |
 | A second finger | Only the first touch point counts |
 | The headphones drop mid-scrub | The pause comes from main.cpp. The lost dialog's opening cancels the touch; without a dialog, the lift seeks in the Paused state (it waits) |
 | Long tracks (30 min and more) | 6 s or more per px, and the detent is ±4 px. Fine scrubbing is in section 13 |
+| Short tracks (under 74 s) | A second is wider than the ±4 px detent (5.64 px on 0:52). The second playing is in it whatever its px, so a tap or a lift never seeks to it; around it the detent is ±4 px of the finger's place (2.5). A knob held still leaves it once the marker is past its second and 4 px (at most about a second on 0:52) |
 | `uiF` faked states | Display only: a seek acts on the real player |
 | The console's tests that borrow the backend (Rt, b<n>) | The snapshot shows the borrowed track's numbers on the stopped entry, as today. A seek there only sets a start point. Console only |
 
@@ -998,16 +1077,18 @@ player logs nothing new; the backend's own start lines follow, as for
    ```
 
    What `onEvent()` does, by event:
-   - **Tap** (while Pressed): the target from the landing x; ends Stay,
-     or Seek (a tap).
+   - **Tap** (while Pressed): the target and the place from the landing x;
+     ends Stay (2.5), or Seek (a tap).
    - **DragStart** (while Pressed):
      - not sideways: ends Let;
      - else: the grab (2.3), Scrubbing, the readout's side by the knob
        (left if x >= 160), and a tick.
    - **DragMove and DragEnd** (while Scrubbing or Off):
      - off or back by y (2.6), with a tick each;
-     - on the bar: `vx` → `msAt()` → staying, with a tick when a move
-       enters the detent;
+     - on the bar: the target (`msAt(x)`, or from the grab's time, 2.3)
+       and the finger's place → staying (2.5), with a tick when the
+       finger's move enters the detent (where it plays now is measured
+       first, so the marker reaching the knob doesn't tick);
      - the readout's side by `kReadoutLeftX` and `kReadoutRightX`.
    - **DragEnd**, after that update: ends Off, Stay or Seek.
    - **Release, Cancel:** ends Cancel.
@@ -1110,10 +1191,12 @@ fields, the player's 8 B); no IRAM.
      reach.
 6. `test_a_tap_seeks_where_it_landed`: live 60,000 (the knob at x 84). A
    Tap at 160 ends Seek (a tap) at 122,000, and nothing is active after.
-7. `test_a_tap_on_the_knob_seeks_nothing`, live 60,000:
-   - Taps at 81 and at 89 end Stay;
-   - a Tap at 80 ends Seek at 56,000;
-   - a Tap at 90 ends Seek at 64,000.
+7. `test_a_tap_on_the_knob_seeks_nothing`, live 60,000 (the knob at
+   x 84):
+   - Taps at 80, 81, 84 and 88 end Stay;
+   - a Tap at 79 ends Seek at 55,000;
+   - a Tap at 89 ends Seek at 63,000.
+   (Until 2026-10-07, by the target's x: 81-89 stayed, 80 sought 56,000.)
 8. `test_a_drag_seeks_once_at_the_lift`, live 60,000, a far grab:
    - Down at 200, DragStart at 214, DragMoves to 250: no end, a tick only
      at the DragStart, the target 196,000;
@@ -1121,16 +1204,20 @@ fields, the player's 8 B); no IRAM.
    - a Fling after it: nothing.
 9. `test_a_knob_grab_doesnt_jump`, live 60,000:
    - Down at 90, DragStart at 103: staying, the knob at x 84;
-   - DragMove to 153 (`vx` 134): the target 100,000;
-   - DragEnd: Seek at 100,000.
+   - DragMove to 153 (50 px: 1:00 + 41.4 s): the target 101,000 (from the
+     knob's pixel, until 2026-10-07: 100,000);
+   - DragEnd: Seek at 101,000.
 10. `test_a_vertical_drag_is_let_go`: a DragStart with dx 3, dy −13 ends
     Let; a DragEnd after it ends nothing.
 11. `test_the_detent_snaps_and_ticks`:
-    - entering it by a move ticks once;
+    - entering it by a move ticks once; in to x 80, out at 79, in again
+      at 86 with a tick;
     - staying at the DragStart of a knob grab doesn't tick;
     - `live()` moving the marker onto the knob makes it staying, without
       a tick;
-    - a DragEnd there ends Stay.
+    - a DragEnd there ends Stay;
+    - the marker onto the knob at a DragMove, or at a DragEnd, with no
+      pass between: no tick, and the DragEnd ends Stay.
 12. `test_off_and_back`:
     - y 129 is off (a tick), 135 still off, 138 back (a tick);
     - 240 is off, 235 still off, 231 back;
@@ -1170,6 +1257,35 @@ what the readout shows:
     `readout()`s, and off differs from both.
 22. `test_the_readout_texts`: "0:00", "2:31", "100:00"; "+1:21", "-0:45"
     (ASCII), "+0:00".
+
+Added for the device's finding (section 17), on a 0:52 track (52,480 ms:
+5.64 px a second):
+
+23. `test_the_second_playing_is_no_seek`:
+    - paused at 0:42.99 (the knob at x 254): a Tap at 249 (0:42, whose
+      start is 5 px behind) ends Stay; at 248 (0:41), Seek at 41,000;
+    - paused at 0:42.01 (the knob at x 248): a Tap at 247 (in 0:41, 1 px
+      left of the knob) ends Stay; at 243, Seek at 40,000. From 0:42.10,
+      a Tap at 255 ends Seek at 43,000;
+    - playing, a drag from x 100 to 249 at 0:42.90: one tick into the
+      detent (by the second), the knob on the marker, "0:42 no change";
+      lifted at 0:42.99, Stay and no tick; lifted at 0:43.05 instead (5 px
+      on), Seek at 42,000, the readout having said 0:42 and 0:43;
+    - paused, a Tap within 1 px of the knob for every phase from 0:41 to
+      0:44 (7 ms steps), on 0:52 and on 1:15: Stay every time.
+24. `test_a_knob_grab_while_it_plays_on` (the drift):
+    - the device's `uid249,150,263,150,300` from 0:42.25, through a real
+      recogniser at 42 ms a frame (as `Input::simulate()` moves the
+      finger): Stay, one tick (the scrub's), the lift at 0:42.754;
+    - the same 14 px from the knob for every phase from 0:41 to 0:44 (7 ms
+      steps), at 33, 42, 50 and 60 ms a frame, on 0:52 and on 1:15: Stay
+      every time;
+    - a grab at 0:42.01 (a pixel that begins in 0:41): staying, the target
+      42,000, the knob at x 248; held still, staying at 0:42.90 (the same
+      second, 5 px), not at 0:43.10 (7 px), the knob left at x 248; the
+      lift seeks 42,000;
+    - moved from the DragStart while paused: 5 px back, Seek at 41,000;
+      5 px on, Stay (still 0:42); 6 px on, Seek at 43,000.
 
 **test_playback** (the Rig; `FakeAudioBackend` with `asyncStarts` and
 `anchorsOn`; `TestHold`):
@@ -1393,6 +1509,22 @@ The examples are for a 4:05 CBR MP3.
 15. **Bluetooth** (the user, with silence only): seeks while connected
     to the headphones give no dropout beyond the fade-in, and no AVRCP
     effects.
+16. **A short track, playing** (under 74 s, where a second is wider than
+    the detent: an Opus track of 0:52 is 5.64 px a second). Read the
+    knob's x from `ui` (`the knob at x k`), and aim each touch at where
+    it will be at the Down (section 17's gate added 3 px for the ~0.6 s
+    between them):
+    - `uid<k>,150,<k+14>,150,300` (a grab let go: the slop takes the
+      14 px): `no seek (back where it plays)`, whatever the second's
+      phase. Repeat it ten times. Until 2026-10-07 almost half sought the
+      second playing (`seek 0:42 -> 0:42 ...`) or the one before;
+    - `uit<k-1>,150`: `no seek (back where it plays)`;
+    - `uid<k>,150,<k+24>,150,300` (8-11 px past the slop): one `seek` a
+      second or two on, `plays from there` (a host replay of every phase:
+      always);
+    - paused (`uit160,204`), the first two again: `no seek (back where it
+      plays)`, and no `[queue] resume point saved` line (the paused
+      sample's anchor stays).
 
 ## 12. Build order
 
@@ -1622,3 +1754,56 @@ were put back.
   remembered headphones`, and the restart that follows it). They have to
   be paired again (Output > Pair new headphones); 11's setup now warns
   of it.
+
+## 17. On the device (2026-10-06): the second already playing
+
+OPUS.md's M4 gate (part a, S4: the seek bar on Opus) on feature/opus,
+silent mode on the speaker, an Opus track of 0:52 (52,480 ms) playing.
+
+- **What it found.** `ui` put the knob at x 246 (0:41.5). The gate's drag
+  from the knob, `uid249,150,263,150,300` (a grab let go: the slop takes
+  the 14 px), logged `seek 0:42 -> 0:42 of 0:52 (drag from the knob,
+  held 172 ms): plays from there`, and the Opus start lines after it:
+  the second already playing, started again for nothing (a ~250 ms gap
+  and a fade-in). The step wanted `no seek (back where it plays)`, which
+  earlier drags of the same shape had given.
+- **Why the detent missed.** Not a stale position: `onEvent()` measures
+  the detent against the snapshot's position at the lift. Nor, mostly,
+  the music moving on under the grabbed knob: from the DragStart to the
+  lift (168 ms) the marker moved 1 px. Replayed on the host (test 24, from 0:42.25):
+  - the DragStart came at 0:42.59, with the finger at x 263. The grab put
+    the knob at the marker's pixel (line px 240), whose time, 0:42.55,
+    floors to 0:42;
+  - the detent compared 0:42's x, its second's start (line px 236), with
+    the marker's: 4 px at the DragStart (staying), 5 at the lift at
+    0:42.75 (line px 241): a seek;
+  - so the cause was the floor. On a track under 74 s a second is wider
+    than the 4 px detent (5.64 px here), and its start is 5 px behind
+    the marker from 0:42.73 on; the marker's 1 px only tipped it. Which
+    drags passed was the second's phase at the lift.
+  - Over every phase (42 ms frames), 45 % of such grabs sought: 20 % to
+    the second playing, 25 % to the one before (the marker had crossed
+    into the next, or the grab's pixel began in the one before). Of taps
+    within 1 px of the knob while paused, 29 % sought: 17 % to the second
+    playing, 12 % to the one before.
+  - From 74 s on, the second playing was always in the detent (a second
+    is 4 px or less), but the one before was not until a second is 3 px
+    or less, about 1:39 (until the review, this said "74 s and more:
+    none"): on 1:15, 15 % of the grabs and 8 % of the taps sought the
+    second before, fewer as the track gets longer, none from 1:39.
+- **The fix** (`Seek bar: a seek to the second already playing does
+  nothing`):
+  - staying is the target on the second playing, or the finger's place
+    within 4 px of the marker (2.5), at each event, the lift's included;
+    an event measures where it plays now before the finger's move, so
+    the marker reaching the knob at an event doesn't tick;
+  - a grab from the knob is anchored at the time at the DragStart, not
+    the knob's pixel (2.3).
+  - Replayed, none of those grabs or taps seeks, on 0:52 or on 1:15
+    (test 24 runs the grabs over every phase at four frame rates, test 23
+    the taps). A seek one second away still seeks once
+    the finger's place is 5 px from the marker (test 23), and a knob held
+    still while the marker moves past its second and 4 px seeks back to
+    the second grabbed.
+  - The firmware builds (core2, core2-dio) with every guard. 11.16 is
+    the device step, not run yet.

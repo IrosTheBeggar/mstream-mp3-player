@@ -160,12 +160,13 @@ private:
   // scrubs: the readout above says it all).
   void drawProgress();
   void drawProgressText(M5Canvas& c, bool paused);
-  // The seek bar: seekable now (a track that hasn't failed, 10 s or more);
-  // its look; the readout row above the line (over the album row and the
-  // cover's lowest rows; while a play waits, the artist row cleared too,
-  // the first time); the end of a scrub (the rows, the cover's rows from
-  // its sprite; the band follows); a touch's seek, its tick and its log
-  // line.
+  // The seek bar: seekable now (a track that hasn't failed, 10 s or more,
+  // and one the backend can start part of the way in: every format today,
+  // an Opus track since docs/OPUS.md section 9); its look; the readout row
+  // above the line (over the album row and the cover's lowest rows; while
+  // a play waits, the artist row cleared too, the first time); the end of
+  // a scrub (the rows, the cover's rows from its sprite; the band
+  // follows); a touch's seek, its tick and its log line.
   bool seekable() const;
   BarLook barLook() const;
   void drawReadout();

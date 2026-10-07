@@ -1016,6 +1016,9 @@ version. Nothing here is IRAM code, and nothing gets `IRAM_ATTR`.
 - `test_repeat_one_next_and_prev_move_and_wrap`.
 - `test_repeat_one_moves_on_from_a_failure`; every track failed, with One,
   still stops.
+- `test_an_end_at_0_00_is_a_failure`: a natural end with the position
+  still at 0:00 (an empty track) is a failure, "no audio in it": One
+  moves on; alone in the queue it stops.
 - `test_repeat_one_with_pause_after_this_track`: the same entry cued at
   0:00, `pausedByTimer()`, `timerStops() + 1`.
 - `test_a_start_point_on_a_cued_entry_keeps_its_told_length` (after the
@@ -1357,9 +1360,16 @@ and 6.
 - **Off on a 10,000-entry queue** sorts 120 KB of PSRAM on the loop task;
   estimated, not measured: check 16.
 - **Repeat One on a file that ends with no frames and no failure** would
-  replay back to back. A queue of one on repeat has had that exposure all
-  along. A guard (three One loops shorter than 1 s each count as a
-  failure, and it moves on) waits for a file that does it.
+  have replayed back to back, as would a queue of one on repeat. OPUS.md
+  M4's review found a file that does it (an Opus file whose last granule
+  is its pre-skip: valid, 0 samples; an MP3 that is all encoder delay and
+  padding or a FLAC of 0 samples would too), so the guard is in: a
+  natural end with the position still at 0:00 counts as a failure ("no
+  audio in it"), which moves on even under One, and every entry failing
+  in a row stops (`checkEnd()`; test_playback's
+  `test_an_end_at_0_00_is_a_failure`, test_gapless_player's
+  `test_an_empty_entry_is_a_failure_under_repeat`). The Opus reader also
+  refuses such a file at its open.
 - **A downgrade while shuffled** loses the queue once (2.9); schema 2 is
   left alone by older firmware (3.6).
 - **End of album with shuffle** pauses at most tracks' ends: the rule as

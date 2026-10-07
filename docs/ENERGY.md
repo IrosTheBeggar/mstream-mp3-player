@@ -3245,7 +3245,8 @@ them, GAPLESS.md section 11.4):
 - **The consumer's read** gained a reading mark and a fence check: a few
   `memw` per read (128 frames per Bluetooth callback, 1,024 per speaker
   buffer), well below the noise.
-- **The tables' copy** (7.6 KB of internal RAM) stays through a chain of
+- **The tables' copy** (7.6 KB; internal RAM then, a pinned PSRAM block
+  since OPUS.md section 8.11) stays through a chain of
   joins from a converted track to 44.1 kHz ones, freed at the next
   request; nothing more is allocated per join (the two 2 KB feed marks and
   the hold are allocated once at boot, in PSRAM).

@@ -1193,6 +1193,11 @@ with the block path; as built it differs from the plan below (section
   kept until a restart. Since v0.5.0 it is freed when a 44.1 kHz track
   starts, at the cost of a 7.6 KB allocation at each change of rate; when
   that allocation fails the tables are read from flash (section 10c).
+  Since the Opus work's M2 follow-ups the copy lives by default in a PSRAM
+  block pinned at boot beside the decoder arena's (OPUS.md section 8.11:
+  +2.8 points of a core for the converter against the internal-RAM copy,
+  which the console's `Ot0` brings back; 56 K of internal RAM free with an
+  Opus track playing against 48 K).
 - **Why the 441-row table went.** The first design had a direct 441-row
   upsampling table for 8/16/32 kHz (21.2 KB). That is larger than one 16 KB
   way of the 2-way 32 KB cache that the decoder's code and PSRAM data share
@@ -1392,7 +1397,8 @@ is ELF 3bdea34d (v0.5.0-dev+771f8ae-dirty).
   is configured (`setTablesWanted()`, on the decode task) and keeps them
   until a restart: 7,776 bytes of internal heap. Without the room they
   stay in flash (the same bits, slower). (v0.5.0 frees them at a 44.1 kHz
-  track's start: section 10c.)
+  track's start: section 10c; since OPUS.md 8.11 the copy's default home
+  is a pinned PSRAM block, `Ot0` internal RAM.)
 - **Test tones are paced like files** (`produceTone()` uses
   `RefillPacer`): flat out to 500 ms, then at most 1.5x realtime until the
   ring is first full, so a 32 or 8 kHz tone's start no longer takes most

@@ -22,15 +22,24 @@ const char* DecoderArena::whereName(Where w) {
   }
 }
 
-DecoderArena::DecoderArena(const size_t* sizes, size_t count) {
-  count_ = count < kMaxParts ? count : kMaxParts;
+DecoderArena::DecoderArena(const size_t* sizes, size_t count) { setLayout(0, sizes, count); }
+
+void DecoderArena::setLayout(size_t layout, const size_t* sizes, size_t count) {
+  count_[layout] = count < kMaxParts ? count : kMaxParts;
   size_t at = 0;
-  for (size_t i = 0; i < count_; ++i) {
-    size_[i] = sizes[i];
-    offset_[i] = at;
+  for (size_t i = 0; i < count_[layout]; ++i) {
+    size_[layout][i] = sizes[i];
+    offset_[layout][i] = at;
     at += alignUp(sizes[i]);
   }
-  bytes_ = at;
+  bytes_[layout] = at;
+  if (at > max_) max_ = at;
+}
+
+int DecoderArena::addLayout(const size_t* sizes, size_t count) {
+  if (block_ || layouts_ >= kMaxLayouts) return -1;
+  setLayout(layouts_, sizes, count);
+  return static_cast<int>(layouts_++);
 }
 
 bool DecoderArena::attach(void* block) {
@@ -41,18 +50,22 @@ bool DecoderArena::attach(void* block) {
 }
 
 void* DecoderArena::part(size_t i) const {
-  if (!block_ || i >= count_) return nullptr;
-  return block_ + offset_[i];
+  if (!block_ || i >= count_[current_]) return nullptr;
+  return block_ + offset_[current_][i];
 }
 
-bool DecoderArena::claim() {
-  if (!block_ || inUse_) {
-    if (block_) ++refused_;
+bool DecoderArena::claim(size_t layout) {
+  if (!block_ || inUse_ || layout >= layouts_) {
+    if (block_ && layout < layouts_) ++refused_;
     return false;
   }
   inUse_ = true;
+  current_ = layout;
   ++claims_;
   return true;
 }
 
-void DecoderArena::release() { inUse_ = false; }
+void DecoderArena::release() {
+  inUse_ = false;
+  current_ = 0;
+}

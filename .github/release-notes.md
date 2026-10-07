@@ -7,22 +7,67 @@ ELF {{ELF}} for this build; ELF {{DIO_ELF}} for the `-dio-full.bin`).
 Source for this binary: {{SOURCE_URL}}, and with its libraries in
 `{{SOURCE_TAR}}` below.
 
-## What's new in 0.6.0
+## What's new in 0.7.0
 
-- **Gapless playback:** albums mixed without gaps (live sets, DJ mixes)
-  play straight through, MP3 (with a LAME header) and FLAC alike.
-- **Resume and seeks to the exact spot:** after a restart a track picks up
-  at the second it paused at, VBR MP3s included.
-- **Steadier MP3 decoding:** the decoder's working memory stays in the
-  faster half of the PSRAM, so its speed no longer varies from boot to boot.
-- **The dancer keeps the beat better:** the beat tracker was reworked and
-  scored on a 77-track library. It is on the beat more of the time and
-  locks onto a wrong beat less often.
-- **USB visualizer (a novelty):** with the Core2 plugged into a computer,
-  `tools/usb_viz.py` (in the source) plays a song on the computer and sends
-  the Core2 its beat, and the crab dances to it (docs/USB-VISUALIZER.md).
-- **Faster flash mode (QIO)** by default, with the `-dio-full.bin`
-  fallback below, and a second round of power savings.
+- **Repeat is off by default, so the queue now stops at its end.** 0.6.0
+  always started it again from the top: for that, choose Repeat **All**
+  (Now Playing's "..."; below).
+- **Opus playback:** `.opus` files (Ogg Opus: what mStream's transcoding
+  makes and what yt-dlp downloads) play like any other track, mono or
+  stereo, at any bitrate, on the headphones and the speaker. A gapless
+  album joins without a gap, and seeks and the resume point land on the
+  exact sample, as on a FLAC. What the player learns about a file the
+  first time it opens it is kept on the card (`/.player/opus.idx`), so a
+  seek and the next play of it start sooner. Opus is always 48 kHz and
+  costs what a 48 kHz MP3 does: it plays at the 160 MHz CPU speed too
+  (Output > CPU speed), where lists scroll more slowly. The artist, album
+  and title come from the folders and the file name, as for the other
+  formats (the tags inside the file aren't read). Skipped, with a note on
+  Now Playing: surround files (more than two channels), files with frames
+  under 10 ms (encoders write 20 ms unless told otherwise), and the other
+  Ogg codecs (a Vorbis file renamed `.opus`; `.ogg` and `.oga` files
+  aren't listed). The first boot after the update builds the library's
+  index again, once (0.6.0's didn't list `.opus` files). Opus decoding
+  uses libopus under the IETF royalty-free patent grants (Xiph.Org
+  [#1524](https://datatracker.ietf.org/ipr/1524/), Microsoft
+  [#1914](https://datatracker.ietf.org/ipr/1914/), Broadcom
+  [#1526](https://datatracker.ietf.org/ipr/1526/)). Separately, members
+  of the Vectis Opus patent pool (Dolby, Fraunhofer, NTT) assert patents
+  against makers of hardware that decodes Opus. If you sell devices with
+  this firmware installed, that may concern you.
+- **File names read better:** artists and albums sort past a leading
+  "The" ("The Lantern Choir" under L, shown whole); `1-03 Title` and
+  `103 Title` give the disc and the number, and `Artist - 03 - Title`
+  the number, so an album plays disc after disc and in track order; and
+  `03 - Artist - Title` shows as "Title" when the artist is the
+  folder's. The Library's index rebuilds once, with the Opus one above.
+- **The Now Playing seek bar:** tap the progress line, or drag along it
+  and lift, to move in the track (never into its last 6 s; slide off it
+  to cancel). Paused, it stays paused, and play (or the next boot) starts
+  there.
+- **Now Playing's menus, shuffle and repeat:** a tap on the cover, the
+  title, the artist or the album offers Go to artist, Go to album and Go
+  to folder; "..." holds **Shuffle**, **Repeat** (Off, All, One) and the
+  Sleep timer, with a small sign under it for what is on. Both modes are
+  kept across a restart. Shuffle shuffles what's up next and Off puts the
+  queue's own order back; Shuffle all (the empty queue's button) turns it
+  on, and its Undo puts both back.
+- **MP3 decoding at full speed again:** in the builds after 0.6.0, new
+  code had moved the MP3 decoder's busiest loop onto flash-cache lines it
+  then fought over (3.8x realtime on a track 0.6.0 decodes at 4.8x). That
+  loop now has a fixed place in the cache, and the build fails if it ever
+  loses it. 0.6.0 itself wasn't affected.
+- **The Pair screen stays lit while it searches** (2 minutes at most):
+  the screen used to dim and then go off mid-search, which stopped it.
+- **Output > About and the card:** the card's size now comes from the card
+  itself; it was a count of the free space, which on some large FAT32
+  cards took minutes and could stop the music. A card that doesn't mount
+  says what it is ("This card is exFAT", "This card is NTFS", "This card
+  uses GPT", "Can't read this card"), and the card's section below has the
+  steps per computer.
+- Going back to 0.6.0 later: a pause saved on an Opus track loses its
+  resume point once, and a shuffled queue is lost once (0.6.0 can't read
+  the shuffled queue's file).
 
 ## Hardware
 
@@ -117,7 +162,9 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
 
 ## Known limits
 
-- MP3 and FLAC only.
+- MP3, FLAC and Opus only (`.mp3`, `.flac`, `.opus`): no AAC/M4A, Ogg
+  Vorbis or WAV. Surround Opus and Opus with frames under 10 ms are
+  skipped with a note.
 - Files from 8 to 48 kHz play, on the headphones and the speaker alike;
   88.2 kHz and higher are skipped with a message that names the rate.
 - Text is drawn in Latin scripts only.

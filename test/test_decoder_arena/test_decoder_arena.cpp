@@ -108,6 +108,64 @@ void test_where() {
   TEST_ASSERT_EQUAL_STRING("PSRAM, its lower 2 MB", DecoderArena::whereName(W::PsramLow));
 }
 
+// ---- several decoders, one block (docs/OPUS.md) ----
+
+// The Opus decoder's state (opus_decoder_get_size(2) on the ESP32) and one
+// frame's PCM (2,880 x 2 x int16).
+const size_t kOpusParts[] = {26520, 11520};
+
+void test_a_second_layout_sizes_the_block_to_the_largest() {
+  DecoderArena a(kMp3Parts, 2);
+  TEST_ASSERT_EQUAL_UINT32(1, a.layouts());
+  TEST_ASSERT_EQUAL_INT(1, a.addLayout(kOpusParts, 2));
+  TEST_ASSERT_EQUAL_UINT32(2, a.layouts());
+  TEST_ASSERT_EQUAL_UINT32(20800 + 4256, a.layoutBytes(0));
+  TEST_ASSERT_EQUAL_UINT32(26528 + 11520, a.layoutBytes(1));  // 26,520 rounded up to 32
+  TEST_ASSERT_EQUAL_UINT32(26528 + 11520, a.bytes());
+  TEST_ASSERT_EQUAL_UINT32(2, a.layoutParts(1));
+  TEST_ASSERT_EQUAL_UINT32(0, a.layoutParts(2));
+  // No third layout, and none once the block is attached.
+  TEST_ASSERT_EQUAL_INT(-1, a.addLayout(kMp3Parts, 2));
+  DecoderArena b(kOpusParts, 2);
+  TEST_ASSERT_TRUE(b.attach(g_block));
+  TEST_ASSERT_EQUAL_INT(-1, b.addLayout(kMp3Parts, 2));
+  TEST_ASSERT_EQUAL_UINT32(1, b.layouts());
+}
+
+void test_a_claim_names_its_layout() {
+  DecoderArena a(kMp3Parts, 2);
+  TEST_ASSERT_EQUAL_INT(1, a.addLayout(kOpusParts, 2));
+  TEST_ASSERT_TRUE(a.attach(g_block));
+  // Nothing claimed: layout 0's parts (the MP3 path reads them as before).
+  TEST_ASSERT_EQUAL_UINT32(2, a.parts());
+  TEST_ASSERT_EQUAL_UINT32(20784, a.size(0));
+  TEST_ASSERT_EQUAL_PTR(g_block + 20800, a.part(1));
+  // The Opus decoder's claim: its own parts, at its own offsets.
+  TEST_ASSERT_TRUE(a.claim(1));
+  TEST_ASSERT_EQUAL_UINT32(1, a.claimed());
+  TEST_ASSERT_EQUAL_UINT32(26520, a.size(0));
+  TEST_ASSERT_EQUAL_UINT32(11520, a.size(1));
+  TEST_ASSERT_EQUAL_PTR(g_block, a.part(0));
+  TEST_ASSERT_EQUAL_PTR(g_block + 26528, a.part(1));
+  TEST_ASSERT_EQUAL_UINT32(0, reinterpret_cast<uintptr_t>(a.part(1)) % DecoderArena::kAlign);
+  // One decoder at a time, whichever the layout.
+  TEST_ASSERT_FALSE(a.claim(0));
+  TEST_ASSERT_FALSE(a.claim(1));
+  TEST_ASSERT_EQUAL_UINT32(2, a.refused());
+  a.release();
+  TEST_ASSERT_EQUAL_UINT32(0, a.claimed());
+  TEST_ASSERT_EQUAL_UINT32(20784, a.size(0));  // layout 0 again
+  // The MP3 decoder's claim (the default) after it: libmad's parts.
+  TEST_ASSERT_TRUE(a.claim());
+  TEST_ASSERT_EQUAL_UINT32(0, a.claimed());
+  TEST_ASSERT_EQUAL_PTR(g_block + 20800, a.part(1));
+  a.release();
+  // A layout that doesn't exist: refused, not counted as a decoder's loss.
+  TEST_ASSERT_FALSE(a.claim(2));
+  TEST_ASSERT_EQUAL_UINT32(2, a.refused());
+  TEST_ASSERT_FALSE(a.inUse());
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(test_layout_aligns_each_part);
@@ -117,5 +175,7 @@ int main() {
   RUN_TEST(test_misaligned_block_is_refused);
   RUN_TEST(test_one_decoder_at_a_time);
   RUN_TEST(test_where);
+  RUN_TEST(test_a_second_layout_sizes_the_block_to_the_largest);
+  RUN_TEST(test_a_claim_names_its_layout);
   return UNITY_END();
 }

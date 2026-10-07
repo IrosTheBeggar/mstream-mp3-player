@@ -141,12 +141,6 @@ uint32_t vbriEntry(const Header& h, uint32_t i) {
 
 }  // namespace
 
-uint32_t startMs(uint32_t requestMs, uint32_t durationMs) {
-  if (durationMs == 0) return requestMs;
-  if (requestMs >= durationMs || durationMs - requestMs <= kTailMs) return 0;
-  return requestMs;
-}
-
 const char* mp3SeekName(Mp3Seek how) {
   switch (how) {
     case Mp3Seek::CbrInfo: return "CBR, Info header";

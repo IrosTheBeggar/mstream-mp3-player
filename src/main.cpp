@@ -498,6 +498,7 @@ struct MainUiHost : ui::UiHost {
   void snapshot(ui::AppState& s) override {
     s.play = player.state();
     s.failed = audio.failed();
+    s.seekable = player.seekable();  // the current entry's, by its path (a joined track has no play() of its own)
     s.current = queue.current();
     s.trackId = queue.currentTrack();
     s.currentKey = queue.currentKey();
@@ -806,16 +807,16 @@ static void printStats() {
   const diag::Heap h = diag::heap();
   Serial.printf(
       "[stats] track=%d/%lu %s pos=%.1fs out=%s%s buf=%lums underruns=%lu bt=%lufps load=%.1f%% "
-      "stack_free=%lu ram=%luK min=%luK psram=%luK bat=%d%%\n",
+      "stack_free=%lu pass_max=%luus ram=%luK min=%luK psram=%luK bat=%d%%\n",
       player.currentIndex() + 1, (unsigned long)queue.size(), stateName(), audio.positionMs() / 1000.0f,
       audio.output() == Output::Bluetooth ? "bt" : "speaker",
       audio.output() == Output::Bluetooth ? (audio.bluetooth().connected() ? "(connected)" : "(searching)")
       : silent                            ? "(silent test mode)"
                                           : "",
       (unsigned long)s.bufferedMs, (unsigned long)s.underruns, (unsigned long)s.btFramesPerSec,
-      s.decodeLoad * 100.0f, (unsigned long)s.decodeStackFree, (unsigned long)(h.internalFree / 1024),
-      (unsigned long)(h.internalMin / 1024), (unsigned long)(h.psramFree / 1024),
-      (int)M5.Power.getBatteryLevel());
+      s.decodeLoad * 100.0f, (unsigned long)s.decodeStackFree, (unsigned long)s.maxPassUs,
+      (unsigned long)(h.internalFree / 1024), (unsigned long)(h.internalMin / 1024),
+      (unsigned long)(h.psramFree / 1024), (int)M5.Power.getBatteryLevel());
   if (danceMode.active()) danceMode.printStats(millis());  // every 5 s while dancing
 
   BtSink& bt = audio.bluetooth();
@@ -1332,7 +1333,10 @@ static void rateCommand(const char* a) {
   const Core2AudioBackend::TableStatus t = Core2AudioBackend::tableStatus();
   Serial.printf("[rate] filter tables: %s; %lu copies found no room since boot; internal free %u B, largest block "
                 "%u B\n",
-                t.inRam ? "the internal-RAM copy" : "flash (no copy now)", (unsigned long)t.noRoom,
+                t.inRam     ? "the internal-RAM copy"
+                : t.inPsram ? "the pinned PSRAM block's copy (Ot1)"
+                            : "flash (no copy now)",
+                (unsigned long)t.noRoom,
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   Serial.printf("[rate] CPU set at boot: %u MHz; 88.2/96 kHz %s; R status, Rt the test tracks (Rt<n> plays one "
@@ -1445,6 +1449,43 @@ static void gaplessCommand(const char* a) {
                 (unsigned long)g.restarted, (unsigned long)g.paused, (unsigned long)player.repeats());
 }
 
+// O...: Opus (docs/OPUS.md): the device checks' knobs. An .opus file in
+// the library plays as any track; one the library doesn't list (the card
+// set under /bench/opus/) plays by its path, Rf</bench/opus/x.opus> in
+// silent mode, or benches by it, b</bench/opus/x.opus> (into nothing).
+//   O        the knobs' state
+//   Ol/Oi/Oh the decoder's state (and the frame's PCM) in the pinned block
+//            (PSRAM, its lower 2 MB: the default) / internal RAM / PSRAM
+//            above 0x3FA00000 from the next open (gate G1's A/B; a
+//            placement with no room falls back to the block, logged)
+//   Ot1/Ot0  the converter's 7,776 B table copy in a PSRAM block pinned
+//            next to the decoder's (the default since M2's device check:
+//            its internal RAM stays free, gate G5) / in internal RAM from
+//            the next converted track (a copy in the other place is
+//            dropped at the next request's start); `b` with each measures
+//            what the PSRAM copy costs the converter (the cache: +2.8
+//            points of a core measured, docs/OPUS.md 8.11)
+static void opusCommand(const char* a) {
+  static const char* const kWhere[] = {"the pinned block (PSRAM, its lower 2 MB)", "internal RAM",
+                                       "PSRAM above 0x3FA00000"};
+  if (a[0] == 'l' || a[0] == 'i' || a[0] == 'h') {
+    audio.setOpusPlacement(a[0] == 'l' ? 0 : a[0] == 'i' ? 1 : 2);
+  } else if (a[0] == 't') {
+    audio.setOpusTablesPinned(a[1] != '0');
+  } else if (a[0]) {
+    Serial.println("[opus] O status; Ol/Oi/Oh the decoder's state in the pinned block / internal RAM / high PSRAM "
+                   "from the next open; Ot1/Ot0 the converter's table copy in the pinned PSRAM block (the default) / "
+                   "internal RAM from the next converted track");
+  }
+  char block[96];
+  audio.opusTablesBlock(block, sizeof(block));
+  Serial.printf("[opus] the decoder's state goes to %s from the next open; the converter's table copy goes to %s "
+                "from the next converted track (the pinned block: %s); b</bench/opus/x.opus> benches a file (no "
+                "sound), Rf</bench/opus/x.opus> plays one on its own (silent mode z only)\n",
+                kWhere[audio.opusPlacement() < 3 ? audio.opusPlacement() : 0],
+                audio.opusTablesPinned() ? "the pinned PSRAM block (Ot1, the default)" : "internal RAM (Ot0)", block);
+}
+
 static void bluetoothTestCommand(const char* a) {
   BtSink& bt = audio.bluetooth();
   const BtLink l = bt.link();
@@ -1541,10 +1582,21 @@ static SerialConsole console({
     },
     listTracks,
     [](int i) { player.play(static_cast<size_t>(i)); },
-    [](int i) {
-      if (i < 0 || static_cast<uint32_t>(i) >= queue.size()) return;
+    [](const char* a) {
+      // b<n>: queue entry n; b</path>: a file by its path (one the library
+      // doesn't list: the card set under /bench/opus/, docs/OPUS.md). The
+      // bench decodes into nothing: no sound either way.
       char path[TrackCatalog::kMaxPath];
-      library.catalog().path(queue.trackAt(i), path, sizeof(path));
+      if (a[0] == '/') {
+        snprintf(path, sizeof(path), "%s", a);
+      } else {
+        const long i = atol(a);
+        if (!isDigit(a[0]) || i < 0 || static_cast<uint32_t>(i) >= queue.size()) {
+          Serial.println("[bench] b<n> benches queue entry n (l lists them); b</path> a file by its path");
+          return;
+        }
+        library.catalog().path(queue.trackAt(static_cast<size_t>(i)), path, sizeof(path));
+      }
       stopForTest("bench");
       audio.bench(path);
     },
@@ -1636,6 +1688,7 @@ static SerialConsole console({
     diag::printPartitionTable,
     rateCommand,
     gaplessCommand,
+    opusCommand,
     [](char* line, HostLine::Byte kind) { usbViz.onLine(line, kind); },
 });
 
@@ -2489,7 +2542,8 @@ void setup() {
 
   // The Bluetooth power, applied as the controller comes up (before any page).
   powerSettings.beginBluetooth(audio.bluetooth());
-  if (!audio.begin(storage.available() ? &storage.fs() : nullptr, BT_SINK_NAME)) {
+  if (!audio.begin(storage.available() ? &storage.fs() : nullptr, storage.available() ? storage.stateDir() : nullptr,
+                   BT_SINK_NAME)) {
     Serial.println("[audio] failed to start");
   }
   // 88.2/96 kHz tracks need 240 MHz: the speed set at boot, not the clock
@@ -2565,7 +2619,7 @@ void setup() {
   diag::logHeap("ui");
   Serial.println("[console] n/p next/prev, space play/pause, o output, +/- volume, s stats, l list, "
                  "f forget bt, z silent test mode, d dance tab, m next dancer, x/X screenshot dancer/screen, v beat log; "
-                 "with Enter: i<n> play, b<n> bench, c<name> headphones name, h<n> bt headroom -n dB, "
+                 "with Enter: i<n> play, b<n> bench (b</path> a file by its path), c<name> headphones name, h<n> bt headroom -n dB, "
                  "q queue (q? for its commands; qs<sec> a resume point), "
                  "a touch calibration (a5-a9 fewer crosses, ac check, ab first-boot check, ab0 ask it again, "
                  "as status, ad remove it, ah0/1 haptics, ar0/1 rail ticks), "
@@ -2582,7 +2636,9 @@ void setup() {
                  "T0 off); I idle power-off (I status, I<min>/Is<sec> a test length, I0 the setting's); "
                  "R rate converter (R status, Rt test tracks, Rt<n> play one on its own, Rf</music/...> a file on its own "
                  "(silent mode), Rx stop it, Rb bench); G gapless playback (G status, G0/G1 off/on, Gt0/Gt1 trimming, Gx<n> "
-                 "the cut's stress test); "
+                 "the cut's stress test); O Opus (O status, Ol/Oi/Oh the decoder's state in the pinned block / internal "
+                 "RAM / high PSRAM, Ot1/Ot0 the converter's table copy in the pinned PSRAM block (the default) / "
+                 "internal RAM); "
                  "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md), never commands");
 }
 

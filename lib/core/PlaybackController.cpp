@@ -4,6 +4,7 @@
 #include "PlaybackController.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <string>
 
 #include "TrackSeek.h"
@@ -370,6 +371,15 @@ PlaybackController::Seek PlaybackController::seek(uint32_t key, uint32_t ms, uin
   return state_ == PlayState::Playing ? Seek::Started : Seek::Waits;
 }
 
+bool PlaybackController::seekable() const {
+  // By the entry's path, not by what the backend was last asked to play:
+  // after a gapless join the heard track is the entry's without any play(),
+  // and after a boot the restored entry waits with none yet.
+  char path[TrackCatalog::kMaxPath];
+  if (currentPath(path, sizeof(path)) == 0) return false;
+  return audio_.seekable(path);
+}
+
 bool PlaybackController::pendingStart(uint32_t* ms) const {
   // As prevAction() reads it: only while the backend holds this entry's
   // track (the play it was asked for) and hasn't taken that start up.
@@ -442,11 +452,27 @@ void PlaybackController::update(uint32_t nowMs) {
 
 void PlaybackController::checkEnd() {
   if (state_ != PlayState::Playing) return;
-  if (audio_.failed()) {
+  // A natural end with nothing heard (the position never left 0:00): a
+  // track with no samples to play, which every format can hold (an Opus
+  // file whose last granule is its pre-skip, an MP3 that is all encoder
+  // delay and padding, a FLAC of 0 samples; the Opus reader refuses the
+  // first at its open, the others end at once). Taken as a failure: by
+  // the repeat mode it would be started again at once, and Repeat One,
+  // or All with nothing else to play, would spin on it (an SD open and a
+  // log line fifty times a second, Now Playing frozen at 0:00) until the
+  // listener acted. A failure moves on even under Repeat One, and a
+  // queue of nothing but such entries stops (docs/QUEUE-MODES.md).
+  const bool empty = !audio_.failed() && audio_.finished() && audio_.positionKnown() && audio_.positionMs() == 0;
+  if (audio_.failed() || empty) {
     ++failure_.count;
     failure_.track = queue_.currentTrack();
     failure_.key = queue_.currentKey();
     failure_.rate = audio_.rateRefusal();
+    if (empty) {
+      snprintf(failure_.note, sizeof(failure_.note), "no audio in it");
+    } else {
+      audio_.failureNote(failure_.note, sizeof(failure_.note));
+    }
     if (++failuresInARow_ >= queue_.size()) {
       stop();  // every track failed in a row: nothing here plays
       return;

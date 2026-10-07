@@ -14,7 +14,7 @@
 // a touch ends in a seek.
 //
 // - A tap goes to the second under the finger (where it landed). A tap on
-//   the knob (within kStayPx of where it plays) is no seek.
+//   the knob (in the stay detent, below) is no seek.
 // - A sideways drag (|dx| >= |dy| at the DragStart) scrubs: the knob and
 //   the readout follow the finger while the music plays on where it was,
 //   and the lift seeks once, to the second the readout showed. A drag that
@@ -24,8 +24,10 @@
 //   plays then: a finger that rested on it while the music played on
 //   doesn't pull it back to the Down's x), then moves by the finger's
 //   movement, with no jump (only differences count, so the panel's few px
-//   of calibration error don't matter). Anywhere else the knob comes to
-//   the finger.
+//   of calibration error don't matter). The anchor is that time, not the
+//   knob's pixel (one is 1/296 of the length: 177 ms on a 52 s track):
+//   rounded to it, a grab that began in a second's first pixel aimed at
+//   the second before. Anywhere else the knob comes to the finger.
 // - Whole seconds. The line is x kLineX to kLineX + kLineW - 1 (the
 //   drawing's); msAt() floors to a second, which the readout shows and the
 //   seek asks for. The far left is 0:00; the far right the reach,
@@ -37,11 +39,20 @@
 //   so a length estimate that settles can't move the knob under a still
 //   finger.
 // - The stay detent. While scrubbing, a marker shows where it plays (the
-//   live position, which moves while playing). A target within kStayPx of
-//   it (in line px) is "staying": the knob snaps onto the marker, and a
-//   lift seeks nothing (a paused track keeps its exact resume anchor). A
+//   live position, which moves while playing). The touch is "staying" when
+//   its target is the second already playing, or when the finger's place
+//   (where it puts the knob, before the whole second) is within kStayPx
+//   line px of the marker: the knob snaps onto the marker, the readout
+//   says "no change", and a lift (or a tap) seeks nothing (a paused track
+//   keeps its exact resume anchor). Not the target's x: that is its
+//   second's start, up to a second's px behind the finger. A second is
+//   wider than kStayPx on a track under 74 s (296 px / 4 px), so a lift on
+//   the knob could seek to the second playing; and the one before starts a
+//   second and a px or two behind, so up to about 99 s (a second over
+//   3 px) a tap 1 px left of the knob, or a drift of 1 px, sought it.
+//   Measured against where it plays at each event, the lift's included. A
 //   finger that moves into it ticks; a knob grab that starts in it, and
-//   the marker coming onto a still knob, don't.
+//   the marker coming onto a still knob (at a pass or at an event), don't.
 // - Off. Onto the artist row or above (y < kOffAboveY: Now Playing's
 //   layout, its static_asserts tie these rows to it) or onto the button
 //   strip (y >= kOffBelowY) the knob goes back to where it plays and a lift
@@ -140,9 +151,18 @@ public:
   uint32_t heldMs(uint32_t nowMs) const { return nowMs - targetSinceMs_; }
 
 private:
-  // The finger at (x, edges): the target by the grab's mapping.
+  // The finger at (x, edges): the target by the grab's mapping, its
+  // place, staying.
   void aim(const InputEvent& e);
-  bool stays(uint32_t targetMs) const;
+  // A knob grab's target: where it played at the DragStart, moved by the
+  // finger's `dx` px since (whole seconds, 0..seekLimitMs()).
+  uint32_t fromGrab(int dx) const;
+  // The finger's place for line px `px` (a clamped reading: its end), on
+  // the line up to the reach's px.
+  int placeAt(int px, uint8_t edges) const;
+  // The detent: the target on the second playing, or the finger's place
+  // within kStayPx of where it plays.
+  bool stays() const;
   void side();
   Out end(End how, uint32_t ms = 0);
 
@@ -155,5 +175,10 @@ private:
   bool staying_ = false;
   bool knobGrab_ = false;
   bool readoutLeft_ = false;
-  int grabDx_ = 0;  // a knob grab: the knob's x at the DragStart (where it plays) less the finger's
+  // Where the finger puts the knob, in line px, before the whole second
+  // (the detent's measure: the target's x is its second's start).
+  int placePx_ = 0;
+  // A knob grab, at the DragStart: where it played, and the finger's x.
+  uint32_t grabMs_ = 0;
+  int grabX_ = 0;
 };
