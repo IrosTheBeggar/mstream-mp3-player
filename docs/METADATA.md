@@ -15,8 +15,12 @@ brings the tags in, two ways at once:
 One builder on the device merges both into the library index. A file
 reads the same whichever way it reached the card.
 
-**Status: a design, nothing built (2026-10-07, at cc13597 on
-`feature/metadata`, from dev with v0.7.0 released).** Part 2, the card
+**Status: a design, and its first milestone built (2026-10-07, at
+cc13597 on `feature/metadata`, from dev with v0.7.0 released).** N1, the
+contract kit, is in `lib/core/CardContract*`, `CardContainer`, `CardTags`,
+`CardManifest` and `CardAutoDj`, with the shared fixtures of 2.17 in
+`test/fixtures/card/` (made by `tools/card_fixtures.py`, a second
+implementation, and frozen); nothing else is built. Part 2, the card
 contract, is a **PROPOSAL (v1)** for the transfer software, whose own
 design is still being worked on in mstream-terminal; it is written so
 that side can implement it without reading the player's code, and every
@@ -441,6 +445,11 @@ metascan section 5.1). No cheap check sees every retag.
 - **The steps run in this order:** control characters to spaces; empty
   values dropped; each value cut to 255 bytes; repeats dropped; the list
   limits.
+- **A single-valued field** (title, album, the sort names, the
+  MusicBrainz ids: 2.6.5) is the first value left after the empty ones
+  are dropped, cut to 255 bytes; the values after it aren't the field's
+  and never set TRUNCATED. (A value empty after its control characters
+  became spaces isn't empty: a lone tab is stored as one space.)
 - **Paths:** names are stored as the card stores them (2.8.5); the names
   the software *creates* are NFC (2.8.3).
 
@@ -478,9 +487,11 @@ header, a section directory, then the sections, each 8-byte aligned.
 | 24 | 4 | crc | CRC-32 of the section's bytes |
 | 28 | 4 | reserved | 0 |
 
-Layout rules: sections are in increasing offset order and don't overlap;
-the gaps between them are zero padding of under 8 bytes; the last
-section ends exactly at fileBytes; a type appears at most once per file.
+Layout rules: sections are in increasing offset order and don't overlap
+(a section of 0 bytes, such as an empty RECS, shares its offset with the
+next one); the gaps between them are zero padding of under 8 bytes; the
+last section ends exactly at fileBytes; a type appears at most once per
+file.
 
 So that two writers produce the same bytes:
 
@@ -500,10 +511,24 @@ So that two writers produce the same bytes:
 
 #### 2.4.3 Validation
 
-A reader MUST treat a file as **absent** when any of these fails: the
-magic; a supported major; headerCrc; fileBytes equal to the length on the
-card; the directory's offsets inside the file; the CRC of each section
-the reader uses; the bounds checks of the section rules below.
+A reader MUST treat a file as **absent** when any of these fails:
+
+- **the frame:** the magic; a supported major; headerBytes a multiple of
+  8 and at least its format's v1 header; at most 64 sections; headerCrc;
+  fileBytes equal to the length on the card;
+- **the directory:** 2.4.2's layout rules (offsets multiples of 8 in
+  increasing order, the first at the directory's end, each next one under
+  8 bytes past the end of the one before, the last ending at fileBytes, no
+  type twice); no REQUIRED section of a type the reader doesn't know
+  (2.4.5); every section its format requires present; for each known
+  array, a stride at least its v1 stride (a later minor's longer rows are
+  read by their known prefix) and bytes = count × stride; for each known
+  blob, count and stride 0;
+- **the header's own fields:** the counts it states equal its sections'
+  (MPTG recordCount and folderCount, MPDJ rowCount and pathCount), and
+  2.4.5's values that make a file absent (MPTG source, MPDJ scoreKind);
+- the CRC of each section the reader uses;
+- the bounds checks of the section rules below.
 
 **The structure the device relies on** is checked too, because a writer
 bug can produce valid CRCs over a wrong order, and the builder is a
@@ -511,32 +536,56 @@ streaming merge that assumes canonical order and follows `FOLD.parent`.
 In the sections a reader uses, each of these MUST hold, or the file is
 absent:
 
-- **FOLD:** folder 0's parent is 0xFFFFFFFF and its name offset is 0;
-  every other folder's parent is lower than its own index, and is the
-  folder just before it or one of that folder's ancestors (strict
-  pre-order, checked with a stack); siblings' names strictly increase
-  by bytes (2.6.8).
+- **FOLD:** folder 0 is there (folderCount is at least 1), its parent is
+  0xFFFFFFFF and its name offset is 0; every other folder's parent is
+  lower than its own index, and is the folder just before it or one of
+  that folder's ancestors (strict pre-order, checked with a stack);
+  siblings' names strictly increase by bytes (2.6.8).
 - **firstRecord** of each folder equals the number of records whose
   folder index is lower.
 - **RECS:** folder indexes are below folderCount; records strictly
   increase by (folder index, name bytes).
 - **Names** (folders and records) are non-empty, contain no `/`, and
   are not `.` or `..`.
-- **HIDX**, when used: recordCount entries, strictly increasing by
-  (pathHash, record), each record once, each pathHash equal to its
-  record's path hash.
+- **Paths:** `/music/` and the path of every folder and record (and every
+  LIBR root and PEND path) is at most 255 bytes of UTF-8 (2.8.2; the
+  software keeps to it by 2.8.3, step 5, the device by its walk), so a
+  reader's path buffers and its folder stack are bounded (at most 124
+  levels).
+- **Strings** (2.4.4): every offset a reader uses is inside its section
+  with a NUL after it inside, and the strings a reader uses lie in
+  2.4.4's order: each starts at or after the end of the one before it in
+  that order (gaps are allowed: a later minor's strings fill them). So a
+  reader reads each string section front to back, in one pass; the
+  builder reads STRS as two runs at once (the producer and the folder
+  names; then, from the first record's name on, the records' names and
+  runs) and combines their two CRCs into the section's.
+- **HIDX**, when used: present when recordCount > 0 (2.6.2); recordCount
+  entries, strictly increasing by (pathHash, record), each record once,
+  each pathHash equal to its record's path hash. A streaming reader MAY
+  check the last two against the records' own (pathHash, record) pairs
+  through an order-free 128-bit digest, as the player's does: with the
+  strict order and the count, equal digests mean each record once with
+  its own hash, all but certainly.
 - **ORIG:** its count equals recordCount (2.6.6).
-- **COMP:** kinds `MPTG` then `MPDJ` (2.5.3); each name matches
-  `^tags-[0-9a-f]{8}\.bin$` for MPTG or `^autodj-[0-9a-f]{8}\.bin$` for
-  MPDJ, and its 8 digits are the entry's generation.
+- **COMP:** exactly one `MPTG` entry, then at most one `MPDJ` (2.5.3);
+  an entry of another kind is ignored wherever it stands (2.4.5); each
+  name matches `^tags-[0-9a-f]{8}\.bin$` for MPTG or
+  `^autodj-[0-9a-f]{8}\.bin$` for MPDJ, and its 8 digits are the entry's
+  generation.
+- **LIBR:** each root a relative path made of names (as above), the
+  roots strictly increasing by bytes.
 - **MPDJ:** indexBytes is 2 or 4, and 2 exactly when rowCount is 65,535
-  or less; k is at least 1; scoreKind is 1 (2.4.5); DJRW rows are in
-  non-decreasing hashPrefix order (2.13.2); DJPH strictly increases by
-  (pathHash, row); every DJPH row and every DJNB index is below rowCount,
-  except a DJNB unused slot's all-ones index.
-- **MSPD:** entries are in 2.12.5's order; paths are non-empty and
-  relative. (An op above 3 doesn't make the plan absent: it stops the
-  software, 2.4.5.)
+  or less; k is at least 1; DJNB's stride is k × (indexBytes + 1);
+  scoreKind is 1 (2.4.5); DJRW rows are in non-decreasing hashPrefix
+  order (2.13.2); DJPH strictly increases by (pathHash, row); every DJPH
+  row and every DJNB index is below rowCount, except a DJNB unused slot's
+  all-ones index.
+- **MSPD:** entries are in 2.12.5's order, each group strictly increasing;
+  an op of 0 makes the plan absent; paths are non-empty, relative and
+  made of names (no empty, `.` or `..` component), so no plan can name a
+  file outside `/music`. (An op above 3 doesn't make the plan absent: it
+  stops the software, 2.4.5, and isn't placed in the order.)
 
 Checks that need a whole section MAY run while the section streams; a
 failure found mid-stream makes the file absent from then on (for a build
@@ -567,6 +616,8 @@ generation) and noted it in `/.player`.
     nothing else;
   - MSPD: the PEND paths in PEND order.
 - `OSTR` follows 2.6.8.
+- Readers check that the strings they use come in this order (2.4.3): a
+  writer that shared or reordered strings makes its file absent.
 
 #### 2.4.5 Versions and compatibility
 
@@ -643,9 +694,10 @@ reads the root with one small read at every boot.
 - **serverInstance** is A6's id when the server gives one.
 - **serverUrlKey** is always written in v1, so the guard works before A6
   ships. The URL is normalised first: the scheme and the host in lower
-  case; no user name, password, query or fragment; the default port (80
-  for http, 443 for https) dropped; the path kept, without a trailing
-  slash. `HTTP://Music.Example:3000/` becomes `http://music.example:3000`,
+  case; no user name, password, query or fragment; an empty port, or the
+  default one (80 for http, 443 for https), dropped, any other written in
+  decimal without leading zeros; the path kept, every trailing slash
+  removed. `HTTP://Music.Example:3000/` becomes `http://music.example:3000`,
   whose key is ED901EA3EE763AC7. Only the hash is on the card, never the
   URL or a token.
 - The same server reached through two URLs (the LAN and a tunnel, say)
@@ -772,9 +824,11 @@ One format for both producers:
 | 8 | 4 | flags | bit 0 OWNED: the producer created this folder (sources 2 and 3); bit 1 THUMB: `/.mstream/thumbs` has this album folder's thumbnail (2.14.1) |
 | 12 | 4 | firstRecord | the number of records whose folder index is lower, so its records run to the next folder's firstRecord (or recordCount), and an empty folder's equals the next one's |
 
-**Folder 0 is `/music`.** The table holds every ancestor of a record, and
-every OWNED folder, even an empty one, so the software can remove it
-later, and no other folder. A folder's path is `/music` followed by `/`
+**Folder 0 is `/music`**, and is always there, even in a file with no
+records. The table holds every ancestor of a record, and every OWNED
+folder, even an empty one, so the software can remove it later, with its
+ancestors (a parent the listener made stays in the table, without
+OWNED), and no other folder. A folder's path is `/music` followed by `/`
 and each folder's name from the root down.
 
 #### 2.6.4 `RECS`: records (72 bytes)
@@ -1763,9 +1817,13 @@ max_channels=2
   `max_rate` or `max_channels`. A card file's extension MUST be one of
   `extensions` (2.8.3, step 3).
 - **No file** (a new card, or firmware before this design) means
-  `read.*=1`, `codecs=mp3,flac` and `extensions=mp3,flac`. Firmware 0.7.0
-  plays Opus but can't say so; the software MAY ask the listener rather
-  than convert.
+  `read.*=1`, `codecs=mp3,flac`, `extensions=mp3,flac`, `max_rate=48000`
+  and `max_channels=2`. Firmware 0.7.0 plays Opus but can't say so; the
+  software MAY ask the listener rather than convert.
+- **A key missing** from a file reads as its no-file value; a key with an
+  empty value (`read.mpdj=`) says "none". The `contract` line is what
+  makes a file a `device.txt`; a reader reads the keys it knows whatever
+  the contract number says.
 
 ### 2.16 Compatibility summary
 
@@ -1786,9 +1844,13 @@ max_channels=2
 ### 2.17 Conformance (no device needed)
 
 Both implementations test against shared fixtures, kept in the player
-repo (proposed: `test/fixtures/card/`, under a permissive licence so
+repo in `test/fixtures/card/` (built in N1, under CC0 as proposed so
 mstream-terminal and mStream can copy them; part 7, U18) and mirrored
-into mstream-terminal:
+into mstream-terminal. They are `vectors.json`, `libraries/*.json` (the
+descriptions), `golden/` (what a writer makes of each) and `hardening/`
+(with `index.json`), made by `tools/card_fixtures.py`, an implementation
+of this part apart from the player's C++, and frozen: its `--check` fails
+on any difference. The folder's README says how to read them.
 
 1. **The vectors** of 2.18, as data files both test suites read.
 2. **Writer equality.** A JSON description of a small library (folders,
@@ -1796,9 +1858,11 @@ into mstream-terminal:
    writer would otherwise choose: ids, times, generations) goes into both
    writers. The C++ writer (host-built, `lib/core`) and the Rust writer
    MUST produce byte-identical MPTG files (2.6.8), and the same for MSMF,
-   MPDJ, MSPD and MPTH. MPDJ's fixture uses small synthetic embeddings
-   (no real table: 2.13.4's licence), with ties at the K boundary and
-   same-song pairs.
+   MPDJ, MSPD and MPTH (an MPTH from given pixels: the scaling filter
+   isn't pinned, and PCs' JPEG decoders differ anyway). Tag values go in
+   raw: each writer applies 2.3.6 and sets TRUNCATED. MPDJ's fixture uses
+   small synthetic embeddings (no real table: 2.13.4's licence), with ties
+   at the K boundary and same-song pairs.
 3. **Reader parity.** A corpus of synthetic audio files (no real
    library's files) goes through the software's reference reader and the
    device's TagScan built on the host. Their records MUST be field-equal,
@@ -1872,7 +1936,8 @@ follow from the sections cited.
 
 - 20 pairs, all at Δ +3,600: D = +3,600; all 20 match.
 - 7 pairs at +3,600 and no others: no skew (fewer than 8); qfp decides.
-- 10 of 30 pairs at +3,600: no skew (fewer than half).
+- 10 of 30 pairs at +3,600 (the other 20 at 0): no skew (fewer than
+  half).
 - 20 pairs at +2: no skew (not a multiple of 900).
 - 10 pairs at +3,600 and 10 at −3,600: D = −3,600 (equal counts and
   equal |D|: the negative wins); the +3,600 files go to qfp.
@@ -2198,9 +2263,10 @@ walk.
 
 **Per file** (metascan section 5.1-5.2): an open, 1-3 reads of 4 KB, a
 close: 10-60 ms. `TagScan` reads through a FatFs `Source` (`f_lseek` +
-`f_read`); its 4 KB buffer and its record (about 3 KB at the limits of
-2.3.6) are in PSRAM, and so is the `FIL`. In this build a `FIL` is about
-4.1 KB, since it embeds a sector buffer (`FF_MAX_SS` is 4096 through
+`f_read`); its 4 KB buffer and its record (about 6 KB at the limits of
+2.3.6: eight single values of 255 bytes and four lists of 1,023, each
+with its NUL) are in PSRAM, and so is the `FIL`. In this build a `FIL`
+is about 4.1 KB, since it embeds a sector buffer (`FF_MAX_SS` is 4096 through
 `CONFIG_WL_SECTOR_SIZE`, `FF_FS_TINY` 0 for the per-file cache, no
 `CONFIG_FATFS_USE_DYN_BUFFERS`): on the worker's 6 KB stack it would
 overflow at the first file. One `FIL` per worker is allocated once and
@@ -2538,7 +2604,7 @@ one 300 B row (about 3 ms).
 
 | File | Change |
 |---|---|
-| New `lib/core/CardContract` | The contract kit: CRC-32, FNV-1a 64, qfp, FAT time and the skew rule; MSMF, MPTG, MPDJ and MSPD readers and writers (the device writes only MPTG; the writers serve the host tests and the future sync agent); the root election; `device.txt`; the canonical order; 2.4.3's structural checks. Its golden files are 2.17's, its vectors 2.18's. |
+| New `lib/core/CardContract` (with `CardContainer`, `CardTags`, `CardManifest`, `CardAutoDj`; built in N1) | The contract kit: CRC-32, FNV-1a 64, qfp, FAT time and the skew rule; MSMF, MPTG, MPDJ and MSPD readers and writers (the device writes only MPTG; the writers serve the host tests and the future sync agent); the root election; `device.txt`; the canonical order; 2.4.3's structural checks. Its golden files are 2.17's, its vectors 2.18's. |
 | New `lib/core` modules | `TagStore` (D, `tags.jnl`, `walk.jnl`, the streaming compaction, recovery, the cut-rename rule of 2.12.6); `CardWalk` (an `IDirLister`, the canonical sort with its passes, the digests, T's freshness, the skew, the merge); `SectorCache`; `TagScan` (the production port of the prototype, with part 5's rules); `ScanScheduler`; `LibraryBuilder` (the merge into `LibraryIndex`, part 5's votes, the streamed checks); `LibraryUpdate` (the boot decision and the update step as a state machine: N12). |
 | `lib/core/LibraryIndex.{h,cpp}` | v6 records and the header's inputs; `begin(const Sizing&)` with exact counts; `addRecord(path, const TagView&)` next to `addFile()`; Stage A's votes and orders in `buildViews()` (a missing number sorts last, an artist's albums newest first); `readNames()` fills only the fields a record lacks; `kLoose` and the transfer-thumbnail flag; library roots (LIBR), if the vpath layout is chosen. `Load::Stale` no longer happens at boot. |
 | `lib/core/TrackCatalog.{h,cpp}` | `title()` the tag's own string or the slice; `artist()` the track artist, else the album's line, else the folder artist; `album()` the display name; `durationHintMs()` the library's length; a one-slot overlay for the playing track's fresh tags (3.3.3). |
@@ -2699,8 +2765,9 @@ the file has no comment block and no PICTURE block.
 **The number rule** (both producers, so the f32 of the ESP32's FPU, the
 f64 of Rust and a JS `Math.round` can't disagree):
 
-1. Trim ASCII whitespace; for a gain, strip one trailing `dB` in any
-   ASCII case, and trim again.
+1. Trim ASCII whitespace (space, tab, LF, FF and CR: Rust's
+   `is_ascii_whitespace`, so not VT); for a gain, strip one trailing `dB`
+   in any ASCII case, and trim again.
 2. The rest MUST match `[+-]?([0-9]+(\.[0-9]*)?|\.[0-9]+)`: no exponent,
    no hex, no `inf` or `nan`, no unit or other text after it. Otherwise
    the field is absent.
@@ -2834,7 +2901,7 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 
 | # | Work | Days | Host proof |
 |---|---|---|---|
-| N1 | **The contract kit** (`lib/core/CardContract`): CRC-32, FNV-1a 64, qfp, FAT time and the skew rule; MSMF, MPTG, MPDJ and MSPD readers and writers; the root election; `device.txt`; 2.4.3's structural checks; the fixtures of 2.17 (2.18's vectors, the JSON library descriptions and their golden files), frozen for the terminal's tests | 2.5-3 | Round trips; truncation at every byte and a flipped bit per section give "absent"; each structural check broken under valid CRCs gives "absent" (no endless loop); a newer major is absent, a newer minor reads; the golden bytes |
+| N1 | **Built.** **The contract kit** (`lib/core/CardContract`): CRC-32, FNV-1a 64, qfp, FAT time and the skew rule; MSMF, MPTG, MPDJ and MSPD readers and writers; the root election; `device.txt`; 2.4.3's structural checks; the fixtures of 2.17 (2.18's vectors, the JSON library descriptions and their golden files), frozen for the terminal's tests | 2.5-3 | Round trips; truncation at every byte and a flipped bit per section give "absent"; each structural check broken under valid CRCs gives "absent" (no endless loop); a newer major is absent, a newer minor reads; the golden bytes |
 | N2 | **`LibraryIndex` v6 and `LibraryBuilder`**: Stage A's election (5.4), the merge (2.9), exact sizing, the inputs, LIBR roots | 3.5-4.5 | `test_library_index` extended; `LibrarySynth` with synthetic tags at the measured disagreement rates; 20k memory and build-peak asserts; the same files from T and from D build byte-identical indexes |
 | N3 | **The queue's remap through `queue.txt`**; `QueueModel::release()` and the exact trim | 1-1.5 | `test_queue`: a 20k remap within budget; shuffled; the current track gone; the resume point carried |
 | N4 | **`TagStore`**: D with its device sections, `tags.jnl` (sorted chunks), `walk.jnl`, the streaming k-way compaction, recovery, the cut-rename rule (2.12.6) | 2-2.5 | A power cut injected at every write, sync, remove and rename, a rename cut between its two directory writes included; the compaction's PSRAM bounded whatever the journal holds |

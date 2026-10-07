@@ -1,0 +1,629 @@
+{
+ "note": "docs/METADATA.md 2.18 as data. 'who': both (every implementation), software (the transfer software only), builder (the device's builder, milestone N2). Hex strings are integers; byte strings are space-separated hex.",
+ "crc32": [
+  {
+   "ascii": "123456789",
+   "crc": "0xCBF43926"
+  }
+ ],
+ "fnv1a64": [
+  {
+   "utf8": "",
+   "hash": "0xCBF29CE484222325"
+  },
+  {
+   "utf8": "a",
+   "hash": "0xAF63DC4C8601EC8C"
+  },
+  {
+   "utf8": "/music",
+   "hash": "0x75DC8A6A38687865"
+  },
+  {
+   "utf8": "/music/Artist/Album",
+   "hash": "0xB1F7E69FBD466B59"
+  },
+  {
+   "utf8": "/music/Artist/Album/01 - Title.mp3",
+   "hash": "0xDA70B312760188D8"
+  },
+  {
+   "utf8": "/music/Café/Album/01 - Title.mp3",
+   "hash": "0xF1B24FC757494F2B"
+  },
+  {
+   "utf8": "/music/Café/Album/01 - Title.mp3",
+   "hash": "0x57017C0CC011BB1B"
+  },
+  {
+   "utf8": "/music/Artist",
+   "hash": "0x4296E8541CC39B71"
+  },
+  {
+   "utf8": "/music/Artist/Album/CD1",
+   "hash": "0xD9FA96D903A5A10C"
+  },
+  {
+   "utf8": "/Music",
+   "hash": "0x359C71D0AA7DCAC5"
+  }
+ ],
+ "pathHash": [
+  {
+   "rel": "",
+   "hash": "0x75DC8A6A38687865",
+   "note": "/music itself; a card storing 'Music' still hashes as '/music'"
+  },
+  {
+   "rel": "Artist/Album",
+   "hash": "0xB1F7E69FBD466B59",
+   "note": ""
+  },
+  {
+   "rel": "Artist/Album/01 - Title.mp3",
+   "hash": "0xDA70B312760188D8",
+   "note": ""
+  }
+ ],
+ "serverUrlKey": [
+  {
+   "url": "HTTP://Music.Example:3000/",
+   "normalised": "http://music.example:3000",
+   "key": "0xED901EA3EE763AC7"
+  },
+  {
+   "url": "https://user:pw@Host.Example:443/mstream/?q=1#x",
+   "normalised": "https://host.example/mstream",
+   "key": "0xB3649B197EE32584"
+  },
+  {
+   "url": "http://10.0.0.5:80",
+   "normalised": "http://10.0.0.5",
+   "key": "0xEFFF6BED9EB4E2FB"
+  }
+ ],
+ "qfp": [
+  {
+   "size": 0,
+   "qfp": "0xA8C7F832281A39C5"
+  },
+  {
+   "size": 100,
+   "qfp": "0xB708DC48BA0A842D"
+  },
+  {
+   "size": 4096,
+   "qfp": "0x636A94FE9C19DC15"
+  },
+  {
+   "size": 4097,
+   "qfp": "0xA76BF84EC13A75BC"
+  },
+  {
+   "size": 5000,
+   "qfp": "0xC8E651224ADA889C"
+  },
+  {
+   "size": 8192,
+   "qfp": "0xA9383C4532F6F525"
+  },
+  {
+   "size": 8193,
+   "qfp": "0xD70E2B23544A7444"
+  },
+  {
+   "size": 10000,
+   "qfp": "0xF17B194EF7F5F338"
+  }
+ ],
+ "qfpNote": "files whose byte i is i & 0xFF",
+ "fatTime": [
+  {
+   "time": "2026-10-07 14:30:42",
+   "fatTime": "0x5D4773D5"
+  },
+  {
+   "time": "2026-10-07 15:30:42",
+   "fatTime": "0x5D477BD5"
+  },
+  {
+   "time": "2026-10-07 14:30:43",
+   "fatTime": "0x5D4773D5"
+  }
+ ],
+ "fatTimeInvalid": [
+  "0x00000000",
+  "0x5C0773D5"
+ ],
+ "wallDelta": [
+  {
+   "a": "0x5D4773D5",
+   "b": "0x5D477BD5",
+   "delta": 3600
+  }
+ ],
+ "skew": [
+  {
+   "groups": [
+    {
+     "count": 20,
+     "delta": 3600
+    }
+   ],
+   "skew": 3600,
+   "matching": 20
+  },
+  {
+   "groups": [
+    {
+     "count": 7,
+     "delta": 3600
+    }
+   ],
+   "skew": 0,
+   "matching": 0
+  },
+  {
+   "groups": [
+    {
+     "count": 10,
+     "delta": 3600
+    },
+    {
+     "count": 20,
+     "delta": 0
+    }
+   ],
+   "skew": 0,
+   "matching": 20
+  },
+  {
+   "groups": [
+    {
+     "count": 20,
+     "delta": 2
+    }
+   ],
+   "skew": 0,
+   "matching": 0
+  },
+  {
+   "groups": [
+    {
+     "count": 10,
+     "delta": 3600
+    },
+    {
+     "count": 10,
+     "delta": -3600
+    }
+   ],
+   "skew": -3600,
+   "matching": 10
+  }
+ ],
+ "skewNote": "pairs: recorded = 2026-10-07 14:30:42 + 2 days x i, observed = recorded + delta; 'matching' counts the pairs whose time matches under the skew. A pair with a 0 or invalid stamp is left out and never matches.",
+ "bytes": {
+  "MPTG": "4D 50 54 47",
+  "MPTGu32": "0x4754504D",
+  "MPTHu32": "0x4854504D",
+  "thumbPath": {
+   "folder": "Artist/Album",
+   "path": "/.mstream/thumbs/B/B1F7E69F.565",
+   "bytes": 21656,
+   "head0to15": "4D 50 54 48 01 00 00 00 59 6B 46 BD 9F E6 F7 B1",
+   "head20to23": "28 00 60 00"
+  },
+  "serverInstance": {
+   "uuid": "00112233-4455-6677-8899-aabbccddeeff",
+   "stored": "00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF"
+  },
+  "hashPrefix": {
+   "audioHash": "0123456789abcdef0123456789abcdef",
+   "stored": "01 23 45 67 89 AB CD EF"
+  },
+  "selectionSigStored": "9F 0A E9 1F 22 0E 2E 76 EC 5A 40 E4 9F C8 0B 2D"
+ },
+ "selectionSignature": [
+  {
+   "modelId": "discogs-effnet",
+   "modelVersion": "1",
+   "metric": "cosine",
+   "k": 100,
+   "hashes": [
+    "0123456789abcdef0123456789abcdef",
+    "fedcba9876543210fedcba9876543210"
+   ],
+   "sig": "9f0ae91f220e2e76ec5a40e49fc80b2d"
+  },
+  {
+   "modelId": "discogs-effnet",
+   "modelVersion": "1",
+   "metric": "cosine",
+   "k": 100,
+   "hashes": [],
+   "sig": "efdb6ffa02a177c18593a3ed34f7016b"
+  }
+ ],
+ "canonicalOrder": {
+  "siblings": [
+   "A",
+   "A B",
+   "A-",
+   "B",
+   "a",
+   "É"
+  ],
+  "files": [
+   "A/x.mp3",
+   "A/B/y.mp3",
+   "A B/y.mp3"
+  ],
+  "note": "siblings in byte order; files in the walk's order (a folder's files before its subfolders; 'A' and its subfolders before 'A B')"
+ },
+ "stringRuns": [
+  {
+   "fields": {
+    "title": [
+     "T"
+    ]
+   },
+   "run": "01 54 00"
+  },
+  {
+   "fields": {
+    "artist": [
+     "A"
+    ]
+   },
+   "run": "02 00 41 00"
+  },
+  {
+   "fields": {},
+   "run": "",
+   "note": "no field: strings = 0"
+  },
+  {
+   "fields": {
+    "artist": [
+     "X",
+     "X",
+     "Y"
+    ]
+   },
+   "run": "02 00 58 1F 59 00"
+  }
+ ],
+ "fieldRules": [
+  {
+   "field": "title",
+   "values": [
+    "A\tB"
+   ],
+   "stored": "A B",
+   "truncated": false
+  },
+  {
+   "field": "title",
+   "values": [
+    "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt"
+   ],
+   "stored": "ttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+   "truncated": true
+  },
+  {
+   "field": "title",
+   "values": [
+    "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttté"
+   ],
+   "stored": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+   "truncated": true
+  },
+  {
+   "field": "artist",
+   "values": [
+    "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
+    "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+    "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+    "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+    "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"
+   ],
+   "stored": "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP\u001fQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ\u001fRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR\u001fSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+   "truncated": true,
+   "bytes": 819
+  },
+  {
+   "field": "genre",
+   "values": [
+    "ggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+    "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
+    "iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii",
+    "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj",
+    "kkkkkkkkkk",
+    "l"
+   ],
+   "stored": "ggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg\u001fhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh\u001fiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii\u001fjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj",
+   "truncated": true,
+   "bytes": 1018
+  },
+  {
+   "field": "artist",
+   "values": [
+    "",
+    "B",
+    ""
+   ],
+   "stored": "B",
+   "truncated": false
+  },
+  {
+   "field": "title",
+   "values": [
+    "",
+    "Second",
+    "Third"
+   ],
+   "stored": "Second",
+   "truncated": false,
+   "note": "a single field: the first value left after the empty ones go"
+  }
+ ],
+ "numbers": [
+  {
+   "kind": "gain",
+   "text": "-6.785 dB",
+   "value": -679
+  },
+  {
+   "kind": "gain",
+   "text": "1.005 dB",
+   "value": 101
+  },
+  {
+   "kind": "gain",
+   "text": "-6.5 DB",
+   "value": -650
+  },
+  {
+   "kind": "gain",
+   "text": "-400 dB",
+   "value": null
+  },
+  {
+   "kind": "gain",
+   "text": "inf",
+   "value": null
+  },
+  {
+   "kind": "gain",
+   "text": "1e2",
+   "value": null
+  },
+  {
+   "kind": "r128",
+   "q": -1312,
+   "value": -13
+  },
+  {
+   "kind": "r128",
+   "q": 32,
+   "value": 513
+  },
+  {
+   "kind": "r128",
+   "q": 0,
+   "value": 500
+  },
+  {
+   "kind": "r128",
+   "q": -5888,
+   "value": -1800
+  },
+  {
+   "kind": "peak",
+   "text": "0.988567",
+   "value": 9886
+  },
+  {
+   "kind": "peak",
+   "text": "7",
+   "value": 65535
+  },
+  {
+   "kind": "bpm",
+   "text": "120.5",
+   "value": 1210
+  },
+  {
+   "kind": "bpm",
+   "text": "19.5",
+   "value": 200
+  },
+  {
+   "kind": "bpm",
+   "text": "300.5",
+   "value": null
+  },
+  {
+   "kind": "bpm",
+   "text": "0x78",
+   "value": null
+  },
+  {
+   "kind": "bpm",
+   "text": "120 BPM",
+   "value": null
+  }
+ ],
+ "hashSampled": [
+  {
+   "fileSize": 26214399,
+   "hashV": 2,
+   "sampled": false
+  },
+  {
+   "fileSize": 26214400,
+   "hashV": 2,
+   "sampled": true
+  },
+  {
+   "fileSize": 30000000,
+   "hashV": 1,
+   "sampled": false
+  }
+ ],
+ "rootElection": [
+  {
+   "bin": {
+    "valid": true,
+    "generation": 5,
+    "commitId": 1,
+    "headerCrc": 10
+   },
+   "tmp": {
+    "valid": true,
+    "generation": 6,
+    "commitId": 2,
+    "headerCrc": 20
+   },
+   "pick": "tmp",
+   "sameCommit": false
+  },
+  {
+   "bin": {
+    "valid": true,
+    "generation": 5,
+    "commitId": 1,
+    "headerCrc": 10
+   },
+   "tmp": {
+    "valid": true,
+    "generation": 5,
+    "commitId": 2,
+    "headerCrc": 20
+   },
+   "pick": "bin",
+   "sameCommit": false
+  },
+  {
+   "bin": {
+    "valid": true,
+    "generation": 5,
+    "commitId": 9,
+    "headerCrc": 77
+   },
+   "tmp": {
+    "valid": true,
+    "generation": 5,
+    "commitId": 9,
+    "headerCrc": 77
+   },
+   "pick": "bin",
+   "sameCommit": true,
+   "note": "one commit seen twice (a cut rename): readers use either; the software deletes neither"
+  },
+  {
+   "bin": {
+    "valid": false
+   },
+   "tmp": {
+    "valid": true,
+    "generation": 6,
+    "commitId": 2,
+    "headerCrc": 20
+   },
+   "pick": "tmp",
+   "sameCommit": false
+  },
+  {
+   "bin": {
+    "valid": true,
+    "generation": 6,
+    "commitId": 1,
+    "headerCrc": 10
+   },
+   "tmp": {
+    "valid": true,
+    "generation": 5,
+    "commitId": 2,
+    "headerCrc": 20
+   },
+   "pick": "bin",
+   "sameCommit": false
+  },
+  {
+   "bin": {
+    "valid": false
+   },
+   "tmp": {
+    "valid": false,
+    "major": 2
+   },
+   "pick": "none",
+   "sameCommit": false,
+   "softwareRefuses": true,
+   "note": "no bin, a tmp of major 2"
+  }
+ ],
+ "albumFolder": [
+  {
+   "rel": "Artist/Album/CD1/01.flac",
+   "album": "Artist/Album",
+   "hash": "0xB1F7E69FBD466B59"
+  },
+  {
+   "rel": "Artist/x.mp3",
+   "album": "Artist",
+   "hash": "0x4296E8541CC39B71"
+  },
+  {
+   "rel": "Artist/Album/01.flac",
+   "album": "Artist/Album",
+   "hash": "0xB1F7E69FBD466B59"
+  },
+  {
+   "rel": "x.mp3",
+   "album": "",
+   "hash": "0x75DC8A6A38687865"
+  },
+  {
+   "rel": "Lib A/Artist/Album/CD1/01.flac",
+   "roots": [
+    "Lib A"
+   ],
+   "album": "Lib A/Artist/Album",
+   "hash": "0x6DFD3DB5A41507D4"
+  }
+ ],
+ "builderPrecedence": {
+  "who": "builder",
+  "cases": [
+   "the walk (s, t) and T (s, t): T",
+   "T (s, t - 3600) under a skew of +3600: T",
+   "T (s, t - 2), no skew: qfp; equal: T, and the confirmation is saved",
+   "T (s + 1, t) and a Scanned D record (s + 1, t): D",
+   "T UNREADABLE without FROM_API, and the device reads the tags: D",
+   "a Scanned D record of an older parserVersion, no T: path names, and the file goes Pending",
+   "the walk's Acme/x.mp3 against T's ACME/x.mp3: no T match on the device"
+  ]
+ },
+ "softwareMatching": {
+  "who": "software",
+  "cases": [
+   "the ledger has ACME/Hits/01.mp3; the card lists Acme/Hits/01.mp3 with an equal size and time: unchanged, and the ledger takes the spelling Acme/...; no '01 (2).mp3'",
+   "a plan's write target that is on the card but not in the ledger is replaced in place",
+   "on macOS, a listed 'Cafe' + U+0301 is recorded in NFC (C3 A9), hash F1B24FC757494F2B",
+   "an Opus stream the server stores as x.ogg goes on the card as x.opus, its bytes unchanged, convertedTo 0"
+  ]
+ },
+ "deviceTxt": {
+  "text": "contract=1\nfirmware=0.8.0\nread.msmf=1\nread.mptg=1\nread.mpdj=1\nread.mpth=1\ncodecs=mp3,flac,opus\nextensions=mp3,flac,opus\nmax_rate=48000\nmax_channels=2\n",
+  "noFile": {
+   "read": "1",
+   "codecs": "mp3,flac",
+   "extensions": "mp3,flac",
+   "max_rate": "48000",
+   "max_channels": "2"
+  }
+ }
+}

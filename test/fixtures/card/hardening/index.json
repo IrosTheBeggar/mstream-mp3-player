@@ -1,0 +1,460 @@
+[
+ {
+  "file": "mptg-fold-root-parent.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "foldRoot",
+  "check": "FOLD: folder 0's parent isn't 0xFFFFFFFF"
+ },
+ {
+  "file": "mptg-fold-root-name.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "foldRoot",
+  "check": "FOLD: folder 0's name isn't offset 0"
+ },
+ {
+  "file": "mptg-fold-self-parent.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "foldParent",
+  "check": "FOLD: a folder that is its own parent"
+ },
+ {
+  "file": "mptg-fold-not-preorder.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "foldParent",
+  "check": "FOLD: a parent that isn't on the pre-order stack"
+ },
+ {
+  "file": "mptg-fold-sibling-order.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "foldOrder",
+  "check": "FOLD: siblings' names not strictly increasing"
+ },
+ {
+  "file": "mptg-first-record.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "firstRecord",
+  "check": "FOLD: a wrong firstRecord"
+ },
+ {
+  "file": "mptg-recs-folder-range.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "recsFolder",
+  "check": "RECS: a folder index not below folderCount"
+ },
+ {
+  "file": "mptg-recs-path-string-order.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "firstRecord",
+  "check": "RECS: records in path-string order (A B/y.mp3 before A/x.mp3; the first check it breaks is firstRecord)"
+ },
+ {
+  "file": "mptg-recs-duplicate-name.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "recsOrder",
+  "check": "RECS: two records of one folder with one name"
+ },
+ {
+  "file": "mptg-name-empty.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "name",
+  "check": "RECS: a record named by offset 0 (the empty string)"
+ },
+ {
+  "file": "mptg-name-slash.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "name",
+  "check": "RECS: a name with a '/'"
+ },
+ {
+  "file": "mptg-name-dot.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "name",
+  "check": "FOLD: a folder named '.'"
+ },
+ {
+  "file": "mptg-name-dotdot.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "name",
+  "check": "FOLD: a folder named '..'"
+ },
+ {
+  "file": "mptg-string-out-of-range.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "string",
+  "check": "RECS: a run's offset at STRS's end"
+ },
+ {
+  "file": "mptg-string-no-nul.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "string",
+  "check": "STRS: the last string has no NUL"
+ },
+ {
+  "file": "mptg-string-order.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "stringOrder",
+  "check": "STRS: two records' runs swapped (each string still valid)"
+ },
+ {
+  "file": "mptg-counts.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "counts",
+  "check": "header: recordCount isn't RECS's count"
+ },
+ {
+  "file": "mptg-source-0.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "header: source 0"
+ },
+ {
+  "file": "mptg-source-4.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "header: source 4"
+ },
+ {
+  "file": "mptg-hidx-unsorted.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "hidx",
+  "check": "HIDX: two entries swapped"
+ },
+ {
+  "file": "mptg-hidx-wrong-hash.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "hidx",
+  "check": "HIDX: a hash that isn't its record's"
+ },
+ {
+  "file": "mptg-hidx-record-twice.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "hidx",
+  "check": "HIDX: a record twice (and one missing)"
+ },
+ {
+  "file": "mptg-hidx-count.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "hidx",
+  "check": "HIDX: one entry fewer than recordCount"
+ },
+ {
+  "file": "mptg-hidx-ignored.bin",
+  "format": "MPTG",
+  "uses": "device",
+  "expect": "present",
+  "why": "ok",
+  "check": "HIDX broken, read by a reader that doesn't use it (the device's builder)"
+ },
+ {
+  "file": "mptg-orig-count.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "orig",
+  "check": "ORIG: its count isn't recordCount"
+ },
+ {
+  "file": "mptg-orig-ignored.bin",
+  "format": "MPTG",
+  "uses": "device",
+  "expect": "present",
+  "why": "ok",
+  "check": "ORIG broken, read by the device (which ignores the ledger)"
+ },
+ {
+  "file": "mptg-unknown-required.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "unknownRequired",
+  "check": "a REQUIRED section this reader doesn't know"
+ },
+ {
+  "file": "mptg-unknown-optional.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "an unknown section without REQUIRED: skipped",
+  "same": "tags-0000002a.bin"
+ },
+ {
+  "file": "mptg-major-2.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "major",
+  "check": "a newer major"
+ },
+ {
+  "file": "mptg-layout-gap.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "the directory: a gap of 8 bytes before a section"
+ },
+ {
+  "file": "mptg-shape.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "shape",
+  "check": "RECS: a stride below v1's 72"
+ },
+ {
+  "file": "mptg-no-folders.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "foldRoot",
+  "check": "FOLD empty: folder 0 is always there"
+ },
+ {
+  "file": "mptg-path-too-long.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "absent",
+  "why": "pathLength",
+  "check": "a record whose path makes '/music/' + path 256 bytes"
+ },
+ {
+  "file": "mptg-path-longest.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "a record whose path makes '/music/' + path exactly 255 bytes"
+ },
+ {
+  "file": "mptg-minor-1.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "a newer minor: 8 more header bytes, RECS rows of 80 bytes, a 13th run field, an unknown section",
+  "same": "tags-0000002a.bin"
+ },
+ {
+  "file": "msmf-comp-order.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "comp",
+  "check": "COMP: the MPDJ before the MPTG"
+ },
+ {
+  "file": "msmf-comp-two-mptg.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "comp",
+  "check": "COMP: two MPTG"
+ },
+ {
+  "file": "msmf-comp-no-mptg.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "comp",
+  "check": "COMP: no MPTG"
+ },
+ {
+  "file": "msmf-comp-name-upper.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "comp",
+  "check": "COMP: tags-0000002A.bin (uppercase hex)"
+ },
+ {
+  "file": "msmf-comp-name-generation.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "comp",
+  "check": "COMP: a name whose digits aren't the entry's generation"
+ },
+ {
+  "file": "msmf-comp-unknown-kind.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "COMP: an unknown kind between them, ignored"
+ },
+ {
+  "file": "msmf-libr-unsorted.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "libr",
+  "check": "LIBR: roots not in byte order"
+ },
+ {
+  "file": "msmf-libr-absolute.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "libr",
+  "check": "LIBR: an absolute root"
+ },
+ {
+  "file": "msmf-major-2.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "absent",
+  "why": "major",
+  "check": "a newer major"
+ },
+ {
+  "file": "mpdj-index-bytes.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "header: indexBytes 4 for 6 rows"
+ },
+ {
+  "file": "mpdj-k-zero.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "header: k 0"
+ },
+ {
+  "file": "mpdj-score-kind.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "header: scoreKind 2"
+ },
+ {
+  "file": "mpdj-rows-unsorted.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djRows",
+  "check": "DJRW: rows out of hashPrefix order"
+ },
+ {
+  "file": "mpdj-paths-unsorted.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djPaths",
+  "check": "DJPH: entries out of order"
+ },
+ {
+  "file": "mpdj-paths-row-range.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djPaths",
+  "check": "DJPH: a row out of range"
+ },
+ {
+  "file": "mpdj-neighbour-range.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djNeighbours",
+  "check": "DJNB: an index out of range (not the unused all-ones)"
+ },
+ {
+  "file": "mspd-order.bin",
+  "format": "MSPD",
+  "uses": "all",
+  "expect": "absent",
+  "why": "pendOrder",
+  "check": "PEND: a write before a delete"
+ },
+ {
+  "file": "mspd-group-order.bin",
+  "format": "MSPD",
+  "uses": "all",
+  "expect": "absent",
+  "why": "pendOrder",
+  "check": "PEND: two deletes out of canonical order"
+ },
+ {
+  "file": "mspd-absolute.bin",
+  "format": "MSPD",
+  "uses": "all",
+  "expect": "absent",
+  "why": "pendPath",
+  "check": "PEND: an absolute path"
+ },
+ {
+  "file": "mspd-dotdot.bin",
+  "format": "MSPD",
+  "uses": "all",
+  "expect": "absent",
+  "why": "pendPath",
+  "check": "PEND: a path through '..'"
+ },
+ {
+  "file": "mspd-op-0.bin",
+  "format": "MSPD",
+  "uses": "all",
+  "expect": "absent",
+  "why": "pendOp",
+  "check": "PEND: an op of 0"
+ },
+ {
+  "file": "mspd-op-9.bin",
+  "format": "MSPD",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "PEND: an op above 3: the plan reads, and stops the software"
+ }
+]

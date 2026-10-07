@@ -1,0 +1,42 @@
+{
+ "format": "MPDJ",
+ "file": "autodj-small.bin",
+ "generation": 7,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "k": 3,
+ "builtTime": 1790000000,
+ "tagsGeneration": 7,
+ "modelId": "synthetic-embedding",
+ "modelVersion": "1",
+ "metric": "cosine",
+ "license": "CC0-1.0",
+ "attribution": "synthetic fixture vectors",
+ "dim": 2,
+ "note": "Fewer rows than K: unused slots; a negative cosine scores 0.",
+ "rows": [
+  {
+   "hash": "aa000000000000000000000000000000",
+   "paths": [
+    "A/x.mp3"
+   ],
+   "artistNameKey": "",
+   "songKey": "|x",
+   "embedding": [
+    1.0,
+    0.0
+   ]
+  },
+  {
+   "hash": "bb000000000000000000000000000000",
+   "paths": [
+    "a/v.mp3"
+   ],
+   "artistNameKey": "",
+   "songKey": "|v",
+   "embedding": [
+    -1.0,
+    0.0
+   ]
+  }
+ ]
+}
