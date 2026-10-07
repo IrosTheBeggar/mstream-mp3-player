@@ -50,8 +50,32 @@ Result fold(const char* in, size_t inLen, char* out, size_t outSize, Mode mode);
 // the raw bytes, so the order is total. <0, 0, >0 like strcmp.
 int compare(const char* a, const char* b);
 
+// The name as the Artists and Albums lists sort it: past one leading
+// article ("The Lantern Choir" sorts as "Lantern Choir", under L), when a
+// word follows it ("The" alone, "Theory" and "The-Dream" stay as they are).
+// The articles are mStream's (its sort key, orderName): the, el, la, los,
+// las, le, les; not "A" or "An", which start far more titles than names. A
+// pointer into `s`: the name shown is still the whole name.
+const char* sortName(const char* s);
+// compare() on the sort names; names that sort alike ("The Pale Ferns" and
+// "Pale Ferns") by their whole names, so the order is total. <0, 0, >0.
+int compareSorted(const char* a, const char* b);
+
+// Whether two names are the same artist as a folder and a file name write
+// it: Full folding, lower case, letters and digits only (so "AC/DC",
+// "AC_DC" and "ACDC" agree: a FAT name can't hold / : ? " * < > | \ and
+// tools replace or drop them), and one leading "The " dropped on either
+// side. A name with no letter or digit (empty, or a script Full folding
+// can't spell) matches nothing. The slices lie inside NUL-terminated
+// strings (a UTF-8 sequence a slice's end cuts ends it).
+bool sameName(const char* a, size_t aLen, const char* b, size_t bLen);
+// Whether `s` begins with `name` that way, the word ending there: "Artist
+// feat. Guest" and "Artist & Band" begin with "Artist"; "Artistry" doesn't.
+bool startsWithName(const char* s, size_t sLen, const char* name, size_t nameLen);
+
 // The A-Z rail's key: the first character, folded and upper-cased, when it
-// is a letter; '#' otherwise (digits, symbols, empty).
+// is a letter; '#' otherwise (digits, symbols, empty). The Artists and
+// Albums lists take it of their sortName().
 char railKey(const char* s);
 // '#' -> 0, 'A'..'Z' -> 1..26 (27 buckets, in the order compare() sorts them).
 int bucketOf(char key);

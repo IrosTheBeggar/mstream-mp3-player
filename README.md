@@ -38,6 +38,26 @@ stops there (on battery it powers off after a minute).
   the disk you pick is the card (by its size) before you erase.
 - Put the music under **`/music`**, e.g. `/music/Artist/Album/01 - Title.mp3`.
   An album's cover is the `cover.jpg` (or `folder.jpg`) next to its tracks.
+- The player doesn't read tags yet: the artist and the album are the two
+  folders, and the number and the title come from the file name. These
+  names all work:
+  - `01 - Title`, `01. Title`, `01 Title`, `01_Title`, `(01) Title`: track 1.
+  - `1-01 Title`, `2-03 - Title`, `2.03 Title`, `203 Title`: disc 2, track
+    3, so an album plays disc after disc. Only in a folder where every file
+    that starts with a number is written that way: `1-800 Hotline` or
+    `1999 - Title` are left alone. Discs in subfolders (`CD1`, `CD2`) play
+    in order too.
+  - `Artist - 03 - Title`, `Artist - Album - 03 Title`, `CD2 - 03 - Title`:
+    track 3 (on disc 2).
+  - `03 - Artist - Title`: the title shows without the artist when it is the
+    folder's artist (in any case, with or without "The" or accents);
+    a compilation's `03 - Other Artist - Title` shows as it is.
+  - Artists and albums sort without a leading "The" ("The Lantern Choir"
+    under L, shown whole), or El, La, Las, Le, Les, Los, as mStream sorts
+    them. The Folders list shows the card as it is.
+  - Two discs in one folder whose numbers both start at 01, with nothing
+    else to tell them apart, play by number, the discs mixed: put each disc
+    in its own subfolder, or name them `1-01`, `2-01`.
 
 Making a FAT32 (MBR) card. One of 32 GB or less that isn't GPT: the
 computer's own Format, FAT32 (File Explorer's on Windows). Over 32 GB, or
@@ -647,6 +667,9 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       sorted views, A-Z buckets, folder tree; saved and loaded
                       as one file (LibrarySynth: made-up libraries of any size)
   TextFold            UTF-8 to ASCII for the GFX fonts; the library's sort order
+                      (and its sort names: "The Lantern Choir" under L)
+  TrackName           A track's disc, number and title from its file name,
+                      read with the other names in its folder
   JumpIndex           The A-Z jump grid: each letter's first row, and a big
                       letter's two-letter starts
   ThumbCache, ThumbScaler, JpegInfo

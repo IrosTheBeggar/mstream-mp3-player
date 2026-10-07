@@ -7,8 +7,9 @@
 // The jump grid behind the A-Z rail (the tab bar spec §6.3, with the
 // review's second level for large libraries). Portable, host-tested.
 //
-// A list sorted with textfold::compare() (the artists, the albums, a folder
-// of folders) has its rows in rail-key order: '#', then A..Z. The grid's
+// A list sorted with textfold::compare() (a folder of folders; the artists
+// and the albums by their textfold::sortName(), which is then the row's
+// name here) has its rows in rail-key order: '#', then A..Z. The grid's
 // first level is those 27 keys: where each one's first row is, or none (the
 // cell is drawn faint and does nothing). Tapping a letter with many rows
 // opens the second level: the letter itself (its first row) and its 26

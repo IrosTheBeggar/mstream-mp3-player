@@ -256,7 +256,7 @@ void ScrollLab::drawRow(M5Canvas& s, uint32_t i) {
     const LibraryIndex::Artist& a = index_->artist(id);
     const uint16_t c = kDiscColours[hashName(name) % 6];
     s.fillCircle(25, 21, 15, c);
-    char key[2] = {textfold::railKey(name), 0};
+    char key[2] = {textfold::railKey(textfold::sortName(name)), 0};
     s.setFont(&fonts::FreeSansBold9pt7b);
     s.setTextColor(col::CORAL_DK, c);
     s.setTextDatum(textdatum_t::middle_center);

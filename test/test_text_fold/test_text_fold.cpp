@@ -150,6 +150,98 @@ void test_rail_keys() {
   TEST_ASSERT_EQUAL_INT(26, textfold::bucketOf('Z'));
 }
 
+// ---- names as the library sorts and matches them (made-up names) ----
+
+void test_sort_name_drops_one_leading_article() {
+  TEST_ASSERT_EQUAL_STRING("Lantern Choir", textfold::sortName("The Lantern Choir"));
+  TEST_ASSERT_EQUAL_STRING("Lantern Choir", textfold::sortName("THE Lantern Choir"));
+  TEST_ASSERT_EQUAL_STRING("Lantern Choir", textfold::sortName("the  Lantern Choir"));  // spaces after it too
+  TEST_ASSERT_EQUAL_STRING("the", textfold::sortName("The the"));                       // one article only
+  // mStream's other articles (its orderName): el, la, los, las, le, les.
+  TEST_ASSERT_EQUAL_STRING("Ciel Bleu", textfold::sortName("Le Ciel Bleu"));
+  TEST_ASSERT_EQUAL_STRING("Nuit", textfold::sortName("La Nuit"));
+  TEST_ASSERT_EQUAL_STRING("Faros Lentos", textfold::sortName("Los Faros Lentos"));
+  TEST_ASSERT_EQUAL_STRING("Olas", textfold::sortName("Las Olas"));
+  TEST_ASSERT_EQUAL_STRING("Marins", textfold::sortName("Les Marins"));
+  TEST_ASSERT_EQUAL_STRING("Sol Verde", textfold::sortName("El Sol Verde"));
+  // Not an article, or nothing after it: the name as it is.
+  const char* same[] = {"Theory of Rain", "The-Dream Machine", "Them Crooked", "The", "The ", "A Paper Moon",
+                        "An Open Door", "Lesson Nine", "Elk Road", "Lattice", "", " The Lantern"};
+  for (const char* s : same) TEST_ASSERT_EQUAL_PTR(s, textfold::sortName(s));
+  TEST_ASSERT_NULL(textfold::sortName(nullptr));
+}
+
+void test_compare_sorted() {
+  // "The Lantern Choir" sorts as "Lantern Choir": after "Lantern", before "Lattice".
+  TEST_ASSERT_TRUE(textfold::compareSorted("Lantern", "The Lantern Choir") < 0);
+  TEST_ASSERT_TRUE(textfold::compareSorted("The Lantern Choir", "Lattice") < 0);
+  TEST_ASSERT_TRUE(textfold::compareSorted("Brass Arcade", "The Lantern Choir") < 0);
+  TEST_ASSERT_TRUE(textfold::compareSorted("The Lantern Choir", "Theory of Rain") < 0);
+  // Names that sort alike go by their whole names: total, never 0 for two names.
+  TEST_ASSERT_TRUE(textfold::compareSorted("Pale Ferns", "The Pale Ferns") < 0);
+  TEST_ASSERT_TRUE(textfold::compareSorted("The Pale Ferns", "Pale Ferns") > 0);
+  TEST_ASSERT_EQUAL_INT(0, textfold::compareSorted("The Pale Ferns", "The Pale Ferns"));
+  TEST_ASSERT_TRUE(textfold::compareSorted("Le Pale Ferns", "The Pale Ferns") != 0);
+  // A strict weak order over a mix of them.
+  const char* names[] = {"The Pale Ferns", "Pale Ferns", "Le Pale Ferns", "the pale ferns", "Pale Fernsby",
+                         "The Pale Fernsby", "Theory", "The", "La", ""};
+  for (const char* a : names) {
+    TEST_ASSERT_EQUAL_INT(0, textfold::compareSorted(a, a));
+    for (const char* b : names) {
+      TEST_ASSERT_EQUAL_INT(-textfold::compareSorted(b, a), textfold::compareSorted(a, b));
+      for (const char* c : names) {
+        if (textfold::compareSorted(a, b) < 0 && textfold::compareSorted(b, c) < 0) {
+          TEST_ASSERT_TRUE(textfold::compareSorted(a, c) < 0);
+        }
+      }
+    }
+  }
+}
+
+void test_same_name() {
+  auto same = [](const char* a, const char* b) {
+    return textfold::sameName(a, std::strlen(a), b, std::strlen(b));
+  };
+  TEST_ASSERT_TRUE(same("Glass Orchard", "Glass Orchard"));
+  TEST_ASSERT_TRUE(same("glass orchard", "GLASS ORCHARD"));    // case
+  TEST_ASSERT_TRUE(same("Émile Varga", "Emile Varga"));        // accents
+  TEST_ASSERT_TRUE(same("R/K Unit", "R_K Unit"));              // what a FAT name can't hold
+  TEST_ASSERT_TRUE(same("R/K Unit", "RK Unit"));
+  TEST_ASSERT_TRUE(same("Mister E.", "Mister E"));
+  TEST_ASSERT_TRUE(same("Søren Vale", "Soren Vale"));
+  TEST_ASSERT_TRUE(same("The Lantern Choir", "Lantern Choir"));  // a leading "The", either side
+  TEST_ASSERT_TRUE(same("Lantern Choir", "the Lantern Choir"));
+  TEST_ASSERT_TRUE(same("The The", "The The"));
+  TEST_ASSERT_FALSE(same("Glass Orchard", "Glass Orchards"));
+  TEST_ASSERT_FALSE(same("Glass Orchard", "Glass"));
+  TEST_ASSERT_FALSE(same("Brass & Bone", "Brass and Bone"));  // words aren't guessed
+  TEST_ASSERT_FALSE(same("", ""));                            // nothing matches nothing
+  TEST_ASSERT_FALSE(same("...", "..."));
+  TEST_ASSERT_FALSE(same("日本", "日本"));                    // a script Full folding can't spell
+  // The slice's length counts, not the NUL.
+  const char* title = "Glass Orchard - Opening";
+  TEST_ASSERT_TRUE(textfold::sameName(title, 13, "Glass Orchard", 13));
+  TEST_ASSERT_TRUE(textfold::sameName(title, 15, "Glass Orchard", 13));  // " -": no letters
+  TEST_ASSERT_FALSE(textfold::sameName(title, 23, "Glass Orchard", 13));
+  // A UTF-8 sequence the slice cuts ends it.
+  TEST_ASSERT_TRUE(textfold::sameName("Ab\xC3\xA9", 3, "ab", 2));
+}
+
+void test_starts_with_name() {
+  auto starts = [](const char* s, const char* name) {
+    return textfold::startsWithName(s, std::strlen(s), name, std::strlen(name));
+  };
+  TEST_ASSERT_TRUE(starts("Glass Orchard", "Glass Orchard"));
+  TEST_ASSERT_TRUE(starts("Glass Orchard feat. Mira Lune", "Glass Orchard"));
+  TEST_ASSERT_TRUE(starts("Glass Orchard & The Tide", "glass orchard"));
+  TEST_ASSERT_TRUE(starts("The Glass Orchard ft Mira", "Glass Orchard"));
+  TEST_ASSERT_TRUE(starts("R-K Unit x Mira", "R/K Unit"));
+  TEST_ASSERT_FALSE(starts("Glass Orchards", "Glass Orchard"));  // the word runs on
+  TEST_ASSERT_FALSE(starts("Glass", "Glass Orchard"));
+  TEST_ASSERT_FALSE(starts("Other Act", "Glass Orchard"));
+  TEST_ASSERT_FALSE(starts("Glass Orchard", ""));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_decode_utf8);
@@ -159,5 +251,9 @@ int main(int, char**) {
   RUN_TEST(test_compare_order);
   RUN_TEST(test_compare_is_a_total_order);
   RUN_TEST(test_rail_keys);
+  RUN_TEST(test_sort_name_drops_one_leading_article);
+  RUN_TEST(test_compare_sorted);
+  RUN_TEST(test_same_name);
+  RUN_TEST(test_starts_with_name);
   return UNITY_END();
 }

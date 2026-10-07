@@ -107,14 +107,17 @@ struct Vlw {
 
 void test_jump_letters_match_the_index_buckets() {
   // The synthetic library at 10,000 tracks: 600 artists, their accents,
-  // digits and "The " included.
+  // digits and "The " included. The rows' rail names are their sort names
+  // (LibraryPage::railName(): "The X" under X), as the index sorts them.
   LibraryIndex idx;
   const synth::Spec spec = synth::specFor(10000);
   TEST_ASSERT_TRUE(idx.begin(spec.root));
   synth::addTracks(idx, spec);
   TEST_ASSERT_TRUE(idx.finish());
   std::vector<std::string> names;
-  for (uint32_t i = 0; i < idx.artistCount(); ++i) names.push_back(idx.artistName(idx.artistsAZ()[i]));
+  for (uint32_t i = 0; i < idx.artistCount(); ++i) {
+    names.push_back(textfold::sortName(idx.artistName(idx.artistsAZ()[i])));
+  }
   int32_t first[jump::kCells], end[jump::kCells];
   jump::letters(static_cast<uint32_t>(names.size()), nameOf, &names, first, end);
   for (int b = 0; b < jump::kCells; ++b) {
@@ -180,7 +183,9 @@ void test_jump_second_level_on_a_big_library() {
   synth::addTracks(idx, spec);
   TEST_ASSERT_TRUE(idx.finish());
   std::vector<std::string> names;
-  for (uint32_t i = 0; i < idx.albumCount(); ++i) names.push_back(idx.albumName(idx.albumsAZ()[i]));
+  for (uint32_t i = 0; i < idx.albumCount(); ++i) {
+    names.push_back(textfold::sortName(idx.albumName(idx.albumsAZ()[i])));
+  }
   int32_t first[jump::kCells], end[jump::kCells], second[jump::kCells];
   jump::letters(static_cast<uint32_t>(names.size()), nameOf, &names, first, end);
   int big = 0;
