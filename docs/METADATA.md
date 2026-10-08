@@ -28,7 +28,9 @@ is in `lib/core/QueueRemap` (with `QueueModel::release()`, the exact
 trim and `queuetext::read()`'s pre-sized blocks), built into
 `QueueStore::remap()` and not flashed. The queue's cap of 5,000 tracks
 (the user's answer to U12: 3.5, and docs/QUEUE-MODES.md section 15) is
-built the same way. Part 2, the card
+built the same way. N5, the validation walk, is in `lib/core/CardWalk`,
+host-tested on fake FAT trees (3.2.6 says what it decided); N10 and N12
+bring it into the firmware. Part 2, the card
 contract, is a **PROPOSAL (v1)** for the transfer software, whose own
 design is still being worked on in mstream-terminal; it is written so
 that side can implement it without reading the player's code, and every
@@ -2278,6 +2280,66 @@ later; `queue.txt` stays the fallback. The totals above still count a
 20k-line queue; the queue's cap (3.5) takes up to about 1.5 s off them,
 kept as margin until L2 measures.
 
+#### 3.2.6 As built (N5)
+
+`lib/core/CardWalk` is 3.2.3's walk, host-tested (`test_card_walk`, on
+the fake FAT trees of `test/support/FakeFat.h`) and not yet called: its
+FatFs lister is N10's, its place in the boot N12's. What the code decided
+where 3.2.3 left room:
+
+- **The lister** (`cardwalk::Lister`, 3.6's `IDirLister`): `openDir`,
+  `next` and `closeDir` give each entry's name, size and FAT time, as
+  `f_readdir`'s `FILINFO` does, one folder open at a time; `openFile`
+  reads a file for its qfp. A missing `/music` is a card with no library;
+  any other failed listing stops the walk, and nothing it gave counts.
+- **The scratch is a stack.** A pass keeps the smallest keys after the
+  last one used (a heap of offsets, the entries packed from the top), so
+  a folder of any size comes in order through any scratch from 2.4 KB
+  (`kMinScratch`: one 268-byte entry for each of the nine levels). Each
+  level leaves room for the levels below it, and a folder's waiting
+  subfolders take at most half of its pass's room. A big folder's digest
+  is found in passes first and its files listed again only if it
+  changed; one that is merged anyway (the first walk after a commit, or a
+  folder D doesn't list) is digested and merged in the same passes.
+  Measured on the host: a 3,000-file folder takes 3 passes in the
+  device's 64 KB, as 3.2.3 said, and 25 in 8 KB.
+- **The digest's bytes:** FNV-1a 64 over each audio and image file in
+  name order (its name, a 0 byte, its size and FAT time as u32 LE), then
+  the count of the other files (u32 LE). Device-internal.
+- **D's rows** carry the status, the confirmation and the qfp the device
+  read for the file at its size and time (the record's `qfp`, which 2.6.4
+  lets the device fill). A later commit whose T has the same fingerprint
+  for a doubtful file settles it without a read, so a PC that converts
+  stamps unevenly costs 3.2.5's 2.7 min of checks once per card, not once
+  per commit.
+- **Which folders D lists:** those with audio at or below them (a folder's
+  row waits until audio turns up below it): FOLD's folders. A folder of
+  images alone (a `Scans` folder) has no row; each walk lists it and
+  writes nothing.
+- **The skew's pairs** are every file T has a record for, covers included
+  (2.3.4); a pair that isn't an audio file's doubt goes to the sink as a
+  count-only doubt, so the recount past 256 distinct deltas is exact.
+- **Covers:** a folder's best image is the lowest `imageRank()`, ties to
+  the first by name (as `LibraryIndex` elects in canonical order). It is
+  owned (2.14.3) when T has a record of its size at its path; the time
+  isn't asked.
+- **T** is streamed on the first walk after a commit (every file asked,
+  one pass) and read through HIDX at the same commit (the changed files
+  and the merged folders' covers only). A T that fails a check at its end
+  fails the walk (`Error::Transfer`), to be run again without it. A T
+  record UNREADABLE without FROM_API gives the file the row it would have
+  without T (Pending: the scan reads it); a fresh one turns a Scanned row
+  Software (U8).
+- **N4's side** is two interfaces: `Known` (D's folders in pre-order with
+  their digests, each folder's rows by name) and `Sink` (`walk.jnl`: the
+  walk's rows and gones, the doubts read back after it, the settled rows,
+  then the summary with the skew for DHDR; `abort()` drops a failed
+  walk's output).
+- **Memory and steps:** the walk is about 7 KB, a streamed T's walker
+  3.9 KB and its 8 KB of buffers, the scratch 64 KB: PSRAM, never the
+  worker's stack. A step lists at most one folder (or one pass of a big
+  one) or reads at most one qfp.
+
 ### 3.3 The scanner
 
 #### 3.3.1 Which files it reads
@@ -3018,7 +3080,7 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 | N2 | **Built.** **`LibraryIndex` v6 and `LibraryBuilder`**: Stage A's election (5.4), the merge (2.9), exact sizing, the inputs, LIBR roots | 3.5-4.5 | `test_library_index` extended; `LibrarySynth` with synthetic tags at the measured disagreement rates; 20k memory and build-peak asserts (walked, and T listing after a transfer); the same files from T and from D build byte-identical indexes apart from the sources and lengths within a second |
 | N3 | **Built.** **The queue's remap through `queue.txt`**; `QueueModel::release()` and the exact trim | 1-1.5 | `test_queue`: a 20k remap within budget (since the queue's cap, a full queue of 5,000 from a 20k library); shuffled; the current track gone; the resume point carried; the remap after a rebuild or a boot with no library, and after a cleared queue (the file read back from its own line) |
 | N4 | **`TagStore`**: D with its device sections, `tags.jnl` (sorted chunks), `walk.jnl`, the streaming k-way compaction, recovery, the cut-rename rule (2.12.6) | 2-2.5 | A power cut injected at every write, sync, remove and rename, a rename cut between its two directory writes included; the compaction's PSRAM bounded whatever the journal holds |
-| N5 | **`CardWalk`**: the lister interface, the canonical sort (with its passes for big folders), the digests, T's freshness (the skew, Doubtful entries through `walk.jnl`, qfp, confirmations) | 2-2.5 | Fake FAT trees: shuffled order, a 3,000-file folder through a small scratch, a retag at the same size, a renamed folder, a deleted album, every stamp shifted an hour, three files shifted, invalid and zero stamps |
+| N5 | **Built.** **`CardWalk`**: the lister interface, the canonical sort (with its passes for big folders), the digests, T's freshness (the skew, Doubtful entries through `walk.jnl`, qfp, confirmations) | 2-2.5 | Fake FAT trees: shuffled order, a 3,000-file folder through a small scratch, a retag at the same size, a renamed folder, a deleted album, every stamp shifted an hour, three files shifted, invalid and zero stamps |
 | N6 | **`TagScan`, the production port** with part 5's rules; the synthetic parity corpus (2.17, item 3) | 3-4 | The corpus and the crafted edge files; the fuzz harness (ASan only if a Linux toolchain is available); parity against a lofty reference (the terminal's S3, or a small host harness until it exists) |
 | N7 | **`ScanScheduler`** and the `LibraryWrite` blocker | 1-1.5 | Like `test_idle_policy` |
 | N8 | **`SectorCache`.** Optional: a host FatFs model (vendored FatFs on a RAM disk) counting sector reads per walk and per open on a 20k tree of the user's shape (part 7, U14: vendoring is a download; the user said yes) | 1 (+1) | LRU, bypass, write invalidation, a random model check; the model checks metascan's 56 sectors per open before L0 |
