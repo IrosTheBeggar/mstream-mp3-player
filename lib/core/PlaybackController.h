@@ -366,7 +366,10 @@ public:
   // before), update() does nothing (a natural end is queueReplaced()'s).
   // The actions find the queue empty and do nothing, but for pause, and
   // resume of the track the backend holds: the listener can always stop
-  // the sound, and nothing starts that needs a path.
+  // the sound, and nothing starts that needs a path. The queue's edits
+  // (playNow() to undo(), and setShuffle()) refuse at once: false, nothing
+  // removed (clearQueue() would otherwise stop the held track and clear
+  // nothing, the queue coming back whole after the fence).
   void setFenced(bool on);
   bool fenced() const { return fenced_; }
   // Heard tracks that ended inside a fence with nothing joined (cued after

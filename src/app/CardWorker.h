@@ -29,7 +29,9 @@
 //
 // Its 6 KB stack is in internal RAM (a task that reads the card or the
 // flash can't have its stack in PSRAM), only while there is work: the task
-// is made for the first step and ends itself kIdleExitMs after the last.
+// is made for the first step (or just before one that must start at once:
+// ensure(), the library update's build) and ends itself kIdleExitMs after
+// the last.
 // What the steps hold is in PSRAM (their jobs' memory, FatFs's FIL, DIR
 // and FILINFO); on the stack: TagScan's about 1 KB, FatFs's 512 B long-name
 // buffer, the frames (the build's deepest path, its views' sort, about 4.5
@@ -51,6 +53,12 @@ public:
   // on the worker. False: one is under way or waiting to be taken in, or
   // no internal RAM for the task (asked again after kRetryMs).
   bool start(Job job, uint8_t priority, StepFn fn, void* ctx, uint32_t nowMs);
+  // The task made now if it isn't there (no step yet), and kept kIdleExitMs
+  // from now either way: before the library update step's fence, whose
+  // build must start at once (LibraryUpdate::Out::wantWorker). False: it
+  // can't be now (no internal RAM for its stack: asked again after
+  // kRetryMs; or it is ending itself: once it's gone).
+  bool ensure(uint32_t nowMs);
   // A step is handed and not yet taken in by poll().
   bool busy() const { return state_.load() != kIdle; }
   // The step under way (None: none, or finished and waiting for poll()).
@@ -87,6 +95,8 @@ private:
   static constexpr uint32_t kRetryMs = 5000;
   static void entry(void* self);
   void work();
+  // The task made (at `priority`); false: no internal RAM for it.
+  bool spawn(uint8_t priority, uint32_t nowMs);
 
   std::atomic<uint8_t> state_{kIdle};
   std::atomic<bool> alive_{false};

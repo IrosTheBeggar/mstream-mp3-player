@@ -436,6 +436,9 @@ private:
   void selectAll();
   void clearUpNext();
   void clearQueue();
+  // Behind the library update's fence: selection mode ends and the note
+  // says to wait (true: the edit doesn't happen).
+  bool fenced();
   void jump();  // the title's tap: the playing track, the top, the end, in turn
   Header header() const;
   uint32_t headerSig() const;

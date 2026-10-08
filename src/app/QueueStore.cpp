@@ -316,16 +316,21 @@ bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
   return r.rebuilt;
 }
 
-bool QueueStore::remapBegin() {
+bool QueueStore::remapBegin(size_t textRoom) {
   if (!carry_) carry_ = psramNew<queueremap::Carry>(psramAlloc, psramFree);
   if (!card_) card_ = psramNew<RemapCard>(*this, nullptr, nullptr);
   if (!carry_ || !card_) {
     Serial.println("[queue] no PSRAM to carry the queue across the library update");
     return false;
   }
-  carry_->begin(queue_, saver_, player_, catalog_, *card_);
+  const bool ok = carry_->begin(queue_, saver_, player_, catalog_, *card_, textRoom);
   noteFailures();
-  return true;
+  if (!ok) {
+    // (Nothing given back: the queue plays on as it is, the step defers.)
+    Serial.println("[queue] the card couldn't take queue.txt, and its text in PSRAM found no memory or would leave "
+                   "the build short: the queue can't be carried across the library update (it stays as it is)");
+  }
+  return ok;
 }
 
 bool QueueStore::remapFinish(bool rebuilt) {

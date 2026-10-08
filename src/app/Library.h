@@ -45,7 +45,8 @@ public:
   explicit Library(LocalStorage& storage);
 
   // At boot, once storage is up. False: no index (no storage, no PSRAM, or
-  // a build that ran out of memory); the built-in tracks still play.
+  // a build that ran out of memory: the build-at-boot marker's loads the
+  // matching library.idx instead); the built-in tracks still play.
   bool begin();
   // The flash's rebuild (g0, "Try again"): /music walked and saved, on the
   // loop. Every library id changes: QueueStore::remap() wraps this so the
@@ -85,7 +86,8 @@ public:
   // ---- the update step's fence (3.4.2, steps 2 and 5; main.cpp's) ----
   // Up: the names of `playing` (a catalog id: the current entry's) kept
   // for Now Playing, the catalog without its index (every library id
-  // unknown: no path, no name), index() nullptr. Down: the index back, the
+  // unknown: no path, no name); index() is nullptr from CardTasks::fenceUp()
+  // right after (LibraryUpdate::fencedUp()). Down: the index back, the
   // copy dropped.
   void fence(uint32_t playing);
   void unfence();

@@ -77,9 +77,13 @@ public:
   // remapBegin() flushes and gives the queue's memory to the build (the
   // player fenced); remapFinish() reads queue.txt back with the new ids
   // (`rebuilt`: the build's result). Between them the queue is empty and
-  // nothing here writes. False: no PSRAM for the carry (nothing done: the
-  // caller doesn't start the build).
-  bool remapBegin();
+  // nothing here writes. When the card can't take queue.txt, the queue's
+  // text is held in PSRAM through the build instead, at most `textRoom`
+  // (what the build's memory check had to spare: LibraryUpdate::spare()).
+  // False: the queue can't be carried (no PSRAM for the carry, or the text
+  // over `textRoom` or without memory): nothing done, the queue as it is
+  // (the caller doesn't start the build: LibraryUpdate::cantFence()).
+  bool remapBegin(size_t textRoom = SIZE_MAX);
   // True: the current entry is the same file as before (its key is new).
   bool remapFinish(bool rebuilt);
   bool carrying() const { return carry_ && carry_->carrying(); }

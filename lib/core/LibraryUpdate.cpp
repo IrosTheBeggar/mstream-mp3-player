@@ -72,19 +72,57 @@ private:
   LibraryIndex& idx_;
 };
 
+// One of the build's files, read only, its failed reads noted: a read that
+// fails is the card's trouble (pulled, failing), whoever asked. The walkers
+// say Why::Io, but D's rows and its folders' facts read on without a word
+// (a row Pending, no facts), and a builder that restarts without both
+// files says "no records". Its size is the one at the open: FatFs keeps it
+// in the FIL, so a pulled card's reads are tried, and fail.
+class Watched : public tagstore::File {
+public:
+  void watch(tagstore::File* f) {
+    f_ = f;
+    size_ = f ? f->size() : 0;
+  }
+  bool failed() const { return failed_; }
+  uint32_t size() const override { return size_; }
+  bool read(uint32_t offset, void* out, uint32_t n) override {
+    if (f_ && f_->read(offset, out, n)) return true;
+    failed_ = true;
+    return false;
+  }
+  bool write(uint32_t, const void*, uint32_t) override { return false; }
+  bool sync() override { return true; }
+  bool truncate(uint32_t) override { return false; }
+
+private:
+  tagstore::File* f_ = nullptr;
+  uint32_t size_ = 0;
+  bool failed_ = false;
+};
+
 // The build's three opens of D (the merge, DSTA's rows, DFLD's facts: each
-// read front to back) and T's, closed together.
+// read front to back) and T's, watched, closed together.
 struct Opened {
   tagstore::Fs& fs;
   tagstore::File* t = nullptr;
   tagstore::File* d = nullptr;
   tagstore::File* rows = nullptr;
   tagstore::File* facts = nullptr;
+  Watched wt, wd, wrows, wfacts;
   explicit Opened(tagstore::Fs& f) : fs(f) {}
   ~Opened() {
     for (tagstore::File* x : {t, d, rows, facts})
       if (x) fs.close(x);
   }
+  void watch() {
+    wt.watch(t);
+    wd.watch(d);
+    wrows.watch(rows);
+    wfacts.watch(facts);
+  }
+  bool transferFailed() const { return wt.failed(); }
+  bool deviceFailed() const { return wd.failed() || wrows.failed() || wfacts.failed(); }
 };
 
 }  // namespace
@@ -119,6 +157,20 @@ LibraryUpdate::Verdict LibraryUpdate::roomToBuild(const Room& r) {
   }
   if (r.trackBlock < r.tableBytes && r.psramLargest < r.tableBytes + r.tableBytes / 16) v.shortOf = Short::Table;
   return v;
+}
+
+size_t LibraryUpdate::spareOf(const Room& r) {
+  const Verdict v = roomToBuild(r);
+  if (v.shortOf != Short::None) return 0;
+  // The room left over 1.1 x the peak (rounded up: the check's own edge).
+  const uint64_t need = (static_cast<uint64_t>(v.peak) * 11 + 9) / 10;
+  uint64_t spare = v.room > need ? v.room - need : 0;
+  // The new table in a free block of its own: what that block can lose.
+  if (r.trackBlock < r.tableBytes) {
+    const size_t table = r.tableBytes + r.tableBytes / 16;
+    spare = std::min<uint64_t>(spare, r.psramLargest > table ? r.psramLargest - table : 0);
+  }
+  return static_cast<size_t>(spare);
 }
 
 bool LibraryUpdate::records() const {
@@ -177,9 +229,10 @@ void LibraryUpdate::compactFirst(tagstore::TagStore::Compacted* c, bool* ran) {
   *ran = true;
 }
 
-bool LibraryUpdate::buildIndex(bool update, LibraryBuilder::Result* r, bool* walked, bool* noMemory, bool* cardGone) {
+bool LibraryUpdate::buildIndex(bool update, LibraryBuilder::Result* r, bool* walked, bool* noMemory, bool* cardGone,
+                              bool* readErrors) {
   *r = LibraryBuilder::Result{};
-  *walked = *noMemory = *cardGone = false;
+  *walked = *noMemory = *cardGone = *readErrors = false;
   LibraryIndex& index = *c_.index;
   const tagstore::DeviceInfo* di = c_.store ? &c_.store->device() : nullptr;
   const bool useT = c_.root && c_.root->present && !transferBad_;
@@ -207,6 +260,7 @@ bool LibraryUpdate::buildIndex(bool update, LibraryBuilder::Result* r, bool* wal
     *noMemory = !ok;
     return ok;
   }
+  o.watch();
   constexpr uint32_t kRowsBuf = 1024, kFactsBuf = 3072;
   auto* bufs = static_cast<uint8_t*>(c_.alloc(kRowsBuf + kFactsBuf));
   void* rowsMem = c_.alloc(sizeof(tagstore::BuilderRows));
@@ -216,16 +270,16 @@ bool LibraryUpdate::buildIndex(bool update, LibraryBuilder::Result* r, bool* wal
   LibraryBuilder builder(c_.alloc, c_.release);
   LibraryBuilder::Config bc;
   bc.root = c_.musicRoot;
-  bc.transfer = o.t;
+  bc.transfer = o.t ? &o.wt : nullptr;
   // T's skew as the walk found it at this commit; before the first walk
   // after it T's paths count as present (the software listed the card
   // moments ago) and its records are taken as they are.
   const bool walkedHere = useD && c_.root && di->header.walked && di->header.walk == c_.root->identity;
   bc.skew = walkedHere ? di->header.skew : 0;
   bc.transferLists = o.t && !walkedHere;
-  bc.device = o.d;
-  if (o.d && bufs && rows && o.rows && rows->begin(*o.rows, bufs, kRowsBuf)) bc.rows = rows;
-  if (o.d && bufs && facts && o.facts && facts->begin(*o.facts, bufs + kRowsBuf, kFactsBuf)) bc.facts = facts;
+  bc.device = o.d ? &o.wd : nullptr;
+  if (o.d && bufs && rows && o.rows && rows->begin(o.wrows, bufs, kRowsBuf)) bc.rows = rows;
+  if (o.d && bufs && facts && o.facts && facts->begin(o.wfacts, bufs + kRowsBuf, kFactsBuf)) bc.facts = facts;
   if (c_.root) {
     bc.libraryRoots = c_.root->rootList();
     bc.libraryRootCount = c_.root->rootCount;
@@ -240,9 +294,24 @@ bool LibraryUpdate::buildIndex(bool update, LibraryBuilder::Result* r, bool* wal
     c_.release(factsMem);
   }
   c_.release(bufs);
+  // A read that failed is the card's trouble, not a file's checks. In the
+  // update step (the old index in use until the fence, and saved on the
+  // card): one of D's, or T's with no whole build from D after it, fails
+  // the step rather than walking a card that may be gone (an empty /music:
+  // "Library updated", nothing in it) or saving a path-named index over
+  // library.idx (a glitch the card came back from).
+  const bool tFailed = o.transferFailed(), dFailed = o.deviceFailed();
+  *readErrors = tFailed || dFailed;
+  if (update && (dFailed || (tFailed && !(r->built && r->deviceUsed)))) {
+    *cardGone = true;
+    *noMemory = r->noMemory;
+    index.clear();
+    return false;
+  }
   // A T that failed its checks (at its start, or found at its end: the
-  // builder restarted from D alone, 3.4.1) is left out for the session.
-  if (useT && o.t && !r->transferUsed && r->transferWhy != cardcontract::Why::Ok) transferBad_ = true;
+  // builder restarted from D alone, 3.4.1) is left out for the session; one
+  // whose reads failed isn't (the next build tries it again).
+  if (useT && o.t && !r->transferUsed && r->transferWhy != cardcontract::Why::Ok && !tFailed) transferBad_ = true;
   if (r->noRecords) {
     if (!c_.walk) return false;
     *walked = true;
@@ -295,14 +364,18 @@ LibraryUpdate::Booted LibraryUpdate::boot() {
   in.transfer = c_.root && c_.root->present;
   in.device = c_.store && c_.store->device().present;
   libraryboot::Decision d = libraryboot::decide(in);
-  if (d.action == libraryboot::Action::Load) {
-    t0 = now();
+  auto load = [&]() {
     LibraryIndex::Load r = LibraryIndex::Load::Corrupt;
     if (tagstore::File* f = fs.open(kIndexNames.path, tagstore::Fs::Mode::Read)) {
       FileIn all(*f);
       r = index.load(all, saved);  // its own inputs: the decision compared them
       fs.close(f);
     }
+    return r;
+  };
+  if (d.action == libraryboot::Action::Load) {
+    t0 = now();
+    const LibraryIndex::Load r = load();
     b.loadMs = msSince(t0);
     if (r == LibraryIndex::Load::Loaded) {
       b.ok = true;
@@ -327,20 +400,43 @@ LibraryUpdate::Booted LibraryUpdate::boot() {
     }
     t0 = now();
     bool cardGone = false;
-    b.ok = buildIndex(false, &b.build, &b.walked, &b.noMemory, &cardGone);
+    b.ok = buildIndex(false, &b.build, &b.walked, &b.noMemory, &cardGone, &b.readErrors);
     b.built = !b.walked && b.ok;
     b.buildMs = msSince(t0);
     if (b.ok) {
       // Journals the compaction couldn't fold in (a full card, a walk being
-      // written) weren't read: the inputs saved say so, and the next boot
-      // finds the index soft-stale (rebuilt at its scan's end).
+      // written) weren't read, or a read failed (the card?): the inputs
+      // saved say records were left out, and the next boot finds the index
+      // soft-stale (rebuilt at its scan's end).
       b.journalsLeft = c_.store && c_.store->hasJournals();
       const LibraryIndex::Inputs inputs = libraryboot::inputsOf(
           root, !b.walked && b.build.transferUsed, c_.store ? c_.store->deviceCrc() : 0,
-          c_.store ? c_.store->journalSeq() : 0, b.journalsLeft);
+          c_.store ? c_.store->journalSeq() : 0, b.journalsLeft || b.readErrors);
       t0 = now();
       b.saveFailed = !save(inputs);
       b.saveMs = msSince(t0);
+    } else if (b.noMemory && in.saved == libraryboot::Saved::Matches) {
+      // The marker's build (a matching library.idx builds only for it) ran
+      // out of PSRAM on this boot's fresh heap: no update step would fit
+      // either. library.idx, whose hard inputs are the card's, is loaded
+      // instead, as the Load row would (stale, but a library: without this
+      // every boot would end here with none), and the marker goes; this
+      // session's short memory checks don't write it again.
+      t0 = now();
+      const LibraryIndex::Load r = load();
+      b.loadMs = msSince(t0);
+      if (r == LibraryIndex::Load::Loaded) {
+        b.ok = true;
+        b.noMemory = false;
+        b.loadedShort = true;
+        bootBuildShort_ = true;
+        b.softStale = c_.store && libraryboot::softStale(saved, c_.store->deviceCrc(), c_.store->journalSeq());
+        if (b.marker) {
+          b.markerRemoved = fs.remove(kMarker);
+          if (b.markerRemoved) markerSet_ = false;
+        }
+        return b;
+      }
     }
   }
   // The marker goes once what it asked for is built and saved (a build
@@ -398,6 +494,14 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
         o.wait = Wait::SafePoint;
         break;
       }
+      // The worker's task, made now if it ended (3 s after its last step):
+      // no internal RAM for its stack, and the step waits here, the index
+      // as it is, never behind a fence whose build can't start.
+      if (!in.workerUp) {
+        o.wait = Wait::Worker;
+        o.wantWorker = true;
+        break;
+      }
       step_ = Step{};
       step_.why = why_;
       // The card answers first (it may have been pulled while on): a step
@@ -419,13 +523,19 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
       }
       r.alsoFreed = in.alsoFreed;
       r.tableBytes = static_cast<size_t>(trackSlots()) * sizeof(LibraryIndex::Track);
+      room_ = r;
       verdict_ = roomToBuild(r);
       deferForced_ = deferAsked_;
       if (deferAsked_ || verdict_.shortOf != Short::None) {
         // The next boot builds before the UI, on a fresh heap (3.2.2's
         // first row): without the marker it would load the old index, whose
-        // hard inputs still match, and meet the same check again.
-        step_.markerWritten = writeMarker();
+        // hard inputs still match, and meet the same check again. Not when
+        // this boot's own marker build ran short: the next would too.
+        if (!deferAsked_ && bootBuildShort_) {
+          step_.markerSkipped = true;
+        } else {
+          step_.markerWritten = writeMarker();
+        }
         phase_ = Phase::Idle;
         deferAsked_ = false;
         ++deferrals_;
@@ -476,7 +586,12 @@ void LibraryUpdate::cantFence() {
   if (phase_ != Phase::Fence) return;
   deferForced_ = false;
   verdict_.shortOf = Short::Carry;
-  step_.markerWritten = writeMarker();
+  // (Not after this boot's own marker build ran short: the next would too.)
+  if (bootBuildShort_) {
+    step_.markerSkipped = true;
+  } else {
+    step_.markerWritten = writeMarker();
+  }
   ++deferrals_;
   deferAsked_ = false;
   phase_ = Phase::Idle;
@@ -489,16 +604,19 @@ void LibraryUpdate::buildStarted() {
 
 void LibraryUpdate::stepBuild() {
   const uint64_t t0 = now();
-  step_.built = buildIndex(true, &step_.build, &step_.walked, &step_.noMemory, &step_.cardGone);
+  step_.built =
+      buildIndex(true, &step_.build, &step_.walked, &step_.noMemory, &step_.cardGone, &step_.readErrors);
   step_.buildMs = msSince(t0);
   // What the save writes (3.4.3): taken now, as the build read them (the
-  // scan, which moves the journal on, waits for the save).
+  // scan, which moves the journal on, waits for the save). A read that
+  // failed and still built (T's, D read whole): saved as records left out,
+  // so the next boot rebuilds with T at its scan's end.
   const tagstore::Identity none;
   const tagstore::Identity& root = c_.root ? c_.root->identity : none;
   step_.journalsLeft = c_.store && c_.store->hasJournals();
   step_.inputs = libraryboot::inputsOf(root, !step_.walked && step_.build.transferUsed,
                                        c_.store ? c_.store->deviceCrc() : 0, c_.store ? c_.store->journalSeq() : 0,
-                                       step_.journalsLeft);
+                                       step_.journalsLeft || step_.readErrors);
 }
 
 void LibraryUpdate::buildDone() {

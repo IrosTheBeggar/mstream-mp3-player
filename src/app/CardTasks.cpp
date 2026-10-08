@@ -76,7 +76,13 @@ bool CardTasks::begin() {
   c.indexedCtx = this;
   jobs_.begin(c);
   active_ = true;
+  // A soft-stale index (the scan went on since its build, a build that left
+  // records out, an update step a cut stopped) is rebuilt at the scan's
+  // end: the first one after the boot's walk, even with nothing to scan
+  // (a transfer card D has nothing of its own for, and a walk that finds
+  // nothing new), whose scanOver_ would never go from false to true.
   pendingAfterScan_ = lib_.softStale();
+  scanOver_ = !pendingAfterScan_;
   scanTotal_ = indexPending();
   return true;
 }
@@ -137,6 +143,9 @@ void CardTasks::sources(ScanScheduler::In& in, const Sources& src) {
 void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, bool covers, const UpdateEnv& env) {
   const uint32_t now = in.nowMs;
   playing_ = src.playing;
+  // The update step's fence is up and its build not handed yet: the
+  // worker's task (made before the fence: Out::wantWorker) stays for it.
+  if (active_ && lib_.update()->phase() == LibraryUpdate::Phase::Build) worker_.ensure(now);
   // 1. The step that finished.
   Job done = Job::None;
   uint32_t ms = 0;
@@ -157,6 +166,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     LibraryUpdate::In ui;
     ui.nowMs = now;
     ui.workerFree = !worker_.busy();
+    ui.workerUp = worker_.alive();
     ui.walking = jobs_.walking();
     ui.journals = lib_.store()->hasJournals() || jobs_.chunkPending();
     ui.compactFailed = lastCompactFailed_;
@@ -170,12 +180,17 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
       ui.alsoFreed = env.alsoFreed;
     }
     uo = up->update(ui);
+    // The fence goes up only once the build can start at once: the task
+    // first (no internal RAM for it: the step waits, the index untouched).
+    if (uo.wantWorker) worker_.ensure(now);
     if (uo.act != LibraryUpdate::Do::None) act_ = uo.act;
     switch (uo.act) {
       case LibraryUpdate::Do::Deferred:
         ++deferred_;
         updateOver();
-        toast(uitext::kLibraryAtBoot);
+        // (No marker on the card, no promise: none written, or none wanted
+        // after this boot's own build ran short.)
+        if (up->last().markerWritten) toast(uitext::kLibraryAtBoot);
         break;
       case LibraryUpdate::Do::Failed:
         ++updates_;
@@ -442,9 +457,13 @@ void CardTasks::live() {
     scanDone_ = 0;
     toast(uitext::kLibraryUpdated);
   }
-  Serial.printf("[card] the update step (%s): %s\n", s.why,
+  Serial.printf("[card] the update step (%s): %s%s\n", s.why,
                 s.built ? "the library is rebuilt (its save next, on the card worker)"
-                        : "FAILED (no library until the next boot, or Try again)");
+                        : "FAILED (no library until the next boot, or Try again)",
+                s.cardGone && s.readErrors ? "; a read of the card's records failed as it built (the card?): "
+                                             "nothing walked or saved"
+                : s.readErrors             ? "; a read of T failed: built from D alone, T tried again next time"
+                                           : "");
 }
 
 void CardTasks::updateOver() {

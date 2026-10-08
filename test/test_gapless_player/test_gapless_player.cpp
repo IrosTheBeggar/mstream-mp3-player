@@ -1194,7 +1194,9 @@ void test_a_track_that_ends_inside_the_fence_starts_nothing() {
 
 // Inside the fence the listener can always pause and resume what plays;
 // the rest (next, prev, a play from the start, a seek) finds no queue and
-// does nothing.
+// does nothing, and the queue's edits refuse (the Queue tab's Clear would
+// have stopped the music, cleared nothing, and the queue come back whole
+// after the fence).
 void test_inside_the_fence_only_pause_and_resume_act() {
   World w({"a", "b", "c"}, {"a", "b", "c"});
   w.put("a", track(44100, 90000, 50));
@@ -1219,8 +1221,25 @@ void test_inside_the_fence_only_pause_and_resume_act() {
   TEST_ASSERT_TRUE(w.player.state() == PlayState::Paused);
   w.player.togglePlayPause();  // resume: the track the backend holds
   TEST_ASSERT_TRUE(w.player.state() == PlayState::Playing);
+  w.player.clearQueue();
+  TEST_ASSERT_TRUE(w.player.state() == PlayState::Playing);
+  TEST_ASSERT_FALSE(w.player.clearUpNext());
+  const uint32_t positions[1] = {0};
+  TEST_ASSERT_FALSE(w.player.moveNext(positions, 1));
+  TEST_ASSERT_EQUAL_UINT32(0, w.player.remove(positions, 1).count);
+  const uint32_t ids[1] = {w.index.findTrack(World::path("b").c_str())};
+  TEST_ASSERT_FALSE(w.player.playNow(ids, 1, 0));
+  TEST_ASSERT_FALSE(w.player.playNext(ids, 1));
+  TEST_ASSERT_FALSE(w.player.addToQueue(ids, 1));
+  TEST_ASSERT_FALSE(w.player.undo());
+  w.player.setShuffle(true);
+  TEST_ASSERT_FALSE(w.player.shuffle());
+  TEST_ASSERT_TRUE(w.queue.empty());
+  TEST_ASSERT_TRUE(w.player.state() == PlayState::Playing);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
   for (int i = 0; i < 100; ++i) w.tick();
   fenceDown(w, {"a", "b", "c"}, 0);
+  TEST_ASSERT_EQUAL_UINT32(3, w.queue.size());
   w.runToStop();
   assertSame(concat({w.get("a").kept(), w.get("b").kept(), w.get("c").kept()}), w.audio.heard);
   TEST_ASSERT_EQUAL_INT(1, w.audio.plays);

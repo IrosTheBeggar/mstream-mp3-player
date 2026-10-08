@@ -40,7 +40,8 @@ class Thumbs;
 //     update step, when the journal took records since the last build
 //     (CardJobs::newRecords(): reads a full card refused are none), or a
 //     walk's changes, a Rescan, or a boot that loaded an index the scan had
-//     gone past (Library::softStale()) ask for it; not when the rest
+//     gone past (Library::softStale(): the first scan's end after the
+//     boot's walk, even with nothing to scan) ask for it; not when the rest
 //     stopped on a read error (the card pulled: the next boot has it).
 //     After an update step, built or failed or deferred, what the journal
 //     had asks for no other: only new records (or a walk's changes, a
@@ -48,7 +49,9 @@ class Thumbs;
 // The update step itself is LibraryUpdate's state machine (3.4.2), run here
 // every pass with the worker's and the jobs' state and the loop's (UpdateEnv:
 // the safe point, what the step frees): it holds the scan and new walks
-// once asked, asks the compaction first, then (Do::Fence) main.cpp puts the
+// once asked, asks the compaction first, has the worker's task made
+// (Out::wantWorker: the build must start at once, so no fence goes up
+// without it) and kept to the hand-off, then (Do::Fence) main.cpp puts the
 // fence up and calls fenceUp(); the build is the worker's (priority 1); at
 // its end (Do::Live) main.cpp takes the fence down and calls live(); the
 // save is the worker's too, and the background jobs wait for its end.

@@ -1681,19 +1681,22 @@ the browsing UI hold its **track ids**, never strings.
   walk that found 200 new files or more (they show with their file names
   at once). Once asked it holds the scan; after the journals' compaction,
   with the worker free and a safe point (nothing plays, or 20 s left and no
-  seek in 2 s), and memory for it (else `/.player/build.req`, and the next
+  seek in 2 s), the worker's task there (made first: the build must start
+  at once), and memory for it (else `/.player/build.req`, and the next
   boot builds), the loop puts up a **fence**: the queue flushed and its
   memory lent to the build (the player fenced: pause and resume still
   act, nothing reads the queue), the index hidden from every reader
   (`Library::index()` nullptr, the catalog without one; Now Playing keeps
   its track's names from a held copy, the lists say "Updating the
-  library…", skips and seeks wait), Thumbs' pools lent. The build is a
+  library…", skips, seeks and queue edits wait), Thumbs' pools lent. The build is a
   card-worker step at the loop's priority, the loop live meanwhile; then
   the fence comes down (the queue read back with the new ids; a track
   that ended inside it starts nothing: the next waits, paused), and the
   save is another worker step, the scan and compactions waiting for its
   end. On a card that doesn't answer (pulled while on) it fails before the
-  fence; a power cut at any step leaves a card the next boot reads whole.
+  fence, and on one whose reads fail as the build reads it, at its end
+  (nothing walked or saved: the next boot loads the last `library.idx`);
+  a power cut at any step leaves a card the next boot reads whole.
   A file the scan reads
   stops being Pending in the index (a card walked into a path-named index
   has every file Pending), and the playing track's tags show on Now

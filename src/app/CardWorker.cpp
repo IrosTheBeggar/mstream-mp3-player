@@ -55,23 +55,38 @@ void CardWorker::work() {
   }
 }
 
+bool CardWorker::spawn(uint8_t priority, uint32_t nowMs) {
+  if (static_cast<int32_t>(nowMs - retryAtMs_) < 0) return false;
+  alive_.store(true);
+  priority_ = priority;
+  if (xTaskCreatePinnedToCore(entry, "card", kStackBytes, this, priority, &task_, 1) != pdPASS) {
+    alive_.store(false);
+    task_ = nullptr;
+    retryAtMs_ = nowMs + kRetryMs;
+    if (failedStarts_++ == 0) {
+      Serial.printf("[card] no internal RAM for the card worker's %lu B stack: its jobs wait\n",
+                    (unsigned long)kStackBytes);
+    }
+    return false;
+  }
+  return true;
+}
+
+bool CardWorker::ensure(uint32_t nowMs) {
+  const uint8_t st = state_.load();
+  if (alive_.load()) {
+    if (st == kExit) return false;  // ending itself: made again once it's gone
+    lastStepMs_ = nowMs;            // (poll() ends it kIdleExitMs after this)
+    return true;
+  }
+  if (st != kIdle || !spawn(0, nowMs)) return false;
+  lastStepMs_ = nowMs;
+  return true;
+}
+
 bool CardWorker::start(Job job, uint8_t priority, StepFn fn, void* ctx, uint32_t nowMs) {
   if (state_.load() != kIdle || !fn) return false;
-  if (!alive_.load()) {
-    if (static_cast<int32_t>(nowMs - retryAtMs_) < 0) return false;
-    alive_.store(true);
-    priority_ = priority;
-    if (xTaskCreatePinnedToCore(entry, "card", kStackBytes, this, priority, &task_, 1) != pdPASS) {
-      alive_.store(false);
-      task_ = nullptr;
-      retryAtMs_ = nowMs + kRetryMs;
-      if (failedStarts_++ == 0) {
-        Serial.printf("[card] no internal RAM for the card worker's %lu B stack: its jobs wait\n",
-                      (unsigned long)kStackBytes);
-      }
-      return false;
-    }
-  }
+  if (!alive_.load() && !spawn(priority, nowMs)) return false;
   fn_ = fn;
   ctx_ = ctx;
   job_ = job;

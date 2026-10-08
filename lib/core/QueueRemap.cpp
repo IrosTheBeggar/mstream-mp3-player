@@ -80,9 +80,20 @@ void Carry::dropText() {
   textSize_ = 0;
 }
 
-void Carry::begin(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog,
-                  Card& card) {
+bool Carry::begin(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog,
+                  Card& card, size_t textRoom) {
+  carry(queue, saver, player, catalog, card, textRoom);
+  // No route: nothing is given back (the build doesn't start, and the queue
+  // isn't the listener's to lose for it).
+  if (res_.via == Via::None) return false;
+  lend(queue, player);
+  return true;
+}
+
+void Carry::carry(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog,
+                  Card& card, size_t textRoom) {
   res_ = Result{};
+  carrying_ = false;
   dropText();
   // A start point waiting belongs to the entry's key, which the read gives
   // afresh: noted here, set again after.
@@ -104,9 +115,10 @@ void Carry::begin(QueueModel& queue, QueueSaver& saver, PlaybackController& play
     if (!saver.fileIsQueue()) position_ = saver.fileLine();
   } else {
     saver.abort();  // a write under way would go on with the new ids (flushNow() leaves none: to be sure)
-    // The text in one block of exactly its size (a first pass measures it).
+    // The text in one block of exactly its size (a first pass measures it),
+    // held through the rebuild: no more than it can spare.
     CountSink count;
-    if (queuetext::write(queue, catalog, saver.generation(), count)) {
+    if (queuetext::write(queue, catalog, saver.generation(), count) && count.size() <= textRoom) {
       text_ = static_cast<uint8_t*>(alloc_(count.size()));
       if (text_) {
         FixedSink out(text_, count.size());
@@ -120,7 +132,9 @@ void Carry::begin(QueueModel& queue, QueueSaver& saver, PlaybackController& play
     res_.via = text_ ? Via::Memory : Via::None;
     res_.textBytes = textSize_;
   }
+}
 
+void Carry::lend(QueueModel& queue, PlaybackController& player) {
   // 2. Its memory to the rebuild; the player reads neither the queue nor
   // the catalog until finish().
   res_.freedBytes = queue.memoryBytes();
@@ -199,7 +213,10 @@ Result Carry::finish(QueueModel& queue, QueueSaver& saver, PlaybackController& p
 Result run(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog, Card& card,
            uint32_t nowMs, MemorySink::AllocFn alloc, MemorySink::FreeFn release) {
   Carry carry(alloc, release);
-  carry.begin(queue, saver, player, catalog, card);
+  // (No route: the queue is given back all the same, and cleared after:
+  // the rebuild here runs anyway.)
+  carry.carry(queue, saver, player, catalog, card, SIZE_MAX);
+  carry.lend(queue, player);
   // 3. The rebuild.
   const bool rebuilt = card.rebuild();
   return carry.finish(queue, saver, player, catalog, card, rebuilt, nowMs);

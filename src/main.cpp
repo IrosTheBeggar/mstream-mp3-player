@@ -2581,14 +2581,19 @@ bool MainUiHost::setCpuSpeed(uint16_t mhz) {
 
 // Every loop pass: the restart setCpuSpeed() asked for, once the headphones
 // are gone and the speaker's amp is off (at most 3 s, as before the idle
-// power-off).
+// power-off). Never while the card's library is written (LibraryWrite: a
+// compaction, or the update step from its fence to its save's end, which
+// the pause may have let start after the ask): that waits, however long,
+// as the idle power-off does (the update step itself doesn't start once a
+// restart is asked: stepCard()).
 static void stepCpuRestart(uint32_t now) {
   if (!cpuRestartMhz) return;
   // (Until the disconnect is done: connected() drops as soon as it starts.)
   const bool linked = audio.bluetooth().linkUp();
   const bool amp = SpeakerSink::ampOn();
-  if (!powerchoice::cpuRestartDue(now, cpuRestartAskedMs, linked, amp)) return;
-  if (queueStore.busy()) queueStore.flushNow();  // an edit meanwhile
+  const bool libraryWrite = cardTasks && cardTasks->libraryWrite();
+  if (!powerchoice::cpuRestartDue(now, cpuRestartAskedMs, linked, amp, libraryWrite)) return;
+  if (queueStore.busy()) queueStore.flushNow();  // an edit meanwhile (or the queue read back after an update step)
   Serial.printf("[power] restarting now at %u MHz (%s%s)\n", (unsigned)cpuRestartMhz,
                 linked ? "the headphones still linked after 3 s" : "headphones let go",
                 amp ? "; the speaker's amp still on after 3 s" : "");
@@ -2604,9 +2609,14 @@ static void stepCpuRestart(uint32_t now) {
 // fenced: it reads neither the queue nor the catalog, and pause and resume
 // still act), the playing track's names kept for Now Playing and the index
 // hidden (Library::index() nullptr, the catalog without one), Thumbs'
-// pools given back, the UI's lists to their "Updating" line; then the old
-// index is cleared (CardTasks::fenceUp(): LibraryUpdate::fencedUp()).
-// False: no PSRAM to carry the queue: nothing done (the step defers).
+// pools given back; then the old index is cleared (CardTasks::fenceUp():
+// LibraryUpdate::fencedUp()), and only then the UI's lists go to their
+// "Updating" line (they count their rows from Library::index(), nullptr
+// from fenceUp(): before it they'd keep the old index's rows, blank).
+// False: the queue can't be carried (no PSRAM for the carry; or the card
+// refused queue.txt and its text in PSRAM, held through the build, would
+// take more than the memory check had to spare): nothing done (the step
+// defers).
 static uint32_t fencePsramBefore = 0;
 static bool enterFence() {
   const int32_t cur = queue.current();
@@ -2628,16 +2638,14 @@ static bool enterFence() {
   f.libraryTracks = index && index->ready() ? index->trackCount() : 0;
   fencePsramBefore = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
   // 1. queue.txt is the queue; its memory the build's.
-  if (!queueStore.remapBegin()) return false;
+  if (!queueStore.remapBegin(library.update()->spare())) return false;
   frozen = f;
-  // 2. The readers: the names kept, the index hidden; the UI.
+  // 2. The readers: the names kept, the index hidden.
   library.fence(f.trackId);
-  if (userInterface) {
-    userInterface->thumbs().lend();  // 3. Thumbs' pools (about 315 KB)
-    userInterface->libraryUpdating();
-  }
-  // 3. The old index (and the scan's memory).
+  if (userInterface) userInterface->thumbs().lend();  // 3. Thumbs' pools (about 315 KB)
+  // 3. The old index (and the scan's memory); then the UI, which sees none.
   cardTasks->fenceUp();
+  if (userInterface) userInterface->libraryUpdating();
   Serial.printf("[lib] the update step (%s): the fence is up; the build on the card worker (the loop goes on); PSRAM "
                 "free %u B before, %u B now\n",
                 library.update()->why(), (unsigned)fencePsramBefore,
@@ -2669,7 +2677,8 @@ static void leaveFence() {
   Serial.printf("[lib] the update step: %s in %.0f ms on the card worker (the loop live; the fence up %lu ms); PSRAM "
                 "free %u B before, %u B after, lowest %u B\n",
                 s.built ? (s.walked ? "walked /music" : "built") : s.cardGone ? "FAILED (the card's records didn't "
-                                                                                 "open: the card pulled?)"
+                                                                                 "open, or a read failed: the card "
+                                                                                 "pulled?)"
                                                               : "FAILED (out of PSRAM)",
                 s.buildMs, (unsigned long)s.fenceMs, (unsigned)fencePsramBefore,
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
@@ -2726,7 +2735,9 @@ static void stepCard(uint32_t now, bool input) {
   // headphones isn't one) and what it frees besides the index.
   CardTasks::UpdateEnv env;
   env.playing = player.state() == PlayState::Playing;
-  env.waiting = player.state() == PlayState::Waiting;
+  // (A CPU speed's restart asked: not a safe point either. Its pause would
+  // make one, and the restart would cut the build it let start.)
+  env.waiting = player.state() == PlayState::Waiting || cpuRestartMhz != 0;
   env.trackLeftMs = trackLeftMs();
   env.seekSeq = player.seeks();
   env.alsoFreed = queue.memoryBytes() + (userInterface ? userInterface->thumbs().poolBytes() : 0);
@@ -2744,8 +2755,12 @@ static void stepCard(uint32_t now, bool input) {
     case LibraryUpdate::Do::Deferred: {
       char why[160];
       library.deferralWhy(why, sizeof(why));
+      const LibraryUpdate::Step& s = library.update()->last();
       Serial.printf("[lib] the update step waits for the next boot (%s)%s\n", why,
-                    library.update()->last().markerWritten ? "" : "; the marker COULDN'T be written");
+                    s.markerWritten   ? ""
+                    : s.markerSkipped ? "; no marker: this boot's own build ran out of PSRAM too (the library "
+                                        "stays as it is)"
+                                      : "; the marker COULDN'T be written");
       break;
     }
     case LibraryUpdate::Do::Failed:
@@ -2755,8 +2770,11 @@ static void stepCard(uint32_t now, bool input) {
     case LibraryUpdate::Do::Saved: {
       const LibraryUpdate::Step& s = library.update()->last();
       if (s.built) {
-        Serial.printf("[lib] the update step: library.idx %s in %.0f ms on the card worker%s\n",
+        Serial.printf("[lib] the update step: library.idx %s in %.0f ms on the card worker%s%s\n",
                       s.saved ? "saved" : "COULDN'T be saved (the next boot builds again)", s.saveMs,
+                      s.saved && s.readErrors ? " (a read of T failed: saved as records left out, rebuilt at the "
+                                                "next boot's scan's end)"
+                                              : "",
                       s.markerRemoved ? "; the build-at-boot marker removed" : "");
       }
       break;

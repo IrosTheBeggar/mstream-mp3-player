@@ -22,7 +22,11 @@
 // header, then libraryboot::decide()'s table (3.2.2): load it, build from
 // the records (the journals compacted first) and save, or (no records at
 // all) walk /music through the caller's walk and save; the marker goes once
-// its build is saved.
+// its build is saved. The marker's build out of PSRAM on the boot's fresh
+// heap, with library.idx matching the card: that index is loaded instead
+// (stale, but a library) and the marker removed, and this session's update
+// steps don't write it again for a short PSRAM (bootBuildShort(): the next
+// boot would only fail the same build).
 //
 // The update step (3.4.2), asked by the scan's end, a walk that found new
 // files (U11), the console (gb, gb!, g0), the boot's soft-stale index:
@@ -30,10 +34,13 @@
 //   Asked     the scan and new walks hold (Out::holdScan); a walk under way
 //             goes on to its end (its walk.jnl must be merged first); the
 //             journals are compacted (Out::compact: the card worker's
-//             compaction step); then, with the worker free, the card
-//             answering (/music, and the records opening) and the safe point
+//             compaction step); then, with the worker free, the safe point
 //             reached (nothing plays, or the heard track has 20 s left at
-//             least and no seek came in the last 2 s), the memory check:
+//             least and no seek came in the last 2 s), the worker's task up
+//             (Out::wantWorker: the caller makes it; no internal RAM for its
+//             stack, the step waits here, the index untouched, rather than
+//             behind a fence no build can start under) and the card
+//             answering (/music, and the records opening), the memory check:
 //             free PSRAM plus what the step frees at least 1.1 x the build's
 //             estimated peak, and the new track table fitting the old one's
 //             block or the largest free one. Short (or gb!), the marker is
@@ -42,16 +49,26 @@
 //             heap. Else:
 //   Fence     Do::Fence, once: the loop puts the fence up and calls
 //             fencedUp() in the same pass (steps 1-3: the queue flushed to
-//             queue.txt and its memory given back, the UI's "Updating
-//             library" state, the old index hidden from every reader on the
-//             loop, Thumbs' pools given back); fencedUp() clears the old
-//             index (two don't fit at 20k). No memory to carry the queue:
-//             cantFence(), and the step defers to the boot.
+//             queue.txt and its memory given back, the old index hidden from
+//             every reader on the loop, Thumbs' pools given back); fencedUp()
+//             clears the old index (two don't fit at 20k); then the UI's
+//             "Updating library" state (its lists count no rows: readable()
+//             is nullptr by then). The queue can't be carried (no memory for
+//             it; or the card refused queue.txt and its text in PSRAM would
+//             take more than the memory check had to spare(): it is held
+//             through the build): cantFence(), and the step defers to the
+//             boot.
 //   Build     Out::build: ScanScheduler hands the card worker the build (one
 //             step at priority 1); buildStarted(), stepBuild() on the worker
 //             (the merge of T and D, LibraryBuilder; a T that fails its checks
 //             restarts it from D alone; no records, the caller's walk), then
-//             buildDone() on the loop.
+//             buildDone() on the loop. A read that fails meanwhile is the
+//             card's (pulled, failing), not a file's checks: on D's files, or
+//             on T with no whole build from D after it, the step fails
+//             (Step::cardGone: nothing walked, nothing saved; the next boot
+//             loads the last library.idx); on T with D read whole, the build
+//             from D alone stands and is saved as one that left records out
+//             (the next boot finds it soft-stale; T isn't marked bad).
 //   Live      Do::Live, once: the loop takes the fence down and calls lived()
 //             in the same pass (step 5: the queue read back from queue.txt
 //             with the new ids, the readers back, Thumbs' pools back).
@@ -76,12 +93,16 @@
 // A power cut at any stage leaves a card the next boot reads whole: before
 // the save, the old library.idx, its hard inputs still the card's, is
 // loaded, and its soft inputs (D's headerCrc, the journal's sequence: the
-// compaction changed them) make the scan's end rebuild it; mid-save,
+// compaction changed them) make the scan's end rebuild it (the first one
+// after the boot's walk, even with nothing to scan); mid-save,
 // library.tmp is removed (not whole) or taken (whole: the cut fell between
 // the remove and the rename); after the save, before the marker's removal,
 // the boot builds once more. A T that failed its checks is left out of every
 // build this session (the builder restarts from D alone, before anything is
-// shown); the next boot's build meets it again and does the same.
+// shown); the next boot's build meets it again and does the same. A build
+// (the boot's or a step's) that met a read error and still built is saved
+// with the journal's sequence kJournalsLeftOut, as one that left records
+// out: the next boot loads it soft-stale and its scan's end rebuilds it.
 //
 // Loop task only, but for stepBuild() and stepSave(), which run on the card
 // worker while the loop goes on, and touch only the index (behind the fence),
@@ -136,6 +157,12 @@ public:
   // (ESP-IDF's TLSF rounds a request up to its next size class, a
   // thirty-second, before it searches).
   static Verdict roomToBuild(const Room& r);
+  // What `r` leaves to spare for the build: the most that may be held
+  // through it besides what the check counted, with roomToBuild() still
+  // passing (the room over 1.1 x the peak; and when the new track table
+  // doesn't fit the old one's block, the largest free block over the
+  // table's need, taken as if the held bytes came out of it). 0: none.
+  static size_t spareOf(const Room& r);
 
   struct Config {
     tagstore::Fs* fs = nullptr;          // the card (its library.idx, the marker, T, D)
@@ -174,6 +201,14 @@ public:
     bool journalsLeft = false;        // it failed: built from tags.bin alone (3.8)
     bool saveFailed = false;
     bool markerRemoved = false;
+    // A read of T or D failed as the build read them (the card?): what was
+    // built is the session's, saved as one that left records out (the next
+    // boot loads it soft-stale, and its scan's end rebuilds it).
+    bool readErrors = false;
+    // The marker's build ran out of PSRAM (on this fresh heap) and
+    // library.idx matches the card: loaded instead, the marker removed
+    // (bootBuildShort()).
+    bool loadedShort = false;
     // The timings (Config::nowUs).
     float peekMs = 0, loadMs = 0, compactMs = 0, buildMs = 0, saveMs = 0;
   };
@@ -184,7 +219,7 @@ public:
   // What the loop carries out this pass (each once).
   enum class Do : uint8_t {
     None,
-    Deferred,  // the memory check failed (or gb! asked it to): the marker written, the step over
+    Deferred,  // the memory check failed (or gb! asked it to): the marker written (Step::markerWritten), the step over
     Failed,    // the card didn't answer (/music, or the records the boot opened): the step over, the index untouched
     Fence,     // steps 1-3: put the fence up, then fenced()
     Live,      // step 5: take it down (the queue read back, the readers back), then lived()
@@ -196,6 +231,7 @@ public:
   struct In {
     uint32_t nowMs = 0;
     bool workerFree = true;     // no step under way or waiting to be taken in
+    bool workerUp = true;       // the worker's task is there (CardWorker::alive()): the build can start at once
     bool walking = false;       // a walk under way (between its steps): its walk.jnl must be merged first
     bool journals = false;      // D has journals, or the scan's chunk waits for tags.jnl
     bool compactFailed = false;  // the last compaction failed (a full card, a walk being written): built from tags.bin alone
@@ -215,6 +251,10 @@ public:
     Wait wait = Wait::None;
     bool holdScan = false;      // asked: the scan and new walks wait (a walk under way goes on)
     bool compact = false;       // a compaction is wanted before the build (the journals)
+    // The step waits only for the worker's task (In::workerUp): the caller
+    // makes it now (CardWorker::ensure()), and keeps it until the build is
+    // handed. Its fence goes up once the task is there, never before.
+    bool wantWorker = false;
     bool build = false;         // ScanScheduler::In::build
     bool save = false;          // ScanScheduler::In::save
     bool updating = false;      // ScanScheduler::In::updating: the fence to the save's end
@@ -241,10 +281,15 @@ public:
   Out update(const In& in);
   // The loop put the fence up (Do::Fence): the old index is cleared now.
   void fencedUp();
-  // The loop couldn't put it up (no memory to carry the queue across):
-  // the step defers to the boot as a short PSRAM would (the marker;
-  // Do::Deferred at the next update()).
+  // The loop couldn't put it up (no memory to carry the queue across, or
+  // its text over spare()): the step defers to the boot as a short PSRAM
+  // would (the marker; Do::Deferred at the next update()). Nothing was
+  // given back: the index is as it was.
   void cantFence();
+  // What the last memory check left to spare (spareOf()): the most the
+  // fence may hold through the build besides what the check counted (the
+  // queue's text in PSRAM, when the card can't take queue.txt).
+  size_t spare() const { return spareOf(room_); }
   // The worker took the build (ScanScheduler handed Job::Build).
   void buildStarted();
   // On the card worker: the build. The fence holds; the index is the build's.
@@ -266,13 +311,15 @@ public:
     bool built = false;          // the index is ready (else: no library until the next boot or "Try again")
     bool walked = false;         // no records: /music walked
     bool noMemory = false;
-    bool cardGone = false;       // a file that opened before the fence didn't on the worker
+    bool cardGone = false;       // a file that opened before the fence didn't on the worker, or a read of it failed
+    bool readErrors = false;     // a read failed (cardGone, or T's with D read whole: saved as records left out)
     LibraryBuilder::Result build;
     bool journalsLeft = false;   // the compaction before it failed: tags.bin alone
     LibraryIndex::Inputs inputs;  // what the save writes
     bool saved = false;          // library.idx replaced
     bool markerRemoved = false;
     bool markerWritten = false;  // Do::Deferred: the marker is on the card
+    bool markerSkipped = false;  // Do::Deferred, short, after a boot whose marker build was short too: none written
     float buildMs = 0, saveMs = 0;
     uint32_t fenceMs = 0;        // the fence's length (the loop's clock: Fence to Live)
   };
@@ -284,6 +331,11 @@ public:
   // every build leaves it out.
   bool transferBad() const { return transferBad_; }
   void setTransferBad() { transferBad_ = true; }
+  // This boot's marker build ran out of PSRAM (Booted::loadedShort): a
+  // short memory check this session ends the step without the marker
+  // (Step::markerSkipped), which would only make the next boot fail the
+  // same build. gb! still writes it.
+  bool bootBuildShort() const { return bootBuildShort_; }
   // The steps run, and those deferred to the boot (the console).
   uint32_t steps() const { return steps_; }
   uint32_t deferrals() const { return deferrals_; }
@@ -301,7 +353,9 @@ public:
 private:
   // The build of the records (T and D), or the walk (none): into the index.
   // `update`: the update step's (its files opened on the worker).
-  bool buildIndex(bool update, LibraryBuilder::Result* r, bool* walked, bool* noMemory, bool* cardGone);
+  // `readErrors`: a read of T or D failed (whatever came of it).
+  bool buildIndex(bool update, LibraryBuilder::Result* r, bool* walked, bool* noMemory, bool* cardGone,
+                  bool* readErrors);
   bool records() const;
   void compactFirst(tagstore::TagStore::Compacted* c, bool* ran);
   bool save(const LibraryIndex::Inputs& inputs);
@@ -314,6 +368,7 @@ private:
   bool deferAsked_ = false;
   bool deferForced_ = false;
   bool transferBad_ = false;
+  bool bootBuildShort_ = false;
   bool markerSet_ = false;      // the marker is on the card (the boot's, or a deferral's)
   bool primed_ = false;
   uint32_t lastSeekSeq_ = 0;
@@ -323,6 +378,7 @@ private:
   bool liveDue_ = false;        // the build ended: Do::Live
   bool savedDue_ = false;       // the save ended: Do::Saved
   bool deferredDue_ = false;    // cantFence(): Do::Deferred
+  Room room_;                   // the last memory check's inputs (spare())
   Verdict verdict_;
   Step step_;
   uint32_t steps_ = 0, deferrals_ = 0;

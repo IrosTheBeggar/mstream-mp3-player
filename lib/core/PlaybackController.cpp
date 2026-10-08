@@ -162,6 +162,7 @@ void PlaybackController::setRepeat(Repeat r) {
 }
 
 void PlaybackController::setShuffle(bool on) {
+  if (fenced_) return;  // (the mode comes back with the queue, from queue.txt)
   Act act(*this);
   // The same entry (its key) stays current in the same state: nothing to
   // start, stop or cue, and its start point and length belong to the key.
@@ -526,6 +527,7 @@ void PlaybackController::currentMoved() {
 }
 
 bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle) {
+  if (fenced_) return false;  // (the queue is the build's: nothing to edit)
   Act act(*this);
   if (!queue_.replace(tracks, n, start, shuffle)) return false;
   failuresInARow_ = 0;
@@ -539,26 +541,31 @@ bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t st
 }
 
 bool PlaybackController::playNext(const uint32_t* tracks, uint32_t n) {
+  if (fenced_) return false;
   Act act(*this);
   return queue_.insertNext(tracks, n);
 }
 
 bool PlaybackController::addToQueue(const uint32_t* tracks, uint32_t n) {
+  if (fenced_) return false;
   Act act(*this);
   return queue_.append(tracks, n);
 }
 
 bool PlaybackController::moveNext(const uint32_t* positions, uint32_t n) {
+  if (fenced_) return false;
   Act act(*this);
   return queue_.moveNext(positions, n);
 }
 
 bool PlaybackController::clearUpNext() {
+  if (fenced_) return false;
   Act act(*this);
   return queue_.clearUpNext();
 }
 
 QueueModel::Removed PlaybackController::remove(const uint32_t* positions, uint32_t n) {
+  if (fenced_) return QueueModel::Removed{};
   Act act(*this);
   const QueueModel::Removed r = queue_.remove(positions, n);
   if (!r.current) return r;
@@ -572,6 +579,7 @@ QueueModel::Removed PlaybackController::remove(const uint32_t* positions, uint32
 }
 
 void PlaybackController::clearQueue() {
+  if (fenced_) return;  // (it would stop the held track, and clear nothing)
   Act act(*this);
   clearStartPoint();  // an undo brings the queue back, not the second
   stop();
@@ -579,6 +587,7 @@ void PlaybackController::clearQueue() {
 }
 
 bool PlaybackController::undo() {
+  if (fenced_) return false;
   Act act(*this);
   const uint32_t key = queue_.currentKey();
   if (!queue_.undo()) return false;

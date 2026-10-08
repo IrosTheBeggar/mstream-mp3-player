@@ -12,8 +12,10 @@
 // TrackCatalog as the firmware sets it up). The safe point near a track's
 // end; a deferral, then the boot that builds; a compaction asked during a
 // build; a T found bad at the end of a build; a power cut at every step of
-// an update; the fence (no reader sees a half-built index). What a track
-// that ends inside the fence does is test_gapless_player's.
+// an update; the fence (no reader sees a half-built index); a card that
+// fails while the build reads it; the worker's task before the fence; the
+// marker's build out of PSRAM at the boot. What a track that ends inside
+// the fence does is test_gapless_player's.
 // Run: pio test -e native -f test_library_update
 #include <unity.h>
 
@@ -239,26 +241,30 @@ void spoilStrings(CutFs& fs, uint32_t gen) {
 // ---- the card's files, with an eye on every read (the fence test) ----
 std::function<void()> g_onRead;
 std::function<void()> g_onAlloc;
+// A read of `path` that fails (a contact glitch): true fails it.
+std::function<bool(const std::string& path)> g_failRead;
 
 class SpyFs : public ts::Fs {
 public:
   explicit SpyFs(CutFs& inner) : in_(inner) {}
   class F : public ts::File {
   public:
-    explicit F(ts::File* f) : f_(f) {}
+    F(ts::File* f, const char* path) : f_(f), path_(path) {}
     uint32_t size() const override { return f_->size(); }
     bool read(uint32_t offset, void* out, uint32_t n) override {
       if (g_onRead) g_onRead();
+      if (g_failRead && g_failRead(path_)) return false;
       return f_->read(offset, out, n);
     }
     bool write(uint32_t offset, const void* data, uint32_t n) override { return f_->write(offset, data, n); }
     bool sync() override { return f_->sync(); }
     bool truncate(uint32_t size) override { return f_->truncate(size); }
     ts::File* f_;
+    std::string path_;
   };
   ts::File* open(const char* path, Mode mode) override {
     ts::File* f = in_.open(path, mode);
-    return f ? new F(f) : nullptr;
+    return f ? new F(f, path) : nullptr;
   }
   bool close(ts::File* file) override {
     F* f = static_cast<F*>(file);
@@ -300,8 +306,10 @@ void testFree(void* p) {
 
 // No records at all: /music walked into the index, every file Pending (the
 // firmware's VFS walk).
+int g_walks = 0;
 bool walkTree(LibraryIndex& idx, void* ctx) {
   const TestCard& card = *static_cast<const TestCard*>(ctx);
+  ++g_walks;
   idx.clear();
   if (!idx.begin("/music", 0)) return false;
   for (const auto& kv : card.tree.files) idx.addFile(("/music/" + kv.first).c_str(), LibraryIndex::kAddPending);
@@ -370,6 +378,10 @@ struct Device {
   std::vector<Do> acts;
   LibraryUpdate::Out lastOut;
   bool failFence = false;  // the loop can't put the fence up (no PSRAM to carry the queue)
+  // The worker's task (CardWorker): there, or made when the step wants it
+  // (Out::wantWorker) unless there's no internal RAM for its stack.
+  bool workerUp = true;
+  bool canMakeWorker = true;
 
   Device(CutFs& c, TestCard& t) : cut(c), fs(c), card(t), jobs(nullptr, nullptr) {
     index.keepTrackBlock(true);
@@ -417,6 +429,7 @@ struct Device {
     LibraryUpdate::In ui;
     ui.nowMs = now;
     ui.workerFree = running == Job::None;
+    ui.workerUp = workerUp;
     ui.walking = jobs.walking();
     ui.journals = store->hasJournals() || jobs.chunkPending();
     ui.compactFailed = lastCompactFailed;
@@ -429,6 +442,7 @@ struct Device {
     ui.alsoFreed = e.alsoFreed;
     const LibraryUpdate::Out uo = upd->update(ui);
     lastOut = uo;
+    if (uo.wantWorker && canMakeWorker) workerUp = true;  // (CardWorker::ensure())
     if (uo.act != Do::None) acts.push_back(uo.act);
     if (uo.act == Do::Fence && failFence) {
       upd->cantFence();
@@ -466,6 +480,7 @@ struct Device {
     if (o.job != Job::None) start(o.job);
   }
   void start(Job j) {
+    TEST_ASSERT_TRUE(workerUp || j != Job::Build);  // the build is handed only to a task that is there
     running = j;
     left = j == Job::Build ? buildPasses : 1;
     steps.push_back(j);
@@ -536,6 +551,7 @@ void setUp() {}
 void tearDown() {
   g_onRead = nullptr;
   g_onAlloc = nullptr;
+  g_failRead = nullptr;
   g_ceiling = SIZE_MAX;
 }
 
@@ -553,6 +569,18 @@ void handFilled(CutFs& fs, TestCard& card) {
   d.jobs.askWalk();
   d.drain();
   TEST_ASSERT_TRUE(d.store->hasJournals() || d.store->device().present);
+}
+
+// A transfer card: committed, booted once (built from T), then walked and
+// drained (D's rows for T's files).
+void transferCard(CutFs& fs, TestCard& card) {
+  fill(card);
+  commit(fs, card, 1);
+  Device d(fs, card);
+  d.boot();
+  TEST_ASSERT_TRUE(d.booted.build.transferUsed);
+  d.jobs.askWalk();
+  d.drain();
 }
 
 }  // namespace
@@ -596,6 +624,37 @@ void test_the_safe_point_and_the_memory_check() {
   r.psramLargest = 0;
   r.tableBytes = 200000;  // fits the old block
   TEST_ASSERT_TRUE(U::roomToBuild(r).shortOf == U::Short::None);
+
+  // What the step can spare (the queue's text in PSRAM held through the
+  // build, when the card can't take queue.txt): held, the check still
+  // passes; a byte more, it doesn't.
+  U::Room s;
+  s.indexBytes = 1000000;
+  s.trackBlock = 200000;
+  s.tableBytes = 200000;
+  s.psramFree = need - s.indexBytes;  // the check's edge: nothing to spare
+  TEST_ASSERT_EQUAL_size_t(0, U::spareOf(s));
+  s.psramFree += 5000;
+  TEST_ASSERT_EQUAL_size_t(5000, U::spareOf(s));
+  U::Room held = s;
+  held.psramFree -= U::spareOf(s);
+  TEST_ASSERT_TRUE(U::roomToBuild(held).shortOf == U::Short::None);
+  held.psramFree -= 1;
+  TEST_ASSERT_TRUE(U::roomToBuild(held).shortOf == U::Short::Room);
+  s.psramFree -= 6000;  // short already
+  TEST_ASSERT_EQUAL_size_t(0, U::spareOf(s));
+  // The table in a free block of its own: what that block can lose, taken
+  // as if the held bytes came out of it.
+  s.psramFree = 64u << 20;
+  s.tableBytes = 300000;
+  s.psramLargest = 300000 + 300000 / 16 + 700;
+  TEST_ASSERT_EQUAL_size_t(700, U::spareOf(s));
+  held = s;
+  held.psramFree -= 700;
+  held.psramLargest -= 700;
+  TEST_ASSERT_TRUE(U::roomToBuild(held).shortOf == U::Short::None);
+  held.psramLargest -= 1;
+  TEST_ASSERT_TRUE(U::roomToBuild(held).shortOf == U::Short::Table);
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,6 +1299,220 @@ void test_the_steps_order_and_a_card_that_doesnt_answer() {
   d.cut.dead = false;
 }
 
+// ---------------------------------------------------------------------------
+// A card that fails while the build reads it (pulled, or a contact glitch),
+// after its opens worked (the card answered at the ask and on the worker):
+// the card's trouble, not "no records". Nothing is walked (an absent /music
+// would give an empty library and "Library updated"; a glitch the card came
+// back from, a path-named one saved over library.idx) or saved, T isn't
+// marked bad, and the next boot loads the last library.idx. A read of T
+// failing while D reads whole: the build from D alone stands, saved as one
+// that left records out: the next boot finds it soft-stale, and its update
+// step reads T again.
+// ---------------------------------------------------------------------------
+void test_a_card_that_fails_mid_build() {
+  for (int withT = 0; withT < 2; ++withT) {
+    for (int how = 0; how < 2; ++how) {  // 0: pulled (every read after fails); 1: one read of D fails
+      char msg[64];
+      snprintf(msg, sizeof(msg), "%s, %s", withT ? "T and D" : "D", how ? "a glitch" : "pulled");
+      CutFs fs;
+      TestCard card;
+      if (withT) {
+        transferCard(fs, card);
+      } else {
+        handFilled(fs, card);
+      }
+      const std::vector<uint8_t> saved = fs.bytes(LibraryUpdate::kIndexNames.path);
+      std::string title;
+      {
+        Device d(fs, card);
+        d.boot();
+        TEST_ASSERT_TRUE_MESSAGE(d.booted.ok, msg);
+        title = titleOf(d.index, kFlac);
+        const int walks = g_walks;
+        int reads = 0;
+        g_onRead = [&] {
+          if (how == 0 && d.upd->phase() == Phase::Building && ++reads == 3) fs.dead = true;
+        };
+        int deviceReads = 0;
+        g_failRead = [&](const std::string& path) {
+          return how == 1 && d.upd->phase() == Phase::Building && path == "/.player/tags.bin" && ++deviceReads == 4;
+        };
+        d.upd->ask("the scan's end");
+        d.runUntil([&] { return d.did(Do::Live); });
+        g_onRead = nullptr;
+        g_failRead = nullptr;
+        fs.dead = false;  // (put back)
+        d.runUntil([&] { return d.did(Do::Saved); });
+        const LibraryUpdate::Step& s = d.upd->last();
+        TEST_ASSERT_TRUE_MESSAGE(s.cardGone, msg);
+        TEST_ASSERT_TRUE_MESSAGE(s.readErrors, msg);
+        TEST_ASSERT_FALSE_MESSAGE(s.built, msg);
+        TEST_ASSERT_FALSE_MESSAGE(s.walked, msg);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(walks, g_walks, msg);
+        TEST_ASSERT_FALSE_MESSAGE(s.saved, msg);
+        TEST_ASSERT_TRUE_MESSAGE(std::find(d.steps.begin(), d.steps.end(), Job::Save) == d.steps.end(), msg);
+        TEST_ASSERT_FALSE_MESSAGE(d.upd->transferBad(), msg);
+        TEST_ASSERT_FALSE_MESSAGE(d.index.ready(), msg);  // no library until the next boot
+        TEST_ASSERT_TRUE_MESSAGE(d.upd->phase() == Phase::Idle, msg);
+      }
+      // library.idx as it was: the next boot loads it.
+      TEST_ASSERT_TRUE_MESSAGE(fs.bytes(LibraryUpdate::kIndexNames.path) == saved, msg);
+      Device again(fs, card);
+      again.boot();
+      TEST_ASSERT_TRUE_MESSAGE(again.booted.decision.action == libraryboot::Action::Load, msg);
+      TEST_ASSERT_TRUE_MESSAGE(again.booted.ok, msg);
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(title.c_str(), titleOf(again.index, kFlac).c_str(), msg);
+      TEST_ASSERT_TRUE_MESSAGE(fs.violations.empty(), msg);
+    }
+  }
+  // One read of T fails, D reads whole: built from D alone, T not marked
+  // bad, saved as records left out; the next boot loads it soft-stale and
+  // its update step reads T again.
+  CutFs fs;
+  TestCard card;
+  transferCard(fs, card);
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.decision.action == libraryboot::Action::Load);
+    int tReads = 0;
+    g_failRead = [&](const std::string& path) {
+      return d.upd->phase() == Phase::Building && path == tagsName(1) && ++tReads == 3;
+    };
+    d.update("gb");
+    g_failRead = nullptr;
+    const LibraryUpdate::Step& s = d.upd->last();
+    TEST_ASSERT_TRUE(s.built);
+    TEST_ASSERT_TRUE(s.readErrors);
+    TEST_ASSERT_FALSE(s.cardGone);
+    TEST_ASSERT_FALSE(s.build.transferUsed);
+    TEST_ASSERT_TRUE(s.build.transferWhy == cc::Why::Io);
+    TEST_ASSERT_TRUE(s.build.deviceUsed);
+    TEST_ASSERT_FALSE(d.upd->transferBad());
+    TEST_ASSERT_TRUE(s.saved);
+    TEST_ASSERT_EQUAL_UINT32(libraryboot::kJournalsLeftOut, s.inputs.journalSeq);
+    TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
+  }
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.decision.action == libraryboot::Action::Load);
+    TEST_ASSERT_TRUE(d.booted.softStale);
+    d.update("the scan's end");
+    TEST_ASSERT_TRUE(d.upd->last().build.transferUsed);
+    TEST_ASSERT_FALSE(d.upd->last().readErrors);
+    TEST_ASSERT_EQUAL_STRING("From T", titleOf(d.index, kFlac).c_str());
+  }
+  {
+    Device d(fs, card);
+    d.boot();
+    TEST_ASSERT_FALSE(d.booted.softStale);
+  }
+  TEST_ASSERT_TRUE(fs.violations.empty());
+}
+
+// ---------------------------------------------------------------------------
+// The worker's task before the fence: it ends 3 s after its last step (a
+// long wait for the safe point), and the build needs it made again (a 6 KB
+// stack in internal RAM). The step asks for it (Out::wantWorker) and puts
+// its fence up only once it is there: with no internal RAM for it, the step
+// waits, the index as it was and nothing held but the scan; once it can be
+// made, the step goes on.
+// ---------------------------------------------------------------------------
+void test_the_worker_s_task_before_the_fence() {
+  CutFs fs;
+  TestCard card;
+  handFilled(fs, card);
+  Device d(fs, card);
+  d.boot();
+  const uint32_t tracks = d.index.trackCount();
+  d.workerUp = false;
+  d.canMakeWorker = false;
+  d.upd->ask("the scan's end");
+  for (int i = 0; i < 300; ++i) d.pass();
+  TEST_ASSERT_FALSE(d.did(Do::Fence));
+  TEST_ASSERT_TRUE(d.upd->phase() == Phase::Asked);
+  TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::Worker);
+  TEST_ASSERT_TRUE(d.lastOut.wantWorker);
+  TEST_ASSERT_FALSE(d.lastOut.libraryWrite || d.lastOut.updating || d.lastOut.fenced);
+  TEST_ASSERT_NOT_NULL(d.upd->readable());
+  TEST_ASSERT_TRUE(d.index.ready());
+  TEST_ASSERT_EQUAL_UINT32(tracks, d.index.trackCount());
+  // (Not asked while it waits for the safe point: the task isn't held then.)
+  Env playing;
+  playing.playing = true;
+  playing.trackLeftMs = 5000;
+  d.pass(playing);
+  TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::SafePoint);
+  TEST_ASSERT_FALSE(d.lastOut.wantWorker);
+  // Internal RAM for it: made, then the fence, the build, the save.
+  d.canMakeWorker = true;
+  d.runUntil([&] { return d.did(Do::Saved); });
+  TEST_ASSERT_TRUE(d.upd->last().saved);
+  TEST_ASSERT_EQUAL_STRING(kFlacTitle, titleOf(d.index, kFlac).c_str());
+}
+
+// ---------------------------------------------------------------------------
+// The build-at-boot marker's build out of PSRAM on the boot's fresh heap,
+// library.idx matching the card: that index is loaded instead (stale, but a
+// library; before, every boot ended with none), the marker removed, and the
+// session's short memory checks don't write it again (the next boot would
+// fail the same build); gb! still does.
+// ---------------------------------------------------------------------------
+void test_the_marker_s_build_out_of_psram() {
+  CutFs fs;
+  TestCard card;
+  handFilled(fs, card);
+  size_t loadBytes = 0;
+  std::string title;
+  {
+    Device d(fs, card);
+    const size_t base = g_live;
+    d.boot();
+    TEST_ASSERT_TRUE(d.booted.decision.action == libraryboot::Action::Load);
+    loadBytes = g_live - base;
+    title = titleOf(d.index, kFlac);
+  }
+  fs.put(LibraryUpdate::kMarker, {});
+  Device d(fs, card);
+  // Room for the load, not for the builder's own memory.
+  g_ceiling = g_live + loadBytes + 1024;
+  d.boot();
+  g_ceiling = SIZE_MAX;
+  TEST_ASSERT_TRUE(d.booted.marker);
+  TEST_ASSERT_TRUE(d.booted.decision.action == libraryboot::Action::Build);
+  TEST_ASSERT_TRUE(d.booted.ok);
+  TEST_ASSERT_FALSE(d.booted.noMemory);
+  TEST_ASSERT_TRUE(d.booted.loadedShort);
+  TEST_ASSERT_TRUE(d.booted.softStale);  // (the marker's compaction ran: the journal is in D now)
+  TEST_ASSERT_TRUE(d.booted.markerRemoved);
+  TEST_ASSERT_FALSE(fs.exists(LibraryUpdate::kMarker));
+  TEST_ASSERT_TRUE(d.upd->bootBuildShort());
+  TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
+  TEST_ASSERT_EQUAL_STRING(title.c_str(), titleOf(d.index, kFlac).c_str());
+  // This session: short again, no marker; gb! writes it.
+  Env shortOf;
+  shortOf.psramFree = shortOf.psramLargest = 1024;
+  d.update("the scan's end", shortOf);
+  TEST_ASSERT_TRUE(d.did(Do::Deferred));
+  TEST_ASSERT_TRUE(d.upd->last().markerSkipped);
+  TEST_ASSERT_FALSE(d.upd->last().markerWritten);
+  TEST_ASSERT_FALSE(fs.exists(LibraryUpdate::kMarker));
+  TEST_ASSERT_TRUE(d.index.ready());
+  d.update("gb!", Env(), true);
+  TEST_ASSERT_TRUE(d.upd->last().markerWritten);
+  TEST_ASSERT_TRUE(fs.exists(LibraryUpdate::kMarker));
+  // A boot with room: the marker's build, as ever.
+  Device again(fs, card);
+  again.boot();
+  TEST_ASSERT_TRUE(again.booted.built);
+  TEST_ASSERT_FALSE(again.booted.loadedShort);
+  TEST_ASSERT_TRUE(again.booted.markerRemoved);
+  TEST_ASSERT_FALSE(again.upd->bootBuildShort());
+  TEST_ASSERT_EQUAL_STRING(kFlacTitle, titleOf(again.index, kFlac).c_str());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_safe_point_and_the_memory_check);
@@ -1252,5 +1525,8 @@ int main(int, char**) {
   RUN_TEST(test_a_power_cut_at_each_stage);
   RUN_TEST(test_the_fence);
   RUN_TEST(test_the_steps_order_and_a_card_that_doesnt_answer);
+  RUN_TEST(test_a_card_that_fails_mid_build);
+  RUN_TEST(test_the_worker_s_task_before_the_fence);
+  RUN_TEST(test_the_marker_s_build_out_of_psram);
   return UNITY_END();
 }

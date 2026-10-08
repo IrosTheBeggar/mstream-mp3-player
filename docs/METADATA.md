@@ -56,8 +56,14 @@ worker under N7's scheduler, the sector cache under FatFs, the update step
 `device.txt`; its portable parts (`lib/core/LibraryBoot`, `CardRoot`,
 `CardJobs`) are host-tested, the rest built for `core2` and `core2-dio` and
 not flashed (3.8 says what it decided; 6.3.1 is the device batch's
-runbook). N12, `lib/core/LibraryUpdate`, makes the boot decision and the
-update step one portable state machine, host-tested like `IdlePolicy`:
+runbook). N11, a synthetic big card for L0 without the real library, is
+`tools/synthcard.py`: about 20,000 tiny tagged MP3, FLAC and Opus stubs in
+the shape of the user's library (aggregates only; every name made up),
+with its tests in `tools/test_synthcard.py` (the stubs read back by its
+own parsers and by the repo's, N6's TagScan among them); the user writes
+it to a card (6.3's C2). N12, `lib/core/LibraryUpdate`, makes the boot
+decision and the update step one portable state machine, host-tested like
+`IdlePolicy`:
 the build and the save are card-worker steps, the loop goes on behind a
 fence on its readers (Now Playing keeps its track's names, the lists say
 "Updating the library…"), the queue and Thumbs' pools are lent to the
@@ -2177,7 +2183,7 @@ labels; device times are to be measured in milestones L0-L5 (part 6).
 
 | `library.idx` | Records on the card | At boot | Then, in the background |
 |---|---|---|---|
-| v6, hard inputs match, and the build-at-boot marker `/.player/build.req` present (a build was deferred: 3.4.2) | any | Compact the journals if any. **Build from the records** behind the boot screen, on a fresh heap, as in the next row; the marker goes after the save. | The validation walk (3.2.3). |
+| v6, hard inputs match, and the build-at-boot marker `/.player/build.req` present (a build was deferred: 3.4.2) | any | Compact the journals if any. **Build from the records** behind the boot screen, on a fresh heap, as in the next row; the marker goes after the save. Out of PSRAM even here: **load it** as the next row does (stale, but a library), the marker goes, and that session's short memory checks don't write it again (as built: 3.9). | The validation walk (3.2.3). |
 | v6, hard inputs match, no marker | any | **Load it:** 1.8 MB, 1.1-1.5 s at 20k (ESTIMATED). No walk. | The validation walk (3.2.3). If the soft inputs differ (the scan went on after the last build), resume the scan; rebuild at its end. |
 | v6, the transfer's identity differs (a transfer happened, or `/.mstream` is gone or damaged) | T valid, or D only | Compact the journals if any (0-3 s). **Build from T (if valid) and D** behind the boot screen, a new T's listing standing in for the walk (2.9): about 7-9 s at 20k (ESTIMATED from UI-SPIKE's measured rates: 3.5-5 s of reads, 2.2-2.6 s of adds, about 1.3 s to finish), then the save. Without T, D's rows for files T covered turn Pending. | The walk confirms; files it finds changed go Pending; the scan reads the Pending files. |
 | an older rules version, v1-v5 (today's is v5), missing or corrupt | some | Build from the records. No walk. | The walk. |
@@ -3709,7 +3715,15 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   unchanged, and one more: `library.idx ... (library.tmp taken: a cut fell
   mid-save)`). The walk of a card with no records is the caller's
   (`Config::walk`: the firmware's VFS walk; `test_library_update` walks
-  FakeFat's tree).
+  FakeFat's tree). The marker's build out of PSRAM on the boot's fresh
+  heap (N10 left no library then, on every boot: the marker stayed, and
+  no update step could build it either), `library.idx` matching the card:
+  it is loaded as the Load row would (`Booted::loadedShort`), the marker
+  removed, and this session's short memory checks end their steps without
+  writing it again (`Step::markerSkipped`, no toast; `gb!` still writes
+  it). A build that met a read error (`Booted::readErrors`: the card?) is
+  saved with the journal's sequence `kJournalsLeftOut`, as one that left
+  records out: the next boot loads it soft-stale and rebuilds.
 - **The update step, pass by pass** (`update()` with the worker's, the
   jobs', the player's and the memory's state; `Out` says what to hold and
   what the loop does now, each once):
@@ -3717,29 +3731,55 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
      scan and new walks hold; a walk under way goes on to its end; the
      journals are compacted (the worker's Compact step; one that fails
      leaves the build to `tags.bin` alone, as N10's); with the worker
-     free, the card answers (`/music` exists, T and D open: a pulled card
-     fails the step here, `Do::Failed`, the index untouched), the safe
-     point holds, then the memory check (N10's, with Thumbs' pools counted
-     too: the index, the queue's entries and the pools, about 315 KB, go
-     before the build). Short, or `gb!`: the marker, `Do::Deferred`.
+     free, the safe point holds (a CPU speed's restart asked counts as
+     none: its pause would make one, and the restart would cut the build),
+     the worker's task is there (`Out::wantWorker`: `CardWorker::ensure()`
+     makes it, since it ends 3 s after its last step, and keeps it to the
+     build's hand-off; no internal RAM for its 6 KB stack and the step
+     waits here, the index as it is, never behind a fence whose build
+     can't start), the card answers (`/music` exists, T and D open: a
+     pulled card fails the step here, `Do::Failed`, the index untouched),
+     then the memory check (N10's, with Thumbs' pools counted too: the
+     index, the queue's entries and the pools, about 315 KB, go before the
+     build). Short, or `gb!`: the marker, `Do::Deferred` and the toast
+     (not after a boot whose own marker build ran short: above).
   2. **The fence** (`Do::Fence`, one pass, `main.cpp`'s `enterFence()`):
      the queue as it is kept for the loop (`Frozen`: its position, size,
      keys and versions, the sleep timer's last-of-queue and last-of-album);
      `QueueStore::remapBegin()` (`queue.txt` flushed, the queue's memory
-     given back, the player fenced); `Library::fence()` (the playing
-     track's names copied, the catalog without its index, `index()`
-     nullptr); Thumbs' pools lent; the UI's lists to their line; then
-     `CardTasks::fenceUp()`: the scan's View closed, its chunk out, its
-     memory back, and the old index cleared (`fencedUp()`; its track
-     table's block kept for the build, N10's `keepTrackBlock()`). No PSRAM
-     for the carry: `cantFence()`, deferred to the boot as a short PSRAM.
+     given back, the player fenced; a card that refuses `queue.txt`: the
+     queue's text in PSRAM instead, held through the build, so only up to
+     what the memory check had to spare, `LibraryUpdate::spare()`);
+     `Library::fence()` (the playing track's names copied, the catalog
+     without its index); Thumbs' pools lent; `CardTasks::fenceUp()`: the
+     scan's View closed, its chunk out, its memory back, and the old index
+     cleared (`fencedUp()`; its track table's block kept for the build,
+     N10's `keepTrackBlock()`; `index()` nullptr from here); then the UI's
+     lists to their line (after the clear: they count no rows, so the
+     "Updating the library…" line shows, not the old index's rows drawn
+     blank). The queue can't be carried (no PSRAM for the carry, or its
+     text over the spare): nothing is given back (`Carry::begin()` false,
+     the queue as it was), `cantFence()`, deferred to the boot as a short
+     PSRAM.
   3. **The build** (`Out::build`: ScanScheduler hands `Job::Build` at
      priority 1, before anything, a moving list included): on the worker,
      T and D opened there (their `FIL`s in PSRAM; the opens' 512 B
      long-name buffer on its stack), `LibraryBuilder` as N10 ran it, a T
      that fails at its end restarts from D alone (3.4.1) and is left out
      for the session, a card with no records walks `/music` through the
-     same VFS walk as the boot's, the inputs to save taken at its end.
+     same VFS walk as the boot's, the inputs to save taken at its end. A
+     read that fails (the four files watched: the walkers say `Why::Io`,
+     but D's rows and its folders' facts read on without a word, and a
+     builder that restarts without both says "no records") is the card's,
+     pulled or failing, not a file's checks: on D's files, or on T with no
+     whole build from D after it, the step fails (`Step::cardGone`,
+     `readErrors`: nothing walked, which on a pulled card gave an empty
+     library and "Library updated", nor saved, which after a glitch the
+     card came back from put a path-named index over `library.idx`; T not
+     marked bad; the next boot loads the last `library.idx`); on T with D
+     read whole, the build from D alone stands, T is tried again next
+     time, and the save marks it as records left out (the next boot loads
+     it soft-stale and its scan's end reads T again).
   4. **Live** (`Do::Live`, one pass, `leaveFence()`): the catalog's index
      back, `CardTasks::live()` (`lived()`: the index readable; the jobs
      start over with it; "Library updated"), `remapFinish()` (`queue.txt`
@@ -3756,7 +3796,11 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   input: a compaction asked meanwhile, `gr`'s or the journal's, runs
   after the save), and `Out::libraryWrite` holds IdlePolicy's
   `LibraryWrite`. ScanScheduler's `build`, `save` and `updating` inputs,
-  which N10 never set, are these.
+  which N10 never set, are these. A boot that loaded a soft-stale index
+  asks for the step at the first scan's end after its walk, even with
+  nothing to scan (`CardTasks::begin()`: N10's `scanOver_` started true,
+  so a card with no scan work, a transfer card after a cut mid-build say,
+  never rebuilt it).
 - **The fence's span** is `fencedUp()` to `lived()`: the pass that puts it
   up still reads the old index (the queue's flush names its paths, the
   sleep timer's last-of-album reads it), the pass that takes it down reads
@@ -3792,10 +3836,18 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   logged). With gapless on the next track joins as it would, and plays on.
 - **What waits** (`waitsForLibrary()`: a note, "Updating the library: a
   moment"): the UI's next, prev, shuffle and Shuffle all (the seek bar
-  shows no knob: the catalog has no path to ask), the console's `n`,
-  `p`, `l`, `i`, `b`, `q`, `R`, `G`, `g` and `j` (`g` and `j` until the
-  save's end: `gs` would wait for the worker's build); the CPU speed's
-  restart while `LibraryWrite` holds.
+  shows no knob: the catalog has no path to ask), the Queue tab's edits
+  (no Edit offered, its size being `Frozen`'s; a selection open at the
+  fence ends; the bar's Remove, Play next and Clear refused with the
+  note; `PlaybackController` refuses the queue's edits behind the fence
+  too: its Clear queue stopped the music, cleared nothing, and the queue
+  came back whole after), the console's `n`, `p`, `l`, `i`, `b`, `q`,
+  `R`, `G`, `g` and `j` (`g` and `j` until the save's end: `gs` would
+  wait for the worker's build); the CPU speed's restart while
+  `LibraryWrite` holds (`powerchoice::cpuRestartDue()`: it was asked
+  before the fence, the pause made the safe point, and it cut the build
+  3 s later; now it waits, and an update step asked meanwhile waits for
+  it).
 - **The safe point** is N10's, and a play waiting for the headphones
   isn't one (its start would need a path). The last seek's time is the
   machine's (`In::seekSeq`).
@@ -3826,18 +3878,25 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   +4,268 B in core2-dio (631,620 to 635,888), the app 2.49 to 2.50 MB
   (`firmware.bin` 2,606,016 to 2,619,520 B in core2), 42% of its slot;
   `iram_diet`, `cache_guard`, `flash_guard` and `version` pass in both.
+  The review's fixes, against 3ae7cb6 the same way: IRAM and internal
+  DRAM unchanged, flash `.text` +1,484 B (1,755,932 in both builds) and
+  `.rodata` +1,024 B in both (636,848 in core2), `firmware.bin` 2,622,240 B
+  in core2; every guard passes.
   PSRAM (from the code): `LibraryUpdate` and its step about 0.4 KB, the
-  held names about 1 KB, the carry about 0.1 KB; lent to the build and
-  given back: the queue's entries (up to 120 KB) and Thumbs' pools
-  (315,952 B).
+  held names about 1 KB, the carry about 0.1 KB, and when the card can't
+  take `queue.txt` the queue's text through the build (up to about 400 KB
+  for 5,000 long paths, only within `spare()`: the memory check counts
+  the queue's entries as freed, not this); lent to the build and given
+  back: the queue's entries (up to 120 KB) and Thumbs' pools (315,952 B).
 - **The card worker's stack (ESTIMATED from `-fstack-usage`; L4
   measures).** The build's deepest path is its views' sort at the end
   (`LibraryIndex::finish()`, `buildViews()` 640 B, `std::sort`'s
   introsort 112 B a level, at most about 30 levels at 20k before it turns
   to heapsort): about 2.7 KB typical, 4.5 KB at worst of the 6 KB with the
-  frames above it (`stepBuild()` 128, `buildIndex()` 208, the builder's
-  208, the task's); the merge's reads (a walker's 352 B, FatFs and the SD
-  driver below it) about 2 KB; the save about 1.5 KB (`save()` 368 B, a
+  frames above it (`stepBuild()` 128, `buildIndex()` 208 and since the
+  review about 80 B more for its four files' read watchers, the
+  builder's 208, the task's); the merge's reads (a walker's 352 B, FatFs
+  and the SD driver below it) about 2 KB; the save about 1.5 KB (`save()` 368 B, a
   rename's 640 B and FatFs's 512 B long-name buffer). Tight but under;
   `gs`'s least left after a build is L4's figure.
 - **The compaction's stack (found by this review).** The same build put
@@ -3852,7 +3911,7 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   firmware links are the console's (`gt`'s `mptg::check()` 3.8 KB, `gt`'s
   dump 1.3 KB: the loop's) and TagScan's 1.3 KB (the worker's scan, 3.3.4's
   budget).
-- **Proven on the host:** `test_library_update` (10 tests, like
+- **Proven on the host:** `test_library_update` (13 tests, like
   `test_idle_policy`: the scheduler, CardJobs on FakeFat's trees and the
   records and `library.idx` on CutFs, a worker whose steps take passes,
   the loop's catalog): the safe point and the memory check at their
@@ -3874,16 +3933,29 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   taken when the cut fell after its sync, no chain freed under another
   entry; the fence at every read and allocation of the build; the
   phases' order, LibraryWrite's span, and a pulled card failing before
-  the fence. `test_gapless_player` (4 more): every id renumbered behind
+  the fence; the review's three more: a card that fails while the build
+  reads it (pulled, or one read of D: nothing walked or saved, T not
+  marked bad, the next boot loads the last `library.idx`; one read of T:
+  built from D alone, saved soft-stale, the next boot's update reads T
+  again), the worker's task before the fence (no internal RAM: the step
+  waits, the index untouched), and the marker's build out of PSRAM at the
+  boot (loaded instead, the marker gone, not written again that
+  session; `gb!` writes it); and `spareOf()` at its edges.
+  `test_gapless_player` (4 more): every id renumbered behind
   the fence with the join after it kept (one play, no cut); a join heard
   inside the fence taken after it by its path; a track that ends inside
   the fence with nothing after it starting nothing (cued paused, or
-  stopped at the queue's end); only pause and resume acting inside it.
-  `test_queue` (the remap in two halves, through the file and through
-  memory), `test_thumbs` (the pools lent and back), `test_ui_library`
+  stopped at the queue's end); only pause and resume acting inside it,
+  the queue's edits refused. `test_queue` (the remap in two halves,
+  through the file and through memory, and a queue it can't carry: over
+  the spare, or no memory, nothing given back), `test_power_choices`
+  (the CPU restart waits for `LibraryWrite`), `test_thumbs` (the pools
+  lent and back), `test_ui_library`
   (the held copy; the Library row's and the fence's texts),
   `test_sleep_timer` (`rekey()`). Not on the host: the task, FatFs on the
-  card, the UI; 6.3.1's L4 lists what the device batch checks.
+  card, the UI, `CardTasks` (the soft-stale index at the scan's end, the
+  worker kept to the hand-off); 6.3.1's L4 lists what the device batch
+  checks.
 
 ---
 
@@ -4178,8 +4250,8 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 | N8 | **Built.** **`SectorCache`.** Optional: a host FatFs model (vendored FatFs on a RAM disk) counting sector reads per walk and per open on a 20k tree of the user's shape (part 7, U14: vendoring is a download; the user said yes). Both built (3.2.7) | 1 (+1) | LRU, bypass, write invalidation, a random model check (`test_sector_cache`); the model (`test_fat_model`, `tools/fatmodel.py`) checks metascan's 56 sectors per open before L0: 58.0 on N11's card, 3.5 with the cache's 256 sectors |
 | N9 | **Built.** **The catalog, the UI and the texts**: `TrackCatalog`, `LibraryPage` rows, `UiText`, `SleepTimer`'s `kLoose`, the console's `g*` commands (3.7) | 1.5-2 | `test_ui_library`, `test_sleep_timer` |
 | N10 | **Built.** **Firmware glue, built and not flashed** (3.8): the FatFs lister, the diskio wrapper, the card worker, streamed JPEG input, transfer thumbnails, `device.txt`; with them the boot of 3.2.2, the walk, the compactions and the scan under N7's scheduler, the status line and toasts, and a first update step on the loop | 2-3 | `pio run -e core2` and `core2-dio` with every guard (`cache_guard`, `flash_guard`); `test_card_jobs`: the boot's table, the root, the jobs on fake cards (a hand-filled card walked, scanned and built; a transfer card; a bad T; a full journal) |
-| N11 | **A synthetic big card** (`tools/`): about 20k tiny tagged MP3, FLAC and Opus stubs in the user's shape, with no real names, for L0 without the real library (the user writes it to a card) | 0.5-1 | Its own tag dump through N6 |
-| N12 | **Built.** **`LibraryUpdate`**, the boot decision and the update step as a portable state machine (3.2.2, 3.4.2): the decision table with `library.tmp` recovery and the build-at-boot marker, the safe point, the memory check and deferral, the build as a card-worker job with the scan and compaction paused until the save, the fence on the loop's readers, Thumbs' pools and the queue released and restored, the restart from D alone; and its glue in `Library.cpp`, `main.cpp` and the UI's "Updating library" state, built and not flashed (N10 built the decision table, the marker, a first safe point and memory check, and the update step on the loop: 3.8). With it the Output tab's Library row and its Rescan button (3.3.6), and the compaction's 13 KB stack frame cut to 1 KB (3.9) | 1.5-2.5 | `test_library_update`, like `test_idle_policy`: every row of 3.2.2, `library.tmp` after a cut, a deferral then a boot that builds, a track end near the safe point, a compaction request during a build, a bad T found at the end of a build, a power cut at every step (each way a card comes back), the fence at every read and allocation of the build; `test_gapless_player`: a track that ends inside the fence starts nothing, a join inside it is kept (3.9) |
+| N11 | **Built.** **A synthetic big card** (`tools/synthcard.py`): about 20k tiny tagged MP3, FLAC and Opus stubs in the user's shape, with no real names, for L0 without the real library (the user writes it to a card: 6.3's C2) | 0.5-1 | Its own tag dump through N6: `tools/test_synthcard.py` (27 tests: the shape statistics, determinism, stubs read back by its own parsers, by ffprobe and by the repo's through `tools/synthcard_probe.cpp`, N6's TagScan among them; `--copy-to`'s refusals) |
+| N12 | **Built.** **`LibraryUpdate`**, the boot decision and the update step as a portable state machine (3.2.2, 3.4.2): the decision table with `library.tmp` recovery and the build-at-boot marker, the safe point, the memory check and deferral, the build as a card-worker job with the scan and compaction paused until the save, the fence on the loop's readers, Thumbs' pools and the queue released and restored, the restart from D alone; and its glue in `Library.cpp`, `main.cpp` and the UI's "Updating library" state, built and not flashed (N10 built the decision table, the marker, a first safe point and memory check, and the update step on the loop: 3.8). With it the Output tab's Library row and its Rescan button (3.3.6), and the compaction's 13 KB stack frame cut to 1 KB (3.9) | 1.5-2.5 | `test_library_update`, like `test_idle_policy`: every row of 3.2.2, `library.tmp` after a cut, a deferral then a boot that builds, a track end near the safe point, a compaction request during a build, a bad T found at the end of a build, a power cut at every step (each way a card comes back), the fence at every read and allocation of the build, a card that fails mid-build, the worker's task before the fence, the marker's build out of PSRAM; `test_gapless_player`: a track that ends inside the fence starts nothing, a join inside it is kept, the queue's edits refused; `test_queue`: a queue that can't be carried (3.9) |
 | | **Total** | **about 21.5-29.5** | |
 
 **Order:** N1, then N2 and N3: they fix the shared format (which unblocks
@@ -4400,7 +4472,9 @@ figures through it are what L4 records.
 1. `gb` (or the scan's end): `[card] the update step is asked (gb)`, then
    `[lib] the update step (gb): the fence is up; the build on the card
    worker (the loop goes on); PSRAM free X B before, Y B now` (Y over X by
-   about the queue's, Thumbs' pools' 315 KB and the old index's 1.8 MB),
+   about the queue's entries (up to 120 KB), Thumbs' pools' 315 KB, the
+   scan's memory, and the old index less its track table, which is kept
+   for the build: about 1.15 MB of the index's 1.8 MB at 20k),
    then `[card] the update step (gb): the library is rebuilt (its save
    next, on the card worker)`, `[lib] the update step: built in N ms on
    the card worker (the loop live; the fence up F ms); PSRAM free X B
@@ -4416,7 +4490,9 @@ figures through it are what L4 records.
 2. The loop through the fence: touch, Now Playing's time and names (the
    held copy), the volume and pause and resume act; the lists say
    "Updating the library…" and the status line "Updating library…"; a
-   skip or a seek gets the note "Updating the library: a moment"; the
+   skip (next, prev, shuffle) gets the note "Updating the library: a
+   moment"; the Queue tab offers no Edit (a selection open at the fence
+   closes); the seek bar shows no knob; the
    `[stats]` line's `pass_max=` against the same without a build; 0
    underruns.
 3. The save: `[lib] the update step: library.idx saved in X ms on the

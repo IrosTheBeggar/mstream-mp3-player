@@ -326,7 +326,7 @@ bool Library::beginCard() {
   stats_.compactMs = b.compactMs;
   if (!b.walked) stats_.buildMs = b.buildMs;
   stats_.saveMs = b.saveMs;
-  stats_.fromCache = b.decision.action == libraryboot::Action::Load && b.ok;
+  stats_.fromCache = (b.decision.action == libraryboot::Action::Load && b.ok) || b.loadedShort;
   stats_.build = b.build;
   stats_.built = b.built;
   softStale_ = b.softStale;
@@ -346,6 +346,15 @@ bool Library::beginCard() {
                   update_->transferBad() ? "; T left out" : "", (unsigned)index_->memory().buildPeak);
   }
   if (b.journalsLeft) Serial.println("[lib] the journals couldn't be compacted first: built from tags.bin alone");
+  if (b.readErrors) {
+    Serial.println("[lib] a read of the card's records FAILED as they were built (the card?): what was built is "
+                   "saved as one that left records out (the next boot rebuilds it at its scan's end)");
+  }
+  if (b.loadedShort) {
+    Serial.printf("[lib] the build-at-boot marker's build ran out of PSRAM: library.idx (it matches the card) loaded "
+                  "instead, the marker %s; no update step this session writes it again for a short PSRAM\n",
+                  b.markerRemoved ? "removed" : "COULDN'T be removed");
+  }
   if (b.saveFailed) Serial.println("[lib] couldn't save library.idx (the next boot builds again)");
   if (b.noMemory && b.decision.action == libraryboot::Action::Load) {
     Serial.println("[lib] no PSRAM to load library.idx: no library (the built-in tracks still play)");
@@ -462,7 +471,8 @@ void Library::deferralWhy(char* why, size_t size) const {
     snprintf(why, size, "%u KB of PSRAM for a peak of about %u KB", (unsigned)(v.room / 1024),
              (unsigned)(v.peak / 1024));
   } else if (v.shortOf == LibraryUpdate::Short::Carry) {
-    snprintf(why, size, "no PSRAM to carry the queue across the build");
+    snprintf(why, size, "the queue can't be carried across the build (no PSRAM; or the card refused queue.txt and "
+                        "its text would leave the build short)");
   } else if (v.shortOf == LibraryUpdate::Short::Table) {
     const size_t table = static_cast<size_t>(update_->trackSlots()) * sizeof(LibraryIndex::Track);
     snprintf(why, size, "the track table %u KB fits neither the old one's block (%u KB) nor the largest free one (%u KB)",

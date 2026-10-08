@@ -3590,7 +3590,7 @@ void test_remap_in_two_halves_around_a_build_elsewhere() {
     });
     card.cantTake = memory != 0;
     queueremap::Carry carry(Meter::alloc, Meter::release);
-    carry.begin(q, saver, player, c, card);
+    TEST_ASSERT_TRUE(carry.begin(q, saver, player, c, card));
     TEST_ASSERT_TRUE(carry.carrying());
     TEST_ASSERT_TRUE(q.empty());
     TEST_ASSERT_EQUAL_INT(-1, q.current());
@@ -3623,6 +3623,74 @@ void test_remap_in_two_halves_around_a_build_elsewhere() {
     TEST_ASSERT_EQUAL_INT(plays, audio.plays);  // it plays on: nothing started
     TEST_ASSERT_TRUE(player.state() == PlayState::Playing);
     if (memory) TEST_ASSERT_EQUAL_size_t(q.memoryBytes(), Meter::live);  // the text given back
+  }
+}
+
+// The two halves when the card can't take queue.txt and the text can't be
+// held through the build: no memory for it, or more than the build can
+// spare (`textRoom`, LibraryUpdate::spare(): the build's memory check
+// didn't count it). begin() gives nothing back: the queue as it was, the
+// player not fenced, nothing held (the caller defers the build), where
+// run() would go on and clear the queue. Within `textRoom` the text is
+// held, as before.
+void test_remap_in_two_halves_that_cant_carry_the_queue() {
+  constexpr uint32_t kN = 120;
+  for (int kind = 0; kind < 3; ++kind) {  // 0: over textRoom; 1: no memory for the text; 2: within textRoom
+    Meter::reset();
+    LibraryIndex idx;
+    TEST_ASSERT_TRUE(buildSynth(idx, kN));
+    TrackCatalog c(&idx);
+    QueueModel q(Meter::alloc, Meter::release);
+    QuietBackend audio;
+    PlaybackController player(audio, q, c);
+    MemStore st;
+    QueueSaver saver(st, q, c);
+    const LibraryIndex::Span all = idx.allTracks();
+    TEST_ASSERT_TRUE(q.assign(all.ids, all.count, 0));
+    saver.loaded(4, true, 0);
+    player.play(30);
+    const std::vector<std::string> before = paths(q, c);
+    MemCard card(saver, st, player, [] { return false; });
+    card.cantTake = true;
+    // The text's size: what Via::Memory held in the test above.
+    size_t textBytes = 0;
+    {
+      struct Count : ByteSink {
+        size_t size = 0;
+        bool write(const void*, size_t n) override {
+          size += n;
+          return true;
+        }
+      } count;
+      TEST_ASSERT_TRUE(queuetext::write(q, c, saver.generation(), count));
+      textBytes = count.size;
+    }
+    TEST_ASSERT_TRUE(textBytes > 1000);
+    const size_t live = Meter::live;
+    queueremap::Carry carry(Meter::alloc, Meter::release);
+    if (kind == 1) Meter::ceiling = live + 16;
+    const size_t room = kind == 0 ? textBytes - 1 : kind == 1 ? SIZE_MAX : textBytes;
+    const bool ok = carry.begin(q, saver, player, c, card, room);
+    Meter::ceiling = SIZE_MAX;
+    if (kind == 2) {
+      TEST_ASSERT_TRUE(ok);
+      TEST_ASSERT_TRUE(carry.result().via == queueremap::Via::Memory);
+      TEST_ASSERT_EQUAL_size_t(textBytes, carry.result().textBytes);
+      TEST_ASSERT_TRUE(player.fenced());
+      TEST_ASSERT_TRUE(q.empty());
+      carry.finish(q, saver, player, c, card, false, 5000);
+      TEST_ASSERT_TRUE(paths(q, c) == before);
+      continue;
+    }
+    TEST_ASSERT_FALSE(ok);
+    TEST_ASSERT_FALSE(carry.carrying());
+    TEST_ASSERT_TRUE(carry.result().via == queueremap::Via::None);
+    TEST_ASSERT_FALSE(player.fenced());
+    TEST_ASSERT_TRUE(player.state() == PlayState::Playing);
+    TEST_ASSERT_EQUAL_UINT32(kN, q.size());
+    TEST_ASSERT_EQUAL_INT(30, q.current());
+    TEST_ASSERT_TRUE(paths(q, c) == before);
+    TEST_ASSERT_EQUAL_size_t(live, Meter::live);  // nothing held, nothing given back
   }
 }
 
@@ -3714,5 +3782,6 @@ int main(int, char**) {
   RUN_TEST(test_an_older_longer_queue_at_boot_is_written_again);
   RUN_TEST(test_remap_reads_a_kept_longer_file_in_its_window);
   RUN_TEST(test_remap_in_two_halves_around_a_build_elsewhere);
+  RUN_TEST(test_remap_in_two_halves_that_cant_carry_the_queue);
   return UNITY_END();
 }

@@ -129,7 +129,10 @@ Result run(QueueModel& queue, QueueSaver& saver, PlaybackController& player, con
 // (PlaybackController::setFenced(): it reads neither the queue nor the
 // catalog, and keeps a heard join for finish()); nothing else may touch the
 // queue, the saver (QueueStore pauses its passes) or the index. The memory
-// fallback's text, if the card couldn't take the file, is held here across.
+// fallback's text, if the card couldn't take the file, is held here across
+// (up to about 400 KB for a full queue of long paths), so it may hold only
+// what the caller can spare; unlike run(), a queue that can't be carried
+// isn't cleared: nothing is given back, and the caller doesn't build.
 class Carry {
 public:
   explicit Carry(MemorySink::AllocFn alloc = nullptr, MemorySink::FreeFn release = nullptr);
@@ -138,9 +141,13 @@ public:
   Carry& operator=(const Carry&) = delete;
 
   // Steps 1-2: the queue on the card (or as text here), its memory given
-  // back, the player fenced. What it freed: result().freedBytes.
-  void begin(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog,
-             Card& card);
+  // back, the player fenced. What it freed: result().freedBytes. False:
+  // the card can't take the file and its text doesn't fit (no memory for
+  // it, or over `textRoom`: what the rebuild can spare while it is held):
+  // Via::None, nothing given back, the player not fenced, the queue as it
+  // was (the caller doesn't start the rebuild).
+  bool begin(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog,
+             Card& card, size_t textRoom = SIZE_MAX);
   // Between begin() and finish().
   bool carrying() const { return carrying_; }
   // Step 4: read back through `card` (its file) or the text, the player
@@ -165,6 +172,12 @@ private:
   uint8_t* text_ = nullptr;
   size_t textSize_ = 0;
   void dropText();
+  // Step 1 (the route: the file, or the text up to `textRoom`), then step 2.
+  void carry(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog,
+             Card& card, size_t textRoom);
+  void lend(QueueModel& queue, PlaybackController& player);
+  friend Result run(QueueModel&, QueueSaver&, PlaybackController&, const TrackCatalog&, Card&, uint32_t,
+                    MemorySink::AllocFn, MemorySink::FreeFn);
 };
 
 }  // namespace queueremap

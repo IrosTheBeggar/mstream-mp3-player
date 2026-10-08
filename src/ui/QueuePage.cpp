@@ -161,7 +161,9 @@ Header QueuePage::header() const {
     if (s.queueSize == 0) {
       snprintf(sub, sizeof(headerSub_), "empty");
     } else {
-      h.right = "Edit";
+      // Behind the library update's fence the size is the queue's as it
+      // was (AppState's Frozen), its entries the build's: nothing to edit.
+      if (!s.libraryFenced) h.right = "Edit";
       // The long form if it fits beside the title and the pill (the room
       // drawHeader() leaves); else the position and the time (where the
       // queue is is what the header is for: spec §6.4); else the rest.
@@ -185,7 +187,8 @@ Header QueuePage::header() const {
 uint32_t QueuePage::headerSig() const {
   const AppState& s = ui_.state();
   uint32_t h = (static_cast<uint32_t>(s.current + 1) * 2654435761u) ^ (s.queueSize * 40503u) ^
-               (selecting_ ? selection_.count() * 97u + 1u : 0u) ^ (static_cast<uint32_t>(headerPressed_) << 29);
+               (selecting_ ? selection_.count() * 97u + 1u : 0u) ^ (static_cast<uint32_t>(headerPressed_) << 29) ^
+               (static_cast<uint32_t>(s.libraryFenced) << 28);
   for (const char* p = summaryLong_; *p; ++p) h = h * 31u + static_cast<unsigned char>(*p);
   for (const char* p = summaryMid_; *p; ++p) h = h * 31u + static_cast<unsigned char>(*p);
   return h;
@@ -199,6 +202,9 @@ void QueuePage::repaintHeader() {
 bool QueuePage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   const AppState& s = ui_.state();
   ListView& list = ui_.list();
+  // The library update's fence: the queue is the build's (its version
+  // frozen, so the selection would outlive it): selection mode ends.
+  if (selecting_ && s.libraryFenced) setSelecting(false);
   if (s.contentVersion != content_) {
     // Entries came or went: positions moved, so the selection starts over,
     // and an open row closes (it would be under another track now).
@@ -339,7 +345,17 @@ void QueuePage::selectAll() {
   repaintHeader();
 }
 
+// Behind the library update's fence the queue is the build's: the bar's
+// actions wait, as a skip does (PlaybackController refuses them anyway).
+bool QueuePage::fenced() {
+  if (!ui_.state().libraryFenced) return false;
+  setSelecting(false);
+  ui_.toast(uitext::kUpdatingWait, false);
+  return true;
+}
+
 void QueuePage::removeSelected() {
+  if (fenced()) return;
   const uint32_t n = selection_.count();
   if (n == 0) return;
   auto* positions = static_cast<uint32_t*>(psramAlloc(n * sizeof(uint32_t)));
@@ -359,6 +375,7 @@ void QueuePage::removeSelected() {
 }
 
 void QueuePage::playSelectedNext() {
+  if (fenced()) return;
   const uint32_t n = selection_.count();
   if (n == 0) return;
   auto* positions = static_cast<uint32_t*>(psramAlloc(n * sizeof(uint32_t)));
@@ -384,6 +401,7 @@ void QueuePage::playSelectedNext() {
 }
 
 void QueuePage::clearUpNext() {
+  if (fenced()) return;
   const uint32_t n = ui_.state().upNext;
   setSelecting(false);
   if (n == 0) {
@@ -398,6 +416,7 @@ void QueuePage::clearUpNext() {
 }
 
 void QueuePage::clearQueue() {
+  if (fenced()) return;
   const uint32_t n = ui_.state().queueSize;
   setSelecting(false);
   ui_.player().clearQueue();
@@ -496,7 +515,7 @@ void QueuePage::onEvent(const InputEvent& e) {
           ui_.tick();
           if (selecting_) {
             selectAll();
-          } else if (ui_.state().queueSize > 0) {
+          } else if (ui_.state().queueSize > 0 && !fenced()) {
             setSelecting(true);
           }
         } else if (hit == 3 && !selecting_) {

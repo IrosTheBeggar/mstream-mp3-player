@@ -359,11 +359,22 @@ mstream-queue 2 <entries> <current> <generation>
   back after the rebuild: `queueremap::run()`), not a copy in PSRAM. A
   queue that can't come back is left empty by `QueueModel::release()`,
   which keeps the mode. On the card the rebuild is METADATA.md's update
-  step (3.4.2, built in its N10: 3.8), which the card worker asks for after
-  the tag scan, a walk that found new files, or `gb`; it waits for a safe
-  point (nothing plays, or the playing track has 20 s left at least and no
-  seek came in the last 2 s) and runs on the loop until METADATA.md's N12
-  moves its build to the card worker.
+  step (3.4.2; 3.9 as built in its N12), which the card worker asks for
+  after the tag scan, a walk that found new files, or `gb`; it waits for a
+  safe point (nothing plays, or the playing track has 20 s left at least
+  and no seek came in the last 2 s). Its build runs on the card worker
+  while the loop goes on, so the remap comes in two halves around it
+  (`queueremap::Carry`, `QueueStore::remapBegin()` and `remapFinish()`):
+  before the build `queue.txt` is flushed and the queue's memory lent to
+  it (the queue empty, the player fenced: pause and resume act, the
+  queue's edits and the shuffle toggle refuse, a skip gets "Updating the
+  library: a moment"); after it the file is read back with the new ids,
+  the mode and ranks with it. A card that can't take `queue.txt` carries
+  the text in PSRAM through the build instead, only within what the build
+  can spare; past that, nothing is lent and the update waits for the next
+  boot (the queue is never cleared for it). A track that ended behind the
+  fence with nothing joined starts nothing after it: the next entry waits,
+  cued at 0:00, paused (docs/GAPLESS.md's risks).
 - **Why in the file and not NVS:** the mode is atomic with the ranks it
   needs, so a shuffled mode with a rankless file, or the reverse, can't
   happen. With no card there is no library to shuffle anyway.
