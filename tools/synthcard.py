@@ -42,15 +42,18 @@ Usage:
         in drive E:. It first prints the drive's label, size, free space and
         file system and what it will copy, and copies only with --yes. It
         refuses unless the drive is removable, FAT32 (the firmware reads no
-        other: README), not the system drive, has no \\music already, and
-        has room. The artist folders are created in the order the summary's
-        probes assume (Windows Explorer's name order), with a progress line.
-        Windows only.
+        other: README), not the system drive, empty (Windows' own System
+        Volume Information aside) and has room. It never deletes, overwrites
+        or formats anything. The artist folders are created in the order the
+        summary's probes assume (NTFS's name order, as Windows lists a
+        folder), with a progress line. Windows only.
 
 The summary's probes: three plain MP3 albums (no pictures, no covers) whose
-artist folders sit at entries 1, 353 and 705 of /music in creation order,
-so the open time by a folder's place in a 705-entry directory (L0's
-check) can be read from plays of the three (the runbook's start latency).
+artist folders sit at the entries of /music, in creation order, nearest 1,
+353 and 705 that hold such an album (1, 353 and 703 in the default tree:
+its last two entries are the made-up Katakana names), so the open time by
+a folder's place in a 705-entry directory (L0's check) can be read from
+plays of the three (the runbook's start latency).
 
 Its tests: python -m unittest discover -s tools -p "test_synthcard.py"
 (the shape statistics; the stubs parsed by ffprobe when it is installed,
@@ -360,7 +363,8 @@ def fold(s):
 
 
 def ntfs_key(s):
-    """Explorer's (NTFS's) name order: by the upper-cased UTF-16 units."""
+    """NTFS's name order (as Windows lists a folder; not Explorer's view, which
+    sorts numbers by value): by the upper-cased UTF-16 units."""
     return s.upper().encode("utf-16-be")
 
 
@@ -1134,7 +1138,7 @@ def _fill_loose(plan, rng, names, a, genre_w, year_w):
 
 def _probes(plan, rng):
     """L0's three probe albums: the artists at entries 1, 353 and 705 of
-    /music in creation order (Explorer's name order; the nearest one with a
+    /music in creation order (NTFS's name order; the nearest one with a
     plain MP3 album when that artist has none), each album first among the
     artist's candidates: no pictures, no covers, no other files, at depth 2."""
     order = sorted((a for a in plan.artists), key=lambda a: ntfs_key(a["folder"]))
@@ -2080,6 +2084,11 @@ def sample_files(plan, n, seed=0):
 # ---------------------------------------------------------------------------
 
 
+# What an empty card's root may hold: the folder Windows itself makes on a
+# drive it mounts (the indexer's volume id). Anything else there: refused.
+ROOT_IGNORED = {"system volume information"}
+
+
 class DriveProbe:
     """What Windows says about a drive. The tests replace it."""
 
@@ -2117,7 +2126,8 @@ class DriveProbe:
 
 def copy_to(out, drive, yes, probe=None, stream=sys.stdout):
     """--copy-to: checks, says what it would do, copies only with yes.
-    Returns 0 copied, 2 not asked (no --yes), raises SystemExit on a refusal."""
+    Returns 0 copied, 2 not asked (no --yes), raises SystemExit on a refusal:
+    a drive that isn't removable, FAT32 and empty is never written to."""
     probe = probe or DriveProbe()
     w = stream.write
     d = drive.strip()
@@ -2142,13 +2152,27 @@ def copy_to(out, drive, yes, probe=None, stream=sys.stdout):
         raise SystemExit(f"--copy-to {root}: {info['fs'] or 'no file system'}, not FAT32 (the firmware reads FAT32 "
                          f"only): refusing; the tool never formats a card")
     if os.path.exists(probe.target(root, "music")):
-        raise SystemExit(f"--copy-to {root}: the card already has \\music: refusing (this tool only fills a card "
-                         f"with no library on it; it never deletes)")
+        raise SystemExit(f"--copy-to {root}: the card already has \\music: refusing (this tool only fills an empty "
+                         f"card; it never deletes or formats)")
+    try:
+        present = sorted(n for n in os.listdir(probe.target(root, "")) if n.casefold() not in ROOT_IGNORED)
+    except OSError as e:
+        raise SystemExit(f"--copy-to {root}: its root can't be listed ({e}): refusing")
+    if present:
+        shown = ", ".join(present[:5]) + (f" and {len(present) - 5} more" if len(present) > 5 else "")
+        raise SystemExit(f"--copy-to {root}: the card isn't empty ({shown}): refusing (this tool only fills an empty "
+                         f"card; it never deletes or formats: empty or format it yourself first)")
     ops = copy_plan(out)
     files = [(rel, sz) for kind, rel, sz in ops if kind == "file"]
     dirs = [rel for kind, rel, _ in ops if kind == "dir"]
     c = info["cluster"] or 32768
-    need = sum((sz + c - 1) // c * c for _, sz in files) + len(dirs) * c
+    # Each folder's entries ("." and ".." and the LFN runs) in whole clusters: /music's 1,600-odd take two.
+    entries = {d: 2 for d in dirs}
+    for _, rel, _ in ops:
+        if "/" in rel:
+            parent, name = rel.rsplit("/", 1)
+            entries[parent] += lfn_entries(name)
+    need = sum((sz + c - 1) // c * c for _, sz in files) + sum((e * 32 + c - 1) // c * c for e in entries.values())
     w(f"would copy {len(files):,} files ({sum(sz for _, sz in files) / 1e6:.1f} MB; about {need / 1e6:.0f} MB on "
       f"this card's clusters) and {len(dirs):,} folders from {out} to {root}: \\music\\ "
       f"({summ.get('artists', 0)} artist folders, created in name order) and \\SYNTHCARD.TXT\n")
@@ -2187,7 +2211,7 @@ def copy_to(out, drive, yes, probe=None, stream=sys.stdout):
 
 def copy_plan(out):
     """The copy, in order: [("dir"|"file", rel, size)]. Pre-order, each
-    folder before what it holds, names in Explorer's order, so the card's
+    folder before what it holds, names in NTFS's order, so the card's
     directory entries come in the order the summary's FAT figures and the
     probes' positions assume."""
     ops = [("file", "SYNTHCARD.TXT", os.path.getsize(os.path.join(out, "SYNTHCARD.TXT")))] \
@@ -2237,7 +2261,8 @@ def main(argv=None):
     ap.add_argument("--opus-share", type=float, default=1.0, help="percent of the audio files as Opus (default 1)")
     ap.add_argument("--plan", action="store_true", help="the summary only (the sizes too): nothing written")
     ap.add_argument("--json", action="store_true", help="with --plan: the summary as JSON")
-    ap.add_argument("--copy-to", metavar="DRIVE", help="copy the built tree in --out to this card's root (E:\\)")
+    ap.add_argument("--copy-to", metavar="DRIVE", help="copy the built tree in --out to this card's root (E:\\): an "
+                    "empty, removable FAT32 drive only")
     ap.add_argument("--yes", action="store_true", help="with --copy-to: copy (without it, only say what it would do)")
     a = ap.parse_args(argv)
     if a.count < 50:

@@ -808,6 +808,43 @@ class TreeTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             sc.copy_to(self.out, "E:\\music", True, FakeProbe(card), io.StringIO())
 
+    def test_copy_refuses_a_card_that_isnt_empty(self):
+        # Anything at the root but Windows' own System Volume Information: refused, nothing written.
+        for what in ("DCIM", "photo.jpg", ".hidden", "$RECYCLE.BIN"):
+            card = os.path.join(self.tmp, "card_full_" + what.strip(".$"))
+            os.makedirs(card)
+            p = os.path.join(card, what)
+            if "." in what[1:]:
+                Path(p).write_bytes(b"keep me")
+            else:
+                os.makedirs(p)
+            rc, why, said = self.copy(FakeProbe(card), True)
+            self.assertEqual(rc, "refused", said)
+            self.assertIn("isn't empty", why)
+            self.assertIn(what, why)
+            self.assertEqual(os.listdir(card), [what])
+        card = os.path.join(self.tmp, "card_svi")
+        os.makedirs(os.path.join(card, "System Volume Information"))
+        rc, why, said = self.copy(FakeProbe(card), False)
+        self.assertEqual(rc, 2, why)
+        self.assertEqual(os.listdir(card), ["System Volume Information"])
+
+    def test_copy_needs_room_for_the_folders_too(self):
+        # A folder's entries take whole clusters, more than one when they don't fit (/music's 1,600-odd do not
+        # at 32 KB): with 512 B clusters, room for the files and one cluster a folder isn't enough.
+        class SmallClusters(FakeProbe):
+            def info(self, root):
+                return dict(FakeProbe.info(self, root), cluster=512)
+        card = os.path.join(self.tmp, "card_room")
+        os.makedirs(card)
+        ops = sc.copy_plan(self.out)
+        files = sum((sz + 511) // 512 * 512 for k, _, sz in ops if k == "file")
+        dirs = sum(1 for k, _, _ in ops if k == "dir")
+        rc, why, said = self.copy(SmallClusters(card, free=files + dirs * 512), True)
+        self.assertEqual(rc, "refused", said)
+        self.assertIn("free", why)
+        self.assertEqual(os.listdir(card), [])
+
     def test_copy_needs_yes_then_copies_in_order(self):
         card = os.path.join(self.tmp, "card_ok")
         os.makedirs(card)
@@ -825,7 +862,7 @@ class TreeTests(unittest.TestCase):
         self.assertEqual(files[0], "SYNTHCARD.TXT")
         for rel in files:
             self.assertTrue(os.path.isfile(sc.long_path(os.path.join(card, *rel.split("/")))), rel)
-        # The artist folders made in Explorer's name order: the order the probes' positions assume.
+        # The artist folders made in NTFS's name order: the order the probes' positions assume.
         artists = [r.split("/")[1] for k, r, _ in ops if k == "dir" and r.count("/") == 1]
         self.assertEqual(artists, sorted(artists, key=sc.ntfs_key))
         self.assertEqual(len(artists), self.summ["artists"])
