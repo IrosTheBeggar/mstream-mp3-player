@@ -862,7 +862,10 @@ chip's status, read once a second by `ScreenControl`: by
 Core2 v1.1 has no ACIN), and any other chip counts as USB, so a board it
 can't read never powers itself off; not read yet counts as USB); no Pair screen scan or pairing; no queue write under way
 or edit waiting (`QueueStore::busy()`; not a write that failed and waits its
-retry); no screen of its own (calibration, a spike tool). Anything that
+retry); no library write under way (`LibraryWrite`: the library's update
+step or a compaction of the tag records, docs/METADATA.md 3.3.9; nothing
+feeds it until that update step is in, since today's rebuild holds the
+loop); no screen of its own (calibration, a spike tool). Anything that
 blocks restarts the countdown when it goes, and so does any input: a touch
 or strip press (a waking one too), PWR, a headphone key that acted (not a
 Play ignored after the sleep timer's pause, a Pause while paused, a cue

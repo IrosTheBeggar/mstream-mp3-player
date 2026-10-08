@@ -2474,7 +2474,8 @@ internal free during a scan in Bluetooth mode.
 - **A new blocker, `LibraryWrite`**, next to `QueueWrite` in
   `IdlePolicy::Blocker`: it holds while a build saves `library.idx` or a
   compaction renames, so the power never goes mid-rename. It lasts
-  seconds.
+  seconds. (As built, it holds for the whole update step and the whole
+  compaction: 3.3.9.)
 
 #### 3.3.6 Progress, Rescan, the console
 
@@ -2699,6 +2700,100 @@ yet called: N7's scheduler and N10's card worker run it through a FatFs
   past 255 bytes were lost (`ape_long_value.mp3`). Under ASan and UBSan
   (a Linux container, not the native environment): `test_tag_scan` and
   120,000 scans of a structured fuzzer of generated tags, clean.
+
+#### 3.3.9 As built (N7)
+
+`lib/core/ScanScheduler` is 3.3.3-3.3.5's scheduler, host-tested
+(`test_scan_scheduler`) and not yet called: N10's card worker runs it and
+N12's `LibraryUpdate` asks it for the build and the save. `IdlePolicy` has
+the `LibraryWrite` blocker (`test_idle_policy`). What the code decided
+where 3.3.3-3.3.5 left room:
+
+- **The loop decides, the worker steps.** `update()` runs every loop
+  pass, where its inputs are, and names the one step the worker may take
+  now and at what priority, or why it waits. The worker takes only what it
+  is handed, one step at a time (a cover; the build; the save; a folder of
+  the walk, or a pass of a big one; a compaction; a file of the scan; the
+  DJNB check), so no two jobs overlap. Thumbs' `loop()` hands out covers
+  the same way today.
+- **The order**, when the worker is free: the update step's build
+  (priority 1; nothing here holds it, N12's safe point decides when it is
+  asked); then nothing while a list moves, covers included (Thumbs' rule);
+  a cover (priority 1, 0 while a list moves under it), whatever the audio;
+  the save; then one job at a time, the first with work: the walk, a
+  compaction, the scan, the DJNB check (priority 0). While the update step
+  holds the worker (its fence to the save's end) the last four wait;
+  covers don't. The scan's file comes from 3.3.3's sources in order: the
+  playing track, the queue's next 3, the 200 after them, the Library
+  tab's album or folder, the rest. The glue says which have a Pending file,
+  once D's to-do is known (after the boot's walk).
+- **The yields**, for the save and the background work, the first that
+  applies (its name is the console's `gs` line): the battery floor (the
+  scan and the DJNB check only); input in the last 0.5 s; playing with the
+  ring below half; an underrun in the last 30 s; a decode pass over 40 ms
+  in the last 5 s; a track change (from the decoder's end of file on the
+  heard track to 2 s after the next is first heard: a gapless join, a
+  start's or a skip's first audio); a seek, and the 2 s after; a pairing
+  or a link being set up, and the 3 s after a link event (up or down).
+  3.3.4's "an underrun since the last step" counts from the pass that sees
+  it, and each window from the last pass its cause was seen. Three are new:
+  input (a tap's redraw shares the SPI bus with the card); the long decode
+  pass (G6 is 30 ms, and the 0.7.0 soak measured passes up to 30.5 ms on
+  MP3 and 32.7 ms on FLAC with no scan, so over 40 ms the decoder waited
+  for the card); and the settle after a link event (A2DP's start, AVRCP's
+  handover). Each is a `Config` value (ESTIMATED; L3 and L5 measure).
+  Playing, and the battery above the floor, hold nothing.
+- **The battery floor (U13)** holds the scan and the DJNB check below 10%
+  off USB, and lets them go on USB or above 15%; 10-15%, or a reading not
+  known, keeps the state. The playing track's file is the scan's, so it
+  waits too. The walk, compactions, the save, covers and the build go on:
+  they are short, a cut is safe (N4), and they are what the listener sees.
+- **The build right after a walk (U11):** `buildAfterWalk(added, toScan,
+  msPerFile)` is true for 200 added files or more, or a scan estimated over
+  60 s; else the update step waits for the scan's end. It is asked only
+  after a walk that found changes. The estimate takes the scan's own mean
+  step once it has one (`stepDone()`), else 18 ms a file (3.3.4's 3-6 min
+  for 20k while playing, with the sector cache).
+- **Where the time went:** the time spent waiting on each reason, and each
+  job's steps, mean and longest step (`stepDone()`): `gs` and L3's figures.
+- **millis()'s wrap:** a window is cleared once it has passed, so an old
+  one can't come back 24.8 days later (a device on USB for weeks).
+- **The glue's inputs (N10):** `listMoving` is the page's `animating()`;
+  `input` is `stepIdle()`'s; the ring and the underruns are the backend's
+  `bufferedMsNow()` and `underrunsNow()`; `decodePassUs` needs a peak the
+  decode task raises after each pass and the loop takes (swapped to 0);
+  `decoderAtEnd` and `trackSeq` are the backend's join state and heard
+  token; `btSetup` is `pairingUnderWay()` or a page burst (BtLink Paging),
+  `btSeq` counts the link's ups and downs; `battery` is -1 until read
+  (main.cpp's snapshot clamps a failed read to 0 today, which would hold
+  the scan).
+- **`LibraryWrite`** (after `QueueWrite`, before `Busy`) holds for the
+  whole update step, from the queue's flush (3.4.2, step 1) to the end of
+  `library.idx`'s save, and for a whole compaction, not only for their
+  renames (3.3.5): the step gives the queue's memory to the build
+  (`QueueModel::release()`), so the idle power-off's `flushNow()` in the
+  middle would write the queue empty, and both are seconds of work. The
+  sleep timer turns the power off only through the idle countdown (it
+  pauses, and the countdown runs from the pause), so the blocker covers it
+  too. main.cpp doesn't feed it yet: today's `rebuildLibrary()` holds the
+  loop, so `stepIdle()` can't run during it; N12's update step and N10's
+  compaction set it.
+- **Proven on the host:** `test_scan_scheduler` holds each yield for
+  exactly its window after its cause, in its order; the battery's
+  hysteresis and the jobs it holds; covers first and the build before
+  everything; one step at a time and each step's priority; the jobs' and
+  the sources' order; a 60-day run across millis()'s wrap; and a random
+  session of 900,000 passes (about 5.6 simulated hours, across the wrap)
+  against a model of the rules written apart from the code (each cause as
+  the last time it was seen, in 64-bit time): every answer equal. Six
+  mutations of the rules (an off-by-one window, two yields swapped, the
+  floor's resume at 15%, the DJNB check unfloored, covers during a moving
+  list, no baseline for the counters) each fail it. `test_idle_policy`
+  adds `LibraryWrite` to every blocker's test and to the random run, and
+  runs the real `SleepTimer` into `IdlePolicy`: an update step at the end
+  of the countdown after the timer's pause holds the power-off until 20
+  min after it ends, an update step in the warning ends it, and one in
+  the release cancels it.
 
 ### 3.4 The builder
 
@@ -3299,7 +3394,7 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 | N4 | **Built.** **`TagStore`**: D with its device sections, `tags.jnl` (sorted chunks), `walk.jnl`, the streaming k-way compaction, recovery, the cut-rename rule (2.12.6) | 2-2.5 | A power cut injected at every write, sync, remove and rename, a rename cut between its two directory writes included; the compaction's PSRAM bounded whatever the journal holds |
 | N5 | **Built.** **`CardWalk`**: the lister interface, the canonical sort (with its passes for big folders), the digests, T's freshness (the skew, Doubtful entries through `walk.jnl`, qfp, confirmations) | 2-2.5 | Fake FAT trees: shuffled order, a 3,000-file folder through a small scratch, a retag at the same size, a renamed folder, a deleted album, every stamp shifted an hour, three files shifted, invalid and zero stamps |
 | N6 | **Built.** **`TagScan`, the production port** with part 5's rules; the synthetic parity corpus (2.17, item 3) | 3-4 | `test_tag_scan`: the corpus and the crafted edge files (`test/fixtures/tags`, `tools/tag_corpus.py`) field for field against the lofty reference (`tools/tagref`) at every buffer size; the anchors read back; generated files past the corpus's sizes and the read budget; truncation, mutation and generated fuzz passes (ASan only where a Linux toolchain is: a review ran one); a random differential against the reference (3.3.8) |
-| N7 | **`ScanScheduler`** and the `LibraryWrite` blocker | 1-1.5 | Like `test_idle_policy` |
+| N7 | **Built.** **`ScanScheduler`** and the `LibraryWrite` blocker | 1-1.5 | Like `test_idle_policy` (3.3.9) |
 | N8 | **`SectorCache`.** Optional: a host FatFs model (vendored FatFs on a RAM disk) counting sector reads per walk and per open on a 20k tree of the user's shape (part 7, U14: vendoring is a download; the user said yes) | 1 (+1) | LRU, bypass, write invalidation, a random model check; the model checks metascan's 56 sectors per open before L0 |
 | N9 | **The catalog, the UI and the texts**: `TrackCatalog`, `LibraryPage` rows, `UiText`, `SleepTimer`'s `kLoose`, the console's `g*` commands | 1.5-2 | `test_ui_library`, `test_sleep_timer` |
 | N10 | **Firmware glue, built and not flashed**: the FatFs lister, the diskio wrapper, the card worker, streamed JPEG input, transfer thumbnails, `device.txt` | 2-3 | `pio run -e core2` and `cache_guard` |

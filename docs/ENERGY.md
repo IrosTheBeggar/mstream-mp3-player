@@ -1562,7 +1562,11 @@ power-off on battery is still to do.** As built:
   `btSession.pairingUnderWay()`); the queue on its way to the card
   (`QueueStore::busy()`: a write under way, or an edit or move waiting its
   delay; not a write that failed and waits its retry, which with the card
-  gone would keep it on forever); a screen of its own (calibration, a spike
+  gone would keep it on forever); the library on its way to the card
+  (`LibraryWrite`: the library's update step, from the queue's flush to
+  `library.idx`'s save, or a compaction of `tags.bin`; METADATA.md 3.3.5
+  and 3.3.9, fed once that update step and the card worker are in, N10
+  and N12); a screen of its own (calibration, a spike
   tool). A blocker, or input, restarts the countdown from that pass. So it
   counts from the pause, the sleep timer's included (section 3, step 6):
   nothing special is needed for it.

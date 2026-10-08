@@ -4,7 +4,9 @@
 // Host tests for the idle power-off (IdlePolicy, docs/ENERGY.md item 4 and
 // step 5): the countdown for each choice, every condition that blocks it,
 // input restarting it, the 30 s warning, the release before the power
-// goes, and its texts. The queue's flushNow() is covered in test_queue.
+// goes, the library's update step and a compaction holding it off
+// (LibraryWrite, docs/METADATA.md 3.3.5) with the sleep timer's pause, and
+// its texts. The queue's flushNow() is covered in test_queue.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -12,6 +14,7 @@
 #include <cstring>
 
 #include "IdlePolicy.h"
+#include "SleepTimer.h"
 
 void setUp() {}
 void tearDown() {}
@@ -141,8 +144,9 @@ void test_each_choice_and_the_test_length() {
 // Every condition that blocks it: held over twice the length, nothing
 // happens; once it clears, the whole length again from that moment.
 void test_every_blocker_blocks_and_restarts_the_countdown() {
-  enum Kind { Playing, Waiting, Usb, Pairing, QueueWrite, Busy, kKinds };
-  const B expect[kKinds] = {B::Playing, B::Waiting, B::Usb, B::Pairing, B::QueueWrite, B::Busy};
+  enum Kind { Playing, Waiting, Usb, Pairing, QueueWrite, LibraryWrite, Busy, kKinds };
+  const B expect[kKinds] = {B::Playing,    B::Waiting,      B::Usb, B::Pairing,
+                            B::QueueWrite, B::LibraryWrite, B::Busy};
   for (int k = 0; k < kKinds; ++k) {
     IdlePolicy p;
     p.begin(0, 0);  // 10 min
@@ -152,6 +156,7 @@ void test_every_blocker_blocks_and_restarts_the_countdown() {
     in.usb = k == Usb;
     in.pairing = k == Pairing;
     in.queueWrite = k == QueueWrite;
+    in.libraryWrite = k == LibraryWrite;
     in.busy = k == Busy;
     Seen s = run(p, 0, 20 * kMin, in);
     TEST_ASSERT_EQUAL_INT(0, s.warns);
@@ -303,6 +308,73 @@ void test_a_new_choice_restarts() {
   TEST_ASSERT_EQUAL_UINT32(20 * kMin + 300, s2.shutdownAt);
 }
 
+// The library's update step, or a compaction (LibraryWrite: METADATA.md
+// 3.3.5): the power never goes while one runs, whatever phase the countdown
+// is in, and the sleep timer (which turns it off only through this
+// countdown) can't cut one either. The update step gives the queue's memory
+// to the build, so a shutdown's flush in the middle would write it empty.
+void test_a_library_write_holds_it_off() {
+  // In the warning: it ends, and the whole length counts from the write's end.
+  IdlePolicy p;
+  p.begin(0, 0);
+  run(p, 0, 10 * kMin - 10000, idle(0));
+  TEST_ASSERT_EQUAL(P::Warning, p.phase());
+  IdlePolicy::In in = idle(10 * kMin - 9900);
+  in.libraryWrite = true;
+  IdlePolicy::Out o = p.update(in);
+  TEST_ASSERT_TRUE(o.warnEnd);
+  TEST_ASSERT_EQUAL(B::LibraryWrite, p.blocker());
+  Seen s = run(p, 10 * kMin - 9800, 10 * kMin + 14000, in);  // the update step: 14 s past the end
+  TEST_ASSERT_EQUAL_INT(0, s.shutdowns);
+  TEST_ASSERT_EQUAL(P::Blocked, p.phase());
+  s = run(p, 10 * kMin + 14100, 21 * kMin, idle(0));
+  TEST_ASSERT_EQUAL_INT(1, s.shutdowns);
+  TEST_ASSERT_EQUAL_UINT32(20 * kMin + 14100, s.shutdownAt);
+  // In the release (the headphones going): cancelled, it stays on.
+  IdlePolicy r;
+  r.begin(0, 0);
+  IdlePolicy::In li = idle(0);
+  li.linked = true;
+  run(r, 0, 10 * kMin + 500, li);
+  TEST_ASSERT_EQUAL(P::Releasing, r.phase());
+  li.nowMs = 10 * kMin + 600;
+  li.libraryWrite = true;
+  o = r.update(li);
+  TEST_ASSERT_TRUE(o.cancelled);
+  TEST_ASSERT_FALSE(o.powerOff);
+  TEST_ASSERT_EQUAL(P::Blocked, r.phase());
+  // The sleep timer: 15 min of music, the fade, the pause; 20 min later the
+  // idle power-off would come, but an update step from 19:50 to 20:02 after
+  // the pause (a scan's end) holds it: the power goes 20 min after that.
+  IdlePolicy q;
+  q.begin(IdlePolicy::kDefaultChoice, 0);
+  SleepTimer timer;
+  timer.setTimed(15 * kMin, 0);
+  PlayState play = PlayState::Playing;
+  uint32_t pausedAt = 0, offAt = 0, writeFrom = 0, writeTo = 0;
+  for (uint32_t t = 0; t <= 60 * kMin && !offAt; t += 100) {
+    SleepTimer::In st;
+    st.nowMs = t;
+    st.play = play;
+    const SleepTimer::Out so = timer.update(st);
+    if (so.pauseNow && play == PlayState::Playing) {
+      play = PlayState::Paused;  // the player's pauseByTimer()
+      pausedAt = t;
+      writeFrom = t + 20 * kMin - 10000;
+      writeTo = t + 20 * kMin + 2000;
+    }
+    IdlePolicy::In ii = idle(t);
+    ii.play = play;
+    ii.libraryWrite = pausedAt && t >= writeFrom && t < writeTo;
+    const IdlePolicy::Out io = q.update(ii);
+    if (ii.libraryWrite) TEST_ASSERT_FALSE(io.shutdown || io.powerOff);
+    if (io.powerOff) offAt = t;
+  }
+  TEST_ASSERT_TRUE(pausedAt >= 15 * kMin + SleepTimer::kFadeMs);
+  TEST_ASSERT_TRUE(pausedAt < 15 * kMin + SleepTimer::kFadeMs + 1000);
+  TEST_ASSERT_EQUAL_UINT32(writeTo + 20 * kMin + 100, offAt);  // the shutdown at its end + 20 min, off at the next pass
+}
+
 // A random run: never a shutdown while anything blocks or since an input
 // less than the length ago; always one once idle that long.
 void test_random_never_off_while_blocked_or_touched() {
@@ -319,7 +391,8 @@ void test_random_never_off_while_blocked_or_touched() {
     in.usb = (t / 600000) % 3 == 1;
     in.play = (t / 450000) % 4 == 2 ? PlayState::Playing : PlayState::Paused;
     in.queueWrite = r >= 4 && r < 6;
-    const bool blocked = in.usb || in.play == PlayState::Playing || in.queueWrite;
+    in.libraryWrite = (t / 50000) % 37 == 5;  // an update step's 50 s now and then
+    const bool blocked = in.usb || in.play == PlayState::Playing || in.queueWrite || in.libraryWrite;
     if (blocked || in.input || wasBlocked) quietSince = t;
     wasBlocked = blocked;
     const IdlePolicy::Out o = p.update(in);
@@ -346,6 +419,7 @@ void test_texts() {
   IdlePolicy::offText(45000, b, sizeof(b));
   TEST_ASSERT_EQUAL_STRING("Turned off after 45 s idle", b);
   TEST_ASSERT_EQUAL_STRING("on USB power", IdlePolicy::blockerName(B::Usb));
+  TEST_ASSERT_EQUAL_STRING("the library is being updated", IdlePolicy::blockerName(B::LibraryWrite));
   TEST_ASSERT_EQUAL_STRING("warning", IdlePolicy::phaseName(P::Warning));
 }
 
@@ -360,6 +434,7 @@ int main(int, char**) {
   RUN_TEST(test_the_release_waits_for_the_headphones_and_can_be_cancelled);
   RUN_TEST(test_it_counts_from_the_pause);
   RUN_TEST(test_a_new_choice_restarts);
+  RUN_TEST(test_a_library_write_holds_it_off);
   RUN_TEST(test_random_never_off_while_blocked_or_touched);
   RUN_TEST(test_texts);
   return UNITY_END();
