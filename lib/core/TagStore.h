@@ -51,12 +51,17 @@
 //              sequence when it began), then at most two sorted runs of CRC'd
 //              blocks, each run closed by an End block that carries T's skew:
 //              run 1 the walk's File, Gone, Doubtful and Folder entries, run 2
-//              the doubtful files' resolutions. A run without its End is
-//              dropped: a walk cut short in run 1 is walked again; cut in
-//              run 2, its run 1's rows stand. DHDR takes the walk's commit
-//              and skew from a whole walk only (run 2 closed), so after a
-//              cut the next boot walks against T again and settles the
-//              doubts.
+//              the doubtful files' resolutions (its End says whether one
+//              couldn't be settled: a qfp read failed). A run without its
+//              End is dropped: a walk cut short in run 1 is walked again; cut
+//              in run 2, its run 1's rows stand. DHDR takes the walk's commit
+//              and skew from a whole walk whose doubts were all settled; a
+//              walk that left one unsettled (run 1 alone with a doubt, or a
+//              qfp read that failed) leaves DHDR unwalked, so the next boot's
+//              walk is a first one: it merges every folder against T and
+//              settles the doubts again (a walk at the same commit would skip
+//              the folders whose rows run 1 already gave, and never ask T
+//              about them).
 //   tags.tmp   The compaction's output, renamed over tags.bin.
 //   hidx.tmp   The compaction's scratch: HIDX's pairs before their sort.
 //   tags.xl1.. Twins (2.12.6): a tags.tmp that shared tags.bin's cluster
@@ -471,8 +476,11 @@ public:
   bool doubt(const char* rel, size_t len, const Doubt& d);
   bool folder(const char* rel, size_t len, const FolderFacts& facts);
   bool folderGone(const char* rel, size_t len);
-  // Closes the current run (1, then 2), with T's skew as the walk then has it.
-  bool endRun(int32_t skew);
+  // Closes the current run (1, then 2), with T's skew as the walk then has
+  // it. `unsettled` (run 2): a doubt couldn't be settled (its qfp read
+  // failed), so DHDR doesn't take the walk's commit: the next walk asks T
+  // again.
+  bool endRun(int32_t skew, bool unsettled = false);
   // Done (closes the file; a run left open is dropped, as a cut would).
   bool finish();
   // The walk failed: nothing of it counts (walk.jnl removed).
@@ -491,8 +499,9 @@ private:
   bool flush();  // the block being built, to the card
   bool ensureFile();
   bool writeBlock(uint8_t type, const uint8_t* payload, uint32_t bytes, uint32_t count);
-  bool writeEnd(uint32_t run, int32_t skew, uint32_t count);
+  bool writeEnd(uint32_t run, int32_t skew, uint32_t count, uint32_t flags = 0);
   bool sameAsDevice(int32_t skew) const;
+  bool settles_ = false;  // run 1 holds a doubt to settle
   class TagStore* store_ = nullptr;
   File* file_ = nullptr;
   Identity id_;
@@ -601,6 +610,9 @@ public:
   uint32_t chunkCount() const { return chunkN_; }
   uint32_t journalBytes() const { return jnlEnd_; }
   bool hasWalk() const { return walkRuns_ > 0; }
+  // The walk to merge leaves a doubt unsettled (its run 1 alone, or a qfp
+  // read that failed): the compaction leaves DHDR unwalked.
+  bool walkUnsettled() const { return walkRuns_ > 0 && walkUnsettled_; }
   bool hasJournals() const { return chunkN_ > 0 || walkRuns_ > 0; }
   // The journal asks for a compaction (Config::compactBytes, or maxChunks
   // reached), or D was read by another parser.
@@ -680,7 +692,7 @@ private:
   bool beginMerge(Merge& m, uint8_t* arena, size_t arenaBytes, bool useBin, uint32_t epoch);
   void release(void* p);
   void walkDone(uint32_t runs, const uint32_t* start, const uint32_t* end, int32_t skew, const Identity& id,
-                uint32_t seq);
+                uint32_t seq, bool unsettled);
 
   Fs& fs_;
   Config cfg_;
@@ -703,6 +715,7 @@ private:
   uint32_t walkSeq_ = 0;  // tags.jnl's last sequence when the walk began
   Identity walkId_;
   int32_t walkSkew_ = 0;
+  bool walkUnsettled_ = false;  // the walk merged so far leaves a doubt unsettled (run 1 alone with one, or run 2's End)
   bool walking_ = false;
 };
 

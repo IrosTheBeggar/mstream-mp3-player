@@ -262,9 +262,44 @@ void test_capped_texts() {
   TEST_ASSERT_EQUAL_STRING("Added 37 of", cappedText(Capped::Add, 37, 300, tiny, sizeof(tiny)));
 }
 
+// An add the full queue refuses changes nothing: its note keeps the Undo
+// (and the View) of the toast it covers, so the Play all that filled the
+// queue can still be undone from the screen (QUEUE-MODES.md 15.5).
+void test_a_refusal_keeps_the_last_undo() {
+  std::vector<uint32_t> all(6000);
+  for (uint32_t i = 0; i < all.size(); ++i) all[i] = i;
+  QueueModel q;
+  TEST_ASSERT_TRUE(q.replace(all.data(), static_cast<uint32_t>(all.size()), QueueModel::kAnyStart, false));
+  TEST_ASSERT_EQUAL_UINT32(0, q.room());
+  const uint32_t one = 7;
+  TEST_ASSERT_FALSE(q.insertNext(&one, 1));  // refused: nothing changes
+  TEST_ASSERT_TRUE(q.undoable() == QueueModel::Edit::Replace);
+  // Over "Playing 5,000 of 6,000" (Undo): the note keeps its Undo.
+  ToastButtons k = keptByRefusal(true, true, false, QueueModel::kNone, q.undoable());
+  TEST_ASSERT_TRUE(k.undo);
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, k.viewKey);
+  // Over an add's toast (Undo, View): both.
+  k = keptByRefusal(true, true, true, 42, q.undoable());
+  TEST_ASSERT_TRUE(k.undo);
+  TEST_ASSERT_EQUAL_UINT32(42, k.viewKey);
+  // No toast up (it went, and its undo with it), or one without buttons:
+  // a plain note.
+  k = keptByRefusal(false, true, true, 42, q.undoable());
+  TEST_ASSERT_FALSE(k.undo);
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, k.viewKey);
+  k = keptByRefusal(true, false, false, 42, q.undoable());
+  TEST_ASSERT_FALSE(k.undo);
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, k.viewKey);
+  // Nothing left to undo (undone since): no Undo.
+  TEST_ASSERT_TRUE(q.undo());
+  k = keptByRefusal(true, true, false, QueueModel::kNone, q.undoable());
+  TEST_ASSERT_FALSE(k.undo);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_capped_texts);
+  RUN_TEST(test_a_refusal_keeps_the_last_undo);
   RUN_TEST(test_durations_are_learned_per_track);
   RUN_TEST(test_up_next_time_adds_what_is_known);
   RUN_TEST(test_summary_texts);

@@ -118,6 +118,8 @@ struct State {
   ts::DeviceHeader header;  // D's after the next compaction
   bool walkPending = false;
   ts::DeviceHeader walk;     // the walk to merge
+  bool walkUnsettled = false;  // a walk's run 1 alone to merge, a doubt in it: D unwalked after it
+  bool walkSettles = false;    // the walk to merge has a doubt to settle in its run 1
 };
 
 mptg::Record bare(uint32_t size, uint32_t fatTime, uint64_t qfp = 0) {
@@ -373,9 +375,14 @@ bool walk(ts::TagStore& st, State& m, const ts::Identity& id, int32_t skew, std:
   m.walk.walked = true;
   m.walk.walk = id;
   m.walk.skew = skew;
+  m.walkSettles = false;
+  for (const WOp& o : run1) m.walkSettles = m.walkSettles || (o.kind == WOp::Doubt && o.doubt.settle);
   if (gMid && !run2.empty()) {
     *gMid = m;  // run 1 alone: its rows, not its commit (DHDR waits for a whole walk)
     gMid->walkPending = false;
+    // With a doubt to settle in it, DHDR unwalked (the next walk asks T
+    // again); else as it was.
+    for (const WOp& o : run1) gMid->walkUnsettled = gMid->walkUnsettled || (o.kind == WOp::Doubt && o.doubt.settle);
   }
   applyWalk(m, run2);
   m.walkPending = true;
@@ -393,7 +400,10 @@ void compacted(State& m, bool rescan, uint16_t parserChanged = 0) {
     m.header.walk = m.walk.walk;
     m.header.skew = m.walk.skew;
     m.walkPending = false;
+  } else if (m.walkUnsettled) {
+    m.header.walked = false;
   }
+  m.walkUnsettled = false;
   if (rescan) ++m.header.epoch;
   if (rescan || parserChanged) {
     for (auto& kv : m.files) {
@@ -1283,10 +1293,26 @@ void recoverAndFinish(CutFs& card, const Run& r, size_t i, const char* label) {
   // The journals into D: the same rows, D whole.
   if (m.walkPending && !st.hasWalk()) {
     // The cut compaction merged the walk (its walk.jnl left behind, stale).
-    m.header.walked = true;
-    m.header.walk = m.walk.walk;
-    m.header.skew = m.walk.skew;
+    // Its run 1 alone with a doubt to settle leaves the same rows when run 2
+    // changed none, and D unwalked.
+    if (m.walkSettles && !st.device().header.walked) {
+      m.header.walked = false;
+    } else {
+      m.header.walked = true;
+      m.header.walk = m.walk.walk;
+      m.header.skew = m.walk.skew;
+    }
     m.walkPending = false;
+  }
+  if (m.walkUnsettled && !st.hasWalk()) {
+    m.header.walked = false;  // ... its run 1 alone: D unwalked
+    m.walkUnsettled = false;
+  }
+  if (m.walkPending && st.walkUnsettled()) {
+    // Run 1 alone is on the card, its rows the whole walk's (run 2 changed
+    // none): merged, it leaves D unwalked.
+    m.walkPending = false;
+    m.walkUnsettled = true;
   }
   if (st.hasJournals() || !st.device().present) {
     ts::TagStore::Compacted c = st.compact();
@@ -1329,6 +1355,7 @@ void test_power_cut_at_every_step() {
       TEST_ASSERT_TRUE(fs.dead);
       TEST_ASSERT_TRUE(fs.violations.empty());
     }
+    TEST_ASSERT_EQUAL_UINT32(0, fs.openNow);  // every file closed, the one whose write the cut failed too
     for (Variant v : {Variant::InOrder, Variant::LoseUnsynced, Variant::Torn}) {
       CutFs card = fs.reboot(v);
       char label[96];

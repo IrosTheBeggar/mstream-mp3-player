@@ -505,6 +505,22 @@ void Ui::toast(const char* text, bool undo, uint32_t viewKey) {
                 viewKey != QueueModel::kNone ? " (View)" : "");
 }
 
+void Ui::refuse(const char* text) {
+  const queueview::ToastButtons keep =
+      queueview::keptByRefusal(toast_.up(), toast_.undo(), toast_.view(), viewKey_, queue_.undoable());
+  if (!started_ || suspended_) {
+    Serial.printf("[ui] toast not shown (the UI isn't on screen): %s\n", text);
+    return;
+  }
+  // Not toast(): the View kept was noted as an add when it was offered.
+  viewKey_ = keep.viewKey;
+  const int was = toast_.bottom();
+  toast_.show(text, keep.undo, keep.viewKey != QueueModel::kNone, accent(), nowMs_);
+  uncover(was);
+  Serial.printf("[ui] toast: %s%s%s (refused: the last toast's buttons kept)\n", text, keep.undo ? " (Undo)" : "",
+                keep.viewKey != QueueModel::kNone ? " (View)" : "");
+}
+
 void Ui::warn(const char* text) {
   // (As toast(): the pocket guard's note for a B click while the
   // calibration is up drew over it.)

@@ -2927,7 +2927,7 @@ its opposite; only `Pcb` is saved):
 | `Pd<ms>` | the loop's idle delay while nothing animates (1-100) | `Pd0` the UI's own (~5 ms); never while a list moves or the Dance tab is up |
 | `Pk0` / `Pk1` | the dance beat tracker (and so the outputs' taps) | the taps are on only while the Dance tab is up and the tracker is on |
 | `Pr0` / `Pr1` | the background Bluetooth search: rest now / a burst again | stays connectable; `link=resting`, `bg=resting`; a connect, the Pair screen or a play waiting for the headphones starts a burst |
-| `Pz` | plays `tone:silence` next | an hour of zeros: the output runs at its full rate (SBC over Bluetooth), nothing is heard |
+| `Pz` | plays `tone:silence` next | an hour of zeros: the output runs at its full rate (SBC over Bluetooth), nothing is heard; a full queue (its cap of 5,000, docs/QUEUE-MODES.md section 15) can't take it, so it plays as the queue then, and `qu` puts the listener's back |
 
 `tone:silence` is a built-in track (TrackCatalog) that isn't queued with
 the others: only `Pz` plays it. Nor are the rate converter's test tracks

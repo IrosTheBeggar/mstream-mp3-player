@@ -1572,6 +1572,7 @@ comes after it; what played before goes), moved back so the window stays
 | An add to an empty queue | its first 5,000, laid out as a Play from its first (as ever) |
 | `assign()`: the boot's restore, its default queue (`queueEverything()`: the library's first 5,000), a remap's re-read | `window(n, current)`, its ranks with it |
 | Remove, Play next in edit mode (`moveNext()`), Clear up next, Clear, a toggle, Undo | never grow the queue |
+| The console's `Pz` (PowerLab: an hour of `tone:silence` next, for power measurements) | a full queue can't take it: it plays as the queue (`playNow()`), and `qu` puts the listener's back (2026-10-07 review: before, `Pz` said only "couldn't queue it", and a full queue is the default after the first boot on a big card) |
 
 - **The undo is kept** whatever the size: the snapshot is at most 60 KB.
   The Undo of a Play past the cap puts back the queue (and the mode) it
@@ -1641,7 +1642,7 @@ counts grouped by thousands by `queueview::grouped()` and put in by
 
 | When | Toast | Buttons |
 |---|---|---|
-| Play next or + Queue with the queue full | "The queue holds 5,000 tracks" (one line, Body) | none |
+| Play next or + Queue with the queue full | "The queue holds 5,000 tracks" (one line, Body) | the Undo and View of the toast it covers, if one was up (`Ui::refuse()`, `queueview::keptByRefusal()`): nothing changed, so the last edit's undo stays, and its button with it. Most often that is the Play all or Shuffle all that filled the queue moments before; replaced by a note without buttons, its Undo was out of reach (2026-10-07 review) |
 | An add that only partly fit | "Added 37 of 300: the queue holds 5,000 tracks", "10 of 12 play next: the queue holds 5,000 tracks" (two lines: the what in Small over the why, Small beside View) | Undo, View |
 | A container's Play past the cap | "Playing 5,000 of 6,021: the queue holds 5,000 tracks" (the why in Body) | Undo |
 | Shuffle all past the cap | "Shuffling 5,000 of 19,412: the queue holds 5,000 tracks" | Undo |
@@ -1654,7 +1655,9 @@ before. The Folders root's "Play all N" still counts the whole card.
 Log lines:
 
 - `[ui] library: add 300 tracks (<album>): 37 of them (the queue holds
-  5000)`; `... : REFUSED, the queue is full (5000)`; a Play past it:
+  5000)`; `... : REFUSED, the queue is full (5000)`, then `[ui] toast: The
+  queue holds 5,000 tracks (Undo) (refused: the last toast's buttons
+  kept)`; a Play past it:
   `[ui] library: play 6021 tracks (everything): 5000 of them (the queue
   holds 5000)`.
 - `[ui] shuffle all: 19412 tracks, a random 5000 of them (the queue holds
@@ -1709,7 +1712,9 @@ huge header (the window's block, then the line count).
 **test_playback:** `test_the_queue_cap_through_the_player` (a Play of
 6,000 plays its track from the window; refused adds change nothing that
 plays). **test_ui_queue:** `test_capped_texts` (`grouped()`,
-`cappedText()`, short buffers). **test_ui_library:**
+`cappedText()`, short buffers); `test_a_refusal_keeps_the_last_undo` (the
+note over a Play all's toast keeps its Undo, over an add's its Undo and
+View; none with no toast up, or nothing left to undo). **test_ui_library:**
 `test_queue_cap_texts_fit` (the refusal on one line; each cut-short text
 on two lines, each in its room, at 99,999 tracks).
 

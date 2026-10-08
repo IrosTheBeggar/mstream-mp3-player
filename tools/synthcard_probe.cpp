@@ -153,7 +153,10 @@ std::string tags(const std::vector<uint8_t>& d, tagscan::Kind kind) {
                                        "genre",     "composer",        "titleSort",  "artistSort",
                                        "albumSort", "albumArtistSort", "mbAlbumId",  "mbRecordingId"};
   std::string o = "\"tagscan\":{\"result\":\"";
-  o += r == tagscan::Result::Ok ? "ok" : r == tagscan::Result::Unreadable ? "unreadable" : "readerror";
+  o += r == tagscan::Result::Ok           ? "ok"
+       : r == tagscan::Result::Unreadable ? "unreadable"
+       : r == tagscan::Result::Partial    ? "partial"
+                                          : "readerror";
   o += "\"";
   for (uint32_t f = 0; f < cardcontract::kRunFields; ++f) {
     const char* v = rec.field(f);

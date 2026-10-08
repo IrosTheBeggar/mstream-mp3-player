@@ -978,8 +978,11 @@ bool CardWalk::settleOne(const Doubt& d, size_t len, bool* read) {
       c_.lister->closeFile();
     }
     if (!ok) {
+      // Not settled: the row without T for now, and the walk's summary says
+      // so (the next walk asks T again: Summary::unsettled).
       ++r_.qfpFailed;
       ++r_.notTransfer;
+      r_.summary.unsettled = true;
     } else {
       row.qfp = q;
       if (q == d.transferQfp) {

@@ -762,7 +762,9 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
                 static_cast<unsigned long>(span.count), span.count == 1 ? "" : "s", span.count == 1 ? what : name,
                 outcome);
   if (full) {
-    ui_.toast(uitext::kQueueFull, false);
+    // Nothing changed: the Undo (and View) the last toast offered stay on
+    // the note (docs/QUEUE-MODES.md 15.5).
+    ui_.refuse(uitext::kQueueFull);
     return;
   }
   const uint32_t viewKey = ok && action != 0 ? q.keyAt(addedAt) : QueueModel::kNone;

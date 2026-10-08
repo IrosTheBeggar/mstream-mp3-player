@@ -32,7 +32,13 @@ built the same way. N5, the validation walk, is in `lib/core/CardWalk`,
 host-tested on fake FAT trees (3.2.6 says what it decided); N10 and N12
 bring it into the firmware. N4, the device's own records and their journals, is
 in `lib/core/TagStore`, a power cut tested at every step (3.3.7 says
-what it decided). Part 2, the card
+what it decided). N6, the device's tag reader, is in `lib/core/TagScan`
+and `TagRules`, checked field for field against a reference reader
+(`tools/tagref`, lofty 0.25 with mStream's rules) on the synthetic parity
+corpus of 2.17 item 3 (`test/fixtures/tags`, made by
+`tools/tag_corpus.py`), its picture anchors read back, its read budget
+and its fuzz passes host-tested (3.3.8 says what it decided); core2
+builds with it, and N7 and N10 will call it. Part 2, the card
 contract, is a **PROPOSAL (v1)** for the transfer software, whose own
 design is still being worked on in mstream-terminal; it is written so
 that side can implement it without reading the player's code, and every
@@ -2313,7 +2319,11 @@ where 3.2.3 left room:
   lets the device fill). A later commit whose T has the same fingerprint
   for a doubtful file settles it without a read, so a PC that converts
   stamps unevenly costs 3.2.5's 2.7 min of checks once per card, not once
-  per commit.
+  per commit. A qfp read that fails leaves the file's row without T and
+  says so in the walk's summary (`Summary::unsettled`): D doesn't take
+  the walk's commit (3.3.7), so the next boot's walk is a first one and
+  reads it again (2026-10-07 review: kept at the commit, the next walk
+  found the row at the file's size and time and never asked T again).
 - **Which folders D lists:** those with audio at or below them (a folder's
   row waits until audio turns up below it): FOLD's folders. A folder of
   images alone (a `Scans` folder) has no row; each walk lists it and
@@ -2371,8 +2381,10 @@ reused, for the scan and the qfp checks alike. (Today's Thumbs worker
 opens through POSIX `open()`, whose VFS allocates the `FIL` with PSRAM
 preferred.) Durations come from the existing helpers
 (`progress::mp3HeaderDurationMs` with the LAME trim, `flacDurationMs`;
-Opus from the last granule). Pictures are located, never read. The
-reading rules are part 5's.
+Opus from the last granule). Pictures are located, never decoded or
+kept (inside a v2.2/2.3 tag under tag-level unsynchronisation a
+picture's bytes are read through, the only way to find the frame after
+it: 3.3.8). The reading rules are part 5's.
 
 #### 3.3.2 `tags.bin`, the journals, compaction, resume
 
@@ -2532,8 +2544,15 @@ fake FAT trees into it). What the code decided where 3.3.2 left room:
   gives the doubtful file's row without T first. Run 1 without its End is
   dropped (the card is walked again); run 2 without its End leaves run 1's
   rows (the doubtful files without T). DHDR takes the walk's commit and
-  skew from a whole walk only, so after such a cut the next boot walks
-  against T again and settles the doubts. An unchanged card's walk writes
+  skew from a whole walk whose doubts were all settled. A walk that
+  leaves one unsettled (run 1 alone with a doubt in it, or a qfp read
+  that failed, which run 2's End says) leaves DHDR unwalked, so the next
+  boot's walk is a first one: it merges every folder against T and
+  settles the doubts again. (2026-10-07 review: such a walk at the same
+  commit used to leave DHDR at that commit; the next walk was then one at
+  the same commit, which found the doubtful files' rows at their sizes
+  and times and their folders' digests D's, and never asked T again until
+  the next transfer.) An unchanged card's walk writes
   nothing; a failed one is removed (`abort()`). `WalkSink` closes run 1
   when the walk reads its doubts back; the walk's skew comes with its
   summary, in run 2's End.
@@ -2588,7 +2607,13 @@ fake FAT trees into it). What the code decided where 3.3.2 left room:
   each of their 41 steps and booted the three ways: the 123 boots (24 of
   them with run 1 alone) each find the card's files at their sizes and
   times, and the next boot's walk and compaction make the D the uncut
-  ones made.
+  ones made. And a walk at the same commit whose doubt (a time a PC
+  rewrote, the bytes the same) its qfp settles, cut at each of its 42
+  steps and booted the three ways (126 boots, 24 with run 1 alone), or
+  with that read failing: the next boot's walk settles the file as T's,
+  confirmed, and DHDR at the commit. After each cut every file is closed
+  (an ASan run found `walk.jnl` left open when the cut failed its header's
+  write; the fake now counts open files).
 - **Measured (host) at 20k** (the user's shape, every file scanned, 100 a
   chunk): D of Pending rows 2.51 MB, of full records 3.84 MB (3.3.2 said
   about 4.1). The scan compacts 8 times: 71.0 MB read and 28.0 MB written
@@ -2598,6 +2623,82 @@ fake FAT trees into it). What the code decided where 3.3.2 left room:
   min over a full scan (ESTIMATED), more than 3.3.2's 12-24 s since every
   compaction reads D twice. Levers if L3 finds it slow: a bigger journal
   (fewer compactions), HIDX's sort in more memory.
+
+#### 3.3.8 As built (N6)
+
+`lib/core/TagScan` is 3.3.1's reader, with part 5's small rules as pure
+functions in `lib/core/TagRules`, host-tested (`test_tag_scan`) and not
+yet called: N7's scheduler and N10's card worker run it through a FatFs
+`Source`. What the code decided where 3.3.1 and part 5 left room:
+
+- **The reference** is mStream's reader: lofty 0.25 in relaxed mode
+  behind mStream's ID3v2 repair pass, then mStream's selection rules and
+  part 5. `tools/tagref` (Rust, lofty 0.25.1) reads the corpus that way
+  into `expected.json`. Since the first value of a field wins, the
+  device models the order of lofty's frame and item lists (its swap
+  removals included), not only their contents. Where lofty fails the
+  whole file, the reference record is UNREADABLE and the device reads
+  the file itself (2.9). The known differences, all rare, are listed in
+  `TagScan.h` and the corpus's README.
+- **The read budget.** The tags are walked within 512 KB and 160 reads
+  of the source; what follows the walk (the audio's first frame, the
+  tail, the length, the values located) has a reserve on top (128 KB, 48
+  reads). A walk the budget stops still ends in a record:
+  `Result::Partial`, the fields found before the stop, never UNREADABLE
+  (which 3.3.1's rule 3 would keep until the file changed). A Partial
+  record is the device's reading (Scanned: N7 keeps it so, and counts it
+  in the scan's log); a parser version that reads further reads it again. Two
+  walks read more than headers: a v2.2/2.3 tag under tag-level
+  unsynchronisation is read through (a frame's size counts its bytes
+  resynchronised, so the next frame is found no other way; lofty reads
+  the whole tag too), its bytes on top of the budget up to 8 MB, in
+  sequential reads of the buffer (a 2 MB cover there is about 500 reads
+  of 4 KB); and the page headers of an Opus comment packet past a
+  picture are probes that count their bytes but not as reads (a 9 MB
+  picture is about 190 pages of 64 KB). (2026-10-07 review: before, a
+  cover past about 500 KB behind tag-level unsynchronisation made the
+  file UNREADABLE, and an Opus picture past about 7.5 MB left a record
+  with no fields and no length, as Ok.)
+- **The tables** have room for 96 frames or comments a field may take.
+  A v2.2 or v2.4 tag keeps no entry for a frame no field comes from
+  (only v2.3's date removal reads such frames' places); a v2.3 tag gives
+  such entries up for frames a field comes from; a full Vorbis table
+  lets go of the comments that can't change the record (an empty value,
+  a later value of a single field, a list's repeats and its values from
+  the 18th distinct one, a number's later items). Before, 96 TXXX frames
+  or 96 artists in front of the title hid the title.
+- **An MP3's length** is read from the first frame lofty's rule finds
+  (its Xing/Info, VBRI or LAME fields: `progress::mp3FrameDurationMs()`,
+  no search of its own), in a 512-byte window, so it is the same
+  whatever the buffer; else the bitrate over the audio.
+- **Memory and stack:** the Scanner is about 10 KB (PSRAM), a scan about
+  1 KB of stack; every read goes through one caller buffer (4 KB the
+  design's, any from 512 bytes). `kParserVersion` is 1: no device has
+  written a record yet.
+- **Proven on the host** (`test_tag_scan`): the corpus (86 audio files:
+  the crafted edges, and files past the tables' 96 entries) field for field
+  against `expected.json`, the length within 100 ms, at nine buffer sizes
+  from 512 bytes to 64 KB (sizes that aren't multiples of 512 included);
+  every picture anchor read back to its image by an independent reader
+  of each picCoding; generated files past the corpus's sizes (a 700 KB
+  and a 2 MB cover behind v2.3 tag-level unsynchronisation, 1 MB behind
+  v2.2's, a 9 MB Opus picture with its comments before or after it) read
+  whole; a budget stop Partial with what was found (every corpus file
+  under four tight budgets: Ok only with the whole scan's record); an
+  MP3 whose second frame TrackProgress's own search would refuse: one
+  length at every buffer; truncation at every byte; 10,320 mutated
+  copies of the corpus files and 450 generated files (ID3v2.2-2.4 tags of up to 150 frames,
+  FLAC and Opus with up to 300 comments, Opus pictures over pages of 16
+  to 255 segments), each with its invariants, at two buffers, and under
+  a random tight budget. A random differential (`tag_corpus.py --random
+  N --out DIR`, `tagref --dir DIR`, then the reader over the same files
+  in a scratch harness), 8,431 files at five buffer sizes, agrees with
+  the reference on every file lofty reads; it found two differences,
+  fixed and in the corpus: a TDRC whose text passed the value's buffer
+  lost its year (`long_tdrc.mp3`), and an APE item's values after one
+  past 255 bytes were lost (`ape_long_value.mp3`). Under ASan and UBSan
+  (a Linux container, not the native environment): `test_tag_scan` and
+  120,000 scans of a structured fuzzer of generated tags, clean.
 
 ### 3.4 The builder
 
@@ -3051,7 +3152,7 @@ the file has no comment block and no PICTURE block.
 | camelot | TKEY, or Vorbis `INITIALKEY` or `KEY`: trimmed, its first 12 characters, matched case-insensitively against the aliases of mStream's `CAMELOT_TO_KEYS` (`src/api/random.js`: `8A`, `A minor`, `Am`, `Amin`, …); no match is 0. |
 | ReplayGain | `REPLAYGAIN_TRACK_GAIN`, `REPLAYGAIN_ALBUM_GAIN` (TXXX, Vorbis, APE): one trailing `dB` stripped (any ASCII case), then a decimal by the number rule below, in hundredths of a dB; outside the i16 range: absent. The peaks `REPLAYGAIN_TRACK_PEAK`, `REPLAYGAIN_ALBUM_PEAK`: the number rule in ten-thousandths, saturating at 65,535; negative: absent. Opus `R128_TRACK_GAIN` and `R128_ALBUM_GAIN`: an integer (`[+-]?[0-9]+`) in the i16 range, converted by 2.6.4's integer formula (RG_FROM_R128). mStream reads only the track gain; the record keeps all four. |
 | compilation | TCMP or COMPILATION: `1` or `true` (any case) is 1; `0` or `false` is 2 ("said no"); anything else, or none, 0. mStream keeps only "yes". |
-| picture | Every non-empty embedded picture is seen, except a compressed or encrypted ID3v2 frame; the elected one is the first front cover (type 3), else the first picture. Its anchor, stored length, type, MIME and coding (2.6.4) are recorded; its bytes are never read by the scan. |
+| picture | Every non-empty embedded picture is seen, except a compressed or encrypted ID3v2 frame; the elected one is the first front cover (type 3), else the first picture. Its anchor, stored length, type, MIME and coding (2.6.4) are recorded; its image is never decoded or kept by the scan (the device reads through its bytes only inside a v2.2/2.3 tag under tag-level unsynchronisation, where the frame after it is found no other way: 3.3.8). |
 
 **The number rule** (both producers, so the f32 of the ESP32's FPU, the
 f64 of Rust and a JS `Math.round` can't disagree):
@@ -3197,7 +3298,7 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 | N3 | **Built.** **The queue's remap through `queue.txt`**; `QueueModel::release()` and the exact trim | 1-1.5 | `test_queue`: a 20k remap within budget (since the queue's cap, a full queue of 5,000 from a 20k library); shuffled; the current track gone; the resume point carried; the remap after a rebuild or a boot with no library, and after a cleared queue (the file read back from its own line) |
 | N4 | **Built.** **`TagStore`**: D with its device sections, `tags.jnl` (sorted chunks), `walk.jnl`, the streaming k-way compaction, recovery, the cut-rename rule (2.12.6) | 2-2.5 | A power cut injected at every write, sync, remove and rename, a rename cut between its two directory writes included; the compaction's PSRAM bounded whatever the journal holds |
 | N5 | **Built.** **`CardWalk`**: the lister interface, the canonical sort (with its passes for big folders), the digests, T's freshness (the skew, Doubtful entries through `walk.jnl`, qfp, confirmations) | 2-2.5 | Fake FAT trees: shuffled order, a 3,000-file folder through a small scratch, a retag at the same size, a renamed folder, a deleted album, every stamp shifted an hour, three files shifted, invalid and zero stamps |
-| N6 | **`TagScan`, the production port** with part 5's rules; the synthetic parity corpus (2.17, item 3) | 3-4 | The corpus and the crafted edge files; the fuzz harness (ASan only if a Linux toolchain is available); parity against a lofty reference (the terminal's S3, or a small host harness until it exists) |
+| N6 | **Built.** **`TagScan`, the production port** with part 5's rules; the synthetic parity corpus (2.17, item 3) | 3-4 | `test_tag_scan`: the corpus and the crafted edge files (`test/fixtures/tags`, `tools/tag_corpus.py`) field for field against the lofty reference (`tools/tagref`) at every buffer size; the anchors read back; generated files past the corpus's sizes and the read budget; truncation, mutation and generated fuzz passes (ASan only where a Linux toolchain is: a review ran one); a random differential against the reference (3.3.8) |
 | N7 | **`ScanScheduler`** and the `LibraryWrite` blocker | 1-1.5 | Like `test_idle_policy` |
 | N8 | **`SectorCache`.** Optional: a host FatFs model (vendored FatFs on a RAM disk) counting sector reads per walk and per open on a 20k tree of the user's shape (part 7, U14: vendoring is a download; the user said yes) | 1 (+1) | LRU, bypass, write invalidation, a random model check; the model checks metascan's 56 sectors per open before L0 |
 | N9 | **The catalog, the UI and the texts**: `TrackCatalog`, `LibraryPage` rows, `UiText`, `SleepTimer`'s `kLoose`, the console's `g*` commands | 1.5-2 | `test_ui_library`, `test_sleep_timer` |

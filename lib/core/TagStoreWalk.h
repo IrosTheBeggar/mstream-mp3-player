@@ -55,8 +55,9 @@ private:
 // The walk's output into walk.jnl: its rows, gones and doubts in run 1;
 // rewindDoubts() closes run 1 (with D's skew, or none on a new commit, until
 // the walk has its own) and reads its doubts back; the settled rows go to
-// run 2; finish() closes the run (with the summary's skew) and the file;
-// abort() removes it. About 1.5 KB plus the buffers it is given.
+// run 2; finish() closes the run (with the summary's skew, and whether a
+// doubt was left unsettled: D then stays unwalked) and the file; abort()
+// removes it. About 1.5 KB plus the buffers it is given.
 class WalkSink : public cardwalk::Sink {
 public:
   // Begins the walk's journal against `walk` (the root's identity, or none).

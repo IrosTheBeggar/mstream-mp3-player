@@ -153,4 +153,19 @@ private:
   bool changed_ = false;
 };
 
+// ---- a refused add's note ----
+//
+// An add the full queue refuses changes nothing (docs/QUEUE-MODES.md 15.2:
+// the last edit's undo stays), so its note ("The queue holds 5,000 tracks")
+// keeps the buttons of the toast it covers: the Undo and the View a Play
+// all or an add was offering moments before (15.5). Else that undo would be
+// out of reach while the queue still keeps it.
+struct ToastButtons {
+  bool undo = false;
+  uint32_t viewKey = QueueModel::kNone;  // kNone: no View
+};
+// The toast up (`up`), whether it offers Undo and View (`viewKey` its
+// View's), and the queue's undoable edit: what the note keeps.
+ToastButtons keptByRefusal(bool up, bool undo, bool view, uint32_t viewKey, QueueModel::Edit undoable);
+
 }  // namespace queueview

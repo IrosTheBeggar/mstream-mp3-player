@@ -589,6 +589,10 @@ def build():
     ])
     mp3("ape_only.mp3", "APEv2 alone: a repeated key's last item; values on NUL; 'Track' 4/9; covers", ape_tag=a)
 
+    a = ape([("Composer", ("x" * 300 + "\x00Lima Pen").encode(), 0), ("Title", "Long First Value".encode(), 0)])
+    mp3("ape_long_value.mp3", "an APE item of two values, the first past 255 bytes (cut, TRUNCATED): the second kept",
+        ape_tag=a)
+
     a = ape([("Title", "From APE".encode(), 0), ("Artist", "Sierra".encode(), 0)])
     v1 = id3v1("From ID3v1", "Tango", "Uniform")
     mp3("ape_v1.mp3", "APE beside ID3v1, no ID3v2: ID3v1 is the tag (lofty's order)", ape_tag=a, v1=v1)
@@ -940,6 +944,44 @@ def build():
     b, offs = opus_file([long_title, "ARTIST=Uniform", "ALBUM=Split Across"], segs_per_page=2)
     add("opus_pages.opus", b, [], "OpusTags across pages of two segments: values split by page headers")
 
+    # ---- More frames or comments than the reader's tables hold (96) ----
+    t = Tag(4)
+    for i in range(120):
+        t.frame("TXXX", txxx(0, "CUSTOM_%03d" % i, "x"))
+    t.frame("TIT2", text_frame(0, "After The Customs"))
+    t.frame("TPE1", text_frame(0, "Victor Late"))
+    t.frame("TXXX", txxx(0, "REPLAYGAIN_TRACK_GAIN", "-3.5 dB"))
+    t.frame("APIC", b"", picture=apic(4, 3, "image/jpeg", jpeg(25)))
+    mp3("many_txxx.mp3", "v2.4: 120 TXXX frames no field comes from, then the title, the artist, a gain, a cover", t)
+
+    t = Tag(3)
+    t.frame("APIC", b"", picture=apic(3, 0, "image/jpeg", jpeg(26)))
+    t.frame("APIC", b"", picture=apic(3, 0, "image/png", png(27)))
+    for i in range(100):
+        t.frame("TZ%02d" % i, text_frame(0, "z"))
+    t.frame("TYER", text_frame(0, "1999"))
+    t.frame("TIT2", text_frame(0, "Whiskey Crowd"))
+    t.frame("TPE1", text_frame(0, "Xray Many"))
+    mp3("many_text_v23.mp3", "v2.3: two pictures, 100 other text frames, TYER (its removal swaps the first picture "
+        "behind the second), the title, the artist", t)
+
+    items = ["GENRE=" for _ in range(30)] + ["GENRE=Folk" for _ in range(30)]
+    items += ["ALBUM=Album %02d" % i for i in range(20)] + ["BPM=1%02d" % i for i in range(20)]
+    items += ["ARTIST=Artist %03d" % i for i in range(120)]
+    items += ["TITLE=After The Crowd", "COMPOSER=Yankee Pen", "TRACKNUMBER=3/12", "GENRE=Late Genre"]
+    b, p = flac([(4, vorbis_comment(items))])
+    add("flac_many_comments.flac", b, p, "224 comments: empty and repeated genres, later albums and BPMs, 120 "
+        "artists (the list keeps 16), then the title, the composer, the track")
+
+    t = Tag(4)
+    t.frame("TIT2", text_frame(0, "Long Date"))
+    t.frame("TDRC", text_frame(1, "1999", "2010-13-01", "x" * 300))
+    mp3("long_tdrc.mp3", "a TDRC of three values, its text longer than a value holds: the year from its start", t)
+
+    items = ["GENRE=Genre %03d" % i for i in range(110)] + ["TITLE=Zulu Late", "ARTIST=Late Artist", "DATE=2011"]
+    b, offs = opus_file(items, segs_per_page=40)
+    add("opus_many_comments.opus", b, [], "110 genres across pages, then the title, the artist, the date")
+
 
 GITATTRIBUTES = """# The files are compared byte for byte (the audio, anchors.json, the
 # README, expected.json): never convert their line ends.
@@ -977,10 +1019,14 @@ of these in this corpus): a compressed ID3v2 text frame (lofty inflates it),
 the repair pass's fallback for a tag with no padding to grow into, COVERART,
 an APE tag at the head of an MP3, a Lyrics3 block before ID3v1, the base64
 of an Opus picture past its head, a frame no field comes from repeated
-within one tag (lofty's list may replace it; the device only counts it), and
-a Vorbis value whose bytes stop being UTF-8 after its first 4 KB. Then the
-files lofty fails on (the two `lofty_fails_*` here): the reference reads them
-as UNREADABLE and the device reads them itself (2.9).
+within one tag (lofty's list may replace it; the device only counts it), a
+Vorbis value whose bytes stop being UTF-8 after its first 4 KB, more than 96
+frames or comments in one tag that a field may take (the `many_*` files here
+pass 96 with entries the device can let go of), and tags past the device's
+read budget (an Ogg comment packet of more than about 500 pages, an
+unsynchronised v2.2/2.3 tag past 8 MB: the device keeps what it found).
+Then the files lofty fails on (the two `lofty_fails_*` here): the reference
+reads them as UNREADABLE and the device reads them itself (2.9).
 """
 
 

@@ -171,6 +171,10 @@ public:
   // the queue: the toast also offers "View" (the Queue, scrolled to it),
   // and the next visit to the Queue shows and highlights what was added.
   void toast(const char* text, bool undo, uint32_t viewKey = QueueModel::kNone);
+  // An add the full queue refused: its note, keeping the Undo and View of
+  // the toast it covers (nothing changed: the last edit's undo stays, and
+  // its button with it: queueview::keptByRefusal()).
+  void refuse(const char* text);
   // A note in amber (a track skipped, no card yet).
   void warn(const char* text);
   // A plain toast that stays `ms` (the next boot's "Turned off after 20

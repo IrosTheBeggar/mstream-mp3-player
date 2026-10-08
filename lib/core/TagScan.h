@@ -63,14 +63,37 @@
 // field comes from is counted in its list but never compared, so taken to
 // be never replaced (only where such a frame repeats in one tag does an
 // entry move); a Vorbis value is checked as UTF-8 only in its first 4 KB.
+// The tables have room for 96 entries (Scanner::kMaxFrames, kMaxItems):
+// a v2.2 or v2.4 tag keeps no entry for a frame no field comes from (only
+// v2.3's date removal reads such frames' places); a v2.3 tag gives such an
+// entry up for a frame a field comes from when full (a later frame equal to
+// it then isn't seen to replace it); a full Vorbis table lets go of the
+// comments that can't change the record (an empty value; a later value of a
+// field that has its first; a repeat, or the 18th distinct value on, of a
+// list; a later item of a number), though a removal of two TRACKNUMBER or
+// DISCNUMBER items (a swap) could have moved one first. Past that, more
+// than 96 frames or comments a field takes: the later ones are dropped
+// (kIssueTooMany). And past the read budget (below: an Ogg comment packet
+// of more than about 500 pages, an unsynchronised v2.2/2.3 tag past 8 MB,
+// a tag of more than about 150 frames each a seek away), the record is
+// what was found before the stop (Result::Partial).
 //
 // Bounded and fixed: every read goes through one caller buffer (a cursor:
 // aligned refills, a short read after a seek), within a byte and a read
-// budget per file; no heap, no recursion. Pictures are located, never read:
-// the elected one's anchor (2.6.4: offset, stored length, type, MIME,
-// coding) goes into the record. The Scanner (about 10 KB: the record, the
-// ID3v2 frame or Vorbis item table, one value) belongs in PSRAM, never on
-// the card worker's stack; a scan itself takes about 1 KB of stack.
+// budget per file (Limits); no heap, no recursion. The tags are walked
+// within the budget, and what follows the walk (the audio's first frame,
+// the tail, the length, the values located) has a reserve on top, so a walk
+// the budget stopped still ends in a record (Result::Partial), never in
+// UNREADABLE. Two walks read more than their headers: a v2.2/2.3 tag under
+// tag-level unsynchronisation is read through (a frame's stored length is
+// known no other way), its bytes on top of the budget up to maxUnsyncTag;
+// and an Ogg packet's page headers are read one by one past a picture, each
+// counting its bytes but not as a read (maxOggPages bounds them). Pictures
+// are located, never read: the elected one's anchor (2.6.4: offset, stored
+// length, type, MIME, coding) goes into the record. The Scanner (about 10
+// KB: the record, the ID3v2 frame or Vorbis item table, one value) belongs
+// in PSRAM, never on the card worker's stack; a scan itself takes about 1 KB
+// of stack.
 namespace tagscan {
 
 using cardcontract::Source;
@@ -133,12 +156,22 @@ enum class Result : uint8_t {
   Ok,          // read: the record holds what the file carries (NO_TAGS when nothing)
   Unreadable,  // not a file of its kind: the record is UNREADABLE (known 0)
   ReadError,   // the source failed a read: try again later (the record is UNREADABLE meanwhile)
+  // The read budget ran out (kIssueBudget): the record holds what was found
+  // before the walk stopped, and the length when the audio was reached
+  // (NO_TAGS when nothing); never UNREADABLE. Kept as the device's reading,
+  // as an Ok record is (Scanned): the same budget stops at the same byte,
+  // and a parser version that reads further reads it again (3.3.2). The
+  // scan's log counts these.
+  Partial,
 };
 
 struct Limits {
-  uint32_t readBudget = 512 * 1024;  // bytes asked of the source per file
-  uint16_t maxReads = 160;           // reads per file (an Opus picture of about 8 MB is about 128 pages)
-  uint16_t seekRead = 1024;          // a read after a seek: this much, not a whole buffer
+  uint32_t readBudget = 512 * 1024;    // bytes asked of the source per file for the tags' walk
+  uint16_t maxReads = 160;             // reads per file for the walk (an Ogg page header stepped over: its bytes only)
+  uint16_t reserveReads = 48;          // after the walk, on top: the audio's first frame, the tail, the length
+  uint32_t reserveBytes = 128 * 1024;  // and the values located (a walk the budget stopped still ends in a record)
+  uint32_t maxUnsyncTag = 8u << 20;    // a v2.2/2.3 tag under tag-level unsynchronisation: read through, on top
+  uint16_t seekRead = 1024;            // a read after a seek: this much, not a whole buffer
   uint32_t maxText = 4096;           // stored bytes read of one value; the rest skipped
   uint32_t maxJunk = 1024;           // lofty's max_junk_bytes: an ID3v2 tag looked for in junk before the audio
   uint32_t maxSync = 64 * 1024;      // bytes searched for the first MPEG frame
@@ -150,20 +183,23 @@ struct Limits {
 };
 
 struct Stats {
-  uint32_t reads = 0;  // Source::read calls
-  uint32_t bytes = 0;  // bytes asked
-  uint32_t seeks = 0;  // reads not starting where the previous one ended
+  uint32_t reads = 0;       // Source::read calls
+  uint32_t bytes = 0;       // bytes asked
+  uint32_t seeks = 0;       // reads not starting where the previous one ended
+  uint32_t pages = 0;       // of the reads, Ogg page headers stepped over (not counted against maxReads)
+  uint32_t extraBytes = 0;  // the budget's extension for an unsynchronised v2.2/2.3 tag (Limits::maxUnsyncTag)
+  uint32_t extraReads = 0;  // ... and the reads it brings (its bytes over the buffer)
 };
 
 // What was met (Scanner::issues()): diagnostics, never a field.
 enum Issue : uint32_t {
-  kIssueBudget = 1u << 0,           // the byte or read budget ran out: the parse stopped
+  kIssueBudget = 1u << 0,           // the byte or read budget ran out: the parse stopped (Result::Partial)
   kIssueReadError = 1u << 1,        // the source failed a read
   kIssueCompressedFrame = 1u << 2,  // an ID3v2 frame compressed (zlib): skipped
   kIssueEncryptedFrame = 1u << 3,   // an ID3v2 frame encrypted: skipped
   kIssueBadFrame = 1u << 4,         // an ID3v2 frame header or size that didn't fit
   kIssueTruncatedTag = 1u << 5,     // a tag or block running past the end of the file
-  kIssueTooMany = 1u << 6,          // a loop cap or the frame table's size was hit
+  kIssueTooMany = 1u << 6,          // a loop cap or a table's size was hit (an entry given up or dropped)
   kIssueLofty = 1u << 7,            // something lofty would refuse: the reference reads the file as UNREADABLE
   kIssueRepaired = 1u << 8,         // the repair pass's rules changed something (5.2)
   kIssueNonSyncsafe = 1u << 9,      // a v2.4 frame size re-read as a plain integer
@@ -213,6 +249,7 @@ public:
     uint32_t len;     // its value's bytes
     uint32_t number;  // a number lofty wrote itself (TRACKNUMBER's "N/M" read)
     uint32_t page;    // an Ogg file: the page the value starts in
+    uint32_t hash;    // its value as a list keeps it (a repeat hashes the same): for a full table
     uint16_t place;   // its place in lofty's item list
     uint8_t key;      // what it fills (TagScan.cpp)
     uint8_t kind;     // what lofty's insert() and remove() match it by

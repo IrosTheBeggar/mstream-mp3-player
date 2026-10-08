@@ -32,7 +32,8 @@ constexpr uint16_t kWalkVersion = 1;
 constexpr uint32_t kBlockHeader = 16;
 constexpr uint8_t kBlockEntries = 1;
 constexpr uint8_t kBlockEnd = 2;
-constexpr uint32_t kEndPayload = 8;  // i32 skew, u32 reserved
+constexpr uint32_t kEndPayload = 8;  // i32 skew, u32 flags
+constexpr uint32_t kEndUnsettled = 1;  // an End's flag (run 2's): a doubt couldn't be settled
 constexpr uint32_t kEntryHead = 4;   // kind, flags, u16 path length
 constexpr uint32_t kFileTail = 16;   // a walk File entry: size, fatTime, qfp
 constexpr uint32_t kDoubtTail = 32;  // a Doubt: size, fatTime, delta, T's qfp, D's qfp
@@ -1481,6 +1482,7 @@ struct RunKeys {
   char path[3][cc::kMaxRelPath + 1];
   size_t len[3] = {};
   bool have[3] = {};
+  bool settles = false;  // a Doubt entry to settle (an audio file's) came
 };
 
 // Checks a walk entry's head and tail in a stream, and that it comes after
@@ -1505,6 +1507,7 @@ bool checkWalkEntry(cc::Stream& s, RunKeys& k, char* cur) {
       break;
     case EntryKind::Doubt:
       if ((flags & ~15u) || !s.read(t, kDoubtTail)) return false;
+      if (flags & 1) k.settles = true;
       seq = 2;
       break;
     case EntryKind::Folder: {
@@ -1538,6 +1541,7 @@ void TagStore::scanWalk(Opened* o) {
   walkRuns_ = 0;
   walkSeq_ = 0;
   walkSkew_ = 0;
+  walkUnsettled_ = false;
   walkId_ = Identity();
   File* f = fs_.open(walkPath_, Fs::Mode::Read);
   if (!f) return;
@@ -1558,6 +1562,7 @@ void TagStore::scanWalk(Opened* o) {
       new (keys) RunKeys();
       bool complete = false;
       int32_t skew = 0;
+      uint32_t endFlags = 0;
       for (;;) {
         uint8_t b[kBlockHeader];
         if (size - at < kBlockHeader + 4 || !f->read(at, b, kBlockHeader)) break;
@@ -1571,6 +1576,7 @@ void TagStore::scanWalk(Opened* o) {
           uint8_t e[kEndPayload];
           good = payload == kEndPayload && count == entries && s.read(e, kEndPayload);
           skew = static_cast<int32_t>(cc::get32(e));
+          endFlags = cc::get32(e + 4);
         } else if (b[5] == kBlockEntries) {
           for (uint32_t k = 0; good && k < count; ++k) good = checkWalkEntry(s, *keys, cur);
           entries += count;
@@ -1590,6 +1596,9 @@ void TagStore::scanWalk(Opened* o) {
       walkStart_[run - 1] = start;
       walkEnd_[run - 1] = at;
       walkSkew_ = skew;
+      // Run 1 alone leaves its doubts unsettled; run 2's End says whether
+      // one was left so.
+      walkUnsettled_ = run == 1 ? keys->settles : (endFlags & kEndUnsettled) != 0;
       walkRuns_ = run;
     }
     free_(mem);
@@ -1634,13 +1643,17 @@ bool WalkWriter::ensureFile() {
   if (open_) return !failed_;
   Fs& fs = store_->fs_;
   file_ = fs.open(store_->walkPath_, Fs::Mode::Create);
-  if (!file_ || !file_->write(0, header_, kWalkHeader)) {
+  if (!file_) {
+    failed_ = true;
+    return false;
+  }
+  open_ = true;  // finish() closes it (abort() removes it) whatever comes next
+  if (!file_->write(0, header_, kWalkHeader)) {
     failed_ = true;
     return false;
   }
   at_ = kWalkHeader;
   runStart_[0] = at_;
-  open_ = true;
   return true;
 }
 
@@ -1664,11 +1677,12 @@ bool WalkWriter::writeBlock(uint8_t type, const uint8_t* payload, uint32_t bytes
   return true;
 }
 
-bool WalkWriter::writeEnd(uint32_t run, int32_t skew, uint32_t count) {
+bool WalkWriter::writeEnd(uint32_t run, int32_t skew, uint32_t count, uint32_t flags) {
   const uint32_t r = run_;
   run_ = run;
   uint8_t e[kEndPayload] = {};
   cc::put32(e, static_cast<uint32_t>(skew));
+  cc::put32(e + 4, flags);
   const bool ok = writeBlock(kBlockEnd, e, kEndPayload, count);
   run_ = r;
   if (!ok) return false;
@@ -1749,7 +1763,9 @@ bool WalkWriter::doubt(const char* rel, size_t len, const Doubt& d) {
   cc::put64(t + 24, d.deviceQfp);
   const uint8_t flags = static_cast<uint8_t>((d.settle ? 1u : 0u) | (d.hasDelta ? 2u : 0u) |
                                              ((static_cast<uint8_t>(d.fallback) & 3u) << 2));
-  return put(EntryKind::Doubt, flags, rel, len, t, kDoubtTail);
+  if (!put(EntryKind::Doubt, flags, rel, len, t, kDoubtTail)) return false;
+  if (d.settle && run_ == 1) settles_ = true;
+  return true;
 }
 
 bool WalkWriter::folder(const char* rel, size_t len, const FolderFacts& facts) {
@@ -1763,9 +1779,9 @@ bool WalkWriter::folderGone(const char* rel, size_t len) {
   return put(EntryKind::FolderGone, 0, rel, len, nullptr, 0);
 }
 
-bool WalkWriter::endRun(int32_t skew) {
+bool WalkWriter::endRun(int32_t skew, bool unsettled) {
   if (failed_ || !store_ || run_ > 2) return false;
-  const bool nothing = runCount_ == 0 && !open_ && sameAsDevice(skew) && (run_ == 1 || deferred_);
+  const bool nothing = runCount_ == 0 && !open_ && !unsettled && sameAsDevice(skew) && (run_ == 1 || deferred_);
   if (nothing) {
     // Nothing new: nothing reaches the card (unless run 2 finds something).
     if (run_ == 1) {
@@ -1779,8 +1795,9 @@ bool WalkWriter::endRun(int32_t skew) {
       if (!writeEnd(1, skew1_, 0)) return false;
       deferred_ = false;
     }
-    if (!writeEnd(run_, skew, runCount_)) return false;
-    store_->walkDone(run_, runStart_, runEnd_, skew, id_, cc::get32(header_ + 12));
+    if (!writeEnd(run_, skew, runCount_, unsettled ? kEndUnsettled : 0)) return false;
+    // Merged as it is now, run 1 leaves its doubts unsettled.
+    store_->walkDone(run_, runStart_, runEnd_, skew, id_, cc::get32(header_ + 12), run_ == 1 ? settles_ : unsettled);
   }
   ++run_;
   runCount_ = 0;
@@ -1807,8 +1824,9 @@ void WalkWriter::abort() {
 }
 
 void TagStore::walkDone(uint32_t runs, const uint32_t* start, const uint32_t* end, int32_t skew, const Identity& id,
-                        uint32_t seq) {
+                        uint32_t seq, bool unsettled) {
   walkRuns_ = runs;
+  walkUnsettled_ = unsettled;
   for (uint32_t r = 0; r < runs; ++r) {
     walkStart_[r] = start[r];
     walkEnd_[r] = end[r];
@@ -2428,16 +2446,22 @@ TagStore::Compacted TagStore::compact(bool rescan) {
   DeviceHeader dh;
   if (useBin) dh = dev_.header;
   dh.epoch = epoch;
-  if (walkRuns_ == 2 && (useBin || !dev_.present)) {
+  if (walkRuns_ == 2 && !walkUnsettled_ && (useBin || !dev_.present)) {
     // A whole walk (its doubts settled) completes D's listing: its commit and
-    // its skew are D's. Run 1 alone (cut while the doubts were settled)
-    // merges its rows but not its commit, so the next boot walks against T
-    // again and settles them; and against a D left out, the walk's changes
-    // aren't a listing (an unchanged folder said nothing): the next walk
-    // compares the whole card.
+    // its skew are D's. Against a D left out, the walk's changes aren't a
+    // listing (an unchanged folder said nothing): the next walk compares the
+    // whole card.
     dh.walked = true;
     dh.walk = walkId_;
     dh.skew = walkSkew_;
+  } else if (walkUnsettled_) {
+    // Doubts left unsettled: run 1 alone (cut while they were settled), or
+    // a qfp read that failed. The rows merge, D unwalked, so the next boot's
+    // walk is a first one, against T, and settles them. (Kept at its commit,
+    // a walk at the same commit would find those files' rows at their sizes
+    // and times, and their folders' digests D's, and never ask.) Run 1 alone
+    // with no doubt merges its rows and leaves DHDR as it was.
+    dh.walked = false;
   }
   {
     uint8_t d[kDhdrBytes];
@@ -2538,6 +2562,7 @@ TagStore::Compacted TagStore::compact(bool rescan) {
   walkRuns_ = 0;
   walkSeq_ = 0;
   walkSkew_ = 0;
+  walkUnsettled_ = false;
   walkId_ = Identity();
   res.ok = dev_.present;
   if (!res.ok) res.error = "reload";

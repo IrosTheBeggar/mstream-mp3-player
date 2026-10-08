@@ -8,7 +8,9 @@
 // changed on a PC, a transfer whose every stamp a PC shifted an hour (the
 // doubts written, read back and settled by the skew, which DHDR keeps), N2's
 // builder over the result, and a power cut at every step of that walk and
-// its compaction, after which the next boot's walk reaches the same D.
+// its compaction, after which the next boot's walk reaches the same D; a
+// doubt at the same commit settled by its qfp, cut at every step of its walk
+// or its read failing, asked again by the next boot's walk.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -127,10 +129,11 @@ struct Buffers {
   std::vector<uint8_t> transfer = std::vector<uint8_t>(8192);
 };
 
-// One walk of `card` into `st` against `t` (nullptr: no transfer data) at
-// `id`, as N12 will run it: the first walk after a commit when D's identity
-// isn't the root's, D's skew otherwise.
-cw::CardWalk::Result walk(ts::TagStore& st, fakefat::Card& card, const std::vector<uint8_t>* t,
+// One walk of the card (`card`, a fakefat::Card or a lister over one) into
+// `st` against `t` (nullptr: no transfer data) at `id`, as N12 will run it:
+// the first walk after a commit when D's identity isn't the root's (or D is
+// unwalked), D's skew otherwise.
+cw::CardWalk::Result walk(ts::TagStore& st, cw::Lister& card, const std::vector<uint8_t>* t,
                           const ts::Identity& id) {
   Buffers b;
   auto known = std::make_unique<ts::KnownD>();
@@ -200,6 +203,30 @@ void assertRows(ts::TagStore& st, const fakefat::Card& card, Status status) {
     TEST_ASSERT_TRUE_MESSAGE(it->second.status == status, kv.first.c_str());
   }
   TEST_ASSERT_EQUAL_size_t(audio, v.size());
+}
+
+// A lister over a card whose file reads can fail (a card's read error).
+class FlakyLister : public cw::Lister {
+public:
+  explicit FlakyLister(fakefat::Card& c) : card_(c) {}
+  Open openDir(const char* rel, size_t len) override { return card_.openDir(rel, len); }
+  Next next(cw::Entry* out) override { return card_.next(out); }
+  void closeDir() override { card_.closeDir(); }
+  cc::Source* openFile(const char* rel, size_t len) override {
+    return failFiles ? nullptr : card_.openFile(rel, len);
+  }
+  void closeFile() override { card_.closeFile(); }
+  bool failFiles = false;
+
+private:
+  fakefat::Card& card_;
+};
+
+Seen rowOf(ts::TagStore& st, const std::string& rel) {
+  const auto v = view(st);
+  auto it = v.find(rel);
+  TEST_ASSERT_TRUE_MESSAGE(it != v.end(), rel.c_str());
+  return it->second;
 }
 
 ts::FolderFacts factsIn(CutFs& fs, ts::TagStore& st, const char* rel) {
@@ -365,6 +392,7 @@ void test_a_cut_walk_is_walked_again() {
       if (walk(st, card, &t, commit(1)).state == cw::CardWalk::State::Done && !fs.dead) st.compact();
     }
     TEST_ASSERT_TRUE(fs.dead);
+    TEST_ASSERT_EQUAL_UINT32(0, fs.openNow);  // every file closed, the one whose write the cut failed too
     TEST_ASSERT_TRUE(fs.violations.empty());
     for (Variant v : {Variant::InOrder, Variant::LoseUnsynced, Variant::Torn}) {
       CutFs boot = fs.reboot(v);
@@ -406,10 +434,141 @@ void test_a_cut_walk_is_walked_again() {
   printf("[tagstore+walk] %u boots checked; %u found run 1 alone\n", boots, runOneAlone);
 }
 
+// ---------------------------------------------------------------------------
+// Doubts left unsettled are asked again. A PC rewrote a file's time without
+// changing its bytes: the walk at the same commit finds it doubtful and
+// settles it by its qfp (T's, confirmed). Cut after run 1 (the file's row
+// without T) and before run 2 (its settled row), or with the qfp read
+// failing, D is left unwalked: the next boot's walk is a first one, asks T
+// about every file, reads the qfp and settles it. (Kept at the commit, that
+// walk found the row at the file's size and time, the folder's digest D's,
+// and never asked T again: the file stayed Pending until the next commit.)
+// ---------------------------------------------------------------------------
+namespace {
+const char* const kTouched = "Artist/Album/02 - Song.mp3";
+
+// D after a first walk against T (stamps equal), then the touch.
+CutFs walkedThenTouched(fakefat::Card& card, const std::vector<uint8_t>& t) {
+  CutFs fs;
+  ts::TagStore st(fs, config());
+  st.open();
+  TEST_ASSERT_TRUE(walk(st, card, &t, commit(1)).state == cw::CardWalk::State::Done);
+  TEST_ASSERT_TRUE(st.compact().ok);
+  assertRows(st, card, Status::Software);
+  card.at(kTouched).fatTime = shifted(kT, 7 * 60 + 4);
+  return fs;
+}
+
+void assertSettled(ts::TagStore& st, const fakefat::Card& card, const char* label) {
+  const Seen s = rowOf(st, kTouched);
+  TEST_ASSERT_TRUE_MESSAGE(s.status == Status::Software && s.confirmed, label);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(card.files.at(kTouched).fatTime, s.fatTime, label);
+  TEST_ASSERT_TRUE_MESSAGE(st.device().header.walked && st.device().header.walk == commit(1), label);
+  assertRows(st, card, Status::Software);
+}
+}  // namespace
+
+void test_a_cut_same_commit_walk_settles_again() {
+  fakefat::Card card;
+  fill(card);
+  const std::vector<uint8_t> t = transferOf(card, 0);
+  const CutFs base = walkedThenTouched(card, t);
+  // Uncut: the walk at the same commit settles the file by its qfp.
+  long steps = 0;
+  {
+    CutFs fs = base;
+    ts::TagStore st(fs, config());
+    st.open();
+    const long before = fs.steps;
+    const cw::CardWalk::Result r = walk(st, card, &t, commit(1));
+    TEST_ASSERT_FALSE(r.summary.firstAfterCommit);
+    TEST_ASSERT_EQUAL_UINT32(1, r.doubtful);
+    TEST_ASSERT_EQUAL_UINT32(1, r.byQfp);
+    TEST_ASSERT_TRUE(st.compact().ok);
+    steps = fs.steps - before;
+    assertSettled(st, card, "uncut");
+  }
+  // Cut at every step of that walk and its compaction.
+  uint32_t boots = 0, unsettled = 0;
+  for (long k = 1; k <= steps; ++k) {
+    CutFs fs = base;
+    fs.cutAt = fs.steps + k;
+    {
+      ts::TagStore st(fs, config());
+      st.open();
+      if (walk(st, card, &t, commit(1)).state == cw::CardWalk::State::Done && !fs.dead) st.compact();
+    }
+    TEST_ASSERT_TRUE(fs.dead);
+    TEST_ASSERT_EQUAL_UINT32(0, fs.openNow);  // every file closed, the one whose write the cut failed too
+    for (Variant v : {Variant::InOrder, Variant::LoseUnsynced, Variant::Torn}) {
+      CutFs boot = fs.reboot(v);
+      ts::TagStore st(boot, config());
+      st.open();
+      char label[64];
+      std::snprintf(label, sizeof(label), "cut at %ld, variant %d", k, static_cast<int>(v));
+      if (st.walkUnsettled()) ++unsettled;
+      if (st.hasJournals() || !st.device().present) TEST_ASSERT_TRUE_MESSAGE(st.compact().ok, label);
+      TEST_ASSERT_TRUE_MESSAGE(walk(st, card, &t, commit(1)).state == cw::CardWalk::State::Done, label);
+      if (st.hasJournals()) TEST_ASSERT_TRUE_MESSAGE(st.compact().ok, label);
+      assertSettled(st, card, label);
+      // And the boot after that: nothing new.
+      const cw::CardWalk::Result r = walk(st, card, &t, commit(1));
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.doubtful + r.added + r.changed + r.qfpReads, label);
+      TEST_ASSERT_FALSE_MESSAGE(st.hasWalk(), label);
+      TEST_ASSERT_TRUE_MESSAGE(boot.violations.empty(), label);
+      ++boots;
+    }
+  }
+  printf("[tagstore+walk] a same-commit walk with a doubt, cut at each of its %ld steps: %u boots, %u found its run 1 "
+         "alone\n",
+         steps, boots, unsettled);
+  TEST_ASSERT_GREATER_THAN(0, unsettled);
+}
+
+void test_a_failed_qfp_read_is_asked_again() {
+  fakefat::Card card;
+  fill(card);
+  const std::vector<uint8_t> t = transferOf(card, 0);
+  CutFs fs = walkedThenTouched(card, t);
+  ts::TagStore st(fs, config());
+  st.open();
+  FlakyLister flaky(card);
+  flaky.failFiles = true;
+  // The read fails: the row without T (Pending), the walk unsettled, D
+  // unwalked.
+  cw::CardWalk::Result r = walk(st, flaky, &t, commit(1));
+  TEST_ASSERT_TRUE(r.state == cw::CardWalk::State::Done);
+  TEST_ASSERT_EQUAL_UINT32(1, r.qfpFailed);
+  TEST_ASSERT_TRUE(r.summary.unsettled);
+  TEST_ASSERT_TRUE(st.walkUnsettled());
+  {
+    ts::TagStore again(fs, config());  // a boot here: run 2's End says it
+    again.open();
+    TEST_ASSERT_TRUE(again.hasWalk());
+    TEST_ASSERT_TRUE(again.walkUnsettled());
+  }
+  TEST_ASSERT_TRUE(st.compact().ok);
+  TEST_ASSERT_TRUE(rowOf(st, kTouched).status == Status::Pending);
+  TEST_ASSERT_FALSE(st.device().header.walked);
+  // It reads again: a first walk, against T, settles it.
+  flaky.failFiles = false;
+  r = walk(st, flaky, &t, commit(1));
+  TEST_ASSERT_TRUE(r.summary.firstAfterCommit);
+  TEST_ASSERT_EQUAL_UINT32(1, r.byQfp);
+  TEST_ASSERT_FALSE(r.summary.unsettled);
+  TEST_ASSERT_TRUE(st.compact().ok);
+  assertSettled(st, card, "after the read that worked");
+  r = walk(st, flaky, &t, commit(1));
+  TEST_ASSERT_EQUAL_UINT32(0, r.doubtful + r.qfpReads);
+  TEST_ASSERT_FALSE(st.hasWalk());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_walks_into_the_store);
   RUN_TEST(test_a_transfer_and_its_skew);
   RUN_TEST(test_a_cut_walk_is_walked_again);
+  RUN_TEST(test_a_cut_same_commit_walk_settles_again);
+  RUN_TEST(test_a_failed_qfp_read_is_asked_again);
   return UNITY_END();
 }

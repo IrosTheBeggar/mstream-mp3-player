@@ -184,6 +184,13 @@ uint32_t encodeUtf8(uint32_t cp, uint8_t b[4]) {
 // ===========================================================================
 // The cursor: one buffer over the file. Every byte the parsers see comes
 // through at(), which checks the range against the file and the buffer.
+//
+// The budget (Limits): a walk of the tags (walk(true)) reads within
+// readBudget and maxReads; the rest (the audio's first frame, the tail, the
+// length, the values located) within the reserve on top, whatever the walk
+// spent. The budget stopping a walk ends the walk only (stopped()); the
+// scan goes on in the reserve, and the result is Partial. An Ogg page header
+// stepped over (`page`) counts its bytes but not as a read.
 // ===========================================================================
 class Cursor {
 public:
@@ -194,6 +201,8 @@ public:
   uint32_t size() const { return size_; }
   bool failed() const { return failed_; }
   bool ioError() const { return ioError_; }
+  bool stopped() const { return stopped_; }  // the budget ran out, in a walk or after it
+  bool walking() const { return walking_; }
   uint32_t cap() const { return cap_; }
   uint32_t generation() const { return gen_; }
   // Bytes from `off` already in the buffer (0: none).
@@ -201,10 +210,39 @@ public:
     return (len_ && off >= base_ && off - base_ < len_) ? len_ - (off - base_) : 0;
   }
 
+  // A walk of the tags begins (true) or ends (false). At its end, a budget
+  // stop inside it lets go: the rest reads in the reserve.
+  void walk(bool on) {
+    walking_ = on;
+    if (!on && walkStop_) {
+      walkStop_ = false;
+      failed_ = false;
+    }
+  }
+  // A v2.2/2.3 tag under tag-level unsynchronisation is read through:
+  // `bytes` of it (up to Limits::maxUnsyncTag a file) on top of the budget,
+  // for the walk and so for the rest, as the reads that take them in
+  // sequence (each moves on by the buffer's aligned part, cap & ~511, and
+  // asks for the whole buffer).
+  void extend(uint32_t bytes) {
+    const uint32_t room = lim_.maxUnsyncTag > extendedTag_ ? lim_.maxUnsyncTag - extendedTag_ : 0;
+    if (bytes > room) bytes = room;
+    if (!bytes) return;
+    extendedTag_ += bytes;
+    const uint32_t reads = bytes / (cap_ & ~511u) + 2;
+    extraReads_ += reads;
+    extraBytes_ += static_cast<uint64_t>(reads) * cap_;
+    if (st_) {
+      st_->extraBytes = extraBytes_ > 0xFFFFFFFFu ? 0xFFFFFFFFu : static_cast<uint32_t>(extraBytes_);
+      st_->extraReads = extraReads_;
+    }
+  }
+
   // [off, off + n) in the buffer (n <= the buffer), read when it isn't
   // there: nullptr past the end of the file, over the budget, or on a read
-  // error. `probe`: read only that much (a header among skipped bytes).
-  const uint8_t* at(uint32_t off, uint32_t n, uint32_t probe = 0) {
+  // error. `probe`: read only that much (a header among skipped bytes);
+  // `page`: an Ogg page header stepped over.
+  const uint8_t* at(uint32_t off, uint32_t n, uint32_t probe = 0, bool page = false) {
     if (failed_ || n == 0 || n > cap_ || off > size_ || n > size_ - off) return nullptr;
     if (len_ && off >= base_ && off - base_ <= len_ && n <= len_ - (off - base_)) return buf_ + (off - base_);
     uint32_t start = off & ~511u;
@@ -212,18 +250,22 @@ public:
     uint32_t want = cap_;
     // After a seek, a short read: what follows a skipped picture is usually
     // a few frame headers, not a buffer's worth.
-    if (!probe && reads_ && start != lastEnd_) probe = lim_.seekRead;
+    if (!probe && gen_ > 1 && start != lastEnd_) probe = lim_.seekRead;
     if (probe && probe < want) want = (off - start + n > probe) ? (off - start + n) : probe;
     if (want > size_ - start) want = size_ - start;
-    if (spent_ + want > lim_.readBudget || reads_ >= lim_.maxReads) {
-      failed_ = true;
+    const uint64_t byteCap = static_cast<uint64_t>(lim_.readBudget) + extraBytes_ + (walking_ ? 0 : lim_.reserveBytes);
+    const uint32_t readCap = lim_.maxReads + extraReads_ + (walking_ ? 0u : lim_.reserveReads);
+    if (spent_ + want > byteCap || (!page && reads_ >= readCap)) {
+      failed_ = stopped_ = true;
+      if (walking_) walkStop_ = true;
       *issues_ |= kIssueBudget;
       return nullptr;
     }
     spent_ += want;
-    ++reads_;
+    if (!page) ++reads_;
     if (st_) {
       ++st_->reads;
+      if (page) ++st_->pages;
       st_->bytes += want;
       if (start != lastEnd_) ++st_->seeks;
     }
@@ -231,6 +273,7 @@ public:
     ++gen_;
     if (!src_.read(start, buf_, want)) {
       failed_ = ioError_ = true;
+      walkStop_ = false;
       len_ = 0;
       *issues_ |= kIssueReadError;
       return nullptr;
@@ -254,11 +297,18 @@ private:
   const Limits& lim_;
   Stats* st_;
   uint32_t* issues_;
-  uint32_t base_ = 0, len_ = 0, spent_ = 0, lastEnd_ = 0;
+  uint32_t base_ = 0, len_ = 0, lastEnd_ = 0;
+  uint64_t spent_ = 0;
   uint32_t gen_ = 1;
-  uint16_t reads_ = 0;
+  uint32_t reads_ = 0;  // against maxReads (an Ogg page header stepped over isn't one)
+  uint32_t extendedTag_ = 0;  // an unsynchronised tag's bytes the budget was extended for
+  uint64_t extraBytes_ = 0;   // ... and what that extension gives
+  uint32_t extraReads_ = 0;
   bool failed_ = false;
   bool ioError_ = false;
+  bool stopped_ = false;
+  bool walking_ = false;
+  bool walkStop_ = false;  // the budget stopped the walk under way
 };
 
 // ===========================================================================
@@ -461,7 +511,9 @@ private:
       done_ = true;
       return false;
     }
-    const uint8_t* h = c_.at(next_, 27, kProbe);
+    // A page header is a probe that counts its bytes, not a read: a picture
+    // of 8 MB is about 130 of them on 64 KB pages (maxOggPages bounds them).
+    const uint8_t* h = c_.at(next_, 27, kProbe, true);
     if (!h || std::memcmp(h, "OggS", 4) != 0 || h[4] != 0) return fail();
     const uint32_t serial = le32(h + 14);
     if (serial != serial_) return fail();  // another stream's page: not followed
@@ -469,7 +521,7 @@ private:
     // The packet starts a page; its later pages continue it.
     if ((mode == kStarts && continued) || (mode == kContinues && !continued)) return fail();
     const uint8_t segs = h[26];
-    const uint8_t* lace = segs ? c_.at(next_ + 27, segs, kProbe) : nullptr;
+    const uint8_t* lace = segs ? c_.at(next_ + 27, segs, kProbe, true) : nullptr;
     if (segs && !lace) return fail();
     uint32_t body = 0, packet = 0;
     bool ends = false;
@@ -879,6 +931,7 @@ struct ScanCtx {
   uint32_t uniq = 0;       // pictures never compare equal
   uint32_t regionEnd = 0;  // the tag being walked: where its frames end
   uint16_t tagN = 0;       // the frames in its list so far (lofty's FrameList)
+  uint8_t tagVer = 0;      // its major version
 
   // ---- the tail ----
   bool hasV1 = false;
@@ -903,7 +956,12 @@ struct ScanCtx {
   bool vorbisTag = false;     // FLAC: a comment block was read
   bool blockPicSeen = false;  // FLAC: a PICTURE block was read
   uint16_t itemN = 0;         // the comments in lofty's item list so far
+  bool itemsShed = false;     // a full table had nothing to let go of, and nothing changed since
   uint32_t serial = 0;        // Opus: the stream's
+
+  // An MP3's first frame, read for its length: its Xing/Info, VBRI and LAME
+  // fields lie in its first 194 bytes, and the smallest buffer holds 512.
+  static constexpr uint32_t kFrameWindow = 512;
 
   ScanCtx(Scanner& sc, Cursor& cur, const Limits& l, Kind k)
       : s(sc), r(sc.rec_), c(cur), lim(l), issues(sc.issues_), kind(k) {}
@@ -926,7 +984,18 @@ struct ScanCtx {
       s.nFrames_ = w;
       if (w == Scanner::kMaxFrames) {
         issues |= kIssueTooMany;
-        return false;
+        if (f.key >= kPosText) return false;  // its place still counts
+        // A frame a field comes from takes the entry of one kept for its
+        // place only (v2.3's, the earliest): that frame can't be seen
+        // replaced any more, which only v2.3's date removal would read.
+        FrameRef* out = nullptr;
+        for (uint32_t i = 0; i < s.nFrames_; ++i) {
+          FrameRef& e = s.frames_[i];
+          if (e.key >= kPosText && (!out || e.place < out->place)) out = &e;
+        }
+        if (!out) return false;
+        *out = f;
+        return true;
       }
     }
     s.frames_[s.nFrames_++] = f;
@@ -943,6 +1012,15 @@ struct ScanCtx {
   // one in the list (same key and eq) replaces it and goes last; an empty
   // frame doesn't replace a non-empty one, which goes last instead.
   void insertInTag(FrameRef f) {
+    // A frame kept for its place only matters to v2.3's date removal, which
+    // reads places as they are: elsewhere only the order of the frames a
+    // field comes from counts, which such a frame's replacement (the frames
+    // after it moving up one) doesn't change. So outside v2.3 its place is
+    // counted and nothing kept.
+    if (f.key >= kPosText && tagVer != 3) {
+      ++tagN;
+      return;
+    }
     const bool emptiness = f.key != kTDRC && f.key != kPosTimestamp;  // a timestamp has no is_empty()
     for (uint32_t i = 0; i < s.nFrames_; ++i) {
       FrameRef& e = s.frames_[i];
@@ -1093,6 +1171,7 @@ struct ScanCtx {
     id3 = true;
     tagN = 0;
     const uint8_t ver = h.ver;
+    tagVer = ver;
     const uint32_t bodyStart = h.start + 10;
     const uint64_t bodyEnd64 = static_cast<uint64_t>(bodyStart) + h.size;
     regionEnd = bodyEnd64 < c.size() ? static_cast<uint32_t>(bodyEnd64) : c.size();
@@ -1125,6 +1204,12 @@ struct ScanCtx {
       const uint64_t end = static_cast<uint64_t>(pos) + (h.size - ext);
       regionEnd = end < c.size() ? static_cast<uint32_t>(end) : c.size();
     }
+    // A v2.2/2.3 tag under tag-level unsynchronisation is read through: a
+    // frame's size counts its bytes resynchronised, so where the next frame
+    // starts is known only by reading through this one (a picture's
+    // included, as lofty reads the whole tag). Its bytes come on top of the
+    // budget (Limits::maxUnsyncTag), as sequential reads of the buffer.
+    if (wholeUnsync && regionEnd > pos) c.extend(regionEnd - pos);
     PlainIn raw(c, pos, regionEnd);
     UnsyncIn un(raw, false);
     ByteIn& in = wholeUnsync ? static_cast<ByteIn&>(un) : static_cast<ByteIn&>(raw);
@@ -1278,8 +1363,14 @@ struct ScanCtx {
       }
       if (truncated && repairs) break;  // the repair pass cuts the frame there and stops
     }
+    // The tag's end. When the budget stopped the walk, the frames located
+    // stand (the one it stopped in doesn't: its entry is only made once it
+    // is read), and v2.3's two date frames are read in the reserve.
+    const bool walking = c.walking();
+    c.walk(false);
     if (ver == 3) v23Date(t);
     mergeTag(t);
+    c.walk(walking);
   }
 
   // Where a frame's content continues, for its FrameRef: never past the
@@ -1341,6 +1432,7 @@ struct ScanCtx {
       f.eq = mb ? 0 : static_cast<uint32_t>(hash ^ (hash >> 32));
       locate(&f, in, fu, frame, tagUnsync);
       f.empty = in.get() < 0;
+      if (c.failed()) return;  // stopped inside it (the budget): not read whole
       insertInTag(f);
       return;
     }
@@ -1359,12 +1451,22 @@ struct ScanCtx {
       LimitIn capped(in, lim.maxText);
       TextIn t(capped, enc);
       readWhole(t, v);
-      if (v.longer) return;
+      // The parse reads at most 19 bytes after the leading ASCII
+      // whitespace: a text longer than the value holds parses as its start
+      // does, unless that whitespace runs past what is held.
+      if (v.longer) {
+        size_t ws = 0;
+        while (ws < v.len && (v.buf[ws] == ' ' || v.buf[ws] == '\t' || v.buf[ws] == '\n' || v.buf[ws] == '\f' ||
+                              v.buf[ws] == '\r'))
+          ++ws;
+        if (ws + 19 > v.len) return;
+      }
       tagrules::Timestamp ts;
       if (tagrules::parseTimestamp(v.buf, v.len, &ts) != tagrules::TsParse::Ok) return;
       f.year = ts.year;
       f.aux = static_cast<uint8_t>((tagrules::verifyTimestamp(ts) ? kTsVerified : 0) | (ts.fields ? kTsMonth : 0));
       f.eq = timestampEq(enc, ts) ^ (k == kTDRC ? 0u : idHash(id));
+      if (c.failed()) return;
       insertInTag(f);
       return;
     }
@@ -1398,6 +1500,7 @@ struct ScanCtx {
       LimitIn capped(in, lim.maxText);
       TextIn content(capped, enc, f.aux);
       f.empty = !anyText(content);
+      if (c.failed()) return;
       insertInTag(f);
       return;
     }
@@ -1408,6 +1511,7 @@ struct ScanCtx {
     LimitIn capped(in, lim.maxText);
     TextIn t(capped, enc);
     f.empty = !anyText(t);
+    if (c.failed()) return;
     insertInTag(f);
   }
 
@@ -1459,8 +1563,10 @@ struct ScanCtx {
     const uint32_t dataPos = in.filePos();
     uint32_t stored;
     if (tagUnsync) {
-      // The stored length is known only by reading through the picture.
+      // The stored length is known only by reading through the picture
+      // (the walk's budget is extended for it: walkId3()).
       frame.finish();
+      if (c.failed()) return;  // stopped inside it: its length isn't known
       stored = in.filePos() - dataPos;
       f->mode = kModeUnsync;
     } else {
@@ -1926,6 +2032,22 @@ struct ScanCtx {
     kOther, kTrackNumber, kTrackNum, kTrackTotal, kTotalTracks, kDiscNumber, kDiscTotal, kTotalDiscs,
   };
   static constexpr uint8_t kSynth = 1;  // lofty wrote the value: the number
+  static constexpr uint8_t kSets = 2;   // the value would set its field (not empty; an MB id not blank)
+  static constexpr uint8_t kCut = 4;    // a list cuts the value (past 255 bytes)
+
+  // What a key's items are to the record: a field taking its first value, a
+  // list, or a number taking its first item.
+  enum KeyClass : uint8_t { kcNone, kcSingle, kcList, kcNumber };
+  static uint8_t classOf(uint8_t k) {
+    switch (k) {
+      case vTitle: case vAlbum: case vTitleSort: case vArtistSort: case vAlbumSort: case vAlbumArtistSort:
+      case vMbAlbum: case vMbRecording: return kcSingle;
+      case vArtist: case vAlbumArtist: case vGenre: case vComposer: return kcList;
+      case vDate: case vYear: case vTrack: case vTrackTotal: case vDisc: case vDiscTotal: case vBpm: case vKey:
+      case vCompilation: case vRgTG: case vRgTP: case vRgAG: case vRgAP: case vR128T: case vR128A: return kcNumber;
+      default: return kcNone;
+    }
+  }
 
   static uint8_t vorbisKey(const char* k, size_t n) {
     static const struct {
@@ -1969,28 +2091,102 @@ struct ScanCtx {
     return !t.invalid();
   }
 
+  // The first pass's reading of a value (`v`, as the second pass reads it
+  // again), for a full table: whether it sets its field (kSets), whether a
+  // list cuts it (kCut), and its hash as a list keeps it (FieldBuilder: cut
+  // to 255 bytes at a code point, control characters to spaces).
+  static uint8_t valueFacts(uint8_t k, const Value& v, uint32_t* hash) {
+    const char* p = v.buf;
+    size_t n = v.len;
+    if (k == vMbAlbum || k == vMbRecording) tagrules::trim(p, n);
+    uint8_t flags = n ? kSets : 0;
+    const size_t keep = cc::utf8CutLength(v.buf, v.len, cc::FieldBuilder::kValueMax);
+    if (keep < v.len) flags |= kCut;
+    uint32_t h = 2166136261u;
+    for (size_t i = 0; i < keep; ++i) {
+      uint8_t c = static_cast<uint8_t>(v.buf[i]);
+      if (c < 0x20 || c == 0x7F) c = ' ';
+      h = (h ^ c) * 16777619u;
+    }
+    *hash = h;
+    return flags;
+  }
+
+  // Item x can't change the record, whatever follows it: an item before it
+  // in the list settles its field (a single field's first value, a number's
+  // first item, a list's own value or its 17 distinct ones: the list has
+  // ended), or it sets nothing. Only an item lofty's removals don't match
+  // (kOther): two TRACKNUMBER or DISCNUMBER items' swap could still move an
+  // earlier one after it, a difference the header lists.
+  bool dominated(const Scanner::Item& x) const {
+    if (x.kind != kOther || (x.flags & kSynth)) return false;
+    const uint8_t cls = classOf(x.key);
+    if (cls == kcNone) return false;
+    if (cls != kcNumber && !(x.flags & kSets)) return true;  // empty: it sets nothing
+    uint32_t seen[17];
+    uint32_t distinct = 0;
+    for (uint32_t i = 0; i < s.nItems_; ++i) {
+      const Scanner::Item& y = s.items_[i];
+      if (&y == &x || y.key != x.key || y.place >= x.place) continue;
+      if (cls == kcNumber) return true;  // the number is its first item's
+      if (!(y.flags & kSets)) continue;
+      if (cls == kcSingle) return true;  // the field is its first value
+      // A list: a repeat of a value it holds goes (a cut one only after a
+      // cut one: its cut marks the list TRUNCATED), and after 17 distinct
+      // values the list has ended.
+      if (y.hash == x.hash && (!(x.flags & kCut) || (y.flags & kCut))) return true;
+      bool known = false;
+      for (uint32_t j = 0; j < distinct && !known; ++j) known = seen[j] == y.hash;
+      if (!known) seen[distinct++] = y.hash;
+      if (distinct == 17) return true;
+    }
+    return false;
+  }
+
+  // A full table: the items that can't change the record go (their places
+  // still count: the others keep theirs). False: none could.
+  bool shedItems() {
+    if (itemsShed) return false;  // nothing changed since the last try
+    bool drop[Scanner::kMaxItems];
+    bool any = false;
+    for (uint32_t i = 0; i < s.nItems_; ++i) any |= (drop[i] = dominated(s.items_[i]));
+    uint32_t w = 0;
+    for (uint32_t i = 0; i < s.nItems_; ++i)
+      if (!drop[i]) s.items_[w++] = s.items_[i];
+    s.nItems_ = w;
+    itemsShed = !any;
+    return any;
+  }
+
   // ---- the item list's moves ----
-  void pushItem(uint8_t k, uint8_t kind, uint32_t at, uint32_t len, uint32_t page, uint32_t number, uint8_t flags) {
+  void pushItem(uint8_t k, uint8_t kind, uint32_t at, uint32_t len, uint32_t page, uint32_t number, uint8_t flags,
+                uint32_t hash = 0) {
     if (k == vNone && kind == kOther) {  // nothing to keep: its place only
       ++itemN;
       return;
     }
-    if (s.nItems_ == Scanner::kMaxItems) {
-      issues |= kIssueTooMany;
-      ++itemN;
-      return;
-    }
-    Scanner::Item& it = s.items_[s.nItems_++];
+    Scanner::Item it;
+    std::memset(&it, 0, sizeof(it));
     it.at = at;
     it.len = len;
     it.number = number;
     it.page = page;
+    it.hash = hash;
     it.place = itemN++;
     it.key = k;
     it.kind = kind;
     it.flags = flags;
+    if (s.nItems_ == Scanner::kMaxItems) {
+      issues |= kIssueTooMany;
+      if (dominated(it) || !shedItems()) return;  // its place counts
+    }
+    s.items_[s.nItems_++] = it;
+    itemsShed = false;
   }
-  void dropItem(uint32_t i) { s.items_[i] = s.items_[--s.nItems_]; }
+  void dropItem(uint32_t i) {
+    s.items_[i] = s.items_[--s.nItems_];
+    itemsShed = false;
+  }
   // insert()'s retain: the items of a kind go, the others keep their order.
   void retainRemove(uint8_t kind) {
     for (uint32_t i = 0; i < s.nItems_;) {
@@ -2178,12 +2374,15 @@ struct ScanCtx {
       const uint32_t page = ogg ? ogg->page() : 0;
       Value& v = value();
       const bool valid = utf8Value(in, vlen, v);
+      if (c.failed()) return;  // stopped inside it (the budget): not read whole
       if (vk == vTrack || vk == vDisc) {
         if (valid) numberComment(vk == vTrack, v, at, vlen, page);
         continue;
       }
       if (!keyOk || !valid) continue;  // lofty drops it
-      pushItem(vk, known ? vorbisKind(kbuf, k) : static_cast<uint8_t>(kOther), at, vlen, page, 0, 0);
+      uint32_t hash = 0;
+      const uint8_t facts = valueFacts(vk, v, &hash);
+      pushItem(vk, known ? vorbisKind(kbuf, k) : static_cast<uint8_t>(kOther), at, vlen, page, 0, facts, hash);
     }
   }
 
@@ -2262,6 +2461,7 @@ struct ScanCtx {
     for (int b; (b = val.get()) >= 0;)
       if (b == '=') ++pad;
     const uint32_t decoded = vlen / 4 * 3 - static_cast<uint32_t>(pad);
+    if (c.failed()) return;  // stopped inside it (the budget): its end wasn't seen
     if (!ok || static_cast<uint64_t>(head) + dataLen > decoded || dataLen == 0) return;
     Pic p;
     p.offset = at;
@@ -2411,13 +2611,16 @@ struct ScanCtx {
       if (cut < v.len) keep(k == vTrack ? &trackTot : &discTot, v.buf + cut + 1, v.len - cut - 1, v.longer);
       return;
     }
-    // A text item with NULs is several values.
-    size_t start = 0;
-    for (size_t i = 0; i <= v.len; ++i)
-      if (i == v.len || v.buf[i] == 0) {
-        textValue(k, v.buf + start, i - start, v.longer && i == v.len);
-        start = i + 1;
-      }
+    // A text item with NULs is several values, each read whole from the
+    // item (one past the value's buffer doesn't hide those after it).
+    PlainIn again(c, it.valueAt, it.valueAt + it.valueLen);
+    LimitIn capped(again, lim.maxText);
+    TextIn t(capped, kUtf8);
+    for (;;) {
+      const bool more = readValue(t, v);
+      textValue(k, v.buf, v.len, v.longer);
+      if (!more) break;
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -2558,22 +2761,33 @@ struct ScanCtx {
       ++pos;
     }
     if (pos >= c.size()) return false;
+    // The tags at the head: the walk.
+    c.walk(true);
     for (uint8_t k = 0; k < lim.maxId3Tags; ++k) {
       Id3Header h;
       if (!id3Header(pos, &h)) break;
       // mStream's repair pass reads the tag at offset 0, up to 64 MB.
       walkId3(h, k == 0 && pos == 0 && h.size <= 64u * 1024 * 1024);
-      if (c.failed()) break;
+      // Past the tag, as its header says (where the audio is looked for
+      // even when the budget stopped the walk inside it).
+      if (static_cast<uint64_t>(pos) + h.total >= c.size()) {
+        pos = c.size();
+        break;
+      }
       pos += h.total;
-      if (pos >= c.size()) break;
+      if (c.stopped() || c.failed()) break;
     }
+    c.walk(false);
     if (const uint8_t* p = c.at(pos, 8))
       if (std::memcmp(p, "APETAGEX", 8) == 0) issues |= kIssueLofty;  // an APE tag at the head: not read here
     uint32_t first = 0, kbps = 0;
-    if (!firstFrame(pos, &first, &kbps)) return false;
+    const bool audio = firstFrame(pos, &first, &kbps);
+    // No audio: not an MP3, unless the budget stopped the scan first (the
+    // tags located are still the file's: Partial).
+    if (!audio && !c.stopped()) return false;
     // A tag in junk before the audio (lofty: when none was at the head,
     // within max_junk_bytes of the file's start).
-    if (!id3 && first > 0) {
+    if (audio && !id3 && first > 0) {
       const uint32_t window = first < lim.maxJunk ? first : lim.maxJunk;
       for (uint32_t i = 0; i + 3 <= window; ++i) {
         const uint8_t* p = c.at(i, 3);
@@ -2581,23 +2795,31 @@ struct ScanCtx {
         if (p[0] != 'I' || p[1] != 'D' || p[2] != '3') continue;
         Id3Header h;
         if (id3Header(i, &h)) {
-          if (static_cast<uint64_t>(i) + 10 + h.size > c.size()) issues |= kIssueLofty;  // lofty reads it whole first
-          else walkId3(h, false);
+          if (static_cast<uint64_t>(i) + 10 + h.size > c.size()) {
+            issues |= kIssueLofty;  // lofty reads it whole first
+          } else {
+            c.walk(true);
+            walkId3(h, false);
+            c.walk(false);
+          }
         }
         break;
       }
     }
     // The length: the first frame's Xing/Info/VBRI (with LAME's trim), else
-    // the bitrate over the audio.
+    // the bitrate over the audio. The frame is the one lofty's rule found;
+    // its header's fields lie in its first 194 bytes, so the window is the
+    // same whatever the buffer, and so is the length.
     const uint32_t tail = readTail();
-    uint32_t n = c.size() - first;
-    if (n > c.cap()) n = c.cap();
-    if (n > 2048) n = 2048;
-    if (const uint8_t* b = c.at(first, n)) r.rec.durationMs = progress::mp3HeaderDurationMs(b, n, c.size(), first);
-    if (!r.rec.durationMs && kbps) {
-      const uint32_t end = c.size() > tail ? c.size() - tail : 0;
-      if (end > first)
-        r.rec.durationMs = static_cast<uint32_t>((static_cast<uint64_t>(end - first) * 8 + kbps / 2) / kbps);
+    if (audio) {
+      uint32_t n = c.size() - first;
+      if (n > kFrameWindow) n = kFrameWindow;
+      if (const uint8_t* b = c.at(first, n)) r.rec.durationMs = progress::mp3FrameDurationMs(b, n, c.size(), first);
+      if (!r.rec.durationMs && kbps) {
+        const uint32_t end = c.size() > tail ? c.size() - tail : 0;
+        if (end > first)
+          r.rec.durationMs = static_cast<uint32_t>((static_cast<uint64_t>(end - first) * 8 + kbps / 2) / kbps);
+      }
     }
     // The chosen tag (5.1): ID3v2 (with ID3v1's fill), else ID3v1, else APE.
     if (id3) {
@@ -2610,23 +2832,30 @@ struct ScanCtx {
       finishValues(false);
       picture = elect(apePics, PicVote());
     }
-    return true;
+    return audio;
   }
 
   bool scanFlac() {
     uint32_t pos = 0;
     Id3Header h;
+    c.walk(true);
     if (id3Header(0, &h)) {
       if (static_cast<uint64_t>(10) + h.size > c.size()) issues |= kIssueLofty;  // lofty reads it whole first
       walkId3(h, h.size <= 64u * 1024 * 1024);
       pos = h.total;
     }
+    c.walk(false);
     const uint8_t* m = c.at(pos, 8);
-    if (!m || std::memcmp(m, "fLaC", 4) != 0) return false;
-    if ((m[4] & 0x7F) != 0) return false;  // STREAMINFO first
+    if (!m || std::memcmp(m, "fLaC", 4) != 0 || (m[4] & 0x7F) != 0) {  // STREAMINFO first
+      // The budget stopped it in a front ID3v2: that tag, as far as it went.
+      if (c.stopped() && id3) resolveId3();
+      return false;
+    }
     const uint32_t siLen = (static_cast<uint32_t>(m[5]) << 16) | (static_cast<uint32_t>(m[6]) << 8) | m[7];
     if (siLen < 18) return false;
     if (const uint8_t* si = c.at(pos, 26)) r.rec.durationMs = progress::flacDurationMs(si, 26);
+    // The metadata blocks: the walk.
+    c.walk(true);
     uint32_t off = pos + 4;
     bool last = false;
     for (uint32_t i = 0; !last; ++i) {
@@ -2670,6 +2899,7 @@ struct ScanCtx {
       }
       off += 4 + len;
     }
+    c.walk(false);
     // The chosen tag (5.1): the comments (a picture alone makes them), else a
     // front ID3v2.
     if (vorbisTag || blockPicSeen) {
@@ -2686,6 +2916,7 @@ struct ScanCtx {
   void clearVorbis() {
     s.nItems_ = 0;
     itemN = 0;
+    itemsShed = false;
     commentPics.clear();
   }
 
@@ -2711,7 +2942,10 @@ struct ScanCtx {
     if (!in.start()) return false;
     uint8_t magic[8];
     if (!in.getN(magic, 8) || std::memcmp(magic, "OpusTags", 8) != 0) return false;
+    // The comment packet's pages: the walk.
+    c.walk(true);
     readComments(in, &in);
+    c.walk(false);
     finishComments(true);
     picture = elect(commentPics, PicVote());
     // The length: the last page's granule less the first's and the pre-skip
@@ -2755,6 +2989,7 @@ Result Scanner::scan(Source& src, Kind kind, uint8_t* buf, uint32_t bufBytes, co
   clearValue(spare_);
   bool ok = false;
   bool ioError = false;
+  bool stopped = false;
   if (buf && bufBytes >= 512) {
     Cursor c(src, buf, bufBytes, limits, &stats_, &issues_);
     ScanCtx x(*this, c, limits, kind);
@@ -2765,8 +3000,11 @@ Result Scanner::scan(Source& src, Kind kind, uint8_t* buf, uint32_t bufBytes, co
       default: break;
     }
     ioError = c.ioError();
-    if (ok && !ioError) x.finishRecord(static_cast<uint8_t>(kind));
+    // The budget never makes a file UNREADABLE: what was found stands.
+    stopped = c.stopped() && !ioError;
+    if ((ok || stopped) && !ioError) x.finishRecord(static_cast<uint8_t>(kind));
   }
+  if (stopped) return Result::Partial;
   if (ok && !ioError) return Result::Ok;
   rec_.clear();
   rec_.rec.container = static_cast<uint8_t>(kind);

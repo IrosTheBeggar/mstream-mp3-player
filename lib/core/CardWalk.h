@@ -289,6 +289,11 @@ struct Summary {
   bool firstAfterCommit = false;  // D's walk identity becomes the root's commit
   int32_t skew = 0;               // T's skew (2.3.4) for DHDR; 0 none
   bool changed = false;           // the sink was given rows (a first walk after a commit always changes D's header)
+  // A doubt couldn't be settled (its qfp read failed): its row is the one
+  // without T, and D must not take this walk's commit, so that the next walk
+  // is a first one and asks T again (a walk at the same commit would find
+  // the row at the file's size and time and never ask).
+  bool unsettled = false;
 };
 
 // The walk's output (N4: walk.jnl). False from any call stops the walk.
@@ -373,7 +378,7 @@ public:
     uint32_t byQfp = 0;           // ... a qfp read
     uint32_t notTransfer = 0;     // doubtful files that aren't T's
     uint32_t qfpReads = 0;
-    uint32_t qfpFailed = 0;       // a file that couldn't be read (its row stays without T)
+    uint32_t qfpFailed = 0;       // a file that couldn't be read (its row without T; summary.unsettled)
     bool recounted = false;       // the histogram needed the pass over the doubts
   };
 

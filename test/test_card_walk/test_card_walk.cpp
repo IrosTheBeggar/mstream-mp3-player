@@ -1110,6 +1110,8 @@ void test_three_files_shifted() {
   TEST_ASSERT_EQUAL_UINT32(3, r.qfpReads);
   TEST_ASSERT_EQUAL_UINT32(2, r.byQfp);
   TEST_ASSERT_EQUAL_UINT32(1, r.notTransfer);
+  TEST_ASSERT_EQUAL_UINT32(0, r.qfpFailed);
+  TEST_ASSERT_FALSE(r.summary.unsettled);  // every doubt settled (a failed read: test_tag_store_walk)
   TEST_ASSERT_TRUE(d.row(moved[0]).confirmed);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(St::Software), static_cast<int>(d.row(moved[1]).status));
   TEST_ASSERT_EQUAL_INT(static_cast<int>(St::Pending), static_cast<int>(d.row(moved[2]).status));

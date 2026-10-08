@@ -189,9 +189,10 @@ cw::Sink::Read WalkSink::nextDoubt(char* rel, size_t* len, cw::Doubt* d) {
 bool WalkSink::finish(const cw::Summary& s) {
   r_.close();
   // A whole walk closes both runs (run 1 here when no doubt was read back),
-  // so its commit and skew reach DHDR.
+  // so its commit and skew reach DHDR, unless a doubt was left unsettled
+  // (run 2's End says so: D stays unwalked, and the next walk asks T again).
   bool ok = w_.run() != 1 || w_.endRun(s.skew);
-  ok = ok && w_.endRun(s.skew);
+  ok = ok && w_.endRun(s.skew, s.unsettled);
   return w_.finish() && ok;
 }
 

@@ -461,15 +461,34 @@ void PowerLab::reconnect(const char* a) {
 
 void PowerLab::playSilence() {
   const uint32_t id = TrackCatalog().find(TrackCatalog::kSilencePath);
+  if (id == TrackCatalog::kNone) {
+    Serial.println("[power] silence: no such track");
+    return;
+  }
+  const char* silent = hooks_.silentMode && hooks_.silentMode() ? "; silent test mode" : "";
+  // A full queue (the queue's cap, docs/QUEUE-MODES.md 15: a card of 5,000
+  // tracks or more after its first boot, a Play all or a Shuffle all)
+  // refuses an add: the silence plays as the queue then, and qu puts the
+  // listener's back (the Play's undo).
+  if (player_.queue().room() == 0) {
+    if (!player_.playNow(&id, 1, 0)) {
+      Serial.println("[power] silence: couldn't play it (no memory)");
+      return;
+    }
+    Serial.printf("[power] playing %s as the queue (the queue was full, %lu: qu puts it back; an hour of zeros: the "
+                  "output runs at its full rate, nothing is heard%s)\n",
+                  TrackCatalog::kSilencePath, static_cast<unsigned long>(QueueModel::kMaxEntries), silent);
+    return;
+  }
   const int at = player_.currentIndex() + 1;  // 0 with an empty queue
-  if (id == TrackCatalog::kNone || !player_.playNext(&id, 1)) {
-    Serial.println("[power] silence: couldn't queue it");
+  if (!player_.playNext(&id, 1)) {
+    Serial.println("[power] silence: couldn't queue it (no memory)");
     return;
   }
   player_.play(static_cast<size_t>(at));
   Serial.printf("[power] playing %s (queue entry %d, an hour of zeros: the output runs at its full rate, nothing is "
                 "heard%s)\n",
-                TrackCatalog::kSilencePath, at, hooks_.silentMode && hooks_.silentMode() ? "; silent test mode" : "");
+                TrackCatalog::kSilencePath, at, silent);
 }
 
 void PowerLab::loop(uint32_t nowMs) {

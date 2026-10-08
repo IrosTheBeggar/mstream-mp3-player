@@ -1,4 +1,8 @@
 {
+ "ape_long_value.mp3": {
+  "note": "an APE item of two values, the first past 255 bytes (cut, TRUNCATED): the second kept",
+  "pictures": []
+ },
  "ape_lower_key.mp3": {
   "note": "an APE cover under a lowercase key (mStream reads it)",
   "pictures": [
@@ -162,6 +166,10 @@
    }
   ]
  },
+ "flac_many_comments.flac": {
+  "note": "224 comments: empty and repeated genres, later albums and BPMs, 120 artists (the list keeps 16), then the title, the composer, the track",
+  "pictures": []
+ },
  "flac_numbers_0.flac": {
   "note": "TRACKNUMBER ' 3' (parse_num_of), 'x/2'",
   "pictures": []
@@ -251,9 +259,41 @@
   "note": "an unpaired surrogate: lofty fails the file; U+FFFD here",
   "pictures": []
  },
+ "long_tdrc.mp3": {
+  "note": "a TDRC of three values, its text longer than a value holds: the year from its start",
+  "pictures": []
+ },
  "long_values.mp3": {
   "note": "a 300-byte title cut; five 204-byte artists keep four; 20 composers keep 16",
   "pictures": []
+ },
+ "many_text_v23.mp3": {
+  "note": "v2.3: two pictures, 100 other text frames, TYER (its removal swaps the first picture behind the second), the title, the artist",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "a1ab3b1f0aaa5826",
+    "length": 96,
+    "offset": 34
+   },
+   {
+    "coding": 0,
+    "fnv": "b497ba1d708b1c02",
+    "length": 96,
+    "offset": 153
+   }
+  ]
+ },
+ "many_txxx.mp3": {
+  "note": "v2.4: 120 TXXX frames no field comes from, then the title, the artist, a gain, a cover",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "522edb4729d2707a",
+    "length": 96,
+    "offset": 2884
+   }
+  ]
  },
  "mpeg2.mp3": {
   "note": "MPEG-2 Layer III",
@@ -300,6 +340,10 @@
  },
  "opus_basic.opus": {
   "note": "Opus: R128 gains (the REPLAYGAIN gain ignored); a peak",
+  "pictures": []
+ },
+ "opus_many_comments.opus": {
+  "note": "110 genres across pages, then the title, the artist, the date",
   "pictures": []
  },
  "opus_pages.opus": {

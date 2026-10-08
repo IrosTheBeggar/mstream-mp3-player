@@ -160,6 +160,16 @@ bool KeyRing::has(uint32_t key) const {
   return false;
 }
 
+// ---- a refused add's note ----
+
+ToastButtons keptByRefusal(bool up, bool undo, bool view, uint32_t viewKey, QueueModel::Edit undoable) {
+  ToastButtons b;
+  if (!up) return b;
+  b.undo = undo && undoable != QueueModel::Edit::None;
+  b.viewKey = view ? viewKey : QueueModel::kNone;
+  return b;
+}
+
 // ---- UndoWatch ----
 
 UndoWatch::Gone UndoWatch::pass(bool shuffled, bool undoToast, QueueModel::Edit undoable) {

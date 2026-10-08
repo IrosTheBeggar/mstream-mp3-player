@@ -29,7 +29,11 @@ of these in this corpus): a compressed ID3v2 text frame (lofty inflates it),
 the repair pass's fallback for a tag with no padding to grow into, COVERART,
 an APE tag at the head of an MP3, a Lyrics3 block before ID3v1, the base64
 of an Opus picture past its head, a frame no field comes from repeated
-within one tag (lofty's list may replace it; the device only counts it), and
-a Vorbis value whose bytes stop being UTF-8 after its first 4 KB. Then the
-files lofty fails on (the two `lofty_fails_*` here): the reference reads them
-as UNREADABLE and the device reads them itself (2.9).
+within one tag (lofty's list may replace it; the device only counts it), a
+Vorbis value whose bytes stop being UTF-8 after its first 4 KB, more than 96
+frames or comments in one tag that a field may take (the `many_*` files here
+pass 96 with entries the device can let go of), and tags past the device's
+read budget (an Ogg comment packet of more than about 500 pages, an
+unsynchronised v2.2/2.3 tag past 8 MB: the device keeps what it found).
+Then the files lofty fails on (the two `lofty_fails_*` here): the reference
+reads them as UNREADABLE and the device reads them itself (2.9).
