@@ -58,7 +58,12 @@ the prebuilt ESP-IDF libraries; WiFi (net80211, pp, wpa_supplicant, lwIP,
 mesh, ESP-NOW: pulled into the link, then collected to 0 bytes); the Arduino
 core's HTTPClient, Network and SPIFFS; Mbed TLS itself (only Espressif's
 SHA-256 port file is linked, see ESP-IDF). The Unity test framework is used
-by the host tests only.
+by the host tests only, and so is the copy of ChaN's FatFs R0.15 in
+`test/support/fatfs` (elm-chan.org's ff15.zip, SHA-256
+e0d76654d877e6c74be5ea3c395808794d495169514e98cbf6046168b8f4f070, with
+`ffunicode.c` cut to its CP850 table; its licence is that folder's
+LICENSE.txt, as in [LICENSES/FatFs.txt](LICENSES/FatFs.txt)): a host model
+of the firmware's FatFs, which is ESP-IDF's (below).
 
 A new dependency, a version bump or a change of what the firmware calls can
 change this list: check the map again before a release.

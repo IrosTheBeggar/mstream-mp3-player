@@ -30,7 +30,11 @@ trim and `queuetext::read()`'s pre-sized blocks), built into
 (the user's answer to U12: 3.5, and docs/QUEUE-MODES.md section 15) is
 built the same way. N5, the validation walk, is in `lib/core/CardWalk`,
 host-tested on fake FAT trees (3.2.6 says what it decided); N10 and N12
-bring it into the firmware. N4, the device's own records and their journals, is
+bring it into the firmware. N8, the PSRAM sector cache under FatFs, is in
+`lib/core/SectorCache`, checked against a reference model and under ChaN's
+FatFs on RAM disks (`test/support/fatfs`, host only), on which
+`tools/fatmodel.py` counts a lookup and a walk on N11's card (3.2.7 says
+what it measured and decided); N10 installs it. N4, the device's own records and their journals, is
 in `lib/core/TagStore`, a power cut tested at every step (3.3.7 says
 what it decided). N6, the device's tag reader, is in `lib/core/TagScan`
 and `TagRules`, checked field for field against a reference reader
@@ -2110,7 +2114,7 @@ labels; device times are to be measured in milestones L0-L5 (part 6).
 - **The walk lists once, with sizes and FAT times**, through FatFs's
   `f_readdir` (`FILINFO` carries both), one folder at a time, and skips
   folders whose digest is unchanged.
-- **A PSRAM sector cache under FatFs** (64 KB) makes the walk and every
+- **A PSRAM sector cache under FatFs** (128 KB: 3.2.7) makes the walk and every
   open fast on a big card. It is the precondition for 20,000 tracks.
 - **The scanner reads only files no fresh record covers**: on a
   transfer-filled card, none. It shares one card worker with the
@@ -2244,10 +2248,11 @@ for a sector or two: about 35 µs cached, 0.6-1.0 ms uncached.
 
 #### 3.2.4 The PSRAM sector cache
 
-**`lib/core/SectorCache` (portable):** an LRU of single 512 B sectors, 128
-entries (64 KB of PSRAM), hashed by LBA. Multi-sector reads (file data)
-bypass it; writes go through and invalidate the sectors they cover; it is
-cleared at mount.
+**`lib/core/SectorCache` (portable; built, 3.2.7):** an LRU of single 512 B
+sectors, 256 entries (128 KB of PSRAM: 128 sit at the knee of the user's
+`/music`, 3.2.7), hashed by LBA. Multi-sector reads (file data) bypass it;
+writes go through, and a cached sector a write covers takes its bytes (or
+is dropped, if the write failed); it is cleared at mount.
 
 **Installed (firmware):** a diskio wrapper registered with
 `ff_diskio_register` right after a successful `SD.begin()`, forwarding to
@@ -2351,6 +2356,84 @@ where 3.2.3 left room:
   3.9 KB and its 8 KB of buffers, the scratch 64 KB: PSRAM, never the
   worker's stack. A step lists at most one folder (or one pass of a big
   one) or reads at most one qfp.
+
+#### 3.2.7 As built (N8)
+
+`lib/core/SectorCache` is 3.2.4's cache, host-tested (`test_sector_cache`,
+`test_fat_model`) and not yet installed: the diskio wrapper is N10's. What
+the code and the model decided:
+
+- **The model.** ChaN's FatFs R0.15, the revision ESP-IDF 5.5.5 carries,
+  is vendored for the host only in `test/support/fatfs` (U14: from
+  elm-chan.org, `ffunicode.c` cut to its CP850 table), configured as the
+  Core2's sdkconfig builds it: long names on the stack, UTF-8, code page
+  850, no relative paths, no fast seek, a buffer per file, TRIM on. It runs
+  on sparse RAM disks (`test/support/FatModel.h`), counting FatFs's
+  `disk_read` calls (the stock SD driver's card reads: one CMD17 each) and
+  what reaches the card through the cache. `tools/fatmodel.py` runs it on
+  N11's card (tools/synthcard.py's plan, seed 1, or a tree it built: the
+  same figures): 19,410 audio files to open, a `/music` of 1,659 entries
+  in 104 sectors (the user's: 1,628 in 102), FAT32 with 32 KB clusters,
+  everything created in the copy's order.
+- **The research's counts hold.** FatFs reads exactly what metascan's
+  model counts: at each level of the path the sectors up to the name's
+  entry, plus a FAT sector for each cluster the scan crosses
+  (`test_fat_model` checks it file for file on a 20k tree of
+  `LibrarySynth`'s). On N11's card a lookup (an open, a stat, an opendir)
+  is 58.0 card reads on average (p90 99, max 116; metascan: 56), 35-58 ms
+  at the calibrated 0.6-1.0 ms a read. The probes L0 opens, at entries 1,
+  353 and 703 of `/music`, read 4, 55 and 108. 3.2.3's walk reads 150,742
+  sectors (90-151 s; today's nested walk 153,241; metascan: about 148,000
+  and 89-148 s).
+- **256 sectors, not 128** (128 KB; the block with its links and its hash
+  is 135,168 B). Each lookup scans `/music` from its first sector, so an
+  LRU smaller than `/music` evicts, at each lookup, what the next one
+  needs. Card reads, warm (the first 2,000 opens left out) or from a mount:
+
+| Cache | A random open: mean, p99 | 3.2.3's walk | The scan's opens and 4 KB heads, per file |
+|---|---|---|---|
+| none | 58.0, 109 | 150,742 (90-151 s) | 59.4 |
+| 64 sectors | 41.7, 108 | 105,599 (65-107 s) | 40.8 |
+| 128 sectors | 4.8, 27 | 7,355 (9.4-12.4 s) | 1.75 |
+| 256 sectors | 3.5, 8 | 7,276 (9.4-12.3 s) | 1.75 |
+
+  The knee is `/music`'s own size: 96 sectors give 18.6 a random open, 112
+  give 7.1, 160 give 3.9. The user's `/music` sits just under 128's knee,
+  and grows a sector for about every 7 artists; 256 moves the knee to
+  about 1,500 artists for 64 KB more (3.5). What a random open still reads
+  at 256 is its artist's and album's own folder sectors, about 3; a walk
+  or a scan reads each folder's sectors about once (3.2.3 said 9-11 s for
+  the walk; the model says 9.4-12.3 s at 35 µs a hit). The times are the
+  research's per-read figures; L0 measures them.
+- **What it keeps.** Single-sector reads (FatFs's folders and FAT, a
+  file's partial sector) are kept, least recently used out first; a read
+  of more than one sector goes to the card in one call and changes
+  nothing; a failed read keeps and evicts nothing. A write goes to the card
+  first; each cached sector it covers then takes the written bytes, or is
+  dropped if the write failed (3.2.4 said "invalidate": refreshing keeps
+  the folder and FAT sectors that a journal's appends rewrite, and equals
+  a drop and a read back). A write never adds a sector. `invalidate()`
+  serves a TRIM (FatFs trims freed clusters, `FF_USE_TRIM`), `clear()` a
+  mount.
+- **The checks.** `test_sector_cache` drives random reads, writes, writes
+  that fail part way, failed reads, invalidations and clears against a
+  reference LRU and the device's bytes, for 1 to 64 sectors: the same
+  sectors in the same order after every step, the device asked exactly at
+  the reference's misses, every byte the card's. `test_fat_model` runs the
+  same random file work (folders, writes in random chunks and past the
+  end, reads, deletes, moves, truncations, listings, remounts, the cache
+  dropped behind FatFs's back) through FatFs on two RAM disks, one behind
+  a 24-sector cache and then a 4,096-sector one: the same results, the
+  same bytes and the same card image. Its TRIMs scramble their sectors and
+  its allocation is sent back to the freed clusters, so a cache that kept
+  a trimmed sector fails it (checked by breaking the wrapper's TRIM).
+- **For N10's wrapper:** `clear()` at every mount, before
+  `ff_diskio_register`; `CTRL_TRIM` calls `invalidate()` and then the SD
+  driver; anything that writes the card around FatFs must invalidate too
+  (nothing does today: `SD.writeRAW` isn't used). FatFs's volume lock
+  serialises the cache (one volume). A lookup is one `f_open`, `f_stat` or
+  `f_opendir`; how many an Arduino `File` open makes through the VFS is
+  L0's to count.
 
 ### 3.3 The scanner
 
@@ -3019,10 +3102,10 @@ counts):
 | `library.idx` v6 | −1.75 to −1.85 | 3.4.3 |
 | The queue, full (the cap: 5,000 entries), with its undo snapshot | −0.12 | 12 B per entry, twice (`QueueModel`). With no saved queue the boot queues the library's first 5,000 (`queueEverything`), so a full queue is the *default* on a big new card; `assign()` takes no snapshot (0.06 MB), and the first edit after it adds one. A whole-library queue of 20k was −0.48 (−0.96 untrimmed) before the cap |
 | AutoDJ: u16 maps, filters, 5 cached rows | −0.17 to −0.33 | autodj research section 5 |
-| The sector cache | −0.07 | 3.2.4 |
+| The sector cache | −0.13 | 3.2.4: 256 sectors, 135,168 B (3.2.7: 0.06 MB more than the 128 first planned) |
 | `DurationBook` | −0.04, or 0 once lengths come from the index | `lib/core/QueueView.h` |
 | The card worker's job, only while one runs (one at a time) | −0.08 to −0.1 | the largest job: the walk (the 64 KB scratch, DFLD's 8 KB buffer, the 2 KB Δ histogram, the journal's write buffer). The scan: its 4 KB buffer, the record, the `FIL`, a 100-record chunk, the resume set (about 60 KB). The compaction: its run buffers (about 60 KB). The doubtful files go to `walk.jnl`, not RAM (3.2.3) |
-| **Headroom** | **about 0.26 to 0.71** | positive in the worst case since the queue's cap (it was about −0.1 to 0.35 with a whole-library queue) |
+| **Headroom** | **about 0.20 to 0.65** | positive in the worst case since the queue's cap (it was about −0.16 to 0.29 with a whole-library queue); the sector cache's 256 sectors took 0.06 MB of it (3.2.7) |
 
 **What that forces:**
 
@@ -3395,7 +3478,7 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 | N5 | **Built.** **`CardWalk`**: the lister interface, the canonical sort (with its passes for big folders), the digests, T's freshness (the skew, Doubtful entries through `walk.jnl`, qfp, confirmations) | 2-2.5 | Fake FAT trees: shuffled order, a 3,000-file folder through a small scratch, a retag at the same size, a renamed folder, a deleted album, every stamp shifted an hour, three files shifted, invalid and zero stamps |
 | N6 | **Built.** **`TagScan`, the production port** with part 5's rules; the synthetic parity corpus (2.17, item 3) | 3-4 | `test_tag_scan`: the corpus and the crafted edge files (`test/fixtures/tags`, `tools/tag_corpus.py`) field for field against the lofty reference (`tools/tagref`) at every buffer size; the anchors read back; generated files past the corpus's sizes and the read budget; truncation, mutation and generated fuzz passes (ASan only where a Linux toolchain is: a review ran one); a random differential against the reference (3.3.8) |
 | N7 | **Built.** **`ScanScheduler`** and the `LibraryWrite` blocker | 1-1.5 | Like `test_idle_policy` (3.3.9) |
-| N8 | **`SectorCache`.** Optional: a host FatFs model (vendored FatFs on a RAM disk) counting sector reads per walk and per open on a 20k tree of the user's shape (part 7, U14: vendoring is a download; the user said yes) | 1 (+1) | LRU, bypass, write invalidation, a random model check; the model checks metascan's 56 sectors per open before L0 |
+| N8 | **Built.** **`SectorCache`.** Optional: a host FatFs model (vendored FatFs on a RAM disk) counting sector reads per walk and per open on a 20k tree of the user's shape (part 7, U14: vendoring is a download; the user said yes). Both built (3.2.7) | 1 (+1) | LRU, bypass, write invalidation, a random model check (`test_sector_cache`); the model (`test_fat_model`, `tools/fatmodel.py`) checks metascan's 56 sectors per open before L0: 58.0 on N11's card, 3.5 with the cache's 256 sectors |
 | N9 | **The catalog, the UI and the texts**: `TrackCatalog`, `LibraryPage` rows, `UiText`, `SleepTimer`'s `kLoose`, the console's `g*` commands | 1.5-2 | `test_ui_library`, `test_sleep_timer` |
 | N10 | **Firmware glue, built and not flashed**: the FatFs lister, the diskio wrapper, the card worker, streamed JPEG input, transfer thumbnails, `device.txt` | 2-3 | `pio run -e core2` and `cache_guard` |
 | N11 | **A synthetic big card** (`tools/`): about 20k tiny tagged MP3, FLAC and Opus stubs in the user's shape, with no real names, for L0 without the real library (the user writes it to a card) | 0.5-1 | Its own tag dump through N6 |
@@ -3434,7 +3517,7 @@ the embedded-cover decode beyond JPEG (PNG, progressive: metascan's M6).
 
 | # | Work | Days | Device checks (console lines) |
 |---|---|---|---|
-| L0 | **The M0 bench** on a full FAT32 card (the real library, or N11's) | 0.5-1 | ms per sector; open time at entry 1, 350 and 700 of a 705-entry folder; the stock walk against the 89-148 s model; PSRAM free with the UI up |
+| L0 | **The M0 bench** on a full FAT32 card (the real library, or N11's) | 0.5-1 | ms per sector; open time at entry 1, 350 and 700 of a 705-entry folder (N11's probes: 4, 55 and 108 card reads in the model, 3.2.7); the stock walk against the 89-148 s model; PSRAM free with the UI up |
 | L1 | **The sector cache on** | 1-1.5 | A write soak with the cache on (resume saves, thumbnails, the queue, `library.idx`); the SD write bench unchanged; a remount |
 | L2 | **The boot and the validation walk** | 0.5-1 | Browsable in under 3.5 s at 20k; the walk about 10 s; 0 underruns over MP3, FLAC and Bluetooth during the walk |
 | L3 | **The scanner** | 1-1.5 | Per-file and full-scan times idle and playing, and on the Dance page; 0 underruns; a reboot mid-scan resumes; the stack's high-water mark; the lowest internal RAM in Bluetooth mode; the loop's `pass_max` during a scan; the battery percent |
@@ -3535,7 +3618,8 @@ The user answered U8, U11, U12, U13 and U14 on 2026-10-07 (marked
   resumed on USB or above 15%).
 - **U14. May a host test vendor FatFs** (a download) to count sector reads
   on a synthetic 20k tree before L0? **Decided (2026-10-07): yes** (N8's
-  optional model).
+  optional model). Built: R0.15 from elm-chan.org, in `test/support/fatfs`
+  for the host only (3.2.7).
 - **U15. AutoDJ's table:** K = 100 (about 6 MB per 20k tracks on the
   card)? Rows only for embedded tracks, or also rows with filter data
   only (BPM, key) for tracks not yet embedded? And random with filters
@@ -3601,13 +3685,16 @@ The user answered U8, U11, U12, U13 and U14 on 2026-10-07 (marked
 1. **The big-card figures are modelled, not measured.** The per-sector
    latency, the walk and the opens decide how urgent the sector cache is
    and how long scans take. L0 retires it.
-2. **PSRAM at 20k** leaves about 0.26 to 0.71 MB (a full queue of 5,000,
-   its undo snapshot and AutoDJ, while a card-worker job runs) since the
-   queue's cap; it was about −0.1 to 0.35 with a whole-library queue. The
+2. **PSRAM at 20k** leaves about 0.20 to 0.65 MB (a full queue of 5,000,
+   its undo snapshot and AutoDJ, while a card-worker job runs, with the
+   sector cache's 128 KB) since the queue's cap; it was about −0.16 to
+   0.29 with a whole-library queue. The
    levers are in 3.5; fragmentation can defer a build to the next boot,
    which the build-at-boot marker makes happen.
-3. **Sector-cache invalidation bugs would corrupt data.** L1's write soak
-   comes before anything else ships.
+3. **Sector-cache invalidation bugs would corrupt data.** The host checks
+   it under FatFs (3.2.7: the same work with the cache and without it
+   leaves the same card); L1's write soak comes before anything else
+   ships.
 4. **Two implementations of one format** (Rust and C++) can drift: the
    canonical order, path bytes (NFC and NFD, and how each OS lists
    them), string limits, number parsing, the AutoDJ scores. The golden

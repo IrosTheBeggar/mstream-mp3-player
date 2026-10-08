@@ -1149,6 +1149,23 @@ the whole file system for a used count it throws away. Nothing needs the
 free space yet; the WiFi sync will, and must count it once, in one
 controlled scan with progress, outside playback and never at boot.
 
+**The PSRAM sector cache (built, not installed yet).** FatFs here has no
+relative paths (`FF_FS_RPATH 0`) and the SD driver caches nothing, so every
+open, stat and opendir reads its path's folders again from the root, one
+sector per card transaction: about 58 card reads per open on a card of the
+user's shape (a `/music` of 705 artists is 102 sectors), and a walk of 20k
+files about 150,000 (90-150 s). `lib/core/SectorCache` keeps single 512 B
+sectors (FatFs's folders and FAT) in a 256-sector LRU (128 KB of PSRAM);
+multi-sector reads, file data, bypass it; writes go through to the card,
+refreshing the cached sectors they cover (dropping them if the write
+failed); a TRIM invalidates its range and a mount clears it. With it an
+open is about 3.5 card reads and the walk about 7,300. Host-tested against
+a reference model (test_sector_cache) and under ChaN's FatFs R0.15 on RAM
+disks (test_fat_model; `test/support/fatfs`, configured as the Core2 builds
+it, host only); `tools/fatmodel.py` measures it on tools/synthcard.py's
+card. The diskio wrapper that puts it under the SD card after each mount
+is the next step (docs/METADATA.md 3.2.4 and 3.2.7, N10).
+
 ## The board guard
 
 The firmware assumes a Core2 everywhere (pins, power chip, panel, speaker).
