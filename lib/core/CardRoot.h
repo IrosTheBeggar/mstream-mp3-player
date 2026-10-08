@@ -37,6 +37,7 @@ struct Root {
   tagstore::Identity identity;  // present: the commit (cardId, generation, commitId, T's headerCrc)
   char tagsPath[48] = "";       // "/.mstream/tags-0000002a.bin"
   uint32_t tagsBytes = 0;
+  uint32_t tagsRecords = 0;     // T's header's record count (the update step's memory check)
   // Why there is no transfer data (Ok when present; Missing: no root at all).
   cardcontract::Why why = cardcontract::Why::Missing;
   // manifest.bin and manifest.tmp are one commit seen twice (a rename cut

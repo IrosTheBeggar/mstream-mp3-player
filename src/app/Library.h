@@ -52,7 +52,9 @@ public:
   bool begin();
   // The update step's build (3.4.2), whatever library.idx says: from the
   // records (the journals compacted first), or a walk when there are none
-  // (the flash: always the walk); then saved. Every library id changes:
+  // (the flash: always the walk); then saved. On the card, a card that
+  // doesn't answer (/music, or the records the boot opened: pulled while
+  // on) fails it before the index is touched. Every library id changes:
   // QueueStore::remap() wraps this so the queue follows its tracks by
   // path. Runs on the loop: the card worker must have no step under way
   // (app/CardTasks waits for it).
@@ -84,8 +86,10 @@ public:
   void setOverlay(uint32_t track, const tagscan::Record& rec);
   // The update step's memory check (3.4.2): free PSRAM, with what the step
   // frees (the index, and `alsoFreed`: the queue's), is at least 1.1 x the
-  // build's estimated peak, and the largest free block takes the track
-  // table. False: `why` says what is short.
+  // build's estimated peak, and the new track table (the builder's
+  // reservation) fits in the old one's block, which the index keeps across
+  // the rebuild, or in the largest free block with a sixteenth to spare.
+  // False: `why` says what is short.
   bool roomToBuild(size_t alsoFreed, char* why, size_t size) const;
   // The build-at-boot marker (3.4.2): written when the update step can't
   // run for memory, so the next boot builds before the UI, on a fresh heap.
@@ -124,7 +128,7 @@ private:
   // The flash: today's signature walk and cache.
   Walk signatureWalk();
   bool loadCache(uint64_t signature);
-  bool build(uint64_t* signature);
+  bool build(uint64_t* signature, uint8_t addOptions = 0);
   void saveCache(uint64_t signature);
   void cachePath(char* buf, size_t size, bool temp);
   bool beginFlash();
@@ -132,8 +136,13 @@ private:
   bool beginCard();
   bool openRecords();
   // Builds from the records (T and D), or walks when there are none; saves.
-  bool buildCard();
+  // `update`: the update step's (an index in use: records that don't open
+  // fail it, the index untouched).
+  bool buildCard(bool update = false);
+  // /music walked into a path-named index, every track Pending.
   bool walkCard();
+  // The track table the build would reserve (roomToBuild()).
+  uint32_t buildTrackSlots() const;
   bool saveCard(const LibraryIndex::Inputs& inputs);
   LibraryIndex::Load loadCard(LibraryIndex::Inputs* saved);
   void writeDeviceTxt();

@@ -688,6 +688,19 @@ void test_20k_memory_and_peak() {
   TEST_ASSERT_TRUE(b.bytes == l.bytes);
 }
 
+// The track table build() reserves, which the update step's memory check
+// asks first (Library::roomToBuild(), N10's review): D's records, capped by
+// its own rows while T lists, plus T's when T lists.
+void test_track_slots() {
+  const uint32_t own = 300;
+  TEST_ASSERT_EQUAL_UINT32(20000, LibraryBuilder::trackSlots(20000, nullptr, 0, false));
+  TEST_ASSERT_EQUAL_UINT32(20000, LibraryBuilder::trackSlots(20000, &own, 19000, false));  // T doesn't list: D alone
+  TEST_ASSERT_EQUAL_UINT32(19300, LibraryBuilder::trackSlots(20000, &own, 19000, true));
+  TEST_ASSERT_EQUAL_UINT32(39000, LibraryBuilder::trackSlots(20000, nullptr, 19000, true));  // D's own unknown
+  TEST_ASSERT_EQUAL_UINT32(19000, LibraryBuilder::trackSlots(0, nullptr, 19000, true));      // T alone
+  TEST_ASSERT_EQUAL_UINT32(0, LibraryBuilder::trackSlots(0, nullptr, 0, false));
+}
+
 // The same files from T and from D build the same index (2.17, item 5: the
 // research's M7 test on the host), byte for byte once the tracks' sources
 // (which differ by definition) are cleared, when the two records' lengths
@@ -741,6 +754,7 @@ int main(int, char**) {
   RUN_TEST(test_older_device_parser);
   RUN_TEST(test_facts_and_thumbnails);
   RUN_TEST(test_20k_memory_and_peak);
+  RUN_TEST(test_track_slots);
   RUN_TEST(test_transfer_and_device_build_the_same_index);
   return UNITY_END();
 }

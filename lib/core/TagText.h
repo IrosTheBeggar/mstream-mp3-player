@@ -19,13 +19,16 @@
 //   g0            walk /music and build again (as before)
 //   g<n>          a synthetic library of n tracks for the labs (as before)
 //   gs            the scan's status: the device's records, the transfer's,
-//                 the index's sources
+//                 the index's sources; gs0 starts the card worker's figures
+//                 again (the waits, the steps, its stack, internal RAM: L3's
+//                 per-condition figures)
 //   gt</music/..> one file: its tags read now, its records in D and T,
 //                 which one the builder takes (2.9), and the index's names
 //   gr            Rescan tags: the device's own records read again
 //   gr!           ... the transfer's files' too (a diagnostic)
 //   gw, gb, gv    walk now, build now, verify T's files (the card worker's
-//                 jobs: N10, N12)
+//                 jobs: N10, N12); gb! the update step with its memory check
+//                 made to fail: the deferral to the next boot (L4.4)
 //   gc            the PSRAM sector cache under FatFs (N10): its counts; gc0
 //                 off, gc1 on, gc2 on with every hit checked against the
 //                 card (the device batch's L0 and L1, 6.3)
@@ -39,12 +42,12 @@ enum class Command : uint8_t {
   Report,     // g
   Rebuild,    // g0
   Synthetic,  // g<n>: `n`
-  Status,     // gs
+  Status,     // gs; gs0: `n` 1 (the worker's figures start again)
   Dump,       // gt<path>: `path`
   Rescan,     // gr
   RescanAll,  // gr!
   Walk,       // gw
-  Build,      // gb
+  Build,      // gb; gb!: `n` 1 (deferred to the next boot)
   Verify,     // gv
   Cache,      // gc, gc0, gc1, gc2: `n` the switch (kCacheReport, 0, 1, 2)
   Bench,      // gl, glw: `n` 1 with the walks
@@ -54,7 +57,7 @@ enum class Command : uint8_t {
 constexpr uint32_t kCacheReport = 9;
 struct Parsed {
   Command command = Command::Bad;
-  uint32_t n = 0;            // Synthetic's; Cache's and Bench's
+  uint32_t n = 0;            // Synthetic's; Cache's, Bench's, Status's and Build's
   const char* path = "";     // Dump's: the rest of the argument, from its first non-space
 };
 // `arg`: what followed the 'g', trimmed (nullptr: "").

@@ -398,6 +398,16 @@ void test_the_boots_decision() {
   TEST_ASSERT_EQUAL_UINT32(5, in.deviceCrc);
   TEST_ASSERT_EQUAL_UINT32(6, in.journalSeq);
   TEST_ASSERT_TRUE(libraryboot::matches(in, root));
+  // The soft inputs: equal, the index is current; the scan went on, or the
+  // build left the journals out (their compaction refused: N10's review),
+  // rebuilt at the scan's end. The hard ones don't care.
+  TEST_ASSERT_FALSE(libraryboot::softStale(in, 5, 6));
+  TEST_ASSERT_TRUE(libraryboot::softStale(in, 5, 7));
+  TEST_ASSERT_TRUE(libraryboot::softStale(in, 4, 6));
+  const LibraryIndex::Inputs left = libraryboot::inputsOf(root, true, 5, 6, true);
+  TEST_ASSERT_EQUAL_UINT32(libraryboot::kJournalsLeftOut, left.journalSeq);
+  TEST_ASSERT_TRUE(libraryboot::matches(left, root));
+  for (uint32_t seq : {0u, 1u, 6u, 1000000u}) TEST_ASSERT_TRUE(libraryboot::softStale(left, 5, seq));
   in.transfer = false;  // T failed its checks at that build: the same T fails again
   TEST_ASSERT_TRUE(libraryboot::matches(in, root));
   LibraryIndex::Inputs walked = in;
@@ -469,6 +479,7 @@ void test_the_root() {
     TEST_ASSERT_EQUAL_HEX32(info.frame.headerCrc, r->identity.tagsCrc);
     TEST_ASSERT_EQUAL_STRING(tagsName(5).c_str(), r->tagsPath);
     TEST_ASSERT_EQUAL_UINT32(t5.size(), r->tagsBytes);
+    TEST_ASSERT_EQUAL_UINT32(kAudio, r->tagsRecords);  // T's header's count (the update step's memory check)
     TEST_ASSERT_EQUAL_UINT32(2, r->rootCount);
     TEST_ASSERT_EQUAL_STRING("Lib A", r->roots[0]);  // LIBR is sorted
     TEST_ASSERT_EQUAL_STRING("Lib B", r->rootList()[1]);
@@ -903,6 +914,107 @@ void test_a_bad_transfer_is_walked_without() {
   TEST_ASSERT_FALSE(s.store.device().header.walk.present);  // walked against no transfer data
 }
 
+// ---------------------------------------------------------------------------
+// A card that refuses writes (full), or is pulled (N10's review): nothing
+// is tried again pass after pass. A walk left to merge whose compaction
+// fails isn't handed again (the jobs run out of work); a chunk the card
+// refused is offered again from the loop only after Config::retryMs; a
+// read whose record never reached tags.jnl is no news for the update
+// step; a rest whose View can't be read says so.
+// ---------------------------------------------------------------------------
+void test_a_card_that_refuses() {
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  {
+    // A session cut after its walk: walk.jnl written, never merged.
+    Session s(fs, card);
+    s.begin();
+    s.jobs.askWalk();
+    while (s.jobs.walkWork()) s.run(Job::Walk);
+    TEST_ASSERT_TRUE(s.store.hasWalk());
+  }
+  {
+    // The next boot, the card full: the boot's walk needs that walk merged,
+    // and the compaction fails. Once: not handed again pass after pass
+    // (each a LibraryWrite holding the idle power-off), and the walk (and
+    // the scan after it, the firmware's order) waits for the next boot.
+    Session s(fs, card);
+    s.begin();
+    fs.refuse = true;
+    s.jobs.askWalk();
+    TEST_ASSERT_FALSE(s.jobs.walkWork());
+    TEST_ASSERT_TRUE(s.jobs.compactWork());
+    TEST_ASSERT_FALSE(s.run(Job::Compact).compacted);
+    for (int pass = 0; pass < 100; ++pass) {
+      TEST_ASSERT_FALSE(s.jobs.compactWork());
+      TEST_ASSERT_FALSE(s.jobs.walkWork());
+    }
+    TEST_ASSERT_EQUAL_UINT32(1, s.jobs.counts().compactionsFailed);
+    // Asked again (the update step's, gr): it runs.
+    s.jobs.askCompact();
+    TEST_ASSERT_TRUE(s.jobs.compactWork());
+    TEST_ASSERT_FALSE(s.run(Job::Compact).compacted);
+    TEST_ASSERT_FALSE(s.jobs.compactWork());
+    TEST_ASSERT_EQUAL_UINT32(2, s.jobs.counts().compactionsFailed);
+
+    // The playing track, read: its record waits in the chunk. News for the
+    // update step while the journal may still take it...
+    const cj::Done& d = s.run(Job::Scan, Src::Playing, "Artist/Album/01 - a.flac");
+    TEST_ASSERT_TRUE(d.read);
+    TEST_ASSERT_TRUE(s.jobs.chunkPending());
+    TEST_ASSERT_TRUE(s.jobs.newRecords());
+    // ... the loop's flush: refused, kept; no news any more (an update now
+    // would build the same index and find the track Pending again).
+    const uint32_t opens = fs.opens;
+    TEST_ASSERT_FALSE(s.jobs.idleFlush(s.now));
+    TEST_ASSERT_EQUAL_UINT32(1, s.jobs.counts().appendFailures);
+    TEST_ASSERT_TRUE(s.jobs.chunkPending());
+    TEST_ASSERT_FALSE(s.jobs.newRecords());
+    // Not tried again pass after pass: each try is an open and a write.
+    const uint32_t opensAfterTry = fs.opens;
+    TEST_ASSERT_TRUE(opensAfterTry >= opens);
+    for (uint32_t k = 1; k < 30; ++k) TEST_ASSERT_FALSE(s.jobs.idleFlush(s.now + k * 1000));
+    TEST_ASSERT_EQUAL_UINT32(1, s.jobs.counts().appendFailures);
+    TEST_ASSERT_EQUAL_UINT32(opensAfterTry, fs.opens);
+    // After Config::retryMs: tried again (refused again).
+    TEST_ASSERT_FALSE(s.jobs.idleFlush(s.now + 30000));
+    TEST_ASSERT_EQUAL_UINT32(2, s.jobs.counts().appendFailures);
+    // The card takes writes again: the next try writes it, and that is news.
+    fs.refuse = false;
+    TEST_ASSERT_FALSE(s.jobs.idleFlush(s.now + 30000 + 29999));
+    TEST_ASSERT_TRUE(s.jobs.idleFlush(s.now + 60000));
+    TEST_ASSERT_FALSE(s.jobs.chunkPending());
+    TEST_ASSERT_EQUAL_UINT32(1, s.jobs.counts().recorded);
+    TEST_ASSERT_TRUE(s.jobs.newRecords());
+    s.jobs.markRecords();  // the update step
+    TEST_ASSERT_FALSE(s.jobs.newRecords());
+  }
+  {
+    // A rest that ends because the card can't be read says so; one that
+    // reaches D's end doesn't.
+    Session s(fs, card);
+    s.begin();
+    bool ended = false, failed = true;
+    while (s.jobs.restWork()) {
+      const cj::Done& d = s.run(Job::Scan);
+      if (d.restEnded) {
+        ended = true;
+        failed = d.restFailed;
+      }
+    }
+    TEST_ASSERT_TRUE(ended);
+    TEST_ASSERT_FALSE(failed);
+    s.jobs.askRest();
+    fs.dead = true;  // pulled
+    const cj::Done& d = s.run(Job::Scan);
+    TEST_ASSERT_TRUE(d.restEnded);
+    TEST_ASSERT_TRUE(d.restFailed);
+    TEST_ASSERT_FALSE(s.jobs.restWork());
+    fs.dead = false;
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_boots_decision);
@@ -914,5 +1026,6 @@ int main(int, char**) {
   RUN_TEST(test_changed_files_and_a_rescan);
   RUN_TEST(test_a_transfer_card);
   RUN_TEST(test_a_bad_transfer_is_walked_without);
+  RUN_TEST(test_a_card_that_refuses);
   return UNITY_END();
 }

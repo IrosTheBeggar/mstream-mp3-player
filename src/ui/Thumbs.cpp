@@ -305,7 +305,9 @@ bool decode(Job& j, uint32_t* sourceBytes, bool* undecodable) {
   const int64_t readAt0 = esp_timer_get_time();
   j.internalMin = std::min(j.internalMin, internalFree());
   bool ok = false;
-  if (!info.ok) {
+  if (info.readFailed) {
+    snprintf(j.note, sizeof(j.note), "a read failed");  // the card, not the picture: tried again later
+  } else if (!info.ok) {
     snprintf(j.note, sizeof(j.note), "not a JPEG the decoder can read");
     *undecodable = true;
   } else if (info.progressive) {

@@ -847,6 +847,10 @@ bool LibraryPage::holds(uint32_t row) {
   return k != RowKind::None && k != RowKind::Disc;
 }
 
+// A disc divider is no control (3.7): no highlight under the finger, no
+// tick, nothing on a tap or a hold.
+bool LibraryPage::pressable(uint32_t row) { return rowAt(row).kind != RowKind::Disc; }
+
 void LibraryPage::onHold(uint32_t row) {
   held_ = rowAt(row);
   const LibraryIndex* i = index();

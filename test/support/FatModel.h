@@ -5,7 +5,8 @@
 // The host-only FatFs model (docs/METADATA.md 3.2.7, row N8 of 6.1): ChaN's
 // FatFs R0.15, configured as the Core2's firmware builds it
 // (test/support/fatfs/ffconf.h), on sparse RAM disks, with SectorCache in
-// front of a drive or not. It counts what FatFs asks of its disk (what the
+// front of a drive or not, or the firmware's whole wrapper (CachedDrive:
+// its mount, its switches) over a card slot whose card can be swapped. It counts what FatFs asks of its disk (what the
 // stock SD driver reads: one card transaction per call) and what reaches
 // the card through the cache, per lookup and per walk, on trees in the
 // user's shape (test_fat_model; tools/fatmodel.py on tools/synthcard.py's
@@ -22,6 +23,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "CachedDrive.h"
 #include "SectorCache.h"
 #include "fatfs/FatFsHost.h"
 
@@ -90,9 +92,16 @@ private:
 
 // One FatFs drive: its disk, the cache in front of it (null: the stock
 // driver, every call a card transaction), and what FatFs asked of it.
+// `wrapper` (set: `cache` is ignored) is the firmware's diskio wrapper over
+// the drive's slot (Slot below), whose init() runs at FatFs's
+// disk_initialize. `noInit`: disk_status() says STA_NOINIT until FatFs
+// initialises the drive again (the SD driver's answer once a card stopped
+// answering: pulled, or another put in).
 struct Drive {
   RamDisk* disk = nullptr;
   SectorCache* cache = nullptr;
+  CachedDrive* wrapper = nullptr;
+  bool noInit = false;
   struct Asked {
     uint64_t reads = 0, singleReads = 0, readSectors = 0, writes = 0, trims = 0;
   } asked;
@@ -102,6 +111,24 @@ inline Drive& drive(BYTE pdrv) {
   static Drive drives[FF_VOLUMES];
   return drives[pdrv];
 }
+
+// The card slot of drive `pdrv`: whichever disk is in it now (the SD
+// driver under the firmware's wrapper).
+class Slot : public SectorCache::Device {
+public:
+  explicit Slot(BYTE pdrv) : pdrv_(pdrv) {}
+  bool read(uint32_t lba, uint8_t* out, uint32_t n) override {
+    RamDisk* d = drive(pdrv_).disk;
+    return d && d->read(lba, out, n);
+  }
+  bool write(uint32_t lba, const uint8_t* data, uint32_t n) override {
+    RamDisk* d = drive(pdrv_).disk;
+    return d && d->write(lba, data, n);
+  }
+
+private:
+  BYTE pdrv_;
+};
 
 // What one stretch of work read: FatFs's disk_read calls (the stock
 // driver's card reads) and the reads that reached the card.
@@ -154,9 +181,10 @@ inline FRESULT format(BYTE pdrv, uint32_t clusterBytes) {
   return f_mkfs(path(pdrv, "").c_str(), &opt, work.data(), static_cast<UINT>(work.size()));
 }
 
-// Mounts drive `pdrv` now (the firmware's mount: the cache cleared first).
+// Mounts drive `pdrv` now (the firmware's mount: the cache cleared first;
+// a wrapper clears its own at FatFs's disk_initialize).
 inline FRESULT mount(BYTE pdrv, FATFS* fs) {
-  if (drive(pdrv).cache) drive(pdrv).cache->clear();
+  if (drive(pdrv).cache && !drive(pdrv).wrapper) drive(pdrv).cache->clear();
   return f_mount(fs, path(pdrv, "").c_str(), 1);
 }
 
@@ -264,10 +292,17 @@ inline uint32_t folderSectors(BYTE pdrv, const std::string& rel, uint32_t* entri
 // ---- the disk functions FatFs calls ----
 
 extern "C" DSTATUS disk_status(BYTE pdrv) {
-  return pdrv < FF_VOLUMES && fatmodel::drive(pdrv).disk ? 0 : STA_NOINIT;
+  if (pdrv >= FF_VOLUMES || !fatmodel::drive(pdrv).disk) return STA_NOINIT;
+  return fatmodel::drive(pdrv).noInit ? STA_NOINIT : 0;
 }
 
-extern "C" DSTATUS disk_initialize(BYTE pdrv) { return disk_status(pdrv); }
+extern "C" DSTATUS disk_initialize(BYTE pdrv) {
+  if (pdrv >= FF_VOLUMES || !fatmodel::drive(pdrv).disk) return STA_NOINIT;
+  fatmodel::Drive& d = fatmodel::drive(pdrv);
+  if (d.wrapper) d.wrapper->init();  // the firmware's wInit(), then the SD driver's
+  d.noInit = false;
+  return 0;
+}
 
 extern "C" DRESULT disk_read(BYTE pdrv, BYTE* buff, LBA_t sector, UINT count) {
   if (disk_status(pdrv)) return RES_NOTRDY;
@@ -276,7 +311,9 @@ extern "C" DRESULT disk_read(BYTE pdrv, BYTE* buff, LBA_t sector, UINT count) {
   d.asked.singleReads += count == 1;
   d.asked.readSectors += count;
   const uint32_t lba = static_cast<uint32_t>(sector);
-  const bool ok = d.cache ? d.cache->read(*d.disk, lba, buff, count) : d.disk->read(lba, buff, count);
+  const bool ok = d.wrapper ? d.wrapper->read(lba, buff, count)
+                  : d.cache ? d.cache->read(*d.disk, lba, buff, count)
+                            : d.disk->read(lba, buff, count);
   return ok ? RES_OK : RES_ERROR;
 }
 
@@ -285,7 +322,9 @@ extern "C" DRESULT disk_write(BYTE pdrv, const BYTE* buff, LBA_t sector, UINT co
   fatmodel::Drive& d = fatmodel::drive(pdrv);
   ++d.asked.writes;
   const uint32_t lba = static_cast<uint32_t>(sector);
-  const bool ok = d.cache ? d.cache->write(*d.disk, lba, buff, count) : d.disk->write(lba, buff, count);
+  const bool ok = d.wrapper ? d.wrapper->write(lba, buff, count)
+                  : d.cache ? d.cache->write(*d.disk, lba, buff, count)
+                            : d.disk->write(lba, buff, count);
   return ok ? RES_OK : RES_ERROR;
 }
 
@@ -301,7 +340,11 @@ extern "C" DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void* buff) {
       // The wrapper's rule (N10): a TRIM drops the range from the cache.
       const LBA_t* r = static_cast<const LBA_t*>(buff);
       ++d.asked.trims;
-      if (d.cache) d.cache->invalidate(static_cast<uint32_t>(r[0]), static_cast<uint32_t>(r[1] - r[0] + 1));
+      if (d.wrapper) {
+        d.wrapper->trim(static_cast<uint32_t>(r[0]), static_cast<uint32_t>(r[1]));
+      } else if (d.cache) {
+        d.cache->invalidate(static_cast<uint32_t>(r[0]), static_cast<uint32_t>(r[1] - r[0] + 1));
+      }
       d.disk->trim(static_cast<uint32_t>(r[0]), static_cast<uint32_t>(r[1]));
       return RES_OK;
     }

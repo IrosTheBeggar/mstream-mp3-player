@@ -57,9 +57,20 @@ bool matches(const LibraryIndex::Inputs& saved, const tagstore::Identity& root);
 
 // What a build saves in library.idx's header (3.4.3): the root's identity,
 // whether T was used, D's headerCrc and the journal's last sequence (the
-// soft inputs: the scan going on since makes them differ).
+// soft inputs: the scan going on since makes them differ). `journalsLeft`:
+// the build read tags.bin while the journals (tags.jnl, walk.jnl) were
+// left on the card, their compaction refused (a full card, a walk being
+// written: N10's review): the sequence saved is kJournalsLeftOut, which no
+// store has, so the next boot finds the index soft-stale and rebuilds it at
+// its scan's end, with the records this build didn't read.
+constexpr uint32_t kJournalsLeftOut = 0xFFFFFFFFu;
 LibraryIndex::Inputs inputsOf(const tagstore::Identity& root, bool transferUsed, uint32_t deviceCrc,
-                              uint32_t journalSeq);
+                              uint32_t journalSeq, bool journalsLeft = false);
+
+// A loaded index's soft inputs against the store's now: differing, the
+// scan went on since its build (or the build left records out), and the
+// scan's end rebuilds it (Library::softStale()).
+bool softStale(const LibraryIndex::Inputs& saved, uint32_t deviceCrc, uint32_t journalSeq);
 
 // The Saved state for a peek() (`load` its result) and its inputs.
 Saved savedOf(LibraryIndex::Load load, const LibraryIndex::Inputs& saved, const tagstore::Identity& root);

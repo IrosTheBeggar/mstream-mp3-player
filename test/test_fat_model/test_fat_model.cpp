@@ -16,6 +16,11 @@
 //   (each level's sectors up to the name's entry, and a FAT sector where
 //   a folder crosses a cluster); with the cache a lookup reads next to
 //   nothing; the walk reads each folder's sectors about once.
+// - A card swapped under the firmware's wrapper (CachedDrive, N10's
+//   review): the card stops answering, FatFs mounts the volume again by
+//   itself, and the wrapper's init() clears the cache, so FatFs reads the
+//   new card's boot sector, FAT and folders, and a write there leaves the
+//   image a FatFs without the cache would.
 // tools/fatmodel.py runs the same model on tools/synthcard.py's card.
 // Run: pio test -e native -f test_fat_model
 #include <unity.h>
@@ -46,6 +51,8 @@ void detach(BYTE pdrv) {
   f_mount(nullptr, path(pdrv, "").c_str(), 0);
   drive(pdrv).disk = nullptr;
   drive(pdrv).cache = nullptr;
+  drive(pdrv).wrapper = nullptr;
+  drive(pdrv).noInit = false;
   drive(pdrv).asked = Drive::Asked();
 }
 
@@ -455,9 +462,116 @@ void test_user_shape_lookups_and_walk() {
   TEST_ASSERT_TRUE(wc.reads.card < ownSectors * 11 / 10);
 }
 
+namespace {
+
+// A file of `n` bytes from `seed`, written whole.
+void putFile(BYTE pdrv, const std::string& rel, uint32_t n, uint32_t seed) {
+  std::vector<uint8_t> b(n);
+  for (uint32_t i = 0; i < n; ++i) b[i] = static_cast<uint8_t>(seed * 131u + i * 7u + (i >> 9));
+  FIL f;
+  TEST_ASSERT_EQUAL(FR_OK, f_open(&f, path(pdrv, rel).c_str(), FA_CREATE_ALWAYS | FA_WRITE));
+  UINT w = 0;
+  TEST_ASSERT_EQUAL(FR_OK, f_write(&f, b.data(), n, &w));
+  TEST_ASSERT_EQUAL_UINT32(n, w);
+  TEST_ASSERT_EQUAL(FR_OK, f_close(&f));
+}
+
+// The file's bytes are putFile()'s.
+void checkFile(BYTE pdrv, const std::string& rel, uint32_t n, uint32_t seed) {
+  FIL f;
+  TEST_ASSERT_EQUAL(FR_OK, f_open(&f, path(pdrv, rel).c_str(), FA_READ));
+  TEST_ASSERT_EQUAL_UINT32(n, static_cast<uint32_t>(f_size(&f)));
+  std::vector<uint8_t> b(n);
+  UINT r = 0;
+  TEST_ASSERT_EQUAL(FR_OK, f_read(&f, b.data(), n, &r));
+  TEST_ASSERT_EQUAL_UINT32(n, r);
+  for (uint32_t i = 0; i < n; ++i) {
+    if (b[i] != static_cast<uint8_t>(seed * 131u + i * 7u + (i >> 9))) TEST_FAIL_MESSAGE(rel.c_str());
+  }
+  TEST_ASSERT_EQUAL(FR_OK, f_close(&f));
+}
+
+// Two cards formatted alike (the same boot sector: the model's clock is
+// fixed), their folders and FATs not: one with an artist's album, the
+// other with another's and more files.
+void fillCard(BYTE pdrv, bool second) {
+  TEST_ASSERT_EQUAL(FR_OK, f_mkdir(path(pdrv, "music").c_str()));
+  if (!second) {
+    TEST_ASSERT_EQUAL(FR_OK, f_mkdir(path(pdrv, "music/First Artist").c_str()));
+    for (uint32_t k = 0; k < 6; ++k) putFile(pdrv, "music/First Artist/0" + std::to_string(k) + " - a.mp3", 9000 + k, k);
+  } else {
+    TEST_ASSERT_EQUAL(FR_OK, f_mkdir(path(pdrv, "music/Second Artist").c_str()));
+    TEST_ASSERT_EQUAL(FR_OK, f_mkdir(path(pdrv, "music/Third Artist").c_str()));
+    for (uint32_t k = 0; k < 9; ++k) putFile(pdrv, "music/Second Artist/0" + std::to_string(k) + " - b.mp3", 7000 + k, 50 + k);
+    putFile(pdrv, "music/Third Artist/01 - c.mp3", 20000, 99);
+  }
+}
+
+}  // namespace
+
+void test_card_swapped_under_the_wrapper() {
+  static RamDisk a(524288), b(524288), ref(1);  // 256 MB each (sparse); static: see coherence()
+  a = RamDisk(524288);
+  b = RamDisk(524288);
+  // The second card, made on drive 1 (no cache), and a copy of it for the
+  // reference.
+  drive(1).disk = &b;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::format(1, 2048));
+  FATFS fs1;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::mount(1, &fs1));
+  fillCard(1, true);
+  TEST_ASSERT_EQUAL(FR_OK, f_mount(nullptr, "1:", 0));
+  ref = b;
+  // The first card under the wrapper, as the firmware mounts it.
+  static SectorCache cache;
+  TEST_ASSERT_TRUE(cache.begin(SectorCache::kDefaultEntries));
+  fatmodel::Slot slot(0);
+  CachedDrive wrapper(cache, slot);
+  drive(0).disk = &a;
+  drive(0).wrapper = &wrapper;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::format(0, 2048));
+  FATFS fs0;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::mount(0, &fs0));
+  fillCard(0, false);
+  for (uint32_t k = 0; k < 6; ++k) checkFile(0, "music/First Artist/0" + std::to_string(k) + " - a.mp3", 9000 + k, k);
+  TEST_ASSERT_TRUE(cache.size() > 4);  // its boot sector, FAT and folders
+  const uint32_t inits = wrapper.stats().inits;
+
+  // The card pulled and the other put in, the player on: the SD driver's
+  // status says not initialised, and FatFs's next call mounts again.
+  drive(0).disk = &b;
+  drive(0).noInit = true;
+  FILINFO fi;
+  TEST_ASSERT_EQUAL(FR_OK, f_stat(path(0, "music/Second Artist/03 - b.mp3").c_str(), &fi));
+  TEST_ASSERT_EQUAL_UINT32(inits + 1, wrapper.stats().inits);
+  TEST_ASSERT_EQUAL_UINT32(7003, static_cast<uint32_t>(fi.fsize));
+  TEST_ASSERT_EQUAL(FR_NO_PATH, f_stat(path(0, "music/First Artist/00 - a.mp3").c_str(), &fi));
+  for (uint32_t k = 0; k < 9; ++k) checkFile(0, "music/Second Artist/0" + std::to_string(k) + " - b.mp3", 7000 + k, 50 + k);
+  // A write there (a queue save, a journal append): the image FatFs
+  // without the cache leaves on the same card.
+  putFile(0, "music/Second Artist/queue.tmp", 3000, 7);
+  TEST_ASSERT_EQUAL(FR_OK, f_unlink(path(0, "music/Third Artist/01 - c.mp3").c_str()));
+  TEST_ASSERT_EQUAL(FR_OK, f_mount(nullptr, "0:", 0));
+  drive(1).disk = &ref;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::mount(1, &fs1));
+  putFile(1, "music/Second Artist/queue.tmp", 3000, 7);
+  TEST_ASSERT_EQUAL(FR_OK, f_unlink(path(1, "music/Third Artist/01 - c.mp3").c_str()));
+  TEST_ASSERT_EQUAL(FR_OK, f_mount(nullptr, "1:", 0));
+  TEST_ASSERT_TRUE(b.same(ref));
+
+  // And back: the first card again, as it was.
+  drive(0).disk = &a;
+  drive(0).noInit = true;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::mount(0, &fs0));
+  for (uint32_t k = 0; k < 6; ++k) checkFile(0, "music/First Artist/0" + std::to_string(k) + " - a.mp3", 9000 + k, k);
+  TEST_ASSERT_EQUAL(FR_NO_PATH, f_stat(path(0, "music/Second Artist/03 - b.mp3").c_str(), &fi));
+  tearDown();
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_cache_transparent_under_fatfs);
   RUN_TEST(test_user_shape_lookups_and_walk);
+  RUN_TEST(test_card_swapped_under_the_wrapper);
   return UNITY_END();
 }

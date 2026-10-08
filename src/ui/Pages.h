@@ -293,6 +293,7 @@ public:
   ListView::Tap onTap(uint32_t row) override;
   bool holds(uint32_t row) override;
   void onHold(uint32_t row) override;
+  bool pressable(uint32_t row) override;
   bool alphabetical() override;
   char railKey(uint32_t row) override;
   uint32_t railRows() override;

@@ -200,10 +200,35 @@ void test_jpeg_parsed_from_a_file() {
   same(cut);
   same(std::vector<uint8_t>{0xFF, 0xD8, 0xFF, 0xC4, 0x00, 0x04, 0, 0, 0xFF, 0xC0, 0x00, 0x11, 8, 0, 20, 0, 30, 3, 0, 0});
   same(std::vector<uint8_t>());
-  // A read that fails: not a JPEG it can say anything about.
+  // A read that fails: nothing said of the picture, and it says the read
+  // failed (Thumbs tries it again later; N10's review: a card's error isn't
+  // remembered as an undecodable cover). The answers above never say so.
   File bad{jpegHead(0xC0, 650, 565)};
   bad.fail = true;
-  TEST_ASSERT_FALSE(jpeg::parseFile(File::read, &bad, static_cast<uint32_t>(bad.b.size())).ok);
+  const jpeg::Info failed = jpeg::parseFile(File::read, &bad, static_cast<uint32_t>(bad.b.size()));
+  TEST_ASSERT_FALSE(failed.ok);
+  TEST_ASSERT_TRUE(failed.readFailed);
+  // ... after a first read that worked (a segment skipped, the next read fails).
+  struct Later {
+    std::vector<uint8_t> b;
+    uint32_t reads = 0;
+    static bool read(uint32_t offset, uint8_t* out, uint32_t n, void* ctx) {
+      Later& f = *static_cast<Later*>(ctx);
+      if (f.reads++ > 0 || offset > f.b.size() || n > f.b.size() - offset) return false;
+      std::memcpy(out, f.b.data() + offset, n);
+      return true;
+    }
+  } later{big};
+  const jpeg::Info halfway = jpeg::parseFile(Later::read, &later, static_cast<uint32_t>(big.size()));
+  TEST_ASSERT_FALSE(halfway.ok);
+  TEST_ASSERT_TRUE(halfway.readFailed);
+  TEST_ASSERT_EQUAL_UINT32(2, later.reads);
+  {
+    File png{std::vector<uint8_t>{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0}};
+    TEST_ASSERT_FALSE(jpeg::parseFile(File::read, &png, static_cast<uint32_t>(png.b.size())).readFailed);
+    File good{jpegHead(0xC0, 650, 565)};
+    TEST_ASSERT_FALSE(jpeg::parseFile(File::read, &good, static_cast<uint32_t>(good.b.size())).readFailed);
+  }
   TEST_ASSERT_FALSE(jpeg::parseFile(nullptr, nullptr, 100).ok);
 }
 

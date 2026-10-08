@@ -167,6 +167,14 @@ public:
   static LibraryIndex::TagView viewOf(const cardcontract::mptg::Record& r, const cardcontract::RunFields* run,
                                       uint8_t source);
 
+  // The track table build() reserves (LibraryIndex::Sizing::tracks), from
+  // the headers' counts: D's records (`deviceOwn`, when known, caps them
+  // while T lists: D's rows that aren't T's files), plus T's records when
+  // T lists the files. The update step's memory check (Library, 3.4.2)
+  // asks it before the build.
+  static uint32_t trackSlots(uint32_t deviceRecords, const uint32_t* deviceOwn, uint32_t transferRecords,
+                             bool transferLists);
+
   // The builder's own memory (its walkers, their run fields and buffers,
   // the THUMB set) comes from these: the firmware's PSRAM, never the card
   // worker's stack. nullptr: malloc/free.

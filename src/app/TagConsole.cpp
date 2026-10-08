@@ -97,6 +97,17 @@ void TagConsole::command(const tagtext::Parsed& p) {
   using C = tagtext::Command;
   switch (p.command) {
     case C::Status:
+      if (p.n == 1) {
+        // gs0: L3's figures one condition at a time.
+        if (!jobs_.resetStats) {
+          Serial.println("[tags] gs0: no card worker in this build; nothing changed");
+          return;
+        }
+        jobs_.resetStats();
+        Serial.println("[card] the scan's figures start now: gs's waits, each job's steps (mean, longest), the "
+                       "worker's stack and internal RAM's lowest while a step ran");
+        return;
+      }
       if (jobs_.idle) jobs_.idle();
       status();
       return;
@@ -121,7 +132,13 @@ void TagConsole::command(const tagtext::Parsed& p) {
       return;
     }
     case C::Walk: job("walk the card now (gw)", jobs_.walk); return;
-    case C::Build: job("build the library now (gb)", jobs_.build); return;
+    case C::Build:
+      if (p.n == 1) {
+        job("the update step, deferred to the next boot as a short PSRAM would (gb!)", jobs_.buildAtBoot);
+      } else {
+        job("build the library now (gb)", jobs_.build);
+      }
+      return;
     case C::Verify: job("verify the transfer's files (gv)", jobs_.verify); return;
     default: Serial.printf("[tags] %s\n", tagtext::kHelp); return;
   }
@@ -136,35 +153,41 @@ void TagConsole::cache(uint32_t n) {
                                                                          : "this build leaves it out (MSTREAM_SECTOR_CACHE=0)");
     return;
   }
-  if (n == 0) {
-    sectordisk::setEnabled(false);
-    sectordisk::setVerify(false);
-  } else if (n == 1 || n == 2) {
-    sectordisk::setEnabled(true);
+  const bool flip = n <= 2;
+  if (flip) {
+    // The counts so far first (the reset is taken at the next disk call,
+    // under FatFs's lock: read after it, they'd still be these).
+    cacheCounts("up to the switch: ");
+    sectordisk::setEnabled(n != 0);
     sectordisk::setVerify(n == 2);
+    sectordisk::resetStats();
   }
-  if (n <= 2) sectordisk::resetStats();  // the counts from the switch on
   const sectordisk::Stats st = sectordisk::stats();
-  const SectorCache::Stats& c = st.cache;
-  const uint32_t reads = c.hits + c.misses;
   Serial.printf("[cache] the sector cache: %s%s; %lu sectors (%u B of PSRAM), %lu held%s\n",
                 sectordisk::enabled() ? "on" : "OFF (every read from the card)",
                 sectordisk::verifying() ? ", every hit checked against the card" : "", (unsigned long)st.capacity,
-                (unsigned)st.bytes, (unsigned long)st.held, n <= 2 ? " (the counts start now)" : "");
-  Serial.printf("[cache] single-sector reads %lu: %lu hits (%.1f%%), %lu misses; multi-sector %lu (%lu sectors); "
+                (unsigned)st.bytes, (unsigned long)st.held, flip ? " (the counts start now)" : "");
+  if (!flip) cacheCounts("");
+}
+
+void TagConsole::cacheCounts(const char* when) {
+  const sectordisk::Stats st = sectordisk::stats();
+  const SectorCache::Stats& c = st.cache;
+  const uint32_t reads = c.hits + c.misses;
+  Serial.printf("[cache] %ssingle-sector reads %lu: %lu hits (%.1f%%), %lu misses; multi-sector %lu (%lu sectors); "
                 "writes %lu (%lu sectors, %lu cached sectors refreshed, %lu failed); %lu dropped, %lu evicted\n",
-                (unsigned long)reads, (unsigned long)c.hits, reads ? 100.0 * c.hits / reads : 0.0,
+                when, (unsigned long)reads, (unsigned long)c.hits, reads ? 100.0 * c.hits / reads : 0.0,
                 (unsigned long)c.misses, (unsigned long)c.bypassed, (unsigned long)c.bypassedSectors,
                 (unsigned long)c.writes, (unsigned long)c.writtenSectors, (unsigned long)c.updated,
                 (unsigned long)c.failedWrites, (unsigned long)c.dropped, (unsigned long)c.evicted);
-  Serial.printf("[cache] the card: %lu reads (%lu of one sector; %lu sectors) in %.0f ms (%.2f ms a read), %lu "
-                "writes, %lu trims\n",
-                (unsigned long)st.cardReads, (unsigned long)st.cardSingleReads, (unsigned long)st.cardReadSectors,
+  Serial.printf("[cache] %sthe card: %lu reads (%lu of one sector; %lu sectors) in %.0f ms (%.2f ms a read), %lu "
+                "writes, %lu trims; %lu mounts\n",
+                when, (unsigned long)st.cardReads, (unsigned long)st.cardSingleReads, (unsigned long)st.cardReadSectors,
                 st.cardReadUs / 1000.0,
                 st.cardReads ? st.cardReadUs / 1000.0 / st.cardReads : 0.0, (unsigned long)st.cardWrites,
-                (unsigned long)st.trims);
+                (unsigned long)st.trims, (unsigned long)st.inits);
   if (sectordisk::verifying() || st.verified) {
-    Serial.printf("[cache] verify: %lu hits checked, %lu STALE%s\n", (unsigned long)st.verified,
+    Serial.printf("[cache] %sverify: %lu hits checked, %lu STALE%s\n", when, (unsigned long)st.verified,
                   (unsigned long)st.stale, st.stale ? " (a cache bug: L1 fails)" : "");
     if (st.stale) Serial.printf("[cache] STALE: sector %lu was the last\n", (unsigned long)st.staleLba);
   }

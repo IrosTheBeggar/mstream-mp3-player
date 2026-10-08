@@ -1640,10 +1640,23 @@ void test_console_tag_commands() {
   TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("99999999999999").command);
   TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("12a").command);
   TEST_ASSERT_EQUAL(C::Status, tagtext::parse("s").command);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::parse("s").n);
   TEST_ASSERT_EQUAL(C::Rescan, tagtext::parse("r").command);
   TEST_ASSERT_EQUAL(C::RescanAll, tagtext::parse("r!").command);
   TEST_ASSERT_EQUAL(C::Walk, tagtext::parse("w").command);
   TEST_ASSERT_EQUAL(C::Build, tagtext::parse("b").command);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::parse("b").n);
+  // gs0: the worker's figures from now (L3); gb!: the update step deferred
+  // to the next boot (L4.4).
+  TEST_ASSERT_EQUAL(C::Status, tagtext::parse("s0").command);
+  TEST_ASSERT_EQUAL_UINT32(1, tagtext::parse("s0").n);
+  TEST_ASSERT_EQUAL(C::Build, tagtext::parse(" b! ").command);
+  TEST_ASSERT_EQUAL_UINT32(1, tagtext::parse("b!").n);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("s1").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("b0").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("w!").command);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gs0") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gb!") != nullptr);
   TEST_ASSERT_EQUAL(C::Verify, tagtext::parse("v").command);
   // The sector cache (gc: the counts; gc0-gc2 the switch) and L0's bench.
   TEST_ASSERT_EQUAL(C::Cache, tagtext::parse("c").command);

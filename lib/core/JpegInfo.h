@@ -17,6 +17,10 @@ struct Info {
   uint16_t width = 0;
   uint16_t height = 0;
   uint8_t components = 0;    // 1 grey, 3 YCbCr
+  // parseFile(): a read failed before the walk could say (ok false): the
+  // card's, not the picture's (ui/Thumbs tries it again later, and doesn't
+  // remember it as undecodable).
+  bool readFailed = false;
 };
 
 // Walks the markers from SOI to the first frame header (SOFn), skipping
@@ -30,7 +34,8 @@ Info parse(const uint8_t* data, size_t len);
 // streams a cover from the card: docs/METADATA.md 3.5, "Covers stream"):
 // `read` gives all `n` bytes at `offset` (false: it couldn't), the file is
 // `size` bytes. A few reads of up to 64 bytes each, a segment's length
-// skipped without reading it, wherever the frame header is.
+// skipped without reading it, wherever the frame header is. A read that
+// fails ends the walk with readFailed set.
 using ReadFn = bool (*)(uint32_t offset, uint8_t* out, uint32_t n, void* ctx);
 Info parseFile(ReadFn read, void* ctx, uint32_t size);
 

@@ -316,7 +316,19 @@ public:
   // Elects, sorts, fills the views and trims the blocks. False: out of
   // memory (the index is then empty).
   bool finish();
+  // Empties the index and gives every block back (but the kept track
+  // block: keepTrackBlock()).
   void clear();
+  // The update step's rebuild (3.4.2, N10's review): clear() keeps the
+  // track table's block, and the next build (begin()'s Sizing) or load
+  // takes it again when the new table fits in it (else it is freed first
+  // and the new one asked at its size), so a rebuild of about the same
+  // library needs no second free block of the table's size. The heap's
+  // largest free block can't stand in for it: ESP-IDF's TLSF rounds a
+  // request up to its next size class before it searches, so a block the
+  // table's own size isn't found for a table that size. memory().tracks is
+  // the kept block's bytes. The destructor frees it.
+  void keepTrackBlock(bool on) { keepTracks_ = on; }
   bool ready() const { return ready_; }
   bool failed() const { return failed_; }
 
@@ -568,6 +580,7 @@ private:
   bool building_ = false;
   bool failed_ = false;
   bool ready_ = false;
+  bool keepTracks_ = false;  // keepTrackBlock()
   size_t held_ = 0;       // bytes from the hooks now
   size_t buildPeak_ = 0;  // the most held_ since clear()
 

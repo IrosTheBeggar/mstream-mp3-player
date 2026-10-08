@@ -46,6 +46,7 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
   r.identity = tagstore::Identity();
   r.tagsPath[0] = 0;
   r.tagsBytes = 0;
+  r.tagsRecords = 0;
   r.why = cc::Why::Missing;
   r.sameCommitTwice = false;
   r.rootCount = 0;
@@ -104,6 +105,7 @@ void read(tagstore::Fs& fs, uint8_t* scratch, uint32_t scratchBytes, Root* out) 
     return;
   }
   r.present = true;
+  r.tagsRecords = info.recordCount;
   r.identity.present = true;
   r.identity.cardId = m.frame().cardId;
   r.identity.generation = m.frame().generation;

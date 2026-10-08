@@ -54,6 +54,15 @@
 //     for the rest (the walk's sight of it), f_stat's for a file the loop
 //     names.
 //
+// When the card refuses (full, or pulled: there is no card-detect), nothing
+// is tried again pass after pass (N10's review): a compaction that failed
+// isn't handed again until it is asked again (askCompact(), the update
+// step, the next boot), the walk's merge included; the loop's flush of a
+// chunk the card refused waits Config::retryMs (idleFlush()). What the
+// scan read counts for the update step only once it reached tags.jnl
+// (newRecords()): reads the card couldn't take don't make an update that
+// would find them Pending again.
+//
 // Memory, from the hooks (PSRAM on the device), only while a job has
 // work: the walk about 98 KB (CardWalk's 64 KB scratch, D's and the
 // journal's buffers, T's streams), the scan about 85 KB (TagScan's
@@ -92,6 +101,10 @@ struct Config {
   uint32_t readSlots = 4096;
   // A step of the rest looks at most this many of the View's rows.
   uint32_t rowsPerStep = 512;
+  // A chunk the card refused is offered again from the loop (idleFlush())
+  // after this long, not every pass: each try is a FatFs open (on a pulled
+  // card about 1 s of the SD driver's retries) and a write.
+  uint32_t retryMs = 30000;
   // Whether the index lists a file (`rel` relative to /music), asked on the
   // worker for each file the walk adds to D: the walk's news is the files
   // new to the index (Done::newToIndex), not those new to D (an index
@@ -139,6 +152,7 @@ struct Done {
   bool appended = false;      // a chunk went to tags.jnl this step
   bool appendFailed = false;  // it couldn't (a compaction is asked; the chunk kept)
   bool restEnded = false;     // the View reached its end (the scan's rest is done)
+  bool restFailed = false;    // ... because D or a journal couldn't be read (the card?), or no memory
   bool verifyEnded = false;   // ... in Verify (verified() has the counts)
 };
 
@@ -189,6 +203,17 @@ public:
   // The chunk to tags.jnl now (the idle power-off's shutdown, before the
   // update step). False: it couldn't be written (kept).
   bool flushChunk();
+  // The same for a chunk that waited (the loop, with the worker free): not
+  // tried again within Config::retryMs of a failed append. False: not
+  // written (kept).
+  bool idleFlush(uint32_t nowMs);
+  // Records reached tags.jnl since markRecords(), or a chunk waits that the
+  // journal may still take (no append refused since): the scan's end has
+  // something for the update step.
+  bool newRecords() const;
+  // The update step ran (built, or failed, or deferred to the boot): what
+  // the journal had is the index's, or the next boot's.
+  void markRecords() { recordedMark_ = counts_.recorded; }
   // Gives back what no job needs (the scan's memory once its chunk is out
   // and its View closed; called when the scheduler has no scan to hand).
   void trim();
@@ -210,6 +235,7 @@ public:
     uint32_t readErrors = 0;   // reads that failed (read again next boot)
     uint32_t skipped = 0;      // changed since the walk, gone, or not audio
     uint32_t chunks = 0;       // appended
+    uint32_t recorded = 0;     // records in them
     uint32_t appendFailures = 0;
     uint32_t viewsOpened = 0;
     uint32_t rowsLooked = 0;   // the View's rows passed
@@ -246,7 +272,10 @@ private:
   bool compactAsked_ = false;
   bool rescanAsked_ = false;
   bool appendBlocked_ = false;  // the journal is full: a compaction first
-  bool compactFailed_ = false;  // the last one failed: not asked again by the journal until a new ask
+  bool compactFailed_ = false;  // the last one failed: not handed again (the journal's, the walk's) until a new ask
+  bool appendFailed_ = false;   // the last append failed (at appendFailedMs_): idleFlush() waits
+  uint32_t appendFailedMs_ = 0;
+  uint32_t recordedMark_ = 0;
   bool restDone_ = false;
   bool restartRest_ = false;  // the View starts over at the next scan step (a walk, a compaction, askRest())
   bool transferBad_ = false;

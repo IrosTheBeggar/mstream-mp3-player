@@ -8,7 +8,12 @@
 // nothing, invalidate() over short and long ranges and at the top of the
 // LBA space, clear(), no memory (everything passes through), the block's
 // size, and a random model check against a reference LRU and the device's
-// own bytes. FatFs over the cache is test_fat_model's. Run:
+// own bytes. And the diskio wrapper's rules over it (CachedDrive, N10's
+// review): a mount clears it, a write with the cache off drops what it
+// held of those sectors, on again it starts empty, verify catches a sector
+// the card no longer has, the switches and the counts' reset wait for the
+// next disk call, every card read and write counted, a TRIM's range
+// dropped. FatFs over the cache is test_fat_model's. Run:
 // pio test -e native -f test_sector_cache
 #include <unity.h>
 
@@ -22,6 +27,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "CachedDrive.h"
 #include "SectorCache.h"
 
 void setUp() {}
@@ -493,6 +499,177 @@ void test_random_against_reference() {
     for (int k = 0; k < 3; ++k) randomRun(cap, seed++, cap >= 64 ? 20000 : 30000);
 }
 
+// ---- CachedDrive: the diskio wrapper's rules ----
+
+// A mount (FatFs's disk_initialize: also after the card stopped answering,
+// a card pulled or swapped while on) clears the cache: the next read of a
+// sector it held goes to the card, whatever card is there now.
+void test_drive_mount_clears() {
+  RamDevice dev;
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  d.init();
+  uint8_t buf[kSS];
+  TEST_ASSERT_TRUE(d.read(0, buf, 1));  // the boot sector, say
+  TEST_ASSERT_TRUE(d.read(5, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(2, c.size());
+  // Another card in the slot: its sectors 0 and 5 aren't the cached ones.
+  dev.sectors[0] = filled(0xA0);
+  dev.sectors[5] = filled(0xA5);
+  TEST_ASSERT_TRUE(d.read(5, buf, 1));
+  TEST_ASSERT_FALSE(dev.equals(5, buf));  // (what a cache kept across the swap serves)
+  d.init();
+  TEST_ASSERT_EQUAL_UINT32(0, c.size());
+  TEST_ASSERT_TRUE(d.read(0, buf, 1));
+  TEST_ASSERT_TRUE(dev.equals(0, buf));
+  TEST_ASSERT_TRUE(d.read(5, buf, 1));
+  TEST_ASSERT_TRUE(dev.equals(5, buf));
+  TEST_ASSERT_EQUAL_UINT32(2, d.stats().inits);
+}
+
+// Off: every read and write goes to the card, and a write drops what the
+// cache held of its sectors (so it can't be stale when the cache comes on
+// again, whatever the order of the switch and a call under way on another
+// task). On again: it starts empty, at the next call.
+void test_drive_off_and_on() {
+  RamDevice dev;
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  d.init();
+  uint8_t buf[kSS];
+  TEST_ASSERT_TRUE(d.read(3, buf, 1));
+  TEST_ASSERT_TRUE(d.read(4, buf, 1));
+  TEST_ASSERT_TRUE(c.holds(3));
+  d.setEnabled(false);
+  TEST_ASSERT_FALSE(d.enabled());
+  const uint32_t before = dev.reads;
+  TEST_ASSERT_TRUE(d.read(3, buf, 1));  // off: the card's, though the cache holds it
+  TEST_ASSERT_EQUAL_UINT32(before + 1, dev.reads);
+  TEST_ASSERT_EQUAL_UINT32(0, c.stats().hits);
+  const Sector w = filled(0x5C);
+  TEST_ASSERT_TRUE(d.write(3, w.data(), 1));
+  TEST_ASSERT_TRUE(dev.equals(3, w.data()));
+  TEST_ASSERT_FALSE(c.holds(3));  // dropped at once, not at the switch
+  TEST_ASSERT_TRUE(c.holds(4));
+  TEST_ASSERT_EQUAL_UINT32(0, c.stats().writes);  // the cache wasn't written through
+  d.setEnabled(true);
+  TEST_ASSERT_TRUE(c.holds(4));  // the clear waits for the next disk call
+  TEST_ASSERT_TRUE(d.read(3, buf, 1));
+  TEST_ASSERT_TRUE(dev.equals(3, buf));
+  TEST_ASSERT_FALSE(c.holds(4));  // cleared: a cold start
+  TEST_ASSERT_TRUE(c.holds(3));
+  // A failed write while off drops the sector too.
+  d.setEnabled(false);
+  dev.failWriteAfter = 0;
+  TEST_ASSERT_FALSE(d.write(3, w.data(), 1));
+  TEST_ASSERT_FALSE(c.holds(3));
+}
+
+// Verify: a hit read from the card again and compared; a sector the card
+// changed behind the cache (what a cache bug would leave) is counted, its
+// LBA kept, the card's bytes returned and the sector dropped.
+void test_drive_verify() {
+  RamDevice dev;
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS];
+  d.setScratch(scratch);
+  d.init();
+  uint8_t buf[kSS];
+  TEST_ASSERT_TRUE(d.read(9, buf, 1));
+  TEST_ASSERT_TRUE(d.read(9, buf, 1));  // verify off: a plain hit
+  TEST_ASSERT_EQUAL_UINT32(0, d.stats().verified);
+  d.setVerify(true);
+  TEST_ASSERT_TRUE(d.verifying());
+  TEST_ASSERT_TRUE(d.read(9, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(1, d.stats().verified);
+  TEST_ASSERT_EQUAL_UINT32(0, d.stats().stale);
+  dev.sectors[9] = filled(0x99);  // around the cache
+  TEST_ASSERT_TRUE(d.read(9, buf, 1));
+  TEST_ASSERT_TRUE(dev.equals(9, buf));
+  TEST_ASSERT_EQUAL_UINT32(2, d.stats().verified);
+  TEST_ASSERT_EQUAL_UINT32(1, d.stats().stale);
+  TEST_ASSERT_EQUAL_UINT32(9, d.stats().staleLba);
+  TEST_ASSERT_FALSE(c.holds(9));
+  // A miss and a multi-sector read aren't checked (nothing cached to doubt).
+  uint8_t two[2 * kSS];
+  TEST_ASSERT_TRUE(d.read(20, two, 2));
+  TEST_ASSERT_TRUE(d.read(21, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(2, d.stats().verified);
+  // No scratch: verify does nothing.
+  d.setScratch(nullptr);
+  TEST_ASSERT_TRUE(d.read(21, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(2, d.stats().verified);
+}
+
+// The counts: every card read (its sectors, single ones apart, its time by
+// the clock) and write, on or off; TRIMs (their range dropped); the reset
+// taken at the next disk call, the cache's counts with it.
+uint64_t fakeUs = 0;
+uint64_t fakeClock() { return fakeUs += 7; }
+
+void test_drive_counts_and_reset() {
+  RamDevice dev;
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev, fakeClock);
+  d.init();
+  uint8_t buf[4 * kSS];
+  TEST_ASSERT_TRUE(d.read(1, buf, 1));   // a miss: a card read
+  TEST_ASSERT_TRUE(d.read(1, buf, 1));   // a hit: none
+  TEST_ASSERT_TRUE(d.read(10, buf, 4));  // bypassed: one read of 4
+  d.setEnabled(false);
+  TEST_ASSERT_TRUE(d.read(1, buf, 1));
+  TEST_ASSERT_TRUE(d.write(30, buf, 2));
+  d.setEnabled(true);
+  TEST_ASSERT_TRUE(d.write(31, buf, 1));
+  CachedDrive::Stats s = d.stats();
+  TEST_ASSERT_EQUAL_UINT32(3, s.cardReads);
+  TEST_ASSERT_EQUAL_UINT32(2, s.cardSingleReads);
+  TEST_ASSERT_EQUAL_UINT32(6, s.cardReadSectors);
+  TEST_ASSERT_EQUAL_UINT64(3 * 7, s.cardReadUs);
+  TEST_ASSERT_EQUAL_UINT32(2, s.cardWrites);
+  // A TRIM drops its range, first to last.
+  TEST_ASSERT_TRUE(d.read(40, buf, 1));
+  TEST_ASSERT_TRUE(d.read(41, buf, 1));
+  TEST_ASSERT_TRUE(d.read(42, buf, 1));
+  d.trim(40, 41);
+  TEST_ASSERT_FALSE(c.holds(40));
+  TEST_ASSERT_FALSE(c.holds(41));
+  TEST_ASSERT_TRUE(c.holds(42));
+  TEST_ASSERT_EQUAL_UINT32(1, d.stats().trims);
+  // The reset: asked now, taken at the next call (the console prints the
+  // counts before it, as the totals up to the switch).
+  d.resetStats();
+  TEST_ASSERT_EQUAL_UINT32(6, d.stats().cardReads);
+  TEST_ASSERT_TRUE(c.stats().hits > 0);
+  TEST_ASSERT_TRUE(d.read(42, buf, 1));  // a hit, after the reset
+  s = d.stats();
+  TEST_ASSERT_EQUAL_UINT32(0, s.cardReads);
+  TEST_ASSERT_EQUAL_UINT32(0, s.trims);
+  TEST_ASSERT_EQUAL_UINT32(0, s.inits);
+  TEST_ASSERT_EQUAL_UINT32(1, c.stats().hits);
+  TEST_ASSERT_EQUAL_UINT32(0, c.stats().misses);
+}
+
+// No block: every call to the card, nothing kept, the rules the same.
+void test_drive_without_memory() {
+  RamDevice dev;
+  SectorCache c;
+  CachedDrive d(c, dev);
+  d.init();
+  uint8_t buf[kSS];
+  TEST_ASSERT_TRUE(d.read(2, buf, 1));
+  TEST_ASSERT_TRUE(d.read(2, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(2, dev.reads);
+  TEST_ASSERT_TRUE(d.write(2, buf, 1));
+  d.trim(0, 100);
+  TEST_ASSERT_EQUAL_UINT32(0, c.size());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_hit_and_miss);
@@ -505,5 +682,10 @@ int main(int, char**) {
   RUN_TEST(test_no_memory_passes_through);
   RUN_TEST(test_block_sizes);
   RUN_TEST(test_random_against_reference);
+  RUN_TEST(test_drive_mount_clears);
+  RUN_TEST(test_drive_off_and_on);
+  RUN_TEST(test_drive_verify);
+  RUN_TEST(test_drive_counts_and_reset);
+  RUN_TEST(test_drive_without_memory);
   return UNITY_END();
 }

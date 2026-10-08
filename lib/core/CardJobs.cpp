@@ -111,6 +111,8 @@ void Jobs::begin(const Config& c) {
   transferBad_ = false;
   appendBlocked_ = false;
   compactFailed_ = false;
+  appendFailed_ = false;
+  recordedMark_ = counts_.recorded;
   mode_ = Mode::Normal;
   // Nothing for the scan when D has only Software rows (or none) and no
   // journal: every file is the transfer's. Else one pass of the View says.
@@ -151,7 +153,10 @@ bool Jobs::walkWork() const {
 bool Jobs::compactWork() const {
   if (!c_.store) return false;
   if (compactAsked_ || appendBlocked_) return !compactFailed_ || compactAsked_;
-  if (walkAsked_ && !walk_ && c_.store->hasWalk()) return true;
+  // The last walk merged before the next walks (a failed merge isn't handed
+  // again: on a full or pulled card it would be every pass, each holding
+  // the idle power-off; the walk then waits for the next boot).
+  if (walkAsked_ && !walk_ && c_.store->hasWalk()) return !compactFailed_;
   return !compactFailed_ && c_.store->wantsCompaction();
 }
 
@@ -384,20 +389,36 @@ void Jobs::stepCompact() {
 
 bool Jobs::appendChunk() {
   if (!scan_ || scan_->chunk.count() == 0) return true;
+  const uint32_t n = scan_->chunk.count();
   if (c_.store->append(scan_->chunk)) {
     ++counts_.chunks;
+    counts_.recorded += n;
     done_.appended = true;
     scan_->chunkTimed = false;
     appendBlocked_ = false;
+    appendFailed_ = false;
     return true;
   }
   ++counts_.appendFailures;
   done_.appendFailed = true;
   appendBlocked_ = true;  // a compaction first (the journal's limits), or the card refused
+  appendFailed_ = true;
+  appendFailedMs_ = nowMs_;
   return false;
 }
 
 bool Jobs::flushChunk() { return appendChunk(); }
+
+bool Jobs::idleFlush(uint32_t nowMs) {
+  if (!chunkPending()) return true;
+  if (appendFailed_ && nowMs - appendFailedMs_ < c_.retryMs) return false;
+  nowMs_ = nowMs;
+  return appendChunk();
+}
+
+bool Jobs::newRecords() const {
+  return counts_.recorded != recordedMark_ || (chunkPending() && !appendBlocked_);
+}
 
 void Jobs::trim() {
   if (!scan_ || scan_->chunk.count() > 0 || scan_->viewOpen || scan_->verifyOpen) return;
@@ -465,6 +486,7 @@ bool Jobs::nextRow(char* rel, size_t* len, uint32_t* size, uint32_t* fatTime, ui
       s.view.~View();
       new (&s.view) ts::TagStore::View();
       *ended = true;
+      done_.restFailed = true;
       return false;
     }
     s.viewOpen = true;
@@ -472,6 +494,7 @@ bool Jobs::nextRow(char* rel, size_t* len, uint32_t* size, uint32_t* fatTime, ui
   for (uint32_t k = 0; k < c_.rowsPerStep; ++k) {
     if (!s.view.next()) {
       *ended = true;
+      done_.restFailed = s.view.failed();  // a read failed (the card?), not the end
       return false;
     }
     ++counts_.rowsLooked;

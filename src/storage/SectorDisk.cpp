@@ -6,9 +6,7 @@
 #include <esp_timer.h>
 #include <sd_diskio.h>
 
-#include <atomic>
-#include <cstring>
-
+#include "CachedDrive.h"
 #include "app/Psram.h"
 #include "diskio_impl.h"  // ff_diskio_register(), ff_diskio_impl_t
 #include "ff.h"
@@ -25,83 +23,52 @@ namespace sectordisk {
 
 namespace {
 
-// All in internal RAM (the globals): only the cache's block is in PSRAM.
-SectorCache s_cache;
+// All in internal RAM (the globals): only the cache's block and verify's
+// sector are in PSRAM. The rules are lib/core CachedDrive's (host-tested):
+// this adapts them to the SD driver.
 uint8_t s_pdrv = 0xFF;
 bool s_installed = false;
-std::atomic<bool> s_enabled{true};
-std::atomic<bool> s_clear{false};   // clear at the next disk call (under FatFs's lock)
-std::atomic<bool> s_reset{false};   // reset the stats at the next disk call
-std::atomic<bool> s_verify{false};
-uint8_t* s_check = nullptr;         // verify's sector (PSRAM)
-Stats s_stats;
 
-class SdDevice final : public SectorCache::Device {
+class SdCard final : public SectorCache::Device {
 public:
-  bool read(uint32_t lba, uint8_t* out, uint32_t count) override {
-    const int64_t t0 = esp_timer_get_time();
-    const bool ok = ff_sd_read(s_pdrv, out, lba, count) == RES_OK;
-    s_stats.cardReadUs += static_cast<uint64_t>(esp_timer_get_time() - t0);
-    ++s_stats.cardReads;
-    if (count == 1) ++s_stats.cardSingleReads;
-    s_stats.cardReadSectors += count;
-    return ok;
-  }
+  bool read(uint32_t lba, uint8_t* out, uint32_t count) override { return ff_sd_read(s_pdrv, out, lba, count) == RES_OK; }
   bool write(uint32_t lba, const uint8_t* data, uint32_t count) override {
-    ++s_stats.cardWrites;
     return ff_sd_write(s_pdrv, data, lba, count) == RES_OK;
   }
 };
-SdDevice s_device;
 
-// Pending requests from other tasks, taken under FatFs's lock.
-void settle() {
-  if (s_reset.exchange(false)) {
-    s_cache.resetStats();
-    const uint32_t capacity = s_stats.capacity;
-    s_stats = Stats();
-    s_stats.capacity = capacity;
-  }
-  if (s_clear.exchange(false)) s_cache.clear();
+uint64_t nowUs() { return static_cast<uint64_t>(esp_timer_get_time()); }
+
+SectorCache s_cache;
+SdCard s_card;
+CachedDrive s_drive(s_cache, s_card, nowUs);
+uint8_t* s_check = nullptr;  // verify's sector (PSRAM)
+
+// FatFs (re)mounts the volume: at the first access after the mount, and by
+// itself once the card stopped answering (ff_sd_status()'s STA_NOINIT: a
+// card pulled or swapped while on). The cache is cleared first: nothing of
+// the card that was there is served to the one that is.
+DSTATUS wInit(unsigned char pdrv) {
+  s_drive.init();
+  return ff_sd_initialize(pdrv);
 }
-
-DSTATUS wInit(unsigned char pdrv) { return ff_sd_initialize(pdrv); }
 DSTATUS wStatus(unsigned char pdrv) { return ff_sd_status(pdrv); }
 
 DRESULT wRead(unsigned char pdrv, unsigned char* buff, uint32_t sector, unsigned count) {
-  settle();
-  if (!s_enabled.load(std::memory_order_relaxed)) {
-    return s_device.read(sector, buff, count) ? RES_OK : RES_ERROR;
-  }
-  const bool check = s_verify.load(std::memory_order_relaxed) && s_check && count == 1 && s_cache.holds(sector);
-  if (!s_cache.read(s_device, sector, buff, count)) return RES_ERROR;
-  if (check && s_device.read(sector, s_check, 1)) {
-    ++s_stats.verified;
-    if (std::memcmp(s_check, buff, SectorCache::kSectorBytes) != 0) {
-      ++s_stats.stale;
-      s_stats.staleLba = sector;
-      std::memcpy(buff, s_check, SectorCache::kSectorBytes);  // the card's bytes win
-      s_cache.invalidate(sector, 1);
-    }
-  }
   (void)pdrv;
-  return RES_OK;
+  return s_drive.read(sector, buff, count) ? RES_OK : RES_ERROR;
 }
 
 DRESULT wWrite(unsigned char pdrv, const unsigned char* buff, uint32_t sector, unsigned count) {
-  settle();
   (void)pdrv;
-  if (!s_enabled.load(std::memory_order_relaxed)) return s_device.write(sector, buff, count) ? RES_OK : RES_ERROR;
-  return s_cache.write(s_device, sector, buff, count) ? RES_OK : RES_ERROR;
+  return s_drive.write(sector, buff, count) ? RES_OK : RES_ERROR;
 }
 
 DRESULT wIoctl(unsigned char pdrv, unsigned char cmd, void* buff) {
-  settle();
   if (cmd == CTRL_TRIM && buff) {
     // FatFs's range: the first and the last sector freed.
     const LBA_t* r = static_cast<const LBA_t*>(buff);
-    if (r[1] >= r[0]) s_cache.invalidate(static_cast<uint32_t>(r[0]), static_cast<uint32_t>(r[1] - r[0] + 1));
-    ++s_stats.trims;
+    s_drive.trim(static_cast<uint32_t>(r[0]), static_cast<uint32_t>(r[1]));
   }
   return ff_sd_ioctl(pdrv, cmd, buff);
 }
@@ -115,10 +82,9 @@ bool install(uint8_t pdrv) {
   if (pdrv == 0xFF) return false;
   if (s_cache.capacity() == 0 && !s_cache.begin(SectorCache::kDefaultEntries, psramAlloc, psramFree)) return false;
   if (!s_check) s_check = static_cast<uint8_t*>(psramAlloc(SectorCache::kSectorBytes));
+  s_drive.setScratch(s_check);
   s_pdrv = pdrv;
-  s_cache.clear();  // a mount: nothing kept from before
-  s_clear.store(false);
-  s_stats.capacity = s_cache.capacity();
+  s_drive.init();  // a mount: nothing kept from before
   ff_diskio_register(pdrv, &kImpl);
   s_installed = true;
   return true;
@@ -130,28 +96,36 @@ bool install(uint8_t pdrv) {
 
 bool installed() { return s_installed; }
 
-void setEnabled(bool on) {
-  if (on && !s_enabled.load()) s_clear.store(true);  // what was written while off isn't in it
-  s_enabled.store(on);
-}
+void setEnabled(bool on) { s_drive.setEnabled(on); }
 
-bool enabled() { return s_installed && s_enabled.load(); }
+bool enabled() { return s_installed && s_drive.enabled(); }
 
-void setVerify(bool on) { s_verify.store(on); }
-bool verifying() { return s_verify.load(); }
+void setVerify(bool on) { s_drive.setVerify(on); }
+bool verifying() { return s_drive.verifying(); }
 
 Stats stats() {
   // Read while FatFs may be inside a call on another task: each field is a
   // word, read as it is (a diagnostic).
-  Stats s = s_stats;
+  const CachedDrive::Stats d = s_drive.stats();
+  Stats s;
   s.cache = s_cache.stats();
   s.capacity = s_cache.capacity();
   s.held = s_cache.size();
   s.bytes = s_cache.bytes();
+  s.cardReads = d.cardReads;
+  s.cardSingleReads = d.cardSingleReads;
+  s.cardReadSectors = d.cardReadSectors;
+  s.cardReadUs = d.cardReadUs;
+  s.cardWrites = d.cardWrites;
+  s.trims = d.trims;
+  s.inits = d.inits;
+  s.verified = d.verified;
+  s.stale = d.stale;
+  s.staleLba = d.staleLba;
   return s;
 }
 
-void resetStats() { s_reset.store(true); }
+void resetStats() { s_drive.resetStats(); }
 
 Bench benchReads(uint32_t n) {
   Bench b;

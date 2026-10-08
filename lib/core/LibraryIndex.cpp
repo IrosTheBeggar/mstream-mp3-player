@@ -249,7 +249,10 @@ struct LibraryIndex::Votes {
 LibraryIndex::LibraryIndex(AllocFn alloc, FreeFn release, ShrinkFn shrink)
     : allocFn_(alloc ? alloc : defaultAlloc), freeFn_(release ? release : defaultFree), shrinkFn_(shrink) {}
 
-LibraryIndex::~LibraryIndex() { clear(); }
+LibraryIndex::~LibraryIndex() {
+  keepTracks_ = false;
+  clear();
+}
 
 // Every block goes through these two, which count what is held: the build
 // peak is the most held at any moment, a block and its replacement included.
@@ -271,6 +274,9 @@ void LibraryIndex::release(void* p, size_t bytes) {
 template <typename T>
 bool LibraryIndex::reserve(Block<T>& b, uint32_t n) {
   if (n <= b.cap) return true;
+  // An empty block too small for what comes (the kept track block):
+  // freed first, then asked at the size wanted, not doubled.
+  if (b.size == 0 && b.data) drop(b);
   uint32_t cap = b.cap ? b.cap * 2 : 16;
   if (cap < n) cap = n;
   T* p = static_cast<T*>(alloc(static_cast<size_t>(cap) * sizeof(T)));
@@ -507,7 +513,11 @@ void LibraryIndex::dropVotes() {
 
 void LibraryIndex::clear() {
   dropArena();
-  drop(tracksB_);
+  if (keepTracks_ && tracksB_.data) {
+    tracksB_.size = 0;  // the block kept for the next build or load
+  } else {
+    drop(tracksB_);
+  }
   drop(artistsB_);
   drop(albumsB_);
   drop(foldersB_);
@@ -538,7 +548,7 @@ void LibraryIndex::clear() {
   building_ = false;
   failed_ = false;
   ready_ = false;
-  buildPeak_ = held_;  // 0: everything is released above
+  buildPeak_ = held_;  // 0: everything is released above (but a kept track block)
 }
 
 bool LibraryIndex::begin(const char* root, uint32_t expectTracks) {
@@ -1626,11 +1636,19 @@ bool LibraryIndex::save(ByteSink& out, uint64_t signature) const {
 
 template <typename T>
 bool LibraryIndex::readBlock(ByteSource& in, Block<T>& b, uint32_t n) {
+  // A kept block (keepTrackBlock()) is taken when the records fit, else
+  // freed first.
+  if (b.data && (n == 0 || b.cap < n)) drop(b);
   if (n == 0) return true;
-  b.data = static_cast<T*>(alloc(static_cast<size_t>(n) * sizeof(T)));
-  if (!b.data) return false;
-  b.cap = b.size = n;
-  return readFully(in, b.data, static_cast<size_t>(n) * sizeof(T));
+  if (!b.data) {
+    b.data = static_cast<T*>(alloc(static_cast<size_t>(n) * sizeof(T)));
+    if (!b.data) return false;
+    b.cap = n;
+  }
+  b.size = n;
+  if (!readFully(in, b.data, static_cast<size_t>(n) * sizeof(T))) return false;
+  trim(b);  // a kept block bigger than the file's table: to its size
+  return true;
 }
 
 namespace {

@@ -36,15 +36,22 @@ struct Heap {
     static std::vector<std::pair<void*, size_t>> b;
     return b;
   }
+  // Every size asked since reset() (or since a test cleared it).
+  static std::vector<size_t>& sizes() {
+    static std::vector<size_t> s;
+    return s;
+  }
   static void reset() {
     live = peak = allocs = frees = 0;
     limit = SIZE_MAX;
     blocks().clear();
+    sizes().clear();
   }
   static void* alloc(size_t n) {
     if (live + n > limit) return nullptr;
     void* p = std::malloc(n ? n : 1);
     blocks().push_back({p, n});
+    sizes().push_back(n);
     live += n;
     if (live > peak) peak = live;
     ++allocs;
@@ -1715,6 +1722,92 @@ void test_trims_in_place() {
   TEST_ASSERT_EQUAL_MEMORY(a.data(), b.data(), a.size());
 }
 
+// The update step's rebuild (keepTrackBlock(), N10's review): clear()
+// keeps the track table's block, and a build or a load that fits in it
+// takes it again (no second block of its size: the heap's largest free
+// block needn't hold the table), the index the same bytes; one that
+// doesn't fit frees it first and asks at its size (not doubled); a smaller
+// one is trimmed to its size; the destructor frees it.
+void test_a_kept_track_block() {
+  const synth::Spec spec = synth::specFor(3000);
+  constexpr size_t kTrack = sizeof(LibraryIndex::Track);
+  MemorySink plain;
+  {
+    LibraryIndex idx(Heap::alloc, Heap::release, shrinkInPlace);
+    TEST_ASSERT_TRUE(idx.begin(spec.root, 3000));
+    synth::addTracks(idx, spec);
+    TEST_ASSERT_TRUE(idx.finish());
+    TEST_ASSERT_TRUE(idx.save(plain, 1));
+  }
+  TEST_ASSERT_EQUAL_size_t(0, Heap::live);
+  Heap::reset();
+  {
+    LibraryIndex idx(Heap::alloc, Heap::release, shrinkInPlace);
+    idx.keepTrackBlock(true);
+    auto build = [&](const synth::Spec& sp, uint32_t n) {
+      TEST_ASSERT_TRUE(idx.begin(sp.root, n));
+      synth::addTracks(idx, sp);
+      TEST_ASSERT_TRUE(idx.finish());
+    };
+    auto asked = [](size_t bytes) { return std::count(Heap::sizes().begin(), Heap::sizes().end(), bytes); };
+    build(spec, 3000);
+    const size_t table = 3000 * kTrack;
+    TEST_ASSERT_EQUAL_size_t(table, idx.memory().tracks);
+    idx.clear();
+    TEST_ASSERT_FALSE(idx.ready());
+    TEST_ASSERT_EQUAL_UINT32(0, idx.trackCount());
+    TEST_ASSERT_EQUAL_size_t(table, Heap::live);  // the kept block alone
+    TEST_ASSERT_EQUAL_size_t(table, idx.memory().tracks);
+    // The same library again: the block taken, none asked of its size.
+    Heap::sizes().clear();
+    build(spec, 3000);
+    TEST_ASSERT_EQUAL(0, asked(table));
+    MemorySink again;
+    TEST_ASSERT_TRUE(idx.save(again, 1));
+    TEST_ASSERT_EQUAL_size_t(plain.size(), again.size());
+    TEST_ASSERT_EQUAL_MEMORY(plain.data(), again.data(), plain.size());
+    TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+    // A load of the same size takes it too.
+    Heap::sizes().clear();
+    MemorySource in(plain.data(), plain.size(), 4096);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(idx.load(in, 1)));
+    TEST_ASSERT_EQUAL(0, asked(table));
+    TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+    TEST_ASSERT_EQUAL_UINT32(3000, idx.trackCount());
+    // A bigger library: the kept block freed first, the new one asked at
+    // its size (not twice the old).
+    const synth::Spec bigger = synth::specFor(4000);
+    idx.clear();
+    Heap::sizes().clear();
+    build(bigger, 4000);
+    TEST_ASSERT_EQUAL(1, asked(4000 * kTrack));
+    TEST_ASSERT_EQUAL(0, asked(6000 * kTrack));
+    TEST_ASSERT_EQUAL_UINT32(4000, idx.trackCount());
+    // A smaller one: taken, trimmed to its size by finish().
+    const synth::Spec smaller = synth::specFor(2000);
+    idx.clear();
+    Heap::sizes().clear();
+    build(smaller, 2000);
+    TEST_ASSERT_EQUAL(0, asked(2000 * kTrack));
+    TEST_ASSERT_EQUAL_size_t(2000 * kTrack, idx.memory().tracks);
+    TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+    // A load bigger than the kept block: freed first, then exactly the file's.
+    idx.clear();
+    Heap::sizes().clear();
+    MemorySource in2(plain.data(), plain.size(), 4096);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), static_cast<int>(idx.load(in2, 1)));
+    TEST_ASSERT_EQUAL(1, asked(table));
+    TEST_ASSERT_EQUAL_size_t(Heap::live, idx.memory().total);
+    // A failed load keeps the block for the next try, and nothing else.
+    idx.clear();
+    MemorySource cut(plain.data(), plain.size() / 2, 4096);
+    TEST_ASSERT_TRUE(idx.load(cut, 1) != LibraryIndex::Load::Loaded);
+    TEST_ASSERT_EQUAL_size_t(idx.memory().tracks, Heap::live);
+  }
+  TEST_ASSERT_EQUAL_size_t(0, Heap::live);  // the destructor frees the kept block
+  TEST_ASSERT_EQUAL_size_t(Heap::allocs, Heap::frees);
+}
+
 // The tagged synthetic library: deterministic, its rates as the constants
 // say, its folders unique (one album and one artist each).
 void test_tagged_synthetic_library() {
@@ -1798,6 +1891,7 @@ int main(int, char**) {
   RUN_TEST(test_peek_and_clear_pending);
   RUN_TEST(test_folder_facts_and_thumbnails);
   RUN_TEST(test_trims_in_place);
+  RUN_TEST(test_a_kept_track_block);
   RUN_TEST(test_tagged_synthetic_library);
   return UNITY_END();
 }

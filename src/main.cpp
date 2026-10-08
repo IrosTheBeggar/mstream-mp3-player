@@ -2494,8 +2494,10 @@ static bool updateSafePoint(uint32_t now) {
 // (PSRAM short: the build-at-boot marker, and the next boot builds before
 // the UI), then the build with the queue carried through queue.txt.
 static void runUpdateStep() {
-  char why[96];
-  if (!library.roomToBuild(queue.memoryBytes(), why, sizeof(why))) {
+  char why[128];
+  const bool forced = cardTasks->deferAsked();  // gb! (L4.4)
+  if (forced) snprintf(why, sizeof(why), "gb! asked for the deferral");
+  if (forced || !library.roomToBuild(queue.memoryBytes(), why, sizeof(why))) {
     const bool marked = library.deferToBoot();
     Serial.printf("[lib] the update step waits for the next boot (%s)%s\n", why,
                   marked ? "" : "; the marker COULDN'T be written");
@@ -2715,12 +2717,20 @@ void setup() {
       cardTasks->askUpdate("gb");
       return true;
     };
+    j.buildAtBoot = [] {
+      if (!cardTasks || !cardTasks->active()) return false;
+      cardTasks->askUpdate("gb!", true);
+      return true;
+    };
     j.verify = [] { return cardTasks && cardTasks->verify(); };
     j.state = [](librarytext::Status* st, char* line, size_t size) {
       if (cardTasks) cardTasks->state(st, line, size);
     };
     j.report = [] {
       if (cardTasks) cardTasks->report();
+    };
+    j.resetStats = [] {
+      if (cardTasks) cardTasks->resetStats();
     };
     j.idle = [] { return !cardTasks || cardTasks->waitIdle(10000); };
     tc->setJobs(j);

@@ -22,7 +22,9 @@
 //   - LoseUnsynced: a file's writes since its last sync lost (the directory
 //     entry still says the old size);
 //   - Torn: as InOrder, and the cut write half done.
-// diskCheck() copies shared chains apart, as chkdsk does. Host only.
+// diskCheck() copies shared chains apart, as chkdsk does. `refuse` makes
+// a card that takes no writes (full: every step fails, reads work);
+// `dead` set by hand is a card pulled (put back: cleared). Host only.
 #include <cstdint>
 #include <cstring>
 #include <map>
@@ -48,6 +50,7 @@ public:
   long cutAt = -1;
   long steps = 0;
   bool dead = false;
+  bool refuse = false;  // a full card: no step succeeds, nothing is cut
   std::vector<std::string> violations;
   // What went through it.
   uint64_t bytesRead = 0, bytesWritten = 0;
@@ -241,7 +244,7 @@ public:
 
 private:
   bool step() {
-    if (dead) return false;
+    if (dead || refuse) return false;
     ++steps;
     if (cutAt >= 0 && steps == cutAt) {
       dead = true;

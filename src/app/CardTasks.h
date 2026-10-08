@@ -35,12 +35,19 @@ class Thumbs;
 //     again), and the playing track's tags go to Now Playing at once
 //     (Library::setOverlay(), 3.3.3);
 //   - the scan's end (nothing Pending in D or the index's sources): the
-//     update step, when the scan read anything since the last build (or the
-//     boot loaded an index the scan had gone past: Library::softStale()).
+//     update step, when the journal took records since the last build
+//     (CardJobs::newRecords(): reads a full card refused are none), or a
+//     walk's changes, a Rescan, or a boot that loaded an index the scan had
+//     gone past (Library::softStale()) ask for it; not when the rest
+//     stopped on a read error (the card pulled: the next boot has it).
+//     After an update step, built or failed or deferred, what the journal
+//     had asks for no other: only new records (or a walk's changes, a
+//     Rescan) do.
 // The update step itself (3.4.2) is main.cpp's (rebuildLibrary(): the queue
 // carried through queue.txt around Library::rebuild()), on the loop, once
-// updateDue() says: the journals compacted (a worker step, first), the
-// worker free, the status line drawn as "Updating library…". The build on
+// updateDue() says: a walk under way ended (its walk.jnl can't be merged
+// before), the journals compacted (a worker step, first), the worker free,
+// the status line drawn as "Updating library…". The build on
 // the worker behind the "Updating library" fence, the queue's remap split
 // around it, is N12's.
 //
@@ -75,7 +82,10 @@ public:
   void loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, bool covers);
 
   // ---- the update step (3.4.2) ----
-  void askUpdate(const char* why);
+  // `deferToBoot` (gb!, L4.4): the memory check made to fail, so the step
+  // writes the build-at-boot marker as a short PSRAM would.
+  void askUpdate(const char* why, bool deferToBoot = false);
+  bool deferAsked() const { return deferAsked_; }
   // g0: the walk now, the update step after it whatever it finds.
   void askWalkAndUpdate();
   bool updateWanted() const { return updateWanted_; }
@@ -98,6 +108,9 @@ public:
   bool verify();
   void state(librarytext::Status* s, char* line, size_t size) const;
   void report() const;  // gs's lines: the waits, the steps, the worker, the jobs, the cache
+  // gs0: the scheduler's waits and steps, the worker's stack and internal
+  // RAM's lowest start again (L3's figures, one condition at a time).
+  void resetStats();
   // Waits for the worker's step to finish and takes it in (before the
   // loop reads the card's records itself: gs, gt; the idle power-off).
   bool waitIdle(uint32_t maxMs);
@@ -122,6 +135,7 @@ private:
   void taken(ScanScheduler::Job job, uint32_t nowMs);
   void afterWalk(const cardjobs::Done& d);
   void afterScan(const cardjobs::Done& d, uint32_t nowMs);
+  void scanEnded();
   // The scan's sources from the index (3.3.3): each source's first Pending
   // track, its path for the step.
   void sources(ScanScheduler::In& in, const Sources& src);
@@ -152,9 +166,10 @@ private:
   static constexpr uint32_t kShowUpdatingMs = 600;  // ... at least this long before the build holds the loop
   bool updateAfterWalk_ = false;
   bool lastCompactFailed_ = false;
+  bool deferAsked_ = false;  // gb!
   const char* updateWhy_ = "";
   bool pendingAfterScan_ = false;  // the scan's end rebuilds (a walk's changes, a soft-stale index, a Rescan)
-  uint32_t scannedSinceBuild_ = 0;
+  bool restFailed_ = false;        // the rest's last end was a read error (no update at the scan's end)
   bool scanOver_ = true;
   // The status line's counts.
   uint32_t scanDone_ = 0, scanTotal_ = 0;

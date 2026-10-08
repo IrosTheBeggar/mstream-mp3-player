@@ -96,8 +96,9 @@ def build():
     if not gcc or not gxx:
         sys.exit("fatmodel: needs gcc and g++ on PATH (MinGW-w64 on Windows)")
     c_src = SUPPORT / "fatfs" / "FatFsBuild.c"
-    cpp = [ROOT / "tools" / "fatmodel.cpp", CORE / "SectorCache.cpp"]
-    deps = sorted((SUPPORT / "fatfs").iterdir()) + [SUPPORT / "FatModel.h", CORE / "SectorCache.h"] + cpp
+    cpp = [ROOT / "tools" / "fatmodel.cpp", CORE / "SectorCache.cpp", CORE / "CachedDrive.cpp"]
+    deps = sorted((SUPPORT / "fatfs").iterdir()) + [SUPPORT / "FatModel.h", CORE / "SectorCache.h",
+                                                    CORE / "CachedDrive.h"] + cpp
     h = hashlib.sha256()
     for p in deps:
         if p.is_file():

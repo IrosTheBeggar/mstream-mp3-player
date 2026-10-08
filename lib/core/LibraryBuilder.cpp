@@ -111,6 +111,13 @@ bool absPath(const char* root, size_t rootLen, const char* rel, size_t len, char
 
 }  // namespace
 
+uint32_t LibraryBuilder::trackSlots(uint32_t deviceRecords, const uint32_t* deviceOwn, uint32_t transferRecords,
+                                    bool transferLists) {
+  uint32_t d = deviceRecords;
+  if (transferLists && deviceOwn) d = std::min(d, *deviceOwn);
+  return d + (transferLists ? transferRecords : 0);
+}
+
 LibraryBuilder::Result LibraryBuilder::build(LibraryIndex& index, const Config& c) {
   Result r;
   index.clear();
@@ -172,16 +179,12 @@ LibraryBuilder::Outcome LibraryBuilder::attempt(LibraryIndex& index, const Confi
   // that aren't Software rows (those are T's files, or dropped): D's own
   // counts when its statuses give them, else all of D. The strings take
   // 64 KB chunks as they come.
-  uint32_t dRecords = di ? di->recordCount : 0, dFolders = di ? di->folderCount : 0;
-  if (tLists && di && c.rows) {
-    uint32_t ownRecords = 0, ownFolders = 0;
-    if (c.rows->ownCounts(&ownRecords, &ownFolders)) {
-      dRecords = std::min(dRecords, ownRecords);
-      dFolders = std::min(dFolders, ownFolders);
-    }
-  }
+  uint32_t dFolders = di ? di->folderCount : 0;
+  uint32_t ownRecords = 0, ownFolders = 0;
+  const bool own = tLists && di && c.rows && c.rows->ownCounts(&ownRecords, &ownFolders);
+  if (own) dFolders = std::min(dFolders, ownFolders);
   LibraryIndex::Sizing s;
-  s.tracks = dRecords + (tLists ? ti->recordCount : 0);
+  s.tracks = trackSlots(di ? di->recordCount : 0, own ? &ownRecords : nullptr, ti ? ti->recordCount : 0, tLists);
   s.folders = dFolders + (tLists ? ti->folderCount : 0);
   s.firstChunk = s.tracks * 40 + 1024;
   if (!index.begin(s, c.root, c.libraryRoots, c.libraryRootCount)) return Outcome::NoMemory;

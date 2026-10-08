@@ -145,12 +145,18 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   }
   // 3. What has work (only read with the worker free: a step may change it).
   in.running = worker_.running();
+  // Internal RAM's lowest while a step runs (gs; L3 and L4).
+  if (in.running != Job::None) worker_.noteInternal(static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
   const bool free = !worker_.busy();
   if (free) {
     in.cover = covers && thumbs && thumbs->wantsCover(now);
     if (active_) {
-      in.walk = !updateWanted_ && jobs_.walkWork();
-      const bool beforeUpdate = updateWanted_ && (lib_.store()->hasJournals() || jobs_.chunkPending());
+      // A walk under way goes on to its end when the update step is asked:
+      // the compaction before the build can't run while it writes walk.jnl
+      // (the step would build from tags.bin alone).
+      in.walk = (!updateWanted_ || jobs_.walking()) && jobs_.walkWork();
+      const bool beforeUpdate =
+          updateWanted_ && !jobs_.walking() && (lib_.store()->hasJournals() || jobs_.chunkPending());
       in.compact = (jobs_.compactWork() || beforeUpdate) && !(beforeUpdate && lastCompactFailed_);
       // The scan once the boot's walk has said what D's to-do is (3.3.9).
       if (!updateWanted_ && !in.walk && !in.compact && bootWalkDone_) sources(in, src);
@@ -160,7 +166,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
       if (!updateWanted_ && !in.walk && !jobs_.walking() && !in.compact && bootWalkDone_) {
         if (!scanWork && !scanOver_) {
           scanOver_ = true;
-          if (scannedSinceBuild_ > 0 || pendingAfterScan_) askUpdate("the scan's end");
+          scanEnded();
         } else if (scanWork) {
           scanOver_ = false;
         }
@@ -190,11 +196,29 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     }
   }
   // 6. Between steps: the scan's chunk out once it has waited 5 s (a
-  // pause, the battery floor), and its memory back once it has nothing.
+  // pause, the battery floor; a chunk the card refused, 30 s after: each try
+  // is a FatFs open, about 1 s of the SD driver's retries on a pulled card),
+  // and its memory back once it has nothing.
   if (active_ && !worker_.busy()) {
-    if (jobs_.chunkPending() && now - lastScanStepMs_ >= kChunkIdleMs) jobs_.flushChunk();
+    if (jobs_.chunkPending() && now - lastScanStepMs_ >= kChunkIdleMs) jobs_.idleFlush(now);
     if (now - lastScanStepMs_ >= kTrimMs && !jobs_.restWork()) jobs_.trim();
   }
+}
+
+// The scan's end: the update step when the journal took records since the
+// last build (reads the card refused are none: the build would find them
+// Pending again, and the scan would read them again, an update a pass), or
+// a walk's changes, a Rescan or a soft-stale boot ask for it. Not when the
+// rest stopped on a read error (the card pulled: the build would fail, and
+// the next boot's scan rebuilds what this one recorded).
+void CardTasks::scanEnded() {
+  if (!jobs_.newRecords() && !pendingAfterScan_) return;
+  if (restFailed_) {
+    Serial.println("[card] the scan's end: its rest stopped on a read error (the card?): no update step now (the "
+                   "next boot's scan's end has it)");
+    return;
+  }
+  askUpdate("the scan's end");
 }
 
 void CardTasks::taken(Job job, uint32_t nowMs) {
@@ -256,7 +280,9 @@ void CardTasks::afterWalk(const cardjobs::Done& d) {
     toast(t);
   }
   if (r.summary.changed) {
-    const uint32_t toScan = r.added + r.changed + indexPending();
+    // The files the scan reads: the index's Pending tracks (a walked
+    // index's are all of them), the files new to it and the changed ones.
+    const uint32_t toScan = added + r.changed + indexPending();
     scanTotal_ = toScan;
     scanDone_ = 0;
     scanOver_ = false;
@@ -276,6 +302,7 @@ void CardTasks::afterWalk(const cardjobs::Done& d) {
 
 void CardTasks::afterScan(const cardjobs::Done& d, uint32_t nowMs) {
   lastScanStepMs_ = nowMs;
+  if (d.restEnded) restFailed_ = d.restFailed;
   if (d.verifyEnded) {
     const cardjobs::Verified& v = jobs_.verified();
     Serial.printf("[card] verify: %lu software files, %lu their qfp T's, %lu NOT, %lu with no qfp in T, %lu unreadable\n",
@@ -297,18 +324,18 @@ void CardTasks::afterScan(const cardjobs::Done& d, uint32_t nowMs) {
     }
   }
   if (d.read && !d.readError && jobs_.mode() != cardjobs::Mode::Verify) {
-    ++scannedSinceBuild_;
     ++scanDone_;
     if (scanDone_ > scanTotal_) scanTotal_ = scanDone_;
   }
 }
 
-void CardTasks::askUpdate(const char* why) {
+void CardTasks::askUpdate(const char* why, bool deferToBoot) {
   if (!active_) return;
   if (!updateWanted_) Serial.printf("[card] the update step is asked (%s)\n", why);
   updateWanted_ = true;
   updateShown_ = false;
   updateWhy_ = why;
+  deferAsked_ = deferAsked_ || deferToBoot;
 }
 
 void CardTasks::askWalkAndUpdate() {
@@ -318,7 +345,7 @@ void CardTasks::askWalkAndUpdate() {
 }
 
 bool CardTasks::updateDue(uint32_t nowMs, bool safePoint) {
-  if (!updateWanted_ || worker_.busy()) return false;
+  if (!updateWanted_ || worker_.busy() || jobs_.walking()) return false;
   const bool journals = lib_.store()->hasJournals() || jobs_.chunkPending();
   if (journals && !lastCompactFailed_) return false;  // compacted first (a worker step)
   if (!safePoint) return false;
@@ -343,25 +370,40 @@ void CardTasks::afterUpdate(bool ok) {
   updating_ = false;
   updateWanted_ = false;
   updateShown_ = false;
+  deferAsked_ = false;
   lastCompactFailed_ = false;
   ++updates_;
+  // What the journal had is the index's now, or (failed: the card couldn't
+  // be read, no memory) the next boot's: library.idx keeps the inputs of
+  // its last build, which the records no longer match, so that boot's scan's
+  // end rebuilds. Not asked again until new records reach the journal.
+  jobs_.markRecords();
+  pendingAfterScan_ = false;
   if (ok) {
-    scannedSinceBuild_ = 0;
-    pendingAfterScan_ = false;
     jobs_.libraryRebuilt();
     scanTotal_ = indexPending();
     scanDone_ = 0;
     toast(uitext::kLibraryUpdated);
   }
-  Serial.printf("[card] the update step (%s): %s\n", updateWhy_, ok ? "the library is rebuilt" : "FAILED");
+  Serial.printf("[card] the update step (%s): %s\n", updateWhy_,
+                ok ? "the library is rebuilt" : "FAILED (the library stays as it was; the next boot updates it)");
 }
 
 void CardTasks::updateDeferred() {
   updating_ = false;
   updateWanted_ = false;
   updateShown_ = false;
+  deferAsked_ = false;
+  // The marker makes the next boot build everything there is.
+  jobs_.markRecords();
+  pendingAfterScan_ = false;
   ++deferred_;
   toast(uitext::kLibraryAtBoot);
+}
+
+void CardTasks::resetStats() {
+  sched_.resetStats();
+  worker_.resetStats();
 }
 
 bool CardTasks::rescan(bool everything) {
@@ -460,11 +502,19 @@ void CardTasks::report() const {
                   (unsigned long)sched_.steps(job), (unsigned long)sched_.meanStepMs(job),
                   (unsigned long)sched_.maxStepMs(job));
   }
-  Serial.printf("[card] the worker: %s, %lu steps, its 6 KB stack's least left %lu B%s; internal RAM free %u B, "
-                "lowest %u B\n",
+  // Since the boot or gs0: the stack's least left over every life of the
+  // task (each life's own mark starts again), internal RAM's lowest while a
+  // step ran (sampled at each step's start and end and each loop pass
+  // during it); and internal RAM's lowest since the boot.
+  const uint32_t internalMin = worker_.internalMin();
+  char lowest[24] = "(no step)";
+  if (internalMin != UINT32_MAX) snprintf(lowest, sizeof(lowest), "%lu B", (unsigned long)internalMin);
+  Serial.printf("[card] the worker: %s, %lu steps, its 6 KB stack's least left %lu B (this life %lu B)%s; internal "
+                "RAM free %u B, lowest %s while a step ran, %u B since the boot\n",
                 worker_.alive() ? "up" : "not running", (unsigned long)worker_.steps(),
-                (unsigned long)worker_.stackLeft(), worker_.failedStarts() ? " (it couldn't always start)" : "",
-                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                (unsigned long)worker_.stackLeastLeft(), (unsigned long)worker_.stackLeft(),
+                worker_.failedStarts() ? " (it couldn't always start)" : "",
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), lowest,
                 (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
   if (!active_) return;
   const cardjobs::Jobs::Counts& c = jobs_.counts();

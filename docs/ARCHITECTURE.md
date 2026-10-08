@@ -865,9 +865,11 @@ Core2 v1.1 has no ACIN), and any other chip counts as USB, so a board it
 can't read never powers itself off; not read yet counts as USB); no Pair screen scan or pairing; no queue write under way
 or edit waiting (`QueueStore::busy()`; not a write that failed and waits its
 retry); no library write under way (`LibraryWrite`: the library's update
-step or a compaction of the tag records, docs/METADATA.md 3.3.9; nothing
-feeds it until that update step is in, since today's rebuild holds the
-loop); no screen of its own (calibration, a spike tool). Anything that
+step or a compaction of the tag records, docs/METADATA.md 3.3.9, fed by
+`CardTasks::libraryWrite()`: every compaction step, and from "Updating
+library…" to the update step's end, whose build holds the loop until
+METADATA.md's N12 moves it to the card worker); no screen of its own
+(calibration, a spike tool). Anything that
 blocks restarts the countdown when it goes, and so does any input: a touch
 or strip press (a waking one too), PWR, a headphone key that acted (not a
 Play ignored after the sleep timer's pause, a Pause while paused, a cue
@@ -1185,11 +1187,17 @@ card. `storage/SectorDisk` puts it under the SD card right after the mount
 (METADATA.md 3.2.4, 3.8): a diskio driver that forwards to the SD library's
 own (`ff_sd_read` and the rest) through the cache, registered after
 `SD.begin()` (which registers the stock one) and before the audio starts;
-`CTRL_TRIM` invalidates the freed range; FatFs's volume lock serialises it.
+FatFs's volume lock serialises it. Its rules are `lib/core/CachedDrive`'s,
+host-tested on their own and under FatFs: `disk_initialize` clears the
+cache (FatFs mounts the volume again by itself once a card stopped
+answering: pulled or swapped while on, with no card-detect, the next card
+mustn't get the last one's FAT and folders), `CTRL_TRIM` invalidates the
+freed range, and a write with the cache off drops the sectors it wrote.
 The console's `gc` prints its counts (hits, misses, the card's reads and
-their time); `gc0` and `gc1` turn it off and on for the device batch's A/B,
-`gc2` checks every hit against the card; `gl` is L0's bench (METADATA.md
-6.3.1). A build with `MSTREAM_SECTOR_CACHE=0` leaves it out.
+their time, the mounts); `gc0` and `gc1` turn it off and on for the device
+batch's A/B, `gc2` checks every hit against the card (each prints the
+counts up to the switch, then they start again); `gl` is L0's bench
+(METADATA.md 6.3.1). A build with `MSTREAM_SECTOR_CACHE=0` leaves it out.
 
 ## The board guard
 
@@ -1664,11 +1672,16 @@ the browsing UI hold its **track ids**, never strings.
   seek or a Bluetooth setup is under way, after an underrun or a long
   decode pass, and the scan below 10% battery off USB. The update step
   (the index built again from the records, the queue carried through
-  `queue.txt`) follows the scan's end, or a walk that found 200 new files
-  or more (they show with their file names at once); it runs on the loop
-  for now (METADATA.md N12 moves its build to the worker). A file the scan
-  reads stops being Pending in the index, and the playing track's tags
-  show on Now Playing at once (`TrackCatalog::Overlay`). The Library's
+  `queue.txt`) follows the scan's end when the journal took records since
+  the last one, or a walk that found 200 new files or more (they show with
+  their file names at once); it runs on the loop for now (METADATA.md N12
+  moves its build to the worker), and on a card that doesn't answer (pulled
+  while on) it fails before it touches the index. A file the scan reads
+  stops being Pending in the index (a card walked into a path-named index
+  has every file Pending), and the playing track's tags show on Now
+  Playing at once (`TrackCatalog::Overlay`). A full or pulled card isn't
+  tried pass after pass: a failed compaction waits for the next ask, a
+  refused chunk 30 s. The Library's
   status line and toasts say what it does ("Checking the card…",
   "Reading tags 1,234 / 19,410", "Found 12 new tracks", "Library
   updated").
@@ -1686,8 +1699,9 @@ the browsing UI hold its **track ids**, never strings.
   `gt</music/...>`, `gr`, `gw`, `gb` and `gv` (`app/TagConsole`,
   `lib/core/TagText`) report the scan and the card worker, dump one file's
   tags and records, and ask the worker for a Rescan, a walk, a build or a
-  check of the transfer's files; `gc` and `gl` are the sector cache's
-  switches and L0's bench.
+  check of the transfer's files (`gb!` the update step deferred to the
+  next boot, `gs0` the worker's figures from now: the device batch's L4
+  and L3); `gc` and `gl` are the sector cache's switches and L0's bench.
 - **The queue** (`QueueModel`, host-tested): track ids in a PSRAM array (12 B an
   entry with its key and its rank), a current position, and one level of undo. Its edits
   are the design's Library and Queue actions: Play (replace the queue, start at

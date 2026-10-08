@@ -77,6 +77,7 @@ Info parseFile(ReadFn read, void* ctx, uint32_t size) {
     uint8_t buf[64];
     uint32_t at = 0;
     uint32_t n = 0;
+    bool failed = false;
     int operator()(size_t i) {
       if (i >= size) return -1;
       if (i < at || i >= static_cast<size_t>(at) + n) {
@@ -84,6 +85,7 @@ Info parseFile(ReadFn read, void* ctx, uint32_t size) {
                                                                              : static_cast<uint32_t>(sizeof(buf));
         if (!read(static_cast<uint32_t>(i), buf, want, ctx)) {
           n = 0;
+          failed = true;
           return -1;
         }
         at = static_cast<uint32_t>(i);
@@ -91,8 +93,13 @@ Info parseFile(ReadFn read, void* ctx, uint32_t size) {
       }
       return buf[i - at];
     }
-  } w{read, ctx, size, {}, 0, 0};
-  return walk(w, size);
+  } w{read, ctx, size, {}, 0, 0, false};
+  Info out = walk(w, size);
+  if (w.failed) {
+    out = Info();
+    out.readFailed = true;
+  }
+  return out;
 }
 
 }  // namespace jpeg

@@ -4,16 +4,38 @@
 #include "app/CardWorker.h"
 
 #include <Arduino.h>
+#include <esp_heap_caps.h>
 #include <esp_timer.h>
 
 void CardWorker::entry(void* self) { static_cast<CardWorker*>(self)->work(); }
+
+void CardWorker::noteInternal(uint32_t freeBytes) {
+  uint32_t m = internalMin_.load();
+  while (freeBytes < m && !internalMin_.compare_exchange_weak(m, freeBytes)) {
+  }
+}
+
+void CardWorker::resetStats() {
+  resetLeast_.store(true);  // the worker's own field: it takes the reset at its next step
+  internalMin_.store(UINT32_MAX);
+  steps_ = 0;
+}
+
+// This life's high-water mark into the least over every life (the task's
+// own mark starts again when it is made, kIdleExitMs after its last step).
+static uint32_t markStack(uint32_t* least, std::atomic<bool>& reset) {
+  const uint32_t left = uxTaskGetStackHighWaterMark(nullptr);
+  if (reset.exchange(false)) *least = UINT32_MAX;
+  if (left < *least) *least = left;
+  return left;
+}
 
 void CardWorker::work() {
   for (;;) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
     const uint8_t st = state_.load();
     if (st == kExit) {
-      stackLeft_ = uxTaskGetStackHighWaterMark(nullptr);
+      stackLeft_ = markStack(&leastLeft_, resetLeast_);
       // Not alive first, then Idle (Thumbs' order): the loop never sees Idle
       // with this task still counted as alive, which would hand a step to a
       // task about to delete itself.
@@ -23,10 +45,12 @@ void CardWorker::work() {
     }
     if (st != kQueued) continue;
     state_.store(kWorking);
+    noteInternal(static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
     const int64_t t0 = esp_timer_get_time();
     fn_(ctx_);
     tookUs_.store(static_cast<uint32_t>(esp_timer_get_time() - t0));
-    stackLeft_ = uxTaskGetStackHighWaterMark(nullptr);
+    noteInternal(static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+    stackLeft_ = markStack(&leastLeft_, resetLeast_);
     state_.store(kDone);
   }
 }

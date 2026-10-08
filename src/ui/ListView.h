@@ -144,6 +144,13 @@ public:
       (void)row;
       return false;
     }
+    // Whether the row is a control at all: false (a "Disc 2" divider) and a
+    // touch on it neither highlights it nor ticks, and a tap or a hold
+    // there does nothing (the list still scrolls from it).
+    virtual bool pressable(uint32_t row) {
+      (void)row;
+      return true;
+    }
     virtual void onHold(uint32_t row) { (void)row; }
     // Sorted by name: the A-Z rail, with each row's letter.
     virtual bool alphabetical() { return false; }

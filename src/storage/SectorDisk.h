@@ -13,13 +13,19 @@
 // ff_sd_status, ff_sd_read, ff_sd_write, ff_sd_ioctl) through N8's
 // SectorCache (lib/core): 256 single sectors, 135,168 B of PSRAM, the
 // directories' and the FAT's sectors that every path lookup reads again
-// from the root.
+// from the root. The rules are lib/core CachedDrive's (host-tested in
+// test_sector_cache, and under FatFs in test_fat_model); this file adapts
+// them to the SD driver.
 //
 //   - install(), right after every mount: SD.begin() registers the stock
 //     driver each time (sdcard_init()), so the wrapper goes in after it, the
 //     cache cleared first. LocalStorage::begin() runs before the audio
 //     starts, so no other task is inside a disk call during the swap.
 //     probeCard() mounts only to look and unmounts (SD.end()): no wrapper.
+//   - disk_initialize (FatFs mounting the volume again by itself: after
+//     ff_sd_status() said STA_NOINIT, the card pulled or swapped while on;
+//     there is no card-detect) clears the cache before the SD driver's
+//     init: the card that answers now may not be the one the cache read.
 //   - CTRL_TRIM (FatFs trims the clusters it frees, FF_USE_TRIM): the range
 //     is invalidated, then the SD driver's ioctl runs (it answers PARERR to
 //     a trim: FatFs ignores the answer).
@@ -31,11 +37,14 @@
 // The device batch's A/B switches (6.3, L0 and L1), at runtime from the
 // console (gc0, gc1, gc2):
 //   - off: every call goes straight to the SD driver (the stock build's
-//     reads; L0's "uncached" figures). On again: the cache starts empty
-//     (whatever was written meanwhile isn't in it).
+//     reads; L0's "uncached" figures), and a write drops the sectors it
+//     wrote from the cache. On again: the cache starts empty.
 //   - verify: every cache hit is also read from the card and compared (L1's
 //     write soak: a sector the cache holds that the card doesn't is counted
 //     and its LBA kept). Costs the read the cache saves.
+//   - The switches and the counts' reset are taken at the next disk call
+//     (under FatFs's lock): stats() read right after a reset still has the
+//     totals up to it.
 // The build's default (MSTREAM_SECTOR_CACHE, 1: on) is the spec's choice;
 // 0 builds the stock driver alone (no wrapper, no PSRAM taken).
 #ifndef MSTREAM_SECTOR_CACHE
@@ -68,6 +77,7 @@ struct Stats {
   uint64_t cardReadUs = 0;
   uint32_t cardWrites = 0;
   uint32_t trims = 0;
+  uint32_t inits = 0;        // mounts (FatFs's own after a card stopped answering too): the cache cleared
   uint32_t verified = 0;     // hits compared with the card (verify on)
   uint32_t stale = 0;        // ... that differed: a cache bug (L1 fails)
   uint32_t staleLba = 0;     // the last such sector

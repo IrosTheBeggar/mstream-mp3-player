@@ -24,10 +24,13 @@
 //        and the names the index has for it
 //   gr, gr!, gw, gb, gv: the card worker's jobs (Rescan tags, walk, build,
 //        verify), handed in by whoever runs it (setJobs(): app/CardTasks);
-//        without them they say there is none, and change nothing
+//        without them they say there is none, and change nothing; gb! the
+//        update step deferred to the next boot (L4.4), gs0 the worker's
+//        figures from now (L3)
 //   gc   the PSRAM sector cache under FatFs (storage/SectorDisk): its
 //        counts; gc0 off, gc1 on, gc2 on with every hit checked against
-//        the card (the device batch's L0 and L1)
+//        the card (the device batch's L0 and L1): each prints the counts up
+//        to the switch, and they start again from it
 //   gl   L0's bench: the card's time per sector, and the opens of a file
 //        under /music's 1st, 353rd and 703rd entries uncached, cold and warm;
 //        glw also the stock walk (forEachFile) and 3.2.3's walk (CardWalk
@@ -42,12 +45,15 @@ public:
     bool (*rescan)(bool everything) = nullptr;
     bool (*walk)() = nullptr;
     bool (*build)() = nullptr;
+    bool (*buildAtBoot)() = nullptr;  // gb!: the update step, its memory check made to fail
     bool (*verify)() = nullptr;
     // The scan's state now: the status line's (librarytext), and a line of
     // the worker's own for the console ("" for none).
     void (*state)(librarytext::Status* status, char* line, size_t size) = nullptr;
     // gs's lines of the worker's own (its waits, its steps, its stack).
     void (*report)() = nullptr;
+    // gs0: those figures start again.
+    void (*resetStats)() = nullptr;
     // Waits for the worker's step under way to finish, before a command
     // reads the card's records itself (gs, gt, gl).
     bool (*idle)() = nullptr;
@@ -67,6 +73,7 @@ private:
   void status();
   void dump(const char* path);
   void cache(uint32_t n);
+  void cacheCounts(const char* when);
   void bench(bool walks);
   void job(const char* what, bool (*fn)());
   void scanLine();

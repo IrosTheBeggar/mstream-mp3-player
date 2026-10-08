@@ -55,7 +55,7 @@ bool matches(const LibraryIndex::Inputs& saved, const tagstore::Identity& root) 
 }
 
 LibraryIndex::Inputs inputsOf(const tagstore::Identity& root, bool transferUsed, uint32_t deviceCrc,
-                              uint32_t journalSeq) {
+                              uint32_t journalSeq, bool journalsLeft) {
   LibraryIndex::Inputs in;
   if (root.present) {
     in.cardId = root.cardId;
@@ -65,8 +65,12 @@ LibraryIndex::Inputs inputsOf(const tagstore::Identity& root, bool transferUsed,
   }
   in.transfer = root.present && transferUsed;
   in.deviceCrc = deviceCrc;
-  in.journalSeq = journalSeq;
+  in.journalSeq = journalsLeft ? kJournalsLeftOut : journalSeq;
   return in;
+}
+
+bool softStale(const LibraryIndex::Inputs& saved, uint32_t deviceCrc, uint32_t journalSeq) {
+  return saved.deviceCrc != deviceCrc || saved.journalSeq != journalSeq;
 }
 
 Saved savedOf(LibraryIndex::Load load, const LibraryIndex::Inputs& saved, const tagstore::Identity& root) {
