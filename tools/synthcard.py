@@ -2085,8 +2085,29 @@ def sample_files(plan, n, seed=0):
 
 
 # What an empty card's root may hold: the folder Windows itself makes on a
-# drive it mounts (the indexer's volume id). Anything else there: refused.
+# drive it mounts (the indexer's volume id), and the label and icon Rufus
+# writes when it formats a card (an autorun.inf it signs, and its icon; see
+# formatter_files). Anything else there: refused.
 ROOT_IGNORED = {"system volume information"}
+RUFUS_FILES = {"autorun.inf", "autorun.ico"}
+
+
+def formatter_files(root, names):
+    """The names a formatter left: Rufus's autorun.inf (its first comment line
+    says "Created by Rufus", in UTF-16 as Rufus writes it, or UTF-8) and the
+    autorun.ico beside it. Nothing when the .inf isn't Rufus's."""
+    inf = next((n for n in names if n.casefold() == "autorun.inf"), None)
+    if inf is None:
+        return set()
+    try:
+        with open(os.path.join(root, inf), "rb") as fh:
+            head = fh.read(512)
+    except OSError:
+        return set()
+    text = head.decode("utf-16", "replace") if head[:2] in (b"\xff\xfe", b"\xfe\xff") else head.decode("utf-8", "replace")
+    if not text.lstrip("﻿").startswith("; Created by Rufus"):
+        return set()
+    return {n for n in names if n.casefold() in RUFUS_FILES}
 
 
 class DriveProbe:
@@ -2155,7 +2176,9 @@ def copy_to(out, drive, yes, probe=None, stream=sys.stdout):
         raise SystemExit(f"--copy-to {root}: the card already has \\music: refusing (this tool only fills an empty "
                          f"card; it never deletes or formats)")
     try:
-        present = sorted(n for n in os.listdir(probe.target(root, "")) if n.casefold() not in ROOT_IGNORED)
+        listed = os.listdir(probe.target(root, ""))
+        left = formatter_files(probe.target(root, ""), listed)
+        present = sorted(n for n in listed if n.casefold() not in ROOT_IGNORED and n not in left)
     except OSError as e:
         raise SystemExit(f"--copy-to {root}: its root can't be listed ({e}): refusing")
     if present:

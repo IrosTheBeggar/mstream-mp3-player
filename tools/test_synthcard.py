@@ -829,6 +829,29 @@ class TreeTests(unittest.TestCase):
         self.assertEqual(rc, 2, why)
         self.assertEqual(os.listdir(card), ["System Volume Information"])
 
+    def test_copy_takes_a_card_rufus_formatted(self):
+        # Rufus's label and icon (a UTF-16 autorun.inf it signs, and autorun.ico) count as empty, and stay.
+        rufus = "; Created by Rufus 4.7\r\n; https://rufus.ie\r\n[autorun]\r\nicon  = autorun.ico\r\nlabel = music\r\n"
+        card = os.path.join(self.tmp, "card_rufus")
+        os.makedirs(card)
+        Path(card, "autorun.inf").write_bytes(b"\xff\xfe" + rufus.encode("utf-16-le"))
+        Path(card, "autorun.ico").write_bytes(b"\x00\x00\x01\x00")
+        rc, why, said = self.copy(FakeProbe(card), False)
+        self.assertEqual(rc, 2, why)
+        self.assertEqual(sorted(os.listdir(card)), ["autorun.ico", "autorun.inf"])
+        # Anyone else's autorun.inf, an icon without Rufus's .inf, or anything beside them: refused.
+        for files in ({"autorun.inf": b"[autorun]\r\nopen=setup.exe\r\n", "autorun.ico": b"\x00"},
+                      {"autorun.ico": b"\x00"},
+                      {"autorun.inf": b"\xff\xfe" + rufus.encode("utf-16-le"), "photo.jpg": b"keep me"}):
+            card = os.path.join(self.tmp, "card_not_rufus_" + str(len(os.listdir(self.tmp))))
+            os.makedirs(card)
+            for name, data in files.items():
+                Path(card, name).write_bytes(data)
+            rc, why, said = self.copy(FakeProbe(card), True)
+            self.assertEqual(rc, "refused", said)
+            self.assertIn("isn't empty", why)
+            self.assertEqual(sorted(os.listdir(card)), sorted(files))
+
     def test_copy_needs_room_for_the_folders_too(self):
         # A folder's entries take whole clusters, more than one when they don't fit (/music's 1,600-odd do not
         # at 32 KB): with 512 B clusters, room for the files and one cluster a folder isn't enough.
