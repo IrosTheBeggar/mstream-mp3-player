@@ -17,8 +17,12 @@ The Dance tab gives the dancer a stage 320 px wide, and the first drawn
 set is a new stick figure that travels between three spots.
 
 **Status: designed (2026-10-07, at 2e1b5c5), with the user's decisions
-(section 12). Nothing is built.** Section 11 is the build order. The
-contributor guide, docs/DANCERS.md, comes with step 11.
+(section 12). Step 1 is built: tools/dancepack.py, its tests and the test
+dancer (Appendix C); the rest is designed.** Section 11 is the build order. The
+contributor guide, docs/DANCERS.md, comes with step 11. Appendices A-C
+freeze the contract for step 1: the MPDN v1 bytes, the shared integer
+algorithms and dancepack.py's interface. Where they and the sections
+above differ, the appendices win.
 
 Where the facts come from:
 
@@ -88,7 +92,7 @@ namespace dance {
 enum class MoveKind : uint8_t { Beat, Idle };
 enum class Origin : uint8_t { BuiltIn, Card };
 enum : uint8_t { kWhenQuiet = 1, kWhenListening = 2 };   // Idle moves; 3 = any
-enum : uint8_t { kMirror = 1, kFreeze = 2, kPlaceStart = 4, kPlaceEnd = 8, kHeavy = 16 };
+enum : uint8_t { kMirror = 1, kFreeze = 2, kPlaceStart = 4, kPlaceEnd = 8, kHeavy = 16, kSnap = 32 };
 enum : uint8_t { kNeedsSongBpm = 1 };                    // known to v1, unsupported: move skipped
 enum class StartAt : uint8_t { Any, Centre, Side, Left, Right };  // mirrored: Left<->Right
 struct MoveLabels {                // what the picker reads, the same for both classes
@@ -99,7 +103,8 @@ struct MoveLabels {                // what the picker reads, the same for both c
   uint8_t paceLo, paceHi;          // danced pace 36..200; 0,0 = any
   uint8_t weight10;                // 1..100 = 0.1..10.0 (default 10)
   uint8_t when, flags, repeat;     // repeat 0 (auto) ..8, repeat*beats <= 16
-  uint8_t fromTag, toTag;          // pose keys ("stand", "low", "left"...), 0 = none
+  uint8_t fromTag, toTag;          // pose keys ("stand", "low", "left"...), 0 = none;
+                                   // the pack also carries each one's mirror twin (A.12)
   uint8_t needs;                   // feature bits; any bit this engine lacks -> move skipped
   int8_t travel; StartAt startAt;  // spots -2..+2, negated when mirrored (section 8)
   uint8_t genreCount; const uint32_t* genreKeys;  // folded keys, never FNV("")
@@ -195,8 +200,9 @@ a 3-tick floor keeps both triplets and safety.
 - `repeat`: 0-8, with repeat·beats ≤ 16.
 - `weight`: 0.1-10.
 - `travel`: −2..+2 spots.
-- `row = n` must split evenly on the 1/12 grid. Otherwise it is an error:
-  `5 frames can't share 1 beat evenly on the 1/12 grid: give timing =`.
+- `row = n` must split evenly on the 1/12 grid. Otherwise the move is
+  skipped (a failure under `--strict`): `5 frames can't share 1 beat
+  evenly on the 1/12 grid: give timing =`.
 
 ### 2.2 How frames map to beat phase
 
@@ -209,8 +215,9 @@ a 3-tick floor keeps both triplets and safety.
   If the last render was before beat b, and the current u is past that
   step but within ⅛ beat of b, the step is shown anyway.
 - **Hit warning.** A step that straddles a whole beat gets a compiler
-  warning ("the hit on beat 2 falls inside B4"). It isn't dropped, because
-  holds are legitimate.
+  warning ("beat 2 lands inside step 2 (B4): no step starts on it; fine
+  for a hold, otherwise set timing = so one does"). It isn't dropped,
+  because holds are legitimate.
 
 ### 2.3 Offsets
 
@@ -245,7 +252,8 @@ by in a minute.
   - k = −1 is half time: each move beat lasts 2 dance beats. It is allowed
     only for moves of 1-4 beats, so no single play is longer than 8 dance
     beats (6.7 s at T = 72).
-  - k = +1 is double time, allowed only while 2T ≤ 180.
+  - k = +1 is double time, allowed only while 2T ≤ 180, for a running
+    move too (section 2.5).
   - So the reachable paces are 36-180.
 - **The test:**
   - An **unranged** move always uses k = 0, so half time never leaks into
@@ -271,9 +279,12 @@ can't be reached: the fastest pace is 180`.
 
 - Eligibility is checked when a move or a run starts, and again whenever T
   moves (a re-acquire at a new tempo, section 3.5).
-- If a running move's pace T·2^k leaves [0.97·lo, 1.03·hi], it holds at
-  its next whole move beat and the picker chooses again. The cut move is
-  exempt from no-repeat, so it can carry on at the new octave if one fits.
+- If a running move's pace T·2^k leaves [0.97·lo, 1.03·hi], or a
+  double-time move's 2T passes 180, it holds at its next whole move beat
+  and the picker chooses again. The 3 % never relaxes the 180 cap of
+  section 2.4, so no move dances faster than 180 (section 2.1's quarter
+  beat of 83 ms). The cut move is exempt from no-repeat, so it can carry
+  on at the new octave if one fits.
 - So "never used outside its range" means "never danced more than 3 %
   outside it for longer than one move beat". The contributor guide says
   so.
@@ -304,13 +315,14 @@ Idle moves carry `when = quiet | listening | any`. The default is `any`.
 
 - **Tags.** A move may carry up to 8 free-text tags
   (`genre = disco, funk`).
-- **Folding.** The compiler and the device fold tags the same way.
-  - `&`, `+` and a lone `n` between words become "and". Then textfold's
-    Full folding keeps letters and digits only, lowercased. The key is
-    FNV-1a 32.
+- **Folding.** The compiler and the device fold tags the same way
+  (Appendix B.8 gives the exact order).
+  - textfold's Full folding, lowercased; then `&`, `+` and a lone `n`
+    between words become "and"; then only letters and digits are kept.
+    The key is FNV-1a 32.
   - A tag that folds to empty (a script Full folding can't spell; see
-    `sameName()`'s note in TextFold.h) is an error in the compiler and
-    drops the move on the device.
+    `sameName()`'s note in TextFold.h) skips the move in the compiler (a
+    failure under `--strict`) and drops it on the device.
   - A track genre that folds to empty is ignored, so it can never match
     everything.
 - **Matching.** A tagged move is eligible only when ANY of the track's up
@@ -366,10 +378,11 @@ otherwise auto-bounce.
 **How drops are reported:**
 
 - **Compiler:** one status line per move, e.g. `dancer.ini:41: move
-  "spin": frames last 15 quarter beats; a 4-beat move needs 16 (skipped)`.
-  `--strict`, used for built-ins, turns a skip into a failure.
+  "spin": steps last 45 ticks (3 3/4 beats); a 4-beat move needs 48
+  (skipped)`. `--strict`, used for built-ins, turns a skip into a
+  failure. Appendix C.6 lists every message.
 - **Device:** logged once per load, e.g. `[dance] robo: move "spin"
-  ignored: 15 of 16 quarters`.
+  ignored: 45 of 48 ticks`.
 - **Dancers page:** the row reads "9 moves (1 ignored)" once the pack has
   been loaded in this session.
 - **Console:** `Dl` lists the moves.
@@ -463,7 +476,10 @@ A pick takes under 50 µs (estimate).
 
 **Position.** Each frame, `u += Δ(trackerBeats)·M`, where **M = S·2^k is
 recomputed at every acquisition** (S is the current fold scale). The
-move's pace therefore stays T·2^k whatever the tracker's octave.
+move's pace therefore stays T·2^k whatever the tracker's octave. Within a
+run u never goes below 0: a backward PLL nudge or a re-phase that would
+take it under the run's start holds it at 0, because `frameAt` needs a
+position ≥ 0 (Appendix B.4).
 
 | Event | Detected by | Handling |
 |---|---|---|
@@ -482,9 +498,10 @@ move's pace therefore stays T·2^k whatever the tracker's octave.
   locked beat, otherwise 0, eased with τ = 0.4 s. DanceRate (fps), the
   beat light (dance phi < 0.12 while dancing), test_dance_rate and
   beat_eval's `IDLE_WEIGHT` 0.5 keep their meaning.
-- **Offsets, bounce, sway and travel** scale by the energy e = 0.6 +
-  0.4·clamp((w − 0.5)/0.5), so a fresh lock (w 0.65) hops at 72 %. Travel
-  always completes its full distance; e scales only the hop.
+- **Offsets, bounce and sway** scale by the energy e = 0.6 +
+  0.4·clamp((w − 0.5)/0.5), so a fresh lock (w 0.65) hops at 72 %.
+  Travel doesn't: it always completes its full distance. Idle moves are
+  drawn at e = 1 (Appendix B.4).
 - **Palette:** the 32-step fade between the idle and dance palettes comes
   for free through the LUT (section 6.2).
 
@@ -549,21 +566,24 @@ It lands in step 4, with the Choreographer. `D` is free today.
 - One PNG of equal cells, with no padding, trimming or rotation. Cells are
   named like spreadsheet cells: `B4` is column B, row 4. The sheet is at
   most 1024×1024, with at most 256 cells used.
-- **Accepted PNGs:** colour types 0, 2, 3, 4 and 6; bit depths 1-8 for
-  indexed and grey; 8 or 16 (16 reduced to 8) for RGB and RGBA.
+- **Accepted PNGs:** colour types 0, 2, 3, 4 and 6, at every bit depth
+  PNG allows for them: 1-8 for indexed, 1-16 for grey, 8 or 16 for grey
+  with alpha, RGB and RGBA (16 reduced to 8; Appendix C.4).
   - **tRNS** is honoured for types 0, 2 and 3.
   - Interlaced (Adam7) files are rejected with "save without interlacing".
 - **Colour key.** `key = #rrggbb` makes that colour transparent. With no
   alpha, no tRNS and no key, the build fails with `every cell is fully
-  opaque: export with transparency or set key =`. Otherwise every bounding
+  opaque: export with transparency, or set key = #ff00ff (the top-left
+  pixel of A1)`, naming the likely background. Otherwise every bounding
   box would be the whole cell and the budget red.
 - **Export recipes**, in the guide:
   - Aseprite / LibreSprite: Export Sprite Sheet, By Rows, no trim.
   - Piskel: PNG with columns.
   - Pixelorama: Rows.
   - Paint: a magenta background and `key = #ff00ff`.
-- Identical cells, and cells that are mirror images of each other, are
-  stored once. A mirror bit in the step record handles the second.
+- Identical cells, and cells that are mirror images of each other about
+  the anchor column, are stored once. A mirror bit in the step record
+  handles the second (A.14).
 - **`row = n`** takes row n's cells from A up to its last non-empty cell.
   Empty cells between drawn ones stay as blank frames, so deliberately
   blank frames are possible. Anything else uses an explicit `frames =`
@@ -581,8 +601,9 @@ It lands in step 4, with the Choreographer. `D` is free today.
 - **Merges and warnings:** colours that become the same RGB565 value are
   merged, with a note. A colour too close to the background gets a "will
   vanish" warning.
-- **Too many colours:** an error that lists the colours by pixel count,
-  and the cells where the rare ones sit (usually stray pixels).
+- **Too many colours:** an error that lists the 15 most used colours by
+  pixel count and sums up the rest, with the cells where the rare ones
+  sit (usually stray pixels, or an export with smoothing on).
 - **Anti-aliasing** is allowed only as opaque colours pre-blended against
   #080C10 (0x0862).
 - **Idle palette:** derived automatically, each colour taken 50 % toward
@@ -594,11 +615,17 @@ It lands in step 4, with the Choreographer. `D` is free today.
 - `scale` is 1-4. A cell times its scale must be at most 160×160
   screen px, for example 80×80 native at 2×.
 - `anchor` is the ground point in native px. The default is the bottom
-  centre. The feet's last drawn row is anchor y − 1.
+  centre. The feet's last drawn row is anchor y − 1; the compiler warns
+  when the rest frame's lowest row isn't, and names the anchor that would
+  stand it on the ground.
 - The cell must fit the stage: anchor y × scale ≤ 153, and at most 10
   screen px drawn below the anchor.
-- The compiler warns when the feet drift more than 1 native px within a
-  move that stays in place, unless offsets account for it.
+- Offsets move the whole drawing, feet included. The compiler warns when
+  the feet drift more than 1 native px within a move that stays in place:
+  it compares the feet of every step that stands on the ground (drawn
+  down to anchor y, keyed at y 0) at its key, and where an ease glides it
+  to the next key on the ground (Appendix C.6). To sway the body with the
+  feet planted, draw the sway in the frames.
 - The compiler also warns when a standing frame reaches above stage row 36
   (the toast band).
 - `faces = none | right | left` (default none) says which way the art
@@ -612,16 +639,25 @@ whole-line comments, and `inline_comment_prefixes=(';',)`.
 
 - **Comments:** a `;` after whitespace starts an inline comment. `#` is a
   comment only at the start of a line, so `palette = #ff0000 #00ff00`
-  reads correctly. A BOM and CRLF are accepted. Keys are case-insensitive,
-  with `=` or `:`.
+  reads correctly. A `#` after a value, with whitespace before and after
+  it (`name = Robo  # my robot`), is part of the value, and the compiler
+  warns. A line starting with `#` is a comment even when indented, so a
+  colour list can't wrap onto a line of its own: keep `palette` and
+  `idle_palette` on one line (the compiler stops at a wrapped one). A BOM
+  and CRLF are accepted. Keys are case-insensitive, with `=` or `:`.
 - **`bpm` is required on every move:** a range, `any`, or `none` (a no-BPM
   move). A typo can't silently turn a range into "any", because a move
-  without `bpm` is an error.
-- **Unknown keys:** an **error** when the key is an adjacent transposition
-  of a known key (`bmp` → `bpm`), or when difflib's ratio is ≥ 0.6 ("did
-  you mean bpm?"); `bmp` against `bpm` scores 0.667, which a 0.75 cutoff
-  would miss. Any other unknown key is a warning, so newer manifests still
-  build. Keys starting with `x-` are ignored silently.
+  without `bpm` is skipped with an error line (a failure under
+  `--strict`).
+- **Unknown keys:** an **error** ("did you mean bpm?") when the key is an
+  adjacent transposition of a known key (`bmp` → `bpm`) or close to one
+  (difflib's ratio ≥ 0.75: `timming` → `timing`); in a move it skips the
+  move. A weaker match (0.6-0.75: `name` against `frames` in a move) is a
+  warning that names the key it may mean and ignores the line, as is any
+  other unknown key, so newer manifests still build. Keys starting with
+  `x-` are ignored silently. A section header that nearly reads `[move
+  <name>]` (`[moves wave]`, `[move:wave]`) skips that move, and one that
+  nearly reads `[dancer]` is an error.
 
 ```ini
 [dancer]
@@ -668,11 +704,9 @@ bpm    = 70-100
 genre  = hip hop                ; only on hip-hop tracks (dormant until tracks carry genres)
 
 [move sway]
-frames = A12 B12
+frames = A12 B12 C12 D12 E12 D12 C12 B12  ; the hip sways in the drawing: the feet stay planted
 bpm    = none                   ; a no-BPM move: plays when there is no beat to follow
-timing = 2s 2s
-offset = -2,0 2,0
-ease   = inout
+timing = .5s .5s .5s .5s .5s .5s .5s .5s
 when   = any                    ; quiet | listening | any
 ```
 
@@ -688,15 +722,19 @@ reserved `song_bpm`; the other `[dancer]` keys are `key`, `palette`,
   decimals. Decimals within 1/48 beat of the 1/12 grid are snapped, with a
   warning. No-BPM moves take `s` or `ms` values. The compiler echoes each
   move as a table (step, cell, duration, offset, ease), so misaligned
-  lists are easy to see. A list of the wrong length is an error.
+  lists are easy to see. A list of the wrong length skips the move (a
+  failure under `--strict`).
 - **Licence and credits.** `license` and `author` are required; `url` and
   `version` are optional. All of them show in the Dancers page.
 - **Text the device can show.** The name and the author must be valid
   UTF-8 with no control characters. The compiler warns about characters
   outside the device fonts' coverage: dancepack.py embeds the covered
-  ranges, generated by a new `vlw_font.py --ranges` flag. On the device
-  M5GFX draws a missing glyph as a blank (the note in `Fonts::widthOf()`),
-  and every name is ellipsized by the usual fit rules.
+  code points, and `dancepack.py --check` verifies them against the VLW
+  arrays in src/ui/VlwFonts.cpp (its four fonts cover the same 256 code
+  points), so no `vlw_font.py` change is needed. On the device a label
+  goes through TextFit, which replaces a glyph the font lacks with its
+  TextFold look-alike, or "?" (TextFit.h), and every name is ellipsized
+  by the usual fit rules.
 - **Versioning.** `format = 1`. A manifest declaring a higher format than
   the tool knows is an error ("update dancepack.py"). In the binary,
   `minReader` covers changes that break meaning, and per-move `needs` bits
@@ -725,13 +763,14 @@ card packs. The magic is `MPDN`, after MPTH (the thumbnail cache), MPLI
 
 The compiler puts the directory, META, GEOM, PALS and THMB in the first
 2 KB. Unknown chunks are skipped. A tag that appears twice rejects the
-pack.
+pack. Appendix A gives every chunk byte for byte; this is the summary.
 
 - **META:** id ≤ 23 chars `[a-z0-9-]`, name ≤ 24, author ≤ 40, licence
-  ≤ 40, url ≤ 80, version ≤ 16 (each a u8 length + UTF-8), and a u8
-  **declared move count** (unverified until a load).
-- **GEOM:** scale, cellW, cellH, anchorX, anchorY, shadowW, rest frame,
-  frame count, faces (0 none, 1 right, 2 left).
+  ≤ 40, url ≤ 80, version ≤ 16 (each a u8 length, the UTF-8 bytes and a
+  NUL, so the device can point at them), and a u8 **declared move
+  count** (unverified until a load).
+- **GEOM:** scale, faces (0 none, 1 right, 2 left), cellW, cellH,
+  anchorX, anchorY, shadowW, frame count, rest frame.
 - **PALS:** 16 × RGB888 for dancing, then 16 for idle.
 - **THMB:** a 40×40 4-bit thumbnail (800 B) in the dance palette.
 - **FTAB:** 12 B per frame: the opaque bounding box x0, y0, w, h (u8,
@@ -739,12 +778,12 @@ pack.
 - **FDAT:** per bounding-box row: `skip` (u8, leading transparent px), `n`
   (u8), then n tokens `(len−1)<<4 | index` (1-16 px each; index 0 is an
   interior gap).
-- **STRS:** move names, pose keys and genre tags (u8 length + UTF-8,
-  ≤ 63 B).
+- **STRS:** a 4-byte header (the pose-key count), then the pose keys,
+  move names and genre tags (u8 length + UTF-8 + NUL, ≤ 63 B).
 - **MOVS:** a u8 count, a u8 record length (≥ 32, so records can grow; the
-  reader takes the first 32 B). Each record holds the `MoveLabels` fields
-  plus bounce, sway, travelEase, the first genre and the genre count, and
-  the first step and the step count.
+  reader takes the first 32 B) and two reserved bytes. Each record holds
+  the `MoveLabels` fields plus bounce, sway, travelEase, the first genre
+  and the genre count, and the first step and the step count.
 - **STEP:** 8 B: u16 frame (bit 15 = mirrored), u16 duration (ticks, or
   10 ms units for idle moves), i8 dx, i8 dy, u8 ease, u8 flags (bit 0
   `go`, section 8).
@@ -763,8 +802,11 @@ is parsed in place: no PSRAM, no card reads.
 ### 5.4 Validation
 
 One parser, `dance::Pack::open(ptr, size, avail, Report*)`, serves flash
-and card. `avail` is the number of bytes actually present; it equals size
-for a full load. All checks run at load, never per frame:
+and card. `size` is the file's length and `avail` the number of bytes
+actually present; it equals size for a full load. open() needs the whole
+file: with avail < size it rejects the pack as `short read (<avail> of
+<size> bytes)` before any other check (A.15's first row). All checks run
+at load, never per frame:
 
 - the magic, `minReader` ≤ 1, the size equal to the file length, and the
   CRC (skipped only by a test-only option, section 10.3);
@@ -793,19 +835,35 @@ before anything plays:
 - a readdir of at most 32 entries, keeping at most 16;
 - for each pack, one open, one 2 KB read and a close (~5 ms each,
   estimate, from the 4.9 ms `.565` read);
-- `Pack::scan(buf, avail = bytes read, size = file size)`:
-  - the header checks;
-  - META, GEOM, PALS and THMB must each satisfy off + size ≤ avail, or the
-    row reads "header unreadable";
-  - scan-time strings get the same UTF-8, control-character and length
-    checks as at load;
+- `Pack::scan(buf, avail = bytes read, size = file size)` runs these
+  checks in this order, the first failure naming the row's reason (A.15's
+  reasons, plus "header unreadable"):
+  1. A.15's header rows without the CRC: `too short` (avail < 32), the
+     magic, minReader, the total size against `size` (the file's) and
+     the 131,072 cap, then the chunk count;
+  2. the directory within avail (32 + 12·count ≤ avail), else "header
+     unreadable";
+  3. A.3, every entry, against the total size;
+  4. the nine required tags (`no <tag> chunk`);
+  5. META, GEOM, PALS and THMB within avail: off ≤ avail, then size ≤
+     avail − off (in that order, so nothing wraps in 32-bit arithmetic),
+     else "header unreadable";
+  6. META (A.5), its strings read as at load (A.1);
+  7. GEOM (A.6), every field in table order, the rest frame below the
+     frame count; whether its box is empty needs FTAB, so open() checks
+     it;
+  8. PALS = 96 B and THMB = 800 B (`PALS: <n> bytes, not 96`, `THMB: <n>
+     bytes, not 800`).
+
+  The CRC, FTAB, the frames, STRS, MOVS, STEP and every move check run
+  only in open(), at load;
 - then a roster entry is `psramAlloc`'d: id, name, author, licence, file
   size, declared move count, the 800 B thumbnail, and a status.
 
 ### 5.6 The arena
 
 - After the scan, **one double-ended PSRAM arena** is allocated, sized to
-  the two largest header-valid packs (at most 256 KB; typically about
+  the two largest packs that pass the scan (at most 256 KB; typically about
   60 KB). It is never freed.
 - The resident pack sits at one end and a new pack loads at the other. Any
   two packs fit, because a + b ≤ L1 + L2. So the old dancer keeps dancing
@@ -927,11 +985,12 @@ Its geometry is a portable struct in `lib/core/DanceStage.h`,
 
 ### 6.4 Offsets and travel
 
-- Root x = spotX + travel(u) + round(scale·e·(eased offset + bounce +
-  sway)), with offsets negated when mirrored.
+- Root x = spotX + travel(u) + round(scale·e·(eased offset + sway)), with
+  the offset and sway negated when mirrored.
 - travel(u) eases from the start spot to the end spot over the `go` steps
   (the whole move by default), with `travelEase`.
-- Root y is computed the same way, from the ground.
+- Root y is computed the same way, from the ground, with the bounce's hop
+  in place of the sway. Appendix B.4 is the exact integer form.
 - A mirrored frame places x′ = cellW − 1 − x, with the anchor at cellW − 1
   − ax.
 - The root is clamped so the bounding box stays on the stage.
@@ -990,8 +1049,9 @@ Measured where marked (MASCOT-POC.md), otherwise worked out from 0.47
   and reports the median and peak dirty px.
 - It works on bounding boxes only (no pixels), in Q16 fixed point.
 - dancepack.py mirrors it, and **shared vectors**
-  (`test/fixtures/dance/budget_vectors.txt`: move, fps, pace → median,
-  peak) are pinned in both test suites.
+  (`test/support/dance/BudgetVectors.h`: move, fps, pace, orientation,
+  spot → median, peak, plus a frame-by-frame trace; Appendix C.8) are
+  pinned in both test suites.
 - It is not a Choreographer: no picking, no state machine.
 - **Lights:**
   - **green:** peak ≤ 16,000;
@@ -1220,7 +1280,8 @@ never starts under the list.
 - **A travel move is eligible when:**
   - its destination spot exists;
   - the move's widest frame, with its offsets, fits on the stage there;
-  - D ≥ 2;
+  - D ≥ 2 (Appendix B.7's eligible_k never picks an octave that breaks
+    it);
   - it starts at p ∈ {0, 4};
   - its `start_at` matches.
 - **Travel bias:** moves heading toward the centre get ×2. After a track
@@ -1231,7 +1292,9 @@ never starts under the list.
   pushes are live (section 6.3).
 - Non-travel moves at an edge spot are clamped (section 6.4). The
   compiler's coverage report flags moves whose widest frame doesn't fit at
-  an edge spot, because those are then eligible only at the centre.
+  an edge spot: a travel move is then eligible only from the spots where
+  it fits at both ends, and any other move is pushed inwards there
+  (Appendix B.11).
 - The crab and `stick-classic` have no travel moves and stay at the
   centre.
 
@@ -1316,7 +1379,7 @@ never starts under the list.
 
 | Move | When | Length | Steps (cells) | Notes |
 |---|---|---|---|---|
-| sway | any | 4.0 s | 2 (2), 2 keys | today's idle; offsets ±2, inout, exactly as in the section 4.5 example |
+| sway | any | 4.0 s | 8 (5) | today's idle: idlePose's hip sway drawn in the frames (0.5 s each), so the feet stay planted and there are no offsets; exactly as in the section 4.5 example |
 | breathe | quiet | 3.0 s | 3 (3) | |
 | look-around | listening | 3.0 s | 4 (3) | mirror |
 | tap-foot | listening | 1.6 s | 4 (2) | 0.4 s each |
@@ -1372,7 +1435,7 @@ All are standard-library Python 3.8+. Each `--check` exits 1 with
   - the PNG colour types, bit depths, tRNS, `key` and the all-opaque
     error;
   - the ini rules: `bmp` → the error "did you mean bpm?"; a move without
-    `bpm` → an error; `license = X ; comment` reads as X;
+    `bpm` → skipped; `license = X ; comment` reads as X;
     `palette = #ff0000 #00ff00` reads both colours; duplicate keys → an
     error;
   - empty-folding tags, uneven `row =` splits, and the bounds on bounce,
@@ -1384,29 +1447,43 @@ All are standard-library Python 3.8+. Each `--check` exits 1 with
 ### 10.2 CI
 
 The firmware workflow (`.github/workflows/firmware.yml`) gains three steps
-before the host tests: `python tools/crab_art.py --check`,
-`python tools/dancepack.py --check`, and `python -m unittest discover -s
-tools -p "test_dancepack.py"`. All are integer-deterministic and need no
-pip install.
+before the host tests, right after `actions/setup-python`:
+`python tools/crab_art.py --check`, `python tools/dancepack.py --check`,
+and `python -m unittest discover -s tools -p "test_dancepack.py"`. All
+are integer-deterministic and need no pip install.
 
 ### 10.3 Host tests
 
 - **`test_dance_pack`:**
-  - parses the fixture pack (`test/fixtures/dance/TestPack.cpp`, compiled
-    from `tools/art/dancers/test/`, which uses every field);
+  - parses the fixture pack (`test/support/dance/TestPack.h`, compiled
+    from `tools/art/dancers/test/`, which uses every field; Appendix
+    C.10), included by relative path as test_ogg_opus includes
+    `../support/OggWriter.h`;
   - one hand-built bad pack per rejection reason, duplicate chunk tags
-    included; the CRC; unknown chunks skipped; a `needs` bit skipping a
-    move;
-  - **scan mode:** META, GEOM, PALS or THMB pointing past `avail` →
-    "header unreadable";
+    included, with test_dancepack.py's list of patches and exact reasons
+    (A.3's and A.9's bounds where 32-bit sums would wrap, a token-less
+    row with skip > w, string offsets at and far past STRS's end, the
+    accepted token sequences and reserved bytes); the CRC; unknown
+    chunks skipped; a `needs` bit skipping a move; open() with avail <
+    size → `short read (<avail> of <size> bytes)`;
+  - **scan mode** (5.5's order): META, GEOM, PALS or THMB pointing past
+    `avail` → "header unreadable"; a THMB of 799 bytes → `THMB: 799
+    bytes, not 800`; a missing GEOM → `no GEOM chunk`; a bad CRC still
+    scans (only open() checks it);
   - **fuzzing that reaches the validators:**
     - every truncation, and 10,000 seeded single-byte flips, with **the
       size and the CRC recomputed after each mutation**;
     - a structure-aware mutator that edits directory offsets and sizes,
       FTAB boxes, offsets and lengths, FDAT token bytes, MOVS step indices
       and counts, STEP frame indices, and STRS lengths;
-    - all through a bounds-asserting accessor, with a test-only `kSkipCrc`
-      option on `Pack::open`.
+  - **every pack above, the hand-built bad packs included, goes through a
+    bounds-asserting accessor**: each read goes through a view of the
+    region it belongs to (the header and directory, or one chunk), which
+    asserts that its index lies inside that region. So a reader that
+    reads a string's length byte before checking its offset (A.1, A.11)
+    fails the `bad name` rows even where the byte it reads is still
+    inside the pack. A test-only `kSkipCrc` option on `Pack::open` lets
+    the fuzzing skip the CRC.
   - It also runs in a CI-only `native_asan` env on Linux g++, which needs
     `-fsanitize=address,undefined` at compile and link (estimate). MinGW
     on the laptop has no ASan.
@@ -1414,8 +1491,10 @@ pip install.
   mirroring; scales 1-4; edge clipping with a canary border.
 - **`test_dance_choreo`:**
   - **pace:** eligibility at k ∈ {previous ranged, 0, −1, +1}; unranged
-    moves always at k = 0; the 180 cap; half time only for ≤ 4-beat moves;
-    the 3 % latch;
+    moves always at k = 0; the 180 cap, for a running double-time move
+    too (a 170-180 move danced at +1 from T10 880 is cut by a re-acquire
+    at T10 907: pace 181.4 is inside its 3 % but past 180); half time
+    only for ≤ 4-beat moves; the 3 % latch;
   - **an I Wonder trace** (95.7 → 191 → 95.7 re-acquires while locked): M
     recomputed, the dance-beat origin chosen among the shifts, and **the
     pace never more than 3 % outside the running move's range**;
@@ -1581,7 +1660,7 @@ needs cache_guard passing and the `b<n>` bench within noise of 0.7.0.
 | # | Commit | Contents | Accepted when |
 |---|---|---|---|
 | 0 | Dance sprites: the design | this document, with the MPDN v1 spec | the user's decisions recorded (section 12) |
-| 1 | Dance sprites 1: the compiler | dancepack.py (PNG with tRNS and key, the INI rules, validation, the MPDN writer, build, check, info, builtin, `--check`, `--strict`, the budget mirror and the coverage report), test_dancepack.py, the shared eligibility and budget vectors, the test dancer → the TestPack fixture, the CI steps | unittest green on 3.10 and 3.12; byte-identical output on Windows and in CI |
+| 1 | Dance sprites 1: the compiler | dancepack.py (PNG with tRNS and key, the INI rules, validation, the MPDN writer, build, check, info, builtin, `--check`, `--strict`, the budget mirror and the coverage report), test_dancepack.py, the shared eligibility, fold and budget vectors (test/support/dance/), the test dancer (tools/art/dancers/test/) → the TestPack fixture (test/support/dance/TestPack.h), the CI steps; Appendices A-C are its contract | unittest green on 3.10 and 3.12; byte-identical output on Windows and in CI |
 | 2 | 2: the reader and blitter | DancePack (with scan mode), DanceBlit, Crc32; test_dance_pack (with the structure-aware fuzz), test_dance_blit; the `native_asan` env | the fuzz clean under ASan; the hashes equal the fixture's table |
 | 3 | 3: the choreographer | DanceCharacter.h, DanceChoreo (the pace rules, M recomputed, spots), DrawnCharacter, DanceBudget, GenreFold (folding only), `acquisitions()`; test_dance_choreo, test_drawn_character, test_dance_budget | all suites green; the shared vectors agree with Python; beat_eval builds and scores identically |
 | 4 | 4: characters, the cast and the console | CrabCharacter, ClassicStick (its id still `stick`), DanceCast replacing DanceSkin, DanceMode on the Choreographer with today's view, `onTrack` for gapless joins, **the `D…` console** (D, Dc, Dl, Dm, Df, Dv, Dg, Ds), Df cleared by host mode; test_character_set | on the device: the crab's k0-k15 sheet pixel-identical to 0.7.0; fps, logs and `usb_viz --measure` unchanged |
@@ -1768,3 +1847,1893 @@ rebuild).
 17. **Contributors put off by Python.** One file, a template with a guide,
     a watch preview, card loading in the same release, and a web studio
     (L3) next.
+
+## Appendix A. MPDN v1, byte for byte
+
+Appendices A-C are the contract for step 1. Three parties work from them
+alone and must agree byte for byte: the compiler (tools/dancepack.py),
+its unittest suite, and the C++ reader and engine of steps 2-3. Every
+rule is integer-exact. Where they and the sections above differ, the
+appendices win.
+
+### A.1 Conventions
+
+- **Little-endian.** Fields are unsigned unless marked `i8` (two's
+  complement).
+- **Offsets.** The header's and the directory's count from the pack's
+  first byte; FTAB's data offsets from FDAT's first byte; string offsets
+  from STRS's first byte.
+- **A string** is a u8 length n, then n bytes of UTF-8, then a NUL: n + 2
+  bytes in all. The NUL isn't counted in n, and no byte inside is 0, so
+  the device can point at the bytes as a C string. **Valid** means strict
+  UTF-8 (no overlong forms, no surrogates, nothing above U+10FFFF: what
+  Python's `bytes.decode("utf-8")` accepts) with no control character
+  (U+0000-U+001F, U+007F-U+009F).
+- **Reading a string** at p inside a region that ends at e (a chunk's
+  end) checks, in this order: p + 2 ≤ e (so the length byte n at p, and
+  at least the NUL's place, lie inside); then n ≤ e − p − 2; then the
+  byte at p + 1 + n is 0; then none of the n bytes is 0; then the text
+  is valid, and within its field's limit. No byte is read before the check
+  that puts it inside the region, so a 32-bit reader neither reads past
+  the chunk nor forms a sum that wraps. The string ends at p + 2 + n,
+  where the next one starts (it can equal e). A.5 and A.11 read every
+  string this way.
+- **Padding.** Every chunk starts at the first multiple of 4 at or after
+  the previous chunk's end, and the file ends at the first multiple of 4
+  at or after the last chunk's end. Padding bytes are 0. A chunk's size
+  in the directory never includes its padding.
+- **Determinism.** The bytes are a pure function of the dancer folder's
+  dancer.ini and sheet pixels, and of the folder's name (the id): no
+  time, no path, no locale, no set or hash order. Two PNG files with the
+  same pixels give the same pack.
+
+### A.2 Header (32 B)
+
+| Offset | Type | Field | The compiler writes | The reader requires |
+|---|---|---|---|---|
+| 0 | 4 B | magic | `MPDN` | exactly that |
+| 4 | u16 | format | 1 | nothing (informational) |
+| 6 | u16 | minReader | 1 | ≤ 1 |
+| 8 | u32 | total size | the file length, a multiple of 4 | equal to the file length; ≤ 131,072 |
+| 12 | u32 | CRC-32 | over bytes 16 .. size − 1 | a match (skipped only by the test-only `kSkipCrc`) |
+| 16 | u16 | chunk count | 9 | 1-16, and size ≥ 32 + 12·count |
+| 18 | u16 | flags | 0 | nothing (ignored) |
+| 20 | 12 B | reserved | 0 | nothing (ignored) |
+
+The CRC is zlib's CRC-32: the reflected polynomial 0xEDB88320, initial
+value 0xFFFFFFFF, final XOR 0xFFFFFFFF, as Python's
+`zlib.crc32(data) & 0xFFFFFFFF`. It covers the chunk count, the flags,
+the reserved bytes, the directory, every chunk and all padding.
+
+### A.3 Directory
+
+At byte 32: chunk-count entries of 12 B, `tag` (4 bytes, ASCII),
+`u32 off`, `u32 size`. The reader checks every entry, known or not:
+
+- off is a multiple of 4;
+- off ≥ 32 + 12·count, then off ≤ total size, then size ≤ total size −
+  off, checked in that order: a 32-bit reader never forms off + size
+  before it knows that sum can't wrap (an off near 2^32 fails the second
+  test, not the third);
+- no tag appears twice;
+- no two chunks of non-zero size overlap ([off, off + size) intersecting;
+  the bounds above keep each sum ≤ 131,072). A zero-size chunk overlaps
+  nothing.
+
+Then all nine tags below must be present; unknown tags are skipped.
+`STAG` and `SPOT` are reserved and skipped today.
+
+### A.4 What the compiler writes, and where
+
+- **Order:** META, GEOM, PALS, THMB, FTAB, STRS, MOVS, STEP, FDAT; the
+  directory lists them in the same order. With 9 entries the directory
+  ends at byte 140, where META starts.
+- **The first 2 KB** then always holds the directory, META, GEOM, PALS and
+  THMB: at most 140 + 236 + 12 + 96 + 800 = 1,284 B.
+- A chunk with nothing in it (STEP with no moves) has size 0 and sits at
+  the current offset.
+
+### A.5 META
+
+The fields in this order, with nothing between them:
+
+| Field | Type | Limit |
+|---|---|---|
+| id | string | 1-23 B, `[a-z0-9][a-z0-9-]*`: the dancer folder's name (C.1) |
+| name | string | 1-24 B |
+| author | string | 1-40 B |
+| licence | string | 1-40 B (an SPDX id or expression; any text for card packs) |
+| url | string | 0-80 B |
+| version | string | 0-16 B |
+| declared move count | u8 | the MOVS count |
+
+The reader reads the fields in order, each string as A.1 says, from the
+chunk's first byte with the chunk's end as e. Each must lie inside the
+chunk and be a valid string within its limit, and the id must match its
+pattern; the count is the byte where the version ends, and must lie
+inside the chunk too.
+Bytes after the count are ignored, so a later format can append fields.
+The count isn't checked against MOVS.
+
+### A.6 GEOM (12 B)
+
+| Offset | Type | Field | Values |
+|---|---|---|---|
+| 0 | u8 | scale | 1-4 |
+| 1 | u8 | faces | 0 none, 1 right, 2 left |
+| 2 | u8 | cellW | native px, 1 .. 160 // scale (cellW·scale ≤ 160) |
+| 3 | u8 | cellH | native px, 1 .. 160 // scale (cellH·scale ≤ 160) |
+| 4 | u8 | anchorX | the ground point's column, 0 .. cellW − 1 |
+| 5 | u8 | anchorY | the ground row, 1 .. cellH; the feet's last drawn row is anchorY − 1 |
+| 6 | u8 | shadowW | screen px, 0-160 (0 = none) |
+| 7 | u8 | reserved | 0 |
+| 8 | u16 | frame count | 1-256, equal to FTAB's records |
+| 10 | u16 | rest frame | bits 0-14 the frame, bit 15 mirrored; the compiler always writes 0 (A.14) |
+
+The reader requires size ≥ 12 (more is ignored), every value in range
+(byte 7, reserved, is ignored), anchorY·scale ≤ 153 (the cell's top on
+the stage) and
+(cellH − anchorY)·scale ≤ 10 (the cell's rows at and under the ground
+row, which is stage row 153 of 0-163), and a rest frame below the frame
+count whose box isn't empty. Any failure rejects the pack.
+
+### A.7 PALS (96 B)
+
+16 RGB888 entries for dancing (entry i at byte 3i: r, g, b), then 16 for
+idle (at 48 + 3i). Entry 0 of each half is index 0, transparent, and is
+written 0, 0, 0; so is every entry past the last used index. The reader
+requires size = 96 and checks no values.
+
+### A.8 THMB (800 B)
+
+A 40×40 picture of the rest frame, 4 bits a pixel: 40 rows of 20 bytes,
+two pixels a byte, the high nibble the left pixel (CrabArt's packing).
+Values are indices into PALS's dance half; 0 is the row's background.
+
+It is made from the rest frame's cell grid as stored (unmirrored), within
+its box (x0, y0, w, h), with integers only:
+
+- **max(w, h) ≤ 40:** m = 40 // max(w, h); each native pixel becomes an
+  m×m block; tw = w·m, th = h·m.
+- **max(w, h) > 40:** s = (max(w, h) + 39) // 40; tw = (w + s − 1) // s,
+  th = (h + s − 1) // s. Thumbnail pixel (i, j) covers the box pixels
+  [i·s, min(i·s + s, w)) × [j·s, min(j·s + s, h)) and takes the most
+  frequent non-zero index among them (a tie goes to the lower index), or
+  0 when they are all transparent.
+- It is placed with its top-left at ((40 − tw) // 2, (40 − th) // 2);
+  every other pixel is 0.
+
+The reader requires size = 800 and checks no values.
+
+### A.9 FTAB (12 B a frame)
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u8 | x0: the box's left column in the cell |
+| 1 | u8 | y0: its top row |
+| 2 | u8 | w |
+| 3 | u8 | h |
+| 4 | u32 | off: the frame's data, from FDAT's start |
+| 8 | u16 | len: its bytes |
+| 10 | u16 | reserved, 0 (ignored) |
+
+The box is the tightest one around the cell's opaque pixels. A blank
+cell (every pixel transparent) has x0 = y0 = w = h = 0, off 0, len 0.
+
+The reader requires size = 12 × the frame count, and for every frame:
+w = 0 exactly when h = 0 and exactly when len = 0; x0 + w ≤ cellW and
+y0 + h ≤ cellH; off ≤ FDAT's size, then len ≤ FDAT's size − off (in that
+order, so a 32-bit u32 + u16 sum never wraps); and the dry-run decode of
+A.10. The box needn't be tight: only the compiler's is.
+
+### A.10 FDAT
+
+The frames' data back to back in frame order, with no padding between
+frames. A frame is h rows, from y0 down. A row is `u8 skip`, `u8 n`, then
+n tokens, each a byte `(run − 1) << 4 | index`: run is 1-16 px, and index
+0 is a transparent gap.
+
+**The compiler's encoding** (the canonical one, so the bytes are fixed):
+
+- skip is the row's leading transparent pixels inside the box. An
+  all-transparent row inside the box is `0, 0`.
+- The tokens cover the row from skip to its last opaque pixel; the
+  trailing transparent pixels aren't encoded.
+- Each maximal run of one index (gaps included) is split from its left
+  into tokens of 16 px and a remainder: 37 px is 16, 16, 5.
+
+**The reader's dry-run decode:** for every row, the two bytes and the n
+tokens lie inside the frame's len, and skip + the sum of the runs ≤ w,
+a row with no tokens included (its skip ≤ w); after the last row exactly
+len bytes have been read. Any other token sequence that meets those
+rules is accepted: a leading or trailing gap token, a run split into
+shorter tokens, a skip of w on a blank row.
+
+**Drawing** (for the blitter and the hashes): decode a row into w
+indices, 0 for anything skip, a gap or past the last token covers. Box
+column i lands on cell column x0 + i, or cellW − 1 − (x0 + i) when the
+frame is drawn mirrored.
+
+### A.11 STRS
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u8 | P: how many pose keys the chunk starts with (0-255) |
+| 1 | 3 B | reserved, 0 |
+| 4 | strings | back to back, no padding between them |
+
+**What the compiler writes, in this order:**
+
+1. **The pose keys.** For each kept move in manifest order, its `from`,
+   its `to`, the mirror twin of `from` and the mirror twin of `to`, each
+   added when it is set and not yet present. Pose key id i (1..P) is the
+   i-th string; id 0 means none.
+2. **The move names**, in MOVS order.
+3. **The genre runs.** For each move with tags, in MOVS order, its tags as
+   consecutive strings in manifest order. A run equal to an earlier one
+   (the same tags in the same order) isn't written again: the move points
+   at the earlier run.
+
+**The mirror twin** of a pose key: split it at `-`, swap each part that is
+exactly `left` or `right`, and join it again. `lean-left` → `lean-right`;
+`stand` and `leftish` stay as they are. A key that is its own twin keeps
+its id. A twin can be longer than its key (`left` → `right`): the
+compiler skips a move whose `from` or `to` has a twin over 23 B (C.6), so
+every twin it writes is a valid pose key.
+
+**References:** move names and genre runs by u16 byte offset (≥ 4, the
+string's length byte); pose keys by u8 id. Pose keys and move names are
+1-23 B of `[a-z0-9][a-z0-9-]*`; genre tags are valid strings of 1-63 B.
+
+**The reader** reads every string as A.1 says, with STRS's size as e
+(offsets from STRS's first byte). It requires size ≥ 4 and P strings
+starting at 4, each starting where the previous one ends, each in
+bounds and a valid pose key (else the pack is rejected). A referenced
+offset o is good when, in this order: o ≥ 4; then o + 2 ≤ size (so the
+length byte n at o, and at least the NUL's place, lie inside); then n ≤
+size − o − 2; then byte o + 1 + n is 0; then no byte inside is 0, and
+the string is valid with its kind's limit. Otherwise the move that
+refers to it is dropped. A genre run's next tag has as its o the
+previous tag's end, which can equal size (then it fails o + 2 ≤ size).
+Strings no move refers to aren't checked.
+
+### A.12 MOVS
+
+A 4-byte head: `u8 count` (0-64), `u8 recordLen` (≥ 32; the compiler
+writes 32), 2 reserved bytes (0). Then count records of recordLen bytes
+each, in manifest order of the kept moves; the reader takes the first
+32 B of each and skips the rest, so records can grow. The reader checks
+the head in this order, rejecting the pack at the first failure: size ≥
+4 (`MOVS: too short`); count ≤ 64 (`MOVS: <n> moves`); recordLen ≥ 32
+(`MOVS: record length <n>`); then size ≥ 4 + count·recordLen (`MOVS:
+too short`). So a count of 65 with one record reads `MOVS: 65 moves`.
+
+The record (32 B):
+
+| Offset | Type | Field | Values | MoveLabels |
+|---|---|---|---|---|
+| 0 | u16 | name | STRS offset | `name` (points at the STRS bytes) |
+| 2 | u8 | kind | 0 beat, 1 idle (no-BPM) | `kind` |
+| 3 | u8 | beats | beat: 1, 2, 4, 8; idle: 0 | `beats` |
+| 4 | u8 | paceLo | beat: 36-200, or 0 with paceHi 0 for any pace; idle: 0 | `paceLo` |
+| 5 | u8 | paceHi | likewise | `paceHi` |
+| 6 | u8 | weight10 | 1-100 (default 10) | `weight10` |
+| 7 | u8 | when | idle: 1 quiet, 2 listening, 3 any; beat: 0 | `when` |
+| 8 | u8 | flags | bit 0 mirror, 1 freeze, 2 placeStart, 3 placeEnd, 4 heavy, 5 snap; bits 6-7 0 (ignored) | `flags` |
+| 9 | u8 | repeat | beat: 0-8, repeat·beats ≤ 16; idle: 0 | `repeat` |
+| 10 | u8 | needs | bit 0 song_bpm; the others 0 | `needs` |
+| 11 | i8 | travel | beat: −2..2 spots; idle: 0 | `travel` |
+| 12 | u8 | startAt | 0 any, 1 centre, 2 side, 3 left, 4 right; 0 without travel | `startAt` |
+| 13 | u8 | travelEase | an ease code (A.13); default 4 (inout) with travel, 0 without | — |
+| 14 | u8 | bounce | beat: 0-16 native px; idle: 0 | — |
+| 15 | u8 | sway | beat: 0-16 native px; idle: 0 | — |
+| 16 | u8 | fromKey | pose key id, 0 none | `fromTag` |
+| 17 | u8 | toKey | pose key id, 0 none | `toTag` |
+| 18 | u8 | fromKeyM | the twin of fromKey, for the mirrored orientation | (mirrored `fromTag`) |
+| 19 | u8 | toKeyM | the twin of toKey | (mirrored `toTag`) |
+| 20 | u16 | genreFirst | STRS offset of the run's first tag; 0 when there are none | `genreKeys` (folded at load, B.8) |
+| 22 | u8 | genreCount | 0-8 | `genreCount` |
+| 23 | u8 | stepCount | 1-32 | — |
+| 24 | u16 | stepFirst | the first step's index in STEP | — |
+| 26 | u8 | songLo | with needs bit 0: 1-255; otherwise 0 | — |
+| 27 | u8 | songHi | likewise, ≥ songLo | — |
+| 28 | u32 | reserved | 0 | — |
+
+`MoveLabels.idleMs` isn't stored: it is 10 × the sum of the steps'
+durations. The compiler writes each move's steps consecutively, in MOVS
+order, so stepFirst is the running total; the reader allows any
+in-bounds stepFirst.
+
+### A.13 STEP (8 B a step)
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | u16 | frame: bits 0-14 the frame index, bit 15 drawn mirrored |
+| 2 | u16 | dur: beat moves in ticks (1/12 move beat, ≥ 3); idle moves in 10 ms units (20-500) |
+| 4 | i8 | dx: the step's key, native px, x right |
+| 5 | i8 | dy: native px, y down |
+| 6 | u8 | ease: 0 hold, 1 linear, 2 in, 3 out, 4 inout |
+| 7 | u8 | flags: bit 0 `go`; the other bits 0 (ignored) |
+
+The keys are stored as written; the engine negates x for the mirrored
+orientation. A move with no `go` flag travels during every step. The
+reader requires STEP's size to be a multiple of 8 (else the pack is
+rejected).
+
+### A.14 Frames: what is stored, and in what order
+
+- A cell is compared as a whole grid: cellH rows of cellW palette indices.
+- The cells are taken in this order: the rest cell, then for each kept
+  move in manifest order, each step's cell in step order.
+- A cell equal to a stored frame reuses it (bit 15 clear). Otherwise a
+  cell whose mirror image about the anchor column (row y's pixel x moves
+  to 2·anchorX − x; a cell with an opaque pixel that would land outside
+  it has no mirror image) equals a stored frame reuses that frame with
+  bit 15 set. Otherwise it becomes the next frame. A symmetric cell
+  equals itself first, so it never needs the bit.
+  The mirror is about the anchor column, not the cell's centre
+  (grid[y][cellW − 1 − x]), because B.4 draws a mirrored frame about the
+  anchor; the centre would draw a merged cell 1 native px off whenever
+  cellW ≠ 2·anchorX + 1, as for the test dancer and the stick.
+- So the rest cell is frame 0, unmirrored, and GEOM's rest frame is 0.
+- A cell used only by a skipped move isn't stored. All blank cells are
+  one frame.
+
+### A.15 The reader's checks
+
+One reader serves the device (`dance::Pack::open`, step 2) and
+`dancepack.py info` (`read_pack`, C.9). Both report the same short
+reasons. The device logs a rejection as `[dance] ignored
+/dancers/robo.dnc: <reason>` and a dropped move as `[dance] robo: move
+"spin" ignored: <reason>`.
+
+**The pack is rejected** at the first of these, in this order:
+
+| Check | Reason |
+|---|---|
+| `Pack::open` only: avail < size, fewer bytes present than the file's length (5.4; read_pack always has them all) | `short read (<avail> of <size> bytes)` |
+| fewer than 32 bytes | `too short` |
+| magic | `not an MPDN pack` |
+| minReader > 1 | `needs a newer player` |
+| total size ≠ the file length | `size <n> isn't the file's <m>` |
+| total size > 131,072 | `too big (<n> bytes)` |
+| the CRC | `bad checksum` |
+| chunk count 0 or > 16, or the directory past the end | `bad chunk count <n>` |
+| A.3, per entry | `chunk <tag>: misaligned`, `chunk <tag>: out of bounds`, `chunk <tag> twice`, `chunks <a> and <b> overlap` |
+| a required chunk missing | `no <tag> chunk` |
+| META (A.5) | `META: bad <field>` |
+| GEOM (A.6) | `GEOM: too short`, `GEOM: bad <field>` |
+| PALS, THMB sizes | `PALS: <n> bytes, not 96`, `THMB: <n> bytes, not 800` |
+| FTAB size | `FTAB: <n> bytes for <f> frames` |
+| a frame's box, data bounds or decode (A.9, A.10) | `frame <i>: bad box`, `frame <i>: data out of bounds`, `frame <i>: bad data` |
+| the rest frame | `the rest frame is empty` |
+| STRS head and pose keys | `STRS: too short`, `STRS: bad pose key <i>` |
+| MOVS head, in A.12's order | `MOVS: too short` (size < 4), `MOVS: <n> moves`, `MOVS: record length <n>`, `MOVS: too short` (the records past the end) |
+| STEP size | `STEP: <n> bytes` |
+
+**How a reason reads**, so both readers print the same text:
+
+- `<field>` is the field's name as in A.5 and A.6 (`id`, `cellW`...);
+  META's last byte is `count`. GEOM's fields are checked in table order
+  (scale, faces, cellW, cellH, anchorX, anchorY, shadowW, frame count,
+  rest frame), and anchorY's two stage limits (anchorY·scale ≤ 153,
+  (cellH − anchorY)·scale ≤ 10) report `bad anchorY`.
+- An entry is misaligned when off isn't a multiple of 4, and out of
+  bounds when it fails one of A.3's three bounds.
+- The overlap reason names the earlier directory entry (the first one
+  the later overlaps), then the later.
+  With several required tags missing, the reason names the first in A.4's
+  order.
+- A tag prints its bytes 0x20-0x7E as themselves and any other as `?`.
+- Numbers are plain decimal, with no commas. `frame <i>` counts frames
+  from 0, as FTAB does; `STRS: bad pose key <i>` names the key's id, from
+  1, as A.11 counts them; `step <i>` counts steps from 1. `needs 0x<hh>`
+  prints uppercase hex digits: `needs 0xA0`.
+- Every reserved byte or bit is ignored: the header's flags and bytes
+  20-31, GEOM byte 7, FTAB bytes 10-11, STRS bytes 1-3, MOVS head bytes
+  2-3, record bytes 28-31, the record's flag bits 6-7 and STEP's flag bits
+  1-7. The rest frame's check reads its bits 0-14.
+
+**A move is dropped** (the others keep working) at the first of these,
+in this order:
+
+| Check | Reason |
+|---|---|
+| the name's string (A.11) | `bad name` |
+| kind > 1 | `bad kind` |
+| stepCount 0 or > 32, or stepFirst + stepCount past STEP's end | `bad steps` |
+| a step's frame ≥ the frame count | `frame <f> out of range` |
+| beat: beats not 1, 2, 4 or 8 | `<n> beats` |
+| beat: a step under 3 ticks | `step <i>: <d> ticks` (i from 1) |
+| beat: the sum ≠ 12·beats | `<sum> of <need> ticks` |
+| idle: a step outside 20-500 | `step <i>: <ms> ms` |
+| idle: the sum outside 50-1,200 | `<ms> ms in all` |
+| idle: beats, a pace, repeat, bounce, sway, travel, genreCount, freeze or place set (genreFirst isn't read) | `beat fields on a no-BPM move` |
+| beat: when ≠ 0; idle: when not 1-3 | `bad when` |
+| a pace bound outside 36-200, lo > hi, or one of them 0 | `pace <lo>-<hi>` |
+| a ranged move (lo, hi not both 0) whose range no allowed octave reaches (B.7) | `range <lo>-<hi> unreachable` |
+| weight10 0 or > 100 | `weight <n>` |
+| repeat > 8 or repeat·beats > 16 | `repeat <n>` |
+| bounce or sway > 16 | `bounce <n>`, `sway <n>` |
+| travel outside −2..2, or travel with beats < 2 | `travel <n>` |
+| startAt > 4, or an ease code > 4 (travelEase or a step's) | `bad start_at`, `bad ease` |
+| both place bits | `bad place` |
+| a step's abs(dx)·scale or abs(dy)·scale > 48 | `offset <dx>,<dy>` |
+| a pose key id > P | `bad pose key` |
+| genreCount > 8, a bad tag string, or a tag folding to nothing (B.8) | `bad genre` |
+| needs bit 0 | `song_bpm needs track BPM data: skipped in this version` |
+| any other needs bit | `needs 0x<hh>` |
+| a travel move with no start spot in any orientation it plays in: unmirrored, and mirrored only with the mirror flag (B.11) | `travels from no spot` |
+| card packs only: the budget is red (B.6) and heavy isn't set | `budget red (<peak> px)` |
+
+A pack whose every move is dropped still loads: it plays auto-bounce and
+auto-idle (section 2.8). So does a pack with no moves.
+
+### A.16 The frame hash
+
+`kXxxFrameHash[i]` is FNV-1a 32 (B.10) over frame i's cell grid as
+stored: cellH rows of cellW bytes, each byte the palette index (0
+transparent), row-major, unmirrored. test_dance_blit renders the frame
+at scale 1, unmirrored, at the cell's origin into a cleared cellW×cellH
+buffer through a LUT with LUT[i] = i, and hashes the low bytes.
+
+### A.17 Worked example: a one-move pack
+
+The folder `dot/` holds `sheet.png`, 4×4, transparent except #ff0000 at
+x 1-2, y 2-3 (any PNG form with those pixels), and this dancer.ini:
+
+```ini
+[dancer]
+name    = Dot
+author  = Ana
+license = CC0-1.0
+cell    = 4x4
+
+[move hop]
+frames = A1
+beats  = 1
+bpm    = any
+bounce = 2
+```
+
+The defaults fill the rest: scale 1, anchor 2,4 (the bottom centre),
+rest A1, shadow 0, faces none, weight 1, ease hold. The pack is 1,156
+bytes:
+
+| Chunk | off | size | Bytes |
+|---|---|---|---|
+| META | 140 | 29 | `03 64 6f 74 00 03 44 6f 74 00 03 41 6e 61 00 07 43 43 30 2d 31 2e 30 00 00 00 00 00 01` |
+| GEOM | 172 | 12 | `01 00 04 04 02 04 00 00 01 00 00 00` |
+| PALS | 184 | 96 | entry 1 `ff 00 00`; idle entry 1 `74 1b 1b` (B.9); the rest 0 |
+| THMB | 280 | 800 | `11` × 800 (the 2×2 box at m = 20 fills the square) |
+| FTAB | 1080 | 12 | `01 02 02 02 00 00 00 00 06 00 00 00` |
+| STRS | 1092 | 9 | `00 00 00 00 03 68 6f 70 00` |
+| MOVS | 1104 | 36 | `01 20 00 00`, then `04 00 00 01 00 00 0a 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 00` |
+| STEP | 1140 | 8 | `00 00 0c 00 00 00 00 00` |
+| FDAT | 1148 | 6 | `00 01 11 00 01 11` |
+
+The header and directory (bytes 0-139); the CRC is 0x5BF1E285:
+
+```
+0000: 4d 50 44 4e 01 00 01 00 84 04 00 00 85 e2 f1 5b
+0010: 09 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+0020: 4d 45 54 41 8c 00 00 00 1d 00 00 00 47 45 4f 4d
+0030: ac 00 00 00 0c 00 00 00 50 41 4c 53 b8 00 00 00
+0040: 60 00 00 00 54 48 4d 42 18 01 00 00 20 03 00 00
+0050: 46 54 41 42 38 04 00 00 0c 00 00 00 53 54 52 53
+0060: 44 04 00 00 09 00 00 00 4d 4f 56 53 50 04 00 00
+0070: 24 00 00 00 53 54 45 50 74 04 00 00 08 00 00 00
+0080: 46 44 41 54 7c 04 00 00 06 00 00 00
+```
+
+META's 29 bytes are padded to 32, STRS's 9 to 12 and FDAT's 6 to 8, so
+the file ends at 1,156. Frame 0's hash is 0x18857B21. The move's budget
+(B.6) is green: median 4 px and peak 6 px in each of its six cases (24
+and 30 fps at paces 72, 124 and 176).
+
+## Appendix B. The shared algorithms, integer-exact
+
+dancepack.py and the C++ engine (DrawnCharacter, DanceBudget, the
+Choreographer's pace test, GenreFold) compute these the same way, bit for
+bit. The vectors of C.8 pin them in both test suites.
+
+### B.0 Integer rules
+
+- **Q16:** 65536 is 1.0.
+- **`a // b`** (b > 0) is floor division, as in Python. C++'s `/`
+  truncates toward zero, so wherever a can be negative the C++ uses a
+  floor helper; `>> k` on an `int64_t` is floor division by 2^k (an
+  arithmetic shift: what GCC and Clang do, and guaranteed from C++20).
+- **`a mod b`** (b > 0) is a − b·(a // b), so 0 ≤ a mod b < b, as Python's
+  `%`; C++'s `%` takes the sign of a, so where a can be negative the C++
+  uses a floor helper too. (B.4's divisions of pos16 need neither, since
+  pos16 ≥ 0. Its rhu calls in steps 7 and 8 still take negative values,
+  an offset up or left, the hop or a leftward travel, and need the floor:
+  `(a + 2^(k−1)) >> k` on `int64_t`. Truncating gives −3 instead of B.4's
+  −4 at tick 3.)
+- **`rhu(a, b)`** = (2a + b) // (2b), b > 0: round half up, crab::rnd's
+  rule. For b = 2^k it is (a + 2^(k−1)) >> k.
+- Every intermediate below fits in a signed 64-bit integer (the largest
+  is about 2^48); the C++ computes them in `int64_t`.
+
+### B.1 Timing
+
+Each error below skips the move (C.6 gives its message); the API's
+parse functions raise it as a DanceError (C.9).
+
+**Beat moves.** Each `timing` value is one token:
+
+- Its form is an integer (`2`), a decimal (`0.5`, `.25`) or a fraction
+  (`3/4`): the regex `^([0-9]+|[0-9]*\.[0-9]+|[0-9]+/[0-9]+)$`, with C.3's
+  limit on digits (each integer part at most 9 digits after its leading
+  zeros, at most 9 digits after the point; more is the error `timing
+  "<value>" has a number of more than 9 digits`). Anything else (a unit,
+  a sign, an exponent) is an error, and so is a zero denominator.
+- v is its exact value (Python's `fractions.Fraction(text)`), and t =
+  12·v ticks. n = floor(t + 1/2).
+- t = n: exact. Otherwise, |t − n| ≤ 1/4 tick (1/48 beat): snapped to n,
+  with a warning. Otherwise an error.
+- n < 3 is then the step-too-short error.
+
+| Value | Ticks |
+|---|---|
+| `1/4`, `.25` | 3 |
+| `1/3` | 4 |
+| `3/4` | 9 |
+| `2` | 24 |
+| `0.33` | 4, snapped (t = 3.96) |
+| `0.26` | 3, snapped (t = 3.12) |
+| `0.3` | error (t = 3.6) |
+| `1/5` | error (t = 2.4) |
+| `0.125` | error (t = 1.5, half a tick from the grid) |
+
+**The even split.** A beat move with no `timing` (given by `row =` or by
+`frames =`) shares 12·beats ticks among its n frames: an error when
+12·beats isn't a multiple of n, otherwise 12·beats / n each (then the
+3-tick floor applies). 8 frames on 2 beats: 3 each. 3 frames on 4 beats:
+16 each. 5 frames on 1 beat: an error.
+
+**Idle moves.** Each value matches `^([0-9]+|[0-9]*\.[0-9]+)(s|ms)$`,
+the unit in any case (`2S` too, as C.3's words), with the same limit on
+digits as a beat value. Its
+milliseconds (exact: v·1000 for `s`, v for `ms`) must be a whole multiple
+of 10; the step lasts ms / 10 units. Each step is 20-500 units
+(200-5,000 ms) and the sum 50-1,200 (500-12,000 ms). `2s` is 200, `1.5s`
+is 150, `400ms` is 40; `0.405s` and a bare `2` are errors. Idle moves
+have no even split: `timing` is required.
+
+**Beat sums.** A beat move's ticks must sum to 12·beats.
+
+### B.2 Eases (Q16)
+
+f is the step's elapsed fraction, 0 ≤ f ≤ 65536; each ease returns
+0-65536, and 65536 at f = 65536:
+
+| Code | Name | e(f) |
+|---|---|---|
+| 0 | hold | 0 for f < 65536, and 65536 at f = 65536 |
+| 1 | linear | f |
+| 2 | in | (f·f) >> 16 |
+| 3 | out | 65536 − (((65536 − f)·(65536 − f)) >> 16) |
+| 4 | inout | (f·f·(196608 − 2f)) >> 32 (smoothstep, 3f² − 2f³) |
+
+| f | 0 | 16384 | 32768 | 49152 | 65536 |
+|---|---|---|---|---|---|
+| hold | 0 | 0 | 0 | 0 | 65536 |
+| linear | 0 | 16384 | 32768 | 49152 | 65536 |
+| in | 0 | 4096 | 16384 | 36864 | 65536 |
+| out | 0 | 28672 | 49152 | 61440 | 65536 |
+| inout | 0 | 10240 | 32768 | 55296 | 65536 |
+
+A step's f is always below 65536 (B.4 step 2), so a held key holds until
+the next step starts. Only travel reaches p = 65536 (B.4 step 8): a held
+travel stays at its start spot, then lands on its end spot when the last
+`go` step ends, or at the frame that crosses the play's end.
+
+### B.3 Bounce and sway
+
+φ is the phase within the current move beat (Q16, 0 ≤ φ < 65536), and b
+counts the move beats since the run started, not since the play started;
+B.4 derives both from the unwrapped pos16.
+
+**The hop** (the crab's curve: 0.12 beat on the ground, then a parabola
+that lands on the next beat):
+
+- hop(φ) = 0 when φ < 7864 (0.12·65536 = 7864.32, floored);
+- otherwise a = ((φ − 7864)·65536) // 57672 and hop(φ) = (4·a·(65536 −
+  a)) >> 16. It peaks at 65536 at φ = 36700 (0.56 beat), as the crab's.
+- `bounce = n` adds −n·hop(φ) to the key's y (Q16 native px, up).
+
+**The sway** (extremes on the beats):
+
+- sway(b, φ) = s·(65536 − 2·inout(φ)), with s = −1 when b is even and +1
+  when b is odd. So it is −1 on even beats, +1 on odd beats, and a
+  smoothstep between: continuous across beats and across plays.
+- `sway = n` adds n·sway(b, φ) to the key's x (Q16 native px).
+
+| φ | 0 | 7863 | 7864 | 7865 | 7866 | 16384 | 32768 | 36700 | 49152 | 65535 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| hop | 0 | 0 | 0 | 3 | 7 | 33003 | 64317 | 65536 | 53317 | 7 |
+
+sway(0, 0) = −65536, sway(0, 32768) = 0, sway(0, 65535) = 65534,
+sway(1, 0) = 65536. So a 1-beat move with sway swings on through its
+plays: at scale 2 with sway 2 from the centre spot, rootX is 156, 160,
+164, 160, 156 at ticks 0, 6, 12, 18 and 24 (tick 12, the second play's
+start, has b = 1, the other extreme from tick 0).
+
+### B.4 frameAt
+
+**Inputs:**
+
+- the pack's scale, anchorX, anchorY and shadowW, and the frames' boxes
+  (FTAB);
+- a move: its steps with durations d_0..d_(n−1), the starts s_i = d_0 +
+  … + d_(i−1), and L = the sum;
+- **pos16 ≥ 0**, the position since the run started, in Q16 step units
+  (Q16 ticks for beat moves, Q16 10 ms units for idle moves), never
+  wrapped. The Choreographer derives it as floor(u·12·65536) from u in
+  move beats, or as (ms·65536) // 10 from the milliseconds an idle run has
+  played, and never passes a negative one: u is held at 0 within a run
+  (section 3.5). A negative pos16 is a caller's error (dancepack.py raises
+  ValueError);
+- **mirrored**, the move's orientation (0 or 1);
+- **spot**, the start spot (−1, 0 or +1), at stage x spotX[spot + 1] of
+  `{64, 160, 256}`;
+- **e16**, the energy in Q16 (section 3.6: 39322-65536). The budget passes
+  65536, and idle moves are always drawn at 65536.
+
+**Steps** (stage coordinates: x 0-319, y 0-163, groundY 153):
+
+1. **Wrap.** loop = pos16 // (L·65536); q = pos16 − loop·L·65536.
+2. **The step.** i is the last step with s_i·65536 ≤ q, and f =
+   (q − s_i·65536) // d_i, so 0 ≤ f < 65536.
+3. **The frame.** frame = step i's frame index; drawnMirror = (step i's
+   bit 15) XOR mirrored.
+4. **The key.** j = (i + 1) mod n: the last step eases into the first
+   key. E = ease_i(f). kx = dx_i·65536 + (dx_j − dx_i)·E, and ky likewise
+   from dy.
+5. **Bounce and sway** (beat moves; both 0 for idle moves). b = pos16 //
+   786432 and φ = (pos16 mod 786432) // 12 (786432 = 12·65536). by =
+   −bounce·hop(φ); sx = sway·sway(b, φ).
+6. **Orientation.** sgn = −1 when mirrored, else +1. x16 = sgn·(kx + sx);
+   y16 = ky + by.
+7. **To screen px.** X = rhu(scale·e16·x16, 2^32) and Y = rhu(scale·e16·
+   y16, 2^32). With `snap`: X = scale·rhu(e16·x16, 2^32), Y likewise.
+8. **Travel** (beat moves with travel ≠ 0; otherwise 0). t = travel·sgn;
+   startX = spotX[spot + 1]; endX = spotX[spot + t + 1]. G is the steps
+   flagged `go`, or every step when none is; Gt = the sum of their
+   durations. When loop ≥ 1, p = 65536 (done). Otherwise g = the sum of
+   d_k·65536 over the steps k in G before i, plus q − s_i·65536 when i is
+   in G; p = g // Gt (floored, not rounded). travelPx =
+   rhu((endX − startX)·ease_travelEase(p), 65536). The energy doesn't
+   scale it. With every ease p = 65536 means the travel is complete, `hold`
+   included (B.2).
+9. **The root.** rootX = startX + travelPx + X; rootY = 153 + Y.
+10. **The box.** For a frame box (x0, y0, w, h) with w > 0: left = rootX
+    + (x0 − anchorX)·scale when drawnMirror is 0, or rootX + (anchorX −
+    x0 − w + 1)·scale when it is 1 (the anchor column mirrors to
+    cellW − 1 − anchorX); top = rootY + (y0 − anchorY)·scale; right = left
+    + w·scale; bottom = top + h·scale.
+11. **The clamp.** cx = −left when left < 0, 320 − right when right >
+    320, else 0; cy = −top when top < 0, 164 − bottom when bottom > 164,
+    else 0. Add cx to rootX, left and right, and cy to rootY, top and
+    bottom. A blank frame has no box and isn't clamped.
+12. **The shadow and the character rect** (B.5).
+
+**Output:** frame, drawnMirror, rootX, rootY, the box (or none), the
+shadow (or none) and the character rect.
+
+**Example.** Scale 2, cell 8×8, anchor 4,8, shadow 10; one frame, box
+(2, 2, 4, 6). A beat move of 2 beats, bounce 2, sway 1, travel 1,
+travelEase inout; step 1: frame 0, 12 ticks, key 0,0, ease out; step 2:
+frame 0 with bit 15, 12 ticks, key 3,−2, ease in, `go`. Rects are
+x0,y0-x1,y1, half-open. With travelEase hold instead, rootX at ticks 0,
+12, 23, 24 and 30 (unmirrored, from spot −1) is 62, 72, 63, 158 and 165:
+the root lands at tick 24.
+
+| Tick (pos16 / 65536) | Unmirrored from spot −1: frame/mirror, root, box, shadow | Mirrored from spot +1 |
+|---|---|---|
+| 0 | 0/0, 62,153, 58,141-66,153, 57,152-67,155 | 0/1, 258,153, 256,141-264,153, 253,152-263,155 |
+| 3 | 0/0, 65,149, 61,137-69,149, 64,152-66,155 | 0/1, 255,149, 253,137-261,149, 254,152-256,155 |
+| 6 | 0/0, 69,146, 65,134-73,146, none | 0/1, 252,146, 250,134-258,146, none |
+| 12 | 0/1, 72,149, 70,137-78,149, 71,152-73,155 | 0/0, 248,149, 244,137-252,149, 247,152-249,155 |
+| 15 | 0/1, 86,147, 84,135-92,147, none | 0/0, 234,147, 230,135-238,147, none |
+| 18 | 0/1, 117,146, 115,134-123,146, none | 0/0, 204,146, 200,134-208,146, none |
+| 24 | 0/0, 158,153, 154,141-162,153, 153,152-163,155 | 0/1, 162,153, 160,141-168,153, 157,152-167,155 |
+
+At tick 3, for instance: f = 16384, out gives 28672, so kx = 86016 and
+ky = −57344; φ = 16384, hop 33003, so by = −66006; inout(16384) = 10240,
+so sx = −45056. X = rhu(2·65536·40960, 2^32) = 1 and Y =
+rhu(2·65536·(−123350), 2^32) = −4. At tick 24 the play is over: the
+travel is complete (96 px) and the step wraps to the first. At e16 =
+47186 (0.72) and tick 15, unmirrored: root 84,149, box 82,137-90,149,
+shadow 83,152-85,155.
+
+**The clamp, for example:** scale 2, cell 64×76, anchor 32,72, shadow
+40, one frame with box (0, 10, 64, 62), a 1-beat move of one step with
+key −8,0, at tick 0 from spot −1. Unmirrored, X = −16 puts the box's left
+at −16, so it is pushed 16 px right: root 64,153, box 0,29-128,153,
+shadow 44,152-84,155. Mirrored, the key is +16 px: root 80,153, box
+18,29-146,153, no clamp.
+
+### B.5 Rects, the shadow and the dirty rule
+
+- **A rect** is half-open, [x0, x1) × [y0, y1) in stage px. It is empty
+  when x1 ≤ x0 or y1 ≤ y0; its area is (x1 − x0)·(y1 − y0), or 0 when
+  empty. The union of two rects is their bounding rect; an empty one adds
+  nothing.
+- **The shadow.** hop = max(0, −Y), with Y from B.4 step 7 (before the
+  clamp). sw = shadowW − 2·hop; none when sw ≤ 0. Otherwise x0 = rootX −
+  sw // 2 (rootX after the clamp), x1 = x0 + sw, rows [groundY − 1,
+  groundY + 2) = [152, 155), clipped to x 0-320; none when that leaves it
+  empty. This is CrabPose's `shadowRect()` (2 px narrower per px of hop);
+  at the legacy stage's groundY 145 the rows are the crab's 144-146.
+- **The character rect** is the union of the box and the shadow.
+- **The dirty rule.** A is the last frame's character rect and B this
+  frame's; U = union(A, B). When 10·area(U) > 13·(area(A) + area(B)),
+  they stay two rects and the dirty px are area(A) + area(B). Otherwise
+  it is the one rect U, and the dirty px are area(U). A frame with no
+  previous one dirties area(B).
+- **Example** (B.4's move, unmirrored): from tick 6 to tick 15, A and B
+  are 96 px each and U is 351 px, more than 1.3 × 192: two rects, 192 px.
+  From tick 0 to tick 24, U is 1,484 px against 140 + 140: 280 px.
+
+### B.6 The per-move budget
+
+**The cases.** For each move:
+
+- **fps** 24 and 30, with the frame periods 42 and 33 ms
+  (`dancerate::periodMs`). Frame n is at n·period ms, so pos16(n) =
+  (n·period·pace·65536) // 5000 for a beat move (pace P BPM is P/5000
+  ticks a ms) and (n·period·65536) // 10 for an idle move.
+- **paces** (beat moves): with (rlo, rhi) = reach(lo, hi, beats, travel)
+  (B.7), the paces rlo, (rlo + rhi) // 2 and rhi, ascending, a repeat
+  dropped. Idle moves have the one pace 0.
+- **orientations:** unmirrored, then mirrored when the move has the
+  mirror flag.
+- **spots:** the centre (0) for a move without travel; for a travel move
+  each start spot of that orientation (B.11), ascending.
+- The cases run in this nested order: fps, pace, orientation, spot.
+
+**One case.** N is the first n ≥ 1 with pos16(n) ≥ L·65536: one play,
+plus the frame that crosses its end (which wraps to the first step, with
+any travel complete). Frames n = 0..N go through frameAt at e16 = 65536,
+and the dirty px d_n of n = 1..N (B.5) make N values. The case median is
+the lower median: the element (N − 1) // 2, from 0, of the values sorted
+ascending. The case peak is the largest.
+
+**The move.** Its peak is the largest case peak, and its median the
+largest case median. The light: **green** when the peak ≤ 16,000,
+**amber** when ≤ 20,000, **red** above. The budget reads boxes only,
+never pixels.
+
+**Examples.** A.17's move: six cases, each median 4 and peak 6: green.
+B.4's move (unranged, travel 1, no mirror flag, so the paces 72, 124 and
+176 and the start spots −1 and 0) gives 12 cases. At 30 fps, pace 124,
+spot −1: N = 30, median 160, peak 266. At 24 fps, pace 124: median 176,
+peak 304. The move: median 192 (24 fps, pace 176), peak 304: green.
+
+### B.7 Pace: eligibility, tolerance and reach
+
+**T10** is the dance tempo T (section 2.4) in tenths of a BPM, an
+integer 720-1760. The device takes floor(T·10 + 0.5) of its latched T.
+At octave k the pace is T·2^k; in integers, x(k) = T10·2^(k+1), and the
+pace is x(k)/20.
+
+**eligible_k(T10, lo, hi, prevK, beats, travel) → k or none** (prevK: the
+k of the last ranged move, or none; travel: the move's, 0 for none):
+
+- An unranged move (lo = hi = 0) gets 0.
+- Otherwise try, in order, prevK (when there is one), then 0, −1 and +1,
+  each once. k fits when 20·lo ≤ x(k) ≤ 20·hi, and k = −1 needs beats ≤ 4,
+  and k = +1 needs T10 ≤ 900 (2T ≤ 180) and, for a travel move, beats ≥ 4
+  (section 8's D = beats·2^−k ≥ 2). The first k that fits is the answer;
+  none when nothing fits.
+- So for every valid move its octaves are reach's (below), and the
+  Choreographer needs no travel test of its own: a travel move has at least 2 beats
+  (A.15), so k = 0 and k = −1 always give D ≥ 2. The coverage report and
+  its warning (C.5) use it the same way.
+
+**pace_holds(T10, k, lo, hi)**, the running move's tolerance (section
+2.5): always true for an unranged move. Otherwise 1940·lo ≤ 100·x(k) ≤
+2060·hi, both bounds inclusive, and k = +1 needs T10 ≤ 900, as in
+eligible_k: the 3 % never takes a pace past 180. For a 100-100 range at
+k = 0: T10 970 and 1030 hold (97 and 103 exactly), 969 and 1031 don't.
+For a 170-180 range at k = +1: T10 900 holds (180), 901 and 927 don't
+(180.2 and 185.4, inside 1.03·180 but past 180).
+
+**reach(lo, hi, beats, travel) → (rlo, rhi) or none:**
+
+- The octaves allowed: 0, unless the move travels and beats < 2; −1, for
+  a ranged move with beats ≤ 4; +1, for a ranged move without travel or
+  with beats ≥ 4 (D ≥ 2).
+- Each octave covers paces: −1 → 36-88, 0 → 72-176, +1 → 144-180. Their
+  union is one interval [a, b] (36 or 72 to 176 or 180).
+- An unranged move reaches [a, b] (72-176). A ranged one reaches
+  [max(lo, a), min(hi, b)], or none when that is empty: the error names b
+  as the fastest pace when lo > b, and a as the slowest otherwise.
+- reach is none when no octave is allowed, which happens only for an
+  unranged travel move under 2 beats. The reader never asks reach about
+  one: A.15's range row applies to ranged moves only, and its travel row
+  drops the move as `travel <n>` (the compiler skips it earlier, `a
+  travel move needs at least 2 beats`).
+
+| T10 | Range | prevK | Beats | Travel | k |
+|---|---|---|---|---|---|
+| 1200 | 90-130 | none | 4 | 0 | 0 |
+| 870 | 150-180 | none | 1 | 0 | +1 |
+| 870 | 150-180 | none | 8 | 0 | +1 |
+| 1740 | 36-60 | none | 4 | 0 | none |
+| 1200 | 36-200 | +1 | 2 | 0 | 0 (double time needs T10 ≤ 900) |
+| 1200 | 36-200 | −1 | 2 | 0 | −1 (the previous k fits first) |
+| 950 | 170-180 | none | 2 | 0 | none |
+| 900 | 170-180 | none | 2 | 0 | +1 |
+| 1760 | any | +1 | 2 | 0 | 0 |
+| 1200 | 60-100 | none | 4 | 0 | −1 |
+| 1200 | 60-100 | none | 8 | 0 | none (half time needs ≤ 4 beats) |
+| 800 | 72-180 | +1 | 2 | 1 | 0 (at +1 D would be 1) |
+| 720 | 100-150 | none | 2 | 1 | none (only +1 fits, and D would be 1) |
+| 720 | 100-150 | none | 4 | 1 | +1 (D = 2) |
+
+| Range | Beats | Travel | reach |
+|---|---|---|---|
+| any | any | 0 | 72-176 |
+| any | 1 | 1 | none: no octave is allowed |
+| 40-80 | 1 | 1 | 40-80 (half time only) |
+| 90-130 | 4 | 0 | 90-130 |
+| 36-60 | 4 | 0 | 36-60 |
+| 36-60 | 8 | 0 | none: the slowest pace is 72 |
+| 185-200 | 2 | 0 | none: the fastest pace is 180 |
+| 178-200 | 2 | 1 | none: the fastest pace is 176 |
+| 100-200 | 4 | 1 | 100-180 |
+| 40-200 | 8 | 0 | 72-180 |
+
+### B.8 Genre folding
+
+**fold_genre(tag) → an ASCII key:**
+
+1. **Full folding.** Each code point below 0x80 stays; any other becomes
+   its textfold Full replacement, exactly `textfold::replacement(cp,
+   Mode::Full)`: `punctuation()`, else `latin1Multi()`, else `symbols()`,
+   else `kLatin1` (when its entry isn't `\0`), else `kLatinExtA`, else
+   `?`.
+2. Lowercase A-Z.
+3. Replace every `&` and every `+` with ` and `.
+4. Split into words: the maximal runs of `[a-z0-9]`. Everything else
+   separates words and is dropped.
+5. A word that is exactly `n`, with a word before it and a word after it,
+   becomes `and`.
+6. The key is the words joined with nothing between them. An empty key
+   means the tag **folds to nothing**.
+
+The genre key is FNV-1a 32 (B.10) of the key's bytes. A tag that folds to
+nothing has no key, so FNV("") (0x811C9DC5) is never a key.
+
+**Where the tables come from.** dancepack.py embeds `TEXTFOLD`, a dict
+from code point to replacement for every code point whose Full
+replacement isn't `?` (267 entries at 2e1b5c5; U+00BF `¿` isn't one, as
+it folds to `?`). `dancepack.py --check`
+rebuilds it from lib/core/TextFold.cpp's source (C.2) and reports any
+difference, so the two can't drift. The C++ GenreFold (step 3) calls
+`textfold::replacement()` itself and folds as a stream, with no buffer
+limit.
+
+| Tag | Key | FNV-1a 32 |
+|---|---|---|
+| `Hip Hop`, `hip-hop`, `HIP_HOP` | hiphop | 0x5DE39FA5 |
+| `Drum & Bass`, `drum n bass`, `Drum ’n’ Bass` | drumandbass | 0xE6318A55 |
+| `Drum&n&Bass` (step 3's spaces split the words, so step 5 sees a lone `n`) | drumandandandbass | 0xEBEFBAA3 |
+| `R&B`, `r+b` | randb | 0x1BDE7F5C |
+| `d&b` | dandb | 0xDD173CB2 |
+| `rock'n'roll` | rockandroll | 0x4666B1EE |
+| `n` | n | 0xEB0C3431 |
+| `a n` | an | 0x4124F2E6 |
+| `n n n` | nandn | 0x66E2517C |
+| `&` | and | 0x0F29C2A6 |
+| `C++` | candand | 0xF49E7244 |
+| `Électro` | electro | 0xEED54F8F |
+| `Straße` | strasse | 0x0581A214 |
+| `Æther` | aether | 0x886A2654 |
+| `Œuvre` | oeuvre | 0xA67EB213 |
+| `Łódź` | lodz | 0xD5FC07C6 |
+| `Ñandú` | nandu | 0x61E2499D |
+| `½ step` | 12step | 0x8E61F028 |
+| `©` | c | 0xE60C2C52 |
+| `Synth–Pop` | synthpop | 0x87CDEC94 |
+| `K-Pop` | kpop | 0x9076A259 |
+| `90s` | 90s | 0xA0CA74AD |
+| `Música Popular Brasileira` | musicapopularbrasileira | 0xC9B7E57E |
+| `日本`, two spaces, the empty string | (folds to nothing) | — |
+
+### B.9 Colours
+
+- **RGB565:** `(r >> 3) << 11 | (g >> 2) << 5 | (b >> 3)`, as M5GFX's
+  `color565`. The background #080C10 is 0x0862.
+- **Merging:** sheet colours with the same RGB565 value are one palette
+  entry. The first in scan order (C.4) keeps its RGB888 value.
+- **The idle palette**, derived: Y = (77r + 150g + 29b + 128) >> 8; each
+  channel c becomes c1 = (c + Y + 1) >> 1 (half way to its luma, rounded
+  half up), then (7·c1 + 5) // 10 (×0.7, rounded half up). Index 0 stays
+  0, 0, 0. #ff0000 → #741b1b, #f0f0f8 → #a9a9ac, #a8acc0 → #787980,
+  #f472b6 → #8e6178, #ffffff → #b3b3b3.
+- **Too close to the background:** every 8-bit channel within 15 of
+  #080C10's (|r − 8| < 16, |g − 12| < 16, |b − 16| < 16). It is tested on
+  every dance colour and every idle colour, derived or given: #101418
+  vanishes, #181c20 doesn't.
+
+### B.10 FNV-1a 32, and the frame hash
+
+h starts at 0x811C9DC5; for each byte, h = (h XOR byte) × 0x01000193 mod
+2^32 (QueueSaver.cpp's). FNV("a") = 0xE40C292C. The frame hash is FNV-1a
+32 over the stored cell grid (A.16).
+
+### B.11 Extent, fit and start spots
+
+**extent(move, mirrored) → (lo, hi)**, screen px from the root x: a
+bound on the columns the move can draw at any e16 ≤ 65536, before the
+clamp. For each step i whose frame box isn't empty, with m = (bit 15)
+XOR mirrored, sgn as in B.4 and j = (i + 1) mod n, the next step (the
+last step eases into the first key, as in B.4):
+
+- L = (x0 − anchorX)·scale when m is 0, (anchorX − x0 − w + 1)·scale when
+  1; R = L + w·scale;
+- a = sgn·dx_i·scale and c = sgn·dx_j·scale (the keys it eases between);
+- lo_i = L + min(a, c, 0) − sway·scale and hi_i = R + max(a, c, 0) +
+  sway·scale.
+
+extent = (the smallest lo_i, the largest hi_i); a move whose boxes are
+all empty fits anywhere. It is a true bound: every ease stays between its
+two keys, an energy below 1 only pulls the offset toward 0 (hence the 0
+in min and max), and rounding a value that lies between two integers
+keeps it between them.
+
+**fits(spot):** spotX + lo ≥ 0 and spotX + hi ≤ 320.
+
+**Start spots** of a travel move in an orientation: each s of −1, 0, +1,
+ascending, such that s + t is a spot (t = travel·sgn), `start_at` allows
+s (any: all; centre: 0; side: −1 and +1; left: −1, or +1 when mirrored;
+right: +1, or −1 when mirrored), and the move fits at s and at s + t
+(so it fits all the way, the root moving monotonically between them).
+
+A travel move with no start spot in any orientation it plays in
+(unmirrored, and mirrored only with the mirror flag, as B.6's cases) can
+never play: the compiler skips it, and the reader drops it. Mirrored
+spots don't reflect unmirrored ones (the mirror is about the anchor
+column, so the mirrored extent is (scale − hi, scale − lo)), so a move
+without the mirror flag that would have a mirrored spot but no
+unmirrored one is still dropped. A move without travel is
+always eligible; where it doesn't fit, B.4's clamp pushes it inwards, and
+the coverage report says so.
+
+B.4's move, unmirrored: step 1 gives L = −4, R = 4, keys 0 and 6, so −6
+and 12; step 2 (drawn mirrored) gives L = −2, R = 6, so −4 and 14. The
+extent is (−6, 14), and the start spots are −1 and 0.
+
+Where the wrap matters: scale 2, cell 16×8, anchor 8,8, frames with boxes
+(7, 0, 2, 8) and (0, 0, 16, 8); step 1 frame 0 keyed −10,0, step 2 frame
+1 keyed 0,0, both linear. Step 2's c is step 1's key, −20, so its lo is
+−16 − 20 = −36: the extent is (−36, 16), and the drawn box does reach
+36 px left of the root as step 2 eases back into the first key.
+
+## Appendix C. dancepack.py's contract
+
+### C.1 Files, paths and the registry
+
+| Path | What |
+|---|---|
+| `tools/dancepack.py` | the compiler: standard library only, Python 3.8+, one file a contributor can download alone (`--check` and `builtin` need the repository) |
+| `tools/test_dancepack.py` | its unittest suite |
+| `tools/art/dancers/test/` | the test dancer (C.10): `dancer.ini` (hand-written), `sheet.txt` (the art as text, its source) and `sheet.png` (committed, rendered from it) |
+| `test/support/dance/TestPack.h` | generated: the test dancer's pack, the fixture of steps 2-3 |
+| `test/support/dance/EligibilityVectors.h` | generated: B.7's cases |
+| `test/support/dance/FoldVectors.h` | generated: B.8's cases |
+| `test/support/dance/BudgetVectors.h` | generated: the test pack's budget cases and traces (B.6) |
+| `lib/core/packs/StickPack.cpp` | generated from `tools/art/dancers/stick/`: added to the registry in step 7 |
+
+- **The registry** is a list in dancepack.py, `BUILTINS = [(source
+  folder, output file)]`, both relative to the repository root with `/`.
+  In step 1 it holds one entry, `("tools/art/dancers/test",
+  "test/support/dance/TestPack.h")`. The three vector headers are
+  generated from dancepack.py's own tables and from the test dancer.
+  `--check` and `builtin` cover exactly the registry and the vectors,
+  and a registry folder's `sheet.txt` when it has one. `builtin` renders
+  sheet.txt to an RGB sheet.png with the colours the file lists, and
+  `--check` compares the pixels, not the bytes, so zlib versions don't
+  matter; the format is in `_render_sheet_txt`'s docstring.
+- **The id** of a pack is its dancer folder's name: the last part of DIR
+  once resolved, so `robo`, `robo/` and `./robo` agree. DIR is resolved
+  lexically, as `os.path.abspath`, so on a file system that ignores case
+  the name keeps the case it was given. It must be 1-23 of `a-z`, `0-9`
+  and `-`, starting with a letter or digit.
+- **Python 3.8+:** no syntax or library call newer than 3.8 unless
+  guarded (no `list[int]` evaluated at run time, no `match`, no
+  `str.removeprefix`). Determinism: never iterate a set or a dict built
+  from one into output; sort.
+- Test suites in test/ include the headers by relative path
+  (`#include "../support/dance/TestPack.h"`), as test_ogg_opus includes
+  OggWriter.h: PlatformIO compiles only a suite's own folder.
+
+### C.2 The command line
+
+```
+python tools/dancepack.py check DIR [--strict]
+python tools/dancepack.py build DIR [-o FILE] [--strict]
+python tools/dancepack.py info FILE
+python tools/dancepack.py builtin [DIR --out FILE]
+python tools/dancepack.py --check
+```
+
+- **check** reads and validates DIR, prints the report of C.5 (with the
+  echo tables and the coverage report), and writes nothing.
+- **build** prints the same report without the echo tables and the
+  coverage report, then writes the pack to FILE (default: `<id>.dnc` in
+  the current directory), creating FILE's folder when it doesn't exist
+  (so `-o E:/dancers/robo.dnc` works on a fresh card), and prints `wrote
+  <FILE>`. A failure writes nothing. A FILE that can't be written (a
+  folder, say) prints `<FILE>: error: can't write it (<reason>)`, the
+  operating system's reason.
+- **info** reads FILE with the reader of A.15 and prints it. The first
+  line is `<FILE>: MPDN v<format> (reader <minReader>), <size> bytes, CRC
+  ok`; then the id, name, author and licence, the geometry, the chunks
+  (tag, offset, size), and a line per move (its status line's move and
+  light, C.5, with its step count), or `ignored: <reason>`. An invalid
+  pack prints `<FILE>: error: <reason>`; a folder `<FILE>: error: a
+  folder, not a .dnc pack`.
+- **builtin** with no arguments regenerates every registry output and
+  vector header. It writes only the files whose text changed, printing
+  `wrote <path>` for each. With DIR and `--out FILE` it compiles one pack
+  to FILE, which must end in `.cpp` or `.h` and whose stem must be a C++
+  identifier (it names the symbols, C.8). `--strict` and the licence
+  allowlist always apply. Without arguments it needs the repository (C.1);
+  with DIR and `--out` it works anywhere.
+- **--check** regenerates the same outputs in memory and compares each
+  with the file on disk, read as text with universal newlines (so a CRLF
+  checkout under `core.autocrlf`, as on the laptop, still passes). Each
+  file that differs or is missing prints `stale: <path> (run python
+  tools/dancepack.py builtin)`. It then checks the embedded tables:
+  - `TEXTFOLD` against lib/core/TextFold.cpp: in the bodies of
+    `punctuation()`, `latin1Multi()` and `symbols()`, each group of `case
+    0x…:` labels maps to the next `return "…";`; the string literals of
+    `kLatin1` and `kLatinExtA` are concatenated, with `\0`, `\"` and `\\`
+    decoded; the four are combined in `replacement()`'s order (B.8), and
+    entries equal to `?` are left out.
+  - `FONT_COVERAGE` (sorted code point ranges) against
+    src/ui/VlwFonts.cpp: every `const uint8_t kVlw<Name>[<n>] = { … };`
+    array's bytes, whose glyph count is the big-endian u32 at byte 0 and
+    whose glyph i has its code point in the big-endian u32 at 24 + 28·i;
+    the coverage is the intersection over the arrays (at 2e1b5c5 all four
+    hold the same 256 code points).
+  - A difference prints `stale: tools/dancepack.py (TEXTFOLD differs from
+    lib/core/TextFold.cpp at U+00E9)`, or the same for `FONT_COVERAGE`
+    and src/ui/VlwFonts.cpp, naming the lowest code point that differs.
+  - It prints nothing when everything matches.
+- **Outside the repository** (dancepack.py downloaded alone, so there is
+  no lib/core beside tools/), `--check` and `builtin` without arguments
+  are a usage error: `--check and builtin work only in the
+  mstream-mp3-player repository; to check a dancer use: dancepack.py
+  check DIR`. They would otherwise report the repository's files as
+  stale.
+- **Exit codes:** 0 on success. 1 for a pack-level error, a `--strict`
+  failure, an invalid pack (`info`), a stale file, a missing DIR, FILE
+  or dancer.ini, or an output that can't be written. 2 for a usage
+  error: argparse's own, `builtin` with only one of DIR and `--out`, an
+  `--out` name that can't name symbols, or `--check` or `builtin` outside
+  the repository.
+- **Output** goes to stdout, except argparse's usage errors (stderr).
+  Paths print with `/`.
+
+### C.3 Reading dancer.ini
+
+**The parser.**
+
+- The bytes are decoded as `utf-8-sig`, so a BOM is accepted. A file
+  that isn't UTF-8 is a pack error at the line of the first bad byte.
+  CRLF and lone CR become LF before parsing.
+- `configparser.ConfigParser(interpolation=None, strict=True,
+  comment_prefixes=('#', ';'), inline_comment_prefixes=(';',),
+  default_section='')`, with its default lowercasing of keys and both `=`
+  and `:`. `default_section=''` can't name a section, so `[DEFAULT]` is
+  an unknown section like any other instead of lending its keys to every
+  section.
+- **A section header** is a line starting with `[` (after any indent): its
+  name runs to the line's last `]`, and text after that is ignored. So
+  `[move hop]]` names the move `hop]`, an invalid name. This is
+  configparser's rule from Python 3.10 (3.8 and 3.9 stopped at the first
+  `]`), and dancepack.py sets it (`SECTCRE = \[(?P<header>.+)\]`) so every
+  version reads a header alike.
+- **A line starting with `#` or `;`** (after any indent) is a comment,
+  even inside a value's continuation lines, so a value can't continue on
+  one. An indented comment made only of `#rrggbb` tokens inside
+  `palette` or `idle_palette` is an error: those colours would be lost.
+- **A `#` inside a value** is part of it. When one stands alone (at the
+  value's start or after whitespace, and followed by whitespace or the
+  line's end) the compiler warns, since it reads like a comment (`name =
+  Robo  # my robot`); `Robo #2` and `#ff0000` are quiet.
+- Lines count from 1 in the decoded text. A key's line is the line where
+  it starts; a move's line is its section header's.
+- Sections are `[dancer]`, exactly once, and `[move <name>]`: the word
+  before the first whitespace, lowercased, is `dancer` or `move`, and a
+  move's name is the rest, stripped. A section that is neither is a near
+  miss when, checked in this order, its first word, lowercased, is
+  `move` followed by a character that isn't a letter (`move:wave`,
+  `move-wave`, `move-1`: the name is what follows that character in the
+  header, stripped), or else matches `dancer` or `move` by the rule for
+  unknown keys below (a typo such as `dancr`, `moves` or `mvoe`, or
+  `dancer` followed by more words: a typo of `move` is named by the
+  header's next word). The separator rule comes first, so a one-letter
+  name such as `[move-1]`, whose first word also scores 0.8 against
+  `move`, skips move `1`. A near miss of `dancer` is a pack error; of
+  `move`, it skips that move (a pack error when it has no name:
+  `[move2]`, `[moves]`). Any other section is a warning and is ignored,
+  so later formats can add sections.
+- Lists split on whitespace (continuation lines included), except
+  `genre`, which splits on commas, each tag stripped.
+- Words (`any`, `none`, the eases, `quiet`, `start`...) match in any
+  case. Booleans are configparser's `yes`/`no`, `true`/`false`, `on`/`off`
+  and `1`/`0`. Cell names match in any case (`b4` is B4), and so do the
+  hex digits of `#rrggbb`.
+- Integers are `[0-9]+`, or `[+-]?[0-9]+` for `travel` and the parts of
+  `offset`. Ranges are `lo-hi`, spaces allowed around the `-`. **Long
+  numbers:** any number of leading zeros, then at most 9 digits; a
+  decimal (`weight`, timing) has at most 9 digits after the point. A
+  longer number is outside the grammar, so it reads as that key's syntax
+  error (`scale must be 1, 2, 3 or 4`) or, in `timing`, as `timing
+  "<value>" has a number of more than 9 digits`. So the tool never
+  converts a long digit string (Python 3.10.7, 3.9.14 and 3.8.14 on
+  refuse one over 4,300 digits, older releases don't), and every version
+  agrees.
+- **Unknown keys.** A key starting with `x-` is ignored silently.
+  Otherwise, for an unknown key, K is the known key of its section that
+  swapping two adjacent characters gives, else the one with the highest
+  `difflib.SequenceMatcher(None, key, K).ratio()` of at least 0.6, a tie
+  going to the earlier key in the tables below. With a swap or a ratio of
+  at least 0.75 it is an error, "did you mean K?": in `[dancer]` a pack
+  error, in a move a skip. With a ratio from 0.6 up to 0.75 it is a
+  warning that ends `(did you mean K?)`, and the key is ignored (`name`
+  in a move scores 0.6 against `frames`, `speed` in `[dancer]` 0.6
+  against `sheet`). Any other unknown key is a warning.
+
+**`[dancer]`**, in the order used to break ties:
+
+| Key | Syntax | Default | Rules |
+|---|---|---|---|
+| `name` | text | required | 1-24 B |
+| `author` | text | required | 1-40 B |
+| `license` | text | required | 1-40 B; on the allowlist under `--strict` |
+| `sheet` | a relative path with `/`, inside the folder (no `..`) | `sheet.png` | must exist, each name matched exactly as written (case included) on every file system; no name may end in `.` or a space |
+| `cell` | `WxH` | required | W, H ≥ 1; W·scale and H·scale ≤ 160 |
+| `scale` | 1-4 | 1 | |
+| `anchor` | `x,y` | cellW // 2, cellH | 0 ≤ x < W, 1 ≤ y ≤ H, y·scale ≤ 153, (H − y)·scale ≤ 10 |
+| `rest` | a cell | A1 | on the sheet, not blank |
+| `shadow` | 0-160 | 0 | screen px |
+| `format` | integer | 1 | above 1: "update dancepack.py"; below 1: an error |
+| `key` | `#rrggbb` | none | that colour becomes transparent |
+| `palette` | `#rrggbb` list | first appearance | ≤ 15, no two with the same RGB565 |
+| `idle_palette` | `#rrggbb` list | derived (B.9) | one per palette entry |
+| `faces` | `none`, `right`, `left` | `none` | |
+| `url` | text | empty | 0-80 B |
+| `version` | text | empty | 0-16 B |
+
+Text values must hold no control character; their limits are in UTF-8
+bytes.
+
+**`[move <name>]`.** The name is 1-23 of `a-z`, `0-9` and `-`, starting
+with a letter or digit. `bpm = none` makes a no-BPM (idle) move; a range
+or `any` makes a beat move. In the order used to break ties (C.6 gives
+the order of the checks):
+
+| Key | Moves | Syntax | Default | Stored as (A.12, A.13) |
+|---|---|---|---|---|
+| `row` | both | n ≥ 1 | one of `row` and `frames` is required | the steps' cells: A n, B n … up to the row's last non-blank cell |
+| `frames` | both | cell names, 1-32 of them | | the steps' cells |
+| `beats` | beat, required | 1, 2, 4, 8 | | beats |
+| `bpm` | both, required | `lo-hi` (36-200), `any`, `none` | | kind, paceLo, paceHi |
+| `timing` | beat: optional; idle: required | B.1 | the even split | dur |
+| `offset` | both | `x,y` per step, no space inside | `0,0` each | dx, dy |
+| `ease` | both | one name for every step, or one per step | `hold` | ease |
+| `mirror` | both | boolean | no | flags bit 0 |
+| `place` | beat | `start`, `end` | neither | flags bit 2 or 3 |
+| `weight` | both | 0.1-10 in steps of 0.1 | 1 | weight10 |
+| `from`, `to` | both | a pose key (1-23 of `a-z0-9-`) whose mirror twin (A.11) is at most 23 B too | none | fromKey, toKey and their twins |
+| `repeat` | beat | 0-8, repeat·beats ≤ 16 | 0 | repeat |
+| `freeze` | beat | boolean; one move at most | no | flags bit 1 |
+| `heavy` | both | boolean | no | flags bit 4 |
+| `snap` | both | boolean | no | flags bit 5 |
+| `sway` | beat | 0-16 | 0 | sway |
+| `bounce` | beat | 0-16 | 0 | bounce |
+| `travel` | beat | −2..2, with beats ≥ 2 | 0 | travel |
+| `travel_ease` | beat, with travel | an ease | `inout` | travelEase (0 without travel) |
+| `start_at` | beat, with travel | `any`, `centre`, `side`, `left`, `right` | `any` | startAt |
+| `go` | beat, with travel | step numbers from 1 and ranges `a-b`, by spaces or commas | none: every step travels | step flags bit 0 |
+| `genre` | beat | 1-8 tags, by commas, 1-63 B each | none | a genre run |
+| `when` | idle | `quiet`, `listening`, `any` | `any` | when |
+| `song_bpm` | beat | `lo-hi`, 1-255 | none | needs bit 0, songLo, songHi |
+
+A key outside its "Moves" column skips the move.
+
+### C.4 Reading the sheet
+
+- **PNG.** The signature, then chunks whose lengths and CRCs are
+  checked. IHDR comes first. A critical chunk other than IHDR, PLTE, IDAT
+  and IEND is an error; ancillary chunks other than tRNS are ignored (no
+  gamma or colour profile: the stored samples are the colours).
+  Compression and filter methods are 0. The IDATs are concatenated,
+  inflated with zlib and unfiltered row by row (filter types 0-4, Paeth
+  as the PNG specification).
+- **Accepted:** colour type 0 at 1, 2, 4, 8 or 16 bits; 2 at 8 or 16; 3
+  at 1, 2, 4 or 8 (PLTE required); 4 at 8 or 16; 6 at 8 or 16. Interlace
+  method 1 is "save without interlacing".
+- **To 8-bit RGBA:** a 16-bit sample keeps its high byte; a grey sample
+  of d < 8 bits becomes v·255 // (2^d − 1); an indexed pixel takes its
+  PLTE colour. Alpha: types 4 and 6 their alpha sample (high byte); type
+  3 its tRNS entry (255 past the end of tRNS); types 0 and 2 alpha 0 when
+  the raw sample or samples, at the file's own bit depth, equal tRNS's
+  value, else 255.
+- **Opaque** means alpha ≥ 128. Then a pixel whose 8-bit RGB equals
+  `key` is transparent. Only opaque pixels have a colour.
+- **Size:** at most 1024×1024, a whole number of cells. Cell names are
+  spreadsheet columns (A-Z, then AA, AB…) and rows from 1, in any case
+  and with any leading zeros on the row; a name of more than 3 letters
+  or a row of more than 4 digits (after its zeros) is no cell, as none
+  fits 1024 px.
+- **Inflating:** the IDATs are inflated to at most one byte more than the
+  image needs (height × (the row's bytes + 1)), so a small file holding
+  gigabytes of zeros fails at once with `more than <m> bytes of pixels`.
+- **Used cells** are the rest cell and every cell that any move's `row`
+  or `frames` names (skipped moves too, near-miss headers of C.3
+  included; a `row` or a `frames` token that names no cell of the sheet
+  adds nothing), at most 256. So a move's cells count alike however it
+  is skipped. **Scan order** is
+  the used cells in sheet order (row 1 from A, then row 2...), each cell
+  row-major. Colours, partial alpha and "every cell is fully opaque" look
+  at the used cells only.
+- **The palette.** Opaque colours merge by RGB565 (B.9), the first in
+  scan order keeping its RGB888; more than 15 after merging is an error.
+  Without `palette =`, indices 1..n follow first appearance in scan
+  order. With it, the listed colours are indices 1..n, each opaque pixel
+  must match one of them by RGB565, and the listed RGB888 is stored.
+- Blank cells (no opaque pixel) are allowed in `row` and `frames`; the
+  rest cell can't be blank.
+
+### C.5 What it prints
+
+**Order.**
+
+1. As dancer.ini is read: warnings about unknown keys and sections and
+   about a lone `#` in a value, the skip lines of near-miss move headers,
+   and the errors a reading finds (a near miss of `[dancer]`, a wrapped
+   palette).
+2. The `[dancer]` keys, the sheet and the palette: errors, warnings and
+   notes. A pack-level error stops here (exit 1).
+3. Each move in manifest order: its skip line; or its status line, then
+   (`check` only) its echo table, then its warnings and notes.
+4. Frame warnings, in frame order (A.14).
+5. Pack-level errors found after the moves (frames, moves, pose keys,
+   size).
+6. The coverage report (`check` only), then the coverage warnings (no
+   moves; tempo gaps), which both commands print.
+7. With `--strict`: the licence error and the skipped-moves error.
+8. The summary line; `build` then prints `wrote <FILE>`.
+
+**Shapes.**
+
+- A location is `dancer.ini:<line>: `, `<sheet>: ` (the `sheet` value as
+  written), `<DIR>: `, `<FILE>: `, or nothing.
+- After the location: `error: `, `warning: ` or `note: `. A skip line and
+  a status line carry no such word.
+- A move is named `move "<name>"`.
+- Counts of px and bytes of 1,000 or more carry commas (Python's
+  `f"{n:,}"`, which ignores the locale). Other numbers are plain.
+- Text echoed from dancer.ini or from a path prints each control
+  character (U+0000-U+001F and U+007F-U+009F) as `\xNN`, two lowercase
+  hex digits, so a downloaded dancer can't send escape sequences to the
+  terminal: `unknown section [\x1b]0;x\x07] ignored`.
+- **beats_text(t)** for t ticks: w = t // 12 and the remainder r/12
+  reduced to p/q. `1 beat` when t = 12, `<w> beats` when r = 0, `<p>/<q>
+  beat` when w = 0, `<w> <p>/<q> beats` otherwise: `1/4 beat`, `2 beats`,
+  `3 3/4 beats`.
+
+**A skip line:** `dancer.ini:<line>: move "<name>": <message> (skipped)`.
+
+**A status line:**
+
+- beat: `dancer.ini:<line>: move "<name>": <beats_text(12·beats)>, pace
+  <lo>-<hi>; <light>` (`pace any` when unranged);
+- idle: `dancer.ini:<line>: move "<name>": no BPM, when <when>, <ms> ms;
+  <light>`;
+- `<light>` is `green: median <m> px, peak <p> of 16,000 px`, `amber:
+  median <m> px, peak <p> of 20,000 px` (each light's limit, B.6), or, for
+  a red move kept by `heavy`, `red (heavy): median <m> px, peak <p> px,
+  over 20,000`. A.17's move reads `dancer.ini:7: move "hop": 1 beat, pace
+  any; green: median 4 px, peak 6 of 16,000 px`.
+
+**The echo table** (`check`): indented 4 spaces, a header `step cell
+ticks offset ease` (`ms` for idle moves) and a row per step: its number
+from 1, the cell as written (then ` (blank)` for a blank cell), the
+duration, `x,y`, the ease, and `go` when flagged. Its spacing is free.
+
+**The coverage report** (`check`), here with a few of the test dancer's
+rows (C.10):
+
+```
+coverage: pace at dance tempo T (h = half time, d = double time, . = not eligible)
+  T              72   80   90  100  110  120  130  140  150  160  176
+  bounce         72   80   90  100  110  120  130  140  150  160  176
+  slow          36h  40h  45h  50h  55h  60h    .    .    .    .    .
+  nod*           72   80   90  100    .    .    .  70h  75h  80h  88h
+  * genre-tagged: dormant until tracks carry genres
+idles: quiet: sway, breathe; listening: sway, look
+edges:
+  walk: travels from -1; mirrored from +1
+  heavy: clamped at both edge spots
+```
+
+(The label column is as wide as the whole report's: the test dancer's
+longest label is `step-touch`.)
+
+- The columns are T = 72, 80, 90 … 160, 176, each right-aligned in 5
+  characters; the labels are left-aligned, indented 2, in a column 2
+  wider than the longest label (`T` included). A cell is the
+  pace at the k of `eligible_k(10·T, lo, hi, none, beats, travel)`:
+  `<pace>` at 0, `<pace>h` at −1, `<pace>d` at +1, `.` for none. So a
+  2-beat travel move never shows a `d` (B.7).
+- The rows are the kept beat moves without a needs bit, in MOVS order. A
+  genre-tagged move's label ends with `*`, and the footnote line follows
+  when one does.
+- `idles:` names, per state, the idle moves for it in MOVS order, joined
+  with `, `. A state with none reads `(the listening idles)` or `(the
+  quiet idles)` when the other has some, and `auto-idle` when neither
+  has.
+- `edges:` has a line per kept beat move with something to say, in MOVS
+  order: a move
+  without travel that doesn't fit at an edge spot in an orientation it
+  plays (B.11) is `clamped at spot -1`, `clamped at spot +1` or `clamped
+  at both edge spots`; a travel move is `travels from <spots>`, with `;
+  mirrored from <spots>` when it mirrors (spots `-1`, `0`, `+1`, joined
+  with ` and `). With no line, it reads `edges: every move fits at both
+  edge spots`.
+- **The coverage warning:** over the integer tempos T = 72..176, with
+  the kept beat moves that have neither genre tags nor a needs bit, each
+  run of tempos where none is eligible (eligible_k with the move's
+  travel) gives `warning: no beat move at dance tempo <a>-<b>:
+  auto-bounce plays there` (`<a>` alone for one tempo).
+
+**The summary:** `<id>: <n> move[s] (<s> of <w> skipped), <f> frame[s],
+<bytes> bytes`, e.g. `dot: 1 move (0 of 1 skipped), 1 frame, 1,156
+bytes`. `<n>`, `<f>` and `<bytes>` count what the pack holds (`<n>` is
+MOVS's count), and `<w>` the moves dancer.ini writes, near-miss headers
+included: five moves with one skipped read `4 moves (1 of 5 skipped)`.
+
+### C.6 The message catalogue
+
+Every message the compiler prints. `<…>` are filled in; "at" says which
+line a location names (a key's own line when it is present, else the
+section's). Hex digits print lowercase in `#rrggbb` and uppercase after
+`0x`, as `0x%04X`: `#fe0000`, `0xF800`.
+
+**Pack errors** (exit 1; nothing is written):
+
+| Message | At |
+|---|---|
+| `<DIR>: error: no dancer.ini` | — |
+| `<DIR>: error: the folder name "<name>" can't be an id: use 1-23 of a-z, 0-9 and -, starting with a letter or digit` | — |
+| `dancer.ini: error: can't read it (<reason>)` | — (the operating system's reason) |
+| `dancer.ini:<line>: error: not UTF-8: save it as UTF-8` | the first bad byte |
+| `dancer.ini:<line>: error: duplicate section [<section>]` | the second |
+| `dancer.ini:<line>: error: duplicate key "<key>" in [<section>]` | the second |
+| `dancer.ini:<line>: error: "<text>" is outside any section` | it |
+| `dancer.ini:<line>: error: can't read "<text>": not key = value` | it |
+| `dancer.ini:<line>: error: a move needs a name: [move <name>]` | the section |
+| `dancer.ini:<line>: error: duplicate move "<name>"` | the second |
+| `dancer.ini:<line>: error: unknown section [<section>]: did you mean [dancer]?` | the section (a near miss, C.3) |
+| `dancer.ini:<line>: error: unknown section [<section>]: did you mean [move <name>]?` | the section (a near miss of `move` with no name) |
+| `dancer.ini:<line>: error: an indented line starting with # is a comment, not more colours: keep <key> on one line` | that line (`palette` or `idle_palette`) |
+| `dancer.ini: error: no [dancer] section` | — |
+| `dancer.ini:<line>: error: [dancer] needs <key> =` | `[dancer]` |
+| `dancer.ini:<line>: error: unknown key "<key>" in [dancer]: did you mean <known>?` | the key |
+| `dancer.ini:<line>: error: format <n> is newer than this dancepack.py knows (1): update dancepack.py` | `format` |
+| `dancer.ini:<line>: error: format must be 1` | `format` |
+| `dancer.ini:<line>: error: <key> is empty` | the key |
+| `dancer.ini:<line>: error: <key> is <n> bytes: at most <max>` | the key |
+| `dancer.ini:<line>: error: <key> has a control character` | the key |
+| `dancer.ini:<line>: error: sheet must be a path inside the dancer's folder`, then `: use / between folders` when the value holds a `\` | `sheet` |
+| `dancer.ini:<line>: error: sheet: "<name>" ends in a dot or a space, which Windows drops: rename it` | `sheet` |
+| `dancer.ini:<line>: error: no sheet at <sheet>`, then ` (the file is <path>: names are case-sensitive)` when the names differ from a file's only in case | `sheet` |
+| `dancer.ini:<line>: error: cell must be WxH, like 64x76` | `cell` |
+| `dancer.ini:<line>: error: scale must be 1, 2, 3 or 4` | `scale` |
+| `dancer.ini:<line>: error: cell <w>x<h> at scale <s> is <W>x<H> on screen: at most 160x160` | `cell` |
+| `dancer.ini:<line>: error: anchor must be x,y` | `anchor` |
+| `dancer.ini:<line>: error: anchor <x>,<y> is outside the <w>x<h> cell` | `anchor` |
+| `dancer.ini:<line>: error: anchor y <y> at scale <s> puts the cell's top <n> px above the ground: at most 153` | `anchor` |
+| `dancer.ini:<line>: error: the cell reaches <n> screen px below the ground: at most 10` | `anchor` |
+| `dancer.ini:<line>: error: shadow must be 0-160 (screen px)` | `shadow` |
+| `dancer.ini:<line>: error: faces must be none, right or left` | `faces` |
+| `dancer.ini:<line>: error: key must be #rrggbb` | `key` |
+| `dancer.ini:<line>: error: <key>: "<token>" isn't #rrggbb` | `palette` or `idle_palette` |
+| `dancer.ini:<line>: error: palette lists #<a> and #<b>, both RGB565 0x<hhhh>` | `palette` |
+| `dancer.ini:<line>: error: palette has <n> colours: at most 15` | `palette` |
+| `dancer.ini:<line>: error: idle_palette has <n> colour[s]; the palette has <m>` | `idle_palette` |
+| `<sheet>: error: can't read it (<reason>)` | — |
+| `<sheet>: error: not a PNG` | — |
+| `<sheet>: error: damaged PNG (<detail>)`: `bad CRC in <chunk>`, `truncated`, `no IHDR`, `no IDAT`, `no PLTE`, `bad PLTE` (its length isn't 1-256 entries of 3 bytes, or a pixel indexes past it), `bad IHDR`, `bad zlib data`, `bad filter <n>`, `unknown critical chunk <chunk>`, `<n> bytes of pixels, not <m>` (too few), `more than <m> bytes of pixels` (too many: C.4 stops inflating) | — |
+| `<sheet>: error: colour type <t> at <d> bits isn't valid PNG` | — |
+| `<sheet>: error: save without interlacing` | — |
+| `<sheet>: error: <w>x<h>: at most 1024x1024` | — |
+| `<sheet>: error: <w>x<h> isn't a whole number of <cw>x<ch> cells` | — |
+| `dancer.ini:<line>: error: rest <cell> isn't a cell of the <c>x<r> sheet` | `rest` |
+| `dancer.ini:<line>: error: the rest frame <cell> is empty` | `rest` |
+| `dancer.ini: error: <n> cells used: at most 256` | — |
+| `<sheet>: error: every cell is fully opaque: export with transparency, or set key = #<rrggbb> (the top-left pixel of <cell>)` | — (`<cell>` is the first used cell in sheet order) |
+| `<sheet>: error: <n> colours: at most 15. By pixel count: <list>` | — |
+| `<sheet>: error: colour #<rrggbb> (in <cells>) isn't in palette =` | — |
+| `error: <n> frames: at most 256` | — |
+| `error: <n> moves: at most 64` | — |
+| `error: <n> pose keys: at most 255` | — |
+| `error: the pack is <n> bytes: at most 131,072` | — |
+| `error: internal: the pack doesn't read back (<reason>): please report it` | — (the compiler's own pack fails A.15: a bug, never an exception) |
+| `dancer.ini:<line>: error: license "<licence>" isn't on the built-in allowlist: GPL-3.0-or-later, GPL-2.0-or-later, CC0-1.0, CC-BY-4.0, CC-BY-SA-4.0, MIT, Apache-2.0` | `license`; `--strict` only |
+| `error: --strict: <n> move[s] skipped` | `--strict` only |
+| `<FILE>: error: <reason>` | `info`: A.15's reasons, `no such file`, `a folder, not a .dnc pack` or `can't read it (<reason>)` |
+| `<FILE>: error: can't write it (<reason>)` | `build`'s or `builtin`'s output |
+
+`<list>` is the 15 most used colours by pixel count, most first (a tie
+in scan order), as `#<rrggbb> <n> px`, joined with `, `; a colour under
+16 px adds ` in <cells>`. Then `, and <k> more colour[s] of at most <m>
+px each, in <cells>` sums up the rest (no `each` when k is 1; `<m>` the
+largest of their counts, `<cells>` where they all sit), and the line
+ends ` (smoothing or anti-aliasing in the export adds colours: export at
+100 % with no smoothing)`. With this error no merge note prints.
+`<cells>` is at most 8 cell names, in sheet order, joined with `, `
+(then ` …` when there are more).
+
+**Move skips**, `dancer.ini:<line>: move "<name>": <message> (skipped)`.
+A move's checks run in this order and the first failure is its only
+line:
+
+| Message | At |
+|---|---|
+| `unknown section [<section>]: did you mean [move <name>]?` | the section (a near miss, C.3; printed as dancer.ini is read) |
+| `its name must be 1-23 of a-z, 0-9 and -, starting with a letter or digit` | the section |
+| `unknown key "<key>": did you mean <known>?` | the key |
+| `needs bpm = (a range like 90-130, any, or none)` | the section |
+| `bpm must be lo-hi, any or none` | `bpm` |
+| `<key> applies to beat moves only` | the key |
+| `<key> applies to no-BPM moves only` | the key |
+| `<key> needs travel =` (`travel_ease`, `start_at`, `go`, when `travel` is absent or reads 0) | the key |
+| `give row = or frames =` | the section |
+| `give row = or frames =, not both` | `row` |
+| `row <n> isn't a row of the <c>x<r> sheet` | `row` |
+| `row <n> is empty` | `row` |
+| `frames: "<token>" isn't a cell of the <c>x<r> sheet`, then `: separate cells with spaces` when the token holds a comma | `frames` |
+| `<n> frames: at most 32 steps` | `row` or `frames` |
+| `needs beats = 1, 2, 4 or 8` | the section |
+| `beats must be 1, 2, 4 or 8` | `beats` |
+| `a no-BPM move needs timing = (s or ms)` | the section |
+| `timing has <n> value[s] for <m> step[s]: give one per step` | `timing` |
+| `timing "<value>" has a number of more than 9 digits` | `timing` |
+| `timing "<value>" isn't a number of beats, like 1/4, 0.5 or 2` | `timing` |
+| `timing <value> is off the 1/12-beat grid by more than 1/48 beat` | `timing` |
+| `timing "<value>" needs s or ms, like 2s or 400ms` | `timing` |
+| `timing <value> isn't a whole number of 10 ms` | `timing` |
+| `<n> frames can't share <beats_text> evenly on the 1/12 grid: give timing =` | `row` or `frames` |
+| `step <i> lasts <t> ticks: at least 3 (1/4 beat)` | `timing`, else `row` or `frames` |
+| `steps last <t> ticks (<beats_text(t)>); a <b>-beat move needs <12·b>` | `timing` |
+| `step <i> lasts <ms> ms: 200-5,000 ms` | `timing` |
+| `the steps last <ms> ms in all: 500-12,000 ms` | `timing` |
+| `offset has <n> value[s] for <m> step[s]: give one per step` | `offset` |
+| `offset "<token>" isn't x,y` | `offset` |
+| `offset <x>,<y> moves <n> screen px: at most 48` | `offset` |
+| `ease "<word>" isn't hold, linear, in, out or inout` | `ease` or `travel_ease` |
+| `ease has <n> value[s] for <m> step[s]: give one, or one per step` | `ease` |
+| `<key> must be yes or no` | the key |
+| `place must be start or end` | `place` |
+| `weight must be 0.1-10 in steps of 0.1` | `weight` |
+| `<key> "<value>": pose keys are 1-23 of a-z, 0-9 and -` | `from` or `to` |
+| `<key> "<value>": its mirror twin "<twin>" is <n> bytes: at most 23` | `from` or `to` |
+| `repeat must be 0-8` | `repeat` |
+| `repeat <r> x <b> beats is <r·b> beats: at most 16` | `repeat` |
+| `freeze is already set on move "<first>"` | `freeze` |
+| `sway must be 0-16 (native px)` | `sway` |
+| `bounce must be 0-16 (native px)` | `bounce` |
+| `travel must be -2 to 2 (spots)` | `travel` |
+| `a travel move needs at least 2 beats` | `travel` |
+| `start_at must be any, centre, side, left or right`, then `: did you mean centre?` for `center` | `start_at` |
+| `go: "<token>" isn't a step (1-<m>) or a range of them` | `go` |
+| `empty genre tag` | `genre` |
+| `more than 8 genre tags (<n>)` | `genre` |
+| `genre tag "<tag>" is <n> bytes: at most 63` | `genre` |
+| `genre tag "<tag>" has a control character` | `genre` |
+| `genre tag "<tag>" folds to nothing: use letters or digits Full folding can spell` | `genre` |
+| `when must be quiet, listening or any` | `when` |
+| `song_bpm must be lo-hi, 1-255` | `song_bpm` |
+| `bpm <lo>-<hi>: each bound must be 36-200` | `bpm` |
+| `bpm <lo>-<hi>: lo is above hi` | `bpm` |
+| `range <lo>-<hi> can't be reached: the fastest pace is <b>` | `bpm` |
+| `range <lo>-<hi> can't be reached: the slowest pace is <a>` | `bpm` |
+| `can't travel from any spot: too wide there, or start_at rules every spot out` | `travel` |
+| `budget red: peak <p> px is over 20,000; set heavy = yes to keep it` | the section |
+
+**Warnings** (the build goes on):
+
+| Message | At |
+|---|---|
+| `dancer.ini:<line>: warning: unknown key "<key>" in [<section>] ignored`, then ` (did you mean <known>?)` for a weak match (C.3) | the key |
+| `dancer.ini:<line>: warning: unknown section [<section>] ignored` | the section |
+| `dancer.ini:<line>: warning: <key>: "<text>" is part of the value; a comment after a value starts with ;` | the key (`<text>` runs from the lone `#` to its line's end, C.3) |
+| `dancer.ini:<line>: warning: <key>: <n> character[s] the device fonts lack will show as a look-alike or "?": <U+XXXX, …>` | `name`, `author`, `license`, `url` or `version`; code points ascending, at least 4 hex digits |
+| `<sheet>: warning: <n> px with partial alpha in <cells>: alpha 128-254 counts as opaque, 1-127 as transparent` | — |
+| `<sheet>: warning: colour <i> #<rrggbb> is close to the background #080c10: it will vanish` | — |
+| `dancer.ini:<line>: warning: the rest frame <cell>'s feet end on row <r>, <d> native px above the ground row (anchor y <y>): <fix>` (or `below`) | `anchor`, else `[dancer]` |
+| `<sheet>: warning: the drawing in <cell> runs on into <next>: is cell = <w>x<h> right?` | — |
+| `dancer.ini:<line>: warning: idle colour <i> #<rrggbb> is close to the background #080c10: it will vanish while idle` | `idle_palette`, else `[dancer]` |
+| `dancer.ini:<line>: warning: palette colour #<rrggbb> isn't used` | `palette` |
+| `dancer.ini:<line>: warning: move "<name>": timing <value> snapped to <beats_text(n)>` | `timing` |
+| `dancer.ini:<line>: warning: move "<name>": beat <b> lands inside step <i> (<cell>): no step starts on it; fine for a hold, otherwise set timing = so one does` | `timing`, else the section |
+| `dancer.ini:<line>: warning: move "<name>": the first key is <x>,<y>, not 0,0: the dancer jumps when another move follows` | `offset` |
+| `dancer.ini:<line>: warning: move "<name>": the feet drift <d> native px across its standing frames` | the section |
+| `dancer.ini:<line>: warning: move "<name>": travels <left or right> while the art faces <right or left>` | `travel` |
+| `dancer.ini:<line>: warning: move "<name>": song_bpm needs track BPM data: skipped in this version` | `song_bpm` |
+| `dancer.ini:<line>: warning: move "<name>": budget red (peak <p> px), kept because heavy = yes` | `heavy` |
+| `<sheet>: warning: frame <cell>: standing, it reaches stage row <r>, under the toast (rows 0-35)` | — |
+| `<sheet>: warning: frame <cell>: <n> runs, over 300: slow to draw` | — |
+| `warning: no moves: only the engine's auto-bounce and auto-idle will play` | — |
+| `warning: no beat move at dance tempo <a>-<b>: auto-bounce plays there` | — |
+
+**Notes:**
+
+| Message | At |
+|---|---|
+| `<sheet>: note: #<later> merges with #<first> (both RGB565 0x<hhhh>)` | — |
+| `dancer.ini:<line>: note: move "<name>": step <i> (<cell>) is blank: the dancer disappears for <length>` | `row` or `frames` |
+| `dancer.ini:<line>: note: move "<name>": genre tags keep it dormant until tracks carry genres` | `genre` |
+
+**The triggers that need a definition:**
+
+- **The hit:** in a beat move, a step that starts before tick 12·(b − 1)
+  and ends after it, for b = 2..beats; `<i>` is that step's number from
+  1 and `<cell>` its cell as written.
+- **A blank step:** a step whose cell has no opaque pixel; `<length>` is
+  beats_text(its ticks) for a beat move and `<ms> ms` for an idle move.
+  A note, not a warning: blank frames can be deliberate (4.2).
+- **The first key** warning: a beat move whose first step's key isn't
+  0,0.
+- **The feet drift:** in a move without travel, for each standing step
+  (its cell's box bottom, y0 + h, equals anchorY, and its key's dy is
+  0: a step its key lifts isn't on the ground), take the leftmost and
+  rightmost opaque columns xa and xb of the box's bottom row in the
+  step's cell as drawn on the sheet, and c = xa + xb + 2·dx. When the
+  step's ease isn't `hold` and the next step's key (j = (i + 1) mod n)
+  has another dx and dy 0, the ease glides the same feet to that key by
+  the step's end, so xa + xb + 2·dx_j counts too. When max(c) − min(c) >
+  2 (more than 1 native px), d = (max(c) − min(c) + 1) // 2. So feet
+  drawn against an offset sway still drift: offsets move the whole
+  drawing (4.4).
+- **The rest frame's feet:** the rest cell's box bottom y0 + h isn't
+  anchorY. `<r>` = y0 + h − 1 and `<d>` = |anchorY − (y0 + h)|. `<fix>`
+  is `set anchor = <x>,<y0 + h> to stand it on the ground` (x the
+  anchor's) when that anchor obeys C.3's rules, else `draw it <d> native
+  px lower` (above) or `higher` (below).
+- **Runs on:** a used, non-blank cell runs on when, on some row, its
+  last column and the next cell's first column (the cell to its right on
+  the sheet) are both opaque. It warns when at least half of the used
+  non-blank cells run on, naming the first in sheet order: drawings cut
+  in two by a cell width that is too small.
+- **Faces:** `faces = right` with travel < 0, or `faces = left` with
+  travel > 0 (the unmirrored direction).
+- **Standing frame under the toast:** a standing frame whose top, 153 +
+  (y0 − anchorY)·scale, is below 36. `<cell>` is the frame's first cell
+  in A.14's order.
+- **Runs:** a frame's tokens (A.10) with a non-zero index.
+- **The font warning:** a code point outside `FONT_COVERAGE` (C.2).
+- The status line's light and the red skip come from B.6; `song_bpm`
+  moves keep their needs bit and are written (the device skips them), so
+  they aren't skips.
+
+### C.7 `--strict` and the allowlist
+
+- `--strict` (on `check` and `build`; always on for `builtin` and
+  `--check`) fails the build when any move is skipped, or when `license`
+  isn't on the allowlist, exactly (case-sensitive): GPL-3.0-or-later,
+  GPL-2.0-or-later, CC0-1.0, CC-BY-4.0, CC-BY-SA-4.0, MIT, Apache-2.0
+  (decision 14).
+- Warnings and notes never fail it. A `song_bpm` move isn't a skip (C.6),
+  and neither is a red move kept by `heavy`.
+- So a built-in can't hold a deliberately skipped move: the skips are
+  tested on throwaway dancers that test_dancepack.py writes to a
+  temporary folder, and the device-side drops on bytes test_dance_pack
+  patches into a copy of the fixture (with the size and CRC recomputed).
+
+### C.8 Generated files
+
+All are UTF-8 with LF line endings and end with a newline. Numbers are
+decimal, except hashes, written `0x%08Xu`, and pack bytes, written
+`0x%02X`, 16 a line. Each starts:
+
+```
+// SPDX-License-Identifier: <licence>
+// Copyright (C) <holder>
+// Generated by tools/dancepack.py from <source>. Do not edit:
+// change the source and run `python tools/dancepack.py builtin`.
+```
+
+For a pack, `<licence>` and `<holder>` are the pack's licence and author
+and `<source>` the dancer folder (`tools/art/dancers/test`). For the
+vector headers they are `GPL-3.0-or-later`, `2026 IrosTheBeggar`, and
+`its own tables` (Eligibility, Fold) or `tools/art/dancers/test`
+(Budget).
+
+**A pack as a header** (`.h`, the fixture), the symbols named `k<stem>`:
+
+```cpp
+#pragma once
+#include <cstddef>
+#include <cstdint>
+
+// (comments: the dancer, then each frame: its cells, its box and its
+// pixels as text, '.' for 0 and 1-9, a-f for the index)
+namespace dance {
+alignas(4) static const uint8_t kTestPack[<size>] = { … };
+static const size_t kTestPackSize = <size>;
+static const uint32_t kTestPackFrameHash[<frames>] = { … };  // A.16
+static const int kTestPackFrameCount = <frames>;
+}  // namespace dance
+```
+
+**A pack as a `.cpp`** (StickPack.cpp, step 7): the same comments, then
+in `namespace dance` the `extern const` declarations of the four symbols
+followed by their definitions (`alignas(4) const uint8_t kStickPack[…]`),
+so they have external linkage without a header.
+
+**The vector headers** (`#pragma once`, `<cstdint>`, `namespace
+dancevec`), each array with a `static const int k…Count`:
+
+```cpp
+// EligibilityVectors.h: B.7's eligible_k and pace_holds on grids
+constexpr int8_t kNoK = 127;  // prevK: no previous ranged move; k: not eligible
+struct Eligibility { uint16_t t10; uint8_t lo, hi; int8_t prevK; uint8_t beats; int8_t travel; int8_t k; };
+static const Eligibility kEligibility[] = { … };
+struct PaceHolds { uint16_t t10; int8_t k; uint8_t lo, hi; uint8_t holds; };  // holds: 1 or 0
+static const PaceHolds kPaceHolds[] = { … };
+
+// FoldVectors.h: B.8's fold_genre and key
+struct Fold { const char* tag; const char* key; uint32_t hash; };  // key "" and hash 0: folds to nothing
+static const Fold kFold[] = { … };
+
+// BudgetVectors.h: B.6 on every move of kTestPack (move = its MOVS index)
+struct BudgetCase { uint8_t move, fps, pace, mirrored; int8_t spot; uint16_t frames; uint32_t median, peak; };
+static const BudgetCase kBudgetCases[] = { … };   // every case, in B.6's order
+struct MoveBudget { uint8_t move; uint32_t median, peak; uint8_t light; };  // 0 green, 1 amber, 2 red
+static const MoveBudget kMoveBudgets[] = { … };
+struct TraceCase { uint8_t move, fps, pace, mirrored; int8_t spot; uint16_t first, count; };
+static const TraceCase kTraceCases[] = { … };     // one per move
+struct TraceFrame { uint16_t n; uint32_t pos16; uint16_t frame;  // bit 15: drawn mirrored
+                    int16_t rootX, rootY, x0, y0, x1, y1;        // the character rect; 0s when empty
+                    uint32_t dirty; };                           // 0 for n = 0
+static const TraceFrame kTrace[] = { … };         // frames 0..N of each trace case
+```
+
+- **The eligibility grid**, in nested order: T10 in 720, 800, 870, 880,
+  900, 901, 957, 1200, 1600, 1740, 1760; (lo, hi) in (0, 0), (36, 60),
+  (36, 200), (60, 100), (88, 88), (90, 130), (100, 160), (110, 180),
+  (144, 180), (150, 200), (170, 180), (177, 200); prevK in none, −1, 0,
+  +1; beats in 1, 2, 4, 8; travel in 0, 1 (1 only with 2 beats or more,
+  as a travel move has). 3,696 cases.
+- **The pace-holds grid**, in nested order: T10 in 720, 800, 870, 880,
+  900, 901, 957, 969, 970, 1030, 1031, 1200, 1600, 1740, 1760; k in −1, 0,
+  +1; (lo, hi) in the eligibility grid's ranges, then (100, 100). 585
+  cases.
+- **The fold cases** are B.8's table, one row per tag, in its order (31
+  tags; the last three are `日本`, two spaces and the empty string). A
+  tag's bytes of 0x80 and above are written as three-digit octal escapes
+  (`\303\211`), `"` and `\` are escaped, and every other byte is written
+  as itself.
+- **The trace case** of a move is its first case (B.6's order) at 30 fps
+  and pace (rlo + rhi) // 2, or at 30 fps for an idle move.
+- Each count is the array's name plus `Count`: `kEligibilityCount`,
+  `kPaceHoldsCount`, `kFoldCount`, `kBudgetCasesCount`,
+  `kMoveBudgetsCount`, `kTraceCasesCount` and `kTraceCount`. A
+  BudgetCase's `frames` is B.6's N, the number of dirty values. "Every
+  move" is every MOVS record, so `future`, which a v1 reader drops for
+  its needs bit, has its cases and trace too.
+
+### C.9 The Python API
+
+test_dancepack.py imports dancepack and calls these directly. Names and
+argument orders are fixed; the record types are `collections.namedtuple`.
+
+```python
+class DanceError(ValueError)   # args[0]: a C.6 message, without location or "(skipped)",
+                               # or an A.15 reason (read_pack)
+
+Geom(scale, faces, cell_w, cell_h, anchor_x, anchor_y, shadow_w, frame_count, rest_frame)
+Box(x0, y0, w, h)
+Step(frame, mirrored, dur, dx, dy, ease, go)          # mirrored, go: bool; ease: 0-4
+Move(name, kind, beats, pace_lo, pace_hi, weight10, when, flags, repeat, needs,
+     travel, start_at, travel_ease, bounce, sway, from_key, to_key, from_key_m,
+     to_key_m, genres, song_lo, song_hi, steps)       # keys: str or None; genres, steps: tuples
+Pack(size, crc, id, name, author, licence, url, version, declared_moves, geom,
+     palette, idle_palette, thumb, boxes, grids, pose_keys, moves, ignored)
+     # palettes: 16 (r, g, b) each; thumb: 800 bytes; grids: per frame, cell_h rows of
+     # cell_w-byte bytes; ignored: tuple of (move index, A.15 reason)
+     # moves holds every MOVS record, decoded as far as it goes (a bad
+     # name is None, steps past STEP's end are ()), so a move index indexes moves and
+     # the dropped ones are those ignored names
+Pose(frame, mirrored, root_x, root_y, box, shadow, rect)   # rects (x0, y0, x1, y1) or None
+Case(fps, pace, mirrored, spot, frames, median, peak)
+Budget(cases, median, peak, light)                     # light: "green", "amber" or "red"
+Result(ok, data, pack, messages, report, skipped, budgets)
+     # data: the pack's bytes or None; messages: the diagnostic lines of C.5 in order
+     # (no echo tables, no coverage report); report: every line check prints;
+     # skipped: names; budgets: {name: Budget} for the kept moves
+
+FORMAT, MIN_READER, MAX_PACK          # 1, 1, 131072
+STAGE_W, STAGE_H, GROUND_Y, SPOTS     # 320, 164, 153, (64, 160, 256)
+EASES                                 # ("hold", "linear", "in", "out", "inout")
+LICENCE_ALLOWLIST, TEXTFOLD, FONT_COVERAGE, BUILTINS, ROOT
+
+fnv1a32(data) -> int                  crc32(data) -> int
+rgb565(r, g, b) -> int                idle_colour((r, g, b)) -> (r, g, b)
+near_background((r, g, b)) -> bool
+textfold_full(text) -> str            fold_genre(tag) -> str
+genre_key(tag) -> int or None         pose_twin(key) -> str
+parse_beat_time(text) -> (ticks, snapped)          # raises DanceError
+parse_idle_time(text) -> units                     # 10 ms units; raises DanceError
+even_split(frames, beats) -> [ticks, ...]          # raises DanceError
+beats_text(ticks) -> str
+ease_q16(ease, f) -> int              hop_q16(phi) -> int
+sway_q16(beat, phi) -> int
+eligible_k(t10, lo, hi, prev_k, beats, travel=0) -> int or None   # prev_k: -1, 0, 1 or None
+pace_holds(t10, k, lo, hi) -> bool
+reach(lo, hi, beats, travel=0) -> (rlo, rhi) or None
+frame_at(geom, boxes, move, pos16, mirrored, spot, e16=65536) -> Pose   # pos16 < 0: ValueError
+dirty_px(prev_rect, rect) -> int      # prev_rect None: area(rect)
+extent(geom, boxes, move, mirrored) -> (lo, hi) or None
+fits(geom, boxes, move, mirrored, spot) -> bool
+start_spots(geom, boxes, move, mirrored) -> [spot, ...]
+budget(geom, boxes, move) -> Budget
+trace(geom, boxes, move, fps, pace, mirrored, spot) -> [(n, pos16, Pose, dirty or None), ...]
+encode_frame(grid, box) -> bytes      # A.10's canonical rows
+thumbnail(grid, box) -> bytes         # A.8, 800 bytes
+frame_hash(grid) -> int               # A.16
+read_png(data) -> (width, height, rows)   # rows[y][x] = (r, g, b, a), 8-bit (C.4); raises DanceError
+compile_dir(path, strict=False) -> Result
+read_pack(data, check_crc=True) -> Pack   # A.15 as for a card pack (budget included);
+                                          # raises DanceError(reason)
+parse_textfold_cpp(text) -> {code point: replacement}
+parse_vlw_coverage(text) -> [(first, last), ...]
+generated_files() -> [(path, text), ...]  # every registry output and vector header
+main(argv=None) -> int                # the command line; usage errors raise SystemExit(2)
+```
+
+`spot` is −1, 0 or +1, `mirrored` a bool, `pos16` and `e16` as in B.4,
+and `grid` a cell grid as in Pack.grids. `budget`, `trace` and
+`frame_at` read only the fields B.4-B.6 use, so a test can build the
+records by hand. Printed lines escape control characters (C.5); a
+DanceError's message doesn't.
+
+### C.10 The test dancer
+
+`tools/art/dancers/test/` (id `test`) uses every manifest key, and its
+pack becomes `test/support/dance/TestPack.h`. It compiles under
+`--strict` with no skipped move. The art is free; the geometry, the
+cells' roles and the moves are fixed, so tests can name them.
+
+**`[dancer]`:** `name = Tëst` (non-ASCII, inside the fonts' coverage),
+`author = IrosTheBeggar`, `license = GPL-3.0-or-later`, `url` and
+`version` set, `sheet = sheet.png`, `cell = 24x32`, `scale = 4`, `anchor
+= 12,30`, `rest = A1`, `shadow = 35` (odd, so B.5's sw // 2 rounds), `format = 1`, `key = #ff00ff`,
+`palette` (4 colours) and `idle_palette` (4) given, `faces = right`, and
+an `x-note` key.
+
+**`sheet.png`:** colour type 2 (RGB, 8-bit, no alpha), magenta #ff00ff
+wherever transparent, 4 columns by 11 rows of cells (96×352).
+
+| Cells | Role |
+|---|---|
+| A1, B1, C1, D1 | stand (the rest), squash, a pixel copy of A1, air |
+| A2, B2 | a lean, and its exact mirror image drawn |
+| A3-C3 | the point |
+| A4, B4, C4 | a blank B4 between two drawn cells |
+| A5-C5 | the fast steps |
+| A6-D6 | the walk, drawn in place |
+| A7, B7 | the nod |
+| A8 | the whole cell filled: the heavy block |
+| A9, B9 | sway, drawn in place: A9 is a pixel copy of A1, B9 A1 with a mark on the head |
+| A10-C10 | breathe |
+| A11, B11 | look |
+
+**The moves**, in this manifest (and MOVS) order:
+
+| Move | Keys | What it exercises |
+|---|---|---|
+| `bounce` | `row = 1`, `beats = 2`, `bpm = any`, `bounce = 3`, `freeze = yes` | row, the even split, bounce, freeze, a duplicate cell |
+| `pulse` | `frames = A1 B1 D1 B1`, `beats = 1`, `bpm = any`, `timing = 1/4 0.25 1/4 0.26`, `offset = 0,0 0,-1 0,-2 0,-1`, `ease = out`, `snap = yes`, `sway = 1` | fractions, decimals, a snap warning, one ease for all, snap, a 1-beat sway (B.3's b since the run started) |
+| `step-touch` | `frames = A2 B2 A2 B2`, `beats = 2`, `bpm = any`, `mirror = yes`, `sway = 2`, `from = stand`, `to = stand`, `offset = 0,0 -1,0 0,0 1,0`, `ease = linear out in hold` | a mirror-image cell, sway, an ease list |
+| `point` | `frames = A3 B3 C3 B3`, `beats = 4`, `timing = 1/2 1/2 1 2`, `offset = 0,0 2,-2 4,-3 2,-2`, `ease = inout`, `bpm = 90-130`, `mirror = yes`, `place = start`, `weight = 0.3`, `repeat = 2`, `from = stand`, `to = left` | section 4.5's example; a pose key with a twin |
+| `slow` | `row = 4`, `beats = 4`, `bpm = 36-60`, `weight = 2.5` | a blank frame, half time only |
+| `fast` | `frames = A5 B5 C5`, `beats = 1`, `timing = 1/4 1/2 1/4`, `bpm = 150-180`, `place = end`, `from = low`, `to = stand` | double time, place end |
+| `walk` | `row = 6`, `beats = 4`, `bpm = 90-140`, `mirror = yes`, `travel = 1`, `travel_ease = linear`, `start_at = side`, `go = 2-3` | travel: from −1, mirrored from +1 |
+| `nod` | `frames = A7 B7 A7`, `beats = 1`, `timing = 1/3 1/3 1/3`, `bpm = 70-100`, `genre = hip hop, R&B, drum n bass` | triplets, genre tags |
+| `future` | `frames = A1 B1`, `beats = 2`, `bpm = any`, `song_bpm = 160-180` | the needs bit, kept |
+| `big` | `frames = A8 A8`, `beats = 2`, `bpm = 100-160`, `offset = -4,0 4,0` | an amber light |
+| `heavy` | `frames = A8 A8`, `beats = 2`, `bpm = any`, `offset = -12,0 12,0`, `heavy = yes` | a red light, kept |
+| `sway` | `frames = A9 B9`, `bpm = none`, `timing = 2s 2s`, `offset = -2,0 2,0`, `ease = inout`, `when = any` | an idle with offsets and an ease; its feet slide (the drift warning) |
+| `breathe` | `frames = A10 B10 C10`, `bpm = none`, `timing = 1.1s 1.1s 1.1s`, `when = quiet` | a quiet idle whose 3.3 s play ends exactly on a 30 fps frame (B.6's N) |
+| `look` | `frames = A11 B11 A11`, `bpm = none`, `timing = 500ms 1s 1.5s`, `when = listening`, `mirror = yes` | a listening idle, ms, a mirrored idle |
+
+- **Lights:** `big` amber and `heavy` red (both A8 moved 4 or 12 native
+  px either side: 128×128 and 192×128 screen px at the switch); every
+  other move green. The art is drawn to keep it so.
+- **Pose keys:** stand, left, right (the twin), low: P = 4.
+- So the fixture holds: identical cells (C1 = A1, and A1 reused), a
+  mirror-image cell (B2), the blank frame (B4), every ease, each `when`,
+  travel with `go` and `start_at`, three genre tags, a needs bit, a heavy
+  red move, an odd shadow, a 1-beat sway, an idle play ending on a frame,
+  and the expected warnings and notes: the snap, `song_bpm`, the kept red
+  move, the dormant genre note, the first key of `big` and `heavy`, the
+  hits (`point`'s beat 4 inside step 4, B3; `slow`'s beats 2, 3 and 4
+  inside steps 1-3, A4, B4 and C4: they follow from the fixed timings, a
+  2-beat last step and three 16-tick steps), `slow`'s blank step 2 (B4),
+  and `sway`'s feet drift (4 native px: its offsets slide feet drawn in
+  place).
+- The art keeps every other warning away: standing frames leave row 0
+  empty, the rest frame stands on the ground row, art is drawn in place
+  (except `point`'s B3 and C3, whose feet are drawn against their
+  offsets; the drift rule ignores them anyway, as their keys lift
+  them), and the lean (A2) is drawn 1 px off the ground, since as a
+  standing frame step-touch's ±1 offsets and glides on its mirror image
+  would drift the feet 2 px. A7 and A9 are pixel copies of A1. The
+  compiled fixture: 14 moves, 25 frames, 5,380 bytes, with only B2 stored
+  as a mirrored reference.
+
+### C.11 test_dancepack.py, and CI
+
+**The suite** writes only to temporary folders (`tempfile`), builds its
+throwaway sheets with its own small PNG encoder (zlib and struct), and
+covers at least:
+
+- every message of C.6, each with its line, including the doc's own
+  quotes (`did you mean bpm?`, `5 frames can't share 1 beat evenly on the
+  1/12 grid: give timing =`, `range 185-200 can't be reached: the
+  fastest pace is 180`, `every cell is fully opaque: export with
+  transparency, or set key = #ff00ff (the top-left pixel of A1)`,
+  `song_bpm needs track BPM data: skipped in this version`, `save without
+  interlacing`, `update dancepack.py`);
+- the PNG forms of C.4 (every colour type and bit depth, tRNS, `key`,
+  16-bit, interlacing, damage), and the INI rules (`license = X ;
+  comment` reads as X; `palette = #ff0000 #00ff00` reads both; duplicate
+  keys; a BOM and CRLF; `x-` keys);
+- A.17's 1,156 bytes exactly, and a round trip through `read_pack`;
+- A.15's rejections and drops on patched copies, with their exact
+  reasons, including the bounds a 32-bit reader could get wrong (a
+  directory off past the total size; an FTAB off near 2^32; string
+  offsets at and far past STRS's end), a token-less row whose skip is
+  past w, the MOVS head's order, a travel move whose only start spot is
+  in an orientation it doesn't play (on the test dancer's pack), and the
+  accepted token sequences and reserved bytes; step 2's test_dance_pack
+  takes the same list, through 10.3's bounds-asserting accessor;
+- every worked example of Appendix B;
+- determinism: two builds equal; the same dancer from another path, with
+  CRLF line endings, or with its PNG re-encoded in another colour type,
+  gives the same bytes;
+- `--strict` (a skip, a licence), the exit codes 0, 1 and 2 through
+  `main(argv)`, and `--check` passing on the repository (which also
+  checks TEXTFOLD and FONT_COVERAGE);
+- the test dancer: compiled under `--strict`, its moves, lights and pose
+  keys as in C.10.
+
+**CI** (`.github/workflows/firmware.yml`), three steps right after
+`actions/setup-python`, before PlatformIO is installed:
+
+```yaml
+      - name: Crab art up to date
+        run: python tools/crab_art.py --check
+      - name: Dance packs up to date
+        run: python tools/dancepack.py --check
+      - name: Dance pack compiler tests
+        run: python -m unittest discover -s tools -p "test_dancepack.py"
+```
+
+Step 1 is accepted when the suite passes on Python 3.10 (the laptop's
+3.10.7) and 3.12 (CI), and `--check` passes in CI on the files generated
+on Windows.

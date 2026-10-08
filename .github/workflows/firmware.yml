@@ -76,6 +76,17 @@ jobs:
         with:
           python-version: "3.12"
 
+      # Generated sources and the dance pack compiler: integer-deterministic,
+      # standard library only, so they need no pip install. --check fails
+      # when a checked-in file differs from what its generator writes
+      # (docs/DANCE-SPRITES.md, Appendix C.11).
+      - name: Crab art up to date
+        run: python tools/crab_art.py --check
+      - name: Dance packs up to date
+        run: python tools/dancepack.py --check
+      - name: Dance pack compiler tests
+        run: python -m unittest discover -s tools -p "test_dancepack.py"
+
       - name: Install PlatformIO
         run: python -m pip install "platformio==${PLATFORMIO_VERSION}"
 
