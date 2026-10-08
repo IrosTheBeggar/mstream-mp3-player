@@ -42,7 +42,12 @@ and `TagRules`, checked field for field against a reference reader
 corpus of 2.17 item 3 (`test/fixtures/tags`, made by
 `tools/tag_corpus.py`), its picture anchors read back, its read budget
 and its fuzz passes host-tested (3.3.8 says what it decided); core2
-builds with it, and N7 and N10 will call it. Part 2, the card
+builds with it, and N7 and N10 will call it. N9, the names on screen, is
+in `lib/core/TrackCatalog`, `LibraryText` and `UiText`, the Library's and
+Now Playing's pages, `SleepTimer`'s `kLoose` and the console's `g`
+commands (`TagText`, `app/TagConsole`), host-tested (`test_ui_library`,
+`test_sleep_timer`) and built, not flashed; with no records on the card
+it names everything as before (3.7 says what it decided). Part 2, the card
 contract, is a **PROPOSAL (v1)** for the transfer software, whose own
 design is still being worked on in mstream-terminal; it is written so
 that side can implement it without reading the player's code, and every
@@ -3177,16 +3182,128 @@ one 300 B row (about 3 ms).
 | New `lib/core/CardContract` (with `CardContainer`, `CardTags`, `CardManifest`, `CardAutoDj`; built in N1) | The contract kit: CRC-32, FNV-1a 64, qfp, FAT time and the skew rule; MSMF, MPTG, MPDJ and MSPD readers and writers (the device writes only MPTG; the writers serve the host tests and the future sync agent); the root election; `device.txt`; the canonical order; 2.4.3's structural checks. Its golden files are 2.17's, its vectors 2.18's. |
 | New `lib/core` modules | `TagStore` (D, `tags.jnl`, `walk.jnl`, the streaming compaction, recovery, the cut-rename rule of 2.12.6); `CardWalk` (an `IDirLister`, the canonical sort with its passes, the digests, T's freshness, the skew, the merge); `SectorCache`; `TagScan` (the production port of the prototype, with part 5's rules); `ScanScheduler`; `LibraryBuilder` (the merge into `LibraryIndex`, part 5's votes, the streamed checks); `LibraryUpdate` (the boot decision and the update step as a state machine: N12). |
 | `lib/core/LibraryIndex.{h,cpp}` | v6 records and the header's inputs; `begin(const Sizing&)` with exact counts; `addRecord(path, const TagView&)` next to `addFile()`; Stage A's votes and orders in `buildViews()` (a missing number sorts last, an artist's albums newest first); `readNames()` fills only the fields a record lacks; `kLoose` and the transfer-thumbnail flag; library roots (LIBR), if the vpath layout is chosen. `Load::Stale` no longer happens at boot. |
-| `lib/core/TrackCatalog.{h,cpp}` | `title()` the tag's own string or the slice; `artist()` the track artist, else the album's line, else the folder artist; `album()` the display name; `durationHintMs()` the library's length; a one-slot overlay for the playing track's fresh tags (3.3.3). |
+| `lib/core/TrackCatalog.{h,cpp}` | `title()` the tag's own string or the slice; `artist()` the track artist, else the album's line, else the folder artist; `album()` the display name; `durationHintMs()` the library's length; a one-slot overlay for the playing track's fresh tags (3.3.3). Built (N9, 3.7), with `albumArtist()` and `year()`; new `lib/core/LibraryText` holds the rows' texts. |
 | `src/app/Library.{h,cpp}` | The boot decision (3.2.2) replaces `begin()`'s walk, `library.tmp` recovery and the build-at-boot marker included; `rebuild()` becomes the update step, driven by `LibraryUpdate`, its build a card-worker job; the save moves to the card worker; `report()` gains the scan state. |
 | `src/app/QueueStore.cpp`, `lib/core/QueueModel` | `remap()` through `queue.txt` (flush, free, rebuild, re-read); the reads pre-size their sinks; `QueueModel::release()` and an exact-size trim. Built (N3). Then the cap of 5,000 entries (`kMaxEntries`, `room()`, `window()`; `queuetext::read()`'s window; the UI's toasts): built, QUEUE-MODES.md section 15. |
 | `src/storage/LocalStorage.cpp` | A FatFs lister (`FILINFO`'s size and time); the sector-cache wrapper after `SD.begin()`; `forEachFile` stays for LittleFS and the console. |
 | `src/ui/Thumbs.{h,cpp}` | The worker becomes the shared card worker (walk, scan and cover jobs); cover sources in 2.14.3's order, `/.mstream/thumbs` read-only (and `hasCover()` true for an album with the transfer-thumbnail flag); streamed JPEG input. |
-| `src/ui/LibraryPage.cpp`, `NowPlayingPage.cpp` | Direct `trackTitle()` reads move to the catalog; rows show a year subtitle, disc dividers and a track-artist subtitle; the status line. Go to artist and album keep the folder entities. |
-| `lib/core/SleepTimer.cpp` | End of album tests `kLoose`, not an empty album name. |
+| `src/ui/LibraryPage.cpp`, `NowPlayingPage.cpp` | Direct `trackTitle()` reads move to the catalog; rows show a year subtitle, disc dividers and a track-artist subtitle; the status line. Go to artist and album keep the folder entities. Built (N9, 3.7), but the status line: its texts are (`librarytext::statusText()`), its drawing comes with the scan's state (N10, N12). |
+| `lib/core/SleepTimer.cpp` | End of album tests `kLoose`, not an empty album name. Built (N9). |
+| `src/spike/Spike.cpp`, new `src/app/TagConsole`, new `lib/core/TagText` | The console's `g` commands (3.3.6). Built (N9, 3.7); the card worker's jobs (`gr`, `gw`, `gb`, `gv`) are hooks its glue fills (N10, N12). |
 | `lib/core/IdlePolicy.{h,cpp}`, `src/main.cpp` | The `LibraryWrite` blocker; the journal flush at shutdown; the boot and `rebuildLibrary()`. |
 | `lib/core/NvsLayout.h` | **No change** (`kCurrent` stays 2): the library's state lives on the card and moves with it. AutoDJ's on/off would be schema 3 (autodj research section 7), outside this plan. |
 | `lib/core/OpusOpenCache` | **Unchanged:** keyed by path hash and size and checked at the open, so rebuilds don't touch it. |
+
+### 3.7 As built (N9): the catalog, the UI and the texts
+
+What the screens say comes from N2's index through `TrackCatalog` (a
+track id) and `lib/core/LibraryText` (an artist, an album, a row), both
+host-tested in `test_ui_library`; the firmware builds them and nothing is
+flashed. Until N12 builds the index from records, the firmware's index is
+the walk's (paths alone) and every name reads as before. What the code
+decided where 3.6 and 5.4 left room:
+
+- **An album's artist line** (`librarytext::albumArtist()`): the line its
+  records elected when it has any (`kTagged`), else its artist's name. An
+  album with no record keeps the artist folder's name as its stored line,
+  while the artist itself may show the spelling its other albums' tags
+  elected (the folder "Lantern Choir" shown "The Lantern Choir"): so an
+  untagged album says what its artist row says. `TrackCatalog::artist()` is the
+  track's own display, else that line; `albumArtist()` and `year()` are
+  new; `durationHintMs()` gives the record's length in whole seconds (the
+  index keeps no more), which PlaybackController hands the backend and
+  the bar until the open measures it. A path-only track's hint stays 0,
+  as before.
+- **The overlay** (3.3.3) is `TrackCatalog::Overlay`, about 800 bytes its
+  owner holds in PSRAM: one track's title, artist display (the list
+  joined by 5.4's rule), album, year and length from a record as the
+  builder reads it (`LibraryBuilder::viewOf()`), each cut to 255 bytes. A
+  field the record lacks stays the index's. It is keyed by the track id
+  *and* the index's `buildStamp()`, so a rebuild that renumbers the tracks
+  ignores it without anyone clearing it; an artist folder's loose tracks
+  keep no album and no year whatever it says (the next build would show
+  them so). `namesVersion()` changes with every set and clear, and Now
+  Playing draws its names again when it does. Nothing sets it yet: the
+  scan's glue (N10) will, for the playing track.
+- **The rows** (`LibraryPage`, its texts in `librarytext`): an artist,
+  "3 albums, 41 tracks" ("1 album, 1 track": the counts are singular when
+  they are 1 now); the root's Albums, the album's line and year
+  ("The Lantern Choir · 2001"); an artist's albums, newest first (N2's
+  view), "2001 · 14 tracks"; an album's header, "Artist · 2001 · 14
+  tracks"; a track, its title through the catalog (the overlay's for the
+  playing track) and, under it, its own artist where it differs from the
+  album's line (the builder stores none where it is the same), with its
+  album after it on an artist's All tracks ("Guest · Album"). A cut text
+  never ends mid-character. The A-Z rail, a row's letter and the jump
+  grid key on `librarytext::railName()`, the sort key's sort name, which
+  matches the index's buckets row for row on the tagged synthetic library
+  (a test). The Folders view stays raw.
+- **Disc dividers** (`librarytext::Discs`, the Album page's rows): an
+  album whose highest disc is over 1 gets a "Disc N" row (Bold, the
+  Library's accent, a hairline under it) before each disc's first track,
+  "Disc 1" included; a divider is no control (no bar, no sheet, never
+  tinted), and a track's number falls back to its place in the album, not
+  its row. With records the tracks sort by disc first, so each disc is one
+  run. A path-only album whose names give discs ("1-01", "2-01") gets them
+  too: a visible change of this firmware on today's cards. One that sorts
+  folder by folder with its discs interleaved (each subfolder a disc 1 and
+  a disc 2) has a divider at each change, up to 64; past that, none at
+  all. The page reads the album once when it opens (64 starts, about 400
+  bytes in the page).
+- **Now Playing**: the artist row is the catalog's (the track's), and
+  "Unknown artist" (`uitext::kUnknownArtist`) when neither a tag nor a
+  folder names one: the placeholder reworded, since a tagged track at the
+  top of /music has a name now. The album row adds the year,
+  "Album · 2001", when the whole fits its 190 px, else shows the album
+  alone. The navigation menu's details name what Go to opens, the folder
+  entities (the artist's and the album's shown names), no longer the
+  catalog's, which are the track's own now.
+- **The texts** (`UiText`, each width-tested with the firmware's fonts):
+  the no-music state ("Put your albums in /music/Artist/Album/ (MP3, FLAC
+  or Opus), then tap Try again.") and the no-card lines drop the file-name
+  pattern ("01 - Title.mp3": tags name the tracks, and a name only where
+  a file has none) and keep the folders, which still make the artists and
+  the albums in Stage A; "Unknown artist"; "Disc %u"; and 3.3.6's status
+  line and toasts ("Checking the card…", "Reading tags 1,234 / 19,410",
+  "Updating library…", "The last transfer didn't finish", "Found 12 new
+  tracks", "Library updated", "Library updates at next boot") with
+  `librarytext::statusText()` and `foundText()`. The status line isn't
+  drawn yet: nothing has a scan state to show until N10 and N12, which
+  draw it across the list's width (304 px, Small, the room the test
+  checks) and fire the toasts. The Output tab's Library row and its
+  Rescan tags button (3.3.6) wait for the same.
+- **SleepTimer**: End of album tests the album's `kLoose` flag, not its
+  name: two album folders that share a tag name are two albums, one
+  folder whose tracks disagree is one, and an artist folder's tagged
+  loose tracks are still no album (`test_sleep_timer`).
+- **The console** (3.3.6; `tagtext::parse()` for the argument,
+  `app/TagConsole` on the loop task, about 30 KB of PSRAM while a command
+  runs): `g` adds a line on where the names came from ("19,410 tracks:
+  19,000 from the transfer's records, 400 from the device's, 10 by their
+  paths (10 for the scan)") and the scan's state; `gs` reads D (its
+  header, DHDR, its rows by status through DSTA), the journals' sizes, the
+  root election and T's header (and whether it is the companion the root
+  names), and `pending.bin`; `gt</music/...>` reads the file with TagScan
+  now (its result, reads, bytes and time), D's and T's records of it, each
+  file checked whole first (`mptg::check()`, seconds at 20k), the record a
+  build would take (`LibraryBuilder::choose()` with D's row as the
+  listing, DHDR's skew, and T counted as listing when D's walk wasn't at
+  the root's commit), and the index's names for it. The file's FAT time is
+  its `getLastWrite()` turned back by `gmtime()` (the VFS made it with
+  `mktime()` and no time zone, which the firmware never sets).
+  `gr`, `gr!`, `gw`, `gb` and `gv` are the card worker's jobs:
+  `TagConsole::Jobs` hooks (and a `state` hook for the scan's line) that
+  N10 and N12 fill through `Spike::tags()`; until then each says there is
+  no worker and changes nothing. `g?` (anything else) lists them.
+- **Proven on the host:** the rows and headers of a tagged library and of
+  a path-only one (`test_library_rows_from_tags`, `_from_paths`), the
+  dividers (`test_disc_dividers`), the catalog and its overlay
+  (`test_catalog_names_and_overlay`), the rail on sort keys
+  (`test_rail_follows_the_sort_keys`, 3,000 tagged synthetic tracks), the
+  texts' widths (`test_library_texts_fit`), the console's parse, dumps
+  (crafted and the corpus's `flac_full.flac` through TagScan) and sources
+  (`test_console_*`), and End of album with tags
+  (`test_album_ends_between_with_tags`).
 
 ---
 
@@ -3479,7 +3596,7 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 | N6 | **Built.** **`TagScan`, the production port** with part 5's rules; the synthetic parity corpus (2.17, item 3) | 3-4 | `test_tag_scan`: the corpus and the crafted edge files (`test/fixtures/tags`, `tools/tag_corpus.py`) field for field against the lofty reference (`tools/tagref`) at every buffer size; the anchors read back; generated files past the corpus's sizes and the read budget; truncation, mutation and generated fuzz passes (ASan only where a Linux toolchain is: a review ran one); a random differential against the reference (3.3.8) |
 | N7 | **Built.** **`ScanScheduler`** and the `LibraryWrite` blocker | 1-1.5 | Like `test_idle_policy` (3.3.9) |
 | N8 | **Built.** **`SectorCache`.** Optional: a host FatFs model (vendored FatFs on a RAM disk) counting sector reads per walk and per open on a 20k tree of the user's shape (part 7, U14: vendoring is a download; the user said yes). Both built (3.2.7) | 1 (+1) | LRU, bypass, write invalidation, a random model check (`test_sector_cache`); the model (`test_fat_model`, `tools/fatmodel.py`) checks metascan's 56 sectors per open before L0: 58.0 on N11's card, 3.5 with the cache's 256 sectors |
-| N9 | **The catalog, the UI and the texts**: `TrackCatalog`, `LibraryPage` rows, `UiText`, `SleepTimer`'s `kLoose`, the console's `g*` commands | 1.5-2 | `test_ui_library`, `test_sleep_timer` |
+| N9 | **Built.** **The catalog, the UI and the texts**: `TrackCatalog`, `LibraryPage` rows, `UiText`, `SleepTimer`'s `kLoose`, the console's `g*` commands (3.7) | 1.5-2 | `test_ui_library`, `test_sleep_timer` |
 | N10 | **Firmware glue, built and not flashed**: the FatFs lister, the diskio wrapper, the card worker, streamed JPEG input, transfer thumbnails, `device.txt` | 2-3 | `pio run -e core2` and `cache_guard` |
 | N11 | **A synthetic big card** (`tools/`): about 20k tiny tagged MP3, FLAC and Opus stubs in the user's shape, with no real names, for L0 without the real library (the user writes it to a card) | 0.5-1 | Its own tag dump through N6 |
 | N12 | **`LibraryUpdate`**, the boot decision and the update step as a portable state machine (3.2.2, 3.4.2): the decision table with `library.tmp` recovery and the build-at-boot marker, the safe point, the memory check and deferral, the build as a card-worker job with the scan and compaction paused until the save, the fence on the loop's readers, Thumbs' pools and the queue released and restored, the restart from D alone; and its glue in `Library.cpp`, `main.cpp` and the UI's "Updating library" state, built and not flashed | 1.5-2.5 | Like `test_idle_policy`: every row of 3.2.2, a deferral then a boot that builds, a track end near the safe point, a compaction request during a build, a bad T found at the end of a build |

@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "LibraryText.h"
 #include "SheetLayout.h"
 #include "TextFit.h"
 #include "TrackCatalog.h"
@@ -273,12 +274,21 @@ void NowPlayingPage::drawArtistAlbum() {
   // Both rows in one push: plain text, no "›" (neither is a control of its
   // own: the whole area opens the navigation menu).
   c.fillRect(0, 0, w, kArtistH + kAlbumH, bg);
+  // The track's artist (its tag's, else its album's line, else its artist
+  // folder); its album's name, and its year when the whole fits.
   const char* artist = lib ? cat.artist(s.trackId) : s.current >= 0 ? "Built-in test track" : "";
-  if (lib && !artist[0]) artist = uitext::kNoArtistFolder;
+  if (lib && !artist[0]) artist = uitext::kUnknownArtist;
   f.draw(c, Font::Body, artist, x, kArtistH / 2, kTextW, col::SOFT, bg);
   if (lib) {
     const char* album = cat.album(s.trackId);
-    f.draw(c, Font::Body, album[0] ? album : uitext::kLooseTracks, x, kArtistH + kAlbumH / 2, kTextW, col::DIM, bg);
+    if (!album[0]) album = uitext::kLooseTracks;
+    const uint16_t year = cat.year(s.trackId);
+    char line[300];
+    if (year) {
+      snprintf(line, sizeof(line), "%s%s%u", album, librarytext::kDot, static_cast<unsigned>(year));
+      if (f.width(Font::Body, line) <= kTextW) album = line;
+    }
+    f.draw(c, Font::Body, album, x, kArtistH + kAlbumH / 2, kTextW, col::DIM, bg);
   }
   gfx::push(c, kColumnX, kArtistY, w, kArtistH + kAlbumH);
 }
@@ -713,7 +723,11 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
     return false;
   }
   const bool all = !drawn_.valid;
-  const bool newTrack = all || s.trackId != drawn_.track || (s.current < 0) != (drawn_.current < 0);
+  // A track's names may also change under it: the scan read the playing
+  // track's tags (TrackCatalog's overlay, 3.3.3).
+  const uint32_t names = ui_.player().catalog().namesVersion();
+  const bool newTrack =
+      all || s.trackId != drawn_.track || (s.current < 0) != (drawn_.current < 0) || names != drawn_.names;
   const bool waiting = s.play == PlayState::Waiting;
   const uint32_t wsig = waiting ? waitSig() : 0;
   if (!waiting && (pressed_ == WaitSpeaker || pressed_ == WaitCancel)) pressed_ = None;
@@ -774,6 +788,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   drawn_.waiting = waiting;
   drawn_.waitSig = wsig;
   drawn_.track = s.trackId;
+  drawn_.names = names;
   drawn_.play = s.play;
   drawn_.second = second;
   drawn_.durationS = durS;
@@ -841,9 +856,11 @@ void NowPlayingPage::openNavMenu() {
     const int room = sheet::detailRoom(f.width(Font::Body, kGoTo[2]));
     textfit::cutPathLeft(f.fit(Font::Small), path, room, navFolder_, sizeof(navFolder_));
   }
-  const char* artist = cat.artist(navTrack_);
-  const char* album = cat.album(navTrack_);
-  const char* details[3] = {artist[0] ? artist : kNoArtistFolder, album[0] ? album : kLooseTracks, navFolder_};
+  // Go to artist and Go to album open the folder entities (Stage A keeps
+  // them, 5.4): their details name those, not the track's own tags.
+  const LibraryIndex::Track& t = index->track(navTrack_);
+  const char* details[3] = {librarytext::artistShown(*index, t.artist), librarytext::albumShown(*index, t.album),
+                            navFolder_};
   char title[128];
   cat.title(navTrack_, title, sizeof(title));
   Serial.println("[ui] now playing: the navigation menu");

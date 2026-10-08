@@ -389,7 +389,12 @@ pages do:
 - **Library**: three lists at the top: **Artists**, **Albums** (with their
   covers) and **Folders** (the card's folders; only audio files are listed,
   the others counted: "14 audio files, 1 other"). An artist opens its
-  albums and "All tracks"; an album or a folder its tracks. Play / Play
+  albums and "All tracks"; an album or a folder its tracks. An album of
+  more than one disc (`1-01`, `2-01` names) has a "Disc 1", "Disc 2" row
+  before each disc's first track. (Once the player reads tags,
+  docs/METADATA.md, the lists show their names: an album's tag name, year
+  and artist, an artist's albums newest first, a guest artist under its
+  track.) Play / Play
   next / + Queue sit at the top of each (at the Folders' top: "Play all N"
   and + Queue), and under a track once you tap it (Play on a track plays its
   album or folder from there); a long press on any row offers the same
@@ -662,7 +667,8 @@ optional argument and Enter:
 |---|---|
 | `u` (`u0`-`u3`, `us`, `uh<ms>`, `ut<ms>`) | input lab: button and glass-touch logging, tab target practice, button practice, haptic ticks, percentile summary |
 | `w` (`w0`-`w3`, `wv` `wf` `wh` `wc` `wd` `wk` `wg` `wm` `wp` `ws`) | scroll lab: a flick-scrolled library list, interactive or a 60 s stress while audio plays (hardware scroll and 30 fps by default) |
-| `g` (`g0`, `g<n>`) | library index: report, rebuild from the card (the queue follows by path), or a synthetic library of n tracks for the labs (the player keeps the real one) |
+| `g` (`g0`, `g<n>`) | library index: report (and where its names came from: tags or paths), rebuild from the card (the queue follows by path), or a synthetic library of n tracks for the labs (the player keeps the real one) |
+| `gs`, `gt</music/...>`, `gr` (`gr!`, `gw`, `gb`, `gv`) | the tags ([docs/METADATA.md](docs/METADATA.md) 3.3.6): `gs` the scan's status (the device's records in `/.player/tags.bin` by status, its journals, the transfer's root and tags file, an unfinished transfer); `gt` one file: its tags read now, its records in both files, which one a build takes, and the names the library has for it; `gr` Rescan tags (`gr!` the transfer's files too), `gw` walk, `gb` build, `gv` verify: the card worker's jobs, which say so while this firmware has none; `g?` lists them |
 | `e` (`e1`-`e5`) | font probe: list rows in FreeSans (folded) and the UI's VLW font, timed (efont only in a build with `-DUI_SPIKE_EFONT=1`) |
 | `j` (`j<n>`, `jw<n>`, `ja`) | thumbnail probe: cover.jpg to 40x40 / 80x80, decoder RAM, PSRAM and .565 caches |
 

@@ -187,9 +187,10 @@ public:
   static bool endsAt(Choice choice, bool lastOfAlbum, bool lastOfQueue);
 
   // End of album: the next queue entry's track `b` is on another album
-  // than `a`: the album's; with no album information (the "loose tracks",
-  // album ""), the folder. A built-in track, or one the index doesn't
-  // have, is an album of its own. `b` kNone (no next entry): true.
+  // than `a`: the album's; with no album information (an artist folder's
+  // loose tracks, LibraryIndex::kLoose), the folder. A built-in track, or
+  // one the index doesn't have, is an album of its own. `b` kNone (no next
+  // entry): true.
   static bool albumEndsBetween(const LibraryIndex* index, uint32_t a, uint32_t b);
 
   // In::lastOfQueue: the current entry (`current`, -1 none, of `size`) is

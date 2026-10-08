@@ -104,9 +104,13 @@ struct CardMessage {
   const char* lines[2];
   const char* still;  // Try again's note
 };
+// (The tracks are named by their tags since metadata's N9, by their file
+// names only where a file has none: so the folders, which still make the
+// artists and the albums, are what the lines ask for, not a file-name
+// pattern.)
 inline constexpr CardMessage kNoCard = {
     "No microSD card",
-    {"Insert a card with your music in /music,", "as /music/Artist/Album/01 - Title.mp3"},
+    {"Insert a card with your music in /music,", "one folder per album: /music/Artist/Album/"},
     "Still no card: is it all the way in?"};
 inline constexpr CardMessage kExFatCard = {
     "This card is exFAT",
@@ -135,6 +139,11 @@ constexpr const CardMessage& cardMessage(cardformat::Kind k) {
   }
 }
 inline constexpr const char* kTryAgain = "Try again";
+// A card with no music on it (the Library's and the Queue's root): the
+// title (Title) and two lines (Small, kEmptyLineW), with [Try again].
+inline constexpr const char* kNoMusicTitle = "No music found";
+inline constexpr const char* kNoMusicLines[2] = {"Put your albums in /music/Artist/Album/",
+                                                 "(MP3, FLAC or Opus), then tap Try again."};
 
 // ---- Now Playing (ui/NowPlayingPage) ----
 // The progress line's middle (Small), centred between the times (from
@@ -162,9 +171,21 @@ inline constexpr const char* kSeekCancel = "Release to cancel";
 // (sheet::detailRoom(): 183, 174 and 177 px): the artist or
 // kNoArtistFolder, the album or kLooseTracks, the folder cut from the left
 // ("…/Daft Punk/Discovery").
+// Go to artist and Go to album open the folder entities Stage A keeps
+// (docs/METADATA.md 5.4), so their details name those: the artist's name
+// (its folder's, or the spelling its tags elected), the album's.
+// kNoArtistFolder and kLooseTracks are the entities with no name (the files
+// right under /music; an artist folder's own tracks): the Library's rows,
+// headers and toasts call them so too (librarytext).
 inline constexpr const char* kGoTo[3] = {"Go to artist", "Go to album", "Go to folder"};
 inline constexpr const char* kNoArtistFolder = "(no artist folder)";
 inline constexpr const char* kLooseTracks = "(loose tracks)";
+// Now Playing's artist row names the track's artist (its tag's, else its
+// album's line, else its artist folder): with none of them, this (Body, the
+// row's kTextW, x 120-310). Its album row: the album's name, then its year
+// (librarytext::kDot, "2001") when the whole fits, else the name alone.
+inline constexpr const char* kUnknownArtist = "Unknown artist";
+inline constexpr int kNowPlayingTextW = 190;
 // When nothing in it could act, no menu but a toast (Body, one line: 264
 // and 209 px of kToastTextRight - kToastTextX).
 inline constexpr const char* kBuiltinNotInLibrary = "A built-in track isn't in the Library";
@@ -295,6 +316,30 @@ inline constexpr const char* kCapShuffling = "Shuffling %s of %s";
 inline constexpr const char* kCapPlaying = "Playing %s of %s";
 inline constexpr const char* kCapAdded = "Added %s of %s";
 inline constexpr const char* kCapNext = "%s of %s play next";
+
+// ---- the Library's names (ui/LibraryPage; librarytext, docs/METADATA.md 5.4) ----
+// An album of more than one disc: a divider row before each disc's first
+// track ("Disc 2", Bold in the Library's accent, from 12 px into the row to
+// 8 px short of its right; disc numbers up to 255).
+inline constexpr const char* kDisc = "Disc %u";
+inline constexpr int kDiscTextX = 12;
+inline constexpr int kDiscTextW = 320 - kDiscTextX - 8;
+
+// ---- the scan's texts (docs/METADATA.md 3.3.6; librarytext::statusText()) ----
+// The Library's status line while the card worker works (Small, across the
+// list's width, x 8-312), drawn by the scan's glue (N10, N12): the counts
+// grouped ("Reading tags 1,234 / 19,410", up to 99,999).
+inline constexpr int kStatusW = 304;
+inline constexpr const char* kStatusChecking = "Checking the card\xE2\x80\xA6";
+inline constexpr const char* kStatusReading = "Reading tags %s / %s";
+inline constexpr const char* kStatusUpdating = "Updating library\xE2\x80\xA6";
+inline constexpr const char* kStatusUnfinished = "The last transfer didn't finish";
+// Its toasts (Body, one line, no buttons: kToastTextX to kToastTextRight):
+// the walk's news, the update step's end, and its deferral (3.4.2).
+inline constexpr const char* kFoundOne = "Found 1 new track";
+inline constexpr const char* kFoundMany = "Found %s new tracks";
+inline constexpr const char* kLibraryUpdated = "Library updated";
+inline constexpr const char* kLibraryAtBoot = "Library updates at next boot";
 
 // ---- the Output tab (ui/OutputPage) ----
 // The Bluetooth card's status line (Small, x 52 to the radio).

@@ -1618,6 +1618,19 @@ the browsing UI hold its **track ids**, never strings.
   still builds it from the walk alone, as before; `LibraryBuilder` (the
   merge of the transfer's and the device's tag records, Stage A's names)
   is host-tested and comes in with the boot's rework (METADATA.md, N12).
+- **The names shown** (docs/METADATA.md 3.7, built in its N9):
+  `TrackCatalog` names a track by the index (its tag's title, its own
+  artist display else its album's line, the album's elected name and
+  year, the record's length as the backend's hint), and
+  `lib/core/LibraryText` makes the Library's row and header texts from it
+  ("2001 · 14 tracks", "Artist · 2001 · 14 tracks", a guest artist under
+  its track, "Disc 2" dividers, the rail's sort names). An album with no
+  record shows its artist's name as its line, so a path-only index reads
+  as before. One track can have fresher names than the index
+  (`TrackCatalog::Overlay`: the scan reads the playing track at once), for
+  that index's build only. The console's `gs`, `gt</music/...>` and `gr`
+  (`app/TagConsole`, `lib/core/TagText`) report the scan, dump one file's
+  tags and records, and ask the card worker for a Rescan.
 - **The queue** (`QueueModel`, host-tested): track ids in a PSRAM array (12 B an
   entry with its key and its rank), a current position, and one level of undo. Its edits
   are the design's Library and Queue actions: Play (replace the queue, start at
@@ -2425,8 +2438,13 @@ Queue, Dance and Output (with its Pair and About pages).
     The rows are 23 px (a Body line and 4): the artist's starts where the
     title strip ends and the album's ends on the cover's last row. Their
     text has the title's 190 px (the "›" and its 16 px are gone):
-    "(no artist folder)" (130 px), "(loose tracks)" and "Built-in test
-    track" fit, a longer name is cut with "…". The band moved up 24 px
+    "Unknown artist" (a track no tag or folder names; "(no artist
+    folder)" before the tags, METADATA.md 3.7), "(loose tracks)" and
+    "Built-in test track" fit, a longer name is cut with "…". The artist
+    row is the track's artist (its tag's, else its album's line, else its
+    folder's), the album row its album and, when the whole fits, its year
+    ("Album · 2001"); both are drawn again when the catalog's names change
+    under the playing track (`namesVersion()`). The band moved up 24 px
     and the transport grew from 48 to 72 px. In it: the volume's icon
     centred at y 195 over its "60%" (Small, dim) at y 218; prev and next at
     y 204; play a disc of r 25 at (160, 204), y 179-229 (r 23 at y 216
@@ -2459,9 +2477,10 @@ Queue, Dance and Output (with its Pair and About pages).
     long press has no hold there, so `Ui` ends it as a slow tap (lifted
     within 24 px): the menu, with the tap tick, never the double tick.
   - **The navigation menu** (a 3-row sheet, from y 80), titled with the
-    track's title (Small, dim): **Go to artist** (its detail the artist,
-    or "(no artist folder)"), **Go to album** (the album, or "(loose
-    tracks)"), **Go to folder** (the track's folder, cut from the left by
+    track's title (Small, dim): **Go to artist** (its detail the artist
+    it opens, the folder's, by its shown name, or "(no artist folder)"),
+    **Go to album** (the album it opens, or "(loose tracks)"), **Go to
+    folder** (the track's folder, cut from the left by
     whole folders, as the Folders header cuts its path: "…/Daft
     Punk/Discovery"; "/music" for a track at the root). Each detail is
     Small, dim, right-aligned in what its label leaves (183, 174 and 177
@@ -2604,8 +2623,13 @@ Queue, Dance and Output (with its Pair and About pages).
   PageRef's id is the segment; each keeps its own scroll; the Library opens
   on the last one). Artists A-Z (a disc with the initial, "1 album, 14
   tracks") > an artist (its Play / Play next / + Queue bar, "All tracks",
-  its albums with covers) > an album's or all its tracks. **Albums**: every
-  album A-Z with its 40 x 40 cover and artist. **Folders**: a folder's
+  its albums with covers, newest first: "2001 · 14 tracks") > an album's
+  or all its tracks (a track's own artist under it where it isn't the
+  album's line; an album of several discs has a "Disc 2" row before each
+  disc's first track, `librarytext::Discs`; the header "Artist · 2001 · 14
+  tracks"). **Albums**: every album A-Z with its 40 x 40 cover, its artist
+  line and year. The texts are `lib/core/LibraryText`'s (docs/METADATA.md
+  3.7). **Folders**: a folder's
   folders (amber icon, "1 folder, 13 files, 1 other"), then its audio files
   (a file icon, the name, an MP3/FLAC/OPUS badge); the header's second line is
   its counts, whole ("14 audio files, 1 other"), and, when 60 px or more

@@ -6,6 +6,7 @@
 
 #include "BitSet.h"
 #include "LibraryIndex.h"
+#include "LibraryText.h"
 #include "OutputModel.h"
 #include "PlaybackController.h"
 #include "SeekBar.h"
@@ -200,6 +201,7 @@ private:
   struct Drawn {
     bool valid = false;
     uint32_t track = 0xFFFFFFFFu;
+    uint32_t names = 0;  // TrackCatalog::namesVersion()
     PlayState play = PlayState::Stopped;
     uint32_t second = 0xFFFFFFFFu;
     uint32_t durationS = 0;
@@ -299,11 +301,12 @@ public:
   void onEmptyAction(int i) override;
 
 private:
-  enum class RowKind : uint8_t { None, Artist, Album, AllTracks, Track, Folder, File };
+  // Disc: an album's "Disc 2" divider (5.4), not a control.
+  enum class RowKind : uint8_t { None, Artist, Album, AllTracks, Track, Folder, File, Disc };
   struct RowRef {
     RowKind kind = RowKind::None;
-    uint32_t id = 0;     // the artist, album, folder or track
-    uint32_t index = 0;  // a track's or a file's place in pageTracks()
+    uint32_t id = 0;     // the artist, album, folder or track; a divider's disc
+    uint32_t index = 0;  // a track's or a file's place in pageTracks() (a divider: the next track's)
   };
 
   const LibraryIndex* index() const;
@@ -333,6 +336,7 @@ private:
   void switchSegment(LibrarySegment s);
   bool crumb() const;
   const char* rowName(uint32_t row) const;
+  size_t titleOf(uint32_t track, char* buf, size_t size) const;
 
   PageKind kind_ = PageKind::Library;
   uint32_t id_ = 0;
@@ -351,6 +355,8 @@ private:
   int playDepth_ = 0;
   // A long press's row, for its sheet.
   RowRef held_;
+  // The Album page's disc dividers (read at enter()).
+  librarytext::Discs discs_;
 };
 
 // ---- Queue (spec §6.4, mockups 16-18, with the review's grafts and the
