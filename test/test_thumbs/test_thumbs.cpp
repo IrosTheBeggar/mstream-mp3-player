@@ -148,6 +148,65 @@ void test_jpeg_not_a_jpeg() {
   TEST_ASSERT_EQUAL_UINT16(20, i.height);
 }
 
+// parseFile(): the same walk over a file read at offsets (a cover streamed
+// from the card, docs/METADATA.md 3.5): the same answers as parse() on every
+// case above, in a few small reads, the segments skipped unread.
+void test_jpeg_parsed_from_a_file() {
+  struct File {
+    std::vector<uint8_t> b;
+    uint32_t reads = 0, bytes = 0;
+    bool fail = false;
+    static bool read(uint32_t offset, uint8_t* out, uint32_t n, void* ctx) {
+      File& f = *static_cast<File*>(ctx);
+      if (f.fail || offset > f.b.size() || n > f.b.size() - offset) return false;
+      std::memcpy(out, f.b.data() + offset, n);
+      ++f.reads;
+      f.bytes += n;
+      return true;
+    }
+  };
+  auto same = [](const std::vector<uint8_t>& b) {
+    File f{b};
+    const jpeg::Info a = jpeg::parse(b.data(), b.size());
+    const jpeg::Info c = jpeg::parseFile(File::read, &f, static_cast<uint32_t>(b.size()));
+    TEST_ASSERT_EQUAL(a.ok, c.ok);
+    TEST_ASSERT_EQUAL(a.progressive, c.progressive);
+    TEST_ASSERT_EQUAL_UINT16(a.width, c.width);
+    TEST_ASSERT_EQUAL_UINT16(a.height, c.height);
+    TEST_ASSERT_EQUAL_UINT8(a.components, c.components);
+    return f;
+  };
+  same(jpegHead(0xC0, 650, 565));
+  same(jpegHead(0xC2, 500, 500));
+  same(jpegHead(0xC1, 1200, 1100, true));
+  std::vector<uint8_t> big = {0xFF, 0xD8};
+  for (int seg = 0; seg < 3; ++seg) {
+    const uint16_t len = 30000;
+    big.push_back(0xFF);
+    big.push_back(static_cast<uint8_t>(0xE1 + seg));
+    big.push_back(static_cast<uint8_t>(len >> 8));
+    big.push_back(static_cast<uint8_t>(len));
+    for (int i = 0; i < len - 2; ++i) big.push_back(static_cast<uint8_t>(i % 7 == 0 ? 0xFF : 0x20));
+  }
+  const std::vector<uint8_t> head = jpegHead(0xC0, 1400, 1400);
+  big.insert(big.end(), head.begin() + 2, head.end());
+  const File f = same(big);
+  TEST_ASSERT_TRUE(f.reads <= 8);   // the three 30 KB segments skipped, not read
+  TEST_ASSERT_TRUE(f.bytes <= 8 * 64);
+  same(std::vector<uint8_t>{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A});
+  same(std::vector<uint8_t>{0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x08, 1, 2, 3, 4, 5, 6});
+  std::vector<uint8_t> cut = jpegHead(0xC0, 100, 100);
+  cut.resize(30);
+  same(cut);
+  same(std::vector<uint8_t>{0xFF, 0xD8, 0xFF, 0xC4, 0x00, 0x04, 0, 0, 0xFF, 0xC0, 0x00, 0x11, 8, 0, 20, 0, 30, 3, 0, 0});
+  same(std::vector<uint8_t>());
+  // A read that fails: not a JPEG it can say anything about.
+  File bad{jpegHead(0xC0, 650, 565)};
+  bad.fail = true;
+  TEST_ASSERT_FALSE(jpeg::parseFile(File::read, &bad, static_cast<uint32_t>(bad.b.size())).ok);
+  TEST_ASSERT_FALSE(jpeg::parseFile(nullptr, nullptr, 100).ok);
+}
+
 // ---- ThumbScaler ----
 
 void test_scaler_decoder_scale() {
@@ -398,6 +457,7 @@ int main(int, char**) {
   RUN_TEST(test_jpeg_baseline_and_progressive);
   RUN_TEST(test_jpeg_frame_header_past_64_kb);
   RUN_TEST(test_jpeg_not_a_jpeg);
+  RUN_TEST(test_jpeg_parsed_from_a_file);
   RUN_TEST(test_scaler_decoder_scale);
   RUN_TEST(test_scaler_box_filter_quadrants);
   RUN_TEST(test_scaler_means_and_crops);

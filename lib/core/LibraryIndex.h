@@ -431,6 +431,12 @@ public:
   // builds are then the same bytes whatever the lengths (the test compares
   // the lengths apart).
   void forgetLengths();
+  // The scan has read track `id` since this index was built (N10): it is
+  // no longer kTrackPending, so the scan's sources that read the index
+  // (the playing track, the queue, the Library tab's page) don't ask for it
+  // again. Nothing else changes (not the build stamp: the ids stay); the
+  // next build takes its record.
+  void clearPending(uint32_t id);
 
   // ---- the cache ----
   // Writes the finished index with what it was built from. False: not
@@ -444,6 +450,12 @@ public:
   // Today's path walk alone: the inputs are `signature`, the rest zero.
   bool save(ByteSink& out, uint64_t signature) const;
   Load load(ByteSource& in, uint64_t signature);
+  // A saved index's header alone (the boot's decision, 3.2.2: a few hundred
+  // bytes, nothing loaded): Loaded with its inputs in `out` (its sum isn't
+  // checked: load() does that), Outdated (an earlier version or other
+  // rules) or Corrupt (short, foreign, other record sizes, a newer
+  // version). Stale and NoMemory never come from here.
+  static Load peek(ByteSource& in, Inputs* out);
 
 private:
   template <typename T>

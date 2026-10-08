@@ -12,6 +12,13 @@
 // `pio run -e core2 -t uploadfs`). The music is the .mp3/.flac/.opus files
 // under /music, read into the library index (app/Library); the player's own files
 // (the index's cache, the queue) are in /.player.
+//
+// On the card, begin() also gives the card's FatFs drive to storage/CardFat
+// (the validation walk's lister and the device's records go through FatFs
+// itself: docs/METADATA.md 3.8) and puts the PSRAM sector cache under it
+// (storage/SectorDisk, 3.2.4), right after the mount and before the audio
+// starts. forEachFile() stays for the flash, the boot's walk of a card with
+// no records, and the console's bench.
 class LocalStorage : public IStorage {
 public:
   bool begin() override;

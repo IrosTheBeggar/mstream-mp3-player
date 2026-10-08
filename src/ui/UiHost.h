@@ -6,6 +6,7 @@
 
 #include "ButtonPolicy.h"
 #include "CardFormat.h"
+#include "LibraryText.h"
 #include "OutputModel.h"
 #include "PlayGate.h"
 #include "PlaybackController.h"
@@ -64,6 +65,10 @@ struct AppState {
   // the empty state's message); Unreadable with none in, or one mounted.
   cardformat::Kind cardKind = cardformat::Kind::Unreadable;
   uint32_t libraryTracks = 0;
+  // The card worker's news for the Library's status line (3.3.6): checking
+  // the card, reading tags (done / total), updating, a transfer that didn't
+  // finish; Idle: no line.
+  librarytext::Status libraryStatus;
   // The rest.
   uint8_t battery = 0;
   bool charging = false;

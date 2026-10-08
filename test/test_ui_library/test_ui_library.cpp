@@ -1645,6 +1645,21 @@ void test_console_tag_commands() {
   TEST_ASSERT_EQUAL(C::Walk, tagtext::parse("w").command);
   TEST_ASSERT_EQUAL(C::Build, tagtext::parse("b").command);
   TEST_ASSERT_EQUAL(C::Verify, tagtext::parse("v").command);
+  // The sector cache (gc: the counts; gc0-gc2 the switch) and L0's bench.
+  TEST_ASSERT_EQUAL(C::Cache, tagtext::parse("c").command);
+  TEST_ASSERT_EQUAL_UINT32(tagtext::kCacheReport, tagtext::parse("c").n);
+  for (uint32_t k = 0; k <= 2; ++k) {
+    const char arg[3] = {'c', static_cast<char>('0' + k), 0};
+    TEST_ASSERT_EQUAL(C::Cache, tagtext::parse(arg).command);
+    TEST_ASSERT_EQUAL_UINT32(k, tagtext::parse(arg).n);
+  }
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("c3").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("c12").command);
+  TEST_ASSERT_EQUAL(C::Bench, tagtext::parse("l").command);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::parse("l").n);
+  TEST_ASSERT_EQUAL(C::Bench, tagtext::parse(" lw ").command);
+  TEST_ASSERT_EQUAL_UINT32(1, tagtext::parse("lw").n);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("lx").command);
   TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("x").command);
   TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("?").command);
   TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("ss").command);

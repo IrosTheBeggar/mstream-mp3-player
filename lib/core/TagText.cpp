@@ -17,7 +17,8 @@ namespace mptg = cardcontract::mptg;
 const char* const kHelp =
     "g report (where the names came from), g0 walk /music and build again, g<n> a synthetic library of n tracks "
     "(1-50000), gs the scan's status, gt</music/...> one file's tags (read now, D, T, the winner), gr Rescan tags "
-    "(gr! the transfer's files too), gw walk now, gb build now, gv verify the transfer's files";
+    "(gr! the transfer's files too), gw walk now, gb build now, gv verify the transfer's files; gc the sector cache "
+    "(gc0 off, gc1 on, gc2 on and every hit checked), gl the card's bench (glw with the walks)";
 
 namespace {
 
@@ -141,11 +142,24 @@ Parsed parse(const char* arg) {
       case 'w': p.command = Command::Walk; break;
       case 'b': p.command = Command::Build; break;
       case 'v': p.command = Command::Verify; break;
+      case 'c':
+        p.command = Command::Cache;
+        p.n = kCacheReport;
+        break;
+      case 'l': p.command = Command::Bench; break;
       default: break;
     }
     return p;
   }
   if (n == 2 && arg[0] == 'r' && arg[1] == '!') p.command = Command::RescanAll;
+  if (n == 2 && arg[0] == 'c' && arg[1] >= '0' && arg[1] <= '2') {
+    p.command = Command::Cache;
+    p.n = static_cast<uint32_t>(arg[1] - '0');
+  }
+  if (n == 2 && arg[0] == 'l' && arg[1] == 'w') {
+    p.command = Command::Bench;
+    p.n = 1;
+  }
   return p;
 }
 

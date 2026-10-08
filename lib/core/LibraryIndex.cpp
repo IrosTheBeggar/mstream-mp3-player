@@ -1633,25 +1633,50 @@ bool LibraryIndex::readBlock(ByteSource& in, Block<T>& b, uint32_t n) {
   return readFully(in, b.data, static_cast<size_t>(n) * sizeof(T));
 }
 
+namespace {
+
+// The header (load()'s and peek()'s): the magic and the version first (an
+// older version's header is shorter), then the rest, the record sizes, the
+// rules and the inputs. Loaded: `h` holds it all.
+LibraryIndex::Load readHeader(ByteSource& s, uint32_t* h, LibraryIndex::Inputs* got) {
+  using Load = LibraryIndex::Load;
+  if (!readFully(s, h, 2 * sizeof(uint32_t)) || h[0] != kMagic) return Load::Corrupt;
+  if (h[1] != kVersion) return h[1] >= 1 && h[1] < kVersion ? Load::Outdated : Load::Corrupt;
+  if (!readFully(s, h + 2, (kHeaderWords - 2) * sizeof(uint32_t))) return Load::Corrupt;
+  if (h[2] != recordSizes()) return Load::Corrupt;
+  if (h[3] != LibraryIndex::kRulesVersion) return Load::Outdated;
+  got->walkSignature = static_cast<uint64_t>(h[5]) << 32 | h[4];
+  got->cardId = static_cast<uint64_t>(h[7]) << 32 | h[6];
+  got->generation = h[8];
+  got->commitId = static_cast<uint64_t>(h[10]) << 32 | h[9];
+  got->tagsCrc = h[11];
+  got->transfer = (h[12] & 1u) != 0;
+  got->deviceCrc = h[13];
+  got->journalSeq = h[14];
+  return Load::Loaded;
+}
+
+}  // namespace
+
+LibraryIndex::Load LibraryIndex::peek(ByteSource& in, Inputs* out) {
+  uint32_t h[kHeaderWords];
+  Inputs got;
+  const Load r = readHeader(in, h, &got);
+  if (r == Load::Loaded && out) *out = got;
+  return r;
+}
+
+void LibraryIndex::clearPending(uint32_t id) {
+  if (id < tracksB_.size) tracksB_.data[id].flags &= static_cast<uint8_t>(~kTrackPending);
+}
+
 LibraryIndex::Load LibraryIndex::load(ByteSource& in, const Inputs& expect) {
   clear();
   SummingSource s(in);
   uint32_t h[kHeaderWords];
-  // The magic and the version first: an older version's header is shorter.
-  if (!readFully(s, h, 2 * sizeof(uint32_t)) || h[0] != kMagic) return Load::Corrupt;
-  if (h[1] != kVersion) return h[1] >= 1 && h[1] < kVersion ? Load::Outdated : Load::Corrupt;
-  if (!readFully(s, h + 2, sizeof(h) - 2 * sizeof(uint32_t))) return Load::Corrupt;
-  if (h[2] != recordSizes()) return Load::Corrupt;
-  if (h[3] != kRulesVersion) return Load::Outdated;
   Inputs got;
-  got.walkSignature = static_cast<uint64_t>(h[5]) << 32 | h[4];
-  got.cardId = static_cast<uint64_t>(h[7]) << 32 | h[6];
-  got.generation = h[8];
-  got.commitId = static_cast<uint64_t>(h[10]) << 32 | h[9];
-  got.tagsCrc = h[11];
-  got.transfer = (h[12] & 1u) != 0;
-  got.deviceCrc = h[13];
-  got.journalSeq = h[14];
+  const Load head = readHeader(s, h, &got);
+  if (head != Load::Loaded) return head;
   if (!got.sameHard(expect)) return Load::Stale;
   const uint32_t arenaBytes = h[17], nT = h[18], nA = h[19], nB = h[20], nF = h[21];
   if (arenaBytes == 0 || arenaBytes > kMaxChunks * kChunkBytes || nT > kMaxRecords || nA > kMaxRecords ||

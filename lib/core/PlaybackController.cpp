@@ -368,6 +368,7 @@ PlaybackController::Seek PlaybackController::seek(uint32_t key, uint32_t ms, uin
   } else {
     placeStart(ms, durationMs, nullptr);  // (no nested Act between the check and the start)
   }
+  ++seeks_;
   return state_ == PlayState::Playing ? Seek::Started : Seek::Waits;
 }
 

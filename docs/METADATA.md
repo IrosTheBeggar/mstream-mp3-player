@@ -47,7 +47,16 @@ in `lib/core/TrackCatalog`, `LibraryText` and `UiText`, the Library's and
 Now Playing's pages, `SleepTimer`'s `kLoose` and the console's `g`
 commands (`TagText`, `app/TagConsole`), host-tested (`test_ui_library`,
 `test_sleep_timer`) and built, not flashed; with no records on the card
-it names everything as before (3.7 says what it decided). Part 2, the card
+it names everything as before (3.7 says what it decided). N10, the
+firmware glue, wires them in: the boot of 3.2.2 (a matching `library.idx`
+loaded, a card with records built from them, only a card with none
+walked), the validation walk, the compactions and the scan on one card
+worker under N7's scheduler, the sector cache under FatFs, the update step
+(on the loop until N12), the transfer's thumbnails, streamed covers and
+`device.txt`; its portable parts (`lib/core/LibraryBoot`, `CardRoot`,
+`CardJobs`) are host-tested, the rest built for `core2` and `core2-dio` and
+not flashed (3.8 says what it decided; 6.3.1 is the device batch's
+runbook). Part 2, the card
 contract, is a **PROPOSAL (v1)** for the transfer software, whose own
 design is still being worked on in mstream-terminal; it is written so
 that side can implement it without reading the player's code, and every
@@ -2259,7 +2268,8 @@ sectors, 256 entries (128 KB of PSRAM: 128 sit at the knee of the user's
 writes go through, and a cached sector a write covers takes its bytes (or
 is dropped, if the write failed); it is cleared at mount.
 
-**Installed (firmware):** a diskio wrapper registered with
+**Installed (firmware; built in N10, `storage/SectorDisk`: 3.8):** a
+diskio wrapper registered with
 `ff_diskio_register` right after a successful `SD.begin()`, forwarding to
 the SD library's non-static `ff_sd_initialize`, `ff_sd_status`,
 `ff_sd_read`, `ff_sd_write` and `ff_sd_ioctl`.
@@ -2301,8 +2311,8 @@ kept as margin until L2 measures.
 #### 3.2.6 As built (N5)
 
 `lib/core/CardWalk` is 3.2.3's walk, host-tested (`test_card_walk`, on
-the fake FAT trees of `test/support/FakeFat.h`) and not yet called: its
-FatFs lister is N10's, its place in the boot N12's. What the code decided
+the fake FAT trees of `test/support/FakeFat.h`), called since N10 by the
+card worker (3.8: its FatFs lister is `storage/CardFat`). What the code decided
 where 3.2.3 left room:
 
 - **The lister** (`cardwalk::Lister`, 3.6's `IDirLister`): `openDir`,
@@ -2365,7 +2375,7 @@ where 3.2.3 left room:
 #### 3.2.7 As built (N8)
 
 `lib/core/SectorCache` is 3.2.4's cache, host-tested (`test_sector_cache`,
-`test_fat_model`) and not yet installed: the diskio wrapper is N10's. What
+`test_fat_model`), installed since N10 (`storage/SectorDisk`, 3.8). What
 the code and the model decided:
 
 - **The model.** ChaN's FatFs R0.15, the revision ESP-IDF 5.5.5 carries,
@@ -2590,8 +2600,8 @@ internal free during a scan in Bluetooth mode.
 
 `lib/core/TagStore` is 3.3.2's store, host-tested (`test_tag_store`)
 through a file interface of its own (`tagstore::Fs`: FatFs on the device,
-N10's glue) and not yet called: N6's scan writes through it, N12 calls it
-at boot and before a build. N5's walk reads and writes it through
+N10's glue), called since N10 (3.8): the boot opens it, the scan writes
+through it, the card worker compacts it, a build reads it. N5's walk reads and writes it through
 `lib/core/TagStoreWalk` (`KnownD`, D as `cardwalk::Known`; `WalkSink`,
 walk.jnl as `cardwalk::Sink`; `test_tag_store_walk` runs the real walk on
 fake FAT trees into it). What the code decided where 3.3.2 left room:
@@ -2716,9 +2726,8 @@ fake FAT trees into it). What the code decided where 3.3.2 left room:
 #### 3.3.8 As built (N6)
 
 `lib/core/TagScan` is 3.3.1's reader, with part 5's small rules as pure
-functions in `lib/core/TagRules`, host-tested (`test_tag_scan`) and not
-yet called: N7's scheduler and N10's card worker run it through a FatFs
-`Source`. What the code decided where 3.3.1 and part 5 left room:
+functions in `lib/core/TagRules`, host-tested (`test_tag_scan`), run since
+N10 by the card worker through a FatFs `Source` (3.8). What the code decided where 3.3.1 and part 5 left room:
 
 - **The reference** is mStream's reader: lofty 0.25 in relaxed mode
   behind mStream's ID3v2 repair pass, then mStream's selection rules and
@@ -2792,8 +2801,9 @@ yet called: N7's scheduler and N10's card worker run it through a FatFs
 #### 3.3.9 As built (N7)
 
 `lib/core/ScanScheduler` is 3.3.3-3.3.5's scheduler, host-tested
-(`test_scan_scheduler`) and not yet called: N10's card worker runs it and
-N12's `LibraryUpdate` asks it for the build and the save. `IdlePolicy` has
+(`test_scan_scheduler`), run since N10 by the card worker's loop side
+(`app/CardTasks`, 3.8); N12's `LibraryUpdate` asks it for the build and the
+save. `IdlePolicy` has
 the `LibraryWrite` blocker (`test_idle_policy`). What the code decided
 where 3.3.3-3.3.5 left room:
 
@@ -3168,7 +3178,9 @@ IRAM, about 1 KB of stack per parse; the scan engine, the contract kit,
 the builder and the UI about 10-20 KB (ESTIMATED); the sector-cache
 wrapper 1-2 KB. The app is 2.3 MB in a 6.3 MB slot: flash is no
 constraint. IRAM is untouched, and the `cache_guard` build check still
-applies to any layout shift.
+applies to any layout shift. (MEASURED at N10, 3.8: the glue and every
+part it links added 76.2 KB of code and 16.7 KB of rodata, 472 B of
+internal DRAM and no IRAM; the app is 2.48 MB, 41% of its slot.)
 
 **Card time** at 20k (ESTIMATED): reading T's FOLD, RECS and STRS, about
 3.9 MB, takes 2.3-3.3 s, only during a build; checking DJNB's CRC, 6 MB,
@@ -3180,17 +3192,17 @@ one 300 B row (about 3 ms).
 | File | Change |
 |---|---|
 | New `lib/core/CardContract` (with `CardContainer`, `CardTags`, `CardManifest`, `CardAutoDj`; built in N1) | The contract kit: CRC-32, FNV-1a 64, qfp, FAT time and the skew rule; MSMF, MPTG, MPDJ and MSPD readers and writers (the device writes only MPTG; the writers serve the host tests and the future sync agent); the root election; `device.txt`; the canonical order; 2.4.3's structural checks. Its golden files are 2.17's, its vectors 2.18's. |
-| New `lib/core` modules | `TagStore` (D, `tags.jnl`, `walk.jnl`, the streaming compaction, recovery, the cut-rename rule of 2.12.6); `CardWalk` (an `IDirLister`, the canonical sort with its passes, the digests, T's freshness, the skew, the merge); `SectorCache`; `TagScan` (the production port of the prototype, with part 5's rules); `ScanScheduler`; `LibraryBuilder` (the merge into `LibraryIndex`, part 5's votes, the streamed checks); `LibraryUpdate` (the boot decision and the update step as a state machine: N12). |
+| New `lib/core` modules | `TagStore` (D, `tags.jnl`, `walk.jnl`, the streaming compaction, recovery, the cut-rename rule of 2.12.6); `CardWalk` (an `IDirLister`, the canonical sort with its passes, the digests, T's freshness, the skew, the merge); `SectorCache`; `TagScan` (the production port of the prototype, with part 5's rules); `ScanScheduler`; `LibraryBuilder` (the merge into `LibraryIndex`, part 5's votes, the streamed checks); `LibraryUpdate` (the boot decision and the update step as a state machine: N12). Built in N10 (3.8): `LibraryBoot` (3.2.2's table), `CardRoot` (the root as the boot reads it) and `CardJobs` (the walk, the compaction and the scan, a step at a time). |
 | `lib/core/LibraryIndex.{h,cpp}` | v6 records and the header's inputs; `begin(const Sizing&)` with exact counts; `addRecord(path, const TagView&)` next to `addFile()`; Stage A's votes and orders in `buildViews()` (a missing number sorts last, an artist's albums newest first); `readNames()` fills only the fields a record lacks; `kLoose` and the transfer-thumbnail flag; library roots (LIBR), if the vpath layout is chosen. `Load::Stale` no longer happens at boot. |
 | `lib/core/TrackCatalog.{h,cpp}` | `title()` the tag's own string or the slice; `artist()` the track artist, else the album's line, else the folder artist; `album()` the display name; `durationHintMs()` the library's length; a one-slot overlay for the playing track's fresh tags (3.3.3). Built (N9, 3.7), with `albumArtist()` and `year()`; new `lib/core/LibraryText` holds the rows' texts. |
-| `src/app/Library.{h,cpp}` | The boot decision (3.2.2) replaces `begin()`'s walk, `library.tmp` recovery and the build-at-boot marker included; `rebuild()` becomes the update step, driven by `LibraryUpdate`, its build a card-worker job; the save moves to the card worker; `report()` gains the scan state. |
+| `src/app/Library.{h,cpp}` | The boot decision (3.2.2) replaces `begin()`'s walk, `library.tmp` recovery and the build-at-boot marker included; `rebuild()` becomes the update step, driven by `LibraryUpdate`, its build a card-worker job; the save moves to the card worker; `report()` gains the scan state. Built (N10, 3.8): the boot, the build from the records, the save through 2.12.6's rule, `device.txt`, the overlay, the memory check and the marker; `rebuild()` builds from the records on the loop (the card worker's build and save are N12's). New `src/app/CardWorker` (the task) and `src/app/CardTasks` (its loop side). |
 | `src/app/QueueStore.cpp`, `lib/core/QueueModel` | `remap()` through `queue.txt` (flush, free, rebuild, re-read); the reads pre-size their sinks; `QueueModel::release()` and an exact-size trim. Built (N3). Then the cap of 5,000 entries (`kMaxEntries`, `room()`, `window()`; `queuetext::read()`'s window; the UI's toasts): built, QUEUE-MODES.md section 15. |
-| `src/storage/LocalStorage.cpp` | A FatFs lister (`FILINFO`'s size and time); the sector-cache wrapper after `SD.begin()`; `forEachFile` stays for LittleFS and the console. |
-| `src/ui/Thumbs.{h,cpp}` | The worker becomes the shared card worker (walk, scan and cover jobs); cover sources in 2.14.3's order, `/.mstream/thumbs` read-only (and `hasCover()` true for an album with the transfer-thumbnail flag); streamed JPEG input. |
-| `src/ui/LibraryPage.cpp`, `NowPlayingPage.cpp` | Direct `trackTitle()` reads move to the catalog; rows show a year subtitle, disc dividers and a track-artist subtitle; the status line. Go to artist and album keep the folder entities. Built (N9, 3.7), but the status line: its texts are (`librarytext::statusText()`), its drawing comes with the scan's state (N10, N12). |
+| `src/storage/LocalStorage.cpp` | A FatFs lister (`FILINFO`'s size and time); the sector-cache wrapper after `SD.begin()`; `forEachFile` stays for LittleFS and the console. Built (N10, 3.8): new `src/storage/CardFat` (the lister, N4's file interface over FatFs) and `src/storage/SectorDisk` (the wrapper), installed after the mount. |
+| `src/ui/Thumbs.{h,cpp}` | The worker becomes the shared card worker (walk, scan and cover jobs); cover sources in 2.14.3's order, `/.mstream/thumbs` read-only (and `hasCover()` true for an album with the transfer-thumbnail flag); streamed JPEG input. Built (N10, 3.8). |
+| `src/ui/LibraryPage.cpp`, `NowPlayingPage.cpp` | Direct `trackTitle()` reads move to the catalog; rows show a year subtitle, disc dividers and a track-artist subtitle; the status line. Go to artist and album keep the folder entities. Built (N9, 3.7); the status line's drawing too (N10, 3.8: `ui/Ui`, at the bottom of a Library page). |
 | `lib/core/SleepTimer.cpp` | End of album tests `kLoose`, not an empty album name. Built (N9). |
-| `src/spike/Spike.cpp`, new `src/app/TagConsole`, new `lib/core/TagText` | The console's `g` commands (3.3.6). Built (N9, 3.7); the card worker's jobs (`gr`, `gw`, `gb`, `gv`) are hooks its glue fills (N10, N12). |
-| `lib/core/IdlePolicy.{h,cpp}`, `src/main.cpp` | The `LibraryWrite` blocker; the journal flush at shutdown; the boot and `rebuildLibrary()`. |
+| `src/spike/Spike.cpp`, new `src/app/TagConsole`, new `lib/core/TagText` | The console's `g` commands (3.3.6). Built (N9, 3.7); the card worker's jobs (`gr`, `gw`, `gb`, `gv`) are filled (N10, 3.8), with `gc` and `gl` (6.3.1). |
+| `lib/core/IdlePolicy.{h,cpp}`, `src/main.cpp` | The `LibraryWrite` blocker; the journal flush at shutdown; the boot and `rebuildLibrary()`. Built (N7, N10): `LibraryWrite` during a compaction and the update step, the scan's chunk written at the idle power-off and the CPU speed's restart, the update step run when the card worker's jobs ask (3.8). |
 | `lib/core/NvsLayout.h` | **No change** (`kCurrent` stays 2): the library's state lives on the card and moves with it. AutoDJ's on/off would be schema 3 (autodj research section 7), outside this plan. |
 | `lib/core/OpusOpenCache` | **Unchanged:** keyed by path hash and size and checked at the open, so rebuilds don't touch it. |
 
@@ -3223,8 +3235,8 @@ decided where 3.6 and 5.4 left room:
   ignores it without anyone clearing it; an artist folder's loose tracks
   keep no album and no year whatever it says (the next build would show
   them so). `namesVersion()` changes with every set and clear, and Now
-  Playing draws its names again when it does. Nothing sets it yet: the
-  scan's glue (N10) will, for the playing track.
+  Playing draws its names again when it does. The scan's glue sets it for
+  the playing track (N10, 3.8).
 - **The rows** (`LibraryPage`, its texts in `librarytext`): an artist,
   "3 albums, 41 tracks" ("1 album, 1 track": the counts are singular when
   they are 1 now); the root's Albums, the album's line and year
@@ -3271,7 +3283,8 @@ decided where 3.6 and 5.4 left room:
   drawn yet: nothing has a scan state to show until N10 and N12, which
   draw it across the list's width (304 px, Small, the room the test
   checks) and fire the toasts. The Output tab's Library row and its
-  Rescan tags button (3.3.6) wait for the same.
+  Rescan tags button (3.3.6) wait for the same. (N10 draws the line and
+  fires the toasts, 3.8; the Output tab's row still waits.)
 - **SleepTimer**: End of album tests the album's `kLoose` flag, not its
   name: two album folders that share a tag name are two albums, one
   folder whose tracks disagree is one, and an artist folder's tagged
@@ -3304,6 +3317,259 @@ decided where 3.6 and 5.4 left room:
   (crafted and the corpus's `flac_full.flac` through TagScan) and sources
   (`test_console_*`), and End of album with tags
   (`test_album_ends_between_with_tags`).
+
+### 3.8 As built (N10): the firmware glue
+
+N1-N9's parts run on the device now: the boot of 3.2.2, the validation
+walk, the compactions and the scan on one card worker under N7's
+scheduler, the sector cache under FatFs, the transfer's thumbnails and
+streamed covers, `device.txt`. Built for `core2` and `core2-dio` with every
+guard, **not flashed**: nothing here has run on a Core2 yet (6.3's batch
+measures it). The portable parts are host-tested in `test_card_jobs`
+(lib/core `LibraryBoot`, `CardRoot`, `CardJobs`); the rest is glue in
+src/. What the code decided where 3.2-3.4 left room:
+
+- **The files.** `storage/CardFat` (FatFs itself: N4's `tagstore::Fs`
+  and N5's lister, `cardjobs::Card`), `storage/SectorDisk` (the diskio
+  wrapper), `app/CardWorker` (the task), `app/CardTasks` (its loop side:
+  the scheduler, the steps, what follows them), `app/Library` (the boot,
+  the build, the save), `ui/Thumbs` (covers as worker steps), and in
+  lib/core `LibraryBoot` (3.2.2's table), `CardRoot` (the root as the boot
+  reads it) and `CardJobs` (the walk, the compaction and the scan, a step
+  at a time).
+- **FatFs, not the VFS.** The SD library mounts its physical drive as
+  FatFs's logical drive of the same number; the boot reads it from
+  `SDFS::_pdrv` (protected: through a member pointer) and every path is
+  that drive's (`"0:/music/Artist"`, `"0:/.player/tags.bin"`). A `FIL`
+  (about 4.1 KB here), `FF_DIR` and `FILINFO` are PSRAM objects; the
+  lister's are allocated once (3.3.1's one `FIL` per worker), `Fs::open()`
+  makes one per open file. Reads and writes go to FatFs in pieces of 4 KB
+  at most with a yield between, as `FileStream` does, so the decoder's
+  reads of the playing file (the same volume lock) never wait long.
+  `firstCluster()` is the open `FIL`'s `obj.sclust`; `rename()` is
+  `f_rename`, which refuses an existing target, as N4 asks. The decoder,
+  the queue and the thumbnails keep the VFS; both reach the same FatFs
+  volume under its lock.
+- **The boot** (`Library::begin()` on the card; the flash keeps today's
+  signature walk): `cardroot::read()` (the election of 2.5.4, each root
+  checked whole, then T's frame and header against its COMP entry: three
+  small files read; LIBR's roots, at most 16, kept), `TagStore::open()`
+  (its recovery), 2.12.6's `settle()` of `library.tmp` (whole when its
+  header reads and its sum holds: it is loaded once to know), the marker,
+  then `LibraryIndex::peek()` of `library.idx`'s header (a new portable
+  call: the header alone, 312 bytes) and `libraryboot::decide()`.
+  **Whether T was used isn't a hard input the boot compares**
+  (`libraryboot::matches()`): a T whose sections fail at the build has the
+  same identity at every boot and fails again, so asking "was T used" of
+  the saved index would rebuild it at every boot; the load takes the saved
+  inputs as they are. A saved walk signature (any index an older firmware
+  saved) doesn't match: the first boot of this firmware builds (or walks)
+  once. A load whose sum fails falls to the same table as unreadable.
+  Each boot logs one line for the card ("T tags-0000002a.bin, generation
+  42 ...; D present (N records, M journal chunks)") and one for the
+  decision ("library.idx matches the card: load (its inputs are the
+  card's) in N ms"), then "browsable N ms after the mount".
+- **`device.txt`** is formatted from `devicetxt::current()` with the
+  version less its "v" (`firmware=0.7.0-17-gcc3413b`), compared with the
+  file byte for byte, and written through `device.tmp` and `replace()`
+  only when it differs: a new firmware rewrites it once.
+- **The build** (`Library::buildCard()`): the journals compacted first,
+  then `LibraryBuilder` over T (when the root has one and this session
+  hasn't found it bad) and D, opened as three files (the merge, DSTA's
+  rows, DFLD's facts: each read front to back), D's skew only when its
+  walk was at this commit, T listing (`transferLists`) until that walk,
+  LIBR's roots, the index's trims in place (`heap_caps_realloc` as N2's
+  shrink hook). No records at all: /music walked as before (the VFS
+  walk), saved with the root's identity. A T the boot's build left out (its
+  stream failed a check) is bad for the session: the jobs leave it out
+  too.
+- **The sector cache's wrapper** (`storage/SectorDisk`, 3.2.4 and 3.2.7):
+  installed right after `SD.begin()` (the stock driver registered, the
+  cache cleared, then `ff_diskio_register()` with the wrapper), before the
+  audio starts; `probeCard()` mounts only to look and gets none. `CTRL_TRIM`
+  invalidates FatFs's range (its first and last sector) before the SD
+  driver's ioctl. The cache is one PSRAM block, allocated at the first
+  mount (135,168 B), and the wrapper counts every read that reaches the
+  SD driver (its sectors and its time), the cache on or off. **The device
+  batch's switches:** `MSTREAM_SECTOR_CACHE=0` builds the stock driver
+  alone; at runtime `gc0` turns it off (every call to the card), `gc1` on
+  (it starts empty: what was written meanwhile isn't in it), `gc2` on
+  with every hit read from the card again and compared (L1's soak: a
+  difference is counted, the card's bytes returned, the sector dropped).
+  The default is the spec's: on.
+- **The card worker** (`app/CardWorker`): Thumbs' worker, generalised: a
+  task on core 1, made for the first step and gone 3 s after the last, a
+  6 KB internal stack, handed one step at a time by the loop (a function
+  and its context) at the priority ScanScheduler says, raised or lowered
+  while it runs (a cover drops to 0 when a list starts moving). A cover is
+  one of its steps: Thumbs keeps its job and its PSRAM buffers, and no
+  longer has a task of its own.
+- **The loop's side** (`app/CardTasks`, every pass after the UI's): the
+  finished step taken in (`stepDone()` with its time), the boot's walk 2
+  s after the UI's first frame (`armWalk()`), the scan only once that walk
+  ended (D's to-do is known then: 3.3.9), the work flags read only
+  while the worker is free (a step may change them), the scheduler's
+  `update()` with N7's inputs, then the step: `CardJobs::prepare()` on the
+  loop (its memory, the scan's file), `step()` on the worker,
+  `finish()` on the loop after it. Between steps, a chunk waiting 5 s with
+  the worker free is written from the loop (the floor, a pause), and the
+  scan's memory goes back after 10 s without a scan step.
+- **The scheduler's inputs** (3.3.9's notes): `listMoving` the page's
+  `animating()`; `input` what `stepIdle()` takes (a touch, the console, a
+  key); the ring's `bufferedMsNow()` and a new `ringCapacityMs()` (1,486
+  ms: 65,536 frames); `underrunsNow()`; `decodePassUs` a new peak the
+  decode task raises after each pass and the loop takes back to 0
+  (`takePassPeakUs()`); `decoderAtEnd` the heard track's source ended
+  (`GaplessJoin::frozenLength()`), while playing only (a track paused or
+  stopped at its end would otherwise hold the scan for good); `trackSeq`
+  the backend's; `seeking` a start not taken up yet (`positionKnown()`
+  false: a seek's, a skip's) and `seekSeq` a new `PlaybackController::
+  seeks()` (the seeks that did something); `btSetup` a pairing or the
+  link Paging, `btSeq` the link's ups and downs; `usb` external power;
+  `battery` the reading as it came, -1 until the first (the UI's snapshot
+  keeps its clamped copy).
+- **The walk** (`CardJobs`): its first step writes the scan's chunk (N7's
+  rule, and `append()` refuses during a walk), opens T (streamed on the
+  first walk after a commit, through HIDX after), D (`KnownD`) and
+  `walk.jnl` (`WalkSink`), then lists; each step after is one CardWalk
+  step. **T that fails as it streams** (CardWalk's `Error::Transfer`)
+  makes the walk start over without T, against no identity (D then
+  records a walk against none: the next boot's walk is a first one and
+  tries T again); T that won't even open is left out the same way. A walk
+  asked while one runs runs again after it; a walk asked while D still
+  has one to merge waits for that compaction.
+- **The walk's news is the files new to the index**, not to D: an index
+  built from T, or walked from /music, lists files D has no row for yet,
+  so the walk's sink counts its Added rows the index can't find
+  (`Config::indexed`, `findTrack()` read on the worker: nothing changes
+  the index while a step runs). That count is the toast ("Found 12 new
+  tracks") and U11's (`buildAfterWalk()`); with none, the update step
+  waits for the scan's end. The first boot on a card with no records thus
+  walks /music into a path-named index, the background walk finds every
+  file new to D but none new to the index, the scan reads them all, and
+  one update step shows their tags: no pause in between.
+- **The scan.** Its "rest" is D's merged view (a `TagStore::View`) kept
+  open across steps: each step looks at most 512 rows (the host tests
+  use 3) for the next Pending one. It is closed before a walk or a
+  compaction (they write what it reads) and opened again after, the chunk
+  written first so the new View has what the scan read. A file a loop
+  source named (the playing track, the queue's next 3 and 200, the
+  Library tab's album, artist or folder, looked at in its first 512 rows)
+  is taken at `f_stat`'s size and time; a rest row at the walk's (D's),
+  and skipped when the file's size isn't that any more (changed since:
+  the next walk sees it). An open View hasn't seen files the loop's
+  sources read meanwhile: a read set of their path hashes (4,096 slots,
+  half used at most; past that a file may be read twice, never missed)
+  keeps the View from reading them again, cleared when a View opens. A
+  file read is recorded Scanned (Ok or Partial) or Unreadable; a read
+  that failed isn't recorded (read again at the next boot); a gone,
+  changed or not-audio file is skipped. The chunk goes to `tags.jnl` at
+  100 files, at half its 32 KB of entries, 5 s after its first record,
+  at the View's end, and before any other job; a journal full to its 32
+  chunks refuses it, kept, until the compaction the store then asks for.
+- **What the loop learns from a scan step:** the index's track for the
+  file stops being Pending (`LibraryIndex::clearPending()`, a new
+  portable call that changes nothing else), so the playing track, the
+  queue and the Library tab's page don't name it again; the playing
+  track's record goes to `Library::setOverlay()` (N9's overlay, owned by
+  Library in PSRAM, through `LibraryBuilder::viewOf()`), and Now Playing
+  shows its tags at once.
+- **The scan's end** (nothing for any source, no walk asked or running):
+  the update step, when the scan read anything since the last build, the
+  walk changed D, a Rescan was asked, or the boot loaded an index the scan
+  had gone past (`Library::softStale()`: D's CRC or the journal's sequence
+  differ from the saved soft inputs).
+- **The update step, until N12** (3.4.2): asked (the scan's end, U11, `gb`,
+  g0's walk); the scan and the walk hold (`updateWanted`) while the
+  journals are compacted (a worker step, the chunk with it); then, with
+  the worker free and the safe point reached (not playing, or 20 s left at
+  least and no seek in the last 2 s), the status line says "Updating
+  library…" (0.6 s, so it is drawn before the loop stops), and
+  `runUpdateStep()` checks the memory
+  (`Library::roomToBuild()`: free PSRAM with the index's and the queue's
+  bytes at least 1.1 x the index's size plus an eighth plus 96 KB, and the
+  largest block or the old track table holding the new table; ESTIMATED,
+  L4 measures), else writes the build-at-boot marker and toasts "Library
+  updates at next boot"; then `rebuildLibrary()`: N3's remap through
+  `queue.txt` around `Library::rebuild()`, **on the loop**, which is held
+  for the build (about 9-14 s at 20k, ESTIMATED; under 0.1 s at 77
+  tracks), as `g0` held it before; "Library updated" after. The build on
+  the worker behind the "Updating library" fence, the queue's remap split
+  around it, the save on the worker and Thumbs' pools freed are N12's.
+- **`LibraryWrite`** holds while a compaction runs and while the update
+  step is under way; the idle power-off's shutdown and the CPU speed's
+  restart write the scan's chunk next to the queue (`flushNow()`: the
+  worker's step finished first).
+- **The status line** (3.3.6): on a Library page (the card's library, not
+  a synthetic one) while there is something to say, a Small line across
+  the list's width at y 220-239 (`uitext::kStatusW`), the list's band
+  shortened by 20 px under it; drawn when its text changes, at most twice
+  a second, never while the list moves (the band isn't changed under a
+  fling either), again after a sheet or the dark. "Checking the card…"
+  from the walk's arming to its end, "Reading tags N / M" while the scan
+  has work (M: the walk's added and changed files and the index's Pending
+  ones, raised to N if passed), "Updating library…", "The last transfer
+  didn't finish" when a plan is on the card and nothing else is said.
+  The toasts are `Ui::note()`s. The Output tab's Library row and its
+  Rescan tags button (3.3.6) aren't built (the console's `gr` is).
+- **Covers** (2.14.3): an album with the transfer's thumbnail
+  (`kTransferThumb`) reads `/.mstream/thumbs/<h>/<8 HEX>.565` first,
+  keyed by its album folder's path hash (`thumbfile::pathHash()` of
+  `/music/Artist/Album`, 2.3.3's), its header checked (MPTH v1, the hash;
+  a "no picture" file is the device's marker, never the software's: a
+  miss), never written; a miss falls to the folder's image as before.
+  `hasCover()` is true for such an album with no image at all. The folder
+  image is **streamed**: its header walked at offsets
+  (`jpeg::parseFile()`, a new portable call: a few reads of at most 64
+  bytes, segments skipped by their lengths, so EXIF past 64 KB costs
+  nothing), TJpgDec fed from a 16 KB PSRAM buffer refilled from the file;
+  the whole file is never in PSRAM and the 2 MB cap is gone. A read that
+  fails mid-decode is the card's, not the picture's: not remembered as
+  undecodable.
+- **The console** (3.3.6): `gr`, `gr!`, `gw`, `gb` and `gv` are the
+  worker's jobs now; g0 on the card asks a walk and the update step after
+  it (the flash builds at once, as before); `gs` adds the scheduler's
+  waits (seconds per reason), each job's steps (count, mean, longest), the
+  worker's stack high-water mark and the internal RAM's lowest, the jobs'
+  counts and the cache's; `gs`, `gt` and `gl` wait for the worker's step
+  first (they read the card's records themselves). New: `gc` (the cache:
+  `gc0`, `gc1`, `gc2`) and `gl` (L0's bench; `glw` with the walks), 6.3.
+- **Sizes (MEASURED, the build).** IRAM unchanged in both builds
+  (`.iram0.vectors` 1,028 + `.iram0.text` 124,867 = 125,895 B); internal
+  DRAM +472 B (`.dram0.data` 24,328 to 24,440, `.dram0.bss` 32,168 to
+  32,528: the worker's handle, the wrapper's state, the sector cache's
+  object, a few counters); flash `.text` +76,244 B and `.rodata` +16,668 B
+  (1,667,560 to 1,743,804 in both builds; 613,928 to 630,596 in core2,
+  613,960 to 630,628 in core2-dio), 93,024 B in all, the app 2.39 to 2.48
+  MB, 41% of its slot; `iram_diet`, `cache_guard`, `flash_guard` and
+  `version` pass in both. PSRAM
+  (from the code; L0 and L3 measure): the cache 135,168 B on the card; the
+  walk about 98 KB while it runs; the scan about 85 KB and its View's
+  merge memory; the lister's `FIL`, `FF_DIR` and `FILINFO` about 4.5 KB;
+  Library's root (about 4 KB), overlay and run (about 7 KB); CardTasks
+  about 2 KB.
+- **Not as 3.2-3.4 said** (each N12's or later): the update step's build
+  and save run on the loop (above); on the flash fallback nothing of the
+  records exists (no D, no walk, no scan: today's signature walk), not the
+  POSIX walk 3.2.3 kept for it; `queue.txt` keeps its own write-aside
+  rule, not 2.12.6's twins; ScanScheduler's `build`, `save` and `updating`
+  inputs and the DJNB check are never asked (no AutoDJ engine yet).
+- **Proven on the host:** `test_card_jobs` (9 tests): every row of
+  3.2.2's table and `matches()`'s inputs; the root's election, T against
+  its COMP entry, LIBR, the plan; a hand-filled card (tagged corpus files
+  among noise) walked, scanned once each, compacted and built into an
+  index of their tags, then an unchanged boot that opens no file, then a
+  hand-copied album walked and read alone; the walk's files new to the
+  index; the loop's sources (a file named at its f_stat size and time,
+  the rest not reading it again, a gone file skipped); the chunk's
+  appends, a full journal's refusal and the compaction after it with
+  nothing lost; a file changed or gone after the walk, then a Rescan; a
+  transfer card (no scan, the build from T, Verify finding the one bad
+  qfp, Rescan everything); a T whose STRS fails its CRC walked again
+  without it. `test_library_index` (`peek()`, `clearPending()`),
+  `test_thumbs` (`parseFile()` against `parse()`), `test_ui_library` (`gc`,
+  `gl`), `test_playback` (`seeks()`). Not on the host: FatFs on the card,
+  the wrapper, the task, the UI; 6.3.1 lists what the device batch checks.
 
 ---
 
@@ -3597,9 +3863,9 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 | N7 | **Built.** **`ScanScheduler`** and the `LibraryWrite` blocker | 1-1.5 | Like `test_idle_policy` (3.3.9) |
 | N8 | **Built.** **`SectorCache`.** Optional: a host FatFs model (vendored FatFs on a RAM disk) counting sector reads per walk and per open on a 20k tree of the user's shape (part 7, U14: vendoring is a download; the user said yes). Both built (3.2.7) | 1 (+1) | LRU, bypass, write invalidation, a random model check (`test_sector_cache`); the model (`test_fat_model`, `tools/fatmodel.py`) checks metascan's 56 sectors per open before L0: 58.0 on N11's card, 3.5 with the cache's 256 sectors |
 | N9 | **Built.** **The catalog, the UI and the texts**: `TrackCatalog`, `LibraryPage` rows, `UiText`, `SleepTimer`'s `kLoose`, the console's `g*` commands (3.7) | 1.5-2 | `test_ui_library`, `test_sleep_timer` |
-| N10 | **Firmware glue, built and not flashed**: the FatFs lister, the diskio wrapper, the card worker, streamed JPEG input, transfer thumbnails, `device.txt` | 2-3 | `pio run -e core2` and `cache_guard` |
+| N10 | **Built.** **Firmware glue, built and not flashed** (3.8): the FatFs lister, the diskio wrapper, the card worker, streamed JPEG input, transfer thumbnails, `device.txt`; with them the boot of 3.2.2, the walk, the compactions and the scan under N7's scheduler, the status line and toasts, and a first update step on the loop | 2-3 | `pio run -e core2` and `core2-dio` with every guard (`cache_guard`, `flash_guard`); `test_card_jobs`: the boot's table, the root, the jobs on fake cards (a hand-filled card walked, scanned and built; a transfer card; a bad T; a full journal) |
 | N11 | **A synthetic big card** (`tools/`): about 20k tiny tagged MP3, FLAC and Opus stubs in the user's shape, with no real names, for L0 without the real library (the user writes it to a card) | 0.5-1 | Its own tag dump through N6 |
-| N12 | **`LibraryUpdate`**, the boot decision and the update step as a portable state machine (3.2.2, 3.4.2): the decision table with `library.tmp` recovery and the build-at-boot marker, the safe point, the memory check and deferral, the build as a card-worker job with the scan and compaction paused until the save, the fence on the loop's readers, Thumbs' pools and the queue released and restored, the restart from D alone; and its glue in `Library.cpp`, `main.cpp` and the UI's "Updating library" state, built and not flashed | 1.5-2.5 | Like `test_idle_policy`: every row of 3.2.2, a deferral then a boot that builds, a track end near the safe point, a compaction request during a build, a bad T found at the end of a build |
+| N12 | **`LibraryUpdate`**, the boot decision and the update step as a portable state machine (3.2.2, 3.4.2): the decision table with `library.tmp` recovery and the build-at-boot marker, the safe point, the memory check and deferral, the build as a card-worker job with the scan and compaction paused until the save, the fence on the loop's readers, Thumbs' pools and the queue released and restored, the restart from D alone; and its glue in `Library.cpp`, `main.cpp` and the UI's "Updating library" state, built and not flashed (N10 built the decision table, the marker, a first safe point and memory check, and the update step on the loop: 3.8) | 1.5-2.5 | Like `test_idle_policy`: every row of 3.2.2, a deferral then a boot that builds, a track end near the safe point, a compaction request during a build, a bad T found at the end of a build |
 | | **Total** | **about 21.5-29.5** | |
 
 **Order:** N1, then N2 and N3: they fix the shared format (which unblocks
@@ -3660,6 +3926,168 @@ the user prepares the card and the machines):
   tool that decodes the directory entries as FatFs does: 0.5 day per
   OS.
 - **C2:** N11's synthetic 20k card written by the user, ready for L0.
+
+#### 6.3.1 The runbook (N10's console lines)
+
+What the batch runs, in order, and what each line should say. The
+expected figures are this document's (ESTIMATED unless marked); a line
+that differs by more than the range is a finding to record next to it.
+Serial at 115200 (the console of README); commands end with Enter.
+
+**Before.** The core2 (QIO) build of `feature/metadata` at N10's commit or
+later, flashed with the user's go-ahead. The card: N11's synthetic 20k
+card (`tools/synthcard.py`, seed 1: no `/.mstream`, every file the
+listener's), or the real library. The first boot of this firmware on a
+card (any `library.idx` an older firmware saved has a walk signature)
+walks /music and saves; the console's first lines say so:
+
+- `[storage] SD card on FatFs drive 0; the sector cache: on (256 sectors,
+  135168 B of PSRAM)`
+- `[lib] the card: no transfer data (none on the card); D none (0 records,
+  0 journal chunks), read in R ms + D ms`
+- `[lib] library.idx built for other card data: walk /music (another
+  transfer's or an older firmware's, and no records) in N ms` (or
+  `missing`), then `[lib] /music walked: N files in M ms`, then `[lib] N
+  tracks, ...; browsable M ms after the mount`
+- `[lib] /.player/device.txt written (firmware 0.7.0-...)`
+
+**L0, the bench** (the stock driver; 3.2.1, 3.2.7). Playback stopped (the
+decoder's reads would count):
+
+1. `gl`. `[bench] the card: 200 single-sector reads over the card, mean X
+   ms`: 0.6-1.0 ms (3.2.1's calibration). `[bench] /music has N entries`
+   (names: N11's card about 705 artists, the user's 705).
+2. The three opens, `[bench] the open under entry K (probe P, 3 levels):
+   uncached A reads in T ms; cached cold B in T ms, warm C in T ms` (the
+   first file of the first folder of the artist at /music's entry 1, 353
+   and 703: on N11's card a plain MP3 album, the summary's probes): A = 4,
+   55 and 108 (3.2.7's model, give or take the album's own folder
+   sectors), B about A (the cache empty), C about 1-3 (the artist's and
+   the album's own folder sectors); T uncached about A x the per-sector
+   time. These are FatFs lookups (`f_stat`). Whether the VFS's open of a
+   track is one lookup or two (its `fstat()`, 3.2.7): `gc0` (the cache
+   off, the counts from zero), play the probe's first track from the
+   Library, `gc`: the card's reads of one sector against A (one lookup,
+   plus a few for the file's FAT and first partial sector) or twice A.
+3. `glw` (minutes at 20k): `[bench] the stock (forEachFile) walk,
+   uncached: 19,410 files ...`: about 153,000 card reads and 89-148 s
+   (3.2.7's nested walk, 153,241); 3.2.3's (CardWalk over FatFs) uncached
+   about 150,742 reads (90-151 s); cached about 7,300 (9.4-12.3 s at 35 µs
+   a hit). The two cached figures are what the device keeps.
+4. PSRAM free with the UI up: `gl`'s last line (`[bench] PSRAM free ...`)
+   or About: 3.5's 2.77-2.90 MB less the cache's 0.13 MB at 77 tracks;
+   record it at 20k for 3.5's table.
+
+**L1, the cache on** (3.2.4, 3.2.7; risk 3). `gc2` (every hit checked
+against the card), then a write soak of 30 minutes or more: play with
+skips and seeks (the resume point's NVS and `queue.txt` writes), queue
+edits, `uiT` (every cover decoded again, its card copy rewritten), `gb`
+(library.idx and a compaction), `gr` (the journal, then a compaction at
+the next epoch). Then:
+
+- `gc`: `[cache] verify: N hits checked, 0 STALE` (any STALE fails L1: the
+  sector's number follows); `[cache] ... writes W (S sectors, U cached
+  sectors refreshed, 0 failed)`; the hit rate during the soak.
+- The firmware has no SD write bench: record the saves' times instead
+  (`g`'s `[index] the card's boot: ... save X ms`, the queue's `q` line)
+  with `gc0` and with `gc1`; they should agree within noise.
+- A remount: restart. `[lib] library.idx matches the card: load (its
+  inputs are the card's)` and the library as before (`g`); `gs` reads D
+  whole (`D /.player/tags.bin: N records ...`).
+
+**L2, the boot and the validation walk** (3.2.2, 3.2.3, 3.2.5):
+
+1. An unchanged card: `[lib] library.idx matches the card: load (...) in
+   N ms` (5 ms at 77 tracks MEASURED before; 1.1-1.5 s at 20k) and
+   `browsable N ms after the mount` (under 0.5 s at 77; under 3.5 s at
+   20k).
+2. About 2 s after the UI's first frame (the Library's status line says
+   "Checking the card…"): `[card] the walk: F folders (L listings, 0
+   merged), A audio ...; 0 added, 0 changed, 0 gone; ...; S steps in M ms`:
+   M about 10 s at 20k with the cache (under 0.05 s at 77); `gs`'s `[card]
+   walk: S steps, mean m ms, longest l ms` (a step is a folder: l under
+   100 ms wanted).
+3. During the walk, play MP3, then FLAC, then on the headphones: the
+   `[stats]` line's `underruns=` doesn't move; `gs`'s `[card] waited (s):`
+   shows what the walk yielded to.
+4. A hand-copied album added on a PC (12 files): the walk says `12
+   added`, the toast "Found 12 new tracks", the status line "Reading tags
+   0 / 12" then "Updating library…", and `[card] the update step (the
+   scan's end): the library is rebuilt`; the album shows with its tags.
+5. 200 files or more added: `[card] the update step is asked (the walk
+   found new files)` right after the walk (U11): the files show by their
+   names first, with their tags after the scan.
+
+**L3, the scanner** (3.3; risk 7). N11's card from a fresh `/.player`
+(delete it on a PC: every file the scan's):
+
+1. The first boot walks /music (the line above), the walk adds every file
+   (`19,410 added`, no toast: none is new to the index), and the scan
+   reads them: "Reading tags N / 19,410". `gs`: `[card] scan: S steps,
+   mean m ms, longest l ms`: m about 8 ms idle with the cache (7.5-8.7),
+   about 18 ms while playing; l under 100 ms. The whole scan (the status
+   line's start to "Library updated"): 2.5-2.9 min idle, 3-6 min playing.
+2. The same while playing MP3, FLAC and on the headphones, and on the
+   Dance page: `underruns=` doesn't move; `gs`'s waits show the ring,
+   track changes, decode passes.
+3. A restart mid-scan: the next boot's `gs` shows D's Pending rows fewer;
+   the scan reads at most the last 100 files (or 5 s) again (`[card]
+   jobs: ... N files read`).
+4. The worker's stack: `gs`'s `[card] the worker: ... its 6 KB stack's
+   least left N B` (1 KB left at least; less is a finding: the stack
+   grows before release). Internal RAM: the same line's `lowest` in
+   Bluetooth mode, against the 50 KB the soaks kept.
+5. The loop: the `[stats]` line's `pass_max=` and the scroll lines' frame
+   times during the scan (L5's too).
+6. The battery: on battery below 10%, `[card] the battery is below 10%:
+   the scan waits for USB or 15%`, and `gs` says `waiting for the battery
+   (below the floor)`.
+7. Compactions: `[card] compaction done: N records ...` about every 3,500
+   files; `gs`'s `[card] compaction: S steps, mean m ms, longest l ms`:
+   the last one 10-16 s at 20k (3.3.7).
+
+**L4, the update step at 20k** (3.4.2; risk 8). With the queue full
+(Shuffle all: 5,000) and an MP3 playing:
+
+1. `gb` (or the scan's end): `[lib] the update step: built in N ms (the
+   loop held for it); PSRAM free X B before, Y B after, lowest Z B`: N
+   against 3.4.2's 11-14 s while an MP3 plays (9-12 s idle; over 16 s
+   grows the safe point); Z the PSRAM's lowest since boot (3.5's margin
+   about 0.7 MB). `[lib] built from the records in N ms: ... peak P B` (3.4.4: 1.99
+   MB at 20k).
+2. The save: `g`'s `[index] the card's boot: ... save X ms` (2-4 s at
+   20k).
+3. The queue survives: `[queue] after the rebuild, carried through
+   queue.txt: 5000 of 5000 tracks still there, at K` (and `(its start
+   point kept)` when paused with a resume point); the playing track plays
+   on and the next one joins gaplessly (`G`'s counters).
+4. A deferral: make PSRAM short (a synthetic library in the Library tab,
+   `uil<n>`, n large enough that PSRAM free falls under the index's size)
+   and `gb`: `[lib] the update step waits for the next boot
+   (...)` and the toast "Library updates at next boot"; restart: `[lib]
+   library.idx matches the card, the build-at-boot marker set: build from
+   the records (a build was deferred to this boot)`, the marker gone
+   after.
+5. The worker's stack during a build: N12's (the build is on the loop
+   here).
+
+**L5, the UI at 20k** (3.3.6, 3.7):
+
+1. Scroll the Artists and Albums lists while the scan runs: the `[ui]
+   scroll:` lines (fps, draw mean and max, ring min, `underruns +0`).
+2. The status line: drawn at most twice a second; the `ui` report's fps
+   with the line up and with it gone (3.3.6: 10 Hz cost 5%).
+3. Covers: `[thumb] <path>: WxH at 1/n, 40 + 96 px in N ms (header and
+   reads R, ...; K KB streamed)`; a cover over 2 MB decodes now; on a
+   transfer card `ui`'s `[thumb] made: ... N transfer thumbnails`.
+4. N9's checks: the "Disc N" divider's look (Bold accent text at y 25, a
+   hairline at y 39), Now Playing's "Album · 2001" fit, `gs` and `gt` on a
+   real card, the Album page's dividers keeping the playing row's reveal
+   and Play from a track.
+5. Touch latency and the `[stats]` line's `pass_max=` while the scan
+   runs, against the same without it (`gc` changes nothing here; stop the
+   scan by unplugging USB below the battery floor, or compare with the
+   card's second boot, when nothing is Pending).
 
 ---
 

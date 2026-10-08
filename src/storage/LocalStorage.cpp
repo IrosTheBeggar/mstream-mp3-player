@@ -15,6 +15,8 @@
 #include <cstring>
 
 #include "UiText.h"
+#include "storage/CardFat.h"
+#include "storage/SectorDisk.h"
 #include "diskio.h"  // FatFs: disk_initialize(), disk_read() (after ff.h's ffconf names them)
 #include "ff.h"
 
@@ -27,6 +29,12 @@ constexpr const char* kFlashLabel = "spiffs";  // LittleFS.begin()'s default par
 // The VFS path: the mount point, then what the callback sees ("/music/...").
 constexpr size_t kPathMax = 300;
 constexpr uint32_t kSdHz = 25000000;
+
+// The SD library's FatFs drive (SDFS::_pdrv, protected): read through a
+// member pointer, which a derived class may name.
+struct SdDrive : fs::SDFS {
+  static uint8_t of(const fs::SDFS& sd) { return sd.*(&SdDrive::_pdrv); }
+};
 
 // One sector of a card that didn't mount, through the SD driver's FatFs
 // disk (cardformat's reader; ctx: the drive number).
@@ -109,6 +117,17 @@ bool LocalStorage::begin() {
     fs_ = &SD;
     name_ = "SD";
     mount_ = kSdMount;
+    // The card's FatFs drive, for what reads it through FatFs itself (the
+    // walk, the scan, the device's records: storage/CardFat), and the PSRAM
+    // sector cache under it (storage/SectorDisk: docs/METADATA.md 3.2.4).
+    // SD.begin() registered the stock driver: the wrapper goes in after it,
+    // before the audio starts (no other task is inside a disk call).
+    const uint8_t pdrv = SdDrive::of(SD);
+    cardfat::setDrive(pdrv);
+    const bool cached = sectordisk::install(pdrv);
+    Serial.printf("[storage] SD card on FatFs drive %u; the sector cache: %s\n", static_cast<unsigned>(pdrv),
+                  cached ? "on (256 sectors, 135168 B of PSRAM)"
+                  : MSTREAM_SECTOR_CACHE ? "OFF (no PSRAM)" : "off (this build: MSTREAM_SECTOR_CACHE=0)");
     return true;
   }
   lookAtCard(cs);  // a card that isn't FAT32 says so (the empty state)

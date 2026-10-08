@@ -52,9 +52,15 @@
 //     a "!" on its Queue row; the headphones lost while playing are a
 //     dialog that follows their reconnecting; the pages have their empty
 //     and no-card states (ui/EmptyState).
-//   - Album covers (ui/Thumbs): thumbnails made by a worker task below the
-//     loop, never while a list moves; a page redraws the row (or the
-//     cover) that shows one when it arrives.
+//   - Album covers (ui/Thumbs): thumbnails made by the card worker below
+//     the loop (app/CardWorker, handed by app/CardTasks), never started
+//     while a list moves; a page redraws the row (or the cover) that shows
+//     one when it arrives.
+//   - The Library's status line (docs/METADATA.md 3.3.6): while the card
+//     worker checks the card, reads tags or the library updates, a Small
+//     line across the list's width at the bottom of a Library page (y
+//     220-239; the list's band ends above it), redrawn at most twice a
+//     second when its text changes.
 //   - The lists (ui/ListView) on the LCD's hardware scroll: the scroller is
 //     started when a list page comes up and stopped (its band cleared) when
 //     a page without one does.
@@ -113,6 +119,14 @@ public:
 
   // ---- events from the rest of the firmware ----
   void libraryChanged();       // the index was rebuilt (g0): the Library's ids are stale
+  // ---- for the card worker (app/CardTasks, ScanScheduler's inputs) ----
+  // A list moves (the page's animating(): a drag, a fling, a snap).
+  bool listMoving() const { return started_ && !suspended_ && page_ && page_->animating(); }
+  // A cover may be made now: the UI is up and lit.
+  bool coversAllowed() const { return started_ && !suspended_ && !dark_; }
+  // The Library tab's open album, artist or folder: its tracks (the scan's
+  // "shown" source, 3.3.3); none when another page is up.
+  LibraryIndex::Span shownTracks() const;
   void volumeKeys();           // the headphones' volume keys: the HUD
   void headphonesLost();       // dropped while playing on them: a dialog (and a long buzz)
   // The headphones the listener asked for are connected and the audio
@@ -268,6 +282,12 @@ private:
   // undo goes (a toggle drops it, qu uses it), an Undo toast up goes too.
   queueview::UndoWatch undoWatch_;
   void sleepTitle(char* buf, size_t size) const;
+  // The Library's status line: the band shortened under it while it shows.
+  void updateStatus(uint32_t nowMs);
+  static constexpr int kStatusH = 20;
+  bool statusBand_ = false;   // the list's band ends above the line
+  uint32_t statusHash_ = 0;   // the text drawn (0: none, or to be drawn again)
+  uint32_t statusAtMs_ = 0;   // when it was drawn
   void coachDone();
   void updateLostDialog();
   // A play that waited for the headphones failed (PlayGate): "Couldn't

@@ -3,6 +3,7 @@
 
 #include "app/TagConsole.h"
 
+#include <esp_heap_caps.h>
 #include <esp_timer.h>
 
 #include <cstring>
@@ -11,11 +12,14 @@
 #include "CardContainer.h"
 #include "CardManifest.h"
 #include "CardTags.h"
+#include "CardWalk.h"
 #include "LibraryBuilder.h"
 #include "QueueView.h"
 #include "TagScan.h"
 #include "TagStore.h"
 #include "app/Psram.h"
+#include "storage/CardFat.h"
+#include "storage/SectorDisk.h"
 
 namespace cc = cardcontract;
 namespace mptg = cardcontract::mptg;
@@ -92,8 +96,16 @@ struct TagConsole::Found {
 void TagConsole::command(const tagtext::Parsed& p) {
   using C = tagtext::Command;
   switch (p.command) {
-    case C::Status: status(); return;
-    case C::Dump: dump(p.path); return;
+    case C::Status:
+      if (jobs_.idle) jobs_.idle();
+      status();
+      return;
+    case C::Dump:
+      if (jobs_.idle) jobs_.idle();
+      dump(p.path);
+      return;
+    case C::Cache: cache(p.n); return;
+    case C::Bench: bench(p.n == 1); return;
     case C::Rescan:
     case C::RescanAll: {
       const bool all = p.command == C::RescanAll;
@@ -113,6 +125,224 @@ void TagConsole::command(const tagtext::Parsed& p) {
     case C::Verify: job("verify the transfer's files (gv)", jobs_.verify); return;
     default: Serial.printf("[tags] %s\n", tagtext::kHelp); return;
   }
+}
+
+// ---- gc: the sector cache (storage/SectorDisk; METADATA.md 3.2.4, 6.3's L0 and L1) ----
+
+void TagConsole::cache(uint32_t n) {
+  if (!sectordisk::installed()) {
+    Serial.printf("[cache] no sector cache: %s\n", !storage_.onCard() ? "no card (the flash)"
+                                                  : MSTREAM_SECTOR_CACHE ? "no PSRAM for it at the mount"
+                                                                         : "this build leaves it out (MSTREAM_SECTOR_CACHE=0)");
+    return;
+  }
+  if (n == 0) {
+    sectordisk::setEnabled(false);
+    sectordisk::setVerify(false);
+  } else if (n == 1 || n == 2) {
+    sectordisk::setEnabled(true);
+    sectordisk::setVerify(n == 2);
+  }
+  if (n <= 2) sectordisk::resetStats();  // the counts from the switch on
+  const sectordisk::Stats st = sectordisk::stats();
+  const SectorCache::Stats& c = st.cache;
+  const uint32_t reads = c.hits + c.misses;
+  Serial.printf("[cache] the sector cache: %s%s; %lu sectors (%u B of PSRAM), %lu held%s\n",
+                sectordisk::enabled() ? "on" : "OFF (every read from the card)",
+                sectordisk::verifying() ? ", every hit checked against the card" : "", (unsigned long)st.capacity,
+                (unsigned)st.bytes, (unsigned long)st.held, n <= 2 ? " (the counts start now)" : "");
+  Serial.printf("[cache] single-sector reads %lu: %lu hits (%.1f%%), %lu misses; multi-sector %lu (%lu sectors); "
+                "writes %lu (%lu sectors, %lu cached sectors refreshed, %lu failed); %lu dropped, %lu evicted\n",
+                (unsigned long)reads, (unsigned long)c.hits, reads ? 100.0 * c.hits / reads : 0.0,
+                (unsigned long)c.misses, (unsigned long)c.bypassed, (unsigned long)c.bypassedSectors,
+                (unsigned long)c.writes, (unsigned long)c.writtenSectors, (unsigned long)c.updated,
+                (unsigned long)c.failedWrites, (unsigned long)c.dropped, (unsigned long)c.evicted);
+  Serial.printf("[cache] the card: %lu reads (%lu of one sector; %lu sectors) in %.0f ms (%.2f ms a read), %lu "
+                "writes, %lu trims\n",
+                (unsigned long)st.cardReads, (unsigned long)st.cardSingleReads, (unsigned long)st.cardReadSectors,
+                st.cardReadUs / 1000.0,
+                st.cardReads ? st.cardReadUs / 1000.0 / st.cardReads : 0.0, (unsigned long)st.cardWrites,
+                (unsigned long)st.trims);
+  if (sectordisk::verifying() || st.verified) {
+    Serial.printf("[cache] verify: %lu hits checked, %lu STALE%s\n", (unsigned long)st.verified,
+                  (unsigned long)st.stale, st.stale ? " (a cache bug: L1 fails)" : "");
+    if (st.stale) Serial.printf("[cache] STALE: sector %lu was the last\n", (unsigned long)st.staleLba);
+  }
+}
+
+// ---- gl: L0's bench (METADATA.md 6.3; 3.2.7's model: tools/fatmodel.py) ----
+
+namespace {
+
+// 3.2.3's walk with nothing written: CardWalk over FatFs into a sink that
+// only counts (no D, no T).
+class CountSink : public cardwalk::Sink {
+public:
+  bool folder(const char*, size_t, const cardwalk::FolderRow&) override { return true; }
+  bool folderGone(const char*, size_t) override { return true; }
+  bool file(const char*, size_t, cardwalk::Change, const cardwalk::FileRow&) override { return true; }
+  bool fileGone(const char*, size_t) override { return true; }
+  bool doubt(const char*, size_t, const cardwalk::Doubt&) override { return true; }
+  bool rewindDoubts() override { return true; }
+  Read nextDoubt(char*, size_t*, cardwalk::Doubt*) override { return Read::End; }
+  bool finish(const cardwalk::Summary&) override { return true; }
+  void abort() override {}
+};
+
+void countFile(const char*, void* ctx) { ++*static_cast<uint32_t*>(ctx); }
+
+// The card's reads since `before` (every read that reached the SD driver,
+// the cache on or off).
+uint32_t readsSince(const sectordisk::Stats& before) { return sectordisk::stats().cardReads - before.cardReads; }
+
+}  // namespace
+
+void TagConsole::bench(bool walks) {
+  if (!storage_.onCard() || !cardfat::ready() || !sectordisk::installed()) {
+    Serial.println("[bench] a mounted card with the sector cache's wrapper (it counts the card's reads)");
+    return;
+  }
+  if (jobs_.idle) jobs_.idle();
+  Serial.println("[bench] L0: playback stopped, or the decoder's reads count too; the cache goes back as it was");
+  const bool wasOn = sectordisk::enabled();
+  // 1. The card's time per sector (the stock driver, never the cache).
+  const sectordisk::Bench b = sectordisk::benchReads(200);
+  Serial.printf("[bench] the card: %lu single-sector reads over the card, mean %.2f ms (fastest %.2f, slowest %.2f), "
+                "%lu failed\n",
+                (unsigned long)b.reads, b.meanUs / 1000.0, b.minUs / 1000.0, b.maxUs / 1000.0, (unsigned long)b.failed);
+  // 2. The opens of a file under /music's 1st, 353rd and 703rd entries
+  // (directory order; the last entry for a probe past a smaller folder's
+  // end): the entry's first subfolder's first file (N11's card puts a plain
+  // MP3 album first there), looked up as an open does, uncached, then the
+  // cache cold (cleared), then warm. 3.2.7's model on N11's card: 4, 55 and
+  // 108 reads uncached, give or take the album's own folder sectors.
+  FF_DIR* dir = psramNew<FF_DIR>();
+  FILINFO* fi = psramNew<FILINFO>();
+  char* names = static_cast<char*>(psramAlloc(4 * 256));
+  char* probe = static_cast<char*>(psramAlloc(3 * 300));
+  char music[16], path[300];
+  const uint32_t want[3] = {1, 353, 703};
+  uint32_t got[3] = {0, 0, 0}, entries = 0;
+  if (dir && fi && names && probe && cardfat::musicPath("", 0, music, sizeof(music)) &&
+      f_opendir(dir, music) == FR_OK) {
+    for (;;) {
+      if (f_readdir(dir, fi) != FR_OK || fi->fname[0] == 0) break;
+      ++entries;
+      for (int k = 0; k < 3; ++k) {
+        if (entries != want[k]) continue;
+        snprintf(names + k * 256, 256, "%s", fi->fname);
+        got[k] = entries;
+      }
+      snprintf(names + 3 * 256, 256, "%s", fi->fname);  // the last so far
+    }
+    f_closedir(dir);
+    for (int k = 0; k < 3; ++k) {
+      if (got[k] || !entries) continue;
+      snprintf(names + k * 256, 256, "%s", names + 3 * 256);
+      got[k] = entries;
+    }
+    // Each probe's path: down the first subfolder to the first file (or
+    // the entry itself, when it is a file or holds nothing).
+    for (int k = 0; k < 3; ++k) {
+      char* rel = probe + k * 300;
+      snprintf(rel, 300, "%s", names + k * 256);
+      for (int depth = 0; depth < 2 && got[k]; ++depth) {
+        if (!cardfat::musicPath(rel, strlen(rel), path, sizeof(path)) || f_opendir(dir, path) != FR_OK) break;
+        char sub[256] = "", file[256] = "";
+        while (f_readdir(dir, fi) == FR_OK && fi->fname[0] != 0) {
+          if (fi->fname[0] == '.') continue;
+          if ((fi->fattrib & AM_DIR) && !sub[0]) snprintf(sub, sizeof(sub), "%s", fi->fname);
+          if (!(fi->fattrib & AM_DIR) && !file[0]) snprintf(file, sizeof(file), "%s", fi->fname);
+        }
+        f_closedir(dir);
+        const char* next = depth == 0 && sub[0] ? sub : file;
+        if (!next[0]) break;
+        const size_t n = strlen(rel);
+        snprintf(rel + n, 300 - n, "/%s", next);
+        if (next == file) break;
+      }
+    }
+  }
+  Serial.printf("[bench] /music has %lu entries\n", (unsigned long)entries);
+  for (int k = 0; k < 3; ++k) {
+    if (!got[k] || !probe) continue;
+    const char* rel = probe + k * 300;
+    if (!cardfat::musicPath(rel, strlen(rel), path, sizeof(path))) continue;
+    uint32_t reads[3];
+    float ms[3];
+    for (int pass = 0; pass < 3; ++pass) {
+      // 0 uncached; 1 the cache cold (off, then on: cleared); 2 warm. A
+      // look at the root first, so FatFs's own one-sector window holds
+      // nothing of the path.
+      if (pass == 0) sectordisk::setEnabled(false);
+      if (pass == 1) sectordisk::setEnabled(true);
+      char root[16];
+      if (cardfat::fatPath("/.player", root, sizeof(root))) f_stat(root, fi);
+      const sectordisk::Stats before = sectordisk::stats();
+      const int64_t t0 = esp_timer_get_time();
+      f_stat(path, fi);
+      ms[pass] = (esp_timer_get_time() - t0) / 1000.0f;
+      reads[pass] = readsSince(before);
+    }
+    Serial.printf("[bench] the open under entry %lu (probe %lu, %u levels): uncached %lu reads in %.1f ms; cached "
+                  "cold %lu in %.1f ms, warm %lu in %.1f ms\n",
+                  (unsigned long)got[k], (unsigned long)want[k], 1u + (unsigned)(strchr(rel, '/') != nullptr) +
+                      (unsigned)(strchr(rel, '/') && strchr(strchr(rel, '/') + 1, '/') != nullptr),
+                  (unsigned long)reads[0], ms[0], (unsigned long)reads[1], ms[1], (unsigned long)reads[2], ms[2]);
+  }
+  psramDelete(dir);
+  psramDelete(fi);
+  psramFree(names);
+  psramFree(probe);
+  // 3. The walks (glw): the stock one (POSIX readdir, forEachFile) and
+  // 3.2.3's (CardWalk over FatFs), each uncached and cached (cleared).
+  if (walks) {
+    for (int w = 0; w < 2; ++w) {
+      for (int cached = 0; cached < 2; ++cached) {
+        sectordisk::setEnabled(false);
+        if (cached) sectordisk::setEnabled(true);  // on again: cleared
+        const sectordisk::Stats before = sectordisk::stats();
+        const int64_t t0 = esp_timer_get_time();
+        uint32_t files = 0, folders = 0;
+        bool ok = true;
+        if (w == 0) {
+          storage_.forEachFile(countFile, &files, 8);
+        } else {
+          cardfat::FatCard* card = psramNew<cardfat::FatCard>();
+          cardwalk::CardWalk* walk = psramNew<cardwalk::CardWalk>();
+          CountSink* sink = psramNew<CountSink>();
+          uint8_t* scratch = static_cast<uint8_t*>(psramAlloc(cardwalk::CardWalk::kDeviceScratch));
+          ok = card && walk && sink && scratch && card->begin();
+          if (ok) {
+            cardwalk::CardWalk::Config c;
+            c.lister = card;
+            c.sink = sink;
+            c.firstAfterCommit = true;
+            c.scratch = scratch;
+            c.scratchBytes = cardwalk::CardWalk::kDeviceScratch;
+            ok = walk->begin(c) && walk->run() == cardwalk::CardWalk::State::Done;
+            const cardwalk::CardWalk::Result& r = walk->result();
+            files = r.audio + r.images + r.others;
+            folders = r.folders;
+          }
+          psramDelete(card);
+          psramDelete(walk);
+          psramDelete(sink);
+          psramFree(scratch);
+        }
+        const float ms = (esp_timer_get_time() - t0) / 1000.0f;
+        Serial.printf("[bench] %s walk, %s: %lu files, %lu folders, in %.0f ms, %lu card reads%s\n",
+                      w == 0 ? "the stock (forEachFile)" : "3.2.3's (CardWalk over FatFs)",
+                      cached ? "cached" : "uncached", (unsigned long)files, (unsigned long)folders, ms,
+                      (unsigned long)readsSince(before), ok ? "" : " (FAILED)");
+      }
+    }
+  }
+  sectordisk::setEnabled(wasOn);
+  Serial.printf("[bench] PSRAM free %u B (largest block %u B), internal RAM free %u B\n",
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM),
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
 }
 
 void TagConsole::job(const char* what, bool (*fn)()) {
@@ -197,6 +427,8 @@ void TagConsole::status() {
     return;
   }
   scanLine();
+  if (jobs_.report) jobs_.report();
+  cache(tagtext::kCacheReport);
   const LibraryIndex* index = library_.index();
   if (index && index->ready()) {
     char t[192];

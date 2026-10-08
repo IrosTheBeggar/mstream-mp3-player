@@ -384,6 +384,9 @@ public:
   // Repeat One's loops (a natural end that played the entry again),
   // free-running: main's "[queue] repeat one" line.
   uint32_t repeats() const { return repeats_; }
+  // The seeks that did something (Started or Waits), free-running: the
+  // card worker waits 2 s after one (ScanScheduler's seekSeq).
+  uint32_t seeks() const { return seeks_; }
 
   PlayState state() const { return state_; }
   int currentIndex() const { return queue_.current(); }
@@ -485,6 +488,7 @@ private:
   PlayState state_ = PlayState::Stopped;
   Repeat repeat_ = Repeat::All;
   uint32_t repeats_ = 0;
+  uint32_t seeks_ = 0;
   // Paused (or Waiting) on a cued track: the backend holds nothing, so a
   // resume starts it.
   bool cued_ = false;

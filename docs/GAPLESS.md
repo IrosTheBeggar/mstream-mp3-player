@@ -1752,7 +1752,11 @@ next file (it needs a file renamed on the card); the hold's cost by
   250 ms in the ring (section 3.2; the review's amendment 15 was rejected
   for this reason). A loop pass that comes late (a library rebuild, a
   screenshot) during a track shorter than the ring can cost that one join
-  the same way. Such tracks are rare, and v0.5.0's gap is all that
+  the same way. The library's update step (docs/METADATA.md 3.4.2, built
+  on the loop in its N10) starts only with 20 s of the playing track left
+  at least and no seek in the last 2 s: the decoder asks what follows only
+  near the track's end, after a build of about 9-14 s at 20,000 tracks
+  (ESTIMATED; the device batch's L4 measures it). Such tracks are rare, and v0.5.0's gap is all that
   happens.
 - **A FLAC with a big embedded picture** is read through at its open
   (libFLAC skips metadata it doesn't keep through the read callback). At

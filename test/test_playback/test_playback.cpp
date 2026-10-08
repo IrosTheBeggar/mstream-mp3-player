@@ -1759,7 +1759,11 @@ void test_a_start_point_on_a_cued_entry_keeps_its_told_length() {
   p.setRepeat(Repeat::One);
   p.play(1);
   a.duration = 207000;
+  TEST_ASSERT_EQUAL_UINT32(0, p.seeks());
   TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, p.seek(r.queue.keyAt(1), 201000, 207000));
+  TEST_ASSERT_EQUAL_UINT32(1, p.seeks());  // counted (the card worker's seekSeq)
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Moved, p.seek(r.queue.keyAt(0), 1000, 207000));
+  TEST_ASSERT_EQUAL_UINT32(1, p.seeks());  // nothing done: not counted
   p.setPauseAfterTrack(true);
   a.position = 207000;
   a.finish();

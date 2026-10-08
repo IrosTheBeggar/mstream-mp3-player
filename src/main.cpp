@@ -38,6 +38,8 @@
 #include "ToneTrack.h"
 #include "TrackCatalog.h"
 #include "UiText.h"
+#include "app/CardTasks.h"
+#include "app/CardWorker.h"
 #include "app/DanceMode.h"
 #include "app/BoardGuard.h"
 #include "app/BoardPower.h"
@@ -53,6 +55,7 @@
 #include "app/ScreenControl.h"
 #include "app/Screenshot.h"
 #include "app/SerialConsole.h"
+#include "app/TagConsole.h"
 #include "app/UsbViz.h"
 #include "app/Version.h"
 #include "audio/Core2AudioBackend.h"
@@ -77,6 +80,11 @@ static Core2AudioBackend audio;
 // The library (a LibraryIndex, the single store) and the play queue (track
 // ids): both in PSRAM, only these small objects in internal RAM.
 static Library library(storage);
+// The one card worker (app/CardWorker: the covers, and on the card the
+// validation walk, the compactions and the tag scan: docs/METADATA.md
+// 3.3.4) and its loop side (app/CardTasks, in PSRAM, made at boot).
+static CardWorker cardWorker;
+static CardTasks* cardTasks = nullptr;
 // (Shuffles draw from esp_random(): fresh hardware entropy for each one.)
 static QueueModel queue(psramAlloc, psramFree, esp_random);
 static PlaybackController player(audio, queue, library.catalog());
@@ -493,6 +501,10 @@ static char uiFake = 0;
 struct MainUiHost : ui::UiHost {
   uint32_t batteryAtMs = 0;
   uint8_t battery = 0;
+  // The reading as it came (-1: not read yet; a failed read is negative
+  // too): the scan's battery floor keeps its state then (ScanScheduler),
+  // where the UI's 0-100 would hold the scan.
+  int batteryRaw = -1;
   bool charging = false;
 
   void snapshot(ui::AppState& s) override {
@@ -549,11 +561,13 @@ struct MainUiHost : ui::UiHost {
     s.cardKind = s.card ? cardformat::Kind::Unreadable : storage.cardKind();
     const LibraryIndex* index = library.index();
     s.libraryTracks = index && index->ready() ? index->trackCount() : 0;
+    s.libraryStatus = cardTasks ? cardTasks->status() : librarytext::Status{};
     // The battery is an I2C read of the power chip: every 10 s is plenty.
     const uint32_t now = millis();
     if (batteryAtMs == 0 || now - batteryAtMs >= 10000) {
       batteryAtMs = now ? now : 1;
-      battery = static_cast<uint8_t>(constrain(M5.Power.getBatteryLevel(), 0, 100));
+      batteryRaw = M5.Power.getBatteryLevel();
+      battery = static_cast<uint8_t>(constrain(batteryRaw, 0, 100));
       charging = M5.Power.isCharging() == m5::Power_Class::is_charging;
     }
     s.battery = battery;
@@ -782,9 +796,21 @@ static bool rebuildLibrary() {
   return ok;
 }
 
+// g0 and the UI's "Try again" with no music: on the card, the validation
+// walk now and the update step after it (the card worker's: the Library's
+// status line follows them); on the flash, /music walked and built at once.
+static bool walkAndRebuild() {
+  if (cardTasks && cardTasks->active()) {
+    cardTasks->askWalkAndUpdate();
+    Serial.println("[index] the card is walked now, and the library updated after it (gs follows them)");
+    return false;
+  }
+  return rebuildLibrary();
+}
+
 void MainUiHost::rescanLibrary() {
   Serial.println("[ui] try again: walking /music");
-  rebuildLibrary();
+  walkAndRebuild();
 }
 
 static const char* stateName() {
@@ -2311,6 +2337,7 @@ static void stepIdle(uint32_t now, bool input) {
   in.input = input;
   in.pairing = pairingUnderWay();
   in.queueWrite = queueStore.busy();
+  in.libraryWrite = cardTasks && cardTasks->libraryWrite();
   in.busy = screenTaken() || usbViz.active();  // (the visualizer: someone is watching)
   in.linked = bt.linkUp();  // (until the disconnect is done: connected() drops as it starts)
   IdlePolicy& p = idlePower.policy();
@@ -2344,6 +2371,7 @@ static void stepIdle(uint32_t now, bool input) {
                   "headphones\n",
                   (unsigned long)(len >= 60000 ? len / 60000 : len / 1000), len >= 60000 ? "min" : "s", stateName());
     queueStore.flushNow();
+    if (cardTasks) cardTasks->flushNow();  // the scan's records next to the queue (METADATA.md 3.3.5)
     idlePower.noteOff(p.lengthMs());
     releaseHeadphones("[power] turning off");
   }
@@ -2418,6 +2446,7 @@ bool MainUiHost::setCpuSpeed(uint16_t mhz) {
                 (unsigned)before, (unsigned)mhz, paused ? " (paused first)" : "",
                 amp ? ", the speaker's amp off" : "");
   queueStore.flushNow();
+  if (cardTasks) cardTasks->flushNow();
   powerSettings.noteRestart(mhz);
   releaseHeadphones("[power] restarting");
   // Carried out by the speaker's pump once its fade has played out (as Pa0).
@@ -2442,6 +2471,91 @@ static void stepCpuRestart(uint32_t now) {
                 amp ? "; the speaker's amp still on after 3 s" : "");
   haptics.stop();
   powerSettings.restart();  // (doesn't return)
+}
+
+// ---- the card worker (docs/METADATA.md 3.3.4, 3.4.2) ----
+
+// The update step's safe point (3.4.2): nothing plays, or the playing track
+// has 20 s left at least and no seek came in the last 2 s, so the decoder
+// can't reach its end of file and ask for the next path while the index is
+// down (the build holds the loop until N12 moves it to the card worker).
+static uint32_t lastSeekMs = 0;
+static uint32_t seeksSeen = 0;
+static bool updateSafePoint(uint32_t now) {
+  if (player.seeks() != seeksSeen) {
+    seeksSeen = player.seeks();
+    lastSeekMs = now;
+  }
+  if (player.state() != PlayState::Playing) return true;
+  return trackLeftMs() >= 20000 && now - lastSeekMs >= 2000;
+}
+
+// The update step, when the card worker's jobs ask for it: the memory check
+// (PSRAM short: the build-at-boot marker, and the next boot builds before
+// the UI), then the build with the queue carried through queue.txt.
+static void runUpdateStep() {
+  char why[96];
+  if (!library.roomToBuild(queue.memoryBytes(), why, sizeof(why))) {
+    const bool marked = library.deferToBoot();
+    Serial.printf("[lib] the update step waits for the next boot (%s)%s\n", why,
+                  marked ? "" : "; the marker COULDN'T be written");
+    cardTasks->updateDeferred();
+    return;
+  }
+  cardTasks->beforeUpdate();
+  const uint32_t t0 = millis();
+  const uint32_t psBefore = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  const bool ok = rebuildLibrary();
+  Serial.printf("[lib] the update step: %s in %lu ms (the loop held for it); PSRAM free %u B before, %u B after, "
+                "lowest %u B\n",
+                ok ? "built" : "FAILED", (unsigned long)(millis() - t0), (unsigned)psBefore,
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+  cardTasks->afterUpdate(ok);
+}
+
+// Every loop pass, after the UI's (its covers taken in, its list's motion
+// known): what the card worker does next (ScanScheduler's inputs, as
+// METADATA.md 3.3.9 maps them), the update step when it is due, the toasts.
+static void stepCard(uint32_t now, bool input) {
+  if (!cardTasks) return;
+  ScanScheduler::In in;
+  in.nowMs = now;
+  in.listMoving = userInterface && userInterface->listMoving();
+  in.input = input;
+  in.playing = player.state() == PlayState::Playing;
+  in.ringMs = audio.bufferedMsNow();
+  in.ringCapacityMs = audio.ringCapacityMs();
+  in.underruns = audio.underrunsNow();
+  in.decodePassUs = audio.takePassPeakUs();
+  in.decoderAtEnd = in.playing && audio.heardSourceEnded();
+  in.trackSeq = audio.trackSeq();
+  in.seeking = !audio.positionKnown();  // a start not taken up yet (a seek's, a skip's)
+  in.seekSeq = player.seeks();
+  BtSink& bt = audio.bluetooth();
+  in.btSetup = pairingUnderWay() || bt.link().phase == BtLink::Phase::Paging;
+  static bool linkWas = false;
+  static uint32_t linkEvents = 0;
+  if (bt.linkUp() != linkWas) {
+    linkWas = bt.linkUp();
+    ++linkEvents;
+  }
+  in.btSeq = linkEvents;
+  in.usb = screen.externalPower();
+  in.battery = uiHost.batteryRaw;
+  CardTasks::Sources src;
+  const uint32_t t = queue.currentTrack();
+  src.playing = t != QueueModel::kNone && !TrackCatalog::isBuiltin(t) ? t : LibraryIndex::kNone;
+  src.queue = &queue;
+  if (userInterface) src.shown = userInterface->shownTracks();
+  cardTasks->loop(in, src, userInterface ? &userInterface->thumbs() : nullptr,
+                  userInterface && userInterface->coversAllowed());
+  if (cardTasks->updateDue(now, updateSafePoint(now))) runUpdateStep();
+  char toast[64];
+  if (cardTasks->takeToast(toast, sizeof(toast))) {
+    Serial.printf("[card] toast: %s\n", toast);
+    if (userInterface) userInterface->note(toast, 3000);
+  }
 }
 
 // NVS (Preferences: the settings, the touch calibration, the Bluetooth
@@ -2584,6 +2698,33 @@ void setup() {
       Serial.printf("[queue] no saved queue: the whole library, %lu tracks\n", (unsigned long)queue.size());
     }
   }
+  // The card worker's jobs over the card's records (the walk 2 s after the
+  // UI's first frame, then the scan), and the console's hooks into them.
+  cardTasks = psramNew<CardTasks>(library, cardWorker);
+  if (!cardTasks) {
+    Serial.println("[card] no PSRAM for the card worker's jobs: no covers, no scan");
+  } else if (cardTasks->begin()) {
+    Serial.println("[card] the card worker: the validation walk 2 s after the UI, then the tag scan");
+  }
+  if (TagConsole* tc = spike.tags()) {
+    TagConsole::Jobs j;
+    j.rescan = [](bool all) { return cardTasks && cardTasks->rescan(all); };
+    j.walk = [] { return cardTasks && cardTasks->walkNow(); };
+    j.build = [] {
+      if (!cardTasks || !cardTasks->active()) return false;
+      cardTasks->askUpdate("gb");
+      return true;
+    };
+    j.verify = [] { return cardTasks && cardTasks->verify(); };
+    j.state = [](librarytext::Status* st, char* line, size_t size) {
+      if (cardTasks) cardTasks->state(st, line, size);
+    };
+    j.report = [] {
+      if (cardTasks) cardTasks->report();
+    };
+    j.idle = [] { return !cardTasks || cardTasks->waitIdle(10000); };
+    tc->setJobs(j);
+  }
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);
   diag::logHeap("library");
@@ -2615,7 +2756,7 @@ void setup() {
     if (userInterface) userInterface->setDark(dark);
   });
   spike.onScreenReleased(uiResume);  // the UI draws again
-  spike.onRebuild(rebuildLibrary);
+  spike.onRebuild(walkAndRebuild);
   {
     const LibraryIndex* index = library.index();
     durations.reset(index && index->ready() ? index->trackCount() : 0);
@@ -2630,6 +2771,7 @@ void setup() {
   }
   Serial.printf("[ui] internal RAM %lu B free before the UI, %lu B after\n", (unsigned long)freeBeforeUi,
                 (unsigned long)diag::heap().internalFree);
+  if (!userInterface && cardTasks) cardTasks->armWalk(millis());  // no UI to wait for
   // The rescue hold, on the start-up screen (with the UI's fonts, now loaded).
   if (userInterface) {
     bootScreen.hint(uitext::kBootTouchHint);
@@ -2650,7 +2792,7 @@ void setup() {
                  "library of n tracks in the Library tab, uil0 the card's); "
                  "UI spike (with Enter): u input lab (u0-u3, us summary), w scroll lab (w0 interactive, w1-w3 stress, wm0/wm1 redraw/hw scroll, wp refill pacing), "
                  "g library index (g0 SD card, g<n> synthetic) and its tags (gs the scan's status, gt</music/...> a "
-                 "file's tags, gr rescan tags; g? all), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja); "
+                 "file's tags, gr rescan tags, gc the sector cache, gl the card's bench; g? all), e font probe (e1-e5), j thumbnail probe (j<n>, jw, ja); "
                  "P power measurement (P a line, Pl log, P? the knobs; Ps the screen, Ps0/Ps1 off/on); "
                  "T sleep timer (T status, T<min>, Ts<sec> for tests, Tt/Ta/Tq end of track/album/queue, T+ +10 min, "
                  "T0 off); I idle power-off (I status, I<min>/Is<sec> a test length, I0 the setting's); "
@@ -2688,7 +2830,8 @@ void loop() {
   if (sleepTimer.fading() && (woken || touchedThisPass) && userInterface) userInterface->sleepFading();
   stepSleep(now);
   player.update(now);
-  stepIdle(now, idleInput || touchedThisPass || screen.takeInput());
+  const bool anyInput = idleInput || touchedThisPass || screen.takeInput();
+  stepIdle(now, anyInput);
   powerSettings.update(audio.bluetooth().connected());
   stepCpuRestart(now);
   audio.loop(now);
@@ -2777,6 +2920,7 @@ void loop() {
     }
     if (!userInterface->started() && bootShown && !screenTaken() && !rescueFinger) {
       userInterface->start(now);
+      if (cardTasks) cardTasks->armWalk(now);  // the validation walk 2 s after the first frame (3.2.3)
       // It turned itself off last time, or restarted for a new CPU speed:
       // say so, once (stopped or paused where it was).
       char note[48];
@@ -2786,6 +2930,7 @@ void loop() {
     }
     userInterface->loop(now);
   }
+  stepCard(now, anyInput);
   // The computer's visualizer: its timeout, USB unplugged, the Dance tab gone.
   usbViz.loop(now, screen.externalPower());
   shot.poll();

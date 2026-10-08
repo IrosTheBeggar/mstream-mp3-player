@@ -26,6 +26,13 @@
 //   gr!           ... the transfer's files' too (a diagnostic)
 //   gw, gb, gv    walk now, build now, verify T's files (the card worker's
 //                 jobs: N10, N12)
+//   gc            the PSRAM sector cache under FatFs (N10): its counts; gc0
+//                 off, gc1 on, gc2 on with every hit checked against the
+//                 card (the device batch's L0 and L1, 6.3)
+//   gl            L0's bench: the card's time per sector, the opens of a
+//                 file under /music's 1st, 353rd and 703rd entries,
+//                 uncached and cached;
+//                 glw also the stock walk of /music, uncached and cached
 namespace tagtext {
 
 enum class Command : uint8_t {
@@ -39,11 +46,15 @@ enum class Command : uint8_t {
   Walk,       // gw
   Build,      // gb
   Verify,     // gv
+  Cache,      // gc, gc0, gc1, gc2: `n` the switch (kCacheReport, 0, 1, 2)
+  Bench,      // gl, glw: `n` 1 with the walks
   Bad,        // anything else (g<n> out of 1-50,000 included)
 };
+// Cache's `n` for gc alone: the counts, nothing switched.
+constexpr uint32_t kCacheReport = 9;
 struct Parsed {
   Command command = Command::Bad;
-  uint32_t n = 0;            // Synthetic's
+  uint32_t n = 0;            // Synthetic's; Cache's and Bench's
   const char* path = "";     // Dump's: the rest of the argument, from its first non-space
 };
 // `arg`: what followed the 'g', trimmed (nullptr: "").

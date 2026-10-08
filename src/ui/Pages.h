@@ -279,6 +279,9 @@ public:
   void describe(char* buf, size_t size) const override;
   // The segment the root shows (for a jump from Now Playing that keeps it).
   LibrarySegment segmentShown() const { return segment(); }
+  // The page's own tracks (an album's, an artist's, a folder's files): the
+  // scan reads what the listener looks at first (METADATA.md 3.3.3).
+  LibraryIndex::Span shownTracks() const { return real() ? pageTracks() : LibraryIndex::Span{}; }
 
   // ListView::Source
   uint32_t rows() override;

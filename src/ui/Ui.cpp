@@ -246,9 +246,11 @@ void Ui::shuffleAll() {
 void Ui::showTop() {
   Page* next = pageFor(nav_.top().kind);
   if (page_) page_->leave();
-  // A page that shortened the list band (the Queue's selection mode) has
-  // let it go in leave(); be sure.
+  // A page that shortened the list band (the Queue's selection mode, the
+  // Library's status line) has let it go in leave(); be sure.
   if (list_.height() != ListView::kHeight) setListBand(ListView::kHeight);
+  statusBand_ = false;
+  statusHash_ = 0;
   ensureScroller(next->scrolls());
   page_ = next;
   applyCover();
@@ -455,6 +457,7 @@ bool Ui::closeModal(bool notify) {
 
 void Ui::repaintUnder() {
   applyCover();
+  statusHash_ = 0;  // the status line again, if it shows (a sheet covered it)
   if (jumpGrid_.up()) {
     jumpGrid_.draw();
   } else if (coach_.up()) {
@@ -1071,7 +1074,7 @@ void Ui::loop(uint32_t nowMs) {
       dance_.setActive(false);  // (a console tab change while dark)
       danceWasOn_ = true;
     }
-    thumbs_.loop(nowMs, /*busy=*/true);
+    thumbs_.loop(nowMs);
     return;
   }
   if (!hud_.up()) tabBar_.update(tabState(nowMs));
@@ -1106,10 +1109,12 @@ void Ui::loop(uint32_t nowMs) {
       clock_.msUntilDue(millis()) >= kAheadMinMs) {
     list_.renderAhead();
   }
-  // Covers: a new job only while no list moves; one that arrived is drawn
-  // where it shows (a modal's page draws it all when the modal goes).
-  const uint32_t arrived = thumbs_.loop(nowMs, page_ && page_->animating());
+  // Covers: one that arrived is drawn where it shows (a modal's page draws
+  // it all when the modal goes). New ones are the card worker's, never
+  // started while a list moves (app/CardTasks).
+  const uint32_t arrived = thumbs_.loop(nowMs);
   if (arrived != Thumbs::kNone && page_ && !modalUp()) page_->thumbReady(arrived);
+  updateStatus(nowMs);
   if (nowMs - framesWindowStart_ >= 1000) {
     const uint32_t ms = nowMs - framesWindowStart_;
     if (framesInWindow_ > 1) fps_ = framesInWindow_ * 1000.0f / ms;
@@ -1146,6 +1151,51 @@ void Ui::trackMotion(uint32_t nowMs) {
                 motion_.list ? "scroll" : "scrub", (unsigned long)ms, (unsigned long)motion_.frames,
                 ms ? motion_.frames * 1000.0f / ms : 0.0f, motion_.sumUs / 1000.0f / motion_.frames, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
                 (unsigned long)(state_.underruns - motion_.underruns), ScrollGovernor::name(budget_.level));
+}
+
+LibraryIndex::Span Ui::shownTracks() const {
+  if (!started_ || suspended_ || page_ != &libraryPage_ || browse_) return {};
+  return libraryPage_.shownTracks();
+}
+
+// The Library's status line (docs/METADATA.md 3.3.6): Small, across the
+// list's width (uitext::kStatusW), at the bottom of a Library page while
+// the card worker has something to say; the list's band ends above it.
+void Ui::updateStatus(uint32_t nowMs) {
+  char text[64] = "";
+  const bool library = page_ == &libraryPage_ && !browse_;
+  if (library) librarytext::statusText(state_.libraryStatus, text, sizeof(text));
+  // The band changes only while the list stands still (a fling isn't cut).
+  if (list_.attached() && list_.animating()) return;
+  if (!text[0]) {
+    if (statusBand_) {
+      statusBand_ = false;
+      statusHash_ = 0;
+      setListBand(ListView::kHeight);
+      list_.invalidate();
+    }
+    return;
+  }
+  if (modalUp() || jumpGrid_.up() || coach_.up()) return;  // drawn again when they go
+  if (!statusBand_) {
+    statusBand_ = true;
+    statusHash_ = 0;
+    setListBand(ListView::kHeight - kStatusH);
+    list_.invalidate();
+  }
+  uint32_t h = 2166136261u;
+  for (const char* p = text; *p; ++p) h = (h ^ static_cast<uint8_t>(*p)) * 16777619u;
+  if (h == 0) h = 1;
+  // At most twice a second (at 10 Hz the redraw cost 5%: MEASURED, 3.3.6).
+  if (h == statusHash_ || (statusHash_ != 0 && nowMs - statusAtMs_ < 500)) return;
+  statusHash_ = h;
+  statusAtMs_ = nowMs;
+  M5Canvas& c = gfx::strip();
+  Fonts& f = Fonts::instance();
+  c.fillRect(0, 0, kW, kStatusH, col::HEAD);
+  c.drawFastHLine(0, 0, kW, col::DIV);
+  f.draw(c, Font::Small, text, 8, kStatusH / 2 + 1, uitext::kStatusW, col::DIM, col::HEAD);
+  gfx::push(c, 0, kH - kStatusH, kW, kStatusH);
 }
 
 uint32_t Ui::idleMs(uint32_t nowMs) const {
@@ -1455,6 +1505,7 @@ void Ui::setDark(bool on) {
 // was off, and what was drawn before (its GRAM) may be stale.
 void Ui::redrawAll() {
   const uint32_t t0 = millis();
+  statusHash_ = 0;
   // The panel keeps its scroll registers through sleep-in; sent again anyway.
   if (vscroll_.active()) vscroll_.resend();
   // A volume HUD that came up in the dark is old news.

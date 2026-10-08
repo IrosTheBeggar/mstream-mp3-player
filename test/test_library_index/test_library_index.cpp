@@ -1558,6 +1558,75 @@ void test_inputs_of_the_cache() {
   TEST_ASSERT_TRUE(more.buildStamp() != idx.buildStamp());
 }
 
+// peek(): the boot reads a saved index's header alone (3.2.2, N10): its
+// inputs whatever they are (no Stale here), Outdated for an older version
+// or other rules, Corrupt for a short or foreign file; nothing is loaded.
+// clearPending(): a track the scan read since the build stops being
+// Pending, its other fields and the build stamp as they were.
+void test_peek_and_clear_pending() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  buildSample(idx);
+  LibraryIndex::Inputs in;
+  in.cardId = 0x0102030405060708ull;
+  in.generation = 3;
+  in.commitId = 0xA0A0B0B0C0C0D0D0ull;
+  in.tagsCrc = 0x12345678u;
+  in.transfer = true;
+  in.deviceCrc = 0xDEADBEEFu;
+  in.journalSeq = 4;
+  MemorySink file;
+  TEST_ASSERT_TRUE(idx.save(file, in));
+  std::vector<uint8_t> bytes(file.data(), file.data() + file.size());
+  auto peek = [](const std::vector<uint8_t>& b, LibraryIndex::Inputs* out) {
+    MemorySource src(b.data(), b.size());
+    return static_cast<int>(LibraryIndex::peek(src, out));
+  };
+  LibraryIndex::Inputs got;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), peek(bytes, &got));
+  TEST_ASSERT_TRUE(got.sameHard(in));
+  TEST_ASSERT_TRUE(got.sameSoft(in));
+  TEST_ASSERT_EQUAL_UINT64(0, got.walkSignature);
+  // Only the header is read: a file cut right after it still peeks.
+  std::vector<uint8_t> head(bytes.begin(), bytes.begin() + 22 * 4 + 2 * 4 * (LibraryIndex::kBuckets + 1));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Loaded), peek(head, &got));
+  head.pop_back();
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), peek(head, &got));
+  std::vector<uint8_t> older = bytes;
+  older[4] = 5;  // version 5
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), peek(older, &got));
+  std::vector<uint8_t> rules = bytes;
+  rules[12] = static_cast<uint8_t>(LibraryIndex::kRulesVersion + 1);
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), peek(rules, &got));
+  std::vector<uint8_t> foreign = bytes;
+  foreign[0] ^= 1;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), peek(foreign, &got));
+  std::vector<uint8_t> newer = bytes;
+  newer[4] = 7;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), peek(newer, &got));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Corrupt), peek(std::vector<uint8_t>(), &got));
+
+  // clearPending: built Pending, then read by the scan.
+  LibraryIndex p(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(p.begin("/music"));
+  TEST_ASSERT_TRUE(p.addFile("/music/A/B/01 - x.mp3", LibraryIndex::kAddPending) == LibraryIndex::Add::Added);
+  TEST_ASSERT_TRUE(p.addFile("/music/A/B/02 - y.mp3", LibraryIndex::kAddPending) == LibraryIndex::Add::Added);
+  TEST_ASSERT_TRUE(p.finish());
+  const uint64_t stamp = p.buildStamp();
+  const uint32_t t = p.findTrack("/music/A/B/02 - y.mp3");
+  TEST_ASSERT_TRUE(t != LibraryIndex::kNone);
+  const LibraryIndex::Track before = p.track(t);
+  TEST_ASSERT_TRUE(before.flags & LibraryIndex::kTrackPending);
+  p.clearPending(t);
+  p.clearPending(LibraryIndex::kNone);  // out of range: nothing
+  const LibraryIndex::Track after = p.track(t);
+  TEST_ASSERT_FALSE(after.flags & LibraryIndex::kTrackPending);
+  TEST_ASSERT_EQUAL_UINT8(before.flags & ~LibraryIndex::kTrackPending, after.flags);
+  TEST_ASSERT_EQUAL_UINT32(before.title, after.title);
+  TEST_ASSERT_EQUAL_UINT16(before.number, after.number);
+  TEST_ASSERT_EQUAL_UINT64(stamp, p.buildStamp());
+  TEST_ASSERT_TRUE(p.track(p.findTrack("/music/A/B/01 - x.mp3")).flags & LibraryIndex::kTrackPending);
+}
+
 // A folder's facts (D's DFLD: its best image, its counts) set its cover as
 // the files would have; an owned image doesn't beat a transfer thumbnail, a
 // hand-added one does (2.14.3).
@@ -1726,6 +1795,7 @@ int main(int, char**) {
   RUN_TEST(test_sort_keys_are_kept_and_blank_ones_ignored);
   RUN_TEST(test_library_roots);
   RUN_TEST(test_inputs_of_the_cache);
+  RUN_TEST(test_peek_and_clear_pending);
   RUN_TEST(test_folder_facts_and_thumbnails);
   RUN_TEST(test_trims_in_place);
   RUN_TEST(test_tagged_synthetic_library);

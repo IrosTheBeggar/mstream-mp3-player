@@ -358,7 +358,12 @@ mstream-queue 2 <entries> <current> <generation>
   docs/METADATA.md's N3, through `queue.txt` itself (flushed, then read
   back after the rebuild: `queueremap::run()`), not a copy in PSRAM. A
   queue that can't come back is left empty by `QueueModel::release()`,
-  which keeps the mode.
+  which keeps the mode. On the card the rebuild is METADATA.md's update
+  step (3.4.2, built in its N10: 3.8), which the card worker asks for after
+  the tag scan, a walk that found new files, or `gb`; it waits for a safe
+  point (nothing plays, or the playing track has 20 s left at least and no
+  seek came in the last 2 s) and runs on the loop until METADATA.md's N12
+  moves its build to the card worker.
 - **Why in the file and not NVS:** the mode is atomic with the ranks it
   needs, so a shuffled mode with a rankless file, or the reverse, can't
   happen. With no card there is no library to shuffle anyway.
