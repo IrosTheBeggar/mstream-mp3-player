@@ -30,7 +30,9 @@ trim and `queuetext::read()`'s pre-sized blocks), built into
 (the user's answer to U12: 3.5, and docs/QUEUE-MODES.md section 15) is
 built the same way. N5, the validation walk, is in `lib/core/CardWalk`,
 host-tested on fake FAT trees (3.2.6 says what it decided); N10 and N12
-bring it into the firmware. Part 2, the card
+bring it into the firmware. N4, the device's own records and their journals, is
+in `lib/core/TagStore`, a power cut tested at every step (3.3.7 says
+what it decided). Part 2, the card
 contract, is a **PROPOSAL (v1)** for the transfer software, whose own
 design is still being worked on in mstream-terminal; it is written so
 that side can implement it without reading the player's code, and every
@@ -2483,6 +2485,120 @@ internal free during a scan in Bluetooth mode.
 - **Texts:** the placeholders in `lib/core/UiText.h` and the empty state
   ("Put folders in /music/Artist/Album/") are reworded: tags are read now.
 
+#### 3.3.7 As built (N4)
+
+`lib/core/TagStore` is 3.3.2's store, host-tested (`test_tag_store`)
+through a file interface of its own (`tagstore::Fs`: FatFs on the device,
+N10's glue) and not yet called: N6's scan writes through it, N12 calls it
+at boot and before a build. N5's walk reads and writes it through
+`lib/core/TagStoreWalk` (`KnownD`, D as `cardwalk::Known`; `WalkSink`,
+walk.jnl as `cardwalk::Sink`; `test_tag_store_walk` runs the real walk on
+fake FAT trees into it). What the code decided where 3.3.2 left room:
+
+- **D's sections**, after HIDX and not REQUIRED (N1's reader skips them):
+  `DSTA`, a 16-byte header (the records; the rows that aren't Software and
+  the FOLD entries on their paths, 3.4.4's `ownCounts()`) and a byte per
+  record (`LibraryBuilder::Status` in bits 0-1, "confirmed by qfp" in bit
+  2); `DFLD`, an 8-byte header and per FOLD entry N5's folder row (its
+  digest; its best cover's name, rank, size, time and ownership; its
+  counts of audio, images and other files: 31 bytes and the name); `DHDR`,
+  48 bytes (a version, the commit the walk compared against, T's skew, the
+  rescan epoch). A Software or Pending row's record holds the size, the
+  FAT time and the qfp the walk read (2.6.4 lets the device fill qfp; N5
+  saves it so a confirmation is paid once); an Unreadable one the
+  UNREADABLE flag. FOLD lists the folders with audio at or below them, as
+  N5 does. The rest is the contract's MPTG: what a compaction writes is
+  byte for byte what N1's writer makes of the same rows (a test).
+- **One parser and one epoch per D:** the header's parserVersion and
+  DHDR's epoch are its readings'. A compaction under another parser, or a
+  Rescan (`compact(true)`, the next epoch), turns Scanned and Unreadable
+  rows Pending (their size, time and qfp kept), and so do chunks read
+  under another.
+- **`tags.jnl`:** a chunk is a 32-byte header (magic `MPJC`, the sequence
+  from 1, D's headerCrc, the count, the payload's length, the parser, the
+  rules, the epoch), the records sorted into canonical order (a path
+  added twice keeps its last), and a CRC-32. Boot checks each chunk whole
+  (its CRC, its order, each run's shape) up to the first that fails; the
+  next append cuts the tail off there. A journal whose first chunk names
+  another D was merged already, and the next append replaces it.
+- **`walk.jnl`** is the target of N5's `cardwalk::Sink`: a 64-byte header
+  (magic `MPWJ`, D's headerCrc, the commit, and `tags.jnl`'s last
+  sequence when the walk began), then CRC'd blocks of File, Gone, Doubt,
+  Folder and FolderGone entries, each run closed by an End block with T's
+  skew. Run 1 is the walk's rows and its doubts, read back after it; run 2
+  its settled rows. Each kind keeps its own order (files and gones
+  canonical, folders in pre-order, doubts canonical), the kinds
+  interleaved as the walk gives them. A doubt changes no row: the walk
+  gives the doubtful file's row without T first. Run 1 without its End is
+  dropped (the card is walked again); run 2 without its End leaves run 1's
+  rows (the doubtful files without T). DHDR takes the walk's commit and
+  skew from a whole walk only, so after such a cut the next boot walks
+  against T again and settles the doubts. An unchanged card's walk writes
+  nothing; a failed one is removed (`abort()`). `WalkSink` closes run 1
+  when the walk reads its doubts back; the walk's skew comes with its
+  summary, in run 2's End.
+- **Which row wins:** per path, the newest in time: D, the chunks older
+  than the walk (by the header's sequence), run 1, run 2, the newer
+  chunks. A walk's row keeps a reading made at the same size and time
+  (unless T now covers the file), and a qfp of that size and time. So the
+  scan may run before and after a walk with no compaction between them,
+  and a card changed on a PC is seen by the next boot's walk over the
+  chunks the last session left. `TagStore::View` reads this merged view
+  without writing (the scan's to-do: its Pending rows in canonical order),
+  in the compaction's memory.
+- **The compaction is two passes** over its inputs: the first counts each
+  section (and writes HIDX's pairs to `hidx.tmp`), the second writes each
+  at its place, a 512-byte buffer per section; then HIDX is sorted in
+  passes over `hidx.tmp` in the memory the merge gave back (8 passes at
+  20k), then DHDR, the directory and the header, a sync, and 2.12.6's
+  rename. Its memory is fixed by its config: 66,220 bytes at the defaults
+  (32 chunks, 512-byte buffers), the same with 32 chunks of records at
+  2.3.6's limits as with 96 chunks (MEASURED on the host). `albumValues`
+  and `artistValues` are exact to 128 values, then a linear-counting
+  estimate (they only pre-size). D failing its checks partway through the
+  first pass is left out (3.4.1): the journals alone make the new D, its
+  DHDR unwalked, and the next walk compares the whole card.
+- **The journal's limits:** 512 KB or 32 chunks asks for a compaction
+  (`wantsCompaction()`, also when D was read by another parser), and
+  `append()` refuses a 33rd chunk, so the memory holds. A journal of more
+  (another firmware's) has the rest dropped by the compaction; their files
+  stay Pending and the scan reads them again.
+- **2.12.6, extended:** twins are `tags.xl1` to `tags.xl9`; repeated cuts
+  without a disk check take the next free name, and with all nine taken
+  the file isn't replaced until a disk check frees them. `settle()`,
+  `prepareTmp()`, `replace()` and `collectTwins()` take any file's names,
+  so `library.idx`, `queue.txt` and `device.txt` can use them (N12).
+- **The builder's inputs** (3.4.4): `BuilderRows` (DSTA, its CRC checked
+  first: N2's walker doesn't know the section) and `BuilderFacts` (DFLD
+  through a folder cursor) are `LibraryBuilder::DeviceRows` and
+  `FolderFactsSource`.
+- **Proven on the host** (a fake card whose rename is two directory
+  writes and that records any cluster chain freed while another entry
+  uses it): a session of walks, scans, compactions and a Rescan, cut at
+  each of its 192 steps (every write, sync and remove, both directory
+  writes of each rename) and booted three ways (every step before the cut
+  on the card; the unsynced writes lost; the cut write half done). Each of
+  the 576 boots finds the state before the step that was cut or after it
+  (or, inside a walk, run 1 alone), reads it whole, and the rest of the
+  session reaches the same end; 2,677 boots whose recovery was cut again
+  do too; no cut frees a chain another entry uses, and the 9 cuts that
+  left `tags.bin` and `tags.tmp` on one chain made twins. Through N5's
+  walk: a first walk after a transfer whose stamps a PC shifted an hour
+  (every file doubtful, settled by the skew) and its compaction, cut at
+  each of their 41 steps and booted the three ways: the 123 boots (24 of
+  them with run 1 alone) each find the card's files at their sizes and
+  times, and the next boot's walk and compaction make the D the uncut
+  ones made.
+- **Measured (host) at 20k** (the user's shape, every file scanned, 100 a
+  chunk): D of Pending rows 2.51 MB, of full records 3.84 MB (3.3.2 said
+  about 4.1). The scan compacts 8 times: 71.0 MB read and 28.0 MB written
+  in all, the last compaction 10.0 MB read (D twice, the journal twice,
+  HIDX's passes) and 4.1 MB written. At 1.2-1.7 MB/s to read and 0.5-1
+  MB/s to write that is about 10-16 s for the last compaction and 1.2-1.9
+  min over a full scan (ESTIMATED), more than 3.3.2's 12-24 s since every
+  compaction reads D twice. Levers if L3 finds it slow: a bigger journal
+  (fewer compactions), HIDX's sort in more memory.
+
 ### 3.4 The builder
 
 #### 3.4.1 Inputs and the merge
@@ -3079,7 +3195,7 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 | N1 | **Built.** **The contract kit** (`lib/core/CardContract`): CRC-32, FNV-1a 64, qfp, FAT time and the skew rule; MSMF, MPTG, MPDJ and MSPD readers and writers; the root election; `device.txt`; 2.4.3's structural checks; the fixtures of 2.17 (2.18's vectors, the JSON library descriptions and their golden files), frozen for the terminal's tests | 2.5-3 | Round trips; truncation at every byte and a flipped bit per section give "absent"; each structural check broken under valid CRCs gives "absent" (no endless loop); a newer major is absent, a newer minor reads; the golden bytes |
 | N2 | **Built.** **`LibraryIndex` v6 and `LibraryBuilder`**: Stage A's election (5.4), the merge (2.9), exact sizing, the inputs, LIBR roots | 3.5-4.5 | `test_library_index` extended; `LibrarySynth` with synthetic tags at the measured disagreement rates; 20k memory and build-peak asserts (walked, and T listing after a transfer); the same files from T and from D build byte-identical indexes apart from the sources and lengths within a second |
 | N3 | **Built.** **The queue's remap through `queue.txt`**; `QueueModel::release()` and the exact trim | 1-1.5 | `test_queue`: a 20k remap within budget (since the queue's cap, a full queue of 5,000 from a 20k library); shuffled; the current track gone; the resume point carried; the remap after a rebuild or a boot with no library, and after a cleared queue (the file read back from its own line) |
-| N4 | **`TagStore`**: D with its device sections, `tags.jnl` (sorted chunks), `walk.jnl`, the streaming k-way compaction, recovery, the cut-rename rule (2.12.6) | 2-2.5 | A power cut injected at every write, sync, remove and rename, a rename cut between its two directory writes included; the compaction's PSRAM bounded whatever the journal holds |
+| N4 | **Built.** **`TagStore`**: D with its device sections, `tags.jnl` (sorted chunks), `walk.jnl`, the streaming k-way compaction, recovery, the cut-rename rule (2.12.6) | 2-2.5 | A power cut injected at every write, sync, remove and rename, a rename cut between its two directory writes included; the compaction's PSRAM bounded whatever the journal holds |
 | N5 | **Built.** **`CardWalk`**: the lister interface, the canonical sort (with its passes for big folders), the digests, T's freshness (the skew, Doubtful entries through `walk.jnl`, qfp, confirmations) | 2-2.5 | Fake FAT trees: shuffled order, a 3,000-file folder through a small scratch, a retag at the same size, a renamed folder, a deleted album, every stamp shifted an hour, three files shifted, invalid and zero stamps |
 | N6 | **`TagScan`, the production port** with part 5's rules; the synthetic parity corpus (2.17, item 3) | 3-4 | The corpus and the crafted edge files; the fuzz harness (ASan only if a Linux toolchain is available); parity against a lofty reference (the terminal's S3, or a small host harness until it exists) |
 | N7 | **`ScanScheduler`** and the `LibraryWrite` blocker | 1-1.5 | Like `test_idle_policy` |
