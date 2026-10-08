@@ -61,15 +61,40 @@ public:
     void clear();
   };
 
+  // One track's names while the index is away (the library's update step,
+  // docs/METADATA.md 3.4.2: behind its fence the catalog has no index, and
+  // Now Playing keeps the playing track's title, artist and album): taken
+  // from the catalog before the fence (take()), answered for that id while
+  // the catalog has no ready index (setHeld()). Its path isn't kept: the
+  // player starts nothing meanwhile. Held by its owner (about 1 KB: PSRAM).
+  struct Held {
+    uint32_t track = kNone;  // kNone: none
+    char title[Overlay::kField] = "";
+    char artist[Overlay::kField] = "";
+    char album[Overlay::kField] = "";
+    char albumArtist[Overlay::kField] = "";
+    uint16_t year = 0;
+    uint32_t durationMs = 0;
+  };
+
   explicit TrackCatalog(const LibraryIndex* index = nullptr) : index_(index) {}
   void setIndex(const LibraryIndex* index) { index_ = index; }
   const LibraryIndex* index() const { return index_; }
   // The overlay to read (nullptr: none); its owner keeps it alive.
   void setOverlay(const Overlay* overlay) { overlay_ = overlay; }
   // Changes whenever what a library track is called may have changed
-  // without a rebuild (an overlay set or cleared): Now Playing draws its
-  // names again.
-  uint32_t namesVersion() const { return overlay_ ? overlay_->version : 0; }
+  // without a rebuild (an overlay set or cleared, a held copy set or
+  // dropped): Now Playing draws its names again.
+  uint32_t namesVersion() const { return (overlay_ ? overlay_->version : 0) + heldVersion_; }
+  // `id`'s names as the catalog gives them now, into `h` (false: not a
+  // library track of a ready index; `h` then names none).
+  bool take(uint32_t id, Held* h) const;
+  // The copy to answer from while there is no ready index (nullptr: none);
+  // its owner keeps it alive.
+  void setHeld(const Held* held) {
+    held_ = held;
+    ++heldVersion_;
+  }
 
   // The power test's silence (the console's Pz): zeros for an hour.
   static constexpr const char* kSilencePath = "tone:silence";
@@ -118,7 +143,13 @@ private:
   const Overlay* overlayFor(uint32_t id) const;
   // `id` (in the index) is an artist folder's own track.
   bool loose(uint32_t id) const;
+  // The held copy, when it names `id` and the index is away.
+  const Held* heldFor(uint32_t id) const {
+    return held_ && held_->track == id && id != kNone && !inIndex(id) ? held_ : nullptr;
+  }
 
   const LibraryIndex* index_;
   const Overlay* overlay_ = nullptr;
+  const Held* held_ = nullptr;
+  uint32_t heldVersion_ = 0;
 };

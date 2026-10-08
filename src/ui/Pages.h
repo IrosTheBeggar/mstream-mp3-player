@@ -425,7 +425,8 @@ public:
   bool tinted(uint32_t row) override;
   bool emptyState(EmptyState& e) override;
   void onEmptyAction(int i) override;
-  const char* emptyText() override { return "The queue is empty"; }
+  // (Behind the library update's fence the queue is the build's: its line.)
+  const char* emptyText() override;
 
 private:
   enum class Ask : uint8_t { None, ClearSheet, ClearConfirm };
@@ -555,7 +556,7 @@ public:
 
 private:
   // What the dialog or sheet up is asking.
-  enum class Ask : uint8_t { None, Pair, More, Forget, CpuRestart, Touch, RemoveCal };
+  enum class Ask : uint8_t { None, Pair, More, Forget, CpuRestart, Touch, RemoveCal, Rescan };
   enum RootRow : uint8_t {
     BtTop,
     BtButtons,
@@ -569,6 +570,7 @@ private:
     CpuSpeed,
     BtPower,
     Calibrate,
+    LibraryRow,
     AboutRow,
     kRootRows
   };
@@ -603,6 +605,11 @@ private:
   // A tap on "Touch calibration": its sheet (Calibrate, Test taps,
   // and Remove while a table is saved).
   void onTouch();
+  // The Library row (docs/METADATA.md 3.3.6): its count, where the names
+  // come from, the Rescan tags pill; a tap asks first (the dialog).
+  void drawLibraryRow(ListView::Row& r);
+  void onRescan();
+  static uint32_t librarySig(const AppState& s);
   static uint32_t screenSig(const AppState& s);
   void drawDevice(ListView::Row& r, const BtDevice& d);
   void drawPairStatus(ListView::Row& r);
@@ -627,6 +634,7 @@ private:
   bool drawnHaptics_ = false;
   bool drawnCalibrated_ = false;
   uint32_t drawnScreen_ = 0xFFFFFFFFu;  // the screen, idle and power settings drawn (screenSig())
+  uint32_t drawnLibrary_ = 0xFFFFFFFFu;  // the Library row drawn (librarySig())
   uint32_t nextSpinMs_ = 0;
   uint8_t spin_ = 0;  // the spinner's step (8 a turn)
   // Pair: the scan's list as last copied, and the device picked.

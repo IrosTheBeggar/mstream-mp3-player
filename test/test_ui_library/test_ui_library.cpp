@@ -1495,6 +1495,37 @@ void test_catalog_names_and_overlay() {
   TEST_ASSERT_EQUAL_STRING("Sketch", titleOf(c, sketch).c_str());
   c.setOverlay(nullptr);
   TEST_ASSERT_EQUAL_UINT32(0, c.namesVersion());
+  // The library update's fence (docs/METADATA.md 3.4.2, N12): the catalog
+  // has no index while the build runs; the playing track's names come from
+  // the copy taken before (Now Playing keeps them), its path doesn't (the
+  // player starts nothing), every other library id is unknown.
+  TrackCatalog::Held h;
+  TEST_ASSERT_TRUE(c.take(dawn, &h));
+  TEST_ASSERT_EQUAL_UINT32(dawn, h.track);
+  const uint32_t v2 = c.namesVersion();
+  c.setHeld(&h);
+  TEST_ASSERT_TRUE(c.namesVersion() != v2);
+  TEST_ASSERT_EQUAL_STRING("Dawn", titleOf(c, dawn).c_str());  // the index still answers while it is there
+  c.setIndex(nullptr);
+  TEST_ASSERT_EQUAL_STRING("Dawn", titleOf(c, dawn).c_str());
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir", c.artist(dawn));
+  TEST_ASSERT_EQUAL_STRING("First Light", c.album(dawn));
+  TEST_ASSERT_EQUAL_UINT16(2001, c.year(dawn));
+  TEST_ASSERT_EQUAL_UINT32(201000, c.durationHintMs(dawn));
+  char p[TrackCatalog::kMaxPath];
+  TEST_ASSERT_EQUAL_size_t(0, c.path(dawn, p, sizeof(p)));
+  TEST_ASSERT_FALSE(c.valid(dawn));
+  TEST_ASSERT_EQUAL_STRING("", titleOf(c, gale).c_str());
+  TEST_ASSERT_EQUAL_STRING("", c.artist(gale));
+  TEST_ASSERT_EQUAL_STRING("Built-in", c.album(TrackCatalog::builtins()[0]));  // the built-in tracks as ever
+  // The index back (the new build's): it answers, the copy is dropped.
+  c.setIndex(&idx);
+  const uint32_t v3 = c.namesVersion();
+  c.setHeld(nullptr);
+  TEST_ASSERT_TRUE(c.namesVersion() != v3);
+  TEST_ASSERT_EQUAL_STRING("Dawn", titleOf(c, dawn).c_str());
+  TEST_ASSERT_FALSE(c.take(TrackCatalog::kNone, &h));
+  TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kNone, h.track);
 }
 
 // The A-Z rail, a row's letter and the jump grid key on the sort keys
@@ -1610,6 +1641,10 @@ void test_library_texts_fit() {
   fits(body, kLibraryUpdated, kToastTextRight - kToastTextX);
   fits(body, kLibraryAtBoot, kToastTextRight - kToastTextX);
   TEST_ASSERT_TRUE(small.hasAll(kStatusChecking) && small.hasAll(kStatusUpdating));
+  // The update step's fence (N12): the lists' line, and the note for what waits.
+  fits(body, kUpdatingList, 320 - 24);
+  TEST_ASSERT_TRUE(body.hasAll(kUpdatingList));
+  fits(body, kUpdatingWait, kToastTextRight - kToastTextX);
 }
 
 // ---- the console's tag commands (tagtext, docs/METADATA.md 3.3.6) ----
@@ -1819,6 +1854,89 @@ void test_dance_texts_fit() {
   TEST_MESSAGE(msg);
 }
 
+// The Output tab's Library row (3.3.6, N12): its title, where its names
+// come from (the longest form that fits; the shortest always does), the
+// Rescan pill and its dialog.
+void test_library_row_texts() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
+  char t[96];
+  librarytext::libraryRowTitle(19410, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Library: 19,410 tracks", t);
+  fits(body, t, kLibraryRowW);
+  librarytext::libraryRowTitle(99999, t, sizeof(t), 1);  // the short form, when the long one doesn't fit
+  TEST_ASSERT_EQUAL_STRING("99,999 tracks", t);
+  fits(body, t, kLibraryRowW);
+  librarytext::libraryRowTitle(0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Library: no tracks", t);
+  librarytext::Sources s;
+  s.transfer = 18000;
+  s.device = 1400;
+  s.none = 10;
+  librarytext::sourcesText(s, 0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("18,000 from the transfer, 1,400 read here, 10 without tags", t);
+  librarytext::sourcesText(s, 1, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("18,000 transfer, 1,400 here, 10 none", t);
+  librarytext::sourcesText(s, 2, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("99% tagged", t);
+  // The parts with a count only; all from one source.
+  s = librarytext::Sources{};
+  s.device = 77;
+  librarytext::sourcesText(s, 0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("77 read here", t);
+  fits(small, t, kLibraryRowW);
+  librarytext::sourcesText(s, 2, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("100% tagged", t);
+  s.none = 1;
+  librarytext::sourcesText(s, 2, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("98% tagged", t);  // rounded down: 100% only when all are
+  s = librarytext::Sources{};
+  s.none = 5;
+  librarytext::sourcesText(s, 0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("names from the files", t);
+  // The shortest form fits whatever the counts; the short one for a card
+  // of the user's shape (most from the transfer, some read here).
+  s.transfer = 99999;
+  s.device = 99999;
+  s.none = 99999;
+  librarytext::sourcesText(s, librarytext::kSourceForms - 1, t, sizeof(t));
+  fits(small, t, kLibraryRowW);
+  s.transfer = 18000;
+  s.device = 1400;
+  s.none = 0;
+  librarytext::sourcesText(s, 1, t, sizeof(t));
+  fits(small, t, kLibraryRowW);
+  for (const char* l : {kLibraryRowPaths, kLibraryRowNoCard, kLibraryRowUpdating}) fits(small, l, kLibraryRowW);
+  TEST_ASSERT_TRUE(small.hasAll(kLibraryRowUpdating));
+  fits(body, kRescanPill, kRescanPillW - kSettingPillPad);
+  fits(body, kRescanStarted, kToastTextRight - kToastTextX);
+  fits(body, kRescanNoCard, kToastTextRight - kToastTextX);
+  // The dialog: its title in Bold, its body in Small on its 3 lines (as
+  // the calibration's Remove), its button.
+  fits(bold, kRescanTitle, kDialogTitleW);
+  fits(bold, kRescanPill, kDialogButtonTextW);
+  {
+    textfit::Font f;
+    f.ctx = const_cast<Vlw*>(&small);
+    f.width = [](void* ctx, const char* text) { return static_cast<const Vlw*>(ctx)->width(text); };
+    TEST_ASSERT_TRUE(strlen(kRescanBody) < 128);
+    char lines[4][96];
+    const int n =
+        textfit::wrap(f, kRescanBody, strlen(kRescanBody), kDialogTitleW, 3, &lines[0][0], sizeof(lines[0]));
+    TEST_ASSERT_TRUE(n <= 3);
+    std::string joined;
+    for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
+    TEST_ASSERT_EQUAL_STRING(kRescanBody, joined.c_str());
+  }
+  // A buffer too small: cut, never past it.
+  char tiny[12];
+  s.transfer = 18000;
+  s.device = 1400;
+  s.none = 10;
+  TEST_ASSERT_TRUE(librarytext::sourcesText(s, 0, tiny, sizeof(tiny)) < sizeof(tiny));
+  TEST_ASSERT_TRUE(strlen(tiny) < sizeof(tiny));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_jump_letters_match_the_index_buckets);
@@ -1852,6 +1970,7 @@ int main(int, char**) {
   RUN_TEST(test_catalog_names_and_overlay);
   RUN_TEST(test_rail_follows_the_sort_keys);
   RUN_TEST(test_library_texts_fit);
+  RUN_TEST(test_library_row_texts);
   RUN_TEST(test_console_tag_commands);
   RUN_TEST(test_console_tag_dump);
   RUN_TEST(test_console_sources);

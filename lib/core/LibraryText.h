@@ -120,4 +120,25 @@ size_t statusText(const Status& s, char* buf, size_t size);
 // "Found 12 new tracks", "Found 1 new track" (the walk's toast).
 size_t foundText(uint32_t n, char* buf, size_t size);
 
+// ---- the Output tab's Library row (3.3.6, N12) ----
+// Where the index's tracks' names come from: the transfer's records, the
+// device's own reading, or none (their paths).
+struct Sources {
+  uint32_t transfer = 0;
+  uint32_t device = 0;
+  uint32_t none = 0;
+  uint32_t total() const { return transfer + device + none; }
+};
+Sources sourcesOf(const LibraryIndex& index);
+// "Library: 19,410 tracks" ("Library: no tracks"); `form` 1, its short
+// form ("19,410 tracks") when the long one doesn't fit.
+size_t libraryRowTitle(uint32_t tracks, char* buf, size_t size, int form = 0);
+// The row's second line in `form` 0 (long: "18,000 from the transfer, 1,400
+// read here, 10 without tags"), 1 (short: "18,000 transfer, 1,400 here, 10
+// none") or 2 ("99% tagged"; rounded down, 100% only when all are); the
+// parts with a count only; none at all with a record: "names from the
+// files". The caller takes the longest that fits.
+constexpr int kSourceForms = 3;
+size_t sourcesText(const Sources& s, int form, char* buf, size_t size);
+
 }  // namespace librarytext

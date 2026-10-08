@@ -340,6 +340,11 @@ inline constexpr const char* kFoundOne = "Found 1 new track";
 inline constexpr const char* kFoundMany = "Found %s new tracks";
 inline constexpr const char* kLibraryUpdated = "Library updated";
 inline constexpr const char* kLibraryAtBoot = "Library updates at next boot";
+// The update step's fence (3.4.2, N12): the lists' line (Body, centred, the
+// list's width less 24) while the library is rebuilt on the card worker,
+// and the note for a skip, a seek or an edit tried meanwhile (a toast).
+inline constexpr const char* kUpdatingList = "Updating the library\xE2\x80\xA6";
+inline constexpr const char* kUpdatingWait = "Updating the library: a moment";
 
 // ---- the Output tab (ui/OutputPage) ----
 // The Bluetooth card's status line (Small, x 52 to the radio).
@@ -462,6 +467,28 @@ inline constexpr int kIdleToastPad = 8;  // a label has its pill less this
 // The next boot's toast (IdlePolicy::offText(): "Turned off after 20
 // minutes idle"): Body on one line, no buttons, kToastTextX to
 // kToastTextRight.
+// The Output tab's Library row (docs/METADATA.md 3.3.6, N12): its title
+// (Body: "Library: 19,410 tracks"), where its tracks' names come from
+// (Small: librarytext::sourcesText(), the longest form that fits), and its
+// Rescan tags button in a pill (a dialog asks first) narrower than the
+// settings' (its one word). Both lines kLibraryRowW wide.
+inline constexpr int kRescanPillW = 68;  // "Rescan" (58 px) in its pill
+inline constexpr int kLibraryRowW = 312 - 8 - kRescanPillW - 8 - 44;  // from x 44, the row's right 312
+inline constexpr const char* kLibraryRowTitle = "Library: %s tracks";
+inline constexpr const char* kLibraryRowTitleShort = "%s tracks";  // (when the title doesn't fit)
+inline constexpr const char* kLibraryRowEmpty = "Library: no tracks";
+inline constexpr const char* kLibrarySrcLong[3] = {"%s from the transfer", "%s read here", "%s without tags"};
+inline constexpr const char* kLibrarySrcShort[3] = {"%s transfer", "%s here", "%s none"};
+inline constexpr const char* kLibrarySrcTagged = "%s%% tagged";
+inline constexpr const char* kLibraryRowPaths = "names from the files";
+inline constexpr const char* kLibraryRowNoCard = "tags need a card";
+inline constexpr const char* kLibraryRowUpdating = "updating\xE2\x80\xA6";
+inline constexpr const char* kRescanPill = "Rescan";
+inline constexpr const char* kRescanTitle = "Rescan tags?";
+inline constexpr const char* kRescanBody =
+    "The player reads the tags of its own files again (the transfer's stay as they are). Minutes on a big card.";
+inline constexpr const char* kRescanStarted = "Reading the tags again";
+inline constexpr const char* kRescanNoCard = "Tags are read on a card only";
 // About: a value (Body, or Small when Body doesn't fit).
 inline constexpr int kAboutValueW = 260;
 inline constexpr const char* kAboutMemory = "RAM %lu KB (low %lu), PSRAM %.1f MB";

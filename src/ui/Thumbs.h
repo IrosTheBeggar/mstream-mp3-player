@@ -87,6 +87,16 @@ public:
   bool startCover(CardWorker& worker, uint8_t priority, uint32_t nowMs);
   // The library was rebuilt: album ids mean other albums.
   void libraryChanged();
+  // The library's update step (docs/METADATA.md 3.4.2) borrows the pools
+  // for its build (about 315 KB: ThumbCache::release()): every cover is the
+  // placeholder and nothing is asked meanwhile; restore() makes them again,
+  // empty (false: no PSRAM for them now: the placeholders stay, and the
+  // next update step tries again). The job's own buffers stay.
+  void lend();
+  bool restore();
+  bool lent() const { return lent_; }
+  // What lend() gives back (the update step's memory check counts it).
+  size_t poolBytes() const { return lent_ ? 0 : cache_.bytes(); }
   // Console uiT: every cover is decoded again this session, not read from
   // its card copy (which is rewritten): the decode's timings on demand.
   void redecode();
@@ -106,6 +116,7 @@ private:
   ThumbCache cache_;
   Job* job_ = nullptr;          // PSRAM
   bool ready_ = false;
+  bool lent_ = false;           // lend(): the pools are the library update's
   uint32_t generation_ = 0;     // bumped by libraryChanged(): a job from before is dropped
   uint32_t retryAtMs_ = 0;      // the worker couldn't be made: try again then
   bool skipCard_ = false;       // redecode()

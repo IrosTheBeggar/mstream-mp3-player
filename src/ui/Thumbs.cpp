@@ -427,6 +427,23 @@ void Thumbs::libraryChanged() {
   cache_.clear();
 }
 
+void Thumbs::lend() {
+  if (!ready_ || lent_) return;
+  ++generation_;  // (a job taken in after this is dropped)
+  cache_.release();
+  lent_ = true;
+}
+
+bool Thumbs::restore() {
+  if (!lent_) return true;
+  if (!cache_.begin(kSmallSlots, kLargeSlots)) {
+    Serial.println("[thumb] no PSRAM for the covers' cache after the library update: placeholders until the next");
+    return false;
+  }
+  lent_ = false;
+  return true;
+}
+
 void Thumbs::redecode() {
   libraryChanged();
   skipCard_ = true;
@@ -523,7 +540,7 @@ uint32_t Thumbs::loop(uint32_t nowMs) {
 }
 
 bool Thumbs::wantsCover(uint32_t nowMs) const {
-  return ready_ && job_->state.load() == Idle && cache_.wanted() > 0 && cache_.making() == kNone &&
+  return ready_ && !lent_ && job_->state.load() == Idle && cache_.wanted() > 0 && cache_.making() == kNone &&
          static_cast<int32_t>(nowMs - retryAtMs_) >= 0;
 }
 

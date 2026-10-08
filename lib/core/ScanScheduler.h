@@ -19,7 +19,7 @@
 // What starts, when the worker is free (the first that applies):
 //   1. The update step's build, at priority 1 (the loop's): the listener
 //      waits for it behind the "Updating library" fence. Nothing here holds
-//      it: N12's safe point decides when it is asked.
+//      it: LibraryUpdate's safe point decides when it is asked (N12).
 //   2. A list is moving: nothing else starts, covers included (Thumbs' rule).
 //   3. A cover, at priority 1, dropped to 0 while a list moves under it
 //      (Thumbs' rule): rows on screen come first (3.3.3, 0). The audio's
@@ -65,8 +65,10 @@
 // compaction hold IdlePolicy's LibraryWrite: the idle power-off never cuts
 // them.
 //
-// Portable, host-tested (test_scan_scheduler); not called yet: N10's card
-// worker runs it, and N12's LibraryUpdate asks for the build and the save.
+// Portable, host-tested (test_scan_scheduler); the firmware's card worker
+// runs it (app/CardTasks, N10), and N12's LibraryUpdate asks for the build
+// and the save and holds the rest from its fence to the save's end
+// (test_library_update runs the two together).
 class ScanScheduler {
 public:
   // The worker's jobs. A step: a cover; the build (one step); the save (one

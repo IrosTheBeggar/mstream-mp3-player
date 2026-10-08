@@ -130,7 +130,7 @@ struct Buffers {
 };
 
 // One walk of the card (`card`, a fakefat::Card or a lister over one) into
-// `st` against `t` (nullptr: no transfer data) at `id`, as N12 will run it:
+// `st` against `t` (nullptr: no transfer data) at `id`, as CardJobs runs it:
 // the first walk after a commit when D's identity isn't the root's (or D is
 // unwalked), D's skew otherwise.
 cw::CardWalk::Result walk(ts::TagStore& st, cw::Lister& card, const std::vector<uint8_t>* t,

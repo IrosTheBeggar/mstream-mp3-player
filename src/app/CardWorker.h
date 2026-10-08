@@ -10,15 +10,17 @@
 
 #include "ScanScheduler.h"
 
-// The one card worker (docs/METADATA.md 3.3.4; milestone N10): a task on
-// core 1, below the audio decoder (2), that takes one step at a time of
+// The one card worker (docs/METADATA.md 3.3.4; milestones N10, N12): a task
+// on core 1, below the audio decoder (2), that takes one step at a time of
 // whatever the loop hands it: a cover (ui/Thumbs), a folder of the
 // validation walk, a compaction, a file of the scan (app/CardTasks,
-// lib/core CardJobs). Thumbs' worker, generalised: it runs only the step
+// lib/core CardJobs), the update step's build and its save (lib/core
+// LibraryUpdate). Thumbs' worker, generalised: it runs only the step
 // it is handed, so no two jobs overlap, and the loop (ScanScheduler)
 // decides what starts and at what priority:
 //   - 1 (the loop's) for a cover on screen and the update step's build;
-//   - 0 (the idle task's) for the walk, the scan and the compaction: the SD
+//   - 0 (the idle task's) for the walk, the scan, the compaction and the
+//     update step's save: the SD
 //     driver's reads busy-wait the CPU, so at the loop's priority a step
 //     would time-slice with the loop for its whole length; at 0 the loop
 //     preempts it whenever it is ready.
@@ -30,10 +32,12 @@
 // is made for the first step and ends itself kIdleExitMs after the last.
 // What the steps hold is in PSRAM (their jobs' memory, FatFs's FIL, DIR
 // and FILINFO); on the stack: TagScan's about 1 KB, FatFs's 512 B long-name
-// buffer, the frames. The 'gs' line prints its stack's high-water mark,
-// the least left over every life of the task since the boot or `gs0` (a
-// task's own mark starts again when it is made), and the internal RAM's
-// lowest while a step ran (L3 and L4 measure them).
+// buffer, the frames (the build's deepest path, its views' sort, about 4.5
+// KB at worst: METADATA.md 3.9, ESTIMATED). The 'gs' line prints its
+// stack's high-water mark, the least left over every life of the task
+// since the boot or `gs0` (a task's own mark starts again when it is
+// made), and the internal RAM's lowest while a step ran (L3 and L4 measure
+// them).
 //
 // Loop task only, but for the step itself.
 class CardWorker {

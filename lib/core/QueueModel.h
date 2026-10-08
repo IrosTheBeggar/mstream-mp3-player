@@ -228,8 +228,9 @@ public:
   // (docs/METADATA.md section 3.4.2, step 3; queueremap::run()): the queue
   // file holds the queue while the index is rebuilt in its memory, and an
   // assign() reads it back after. Nothing may save the queue meanwhile (the
-  // saver would write it empty): the rebuild holds the loop today, and the
-  // update step's fence will (N12).
+  // saver would write it empty): the flash's rebuild holds the loop, and
+  // the card's update step holds QueueStore's saver behind its fence (N12:
+  // queueremap::Carry).
   void release();
 
 private:

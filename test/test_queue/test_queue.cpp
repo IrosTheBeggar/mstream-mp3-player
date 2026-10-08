@@ -3560,6 +3560,72 @@ void test_remap_reads_a_kept_longer_file_in_its_window() {
   TEST_ASSERT_EQUAL_INT(4500, st.pos);
 }
 
+// The remap in two halves (docs/METADATA.md 3.4.2, N12: the update step's
+// build runs on the card worker while the loop goes on): begin() flushes
+// and frees, the player fenced; the build happens elsewhere (Card::rebuild()
+// isn't called); finish() reads back as run() would. Through the file and,
+// for a card that can't take it, through the text held across.
+void test_remap_in_two_halves_around_a_build_elsewhere() {
+  constexpr uint32_t kN = 120;
+  for (int memory = 0; memory < 2; ++memory) {
+    Meter::reset();
+    LibraryIndex idx;
+    TEST_ASSERT_TRUE(buildSynth(idx, kN));
+    TrackCatalog c(&idx);
+    QueueModel q(Meter::alloc, Meter::release);
+    QuietBackend audio;
+    PlaybackController player(audio, q, c);
+    MemStore st;
+    QueueSaver saver(st, q, c);
+    const LibraryIndex::Span all = idx.allTracks();
+    TEST_ASSERT_TRUE(q.assign(all.ids, all.count, 0));
+    saver.loaded(4, true, 0);
+    player.play(30);
+    const std::vector<std::string> before = paths(q, c);
+    const int plays = audio.plays;
+    bool rebuildCalled = false;
+    MemCard card(saver, st, player, [&] {
+      rebuildCalled = true;
+      return false;
+    });
+    card.cantTake = memory != 0;
+    queueremap::Carry carry(Meter::alloc, Meter::release);
+    carry.begin(q, saver, player, c, card);
+    TEST_ASSERT_TRUE(carry.carrying());
+    TEST_ASSERT_TRUE(q.empty());
+    TEST_ASSERT_EQUAL_INT(-1, q.current());
+    TEST_ASSERT_TRUE(player.fenced());
+    TEST_ASSERT_TRUE(carry.result().freedBytes > 0);
+    TEST_ASSERT_TRUE(carry.result().via == (memory ? queueremap::Via::Memory : queueremap::Via::File));
+    if (memory) {
+      TEST_ASSERT_TRUE(carry.result().textBytes > 0);
+      TEST_ASSERT_EQUAL_size_t(carry.result().textBytes, Meter::live);  // the text, and nothing of the queue's
+    } else {
+      TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+    }
+    // The loop goes on (the player's passes do nothing), the build elsewhere.
+    for (int i = 0; i < 10; ++i) player.update(static_cast<uint32_t>(i));
+    TEST_ASSERT_TRUE(player.state() == PlayState::Playing);
+    const std::string gone = before[3];
+    TEST_ASSERT_TRUE(buildSynth(idx, kN, {gone}, {"/music/A Made-up Opener/01 - Intro.mp3"}));
+    const queueremap::Result r = carry.finish(q, saver, player, c, card, true, 5000);
+    TEST_ASSERT_FALSE(rebuildCalled);
+    TEST_ASSERT_FALSE(carry.carrying());
+    TEST_ASSERT_FALSE(player.fenced());
+    TEST_ASSERT_TRUE(r.rebuilt);
+    TEST_ASSERT_TRUE(r.read.ok);
+    TEST_ASSERT_TRUE(r.read.currentKept);
+    TEST_ASSERT_EQUAL_UINT32(1, r.read.dropped);
+    std::vector<std::string> want = before;
+    want.erase(want.begin() + 3);
+    TEST_ASSERT_TRUE(paths(q, c) == want);
+    TEST_ASSERT_EQUAL_STRING(before[30].c_str(), pathOf(c, q.currentTrack()).c_str());
+    TEST_ASSERT_EQUAL_INT(plays, audio.plays);  // it plays on: nothing started
+    TEST_ASSERT_TRUE(player.state() == PlayState::Playing);
+    if (memory) TEST_ASSERT_EQUAL_size_t(q.memoryBytes(), Meter::live);  // the text given back
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -3647,5 +3713,6 @@ int main(int, char**) {
   RUN_TEST(test_a_longer_file_reads_in_its_window);
   RUN_TEST(test_an_older_longer_queue_at_boot_is_written_again);
   RUN_TEST(test_remap_reads_a_kept_longer_file_in_its_window);
+  RUN_TEST(test_remap_in_two_halves_around_a_build_elsewhere);
   return UNITY_END();
 }

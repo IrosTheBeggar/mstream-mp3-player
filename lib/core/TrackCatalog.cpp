@@ -152,11 +152,13 @@ size_t TrackCatalog::title(uint32_t id, char* buf, size_t size) const {
     const char* t = index_->trackTitle(id, &len);
     return copyCut(t, len, buf, size);
   }
+  if (const Held* h = heldFor(id)) return copyCut(h->title, std::strlen(h->title), buf, size);
   return copyOut("", 0, buf, size);
 }
 
 const char* TrackCatalog::artist(uint32_t id) const {
   if (isBuiltin(id)) return "built-in";
+  if (const Held* h = heldFor(id)) return h->artist;
   if (!inIndex(id)) return "";
   const Overlay* o = overlayFor(id);
   if (o && o->artist[0]) return o->artist;
@@ -172,6 +174,7 @@ bool TrackCatalog::loose(uint32_t id) const {
 
 const char* TrackCatalog::album(uint32_t id) const {
   if (isBuiltin(id)) return "Built-in";
+  if (const Held* h = heldFor(id)) return h->album;
   if (!inIndex(id)) return "";
   const Overlay* o = overlayFor(id);
   if (o && o->album[0] && !loose(id)) return o->album;
@@ -179,10 +182,12 @@ const char* TrackCatalog::album(uint32_t id) const {
 }
 
 const char* TrackCatalog::albumArtist(uint32_t id) const {
+  if (const Held* h = heldFor(id)) return h->albumArtist;
   return inIndex(id) ? librarytext::albumArtist(*index_, index_->track(id).album) : "";
 }
 
 uint16_t TrackCatalog::year(uint32_t id) const {
+  if (const Held* h = heldFor(id)) return h->year;
   if (!inIndex(id)) return 0;
   const Overlay* o = overlayFor(id);
   if (o && o->year && !loose(id)) return o->year;
@@ -191,10 +196,29 @@ uint16_t TrackCatalog::year(uint32_t id) const {
 
 uint32_t TrackCatalog::durationHintMs(uint32_t id) const {
   if (isBuiltin(id)) return kBuiltins[id - kBuiltin].durationMs;
+  if (const Held* h = heldFor(id)) return h->durationMs;
   if (!inIndex(id)) return 0;
   const Overlay* o = overlayFor(id);
   if (o && o->durationMs) return o->durationMs;
   return static_cast<uint32_t>(index_->track(id).durationS) * 1000u;
+}
+
+bool TrackCatalog::take(uint32_t id, Held* h) const {
+  *h = Held{};
+  if (!inIndex(id)) return false;
+  h->track = id;
+  title(id, h->title, sizeof(h->title));
+  const auto copy = [](const char* s, char* out, size_t cap) {
+    const size_t n = s ? cardcontract::utf8CutLength(s, std::strlen(s), cap - 1) : 0;
+    if (n) std::memcpy(out, s, n);
+    out[n] = 0;
+  };
+  copy(artist(id), h->artist, sizeof(h->artist));
+  copy(album(id), h->album, sizeof(h->album));
+  copy(albumArtist(id), h->albumArtist, sizeof(h->albumArtist));
+  h->year = year(id);
+  h->durationMs = durationHintMs(id);
+  return true;
 }
 
 uint32_t TrackCatalog::find(const char* path) const {

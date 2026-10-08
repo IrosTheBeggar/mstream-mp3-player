@@ -426,6 +426,34 @@ void test_cache_memory_goes_back() {
   TEST_ASSERT_EQUAL_size_t(0, live);
 }
 
+// The library's update step (docs/METADATA.md 3.4.2) borrows the pools for
+// its build: release() gives them back whole, nothing is stored or asked
+// for meanwhile, and begin() makes them again, empty (the ids mean other
+// albums after the build).
+void test_cache_pools_lent_to_the_library_update() {
+  live = 0;
+  ThumbCache c(countAlloc, countFree);
+  TEST_ASSERT_TRUE(c.begin(64, 6));
+  std::vector<uint16_t> a(40 * 40, 0x1111);
+  TEST_ASSERT_TRUE(c.put(7, ThumbCache::Size::Small, a.data()));
+  c.want(8, ThumbCache::Size::Large);
+  c.markFailed(9);
+  c.release();
+  TEST_ASSERT_EQUAL_size_t(0, live);
+  TEST_ASSERT_EQUAL_size_t(0, c.bytes());
+  TEST_ASSERT_EQUAL_UINT32(0, c.wanted());
+  TEST_ASSERT_NULL(c.get(7, ThumbCache::Size::Small));
+  TEST_ASSERT_FALSE(c.put(7, ThumbCache::Size::Small, a.data()));
+  c.want(8, ThumbCache::Size::Small);
+  TEST_ASSERT_EQUAL_UINT32(0, c.wanted());
+  TEST_ASSERT_TRUE(c.begin(64, 6));
+  TEST_ASSERT_EQUAL_size_t(c.bytes(), live);
+  TEST_ASSERT_FALSE(c.has(7, ThumbCache::Size::Small));
+  TEST_ASSERT_FALSE(c.failed(9));
+  c.want(9, ThumbCache::Size::Small);
+  TEST_ASSERT_EQUAL_UINT32(1, c.wanted());
+}
+
 // ---- thumbfile ----
 
 void test_thumbfile_header_round_trip() {
@@ -492,6 +520,7 @@ int main(int, char**) {
   RUN_TEST(test_cache_requests_newest_first);
   RUN_TEST(test_cache_keeps_only_the_last_requests);
   RUN_TEST(test_cache_memory_goes_back);
+  RUN_TEST(test_cache_pools_lent_to_the_library_update);
   RUN_TEST(test_thumbfile_header_round_trip);
   RUN_TEST(test_thumbfile_names_are_short);
   return UNITY_END();

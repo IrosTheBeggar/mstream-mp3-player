@@ -644,7 +644,12 @@ void QueuePage::onHold(uint32_t row) {
 
 // ---- empty ----
 
+const char* QueuePage::emptyText() {
+  return ui_.state().libraryFenced ? uitext::kUpdatingList : "The queue is empty";
+}
+
 bool QueuePage::emptyState(EmptyState& e) {
+  if (ui_.state().libraryFenced) return false;  // the library update's fence: emptyText()'s line
   if (noCard()) {
     noCardState(e, ui_.state().cardKind);
     return true;

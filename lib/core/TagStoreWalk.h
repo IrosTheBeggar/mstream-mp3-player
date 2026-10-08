@@ -11,8 +11,8 @@
 // N5's walk (lib/core/CardWalk) over N4's store (lib/core/TagStore): D as
 // the walk reads it (cardwalk::Known), and walk.jnl as the walk writes it
 // (cardwalk::Sink). Portable, host-tested (test_tag_store_walk: CardWalk on
-// a fake FAT tree, through these, into tags.bin). N12 gives them to the
-// walk at boot:
+// a fake FAT tree, through these, into tags.bin). CardJobs (N10) gives
+// them to the walk:
 //
 //   KnownD d;   d.begin(store, scratch, 4096);
 //   WalkSink s; s.begin(store, root's identity, buf, 4096, readBuf, 512);

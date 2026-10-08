@@ -793,6 +793,17 @@ void test_entry_start_waits_for_the_backend() {
   TEST_ASSERT_TRUE(e.update(12, 6, 1500));  // and it stays started
   // An entry that changes while the last one had barely begun.
   TEST_ASSERT_TRUE(e.update(13, 6, 400));
+  // A library update read the queue back: the same entry, a new key
+  // (rekey()): still started, its position this entry's.
+  TEST_ASSERT_TRUE(e.update(13, 6, 90000));
+  e.rekey(40);
+  TEST_ASSERT_TRUE(e.update(40, 6, 90040));
+  TEST_ASSERT_TRUE(e.started());
+  // Not told: the new key looks like a skip until the backend starts one.
+  EntryStart g;
+  TEST_ASSERT_TRUE(g.update(13, 6, 400));
+  TEST_ASSERT_TRUE(g.update(13, 6, 90000));
+  TEST_ASSERT_FALSE(g.update(41, 6, 90040));
 }
 
 // Where each choice ends: what PlaybackController's NextGate asks (the

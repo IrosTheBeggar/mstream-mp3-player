@@ -7,6 +7,7 @@
 #include "CardJobs.h"
 #include "LibraryIndex.h"
 #include "LibraryText.h"
+#include "LibraryUpdate.h"
 #include "QueueModel.h"
 #include "ScanScheduler.h"
 #include "app/CardWorker.h"
@@ -18,15 +19,16 @@ class Thumbs;
 }
 
 // The card worker's loop side (docs/METADATA.md 3.2.3, 3.3, 3.4.2;
-// milestone N10): every loop pass it asks ScanScheduler (N7) what the one
-// card worker may do next, hands it that one step at that priority, and
+// milestones N10, N12): every loop pass it asks ScanScheduler (N7) what the
+// one card worker may do next, hands it that one step at that priority, and
 // takes in what the last step did. The jobs:
 //   - covers (ui/Thumbs), on any storage;
 //   - on the SD card, over the records Library opened: the validation
 //     walk, 2 s after the UI's first frame (3.2.3); the compactions; the
-//     tag scan (lib/core CardJobs).
-// What the steps do is CardJobs'; this is when they run, what the loop
-// learns from them, and what follows:
+//     tag scan (lib/core CardJobs); the update step's build and its save
+//     (lib/core LibraryUpdate, Library's).
+// What the steps do is CardJobs' and LibraryUpdate's; this is when they
+// run, what the loop learns from them, and what follows:
 //   - after a walk that found changes: "Found 12 new tracks", and the update
 //     step at once when ScanScheduler::buildAfterWalk() says so (U11: 200
 //     files or more, or a scan over 60 s), else at the scan's end;
@@ -43,13 +45,13 @@ class Thumbs;
 //     After an update step, built or failed or deferred, what the journal
 //     had asks for no other: only new records (or a walk's changes, a
 //     Rescan) do.
-// The update step itself (3.4.2) is main.cpp's (rebuildLibrary(): the queue
-// carried through queue.txt around Library::rebuild()), on the loop, once
-// updateDue() says: a walk under way ended (its walk.jnl can't be merged
-// before), the journals compacted (a worker step, first), the worker free,
-// the status line drawn as "Updating library…". The build on
-// the worker behind the "Updating library" fence, the queue's remap split
-// around it, is N12's.
+// The update step itself is LibraryUpdate's state machine (3.4.2), run here
+// every pass with the worker's and the jobs' state and the loop's (UpdateEnv:
+// the safe point, what the step frees): it holds the scan and new walks
+// once asked, asks the compaction first, then (Do::Fence) main.cpp puts the
+// fence up and calls fenceUp(); the build is the worker's (priority 1); at
+// its end (Do::Live) main.cpp takes the fence down and calls live(); the
+// save is the worker's too, and the background jobs wait for its end.
 //
 // The scheduler's inputs from the rest of the firmware come in each pass
 // (`in`: the UI, the audio, Bluetooth, power, as N7's notes map them);
@@ -65,6 +67,15 @@ public:
     const QueueModel* queue = nullptr;
     LibraryIndex::Span shown;  // the Library tab's album, artist or folder page (its tracks)
   };
+  // What the update step needs of the loop (LibraryUpdate::In's player and
+  // memory parts).
+  struct UpdateEnv {
+    bool playing = false;      // PlayState::Playing
+    bool waiting = false;      // PlayState::Waiting (a play waiting for the headphones)
+    uint32_t trackLeftMs = 0;  // what is left of the heard track (0: not known)
+    uint32_t seekSeq = 0;      // PlaybackController::seeks()
+    size_t alsoFreed = 0;      // what the step frees besides the index: the queue's, Thumbs' pools
+  };
 
   CardTasks(Library& library, CardWorker& worker);
 
@@ -78,29 +89,35 @@ public:
 
   // Every loop pass. `in`: the environment (nowMs; listMoving, input; the
   // audio's ring, underruns, decode pass, track and seek; Bluetooth;
-  // power); `covers`: a cover job may start (the UI is up and lit).
-  void loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, bool covers);
+  // power); `covers`: a cover job may start (the UI is up and lit); `env`:
+  // the update step's.
+  void loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, bool covers, const UpdateEnv& env);
 
-  // ---- the update step (3.4.2) ----
+  // ---- the update step (3.4.2, lib/core LibraryUpdate) ----
   // `deferToBoot` (gb!, L4.4): the memory check made to fail, so the step
   // writes the build-at-boot marker as a short PSRAM would.
   void askUpdate(const char* why, bool deferToBoot = false);
-  bool deferAsked() const { return deferAsked_; }
   // g0: the walk now, the update step after it whatever it finds.
   void askWalkAndUpdate();
-  bool updateWanted() const { return updateWanted_; }
-  // The update step may run now (the caller's safe point given): the
-  // journals compacted, the worker free, and "Updating library…" shown for
-  // a pass. Once true, the caller runs it at once.
-  bool updateDue(uint32_t nowMs, bool safePoint);
-  // Right before it: the worker's step finished (waited for), the scan's
-  // View closed and its chunk written.
-  void beforeUpdate();
-  // After it (`ok`: built): the scan's state starts over with the new
-  // index; "Library updated" (not after a boot's build: that's Library's).
-  void afterUpdate(bool ok);
-  // The memory check deferred it to the next boot (the marker written).
-  void updateDeferred();
+  bool updateAsked() const;
+  // From the fence to the save's end (the console's commands that read
+  // the card's records or the library wait; the CPU speed's restart).
+  bool updating() const { return lastUpdate_.updating; }
+  // What main.cpp carries out after loop(), each once: Fence (the fence up,
+  // then fenceUp()), Live (the fence down, then live()), Deferred, Failed,
+  // Saved (for their lines; the jobs' side is done here).
+  LibraryUpdate::Do takeAct() {
+    const LibraryUpdate::Do a = act_;
+    act_ = LibraryUpdate::Do::None;
+    return a;
+  }
+  // Right after main.cpp's steps 1-3: the scan's View closed, its chunk
+  // out, its memory back; the old index cleared (LibraryUpdate::fencedUp()).
+  void fenceUp();
+  // Right after main.cpp's step 5 (the queue read back, the readers back):
+  // the scan's state starts over with the new index; "Library updated";
+  // the save next (LibraryUpdate::lived()).
+  void live();
 
   // ---- the console (TagConsole's hooks) ----
   bool rescan(bool everything);
@@ -118,8 +135,9 @@ public:
   // ---- the rest of the firmware ----
   // The Library tab's status line (3.3.6).
   librarytext::Status status() const;
-  // A compaction under way, or the update step: IdlePolicy's LibraryWrite.
-  bool libraryWrite() const { return compacting_ || updating_; }
+  // A compaction under way, or the update step from its fence to its
+  // save's end: IdlePolicy's LibraryWrite.
+  bool libraryWrite() const { return compacting_ || lastUpdate_.libraryWrite; }
   // The idle power-off's shutdown: the scan's chunk to the card next to the
   // queue (3.3.5).
   void flushNow();
@@ -131,11 +149,16 @@ public:
 
 private:
   static void stepEntry(void* self);
+  static void buildEntry(void* self);
+  static void saveEntry(void* self);
   static bool indexed(const char* rel, size_t len, void* ctx);
   void taken(ScanScheduler::Job job, uint32_t nowMs);
   void afterWalk(const cardjobs::Done& d);
   void afterScan(const cardjobs::Done& d, uint32_t nowMs);
   void scanEnded();
+  // The update step's ends the jobs hear of (a deferral, a failure, the
+  // save): what the journal had asks for no other step.
+  void updateOver();
   // The scan's sources from the index (3.3.3): each source's first Pending
   // track, its path for the step.
   void sources(ScanScheduler::In& in, const Sources& src);
@@ -158,16 +181,11 @@ private:
   size_t pickLen_[kSlots] = {};
   uint32_t playing_ = LibraryIndex::kNone;
   bool compacting_ = false;
-  bool updating_ = false;
   // The update step.
-  bool updateWanted_ = false;
-  bool updateShown_ = false;   // "Updating library…" is in the status line
-  uint32_t updateShownMs_ = 0;
-  static constexpr uint32_t kShowUpdatingMs = 600;  // ... at least this long before the build holds the loop
+  LibraryUpdate::Out lastUpdate_;
+  LibraryUpdate::Do act_ = LibraryUpdate::Do::None;
   bool updateAfterWalk_ = false;
   bool lastCompactFailed_ = false;
-  bool deferAsked_ = false;  // gb!
-  const char* updateWhy_ = "";
   bool pendingAfterScan_ = false;  // the scan's end rebuilds (a walk's changes, a soft-stale index, a Rescan)
   bool restFailed_ = false;        // the rest's last end was a read error (no update at the scan's end)
   bool scanOver_ = true;

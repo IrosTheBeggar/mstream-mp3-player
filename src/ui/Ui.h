@@ -119,6 +119,11 @@ public:
 
   // ---- events from the rest of the firmware ----
   void libraryChanged();       // the index was rebuilt (g0): the Library's ids are stale
+  // The library update's fence went up (docs/METADATA.md 3.4.2, N12): the
+  // Library back to its root, the sheets and the jump grid that name its
+  // ids closed, the list on screen read again (the "Updating" line). Down,
+  // libraryChanged() follows.
+  void libraryUpdating();
   // ---- for the card worker (app/CardTasks, ScanScheduler's inputs) ----
   // A list moves (the page's animating(): a drag, a fling, a snap).
   bool listMoving() const { return started_ && !suspended_ && page_ && page_->animating(); }

@@ -1222,7 +1222,10 @@ public:
     bool ok = false;
     if (mem) {
       Bump b{static_cast<uint8_t*>(mem), bytes};
-      DeviceReader* r = new (b.take(sizeof(DeviceReader))) DeviceReader();
+      // (Zeroed, then default-initialized in place: compact()'s note.)
+      void* rm = b.take(sizeof(DeviceReader));
+      std::memset(rm, 0, sizeof(DeviceReader));
+      DeviceReader* r = new (rm) DeviceReader;
       uint8_t* scratch = static_cast<uint8_t*>(b.take(cfg_.deviceBuffer));
       if (r->begin(*f, scratch, cfg_.deviceBuffer, nullptr, true) == Why::Ok) {
         DeviceReader::Step s;
@@ -2203,7 +2206,13 @@ TagStore::Compacted TagStore::compact(bool rescan) {
   if (!mem) return fail("no memory");
   res.workBytes = bytes;
   Bump b{static_cast<uint8_t*>(mem), bytes};
-  CompactWork* w = new (b.take(sizeof(CompactWork))) CompactWork();
+  // Zeroed, then default-initialized in place: what `new (p) CompactWork()`
+  // means, without the copy of it xtensa's GCC built on the stack for that
+  // value-initialization (a 13 KB frame: compact() runs on the card
+  // worker's 6 KB stack; N12's review, -fstack-usage).
+  void* wm = b.take(sizeof(CompactWork));
+  std::memset(wm, 0, sizeof(CompactWork));
+  CompactWork* w = new (wm) CompactWork;
   w->binFolderBuf = static_cast<uint8_t*>(b.take(3 * cfg_.runBuffer));
   for (int r = 0; r < 2; ++r) w->walkBuf[r] = static_cast<uint8_t*>(b.take(cfg_.runBuffer));
   for (int k = 0; k < 7; ++k) w->outBuf[k] = static_cast<uint8_t*>(b.take(cfg_.writeBuffer));

@@ -243,6 +243,12 @@ public:
   // position. True: they are this entry's.
   bool update(uint32_t key, uint32_t startSeq, uint32_t positionMs);
   bool started() const { return started_; }
+  // The same entry under a new key (a library rebuild reads the queue back
+  // with fresh keys: docs/METADATA.md 3.4.2): it keeps what it knew, as if
+  // the key had always been this one.
+  void rekey(uint32_t key) {
+    if (seen_) key_ = key;
+  }
 
 private:
   bool seen_ = false;

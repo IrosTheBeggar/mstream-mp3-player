@@ -370,7 +370,7 @@ void TagConsole::bench(bool walks) {
 
 void TagConsole::job(const char* what, bool (*fn)()) {
   if (!fn) {
-    Serial.printf("[tags] %s: no card worker in this build yet (docs/METADATA.md N10, N12); nothing changed\n", what);
+    Serial.printf("[tags] %s: no card worker here (the flash, or no PSRAM for its jobs); nothing changed\n", what);
     return;
   }
   Serial.printf("[tags] %s: %s\n", what, fn() ? "asked" : "REFUSED");

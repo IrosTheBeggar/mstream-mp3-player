@@ -96,7 +96,7 @@
 // row: each walk lists it and finds nothing to say, at the cost of its
 // listing and, when T is given, one lookup of its best cover.
 //
-// Which T to give (N12's glue): on the first walk after a commit, a
+// Which T to give (CardJobs, N10): on the first walk after a commit, a
 // StreamedTransfer (every file is asked, in order: one pass); on a walk at
 // the same commit, an IndexedTransfer (only the changed files and the covers
 // of the folders merged are asked: a few HIDX lookups; on an unchanged card,

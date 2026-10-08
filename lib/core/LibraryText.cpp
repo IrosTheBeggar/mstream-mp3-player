@@ -233,4 +233,52 @@ size_t foundText(uint32_t n, char* buf, size_t size) {
   return done(snprintf(buf, size, uitext::kFoundMany, a), buf, size);
 }
 
+Sources sourcesOf(const LibraryIndex& index) {
+  Sources s;
+  if (!index.ready()) return s;
+  for (uint32_t t = 0; t < index.trackCount(); ++t) {
+    switch (index.track(t).flags & LibraryIndex::kSourceMask) {
+      case LibraryIndex::kFromTransfer: ++s.transfer; break;
+      case LibraryIndex::kFromDevice: ++s.device; break;
+      default: ++s.none; break;
+    }
+  }
+  return s;
+}
+
+size_t libraryRowTitle(uint32_t tracks, char* buf, size_t size, int form) {
+  if (!buf || size == 0) return 0;
+  if (tracks == 0) return done(snprintf(buf, size, "%s", uitext::kLibraryRowEmpty), buf, size);
+  char a[16];
+  queueview::grouped(tracks, a, sizeof(a));
+  return done(snprintf(buf, size, form == 0 ? uitext::kLibraryRowTitle : uitext::kLibraryRowTitleShort, a), buf,
+              size);
+}
+
+size_t sourcesText(const Sources& s, int form, char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  buf[0] = 0;
+  if (s.transfer == 0 && s.device == 0) return done(snprintf(buf, size, "%s", uitext::kLibraryRowPaths), buf, size);
+  if (form >= 2) {
+    const uint64_t tagged = static_cast<uint64_t>(s.transfer) + s.device;
+    const uint32_t pct = static_cast<uint32_t>(tagged * 100 / s.total());
+    char p[8];
+    snprintf(p, sizeof(p), "%lu", static_cast<unsigned long>(pct));
+    return done(snprintf(buf, size, uitext::kLibrarySrcTagged, p), buf, size);
+  }
+  const char* const* forms = form == 0 ? uitext::kLibrarySrcLong : uitext::kLibrarySrcShort;
+  const uint32_t counts[3] = {s.transfer, s.device, s.none};
+  size_t at = 0;
+  for (int k = 0; k < 3; ++k) {
+    if (counts[k] == 0) continue;
+    char a[16], part[48];
+    queueview::grouped(counts[k], a, sizeof(a));
+    snprintf(part, sizeof(part), forms[k], a);
+    const int n = snprintf(buf + at, size - at, "%s%s", at ? ", " : "", part);
+    if (n < 0 || static_cast<size_t>(n) >= size - at) return done(n, buf, size);
+    at += static_cast<size_t>(n);
+  }
+  return at;
+}
+
 }  // namespace librarytext

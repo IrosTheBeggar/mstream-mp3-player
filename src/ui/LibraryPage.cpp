@@ -574,6 +574,7 @@ const char* LibraryPage::jumpTitle() {
 bool LibraryPage::tinted(uint32_t row) { return playing(rowAt(row)); }
 
 const char* LibraryPage::emptyText() {
+  if (real() && ui_.state().libraryFenced) return uitext::kUpdatingList;  // (the status line says it too)
   const LibraryIndex* i = const_cast<Ui&>(ui_).browseIndex();
   if (!i || !i->ready()) return "No music found: put folders in /music";
   return folderList() ? "No audio files here" : "Nothing here";
@@ -584,6 +585,7 @@ const char* LibraryPage::emptyText() {
 bool LibraryPage::emptyState(EmptyState& e) {
   if (!root() || !real()) return false;
   const AppState& s = ui_.state();
+  if (s.libraryFenced) return false;  // the library update's fence: emptyText()'s line, not "No music"
   if (!s.card && s.libraryTracks == 0) {
     noCardState(e, s.cardKind);
     return true;

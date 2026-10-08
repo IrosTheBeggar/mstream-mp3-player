@@ -43,40 +43,8 @@ private:
   size_t size_ = 0;
 };
 
-// The fallback: the queue as text in one block of exactly its size (a
-// first pass measures it), from the hooks; given back at the end.
-class Text {
-public:
-  Text(MemorySink::AllocFn alloc, MemorySink::FreeFn release)
-      : alloc_(alloc ? alloc : heapAlloc), free_(release ? release : heapFree) {}
-  ~Text() {
-    if (data_) free_(data_);
-  }
-  Text(const Text&) = delete;
-  Text& operator=(const Text&) = delete;
-
-  bool take(const QueueModel& q, const TrackCatalog& catalog, uint32_t generation) {
-    CountSink count;
-    if (!queuetext::write(q, catalog, generation, count)) return false;
-    data_ = static_cast<uint8_t*>(alloc_(count.size()));
-    if (!data_) return false;
-    FixedSink out(data_, count.size());
-    if (!queuetext::write(q, catalog, generation, out) || out.size() != count.size()) return false;
-    size_ = count.size();
-    return true;
-  }
-  const uint8_t* data() const { return data_; }
-  size_t size() const { return size_; }
-
-private:
-  static void* heapAlloc(size_t n) { return std::malloc(n); }
-  static void heapFree(void* p) { std::free(p); }
-
-  MemorySink::AllocFn alloc_;
-  MemorySink::FreeFn free_;
-  uint8_t* data_ = nullptr;
-  size_t size_ = 0;
-};
+void* heapAlloc(size_t n) { return std::malloc(n); }
+void heapFree(void* p) { std::free(p); }
 
 // The re-read's current line: the position the queue had when the file's
 // lines are its positions, whatever the header says (the file may be older
@@ -101,51 +69,86 @@ __attribute__((noinline)) bool currentFile(const QueueModel& q, const TrackCatal
 
 }  // namespace
 
-Result run(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog, Card& card,
-           uint32_t nowMs, MemorySink::AllocFn alloc, MemorySink::FreeFn release) {
-  Result res;
+Carry::Carry(MemorySink::AllocFn alloc, MemorySink::FreeFn release)
+    : alloc_(alloc ? alloc : heapAlloc), free_(release ? release : heapFree) {}
+
+Carry::~Carry() { dropText(); }
+
+void Carry::dropText() {
+  if (text_) free_(text_);
+  text_ = nullptr;
+  textSize_ = 0;
+}
+
+void Carry::begin(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog,
+                  Card& card) {
+  res_ = Result{};
+  dropText();
   // A start point waiting belongs to the entry's key, which the read gives
   // afresh: noted here, set again after.
-  uint32_t startMs = 0, startDurationMs = 0;
-  ResumeAnchor startAnchor;
-  const bool hadStart = player.startPoint(&startMs, &startDurationMs, &startAnchor);
-  int32_t position = queue.current();
+  hadStart_ = player.startPoint(&startMs_, &startDurationMs_, &startAnchor_);
+  position_ = queue.current();
   // The current entry's file: whether it is still the current one after is
   // a question of its path, not of a line number (the file may hold more
   // lines than the queue did).
-  uint32_t before = 0;
-  const bool hadCurrent = currentFile(queue, catalog, &before);
+  before_ = 0;
+  hadCurrent_ = currentFile(queue, catalog, &before_);
 
   // 1. The queue on the card (or, failing that, in memory).
-  Text text(alloc, release);
   if (card.flush()) {
-    res.via = Via::File;
+    res_.via = Via::File;
     // The file holds more than the queue (QueueSaver::keptFile(): a boot or
     // a rebuild with no library left its library tracks out, or the queue
     // couldn't come across the last rebuild): it is read back whole, from
     // its own line, as the next boot would, not from the queue's.
-    if (!saver.fileIsQueue()) position = saver.fileLine();
+    if (!saver.fileIsQueue()) position_ = saver.fileLine();
   } else {
     saver.abort();  // a write under way would go on with the new ids (flushNow() leaves none: to be sure)
-    res.via = text.take(queue, catalog, saver.generation()) ? Via::Memory : Via::None;
-    res.textBytes = text.size();
+    // The text in one block of exactly its size (a first pass measures it).
+    CountSink count;
+    if (queuetext::write(queue, catalog, saver.generation(), count)) {
+      text_ = static_cast<uint8_t*>(alloc_(count.size()));
+      if (text_) {
+        FixedSink out(text_, count.size());
+        if (queuetext::write(queue, catalog, saver.generation(), out) && out.size() == count.size()) {
+          textSize_ = count.size();
+        } else {
+          dropText();
+        }
+      }
+    }
+    res_.via = text_ ? Via::Memory : Via::None;
+    res_.textBytes = textSize_;
   }
 
-  // 2. Its memory to the rebuild; 3. the rebuild.
-  res.freedBytes = queue.memoryBytes();
+  // 2. Its memory to the rebuild; the player reads neither the queue nor
+  // the catalog until finish().
+  res_.freedBytes = queue.memoryBytes();
+  player.setFenced(true);
   queue.release();
-  res.rebuilt = card.rebuild();
+  carrying_ = true;
+}
+
+Result Carry::finish(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog,
+                     Card& card, bool rebuilt, uint32_t nowMs) {
+  carrying_ = false;
+  res_.rebuilt = rebuilt;
+  // A track that ended inside the fence is noted now (queueReplaced() takes
+  // it, and any join heard meanwhile).
+  player.setFenced(false);
 
   // 4. Read back.
-  if (res.via == Via::File) {
+  if (res_.via == Via::File) {
     if (ByteSource* in = card.openFile()) {
-      res.read = queuetext::read(*in, catalog, queue, thePosition, &position, alloc, release);
+      res_.read = queuetext::read(*in, catalog, queue, thePosition, &position_, alloc_, free_);
       card.closeFile();
     }
-  } else if (res.via == Via::Memory) {
-    MemorySource in(text.data(), text.size());
-    res.read = queuetext::read(in, catalog, queue, thePosition, &position, alloc, release);
+  } else if (res_.via == Via::Memory) {
+    MemorySource in(text_, textSize_);
+    res_.read = queuetext::read(in, catalog, queue, thePosition, &position_, alloc_, free_);
   }
+  dropText();
+  Result& res = res_;
   if (!res.read.ok) {
     // Cleared (release() kept the mode). The file keeps the last queue
     // saved, and its line: nothing is written over it until the listener
@@ -156,7 +159,7 @@ Result run(QueueModel& queue, QueueSaver& saver, PlaybackController& player, con
   }
   // Kept: the same file is current (its key is new).
   uint32_t after = 0;
-  res.read.currentKept = hadCurrent && currentFile(queue, catalog, &after) && after == before;
+  res.read.currentKept = hadCurrent_ && currentFile(queue, catalog, &after) && after == before_;
 
   const LibraryIndex* index = catalog.index();
   // (A rebuild that failed before touching the index leaves the ids as
@@ -186,11 +189,20 @@ Result run(QueueModel& queue, QueueSaver& saver, PlaybackController& player, con
     // through memory): then written again.
     saver.loaded(generation, res.read.dropped > 0 || res.read.capped > 0 || res.via == Via::Memory, nowMs);
   }
-  if (hadStart && res.read.currentKept) {
-    player.setStartPoint(startMs, startDurationMs, &startAnchor);
+  if (hadStart_ && res.read.currentKept) {
+    player.setStartPoint(startMs_, startDurationMs_, &startAnchor_);
     res.startCarried = true;
   }
   return res;
+}
+
+Result run(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog, Card& card,
+           uint32_t nowMs, MemorySink::AllocFn alloc, MemorySink::FreeFn release) {
+  Carry carry(alloc, release);
+  carry.begin(queue, saver, player, catalog, card);
+  // 3. The rebuild.
+  const bool rebuilt = card.rebuild();
+  return carry.finish(queue, saver, player, catalog, card, rebuilt, nowMs);
 }
 
 }  // namespace queueremap

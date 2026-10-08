@@ -42,6 +42,12 @@ CardTasks::CardTasks(Library& library, CardWorker& worker)
 
 void CardTasks::stepEntry(void* self) { static_cast<CardTasks*>(self)->jobs_.step(); }
 
+// The update step's build and save (LibraryUpdate): behind the fence, the
+// index the build's; then the finished index, which nothing changes while
+// it is written.
+void CardTasks::buildEntry(void* self) { static_cast<CardTasks*>(self)->lib_.update()->stepBuild(); }
+void CardTasks::saveEntry(void* self) { static_cast<CardTasks*>(self)->lib_.update()->stepSave(); }
+
 // On the worker, during a walk step: the index is read only (nothing
 // changes it while a step runs: the update step waits for the worker).
 bool CardTasks::indexed(const char* rel, size_t len, void* ctx) {
@@ -54,7 +60,7 @@ bool CardTasks::indexed(const char* rel, size_t len, void* ctx) {
 
 bool CardTasks::begin() {
   active_ = false;
-  if (!lib_.records() || !card_.begin()) return false;
+  if (!lib_.records() || !lib_.update() || !card_.begin()) return false;
   cardroot::Root* root = lib_.root();
   cardjobs::Config c;
   c.store = lib_.store();
@@ -128,7 +134,7 @@ void CardTasks::sources(ScanScheduler::In& in, const Sources& src) {
   in.restPending = jobs_.restWork();
 }
 
-void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, bool covers) {
+void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumbs, bool covers, const UpdateEnv& env) {
   const uint32_t now = in.nowMs;
   playing_ = src.playing;
   // 1. The step that finished.
@@ -143,27 +149,68 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     walkArmed_ = false;
     jobs_.askWalk();
   }
-  // 3. What has work (only read with the worker free: a step may change it).
+  // 3. The update step (LibraryUpdate, 3.4.2): what it waits for, what it
+  // holds, and what the loop carries out this pass.
+  LibraryUpdate* up = active_ ? lib_.update() : nullptr;
+  LibraryUpdate::Out uo;
+  if (up) {
+    LibraryUpdate::In ui;
+    ui.nowMs = now;
+    ui.workerFree = !worker_.busy();
+    ui.walking = jobs_.walking();
+    ui.journals = lib_.store()->hasJournals() || jobs_.chunkPending();
+    ui.compactFailed = lastCompactFailed_;
+    ui.playing = env.playing;
+    ui.waiting = env.waiting;
+    ui.trackLeftMs = env.trackLeftMs;
+    ui.seekSeq = env.seekSeq;
+    if (up->phase() == LibraryUpdate::Phase::Asked) {  // (the memory check's: read only when it may be asked)
+      ui.psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+      ui.psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+      ui.alsoFreed = env.alsoFreed;
+    }
+    uo = up->update(ui);
+    if (uo.act != LibraryUpdate::Do::None) act_ = uo.act;
+    switch (uo.act) {
+      case LibraryUpdate::Do::Deferred:
+        ++deferred_;
+        updateOver();
+        toast(uitext::kLibraryAtBoot);
+        break;
+      case LibraryUpdate::Do::Failed:
+        ++updates_;
+        updateOver();
+        Serial.printf("[card] the update step (%s): FAILED before its fence (the library stays as it was)\n",
+                      up->why());
+        break;
+      case LibraryUpdate::Do::Saved: updateOver(); break;
+      default: break;
+    }
+  }
+  lastUpdate_ = uo;
+  // 4. What has work (only read with the worker free: a step may change it).
   in.running = worker_.running();
   // Internal RAM's lowest while a step runs (gs; L3 and L4).
   if (in.running != Job::None) worker_.noteInternal(static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
   const bool free = !worker_.busy();
   if (free) {
-    in.cover = covers && thumbs && thumbs->wantsCover(now);
+    // (Not in the pass that puts the fence up: Thumbs' pools go with it.)
+    in.cover = covers && thumbs && thumbs->wantsCover(now) && uo.act != LibraryUpdate::Do::Fence;
     if (active_) {
       // A walk under way goes on to its end when the update step is asked:
       // the compaction before the build can't run while it writes walk.jnl
       // (the step would build from tags.bin alone).
-      in.walk = (!updateWanted_ || jobs_.walking()) && jobs_.walkWork();
-      const bool beforeUpdate =
-          updateWanted_ && !jobs_.walking() && (lib_.store()->hasJournals() || jobs_.chunkPending());
-      in.compact = (jobs_.compactWork() || beforeUpdate) && !(beforeUpdate && lastCompactFailed_);
-      // The scan once the boot's walk has said what D's to-do is (3.3.9).
-      if (!updateWanted_ && !in.walk && !in.compact && bootWalkDone_) sources(in, src);
+      in.walk = (!uo.holdScan || jobs_.walking()) && jobs_.walkWork();
+      in.compact = (jobs_.compactWork() || uo.compact) && !(uo.compact && lastCompactFailed_);
+      // The scan once the boot's walk has said what D's to-do is (3.3.9);
+      // not while the update step is asked or under way (the index is the
+      // build's, then the save's).
+      const bool held = uo.holdScan || uo.updating;
+      if (!held && !in.walk && !in.compact && bootWalkDone_) sources(in, src);
       // The scan's end: nothing for it anywhere, no walk under way or asked.
       const bool scanWork = in.playingPending || in.queueNextPending || in.queueSoonPending || in.shownPending ||
                             in.restPending;
-      if (!updateWanted_ && !in.walk && !jobs_.walking() && !in.compact && bootWalkDone_) {
+      if (!held && !in.walk && !jobs_.walking() && !in.compact && bootWalkDone_) {
         if (!scanWork && !scanOver_) {
           scanOver_ = true;
           scanEnded();
@@ -173,15 +220,28 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
       }
     }
   }
-  // 4. The scheduler.
+  in.build = uo.build;
+  in.save = uo.save;
+  in.updating = uo.updating;
+  // 5. The scheduler.
   const ScanScheduler::Out o = sched_.update(in);
   if (o.batteryHeld) Serial.println("[card] the battery is below 10%: the scan waits for USB or 15%");
   if (o.batteryReleased) Serial.println("[card] the battery floor lifted: the scan goes on");
   lastWait_ = o.wait;
   if (in.running != Job::None) worker_.setPriority(o.priority);
-  // 5. The step.
+  // 6. The step.
   if (o.job == Job::Cover) {
     if (thumbs) thumbs->startCover(worker_, o.priority, now);
+  } else if (o.job == Job::Build) {
+    if (up && worker_.start(Job::Build, o.priority, buildEntry, this, now)) {
+      up->buildStarted();
+      lastWorkMs_ = now;
+    }
+  } else if (o.job == Job::Save) {
+    if (up && worker_.start(Job::Save, o.priority, saveEntry, this, now)) {
+      up->saveStarted();
+      lastWorkMs_ = now;
+    }
   } else if (o.job == Job::Walk || o.job == Job::Compact || o.job == Job::Scan) {
     const int slot = o.job == Job::Scan ? slotOf(o.source) : -1;
     const char* rel = slot >= 0 ? picks_[slot] : nullptr;
@@ -195,7 +255,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
       lastWorkMs_ = now;
     }
   }
-  // 6. Between steps: the scan's chunk out once it has waited 5 s (a
+  // 7. Between steps: the scan's chunk out once it has waited 5 s (a
   // pause, the battery floor; a chunk the card refused, 30 s after: each try
   // is a FatFs open, about 1 s of the SD driver's retries on a pulled card),
   // and its memory back once it has nothing.
@@ -223,6 +283,15 @@ void CardTasks::scanEnded() {
 
 void CardTasks::taken(Job job, uint32_t nowMs) {
   if (job == Job::Cover || job == Job::None) return;  // Thumbs takes its own in
+  if (job == Job::Build || job == Job::Save) {
+    LibraryUpdate* up = lib_.update();
+    if (job == Job::Build) {
+      up->buildDone();
+    } else {
+      up->saveDone();
+    }
+    return;
+  }
   const cardjobs::Done& d = jobs_.finish();
   switch (job) {
     case Job::Walk:
@@ -331,11 +400,9 @@ void CardTasks::afterScan(const cardjobs::Done& d, uint32_t nowMs) {
 
 void CardTasks::askUpdate(const char* why, bool deferToBoot) {
   if (!active_) return;
-  if (!updateWanted_) Serial.printf("[card] the update step is asked (%s)\n", why);
-  updateWanted_ = true;
-  updateShown_ = false;
-  updateWhy_ = why;
-  deferAsked_ = deferAsked_ || deferToBoot;
+  LibraryUpdate* up = lib_.update();
+  if (!up->asked()) Serial.printf("[card] the update step is asked (%s)\n", why);
+  up->ask(why, deferToBoot);
 }
 
 void CardTasks::askWalkAndUpdate() {
@@ -344,61 +411,49 @@ void CardTasks::askWalkAndUpdate() {
   jobs_.askWalk();
 }
 
-bool CardTasks::updateDue(uint32_t nowMs, bool safePoint) {
-  if (!updateWanted_ || worker_.busy() || jobs_.walking()) return false;
-  const bool journals = lib_.store()->hasJournals() || jobs_.chunkPending();
-  if (journals && !lastCompactFailed_) return false;  // compacted first (a worker step)
-  if (!safePoint) return false;
-  // "Updating library…" drawn before the loop stops for the build (the
-  // status line redraws at most twice a second).
-  if (!updateShown_) {
-    updateShown_ = true;
-    updating_ = true;
-    updateShownMs_ = nowMs;
-    return false;
-  }
-  return nowMs - updateShownMs_ >= kShowUpdatingMs;
-}
+bool CardTasks::updateAsked() const { return active_ && const_cast<Library&>(lib_).update()->asked(); }
 
-void CardTasks::beforeUpdate() {
-  waitIdle(30000);
-  updating_ = true;
+void CardTasks::fenceUp() {
+  // The build streams tags.bin: the scan's View (it reads it) closed, its
+  // chunk out, and its memory back for the build (nothing scans until the
+  // save's end).
   jobs_.prepareUpdate();
+  jobs_.trim();
+  lib_.update()->fencedUp();
 }
 
-void CardTasks::afterUpdate(bool ok) {
-  updating_ = false;
-  updateWanted_ = false;
-  updateShown_ = false;
-  deferAsked_ = false;
-  lastCompactFailed_ = false;
+void CardTasks::live() {
+  LibraryUpdate* up = lib_.update();
+  const LibraryUpdate::Step& s = up->last();
+  // The fence down: the index readable again (the save next, on the worker).
+  up->lived();
   ++updates_;
-  // What the journal had is the index's now, or (failed: the card couldn't
-  // be read, no memory) the next boot's: library.idx keeps the inputs of
-  // its last build, which the records no longer match, so that boot's scan's
-  // end rebuilds. Not asked again until new records reach the journal.
+  // What the journal had is the index's now, or (failed: no memory, the
+  // card pulled mid-build) the next boot's: library.idx keeps the inputs of
+  // its last build, which the records no longer match, so that boot's
+  // scan's end rebuilds. Not asked again until new records reach the
+  // journal.
   jobs_.markRecords();
   pendingAfterScan_ = false;
-  if (ok) {
+  lastCompactFailed_ = false;
+  if (s.built) {
     jobs_.libraryRebuilt();
     scanTotal_ = indexPending();
     scanDone_ = 0;
     toast(uitext::kLibraryUpdated);
   }
-  Serial.printf("[card] the update step (%s): %s\n", updateWhy_,
-                ok ? "the library is rebuilt" : "FAILED (the library stays as it was; the next boot updates it)");
+  Serial.printf("[card] the update step (%s): %s\n", s.why,
+                s.built ? "the library is rebuilt (its save next, on the card worker)"
+                        : "FAILED (no library until the next boot, or Try again)");
 }
 
-void CardTasks::updateDeferred() {
-  updating_ = false;
-  updateWanted_ = false;
-  updateShown_ = false;
-  deferAsked_ = false;
-  // The marker makes the next boot build everything there is.
+void CardTasks::updateOver() {
+  // The marker (a deferral's) makes the next boot build everything there
+  // is; a failure leaves library.idx's inputs, which the records no longer
+  // match. Either way: no other step for what the journal had.
   jobs_.markRecords();
   pendingAfterScan_ = false;
-  ++deferred_;
-  toast(uitext::kLibraryAtBoot);
+  lastCompactFailed_ = false;
 }
 
 void CardTasks::resetStats() {
@@ -451,7 +506,14 @@ librarytext::Status CardTasks::status() const {
   librarytext::Status s;
   if (!active_) return s;
   using P = librarytext::Status::Phase;
-  if (updating_ || (updateWanted_ && updateShown_)) {
+  const LibraryUpdate::Phase up = const_cast<Library&>(lib_).update()->phase();
+  // From the step's fence to its Live (the library hidden), and while it
+  // waits only for the safe point or the worker (its compaction done).
+  const bool updating = up == LibraryUpdate::Phase::Fence || up == LibraryUpdate::Phase::Build ||
+                        up == LibraryUpdate::Phase::Building || up == LibraryUpdate::Phase::Live ||
+                        (up == LibraryUpdate::Phase::Asked && (lastUpdate_.wait == LibraryUpdate::Wait::SafePoint ||
+                                                                lastUpdate_.wait == LibraryUpdate::Wait::Worker));
+  if (updating) {
     s.phase = P::Updating;
   } else if (jobs_.walking() || walkSeen_ || walkArmed_) {
     s.phase = P::Checking;
@@ -481,10 +543,16 @@ void CardTasks::state(librarytext::Status* s, char* line, size_t size) const {
     return;
   }
   const cardjobs::Jobs::Counts& c = jobs_.counts();
+  static const char* const kUpdateWaits[] = {"", "a walk's end", "its compaction", "the worker", "the safe point"};
+  char update[64] = "";
+  if (updateAsked()) {
+    const int w = static_cast<int>(lastUpdate_.wait);
+    snprintf(update, sizeof(update), "; the update step is asked%s%s", w ? ", waiting for " : "",
+             w > 0 && w < 5 ? kUpdateWaits[w] : "");
+  }
   snprintf(line, size, "%lu read (%lu unreadable, %lu partial, %lu read errors, %lu skipped); waiting for %s%s",
            (unsigned long)c.scanned, (unsigned long)c.unreadable, (unsigned long)c.partial,
-           (unsigned long)c.readErrors, (unsigned long)c.skipped, ScanScheduler::waitName(lastWait_),
-           updateWanted_ ? "; the update step is asked" : "");
+           (unsigned long)c.readErrors, (unsigned long)c.skipped, ScanScheduler::waitName(lastWait_), update);
 }
 
 void CardTasks::report() const {

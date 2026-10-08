@@ -209,6 +209,10 @@ void Ui::retryCard() {
 }
 
 void Ui::shuffleAll() {
+  if (state_.libraryFenced) {  // the library update's fence: the index is the build's
+    toast(uitext::kUpdatingWait, false);
+    return;
+  }
   const LibraryIndex* index = library_.index();
   if (browse_ || !index || !index->ready() || index->trackCount() == 0) {
     warn("No music on the card to shuffle");
@@ -396,6 +400,15 @@ void Ui::libraryChanged() {
   // and the Library's pages start over at the root.
   thumbs_.libraryChanged();
   resetLibraryTab();
+  if (started_ && !suspended_ && list_.attached()) list_.reload();  // (the Queue's rows: new keys)
+}
+
+void Ui::libraryUpdating() {
+  // The snapshot says so from now (the pages' lines): taken again, so the
+  // pages drawn below see it.
+  host_.snapshot(state_);
+  resetLibraryTab();
+  if (started_ && !suspended_ && list_.attached()) list_.reload();
 }
 
 void Ui::browse(LibraryIndex* index) {

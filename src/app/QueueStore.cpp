@@ -181,7 +181,7 @@ void QueueStore::saveRepeat(PlaybackController::Repeat r) {
 }
 
 void QueueStore::loop(uint32_t nowMs) {
-  if (!storage_.available()) return;
+  if (!storage_.available() || carrying()) return;
   noteTransport();
   saver_.loop(nowMs);
   noteFailures();
@@ -195,6 +195,10 @@ void QueueStore::noteTransport() {
 
 bool QueueStore::flushNow() {
   if (!storage_.available()) return true;  // nothing is saved without storage
+  if (carrying()) {
+    Serial.println("[queue] saved now: queue.txt has the queue (flushed as the library update began)");
+    return true;
+  }
   const uint32_t t0 = millis();
   noteTransport();
   const bool wasWriting = saver_.writing(), wasDirty = saver_.contentDirty();
@@ -280,33 +284,58 @@ void QueueStore::saveResume(const QueueResume& r) {
   }
 }
 
+// The card and the caller's rebuild, for the portable sequence (flush,
+// free, rebuild, re-read: lib/core/QueueRemap, docs/METADATA.md 3.4.2).
+struct QueueStore::RemapCard : queueremap::Card {
+  RemapCard(QueueStore& store, bool (*rebuild)(void*), void* ctx) : store_(store), rebuild_(rebuild), ctx_(ctx) {}
+  bool flush() override { return store_.storage_.available() && store_.flushNow(); }
+  ByteSource* openFile() override {
+    char file[48], temp[48];
+    store_.paths(file, temp, sizeof(file));
+    file_ = store_.storage_.fs().open(file, FILE_READ);
+    // Only queue.tmp: power went between removing queue.txt and the
+    // rename, and a boot with no library kept it as it was (restore()).
+    if (!file_) file_ = store_.storage_.fs().open(temp, FILE_READ);
+    return file_ ? &source_ : nullptr;
+  }
+  void closeFile() override { file_.close(); }
+  bool rebuild() override { return rebuild_ && rebuild_(ctx_); }
+
+  QueueStore& store_;
+  bool (*rebuild_)(void*);
+  void* ctx_;
+  File file_;
+  FileSource source_{file_};
+};
+
 bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
-  // The card and the caller's rebuild, for the portable sequence (flush,
-  // free, rebuild, re-read: lib/core/QueueRemap, docs/METADATA.md 3.4.2).
-  struct Card : queueremap::Card {
-    Card(QueueStore& store, bool (*rebuild)(void*), void* ctx) : store_(store), rebuild_(rebuild), ctx_(ctx) {}
-    bool flush() override { return store_.storage_.available() && store_.flushNow(); }
-    ByteSource* openFile() override {
-      char file[48], temp[48];
-      store_.paths(file, temp, sizeof(file));
-      file_ = store_.storage_.fs().open(file, FILE_READ);
-      // Only queue.tmp: power went between removing queue.txt and the
-      // rename, and a boot with no library kept it as it was (restore()).
-      if (!file_) file_ = store_.storage_.fs().open(temp, FILE_READ);
-      return file_ ? &source_ : nullptr;
-    }
-    void closeFile() override { file_.close(); }
-    bool rebuild() override { return rebuild_(ctx_); }
-
-    QueueStore& store_;
-    bool (*rebuild_)(void*);
-    void* ctx_;
-    File file_;
-    FileSource source_{file_};
-  } card(*this, rebuild, ctx);
-
+  RemapCard card(*this, rebuild, ctx);
   const queueremap::Result r =
       queueremap::run(queue_, saver_, player_, catalog_, card, millis(), psramAlloc, psramFree);
+  logRemap(r);
+  return r.rebuilt;
+}
+
+bool QueueStore::remapBegin() {
+  if (!carry_) carry_ = psramNew<queueremap::Carry>(psramAlloc, psramFree);
+  if (!card_) card_ = psramNew<RemapCard>(*this, nullptr, nullptr);
+  if (!carry_ || !card_) {
+    Serial.println("[queue] no PSRAM to carry the queue across the library update");
+    return false;
+  }
+  carry_->begin(queue_, saver_, player_, catalog_, *card_);
+  noteFailures();
+  return true;
+}
+
+bool QueueStore::remapFinish(bool rebuilt) {
+  if (!carrying()) return false;
+  const queueremap::Result r = carry_->finish(queue_, saver_, player_, catalog_, *card_, rebuilt, millis());
+  logRemap(r);
+  return r.read.ok && r.read.currentKept;
+}
+
+void QueueStore::logRemap(const queueremap::Result& r) {
   noteFailures();
   const queuetext::Restored& got = r.read;
   if (!got.ok) {
@@ -316,7 +345,7 @@ bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
     Serial.printf("[queue] couldn't carry the queue across the rebuild (%s): cleared; queue.txt keeps the last one "
                   "saved\n",
                   why);
-    return r.rebuilt;
+    return;
   }
   char via[96] = "through queue.txt";
   if (r.via == queueremap::Via::Memory) {
@@ -327,7 +356,7 @@ bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
     Serial.printf("[queue] the rebuild left no library: %lu of %lu tracks here until it's back (queue.txt stays as "
                   "it was last saved)%s\n",
                   (unsigned long)got.entries, (unsigned long)got.lines, got.currentKept ? "" : "; stopped");
-    return r.rebuilt;
+    return;
   }
   // (Lines left out: a file from before the queue's cap, kept whole by a
   // boot with no library and read back now.)
@@ -341,7 +370,11 @@ bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
                 via, (unsigned long)got.entries, (unsigned long)got.lines, capped, queue_.current() + 1,
                 got.currentKept ? "" : " (the current one is gone)", r.startCarried ? " (its start point kept)" : "",
                 (unsigned long)(r.freedBytes / 1024), (unsigned long)(queue_.memoryBytes() / 1024));
-  return r.rebuilt;
+  if (player_.fenceStops() != fenceStopsSeen_) {
+    fenceStopsSeen_ = player_.fenceStops();
+    Serial.println("[queue] the track ended while the library updated: the next one waits, paused (nothing starts "
+                   "by itself)");
+  }
 }
 
 void QueueStore::printStatus() const {

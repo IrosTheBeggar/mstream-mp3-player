@@ -349,8 +349,29 @@ public:
   // The queue was replaced behind our back (restored from the card, or
   // remapped after a library rebuild). `currentKept`: the current entry is
   // still the track the backend has; otherwise, if it plays, the new
-  // current one starts.
+  // current one starts. After a fence (setFenced()), a heard track that
+  // ended inside it with nothing joined starts nothing: the entry after it
+  // (by the repeat mode; not `currentKept`, the new current one) is cued at
+  // 0:00, paused (fenceStops()).
   void queueReplaced(bool currentKept);
+
+  // ---- the library update's fence (docs/METADATA.md 3.4.2; N12) ----
+  // The queue's memory goes to a library build that runs on the card
+  // worker while the loop goes on (queueremap::Carry): from setFenced(true)
+  // to setFenced(false), the queue is empty and the catalog has no index,
+  // so nothing here reads them: no heard join is taken (the backend keeps
+  // it: queueReplaced() takes it after, its entry found by its path, since
+  // every id changed), no word goes to the backend (it keeps the one it
+  // had: a track that reaches its end inside the fence joins the next as
+  // before), update() does nothing (a natural end is queueReplaced()'s).
+  // The actions find the queue empty and do nothing, but for pause, and
+  // resume of the track the backend holds: the listener can always stop
+  // the sound, and nothing starts that needs a path.
+  void setFenced(bool on);
+  bool fenced() const { return fenced_; }
+  // Heard tracks that ended inside a fence with nothing joined (cued after
+  // it, paused), free-running.
+  uint32_t fenceStops() const { return fenceStops_; }
 
   // The last track that couldn't be played (skipped by update()), for the
   // UI's note ("Skipped 07 - x.flac: can't play it", why its sample rate
@@ -414,6 +435,9 @@ private:
     uint32_t token = 0;
     uint32_t key = QueueModel::kNone;
     uint32_t track = QueueModel::kNone;
+    // Its path's FNV-1a (QueueSaver::pathHash()'s): the same file when its
+    // key went and its id may mean another track (a library rebuild).
+    uint32_t pathHash = 0;
   };
   struct Signature {
     uint32_t position = 0, content = 0, heard = 0;
@@ -527,4 +551,11 @@ private:
   uint32_t sentAfter_ = 0;
   Signature signature_;
   GaplessStats gaplessStats_;
+
+  // The library update's fence (setFenced()).
+  bool fenced_ = false;
+  bool endedInFence_ = false;  // the heard track ended inside it (taken by queueReplaced())
+  uint32_t fenceStops_ = 0;
+  // The file the entry at `pos` names (its path's FNV-1a; 0: none).
+  uint32_t pathHashAt(uint32_t pos) const;
 };

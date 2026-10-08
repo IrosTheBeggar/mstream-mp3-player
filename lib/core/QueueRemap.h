@@ -23,8 +23,8 @@
 //   2. free: the queue's entries and undo snapshot given back
 //      (QueueModel::release()), so the rebuild has their memory: a full
 //      queue (QueueModel::kMaxEntries, 5,000) is 60-120 KB;
-//   3. rebuild: the caller's (Library::rebuild() today; the update step's
-//      build in N12);
+//   3. rebuild: the caller's (the flash's Library::rebuild(); on the card
+//      the update step's build, on the card worker: Carry below, N12);
 //   4. re-read: queuetext::read() of queue.txt, its two blocks exactly the
 //      lines read in (20 KB at 5,000, 40 KB shuffled), into a block of
 //      exactly the queue's size (QueueModel::assign()).
@@ -120,5 +120,51 @@ struct Result {
 // PSRAM; nullptr: malloc/free).
 Result run(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog, Card& card,
            uint32_t nowMs, MemorySink::AllocFn alloc = nullptr, MemorySink::FreeFn release = nullptr);
+
+// The same in two halves, for a rebuild that runs while the loop goes on
+// (the update step's build on the card worker, docs/METADATA.md 3.4.2,
+// N12): begin() flushes and frees (steps 1-2), the caller's rebuild runs
+// elsewhere, finish() reads back (step 4). Card::rebuild() isn't called.
+// Between them the queue is empty and the player fenced
+// (PlaybackController::setFenced(): it reads neither the queue nor the
+// catalog, and keeps a heard join for finish()); nothing else may touch the
+// queue, the saver (QueueStore pauses its passes) or the index. The memory
+// fallback's text, if the card couldn't take the file, is held here across.
+class Carry {
+public:
+  explicit Carry(MemorySink::AllocFn alloc = nullptr, MemorySink::FreeFn release = nullptr);
+  ~Carry();
+  Carry(const Carry&) = delete;
+  Carry& operator=(const Carry&) = delete;
+
+  // Steps 1-2: the queue on the card (or as text here), its memory given
+  // back, the player fenced. What it freed: result().freedBytes.
+  void begin(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog,
+             Card& card);
+  // Between begin() and finish().
+  bool carrying() const { return carrying_; }
+  // Step 4: read back through `card` (its file) or the text, the player
+  // unfenced and told. `rebuilt`: what the rebuild returned (the result's).
+  Result finish(QueueModel& queue, QueueSaver& saver, PlaybackController& player, const TrackCatalog& catalog,
+                Card& card, bool rebuilt, uint32_t nowMs);
+  const Result& result() const { return res_; }
+
+private:
+  MemorySink::AllocFn alloc_;
+  MemorySink::FreeFn free_;
+  bool carrying_ = false;
+  Result res_;
+  // What begin() noted for finish().
+  uint32_t startMs_ = 0, startDurationMs_ = 0;
+  ResumeAnchor startAnchor_;
+  bool hadStart_ = false;
+  int32_t position_ = -1;
+  uint32_t before_ = 0;
+  bool hadCurrent_ = false;
+  // The fallback text (Via::Memory): one block of exactly its size.
+  uint8_t* text_ = nullptr;
+  size_t textSize_ = 0;
+  void dropText();
+};
 
 }  // namespace queueremap

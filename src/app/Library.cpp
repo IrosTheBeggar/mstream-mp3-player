@@ -17,14 +17,14 @@ namespace {
 
 constexpr const char* kRoot = "/music";
 constexpr int kMaxDepth = 8;
-// The device's own files (2.12.6): written aside, then replace()d.
-constexpr tagstore::Names kIdxNames{"/.player/library.idx", "/.player/library.tmp", "/.player/library"};
+// The device's own files (2.12.6): written aside, then replace()d
+// (library.idx's are LibraryUpdate's).
 constexpr tagstore::Names kTxtNames{"/.player/device.txt", "/.player/device.tmp", "/.player/device"};
-constexpr const char* kMarker = "/.player/build.req";
 
 uint32_t internalFree() { return static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)); }
 uint32_t psramFreeNow() { return static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)); }
 float msSince(int64_t t0) { return static_cast<float>(esp_timer_get_time() - t0) / 1000.0f; }
+uint64_t nowUs() { return static_cast<uint64_t>(esp_timer_get_time()); }
 // The index's trims in place (LibraryIndex::ShrinkFn): heap_caps_realloc to
 // a smaller size splits the block where it is.
 void* psramShrink(void* p, size_t bytes) { return heap_caps_realloc(p, bytes, MALLOC_CAP_SPIRAM); }
@@ -70,63 +70,6 @@ void onBuild(const char* path, void* p) {
   c.minFree = std::min(c.minFree, internalFree());
 }
 
-// A file of the card (FatFs) as LibraryIndex's streams.
-class FileIn : public ByteSource {
-public:
-  explicit FileIn(tagstore::File& f) : f_(f) {}
-  size_t read(void* data, size_t n) override {
-    const uint32_t left = f_.size() > at_ ? f_.size() - at_ : 0;
-    const uint32_t k = static_cast<uint32_t>(std::min<size_t>(n, left));
-    if (k == 0 || !f_.read(at_, data, k)) return 0;
-    at_ += k;
-    return k;
-  }
-
-private:
-  tagstore::File& f_;
-  uint32_t at_ = 0;
-};
-
-class FileOut : public ByteSink {
-public:
-  explicit FileOut(tagstore::File& f) : f_(f) {}
-  bool write(const void* data, size_t n) override {
-    if (!f_.write(at_, data, static_cast<uint32_t>(n))) return false;
-    at_ += static_cast<uint32_t>(n);
-    return true;
-  }
-
-private:
-  tagstore::File& f_;
-  uint32_t at_ = 0;
-};
-
-// library.tmp left alone by a cut (2.12.6's settle()): whole when its
-// header reads and its sum holds (an older version's is taken as it is: it
-// is rebuilt anyway).
-class IdxCheck : public tagstore::TmpCheck {
-public:
-  explicit IdxCheck(LibraryIndex& idx) : idx_(idx) {}
-  bool whole(tagstore::Fs& fs, const char* tmp) override {
-    tagstore::File* f = fs.open(tmp, tagstore::Fs::Mode::Read);
-    if (!f) return false;
-    FileIn head(*f);
-    LibraryIndex::Inputs got;
-    const LibraryIndex::Load r = LibraryIndex::peek(head, &got);
-    bool ok = r == LibraryIndex::Load::Outdated;
-    if (r == LibraryIndex::Load::Loaded) {
-      FileIn all(*f);
-      ok = idx_.load(all, got) == LibraryIndex::Load::Loaded;
-      idx_.clear();
-    }
-    fs.close(f);
-    return ok;
-  }
-
-private:
-  LibraryIndex& idx_;
-};
-
 // device.tmp: whole when it reads as a device.txt.
 class TxtCheck : public tagstore::TmpCheck {
 public:
@@ -153,7 +96,7 @@ bool Library::ensureIndex() {
   if (!index_) {
     index_ = psramNew<LibraryIndex>(psramAlloc, psramFree, psramShrink);
     // A rebuild takes the old track table's block again (3.4.2's memory
-    // check counts on it: roomToBuild()).
+    // check counts on it: LibraryUpdate::roomToBuild()).
     if (index_) index_->keepTrackBlock(true);
   }
   if (!index_) Serial.println("[lib] no PSRAM for the library index");
@@ -293,7 +236,7 @@ bool Library::beginFlash() {
   return ok;
 }
 
-// ---- the card: the boot's decision (3.2.2) ----
+// ---- the card: the boot's decision (3.2.2, LibraryUpdate) ----
 
 bool Library::openRecords() {
   if (store_) return true;
@@ -302,8 +245,9 @@ bool Library::openRecords() {
   root_ = psramNew<cardroot::Root>();
   overlay_ = psramNew<TrackCatalog::Overlay>();
   run_ = psramNew<cardcontract::RunFields>();
+  held_ = psramNew<TrackCatalog::Held>();
   auto* scratch = static_cast<uint8_t*>(psramAlloc(1024));
-  if (!fat_ || !root_ || !overlay_ || !run_ || !scratch) {
+  if (!fat_ || !root_ || !overlay_ || !run_ || !held_ || !scratch) {
     psramFree(scratch);
     return false;
   }
@@ -322,19 +266,43 @@ bool Library::openRecords() {
   if (!store_) return false;
   stats_.opened = store_->open();
   stats_.openMs = msSince(t0);
+  LibraryUpdate::Config u;
+  u.fs = fat_;
+  u.store = store_;
+  u.root = root_;
+  u.index = index_;
+  u.alloc = psramAlloc;
+  u.release = psramFree;
+  u.musicRoot = kRoot;
+  u.walk = walkMusic;
+  u.walkCtx = this;
+  u.nowUs = nowUs;
+  update_ = psramNew<LibraryUpdate>(u);
+  if (!update_) {
+    psramDelete(store_);
+    store_ = nullptr;
+    return false;
+  }
   catalog_.setOverlay(overlay_);
   return true;
 }
 
-LibraryIndex::Load Library::loadCard(LibraryIndex::Inputs* saved) {
-  tagstore::File* f = fat_->open(kIdxNames.path, tagstore::Fs::Mode::Read);
-  if (!f) return LibraryIndex::Load::Corrupt;
-  FileIn in(*f);
+bool Library::walkMusic(LibraryIndex& index, void* self) {
+  // No records at all: /music walked into a path-named index (the
+  // validation walk then makes D, and the scan reads the tags). Every file
+  // is unread: Pending, so the scan reads the playing track, the queue's
+  // and the Library tab's first (3.3.3), and the status line counts them.
+  Library& lib = *static_cast<Library*>(self);
+  (void)index;  // (the one index: lib.index_)
+  lib.stats_.walk = Walk{};
+  uint64_t signature = 0;
   const int64_t t0 = esp_timer_get_time();
-  const LibraryIndex::Load r = index_->load(in, *saved);  // its own inputs: the decision compared them
-  stats_.loadMs = msSince(t0);
-  fat_->close(f);
-  return r;
+  if (!lib.build(&signature, LibraryIndex::kAddPending)) return false;
+  lib.stats_.buildMs = msSince(t0);
+  Serial.printf("[lib] /music walked: %lu files in %.0f ms (add %.0f ms, finish %.0f ms)\n",
+                (unsigned long)lib.stats_.walk.files, lib.stats_.buildWalkMs + lib.stats_.addMs, lib.stats_.addMs,
+                lib.stats_.finishMs);
+  return true;
 }
 
 bool Library::beginCard() {
@@ -347,47 +315,43 @@ bool Library::beginCard() {
     Serial.println("[lib] no PSRAM for the card's records: /music walked as before");
     return beginFlash();
   }
-  // library.idx: a cut rename settled (2.12.6), the marker, its header.
-  IdxCheck check(*index_);
-  const tagstore::Settled idxSettled = tagstore::settle(*fat_, kIdxNames, &check);
-  const bool marker = fat_->exists(kMarker);
-  int64_t t0 = esp_timer_get_time();
-  LibraryIndex::Inputs saved;
-  libraryboot::In in;
-  in.saved = libraryboot::Saved::Missing;
-  if (tagstore::File* f = fat_->open(kIdxNames.path, tagstore::Fs::Mode::Read)) {
-    FileIn head(*f);
-    in.saved = libraryboot::savedOf(LibraryIndex::peek(head, &saved), saved, root_->identity);
-    fat_->close(f);
+  const uint32_t minBefore = internalFree();
+  const LibraryUpdate::Booted b = update_->boot();
+  stats_.internalMinDuring = std::min(minBefore, internalFree());
+  stats_.saved = b.saved;
+  stats_.action = b.decision.action;
+  stats_.why = b.noMemory ? "no PSRAM" : b.decision.why;
+  stats_.peekMs = b.peekMs;
+  stats_.loadMs = b.loadMs;
+  stats_.compactMs = b.compactMs;
+  if (!b.walked) stats_.buildMs = b.buildMs;
+  stats_.saveMs = b.saveMs;
+  stats_.fromCache = b.decision.action == libraryboot::Action::Load && b.ok;
+  stats_.build = b.build;
+  stats_.built = b.built;
+  softStale_ = b.softStale;
+  if (b.compacted) {
+    const tagstore::TagStore::Compacted& c = b.compaction;
+    Serial.printf("[lib] the journals compacted into tags.bin in %.0f ms: %s (%lu records, %lu chunks merged%s)\n",
+                  b.compactMs, c.ok ? "ok" : c.error ? c.error : "FAILED", (unsigned long)c.records,
+                  (unsigned long)c.chunksMerged, c.walkMerged ? ", the walk's" : "");
   }
-  stats_.peekMs = msSince(t0);
-  in.marker = marker;
-  in.transfer = root_->present;
-  in.device = store_->device().present;
-  libraryboot::Decision d = libraryboot::decide(in);
-  stats_.saved = in.saved;
-  bool ok = false;
-  if (d.action == libraryboot::Action::Load) {
-    const LibraryIndex::Load r = loadCard(&saved);
-    if (r == LibraryIndex::Load::Loaded) {
-      ok = true;
-      stats_.fromCache = true;
-      softStale_ = libraryboot::softStale(saved, store_->deviceCrc(), store_->journalSeq());
-    } else if (r == LibraryIndex::Load::NoMemory) {
-      Serial.println("[lib] no PSRAM to load library.idx: no library (the built-in tracks still play)");
-      stats_.action = d.action;
-      stats_.why = "no PSRAM";
-      return false;
-    } else {
-      in.saved = libraryboot::Saved::Corrupt;  // its sum failed: built or walked instead
-      d = libraryboot::decide(in);
-    }
+  if (b.built) {
+    const LibraryBuilder::Result& r = b.build;
+    Serial.printf("[lib] built from the records in %.0f ms: %lu tracks, %lu from the transfer's, %lu from the "
+                  "device's, %lu by their paths (%lu for the scan)%s%s; peak %u B of PSRAM\n",
+                  b.buildMs, (unsigned long)index_->trackCount(), (unsigned long)r.fromTransfer,
+                  (unsigned long)r.fromDevice, (unsigned long)r.fromPath, (unsigned long)r.pending,
+                  r.restarted ? "; restarted without a file that failed its checks" : "",
+                  update_->transferBad() ? "; T left out" : "", (unsigned)index_->memory().buildPeak);
   }
-  stats_.action = d.action;
-  stats_.why = d.why;
-  if (!ok && d.action == libraryboot::Action::Build) ok = buildCard();
-  if (!ok && d.action == libraryboot::Action::Walk) ok = walkCard();
-  if (ok && d.removeMarker) fat_->remove(kMarker);
+  if (b.journalsLeft) Serial.println("[lib] the journals couldn't be compacted first: built from tags.bin alone");
+  if (b.saveFailed) Serial.println("[lib] couldn't save library.idx (the next boot builds again)");
+  if (b.noMemory && b.decision.action == libraryboot::Action::Load) {
+    Serial.println("[lib] no PSRAM to load library.idx: no library (the built-in tracks still play)");
+  } else if (!b.ok) {
+    Serial.printf("[lib] the build from the records FAILED (%s)\n", b.noMemory ? "out of PSRAM" : "unreadable");
+  }
   writeDeviceTxt();
   stats_.psramUsed = static_cast<int32_t>(psBefore) - static_cast<int32_t>(psramFreeNow());
   stats_.internalDelta = static_cast<int32_t>(internalFree()) - static_cast<int32_t>(stats_.internalFreeBefore);
@@ -399,144 +363,21 @@ bool Library::beginCard() {
   Serial.printf("[lib] the card: %s; D %s (%lu records, %lu journal chunks%s), read in %.0f ms + %.0f ms%s\n",
                 rootLine, di.present ? "present" : "none", (unsigned long)(di.present ? di.tags.recordCount : 0),
                 (unsigned long)store_->chunkCount(), store_->hasWalk() ? ", a walk to merge" : "", stats_.rootMs,
-                stats_.openMs, store_->twins() || idxSettled.twins ? "; TWINS: the card wants a disk check on a PC" : "");
-  Serial.printf("[lib] library.idx %s%s: %s (%s)%s in %.0f ms (header %.0f ms)\n", libraryboot::savedName(in.saved),
-                marker ? ", the build-at-boot marker set" : "", libraryboot::actionName(d.action), d.why,
+                stats_.openMs, store_->twins() || b.tmpSettled.twins ? "; TWINS: the card wants a disk check on a PC" : "");
+  Serial.printf("[lib] library.idx %s%s%s: %s (%s)%s in %.0f ms (header %.0f ms)\n", libraryboot::savedName(b.saved),
+                b.tmpSettled.what == tagstore::Settle::Promoted ? " (library.tmp taken: a cut fell mid-save)" : "",
+                b.marker ? ", the build-at-boot marker set" : "", libraryboot::actionName(b.decision.action),
+                b.decision.why,
                 softStale_ ? "; the scan went on since its build: rebuilt at the scan's end" : "",
-                d.action == libraryboot::Action::Load ? stats_.loadMs : stats_.buildMs + stats_.compactMs,
-                stats_.peekMs);
-  if (ok) {
+                b.decision.action == libraryboot::Action::Load ? b.loadMs : b.buildMs + b.compactMs, b.peekMs);
+  if (b.ok) {
     Serial.printf("[lib] %lu tracks, %lu artists, %lu albums; %u B of PSRAM; browsable %.0f ms after the mount; "
                   "internal RAM %+ld B\n",
                   (unsigned long)index_->trackCount(), (unsigned long)index_->artistCount(),
                   (unsigned long)index_->albumCount(), (unsigned)index_->memory().total, msSince(boot),
                   (long)stats_.internalDelta);
   }
-  return ok;
-}
-
-void Library::compactFirst() {
-  if (!store_->hasJournals() && !store_->wantsCompaction()) return;
-  // (A failure leaves the journals: the build reads tags.bin alone, and
-  // saves inputs the next boot finds soft-stale: buildCard().)
-  const int64_t t0 = esp_timer_get_time();
-  const tagstore::TagStore::Compacted c = store_->compact();
-  stats_.compactMs = msSince(t0);
-  Serial.printf("[lib] the journals compacted into tags.bin in %.0f ms: %s (%lu records, %lu chunks merged%s)\n",
-                stats_.compactMs, c.ok ? "ok" : c.error ? c.error : "FAILED", (unsigned long)c.records,
-                (unsigned long)c.chunksMerged, c.walkMerged ? ", the walk's" : "");
-}
-
-bool Library::buildCard(bool update) {
-  compactFirst();
-  const tagstore::DeviceInfo& di = store_->device();
-  const bool useT = root_->present && !transferBad_;
-  tagstore::File* t = useT ? fat_->open(root_->tagsPath, tagstore::Fs::Mode::Read) : nullptr;
-  tagstore::File* d = di.present ? fat_->open(store_->devicePath(), tagstore::Fs::Mode::Read) : nullptr;
-  tagstore::File* dRows = di.present ? fat_->open(store_->devicePath(), tagstore::Fs::Mode::Read) : nullptr;
-  tagstore::File* dFacts = di.present ? fat_->open(store_->devicePath(), tagstore::Fs::Mode::Read) : nullptr;
-  auto closeAll = [&] {
-    for (tagstore::File* f : {t, d, dRows, dFacts})
-      if (f) fat_->close(f);
-  };
-  // The update step (an index in use): T or D there a moment ago and not
-  // opening now is the card's trouble (pulled, failing), not "no records":
-  // the step fails with the index untouched (the queue reads back the same
-  // ids), rather than walking an absent /music into an empty library.
-  if (update && ((useT && !t) || (di.present && (!d || !dRows || !dFacts)))) {
-    closeAll();
-    Serial.println("[lib] the update step: the card's records didn't open (the card pulled?): the library stays as "
-                   "it was");
-    return false;
-  }
-  if (!t && !d) {
-    closeAll();
-    return walkCard();
-  }
-  constexpr uint32_t kRowsBuf = 1024, kFactsBuf = 3072;
-  auto* bufs = static_cast<uint8_t*>(psramAlloc(kRowsBuf + kFactsBuf));
-  auto* rows = psramNew<tagstore::BuilderRows>();
-  auto* facts = psramNew<tagstore::BuilderFacts>();
-  LibraryBuilder builder(psramAlloc, psramFree);
-  LibraryBuilder::Config bc;
-  bc.root = kRoot;
-  bc.transfer = t;
-  // T's skew as the walk found it at this commit; before the first walk
-  // after it T's paths count as present (the software listed the card
-  // moments ago) and its records are taken as they are.
-  const bool walkedHere = di.present && di.header.walked && di.header.walk == root_->identity;
-  bc.skew = walkedHere ? di.header.skew : 0;
-  bc.transferLists = t && !walkedHere;
-  bc.device = d;
-  if (d && bufs && rows && dRows && rows->begin(*dRows, bufs, kRowsBuf)) bc.rows = rows;
-  if (d && bufs && facts && dFacts && facts->begin(*dFacts, bufs + kRowsBuf, kFactsBuf)) bc.facts = facts;
-  bc.libraryRoots = root_->rootList();
-  bc.libraryRootCount = root_->rootCount;
-  const int64_t t0 = esp_timer_get_time();
-  const uint32_t minBefore = internalFree();
-  stats_.build = builder.build(*index_, bc);
-  stats_.buildMs = msSince(t0);
-  stats_.internalMinDuring = std::min(minBefore, internalFree());
-  stats_.built = true;
-  closeAll();
-  psramDelete(rows);
-  psramDelete(facts);
-  psramFree(bufs);
-  const LibraryBuilder::Result& r = stats_.build;
-  if (useT && !r.transferUsed && r.transferWhy != cardcontract::Why::Ok) transferBad_ = true;
-  if (r.noRecords) return walkCard();
-  if (!r.built) {
-    Serial.printf("[lib] the build from the records FAILED (%s)\n", r.noMemory ? "out of PSRAM" : "unreadable");
-    return false;
-  }
-  Serial.printf("[lib] built from the records in %.0f ms: %lu tracks, %lu from the transfer's, %lu from the device's, "
-                "%lu by their paths (%lu for the scan)%s%s; peak %u B of PSRAM\n",
-                stats_.buildMs, (unsigned long)index_->trackCount(), (unsigned long)r.fromTransfer,
-                (unsigned long)r.fromDevice, (unsigned long)r.fromPath, (unsigned long)r.pending,
-                r.restarted ? "; restarted without a file that failed its checks" : "",
-                useT && !r.transferUsed ? "; T left out" : "", (unsigned)index_->memory().buildPeak);
-  // Journals the compaction couldn't fold in (a full card, a walk being
-  // written) weren't read: the inputs saved say so, and the next boot finds
-  // the index soft-stale (rebuilt at its scan's end).
-  const bool journalsLeft = store_->hasJournals();
-  if (journalsLeft) Serial.println("[lib] the journals couldn't be compacted first: built from tags.bin alone");
-  softStale_ = false;
-  return saveCard(libraryboot::inputsOf(root_->identity, r.transferUsed, store_->deviceCrc(), store_->journalSeq(),
-                                        journalsLeft));
-}
-
-bool Library::walkCard() {
-  // No records at all: /music walked into a path-named index (the
-  // validation walk then makes D, and the scan reads the tags). Every file
-  // is unread: Pending, so the scan reads the playing track, the queue's
-  // and the Library tab's first (3.3.3), and the status line counts them.
-  stats_.walk = Walk{};
-  uint64_t signature = 0;
-  const int64_t t0 = esp_timer_get_time();
-  if (!build(&signature, LibraryIndex::kAddPending)) return false;
-  stats_.buildMs = msSince(t0);
-  Serial.printf("[lib] /music walked: %lu files in %.0f ms (add %.0f ms, finish %.0f ms)\n",
-                (unsigned long)stats_.walk.files, stats_.buildWalkMs + stats_.addMs, stats_.addMs, stats_.finishMs);
-  softStale_ = false;
-  return saveCard(libraryboot::inputsOf(root_->identity, false, store_->deviceCrc(), store_->journalSeq(),
-                                        store_->hasJournals()));
-}
-
-bool Library::saveCard(const LibraryIndex::Inputs& inputs) {
-  const int64_t t0 = esp_timer_get_time();
-  bool ok = tagstore::prepareTmp(*fat_, kIdxNames);
-  tagstore::File* f = ok ? fat_->open(kIdxNames.tmp, tagstore::Fs::Mode::Create) : nullptr;
-  ok = f != nullptr;
-  if (ok) {
-    FileOut out(*f);
-    ok = index_->save(out, inputs);
-    ok = fat_->close(f) && ok;
-  }
-  ok = ok && tagstore::replace(*fat_, kIdxNames);
-  if (!ok) fat_->remove(kIdxNames.tmp);
-  stats_.saveMs = msSince(t0);
-  if (!ok) Serial.println("[lib] couldn't save library.idx (the next boot builds again)");
-  return true;  // the index is ready either way
+  return b.ok;
 }
 
 void Library::writeDeviceTxt() {
@@ -568,102 +409,66 @@ void Library::writeDeviceTxt() {
 
 bool Library::rebuild() {
   if (!storage_.available() || !ensureIndex()) return false;
-  if (!records()) {
-    stats_ = Stats{};
-    stats_.cacheNote = "asked for";
-    stats_.internalFreeBefore = internalFree();
-    const uint32_t psBefore = psramFreeNow();
-    uint64_t signature = 0;
-    const bool ok = build(&signature);
-    if (ok) saveCache(signature);
-    stats_.walk.signature = signature;
-    stats_.psramUsed = static_cast<int32_t>(psBefore) - static_cast<int32_t>(psramFreeNow());
-    stats_.internalDelta = static_cast<int32_t>(internalFree()) - static_cast<int32_t>(stats_.internalFreeBefore);
-    return ok;
-  }
-  // The card answers first (it may have been pulled while on: there is no
-  // card-detect): a step on an absent card leaves the index as it is,
-  // rather than walking nothing into an empty library.
-  if (!fat_->exists(kRoot)) {
-    Serial.println("[lib] the update step: /music can't be read (the card pulled?): the library stays as it was");
+  if (records()) {
+    Serial.println("[lib] the card's library updates through the update step (gb, g0): not here");
     return false;
   }
-  const tagstore::TagStore::Opened opened = stats_.opened;
   stats_ = Stats{};
-  stats_.card = true;
-  stats_.opened = opened;
-  stats_.cacheNote = "the update step";
-  stats_.why = "the update step";
-  stats_.action = libraryboot::Action::Build;
+  stats_.cacheNote = "asked for";
   stats_.internalFreeBefore = internalFree();
   const uint32_t psBefore = psramFreeNow();
-  const bool records = (root_->present && !transferBad_) || store_->device().present || store_->hasJournals();
-  const bool ok = records ? buildCard(true) : walkCard();
+  uint64_t signature = 0;
+  const bool ok = build(&signature);
+  if (ok) saveCache(signature);
+  stats_.walk.signature = signature;
   stats_.psramUsed = static_cast<int32_t>(psBefore) - static_cast<int32_t>(psramFreeNow());
   stats_.internalDelta = static_cast<int32_t>(internalFree()) - static_cast<int32_t>(stats_.internalFreeBefore);
   return ok;
 }
 
+void Library::fence(uint32_t playing) {
+  if (!update_) return;
+  // Taken while the catalog still has its index: Now Playing's names (a
+  // built-in track's need no copy).
+  if (held_) {
+    catalog_.take(playing, held_);
+    catalog_.setHeld(held_);
+  }
+  catalog_.setIndex(nullptr);
+}
+
+void Library::unfence() {
+  catalog_.setIndex(index_);
+  catalog_.setHeld(nullptr);
+  if (held_) *held_ = TrackCatalog::Held{};
+}
+
 void Library::setOverlay(uint32_t track, const tagscan::Record& rec) {
-  if (!overlay_ || !run_ || !index_ || !index_->ready()) return;
+  LibraryIndex* idx = index();
+  if (!overlay_ || !run_ || !idx || !idx->ready()) return;
   rec.toRunFields(run_);
   const LibraryIndex::TagView v = LibraryBuilder::viewOf(rec.rec, run_, LibraryIndex::kFromDevice);
-  overlay_->set(*index_, track, v);
+  overlay_->set(*idx, track, v);
 }
 
-uint32_t Library::buildTrackSlots() const {
-  // As buildCard() configures the builder: T while this session hasn't
-  // found it bad, T listing until the walk at its commit, D's own rows
-  // capping D's records while T lists. No records: the walk, the same
-  // files as the index (a walk reserves as it goes).
-  const uint32_t walked = index_ ? index_->trackCount() : 0;
-  if (!store_ || !root_) return walked;
-  const bool useT = root_->present && !transferBad_;
-  const bool dPresent = store_->device().present;
-  if (!useT && !dPresent) return walked;
-  const tagstore::DeviceInfo& di = store_->device();
-  const bool walkedHere = dPresent && di.header.walked && di.header.walk == root_->identity;
-  const bool tLists = useT && (!walkedHere || !dPresent);
-  return LibraryBuilder::trackSlots(dPresent ? di.tags.recordCount : 0, dPresent ? &di.ownRecords : nullptr,
-                                    useT ? root_->tagsRecords : 0, tLists);
-}
-
-bool Library::roomToBuild(size_t alsoFreed, char* why, size_t size) const {
-  if (why && size) why[0] = 0;
-  if (!index_) return false;
-  const size_t freeNow = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-  const size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
-  const LibraryIndex::Memory m = index_->memory();
-  // The build's peak (ESTIMATED): the index it replaces and an eighth more
-  // (3.4.4 measured 1.99 MB for 1.78 MB at 20k), the builder's own (about
-  // 58 KB) and its buffers. L4 measures it.
-  const size_t peak = m.total + m.total / 8 + 96 * 1024;
-  const size_t room = freeNow + m.total + alsoFreed;
-  if (room * 10 < peak * 11) {
-    if (why) snprintf(why, size, "%u KB of PSRAM for a peak of about %u KB", (unsigned)(room / 1024), (unsigned)(peak / 1024));
-    return false;
+void Library::deferralWhy(char* why, size_t size) const {
+  if (!size) return;
+  why[0] = 0;
+  if (!update_) return;
+  const LibraryUpdate::Verdict& v = update_->verdict();
+  if (update_->deferForced()) {
+    snprintf(why, size, "gb! asked for the deferral");
+  } else if (v.shortOf == LibraryUpdate::Short::Room) {
+    snprintf(why, size, "%u KB of PSRAM for a peak of about %u KB", (unsigned)(v.room / 1024),
+             (unsigned)(v.peak / 1024));
+  } else if (v.shortOf == LibraryUpdate::Short::Carry) {
+    snprintf(why, size, "no PSRAM to carry the queue across the build");
+  } else if (v.shortOf == LibraryUpdate::Short::Table) {
+    const size_t table = static_cast<size_t>(update_->trackSlots()) * sizeof(LibraryIndex::Track);
+    snprintf(why, size, "the track table %u KB fits neither the old one's block (%u KB) nor the largest free one (%u KB)",
+             (unsigned)(table / 1024), (unsigned)(index_ ? index_->memory().tracks / 1024 : 0),
+             (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024));
   }
-  // The track table is one block, the build's biggest: the old one is kept
-  // across the rebuild (LibraryIndex::keepTrackBlock()) and taken again when
-  // the new table (the builder's reservation, from the headers' counts)
-  // fits in it; else the new one needs a free block of its size and a
-  // sixteenth more (TLSF rounds a request up to its next size class, a
-  // thirty-second, before it searches).
-  const size_t table = static_cast<size_t>(buildTrackSlots()) * sizeof(LibraryIndex::Track);
-  if (m.tracks < table && largest < table + table / 16) {
-    if (why) {
-      snprintf(why, size, "the track table %u KB fits neither the old one's block (%u KB) nor the largest free one "
-               "(%u KB)", (unsigned)(table / 1024), (unsigned)(m.tracks / 1024), (unsigned)(largest / 1024));
-    }
-    return false;
-  }
-  return true;
-}
-
-bool Library::deferToBoot() {
-  if (!fat_) return false;
-  tagstore::File* f = fat_->open(kMarker, tagstore::Fs::Mode::Create);
-  return f && fat_->close(f);
 }
 
 void Library::report() const {
@@ -691,6 +496,14 @@ void Library::report() const {
                     r.transferUsed ? "used" : cardcontract::whyName(r.transferWhy),
                     r.deviceUsed ? "used" : cardcontract::whyName(r.deviceWhy),
                     r.restarted ? " (restarted)" : "", (unsigned)r.workBytes);
+    }
+    if (update_ && update_->steps() > 0) {
+      const LibraryUpdate::Step& s = update_->last();
+      Serial.printf("[index] the last update step (%s): %s in %.1f ms on the card worker, the fence up %lu ms, %s in "
+                    "%.1f ms%s; %lu steps, %lu deferred to the boot\n",
+                    s.why, s.built ? (s.walked ? "walked" : "built") : "FAILED", s.buildMs, (unsigned long)s.fenceMs,
+                    s.saved ? "saved" : "NOT saved", s.saveMs, s.markerRemoved ? " (the marker removed)" : "",
+                    (unsigned long)update_->steps(), (unsigned long)update_->deferrals());
     }
   } else if (stats_.fromCache) {
     Serial.printf("[index] time: signature walk %.1f ms (%lu files), cache load %.1f ms\n", stats_.walk.ms,

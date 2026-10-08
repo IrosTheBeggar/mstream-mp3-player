@@ -7,6 +7,7 @@
 
 #include "PlaybackController.h"
 #include "QueueModel.h"
+#include "QueueRemap.h"
 #include "QueueSaver.h"
 #include "QueueText.h"
 #include "TrackCatalog.h"
@@ -51,13 +52,15 @@ public:
   PlaybackController::Repeat loadRepeat();
   // A change of mode (the menu, the console): written at once.
   void saveRepeat(PlaybackController::Repeat r);
-  // Saves what changed; call every loop pass.
+  // Saves what changed; call every loop pass (nothing while the queue is
+  // carried across a build: remapBegin()).
   void loop(uint32_t nowMs);
   // Everything now, synchronously (before a power-off: ENERGY.md item 4):
   // a write under way finished (or written again whole if the queue
   // changed since it began), an edit not yet written, the position, the
   // resume point. True: the card has the queue as it is (or there is no
-  // storage).
+  // storage; or it is carried across a build: queue.txt was flushed then,
+  // and the queue's memory is the build's).
   bool flushNow();
   // Something on its way to the card (a write under way, an edit or a
   // move waiting its delay; not a failed one waiting its retry).
@@ -69,6 +72,17 @@ public:
   // the file). The track that plays keeps playing if it's still there.
   // Returns what `rebuild` returned.
   bool remap(bool (*rebuild)(void* ctx), void* ctx);
+  // The same in two halves around a build that runs while the loop goes on
+  // (the update step's on the card worker, docs/METADATA.md 3.4.2):
+  // remapBegin() flushes and gives the queue's memory to the build (the
+  // player fenced); remapFinish() reads queue.txt back with the new ids
+  // (`rebuilt`: the build's result). Between them the queue is empty and
+  // nothing here writes. False: no PSRAM for the carry (nothing done: the
+  // caller doesn't start the build).
+  bool remapBegin();
+  // True: the current entry is the same file as before (its key is new).
+  bool remapFinish(bool rebuilt);
+  bool carrying() const { return carry_ && carry_->carrying(); }
   // "[queue] ..." for the console.
   void printStatus() const;
 
@@ -83,6 +97,9 @@ private:
   void noteTransport();
   void paths(char* file, char* temp, size_t size);
   void noteFailures();
+  // The card side of the remap (lib/core QueueRemap: queueremap::Card).
+  struct RemapCard;
+  void logRemap(const queueremap::Result& r);
 
   LocalStorage& storage_;
   QueueModel& queue_;
@@ -94,4 +111,7 @@ private:
   File file_;
   uint8_t* buf_ = nullptr;  // PSRAM
   BufferedFileSink sink_;
+  queueremap::Carry* carry_ = nullptr;  // PSRAM: the two-halves remap's state (remapBegin())
+  RemapCard* card_ = nullptr;           // PSRAM
+  uint32_t fenceStopsSeen_ = 0;
 };
