@@ -919,11 +919,23 @@ static void queueCommand(const char* a) {
         break;
       }
       const LibraryIndex::Span t = index->tracksOfAlbum(index->albumsAZ()[n]);
+      // An add takes as many as fit under the queue's cap, none when it is
+      // full (docs/QUEUE-MODES.md section 15).
+      const uint32_t room = queue.room();
       const bool ok = c == 'p' ? player.playNow(t.ids, t.count, 0)
                       : c == 'n' ? player.playNext(t.ids, t.count)
                                  : player.addToQueue(t.ids, t.count);
+      char why[64] = "";
+      if (!ok && c != 'p' && room == 0) {
+        snprintf(why, sizeof(why), " (REFUSED: the queue is full, %lu)", (unsigned long)QueueModel::kMaxEntries);
+      } else if (!ok) {
+        snprintf(why, sizeof(why), " (NO MEMORY)");
+      } else if (c != 'p' && t.count > room) {
+        snprintf(why, sizeof(why), " (%lu of them: the queue holds %lu)", (unsigned long)room,
+                 (unsigned long)QueueModel::kMaxEntries);
+      }
       Serial.printf("[queue] %s %s: %lu tracks%s\n", c == 'p' ? "playing" : c == 'n' ? "plays next:" : "added",
-                    index->albumName(index->albumsAZ()[n]), (unsigned long)t.count, ok ? "" : " (NO MEMORY)");
+                    index->albumName(index->albumsAZ()[n]), (unsigned long)t.count, why);
       break;
     }
     case 'r': {
@@ -2562,8 +2574,15 @@ void setup() {
   player.setRepeat(queueStore.loadRepeat());
   if (!queueStore.restore()) {
     queueEverything(false);
-    Serial.printf("[queue] no saved queue: the whole library, %lu tracks\n",
-                  (unsigned long)queue.size());
+    // Past the queue's cap, the library's first 5,000 (QueueModel::assign()).
+    const LibraryIndex* lib = library.index();
+    const uint32_t all = lib && lib->ready() ? lib->trackCount() : 0;
+    if (all > queue.size()) {
+      Serial.printf("[queue] no saved queue: the library's first %lu of %lu tracks (the queue holds %lu)\n",
+                    (unsigned long)queue.size(), (unsigned long)all, (unsigned long)QueueModel::kMaxEntries);
+    } else {
+      Serial.printf("[queue] no saved queue: the whole library, %lu tracks\n", (unsigned long)queue.size());
+    }
   }
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);

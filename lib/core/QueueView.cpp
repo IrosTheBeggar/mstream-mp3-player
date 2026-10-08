@@ -7,6 +7,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "UiText.h"
+
 namespace queueview {
 
 // ---- DurationBook ----
@@ -106,6 +108,40 @@ uint32_t AddedMark::firstPosition(const QueueModel& q) const {
     if (marks(q.keyAt(p))) return p;
   }
   return kNone;
+}
+
+// ---- the queue's cap ----
+
+static_assert(QueueModel::kMaxEntries == 5000, "uitext's cap texts say 5,000");
+
+char* grouped(uint32_t n, char* buf, size_t size) {
+  if (!buf || size == 0) return buf;
+  char digits[12];
+  const int len = snprintf(digits, sizeof(digits), "%lu", static_cast<unsigned long>(n));
+  size_t w = 0;
+  for (int i = 0; i < len && w + 1 < size; ++i) {
+    if (i > 0 && (len - i) % 3 == 0) {
+      buf[w++] = ',';
+      if (w + 1 >= size) break;
+    }
+    buf[w++] = digits[i];
+  }
+  buf[w] = 0;
+  return buf;
+}
+
+char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t size) {
+  if (!buf || size == 0) return buf;
+  char a[16], b[16];
+  grouped(took, a, sizeof(a));
+  grouped(asked, b, sizeof(b));
+  const char* fmt = what == Capped::Shuffle ? uitext::kCapShuffling
+                    : what == Capped::Play  ? uitext::kCapPlaying
+                    : what == Capped::Add   ? uitext::kCapAdded
+                                            : uitext::kCapNext;
+  const int n = snprintf(buf, size, fmt, a, b);
+  if (n > 0 && static_cast<size_t>(n) < size) snprintf(buf + n, size - n, ": %s", uitext::kCapWhy);
+  return buf;
 }
 
 // ---- KeyRing ----

@@ -26,7 +26,9 @@ implementation, and frozen). N2, `library.idx` v6 and the builder, is in
 until N12 brings the builder in. N3, the queue's remap through `queue.txt`,
 is in `lib/core/QueueRemap` (with `QueueModel::release()`, the exact
 trim and `queuetext::read()`'s pre-sized blocks), built into
-`QueueStore::remap()` and not flashed. Part 2, the card
+`QueueStore::remap()` and not flashed. The queue's cap of 5,000 tracks
+(the user's answer to U12: 3.5, and docs/QUEUE-MODES.md section 15) is
+built the same way. Part 2, the card
 contract, is a **PROPOSAL (v1)** for the transfer software, whose own
 design is still being worked on in mstream-terminal; it is written so
 that side can implement it without reading the player's code, and every
@@ -121,6 +123,13 @@ Where the facts come from:
   one builder that merges per file; change detection by generation, the
   walk, and size, time and fingerprint; atomic writes; AutoDJ rows keyed
   by path hash, with "random with filters" for files that have none.
+- **The user's answers to part 7** (2026-10-07): the device defaults
+  stand: a transfer record wins while it still matches (U8); hand-copied
+  files show at once with their file names (U11); the scan stops below
+  10% battery (U13); a host test may vendor FatFs (U14). U12 is replaced
+  by **a cap on the queue, 5,000 tracks** (3.5; built: QUEUE-MODES.md
+  section 15). A spare card is ready for N11's synthetic 20k card and
+  later tests (U1).
 
 **What this design decided** (the defaults didn't say; each is open to
 change, and part 7 lists the questions):
@@ -1268,7 +1277,7 @@ other producer's record. A file with no record indexes exactly as today.
   next run takes the new spelling (2.10.2); its files are scanned
   meanwhile.
 - **Rescan tags** on the device rewrites D's records only; rule 1 still
-  prefers a matching T record (part 7, U8).
+  prefers a matching T record (part 7, U8: decided so).
 - Covers have their own order (2.14.3).
 - What the builder makes of the chosen fields (the votes, the display
   join, the orders) is part 5.
@@ -2255,17 +2264,19 @@ falls from about 50 ms to about 2 ms (ESTIMATED, metascan section 5.2).
 |---|---|---|
 | Mount, the root, the index header | about 0.2 s | about 0.2 s |
 | Load `library.idx` | 5 ms (MEASURED) | 1.1-1.5 s |
-| Restore the queue (`queue.txt`) | ms | 0.1 s (a short queue) to 1.5-2 s (20k lines, about 1.5 MB, `findTrack` per line) |
+| Restore the queue (`queue.txt`) | ms | 0.1 s (a short queue) to 0.4-0.5 s (a full queue since the cap: 5,000 lines, about 0.4 MB, `findTrack` per line; 1.5-2 s for the 20k lines before it) |
 | **To a browsable library** | **under 0.5 s** | **about 1.5-3.5 s** |
 | Instead, a build at boot (after a transfer, or a deferred one), before the UI | under 0.1 s | about 7-9 s, plus the journals' compaction (0-3 s) |
 | Background walk, cached | under 0.05 s | 9-11 s, plus 2.3-3.3 s on the first walk after a transfer |
 | qfp checks (only after a PC wrote times the skew rule can't explain) | none | at most about 2.7 min once |
-| The update step's pause (3.4.2) | under 0.1 s | about 9-12 s idle, 11-14 s while an MP3 plays (whole-library queue) |
+| The update step's pause (3.4.2) | under 0.1 s | about 9-12 s idle, 11-14 s while an MP3 plays (a 20k-line queue; a full one since the cap is about 1-1.5 s less) |
 | MPDJ's DJNB check, once per commit, on the card worker (3.4.2) | none | 3.5-5 s of reads (6 MB) |
 
 If L2 measures more than 3 s for the queue, a binary fast path (track ids
 saved with the index's build stamp, used when the stamp matches) can come
-later; `queue.txt` stays the fallback.
+later; `queue.txt` stays the fallback. The totals above still count a
+20k-line queue; the queue's cap (3.5) takes up to about 1.5 s off them,
+kept as margin until L2 measures.
 
 ### 3.3 The scanner
 
@@ -2327,7 +2338,7 @@ reading rules are part 5's.
 queued or browsed until a build. If the walk adds 200 files or more, or
 the scan's estimate is over 60 s, the builder runs once right after the
 walk (the new files appear with path names), and again at the scan's
-end (part 7, U11).
+end (part 7, U11: decided so).
 
 #### 3.3.4 Yielding (a portable `ScanScheduler`, host-tested like `test_idle_policy`)
 
@@ -2379,7 +2390,7 @@ internal free during a scan in Bluetooth mode.
 - **Cost:** about 1% of a 390 mAh charge for a full 20k scan with the
   cache (ESTIMATED, metascan section 6.4).
 - **Low battery:** pause below 10% when not charging; resume on USB or
-  above 15% (part 7, U13).
+  above 15% (part 7, U13: decided, 10%).
 - **No idle-off blocker for scanning.** On USB the idle power-off is
   already blocked (`IdlePolicy`'s `Usb`); on battery a power-off just
   interrupts the scan and the journal resumes it. The shutdown path
@@ -2506,12 +2517,14 @@ finish as n log n, at 20k:
 | Reads: T's and D's sections, about 6 MB at 1.2-1.7 MB/s | 3.5-5 s | 3.5-5 s |
 | Adds | 2.2-2.6 s | about 4 s |
 | Finish | about 1.3 s | about 2.1 s |
-| The queue's re-read, 20k lines (3.2.5) | 1.5-2 s | 1.5-2 s |
+| The queue's re-read, 20k lines (3.2.5; at most 5,000 since the cap: 0.4-0.5 s) | 1.5-2 s | 1.5-2 s |
 | AutoDJ's join | 0.3-0.5 s | 0.3-0.5 s |
 | **The pause** | **about 9-12 s** | **about 11-14 s** |
 
 The card reads busy-wait the CPU (3.3.4), so they don't overlap the
-adds. A short queue takes 1.5-2 s off. At 2k the pause is about 1-1.5 s.
+adds. A short queue takes 1.5-2 s off; a full one since the queue's cap
+(5,000 lines, 3.5) about 1-1.5 s, which the table keeps as margin until
+L4 measures. At 2k the pause is about 1-1.5 s.
 The save follows in the background (about 1.8 MB at 0.5-1 MB/s, 2-4 s).
 The safe point's 20 s still covers the worst case, with about 6 s to
 spare (the decoder asks for the next path only near its end of file); if
@@ -2608,8 +2621,8 @@ the host:
 - **nameKey's tables are Rust's own** (`tools/unicode_case.rs`, Unicode
   17.0 from rustc 1.98), checked against std code point by code point
   (`test_name_key`).
-- **U8 and U9 (b)** keep the proposed defaults behind
-  `LibraryBuilder::kTransferBeatsRescan` and
+- **U8 (decided: the default stands) and U9 (b)** keep the proposed
+  defaults behind `LibraryBuilder::kTransferBeatsRescan` and
   `LibraryIndex::kHandCoverBeatsThumbnail`.
 - **Measured (host):** the tagged synthetic library (`LibrarySynth`) in
   the user's shape, with the measured disagreement rates and name lengths,
@@ -2630,12 +2643,12 @@ counts):
 |---|---|---|
 | Free with the UI up, today (77-track card) | **2.77-2.90** | MEASURED (dev.log `psram=`) |
 | `library.idx` v6 | −1.75 to −1.85 | 3.4.3 |
-| A whole-library queue, 20k entries, with its undo snapshot | −0.48 (−0.96 untrimmed) | 12 B per entry, twice (`QueueModel`). With no saved queue the boot queues the whole library (`queueEverything`), so a whole-library queue is the *default* on a new card; `assign()` takes no snapshot (0.24 MB), and the first edit after it adds one |
+| The queue, full (the cap: 5,000 entries), with its undo snapshot | −0.12 | 12 B per entry, twice (`QueueModel`). With no saved queue the boot queues the library's first 5,000 (`queueEverything`), so a full queue is the *default* on a big new card; `assign()` takes no snapshot (0.06 MB), and the first edit after it adds one. A whole-library queue of 20k was −0.48 (−0.96 untrimmed) before the cap |
 | AutoDJ: u16 maps, filters, 5 cached rows | −0.17 to −0.33 | autodj research section 5 |
 | The sector cache | −0.07 | 3.2.4 |
 | `DurationBook` | −0.04, or 0 once lengths come from the index | `lib/core/QueueView.h` |
 | The card worker's job, only while one runs (one at a time) | −0.08 to −0.1 | the largest job: the walk (the 64 KB scratch, DFLD's 8 KB buffer, the 2 KB Δ histogram, the journal's write buffer). The scan: its 4 KB buffer, the record, the `FIL`, a 100-record chunk, the resume set (about 60 KB). The compaction: its run buffers (about 60 KB). The doubtful files go to `walk.jnl`, not RAM (3.2.3) |
-| **Headroom** | **about −0.1 to 0.35** | negative in the worst case without the trims below |
+| **Headroom** | **about 0.26 to 0.71** | positive in the worst case since the queue's cap (it was about −0.1 to 0.35 with a whole-library queue) |
 
 **What that forces:**
 
@@ -2645,15 +2658,22 @@ counts):
   about 170 KB during a decode fits only in the better half of the range,
   so transfer thumbnails (one 3.2 KB or 18 KB read, no decode) matter at
   20k.
-- **The queue's blocks are trimmed** to their exact size after
-  `assign()`.
+- **The queue is capped at 5,000 entries** (the user's answer to U12,
+  2026-10-07; docs/QUEUE-MODES.md section 15): Shuffle all and Play all
+  on a bigger library take a random 5,000 (shuffle on) or the first 5,000
+  (off); an add takes as many as fit and is refused with "The queue
+  holds 5,000 tracks" when none do; the undo is always kept. A longer
+  `queue.txt` from before the cap loads its first 5,000 lines, or the
+  5,000 from its current line on, and is written again. Its blocks are
+  trimmed to their exact size after `assign()` and never grow past the
+  cap.
 - **During the update step:** it frees the index, the queue, AutoDJ's
   maps and Thumbs' pools (about 2.7-3.4 MB with the headroom); the build
   peak, pre-sized, is about 2.0 MB; margin about 0.7 MB or more.
   Afterwards, in order: AutoDJ's join (a sorted array of (path hash,
   track id), 240 KB transient, then 2 × 40 KB of u16 maps; rows whose
-  file is gone are skipped), the queue's re-read (about 80 KB transient,
-  then 240 KB), Thumbs' pools (315 KB).
+  file is gone are skipped), the queue's re-read (at most 20 KB
+  transient, 40 KB shuffled, then 60 KB), Thumbs' pools (315 KB).
 - **Fragmentation:** the arena (about 0.8 MB) and the track table (640 KB)
   are single blocks; the memory check (3.4.2) defers a build to the next
   boot rather than fail, and the build-at-boot marker makes sure that
@@ -2665,17 +2685,20 @@ counts):
   random with filters is narrowed to it (2.13.4). A per-track filter
   block for every file would cost about 80 KB more (part 7, U15).
 
-**Levers, if L0 or L4 measure less** (part 7, U12):
+**Levers, if L0 or L4 measure less** (part 7, U12, which the cap
+answered):
 
 | Lever | Saving |
 |---|---|
-| No undo snapshot for queues over about 5,000 entries | 0.24 MB |
+| ~~No undo snapshot for queues over about 5,000 entries~~ | taken another way: the cap saves 0.36 MB against a whole-library queue of 20k and keeps the undo |
 | File names kept on the card instead of in PSRAM (about 31 B per track) | 0.62 MB |
 | `DurationBook` folded into the index | 0.04 MB |
 | AutoDJ at its compact layout | up to 0.16 MB |
 
-The ceiling stays about 25k tracks with a full queue (metascan section
-6.2).
+The ceiling was about 25k tracks with a full queue (metascan section
+6.2). Since the cap the queue no longer grows with the library; the
+index, AutoDJ's maps and `DurationBook` do (about 100 B a track): about
+23k-27k tracks by the table above (ESTIMATED), before the levers.
 
 **Flash, IRAM, internal RAM** (metascan section 6.1): TagScan about 11.4
 KB of code and 4.0 KB of rodata (MEASURED with the ESP32 toolchain), 0
@@ -2699,7 +2722,7 @@ one 300 B row (about 3 ms).
 | `lib/core/LibraryIndex.{h,cpp}` | v6 records and the header's inputs; `begin(const Sizing&)` with exact counts; `addRecord(path, const TagView&)` next to `addFile()`; Stage A's votes and orders in `buildViews()` (a missing number sorts last, an artist's albums newest first); `readNames()` fills only the fields a record lacks; `kLoose` and the transfer-thumbnail flag; library roots (LIBR), if the vpath layout is chosen. `Load::Stale` no longer happens at boot. |
 | `lib/core/TrackCatalog.{h,cpp}` | `title()` the tag's own string or the slice; `artist()` the track artist, else the album's line, else the folder artist; `album()` the display name; `durationHintMs()` the library's length; a one-slot overlay for the playing track's fresh tags (3.3.3). |
 | `src/app/Library.{h,cpp}` | The boot decision (3.2.2) replaces `begin()`'s walk, `library.tmp` recovery and the build-at-boot marker included; `rebuild()` becomes the update step, driven by `LibraryUpdate`, its build a card-worker job; the save moves to the card worker; `report()` gains the scan state. |
-| `src/app/QueueStore.cpp`, `lib/core/QueueModel` | `remap()` through `queue.txt` (flush, free, rebuild, re-read); the reads pre-size their sinks; `QueueModel::release()` and an exact-size trim. |
+| `src/app/QueueStore.cpp`, `lib/core/QueueModel` | `remap()` through `queue.txt` (flush, free, rebuild, re-read); the reads pre-size their sinks; `QueueModel::release()` and an exact-size trim. Built (N3). Then the cap of 5,000 entries (`kMaxEntries`, `room()`, `window()`; `queuetext::read()`'s window; the UI's toasts): built, QUEUE-MODES.md section 15. |
 | `src/storage/LocalStorage.cpp` | A FatFs lister (`FILINFO`'s size and time); the sector-cache wrapper after `SD.begin()`; `forEachFile` stays for LittleFS and the console. |
 | `src/ui/Thumbs.{h,cpp}` | The worker becomes the shared card worker (walk, scan and cover jobs); cover sources in 2.14.3's order, `/.mstream/thumbs` read-only (and `hasCover()` true for an album with the transfer-thumbnail flag); streamed JPEG input. |
 | `src/ui/LibraryPage.cpp`, `NowPlayingPage.cpp` | Direct `trackTitle()` reads move to the catalog; rows show a year subtitle, disc dividers and a track-artist subtitle; the status line. Go to artist and album keep the folder entities. |
@@ -2993,12 +3016,12 @@ or firmware glue that is built (`pio run -e core2`, with the IRAM
 |---|---|---|---|
 | N1 | **Built.** **The contract kit** (`lib/core/CardContract`): CRC-32, FNV-1a 64, qfp, FAT time and the skew rule; MSMF, MPTG, MPDJ and MSPD readers and writers; the root election; `device.txt`; 2.4.3's structural checks; the fixtures of 2.17 (2.18's vectors, the JSON library descriptions and their golden files), frozen for the terminal's tests | 2.5-3 | Round trips; truncation at every byte and a flipped bit per section give "absent"; each structural check broken under valid CRCs gives "absent" (no endless loop); a newer major is absent, a newer minor reads; the golden bytes |
 | N2 | **Built.** **`LibraryIndex` v6 and `LibraryBuilder`**: Stage A's election (5.4), the merge (2.9), exact sizing, the inputs, LIBR roots | 3.5-4.5 | `test_library_index` extended; `LibrarySynth` with synthetic tags at the measured disagreement rates; 20k memory and build-peak asserts (walked, and T listing after a transfer); the same files from T and from D build byte-identical indexes apart from the sources and lengths within a second |
-| N3 | **Built.** **The queue's remap through `queue.txt`**; `QueueModel::release()` and the exact trim | 1-1.5 | `test_queue`: a 20k remap within budget; shuffled; the current track gone; the resume point carried; the remap after a rebuild or a boot with no library, and after a cleared queue (the file read back from its own line) |
+| N3 | **Built.** **The queue's remap through `queue.txt`**; `QueueModel::release()` and the exact trim | 1-1.5 | `test_queue`: a 20k remap within budget (since the queue's cap, a full queue of 5,000 from a 20k library); shuffled; the current track gone; the resume point carried; the remap after a rebuild or a boot with no library, and after a cleared queue (the file read back from its own line) |
 | N4 | **`TagStore`**: D with its device sections, `tags.jnl` (sorted chunks), `walk.jnl`, the streaming k-way compaction, recovery, the cut-rename rule (2.12.6) | 2-2.5 | A power cut injected at every write, sync, remove and rename, a rename cut between its two directory writes included; the compaction's PSRAM bounded whatever the journal holds |
 | N5 | **`CardWalk`**: the lister interface, the canonical sort (with its passes for big folders), the digests, T's freshness (the skew, Doubtful entries through `walk.jnl`, qfp, confirmations) | 2-2.5 | Fake FAT trees: shuffled order, a 3,000-file folder through a small scratch, a retag at the same size, a renamed folder, a deleted album, every stamp shifted an hour, three files shifted, invalid and zero stamps |
 | N6 | **`TagScan`, the production port** with part 5's rules; the synthetic parity corpus (2.17, item 3) | 3-4 | The corpus and the crafted edge files; the fuzz harness (ASan only if a Linux toolchain is available); parity against a lofty reference (the terminal's S3, or a small host harness until it exists) |
 | N7 | **`ScanScheduler`** and the `LibraryWrite` blocker | 1-1.5 | Like `test_idle_policy` |
-| N8 | **`SectorCache`.** Optional: a host FatFs model (vendored FatFs on a RAM disk) counting sector reads per walk and per open on a 20k tree of the user's shape (part 7, U14: vendoring is a download) | 1 (+1) | LRU, bypass, write invalidation, a random model check; the model checks metascan's 56 sectors per open before L0 |
+| N8 | **`SectorCache`.** Optional: a host FatFs model (vendored FatFs on a RAM disk) counting sector reads per walk and per open on a 20k tree of the user's shape (part 7, U14: vendoring is a download; the user said yes) | 1 (+1) | LRU, bypass, write invalidation, a random model check; the model checks metascan's 56 sectors per open before L0 |
 | N9 | **The catalog, the UI and the texts**: `TrackCatalog`, `LibraryPage` rows, `UiText`, `SleepTimer`'s `kLoose`, the console's `g*` commands | 1.5-2 | `test_ui_library`, `test_sleep_timer` |
 | N10 | **Firmware glue, built and not flashed**: the FatFs lister, the diskio wrapper, the card worker, streamed JPEG input, transfer thumbnails, `device.txt` | 2-3 | `pio run -e core2` and `cache_guard` |
 | N11 | **A synthetic big card** (`tools/`): about 20k tiny tagged MP3, FLAC and Opus stubs in the user's shape, with no real names, for L0 without the real library (the user writes it to a card) | 0.5-1 | Its own tag dump through N6 |
@@ -3070,9 +3093,14 @@ the user prepares the card and the machines):
 
 ### 7.1 For the user
 
+The user answered U8, U11, U12, U13 and U14 on 2026-10-07 (marked
+**Decided** below), and part of U1.
+
 - **U1. One card for the whole library?** If about 19,400 files will go on
   one card, can you prepare a FAT32 card for L0: the real library, or
-  N11's synthetic one written from the PC?
+  N11's synthetic one written from the PC? **Answered in part
+  (2026-10-07):** a spare card is ready for N11's synthetic 20k card and
+  later tests.
 - **U2. The card's layout.** Mirror the server's paths minus the vpath
   (proposed: Artist/Album stay at depths 1 and 2), or keep
   `/music/<vpath>/` folders as declared roots? With several libraries
@@ -3098,7 +3126,9 @@ the user prepares the card and the machines):
 - **U8. Rescan tags:** should it override transfer records? Today a
   matching transfer record wins, so a retag that kept both the size and
   the time of a software-owned file stays invisible until the next
-  transfer.
+  transfer. **Decided (2026-10-07): no, the default stands:** a transfer
+  record wins while it still matches (2.9;
+  `LibraryBuilder::kTransferBeatsRescan`).
 - **U9. Covers.** (a) The folder ranking: the device's `cover > folder >
   front > the largest other .jpg`, or mStream's `folder > cover > album >
   front`, then PNGs, then by name? (b) A cover the listener adds to a
@@ -3112,13 +3142,26 @@ the user prepares the card and the machines):
   fixed to keep all?
 - **U11. New hand-copied files:** show them at once with file names (an
   extra update step, about 9-12 s at 20k, 11-14 s while an MP3 plays:
-  3.4.2), or only once their tags are read?
+  3.4.2), or only once their tags are read? **Decided (2026-10-07): at
+  once, with their file names** (3.3.3's build right after the walk; the
+  tags follow at the scan's end).
 - **U12. If PSRAM is short at 20k** with a whole-library queue and
   AutoDJ: drop the undo snapshot for queues over about 5,000 entries
-  first, or keep file names on the card instead of in PSRAM?
+  first, or keep file names on the card instead of in PSRAM? **Replaced
+  (2026-10-07) by a cap on the queue: 5,000 entries.** Shuffle all and
+  Play all on a bigger library take a random 5,000 (shuffle on) or the
+  first 5,000 in order (shuffle off); an add past the cap takes as many
+  as fit and is refused with a toast, "The queue holds 5,000 tracks",
+  when none do (adding what fits was this design's call:
+  QUEUE-MODES.md 15.3); the undo is always kept. Built and host-tested
+  (QUEUE-MODES.md section 15); 3.5 has the budget. The file-names lever
+  stays in 3.5's table, unused.
 - **U13. The scan's battery floor:** 10% (proposed), lower, or a setting?
+  **Decided (2026-10-07): 10%** (3.3.5: paused below 10% off USB,
+  resumed on USB or above 15%).
 - **U14. May a host test vendor FatFs** (a download) to count sector reads
-  on a synthetic 20k tree before L0?
+  on a synthetic 20k tree before L0? **Decided (2026-10-07): yes** (N8's
+  optional model).
 - **U15. AutoDJ's table:** K = 100 (about 6 MB per 20k tracks on the
   card)? Rows only for embedded tracks, or also rows with filter data
   only (BPM, key) for tracks not yet embedded? And random with filters
@@ -3184,8 +3227,9 @@ the user prepares the card and the machines):
 1. **The big-card figures are modelled, not measured.** The per-sector
    latency, the walk and the opens decide how urgent the sector cache is
    and how long scans take. L0 retires it.
-2. **PSRAM at 20k** leaves about −0.1 to 0.35 MB (a whole-library queue,
-   its undo snapshot and AutoDJ, while a card-worker job runs). The
+2. **PSRAM at 20k** leaves about 0.26 to 0.71 MB (a full queue of 5,000,
+   its undo snapshot and AutoDJ, while a card-worker job runs) since the
+   queue's cap; it was about −0.1 to 0.35 with a whole-library queue. The
    levers are in 3.5; fragmentation can defer a build to the next boot,
    which the build-at-boot marker makes happen.
 3. **Sector-cache invalidation bugs would corrupt data.** L1's write soak

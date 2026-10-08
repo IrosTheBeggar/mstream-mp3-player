@@ -1932,6 +1932,38 @@ void test_play_now_while_shuffled() {
   TEST_ASSERT_EQUAL_INT(static_cast<int>(first), p.currentIndex());  // the given order around it
 }
 
+// The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15)
+// through the player: a Play of 6,000 plays its chosen track from the
+// window that holds it; with the queue full, Play next and + Queue are
+// refused and nothing that plays changes; a remove makes room.
+void test_the_queue_cap_through_the_player() {
+  Rig r(8);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  std::vector<uint32_t> ids(6000);
+  for (uint32_t i = 0; i < 6000; ++i) ids[i] = i % 8;  // (the ids repeat: the queue doesn't mind)
+  TEST_ASSERT_TRUE(p.playNow(ids.data(), 6000, 5500));
+  TEST_ASSERT_EQUAL_UINT32(5000, r.queue.size());
+  TEST_ASSERT_EQUAL_INT(4500, p.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("/music/e.mp3", a.lastPath.c_str());  // 5,500 % 8: e
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  const int plays = a.playCount;
+  const uint32_t content = r.queue.contentVersion();
+  const uint32_t one[] = {7};
+  TEST_ASSERT_FALSE(p.playNext(one, 1));
+  TEST_ASSERT_FALSE(p.addToQueue(one, 1));
+  TEST_ASSERT_EQUAL_UINT32(content, r.queue.contentVersion());
+  TEST_ASSERT_EQUAL_INT(plays, a.playCount);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(4500, p.currentIndex());
+  const uint32_t at = 0;
+  p.remove(&at, 1);
+  TEST_ASSERT_TRUE(p.playNext(one, 1));
+  TEST_ASSERT_EQUAL_UINT32(5000, r.queue.size());
+  TEST_ASSERT_EQUAL_UINT32(7, r.queue.trackAt(4500));  // right after the current entry (now 4,499)
+  TEST_ASSERT_EQUAL_INT(plays, a.playCount);
+}
+
 // Shuffle all (Ui::shuffleAll()): a Play that turns shuffle on, one edit;
 // its Undo puts back the queue and the mode it found (docs/QUEUE-MODES.md
 // section 2.6).
@@ -2696,6 +2728,7 @@ int main(int, char**) {
   RUN_TEST(test_set_shuffle_changes_nothing_that_plays);
   RUN_TEST(test_shuffle_off_with_the_same_next_keeps_the_word);
   RUN_TEST(test_play_now_while_shuffled);
+  RUN_TEST(test_the_queue_cap_through_the_player);
   RUN_TEST(test_shuffle_all_and_its_undo);
   RUN_TEST(test_a_start_points_anchor_reaches_the_play_once);
   RUN_TEST(test_a_start_points_anchor_goes_with_it);

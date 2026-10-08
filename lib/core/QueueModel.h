@@ -13,22 +13,31 @@
 // row it shows) across edits that move positions. Positions are 0-based,
 // and are the order that plays, shuffled or not.
 //
+// The cap: at most kMaxEntries (5,000) entries, whatever the library's
+// size (docs/QUEUE-MODES.md section 15; the user's answer to
+// docs/METADATA.md's U12). A Play of more takes kMaxEntries of them (not
+// shuffled: the first, or the window that holds its start; shuffled: the
+// chosen track and a random rest); an add takes as many as fit, the first
+// ones in its order, and is refused (false, nothing changed) when none
+// do; assign() keeps the window that holds its current entry (window()).
+// The undo is kept whatever the size.
+//
 // Memory: the entries (12 bytes each) and the undo snapshot (the same
 // again) are flat arrays from allocator hooks (the firmware points them at
-// PSRAM). They grow by doubling while small and by an eighth past
-// kGrowByEighth entries, and assign() (the boot's restore, the whole-library
-// queue, a remap's re-read) gives the entries a block of exactly their
-// count and no snapshot: a 20,000-entry queue is 240 KB, and 480 KB once an
-// edit takes its snapshot, not twice that (docs/METADATA.md section 3.5).
-// release() gives both back for a library rebuild. Nothing else is
+// PSRAM). They grow by doubling, never past the cap, and assign() (the
+// boot's restore, its default queue, a remap's re-read) gives the entries
+// a block of exactly their count and no snapshot: a full queue is 60 KB,
+// and 120 KB once an edit takes its snapshot (docs/METADATA.md section
+// 3.5). release() gives both back for a library rebuild. Nothing else is
 // allocated, except a bit per entry for the length of a remove() or
 // moveNext().
 //
 // The current position is -1 only when the queue is empty. The rules the
 // edits follow (the tab bar design's Library and Queue actions):
 //   replace()      Play: the queue becomes these tracks, current at `start`
-//   insertNext()   Play next: right after the current entry
-//   append()       + Queue: at the end
+//                  (past the cap, kMaxEntries of them: above)
+//   insertNext()   Play next: right after the current entry (as many as fit)
+//   append()       + Queue: at the end (as many as fit)
 //   remove()       the selected positions; the current entry going makes
 //                  the next one that stays current (the last one, and
 //                  pastEnd, when none after it stays)
@@ -82,12 +91,24 @@ public:
   // replace()'s start: shuffled, a random first; not shuffled, the first
   // (0, not the clamp's last).
   static constexpr uint32_t kAnyStart = kNone;
-  // Past this many entries a block grows by an eighth, not by doubling: a
-  // whole-library queue of 20,000 (exact after assign()) that gains a track
-  // takes 2,500 entries more (30 KB), not 20,000 (240 KB). The copies stay
-  // amortized (the block moves once per eighth of its size added: about 8
-  // copies of each entry, against doubling's 2), and queue edits are taps.
-  static constexpr uint32_t kGrowByEighth = 4096;
+  // The most entries the queue holds (the class comment): 60 KB of
+  // entries, 120 KB with the undo snapshot. The user's choice (2026-10-07)
+  // over dropping the undo of a long queue: a whole-library queue of
+  // 20,000 was 240-480 KB of PSRAM next to a 20k index.
+  static constexpr uint32_t kMaxEntries = 5000;
+
+  // Of `n` entries with `current` the current one (-1: none), the ones a
+  // queue keeps: all when they fit (n <= kMaxEntries); else the first
+  // kMaxEntries when `current` is among them; else from `current` on (what
+  // plays and what comes after it, what played before it left out), moved
+  // back so it is still kMaxEntries long when fewer follow `current`.
+  // assign()'s rule, replace()'s when not shuffled, and the queue file's
+  // read (queuetext::read(): an older firmware's longer queue).
+  struct Window {
+    uint32_t first = 0;
+    uint32_t count = 0;
+  };
+  static Window window(uint32_t n, int32_t current);
 
   enum class Edit : uint8_t { None, Replace, InsertNext, Append, Remove, MoveNext, ClearUpNext, Clear };
 
@@ -116,6 +137,10 @@ public:
   uint32_t positionOf(uint32_t key) const;
   // Entries after the current one ("12 up next").
   uint32_t upNext() const { return current_ >= 0 ? q_.size - 1 - static_cast<uint32_t>(current_) : 0; }
+  // How many tracks an add can take now: kMaxEntries less the size (0: the
+  // queue is full, and an add is refused). What the UI asks before an add,
+  // to say how much of it went in.
+  uint32_t room() const { return q_.size < kMaxEntries ? kMaxEntries - q_.size : 0; }
   // Bumped by every change to the entries (not by a move of the current
   // position alone): what the UI redraws on and the saver saves on.
   uint32_t contentVersion() const { return contentVersion_; }
@@ -141,11 +166,18 @@ public:
   bool setShuffled(bool on);
 
   // ---- editing: false when out of memory, the queue then unchanged ----
+  // Past kMaxEntries, a Play keeps kMaxEntries of the tracks: not shuffled,
+  // window(n, start) (kAnyStart: the first kMaxEntries); shuffled, the
+  // chosen track (kAnyStart: a random one) and a random kMaxEntries - 1 of
+  // the others, picked in the given order (their ranks), then shuffled.
   bool replace(const uint32_t* tracks, uint32_t n, uint32_t start) { return replace(tracks, n, start, shuffled_); }
   // Play in a mode (Shuffle all: shuffled): the mode set and the queue
   // replaced as one edit, laid out as the mode's Play; undo() puts both
   // back. Nothing to play (`n` 0) is a Clear, in that mode.
   bool replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled);
+  // The first room() of the tracks, in their order (all of them when they
+  // fit). False when none fit (the queue full: room() 0) or out of
+  // memory; the queue then unchanged and nothing to undo.
   bool insertNext(const uint32_t* tracks, uint32_t n);
   bool append(const uint32_t* tracks, uint32_t n);
   // Positions out of range and repeats are ignored; any order.
@@ -180,11 +212,13 @@ public:
   // The queue becomes these tracks with `current` (clamped; -1 for an
   // empty queue), with fresh keys and no undo, shuffled or not, with
   // `ranks` (nullptr: the positions; read back from a shuffled file, they
-  // may have gaps where tracks were dropped). The entries' block is then
-  // exactly `n` long (a new block when it was any other size; if none can
-  // be had for a smaller `n`, the bigger block is kept and still filled)
-  // and the snapshot's is given back: the first edit after takes one of
-  // the queue's exact size.
+  // may have gaps where tracks were dropped). Past kMaxEntries, only
+  // window(n, current) of them (the boot's whole library with no saved
+  // queue: its first kMaxEntries). The entries' block is then exactly as
+  // long as what is kept (a new block when it was any other size; if none
+  // can be had for a smaller count, the bigger block is kept and still
+  // filled) and the snapshot's is given back: the first edit after takes
+  // one of the queue's exact size.
   bool assign(const uint32_t* tracks, uint32_t n, int32_t current, bool shuffled = false,
               const uint32_t* ranks = nullptr);
   // Gives back every block (the entries and the undo snapshot): the queue
@@ -212,6 +246,8 @@ private:
 
   bool reserve(Array& a, uint32_t n);
   void drop(Array& a);
+  // Entry `pos` becomes `track` with the next key and `rank`.
+  void put(uint32_t pos, uint32_t track, uint32_t rank);
   // Copies the entries and the mode to the undo snapshot (the edit is then
   // undoable); false: no memory for it (the edit goes ahead, not undoable).
   bool snapshot(Edit edit);

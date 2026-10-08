@@ -1780,7 +1780,14 @@ the browsing UI hold its **track ids**, never strings.
   current one goes by its path.
   `assign()` gives the queue a block of exactly its size and no undo
   snapshot (the boot's restore, the whole-library default), and blocks
-  past 4,096 entries grow by an eighth rather than doubling.
+  grow by doubling. The queue holds at most 5,000 entries
+  (`QueueModel::kMaxEntries`, docs/QUEUE-MODES.md section 15): a Play
+  of more takes the first 5,000 (or the 5,000 from its start), shuffled
+  a random 5,000; an add takes what fits and is refused when the queue
+  is full; a longer `queue.txt` from an older firmware loads the 5,000
+  around its current line and is written again. So the figures above
+  for 20,000 entries are what a queue no longer reaches: at most 60 KB,
+  120 KB with its snapshot, an 80 KB re-read.
   When and what to write is `QueueSaver`'s (lib/core, host-tested in
   test_queue: the timing, a failure keeping the last file); `QueueStore`
   gives it the card and NVS. `flushNow()` does it all synchronously, for
@@ -1793,9 +1800,9 @@ the browsing UI hold its **track ids**, never strings.
   `f_write` holds the FAT volume's lock for its whole length, and the decoder
   reads the playing track through that lock, so a g0 rebuild's cache save
   (blocks of hundreds of KB at 10,000 tracks) never makes it wait long.
-  With no saved queue, it's the whole library (artist, album, track order),
-  without the built-in test tracks (`qb` queues those); with no card, it's
-  empty.
+  With no saved queue, it's the whole library (artist, album, track order;
+  past 5,000 tracks, its first 5,000), without the built-in test tracks
+  (`qb` queues those); with no card, it's empty.
 - **Internal RAM**: the old `std::vector<Track>` library and its playlist copy
   cost ~86 B of internal RAM per track per copy (13 KB for 77 tracks, and
   impossible at a few thousand). Now the library, the queue and its undo are

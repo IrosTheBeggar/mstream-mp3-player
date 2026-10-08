@@ -6,10 +6,13 @@
 // Undo (and View after an add: the Queue at the added tracks). Browsing a
 // synthetic library ('uil<n>' on the console, to see the lists at the
 // scale of thousands) is look-only: its ids aren't the player's.
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
+#include "QueueView.h"
 #include "TextFold.h"
+#include "UiText.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
@@ -696,6 +699,11 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
   // Where an add puts its first track (QueueModel: Play next right after
   // the current entry, + Queue at the end): the toast's View goes there.
   const uint32_t addedAt = action == 1 && q.current() >= 0 ? static_cast<uint32_t>(q.current()) + 1 : q.size();
+  // The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15): a
+  // Play takes 5,000 of a bigger set; an add as many as fit, none when the
+  // queue is full (refused: its own toast).
+  const uint32_t took = action == 0 ? std::min(span.count, QueueModel::kMaxEntries) : std::min(span.count, q.room());
+  const bool full = action != 0 && took == 0;
   bool ok = false;
   char text[128];
   switch (action) {
@@ -711,21 +719,28 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
         // Playing shows the wait, and its way out).
         const char* them = ui_.state().btName[0] ? ui_.state().btName : "the headphones";
         snprintf(text, sizeof(text), "Waiting for %s: %s", them, start >= 0 ? what : name);
+      } else if (start < 0 && took < span.count) {
+        // A container past the cap: the news is what the queue took.
+        queueview::cappedText(queueview::Capped::Play, took, span.count, text, sizeof(text));
       } else {
         snprintf(text, sizeof(text), "Playing: %s", start >= 0 ? what : name);
       }
       break;
     case 1:
-      ok = p.playNext(span.ids, span.count);
-      if (span.count == 1) {
+      ok = !full && p.playNext(span.ids, span.count);
+      if (took < span.count) {
+        queueview::cappedText(queueview::Capped::Next, took, span.count, text, sizeof(text));
+      } else if (span.count == 1) {
         snprintf(text, sizeof(text), "Plays next: %s", what);
       } else {
         snprintf(text, sizeof(text), "Plays next: %lu tracks", static_cast<unsigned long>(span.count));
       }
       break;
     default:
-      ok = p.addToQueue(span.ids, span.count);
-      if (span.count == 1) {
+      ok = !full && p.addToQueue(span.ids, span.count);
+      if (took < span.count) {
+        queueview::cappedText(queueview::Capped::Add, took, span.count, text, sizeof(text));
+      } else if (span.count == 1) {
         snprintf(text, sizeof(text), "Added: %s", what);
       } else {
         snprintf(text, sizeof(text), "Added %lu tracks", static_cast<unsigned long>(span.count));
@@ -733,9 +748,23 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       break;
   }
   static const char* const kVerbs[3] = {"play", "play next", "add"};
+  char outcome[64] = "";
+  if (full) {
+    snprintf(outcome, sizeof(outcome), ": REFUSED, the queue is full (%lu)",
+             static_cast<unsigned long>(QueueModel::kMaxEntries));
+  } else if (!ok) {
+    snprintf(outcome, sizeof(outcome), ": NO MEMORY");
+  } else if (took < span.count) {
+    snprintf(outcome, sizeof(outcome), ": %lu of them (the queue holds %lu)", static_cast<unsigned long>(took),
+             static_cast<unsigned long>(QueueModel::kMaxEntries));
+  }
   Serial.printf("[ui] library: %s %lu track%s (%s)%s\n", kVerbs[action < 0 || action > 2 ? 2 : action],
                 static_cast<unsigned long>(span.count), span.count == 1 ? "" : "s", span.count == 1 ? what : name,
-                ok ? "" : ": NO MEMORY");
+                outcome);
+  if (full) {
+    ui_.toast(uitext::kQueueFull, false);
+    return;
+  }
   const uint32_t viewKey = ok && action != 0 ? q.keyAt(addedAt) : QueueModel::kNone;
   ui_.toast(ok ? text : "Not enough memory for that", ok, viewKey);
 }

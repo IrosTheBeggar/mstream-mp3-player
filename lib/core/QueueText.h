@@ -44,8 +44,8 @@ struct Header {
   bool shuffled = false;  // version 2
 };
 
-// Writes a queue a few lines at a time, so a long one (10,000 tracks is
-// ~700 KB) doesn't hold the caller's loop. It writes what the queue holds
+// Writes a queue a few lines at a time, so a long one (a full queue, 5,000
+// tracks, is ~350 KB) doesn't hold the caller's loop. It writes what the queue holds
 // at each step: begin() notes the queue's contentVersion(), and a step
 // after the queue changed returns Changed (start again later).
 class Writer {
@@ -71,7 +71,12 @@ struct Restored {
   bool ok = false;           // a queue file (false: none, or not one)
   uint32_t lines = 0;        // entries in the file
   uint32_t entries = 0;      // in the queue now
-  uint32_t dropped = 0;      // paths the catalog doesn't know any more
+  uint32_t dropped = 0;      // paths the catalog doesn't know any more (of the lines read in)
+  // Lines left out by the queue's cap (QueueModel::kMaxEntries): a file
+  // longer than the queue holds (an older firmware's whole-library queue),
+  // read in from line `first` only. lines = entries + dropped + capped.
+  uint32_t capped = 0;
+  uint32_t first = 0;
   bool currentKept = false;  // the current line's track is still there
   Header header;
 };
@@ -83,11 +88,18 @@ struct Restored {
 // `current` >= 0 overrides the file's own current line (a position saved
 // since, for this generation). Reads the header first and calls
 // `pickCurrent(header, ctx)` for that override; nullptr: the file's.
+// A file of more lines than the queue holds (QueueModel::kMaxEntries:
+// written before the cap) is read in as QueueModel::window() of its lines
+// and that current line: its first 5,000, or from the current line on
+// when that is past them (every line is still checked: a file that isn't
+// whole is left alone as ever). The writer never writes more: the queue
+// never holds more.
 // Nothing changes in `q` unless the result is ok (and memory allowed).
 // Memory, from `alloc`/`release` (nullptr: malloc/free): the surviving
-// ids and (version 2) their ranks, each a block of exactly the header's
-// line count, 4 bytes a line, held until assign() has copied them; a file
-// with more lines than its header says isn't whole either.
+// ids and (version 2) their ranks, each a block of exactly the lines read
+// in (the header's count, at most the cap), 4 bytes a line, held until
+// assign() has copied them; a file with more lines than its header says
+// isn't whole either.
 Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q,
               int32_t (*pickCurrent)(const Header& h, void* ctx) = nullptr, void* ctx = nullptr,
               MemorySink::AllocFn alloc = nullptr, MemorySink::FreeFn release = nullptr);

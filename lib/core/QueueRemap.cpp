@@ -174,16 +174,17 @@ Result run(QueueModel& queue, QueueSaver& saver, PlaybackController& player, con
     } else {
       player.stop();
     }
-    if (res.read.dropped > 0) {
+    if (res.read.dropped > 0 || res.read.capped > 0) {
       saver.keptFile(generation, saver.fileLine());
     } else {
       saver.loaded(generation, res.via == Via::Memory, nowMs);  // nothing of the library's in it
     }
   } else {
     player.queueReplaced(res.read.currentKept);
-    // The file is this queue unless tracks were dropped, or it never got
-    // there (the text came through memory): then written again.
-    saver.loaded(generation, res.read.dropped > 0 || res.via == Via::Memory, nowMs);
+    // The file is this queue unless tracks were dropped or left out by the
+    // cap (a file from before it), or it never got there (the text came
+    // through memory): then written again.
+    saver.loaded(generation, res.read.dropped > 0 || res.read.capped > 0 || res.via == Via::Memory, nowMs);
   }
   if (hadStart && res.read.currentKept) {
     player.setStartPoint(startMs, startDurationMs, &startAnchor);

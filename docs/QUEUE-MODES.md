@@ -18,7 +18,9 @@ built** (section 14: host-tested, both images build with every guard);
 faults, fixed since (section 14's last entry: Shuffle all's Undo left
 shuffle on; Repeat One's "1" didn't read), and two of section 10's
 expectations that were wrong; the fixes wait for their own device steps
-(section 10, steps 1, 9a and 14). What Now Playing looks like and how it takes touches is the spec
+(section 10, steps 1, 9a and 14). **Since 2026-10-07 the queue holds
+at most 5,000 tracks** (section 15: the user's answer to
+docs/METADATA.md's U12; host-tested, not yet on the device). What Now Playing looks like and how it takes touches is the spec
 in [ARCHITECTURE.md](ARCHITECTURE.md) ("Now Playing", under UI): the
 layout, the hit areas, the two menus and their texts, the indicator, the
 haptics. This document is the rest:
@@ -160,7 +162,9 @@ nothing (the own order is the positions) and nothing keeps them.
 Memory: +4 B an entry, and the same in the undo snapshot. A 10,000-entry
 queue goes from 160 KB to 240 KB of PSRAM with its snapshot (480 KB at
 worst after doubling). A rank array kept only while shuffled would save
-that, but would double every memmove path. Not worth it.
+that, but would double every memmove path. Not worth it. (Since the cap,
+section 15, a queue is at most 5,000 entries: 60 KB, 120 KB with its
+snapshot.)
 
 ### 2.2 On (`QueueModel::setShuffled(true)`)
 
@@ -235,7 +239,9 @@ Positions are play positions, as the Queue tab shows them.
   more (`replace()` copies the ids) and no `queueview::shuffle()`. Off
   afterwards gives the library A-Z, from the track playing. The toast
   stays "Shuffling 77 tracks" with Undo, and the Undo puts back the queue
-  and the mode it found. Out of memory, neither changes.
+  and the mode it found. Out of memory, neither changes. On a library past
+  the queue's cap it plays a random 5,000 of it, and says so ("Shuffling
+  5,000 of 19,412: the queue holds 5,000 tracks"; section 15).
   - *As first built* it called `host_.setShuffle(true)` and then
     `playNow()`: the toggle, then the Play. The Play's snapshot was taken
     after the toggle, so its Undo brought the old queue back with shuffle
@@ -356,6 +362,9 @@ mstream-queue 2 <entries> <current> <generation>
 - **Why in the file and not NVS:** the mode is atomic with the ranks it
   needs, so a shuffled mode with a rankless file, or the reverse, can't
   happen. With no card there is no library to shuffle anyway.
+- **At most 5,000 lines** since the queue's cap (section 15.4): the
+  queue never holds more. A longer file from before the cap is read in
+  as its 5,000-line window around the current line, then written again.
 
 ## 3. Repeat
 
@@ -984,7 +993,8 @@ version. Nothing here is IRAM code, and nothing gets `IRAM_ATTR`.
 - `test_shuffle_is_repeatable_and_uniform`: the same hook sequence, the
   same order; 5 up next x 20,000 shuffles: each entry in each slot within
   ±3 % of 1/5; the current entry never moves.
-- `test_a_toggle_allocates_nothing`: 10,000 entries, a counting alloc hook,
+- `test_a_toggle_allocates_nothing`: 10,000 entries (a full 5,000 since
+  the cap, section 15), a counting alloc hook,
   and a counting global operator new (the hooks can't see a
   `std::stable_sort`'s buffer or a scratch `std::vector`; the test first
   checks that the count sees a stable sort's).
@@ -1360,7 +1370,8 @@ and 6.
   restarts the next one past the join (the ring cut): any edit's
   behaviour, now one tap away. Host-tested; heard as a skip at worst.
 - **Off on a 10,000-entry queue** sorts 120 KB of PSRAM on the loop task;
-  estimated, not measured: check 16.
+  estimated, not measured: check 16. (Since the cap, section 15, a queue
+  is at most 5,000 entries: 60 KB.)
 - **Repeat One on a file that ends with no frames and no failure** would
   have replayed back to back, as would a queue of one on repeat. OPUS.md
   M4's review found a file that does it (an Opus file whose last granule
@@ -1514,3 +1525,209 @@ Where the build differs from sections 1-13, and why:
   (`g0`'s rebuild holds the loop); its text is host-tested.
 - `PlaybackController::kAnyStart` is declared next to `play()`; the
   console's `qR` refuses a mode past 2 with its usage line.
+
+## 15. The queue's cap: 5,000 tracks (2026-10-07)
+
+docs/METADATA.md's U12 asked the user what to give up if PSRAM runs short
+at 20,000 tracks with a whole-library queue and AutoDJ: the undo snapshot
+of a long queue, or the file names in PSRAM. The user's answer was
+neither: **put a cap on the queue, 5,000 entries.** Shuffle all and Play
+all on a bigger library take a random 5,000 (shuffle on) or the first
+5,000 in order (shuffle off); an add past the cap is refused with a toast,
+"The queue holds 5,000 tracks", adding as many as fit first if that is the
+cleaner rule (left to this design: 15.3); the undo is always kept.
+
+### 15.1 Why, and what it costs
+
+- **Memory.** 12 B an entry, and the same again in the undo snapshot: a
+  whole-library queue of 20,000 was 240 KB, 480 KB once an edit took its
+  snapshot, next to a 1.75-1.85 MB index. It was the default on a new
+  card (no saved queue: the whole library), and it put METADATA.md 3.5's
+  worst case below zero. Capped, the queue is at most 60 KB, 120 KB with
+  its snapshot, whatever the library's size: 3.5's headroom becomes about
+  0.26-0.71 MB (ESTIMATED), and the undo needs no lever.
+- **The card and the clock** (ESTIMATED from METADATA.md 3.2.5):
+  `queue.txt` at most about 375 KB (5,000 lines of about 75 B) instead of
+  1.5 MB; its read at boot, and the update step's re-read, at most about
+  0.4-0.5 s instead of 1.5-2 s; the remap's re-read peak 80 KB (100 KB
+  shuffled) instead of 0.32 MB.
+- **What the listener gives up:** a queue of the whole library past
+  5,000 tracks. Each Shuffle all is a fresh random 5,000, so every track
+  is still reachable that way; the Library reaches any one directly.
+
+### 15.2 The rule (`QueueModel`)
+
+`QueueModel::kMaxEntries` is 5,000; `room()` is how many an add can take
+now (0: full); `window(n, current)` is which of `n` entries a queue keeps
+around a current one: all when they fit; the first 5,000 when the current
+one is among them; else from the current one on (what plays and what
+comes after it; what played before goes), moved back so the window stays
+5,000 long when fewer follow it.
+
+| Way in | Past 5,000 |
+|---|---|
+| Play, not shuffled (`replace()`: a container's Play, "Play all N", an artist's or All tracks, the console's `qa`) | `window(n, start)`: the first 5,000 (`kAnyStart`, or a start among them); a start past them: from it on |
+| Play, shuffled; Shuffle all (`replace(.., true)`) | the chosen track first (`kAnyStart`: a random one), then a random 4,999 of the others, shuffled after it. The pick is selection sampling (Knuth's algorithm S, `shuffle::sample()` in `lib/core/Shuffle.h`): one pass in the list's order, nothing allocated, every set of 4,999 as likely. Each kept track's rank is its place in the whole list, so Off lays the 5,000 out in the library's order (with gaps, which ranks allow) |
+| Play next, + Queue (`insertNext()`, `append()`) | the first `room()` of them, in their order, where the add puts them (shuffled: ranked as any add); none fit: refused, `false`, nothing changes, no snapshot (the last edit's undo stays) |
+| An add to an empty queue | its first 5,000, laid out as a Play from its first (as ever) |
+| `assign()`: the boot's restore, its default queue (`queueEverything()`: the library's first 5,000), a remap's re-read | `window(n, current)`, its ranks with it |
+| Remove, Play next in edit mode (`moveNext()`), Clear up next, Clear, a toggle, Undo | never grow the queue |
+
+- **The undo is kept** whatever the size: the snapshot is at most 60 KB.
+  The Undo of a Play past the cap puts back the queue (and the mode) it
+  found, as any Play's does.
+- **Memory:** the blocks grow by doubling, never past 5,000 entries;
+  `kGrowByEighth` (an eighth past 4,096 entries, for 20,000-entry
+  queues) is gone. A Play past the cap asks for a block of 5,000, never
+  of `n`.
+- **The draws:** a shuffled Play past the cap takes one draw more than
+  one under it (the pick's seed): three with `kAnyStart`.
+- `PlaybackController` is unchanged: `playNow()`, `playNext()` and
+  `addToQueue()` pass the rule through, and a refused add starts, stops
+  and cuts nothing (its `Act` finds the same next entry).
+
+### 15.3 An add past the cap: as many as fit (decided here)
+
+The user left it open: refuse the whole add, or add as many as fit and
+then refuse the rest. This takes **as many as fit, the first ones in the
+add's order; refused only when none fit.**
+
+- **One rule for every way in:** the queue takes what it can hold, in the
+  order given (a Play: the first 5,000; shuffled, a random 5,000; an add:
+  what fits), and the toast says how much.
+- **No dead buttons:** an add bigger than the cap (the Folders root's
+  "+ Queue" on a big card, an artist of thousands) could never go in
+  whole, even into an empty queue; refused whole, it would always fail.
+- **What the listener didn't want is one tap away:** the toast's Undo
+  takes the whole add back (the add is one edit), and View shows where
+  it went.
+- **Against it:** an album can be cut short (10 of its 12 tracks play
+  next). The toast says so with the counts, and its Undo is there.
+- In practice the partial add is rare: after a big Play the queue is
+  full and every add is refused (15.7).
+
+### 15.4 Persistence (`queue.txt`)
+
+- **It never holds more than 5,000 lines:** the writer writes the queue,
+  and the queue never holds more.
+- **An older card's longer queue** (a whole-library queue a firmware from
+  before the cap saved): `queuetext::read()` reads in
+  `QueueModel::window(lines, the current line)`: its first 5,000 lines,
+  or from its current line on when that is past them (moved back to stay
+  5,000 long near the end), so the current entry is always inside the
+  kept window. Every line is still checked (a broken line anywhere means
+  the file isn't whole, and the queue is left alone, as ever); the lines
+  outside aren't looked up. The read's blocks are the window's (20 KB, 40
+  KB shuffled), not the header's count. `Restored` says what it did:
+  `capped` lines left out, from line `first` (`lines = entries + dropped
+  + capped`).
+- **Then the file is written again**, at the queue's size and the next
+  generation (`QueueStore::restore()`: `loaded(.., rewrite)` when
+  `capped`), and the position and a resume point follow the entry to its
+  new line (the moved-only rule). The resume point applies as before: it
+  names the file's line, which the read kept current.
+- **A boot with no library** keeps the longer file whole (`keptFile()`,
+  as before); the rebuild that brings the library back (`g0`, Try again)
+  reads its window from the file's line and writes it again
+  (`queueremap::run()`: `capped` counts as "the file holds more than the
+  queue").
+- **A downgrade** reads a 5,000-line file as any other.
+
+### 15.5 The UI: texts and logs
+
+The texts are `lib/core/UiText.h`'s (section "the queue's cap"), the
+counts grouped by thousands by `queueview::grouped()` and put in by
+`queueview::cappedText()`; test_ui_library measures them in their rooms.
+
+| When | Toast | Buttons |
+|---|---|---|
+| Play next or + Queue with the queue full | "The queue holds 5,000 tracks" (one line, Body) | none |
+| An add that only partly fit | "Added 37 of 300: the queue holds 5,000 tracks", "10 of 12 play next: the queue holds 5,000 tracks" (two lines: the what in Small over the why, Small beside View) | Undo, View |
+| A container's Play past the cap | "Playing 5,000 of 6,021: the queue holds 5,000 tracks" (the why in Body) | Undo |
+| Shuffle all past the cap | "Shuffling 5,000 of 19,412: the queue holds 5,000 tracks" | Undo |
+
+A tapped track in a list past the cap (a folder of 6,000 files) keeps
+"Playing: <title>": the window holds it, and its title is the news. While
+the play waits for the headphones, "Waiting for <name>: <what>" as
+before. The Folders root's "Play all N" still counts the whole card.
+
+Log lines:
+
+- `[ui] library: add 300 tracks (<album>): 37 of them (the queue holds
+  5000)`; `... : REFUSED, the queue is full (5000)`; a Play past it:
+  `[ui] library: play 6021 tracks (everything): 5000 of them (the queue
+  holds 5000)`.
+- `[ui] shuffle all: 19412 tracks, a random 5000 of them (the queue holds
+  5000) (shuffle on; was off)`.
+- The boot: `[queue] no saved queue: the library's first 5000 of 19412
+  tracks (the queue holds 5000)`; `[queue] restored 5000 of 20000 tracks
+  from /.player/queue.txt (0 no longer there; lines 7343-12342 read in,
+  15000 left out (the queue holds 5000)), at 1 of 5000 (position from
+  NVS)`.
+- The remap: `... 5000 of 6000 tracks still there (1000 left out: the
+  queue holds 5000), at ...`.
+- `q`: `[queue] 5000 tracks (full: an add is refused) (60 KB of PSRAM,
+  ...)`.
+- The console's `qn<n>` and `q+<n>`: `[queue] added <album>: 12 tracks
+  (REFUSED: the queue is full, 5000)`, `(10 of them: the queue holds
+  5000)`.
+
+### 15.6 Host tests (`pio test -e native`)
+
+**test_queue:** `test_window_holds_the_current_entry` (every case of the
+rule, out of range too); `test_assign_past_the_cap_keeps_the_window`
+(exact, no undo; the ranks with it, Off after);
+`test_play_past_the_cap_in_order` (`kAnyStart`, a start among the first
+5,000, past them, near the end; undoable; never more than the cap's two
+blocks; out of memory refused whole);
+`test_shuffled_play_past_the_cap_takes_a_random_5000` (each once, from
+the whole list, shuffled, ranks their places, Off in the list's order,
+its Undo whole, another draw another 5,000, a chosen track first and
+never twice, three draws); `test_sample_is_exact_and_uniform` (exactly
+k, ascending, repeatable, k >= n, 30,000 seeds each index within 3 %);
+`test_an_add_takes_what_fits` (+ Queue and Play next past the room, the
+Undo whole, an add of 6,000 to an empty queue);
+`test_a_full_queue_refuses_an_add` (false, no version bump, no
+allocation, the last undo kept; moves and toggles at the cap; a remove
+makes room); `test_shuffled_adds_at_the_cap`;
+`test_random_edits_never_pass_the_cap` (4,000 random edits near the cap:
+an add takes exactly `min(n, room())`);
+`test_a_longer_file_reads_in_its_window` (6,000 lines from line 5,500
+and from line 10, a dropped track inside, version 2's ranks, a bad line
+outside the window, the blocks the window's);
+`test_an_older_longer_queue_at_boot_is_written_again` (the resume point
+applies, then the file at 5,000 lines a generation on, with the position
+and the resume point at the entry's new line);
+`test_remap_reads_a_kept_longer_file_in_its_window`. Changed:
+`test_assign_is_exact_and_growth_is_bounded` (the first 5,000 of 20,000;
+growth stops at the cap), `test_a_toggle_allocates_nothing` (a full
+queue), `test_remap_of_20k_entries_within_its_budget` became
+`test_remap_of_a_full_queue_within_its_budget` (a full queue of a 20,000
+library: an 80 KB peak), and `test_text_read_is_sized_by_its_header`'s
+huge header (the window's block, then the line count).
+
+**test_playback:** `test_the_queue_cap_through_the_player` (a Play of
+6,000 plays its track from the window; refused adds change nothing that
+plays). **test_ui_queue:** `test_capped_texts` (`grouped()`,
+`cappedText()`, short buffers). **test_ui_library:**
+`test_queue_cap_texts_fit` (the refusal on one line; each cut-short text
+on two lines, each in its room, at 99,999 tracks).
+
+As built (2026-10-07, on feature/metadata after a5623d9): 1,292 host
+tests pass (15 new); core2 builds with every guard (iram_diet: 51 of 51
+objects moved, the hot set pinned; cache_guard ok; flash_guard: 2.32 MB,
+39 % of the slot), no new warnings. Not flashed.
+
+### 15.7 What it leaves open
+
+- **A full queue refuses every add.** After Shuffle all or Play all on a
+  library of 5,000 tracks or more, the queue is full: Play next and +
+  Queue are refused until something goes (Clear up next, or Remove in
+  Edit). That is the rule as the user gave it. A question for the user:
+  should an add push out what already played (the entries before the
+  current one, oldest first) to make room? Not built.
+- **Not on the device yet** (no device in this step): the toasts' two
+  lines, the log lines, and Shuffle all's time at 20,000 (the pick is
+  one pass over the ids, then a shuffle of 5,000: under 10 ms,
+  ESTIMATED). Section 10 gains no step yet; METADATA.md's L5 covers the
+  UI at 20k.

@@ -109,13 +109,22 @@ bool QueueStore::restore() {
     const LibraryIndex* index = catalog_.index();
     const uint32_t generation =
         r.header.generation > saved.generation ? r.header.generation : saved.generation;
+    // A file longer than the queue holds (written before its cap) is read
+    // in as its window: written again, at the queue's size.
     if (r.dropped > 0 && !(index && index->ready())) {
       saver_.keptFile(generation, line);
     } else {
-      saver_.loaded(generation, r.dropped > 0 || path == temp, millis());
+      saver_.loaded(generation, r.dropped > 0 || r.capped > 0 || path == temp, millis());
     }
-    Serial.printf("[queue] restored %lu of %lu tracks from %s (%lu no longer there), at %d of %lu (position from %s)%s\n",
-                  (unsigned long)r.entries, (unsigned long)r.lines, path, (unsigned long)r.dropped,
+    char capped[96] = "";
+    if (r.capped > 0) {
+      snprintf(capped, sizeof(capped), "; lines %lu-%lu read in, %lu left out (the queue holds %lu)",
+               (unsigned long)r.first + 1, (unsigned long)(r.lines - r.capped + r.first),
+               (unsigned long)r.capped, (unsigned long)QueueModel::kMaxEntries);
+    }
+    Serial.printf("[queue] restored %lu of %lu tracks from %s (%lu no longer there%s), at %d of %lu (position from "
+                  "%s)%s\n",
+                  (unsigned long)r.entries, (unsigned long)r.lines, path, (unsigned long)r.dropped, capped,
                   queue_.current() + 1, (unsigned long)queue_.size(), fromNvs ? "NVS" : "the file",
                   r.header.shuffled ? ", shuffled" : "");
     // The second it paused at: for this file's current line, if that track
@@ -320,9 +329,16 @@ bool QueueStore::remap(bool (*rebuild)(void* ctx), void* ctx) {
                   (unsigned long)got.entries, (unsigned long)got.lines, got.currentKept ? "" : "; stopped");
     return r.rebuilt;
   }
-  Serial.printf("[queue] after the rebuild, carried %s: %lu of %lu tracks still there, at %d%s%s; the queue gave "
+  // (Lines left out: a file from before the queue's cap, kept whole by a
+  // boot with no library and read back now.)
+  char capped[64] = "";
+  if (got.capped > 0) {
+    snprintf(capped, sizeof(capped), " (%lu left out: the queue holds %lu)", (unsigned long)got.capped,
+             (unsigned long)QueueModel::kMaxEntries);
+  }
+  Serial.printf("[queue] after the rebuild, carried %s: %lu of %lu tracks still there%s, at %d%s%s; the queue gave "
                 "%lu KB to the rebuild and holds %lu KB\n",
-                via, (unsigned long)got.entries, (unsigned long)got.lines, queue_.current() + 1,
+                via, (unsigned long)got.entries, (unsigned long)got.lines, capped, queue_.current() + 1,
                 got.currentKept ? "" : " (the current one is gone)", r.startCarried ? " (its start point kept)" : "",
                 (unsigned long)(r.freedBytes / 1024), (unsigned long)(queue_.memoryBytes() / 1024));
   return r.rebuilt;
@@ -335,9 +351,10 @@ void QueueStore::printStatus() const {
   const char* undoMode = queue_.undoShuffled() == queue_.shuffled() ? ""
                          : queue_.undoShuffled()                    ? " (and shuffle on)"
                                                                     : " (and shuffle off)";
-  Serial.printf("[queue] %lu tracks (%lu KB of PSRAM, the undo's included), at %d, %lu up next; shuffle %s, repeat "
+  Serial.printf("[queue] %lu tracks%s (%lu KB of PSRAM, the undo's included), at %d, %lu up next; shuffle %s, repeat "
                 "%s; undo: %s%s; file generation %lu%s, %lu writes (last %lu ms), %lu failures\n",
-                (unsigned long)queue_.size(), (unsigned long)((queue_.memoryBytes() + 1023) / 1024),
+                (unsigned long)queue_.size(), queue_.room() == 0 ? " (full: an add is refused)" : "",
+                (unsigned long)((queue_.memoryBytes() + 1023) / 1024),
                 queue_.current() + 1, (unsigned long)queue_.upNext(),
                 queue_.shuffled() ? "on" : "off", repeatName(static_cast<uint8_t>(player_.repeat())),
                 kEdits[static_cast<int>(queue_.undoable())], undoMode, (unsigned long)saver_.generation(),

@@ -93,6 +93,18 @@ private:
   uint32_t since_ = kNone;
 };
 
+// ---- the queue's cap (QueueModel::kMaxEntries: docs/QUEUE-MODES.md 15) ----
+//
+// `n` with its thousands grouped ("19,412"), as the cap's texts write
+// their counts. Returns buf.
+char* grouped(uint32_t n, char* buf, size_t size);
+// The toast of a Play, a Shuffle all or an add the cap cut short, `took`
+// of `asked`: "Shuffling 5,000 of 19,412: the queue holds 5,000 tracks",
+// "Playing ...", "Added 37 of 300: ...", "37 of 300 play next: ..."
+// (uitext's kCap* texts). Returns buf.
+enum class Capped : uint8_t { Shuffle, Play, Add, Next };
+char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t size);
+
 // ---- tracks that failed to play ----
 //
 // The last few queue entries (by key) whose track couldn't be played, so

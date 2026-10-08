@@ -3,9 +3,10 @@
 
 // Host tests for the Queue screen's portable pieces (QueueView): the
 // "12 up next · 49 min" summary from learned track lengths, the mark on
-// what a Library add put in the queue, the failed-track ring, and when an
-// Undo toast goes because the undo went from under it (UndoWatch). (The
-// shuffle's loop moved to lib/core/Shuffle.h: test_queue.)
+// what a Library add put in the queue, the failed-track ring, when an
+// Undo toast goes because the undo went from under it (UndoWatch), and the
+// texts of the queue's cap. (The shuffle's loop moved to
+// lib/core/Shuffle.h: test_queue.)
 // Run: pio test -e native
 #include <unity.h>
 
@@ -237,8 +238,33 @@ void test_undo_watch_qu_of_any_edit() {
   TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));
 }
 
+// The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15): its
+// counts grouped by thousands, and the toast of what it cut short.
+void test_capped_texts() {
+  char b[96];
+  TEST_ASSERT_EQUAL_STRING("0", grouped(0, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("999", grouped(999, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("1,000", grouped(1000, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("19,412", grouped(19412, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("100,000", grouped(100000, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("4,294,967,295", grouped(4294967295u, b, sizeof(b)));
+  char small[4];
+  TEST_ASSERT_EQUAL_STRING("1,0", grouped(1000, small, sizeof(small)));  // cut, never past the buffer
+  TEST_ASSERT_EQUAL_STRING("Shuffling 5,000 of 19,412: the queue holds 5,000 tracks",
+                           cappedText(Capped::Shuffle, 5000, 19412, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("Playing 5,000 of 6,021: the queue holds 5,000 tracks",
+                           cappedText(Capped::Play, 5000, 6021, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("Added 37 of 300: the queue holds 5,000 tracks",
+                           cappedText(Capped::Add, 37, 300, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("10 of 12 play next: the queue holds 5,000 tracks",
+                           cappedText(Capped::Next, 10, 12, b, sizeof(b)));
+  char tiny[12];
+  TEST_ASSERT_EQUAL_STRING("Added 37 of", cappedText(Capped::Add, 37, 300, tiny, sizeof(tiny)));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_capped_texts);
   RUN_TEST(test_durations_are_learned_per_track);
   RUN_TEST(test_up_next_time_adds_what_is_known);
   RUN_TEST(test_summary_texts);

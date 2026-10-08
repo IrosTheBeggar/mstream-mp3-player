@@ -346,6 +346,43 @@ void test_toast_names_fit() {
   fits(small, "Plays next", room);
 }
 
+// The queue's cap (docs/QUEUE-MODES.md 15): the refusal on one line, no
+// buttons; a Play, Shuffle all or add it cut short as "what: why" on the
+// toast's two lines (too wide for one beside its buttons, as Toast::show()
+// decides), each line in its room in Small at least (Toast draws the why in
+// Body when it fits), with the counts of a library of 99,999.
+void test_queue_cap_texts_fit() {
+  using namespace uitext;
+  using queueview::Capped;
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  fits(body, kQueueFull, kToastTextRight - kToastTextX);
+  TEST_ASSERT_TRUE(strstr(kQueueFull, ": ") == nullptr);  // one line, always
+  struct Case {
+    Capped what;
+    uint32_t took, asked;
+    bool view;  // an add: View beside Undo
+  } cases[] = {{Capped::Shuffle, 5000, 99999, false},
+               {Capped::Play, 5000, 99999, false},
+               {Capped::Add, 4999, 99999, true},
+               {Capped::Next, 4999, 99999, true}};
+  for (const Case& c : cases) {
+    char t[128];
+    queueview::cappedText(c.what, c.took, c.asked, t, sizeof(t));
+    const std::string s(t);
+    const size_t colon = s.find(": ");
+    TEST_ASSERT_TRUE(colon != std::string::npos);
+    const int oneLine = (c.view ? kToastViewX : kToastUndoX) - 6 - kToastTextX;
+    const int room = c.view ? kToastCompactTextRight - kToastTextX : kToastUndoCX - 6 - kToastTextX;
+    TEST_ASSERT_TRUE(body.width(t) > oneLine);
+    fits(small, s.substr(0, colon).c_str(), room);
+    fits(small, t + colon + 2, room);
+    char msg[160];
+    snprintf(msg, sizeof(msg), "%s: what %d (Small), why %d (Body) / %d (Small) in %d", t,
+             small.width(s.substr(0, colon).c_str()), body.width(t + colon + 2), small.width(t + colon + 2), room);
+    TEST_MESSAGE(msg);
+  }
+}
+
 // The empty states' two buttons (the empty queue, Nothing playing) and line.
 void test_empty_state_texts_fit() {
   using namespace uitext;
@@ -1094,6 +1131,7 @@ int main(int, char**) {
   RUN_TEST(test_tabbar_texts_fit_in_every_state);
   RUN_TEST(test_coach_texts_fit);
   RUN_TEST(test_toast_names_fit);
+  RUN_TEST(test_queue_cap_texts_fit);
   RUN_TEST(test_empty_state_texts_fit);
   RUN_TEST(test_no_card_texts_fit);
   RUN_TEST(test_board_guard_texts_fit);

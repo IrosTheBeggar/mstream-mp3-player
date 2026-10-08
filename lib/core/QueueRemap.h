@@ -21,20 +21,22 @@
 //      now (a write under way finished, an edit not yet written written),
 //      its lines the queue's positions;
 //   2. free: the queue's entries and undo snapshot given back
-//      (QueueModel::release()), so the rebuild has their memory: a
-//      whole-library queue of 20,000 is 240-480 KB;
+//      (QueueModel::release()), so the rebuild has their memory: a full
+//      queue (QueueModel::kMaxEntries, 5,000) is 60-120 KB;
 //   3. rebuild: the caller's (Library::rebuild() today; the update step's
 //      build in N12);
 //   4. re-read: queuetext::read() of queue.txt, its two blocks exactly the
-//      header's line count (80 KB at 20,000, 160 KB shuffled), into a
-//      block of exactly the queue's size (QueueModel::assign()).
+//      lines read in (20 KB at 5,000, 40 KB shuffled), into a block of
+//      exactly the queue's size (QueueModel::assign()).
 //
 // Until this, the remap wrote the queue as text into a PSRAM buffer that
 // doubled as it grew, while the old index was still held: about 1.5 MB of
 // text at 20,000 lines, 3 MB at the moment of a doubling. It ran out at
 // about 15,000 entries (the metascan research, section 6.2). Now nothing
 // the size of the queue is held across the rebuild: its peak is the
-// re-read's, after the rebuild, about 0.32 MB at 20,000 (0.4 MB shuffled).
+// re-read's, after the rebuild, about 80 KB for a full queue (100 KB
+// shuffled; 0.32 MB for the whole-library queue of 20,000 there was
+// before the queue's cap).
 //
 // What comes across: the entries whose tracks are still there, in the same
 // order (shuffled: the same play order with the same ranks, gaps where
@@ -44,9 +46,10 @@
 // console's qs) when the current entry is still the same file (its path,
 // not its line, says so); nothing of the undo (the keys are new: an undo
 // can't name these entries). The saver is told what the card now holds:
-// the file is the queue unless tracks were dropped (then it's written
-// again, with the next generation, and the resume point follows the
-// entry's new line).
+// the file is the queue unless tracks were dropped, or lines were left
+// out by the queue's cap (a file written before it: read in as
+// QueueModel::window()), and then it's written again, with the next
+// generation, and the resume point follows the entry's new line.
 //
 // The file can hold more than the queue (QueueSaver::keptFile()): after a
 // boot or a rebuild that found no library, which left its library tracks

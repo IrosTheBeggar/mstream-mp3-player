@@ -132,10 +132,11 @@ private:
 
 // A block of exactly `n` words from the hooks, given back at the end of
 // the read. The header says how many lines follow, so the read's ids (and,
-// shuffled, ranks) never grow by doubling: a 20,000-line file takes 80 KB
-// (160 KB shuffled) next to the queue's own 240 KB, not twice that
-// (docs/METADATA.md section 3.4.2, step 5). A header that claims more
-// than memory holds fails here, as its file would at the line count.
+// shuffled, ranks) never grow by doubling: a full queue's 5,000 lines take
+// 20 KB (40 KB shuffled) next to the queue's own 60 KB, and a longer file
+// (written before the queue's cap) no more, since only the cap's window is
+// read in (docs/METADATA.md section 3.4.2, step 5). A header that claims
+// more than memory holds fails here, as its file would at the line count.
 class Words {
 public:
   Words(MemorySink::AllocFn alloc, MemorySink::FreeFn release)
@@ -213,9 +214,13 @@ Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_
   const int32_t target = pickCurrent ? pickCurrent(r.header, ctx) : r.header.current;
 
   const bool shuffled = r.header.shuffled;
+  // The lines read in: all of them, or past the queue's cap the window
+  // that holds the current line (QueueModel::window()).
+  const QueueModel::Window w = QueueModel::window(r.header.entries, target);
+  r.first = w.first;
   Words ids(alloc, release);    // the tracks that survive
   Words ranks(alloc, release);  // version 2: their ranks
-  if (!ids.reserve(r.header.entries) || (shuffled && !ranks.reserve(r.header.entries))) return r;
+  if (!ids.reserve(w.count) || (shuffled && !ranks.reserve(w.count))) return r;
   uint32_t count = 0;
   int32_t current = -1;
   while (lines.next(&line, &overflow)) {
@@ -227,9 +232,13 @@ Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_
     // More lines than the header said: not what it says (the queue left
     // alone, as for fewer).
     if (r.lines == r.header.entries) return r;
+    const uint32_t at = r.lines++;
+    if (at < w.first || at - w.first >= w.count) {
+      ++r.capped;  // outside the window: not looked up, not kept
+      continue;
+    }
     const uint32_t id = overflow || !*path ? TrackCatalog::kNone : catalog.find(path);
-    const bool isTarget = static_cast<int32_t>(r.lines) == target;
-    ++r.lines;
+    const bool isTarget = static_cast<int32_t>(at) == target;
     if (id == TrackCatalog::kNone) {
       ++r.dropped;
       if (isTarget) current = static_cast<int32_t>(count);  // the next survivor, if any
@@ -239,7 +248,7 @@ Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_
       current = static_cast<int32_t>(count);
       r.currentKept = true;
     }
-    // (Room for every line the header counts, so these can't fail.)
+    // (Room for every line read in, so these can't fail.)
     if (!ids.push(id)) return r;
     if (shuffled && !ranks.push(rank)) return r;  // (dropped tracks leave gaps: fine)
     ++count;

@@ -281,6 +281,21 @@ inline constexpr int kRemoveTextX = 32;  // from the button's left, after the ic
 inline constexpr int kQueueNextX = 152, kQueueNextW = 80;
 inline constexpr int kQueueClearX = 238, kQueueClearW = 76;
 
+// ---- the queue's cap (QueueModel::kMaxEntries; docs/QUEUE-MODES.md 15) ----
+// Play next or + Queue with the queue full: nothing went in. The toast's
+// one line (Body, no buttons: kToastTextRight - kToastTextX).
+inline constexpr const char* kQueueFull = "The queue holds 5,000 tracks";
+// A Play (an artist's, an album's, "Play all N"), Shuffle all, or an add
+// the cap cut short: "<what>: <why>" (queueview::cappedText() puts in the
+// counts, grouped: "Shuffling 5,000 of 19,412"), on the toast's two lines
+// beside Undo (and View after an add): what in Small, kCapWhy in Body if
+// it fits, else Small (test_ui_library: each in its room).
+inline constexpr const char* kCapWhy = "the queue holds 5,000 tracks";
+inline constexpr const char* kCapShuffling = "Shuffling %s of %s";
+inline constexpr const char* kCapPlaying = "Playing %s of %s";
+inline constexpr const char* kCapAdded = "Added %s of %s";
+inline constexpr const char* kCapNext = "%s of %s play next";
+
 // ---- the Output tab (ui/OutputPage) ----
 // The Bluetooth card's status line (Small, x 52 to the radio).
 inline constexpr int kBtStatusW = 222;

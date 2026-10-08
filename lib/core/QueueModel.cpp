@@ -27,11 +27,19 @@ QueueModel::~QueueModel() {
   drop(undo_);
 }
 
+QueueModel::Window QueueModel::window(uint32_t n, int32_t current) {
+  if (n <= kMaxEntries) return Window{0, n};
+  const uint32_t cur = current < 0 ? 0 : static_cast<uint32_t>(current);
+  if (cur < kMaxEntries) return Window{0, kMaxEntries};
+  return Window{std::min(cur, n - kMaxEntries), kMaxEntries};
+}
+
 bool QueueModel::reserve(Array& a, uint32_t n) {
   if (n <= a.cap) return true;
-  // Doubling while small, an eighth more once big (kGrowByEighth); never
-  // less than asked.
-  uint32_t cap = !a.cap ? 16 : a.cap < kGrowByEighth ? a.cap * 2 : a.cap + a.cap / 8;
+  // Doubling, never past the cap (nothing asks for more), never less than
+  // asked.
+  uint32_t cap = !a.cap ? 16 : a.cap * 2;
+  if (cap > kMaxEntries) cap = kMaxEntries;
   if (cap < n) cap = n;
   auto* p = static_cast<Entry*>(allocFn_(static_cast<size_t>(cap) * sizeof(Entry)));
   if (!p) return false;
@@ -109,7 +117,10 @@ uint32_t* QueueModel::selection(const uint32_t* positions, uint32_t n, uint32_t*
 
 bool QueueModel::insertAt(uint32_t at, const uint32_t* tracks, uint32_t n, Edit edit) {
   if (n == 0) return true;
-  if (!tracks || q_.size + n < q_.size) return false;
+  if (!tracks) return false;
+  // As many as fit under the cap, the first ones; none: refused (full).
+  if (n > room()) n = room();
+  if (n == 0) return false;
   const bool wasEmpty = current_ < 0;
   // Shuffled, the new entries' ranks: Play next's right after the current
   // entry's (those above it go up by n), + Queue's after the highest. The
@@ -152,30 +163,51 @@ bool QueueModel::insertNext(const uint32_t* tracks, uint32_t n) {
 
 bool QueueModel::append(const uint32_t* tracks, uint32_t n) { return insertAt(q_.size, tracks, n, Edit::Append); }
 
+void QueueModel::put(uint32_t pos, uint32_t track, uint32_t rank) {
+  q_.data[pos] = Entry{track, nextKey_++, rank};
+  if (nextKey_ == kNone) nextKey_ = 0;
+}
+
 bool QueueModel::replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled) {
   if (n == 0 && shuffled == shuffled_) return clear();
-  if (n && (!tracks || !reserve(q_, n))) return false;
+  // Past the cap, kMaxEntries of them (the class): a block of that.
+  const uint32_t keep = n < kMaxEntries ? n : kMaxEntries;
+  if (n && (!tracks || !reserve(q_, keep))) return false;
   // The snapshot first: it holds the mode the queue was in (undo() puts it
   // back with the entries), then the mode this Play is laid out in.
   snapshot(n ? Edit::Replace : Edit::Clear);
   shuffled_ = shuffled;
-  for (uint32_t i = 0; i < n; ++i) {
-    q_.data[i] = Entry{tracks[i], nextKey_++, i};
-    if (nextKey_ == kNone) nextKey_ = 0;
-  }
-  q_.size = n;
+  q_.size = keep;
   if (n == 0) {
     current_ = -1;
   } else if (shuffled_) {
     // The chosen track first (kAnyStart: a random one), every other one
     // shuffled after it, those before it in the list too; the ranks the
-    // given order.
+    // given order (each track's place in the list).
     const uint32_t s = start == kAnyStart ? draw(n) : (start < n ? start : n - 1);
-    std::swap(q_.data[0], q_.data[s]);
-    shuffle::permute(q_.data + 1, n - 1, draw());
+    if (keep == n) {
+      for (uint32_t i = 0; i < n; ++i) put(i, tracks[i], i);
+      std::swap(q_.data[0], q_.data[s]);
+    } else {
+      // Past the cap: the chosen one, then a random kMaxEntries - 1 of the
+      // others, picked in the list's order (the rank of each its place in
+      // the whole list: Off gives them in the given order, gaps and all).
+      put(0, tracks[s], s);
+      uint32_t w = 1;
+      shuffle::sample(n - 1, keep - 1, draw(), [&](uint32_t j) {
+        const uint32_t i = j < s ? j : j + 1;  // (s itself is first already)
+        put(w++, tracks[i], i);
+      });
+    }
+    shuffle::permute(q_.data + 1, keep - 1, draw());
     current_ = 0;
   } else {
-    current_ = static_cast<int32_t>(start == kAnyStart ? 0 : start < n ? start : n - 1);
+    // From `start` (kAnyStart: the first); past the cap, the window that
+    // holds it.
+    const uint32_t s = start == kAnyStart ? 0 : (start < n ? start : n - 1);
+    const Window w = window(n, static_cast<int32_t>(s));
+    for (uint32_t i = 0; i < w.count; ++i) put(i, tracks[w.first + i], i);
+    current_ = static_cast<int32_t>(s - w.first);
   }
   changed();
   return true;
@@ -365,6 +397,15 @@ bool QueueModel::setShuffled(bool on) {
 
 bool QueueModel::assign(const uint32_t* tracks, uint32_t n, int32_t current, bool shuffled, const uint32_t* ranks) {
   if (n && !tracks) return false;
+  // Past the cap, the window that holds the current entry (its ranks with
+  // it: gaps are fine).
+  const Window kept = window(n, current);
+  if (kept.first) {
+    tracks += kept.first;
+    if (ranks) ranks += kept.first;
+    current -= static_cast<int32_t>(kept.first);  // (>= 0: the window starts at most at it)
+  }
+  n = kept.count;
   // A block of exactly n entries (docs/METADATA.md section 3.5): the new
   // one first, so a failure leaves the queue as it was; what it held isn't
   // copied (all of it is replaced). A smaller n with no new block to be had

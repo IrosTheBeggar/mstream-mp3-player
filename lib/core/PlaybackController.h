@@ -333,8 +333,12 @@ public:
   bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start) { return playNow(tracks, n, start, shuffle()); }
   // Play with the shuffle mode set as part of it (Shuffle all: on): one
   // edit (QueueModel::replace(.., shuffled)), so undo() puts the queue and
-  // the mode back. Out of memory: false, and neither changed.
+  // the mode back. Out of memory: false, and neither changed. Past the
+  // queue's cap (QueueModel::kMaxEntries), 5,000 of the tracks: the first
+  // (or the window that holds `start`), or shuffled a random 5,000.
   bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle);
+  // As many as fit under the cap (QueueModel::room()), the first ones;
+  // false when none do (the queue full) or out of memory.
   bool playNext(const uint32_t* tracks, uint32_t n);
   bool addToQueue(const uint32_t* tracks, uint32_t n);
   QueueModel::Removed remove(const uint32_t* positions, uint32_t n);

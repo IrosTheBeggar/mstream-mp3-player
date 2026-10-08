@@ -522,7 +522,8 @@ the Vectis Opus patent pool (Dolby, Fraunhofer, NTT) assert patents against
 makers of hardware that decodes Opus. If you sell devices with this
 firmware installed, that may concern you.
 
-The first time, the queue is the whole library (artist, album, track order).
+The first time, the queue is the whole library (artist, album, track order;
+on a card of more than 5,000 tracks, its first 5,000).
 The built-in test tones and click tracks (60 s at 90-174 BPM, for the beat
 tracker) stay out of it; the console's `qb` queues them. The queue and its position are saved on the card:
 after a restart it's where it was, stopped. A pause, or a seek while
@@ -535,6 +536,14 @@ while playing starts the track from its beginning:
 nothing is written while it plays.) The Library and Queue tabs edit
 it, and so do the console's `q` commands (play an album, play it next, add
 it, remove, clear, undo).
+**The queue holds up to 5,000 tracks.** Play all, an artist's or a big
+folder's Play, and Shuffle all on more than that take 5,000 of them: the
+first 5,000 in order, or with shuffle on a random 5,000 (each Shuffle all
+another), and the message says so. Play next and + Queue add as many as
+fit and say how many; with the queue full they're refused ("The queue
+holds 5,000 tracks") until Clear up next or a Remove makes room. Undo
+works whatever the size. A longer queue saved by an older firmware comes
+back as its 5,000 around the track it was on.
 **Shuffle and repeat** are kept across a restart too. Shuffle on shuffles
 what's up next (the track that plays plays on, and the Queue tab shows the
 order that plays); off puts the queue's own order back. While it's on, an
@@ -668,10 +677,11 @@ partitions.csv        Two 6 MB OTA app slots, NVS above anything a single-file
 lib/core/             Portable logic, framework-agnostic (also compiled for native)
   PlaybackController  Transport over the queue; repeat Off / All / One;
                       skips tracks that fail
-  QueueModel          The play queue: track ids in PSRAM, current position,
-                      stable keys, one level of undo, shuffle (each entry's
-                      rank in the queue's own order)
-  Shuffle             The shuffle's Fisher-Yates loop (QueueModel's)
+  QueueModel          The play queue: track ids in PSRAM (at most 5,000),
+                      current position, stable keys, one level of undo,
+                      shuffle (each entry's rank in the queue's own order)
+  Shuffle             The shuffle's Fisher-Yates loop and the random pick
+                      of 5,000 past the queue's cap (QueueModel's)
   QueueText           The queue saved as paths (survives a library rebuild;
                       version 2: a shuffled queue, with its ranks)
   TrackCatalog        Track ids to paths and names: the index's tracks and

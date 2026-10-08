@@ -220,14 +220,26 @@ void Ui::shuffleAll() {
   // it, so the toast's Undo puts back the queue and the mode it found
   // (QueueModel copies the ids and shuffles them: docs/QUEUE-MODES.md
   // sections 2.5 and 2.6).
+  // Past the queue's cap (QueueModel::kMaxEntries), a random 5,000 of the
+  // library (docs/QUEUE-MODES.md section 15), and the toast says so.
   const LibraryIndex::Span all = index->allTracks();
   const bool was = player_.shuffle();
   const bool ok = player_.playNow(all.ids, all.count, PlaybackController::kAnyStart, /*shuffle=*/true);
   if (ok) added_.clear();  // a new queue: nothing "added" to show in it
-  Serial.printf("[ui] shuffle all: %lu tracks (shuffle on; was %s)%s\n", (unsigned long)all.count, was ? "on" : "off",
-                ok ? "" : ": NO MEMORY");
-  char text[48];
-  snprintf(text, sizeof(text), "Shuffling %lu tracks", (unsigned long)all.count);
+  const uint32_t took = all.count < QueueModel::kMaxEntries ? all.count : QueueModel::kMaxEntries;
+  char capped[64] = "";
+  if (took < all.count) {
+    snprintf(capped, sizeof(capped), ", a random %lu of them (the queue holds %lu)", (unsigned long)took,
+             (unsigned long)QueueModel::kMaxEntries);
+  }
+  Serial.printf("[ui] shuffle all: %lu tracks%s (shuffle on; was %s)%s\n", (unsigned long)all.count, capped,
+                was ? "on" : "off", ok ? "" : ": NO MEMORY");
+  char text[96];
+  if (took < all.count) {
+    queueview::cappedText(queueview::Capped::Shuffle, took, all.count, text, sizeof(text));
+  } else {
+    snprintf(text, sizeof(text), "Shuffling %lu tracks", (unsigned long)all.count);
+  }
   toast(ok ? text : "Not enough memory for that", ok);
 }
 
