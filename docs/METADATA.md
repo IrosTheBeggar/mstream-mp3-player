@@ -3371,7 +3371,7 @@ point (`[index] the update step's safe point: …`), and `gs`'s scan line
 the length it waits for (`waiting for the safe point (24.4 s left of the
 heard track)`): whole since run 4's review (`TagConsole::scanLine()`'s
 96 B line cut the update step's clause off, so on 062bd1f and before `gs`
-never said the step was asked; 224 B now, about 215 B at most).
+never said the step was asked; 224 B now, for 208 B at most).
 
 **Callers:** the end of a scan; a walk that found changes; `g0` and `gb`;
 the UI's "Try again"; the boot (3.2.2). Today's `rebuildLibrary()` in
@@ -4528,7 +4528,13 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   640,296) and +640 B in core2-dio (639,720 to 640,360), `firmware.bin`
   2,629,088 to 2,631,568 B in core2 (2,629,120 to 2,631,632 in core2-dio),
   the app 2.51 MB (42% of its slot); `iram_diet`, `cache_guard`,
-  `flash_guard` and `version` pass in both.
+  `flash_guard` and `version` pass in both. Run 4's review fixes
+  (7ac43ef: the sort keys past leading White_Space, `g`'s artists line,
+  `gs`'s 224 B line, the scroll lab's since-boot low), against 70d43e4
+  (core2) and e2ec85c (core2-dio), both built clean: IRAM, internal DRAM
+  and `.rodata` unchanged; flash `.text` +56 B (1,761,212 to 1,761,268
+  in both builds); `firmware.bin` 2,631,600 to 2,631,680 B in core2
+  (2,631,632 to 2,631,712 in core2-dio); the four guards pass in both.
   PSRAM (from the code): `LibraryUpdate` and its step about 0.4 KB, the
   held names about 1 KB, the carry about 0.1 KB, and when the card can't
   take `queue.txt` the queue's text through the build (up to about 400 KB
