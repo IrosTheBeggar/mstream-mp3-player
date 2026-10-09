@@ -336,12 +336,13 @@ and at that commit. To try the page, serve `dist/site` over
 
 ## Using it
 
-Switched on, the Core2 shows the mStream logo and the player's version,
-and at the bottom the touch rescue (**Touch calibration**, below), for
-about 3 s, or until the library is ready: about 20 s the first time a new
-card of 20,000 tracks is read. Then the tabs. What the boot screen used to
-list (the board and its chips, memory, the battery, the library) is in
-**Output > About > Device info**.
+Switched on, the Core2 shows the mStream logo and the player's version
+for about 3 s, or until the library is ready: about 20 s the first time a
+new card of 20,000 tracks is read. Once the library is ready, the touch
+rescue's line (**Touch calibration**, below) shows at the bottom, for at
+least 1.5 s, and only then does a finger held on the screen count. Then
+the tabs. What the boot screen used to list (the board and its chips,
+memory, the battery, the library) is in **Output > About > Device info**.
 
 The three touch buttons under the screen do the same on every screen:
 **prev** (past a track's first 3 s: back to its start, and paused it
@@ -602,10 +603,11 @@ label on the screen does the same).
   the ring should land under your finger (a grey dot: where it would land
   without the calibration); A undoes the Save there.
 - **The rescue.** If the taps are too far off to reach the Output tab,
-  switch the Core2 off and on, and once the start-up screen shows (it says
-  "Touch trouble? Hold a finger on the screen."), hold a finger anywhere
-  on the screen for 2 s: the calibration opens. Put the finger on after
-  the screen lights, not while switching on.
+  switch the Core2 off and on, and once the start-up screen's bottom line
+  says "Touch trouble? Hold a finger on the screen." (under the logo, when
+  the library is ready), hold a finger anywhere on the screen for 2 s: the
+  calibration opens. Put the finger on after the screen lights, not while
+  switching on.
 
 On the console: `a` + Enter opens the crosses (`a5` for 5), `ac` the check
 page, `ab` the first-start touch check (`ab0` has it ask again at the next

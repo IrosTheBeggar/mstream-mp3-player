@@ -2,9 +2,9 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host tests for the boot screen's portable pieces: the logo's runs
-// (RleImage reading LogoArt, against the counts tools/make_logo.py wrote
-// beside them), the palette's blends, and the screen's layout
-// (BootLayout). The texts' widths are test_ui_library's.
+// (RleImage reading LogoArt, against the counts and the digest
+// tools/make_logo.py wrote beside them), the palette's blends, and the
+// screen's layout (BootLayout). The texts' widths are test_ui_library's.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -27,6 +27,21 @@ namespace {
 uint16_t rgb565(uint32_t c) {
   const uint32_t r = c >> 16 & 0xFF, g = c >> 8 & 0xFF, b = c & 0xFF;
   return static_cast<uint16_t>((r >> 3) << 11 | (g >> 2) << 5 | (b >> 3));
+}
+
+// FNV-1a (32-bit) over pixel codes, as tools/make_logo.py's digest().
+struct Fnv {
+  uint32_t h = 0x811C9DC5u;
+  void add(uint8_t c) { h = (h ^ c) * 0x01000193u; }
+};
+
+// The whole logo read, kW codes a row, top row first.
+std::vector<uint8_t> readLogo() {
+  rleimage::Reader r(logo::kData, logo::kSize, logo::kW);
+  std::vector<uint8_t> px(static_cast<size_t>(logo::kW) * logo::kH);
+  for (int y = 0; y < logo::kH; ++y) TEST_ASSERT_TRUE(r.row(&px[static_cast<size_t>(y) * logo::kW]));
+  TEST_ASSERT_TRUE(r.done());
+  return px;
 }
 }  // namespace
 
@@ -62,6 +77,47 @@ void test_logo_reads_whole() {
   TEST_ASSERT_FALSE(r.row(row.data()));
   TEST_ASSERT_EQUAL_INT(rleimage::kLevels, logo::kLevels);
   TEST_ASSERT_EQUAL_INT(rleimage::kParts, logo::kParts);
+}
+
+// Every pixel where the tool put it: the codes, top row first and each row
+// left to right, hash to the digest it wrote. (The counts above don't see
+// a pixel out of place.)
+void test_logo_pixels_in_place() {
+  const std::vector<uint8_t> px = readLogo();
+  Fnv inOrder;
+  for (const uint8_t c : px) inOrder.add(c);
+  TEST_ASSERT_EQUAL_HEX32(logo::kDigest, inOrder.h);
+  // And the digest has teeth for this logo: the rows bottom up, or each
+  // row mirrored (what a reader filling runs from the wrong end would draw;
+  // the counts and the empty border are the same), hash to something else.
+  Fnv upsideDown, mirrored;
+  for (int y = logo::kH - 1; y >= 0; --y) {
+    for (int x = 0; x < logo::kW; ++x) upsideDown.add(px[static_cast<size_t>(y) * logo::kW + x]);
+  }
+  for (int y = 0; y < logo::kH; ++y) {
+    for (int x = logo::kW - 1; x >= 0; --x) mirrored.add(px[static_cast<size_t>(y) * logo::kW + x]);
+  }
+  TEST_ASSERT_NOT_EQUAL(logo::kDigest, upsideDown.h);
+  TEST_ASSERT_NOT_EQUAL(logo::kDigest, mirrored.h);
+  // And by the logo's own shape, not the tool's numbers: the "m" (the bars,
+  // parts 2 and 3) comes before the word (part 1), every pixel of it left
+  // of every pixel of the word; and its middle bar's notched top is lower
+  // than the outer bars' tops (all three end on one line), so the logo is
+  // the right way up.
+  int mRight = -1, wordLeft = logo::kW, outerTop = logo::kH, middleTop = logo::kH;
+  for (int y = 0; y < logo::kH; ++y) {
+    for (int x = 0; x < logo::kW; ++x) {
+      const int p = partOf(px[static_cast<size_t>(y) * logo::kW + x]);
+      if (p == 1 && x < wordLeft) wordLeft = x;
+      if ((p == 2 || p == 3) && x > mRight) mRight = x;
+      if (p == 2 && y < outerTop) outerTop = y;
+      if (p == 3 && y < middleTop) middleTop = y;
+    }
+  }
+  TEST_ASSERT_TRUE(mRight >= 0 && mRight < wordLeft);
+  TEST_ASSERT_TRUE(mRight < logo::kW / 4);
+  TEST_ASSERT_TRUE(outerTop < logo::kH && middleTop < logo::kH);
+  TEST_ASSERT_TRUE(middleTop > outerTop + 2);
 }
 
 // The ink spans the width less a pixel each side (its edges' room): the
@@ -195,6 +251,7 @@ void test_layout_fits_the_screen() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_logo_reads_whole);
+  RUN_TEST(test_logo_pixels_in_place);
   RUN_TEST(test_logo_fills_its_box);
   RUN_TEST(test_logo_is_small);
   RUN_TEST(test_reader_refuses_bad_runs);

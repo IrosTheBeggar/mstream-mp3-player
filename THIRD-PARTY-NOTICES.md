@@ -399,7 +399,13 @@ It contains:
 - **The mStream logo** on the boot screen (lib/core/LogoArt.*, made by
   tools/make_logo.py from tools/art/mstream-logo.svg): the logo of
   mStream, the music server this player syncs from, by the same author
-  (IrosTheBeggar). The SVG is mStream's webapp/assets/img/mstream-logo.svg
-  as it is in https://github.com/IrosTheBeggar/mStream, unchanged; the
-  firmware has it rendered at 240 px and recoloured for the dark screen.
-  Licence: GPL-3.0, as mStream (the text is [LICENSE](LICENSE)).
+  (IrosTheBeggar). The SVG is mStream's webapp/assets/img/mstream-logo.svg,
+  unchanged, as it is in mStream v6.24.0 (where it last changed in commit
+  b0cfd005b331cdc2362d7e43bf24a0f0be175332, 2021-02-02; git blob
+  164177d7a5283463bd48e82aae20bb31077a9581); the firmware has it rendered
+  at 240 px and recoloured for the dark screen. Licence: mStream declares
+  GPL-3.0 (its package.json); the logo's author, who is also this
+  firmware's, licenses it here (the SVG copy and the files made from it)
+  under GPL-3.0-or-later, like the rest of the firmware (the text is
+  [LICENSE](LICENSE)). Source:
+  https://github.com/IrosTheBeggar/mStream/blob/v6.24.0/webapp/assets/img/mstream-logo.svg

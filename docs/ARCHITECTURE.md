@@ -2649,9 +2649,12 @@ Queue, Dance and Output (with its Pair and About pages).
 - **The boot screen** (ui/BootScreen; lib/core/BootLayout): from the
   start of `setup()` until the UI starts (3 s at least; about 20 s on a
   new card's first boot, while the library is built), the mStream logo
-  centred (240 x 47 px at y 80), the player's version under it (Body,
-  centred on y 150, Small for a long dev version), and once the UI's
-  fonts are up, the rescue hold's line at the bottom. The logo is
+  centred (240 x 47 px at y 80) and the player's version under it (Body,
+  centred on y 150, Small for a long dev version). The rescue hold's line
+  at the bottom comes later: once the UI is made, at the end of `setup()`
+  (after the library, so up to ~20 s on a new card's first boot), which is
+  also when a hold starts to count (the glass's events are read in
+  `loop()`); the screen then stays at least 1.5 s more. The logo is
   mStream's own (tools/art/mstream-logo.svg, the web app's), navy on
   white there; on the dark screen the bars of its "m" keep their two
   blues (#6684B2 outside, #26477B in the middle) and the word is white

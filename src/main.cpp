@@ -2636,7 +2636,9 @@ void setup() {
   }
   Serial.printf("[ui] internal RAM %lu B free before the UI, %lu B after\n", (unsigned long)freeBeforeUi,
                 (unsigned long)diag::heap().internalFree);
-  // The rescue hold, on the start-up screen (with the UI's fonts, now loaded).
+  // The rescue hold's line on the start-up screen, now that there is a UI
+  // to wait for (the fonts are BootScreen::begin()'s). A hold counts from
+  // here on: loop() reads the glass.
   if (userInterface) {
     bootScreen.hint(uitext::kBootTouchHint);
     bootHintMs = millis();
