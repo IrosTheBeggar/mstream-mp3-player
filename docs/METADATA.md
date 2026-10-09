@@ -3869,7 +3869,14 @@ src/. What the code decided where 3.2-3.4 left room:
   unchanged, internal DRAM -32 B (`.dram0.data` 24,488, `.dram0.bss`
   32,448), flash +3,308 B in core2 (`.text` 1,746,136, `.rodata` 631,572)
   and +3,332 B in core2-dio (1,746,128 and 631,636), the app 2.49 MB, every
-  guard passing. PSRAM
+  guard passing. After the 2026-10-09 fixes (`lib/SD`, the card's guard,
+  the walk's and the scan's slices, the console's stack line; against
+  079d047, both builds the same way): IRAM +16 B (`.iram0.text` 124,883:
+  FreeRTOS's `pxTaskGetStackStart()`, which the IDF links into IRAM, for
+  app/LoopStack; no `IRAM_ATTR` of ours), internal DRAM +80 B
+  (`.dram0.bss` 32,584, `.dram0.data` 24,552 unchanged), flash `.text`
+  +744 B (1,759,008) and `.rodata` +1,608 B (638,952 in core2, 638,984 in
+  core2-dio), the app 2.51 MB, every guard passing. PSRAM
   (from the code; L0 and L3 measure): the cache 135,168 B on the card; the
   walk about 98 KB while it runs; the scan about 85 KB and its View's
   merge memory; the lister's `FIL`, `FF_DIR` and `FILINFO` about 4.5 KB;
@@ -4585,7 +4592,8 @@ Serial at 115200 (the console of README); commands end with Enter.
 **After every command** ended with Enter (and `l`, `s`): `[console] <the
 command>: the loop task's stack: N B never used during it (of 8 KB; M B
 the lowest since the boot)`. N at least 1,536 everywhere (the line says
-LOW under it: record the command and its card's state); at least about
+LOW under it: record the command and its card's state), and no `Stack
+canary watchpoint triggered (loopTask)` in the whole log; at least about
 3.5 KB after `gs` and `gt`, 3.8 KB after `gl` and `glw` (ESTIMATED worst
 cases: about 1.6 KB less if the SD driver logs a card error during it),
 4.4-5.1 KB after the others (ARCHITECTURE.md, "The loop task's stack").
@@ -4618,20 +4626,26 @@ order:
   the mount; internal RAM ...`
 
 **The SD bus, through the whole batch** (since 2026-10-09: `lib/SD`'s
-patched driver, 3.8). No `sdCommand(): token error`, `crc error` or
-`Check status failed` line in any step (the 2026-10-08 run had three
+patched driver, 3.8). No `sdCommand(): token error`, `crc error`,
+`Check status failed`, `Wait Failed` or `Select Failed` line in any step,
+and no walk failing on its journal's write (the 2026-10-08 run had three
 token errors, each failing a walk with `the walk FAILED (error 4)`, and two
 crc errors); if one shows, a `[W] ... status: R1 0x.., asked again` and
 no remount, and `[card] writes the card refused and took the second time:
 N; refused twice: 0`, mean the belt held where the fix didn't: record
 which step, and how often. `gc`'s `writes W (... 0 failed)` at the end of
-each part.
+each part. While the card is out (L1's pull) the driver's lines are the
+pull's: `no token received`, `Card Failed!` and `Check status failed`
+then are expected, and count only from the put-back on.
 
 **L0, the bench** (the stock driver; 3.2.1, 3.2.7). Playback stopped (the
 decoder's reads would count):
 
 1. `gl`. `[bench] the card: 200 single-sector reads over the card, mean X
-   ms`: 0.6-1.0 ms (3.2.1's calibration). `[bench] /music has N entries`
+   ms`: 0.6-1.0 ms (3.2.1's calibration; since 2026-10-09 the patched
+   driver waits for two bytes of 0xFF at each select, one byte more: a
+   few µs, record it against the walk's and the scan's means in `gs`).
+   `[bench] /music has N entries`
    (names: N11's card about 705 artists, the user's 705).
 2. The three opens, `[bench] the open under entry K (probe P, 3 levels):
    uncached A reads in T ms; cached cold B in T ms, warm C in T ms` (the
@@ -4689,8 +4703,13 @@ the next epoch). Then:
   walk, a scan step or an update step, `[card] the card answered again
   (the same card) with a card job under way: the queue saved,
   restarting`, the toast "Card back: restarting", and a boot that loads
-  the library and the queue as they were. The `[stats]` line's
-  `stack_free=` after it (the records are opened again on the loop).
+  the library and the queue as they were. The records are opened again
+  on the loop task, outside the console (no `[console]` line): `ui`'s
+  `[ui] loop task stack: M B never used since the boot` after it, M at
+  least 1,536 (ESTIMATED: `TagStore::open()` under `loop()`'s frames
+  about 3.5 KB deep, 4.9 KB with the SD driver's log line on top, below
+  the boot's; ARCHITECTURE.md, "The loop task's stack"). The `[stats]`
+  line's `stack_free=` is the decoder task's, not the loop's.
 - **Another card while on** (the guard, 3.8): note a second FAT32 card's
   `/.player` on a PC first (a card from another player, or N11's card
   with a `/.player` of its own: its files' names, sizes and times). With
@@ -4712,23 +4731,31 @@ the next epoch). Then:
    `browsable N ms after the mount` (under 0.5 s at 77; under 3.5 s at
    20k).
 2. About 2 s after the UI's first frame (the Library's status line says
-   "Checking the card…"): `[card] the walk: F folders (L listings, 0
+   "Checking the card…"): `[card] the walk: F folders (L listings, G
    merged), A audio ...; 0 added, 0 changed, 0 gone; ...; S steps in M ms`:
-   S = F + 2 (a step a folder: 2,593 on N11's card; 7,774 before
-   2026-10-09), M 10-20 s at 20k with the cache (3.3.9, ESTIMATED: 2.7 min
-   with the screen dark before), under 0.05 s at 77. Then `gs`: `[card]
-   walk: H slices (S walk steps), mean m ms, longest l ms`: several walk
-   steps a slice (S/H about 4-15), m near the slice (18 ms lit, 60 ms
-   dark), l under about 100 ms (a slice and one unit; a 3,000-file
-   folder's pass, 0.3-0.6 s, is the exception). The same walk with the
-   screen dark: `gw` once it is off (the console's line is input for
-   0.5 s only), and M again. Record how long `Bluetooth` held its start
-   (`gs`'s waits; about 13 s on 2026-10-08 while remembered headphones
-   were paged).
+   G the folders with no audio at or below them, which D has no row for
+   and every walk merges again (115 on N11's card); S = F + 2 (a step a
+   folder: 2,593 on N11's card; 7,774 before 2026-10-09), M 10-20 s at
+   20k with the cache (3.3.9, ESTIMATED: 11-19 s lit, 9-14 s dark; 2.7
+   min with the screen dark before), under 0.05 s at 77. Then `gs`:
+   `[card] walk: H slices (S walk steps), mean m ms, longest l ms`:
+   several walk steps a slice (S/H about 4-6 lit, 12-20 dark, at 3-5 ms a
+   folder), m near the slice (18 ms lit, 60 ms dark), l under about 100
+   ms (a slice and one unit; a 3,000-file folder's pass, 0.3-0.6 s, is
+   the exception). The same walk with the screen dark: `gs0`, then `gw`
+   once it is off (30 s after the last touch; console lines don't wake
+   it, and the console's line is input for 0.5 s only), M again and
+   `gs`. Record how long `Bluetooth` held its start (`gs`'s waits; about
+   13 s on 2026-10-08 while remembered headphones were paged).
 3. During the walk, play MP3, then FLAC, then on the headphones: the
    `[stats]` line's `underruns=` doesn't move and `pass_max=` stays near
    its figure without a walk; `gs`'s `[card] waited (s):` shows what the
-   walk yielded to.
+   walk yielded to. With the screen lit (the walk's slices at priority 1
+   since 2026-10-09), tap and scroll during it: no lag past a pass (a
+   touch or a moving list cuts the slice after its folder and drops it to
+   0), `gs`'s `input` and `a list moving` waits grow, and the `[ui]
+   scroll:` lines and the Dance page's frame rate match the same without
+   a walk.
 4. A hand-copied album added on a PC (12 files): the walk says `12
    added`, the toast "Found 12 new tracks", the status line "Reading tags
    0 / 12" then "Updating library…", and `[card] the update step (the
@@ -4753,14 +4780,20 @@ as each condition starts (idle, MP3, FLAC, the headphones, the Dance
 page) and `gs` at its end.
 
 1. The first boot walks /music (the line above), the walk adds every file
-   (`19,410 added`, no toast: none is new to the index), and the scan
+   (`19,410 added`, no toast: none is new to the index; `2593 steps in M
+   ms`, M about 20-30 s: 3.3.9, ESTIMATED, `walk.jnl`'s 4 KB blocks and
+   their `f_sync`s, some 430 at 20k, in it; `gs` right after it: the walk's
+   slices as in L2.2, the syncs inside the longest), and the scan
    reads them: "Reading tags N / 19,410". `gs`: `[card] scan: S steps (F
    files), mean m ms, longest l ms` and the jobs line's `the scan ~x ms a
    file`: x about 8 ms idle with the cache (7.5-8.7), about 18 ms while
    playing; m near the slice (18 ms lit, 60 ms dark); l under 100 ms. The
-   whole scan (the status line's start to "Library updated"): 2.6-3.0 min
-   idle with the screen dark (3.3.9, ESTIMATED; at least 7 min before
-   2026-10-09), about 6 min lit; 3-6 min playing.
+   whole scan (the status line's start to "Library updated", less the
+   compactions, the build and what held the worker: the reading): 2.6-3.0
+   min idle with the screen dark (3.3.9, ESTIMATED; at least 7 min before
+   2026-10-09), about 6 min lit (in between, by the share of the time the
+   screen was lit: its `[screen] ... -> off` and `-> bright` lines); 3-6
+   min playing.
 2. The same while playing MP3, FLAC and on the headphones, and on the
    Dance page: `underruns=` doesn't move; `gs`'s waits show the ring,
    track changes, decode passes.

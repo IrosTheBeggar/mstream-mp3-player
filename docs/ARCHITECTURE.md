@@ -415,6 +415,16 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   1,536 B (`loopstack::kMinLeft`: an interrupt's frame, or a card error's
   log line, on top) the line says LOW, after any command. `ui` prints the
   lowest since the boot.
+- **The card's guard reopens the records on the loop**, outside the
+  console (main.cpp's `stepCardGuard()`, inlined in `loop()`: the same
+  card back after FatFs mounted it again, nothing under way):
+  `TagStore::open()` and `CardTasks::begin()`, ESTIMATED 3,472 B used at
+  worst (the task's top and `loop()`'s 608 B frame, then
+  `TagStore::open()`'s 2,688 B through `cardcontract::Container::open()`'s
+  672 B frame and a read of the card), 4,864 B with the SD driver's log
+  line on top: under `loop()`'s own worst (about 4.9 KB, the power
+  probe's CSV) and the boot's. It prints no `[console]` line; `ui`'s
+  lowest since the boot shows it (METADATA.md 6.3.1, L1).
 - **ESTIMATED worst cases**, bytes used from the stack's top (from the
   image: each function's `entry` frame, its calls and long calls, the
   VFS's, FatFs's disk and the console's function pointers by hand, the
