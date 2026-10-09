@@ -8,8 +8,9 @@
 // pass, a track change, a seek, Bluetooth) holding the background work for
 // exactly its window, in its order; the battery floor and its hysteresis;
 // the jobs' and the scan's sources' order; millis()'s wrap; the build after a
-// walk (U11); and a random run against an independent model. The
-// LibraryWrite blocker is in test_idle_policy.
+// walk (U11); a slice of the walk or the scan cut, and dropped to 0, by any
+// wait (2026-10-09); each step's units; and a random run against an
+// independent model. The LibraryWrite blocker is in test_idle_policy.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -127,22 +128,118 @@ void test_one_step_at_a_time() {
   const J kinds[] = {J::Cover, J::Build, J::Save, J::Walk, J::Compact, J::Scan, J::DjCheck};
   for (J running : kinds) {
     for (int moving = 0; moving < 2; ++moving) {
-      in.nowMs += 10;
-      in.running = running;
-      in.listMoving = moving == 1;
-      const S::Out o = s.update(in);
-      TEST_ASSERT_EQUAL(J::None, o.job);
-      TEST_ASSERT_EQUAL(W::Step, o.wait);
-      // Covers drop below the loop while a list moves (Thumbs' rule); the
-      // build stays level with it (the listener waits for it); the rest are
-      // below it.
-      const uint8_t want = running == J::Build ? S::kHighPriority
-                           : running == J::Cover ? (moving ? S::kLowPriority : S::kHighPriority)
-                                                 : S::kLowPriority;
-      TEST_ASSERT_EQUAL_UINT8(want, o.priority);
-      TEST_ASSERT_EQUAL_UINT8(want, S::priorityOf(running, moving == 1));
+      for (int dark = 0; dark < 2; ++dark) {
+        in.nowMs += 10;
+        in.running = running;
+        in.listMoving = moving == 1;
+        in.dark = dark == 1;
+        const S::Out o = s.update(in);
+        TEST_ASSERT_EQUAL(J::None, o.job);
+        TEST_ASSERT_EQUAL(W::Step, o.wait);
+        // Covers and the walk's slices drop below the loop while a list
+        // moves (Thumbs' rule); the build stays level with it (the listener
+        // waits for it); the scan's slices are level with it only while the
+        // screen is dark (3.3.9); the rest are below it.
+        const uint8_t want = running == J::Build                         ? S::kHighPriority
+                             : running == J::Cover || running == J::Walk ? (moving ? S::kLowPriority : S::kHighPriority)
+                             : running == J::Scan                        ? (dark && !moving ? S::kHighPriority
+                                                                                            : S::kLowPriority)
+                                                                         : S::kLowPriority;
+        TEST_ASSERT_EQUAL_UINT8(want, o.priority);
+        TEST_ASSERT_EQUAL_UINT8(want, S::priorityOf(running, moving == 1, dark == 1));
+        // A moving list cuts a slice (the walk's, the scan's) after its unit.
+        TEST_ASSERT_EQUAL(moving == 1 && (running == J::Walk || running == J::Scan), o.cut);
+      }
     }
   }
+  // Handed: the walk level with the loop, the scan only in the dark.
+  S t;
+  S::In h = base(0);
+  h.walk = true;
+  S::Out o = t.update(h);
+  TEST_ASSERT_EQUAL(J::Walk, o.job);
+  TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+  h.walk = false;
+  o = t.update(h);
+  TEST_ASSERT_EQUAL(J::Scan, o.job);
+  TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+  h.dark = true;
+  o = t.update(h);
+  TEST_ASSERT_EQUAL(J::Scan, o.job);
+  TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+  h.compact = true;
+  o = t.update(h);
+  TEST_ASSERT_EQUAL(J::Compact, o.job);
+  TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+}
+
+// A slice of the walk or the scan under way (CardJobs, 2026-10-09) is cut
+// after its unit, and dropped below the loop, by whatever would hold the
+// next one: input, the ring, an underrun, a long decode pass, a track
+// change, a seek, Bluetooth, a moving list, and for the scan the battery
+// floor. So a wait takes effect within a unit and a pass, as with one-unit
+// steps. A cover, a compaction, the build and the save aren't slices.
+void test_a_slice_is_cut_by_any_wait() {
+  struct Cause {
+    const char* name;
+    void (*set)(S::In&);
+  } causes[] = {
+      {"input", [](S::In& in) { in.input = true; }},
+      {"ring", [](S::In& in) { in.ringMs = 100; }},
+      {"underrun", [](S::In& in) { ++in.underruns; }},
+      {"decode pass", [](S::In& in) { in.decodePassUs = 50000; }},
+      {"track change", [](S::In& in) { in.decoderAtEnd = true; }},
+      {"seek", [](S::In& in) { in.seeking = true; }},
+      {"bluetooth", [](S::In& in) { in.btSetup = true; }},
+      {"list", [](S::In& in) { in.listMoving = true; }},
+  };
+  const J kinds[] = {J::Walk, J::Scan, J::Cover, J::Compact, J::Build, J::Save};
+  for (const Cause& c : causes) {
+    for (J running : kinds) {
+      S s;
+      S::In in = base(0);
+      in.dark = true;
+      s.update(in);
+      in.nowMs = 10;
+      in.running = running;
+      S::Out o = s.update(in);
+      TEST_ASSERT_FALSE_MESSAGE(o.cut, c.name);  // nothing holds it
+      const bool sliced = running == J::Walk || running == J::Scan;
+      if (sliced) TEST_ASSERT_EQUAL_UINT8_MESSAGE(S::kHighPriority, o.priority, c.name);
+      in.nowMs = 20;
+      c.set(in);
+      o = s.update(in);
+      TEST_ASSERT_EQUAL(W::Step, o.wait);
+      TEST_ASSERT_EQUAL_MESSAGE(sliced, o.cut, c.name);
+      if (sliced) TEST_ASSERT_EQUAL_UINT8_MESSAGE(S::kLowPriority, o.priority, c.name);
+    }
+  }
+  // The input's window: cut while it holds, level again after it (the slice
+  // under way was cut; the next is handed only once it ends).
+  S s;
+  S::In in = base(0);
+  in.running = J::Walk;
+  s.update(in);
+  in.nowMs = 100;
+  in.input = true;
+  TEST_ASSERT_TRUE(s.update(in).cut);
+  in.input = false;
+  in.nowMs = 599;
+  TEST_ASSERT_TRUE(s.update(in).cut);
+  in.nowMs = 600;
+  S::Out o = s.update(in);
+  TEST_ASSERT_FALSE(o.cut);
+  TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+  // The battery floor cuts the scan's slice, not the walk's.
+  S b;
+  S::In low = base(0);
+  low.battery = 5;
+  low.running = J::Scan;
+  TEST_ASSERT_TRUE(b.update(low).cut);
+  low.running = J::Walk;
+  o = b.update(low);
+  TEST_ASSERT_FALSE(o.cut);
+  TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
 }
 
 // Each yield holds the background work, reports itself, and lets go exactly
@@ -681,6 +778,29 @@ void test_the_build_after_a_walk() {
   TEST_ASSERT_EQUAL_UINT32(0, s.steps(J::Scan));
   TEST_ASSERT_EQUAL_UINT32(0, s.meanStepMs(J::Scan));
   TEST_ASSERT_EQUAL_UINT32(S::kEstimateMsPerFile, s.scanMsPerFile());
+  // Slices (2026-10-09): the rate is a file's, not a step's. Two slices of
+  // 16 ms and 17 ms took 2 files each, a loop source's file 10 ms, and a
+  // look at rows found none (5 ms, no file): 48 ms for 5 files.
+  s.stepDone(J::Scan, 16, 2);
+  s.stepDone(J::Scan, 17, 2);
+  s.stepDone(J::Scan, 10, 1);
+  s.stepDone(J::Scan, 5, 0);
+  TEST_ASSERT_EQUAL_UINT32(4, s.steps(J::Scan));
+  TEST_ASSERT_EQUAL_UINT32(5, s.units(J::Scan));
+  TEST_ASSERT_EQUAL_UINT32(12, s.meanStepMs(J::Scan));  // 48 / 4 steps
+  TEST_ASSERT_EQUAL_UINT32(10, s.scanMsPerFile());      // 48 / 5 files, rounded
+  // Only rows looked at so far: the estimate still.
+  S r;
+  r.stepDone(J::Scan, 5, 0);
+  TEST_ASSERT_EQUAL_UINT32(S::kEstimateMsPerFile, r.scanMsPerFile());
+  // The walk's slices count their CardWalk steps.
+  s.stepDone(J::Walk, 18, 6);
+  s.stepDone(J::Walk, 15, 5);
+  TEST_ASSERT_EQUAL_UINT32(2, s.steps(J::Walk));
+  TEST_ASSERT_EQUAL_UINT32(11, s.units(J::Walk));
+  s.resetStats();
+  TEST_ASSERT_EQUAL_UINT32(0, s.units(J::Walk));
+  TEST_ASSERT_EQUAL_UINT32(0, s.units(J::Scan));
 }
 
 // Where the time went (the console's 'gs', L3): each pass's time to what it
@@ -764,9 +884,24 @@ struct Model {
 
     const bool scan = in.playingPending || in.queueNextPending || in.queueSoonPending || in.shownPending ||
                       in.restPending;
+    W yield = W::None;
+    if (within(t, inputAt, c.inputQuietMs)) yield = W::Input;
+    else if (in.playing && in.ringCapacityMs && in.ringMs * 100ull < in.ringCapacityMs * 1ull * c.ringMinPct)
+      yield = W::Ring;
+    else if (within(t, underrunAt, c.underrunBackoffMs)) yield = W::Underrun;
+    else if (within(t, passAt, c.passBackoffMs)) yield = W::DecodePass;
+    else if (within(t, trackAt, c.trackSettleMs)) yield = W::TrackChange;
+    else if (within(t, seekAt, c.seekSettleMs)) yield = W::Seek;
+    else if (within(t, btAt, c.btSettleMs)) yield = W::Bluetooth;
     if (in.running != J::None) {
       o.wait = W::Step;
-      o.priority = in.running == J::Build || (in.running == J::Cover && !in.listMoving) ? 1 : 0;
+      const bool slice = in.running == J::Walk || in.running == J::Scan;
+      o.cut = slice && (in.listMoving || yield != W::None || (in.running == J::Scan && low));
+      if (o.cut) o.priority = 0;
+      else if (in.running == J::Build) o.priority = 1;
+      else if (in.running == J::Cover || in.running == J::Walk) o.priority = in.listMoving ? 0 : 1;
+      else if (in.running == J::Scan) o.priority = in.dark && !in.listMoving ? 1 : 0;
+      else o.priority = 0;
       return o;
     }
     if (in.build) {
@@ -792,21 +927,13 @@ struct Model {
       o.wait = W::Updating;
       return o;
     }
-    W w = W::None;
-    if ((next == J::Scan || next == J::DjCheck) && low) w = W::Battery;
-    else if (within(t, inputAt, c.inputQuietMs)) w = W::Input;
-    else if (in.playing && in.ringCapacityMs && in.ringMs * 100ull < in.ringCapacityMs * 1ull * c.ringMinPct)
-      w = W::Ring;
-    else if (within(t, underrunAt, c.underrunBackoffMs)) w = W::Underrun;
-    else if (within(t, passAt, c.passBackoffMs)) w = W::DecodePass;
-    else if (within(t, trackAt, c.trackSettleMs)) w = W::TrackChange;
-    else if (within(t, seekAt, c.seekSettleMs)) w = W::Seek;
-    else if (within(t, btAt, c.btSettleMs)) w = W::Bluetooth;
+    const W w = (next == J::Scan || next == J::DjCheck) && low ? W::Battery : yield;
     if (w != W::None) {
       o.wait = w;
       return o;
     }
     o.job = next;
+    o.priority = next == J::Walk || (next == J::Scan && in.dark) ? 1 : 0;
     o.source = next == J::Scan ? (in.playingPending     ? Src::Playing
                                   : in.queueNextPending ? Src::QueueNext
                                   : in.queueSoonPending ? Src::QueueSoon
@@ -834,13 +961,14 @@ void test_random_against_a_model() {
   S::In in = base(0);
   int64_t t = 0xFFFFFFFFll - 3600000ll;  // an hour before the wrap
   uint64_t runUntil = 0;
-  uint32_t scans = 0, covers = 0, builds = 0, held[S::kWaits] = {};
+  uint32_t scans = 0, covers = 0, builds = 0, cuts = 0, held[S::kWaits] = {};
   for (int pass = 0; pass < 900000; ++pass) {
     t += 5 + rng() % 36;
     in.nowMs = static_cast<uint32_t>(t);
     if (static_cast<uint64_t>(t) >= runUntil) in.running = J::None;
     flip(in.playing, 200, 100);
     flip(in.listMoving, 200, 2000);
+    flip(in.dark, 100, 100);
     flip(in.decoderAtEnd, in.playing ? 100 : 0, 1500);
     flip(in.seeking, in.playing ? 50 : 0, 3000);
     flip(in.btSetup, 20, 500);
@@ -874,10 +1002,12 @@ void test_random_against_a_model() {
     TEST_ASSERT_EQUAL_MESSAGE(want.wait, got.wait, "wait");
     TEST_ASSERT_EQUAL_MESSAGE(want.source, got.source, "source");
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(want.priority, got.priority, "priority");
+    TEST_ASSERT_EQUAL_MESSAGE(want.cut, got.cut, "cut");
     TEST_ASSERT_EQUAL_MESSAGE(want.batteryHeld, got.batteryHeld, "held");
     TEST_ASSERT_EQUAL_MESSAGE(want.batteryReleased, got.batteryReleased, "released");
     TEST_ASSERT_EQUAL(m.low, s.batteryLow());
     ++held[static_cast<int>(got.wait)];
+    if (got.cut) ++cuts;
     if (got.job != J::None) {
       TEST_ASSERT_EQUAL(J::None, in.running);
       if ((got.job == J::Scan || got.job == J::DjCheck)) TEST_ASSERT_FALSE(s.batteryLow());
@@ -892,6 +1022,7 @@ void test_random_against_a_model() {
   TEST_ASSERT_TRUE(scans > 10000);
   TEST_ASSERT_TRUE(covers > 1000);
   TEST_ASSERT_TRUE(builds > 10);
+  TEST_ASSERT_TRUE(cuts > 1000);
   for (int w = 1; w < S::kWaits; ++w) TEST_ASSERT_TRUE_MESSAGE(held[w] > 0, S::waitName(static_cast<W>(w)));
 }
 
@@ -900,6 +1031,7 @@ int main(int, char**) {
   RUN_TEST(test_defaults);
   RUN_TEST(test_runs_on_battery_and_while_playing);
   RUN_TEST(test_one_step_at_a_time);
+  RUN_TEST(test_a_slice_is_cut_by_any_wait);
   RUN_TEST(test_each_yield_holds_and_lets_go);
   RUN_TEST(test_the_ring_rule);
   RUN_TEST(test_track_changes_and_a_starts_refill);

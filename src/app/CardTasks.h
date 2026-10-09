@@ -21,7 +21,11 @@ class Thumbs;
 // The card worker's loop side (docs/METADATA.md 3.2.3, 3.3, 3.4.2;
 // milestones N10, N12): every loop pass it asks ScanScheduler (N7) what the
 // one card worker may do next, hands it that one step at that priority, and
-// takes in what the last step did. The jobs:
+// takes in what the last step did. A step of the walk or of the scan's rest
+// is a slice (CardJobs: so the walk isn't a hand-off a folder, each one
+// waiting out the loop's 5-20 ms sleep) of kLitSliceUs, or kDarkSliceUs
+// while the screen is dark, cut after its unit when a wait comes
+// (ScanScheduler's Out::cut). The jobs:
 //   - covers (ui/Thumbs), on any storage;
 //   - on the SD card, over the records Library opened: the validation
 //     walk, 2 s after the UI's first frame (3.2.3); the compactions; the
@@ -32,6 +36,12 @@ class Thumbs;
 //   - after a walk that found changes: "Found 12 new tracks", and the update
 //     step at once when ScanScheduler::buildAfterWalk() says so (U11: 200
 //     files or more, or a scan over 60 s), else at the scan's end;
+//   - after a walk that failed: walked again kWalkRetryMs later, at most
+//     kWalkRetries times a boot; and while the card's records don't list it
+//     (no transfer data in use, and D never walked: the first boot's walk
+//     failed), no update step: the build would list only the files the
+//     scan read (2026-10-09: a failed first walk shrank 19,410 tracks to
+//     the 204 the loop's sources had read);
 //   - a file the scan read: the index stops calling it Pending (so the
 //     playing track, the queue and the Library tab's page aren't asked for
 //     again), and the playing track's tags go to Now Playing at once
@@ -89,6 +99,20 @@ public:
   // The UI's first frame: the validation walk kWalkDelayMs later.
   void armWalk(uint32_t nowMs);
   static constexpr uint32_t kWalkDelayMs = 2000;
+  // A walk that failed (a write the card refused, a listing: often a
+  // glitch) is walked again this long after, at most this many times a
+  // boot.
+  static constexpr uint32_t kWalkRetryMs = 60000;
+  static constexpr uint32_t kWalkRetries = 2;
+  // A slice of the walk or the scan's rest (CardJobs::Config::sliceUs,
+  // METADATA.md 3.3.9). The loop hands the next at its first pass after a
+  // slice's end: every 5-7 ms while the screen is lit, so 18 ms loses a few
+  // ms a slice; every 20-22 ms while it is dark, where a slice under one
+  // pass would lose most of a pass whenever its units are 9 ms or more (a
+  // file of the scan, a first walk's folder), so three passes less a
+  // margin. A wait cuts either after its unit (ScanScheduler's Out::cut).
+  static constexpr uint32_t kLitSliceUs = 18000;
+  static constexpr uint32_t kDarkSliceUs = 60000;
 
   // Every loop pass. `in`: the environment (nowMs; listMoving, input; the
   // audio's ring, underruns, decode pass, track and seek; Bluetooth;
@@ -98,7 +122,9 @@ public:
 
   // ---- the update step (3.4.2, lib/core LibraryUpdate) ----
   // `deferToBoot` (gb!, L4.4): the memory check made to fail, so the step
-  // writes the build-at-boot marker as a short PSRAM would.
+  // writes the build-at-boot marker as a short PSRAM would. Not after a
+  // walk that failed while the card's records don't list it (above): the
+  // walk that lists it asks.
   void askUpdate(const char* why, bool deferToBoot = false);
   // g0: the walk now, the update step after it whatever it finds.
   void askWalkAndUpdate();
@@ -108,7 +134,9 @@ public:
   bool updating() const { return lastUpdate_.updating; }
   // What main.cpp carries out after loop(), each once: Fence (the fence up,
   // then fenceUp()), Live (the fence down, then live()), Deferred, Failed,
-  // Saved (for their lines; the jobs' side is done here).
+  // Saved (for their lines; the jobs' side is done here). Not a Failed for
+  // records that don't list the card (Step::unlisted): the card answered,
+  // and this class's own line says why.
   LibraryUpdate::Do takeAct() {
     const LibraryUpdate::Do a = act_;
     act_ = LibraryUpdate::Do::None;
@@ -155,7 +183,7 @@ private:
   static void buildEntry(void* self);
   static void saveEntry(void* self);
   static bool indexed(const char* rel, size_t len, void* ctx);
-  void taken(ScanScheduler::Job job, uint32_t nowMs);
+  void taken(ScanScheduler::Job job, uint32_t nowMs, uint32_t ms);
   void afterWalk(const cardjobs::Done& d);
   void afterScan(const cardjobs::Done& d, uint32_t nowMs);
   void scanEnded();
@@ -178,6 +206,11 @@ private:
   bool active_ = false;
   bool walkArmed_ = false;
   uint32_t walkAtMs_ = 0;
+  // A failed walk's retry (not "Checking the card…" while it waits).
+  bool walkRetryArmed_ = false;
+  uint32_t walkRetryAtMs_ = 0;
+  uint32_t walkRetries_ = 0;
+  bool walkFailed_ = false;  // the last walk failed: no update step while the records don't list the card
   // The step handed (its kind) and the scan's file per source.
   static constexpr int kSlots = 4;  // Playing, QueueNext, QueueSoon, Shown
   char picks_[kSlots][TrackCatalog::kMaxPath] = {};

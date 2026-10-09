@@ -21,8 +21,9 @@
 // (2.12.6: whole, it is taken), the build-at-boot marker, library.idx's
 // header, then libraryboot::decide()'s table (3.2.2): load it, build from
 // the records (the journals compacted first) and save, or (no records at
-// all) walk /music through the caller's walk and save; the marker goes once
-// its build is saved. The marker's build out of PSRAM on the boot's fresh
+// all, or records that don't list the card: no T in use and D never walked)
+// walk /music through the caller's walk and save; the marker goes once its
+// build is saved. The marker's build out of PSRAM on the boot's fresh
 // heap, with library.idx matching the card: that index is loaded instead
 // (stale, but a library) and the marker removed, and this session's update
 // steps don't write it again for a short PSRAM (bootBuildShort(): the next
@@ -46,7 +47,12 @@
 //             block or the largest free one. Short (or gb!), the marker is
 //             written and the step ends (Do::Deferred: "Library updates at
 //             next boot"); the next boot builds before the UI, on a fresh
-//             heap. Else:
+//             heap. Before the memory check, the records must list the card
+//             (recordsListCard(): T in use, or D walked): D with only what
+//             the scan read (the first boot's walk failed, 2026-10-09)
+//             would build an index of those files alone, so the step ends
+//             there (Do::Failed, Step::unlisted: the index untouched, no
+//             marker). Else:
 //   Fence     Do::Fence, once: the loop puts the fence up and calls
 //             fencedUp() in the same pass (steps 1-3: the queue flushed to
 //             queue.txt and its memory given back, the old index hidden from
@@ -312,6 +318,7 @@ public:
     bool walked = false;         // no records: /music walked
     bool noMemory = false;
     bool cardGone = false;       // a file that opened before the fence didn't on the worker, or a read of it failed
+    bool unlisted = false;       // Do::Failed: the records don't list the card (recordsListCard()): the index untouched
     bool readErrors = false;     // a read failed (cardGone, or T's with D read whole: saved as records left out)
     LibraryBuilder::Result build;
     bool journalsLeft = false;   // the compaction before it failed: tags.bin alone
@@ -349,6 +356,16 @@ public:
   // Whether the card answers for a build now: /music, and the records the
   // boot found (T while it isn't bad, D) opening.
   bool cardAnswers();
+  // Whether a build from the card's records, after the compaction an update
+  // step makes first, would list every file on it: T in use (it lists the
+  // card until the walk at its commit); or a walk to merge, or D walked (a
+  // walk listed the card into it); or no records at all (the build walks
+  // /music). False: no T, and D (or the journal it would be compacted
+  // from) holds only what the scan read: the first boot's walk failed, or
+  // hasn't merged. A build then would drop every other file (2026-10-09:
+  // 19,410 tracks to 204), so the update step refuses (Step::unlisted) and
+  // CardTasks doesn't ask after a failed walk.
+  bool recordsListCard() const;
 
 private:
   // The build of the records (T and D), or the walk (none): into the index.
@@ -357,6 +374,8 @@ private:
   bool buildIndex(bool update, LibraryBuilder::Result* r, bool* walked, bool* noMemory, bool* cardGone,
                   bool* readErrors);
   bool records() const;
+  // No T in use and D there but never walked: a build lists only its rows.
+  bool deviceUnlisted() const;
   void compactFirst(tagstore::TagStore::Compacted* c, bool* ran);
   bool save(const LibraryIndex::Inputs& inputs);
   float msSince(uint64_t t0) const;

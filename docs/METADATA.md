@@ -2273,6 +2273,30 @@ changed.
 (ESTIMATED). Each `f_readdir` holds the FatFs volume lock (`FF_FS_REENTRANT`)
 for a sector or two: about 35 µs cached, 0.6-1.0 ms uncached.
 
+**As built (2026-10-09, after N11's card on the device):** a step of the
+walk is one folder's listing (3.2.6), and the card worker runs several a
+hand-off, in slices (3.3.9). Before, a folder took three steps (entering
+it and leaving it read nothing) and the loop handed one a pass: N11's 20k
+card (2,591 folders) was 7,774 hand-offs, each waiting out the loop's
+20 ms sleep with the screen dark, about 2.7 min for the walk this section
+costs at 9-11 s. It is 2,593 steps now (host, `test_card_jobs`, on the
+card's own shape), 432 hand-offs at 3 ms a listing. The device's worker
+clock said about 15 ms a listing at priority 0 on the first walk (`gs`:
+5,189 steps, mean 5 ms, 1,731 folders), the idle task's half of the CPU
+and `walk.jnl`'s writes included (a 4 KB block and its `f_sync` about
+every 6 folders on a first walk, some 430 at 20k). From those
+(ESTIMATED; L2 measures): an unchanged card's walk at 20k 10-20 s (3-5 ms
+a folder at priority 1: about 9-14 s with the screen dark, 11-19 s lit),
+a first walk 20-30 s. Its start waits 2 s after the UI and for Bluetooth:
+a page of the remembered headphones is a link being set up (3.3.9's
+yield, and the 3 s after), which held the boot's walk about 13 s on
+2026-10-08. A walk that fails says why (`the walk FAILED (the journal's
+write)`, CardWalk's `errorName()`), runs again 60 s later, twice at most
+a boot; and while the card's records don't list it (no T in use, D never
+walked: a first boot's), no update step runs (3.8, 3.9). The scan went
+on after that failed walk, and its update step built the library from
+what the scan had read: 19,410 tracks became 204, saved.
+
 #### 3.2.4 The PSRAM sector cache
 
 **`lib/core/SectorCache` (portable; built, 3.2.7):** an LRU of single 512 B
@@ -2389,8 +2413,12 @@ where 3.2.3 left room:
   walk's output).
 - **Memory and steps:** the walk is about 7 KB, a streamed T's walker
   3.9 KB and its 8 KB of buffers, the scratch 64 KB: PSRAM, never the
-  worker's stack. A step lists at most one folder (or one pass of a big
-  one) or reads at most one qfp.
+  worker's stack. A step lists one folder (or one pass of a big one),
+  with the moves into and out of folders before it, which read nothing;
+  or ends the walk (D's folders it didn't reach, T's end); or settles a
+  few doubts with at most one qfp read. A card of F folders that fit
+  takes F + 2 steps with no doubts. (2026-10-09: the moves were steps of
+  their own, three a folder, and each was a hand-off on the device: 3.2.3.)
 
 #### 3.2.7 As built (N8)
 
@@ -2571,6 +2599,15 @@ back-to-back steps would halve the loop's share for minutes. So:
 
 **Cost** (ESTIMATED; L3 measures): a full 20k scan takes 2.5-2.9 min idle
 with the cache, 3-6 min while playing (14-23 min idle without the cache).
+
+**As built (2026-10-09):** a step is still one file or one folder, but the
+worker takes a slice of them a hand-off (3.3.9), and two jobs run level
+with the loop when nothing holds them: the walk's slices, and the scan's
+while the screen is dark. One file a hand-off at priority 0 held the scan
+to a loop pass a file: at least 7 min for 20k files with the screen
+dark, against the cost above. With 60 ms slices at priority 1 in the
+dark it is about 2.6-3.0 min idle (ESTIMATED at 7.5-8.7 ms a file); lit,
+at priority 0, about twice that, as before (the loop draws then).
 
 **Risk:** the worker's 6 KB stack is held for the whole scan, and
 Bluetooth mode has the least internal RAM. Nothing large lives on it:
@@ -2878,6 +2915,70 @@ where 3.3.3-3.3.5 left room:
   for 20k while playing, with the sector cache).
 - **Where the time went:** the time spent waiting on each reason, and each
   job's steps, mean and longest step (`stepDone()`): `gs` and L3's figures.
+  Since 2026-10-09 each step's units too (`stepDone(job, ms, units)`: a
+  slice's walk steps, the files a scan step took, 0 when it only looked at
+  rows): `gs` prints `walk: H slices (S walk steps)` and `scan: H steps (F
+  files)`, and the scan's rate for U11's estimate is its time over its
+  files, not its steps.
+- **Slices (2026-10-09).** A step of the walk or of the scan's rest is a
+  slice: `CardJobs` runs its units (a CardWalk step, a file) one after
+  another until the slice has passed on the worker's clock
+  (`Config::nowUs`, esp_timer), each unit whole, the next one started only
+  when the last one's time still fits. `CardTasks` gives 18 ms while the
+  screen is lit and 60 ms while it is dark. The loop hands the next slice
+  at its first pass after one ends: lit, 5-7 ms later; dark, 20-22 ms
+  later, so a dark slice under one pass would lose most of a pass whenever
+  a unit takes 9 ms or more (a file of the scan; a first walk's folder,
+  15 ms at priority 0 on the device), and 60 ms is three dark passes less
+  a margin. A file a loop source names (the playing track, the queue, the
+  Library tab) is a step of its own; a slice of the rest takes 32 files at
+  most (their paths for the loop, `CardJobs::file()`, in the scan's PSRAM,
+  about 8 KB). The record for Now Playing's overlay is the step's last
+  file's: a slice that read the playing track before its last file shows
+  its tags at the next build (it is the playing track's own step first
+  whenever it is Pending). Why: a unit a hand-off made the loop's sleep
+  the floor of every unit (N11's walk 7,774 hand-offs, about 2.7 min with
+  the screen dark; its scan at least 7 min).
+- **A slice under way is cut** (`Out::cut`, `CardJobs::cutSlice()`): the
+  pass that sees a list move, or any yield above apply (the battery floor
+  too, for the scan), drops it to priority 0 and has it end after its
+  unit. So a wait holds the walk and the scan within one unit and a pass
+  (a folder's listing, a file: as with one-unit steps), not a slice and a
+  pass.
+- **The priority decision (2026-10-09).** Priority 0 shares what the loop
+  leaves with the idle task, about half of it (`configIDLE_SHOULD_YIELD`
+  is 0: the idle task keeps its whole tick); covers measured 2-2.5x slower
+  at 0 (ARCHITECTURE.md). Two ways out were weighed. Waking the loop when
+  a step ends (a notification instead of its `delay()`) was not taken: it
+  changes the loop's cadence for everything (the UI's frame clock, the
+  power it draws) to serve the card worker; it needs `main.cpp`'s sleep
+  replaced; a wake from outside (`xTaskAbortDelay()`) would also cut short
+  the loop's other timed waits; and with slices the loop's sleep is no
+  longer each unit's floor. Taken instead: **the walk's slices at priority
+  1 while no list moves and no wait applies**, as covers: the walk is
+  seconds once a boot (10-30 s at 20k, ESTIMATED), the Library tab says
+  "Checking the card…" through it, input and a moving list drop it to 0
+  within a pass, and its time-slicing with the loop lasts a slice at
+  most. **The scan's slices at priority 1 only while the screen is dark**
+  (`In::dark`: the UI isn't up and lit, `CardTasks`' `!covers`): the scan
+  is minutes long, and lit the loop draws (the Dance page's 24-30 frames
+  a second, list frames on 30 fps deadlines), which a step level with it
+  would stretch by 1 ms turns for minutes, 3.3.4's concern; dark, the
+  loop only reads touches every 20 ms. The rest stay at 0 (a compaction,
+  the save, the DJNB check). The decoder (2) is above both either way.
+  L2, L3 and L5 measure it (6.3.1): `gs`'s slices, the times, the
+  `[stats]` line's `pass_max=` and `underruns=`.
+- **The figures** (ESTIMATED from the device's 15 ms a first walk's
+  listing at priority 0, and 3.2.3's and 3.3.4's costs): the walk at 20k
+  10-20 s on an unchanged card, 20-30 s on a first walk (it was 2.7 min
+  with the screen dark, 50 s lit at best); the scan 2.6-3.0 min idle with
+  the screen dark, about 6 min lit.
+- **Bluetooth holds the walk too:** a page of the remembered headphones is
+  a link being set up (`btSetup`), and the 3 s after it. On 2026-10-08 it
+  held the boot's walk about 13 s past its 2 s (pages at 74, 84 and 94 s),
+  and a later session's `gs` said 34.4 s of `Bluetooth` in all. Expected
+  (paging ends; the walk is background work), but the walk's own time in
+  `[card] the walk: ... in M ms` counts from its first slice, after it.
 - **millis()'s wrap:** a window is cleared once it has passed, so an old
   one can't come back 24.8 days later (a device on USB for weeks).
 - **The glue's inputs (N10):** `listMoving` is the page's `animating()`;
@@ -2911,12 +3012,16 @@ where 3.3.3-3.3.5 left room:
   the last time it was seen, in 64-bit time): every answer equal. Six
   mutations of the rules (an off-by-one window, two yields swapped, the
   floor's resume at 15%, the DJNB check unfloored, covers during a moving
-  list, no baseline for the counters) each fail it. `test_idle_policy`
-  adds `LibraryWrite` to every blocker's test and to the random run, and
-  runs the real `SleepTimer` into `IdlePolicy`: an update step at the end
-  of the countdown after the timer's pause holds the power-off until 20
-  min after it ends, an update step in the warning ends it, and one in
-  the release cancels it.
+  list, no baseline for the counters) each fail it. Since 2026-10-09:
+  each step's priority with the screen lit and dark, a slice cut (and
+  dropped to 0) by each wait and a moving list but no other step, the
+  battery floor cutting the scan's and not the walk's, each step's units
+  and the scan's rate a file; the model has `dark` and `cut` too.
+  `test_idle_policy` adds `LibraryWrite` to every blocker's test and to
+  the random run, and runs the real `SleepTimer` into `IdlePolicy`: an
+  update step at the end of the countdown after the timer's pause holds
+  the power-off until 20 min after it ends, an update step in the warning
+  ends it, and one in the release cancels it.
 
 ### 3.4 The builder
 
@@ -3544,14 +3649,18 @@ src/. What the code decided where 3.2-3.4 left room:
   (2026-10-08 review: the last life's mark and the lowest since the boot,
   neither what L3 and L4 measure).
 - **The loop's side** (`app/CardTasks`, every pass after the UI's): the
-  finished step taken in (`stepDone()` with its time), the boot's walk 2
-  s after the UI's first frame (`armWalk()`), the scan only once that walk
-  ended (D's to-do is known then: 3.3.9), the work flags read only
-  while the worker is free (a step may change them), the scheduler's
-  `update()` with N7's inputs, then the step: `CardJobs::prepare()` on the
-  loop (its memory, the scan's file), `step()` on the worker,
-  `finish()` on the loop after it. Between steps, a chunk waiting 5 s with
-  the worker free is written from the loop (the floor, a pause); one the
+  finished step taken in (`stepDone()` with its time and, since
+  2026-10-09, its units), the boot's walk 2 s after the UI's first frame
+  (`armWalk()`), the scan only once that walk ended (D's to-do is known
+  then: 3.3.9), the work flags read only while the worker is free (a step
+  may change them), the scheduler's `update()` with N7's inputs (and
+  `dark`: the UI isn't up and lit), then the step: `CardJobs::prepare()`
+  on the loop (its memory, the scan's file, the slice: 18 ms lit, 60 ms
+  dark), `step()` on the worker, `finish()` on the loop after it; while a
+  step runs, its priority each pass and, when the scheduler says
+  `Out::cut`, `CardJobs::cutSlice()` (3.3.9). Between steps, a chunk
+  waiting 5 s with the worker free is written from the loop (the floor, a
+  pause); one the
   card refused is offered again 30 s later (`CardJobs::idleFlush()`,
   `Config::retryMs`), not every pass (2026-10-08 review: every pass, each
   a FatFs open, about 1 s of the SD driver's retries on a pulled card and
@@ -3574,8 +3683,9 @@ src/. What the code decided where 3.2-3.4 left room:
 - **The walk** (`CardJobs`): its first step writes the scan's chunk (N7's
   rule, and `append()` refuses during a walk), opens T (streamed on the
   first walk after a commit, through HIDX after), D (`KnownD`) and
-  `walk.jnl` (`WalkSink`), then lists; each step after is one CardWalk
-  step. **T that fails as it streams** (CardWalk's `Error::Transfer`)
+  `walk.jnl` (`WalkSink`), then lists; each step is a slice of CardWalk's
+  steps (3.3.9; until 2026-10-09 one CardWalk step, a third of a folder).
+  **T that fails as it streams** (CardWalk's `Error::Transfer`)
   makes the walk start over without T, against no identity (D then
   records a walk against none: the next boot's walk is a first one and
   tries T again); T that won't even open is left out the same way. A walk
@@ -3588,6 +3698,21 @@ src/. What the code decided where 3.2-3.4 left room:
   off). A walk under way goes on to its end when the update step is
   asked: the compaction before the build can't run while it writes
   `walk.jnl`.
+- **A walk that fails** (2026-10-09; a `walk.jnl` write the card refused
+  on 2026-10-08, CardWalk's `Error::Sink`): the log names the error
+  (`[card] the walk FAILED (the journal's write) after N steps: nothing of
+  it counts (walked again in 60 s)`), and `CardTasks` asks it again 60 s
+  later, twice at most a boot (`kWalkRetries`). The scan goes on (the
+  loop's sources; D's rest as it was). While the card's records don't
+  list it (`LibraryUpdate::recordsListCard()`: no T in use, and D never
+  walked or about to be compacted from the scan's records alone), no
+  update step is asked after a failed walk (`[card] the update step (the
+  scan's end) waits: the walk failed, and the card's records don't list
+  it yet`), and the update step itself refuses (3.9): on N11's card the
+  first boot's walk failed, the scan read the 204 files the loop named,
+  and the update step at its end built the library from them, 19,410
+  tracks to 204, saved for the next boot. The walk that lists the card
+  changes D, so the scan's end asks again.
 - **The walk's news is the files new to the index**, not to D: an index
   built from T, or walked from /music, lists files D has no row for yet,
   so the walk's sink counts its Added rows the index can't find
@@ -3601,8 +3726,9 @@ src/. What the code decided where 3.2-3.4 left room:
   Library tab's first), and one update step shows their tags: no pause in
   between.
 - **The scan.** Its "rest" is D's merged view (a `TagStore::View`) kept
-  open across steps: each step looks at most 512 rows (the host tests
-  use 3) for the next Pending one. It is closed before a walk or a
+  open across steps: each unit looks at most 512 rows (the host tests
+  use 3) for the next Pending one, and a step takes files until its slice
+  is up (3.3.9), 32 at most. It is closed before a walk or a
   compaction (they write what it reads) and opened again after, the chunk
   written first so the new View has what the scan read. A file a loop
   source named (the playing track, the queue's next 3 and 200, the
@@ -3619,7 +3745,8 @@ src/. What the code decided where 3.2-3.4 left room:
   100 files, at half its 32 KB of entries, 5 s after its first record,
   at the View's end, and before any other job; a journal full to its 32
   chunks refuses it, kept, until the compaction the store then asks for.
-- **What the loop learns from a scan step:** the index's track for the
+- **What the loop learns from a scan step**, for each file it took (a
+  slice's several, `CardJobs::file()`): the index's track for the
   file stops being Pending (`LibraryIndex::clearPending()`, a new
   portable call that changes nothing else), so the playing track, the
   queue and the Library tab's page don't name it again; the playing
@@ -3742,7 +3869,7 @@ src/. What the code decided where 3.2-3.4 left room:
   write-aside rule, not 2.12.6's twins; the DJNB check is never asked (no
   AutoDJ engine yet). (N12's review found the compaction's frame 13 KB
   deep on the 6 KB card worker: fixed, 3.9.)
-- **Proven on the host:** `test_card_jobs` (9 tests): every row of
+- **Proven on the host:** `test_card_jobs` (12 tests): every row of
   3.2.2's table and `matches()`'s inputs; the root's election, T against
   its COMP entry, LIBR, the plan; a hand-filled card (tagged corpus files
   among noise) walked, scanned once each, compacted and built into an
@@ -3758,7 +3885,16 @@ src/. What the code decided where 3.2-3.4 left room:
   (a walk's failed merge handed once, the refused chunk offered again
   only after `retryMs`, a refused read no news for the update step) and a
   rest that ends on a pulled card (`restFailed`), the soft inputs a build
-  that left the journals out saves, T's record count. `test_sector_cache`
+  that left the journals out saves, T's record count; and since
+  2026-10-09 N11's synthetic card's walk (its shape as the device walked
+  it, `test/fixtures/synthcard/walk-shape.txt`, the names made up: 2,591
+  folders, 19,410 audio files) at 2,593 steps where the old steps give
+  the device's 7,774, in 432 slices of 18 ms at 3 ms a listing, the
+  unchanged card's the same with nothing written, and a cut after the
+  listing under way; and the scan's slices (two 8 ms files a slice, 18 of
+  1 ms, the list's 32 in a 60 ms one, the cut after the file under way, a
+  loop source's file a step of its own, each file listed for the loop).
+  `test_sector_cache`
   (the wrapper's rules, `CachedDrive`: a mount clears, a write with the
   cache off drops, on again starts empty, verify, the deferred reset),
   `test_fat_model` (a card swapped under the wrapper: FatFs's own remount
@@ -3819,7 +3955,10 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   writing it again (`Step::markerSkipped`, no toast; `gb!` still writes
   it). A build that met a read error (`Booted::readErrors`: the card?) is
   saved with the journal's sequence `kJournalsLeftOut`, as one that left
-  records out: the next boot loads it soft-stale and rebuilds.
+  records out: the next boot loads it soft-stale and rebuilds. A boot that
+  must build (no `library.idx`, the marker) while D doesn't list the card
+  (no T in use, D never walked: only what the scan read after a failed
+  first walk) walks /music instead, every file Pending (2026-10-09).
 - **The update step, pass by pass** (`update()` with the worker's, the
   jobs', the player's and the memory's state; `Out` says what to hold and
   what the loop does now, each once):
@@ -3835,6 +3974,11 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
      waits here, the index as it is, never behind a fence whose build
      can't start), the card answers (`/music` exists, T and D open: a
      pulled card fails the step here, `Do::Failed`, the index untouched),
+     the card's records list it (`recordsListCard()`, 2026-10-09: T in
+     use, or D walked; else `Do::Failed` with `Step::unlisted`, the index
+     untouched, and before the memory check, so `gb!` writes no marker
+     whose boot would build those files alone: a failed first walk, then
+     the scan's records compacted into D, made N11's 19,410 tracks 204),
      then the memory check (N10's, with Thumbs' pools counted too: the
      index, the queue's entries and the pools, about 315 KB, go before the
      build). Short, or `gb!`: the marker, `Do::Deferred` and the toast
@@ -4009,7 +4153,7 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   firmware links are the console's (`gt`'s `mptg::check()` 3.8 KB, `gt`'s
   dump 1.3 KB: the loop's) and TagScan's 1.3 KB (the worker's scan, 3.3.4's
   budget).
-- **Proven on the host:** `test_library_update` (13 tests, like
+- **Proven on the host:** `test_library_update` (14 tests, like
   `test_idle_policy`: the scheduler, CardJobs on FakeFat's trees and the
   records and `library.idx` on CutFs, a worker whose steps take passes,
   the loop's catalog): the safe point and the memory check at their
@@ -4038,7 +4182,13 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   again), the worker's task before the fence (no internal RAM: the step
   waits, the index untouched), and the marker's build out of PSRAM at the
   boot (loaded instead, the marker gone, not written again that
-  session; `gb!` writes it); and `spareOf()` at its edges.
+  session; `gb!` writes it); and `spareOf()` at its edges. Since
+  2026-10-09, a failed first walk (its `walk.jnl` write refused), the
+  loop's sources scanned, then the update step: it refuses before its
+  fence (and `gb!` writes no marker), and the index keeps every track,
+  where the investigation's host test went from 6 tracks to 2; a boot
+  that must build from that D walks /music; the walk that lists the card,
+  then the update step with every track and the scanned tags.
   `test_gapless_player` (4 more): every id renumbered behind
   the fence with the join after it kept (one play, no cut); a join heard
   inside the fence taken after it by its path; a track that ends inside
@@ -4539,12 +4689,21 @@ the next epoch). Then:
 2. About 2 s after the UI's first frame (the Library's status line says
    "Checking the card…"): `[card] the walk: F folders (L listings, 0
    merged), A audio ...; 0 added, 0 changed, 0 gone; ...; S steps in M ms`:
-   M about 10 s at 20k with the cache (under 0.05 s at 77); `gs`'s `[card]
-   walk: S steps, mean m ms, longest l ms` (a step is a folder: l under
-   100 ms wanted).
+   S = F + 2 (a step a folder: 2,593 on N11's card; 7,774 before
+   2026-10-09), M 10-20 s at 20k with the cache (3.3.9, ESTIMATED: 2.7 min
+   with the screen dark before), under 0.05 s at 77. Then `gs`: `[card]
+   walk: H slices (S walk steps), mean m ms, longest l ms`: several walk
+   steps a slice (S/H about 4-15), m near the slice (18 ms lit, 60 ms
+   dark), l under about 100 ms (a slice and one unit; a 3,000-file
+   folder's pass, 0.3-0.6 s, is the exception). The same walk with the
+   screen dark: `gw` once it is off (the console's line is input for
+   0.5 s only), and M again. Record how long `Bluetooth` held its start
+   (`gs`'s waits; about 13 s on 2026-10-08 while remembered headphones
+   were paged).
 3. During the walk, play MP3, then FLAC, then on the headphones: the
-   `[stats]` line's `underruns=` doesn't move; `gs`'s `[card] waited (s):`
-   shows what the walk yielded to.
+   `[stats]` line's `underruns=` doesn't move and `pass_max=` stays near
+   its figure without a walk; `gs`'s `[card] waited (s):` shows what the
+   walk yielded to.
 4. A hand-copied album added on a PC (12 files): the walk says `12
    added`, the toast "Found 12 new tracks", the status line "Reading tags
    0 / 12" then "Updating library…", and `[card] the update step (the
@@ -4552,6 +4711,15 @@ the next epoch). Then:
 5. 200 files or more added: `[card] the update step is asked (the walk
    found new files)` right after the walk (U11): the files show by their
    names first, with their tags after the scan.
+6. A walk that fails (a write the card refused, as on 2026-10-08): `[card]
+   the walk FAILED (the journal's write) after N steps: nothing of it
+   counts (walked again in 60 s)`, with `; no update step until a walk
+   lists the card` on a card whose records don't list it (a first boot's),
+   then `[card] the walk again (retry 1 of 2)` a minute later. The scan
+   goes on (the playing track, the queue's); at its end `[card] the update
+   step (the scan's end) waits: the walk failed, and the card's records
+   don't list it yet`. The library keeps every track (the Library tab, `g`)
+   through it and through the next boot.
 
 **L3, the scanner** (3.3; risk 7). N11's card from a fresh `/.player`
 (delete it on a PC: every file the scan's). `gs`'s waits, steps, stack
@@ -4561,10 +4729,13 @@ page) and `gs` at its end.
 
 1. The first boot walks /music (the line above), the walk adds every file
    (`19,410 added`, no toast: none is new to the index), and the scan
-   reads them: "Reading tags N / 19,410". `gs`: `[card] scan: S steps,
-   mean m ms, longest l ms`: m about 8 ms idle with the cache (7.5-8.7),
-   about 18 ms while playing; l under 100 ms. The whole scan (the status
-   line's start to "Library updated"): 2.5-2.9 min idle, 3-6 min playing.
+   reads them: "Reading tags N / 19,410". `gs`: `[card] scan: S steps (F
+   files), mean m ms, longest l ms` and the jobs line's `the scan ~x ms a
+   file`: x about 8 ms idle with the cache (7.5-8.7), about 18 ms while
+   playing; m near the slice (18 ms lit, 60 ms dark); l under 100 ms. The
+   whole scan (the status line's start to "Library updated"): 2.6-3.0 min
+   idle with the screen dark (3.3.9, ESTIMATED; at least 7 min before
+   2026-10-09), about 6 min lit; 3-6 min playing.
 2. The same while playing MP3, FLAC and on the headphones, and on the
    Dance page: `underruns=` doesn't move; `gs`'s waits show the ring,
    track changes, decode passes.
@@ -4585,7 +4756,9 @@ page) and `gs` at its end.
    grows before release). Internal RAM: the same line's `lowest X B while
    a step ran` in Bluetooth mode, against the 50 KB the soaks kept.
 5. The loop: the `[stats]` line's `pass_max=` and the scroll lines' frame
-   times during the scan (L5's too).
+   times during the scan (L5's too), with the screen lit (the scan at
+   priority 0) and dark (at 1: `pass_max=` against the same without a
+   scan), and the Dance page's frame rate while it scans.
 6. The battery: on battery below 10%, `[card] the battery is below 10%:
    the scan waits for USB or 15%`, and `gs` says `waiting for the battery
    (below the floor)`.

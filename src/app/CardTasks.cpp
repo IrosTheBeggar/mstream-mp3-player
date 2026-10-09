@@ -4,6 +4,7 @@
 #include "app/CardTasks.h"
 
 #include <esp_heap_caps.h>
+#include <esp_timer.h>
 
 #include <cstring>
 
@@ -24,6 +25,8 @@ constexpr size_t kMusicPrefix = 7;  // "/music/"
 constexpr uint32_t kChunkIdleMs = 5000;
 // The scan's memory given back after this long without a scan step.
 constexpr uint32_t kTrimMs = 10000;
+
+uint64_t nowUs() { return static_cast<uint64_t>(esp_timer_get_time()); }
 
 int slotOf(Src s) {
   switch (s) {
@@ -74,6 +77,9 @@ bool CardTasks::begin() {
   c.release = psramFree;
   c.indexed = indexed;
   c.indexedCtx = this;
+  // A step of the walk or the scan's rest is a slice (3.3.9).
+  c.nowUs = nowUs;
+  c.sliceUs = kLitSliceUs;
   jobs_.begin(c);
   active_ = true;
   // A soft-stale index (the scan went on since its build, a build that left
@@ -149,13 +155,17 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   // 1. The step that finished.
   Job done = Job::None;
   uint32_t ms = 0;
-  if (worker_.poll(now, &done, &ms)) {
-    sched_.stepDone(done, ms);
-    taken(done, now);
-  }
-  // 2. The boot's validation walk, 2 s after the UI's first frame.
+  if (worker_.poll(now, &done, &ms)) taken(done, now, ms);
+  // 2. The boot's validation walk, 2 s after the UI's first frame; a failed
+  // walk's retry.
   if (walkArmed_ && static_cast<int32_t>(now - walkAtMs_) >= 0) {
     walkArmed_ = false;
+    jobs_.askWalk();
+  }
+  if (walkRetryArmed_ && static_cast<int32_t>(now - walkRetryAtMs_) >= 0) {
+    walkRetryArmed_ = false;
+    Serial.printf("[card] the walk again (retry %lu of %lu)\n", (unsigned long)walkRetries_,
+                  (unsigned long)kWalkRetries);
     jobs_.askWalk();
   }
   // 3. The update step (LibraryUpdate, 3.4.2): what it waits for, what it
@@ -183,7 +193,10 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     // The fence goes up only once the build can start at once: the task
     // first (no internal RAM for it: the step waits, the index untouched).
     if (uo.wantWorker) worker_.ensure(now);
-    if (uo.act != LibraryUpdate::Do::None) act_ = uo.act;
+    // (A refusal for records that don't list the card isn't main.cpp's:
+    // its Failed line says the card doesn't answer. This one says why.)
+    const bool unlisted = uo.act == LibraryUpdate::Do::Failed && up->last().unlisted;
+    if (uo.act != LibraryUpdate::Do::None && !unlisted) act_ = uo.act;
     switch (uo.act) {
       case LibraryUpdate::Do::Deferred:
         ++deferred_;
@@ -195,8 +208,11 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
       case LibraryUpdate::Do::Failed:
         ++updates_;
         updateOver();
-        Serial.printf("[card] the update step (%s): FAILED before its fence (the library stays as it was)\n",
-                      up->why());
+        Serial.printf("[card] the update step (%s): FAILED before its fence (the library stays as it was)%s\n",
+                      up->why(),
+                      up->last().unlisted ? ": the card's records don't list it (no transfer data, and no walk yet "
+                                            "listed it into tags.bin); a walk that does asks again"
+                                          : "");
         break;
       case LibraryUpdate::Do::Saved: updateOver(); break;
       default: break;
@@ -238,12 +254,20 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   in.build = uo.build;
   in.save = uo.save;
   in.updating = uo.updating;
+  // The UI isn't up and lit (dark; or not started, or a screen of its own,
+  // where input holds the scan anyway): a scan's slice may be level with
+  // the loop (3.3.9).
+  in.dark = !covers;
   // 5. The scheduler.
   const ScanScheduler::Out o = sched_.update(in);
   if (o.batteryHeld) Serial.println("[card] the battery is below 10%: the scan waits for USB or 15%");
   if (o.batteryReleased) Serial.println("[card] the battery floor lifted: the scan goes on");
   lastWait_ = o.wait;
-  if (in.running != Job::None) worker_.setPriority(o.priority);
+  if (in.running != Job::None) {
+    worker_.setPriority(o.priority);
+    // A wait came, or a list moves: the slice under way ends after its unit.
+    if (o.cut) jobs_.cutSlice();
+  }
   // 6. The step.
   if (o.job == Job::Cover) {
     if (thumbs) thumbs->startCover(worker_, o.priority, now);
@@ -261,6 +285,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     const int slot = o.job == Job::Scan ? slotOf(o.source) : -1;
     const char* rel = slot >= 0 ? picks_[slot] : nullptr;
     const size_t len = slot >= 0 ? pickLen_[slot] : 0;
+    jobs_.setSlice(in.dark ? kDarkSliceUs : kLitSliceUs);
     if (jobs_.prepare(o.job, o.source, rel, len, now) && worker_.start(o.job, o.priority, stepEntry, this, now)) {
       if (o.job == Job::Compact) compacting_ = true;
       if (o.job == Job::Walk && !walkSeen_) {
@@ -296,9 +321,13 @@ void CardTasks::scanEnded() {
   askUpdate("the scan's end");
 }
 
-void CardTasks::taken(Job job, uint32_t nowMs) {
-  if (job == Job::Cover || job == Job::None) return;  // Thumbs takes its own in
+void CardTasks::taken(Job job, uint32_t nowMs, uint32_t ms) {
+  if (job == Job::Cover || job == Job::None) {
+    sched_.stepDone(job, ms);
+    return;  // Thumbs takes its own in
+  }
   if (job == Job::Build || job == Job::Save) {
+    sched_.stepDone(job, ms);
     LibraryUpdate* up = lib_.update();
     if (job == Job::Build) {
       up->buildDone();
@@ -308,6 +337,9 @@ void CardTasks::taken(Job job, uint32_t nowMs) {
     return;
   }
   const cardjobs::Done& d = jobs_.finish();
+  // The step's units for gs and the scan's rate: a slice's CardWalk steps,
+  // or the files the scan took.
+  sched_.stepDone(job, ms, job == Job::Walk ? d.walkSteps : job == Job::Scan ? d.files : 1);
   switch (job) {
     case Job::Walk:
       if (d.walkEnded) afterWalk(d);
@@ -341,11 +373,27 @@ void CardTasks::afterWalk(const cardjobs::Done& d) {
   }
   bootWalkDone_ = true;  // the scan goes on from D as it is, whatever the walk found
   if (r.state != cardwalk::CardWalk::State::Done) {
-    Serial.printf("[card] the walk FAILED (error %u) after %lu steps: nothing of it counts (the next boot walks "
-                  "again)\n",
-                  static_cast<unsigned>(r.error), (unsigned long)r.steps);
+    // Nothing of it counts. Often a glitch (a write the card refused once):
+    // walked again a minute later, twice at most; then the next boot's. The
+    // scan goes on; while the card's records don't list it, no update step
+    // (askUpdate()): built from the files the scan read, it would drop the
+    // rest of the library.
+    walkFailed_ = true;
+    char next[40];
+    if (walkRetries_ < kWalkRetries) {
+      ++walkRetries_;
+      walkRetryArmed_ = true;
+      walkRetryAtMs_ = millis() + kWalkRetryMs;
+      snprintf(next, sizeof(next), "walked again in %lu s", (unsigned long)(kWalkRetryMs / 1000));
+    } else {
+      snprintf(next, sizeof(next), "the next boot walks again");
+    }
+    Serial.printf("[card] the walk FAILED (%s) after %lu steps: nothing of it counts (%s)%s\n",
+                  cardwalk::CardWalk::errorName(r.error), (unsigned long)r.steps, next,
+                  lib_.update()->recordsListCard() ? "" : "; no update step until a walk lists the card");
     return;
   }
+  walkFailed_ = false;
   Serial.printf("[card] the walk: %lu folders (%lu listings, %lu merged), %lu audio, %lu images, %lu other; %lu "
                 "added, %lu changed, %lu gone; %lu doubtful (%lu by the skew, %lu by D's qfp, %lu read, %lu not T's)%s; "
                 "%lu steps in %lu ms\n",
@@ -393,29 +441,42 @@ void CardTasks::afterScan(const cardjobs::Done& d, uint32_t nowMs) {
                   (unsigned long)v.checked, (unsigned long)v.equal, (unsigned long)v.differ, (unsigned long)v.noQfp,
                   (unsigned long)v.failed);
   }
-  if (!d.handled || d.relLength == 0) return;
-  // The index's track, if it has one: no longer Pending; the playing one's
-  // tags shown now.
+  // Each file the step took (a slice's several): the index's track, if it
+  // has one, no longer Pending; the playing one's tags shown now (the
+  // record is the step's last file's: a slice of the rest that read the
+  // playing track before its last file shows its tags at the next build).
   LibraryIndex* idx = lib_.index();
-  if (idx && idx->ready()) {
-    char path[TrackCatalog::kMaxPath];
-    snprintf(path, sizeof(path), "/music/%s", d.rel);
-    const uint32_t id = idx->findTrack(path);
-    if (id != LibraryIndex::kNone) {
-      idx->clearPending(id);
-      const bool tags = d.read && !d.readError && d.result != tagscan::Result::Unreadable;
-      if (tags && id == playing_ && jobs_.record()) lib_.setOverlay(id, *jobs_.record());
+  const bool verifying = jobs_.mode() == cardjobs::Mode::Verify;
+  for (uint32_t i = 0; i < d.files; ++i) {
+    const cardjobs::FileDone f = jobs_.file(i);
+    if (f.relLength == 0) continue;
+    if (idx && idx->ready()) {
+      char path[TrackCatalog::kMaxPath];
+      snprintf(path, sizeof(path), "/music/%s", f.rel);
+      const uint32_t id = idx->findTrack(path);
+      if (id != LibraryIndex::kNone) {
+        idx->clearPending(id);
+        const bool tags = f.read && !f.readError && f.result != tagscan::Result::Unreadable;
+        if (tags && i + 1 == d.files && id == playing_ && jobs_.record()) lib_.setOverlay(id, *jobs_.record());
+      }
     }
-  }
-  if (d.read && !d.readError && jobs_.mode() != cardjobs::Mode::Verify) {
-    ++scanDone_;
-    if (scanDone_ > scanTotal_) scanTotal_ = scanDone_;
+    if (f.read && !f.readError && !verifying) {
+      ++scanDone_;
+      if (scanDone_ > scanTotal_) scanTotal_ = scanDone_;
+    }
   }
 }
 
 void CardTasks::askUpdate(const char* why, bool deferToBoot) {
   if (!active_) return;
   LibraryUpdate* up = lib_.update();
+  if (walkFailed_ && !up->recordsListCard()) {
+    // (The update step would refuse it too, after its compaction:
+    // LibraryUpdate::Step::unlisted. The walk that lists the card asks.)
+    Serial.printf("[card] the update step (%s) waits: the walk failed, and the card's records don't list it yet\n",
+                  why);
+    return;
+  }
   if (!up->asked()) Serial.printf("[card] the update step is asked (%s)\n", why);
   up->ask(why, deferToBoot);
 }
@@ -508,10 +569,7 @@ bool CardTasks::waitIdle(uint32_t maxMs) {
   const bool ok = worker_.waitIdle(maxMs);
   Job done = Job::None;
   uint32_t ms = 0;
-  if (worker_.poll(millis(), &done, &ms)) {
-    sched_.stepDone(done, ms);
-    taken(done, millis());
-  }
+  if (worker_.poll(millis(), &done, &ms)) taken(done, millis(), ms);
   return ok;
 }
 
@@ -585,9 +643,14 @@ void CardTasks::report() const {
   for (int j = 1; j < ScanScheduler::kJobs; ++j) {
     const auto job = static_cast<Job>(j);
     if (!sched_.steps(job)) continue;
-    Serial.printf("[card] %s: %lu steps, mean %lu ms, longest %lu ms\n", ScanScheduler::jobName(job),
-                  (unsigned long)sched_.steps(job), (unsigned long)sched_.meanStepMs(job),
-                  (unsigned long)sched_.maxStepMs(job));
+    // The walk's steps are slices (their CardWalk steps: a folder each); the
+    // scan's, a loop source's file or a slice of the rest's (their files).
+    char units[40] = "";
+    if (job == Job::Walk) snprintf(units, sizeof(units), " (%lu walk steps)", (unsigned long)sched_.units(job));
+    if (job == Job::Scan) snprintf(units, sizeof(units), " (%lu files)", (unsigned long)sched_.units(job));
+    Serial.printf("[card] %s: %lu %s%s, mean %lu ms, longest %lu ms\n", ScanScheduler::jobName(job),
+                  (unsigned long)sched_.steps(job), job == Job::Walk ? "slices" : "steps", units,
+                  (unsigned long)sched_.meanStepMs(job), (unsigned long)sched_.maxStepMs(job));
   }
   // Since the boot or gs0: the stack's least left over every life of the
   // task (each life's own mark starts again), internal RAM's lowest while a

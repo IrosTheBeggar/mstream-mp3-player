@@ -16,7 +16,9 @@
 // on the card since the last walk, and settles which files T's records (the
 // transfer's) still describe. Portable, host-tested (test_card_walk), in
 // fixed memory whatever the card holds. A job for the card worker, one step
-// at a time (3.3.4: a step is one folder's listing, or one doubtful file).
+// at a time (3.3.4: a step is one folder's listing, or a few doubts with at
+// most one qfp read), the worker running a slice of steps per hand-off
+// (CardJobs).
 //
 // The walk:
 //   - lists one folder at a time through the Lister (FatFs's f_readdir on
@@ -385,14 +387,19 @@ public:
   // Starts a walk. False (Error::Config): a missing lister or sink, or the
   // scratch too small. The interfaces and the scratch must outlive it.
   bool begin(const Config& config);
-  // One step: at most one folder listing (a folder that fits, or one pass of
-  // a big one), or a few doubts with at most one qfp read. Returns the state
-  // after it.
+  // One step: one folder listing (a folder that fits, or one pass of a big
+  // one) with the moves into and out of folders before it, which read
+  // nothing; or the walk's end (D's folders it didn't reach, T's end); or a
+  // few doubts with at most one qfp read. Returns the state after it. A card
+  // of F folders that fit takes F + 2 steps with no doubts (the end, then
+  // the doubts' pass that finds none).
   State step();
   // Steps to the end.
   State run();
   const Result& result() const { return r_; }
   State state() const { return r_.state; }
+  // For the log: "the walk FAILED (the journal's write)".
+  static const char* errorName(Error e);
 
 private:
   // One folder on the walk's stack.

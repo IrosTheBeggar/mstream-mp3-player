@@ -9,7 +9,9 @@
 // FakeFat.h) with real tagged files from the tag corpus, and the device's
 // records on a fake card (test/support/CutFs.h), then built into the index
 // as the boot would (LibraryBuilder). Sessions are boots: a new TagStore
-// over the same card, open()ed.
+// over the same card, open()ed. The slices (2026-10-09): N11's synthetic
+// card walked a folder a step, several steps a hand-off on a fake clock;
+// the scan's rest a few files a hand-off; the loop's cut.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -78,6 +80,11 @@ std::vector<uint8_t> corpus(const char* name) {
   return b;
 }
 
+// The worker's clock for the slices (Config::nowUs): a listing and a file's
+// open cost what a test sets (TestCard::listUs, openUs).
+uint64_t g_us = 0;
+uint64_t fakeUs() { return g_us; }
+
 // ---- the card: FakeFat's tree, real bytes for some files ----
 class TestCard : public cj::Card {
 public:
@@ -85,6 +92,9 @@ public:
   std::map<std::string, std::vector<uint8_t>> bytes;
   std::map<std::string, uint32_t> reads;  // files opened, by path
   uint32_t stats = 0;
+  uint32_t listUs = 0, openUs = 0;
+  // The loop meanwhile (a cut): at each listing, at each file's open.
+  std::function<void()> onList, onOpen;
 
   void addBytes(const std::string& rel, const std::vector<uint8_t>& b, uint32_t fatTime = kT) {
     bytes[rel] = b;
@@ -95,11 +105,17 @@ public:
     tree.addFile(rel, size, fatTime, seed);
   }
 
-  Open openDir(const char* rel, size_t len) override { return tree.openDir(rel, len); }
+  Open openDir(const char* rel, size_t len) override {
+    g_us += listUs;
+    if (onList) onList();
+    return tree.openDir(rel, len);
+  }
   Next next(cardwalk::Entry* out) override { return tree.next(out); }
   void closeDir() override { tree.closeDir(); }
   cc::Source* openFile(const char* rel, size_t len) override {
     const std::string p(rel, len);
+    g_us += openUs;
+    if (onOpen) onOpen();
     ++reads[p];
     auto it = bytes.find(p);
     if (it == bytes.end()) return tree.openFile(rel, len);
@@ -156,6 +172,7 @@ struct Session {
   // The index's files (Config::indexed): what the walk's news leaves out.
   std::set<std::string> indexed;
   bool useIndexed = false;
+  uint32_t sliceUs = 0;  // a slice on the fake clock (0: one unit a step)
   static bool isIndexed(const char* rel, size_t len, void* ctx) {
     return static_cast<Session*>(ctx)->indexed.count(std::string(rel, len)) > 0;
   }
@@ -172,6 +189,10 @@ struct Session {
     c.root = root;
     c.chunkFiles = chunkFiles;
     c.rowsPerStep = 3;  // small: the rest spans steps
+    if (sliceUs) {
+      c.sliceUs = sliceUs;
+      c.nowUs = fakeUs;
+    }
     jobs.begin(c);
   }
   // One step of `job`, as the worker takes it.
@@ -1015,6 +1036,230 @@ void test_a_card_that_refuses() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// The slices (2026-10-09). On the device a step of the walk was a third of a
+// folder (entering it, listing it, leaving it: two of the three no I/O), and
+// a step was handed once a loop pass: N11's 20k card took 7,774 hand-offs,
+// each waiting out the loop's 20 ms sleep with the screen dark (2.7 min).
+// Now a step is a folder's listing, and a hand-off runs them for up to
+// 18 ms on the worker's clock (CardTasks' kSliceUs).
+// ---------------------------------------------------------------------------
+namespace {
+
+std::string fixturesDir() {
+  const char* tries[] = {"test/fixtures", "../test/fixtures", "../../test/fixtures"};
+  for (const char* t : tries) {
+    const std::string p = std::string(t) + "/synthcard/walk-shape.txt";
+    if (FILE* f = std::fopen(p.c_str(), "rb")) {
+      std::fclose(f);
+      return t;
+    }
+  }
+  std::string self = __FILE__;
+  for (int up = 0; up < 2; ++up) self = self.substr(0, self.find_last_of("/\\"));
+  return self + "/fixtures";
+}
+
+struct Shape {
+  uint32_t folders = 0, audio = 0, images = 0, others = 0;
+};
+
+// N11's synthetic card as the walk saw it on the device (2026-10-08), its
+// folders in pre-order with their files' counts; the names made up here.
+Shape loadShape(TestCard& card) {
+  const std::string path = fixturesDir() + "/synthcard/walk-shape.txt";
+  FILE* f = std::fopen(path.c_str(), "rb");
+  TEST_ASSERT_NOT_NULL_MESSAGE(f, path.c_str());
+  Shape sh;
+  std::vector<std::string> at;  // the folder at each depth
+  char line[128];
+  uint32_t seed = 1;
+  while (std::fgets(line, sizeof(line), f)) {
+    unsigned depth = 0, a = 0, i = 0, o = 0;
+    if (line[0] == '#' || std::sscanf(line, "%u %u %u %u", &depth, &a, &i, &o) != 4) continue;
+    std::string rel;
+    if (depth > 0) {
+      TEST_ASSERT_TRUE(depth <= at.size());
+      const std::string& parent = at[depth - 1];
+      rel = (parent.empty() ? "" : parent + "/") + "f" + std::to_string(sh.folders);
+      card.tree.addFolder(rel);
+    }
+    at.resize(depth + 1);
+    at[depth] = rel;
+    const std::string pre = rel.empty() ? "" : rel + "/";
+    for (unsigned k = 0; k < a; ++k) card.addNoise(pre + "a" + std::to_string(k) + ".mp3", 4000 + k, ++seed);
+    for (unsigned k = 0; k < i; ++k) card.addNoise(pre + "c" + std::to_string(k) + ".jpg", 2000 + k, ++seed);
+    for (unsigned k = 0; k < o; ++k) card.addNoise(pre + "o" + std::to_string(k) + ".txt", 100 + k, ++seed);
+    ++sh.folders;
+    sh.audio += a;
+    sh.images += i;
+    sh.others += o;
+  }
+  std::fclose(f);
+  return sh;
+}
+
+}  // namespace
+
+// The walk's steps and hand-offs on N11's card: the first boot's (no D:
+// every file added, walk.jnl written), then an unchanged one's (D walked:
+// every folder listed, its digest D's, nothing written).
+void test_the_synthetic_cards_walk() {
+  CutFs fs;
+  TestCard card;
+  const Shape sh = loadShape(card);
+  TEST_ASSERT_EQUAL_UINT32(2591, sh.folders);  // /music included
+  TEST_ASSERT_EQUAL_UINT32(19410, sh.audio);   // the device's tracks
+  TEST_ASSERT_EQUAL_UINT32(1688, sh.images);
+  TEST_ASSERT_EQUAL_UINT32(1570, sh.others);
+  card.listUs = 3000;  // a listing: 3 ms on the worker's clock
+  for (int boot = 0; boot < 2; ++boot) {
+    Session s(fs, card);
+    s.sliceUs = 18000;
+    s.begin();
+    TEST_ASSERT_EQUAL(boot == 1, s.store.device().present && s.store.device().header.walked);
+    s.jobs.askWalk();
+    uint32_t handOffs = 0, steps = 0;
+    uint64_t longest = 0;
+    cardwalk::CardWalk::Result r;
+    while (s.jobs.walkWork()) {
+      const uint64_t t0 = g_us;
+      const cj::Done& d = s.run(Job::Walk);
+      ++handOffs;
+      steps += d.walkSteps;
+      TEST_ASSERT_TRUE(d.walkSteps >= 1);
+      if (g_us - t0 > longest) longest = g_us - t0;
+      if (d.walkEnded) r = d.walk;
+    }
+    TEST_ASSERT_TRUE(r.state == cardwalk::CardWalk::State::Done);
+    TEST_ASSERT_EQUAL_UINT32(sh.folders, r.folders);
+    TEST_ASSERT_EQUAL_UINT32(sh.folders, r.listings);  // each fits the 64 KB scratch: one pass
+    TEST_ASSERT_EQUAL_UINT32(sh.audio, r.audio);
+    TEST_ASSERT_EQUAL_UINT32(sh.images, r.images);
+    TEST_ASSERT_EQUAL_UINT32(sh.others, r.others);
+    // A step a folder, then the walk's end and the doubts' pass (none):
+    // 2,593, where the device took 7,774.
+    TEST_ASSERT_EQUAL_UINT32(sh.folders + 2, r.steps);
+    TEST_ASSERT_EQUAL_UINT32(r.steps, steps);
+    // Six 3 ms listings a slice (a seventh would end at 21 ms): 432
+    // hand-offs, none over the slice.
+    TEST_ASSERT_TRUE(longest <= 18000);
+    TEST_ASSERT_EQUAL_UINT32(432, handOffs);
+    if (boot == 0) {
+      TEST_ASSERT_EQUAL_UINT32(sh.audio, r.added);
+      TEST_ASSERT_TRUE(r.summary.changed);
+      s.jobs.askCompact();  // (the update step's, before its build)
+      TEST_ASSERT_TRUE(s.run(Job::Compact).compacted);
+    } else {
+      // (Its folders with no audio at or below them, which D has no row
+      // for, are merged each walk, and say nothing.)
+      TEST_ASSERT_EQUAL_UINT32(0, r.added + r.changed + r.gone + r.foldersGone);
+      TEST_ASSERT_FALSE(r.summary.changed);
+      TEST_ASSERT_FALSE(s.store.hasWalk());  // an unchanged card writes nothing
+    }
+  }
+  // The loop cuts a slice (a wait came): it ends after the listing under way.
+  Session s(fs, card);
+  s.sliceUs = 18000;
+  s.begin();
+  s.jobs.askWalk();
+  s.run(Job::Walk);  // (its first: six folders)
+  uint32_t lists = 0;
+  card.onList = [&] {
+    if (++lists == 2) s.jobs.cutSlice();
+  };
+  const cj::Done& d = s.run(Job::Walk);
+  TEST_ASSERT_EQUAL_UINT32(2, d.walkSteps);
+  card.onList = nullptr;
+  TEST_ASSERT_EQUAL_UINT32(6, s.run(Job::Walk).walkSteps);  // the next isn't cut
+  // No clock: a step a hand-off.
+  CutFs fresh;
+  Session one(fresh, card);
+  one.begin();
+  one.jobs.askWalk();
+  TEST_ASSERT_EQUAL_UINT32(1, one.run(Job::Walk).walkSteps);
+  TEST_ASSERT_EQUAL_UINT32(1, one.run(Job::Walk).walkSteps);
+}
+
+// The scan's rest a slice of files a hand-off, each file whole and listed
+// for the loop (file()); a loop source's file a step of its own; the loop's
+// cut after the file under way.
+void test_slices_of_the_scan() {
+  CutFs fs;
+  TestCard card;
+  for (int a = 0; a < 5; ++a)
+    for (int t = 0; t < 8; ++t)
+      card.addNoise("A" + std::to_string(a) + "/Album/" + std::to_string(t) + ".mp3", 3000 + 7 * t, 40 + 8 * a + t);
+  constexpr uint32_t kFiles = 40;
+  Session s(fs, card);
+  s.sliceUs = 18000;
+  s.begin();
+  s.jobs.askWalk();
+  while (s.jobs.walkWork()) s.run(Job::Walk);
+  // A file's read costs 8 ms: two a slice (a third would end at 24 ms).
+  card.openUs = 8000;
+  std::map<std::string, int> seen;
+  uint32_t steps = 0;
+  while (s.jobs.restWork()) {
+    const uint64_t t0 = g_us;
+    const cj::Done& d = s.run(Job::Scan);
+    ++steps;
+    TEST_ASSERT_TRUE(g_us - t0 <= 18000);
+    TEST_ASSERT_TRUE(d.files <= 2);
+    for (uint32_t i = 0; i < d.files; ++i) {
+      const cj::FileDone f = s.jobs.file(i);
+      TEST_ASSERT_TRUE(f.read);
+      ++seen[std::string(f.rel, f.relLength)];
+    }
+    if (d.files > 0) {
+      // Done's fields are the last file's.
+      const cj::FileDone last = s.jobs.file(d.files - 1);
+      TEST_ASSERT_EQUAL_STRING(last.rel, d.rel);
+      TEST_ASSERT_EQUAL(last.read, d.read);
+      TEST_ASSERT_TRUE(d.handled);
+    }
+    TEST_ASSERT_EQUAL_STRING("", s.jobs.file(d.files).rel);  // (none past them)
+  }
+  TEST_ASSERT_EQUAL_UINT32(kFiles, seen.size());
+  for (const auto& kv : seen) TEST_ASSERT_EQUAL_INT_MESSAGE(1, kv.second, kv.first.c_str());
+  TEST_ASSERT_EQUAL_UINT32(kFiles / 2 + 1, steps);  // two a slice, then the rest's end
+  TEST_ASSERT_EQUAL_UINT32(kFiles, s.jobs.counts().scanned);
+  // 1 ms a file: 18 a slice (a 19th would end at 19 ms); the rest's end in
+  // the last.
+  card.openUs = 1000;
+  s.jobs.askRest(cj::Mode::All);  // (gr!: every file again)
+  std::vector<uint32_t> files;
+  while (s.jobs.restWork()) files.push_back(s.run(Job::Scan).files);
+  TEST_ASSERT_EQUAL_UINT32(3, files.size());
+  TEST_ASSERT_EQUAL_UINT32(18, files[0]);
+  TEST_ASSERT_EQUAL_UINT32(18, files[1]);
+  TEST_ASSERT_EQUAL_UINT32(kFiles - 36, files[2]);
+  // The dark's 60 ms slice (setSlice(), between steps): the list holds
+  // kSliceFiles, however much of the slice is left.
+  s.jobs.setSlice(60000);
+  s.jobs.askRest(cj::Mode::All);
+  files.clear();
+  while (s.jobs.restWork()) files.push_back(s.run(Job::Scan).files);
+  TEST_ASSERT_EQUAL_UINT32(2, files.size());
+  TEST_ASSERT_EQUAL_UINT32(cj::kSliceFiles, files[0]);
+  TEST_ASSERT_EQUAL_UINT32(kFiles - cj::kSliceFiles, files[1]);
+  // The loop's cut, during the third file: the slice ends after it.
+  s.jobs.askRest(cj::Mode::All);
+  uint32_t opened = 0;
+  card.onOpen = [&] {
+    if (++opened == 3) s.jobs.cutSlice();
+  };
+  TEST_ASSERT_EQUAL_UINT32(3, s.run(Job::Scan).files);
+  card.onOpen = nullptr;
+  TEST_ASSERT_EQUAL_UINT32(cj::kSliceFiles, s.run(Job::Scan).files);  // the next isn't cut
+  // A file the loop names: a step of its own, whatever the slice.
+  const cj::Done& d = s.run(Job::Scan, Src::Playing, "A2/Album/5.mp3");
+  TEST_ASSERT_EQUAL_UINT32(1, d.files);
+  TEST_ASSERT_EQUAL_STRING("A2/Album/5.mp3", s.jobs.file(0).rel);
+  TEST_ASSERT_EQUAL_STRING("A2/Album/5.mp3", d.rel);
+  card.openUs = 0;
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_boots_decision);
@@ -1027,5 +1272,7 @@ int main(int, char**) {
   RUN_TEST(test_a_transfer_card);
   RUN_TEST(test_a_bad_transfer_is_walked_without);
   RUN_TEST(test_a_card_that_refuses);
+  RUN_TEST(test_the_synthetic_cards_walk);
+  RUN_TEST(test_slices_of_the_scan);
   return UNITY_END();
 }

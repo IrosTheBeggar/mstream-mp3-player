@@ -7,7 +7,7 @@
 // device sees, the digests, and T's freshness: a retag at the same size, a
 // renamed folder, a deleted album, every stamp shifted an hour, three files
 // shifted, invalid and zero stamps, 2.18's skew vectors and the recount past
-// 256 distinct deltas. D is an in-memory store that takes the walk's output
+// 256 distinct deltas; a step a folder (2026-10-09), and the errors' names. D is an in-memory store that takes the walk's output
 // as N4's TagStore would (MemD below), so each test walks again and checks
 // that an unchanged card writes nothing.
 // Run: pio test -e native
@@ -1347,6 +1347,64 @@ void test_steps_are_small() {
   TEST_ASSERT_TRUE(d.orderOk);
 }
 
+// A step is one folder's listing (2026-10-09): entering a subfolder and
+// leaving a finished one read nothing, so they go on into the next listing;
+// the walk's end and the doubts' pass are steps of their own. (Each step was
+// a hand-off on the device, and three a folder made N11's walk 7,774 of
+// them: test_card_jobs walks its shape.)
+void test_a_step_is_a_folder() {
+  fakefat::Card card;
+  album(card, "A/B/C/D/E/F/G/Deep", 2, kT, 1);  // 8 levels below /music, the deepest walked
+  album(card, "Artist/Album", 3, kT, 10);
+  card.addFile("Artist/Album/Scans/01.jpg", 900, kT, 20);  // no audio at or below it
+  card.addFolder("Empty");
+  card.addFile("Loose.mp3", 1000, kT, 21);
+  for (int boot = 0; boot < 2; ++boot) {
+    MemD d;
+    if (boot == 1) walk(card, d, WalkOpts{nullptr, true});  // D as the first walk left it
+    d.beginWalk();
+    std::vector<uint8_t> scratch(cw::CardWalk::kDeviceScratch);
+    cw::CardWalk::Config c;
+    c.lister = &card;
+    c.known = &d;
+    c.sink = &d;
+    c.firstAfterCommit = boot == 0;
+    c.scratch = scratch.data();
+    c.scratchBytes = static_cast<uint32_t>(scratch.size());
+    auto w = std::make_unique<cw::CardWalk>();
+    TEST_ASSERT_TRUE(w->begin(c));
+    std::vector<uint32_t> opens;  // folders listed, a step
+    for (;;) {
+      const uint32_t before = card.opens;
+      const auto st = w->step();
+      opens.push_back(card.opens - before);
+      if (st == cw::CardWalk::State::Done || st == cw::CardWalk::State::Failed) break;
+      TEST_ASSERT_TRUE(opens.size() < 1000);
+    }
+    const cw::CardWalk::Result& r = w->result();
+    assertDone(r);
+    TEST_ASSERT_EQUAL_UINT32(13, r.folders);  // /music, A to G and Deep, Artist, Album, Scans, Empty
+    TEST_ASSERT_EQUAL_UINT32(r.folders, r.listings);
+    TEST_ASSERT_EQUAL_UINT32(r.folders + 2, r.steps);
+    TEST_ASSERT_EQUAL_UINT32(r.steps, opens.size());
+    for (size_t i = 0; i + 2 < opens.size(); ++i) TEST_ASSERT_EQUAL_UINT32(1, opens[i]);
+    TEST_ASSERT_EQUAL_UINT32(0, opens[opens.size() - 2]);  // the walk's end
+    TEST_ASSERT_EQUAL_UINT32(0, opens[opens.size() - 1]);  // the doubts' pass (none)
+    TEST_ASSERT_EQUAL_UINT32(6, r.audio);
+    if (boot == 0) {
+      TEST_ASSERT_EQUAL_UINT32(6, r.added);
+    } else {
+      TEST_ASSERT_FALSE(r.summary.changed);
+    }
+    TEST_ASSERT_TRUE(d.orderOk);
+  }
+  // The log's names (CardTasks: "the walk FAILED (the journal's write)").
+  TEST_ASSERT_EQUAL_STRING("the journal's write", cw::CardWalk::errorName(cw::CardWalk::Error::Sink));
+  TEST_ASSERT_EQUAL_STRING("a listing: the card?", cw::CardWalk::errorName(cw::CardWalk::Error::Card));
+  for (int e = 0; e <= static_cast<int>(cw::CardWalk::Error::Transfer); ++e)
+    TEST_ASSERT_TRUE(cw::CardWalk::errorName(static_cast<cw::CardWalk::Error>(e))[0] != '?');
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_digest_and_qfp_helpers);
@@ -1368,5 +1426,6 @@ int main(int, char**) {
   RUN_TEST(test_recount_past_256_distinct_deltas);
   RUN_TEST(test_failures_leave_d_as_it_was);
   RUN_TEST(test_steps_are_small);
+  RUN_TEST(test_a_step_is_a_folder);
   return UNITY_END();
 }

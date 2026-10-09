@@ -14,8 +14,9 @@
 // build; a T found bad at the end of a build; a power cut at every step of
 // an update; the fence (no reader sees a half-built index); a card that
 // fails while the build reads it; the worker's task before the fence; the
-// marker's build out of PSRAM at the boot. What a track that ends inside
-// the fence does is test_gapless_player's.
+// marker's build out of PSRAM at the boot; a failed first walk that must
+// not shrink the library (2026-10-09). What a track that ends inside the
+// fence does is test_gapless_player's.
 // Run: pio test -e native -f test_library_update
 #include <unity.h>
 
@@ -1513,6 +1514,92 @@ void test_the_marker_s_build_out_of_psram() {
   TEST_ASSERT_EQUAL_STRING(kFlacTitle, titleOf(again.index, kFlac).c_str());
 }
 
+// ---------------------------------------------------------------------------
+// A failed first walk (the device, 2026-10-08: a walk.jnl write the card
+// refused, CardWalk's Error::Sink). The scan then read the loop's sources,
+// the update step at its end built from D, which held those files alone,
+// and 19,410 tracks became 204, saved. Here (the inverse of the
+// investigation's host test, where 6 tracks became 2): the update step
+// refuses while the card's records don't list it (no T, D never walked),
+// before its fence and its memory check (no marker), and the index keeps
+// every track; a boot that would build from such a D walks /music instead;
+// once a walk lists the card, the update builds every track, the scanned
+// ones with their tags.
+// ---------------------------------------------------------------------------
+void test_a_failed_first_walk_keeps_the_library() {
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  Device d(fs, card);
+  d.boot();
+  TEST_ASSERT_TRUE(d.booted.walked);  // no records: /music walked, every track by its path
+  TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
+  TEST_ASSERT_TRUE(d.upd->recordsListCard());  // none at all: a build walks /music
+  // The boot's walk, its walk.jnl write refused.
+  d.jobs.askWalk();
+  fs.refuse = true;
+  d.runUntil([&] { return d.running == Job::None && !d.jobs.walkWork() && !d.jobs.walking(); });
+  fs.refuse = false;
+  TEST_ASSERT_EQUAL_UINT32(1, d.jobs.counts().walksFailed);
+  TEST_ASSERT_FALSE(d.store->hasWalk());
+  TEST_ASSERT_FALSE(d.jobs.restWork());  // D none: no rest; the loop's sources only
+  // The loop's sources: the playing track and the queue's next.
+  const char* const read[] = {"Artist/Album/01 - a.flac", "Artist/Album/02 - b.opus"};
+  for (const char* rel : read) {
+    TEST_ASSERT_TRUE(d.jobs.prepare(Job::Scan, ScanScheduler::Source::Playing, rel, std::strlen(rel), d.now));
+    d.jobs.step();
+    TEST_ASSERT_TRUE(d.jobs.finish().read);
+  }
+  TEST_ASSERT_TRUE(d.jobs.flushChunk());
+  TEST_ASSERT_TRUE(d.jobs.newRecords());  // the scan's end would ask (CardTasks doesn't, after a failed walk)
+  TEST_ASSERT_FALSE(d.upd->recordsListCard());  // the journal holds the two, nothing listed the card
+  // The update step (the scan's end; gb): its compaction makes D of the two
+  // records alone; then it refuses, before its fence.
+  d.update("the scan's end");
+  TEST_ASSERT_TRUE(d.did(Do::Failed));
+  TEST_ASSERT_FALSE(d.did(Do::Fence));
+  TEST_ASSERT_TRUE(d.upd->last().unlisted);
+  TEST_ASSERT_FALSE(d.upd->last().cardGone);
+  TEST_ASSERT_TRUE(d.store->device().present);
+  TEST_ASSERT_FALSE(d.store->device().header.walked);
+  TEST_ASSERT_TRUE(d.index.ready());
+  TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());  // every track kept
+  // gb! the same: no marker (the next boot would build those two alone).
+  d.acts.clear();
+  d.update("gb!", Env(), true);
+  TEST_ASSERT_TRUE(d.did(Do::Failed));
+  TEST_ASSERT_FALSE(d.did(Do::Deferred));
+  TEST_ASSERT_TRUE(d.upd->last().unlisted);
+  TEST_ASSERT_FALSE(fs.exists(LibraryUpdate::kMarker));
+  TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
+  // A boot that must build (library.idx gone) from such a D: /music walked.
+  {
+    CutFs copy = fs;
+    copy.remove(LibraryUpdate::kIndexNames.path);
+    Device b(copy, card);
+    b.boot();
+    TEST_ASSERT_TRUE(b.booted.ok);
+    TEST_ASSERT_TRUE(b.booted.walked);
+    TEST_ASSERT_EQUAL_UINT32(kAudio, b.index.trackCount());
+    TEST_ASSERT_EQUAL_UINT32(kAudio, pendingIn(b.index));
+  }
+  // The walk again (CardTasks' retry, or the next boot's): it lists the
+  // card, and the update step builds every track, the two read with their
+  // tags, the rest's scan with theirs.
+  d.jobs.askWalk();
+  d.drain();
+  TEST_ASSERT_EQUAL_UINT32(1, d.jobs.counts().walksFailed);
+  TEST_ASSERT_TRUE(d.upd->recordsListCard());
+  d.acts.clear();
+  d.update("the scan's end");
+  TEST_ASSERT_TRUE(d.did(Do::Saved));
+  TEST_ASSERT_FALSE(d.upd->last().unlisted);
+  TEST_ASSERT_TRUE(d.store->device().header.walked);
+  TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
+  TEST_ASSERT_EQUAL_UINT32(0, pendingIn(d.index));
+  TEST_ASSERT_EQUAL_STRING(kFlacTitle, titleOf(d.index, kFlac).c_str());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_safe_point_and_the_memory_check);
@@ -1528,5 +1615,6 @@ int main(int, char**) {
   RUN_TEST(test_a_card_that_fails_mid_build);
   RUN_TEST(test_the_worker_s_task_before_the_fence);
   RUN_TEST(test_the_marker_s_build_out_of_psram);
+  RUN_TEST(test_a_failed_first_walk_keeps_the_library);
   return UNITY_END();
 }

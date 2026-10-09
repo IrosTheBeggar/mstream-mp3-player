@@ -51,7 +51,17 @@ struct Jobs::WalkWork {
   uint8_t transferBuf[8192];
 };
 
-// The scan's memory (about 85 KB with its read set and chunk).
+// A file a scan step took, for the loop (Jobs::file()).
+struct SliceFile {
+  uint16_t len = 0;
+  bool read = false;
+  bool readError = false;
+  tagscan::Result result = tagscan::Result::Ok;
+  char rel[cc::kMaxRelPath + 1];
+};
+
+// The scan's memory (about 93 KB with its read set, its chunk and a slice's
+// list of files).
 struct Jobs::ScanWork {
   tagscan::Scanner scanner;
   ts::ChunkBuilder chunk;
@@ -68,6 +78,7 @@ struct Jobs::ScanWork {
   uint8_t* chunkBuf = nullptr;
   uint64_t* readSet = nullptr;  // open addressing; 0 empty
   uint32_t readCount = 0;
+  SliceFile files[kSliceFiles];  // the step's (Done::files)
 };
 
 Jobs::Jobs(AllocFn alloc, FreeFn release) : alloc_(alloc), free_(release) {}
@@ -206,6 +217,7 @@ bool Jobs::prepare(Job job, Source source, const char* rel, size_t len, uint32_t
   job_ = Job::None;
   source_ = source;
   nowMs_ = nowMs;
+  cut_.store(false, std::memory_order_relaxed);
   if (!c_.store || !c_.card) return false;
   switch (job) {
     case Job::Walk:
@@ -250,6 +262,37 @@ void Jobs::step() {
   }
 }
 
+FileDone Jobs::file(uint32_t i) const {
+  FileDone f;
+  if (!scan_ || i >= done_.files || i >= kSliceFiles) return f;
+  const SliceFile& s = scan_->files[i];
+  f.rel = s.rel;
+  f.relLength = s.len;
+  f.read = s.read;
+  f.readError = s.readError;
+  f.result = s.result;
+  return f;
+}
+
+// ---- the slice ----
+
+void Jobs::sliceBegin() {
+  const uint64_t now = c_.nowUs ? c_.nowUs() : 0;
+  sliceAtUs_ = now;
+  unitAtUs_ = now;
+}
+
+// After a unit: another one goes on in this step when the loop hasn't cut
+// the slice and the last unit's time, from now, still fits in it (so a
+// slice of steady units ends at sliceUs, not a unit past it).
+bool Jobs::sliceGoesOn() {
+  if (!c_.nowUs || c_.sliceUs == 0 || cut_.load(std::memory_order_relaxed)) return false;
+  const uint64_t now = c_.nowUs();
+  const uint64_t unit = now - unitAtUs_;
+  unitAtUs_ = now;
+  return now - sliceAtUs_ + unit <= c_.sliceUs;
+}
+
 const Done& Jobs::finish() {
   if (done_.walkEnded && walk_) {
     const bool again = walk_->again;
@@ -279,6 +322,7 @@ void Jobs::endWalk() {
 void Jobs::stepWalk() {
   if (!walk_) return;
   WalkWork& w = *walk_;
+  sliceBegin();  // (the first step's opens count in its slice)
   if (!w.begun) {
     w.begun = true;
     ++counts_.walks;
@@ -337,8 +381,16 @@ void Jobs::stepWalk() {
       return;
     }
   }
-  const cw::CardWalk::State s = w.walk.step();
-  ++counts_.walkSteps;
+  // A slice of CardWalk's steps (a folder's listing each), to the walk's
+  // end at most.
+  cw::CardWalk::State s;
+  for (;;) {
+    s = w.walk.step();
+    ++counts_.walkSteps;
+    ++done_.walkSteps;
+    if (s != cw::CardWalk::State::Walking && s != cw::CardWalk::State::Settling) break;
+    if (!sliceGoesOn()) break;
+  }
   if (s != cw::CardWalk::State::Done && s != cw::CardWalk::State::Failed) return;
   endWalk();
   if (s == cw::CardWalk::State::Failed) {
@@ -524,6 +576,9 @@ bool Jobs::nextRow(char* rel, size_t* len, uint32_t* size, uint32_t* fatTime, ui
 bool Jobs::scanFile(const char* rel, size_t len, uint32_t size, uint32_t fatTime, uint64_t qfp) {
   ScanWork& s = *scan_;
   done_.handled = true;
+  done_.read = done_.readError = false;  // (this file's, not the slice's last)
+  done_.result = tagscan::Result::Ok;
+  done_.reads = 0;
   cc::Source* src = c_.card->openFile(rel, len);
   const tagscan::Kind kind = tagscan::kindOf(rel);
   if (!src || src->size() != size || kind == tagscan::Kind::Unknown) {
@@ -568,6 +623,9 @@ bool Jobs::scanFile(const char* rel, size_t len, uint32_t size, uint32_t fatTime
 bool Jobs::verifyFile(const char* rel, size_t len, uint32_t size) {
   ScanWork& s = *scan_;
   done_.handled = true;
+  done_.read = done_.readError = false;
+  done_.result = tagscan::Result::Ok;
+  done_.reads = 0;
   if (!s.verifyOpen && !s.verifyMissing) {
     s.verifyMissing = true;
     if (c_.transferPath && c_.fs && !transferBad_) {
@@ -602,11 +660,62 @@ bool Jobs::verifyFile(const char* rel, size_t len, uint32_t size) {
   return ok;
 }
 
+// The file the step took last (done_.rel and its fields) into its list.
+void Jobs::noteFile() {
+  if (done_.files >= kSliceFiles) return;
+  SliceFile& f = scan_->files[done_.files++];
+  f.len = static_cast<uint16_t>(done_.relLength);
+  std::memcpy(f.rel, done_.rel, done_.relLength + 1);
+  f.read = done_.read;
+  f.readError = done_.readError;
+  f.result = done_.result;
+}
+
+// One unit of the rest: its next file read (or verified), or a look at the
+// View's rows that found none yet, or its end.
+void Jobs::scanRestOne() {
+  ScanWork& s = *scan_;
+  bool ended = false;
+  uint32_t size = 0, fatTime = 0;
+  uint64_t qfp = 0;
+  size_t len = 0;
+  if (nextRow(done_.rel, &len, &size, &fatTime, &qfp, &ended)) {
+    done_.relLength = len;
+    if (mode_ == Mode::Verify) {
+      verifyFile(done_.rel, len, size);
+    } else {
+      scanFile(done_.rel, len, size, fatTime, qfp);
+    }
+    noteFile();
+  } else if (ended) {
+    done_.restEnded = true;
+    restDone_ = true;
+    closeView();
+    if (mode_ == Mode::Verify) {
+      done_.verifyEnded = true;
+      if (s.verifyFile) c_.fs->close(s.verifyFile);
+      s.verifyFile = nullptr;
+      s.verifyOpen = false;
+      s.verifyMissing = false;
+      // The scan's own rest again (it may have had more).
+      restDone_ = false;
+      restartRest_ = true;
+    }
+    if (mode_ != Mode::Normal) mode_ = Mode::Normal;
+  }
+}
+
 void Jobs::stepScan() {
   if (!scan_) return;
   ScanWork& s = *scan_;
+  auto chunkOut = [&] {
+    // The chunk out at its size, or its age.
+    const bool full = s.chunk.count() >= c_.chunkFiles || s.chunk.bytes() >= c_.chunkBytes / 2;
+    const bool old = s.chunkTimed && nowMs_ - s.chunkFirstMs >= c_.chunkMs;
+    if (s.chunk.count() > 0 && (full || old || done_.restEnded)) appendChunk();
+  };
   if (source_ != Source::Rest) {
-    // A file the loop names (a Pending track of the index).
+    // A file the loop names (a Pending track of the index): the step.
     std::memcpy(done_.rel, rel_, relLength_ + 1);
     done_.relLength = relLength_;
     done_.handled = true;
@@ -621,39 +730,20 @@ void Jobs::stepScan() {
       // An open View may not have passed it: not read twice.
       if (s.viewOpen) readSetAdd(h);
     }
-  } else {
-    bool ended = false;
-    uint32_t size = 0, fatTime = 0;
-    uint64_t qfp = 0;
-    size_t len = 0;
-    if (nextRow(done_.rel, &len, &size, &fatTime, &qfp, &ended)) {
-      done_.relLength = len;
-      if (mode_ == Mode::Verify) {
-        verifyFile(done_.rel, len, size);
-      } else {
-        scanFile(done_.rel, len, size, fatTime, qfp);
-      }
-    } else if (ended) {
-      done_.restEnded = true;
-      restDone_ = true;
-      closeView();
-      if (mode_ == Mode::Verify) {
-        done_.verifyEnded = true;
-        if (s.verifyFile) c_.fs->close(s.verifyFile);
-        s.verifyFile = nullptr;
-        s.verifyOpen = false;
-        s.verifyMissing = false;
-        // The scan's own rest again (it may have had more).
-        restDone_ = false;
-        restartRest_ = true;
-      }
-      if (mode_ != Mode::Normal) mode_ = Mode::Normal;
-    }
+    noteFile();
+    chunkOut();
+    return;
   }
-  // The chunk out at its size, or its age.
-  const bool full = s.chunk.count() >= c_.chunkFiles || s.chunk.bytes() >= c_.chunkBytes / 2;
-  const bool old = s.chunkTimed && nowMs_ - s.chunkFirstMs >= c_.chunkMs;
-  if (s.chunk.count() > 0 && (full || old || done_.restEnded)) appendChunk();
+  // The rest: a slice of its files. It ends early at the rest's end, with
+  // its list full, or when the journal refused a chunk (the compaction it
+  // asks for is the next step: the files read after would go unrecorded).
+  sliceBegin();
+  for (;;) {
+    scanRestOne();
+    chunkOut();
+    if (done_.restEnded || done_.appendFailed || done_.files >= kSliceFiles) break;
+    if (!sliceGoesOn()) break;
+  }
 }
 
 }  // namespace cardjobs

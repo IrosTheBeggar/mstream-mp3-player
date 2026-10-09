@@ -94,9 +94,14 @@ ScanScheduler::Wait ScanScheduler::yieldOf(const In& in) const {
 void ScanScheduler::decide(const In& in, Out& o) const {
   if (in.running != Job::None) {
     // One step at a time: it finishes first. A cover under way drops below
-    // the loop while a list moves (Thumbs' rule).
-    o.priority = priorityOf(in.running, in.listMoving);
+    // the loop while a list moves (Thumbs' rule). A slice of the walk or the
+    // scan is cut after its unit, at 0 meanwhile, once a list moves or a
+    // wait applies (the battery floor too, for the scan): it holds them
+    // within a unit and a pass, as one-unit steps did.
     o.wait = Wait::Step;
+    const bool sliced = in.running == Job::Walk || in.running == Job::Scan;
+    o.cut = sliced && (in.listMoving || yieldOf(in) != Wait::None || (in.running == Job::Scan && batteryLow_));
+    o.priority = o.cut ? kLowPriority : priorityOf(in.running, in.listMoving, in.dark);
     return;
   }
   if (in.build) {
@@ -142,7 +147,7 @@ void ScanScheduler::decide(const In& in, Out& o) const {
   }
   o.job = next;
   o.source = next == Job::Scan ? src : Source::None;
-  o.priority = priorityOf(next, false);
+  o.priority = priorityOf(next, false, in.dark);
 }
 
 ScanScheduler::Source ScanScheduler::sourceOf(const In& in) {
@@ -154,19 +159,22 @@ ScanScheduler::Source ScanScheduler::sourceOf(const In& in) {
   return Source::None;
 }
 
-uint8_t ScanScheduler::priorityOf(Job job, bool listMoving) {
+uint8_t ScanScheduler::priorityOf(Job job, bool listMoving, bool dark) {
   switch (job) {
     case Job::Build: return kHighPriority;
-    case Job::Cover: return listMoving ? kLowPriority : kHighPriority;
+    case Job::Cover:
+    case Job::Walk: return listMoving ? kLowPriority : kHighPriority;
+    case Job::Scan: return dark && !listMoving ? kHighPriority : kLowPriority;
     default: return kLowPriority;
   }
 }
 
-void ScanScheduler::stepDone(Job job, uint32_t ms) {
+void ScanScheduler::stepDone(Job job, uint32_t ms, uint32_t units) {
   const int j = static_cast<int>(job);
   if (j <= 0 || j >= kJobs) return;
   ++steps_[j];
   stepMs_[j] += ms;
+  units_[j] += units;
   if (ms > stepMaxMs_[j]) stepMaxMs_[j] = ms;
 }
 
@@ -191,9 +199,16 @@ uint32_t ScanScheduler::maxStepMs(Job job) const {
   return j >= 0 && j < kJobs ? stepMaxMs_[j] : 0;
 }
 
+uint32_t ScanScheduler::units(Job job) const {
+  const int j = static_cast<int>(job);
+  return j >= 0 && j < kJobs ? units_[j] : 0;
+}
+
 uint32_t ScanScheduler::scanMsPerFile() const {
-  const uint32_t mean = meanStepMs(Job::Scan);
-  return steps(Job::Scan) > 0 ? (mean > 0 ? mean : 1) : kEstimateMsPerFile;
+  const int j = static_cast<int>(Job::Scan);
+  if (units_[j] == 0) return kEstimateMsPerFile;
+  const uint32_t mean = static_cast<uint32_t>((stepMs_[j] + units_[j] / 2) / units_[j]);
+  return mean > 0 ? mean : 1;
 }
 
 void ScanScheduler::resetStats() {
@@ -202,6 +217,7 @@ void ScanScheduler::resetStats() {
     steps_[j] = 0;
     stepMs_[j] = 0;
     stepMaxMs_[j] = 0;
+    units_[j] = 0;
   }
 }
 

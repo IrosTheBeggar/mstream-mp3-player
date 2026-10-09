@@ -8,13 +8,14 @@
 // what the one worker on the card does next, and when the background work
 // yields to the music and the listener. The worker (N10: Thumbs' worker,
 // generalised) takes one step at a time, and only the step it is handed: a
-// cover; the update step's build or its save (3.4.2, N12); one folder of the
-// validation walk (3.2.3), or one pass of a big one; a compaction of
-// tags.bin (3.3.2); one file of the scan (3.3.1); the DJNB check. The loop
-// calls update() every pass, where the inputs are, and hands the worker what
-// it says at the priority it says. So the jobs never overlap (a build, a
-// compaction and a scan never run at once), and each step starts only when
-// nothing it would disturb is under way.
+// cover; the update step's build or its save (3.4.2, N12); a slice of the
+// validation walk (3.2.3: its folders, or passes of a big one, for up to
+// about 18 ms); a compaction of tags.bin (3.3.2); a file of the scan
+// (3.3.1) a loop source names, or a slice of its rest's files; the DJNB
+// check. The loop calls update() every pass, where the inputs are, and
+// hands the worker what it says at the priority it says. So the jobs never
+// overlap (a build, a compaction and a scan never run at once), and each
+// step starts only when nothing it would disturb is under way.
 //
 // What starts, when the worker is free (the first that applies):
 //   1. The update step's build, at priority 1 (the loop's): the listener
@@ -27,11 +28,19 @@
 //   4. The update step's save of library.idx, at priority 0: it ends the
 //      update step. It yields as the background work does, but not to the
 //      battery floor (the build is paid for).
-//   5. The background work, at priority 0, one job at a time, the first
-//      with work: the walk, a compaction, the scan, the DJNB check. None of
-//      them starts while the update step holds the worker (from its build's
-//      fence to its save's end: nothing writes tags.bin or the journals
-//      while the build streams them, 3.4.2).
+//   5. The background work, one job at a time, the first with work: the
+//      walk, a compaction, the scan, the DJNB check. None of them starts
+//      while the update step holds the worker (from its build's fence to
+//      its save's end: nothing writes tags.bin or the journals while the
+//      build streams them, 3.4.2). At priority 0, but for two (3.3.9,
+//      2026-10-09): a slice of the walk at 1, as a cover (seconds once a
+//      boot, while the Library tab says "Checking the card..."); a slice
+//      of the scan at 1 while the screen is dark (In::dark: the loop has
+//      nothing to draw). At 0 they share what the loop leaves with the
+//      idle task, half of it (covers measured 2-2.5x slower at 0).
+// A slice under way drops to 0 and is cut after its unit (Out::cut) the
+// moment a list moves or a wait below applies: so a wait holds the walk and
+// the scan within one unit (a folder, a file) and a pass, as before slices.
 // The scan's next file comes from the first source that has one (3.3.3):
 // the playing track, the queue's next kQueueNext entries, the kQueueSoon
 // after them, the album or folder the Library tab shows, then the rest in
@@ -72,8 +81,9 @@
 class ScanScheduler {
 public:
   // The worker's jobs. A step: a cover; the build (one step); the save (one
-  // step); a folder of the walk, or one pass of a big one; a compaction (one
-  // step); a file of the scan; the DJNB check (one step).
+  // step); a slice of the walk (its folders, or passes of a big one); a
+  // compaction (one step); a file of the scan from a loop source, or a
+  // slice of its rest; the DJNB check (one step).
   enum class Job : uint8_t { None, Cover, Build, Save, Walk, Compact, Scan, DjCheck };
   static constexpr int kJobs = 8;
   // Where the scan's next file comes from (3.3.3).
@@ -96,9 +106,10 @@ public:
   };
   static constexpr int kWaits = 12;
 
-  // The worker's FreeRTOS priorities (3.3.4): the loop's for what the
-  // listener waits for, the idle task's for the rest, so the loop preempts
-  // it whenever it is ready (the SD driver's reads busy-wait the CPU).
+  // The worker's FreeRTOS priorities (3.3.4, 3.3.9): the loop's for what
+  // the listener waits for (and the walk's and the dark scan's slices),
+  // the idle task's for the rest, so the loop preempts it whenever it is
+  // ready (the SD driver's reads busy-wait the CPU).
   static constexpr uint8_t kHighPriority = 1;
   static constexpr uint8_t kLowPriority = 0;
 
@@ -154,6 +165,7 @@ public:
     // ---- the UI ----
     bool listMoving = false;  // a list scrolls, flings or follows a finger (Page::animating())
     bool input = false;       // any input this pass (a touch, a button, PWR, a headphone key, the console)
+    bool dark = false;        // the screen is dark: the loop has nothing to draw (a scan's slice at 1)
     // ---- the audio ----
     bool playing = false;         // the player is Playing: audio should flow
     uint32_t ringMs = 0;          // the PCM ring's audio now (bufferedMsNow())
@@ -177,6 +189,10 @@ public:
     Source source = Source::None;  // job Scan: where its file comes from
     uint8_t priority = kLowPriority;  // the worker's priority: the running step's, else `job`'s
     Wait wait = Wait::None;        // why nothing starts (None: `job` starts, or nothing to do)
+    // The step under way is a slice of the walk or the scan, and a list
+    // moves or a wait applies (the scan's battery floor included): it ends
+    // after its unit (CardJobs::cutSlice()), at priority 0 meanwhile.
+    bool cut = false;
     bool batteryHeld = false;      // the floor holds the scan from this pass (the log, the status line)
     bool batteryReleased = false;  // ... and lets it go from this one
   };
@@ -190,20 +206,25 @@ public:
   // window opens for them).
   Out update(const In& in);
 
-  // The worker finished a step of `job` that took `ms` (its own clock): the
-  // scan's rate for the estimate and the console.
-  void stepDone(Job job, uint32_t ms);
+  // The worker finished a step of `job` that took `ms` (its own clock) and
+  // did `units` of its work (a slice's CardWalk steps, or files of the
+  // scan: 0 when it only looked at rows): the scan's rate for the estimate
+  // and the console.
+  void stepDone(Job job, uint32_t ms, uint32_t units = 1);
 
   // The floor holds the scan now.
   bool batteryLow() const { return batteryLow_; }
   // The time update() spent waiting for `w` (Step: a step under way), since
   // the start or resetStats(): what was behind a slow scan (L3).
   uint64_t waitedMs(Wait w) const;
-  // The steps of `job` done (stepDone()), their mean and longest ms.
+  // The steps of `job` done (stepDone()), their mean and longest ms, and
+  // their units.
   uint32_t steps(Job job) const;
   uint32_t meanStepMs(Job job) const;  // 0: none yet
   uint32_t maxStepMs(Job job) const;
-  // The scan's ms a file: its own mean once it has one, else kEstimateMsPerFile.
+  uint32_t units(Job job) const;
+  // The scan's ms a file (its steps' ms over the files they took) once it
+  // has read one, else kEstimateMsPerFile.
   uint32_t scanMsPerFile() const;
   void resetStats();
 
@@ -214,8 +235,10 @@ public:
   static uint32_t scanEstimateMs(uint32_t files, uint32_t msPerFile);
   // The scan's source from In's flags (3.3.3's order).
   static Source sourceOf(const In& in);
-  // A step's priority (3.3.4).
-  static uint8_t priorityOf(Job job, bool listMoving);
+  // A step's priority (3.3.4, 3.3.9) when no wait applies: the build 1; a
+  // cover and the walk 1, 0 while a list moves; the scan 1 while the screen
+  // is dark and no list moves, else 0; the rest 0.
+  static uint8_t priorityOf(Job job, bool listMoving, bool dark = false);
 
   static const char* jobName(Job j);
   static const char* sourceName(Source s);
@@ -245,4 +268,5 @@ private:
   uint32_t steps_[kJobs] = {};
   uint64_t stepMs_[kJobs] = {};
   uint32_t stepMaxMs_[kJobs] = {};
+  uint32_t units_[kJobs] = {};
 };

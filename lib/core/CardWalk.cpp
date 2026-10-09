@@ -386,11 +386,32 @@ bool CardWalk::begin(const Config& config) {
 CardWalk::State CardWalk::step() {
   if (r_.state != State::Walking && r_.state != State::Settling) return r_.state;
   ++r_.steps;
-  if (r_.state == State::Walking)
-    stepFolder();
-  else
+  if (r_.state == State::Settling) {
     stepSettle();
+    return r_.state;
+  }
+  // A step is one listing: entering a subfolder and leaving a finished one
+  // read nothing, so they go on into the next listing (2026-10-09: three
+  // steps a folder, two of them no I/O, made a 20k card's walk 7,774 steps,
+  // each one a hand-off). At most one folder is listed a step, as before;
+  // the walk's end (D's folders left, T's end) is a step of its own.
+  const uint32_t listings = r_.listings;
+  do {
+    stepFolder();
+  } while (r_.state == State::Walking && r_.listings == listings);
   return r_.state;
+}
+
+const char* CardWalk::errorName(Error e) {
+  switch (e) {
+    case Error::None: return "none";
+    case Error::Config: return "its setup";
+    case Error::Card: return "a listing: the card?";
+    case Error::Known: return "reading tags.bin";
+    case Error::Sink: return "the journal's write";
+    case Error::Transfer: return "the transfer's tags file";
+  }
+  return "?";
 }
 
 CardWalk::State CardWalk::run() {

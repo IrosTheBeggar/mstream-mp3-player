@@ -2,6 +2,7 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 #pragma once
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -23,14 +24,25 @@
 // step's memory, the file it names), the worker step(), then the loop
 // finish() (what the step did). Between finish() and the next prepare()
 // the loop may read the store and flush the scan's chunk; while a step runs
-// it touches nothing here.
+// it touches nothing here but cutSlice().
+//
+// A handed step of the walk or of the scan's rest is a slice (2026-10-09):
+// its units (a CardWalk step; a file of the rest) one after another until
+// the slice (Config::sliceUs, setSlice()) has passed on Config::nowUs, each
+// unit whole, the next one started only when the last one's time still
+// fits (so a slice ends before the loop's pass that hands the next: 3.3.9).
+// The loop's cutSlice() ends it after the unit under way (a wait came:
+// input, the ring, a track change...). No clock or a slice of 0: one unit a
+// step (the host tests' default). A file a loop source names is a step of
+// its own.
 //
 // The jobs:
 //   - The walk (3.2.3): CardWalk over KnownD and WalkSink (TagStoreWalk),
 //     against T streamed on the first walk after a commit (D's walk
-//     identity isn't the root's) and through its HIDX otherwise. A step is
-//     a folder listing (or one pass of a big folder), or a few doubts with
-//     at most one qfp read; the first step also opens its files. A T that
+//     identity isn't the root's) and through its HIDX otherwise. A unit is
+//     a folder listing (or one pass of a big folder), or the walk's end, or
+//     a few doubts with at most one qfp read; the first step also opens its
+//     files. A T that
 //     fails its checks as it streams fails the walk (CardWalk's
 //     Error::Transfer): it is walked again without T, and T counts as
 //     absent for the rest of the session (the builder would restart
@@ -38,11 +50,12 @@
 //     rule): compactWork() asks for that compaction before walkWork().
 //   - A compaction (3.3.2): one step, TagStore::compact() (a Rescan's when
 //     asked: the next epoch, every Scanned and Unreadable row Pending).
-//   - The scan (3.3.1, 3.3.3): one file a step. Its file comes from the
+//   - The scan (3.3.1, 3.3.3): a file a unit. Its file comes from the
 //     loop (the playing track, the queue, the Library tab: Pending tracks
-//     of the index, prepare()'s path) or from the rest of D's to-do, the
-//     Pending rows of TagStore's merged view (a View, kept open across
-//     steps, skipping what the scan read since it opened). The file is
+//     of the index, prepare()'s path: one file, the step) or from the rest
+//     of D's to-do, the Pending rows of TagStore's merged view (a View, kept
+//     open across steps, skipping what the scan read since it opened: a
+//     slice of files, at most kSliceFiles, each in file()). The file is
 //     opened, read by TagScan through a 4 KB buffer, and its record added
 //     to the journal's chunk (Scanned, or Unreadable when it isn't a file
 //     of its kind); the chunk goes to tags.jnl every chunkFiles files or
@@ -65,9 +78,10 @@
 //
 // Memory, from the hooks (PSRAM on the device), only while a job has
 // work: the walk about 98 KB (CardWalk's 64 KB scratch, D's and the
-// journal's buffers, T's streams), the scan about 85 KB (TagScan's
-// Scanner, its buffer, the chunk, the run for the overlay, the read set)
-// plus the View's merge memory, the compaction TagStore's own.
+// journal's buffers, T's streams), the scan about 93 KB (TagScan's
+// Scanner, its buffer, the chunk, the run for the overlay, the read set,
+// a slice's list of files) plus the View's merge memory, the compaction
+// TagStore's own.
 namespace cardjobs {
 
 using Job = ScanScheduler::Job;
@@ -105,6 +119,12 @@ struct Config {
   // after this long, not every pass: each try is a FatFs open (on a pulled
   // card about 1 s of the SD driver's retries) and a write.
   uint32_t retryMs = 30000;
+  // The slice (above): a handed step of the walk or of the scan's rest runs
+  // its units until this long has passed on `nowUs` (the worker's clock,
+  // esp_timer on the device). 0, or no clock: one unit a step. The loop may
+  // change it between steps (setSlice(): longer while the screen is dark).
+  uint32_t sliceUs = 0;
+  uint64_t (*nowUs)() = nullptr;
   // Whether the index lists a file (`rel` relative to /music), asked on the
   // worker for each file the walk adds to D: the walk's news is the files
   // new to the index (Done::newToIndex), not those new to D (an index
@@ -129,10 +149,25 @@ struct Verified {
   uint32_t failed = 0;    // the file couldn't be read
 };
 
-// What the last step did (finish()).
+// The most files a slice of the scan's rest takes (its list for the loop,
+// Jobs::file(), is in the scan's PSRAM: about 8 KB).
+constexpr uint32_t kSliceFiles = 32;
+
+// A file a scan step took (Jobs::file()): what the loop learns of it.
+struct FileDone {
+  const char* rel = "";  // relative to /music
+  size_t relLength = 0;
+  bool read = false;       // read (its record in the chunk unless `readError`), else skipped
+  bool readError = false;
+  tagscan::Result result = tagscan::Result::Ok;
+};
+
+// What the last step did (finish()). The scan's fields below `handled` are
+// the step's last file's; file() has each of a slice's.
 struct Done {
   Job job = Job::None;
   // ---- the walk ----
+  uint32_t walkSteps = 0;  // CardWalk's steps in this one (a slice's)
   bool walkEnded = false;  // Done or Failed (`walk` says which)
   bool walkRetried = false;  // T failed its checks: the walk starts again without it
   cardwalk::CardWalk::Result walk;
@@ -141,6 +176,7 @@ struct Done {
   bool compacted = false;
   tagstore::TagStore::Compacted compaction;
   // ---- the scan ----
+  uint32_t files = 0;    // files taken this step (file(0) to file(files - 1)): a loop source's 1, a slice's up to kSliceFiles
   bool handled = false;  // a file was taken: read, or skipped (`read` says which)
   bool read = false;     // ... read, its record in the chunk (Scanned or Unreadable) unless `readError`
   bool readError = false;
@@ -191,13 +227,22 @@ public:
   // step), and for a scan from the loop's sources (`source` not Rest) the
   // file, relative to /music. `nowMs`: the chunk's clock.
   bool prepare(Job job, Source source, const char* rel, size_t len, uint32_t nowMs);
-  // On the worker: the step.
+  // On the worker: the step (a slice: above).
   void step();
-  // After it (the loop): what it did. The scan's record (record()) and the
-  // walk's result are valid until the next prepare().
+  // From the loop while a step runs: the slice ends after the unit under
+  // way (ScanScheduler's Out::cut: a wait came, or a list moves).
+  void cutSlice() { cut_.store(true, std::memory_order_relaxed); }
+  // The slice from the next step on (Config::sliceUs); the loop, between
+  // steps only.
+  void setSlice(uint32_t us) { c_.sliceUs = us; }
+  // After it (the loop): what it did. The scan's record (record()), its
+  // files (file()) and the walk's result are valid until the next prepare().
   const Done& finish();
-  // The record the last scan step read (its fields: viewOf()).
+  // The record the last scan step read last (its fields: viewOf()): the
+  // step's last file's (Done::rel).
   const tagscan::Record* record() const;
+  // The scan step's file `i` (below Done::files).
+  FileDone file(uint32_t i) const;
 
   // ---- the loop, between steps ----
   // The chunk to tags.jnl now (the idle power-off's shutdown, before the
@@ -250,6 +295,11 @@ private:
   void stepWalk();
   void stepCompact();
   void stepScan();
+  // The slice: its start, and after each unit whether another fits.
+  void sliceBegin();
+  bool sliceGoesOn();
+  void scanRestOne();
+  void noteFile();
   bool scanFile(const char* rel, size_t len, uint32_t size, uint32_t fatTime, uint64_t qfp);
   bool verifyFile(const char* rel, size_t len, uint32_t size);
   bool nextRow(char* rel, size_t* len, uint32_t* size, uint32_t* fatTime, uint64_t* qfp, bool* ended);
@@ -286,6 +336,9 @@ private:
   char rel_[cardcontract::kMaxRelPath + 1] = "";
   size_t relLength_ = 0;
   uint32_t nowMs_ = 0;
+  // The slice under way: its start and its last unit's, on Config::nowUs.
+  uint64_t sliceAtUs_ = 0, unitAtUs_ = 0;
+  std::atomic<bool> cut_{false};
   Done done_;
   Counts counts_;
   Verified verified_;

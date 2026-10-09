@@ -218,6 +218,23 @@ bool LibraryUpdate::cardAnswers() {
   return true;
 }
 
+bool LibraryUpdate::deviceUnlisted() const {
+  if (!c_.store || (c_.root && c_.root->present && !transferBad_)) return false;
+  const tagstore::DeviceInfo& di = c_.store->device();
+  return di.present && !di.header.walked;
+}
+
+bool LibraryUpdate::recordsListCard() const {
+  if (!c_.store || (c_.root && c_.root->present && !transferBad_)) return true;
+  // A walk waiting in walk.jnl lists the card once merged (its rows; DHDR
+  // walked when its doubts are settled: with no T there are none).
+  if (c_.store->hasWalk()) return true;
+  if (c_.store->device().present) return c_.store->device().header.walked;
+  // No D: the build walks /music, unless the journal has the scan's records
+  // (the compaction first makes D of them alone).
+  return !c_.store->hasJournals();
+}
+
 // ---- the build and the save ----
 
 void LibraryUpdate::compactFirst(tagstore::TagStore::Compacted* c, bool* ran) {
@@ -236,7 +253,12 @@ bool LibraryUpdate::buildIndex(bool update, LibraryBuilder::Result* r, bool* wal
   LibraryIndex& index = *c_.index;
   const tagstore::DeviceInfo* di = c_.store ? &c_.store->device() : nullptr;
   const bool useT = c_.root && c_.root->present && !transferBad_;
-  const bool useD = di && di->present;
+  bool useD = di && di->present;
+  // The boot, with D that doesn't list the card (no T, never walked: only
+  // what the scan read): /music walked instead, every file Pending, rather
+  // than an index of those files alone. (The update step refuses before
+  // its fence: update()'s Asked.)
+  if (!update && c_.walk && deviceUnlisted()) useD = false;
   Opened o(*c_.fs);
   if (useT) o.t = c_.fs->open(c_.root->tagsPath, tagstore::Fs::Mode::Read);
   if (useD) {
@@ -509,6 +531,18 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
       if (!cardAnswers()) {
         step_.cardGone = true;
         phase_ = Phase::Idle;
+        o.act = Do::Failed;
+        ++steps_;
+        break;
+      }
+      // The records list the card (its compaction done): else the build
+      // would replace the index with the files the scan read alone (a
+      // failed first walk, 2026-10-09). Before the memory check, so no
+      // marker makes the next boot build it either.
+      if (deviceUnlisted() && c_.index && c_.index->ready()) {
+        step_.unlisted = true;
+        phase_ = Phase::Idle;
+        deferAsked_ = false;
         o.act = Do::Failed;
         ++steps_;
         break;

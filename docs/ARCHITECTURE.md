@@ -382,7 +382,7 @@ The rules that keep it deadlock- and glitch-free:
 | decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 1.4 M cycles per second of audio for 44.1 kHz's passthrough, the old path, 5 cycles a frame cheaper (an MP3 still measures 0.8 points above the build before the converter, its decoder's loop 2 % slower in the new image: RESAMPLER.md section 10b); 5.8-5.9 % of a core at 240 MHz for 48 kHz, 8.8 % at 160: RESAMPLER.md sections 10 and 10b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start); at a file's end it opens the next track with the ring still full (a gapless join: no refill from empty at natural ends, GAPLESS.md). Its rests are `ulTaskNotifyTake()`, so a request or a new word (`setNext()`) wakes it |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
-| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover (0 while a list moves) and the library update's build, 0 for the card's walk, compactions, tag scan and the update's save | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.8, 3.9): a cover (ui/Thumbs), a folder of the validation walk, a compaction of `tags.bin`, a file of the tag scan, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs unmeasured: `gs` prints it; the build about 4.5 KB at worst, ESTIMATED from `-fstack-usage`); reads the card in 4 KB pieces; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the card's background jobs at 0, since the SD driver's reads busy-wait the CPU; always below the decoder (below) |
+| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover (0 while a list moves), the library update's build, a slice of the walk, and a slice of the tag scan while the screen is dark (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply); 0 for compactions, the tag scan while the screen is lit and the update's save | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a slice of the validation walk (its folders for 18 ms lit, 60 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs unmeasured: `gs` prints it; the build about 4.5 KB at worst, ESTIMATED from `-fstack-usage`); reads the card in 4 KB pieces; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the card's background jobs at 0, since the SD driver's reads busy-wait the CPU; always below the decoder (below) |
 | Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms) |
 
 ## Bluetooth
@@ -1686,10 +1686,18 @@ the browsing UI hold its **track ids**, never strings.
   the files no fresh record covers (the playing track first, then the
   queue's next ones, the Library tab's page, then the rest), a file a step,
   into `tags.jnl`; **compactions** fold the journals into `tags.bin`. Each
-  step is handed by `ScanScheduler`, which holds the walk and the scan
-  while a list moves, input just came, the ring is low, a track changes, a
-  seek or a Bluetooth setup is under way, after an underrun or a long
-  decode pass, and the scan below 10% battery off USB. The **update step**
+  hand-off is `ScanScheduler`'s, which holds the walk and the scan while a
+  list moves, input just came, the ring is low, a track changes, a seek or
+  a Bluetooth setup is under way, after an underrun or a long decode pass,
+  and the scan below 10% battery off USB. A hand-off of the walk or of the
+  scan's rest is a slice of steps (18 ms lit, 60 ms dark), cut after its
+  step the moment one of those holds; the walk's slices run level with
+  the loop, the scan's only while the screen is dark (METADATA.md 3.3.9:
+  one step a hand-off made the loop's sleep each step's floor, 2.7 min
+  for a 20k walk). A walk that fails runs again a minute later, twice at
+  most, and while the card's records don't list it (the first boot's
+  walk failed) no update step runs: built from what the scan had read,
+  it would keep only those tracks. The **update step**
   (lib/core `LibraryUpdate`, METADATA.md 3.4.2 and 3.9: the index built
   again from the records, the queue carried through `queue.txt`) follows
   the scan's end when the journal took records since the last one, or a
