@@ -291,10 +291,11 @@ It contains:
   `libraries/SD` at 3.3.12), which PlatformIO takes before the
   framework's. Apache-2.0 by the files' headers ("Copyright 2015-2016
   Espressif Systems (Shanghai) PTE LTD"; sd_diskio_crc.c "Copyright (c)
-  2014 Neil Thiessen"); `sd_diskio.cpp` is modified (it says so at its
-  top, and each change is marked: the card's busy waited out after a
-  write), the other files are unchanged (their SHA-256 sums and the
-  changes are in lib/SD/README.md).
+  2014 Neil Thiessen"); two files are modified: `sd_diskio.cpp` (it says
+  so at its top, and each change is marked: the card's busy waited out
+  after a write) and `library.properties` (its `version`, 3.3.12+mstream.1,
+  and its `paragraph`); the other files are unchanged (the SHA-256 sums of
+  every original and the changes are in lib/SD/README.md).
 - Source: https://github.com/espressif/arduino-esp32/tree/3.3.12
 - Also in the merged image: boot_app0.bin (at 0xE000), from this package.
 

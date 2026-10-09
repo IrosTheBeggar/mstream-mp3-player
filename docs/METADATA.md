@@ -2292,10 +2292,12 @@ a page of the remembered headphones is a link being set up (3.3.9's
 yield, and the 3 s after), which held the boot's walk about 13 s on
 2026-10-08. A walk that fails says why (`the walk FAILED (the journal's
 write)`, CardWalk's `errorName()`), runs again 60 s later, twice at most
-a boot; and while the card's records don't list it (no T in use, D never
-walked: a first boot's), no update step runs (3.8, 3.9). The scan went
-on after that failed walk, and its update step built the library from
-what the scan had read: 19,410 tracks became 204, saved.
+a boot (a `gw` or `g0` walk that ends within the minute disarms it); and
+until a walk lists the card into its records (no T in use, D never
+walked: a first boot's, whose records are none at the failure and the
+scan's files alone from its first chunk), no update step runs (3.8, 3.9).
+The scan went on after that failed walk, and its update step built the
+library from what the scan had read: 19,410 tracks became 204, saved.
 
 #### 3.2.4 The PSRAM sector cache
 
@@ -2614,7 +2616,11 @@ Bluetooth mode has the least internal RAM. Nothing large lives on it:
 the `FIL`, `DIR` and `FILINFO` are in PSRAM (3.2.3, 3.3.1), and what
 remains is TagScan's about 1 KB, FatFs's 512 B long-name buffer and the
 call frames. L3 measures the stack's high-water mark and the lowest
-internal free during a scan in Bluetooth mode.
+internal free during a scan in Bluetooth mode (N11's card on df92c01:
+3,140 B least left). The deepest of its jobs is a compaction's reopen
+of D under its folders, ESTIMATED about 5.0 KB with the SD driver's log
+line on top, about 1.1 KB left (the 2026-10-09 review: about 0.6 KB
+before `Container::open()`'s frame went from 672 B to 160 B; 3.8).
 
 #### 3.3.5 Battery and power (the user's choice: on battery, while playing)
 
@@ -2944,7 +2950,14 @@ where 3.3.3-3.3.5 left room:
   too, for the scan), drops it to priority 0 and has it end after its
   unit. So a wait holds the walk and the scan within one unit and a pass
   (a folder's listing, a file: as with one-unit steps), not a slice and a
-  pass.
+  pass. `gr`, `gr!` and `gv` cut it too (`askRest()`, the 2026-10-09
+  review: the rest of the slice went on in the new mode from the middle
+  of the View, and a `gv` whose slice reached the View's end ended with
+  part of it). Each file a slice took says whether `gv` verified it
+  (`FileDone::verified`): a slice that verifies the last files and
+  reaches the rest's end has the mode back at Normal by `finish()`, and
+  `CardTasks` counted those files as the scan's ("Reading tags" up by as
+  many as 32; review).
 - **The priority decision (2026-10-09).** Priority 0 shares what the loop
   leaves with the idle task, about half of it (`configIDLE_SHOULD_YIELD`
   is 0: the idle task keeps its whole tick); covers measured 2-2.5x slower
@@ -3619,7 +3632,15 @@ src/. What the code decided where 3.2-3.4 left room:
   another card holds the card jobs and the queue's saves, toasts "Another
   card: restarting", logs `[card] ANOTHER CARD in the slot (...)` and
   restarts 1.2 s later through `restartAtMs` (Try again's path); the boot
-  reads that card's root, records, `library.idx` and `queue.txt`. The
+  reads that card's root, records, `library.idx` and `queue.txt`. Every
+  restart through `restartAtMs` (and the console's forget) waits for the
+  card worker's step under way first, at most 5 s (the guard holds new
+  ones), then restarts with the SPI bus held (`restartNow()`,
+  `PowerSettings::restart()`; the 2026-10-09 review): a CPU reset doesn't
+  cut the card's power, and a transfer the reset cut mid-block (the
+  worker preempted by the loop inside the SD driver: "Card back" is
+  chosen when a step is under way) would leave the card in its data
+  phase, where the next boot's CMD0 may be taken as data. The
   Opus cache's save and a cover's card copy aren't held: FatFs refuses
   them. The same card answering again (pulled and put back, or a remount
   after a status the card failed twice): with nothing under way (the
@@ -3627,7 +3648,12 @@ src/. What the code decided where 3.2-3.4 left room:
   opened again (`TagStore::open()`) and the jobs begun again
   (`CardTasks::begin()`, which runs `Jobs::begin()` as `CardJobs.h`
   asks after a remount): `[card] the card answered again (the same
-  card): its records opened again ...`; with something under way, the
+  card): its records opened again ...`. The session's scan and update
+  state is kept through it (the 2026-10-09 review: `begin()` took the
+  boot's `softStale()` and the records' mark again, so an update step
+  this session had run was asked again at the scan's end, and records the
+  scan appended before the remount, or a walk's changes, asked none);
+  with something under way, the
   queue saved, "Card back: restarting" and a restart. What the guard
   can't tell: two cards alike in all three (a sector-for-sector clone)
   are one card to it, and a card written on a PC while out of the player
@@ -3702,17 +3728,23 @@ src/. What the code decided where 3.2-3.4 left room:
   on 2026-10-08, CardWalk's `Error::Sink`): the log names the error
   (`[card] the walk FAILED (the journal's write) after N steps: nothing of
   it counts (walked again in 60 s)`), and `CardTasks` asks it again 60 s
-  later, twice at most a boot (`kWalkRetries`). The scan goes on (the
-  loop's sources; D's rest as it was). While the card's records don't
-  list it (`LibraryUpdate::recordsListCard()`: no T in use, and D never
-  walked or about to be compacted from the scan's records alone), no
-  update step is asked after a failed walk (`[card] the update step (the
-  scan's end) waits: the walk failed, and the card's records don't list
-  it yet`), and the update step itself refuses (3.9): on N11's card the
-  first boot's walk failed, the scan read the 204 files the loop named,
-  and the update step at its end built the library from them, 19,410
-  tracks to 204, saved for the next boot. The walk that lists the card
-  changes D, so the scan's end asks again.
+  later, twice at most a boot (`kWalkRetries`; a walk that ends
+  meanwhile, `gw` or `g0`, disarms the retry: the 2026-10-09 review, a
+  second whole walk a minute later). The scan goes on (the loop's
+  sources; D's rest as it was). Until a walk lists the card into its
+  records (`LibraryUpdate::walkListsCard()`: T in use, a walk to merge, or
+  D walked), no update step is asked after a failed walk (`[card] the
+  update step (the scan's end) waits: the walk failed, and the card's
+  records don't list it yet`), and the failure's line ends `; no update
+  step until a walk lists the card`; a fresh card's included, whose
+  records are none at the failure (a build then would walk /music:
+  `recordsListCard()`, true until the scan's first chunk; the review: the
+  line left the words out there, the very case they are for). The update
+  step itself refuses while `recordsListCard()` is false (3.9): on N11's
+  card the first boot's walk failed, the scan read the 204 files the loop
+  named, and the update step at its end built the library from them,
+  19,410 tracks to 204, saved for the next boot. The walk that lists the
+  card changes D, so the scan's end asks again.
 - **The walk's news is the files new to the index**, not to D: an index
   built from T, or walked from /music, lists files D has no row for yet,
   so the walk's sink counts its Added rows the index can't find
@@ -3850,9 +3882,18 @@ src/. What the code decided where 3.2-3.4 left room:
   1.2 KB frame (two records found), over the VFS's and FatFs's reads
   (about 2 KB). The Walker, the records found and `gt`'s path and title
   are in the command's PSRAM `Work` now (about 34 KB while it runs, 29 KB
-  before), `gl`'s names and paths in one PSRAM block: `gs` and `gt` about
-  4.6 KB deep at worst instead of 8.6 KB (ESTIMATED from the image;
-  ARCHITECTURE.md, "The loop task's stack", has each command's). Each
+  before), `gl`'s names and paths in one PSRAM block: `gs` about 4.3 KB
+  deep at worst and `gt` about 5.1 KB instead of 8.6 KB (ESTIMATED from
+  the image; ARCHITECTURE.md, "The loop task's stack", has each command's;
+  610df5a said 4.6 KB for both, its tool not following the tag scanner's
+  reads, which `gt` makes inside an ID3v2 or APE tag: the 2026-10-09
+  review). Since that review `cardcontract::Container::open()`, under
+  every reader of the records, takes 160 B of stack, not 672 B (one 64 B
+  buffer; the types seen read again, not kept in a table of 64): the
+  boot's compaction with the SD driver's log line on top was about 7.0-7.1
+  KB deep, about 1.1 KB left, and is about 6.5-6.6 KB now; the card
+  worker's compaction, the same reopen of D on its 6 KB, about 5.0 KB with
+  the log line, about 1.1 KB left (ARCHITECTURE.md). Each
   command ended with Enter is followed by its own depth: `[console] gs:
   the loop task's stack: N B never used during it (of 8 KB; M B the
   lowest since the boot)` (app/LoopStack paints the stack under the
@@ -3876,7 +3917,12 @@ src/. What the code decided where 3.2-3.4 left room:
   app/LoopStack; no `IRAM_ATTR` of ours), internal DRAM +80 B
   (`.dram0.bss` 32,584, `.dram0.data` 24,552 unchanged), flash `.text`
   +744 B (1,759,008) and `.rodata` +1,608 B (638,952 in core2, 638,984 in
-  core2-dio), the app 2.51 MB, every guard passing. PSRAM
+  core2-dio), the app 2.51 MB, every guard passing. After that day's
+  review's fixes (the restarts through `restartNow()`, the guard's
+  re-begin, `walkListsCard()`, the verified flag, `Container::open()`'s
+  frame; against c465f15): IRAM and internal DRAM unchanged, flash
+  `.text` -36 B (1,758,972) and `.rodata` +96 B (639,048 in core2,
+  639,080 in core2-dio), the app 2.51 MB, every guard passing. PSRAM
   (from the code; L0 and L3 measure): the cache 135,168 B on the card; the
   walk about 98 KB while it runs; the scan about 85 KB and its View's
   merge memory; the lister's `FIL`, `FF_DIR` and `FILINFO` about 4.5 KB;
@@ -3914,8 +3960,13 @@ src/. What the code decided where 3.2-3.4 left room:
   unchanged card's the same with nothing written, and a cut after the
   listing under way; and the scan's slices (two 8 ms files a slice, 18 of
   1 ms, the list's 32 in a 60 ms one, the cut after the file under way, a
-  loop source's file a step of its own, each file listed for the loop).
-  `test_sector_cache`
+  loop source's file a step of its own, each file listed for the loop);
+  and since the 2026-10-09 review a `gv` in one 60 ms slice that reaches
+  the rest's end (each file flagged verified, not read; `gr!` after it
+  read, not verified), `gr!` during a slice ending it after its file (the
+  next from D's first row), and the jobs begun again after a remount
+  keeping the journal's news for the update step (and an update step's
+  mark, and a chunk that waits). `test_sector_cache`
   (the wrapper's rules, `CachedDrive`: a mount clears, a write with the
   cache off drops, on again starts empty, verify, the deferred reset),
   `test_fat_model` (a card swapped under the wrapper: FatFs's own remount
@@ -4209,7 +4260,11 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   fence (and `gb!` writes no marker), and the index keeps every track,
   where the investigation's host test went from 6 tracks to 2; a boot
   that must build from that D walks /music; the walk that lists the card,
-  then the update step with every track and the scanned tags.
+  then the update step with every track and the scanned tags. Since that
+  day's review the same test checks `walkListsCard()` along it: false
+  from the boot (no records: `recordsListCard()` true, the build would
+  walk /music) through the failure and the scan's chunk, true once a
+  walk is there to merge and after the build (D walked).
   `test_gapless_player` (4 more): every id renumbered behind
   the fence with the join after it kept (one play, no cut); a join heard
   inside the fence taken after it by its path; a track that ends inside
@@ -4594,12 +4649,18 @@ command>: the loop task's stack: N B never used during it (of 8 KB; M B
 the lowest since the boot)`. N at least 1,536 everywhere (the line says
 LOW under it: record the command and its card's state), and no `Stack
 canary watchpoint triggered (loopTask)` in the whole log; at least about
-3.5 KB after `gs` and `gt`, 3.8 KB after `gl` and `glw` (ESTIMATED worst
-cases: about 1.6 KB less if the SD driver logs a card error during it),
-4.4-5.1 KB after the others (ARCHITECTURE.md, "The loop task's stack").
-M: about 2,000 B after the first boot on N11's card (the boot's
-compaction; 2,008 B MEASURED). `ui`'s `[ui] loop task stack: N B never
-used since the boot` is M.
+3.5 KB after `gs`, 3.0 KB after `gt` (its tag scan reading inside an
+ID3v2 or APE tag: about 5.1 KB used, the 2026-10-09 review; the probes'
+plain files about 3.9 KB left), 3.8 KB after `gl` and `glw` (ESTIMATED
+worst cases: about 1.6 KB less if the SD driver logs a card error during
+it), 4.4-5.1 KB after the others (ARCHITECTURE.md, "The loop task's
+stack"). M: about 2,000 B after the first boot on N11's card (the
+boot's compaction; 2,008 B MEASURED on df92c01, about 500 B more since
+the review's `Container::open()`). The boot's compaction with the SD
+driver's log line on top (a card error during it) is ESTIMATED at about
+1.5-1.7 KB left: M under 1,536 after an `sd_diskio.cpp` line during a
+boot is a finding to record with that line, under 1,024 a failure either
+way. `ui`'s `[ui] loop task stack: N B never used since the boot` is M.
 
 **Before.** The core2 (QIO) build of `feature/metadata` at N10's commit or
 later, flashed with the user's go-ahead. The card: N11's synthetic 20k
@@ -4699,17 +4760,23 @@ the next epoch). Then:
   again every 30 s).
 - The same card back, the guard's lines (3.8): `[card] the card answered
   again (the same card): its records opened again (D present, N journal
-  chunks), the card jobs begun again` with nothing under way; during the
+  chunks), the card jobs begun again` with nothing under way, and no
+  update step the session had already run asked again at the scan's end
+  (`gs`'s jobs line: the update steps' count as before it); during the
   walk, a scan step or an update step, `[card] the card answered again
   (the same card) with a card job under way: the queue saved,
   restarting`, the toast "Card back: restarting", and a boot that loads
-  the library and the queue as they were. The records are opened again
-  on the loop task, outside the console (no `[console]` line): `ui`'s
-  `[ui] loop task stack: M B never used since the boot` after it, M at
-  least 1,536 (ESTIMATED: `TagStore::open()` under `loop()`'s frames
-  about 3.5 KB deep, 4.9 KB with the SD driver's log line on top, below
-  the boot's; ARCHITECTURE.md, "The loop task's stack"). The `[stats]`
-  line's `stack_free=` is the decoder task's, not the loop's.
+  the library and the queue as they were (the step under way ends first,
+  at most 5 s: rarely `[card] the card worker's step still under way
+  after 5 s: restarting once its SD call ends`; then the boot's
+  `SD card on FatFs drive 0`, never "No microSD card"). The records are
+  opened again on the loop task, outside the console (no `[console]`
+  line): `ui`'s `[ui] loop task stack: M B never used since the boot`
+  after it, M at least 1,536 (ESTIMATED: `TagStore::open()` under
+  `loop()`'s frames about 3.0 KB deep, 4.6 KB with the SD driver's log
+  line on top, below the boot's; ARCHITECTURE.md, "The loop task's
+  stack"). The `[stats]` line's `stack_free=` is the decoder task's, not
+  the loop's.
 - **Another card while on** (the guard, 3.8): note a second FAT32 card's
   `/.player` on a PC first (a card from another player, or N11's card
   with a `/.player` of its own: its files' names, sizes and times). With
@@ -4722,7 +4789,9 @@ the next epoch). Then:
   the swap, byte for byte (`tags.jnl`, `queue.txt`, `library.idx`,
   `opus.idx`, `walk.jnl` unchanged, nothing new). Then the same during
   the scan (the first boot of a fresh card) and during the boot's walk:
-  the same lines, no write.
+  the same lines, no write. (A swap the runner asks for, made with the
+  Core2 left on, is this too: ANOTHER CARD and its restart are the boot
+  the runner waits for, not a stop.)
 
 **L2, the boot and the validation walk** (3.2.2, 3.2.3, 3.2.5):
 
@@ -4766,12 +4835,15 @@ the next epoch). Then:
 6. A walk that fails (a write the card refused, as on 2026-10-08): `[card]
    the walk FAILED (the journal's write) after N steps: nothing of it
    counts (walked again in 60 s)`, with `; no update step until a walk
-   lists the card` on a card whose records don't list it (a first boot's),
-   then `[card] the walk again (retry 1 of 2)` a minute later. The scan
-   goes on (the playing track, the queue's); at its end `[card] the update
-   step (the scan's end) waits: the walk failed, and the card's records
-   don't list it yet`. The library keeps every track (the Library tab, `g`)
-   through it and through the next boot.
+   lists the card` on a card no walk has listed (a first boot's, a fresh
+   card's whose records are none yet included: the 2026-10-09 review),
+   then `[card] the walk again (retry 1 of 2)` a minute later (none if a
+   `gw` or `g0` walk ended in that minute). The scan goes on (the playing
+   track, the queue's); at its end `[card] the update step (the scan's
+   end) waits: the walk failed, and the card's records don't list it yet`.
+   The library keeps every track (the Library tab, `g`) through it and
+   through the next boot, and no "Updating library" fence comes before
+   the walk that lists the card.
 
 **L3, the scanner** (3.3; risk 7). N11's card from a fresh `/.player`
 (delete it on a PC: every file the scan's). `gs`'s waits, steps, stack

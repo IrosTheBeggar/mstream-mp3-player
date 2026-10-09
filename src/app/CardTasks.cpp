@@ -82,6 +82,12 @@ bool CardTasks::begin() {
   c.sliceUs = kLitSliceUs;
   jobs_.begin(c);
   active_ = true;
+  // Again (the card's guard: the same card back after FatFs mounted it
+  // again): the session's scan and update state as it was (Jobs keeps its
+  // records' mark too). softStale() is the boot's: taken again, it would
+  // ask an update step this session already ran, and drop one a walk asked.
+  if (begun_) return true;
+  begun_ = true;
   // A soft-stale index (the scan went on since its build, a build that left
   // records out, an update step a cut stopped) is rebuilt at the scan's
   // end: the first one after the boot's walk, even with nothing to scan
@@ -375,9 +381,11 @@ void CardTasks::afterWalk(const cardjobs::Done& d) {
   if (r.state != cardwalk::CardWalk::State::Done) {
     // Nothing of it counts. Often a glitch (a write the card refused once):
     // walked again a minute later, twice at most; then the next boot's. The
-    // scan goes on; while the card's records don't list it, no update step
-    // (askUpdate()): built from the files the scan read, it would drop the
-    // rest of the library.
+    // scan goes on; until a walk lists the card into its records, no update
+    // step (askUpdate()): built from the files the scan read, it would drop
+    // the rest of the library. (A fresh card's records are none yet, which
+    // a build could take, but the scan's first chunk makes them its files
+    // alone: LibraryUpdate::walkListsCard(), not recordsListCard().)
     walkFailed_ = true;
     char next[40];
     if (walkRetries_ < kWalkRetries) {
@@ -390,10 +398,13 @@ void CardTasks::afterWalk(const cardjobs::Done& d) {
     }
     Serial.printf("[card] the walk FAILED (%s) after %lu steps: nothing of it counts (%s)%s\n",
                   cardwalk::CardWalk::errorName(r.error), (unsigned long)r.steps, next,
-                  lib_.update()->recordsListCard() ? "" : "; no update step until a walk lists the card");
+                  lib_.update()->walkListsCard() ? "" : "; no update step until a walk lists the card");
     return;
   }
   walkFailed_ = false;
+  // (A retry still armed is a walk this one has done: gw or g0 within the
+  // minute after a failure.)
+  walkRetryArmed_ = false;
   Serial.printf("[card] the walk: %lu folders (%lu listings, %lu merged), %lu audio, %lu images, %lu other; %lu "
                 "added, %lu changed, %lu gone; %lu doubtful (%lu by the skew, %lu by D's qfp, %lu read, %lu not T's)%s; "
                 "%lu steps in %lu ms\n",
@@ -445,8 +456,10 @@ void CardTasks::afterScan(const cardjobs::Done& d, uint32_t nowMs) {
   // has one, no longer Pending; the playing one's tags shown now (the
   // record is the step's last file's: a slice of the rest that read the
   // playing track before its last file shows its tags at the next build).
+  // (A file gv verified isn't one the scan read: FileDone::verified, the
+  // step's own; jobs_.mode() is Normal again once a slice reached the
+  // rest's end.)
   LibraryIndex* idx = lib_.index();
-  const bool verifying = jobs_.mode() == cardjobs::Mode::Verify;
   for (uint32_t i = 0; i < d.files; ++i) {
     const cardjobs::FileDone f = jobs_.file(i);
     if (f.relLength == 0) continue;
@@ -456,11 +469,11 @@ void CardTasks::afterScan(const cardjobs::Done& d, uint32_t nowMs) {
       const uint32_t id = idx->findTrack(path);
       if (id != LibraryIndex::kNone) {
         idx->clearPending(id);
-        const bool tags = f.read && !f.readError && f.result != tagscan::Result::Unreadable;
+        const bool tags = f.read && !f.readError && !f.verified && f.result != tagscan::Result::Unreadable;
         if (tags && i + 1 == d.files && id == playing_ && jobs_.record()) lib_.setOverlay(id, *jobs_.record());
       }
     }
-    if (f.read && !f.readError && !verifying) {
+    if (f.read && !f.readError && !f.verified) {
       ++scanDone_;
       if (scanDone_ > scanTotal_) scanTotal_ = scanDone_;
     }
@@ -470,9 +483,11 @@ void CardTasks::afterScan(const cardjobs::Done& d, uint32_t nowMs) {
 void CardTasks::askUpdate(const char* why, bool deferToBoot) {
   if (!active_) return;
   LibraryUpdate* up = lib_.update();
-  if (walkFailed_ && !up->recordsListCard()) {
-    // (The update step would refuse it too, after its compaction:
-    // LibraryUpdate::Step::unlisted. The walk that lists the card asks.)
+  if (walkFailed_ && !up->walkListsCard()) {
+    // (The update step would refuse it too, after its compaction, once the
+    // journal has the scan's records: LibraryUpdate::Step::unlisted. With
+    // none yet there is nothing to update. The walk that lists the card
+    // asks.)
     Serial.printf("[card] the update step (%s) waits: the walk failed, and the card's records don't list it yet\n",
                   why);
     return;
@@ -484,6 +499,7 @@ void CardTasks::askUpdate(const char* why, bool deferToBoot) {
 void CardTasks::askWalkAndUpdate() {
   if (!active_) return;
   updateAfterWalk_ = true;
+  walkRetryArmed_ = false;  // (this is the walk a failed one's retry would ask)
   jobs_.askWalk();
 }
 
@@ -555,6 +571,7 @@ bool CardTasks::rescan(bool everything) {
 
 bool CardTasks::walkNow() {
   if (!active_) return false;
+  walkRetryArmed_ = false;  // (this is the walk a failed one's retry would ask)
   jobs_.askWalk();
   return true;
 }

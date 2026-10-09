@@ -70,18 +70,24 @@ Why Container::open(Source& src, const FormatSpec& spec, uint8_t* typeHeader) {
   header_ = Header();
   for (uint32_t i = 0; i < kMaxKnown; ++i) known_[i] = Section();
   const uint32_t size = src.size();
-  uint8_t common[kCommonHeaderBytes];
+  // One small buffer for the common header, the header's CRC and each
+  // directory entry: this runs under the card's reads on the loop task's
+  // 8 KB and the card worker's 6 KB (the boot's compaction, gs, gt; with
+  // the SD driver's log line on top), so its frame stays small (2026-10-09:
+  // 672 B with a 256 B buffer and a table of the types seen).
+  uint8_t buf[64];
+  static_assert(sizeof(buf) >= kCommonHeaderBytes && sizeof(buf) >= kDirEntryBytes, "the buffer holds both");
   if (size < kCommonHeaderBytes) return Why::Short;
-  if (!src.read(0, common, kCommonHeaderBytes)) return Why::Io;
-  header_.magic = get32(common);
-  header_.major = get16(common + 4);
-  header_.minor = get16(common + 6);
-  header_.headerBytes = get32(common + 8);
-  header_.sectionCount = get32(common + 12);
-  header_.fileBytes = get32(common + 16);
-  header_.generation = get32(common + 20);
-  header_.cardId = get64(common + 24);
-  header_.headerCrc = get32(common + 32);
+  if (!src.read(0, buf, kCommonHeaderBytes)) return Why::Io;
+  header_.magic = get32(buf);
+  header_.major = get16(buf + 4);
+  header_.minor = get16(buf + 6);
+  header_.headerBytes = get32(buf + 8);
+  header_.sectionCount = get32(buf + 12);
+  header_.fileBytes = get32(buf + 16);
+  header_.generation = get32(buf + 20);
+  header_.cardId = get64(buf + 24);
+  header_.headerCrc = get32(buf + 32);
   if (header_.magic != spec.magic) return Why::Magic;
   if (header_.major != kMajor) return Why::Major;
   if (header_.headerBytes % 8 || header_.headerBytes < spec.headerBytes) return Why::HeaderBytes;
@@ -91,8 +97,7 @@ Why Container::open(Source& src, const FormatSpec& spec, uint8_t* typeHeader) {
   if (header_.fileBytes != size) return Why::FileBytes;
 
   // The header's CRC, over the header and the directory with the CRC field
-  // as 0: read through a small buffer, the type's known fields kept.
-  uint8_t buf[256];
+  // as 0: read through the small buffer, the type's known fields kept.
   uint32_t crc = 0;
   for (uint32_t at = 0; at < dirEnd;) {
     const uint32_t n = static_cast<uint32_t>(dirEnd - at < sizeof(buf) ? dirEnd - at : sizeof(buf));
@@ -108,11 +113,10 @@ Why Container::open(Source& src, const FormatSpec& spec, uint8_t* typeHeader) {
   if (crc != header_.headerCrc) return Why::HeaderCrc;
 
   // The directory.
-  uint32_t seen[kMaxSections];
   uint64_t end = dirEnd;  // where the previous section ended
   for (uint32_t i = 0; i < header_.sectionCount; ++i) {
-    uint8_t e[kDirEntryBytes];
-    if (!src.read(header_.headerBytes + kDirEntryBytes * i, e, kDirEntryBytes)) return Why::Io;
+    const uint8_t* e = buf;
+    if (!src.read(header_.headerBytes + kDirEntryBytes * i, buf, kDirEntryBytes)) return Why::Io;
     Section s;
     s.type = get32(e);
     s.flags = get32(e + 4);
@@ -124,9 +128,13 @@ Why Container::open(Source& src, const FormatSpec& spec, uint8_t* typeHeader) {
     if (s.offset % 8 || s.offset < end || s.offset - end >= 8) return Why::Layout;
     const uint64_t sEnd = static_cast<uint64_t>(s.offset) + s.bytes;
     if (sEnd > header_.fileBytes) return Why::Layout;
-    for (uint32_t k = 0; k < i; ++k)
-      if (seen[k] == s.type) return Why::Layout;
-    seen[i] = s.type;
+    // A type once: the entries before it read again (their type's 4 bytes,
+    // a few files' sections), not kept in a table of 64 on the stack.
+    for (uint32_t k = 0; k < i; ++k) {
+      uint8_t t[4];
+      if (!src.read(header_.headerBytes + kDirEntryBytes * k, t, sizeof(t))) return Why::Io;
+      if (get32(t) == s.type) return Why::Layout;
+    }
     end = sEnd;
     uint32_t known = spec.count;
     for (uint32_t k = 0; k < spec.count; ++k)

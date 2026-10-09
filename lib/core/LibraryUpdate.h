@@ -363,9 +363,15 @@ public:
   // /music). False: no T, and D (or the journal it would be compacted
   // from) holds only what the scan read: the first boot's walk failed, or
   // hasn't merged. A build then would drop every other file (2026-10-09:
-  // 19,410 tracks to 204), so the update step refuses (Step::unlisted) and
-  // CardTasks doesn't ask after a failed walk.
+  // 19,410 tracks to 204), so the update step refuses (Step::unlisted).
   bool recordsListCard() const;
+  // Whether a walk listed the card into its records, or T does: T in use, a
+  // walk to merge, or D walked. recordsListCard() less its "no records at
+  // all" (the build walks /music): on a fresh card whose first walk failed
+  // that holds only until the scan's first chunk reaches the journal. So
+  // after a failed walk CardTasks asks no update step, and says so, until
+  // this is true (a walk that lists the card asks).
+  bool walkListsCard() const;
 
 private:
   // The build of the records (T and D), or the walk (none): into the index.

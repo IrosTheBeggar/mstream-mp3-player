@@ -1535,6 +1535,7 @@ void test_a_failed_first_walk_keeps_the_library() {
   TEST_ASSERT_TRUE(d.booted.walked);  // no records: /music walked, every track by its path
   TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
   TEST_ASSERT_TRUE(d.upd->recordsListCard());  // none at all: a build walks /music
+  TEST_ASSERT_FALSE(d.upd->walkListsCard());   // ... but no walk listed the card
   // The boot's walk, its walk.jnl write refused.
   d.jobs.askWalk();
   fs.refuse = true;
@@ -1543,6 +1544,13 @@ void test_a_failed_first_walk_keeps_the_library() {
   TEST_ASSERT_EQUAL_UINT32(1, d.jobs.counts().walksFailed);
   TEST_ASSERT_FALSE(d.store->hasWalk());
   TEST_ASSERT_FALSE(d.jobs.restWork());  // D none: no rest; the loop's sources only
+  // Right after the failure the records are still none, which a build could
+  // take (recordsListCard()); CardTasks' line and its hold go by
+  // walkListsCard(), false from here to the walk that lists the card, so the
+  // failure's line says "no update step until a walk lists the card" on
+  // this first boot too (2026-10-09's review: it didn't).
+  TEST_ASSERT_TRUE(d.upd->recordsListCard());
+  TEST_ASSERT_FALSE(d.upd->walkListsCard());
   // The loop's sources: the playing track and the queue's next.
   const char* const read[] = {"Artist/Album/01 - a.flac", "Artist/Album/02 - b.opus"};
   for (const char* rel : read) {
@@ -1553,6 +1561,7 @@ void test_a_failed_first_walk_keeps_the_library() {
   TEST_ASSERT_TRUE(d.jobs.flushChunk());
   TEST_ASSERT_TRUE(d.jobs.newRecords());  // the scan's end would ask (CardTasks doesn't, after a failed walk)
   TEST_ASSERT_FALSE(d.upd->recordsListCard());  // the journal holds the two, nothing listed the card
+  TEST_ASSERT_FALSE(d.upd->walkListsCard());
   // The update step (the scan's end; gb): its compaction makes D of the two
   // records alone; then it refuses, before its fence.
   d.update("the scan's end");
@@ -1590,11 +1599,13 @@ void test_a_failed_first_walk_keeps_the_library() {
   d.drain();
   TEST_ASSERT_EQUAL_UINT32(1, d.jobs.counts().walksFailed);
   TEST_ASSERT_TRUE(d.upd->recordsListCard());
+  TEST_ASSERT_TRUE(d.upd->walkListsCard());  // (a walk to merge)
   d.acts.clear();
   d.update("the scan's end");
   TEST_ASSERT_TRUE(d.did(Do::Saved));
   TEST_ASSERT_FALSE(d.upd->last().unlisted);
   TEST_ASSERT_TRUE(d.store->device().header.walked);
+  TEST_ASSERT_TRUE(d.upd->walkListsCard());  // (D walked)
   TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
   TEST_ASSERT_EQUAL_UINT32(0, pendingIn(d.index));
   TEST_ASSERT_EQUAL_STRING(kFlacTitle, titleOf(d.index, kFlac).c_str());

@@ -13,7 +13,8 @@
 // The one card worker (docs/METADATA.md 3.3.4, 3.3.9; milestones N10, N12):
 // a task on core 1, below the audio decoder (2), that takes one step at a
 // time of whatever the loop hands it: a cover (ui/Thumbs), a slice of the
-// validation walk (its folders for up to 18 ms), a compaction, a file of
+// validation walk (its folders for about 18 ms lit, 60 ms dark:
+// CardTasks::kLitSliceUs, kDarkSliceUs), a compaction, a file of
 // the scan or a slice of its rest (app/CardTasks, lib/core CardJobs), the
 // update step's build and its save (lib/core LibraryUpdate). Thumbs'
 // worker, generalised: it runs only the step it is handed, so no two jobs

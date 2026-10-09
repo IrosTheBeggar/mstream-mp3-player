@@ -9,8 +9,9 @@
 // yields to the music and the listener. The worker (N10: Thumbs' worker,
 // generalised) takes one step at a time, and only the step it is handed: a
 // cover; the update step's build or its save (3.4.2, N12); a slice of the
-// validation walk (3.2.3: its folders, or passes of a big one, for up to
-// about 18 ms); a compaction of tags.bin (3.3.2); a file of the scan
+// validation walk (3.2.3: its folders, or passes of a big one, for about
+// 18 ms while the screen is lit, 60 ms while it is dark: the firmware's
+// CardTasks); a compaction of tags.bin (3.3.2); a file of the scan
 // (3.3.1) a loop source names, or a slice of its rest's files; the DJNB
 // check. The loop calls update() every pass, where the inputs are, and
 // hands the worker what it says at the priority it says. So the jobs never

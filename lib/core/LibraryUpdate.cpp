@@ -224,15 +224,19 @@ bool LibraryUpdate::deviceUnlisted() const {
   return di.present && !di.header.walked;
 }
 
-bool LibraryUpdate::recordsListCard() const {
+bool LibraryUpdate::walkListsCard() const {
   if (!c_.store || (c_.root && c_.root->present && !transferBad_)) return true;
   // A walk waiting in walk.jnl lists the card once merged (its rows; DHDR
   // walked when its doubts are settled: with no T there are none).
   if (c_.store->hasWalk()) return true;
-  if (c_.store->device().present) return c_.store->device().header.walked;
+  return c_.store->device().present && c_.store->device().header.walked;
+}
+
+bool LibraryUpdate::recordsListCard() const {
+  if (walkListsCard()) return true;
   // No D: the build walks /music, unless the journal has the scan's records
   // (the compaction first makes D of them alone).
-  return !c_.store->hasJournals();
+  return c_.store && !c_.store->device().present && !c_.store->hasJournals();
 }
 
 // ---- the build and the save ----

@@ -886,12 +886,37 @@ void test_a_transfer_card() {
   TEST_ASSERT_EQUAL_UINT32(1, s.jobs.verified().differ);
   TEST_ASSERT_TRUE(s.jobs.mode() == cj::Mode::Normal);
 
-  // Rescan everything: the transfer's files read too.
+  // Verify in slices (the dark's 60 ms; the card's clock still): one slice
+  // verifies every file and reaches the rest's end, so the mode is Normal
+  // again by finish(). Each file says it was verified, not read for its
+  // tags (CardTasks counted them as the scan's: "Reading tags" went up).
+  s.sliceUs = 60000;
+  s.begin(tPath.c_str(), id);  // (again: the slice's clock)
+  s.jobs.askRest(cj::Mode::Verify);
+  const cj::Done& v = s.run(Job::Scan);
+  TEST_ASSERT_TRUE(v.verifyEnded);
+  TEST_ASSERT_TRUE(s.jobs.mode() == cj::Mode::Normal);
+  TEST_ASSERT_EQUAL_UINT32(kAudio, v.files);
+  for (uint32_t i = 0; i < v.files; ++i) {
+    const cj::FileDone f = s.jobs.file(i);
+    TEST_ASSERT_TRUE(f.verified);
+    TEST_ASSERT_TRUE(f.read);
+  }
+  TEST_ASSERT_TRUE(v.verified);
+  TEST_ASSERT_EQUAL_UINT32(2 * kAudio, s.jobs.verified().checked);
+
+  // Rescan everything: the transfer's files read too (one slice: read, not
+  // verified).
   const uint32_t before = s.jobs.counts().scanned;
   s.jobs.askRest(cj::Mode::All);
+  const cj::Done& a = s.run(Job::Scan);
+  TEST_ASSERT_EQUAL_UINT32(kAudio, a.files);
+  for (uint32_t i = 0; i < a.files; ++i) TEST_ASSERT_FALSE(s.jobs.file(i).verified);
+  TEST_ASSERT_FALSE(a.verified);
   s.drain();
   TEST_ASSERT_EQUAL_UINT32(kAudio, s.jobs.counts().scanned - before);
   TEST_ASSERT_TRUE(s.jobs.mode() == cj::Mode::Normal);
+  s.sliceUs = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1252,12 +1277,71 @@ void test_slices_of_the_scan() {
   TEST_ASSERT_EQUAL_UINT32(3, s.run(Job::Scan).files);
   card.onOpen = nullptr;
   TEST_ASSERT_EQUAL_UINT32(cj::kSliceFiles, s.run(Job::Scan).files);  // the next isn't cut
+  // gr or gv during a slice (askRest()): it ends after its unit too (the rest
+  // of it would go on in the new mode from the middle of the View), and the
+  // next starts over from D's first row.
+  s.jobs.askRest(cj::Mode::All);
+  opened = 0;
+  card.onOpen = [&] {
+    if (++opened == 3) s.jobs.askRest(cj::Mode::All);
+  };
+  TEST_ASSERT_EQUAL_UINT32(3, s.run(Job::Scan).files);
+  card.onOpen = nullptr;
+  const cj::Done& again = s.run(Job::Scan);
+  TEST_ASSERT_EQUAL_UINT32(cj::kSliceFiles, again.files);
+  TEST_ASSERT_EQUAL_STRING("A0/Album/0.mp3", s.jobs.file(0).rel);  // (D's first row)
   // A file the loop names: a step of its own, whatever the slice.
   const cj::Done& d = s.run(Job::Scan, Src::Playing, "A2/Album/5.mp3");
   TEST_ASSERT_EQUAL_UINT32(1, d.files);
   TEST_ASSERT_EQUAL_STRING("A2/Album/5.mp3", s.jobs.file(0).rel);
   TEST_ASSERT_EQUAL_STRING("A2/Album/5.mp3", d.rel);
   card.openUs = 0;
+}
+
+// ---------------------------------------------------------------------------
+// The jobs begun again after FatFs mounted the same card again (main.cpp's
+// stepCardGuard, the card pulled and put back while nothing ran): the
+// records this session put in the journal are still news for the update
+// step, and an update step's mark stays. (2026-10-09's review: begin() took
+// the mark again, so the records a scan appended before the remount asked
+// for no update step this session.)
+// ---------------------------------------------------------------------------
+void test_begun_again_after_a_remount() {
+  CutFs fs;
+  TestCard card;
+  fill(card);
+  Session s(fs, card);
+  s.begin();
+  s.jobs.askWalk();
+  s.drain();  // the walk, its merge, the rest: every file read
+  TEST_ASSERT_EQUAL_UINT32(kAudio, s.jobs.counts().scanned);
+  TEST_ASSERT_TRUE(s.jobs.newRecords());
+  s.jobs.markRecords();  // the update step ran
+  s.begin();             // the remount
+  TEST_ASSERT_FALSE(s.jobs.newRecords());  // not asked again for the same records
+  // (The rest looks at the View again and reads nothing: the journal has
+  // every file's record.)
+  const uint32_t scanned = s.jobs.counts().scanned;
+  s.drain();
+  TEST_ASSERT_EQUAL_UINT32(scanned, s.jobs.counts().scanned);
+  TEST_ASSERT_FALSE(s.jobs.newRecords());
+  // The playing track read again, its chunk out; then the remount.
+  const cj::Done& d = s.run(Job::Scan, Src::Playing, "Artist/Album/01 - a.flac");
+  TEST_ASSERT_TRUE(d.read);
+  TEST_ASSERT_TRUE(s.jobs.flushChunk());
+  TEST_ASSERT_TRUE(s.jobs.newRecords());
+  s.begin();
+  TEST_ASSERT_TRUE(s.jobs.newRecords());  // still news
+  // A chunk that waits across it: kept, and news.
+  s.run(Job::Scan, Src::Playing, "Artist/Album/02 - b.opus");
+  TEST_ASSERT_TRUE(s.jobs.chunkPending());
+  s.jobs.markRecords();
+  s.begin();
+  TEST_ASSERT_TRUE(s.jobs.chunkPending());
+  TEST_ASSERT_TRUE(s.jobs.newRecords());
+  TEST_ASSERT_TRUE(s.jobs.flushChunk());
+  s.jobs.markRecords();
+  TEST_ASSERT_FALSE(s.jobs.newRecords());
 }
 
 int main(int, char**) {
@@ -1274,5 +1358,6 @@ int main(int, char**) {
   RUN_TEST(test_a_card_that_refuses);
   RUN_TEST(test_the_synthetic_cards_walk);
   RUN_TEST(test_slices_of_the_scan);
+  RUN_TEST(test_begun_again_after_a_remount);
   return UNITY_END();
 }

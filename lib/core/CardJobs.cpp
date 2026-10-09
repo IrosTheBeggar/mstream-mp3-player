@@ -56,6 +56,7 @@ struct SliceFile {
   uint16_t len = 0;
   bool read = false;
   bool readError = false;
+  bool verified = false;
   tagscan::Result result = tagscan::Result::Ok;
   char rel[cc::kMaxRelPath + 1];
 };
@@ -123,7 +124,8 @@ void Jobs::begin(const Config& c) {
   appendBlocked_ = false;
   compactFailed_ = false;
   appendFailed_ = false;
-  recordedMark_ = counts_.recorded;
+  // (recordedMark_ kept: again after a remount, the records this session
+  // put in the journal are still news for the update step.)
   mode_ = Mode::Normal;
   // Nothing for the scan when D has only Software rows (or none) and no
   // journal: every file is the transfer's. Else one pass of the View says.
@@ -155,6 +157,10 @@ void Jobs::askRest(Mode mode) {
   mode_ = mode;
   restDone_ = false;
   restartRest_ = true;  // the View starts over at the next scan step (a step may be under way now)
+  // A slice of the rest under way ends after its unit (as before slices:
+  // the rest of it would go on in the new mode from the middle of the View,
+  // and a gv whose slice reached its end would end with part of it).
+  cutSlice();
 }
 
 bool Jobs::walkWork() const {
@@ -270,6 +276,7 @@ FileDone Jobs::file(uint32_t i) const {
   f.relLength = s.len;
   f.read = s.read;
   f.readError = s.readError;
+  f.verified = s.verified;
   f.result = s.result;
   return f;
 }
@@ -577,6 +584,7 @@ bool Jobs::scanFile(const char* rel, size_t len, uint32_t size, uint32_t fatTime
   ScanWork& s = *scan_;
   done_.handled = true;
   done_.read = done_.readError = false;  // (this file's, not the slice's last)
+  done_.verified = false;
   done_.result = tagscan::Result::Ok;
   done_.reads = 0;
   cc::Source* src = c_.card->openFile(rel, len);
@@ -624,6 +632,7 @@ bool Jobs::verifyFile(const char* rel, size_t len, uint32_t size) {
   ScanWork& s = *scan_;
   done_.handled = true;
   done_.read = done_.readError = false;
+  done_.verified = true;  // (Verify's, whatever came of it: not read for its tags)
   done_.result = tagscan::Result::Ok;
   done_.reads = 0;
   if (!s.verifyOpen && !s.verifyMissing) {
@@ -668,6 +677,7 @@ void Jobs::noteFile() {
   std::memcpy(f.rel, done_.rel, done_.relLength + 1);
   f.read = done_.read;
   f.readError = done_.readError;
+  f.verified = done_.verified;
   f.result = done_.result;
 }
 

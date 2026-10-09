@@ -198,9 +198,27 @@ static PowerSettings powerSettings;
 static bool idleInput = false;
 // Track lengths learned as they play (the Queue's "49 min"): PSRAM.
 static queueview::DurationBook durations(psramAlloc, psramFree);
-// A card was found by "Try again": restart at this time (the UI's toast
-// shows first). 0: none.
+// A restart the loop carries out (restartAtMs) at this time, the UI's toast
+// shown first: a card found by "Try again", the card's guard (another card,
+// or the same one back with a card job under way), the console's Bf. 0:
+// none.
 static uint32_t restartAtMs = 0;
+
+// The loop's restarts (restartAtMs; the console's forget): the card
+// worker's step under way finishes first (at most kRestartWaitMs: a save,
+// the update step's build, a compaction's end), then
+// PowerSettings::restart(), which holds the SPI bus the card shares with
+// the panel. A CPU reset doesn't cut the card's power: a transfer cut
+// mid-block (the worker at 0 or 1, preempted by the loop inside the SD
+// driver) would leave the card in its data phase, where the next boot's
+// CMD0 may be taken as data, and SD.begin() fail until a power cycle.
+static constexpr uint32_t kRestartWaitMs = 5000;
+static void restartNow() {
+  if (!cardWorker.waitIdle(kRestartWaitMs))
+    Serial.printf("[card] the card worker's step still under way after %lu s: restarting once its SD call ends\n",
+                  (unsigned long)(kRestartWaitMs / 1000));
+  powerSettings.restart();  // (Serial flushed; doesn't return)
+}
 
 static constexpr uint32_t kDiagnosticsScreenMs = 3000;
 // Volume keys of headphones without absolute volume (AVRCP passthrough):
@@ -1759,8 +1777,7 @@ static SerialConsole console({
       audio.bluetooth().forgetDevice(/*waitMs=*/3000);  // before the restart
       Serial.printf("[bt] forgot the remembered device; restarting (%s)\n",
                     audio.bluetooth().scansByName() ? "it scans by name" : "no name to scan by: pair on the Output tab");
-      Serial.flush();
-      ESP.restart();
+      restartNow();
     },
     [](const char* name) {
       BtSink& bt = audio.bluetooth();
@@ -2639,9 +2656,12 @@ static bool cardHeld = false;
 // Opus cache's save and a cover's card copy are refused there too). The
 // same card: its records opened again and the jobs begun again (what was
 // open is gone, and it may have been written elsewhere meanwhile;
-// cardjobs::Jobs::begin() asks for this), unless a job was under way (a
-// step on the worker, a walk, a compaction, the update step): then the
-// queue saved and a restart. And the card's refused writes, as they come.
+// cardjobs::Jobs::begin() asks for this; the session's scan and update
+// state kept: CardTasks::begin()), unless a job was under way (a step on
+// the worker, a walk, a compaction, the update step): then the queue saved
+// and a restart. Either restart waits for the worker's step under way
+// (cardHeld hands no other) and holds the SPI bus (restartNow()). And the
+// card's refused writes, as they come.
 static void stepCardGuard() {
   if (!sectordisk::installed()) return;
   const sectordisk::Guard g = sectordisk::guard();
@@ -3201,10 +3221,7 @@ void loop() {
       lengthNoted = 1;
     }
   }
-  if (restartAtMs && static_cast<int32_t>(now - restartAtMs) >= 0) {
-    Serial.flush();
-    ESP.restart();
-  }
+  if (restartAtMs && static_cast<int32_t>(now - restartAtMs) >= 0) restartNow();
 
   // A new track (skip, jump, natural end, a queue edit) drops the tempo prior.
   // (Not behind the library update's fence: the queue is the build's. After

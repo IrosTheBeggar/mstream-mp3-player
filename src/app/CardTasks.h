@@ -37,11 +37,12 @@ class Thumbs;
 //     step at once when ScanScheduler::buildAfterWalk() says so (U11: 200
 //     files or more, or a scan over 60 s), else at the scan's end;
 //   - after a walk that failed: walked again kWalkRetryMs later, at most
-//     kWalkRetries times a boot; and while the card's records don't list it
-//     (no transfer data in use, and D never walked: the first boot's walk
-//     failed), no update step: the build would list only the files the
-//     scan read (2026-10-09: a failed first walk shrank 19,410 tracks to
-//     the 204 the loop's sources had read);
+//     kWalkRetries times a boot (a walk that ends meanwhile, gw or g0,
+//     disarms it); and until a walk lists the card into its records (no
+//     transfer data in use, and D never walked: the first boot's walk
+//     failed; LibraryUpdate::walkListsCard()), no update step: the build
+//     would list only the files the scan read (2026-10-09: a failed first
+//     walk shrank 19,410 tracks to the 204 the loop's sources had read);
 //   - a file the scan read: the index stops calling it Pending (so the
 //     playing track, the queue and the Library tab's page aren't asked for
 //     again), and the playing track's tags go to Now Playing at once
@@ -93,7 +94,9 @@ public:
   CardTasks(Library& library, CardWorker& worker);
 
   // After Library::begin(): the jobs over the card's records (false: no
-  // records here: covers only).
+  // records here: covers only). Again after the card's guard reopened the
+  // records (the same card back, nothing under way): the session's scan and
+  // update state kept (what the scan's end asks, the journal's new records).
   bool begin();
   bool active() const { return active_; }
   // The UI's first frame: the validation walk kWalkDelayMs later.
@@ -204,6 +207,7 @@ private:
   cardjobs::Jobs jobs_;
   ScanScheduler sched_;
   bool active_ = false;
+  bool begun_ = false;  // begin() ran once: again keeps the session's state
   bool walkArmed_ = false;
   uint32_t walkAtMs_ = 0;
   // A failed walk's retry (not "Checking the card…" while it waits).

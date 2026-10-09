@@ -2,7 +2,8 @@
 
 The Arduino core's SD library, copied from framework-arduinoespressif32
 3.3.12 (`libraries/SD`, https://github.com/espressif/arduino-esp32/tree/3.3.12/libraries/SD)
-with one file changed. A library named `SD` in the project's `lib/` comes
+with two files changed: the driver, and the library's description. A
+library named `SD` in the project's `lib/` comes
 before the framework's in PlatformIO's search, so `#include <SD.h>` and
 `<sd_diskio.h>` find this copy and the framework's isn't compiled (the
 build's dependency graph lists `SD @ 3.3.12+mstream.1`).
@@ -14,9 +15,14 @@ Licence: Apache-2.0, as each file's header says
 
 ## What changed
 
-Only `src/sd_diskio.cpp`; its header says so, and every change is marked
-`mstream-mp3-player:`. The other files are the framework's, byte for byte
-(SHA-256 of the originals in 3.3.12):
+- `src/sd_diskio.cpp`: the driver's busy waits (below). Its header says
+  so, and every change is marked `mstream-mp3-player:`.
+- `library.properties`: `version=3.3.12+mstream.1` (was `3.3.12`), so the
+  dependency graph shows this copy, and `paragraph=` says what it is (was
+  the stock library's description). Its other lines are the framework's.
+
+Every other file is the framework's, byte for byte (SHA-256 of the
+originals in 3.3.12; the two changed files' before the change):
 
 | File | SHA-256 |
 |---|---|
@@ -26,6 +32,7 @@ Only `src/sd_diskio.cpp`; its header says so, and every change is marked
 | sd_diskio.cpp (before the patch) | fda00b53f23d4d93ab63a506b3197f27e24278a3f0d5da9c7590fff5ec37aa05 |
 | sd_diskio.h | 6dafcfea585b34ae3bdf0fe92131e0287836ef0a2169b67eadee02de2c8d393a |
 | sd_diskio_crc.c | c0305b3157516d016d68751786cbfe318b2367b35231a1016d64d636507efbc3 |
+| library.properties (before the change) | 21a453d1653b7076c8f6f28988a22bb5734ba2882ed3691c8746629be9fc3f7c |
 
 The patch (docs/METADATA.md 3.8; the rules are lib/core `SdBusy.h`,
 host-tested in test_sd_busy):
@@ -46,4 +53,6 @@ host-tested in test_sd_busy):
 
 Upgrading the Arduino core: compare its `libraries/SD/src/sd_diskio.cpp`
 with the hash above. If it changed, copy the new library here and apply
-the marked changes again (or drop this copy if upstream waits for 0xFF).
+the marked changes again, and `library.properties`' two lines (the
+version as the new core's plus `+mstream.1`); or drop this copy if
+upstream waits for 0xFF.

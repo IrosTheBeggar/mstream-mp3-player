@@ -159,6 +159,10 @@ struct FileDone {
   size_t relLength = 0;
   bool read = false;       // read (its record in the chunk unless `readError`), else skipped
   bool readError = false;
+  // Verify's (gv): its qfp checked against T's (`read`: the file could be
+  // read), no record. The step's own: a slice that verifies the last files
+  // and reaches the rest's end has Mode::Normal again by finish().
+  bool verified = false;
   tagscan::Result result = tagscan::Result::Ok;
 };
 
@@ -180,6 +184,7 @@ struct Done {
   bool handled = false;  // a file was taken: read, or skipped (`read` says which)
   bool read = false;     // ... read, its record in the chunk (Scanned or Unreadable) unless `readError`
   bool readError = false;
+  bool verified = false;  // ... verified (gv: FileDone::verified)
   Source source = Source::None;
   char rel[cardcontract::kMaxRelPath + 1] = "";
   size_t relLength = 0;
@@ -200,7 +205,9 @@ public:
   Jobs& operator=(const Jobs&) = delete;
 
   // The store, the card, T. Call again after a remount (nothing may be
-  // under way).
+  // under way): what the rest has to do is looked at again, the View
+  // closed, a Verify or Rescan's mode dropped; the counts, a chunk waiting
+  // and the records' mark (newRecords()) are kept.
   void begin(const Config& c);
 
   // ---- what there is to do (the loop, between steps) ----
@@ -211,7 +218,8 @@ public:
   // (gr), the next epoch.
   void askCompact(bool rescan = false);
   // The scan's rest in `mode` (Normal: the Pending rows, as after a walk;
-  // All: gr!; Verify: gv). It starts over from D's first row.
+  // All: gr!; Verify: gv). It starts over from D's first row; a slice
+  // under way ends after its unit (cutSlice()).
   void askRest(Mode mode = Mode::Normal);
   // ScanScheduler::In's flags.
   bool walkWork() const;     // a walk is asked and can start (no walk left to merge)

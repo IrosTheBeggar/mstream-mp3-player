@@ -382,7 +382,7 @@ The rules that keep it deadlock- and glitch-free:
 | decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 1.4 M cycles per second of audio for 44.1 kHz's passthrough, the old path, 5 cycles a frame cheaper (an MP3 still measures 0.8 points above the build before the converter, its decoder's loop 2 % slower in the new image: RESAMPLER.md section 10b); 5.8-5.9 % of a core at 240 MHz for 48 kHz, 8.8 % at 160: RESAMPLER.md sections 10 and 10b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start); at a file's end it opens the next track with the ring still full (a gapless join: no refill from empty at natural ends, GAPLESS.md). Its rests are `ulTaskNotifyTake()`, so a request or a new word (`setNext()`) wakes it |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
-| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover (0 while a list moves), the library update's build, a slice of the walk, and a slice of the tag scan while the screen is dark (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply); 0 for compactions, the tag scan while the screen is lit and the update's save | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a slice of the validation walk (its folders for 18 ms lit, 60 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs unmeasured: `gs` prints it; the build about 4.5 KB at worst, ESTIMATED from `-fstack-usage`); reads the card in 4 KB pieces; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the card's background jobs at 0, since the SD driver's reads busy-wait the CPU; always below the decoder (below) |
+| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover (0 while a list moves), the library update's build, a slice of the walk, and a slice of the tag scan while the screen is dark (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply); 0 for compactions, the tag scan while the screen is lit and the update's save | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a slice of the validation walk (its folders for 18 ms lit, 60 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB, about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build about 4.5 KB at worst); reads the card in 4 KB pieces; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; compactions, the tag scan while the screen is lit and the update's save at 0, since the SD driver's reads busy-wait the CPU (the walk's slices, and the scan's while the screen is dark, at 1: above); always below the decoder (below) |
 | Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms) |
 
 ### The loop task's stack
@@ -401,7 +401,20 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
 
 - **The boot goes deepest:** the library's compaction in `setup()` left
   2,008 B unused on N11's 20k card (MEASURED, df92c01; 6,064 B used
-  ESTIMATED, below, against 6,184 B MEASURED).
+  ESTIMATED then, below, against 6,184 B MEASURED). Its deepest read is
+  D's header, reopened under the compaction's folders
+  (`TagStore::compact()` 944 B, its pass 688 B, `emitFolder()` 400 B,
+  `FolderCursor::begin()` 352 B, `cardcontract::Container::open()`, then
+  FatFs and the SD driver): with the SD driver's log line on top (a card
+  error just then) it came to about 7.0-7.1 KB, about 1.1 KB left before
+  an interrupt's frame, under the 1,536 B line below (the 2026-10-09
+  review). `Container::open()`'s frame is 160 B now (672 B: one 64 B
+  buffer for its header, CRC and directory reads, and the types seen
+  read again instead of a table of 64), which every reader of the
+  records shares: the boot ESTIMATED 5,552 B (512 B less), about 6.5-6.6
+  KB with the log line on top (about 1.5-1.7 KB left; L-steps: a reading
+  under 1,536 B after an SD driver line during a boot is a finding, not a
+  failure, METADATA.md 6.3.1).
 - **`gs` overflowed it** on that card (df92c01): `mptg::check()` put its
   3.9 KB `Walker` on the stack, under `TagConsole::status()`'s 1.2 KB frame
   (two records found), over the card's reads. The Walker, the records
@@ -418,35 +431,54 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
 - **The card's guard reopens the records on the loop**, outside the
   console (main.cpp's `stepCardGuard()`, inlined in `loop()`: the same
   card back after FatFs mounted it again, nothing under way):
-  `TagStore::open()` and `CardTasks::begin()`, ESTIMATED 3,472 B used at
+  `TagStore::open()` and `CardTasks::begin()`, ESTIMATED 3,024 B used at
   worst (the task's top and `loop()`'s 608 B frame, then
-  `TagStore::open()`'s 2,688 B through `cardcontract::Container::open()`'s
-  672 B frame and a read of the card), 4,864 B with the SD driver's log
-  line on top: under `loop()`'s own worst (about 4.9 KB, the power
-  probe's CSV) and the boot's. It prints no `[console]` line; `ui`'s
-  lowest since the boot shows it (METADATA.md 6.3.1, L1).
+  `TagStore::open()`'s 2,240 B through `cardcontract::Container::open()`'s
+  160 B frame and a read of the card; 3,472 B before the 2026-10-09
+  review), 4,576 B with the SD driver's log line on top: under `loop()`'s
+  own worst (about 4.9 KB, the power probe's CSV) and the boot's. It
+  prints no `[console]` line; `ui`'s lowest since the boot shows it
+  (METADATA.md 6.3.1, L1).
 - **ESTIMATED worst cases**, bytes used from the stack's top (from the
   image: each function's `entry` frame, its calls and long calls, the
   VFS's, FatFs's disk and the console's function pointers by hand, the
   coprocessor save area on top; the boot's 6,064 B against the 6,184 B
   measured says how close this comes). "Before" is 079d047 (the same
-  console as the device's df92c01), "after" 2feb566 with this change:
+  console as the device's df92c01), with 610df5a's tool; "after" is this
+  code (the 2026-10-09 review's fixes on c465f15) with the review's
+  corrections to the tool: the tag scanner's reads (its `Source` and its
+  byte readers, virtual calls the tool had left unresolved and so
+  uncounted) and every function a by-hand prefix names, not only a
+  unique one. So "before" is low for `gt`, and 610df5a's "after" (gs and
+  gt about 4.6 KB) was low for `gt`: about 5.1 KB when the tag scanner
+  reads inside an ID3v2 or APE tag (a cover before the text frames, a
+  tag over its 4 KB buffer); the probes' plain files read about 4.2 KB.
+  "A card error's log line" counts the SD driver's `log_w()` on top of the
+  deepest read (printf's 800 B frame again), and everything under it:
 
   | Command | Before | Before, a card error's log line | After | After, a card error's log line |
   |---|---|---|---|---|
-  | `gs` | 8,608 (over: the panic) | 10,224 | 4,608 | 6,224 |
-  | `gt` | 8,672 (over) | 10,288 | 4,624 | 6,128 |
-  | `gl`, `glw` | 5,040 | 6,560 (1,632 left) | 4,320 | 5,840 |
-  | `gc` | 3,360 | 3,360 | 3,440 | 3,440 |
-  | `gw`, `gb`, `gr`, `gv` | 3,024 | 3,024 | 3,072 | 3,072 |
-  | `g` | 3,568 | 3,568 | 3,616 | 3,616 |
-  | `ui` | 3,360 | 3,360 | 3,408 | 3,408 |
-  | `q` | 3,696 | 3,696 | 3,744 | 3,744 |
-  | `l` | 3,568 | 3,568 | 3,616 | 3,616 |
-  | `s` | 3,664 | 3,664 | 3,712 | 3,712 |
+  | `gs` | 8,608 (over: the panic) | 10,224 | 4,320 | 5,856 |
+  | `gt` | 8,672 (over) | 10,288 | 5,104 | 6,656 (1,536 left) |
+  | `gl`, `glw` | 5,040 | 6,560 (1,632 left) | 4,336 | 5,792 |
+  | `gc` | 3,360 | 3,360 | 3,232 | 3,392 |
+  | `gw`, `gb`, `gr`, `gv` | 3,024 | 3,024 | 3,232 | 4,464 |
+  | `g` | 3,568 | 3,568 | 3,776 | 5,008 |
+  | `ui` | 3,360 | 3,360 | 3,632 | 3,792 |
+  | `q` | 3,696 | 3,696 | 3,536 | 3,696 |
+  | `l` | 3,568 | 3,568 | 3,408 | 3,568 |
+  | `s` | 3,664 | 3,664 | 3,504 | 3,664 |
+  | `setup()` (the boot; before: c465f15's, by the new tool) | 6,064 | 7,616 | 5,552 | 7,104 |
+  | `loop()` (before: the same) | 4,912 | 6,288 | 4,912 | 6,288 |
 
-  (After: the console's measuring frame adds 48 B to each; `gc` 32 B more:
-  2feb566's `sectordisk::Stats`, copied onto the stack, grew.)
+  (After: the console's measuring frame is in each; `gs` 304 B less and
+  the boot 512 B less than on c465f15, `Container::open()`'s; the rest as
+  on c465f15. The boot's "log line" column counts D's reads through the
+  VFS, the console's path; the boot's own reads go through FatFs
+  directly, about 6.0-6.1 KB with the line, 6.5-6.6 KB with an
+  interrupt's frame on top as MEASURED above. No console path reaches 8
+  KB; `gt` with the log line leaves 1,536 B, and an interrupt's frame on
+  top would take its line under LOW, not over the end.)
 
 ## Bluetooth
 
@@ -1264,14 +1296,18 @@ CRC-32 of sector 0 and of its FAT boot sector) and compares the card at
 every remount: another card is write-protected until a restart (its
 status says `STA_PROTECT`, so FatFs refuses every write, the call that
 found it included), and the loop restarts ("Another card: restarting");
-the same card put back has its records opened again, or the player
-restarts if a card job was under way (METADATA.md 3.8, "The card's
-guard"). Under it is the SD library's driver, from `lib/SD`: the
-framework's copy with `sd_diskio.cpp` patched, because arduino-esp32
-3.3.12's busy wait took a byte of the card's busy line for "ready" and its
-writes sent their status command to a card still programming, so about
-one write in a few thousand failed with `token error` (the device run's
-walks; METADATA.md 3.8, "The SD driver"; lib/SD/README.md).
+the same card put back has its records opened again (the session's scan
+and update state kept), or the player restarts if a card job was under
+way. Each restart waits for the card worker's step under way (at most 5
+s) and holds the SPI bus (`PowerSettings::restart()`): a CPU reset leaves
+the card powered, and one cut mid-transfer would stay in its data phase
+for the next boot's CMD0 (METADATA.md 3.8, "The card's guard"). Under it
+is the SD library's driver, from `lib/SD`: the framework's copy with
+`sd_diskio.cpp` patched, because arduino-esp32 3.3.12's busy wait took a
+byte of the card's busy line for "ready" and its writes sent their status
+command to a card still programming, so about one write in a few thousand
+failed with `token error` (the device run's walks; METADATA.md 3.8, "The
+SD driver"; lib/SD/README.md).
 The console's `gc` prints its counts (hits, misses, the card's reads and
 their time, the mounts); `gc0` and `gc1` turn it off and on for the device
 batch's A/B, `gc2` checks every hit against the card (each prints the
