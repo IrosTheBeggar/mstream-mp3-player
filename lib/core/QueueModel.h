@@ -17,10 +17,15 @@
 // size (docs/QUEUE-MODES.md section 15; the user's answer to
 // docs/METADATA.md's U12). A Play of more takes kMaxEntries of them (not
 // shuffled: the first, or the window that holds its start; shuffled: the
-// chosen track and a random rest); an add takes as many as fit, the first
-// ones in its order, and is refused (false, nothing changed) when none
-// do; assign() keeps the window that holds its current entry (window()).
-// The undo is kept whatever the size.
+// chosen track and a random rest); assign() keeps the window that holds
+// its current entry (window()). An add that doesn't fit first pushes out
+// what already played (played(): the entries before the current one, in
+// play order, shuffled too), oldest first, as many as it lacks (the
+// user's choice, 2026-10-08: section 15.8), then takes as many as fit,
+// the first ones in its order; it is refused (false, nothing changed)
+// only when nothing can go: the queue full and nothing played. The
+// current entry and everything after it stay, in their order. The undo
+// is kept whatever the size, and puts back what an add pushed out.
 //
 // Memory: the entries (12 bytes each) and the undo snapshot (the same
 // again) are flat arrays from allocator hooks (the firmware points them at
@@ -36,8 +41,9 @@
 // edits follow (the tab bar design's Library and Queue actions):
 //   replace()      Play: the queue becomes these tracks, current at `start`
 //                  (past the cap, kMaxEntries of them: above)
-//   insertNext()   Play next: right after the current entry (as many as fit)
-//   append()       + Queue: at the end (as many as fit)
+//   insertNext()   Play next: right after the current entry (as many as fit,
+//                  pushing out what played to make room)
+//   append()       + Queue: at the end (as many as fit, the same)
 //   remove()       the selected positions; the current entry going makes
 //                  the next one that stays current (the last one, and
 //                  pastEnd, when none after it stays)
@@ -70,8 +76,9 @@
 // keep the ranks: Play (replace()) puts the chosen track first (kAnyStart:
 // a random one) and shuffles every other after it, the ranks the given
 // order; Play next ranks right after the current entry and + Queue after
-// the highest rank, each in the given order and never shuffled in (the
-// listener put them where they are); moveNext() ranks the moved right
+// the highest rank (of what stays, when it pushed out played entries:
+// their ranks leave gaps), each in the given order and never shuffled in
+// (the listener put them where they are); moveNext() ranks the moved right
 // after the current entry; an add to an empty queue is laid out as a Play
 // from its first. An add that would take a rank past 0xFFFFFFFF is refused
 // as out of memory is (four billion adds without a Play: never, but it
@@ -137,10 +144,26 @@ public:
   uint32_t positionOf(uint32_t key) const;
   // Entries after the current one ("12 up next").
   uint32_t upNext() const { return current_ >= 0 ? q_.size - 1 - static_cast<uint32_t>(current_) : 0; }
-  // How many tracks an add can take now: kMaxEntries less the size (0: the
-  // queue is full, and an add is refused). What the UI asks before an add,
-  // to say how much of it went in.
-  uint32_t room() const { return q_.size < kMaxEntries ? kMaxEntries - q_.size : 0; }
+  // How many tracks an add can take now: the places free under the cap
+  // (spare()) and the played entries it would push out to make room
+  // (played()); 0: the queue is full and nothing in it played, and an add
+  // is refused. What the UI asks before an add, to say how much of it went
+  // in.
+  uint32_t room() const { return spare() + played(); }
+  // The places free under the cap: kMaxEntries less the size.
+  uint32_t spare() const { return q_.size < kMaxEntries ? kMaxEntries - q_.size : 0; }
+  // The entries that already played: those before the current one, in
+  // play order (the positions, shuffled or not: a shuffled queue's
+  // entries are in the order that plays). What an add that doesn't fit
+  // pushes out, oldest (position 0) first; never the current entry or
+  // what follows it.
+  uint32_t played() const { return current_ > 0 ? static_cast<uint32_t>(current_) : 0; }
+  // How many played entries an add of `n` would push out now: what of it
+  // the spare places can't take, at most played().
+  uint32_t pushedBy(uint32_t n) const {
+    const uint32_t lack = n > spare() ? n - spare() : 0;
+    return lack < played() ? lack : played();
+  }
   // Bumped by every change to the entries (not by a move of the current
   // position alone): what the UI redraws on and the saver saves on.
   uint32_t contentVersion() const { return contentVersion_; }
@@ -176,8 +199,12 @@ public:
   // back. Nothing to play (`n` 0) is a Clear, in that mode.
   bool replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled);
   // The first room() of the tracks, in their order (all of them when they
-  // fit). False when none fit (the queue full: room() 0) or out of
-  // memory; the queue then unchanged and nothing to undo.
+  // fit), the played entries pushed out first, oldest first, as many as
+  // the spare places lack (pushedBy()). False when none fit (room() 0: the
+  // queue full and nothing played) or out of memory; the queue then
+  // unchanged and nothing to undo. An add that pushes out needs memory
+  // for its snapshot as well (its undo is how what played comes back):
+  // without it, refused as out of memory, the last edit's undo kept.
   bool insertNext(const uint32_t* tracks, uint32_t n);
   bool append(const uint32_t* tracks, uint32_t n);
   // Positions out of range and repeats are ignored; any order.
@@ -202,9 +229,14 @@ public:
   // The mode undo() puts back: the one the last edit was made in (it
   // differs from shuffled() only after a Play that set the mode).
   bool undoShuffled() const { return undoEdit_ != Edit::None ? undoShuffled_ : shuffled_; }
-  // The queue as it was before the last edit, in the mode it was in then.
-  // The current entry is the one current now if it was there then (what
-  // plays keeps playing), otherwise the one that was current then.
+  // The played entries the last edit (an add) pushed out, which undo()
+  // puts back where they were; 0: none, or nothing to undo.
+  uint32_t undoPushed() const { return undoEdit_ != Edit::None ? undoPushed_ : 0; }
+  // The queue as it was before the last edit, in the mode it was in then
+  // (an add's pushed-out entries back in their places: the snapshot is the
+  // whole queue). The current entry is the one current now if it was
+  // there then (what plays keeps playing), otherwise the one that was
+  // current then.
   bool undo();
   void dropUndo();
 
@@ -260,8 +292,8 @@ private:
   // The next draw from the hook (or the fixed sequence): its 32 bits for
   // `bound` 0 (a seed), else in [0, bound) by multiply-shift.
   uint32_t draw(uint32_t bound = 0);
-  // The highest rank (0 for an empty queue): O(n).
-  uint32_t maxRank() const;
+  // The highest rank of the entries from `from` on (0 for none): O(n).
+  uint32_t maxRank(uint32_t from = 0) const;
 
   AllocFn allocFn_;
   FreeFn freeFn_;
@@ -277,5 +309,6 @@ private:
   Array undo_;
   int32_t undoCurrent_ = -1;
   bool undoShuffled_ = false;  // the mode the snapshot was taken in
+  uint32_t undoPushed_ = 0;    // the played entries that edit pushed out
   Edit undoEdit_ = Edit::None;
 };

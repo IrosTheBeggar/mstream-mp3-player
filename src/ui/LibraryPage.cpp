@@ -726,14 +726,19 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
   // A single track is called by its title.
   char what[96];
   if (span.count == 1 || start >= 0) titleOf(span[start >= 0 ? static_cast<uint32_t>(start) : 0], what, sizeof(what));
-  // Where an add puts its first track (QueueModel: Play next right after
-  // the current entry, + Queue at the end): the toast's View goes there.
-  const uint32_t addedAt = action == 1 && q.current() >= 0 ? static_cast<uint32_t>(q.current()) + 1 : q.size();
   // The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15): a
-  // Play takes 5,000 of a bigger set; an add as many as fit, none when the
-  // queue is full (refused: its own toast).
+  // Play takes 5,000 of a bigger set; an add as many as fit, after pushing
+  // out what already played to make room (15.8: the entries before the
+  // current one, oldest first), none when the queue is full and nothing in
+  // it played (refused: its own toast).
   const uint32_t took = action == 0 ? std::min(span.count, QueueModel::kMaxEntries) : std::min(span.count, q.room());
   const bool full = action != 0 && took == 0;
+  const uint32_t pushed = action == 0 ? 0 : q.pushedBy(took);
+  // Where an add puts its first track (QueueModel: Play next right after
+  // the current entry, + Queue at the end), less the played entries it
+  // pushes out from before it: the toast's View goes there.
+  const uint32_t addedAt =
+      (action == 1 && q.current() >= 0 ? static_cast<uint32_t>(q.current()) + 1 : q.size()) - pushed;
   bool ok = false;
   char text[128];
   switch (action) {
@@ -758,7 +763,10 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       break;
     case 1:
       ok = !full && p.playNext(span.ids, span.count);
-      if (took < span.count) {
+      if (pushed > 0) {
+        // The news is what went to make room (the toast's Undo brings it back).
+        queueview::pushedText(queueview::Capped::Next, took, span.count, pushed, text, sizeof(text));
+      } else if (took < span.count) {
         queueview::cappedText(queueview::Capped::Next, took, span.count, text, sizeof(text));
       } else if (span.count == 1) {
         snprintf(text, sizeof(text), "Plays next: %s", what);
@@ -768,7 +776,9 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       break;
     default:
       ok = !full && p.addToQueue(span.ids, span.count);
-      if (took < span.count) {
+      if (pushed > 0) {
+        queueview::pushedText(queueview::Capped::Add, took, span.count, pushed, text, sizeof(text));
+      } else if (took < span.count) {
         queueview::cappedText(queueview::Capped::Add, took, span.count, text, sizeof(text));
       } else if (span.count == 1) {
         snprintf(text, sizeof(text), "Added: %s", what);
@@ -778,15 +788,20 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       break;
   }
   static const char* const kVerbs[3] = {"play", "play next", "add"};
-  char outcome[64] = "";
+  char outcome[128] = "";
+  int at = 0;
   if (full) {
-    snprintf(outcome, sizeof(outcome), ": REFUSED, the queue is full (%lu)",
+    snprintf(outcome, sizeof(outcome), ": REFUSED, the queue is full (%lu) and nothing in it played",
              static_cast<unsigned long>(QueueModel::kMaxEntries));
   } else if (!ok) {
     snprintf(outcome, sizeof(outcome), ": NO MEMORY");
   } else if (took < span.count) {
-    snprintf(outcome, sizeof(outcome), ": %lu of them (the queue holds %lu)", static_cast<unsigned long>(took),
-             static_cast<unsigned long>(QueueModel::kMaxEntries));
+    at = snprintf(outcome, sizeof(outcome), ": %lu of them (the queue holds %lu)", static_cast<unsigned long>(took),
+                  static_cast<unsigned long>(QueueModel::kMaxEntries));
+  }
+  if (ok && pushed > 0 && at >= 0 && static_cast<size_t>(at) < sizeof(outcome)) {
+    snprintf(outcome + at, sizeof(outcome) - at, "%s %lu played pushed out to make room", at ? ";" : ":",
+             static_cast<unsigned long>(pushed));
   }
   Serial.printf("[ui] library: %s %lu track%s (%s)%s\n", kVerbs[action < 0 || action > 2 ? 2 : action],
                 static_cast<unsigned long>(span.count), span.count == 1 ? "" : "s", span.count == 1 ? what : name,

@@ -389,13 +389,23 @@ void QueueStore::printStatus() const {
   const char* undoMode = queue_.undoShuffled() == queue_.shuffled() ? ""
                          : queue_.undoShuffled()                    ? " (and shuffle on)"
                                                                     : " (and shuffle off)";
+  // An add that pushed out what played (docs/QUEUE-MODES.md 15.8): its undo
+  // puts those back.
+  char undoBack[48] = "";
+  if (queue_.undoPushed()) {
+    snprintf(undoBack, sizeof(undoBack), " (and %lu played tracks back)", (unsigned long)queue_.undoPushed());
+  }
+  // Full: an add pushes out what played (the entries before the current
+  // one), or, with nothing played, is refused.
+  const char* full = queue_.room() == 0    ? " (full: nothing played, an add is refused)"
+                     : queue_.spare() == 0 ? " (full: an add pushes out what played)"
+                                           : "";
   Serial.printf("[queue] %lu tracks%s (%lu KB of PSRAM, the undo's included), at %d, %lu up next; shuffle %s, repeat "
-                "%s; undo: %s%s; file generation %lu%s, %lu writes (last %lu ms), %lu failures\n",
-                (unsigned long)queue_.size(), queue_.room() == 0 ? " (full: an add is refused)" : "",
-                (unsigned long)((queue_.memoryBytes() + 1023) / 1024),
+                "%s; undo: %s%s%s; file generation %lu%s, %lu writes (last %lu ms), %lu failures\n",
+                (unsigned long)queue_.size(), full, (unsigned long)((queue_.memoryBytes() + 1023) / 1024),
                 queue_.current() + 1, (unsigned long)queue_.upNext(),
                 queue_.shuffled() ? "on" : "off", repeatName(static_cast<uint8_t>(player_.repeat())),
-                kEdits[static_cast<int>(queue_.undoable())], undoMode, (unsigned long)saver_.generation(),
+                kEdits[static_cast<int>(queue_.undoable())], undoMode, undoBack, (unsigned long)saver_.generation(),
                 saver_.writing() ? " (writing)" : saver_.contentDirty() ? " (to write)" : "",
                 (unsigned long)saver_.writes(), (unsigned long)saver_.lastWriteMs(), (unsigned long)saver_.failures());
   // The resume point in NVS, and the player's start point (qs<sec>).

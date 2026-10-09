@@ -20,7 +20,10 @@ shuffle on; Repeat One's "1" didn't read), and two of section 10's
 expectations that were wrong; the fixes wait for their own device steps
 (section 10, steps 1, 9a and 14). **Since 2026-10-07 the queue holds
 at most 5,000 tracks** (section 15: the user's answer to
-docs/METADATA.md's U12; host-tested, not yet on the device). What Now Playing looks like and how it takes touches is the spec
+docs/METADATA.md's U12; host-tested, not yet on the device), **and
+since 2026-10-08 an add to a full queue pushes out what already
+played** to make room (15.8: the user's answer to 15.7's question;
+host-tested, not yet on the device). What Now Playing looks like and how it takes touches is the spec
 in [ARCHITECTURE.md](ARCHITECTURE.md) ("Now Playing", under UI): the
 layout, the hit areas, the two menus and their texts, the indicator, the
 haptics. This document is the rest:
@@ -1552,6 +1555,9 @@ all on a bigger library take a random 5,000 (shuffle on) or the first
 5,000 in order (shuffle off); an add past the cap is refused with a toast,
 "The queue holds 5,000 tracks", adding as many as fit first if that is the
 cleaner rule (left to this design: 15.3); the undo is always kept.
+**Since 2026-10-08** (the user's answer to 15.7's question) an add to a
+full queue first pushes out what already played, oldest first, and is
+refused only when nothing played: 15.8.
 
 ### 15.1 Why, and what it costs
 
@@ -1574,7 +1580,9 @@ cleaner rule (left to this design: 15.3); the undo is always kept.
 ### 15.2 The rule (`QueueModel`)
 
 `QueueModel::kMaxEntries` is 5,000; `room()` is how many an add can take
-now (0: full); `window(n, current)` is which of `n` entries a queue keeps
+now (since 15.8: `spare()`, the places free under the cap, and
+`played()`, the entries before the current one it may push out; 0: full
+and nothing played); `window(n, current)` is which of `n` entries a queue keeps
 around a current one: all when they fit; the first 5,000 when the current
 one is among them; else from the current one on (what plays and what
 comes after it; what played before goes), moved back so the window stays
@@ -1584,11 +1592,11 @@ comes after it; what played before goes), moved back so the window stays
 |---|---|
 | Play, not shuffled (`replace()`: a container's Play, "Play all N", an artist's or All tracks, the console's `qa`) | `window(n, start)`: the first 5,000 (`kAnyStart`, or a start among them); a start past them: from it on |
 | Play, shuffled; Shuffle all (`replace(.., true)`) | the chosen track first (`kAnyStart`: a random one), then a random 4,999 of the others, shuffled after it. The pick is selection sampling (Knuth's algorithm S, `shuffle::sample()` in `lib/core/Shuffle.h`): one pass in the list's order, nothing allocated, every set of 4,999 as likely. Each kept track's rank is its place in the whole list, so Off lays the 5,000 out in the library's order (with gaps, which ranks allow) |
-| Play next, + Queue (`insertNext()`, `append()`) | the first `room()` of them, in their order, where the add puts them (shuffled: ranked as any add); none fit: refused, `false`, nothing changes, no snapshot (the last edit's undo stays) |
+| Play next, + Queue (`insertNext()`, `append()`) | since 15.8, the entries that already played (before the current one, in play order) pushed out first, oldest first, as many as the spare places lack (`pushedBy()`); then the first `room()` of them, in their order, where the add puts them (shuffled: ranked as any add); none fit (full, nothing played): refused, `false`, nothing changes, no snapshot (the last edit's undo stays) |
 | An add to an empty queue | its first 5,000, laid out as a Play from its first (as ever) |
 | `assign()`: the boot's restore, its default queue (`queueEverything()`: the library's first 5,000), a remap's re-read | `window(n, current)`, its ranks with it |
 | Remove, Play next in edit mode (`moveNext()`), Clear up next, Clear, a toggle, Undo | never grow the queue |
-| The console's `Pz` (PowerLab: an hour of `tone:silence` next, for power measurements) | a full queue can't take it: it plays as the queue (`playNow()`), and `qu` puts the listener's back (2026-10-07 review: before, `Pz` said only "couldn't queue it", and a full queue is the default after the first boot on a big card) |
+| The console's `Pz` (PowerLab: an hour of `tone:silence` next, for power measurements) | since 15.8 a full queue pushes out its oldest played entry to take it (`qu` puts that back); a full queue with nothing played can't take it: it plays as the queue (`playNow()`), and `qu` puts the listener's back (2026-10-07 review: before, `Pz` said only "couldn't queue it", and a full queue is the default after the first boot on a big card) |
 
 - **The undo is kept** whatever the size: the snapshot is at most 60 KB.
   The Undo of a Play past the cap puts back the queue (and the mode) it
@@ -1601,7 +1609,8 @@ comes after it; what played before goes), moved back so the window stays
   one under it (the pick's seed): three with `kAnyStart`.
 - `PlaybackController` is unchanged: `playNow()`, `playNext()` and
   `addToQueue()` pass the rule through, and a refused add starts, stops
-  and cuts nothing (its `Act` finds the same next entry).
+  and cuts nothing (its `Act` finds the same next entry). So does a
+  push-out (15.8): only entries before the current one go.
 
 ### 15.3 An add past the cap: as many as fit (decided here)
 
@@ -1620,8 +1629,12 @@ add's order; refused only when none fit.**
   it went.
 - **Against it:** an album can be cut short (10 of its 12 tracks play
   next). The toast says so with the counts, and its Undo is there.
-- In practice the partial add is rare: after a big Play the queue is
-  full and every add is refused (15.7).
+- In practice the partial add is rare. As first built, after a big Play
+  the queue was full and every add was refused (15.7). Since 15.8 a full
+  queue first pushes out what played, so an add is cut short only when it
+  is bigger than the free places and what played together (a big
+  container's + Queue a few tracks after a Play all), and refused only
+  when nothing played (right after the Play, its first track playing).
 
 ### 15.4 Persistence (`queue.txt`)
 
@@ -1658,8 +1671,9 @@ counts grouped by thousands by `queueview::grouped()` and put in by
 
 | When | Toast | Buttons |
 |---|---|---|
-| Play next or + Queue with the queue full | "The queue holds 5,000 tracks" (one line, Body) | the Undo and View of the toast it covers, if one was up (`Ui::refuse()`, `queueview::keptByRefusal()`): nothing changed, so the last edit's undo stays, and its button with it. Most often that is the Play all or Shuffle all that filled the queue moments before; replaced by a note without buttons, its Undo was out of reach (2026-10-07 review) |
-| An add that only partly fit | "Added 37 of 300: the queue holds 5,000 tracks", "10 of 12 play next: the queue holds 5,000 tracks" (two lines: the what in Small over the why, Small beside View) | Undo, View |
+| Play next or + Queue with the queue full and nothing played (15.8) | "Nothing played yet: the queue holds 5,000 tracks" (two lines: the what in Small over the why, Body with no button or Undo kept, Small with Undo and View kept). As first built, "The queue holds 5,000 tracks" on one line in Body: 236 px, cut once the kept buttons left it 228 px (Undo) or 158 (Undo and View); changed with 15.8, which also changed when it shows | the Undo and View of the toast it covers, if one was up (`Ui::refuse()`, `queueview::keptByRefusal()`): nothing changed, so the last edit's undo stays, and its button with it. Most often that is the Play all or Shuffle all that filled the queue moments before; replaced by a note without buttons, its Undo was out of reach (2026-10-07 review) |
+| An add that pushed out played tracks (15.8) | "Added 12 tracks: 12 played tracks made way", "Plays next: 1 played track made way", "Added 37 of 300: 37 played tracks made way" (`queueview::pushedText()`; two lines: the add's what in Small over the line, Body when it fits, else Small) | Undo, View |
+| An add that only partly fit, nothing pushed out | "Added 37 of 300: the queue holds 5,000 tracks", "10 of 12 play next: the queue holds 5,000 tracks" (two lines: the what in Small over the why, Small beside View) | Undo, View |
 | A container's Play past the cap | "Playing 5,000 of 6,021: the queue holds 5,000 tracks" (the why in Body) | Undo |
 | Shuffle all past the cap | "Shuffling 5,000 of 19,412: the queue holds 5,000 tracks" | Undo |
 
@@ -1671,9 +1685,11 @@ before. The Folders root's "Play all N" still counts the whole card.
 Log lines:
 
 - `[ui] library: add 300 tracks (<album>): 37 of them (the queue holds
-  5000)`; `... : REFUSED, the queue is full (5000)`, then `[ui] toast: The
-  queue holds 5,000 tracks (Undo) (refused: the last toast's buttons
-  kept)`; a Play past it:
+  5000); 37 played pushed out to make room` (15.8; `: 12 played pushed
+  out to make room` when all of it fit); `... : REFUSED, the queue is
+  full (5000) and nothing in it played`, then `[ui] toast: Nothing played
+  yet: the queue holds 5,000 tracks (Undo) (refused: the last toast's
+  buttons kept)`; a Play past it:
   `[ui] library: play 6021 tracks (everything): 5000 of them (the queue
   holds 5000)`.
 - `[ui] shuffle all: 19412 tracks, a random 5000 of them (the queue holds
@@ -1685,11 +1701,15 @@ Log lines:
   NVS)`.
 - The remap: `... 5000 of 6000 tracks still there (1000 left out: the
   queue holds 5000), at ...`.
-- `q`: `[queue] 5000 tracks (full: an add is refused) (60 KB of PSRAM,
-  ...)`.
+- `q`: `[queue] 5000 tracks (full: an add pushes out what played) (60 KB
+  of PSRAM, ...)`, or `(full: nothing played, an add is refused)`; its
+  undo part `undo: add (and 12 played tracks back)` (15.8).
 - The console's `qn<n>` and `q+<n>`: `[queue] added <album>: 12 tracks
-  (REFUSED: the queue is full, 5000)`, `(10 of them: the queue holds
-  5000)`.
+  (REFUSED: the queue is full, 5000, and nothing in it played)`, `(10 of
+  them: the queue holds 5000)`, `(12 played pushed out to make room)`,
+  `(10 of them: the queue holds 5000; 10 played pushed out to make
+  room)`; `qu` and the toast's Undo: `[queue] undo: done (12 played
+  tracks back)`, `[ui] undo: done (12 played tracks back)`.
 
 ### 15.6 Host tests (`pio test -e native`)
 
@@ -1739,16 +1759,230 @@ tests pass (15 new); core2 builds with every guard (iram_diet: 51 of 51
 objects moved, the hot set pinned; cache_guard ok; flash_guard: 2.32 MB,
 39 % of the slot), no new warnings. Not flashed.
 
+Changed by 15.8: `test_an_add_takes_what_fits`,
+`test_a_full_queue_refuses_an_add` and `test_shuffled_adds_at_the_cap`
+start with the first entry current (nothing played, so nothing to push
+out: the rule they test is unchanged), and the refusal test ends with a
+step and a push-out; `test_random_edits_never_pass_the_cap` takes skips
+too and checks an add's size against the push-out; `test_queue_cap_texts_fit`
+measures the refusal's two lines in each of its three rooms;
+`test_the_queue_cap_through_the_player` pushes out at entry 4,500 and is
+refused at entry 0.
+
 ### 15.7 What it leaves open
 
-- **A full queue refuses every add.** After Shuffle all or Play all on a
-  library of 5,000 tracks or more, the queue is full: Play next and +
-  Queue are refused until something goes (Clear up next, or Remove in
-  Edit). That is the rule as the user gave it. A question for the user:
-  should an add push out what already played (the entries before the
-  current one, oldest first) to make room? Not built.
+- **A full queue refuses every add: decided (2026-10-08).** As first
+  built, after Shuffle all or Play all on a library of 5,000 tracks or
+  more, the queue was full: Play next and + Queue were refused until
+  something went (Clear up next, or Remove in Edit). The question for the
+  user was whether an add should push out what already played (the
+  entries before the current one, oldest first) to make room. **The
+  user's answer: push them out.** Built: 15.8.
 - **Not on the device yet** (no device in this step): the toasts' two
   lines, the log lines, and Shuffle all's time at 20,000 (the pick is
   one pass over the ids, then a shuffle of 5,000: under 10 ms,
   ESTIMATED). Section 10 gains no step yet; METADATA.md's L5 covers the
   UI at 20k.
+
+### 15.8 A full queue pushes out what played (2026-10-08)
+
+The user's answer to 15.7's question: **when the queue is full, an add
+pushes out tracks that already played, to make room, instead of
+refusing.**
+
+**The rule** (`QueueModel::insertAt()`, so every way an add comes in:
+the Library's Play next and + Queue on a track, an album, an artist, a
+folder or the Folders root; the console's `qn<n>` and `q+<n>`; PowerLab's
+`Pz`):
+
+- **What played** (`played()`) is the entries before the current one in
+  **play order**: the positions. Shuffled, the entries are in the order
+  that plays (2.1), so it is the shuffled order, not the own order (the
+  ranks) or the library's.
+- An add that doesn't fit in the free places (`spare()`) first removes
+  played entries, **oldest first** (position 0 on), **as many as it
+  lacks** (`pushedBy(n)`: the add less the free places, at most
+  `played()`), then goes in where it always did (Play next right after
+  the current entry, + Queue at the end).
+- Past every played entry it still doesn't fit: **15.3's rule**, as many
+  as fit, the first ones in the add's order (`room()` = `spare()` +
+  `played()`).
+- **Refused only when nothing can go:** the queue full (no free place)
+  and nothing played (the current entry first). `false`, nothing
+  changes, no snapshot (the last edit's undo stays), as before.
+- An add to a queue with room to spare pushes nothing out (the rule is
+  unchanged below the cap).
+
+**Decided here:**
+
+- **The current track is never pushed out**, nor anything after it: the
+  current entry and everything after it keep their order and their keys
+  (host-tested against a reference, below). What is pushed out is always
+  a prefix of the queue.
+- **Repeat All:** the played entries would come round again after the
+  last entry, so pushing them out **shortens the loop** by as many: the
+  loop starts at the oldest entry still there. That is the price of the
+  rule; the toast says how many went, and its Undo puts them back. After
+  a wrap, on the first entry, nothing is "played" by the rule (the rest
+  played last time round, but comes after the current entry): a full
+  queue there refuses until that track ends and the next one plays.
+- **Repeat One:** nothing special. The entries before the current one go
+  as with Off; the loop (the entry itself) and its word are untouched.
+- **Undo:** the snapshot every edit takes is the whole queue as it was,
+  so the Undo of an add that pushed out puts every pushed-out entry back
+  where it was, with its key and rank, the added entries gone, the
+  current entry at its old position (it plays on; `undoPushed()` says how
+  many come back). The Undo model always holds them: the snapshot is at
+  most the cap, 5,000 entries, 60 KB (15.1's budget, unchanged). Two
+  limits, said here:
+  - **The undo lasts as long as its toast** (4 s; Ui drops the undo when
+    an Undo toast goes, 2.6) or until the next edit or a shuffle toggle;
+    the console's `qu` until the next edit. After that, what went is
+    gone for good, as a Remove's is.
+  - **No memory for the snapshot** (the first edit after a boot or a
+    remap asks for its 60 KB block): the push-out isn't done, and the add
+    is refused as out of memory ("Not enough memory for that", `NO
+    MEMORY` in the log), the queue and the last edit's undo as they were.
+    What played never goes without a way back. (An add that pushes
+    nothing out keeps the old rule: without its snapshot it goes in, not
+    undoable.)
+- **The Previous button's history** is the positions before the current
+  one, so what was pushed out is gone from it: prev reaches back to the
+  oldest entry still there. With every played entry gone (the current
+  one first), prev there is as at any first entry: Off, the same track
+  from 0:00; All and One, round to the last. The Undo brings the history
+  back.
+- **Gapless:** only entries before the current one go, so neither a
+  joined track nor the pre-opened next one changes. The joined track is
+  taken first (every action's `Act` adopts a heard join before the
+  edit): it is the current entry, never pushed out. The word names the
+  next entry (or, with One, the entry itself), which is after the
+  current one: the same key, so the same token, nothing cut, nothing sent
+  again. The one time the next entry is a played one is Repeat All on the
+  last entry (the word is the first entry); any add then puts its own
+  entry next (both kinds go right after the last entry), so the word
+  changes because of the add, as it does without a push-out. A join of
+  the pushed-out entry heard too late to cut is restarted as any stale
+  join is (or kept, when the added entry is the same file: the path
+  check).
+- **Positions and indexes:** every position from the current entry on
+  moves down by the count pushed out; whatever follows an entry does so
+  by its key, so nothing else moves:
+  - the player: its start point, the length told, the last failure, the
+    word and the offers' history are by key; `currentIndex()` reads the
+    new position;
+  - `EntryStart` (the sleep timer) is by key; main's `[queue] now at`
+    line and the Dance tab's track change are by key, so none fires;
+  - the sleep timer's End of album and End of queue read the current
+    entry and the one after it each pass: the push-out changes neither
+    (the add itself can, as any add);
+  - the Queue tab: a content change, as a Remove above the playing row:
+    the selection starts over, an open row closes; its next visit opens
+    at the playing track, or at what was added (the "added" marks are
+    keys); the toast's View goes to the first added entry, its position
+    taken less the count pushed out (`LibraryPage::act()`);
+  - `Pz` plays the silence at the current entry's position plus one,
+    less the entry pushed out.
+- **`queue.txt` and NVS:** a push-out is an edit like any. The saver
+  writes the file 2 s later at the next generation: version 1, or
+  version 2 while shuffled, what stays keeping its ranks (gaps where the
+  pushed-out ones were, which ranks allow) and + Queue's new ranks after
+  the highest of what stays. NVS's position is saved for that generation
+  at the entry's new line, and a paused entry's resume point is saved
+  again there once the file holds it (the moved-only rule). The file
+  never holds more than 5,000 lines. A downgrade reads it as any file.
+- **The N12 fence:** behind the library update's fence every edit is
+  refused before the queue is touched (`PlaybackController`'s fenced
+  check), adds included: the Library shows "Updating the library…" and
+  the console's adds need the index. After the fence the queue is read
+  back from `queue.txt` around the same current line, and the next add
+  pushes out from that queue's played entries. Nothing new.
+- **The console:** `qn<n>` and `q+<n>` say what went (`(12 played pushed
+  out to make room)`; cut short too: `(10 of them: the queue holds 5000;
+  10 played pushed out to make room)`) and why a refusal is one
+  (`(REFUSED: the queue is full, 5000, and nothing in it played)`); `qu`
+  and the toast's Undo say what came back (`(12 played tracks back)`);
+  `q` says which full it is (`(full: an add pushes out what played)` or
+  `(full: nothing played, an add is refused)`) and `undo: add (and 12
+  played tracks back)`. `Pz` pushes out one played entry when it must
+  (`(the queue was full: its oldest played track pushed out, qu puts it
+  back)`).
+- **The toast:** the add's what, then **one line saying how many played
+  tracks made room**: "Added 12 tracks: 12 played tracks made way",
+  "Plays next: 1 played track made way", cut short as well "Added 37 of
+  300: 37 played tracks made way" (`uitext::kPushed*`,
+  `queueview::pushedText()`). On the toast's two lines beside Undo and
+  View (as icons): the what in Small, the line in Body when it fits (one
+  track: 202 px of 204), else Small (4,999 tracks: 200 px of 204,
+  measured in test_ui_library at the most an add can push out). The
+  Undo and View stay, as any add's. A single track's title gives way to
+  the news (its tap was the listener's own). "Made way", not "made
+  room": "4,999 played tracks made room" is 207 px in Small, 3 px past
+  the room.
+- **The refusal's note** says why nothing could go: "Nothing played yet:
+  the queue holds 5,000 tracks" (the user's words kept as the why), on
+  two lines. The old one-line note was 236 px in Body, cut whenever it
+  kept the covered toast's Undo (228 px) or Undo and View (158);
+  test_ui_library now measures all three rooms.
+
+**What it costs:** no memory (the snapshot was there already, at most
+60 KB); an add moves the queue once more (a `memmove` of up to 60 KB in
+PSRAM, as any insert does).
+
+**Host tests** (`pio test -e native`, from Git Bash):
+
+- **test_queue:** `test_a_full_queue_pushes_out_what_played` (+ Queue and
+  Play next, the keys and order of what stays, the current entry's key,
+  the Undo whole; free places first; past what played, as many as fit;
+  refused at the first entry with no version bump and no allocation, the
+  last undo kept; a step, then a push-out again);
+  `test_a_push_out_without_memory_for_its_undo_is_refused` (no block for
+  the 5,000-entry snapshot: refused, the queue and the last undo as they
+  were); `test_a_shuffled_queue_pushes_out_in_play_order` (the first
+  positions go, not the lowest ranks; ranks kept, + Queue after the
+  highest of what stays, Play next right after the current entry's; Off
+  lays out exactly what is left);
+  `test_a_full_queue_played_through_then_added` (5,000 played to the
+  last, then an add of 5,000: 4,999 pushed out, 4,999 in, the current
+  entry first, at most the cap's two blocks, the next add refused, the
+  Undo whole; shuffled the same);
+  `test_a_push_out_is_saved_at_the_next_generation` (version 1 and 2: the
+  file a generation on, the position and the resume point at the new
+  line, read back the same queue, ranks and all);
+  `test_random_push_outs_match_a_simple_model` (2,500 random steps at the
+  cap: adds big and small, removes, skips and jumps, toggles, undo, a
+  Play that fills the queue, Clear up next; the queue is the reference's
+  after every step, and around every add the cap holds, the current
+  entry and what follows keep their order, and only played entries go,
+  oldest first, as many as the free places lacked; 758 adds: 301
+  pushing out, 63 cut short, 76 refused).
+- **test_playback:** `test_a_push_out_changes_nothing_that_plays` (the
+  same entry plays on, nothing starts or stops, the word's token kept and
+  nothing sent; Play next's new next entry a new word; a join heard just
+  before an add taken first; shuffled the same);
+  `test_a_push_out_under_each_repeat_mode` (All: the word was the first
+  entry, the add's entry next, then round to the oldest left; One: the
+  word kept, the loop goes on; Off: the last entry gets a next);
+  `test_prev_after_a_push_out` (prev stops at the oldest left; at the
+  first, Off restarts it and All wraps);
+  `test_undo_of_a_push_out_through_the_player` (back in place, nothing
+  started; after moving into the add, the entry that was current again).
+- **test_ui_queue:** `test_pushed_texts` (the texts, grouped counts,
+  short buffers). **test_ui_library:** `test_push_out_texts_fit` (each
+  line in its room at 4,999 pushed out and a library of 99,999; one
+  track's line in Body).
+
+As built (2026-10-08, on feature/metadata after df92c01): 1,451 host
+tests pass (12 new); core2 and core2-dio build with every guard
+(iram_diet: 51 of 51 objects moved, the hot set pinned; cache_guard ok;
+flash_guard: 2.50 MB, 42 % of the slot; core2's app 2,544,719 B), no new
+warnings. Not flashed.
+
+**Not on the device yet** (no device in this step). A check for section
+10, when there is one: Shuffle all on a card of more than 5,000 tracks;
++ Queue on an album is refused ("Nothing played yet", the Shuffle all's
+Undo kept); after two tracks, + Queue of a 12-track album: "Added 2 of
+12: 2 played tracks made way", the Queue tab's first two entries gone
+and the playing row two higher; its Undo: both back, nothing interrupted
+(no `[audio] ... starting` line, no `cut` in the `[gapless]` lines); `q`
+and `qu` lines as above.

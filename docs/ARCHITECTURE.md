@@ -1911,11 +1911,13 @@ the browsing UI hold its **track ids**, never strings.
   grow by doubling. The queue holds at most 5,000 entries
   (`QueueModel::kMaxEntries`, docs/QUEUE-MODES.md section 15): a Play
   of more takes the first 5,000 (or the 5,000 from its start), shuffled
-  a random 5,000; an add takes what fits and is refused when the queue
-  is full; a longer `queue.txt` from an older firmware loads the 5,000
-  around its current line and is written again. So the figures above
-  for 20,000 entries are what a queue no longer reaches: at most 60 KB,
-  120 KB with its snapshot, an 80 KB re-read.
+  a random 5,000; an add to a full queue first pushes out what already
+  played (the entries before the current one, oldest first: its section
+  15.8), takes what fits, and is refused only when the queue is full and
+  nothing in it played; a longer `queue.txt` from an older firmware
+  loads the 5,000 around its current line and is written again. So the
+  figures above for 20,000 entries are what a queue no longer reaches: at
+  most 60 KB, 120 KB with its snapshot, an 80 KB re-read.
   When and what to write is `QueueSaver`'s (lib/core, host-tested in
   test_queue: the timing, a failure keeping the last file); `QueueStore`
   gives it the card and NVS. `flushNow()` does it all synchronously, for
@@ -3073,7 +3075,7 @@ its opposite; only `Pcb` is saved):
 | `Pd<ms>` | the loop's idle delay while nothing animates (1-100) | `Pd0` the UI's own (~5 ms); never while a list moves or the Dance tab is up |
 | `Pk0` / `Pk1` | the dance beat tracker (and so the outputs' taps) | the taps are on only while the Dance tab is up and the tracker is on |
 | `Pr0` / `Pr1` | the background Bluetooth search: rest now / a burst again | stays connectable; `link=resting`, `bg=resting`; a connect, the Pair screen or a play waiting for the headphones starts a burst |
-| `Pz` | plays `tone:silence` next | an hour of zeros: the output runs at its full rate (SBC over Bluetooth), nothing is heard; a full queue (its cap of 5,000, docs/QUEUE-MODES.md section 15) can't take it, so it plays as the queue then, and `qu` puts the listener's back |
+| `Pz` | plays `tone:silence` next | an hour of zeros: the output runs at its full rate (SBC over Bluetooth), nothing is heard; a full queue (its cap of 5,000, docs/QUEUE-MODES.md section 15) pushes out its oldest played entry to take it (15.8), and one with nothing played can't take it, so it plays as the queue then; either way `qu` puts the listener's back |
 
 `tone:silence` is a built-in track (TrackCatalog) that isn't queued with
 the others: only `Pz` plays it. Nor are the rate converter's test tracks

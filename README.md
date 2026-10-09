@@ -557,11 +557,15 @@ it, remove, clear, undo).
 **The queue holds up to 5,000 tracks.** Play all, an artist's or a big
 folder's Play, and Shuffle all on more than that take 5,000 of them: the
 first 5,000 in order, or with shuffle on a random 5,000 (each Shuffle all
-another), and the message says so. Play next and + Queue add as many as
-fit and say how many; with the queue full they're refused ("The queue
-holds 5,000 tracks") until Clear up next or a Remove makes room. Undo
-works whatever the size. A longer queue saved by an older firmware comes
-back as its 5,000 around the track it was on.
+another), and the message says so. Play next and + Queue on a full queue
+make room by pushing out tracks that already played (the ones before the
+track that plays, oldest first; the message says how many, and its Undo
+puts them back where they were); they add as many as fit and say how
+many, and are refused ("Nothing played yet: the queue holds 5,000
+tracks") only while nothing has played yet. With Repeat All on, what is
+pushed out no longer comes round again. Undo works whatever the size. A
+longer queue saved by an older firmware comes back as its 5,000 around
+the track it was on.
 **Shuffle and repeat** are kept across a restart too. Shuffle on shuffles
 what's up next (the track that plays plays on, and the Queue tab shows the
 order that plays); off puts the queue's own order back. While it's on, an

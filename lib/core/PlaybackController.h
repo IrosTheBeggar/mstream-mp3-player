@@ -28,7 +28,12 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // the one playing isn't in the restored queue, in the shuffle mode the edit
 // was made in (Shuffle all's Play turns it on; its undo, off again). Edits
 // that don't touch it (Play next, + Queue, Clear up next) change nothing
-// that plays.
+// that plays. That holds for an add that pushes out what already played
+// to make room in a full queue (QueueModel's cap, docs/QUEUE-MODES.md
+// 15.8): only entries before the current one go, so the current entry
+// (by its key: its start point, length and failure with it) and what
+// follows it stay as they were, a position or more further up; the word
+// on what follows changes only when the add itself puts a new entry next.
 //
 // Repeat (setRepeat(), docs/QUEUE-MODES.md section 3): Off, All or One.
 // The rule: a natural end follows the mode; a skip wraps unless the mode is
@@ -337,8 +342,11 @@ public:
   // queue's cap (QueueModel::kMaxEntries), 5,000 of the tracks: the first
   // (or the window that holds `start`), or shuffled a random 5,000.
   bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle);
-  // As many as fit under the cap (QueueModel::room()), the first ones;
-  // false when none do (the queue full) or out of memory.
+  // As many as fit under the cap (QueueModel::room()), the first ones,
+  // after pushing out the entries that already played to make room
+  // (QueueModel::pushedBy(): oldest first, never the current entry);
+  // false when none fit (the queue full and nothing played) or out of
+  // memory.
   bool playNext(const uint32_t* tracks, uint32_t n);
   bool addToQueue(const uint32_t* tracks, uint32_t n);
   QueueModel::Removed remove(const uint32_t* positions, uint32_t n);

@@ -104,6 +104,13 @@ char* grouped(uint32_t n, char* buf, size_t size);
 // (uitext's kCap* texts). Returns buf.
 enum class Capped : uint8_t { Shuffle, Play, Add, Next };
 char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t size);
+// The toast of an add (`what`: Next, Play next; anything else, + Queue)
+// that pushed out `pushed` played tracks to make room (docs/QUEUE-MODES.md
+// 15.8; `took` of `asked` went in): "Added 12 tracks: 12 played tracks made
+// way", "Plays next: 1 played track made way" (one track: its title gives
+// way to the news), "Added 37 of 300: 37 played tracks made way" (cut short
+// by the cap too). uitext's kPush* texts. Returns buf.
+char* pushedText(Capped what, uint32_t took, uint32_t asked, uint32_t pushed, char* buf, size_t size);
 
 // ---- tracks that failed to play ----
 //
@@ -155,11 +162,12 @@ private:
 
 // ---- a refused add's note ----
 //
-// An add the full queue refuses changes nothing (docs/QUEUE-MODES.md 15.2:
-// the last edit's undo stays), so its note ("The queue holds 5,000 tracks")
-// keeps the buttons of the toast it covers: the Undo and the View a Play
-// all or an add was offering moments before (15.5). Else that undo would be
-// out of reach while the queue still keeps it.
+// An add the full queue refuses (nothing in it played, so nothing to push
+// out: docs/QUEUE-MODES.md 15.8) changes nothing (15.2: the last edit's
+// undo stays), so its note ("Nothing played yet: the queue holds 5,000
+// tracks") keeps the buttons of the toast it covers: the Undo and the View
+// a Play all or an add was offering moments before (15.5). Else that undo
+// would be out of reach while the queue still keeps it.
 struct ToastButtons {
   bool undo = false;
   uint32_t viewKey = QueueModel::kNone;  // kNone: no View

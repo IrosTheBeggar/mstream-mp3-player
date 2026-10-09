@@ -1430,10 +1430,15 @@ void Ui::route(const InputEvent& e) {
           host_.sleepChoose(hit == Toast::kHitExtend ? SleepSheet::kExtend : SleepSheet::kTurnOff);
         } else if (hit == 2) {
           const bool shuffled = player_.shuffle();
+          // (An add that pushed out what played: those come back where they were.)
+          const uint32_t pushed = queue_.undoPushed();
           const bool undone = player_.undo();
           // (Shuffle all's: the mode it found comes back with the queue.)
-          Serial.printf("[ui] undo: %s%s\n", undone ? "done" : "nothing to undo",
-                        player_.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)");
+          char back[48] = "";
+          if (undone && pushed) snprintf(back, sizeof(back), " (%lu played tracks back)", (unsigned long)pushed);
+          Serial.printf("[ui] undo: %s%s%s\n", undone ? "done" : "nothing to undo",
+                        player_.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)",
+                        back);
           toast_.show(undone ? "Undone" : "Nothing to undo", false, false, accent(), nowMs_);
           uncover(was);
         } else if (hit == 3) {

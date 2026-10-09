@@ -353,17 +353,33 @@ void test_toast_names_fit() {
   fits(small, "Plays next", room);
 }
 
-// The queue's cap (docs/QUEUE-MODES.md 15): the refusal on one line, no
-// buttons; a Play, Shuffle all or add it cut short as "what: why" on the
-// toast's two lines (too wide for one beside its buttons, as Toast::show()
-// decides), each line in its room in Small at least (Toast draws the why in
-// Body when it fits), with the counts of a library of 99,999.
+// The queue's cap (docs/QUEUE-MODES.md 15): the refusal (full, and nothing
+// played to push out: 15.8) and a Play, Shuffle all or add it cut short,
+// each "what: why" on the toast's two lines (too wide for one beside its
+// buttons, as Toast::show() decides), each line in its room in Small at
+// least (Toast draws the why in Body when it fits), with the counts of a
+// library of 99,999. The refusal keeps the buttons of the toast it covers
+// (Ui::refuse()): none, Undo, or Undo and View, each room measured.
 void test_queue_cap_texts_fit() {
   using namespace uitext;
   using queueview::Capped;
   const Vlw body(kVlwSans16), small(kVlwSans13);
-  fits(body, kQueueFull, kToastTextRight - kToastTextX);
-  TEST_ASSERT_TRUE(strstr(kQueueFull, ": ") == nullptr);  // one line, always
+  {
+    const std::string s(kQueueFull);
+    const size_t colon = s.find(": ");
+    TEST_ASSERT_TRUE(colon != std::string::npos);
+    struct Kept {
+      int oneLine, room;  // Toast's textRightOf(false, ..) and (true, ..), less kToastTextX
+    } kept[] = {{kToastTextRight - kToastTextX, kToastTextRight - kToastTextX},
+                {kToastUndoX - 6 - kToastTextX, kToastUndoCX - 6 - kToastTextX},
+                {kToastViewX - 6 - kToastTextX, kToastCompactTextRight - kToastTextX}};
+    for (const Kept& k : kept) {
+      TEST_ASSERT_TRUE(body.width(kQueueFull) > k.oneLine);  // folded on two lines
+      fits(small, s.substr(0, colon).c_str(), k.room);
+      fits(small, kQueueFull + colon + 2, k.room);
+    }
+    fits(body, kQueueFull + colon + 2, kToastUndoCX - 6 - kToastTextX);  // Body with none or Undo kept
+  }
   struct Case {
     Capped what;
     uint32_t took, asked;
@@ -388,6 +404,41 @@ void test_queue_cap_texts_fit() {
              small.width(s.substr(0, colon).c_str()), body.width(t + colon + 2), small.width(t + colon + 2), room);
     TEST_MESSAGE(msg);
   }
+}
+
+// An add that pushed out what played (docs/QUEUE-MODES.md 15.8): the add's
+// what over one line of how many played tracks made way, on the toast's two
+// lines beside Undo and View (as icons), each line in its room in Small at
+// least, at the most an add can push out (4,999: all but the one that
+// plays) and a library of 99,999.
+void test_push_out_texts_fit() {
+  using namespace uitext;
+  using queueview::Capped;
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  const int oneLine = kToastViewX - 6 - kToastTextX;
+  const int room = kToastCompactTextRight - kToastTextX;
+  struct Case {
+    Capped what;
+    uint32_t took, asked, pushed;
+  } cases[] = {{Capped::Next, 1, 1, 1},          {Capped::Add, 1, 1, 1},
+               {Capped::Next, 4999, 4999, 4999}, {Capped::Add, 4999, 4999, 4999},
+               {Capped::Next, 4999, 99999, 4999}, {Capped::Add, 4999, 99999, 4999}};
+  for (const Case& c : cases) {
+    char t[128];
+    queueview::pushedText(c.what, c.took, c.asked, c.pushed, t, sizeof(t));
+    const std::string s(t);
+    const size_t colon = s.find(": ");
+    TEST_ASSERT_TRUE(colon != std::string::npos);
+    TEST_ASSERT_TRUE(body.width(t) > oneLine);  // folded on two lines, the buttons as icons
+    fits(small, s.substr(0, colon).c_str(), room);
+    fits(small, t + colon + 2, room);
+    char msg[160];
+    snprintf(msg, sizeof(msg), "%s: what %d (Small), line %d (Body) / %d (Small) in %d", t,
+             small.width(s.substr(0, colon).c_str()), body.width(t + colon + 2), small.width(t + colon + 2), room);
+    TEST_MESSAGE(msg);
+  }
+  // One played track's line is Body.
+  fits(body, kPushedOne, room);
 }
 
 // The empty states' two buttons (the empty queue, Nothing playing) and line.
@@ -1950,6 +2001,7 @@ int main(int, char**) {
   RUN_TEST(test_coach_texts_fit);
   RUN_TEST(test_toast_names_fit);
   RUN_TEST(test_queue_cap_texts_fit);
+  RUN_TEST(test_push_out_texts_fit);
   RUN_TEST(test_empty_state_texts_fit);
   RUN_TEST(test_no_card_texts_fit);
   RUN_TEST(test_board_guard_texts_fit);

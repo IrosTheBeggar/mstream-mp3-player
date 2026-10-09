@@ -262,6 +262,27 @@ void test_capped_texts() {
   TEST_ASSERT_EQUAL_STRING("Added 37 of", cappedText(Capped::Add, 37, 300, tiny, sizeof(tiny)));
 }
 
+// An add that pushed out what played to make room (docs/QUEUE-MODES.md
+// 15.8): the add's what, then how many played tracks made way; cut short by
+// the cap as well, the cap's counts in the what.
+void test_pushed_texts() {
+  char b[96];
+  TEST_ASSERT_EQUAL_STRING("Plays next: 1 played track made way", pushedText(Capped::Next, 1, 1, 1, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("Added: 3 played tracks made way", pushedText(Capped::Add, 1, 1, 3, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("Added 12 tracks: 12 played tracks made way",
+                           pushedText(Capped::Add, 12, 12, 12, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("12 tracks play next: 5 played tracks made way",
+                           pushedText(Capped::Next, 12, 12, 5, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("Added 37 of 300: 37 played tracks made way",
+                           pushedText(Capped::Add, 37, 300, 37, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("4,999 of 6,021 play next: 4,999 played tracks made way",
+                           pushedText(Capped::Next, 4999, 6021, 4999, b, sizeof(b)));
+  char tiny[12];
+  TEST_ASSERT_EQUAL_STRING("Added 12 tr", pushedText(Capped::Add, 12, 12, 12, tiny, sizeof(tiny)));
+  char edge[20];  // the what fits, the line is cut, never past the buffer
+  TEST_ASSERT_EQUAL_STRING("Added 12 tracks: 12", pushedText(Capped::Add, 12, 12, 12, edge, sizeof(edge)));
+}
+
 // An add the full queue refuses changes nothing: its note keeps the Undo
 // (and the View) of the toast it covers, so the Play all that filled the
 // queue can still be undone from the screen (QUEUE-MODES.md 15.5).
@@ -299,6 +320,7 @@ void test_a_refusal_keeps_the_last_undo() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_capped_texts);
+  RUN_TEST(test_pushed_texts);
   RUN_TEST(test_a_refusal_keeps_the_last_undo);
   RUN_TEST(test_durations_are_learned_per_track);
   RUN_TEST(test_up_next_time_adds_what_is_known);

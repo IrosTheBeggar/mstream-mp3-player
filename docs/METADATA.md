@@ -3153,7 +3153,10 @@ counts):
   2026-10-07; docs/QUEUE-MODES.md section 15): Shuffle all and Play all
   on a bigger library take a random 5,000 (shuffle on) or the first 5,000
   (off); an add takes as many as fit and is refused with "The queue
-  holds 5,000 tracks" when none do; the undo is always kept. A longer
+  holds 5,000 tracks" when none do; the undo is always kept. Since
+  2026-10-08 an add to a full queue first pushes out what already played
+  (QUEUE-MODES.md 15.8), and is refused only when nothing played; no new
+  memory (the undo snapshot it needs was already in the budget). A longer
   `queue.txt` from before the cap loads its first 5,000 lines, or the
   5,000 from its current line on, and is written again. Its blocks are
   trimmed to their exact size after `assign()` and never grow past the
@@ -4611,7 +4614,10 @@ The user answered U8, U11, U12, U13 and U14 on 2026-10-07 (marked
   when none do (adding what fits was this design's call:
   QUEUE-MODES.md 15.3); the undo is always kept. Built and host-tested
   (QUEUE-MODES.md section 15); 3.5 has the budget. The file-names lever
-  stays in 3.5's table, unused.
+  stays in 3.5's table, unused. **Then (2026-10-08) the user's answer to
+  QUEUE-MODES.md 15.7:** a full queue makes room by pushing out what
+  already played, oldest first, and refuses an add only when nothing
+  played (built and host-tested: QUEUE-MODES.md 15.8).
 - **U13. The scan's battery floor:** 10% (proposed), lower, or a setting?
   **Decided (2026-10-07): 10%** (3.3.5: paused below 10% off USB,
   resumed on USB or above 15%).

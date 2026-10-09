@@ -144,6 +144,32 @@ char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t s
   return buf;
 }
 
+char* pushedText(Capped what, uint32_t took, uint32_t asked, uint32_t pushed, char* buf, size_t size) {
+  if (!buf || size == 0) return buf;
+  char a[16], b[16];
+  grouped(took, a, sizeof(a));
+  grouped(asked, b, sizeof(b));
+  const bool next = what == Capped::Next;
+  int n;
+  if (took < asked) {
+    n = snprintf(buf, size, next ? uitext::kCapNext : uitext::kCapAdded, a, b);
+  } else if (took == 1) {
+    n = snprintf(buf, size, "%s", next ? uitext::kPushNextOne : uitext::kPushAddedOne);
+  } else {
+    n = snprintf(buf, size, next ? uitext::kPushNextMany : uitext::kPushAddedMany, a);
+  }
+  if (n <= 0 || static_cast<size_t>(n) + 2 >= size) return buf;
+  if (pushed == 1) {
+    snprintf(buf + n, size - n, ": %s", uitext::kPushedOne);
+  } else {
+    char c[16], line[48];
+    grouped(pushed, c, sizeof(c));
+    snprintf(line, sizeof(line), uitext::kPushedMany, c);
+    snprintf(buf + n, size - n, ": %s", line);
+  }
+  return buf;
+}
+
 // ---- KeyRing ----
 
 void KeyRing::add(uint32_t key) {

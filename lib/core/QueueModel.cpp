@@ -74,9 +74,9 @@ uint32_t QueueModel::draw(uint32_t bound) {
   return bound ? static_cast<uint32_t>((static_cast<uint64_t>(x) * bound) >> 32) : x;
 }
 
-uint32_t QueueModel::maxRank() const {
+uint32_t QueueModel::maxRank(uint32_t from) const {
   uint32_t top = 0;
-  for (uint32_t i = 0; i < q_.size; ++i) top = std::max(top, q_.data[i].rank);
+  for (uint32_t i = from; i < q_.size; ++i) top = std::max(top, q_.data[i].rank);
   return top;
 }
 
@@ -95,6 +95,7 @@ bool QueueModel::snapshot(Edit edit) {
   undo_.size = q_.size;
   undoCurrent_ = current_;
   undoShuffled_ = shuffled_;
+  undoPushed_ = 0;  // (an add that pushes out says so after)
   undoEdit_ = edit;
   return true;
 }
@@ -118,21 +119,40 @@ uint32_t* QueueModel::selection(const uint32_t* positions, uint32_t n, uint32_t*
 bool QueueModel::insertAt(uint32_t at, const uint32_t* tracks, uint32_t n, Edit edit) {
   if (n == 0) return true;
   if (!tracks) return false;
-  // As many as fit under the cap, the first ones; none: refused (full).
+  // As many as fit under the cap, the first ones, once what played (the
+  // entries before the current one) is pushed out to make room, oldest
+  // first, as many as the spare places lack; none: refused (full, and
+  // nothing played).
   if (n > room()) n = room();
   if (n == 0) return false;
+  const uint32_t push = pushedBy(n);
   const bool wasEmpty = current_ < 0;
   // Shuffled, the new entries' ranks: Play next's right after the current
-  // entry's (those above it go up by n), + Queue's after the highest. The
+  // entry's (those above it go up by n), + Queue's after the highest of
+  // what stays (the pushed-out ranks leave gaps, which ranks allow). The
   // highest rank grows by n either way: refused past 0xFFFFFFFF.
   uint32_t base = 0;
   if (shuffled_ && !wasEmpty) {
-    const uint32_t top = maxRank();
+    const uint32_t top = maxRank(push);
     if (top > kNone - n) return false;
     base = edit == Edit::InsertNext ? q_.data[current_].rank + 1 : top + 1;
   }
-  if (!reserve(q_, q_.size + n)) return false;
+  if (!reserve(q_, q_.size - push + n)) return false;
+  // What played goes only with a way back: no memory for the snapshot (the
+  // whole queue as it is, at most the cap's 60 KB), no push-out, and the
+  // add is refused as out of memory, the last edit's undo kept (reserve()
+  // copies the snapshot it holds).
+  if (push && !reserve(undo_, q_.size)) return false;
   snapshot(edit);
+  if (push) {
+    // The oldest played entries go: the current entry and what follows it
+    // move up, in their order, and keep their keys.
+    std::memmove(q_.data, q_.data + push, static_cast<size_t>(q_.size - push) * sizeof(Entry));
+    q_.size -= push;
+    current_ -= static_cast<int32_t>(push);
+    at -= push;
+    undoPushed_ = push;
+  }
   if (shuffled_ && !wasEmpty && edit == Edit::InsertNext) {
     for (uint32_t i = 0; i < q_.size; ++i) {
       if (q_.data[i].rank >= base) q_.data[i].rank += n;
