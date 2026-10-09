@@ -293,7 +293,10 @@ private:
   char serverPath_[kMaxRelPath + 1];
 };
 
-// A whole check: a walk to the end. Ok, or why the file is absent.
+// A whole check: a walk to the end. Ok, or why the file is absent. Its
+// Walker (3.9 KB) is on the caller's stack: the host's tests. On the device
+// walk a Walker of your own in PSRAM (app/TagConsole: the loop task's 8 KB
+// stack overflowed with this one on it).
 Why check(Source& src, uint32_t uses, uint8_t* scratch, uint32_t scratchBytes);
 
 // Random access to a file the caller has checked (a walk that reached

@@ -8,6 +8,7 @@
 
 #include <cstring>
 #include <ctime>
+#include <new>
 
 #include "CardContainer.h"
 #include "CardManifest.h"
@@ -71,17 +72,6 @@ uint32_t fatTimeOf(fs::File& f) {
 
 }  // namespace
 
-// What a command reads with, in PSRAM.
-struct TagConsole::Work {
-  tagscan::Scanner scanner;
-  cc::RunFields run;
-  mptg::File file;
-  cc::msmf::Manifest manifest;
-  tagstore::BuilderRows rows;
-  uint8_t buf[4096];
-  uint8_t scratch[8192];
-};
-
 // A record found in a tags file.
 struct TagConsole::Found {
   bool file = false;    // the tags file is there
@@ -91,6 +81,25 @@ struct TagConsole::Found {
   mptg::Record rec;
   LibraryBuilder::Row row;
   tagstore::DeviceInfo device;  // D's header (device files only)
+};
+
+// What a command reads with, in PSRAM. Everything big is here, not on the
+// loop task's 8 KB stack, which the card's reads below a command already
+// take about 2 KB of (the VFS, FatFs's 512 B long-name buffer, the SD
+// driver): the check's Walker alone is 3.9 KB (mptg::check() would put it
+// on the stack, and gs overflowed the loop task's on N11's 20k card).
+struct TagConsole::Work {
+  tagscan::Scanner scanner;
+  mptg::Walker walker;  // the check's walk (find())
+  cc::RunFields run;
+  mptg::File file;
+  cc::msmf::Manifest manifest;
+  tagstore::BuilderRows rows;
+  Found d, t;  // D's and T's
+  char path[TrackCatalog::kMaxPath];  // gt's file
+  char title[260];
+  uint8_t buf[4096];
+  uint8_t scratch[8192];
 };
 
 void TagConsole::command(const tagtext::Parsed& p) {
@@ -214,6 +223,17 @@ public:
 
 void countFile(const char*, void* ctx) { ++*static_cast<uint32_t*>(ctx); }
 
+// The opens' lookups, in PSRAM (names and paths: 2.8 KB, which the loop
+// task's stack can't spare over FatFs's calls).
+struct BenchWork {
+  FF_DIR dir;
+  FILINFO fi;
+  char names[4][256];  // the 1st, 353rd and 703rd entries' names, and the last so far
+  char probe[3][300];  // each probe's path under /music
+  char path[300];      // a probe's FatFs path
+  char sub[256], file[256];
+};
+
 // The card's reads since `before` (every read that reached the SD driver,
 // the cache on or off).
 uint32_t readsSince(const sectordisk::Stats& before) { return sectordisk::stats().cardReads - before.cardReads; }
@@ -239,15 +259,16 @@ void TagConsole::bench(bool walks) {
   // MP3 album first there), looked up as an open does, uncached, then the
   // cache cold (cleared), then warm. 3.2.7's model on N11's card: 4, 55 and
   // 108 reads uncached, give or take the album's own folder sectors.
-  FF_DIR* dir = psramNew<FF_DIR>();
-  FILINFO* fi = psramNew<FILINFO>();
-  char* names = static_cast<char*>(psramAlloc(4 * 256));
-  char* probe = static_cast<char*>(psramAlloc(3 * 300));
-  char music[16], path[300];
+  BenchWork* bw = psramNew<BenchWork>();
+  FF_DIR* dir = bw ? &bw->dir : nullptr;
+  FILINFO* fi = bw ? &bw->fi : nullptr;
+  char* names = bw ? bw->names[0] : nullptr;
+  char* probe = bw ? bw->probe[0] : nullptr;
+  char* path = bw ? bw->path : nullptr;
+  char music[16];
   const uint32_t want[3] = {1, 353, 703};
   uint32_t got[3] = {0, 0, 0}, entries = 0;
-  if (dir && fi && names && probe && cardfat::musicPath("", 0, music, sizeof(music)) &&
-      f_opendir(dir, music) == FR_OK) {
+  if (bw && cardfat::musicPath("", 0, music, sizeof(music)) && f_opendir(dir, music) == FR_OK) {
     for (;;) {
       if (f_readdir(dir, fi) != FR_OK || fi->fname[0] == 0) break;
       ++entries;
@@ -270,12 +291,14 @@ void TagConsole::bench(bool walks) {
       char* rel = probe + k * 300;
       snprintf(rel, 300, "%s", names + k * 256);
       for (int depth = 0; depth < 2 && got[k]; ++depth) {
-        if (!cardfat::musicPath(rel, strlen(rel), path, sizeof(path)) || f_opendir(dir, path) != FR_OK) break;
-        char sub[256] = "", file[256] = "";
+        if (!cardfat::musicPath(rel, strlen(rel), path, sizeof(bw->path)) || f_opendir(dir, path) != FR_OK) break;
+        char* sub = bw->sub;
+        char* file = bw->file;
+        sub[0] = file[0] = 0;
         while (f_readdir(dir, fi) == FR_OK && fi->fname[0] != 0) {
           if (fi->fname[0] == '.') continue;
-          if ((fi->fattrib & AM_DIR) && !sub[0]) snprintf(sub, sizeof(sub), "%s", fi->fname);
-          if (!(fi->fattrib & AM_DIR) && !file[0]) snprintf(file, sizeof(file), "%s", fi->fname);
+          if ((fi->fattrib & AM_DIR) && !sub[0]) snprintf(sub, sizeof(bw->sub), "%s", fi->fname);
+          if (!(fi->fattrib & AM_DIR) && !file[0]) snprintf(file, sizeof(bw->file), "%s", fi->fname);
         }
         f_closedir(dir);
         const char* next = depth == 0 && sub[0] ? sub : file;
@@ -288,9 +311,9 @@ void TagConsole::bench(bool walks) {
   }
   Serial.printf("[bench] /music has %lu entries\n", (unsigned long)entries);
   for (int k = 0; k < 3; ++k) {
-    if (!got[k] || !probe) continue;
+    if (!got[k] || !bw) continue;
     const char* rel = probe + k * 300;
-    if (!cardfat::musicPath(rel, strlen(rel), path, sizeof(path))) continue;
+    if (!cardfat::musicPath(rel, strlen(rel), path, sizeof(bw->path))) continue;
     uint32_t reads[3];
     float ms[3];
     for (int pass = 0; pass < 3; ++pass) {
@@ -313,10 +336,7 @@ void TagConsole::bench(bool walks) {
                       (unsigned)(strchr(rel, '/') && strchr(strchr(rel, '/') + 1, '/') != nullptr),
                   (unsigned long)reads[0], ms[0], (unsigned long)reads[1], ms[1], (unsigned long)reads[2], ms[2]);
   }
-  psramDelete(dir);
-  psramDelete(fi);
-  psramFree(names);
-  psramFree(probe);
+  psramDelete(bw);
   // 3. The walks (glw): the stock one (POSIX readdir, forEachFile) and
   // 3.2.3's (CardWalk over FatFs), each uncached and cached (cleared).
   if (walks) {
@@ -400,7 +420,7 @@ void TagConsole::summary() {
 }
 
 void TagConsole::find(const char* path, const char* rel, bool device, Work& w, Found* out) {
-  *out = Found();
+  new (out) Found();  // in place (`*out = Found()` builds one on the stack first)
   fs::File f = storage_.fs().open(path, FILE_READ);
   if (!f || f.isDirectory()) return;
   out->file = true;
@@ -409,7 +429,13 @@ void TagConsole::find(const char* path, const char* rel, bool device, Work& w, F
     out->why = tagstore::openDevice(src, &out->device);
     if (out->why != cc::Why::Ok) return;
   }
-  out->why = mptg::check(src, mptg::kUseHidx, w.scratch, sizeof(w.scratch));
+  // mptg::check()'s walk to the end, with Work's Walker.
+  out->why = w.walker.begin(src, mptg::kUseHidx, w.scratch, sizeof(w.scratch));
+  while (out->why == cc::Why::Ok) {
+    const mptg::Walker::Step s = w.walker.next();
+    if (s == mptg::Walker::Step::End) break;
+    if (s == mptg::Walker::Step::Bad) out->why = w.walker.why();
+  }
   if (out->why == cc::Why::Ok) out->why = w.file.open(src);
   if (out->why != cc::Why::Ok) return;
   out->valid = true;
@@ -465,7 +491,7 @@ void TagConsole::status() {
   }
   char n[16], m[16];
   // D, its rows by status, its journals.
-  Found d;
+  Found& d = w->d;
   find(kDevicePath, nullptr, true, *w, &d);
   if (!d.file) {
     Serial.printf("[tags] D %s: none (the device has read no tags on this card)\n", kDevicePath);
@@ -508,7 +534,7 @@ void TagConsole::status() {
   if (!transferFile(*w, tpath, sizeof(tpath), &commit, &gen)) {
     Serial.println("[tags] T: no transfer data (no valid /.mstream/manifest.bin or manifest.tmp)");
   } else {
-    Found t;
+    Found& t = w->t;
     find(tpath, nullptr, false, *w, &t);
     if (!t.file) {
       Serial.printf("[tags] T: the root (generation %lu, commit %016llx) names %s, which ISN'T THERE\n",
@@ -517,11 +543,8 @@ void TagConsole::status() {
       Serial.printf("[tags] T: the root (generation %lu) names %s, ABSENT: it fails its checks (%s)\n",
                     static_cast<unsigned long>(gen), tpath, cc::whyName(t.why));
     } else {
-      fs::File f = storage_.fs().open(tpath, FILE_READ);
-      FileAt src(f);
-      mptg::Info info;
-      cc::Container c;
-      mptg::openFile(c, src, &info);
+      // find() opened it (its frame and header: mptg::openFile()).
+      const mptg::Info& info = w->file.info();
       const bool matches = cc::msmf::companionMatches(w->manifest.tags(), info.frame, info.source, nullptr);
       Serial.printf("[tags] T: generation %lu, commit %016llx: %s, %s records in %s folders%s\n",
                     static_cast<unsigned long>(gen), static_cast<unsigned long long>(commit), tpath,
@@ -536,11 +559,10 @@ void TagConsole::status() {
 }
 
 void TagConsole::dump(const char* arg) {
-  char path[TrackCatalog::kMaxPath];
-  snprintf(path, sizeof(path), "%s", arg);
-  size_t len = strlen(path);
-  while (len && (path[len - 1] == ' ' || path[len - 1] == '\r' || path[len - 1] == '\n')) path[--len] = 0;
-  if (strncmp(path, "/music/", 7) != 0 || len <= 7) {
+  // The argument without its trailing blanks (a path's length at most).
+  size_t len = strnlen(arg, TrackCatalog::kMaxPath - 1);
+  while (len && (arg[len - 1] == ' ' || arg[len - 1] == '\r' || arg[len - 1] == '\n')) --len;
+  if (strncmp(arg, "/music/", 7) != 0 || len <= 7) {
     Serial.println("[tags] gt: a file under /music: gt/music/Artist/Album/01 - Title.mp3");
     return;
   }
@@ -548,12 +570,14 @@ void TagConsole::dump(const char* arg) {
     Serial.println("[tags] no storage: no card, no tags");
     return;
   }
-  const char* rel = path + 7;
   Work* w = psramNew<Work>();
   if (!w) {
     Serial.println("[tags] no PSRAM for the readers");
     return;
   }
+  char* path = w->path;
+  snprintf(path, sizeof(w->path), "%.*s", static_cast<int>(len), arg);
+  const char* rel = path + 7;
   char n[16], t[48];
   // The file now.
   LibraryBuilder::Seen now;
@@ -590,8 +614,8 @@ void TagConsole::dump(const char* arg) {
     }
   }
   // D.
-  Found d;
-  find(kDevicePath, rel, true, *w, &d);
+  const Found& d = w->d;
+  find(kDevicePath, rel, true, *w, &w->d);
   if (!d.file) {
     Serial.printf("[tags] D: none (%s isn't there)\n", kDevicePath);
   } else if (!d.valid) {
@@ -607,20 +631,20 @@ void TagConsole::dump(const char* arg) {
       tagtext::dumpRecord(d.rec, &w->run, printLine, nullptr);
     }
   }
-  const tagstore::DeviceInfo device = d.device;
+  const tagstore::DeviceInfo& device = d.device;
   const bool dValid = d.valid;
-  const mptg::Record dRec = d.rec;
+  const mptg::Record& dRec = d.rec;
   const bool dPresent = d.present;
   const LibraryBuilder::Row dRow = d.row;
   // T.
   char tpath[64];
   uint64_t commit = 0;
   uint32_t gen = 0;
-  Found tf;
+  const Found& tf = w->t;  // (nothing found, as the Work came: no transfer data)
   if (!transferFile(*w, tpath, sizeof(tpath), &commit, &gen)) {
     Serial.println("[tags] T: no transfer data");
   } else {
-    find(tpath, rel, false, *w, &tf);
+    find(tpath, rel, false, *w, &w->t);
     if (!tf.file || !tf.valid) {
       Serial.printf("[tags] T: %s ABSENT (%s)\n", tpath, tf.file ? cc::whyName(tf.why) : "not there");
     } else if (!tf.present) {
@@ -664,8 +688,8 @@ void TagConsole::dump(const char* arg) {
   } else {
     const LibraryIndex::Track& tr = index->track(id);
     static const char* const kSources[4] = {"its path", "the device's record", "the transfer's record", "?"};
-    char title[260];
-    library_.catalog().title(id, title, sizeof(title));
+    char* title = w->title;
+    library_.catalog().title(id, title, sizeof(w->title));
     tagtext::lengthText(static_cast<uint32_t>(tr.durationS) * 1000u, t, sizeof(t));
     Serial.printf("[tags] the index: track %lu, named by %s%s: \"%s\" by \"%s\", album \"%s\" (%u), line \"%s\", disc "
                   "%u, number %u, length %s\n",

@@ -385,6 +385,59 @@ The rules that keep it deadlock- and glitch-free:
 | the card worker (`card`, app/CardWorker) | 1 | 1 for a cover (0 while a list moves), the library update's build, a slice of the walk, and a slice of the tag scan while the screen is dark (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply); 0 for compactions, the tag scan while the screen is lit and the update's save | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a slice of the validation walk (its folders for 18 ms lit, 60 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs unmeasured: `gs` prints it; the build about 4.5 KB at worst, ESTIMATED from `-fstack-usage`); reads the card in 4 KB pieces; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the card's background jobs at 0, since the SD driver's reads busy-wait the CPU; always below the decoder (below) |
 | Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms) |
 
+### The loop task's stack
+
+Arduino's `loopTask` has 8 KB of internal RAM
+(`CONFIG_ARDUINO_LOOP_STACK_SIZE`) for `setup()`, `loop()` and every
+console command, and an overflow is a panic: "Stack canary watchpoint
+triggered (loopTask)" (the IDF watches the stack's last 32 B). A read of
+the card takes about 2 KB of it on its own: the VFS (`vfs_fat_stat` 336 B,
+and its path's `snprintf`, printf's 800 B frame), FatFs (`f_open` and
+`f_stat` 624 B each: the 512 B long-name buffer,
+`CONFIG_FATFS_LFN_STACK`), then the sector cache and the SD driver (about
+0.8 KB). The SD driver's log line after a card error adds about 1.6 KB
+(printf again). So a console command keeps anything bigger than a few
+hundred bytes in PSRAM (app/TagConsole's `Work`).
+
+- **The boot goes deepest:** the library's compaction in `setup()` left
+  2,008 B unused on N11's 20k card (MEASURED, df92c01; 6,064 B used
+  ESTIMATED, below, against 6,184 B MEASURED).
+- **`gs` overflowed it** on that card (df92c01): `mptg::check()` put its
+  3.9 KB `Walker` on the stack, under `TagConsole::status()`'s 1.2 KB frame
+  (two records found), over the card's reads. The Walker, the records
+  found, `gt`'s path and title and `gl`'s names and paths are PSRAM now.
+- **Each command's own depth** (app/LoopStack): the console paints the
+  stack under itself with FreeRTOS's fill byte again before each command
+  (FreeRTOS's low-water mark is the lowest since the task started, which
+  the boot already set), and after each command ended with Enter, and
+  after `l`, `s` and `L`, prints `[console] gs: the loop task's stack: N B
+  never used during it (of 8 KB; M B the lowest since the boot)`. Under
+  1,536 B (`loopstack::kMinLeft`: an interrupt's frame, or a card error's
+  log line, on top) the line says LOW, after any command. `ui` prints the
+  lowest since the boot.
+- **ESTIMATED worst cases**, bytes used from the stack's top (from the
+  image: each function's `entry` frame, its calls and long calls, the
+  VFS's, FatFs's disk and the console's function pointers by hand, the
+  coprocessor save area on top; the boot's 6,064 B against the 6,184 B
+  measured says how close this comes). "Before" is 079d047 (the same
+  console as the device's df92c01), "after" 2feb566 with this change:
+
+  | Command | Before | Before, a card error's log line | After | After, a card error's log line |
+  |---|---|---|---|---|
+  | `gs` | 8,608 (over: the panic) | 10,224 | 4,608 | 6,224 |
+  | `gt` | 8,672 (over) | 10,288 | 4,624 | 6,128 |
+  | `gl`, `glw` | 5,040 | 6,560 (1,632 left) | 4,320 | 5,840 |
+  | `gc` | 3,360 | 3,360 | 3,440 | 3,440 |
+  | `gw`, `gb`, `gr`, `gv` | 3,024 | 3,024 | 3,072 | 3,072 |
+  | `g` | 3,568 | 3,568 | 3,616 | 3,616 |
+  | `ui` | 3,360 | 3,360 | 3,408 | 3,408 |
+  | `q` | 3,696 | 3,696 | 3,744 | 3,744 |
+  | `l` | 3,568 | 3,568 | 3,616 | 3,616 |
+  | `s` | 3,664 | 3,664 | 3,712 | 3,712 |
+
+  (After: the console's measuring frame adds 48 B to each; `gc` 32 B more:
+  2feb566's `sectordisk::Stats`, copied onto the stack, grew.)
+
 ## Bluetooth
 
 `BtSink` connects to the headphones the listener paired on the Pair screen
@@ -2929,7 +2982,8 @@ Queue, Dance and Output (with its Pair and About pages).
   a 5:20 LAME VBR track 15 s in, and 3:30 for a 3:13 FLAC.)
 - **Console** `ui`: each tab's stack with scroll positions, the list's state,
   frames and fps, the governor, the UI's bus holds (count, mean, max), the
-  overlays, the covers (above) and the loop task's unused stack. `ui0`-`ui4`
+  overlays, the covers (above) and the loop task's stack never used since
+  the boot ("The loop task's stack", above). `ui0`-`ui4`
   tap a tab, `uib` goes back, `uic` shows the coach cards, `uiT` decodes
   the covers again (their timings), `uiV` shows the volume HUD, and
   **`uiF<c/s/p/r/l/n/f/t/g/u/w>`** shows a faked state for screenshots of what a test

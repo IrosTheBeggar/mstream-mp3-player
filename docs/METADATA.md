@@ -3843,6 +3843,20 @@ src/. What the code decided where 3.2-3.4 left room:
   deferral); `gs`, `gt` and `gl` wait for the worker's step first (they
   read the card's records themselves). New: `gc` (the cache: `gc0`,
   `gc1`, `gc2`) and `gl` (L0's bench; `glw` with the walks), 6.3.
+  On the loop task's 8 KB stack (MEASURED, the first device run on N11's
+  card, df92c01): `gs` panicked it ("Stack canary watchpoint triggered
+  (loopTask)", right after its `[tags] the index's names` line):
+  `mptg::check()` put its 3.9 KB Walker on the stack, under `status()`'s
+  1.2 KB frame (two records found), over the VFS's and FatFs's reads
+  (about 2 KB). The Walker, the records found and `gt`'s path and title
+  are in the command's PSRAM `Work` now (about 34 KB while it runs, 29 KB
+  before), `gl`'s names and paths in one PSRAM block: `gs` and `gt` about
+  4.6 KB deep at worst instead of 8.6 KB (ESTIMATED from the image;
+  ARCHITECTURE.md, "The loop task's stack", has each command's). Each
+  command ended with Enter is followed by its own depth: `[console] gs:
+  the loop task's stack: N B never used during it (of 8 KB; M B the
+  lowest since the boot)` (app/LoopStack paints the stack under the
+  console again before it), LOW under 1,536 B.
 - **Sizes (MEASURED, the build).** IRAM unchanged in both builds
   (`.iram0.vectors` 1,028 + `.iram0.text` 124,867 = 125,895 B); internal
   DRAM +472 B (`.dram0.data` 24,328 to 24,440, `.dram0.bss` 32,168 to
@@ -4567,6 +4581,17 @@ What the batch runs, in order, and what each line should say. The
 expected figures are this document's (ESTIMATED unless marked); a line
 that differs by more than the range is a finding to record next to it.
 Serial at 115200 (the console of README); commands end with Enter.
+
+**After every command** ended with Enter (and `l`, `s`): `[console] <the
+command>: the loop task's stack: N B never used during it (of 8 KB; M B
+the lowest since the boot)`. N at least 1,536 everywhere (the line says
+LOW under it: record the command and its card's state); at least about
+3.5 KB after `gs` and `gt`, 3.8 KB after `gl` and `glw` (ESTIMATED worst
+cases: about 1.6 KB less if the SD driver logs a card error during it),
+4.4-5.1 KB after the others (ARCHITECTURE.md, "The loop task's stack").
+M: about 2,000 B after the first boot on N11's card (the boot's
+compaction; 2,008 B MEASURED). `ui`'s `[ui] loop task stack: N B never
+used since the boot` is M.
 
 **Before.** The core2 (QIO) build of `feature/metadata` at N10's commit or
 later, flashed with the user's go-ahead. The card: N11's synthetic 20k

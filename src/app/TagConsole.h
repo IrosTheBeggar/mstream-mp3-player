@@ -37,8 +37,13 @@
 //        over FatFs), each uncached and cached (minutes at 20k: playback
 //        stopped)
 //
-// About 40 KB of PSRAM while a command runs (the reader, its buffers, two
-// record runs), none between.
+// About 34 KB of PSRAM while a command runs (the readers, the check's
+// Walker, the records found, their buffers), none between. Nothing big goes
+// on the stack: the loop task has 8 KB, and a read of the card under a
+// command takes about 2 KB of it (the VFS, FatFs's 512 B long-name buffer,
+// the SD driver). gs once overflowed it with mptg::check()'s 3.9 KB Walker
+// on the stack; each command's own depth is the [console] line after it
+// (app/LoopStack).
 class TagConsole {
 public:
   struct Jobs {

@@ -16,6 +16,7 @@
 #include "TextFit.h"
 #include "TextFold.h"
 #include "UiText.h"
+#include "app/LoopStack.h"
 #include "app/Psram.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
@@ -1673,9 +1674,11 @@ void Ui::printState() const {
                   (unsigned long)browse_->albumCount());
   }
   thumbs_.printState();
-  // This runs on the loop task (the console): its stack's low-water mark.
-  Serial.printf("[ui] loop task stack: %u B never used (of 8 KB)\n",
-                static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+  // This runs on the loop task (the console): its stack's low-water mark
+  // since the boot (the console paints the stack again before each command,
+  // so FreeRTOS's own mark is the command's: app/LoopStack).
+  Serial.printf("[ui] loop task stack: %lu B never used since the boot (of 8 KB)\n",
+                static_cast<unsigned long>(loopstack::lowestLeft()));
 }
 
 void Ui::command(const char* a) {
