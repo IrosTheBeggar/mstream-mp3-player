@@ -20,16 +20,20 @@ failure and holds the licence to the built-in allowlist.
 
 `builtin` and `--check` need the repository: they regenerate the registry
 (BUILTINS: the test dancer's pack test/support/dance/TestPack.h) and the
-shared test vectors (EligibilityVectors.h, FoldVectors.h, BudgetVectors.h).
+shared test vectors (EligibilityVectors.h, FoldVectors.h, BudgetVectors.h,
+and ReaderVectors.h: about 3,000 mutated packs and what this file's reader
+says of each, which the C++ reader must say too).
 A registry folder may keep its sheet as text, sheet.txt, which `builtin`
 renders to sheet.png and `--check` compares pixel for pixel. `--check` also
 checks the embedded TEXTFOLD and FONT_COVERAGE tables against
 lib/core/TextFold.cpp and src/ui/VlwFonts.cpp.
 
 docs/DANCE-SPRITES.md is the specification: Appendix A the MPDN v1 bytes,
-Appendix B the integer algorithms this file shares with the firmware, and
+Appendix B the integer algorithms this file shares with the firmware,
 Appendix C this tool's contract (commands, messages, generated files and
-the importable API). Standard library only, Python 3.8 or newer; every
+the importable API), and Appendix D.3 the reader's additions for step 2
+(scan_pack, read_pack's avail and late_checks, reader_digest) and the
+reader vectors. Standard library only, Python 3.8 or newer; every
 computation is in integers, so the output is the same on every platform.
 """
 import argparse
@@ -37,6 +41,7 @@ import bisect
 import collections
 import configparser
 import difflib
+import functools
 import io
 import math
 import os
@@ -65,6 +70,7 @@ TEST_DANCER = "tools/art/dancers/test"
 ELIGIBILITY_H = "test/support/dance/EligibilityVectors.h"
 FOLD_H = "test/support/dance/FoldVectors.h"
 BUDGET_H = "test/support/dance/BudgetVectors.h"
+READER_H = "test/support/dance/ReaderVectors.h"
 
 MAX_FRAMES = 256
 MAX_MOVES = 64
@@ -138,6 +144,9 @@ Move = collections.namedtuple(
 Pack = collections.namedtuple(
     "Pack", "size crc id name author licence url version declared_moves geom palette idle_palette "
             "thumb boxes grids pose_keys moves ignored")
+# What the boot scan (5.5) reads of a card pack: the header side only (D.3).
+Scan = collections.namedtuple(
+    "Scan", "size crc id name author licence url version declared_moves geom palette idle_palette thumb")
 Pose = collections.namedtuple("Pose", "frame mirrored root_x root_y box shadow rect")
 Case = collections.namedtuple("Case", "fps pace mirrored spot frames median peak")
 Budget = collections.namedtuple("Budget", "cases median peak light")
@@ -145,9 +154,8 @@ Result = collections.namedtuple("Result", "ok data pack messages report skipped 
 
 
 # ---- small helpers (Appendix B.0, B.9, B.10)
-def fnv1a32(data):
-    """FNV-1a 32 of bytes (B.10)."""
-    h = 0x811C9DC5
+def fnv1a32(data, h=0x811C9DC5):
+    """FNV-1a 32 of bytes (B.10); h continues an earlier result."""
     for b in bytes(data):
         h = ((h ^ b) * 0x01000193) & 0xFFFFFFFF
     return h
@@ -2259,25 +2267,29 @@ def _read_string(data, p, end):
     return None if text is None else (text, p + 2 + n)
 
 
-def _decode_frame(data, off, length, box, cell_w, cell_h):
-    """A.10's dry-run decode into a cell grid, or None when it fails."""
+@functools.lru_cache(maxsize=4096)
+def _decode_rows(raw, box, cell_w, cell_h):
+    """A.10's dry-run decode of one frame's bytes into a cell grid, or None.
+    Cached by its inputs, which changes no result: the reader vectors (D.3)
+    read thousands of packs that share most of their frames."""
     grid = [bytearray(cell_w) for _ in range(cell_h)]
-    p, end = off, off + length
+    p, end = 0, len(raw)
     for y in range(box.h):
         if p + 2 > end:
             return None
-        skip, n = data[p], data[p + 1]
+        skip, n = raw[p], raw[p + 1]
         p += 2
         if p + n > end or skip > box.w:     # skip + the runs <= w, even for a row with no tokens
             return None
         x = skip
-        for t in data[p:p + n]:
+        for t in raw[p:p + n]:
             run, index = (t >> 4) + 1, t & 15
             if x + run > box.w:
                 return None
             if index:
+                row = grid[box.y0 + y]
                 for i in range(x, x + run):
-                    grid[box.y0 + y][box.x0 + i] = index
+                    row[box.x0 + i] = index
             x += run
         p += n
     if p != end:
@@ -2285,14 +2297,19 @@ def _decode_frame(data, off, length, box, cell_w, cell_h):
     return tuple(bytes(r) for r in grid)
 
 
-def read_pack(data, check_crc=True):
-    """Reads and validates an MPDN pack as the device does for a card pack
-    (A.15, the budget included). Raises DanceError(reason) for a rejected
-    pack; dropped moves are listed in Pack.ignored as (MOVS index, reason)."""
-    data = bytes(data)
-    size = len(data)
-    if size < 32:
-        raise DanceError("too short")
+def _decode_frame(data, off, length, box, cell_w, cell_h):
+    """A.10's dry-run decode into a cell grid, or None when it fails."""
+    return _decode_rows(bytes(data[off:off + length]), box, cell_w, cell_h)
+
+
+_META_FIELDS = (("id", 1, 23), ("name", 1, 24), ("author", 1, 40), ("licence", 1, 40), ("url", 0, 80),
+                ("version", 0, 16))
+
+
+def _pack_header(data, size, check_crc):
+    """A.15's header rows after `too short`, in order (5.5's row 1 without the
+    CRC): (the stored CRC, the chunk count), or DanceError. data holds at
+    least the 32-byte header."""
     if data[:4] != b"MPDN":
         raise DanceError("not an MPDN pack")
     _, min_reader, total, crc = struct.unpack_from("<HHII", data, 4)
@@ -2307,35 +2324,37 @@ def read_pack(data, check_crc=True):
     count = struct.unpack_from("<H", data, 16)[0]
     if count == 0 or count > MAX_CHUNKS or 32 + 12 * count > total:
         raise DanceError(f"bad chunk count {count}")
+    return crc, count
+
+
+def _pack_directory(data, total, count):
+    """A.3 on every entry, then the nine required tags: {name: (off, size)}."""
     dir_end = 32 + 12 * count
     chunks, seen = {}, []
     for i in range(count):
         tag, off, length = struct.unpack_from("<4sII", data, 32 + 12 * i)
-        t = _tag_text(tag)
         if off % 4:
-            raise DanceError(f"chunk {t}: misaligned")
+            raise DanceError(f"chunk {_tag_text(tag)}: misaligned")
         # A.3's order, which can't wrap in 32-bit arithmetic: off first, then size
         if off < dir_end or off > total or length > total - off:
-            raise DanceError(f"chunk {t}: out of bounds")
+            raise DanceError(f"chunk {_tag_text(tag)}: out of bounds")
         if tag in chunks:
-            raise DanceError(f"chunk {t} twice")
+            raise DanceError(f"chunk {_tag_text(tag)} twice")
         for ptag, poff, plen in seen:
             if length and plen and off < poff + plen and poff < off + length:
-                raise DanceError(f"chunks {_tag_text(ptag)} and {t} overlap")
+                raise DanceError(f"chunks {_tag_text(ptag)} and {_tag_text(tag)} overlap")
         chunks[tag] = (off, length)
         seen.append((tag, off, length))
     for name in CHUNKS:
         if name.encode("ascii") not in chunks:
             raise DanceError(f"no {name} chunk")
+    return {name: chunks[name.encode("ascii")] for name in CHUNKS}
 
-    def chunk(name):
-        return chunks[name.encode("ascii")]
 
-    # META
-    off, length = chunk("META")
+def _pack_meta(data, off, length):
+    """A.5: ([id, name, author, licence, url, version], the declared count)."""
     p, end, meta = off, off + length, []
-    for field, lo, hi in (("id", 1, 23), ("name", 1, 24), ("author", 1, 40), ("licence", 1, 40),
-                          ("url", 0, 80), ("version", 0, 16)):
+    for field, lo, hi in _META_FIELDS:
         s = _read_string(data, p, end)
         if s is None or not lo <= len(s[0].encode("utf-8")) <= hi or (field == "id" and not _ID.fullmatch(s[0])):
             raise DanceError(f"META: bad {field}")
@@ -2343,9 +2362,12 @@ def read_pack(data, check_crc=True):
         p = s[1]
     if p >= end:
         raise DanceError("META: bad count")
-    declared = data[p]
-    # GEOM
-    off, length = chunk("GEOM")
+    return meta, data[p]
+
+
+def _pack_geom(data, off, length):
+    """A.6, every field in table order; whether the rest frame's box is empty
+    needs FTAB (A.15's `the rest frame is empty`), so it isn't checked here."""
     if length < 12:
         raise DanceError("GEOM: too short")
     scale, faces, cw, ch, ax, ay, shadow, _, frames, rest = struct.unpack_from("<8BHH", data, off)
@@ -2357,21 +2379,57 @@ def read_pack(data, check_crc=True):
                         ("rest frame", (rest & 0x7FFF) < frames)):
         if not good:
             raise DanceError(f"GEOM: bad {field}")
-    geom = Geom(scale, faces, cw, ch, ax, ay, shadow, frames, rest)
-    off, length = chunk("PALS")
+    return Geom(scale, faces, cw, ch, ax, ay, shadow, frames, rest)
+
+
+def _pack_pals(data, off, length):
     if length != 96:
         raise DanceError(f"PALS: {length} bytes, not 96")
     pals = data[off:off + 96]
-    palette = tuple(tuple(pals[3 * i:3 * i + 3]) for i in range(16))
-    idle_palette = tuple(tuple(pals[48 + 3 * i:48 + 3 * i + 3]) for i in range(16))
-    off, length = chunk("THMB")
+    return (tuple(tuple(pals[3 * i:3 * i + 3]) for i in range(16)),
+            tuple(tuple(pals[48 + 3 * i:48 + 3 * i + 3]) for i in range(16)))
+
+
+def _pack_thmb(data, off, length):
     if length != 800:
         raise DanceError(f"THMB: {length} bytes, not 800")
-    thumb = data[off:off + 800]
-    off, length = chunk("FTAB")
+    return bytes(data[off:off + 800])
+
+
+def read_pack(data, check_crc=True, late_checks=True, avail=None):
+    """Reads and validates an MPDN pack as the device does for a card pack
+    (A.15, the budget included). Raises DanceError(reason) for a rejected
+    pack; dropped moves are listed in Pack.ignored as (MOVS index, reason).
+
+    avail is the number of bytes present (Pack::open's, D.1): below
+    len(data) the pack is rejected as `short read (<avail> of <size> bytes)`
+    before any other check. late_checks=False leaves out A.15's last two move
+    rows, `travels from no spot` and `budget red`, as step 2's C++ reader
+    does (D.2): a move that fails only those is kept."""
+    pack, full = _read_pack(data, check_crc, avail, late_checks)
+    return pack._replace(ignored=full) if late_checks else pack
+
+
+def _read_pack(data, check_crc, avail, late):
+    """read_pack's work: (the Pack with step 2's drops, every A.15 row's drops
+    or None when late is false). One pass gives both of D.3's lists."""
+    data = bytes(data)
+    size = len(data)
+    if avail is not None and avail < size:
+        raise DanceError(f"short read ({avail} of {size} bytes)")
+    if size < 32:
+        raise DanceError("too short")
+    crc, count = _pack_header(data, size, check_crc)
+    chunks = _pack_directory(data, size, count)
+    meta, declared = _pack_meta(data, *chunks["META"])
+    geom = _pack_geom(data, *chunks["GEOM"])
+    palette, idle_palette = _pack_pals(data, *chunks["PALS"])
+    thumb = _pack_thmb(data, *chunks["THMB"])
+    off, length = chunks["FTAB"]
+    frames, cw, ch = geom.frame_count, geom.cell_w, geom.cell_h
     if length != 12 * frames:
         raise DanceError(f"FTAB: {length} bytes for {frames} frames")
-    fdat_off, fdat_len = chunk("FDAT")
+    fdat_off, fdat_len = chunks["FDAT"]
     boxes, grids = [], []
     for i in range(frames):
         x0, y0, w, h, foff, flen, _ = struct.unpack_from("<4BIHH", data, off + 12 * i)
@@ -2380,15 +2438,14 @@ def read_pack(data, check_crc=True):
         if foff > fdat_len or flen > fdat_len - foff:      # A.9: off first, so nothing wraps
             raise DanceError(f"frame {i}: data out of bounds")
         box = Box(x0, y0, w, h)
-        grid = _decode_frame(data, fdat_off + foff, flen, box, cw, ch) if w else \
-            tuple(bytes(cw) for _ in range(ch))
+        grid = _decode_frame(data, fdat_off + foff, flen, box, cw, ch) if w else _blank_grid(cw, ch)
         if grid is None:
             raise DanceError(f"frame {i}: bad data")
         boxes.append(box)
         grids.append(grid)
-    if boxes[rest & 0x7FFF].w == 0:
+    if boxes[geom.rest_frame & 0x7FFF].w == 0:
         raise DanceError("the rest frame is empty")
-    soff, slen = chunk("STRS")
+    soff, slen = chunks["STRS"]
     if slen < 4:
         raise DanceError("STRS: too short")
     send = soff + slen
@@ -2400,7 +2457,7 @@ def read_pack(data, check_crc=True):
             raise DanceError(f"STRS: bad pose key {i}")
         pose_keys.append(s[0])
         p = s[1]
-    moff, mlen = chunk("MOVS")
+    moff, mlen = chunks["MOVS"]
     if mlen < 4:
         raise DanceError("MOVS: too short")
     mcount, rlen = data[moff], data[moff + 1]
@@ -2410,7 +2467,7 @@ def read_pack(data, check_crc=True):
         raise DanceError(f"MOVS: record length {rlen}")
     if mlen < 4 + mcount * rlen:
         raise DanceError("MOVS: too short")
-    stoff, stlen = chunk("STEP")
+    stoff, stlen = chunks["STEP"]
     if stlen % 8:
         raise DanceError(f"STEP: {stlen} bytes")
 
@@ -2420,25 +2477,73 @@ def read_pack(data, check_crc=True):
         s = _read_string(data, soff + o, send)
         return s if s is not None and check(s[0]) else None
 
-    moves, ignored = [], []
+    boxes = tuple(boxes)
+    moves, ignored, full = [], [], []
     for i in range(mcount):
         rec = struct.unpack_from("<H9Bb8BHBBHBBI", data, moff + 4 + i * rlen)
         move = _decode_move(data, pose_keys, strs_string, soff, stoff, stlen, rec)
         moves.append(move)
         try:
-            _check_move(geom, boxes, pose_keys, strs_string, soff, stlen, rec, move)
+            _check_move(geom, pose_keys, strs_string, soff, stlen, rec, move)
         except DanceError as e:
             ignored.append((i, str(e)))
-    return Pack(size, crc, meta[0], meta[1], meta[2], meta[3], meta[4], meta[5], declared, geom, palette,
-                idle_palette, bytes(thumb), tuple(boxes), tuple(grids), tuple(pose_keys), tuple(moves),
-                tuple(ignored))
+            full.append((i, str(e)))
+            continue
+        why = _late_reason(geom, boxes, move) if late else None
+        if why is not None:
+            full.append((i, why))
+    pack = Pack(size, crc, meta[0], meta[1], meta[2], meta[3], meta[4], meta[5], declared, geom, palette,
+                idle_palette, thumb, boxes, tuple(grids), tuple(pose_keys), tuple(moves), tuple(ignored))
+    return pack, (tuple(full) if late else None)
+
+
+@functools.lru_cache(maxsize=16)
+def _blank_grid(cell_w, cell_h):
+    return tuple(bytes(cell_w) for _ in range(cell_h))
+
+
+def scan_pack(prefix, size):
+    """5.5's boot scan of a card pack of `size` bytes whose first len(prefix)
+    were read (a longer prefix is cut to size): its rows in 5.5's order, with
+    A.15's reasons plus `header unreadable` for what lies past the bytes read.
+    The CRC, FTAB, the frames, STRS, MOVS, STEP and the moves are open()'s
+    (read_pack's) alone. Returns a Scan, or raises DanceError(reason)."""
+    data = bytes(prefix[:size])
+    avail = len(data)
+    if avail < 32:                                       # row 1, A.15's header rows without the CRC
+        raise DanceError("too short")
+    crc, count = _pack_header(data, size, False)
+    if 32 + 12 * count > avail:                          # row 2: the directory within avail
+        raise DanceError("header unreadable")
+    chunks = _pack_directory(data, size, count)          # rows 3 and 4
+    for name in ("META", "GEOM", "PALS", "THMB"):        # row 5: off first, so nothing wraps
+        off, length = chunks[name]
+        if off > avail or length > avail - off:
+            raise DanceError("header unreadable")
+    meta, declared = _pack_meta(data, *chunks["META"])   # rows 6-8
+    geom = _pack_geom(data, *chunks["GEOM"])
+    palette, idle_palette = _pack_pals(data, *chunks["PALS"])
+    thumb = _pack_thmb(data, *chunks["THMB"])
+    return Scan(size, crc, meta[0], meta[1], meta[2], meta[3], meta[4], meta[5], declared, geom, palette,
+                idle_palette, thumb)
+
+
+@functools.lru_cache(maxsize=4096)
+def _good_tag(tag):
+    """A.11's genre tag: 1-63 B that fold to something (B.8)."""
+    return 1 <= len(tag.encode("utf-8")) <= 63 and bool(fold_genre(tag))
+
+
+@functools.lru_cache(maxsize=4096)
+def _tag_key(tag):
+    return genre_key(tag)
 
 
 def _genre_run(strs_string, soff, first, count):
     """The genre run's tags, or None when one isn't a good tag (A.11)."""
     tags, p = [], first
     for _ in range(count):
-        s = strs_string(p, lambda t: 1 <= len(t.encode("utf-8")) <= 63 and fold_genre(t))
+        s = strs_string(p, _good_tag)
         if s is None:
             return None
         tags.append(s[0])
@@ -2467,8 +2572,9 @@ def _decode_move(data, pose_keys, strs_string, soff, stoff, stlen, rec):
                 song_hi, tuple(steps))
 
 
-def _check_move(geom, boxes, pose_keys, strs_string, soff, stlen, rec, move):
-    """A.15's move checks, in order: DanceError(reason) at the first failure."""
+def _check_move(geom, pose_keys, strs_string, soff, stlen, rec, move):
+    """A.15's move rows down to `needs 0x<hh>`, in order: DanceError(reason)
+    at the first failure. The last two rows are _late_reason's (D.2)."""
     (name_off, kind, beats, lo, hi, weight10, when, flags, repeat, needs, travel, start_at, travel_ease,
      bounce, sway, fk, tk, fkm, tkm, gfirst, gcount, scount, sfirst, song_lo, song_hi, _) = rec
     if move.name is None:
@@ -2533,14 +2639,133 @@ def _check_move(geom, boxes, pose_keys, strs_string, soff, stlen, rec, move):
         raise DanceError("song_bpm needs track BPM data: skipped in this version")
     if needs:
         raise DanceError("needs 0x%02X" % needs)
-    if kind == BEAT and travel:
-        orients = [False, True] if flags & FLAG_MIRROR else [False]
-        if not any(start_spots(geom, boxes, move, o) for o in orients):
-            raise DanceError("travels from no spot")
-    b = budget(geom, boxes, move)
-    if b.light == "red" and not flags & FLAG_HEAVY:
-        raise DanceError(f"budget red ({b.peak} px)")
     return move
+
+
+def _peak_bound(geom, boxes, move):
+    """A bound on B.6's peak for the move, from its boxes and keys alone: no
+    frame's character rect (B.5) can cover more than m px, whatever the
+    pace, the spot or the clamp, so the dirty rule never gives a frame more
+    than 1.3 x 2m. Where m sits under the red line, the budget can't be red
+    and _late_reason skips its simulation, which changes no result.
+
+    m is the largest of: a box's area; the shadow alone (a blank frame);
+    and, when the shadow can show, the box's union with it, whose width is
+    fixed relative to the root and whose height is largest at an end of the
+    root's vertical range (B.4 step 7's Y lies between scale x the lowest
+    key less the bounce and scale x the highest, 0 included, and the shadow
+    shows only while 2 x hop < shadowW; the clamp only moves the box)."""
+    s, sh = geom.scale, geom.shadow_w
+    dys = [st.dy for st in move.steps]
+    y_lo = s * min(0, min(dys) - (move.bounce if move.kind == BEAT else 0))
+    y_hi = s * max(0, max(dys))
+    y_shadow = max(y_lo, -((sh - 1) // 2))          # the lowest Y the shadow shows at
+    m = 3 * min(sh, STAGE_W)
+    for st in move.steps:
+        b = boxes[st.frame]
+        if not b.w:
+            continue
+        bw, bh = b.w * s, b.h * s
+        m = max(m, bw * bh)
+        if sh <= 0 or y_shadow > y_hi:
+            continue
+        ly = (b.y0 - geom.anchor_y) * s
+        spans = []
+        for y in (y_shadow, y_hi):
+            top = min(max(GROUND_Y + y + ly, 0), STAGE_H - bh)
+            spans.append(max(top + bh, GROUND_Y + 2) - min(top, GROUND_Y - 1))
+        for lx in ((b.x0 - geom.anchor_x) * s, (geom.anchor_x - b.x0 - b.w + 1) * s):
+            width = max(lx + bw, sh - sh // 2) - min(lx, -(sh // 2))
+            m = max(m, width * max(spans))
+    return 26 * m // 10
+
+
+_LATE_MEMO = {}
+
+
+def _late_reason(geom, boxes, move):
+    """A.15's last two move rows (step 3's, D.2), for a move that passed every
+    other row: `travels from no spot` (B.11) and, as for a card pack, `budget
+    red (<peak> px)` (B.6); None when it passes both. Memoized by everything
+    the two read (the scale, the anchor, the shadow, the box each step shows
+    and the move's motion), which changes no result: the reader vectors (D.3)
+    read thousands of packs that share most of their moves."""
+    key = (geom.scale, geom.anchor_x, geom.anchor_y, geom.shadow_w, tuple(boxes[s.frame] for s in move.steps),
+           move.kind, move.beats, move.pace_lo, move.pace_hi, move.flags, move.travel, move.start_at,
+           move.travel_ease, move.bounce, move.sway, move.steps)
+    if key in _LATE_MEMO:
+        return _LATE_MEMO[key]
+    why = None
+    if move.kind == BEAT and move.travel:
+        orients = [False, True] if move.flags & FLAG_MIRROR else [False]
+        if not any(start_spots(geom, boxes, move, o) for o in orients):
+            why = "travels from no spot"
+    if why is None and not move.flags & FLAG_HEAVY and _peak_bound(geom, boxes, move) > AMBER_PX:
+        b = budget(geom, boxes, move)
+        if b.light == "red":
+            why = f"budget red ({b.peak} px)"
+    if len(_LATE_MEMO) >= 65536:
+        _LATE_MEMO.clear()
+    _LATE_MEMO[key] = why
+    return why
+
+
+@functools.lru_cache(maxsize=65536)
+def _fnv_part(h, part):
+    """FNV-1a 32 continued over one part of reader_digest's stream, cached:
+    most of the reader vectors' packs share most of their parts."""
+    return fnv1a32(part, h)
+
+
+@functools.lru_cache(maxsize=4096)
+def _grid_hash(grid):
+    return frame_hash(grid)
+
+
+def _str8(text):
+    raw = (text or "").encode("utf-8")
+    return bytes((len(raw),)) + raw
+
+
+def reader_digest(info):
+    """D.3's digest of what a reader exposes: FNV-1a 32 over META, GEOM, PALS
+    and THMB for a Scan; for a Pack also each frame's box and A.16 hash, the
+    pose keys, and every move that its `ignored` doesn't name."""
+    g = info.geom
+    parts = [b"".join(_str8(s) for s in (info.id, info.name, info.author, info.licence, info.url, info.version))
+             + bytes((info.declared_moves,))
+             + struct.pack("<7BHH", g.scale, g.faces, g.cell_w, g.cell_h, g.anchor_x, g.anchor_y, g.shadow_w,
+                           g.frame_count, g.rest_frame),
+             bytes(v for c in info.palette + info.idle_palette for v in c) + bytes(info.thumb)]
+    if not isinstance(info, Scan):
+        parts.append(b"".join(struct.pack("<4BI", b.x0, b.y0, b.w, b.h, _grid_hash(grid))
+                              for b, grid in zip(info.boxes, info.grids)))
+        out = bytearray((len(info.pose_keys),))
+        for k in info.pose_keys:
+            out += _str8(k)
+        dropped = {i for i, _ in info.ignored}
+        out.append(len(info.moves))
+        for i, m in enumerate(info.moves):
+            if i in dropped:
+                continue
+            out.append(i)
+            out += _str8(m.name)
+            out += struct.pack("<9Bb4B", m.kind, m.beats, m.pace_lo, m.pace_hi, m.weight10, m.when, m.flags,
+                               m.repeat, m.needs, m.travel, m.start_at, m.travel_ease, m.bounce, m.sway)
+            for k in (m.from_key, m.to_key, m.from_key_m, m.to_key_m):
+                out += _str8(k)
+            out.append(len(m.genres))
+            for t in m.genres:
+                out += struct.pack("<I", _tag_key(t))
+            out += bytes((m.song_lo, m.song_hi, len(m.steps)))
+            for st in m.steps:
+                out += struct.pack("<HHbbBB", st.frame | (0x8000 if st.mirrored else 0), st.dur, st.dx, st.dy,
+                                   st.ease, 1 if st.go else 0)
+        parts.append(bytes(out))
+    h = 0x811C9DC5
+    for part in parts:
+        h = _fnv_part(h, part)
+    return h
 
 
 # ---- generated files (C.8)
@@ -2613,7 +2838,7 @@ PACE_RANGES = ELIGIBILITY_RANGES + ((100, 100),)
 FOLD_TAGS = ("Hip Hop", "hip-hop", "HIP_HOP", "Drum & Bass", "drum n bass", "Drum ’n’ Bass", "Drum&n&Bass",
              "R&B", "r+b", "d&b", "rock'n'roll", "n", "a n", "n n n", "&", "C++", "Électro", "Straße",
              "Æther", "Œuvre", "Łódź", "Ñandú", "½ step", "©",
-             "Synth–Pop", "K-Pop", "90s", "Música Popular Brasileira", "日本", "  ", "")
+             "Synth–Pop", "K-Pop", "90s", "Música Popular Brasileira", "AZ Zydeco", "日本", "  ", "")
 
 
 def _vector_head(source, what):
@@ -2723,6 +2948,1061 @@ def _budget_h(pack):
     return "\n".join(out)
 
 
+# ---- the differential reader vectors (D.3)
+# ReaderVectors.h: about 3,000 packs made from two bases by patches, each with
+# what read_pack and scan_pack say of it, which the C++ reader must say too.
+KBASE_TEST, KBASE_DOT = 0, 1
+KOPEN, KOPEN_SHORT, KSCAN = 0, 1, 2
+KFIX_SIZE, KFIX_CRC = 1, 2
+_FIX_BOTH = KFIX_SIZE | KFIX_CRC
+READER_SEED = 0x4D50444E
+
+# A.17's chunk table: the dot pack, the second base (PALS and THMB are filled in).
+_DOT_CHUNKS = (
+    ("META", "03 64 6f 74 00 03 44 6f 74 00 03 41 6e 61 00 07 43 43 30 2d 31 2e 30 00 00 00 00 00 01"),
+    ("GEOM", "01 00 04 04 02 04 00 00 01 00 00 00"),
+    ("PALS", ""),
+    ("THMB", ""),
+    ("FTAB", "01 02 02 02 00 00 00 00 06 00 00 00"),
+    ("STRS", "00 00 00 00 03 68 6f 70 00"),
+    ("MOVS", "01 20 00 00 04 00 00 01 00 00 0a 00 00 00 00 00 00 00 02 00 00 00 00 00 00 00 00 01 00 00 00 00 00 00 00 00"),
+    ("STEP", "00 00 0c 00 00 00 00 00"),
+    ("FDAT", "00 01 11 00 01 11"),
+)
+
+
+def _dot_pack(**chunks):
+    """A.17's pack, assembled from its chunk table (1,156 bytes, CRC
+    0x5BF1E285); with chunks= replacing some of A.4's nine, extra tags going
+    after them, sorted."""
+    pals = bytearray(96)
+    pals[3:6] = bytes((0xFF, 0, 0))
+    pals[51:54] = bytes(idle_colour((0xFF, 0, 0)))
+    parts = []
+    for tag, text in _DOT_CHUNKS:
+        data = bytes(pals) if tag == "PALS" else b"\x11" * 800 if tag == "THMB" else bytes.fromhex(text)
+        parts.append((tag, chunks.pop(tag, data)))
+    return _assemble(parts + sorted(chunks.items()))
+
+
+class _Xorshift32:
+    """D.3's generator: x ^= x << 13; x ^= x >> 17; x ^= x << 5, mod 2^32."""
+
+    def __init__(self, seed):
+        self.x = seed & 0xFFFFFFFF
+
+    def next(self):
+        x = self.x
+        x ^= (x << 13) & 0xFFFFFFFF
+        x ^= x >> 17
+        x ^= (x << 5) & 0xFFFFFFFF
+        self.x = x
+        return x
+
+    def below(self, n):
+        return self.next() % n
+
+
+class _VectorError(Exception):
+    """The reader vectors can't be generated as D.3 asks: an internal error."""
+
+
+# D.1's Why, each with its A.15 text, for D.3's coverage rule.
+_WHY_TEXTS = (
+    ("ShortRead", r"short read \(\d+ of \d+ bytes\)"), ("TooShort", r"too short"),
+    ("NotMpdn", r"not an MPDN pack"), ("NeedsNewerPlayer", r"needs a newer player"),
+    ("SizeMismatch", r"size \d+ isn't the file's \d+"), ("TooBig", r"too big \(\d+ bytes\)"),
+    ("BadChecksum", r"bad checksum"), ("BadChunkCount", r"bad chunk count \d+"),
+    ("HeaderUnreadable", r"header unreadable"), ("ChunkMisaligned", r"chunk .{4}: misaligned"),
+    ("ChunkOutOfBounds", r"chunk .{4}: out of bounds"), ("ChunkTwice", r"chunk .{4} twice"),
+    ("ChunksOverlap", r"chunks .{4} and .{4} overlap"), ("NoChunk", r"no (?:" + "|".join(CHUNKS) + ") chunk"),
+    ("MetaBad", r"META: bad (id|name|author|licence|url|version|count)"), ("GeomTooShort", r"GEOM: too short"),
+    ("GeomBad", r"GEOM: bad (scale|faces|cellW|cellH|anchorX|anchorY|shadowW|frame count|rest frame)"),
+    ("PalsSize", r"PALS: \d+ bytes, not 96"), ("ThmbSize", r"THMB: \d+ bytes, not 800"),
+    ("FtabSize", r"FTAB: \d+ bytes for \d+ frames"), ("FrameBadBox", r"frame \d+: bad box"),
+    ("FrameDataOutOfBounds", r"frame \d+: data out of bounds"), ("FrameBadData", r"frame \d+: bad data"),
+    ("RestFrameEmpty", r"the rest frame is empty"), ("StrsTooShort", r"STRS: too short"),
+    ("StrsBadPoseKey", r"STRS: bad pose key \d+"), ("MovsTooShort", r"MOVS: too short"),
+    ("MovsCount", r"MOVS: \d+ moves"), ("MovsRecordLength", r"MOVS: record length \d+"),
+    ("StepSize", r"STEP: \d+ bytes"),
+    ("BadName", r"bad name"), ("BadKind", r"bad kind"), ("BadSteps", r"bad steps"),
+    ("FrameOutOfRange", r"frame \d+ out of range"), ("Beats", r"\d+ beats"), ("StepTicks", r"step \d+: \d+ ticks"),
+    ("TickSum", r"\d+ of \d+ ticks"), ("StepMs", r"step \d+: \d+ ms"), ("IdleTotal", r"\d+ ms in all"),
+    ("BeatFields", r"beat fields on a no-BPM move"), ("BadWhen", r"bad when"), ("Pace", r"pace \d+-\d+"),
+    ("RangeUnreachable", r"range \d+-\d+ unreachable"), ("Weight", r"weight \d+"), ("Repeat", r"repeat \d+"),
+    ("Bounce", r"bounce \d+"), ("Sway", r"sway \d+"), ("Travel", r"travel -?\d+"),
+    ("BadStartAt", r"bad start_at"), ("BadEase", r"bad ease"), ("BadPlace", r"bad place"),
+    ("Offset", r"offset -?\d+,-?\d+"), ("BadPoseKey", r"bad pose key"), ("BadGenre", r"bad genre"),
+    ("SongBpm", r"song_bpm needs track BPM data: skipped in this version"), ("Needs", r"needs 0x[0-9A-F]{2}"),
+    ("TravelsFromNoSpot", r"travels from no spot"), ("BudgetRed", r"budget red \(\d+ px\)"),
+)
+_WHY_RE = tuple((name, re.compile(text, re.S)) for name, text in _WHY_TEXTS)
+_LATE_WHYS = ("TravelsFromNoSpot", "BudgetRed")
+_META_NAMES = tuple(f for f, _, _ in _META_FIELDS) + ("count",)
+_GEOM_NAMES = ("scale", "faces", "cellW", "cellH", "anchorX", "anchorY", "shadowW", "frame count", "rest frame")
+
+
+@functools.lru_cache(maxsize=4096)
+def _why(reason):
+    """(D.1's Why, its field or None) of an A.15 reason, or None."""
+    for name, rx in _WHY_RE:
+        m = rx.fullmatch(reason)
+        if m:
+            return name, (m.group(1) if m.groups() else None)
+    return None
+
+
+# UTF-8 edges (D.3, item 4) for the string bytes of META and STRS: a lone
+# continuation byte, overlong forms, a surrogate, past U+10FFFF, a C1
+# control, DEL, NUL, and valid 2-, 3- and 4-byte forms; and a good second
+# byte followed by a bad third or fourth. Written where the string ends
+# first, a sequence is cut.
+_UTF8_EDGES = (b"\x80", b"\xc0\x80", b"\xc1\xbf", b"\xe0\x80\x80", b"\xf0\x80\x80\x80", b"\xed\xa0\x80",
+               b"\xf4\x90\x80\x80", b"\xf5", b"\xc2\x80", b"\x7f", b"\x00", b"\xc3\xa9", b"\xe2\x82\xac",
+               b"\xf0\x9f\x98\x80", b"\xe6\x97\xa5", b"A", b"-", b" ", b"?!", b"\xe2\x82A", b"\xf0\x9f\x98A")
+
+# The structure-aware mutator's field groups and their weights (D.3, item 4),
+# and the header-side ones that the scan cases (item 6) edit.
+_STRUCT_WEIGHTS = (("header", 4), ("dir", 12), ("meta", 8), ("geom", 8), ("ftab", 10), ("rows", 5),
+                   ("tokens", 5), ("strs", 12), ("movs", 26), ("step", 10))
+_SCAN_WEIGHTS = (("header", 12), ("dir", 22), ("meta", 20), ("geom", 12), ("pals", 17), ("thmb", 17))
+
+
+def _tag_int(tag):
+    return int.from_bytes(tag, "little")
+
+
+def _meta_too_long(data, field):
+    """Whether META's `field` string in a pack whose header and directory
+    pass is well formed (A.1) and longer than A.5's limit: a `META: bad
+    <field>` by its length, which D.3's coverage rule asks for."""
+    try:
+        chunks = _pack_directory(data, len(data), struct.unpack_from("<H", data, 16)[0])
+    except (DanceError, struct.error):
+        return False
+    off, length = chunks["META"]
+    p = off
+    for name, _, hi in _META_FIELDS:
+        s = _read_string(data, p, off + length)
+        if s is None:
+            return False
+        if name == field:
+            return len(s[0].encode("utf-8")) > hi
+        p = s[1]
+    return False
+
+
+class _Layout:
+    """Where a valid base pack's fields lie, each with D.3's pool of edge
+    values: 0, 1, its limit and one past it, 255 or 0xFFFF, the stored
+    value's neighbours, other chunks' offsets and sizes, 0xFFFFFFF0. None in
+    a pool is a random value."""
+
+    def __init__(self, data):
+        self.data = data = bytes(data)
+        self.size = size = len(data)
+        count = struct.unpack_from("<H", data, 16)[0]
+        self.dir = [struct.unpack_from("<4sII", data, 32 + 12 * i) for i in range(count)]
+        self.chunk = {t.decode("ascii"): (o, s) for t, o, s in self.dir}
+        self.dir_end = 32 + 12 * count
+        self.fields = dict((g, []) for g, _ in _STRUCT_WEIGHTS + _SCAN_WEIGHTS)
+        self.strings = {"meta": [], "strs": []}
+        self._header(count)
+        self._directory()
+        self._meta()
+        geom = self._geom()
+        for name, group in (("PALS", "pals"), ("THMB", "thmb")):     # contents no reader checks
+            off, length = self.chunk[name]
+            for k in range(length):
+                self.f(group, off + k, 1, [None, 0, 0xFF])
+        self._frames(geom)
+        str_offsets, pose_count = self._strs()
+        self._moves(str_offsets, pose_count, geom)
+
+    def u(self, off, width):
+        return int.from_bytes(self.data[off:off + width], "little")
+
+    def f(self, group, off, width, values, weight=1):
+        mask, pool = (1 << (8 * width)) - 1, []
+        for v in values:
+            v = None if v is None else v & mask
+            if v not in pool:
+                pool.append(v)
+        for _ in range(weight):
+            self.fields[group].append((off, width, tuple(pool)))
+
+    def _header(self, count):
+        self.f("header", 0, 4, [_tag_int(b"MPDX"), _tag_int(b"mpdn")])
+        self.f("header", 4, 2, [0, 2, 0xFFFF])
+        self.f("header", 6, 2, [0, 2, 3, 0xFFFF])
+        self.f("header", 16, 2, [0, 1, count - 1, count + 1, 16, 17, 0xFFFF])
+        self.f("header", 18, 2, [1, 0xFFFF])
+        for off in (20, 24, 28):
+            self.f("header", off, 4, [0xFFFFFFFF])
+
+    def _directory(self):
+        size = self.size
+        offs = [o for _, o, _ in self.dir]
+        sizes = [s for _, _, s in self.dir]
+        tags = [_tag_int(t.encode("ascii")) for t in CHUNKS] + [_tag_int(t) for t in (b"XTRA", b"STAG", b'\x01"\\?')]
+        limits = {"GEOM": (11, 12), "PALS": (95, 97), "THMB": (799, 801), "STRS": (3, 4), "MOVS": (3, 4)}
+        for i, (tag, off, sz) in enumerate(self.dir):
+            e = 32 + 12 * i
+            self.f("dir", e, 4, tags)
+            self.f("dir", e + 4, 4, [0, 4, 32, self.dir_end - 4, self.dir_end, off - 4, off - 1, off + 1, off + 4,
+                                     size - 4, size, size + 4, 0xFFFFFFF0, 0xFFFFFFFC] + offs + sizes)
+            self.f("dir", e + 8, 4, [0, 1, sz - 1, sz + 1, sz - 8, sz + 8, size - off, size - off + 1, size,
+                                     0xFFFFFFF0, 0xFFFFFFFF] + list(limits.get(tag.decode("ascii"), ()))
+                   + sizes + offs)
+
+    def _meta(self):
+        p = self.chunk["META"][0]
+        for _, _, hi in _META_FIELDS:
+            n = self.data[p]
+            self.f("meta", p, 1, [0, 1, n - 1, n + 1, hi, hi + 1, 255])
+            if n:
+                self.strings["meta"].append((p + 1, n))
+            self.f("meta", p + 1 + n, 1, [0x20, 0x41, 0xFF])          # its NUL
+            p += n + 2
+        self.f("meta", p, 1, [0, 1, 64, 65, 255])                     # the declared count
+
+    def _geom(self):
+        g = self.chunk["GEOM"][0]
+        scale, faces, cw, ch, ax, ay, sh, _, frames, rest = struct.unpack_from("<8BHH", self.data, g)
+        self.f("geom", g, 1, [0, 1, 4, 5, 255, scale - 1, scale + 1])
+        self.f("geom", g + 1, 1, [0, 2, 3, 255])
+        for k, v in ((2, cw), (3, ch)):
+            self.f("geom", g + k, 1, [0, 1, 160 // scale, 160 // scale + 1, 255, v - 1, v + 1])
+        self.f("geom", g + 4, 1, [0, cw - 1, cw, 255, ax - 1, ax + 1])
+        self.f("geom", g + 5, 1, [0, 1, ch, ch + 1, 153 // scale, 153 // scale + 1, ch - 10 // scale,
+                                  ch - 10 // scale - 1, 255, ay - 1, ay + 1])
+        self.f("geom", g + 6, 1, [0, 160, 161, 255, sh - 1, sh + 1])
+        self.f("geom", g + 7, 1, [255])
+        self.f("geom", g + 8, 2, [0, 1, frames - 1, frames + 1, 256, 257, 0xFFFF])
+        self.f("geom", g + 10, 2, [0, 1, frames - 1, frames, 0x8000, 0x7FFF, 0xFFFF])
+        return scale, cw, ch, frames
+
+    def _frames(self, geom):
+        _, cw, ch, frames = geom
+        ftab, fdat = self.chunk["FTAB"][0], self.chunk["FDAT"][0]
+        fdat_len = self.chunk["FDAT"][1]
+        entries = [struct.unpack_from("<4BIHH", self.data, ftab + 12 * i) for i in range(frames)]
+        frame_offs = sorted({e[4] for e in entries})
+        for i, (x0, y0, w, h, off, ln, _) in enumerate(entries):
+            e = ftab + 12 * i
+            self.f("ftab", e, 1, [0, x0 - 1, x0 + 1, cw - w, cw - w + 1, 255])
+            self.f("ftab", e + 1, 1, [0, y0 - 1, y0 + 1, ch - h, ch - h + 1, 255])
+            self.f("ftab", e + 2, 1, [0, 1, w - 1, w + 1, cw - x0, cw - x0 + 1, 160, 161, 255])
+            self.f("ftab", e + 3, 1, [0, 1, h - 1, h + 1, ch - y0, ch - y0 + 1, 255])
+            self.f("ftab", e + 4, 4, [0, off - 1, off + 1, fdat_len - 1, fdat_len, fdat_len + 1, 0xFFFFFFFC,
+                                      0xFFFFFFF0] + frame_offs)
+            self.f("ftab", e + 8, 2, [0, 1, ln - 1, ln + 1, fdat_len - off, fdat_len - off + 1, 0xFFFF])
+            self.f("ftab", e + 10, 2, [0xFFFF])
+            p = fdat + off
+            for _ in range(h if w else 0):
+                skip, n = self.data[p], self.data[p + 1]
+                self.f("rows", p, 1, [0, skip - 1, skip + 1, w, w + 1, 255])
+                self.f("rows", p + 1, 1, [0, n - 1, n + 1, 255])
+                for k in range(n):
+                    t = self.data[p + 2 + k]
+                    self.f("tokens", p + 2 + k, 1, [None, 0x00, 0x0F, 0xF1, 0xFF, t ^ 0x10, t ^ 0x01])
+                p += 2 + n
+
+    def _strs(self):
+        so, sl = self.chunk["STRS"]
+        pose_count = self.data[so]
+        self.f("strs", so, 1, [0, 1, pose_count - 1, pose_count + 1, 255])
+        self.f("strs", so + 1, 1, [0xFF])
+        offsets, p = [], 4
+        while p < sl:
+            n = self.data[so + p]
+            offsets.append(p)
+            self.f("strs", so + p, 1, [0, 1, n - 1, n + 1, 23, 24, 63, 64, 255])
+            if n:
+                self.strings["strs"].append((so + p + 1, n))
+            self.f("strs", so + p + 1 + n, 1, [0x20, 0x41, 0xFF])
+            p += n + 2
+        return offsets, pose_count
+
+    def _moves(self, str_offsets, pose_count, geom):
+        scale, _, _, frames = geom
+        mo = self.chunk["MOVS"][0]
+        sl = self.chunk["STRS"][1]
+        nsteps = self.chunk["STEP"][1] // 8
+        count, rlen = self.data[mo], self.data[mo + 1]
+        self.f("movs", mo, 1, [0, 1, count - 1, count + 1, 64, 65, 255])
+        self.f("movs", mo + 1, 1, [0, 31, 32, 33, 64, 255])
+        self.f("movs", mo + 2, 2, [0xFFFF])
+        strings = [0, 3, 4, sl - 2, sl - 1, sl, sl + 1, 0xFFFF] + str_offsets
+        for r in range(count):
+            e = mo + 4 + rlen * r
+            (name, _, _, lo, hi, _, _, flags, _, _, _, _, _, _, _, _, _, _, _, gfirst, gcount, scount,
+             sfirst, _, _, _) = struct.unpack_from("<H9Bb8BHBBHBBI", self.data, e)
+            self.f("movs", e, 2, strings + [name - 1, name + 1], 3)
+            self.f("movs", e + 2, 1, [0, 1, 2, 255])
+            self.f("movs", e + 3, 1, [0, 1, 2, 3, 4, 8, 9, 255])
+            self.f("movs", e + 4, 1, [0, 35, 36, 72, 100, 176, 180, 181, 185, 200, 201, 255, lo - 1, lo + 1])
+            self.f("movs", e + 5, 1, [0, 35, 36, 60, 88, 100, 176, 180, 181, 200, 201, 255, hi - 1, hi + 1])
+            self.f("movs", e + 6, 1, [0, 1, 100, 101, 255])
+            self.f("movs", e + 7, 1, [0, 1, 2, 3, 4, 255])
+            self.f("movs", e + 8, 1, [0, 1, 2, 4, 8, 12, 16, 32, 64, 128, 255, flags ^ 16, flags ^ 1])
+            self.f("movs", e + 9, 1, [0, 1, 2, 8, 9, 255])
+            self.f("movs", e + 10, 1, [0, 1, 2, 0xA0, 0x80, 255])
+            self.f("movs", e + 11, 1, [0, 1, 2, 3, -1, -2, -3, 127, -128])
+            self.f("movs", e + 12, 1, [0, 1, 2, 3, 4, 5, 255])
+            self.f("movs", e + 13, 1, [0, 1, 4, 5, 255])
+            for k in (14, 15):
+                self.f("movs", e + k, 1, [0, 16, 17, 255])
+            for k in range(16, 20):
+                self.f("movs", e + k, 1, [0, 1, pose_count, pose_count + 1, 255], 3)
+            self.f("movs", e + 20, 2, strings + [gfirst - 1, gfirst + 1], 3)
+            self.f("movs", e + 22, 1, [0, 1, 2, 3, 8, 9, 255, gcount - 1, gcount + 1], 3)
+            self.f("movs", e + 23, 1, [0, 1, 32, 33, 255, scount - 1, scount + 1], 3)
+            self.f("movs", e + 24, 2, [0, sfirst - 1, sfirst + 1, nsteps - scount, nsteps - scount + 1, nsteps,
+                                       0xFFFF], 3)
+            self.f("movs", e + 26, 1, [0, 1, 160, 255])
+            self.f("movs", e + 27, 1, [0, 1, 180, 255])
+            self.f("movs", e + 28, 4, [0xFFFFFFFF])
+        so = self.chunk["STEP"][0]
+        d = 48 // scale
+        for s in range(nsteps):
+            e = so + 8 * s
+            word, dur = struct.unpack_from("<HH", self.data, e)
+            self.f("step", e, 2, [0, frames - 1, frames, frames + 1, 0x7FFF, 0x8000, word ^ 0x8000, 0xFFFF])
+            self.f("step", e + 2, 2, [0, 1, 2, 3, dur - 1, dur + 1, 19, 20, 500, 501, 0xFFFF])
+            for k in (4, 5):
+                self.f("step", e + k, 1, [0, d, -d, d + 1, -d - 1, 127, -128])
+            self.f("step", e + 6, 1, [0, 4, 5, 255])
+            self.f("step", e + 7, 1, [0, 1, 2, 255])
+
+    def edit(self, rng, buf, weights):
+        """One edit in place: a field set from its pool, or (for META's and
+        STRS's strings) a UTF-8 edge written inside a string."""
+        pick = rng.below(sum(w for _, w in weights))
+        for group, w in weights:
+            if pick < w:
+                break
+            pick -= w
+        if group in self.strings and self.strings[group] and rng.below(5) < 2:
+            p, n = self.strings[group][rng.below(len(self.strings[group]))]
+            seq = _UTF8_EDGES[rng.below(len(_UTF8_EDGES))]
+            pos = rng.below(n)
+            seq = seq[:n - pos]
+            buf[p + pos:p + pos + len(seq)] = seq
+            return
+        off, width, pool = self.fields[group][rng.below(len(self.fields[group]))]
+        v = pool[rng.below(len(pool))]
+        if v is None:
+            v = rng.below(1 << (8 * width))
+        buf[off:off + width] = v.to_bytes(width, "little")
+
+    def scan_avails(self):
+        """D.3 item 6's avail values, cut to the pack's length."""
+        out = [0, 31, 32, self.dir_end - 1, self.dir_end]
+        for name in ("META", "GEOM", "PALS", "THMB"):
+            off, size = self.chunk[name]
+            out += [off + size - 1, off + size]
+        out += [1284, 2048, self.size]
+        seen = []
+        for a in out:
+            a = min(a, self.size)
+            if a not in seen:
+                seen.append(a)
+        return seen
+
+
+def _fixed(data, fix):
+    """D.3's step 3: with kFixSize the length at byte 8, then with kFixCrc the
+    CRC of bytes 16.. at byte 12, each where the field fits."""
+    data = bytearray(data)
+    if fix & KFIX_SIZE and len(data) >= 12:
+        struct.pack_into("<I", data, 8, len(data))
+    if fix & KFIX_CRC and len(data) >= 16:
+        struct.pack_into("<I", data, 12, crc32(data[16:]))
+    return data
+
+
+def _diff_runs(a, b, gap):
+    """The runs [off, n] where b differs from a (same length), runs at most
+    `gap` equal bytes apart joined. Equal stretches are skipped 1 KB, then
+    32 bytes, at a time."""
+    runs, n = [], len(a)
+    for i in range(0, n, 1024):
+        if a[i:i + 1024] == b[i:i + 1024]:
+            continue
+        for j in range(i, min(n, i + 1024), 32):
+            if a[j:j + 32] == b[j:j + 32]:
+                continue
+            for k in range(j, min(n, j + 32)):
+                if a[k] != b[k]:
+                    if runs and k - (runs[-1][0] + runs[-1][1]) <= gap:
+                        runs[-1][1] = k + 1 - runs[-1][0]
+                    else:
+                        runs.append([k, 1])
+    return runs
+
+
+def _c_text(text):
+    """A reason as a C string literal: C.8's escapes, and every ? as \\? so no
+    trigraph can form."""
+    return _c_bytes(text).replace("?", "\\?")
+
+
+class _ReaderVectors:
+    """D.3's generator: the cases in their six families, what Python's reader
+    says of each, and ReaderVectors.h's text."""
+
+    def __init__(self, test_data):
+        self.bases = (bytes(test_data), _dot_pack())
+        if len(self.bases[1]) != 1156 or struct.unpack_from("<I", self.bases[1], 12)[0] != 0x5BF1E285:
+            raise _VectorError("the dot pack isn't A.17's")
+        self.layouts = tuple(_Layout(b) for b in self.bases)
+        self.rng = _Xorshift32(READER_SEED)
+        self.bytes = bytearray()
+        self.patches, self.reasons, self.drops, self.cases = [], [], [], []
+        self.reason_at, self.drop_at = {}, {}
+        self.families = []
+        self.seen, self.seen_full = set(), set()
+        self.accepted = {KOPEN: 0, KSCAN: 0}
+
+    def step1(self, base, length):
+        b = self.bases[base]
+        return b[:length] + bytes(max(0, length - len(b)))
+
+    def reason_index(self, text):
+        if text not in self.reason_at:
+            self.reason_at[text] = len(self.reasons)
+            self.reasons.append(text)
+        return self.reason_at[text]
+
+    def drop_list(self, items):
+        if not items:
+            return 0, 0
+        key = tuple((m, self.reason_index(r)) for m, r in items)
+        if key not in self.drop_at:
+            self.drop_at[key] = len(self.drops)
+            self.drops.extend(key)
+        return len(key), self.drop_at[key]
+
+    def cover(self, reason, into):
+        why = _why(reason)
+        if why is None:
+            raise _VectorError(f'"{reason}" is no reason of A.15')
+        into.add(why[0])
+        if why[1] is not None:
+            into.add(why)
+
+    def add(self, base, entry, fix, data, avail=None, want=None, full=None):
+        """One case: data are the mutated bytes, before the fixes. want (an
+        anchor's) is the rejection's text or step 2's drop list; full, every
+        row's drop list as (move, text prefix)."""
+        data = bytes(_fixed(data, fix))
+        length = len(data)
+        if entry == KOPEN:
+            avail = length
+        elif not 0 <= avail <= length or (entry == KOPEN_SHORT and avail == length):
+            raise _VectorError(f"case {len(self.cases)}: avail {avail} of {length}")
+        reason, drops, fulls, digest = None, (), (), 0
+        try:
+            if entry == KOPEN:
+                pack, fulls = _read_pack(data, True, None, True)
+                drops, digest = pack.ignored, reader_digest(pack)
+            elif entry == KOPEN_SHORT:
+                read_pack(data, avail=avail)
+            else:
+                digest = reader_digest(scan_pack(data[:avail], length))
+        except DanceError as e:
+            reason, drops, fulls, digest = str(e), (), (), 0
+        if entry == KOPEN_SHORT and reason is None:
+            raise _VectorError(f"case {len(self.cases)}: a short read was accepted")
+        if want is not None:
+            got = reason if isinstance(want, str) or reason is not None else list(drops)
+            if got != want:
+                raise _VectorError(f"anchor case {len(self.cases)}: expected {want!r}, got {reason or list(drops)!r}")
+        if full is not None and (len(full) != len(fulls) or any(
+                m != fm or not r.startswith(fr) for (fm, fr), (m, r) in zip(full, fulls))):
+            raise _VectorError(f"anchor case {len(self.cases)}: expected {full!r} in full, got {list(fulls)!r}")
+        if reason is not None:
+            self.cover(reason, self.seen)
+            why = _why(reason)
+            if why[0] == "MetaBad" and why[1] != "count" and _meta_too_long(data, why[1]):
+                self.seen.add(("MetaBadLength", why[1]))
+        elif entry in self.accepted:
+            self.accepted[entry] += 1
+        for _, r in drops:
+            self.cover(r, self.seen)
+        for _, r in fulls:
+            self.cover(r, self.seen_full)
+        first, count = self.patch(base, entry, fix, data)
+        index = -1 if reason is None else self.reason_index(reason)
+        nd, fd = self.drop_list(drops)
+        nf, ff = self.drop_list(fulls)
+        self.cases.append((base, entry, fix, count, first, length, avail, index, nd, nf, fd, ff, digest))
+
+    def patch(self, base, entry, fix, data):
+        """Stores data as patches over D.3's step 1 (the fixed fields left to
+        step 3), checks they rebuild it, and returns (first, count)."""
+        length = len(data)
+        s1 = self.step1(base, length)
+        masked = bytearray(data)
+        if fix & KFIX_SIZE and length >= 12:
+            masked[8:12] = s1[8:12]
+        if fix & KFIX_CRC and length >= 16:
+            masked[12:16] = s1[12:16]
+        gap = 2
+        runs = _diff_runs(s1, masked, gap)
+        while len(runs) > 255:
+            gap *= 2
+            runs = _diff_runs(s1, masked, gap)
+        first = len(self.patches)
+        for off, n in runs:
+            for at in range(off, off + n, 0xFFFF):
+                piece = bytes(masked[at:min(off + n, at + 0xFFFF)])
+                where = self.bytes.find(piece)
+                if where < 0:
+                    where = len(self.bytes)
+                    self.bytes += piece
+                self.patches.append((at, len(piece), where))
+        count = len(self.patches) - first
+        rebuilt = bytearray(s1)
+        for off, n, at in self.patches[first:]:
+            rebuilt[off:off + n] = self.bytes[at:at + n]
+        if count > 255 or bytes(_fixed(rebuilt, fix)) != data:
+            raise _VectorError(f"case {len(self.cases)}: its patches don't rebuild it")
+        return first, count
+
+    def family(self, name):
+        self.families.append((len(self.cases), name))
+
+    # -- the six families, in D.3's order
+    def anchors(self):
+        self.family("anchors: at least one case per reason, each checked")
+        T, D = KBASE_TEST, KBASE_DOT
+        test, dot = self.bases
+        lay, tlay = self.layouts[D], self.layouts[T]
+        meta, geom, ftab, strs, movs, step, fdat = (lay.chunk[t][0] for t in
+                                                    ("META", "GEOM", "FTAB", "STRS", "MOVS", "STEP", "FDAT"))
+        mv, n = movs + 4, len(dot)
+
+        def e(i):              # directory entry i (A.4's order)
+            return 32 + 12 * i
+
+        def put(data, *edits):
+            d = bytearray(data)
+            for off, fmt, *vals in edits:
+                struct.pack_into(fmt, d, off, *vals)
+            return d
+
+        def dot_open(want, *edits, fix=_FIX_BOTH):
+            self.add(D, KOPEN, fix, put(dot, *edits), want=want)
+
+        song = "song_bpm needs track BPM data: skipped in this version"
+        # each base as it is, opened and scanned
+        self.add(T, KOPEN, _FIX_BOTH, test, want=[(8, song)], full=[(8, song)])
+        self.add(D, KOPEN, _FIX_BOTH, dot, want=[], full=[])
+        self.add(T, KSCAN, _FIX_BOTH, test, avail=min(2048, len(test)), want=[])
+        self.add(D, KSCAN, _FIX_BOTH, dot, avail=min(2048, n), want=[])
+        # short reads: open() needs the whole file, and checks that first
+        self.add(D, KOPEN_SHORT, 0, dot, avail=0, want=f"short read (0 of {n} bytes)")
+        self.add(T, KOPEN_SHORT, 0, test, avail=len(test) - 1,
+                 want=f"short read ({len(test) - 1} of {len(test)} bytes)")
+        self.add(D, KOPEN_SHORT, _FIX_BOTH, put(dot, (0, "4s", b"MPDX")), avail=31,
+                 want=f"short read (31 of {n} bytes)")
+        # the header, in A.15's order
+        self.add(D, KOPEN, _FIX_BOTH, dot[:31], want="too short")
+        dot_open("not an MPDN pack", (0, "4s", b"MPDX"))
+        dot_open("needs a newer player", (6, "<H", 2))
+        dot_open("needs a newer player", (6, "<HI", 2, 1160), fix=KFIX_CRC)
+        dot_open("size 1160 isn't the file's 1156", (8, "<I", 1160), fix=KFIX_CRC)
+        self.add(D, KOPEN, _FIX_BOTH, self.step1(D, 131076), want="too big (131076 bytes)")
+        dot_open("bad checksum", (12, "<I", 0), fix=KFIX_SIZE)
+        dot_open("bad chunk count 0", (16, "<H", 0))
+        dot_open("bad chunk count 17", (16, "<H", 17))
+        self.add(D, KOPEN, _FIX_BOTH, self.step1(D, 100), want="bad chunk count 9")    # the directory past the end
+        # A.3, per entry; a tag prints its bytes outside 0x20-0x7E as ?
+        dot_open("chunk META: misaligned", (e(0) + 4, "<I", 141))
+        dot_open('chunk ?"\\?: misaligned', (e(0), "4s", b'\x01"\\?'), (e(0) + 4, "<I", 141))
+        dot_open("chunk FDAT: out of bounds", (e(8) + 8, "<I", 100))
+        dot_open("chunk META: out of bounds", (e(0) + 8, "<I", n - meta + 1))
+        dot_open("chunk META: out of bounds", (e(0) + 4, "<I", 32))                   # inside the directory
+        dot_open("chunk STEP: out of bounds", (e(7) + 4, "<II", 0xFFFFFFF0, 0))       # off near 2^32
+        dot_open("chunk STEP: out of bounds", (e(7) + 4, "<II", 0xFFFFFFF0, 0x20))    # off + size wraps
+        dot_open("chunk STEP: out of bounds", (e(7) + 8, "<I", 0xFFFFFFF0))
+        dot_open("chunk GEOM twice", (e(7), "4s", b"GEOM"))
+        dot_open("chunks META and GEOM overlap", (e(1) + 4, "<I", geom - 4))
+        dot_open("chunks STRS and MOVS overlap", (e(5) + 4, "<I", movs))
+        dot_open("no STEP chunk", (e(7), "4s", b"STEX"))
+        dot_open("no META chunk", (e(0), "4s", b"XXXX"), (e(1), "4s", b"YYYY"))
+        dot_open("no GEOM chunk", (e(1), "4s", b"XXXX"), (e(7), "4s", b"YYYY"))
+        # META (A.5): every field
+        dot_open("META: bad id", (meta + 1, "3s", b"DOT"))
+        dot_open("META: bad id", (meta + 4, "B", 0x78))                               # its NUL replaced
+        dot_open("META: bad name", (meta + 5, "B", 0))
+        dot_open("META: bad author", (meta + 10, "B", 0))
+        dot_open("META: bad licence", (meta + 15, "B", 0))
+        dot_open("META: bad url", (meta + 24, "B", 1))
+        dot_open("META: bad version", (meta + 26, "B", 1))
+        dot_open("META: bad count", (e(0) + 8, "<I", 28))                             # the chunk ends before it
+        dot_open("META: bad name", (meta + 6, "2s", b"\xc0\x80"))                     # an overlong NUL
+        # GEOM (A.6): every field, in table order
+        dot_open("GEOM: too short", (e(1) + 8, "<I", 11))
+        dot_open("GEOM: bad scale", (geom, "B", 5))
+        dot_open("GEOM: bad scale", (geom, "BB", 5, 3))
+        dot_open("GEOM: bad faces", (geom + 1, "B", 3))
+        dot_open("GEOM: bad cellW", (geom + 2, "B", 0))
+        dot_open("GEOM: bad cellH", (geom + 3, "B", 161))
+        dot_open("GEOM: bad cellH", (geom + 3, "B", 0))
+        dot_open("GEOM: bad anchorX", (geom + 4, "B", 4))
+        dot_open("GEOM: bad anchorY", (geom + 5, "B", 0))
+        dot_open("GEOM: bad anchorY", (geom + 3, "B", 15))                            # 11 rows under the ground
+        dot_open("GEOM: bad anchorY", (geom, "B", 4), (geom + 3, "B", 40), (geom + 5, "B", 39))   # 156 > 153
+        dot_open("GEOM: bad shadowW", (geom + 6, "B", 161))
+        dot_open("GEOM: bad frame count", (geom + 8, "<H", 0))
+        dot_open("GEOM: bad rest frame", (geom + 10, "<H", 1))
+        dot_open("PALS: 95 bytes, not 96", (e(2) + 8, "<I", 95))
+        dot_open("THMB: 799 bytes, not 800", (e(3) + 8, "<I", 799))
+        dot_open("FTAB: 11 bytes for 1 frames", (e(4) + 8, "<I", 11))
+        # frames (A.9, A.10)
+        dot_open("frame 0: bad box", (ftab, "B", 3))
+        dot_open("frame 0: data out of bounds", (ftab + 8, "<H", 7))
+        dot_open("frame 0: data out of bounds", (ftab + 4, "<IH", 0xFFFFFFFC, 6))      # a u32 + u16 that wraps
+        dot_open("frame 0: bad data", (fdat + 2, "B", 0x21))
+        dot_open("frame 0: bad data", (ftab + 8, "<H", 5))                            # the last token past len
+        dot_open("frame 0: bad data", (fdat, "BB", 9, 0))                             # no tokens, skip > w
+        dot_open("the rest frame is empty", (ftab, "<BBBBIHH", 0, 0, 0, 0, 0, 0, 0))
+        t_ftab = tlay.chunk["FTAB"][0]
+        self.add(T, KOPEN, _FIX_BOTH, put(test, (t_ftab + 36, "B", 255)), want="frame 3: bad box")
+        # STRS, MOVS and STEP heads
+        dot_open("STRS: too short", (e(5) + 8, "<I", 3))
+        dot_open("STRS: bad pose key 2", (strs, "B", 2))
+        dot_open("MOVS: too short", (e(6) + 8, "<I", 3))
+        dot_open("MOVS: 65 moves", (movs, "B", 65))
+        dot_open("MOVS: record length 31", (movs + 1, "B", 31))
+        dot_open("MOVS: too short", (movs, "B", 2))
+        dot_open("STEP: 7 bytes", (e(7) + 8, "<I", 7))
+        # moves (A.15's second table): test_dancepack.py's drops
+        st = step
+        idle = [(mv + 2, "B", 1), (mv + 3, "B", 0), (mv + 14, "B", 0)]
+        for want, edits in (
+                ("bad name", [(mv, "<H", 3)]), ("bad name", [(mv, "<H", 1090)]), ("bad name", [(mv, "<H", 8)]),
+                ("bad name", [(mv, "<H", 9)]), ("bad name", [(mv, "<H", 0xFFFF)]), ("bad name", [(e(5) + 8, "<I", 8)]),
+                ("bad kind", [(mv + 2, "B", 2)]), ("bad kind", [(mv + 2, "B", 2), (mv + 3, "B", 3)]),
+                ("bad steps", [(mv + 23, "B", 0)]), ("bad steps", [(mv + 24, "<H", 1)]),
+                ("bad steps", [(mv + 23, "B", 33)]), ("frame 1 out of range", [(st, "<H", 1)]),
+                ("3 beats", [(mv + 3, "B", 3)]), ("step 1: 2 ticks", [(st + 2, "<H", 2)]),
+                ("13 of 12 ticks", [(st + 2, "<H", 13)]),
+                ("step 1: 100 ms", idle + [(st + 2, "<H", 10), (mv + 7, "B", 3)]),
+                ("step 1: 5010 ms", idle + [(st + 2, "<H", 501), (mv + 7, "B", 3)]),
+                ("400 ms in all", idle + [(st + 2, "<H", 40), (mv + 7, "B", 3)]),
+                ("beat fields on a no-BPM move", [(mv + 2, "B", 1), (st + 2, "<H", 60), (mv + 7, "B", 3)]),
+                ("beat fields on a no-BPM move", idle + [(st + 2, "<H", 60), (mv + 7, "B", 3), (mv + 8, "B", 4)]),
+                ("beat fields on a no-BPM move", idle + [(st + 2, "<H", 60), (mv + 7, "B", 3), (mv + 20, "<HB", 4, 1)]),
+                ("bad when", idle + [(st + 2, "<H", 60)]), ("bad when", [(mv + 7, "B", 1)]),
+                ("pace 30-100", [(mv + 4, "BB", 30, 100)]), ("pace 0-100", [(mv + 4, "BB", 0, 100)]),
+                ("pace 120-100", [(mv + 4, "BB", 120, 100)]), ("pace 36-201", [(mv + 4, "BB", 36, 201)]),
+                ("range 185-200 unreachable", [(mv + 4, "BB", 185, 200)]),
+                ("weight 0", [(mv + 6, "B", 0)]), ("weight 101", [(mv + 6, "B", 101)]),
+                ("repeat 9", [(mv + 9, "B", 9)]), ("repeat 4", [(mv + 3, "B", 8), (st + 2, "<H", 96), (mv + 9, "B", 4)]),
+                ("bounce 17", [(mv + 14, "B", 17)]), ("sway 17", [(mv + 15, "B", 17)]),
+                ("travel 1", [(mv + 11, "b", 1)]),
+                ("travel -3", [(mv + 3, "B", 2), (st + 2, "<H", 24), (mv + 11, "b", -3)]),
+                ("bad start_at", [(mv + 12, "B", 5)]), ("bad ease", [(mv + 13, "B", 5)]),
+                ("bad ease", [(st + 6, "B", 5)]), ("bad place", [(mv + 8, "B", 12)]),
+                ("offset 49,0", [(st + 4, "b", 49)]), ("offset 0,-49", [(st + 5, "b", -49)]),
+                ("bad pose key", [(mv + 16, "B", 1)]), ("bad pose key", [(mv + 19, "B", 1)]),
+                ("bad genre", [(mv + 22, "B", 9)]), ("bad genre", [(mv + 20, "<HB", 0, 1)]),
+                ("bad genre", [(mv + 20, "<HB", 4, 2)]), ("bad genre", [(mv + 20, "<HB", 9, 1)]),
+                ("bad genre", [(mv + 20, "<HB", 0xFFFF, 1)]),
+                (song, [(mv + 10, "B", 1), (mv + 26, "BB", 160, 180)]),
+                ("needs 0x02", [(mv + 10, "B", 2)]), ("needs 0xA0", [(mv + 10, "B", 0xA0)])):
+            dot_open([(0, want)], *edits)
+        # a tag that is a valid string but folds to nothing (B.8): nod's R&B, in the test pack
+        t_strs = tlay.chunk["STRS"][0]
+        at = test.find(b"\x03R&B\x00", t_strs)
+        self.add(T, KOPEN, _FIX_BOTH, put(test, (at + 1, "3s", b"?!?")), want=[(7, "bad genre"), (8, song)])
+        # accepted: what A.15 ignores, and what it allows
+        for edits in ([(4, "<H", 7)], [(18, "<HI", 0xFFFF, 0xFFFFFFFF)], [(geom + 7, "B", 5)],
+                      [(ftab + 10, "<H", 0xFFFF)], [(strs + 1, "3s", b"\x01\x02\x03")], [(movs + 2, "<H", 0xFFFF)],
+                      [(mv + 28, "<I", 0xFFFFFFFF)], [(mv + 8, "B", 0xC0)], [(st + 7, "B", 0xFE)],
+                      [(geom + 10, "<H", 0x8000)], [(mv + 20, "<HB", 4, 1)],
+                      idle + [(mv + 7, "B", 3), (st + 2, "<H", 60)],
+                      idle + [(mv + 7, "B", 3), (st + 2, "<H", 60), (mv + 20, "<H", 4)]):
+            dot_open([], *edits)
+        hop = lay.data[mv:mv + 32]
+        for kw in ({"XTRA": b"abc"}, {"STAG": b"x" * 8, "SPOT": b""}, {"ZERO": b""},
+                   {"MOVS": bytes((1, 40, 0, 0)) + hop + b"\xff" * 8}):
+            self.add(D, KOPEN, _FIX_BOTH, _dot_pack(**kw), want=[])
+        zero = bytearray(_dot_pack(ZERO=b""))
+        struct.pack_into("<I", zero, e(9) + 4, struct.unpack_from("<I", zero, e(4) + 4)[0] + 4)   # inside FTAB
+        self.add(D, KOPEN, _FIX_BOTH, zero, want=[])
+        for box, rows in (((0, 2, 4, 2), "00 02 00 11 00 02 00 11"), ((1, 2, 3, 2), "00 02 11 00 00 02 11 00"),
+                          ((1, 2, 2, 2), "00 02 01 01 00 02 01 01"), ((1, 2, 2, 2), "02 00 00 01 11")):
+            data = bytes.fromhex(rows)
+            self.add(D, KOPEN, _FIX_BOTH, _dot_pack(FTAB=bytes(box) + struct.pack("<IHH", 0, len(data), 0),
+                                                    FDAT=data), want=[])
+        # strings read inside STRS, with STRS last in the file (A.1, A.11)
+        parts = [(tag, lay.data[o:o + s]) for tag, o, s in ((t.decode(), o, s) for t, o, s in lay.dir)]
+        parts = [(t, d + b"\x01x\x00" if t == "STRS" else d) for t, d in parts]
+        order = [p for p in parts if p[0] != "STRS"] + [p for p in parts if p[0] == "STRS"]
+        for name, genre, want in ((4, (0, 0), []), (9, (0, 0), []), (12, (0, 0), [(0, "bad name")]),
+                                  (0xFFFF, (0, 0), [(0, "bad name")]), (4, (9, 1), []),
+                                  (4, (9, 2), [(0, "bad genre")]), (4, (12, 1), [(0, "bad genre")])):
+            chunks = []
+            for tag, d in order:
+                if tag == "MOVS":
+                    d = bytearray(d)
+                    struct.pack_into("<H", d, 4, name)
+                    struct.pack_into("<HB", d, 24, *genre)
+                chunks.append((tag, bytes(d)))
+            self.add(D, KOPEN, _FIX_BOTH, _assemble(chunks), want=want)
+        self._limit_anchors()
+        # step 3's rows (D.2), in the full lists only: walk (move 6) and heavy (move 10)
+        t_movs = tlay.chunk["MOVS"][0] + 4
+        flags = test[t_movs + 32 * 10 + 8]
+        self.add(T, KOPEN, _FIX_BOTH, put(test, (t_movs + 32 * 10 + 8, "B", flags & ~FLAG_HEAVY)),
+                 want=[(8, song)], full=[(8, song), (10, "budget red (")])
+        self.add(T, KOPEN, _FIX_BOTH, put(test, (t_movs + 32 * 6 + 12, "B", 4)),
+                 want=[(8, song)], full=[(6, "travels from no spot"), (8, song)])
+        walk, t_step = t_movs + 32 * 6, tlay.chunk["STEP"][0]
+        sfirst, scount = struct.unpack_from("<H", test, walk + 24)[0], test[walk + 23]
+        edits = [(walk + 8, "B", test[walk + 8] & ~FLAG_MIRROR), (walk + 12, "B", 1)]
+        edits += [(t_step + 8 * (sfirst + k) + 4, "b", 10) for k in range(scount)]
+        self.add(T, KOPEN, _FIX_BOTH, put(test, *edits), want=[(8, song)],
+                 full=[(6, "travels from no spot"), (8, song)])
+        self.add(T, KOPEN, _FIX_BOTH, put(test, *(edits + [(t_movs + 32 * 10 + 8, "B", flags & ~FLAG_HEAVY)])),
+                 want=[(8, song)], full=[(6, "travels from no spot"), (8, song), (10, "budget red (")])
+        # more of them: big (move 9) keyed 12 px either side is red without heavy; walk
+        # travelling left from the left spot has nowhere to go; so has the dot's hop made a
+        # 2-beat move travelling right from the right spot
+        bfirst = struct.unpack_from("<H", test, t_movs + 32 * 9 + 24)[0]
+        self.add(T, KOPEN, _FIX_BOTH, put(test, (t_step + 8 * bfirst + 4, "b", -12),
+                                          (t_step + 8 * (bfirst + 1) + 4, "b", 12)),
+                 want=[(8, song)], full=[(8, song), (9, "budget red (")])
+        self.add(T, KOPEN, _FIX_BOTH, put(test, (walk + 11, "b", -1), (walk + 12, "B", 3)),
+                 want=[(8, song)], full=[(6, "travels from no spot"), (8, song)])
+        self.add(D, KOPEN, _FIX_BOTH, put(dot, (mv + 3, "B", 2), (step + 2, "<H", 24), (mv + 11, "b", 1),
+                                          (mv + 12, "B", 4)),
+                 want=[], full=[(0, "travels from no spot")])
+        # scan mode (5.5), its rows in order
+        dot_end = {name: off + size for name, (off, size) in lay.chunk.items()}
+
+        def scan(want, data, avail, base=D, fix=_FIX_BOTH):
+            self.add(base, KSCAN, fix, data, avail=avail, want=want)
+
+        scan("too short", dot, 31)
+        scan("too short", dot[:20], 20)
+        scan("not an MPDN pack", put(dot, (0, "4s", b"MPDX")), n)
+        scan("needs a newer player", put(dot, (6, "<H", 2)), 32)
+        scan("size 1160 isn't the file's 1156", put(dot, (8, "<I", 1160)), n, fix=KFIX_CRC)
+        scan("too big (131076 bytes)", self.step1(D, 131076), 2048)
+        scan("bad chunk count 0", put(dot, (16, "<H", 0)), n)
+        scan("header unreadable", dot, 139)                                          # the directory needs 140
+        scan("chunk META: misaligned", put(dot, (e(0) + 4, "<I", 141)), 140)
+        scan("chunk FDAT: out of bounds", put(dot, (e(8) + 8, "<I", 100)), 140)
+        scan("no GEOM chunk", put(dot, (e(1), "4s", b"XXXX"), (e(7), "4s", b"YYYY")), n)
+        for name in ("META", "GEOM", "PALS", "THMB"):
+            scan("header unreadable", dot, dot_end[name] - 1)
+        scan([], dot, dot_end["THMB"])
+        scan("header unreadable", put(dot, (meta + 1, "3s", b"DOT")), dot_end["THMB"] - 1)   # row 5 before row 6
+        moved = put(self.step1(D, 2000), (e(3) + 4, "<I", n))                         # THMB moved past FDAT
+        scan("header unreadable", moved, n - 1)                                       # its off past avail
+        scan("header unreadable", moved, n)                                           # only its end
+        scan([], moved, 2000)
+        scan("META: bad id", put(dot, (meta + 1, "3s", b"DOT")), n)
+        scan("META: bad count", put(dot, (e(0) + 8, "<I", 28)), n)
+        scan("GEOM: too short", put(dot, (e(1) + 8, "<I", 11)), n)
+        scan("GEOM: bad rest frame", put(dot, (geom + 10, "<H", 1)), n)
+        scan("PALS: 95 bytes, not 96", put(dot, (e(2) + 8, "<I", 95)), n)
+        scan("THMB: 799 bytes, not 800", put(dot, (e(3) + 8, "<I", 799)), n)
+        # what only open() checks: the CRC, FTAB, the frames, MOVS
+        scan([], put(dot, (12, "<I", 0)), n, fix=KFIX_SIZE)
+        scan([], put(dot, (e(4) + 8, "<I", 11)), n)
+        scan([], put(dot, (ftab, "<BBBBIHH", 0, 0, 0, 0, 0, 0, 0)), n)
+        scan([], put(dot, (movs, "B", 65)), n)
+        scan([], test, tlay.chunk["THMB"][0] + 800, base=T)
+        scan("header unreadable", test, tlay.chunk["THMB"][0] + 799, base=T)
+
+    def _limit_anchors(self):
+        """More anchors: each limit on both sides of it (a well-formed value
+        at the limit, and one past it), each count at its cap, and pairs of
+        adjacent A.15 rows that both fail, so the first one's reason shows.
+        The structure-aware edits patch a length byte in place, which moves a
+        string's NUL, so they never make a well-formed string one byte too
+        long: these do."""
+        D = KBASE_DOT
+        dot = self.bases[D]
+        lay = self.layouts[D]
+        meta, geom, ftab, strs, movs, step, fdat = (lay.chunk[t][0] for t in
+                                                    ("META", "GEOM", "FTAB", "STRS", "MOVS", "STEP", "FDAT"))
+        mv = movs + 4
+        hop = lay.data[mv:mv + 32]                            # the dot's one record
+        head = lay.data[strs:strs + 9]                        # STRS: P = 0, then "hop" at 4
+        song = "song_bpm needs track BPM data: skipped in this version"
+
+        def e(i):
+            return 32 + 12 * i
+
+        def put(data, *edits):
+            d = bytearray(data)
+            for off, fmt, *vals in edits:
+                struct.pack_into(fmt, d, off, *vals)
+            return bytes(d)
+
+        def dot_open(want, *edits):
+            self.add(D, KOPEN, _FIX_BOTH, put(dot, *edits), want=want)
+
+        def rebuilt(want, **chunks):
+            self.add(D, KOPEN, _FIX_BOTH, _dot_pack(**chunks), want=want)
+
+        def record(*edits):                                   # hop's record, fields patched
+            return put(hop, *edits)
+
+        def movs_of(records, rlen=32):
+            return bytes((len(records), rlen, 0, 0)) + b"".join(r + b"\xff" * (rlen - 32) for r in records)
+
+        def steps(*durs):
+            return b"".join(struct.pack("<HHbbBB", 0, d, 0, 0, 0, 0) for d in durs)
+
+        def meta_of(**over):
+            f = dict(id="dot", name="Dot", author="Ana", licence="CC0-1.0", url="", version="")
+            f.update(over)
+            return b"".join(_string(f[k]) for k, _, _ in _META_FIELDS) + b"\x01"
+
+        # META (A.5): each string exactly at its limit, and one byte past it
+        for field, lo, hi in _META_FIELDS:
+            ok = ("a" * (hi - 3) + "é" + "a") if field != "id" else "a" * hi       # multi-byte where A.1 allows it
+            assert len(ok.encode("utf-8")) == hi
+            rebuilt([], META=meta_of(**{field: ok}))
+            rebuilt(f"META: bad {field}", META=meta_of(**{field: ok + "a"}))
+        rebuilt("META: bad id", META=meta_of(id="-dot"))                          # no leading -
+        # A.1: a bad third or fourth byte, after a good second one
+        dot_open("META: bad name", (meta + 6, "3s", b"\xe2\x82("))
+        dot_open("META: bad licence", (meta + 16, "4s", b"\xf0\x9f\x98("))
+        dot_open("META: bad licence", (meta + 16, "4s", b"\xf0\x9f(\x80"))
+        # A.3: two unknown tags that share their first three bytes
+        rebuilt([], XTRA=b"a", XTRB=b"b")
+        # A.6: anchorY * scale <= 153, (cellH - anchorY) * scale <= 10, at each limit and past it
+        for scale, cell_h, anchor_y, want in ((1, 153, 153, []), (1, 154, 154, "GEOM: bad anchorY"),
+                                              (2, 76, 76, []), (2, 77, 77, "GEOM: bad anchorY"),
+                                              (3, 51, 51, []), (3, 52, 52, "GEOM: bad anchorY"),
+                                              (1, 14, 4, []), (2, 9, 4, []), (2, 10, 4, "GEOM: bad anchorY")):
+            dot_open(want, (geom, "B", scale), (geom + 3, "B", cell_h), (geom + 5, "B", anchor_y))
+        # A.9, A.10: a skip of w + 1 with no tokens; a last row head of one byte at FDAT's end
+        dot_open("frame 0: bad data", (fdat, "6s", bytes.fromhex("03 00 00 02 01 01")))
+        rebuilt("frame 0: bad data", FTAB=bytes((1, 2, 2, 2)) + struct.pack("<IHH", 0, 4, 0),
+                FDAT=bytes.fromhex("00 01 11 00"))
+        # a frame 160 px wide (cellW 160 at scale 1), and one past FDAT offset 65,535
+        rebuilt([], GEOM=bytes.fromhex("01 00 a0 04 02 04 00 00 01 00 00 00"),
+                FTAB=bytes((0, 3, 160, 1)) + struct.pack("<IHH", 0, 12, 0), FDAT=bytes.fromhex("00 0a") + b"\xf1" * 10)
+        rebuilt([], FTAB=bytes((1, 2, 2, 2)) + struct.pack("<IHH", 65540, 6, 0),
+                FDAT=bytes(65540) + bytes.fromhex("00 01 11 00 01 11"))
+        # A.11: pose keys and names of 23 bytes and of 24, and with a leading -
+        for key, want in (("k" * 23, []), ("k" * 24, "STRS: bad pose key 1"), ("-x", "STRS: bad pose key 1")):
+            pose = b"\x01\0\0\0" + _string(key)
+            rebuilt(want, STRS=pose + _string("hop"), MOVS=movs_of([record((0, "<H", len(pose)))]))
+        for name, want in (("n" * 23, []), ("n" * 24, [(0, "bad name")]), ("-hop", [(0, "bad name")])):
+            rebuilt(want, STRS=b"\0\0\0\0" + _string(name))
+        rebuilt([(0, "bad name")], STRS=bytes.fromhex("00 00 00 01 61 00"), MOVS=movs_of([record((0, "<H", 3))]))
+        # genre tags of 63 bytes and of 64 (B.8 copies a tag into 64 B), at STRS offset 9
+        for tag, want in (("a" * 63, []), ("é" * 31 + "a", []), ("ZZ", []), ("a" * 64, [(0, "bad genre")]),
+                          ("é" * 32, [(0, "bad genre")]), ("a" * 62 + "é", [(0, "bad genre")])):
+            rebuilt(want, STRS=head + _string(tag), MOVS=movs_of([record((20, "<HB", 9, 1))]))
+        # 8 good tags, then 9; a tag past STRS offset 255
+        tags = b"".join(_string(c) for c in "abcdefghi")
+        rebuilt([], STRS=head + tags, MOVS=movs_of([record((20, "<HB", 9, 8))]))
+        rebuilt([(0, "bad genre")], STRS=head + tags, MOVS=movs_of([record((20, "<HB", 9, 9))]))
+        rebuilt([], STRS=head + bytes(260 - len(head)) + _string("rock"), MOVS=movs_of([record((20, "<HB", 260, 1))]))
+        # A.12: 64 moves; records of 40 bytes, three of them, each different
+        rebuilt([], MOVS=movs_of([hop] * 64))
+        rebuilt([], STRS=head + _string("two"), STEP=steps(12) + struct.pack("<HHbbBB", 0, 12, 1, 0, 2, 0),
+                MOVS=movs_of([hop, record((0, "<H", 9), (6, "B", 20), (14, "B", 3), (24, "<H", 1)),
+                              record((9, "B", 1), (14, "B", 5), (15, "B", 2))], rlen=40))
+        # A.13: 32 steps a move, and 33; beat steps of 3 ticks, idle steps of 200 ms
+        beat8 = ((3, "B", 8),)
+        idle = ((2, "B", 1), (3, "B", 0), (7, "B", 3), (14, "B", 0))
+        for edits, dur in ((beat8, 3), (idle, 20)):
+            rebuilt([], STEP=steps(*[dur] * 32), MOVS=movs_of([record(*edits, (23, "B", 32))]))
+            rebuilt([(0, "bad steps")], STEP=steps(*[dur] * 33), MOVS=movs_of([record(*edits, (23, "B", 33))]))
+        # idle steps of 190 and 200 ms; idle totals of 490 and 500 ms
+        for durs, want in (((19, 20, 20), [(0, "step 1: 190 ms")]), ((20, 20, 20), []),
+                           ((20, 29), [(0, "490 ms in all")]), ((20, 30), [])):
+            rebuilt(want, STEP=steps(*durs), MOVS=movs_of([record(*idle, (23, "B", len(durs)))]))
+        # A.15's move rows at their edges
+        st = step
+        idle_ok = [(mv + 2, "B", 1), (mv + 3, "B", 0), (mv + 14, "B", 0), (mv + 7, "B", 3), (st + 2, "<H", 60)]
+        for field in ((mv + 3, "B", 1), (mv + 4, "B", 90), (mv + 5, "B", 100), (mv + 9, "B", 1), (mv + 14, "B", 1),
+                      (mv + 15, "B", 1), (mv + 11, "b", 1), (mv + 22, "B", 1), (mv + 8, "B", 2), (mv + 8, "B", 4),
+                      (mv + 8, "B", 8)):
+            dot_open([(0, "beat fields on a no-BPM move")], *idle_ok, field)
+        dot_open([(0, "pace 35-100")], (mv + 4, "BB", 35, 100))
+        dot_open([], (mv + 4, "BB", 36, 100))
+        two = [(mv + 3, "B", 2), (st + 2, "<H", 24)]
+        dot_open([(0, "range 178-200 unreachable")], *two, (mv + 4, "BB", 178, 200), (mv + 11, "b", 1))
+        dot_open([], *two, (mv + 4, "BB", 178, 200))
+        for travel in (2, -2):
+            dot_open([(0, "range 178-180 unreachable")], *two, (mv + 4, "BB", 178, 180), (mv + 11, "b", travel))
+        dot_open([(0, song)], (mv + 10, "B", 3))
+        # two adjacent rows failing: the first one's reason
+        dot_open("frame 0: bad box", (ftab + 2, "B", 5), (ftab + 4, "<I", 100))
+        dot_open("MOVS: too short", (e(6) + 8, "<I", 3), (e(7) + 8, "<I", 7))
+        dot_open("MOVS: 65 moves", (movs, "BB", 65, 31))
+        dot_open([(0, "bounce 17")], (mv + 14, "BB", 17, 17))
+
+    def truncations(self):
+        self.family("truncations, the size and the CRC fixed")
+        for base in (KBASE_TEST, KBASE_DOT):
+            lay = self.layouts[base]
+            lengths = list(range(41)) + list(range(136, 145))
+            for _, off, size in lay.dir:
+                lengths += [off - 1, off, off + 1, off + size - 1, off + size, off + size + 1]
+            lengths += [self.rng.below(lay.size + 1) for _ in range(64)]
+            done = set()
+            for n in lengths:
+                if 0 <= n <= lay.size and n not in done:
+                    done.add(n)
+                    self.add(base, KOPEN, _FIX_BOTH, self.step1(base, n))
+
+    def flips(self, count=800):
+        self.family("byte flips, the size and the CRC fixed outside their own bytes")
+        for i in range(count):
+            base = KBASE_DOT if i % 2 else KBASE_TEST
+            data = bytearray(self.bases[base])
+            off = self.rng.below(len(data))
+            data[off] ^= 1 + self.rng.below(255)
+            fix = (0 if 8 <= off < 12 else KFIX_SIZE) | (0 if 12 <= off < 16 else KFIX_CRC)
+            self.add(base, KOPEN, fix, data)
+
+    def structure(self, count=1200):
+        self.family("structure-aware edits, one to three a case")
+        for _ in range(count):
+            base = KBASE_TEST if self.rng.below(4) == 0 else KBASE_DOT
+            lay = self.layouts[base]
+            data = bytearray(lay.data)
+            for _ in range(1 + self.rng.below(3)):
+                lay.edit(self.rng, data, _STRUCT_WEIGHTS)
+            fix = KFIX_SIZE if self.rng.below(100) < 3 else _FIX_BOTH        # about 3 % with a stale CRC
+            self.add(base, KOPEN, fix, data)
+
+    def short_reads(self, count=40):
+        self.family("short reads")
+        for i in range(count):
+            base = KBASE_DOT if i % 2 else KBASE_TEST
+            self.add(base, KOPEN_SHORT, 0, self.bases[base], avail=self.rng.below(len(self.bases[base])))
+
+    def scans(self, edited=130):
+        self.family("scans, of each base and of header-side edits")
+        for base in (KBASE_TEST, KBASE_DOT):
+            for avail in self.layouts[base].scan_avails():
+                self.add(base, KSCAN, _FIX_BOTH, self.bases[base], avail=avail)
+        for i in range(edited):
+            base = KBASE_DOT if i % 2 else KBASE_TEST
+            lay = self.layouts[base]
+            data = bytearray(lay.data)
+            for _ in range(1 + self.rng.below(3)):
+                lay.edit(self.rng, data, _SCAN_WEIGHTS)
+            fix = KFIX_SIZE if self.rng.below(10) == 0 else _FIX_BOTH       # a bad CRC still scans
+            # one of D.3's avail values, then two that hold THMB (row 5 passes)
+            avails = lay.scan_avails()
+            thmb_end = sum(lay.chunk["THMB"])
+            picked = [avails[self.rng.below(len(avails))]]
+            while len(picked) < 3:
+                a = thmb_end + self.rng.below(lay.size - thmb_end + 1)
+                if a not in picked:
+                    picked.append(a)
+            for a in picked:
+                self.add(base, KSCAN, fix, data, avail=a)
+
+    def check(self):
+        """D.3's coverage rule: every Why but None, MetaBad and GeomBad with
+        each field, and enough accepted packs."""
+        missing = [name for name, _ in _WHY_TEXTS if name not in _LATE_WHYS and name not in self.seen]
+        missing += [name for name in _LATE_WHYS if name not in self.seen_full]
+        missing += ["MetaBad " + f for f in _META_NAMES if ("MetaBad", f) not in self.seen]
+        missing += ["GeomBad " + f for f in _GEOM_NAMES if ("GeomBad", f) not in self.seen]
+        missing += ["MetaBad %s by length" % f for f, _, _ in _META_FIELDS if ("MetaBadLength", f) not in self.seen]
+        if missing:
+            raise _VectorError("no case gives " + ", ".join(missing))
+        if self.accepted[KOPEN] < 500 or self.accepted[KSCAN] < 100:
+            raise _VectorError(f"only {self.accepted[KOPEN]} open and {self.accepted[KSCAN]} scan cases accepted")
+        if len(self.reasons) >= 0x7FFF:
+            raise _VectorError(f"{len(self.reasons)} reasons")
+
+    def text(self):
+        out = _head("GPL-3.0-or-later", "2026 IrosTheBeggar", TEST_DANCER) + [
+            "//",
+            "// ReaderVectors.h: Appendix D.3's differential reader vectors (docs/DANCE-SPRITES.md).",
+            f"// {len(self.cases):,} packs, each made from a base (dance::kTestPack, or kDotPack: A.17's pack)",
+            "// as D.3 says: the base cut or zero-extended to `length`; the case's patches",
+            "// in order; then kFixSize (the length at byte 8, when it fits) and kFixCrc (the",
+            "// CRC of bytes 16.. at byte 12, when it fits). Each case records what",
+            "// dancepack.py's reader says of those bytes: the rejection, word for word;",
+            "// step 2's drops (read_pack(late_checks=False)) and every A.15 row's drops",
+            "// (read_pack(), step 3's); and the digest of what it read (reader_digest).",
+            "// The families, by their first case:"]
+        out += [f"//   {first:5d}  {name}" for first, name in self.families]
+        out += ["#pragma once", "#include <cstdint>", "", "namespace dancevec {", ""]
+        dot = self.bases[KBASE_DOT]
+        out += [f"alignas(4) static const uint8_t kDotPack[{len(dot)}] = {{  // A.17's pack, byte for byte"]
+        out += _byte_lines(dot)
+        out += ["};", f"static const uint32_t kDotPackSize = {len(dot)};", "",
+                "constexpr uint8_t kBaseTest = 0, kBaseDot = 1;           // dance::kTestPack (TestPack.h), kDotPack",
+                "constexpr uint8_t kOpen = 0, kOpenShort = 1, kScan = 2;  // the entry",
+                "constexpr uint8_t kFixSize = 1, kFixCrc = 2;             // applied after the patches",
+                "constexpr int16_t kAccepted = -1;", "",
+                "static const uint8_t kReaderBytes[] = {"]
+        out += _byte_lines(self.bytes)
+        out += ["};",
+                "struct ReaderPatch { uint32_t off; uint16_t len; uint32_t at; };  // kReaderBytes[at, at + len) at off",
+                "static const ReaderPatch kReaderPatches[] = {"]
+        for i in range(0, len(self.patches), 6):
+            out.append("    " + " ".join("{%d, %d, %d}," % p for p in self.patches[i:i + 6]))
+        out += ["};",
+                "static const char* const kReaderReasons[] = {    // each reason's text once, in first-use order"]
+        out += [f"    {_c_text(r)}," for r in self.reasons]
+        out += ["};",
+                "struct ReaderDrop { uint8_t move; uint16_t reason; };  // reason: a kReaderReasons index",
+                "static const ReaderDrop kReaderDrops[] = {        // the drop lists back to back; equal lists shared"]
+        for i in range(0, len(self.drops), 8):
+            out.append("    " + " ".join("{%d, %d}," % d for d in self.drops[i:i + 8]))
+        out += ["};",
+                "struct ReaderCase {",
+                "  uint8_t base, entry, fix, patchCount;",
+                "  uint32_t firstPatch;",
+                "  uint32_t length;                    // the mutated bytes' length: the file's size",
+                "  uint32_t avail;                     // kOpen: length; kOpenShort: less; kScan: the bytes read",
+                "  int16_t reason;                     // the rejection, a kReaderReasons index; or kAccepted",
+                "  uint16_t dropCount, fullDropCount;",
+                "  uint32_t firstDrop, firstFullDrop;  // step 2's drops; every A.15 row's (step 3)",
+                "  uint32_t digest;                    // accepted: reader_digest; 0 when rejected",
+                "};",
+                "static const ReaderCase kReaderCases[] = {"]
+        families = dict(self.families)
+        for i, c in enumerate(self.cases):
+            if i in families:
+                out.append(f"    // {i}: {families[i]}")
+            digest = "0x%08Xu" % c[12] if c[7] < 0 else "0"
+            out.append("    {%d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %d, %s}," % (c[:12] + (digest,)))
+        out += ["};",
+                f"static const int kReaderBytesCount = {len(self.bytes)}, kReaderPatchesCount = {len(self.patches)}, "
+                f"kReaderReasonsCount = {len(self.reasons)},",
+                f"                 kReaderDropsCount = {len(self.drops)}, kReaderCasesCount = {len(self.cases)};",
+                "", "}  // namespace dancevec", ""]
+        return "\n".join(out)
+
+
+def _reader_h(test_data):
+    """ReaderVectors.h's text (D.3), or _VectorError."""
+    g = _ReaderVectors(test_data)
+    g.anchors()
+    g.truncations()
+    g.flips()
+    g.structure()
+    g.short_reads()
+    g.scans()
+    g.check()
+    return g.text()
+
+
 def _generate():
     """Every registry output and vector header: ([(path, text)], failures),
     failures being the compile reports of registry packs that failed."""
@@ -2734,11 +4014,15 @@ def _generate():
             continue
         files.append((dst, _pack_source(comp, src, Path(dst).stem, dst.endswith(".cpp"))))
         if src == TEST_DANCER:
-            test = res.pack
+            test, test_data = res.pack, res.data
     files.append((ELIGIBILITY_H, _eligibility_h()))
     files.append((FOLD_H, _fold_h()))
     if test is not None:
         files.append((BUDGET_H, _budget_h(test)))
+        try:
+            files.append((READER_H, _reader_h(test_data)))
+        except _VectorError as e:
+            failures.append((READER_H, [f"error: internal: {READER_H}: {e}: please report it"]))
     return files, failures
 
 

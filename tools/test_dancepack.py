@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 IrosTheBeggar
 """Tests for tools/dancepack.py (the dance pack compiler), from its contract:
-docs/DANCE-SPRITES.md, Appendices A-C.
+docs/DANCE-SPRITES.md, Appendices A-C, and Appendix D.3 (the scan, the
+reader's step-2 options, the digest and the differential reader vectors).
 
     python -m unittest discover -s tools -p "test_dancepack.py"
 
@@ -35,10 +36,12 @@ REPO = TOOLS.parent
 DANCEPACK = TOOLS / "dancepack.py"
 TEST_DANCER = "tools/art/dancers/test"
 TESTPACK_H = "test/support/dance/TestPack.h"
+READER_H = "test/support/dance/ReaderVectors.h"
 VECTOR_HEADERS = (
     "test/support/dance/EligibilityVectors.h",
     "test/support/dance/FoldVectors.h",
     "test/support/dance/BudgetVectors.h",
+    READER_H,
 )
 TEXTFOLD_CPP = "lib/core/TextFold.cpp"
 VLWFONTS_CPP = "src/ui/VlwFonts.cpp"
@@ -647,6 +650,9 @@ A17_STEP = 1140
 A17_FTAB = 1080
 A17_FDAT = 1148
 A17_STRS = 1092
+# D.3's reader_digest of A.17's pack, opened and scanned (pinned).
+A17_DIGEST = 0xD506B07A
+A17_SCAN_DIGEST = 0x5B8380B7
 
 
 def parse_dump(text):
@@ -1145,6 +1151,7 @@ FOLD_TABLE = (
     ("K-Pop", "kpop", 0x9076A259),
     ("90s", "90s", 0xA0CA74AD),
     ("Música Popular Brasileira", "musicapopularbrasileira", 0xC9B7E57E),
+    ("AZ Zydeco", "azzydeco", 0x5B6EF8E2),                  # both ends of step 2's A-Z
     ("日本", "", None),
     ("  ", "", None),
     ("", "", None),
@@ -1593,6 +1600,11 @@ class ConstantsTest(DpCase):
         self.assertEqual(dp.Case._fields, ("fps", "pace", "mirrored", "spot", "frames", "median", "peak"))
         self.assertEqual(dp.Budget._fields, ("cases", "median", "peak", "light"))
         self.assertEqual(dp.Result._fields, ("ok", "data", "pack", "messages", "report", "skipped", "budgets"))
+        # D.3: the boot scan's record, its fields as in Pack
+        self.assertEqual(dp.Scan._fields, (
+            "size", "crc", "id", "name", "author", "licence", "url", "version", "declared_moves", "geom",
+            "palette", "idle_palette", "thumb"))
+        self.assertEqual(dp.READER_H, READER_H)
 
 
 class SharedAlgorithmsTest(DpCase):
@@ -2467,6 +2479,138 @@ class ReadPackTest(DpCase):
         self.assertEqual(self.reason(patch(d, 6, "<HI", 2, 1160)), "needs a newer player")
         two = patch(patch(d, 172, "B", 5), 173, "B", 3)
         self.assertEqual(self.reason(two), "GEOM: bad scale")
+        # adjacent A.15 rows that both fail: the first one's reason
+        self.assertEqual(self.reason(patch(patch(d, A17_FTAB + 2, "B", 5), A17_FTAB + 4, "<I", 100)),
+                         "frame 0: bad box")                             # before data out of bounds
+        self.assertEqual(self.reason(patch(patch(d, 112, "<I", 3), 124, "<I", 7)), "MOVS: too short")
+        self.assertEqual(self.reason(patch(d, 1104, "BB", 65, 31)), "MOVS: 65 moves")
+        self.assertEqual([tuple(x) for x in dp.read_pack(patch(d, A17_MOV + 14, "BB", 17, 17)).ignored],
+                         [(0, "bounce 17")])                             # before sway
+
+    def test_limits(self):
+        # Each limit on both sides of it, with well-formed values: a string exactly at
+        # its limit and one byte past it, each count at its cap and past it, and the
+        # edges of A.6, A.10, A.13 and A.15's move rows. D.3's anchors carry the same.
+        d, mv, st = a17_pack(), A17_MOV, A17_STEP
+        p = Mpdn(d)
+        hop, head = p.chunk["MOVS"][4:36], p.chunk["STRS"]             # STRS: P = 0, "hop" at 4
+
+        def s(text):
+            raw = text.encode("utf-8")
+            return bytes([len(raw)]) + raw + b"\0"
+
+        def rec(*edits):
+            r = bytearray(hop)
+            for off, fmt, *vals in edits:
+                struct.pack_into(fmt, r, off, *vals)
+            return bytes(r)
+
+        def movs(records, rlen=32):
+            return bytes([len(records), rlen, 0, 0]) + b"".join(r + b"\xff" * (rlen - 32) for r in records)
+
+        def steps(*durs):
+            return b"".join(struct.pack("<HHbbBB", 0, x, 0, 0, 0, 0) for x in durs)
+
+        def meta(**over):
+            f = dict(id="dot", name="Dot", author="Ana", licence="CC0-1.0", url="", version="")
+            f.update(over)
+            return b"".join(s(f[k]) for k in ("id", "name", "author", "licence", "url", "version")) + b"\x01"
+
+        def patched(*edits):
+            data = d
+            for off, fmt, *vals in edits:
+                data = patch(data, off, fmt, *vals)
+            return data
+
+        rejected, opened = [], []                  # (reason, data); (drop list, data)
+        # A.5: each META string at its limit, then one byte past it; no leading - in the id
+        for field, hi in (("id", 23), ("name", 24), ("author", 40), ("licence", 40), ("url", 80), ("version", 16)):
+            ok = "a" * hi if field == "id" else "a" * (hi - 3) + "é" + "a"
+            self.assertEqual(len(ok.encode("utf-8")), hi)
+            opened.append(([], a17_with(META=meta(**{field: ok}))))
+            rejected.append(("META: bad " + field, a17_with(META=meta(**{field: ok + "a"}))))
+        rejected.append(("META: bad id", a17_with(META=meta(id="-dot"))))
+        # A.1: a good second byte, then a bad third or fourth
+        rejected += [("META: bad name", patch(d, 146, "3s", b"\xe2\x82(")),
+                     ("META: bad licence", patch(d, 156, "4s", b"\xf0\x9f\x98(")),
+                     ("META: bad licence", patch(d, 156, "4s", b"\xf0\x9f(\x80"))]
+        # A.3: two unknown tags sharing three bytes
+        opened.append(([], a17_with(XTRA=b"a", XTRB=b"b")))
+        # A.6: anchorY * scale <= 153 and (cellH - anchorY) * scale <= 10, at each limit and past it
+        for scale, cell_h, anchor_y, ok in ((1, 153, 153, True), (1, 154, 154, False), (2, 76, 76, True),
+                                            (2, 77, 77, False), (3, 51, 51, True), (3, 52, 52, False),
+                                            (1, 14, 4, True), (2, 9, 4, True), (2, 10, 4, False)):
+            data = patched((172, "B", scale), (175, "B", cell_h), (177, "B", anchor_y))
+            (opened.append(([], data)) if ok else rejected.append(("GEOM: bad anchorY", data)))
+        # A.10: skip = w + 1 with no tokens; a last row head of one byte at FDAT's end
+        rejected.append(("frame 0: bad data", patch(d, A17_FDAT, "6s", bytes.fromhex("03 00 00 02 01 01"))))
+        rejected.append(("frame 0: bad data", a17_with(FTAB=bytes((1, 2, 2, 2)) + struct.pack("<IHH", 0, 4, 0),
+                                                       FDAT=bytes.fromhex("00 01 11 00"))))
+        # a 160 px row (cellW 160 at scale 1); a frame past FDAT offset 65,535
+        opened.append(([], a17_with(GEOM=bytes.fromhex("01 00 a0 04 02 04 00 00 01 00 00 00"),
+                                    FTAB=bytes((0, 3, 160, 1)) + struct.pack("<IHH", 0, 12, 0),
+                                    FDAT=bytes.fromhex("00 0a") + b"\xf1" * 10)))
+        opened.append(([], a17_with(FTAB=bytes((1, 2, 2, 2)) + struct.pack("<IHH", 65540, 6, 0),
+                                    FDAT=bytes(65540) + bytes.fromhex("00 01 11 00 01 11"))))
+        # A.11: keys and names of 23 bytes and of 24, and with a leading -; a name below offset 4
+        for key, ok in (("k" * 23, True), ("k" * 24, False), ("-x", False)):
+            pose = b"\x01\0\0\0" + s(key)
+            data = a17_with(STRS=pose + s("hop"), MOVS=movs([rec((0, "<H", len(pose)))]))
+            (opened.append(([], data)) if ok else rejected.append(("STRS: bad pose key 1", data)))
+        for name, want in (("n" * 23, []), ("n" * 24, [(0, "bad name")]), ("-hop", [(0, "bad name")])):
+            opened.append((want, a17_with(STRS=b"\0\0\0\0" + s(name))))
+        opened.append(([(0, "bad name")], a17_with(STRS=bytes.fromhex("00 00 00 01 61 00"),
+                                                   MOVS=movs([rec((0, "<H", 3))]))))
+        # genre tags of 63 bytes and of 64; 8 good tags, then 9; a tag past STRS offset 255
+        for tag, want in (("a" * 63, []), ("é" * 31 + "a", []), ("ZZ", []), ("a" * 64, [(0, "bad genre")]),
+                          ("é" * 32, [(0, "bad genre")]), ("a" * 62 + "é", [(0, "bad genre")])):
+            opened.append((want, a17_with(STRS=head + s(tag), MOVS=movs([rec((20, "<HB", 9, 1))]))))
+        tags = b"".join(s(c) for c in "abcdefghi")
+        opened.append(([], a17_with(STRS=head + tags, MOVS=movs([rec((20, "<HB", 9, 8))]))))
+        opened.append(([(0, "bad genre")], a17_with(STRS=head + tags, MOVS=movs([rec((20, "<HB", 9, 9))]))))
+        opened.append(([], a17_with(STRS=head + bytes(260 - len(head)) + s("rock"),
+                                    MOVS=movs([rec((20, "<HB", 260, 1))]))))
+        # A.12: 64 moves; three records of 40 bytes, each different
+        opened.append(([], a17_with(MOVS=movs([hop] * 64))))
+        three = a17_with(STRS=head + s("two"), STEP=steps(12) + struct.pack("<HHbbBB", 0, 12, 1, 0, 2, 0),
+                         MOVS=movs([hop, rec((0, "<H", 9), (6, "B", 20), (14, "B", 3), (24, "<H", 1)),
+                                    rec((9, "B", 1), (14, "B", 5), (15, "B", 2))], rlen=40))
+        opened.append(([], three))
+        # A.13: 32 steps and 33, beat and idle; idle steps of 190 and 200 ms, totals of 490 and 500
+        idle = ((2, "B", 1), (3, "B", 0), (7, "B", 3), (14, "B", 0))
+        for edits, dur in ((((3, "B", 8),), 3), (idle, 20)):
+            opened.append(([], a17_with(STEP=steps(*[dur] * 32), MOVS=movs([rec(*edits, (23, "B", 32))]))))
+            opened.append(([(0, "bad steps")], a17_with(STEP=steps(*[dur] * 33),
+                                                        MOVS=movs([rec(*edits, (23, "B", 33))]))))
+        for durs, want in (((19, 20, 20), [(0, "step 1: 190 ms")]), ((20, 20, 20), []),
+                           ((20, 29), [(0, "490 ms in all")]), ((20, 30), [])):
+            opened.append((want, a17_with(STEP=steps(*durs), MOVS=movs([rec(*idle, (23, "B", len(durs)))]))))
+        # A.15's move rows: each beat field alone on a no-BPM move; pace 35 and 36; a 2-beat
+        # move at 178-200, unreachable only when it travels
+        idle_ok = [(mv + 2, "B", 1), (mv + 3, "B", 0), (mv + 14, "B", 0), (mv + 7, "B", 3), (st + 2, "<H", 60)]
+        for field in ((mv + 3, "B", 1), (mv + 4, "B", 90), (mv + 5, "B", 100), (mv + 9, "B", 1), (mv + 14, "B", 1),
+                      (mv + 15, "B", 1), (mv + 11, "b", 1), (mv + 22, "B", 1), (mv + 8, "B", 2), (mv + 8, "B", 4),
+                      (mv + 8, "B", 8)):
+            opened.append(([(0, "beat fields on a no-BPM move")], patched(*idle_ok, field)))
+        opened.append(([(0, "pace 35-100")], patch(d, mv + 4, "BB", 35, 100)))
+        opened.append(([], patch(d, mv + 4, "BB", 36, 100)))
+        two = [(mv + 3, "B", 2), (st + 2, "<H", 24), (mv + 4, "BB", 178, 200)]
+        opened.append(([(0, "range 178-200 unreachable")], patched(*two, (mv + 11, "b", 1))))
+        opened.append(([], patched(*two)))
+        for want, data in rejected:
+            with self.subTest(want, size=len(data)):
+                self.assertEqual(self.reason(data), want)
+        for want, data in opened:
+            with self.subTest(want, size=len(data)):
+                self.assertEqual([tuple(x) for x in dp.read_pack(data).ignored], want)
+        # what the accepted ones read back
+        q = dp.read_pack(three)
+        self.assertEqual([(m.name, m.weight10, m.bounce, m.sway, m.repeat) for m in q.moves],
+                         [("hop", 10, 2, 0, 0), ("two", 20, 3, 0, 0), ("hop", 10, 5, 2, 1)])
+        self.assertEqual(q.moves[1].steps[0].dx, 1)
+        q = dp.read_pack(a17_with(STRS=head + bytes(260 - len(head)) + s("rock"), MOVS=movs([rec((20, "<HB", 260, 1))])))
+        self.assertEqual(q.moves[0].genres, ("rock",))
+        self.assertEqual(len(dp.read_pack(a17_with(MOVS=movs([hop] * 64))).moves), 64)
 
     def test_accepted(self):
         d = a17_pack()
@@ -2575,6 +2719,13 @@ class ReadPackTest(DpCase):
             ("song_bpm needs track BPM data: skipped in this version", [(mv + 10, "B", 1), (mv + 26, "BB", 160, 180)]),
             ("needs 0x02", [(mv + 10, "B", 2)]),
             ("needs 0xA0", [(mv + 10, "B", 0xA0)]),                       # uppercase hex digits (C.6's note)
+            # bit 0 with others: song_bpm's row comes first
+            ("song_bpm needs track BPM data: skipped in this version", [(mv + 10, "B", 3)]),
+            # B.7: any travel, negative too, takes the +1 octave from a 2-beat move
+            ("range 178-180 unreachable", [(mv + 3, "B", 2), (st + 2, "<H", 24), (mv + 4, "BB", 178, 180),
+                                           (mv + 11, "b", -2)]),
+            ("range 178-180 unreachable", [(mv + 3, "B", 2), (st + 2, "<H", 24), (mv + 4, "BB", 178, 180),
+                                           (mv + 11, "b", 2)]),
             # A.15: each beat field on a no-BPM move
             ("beat fields on a no-BPM move", idle + [(st + 2, "<H", 60), (mv + 7, "B", 3), (mv + 8, "B", 4)]),
             ("beat fields on a no-BPM move", idle + [(st + 2, "<H", 60), (mv + 7, "B", 3), (mv + 8, "B", 2)]),
@@ -2712,6 +2863,270 @@ class ReadPackTest(DpCase):
                 dp.read_pack(with_crc(data))
             except dp.DanceError:
                 pass
+
+
+# ===========================================================================
+# Step 2's reader additions (D.3): scan_pack, read_pack's avail and
+# late_checks, and reader_digest.
+
+def ref_str8(text):
+    raw = (text or "").encode("utf-8")
+    return bytes([len(raw)]) + raw
+
+
+@functools.lru_cache(maxsize=None)
+def ref_grid_hash(grid):
+    return ref_frame_hash(grid)
+
+
+def ref_reader_digest(info, scan=False):
+    """D.3's digest, from its table: FNV-1a 32 of META, GEOM, PALS and THMB
+    (a scan stops there), then the frames, the pose keys and the moves
+    outside info.ignored, numbers little-endian."""
+    out = bytearray()
+    for s in (info.id, info.name, info.author, info.licence, info.url, info.version):
+        out += ref_str8(s)
+    out.append(info.declared_moves)
+    g = info.geom
+    out += bytes([g.scale, g.faces, g.cell_w, g.cell_h, g.anchor_x, g.anchor_y, g.shadow_w])
+    out += struct.pack("<HH", g.frame_count, g.rest_frame)
+    for entry in tuple(info.palette) + tuple(info.idle_palette):
+        out += bytes(entry)
+    out += bytes(info.thumb)
+    if scan:
+        return ref_fnv(out)
+    for box, grid in zip(info.boxes, info.grids):
+        out += bytes(tuple(box)) + struct.pack("<I", ref_grid_hash(tuple(bytes(r) for r in grid)))
+    out.append(len(info.pose_keys))
+    for k in info.pose_keys:
+        out += ref_str8(k)
+    out.append(len(info.moves))
+    named = {i for i, _ in info.ignored}
+    for i, m in enumerate(info.moves):
+        if i in named:
+            continue
+        out.append(i)
+        out += ref_str8(m.name)
+        out += bytes([m.kind, m.beats, m.pace_lo, m.pace_hi, m.weight10, m.when, m.flags, m.repeat, m.needs,
+                      m.travel & 0xFF, m.start_at, m.travel_ease, m.bounce, m.sway])
+        for k in (m.from_key, m.to_key, m.from_key_m, m.to_key_m):
+            out += ref_str8(k)
+        out.append(len(m.genres))
+        for tag in m.genres:
+            out += struct.pack("<I", ref_fnv(ref_fold(tag, ref_textfold()).encode("ascii")))
+        out += bytes([m.song_lo, m.song_hi, len(m.steps)])
+        for s in m.steps:
+            out += struct.pack("<HHbbBB", s.frame | (0x8000 if s.mirrored else 0), s.dur, s.dx, s.dy, s.ease,
+                               int(bool(s.go)))
+    return ref_fnv(out)
+
+
+def card_dancer(case):
+    """test_card_budget_and_spots's dancer: a red move kept by heavy (MOVS 0)
+    and a travel move (MOVS 1); its pack and the offset of MOVS's records."""
+    s = Sheet(2, 1, 40, 40)
+    s.fill("A1", 0, 0, 40, 40, R)
+    s.fill("B1", 18, 30, 4, 8, W)
+    keys = dancer_keys({"cell": "40x40"}, add=["scale = 4", "anchor = 20,38", "rest = B1"])
+    ini = ini_text(keys, [("[move held]", ["frames = A1 A1", "beats = 2", "bpm = any", "heavy = yes"]),
+                          ("[move walk]", ["frames = B1 B1", "beats = 2", "bpm = any", "travel = 2"])])
+    r = case.compile(ini, s.png())
+    case.assertTrue(r.ok, r.messages)
+    return r.data, 4 + Mpdn(r.data).dir[TAGS.index("MOVS")][1]
+
+
+class ScanPackTest(DpCase):
+    """scan_pack (D.3): 5.5's boot scan, its rows in 5.5's order, never past
+    the bytes read."""
+
+    def reason(self, prefix, size):
+        with self.assertRaises(dp.DanceError) as cm:
+            dp.scan_pack(prefix, size)
+        return cm.exception.args[0]
+
+    def test_rows_in_order(self):
+        d, n = a17_pack(), 1156
+        cases = [
+            # row 1: A.15's header rows without the CRC
+            ("too short", d[:31], n),
+            ("too short", d[:20], 20),
+            ("not an MPDN pack", b"MPDX" + d[4:], n),
+            ("needs a newer player", patch(d, 6, "<H", 2)[:32], n),
+            ("needs a newer player", patch(d, 6, "<HI", 2, 1160)[:32], n),
+            ("size 1156 isn't the file's 1160", d, 1160),                # the header against the file's size
+            ("size 1160 isn't the file's 1156", patch(d, 8, "<I", 1160), n),
+            ("too big (131076 bytes)", patch(d, 8, "<I", 131076), 131076),
+            ("bad chunk count 0", patch(d, 16, "<H", 0), n),
+            ("bad chunk count 17", patch(d, 16, "<H", 17), n),
+            ("bad chunk count 9", patch(d, 8, "<I", 100)[:100], 100),     # the directory past the end
+            # row 2: the directory within the bytes read
+            ("header unreadable", d[:139], n),
+            # rows 3 and 4: A.3 on every entry, then the nine tags
+            ("chunk META: misaligned", patch(d, 36, "<I", 141)[:140], n),
+            ("chunk FDAT: out of bounds", patch(d, 136, "<I", 100)[:140], n),
+            ("chunk STEP: out of bounds", patch(d, 120, "<II", 0xFFFFFFF0, 0x20)[:140], n),
+            ("chunk GEOM twice", patch(d, 116, "4s", b"GEOM")[:140], n),
+            ("chunks META and GEOM overlap", patch(d, 48, "<I", 168)[:140], n),
+            ("no GEOM chunk", patch(patch(d, 44, "4s", b"XXXX"), 116, "4s", b"YYYY")[:140], n),
+            # row 5: META, GEOM, PALS and THMB inside the bytes read
+            ("header unreadable", d[:168], n),                            # META ends at 169
+            ("header unreadable", d[:183], n),                            # GEOM at 184
+            ("header unreadable", d[:279], n),                            # PALS at 280
+            ("header unreadable", d[:1079], n),                           # THMB at 1080
+            ("header unreadable", patch(d, 141, "3s", b"DOT")[:1079], n),  # row 5 before a bad META (row 6)
+            # rows 6-8, as open() reads them
+            ("META: bad id", patch(d, 141, "3s", b"DOT"), n),
+            ("META: bad count", patch(d, 40, "<I", 28), n),
+            ("GEOM: too short", patch(d, 52, "<I", 11), n),
+            ("GEOM: bad scale", patch(patch(d, 172, "B", 5), 173, "B", 3), n),
+            ("GEOM: bad rest frame", patch(d, 182, "<H", 1), n),
+            ("PALS: 95 bytes, not 96", patch(d, 64, "<I", 95), n),
+            ("THMB: 799 bytes, not 800", patch(d, 76, "<I", 799), n),
+        ]
+        for want, prefix, size in cases:
+            with self.subTest(want, avail=len(prefix)):
+                self.assertEqual(self.reason(prefix, size), want)
+        # THMB's off past the bytes read, or only its end: THMB moved past FDAT in a 2,000-byte file
+        moved = patch(patch(d + bytes(844), 8, "<I", 2000), 72, "<I", 1156)
+        self.assertEqual(self.reason(moved[:1155], 2000), "header unreadable")
+        self.assertEqual(self.reason(moved[:1156], 2000), "header unreadable")
+        self.assertEqual(dp.scan_pack(moved, 2000).thumb, bytes(800))
+
+    def test_what_only_open_checks(self):
+        # the CRC, FTAB, the frames, STRS, MOVS, STEP and the moves are open()'s alone
+        d, n = a17_pack(), 1156
+        for data, open_says in ((d[:12] + b"\0\0\0\0" + d[16:], "bad checksum"),
+                                (patch(d, 88, "<I", 11), "FTAB: 11 bytes for 1 frames"),
+                                (patch(d, A17_FTAB, "<BBBBIHH", 0, 0, 0, 0, 0, 0, 0), "the rest frame is empty"),
+                                (patch(d, 100, "<I", 3), "STRS: too short"),
+                                (patch(d, 1104, "B", 65), "MOVS: 65 moves"),
+                                (patch(d, 124, "<I", 7), "STEP: 7 bytes")):
+            with self.subTest(open_says):
+                self.assertEqual(dp.scan_pack(data, n).id, "dot")
+                with self.assertRaises(dp.DanceError) as cm:
+                    dp.read_pack(data)
+                self.assertEqual(cm.exception.args[0], open_says)
+        self.assertEqual(dp.scan_pack(patch(d, A17_MOV + 3, "B", 3), n).declared_moves, 1)
+
+    def test_fields(self):
+        d = a17_pack()
+        s = dp.scan_pack(d, len(d))
+        self.assertEqual((s.size, s.crc, s.id, s.name, s.author, s.licence, s.url, s.version, s.declared_moves),
+                         (1156, 0x5BF1E285, "dot", "Dot", "Ana", "CC0-1.0", "", "", 1))
+        p = dp.read_pack(d)
+        for pack in (d, testpack_result().data):
+            p = dp.read_pack(pack)
+            for prefix in (pack[:2048], pack, bytes(pack) + b"more"):        # a longer prefix is cut to size
+                s = dp.scan_pack(prefix, len(pack))
+                with self.subTest(p.id, avail=len(prefix)):
+                    self.assertEqual(tuple(s), tuple(getattr(p, f) for f in dp.Scan._fields))
+        # the test pack's THMB ends at 1,156: the scan needs exactly that much
+        test = testpack_result().data
+        thmb_end = sum(Mpdn(test).dir[TAGS.index("THMB")][1:])
+        self.assertEqual(dp.scan_pack(test[:thmb_end], len(test)).name, "Tëst")
+        self.assertEqual(self.reason(test[:thmb_end - 1], len(test)), "header unreadable")
+
+
+class ReadPackOptionsTest(DpCase):
+    """read_pack's avail and late_checks (D.3)."""
+
+    def reason(self, data, **kw):
+        with self.assertRaises(dp.DanceError) as cm:
+            dp.read_pack(data, **kw)
+        return cm.exception.args[0]
+
+    def test_avail(self):
+        d = a17_pack()
+        self.assertEqual(self.reason(d, avail=0), "short read (0 of 1156 bytes)")
+        self.assertEqual(self.reason(d, avail=1155), "short read (1155 of 1156 bytes)")
+        # before any other check (A.15's first row), whatever else is wrong
+        self.assertEqual(self.reason(b"junk", avail=2), "short read (2 of 4 bytes)")
+        self.assertEqual(self.reason(b"MPDX" + d[4:], avail=4), "short read (4 of 1156 bytes)")
+        for avail in (None, 1156, 4096):
+            self.assertEqual(dp.read_pack(d, avail=avail).id, "dot")
+        self.assertEqual(self.reason(d[:12] + b"\0\0\0\0" + d[16:], avail=1156), "bad checksum")
+
+    def test_late_checks(self):
+        # test_card_budget_and_spots's two drops vanish under late_checks=False (D.2)
+        data, rec = card_dancer(self)
+        flags = data[rec + 8]
+        red = patch(data, rec + 8, "B", flags & ~16)
+        nowhere = patch(data, rec + 32 + 12, "B", 1)
+        for d, full in ((red, [(0, "budget red (25600 px)")]), (nowhere, [(1, "travels from no spot")]),
+                        (patch(red, rec + 32 + 12, "B", 1), [(0, "budget red (25600 px)"),
+                                                             (1, "travels from no spot")])):
+            self.assertEqual([tuple(x) for x in dp.read_pack(d).ignored], full)
+            self.assertEqual([tuple(x) for x in dp.read_pack(d, late_checks=False).ignored], [])
+            self.assertEqual([tuple(x) for x in dp.read_pack(d, late_checks=True).ignored], full)
+        # nothing above them moves: a move that fails an earlier row reads the same both ways
+        weight = patch(red, rec + 6, "B", 0)
+        for late in (False, True):
+            self.assertEqual([tuple(x) for x in dp.read_pack(weight, late_checks=late).ignored], [(0, "weight 0")])
+        # the fixture: both lists name only future
+        test = testpack_result().data
+        song = (8, "song_bpm needs track BPM data: skipped in this version")
+        for late in (False, True):
+            self.assertEqual([tuple(x) for x in dp.read_pack(test, late_checks=late).ignored], [song])
+        # the rest of the Pack is the same
+        a, b = dp.read_pack(red), dp.read_pack(red, late_checks=False)
+        self.assertEqual(a._replace(ignored=()), b._replace(ignored=()))
+
+    def test_peak_bound_never_undercuts_the_budget(self):
+        # read_pack skips B.6's simulation where its bound says a move can't be red; the bound
+        # must hold for every move, under a lifted shadow, keys at the offset limit and a full bounce
+        p = dp.read_pack(testpack_result().data, late_checks=False)
+        cases = [(dp_geom(B4_GEOM, B4_BOXES), dp_boxes(B4_BOXES), dp_move(B4_MOVE)),
+                 (dp_geom(CLAMP_GEOM, CLAMP_BOXES), dp_boxes(CLAMP_BOXES), dp_move(CLAMP_MOVE)),
+                 (dp_geom(DOT_GEOM, DOT_BOXES), dp_boxes(DOT_BOXES), dp_move(DOT_MOVE))]
+        for m in p.moves:
+            low = tuple(s._replace(dy=-12) for s in m.steps)
+            high = tuple(s._replace(dy=12) for s in m.steps)
+            cases += [(p.geom, p.boxes, m),
+                      (p.geom, p.boxes, m._replace(steps=low, bounce=16 if m.kind == 0 else 0)),
+                      (p.geom._replace(shadow_w=160), p.boxes, m._replace(steps=high)),
+                      (p.geom._replace(shadow_w=1), p.boxes, m)]
+        for geom, boxes, m in cases:
+            with self.subTest(m.name, shadow=geom.shadow_w, dy=m.steps[0].dy):
+                self.assertGreaterEqual(dp._peak_bound(geom, boxes, m), dp.budget(geom, boxes, m).peak)
+
+
+class ReaderDigestTest(DpCase):
+    """reader_digest (D.3): FNV-1a 32 over what a reader exposes."""
+
+    def test_pinned_on_a17(self):
+        d = a17_pack()
+        p = dp.read_pack(d, late_checks=False)
+        s = dp.scan_pack(d, len(d))
+        self.assertEqual(dp.reader_digest(p), ref_reader_digest(p))
+        self.assertEqual(dp.reader_digest(s), ref_reader_digest(s, scan=True))
+        self.assertEqual(dp.reader_digest(p), A17_DIGEST)
+        self.assertEqual(dp.reader_digest(s), A17_SCAN_DIGEST)
+        # a Scan stops after THMB, and a Pack of the same bytes goes on
+        self.assertNotEqual(dp.reader_digest(p), dp.reader_digest(s))
+
+    def test_against_the_reference(self):
+        test = testpack_result().data
+        p = dp.read_pack(test, late_checks=False)
+        self.assertEqual(dp.reader_digest(p), ref_reader_digest(p))
+        self.assertEqual(dp.reader_digest(dp.scan_pack(test[:2048], len(test))),
+                         ref_reader_digest(dp.scan_pack(test[:2048], len(test)), scan=True))
+        # a dropped move leaves the digest: only the moves `ignored` doesn't name count
+        q = p._replace(ignored=p.ignored + ((3, "x"),))
+        self.assertNotEqual(dp.reader_digest(q), dp.reader_digest(p))
+        self.assertEqual(dp.reader_digest(q), ref_reader_digest(q))
+        # each field it covers changes it
+        d = a17_pack()
+        base = dp.reader_digest(dp.read_pack(d))
+        for off, fmt, val in ((152, "B", 0x6F), (174, "B", 3), (190, "B", 1), (300, "B", 0x12),
+                              (A17_FTAB, "B", 0), (A17_FDAT + 2, "B", 0x12), (A17_MOV + 14, "B", 3),
+                              (A17_STEP + 4, "b", -1), (A17_STEP + 7, "B", 1), (182, "<H", 0x8000)):
+            with self.subTest(off=off):
+                q = dp.read_pack(patch(d, off, fmt, val))
+                self.assertNotEqual(dp.reader_digest(q), base)
+                self.assertEqual(dp.reader_digest(q), ref_reader_digest(q))
+        # the fixture's moves with genres, keys and steps of every kind
+        p = dp.read_pack(test)
+        self.assertEqual(dp.reader_digest(p), ref_reader_digest(p))
 
 
 # ===========================================================================
@@ -4509,7 +4924,7 @@ class GeneratedFilesTest(DpCase):
             head = files[path].split("\n")[:3]
             self.assertEqual(head[0], "// SPDX-License-Identifier: GPL-3.0-or-later")
             self.assertEqual(head[1], "// Copyright (C) 2026 IrosTheBeggar")
-            source = "tools/art/dancers/test" if "Budget" in path else "its own tables"
+            source = "tools/art/dancers/test" if "Budget" in path or "Reader" in path else "its own tables"
             self.assertEqual(head[2], "// Generated by tools/dancepack.py from %s. Do not edit:" % source)
             self.assertIn("namespace dancevec", files[path])
         head = files[TESTPACK_H].split("\n")[:3]
@@ -4574,6 +4989,294 @@ class GeneratedFilesTest(DpCase):
                         ("kTrace", len(frames))):
             self.assertIn("static const int %sCount = %d;" % (name, n), text)
         self.assertEqual(len(moves), 14)     # every MOVS record, future (needs bit) included
+
+
+# ---------------------------------------------------------------------------
+# ReaderVectors.h (D.3), read back as the C++ test reads it.
+
+# A.15's reasons, row by row, as D.3's coverage rule counts them: the rejections
+# (with 5.5's "header unreadable"), the move rows step 2 runs, and step 3's two.
+A15_REJECTIONS = (
+    ("short read", r"short read \(\d+ of \d+ bytes\)"), ("too short", r"too short"),
+    ("magic", r"not an MPDN pack"), ("minReader", r"needs a newer player"),
+    ("size", r"size \d+ isn't the file's \d+"), ("too big", r"too big \(\d+ bytes\)"),
+    ("CRC", r"bad checksum"), ("chunk count", r"bad chunk count \d+"), ("header unreadable", r"header unreadable"),
+    ("misaligned", r"chunk .{4}: misaligned"), ("out of bounds", r"chunk .{4}: out of bounds"),
+    ("twice", r"chunk .{4} twice"), ("overlap", r"chunks .{4} and .{4} overlap"),
+    ("no chunk", r"no (?:META|GEOM|PALS|THMB|FTAB|STRS|MOVS|STEP|FDAT) chunk"),
+    ("META", r"META: bad (id|name|author|licence|url|version|count)"), ("GEOM short", r"GEOM: too short"),
+    ("GEOM", r"GEOM: bad (scale|faces|cellW|cellH|anchorX|anchorY|shadowW|frame count|rest frame)"),
+    ("PALS", r"PALS: \d+ bytes, not 96"), ("THMB", r"THMB: \d+ bytes, not 800"),
+    ("FTAB", r"FTAB: \d+ bytes for \d+ frames"), ("bad box", r"frame \d+: bad box"),
+    ("data out of bounds", r"frame \d+: data out of bounds"), ("bad data", r"frame \d+: bad data"),
+    ("rest frame", r"the rest frame is empty"), ("STRS short", r"STRS: too short"),
+    ("pose key", r"STRS: bad pose key \d+"), ("MOVS short", r"MOVS: too short"), ("MOVS count", r"MOVS: \d+ moves"),
+    ("record length", r"MOVS: record length \d+"), ("STEP", r"STEP: \d+ bytes"),
+)
+A15_DROPS = (
+    ("name", r"bad name"), ("kind", r"bad kind"), ("steps", r"bad steps"),
+    ("frame", r"frame \d+ out of range"), ("beats", r"\d+ beats"), ("ticks", r"step \d+: \d+ ticks"),
+    ("tick sum", r"\d+ of \d+ ticks"), ("ms", r"step \d+: \d+ ms"), ("ms sum", r"\d+ ms in all"),
+    ("beat fields", r"beat fields on a no-BPM move"), ("when", r"bad when"), ("pace", r"pace \d+-\d+"),
+    ("unreachable", r"range \d+-\d+ unreachable"), ("weight", r"weight \d+"), ("repeat", r"repeat \d+"),
+    ("bounce", r"bounce \d+"), ("sway", r"sway \d+"), ("travel", r"travel -?\d+"), ("start_at", r"bad start_at"),
+    ("ease", r"bad ease"), ("place", r"bad place"), ("offset", r"offset -?\d+,-?\d+"),
+    ("pose key", r"bad pose key"), ("genre", r"bad genre"),
+    ("song_bpm", r"song_bpm needs track BPM data: skipped in this version"), ("needs", r"needs 0x[0-9A-F]{2}"),
+)
+A15_LATE = (("no spot", r"travels from no spot"), ("budget", r"budget red \(\d+ px\)"))
+META_FIELDS = ("id", "name", "author", "licence", "url", "version", "count")
+GEOM_FIELDS = ("scale", "faces", "cellW", "cellH", "anchorX", "anchorY", "shadowW", "frame count", "rest frame")
+KOPEN, KOPEN_SHORT, KSCAN = 0, 1, 2
+RCase = collections.namedtuple("RCase", "base entry fix patch_count first_patch length avail reason drop_count "
+                                        "full_drop_count first_drop first_full_drop digest")
+
+
+def a15_row(reason, rows):
+    """(row, field or None) of the row a reason belongs to, or None."""
+    for row, rx in rows:
+        m = re.fullmatch(rx, reason, re.S)
+        if m:
+            return row, (m.group(1) if m.groups() else None)
+    return None
+
+
+def meta_over_limit(data, field):
+    """Whether META's `field` is a well-formed string (A.1) longer than A.5's
+    limit, in a pack whose directory passed: a `META: bad <field>` by length."""
+    count = struct.unpack_from("<H", data, 16)[0]
+    entries = [struct.unpack_from("<4sII", data, 32 + 12 * i) for i in range(count)]
+    off, size = next((o, s) for t, o, s in entries if t == b"META")
+    p, end = off, off + size
+    for name, hi in zip(META_FIELDS, (23, 24, 40, 40, 80, 16)):
+        if p + 2 > end or data[p] > end - p - 2 or data[p + 1 + data[p]] != 0:
+            return False
+        try:
+            text = data[p + 1:p + 1 + data[p]].decode("utf-8")
+        except UnicodeDecodeError:
+            return False
+        if any(c < " " or "\x7f" <= c <= "\x9f" for c in text):
+            return False
+        if name == field:
+            return data[p] > hi
+        p += 2 + data[p]
+    return False
+
+
+def c_string_array(text, name):
+    i = text.index(name + "[] = {")
+    return [c_string_bytes(lit).decode("utf-8")
+            for lit in re.findall(r'"(?:[^"\\]|\\.)*"', text[text.index("\n", i):text.index("\n};", i)])]
+
+
+class ReaderVectors:
+    """ReaderVectors.h parsed, and each case's bytes made as D.3 says."""
+
+    def __init__(self, text):
+        self.text = text
+        self.dot = c_bytes(text, "kDotPack")
+        self.bytes = c_bytes(text, "kReaderBytes")
+        self.patches = c_structs(text, "kReaderPatches")
+        self.reasons = c_string_array(text, "kReaderReasons")
+        self.drops = c_structs(text, "kReaderDrops")
+        self.cases = [RCase(*v) for v in c_structs(text, "kReaderCases")]
+        self.bases = (bytes(testpack_result().data), self.dot)
+
+    def data(self, c):
+        """D.3's steps 1-3: the base cut or zero-extended, the patches, the fixes."""
+        base = self.bases[c.base]
+        d = bytearray(base[:c.length]) + bytes(max(0, c.length - len(base)))
+        for off, n, at in self.patches[c.first_patch:c.first_patch + c.patch_count]:
+            d[off:off + n] = self.bytes[at:at + n]
+        if c.fix & 1 and c.length >= 12:
+            struct.pack_into("<I", d, 8, c.length)
+        if c.fix & 2 and c.length >= 16:
+            struct.pack_into("<I", d, 12, zlib.crc32(bytes(d[16:])) & 0xFFFFFFFF)
+        return bytes(d)
+
+    def drop_list(self, first, count):
+        return [(m, self.reasons[r]) for m, r in self.drops[first:first + count]]
+
+    def step2(self, c):
+        return self.drop_list(c.first_drop, c.drop_count)
+
+    def full(self, c):
+        return self.drop_list(c.first_full_drop, c.full_drop_count)
+
+
+@functools.lru_cache(maxsize=None)
+def reader_vectors():
+    return ReaderVectors(generated()[READER_H])
+
+
+class ReaderVectorsTest(DpCase):
+    def test_layout(self):
+        v, text = reader_vectors(), reader_vectors().text
+        self.assertEqual(v.dot, a17_pack())                          # A.17's pack, byte for byte
+        self.assertIn("alignas(4) static const uint8_t kDotPack[1156] = {", text)
+        self.assertIn("static const uint32_t kDotPackSize = 1156;", text)
+        for line in ("constexpr uint8_t kBaseTest = 0, kBaseDot = 1;", "constexpr uint8_t kOpen = 0, kOpenShort = 1, "
+                     "kScan = 2;", "constexpr uint8_t kFixSize = 1, kFixCrc = 2;", "constexpr int16_t kAccepted = -1;",
+                     "struct ReaderPatch { uint32_t off; uint16_t len; uint32_t at; };",
+                     "struct ReaderDrop { uint8_t move; uint16_t reason; };", "static const char* const kReaderReasons[]"):
+            self.assertIn(line, text)
+        counts = dict((k, int(n)) for k, n in re.findall(r"(k\w+Count) = (\d+)", text))
+        self.assertEqual(counts, {"kReaderBytesCount": len(v.bytes), "kReaderPatchesCount": len(v.patches),
+                                  "kReaderReasonsCount": len(v.reasons), "kReaderDropsCount": len(v.drops),
+                                  "kReaderCasesCount": len(v.cases)})
+        self.assertLess(len(text.encode("utf-8")), 400 * 1024)      # D.3: under 400 KB
+        self.assertGreater(len(v.cases), 2500)                        # about 3,000
+        self.assertNotIn("??", text)                                  # no trigraph can form
+        for lit in re.findall(r'"(?:[^"\\]|\\.)*"', text):
+            self.assertNotIn("?", re.sub(r"\\.", "", lit), lit)      # every ? written \?
+        self.assertEqual(len(set(v.reasons)), len(v.reasons))        # each text once
+        for c in v.cases:
+            self.assertIn(c.base, (0, 1))
+            self.assertIn(c.fix, range(4))
+            self.assertLessEqual(c.patch_count, 255)
+            self.assertLessEqual(c.first_patch + c.patch_count, len(v.patches))
+            for off, n, at in v.patches[c.first_patch:c.first_patch + c.patch_count]:
+                self.assertTrue(n >= 1 and off + n <= c.length and at + n <= len(v.bytes), c)
+            if c.entry == KOPEN:
+                self.assertEqual(c.avail, c.length)
+            elif c.entry == KOPEN_SHORT:
+                self.assertLess(c.avail, c.length)
+            else:
+                self.assertEqual(c.entry, KSCAN)
+                self.assertLessEqual(c.avail, c.length)
+            if c.reason >= 0:
+                self.assertEqual((c.drop_count, c.full_drop_count, c.digest), (0, 0, 0), c)
+            self.assertLessEqual(c.first_drop + c.drop_count, len(v.drops))
+            self.assertLessEqual(c.first_full_drop + c.full_drop_count, len(v.drops))
+        self.assertTrue(all(m < 64 and r < len(v.reasons) for m, r in v.drops))
+        # each base as it is: opened, and scanned with avail = min(2,048, length)
+        for base, data in enumerate(v.bases):
+            for entry, avail in ((KOPEN, len(data)), (KSCAN, min(2048, len(data)))):
+                self.assertTrue(any(c[:4] == (base, entry, 3, 0) and (c.length, c.avail) == (len(data), avail)
+                                    and c.reason == -1 for c in v.cases), (base, entry))
+
+    def test_python_says_the_same(self):
+        # Each case rebuilt from the header alone, as test_dance_pack rebuilds it, and read again.
+        v = reader_vectors()
+        for i, c in enumerate(v.cases):
+            data = v.data(c)
+            self.assertEqual(len(data), c.length)
+            with self.subTest(i, case=c):
+                reason, step2, full, digest = None, [], [], 0
+                try:
+                    if c.entry == KOPEN:
+                        p = dp.read_pack(data, late_checks=False)
+                        step2, full = list(p.ignored), list(dp.read_pack(data).ignored)
+                        digest = dp.reader_digest(p)
+                        if i % 7 == 0:
+                            self.assertEqual(digest, ref_reader_digest(p))
+                    elif c.entry == KOPEN_SHORT:
+                        dp.read_pack(data, avail=c.avail)
+                        self.fail("a short read was accepted")
+                    else:
+                        s = dp.scan_pack(data[:c.avail], c.length)
+                        digest = dp.reader_digest(s)
+                        if i % 7 == 0:
+                            self.assertEqual(digest, ref_reader_digest(s, scan=True))
+                except dp.DanceError as e:
+                    reason = e.args[0]
+                    if c.entry == KOPEN:                  # the two read_pack calls agree on a rejection
+                        with self.assertRaises(dp.DanceError) as cm:
+                            dp.read_pack(data)
+                        self.assertEqual(cm.exception.args[0], reason)
+                self.assertEqual(None if c.reason < 0 else v.reasons[c.reason], reason)
+                self.assertEqual(v.step2(c), [tuple(x) for x in step2])
+                self.assertEqual(v.full(c), [tuple(x) for x in full])
+                self.assertEqual(c.digest, digest)
+
+    def test_coverage(self):
+        # D.3: every reason is some case's rejection or step-2 drop (step 3's two: a full
+        # drop), META's and GEOM's with each field, META's strings each by its length too
+        # (well formed, one byte past the limit), and enough accepted packs.
+        v = reader_vectors()
+        seen, seen_full, accepted = set(), set(), collections.Counter()
+        for c in v.cases:
+            if c.reason >= 0:
+                text = v.reasons[c.reason]
+                row = a15_row(text, A15_REJECTIONS)
+                self.assertIsNotNone(row, text)
+                seen.add(row)
+                seen.add(row[0])
+                if row[0] == "META" and row[1] != "count" and meta_over_limit(v.data(c), row[1]):
+                    seen.add(("META length", row[1]))
+                if c.entry == KOPEN_SHORT:
+                    self.assertEqual(row[0], "short read")
+            else:
+                accepted[c.entry] += 1
+            for _, text in v.step2(c):
+                row = a15_row(text, A15_DROPS)
+                self.assertIsNotNone(row, text)                   # step 2's lists hold no step-3 row
+                seen.add(row[0])
+            for _, text in v.full(c):
+                row = a15_row(text, A15_DROPS) or a15_row(text, A15_LATE)
+                self.assertIsNotNone(row, text)
+                seen_full.add(row[0])
+        for row, _ in A15_REJECTIONS + A15_DROPS:
+            self.assertIn(row, seen)
+        for row, _ in A15_LATE:
+            self.assertIn(row, seen_full)
+        for f in META_FIELDS:
+            self.assertIn(("META", f), seen)
+            if f != "count":
+                self.assertIn(("META length", f), seen)
+        for f in GEOM_FIELDS:
+            self.assertIn(("GEOM", f), seen)
+        self.assertGreaterEqual(accepted[KOPEN], 500)
+        self.assertGreaterEqual(accepted[KSCAN], 100)
+        self.assertEqual(accepted[KOPEN_SHORT], 0)
+
+    def test_full_lists_differ_only_by_step_3(self):
+        # The full list is step 2's plus step 3's two rows (A.15's last), in MOVS order.
+        v = reader_vectors()
+        differ = collections.Counter()
+        for c in v.cases:
+            step2, full = v.step2(c), v.full(c)
+            if c.entry != KOPEN or c.reason >= 0:
+                self.assertEqual((step2, full), ([], []))
+                continue
+            late = [d for d in full if a15_row(d[1], A15_LATE)]
+            self.assertEqual([d for d in full if d not in late], step2, c)
+            self.assertEqual([m for m, _ in full], sorted(m for m, _ in full))
+            self.assertFalse({m for m, _ in late} & {m for m, _ in step2})
+            for _, text in late:
+                differ[a15_row(text, A15_LATE)[0]] += 1
+        self.assertEqual(set(differ), {"no spot", "budget"})
+
+    def test_deterministic(self):
+        # Two generations give the same file (xorshift32 from 0x4D50444E, no set or dict order);
+        # CliTest's --check runs another process, with another string hash seed, against the file.
+        again = dp._reader_h(bytes(testpack_result().data))
+        self.assertEqual(again, generated()[READER_H])
+        self.assertNotRegex((REPO / "tools" / "dancepack.py").read_text(encoding="utf-8"), r"(?m)^import random")
+
+    def test_generator_failures_fail_builtin_and_check(self):
+        # D.3: a generator that misses its coverage is an internal error: builtin and --check exit 1.
+        def skip(self):
+            return None
+
+        families = ("truncations", "flips", "structure", "scans")
+        with contextlib.ExitStack() as stack:
+            for name in families:
+                stack.enter_context(mock.patch.object(dp._ReaderVectors, name, skip))
+            with self.assertRaises(dp.DanceError) as cm:
+                dp.generated_files()
+            self.assertIn(READER_H, cm.exception.args[0])
+            self.assertIn("cases accepted", cm.exception.args[0])
+            code, out, _ = run_main(["--check"])
+            self.assertEqual(code, 1)
+            self.assertTrue(any(line.startswith("error: internal: %s: only " % READER_H) for line in
+                                out.splitlines()), out)
+            stack.enter_context(mock.patch.object(dp, "_WHY_TEXTS", dp._WHY_TEXTS + (("Imaginary", "imaginary"),)))
+            code, out, _ = run_main(["builtin"])
+            self.assertEqual(code, 1)
+            self.assertIn("error: internal: %s: no case gives Imaginary: please report it" % READER_H,
+                          out.splitlines())
+        self.assertEqual(generated()[READER_H], (REPO / READER_H).read_text(encoding="utf-8"))
 
 
 class CliTest(DpCase):

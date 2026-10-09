@@ -41,10 +41,11 @@ static const Fold kFold[] = {
     {"K-Pop", "kpop", 0x9076A259u},
     {"90s", "90s", 0xA0CA74ADu},
     {"M\303\272sica Popular Brasileira", "musicapopularbrasileira", 0xC9B7E57Eu},
+    {"AZ Zydeco", "azzydeco", 0x5B6EF8E2u},
     {"\346\227\245\346\234\254", "", 0x00000000u},
     {"  ", "", 0x00000000u},
     {"", "", 0x00000000u},
 };
-static const int kFoldCount = 31;
+static const int kFoldCount = 32;
 
 }  // namespace dancevec

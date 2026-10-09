@@ -107,6 +107,15 @@ jobs:
       - name: Host tests
         run: pio test -e native
 
+      # The dance pack reader and blitter under ASan and UBSan
+      # (docs/DANCE-SPRITES.md, Appendix D.5): Linux g++ only.
+      # ASan in GCC's older runtimes can hang at start-up (DEADLYSIGNAL
+      # forever) on kernels with 32 bits of mmap randomness; 28 is safe.
+      - name: Host tests under ASan
+        run: |
+          sudo sysctl -w vm.mmap_rnd_bits=28
+          pio test -e native_asan -f test_dance_pack -f test_dance_blit
+
       # On a tag, RELEASE=1: the build fails unless HEAD is exactly that tag,
       # the tree is clean and no local flags are set (tools/version.py).
       # RELEASE_TAG makes the version the tag that triggered the run, not
