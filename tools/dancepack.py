@@ -384,7 +384,8 @@ def hop_q16(phi):
 
 
 def sway_q16(beat, phi):
-    """The sway at move beat `beat` (since the run started), phase phi (Q16)."""
+    """The sway at move beat `beat` (since the run started), phase phi (Q16).
+    Either orientation adds it as it is (B.4 step 6): it isn't mirrored."""
     s = 1 if beat % 2 else -1
     return s * (65536 - 2 * ease_q16(4, phi))
 
@@ -546,7 +547,7 @@ def frame_at(geom, boxes, move, pos16, mirrored, spot, e16=65536):
         by = -move.bounce * hop_q16(phi)
         sx = move.sway * sway_q16(b, phi)
     sgn = -1 if mirrored else 1
-    x16 = sgn * (kx + sx)
+    x16 = sgn * kx + sx        # B.3: the sway isn't mirrored, so it runs on across a run's M, M'
     y16 = ky + by
     scale = geom.scale
     if move.flags & FLAG_SNAP:

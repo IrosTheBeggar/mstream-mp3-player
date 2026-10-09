@@ -833,7 +833,7 @@ def ref_frame_at(g, boxes, mv, pos16, mirrored, spot, e16=65536):
     else:
         by = sx = 0
     sgn = -1 if mirrored else 1
-    x16, y16 = sgn * (kx + sx), ky + by
+    x16, y16 = sgn * kx + sx, ky + by        # B.4 step 6: the orientation mirrors the key, not the sway
     if mv.flags & 32:
         X, Y = g.scale * ref_rhu(e16 * x16, 1 << 32), g.scale * ref_rhu(e16 * y16, 1 << 32)
     else:
@@ -1182,19 +1182,19 @@ B4_MOVE = M(0, 2, 0, 0, 0, 1, 0, 4, 2, 1,
             (RStep(0, False, 12, 0, 0, 3, False), RStep(0, True, 12, 3, -2, 2, True)))
 B4_TABLE = {  # tick: (unmirrored from spot -1, mirrored from spot +1)
     0: ((0, 0, 62, 153, (58, 141, 66, 153), (57, 152, 67, 155)),
-        (0, 1, 258, 153, (256, 141, 264, 153), (253, 152, 263, 155))),
+        (0, 1, 254, 153, (252, 141, 260, 153), (249, 152, 259, 155))),
     3: ((0, 0, 65, 149, (61, 137, 69, 149), (64, 152, 66, 155)),
-        (0, 1, 255, 149, (253, 137, 261, 149), (254, 152, 256, 155))),
+        (0, 1, 252, 149, (250, 137, 258, 149), (251, 152, 253, 155))),
     6: ((0, 0, 69, 146, (65, 134, 73, 146), None),
         (0, 1, 252, 146, (250, 134, 258, 146), None)),
     12: ((0, 1, 72, 149, (70, 137, 78, 149), (71, 152, 73, 155)),
-         (0, 0, 248, 149, (244, 137, 252, 149), (247, 152, 249, 155))),
+         (0, 0, 252, 149, (248, 137, 256, 149), (251, 152, 253, 155))),
     15: ((0, 1, 86, 147, (84, 135, 92, 147), None),
-         (0, 0, 234, 147, (230, 135, 238, 147), None)),
+         (0, 0, 237, 147, (233, 135, 241, 147), None)),
     18: ((0, 1, 117, 146, (115, 134, 123, 146), None),
          (0, 0, 204, 146, (200, 134, 208, 146), None)),
     24: ((0, 0, 158, 153, (154, 141, 162, 153), (153, 152, 163, 155)),
-         (0, 1, 162, 153, (160, 141, 168, 153), (157, 152, 167, 155))),
+         (0, 1, 158, 153, (156, 141, 164, 153), (153, 152, 163, 155))),
 }
 # B.4's clamp example.
 CLAMP_GEOM = RGeom(2, 0, 64, 76, 32, 72, 40, 1, 0)
@@ -1775,6 +1775,9 @@ class SharedAlgorithmsTest(DpCase):
         one = M(0, 1, 0, 0, 0, 0, 0, 0, 0, 2, (RStep(0, False, 12, 0, 0, 0, False),))
         geom, boxes = dp_geom(B4_GEOM, B4_BOXES), dp_boxes(B4_BOXES)
         got = [dp.frame_at(geom, boxes, dp_move(one), t * 65536, False, 0).root_x for t in (0, 6, 12, 18, 24)]
+        self.assertEqual(got, [156, 160, 164, 160, 156])
+        # B.4 step 6 mirrors the key, not the sway: with no key, mirrored is the same
+        got = [dp.frame_at(geom, boxes, dp_move(one), t * 65536, True, 0).root_x for t in (0, 6, 12, 18, 24)]
         self.assertEqual(got, [156, 160, 164, 160, 156])
         self.assertEqual(dp.sway_q16(1, 0), 65536)
         bouncy = one._replace(bounce=3)
@@ -4850,6 +4853,33 @@ class TestDancerTest(DpCase):
         self.assertEqual(100 * 33 * 65536 // 10, 330 * 65536)
         self.assertEqual((self.p.move("pulse").beats, self.p.move("pulse").sway), (1, 1))
         self.assertEqual(self.p.geom.shadow_w % 2, 1)
+
+    def test_sway_runs_on_across_a_mirror(self):
+        # B.3: the sway isn't mirrored, so step-touch (2 beats, sway 2, mirror,
+        # scale 4), played M, M' (3.4 step 6), moves at a play boundary only by
+        # its keys: the held 1,0 (-1,0 mirrored) drops to the first key 0,0.
+        pk = self.r.pack
+        mv = next(m for m in pk.moves if m.name == "step-touch")
+        self.assertEqual((mv.beats, mv.sway, mv.flags & 1, pk.geom.scale), (2, 2, 1, 4))
+        self.assertEqual([(s.dx, s.dy, s.ease) for s in mv.steps], [(0, 0, 1), (-1, 0, 3), (0, 0, 2), (1, 0, 0)])
+
+        def x(u100, mirrored):        # rootX at u = u100 / 100 move beats into the run, from the centre spot
+            return dp.frame_at(pk.geom, pk.boxes, mv, u100 * 786432 // 100, mirrored, 0).root_x
+        # u = 1.99: b = 1, phi = 64880, inout 65516, so 2 * sway = -130992 (Q16); the key is +-65536.
+        # Unmirrored: rhu(4 * (65536 - 130992) / 65536) = rhu(-3.995) = -4; mirrored: rhu(-11.995) = -12.
+        # u = 2.00: b = 2, phi 0, so 2 * sway = -131072 and the key 0: -8 in either orientation.
+        self.assertEqual((x(199, False), x(200, False)), (156, 152))      # M, M: the key's 4 px
+        self.assertEqual((x(199, False), x(200, True)), (156, 152))       # M, M': the same 4 px
+        self.assertEqual((x(199, True), x(200, False)), (148, 152))       # M', M: the mirrored key's 4 px
+        # Every boundary of a 4-play run, either first orientation: the alternating
+        # run moves exactly as the run that keeps the orientation (its first key is
+        # 0,0, so only the key's own change is left), never by the sway's 2 * 2 * 4.
+        for first in (False, True):
+            for play in (1, 2, 3):
+                was = first != (play % 2 == 0)
+                end, start = 200 * play - 1, 200 * play
+                self.assertEqual(x(start, not was) - x(end, was), x(start, was) - x(end, was), (first, play))
+                self.assertEqual(abs(x(start, not was) - x(end, was)), 4, (first, play))
 
     def test_every_warning_and_note(self):
         # C.10 and its note: the expected warnings and notes, and no others (the art keeps them away).

@@ -249,6 +249,8 @@ a 3-tick floor keeps both triplets and safety.
 - **Sugar.** `bounce = n` adds an engine hop that lands on every move
   beat, on the crab's curve: 0.12 beat on the ground, then a parabola.
   `sway = n` adds a side-to-side motion with its extremes on the beats.
+  Mirroring flips the keys but not the sway, so it swings on smoothly
+  when a mirrored play follows.
 - **Rounding.** All motion is scaled to screen px and rounded half up
   (`crab::rnd`). `snap = yes` rounds to the native grid instead.
 
@@ -1041,7 +1043,9 @@ Its geometry is a portable struct in `lib/core/DanceStage.h`,
 ### 6.4 Offsets and travel
 
 - Root x = spotX + travel(u) + round(scale·e·(eased offset + sway)), with
-  the offset and sway negated when mirrored.
+  the offset negated when mirrored. The sway isn't: it follows the move
+  beats from the run's start, so it swings on through a run's mirrored
+  plays (B.3).
 - travel(u) eases from the start spot to the end spot over the `go` steps
   (the whole move by default), with `travelEase`.
 - Root y is computed the same way, from the ground, with the bounce's hop
@@ -1600,8 +1604,9 @@ are integer-deterministic and need no pip install.
     above 0.95 after 2 s; the energy mapping;
   - **switching** at the next dance beat; the freeze fallback chain.
 - **`test_drawn_character`:** step lookup at exact tick edges (integer);
-  Q16 ease values at 0, ¼, ½, ¾ and 1; mirror symmetry; rounding half up;
-  the bounds holding every pixel; `stageX`.
+  Q16 ease values at 0, ¼, ½, ¾ and 1; mirror symmetry; the sway swinging
+  on through a mirror flip; rounding half up; the bounds holding every
+  pixel; `stageX`.
 - **`test_dance_budget`:** the shared vectors; the peak never under any
   single frame's own box.
 - Appendix E.4 makes these three lists concrete.
@@ -1761,14 +1766,16 @@ leaves its code out until step 4 calls it), so its check is E.6's build.
 | 11 | Dance sprites: the contributor kit and docs | `new`, `preview --watch`, the template and guide, DANCERS.md, the doc updates | the template builds and previews; then a dry run in which the user builds a dancer alone and loads it from the card (it doesn't block other steps) |
 | 12 | Dance sprites: review fixes | | |
 
-**A contract change scheduled by step 3's review** (before step 7's
-visual review of the stick set, with its own vectors): B.3's sway is
-negated with the orientation (B.4 step 6), so a mirrorable move with sway
-whose plays alternate jumps by up to 2·sway·scale px at each play
-boundary (the test dancer's step-touch: 12 px). Leave the sway unnegated
-(it is symmetric: mirroring only shifts its phase) or flip its parity
-when mirrored, in B.3/B.4, dancepack.py's frame_at and the generated
-vectors together.
+**The sway isn't mirrored** (a contract change from step 3's review,
+made before step 7's visual review of the stick set). The engine sway
+depends only on the move beat (its parity, counted from the run's start)
+and the phase within it, so it is continuous across plays whatever their
+orientation: a mirrorable move with sway whose plays alternate moves at a
+play boundary only by its keys. The keys keep their mirroring, and the
+bounce is vertical (B.3, B.4 step 6). B.3 and B.4, dancepack.py's
+frame_at, DrawnCharacter's placeSteps and BudgetVectors.h changed
+together: only step-touch's mirrored budget cases moved (its median
+6,156 → 6,270 px, still green), and ReaderVectors.h is unchanged.
 
 **Why this order:**
 
@@ -2545,13 +2552,15 @@ that lands on the next beat):
 
 - sway(b, φ) = s·(65536 − 2·inout(φ)), with s = −1 when b is even and +1
   when b is odd. So it is −1 on even beats, +1 on odd beats, and a
-  smoothstep between: continuous across beats, and across plays while the
-  orientation stays. B.4 step 6 negates it with the orientation, so in a
-  mirrorable move whose plays alternate (3.4 step 6) the sway reverses at
-  each play boundary: the root jumps by up to 2·sway·scale px on that
-  beat (the test dancer's step-touch: 12 px, its key's change included).
-  Section 11 schedules the fix as a contract change.
-- `sway = n` adds n·sway(b, φ) to the key's x (Q16 native px).
+  smoothstep between: continuous across beats, and across plays.
+- **The sway isn't mirrored.** It depends only on φ and b's parity,
+  counted from the run's start, never on the orientation. So in a
+  mirrorable move whose plays alternate (3.4 step 6) it swings on through
+  each play boundary, and the root moves there only by the keys' own
+  change. The keys keep their mirroring (B.4 step 6 negates them), and
+  the bounce is vertical.
+- `sway = n` adds n·sway(b, φ) to the x offset (Q16 native px) after the
+  key is oriented (B.4 step 6).
 
 | φ | 0 | 7863 | 7864 | 7865 | 7866 | 16384 | 32768 | 36700 | 49152 | 65535 |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -2561,7 +2570,18 @@ sway(0, 0) = −65536, sway(0, 32768) = 0, sway(0, 65535) = 65534,
 sway(1, 0) = 65536. So a 1-beat move with sway swings on through its
 plays: at scale 2 with sway 2 from the centre spot, rootX is 156, 160,
 164, 160, 156 at ticks 0, 6, 12, 18 and 24 (tick 12, the second play's
-start, has b = 1, the other extreme from tick 0).
+start, has b = 1, the other extreme from tick 0). Its key is 0,0, so
+mirrored it is the same.
+
+**At a mirror flip:** the test dancer's step-touch (C.10: 2 beats, sway
+2, the mirror flag, scale 4; keys 0,0, −1,0, 0,0 and 1,0, the last held)
+from the centre spot. At u = 1.99 (pos16 1,564,999: b = 1, φ = 64880,
+inout 65516, so sx = 2·sway(1, 64880) = −130992) the held key gives kx =
+65536: x16 = 65536 − 130992 = −65456 and rootX 156 unmirrored, x16 =
+−65536 − 130992 = −196528 and rootX 148 mirrored. At u = 2.00 (b = 2,
+φ = 0, the key 0,0, sx = −131072) rootX is 152 in either orientation.
+So M then M′ moves 4 px left at the boundary, exactly as M then M does
+(the key's 1 native px at scale 4), and M′ then M moves 4 px right.
 
 ### B.4 frameAt
 
@@ -2597,8 +2617,8 @@ start, has b = 1, the other extreme from tick 0).
 5. **Bounce and sway** (beat moves; both 0 for idle moves). b = pos16 //
    786432 and φ = (pos16 mod 786432) // 12 (786432 = 12·65536). by =
    −bounce·hop(φ); sx = sway·sway(b, φ).
-6. **Orientation.** sgn = −1 when mirrored, else +1. x16 = sgn·(kx + sx);
-   y16 = ky + by.
+6. **Orientation.** sgn = −1 when mirrored, else +1. x16 = sgn·kx + sx;
+   y16 = ky + by. The orientation mirrors the key, never the sway (B.3).
 7. **To screen px.** X = rhu(scale·e16·x16, 2^32) and Y = rhu(scale·e16·
    y16, 2^32). With `snap`: X = scale·rhu(e16·x16, 2^32), Y likewise.
 8. **Travel** (beat moves with travel ≠ 0; otherwise 0). t = travel·sgn;
@@ -2635,19 +2655,20 @@ the root lands at tick 24.
 
 | Tick (pos16 / 65536) | Unmirrored from spot −1: frame/mirror, root, box, shadow | Mirrored from spot +1 |
 |---|---|---|
-| 0 | 0/0, 62,153, 58,141-66,153, 57,152-67,155 | 0/1, 258,153, 256,141-264,153, 253,152-263,155 |
-| 3 | 0/0, 65,149, 61,137-69,149, 64,152-66,155 | 0/1, 255,149, 253,137-261,149, 254,152-256,155 |
+| 0 | 0/0, 62,153, 58,141-66,153, 57,152-67,155 | 0/1, 254,153, 252,141-260,153, 249,152-259,155 |
+| 3 | 0/0, 65,149, 61,137-69,149, 64,152-66,155 | 0/1, 252,149, 250,137-258,149, 251,152-253,155 |
 | 6 | 0/0, 69,146, 65,134-73,146, none | 0/1, 252,146, 250,134-258,146, none |
-| 12 | 0/1, 72,149, 70,137-78,149, 71,152-73,155 | 0/0, 248,149, 244,137-252,149, 247,152-249,155 |
-| 15 | 0/1, 86,147, 84,135-92,147, none | 0/0, 234,147, 230,135-238,147, none |
+| 12 | 0/1, 72,149, 70,137-78,149, 71,152-73,155 | 0/0, 252,149, 248,137-256,149, 251,152-253,155 |
+| 15 | 0/1, 86,147, 84,135-92,147, none | 0/0, 237,147, 233,135-241,147, none |
 | 18 | 0/1, 117,146, 115,134-123,146, none | 0/0, 204,146, 200,134-208,146, none |
-| 24 | 0/0, 158,153, 154,141-162,153, 153,152-163,155 | 0/1, 162,153, 160,141-168,153, 157,152-167,155 |
+| 24 | 0/0, 158,153, 154,141-162,153, 153,152-163,155 | 0/1, 158,153, 156,141-164,153, 153,152-163,155 |
 
 At tick 3, for instance: f = 16384, out gives 28672, so kx = 86016 and
 ky = −57344; φ = 16384, hop 33003, so by = −66006; inout(16384) = 10240,
 so sx = −45056. X = rhu(2·65536·40960, 2^32) = 1 and Y =
-rhu(2·65536·(−123350), 2^32) = −4. At tick 24 the play is over: the
-travel is complete (96 px) and the step wraps to the first. At e16 =
+rhu(2·65536·(−123350), 2^32) = −4. Mirrored, the sway keeps its sign:
+x16 = −86016 − 45056 = −131072, so X = −4. At tick 24 the play is over:
+the travel is complete (96 px) and the step wraps to the first. At e16 =
 47186 (0.72) and tick 15, unmirrored: root 84,149, box 82,137-90,149,
 shadow 83,152-85,155.
 
@@ -3751,7 +3772,7 @@ wherever transparent, 4 columns by 11 rows of cells (96×352).
 |---|---|---|
 | `bounce` | `row = 1`, `beats = 2`, `bpm = any`, `bounce = 3`, `freeze = yes` | row, the even split, bounce, freeze, a duplicate cell |
 | `pulse` | `frames = A1 B1 D1 B1`, `beats = 1`, `bpm = any`, `timing = 1/4 0.25 1/4 0.26`, `offset = 0,0 0,-1 0,-2 0,-1`, `ease = out`, `snap = yes`, `sway = 1` | fractions, decimals, a snap warning, one ease for all, snap, a 1-beat sway (B.3's b since the run started) |
-| `step-touch` | `frames = A2 B2 A2 B2`, `beats = 2`, `bpm = any`, `mirror = yes`, `sway = 2`, `from = stand`, `to = stand`, `offset = 0,0 -1,0 0,0 1,0`, `ease = linear out in hold` | a mirror-image cell, sway, an ease list |
+| `step-touch` | `frames = A2 B2 A2 B2`, `beats = 2`, `bpm = any`, `mirror = yes`, `sway = 2`, `from = stand`, `to = stand`, `offset = 0,0 -1,0 0,0 1,0`, `ease = linear out in hold` | a mirror-image cell, sway (B.3's mirror flip), an ease list |
 | `point` | `frames = A3 B3 C3 B3`, `beats = 4`, `timing = 1/2 1/2 1 2`, `offset = 0,0 2,-2 4,-3 2,-2`, `ease = inout`, `bpm = 90-130`, `mirror = yes`, `place = start`, `weight = 0.3`, `repeat = 2`, `from = stand`, `to = left` | section 4.5's example; a pose key with a twin |
 | `slow` | `row = 4`, `beats = 4`, `bpm = 36-60`, `weight = 2.5` | a blank frame, half time only |
 | `fast` | `frames = A5 B5 C5`, `beats = 1`, `timing = 1/4 1/2 1/4`, `bpm = 150-180`, `place = end`, `from = low`, `to = stand` | double time, place end |
@@ -4883,10 +4904,9 @@ and the headers steps 1 and 2 generated (TestPack.h, EligibilityVectors.h,
 FoldVectors.h, BudgetVectors.h, ReaderVectors.h) are the vectors E.4 pins.
 The Choreographer has no Python mirror: E.2 defines it and E.4's tests pin
 it. Where E and the sections above differ, E wins. Of A-D it changes
-nothing but three additions from step 3's review: D.1's `Pack::steps`,
-D.5's `-fsanitize=float-cast-overflow`, and B.3's note on the sway at a
-mirror flip (section 11 schedules its fix). It implements D.2's two
-deferred rows.
+nothing but three things from step 3's review: D.1's `Pack::steps`,
+D.5's `-fsanitize=float-cast-overflow`, and B.3's sway, which no longer
+mirrors (section 11). It implements D.2's two deferred rows.
 
 ### E.1 Files and the public API
 
@@ -5059,7 +5079,7 @@ namespace dance {
 // B.2: ease code 0-4 at f (0..65536). A code above 4 acts as hold.
 int32_t ease16(int ease, int32_t f);
 // B.3: the hop at phase phi (0..65535) of a move beat; the sway at move beat b (>= 0,
-// counted since the run started) and phase phi.
+// counted since the run started) and phase phi, the same in either orientation.
 int32_t hop16(int32_t phi);
 int32_t sway16(int64_t b, int32_t phi);
 // B.4 step 8 (section 8's stageX): the stage x of a travel from spot `from` to spot `to`
@@ -6219,7 +6239,7 @@ items below that use them were wrong without them):
    hold-travel variant's rootX 62, 72, 63, 158 and 165; tick 3's Y of −4
    (B.0's floor); e16 = 47186 at tick 15; and the clamp example, both
    orientations. B.3's 1-beat sway: rootX 156, 160, 164, 160, 156 at ticks
-   0, 6, 12, 18 and 24.
+   0, 6, 12, 18 and 24, in both orientations.
 3. **Step lookup** at exact tick edges: pos16 = s_i·65536 − 1 shows step
    i − 1 and s_i·65536 step i, for every step of every fixture move; the
    wrap at L·65536 back to step 0.
@@ -6269,6 +6289,12 @@ items below that use them were wrong without them):
     rest frame with bit 15 (the engine moves drawn mirrored); and
     readMoveSteps equal to step-by-step reads, its starts and travelling
     sums included.
+13. **Added with the sway change** (section 11): B.3's mirror flip on the
+    fixture's step-touch, through the free frameAt and the view: rootX
+    156 at u 1.99 and 152 at 2.00 unmirrored, 148 at 1.99 and 152 at 2.00
+    mirrored; and at each boundary of a 4-play run, from either first
+    orientation, M then M′ moves exactly as M then M (4 px, the key's
+    change).
 
 #### test_dance_budget
 

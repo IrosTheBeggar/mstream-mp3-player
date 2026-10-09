@@ -206,19 +206,19 @@ void test_b4_worked_example() {
   const dance::Pack& p = op.pack;
   const B4Row rows[] = {
       {0, 0, 0, 62, 153, rect(58, 141, 66, 153), rect(57, 152, 67, 155),
-       0, 1, 258, 153, rect(256, 141, 264, 153), rect(253, 152, 263, 155)},
+       0, 1, 254, 153, rect(252, 141, 260, 153), rect(249, 152, 259, 155)},
       {3, 0, 0, 65, 149, rect(61, 137, 69, 149), rect(64, 152, 66, 155),
-       0, 1, 255, 149, rect(253, 137, 261, 149), rect(254, 152, 256, 155)},
+       0, 1, 252, 149, rect(250, 137, 258, 149), rect(251, 152, 253, 155)},
       {6, 0, 0, 69, 146, rect(65, 134, 73, 146), kNone,
        0, 1, 252, 146, rect(250, 134, 258, 146), kNone},
       {12, 0, 1, 72, 149, rect(70, 137, 78, 149), rect(71, 152, 73, 155),
-       0, 0, 248, 149, rect(244, 137, 252, 149), rect(247, 152, 249, 155)},
+       0, 0, 252, 149, rect(248, 137, 256, 149), rect(251, 152, 253, 155)},
       {15, 0, 1, 86, 147, rect(84, 135, 92, 147), kNone,
-       0, 0, 234, 147, rect(230, 135, 238, 147), kNone},
+       0, 0, 237, 147, rect(233, 135, 241, 147), kNone},
       {18, 0, 1, 117, 146, rect(115, 134, 123, 146), kNone,
        0, 0, 204, 146, rect(200, 134, 208, 146), kNone},
       {24, 0, 0, 158, 153, rect(154, 141, 162, 153), rect(153, 152, 163, 155),
-       0, 1, 162, 153, rect(160, 141, 168, 153), rect(157, 152, 167, 155)},
+       0, 1, 158, 153, rect(156, 141, 164, 153), rect(153, 152, 163, 155)},
   };
   for (const B4Row& r : rows) {
     for (int side = 0; side < 2; ++side) {
@@ -251,13 +251,16 @@ void test_b4_worked_example() {
   TEST_ASSERT_EQUAL_INT_MESSAGE(149, e72.rootY, g_ctx);
   expectRect(rect(82, 137, 90, 149), e72.box, "box");
   expectRect(rect(83, 152, 85, 155), e72.shadow, "shadow");
-  // B.3's 1-beat sway: at scale 2 with sway 2 from the centre spot.
+  // B.3's 1-beat sway: at scale 2 with sway 2 from the centre spot. B.4
+  // step 6 mirrors the key, not the sway, so with no key mirrored is the same.
   const int swayTicks[5] = {0, 6, 12, 18, 24};
   const int swayX[5] = {156, 160, 164, 160, 156};
   for (int i = 0; i < 5; ++i) {
-    ctx("B.3's sway at tick %d", swayTicks[i]);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(swayX[i], dance::frameAt(p, 2, int64_t(swayTicks[i]) * 65536, false, 0).rootX,
-                                  g_ctx);
+    for (int o = 0; o < 2; ++o) {
+      ctx("B.3's sway at tick %d, %s", swayTicks[i], o ? "mirrored" : "unmirrored");
+      TEST_ASSERT_EQUAL_INT_MESSAGE(swayX[i], dance::frameAt(p, 2, int64_t(swayTicks[i]) * 65536, o == 1, 0).rootX,
+                                    g_ctx);
+    }
   }
 }
 
@@ -1080,6 +1083,63 @@ void test_move_steps_read_once() {
   }
 }
 
+// ===========================================================================
+// 13. B.3's sway at a mirror flip: the sway isn't mirrored (B.4 step 6), so
+//     a mirrorable move with sway whose plays alternate (3.4 step 6) moves at
+//     a play boundary only by its keys, as the run that keeps one
+//     orientation does.
+
+void test_sway_runs_on_across_a_mirror() {
+  using namespace beatscript;
+  CardDancer& d = fixture();
+  const dance::Pack& p = d.pack;
+  const dance::MoveRecord r = p.moveRecord(kStepTouch);
+  TEST_ASSERT_EQUAL_STRING("step-touch", p.moveName(kStepTouch));
+  TEST_ASSERT_EQUAL_INT(2, r.beats);
+  TEST_ASSERT_EQUAL_INT(2, r.sway);
+  TEST_ASSERT_TRUE((r.flags & dance::kMirror) != 0);
+  TEST_ASSERT_EQUAL_INT(4, p.geom().scale);
+  // Its keys (C.10): 0,0 linear, -1,0 out, 0,0 in, 1,0 hold.
+  const int dx[4] = {0, -1, 0, 1};
+  for (int i = 0; i < 4; ++i) TEST_ASSERT_EQUAL_INT(dx[i], p.step(kStepTouch, i).dx);
+  const int view = d.viewIndex(kStepTouch);
+  TEST_ASSERT_TRUE(view >= 0);
+  // rootX at u = u100 / 100 move beats into the run, from the centre spot,
+  // with the cue's pos16 = floor(u * 786432); the view agrees with the free
+  // frameAt.
+  auto x = [&](int u100, bool mirrored) {
+    const int64_t pos16 = int64_t(u100) * 786432 / 100;
+    const int got = dance::frameAt(p, kStepTouch, pos16, mirrored, 0).rootX;
+    char msg[80];
+    std::snprintf(msg, sizeof msg, "the view, at u %d/100 %s", u100, mirrored ? "mirrored" : "unmirrored");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(got, d.character().frameAt(view, pos16, mirrored, 0).rootX, msg);
+    return got;
+  };
+  // u 1.99: b 1, phi 64880, inout 65516, so 2 * sway = -130992 (Q16), and
+  // the held key is +-65536: rhu(4 * -65456 / 65536) = -4 unmirrored,
+  // rhu(4 * -196528 / 65536) = -12 mirrored. u 2.00: b 2, phi 0, the key
+  // 0,0 and 2 * sway = -131072: -8 in either orientation.
+  ctx("M, M: the held key 1,0 drops to 0,0, 4 px");
+  TEST_ASSERT_EQUAL_INT_MESSAGE(156, x(199, false), g_ctx);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(152, x(200, false), g_ctx);
+  ctx("M, M': the same 4 px (12 px if the sway were mirrored)");
+  TEST_ASSERT_EQUAL_INT_MESSAGE(152, x(200, true), g_ctx);
+  ctx("M', M: the mirrored key -1,0 drops to 0,0, 4 px the other way");
+  TEST_ASSERT_EQUAL_INT_MESSAGE(148, x(199, true), g_ctx);
+  // Every boundary of a 4-play run, either first orientation: the
+  // alternating run moves exactly as the run that keeps the orientation.
+  for (int first = 0; first < 2; ++first) {
+    for (int play = 1; play <= 3; ++play) {
+      const bool was = (first == 1) != (play % 2 == 0);  // the ending play's orientation
+      const int end = 200 * play - 1, start = 200 * play;
+      const int flip = x(start, !was) - x(end, was), keep = x(start, was) - x(end, was);
+      ctx("first %s, the boundary after play %d", first ? "mirrored" : "unmirrored", play);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(keep, flip, g_ctx);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(was ? 4 : -4, flip, g_ctx);
+    }
+  }
+}
+
 void test_size() {
   char msg[80];
   std::snprintf(msg, sizeof msg, "sizeof(DrawnCharacter) = %u", static_cast<unsigned>(sizeof(dance::DrawnCharacter)));
@@ -1106,6 +1166,7 @@ int main(int, char**) {
   RUN_TEST(test_edge_clamps);
   RUN_TEST(test_view_beyond_the_fixture);
   RUN_TEST(test_move_steps_read_once);
+  RUN_TEST(test_sway_runs_on_across_a_mirror);
   RUN_TEST(test_size);
   return UNITY_END();
 }

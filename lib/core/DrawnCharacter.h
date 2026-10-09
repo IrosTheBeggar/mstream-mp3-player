@@ -22,9 +22,10 @@
 //     an orientation, from a start spot, at an energy e16 (39322-65536,
 //     section 3.6): the step showing and its frame, whether that frame is
 //     drawn mirrored, the root (spot + travel + the eased key, sway and hop,
-//     scaled by the energy and rounded half up), the frame's box clamped
-//     onto the stage, the shadow (2 px narrower per px of hop) and the
-//     character rect, their union (B.5).
+//     scaled by the energy and rounded half up; the orientation mirrors the
+//     key, not the sway), the frame's box clamped onto the stage, the shadow
+//     (2 px narrower per px of hop) and the character rect, their union
+//     (B.5).
 //   - extent, fits and startSpotMask (B.11): a bound on the columns a move
 //     can draw relative to its root, whether it fits on the stage at a spot,
 //     and the spots a travel move can start from (its destination exists,
@@ -56,7 +57,7 @@ namespace dance {
 // B.2: ease code 0-4 at f (0..65536). A code above 4 acts as hold.
 int32_t ease16(int ease, int32_t f);
 // B.3: the hop at phase phi (0..65535) of a move beat; the sway at move beat b (>= 0,
-// counted since the run started) and phase phi.
+// counted since the run started) and phase phi, the same in either orientation.
 int32_t hop16(int32_t phi);
 int32_t sway16(int64_t b, int32_t phi);
 // B.4 step 8 (section 8's stageX): the stage x of a travel from spot `from` to spot `to`

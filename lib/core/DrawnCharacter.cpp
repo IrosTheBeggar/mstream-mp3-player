@@ -200,9 +200,10 @@ Placement placeSteps(const Pack& pack, const MoveSteps& m, int64_t pos16, bool m
     sx = static_cast<int64_t>(m.sway) * sway16(b, phi);
   }
 
-  // 6-7. The orientation, then screen px, rounded half up.
+  // 6-7. The orientation (it mirrors the key, never the sway: B.3), then
+  // screen px, rounded half up.
   const int64_t sgn = mirrored ? -1 : 1;
-  const int64_t x16 = sgn * (kx + sx);
+  const int64_t x16 = sgn * kx + sx;
   const int64_t y16 = ky + by;
   const int64_t scale = g.scale;
   int64_t X, Y;
