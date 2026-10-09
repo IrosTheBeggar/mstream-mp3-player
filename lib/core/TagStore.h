@@ -90,10 +90,13 @@
 // directory and the header, a sync, and the rename: remove tags.bin (or
 // rename it to a twin), rename tags.tmp, remove the journals. Every input is
 // read through a small buffer and nothing is read whole: the work memory is
-// fixed by Config (about 60 KB at the defaults: workBytes()), whatever the
-// files hold. A journal of more than Config::maxChunks chunks (this firmware
-// never writes one: append() refuses and asks for a compaction) has the rest
-// dropped; their files stay Pending and the scan reads them again.
+// fixed by Config (about 115 KB at the defaults: workBytes()), whatever the
+// files hold. Each section's buffer ends on the file's 4 KB boundaries
+// (kWriteAlign below), so the card is written whole sectors at a time
+// (METADATA.md 3.3.7). A journal of more than Config::maxChunks chunks
+// (this firmware never writes one: append() refuses and asks for a
+// compaction) has the rest dropped; their files stay Pending and the scan
+// reads them again.
 //
 // Recovery (open(), at boot, before anything writes): the cut-rename rule of
 // 2.12.6 for tags.bin and tags.tmp (settle()), the twins collected, a
@@ -126,6 +129,26 @@ public:
   virtual bool sync() = 0;                  // f_sync: the data and the directory entry on the card
   virtual bool truncate(uint32_t size) = 0;  // f_truncate at `size` (at most the file's size)
 };
+
+// How a write reaches the card (the 2026-10-09 device run, METADATA.md
+// 3.3.7): FatFs writes the whole sectors of a write from a sector's start
+// straight from the caller's bytes, as many at once as are contiguous; a
+// partial sector goes through the FIL's one-sector buffer, the sector read
+// first when it is inside the file, and written alone when the write moves
+// on. So the store's writers end their buffers on these boundaries of the
+// file (TagStore's section cursors), and the firmware's File (CardFat)
+// cuts a long write into pieces of at most kWriteAlign that end on them
+// (writePiece()): a 4 KB piece from a 4 KB boundary is one 8-sector card
+// write inside a cluster of 4 KB or more, where an unaligned one was a
+// single-sector write at each end, each read first.
+constexpr uint32_t kSectorBytes = 512;
+constexpr uint32_t kWriteAlign = 4096;
+// The first piece of a write of `left` bytes at `offset`: up to the next
+// kWriteAlign boundary of the file, at most `left`.
+inline uint32_t writePiece(uint32_t offset, uint32_t left) {
+  const uint32_t edge = kWriteAlign - offset % kWriteAlign;
+  return left < edge ? left : edge;
+}
 
 class Fs {
 public:
@@ -562,9 +585,12 @@ public:
     const char* producer = "";      // D's producer string ("mstream-player 0.8.0")
     uint16_t parserVersion = 0;     // the scan's parser (N6)
     uint64_t cardId = 0;            // D's cardId (the root's, when known)
-    uint32_t runBuffer = 512;       // each journal run's read buffer
-    uint32_t deviceBuffer = 4096;   // D's walker's buffers (its four streams)
-    uint32_t writeBuffer = 512;     // each output section's buffer
+    // The buffers (2026-10-09: 512, 4096 and 512 made every card access of
+    // a compaction a single sector: 94 s a compaction at 20k on the device;
+    // METADATA.md 3.3.7). The work memory is about 115 KB at these.
+    uint32_t runBuffer = 1024;      // each journal run's read buffer
+    uint32_t deviceBuffer = 8192;   // D's walker's buffers (its four streams)
+    uint32_t writeBuffer = 4096;    // each output section's buffer (whole 4 KB pieces from a 4 KB boundary)
     uint32_t maxChunks = 32;        // chunks a compaction merges (append() refuses more)
     uint32_t compactBytes = 512u * 1024u;  // the journal's size that asks for a compaction
   };

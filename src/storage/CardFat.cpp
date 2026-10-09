@@ -17,7 +17,7 @@ namespace {
 
 uint8_t s_drive = 0xFF;
 
-constexpr uint32_t kPiece = 4096;  // a card access at most per FatFs call (the decoder shares the volume's lock)
+constexpr uint32_t kPiece = 4096;  // a card access at most per FatFs read (the decoder shares the volume's lock)
 
 }  // namespace
 
@@ -64,12 +64,21 @@ bool FatFile::write(uint32_t offset, const void* data, uint32_t n) {
   // every byte they skip).
   if (static_cast<uint32_t>(f_tell(&fil)) != offset && f_lseek(&fil, offset) != FR_OK) return false;
   if (static_cast<uint32_t>(f_tell(&fil)) != offset) return false;  // the card is full
+  // Pieces of at most 4 KB that end on the file's 4 KB boundaries
+  // (tagstore::writePiece()): after the first, each is whole sectors from a
+  // sector's start, which FatFs writes straight, 8 at a time. Cut at 4 KB
+  // from wherever the write began, every piece of library.idx's save (its
+  // header first, then 4 KB blocks) started mid-sector: a single-sector
+  // write at each end, read first (857 card writes, 421 of one sector, for
+  // a 20k index; aligned 424 and 25: test_card_io).
   const auto* p = static_cast<const uint8_t*>(data);
+  uint32_t at = offset;
   while (n) {
-    const UINT want = n < kPiece ? n : kPiece;
+    const UINT want = tagstore::writePiece(at, n);
     UINT put = 0;
     if (f_write(&fil, p, want, &put) != FR_OK || put != want) return false;
     p += put;
+    at += put;
     n -= put;
     if (n) taskYIELD();
   }

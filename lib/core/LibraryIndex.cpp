@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "CardContract.h"
+#include "IdSort.h"
 #include "NameKey.h"
 #include "TextFold.h"
 #include "TrackName.h"
@@ -1215,10 +1216,14 @@ bool LibraryIndex::buildViews() {
   }
   auto artistKey = [&](uint32_t a) { return at(artistSortKeys_[a]); };
   auto albumKey = [&](uint32_t b) { return at(albumSortKeys_[b]); };
+  // The sorts are idsort's, not std::sort: the ids arrive in the records'
+  // byte order and these compare by textfold's, which drove std::sort's
+  // recursion to its depth limit on the card worker's stack (IdSort.h).
+  // Each comparator ends with the ids' order: the result is std::sort's.
 
   // Artists A-Z, "The Lantern Choir" under L (textfold::sortName()).
   for (uint32_t i = 0; i < nA; ++i) artistsAZ_[i] = i;
-  std::sort(artistsAZ_, artistsAZ_ + nA, [&](uint32_t a, uint32_t b) {
+  idsort::sort(artistsAZ_, artistsAZ_ + nA, [&](uint32_t a, uint32_t b) {
     const int c = textfold::compareSorted(artistKey(a), artistKey(b));
     return c != 0 ? c < 0 : a < b;
   });
@@ -1226,13 +1231,13 @@ bool LibraryIndex::buildViews() {
 
   // Albums A-Z (ties: by artist), and by artist, newest first.
   for (uint32_t i = 0; i < nB; ++i) albumsAZ_[i] = albumsByArtist_[i] = i;
-  std::sort(albumsAZ_, albumsAZ_ + nB, [&](uint32_t a, uint32_t b) {
+  idsort::sort(albumsAZ_, albumsAZ_ + nB, [&](uint32_t a, uint32_t b) {
     const int c = textfold::compareSorted(albumKey(a), albumKey(b));
     if (c != 0) return c < 0;
     const uint32_t ra = artistRank[albums[a].artist], rb = artistRank[albums[b].artist];
     return ra != rb ? ra < rb : a < b;
   });
-  std::sort(albumsByArtist_, albumsByArtist_ + nB, [&](uint32_t a, uint32_t b) {
+  idsort::sort(albumsByArtist_, albumsByArtist_ + nB, [&](uint32_t a, uint32_t b) {
     const uint32_t ra = artistRank[albums[a].artist], rb = artistRank[albums[b].artist];
     if (ra != rb) return ra < rb;
     const uint16_t ya = albums[a].year, yb = albums[b].year;
@@ -1265,7 +1270,7 @@ bool LibraryIndex::buildViews() {
     if (folders[i].treeCount) folderChildren_[nSub++] = i;
   }
   for (uint32_t i = nSub; i < nF; ++i) folderChildren_[i] = 0;  // unused: saved as zeros
-  std::sort(folderChildren_, folderChildren_ + nSub, [&](uint32_t a, uint32_t b) {
+  idsort::sort(folderChildren_, folderChildren_ + nSub, [&](uint32_t a, uint32_t b) {
     if (folders[a].parent != folders[b].parent) return folders[a].parent < folders[b].parent;
     const int c = textfold::compare(str(folders[a].name), str(folders[b].name));
     return c != 0 ? c < 0 : a < b;
@@ -1293,7 +1298,7 @@ bool LibraryIndex::buildViews() {
   // files A-Z. So a folder's own files (filesIn) and its whole tree
   // (treeTracks) are runs that start at the same place.
   for (uint32_t i = 0; i < nT; ++i) folderTree_[i] = i;
-  std::sort(folderTree_, folderTree_ + nT, [&](uint32_t a, uint32_t b) {
+  idsort::sort(folderTree_, folderTree_ + nT, [&](uint32_t a, uint32_t b) {
     const uint32_t ra = folderRank[tracks[a].folder], rb = folderRank[tracks[b].folder];
     if (ra != rb) return ra < rb;
     const int c = textfold::compare(str(tracks[a].name), str(tracks[b].name));
@@ -1328,7 +1333,7 @@ bool LibraryIndex::buildViews() {
   // their own subfolders stay apart), then the disc a name gives ("2-03
   // Title"), number (none first), then name, as before.
   for (uint32_t i = 0; i < nT; ++i) tracksByAlbum_[i] = i;
-  std::sort(tracksByAlbum_, tracksByAlbum_ + nT, [&](uint32_t a, uint32_t b) {
+  idsort::sort(tracksByAlbum_, tracksByAlbum_ + nT, [&](uint32_t a, uint32_t b) {
     const Track& x = tracks[a];
     const Track& y = tracks[b];
     if (x.album != y.album) return albumPos[x.album] < albumPos[y.album];

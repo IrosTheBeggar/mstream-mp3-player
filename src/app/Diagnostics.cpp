@@ -8,26 +8,83 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_system.h>
+#include <esp_rom_sys.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <nvs.h>
+
+#include <atomic>
 
 #include "app/Version.h"
 
 namespace diag {
 
+namespace {
+// The low window (beginLowWindow()): the since-boot lowests when it began.
+bool s_window = false;
+uint32_t s_internalLowBefore = 0;
+uint32_t s_psramLowBefore = 0;
+std::atomic<uint32_t> s_failedAllocs{0};
+
+// heap_caps' failed-allocation hook: on the task that asked, outside the
+// heap's locks. No allocation and no lock of ours here: the ROM's printf.
+void onAllocFailed(size_t size, uint32_t caps, const char* function) {
+  const uint32_t n = s_failedAllocs.fetch_add(1) + 1;
+  if (!(caps & MALLOC_CAP_SPIRAM) && size < 4096) return;
+  if (n > 16 && n % 256 != 0) return;
+  const char* task = pcTaskGetName(nullptr);
+  esp_rom_printf("[heap] FAILED: %u B (caps 0x%x) in %s, task %s; PSRAM free %u B, largest block %u B (failed "
+                 "allocations so far: %u)\n",
+                 (unsigned)size, (unsigned)caps, function ? function : "?", task ? task : "?",
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM), (unsigned)n);
+}
+}  // namespace
+
+uint32_t lowestSinceBoot(uint32_t caps) {
+  const uint32_t now = static_cast<uint32_t>(heap_caps_get_minimum_free_size(caps));
+  if (!s_window) return now;
+  const uint32_t before = caps == MALLOC_CAP_SPIRAM ? s_psramLowBefore : s_internalLowBefore;
+  return now < before ? now : before;
+}
+
+bool beginLowWindow() {
+  if (s_window) return false;
+  s_internalLowBefore = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+  s_psramLowBefore = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+  s_window = heap_caps_monitor_local_minimum_free_size_start() == ESP_OK;
+  return s_window;
+}
+
+uint32_t endLowWindow() {
+  const uint32_t low = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+  if (!s_window) return low;
+  // (The IDF puts each heap's since-boot lowest back as the lower of the
+  // two: nothing the window saw is lost.)
+  heap_caps_monitor_local_minimum_free_size_stop();
+  s_window = false;
+  return low;
+}
+
+void watchFailedAllocs() { heap_caps_register_failed_alloc_callback(onAllocFailed); }
+uint32_t failedAllocs() { return s_failedAllocs.load(); }
+
 Heap heap() {
   return {
       static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
-      static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)),
+      lowestSinceBoot(MALLOC_CAP_INTERNAL),
       static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
       static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
+      lowestSinceBoot(MALLOC_CAP_SPIRAM),
   };
 }
 
 void logHeap(const char* stage) {
   const Heap h = heap();
-  Serial.printf("[heap] %-9s internal free=%luK min=%luK largest=%luK | psram free=%luK\n", stage,
+  Serial.printf("[heap] %-9s internal free=%luK min=%luK largest=%luK | psram free=%luK min=%luK\n", stage,
                 (unsigned long)(h.internalFree / 1024), (unsigned long)(h.internalMin / 1024),
-                (unsigned long)(h.internalLargest / 1024), (unsigned long)(h.psramFree / 1024));
+                (unsigned long)(h.internalLargest / 1024), (unsigned long)(h.psramFree / 1024),
+                (unsigned long)(h.psramMin / 1024));
 }
 
 const char* boardName() {

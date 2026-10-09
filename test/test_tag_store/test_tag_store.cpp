@@ -1500,10 +1500,18 @@ void test_compaction_memory_is_bounded() {
            c.chunksMerged, c.chunksDropped, static_cast<unsigned>(peaks[round]), static_cast<unsigned>(st.workBytes()));
   }
   TEST_ASSERT_EQUAL_size_t(peaks[0], peaks[1]);
-  // About 60 KB at the defaults (3.5's "about 60 KB" for the compaction).
+  // About 115 KB at the firmware's defaults since 2026-10-09 (3.5; 1 KB run
+  // buffers, an 8 KB D, 4 KB section buffers: whole-sector card commands,
+  // test_card_io), 66 KB before.
   CutFs fs;
-  ts::TagStore st(fs, config());
-  TEST_ASSERT_TRUE(st.workBytes() <= 72u * 1024u);
+  ts::TagStore::Config d = config();
+  const ts::TagStore::Config firmware;
+  d.runBuffer = firmware.runBuffer;
+  d.deviceBuffer = firmware.deviceBuffer;
+  d.writeBuffer = firmware.writeBuffer;
+  ts::TagStore st(fs, d);
+  printf("[tagstore] the firmware's compaction memory: %u bytes\n", static_cast<unsigned>(st.workBytes()));
+  TEST_ASSERT_TRUE(st.workBytes() <= 120u * 1024u);
 }
 
 // ---------------------------------------------------------------------------

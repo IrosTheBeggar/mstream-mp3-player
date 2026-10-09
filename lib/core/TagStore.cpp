@@ -225,6 +225,16 @@ struct ValueHasher {
 
 // A section of the file being written, through a buffer: CRC'd as it goes;
 // with no file it only counts (the first pass).
+//
+// A full buffer ends on a boundary of the file (room()): 4 KB with a buffer
+// of 4 KB or more, a sector with one of 512 B or more. So every flush but a
+// section's first and last is whole sectors from a sector's start, which
+// FatFs writes straight from the buffer, several at a time, with no read
+// first. Unaligned, each flush was a partial sector at both ends, each a
+// read of the sector and a write of it alone through the FIL's one-sector
+// buffer (the 2026-10-09 device run: every one of a compaction's 9,000-
+// 14,000 card writes was a single sector, a read before most; 94 s a
+// compaction at 20k). The bytes written are the same.
 struct Cursor {
   File* f = nullptr;
   uint32_t base = 0;  // where buf[0] goes
@@ -242,6 +252,12 @@ struct Cursor {
     fill = crc = total = 0;
     bad = false;
   }
+  // The bytes the buffer takes before it is flushed: up to the last
+  // boundary that fits (at least one byte: base % a < a <= cap).
+  uint32_t room() const {
+    const uint32_t a = cap >= kWriteAlign ? kWriteAlign : cap >= kSectorBytes ? kSectorBytes : 0;
+    return a ? cap - cap % a - base % a : cap;
+  }
   bool flush() {
     if (!f || fill == 0 || bad) return !bad;
     if (!f->write(base, buf, fill)) bad = true;
@@ -256,8 +272,8 @@ struct Cursor {
     total += n;
     if (!f) return true;
     while (n) {
-      if (fill == cap && !flush()) return false;
-      uint32_t k = cap - fill;
+      if (fill == room() && !flush()) return false;
+      uint32_t k = room() - fill;
       if (k > n) k = n;
       std::memcpy(buf + fill, p, k);
       fill += k;

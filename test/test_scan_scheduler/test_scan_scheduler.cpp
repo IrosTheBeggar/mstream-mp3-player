@@ -138,11 +138,13 @@ void test_one_step_at_a_time() {
         TEST_ASSERT_EQUAL(W::Step, o.wait);
         // Covers and the walk's slices drop below the loop while a list
         // moves (Thumbs' rule); the build stays level with it (the listener
-        // waits for it); the scan's slices are level with it only while the
-        // screen is dark (3.3.9); the rest are below it.
+        // waits for it); the scan's slices, a compaction and the save are
+        // level with it only while the screen is dark (3.3.9; the 2026-10-09
+        // device run); the DJNB check is below it.
+        const bool darkOnes = running == J::Scan || running == J::Compact || running == J::Save;
         const uint8_t want = running == J::Build                         ? S::kHighPriority
                              : running == J::Cover || running == J::Walk ? (moving ? S::kLowPriority : S::kHighPriority)
-                             : running == J::Scan                        ? (dark && !moving ? S::kHighPriority
+                             : darkOnes                                  ? (dark && !moving ? S::kHighPriority
                                                                                             : S::kLowPriority)
                                                                          : S::kLowPriority;
         TEST_ASSERT_EQUAL_UINT8(want, o.priority);
@@ -170,6 +172,28 @@ void test_one_step_at_a_time() {
   h.compact = true;
   o = t.update(h);
   TEST_ASSERT_EQUAL(J::Compact, o.job);
+  TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);  // dark
+  h.dark = false;
+  o = t.update(h);
+  TEST_ASSERT_EQUAL(J::Compact, o.job);
+  TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+  // The save: level with the loop only in the dark too.
+  h.save = true;
+  o = t.update(h);
+  TEST_ASSERT_EQUAL(J::Save, o.job);
+  TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
+  h.dark = true;
+  o = t.update(h);
+  TEST_ASSERT_EQUAL(J::Save, o.job);
+  TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
+  // The DJNB check stays below it.
+  S u;
+  S::In d = base(0);
+  d.dark = true;
+  d.restPending = false;
+  d.djCheck = true;
+  o = u.update(d);
+  TEST_ASSERT_EQUAL(J::DjCheck, o.job);
   TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
 }
 
@@ -900,7 +924,8 @@ struct Model {
       if (o.cut) o.priority = 0;
       else if (in.running == J::Build) o.priority = 1;
       else if (in.running == J::Cover || in.running == J::Walk) o.priority = in.listMoving ? 0 : 1;
-      else if (in.running == J::Scan) o.priority = in.dark && !in.listMoving ? 1 : 0;
+      else if (in.running == J::Scan || in.running == J::Compact || in.running == J::Save)
+        o.priority = in.dark && !in.listMoving ? 1 : 0;
       else o.priority = 0;
       return o;
     }
@@ -933,7 +958,7 @@ struct Model {
       return o;
     }
     o.job = next;
-    o.priority = next == J::Walk || (next == J::Scan && in.dark) ? 1 : 0;
+    o.priority = next == J::Walk || ((next == J::Scan || next == J::Compact || next == J::Save) && in.dark) ? 1 : 0;
     o.source = next == J::Scan ? (in.playingPending     ? Src::Playing
                                   : in.queueNextPending ? Src::QueueNext
                                   : in.queueSoonPending ? Src::QueueSoon

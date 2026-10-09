@@ -10,7 +10,7 @@
 // generalised) takes one step at a time, and only the step it is handed: a
 // cover; the update step's build or its save (3.4.2, N12); a slice of the
 // validation walk (3.2.3: its folders, or passes of a big one, for about
-// 18 ms while the screen is lit, 60 ms while it is dark: the firmware's
+// 18 ms while the screen is lit, 250 ms while it is dark: the firmware's
 // CardTasks); a compaction of tags.bin (3.3.2); a file of the scan
 // (3.3.1) a loop source names, or a slice of its rest's files; the DJNB
 // check. The loop calls update() every pass, where the inputs are, and
@@ -26,19 +26,24 @@
 //   3. A cover, at priority 1, dropped to 0 while a list moves under it
 //      (Thumbs' rule): rows on screen come first (3.3.3, 0). The audio's
 //      yields below don't hold it.
-//   4. The update step's save of library.idx, at priority 0: it ends the
-//      update step. It yields as the background work does, but not to the
-//      battery floor (the build is paid for).
+//   4. The update step's save of library.idx, at priority 0, 1 while the
+//      screen is dark (as the scan's slices): it ends the update step. It
+//      yields as the background work does, but not to the battery floor
+//      (the build is paid for).
 //   5. The background work, one job at a time, the first with work: the
 //      walk, a compaction, the scan, the DJNB check. None of them starts
 //      while the update step holds the worker (from its build's fence to
 //      its save's end: nothing writes tags.bin or the journals while the
-//      build streams them, 3.4.2). At priority 0, but for two (3.3.9,
+//      build streams them, 3.4.2). At priority 0, but for three (3.3.9,
 //      2026-10-09): a slice of the walk at 1, as a cover (seconds once a
 //      boot, while the Library tab says "Checking the card..."); a slice
-//      of the scan at 1 while the screen is dark (In::dark: the loop has
-//      nothing to draw). At 0 they share what the loop leaves with the
-//      idle task, half of it (covers measured 2-2.5x slower at 0).
+//      of the scan, and a compaction, at 1 while the screen is dark
+//      (In::dark: the loop has nothing to draw). At 0 they share what the
+//      loop leaves with the idle task, half of it (covers measured 2-2.5x
+//      slower at 0; the save 4.5-9.9 s on the worker against 2.2 s on the
+//      loop at boot, the 2026-10-09 device run). A compaction or a save
+//      under way drops to 0 the pass the screen lights (it isn't a slice:
+//      it runs on to its end, below the loop).
 // A slice under way drops to 0 and is cut after its unit (Out::cut) the
 // moment a list moves or a wait below applies: so a wait holds the walk and
 // the scan within one unit (a folder, a file) and a pass, as before slices.
@@ -108,7 +113,8 @@ public:
   static constexpr int kWaits = 12;
 
   // The worker's FreeRTOS priorities (3.3.4, 3.3.9): the loop's for what
-  // the listener waits for (and the walk's and the dark scan's slices),
+  // the listener waits for (and the walk's slices, and the scan's slices,
+  // a compaction and the save while the screen is dark),
   // the idle task's for the rest, so the loop preempts it whenever it is
   // ready (the SD driver's reads busy-wait the CPU).
   static constexpr uint8_t kHighPriority = 1;
@@ -166,7 +172,7 @@ public:
     // ---- the UI ----
     bool listMoving = false;  // a list scrolls, flings or follows a finger (Page::animating())
     bool input = false;       // any input this pass (a touch, a button, PWR, a headphone key, the console)
-    bool dark = false;        // the screen is dark: the loop has nothing to draw (a scan's slice at 1)
+    bool dark = false;        // the screen is dark: nothing to draw (a scan's slice, a compaction, the save at 1)
     // ---- the audio ----
     bool playing = false;         // the player is Playing: audio should flow
     uint32_t ringMs = 0;          // the PCM ring's audio now (bufferedMsNow())
@@ -237,8 +243,9 @@ public:
   // The scan's source from In's flags (3.3.3's order).
   static Source sourceOf(const In& in);
   // A step's priority (3.3.4, 3.3.9) when no wait applies: the build 1; a
-  // cover and the walk 1, 0 while a list moves; the scan 1 while the screen
-  // is dark and no list moves, else 0; the rest 0.
+  // cover and the walk 1, 0 while a list moves; the scan, a compaction and
+  // the save 1 while the screen is dark and no list moves, else 0; the
+  // DJNB check 0.
   static uint8_t priorityOf(Job job, bool listMoving, bool dark = false);
 
   static const char* jobName(Job j);

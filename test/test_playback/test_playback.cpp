@@ -407,6 +407,23 @@ void test_cue_while_paused_stays_paused_and_play_starts_it() {
   TEST_ASSERT_FALSE(a.paused);
 }
 
+// What a play/pause would do now (playStartsEntry(): the firmware's note
+// behind the library update's fence): start an entry when stopped or on a
+// cued one; pause or resume the track the backend holds otherwise.
+void test_play_starts_entry_says_what_a_play_would_do() {
+  Rig r(3);
+  PlaybackController& p = r.player;
+  TEST_ASSERT_TRUE(p.playStartsEntry());  // stopped: a play starts entry 0
+  p.play(0);
+  TEST_ASSERT_FALSE(p.playStartsEntry());  // playing: a pause
+  p.togglePlayPause();
+  TEST_ASSERT_FALSE(p.playStartsEntry());  // paused, held: a resume
+  p.cueNext();
+  TEST_ASSERT_TRUE(p.playStartsEntry());  // cued at 0:00: a start
+  p.togglePlayPause();
+  TEST_ASSERT_FALSE(p.playStartsEntry());  // playing it
+}
+
 void test_cue_while_playing_skips() {
   Rig r(3);
   FakeAudioBackend& a = r.audio;
@@ -2982,6 +2999,7 @@ int main(int, char**) {
   RUN_TEST(test_user_skip_resets_the_failure_count);
   RUN_TEST(test_cue_while_stopped_only_moves);
   RUN_TEST(test_cue_while_paused_stays_paused_and_play_starts_it);
+  RUN_TEST(test_play_starts_entry_says_what_a_play_would_do);
   RUN_TEST(test_cue_while_playing_skips);
   RUN_TEST(test_next_after_a_cue_while_paused_plays);
   RUN_TEST(test_cue_on_an_empty_queue_does_nothing);

@@ -383,6 +383,12 @@ public:
   // nothing, the queue coming back whole after the fence).
   void setFenced(bool on);
   bool fenced() const { return fenced_; }
+  // togglePlayPause() now would start an entry (stopped, or an entry cued
+  // at 0:00, paused), not pause or resume a track the backend holds. Behind
+  // the fence that start does nothing (it needs a path): the firmware says
+  // the play waits instead of ignoring it in silence (the 2026-10-09 device
+  // run's L4.7b pressed play on a cued entry inside the fence).
+  bool playStartsEntry() const { return state_ == PlayState::Stopped || (state_ == PlayState::Paused && cued_); }
   // Heard tracks that ended inside a fence with nothing joined (cued after
   // it, paused), free-running.
   uint32_t fenceStops() const { return fenceStops_; }

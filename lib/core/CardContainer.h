@@ -200,9 +200,13 @@ private:
 
 // A sequential reader of [start, end) of a Source through a caller's buffer:
 // every byte it passes is CRC'd, so crc() after drain() is the CRC of the
-// whole range. Reads past `end` fail (failed() then stays true).
+// whole range. Reads past `end` fail (failed() then stays true). A buffer
+// of 1 KB or more refills from the sector (kSector) boundary at or before
+// the next byte: it may read up to 511 bytes before `start`, never past
+// `end` (a Source's offsets are its file's).
 class Stream {
 public:
+  static constexpr uint32_t kSector = 512;
   void begin(Source* src, uint32_t start, uint32_t end, uint8_t* buf, uint32_t bufLen);
   bool read(void* out, uint32_t n);
   bool readByte(uint8_t* b) { return read(b, 1); }

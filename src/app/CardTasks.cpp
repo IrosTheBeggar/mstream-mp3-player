@@ -11,6 +11,7 @@
 #include "QueueView.h"
 #include "TagText.h"
 #include "UiText.h"
+#include "app/Diagnostics.h"
 #include "app/Psram.h"
 #include "storage/SectorDisk.h"
 #include "ui/Thumbs.h"
@@ -291,7 +292,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     const int slot = o.job == Job::Scan ? slotOf(o.source) : -1;
     const char* rel = slot >= 0 ? picks_[slot] : nullptr;
     const size_t len = slot >= 0 ? pickLen_[slot] : 0;
-    jobs_.setSlice(in.dark ? kDarkSliceUs : kLitSliceUs);
+    jobs_.setSlice(!in.dark ? kLitSliceUs : o.job == Job::Walk ? kDarkWalkSliceUs : kDarkSliceUs);
     if (jobs_.prepare(o.job, o.source, rel, len, now) && worker_.start(o.job, o.priority, stepEntry, this, now)) {
       if (o.job == Job::Compact) compacting_ = true;
       if (o.job == Job::Walk && !walkSeen_) {
@@ -583,6 +584,7 @@ bool CardTasks::verify() {
 }
 
 bool CardTasks::waitIdle(uint32_t maxMs) {
+  jobs_.cutSlice();  // a slice under way ends after its unit (prepare() clears it for the next)
   const bool ok = worker_.waitIdle(maxMs);
   Job done = Job::None;
   uint32_t ms = 0;
@@ -682,7 +684,7 @@ void CardTasks::report() const {
                 (unsigned long)worker_.stackLeastLeft(), (unsigned long)worker_.stackLeft(),
                 worker_.failedStarts() ? " (it couldn't always start)" : "",
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), lowest,
-                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+                (unsigned)diag::lowestSinceBoot(MALLOC_CAP_INTERNAL));
   if (!active_) return;
   const cardjobs::Jobs::Counts& c = jobs_.counts();
   Serial.printf("[card] jobs: %lu walks (%lu steps, %lu failed), %lu compactions (%lu failed), %lu files read, %lu "

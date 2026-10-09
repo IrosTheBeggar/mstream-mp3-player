@@ -77,7 +77,7 @@
 // would find them Pending again.
 //
 // Memory, from the hooks (PSRAM on the device), only while a job has
-// work: the walk about 98 KB (CardWalk's 64 KB scratch, D's and the
+// work: the walk about 110 KB (CardWalk's 64 KB scratch, D's and the
 // journal's buffers, T's streams), the scan about 93 KB (TagScan's
 // Scanner, its buffer, the chunk, the run for the overlay, the read set,
 // a slice's list of files) plus the View's merge memory, the compaction
@@ -203,6 +203,14 @@ public:
   ~Jobs();
   Jobs(const Jobs&) = delete;
   Jobs& operator=(const Jobs&) = delete;
+
+  // The walk's buffer for D (KnownD: its DeviceReader's streams, DSTA's and
+  // DFLD's 512 B each, the walker's four the rest, about 3.8 KB each). At
+  // 4 KB (before 2026-10-09) each refill of a walker's stream was under a
+  // sector and the whole of tags.bin went to the card as about 7,000
+  // single-sector reads (3.7-4.1 MB at 20k, about 5 s of an unchanged
+  // card's walk); at 16 KB most of it is multi-sector reads.
+  static constexpr uint32_t kKnownScratch = 16 * 1024;
 
   // The store, the card, T. Call again after a remount (nothing may be
   // under way): what the rest has to do is looked at again, the View

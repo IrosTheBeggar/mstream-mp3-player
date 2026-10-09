@@ -114,8 +114,15 @@ public:
   // pass would lose most of a pass whenever its units are 9 ms or more (a
   // file of the scan, a first walk's folder), so three passes less a
   // margin. A wait cuts either after its unit (ScanScheduler's Out::cut).
+  // The walk's slices in the dark are longer still: its units are 3-9 ms
+  // (a folder, KnownD's rows), so at 60 ms each slice was about six folders
+  // and a hand-off, and the 2026-10-09 device run's unchanged-card walk
+  // spent about 3.9 s of its 27 s in 418 hand-offs (9.3 ms each, behind
+  // the loop's 20 ms dark sleep). At 250 ms about 95 hand-offs. Input or
+  // any wait still cuts the slice after its folder, and waitIdle() cuts it.
   static constexpr uint32_t kLitSliceUs = 18000;
   static constexpr uint32_t kDarkSliceUs = 60000;
+  static constexpr uint32_t kDarkWalkSliceUs = 250000;
 
   // Every loop pass. `in`: the environment (nowMs; listMoving, input; the
   // audio's ring, underruns, decode pass, track and seek; Bluetooth;
@@ -163,7 +170,8 @@ public:
   // RAM's lowest start again (L3's figures, one condition at a time).
   void resetStats();
   // Waits for the worker's step to finish and takes it in (before the
-  // loop reads the card's records itself: gs, gt; the idle power-off).
+  // loop reads the card's records itself: gs, gt; the idle power-off). A
+  // slice under way is cut first: it ends after its unit.
   bool waitIdle(uint32_t maxMs);
 
   // ---- the rest of the firmware ----

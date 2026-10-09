@@ -42,6 +42,7 @@ public:
 
   bool read(uint32_t lba, uint8_t* out, uint32_t n) override {
     ++counts.reads;
+    counts.singleReads += n == 1;
     counts.readSectors += n;
     if (static_cast<uint64_t>(lba) + n > count_) return false;
     for (uint32_t k = 0; k < n; ++k) {
@@ -53,7 +54,9 @@ public:
   }
   bool write(uint32_t lba, const uint8_t* data, uint32_t n) override {
     ++counts.writes;
+    counts.singleWrites += n == 1;
     counts.writeSectors += n;
+    if (n > counts.mostWriteSectors) counts.mostWriteSectors = n;
     if (static_cast<uint64_t>(lba) + n > count_) return false;
     for (uint32_t k = 0; k < n; ++k) put(lba + k, data + static_cast<size_t>(k) * kSS);
     return true;
@@ -72,6 +75,8 @@ public:
 
   struct Counts {
     uint64_t reads = 0, readSectors = 0, writes = 0, writeSectors = 0, trims = 0;
+    uint64_t singleReads = 0, singleWrites = 0;  // of one sector (an SD single-block command)
+    uint32_t mostWriteSectors = 0;               // the longest write
   } counts;
   bool scrambleTrim = false;
 

@@ -34,7 +34,7 @@ public:
   void abort() override { inner.abort(); }
 };
 
-// The walk's memory (about 98 KB): PSRAM, never the worker's stack.
+// The walk's memory (about 110 KB): PSRAM, never the worker's stack.
 struct Jobs::WalkWork {
   cw::CardWalk walk;
   ts::KnownD known;
@@ -45,7 +45,7 @@ struct Jobs::WalkWork {
   bool begun = false;
   bool again = false;  // askWalk() during it: another after it
   uint8_t scratch[cw::CardWalk::kDeviceScratch];
-  uint8_t knownBuf[4096];
+  uint8_t knownBuf[Jobs::kKnownScratch];
   uint8_t journalBuf[4096];
   uint8_t doubtBuf[512];
   uint8_t transferBuf[8192];

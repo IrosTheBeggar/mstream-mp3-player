@@ -184,11 +184,22 @@ void Stream::begin(Source* src, uint32_t start, uint32_t end, uint8_t* buf, uint
 }
 
 bool Stream::fill() {
-  // The buffer is spent: the next bytes, up to the end.
-  bufAt_ = pos_;
-  const uint32_t left = end_ - pos_;
-  const uint32_t n = left < bufLen_ ? left : bufLen_;
-  if (n == 0 || !src_->read(pos_, buf_, n)) {
+  // The buffer is spent: the next bytes, up to the end. A buffer of two
+  // sectors or more refills whole sectors (as many as it holds) from the
+  // sector boundary at or before pos_ (the bytes before pos_ are read, never
+  // passed: the CRC is the stream's own), so each refill but the last is
+  // whole sectors from a sector's start, which FatFs reads straight into
+  // the buffer in one card command. From pos_, every refill was a partial
+  // sector at each end, each read alone through the FIL's one-sector
+  // buffer, which the other streams on the same file evict (the 2026-10-09
+  // device run: the compaction's, the build's and the walk's reads of
+  // tags.bin, nearly every one a single sector).
+  const bool whole = bufLen_ >= 2 * kSector;
+  bufAt_ = whole ? pos_ - pos_ % kSector : pos_;
+  const uint32_t room = whole ? bufLen_ - bufLen_ % kSector : bufLen_;
+  const uint32_t left = end_ - bufAt_;
+  const uint32_t n = left < room ? left : room;
+  if (n == 0 || !src_->read(bufAt_, buf_, n)) {
     failed_ = true;
     bufFill_ = 0;
     return false;

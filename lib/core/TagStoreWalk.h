@@ -14,7 +14,7 @@
 // a fake FAT tree, through these, into tags.bin). CardJobs (N10) gives
 // them to the walk:
 //
-//   KnownD d;   d.begin(store, scratch, 4096);
+//   KnownD d;   d.begin(store, scratch, 16384);   (CardJobs' kKnownScratch)
 //   WalkSink s; s.begin(store, root's identity, buf, 4096, readBuf, 512);
 //   cardwalk::CardWalk::Config c{lister, &d, transfer, &s, firstAfterCommit,
 //                                store.device().header.skew, ...};
@@ -31,8 +31,10 @@ namespace tagstore {
 class KnownD : public cardwalk::Known {
 public:
   ~KnownD() override { close(); }
-  // `scratch` at least DeviceReader::kMinScratch (4 KB: the reader's
-  // default). False: D couldn't be opened (failed() then says so).
+  // `scratch` at least DeviceReader::kMinScratch; the walker's four streams
+  // take most of it, so at 16 KB (the card worker's) their refills are
+  // several sectors each, not one (2026-10-09). False: D couldn't be opened
+  // (failed() then says so).
   bool begin(TagStore& store, uint8_t* scratch, uint32_t scratchBytes);
   void close();
   bool nextFolder(cardwalk::KnownFolder* out) override;

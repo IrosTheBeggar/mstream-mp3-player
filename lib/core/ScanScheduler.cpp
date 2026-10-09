@@ -164,7 +164,9 @@ uint8_t ScanScheduler::priorityOf(Job job, bool listMoving, bool dark) {
     case Job::Build: return kHighPriority;
     case Job::Cover:
     case Job::Walk: return listMoving ? kLowPriority : kHighPriority;
-    case Job::Scan: return dark && !listMoving ? kHighPriority : kLowPriority;
+    case Job::Scan:
+    case Job::Compact:
+    case Job::Save: return dark && !listMoving ? kHighPriority : kLowPriority;
     default: return kLowPriority;
   }
 }

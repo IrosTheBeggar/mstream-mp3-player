@@ -153,12 +153,22 @@ static ui::Ui* userInterface = nullptr;
 // or a console command that reads the queue or the library waits: the
 // queue's memory and the index are the build's (a few seconds; 3.4.2).
 // True: `what` waits (said on the console, and in a note on the screen).
-// Pause and resume act as ever: the listener can always stop the sound.
+// Pause and resume of the track the backend holds act as ever: the
+// listener can always stop the sound. A play that would start an entry
+// (playPause() below) waits like a skip.
 static bool waitsForLibrary(const char* what) {
   if (!frozen.on) return false;
   Serial.printf("[lib] the library is updating: %s waits (try again in a few seconds)\n", what);
   if (userInterface) userInterface->note(uitext::kUpdatingWait, 1500);
   return true;
+}
+// B, the console's ' ', the UI's play and play/pause: behind the fence a
+// play that would start an entry (stopped, or a cued one: the player can't
+// start it without a path) waits with the note instead of doing nothing
+// unsaid; pause, and resume of the held track, act as ever.
+static void playPause() {
+  if (player.playStartsEntry() && waitsForLibrary("play")) return;
+  player.togglePlayPause();
 }
 // The same for the console's commands that read the card's records or wait
 // for the card worker (g..., j...): from the fence to the save's end.
@@ -377,7 +387,7 @@ struct ButtonTransport : ButtonPolicy::Transport {
   void prev() override { prevTrack(); }
   void next() override { player.next(); }
   // (Waiting: cancels the wait, paused.)
-  void playPause() override { player.togglePlayPause(); }
+  void playPause() override { ::playPause(); }
   // Waiting for the headphones counts: a B hold then ends the wait paused.
   bool playing() const override {
     return player.state() == PlayState::Playing || player.state() == PlayState::Waiting;
@@ -721,9 +731,9 @@ struct MainUiHost : ui::UiHost {
       s.btLost = true;
     }
   }
-  void playPause() override { player.togglePlayPause(); }
+  void playPause() override { ::playPause(); }
   void play() override {
-    if (player.state() == PlayState::Paused || player.state() == PlayState::Stopped) player.togglePlayPause();
+    if (player.state() == PlayState::Paused || player.state() == PlayState::Stopped) ::playPause();
   }
   void playOnSpeaker() override { ::playOnSpeaker(); }
   // (Behind the library update's fence a skip waits: the queue is the build's.)
@@ -936,7 +946,7 @@ static void printStats() {
   const diag::Heap h = diag::heap();
   Serial.printf(
       "[stats] track=%d/%lu %s pos=%.1fs out=%s%s buf=%lums underruns=%lu bt=%lufps load=%.1f%% "
-      "stack_free=%lu pass_max=%luus ram=%luK min=%luK psram=%luK bat=%d%%\n",
+      "stack_free=%lu pass_max=%luus ram=%luK min=%luK psram=%luK pmin=%luK bat=%d%%\n",
       player.currentIndex() + 1, (unsigned long)queue.size(), stateName(), audio.positionMs() / 1000.0f,
       audio.output() == Output::Bluetooth ? "bt" : "speaker",
       audio.output() == Output::Bluetooth ? (audio.bluetooth().connected() ? "(connected)" : "(searching)")
@@ -945,7 +955,7 @@ static void printStats() {
       (unsigned long)s.bufferedMs, (unsigned long)s.underruns, (unsigned long)s.btFramesPerSec,
       s.decodeLoad * 100.0f, (unsigned long)s.decodeStackFree, (unsigned long)s.maxPassUs,
       (unsigned long)(h.internalFree / 1024), (unsigned long)(h.internalMin / 1024),
-      (unsigned long)(h.psramFree / 1024), (int)M5.Power.getBatteryLevel());
+      (unsigned long)(h.psramFree / 1024), (unsigned long)(h.psramMin / 1024), (int)M5.Power.getBatteryLevel());
   if (danceMode.active()) danceMode.printStats(millis());  // every 5 s while dancing
 
   BtSink& bt = audio.bluetooth();
@@ -1741,7 +1751,7 @@ static SerialConsole console({
     [] {
       if (!waitsForLibrary("p")) prevTrack();
     },
-    [] { player.togglePlayPause(); },
+    [] { playPause(); },
     toggleOutput,
     stepVolume,
     [] {
@@ -2729,6 +2739,7 @@ static void stepCardGuard() {
 // take more than the memory check had to spare): nothing done (the step
 // defers).
 static uint32_t fencePsramBefore = 0;
+static bool fenceLowWindow = false;  // diag's low window runs (the fence's own lowest)
 static bool enterFence() {
   const int32_t cur = queue.current();
   Frozen f;
@@ -2748,8 +2759,16 @@ static bool enterFence() {
   const LibraryIndex* index = library.index();
   f.libraryTracks = index && index->ready() ? index->trackCount() : 0;
   fencePsramBefore = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  // The fence's own lowest PSRAM free (leaveFence()'s "lowest", the
+  // since-boot one beside it): the 2026-10-09 run's line gave only the
+  // since-boot lowest, 0 B from a moment outside the fence.
+  fenceLowWindow = diag::beginLowWindow();
   // 1. queue.txt is the queue; its memory the build's.
-  if (!queueStore.remapBegin(library.update()->spare())) return false;
+  if (!queueStore.remapBegin(library.update()->spare())) {
+    diag::endLowWindow();
+    fenceLowWindow = false;
+    return false;
+  }
   frozen = f;
   // 2. The readers: the names kept, the index hidden.
   library.fence(f.trackId);
@@ -2771,6 +2790,16 @@ static bool enterFence() {
 // save on the worker (CardTasks::live(): LibraryUpdate::lived()).
 static void leaveFence() {
   const LibraryUpdate::Step& s = library.update()->last();
+  const uint32_t fenceLow = diag::endLowWindow();
+  const uint32_t bootLow = diag::lowestSinceBoot(MALLOC_CAP_SPIRAM);
+  char lowest[64];
+  if (fenceLowWindow) {
+    snprintf(lowest, sizeof(lowest), "%u B during the fence (%u B since the boot)", (unsigned)fenceLow,
+             (unsigned)bootLow);
+  } else {
+    snprintf(lowest, sizeof(lowest), "%u B since the boot (no window)", (unsigned)bootLow);
+  }
+  fenceLowWindow = false;
   library.unfence();
   frozen = Frozen{};
   // The jobs start over with the new index, the index readable again
@@ -2786,14 +2815,13 @@ static void leaveFence() {
     userInterface->libraryChanged();  // every index id changed
   }
   Serial.printf("[lib] the update step: %s in %.0f ms on the card worker (the loop live; the fence up %lu ms); PSRAM "
-                "free %u B before, %u B after, lowest %u B\n",
+                "free %u B before, %u B after, lowest %s\n",
                 s.built ? (s.walked ? "walked /music" : "built") : s.cardGone ? "FAILED (the card's records didn't "
                                                                                  "open, or a read failed: the card "
                                                                                  "pulled?)"
                                                               : "FAILED (out of PSRAM)",
                 s.buildMs, (unsigned long)s.fenceMs, (unsigned)fencePsramBefore,
-                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-                (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), lowest);
   if (s.built && !s.walked) {
     const LibraryBuilder::Result& r = s.build;
     Serial.printf("[lib] built from the records: %lu tracks, %lu from the transfer's, %lu from the device's, %lu by "
@@ -2970,6 +2998,10 @@ static void haltOnOldChip() {
 
 void setup() {
   haltOnOldChip();  // first: no PSRAM used yet
+  // A line for each failed PSRAM allocation (and any of 4 KB or more), from
+  // the first: PSRAM's lowest since the boot read 0 B in every session of
+  // the 2026-10-09 device run, and no caller logged a failure.
+  diag::watchFailedAllocs();
   ensureNvs();  // before the first Preferences read
   nvsschema::check();  // the layout's number, migrated if older, before anything reads a key
   // The CPU speed saved (or the default), before Bluetooth starts.
