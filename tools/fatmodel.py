@@ -98,7 +98,7 @@ def build():
     c_src = SUPPORT / "fatfs" / "FatFsBuild.c"
     cpp = [ROOT / "tools" / "fatmodel.cpp", CORE / "SectorCache.cpp", CORE / "CachedDrive.cpp"]
     deps = sorted((SUPPORT / "fatfs").iterdir()) + [SUPPORT / "FatModel.h", CORE / "SectorCache.h",
-                                                    CORE / "CachedDrive.h"] + cpp
+                                                    CORE / "CachedDrive.h", CORE / "SdBusy.h"] + cpp
     h = hashlib.sha256()
     for p in deps:
         if p.is_file():

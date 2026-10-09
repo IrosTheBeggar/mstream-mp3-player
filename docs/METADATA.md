@@ -2295,6 +2295,13 @@ the SD library's non-static `ff_sd_initialize`, `ff_sd_status`,
   there.
 - FatFs calls `disk_read` under its per-volume mutex; with one volume the
   cache needs no lock of its own.
+- The SD driver under it is the framework's SD library with
+  `sd_diskio.cpp` patched to wait out the card's busy after a write
+  (`lib/SD`; 3.8, "The SD driver", 2026-10-09), and the wrapper's own
+  rules write a refused write again once.
+- The wrapper also keeps the card's identity at the mount and holds every
+  remount to it: another card put in while the player is on is
+  write-protected until a restart (3.8, "The card's guard").
 
 **What it speeds up:** every path lookup, the walk, the scanner's opens,
 the decoder's FAT-chain reads on a seek (fast seek is off), a track's
@@ -3432,8 +3439,16 @@ src/. What the code decided where 3.2-3.4 left room:
   FatFs's next call mounts the volume again through `disk_initialize`,
   which clears the cache before the SD driver's init (2026-10-08 review:
   it didn't, so FatFs read the old card's boot sector, FAT and folders
-  from the cache, and a write would have put them on the new card).
-  `CTRL_TRIM` invalidates FatFs's range (its first and last sector)
+  from the cache, and a write would have put them on the new card). **The
+  clear alone doesn't make a swap safe** (2026-10-09, after the device
+  run): it keeps the old card's sectors off the new one, but the
+  player's own state stays the old card's (the index, the root and T's
+  path, the store's D header, journal offsets and base CRC, the jobs, the
+  queue), and FatFs would have let it write there: `tags.jnl` truncated
+  or appended at the old card's offset, `queue.txt` replaced, an update
+  step's `library.idx` saved with the old card's inputs. The card's guard
+  (below) refuses all of it. `CTRL_TRIM` invalidates FatFs's range (its
+  first and last sector)
   before the SD driver's ioctl. The cache is one PSRAM block, allocated at
   the first mount (135,168 B), and the wrapper counts every read that
   reaches the SD driver (its sectors and its time), the cache on or off,
@@ -3449,6 +3464,73 @@ src/. What the code decided where 3.2-3.4 left room:
   counts up to the switch, then they start again (review: they were
   printed after the reset was asked, not done, under "the counts start
   now"). The default is the spec's: on.
+- **The SD driver** (`lib/SD`, 2026-10-09). The 2026-10-08 device run on
+  N11's card (the 20k walk's `walk.jnl`, synced every 4 KB block) logged
+  `sdCommand(): token error [13] 0x3` after a write, which failed it (the
+  walk ended `Error::Sink`), twice more in later walks, and `crc error`
+  twice (tried again by the driver, no harm); v0.7.0 barely writes, and
+  never showed it. The R1 values are the card's busy line read mid-byte:
+  arduino-esp32 3.3.12's `sdWait()` returned on the first byte that
+  wasn't 0x00, and its writes deselected right after the data (or a
+  multiple write's Stop Tran token) and sent CMD13 at once, so the status
+  command could go to a card still programming, and the response loop
+  took the busy's rising edge for the R1: 0x01 (a failed write with no
+  line), 0x03 and 0x07 (token error), 0x0F to 0x7F (crc error).
+  `test_sd_busy` models the line bit by bit and finds each. The fix is a
+  copy of the framework's SD library in `lib/SD` (it comes before the
+  framework's in PlatformIO's search; Apache-2.0, THIRD-PARTY-NOTICES.md)
+  with `sd_diskio.cpp` patched, every change marked and listed in
+  `lib/SD/README.md`: the card is ready after two bytes of 0xFF in a row
+  (lib/core `SdBusy.h`); a single write waits out the block's programming
+  before it deselects, a multiple write reads the Stop Tran's one byte
+  and then waits out its busy; `ff_sd_status()` asks CMD13 again once
+  after an R1 with an error bit before it says `STA_NOINIT` (which makes
+  FatFs mount the volume again, every open file gone: the decoder's, the
+  walk's), never after no answer (a pulled card's 300 ms of retries
+  again). And as a belt, `CachedDrive` writes a refused write again once
+  (the same sectors and bytes; the second try's select waits out the
+  first's busy), before the cache or FatFs hears of a failure; the loop
+  prints `[card] writes the card refused and took the second time: N;
+  refused twice: M` when either count moves.
+- **The card's guard** (2026-10-09; lib/core `CachedDrive`, host-tested in
+  `test_sector_cache` and under FatFs in `test_fat_model`). `install()`
+  keeps the mount's card: its size (the SD driver's, from its CSD), the
+  CRC-32 of sector 0 and of its first partition's first sector (the FAT
+  boot sector, whose volume serial a format takes from the clock; sector
+  0 alone on a card with no partition table), read raw into the verify
+  scratch, each read tried twice; logged as `[storage] the card's
+  identity: ...`. FatFs's
+  `disk_initialize` (`wInit()`), once the SD driver's init has a card
+  answering, reads the slot's card's and compares (`remounted()`): not the
+  same, or either unreadable, and the card is **foreign** until a restart
+  (whatever comes back after, the first card included). From then the
+  wrapper's status adds `STA_PROTECT`, so FatFs refuses every write-mode
+  open, unlink, mkdir and rename with `FR_WRITE_PROTECTED` before it
+  writes, the call that found the card included (a remount is always
+  some call's: the scan's create of `tags.jnl` would be it), and a write
+  that reaches the wrapper anyway is `RES_WRPRT`; files opened before the
+  remount are gone (FatFs's volume id changed). The loop polls it
+  (`main.cpp`'s `stepCardGuard()`, before the queue's save each pass):
+  another card holds the card jobs and the queue's saves, toasts "Another
+  card: restarting", logs `[card] ANOTHER CARD in the slot (...)` and
+  restarts 1.2 s later through `restartAtMs` (Try again's path); the boot
+  reads that card's root, records, `library.idx` and `queue.txt`. The
+  Opus cache's save and a cover's card copy aren't held: FatFs refuses
+  them. The same card answering again (pulled and put back, or a remount
+  after a status the card failed twice): with nothing under way (the
+  worker idle, no walk, no compaction, no update step) its records are
+  opened again (`TagStore::open()`) and the jobs begun again
+  (`CardTasks::begin()`, which runs `Jobs::begin()` as `CardJobs.h`
+  asks after a remount): `[card] the card answered again (the same
+  card): its records opened again ...`; with something under way, the
+  queue saved, "Card back: restarting" and a restart. What the guard
+  can't tell: two cards alike in all three (a sector-for-sector clone)
+  are one card to it, and a card written on a PC while out of the player
+  keeps its identity (its records are read again; the index in RAM is the
+  boot's until the next update step or boot). With no wrapper (no PSRAM
+  for the cache, or `MSTREAM_SECTOR_CACHE=0`) there is no guard, and the
+  boot's line says so. No identity at the mount (both reads failed): any
+  remount restarts.
 - **The card worker** (`app/CardWorker`): Thumbs' worker, generalised: a
   task on core 1, made for the first step and gone 3 s after the last, a
   6 KB internal stack, handed one step at a time by the loop (a function
@@ -3685,8 +3767,18 @@ src/. What the code decided where 3.2-3.4 left room:
   (`peek()`, `clearPending()`, the kept track block), `test_library_builder`
   (`trackSlots()`), `test_thumbs` (`parseFile()` against `parse()`, its
   failed reads), `test_ui_library` (`gc`, `gl`, `gs0`, `gb!`),
-  `test_playback` (`seeks()`). Not on the host: FatFs on the card, the SD
-  driver, the task, the UI; 6.3.1 lists what the device batch checks.
+  `test_playback` (`seeks()`). Since 2026-10-09: `test_sector_cache` also
+  writes a refused write again once, tells cards apart part by part of
+  their identity, and refuses another card's writes until `remember()`;
+  `test_fat_model` also takes a clone for the same card (the swap above),
+  write-protects another from the call that found it (its image
+  untouched, FatFs never asking the disk for a write, the first card back
+  refused too) and writes the same card back as before (an open file
+  gone); `test_sd_busy` runs the SD driver's busy rules against a
+  bit-level model of the card's line (the stock wait sends commands to a
+  busy card and takes 0x01-0x7F for their R1s; the patched one never
+  does). Not on the host: FatFs on the card, the SD driver, the task, the
+  UI; 6.3.1 lists what the device batch checks.
 
 ### 3.9 As built (N12): LibraryUpdate, the build on the card worker
 
@@ -3783,7 +3875,9 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
      marked bad; the next boot loads the last `library.idx`); on T with D
      read whole, the build from D alone stands, T is tried again next
      time, and the save marks it as records left out (the next boot loads
-     it soft-stale and its scan's end reads T again).
+     it soft-stale and its scan's end reads T again). Another card put in
+     during the step is write-protected from the remount that finds it
+     (3.8's guard): the save can't reach it, and the loop restarts.
   4. **Live** (`Do::Live`, one pass, `leaveFence()`): the catalog's index
      back, `CardTasks::live()` (`lived()`: the index readable; the jobs
      start over with it; "Library updated"), `remapFinish()` (`queue.txt`
@@ -4333,6 +4427,9 @@ order:
 
 - `[storage] SD card on FatFs drive 0; the sector cache: on (256 sectors,
   135168 B of PSRAM)`
+- `[storage] the card's identity: N sectors, sector 0 CRC xxxxxxxx, boot
+  sector L CRC xxxxxxxx` (since 2026-10-09: the guard, 3.8; L is the
+  partition's first sector)
 - `[lib] /music walked: N files in M ms (add A ms, finish F ms)`
 - `[lib] /.player/device.txt written (firmware 0.7.0-...)`
 - `[lib] the card: no transfer data (none on the card); D none (0 records,
@@ -4344,6 +4441,16 @@ order:
   the walk's time (the line above's M).
 - `[lib] N tracks, A artists, B albums; P B of PSRAM; browsable M ms after
   the mount; internal RAM ...`
+
+**The SD bus, through the whole batch** (since 2026-10-09: `lib/SD`'s
+patched driver, 3.8). No `sdCommand(): token error`, `crc error` or
+`Check status failed` line in any step (the 2026-10-08 run had three
+token errors, each failing a walk with `the walk FAILED (error 4)`, and two
+crc errors); if one shows, a `[W] ... status: R1 0x.., asked again` and
+no remount, and `[card] writes the card refused and took the second time:
+N; refused twice: 0`, mean the belt held where the fix didn't: record
+which step, and how often. `gc`'s `writes W (... 0 failed)` at the end of
+each part.
 
 **L0, the bench** (the stock driver; 3.2.1, 3.2.7). Playback stopped (the
 decoder's reads would count):
@@ -4401,6 +4508,27 @@ the next epoch). Then:
   fence), the library stays,
   and the loop isn't held pass after pass (a refused chunk is offered
   again every 30 s).
+- The same card back, the guard's lines (3.8): `[card] the card answered
+  again (the same card): its records opened again (D present, N journal
+  chunks), the card jobs begun again` with nothing under way; during the
+  walk, a scan step or an update step, `[card] the card answered again
+  (the same card) with a card job under way: the queue saved,
+  restarting`, the toast "Card back: restarting", and a boot that loads
+  the library and the queue as they were. The `[stats]` line's
+  `stack_free=` after it (the records are opened again on the loop).
+- **Another card while on** (the guard, 3.8): note a second FAT32 card's
+  `/.player` on a PC first (a card from another player, or N11's card
+  with a `/.player` of its own: its files' names, sizes and times). With
+  the player paused, pull the first card, put the second in, and touch
+  the screen (any card access: the next track, the Library tab). `[card]
+  ANOTHER CARD in the slot (FatFs mounted it again: ...): every write to
+  it refused; ...; restarting to use it`, the toast "Another card:
+  restarting", and the restart 1.2 s later; the boot loads the second
+  card's library and queue. On the PC, its `/.player` as it was before
+  the swap, byte for byte (`tags.jnl`, `queue.txt`, `library.idx`,
+  `opus.idx`, `walk.jnl` unchanged, nothing new). Then the same during
+  the scan (the first boot of a fresh card) and during the boot's walk:
+  the same lines, no write.
 
 **L2, the boot and the validation walk** (3.2.2, 3.2.3, 3.2.5):
 

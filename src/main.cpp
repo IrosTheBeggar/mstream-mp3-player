@@ -61,6 +61,7 @@
 #include "audio/Core2AudioBackend.h"
 #include "spike/Spike.h"
 #include "storage/LocalStorage.h"
+#include "storage/SectorDisk.h"
 #include "ui/BootScreen.h"
 #include "ui/CalibrationScreen.h"
 #include "ui/Input.h"
@@ -2622,6 +2623,75 @@ static void stepCpuRestart(uint32_t now) {
   powerSettings.restart();  // (doesn't return)
 }
 
+// ---- a card swapped while on (docs/METADATA.md 3.8; storage/SectorDisk) ----
+
+// The card jobs and the queue's saves held until the restart (restartAtMs):
+// another card is in the slot, or the card came back with a job under way.
+static bool cardHeld = false;
+
+// Every loop pass, before the queue's save and the card jobs: what the SD
+// wrapper's guard found at FatFs's remounts (the card pulled and put back,
+// or another put in, while on; or FatFs's own remount after a status check
+// the card failed twice). Another card: the jobs and the queue's saves
+// held, "Another card: restarting", and the restart, whose boot reads that
+// card's records, library and queue (FatFs refuses every write to it from
+// the remount that found it: nothing of this session's reaches it; the
+// Opus cache's save and a cover's card copy are refused there too). The
+// same card: its records opened again and the jobs begun again (what was
+// open is gone, and it may have been written elsewhere meanwhile;
+// cardjobs::Jobs::begin() asks for this), unless a job was under way (a
+// step on the worker, a walk, a compaction, the update step): then the
+// queue saved and a restart. And the card's refused writes, as they come.
+static void stepCardGuard() {
+  if (!sectordisk::installed()) return;
+  const sectordisk::Guard g = sectordisk::guard();
+  static uint32_t retriesSeen = 0, failsSeen = 0, remountsSeen = 0;
+  if (g.writeRetries > retriesSeen || g.writeFails > failsSeen) {
+    Serial.printf("[card] writes the card refused and took the second time: %lu; refused twice: %lu (since the boot "
+                  "or gc)\n",
+                  (unsigned long)g.writeRetries, (unsigned long)g.writeFails);
+  }
+  retriesSeen = g.writeRetries;  // (gc's reset brings them down: followed)
+  failsSeen = g.writeFails;
+  if (cardHeld) return;
+  char id[112];
+  if (g.foreign) {
+    cardHeld = true;
+    sectordisk::identityText(id, sizeof(id), true);
+    Serial.printf("[card] ANOTHER CARD in the slot (FatFs mounted it again: %s): every write to it refused; the card "
+                  "jobs and the queue's saves stop; restarting to use it\n",
+                  id);
+    if (userInterface) userInterface->note(uitext::kAnotherCard, 3000);
+    restartAtMs = millis() + 1200;  // the toast first
+    return;
+  }
+  if (g.remounts == remountsSeen) return;
+  remountsSeen = g.remounts;
+  const bool active = cardTasks && cardTasks->active();
+  if (!active) {
+    Serial.println("[card] the card answered again (FatFs mounted it again: the same card)");
+    return;
+  }
+  using Phase = librarytext::Status::Phase;
+  const Phase phase = cardTasks->status().phase;
+  if (cardTasks->worker().busy() || cardTasks->libraryWrite() || cardTasks->updating() || phase == Phase::Checking ||
+      phase == Phase::Updating) {
+    cardHeld = true;
+    Serial.println("[card] the card answered again (the same card) with a card job under way: the queue saved, "
+                   "restarting");
+    queueStore.flushNow();
+    if (userInterface) userInterface->note(uitext::kCardBack, 3000);
+    restartAtMs = millis() + 1200;
+    return;
+  }
+  const tagstore::TagStore::Opened o = library.store()->open();
+  const bool begun = cardTasks->begin();
+  Serial.printf("[card] the card answered again (the same card): its records opened again (D %s, %lu journal "
+                "chunks), the card jobs %s\n",
+                library.store()->device().present ? "present" : "none", (unsigned long)o.chunks,
+                begun ? "begun again" : "COULDN'T begin again");
+}
+
 // ---- the card worker (docs/METADATA.md 3.3.4, 3.4.2) ----
 
 // The library update's fence goes up (3.4.2, steps 1-3; Do::Fence): the
@@ -3095,7 +3165,8 @@ void loop() {
   stepCpuRestart(now);
   audio.loop(now);
   powerLab.loop(now);
-  queueStore.loop(now);
+  stepCardGuard();
+  if (!cardHeld) queueStore.loop(now);
   // What a track's length is, once the backend knows it (read from the
   // file; or its estimate 20 s in, exact for a constant bitrate): the
   // Queue's "49 min"; once per entry (each change redoes the Queue's sum).
@@ -3195,7 +3266,7 @@ void loop() {
     }
     userInterface->loop(now);
   }
-  stepCard(now, anyInput);
+  if (!cardHeld) stepCard(now, anyInput);
   // The computer's visualizer: its timeout, USB unplugged, the Dance tab gone.
   usbViz.loop(now, screen.externalPower());
   shot.poll();

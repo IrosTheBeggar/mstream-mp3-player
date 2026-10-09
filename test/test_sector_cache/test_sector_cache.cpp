@@ -13,7 +13,10 @@
 // held of those sectors, on again it starts empty, verify catches a sector
 // the card no longer has, the switches and the counts' reset wait for the
 // next disk call, every card read and write counted, a TRIM's range
-// dropped. FatFs over the cache is test_fat_model's. Run:
+// dropped; and since the 2026-10-09 device run, a write the card refused
+// written again once, and the card's identity (another card at a remount
+// is foreign until a restart, every write refused). FatFs over the cache
+// is test_fat_model's. Run:
 // pio test -e native -f test_sector_cache
 #include <unity.h>
 
@@ -39,8 +42,9 @@ constexpr uint32_t kSS = SectorCache::kSectorBytes;
 using Sector = std::array<uint8_t, kSS>;
 
 // A sparse device: a sector never written reads as a pattern of its LBA.
-// Faults on demand: the next `failReads` reads fail; the next write fails
-// after writing its first `failWriteAfter` sectors (-1: no fault).
+// Faults on demand: the next `failReads` reads fail; the next `failWrites`
+// writes fail writing nothing; the next write fails after writing its
+// first `failWriteAfter` sectors (-1: no fault).
 class RamDevice : public SectorCache::Device {
 public:
   bool read(uint32_t lba, uint8_t* out, uint32_t count) override {
@@ -57,6 +61,10 @@ public:
   }
   bool write(uint32_t lba, const uint8_t* data, uint32_t count) override {
     ++writes;
+    if (failWrites > 0) {
+      --failWrites;
+      return false;
+    }
     uint32_t n = count;
     const bool fail = failWriteAfter >= 0;
     if (fail) {
@@ -83,6 +91,7 @@ public:
   std::map<uint32_t, Sector> sectors;
   uint32_t reads = 0, readSectors = 0, lastReadCount = 0, writes = 0;
   int failReads = 0;
+  int failWrites = 0;
   int failWriteAfter = -1;
 };
 
@@ -560,9 +569,10 @@ void test_drive_off_and_on() {
   TEST_ASSERT_TRUE(dev.equals(3, buf));
   TEST_ASSERT_FALSE(c.holds(4));  // cleared: a cold start
   TEST_ASSERT_TRUE(c.holds(3));
-  // A failed write while off drops the sector too.
+  // A failed write while off drops the sector too (refused twice: the
+  // wrapper writes it again once).
   d.setEnabled(false);
-  dev.failWriteAfter = 0;
+  dev.failWrites = 2;
   TEST_ASSERT_FALSE(d.write(3, w.data(), 1));
   TEST_ASSERT_FALSE(c.holds(3));
 }
@@ -670,6 +680,225 @@ void test_drive_without_memory() {
   TEST_ASSERT_EQUAL_UINT32(0, c.size());
 }
 
+// A write the card refused is written again once (sdbusy::kWriteTries: the
+// device run's glitch, a status command sent to a card still busy, failed
+// a write the card had taken): the same sectors and bytes, counted. Refused
+// twice, it fails, and the cache drops what it held of them.
+void test_drive_write_retried_once() {
+  RamDevice dev;
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  d.init();
+  uint8_t buf[kSS];
+  TEST_ASSERT_TRUE(d.read(7, buf, 1));
+  TEST_ASSERT_TRUE(c.holds(7));
+  const Sector w = filled(0x77);
+  dev.failWriteAfter = 0;  // refused once, nothing written
+  const uint32_t writes = dev.writes;
+  TEST_ASSERT_TRUE(d.write(7, w.data(), 1));
+  TEST_ASSERT_EQUAL_UINT32(writes + 2, dev.writes);
+  TEST_ASSERT_TRUE(dev.equals(7, w.data()));
+  TEST_ASSERT_TRUE(c.holds(7));  // refreshed: the second try was taken
+  const uint32_t reads = dev.reads;
+  TEST_ASSERT_TRUE(d.read(7, buf, 1));
+  TEST_ASSERT_EQUAL_UINT32(reads, dev.reads);
+  TEST_ASSERT_EQUAL_MEMORY(w.data(), buf, kSS);
+  CachedDrive::Stats s = d.stats();
+  TEST_ASSERT_EQUAL_UINT32(2, s.cardWrites);
+  TEST_ASSERT_EQUAL_UINT32(1, s.writeRetries);
+  TEST_ASSERT_EQUAL_UINT32(0, s.writeFails);
+  TEST_ASSERT_EQUAL_UINT32(0, c.stats().failedWrites);
+  // A multi-sector write that failed half way: written again whole.
+  std::vector<uint8_t> run(2 * kSS, 0x42);
+  dev.failWriteAfter = 1;
+  TEST_ASSERT_TRUE(d.write(20, run.data(), 2));
+  TEST_ASSERT_TRUE(dev.equals(20, run.data()));
+  TEST_ASSERT_TRUE(dev.equals(21, run.data() + kSS));
+  // Refused twice: the write fails, the cache drops the sector.
+  const Sector w2 = filled(0x78);
+  dev.failWrites = 2;
+  TEST_ASSERT_FALSE(d.write(7, w2.data(), 1));
+  TEST_ASSERT_FALSE(c.holds(7));
+  TEST_ASSERT_TRUE(dev.equals(7, w.data()));
+  s = d.stats();
+  TEST_ASSERT_EQUAL_UINT32(3, s.writeRetries);
+  TEST_ASSERT_EQUAL_UINT32(1, s.writeFails);
+  TEST_ASSERT_EQUAL_UINT32(1, c.stats().failedWrites);
+  // The cache off: the same rule.
+  d.setEnabled(false);
+  dev.failWrites = 1;
+  TEST_ASSERT_TRUE(d.write(7, w2.data(), 1));
+  TEST_ASSERT_TRUE(dev.equals(7, w2.data()));
+  TEST_ASSERT_EQUAL_UINT32(4, d.stats().writeRetries);
+  // Reads aren't tried again here (the SD driver does, three times).
+  dev.failReads = 1;
+  TEST_ASSERT_FALSE(d.read(30, buf, 1));
+}
+
+namespace {
+
+void put32le(uint8_t* p, uint32_t v) {
+  for (int i = 0; i < 4; ++i) p[i] = static_cast<uint8_t>(v >> (8 * i));
+}
+
+// A card as a PC formats it: a partition table in sector 0 (a disk
+// signature, the first entry FAT32 from LBA `boot`) and a FAT boot sector
+// there with a volume serial (BS_VolID, offset 67).
+constexpr uint32_t kCardSectors = 1u << 20;
+void formatLike(RamDevice& dev, uint32_t boot, uint32_t serial, uint32_t signature = 0x5EED0001) {
+  Sector mbr{};
+  put32le(mbr.data() + 440, signature);
+  mbr[446 + 4] = 0x0C;
+  put32le(mbr.data() + 446 + 8, boot);
+  put32le(mbr.data() + 446 + 12, kCardSectors - boot);
+  mbr[510] = 0x55;
+  mbr[511] = 0xAA;
+  dev.sectors[0] = mbr;
+  Sector vbr{};
+  vbr[0] = 0xEB;
+  vbr[1] = 0x58;
+  vbr[2] = 0x90;
+  vbr[12] = 0x02;  // 512 B a sector
+  put32le(vbr.data() + 67, serial);
+  vbr[510] = 0x55;
+  vbr[511] = 0xAA;
+  dev.sectors[boot] = vbr;
+}
+
+// The mount's card remembered, `change` done to the card in the slot, a
+// remount at `sectors`: foreign?
+bool foreignAfter(void (*change)(RamDevice&), uint32_t sectors = kCardSectors) {
+  RamDevice dev;
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS];
+  d.setScratch(scratch);
+  formatLike(dev, 8192, 0x1234ABCD);
+  d.init();
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  change(dev);
+  d.init();
+  const bool same = d.remounted(sectors);
+  TEST_ASSERT_EQUAL(!same, d.foreign());
+  TEST_ASSERT_EQUAL_UINT32(1, d.remounts());
+  return d.foreign();
+}
+
+}  // namespace
+
+// The card's identity: its size, sector 0's CRC and its first partition's
+// boot sector's. The same card (pulled and put back, or FatFs's own
+// remount after a status glitch) passes; each part tells another card
+// apart; a card whose identity can't be read is taken for another. FatFs's
+// own writes (the FSINFO sector after the boot sector, the FAT, folders)
+// change none of it.
+void test_drive_identity() {
+  TEST_ASSERT_FALSE(foreignAfter([](RamDevice&) {}));
+  TEST_ASSERT_FALSE(foreignAfter([](RamDevice& d) {
+    d.sectors[8193] = filled(0x46);  // FSINFO
+    d.sectors[8200] = filled(0xFA);  // the FAT
+    d.sectors[40000] = filled(0xD1);
+  }));
+  TEST_ASSERT_TRUE(foreignAfter([](RamDevice& d) { put32le(d.sectors[8192].data() + 67, 0x1234ABCE); }));
+  TEST_ASSERT_TRUE(foreignAfter([](RamDevice& d) { put32le(d.sectors[0].data() + 440, 0x5EED0002); }));
+  TEST_ASSERT_TRUE(foreignAfter([](RamDevice& d) { formatLike(d, 2048, 0x1234ABCD); }));  // the partition moved
+  TEST_ASSERT_TRUE(foreignAfter([](RamDevice&) {}, kCardSectors / 2));                     // another size
+  TEST_ASSERT_TRUE(foreignAfter([](RamDevice& d) { d.sectors.clear(); }));                 // blank (no table)
+  // One failed read of it is read again; two make it unreadable: another.
+  TEST_ASSERT_FALSE(foreignAfter([](RamDevice& d) { d.failReads = 1; }));
+  TEST_ASSERT_TRUE(foreignAfter([](RamDevice& d) { d.failReads = 2; }));
+  // A card with no partition table (its boot sector at 0): sector 0 alone.
+  RamDevice dev;
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS];
+  d.setScratch(scratch);
+  formatLike(dev, 8192, 0x0BADF00D);
+  dev.sectors[0] = dev.sectors[8192];
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  TEST_ASSERT_EQUAL_UINT32(0, d.mountIdentity().bootLba);
+  TEST_ASSERT_TRUE(d.mountIdentity().valid);
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  put32le(dev.sectors[0].data() + 67, 0x0BADF00E);
+  TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+}
+
+// Another card: every write refused (the card never sees one), reads
+// served (FatFs mounts it; the restart reads it), until a restart: the
+// mount's card put back is still refused. Remounts are counted.
+void test_drive_foreign_card() {
+  RamDevice dev;
+  SectorCache c;
+  TEST_ASSERT_TRUE(c.begin(8));
+  CachedDrive d(c, dev);
+  uint8_t scratch[kSS];
+  d.setScratch(scratch);
+  // Nothing remembered (a model's first mount, before the firmware's
+  // install()): a remount checks nothing.
+  formatLike(dev, 8192, 0xA);
+  d.init();
+  TEST_ASSERT_TRUE(d.remounted(kCardSectors));
+  TEST_ASSERT_FALSE(d.armed());
+  TEST_ASSERT_EQUAL_UINT32(0, d.remounts());
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  TEST_ASSERT_TRUE(d.armed());
+  uint8_t buf[kSS];
+  TEST_ASSERT_TRUE(d.read(8192, buf, 1));  // cached
+  // Another card in the slot.
+  const std::map<uint32_t, Sector> first = dev.sectors;
+  dev.sectors.clear();
+  formatLike(dev, 8192, 0xB);
+  d.init();
+  TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.foreign());
+  TEST_ASSERT_TRUE(d.read(8192, buf, 1));
+  TEST_ASSERT_TRUE(dev.equals(8192, buf));  // the new card's (the cache was cleared)
+  const uint32_t writes = dev.writes;
+  const Sector w = filled(0x99);
+  TEST_ASSERT_FALSE(d.write(8192, w.data(), 1));
+  TEST_ASSERT_FALSE(d.write(100, w.data(), 1));
+  d.setEnabled(false);
+  TEST_ASSERT_FALSE(d.write(100, w.data(), 1));
+  d.setEnabled(true);
+  TEST_ASSERT_EQUAL_UINT32(writes, dev.writes);
+  TEST_ASSERT_EQUAL_UINT32(3, d.stats().refused);
+  TEST_ASSERT_EQUAL_UINT32(0, d.stats().cardWrites);
+  // The first card back: still foreign (a restart is coming).
+  dev.sectors = first;
+  d.init();
+  TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.foreign());
+  TEST_ASSERT_EQUAL_UINT32(2, d.remounts());
+  TEST_ASSERT_FALSE(d.write(100, w.data(), 1));
+  // remember() (the next boot's mount) starts again.
+  TEST_ASSERT_TRUE(d.remember(kCardSectors));
+  TEST_ASSERT_FALSE(d.foreign());
+  TEST_ASSERT_TRUE(d.write(100, w.data(), 1));
+}
+
+// No scratch (no PSRAM for it at the mount): no identity can be read, so
+// none is known, and any remount is taken for another card (a restart
+// reads the card again).
+void test_drive_identity_without_scratch() {
+  RamDevice dev;
+  SectorCache c;
+  CachedDrive d(c, dev);
+  formatLike(dev, 8192, 0xC);
+  d.init();
+  TEST_ASSERT_FALSE(d.remember(kCardSectors));
+  TEST_ASSERT_TRUE(d.armed());
+  TEST_ASSERT_FALSE(d.mountIdentity().valid);
+  TEST_ASSERT_FALSE(d.foreign());
+  uint8_t buf[kSS] = {};
+  TEST_ASSERT_TRUE(d.write(5, buf, 1));
+  d.init();
+  TEST_ASSERT_FALSE(d.remounted(kCardSectors));
+  TEST_ASSERT_TRUE(d.foreign());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_hit_and_miss);
@@ -687,5 +916,9 @@ int main(int, char**) {
   RUN_TEST(test_drive_verify);
   RUN_TEST(test_drive_counts_and_reset);
   RUN_TEST(test_drive_without_memory);
+  RUN_TEST(test_drive_write_retried_once);
+  RUN_TEST(test_drive_identity);
+  RUN_TEST(test_drive_foreign_card);
+  RUN_TEST(test_drive_identity_without_scratch);
   return UNITY_END();
 }

@@ -1193,7 +1193,22 @@ host-tested on their own and under FatFs: `disk_initialize` clears the
 cache (FatFs mounts the volume again by itself once a card stopped
 answering: pulled or swapped while on, with no card-detect, the next card
 mustn't get the last one's FAT and folders), `CTRL_TRIM` invalidates the
-freed range, and a write with the cache off drops the sectors it wrote.
+freed range, a write with the cache off drops the sectors it wrote, and a
+write the card refused is written again once. The clear alone doesn't make
+a swap safe: everything the player holds in RAM is still the old card's.
+So the wrapper also keeps the card's identity at the mount (its size, the
+CRC-32 of sector 0 and of its FAT boot sector) and compares the card at
+every remount: another card is write-protected until a restart (its
+status says `STA_PROTECT`, so FatFs refuses every write, the call that
+found it included), and the loop restarts ("Another card: restarting");
+the same card put back has its records opened again, or the player
+restarts if a card job was under way (METADATA.md 3.8, "The card's
+guard"). Under it is the SD library's driver, from `lib/SD`: the
+framework's copy with `sd_diskio.cpp` patched, because arduino-esp32
+3.3.12's busy wait took a byte of the card's busy line for "ready" and its
+writes sent their status command to a card still programming, so about
+one write in a few thousand failed with `token error` (the device run's
+walks; METADATA.md 3.8, "The SD driver"; lib/SD/README.md).
 The console's `gc` prints its counts (hits, misses, the card's reads and
 their time, the mounts); `gc0` and `gc1` turn it off and on for the device
 batch's A/B, `gc2` checks every hit against the card (each prints the

@@ -8,10 +8,11 @@
 #include "SectorCache.h"
 
 // The PSRAM sector cache under FatFs (docs/METADATA.md 3.2.4, 3.2.7;
-// milestone N10): a diskio driver for the SD card's FatFs drive that
-// forwards to the SD library's own (sd_diskio.cpp's ff_sd_initialize,
-// ff_sd_status, ff_sd_read, ff_sd_write, ff_sd_ioctl) through N8's
-// SectorCache (lib/core): 256 single sectors, 135,168 B of PSRAM, the
+// milestone N10), and the card's guard (3.8): a diskio driver for the SD
+// card's FatFs drive that forwards to the SD library's own (sd_diskio.cpp's
+// ff_sd_initialize, ff_sd_status, ff_sd_read, ff_sd_write, ff_sd_ioctl:
+// lib/SD, the framework's patched to wait out the card's busy) through
+// N8's SectorCache (lib/core): 256 single sectors, 135,168 B of PSRAM, the
 // directories' and the FAT's sectors that every path lookup reads again
 // from the root. The rules are lib/core CachedDrive's (host-tested in
 // test_sector_cache, and under FatFs in test_fat_model); this file adapts
@@ -19,13 +20,24 @@
 //
 //   - install(), right after every mount: SD.begin() registers the stock
 //     driver each time (sdcard_init()), so the wrapper goes in after it, the
-//     cache cleared first. LocalStorage::begin() runs before the audio
-//     starts, so no other task is inside a disk call during the swap.
-//     probeCard() mounts only to look and unmounts (SD.end()): no wrapper.
+//     cache cleared first and the card's identity kept (its size, the CRC
+//     of sector 0 and of its boot sector). LocalStorage::begin() runs
+//     before the audio starts, so no other task is inside a disk call
+//     during the swap. probeCard() mounts only to look and unmounts
+//     (SD.end()): no wrapper.
 //   - disk_initialize (FatFs mounting the volume again by itself: after
 //     ff_sd_status() said STA_NOINIT, the card pulled or swapped while on;
 //     there is no card-detect) clears the cache before the SD driver's
 //     init: the card that answers now may not be the one the cache read.
+//     Then that card's identity is compared with the mount's: another
+//     card (or one whose identity can't be read) is foreign until a
+//     restart, and the status says STA_PROTECT from then on, so FatFs
+//     refuses every write to it (FR_WRITE_PROTECTED) before the call that
+//     found it, or any after, can write (a write that reaches the wrapper
+//     anyway is RES_WRPRT). The loop polls guard() and restarts
+//     (main.cpp's stepCardGuard()).
+//   - A write the SD driver says failed is written again once (CachedDrive:
+//     the device run's glitch, a status command sent to a busy card).
 //   - CTRL_TRIM (FatFs trims the clusters it frees, FF_USE_TRIM): the range
 //     is invalidated, then the SD driver's ioctl runs (it answers PARERR to
 //     a trim: FatFs ignores the answer).
@@ -76,6 +88,9 @@ struct Stats {
   uint32_t cardReadSectors = 0;
   uint64_t cardReadUs = 0;
   uint32_t cardWrites = 0;
+  uint32_t writeRetries = 0;  // writes the card refused, written again (CachedDrive)
+  uint32_t writeFails = 0;    // ... refused twice
+  uint32_t refused = 0;       // writes refused: another card in the slot
   uint32_t trims = 0;
   uint32_t inits = 0;        // mounts (FatFs's own after a card stopped answering too): the cache cleared
   uint32_t verified = 0;     // hits compared with the card (verify on)
@@ -84,6 +99,21 @@ struct Stats {
 };
 Stats stats();
 void resetStats();
+
+// The card's guard (METADATA.md 3.8), for the loop (any task: each field
+// read as it is). Never reset (gc's reset leaves it).
+struct Guard {
+  bool armed = false;    // install() kept the mount's card (the wrapper is in)
+  bool known = false;    // ... and could read its identity (else any remount is foreign)
+  bool foreign = false;  // a remount found another card: every write refused until a restart
+  uint32_t remounts = 0;  // FatFs mounted the volume again with a card answering
+  // The write counts (CachedDrive's; gc's reset starts them again).
+  uint32_t writeRetries = 0, writeFails = 0, refused = 0;
+};
+Guard guard();
+// The mount's card identity (`last`: the last remount's), for the log:
+// "62333952 sectors, sector 0 CRC 1a2b3c4d, boot sector 8192 CRC ...".
+size_t identityText(char* buf, size_t size, bool last = false);
 
 // L0's per-sector figure: `n` single-sector reads straight from the SD
 // driver (never the cache) at sectors spread over the card, timed. The

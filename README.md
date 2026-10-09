@@ -822,17 +822,25 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       The card's check, the device's tag records and their
                       journals, the tag reader, the transfer's root, the
                       card worker's jobs (a step at a time)
-  ScanScheduler, SectorCache
+  ScanScheduler, SectorCache, CachedDrive, SdBusy
                       When the card worker works (it yields to the music
-                      and the listener); the PSRAM sector cache under FatFs
+                      and the listener); the PSRAM sector cache under FatFs,
+                      the diskio wrapper's rules (a refused write written
+                      again, the card's identity: a card swapped while on
+                      is write-protected), the SD driver's busy waits
   NvsLayout           The NVS schema number's boot step; the resume point's
                       versioned blob; the repeat mode's key
   hal/                IAudioBackend, IStorage
+lib/SD/               The Arduino core's SD library (Apache-2.0), with
+                      sd_diskio.cpp patched to wait out the card's busy
+                      after a write (lib/SD/README.md); it replaces the
+                      framework's in the build
 src/                  Core2 firmware
   audio/              Core2AudioBackend (decode task), RingOutput, BtSink, SpeakerSink
   storage/            LocalStorage: SD card if present, else LittleFS; FileStream;
                       CardFat (FatFs itself: the walk's lister, the records'
-                      files), SectorDisk (the sector cache under the card)
+                      files), SectorDisk (the sector cache under the card,
+                      and its guard against a card swapped while on)
   ui/                 Ui (the one owner of the display: navigation, tab bar,
                       overlays, pages), TabBar, ListView (lists on the
                       hardware scroll), Overlays (toast, HUD, sheet, volume

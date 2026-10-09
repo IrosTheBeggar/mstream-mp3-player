@@ -366,6 +366,12 @@ inline constexpr const char* kLibraryAtBoot = "Library updates at next boot";
 // and the note for a skip, a seek or an edit tried meanwhile (a toast).
 inline constexpr const char* kUpdatingList = "Updating the library\xE2\x80\xA6";
 inline constexpr const char* kUpdatingWait = "Updating the library: a moment";
+// A card swapped while the player is on (3.8; main.cpp's stepCardGuard()):
+// the toast before the restart (Body, one line, no buttons). Another card
+// (write-protected until then), or the same card back with a card job
+// under way.
+inline constexpr const char* kAnotherCard = "Another card: restarting";
+inline constexpr const char* kCardBack = "Card back: restarting";
 
 // ---- the Output tab (ui/OutputPage) ----
 // The Bluetooth card's status line (Small, x 52 to the radio).

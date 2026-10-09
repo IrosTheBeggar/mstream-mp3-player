@@ -6,6 +6,8 @@
 #include <esp_timer.h>
 #include <sd_diskio.h>
 
+#include <cstdio>
+
 #include "CachedDrive.h"
 #include "app/Psram.h"
 #include "diskio_impl.h"  // ff_diskio_register(), ff_diskio_impl_t
@@ -44,15 +46,25 @@ SdCard s_card;
 CachedDrive s_drive(s_cache, s_card, nowUs);
 uint8_t* s_check = nullptr;  // verify's sector (PSRAM)
 
-// FatFs (re)mounts the volume: at the first access after the mount, and by
-// itself once the card stopped answering (ff_sd_status()'s STA_NOINIT: a
-// card pulled or swapped while on). The cache is cleared first: nothing of
-// the card that was there is served to the one that is.
+// FatFs mounts the volume again by itself once the card stopped answering
+// (ff_sd_status()'s STA_NOINIT: a card pulled, or swapped, while on; the
+// mount itself was SD.begin()'s, before install()). The cache is cleared
+// first: nothing of the card that was there is served to the one that is.
+// Then, the SD driver's init done and a card answering, its identity is
+// held to the mount's (CachedDrive::remounted()): another card is foreign
+// until a restart, and STA_PROTECT makes FatFs refuse every write to it
+// before it writes (FR_WRITE_PROTECTED: a write-mode open, an unlink, a
+// mkdir, a rename; the call that found it too, when it was one of those).
 DSTATUS wInit(unsigned char pdrv) {
   s_drive.init();
-  return ff_sd_initialize(pdrv);
+  const DSTATUS st = ff_sd_initialize(pdrv);
+  if (!(st & STA_NOINIT)) s_drive.remounted(sdcard_num_sectors(pdrv));
+  return s_drive.foreign() ? static_cast<DSTATUS>(st | STA_PROTECT) : st;
 }
-DSTATUS wStatus(unsigned char pdrv) { return ff_sd_status(pdrv); }
+DSTATUS wStatus(unsigned char pdrv) {
+  const DSTATUS st = ff_sd_status(pdrv);
+  return s_drive.foreign() ? static_cast<DSTATUS>(st | STA_PROTECT) : st;
+}
 
 DRESULT wRead(unsigned char pdrv, unsigned char* buff, uint32_t sector, unsigned count) {
   (void)pdrv;
@@ -61,6 +73,7 @@ DRESULT wRead(unsigned char pdrv, unsigned char* buff, uint32_t sector, unsigned
 
 DRESULT wWrite(unsigned char pdrv, const unsigned char* buff, uint32_t sector, unsigned count) {
   (void)pdrv;
+  if (s_drive.foreign()) return RES_WRPRT;  // (FatFs refuses first: STA_PROTECT)
   return s_drive.write(sector, buff, count) ? RES_OK : RES_ERROR;
 }
 
@@ -85,6 +98,9 @@ bool install(uint8_t pdrv) {
   s_drive.setScratch(s_check);
   s_pdrv = pdrv;
   s_drive.init();  // a mount: nothing kept from before
+  // The mount's card, before the wrapper goes in (no other task reads the
+  // card yet): the one FatFs's remounts are held to.
+  s_drive.remember(sdcard_num_sectors(pdrv));
   ff_diskio_register(pdrv, &kImpl);
   s_installed = true;
   return true;
@@ -117,6 +133,9 @@ Stats stats() {
   s.cardReadSectors = d.cardReadSectors;
   s.cardReadUs = d.cardReadUs;
   s.cardWrites = d.cardWrites;
+  s.writeRetries = d.writeRetries;
+  s.writeFails = d.writeFails;
+  s.refused = d.refused;
   s.trims = d.trims;
   s.inits = d.inits;
   s.verified = d.verified;
@@ -126,6 +145,40 @@ Stats stats() {
 }
 
 void resetStats() { s_drive.resetStats(); }
+
+Guard guard() {
+  Guard g;
+  if (!s_installed) return g;
+  g.armed = s_drive.armed();
+  g.known = s_drive.mountIdentity().valid;
+  // The count first: remounted() counts after its verdict, so a count
+  // seen here comes with its verdict.
+  g.remounts = s_drive.remounts();
+  g.foreign = s_drive.foreign();
+  const CachedDrive::Stats d = s_drive.stats();
+  g.writeRetries = d.writeRetries;
+  g.writeFails = d.writeFails;
+  g.refused = d.refused;
+  return g;
+}
+
+size_t identityText(char* buf, size_t size, bool last) {
+  if (!buf || size == 0) return 0;
+  const CachedDrive::Identity& id = last ? s_drive.lastIdentity() : s_drive.mountIdentity();
+  int n;
+  if (!s_installed || !s_drive.armed()) {
+    n = snprintf(buf, size, "not kept (no wrapper)");
+  } else if (!id.valid) {
+    n = snprintf(buf, size, "%lu sectors, UNREADABLE", (unsigned long)id.sectors);
+  } else if (id.bootLba) {
+    n = snprintf(buf, size, "%lu sectors, sector 0 CRC %08lx, boot sector %lu CRC %08lx", (unsigned long)id.sectors,
+                 (unsigned long)id.sector0Crc, (unsigned long)id.bootLba, (unsigned long)id.bootCrc);
+  } else {
+    n = snprintf(buf, size, "%lu sectors, sector 0 (the volume's boot sector) CRC %08lx", (unsigned long)id.sectors,
+                 (unsigned long)id.sector0Crc);
+  }
+  return n > 0 ? (static_cast<size_t>(n) < size ? static_cast<size_t>(n) : size - 1) : 0;
+}
 
 Bench benchReads(uint32_t n) {
   Bench b;

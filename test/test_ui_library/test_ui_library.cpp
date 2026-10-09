@@ -1700,6 +1700,9 @@ void test_library_texts_fit() {
   fits(body, kUpdatingList, 320 - 24);
   TEST_ASSERT_TRUE(body.hasAll(kUpdatingList));
   fits(body, kUpdatingWait, kToastTextRight - kToastTextX);
+  // A card swapped while on: the toasts before the restart.
+  fits(body, kAnotherCard, kToastTextRight - kToastTextX);
+  fits(body, kCardBack, kToastTextRight - kToastTextX);
 }
 
 // ---- the console's tag commands (tagtext, docs/METADATA.md 3.3.6) ----

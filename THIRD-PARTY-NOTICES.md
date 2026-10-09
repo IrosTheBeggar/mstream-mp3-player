@@ -285,6 +285,16 @@ It contains:
     "Copyright (c) 2014 Neil Thiessen" (sd_diskio_crc.c).
   - HardwareSerial.cpp and chip-debug-report.cpp carry no notice (the
     package's LGPL-2.1-or-later applies).
+- **Its SD library is built from this repository's copy**, `lib/SD`
+  (SD.cpp, SD.h, sd_defines.h, sd_diskio.cpp, sd_diskio.h,
+  sd_diskio_crc.c, library.properties, from the package's
+  `libraries/SD` at 3.3.12), which PlatformIO takes before the
+  framework's. Apache-2.0 by the files' headers ("Copyright 2015-2016
+  Espressif Systems (Shanghai) PTE LTD"; sd_diskio_crc.c "Copyright (c)
+  2014 Neil Thiessen"); `sd_diskio.cpp` is modified (it says so at its
+  top, and each change is marked: the card's busy waited out after a
+  write), the other files are unchanged (their SHA-256 sums and the
+  changes are in lib/SD/README.md).
 - Source: https://github.com/espressif/arduino-esp32/tree/3.3.12
 - Also in the merged image: boot_app0.bin (at 0xE000), from this package.
 

@@ -128,6 +128,14 @@ bool LocalStorage::begin() {
     Serial.printf("[storage] SD card on FatFs drive %u; the sector cache: %s\n", static_cast<unsigned>(pdrv),
                   cached ? "on (256 sectors, 135168 B of PSRAM)"
                   : MSTREAM_SECTOR_CACHE ? "OFF (no PSRAM)" : "off (this build: MSTREAM_SECTOR_CACHE=0)");
+    // The wrapper's guard (METADATA.md 3.8): a card put in while the
+    // player is on is held to this one, and write-protected if another.
+    char id[112];
+    sectordisk::identityText(id, sizeof(id));
+    Serial.printf("[storage] the card's identity: %s%s\n", id,
+                  !cached                     ? " (no guard: a card swapped while on isn't noticed)"
+                  : sectordisk::guard().known ? ""
+                                              : " (any remount restarts: nothing to compare it with)");
     return true;
   }
   lookAtCard(cs);  // a card that isn't FAT32 says so (the empty state)

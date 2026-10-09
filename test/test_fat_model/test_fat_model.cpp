@@ -20,7 +20,13 @@
 //   review): the card stops answering, FatFs mounts the volume again by
 //   itself, and the wrapper's init() clears the cache, so FatFs reads the
 //   new card's boot sector, FAT and folders, and a write there leaves the
-//   image a FatFs without the cache would.
+//   image a FatFs without the cache would (a card the guard can't tell
+//   from the first: formatted alike, a clone).
+// - The guard (2026-10-09): another card is write-protected from the
+//   remount that found it (FatFs refuses every write, the one that found
+//   it too, and never asks the disk for one) until a restart, the first
+//   card put back included; the same card put back is written as before,
+//   and what was open before the pull is gone.
 // tools/fatmodel.py runs the same model on tools/synthcard.py's card.
 // Run: pio test -e native -f test_fat_model
 #include <unity.h>
@@ -492,8 +498,8 @@ void checkFile(BYTE pdrv, const std::string& rel, uint32_t n, uint32_t seed) {
 }
 
 // Two cards formatted alike (the same boot sector: the model's clock is
-// fixed), their folders and FATs not: one with an artist's album, the
-// other with another's and more files.
+// fixed; to the guard, one card), their folders and FATs not: one with an
+// artist's album, the other with another's and more files.
 void fillCard(BYTE pdrv, bool second) {
   TEST_ASSERT_EQUAL(FR_OK, f_mkdir(path(pdrv, "music").c_str()));
   if (!second) {
@@ -522,28 +528,36 @@ void test_card_swapped_under_the_wrapper() {
   fillCard(1, true);
   TEST_ASSERT_EQUAL(FR_OK, f_mount(nullptr, "1:", 0));
   ref = b;
-  // The first card under the wrapper, as the firmware mounts it.
+  // The first card under the wrapper, as the firmware mounts it (its
+  // identity kept, as install() keeps it).
   static SectorCache cache;
   TEST_ASSERT_TRUE(cache.begin(SectorCache::kDefaultEntries));
+  static uint8_t scratch[fatmodel::kSS];
   fatmodel::Slot slot(0);
   CachedDrive wrapper(cache, slot);
+  wrapper.setScratch(scratch);
   drive(0).disk = &a;
   drive(0).wrapper = &wrapper;
   TEST_ASSERT_EQUAL(FR_OK, fatmodel::format(0, 2048));
   FATFS fs0;
   TEST_ASSERT_EQUAL(FR_OK, fatmodel::mount(0, &fs0));
   fillCard(0, false);
+  TEST_ASSERT_TRUE(wrapper.remember(a.sectors()));
   for (uint32_t k = 0; k < 6; ++k) checkFile(0, "music/First Artist/0" + std::to_string(k) + " - a.mp3", 9000 + k, k);
   TEST_ASSERT_TRUE(cache.size() > 4);  // its boot sector, FAT and folders
   const uint32_t inits = wrapper.stats().inits;
 
   // The card pulled and the other put in, the player on: the SD driver's
-  // status says not initialised, and FatFs's next call mounts again.
+  // status says not initialised, and FatFs's next call mounts again. Its
+  // size and boot sectors are the first's: the guard takes it for the same
+  // card (a clone would be), so this is what the cache alone does.
   drive(0).disk = &b;
   drive(0).noInit = true;
   FILINFO fi;
   TEST_ASSERT_EQUAL(FR_OK, f_stat(path(0, "music/Second Artist/03 - b.mp3").c_str(), &fi));
   TEST_ASSERT_EQUAL_UINT32(inits + 1, wrapper.stats().inits);
+  TEST_ASSERT_EQUAL_UINT32(1, wrapper.remounts());
+  TEST_ASSERT_FALSE(wrapper.foreign());
   TEST_ASSERT_EQUAL_UINT32(7003, static_cast<uint32_t>(fi.fsize));
   TEST_ASSERT_EQUAL(FR_NO_PATH, f_stat(path(0, "music/First Artist/00 - a.mp3").c_str(), &fi));
   for (uint32_t k = 0; k < 9; ++k) checkFile(0, "music/Second Artist/0" + std::to_string(k) + " - b.mp3", 7000 + k, 50 + k);
@@ -568,10 +582,170 @@ void test_card_swapped_under_the_wrapper() {
   tearDown();
 }
 
+namespace {
+
+// A FAT32 format at another time: the volume serial (BS_VolID, made from
+// the clock and the size) is another, in the boot sector and its backup.
+// The model's clock is fixed, so two formats of one size are otherwise the
+// same bytes.
+void stampSerial(RamDisk& d, uint32_t serial) {
+  uint8_t s[fatmodel::kSS];
+  TEST_ASSERT_TRUE(d.read(0, s, 1));
+  const uint32_t boot = static_cast<uint32_t>(s[454]) | static_cast<uint32_t>(s[455]) << 8 |
+                        static_cast<uint32_t>(s[456]) << 16 | static_cast<uint32_t>(s[457]) << 24;
+  TEST_ASSERT_TRUE(boot > 0);
+  for (uint32_t lba : {boot, boot + 6}) {
+    TEST_ASSERT_TRUE(d.read(lba, s, 1));
+    TEST_ASSERT_EQUAL_HEX8(0xEB, s[0]);
+    for (int i = 0; i < 4; ++i) s[67 + i] = static_cast<uint8_t>(serial >> (8 * i));
+    TEST_ASSERT_TRUE(d.write(lba, s, 1));
+  }
+}
+
+}  // namespace
+
+// Another card in the slot (2026-10-09: the guard). The first card under
+// the wrapper, its identity kept as install() keeps it; another put in
+// while on. FatFs's next call mounts again (the wrapper's init(), then
+// remounted()): the card isn't the mount's, so the status says
+// STA_PROTECT from then on, and FatFs refuses every write to it before it
+// writes, the call that found it included (the scan's create of tags.jnl
+// would be that call). Its files read; nothing reaches it, so its image is
+// the one it came with. The first card put back is refused too: only a
+// restart (the next mount's remember()) clears it.
+void test_another_card_is_write_protected() {
+  static RamDisk a(524288), b(524288), refA(1), refB(1);
+  a = RamDisk(524288);
+  b = RamDisk(524288);
+  drive(1).disk = &b;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::format(1, 2048));
+  FATFS fs1;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::mount(1, &fs1));
+  fillCard(1, true);
+  TEST_ASSERT_EQUAL(FR_OK, f_mount(nullptr, "1:", 0));
+  stampSerial(b, 0x2B2B2B2B);
+  refB = b;
+  static SectorCache cache;
+  TEST_ASSERT_TRUE(cache.begin(SectorCache::kDefaultEntries));
+  static uint8_t scratch[fatmodel::kSS];
+  fatmodel::Slot slot(0);
+  CachedDrive wrapper(cache, slot);
+  wrapper.setScratch(scratch);
+  drive(0).disk = &a;
+  drive(0).wrapper = &wrapper;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::format(0, 2048));
+  FATFS fs0;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::mount(0, &fs0));
+  fillCard(0, false);
+  TEST_ASSERT_TRUE(wrapper.remember(a.sectors()));  // install()
+  refA = a;
+
+  // Pulled, the other put in: the next call is a write (a journal's create).
+  drive(0).disk = &b;
+  drive(0).noInit = true;
+  const uint64_t asked = drive(0).asked.writes;
+  FIL f;
+  TEST_ASSERT_EQUAL(FR_WRITE_PROTECTED,
+                    f_open(&f, path(0, ".player/tags.jnl").c_str(), FA_CREATE_ALWAYS | FA_WRITE));
+  TEST_ASSERT_TRUE(wrapper.foreign());
+  TEST_ASSERT_EQUAL_UINT32(1, wrapper.remounts());
+  // Its files read (the restart's boot reads them). The refused call left
+  // the volume unmounted (FatFs checks the protection before it mounts),
+  // so this one mounts it: a second remount, of the same foreign card.
+  FILINFO fi;
+  TEST_ASSERT_EQUAL(FR_OK, f_stat(path(0, "music/Second Artist/03 - b.mp3").c_str(), &fi));
+  TEST_ASSERT_EQUAL_UINT32(2, wrapper.remounts());
+  TEST_ASSERT_EQUAL_UINT32(7003, static_cast<uint32_t>(fi.fsize));
+  for (uint32_t k = 0; k < 9; ++k) checkFile(0, "music/Second Artist/0" + std::to_string(k) + " - b.mp3", 7000 + k, 50 + k);
+  // Every write refused: the queue's save, an append, an edit, a delete, a
+  // folder, a rename (the update step's and the opus cache's swaps).
+  const std::string q = path(0, "music/Second Artist/queue.tmp");
+  const std::string old = path(0, "music/Second Artist/00 - b.mp3");
+  TEST_ASSERT_EQUAL(FR_WRITE_PROTECTED, f_open(&f, q.c_str(), FA_CREATE_ALWAYS | FA_WRITE));
+  TEST_ASSERT_EQUAL(FR_WRITE_PROTECTED, f_open(&f, old.c_str(), FA_OPEN_APPEND | FA_WRITE));
+  TEST_ASSERT_EQUAL(FR_WRITE_PROTECTED, f_open(&f, old.c_str(), FA_OPEN_EXISTING | FA_READ | FA_WRITE));
+  TEST_ASSERT_EQUAL(FR_WRITE_PROTECTED, f_unlink(path(0, "music/Third Artist/01 - c.mp3").c_str()));
+  TEST_ASSERT_EQUAL(FR_WRITE_PROTECTED, f_mkdir(path(0, ".player").c_str()));
+  TEST_ASSERT_EQUAL(FR_WRITE_PROTECTED, f_rename(old.c_str(), q.c_str()));
+  TEST_ASSERT_EQUAL(FR_OK, f_open(&f, old.c_str(), FA_READ));  // read-only: fine
+  TEST_ASSERT_EQUAL(FR_OK, f_close(&f));
+  TEST_ASSERT_EQUAL_UINT64(asked, drive(0).asked.writes);  // FatFs never asked the disk to write
+  TEST_ASSERT_EQUAL_UINT32(0, wrapper.stats().refused);    // (the wrapper's own refusal: never reached)
+  TEST_ASSERT_TRUE(b.same(refB));
+
+  // The first card back before the restart: still refused.
+  drive(0).disk = &a;
+  drive(0).noInit = true;
+  TEST_ASSERT_EQUAL(FR_OK, f_stat(path(0, "music/First Artist/00 - a.mp3").c_str(), &fi));
+  TEST_ASSERT_EQUAL_UINT32(3, wrapper.remounts());
+  TEST_ASSERT_EQUAL(FR_WRITE_PROTECTED, f_open(&f, q.c_str(), FA_CREATE_ALWAYS | FA_WRITE));
+  TEST_ASSERT_TRUE(a.same(refA));
+
+  // The restart: the next boot's mount keeps the card that is in.
+  TEST_ASSERT_EQUAL(FR_OK, f_mount(nullptr, "0:", 0));
+  TEST_ASSERT_TRUE(wrapper.remember(a.sectors()));
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::mount(0, &fs0));
+  putFile(0, "music/First Artist/queue.tmp", 3000, 7);
+  checkFile(0, "music/First Artist/queue.tmp", 3000, 7);
+  tearDown();
+}
+
+// The same card pulled and put back while on: FatFs mounts it again (the
+// SD driver had marked it failed), the guard finds the mount's card, and
+// writes go on. What was open before the pull is gone (FR_INVALID_OBJECT:
+// the volume's id changed), which is why main.cpp opens the card's
+// records again, or restarts when a job was under way.
+void test_same_card_back() {
+  static RamDisk a(524288);
+  a = RamDisk(524288);
+  static SectorCache cache;
+  TEST_ASSERT_TRUE(cache.begin(SectorCache::kDefaultEntries));
+  static uint8_t scratch[fatmodel::kSS];
+  fatmodel::Slot slot(0);
+  CachedDrive wrapper(cache, slot);
+  wrapper.setScratch(scratch);
+  drive(0).disk = &a;
+  drive(0).wrapper = &wrapper;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::format(0, 2048));
+  FATFS fs0;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::mount(0, &fs0));
+  fillCard(0, false);
+  TEST_ASSERT_TRUE(wrapper.remember(a.sectors()));
+  static FIL playing;  // the decoder's file, say
+  TEST_ASSERT_EQUAL(FR_OK, f_open(&playing, path(0, "music/First Artist/02 - a.mp3").c_str(), FA_READ));
+
+  // Pulled: nothing answers.
+  drive(0).disk = nullptr;
+  FILINFO fi;
+  TEST_ASSERT_EQUAL(FR_NOT_READY, f_stat(path(0, "music/First Artist/00 - a.mp3").c_str(), &fi));
+  TEST_ASSERT_EQUAL_UINT32(0, wrapper.remounts());
+  // Put back.
+  drive(0).disk = &a;
+  drive(0).noInit = true;
+  TEST_ASSERT_EQUAL(FR_OK, f_stat(path(0, "music/First Artist/00 - a.mp3").c_str(), &fi));
+  TEST_ASSERT_EQUAL_UINT32(1, wrapper.remounts());
+  TEST_ASSERT_FALSE(wrapper.foreign());
+  uint8_t buf[64];
+  UINT n = 0;
+  TEST_ASSERT_EQUAL(FR_INVALID_OBJECT, f_read(&playing, buf, sizeof(buf), &n));
+  for (uint32_t k = 0; k < 6; ++k) checkFile(0, "music/First Artist/0" + std::to_string(k) + " - a.mp3", 9000 + k, k);
+  putFile(0, "music/First Artist/queue.tmp", 3000, 7);
+  TEST_ASSERT_EQUAL(FR_OK, f_unlink(path(0, "music/First Artist/05 - a.mp3").c_str()));
+  // Mounted again from the card alone (no cache): what was written is there.
+  TEST_ASSERT_EQUAL(FR_OK, f_mount(nullptr, "0:", 0));
+  drive(0).wrapper = nullptr;
+  TEST_ASSERT_EQUAL(FR_OK, fatmodel::mount(0, &fs0));
+  checkFile(0, "music/First Artist/queue.tmp", 3000, 7);
+  TEST_ASSERT_EQUAL(FR_NO_FILE, f_stat(path(0, "music/First Artist/05 - a.mp3").c_str(), &fi));
+  tearDown();
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_cache_transparent_under_fatfs);
   RUN_TEST(test_user_shape_lookups_and_walk);
   RUN_TEST(test_card_swapped_under_the_wrapper);
+  RUN_TEST(test_another_card_is_write_protected);
+  RUN_TEST(test_same_card_back);
   return UNITY_END();
 }

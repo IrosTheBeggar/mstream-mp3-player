@@ -93,8 +93,10 @@ private:
 // One FatFs drive: its disk, the cache in front of it (null: the stock
 // driver, every call a card transaction), and what FatFs asked of it.
 // `wrapper` (set: `cache` is ignored) is the firmware's diskio wrapper over
-// the drive's slot (Slot below), whose init() runs at FatFs's
-// disk_initialize. `noInit`: disk_status() says STA_NOINIT until FatFs
+// the drive's slot (Slot below), whose init() and then remounted() (the
+// card's identity, once remember()'d) run at FatFs's disk_initialize, and
+// whose guard adds STA_PROTECT to the status once it found another card.
+// `noInit`: disk_status() says STA_NOINIT until FatFs
 // initialises the drive again (the SD driver's answer once a card stopped
 // answering: pulled, or another put in).
 struct Drive {
@@ -291,21 +293,31 @@ inline uint32_t folderSectors(BYTE pdrv, const std::string& rel, uint32_t* entri
 
 // ---- the disk functions FatFs calls ----
 
+// The firmware's wrapper adds STA_PROTECT once its guard found another
+// card in the slot (storage/SectorDisk's wStatus and wInit).
+inline DSTATUS guarded(const fatmodel::Drive& d, DSTATUS st) {
+  return d.wrapper && d.wrapper->foreign() ? static_cast<DSTATUS>(st | STA_PROTECT) : st;
+}
+
 extern "C" DSTATUS disk_status(BYTE pdrv) {
   if (pdrv >= FF_VOLUMES || !fatmodel::drive(pdrv).disk) return STA_NOINIT;
-  return fatmodel::drive(pdrv).noInit ? STA_NOINIT : 0;
+  const fatmodel::Drive& d = fatmodel::drive(pdrv);
+  return guarded(d, d.noInit ? STA_NOINIT : 0);
 }
 
 extern "C" DSTATUS disk_initialize(BYTE pdrv) {
   if (pdrv >= FF_VOLUMES || !fatmodel::drive(pdrv).disk) return STA_NOINIT;
   fatmodel::Drive& d = fatmodel::drive(pdrv);
-  if (d.wrapper) d.wrapper->init();  // the firmware's wInit(), then the SD driver's
+  // The firmware's wInit(): the cache cleared, the SD driver's init, then
+  // (a card answering) its identity held to the mount's.
+  if (d.wrapper) d.wrapper->init();
   d.noInit = false;
-  return 0;
+  if (d.wrapper) d.wrapper->remounted(d.disk->sectors());
+  return guarded(d, 0);
 }
 
 extern "C" DRESULT disk_read(BYTE pdrv, BYTE* buff, LBA_t sector, UINT count) {
-  if (disk_status(pdrv)) return RES_NOTRDY;
+  if (disk_status(pdrv) & STA_NOINIT) return RES_NOTRDY;
   fatmodel::Drive& d = fatmodel::drive(pdrv);
   ++d.asked.reads;
   d.asked.singleReads += count == 1;
@@ -318,9 +330,11 @@ extern "C" DRESULT disk_read(BYTE pdrv, BYTE* buff, LBA_t sector, UINT count) {
 }
 
 extern "C" DRESULT disk_write(BYTE pdrv, const BYTE* buff, LBA_t sector, UINT count) {
-  if (disk_status(pdrv)) return RES_NOTRDY;
+  const DSTATUS st = disk_status(pdrv);
+  if (st & STA_NOINIT) return RES_NOTRDY;
   fatmodel::Drive& d = fatmodel::drive(pdrv);
   ++d.asked.writes;
+  if (st & STA_PROTECT) return RES_WRPRT;  // (FatFs refuses first; counted, so a test sees it never asks)
   const uint32_t lba = static_cast<uint32_t>(sector);
   const bool ok = d.wrapper ? d.wrapper->write(lba, buff, count)
                   : d.cache ? d.cache->write(*d.disk, lba, buff, count)
@@ -329,7 +343,7 @@ extern "C" DRESULT disk_write(BYTE pdrv, const BYTE* buff, LBA_t sector, UINT co
 }
 
 extern "C" DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void* buff) {
-  if (disk_status(pdrv)) return RES_NOTRDY;
+  if (disk_status(pdrv) & STA_NOINIT) return RES_NOTRDY;
   fatmodel::Drive& d = fatmodel::drive(pdrv);
   switch (cmd) {
     case CTRL_SYNC: return RES_OK;
