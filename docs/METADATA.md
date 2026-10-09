@@ -4506,7 +4506,19 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   and internal DRAM unchanged; flash `.text` +124 B (1,759,312 to
   1,759,436, the same in both builds) and `.rodata` +256 B in core2
   (639,432 to 639,688), `firmware.bin` 2,628,704 to 2,629,088 B in core2;
-  every guard passes in both.
+  every guard passes in both. Run 4's fixes (e2ec85c: the console's shown
+  names, blank values naming nothing, the safe point that follows the
+  pause, PSRAM's lowest from `setup()`, HIDX's sort in the idle buffers
+  and each compaction's line), against 062bd1f, both built clean: IRAM
+  unchanged (`.iram0.vectors` 1,028 + `.iram0.text` 124,883 in both
+  builds; no `IRAM_ATTR`); internal DRAM +8 B (`.dram0.data` 24,568 to
+  24,584, `.dram0.bss` 32,600 to 32,592: `diag`'s floors, set to
+  `UINT32_MAX`, move to `.data`); flash `.text` +1,776 B (1,759,436 to
+  1,761,212 in both builds) and `.rodata` +608 B in core2 (639,688 to
+  640,296) and +640 B in core2-dio (639,720 to 640,360), `firmware.bin`
+  2,629,088 to 2,631,568 B in core2 (2,629,120 to 2,631,632 in core2-dio),
+  the app 2.51 MB (42% of its slot); `iram_diet`, `cache_guard`,
+  `flash_guard` and `version` pass in both.
   PSRAM (from the code): `LibraryUpdate` and its step about 0.4 KB, the
   held names about 1 KB, the carry about 0.1 KB, and when the card can't
   take `queue.txt` the queue's text through the build (up to about 400 KB
