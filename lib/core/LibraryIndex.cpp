@@ -1210,13 +1210,20 @@ bool LibraryIndex::buildViews() {
   Folder* folders = foldersB_.data;
   // What the lists sort by: the elected sort tag, else the name. Kept with
   // the views (the UI's rail and jump grid key on it too), the build's own
-  // tags dropped after.
-  for (uint32_t a = 0; a < nA; ++a) {
-    artistSortKeys_[a] = artistSort_.data[a] != kNone ? artistSort_.data[a] : artists[a].name;
-  }
-  for (uint32_t b = 0; b < nB; ++b) {
-    albumSortKeys_[b] = albumSort_.data[b] != kNone ? albumSort_.data[b] : albums[b].name;
-  }
+  // tags dropped after. A name's leading White_Space doesn't count (5.4's
+  // orderName is its nameKey, trimmed): an album tagged " Zebra Songs" (an
+  // album value keeps its bytes) sorts under Z, not first under '#'. The key
+  // is then the name's own bytes past it, an offset inside its string as a
+  // title's slice is: nothing interned. A sort tag is trimmed already
+  // (sortTagOf()); a FAT name never starts with a space.
+  auto sortKey = [&](uint32_t sortTag, uint32_t name) -> uint32_t {
+    if (sortTag != kNone) return sortTag;
+    const char* s = at(name);
+    size_t len = 0;
+    return name + static_cast<uint32_t>(namekey::trim(s, std::strlen(s), &len) - s);
+  };
+  for (uint32_t a = 0; a < nA; ++a) artistSortKeys_[a] = sortKey(artistSort_.data[a], artists[a].name);
+  for (uint32_t b = 0; b < nB; ++b) albumSortKeys_[b] = sortKey(albumSort_.data[b], albums[b].name);
   auto artistKey = [&](uint32_t a) { return at(artistSortKeys_[a]); };
   auto albumKey = [&](uint32_t b) { return at(albumSortKeys_[b]); };
   // The sorts are idsort's, not std::sort: the ids arrive in the records'

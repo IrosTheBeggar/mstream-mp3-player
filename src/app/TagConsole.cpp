@@ -404,7 +404,10 @@ void TagConsole::scanLine() {
     return;
   }
   librarytext::Status s;
-  char line[96] = "", text[96] = "";
+  // The worker's part whole (up to about 215 B: five counts, the longest
+  // wait's name, the update step's clause with the safe point's length;
+  // 96 B cut that clause off). No card read under it.
+  char line[224] = "", text[96] = "";
   jobs_.state(&s, line, sizeof(line));
   librarytext::statusText(s, text, sizeof(text));
   Serial.printf("[tags] the scan: %s%s%s\n", text[0] ? text : "idle", line[0] ? "; " : "", line);

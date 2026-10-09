@@ -65,7 +65,8 @@
 // Views (all sorted with textfold::compare: case- and accent-insensitive,
 // symbols and digits before letters; the artists and albums by their
 // textfold::sortName() of their sort tag when they have one, else of their
-// name, so "The Lantern Choir" sorts under L):
+// name past any White_Space it starts with, so "The Lantern Choir" sorts
+// under L and " Zebra Songs" under Z):
 //   artistsAZ()           every artist
 //   albumsAZ()            every album (ties: by artist)
 //   albumsOf(artist)      an artist's albums, newest first (by year; no year
@@ -375,7 +376,8 @@ public:
   Span artistsAZ() const { return {artistsAZ_, artistN_}; }
   Span albumsAZ() const { return {albumsAZ_, albumN_}; }
   // What artistsAZ() and albumsAZ() sort an entry by (textfold::
-  // compareSorted() of these): its elected sort tag, else its name. Saved
+  // compareSorted() of these): its elected sort tag, else its name past any
+  // White_Space it starts with (" Zebra Songs" sorts as a Z). Saved
   // with the views, so a loaded index has them too. The A-Z rail, the row's
   // letter and the jump grid key on textfold::sortName() of it, as the
   // buckets do: "Bowery, Daniel" puts Daniel Bowery among the B's.

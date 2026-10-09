@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 
+#include "LibraryText.h"
 #include "app/Psram.h"
 #include "app/Version.h"
 #include "storage/FileStream.h"
@@ -550,7 +551,9 @@ void Library::report() const {
                 (unsigned long)stats_.internalMinDuring, (unsigned)sizeof(LibraryIndex));
   const LibraryIndex::Span a = index_->artistsAZ();
   Serial.print("[index] artists A-Z:");
-  for (uint32_t i = 0; i < a.count && i < 4; ++i) Serial.printf(" \"%s\"", index_->artistName(a[i]));
+  // Named as the Library names them ("(no artist folder)" for the files
+  // right under /music: "" in the index, 3.4.3).
+  for (uint32_t i = 0; i < a.count && i < 4; ++i) Serial.printf(" \"%s\"", librarytext::artistShown(*index_, a[i]));
   Serial.printf("%s; rail buckets:", a.count > 4 ? " ..." : "");
   for (int b = 0; b < LibraryIndex::kBuckets; ++b) {
     const uint32_t n = index_->bucketStart(LibraryIndex::View::Artists, b + 1) -

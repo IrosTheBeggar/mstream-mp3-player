@@ -1865,7 +1865,9 @@ the browsing UI hold its **track ids**, never strings.
   are an album named "" in the index, and every place that names one,
   the console's `ql` and `[queue] playing …` lines included, says "(loose
   tracks)" (`librarytext::albumShown()`; "(no artist folder)" for the
-  files right under `/music`). One track can have fresher names than the index
+  files right under `/music`, `g`'s `[index] artists A-Z:` line too). The
+  A-Z lists, the rail and the jump grid sort a name past any White_Space
+  it starts with (an album tagged " Zebra Songs" is a Z). One track can have fresher names than the index
   (`TrackCatalog::Overlay`: the scan reads the playing track at once), for
   that index's build only, set by the scan (above). The console's `gs`,
   `gt</music/...>`, `gr`, `gw`, `gb` and `gv` (`app/TagConsole`,
@@ -2093,7 +2095,9 @@ the browsing UI hold its **track ids**, never strings.
   in PSRAM; the boot log's `[lib] library + queue` line and `[heap] library`
   show what is left in internal RAM, and `[heap] playing` the figure while
   playing. The `[heap]` lines' and `[stats]`' lowests (`min=`, `pmin=`;
-  app/Diagnostics): internal RAM's since the boot; PSRAM's since
+  app/Diagnostics): internal RAM's since the boot (the scroll lab's
+  `(ever …K)` too: `diag::lowest()`, since heap_caps' own minimum counts
+  only from its window's last reopen); PSRAM's since
   `setup()`'s first line in its stage lines, and from its end on the
   running player's (`diag::restartLows()`, one `[heap] PSRAM's lowest
   free: …` line between): heap_caps' since-boot PSRAM minimum reads 0 B

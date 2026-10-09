@@ -1586,9 +1586,11 @@ void test_catalog_names_and_overlay() {
 
 // The A-Z rail, a row's letter and the jump grid key on the sort keys
 // (an elected sort tag, else the name): "Daniel Bowery" tagged "Bowery,
-// Daniel" is a B, and on the synthetic tagged library (2 % of tracks with
-// sort tags) the letters librarytext::railName() gives are the index's
-// buckets, row for row, in both lists.
+// Daniel" is a B, an album tagged " Zebra Songs" a Z (its leading
+// White_Space doesn't count: run 4's review), and on the synthetic tagged
+// library (2 % of tracks with sort tags) the letters
+// librarytext::railName() gives are the index's buckets, row for row, in
+// both lists.
 void test_rail_follows_the_sort_keys() {
   LibraryIndex idx;
   TEST_ASSERT_TRUE(idx.begin("/music"));
@@ -1598,6 +1600,18 @@ void test_rail_follows_the_sort_keys() {
   TEST_ASSERT_EQUAL(LibraryIndex::Add::Added,
                     idx.addRecord("/music/Ada Crane/The Quiet Year/01 - Snow.mp3",
                                   View().title("Snow").artist("Ada Crane").album("The Quiet Year").albumSort("Quiet Year").v));
+  // An album value keeps its bytes, White_Space first too (2.3.6 stores a
+  // tab as a space); its sort key doesn't (5.4's orderName: the nameKey,
+  // trimmed).
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added,
+                    idx.addRecord("/music/Pell Corrin/Zebra/01 - Stripe.mp3",
+                                  View().title("Stripe").artist("Pell Corrin").album(" Zebra Songs").v));
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added,
+                    idx.addRecord("/music/Pell Corrin/Apple/01 - Core.mp3",
+                                  View().title("Core").artist("Pell Corrin").album("Apple Pie").v));
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added,
+                    idx.addRecord("/music/Pell Corrin/Orchard/01 - Bough.mp3",
+                                  View().title("Bough").artist("Pell Corrin").album("\xE3\x80\x80The Orchard").v));
   TEST_ASSERT_TRUE(idx.finish());
   const uint32_t bowery = artistNamed(idx, "Daniel Bowery");
   TEST_ASSERT_EQUAL_STRING("Bowery, Daniel", librarytext::railName(idx, LibraryIndex::View::Artists, bowery));
@@ -1605,6 +1619,33 @@ void test_rail_follows_the_sort_keys() {
   TEST_ASSERT_EQUAL_UINT32(bowery, idx.artistsAZ()[1]);  // after Ada Crane (A), as a B
   const uint32_t quiet = albumOf(idx, "/music/Ada Crane/The Quiet Year/01 - Snow.mp3");
   TEST_ASSERT_EQUAL('Q', textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, quiet)));
+  // " Zebra Songs" is shown as it is and sorts as a Z: last in the Albums
+  // A-Z, in the Z bucket, not first among the '#' rows; an ideographic
+  // space then "The Orchard" under O (past the article too).
+  const uint32_t zebra = albumOf(idx, "/music/Pell Corrin/Zebra/01 - Stripe.mp3");
+  const uint32_t orchard = albumOf(idx, "/music/Pell Corrin/Orchard/01 - Bough.mp3");
+  const uint32_t apple = albumOf(idx, "/music/Pell Corrin/Apple/01 - Core.mp3");
+  TEST_ASSERT_EQUAL_STRING(" Zebra Songs", idx.albumName(zebra));
+  TEST_ASSERT_EQUAL_STRING(" Zebra Songs", librarytext::albumShown(idx, zebra));
+  TEST_ASSERT_EQUAL_STRING("Zebra Songs", idx.albumSortKey(zebra));
+  TEST_ASSERT_EQUAL_STRING("The Orchard", idx.albumSortKey(orchard));
+  TEST_ASSERT_EQUAL('Z', textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, zebra)));
+  TEST_ASSERT_EQUAL('O', textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, orchard)));
+  const LibraryIndex::Span albums = idx.albumsAZ();
+  TEST_ASSERT_EQUAL_UINT32(5, albums.count);
+  const uint32_t want[] = {apple, orchard, quiet, albumOf(idx, "/music/Daniel Bowery/Rooms/01 - Hall.mp3"), zebra};
+  for (uint32_t i = 0; i < albums.count; ++i) {
+    TEST_ASSERT_EQUAL_UINT32(want[i], albums[i]);
+    TEST_ASSERT_EQUAL_INT(idx.bucketAt(LibraryIndex::View::Albums, i),
+                          textfold::bucketOf(textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums,
+                                                                                     albums[i]))));
+  }
+  TEST_ASSERT_EQUAL_UINT32(0, idx.bucketStart(LibraryIndex::View::Albums, 1));  // no '#' rows
+  TEST_ASSERT_EQUAL_UINT32(4, idx.bucketStart(LibraryIndex::View::Albums, textfold::bucketOf('Z')));
+  // Pell Corrin's albums: no years, so A-Z by the same keys.
+  const LibraryIndex::Span pell = idx.albumsOf(artistNamed(idx, "Pell Corrin"));
+  TEST_ASSERT_EQUAL_UINT32(3, pell.count);
+  TEST_ASSERT_EQUAL_UINT32(zebra, pell[2]);
 
   LibraryIndex big;
   const synth::Spec spec = synth::specFor(3000);

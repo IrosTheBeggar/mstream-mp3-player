@@ -3369,7 +3369,9 @@ and the fence's own rule (a track that ends inside it joins the next, or
 the next waits, paused) is the backstop as before. `g` prints the safe
 point (`[index] the update step's safe point: …`), and `gs`'s scan line
 the length it waits for (`waiting for the safe point (24.4 s left of the
-heard track)`).
+heard track)`): whole since run 4's review (`TagConsole::scanLine()`'s
+96 B line cut the update step's clause off, so on 062bd1f and before `gs`
+never said the step was asked; 224 B now, about 215 B at most).
 
 **Callers:** the end of a scan; a walk that found changes; `g0` and `gb`;
 the UI's "Try again"; the boot (3.2.2). Today's `rebuildLibrary()` in
@@ -3397,7 +3399,9 @@ which fails at about 15k entries (metascan section 6.2).
   `artistShown()`): the rows, headers and sheets, Now Playing, and since
   2026-10-09 (B1) the console's `ql` and its `[queue] playing …` lines,
   which printed the index's "" (`DJ Yagal -  (3)` on N11's card: the 12
-  artist folders with loose tracks, blank before the tags too). Its sort
+  artist folders with loose tracks, blank before the tags too), and since
+  run 4's review `g`'s `[index] artists A-Z:` line ("(no artist folder)"
+  for the files right under `/music`, first in the list). Its sort
   key is "" as well: the loose albums open the Albums A-Z under '#', as
   "(loose tracks)" would.
 - **`rulesVersion` 2** (2026-10-09): a blank title or album value
@@ -3457,7 +3461,13 @@ the host:
   keys, which the views keep (3.4.3), so `LibraryPage`'s rail, its rows'
   letters and the jump grid key on them too. A sort tag is trimmed of
   White_Space, and one with nothing left (a lone tab, which 2.3.6 stores
-  as a space) is no sort tag, as 5.4's orderName says.
+  as a space) is no sort tag, as 5.4's orderName says. A name's leading
+  White_Space doesn't count in its key either (run 4's review): an album
+  value keeps its bytes, so one tagged " Zebra Songs" is shown so but
+  sorts under Z, its rail letter and bucket Z, not first among the '#'
+  rows; the key is the name's bytes past it, an offset inside its string
+  (no string interned). Trailing White_Space only orders a name after
+  the same name without it.
 - **The builder's inputs from N4 and N5** are interfaces: D's statuses
   (DSTA) through `LibraryBuilder::DeviceRows`, the folders' cover facts
   (DFLD) through `FolderFactsSource`; with no statuses every D record is a
@@ -4872,10 +4882,11 @@ folder name. That fixes the about 9% of artist folders that differ from
 the tag only in case or punctuation (metascan section 4) without
 regrouping.
 
-**Views:** artists and albums A-Z by orderName; **an artist's albums
-newest first** (year descending, no year last, then name); the Folders
-view raw; no Genres view (the records keep the genres, so one later is a
-rebuild).
+**Views:** artists and albums A-Z by orderName (a name's leading
+White_Space doesn't count: " Zebra Songs" sorts as a Z); **an artist's
+albums newest first** (year descending, no year last, then name); the
+Folders view raw; no Genres view (the records keep the genres, so one
+later is a rebuild).
 
 **For later (Stage B and AutoDJ):**
 
@@ -5332,7 +5343,11 @@ figures through it are what L4 records.
    F sets the next step's safe point (3.4.2: F + 5 s, 20-30 s): `g` prints
    it, `[index] the update step's safe point: S s left of the heard track
    (the last fence F s; the estimate E s for T tracks; a margin of 5 s,
-   20-30 s)`; record S against F + 5. The line ends `lowest Z B during the
+   20-30 s)`; record S against F + 5. While a step waits for it, `gs`
+   ends `; the update step is asked, waiting for the safe point (S s left
+   of the heard track)` (whole since run 4's review: before, a 96 B line
+   cut the clause off, and the runner's `update_asked` never saw it). The
+   update step's line ends `lowest Z B during the
    fence (W B since the player started)` (`since the boot` before the
    2026-10-09 run 4's fixes): Z the fence's own lowest from
    its frees on (since the r3 review the window starts after

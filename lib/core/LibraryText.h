@@ -62,8 +62,9 @@ const char* artistShown(const LibraryIndex& index, uint32_t artist);
 
 // What the A-Z rail, a row's letter and the jump grid key an Artists or
 // Albums row by: textfold::sortName() of its sort key (its elected sort
-// tag, else its name), as the index's buckets do ("The Lantern Choir"
-// under L, "Bowery, Daniel" under B).
+// tag, else its name past any White_Space it starts with), as the index's
+// buckets do ("The Lantern Choir" under L, "Bowery, Daniel" under B,
+// " Zebra Songs" under Z).
 const char* railName(const LibraryIndex& index, LibraryIndex::View view, uint32_t id);
 
 // "Disc 2" (uitext::kDisc).
