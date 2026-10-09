@@ -58,6 +58,13 @@ void QueueModel::drop(Array& a) {
 void QueueModel::changed() {
   ++contentVersion_;
   ++positionVersion_;
+  hear();  // whatever the edit made current (the class: heard)
+}
+
+uint32_t QueueModel::newKey() {
+  const uint32_t k = nextKey_;
+  nextKey_ = (nextKey_ + 1) & ~kHeard;
+  return k;
 }
 
 uint32_t QueueModel::draw(uint32_t bound) {
@@ -74,16 +81,34 @@ uint32_t QueueModel::draw(uint32_t bound) {
   return bound ? static_cast<uint32_t>((static_cast<uint64_t>(x) * bound) >> 32) : x;
 }
 
-uint32_t QueueModel::maxRank(uint32_t from) const {
+uint32_t QueueModel::maxRank(uint32_t skip) const {
   uint32_t top = 0;
-  for (uint32_t i = from; i < q_.size; ++i) top = std::max(top, q_.data[i].rank);
+  for (uint32_t i = 0; i < q_.size; ++i) {
+    if (skip && static_cast<int32_t>(i) < current_ && isHeard(q_.data[i])) {
+      --skip;
+      continue;
+    }
+    top = std::max(top, q_.data[i].rank);
+  }
   return top;
+}
+
+uint32_t QueueModel::played() const {
+  uint32_t n = 0;
+  for (int32_t i = 0; i < current_; ++i) n += isHeard(q_.data[i]) ? 1 : 0;
+  return n;
+}
+
+uint32_t QueueModel::pushedBy(uint32_t n) const {
+  const uint32_t open = spare();
+  const uint32_t lack = n > open ? n - open : 0;
+  return lack ? std::min(lack, played()) : 0;
 }
 
 uint32_t QueueModel::positionOf(uint32_t key) const {
   if (key == kNone) return kNone;
   for (uint32_t i = 0; i < q_.size; ++i) {
-    if (q_.data[i].key == key) return i;
+    if (keyOf(q_.data[i]) == key) return i;
   }
   return kNone;
 }
@@ -120,12 +145,14 @@ bool QueueModel::insertAt(uint32_t at, const uint32_t* tracks, uint32_t n, Edit 
   if (n == 0) return true;
   if (!tracks) return false;
   // As many as fit under the cap, the first ones, once what played (the
-  // entries before the current one) is pushed out to make room, oldest
-  // first, as many as the spare places lack; none: refused (full, and
-  // nothing played).
-  if (n > room()) n = room();
+  // heard entries before the current one) is pushed out to make room,
+  // oldest first, as many as the spare places lack; none: refused (full,
+  // and no played entry to push out).
+  const uint32_t open = spare();
+  const uint32_t room = open + played();
+  if (n > room) n = room;
   if (n == 0) return false;
-  const uint32_t push = pushedBy(n);
+  const uint32_t push = n > open ? n - open : 0;  // (at most played())
   const bool wasEmpty = current_ < 0;
   // Shuffled, the new entries' ranks: Play next's right after the current
   // entry's (those above it go up by n), + Queue's after the highest of
@@ -145,9 +172,19 @@ bool QueueModel::insertAt(uint32_t at, const uint32_t* tracks, uint32_t n, Edit 
   if (push && !reserve(undo_, q_.size)) return false;
   snapshot(edit);
   if (push) {
-    // The oldest played entries go: the current entry and what follows it
-    // move up, in their order, and keep their keys.
-    std::memmove(q_.data, q_.data + push, static_cast<size_t>(q_.size - push) * sizeof(Entry));
+    // The oldest played entries go: the first heard ones before the
+    // current entry. The unheard ones before it, the current entry and
+    // what follows it move up, in their order, and keep their keys.
+    const auto cur = static_cast<uint32_t>(current_);
+    uint32_t w = 0, left = push;
+    for (uint32_t i = 0; i < cur; ++i) {
+      if (left && isHeard(q_.data[i])) {
+        --left;
+        continue;
+      }
+      q_.data[w++] = q_.data[i];
+    }
+    std::memmove(q_.data + w, q_.data + cur, static_cast<size_t>(q_.size - cur) * sizeof(Entry));
     q_.size -= push;
     current_ -= static_cast<int32_t>(push);
     at -= push;
@@ -159,10 +196,7 @@ bool QueueModel::insertAt(uint32_t at, const uint32_t* tracks, uint32_t n, Edit 
     }
   }
   std::memmove(q_.data + at + n, q_.data + at, static_cast<size_t>(q_.size - at) * sizeof(Entry));
-  for (uint32_t i = 0; i < n; ++i) {
-    q_.data[at + i] = Entry{tracks[i], nextKey_++, base + i};
-    if (nextKey_ == kNone) nextKey_ = 0;
-  }
+  for (uint32_t i = 0; i < n; ++i) q_.data[at + i] = Entry{tracks[i], newKey(), base + i};
   q_.size += n;
   if (wasEmpty) {
     current_ = static_cast<int32_t>(at);  // the queue was empty: the first new entry
@@ -183,10 +217,7 @@ bool QueueModel::insertNext(const uint32_t* tracks, uint32_t n) {
 
 bool QueueModel::append(const uint32_t* tracks, uint32_t n) { return insertAt(q_.size, tracks, n, Edit::Append); }
 
-void QueueModel::put(uint32_t pos, uint32_t track, uint32_t rank) {
-  q_.data[pos] = Entry{track, nextKey_++, rank};
-  if (nextKey_ == kNone) nextKey_ = 0;
-}
+void QueueModel::put(uint32_t pos, uint32_t track, uint32_t rank) { q_.data[pos] = Entry{track, newKey(), rank}; }
 
 bool QueueModel::replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled) {
   if (n == 0 && shuffled == shuffled_) return clear();
@@ -351,6 +382,7 @@ bool QueueModel::setCurrent(uint32_t pos) {
     current_ = static_cast<int32_t>(pos);
     ++positionVersion_;
   }
+  hear();  // (a jump: only where it lands; what it passed over isn't)
   return true;
 }
 
@@ -359,6 +391,7 @@ bool QueueModel::step(int delta, bool wrap) {
   if (next == kNone) return false;
   current_ = static_cast<int32_t>(next);
   ++positionVersion_;
+  hear();
   return true;
 }
 
@@ -379,11 +412,32 @@ bool QueueModel::undo() {
   std::swap(q_, undo_);  // undo_ keeps the edited entries' memory for the next snapshot
   undoEdit_ = Edit::None;
   shuffled_ = undoShuffled_;  // the snapshot's mode (a Play that set it: the one before)
+  carryHeard();
   const uint32_t pos = positionOf(key);
   current_ = pos != kNone ? static_cast<int32_t>(pos) : undoCurrent_;
   if (current_ >= static_cast<int32_t>(q_.size)) current_ = static_cast<int32_t>(q_.size) - 1;
   changed();
   return true;
+}
+
+void QueueModel::carryHeard() {
+  // The snapshot's marks are as old as its edit; an entry heard since (a
+  // track played on, a skip, a tap) is marked in the queue left behind.
+  // That one is of no further use (undo_ now, the next snapshot's memory):
+  // sorted by key in place (introsort allocates nothing), each entry put
+  // back looks its key up there. Marks are only ever set, so nothing is
+  // cleared.
+  Entry* const old = undo_.data;
+  const uint32_t n = undo_.size;
+  if (n == 0 || q_.size == 0) return;
+  std::sort(old, old + n, [](const Entry& a, const Entry& b) { return keyOf(a) < keyOf(b); });
+  for (uint32_t i = 0; i < q_.size; ++i) {
+    Entry& e = q_.data[i];
+    if (isHeard(e)) continue;
+    const uint32_t k = keyOf(e);
+    const Entry* hit = std::lower_bound(old, old + n, k, [](const Entry& a, uint32_t key) { return keyOf(a) < key; });
+    if (hit != old + n && keyOf(*hit) == k && isHeard(*hit)) e.key |= kHeard;
+  }
 }
 
 void QueueModel::dropUndo() {
@@ -405,7 +459,7 @@ bool QueueModel::setShuffled(bool on) {
     // sort would ask the heap for a buffer.
     const uint32_t key = currentKey();
     std::sort(q_.data, q_.data + q_.size, [](const Entry& a, const Entry& b) {
-      return a.rank != b.rank ? a.rank < b.rank : a.key < b.key;
+      return a.rank != b.rank ? a.rank < b.rank : keyOf(a) < keyOf(b);
     });
     if (current_ >= 0) current_ = static_cast<int32_t>(positionOf(key));
   }
@@ -442,10 +496,7 @@ bool QueueModel::assign(const uint32_t* tracks, uint32_t n, int32_t current, boo
       return false;
     }
   }
-  for (uint32_t i = 0; i < n; ++i) {
-    q_.data[i] = Entry{tracks[i], nextKey_++, ranks ? ranks[i] : i};
-    if (nextKey_ == kNone) nextKey_ = 0;
-  }
+  for (uint32_t i = 0; i < n; ++i) q_.data[i] = Entry{tracks[i], newKey(), ranks ? ranks[i] : i};
   shuffled_ = shuffled;
   q_.size = n;
   if (n == 0) {
@@ -453,6 +504,9 @@ bool QueueModel::assign(const uint32_t* tracks, uint32_t n, int32_t current, boo
   } else {
     current_ = current < 0 ? 0 : (current >= static_cast<int32_t>(n) ? static_cast<int32_t>(n) - 1 : current);
   }
+  // What played isn't in the file: every entry before the current one
+  // counts as heard (the class; docs/QUEUE-MODES.md 15.8).
+  for (int32_t i = 0; i < current_; ++i) q_.data[i].key |= kHeard;
   dropUndo();
   changed();
   return true;

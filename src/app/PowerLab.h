@@ -53,7 +53,9 @@ class ScreenControl;
 //              on only while the Dance tab is up and tracking)
 //   Pr0 / Pr1  the background Bluetooth search: rest now / a burst again
 //   Pz         play "tone:silence" next (an hour of zeros: full-rate output, silent);
-//              as the queue when the queue is full (its cap: qu puts it back)
+//              a full queue (its cap) pushes out its oldest played entry for it,
+//              or, with no played track to push out, plays it as the queue
+//              (either way qu puts the listener's back)
 class PowerLab {
 public:
   struct Hooks {

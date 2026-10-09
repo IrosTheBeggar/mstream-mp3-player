@@ -344,9 +344,12 @@ public:
   bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle);
   // As many as fit under the cap (QueueModel::room()), the first ones,
   // after pushing out the entries that already played to make room
-  // (QueueModel::pushedBy(): oldest first, never the current entry);
-  // false when none fit (the queue full and nothing played) or out of
-  // memory.
+  // (QueueModel::pushedBy(): the heard ones before the current entry,
+  // oldest first, never the current entry); false when none fit (the
+  // queue full and no played entry to push out) or out of memory. What
+  // the add did is read off the queue after the call
+  // (queueview::addOutcome()): the call takes a heard join first, which
+  // moves the current entry.
   bool playNext(const uint32_t* tracks, uint32_t n);
   bool addToQueue(const uint32_t* tracks, uint32_t n);
   QueueModel::Removed remove(const uint32_t* positions, uint32_t n);

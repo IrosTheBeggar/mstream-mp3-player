@@ -1030,28 +1030,33 @@ static void queueCommand(const char* a) {
       }
       const LibraryIndex::Span t = index->tracksOfAlbum(index->albumsAZ()[n]);
       // An add takes as many as fit under the queue's cap, pushing out what
-      // already played to make room (the entries before the current one,
-      // oldest first), none when it is full and nothing in it played
-      // (docs/QUEUE-MODES.md sections 15 and 15.8).
-      const uint32_t room = queue.room();
-      const uint32_t pushed = c == 'p' ? 0 : queue.pushedBy(t.count < room ? t.count : room);
+      // already played to make room (the heard entries before the current
+      // one, oldest first), none when it is full and no played track can
+      // go (docs/QUEUE-MODES.md sections 15 and 15.8). Read off the queue
+      // after the call (queueview::addOutcome()): it takes a heard join
+      // first, which moves what an add can push out.
+      const uint32_t sizeBefore = queue.size();
       const bool ok = c == 'p' ? player.playNow(t.ids, t.count, 0)
                       : c == 'n' ? player.playNext(t.ids, t.count)
                                  : player.addToQueue(t.ids, t.count);
+      const queueview::AddOutcome added =
+          c == 'p' ? queueview::AddOutcome{} : queueview::addOutcome(queue, sizeBefore, t.count, c == 'n', ok);
       char why[160] = "";
-      if (!ok && c != 'p' && room == 0) {
-        snprintf(why, sizeof(why), " (REFUSED: the queue is full, %lu, and nothing in it played)",
+      if (added.refused) {
+        snprintf(why, sizeof(why), " (REFUSED: the queue is full, %lu, and no played track can make way)",
                  (unsigned long)QueueModel::kMaxEntries);
       } else if (!ok) {
         snprintf(why, sizeof(why), " (NO MEMORY)");
-      } else if (c != 'p' && (t.count > room || pushed > 0)) {
+      } else if (c != 'p' && (added.took < t.count || added.pushed > 0)) {
         char took[80] = "";
-        if (t.count > room) {
-          snprintf(took, sizeof(took), "%lu of them: the queue holds %lu%s", (unsigned long)room,
-                   (unsigned long)QueueModel::kMaxEntries, pushed ? "; " : "");
+        if (added.took < t.count) {
+          snprintf(took, sizeof(took), "%lu of them: the queue holds %lu%s", (unsigned long)added.took,
+                   (unsigned long)QueueModel::kMaxEntries, added.pushed ? "; " : "");
         }
         char went[64] = "";
-        if (pushed) snprintf(went, sizeof(went), "%lu played pushed out to make room", (unsigned long)pushed);
+        if (added.pushed) {
+          snprintf(went, sizeof(went), "%lu played pushed out to make room", (unsigned long)added.pushed);
+        }
         snprintf(why, sizeof(why), " (%s%s)", took, went);
       }
       Serial.printf("[queue] %s %s: %lu tracks%s\n", c == 'p' ? "playing" : c == 'n' ? "plays next:" : "added",
@@ -1080,7 +1085,9 @@ static void queueCommand(const char* a) {
       const bool undone = player.undo();
       // (Shuffle all's: the mode it found comes back with the queue.)
       char back[48] = "";
-      if (undone && pushed) snprintf(back, sizeof(back), " (%lu played tracks back)", (unsigned long)pushed);
+      if (undone && pushed) {
+        snprintf(back, sizeof(back), " (%lu played track%s back)", (unsigned long)pushed, pushed == 1 ? "" : "s");
+      }
       Serial.printf("[queue] undo: %s%s%s\n", undone ? "done" : "nothing to undo",
                     player.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)",
                     back);

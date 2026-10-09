@@ -8,6 +8,7 @@
 #include <soc/rtc.h>
 
 #include "PowerChoices.h"
+#include "QueueView.h"
 #include "TrackCatalog.h"
 #include "app/BoardPower.h"
 #include "app/PowerSettings.h"
@@ -466,34 +467,37 @@ void PowerLab::playSilence() {
     return;
   }
   const char* silent = hooks_.silentMode && hooks_.silentMode() ? "; silent test mode" : "";
-  // A full queue (the queue's cap, docs/QUEUE-MODES.md 15: a card of 5,000
-  // tracks or more after its first boot, a Play all or a Shuffle all)
-  // pushes out its oldest played entry to take it (15.8), and refuses it
-  // when nothing in it played: the silence plays as the queue then, and qu
-  // puts the listener's back (the Play's undo).
-  if (player_.queue().room() == 0) {
+  // Right after the current entry (the first in an empty queue). A full
+  // queue (the queue's cap, docs/QUEUE-MODES.md 15: a card of 5,000 tracks
+  // or more after its first boot, a Play all or a Shuffle all) pushes out
+  // its oldest played entry to take it (15.8), and refuses it when no
+  // played track can go: the silence plays as the queue then, and qu puts
+  // the listener's back (the Play's undo). Read off the queue after the
+  // call (queueview::addOutcome()): it takes a heard join first, which
+  // moves the current entry and what can be pushed out.
+  const QueueModel& q = player_.queue();
+  const uint32_t sizeBefore = q.size();
+  const bool ok = player_.playNext(&id, 1);
+  const queueview::AddOutcome added = queueview::addOutcome(q, sizeBefore, 1, true, ok);
+  if (added.refused) {
     if (!player_.playNow(&id, 1, 0)) {
       Serial.println("[power] silence: couldn't play it (no memory)");
       return;
     }
-    Serial.printf("[power] playing %s as the queue (the queue was full, %lu, and nothing in it played: qu puts it "
-                  "back; an hour of zeros: the output runs at its full rate, nothing is heard%s)\n",
+    Serial.printf("[power] playing %s as the queue (the queue was full, %lu, and no played track could make way: qu "
+                  "puts it back; an hour of zeros: the output runs at its full rate, nothing is heard%s)\n",
                   TrackCatalog::kSilencePath, static_cast<unsigned long>(QueueModel::kMaxEntries), silent);
     return;
   }
-  // Right after the current entry (0 with an empty queue), less the played
-  // entry a full queue pushes out from before it.
-  const uint32_t pushed = player_.queue().pushedBy(1);
-  const int at = player_.currentIndex() + 1 - static_cast<int>(pushed);
-  if (!player_.playNext(&id, 1)) {
+  if (!ok) {
     Serial.println("[power] silence: couldn't queue it (no memory)");
     return;
   }
-  player_.play(static_cast<size_t>(at));
-  Serial.printf("[power] playing %s (queue entry %d, an hour of zeros: the output runs at its full rate, nothing is "
+  player_.play(added.first);
+  Serial.printf("[power] playing %s (queue entry %lu, an hour of zeros: the output runs at its full rate, nothing is "
                 "heard%s)%s\n",
-                TrackCatalog::kSilencePath, at, silent,
-                pushed ? " (the queue was full: its oldest played track pushed out, qu puts it back)" : "");
+                TrackCatalog::kSilencePath, static_cast<unsigned long>(added.first), silent,
+                added.pushed ? " (the queue was full: its oldest played track pushed out, qu puts it back)" : "");
 }
 
 void PowerLab::loop(uint32_t nowMs) {

@@ -13,6 +13,7 @@
 #include "LibraryIndex.h"
 #include "PlaybackController.h"
 #include "QueueModel.h"
+#include "QueueView.h"
 #include "TrackCatalog.h"
 #include "TrackSeek.h"
 #include "hal/IAudioBackend.h"
@@ -1938,10 +1939,11 @@ void test_play_now_while_shuffled() {
 
 // The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15)
 // through the player: a Play of 6,000 plays its chosen track from the
-// window that holds it; with the queue full, Play next and + Queue push
-// out what played (15.8) and nothing that plays changes; with nothing
-// played (the first entry current) they're refused and nothing changes; a
-// remove makes room.
+// window that holds it. The tracks before a tapped start never played:
+// with the queue full, Play next and + Queue are refused (nothing to push
+// out, 15.8). One track on, the tapped one has played, and makes way;
+// nothing that plays changes. A tap on the first entry: nothing before
+// it, refused again; a remove makes room.
 void test_the_queue_cap_through_the_player() {
   Rig r(8);
   FakeAudioBackend& a = r.audio;
@@ -1953,15 +1955,23 @@ void test_the_queue_cap_through_the_player() {
   TEST_ASSERT_EQUAL_INT(4500, p.currentIndex());
   TEST_ASSERT_EQUAL_STRING("/music/e.mp3", a.lastPath.c_str());  // 5,500 % 8: e
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
-  const int plays = a.playCount;
   const uint32_t one[] = {7};
-  TEST_ASSERT_TRUE(p.playNext(one, 1));  // the oldest played entry makes room
+  TEST_ASSERT_EQUAL_UINT32(0, r.queue.room());
+  TEST_ASSERT_FALSE(p.playNext(one, 1));
+  TEST_ASSERT_FALSE(p.addToQueue(one, 1));
   TEST_ASSERT_EQUAL_UINT32(5000, r.queue.size());
-  TEST_ASSERT_EQUAL_INT(4499, p.currentIndex());
-  TEST_ASSERT_EQUAL_UINT32(7, r.queue.trackAt(4500));  // right after the current entry
+  p.next();  // the tapped track played
+  const uint32_t tapped = r.queue.keyAt(4500);
+  const int plays = a.playCount;
+  TEST_ASSERT_TRUE(p.playNext(one, 1));  // it makes room
+  TEST_ASSERT_EQUAL_UINT32(5000, r.queue.size());
+  TEST_ASSERT_EQUAL_INT(4500, p.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, r.queue.positionOf(tapped));
+  TEST_ASSERT_EQUAL_UINT32(1, r.queue.undoPushed());
+  TEST_ASSERT_EQUAL_UINT32(7, r.queue.trackAt(4501));  // right after the current entry
   TEST_ASSERT_EQUAL_INT(plays, a.playCount);
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
-  // The first entry plays: nothing played, nothing can go: refused.
+  // The first entry plays: nothing played before it, nothing can go: refused.
   p.play(0);
   const int plays0 = a.playCount;
   const uint32_t content = r.queue.contentVersion();
@@ -1981,12 +1991,16 @@ void test_the_queue_cap_through_the_player() {
 
 namespace {
 // A full queue (the cap, 5,000) of the eight tracks over and over (entry i
-// is track i % 8: a, b, ... h, a, ...), playing entry `at`.
+// is track i % 8: a, b, ... h, a, ...), played from the first to entry
+// `at`, one track after another: the `at` before it played (each heard,
+// docs/QUEUE-MODES.md 15.8).
 void playFull(Rig& r, uint32_t at) {
   std::vector<uint32_t> ids(QueueModel::kMaxEntries);
   for (uint32_t i = 0; i < ids.size(); ++i) ids[i] = i % 8;
-  TEST_ASSERT_TRUE(r.player.playNow(ids.data(), static_cast<uint32_t>(ids.size()), at));
+  TEST_ASSERT_TRUE(r.player.playNow(ids.data(), static_cast<uint32_t>(ids.size()), 0));
+  for (uint32_t i = 0; i < at; ++i) r.player.next();
   TEST_ASSERT_EQUAL_INT(static_cast<int>(at), r.player.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(at, r.queue.played());
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
 }
 std::vector<uint32_t> keysOf(const QueueModel& q) {
@@ -2188,6 +2202,84 @@ void test_undo_of_a_push_out_through_the_player() {
   TEST_ASSERT_EQUAL_INT(100, p.currentIndex());
   TEST_ASSERT_EQUAL_STRING("/music/e.mp3", a.lastPath.c_str());
   TEST_ASSERT_TRUE(keysOf(r.queue) == before);
+}
+
+// What an add did is read off the queue after the call
+// (queueview::addOutcome()), never worked out before it: the call takes a
+// heard gapless join first, which moves the current entry, and what an add
+// can push out with it (docs/QUEUE-MODES.md 15.8). Repeat All on a full
+// queue's last entry, its join round to the first heard: room() read
+// before says 4,999, but the add finds the first entry current and nothing
+// played before it, and is refused (the refusal's note, not "Not enough
+// memory"). Entry 100 with its join to 101 heard: a + Queue of 300 takes
+// 101 and pushes out 101, the first of them at 4,899 (not 100, 100 and
+// 4,900, as read before). Play next the same, right after the entry the
+// join made current. An add to an empty queue: its first is current.
+void test_an_add_is_read_after_a_heard_join() {
+  const uint32_t c = 2;
+  {
+    Rig r(8);
+    FakeAudioBackend& a = r.audio;
+    PlaybackController& p = r.player;
+    p.setRepeat(PlaybackController::Repeat::All);
+    playFull(r, 4999);
+    TEST_ASSERT_EQUAL_UINT32(4999, r.queue.room());  // (stale by the time the add looks)
+    a.advances.push_back(p.offeredToken());          // the first entry's join, heard
+    const uint32_t sizeBefore = r.queue.size();
+    const bool ok = p.addToQueue(&c, 1);
+    TEST_ASSERT_FALSE(ok);
+    TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+    const queueview::AddOutcome o = queueview::addOutcome(r.queue, sizeBefore, 1, false, ok);
+    TEST_ASSERT_TRUE(o.refused);
+    TEST_ASSERT_EQUAL_UINT32(0, o.took);
+    TEST_ASSERT_EQUAL_UINT32(0, o.pushed);
+    TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, o.first);
+  }
+  {
+    Rig r(8);
+    FakeAudioBackend& a = r.audio;
+    PlaybackController& p = r.player;
+    p.setRepeat(PlaybackController::Repeat::Off);
+    playFull(r, 100);
+    TEST_ASSERT_EQUAL_UINT32(100, r.queue.pushedBy(300));  // (stale too)
+    a.advances.push_back(p.offeredToken());               // 101's join, heard
+    const std::vector<uint32_t> many(300, c);
+    uint32_t sizeBefore = r.queue.size();
+    bool ok = p.addToQueue(many.data(), 300);
+    TEST_ASSERT_TRUE(ok);
+    queueview::AddOutcome o = queueview::addOutcome(r.queue, sizeBefore, 300, false, ok);
+    TEST_ASSERT_FALSE(o.refused);
+    TEST_ASSERT_EQUAL_UINT32(101, o.took);
+    TEST_ASSERT_EQUAL_UINT32(101, o.pushed);
+    TEST_ASSERT_EQUAL_UINT32(4899, o.first);
+    TEST_ASSERT_EQUAL_UINT32(7, r.queue.trackAt(o.first - 1));  // the last entry before the add (h)
+    for (uint32_t i = o.first; i < 5000; ++i) TEST_ASSERT_EQUAL_UINT32(c, r.queue.trackAt(i));
+    TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+    // Its Undo (the 101 back, the 101 added gone), then Play next with a
+    // join heard again: right after the entry the join made current.
+    TEST_ASSERT_TRUE(p.undo());
+    TEST_ASSERT_EQUAL_INT(101, p.currentIndex());
+    a.advances.push_back(p.offeredToken());  // 102's join, heard
+    sizeBefore = r.queue.size();
+    const uint32_t three[] = {c, c, c};
+    ok = p.playNext(three, 3);
+    TEST_ASSERT_TRUE(ok);
+    o = queueview::addOutcome(r.queue, sizeBefore, 3, true, ok);
+    TEST_ASSERT_EQUAL_UINT32(3, o.took);
+    TEST_ASSERT_EQUAL_UINT32(3, o.pushed);
+    TEST_ASSERT_EQUAL_INT(99, p.currentIndex());  // 102 once the join was taken, less the 3
+    TEST_ASSERT_EQUAL_UINT32(100, o.first);
+    for (uint32_t i = 0; i < 3; ++i) TEST_ASSERT_EQUAL_UINT32(c, r.queue.trackAt(o.first + i));
+  }
+  {
+    QueueModel q;
+    const uint32_t three[] = {c, c, c};
+    TEST_ASSERT_TRUE(q.insertNext(three, 3));
+    const queueview::AddOutcome o = queueview::addOutcome(q, 0, 3, true, true);
+    TEST_ASSERT_EQUAL_UINT32(3, o.took);
+    TEST_ASSERT_EQUAL_UINT32(0, o.first);
+    TEST_ASSERT_EQUAL_UINT32(0, queueview::addOutcome(q, 3, 0, true, true).took);  // nothing asked
+  }
 }
 
 // Shuffle all (Ui::shuffleAll()): a Play that turns shuffle on, one edit;
@@ -2959,6 +3051,7 @@ int main(int, char**) {
   RUN_TEST(test_a_push_out_under_each_repeat_mode);
   RUN_TEST(test_prev_after_a_push_out);
   RUN_TEST(test_undo_of_a_push_out_through_the_player);
+  RUN_TEST(test_an_add_is_read_after_a_heard_join);
   RUN_TEST(test_shuffle_all_and_its_undo);
   RUN_TEST(test_a_start_points_anchor_reaches_the_play_once);
   RUN_TEST(test_a_start_points_anchor_goes_with_it);

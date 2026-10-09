@@ -170,6 +170,27 @@ char* pushedText(Capped what, uint32_t took, uint32_t asked, uint32_t pushed, ch
   return buf;
 }
 
+AddOutcome addOutcome(const QueueModel& q, uint32_t sizeBefore, uint32_t asked, bool next, bool ok) {
+  AddOutcome o;
+  if (asked == 0) return o;  // (nothing asked: nothing done, the last undo as it was)
+  if (!ok) {
+    // Refused (room() 0: nothing changed), or out of memory with room to
+    // spare.
+    o.refused = q.room() == 0;
+    return o;
+  }
+  // An add that pushes out always has its snapshot (QueueModel::insertAt()
+  // refuses it otherwise), so its undo says how many went; one that pushed
+  // nothing out says 0, or has no undo (no memory for it): 0 too.
+  o.pushed = q.undoPushed();
+  o.took = q.size() + o.pushed - sizeBefore;
+  if (o.took == 0) return o;
+  // Play next right after the current entry, + Queue at the end; into an
+  // empty queue, from the first (it is current).
+  o.first = sizeBefore == 0 ? 0 : next ? static_cast<uint32_t>(q.current()) + 1 : q.size() - o.took;
+  return o;
+}
+
 // ---- KeyRing ----
 
 void KeyRing::add(uint32_t key) {

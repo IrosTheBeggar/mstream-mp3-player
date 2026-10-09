@@ -303,13 +303,16 @@ inline constexpr int kQueueNextX = 152, kQueueNextW = 80;
 inline constexpr int kQueueClearX = 238, kQueueClearW = 76;
 
 // ---- the queue's cap (QueueModel::kMaxEntries; docs/QUEUE-MODES.md 15) ----
-// Play next or + Queue with the queue full and nothing in it played (no
-// entry before the current one to push out, 15.8): nothing went in. The
-// why under the what, as Toast folds "what: why" when it is too wide for
-// one line: the what in Small, the why in Body if it fits, else Small, in
-// the room the buttons it keeps leave it (Ui::refuse(): none, Undo, or
-// Undo and View; test_ui_library measures all three).
-inline constexpr const char* kQueueFull = "Nothing played yet: the queue holds 5,000 tracks";
+// Play next or + Queue with the queue full and no played track to push
+// out (none heard before the track that plays, 15.8: right after a Play
+// that filled it, once every played one has gone, after Repeat All comes
+// round to the first): nothing went in. Not "nothing played yet": tracks
+// may well have played, and still none of them can go. The why under the
+// what, as Toast folds "what: why" when it is too wide for one line: the
+// what in Small, the why in Body if it fits, else Small, in the room the
+// buttons it keeps leave it (Ui::refuse(): none, Undo, or Undo and View;
+// test_ui_library measures all three).
+inline constexpr const char* kQueueFull = "No played track can make way: the queue holds 5,000 tracks";
 // A Play (an artist's, an album's, "Play all N"), Shuffle all, or an add
 // the cap cut short: "<what>: <why>" (queueview::cappedText() puts in the
 // counts, grouped: "Shuffling 5,000 of 19,412"), on the toast's two lines
@@ -321,7 +324,7 @@ inline constexpr const char* kCapPlaying = "Playing %s of %s";
 inline constexpr const char* kCapAdded = "Added %s of %s";
 inline constexpr const char* kCapNext = "%s of %s play next";
 // An add that made room by pushing out tracks that already played (the
-// entries before the current one, oldest first; 15.8): the add's what,
+// heard entries before the current one, oldest first; 15.8): the add's what,
 // then one line of how many went, "Added 12 tracks: 12 played tracks made
 // way" (queueview::pushedText()), on the toast's two lines beside Undo and
 // View: the what in Small over the line, in Body if it fits, else Small

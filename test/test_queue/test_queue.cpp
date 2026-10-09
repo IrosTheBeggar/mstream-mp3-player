@@ -2680,10 +2680,12 @@ void test_random_edits_never_pass_the_cap() {
     const uint32_t n = static_cast<uint32_t>(ids.size());
     if (op == 0 || op == 1) {
       const uint32_t pushed = q.pushedBy(std::min(n, room));
+      const uint32_t lastPushed = q.undoPushed();
       const bool ok = op == 0 ? q.append(ids.data(), n) : q.insertNext(ids.data(), n);
       TEST_ASSERT_EQUAL(room > 0, ok);
       TEST_ASSERT_EQUAL_UINT32(size - pushed + std::min(n, room), q.size());
-      TEST_ASSERT_EQUAL_UINT32(ok ? pushed : 0, q.undoPushed());
+      // (Refused: the last edit's undo stays, and what it pushed out.)
+      TEST_ASSERT_EQUAL_UINT32(ok ? pushed : lastPushed, q.undoPushed());
       if (!ok) TEST_ASSERT_EQUAL_UINT32(v, q.contentVersion());
     } else if (op == 2 && q.size() > 0 && rnd(3) == 0) {
       q.step(static_cast<int>(rnd(40)) - 10, true);  // skips: what played grows or shrinks
@@ -2702,7 +2704,9 @@ void test_random_edits_never_pass_the_cap() {
     }
     TEST_ASSERT_TRUE(q.size() <= QueueModel::kMaxEntries);
     TEST_ASSERT_EQUAL_UINT32(QueueModel::kMaxEntries - q.size(), q.spare());
-    TEST_ASSERT_EQUAL_UINT32(q.current() > 0 ? static_cast<uint32_t>(q.current()) : 0, q.played());
+    uint32_t heard = 0;  // (a skip of more than one passes over entries: not heard)
+    for (int32_t i = 0; i < q.current(); ++i) heard += q.heardAt(static_cast<uint32_t>(i)) ? 1 : 0;
+    TEST_ASSERT_EQUAL_UINT32(heard, q.played());
     TEST_ASSERT_EQUAL_UINT32(q.spare() + q.played(), q.room());
   }
 }
@@ -2834,7 +2838,7 @@ void test_a_shuffled_queue_pushes_out_in_play_order() {
   QueueModel q;
   fill(q, 5000, 0);
   q.setShuffled(true);
-  TEST_ASSERT_TRUE(q.step(+300, false));  // 300 played, in the shuffled order
+  for (int i = 0; i < 300; ++i) TEST_ASSERT_TRUE(q.step(+1, false));  // 300 played, in the shuffled order
   const std::vector<uint32_t> beforeKeys = keys(q);
   const std::vector<uint32_t> beforeRanks = ranks(q);
   const std::vector<uint32_t> beforeTracks = tracks(q);
@@ -2917,6 +2921,125 @@ void test_a_full_queue_played_through_then_added() {
   }
 }
 
+// What played is what was heard (15.8): an entry is marked once it has
+// been the current one, and only marked entries before the current one
+// are pushed out. A shuffle Off sorts unplayed entries in before the
+// current one, a jump passes over entries, a tapped start leaves the
+// tracks before it unplayed: none of those goes. The review's case
+// first: Shuffle all on a library of 6,000, two tracks on, Off, + Queue
+// of 12 (then the same with 40 on, so that some heard ones are before the
+// current entry). A restore marks what is before its current entry (the
+// file can't say); the marks go with their entries through toggles, and
+// an Undo keeps what was heard since its edit.
+void test_a_push_out_takes_only_what_was_heard() {
+  const std::vector<uint32_t> lib = range(6000);
+  const std::vector<uint32_t> twelve = range(12, 900000);
+  for (int on : {2, 40}) {
+    QueueModel q;
+    TEST_ASSERT_TRUE(q.replace(lib.data(), 6000, QueueModel::kAnyStart, true));
+    TEST_ASSERT_EQUAL_UINT32(0, q.played());
+    std::set<uint32_t> heard{q.currentKey()};
+    for (int i = 0; i < on; ++i) {
+      TEST_ASSERT_TRUE(q.step(+1, false));
+      heard.insert(q.currentKey());
+    }
+    TEST_ASSERT_TRUE(q.setShuffled(false));
+    TEST_ASSERT_TRUE(q.current() > 100);  // the own order: unplayed entries before it
+    uint32_t before = 0;
+    for (int32_t i = 0; i < q.current(); ++i) before += heard.count(q.keyAt(static_cast<uint32_t>(i))) ? 1 : 0;
+    TEST_ASSERT_EQUAL_UINT32(before, q.played());
+    TEST_ASSERT_EQUAL_UINT32(before, q.room());
+    char msg[64];
+    snprintf(msg, sizeof(msg), "%d on, then Off: %lu heard before the current entry", on, (unsigned long)before);
+    TEST_MESSAGE(msg);
+    if (on == 40) TEST_ASSERT_TRUE(before > 0);  // (so that some do go)
+    const std::vector<uint32_t> was = keys(q);
+    const uint32_t curKey = q.currentKey();
+    const bool ok = q.append(twelve.data(), 12);
+    TEST_ASSERT_EQUAL(before > 0, ok);
+    TEST_ASSERT_EQUAL_UINT32(curKey, q.currentKey());
+    // What went: the first heard ones in the queue's order, as many as the
+    // add lacked (two on: none before the current entry, refused).
+    const uint32_t want = std::min<uint32_t>(12, before);
+    std::vector<uint32_t> first;
+    for (uint32_t k : was) {
+      if (first.size() < want && heard.count(k)) first.push_back(k);
+    }
+    const std::vector<uint32_t> now = keys(q);
+    const std::set<uint32_t> stays(now.begin(), now.end());
+    std::vector<uint32_t> gone;
+    for (uint32_t k : was) {
+      if (!stays.count(k)) gone.push_back(k);
+    }
+    TEST_ASSERT_TRUE(gone == first);  // never an unheard one
+    if (ok) TEST_ASSERT_EQUAL_UINT32(want, q.undoPushed());  // the toast's "N played tracks made way"
+  }
+  {
+    // A jump: what it passed over isn't played.
+    QueueModel q;
+    fill(q, 5000, 0);
+    for (int i = 0; i < 10; ++i) TEST_ASSERT_TRUE(q.step(+1, false));
+    TEST_ASSERT_EQUAL_UINT32(10, q.played());
+    TEST_ASSERT_TRUE(q.setCurrent(300));  // a tap far down: 11 to 299 passed over
+    TEST_ASSERT_EQUAL_UINT32(11, q.played());
+    TEST_ASSERT_FALSE(q.heardAt(11));
+    const std::vector<uint32_t> before = keys(q);
+    const std::vector<uint32_t> twenty = range(20, 900000);
+    TEST_ASSERT_TRUE(q.append(twenty.data(), 20));  // 11 go, 11 in
+    TEST_ASSERT_EQUAL_UINT32(11, q.undoPushed());
+    TEST_ASSERT_EQUAL_INT(289, q.current());
+    for (uint32_t i = 0; i < 4989; ++i) TEST_ASSERT_EQUAL_UINT32(before[11 + i], q.keyAt(i));
+    TEST_ASSERT_EQUAL_UINT32(900010, q.trackAt(4999));
+    TEST_ASSERT_EQUAL_UINT32(0, q.room());
+    TEST_ASSERT_FALSE(q.insertNext(twenty.data(), 1));
+    // Back one (prev) and on again: the entry before is heard now.
+    TEST_ASSERT_TRUE(q.step(-1, false));
+    TEST_ASSERT_TRUE(q.step(+1, false));
+    TEST_ASSERT_EQUAL_UINT32(1, q.played());
+    TEST_ASSERT_TRUE(q.insertNext(twenty.data(), 1));
+    TEST_ASSERT_EQUAL_UINT32(before[11], q.keyAt(0));  // the passed-over ones stay, in order
+  }
+  {
+    // A tapped start in a list past the cap: the tracks before it never
+    // played. Refused; then three tracks on, and those three make way.
+    QueueModel q;
+    TEST_ASSERT_TRUE(q.replace(lib.data(), 6000, 4000));
+    TEST_ASSERT_EQUAL_INT(4000, q.current());
+    TEST_ASSERT_EQUAL_UINT32(0, q.room());
+    TEST_ASSERT_FALSE(q.append(twelve.data(), 5));
+    for (int i = 0; i < 3; ++i) TEST_ASSERT_TRUE(q.step(+1, false));
+    TEST_ASSERT_EQUAL_UINT32(3, q.played());
+    const std::vector<uint32_t> before = keys(q);
+    TEST_ASSERT_TRUE(q.append(twelve.data(), 5));
+    TEST_ASSERT_EQUAL_UINT32(3, q.undoPushed());
+    TEST_ASSERT_EQUAL_INT(4000, q.current());
+    TEST_ASSERT_EQUAL_UINT32(before[4003], q.currentKey());
+    for (uint32_t i = 0; i < 4000; ++i) TEST_ASSERT_EQUAL_UINT32(before[i], q.keyAt(i));
+  }
+  {
+    // A restore marks the entries before its current one; a toggle keeps
+    // the marks; an Undo keeps what was heard since its edit.
+    QueueModel q;
+    fill(q, 5000, 100);
+    TEST_ASSERT_EQUAL_UINT32(100, q.played());
+    for (uint32_t i = 0; i <= 100; ++i) TEST_ASSERT_TRUE(q.heardAt(i));
+    TEST_ASSERT_FALSE(q.heardAt(101));
+    TEST_ASSERT_TRUE(q.setShuffled(true));
+    TEST_ASSERT_TRUE(q.setShuffled(false));
+    TEST_ASSERT_EQUAL_UINT32(100, q.played());
+    TEST_ASSERT_FALSE(q.heardAt(101));
+    const uint32_t one[] = {7};
+    TEST_ASSERT_TRUE(q.append(one, 1));  // entry 0 goes
+    TEST_ASSERT_TRUE(q.step(+1, false));
+    TEST_ASSERT_TRUE(q.step(+1, false));  // two more heard
+    TEST_ASSERT_TRUE(q.undo());
+    TEST_ASSERT_EQUAL_INT(102, q.current());
+    for (uint32_t i = 0; i <= 102; ++i) TEST_ASSERT_TRUE(q.heardAt(i));
+    TEST_ASSERT_FALSE(q.heardAt(103));
+    TEST_ASSERT_EQUAL_UINT32(102, q.played());
+  }
+}
+
 // queue.txt and NVS (QueueSaver): a push-out is an edit like any. The file
 // is written at the next generation (version 1, or 2 with the ranks while
 // shuffled), the position saved for it at the entry's new line, and the
@@ -2968,23 +3091,33 @@ void test_a_push_out_is_saved_at_the_next_generation() {
 }
 
 // A random run at the cap against a plain reference (a vector of {track,
-// key, rank}): adds, removes, skips and jumps, shuffle toggles, undo, and
-// now and then a Play that fills the queue again. After every step the
-// queue is the reference's; and around every add: the cap holds, the
-// current entry and everything after it keep their order, and only played
-// entries go, oldest first, exactly as many as the spare places lacked.
+// key, rank, heard}): adds, removes, skips and jumps, shuffle toggles,
+// undo, and now and then a Play that fills the queue again. After every
+// step the queue is the reference's, its heard marks too (an entry is
+// heard once current, and stays so through toggles and undo); and around
+// every add: the cap holds, the current entry and everything after it
+// keep their order, and only played entries go (heard, before the current
+// one), the first ones first, exactly as many as the spare places lacked.
 void test_random_push_outs_match_a_simple_model() {
   QueueModel q;
   struct E {
     uint32_t track, key, rank;
+    bool heard;
   };
   std::vector<E> m, undoM;
   int32_t cur = -1, undoCur = -1;
   bool shuffled = false, undoShuffled = false, canUndo = false;
   uint32_t pushedRef = 0;
+  auto heardKeys = [&]() {
+    std::set<uint32_t> k;
+    for (const E& e : m) {
+      if (e.heard) k.insert(e.key);
+    }
+    return k;
+  };
   auto resync = [&]() {  // the reference takes the queue as it is (a random layout)
     m.clear();
-    for (uint32_t i = 0; i < q.size(); ++i) m.push_back({q.trackAt(i), q.keyAt(i), q.rankAt(i)});
+    for (uint32_t i = 0; i < q.size(); ++i) m.push_back({q.trackAt(i), q.keyAt(i), q.rankAt(i), q.heardAt(i)});
     cur = q.current();
     shuffled = q.shuffled();
   };
@@ -2996,15 +3129,20 @@ void test_random_push_outs_match_a_simple_model() {
     pushedRef = pushed;
   };
   auto sync = [&]() {
+    if (cur >= 0) m[static_cast<uint32_t>(cur)].heard = true;  // whatever made it current
     TEST_ASSERT_TRUE(q.size() <= QueueModel::kMaxEntries);
     TEST_ASSERT_EQUAL_UINT32(m.size(), q.size());
     TEST_ASSERT_EQUAL_INT(cur, q.current());
     TEST_ASSERT_EQUAL(shuffled, q.shuffled());
+    uint32_t played = 0;
     for (uint32_t i = 0; i < m.size(); ++i) {
       TEST_ASSERT_EQUAL_UINT32(m[i].track, q.trackAt(i));
       TEST_ASSERT_EQUAL_UINT32(m[i].key, q.keyAt(i));
       if (shuffled) TEST_ASSERT_EQUAL_UINT32(m[i].rank, q.rankAt(i));
+      TEST_ASSERT_EQUAL(m[i].heard, q.heardAt(i));
+      played += m[i].heard && static_cast<int32_t>(i) < cur ? 1 : 0;
     }
+    TEST_ASSERT_EQUAL_UINT32(played, q.played());
     TEST_ASSERT_EQUAL(canUndo, q.undoable() != QueueModel::Edit::None);
     TEST_ASSERT_EQUAL_UINT32(canUndo ? pushedRef : 0, q.undoPushed());
   };
@@ -3028,7 +3166,8 @@ void test_random_push_outs_match_a_simple_model() {
       for (uint32_t i = 0; i < n; ++i) ids[i] = 100000 + rnd(1000);
       const bool next = op == 2;
       const uint32_t spare = QueueModel::kMaxEntries - static_cast<uint32_t>(m.size());
-      const uint32_t played = cur > 0 ? static_cast<uint32_t>(cur) : 0;
+      uint32_t played = 0;
+      for (int32_t i = 0; i < cur; ++i) played += m[static_cast<uint32_t>(i)].heard ? 1 : 0;
       const uint32_t took = std::min(n, spare + played);
       const uint32_t pushed = took > spare ? took - spare : 0;
       TEST_ASSERT_EQUAL_UINT32(spare + played, q.room());
@@ -3052,23 +3191,34 @@ void test_random_push_outs_match_a_simple_model() {
       pushes += pushed ? 1 : 0;
       partial += took < n ? 1 : 0;
       // The invariants, read off the queue itself: the cap; the first
-      // `pushed` entries (the oldest played) are gone and nothing else;
-      // what stays, the current entry with it, keeps its order.
+      // `pushed` heard entries before the current one (the oldest played)
+      // are gone and nothing else, never an unheard one; what stays, the
+      // current entry with it, keeps its order.
       TEST_ASSERT_TRUE(q.size() <= QueueModel::kMaxEntries);
       TEST_ASSERT_EQUAL_UINT32(before.size() - pushed + took, q.size());
-      std::vector<uint32_t> stayed;
+      std::vector<uint32_t> stayed, want;
       std::set<uint32_t> oldKeys;
       for (const E& e : before) oldKeys.insert(e.key);
       for (uint32_t i = 0; i < q.size(); ++i) {
         if (oldKeys.count(q.keyAt(i))) stayed.push_back(q.keyAt(i));
       }
-      TEST_ASSERT_EQUAL_size_t(before.size() - pushed, stayed.size());
-      for (uint32_t i = 0; i < stayed.size(); ++i) TEST_ASSERT_EQUAL_UINT32(before[pushed + i].key, stayed[i]);
+      std::vector<E> kept;
+      uint32_t left = pushed;
+      for (uint32_t i = 0; i < before.size(); ++i) {
+        if (left && static_cast<int32_t>(i) < beforeCur && before[i].heard) {
+          --left;
+          continue;
+        }
+        kept.push_back(before[i]);
+        want.push_back(before[i].key);
+      }
+      TEST_ASSERT_EQUAL_UINT32(0, left);
+      TEST_ASSERT_TRUE(stayed == want);
       if (beforeCur >= 0) TEST_ASSERT_EQUAL_UINT32(before[static_cast<uint32_t>(beforeCur)].key, q.currentKey());
       // The reference does the same.
       save(pushed);
       const bool wasEmpty = cur < 0;
-      m.erase(m.begin(), m.begin() + pushed);
+      m = kept;
       if (!wasEmpty) cur -= static_cast<int32_t>(pushed);
       const uint32_t at = next && !wasEmpty ? static_cast<uint32_t>(cur) + 1 : static_cast<uint32_t>(m.size());
       uint32_t base = 0;
@@ -3083,7 +3233,7 @@ void test_random_push_outs_match_a_simple_model() {
         }
       }
       std::vector<E> added;
-      for (uint32_t i = 0; i < took; ++i) added.push_back({ids[i], q.keyAt(at + i), base + i});
+      for (uint32_t i = 0; i < took; ++i) added.push_back({ids[i], q.keyAt(at + i), base + i, false});
       m.insert(m.begin() + at, added.begin(), added.end());
       if (wasEmpty) {
         cur = static_cast<int32_t>(at);
@@ -3110,26 +3260,33 @@ void test_random_push_outs_match_a_simple_model() {
       m = kept;
       cur = newCur >= 0 ? newCur : (firstAfter >= 0 ? firstAfter : lastBefore);
     } else if (op == 4 && !m.empty()) {
-      // A skip (next, prev; wrapping or not), or a jump (a tap in the Queue;
-      // now and then near the top, where little has played).
-      if (rnd(3) == 0) {
+      // A jump (a tap in the Queue; now and then near the top, where little
+      // has played): only where it lands is heard. Or a skip (next, prev;
+      // wrapping or not) of a few at once, which passes over entries; or,
+      // most often, tracks playing on one by one, each heard.
+      const uint32_t kind = rnd(4);
+      if (kind == 0) {
         const uint32_t to = rnd(3) == 0 ? rnd(std::min<uint32_t>(4, static_cast<uint32_t>(m.size())))
                                         : rnd(static_cast<uint32_t>(m.size()));
         q.setCurrent(to);
         cur = static_cast<int32_t>(to);
       } else {
-        const int d = static_cast<int>(rnd(9)) - 3;
+        const int d = kind == 1 ? static_cast<int>(rnd(9)) - 3 : 1;
+        const uint32_t times = kind == 1 ? 1 : rnd(30) + 1;
         const bool wrap = rnd(2) == 0;
         const int64_t n = static_cast<int64_t>(m.size());
-        int64_t to = cur + d;
-        if (to < 0 || to >= n) {
-          if (wrap) {
-            cur = static_cast<int32_t>(((to % n) + n) % n);
+        for (uint32_t k = 0; k < times; ++k) {
+          int64_t to = cur + d;
+          if (to < 0 || to >= n) {
+            if (wrap) {
+              cur = static_cast<int32_t>(((to % n) + n) % n);
+            }
+          } else {
+            cur = static_cast<int32_t>(to);
           }
-        } else {
-          cur = static_cast<int32_t>(to);
+          m[static_cast<uint32_t>(cur)].heard = true;
+          q.step(d, wrap);
         }
-        q.step(d, wrap);
       }
     } else if (op == 5) {
       // A toggle: no edit (the undo goes); On keeps the current entry and
@@ -3137,19 +3294,23 @@ void test_random_push_outs_match_a_simple_model() {
       const uint32_t key = q.currentKey();
       const bool on = !q.shuffled();
       const std::vector<E> was = m;
+      const std::set<uint32_t> heard = heardKeys();
       q.setShuffled(on);
       TEST_ASSERT_EQUAL_UINT32(key, q.currentKey());
       if (on && cur >= 0) {
         for (uint32_t i = 0; i <= static_cast<uint32_t>(cur); ++i) TEST_ASSERT_EQUAL_UINT32(was[i].key, q.keyAt(i));
       }
       resync();
+      TEST_ASSERT_TRUE(heardKeys() == heard);  // the marks go with their entries
       canUndo = false;
     } else if (op == 6) {
       const bool did = q.undo();
       TEST_ASSERT_EQUAL(canUndo, did);
       if (did) {
         const uint32_t key = cur >= 0 ? m[static_cast<uint32_t>(cur)].key : QueueModel::kNone;
+        const std::set<uint32_t> heard = heardKeys();  // heard since the edit stays heard
         m = undoM;
+        for (E& e : m) e.heard = e.heard || heard.count(e.key) > 0;
         shuffled = undoShuffled;
         int32_t found = -1;
         for (uint32_t i = 0; i < m.size(); ++i) {
@@ -3165,6 +3326,8 @@ void test_random_push_outs_match_a_simple_model() {
       save(0);
       TEST_ASSERT_TRUE(q.replace(big.data(), static_cast<uint32_t>(big.size()), rnd(5300)));
       resync();
+      TEST_ASSERT_EQUAL_size_t(1, heardKeys().size());  // its start, not the tracks before it
+      TEST_ASSERT_EQUAL_UINT32(0, q.played());
     } else if (op >= 8 && !m.empty() && rnd(20) == 0) {
       // Clear up next: the room an add makes is what played, again.
       if (cur >= 0 && static_cast<uint32_t>(cur) + 1 < m.size()) {
@@ -4269,6 +4432,7 @@ int main(int, char**) {
   RUN_TEST(test_a_push_out_without_memory_for_its_undo_is_refused);
   RUN_TEST(test_a_shuffled_queue_pushes_out_in_play_order);
   RUN_TEST(test_a_full_queue_played_through_then_added);
+  RUN_TEST(test_a_push_out_takes_only_what_was_heard);
   RUN_TEST(test_a_push_out_is_saved_at_the_next_generation);
   RUN_TEST(test_random_push_outs_match_a_simple_model);
   RUN_TEST(test_text_read_is_sized_by_its_header);

@@ -392,12 +392,13 @@ void QueueStore::printStatus() const {
   // An add that pushed out what played (docs/QUEUE-MODES.md 15.8): its undo
   // puts those back.
   char undoBack[48] = "";
-  if (queue_.undoPushed()) {
-    snprintf(undoBack, sizeof(undoBack), " (and %lu played tracks back)", (unsigned long)queue_.undoPushed());
+  if (const uint32_t pushed = queue_.undoPushed()) {
+    snprintf(undoBack, sizeof(undoBack), " (and %lu played track%s back)", (unsigned long)pushed,
+             pushed == 1 ? "" : "s");
   }
-  // Full: an add pushes out what played (the entries before the current
-  // one), or, with nothing played, is refused.
-  const char* full = queue_.room() == 0    ? " (full: nothing played, an add is refused)"
+  // Full: an add pushes out what played (the heard entries before the
+  // current one), or, with none of those, is refused.
+  const char* full = queue_.room() == 0    ? " (full: no played track can make way, an add is refused)"
                      : queue_.spare() == 0 ? " (full: an add pushes out what played)"
                                            : "";
   Serial.printf("[queue] %lu tracks%s (%lu KB of PSRAM, the undo's included), at %d, %lu up next; shuffle %s, repeat "

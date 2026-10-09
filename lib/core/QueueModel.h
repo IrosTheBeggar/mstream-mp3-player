@@ -19,13 +19,25 @@
 // shuffled: the first, or the window that holds its start; shuffled: the
 // chosen track and a random rest); assign() keeps the window that holds
 // its current entry (window()). An add that doesn't fit first pushes out
-// what already played (played(): the entries before the current one, in
-// play order, shuffled too), oldest first, as many as it lacks (the
-// user's choice, 2026-10-08: section 15.8), then takes as many as fit,
-// the first ones in its order; it is refused (false, nothing changed)
-// only when nothing can go: the queue full and nothing played. The
-// current entry and everything after it stay, in their order. The undo
-// is kept whatever the size, and puts back what an add pushed out.
+// what already played (played(): the heard entries before the current
+// one, below), oldest first (the first in play order, shuffled too), as
+// many as it lacks (the user's choice, 2026-10-08: section 15.8), then
+// takes as many as fit, the first ones in its order; it is refused
+// (false, nothing changed) only when nothing can go: the queue full and
+// no played entry before the current one. The current entry, everything
+// after it and the unheard entries before it stay, in their order. The
+// undo is kept whatever the size, and puts back what an add pushed out.
+//
+// Heard: an entry is marked once it has been the current entry (a step, a
+// tap, a join taken, a Play's start, the next one a remove makes current:
+// whatever makes it current, the player then plays or cues it), and keeps
+// the mark through every move, toggle, sort and undo. An entry passed
+// over never is: those a jump skips, a tapped start's earlier tracks, the
+// unplayed ones a shuffle Off sorts in before the current entry. The
+// marks aren't saved (queue.txt holds the order, NVS the position):
+// assign() (the boot's restore, a remap's re-read) marks every entry
+// before its current one, as the rule was before the marks (15.8). The
+// mark is the key's top bit: keys are 31 bits, and it costs no memory.
 //
 // Memory: the entries (12 bytes each) and the undo snapshot (the same
 // again) are flat arrays from allocator hooks (the firmware points them at
@@ -137,33 +149,35 @@ public:
   bool empty() const { return q_.size == 0; }
   int32_t current() const { return current_; }
   uint32_t trackAt(uint32_t pos) const { return pos < q_.size ? q_.data[pos].track : kNone; }
-  uint32_t keyAt(uint32_t pos) const { return pos < q_.size ? q_.data[pos].key : kNone; }
+  uint32_t keyAt(uint32_t pos) const { return pos < q_.size ? keyOf(q_.data[pos]) : kNone; }
   uint32_t currentTrack() const { return current_ >= 0 ? q_.data[current_].track : kNone; }
-  uint32_t currentKey() const { return current_ >= 0 ? q_.data[current_].key : kNone; }
+  uint32_t currentKey() const { return current_ >= 0 ? keyOf(q_.data[current_]) : kNone; }
+  // The entry at `pos` has been the current one (the class: heard); false
+  // out of range.
+  bool heardAt(uint32_t pos) const { return pos < q_.size && isHeard(q_.data[pos]); }
   // The position of the entry with `key`, or kNone (removed, or never).
   uint32_t positionOf(uint32_t key) const;
   // Entries after the current one ("12 up next").
   uint32_t upNext() const { return current_ >= 0 ? q_.size - 1 - static_cast<uint32_t>(current_) : 0; }
   // How many tracks an add can take now: the places free under the cap
   // (spare()) and the played entries it would push out to make room
-  // (played()); 0: the queue is full and nothing in it played, and an add
-  // is refused. What the UI asks before an add, to say how much of it went
-  // in.
+  // (played()); 0: the queue is full and no played entry can go, and an
+  // add is refused. It moves with the current entry: what a caller reads
+  // before PlaybackController's add can be stale by then (the add's Act
+  // takes a heard gapless join first), so the UI reads what an add did
+  // after it (queueview::addOutcome()).
   uint32_t room() const { return spare() + played(); }
   // The places free under the cap: kMaxEntries less the size.
   uint32_t spare() const { return q_.size < kMaxEntries ? kMaxEntries - q_.size : 0; }
-  // The entries that already played: those before the current one, in
-  // play order (the positions, shuffled or not: a shuffled queue's
-  // entries are in the order that plays). What an add that doesn't fit
-  // pushes out, oldest (position 0) first; never the current entry or
-  // what follows it.
-  uint32_t played() const { return current_ > 0 ? static_cast<uint32_t>(current_) : 0; }
+  // The entries that already played: the heard ones (the class) before
+  // the current one. What an add that doesn't fit pushes out, the first
+  // in play order first (the positions, shuffled or not: a shuffled
+  // queue's entries are in the order that plays); never the current entry,
+  // what follows it, or an unheard entry. O(current()).
+  uint32_t played() const;
   // How many played entries an add of `n` would push out now: what of it
   // the spare places can't take, at most played().
-  uint32_t pushedBy(uint32_t n) const {
-    const uint32_t lack = n > spare() ? n - spare() : 0;
-    return lack < played() ? lack : played();
-  }
+  uint32_t pushedBy(uint32_t n) const;
   // Bumped by every change to the entries (not by a move of the current
   // position alone): what the UI redraws on and the saver saves on.
   uint32_t contentVersion() const { return contentVersion_; }
@@ -201,10 +215,11 @@ public:
   // The first room() of the tracks, in their order (all of them when they
   // fit), the played entries pushed out first, oldest first, as many as
   // the spare places lack (pushedBy()). False when none fit (room() 0: the
-  // queue full and nothing played) or out of memory; the queue then
-  // unchanged and nothing to undo. An add that pushes out needs memory
-  // for its snapshot as well (its undo is how what played comes back):
-  // without it, refused as out of memory, the last edit's undo kept.
+  // queue full and no played entry to push out) or out of memory; the
+  // queue then unchanged and nothing to undo. An add that pushes out needs
+  // memory for its snapshot as well (its undo is how what played comes
+  // back): without it, refused as out of memory, the last edit's undo
+  // kept.
   bool insertNext(const uint32_t* tracks, uint32_t n);
   bool append(const uint32_t* tracks, uint32_t n);
   // Positions out of range and repeats are ignored; any order.
@@ -236,15 +251,18 @@ public:
   // (an add's pushed-out entries back in their places: the snapshot is the
   // whole queue). The current entry is the one current now if it was
   // there then (what plays keeps playing), otherwise the one that was
-  // current then.
+  // current then. What was heard since the edit stays heard (by key: the
+  // queue left behind is sorted in place to look the keys up, O(n log n),
+  // nothing allocated).
   bool undo();
   void dropUndo();
 
   // ---- restoring (persistence, a library rebuild) ----
   // The queue becomes these tracks with `current` (clamped; -1 for an
-  // empty queue), with fresh keys and no undo, shuffled or not, with
-  // `ranks` (nullptr: the positions; read back from a shuffled file, they
-  // may have gaps where tracks were dropped). Past kMaxEntries, only
+  // empty queue), with fresh keys and no undo, the entries before
+  // `current` heard (the file can't say which were: the class), shuffled
+  // or not, with `ranks` (nullptr: the positions; read back from a
+  // shuffled file, they may have gaps where tracks were dropped). Past kMaxEntries, only
   // window(n, current) of them (the boot's whole library with no saved
   // queue: its first kMaxEntries). The entries' block is then exactly as
   // long as what is kept (a new block when it was any other size; if none
@@ -268,9 +286,13 @@ public:
 private:
   struct Entry {
     uint32_t track;
-    uint32_t key;
+    uint32_t key;   // its key (31 bits), and kHeard
     uint32_t rank;  // shuffled: its place in the own order; otherwise unused
   };
+  // In Entry::key: the entry has been the current one (the class).
+  static constexpr uint32_t kHeard = 0x80000000u;
+  static uint32_t keyOf(const Entry& e) { return e.key & ~kHeard; }
+  static bool isHeard(const Entry& e) { return (e.key & kHeard) != 0; }
   struct Array {  // from the hooks
     Entry* data = nullptr;
     uint32_t size = 0;
@@ -279,8 +301,17 @@ private:
 
   bool reserve(Array& a, uint32_t n);
   void drop(Array& a);
+  // The next key (31 bits: past 0x7FFFFFFF, 0 again).
+  uint32_t newKey();
   // Entry `pos` becomes `track` with the next key and `rank`.
   void put(uint32_t pos, uint32_t track, uint32_t rank);
+  // The current entry is heard (none: nothing).
+  void hear() {
+    if (current_ >= 0) q_.data[current_].key |= kHeard;
+  }
+  // undo(): the marks of the queue left behind (undo_ now, sorted here by
+  // key) go to the same entries in the one put back.
+  void carryHeard();
   // Copies the entries and the mode to the undo snapshot (the edit is then
   // undoable); false: no memory for it (the edit goes ahead, not undoable).
   bool snapshot(Edit edit);
@@ -292,8 +323,9 @@ private:
   // The next draw from the hook (or the fixed sequence): its 32 bits for
   // `bound` 0 (a seed), else in [0, bound) by multiply-shift.
   uint32_t draw(uint32_t bound = 0);
-  // The highest rank of the entries from `from` on (0 for none): O(n).
-  uint32_t maxRank(uint32_t from = 0) const;
+  // The highest rank of the entries (0 for none), less the first `skip`
+  // heard ones before the current entry (those a push-out takes): O(n).
+  uint32_t maxRank(uint32_t skip = 0) const;
 
   AllocFn allocFn_;
   FreeFn freeFn_;

@@ -726,21 +726,12 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
   // A single track is called by its title.
   char what[96];
   if (span.count == 1 || start >= 0) titleOf(span[start >= 0 ? static_cast<uint32_t>(start) : 0], what, sizeof(what));
-  // The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15): a
-  // Play takes 5,000 of a bigger set; an add as many as fit, after pushing
-  // out what already played to make room (15.8: the entries before the
-  // current one, oldest first), none when the queue is full and nothing in
-  // it played (refused: its own toast).
-  const uint32_t took = action == 0 ? std::min(span.count, QueueModel::kMaxEntries) : std::min(span.count, q.room());
-  const bool full = action != 0 && took == 0;
-  const uint32_t pushed = action == 0 ? 0 : q.pushedBy(took);
-  // Where an add puts its first track (QueueModel: Play next right after
-  // the current entry, + Queue at the end), less the played entries it
-  // pushes out from before it: the toast's View goes there.
-  const uint32_t addedAt =
-      (action == 1 && q.current() >= 0 ? static_cast<uint32_t>(q.current()) + 1 : q.size()) - pushed;
+  // An add is read off the queue after the call (queueview::addOutcome()),
+  // never worked out before it: the call first takes a gapless join the
+  // backend has heard, which moves the current entry, and what an add can
+  // push out moves with it (docs/QUEUE-MODES.md 15.8).
+  const uint32_t sizeBefore = q.size();
   bool ok = false;
-  char text[128];
   switch (action) {
     case 0:
       // A tapped track plays first; a container's Play (an artist, an
@@ -748,6 +739,27 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       // shuffled, on a random track (docs/QUEUE-MODES.md section 2.5).
       ok = p.playNow(span.ids, span.count,
                      start >= 0 ? static_cast<uint32_t>(start) : PlaybackController::kAnyStart);
+      break;
+    case 1:
+      ok = p.playNext(span.ids, span.count);
+      break;
+    default:
+      ok = p.addToQueue(span.ids, span.count);
+      break;
+  }
+  // The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15): a
+  // Play takes 5,000 of a bigger set; an add as many as fit, after pushing
+  // out what already played to make room (15.8: the heard entries before
+  // the current one, oldest first), none when the queue is full and no
+  // played track can go (refused: its own toast).
+  const queueview::AddOutcome added = action == 0 ? queueview::AddOutcome{}
+                                                  : queueview::addOutcome(q, sizeBefore, span.count, action == 1, ok);
+  const uint32_t took = action == 0 ? std::min(span.count, QueueModel::kMaxEntries) : added.took;
+  const bool full = added.refused;
+  const uint32_t pushed = added.pushed;
+  char text[128];
+  switch (action) {
+    case 0:
       if (ok) ui_.added().clear();  // a new queue: nothing "added" to show in it
       if (ok && p.state() == PlayState::Waiting) {
         // The headphones aren't connected: it plays once they are (Now
@@ -762,7 +774,6 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       }
       break;
     case 1:
-      ok = !full && p.playNext(span.ids, span.count);
       if (pushed > 0) {
         // The news is what went to make room (the toast's Undo brings it back).
         queueview::pushedText(queueview::Capped::Next, took, span.count, pushed, text, sizeof(text));
@@ -775,7 +786,6 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       }
       break;
     default:
-      ok = !full && p.addToQueue(span.ids, span.count);
       if (pushed > 0) {
         queueview::pushedText(queueview::Capped::Add, took, span.count, pushed, text, sizeof(text));
       } else if (took < span.count) {
@@ -791,7 +801,7 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
   char outcome[128] = "";
   int at = 0;
   if (full) {
-    snprintf(outcome, sizeof(outcome), ": REFUSED, the queue is full (%lu) and nothing in it played",
+    snprintf(outcome, sizeof(outcome), ": REFUSED, the queue is full (%lu) and no played track can make way",
              static_cast<unsigned long>(QueueModel::kMaxEntries));
   } else if (!ok) {
     snprintf(outcome, sizeof(outcome), ": NO MEMORY");
@@ -812,7 +822,7 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
     ui_.refuse(uitext::kQueueFull);
     return;
   }
-  const uint32_t viewKey = ok && action != 0 ? q.keyAt(addedAt) : QueueModel::kNone;
+  const uint32_t viewKey = ok && action != 0 ? q.keyAt(added.first) : QueueModel::kNone;
   ui_.toast(ok ? text : "Not enough memory for that", ok, viewKey);
 }
 

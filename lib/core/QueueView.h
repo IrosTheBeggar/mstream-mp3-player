@@ -112,6 +112,27 @@ char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t s
 // by the cap too). uitext's kPush* texts. Returns buf.
 char* pushedText(Capped what, uint32_t took, uint32_t asked, uint32_t pushed, char* buf, size_t size);
 
+// ---- what an add did ----
+//
+// Play next or + Queue (PlaybackController::playNext(), addToQueue()),
+// read off the queue after the call, never worked out before it: the
+// call's Act first takes a gapless join the backend has heard, which moves
+// the current entry, and what an add can take and push out moves with it
+// (QueueModel::room(), pushedBy(): docs/QUEUE-MODES.md 15.8). The Library's
+// toast, the console's qn and q+, and PowerLab's Pz read it.
+struct AddOutcome {
+  uint32_t took = 0;    // entries that went in
+  uint32_t pushed = 0;  // played entries pushed out for them (its Undo puts them back)
+  // Nothing went because nothing could: the queue full and no played
+  // entry to push out (not memory). Nothing changed, the last undo kept.
+  bool refused = false;
+  uint32_t first = QueueModel::kNone;  // the first added entry's position (the toast's View); kNone: none
+};
+// `sizeBefore`: q.size() just before the call (taking a join changes no
+// entry); `asked`: the tracks given; `next`: Play next (else + Queue);
+// `ok`: what the call returned.
+AddOutcome addOutcome(const QueueModel& q, uint32_t sizeBefore, uint32_t asked, bool next, bool ok);
+
 // ---- tracks that failed to play ----
 //
 // The last few queue entries (by key) whose track couldn't be played, so
@@ -162,12 +183,12 @@ private:
 
 // ---- a refused add's note ----
 //
-// An add the full queue refuses (nothing in it played, so nothing to push
-// out: docs/QUEUE-MODES.md 15.8) changes nothing (15.2: the last edit's
-// undo stays), so its note ("Nothing played yet: the queue holds 5,000
-// tracks") keeps the buttons of the toast it covers: the Undo and the View
-// a Play all or an add was offering moments before (15.5). Else that undo
-// would be out of reach while the queue still keeps it.
+// An add the full queue refuses (no played track in it to push out:
+// docs/QUEUE-MODES.md 15.8) changes nothing (15.2: the last edit's undo
+// stays), so its note ("No played track can make way: the queue holds
+// 5,000 tracks") keeps the buttons of the toast it covers: the Undo and
+// the View a Play all or an add was offering moments before (15.5). Else
+// that undo would be out of reach while the queue still keeps it.
 struct ToastButtons {
   bool undo = false;
   uint32_t viewKey = QueueModel::kNone;  // kNone: no View

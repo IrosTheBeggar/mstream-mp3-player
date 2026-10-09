@@ -353,8 +353,8 @@ void test_toast_names_fit() {
   fits(small, "Plays next", room);
 }
 
-// The queue's cap (docs/QUEUE-MODES.md 15): the refusal (full, and nothing
-// played to push out: 15.8) and a Play, Shuffle all or add it cut short,
+// The queue's cap (docs/QUEUE-MODES.md 15): the refusal (full, and no
+// played track to push out: 15.8) and a Play, Shuffle all or add it cut short,
 // each "what: why" on the toast's two lines (too wide for one beside its
 // buttons, as Toast::show() decides), each line in its room in Small at
 // least (Toast draws the why in Body when it fits), with the counts of a
@@ -379,6 +379,10 @@ void test_queue_cap_texts_fit() {
       fits(small, kQueueFull + colon + 2, k.room);
     }
     fits(body, kQueueFull + colon + 2, kToastUndoCX - 6 - kToastTextX);  // Body with none or Undo kept
+    char msg[160];
+    snprintf(msg, sizeof(msg), "%s: what %d (Small) in %d at the least", kQueueFull,
+             small.width(s.substr(0, colon).c_str()), kept[2].room);
+    TEST_MESSAGE(msg);
   }
   struct Case {
     Capped what;

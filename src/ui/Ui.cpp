@@ -1435,7 +1435,9 @@ void Ui::route(const InputEvent& e) {
           const bool undone = player_.undo();
           // (Shuffle all's: the mode it found comes back with the queue.)
           char back[48] = "";
-          if (undone && pushed) snprintf(back, sizeof(back), " (%lu played tracks back)", (unsigned long)pushed);
+          if (undone && pushed) {
+            snprintf(back, sizeof(back), " (%lu played track%s back)", (unsigned long)pushed, pushed == 1 ? "" : "s");
+          }
           Serial.printf("[ui] undo: %s%s%s\n", undone ? "done" : "nothing to undo",
                         player_.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)",
                         back);
