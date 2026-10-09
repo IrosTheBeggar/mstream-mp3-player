@@ -45,8 +45,9 @@
 //   - `travels from no spot`, cheap (O(steps) a move), runs inside open()
 //     through an optional hook, OpenOptions::late, called for each move
 //     that passed every other check;
-//   - `budget red`, a simulation of up to ~3 ms a move, runs after open(),
-//     one kept move a frame while the old dancer keeps dancing; a red move
+//   - `budget red`, a simulation of up to a few thousand frames a move
+//     (tens of ms on the ESP32), runs after open() in time slices while the
+//     old dancer keeps dancing (DanceBudget's BudgetPass::run); a red move
 //     is dropped with dropMove(), which reports it like open()'s drops.
 // As those rows are A.15's last, nothing a move fails before them depends
 // on either.
@@ -206,10 +207,15 @@ class Pack {
   MoveRecord moveRecord(int move) const;
   const char* moveName(int move) const;
   StepRecord step(int move, int k) const;
+  // A move's steps 0..n-1 at once, n = min(stepCount, cap), each as step()
+  // reads it (zeros when the record's steps don't lie inside STEP), with one
+  // record decode instead of one a step; *record (optional) gets the record
+  // (zeroed when there is none). Returns n: 0 out of state or range.
+  int steps(int move, StepRecord* out, int cap, MoveRecord* record = nullptr) const;
   const char* genreTag(int move, int g) const;
 
   // D.2: drops a kept move after open(), as step 3's loader does with a
-  // move whose budget is red, one move a frame (5.7). False, and nothing
+  // move whose budget is red (5.7's sliced pass). False, and nothing
   // changes, unless the pack is open and the move kept. Otherwise its kept
   // bit clears, keptMoves() goes down by 1, and with a report `dropped`
   // goes up by 1 and onDrop(ctx, move, why) is called.

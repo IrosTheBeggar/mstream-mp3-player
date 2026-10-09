@@ -853,6 +853,22 @@ StepRecord Pack::step(int move, int k) const {
   return readStep(region(step_, stepLen_, nullptr), m.stepFirst + static_cast<uint32_t>(k));
 }
 
+int Pack::steps(int move, StepRecord* out, int cap, MoveRecord* record) const {
+  if (record) *record = MoveRecord{};
+  if (state_ != State::Open || move < 0 || move >= moveCount_) return 0;
+  const MoveRecord m = moveRecord(move);
+  if (record) *record = m;
+  if (!out || cap <= 0) return 0;
+  const int n = m.stepCount < cap ? m.stepCount : cap;
+  if (uint32_t{m.stepFirst} + m.stepCount > stepLen_ / 8) {  // as step(): zeros
+    for (int k = 0; k < n; ++k) out[k] = StepRecord{};
+    return n;
+  }
+  const View view = region(step_, stepLen_, nullptr);
+  for (int k = 0; k < n; ++k) out[k] = readStep(view, m.stepFirst + static_cast<uint32_t>(k));
+  return n;
+}
+
 const char* Pack::genreTag(int move, int g) const {
   if (state_ != State::Open || move < 0 || move >= moveCount_ || g < 0) return nullptr;
   const MoveRecord m = moveRecord(move);

@@ -6,10 +6,12 @@
 
 // The rules a dance pack's bytes are held to, in one place: the limits of
 // the MPDN v1 format (docs/DANCE-SPRITES.md, Appendix A), the bits a move
-// record and a step carry, and B.7's reach. tools/dancepack.py enforces the
-// same values when it compiles a dancer; the device enforces them again when
-// it reads a pack (DancePack), so a pack written by anything else is held to
-// exactly what the compiler would have written.
+// record and a step carry, and B.7's pace rules (reach, which the reader
+// checks, and step 3's eligibleK and paceHolds, which the Choreographer
+// dances by). tools/dancepack.py enforces the same values when it compiles a
+// dancer; the device enforces them again when it reads a pack (DancePack), so
+// a pack written by anything else is held to exactly what the compiler would
+// have written.
 //
 // What the numbers mean:
 //   - A pack is at most 128 KB (a card pack is loaded whole into the PSRAM
@@ -96,6 +98,54 @@ inline bool reach(int lo, int hi, int beats, bool travels, int* rlo, int* rhi) {
   if (rlo) *rlo = l;
   if (rhi) *rhi = h;
   return true;
+}
+
+// B.7's octave test and tolerance, step 3's (the Choreographer's pace rules,
+// section 2.4-2.5). T10 is the latched dance tempo in tenths of a BPM; at
+// octave k the move's pace is T * 2^k, in integers x(k) = t10 * 2^(k + 1)
+// twentieths of a BPM, so 20 * lo <= x(k) <= 20 * hi is the range test.
+//   - eligibleK: an unranged move always dances at k = 0 (half time never
+//     leaks into it). A ranged one tries, each once and in this order, the
+//     k of the last ranged run (so consecutive ranged moves don't flip
+//     octave), then 0, -1 and +1, the first that fits winning. Half time
+//     needs at most 4 beats (no play longer than 8 dance beats); double time
+//     needs t10 <= 900 (no pace past 180) and, for a travel move, at least 4
+//     beats (a travel lasts at least 2 dance beats).
+//   - paceHolds: a running move keeps its octave while its pace stays within
+//     0.97 * lo .. 1.03 * hi, both inclusive (1940 * lo <= 100 * x(k) <= 2060
+//     * hi); the 3 % never takes double time past 180.
+// Both are tools/dancepack.py's eligible_k and pace_holds, bit for bit:
+// EligibilityVectors.h pins them.
+constexpr int8_t kNoOctave = 127;  // eligibleK: not eligible; prevK: no previous ranged move
+// B.7's eligible_k: the octave (-1, 0, +1) a move is danced at for dance tempo t10
+// (tenths of a BPM), or kNoOctave. prevK: the k of the last ranged run, or kNoOctave
+// (any value outside -1..1 counts as none). travel: nonzero means the move travels.
+inline int8_t eligibleK(int t10, int lo, int hi, int8_t prevK, int beats, int travel) {
+  if (lo == 0 && hi == 0) return 0;
+  int8_t order[4];
+  int n = 0;
+  if (prevK >= -1 && prevK <= 1) order[n++] = prevK;
+  const int8_t rest[3] = {0, -1, 1};
+  for (int8_t k : rest)
+    if (n == 0 || order[0] != k) order[n++] = k;
+  for (int i = 0; i < n; ++i) {
+    const int8_t k = order[i];
+    if (k == -1 && beats > 4) continue;
+    if (k == 1 && (t10 > 900 || (travel != 0 && beats < 4))) continue;
+    const int64_t x = static_cast<int64_t>(t10) * (k == -1 ? 1 : (k == 0 ? 2 : 4));
+    if (20 * static_cast<int64_t>(lo) <= x && x <= 20 * static_cast<int64_t>(hi)) return k;
+  }
+  return kNoOctave;
+}
+// B.7's pace_holds: the running move's tolerance (2.5): its pace within 0.97*lo ..
+// 1.03*hi, and k = +1 only while t10 <= 900. True for an unranged move; false for a
+// ranged move with k outside -1..1.
+inline bool paceHolds(int t10, int8_t k, int lo, int hi) {
+  if (lo == 0 && hi == 0) return true;
+  if (k < -1 || k > 1) return false;
+  if (k == 1 && t10 > 900) return false;
+  const int64_t x = static_cast<int64_t>(t10) * (k == -1 ? 1 : (k == 0 ? 2 : 4));
+  return 1940 * static_cast<int64_t>(lo) <= 100 * x && 100 * x <= 2060 * static_cast<int64_t>(hi);
 }
 
 }  // namespace dance

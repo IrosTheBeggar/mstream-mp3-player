@@ -16,10 +16,11 @@
 // - The fuzz (truncations, flips, the structure-aware mutator) is seeded,
 //   so a failure names a case that repeats.
 // - ReaderVectors.h (D.3) is read in full against step 2's drop lists, and
-//   each opened case again against its full list: a stub of step 3's hook
-//   drops `travels from no spot` inside open(), then dropMove drops
-//   `budget red` after it, so D.2's split already meets Python's data.
-//   Step 3 replaces the stubs with DanceBudget's.
+//   each opened case again against its full list (E.4): DanceBudget's
+//   start-spot hook drops `travels from no spot` inside open() (through a
+//   counting wrapper), then a BudgetPass run to its end drops `budget red`
+//   through dropMove after it, as 5.7's loader does for a card pack. Item 4's
+//   stub hook stays, for the hook's own contract.
 //
 // Run: pio test -e native -f test_dance_pack; under ASan and UBSan with
 // pio test -e native_asan (CI) or Appendix D.5's Docker command.
@@ -41,6 +42,7 @@
 #include "../support/dance/PackEdit.h"
 #include "Crc32.h"
 #include "DanceBlit.h"
+#include "DanceBudget.h"
 #include "DancePack.h"
 #include "DanceRules.h"
 #include "Fnv1a.h"
@@ -151,6 +153,19 @@ bool zeroBox(const dance::FrameBox& b) { return !b.x0 && !b.y0 && !b.w && !b.h; 
 bool zeroFrame(const dance::PackFrame& f) { return zeroBox(f.box) && f.data == nullptr && f.len == 0; }
 bool zeroStep(const dance::StepRecord& s) {
   return !s.frame && !s.mirrored && !s.dur && !s.dx && !s.dy && !s.ease && !s.go;
+}
+bool sameStep(const dance::StepRecord& a, const dance::StepRecord& b) {
+  return a.frame == b.frame && a.mirrored == b.mirrored && a.dur == b.dur && a.dx == b.dx && a.dy == b.dy &&
+         a.ease == b.ease && a.go == b.go;
+}
+bool sameMove(const dance::MoveRecord& a, const dance::MoveRecord& b) {
+  return a.name == b.name && a.kind == b.kind && a.beats == b.beats && a.paceLo == b.paceLo && a.paceHi == b.paceHi &&
+         a.weight10 == b.weight10 && a.when == b.when && a.flags == b.flags && a.repeat == b.repeat &&
+         a.needs == b.needs && a.travel == b.travel && a.startAt == b.startAt && a.travelEase == b.travelEase &&
+         a.bounce == b.bounce && a.sway == b.sway && a.fromKey == b.fromKey && a.toKey == b.toKey &&
+         a.fromKeyM == b.fromKeyM && a.toKeyM == b.toKeyM && a.genreFirst == b.genreFirst &&
+         a.genreCount == b.genreCount && a.stepCount == b.stepCount && a.stepFirst == b.stepFirst &&
+         a.songLo == b.songLo && a.songHi == b.songHi;
 }
 bool zeroMove(const dance::MoveRecord& m) {
   return !m.name && !m.kind && !m.beats && !m.paceLo && !m.paceHi && !m.weight10 && !m.when && !m.flags && !m.repeat &&
@@ -322,6 +337,23 @@ void verify(Reader& r, Xorshift32* rng) {
     const char* name = p.moveName(m);
     for (int k = 0; k < 34; ++k) (void)p.step(m, k);
     for (int t = 0; t < 10; ++t) (void)p.genreTag(m, t);
+    // steps(): every step at once, each as step() reads it, the record too.
+    {
+      dance::StepRecord all[34];
+      dance::MoveRecord got;
+      const int n = p.steps(m, all, 34, &got);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(rec.stepCount < 34 ? rec.stepCount : 34, n, g_ctx);  // a dropped record may have more
+      TEST_ASSERT_TRUE_MESSAGE(sameMove(got, rec), g_ctx);
+      for (int k = 0; k < n; ++k) TEST_ASSERT_TRUE_MESSAGE(sameStep(all[k], p.step(m, k)), g_ctx);
+      dance::StepRecord few[3];
+      const int n3 = p.steps(m, few, 3);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(rec.stepCount < 3 ? rec.stepCount : 3, n3, g_ctx);
+      for (int k = 0; k < n3; ++k) TEST_ASSERT_TRUE_MESSAGE(sameStep(few[k], p.step(m, k)), g_ctx);
+      dance::MoveRecord only;
+      TEST_ASSERT_EQUAL_INT_MESSAGE(0, p.steps(m, nullptr, 34, &only), g_ctx);
+      TEST_ASSERT_TRUE_MESSAGE(sameMove(only, rec), g_ctx);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(0, p.steps(m, all, 0), g_ctx);
+    }
     TEST_ASSERT_TRUE_MESSAGE(zeroStep(p.step(m, -1)), g_ctx);
     TEST_ASSERT_TRUE_MESSAGE(zeroStep(p.step(m, rec.stepCount)), g_ctx);
     TEST_ASSERT_TRUE_MESSAGE(zeroStep(p.step(m, INT_MAX)), g_ctx);
@@ -373,6 +405,10 @@ void verify(Reader& r, Xorshift32* rng) {
     TEST_ASSERT_NULL_MESSAGE(p.moveName(i), g_ctx);
     TEST_ASSERT_TRUE_MESSAGE(zeroStep(p.step(i, 0)), g_ctx);
     TEST_ASSERT_NULL_MESSAGE(p.genreTag(i, 0), g_ctx);
+    dance::StepRecord none[2];
+    dance::MoveRecord noRec;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, p.steps(i, none, 2, &noRec), g_ctx);
+    TEST_ASSERT_TRUE_MESSAGE(zeroMove(noRec), g_ctx);
   }
   TEST_ASSERT_TRUE_MESSAGE(zeroBox(p.box(frames)), g_ctx);
   TEST_ASSERT_TRUE_MESSAGE(zeroFrame(p.frame(frames)), g_ctx);
@@ -2441,39 +2477,22 @@ void test_structure_aware_fuzz() {
 // ===========================================================================
 // 10. ReaderVectors, in full.
 
-// Step 3's reading (D.2) played now, against Python's own data: a stub hook
-// drops, inside open(), the moves a case's full list adds as `travels from
-// no spot`; then, as 5.7's loader does one kept move a frame, dropMove drops
-// those it adds as `budget red`. The hook is called only for the moves step
-// 2 keeps, in MOVS order, its drops reported in place; the budget's come
-// after open()'s; and the digest is unchanged.
-struct FullListHook {
-  const dancevec::ReaderCase* c = nullptr;
-  int calls = 0;
-  int lastMove = -1;
-  bool bad = false;
+// Step 3's reading (D.2, E.4), with the real code: DanceBudget's start-spot
+// hook inside open(), through a counting wrapper that records each call (it
+// must come exactly for the moves step 2 keeps, in MOVS order), then a
+// BudgetPass run to its end, one kept move a step, as 5.7's loader does for
+// a card pack. open()'s drops come in place; the budget's after them, in
+// MOVS order; and the digest is unchanged.
+struct SpotsWrapper {
+  std::vector<int> calls;
+  bool open = true;  // the Pack open and the move not yet kept, at every call
 };
 
-bool fullListHook(void* ctx, const dance::Pack&, int move, dance::Reason* why) {
-  FullListHook& h = *static_cast<FullListHook*>(ctx);
-  ++h.calls;
-  if (move <= h.lastMove) h.bad = true;
-  h.lastMove = move;
-  for (uint32_t k = 0; k < h.c->dropCount; ++k)
-    if (dancevec::kReaderDrops[h.c->firstDrop + k].move == move) h.bad = true;  // step 2 dropped it
-  for (uint32_t k = 0; k < h.c->fullDropCount; ++k) {
-    const dancevec::ReaderDrop& d = dancevec::kReaderDrops[h.c->firstFullDrop + k];
-    if (d.move != move) continue;
-    const char* text = dancevec::kReaderReasons[d.reason];
-    unsigned peak = 0;
-    if (std::strcmp(text, "travels from no spot") == 0) {
-      why->why = Why::TravelsFromNoSpot;
-      return false;
-    }
-    if (std::sscanf(text, "budget red (%u px)", &peak) != 1) h.bad = true;  // a drop step 2 should have made
-    return true;  // the budget runs after open()
-  }
-  return true;
+bool spotsWrapper(void* ctx, const dance::Pack& pack, int move, dance::Reason* why) {
+  SpotsWrapper& w = *static_cast<SpotsWrapper*>(ctx);
+  w.calls.push_back(move);
+  if (pack.state() != dance::Pack::State::Open || pack.moveKept(move)) w.open = false;
+  return dance::startSpots(nullptr, pack, move, why);
 }
 
 // A drop list's "move:text" pairs; budget: 0 every one, 1 all but `budget
@@ -2534,36 +2553,39 @@ void test_reader_vectors() {
     }
     TEST_ASSERT_EQUAL_HEX32_MESSAGE(c.digest, digestOf(r.pack, c.entry == kScan, listed), g_ctx);
     if (c.entry != kOpen) continue;
-    // Again with a stub of step 3's hook, against the full list.
-    FullListHook h;
-    h.c = &c;
+    // Again as a card pack (E.4): the real hook, then the budget pass.
+    SpotsWrapper w;
     dance::OpenOptions o;
-    o.late = &fullListHook;
-    o.lateCtx = &h;
-    ctx("ReaderVectors case %d with the full list's hook", i);
+    o.late = &spotsWrapper;
+    o.lateCtx = &w;
+    ctx("ReaderVectors case %d with DanceBudget's hook and pass", i);
     TEST_ASSERT_TRUE_MESSAGE(r.open(b, c.length, &o), g_ctx);
     verify(r, &g_rng);
-    TEST_ASSERT_FALSE_MESSAGE(h.bad, g_ctx);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(r.pack.moveCount() - static_cast<int>(c.dropCount), h.calls, g_ctx);
+    // Called exactly for step 2's kept moves, in MOVS order.
+    std::vector<int> want2;
+    for (int m = 0; m < r.pack.moveCount(); ++m)
+      if (!listed[m]) want2.push_back(m);
+    TEST_ASSERT_TRUE_MESSAGE(w.calls == want2, g_ctx);
+    TEST_ASSERT_TRUE_MESSAGE(w.open, g_ctx);
     TEST_ASSERT_EQUAL_STRING_MESSAGE(dropList(c.firstFullDrop, c.fullDropCount, 1).c_str(), r.drops.str().c_str(),
                                      g_ctx);
-    // The budget, one kept move a frame after open() (5.7), through dropMove.
+    // The budget, one kept move a step after open() (5.7), through dropMove.
     r.drops.lastMove = -1;  // its drops come after open()'s, in MOVS order among themselves
     std::string order = r.drops.str();
     const std::string red = dropList(c.firstFullDrop, c.fullDropCount, 2);
-    for (uint32_t k = 0; k < c.fullDropCount; ++k) {
-      const dancevec::ReaderDrop& d = kReaderDrops[c.firstFullDrop + k];
-      unsigned peak = 0;
-      if (std::sscanf(kReaderReasons[d.reason], "budget red (%u px)", &peak) != 1) continue;
-      dance::Reason why;
-      why.why = Why::BudgetRed;
-      why.a = peak;
-      TEST_ASSERT_TRUE_MESSAGE(r.pack.dropMove(d.move, why, &r.report), g_ctx);
-    }
+    const int keptAfterOpen = r.pack.keptMoves();
+    dance::BudgetPass pass;
+    pass.begin(&r.pack, &r.report);
+    int steps = 0;
+    while (pass.step()) ++steps;
+    TEST_ASSERT_TRUE_MESSAGE(pass.done(), g_ctx);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(keptAfterOpen, steps, g_ctx);  // each step checked one kept move
     if (!red.empty()) order += (order.empty() ? "" : "|") + red;
     verify(r, &g_rng);
     TEST_ASSERT_EQUAL_STRING_MESSAGE(order.c_str(), r.drops.str().c_str(), g_ctx);
+    TEST_ASSERT_FALSE_MESSAGE(r.drops.outOfOrder, g_ctx);
     TEST_ASSERT_EQUAL_INT_MESSAGE(c.fullDropCount, r.report.dropped, g_ctx);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(r.pack.moveCount() - static_cast<int>(c.fullDropCount), r.pack.keptMoves(), g_ctx);
     TEST_ASSERT_EQUAL_HEX32_MESSAGE(c.digest, digestOf(r.pack, false, listed), g_ctx);
     lateDrops += static_cast<int>(c.fullDropCount - c.dropCount);
   }

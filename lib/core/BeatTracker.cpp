@@ -413,6 +413,7 @@ bool BeatTracker::acquire(double periodHops) {
   beatIndex_ = 0;
   winSum_ = winMoment_ = 0.0f;
   acquired_ = true;
+  ++acquisitions_;
   beatsSinceAcquire_ = 0;
   betterEstimates_ = 0;
   weakBeats_ = 0;

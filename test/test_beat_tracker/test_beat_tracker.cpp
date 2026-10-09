@@ -435,6 +435,98 @@ void test_acquisition_work_is_bounded() {
   TEST_ASSERT_TRUE_MESSAGE(worst <= firstWorst + 40, msg);
 }
 
+// acquisitions() (docs/DANCE-SPRITES.md, E.1 and E.4): the grids acquired
+// since construction, +1 each time acquire() sets a new one, so the dance
+// Choreographer can tell a re-acquire from a PLL nudge. reset() and
+// setSampleRate() leave it.
+// - On test_tempo_change_relocks' 120 -> 135 track fed a hop at a time it
+//   never falls, rises by at most 1 a hop and only with a valid grid, is at
+//   least 1 once the tracker locks, and rises again after the change, its
+//   grid at 135 BPM. (As E.4's note says, on this track the lock drops at
+//   about 15.1 s, before the re-acquire at about 15.5 s.)
+// - A re-acquire made while locked (10.3): on test_acquisition_work_is_
+//   bounded's hop feed, 120 and 131 BPM alternating every 20 s, some rises
+//   come on a hop that started locked.
+void test_acquisitions_count_new_grids() {
+  BeatTracker bt;
+  TEST_ASSERT_EQUAL_UINT32(0, bt.acquisitions());
+  TEST_ASSERT_TRUE(bt.begin(BeatTracker::Config{}));
+  TEST_ASSERT_EQUAL_UINT32(0, bt.acquisitions());
+  bt.reset(0);
+  TEST_ASSERT_EQUAL_UINT32(0, bt.acquisitions());
+  TEST_ASSERT_TRUE(bt.setSampleRate(44100));
+  TEST_ASSERT_EQUAL_UINT32(0, bt.acquisitions());
+  Track t = sig::concat(sig::clicks(120.0f, 12.0), sig::clicks(135.0f, 16.0, 0.3f));
+  sig::addNoise(t, -30.0, 5);
+  const uint32_t hop = bt.config().hop;
+  uint32_t last = 0;
+  bool firstLock = false, afterChange = false;
+  float bpmAfter = 0.0f;  // the tracker's tempo at the last new grid after the change
+  int rises = 0;
+  for (uint32_t at = 0; at + hop <= t.mono.size(); at += hop) {
+    bt.process(t.mono.data() + at, hop);
+    const uint32_t a = bt.acquisitions();
+    char msg[120];
+    snprintf(msg, sizeof(msg), "at %.3f s: acquisitions %u after %u", (at + hop) / 44100.0, a, last);
+    TEST_ASSERT_TRUE_MESSAGE(a >= last, msg);
+    TEST_ASSERT_TRUE_MESSAGE(a - last <= 1, msg);
+    if (a > last) {
+      TEST_ASSERT_TRUE_MESSAGE(bt.grid().valid, msg);
+      ++rises;
+      if (at >= sig::frames(12.0) && firstLock) {
+        afterChange = true;
+        bpmAfter = bt.bpm();
+      }
+    }
+    if (!firstLock && bt.locked()) {
+      firstLock = true;
+      TEST_ASSERT_TRUE_MESSAGE(a >= 1, msg);
+    }
+    last = a;
+  }
+  char msg[80];
+  snprintf(msg, sizeof(msg), "120 -> 135: %d new grids", rises);
+  TEST_MESSAGE(msg);
+  TEST_ASSERT_TRUE(firstLock);
+  TEST_ASSERT_TRUE_MESSAGE(afterChange, msg);
+  TEST_ASSERT_FLOAT_WITHIN_MESSAGE(1.0f, 135.0f, bpmAfter, "the grid after the change at 135 BPM");
+  const uint32_t n = bt.acquisitions();
+  TEST_ASSERT_TRUE(n >= 2);
+  bt.reset(0);
+  TEST_ASSERT_EQUAL_UINT32(n, bt.acquisitions());
+  TEST_ASSERT_TRUE(bt.setSampleRate(48000));
+  TEST_ASSERT_EQUAL_UINT32(n, bt.acquisitions());
+  TEST_ASSERT_TRUE(bt.setSampleRate(44100));
+  bt.reset(0);
+  TEST_ASSERT_EQUAL_UINT32(n, bt.acquisitions());
+  // Through feedHop too (counted the same way): the same contract on a feed
+  // whose tempo flips every 20 s. How many grids, and how many come while
+  // locked, is the tracker's tuning, not the counter's: printed, not pinned.
+  const double hopRate = 44100.0 / 512;
+  last = bt.acquisitions();
+  bool wasLocked = false;
+  int lockedRises = 0;
+  rises = 0;
+  for (uint32_t h = 0; h < static_cast<uint32_t>(90 * hopRate); ++h) {
+    const double sec = h / hopRate;
+    const double bpm = (static_cast<uint32_t>(sec / 20) & 1) ? 131.0 : 120.0;
+    const double ph = std::fmod(sec * bpm / 60.0, 1.0);
+    bt.feedHop(ph < 0.03 ? 1e9f : 1e6f, ph < 0.03 ? 5e8f : 1e6f);
+    const uint32_t a = bt.acquisitions();
+    TEST_ASSERT_TRUE(a >= last && a - last <= 1);
+    if (a > last) {
+      TEST_ASSERT_TRUE(bt.grid().valid);
+      ++rises;
+      lockedRises += wasLocked;
+    }
+    wasLocked = bt.locked();
+    last = a;
+  }
+  snprintf(msg, sizeof(msg), "120/131 hops: %d new grids, %d while locked", rises, lockedRises);
+  TEST_MESSAGE(msg);
+  TEST_ASSERT_TRUE_MESSAGE(rises >= 1, msg);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_click_trains_lock_and_stay_on_the_beat);
@@ -451,5 +543,6 @@ int main(int, char**) {
   RUN_TEST(test_factors_are_decisive_on_clicks);
   RUN_TEST(test_a_fresh_lock_dances);
   RUN_TEST(test_acquisition_work_is_bounded);
+  RUN_TEST(test_acquisitions_count_new_grids);
   return UNITY_END();
 }

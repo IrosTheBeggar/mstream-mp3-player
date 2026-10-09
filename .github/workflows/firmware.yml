@@ -114,7 +114,7 @@ jobs:
       - name: Host tests under ASan
         run: |
           sudo sysctl -w vm.mmap_rnd_bits=28
-          pio test -e native_asan -f test_dance_pack -f test_dance_blit
+          pio test -e native_asan -f test_dance_pack -f test_dance_blit -f test_dance_choreo -f test_drawn_character -f test_dance_budget
 
       # On a tag, RELEASE=1: the build fails unless HEAD is exactly that tag,
       # the tree is clean and no local flags are set (tools/version.py).

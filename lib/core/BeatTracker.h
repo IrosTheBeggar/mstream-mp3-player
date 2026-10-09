@@ -131,6 +131,11 @@ public:
   // the centroid and the seeds. Bounded by its 3 s window, however long
   // since reset(); for the host test.
   uint32_t acquireReads() const { return acquireReads_; }
+  // Grids acquired since construction: +1 each time acquire() sets a new grid (the first
+  // after a reset, a re-acquire, one after a dropped grid), never on its early return.
+  // reset(), begin() and setSampleRate() leave it; it wraps at 2^32. The Choreographer
+  // compares it for change only (docs/DANCE-SPRITES.md, E.2).
+  uint32_t acquisitions() const { return acquisitions_; }
   const Config& config() const { return cfg_; }
 
   // The onset signal's delay: an onset in the audio shows up this many frames
@@ -209,6 +214,7 @@ private:
   float phaseHist_[kSalienceBins] = {};  // leaky onset energy per phase of the beat
   float hitRate_ = 0.0f;                 // leaky share of PLL beats with an onset
   uint32_t acquireReads_ = 0;
+  uint32_t acquisitions_ = 0;  // acquisitions(): never reset
   float jitter_ = 0.0f;        // leaky mean of (correction / period)^2
   float conf_ = 0.0f;
   bool locked_ = false;

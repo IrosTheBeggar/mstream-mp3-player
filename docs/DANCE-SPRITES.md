@@ -17,13 +17,16 @@ The Dance tab gives the dancer a stage 320 px wide, and the first drawn
 set is a new stick figure that travels between three spots.
 
 **Status: designed (2026-10-07, at 2e1b5c5), with the user's decisions
-(section 12). Step 1 is built: tools/dancepack.py, its tests and the test
-dancer (Appendix C); the rest is designed.** Section 11 is the build order. The
-contributor guide, docs/DANCERS.md, comes with step 11. Appendices A-C
-freeze the contract for step 1: the MPDN v1 bytes, the shared integer
-algorithms and dancepack.py's interface. Appendix D freezes step 2's: the
-C++ reader and blitter, the differential reader vectors and the ASan env.
-Where they and the sections above differ, the appendices win.
+(section 12). Steps 1 and 2 are built (cbfed62: tools/dancepack.py, its
+tests and the test dancer; a5a6fdd: the C++ reader and blitter); the rest
+is designed.** Section 11 is the build order. The contributor guide,
+docs/DANCERS.md, comes with step 11. Appendices A-C freeze the contract
+for step 1: the MPDN v1 bytes, the shared integer algorithms and
+dancepack.py's interface. Appendix D freezes step 2's: the C++ reader and
+blitter, the differential reader vectors and the ASan env. Appendix E
+freezes step 3's: the character interface, DrawnCharacter, the budget and
+the Choreographer. Where they and the sections above differ, the
+appendices win.
 
 Where the facts come from:
 
@@ -85,7 +88,8 @@ lib/core.
 
 **One `Choreographer` owns the dance weight, the idle clock and the
 dancer's spot.** No character holds any of them, so a switch keeps all
-three by construction.
+three by construction; only a switch to a character without travel moves
+puts the spot back at the centre (E.2.4).
 
 ```cpp
 // lib/core/DanceCharacter.h (portable)
@@ -123,12 +127,19 @@ class Character {
 }
 ```
 
+This is the sketch. Appendix E.1 gives the exact header: the record bits
+come from DanceRules.h, MoveLabels gains the twins' ids (`fromTagM`,
+`toTagM`), and Character gains `startSpotMask()`, the spots a move can
+start from (section 8's fit needs the art).
+
 ### 1.2 Drawn characters
 
 `DrawnCharacter` (lib/core) is a zero-copy view over a parsed pack: a
 const array in flash, or bytes in the PSRAM arena (section 5.6). Its
-`frameAt(cue)` returns `{frame, mirrored, dx, dy, shadowW}`, and it is
-host-tested. `DrawnRenderer` (src/ui) blits that result.
+`frameAt(move, pos16, mirrored, spot, e16)` returns B.4's placement (the
+frame, its drawn orientation, the root, the box, the shadow and the
+character rect), and it is host-tested. `DrawnRenderer` (src/ui) blits
+that result.
 
 ### 1.3 The crab
 
@@ -212,9 +223,12 @@ a 3-tick floor keeps both triplets and safety.
   holds at 10, 24 and 30 fps.
 - **Which step shows.** Step i shows while `start_i ≤ 12u < start_{i+1}`.
   Step 0 starts at u = 0, the hit.
-- **Must-show rule.** A step that starts on a whole beat is never skipped.
-  If the last render was before beat b, and the current u is past that
-  step but within ⅛ beat of b, the step is shown anyway.
+- **Must-show rule.** A step that starts on a whole beat is never skipped
+  by a render less than ¼ beat late. The first render at or after whole
+  move beat b draws u = b exactly when it comes at most ⅛ beat late;
+  later than that, a step of at least ¼ beat still covers b on that
+  render. A render ¼ beat or more late (a stall of 83 ms or more at pace
+  180, 125 ms at 120) can miss a 3-tick step outright (E.2.7).
 - **Hit warning.** A step that straddles a whole beat gets a compiler
   warning ("beat 2 lands inside step 2 (B4): no step starts on it; fine
   for a hold, otherwise set timing = so one does"). It isn't dropped,
@@ -282,7 +296,9 @@ can't be reached: the fastest pace is 180`.
   moves (a re-acquire at a new tempo, section 3.5).
 - If a running move's pace T·2^k leaves [0.97·lo, 1.03·hi], or a
   double-time move's 2T passes 180, it holds at its next whole move beat
-  and the picker chooses again. The 3 % never relaxes the 180 cap of
+  and the picker chooses again at the next whole dance beat (the same
+  moment, except at k = +1, where the hold lasts up to ½ beat: E.2.4's
+  CUT). The 3 % never relaxes the 180 cap of
   section 2.4, so no move dances faster than 180 (section 2.1's quarter
   beat of 83 ms). The cut move is exempt from no-repeat, so it can carry
   on at the new octave if one fits.
@@ -305,8 +321,9 @@ Idle moves carry `when = quiet | listening | any`. The default is `any`.
   - No grid: the first ≥ 1.5 s, ambient music, or a grid dropped after 12
     weak beats while the audio continues.
   - An unlocked grid.
-- **During the fade.** Idle frames also show whenever w ≤ 0.5, including
-  the ~0.6 s fade-in after a fresh lock.
+- **During the fade.** Idle frames also show whenever no run is showing:
+  through the ~0.6 s fade-in after a fresh lock, and at w ≤ 0.5, once a
+  run's play in progress has played out (3.2's show latch).
 - **Missing idles.** If a pack has no idle move for the current state, the
   other state's idles are used. If it has none at all, an engine
   **auto-idle** plays: the rest frame with an engine sway of ±1 native px
@@ -400,34 +417,49 @@ Choreographer returns one `Cue`:
 ```
 BeatInput {heard, grid, locked, confidence, trackerBeats (double), rawBpm,
            foldScale, restarts, acquisitions, dt, freeze}
-Cue       {beatMove, u, k, beatMirror, idleMove, idleMs, idleMirror,
-           idleSeconds, weight, energy, showDance, flash, spot, rootX,
-           rootY, state}
+Cue       {beatMove, u, beatPos16, k, beatMirror, idleMove, idleMs,
+           idleMirror, idleSeconds, weight, energy, showDance, flash, spot,
+           rootX, rootY, state}
 ```
 
-The only tracker change is a new `BeatTracker::acquisitions()` counter,
-incremented in `BeatTracker::acquire()`, the one function that acquires a
-grid.
+`beatPos16` is B.4's pos16 for the beat move, floor(u·786432), carried
+so a freeze at a step's start is exact (E.1). The only tracker change is a
+new `BeatTracker::acquisitions()` counter, incremented in
+`BeatTracker::acquire()`, the one function that acquires a grid.
 
-**Determinism.** Identical `BeatInput` streams give identical cues on the
-host and on the device. Two device runs differ from each other, because
-their inputs depend on frame times, latency and epochs.
+**Determinism.** Identical `BeatInput` streams (and calls) give identical
+cues on one build. The host and the device agree too, except where the
+float weight lands within rounding of a threshold: the ESP32 fuses float
+multiply-adds and its `expf` isn't glibc's (E.3). Two device runs differ
+from each other anyway, because their inputs depend on frame times,
+latency and epochs.
 
 ### 3.2 States
 
 | State | Entered when | Behaviour |
 |---|---|---|
 | Quiet / Listening | section 2.6 | Idle moves at the current spot, picked by weight for the state, in runs of 1-3 loops with no immediate repeat. |
-| Entering | w > 0.5 and a locked grid | Keeps idling until the next whole dance beat (≤ 1 beat, ≤ 833 ms), anchors the phrase there (origin A), then picks. The dancer comes in on the beat. |
-| Dancing | | Picks a new run each time the current run ends. |
+| Entering | w > 0.5 and a locked grid | Keeps idling (or holding a held step: a lost lock or a pause that ended while w > 0.5) until the next whole dance beat (≤ 1 beat, ≤ 833 ms), anchors the phrase there (origin A) unless the phrase still holds, then picks. The dancer comes in on the beat. If the weight is falling through 0.5 there (its target at 0.5 or below), it waits for the next beat instead, so a lock fading as it comes in never flashes the dancer in for a frame. |
+| Dancing | | Picks a new run each time the current run ends, while w > 0.5. At w ≤ 0.5 (a locked grid with a weak beat) the play in progress shows to its end, then idle frames; the run plays out unseen and no run follows it (Entering brings the dancer back). |
 | Leaving | lock lost, grid and audio still valid | Plays on to the next whole move beat and holds that step. Idle frames take over at w ≤ 0.5. |
 | Freeze | `!heard.valid` (pause, starve) | Holds the step, the offset and the travel position at once. Quiet idles take over at w ≤ 0.5 (~0.3 s). |
 
-**Which frames show.** Beat-move frames show when w > 0.5 **and** the
-state is Dancing, Leaving, or Freeze holding a beat step. Otherwise idle
-frames show.
+**Which frames show.** Beat-move frames show while a run exists (Dancing,
+Leaving, Freeze holding a beat step, or Entering holding one) **and** its
+**show latch** is on; otherwise idle frames show. A run starts only with
+w > 0.5, so it starts shown. The latch then changes only on whole move
+beats: off where a play starts with w ≤ 0.5, and on again at any whole
+move beat with w > 0.5. So beat and idle frames each last at least a move
+beat however w wobbles about 0.5 (drawn frames can't blend as the crab
+does), and a play once shown, a travel above all, is seen to its end:
+the dancer never snaps from a walk back to its start spot, and since no
+run starts while idle frames show, no travel plays unseen and moves the
+idle dancer a spot. Without a lock the run itself ends at w ≤ 0.5 (U8),
+so beat frames at w ≤ 0.5 only show on a locked grid, where DanceRate
+runs at the full rate anyway (E.2.7).
 
-- During Entering (w > 0.5, idle frames, ≤ 1 dance beat), DanceRate and
+- During Entering (w > 0.5, idle frames, ≤ 1 dance beat while the weight
+  rises), DanceRate and
   beat_eval still count "dancing" by w > 0.5, so their metrics don't
   change.
 - The beat light flashes on dance beats as today. During Entering it leads
@@ -436,7 +468,8 @@ frames show.
 ### 3.3 Timing and the phrase
 
 - A run starts exactly where the previous one ended, at a whole dance
-  beat, even if the first drawn frame shows u ≈ 0.1. Any overshoot carries
+  beat, even if its first frame comes ~0.1 beat after it (that frame is
+  drawn at u = 0 by the must-show rule of 2.2). Any overshoot carries
   into the next run.
 - There are no bars. The **pseudo-phrase** position is p = (danceBeats −
   A) mod 8.
@@ -456,7 +489,8 @@ A pick takes under 50 µs (estimate).
 2. **No repeat:** the last run's move is excluded in both orientations,
    unless that run was a single play of a mirrorable move; then its mirror
    twin is allowed at ×2, which pairs single plays left and right. If the
-   set is empty, the last move may repeat.
+   set is empty, the last move may repeat, but only after alignment and
+   `place` have given way (2.8's order; E.2.5's ladder).
 3. **Continuity:** candidates whose `from` equals the previous `to` keep
    full weight; the rest get ×0.15. Mirroring swaps `left` and `right` in
    tags. If nothing matches, all candidates count equally and the dancer
@@ -485,13 +519,13 @@ position ≥ 0 (Appendix B.4).
 | Event | Detected by | Handling |
 |---|---|---|
 | PLL nudge (≤ 0.07 beat) | same generation | passes through |
-| Re-acquire or jump | a new `acquisitions()`, or Δ < −0.1 or > 1.5 tracker beats | (1) Recompute M from the new S. (2) Compare in **dance beats**: the beat index restarts arbitrarily, so the new grid's dance-beat origin is chosen among the 1/S whole-tracker-beat shifts (when S < 1) as the one nearest the predicted dance position. (3) Within ¼ dance beat: the move keeps its whole-beat count and takes the new phase. Otherwise it holds its step until the new grid's next dance beat, re-anchors A there, and picks afresh. (4) If T moved, re-test the running move's pace (section 2.5). |
-| Fold change (S ×2 or ×½) | the TempoFold scale changes, only on a re-acquire at a new tempo (the PLL's ±4 % clamp keeps drift inside 72-176) | Covered by the row above. With M recomputed, an octave flip (I Wonder, 95.7 ↔ 191) leaves T and the pace unchanged, and a 4:3 or 3:2 re-acquire triggers the pace re-test. |
-| Lost lock | `!locked`, heard valid | Leaving. If the lock returns while w > 0.5, the move continues from the next dance beat, re-phased. Otherwise the dancer goes through Entering. |
+| Re-acquire or jump | a new `acquisitions()`, or Δ < −0.1 or > 1.5 tracker beats (or S changing: the row below) | (1) Recompute M from the new S. (2) Compare in **dance beats**: the beat index restarts arbitrarily, so the new grid's dance-beat origin is chosen among the 1/S whole-tracker-beat shifts (when S < 1) as the one nearest the predicted dance position. (3) Within ¼ dance beat: the move keeps its whole-beat count and takes the new phase. Otherwise it holds its step until the new grid's next dance beat, re-anchors A there, and picks afresh. (4) If T moved, re-test the running move's pace (section 2.5). |
+| Fold change (S ×2 or ×½) | the TempoFold scale changes: on a re-acquire at a new tempo, or by the PLL's drift alone, when a re-acquire kept the old scale near 72 or 176 and the ±4 % clamp carries the folded tempo across (5 such flips on the 77 cached tracks) | Handled as the row above, acquisition or not: the frame re-phases among the 1/S shifts, so the dance beats stay on the tracker's beats (a halved S is always within ¼; a doubled one may hold and re-enter). A nudge there would leave the clock's whole beats (S_old − S_new)·trackerBeats off, until the next acquisition. With M recomputed, an octave flip (I Wonder, 95.7 ↔ 191) leaves T and the pace unchanged, and a 4:3 or 3:2 re-acquire triggers the pace re-test. |
+| Lost lock | `!locked`, heard valid | Leaving: the run is cut to its next whole move beat. If the lock returns before the run ends, it ends there and the next pick follows as usual; if it returns while a held step still shows (w > 0.5), a fresh pick comes at the next whole dance beat, the phrase continuing. Otherwise the dancer goes through Entering (E.2.3). |
 | Grid dropped, audio valid | grid invalid | Leaving, then Listening idles (the "no grid" case). |
 | Pause / resume | heard invalid / valid | Freeze. On resume the same grid applies at once, so Entering starts on the next beat and the phrase continues from A. |
-| Track change with a restart (skip, seek, start, output switch, host epoch) | a tracker restart | `reset(seed)`: history, latch, phrase and beat move are cleared. The idle clock and the spot carry on, so nothing jumps. |
-| Gapless join | `DanceMode::onTrackChanged()` with no restart (a join keeps the epoch, so the lock carries through it) | `onTrack(seed, genres)`: the new seed and the track's genres apply, and `Dg` is cleared. Phrase, latch and current move are kept. |
+| Track change with a restart (skip, seek, start, output switch, host epoch) | a tracker restart: `BeatInput.restarts` changes | The Choreographer's track reset (E.2.4): history, latch, phrase and beat move are cleared, and it reseeds. The idle clock and the spot carry on, so nothing jumps. |
+| Gapless join | `DanceMode::onTrackChanged()` with no restart (a join keeps the epoch, so the lock carries through it) | `onTrack(pathHash, genres)`, which DanceMode calls on every track change: the new seed and the track's genres apply, and `Dg` is cleared. Phrase, latch and current move are kept. |
 
 ### 3.6 Weight and energy
 
@@ -502,7 +536,9 @@ position ≥ 0 (Appendix B.4).
 - **Offsets, bounce and sway** scale by the energy e = 0.6 +
   0.4·clamp((w − 0.5)/0.5), so a fresh lock (w 0.65) hops at 72 %.
   Travel doesn't: it always completes its full distance. Idle moves are
-  drawn at e = 1 (Appendix B.4).
+  drawn at e = 1 (Appendix B.4). Beat frames the show latch keeps at
+  w ≤ 0.5 (3.2) are drawn at e = 0.6. A held step (Leaving, Freeze) keeps the
+  energy it had, so its offset holds too (E.2.4).
 - **Palette:** the 32-step fade between the idle and dance palettes comes
   for free through the LUT (section 6.2).
 
@@ -510,7 +546,8 @@ position ≥ 0 (Appendix B.4).
 
 - A switch takes effect at once while idle. While dancing it waits for the
   next whole dance beat (≤ 1 beat), and the new character starts a fresh
-  pick there, at the current spot.
+  pick there, at the current spot; a character without travel moves (the
+  crab, stick-classic) starts at the centre instead (1.3, E.2.4).
 - A card pack still loading takes over at the first dance beat after its
   load finishes. Waiting for the next move boundary could take up to 8
   beats after a tap.
@@ -528,7 +565,8 @@ position ≥ 0 (Appendix B.4).
 
 ### 3.9 The console
 
-It lands in step 4, with the Choreographer. `D` is free today.
+It lands in step 4, on step 3's Choreographer and its hooks (E.2.8). `D`
+is free today.
 
 - `D` lists the cast; `Dc<id>` picks a character by id. Until the Dancers
   page (step 9), that is the only way to reach `stick-classic`.
@@ -897,12 +935,22 @@ before anything plays:
   - After the last slice comes `Pack::open()`: the CRC and every check of
     5.4 but the budget, B.11's start spots included (D.2), in one call on
     the loop task. That is about 5 ms for a typical 30 KB pack and about
-    25 ms at 240 MHz (40 ms at 160) for one near 128 KB (estimate): at
-    worst one dropped frame of the old dancer, once per load. Then the
-    budget simulation runs one kept move per frame, ≤ 3 ms each
-    (estimate), and drops a red move with `Pack::dropMove` (D.2). Then
-    the swap happens at the next dance beat. The rail shows "Loading
-    Robo…" meanwhile.
+    25 ms at 240 MHz (40 ms at 160) for one near 128 KB, the start-spot
+    hook's few ms for a 64-move pack included (it reads each move's steps
+    once, with `Pack::steps`'s one record decode; estimate): at worst one
+    dropped frame of the old dancer, once per load.
+  - Then the budget simulation runs in slices of simulated frames:
+    `BudgetPass::run(kBudgetSliceFrames)`, 256 frames a dancing frame,
+    about 1-2 ms at 240 MHz (estimate: ~1,200-1,600 cycles a frame), and
+    it drops a red move with `Pack::dropMove` (D.2). A move is never one
+    frame's work: it is up to 24 cases and 2,908 frames (an 8-beat travel
+    move with mirror), ~15-20 ms on the ESP32. The test dancer's 13 moves
+    are ~4,070 frames, 22 slices (under a second); the largest pack the
+    format allows (62 such moves, 180,296 frames) takes 744 slices, about
+    25 s at 30 fps, while the old dancer dances on (an idle frame, at
+    10 fps, has room for a bigger slice). 10.5 times it. Then the swap
+    happens at the next dance beat. The rail shows "Loading Robo…"
+    meanwhile.
 - **Interruptions:**
   - Leaving the Dance tab or the screen going dark pauses the load
     (DanceMode draws nothing). It resumes from the same offset on return,
@@ -955,7 +1003,7 @@ rect from `DanceStage` instead of at `kBoxX`. There is no smaller fallback
 stage.
 
 Its geometry is a portable struct in `lib/core/DanceStage.h`,
-`{x, y, w, h, groundY, spotX[3]}`:
+`{x, y, w, h, groundY, spotX[3]}` (`StageGeom`, there from step 3: E.1):
 
 - **Final:** `{0, 36, 320, 164, 153, {64, 160, 256}}`.
 - **Legacy, for step 5's parity check (section 11):**
@@ -1047,7 +1095,7 @@ Measured where marked (MASCOT-POC.md), otherwise worked out from 0.47
 | Drawn stick travelling | the union ~3 px wider per frame at 120 BPM (estimate) | as above | + ≤ 0.3 | as above |
 | Classic stick, now RGB565 | ~10,800 | ≥ 8.3 / ≥ 15.2 (estimate) | 5.1 / 8.6 | ~25 fps with an MP3 (estimate), so out of the tap cycle |
 | Card-load slice | — | + 5.4 / + 7 per frame | — | fits in 33 ms; at 160 MHz a load may cost a few fps for ~1 s |
-| Card-pack validation (one-shot, 5.7) | — | open(): ~5 for a 30 KB pack, ~25 (~40 at 160 MHz) near 128 KB; then the budget, ≤ 3 a frame, one move a frame (estimates) | — | once per load: near 128 KB, one dropped frame of the old dancer |
+| Card-pack validation (one-shot, 5.7) | — | open(): ~5 for a 30 KB pack, ~25 (~40 at 160 MHz) near 128 KB; then the budget in slices of 256 simulated frames, ~1-2 a frame (estimates) | — | once per load: near 128 KB, one dropped frame of the old dancer; the slices for under a second on a typical pack, ~25 s on the largest |
 
 ### 6.7 The per-move budget: one integer simulation
 
@@ -1082,13 +1130,16 @@ Measured where marked (MASCOT-POC.md), otherwise worked out from 0.47
   would land in internal RAM. That covers Character objects, cast and
   roster entries, and the thumbnail scratch. Dance code uses no
   `std::vector` or `std::string`.
-- **.bss:** the Choreographer (history, latch, RNG, cue: ~240 B, estimate)
-  and the cast pointers live in the global DanceMode, budgeted at ≤ 1 KB
-  and measured.
+- **.bss:** the Choreographer (history, latch, RNG, cue: 424 B on the
+  ESP32; ≤ 1 KB by a static_assert, E.1) and the cast pointers live in
+  the global DanceMode, budgeted at ≤ 1 KB and measured.
 - **IRAM: 0 B.** No `IRAM_ATTR`; 5,176 B remain.
 - **PSRAM:** the stage (105 KB), plus the arena (0 B with no card packs,
   otherwise typically ~60 KB and at most 256 KB), plus the roster
-  (≤ 14 KB), plus one 3,200 B thumbnail scratch. Built-in packs need none.
+  (≤ 14 KB), plus one 3,200 B thumbnail scratch, plus the budget pass
+  while a card pack loads (`BudgetPass`, 792 B: its move's steps, cases
+  and the case in progress; psramNew'd, never in DanceMode's .bss).
+  Built-in packs need none.
 - **Flash:** about +20 KB of code and about +30 KB for the stick pack
   (estimate). New rodata can shift the MP3 hot path's cache sets (10 KB
   once moved decode from 3.8× to 5.0× realtime), so cache_guard and the
@@ -1284,7 +1335,8 @@ never starts under the list.
 **Built now** (step 8, part of this release):
 
 - **Three spots.** The Choreographer owns the dancer's spot, which
-  persists across moves, idles, character switches and track changes.
+  persists across moves, idles, character switches and track changes (a
+  switch to a character without travel moves resets it to the centre).
 - **A travel move is eligible when:**
   - its destination spot exists;
   - the move's widest frame, with its offsets, fits on the stage there;
@@ -1295,9 +1347,12 @@ never starts under the list.
 - **Travel bias:** moves heading toward the centre get ×2. After a track
   restart, the first run gives them ×4.
 - Idles play at the current spot. There is no "walk home", which would
-  look like skating without walk frames.
-- `stageX(from, to, u, ease)` is in lib/core and tested. Two-rect dirty
-  pushes are live (section 6.3).
+  look like skating without walk frames. A travel is seen to its end once
+  it shows, and none starts while idle frames show (3.2's show latch), so
+  the idle dancer never jumps between spots.
+- `stageX(from, to, p16, ease)` (B.4 step 8, at travel progress p16) is
+  in lib/core from step 3 and tested. Two-rect dirty pushes are live
+  (section 6.3).
 - Non-travel moves at an edge spot are clamped (section 6.4). The
   compiler's coverage report flags moves whose widest frame doesn't fit at
   an edge spot: a travel move is then eligible only from the spots where
@@ -1541,14 +1596,15 @@ are integer-deterministic and need no pip install.
     reset; Entering on the beat, with idle frames during Entering;
   - **timing:** every hit shown on the first render at or after its beat,
     at 24 and 30 fps, **across paces 36-180**;
-  - **weight:** a change ≤ 1/12 per frame, and > 0.95 after 2 s; the
-    energy mapping;
+  - **weight:** a change ≤ 1/12 per frame at 30 fps (≤ 0.1 at 24), and
+    above 0.95 after 2 s; the energy mapping;
   - **switching** at the next dance beat; the freeze fallback chain.
 - **`test_drawn_character`:** step lookup at exact tick edges (integer);
   Q16 ease values at 0, ¼, ½, ¾ and 1; mirror symmetry; rounding half up;
   the bounds holding every pixel; `stageX`.
 - **`test_dance_budget`:** the shared vectors; the peak never under any
   single frame's own box.
+- Appendix E.4 makes these three lists concrete.
 - **`test_stick_pack`:**
   - no dropped moves; ≤ 64 frames; ≤ 40 KB;
   - feet on the anchor row in ground frames; the palette limits;
@@ -1567,8 +1623,8 @@ are integer-deterministic and need no pip install.
   ids, the wrap, card entries appended, duplicate ids, overrides limited
   to drawn built-ins and applied only after a load.
 - **Extended suites:**
-  - `test_beat_tracker`: `acquisitions()` counts re-acquires made while
-    locked;
+  - `test_beat_tracker`: `acquisitions()` counts every new grid,
+    re-acquires included (E.4);
   - `test_nvs_layout`: the new schema row;
   - `test_ui_library`: the rail strings;
   - `test_dance_rate`: a Pacer run driven by the Choreographer;
@@ -1615,10 +1671,12 @@ Tracks: click120, HBFS (MP3), Testarossa (24/96 FLAC), and paused. Clocks:
   - loads during MP3 and 24/96 FLAC with 0 underruns, and fps ≥ 25 while
     loading;
   - `Pack::open()`'s time on a typical (~30 KB) and a ~128 KB pack, the
-    budget's per move, and `blit`'s per frame for the stick and a dense
-    card dancer, at 240 MHz and `Pc160`: they replace 5.4's, 5.7's and
-    6.6's estimates (step 2 counted cycles from the disassembly; nothing
-    was timed on the device);
+    budget's per slice (`kBudgetSliceFrames`) and for the worst move (an
+    8-beat travel move with mirror: 24 cases, 2,908 frames), the whole
+    pass on the largest pack, and `blit`'s per frame for the stick and a
+    dense card dancer, at 240 MHz and `Pc160`: they replace 5.4's, 5.7's
+    and 6.6's estimates (steps 2 and 3 counted instructions from the
+    disassembly; nothing was timed on the device);
   - a load during a queue save and during a thumbnails job (FatFs
     handles);
   - a load paused by leaving the tab, and resumed;
@@ -1682,17 +1740,19 @@ Tracks: click120, HBFS (MP3), Testarossa (24/96 FLAC), and paused. Clocks:
 
 Commits follow the house series ("Dance sprites: …"). Each acceptance list
 names the hooks it keeps: k0-k15, `x`, `[dance] on (crab)`, the
-visualizer's touches. Every step that adds rodata (3, 4, 7 and 8) also
-needs cache_guard passing and the `b<n>` bench within noise of 0.7.0.
+visualizer's touches. Every step that adds rodata to the image (4, 7 and
+8) also needs cache_guard passing and the `b<n>` bench within noise of
+0.7.0. Step 3 links nothing new but the tracker's counter (`lib_archive`
+leaves its code out until step 4 calls it), so its check is E.6's build.
 
 | # | Commit | Contents | Accepted when |
 |---|---|---|---|
 | 0 | Dance sprites: the design | this document, with the MPDN v1 spec | the user's decisions recorded (section 12) |
 | 1 | Dance sprites 1: the compiler | dancepack.py (PNG with tRNS and key, the INI rules, validation, the MPDN writer, build, check, info, builtin, `--check`, `--strict`, the budget mirror and the coverage report), test_dancepack.py, the shared eligibility, fold and budget vectors (test/support/dance/), the test dancer (tools/art/dancers/test/) → the TestPack fixture (test/support/dance/TestPack.h), the CI steps; Appendices A-C are its contract | unittest green on 3.10 and 3.12; byte-identical output on Windows and in CI |
 | 2 | 2: the reader and blitter | DanceRules.h (the limits, B.7's reach), DancePack (open with its report and the late-check hook, scan mode, region views), DanceBlit, Crc32, Fnv1a.h, GenreFold (B.8: a tag folding to nothing drops a move); dancepack.py's `scan_pack`, `read_pack` options and `reader_digest`, and the generated ReaderVectors.h; test_dance_pack (the fixture, the hand-built packs, scan mode, the truncations, the flips, the structure-aware fuzz, the vectors), test_dance_blit; the `native_asan` env and its CI step; Appendix D is its contract | the fuzz and every reader vector clean under ASan and UBSan (CI; the Docker command of D.5 on the laptop); every reader vector agrees with step 2's lists; the hashes equal the fixture's table; `pio test -e native`, the unittest suite and `--check` green; `pio run -e core2` builds with IRAM and DRAM unchanged |
-| 3 | 3: the choreographer | DanceCharacter.h, DanceChoreo (the pace rules, M recomputed, spots), DrawnCharacter, DanceBudget with D.2's split (the start spots in open()'s late-check hook, every pack; the budget after open(), one kept move a frame through `Pack::dropMove`, card packs), `acquisitions()`; test_dance_choreo, test_drawn_character, test_dance_budget; test_dance_pack also on ReaderVectors' full lists | all suites green; the shared vectors agree with Python, ReaderVectors' full lists included; beat_eval builds and scores identically |
+| 3 | 3: the choreographer | DanceCharacter.h, DanceChoreo (the pace rules, M recomputed, spots), DrawnCharacter, DanceBudget with D.2's split (the start spots in open()'s late-check hook, every pack; the budget after open(), in slices of simulated frames through `Pack::dropMove`, card packs), a minimal DanceStage.h (the geometry and rects), `acquisitions()`; test_dance_choreo, test_drawn_character, test_dance_budget (all three under native_asan too); test_dance_pack also on ReaderVectors' full lists; Appendix E is its contract | all suites green; the shared vectors agree with Python, ReaderVectors' full lists included; beat_eval builds and scores identically (E.5: the runner's outputs equal HEAD's, byte for byte, its timing aside); E.6 |
 | 4 | 4: characters, the cast and the console | CrabCharacter, ClassicStick (its id still `stick`), DanceCast replacing DanceSkin, DanceMode on the Choreographer with today's view, `onTrack` for gapless joins, **the `D…` console** (D, Dc, Dl, Dm, Df, Dv, Dg, Ds), Df cleared by host mode; test_character_set | on the device: the crab's k0-k15 sheet pixel-identical to 0.7.0; fps, logs and `usb_viz --measure` unchanged |
-| 5 | 5: the stage | DanceStage.h, the DanceView rewrite (one RGB565 canvas, the renderers, direct blit, holds ≤ 40 rows and ≤ 8,000 px bottom-up, `enterClean`, returned rows as a safety net) **at the legacy rect, with the beat dot still in the box**; test_dance_stage | **the crab's k0-k15 sheet pixel-identical to 0.7.0 over the whole 120×150 window**; draw/push ±10 %; holds ≤ 6/10 ms; the classic figure measured in RGB565; overlays; soak |
+| 5 | 5: the stage | DanceStage.h's hold plan and hit zone (its geometry and rects came with step 3), the DanceView rewrite (one RGB565 canvas, the renderers, direct blit, holds ≤ 40 rows and ≤ 8,000 px bottom-up, `enterClean`, returned rows as a safety net) **at the legacy rect, with the beat dot still in the box**; test_dance_stage | **the crab's k0-k15 sheet pixel-identical to 0.7.0 over the whole 120×150 window**; draw/push ±10 %; holds ≤ 6/10 ms; the classic figure measured in RGB565; overlays; soak |
 | 6 | 6: the Dance tab layout | the final stage geometry, the rail with no tap targets, the beat light in the rail (hidden in host mode), tap and flick, the host-mode rule, `x`/`X`, the "No PSRAM" message on the stage, the UiText rooms and tests | **the crab layer identical to step 5**, masking the old dot's square (box x 102-117, y 2-17, which `DanceView::drawDot()` clears around the dot at (110,10)) and the ground line's new pixels (screen x 100-103 and 216-219 on rows 189-190); host checks; fit tests; fps. Meanwhile a hold isn't claimed yet, so it lifts as a tap |
 | 7 | 7: the stick figure set | the runner, stick_frames.py (raster + retouch), the art, StickPack.cpp, test_stick_pack, the contact sheet; the classic figure becomes `stick-classic` (reachable with `Dc`) | the fps gates; draw ≤ 6.1 ms with an MP3; budget ≤ 16K; soak; the flash delta; the user's visual review of each move through `Dm`/`Df` |
 | 8 | 8: travel across three spots | the spots in DanceStage, `stageX`, travel eligibility and bias, two-rect pushes exercised, `x` following the spot, the coverage report's edge-fit column | grapevine and chasse travel on the device; dirty px and holds within the gates while travelling; no stale pixels at the edges; the crab unaffected |
@@ -1700,6 +1760,15 @@ needs cache_guard passing and the `b<n>` bench within noise of 0.7.0.
 | 10 | 10: dancers from the card | the boot scan (with `avail`), the double-ended arena, the sliced loader (a reopen per slice, pause and resume), the device's own budget, failures, duplicates, overrides after load, greyed rows | 0 underruns with MP3 and 24/96 FLAC; loads during a queue save and a thumbnails job; a card pull; the corrupt set; the NVS card restore; the decoder addresses and the 10k-library bench |
 | 11 | Dance sprites: the contributor kit and docs | `new`, `preview --watch`, the template and guide, DANCERS.md, the doc updates | the template builds and previews; then a dry run in which the user builds a dancer alone and loads it from the card (it doesn't block other steps) |
 | 12 | Dance sprites: review fixes | | |
+
+**A contract change scheduled by step 3's review** (before step 7's
+visual review of the stick set, with its own vectors): B.3's sway is
+negated with the orientation (B.4 step 6), so a mirrorable move with sway
+whose plays alternate jumps by up to 2·sway·scale px at each play
+boundary (the test dancer's step-touch: 12 px). Leave the sway unnegated
+(it is symmetric: mirroring only shifts its phase) or flip its parity
+when mirrored, in B.3/B.4, dancepack.py's frame_at and the generated
+vectors together.
 
 **Why this order:**
 
@@ -2476,7 +2545,12 @@ that lands on the next beat):
 
 - sway(b, φ) = s·(65536 − 2·inout(φ)), with s = −1 when b is even and +1
   when b is odd. So it is −1 on even beats, +1 on odd beats, and a
-  smoothstep between: continuous across beats and across plays.
+  smoothstep between: continuous across beats, and across plays while the
+  orientation stays. B.4 step 6 negates it with the orientation, so in a
+  mirrorable move whose plays alternate (3.4 step 6) the sway reverses at
+  each play boundary: the root jumps by up to 2·sway·scale px on that
+  beat (the test dancer's step-touch: 12 px, its key's change included).
+  Section 11 schedules the fix as a contract change.
 - `sway = n` adds n·sway(b, φ) to the key's x (Q16 native px).
 
 | φ | 0 | 7863 | 7864 | 7865 | 7866 | 16384 | 32768 | 36700 | 49152 | 65535 |
@@ -2537,11 +2611,11 @@ start, has b = 1, the other extreme from tick 0).
    scale it. With every ease p = 65536 means the travel is complete, `hold`
    included (B.2).
 9. **The root.** rootX = startX + travelPx + X; rootY = 153 + Y.
-10. **The box.** For a frame box (x0, y0, w, h) with w > 0: left = rootX
-    + (x0 − anchorX)·scale when drawnMirror is 0, or rootX + (anchorX −
-    x0 − w + 1)·scale when it is 1 (the anchor column mirrors to
-    cellW − 1 − anchorX); top = rootY + (y0 − anchorY)·scale; right = left
-    + w·scale; bottom = top + h·scale.
+10. **The box.** For a frame box (x0, y0, w, h) with w > 0: left =
+    rootX + (x0 − anchorX)·scale when drawnMirror is 0, or rootX +
+    (anchorX − x0 − w + 1)·scale when it is 1 (the anchor column mirrors
+    to cellW − 1 − anchorX); top = rootY + (y0 − anchorY)·scale; right =
+    left + w·scale; bottom = top + h·scale.
 11. **The clamp.** cx = −left when left < 0, 320 − right when right >
     320, else 0; cy = −top when top < 0, 164 − bottom when bottom > 164,
     else 0. Add cx to rootX, left and right, and cy to rootY, top and
@@ -4099,9 +4173,12 @@ class Pack {
   MoveRecord moveRecord(int move) const;
   const char* moveName(int move) const;
   StepRecord step(int move, int k) const;
+  // Step 3's review: steps 0..n-1 at once, n = min(stepCount, cap), each as
+  // step() reads it, with one record decode; *record (optional) the record.
+  int steps(int move, StepRecord* out, int cap, MoveRecord* record = nullptr) const;
   const char* genreTag(int move, int g) const;
 
-  // D.2: drops a kept move after open() (step 3's budget, one move a frame).
+  // D.2: drops a kept move after open() (step 3's budget, in slices).
   bool dropMove(int move, const Reason& why, Report* report = nullptr);
 };
 }  // namespace dance
@@ -4181,7 +4258,14 @@ dropMove() (below), after open()'s calls. A dropped move's
 - `moveName(i)`: the name when it passes `bad name`'s check (A.11's,
   then 1-23 B of `[a-z0-9][a-z0-9-]*`), else null; for any record.
 - `step(move, k)`: step k when k < stepCount and stepFirst + stepCount
-  fit STEP (always, for a kept move), else zeroed.
+  fit STEP (always, for a kept move), else zeroed. It decodes the whole
+  record each call (28 bounds-checked bytes), so a move's steps read one
+  by one cost 33 record decodes.
+- `steps(move, out, cap, record)` (added by step 3's review): the first
+  min(stepCount, cap) steps as `step()` gives each, after one record
+  decode; 0 out of state or range (the record then zeroed). B.4's readers
+  (DrawnCharacter's readMoveSteps) use it: ~3.5k instead of ~14k
+  instructions for a 32-step move on the ESP32 (estimate).
 - `genreTag(move, g)`: the run's tag g (g < genreCount) when it and every
   tag before it pass A.11's check with 1-63 B, else null. Its key is
   `genreKey(tag)` (GenreFold.h).
@@ -4189,7 +4273,7 @@ dropMove() (below), after open()'s calls. A dropped move's
   blank frame, whose data is never read).
 
 **dropMove(move, why, report)** drops a kept move after open(): step 3's
-budget, one kept move a frame (5.7, D.2). Unless the pack is open and the
+budget, run in slices of frames (5.7, D.2). Unless the pack is open and the
 move kept, it returns false and changes nothing. Otherwise the move's
 kept bit clears, keptMoves() goes down by 1, and with a report `dropped`
 goes up by 1 and `onDrop(ctx, move, why)` is called. Its record stays
@@ -4283,11 +4367,13 @@ A.15's move rows need these algorithms:
   It isn't called for a move an earlier row dropped. A drop it asks for
   is reported like any other. It must be cheap: open() is one call on the
   loop task (5.7).
-- **dropMove.** The budget isn't cheap (B.6: up to 36 cases of up to
-  ~400 frames a move, ≤ 3 ms a move by 5.7's estimate, so ~190 ms for 64
-  moves in one call). So it runs after open(), one kept move a frame
-  before the swap, and drops a red move with `Pack::dropMove` (D.1),
-  which reports it after open()'s drops.
+- **dropMove.** The budget isn't cheap (B.6: up to 24 cases and 2,908
+  simulated frames a move, for an 8-beat travel move with mirror; at the
+  ~3,300 instructions a frame step 3 first wrote, 40-70 ms for that one
+  move on the ESP32, and ~15-20 ms after its review cut a frame to
+  ~1,200-1,600 cycles; estimates). So it runs after open(), in slices of
+  frames before the swap (`BudgetPass::run`, E.1), and drops a red move
+  with `Pack::dropMove` (D.1), which reports it after open()'s drops.
 - **Step 2's reader** passes no hook. A move that fails only those two
   rows is kept and not reported. Nothing plays packs yet, so nothing can
   tell. ReaderVectors carries both answers: step 2's drop lists, and the
@@ -4296,7 +4382,8 @@ A.15's move rows need these algorithms:
   int move, Reason* why)` in DanceBudget.h, for `travels from no spot`
   (B.11, every pack), and a per-move budget, `bool budgetRed(const Pack&
   pack, int move, Reason* why)`, which the loader runs on each kept move,
-  one a frame, for card packs only, passing a red one to dropMove (A.15;
+  in slices of frames (BudgetPass), for card packs only, passing a red one
+  to dropMove (A.15;
   test_stick_pack pins the built-ins green). test_dance_pack then reads
   every vector twice: without either against step 2's lists, and with
   the hook and the budget pass, as a card pack, against the full lists,
@@ -4726,9 +4813,16 @@ build_flags =
   -g
   -fno-omit-frame-pointer
   -fsanitize=address,undefined
+  -fsanitize=float-cast-overflow
   -fno-sanitize-recover=all
   -DDANCE_ASAN=1
 ```
+
+(Step 3's review added `-fsanitize=float-cast-overflow`: GCC's
+`-fsanitize=undefined` leaves it out, and it is the one undefined
+behaviour the Choreographer's doubles could reach. GCC folds `(int64_t)
+floor(x)` into an unchecked builtin at -O1, so those conversions are kept
+in range by the code itself, E.2.3, rather than left to the sanitizer.)
 
 - **Compile and link.** PlatformIO parses build_flags with SCons's
   ParseFlags, which puts any flag starting with `-fsanitize` in both
@@ -4751,7 +4845,7 @@ build_flags =
   network:
 
 ```sh
-MSYS_NO_PATHCONV=1 docker run --rm -v "$(cygpath -w "$PWD")":/src:ro rust:bookworm sh -c 'cp -r /src /w && cd /w && for t in test_dance_pack test_dance_blit; do g++ -std=gnu++17 -g -O1 -fsanitize=address,undefined -fno-sanitize-recover=all -DDANCE_ASAN=1 -Ilib/core -Isrc -I.pio/libdeps/native/Unity/src test/$t/$t.cpp lib/core/*.cpp .pio/libdeps/native/Unity/src/unity.c -o /tmp/$t && /tmp/$t || exit 1; done && echo ASAN-ALL-OK'
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(cygpath -w "$PWD")":/src:ro rust:bookworm sh -c 'cp -r /src /w && cd /w && for t in test_dance_pack test_dance_blit; do g++ -std=gnu++17 -g -O1 -fsanitize=address,undefined -fsanitize=float-cast-overflow -fno-sanitize-recover=all -DDANCE_ASAN=1 -Ilib/core -Isrc -I.pio/libdeps/native/Unity/src test/$t/$t.cpp lib/core/*.cpp .pio/libdeps/native/Unity/src/unity.c -o /tmp/$t && /tmp/$t || exit 1; done && echo ASAN-ALL-OK'
 ```
 
 (Note, step 2's integration: the laptop's WSL2 kernel has
@@ -4773,3 +4867,1596 @@ tests`:
 
 The libdeps cache's key follows platformio.ini, so the new env's Unity is
 cached with the rest. Step 2 is accepted as section 11's row says.
+
+## Appendix E. The choreographer, drawn characters and the budget (step 3)
+
+Appendix E is step 3's contract, as D is step 2's. Two parties build step
+3 from it in parallel and meet only through it:
+
+- the **C++ implementer**: the lib/core files of E.1,
+  `BeatTracker::acquisitions()`, and native_asan's suite list (E.4);
+- a **test writer**, who writes test/support/dance/BeatScript.h and the
+  suites of E.4 from Appendices A-E alone, without seeing the C++.
+
+Python doesn't change. dancepack.py stays the reference for Appendix B,
+and the headers steps 1 and 2 generated (TestPack.h, EligibilityVectors.h,
+FoldVectors.h, BudgetVectors.h, ReaderVectors.h) are the vectors E.4 pins.
+The Choreographer has no Python mirror: E.2 defines it and E.4's tests pin
+it. Where E and the sections above differ, E wins. Of A-D it changes
+nothing but three additions from step 3's review: D.1's `Pack::steps`,
+D.5's `-fsanitize=float-cast-overflow`, and B.3's note on the sway at a
+mirror flip (section 11 schedules its fix). It implements D.2's two
+deferred rows.
+
+### E.1 Files and the public API
+
+| File | What |
+|---|---|
+| `lib/core/DanceStage.h` | new: the stage's geometry and rects (B.4's stage, B.5); step 5 adds to it |
+| `lib/core/DanceRules.h` | gains B.7's `eligibleK` and `paceHolds` |
+| `lib/core/DanceCharacter.h` | new, header-only: section 1.1's interface, made exact |
+| `lib/core/DrawnCharacter.h`, `.cpp` | new: B.2-B.4 and B.11 over a Pack, and the Character view of an opened pack |
+| `lib/core/DanceBudget.h`, `.cpp` | new: B.6, D.2's start-spot hook, the budget verdict and the pass in slices of frames |
+| `lib/core/DanceChoreo.h`, `.cpp` | new: BeatInput, Cue and the Choreographer (E.2) |
+| `lib/core/BeatTracker.h`, `.cpp` | `acquisitions()`, nothing else |
+| `lib/core/DancePack.h`, `.cpp` | `Pack::steps` (step 3's review: a move's steps after one record decode, D.1), nothing else |
+| `test/support/dance/BeatScript.h` | new, tests: a scripted BeatInput source and a hand-built Character (E.4) |
+| `test/test_dance_choreo/`, `test/test_drawn_character/`, `test/test_dance_budget/` | new suites (E.4) |
+| `test/test_dance_pack/test_dance_pack.cpp` | D.4 item 10 on the real hook and budget pass (E.4) |
+| `test/test_beat_tracker/test_beat_tracker.cpp` | one test added (E.4) |
+| `platformio.ini`, `.github/workflows/firmware.yml` | native_asan's suite list and, from step 3's review, `-fsanitize=float-cast-overflow`; nothing else (E.4) |
+
+**Rules.** D.1's rules for a new lib/core file hold, with one exception:
+DanceChoreo.cpp may use `float` and `double`, exactly where E.2 says
+(E.3 lists them). Everything of Appendix B is integer: `int64_t` wherever
+B.0 says, with floor helpers for values that can be negative. No heap, no
+std containers or strings, no exceptions, no mutable statics, no
+`IRAM_ATTR`, nothing allocated per frame. Nothing in src/ changes and
+nothing calls the new code, so `lib_archive` keeps it out of the image:
+`pio run -e core2` builds with IRAM unchanged, and flash and DRAM within a
+few bytes (the tracker's new counter, inside DanceMode, and its
+increment). DancePose.h/.cpp, CrabPose, CrabArt, DanceRate and
+DanceSkin.h stay byte for byte (step 4 replaces DanceSkin).
+
+**Names.** D.1's list stands: no new `dance::Box`, `Step`, `Pose` or
+`Point`. The vector headers' namespace `dancevec` names `Eligibility`,
+`PaceHolds`, `kNoK`, `Fold`, `BudgetCase`, `MoveBudget`, `TraceCase` and
+`TraceFrame`; `dance` uses none of them, so a test can open both
+namespaces.
+
+#### DanceStage.h
+
+```cpp
+namespace dance {
+// The dance stage (section 6.1): where it sits on the screen, its ground row and its
+// three spots' anchor x, all in px. Stage coordinates run from the stage's top-left.
+struct StageGeom {
+  int16_t x, y, w, h;   // the stage on the screen
+  int16_t groundY;      // the ground row; standing feet's last row is groundY - 1
+  int16_t spotX[3];     // spots -1, 0, +1
+};
+constexpr StageGeom kStage = {0, 36, 320, 164, 153, {64, 160, 256}};       // final: B.4's stage
+constexpr StageGeom kLegacyStage = {100, 44, 120, 150, 145, {60, 60, 60}};  // step 5's parity rect
+inline int spotX(int spot);  // kStage.spotX[spot + 1], spot clamped to -1..1
+
+// B.5's rect: half-open [x0, x1) x [y0, y1) in stage px, empty when x1 <= x0 or
+// y1 <= y0. {0, 0, 0, 0} is how "none" is written.
+struct StageRect { int16_t x0 = 0, y0 = 0, x1 = 0, y1 = 0; };
+inline bool rectEmpty(const StageRect& r);
+inline int32_t rectArea(const StageRect& r);  // 0 when empty
+// The bounding rect; an empty one adds nothing; two empty ones give {0, 0, 0, 0}.
+inline StageRect rectUnion(const StageRect& a, const StageRect& b);
+// B.5's dirty rule: the px a frame dirties, A the last frame's character rect (null:
+// no last frame, which dirties area(now)) and B this frame's. U = union(A, B); when
+// 10 * area(U) > 13 * (area(A) + area(B)) (in 64 bits) they stay two rects,
+// area(A) + area(B); otherwise area(U). As dancepack.py's dirty_px.
+inline uint32_t dirtyPx(const StageRect* last, const StageRect& now);
+}  // namespace dance
+```
+
+- B.4, B.5 and B.11 use `kStage` only (its w, h, groundY and spotX).
+  `kLegacyStage` is 6.1's rect for step 5's parity check; nothing in step
+  3 reads it.
+- Step 5 adds the hold plan, `inStage()` and DanceView's needs to this
+  header, beside these declarations and without changing them. So 6.1's
+  `DanceStage.h` exists from step 3, minimal.
+
+#### DanceRules.h, B.7 added
+
+```cpp
+namespace dance {
+constexpr int8_t kNoOctave = 127;  // eligibleK: not eligible; prevK: no previous ranged move
+// B.7's eligible_k: the octave (-1, 0, +1) a move is danced at for dance tempo t10
+// (tenths of a BPM), or kNoOctave. prevK: the k of the last ranged run, or kNoOctave
+// (any value outside -1..1 counts as none). travel: nonzero means the move travels.
+inline int8_t eligibleK(int t10, int lo, int hi, int8_t prevK, int beats, int travel);
+// B.7's pace_holds: the running move's tolerance (2.5): its pace within 0.97*lo ..
+// 1.03*hi, and k = +1 only while t10 <= 900. True for an unranged move; false for a
+// ranged move with k outside -1..1.
+inline bool paceHolds(int t10, int8_t k, int lo, int hi);
+}  // namespace dance
+```
+
+Both are integer-exact, as dancepack.py's `eligible_k` and `pace_holds`
+(B.7: x(k) = t10·2^(k+1); the order prevK, 0, −1, +1, each tried once).
+EligibilityVectors.h's `kNoK` has the same value, 127.
+
+#### DanceCharacter.h
+
+```cpp
+#include "DanceRules.h"   // the record bits: kMirror ... kSnap, kWhenQuiet, kWhenListening, kNeedsSongBpm
+namespace dance {
+enum class MoveKind : uint8_t { Beat, Idle };                     // A.12's kind 0, 1
+enum class Origin : uint8_t { BuiltIn, Card };
+enum class StartAt : uint8_t { Any, Centre, Side, Left, Right };  // A.12's startAt 0-4; mirrored: Left <-> Right
+constexpr int8_t kNoMove = -1, kAutoBounce = -2, kAutoIdle = -3;  // move indices that aren't a character's
+
+struct MoveLabels {           // what the picker reads: the same for both classes
+  const char* name;
+  MoveKind kind;
+  uint8_t beats;              // Beat: 1, 2, 4 or 8 move beats; Idle: 0
+  uint16_t idleMs;            // Idle: 500..12000, 10 x its steps' sum; 0 = continuous (code characters only); Beat: 0
+  uint8_t paceLo, paceHi;     // the danced pace, 36..200; 0, 0 = any (Idle: 0, 0)
+  uint8_t weight10;           // 1..100 = 0.1..10.0
+  uint8_t when;               // Idle: kWhenQuiet | kWhenListening (3 = any); Beat: 0
+  uint8_t flags;              // kMirror, kFreeze, kPlaceStart, kPlaceEnd, kHeavy, kSnap
+  uint8_t repeat;             // 0 (auto) .. 8, repeat * beats <= 16
+  uint8_t fromTag, toTag;     // pose key ids, 0 = none
+  uint8_t fromTagM, toTagM;   // their mirror twins' ids (A.11, A.12), for the mirrored orientation
+  uint8_t needs;              // feature bits: any bit set and the picker never uses the move
+  int8_t travel;              // -2..+2 spots, negated when mirrored
+  StartAt startAt;
+  uint8_t genreCount;         // 0..8
+  const uint32_t* genreKeys;  // genreCount B.8 keys (genreKey()), never FNV(""); null when 0
+};
+struct CharacterInfo {
+  const char* id; const char* name; const char* author; const char* licence; const char* url;
+  Origin origin; bool inCycle; uint8_t ignoredMoves;
+};
+// B.11's start_at as spots, bit s + 1 for spot s: Any 0b111, Centre 0b010, Side 0b101,
+// Left 0b001 (0b100 mirrored), Right 0b100 (0b001 mirrored); 0 for a value above Right.
+inline uint8_t startAtMask(StartAt a, bool mirrored);
+
+class Character {  // the interface doesn't draw: each class has a renderer in src/ui
+ public:
+  virtual ~Character() = default;
+  virtual const CharacterInfo& info() const = 0;
+  virtual int moveCount() const = 0;                // 0..64
+  virtual const MoveLabels& move(int i) const = 0;  // 0 <= i < moveCount()
+  // The spots move i can start from in an orientation, bit s + 1 for spot s: 0b111 for an
+  // idle move and for a move without travel. This default knows no art: for a travel
+  // move, every s whose s + travel * sgn is a spot (sgn -1 when mirrored) and that
+  // startAtMask allows. DrawnCharacter overrides it with B.11's, which adds the fit.
+  virtual uint8_t startSpotMask(int i, bool mirrored) const;
+};
+// 2.9's freeze move: the first beat move flagged kFreeze; else the first unranged 2-beat
+// beat move; else the first unranged beat move; else kAutoBounce. Moves with a needs
+// bit are skipped. (Unranged: paceLo = paceHi = 0.)
+inline int freezeMove(const Character& c);
+// Whether any beat move without a needs bit has travel != 0.
+inline bool hasTravel(const Character& c);
+}  // namespace dance
+```
+
+- Section 1.1's sketch gains `fromTagM`/`toTagM` (the picker's continuity
+  needs the twins: 3.4 step 3, "mirroring swaps left and right"),
+  `startSpotMask` (travel eligibility needs the fit, which only the art
+  knows), the engine move indices and the two helpers. The record bits
+  stay in DanceRules.h (D.1).
+- Step 4's procedural characters implement it as they are: the crab has
+  `shuffle` (2 beats, any pace, kFreeze, from and to `stand`, its own pose
+  key id 1, twins equal) and `idle` (idleMs 0, when 3); `stick-classic`
+  has `bounce` and `sway` alike. Their renderers read E.2's Cue (u,
+  idleSeconds, weight) and ignore what they don't need.
+
+#### DrawnCharacter.h
+
+```cpp
+#include "DanceCharacter.h"
+#include "DancePack.h"
+#include "DanceStage.h"
+namespace dance {
+// B.2: ease code 0-4 at f (0..65536). A code above 4 acts as hold.
+int32_t ease16(int ease, int32_t f);
+// B.3: the hop at phase phi (0..65535) of a move beat; the sway at move beat b (>= 0,
+// counted since the run started) and phase phi.
+int32_t hop16(int32_t phi);
+int32_t sway16(int64_t b, int32_t phi);
+// B.4 step 8 (section 8's stageX): the stage x of a travel from spot `from` to spot `to`
+// (each clamped to -1..1) at progress p16 (0..65536) through `ease`:
+// spotX(from) + rhu((spotX(to) - spotX(from)) * ease16(ease, p16), 65536).
+int stageX(int from, int to, int32_t p16, int ease);
+
+struct Placement {     // B.4's output
+  uint16_t frame;      // the shown step's frame index (bits 0-14)
+  bool mirrored;       // drawn mirrored: the step's bit 15 XOR the orientation
+  int16_t rootX, rootY;
+  StageRect box;       // the frame's box after the clamp; {0, 0, 0, 0} for a blank frame
+  StageRect shadow;    // {0, 0, 0, 0} for none
+  StageRect rect;      // the character rect: union(box, shadow)
+};
+// B.4 for MOVS record `move` of an open pack, kept or not.
+Placement frameAt(const Pack& pack, int move, int64_t pos16, bool mirrored, int spot,
+                  int32_t e16 = 65536);
+// B.11. extent: false (lo, hi untouched) when every box is empty.
+bool extent(const Pack& pack, int move, bool mirrored, int* lo, int* hi);
+bool fits(const Pack& pack, int move, bool mirrored, int spot);
+uint8_t startSpotMask(const Pack& pack, int move, bool mirrored);  // bit s + 1 per start spot
+
+class DrawnCharacter final : public Character {
+ public:
+  // The view of an open pack (State::Open): its kept moves at this moment, in MOVS
+  // order. False, and an empty view, otherwise. The pack's bytes must outlive the view.
+  bool init(const Pack& pack, Origin origin, bool inCycle);
+  const CharacterInfo& info() const override;
+  int moveCount() const override;
+  const MoveLabels& move(int i) const override;
+  uint8_t startSpotMask(int i, bool mirrored) const override;  // B.11's
+  int packMove(int i) const;   // move i's MOVS index; -1 out of range
+  const Pack& pack() const;
+  // B.4 for move i, or for the engine moves kAutoBounce and kAutoIdle (below).
+  Placement frameAt(int i, int64_t pos16, bool mirrored, int spot, int32_t e16 = 65536) const;
+};
+}  // namespace dance
+```
+
+**The free functions are dancepack.py's, bit for bit:** `frameAt` is
+`frame_at` (its Pose's frame, mirrored, root_x, root_y, box, shadow and
+rect, None written {0, 0, 0, 0}), `extent` is `extent` (false for None),
+`fits` is `fits`, `startSpotMask` is `start_spots` (bit s + 1 for each
+listed spot, so 0b111 for a move without travel), and `ease16`, `hop16`
+and `sway16` are `ease_q16`, `hop_q16` and `sway_q16`. They read only
+what B.4-B.11 use: the geometry, the boxes and the record's steps.
+
+- **Any record.** They work on every MOVS record whose steps read (1-32
+  steps inside STEP, durations summing above 0), kept or not: BudgetVectors
+  carries `future` (move 8), which the reader drops. On any other record
+  frameAt gives frame 0, unmirrored, root (spotX(spot), 153) and no box or
+  shadow; extent gives false; startSpotMask 0b111. A step's frame index at
+  or past the frame count reads as a blank box (Pack::box's zeros).
+- **Where dancepack.py raises, the C++ clamps:** pos16 < 0 counts as 0;
+  spot is clamped to −1..1, and so is a travel's destination spot +
+  travel·sgn; a travel whose `go` steps sum to 0 (only on records A.15
+  drops) counts as done (p = 65536). e16 is used as given. The
+  Choreographer never asks for any of these.
+- frameAt reads the record's steps once per call, with `Pack::steps`:
+  one record decode and up to 32 step decodes, ~15-20 µs on the ESP32
+  (estimate). (Note, step 3's implementation: the header also has
+  frameAt's two halves, `MoveSteps`, `readMoveSteps` and `placeSteps`, and
+  `startSpotMask(pack, MoveSteps, mirrored)`, so the budget reads a move
+  once, not once a case or a frame. Its review made readMoveSteps also
+  precompute B.4 step 8's sums (anyGo, the travelling steps' total and
+  each step's travelling start) and placeSteps find the step by binary
+  search and divide in 32 bits whenever the values fit, as they always do
+  for a record A.15 keeps: no O(steps) loop and no libgcc 64-bit division
+  a frame, ~1,200-1,600 cycles instead of ~3,300 instructions (estimate),
+  with the same results bit for bit: 1.25M queries against dancepack.py
+  and every BudgetVectors row agree.)
+
+**DrawnCharacter:**
+
+- `init` keeps a copy of the Pack (a view: cheap, sharing the bytes). The
+  moves are the ones kept at that moment: a `dropMove` after `init`, on
+  any copy, isn't seen, so the loader builds the view after the budget
+  pass. Move i is MOVS record `packMove(i)`.
+- **The labels** of move i, from its record: `name` = moveName; kind;
+  beats (0 for an idle move); `idleMs` = 10 × its durations' sum for an
+  idle move, 0 for a beat move; paceLo, paceHi, weight10, when, flags,
+  repeat, needs (0 for every kept move) and travel as stored; `fromTag`,
+  `toTag`, `fromTagM`, `toTagM` = fromKey, toKey, fromKeyM, toKeyM;
+  `startAt` = StartAt(startAt); genreCount, and `genreKeys` pointing at
+  the view's own copy of `genreKey(genreTag(m, g))` for each tag.
+- **The info:** id, name, author, licence and url from the Pack (url `""`
+  when empty), origin and inCycle as given, `ignoredMoves` = moveCount() −
+  keptMoves() at init.
+- `startSpotMask(i, o)` = `startSpotMask(pack, packMove(i), o)`, which the
+  view may compute once at init. `frameAt(i, ...)` = `frameAt(pack,
+  packMove(i), ...)`; an i that is neither a move nor an engine move gives
+  the unreadable record's placement.
+- **The engine moves** (2.6's auto-idle, 2.8's auto-bounce) are B.4 on two
+  synthetic records, with r = GEOM's rest frame (bits 0-14 the frame, bit
+  15 the step's mirror bit; the compiler always writes 0):
+  - **auto-bounce:** a beat move of 1 beat, unranged, flags 0, bounce 4,
+    sway 0, travel 0, one step {frame r, dur 12, key 0,0, ease hold, no
+    `go`};
+  - **auto-idle:** an idle move, flags 0, two steps {r, 200, key −1,0,
+    inout} and {r, 200, key +1,0, inout}: the rest frame swaying ±1
+    native px over 4 s.
+- `sizeof(DrawnCharacter)` ≤ 6,144 B on every target, a static_assert in
+  DrawnCharacter.cpp. Step 4 `psramNew`s it.
+- (Note, step 3's integration: a copy, by the copy constructor or
+  assignment, is another view of the same bytes whose labels' genreKeys
+  point at its own keys, so it outlives the original.)
+
+#### DanceBudget.h
+
+```cpp
+#include "DrawnCharacter.h"
+namespace dance {
+constexpr uint32_t kGreenPx = 16000, kAmberPx = 20000;  // B.6's lights
+constexpr int kBudgetMaxCases = 24;    // 2 fps x 3 paces x 2 orientations x 2 start spots
+constexpr int kBudgetMaxFrames = 364;  // B.6's largest N: a 12 s idle move at 30 fps
+constexpr uint32_t kBudgetSliceFrames = 256;  // the loader's slice a frame (5.7)
+enum class BudgetLight : uint8_t { Green, Amber, Red };  // 0, 1, 2, as kMoveBudgets' light
+BudgetLight budgetLight(uint32_t peak);  // green <= 16,000 < amber <= 20,000 < red
+
+// B.6's cases of MOVS record `move`, in B.6's order (fps, pace, orientation, spot).
+struct BudgetCaseSpec { uint8_t fps; uint8_t pace; bool mirrored; int8_t spot; };  // pace 0: idle
+int budgetCaseSpecs(const Pack& pack, int move, BudgetCaseSpec out[kBudgetMaxCases]);
+
+// One case frame by frame: n = 0..N, as dancepack.py's trace().
+struct BudgetFrame { uint16_t n; uint32_t pos16; Placement place; uint32_t dirty; };  // dirty 0 at n = 0
+// One case over steps the caller keeps (BudgetRun's and BudgetPass's engine).
+class BudgetCursor {
+ public:
+  void begin(const MoveSteps& m, const BudgetCaseSpec& spec);         // from frame 0
+  bool next(const Pack& pack, const MoveSteps& m, BudgetFrame* out);  // false after frame N
+};
+class BudgetRun {  // a BudgetCursor with its own MoveSteps
+ public:
+  BudgetRun(const Pack& pack, int move, const BudgetCaseSpec& spec);
+  bool next(BudgetFrame* out);  // false after frame N
+};
+
+struct BudgetCaseResult { uint16_t frames; uint32_t median, peak; };  // frames: N
+// scratch: kBudgetMaxFrames values, for the median; null: median 0.
+BudgetCaseResult budgetCase(const Pack& pack, int move, const BudgetCaseSpec& spec, uint32_t* scratch);
+struct BudgetResult { uint32_t median, peak; BudgetLight light; uint8_t cases; };
+BudgetResult budget(const Pack& pack, int move, uint32_t* scratch);
+
+// D.2, A.15's last two move rows.
+// OpenOptions::late: false, *why = TravelsFromNoSpot, for a beat move with travel != 0
+// whose startSpotMask is 0 unmirrored and, when it has kMirror, mirrored too. ctx unused.
+bool startSpots(void* ctx, const Pack& pack, int move, Reason* why);
+// The verdict: true (drop it), *why = BudgetRed with a = the peak, when the move hasn't
+// kHeavy and its B.6 light is red. A heavy move returns false without a simulation.
+bool budgetRed(const Pack& pack, int move, Reason* why);
+
+// 5.7's budget pass for a card pack, resumable frame by frame: it keeps the move it is
+// on, its cases, the case in progress and the running peak (792 B on the ESP32: the
+// loader psramNews it).
+class BudgetPass {
+ public:
+  void begin(Pack* pack, Report* report = nullptr);  // from MOVS record 0
+  // Up to maxFrames simulated frames (0 counts as 1) of the next kept move's cases; on
+  // the call that ends its last case, budgetRed's verdict, a red move dropped through
+  // pack->dropMove (which reports it). A heavy move takes no frames. True while it did
+  // something; false, doing nothing, once no kept move is left to check.
+  bool run(uint32_t maxFrames);
+  bool step();  // run() to the end of one kept move
+  bool done() const;
+};
+}  // namespace dance
+```
+
+- **As dancepack.py.** `budgetCaseSpecs` is `_case_specs` (paces from
+  `reach` with travel ≠ 0: rlo, (rlo + rhi) // 2, rhi, ascending, a
+  repeat dropped; idle moves the one pace 0; orientations unmirrored, then
+  mirrored with kMirror; spots 0, or for a travel move each start spot of
+  that orientation, ascending). `BudgetRun` is `trace()`: the frame period
+  is `(1000 + fps / 2) / fps` ms (dancerate::periodMs: 42 at 24 fps, 33
+  at 30), pos16(n) is B.6's (kept as a quotient and remainder, advanced
+  by a 32-bit addition and division a frame at 24 and 30 fps), frames go
+  through `frameAt` at e16 = 65536, and the run stops after the first n
+  ≥ 1 with pos16 ≥ L·65536.
+  `budgetCase` is a case's N, lower median and peak; `budget` is the
+  move's largest case median and peak, its light, and its case count.
+  A beat move with pace 0, or a record that doesn't read, has no frames.
+- **The scratch.** A case's median needs its N values: `kBudgetMaxFrames`
+  = 364 holds every move A.15 keeps (the longest is a 12,000 ms idle move:
+  N = 364 at 33 ms; a beat move's largest is 203, 8 beats at 72 or 4 at
+  36, at 30 fps). On a record outside A.15's limits values past 364 aren't
+  stored and the median is unspecified. `budgetRed` and `BudgetPass` need
+  only the peak, so they take no scratch and keep nothing per frame: the
+  device's verdict costs only the pass itself (792 B, in PSRAM).
+- **The cases** are at most 24: a travel move can start from at most two
+  spots in an orientation (s + travel must be a spot), any other move
+  from 0 only. An 8-beat travel move with mirror has all 24, 2,908
+  simulated frames at the paces 72, 124 and 176.
+- **The split** (D.2): the loader opens a card pack with `OpenOptions{0,
+  &startSpots, nullptr}` (built-in packs too: the hook reads each move's
+  steps once), then calls `BudgetPass::run(kBudgetSliceFrames)` once a
+  frame (or run() in a loop under a ~2 ms time budget) until it returns
+  false, then builds the DrawnCharacter. Built-in packs skip the pass (test_stick_pack
+  pins them green). The drops arrive as D.2 says: open()'s in MOVS order,
+  then the pass's in MOVS order.
+- `run()` and `step()` skip moves that aren't kept without counting
+  them: each `step()` that returns true checked exactly one kept move, and
+  `run()` gives a move's verdict on the call that ends its last case, so
+  the drops, their order and their reasons are `step()`'s and
+  `budgetRed`'s whatever the slice. A pack that isn't open (cleared
+  mid-pass too), or a null pack, is done at once. (Note, step 3's review:
+  the first design ran one whole move a call, up to ~70 ms on the ESP32
+  for the worst move.)
+
+#### DanceChoreo.h
+
+```cpp
+#include "DanceCharacter.h"
+#include "DanceStage.h"
+namespace dance {
+struct BeatInput {        // section 3.1: one a frame, from DanceMode::render()
+  bool heard;             // audio is heard now
+  bool grid;              // the tracker's grid applies to what is heard (meaningful with heard)
+  bool locked;            // BeatTracker::locked()
+  float confidence;       // BeatTracker::confidence(), 0..1
+  double trackerBeats;    // the tracker's beat count at the moment shown (with grid)
+  float rawBpm;           // BeatTracker::bpm(): 0 when none
+  double foldScale;       // S: TempoFold::apply(rawBpm), a power of two (1/2, 1 or 2)
+  uint32_t restarts;      // tracker restarts so far (DanceMode's resets_)
+  uint32_t acquisitions;  // BeatTracker::acquisitions()
+  float dt;               // seconds since the last frame; 0 on the first
+  int8_t freeze;          // the console's k<n>: -1 none, 0..15
+};
+enum class DanceState : uint8_t { Quiet, Listening, Entering, Dancing, Leaving, Freeze };
+struct Cue {              // section 3.1, plus beatPos16
+  int8_t beatMove;        // the run's move, kAutoBounce, or kNoMove (none since a reset or switch)
+  double u;               // move beats since its run started, as drawn
+  uint32_t beatPos16;     // B.4's pos16 for beatMove: floor(u * 786432), exact under a freeze
+  int8_t k;               // the run's octave, -1..+1
+  bool beatMirror;        // this play's orientation
+  int8_t idleMove;        // the idle run's move, kAutoIdle, or kNoMove (no character)
+  uint32_t idleMs;        // ms since the idle run started (B.4: pos16 = idleMs * 65536 // 10)
+  bool idleMirror;
+  float idleSeconds;      // the idle clock, 0..2000 s (code characters' continuous idles)
+  float weight;           // w: the dance weight
+  uint32_t energy;        // e16: 39322..65536 (3.6), for B.4's e16
+  bool showDance;         // beat frames show; otherwise idle frames
+  bool flash;             // the beat light's cyan
+  int8_t spot;            // the current spot, -1..+1: the running move's start spot
+  int16_t rootX, rootY;   // spotX(spot), kStage.groundY: the spot's anchor on the stage
+  DanceState state;
+};
+enum class RunStatus : uint8_t { None, Running, Held };
+struct RunInfo {          // the current beat run (status None: the last one's fields)
+  int8_t move;            // a move, kAutoBounce, or kNoMove
+  int8_t k;
+  uint8_t plays;
+  bool firstMirror;
+  int8_t spot;            // its start spot
+  int8_t phrase;          // p at its start, 0..7
+  uint8_t level;          // the ladder level that picked it: 0-2, 3 auto-bounce, 4 forced (Dm)
+  bool cut;               // its pace failed (2.5)
+  RunStatus status;
+  int64_t start, end;     // dance-clock beats: where it started, where it ends (E)
+  double uEnd;            // move beats where its content ends (plays * beats, or a cut point)
+};
+
+class Choreographer {
+ public:
+  Choreographer();                     // as after reset(0), with no character
+  void reset(uint32_t pathHash);       // dance on (E.2.8): everything back but the character
+  void onTrack(uint32_t pathHash, const uint32_t* genreKeys, int count);  // every track change
+  void setCharacter(const Character* c);                   // 3.7; null: none
+  void freeze(int move, uint32_t pos16, bool mirrored);    // Df; kNoMove unfreezes
+  void forceNext(int move);            // Dm: the next beat run
+  void setSpot(int spot);              // Ds
+  void addGenre(uint32_t key);         // Dg: a genre key for this track
+  const Cue& update(const BeatInput& in);                  // once a frame
+  const Cue& cue() const;              // the last update's
+  const Character* character() const;  // the current one, not a pending switch
+  const RunInfo& run() const;
+  int t10() const;                     // the latched T in tenths, 0 = none yet
+  int8_t prevK() const;                // kNoOctave = none
+  double danceClock() const;           // E.2's clock
+  int8_t eligibleNow(int move) const;  // Dl: the k move would get now, or kNoOctave
+};
+}  // namespace dance
+```
+
+- `sizeof(Choreographer)` ≤ 1,024 B on every target, a static_assert in
+  DanceChoreo.cpp (6.8's .bss budget; about 450 B expected). It holds
+  pointers to the characters, never copies them: a character must
+  outlive its use, a pending switch included.
+- **What step 4 feeds it** (DanceMode::render(), names as today):
+
+| Field | Source |
+|---|---|
+| heard | `heard.valid` (TapReader::Audible); host mode: `heard.valid && hostEpochOn_` |
+| grid | today's `beat`: heard and `g.valid && !fresh_` and the epoch matching (host mode: `hostEpochOn_`) |
+| locked, confidence, rawBpm | `tracker_.locked()`, `.confidence()`, `.bpm()` |
+| trackerBeats | today's `beats`: `g.beatIndex + g.beatsAt(...)`; 0 without grid |
+| foldScale | `fold_.apply(bpm)` on frames with grid, as today; `fold_.scale()` otherwise |
+| restarts, acquisitions | `resets_`, `tracker_.acquisitions()` |
+| dt, freeze | today's `dt`, `frozen_` |
+
+  `onTrack`'s pathHash is `fnv1a32` of the track's path (`""` when there
+  is none), and its keys are `genreKey` of the track's genres (none
+  today).
+
+#### BeatTracker::acquisitions()
+
+```cpp
+// Grids acquired since construction: +1 each time acquire() sets a new grid (the first
+// after a reset, a re-acquire, one after a dropped grid), never on its early return.
+// reset(), begin() and setSampleRate() leave it; it wraps at 2^32. The Choreographer
+// compares it for change only (E.2).
+uint32_t acquisitions() const { return acquisitions_; }
+```
+
+`++acquisitions_` goes in `BeatTracker::acquire()` beside `acquired_ =
+true`, after the `return false`; the member is `uint32_t acquisitions_ =
+0`. Nothing else in the tracker changes, so beat_eval's outputs don't
+(E.5).
+
+### E.2 The Choreographer's behaviour
+
+Section 3 says what the dancer does; this is the same behaviour as code,
+complete enough that two implementations agree cue for cue (E.3). The
+names below are for this text; an implementation may name and pack its
+state as it likes, as long as every observable (the Cue, `run()`,
+`t10()`, `prevK()`, `danceClock()`, `eligibleNow()`) is what E.2 gives.
+
+#### E.2.1 Terms
+
+- **The dance clock**, `clock` (double), counts dance beats. On each frame
+  with a grid it advances by Δ(trackerBeats)·S (U4). Its whole values are
+  the dance beats; the beat light, the phrase and every run boundary use
+  them. Runs start and end on whole values, held as `int64_t` (`start`,
+  `end`, A, `enterAt`, `switchAt`).
+- **A run's position.** For a running run, uRaw = max(0, min((clock −
+  start)·2^k, uEnd)) move beats (0 or above whatever uEnd is), where 2^k
+  is 2, 1 or 0.5 (exact). S changes only on a frame that re-phases (U4:
+  an acquisition, a jump, or S itself changing), so between re-phases
+  this is 3.5's u += Δ(trackerBeats)·M with M = S·2^k recomputed at each,
+  and a run start carries the overshoot past its whole beat. uEnd is plays·beats unless a cut, a
+  hold or a switch lowered it.
+- **D2** = beats·2^(1−k), a play's length in half dance beats (D = D2/2):
+  beats at k = +1, 2·beats at 0, 4·beats at −1.
+- **mod8(x)** = x − 8·floor(x / 8), 0..7, on int64.
+- **e16(w):** c = (w − 0.5f)·2.0f in float, clamped to [0, 1]; then
+  e16 = 39322 + (int32) floor(26214.0·(double) c + 0.5). So w ≤ 0.5 gives
+  39322, 0.65f gives 47186 (3.6's 72 %), 0.75f gives 52429, and 1 gives
+  65536.
+- **The RNG:** xorshift32 (x ^= x << 13; x ^= x >> 17; x ^= x << 5, mod
+  2^32), `below(n)` = next() mod n, as D.3's. `seed(v)` sets the state to
+  v, or to 0x4D50444E when v is 0. Section 3.4's seed is pathHash ^
+  restarts ^ acquisitions.
+- **Orientation** o is false (unmirrored, sgn +1) or true (mirrored, sgn
+  −1). A move's key in o: from(o) = o ? fromTagM : fromTag, to(o) likewise.
+- Comparisons with the weight are in float: `w > 0.5f`, `w <= 0.5f`.
+
+#### E.2.2 State
+
+| State | Type | Constructed / reset(pathHash) | Notes |
+|---|---|---|---|
+| w | float | 0 | the dance weight |
+| idleSec | float | 0 | the idle clock, wrapped at 2,000 s (a multiple of the crab's 1,000 s and stick-classic's 400 s wraps) |
+| clock, haveClock | double, bool | 0, false | the dance clock, and whether it is set |
+| lastTB, lastS, lastTl, sinceGrid, acqSeen | double ×4, uint32 | 0 (lastS 1) | at the last frame with a grid: trackerBeats, S, rawBpm·S, seconds since, acquisitions |
+| T, t10 | double, int | 0, 0 | the latch (0: none) |
+| phraseValid, A | bool, int64 | false, 0 | the pseudo-phrase's origin |
+| entering, enterAt | bool, int64 | false, 0 | Entering's beat |
+| run | RunInfo, plus `leaving`, `prevU` and `lastU` (double), `heldEnergy`, `show` (bool) | status None, move kNoMove, show false | prevU: the last frame's uRaw; lastU: the u it drew; show: E.2.7's latch |
+| spot | int8 | 0 | |
+| lastMove, lastPlays, lastFirstMirror | int8, uint8, bool | kNoMove, 0, false | the last run's |
+| recent[3] | int8 | kNoMove ×3 | the last three runs' moves, newest first |
+| prevTo, cutExempt, prevK | uint8, int8, int8 | 0, kNoMove, kNoOctave | |
+| firstRunBias | bool | false | set by a track reset |
+| idle | move, mirrored, runMs (uint32), cls, ms (double), lastIdle | move kNoMove, lastIdle kNoMove | the idle run; runMs 0 never ends |
+| rng | uint32 | seed(pathHash) | |
+| character, pending, switchAt | pointers, int64 | kept by reset | |
+| genres | 16 track keys + 4 injected | none | |
+| pathHash, restartsSeen, started, lastAcqIn | | pathHash, 0, false, 0 | |
+| lastShowDance, lastEnergy | bool, uint32 | false, 39322 | the last update's, before any freeze |
+| Df | move, pos16, mirrored | off | the console's freeze |
+| forced | int8 | kNoMove | Dm |
+
+#### E.2.3 update(in)
+
+Each call runs these steps in this order, then returns the cue.
+
+**U1. dt.** dt = in.dt when it is above 0, else 0 (a NaN too); then at
+most 1,000 s (+inf and huge values too). The cap keeps every state
+finite, and lets one subtraction keep the idle clock in 0..2000 s (from
+just under 2,000, a 1,000 s step rounds to at most 3,000). DanceMode's dt
+is an int32 of µs, at most 2,147 s, and a frame gap past 1,000 s draws
+the same either way.
+
+**U2. Restarts.** When `!started` or in.restarts ≠ restartsSeen: TRACK
+RESET (E.2.4), restartsSeen = in.restarts, seed(pathHash ^ in.restarts ^
+in.acquisitions), started = true. lastAcqIn = in.acquisitions on every
+call. (3.5's "track change with a restart": the Choreographer sees the
+restart in its input, so identical inputs give identical cues.)
+
+**U3. Weight and the idle clock.** First the inputs outside their
+contract, so that none can poison the state or reach an undefined
+conversion: usable = |in.trackerBeats| < 2^40 and 0 ≤ in.rawBpm ≤ 1000
+(false for a NaN or an infinity); S = in.foldScale when it lies in
+[1/64, 64], else 1 (0, a negative, a NaN or an infinity: "none"); c =
+in.confidence clamped to [0, 1], a NaN to 0 (danceWeight's own clamps
+pass a NaN through, and one NaN weight would stop the dancer for good).
+Then heard = in.heard; gridOk = heard && in.grid && usable; lockedOk =
+gridOk && in.locked; target = lockedOk ? danceWeight(c) : 0; `w +=
+(target − w) * (1.0f − std::exp(−dt / 0.4f))`, in float, exactly as
+Dancer::update and Crab::update do. idleSec += dt; when idleSec ≥ 2000,
+idleSec −= 2000.
+
+**U4. The dance clock.** sinceGrid += dt; far = false.
+
+- With gridOk, tb = in.trackerBeats:
+  - `!haveClock`: clock = tb·S, haveClock = true.
+  - otherwise, when in.acquisitions = acqSeen, S = lastS and −0.1 ≤ tb −
+    lastTB ≤ 1.5 (a PLL nudge passes through): clock += (tb − lastTB)·S.
+  - otherwise (3.5's re-acquire, jump or fold change): REPHASE, below;
+    entering = false. S can change with no acquisition: after a
+    re-acquire that kept the old scale near 72 or 176, the PLL's ±4 %
+    drift can carry the folded tempo across, and TempoFold refolds. A
+    nudge there would add Δ·S_new to a clock counted at S_old, leaving its
+    whole beats (S_old − S_new)·tb off the tracker's until the next
+    acquisition.
+  - When the clock comes out at 2^52 dance beats or more in size (never in
+    practice: some 10^13 frames): clock = tb·S, far = true, entering =
+    false. So every int64 made from the clock is in range.
+  - Then lastTB = tb, lastS = S, lastTl = in.rawBpm·S, acqSeen =
+    in.acquisitions, sinceGrid = 0.
+- Heard without a grid (no grid, a fresh tracker, a dropped grid, or a
+  grid U3 found unusable): haveClock = false, phraseValid = false,
+  entering = false.
+- Not heard (paused, starved, no epoch): nothing; the clock waits, so a
+  resume continues it.
+- When far: phraseValid = false.
+
+REPHASE chooses the new grid's dance-beat origin among the 1/S
+whole-tracker-beat shifts, the one nearest the predicted dance position:
+
+```
+predicted = clock + sinceGrid * lastTl / 60        // sinceGrid includes this frame's dt
+x = tb * S
+n = S < 1 ? llround(1 / S) : 1
+best = none
+for j in 0 .. n - 1:
+    xj = x + j * S
+    cj = xj + floor(predicted - xj + 0.5)          // the value of xj's phase nearest predicted
+    if best is none or |cj - predicted| < |best - predicted|: best = cj   // a tie keeps the lower j
+delta = best - predicted
+clock = best
+far = |delta| > 0.25
+```
+
+Within ¼ dance beat the running move keeps its whole-beat count and takes
+the new phase (its uRaw moves by delta·2^k, and is held at 0 if that
+would take it below its start). Farther, U6 holds it and Entering (U9)
+re-anchors A at the new grid's next dance beat.
+
+**U5. The latch (2.4).** tMoved = false. With lockedOk and in.rawBpm > 0:
+Tl = in.rawBpm·S; when t10 = 0 or |Tl − T| > 0.03·T: tMoved = (t10 ≠ 0),
+T = Tl, t10 = clamp(floor(Tl·10 + 0.5), 720, 1760). (A 3 % Schmitt latch
+on the live folded tempo, set at the first locked frame.)
+
+**U6. The running run's guards.** When run.status = Running:
+
+- without gridOk, or when far: HOLD at once (E.2.4): Freeze when not
+  heard, Leaving when the grid dropped, the re-anchor of a far jump;
+- otherwise, with uNow = max(0, (clock − start)·2^k):
+  - when tMoved, the move is ranged and `!paceHolds(t10, run.k, lo, hi)`:
+    CUT(uNow) and run.cut = true (2.5: the move holds at its next whole
+    move beat and the picker chooses again);
+  - when `!in.locked` and `!run.leaving`: CUT(uNow) and run.leaving = true
+    (Leaving plays on to the next whole move beat).
+
+**U7. The run's end.** When run.status = Running, gridOk and clock ≥
+run.end, with E = run.end:
+
+- a pending switch: END the run, then SWITCH to the pending character
+  (E.2.4);
+- otherwise without lockedOk: HOLD(run.uEnd) (Leaving holds that step);
+- otherwise: END the run.
+
+Then, when the run is None, lockedOk, w > 0.5 and there is a character:
+PICK at start = E (E.2.5). With w ≤ 0.5 no run starts (the play that just
+ended showed to its end, E.2.7): idle frames show, and Entering (U9)
+brings the dancer back, the phrase continuing. So no run, and no travel,
+plays unseen. If clock is already at or past the new run's end (a
+stall longer than the run), HOLD(run.uEnd): Entering replaces it at the
+next whole beat. At most one pick a frame here.
+
+**U8. Abandoning.** A held run with w ≤ 0.5, or a running one without
+lockedOk and with w ≤ 0.5, is ENDed: idle frames take over. Then, when a
+switch is pending and the run isn't Running, SWITCH now.
+
+**U9. Entering.** When run.status ≠ Running, lockedOk, w > 0.5 and there
+is a character:
+
+- if not entering: entering = true, enterAt = floor(clock) + 1 (the next
+  whole dance beat, ≤ 1 beat away);
+- when clock ≥ enterAt and target > 0.5: END a held run; if
+  `!phraseValid`, A = enterAt and phraseValid = true; PICK at start =
+  enterAt; entering = false;
+- when clock ≥ enterAt and target ≤ 0.5 (w falling through 0.5: a pick
+  would show for a frame or two, then the latch would hold it a move
+  beat): enterAt = floor(clock) + 1, the next beat.
+
+Otherwise entering = false. So the dancer comes in on the beat; the phrase
+continues from A when nothing invalidated it (a pause, a lost lock with
+the same grid) and is re-anchored otherwise (a reset, a dropped grid, a
+far re-acquire).
+
+**U10. The idle run** (E.2.6).
+
+**U11. The cue** (E.2.7). Then lastShowDance and lastEnergy = the cue's
+showDance and energy before any freeze.
+
+#### E.2.4 Operations
+
+**TRACK RESET** (3.5: history, latch, phrase and beat move cleared): END
+the run if any (its travel rule may move the spot); lastMove = kNoMove,
+lastPlays = 0, recent = kNoMove ×3, prevTo = 0, cutExempt = kNoMove, prevK
+= kNoOctave; T = 0, t10 = 0; phraseValid = false; haveClock = false,
+entering = false, sinceGrid = 0; the beat cue fields (E.2.7) to kNoMove,
+u 0, beatPos16 0, k 0, beatMirror false; firstRunBias = true. The weight,
+the idle clock, the idle run, the spot, the character, a pending switch,
+the genres, Df and forced stay.
+
+**HOLD(u)**: run.uEnd = min(run.uEnd, u), run.status = Held, run.heldEnergy
+= lastEnergy. "At once" means u = run.lastU, the u the last frame drew
+for this run (E.2.7, before any freeze). A held run shows that step at
+uEnd with the energy it had: 3.2's "holds the step, the offset and the
+travel position at once".
+
+**CUT(uNow)**: c = ceil(uNow); when c < run.uEnd: run.uEnd = c, run.end =
+min(run.end, ceil(start + c·2^−k)). The move plays on to its next whole
+move beat c and holds there until the next whole dance beat (at k = +1
+that is up to ½ beat later; at k ≤ 0 none), where the run ends. ceil(uNow)
+of a whole uNow is uNow: a cut on the beat holds at once.
+
+**END(run)**, with u its position now (Running: uRaw; Held: uEnd):
+
+- a travel run: when u ≥ beats/2, spot = clamp(run.spot + travel·sgn(o),
+  −1, 1), o its (only) play's orientation. A completed travel lands, and
+  one abandoned past half way counts as arrived;
+- prevTo = to(o_last) when u ≥ plays·beats (the run completed; o_last the
+  last play's orientation, E.2.7), else 0 (unknown: a wildcard);
+- cutExempt = run.cut ? run.move : kNoMove;
+- run.status = None (its other fields stay, for `run()` and the cue).
+
+**SWITCH(c)** (3.7): END the run if any; character = c, pending = none;
+lastMove = kNoMove, lastPlays = 0, recent = kNoMove ×3, prevTo = 0,
+cutExempt = kNoMove (prevK stays: it is about the tempo); forced =
+kNoMove; Df off; when c isn't null and `!hasTravel(c)`, spot = 0; the beat
+cue fields to kNoMove, u 0, beatPos16 0, k 0, beatMirror false; entering
+= false; idle.move = kNoMove and lastIdle = kNoMove, so the next idle step
+(U10: this update's, or the next one's for a switch made by setCharacter)
+picks the new character's idle. SWITCH itself makes no draw. So a
+character without travel moves, the crab included, always dances at the
+centre (1.3), and a travelling one keeps the current spot (8).
+
+#### E.2.5 PICK(start)
+
+```
+if !phraseValid: A = start; phraseValid = true
+p = mod8(start - A)
+if forced != kNoMove: take it (below) and stop
+for each move i, in index order, its k_i = eligibleK(t10, lo, hi, prevK, beats, travel)
+    (with t10 = 0: kNoOctave for a ranged move, 0 for an unranged one)
+hard(i)  = kind Beat and needs = 0 and k_i != kNoOctave and genreOk(i) and allowed(i) is not empty
+soft(i)  = aligned(i) and placeOk(i) and (travel = 0 or p in {0, 4})
+for level in 0, 1, 2:
+    entries = moves i, in index order, with hard(i), (level >= 1 or soft(i)), and
+              (level >= 2 or the no-repeat rule admits i)
+    stop at the first level with an entry
+no entry: auto-bounce (level 3)
+```
+
+- **genreOk(i):** an untagged move (genreCount 0); or a tagged one with
+  any of its keys among the track's keys and the injected ones (2.7: a
+  filter, never relaxed).
+- **allowed(i)**, its orientations: unmirrored, and mirrored when it has
+  kMirror; for a travel move only those o whose `startSpotMask(i, o)` has
+  the current spot (section 8: the destination exists, it fits there and
+  on arrival, start_at allows the spot; D ≥ 2 comes from eligibleK). A
+  twin entry (below) allows only its own orientation.
+- **aligned(i):** D2 < 2, or (2p) mod min(D2, 8) = 0 (3.3: p mod min(D,
+  4) = 0).
+- **placeOk(i):** kPlaceStart: p = 0; kPlaceEnd: (D2 = 2 and p ∈ {6, 7})
+  or (D2 = 4 and p = 6); neither flag: true.
+- **The no-repeat rule** (3.4 step 2), with L = lastMove: a move other than
+  L is admitted; so is L when L = cutExempt (2.5's cut move carries on, in
+  either orientation); otherwise, when lastPlays = 1 and L has kMirror, L
+  is admitted as a **twin entry** in orientation !lastFirstMirror only
+  (when that orientation is allowed); otherwise L is left out. At level 2
+  every hard move is a plain entry, L included, in any allowed
+  orientation.
+- **The ladder** is 2.8's: phrase alignment, place and travel's p ∈ {0,
+  4} give way first (level 1), then no-repeat (level 2). Continuity and
+  recency are weights and never empty a level. The pace, genre and travel
+  feasibility never give way.
+
+**The weights** are integers. For each entry e of move i:
+
+```
+W(e) = weight10 * G * B * X * C * R
+G = 3 when i is tagged (then it matched), else 1                      // 2.7's boost
+B = 1; when travel != 0 and some o in allowed(e) has |spot + travel*sgn(o)| < |spot|:
+    B = firstRunBias ? 4 : 2                                          // section 8: toward the centre
+X = 2 for a twin entry, else 1                                        // 3.4 step 2
+match(e) = prevTo = 0, or some o in allowed(e) has from(o) = 0 or from(o) = prevTo
+C = 100 when match(e) or no entry matches, else 15                    // 3.4 step 3
+R = 35 when i is in recent and e isn't a twin entry, else 100         // 3.4 step 4
+```
+
+The largest W is 100·3·4·2·100·100 = 24,000,000, so the sum of 64 fits in
+uint32. A key of 0 is a wildcard: a move with no `from` follows anything,
+and after a run whose end key is unknown everything matches.
+
+**The draws**, in this order, and no others:
+
+1. r = below(ΣW); the entry is the first, in index order, with r < W(e)
+   after subtracting the W of those before it. One draw, also when there
+   is one entry.
+2. Its orientation: O = allowed(e); when some entry matched, prevTo ≠ 0
+   and match(e), O keeps only the o with from(o) ∈ {0, prevTo}. With two
+   left, o = (below(2) = 1) (mirrored on 1); with one, that one and no
+   draw.
+
+**The run**, with the chosen move i, o and k = k_i:
+
+- plays: 1 for a travel move (3.4 step 6); for repeat > 0, the least n ≥
+  repeat with n·D2 even (repeat·D whole); otherwise max(1, 8 / D2), integer
+  division (fill 4 dance beats: a 1-beat move 4 plays at k = 0 and 8 at
+  +1, a 2-beat move 2, a 4- or 8-beat move 1);
+- run = {move i, k, plays, firstMirror o, spot = the current spot, phrase
+  p, level, cut false, leaving false, Running, start, end = start +
+  plays·D2/2, uEnd = plays·beats, prevU = −1, lastU = 0};
+- lastMove = i, lastPlays = plays, lastFirstMirror = o; recent = {i,
+  recent[0], recent[1]}; prevK = k when i is ranged; cutExempt = kNoMove;
+  firstRunBias = false.
+
+**Auto-bounce** (level 3, 2.8): run of kAutoBounce, k 0, 1 beat, plays 4
+(4 dance beats), unmirrored, no draws; lastMove = kAutoBounce, lastPlays =
+4, recent shifted, prevK kept, cutExempt = kNoMove, firstRunBias = false.
+
+**A forced move** (Dm): forced = kNoMove first. When the value is a beat
+move of the character (needs ignored): k = its eligibleK, or 0 when that
+is kNoOctave; O = its unmirrored and (with kMirror) mirrored orientations
+whose startSpotMask has the spot, or just unmirrored when none has; one
+below(2) draw when O has two; plays and the history as above; level 4. The
+pace, genre, alignment, place and no-repeat aren't checked. Any other
+value: the normal pick.
+
+#### E.2.6 Idle runs
+
+U10, with cls = heard ? Listening : Quiet (2.6):
+
+- no character: idle.move = kNoMove, nothing else;
+- idle.move = kNoMove, or idle.cls ≠ cls: IDLE-PICK(cls), idle.ms = 0;
+- otherwise idle.ms += dt·1000 (double); when idle.runMs > 0 and idle.ms ≥
+  idle.runMs: idle.ms −= idle.runMs, then 0 when that is still ≥
+  idle.runMs (a frame gap longer than the run: one re-pick, not one a
+  frame), lastIdle = idle.move, IDLE-PICK(cls); when idle.runMs = 0 (a
+  continuous idle) and idle.ms ≥ 2^31, idle.ms −= 2^31, so idleMs stays a
+  uint32 (code characters read idleSeconds; 2^31 ms is 24.9 days).
+
+The idle run advances while beat frames show too, so it is ready when they
+stop. A class change re-picks at once, so the quiet idles start with the
+pause, and show once w ≤ 0.5.
+
+**IDLE-PICK(cls):**
+
+```
+bit = cls = Quiet ? kWhenQuiet : kWhenListening
+cands = idle moves (kind Idle, needs 0) with when & bit, in index order
+if none: cands = every idle move (kind Idle, needs 0)        // the other state's (2.6)
+if none: idle = {kAutoIdle, unmirrored, runMs 4000}; no draws  // auto-idle, re-picked every 4 s
+else:
+    if cands has two or more: leave out lastIdle             // no immediate repeat
+    r = below(sum of weight10); walk as the beat draw
+    loops = idleMs > 0 ? 1 + below(3) : 1                    // a draw only for a timed idle
+    mirrored = kMirror ? below(2) = 1 : false                // a draw only with kMirror
+    idle = {move, mirrored, runMs = loops * idleMs, cls}     // runMs 0: continuous, never ends
+```
+
+#### E.2.7 The cue
+
+**The run's u** (Running): uRaw = max(0, min((clock − start)·2^k, uEnd)).
+**The must-show rule** (2.2): with b = floor(uRaw), when b > run.prevU and
+uRaw − b ≤ 0.125, the cue's u is b exactly; otherwise uRaw. Then
+run.prevU = uRaw and run.lastU = the cue's u. So the first render at or
+after each whole move beat draws that beat's step from its start whenever
+it comes at most ⅛ move beat late:
+for frames on time, always at 30 fps (a frame is under 0.1 move beat at
+pace 180) and at 24 fps up to pace 178 (0.126 at 180). Past ⅛ and under
+¼, a step of at least 3 ticks (¼ beat) still covers the beat, so the
+hit's step shows on that render; a render ¼ beat or more late (a stall
+of 83 ms or more at pace 180, 125 ms at 120) can skip a 3-tick step. A
+run's first frame has prevU = −1, so its step 0 is drawn from u = 0 when
+the run started at most ⅛ beat before it (3.3's "u ≈ 0.1" becomes u =
+0). Held: u = uEnd, no snap. None:
+the beat fields keep their last values (a code character's dance half
+holds its last pose while it fades, as Dancer and Crab do).
+
+**The fields** (U11), before any freeze:
+
+| Field | Value |
+|---|---|
+| beatMove, k | run.move, run.k while a run exists |
+| u, beatPos16 | as above; beatPos16 = (uint32) floor(u·786432) |
+| beatMirror | o_j: with j = min(floor(u / beats), plays − 1) (beats 1 for auto-bounce), firstMirror XOR (j odd) for a move with kMirror, else false |
+| idleMove, idleMirror | idle.move, idle.mirrored |
+| idleMs | (uint32) floor(idle.ms) |
+| idleSeconds, weight | idleSec, w |
+| energy | run held: run.heldEnergy; otherwise e16(w) |
+| showDance | run.status ≠ None and run.show (the latch, below) |
+| flash | gridOk and w > 0.5f and clock − floor(clock) < 0.12 (today's light: dance phi under 0.12 while dancing) |
+| spot, rootX, rootY | spot, spotX(spot), 153 |
+| state | below |
+
+**The show latch** (3.2). run.show is set to w > 0.5 when the run starts
+(always true: U7 and U9 pick only above 0.5) and again on its first
+running frame (prevU = −1). On a later running frame, before prevU moves
+on, with j = floor(uRaw / beats) (beats 1 for auto-bounce): when j >
+floor(prevU / beats) and j < plays (a new play starts), show = w > 0.5;
+otherwise, when floor(uRaw) > prevU (a whole move beat) and w > 0.5, show
+= true. A held run keeps it. So beat frames go off only where a play
+starts and come on only at a whole move beat: each kind shows at least a
+move beat, less a frame, however w wobbles about 0.5, and a travel (one
+play) once shown is seen to its end. Beat frames at w ≤ 0.5 need a
+running run under a locked grid (U8 ends the others), where DanceRate
+already runs at the full rate. (Note, step 3's review: showDance was
+`w > 0.5` alone, which flickered 1-4 frames of a dance pose on real music
+3.8 times a minute, snapped a walk back to its start spot when w dipped,
+and let runs, travels included, play unseen. Replayed over the 77 cached
+tracks at 30 fps with the test dancer, the latch and U7's and U9's gates
+take the toggles from 1,282 to 1,058, the shortest dance shown from
+0.03 s to 0.43 s and the shortest idle gap to 0.36 s; started from spot
+−1, the idle dancer's 96 px jumps between spots go from 20 to none. The
+cost: idle frames with w > 0.5 while the dancer comes back in, at most a
+move beat (2.0 % of the locked dancing time, up from 1.1 %; the longest
+1.9 dance beats, a half-time move).)
+
+**state:** not heard: Freeze when a run exists (Running cannot be: U6
+held it), else Quiet; heard: Dancing when the run is Running and
+lockedOk; Leaving when a run exists without lockedOk; Entering when
+lockedOk and w > 0.5 (waiting for its beat, a held step showing when
+there is one); Listening otherwise (no grid, an unlocked grid, or a fade
+with w ≤ 0.5). A running run under a locked grid with w ≤ 0.5 is
+Dancing: its play in progress shows to its end, then idle frames until a
+whole move beat with w > 0.5; when it ends no run follows (U7) and the
+state is Listening.
+
+**Freezes** override the shown cue only; the state machine runs on
+underneath, and the cue the state machine keeps (lastShowDance,
+lastEnergy) is the unfrozen one.
+
+- **Df** (when set; it wins over k): a beat move (kind Beat, or
+  kAutoBounce): beatMove = it, beatPos16 = pos16, u = pos16 / 786432.0, k
+  0, beatMirror = mirrored, showDance true, weight 1.0f, energy 65536,
+  flash false. An idle move (kind Idle, or kAutoIdle): idleMove = it,
+  idleMs = (pos16·10) >> 16 (pos16 in Q16 10-ms units, so step s's start
+  s·65536 gives 10·s), idleMirror = mirrored, showDance false, weight 0,
+  energy 39322, flash false.
+- **k<n>** (in.freeze 0..15; other values count as −1; 3.8): f =
+  freezeMove(character), or kAutoBounce with no character; L = its beats
+  (1 for kAutoBounce); beatMove = f, beatPos16 = (n·98304) mod
+  (L·786432), u = beatPos16 / 786432.0, k 0, beatMirror false, showDance
+  true, weight 1.0f, energy 65536, flash = (n mod 8 = 0). For the crab's
+  2-beat `shuffle` that is u = n/8, so phi = frac(u) and odd = floor(u)
+  & 1 give `Crab::frozen((n % 8)/8, n >= 8)` exactly.
+
+#### E.2.8 The calls
+
+- **Before the first update**, cue() is {beatMove kNoMove, u 0,
+  beatPos16 0, k 0, unmirrored, idleMove kNoMove, idleMs 0, unmirrored,
+  idleSeconds 0, weight 0, energy 39322, showDance false, flash false,
+  spot 0, root (160, 153), Quiet}, and run() is {kNoMove, k 0, plays 0,
+  unmirrored, spot 0, phrase 0, level 0, not cut, None, start 0, end 0,
+  uEnd 0}.
+- **Choreographer()** and **reset(pathHash)** (dance on): every state of
+  E.2.2, cue() and run() to their first values, except the character: a
+  pending switch becomes
+  the character at once (no draw), and reset makes no draw at all.
+  rng = seed(pathHash); `started` is false, so the next update reseeds
+  with the inputs (U2). Today's `setActive(true)` resets the dancers;
+  step 4 calls reset there.
+- **onTrack(pathHash, keys, count)** (3.5's gapless join, and every other
+  track change): pathHash is kept; the track keys become the first
+  min(count, 16) of keys (null with count 0: none); the injected keys are
+  cleared; seed(pathHash ^ restartsSeen ^ lastAcqIn). The phrase, the
+  latch, the run and the history stay.
+- **setCharacter(c):** c = the current character: a pending switch is
+  dropped, nothing else. Otherwise SWITCH(c) at once when there is no
+  character, the run isn't Running, or the last update's showDance was
+  false (3.7: "at once while idle"). Otherwise the switch waits for the
+  next whole dance beat: pending = c, switchAt = floor(clock) + 1, run.end
+  = min(run.end, switchAt), run.uEnd = min(run.uEnd, max(0, (switchAt −
+  start)·2^k)) (0 when backward nudges left the clock more than a beat
+  behind the run's start). U7 then ends the run there, switches and picks afresh with
+  the new character at the same spot (or the centre, SWITCH's rule). A
+  second call while pending replaces the pending character.
+- **freeze(move, pos16, mirrored):** sets Df when move is a move index of
+  the current character, kAutoBounce or kAutoIdle; any other value
+  (kNoMove included) unfreezes. A switch unfreezes.
+- **forceNext(move):** forced = move; the next PICK takes it (E.2.5). A
+  switch clears it.
+- **setSpot(s):** s clamped to −1..1; END the run if any, then spot = s
+  (overriding END's travel rule); entering = false. Dancing resumes
+  through Entering at the next beat. (Note, step 3's integration: cue()'s
+  spot, rootX and rootY change at once, for Ds's screenshots; its other
+  fields wait for the next update.)
+- **addGenre(key):** appended to the injected keys while there are fewer
+  than 4; otherwise ignored. Cleared by onTrack.
+- **eligibleNow(i):** kNoOctave for an i out of range, an idle move, a
+  move with a needs bit, or a tagged move no key matches; with t10 = 0,
+  0 for an unranged move and kNoOctave for a ranged one; otherwise
+  eligibleK(t10, lo, hi, prevK, beats, travel). (Dl's "at which k each is
+  eligible now"; alignment, place and travel feasibility aren't in it.)
+
+#### E.2.9 Section 3, where it lives
+
+| Section 3's rule | E.2 |
+|---|---|
+| 3.2 Quiet / Listening idles, runs of 1-3 loops, no immediate repeat, fallbacks, auto-idle | E.2.6 |
+| 3.2 Entering: w > 0.5 and a locked grid, the next whole dance beat, A | U9 |
+| 3.2 Dancing: a new run each time one ends | U7 |
+| 3.2 Leaving: on to the next whole move beat, that step held, idles at w ≤ 0.5 | U6 (cut), U7 (hold), U8 |
+| 3.2 Freeze: hold at once, quiet idles at w ≤ 0.5 | U6, U8, E.2.6 |
+| 3.2 which frames show (the show latch); the beat light | E.2.7, U7, U9 |
+| 3.3 runs start where the last ended, overshoot carried; p; alignment; place | U7, U9, E.2.5 |
+| 3.4 the pick | E.2.5 |
+| 3.5 PLL nudge | U4 (−0.1 ≤ Δ ≤ 1.5, same acquisition, same S) |
+| 3.5 re-acquire, jump or fold change: M recomputed, the shift, ¼ beat, hold and re-anchor, re-test | U4 REPHASE, U6, U9, U5 |
+| 3.5 lost lock; grid dropped; pause and resume | U6, U7, U8, U9 |
+| 3.5 track change with a restart | U2, TRACK RESET |
+| 3.5 gapless join | onTrack |
+| 2.4 the latch, eligible_k with prevK; 2.5 the tolerance and the cut | U5, E.2.5, U6, CUT |
+| 2.2 the must-show rule | E.2.7 |
+| 3.6 the weight and the energy | U3, E.2.1's e16, HOLD |
+| 3.7 switching | setCharacter, SWITCH, U7 |
+| 3.8 k<n>, Df | E.2.7 |
+| 3.9's hooks: Dm, Ds, Dg, Dl | E.2.8 |
+| section 8: travel eligibility, the bias, the spot | E.2.5, END, SWITCH |
+
+### E.3 Determinism
+
+- **One build, one input.** The same sequence of calls (reset, onTrack,
+  setCharacter, freeze, forceNext, setSpot, addGenre and update, with the
+  same arguments and the same characters' labels) gives the same cues,
+  every field equal, floats and doubles compared with `==`. Nothing else
+  is an input: no clock, no address, no global. test_dance_choreo runs
+  every script twice and compares.
+- **Integers, shared with Python, on every target:** B's functions
+  (eligibleK, paceHolds, reach, ease16, hop16, sway16, stageX, frameAt,
+  extent, fits, startSpotMask, dirtyPx, the budget) equal dancepack.py's
+  bit for bit.
+- **Integers inside the Choreographer:** t10, the phrase, every run
+  boundary (start, end, A, enterAt, switchAt), plays, the weights and the
+  draws, beatPos16, idleMs and e16.
+- **Doubles:** the clock, trackerBeats·S, lastS, lastTl, sinceGrid, T,
+  uRaw and u, uEnd and the idle run's ms. U1 and U3 bound every input
+  (E.2.3), so they stay finite and every conversion of one to an integer
+  (start, end, enterAt, switchAt, beatPos16, idleMs) is in range. They use
+  +, −, ×, ÷, floor, ceil, llround, fabs and comparisons only, which IEEE
+  754 binary64 rounds exactly: the x86-64 host
+  (SSE2) and the ESP32 (GCC's soft-float) agree bit for bit, given equal
+  inputs. lib/core is never built with flags that change that (`-mfma`,
+  `-march=native`, `-ffast-math`).
+- **Floats:** w (Dancer's formula: `std::exp` on a float), idleSec, dt and
+  confidence (inputs), and e16's c. The ESP32's FPU fuses a float multiply
+  and add (GCC's default `-ffp-contract=fast` emits `madd.s`), and
+  newlib's `expf` isn't glibc's, so w can differ from the host's in its
+  last bits.
+- So section 3.1's claim narrows to this: a host replay of a device's
+  BeatInputs gives the device's cues, except on frames where w lies within
+  float rounding of 0.5 (or of an e16 step); after such a frame the two
+  may part. Two device runs differ anyway (3.1). The tests pin host
+  behaviour; the replay runner (10.1) is a tool, not a proof.
+
+### E.4 The host tests
+
+All three new suites follow D.4's house form (one `.cpp` per
+`test/test_<name>/`, `setUp`/`tearDown`, `UNITY_BEGIN`/`RUN_TEST`/
+`UNITY_END`, D.4 item 12's `#if defined(DANCE_ASAN) &&
+!defined(__SANITIZE_ADDRESS__)` `#error` at the top), include the vector
+headers and PackEdit.h by relative path, and run in under 30 s each
+under ASan. Packs handed to the reader are PackEdit's exact-size
+`HeapCopy`s.
+
+#### BeatScript.h (test/support/dance/, written by the test writer)
+
+Test-only, so std::vector and floats are fine. It holds:
+
+- **`Script`**, one BeatInput a frame at a fixed rate, from a scripted
+  tracker:
+
+  ```cpp
+  namespace beatscript {
+  class Script {
+   public:
+    explicit Script(int fps);   // dt = dancerate::periodMs(fps) / 1000.0f: 33 ms at 30, 42 at 24
+    // From the next frame on:
+    Script& heard(bool on);     // the track's time stands still while not heard (a pause)
+    Script& grid(bool on);
+    Script& locked(bool on);
+    Script& confidence(float c);
+    Script& acquire(double bpm, double beatAt, int32_t index = 0);  // a new grid: beat `index` at
+                                // track time beatAt (s); acquisitions + 1; grid on
+    Script& nudge(double beats); // the grid moved by `beats` tracker beats, same acquisition
+    Script& drift(double bpm);  // (review) the tempo drifts to bpm, same acquisition: no jump
+    Script& restart();          // restarts + 1, grid off, the TempoFold reset (DanceMode::restart)
+    Script& freezeK(int n);     // BeatInput.freeze, -1 off
+    dance::BeatInput frame();   // the next frame's input (dt 0 on the first)
+    std::vector<dance::BeatInput> seconds(double s);
+    double trackTime() const;   // tau
+    double danceBeats() const;  // the script's own trackerBeats * S at tau
+  };
+  }  // namespace beatscript
+  ```
+
+  A frame's trackerBeats is index + (τ − beatAt)·bpm/60, τ the track time,
+  which advances by dt only while heard; rawBpm is (float) bpm; foldScale
+  is a `dance::TempoFold`'s apply(rawBpm), kept by the script and applied
+  on frames with a grid, as DanceMode keeps `fold_`; grid = heard and the
+  grid on; trackerBeats is 0 without a grid. A first `acquire` starts
+  locked with confidence 0.8 unless set otherwise.
+- **`ScriptCharacter`**, a hand-built Character: `add(MoveLabels)`
+  returning the index; helpers `beatMove(name, beats, lo, hi, weight10 =
+  10)` and `idleMove(name, ms, when, weight10 = 10)` filling every other
+  label with its default (0, null, StartAt::Any); and `setSpots(i,
+  unmirrored, mirrored)` overriding startSpotMask for a move (otherwise
+  the default). Its info: id `script`, name `Script`, origin BuiltIn,
+  inCycle true.
+- A helper opening kTestPack (or patched copies) into a DrawnCharacter,
+  as a card pack would be (E.1's split, with BudgetPass run to the end).
+
+#### test_dance_choreo
+
+Two conventions hold through the list (Note, step 3's implementation: the
+items below that use them were wrong without them):
+
+- **The true u** of a running run is (danceClock() − run().start)·2^k,
+  the uNow that CUT takes (E.2.4). The cue's u isn't it on the first frame
+  after a whole move beat, where the must-show rule draws that beat
+  exactly (E.2.7), so a cut is checked against ceil of the true u.
+- **A test that counts picks over many restarts gives each restart its
+  own track:** onTrack(fnv1a32 of a distinct path, e.g. `track<k>`) and
+  then restart(). With one pathHash the seed pathHash ^ restarts ^
+  acquisitions takes only a few values ((k + 1) ^ k when the acquire comes
+  a frame after the restart, the same 0x4D50444E every time when both
+  share a frame), so the shares below wouldn't hold.
+
+1. **B.7 in C++:** every kEligibility row through eligibleK (prevK and k
+   127 as kNoOctave) and every kPaceHolds row through paceHolds; B.7's two
+   tables; paceHolds with k outside −1..1.
+2. **The latch:** at S = 1, T latched 100.0 on the first locked frame
+   (t10 1000); then, each from T = 100: rawBpm 103.0f doesn't move it,
+   103.5f does (t10 1035), 97.0f doesn't, 96.9f does (t10 969); an
+   unlocked grid never moves it; t10 is 0 before the first lock and after
+   a restart.
+3. **Pace in the pick** (ScriptCharacter): an unranged move always at k
+   0; a ranged move at eligibleK's k, consecutive ranged moves keeping
+   prevK; the 180 cap for a running move (10.3: a 170-180 1-beat move
+   danced at +1 from t10 880, then a re-acquire at 90.7 BPM within ¼ beat:
+   t10 907, the run cut, `run().uEnd` = ceil of its true u then, the cue's u
+   held there until `run().end`, never past); half time never for an
+   8-beat move (a lone 8-beat 36-60 move at T 120 gives auto-bounce).
+4. **An I Wonder trace** (30 fps, the fixture's DrawnCharacter and,
+   separately, a ScriptCharacter with one 2-beat move 90-100): locked at
+   95.7 BPM; at 20 s a re-acquire at 191.4 whose beat 0 falls on a
+   midpoint between the 95.7 beats (so REPHASE's j = 1 is the shift that
+   matches: j = 0 would be ½ beat off); at 40 s back to 95.7 on a true
+   beat; to 60 s. Every frame: t10() = 957; no run held or cut;
+   danceClock() advancing by dt·(rawBpm·S)/60 within 1e-6 at every frame,
+   the flips included; and for every frame of a ranged run, paceHolds(957,
+   k, lo, hi) (the pace never more than 3 % outside the running move's
+   range). Then once more with the flip back on a midpoint: there S = 1
+   has one shift and delta = ½, so that frame the run is Held, and the
+   next pick comes at floor(clock) + 1 with `run().phrase` 0.
+5. **A 4:3 trace** (ScriptCharacter: A 2 beats 100-130, B 2 beats
+   140-170): at 120 BPM only A dances (level 2 repeats); mid-play, one or
+   two frames after a whole dance beat, a re-acquire at 160 BPM whose beat
+   0 is on that beat (|delta| ≤ ¼): that frame t10 becomes 1600,
+   `run().cut` is true and `run().uEnd` is ceil of the true u (A's next
+   whole move beat), `run().end` the dance beat where u reaches it; the
+   cue's u never passes it; the next run is B at k 0, starting exactly at
+   that end.
+6. **States:** quiet (`heard(false)`: Freeze while a run exists, Quiet
+   after w ≤ 0.5; a quiet idle shows); listening (no grid; a fresh grid
+   not yet locked; an unlocked grid; a grid dropped while heard: Leaving,
+   then Listening); the idle fallback (a character with only a quiet idle
+   uses it while listening) and auto-idle (no idles: kAutoIdle, runs of
+   4,000 ms); idle runs of 1-3 loops (idleMs advancing by dt·1000, a new
+   pick after loops·idleMs, never the same move twice in a row when the
+   class has two).
+7. **Genre** (ScriptCharacter): tagged moves never picked with no track
+   genres (dormant) and never when the keys don't match; a matching track
+   key via onTrack or addGenre makes them eligible; the ×3: over the
+   first picks after 2,000 restarts, each on its own track (no history
+   then), with one matched
+   tagged and two untagged 1-beat moves of equal weight, the tagged one's
+   share is within 0.05 of 3/5; the ladder: a character whose only moves
+   are unmatched tagged ones plays auto-bounce (`run().level` 3).
+8. **Picking:** never the same move in two consecutive runs while another
+   hard move exists, except a single play of a mirrorable move followed
+   by its twin (the other orientation, at ×2) and the cut move; plays per
+   E.2.5 (a 1-beat move 4 plays at k 0 and 8 at +1, `repeat = 3` on a
+   1-beat move at +1 gives 4, a travel move 1), every run a whole number
+   of dance beats; beatMirror alternating play by play in a mirrorable
+   run; the from/to preference (after a forced run of X, `to` = k1, that
+   completes, the pick between Y, `from` = k1, and Z, `from` = k2, equal
+   1-beat moves: Y's share within 0.02 of 100/115 (Note, step 3's
+   review: the seeds are fixed, so the share is exact; 0.05 let
+   continuity 10 or 20 pass) over 2,000 restarts,
+   each on its own track; a
+   key of 0 matching anything);
+   alignment (at level 0, `run().phrase` mod min(D, 4) = 0); `place =
+   start` only at p 0; `place = end` only at D = 1 with p 6 or 7, or D = 2
+   with p 6; `run().level` 1 when only alignment blocked, 2 when only
+   no-repeat did.
+9. **The draw, exactly:** the seed is pathHash ^ restarts ^ acquisitions
+   of the first update after a reset (0x4D50444E for 0); a
+   ScriptCharacter with two unranged 1-beat moves of weight10 10 and 30,
+   no keys, no history: the first pick is move 0 exactly when
+   `Xorshift32(seed).below(10·100·100 + 30·100·100) < 10·100·100`; with
+   kMirror on the chosen move, the next draw decides its orientation.
+10. **Travel** (the fixture: `walk` travels +1, start_at side, from −1
+    unmirrored and +1 mirrored): never picked from spot 0; from −1 (setSpot)
+    picked only at p ∈ {0, 4} on level 0 and only unmirrored; when its run
+    ends, cue.spot is 0 and stays through idles. The centre bias, from
+    spot −1 (setSpot before each lock), with T (2 beats, unranged, travel
+    +1) and P (2 beats, unranged) of equal weight: with only T and P, the
+    first pick after each of 2,000 restarts, each on its own track (p 0),
+    is T with a share within 0.02 of 4/5 (×4: 0.05 let ×5 pass); with a
+    third move F (1
+    beat, unranged) forced first (4 plays, using up the first-run bias)
+    and setSpot(−1) in its fourth dance beat, the next pick (p 4, F left
+    out by no-repeat), again over 2,000 restarts on their own tracks, is
+    T within 0.02 of 2/3 (×2). D ≥ 2: a 2-beat travel move never runs at
+    k = +1.
+11. **Determinism:** every script above run twice from a new
+    Choreographer gives equal cues; a different pathHash gives a
+    different sequence of runs; a gapless join (onTrack mid-run) keeps the
+    run, the phrase count and t10, takes the new genres, clears Dg's, and
+    changes the later picks.
+12. **Discontinuities:** a nudge of −0.05 beat passes through (no hold);
+    at 120 BPM a nudge of −0.2 is a jump within ¼ (the clock ends 0.2·S
+    behind the prediction, the run
+    goes on, its u held at 0 if that crosses its start); a jump of 2 whole
+    tracker beats at S = 1 changes nothing (delta 0); a re-acquire ½ beat
+    off holds, then re-anchors (`run().phrase` 0 at the next whole beat);
+    Leaving (locked(false) mid-run: the run cut at ceil of its true u;
+    idles once w ≤
+    0.5; and with the lock back after two frames, dancing goes on with a
+    new pick at `run().end`); Freeze on pause (that frame the cue's u and
+    energy equal the last frame's, state Freeze) and resume (Entering,
+    the next pick at the next whole beat, `run().phrase` continuing the
+    count from before the pause); a track reset (restart(): t10 0, prevK
+    none, run None and the beat fields kNoMove that frame; the spot of a
+    run without travel unchanged, w and idleSeconds going on without a
+    jump); Entering (from Listening: idle frames until the
+    first frame with danceClock() ≥ floor(clock at Entering's start) + 1,
+    then `run().start` equal to that beat and phrase 0).
+13. **Timing,** at 24 and 30 fps, at every whole pace P from 36 to 180: a
+    ScriptCharacter with one 1-beat move of range P-P, at T = P for 80-160
+    (k 0), T = 2P for 40-79 (k −1), T = P/2 for 161-180 (k +1), and T = 2P
+    for 36-39 reached by acquiring at 100 BPM first, so the TempoFold keeps
+    S = 1 (its 72-176 band) and the latch moves (Note, step 3's
+    implementation: 80 BPM first, as this said, leaves T at 80 for P = 39,
+    since 78 is within the latch's 3 % of 80); for every whole move beat b
+    a running run crosses (its true u, (danceClock() − run().start)·2^k,
+    going from below b to at least b), that frame's beatPos16 lies in
+    [12b·65536, (12b + 3)·65536): the hit's 3-tick step shows on the first
+    render at or after its beat; and u = b exactly whenever the true u − b
+    ≤ ⅛.
+14. **Weight and energy:** at 30 fps the weight changes by at most 1/12 a
+    frame (by at most 0.1 at 24 fps); locked at confidence ≥ 0.5 it is
+    above 0.95 after 2 s; a lost lock takes it under 0.5 within 0.3 s;
+    e16 at w ≤ 0.5, 0.65f, 0.75f and 1 is 39322, 47186, 52429 and 65536;
+    the beat light only with w > 0.5 and the clock's phase under 0.12.
+15. **Switching:** at once while idle (idle frames from the new character
+    on the next update); while dancing, at the next whole dance beat (the
+    old run's last frame, then the new character's first run starting at
+    floor(clock at the call) + 1), with w, idleSeconds and (for a
+    travelling character) the spot unchanged; a switch to a travel-less
+    character sets the spot to 0.
+16. **Freezes:** k0-k15 on the fixture (bounce, 2 beats): beatPos16 =
+    n·98304, u = n/8, showDance, weight 1, energy 65536, flash exactly at
+    k0 and k8; on a character whose freeze move has 1 beat, k9 gives u =
+    1/8; the freeze chain (kFreeze, then unranged 2-beat, then unranged,
+    then kAutoBounce); Df on a beat move (exact pos16, mirrored) and on an
+    idle move (idleMs = 10·s for step start s); Df over k; freeze(kNoMove)
+    and a switch unfreeze.
+17. **The console hooks:** forceNext (taken at the next pick, `run().level`
+    4, even when not eligible, k 0 then); setSpot (the run ended, the cue's
+    spot at once); addGenre (up to 4, cleared by onTrack); eligibleNow
+    against eligibleK.
+18. **Size:** `sizeof(Choreographer)` ≤ 1,024.
+19. **Added in integration** (rules no test above pinned; each test fails
+    when its rule is broken in the code): U7's stall (a forward jump of
+    1.4 tracker beats past the next run's end: that run held at its end at
+    once, then picked again at floor(clock) + 1, the phrase continuing);
+    U8's pending switch made on a pause's frame, and a running run without
+    a lock ended as soon as w ≤ 0.5, before its cut point; U1's negative
+    and NaN dt counting as 0; the idle clock's wrap at 2,000 s; setSpot's
+    cue at once (E.2.8); the cut move exempt from no-repeat (level ≤ 1 at
+    its new octave) and a run not cut getting no exemption; the second
+    draw's orientation keeping only a matching `from`; prevTo 0 after an
+    unfinished run (1/2, not 100/115); SWITCH keeping prevK; REPHASE
+    setting entering = false (a far re-acquire during Entering picks at
+    the new grid's next beat), its ¼-beat line (±0.24 runs on, ±0.26
+    holds) and its tie keeping the lower j; onTrack's seed, exactly; the
+    must-show rule's b > prevU (a run held at u 0 then draws its true u);
+    the travel bias only toward the centre (+2 from −1: 1/2); and TRACK
+    RESET clearing the phrase when the new grid applies on its frame.
+20. **Added in review** (each fails when its rule is broken: a mutation
+    run killed every listed rule's mutant): U4's fold change with no
+    acquisition (a re-acquire to 175.9 BPM, then a drift to 176.3 with
+    the same acquisitions; and 72.2 to 71.8): clock − S·trackerBeats a
+    multiple of min(1, S) on every frame; the show latch (the fixture's
+    walk shown to its end as w falls under 0.5, the drawn root never
+    moving more than 48 px a frame; no run starting at w ≤ 0.5, the spot
+    unchanged; with the confidence wobbling around 0.31, beat and idle
+    frames each lasting at least 14 frames at 30 fps; Entering not
+    picking with w > 0.5 and the target ≤ 0.5); hostile inputs (one frame
+    of a NaN, infinite or huge confidence, dt, trackerBeats, foldScale or
+    rawBpm in a dance, then dancing again, with or without a restart; a
+    continuous idle for 58 days in 1,000 s frames, its ms below 2^31; a
+    timed idle after a 1e30 s gap re-picked once); a switch with the
+    clock more than a beat behind the run's start (uEnd 0, u never
+    negative); E.2.6's idle draws exactly (the entry, the loops of a
+    timed idle, the orientation of a kMirror one, and a continuous
+    kMirror idle re-picked at each class change); E.2.5's draws over two
+    picks (the entry draw with one entry, the orientation draw only with
+    two orientations); prevTo from the last play's orientation (4 and 3
+    plays, within 0.03 of 100/115); a switch clearing forceNext, at once
+    and pending; U9's w > 0.5 at a steady 0.579 (confidence 0.33), and
+    never at 0.461; the idle classes over 300 seeds; the centre bias of a
+    mirrored travel from +1 (within 0.03 of 4/5); the must-show ⅛ (a
+    frame 0.2 late keeps its true u, one 0.125 late draws the beat);
+    END's half-way boundary (the lock lost at u 0.85-0.92 of a 2-beat
+    travel, cut to 1.0: arrived); `place = end` at p 6 and at p 7 for D
+    1, and at p 6 for D 2. The Twin also writes E.2.3's weight again
+    (equal to the cue's with `==`) and E.2.7's latch, and checks that
+    every new run starts at w > 0.5 and the clock stays under 2^52.
+
+#### test_drawn_character
+
+1. **B.2 and B.3:** ease16's table (B.2) at f 0, 16384, 32768, 49152 and
+   65536 for every ease; hop16's table (B.3); sway16(0, 0) = −65536,
+   sway16(0, 32768) = 0, sway16(0, 65535) = 65534, sway16(1, 0) = 65536.
+2. **B.4's worked example** on a pack built with PackEdit (scale 2, cell
+   8×8, anchor 4,8, shadow 10, one frame with box (2, 2, 4, 6), the
+   2-beat move of B.4): every cell of its table, both orientations; the
+   hold-travel variant's rootX 62, 72, 63, 158 and 165; tick 3's Y of −4
+   (B.0's floor); e16 = 47186 at tick 15; and the clamp example, both
+   orientations. B.3's 1-beat sway: rootX 156, 160, 164, 160, 156 at ticks
+   0, 6, 12, 18 and 24.
+3. **Step lookup** at exact tick edges: pos16 = s_i·65536 − 1 shows step
+   i − 1 and s_i·65536 step i, for every step of every fixture move; the
+   wrap at L·65536 back to step 0.
+4. **Mirror symmetry:** for every frame, B.11's mirrored offsets: L′ =
+   scale − R and R′ = scale − L (the anchor column mirrors to cellW − 1 −
+   anchorX).
+5. **The bounds hold every pixel:** for every kept move of the fixture,
+   both orientations, spots −1, 0 and +1, e16 39322 and 65536, and pos16
+   every 7 ticks over two plays: the frame drawn with `blit` at the box's
+   top-left into a 320×164 canvas inside a canary border writes only
+   inside `box`, `box` lies on the stage, and for a move without travel at
+   spot 0, box.x0 − 160 ≥ lo and box.x1 − 160 ≤ hi of `extent`.
+6. **stageX:** its ends (p 0 gives the start spot, 65536 the end, for
+   every ease), a leftward travel's rounding (rhu with floor), and the
+   clamp of a spot past ±1.
+7. **B.11:** extent (−6, 14) and start spots −1 and 0 for B.4's move; the
+   wrap example's (−36, 16); the fixture's `walk`: 0b001 unmirrored, 0b100
+   mirrored; every other fixture move 0b111; fits: `heavy` (extents
+   (−96, 96) and (−92, 100)) only at spot 0, `big` ((−64, 64) and
+   (−60, 68)) everywhere but mirrored at +1.
+8. **The view of the fixture:** `init` false on a pack not open; 13 moves
+   (MOVS 0-7 and 9-13: `future` is dropped), packMove 0-7 then 9-13; the
+   labels C.10 fixes (names, kinds, beats, paces, weight10, when, flags,
+   repeat, travel, startAt; `point`'s keys 1 → 2 and mirrored 1 → 3;
+   `fast`'s 4 → 1; idleMs 4,000, 3,300 and 3,000 for sway, breathe and
+   look; `nod`'s three genre keys FoldVectors' hashes); the info (id
+   `test`, name `Tëst`, author, licence, url, origin and inCycle as
+   given, ignoredMoves 1); `freezeMove` 0; `hasTravel` true;
+   DrawnCharacter::frameAt equal to the free frameAt through packMove.
+9. **The engine moves:** auto-bounce at pos16 0 is the rest frame at
+   (spotX, 153) and its hop is B.3's at 4 native px; auto-idle's rootX is
+   spotX − scale at 0 ms (pos16 0), spotX + scale at 2,000 ms (pos16
+   200·65536), and back at 4,000 ms.
+10. **BudgetVectors' traces:** every kTrace frame of every kTraceCases
+    case, its pos16 through the free frameAt (all 14 records, `future`
+    included) and, for the 13 kept, through DrawnCharacter::frameAt: frame
+    with bit 15 for the drawn mirror, rootX, rootY and the rect.
+11. **Added in integration:** copies of the view (E.1's note), its genre
+    keys still read after the original is freed.
+12. **Added in review:** a travel move with no `go` flag travels during
+    every step (rootX 64, 88, 112, 136 and 160 at ticks 0-24, linear,
+    from −1; the same with every step flagged; with `go` on the second
+    step only, 64, 64, 64, 112, 160); a 160 px shadow clipped at spots −1
+    and +1 (x 0-144 and 176-320), and a 120-row frame keyed 40 px up
+    pushed down to the stage's top with its root (rootY 120); views of 20
+    and 64 kept moves; `point`'s fromKeyM patched to 2 (fromTagM 2); GEOM's
+    rest frame with bit 15 (the engine moves drawn mirrored); and
+    readMoveSteps equal to step-by-step reads, its starts and travelling
+    sums included.
+
+#### test_dance_budget
+
+1. **B.5:** dirtyPx's examples (192 px from tick 6 to 15, 280 from 0 to
+   24 on B.4's move), a null last rect, empty rects, and the 1.3 boundary
+   (10·U = 13·(A + B) gives the union).
+2. **kBudgetCases:** for each move of kTestPack, budgetCaseSpecs gives
+   exactly its rows, in order; budgetCase gives each row's frames, median
+   and peak.
+3. **kMoveBudgets:** budget() gives each move's median, peak and light
+   (`big` amber, `heavy` red, the rest green), and with a null scratch the
+   same peak and light, median 0.
+4. **kTrace through BudgetRun:** n, pos16, frame and mirror, root, rect
+   and dirty, frame for frame.
+5. **The worked examples:** A.17's dot (six cases, median 4, peak 6,
+   green); B.6's (B.4's move: 12 cases; 30 fps, pace 124, spot −1: N 30,
+   median 160, peak 266; 24 fps, pace 124: median 176, peak 304; the move
+   median 192, peak 304, green).
+6. **The peak is never under a frame's own rect:** in every case, the
+   peak ≥ rectArea of every frame's rect for n ≥ 1.
+7. **The verdicts:** startSpots and budgetRed keep every move of the
+   fixture (`heavy` is heavy, `big` amber); with `heavy`'s kHeavy cleared
+   (a patched copy), budgetRed drops it as `budget red (24576 px)`; with
+   `walk`'s kMirror cleared, start_at centre and every step's dx 10
+   (test_dancepack.py's case: extents (−24, 68) and (−64, 28), start spots
+   none unmirrored and 0 mirrored), startSpots drops it as `travels from
+   no spot`.
+8. **BudgetPass:** on the fixture as a card pack, no drop and 13 true
+   steps; on a copy with two red moves (`heavy` with kHeavy cleared, and
+   `big` keyed −12,0 and 12,0 as `heavy` is: 24,576 px each), their drops
+   arrive after open()'s in MOVS order, one per step(), with dropped and
+   keptMoves following;
+   false at once on a pack with no kept move, a pack not open and a null
+   pack.
+9. **Added in review:** budgetCaseSpecs, every case's N, median and peak,
+   and the move's budget for an odd rlo + rhi (90-131: paces 90, 110 and
+   131), lo = hi (100-100: two cases) and B.4's move with kMirror (24
+   cases: kBudgetMaxCases), all dancepack.py's for the same bytes; the
+   longest case, a 12,000 ms idle (N 286 and 364, median 320, peak 640,
+   the median over all 364 values); and BudgetPass::run in slices (run(1)
+   and run(0) one frame a call, a move's drop on the call after its last
+   frame; slices of 2, 7, 64, 256 and 100,000 dropping what step()
+   drops; a pack cleared mid-pass done at once).
+
+#### test_dance_pack and test_beat_tracker
+
+- **test_dance_pack**, D.4 item 10 again with the real code: each kOpen
+  case opened with `OpenOptions{0, &dance::startSpots, nullptr}` (through
+  a counting wrapper: called exactly for step 2's kept moves, in order)
+  gives the full list's drops but `budget red`, in order; a BudgetPass run
+  to its end then adds the `budget red` drops, in MOVS order; dropped =
+  fullDropCount, and the digest is unchanged. Every other item stays,
+  item 4's stub hook included. (Step 3's review: the accessor check run
+  on every accepted pack also compares `Pack::steps` with `step()` on
+  every record, at caps 34 and 3, with a null out, and out of range.)
+- **test_beat_tracker** gains `test_acquisitions_count_new_grids`: 0 after
+  begin(); unchanged by reset() and by setSampleRate(); on
+  test_tempo_change_relocks' 120 → 135 track fed a hop at a time, it never
+  falls, rises by at most 1 a hop, is at least 1 when the tracker first
+  locks, and rises again after the change (the grid at 135 BPM); and every
+  hop where it rises has a valid grid. (Note, step 3's implementation: on
+  this track the tracker unlocks at 15.1 s and re-acquires at 15.5 s, so
+  that rise isn't made while locked; the unchanged tracker re-acquires
+  after an unlock on all three of test_tempo_change_relocks' tracks.
+  Step 3's review: the feedHop half prints how many new grids came while
+  locked rather than asserting one did; that is the tracker's tuning, not
+  the counter's.) The other tests don't change.
+
+#### native_asan and CI
+
+- `platformio.ini`'s `[env:native_asan]` `test_filter` gains
+  test_dance_choreo, test_drawn_character and test_dance_budget, and its
+  comment line names all five; the CI step becomes `pio test -e
+  native_asan -f test_dance_pack -f test_dance_blit -f test_dance_choreo
+  -f test_drawn_character -f test_dance_budget`. Step 3's review adds
+  `-fsanitize=float-cast-overflow` to its build_flags (D.5). Nothing else
+  in either file changes.
+- On the laptop, this command stands in (D.5's, with what step 2's
+  integration learnt: copy only what the build needs, and run with ASLR
+  off so GCC 12's ASan doesn't hang):
+
+```sh
+MSYS_NO_PATHCONV=1 docker run --rm --security-opt seccomp=unconfined -v "$(cygpath -w "$PWD")":/src:ro rust:bookworm sh -c 'mkdir /w && cp -r /src/lib /src/src /src/test /w/ && mkdir -p /w/.pio/libdeps/native && cp -r /src/.pio/libdeps/native/Unity /w/.pio/libdeps/native/ && cd /w && for t in test_dance_pack test_dance_blit test_dance_choreo test_drawn_character test_dance_budget; do g++ -std=gnu++17 -g -O1 -fno-omit-frame-pointer -fsanitize=address,undefined -fsanitize=float-cast-overflow -fno-sanitize-recover=all -DDANCE_ASAN=1 -Ilib/core -Isrc -I.pio/libdeps/native/Unity/src test/$t/$t.cpp lib/core/*.cpp .pio/libdeps/native/Unity/src/unity.c -o /tmp/$t && setarch x86_64 -R /tmp/$t || exit 1; done && echo ASAN-ALL-OK'
+```
+
+(Note, step 3's review: GCC folds `(int64_t) floor(x)` into an unchecked
+builtin at -O1, so the review also ran this command once with -O0 in
+place of -O1; both print ASAN-ALL-OK.)
+
+### E.5 beat_eval builds and scores identically
+
+The ground-truth corpus (beats.json) is gone, so `beat_eval.py run` can't
+run. What it would score is the runner's output, so step 3 compares that
+directly: the runner built from the commit step 3 starts from (HEAD while
+step 3 is uncommitted: a5a6fdd) and the one built from the working tree,
+run over the same inputs, must print the same bytes, the one timing field
+aside. Scores of equal outputs are equal.
+
+- **The base sources** are `git archive HEAD lib/core tools/beat_eval
+  test/test_beat_tracker`, unpacked into the scratch folder: the files
+  `git show HEAD:<path>` gives, every header the runner includes among
+  them.
+- **The builds** are beat_eval.py's `cmd_build` command on Windows, once
+  per root. Both must succeed, and the new log may hold no warning the
+  base log lacks (their paths aside).
+- **The cases** are what `beat_eval.py run` would run, from the cached
+  inputs (read only): its corpus suite (every `pcm/NN.s16`), the same with
+  `--via-hops`, its mid suite (`--start 60 --seconds 60` on each file of
+  at least 120 s), its joins suite (every `joins/*.s16`, `--lead-in 0`)
+  and its clicks suite (CLICK_CASES and DRUM_CASES). With the cache as it
+  stands that is 352 cases: 77, 77, 74, 71 and 53. The list is read from
+  beat_eval.py itself, imported with a stub numpy (numpy is used only to
+  decode). `--bench` and `--time-only` print only timings and are left
+  out.
+- **The comparison:** every run exits 0, and each pair of outputs is equal
+  byte for byte once the `end` line's ` ns_per_audio_s=<n>` (the timed
+  second pass) is deleted.
+- **test_beat_tracker:** `pio test -e native -f test_beat_tracker`
+  passes, and `git diff HEAD -- test/test_beat_tracker` adds E.4's test
+  and changes no other line.
+
+From Git Bash at the worktree's root (S is this session's scratch
+`step3` folder; W the cached beat_eval work folder):
+
+```sh
+S=C:/Users/paul/AppData/Local/Temp/claude/C--Users-paul-Documents-code-mstream-mp3-player--claude-worktrees-strange-roentgen-d6cb19/b66d988e-630b-443d-b111-58861852acd0/scratchpad/step3
+W=C:/Users/paul/AppData/Local/Temp/claude/C--Users-paul-Documents-code-mstream-mp3-player--claude-worktrees-funny-almeida-627da3/d55d7b19-2e5c-414d-9df1-f7ee14d47a08/scratchpad/beat_eval
+rm -rf "$S/base" "$S/beat_eval" && mkdir -p "$S/base" "$S/beat_eval/base" "$S/beat_eval/new"
+git archive HEAD lib/core tools/beat_eval test/test_beat_tracker | tar -x -C "$S/base"
+for side in base new; do
+  root=.; [ $side = base ] && root="$S/base"
+  g++ -static -std=gnu++17 -O2 -Wall -Wextra -I "$root/lib/core" -I "$root/test/test_beat_tracker" \
+    "$root/tools/beat_eval/runner.cpp" "$root/lib/core/BeatTracker.cpp" "$root/lib/core/HopFrontEnd.cpp" \
+    "$root/lib/core/ClickGen.cpp" "$root/lib/core/DancePose.cpp" -o "$S/beat_eval/runner_$side.exe" \
+    2> "$S/beat_eval/build_$side.txt" || echo "BUILD FAILED: $side"
+done
+python - "$W" <<'EOF' | tr -d '\r' > "$S/beat_eval/cases.txt"
+import os, sys, types
+sys.modules["numpy"] = types.ModuleType("numpy")   # beat_eval.py needs numpy only to decode
+sys.path.insert(0, "tools/beat_eval")
+import beat_eval as be
+w = sys.argv[1]
+for f in sorted(os.listdir(f"{w}/pcm")):
+    if f.endswith(".s16"):
+        p, t = f"{w}/pcm/{f}", f[:-4]
+        print(f"corpus_{t}", "--pcm", p)
+        print(f"hops_{t}", "--pcm", p, "--via-hops")
+        if os.path.getsize(p) // 2 >= (be.MID_START_S + be.MID_SECONDS) * be.RATE:
+            print(f"mid_{t}", "--pcm", p, "--start", str(be.MID_START_S), "--seconds", str(be.MID_SECONDS))
+for f in sorted(os.listdir(f"{w}/joins")):
+    if f.endswith(".s16"):
+        print(f"join_{f[:-4]}", "--pcm", f"{w}/joins/{f}", "--lead-in", "0")
+for name, spec, extra, _ in be.CLICK_CASES + be.DRUM_CASES:
+    print(f"click_{name}", "--synth", spec, *extra)
+EOF
+while read -r name args; do
+  for side in base new; do
+    "$S/beat_eval/runner_$side.exe" $args > "$S/beat_eval/$side/$name.txt" || echo "RUN FAILED: $side $name"
+  done
+done < "$S/beat_eval/cases.txt"
+n=0; bad=0
+for f in "$S/beat_eval/base/"*.txt; do
+  n=$((n + 1))
+  cmp -s <(sed -E 's/ ns_per_audio_s=[0-9]+$//' "$f") \
+         <(sed -E 's/ ns_per_audio_s=[0-9]+$//' "$S/beat_eval/new/${f##*/}") || { bad=$((bad + 1)); echo "DIFFERS: ${f##*/}"; }
+done
+echo "$n cases, $bad different"
+```
+
+It passes with no `FAILED` line and `352 cases, 0 different`. (Note,
+step 3's implementation: the `tr -d '\r'` is needed on Windows, where
+Python prints CRLF, and the `\r` left on each line's last argument made
+every corpus and hops run fail on both sides, 154 of the 352, which an
+empty output then compared equal.)
+
+### E.6 Step 3 is accepted when
+
+- every native suite passes (`pio test -e native` from Git Bash, Unity
+  from .pio/libdeps/native, no download), the three new ones included;
+- E.4's Docker command prints ASAN-ALL-OK for the five dance suites;
+- the shared vectors agree with Python: EligibilityVectors
+  (test_dance_choreo), BudgetVectors' cases, budgets and traces
+  (test_dance_budget, test_drawn_character), and ReaderVectors in full, its
+  full lists
+  included, through the real hook and pass (test_dance_pack);
+  `python -m unittest discover -s tools -p "test_dancepack.py"` and
+  `python tools/dancepack.py --check` pass unchanged;
+- E.5 finds every case equal;
+- `pio run -e core2` (PowerShell, MSYSTEM removed) builds, with IRAM
+  unchanged and flash and DRAM within a few bytes of step 2's (the
+  tracker's counter and its increment: nothing else links).
