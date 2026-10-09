@@ -6,6 +6,7 @@
 
 #include "BitSet.h"
 #include "LibraryIndex.h"
+#include "LibraryText.h"
 #include "OutputModel.h"
 #include "PlaybackController.h"
 #include "SeekBar.h"
@@ -200,6 +201,7 @@ private:
   struct Drawn {
     bool valid = false;
     uint32_t track = 0xFFFFFFFFu;
+    uint32_t names = 0;  // TrackCatalog::namesVersion()
     PlayState play = PlayState::Stopped;
     uint32_t second = 0xFFFFFFFFu;
     uint32_t durationS = 0;
@@ -277,6 +279,9 @@ public:
   void describe(char* buf, size_t size) const override;
   // The segment the root shows (for a jump from Now Playing that keeps it).
   LibrarySegment segmentShown() const { return segment(); }
+  // The page's own tracks (an album's, an artist's, a folder's files): the
+  // scan reads what the listener looks at first (METADATA.md 3.3.3).
+  LibraryIndex::Span shownTracks() const { return real() ? pageTracks() : LibraryIndex::Span{}; }
 
   // ListView::Source
   uint32_t rows() override;
@@ -288,6 +293,7 @@ public:
   ListView::Tap onTap(uint32_t row) override;
   bool holds(uint32_t row) override;
   void onHold(uint32_t row) override;
+  bool pressable(uint32_t row) override;
   bool alphabetical() override;
   char railKey(uint32_t row) override;
   uint32_t railRows() override;
@@ -299,11 +305,12 @@ public:
   void onEmptyAction(int i) override;
 
 private:
-  enum class RowKind : uint8_t { None, Artist, Album, AllTracks, Track, Folder, File };
+  // Disc: an album's "Disc 2" divider (5.4), not a control.
+  enum class RowKind : uint8_t { None, Artist, Album, AllTracks, Track, Folder, File, Disc };
   struct RowRef {
     RowKind kind = RowKind::None;
-    uint32_t id = 0;     // the artist, album, folder or track
-    uint32_t index = 0;  // a track's or a file's place in pageTracks()
+    uint32_t id = 0;     // the artist, album, folder or track; a divider's disc
+    uint32_t index = 0;  // a track's or a file's place in pageTracks() (a divider: the next track's)
   };
 
   const LibraryIndex* index() const;
@@ -333,6 +340,7 @@ private:
   void switchSegment(LibrarySegment s);
   bool crumb() const;
   const char* rowName(uint32_t row) const;
+  size_t titleOf(uint32_t track, char* buf, size_t size) const;
 
   PageKind kind_ = PageKind::Library;
   uint32_t id_ = 0;
@@ -351,6 +359,8 @@ private:
   int playDepth_ = 0;
   // A long press's row, for its sheet.
   RowRef held_;
+  // The Album page's disc dividers (read at enter()).
+  librarytext::Discs discs_;
 };
 
 // ---- Queue (spec §6.4, mockups 16-18, with the review's grafts and the
@@ -415,7 +425,8 @@ public:
   bool tinted(uint32_t row) override;
   bool emptyState(EmptyState& e) override;
   void onEmptyAction(int i) override;
-  const char* emptyText() override { return "The queue is empty"; }
+  // (Behind the library update's fence the queue is the build's: its line.)
+  const char* emptyText() override;
 
 private:
   enum class Ask : uint8_t { None, ClearSheet, ClearConfirm };
@@ -425,6 +436,9 @@ private:
   void selectAll();
   void clearUpNext();
   void clearQueue();
+  // Behind the library update's fence: selection mode ends and the note
+  // says to wait (true: the edit doesn't happen).
+  bool fenced();
   void jump();  // the title's tap: the playing track, the top, the end, in turn
   Header header() const;
   uint32_t headerSig() const;
@@ -545,7 +559,7 @@ public:
 
 private:
   // What the dialog or sheet up is asking.
-  enum class Ask : uint8_t { None, Pair, More, Forget, CpuRestart, Touch, RemoveCal };
+  enum class Ask : uint8_t { None, Pair, More, Forget, CpuRestart, Touch, RemoveCal, Rescan };
   enum RootRow : uint8_t {
     BtTop,
     BtButtons,
@@ -559,6 +573,7 @@ private:
     CpuSpeed,
     BtPower,
     Calibrate,
+    LibraryRow,
     AboutRow,
     kRootRows
   };
@@ -593,6 +608,11 @@ private:
   // A tap on "Touch calibration": its sheet (Calibrate, Test taps,
   // and Remove while a table is saved).
   void onTouch();
+  // The Library row (docs/METADATA.md 3.3.6): its count, where the names
+  // come from, the Rescan tags pill; a tap asks first (the dialog).
+  void drawLibraryRow(ListView::Row& r);
+  void onRescan();
+  static uint32_t librarySig(const AppState& s);
   static uint32_t screenSig(const AppState& s);
   void drawDevice(ListView::Row& r, const BtDevice& d);
   void drawPairStatus(ListView::Row& r);
@@ -617,6 +637,7 @@ private:
   bool drawnHaptics_ = false;
   bool drawnCalibrated_ = false;
   uint32_t drawnScreen_ = 0xFFFFFFFFu;  // the screen, idle and power settings drawn (screenSig())
+  uint32_t drawnLibrary_ = 0xFFFFFFFFu;  // the Library row drawn (librarySig())
   uint32_t nextSpinMs_ = 0;
   uint8_t spin_ = 0;  // the spinner's step (8 a turn)
   // Pair: the scan's list as last copied, and the device picked.

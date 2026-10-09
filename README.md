@@ -38,9 +38,18 @@ stops there (on battery it powers off after a minute).
   the disk you pick is the card (by its size) before you erase.
 - Put the music under **`/music`**, e.g. `/music/Artist/Album/01 - Title.mp3`.
   An album's cover is the `cover.jpg` (or `folder.jpg`) next to its tracks.
-- The player doesn't read tags yet: the artist and the album are the two
-  folders, and the number and the title come from the file name. These
-  names all work:
+- The player reads the files' tags (ID3, FLAC and Opus comments) in the
+  background after it starts: on a card filled by hand, the first start
+  lists the tracks by their folders and file names at once, then reads
+  every file's tags (a few minutes for 20,000 files, while it plays, on
+  battery too), and the Library shows the tags' names once it's done
+  ("Reading tags 1,234 / 19,410", then "Library updated"). Files copied
+  later are found at the next start and read the same way; a card filled
+  by the transfer software comes with its tags read already
+  ([docs/METADATA.md](docs/METADATA.md)). The artists and the albums are
+  still the two folders (an album shows its tags' name, year and artist);
+  where a file has no tags, or until they are read, the number and the
+  title come from the file name. These names all work:
   - `01 - Title`, `01. Title`, `01 Title`, `01_Title`, `(01) Title`: track 1.
   - `1-01 Title`, `2-03 - Title`, `2.03 Title`, `203 Title`: disc 2, track
     3, so an album plays disc after disc. Only in a folder where every file
@@ -214,9 +223,9 @@ still change). `tools/version.py` names every build from git
 |---|---|
 | From the tag | `v0.5.0` |
 | 3 commits past it, with uncommitted changes | `v0.5.0-3-gabc1234-dirty` |
-| No `v*` tag reachable (before the first release, or a clone without its tags: `git fetch --tags`) | `v0.7.0-dev+abc1234` (`-dirty` too) |
+| No `v*` tag reachable (before the first release, or a clone without its tags: `git fetch --tags`) | `v0.8.0-dev+abc1234` (`-dirty` too) |
 
-The `0.7.0` in the last one is `NEXT_RELEASE`, at the top of
+The `0.8.0` in the last one is `NEXT_RELEASE`, at the top of
 `tools/version.py`: the one place the next version is written. The date a
 build shows is its commit's, not the day it was built.
 
@@ -389,7 +398,14 @@ pages do:
 - **Library**: three lists at the top: **Artists**, **Albums** (with their
   covers) and **Folders** (the card's folders; only audio files are listed,
   the others counted: "14 audio files, 1 other"). An artist opens its
-  albums and "All tracks"; an album or a folder its tracks. Play / Play
+  albums and "All tracks"; an album or a folder its tracks. An album of
+  more than one disc (tags, or `1-01`, `2-01` names) has a "Disc 1", "Disc
+  2" row before each disc's first track. With the tags read
+  (docs/METADATA.md), the lists show their names: an album's tag name, year
+  and artist, an artist's albums newest first, a guest artist under its
+  track. While the player checks the card or reads tags, a line at the
+  bottom of the Library says so ("Checking the card…", "Reading tags 1,234
+  / 19,410", "Updating library…"). Play / Play
   next / + Queue sit at the top of each (at the Folders' top: "Play all N"
   and + Queue), and under a track once you tap it (Play on a track plays its
   album or folder from there); a long press on any row offers the same
@@ -469,16 +485,19 @@ as it decodes ([docs/RESAMPLER.md](docs/RESAMPLER.md)). 88.2 and 96 kHz
 files are skipped for now ("96 kHz isn't supported"): they are turned on
 once measured on the device, and will then need the 240 MHz CPU speed
 (Output > CPU speed). Anything else (176.4/192 kHz, odd rates) is skipped
-with a note that names the rate. The files are indexed at boot; the index is cached
-in `/.player` on the card and rebuilt when anything under `/music` changes
-(and once after an update that changes what the index records: 0.6.0's
-cache knew no Opus, nor the discs and artists in file names).
+with a note that names the rate. The index of the files is kept in
+`/.player` on the card and loaded as it is at boot; a few seconds after,
+the player checks the card in the background, and what was added, changed
+or removed on a computer shows once it has (new files with their file
+names, then their tags once read; built again once after an update that
+changes what the index records).
 An album's cover is the `cover.jpg` in its folder (else `folder.jpg`,
-`front.jpg`, or the largest `.jpg` there). It is made into thumbnails the
-first time it shows, which are kept in `/.player/thumbs` (delete that folder
-to have them made again, after replacing a cover under the same name). A
-progressive JPEG can't be decoded on the Core2: its album shows a note
-instead.
+`front.jpg`, or the largest `.jpg` there), or, on a card the transfer
+software filled, the thumbnail it made (a cover you add to the album's
+folder still wins). It is made into thumbnails the first time it shows,
+which are kept in `/.player/thumbs` (delete that folder to have them made
+again, after replacing a cover under the same name). A progressive JPEG
+can't be decoded on the Core2: its album shows a note instead.
 
 **Opus**: `.opus` files (Ogg Opus, [RFC 7845](https://www.rfc-editor.org/rfc/rfc7845):
 what mStream's `/transcode` makes and what yt-dlp downloads) play like any
@@ -495,9 +514,8 @@ them back in internal RAM for about 3 points less); it plays at the
 where list scrolling is slower, as with a 48 kHz MP3. Tracks are sample
 exact from the file alone (the pre-skip and the end trim), so a gapless
 album transcoded by mStream joins without a gap, and an Opus track joins
-an MP3 or FLAC the way a 48 kHz track does. The track's artist, album and
-title come from its folder and file name, as for the other formats (the
-tags inside the file aren't read; the cover is the folder's `cover.jpg`).
+an MP3 or FLAC the way a 48 kHz track does. Its tags (OpusTags) are read
+as the other formats' are; the cover is the folder's `cover.jpg`.
 Not played, each skipped with a note on Now Playing ("Skipped <title>:
 ...") and the full reason in the serial log: surround files (more than two
 channels: "surround Opus isn't supported"; the log adds the channel
@@ -522,7 +540,8 @@ the Vectis Opus patent pool (Dolby, Fraunhofer, NTT) assert patents against
 makers of hardware that decodes Opus. If you sell devices with this
 firmware installed, that may concern you.
 
-The first time, the queue is the whole library (artist, album, track order).
+The first time, the queue is the whole library (artist, album, track order;
+on a card of more than 5,000 tracks, its first 5,000).
 The built-in test tones and click tracks (60 s at 90-174 BPM, for the beat
 tracker) stay out of it; the console's `qb` queues them. The queue and its position are saved on the card:
 after a restart it's where it was, stopped. A pause, or a seek while
@@ -535,6 +554,22 @@ while playing starts the track from its beginning:
 nothing is written while it plays.) The Library and Queue tabs edit
 it, and so do the console's `q` commands (play an album, play it next, add
 it, remove, clear, undo).
+**The queue holds up to 5,000 tracks.** Play all, an artist's or a big
+folder's Play, and Shuffle all on more than that take 5,000 of them: the
+first 5,000 in order, or with shuffle on a random 5,000 (each Shuffle all
+another), and the message says so. Play next and + Queue on a full queue
+make room by pushing out tracks that already played (those before the
+track that plays that were played, oldest first; never one skipped over,
+left before a track you started from, or sorted in front by turning
+shuffle off; the message says how many, and its Undo puts them back
+where they were); they add as many as fit and say how many, and are
+refused ("No played track can make way: the queue holds 5,000 tracks")
+while no played track is before the one that plays (right after a Play
+all, or once those have all gone). After a restart every track before
+the one that plays counts as played. With Repeat All on, what is pushed
+out no longer comes round again. Undo works whatever the size. A
+longer queue saved by an older firmware comes back as its 5,000 around
+the track it was on.
 **Shuffle and repeat** are kept across a restart too. Shuffle on shuffles
 what's up next (the track that plays plays on, and the Queue tab shows the
 order that plays); off puts the queue's own order back. While it's on, an
@@ -653,7 +688,9 @@ optional argument and Enter:
 |---|---|
 | `u` (`u0`-`u3`, `us`, `uh<ms>`, `ut<ms>`) | input lab: button and glass-touch logging, tab target practice, button practice, haptic ticks, percentile summary |
 | `w` (`w0`-`w3`, `wv` `wf` `wh` `wc` `wd` `wk` `wg` `wm` `wp` `ws`) | scroll lab: a flick-scrolled library list, interactive or a 60 s stress while audio plays (hardware scroll and 30 fps by default) |
-| `g` (`g0`, `g<n>`) | library index: report, rebuild from the card (the queue follows by path), or a synthetic library of n tracks for the labs (the player keeps the real one) |
+| `g` (`g0`, `g<n>`) | library index: report (and where its names came from: tags or paths), `g0` walk the card and update the library (the queue follows by path; on a card the walk and the update run in the background), or a synthetic library of n tracks for the labs (the player keeps the real one) |
+| `gs` (`gs0`), `gt</music/...>`, `gr` (`gr!`, `gw`, `gb`, `gb!`, `gv`) | the tags ([docs/METADATA.md](docs/METADATA.md) 3.3.6): `gs` the scan's status (the card worker: what it waited for, each job's steps, its stack; the device's records in `/.player/tags.bin` by status, its journals, the transfer's root and tags file, an unfinished transfer; the sector cache), `gs0` starts its waits, steps, stack and RAM figures again; `gt` one file: its tags read now, its records in both files, which one a build takes, and the names the library has for it; `gr` Rescan tags (`gr!` the transfer's files too, a diagnostic), `gw` walk the card now, `gb` build the library now (`gb!` defer it to the next boot, as a short memory would), `gv` check the transfer's files' fingerprints; `g?` lists them |
+| `gc` (`gc0`, `gc1`, `gc2`), `gl` (`glw`) | the card ([docs/METADATA.md](docs/METADATA.md) 6.3.1): `gc` the PSRAM sector cache's counts (hits, misses, the card's reads and their time), `gc0` off and `gc1` on (until restart, for A/B measurements), `gc2` on with every hit checked against the card (each prints the counts so far, then starts them again); `gl` the card's bench (its time per sector, the opens of a file under `/music`'s 1st, 353rd and 703rd entries with and without the cache), `glw` also the walks of `/music` (minutes on a big card; stop the music first) |
 | `e` (`e1`-`e5`) | font probe: list rows in FreeSans (folded) and the UI's VLW font, timed (efont only in a build with `-DUI_SPIKE_EFONT=1`) |
 | `j` (`j<n>`, `jw<n>`, `ja`) | thumbnail probe: cover.jpg to 40x40 / 80x80, decoder RAM, PSRAM and .565 caches |
 
@@ -668,10 +705,11 @@ partitions.csv        Two 6 MB OTA app slots, NVS above anything a single-file
 lib/core/             Portable logic, framework-agnostic (also compiled for native)
   PlaybackController  Transport over the queue; repeat Off / All / One;
                       skips tracks that fail
-  QueueModel          The play queue: track ids in PSRAM, current position,
-                      stable keys, one level of undo, shuffle (each entry's
-                      rank in the queue's own order)
-  Shuffle             The shuffle's Fisher-Yates loop (QueueModel's)
+  QueueModel          The play queue: track ids in PSRAM (at most 5,000),
+                      current position, stable keys, one level of undo,
+                      shuffle (each entry's rank in the queue's own order)
+  Shuffle             The shuffle's Fisher-Yates loop and the random pick
+                      of 5,000 past the queue's cap (QueueModel's)
   QueueText           The queue saved as paths (survives a library rebuild;
                       version 2: a shuffled queue, with its ranks)
   TrackCatalog        Track ids to paths and names: the index's tracks and
@@ -773,19 +811,43 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       build's name only; never by signal but for console Bs)
   CardFormat          What a card that didn't mount is (exFAT, NTFS, GPT),
                       from its first sectors
+  CardContract, CardContainer, CardTags, CardManifest, CardAutoDj
+                      The card contract with the transfer software
+                      (docs/METADATA.md part 2): its files' readers and
+                      writers, CRC-32, the path hash, the fingerprint
+  LibraryIndex, LibraryBuilder, LibraryBoot
+                      The library index (library.idx v6), its build from
+                      the tag records, the boot's decision
+  CardWalk, TagStore, TagStoreWalk, TagScan, TagRules, CardRoot, CardJobs
+                      The card's check, the device's tag records and their
+                      journals, the tag reader, the transfer's root, the
+                      card worker's jobs (a step at a time)
+  ScanScheduler, SectorCache, CachedDrive, SdBusy
+                      When the card worker works (it yields to the music
+                      and the listener); the PSRAM sector cache under FatFs,
+                      the diskio wrapper's rules (a refused write written
+                      again, the card's identity: a card swapped while on
+                      is write-protected), the SD driver's busy waits
   NvsLayout           The NVS schema number's boot step; the resume point's
                       versioned blob; the repeat mode's key
   hal/                IAudioBackend, IStorage
+lib/SD/               The Arduino core's SD library (Apache-2.0), with
+                      sd_diskio.cpp patched to wait out the card's busy
+                      after a write (lib/SD/README.md); it replaces the
+                      framework's in the build
 src/                  Core2 firmware
   audio/              Core2AudioBackend (decode task), RingOutput, BtSink, SpeakerSink
-  storage/            LocalStorage: SD card if present, else LittleFS; FileStream
+  storage/            LocalStorage: SD card if present, else LittleFS; FileStream;
+                      CardFat (FatFs itself: the walk's lister, the records'
+                      files), SectorDisk (the sector cache under the card,
+                      and its guard against a card swapped while on)
   ui/                 Ui (the one owner of the display: navigation, tab bar,
                       overlays, pages), TabBar, ListView (lists on the
                       hardware scroll), Overlays (toast, HUD, sheet, volume
                       sheet, jump grid, dialog, coach cards), EmptyState,
                       the pages (NowPlaying, Library, Queue, Dance, Output
-                      with Pair and About), Thumbs (album covers:
-                      a worker task decodes them below the loop),
+                      with Pair and About), Thumbs (album covers: the
+                      card worker decodes them below the loop),
                       Fonts + VlwFonts (DejaVu, anti-aliased), Icons +
                       IconData, Gfx (pushes through the scroll and the
                       bus lock), Theme; Input (the one input layer: corrected
@@ -794,7 +856,10 @@ src/                  Core2 firmware
                       BootScreen (the boot diagnostics); DanceView;
                       ListScroller (hardware scroll); LcdLock (times how long
                       the LCD holds the SPI bus)
-  app/                Library (the index at boot: cache or build), QueueStore
+  app/                Library (the index at boot: load, build from the
+                      tag records, or walk), CardWorker + CardTasks (the
+                      card worker: covers, the walk, the tag scan, the
+                      update step), TagConsole (the g commands), QueueStore
                       (the queue on the card, its position in NVS), Psram,
                       SerialConsole, Diagnostics, DanceMode, Screenshot, Haptics,
                       PowerProbe + PowerLab (power measurement and its knobs),

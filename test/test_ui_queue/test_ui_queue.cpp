@@ -3,9 +3,10 @@
 
 // Host tests for the Queue screen's portable pieces (QueueView): the
 // "12 up next · 49 min" summary from learned track lengths, the mark on
-// what a Library add put in the queue, the failed-track ring, and when an
-// Undo toast goes because the undo went from under it (UndoWatch). (The
-// shuffle's loop moved to lib/core/Shuffle.h: test_queue.)
+// what a Library add put in the queue, the failed-track ring, when an
+// Undo toast goes because the undo went from under it (UndoWatch), and the
+// texts of the queue's cap. (The shuffle's loop moved to
+// lib/core/Shuffle.h: test_queue.)
 // Run: pio test -e native
 #include <unity.h>
 
@@ -237,8 +238,90 @@ void test_undo_watch_qu_of_any_edit() {
   TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));
 }
 
+// The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15): its
+// counts grouped by thousands, and the toast of what it cut short.
+void test_capped_texts() {
+  char b[96];
+  TEST_ASSERT_EQUAL_STRING("0", grouped(0, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("999", grouped(999, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("1,000", grouped(1000, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("19,412", grouped(19412, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("100,000", grouped(100000, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("4,294,967,295", grouped(4294967295u, b, sizeof(b)));
+  char small[4];
+  TEST_ASSERT_EQUAL_STRING("1,0", grouped(1000, small, sizeof(small)));  // cut, never past the buffer
+  TEST_ASSERT_EQUAL_STRING("Shuffling 5,000 of 19,412: the queue holds 5,000 tracks",
+                           cappedText(Capped::Shuffle, 5000, 19412, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("Playing 5,000 of 6,021: the queue holds 5,000 tracks",
+                           cappedText(Capped::Play, 5000, 6021, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("Added 37 of 300: the queue holds 5,000 tracks",
+                           cappedText(Capped::Add, 37, 300, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("10 of 12 play next: the queue holds 5,000 tracks",
+                           cappedText(Capped::Next, 10, 12, b, sizeof(b)));
+  char tiny[12];
+  TEST_ASSERT_EQUAL_STRING("Added 37 of", cappedText(Capped::Add, 37, 300, tiny, sizeof(tiny)));
+}
+
+// An add that pushed out what played to make room (docs/QUEUE-MODES.md
+// 15.8): the add's what, then how many played tracks made way; cut short by
+// the cap as well, the cap's counts in the what.
+void test_pushed_texts() {
+  char b[96];
+  TEST_ASSERT_EQUAL_STRING("Plays next: 1 played track made way", pushedText(Capped::Next, 1, 1, 1, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("Added: 3 played tracks made way", pushedText(Capped::Add, 1, 1, 3, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("Added 12 tracks: 12 played tracks made way",
+                           pushedText(Capped::Add, 12, 12, 12, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("12 tracks play next: 5 played tracks made way",
+                           pushedText(Capped::Next, 12, 12, 5, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("Added 37 of 300: 37 played tracks made way",
+                           pushedText(Capped::Add, 37, 300, 37, b, sizeof(b)));
+  TEST_ASSERT_EQUAL_STRING("4,999 of 6,021 play next: 4,999 played tracks made way",
+                           pushedText(Capped::Next, 4999, 6021, 4999, b, sizeof(b)));
+  char tiny[12];
+  TEST_ASSERT_EQUAL_STRING("Added 12 tr", pushedText(Capped::Add, 12, 12, 12, tiny, sizeof(tiny)));
+  char edge[20];  // the what fits, the line is cut, never past the buffer
+  TEST_ASSERT_EQUAL_STRING("Added 12 tracks: 12", pushedText(Capped::Add, 12, 12, 12, edge, sizeof(edge)));
+}
+
+// An add the full queue refuses changes nothing: its note keeps the Undo
+// (and the View) of the toast it covers, so the Play all that filled the
+// queue can still be undone from the screen (QUEUE-MODES.md 15.5).
+void test_a_refusal_keeps_the_last_undo() {
+  std::vector<uint32_t> all(6000);
+  for (uint32_t i = 0; i < all.size(); ++i) all[i] = i;
+  QueueModel q;
+  TEST_ASSERT_TRUE(q.replace(all.data(), static_cast<uint32_t>(all.size()), QueueModel::kAnyStart, false));
+  TEST_ASSERT_EQUAL_UINT32(0, q.room());
+  const uint32_t one = 7;
+  TEST_ASSERT_FALSE(q.insertNext(&one, 1));  // refused: nothing changes
+  TEST_ASSERT_TRUE(q.undoable() == QueueModel::Edit::Replace);
+  // Over "Playing 5,000 of 6,000" (Undo): the note keeps its Undo.
+  ToastButtons k = keptByRefusal(true, true, false, QueueModel::kNone, q.undoable());
+  TEST_ASSERT_TRUE(k.undo);
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, k.viewKey);
+  // Over an add's toast (Undo, View): both.
+  k = keptByRefusal(true, true, true, 42, q.undoable());
+  TEST_ASSERT_TRUE(k.undo);
+  TEST_ASSERT_EQUAL_UINT32(42, k.viewKey);
+  // No toast up (it went, and its undo with it), or one without buttons:
+  // a plain note.
+  k = keptByRefusal(false, true, true, 42, q.undoable());
+  TEST_ASSERT_FALSE(k.undo);
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, k.viewKey);
+  k = keptByRefusal(true, false, false, 42, q.undoable());
+  TEST_ASSERT_FALSE(k.undo);
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, k.viewKey);
+  // Nothing left to undo (undone since): no Undo.
+  TEST_ASSERT_TRUE(q.undo());
+  k = keptByRefusal(true, true, false, QueueModel::kNone, q.undoable());
+  TEST_ASSERT_FALSE(k.undo);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
+  RUN_TEST(test_capped_texts);
+  RUN_TEST(test_pushed_texts);
+  RUN_TEST(test_a_refusal_keeps_the_last_undo);
   RUN_TEST(test_durations_are_learned_per_track);
   RUN_TEST(test_up_next_time_adds_what_is_known);
   RUN_TEST(test_summary_texts);

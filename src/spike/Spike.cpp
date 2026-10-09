@@ -10,6 +10,9 @@
 #include <algorithm>
 
 #include "LibrarySynth.h"
+#include "TagText.h"
+#include "app/Psram.h"
+#include "app/TagConsole.h"
 #include "spike/FontProbe.h"
 #include "spike/InputLab.h"
 #include "spike/ScrollLab.h"
@@ -122,23 +125,34 @@ void Spike::thumbProbe(const char* arg) {
   thumb_->command(arg, storage_.available() ? &storage_.fs() : nullptr, libraryIndex());
 }
 
+TagConsole* Spike::tags() {
+  if (!tags_) tags_ = psramNew<TagConsole>(storage_, library_);
+  if (!tags_) Serial.println("[tags] no PSRAM for the tag console");
+  return tags_;
+}
+
 void Spike::index(const char* arg) {
-  if (!arg || !*arg) {
-    report();
-    return;
+  using C = tagtext::Command;
+  const tagtext::Parsed p = tagtext::parse(arg);
+  switch (p.command) {
+    case C::Report:
+      report();
+      return;
+    case C::Rebuild:
+      dropSynthetic();
+      if (scroll_) scroll_->indexChanging();
+      if (rebuild_ ? rebuild_() : library_.rebuild()) report();
+      return;
+    case C::Synthetic:
+      if (buildSynthetic(p.n)) report();
+      return;
+    case C::Bad:
+      Serial.printf("[index] %s\n", tagtext::kHelp);
+      return;
+    default:  // the tags' (gs, gt, gr, gw, gb, gv)
+      if (TagConsole* t = tags()) t->command(p);
+      return;
   }
-  const long n = atol(arg);
-  if (arg[0] == '0' && n == 0) {
-    dropSynthetic();
-    if (scroll_) scroll_->indexChanging();
-    if (rebuild_ ? rebuild_() : library_.rebuild()) report();
-    return;
-  }
-  if (n < 1 || n > 50000) {
-    Serial.println("[index] g: report; g0: rebuild from the SD card; g<n>: synthetic library of n tracks (1-50000)");
-    return;
-  }
-  if (buildSynthetic(static_cast<uint32_t>(n))) report();
 }
 
 bool Spike::buildSynthetic(uint32_t tracks) {
@@ -175,6 +189,7 @@ bool Spike::buildSynthetic(uint32_t tracks) {
 
 void Spike::report() {
   library_.report();
+  if (TagConsole* t = tags()) t->summary();  // where the names came from, and the scan
   if (!synth_ || !synth_->ready()) {
     Serial.println("[index] no synthetic library (g<n> makes one for the labs)");
     return;

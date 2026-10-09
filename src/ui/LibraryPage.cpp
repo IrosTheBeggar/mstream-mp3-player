@@ -6,10 +6,14 @@
 // Undo (and View after an add: the Queue at the added tracks). Browsing a
 // synthetic library ('uil<n>' on the console, to see the lists at the
 // scale of thousands) is look-only: its ids aren't the player's.
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
+#include "LibraryText.h"
+#include "QueueView.h"
 #include "TextFold.h"
+#include "UiText.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
@@ -38,8 +42,6 @@ NavModel::PageRef page(PageKind kind, uint32_t id) {
   p.id = id;
   return p;
 }
-
-const char* orNone(const char* name, const char* none) { return name && name[0] ? name : none; }
 
 // "N folders, M audio files, K other" (the parts that aren't 0).
 void folderCounts(const LibraryIndex& i, uint32_t f, bool audioWord, char* buf, size_t size) {
@@ -119,7 +121,23 @@ LibraryPage::RowRef LibraryPage::rowAt(uint32_t row) const {
       }
       break;
     }
-    case PageKind::Album:
+    case PageKind::Album: {
+      // Its tracks, with a "Disc 2" row before each disc's first track
+      // when it has more than one (5.4).
+      const LibraryIndex::Span t = pageTracks();
+      if (row >= discs_.rows(t.count)) break;
+      const librarytext::Discs::Row d = discs_.at(row);
+      if (d.divider) {
+        r.kind = RowKind::Disc;
+        r.id = d.disc;
+        r.index = d.track;
+      } else if (d.track < t.count) {
+        r.kind = RowKind::Track;
+        r.id = t[d.track];
+        r.index = d.track;
+      }
+      break;
+    }
     case PageKind::ArtistTracks: {
       const LibraryIndex::Span t = pageTracks();
       if (row < t.count) {
@@ -161,11 +179,11 @@ bool LibraryPage::container(const RowRef& r, LibraryIndex::Span* span, const cha
         case PageKind::Artist:
         case PageKind::ArtistTracks:
           *span = i->tracksOfArtist(id_);
-          *name = orNone(i->artistName(id_), "(no artist folder)");
+          *name = librarytext::artistShown(*i, id_);
           return true;
         case PageKind::Album:
           *span = i->tracksOfAlbum(id_);
-          *name = orNone(i->albumName(id_), "(loose tracks)");
+          *name = librarytext::albumShown(*i, id_);
           return true;
         case PageKind::Folder:
           *span = i->treeTracks(id_);
@@ -182,11 +200,11 @@ bool LibraryPage::container(const RowRef& r, LibraryIndex::Span* span, const cha
     case RowKind::Artist:
     case RowKind::AllTracks:
       *span = i->tracksOfArtist(r.id);
-      *name = orNone(i->artistName(r.id), "(no artist folder)");
+      *name = librarytext::artistShown(*i, r.id);
       return true;
     case RowKind::Album:
       *span = i->tracksOfAlbum(r.id);
-      *name = orNone(i->albumName(r.id), "(loose tracks)");
+      *name = librarytext::albumShown(*i, r.id);
       return true;
     case RowKind::Folder:
       *span = i->treeTracks(r.id);
@@ -195,6 +213,21 @@ bool LibraryPage::container(const RowRef& r, LibraryIndex::Span* span, const cha
     default:
       return false;
   }
+}
+
+// A track's title: the catalog's for the card's library (its tag's, or the
+// playing track's fresher tags: TrackCatalog's overlay), the synthetic
+// index's own otherwise. Cut to `size` at a character boundary.
+size_t LibraryPage::titleOf(uint32_t track, char* buf, size_t size) const {
+  if (size == 0) return 0;
+  buf[0] = 0;
+  if (real()) return ui_.player().catalog().title(track, buf, size);
+  const LibraryIndex* i = index();
+  if (!i || track >= i->trackCount()) return 0;
+  uint8_t len = 0;
+  const char* t = i->trackTitle(track, &len);
+  const int n = snprintf(buf, size, "%.*s", static_cast<int>(len), t);
+  return n < 0 ? 0 : static_cast<size_t>(n) < size ? static_cast<size_t>(n) : size - 1;
 }
 
 // ---- what plays now ----
@@ -252,6 +285,8 @@ void LibraryPage::enter(NavModel::PageRef& ref) {
   touchInList_ = false;
   headerPressed_ = 0;
   drawnTrack_ = ui_.state().trackId;
+  discs_.clear();
+  if (kind_ == PageKind::Album && index()) discs_.set(*index(), id_);
   notePlaying();
   if (root() && segment() == LibrarySegment::Folders && index()) {
     snprintf(playAll_, sizeof(playAll_), "Play all %lu",
@@ -348,24 +383,17 @@ Header LibraryPage::header() const {
   const LibraryIndex* i = index();
   switch (kind_) {
     case PageKind::Artist:
-      h.title = i ? orNone(i->artistName(id_), "(no artist folder)") : "Artist";
-      if (i) {
-        const LibraryIndex::Artist& a = i->artist(id_);
-        snprintf(sub, subSize, "%lu album%s, %lu tracks", static_cast<unsigned long>(a.albumCount),
-                 a.albumCount == 1 ? "" : "s", static_cast<unsigned long>(a.trackCount));
-      }
+      h.title = i ? librarytext::artistShown(*i, id_) : "Artist";
+      if (i) librarytext::artistCounts(*i, id_, sub, subSize);
       break;
     case PageKind::Album:
-      h.title = i ? orNone(i->albumName(id_), "(loose tracks)") : "Album";
-      if (i) {
-        const LibraryIndex::Album& a = i->album(id_);
-        snprintf(sub, subSize, "%s, %lu tracks", orNone(i->artistName(a.artist), "no artist"),
-                 static_cast<unsigned long>(a.trackCount));
-      }
+      // Its name, then "Artist · 2001 · 14 tracks" (the elected line and year).
+      h.title = i ? librarytext::albumShown(*i, id_) : "Album";
+      if (i) librarytext::albumHeader(*i, id_, sub, subSize);
       break;
     case PageKind::ArtistTracks:
       h.title = "All tracks";
-      if (i) snprintf(sub, subSize, "%s", orNone(i->artistName(id_), "(no artist folder)"));
+      if (i) snprintf(sub, subSize, "%s", librarytext::artistShown(*i, id_));
       break;
     case PageKind::Folder:
       h.title = i ? i->folderName(id_) : "Folder";
@@ -482,7 +510,7 @@ uint32_t LibraryPage::rows() {
         }
       }
     case PageKind::Artist: return i->albumsOf(id_).count + 1;
-    case PageKind::Album:
+    case PageKind::Album: return discs_.rows(pageTracks().count);
     case PageKind::ArtistTracks: return pageTracks().count;
     case PageKind::Folder: return i->subfolders(id_).count + i->filesIn(id_).count;
     default: return 0;
@@ -521,15 +549,17 @@ const char* LibraryPage::rowName(uint32_t row) const {
   }
 }
 
-// The artists and albums sort past a leading "The" (textfold::sortName():
-// "The Lantern Choir" under L), so their rail and jump grid go by that; the
+// The artists and albums sort by their sort keys (a sort tag, else the
+// name) past a leading "The" (textfold::sortName(): "The Lantern Choir"
+// under L, "Daniel Bowery" tagged "Bowery, Daniel" under B), so their rail, their
+// rows' letters and the jump grid go by that, as the index's buckets do; the
 // folders sort by their names as they are.
 const char* LibraryPage::railName(uint32_t row) {
   const LibraryIndex* i = index();
   if (!i) return "";
   const RowRef r = rowAt(row);
-  if (r.kind == RowKind::Artist) return textfold::sortName(i->artistName(r.id));
-  if (r.kind == RowKind::Album) return textfold::sortName(i->albumName(r.id));
+  if (r.kind == RowKind::Artist) return librarytext::railName(*i, LibraryIndex::View::Artists, r.id);
+  if (r.kind == RowKind::Album) return librarytext::railName(*i, LibraryIndex::View::Albums, r.id);
   return rowName(row);
 }
 
@@ -544,6 +574,7 @@ const char* LibraryPage::jumpTitle() {
 bool LibraryPage::tinted(uint32_t row) { return playing(rowAt(row)); }
 
 const char* LibraryPage::emptyText() {
+  if (real() && ui_.state().libraryFenced) return uitext::kUpdatingList;  // (the status line says it too)
   const LibraryIndex* i = const_cast<Ui&>(ui_).browseIndex();
   if (!i || !i->ready()) return "No music found: put folders in /music";
   return folderList() ? "No audio files here" : "Nothing here";
@@ -554,6 +585,7 @@ const char* LibraryPage::emptyText() {
 bool LibraryPage::emptyState(EmptyState& e) {
   if (!root() || !real()) return false;
   const AppState& s = ui_.state();
+  if (s.libraryFenced) return false;  // the library update's fence: emptyText()'s line, not "No music"
   if (!s.card && s.libraryTracks == 0) {
     noCardState(e, s.cardKind);
     return true;
@@ -561,10 +593,10 @@ bool LibraryPage::emptyState(EmptyState& e) {
   if (s.libraryTracks == 0) {
     e.icon = &icons::kFolder;
     e.iconColour = col::AMBER;
-    e.title = "No music found";
-    e.line1 = "Put folders in /music/Artist/Album/,";
-    e.line2 = "MP3, FLAC or Opus, then tap Try again.";
-    e.buttons[0] = "Try again";
+    e.title = uitext::kNoMusicTitle;
+    e.line1 = uitext::kNoMusicLines[0];
+    e.line2 = uitext::kNoMusicLines[1];
+    e.buttons[0] = uitext::kTryAgain;
     return true;
   }
   return false;
@@ -588,17 +620,16 @@ void LibraryPage::drawRow(ListView::Row& r) {
   const bool now = playing(rr);
   const uint16_t titleInk = now ? accent::Library : col::TXT;
   const Font titleFont = now ? Font::Bold : Font::Body;
-  char sub[64];
+  char sub[160];
   switch (rr.kind) {
     case RowKind::Artist: {
       const char* name = i->artistName(rr.id);
-      const LibraryIndex::Artist& a = i->artist(rr.id);
       // The initial is the row's rail letter ("The Lantern Choir": L, among the L's).
-      const int x = ListView::disc(r, textfold::railKey(textfold::sortName(name)), discColour(name));
+      const int x = ListView::disc(
+          r, textfold::railKey(librarytext::railName(*i, LibraryIndex::View::Artists, rr.id)), discColour(name));
       const int right = ListView::chevron(r);
-      snprintf(sub, sizeof(sub), "%lu album%s, %lu tracks", static_cast<unsigned long>(a.albumCount),
-               a.albumCount == 1 ? "" : "s", static_cast<unsigned long>(a.trackCount));
-      const char* shown = orNone(name, "(no artist folder)");
+      librarytext::artistCounts(*i, rr.id, sub, sizeof(sub));
+      const char* shown = librarytext::artistShown(*i, rr.id);
       ListView::lines(r, x, right, shown, strlen(shown), sub, strlen(sub), titleInk, titleFont);
       break;
     }
@@ -607,13 +638,11 @@ void LibraryPage::drawRow(ListView::Row& r) {
       const uint16_t* px = real() && thumbs.hasCover(rr.id) ? thumbs.get(rr.id, ThumbCache::Size::Small) : nullptr;
       const int x = ListView::thumb(r, px);
       const int right = ListView::chevron(r);
-      const LibraryIndex::Album& al = i->album(rr.id);
-      if (root()) {
-        snprintf(sub, sizeof(sub), "%s", orNone(i->artistName(al.artist), "(no artist folder)"));
-      } else {
-        snprintf(sub, sizeof(sub), "%lu tracks", static_cast<unsigned long>(al.trackCount));
-      }
-      const char* shown = orNone(i->albumName(rr.id), "(loose tracks)");
+      // The root's A-Z: its artist line and year; an artist's (newest
+      // first): its year and its tracks.
+      librarytext::albumSub(*i, rr.id, root() ? librarytext::AlbumPlace::AZ : librarytext::AlbumPlace::OfArtist, sub,
+                            sizeof(sub));
+      const char* shown = librarytext::albumShown(*i, rr.id);
       ListView::lines(r, x, right, shown, strlen(shown), sub, strlen(sub), titleInk, titleFont);
       break;
     }
@@ -621,21 +650,31 @@ void LibraryPage::drawRow(ListView::Row& r) {
       const int right = ListView::chevron(r);
       r.c.fillRoundRect(r.x + 6, 1, 40, 40, 4, col::BTN);
       icons::drawCentred(r.c, icons::kQueue, r.x + 26, 21, accent::Library);
-      snprintf(sub, sizeof(sub), "%lu tracks, album by album", static_cast<unsigned long>(i->artist(id_).trackCount));
+      const size_t n = librarytext::trackCount(i->artist(id_).trackCount, sub, sizeof(sub));
+      snprintf(sub + n, sizeof(sub) - n, ", album by album");
       ListView::lines(r, r.x + 54, right, "All tracks", 10, sub, strlen(sub), col::TXT);
       break;
     }
     case RowKind::Track: {
-      const uint8_t number = i->track(rr.id).number;
-      const int x = now ? ListView::playing(r, accent::Library) : ListView::number(r, number ? number : r.row + 1, col::DIM);
-      uint8_t len = 0;
-      const char* title = i->trackTitle(rr.id, &len);
-      if (kind_ == PageKind::ArtistTracks) {
-        const char* album = orNone(i->albumName(i->track(rr.id).album), "(loose tracks)");
-        ListView::lines(r, x, r.right - 8, title, len, album, strlen(album), titleInk, titleFont);
-      } else {
-        ListView::lines(r, x, r.right - 8, title, len, nullptr, 0, titleInk, titleFont);
-      }
+      // Its number (its tag's, else its name's, else its place), its title,
+      // and under it its own artist where it isn't the album's line (and on
+      // an artist's All tracks, its album).
+      const uint16_t number = i->track(rr.id).number;
+      const int x =
+          now ? ListView::playing(r, accent::Library) : ListView::number(r, number ? number : rr.index + 1, col::DIM);
+      char title[160];
+      const size_t len = titleOf(rr.id, title, sizeof(title));
+      librarytext::trackSub(*i, rr.id, kind_ == PageKind::ArtistTracks, sub, sizeof(sub));
+      ListView::lines(r, x, r.right - 8, title, len, sub, strlen(sub), titleInk, titleFont);
+      break;
+    }
+    case RowKind::Disc: {
+      // "Disc 2" over a thin line: a divider, not a control (no bar, no sheet).
+      char t[24];
+      librarytext::discText(rr.id, t, sizeof(t));
+      const int x = r.x + uitext::kDiscTextX;
+      Fonts::instance().draw(r.c, Font::Bold, t, x, 25, uitext::kDiscTextW, accent::Library, r.bg);
+      r.c.fillRect(x, 39, r.right - 8 - x, 1, col::DIV);
       break;
     }
     case RowKind::Folder: {
@@ -686,16 +725,13 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
   QueueModel& q = ui_.queue();
   // A single track is called by its title.
   char what[96];
-  if (span.count == 1 || start >= 0) {
-    uint8_t len = 0;
-    const char* t = i->trackTitle(span[start >= 0 ? static_cast<uint32_t>(start) : 0], &len);
-    snprintf(what, sizeof(what), "%.*s", static_cast<int>(len), t);
-  }
-  // Where an add puts its first track (QueueModel: Play next right after
-  // the current entry, + Queue at the end): the toast's View goes there.
-  const uint32_t addedAt = action == 1 && q.current() >= 0 ? static_cast<uint32_t>(q.current()) + 1 : q.size();
+  if (span.count == 1 || start >= 0) titleOf(span[start >= 0 ? static_cast<uint32_t>(start) : 0], what, sizeof(what));
+  // An add is read off the queue after the call (queueview::addOutcome()),
+  // never worked out before it: the call first takes a gapless join the
+  // backend has heard, which moves the current entry, and what an add can
+  // push out moves with it (docs/QUEUE-MODES.md 15.8).
+  const uint32_t sizeBefore = q.size();
   bool ok = false;
-  char text[128];
   switch (action) {
     case 0:
       // A tapped track plays first; a container's Play (an artist, an
@@ -703,27 +739,58 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       // shuffled, on a random track (docs/QUEUE-MODES.md section 2.5).
       ok = p.playNow(span.ids, span.count,
                      start >= 0 ? static_cast<uint32_t>(start) : PlaybackController::kAnyStart);
+      break;
+    case 1:
+      ok = p.playNext(span.ids, span.count);
+      break;
+    default:
+      ok = p.addToQueue(span.ids, span.count);
+      break;
+  }
+  // The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15): a
+  // Play takes 5,000 of a bigger set; an add as many as fit, after pushing
+  // out what already played to make room (15.8: the heard entries before
+  // the current one, oldest first), none when the queue is full and no
+  // played track can go (refused: its own toast).
+  const queueview::AddOutcome added = action == 0 ? queueview::AddOutcome{}
+                                                  : queueview::addOutcome(q, sizeBefore, span.count, action == 1, ok);
+  const uint32_t took = action == 0 ? std::min(span.count, QueueModel::kMaxEntries) : added.took;
+  const bool full = added.refused;
+  const uint32_t pushed = added.pushed;
+  char text[128];
+  switch (action) {
+    case 0:
       if (ok) ui_.added().clear();  // a new queue: nothing "added" to show in it
       if (ok && p.state() == PlayState::Waiting) {
         // The headphones aren't connected: it plays once they are (Now
         // Playing shows the wait, and its way out).
         const char* them = ui_.state().btName[0] ? ui_.state().btName : "the headphones";
         snprintf(text, sizeof(text), "Waiting for %s: %s", them, start >= 0 ? what : name);
+      } else if (start < 0 && took < span.count) {
+        // A container past the cap: the news is what the queue took.
+        queueview::cappedText(queueview::Capped::Play, took, span.count, text, sizeof(text));
       } else {
         snprintf(text, sizeof(text), "Playing: %s", start >= 0 ? what : name);
       }
       break;
     case 1:
-      ok = p.playNext(span.ids, span.count);
-      if (span.count == 1) {
+      if (pushed > 0) {
+        // The news is what went to make room (the toast's Undo brings it back).
+        queueview::pushedText(queueview::Capped::Next, took, span.count, pushed, text, sizeof(text));
+      } else if (took < span.count) {
+        queueview::cappedText(queueview::Capped::Next, took, span.count, text, sizeof(text));
+      } else if (span.count == 1) {
         snprintf(text, sizeof(text), "Plays next: %s", what);
       } else {
         snprintf(text, sizeof(text), "Plays next: %lu tracks", static_cast<unsigned long>(span.count));
       }
       break;
     default:
-      ok = p.addToQueue(span.ids, span.count);
-      if (span.count == 1) {
+      if (pushed > 0) {
+        queueview::pushedText(queueview::Capped::Add, took, span.count, pushed, text, sizeof(text));
+      } else if (took < span.count) {
+        queueview::cappedText(queueview::Capped::Add, took, span.count, text, sizeof(text));
+      } else if (span.count == 1) {
         snprintf(text, sizeof(text), "Added: %s", what);
       } else {
         snprintf(text, sizeof(text), "Added %lu tracks", static_cast<unsigned long>(span.count));
@@ -731,10 +798,31 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       break;
   }
   static const char* const kVerbs[3] = {"play", "play next", "add"};
+  char outcome[128] = "";
+  int at = 0;
+  if (full) {
+    snprintf(outcome, sizeof(outcome), ": REFUSED, the queue is full (%lu) and no played track can make way",
+             static_cast<unsigned long>(QueueModel::kMaxEntries));
+  } else if (!ok) {
+    snprintf(outcome, sizeof(outcome), ": NO MEMORY");
+  } else if (took < span.count) {
+    at = snprintf(outcome, sizeof(outcome), ": %lu of them (the queue holds %lu)", static_cast<unsigned long>(took),
+                  static_cast<unsigned long>(QueueModel::kMaxEntries));
+  }
+  if (ok && pushed > 0 && at >= 0 && static_cast<size_t>(at) < sizeof(outcome)) {
+    snprintf(outcome + at, sizeof(outcome) - at, "%s %lu played pushed out to make room", at ? ";" : ":",
+             static_cast<unsigned long>(pushed));
+  }
   Serial.printf("[ui] library: %s %lu track%s (%s)%s\n", kVerbs[action < 0 || action > 2 ? 2 : action],
                 static_cast<unsigned long>(span.count), span.count == 1 ? "" : "s", span.count == 1 ? what : name,
-                ok ? "" : ": NO MEMORY");
-  const uint32_t viewKey = ok && action != 0 ? q.keyAt(addedAt) : QueueModel::kNone;
+                outcome);
+  if (full) {
+    // Nothing changed: the Undo (and View) the last toast offered stay on
+    // the note (docs/QUEUE-MODES.md 15.5).
+    ui_.refuse(uitext::kQueueFull);
+    return;
+  }
+  const uint32_t viewKey = ok && action != 0 ? q.keyAt(added.first) : QueueModel::kNone;
   ui_.toast(ok ? text : "Not enough memory for that", ok, viewKey);
 }
 
@@ -775,17 +863,28 @@ ListView::Tap LibraryPage::onTap(uint32_t row) {
     case RowKind::Folder: ui_.push(page(PageKind::Folder, r.id)); return ListView::Tap::Handled;
     case RowKind::Track:
     case RowKind::File: return ListView::Tap::Expand;  // its inline bar
-    default: return ListView::Tap::Handled;
+    default: return ListView::Tap::Handled;            // (a disc divider: nothing)
   }
 }
 
-// Every row holds: the same three actions in a sheet, without opening it.
-bool LibraryPage::holds(uint32_t row) { return rowAt(row).kind != RowKind::None; }
+// Every row but a disc divider holds: the same three actions in a sheet,
+// without opening it.
+bool LibraryPage::holds(uint32_t row) {
+  const RowKind k = rowAt(row).kind;
+  return k != RowKind::None && k != RowKind::Disc;
+}
+
+// A disc divider is no control (3.7): no highlight under the finger, no
+// tick, nothing on a tap or a hold.
+bool LibraryPage::pressable(uint32_t row) { return rowAt(row).kind != RowKind::Disc; }
 
 void LibraryPage::onHold(uint32_t row) {
   held_ = rowAt(row);
   const LibraryIndex* i = index();
-  if (!i || held_.kind == RowKind::None) return;
+  if (!i || held_.kind == RowKind::None || held_.kind == RowKind::Disc) {
+    held_ = RowRef{};
+    return;
+  }
   char title[96];
   LibraryIndex::Span span;
   const char* name = "";
@@ -793,9 +892,7 @@ void LibraryPage::onHold(uint32_t row) {
     snprintf(title, sizeof(title), "%s, %lu track%s", name, static_cast<unsigned long>(span.count),
              span.count == 1 ? "" : "s");
   } else {
-    uint8_t len = 0;
-    const char* t = i->trackTitle(held_.id, &len);
-    snprintf(title, sizeof(title), "%.*s", static_cast<int>(len), t);
+    titleOf(held_.id, title, sizeof(title));
   }
   ui_.openSheet(this, title, kActions, 3, nullptr, /*primary=*/0);  // Play
 }

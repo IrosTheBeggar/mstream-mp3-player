@@ -1,0 +1,122 @@
+{
+ "format": "MPDJ",
+ "file": "autodj-00000029.bin",
+ "generation": 41,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "k": 3,
+ "builtTime": 1790000000,
+ "tagsGeneration": 41,
+ "modelId": "synthetic-embedding",
+ "modelVersion": "1",
+ "metric": "cosine",
+ "license": "CC0-1.0",
+ "attribution": "synthetic fixture vectors",
+ "dim": 4,
+ "note": "Synthetic embeddings (multiples of 1/8, exact in f32 and in f64 products): a tie of three at the K boundary for the first row, a same-song pair, a recording at two paths. songKey and artistNameKey are nameKey's output (5.4), given.",
+ "rows": [
+  {
+   "hash": "0123456789abcdef0123456789abcdef",
+   "paths": [
+    "Artist/Album/01 - Title.mp3"
+   ],
+   "artist": "Lantern Choir",
+   "title": "Title",
+   "artistNameKey": "lantern choir",
+   "songKey": "lantern choir|title",
+   "bpm10": 1210,
+   "camelot": 8,
+   "embedding": [
+    0.5,
+    0.5,
+    0.5,
+    0.5
+   ]
+  },
+  {
+   "hash": "11111111111111111111111111111111",
+   "paths": [
+    "Artist/Album/02 - Other.mp3"
+   ],
+   "artist": "X",
+   "title": "A B",
+   "artistNameKey": "x",
+   "songKey": "x, y|a b",
+   "embedding": [
+    0.5,
+    0.5,
+    0.5,
+    -0.5
+   ]
+  },
+  {
+   "hash": "22222222222222222222222222222222",
+   "paths": [
+    "Café/Album/01 - Title.mp3",
+    "Café/Album/01 - Title.mp3"
+   ],
+   "artist": "Café Trio",
+   "title": "Title",
+   "artistNameKey": "café trio",
+   "songKey": "café trio|title",
+   "note": "one recording at two paths: one row",
+   "embedding": [
+    0.625,
+    0.5,
+    0.375,
+    0.25
+   ]
+  },
+  {
+   "hash": "33333333333333333333333333333333",
+   "paths": [
+    "A B/y.mp3"
+   ],
+   "artist": "Some Band, Other Band",
+   "title": "Why",
+   "artistNameKey": "some band, other band",
+   "songKey": "some band, other band|why",
+   "bpm10": 1280,
+   "camelot": 13,
+   "flags": 1,
+   "embedding": [
+    0.5,
+    -0.5,
+    0.5,
+    0.5
+   ]
+  },
+  {
+   "hash": "44444444444444444444444444444444",
+   "paths": [
+    "B/w.opus"
+   ],
+   "artist": "",
+   "title": "Double U",
+   "artistNameKey": "",
+   "songKey": "|double u",
+   "embedding": [
+    -0.5,
+    0.5,
+    0.5,
+    0.5
+   ]
+  },
+  {
+   "hash": "fedcba9876543210fedcba9876543210",
+   "paths": [
+    "Loose Intro.mp3"
+   ],
+   "artist": "Lantern Choir",
+   "title": "Title",
+   "artistNameKey": "lantern choir",
+   "songKey": "lantern choir|title",
+   "note": "the same song as the first row: never its neighbour",
+   "embedding": [
+    0.5,
+    0.5,
+    0.5,
+    0.5
+   ]
+  }
+ ]
+}

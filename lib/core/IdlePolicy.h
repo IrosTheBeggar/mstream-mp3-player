@@ -19,6 +19,13 @@
 //     charger has power to spare);
 //   - no Pair screen scan or pairing;
 //   - no queue write under way (or an edit waiting to be written);
+//   - no library write under way: the library's update step, from the
+//     queue's flush to library.idx's save, or a compaction of tags.bin
+//     (docs/METADATA.md 3.3.5). The update step gives the queue's memory to
+//     the build (QueueModel::release()), so a shutdown's flush in the middle
+//     would write the queue empty; and neither should lose seconds of work
+//     or be cut mid-rename. The sleep timer turns the power off only
+//     through this countdown, so this covers it too;
 //   - nothing else busy (a screen of its own: the calibration, a spike
 //     tool);
 //   - the setting isn't Never.
@@ -35,8 +42,9 @@
 //   Warning    the last 30 s: the UI shows "Turning off in 30 s" [Keep on]
 //              (on a lit screen; it doesn't light a dark one: it may be
 //              night). Any input, or a blocker, ends it: Counting again.
-//   Releasing  the time is up: shutdown (once) says flush the queue, save
-//              the "turned off" note, and let the headphones go (the sleep
+//   Releasing  the time is up: shutdown (once) says flush the queue (and,
+//              once there is a scan, its buffered chunk: METADATA.md 3.3.5),
+//              save the "turned off" note, and let the headphones go (the sleep
 //              timer's release: expected, no dialog). It waits until they
 //              are unlinked, at most kReleaseWaitMs, so they see a clean
 //              disconnect rather than a lost link. Input or a blocker
@@ -62,7 +70,7 @@ public:
 
   enum class Phase : uint8_t { Blocked, Counting, Warning, Releasing, Off };
   // What blocks it (the first that applies, in this order).
-  enum class Blocker : uint8_t { None, Never, Playing, Waiting, Usb, Pairing, QueueWrite, Busy };
+  enum class Blocker : uint8_t { None, Never, Playing, Waiting, Usb, Pairing, QueueWrite, LibraryWrite, Busy };
 
   struct In {
     uint32_t nowMs = 0;
@@ -71,6 +79,7 @@ public:
     bool input = false;       // any input this pass (touch, strip, PWR, headphone key, console)
     bool pairing = false;     // the Pair screen's scan, or a pairing under way
     bool queueWrite = false;  // the queue file being written, or an edit waiting to be
+    bool libraryWrite = false;  // the library's update step, or a compaction of tags.bin, under way
     bool busy = false;        // a screen of its own is up (the calibration, a spike tool)
     bool linked = false;      // the headphones are linked (Releasing waits for them to go)
   };

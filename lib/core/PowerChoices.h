@@ -66,8 +66,12 @@ inline constexpr uint32_t kRestartWaitMs = 3000;
 // A pass takes its time before the UI runs, so a restart asked during the
 // pass is stamped after it: that counts as 0 ms waited, not a wrap to ~49
 // days (which restarted at once, found on the device). millis() wrapping
-// around is fine.
-bool cpuRestartDue(uint32_t nowMs, uint32_t askedMs, bool linked, bool ampOn);
+// around is fine. `libraryWrite` (IdlePolicy's LibraryWrite: a compaction,
+// or the library update step from its fence to its save's end, which may
+// have started after the ask: the pause made its safe point): the restart
+// waits for it, however long, as the idle power-off does; a cut there
+// loses the build and leaves the old index.
+bool cpuRestartDue(uint32_t nowMs, uint32_t askedMs, bool linked, bool ampOn, bool libraryWrite = false);
 // The "Restarting at 160 MHz..." toast stays up this long: until the
 // restart, which comes at most kRestartWaitMs after it.
 inline constexpr uint32_t kRestartToastMs = kRestartWaitMs + 2000;

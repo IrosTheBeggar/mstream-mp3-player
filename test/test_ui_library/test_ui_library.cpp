@@ -18,11 +18,15 @@
 #include <string>
 #include <vector>
 
+#include "CardContract.h"
+#include "CardTags.h"
 #include "IdlePolicy.h"
 #include "JumpIndex.h"
 #include "LibraryIndex.h"
 #include "LibrarySynth.h"
+#include "LibraryText.h"
 #include "ListLayout.h"
+#include "NameKey.h"
 #include "OutputModel.h"
 #include "PowerChoices.h"
 #include "QueueView.h"
@@ -32,11 +36,15 @@
 #include "SheetLayout.h"
 #include "SleepTimer.h"
 #include "TabBarModel.h"
+#include "TagScan.h"
+#include "TagText.h"
 #include "TextFit.h"
 #include "TextFold.h"
 #include "TouchCalibration.h"
 #include "TouchCheck.h"
+#include "TrackCatalog.h"
 #include "UiText.h"
+#include "../support/TagFixtures.h"
 
 // The fonts' data, as the firmware has it (src/ui/VlwFonts.cpp: arrays only).
 #include "../../src/ui/VlwFonts.cpp"
@@ -344,6 +352,98 @@ void test_toast_names_fit() {
   fits(body, "One More Time", room);
   fits(small, "Harder, Better, Faster, Stronger", room);
   fits(small, "Plays next", room);
+}
+
+// The queue's cap (docs/QUEUE-MODES.md 15): the refusal (full, and no
+// played track to push out: 15.8) and a Play, Shuffle all or add it cut short,
+// each "what: why" on the toast's two lines (too wide for one beside its
+// buttons, as Toast::show() decides), each line in its room in Small at
+// least (Toast draws the why in Body when it fits), with the counts of a
+// library of 99,999. The refusal keeps the buttons of the toast it covers
+// (Ui::refuse()): none, Undo, or Undo and View, each room measured.
+void test_queue_cap_texts_fit() {
+  using namespace uitext;
+  using queueview::Capped;
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  {
+    const std::string s(kQueueFull);
+    const size_t colon = s.find(": ");
+    TEST_ASSERT_TRUE(colon != std::string::npos);
+    struct Kept {
+      int oneLine, room;  // Toast's textRightOf(false, ..) and (true, ..), less kToastTextX
+    } kept[] = {{kToastTextRight - kToastTextX, kToastTextRight - kToastTextX},
+                {kToastUndoX - 6 - kToastTextX, kToastUndoCX - 6 - kToastTextX},
+                {kToastViewX - 6 - kToastTextX, kToastCompactTextRight - kToastTextX}};
+    for (const Kept& k : kept) {
+      TEST_ASSERT_TRUE(body.width(kQueueFull) > k.oneLine);  // folded on two lines
+      fits(small, s.substr(0, colon).c_str(), k.room);
+      fits(small, kQueueFull + colon + 2, k.room);
+    }
+    fits(body, kQueueFull + colon + 2, kToastUndoCX - 6 - kToastTextX);  // Body with none or Undo kept
+    char msg[160];
+    snprintf(msg, sizeof(msg), "%s: what %d (Small) in %d at the least", kQueueFull,
+             small.width(s.substr(0, colon).c_str()), kept[2].room);
+    TEST_MESSAGE(msg);
+  }
+  struct Case {
+    Capped what;
+    uint32_t took, asked;
+    bool view;  // an add: View beside Undo
+  } cases[] = {{Capped::Shuffle, 5000, 99999, false},
+               {Capped::Play, 5000, 99999, false},
+               {Capped::Add, 4999, 99999, true},
+               {Capped::Next, 4999, 99999, true}};
+  for (const Case& c : cases) {
+    char t[128];
+    queueview::cappedText(c.what, c.took, c.asked, t, sizeof(t));
+    const std::string s(t);
+    const size_t colon = s.find(": ");
+    TEST_ASSERT_TRUE(colon != std::string::npos);
+    const int oneLine = (c.view ? kToastViewX : kToastUndoX) - 6 - kToastTextX;
+    const int room = c.view ? kToastCompactTextRight - kToastTextX : kToastUndoCX - 6 - kToastTextX;
+    TEST_ASSERT_TRUE(body.width(t) > oneLine);
+    fits(small, s.substr(0, colon).c_str(), room);
+    fits(small, t + colon + 2, room);
+    char msg[160];
+    snprintf(msg, sizeof(msg), "%s: what %d (Small), why %d (Body) / %d (Small) in %d", t,
+             small.width(s.substr(0, colon).c_str()), body.width(t + colon + 2), small.width(t + colon + 2), room);
+    TEST_MESSAGE(msg);
+  }
+}
+
+// An add that pushed out what played (docs/QUEUE-MODES.md 15.8): the add's
+// what over one line of how many played tracks made way, on the toast's two
+// lines beside Undo and View (as icons), each line in its room in Small at
+// least, at the most an add can push out (4,999: all but the one that
+// plays) and a library of 99,999.
+void test_push_out_texts_fit() {
+  using namespace uitext;
+  using queueview::Capped;
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  const int oneLine = kToastViewX - 6 - kToastTextX;
+  const int room = kToastCompactTextRight - kToastTextX;
+  struct Case {
+    Capped what;
+    uint32_t took, asked, pushed;
+  } cases[] = {{Capped::Next, 1, 1, 1},          {Capped::Add, 1, 1, 1},
+               {Capped::Next, 4999, 4999, 4999}, {Capped::Add, 4999, 4999, 4999},
+               {Capped::Next, 4999, 99999, 4999}, {Capped::Add, 4999, 99999, 4999}};
+  for (const Case& c : cases) {
+    char t[128];
+    queueview::pushedText(c.what, c.took, c.asked, c.pushed, t, sizeof(t));
+    const std::string s(t);
+    const size_t colon = s.find(": ");
+    TEST_ASSERT_TRUE(colon != std::string::npos);
+    TEST_ASSERT_TRUE(body.width(t) > oneLine);  // folded on two lines, the buttons as icons
+    fits(small, s.substr(0, colon).c_str(), room);
+    fits(small, t + colon + 2, room);
+    char msg[160];
+    snprintf(msg, sizeof(msg), "%s: what %d (Small), line %d (Body) / %d (Small) in %d", t,
+             small.width(s.substr(0, colon).c_str()), body.width(t + colon + 2), small.width(t + colon + 2), room);
+    TEST_MESSAGE(msg);
+  }
+  // One played track's line is Body.
+  fits(body, kPushedOne, room);
 }
 
 // The empty states' two buttons (the empty queue, Nothing playing) and line.
@@ -1069,6 +1169,882 @@ void test_right_half_neighbours_survive_the_lab_panel() {
   fits(small, "Harder, Better, Faster, Stronger", kToastCompactTextRight - kToastTextX);
 }
 
+// ---- the Library's names from the tags (docs/METADATA.md 5.4, 3.6; N9) ----
+
+namespace {
+
+// A record's view with the fields a test gives (the rest absent).
+struct View {
+  LibraryIndex::TagView v;
+  View& title(const char* s) { return set(&v.title, &v.titleLen, s); }
+  View& artist(const char* s) { return set(&v.artist, &v.artistLen, s); }
+  View& album(const char* s) { return set(&v.album, &v.albumLen, s); }
+  View& albumArtist(const char* s) { return set(&v.albumArtist, &v.albumArtistLen, s); }
+  View& artistSort(const char* s) { return set(&v.artistSort, &v.artistSortLen, s); }
+  View& albumSort(const char* s) { return set(&v.albumSort, &v.albumSortLen, s); }
+  View& year(uint16_t y) {
+    v.year = y;
+    return *this;
+  }
+  View& track(uint16_t t) {
+    v.track = t;
+    return *this;
+  }
+  View& disc(uint16_t d) {
+    v.disc = d;
+    return *this;
+  }
+  View& ms(uint32_t d) {
+    v.durationMs = d;
+    return *this;
+  }
+  View& compilation() {
+    v.compilation = 1;
+    return *this;
+  }
+  View& transfer() {
+    v.source = LibraryIndex::kFromTransfer;
+    return *this;
+  }
+  View& set(const char** p, size_t* n, const char* s) {
+    *p = s;
+    *n = strlen(s);
+    return *this;
+  }
+};
+
+// The tagged library of these tests: made-up names (no real library's).
+//   Lantern Choir/      (its tags say "The Lantern Choir")
+//     First Light/      2001, three tracks, a guest on the third
+//     Second Wind/      2010, one track
+//     Demos/            no records: named by its paths
+//     04 - Stray.mp3    the artist folder's loose track, tagged with an album
+//   Various/Summer Mix/ a compilation of two artists, 2015
+//   Orchard Hum/Archive/CD1, CD2: two discs, the tags say so
+void buildTagged(LibraryIndex& idx) {
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  auto add = [&](const char* path, const View& v) {
+    TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addRecord(path, v.v));
+  };
+  const char* lc = "The Lantern Choir";
+  add("/music/Lantern Choir/First Light/01 - Dawn.mp3",
+      View().title("Dawn").artist(lc).album("First Light").albumArtist(lc).year(2001).track(1).ms(201000));
+  add("/music/Lantern Choir/First Light/02 - Noon.mp3",
+      View().title("Noon").artist(lc).album("First Light").albumArtist(lc).year(2001).track(2).ms(1000));
+  add("/music/Lantern Choir/First Light/03 - Dusk.mp3", View()
+                                                            .title("Dusk")
+                                                            .artist("The Lantern Choir\x1FMara Quill")
+                                                            .album("First Light")
+                                                            .albumArtist(lc)
+                                                            .year(2001)
+                                                            .track(3)
+                                                            .ms(1000));
+  add("/music/Lantern Choir/Second Wind/01 - Gale.flac",
+      View().title("Gale").artist(lc).album("Second Wind").year(2010).track(1).ms(199400).transfer());
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addFile("/music/Lantern Choir/Demos/01 - Sketch.mp3"));
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added,
+                    idx.addFile("/music/Lantern Choir/Demos/02 - Sketch Two.mp3", LibraryIndex::kAddPending));
+  add("/music/Lantern Choir/04 - Stray.mp3", View().title("Stray").artist(lc).album("A Single").year(2005));
+  add("/music/Orchard Hum/Archive/CD1/01 - One.mp3", View().title("One").artist("Orchard Hum").album("Archive").disc(1).track(1));
+  add("/music/Orchard Hum/Archive/CD1/02 - Two.mp3", View().title("Two").artist("Orchard Hum").album("Archive").disc(1).track(2));
+  add("/music/Orchard Hum/Archive/CD2/01 - Three.mp3",
+      View().title("Three").artist("Orchard Hum").album("Archive").disc(2).track(1));
+  add("/music/Orchard Hum/Archive/CD2/02 - Four.mp3",
+      View().title("Four").artist("Orchard Hum").album("Archive").disc(2).track(2));
+  add("/music/Various/Summer Mix/01 - Wave.mp3",
+      View().title("Wave").artist("Ola Brenmark").album("Summer Mix").year(2015).track(1).compilation());
+  add("/music/Various/Summer Mix/02 - Tide.mp3",
+      View().title("Tide").artist("Pim Vossaert").album("Summer Mix").year(2015).track(2).compilation());
+  TEST_ASSERT_TRUE(idx.finish());
+}
+
+uint32_t artistNamed(const LibraryIndex& idx, const char* name) {
+  for (uint32_t a = 0; a < idx.artistCount(); ++a) {
+    if (strcmp(idx.artistName(a), name) == 0) return a;
+  }
+  TEST_FAIL_MESSAGE(name);
+  return LibraryIndex::kNone;
+}
+
+uint32_t albumOf(const LibraryIndex& idx, const char* path) {
+  const uint32_t t = idx.findTrack(path);
+  TEST_ASSERT_NOT_EQUAL(LibraryIndex::kNone, t);
+  return idx.track(t).album;
+}
+
+std::string text(size_t (*fn)(const LibraryIndex&, uint32_t, char*, size_t), const LibraryIndex& idx, uint32_t id) {
+  char b[160];
+  fn(idx, id, b, sizeof(b));
+  return b;
+}
+
+std::string albumSub(const LibraryIndex& idx, uint32_t album, librarytext::AlbumPlace p) {
+  char b[160];
+  librarytext::albumSub(idx, album, p, b, sizeof(b));
+  return b;
+}
+
+std::string trackSub(const LibraryIndex& idx, const char* path, bool album) {
+  char b[160];
+  librarytext::trackSub(idx, idx.findTrack(path), album, b, sizeof(b));
+  return b;
+}
+
+std::string titleOf(const TrackCatalog& c, uint32_t id) {
+  char b[260];
+  c.title(id, b, sizeof(b));
+  return b;
+}
+
+}  // namespace
+
+// An artist's page and its rows: the albums newest first with their years,
+// the elected spelling of the artist folder, the album's line, a track's
+// own artist only where it differs; the root's Albums with the line and the
+// year; an album's header.
+void test_library_rows_from_tags() {
+  using librarytext::AlbumPlace;
+  LibraryIndex idx;
+  buildTagged(idx);
+  const uint32_t lc = artistNamed(idx, "The Lantern Choir");  // the folder "Lantern Choir", elected
+  TEST_ASSERT_EQUAL_STRING("4 albums, 7 tracks", text(librarytext::artistCounts, idx, lc).c_str());
+  TEST_ASSERT_EQUAL_STRING("1 album, 4 tracks",
+                           text(librarytext::artistCounts, idx, artistNamed(idx, "Orchard Hum")).c_str());
+  // Newest first: 2010, 2001, then the ones with no year.
+  const LibraryIndex::Span albums = idx.albumsOf(lc);
+  TEST_ASSERT_EQUAL_UINT32(4, albums.count);
+  TEST_ASSERT_EQUAL_STRING("Second Wind", idx.albumName(albums[0]));
+  TEST_ASSERT_EQUAL_STRING("First Light", idx.albumName(albums[1]));
+  TEST_ASSERT_EQUAL_STRING("2010 \xC2\xB7 1 track", albumSub(idx, albums[0], AlbumPlace::OfArtist).c_str());
+  TEST_ASSERT_EQUAL_STRING("2001 \xC2\xB7 3 tracks", albumSub(idx, albums[1], AlbumPlace::OfArtist).c_str());
+  const uint32_t first = albumOf(idx, "/music/Lantern Choir/First Light/01 - Dawn.mp3");
+  const uint32_t demos = albumOf(idx, "/music/Lantern Choir/Demos/01 - Sketch.mp3");
+  const uint32_t loose = albumOf(idx, "/music/Lantern Choir/04 - Stray.mp3");
+  const uint32_t mix = albumOf(idx, "/music/Various/Summer Mix/01 - Wave.mp3");
+  TEST_ASSERT_EQUAL_STRING("2 tracks", albumSub(idx, demos, AlbumPlace::OfArtist).c_str());
+  // The loose tracks keep no name and no year, whatever their tags say.
+  TEST_ASSERT_EQUAL_STRING("1 track", albumSub(idx, loose, AlbumPlace::OfArtist).c_str());
+  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, loose));
+  // The root's Albums: the line and the year; an album with no records
+  // shows its artist's (elected) name.
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 2001", albumSub(idx, first, AlbumPlace::AZ).c_str());
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir", albumSub(idx, demos, AlbumPlace::AZ).c_str());
+  TEST_ASSERT_EQUAL_STRING("Various Artists \xC2\xB7 2015", albumSub(idx, mix, AlbumPlace::AZ).c_str());
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 2001 \xC2\xB7 3 tracks",
+                           text(librarytext::albumHeader, idx, first).c_str());
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 2 tracks", text(librarytext::albumHeader, idx, demos).c_str());
+  // The tracks: a subtitle only where the artist isn't the album's line.
+  TEST_ASSERT_EQUAL_STRING("", trackSub(idx, "/music/Lantern Choir/First Light/01 - Dawn.mp3", false).c_str());
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir, Mara Quill",
+                           trackSub(idx, "/music/Lantern Choir/First Light/03 - Dusk.mp3", false).c_str());
+  TEST_ASSERT_EQUAL_STRING("Ola Brenmark", trackSub(idx, "/music/Various/Summer Mix/01 - Wave.mp3", false).c_str());
+  TEST_ASSERT_EQUAL_STRING("", trackSub(idx, "/music/Lantern Choir/Demos/01 - Sketch.mp3", false).c_str());
+  // An artist's All tracks: the album after it.
+  TEST_ASSERT_EQUAL_STRING("First Light", trackSub(idx, "/music/Lantern Choir/First Light/01 - Dawn.mp3", true).c_str());
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir, Mara Quill \xC2\xB7 First Light",
+                           trackSub(idx, "/music/Lantern Choir/First Light/03 - Dusk.mp3", true).c_str());
+  TEST_ASSERT_EQUAL_STRING("(loose tracks)", trackSub(idx, "/music/Lantern Choir/04 - Stray.mp3", true).c_str());
+  // A text cut to its buffer: "The Lantern Choir, Mara Quill" in 9 bytes.
+  char small[9];
+  librarytext::trackSub(idx, idx.findTrack("/music/Lantern Choir/First Light/03 - Dusk.mp3"), false, small,
+                        sizeof(small));
+  TEST_ASSERT_EQUAL_STRING("The Lant", small);
+  char tiny[4];
+  librarytext::albumSub(idx, first, AlbumPlace::OfArtist, tiny, sizeof(tiny));
+  TEST_ASSERT_EQUAL_STRING("200", tiny);
+  // ... never mid-character: "\xC3\x89lan Vey" (its first letter two
+  // bytes) in 2 bytes is "", in 3 the letter whole.
+  LibraryIndex accents;
+  TEST_ASSERT_TRUE(accents.begin("/music"));
+  accents.addFile("/music/\xC3\x89lan Vey/Set/01 - a.mp3");
+  TEST_ASSERT_TRUE(accents.finish());
+  char two[2], three[3];
+  librarytext::albumSub(accents, 0, AlbumPlace::AZ, two, sizeof(two));
+  TEST_ASSERT_EQUAL_STRING("", two);
+  librarytext::albumSub(accents, 0, AlbumPlace::AZ, three, sizeof(three));
+  TEST_ASSERT_EQUAL_STRING("\xC3\x89", three);
+}
+
+// The rows keep working with no tags at all (no tags.bin, no transfer: the
+// index of paths, as before N9): the folder names, no years, no subtitles
+// on tracks; the files right under /music are the "(no artist folder)"
+// entity; a path-only album with "1-01" names still gets its dividers.
+void test_library_rows_from_paths() {
+  using librarytext::AlbumPlace;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  for (const char* p : {"/music/Glass Orchard/Morning Set/01 - Opening.mp3", "/music/Glass Orchard/Morning Set/02 - Second.mp3",
+                        "/music/Glass Orchard/Late Set/1-01 Intro.mp3", "/music/Glass Orchard/Late Set/1-02 Middle.mp3",
+                        "/music/Glass Orchard/Late Set/2-01 Outro.mp3", "/music/Glass Orchard/03 - Loose One.mp3",
+                        "/music/Top Level.mp3"}) {
+    TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addFile(p));
+  }
+  TEST_ASSERT_TRUE(idx.finish());
+  const uint32_t morning = albumOf(idx, "/music/Glass Orchard/Morning Set/01 - Opening.mp3");
+  const uint32_t late = albumOf(idx, "/music/Glass Orchard/Late Set/1-01 Intro.mp3");
+  const uint32_t top = albumOf(idx, "/music/Top Level.mp3");
+  TEST_ASSERT_EQUAL_STRING("Glass Orchard", albumSub(idx, morning, AlbumPlace::AZ).c_str());
+  TEST_ASSERT_EQUAL_STRING("2 tracks", albumSub(idx, morning, AlbumPlace::OfArtist).c_str());
+  TEST_ASSERT_EQUAL_STRING("Glass Orchard \xC2\xB7 2 tracks", text(librarytext::albumHeader, idx, morning).c_str());
+  TEST_ASSERT_EQUAL_STRING("", trackSub(idx, "/music/Glass Orchard/Morning Set/01 - Opening.mp3", false).c_str());
+  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, albumSub(idx, top, AlbumPlace::AZ).c_str());
+  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, librarytext::artistShown(idx, idx.album(top).artist));
+  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, top));
+  // The rail keys on the names (no sort tags): "The" aside, as before.
+  for (uint32_t i = 0; i < idx.artistCount(); ++i) {
+    const uint32_t a = idx.artistsAZ()[i];
+    TEST_ASSERT_EQUAL_STRING(textfold::sortName(idx.artistName(a)),
+                             librarytext::railName(idx, LibraryIndex::View::Artists, a));
+  }
+  // The catalog: the folder artist, the folder album, no year, no length.
+  TrackCatalog c(&idx);
+  const uint32_t opening = idx.findTrack("/music/Glass Orchard/Morning Set/01 - Opening.mp3");
+  TEST_ASSERT_EQUAL_STRING("Opening", titleOf(c, opening).c_str());
+  TEST_ASSERT_EQUAL_STRING("Glass Orchard", c.artist(opening));
+  TEST_ASSERT_EQUAL_STRING("Glass Orchard", c.albumArtist(opening));
+  TEST_ASSERT_EQUAL_STRING("Morning Set", c.album(opening));
+  TEST_ASSERT_EQUAL_UINT16(0, c.year(opening));
+  TEST_ASSERT_EQUAL_UINT32(0, c.durationHintMs(opening));
+  TEST_ASSERT_EQUAL_STRING("", c.artist(idx.findTrack("/music/Top Level.mp3")));  // Now Playing: kUnknownArtist
+  // "1-01", "1-02", "2-01": two discs from the names, a divider each.
+  librarytext::Discs d;
+  d.set(idx, late);
+  TEST_ASSERT_EQUAL_UINT32(2, d.dividers());
+  TEST_ASSERT_EQUAL_UINT32(5, d.rows(idx.album(late).trackCount));
+  d.set(idx, morning);
+  TEST_ASSERT_EQUAL_UINT32(0, d.dividers());
+  TEST_ASSERT_EQUAL_UINT32(2, d.rows(2));
+}
+
+// An album of two discs: "Disc 1" and "Disc 2" rows before each disc's
+// first track, the tracks' places kept; one disc: no rows; discs that
+// don't run in order past kMax changes: none at all.
+void test_disc_dividers() {
+  LibraryIndex idx;
+  buildTagged(idx);
+  const uint32_t archive = albumOf(idx, "/music/Orchard Hum/Archive/CD1/01 - One.mp3");
+  TEST_ASSERT_EQUAL_UINT8(2, idx.album(archive).discs);
+  librarytext::Discs d;
+  d.set(idx, archive);
+  TEST_ASSERT_EQUAL_UINT32(2, d.dividers());
+  const LibraryIndex::Span t = idx.tracksOfAlbum(archive);
+  TEST_ASSERT_EQUAL_UINT32(6, d.rows(t.count));
+  // Rows: Disc 1, One, Two, Disc 2, Three, Four.
+  const char* want[6] = {"Disc 1", "One", "Two", "Disc 2", "Three", "Four"};
+  TrackCatalog c(&idx);
+  for (uint32_t r = 0; r < 6; ++r) {
+    const librarytext::Discs::Row row = d.at(r);
+    if (row.divider) {
+      char b[16];
+      librarytext::discText(row.disc, b, sizeof(b));
+      TEST_ASSERT_EQUAL_STRING(want[r], b);
+    } else {
+      TEST_ASSERT_EQUAL_STRING(want[r], titleOf(c, t[row.track]).c_str());
+      TEST_ASSERT_EQUAL_UINT32(r, d.rowOf(row.track));
+    }
+  }
+  // One disc: no dividers.
+  d.set(idx, albumOf(idx, "/music/Lantern Choir/First Light/01 - Dawn.mp3"));
+  TEST_ASSERT_EQUAL_UINT32(0, d.dividers());
+  TEST_ASSERT_EQUAL_UINT32(3, d.rows(3));
+  TEST_ASSERT_FALSE(d.at(0).divider);
+  TEST_ASSERT_EQUAL_UINT32(2, d.at(2).track);
+  TEST_ASSERT_EQUAL_UINT32(1, d.rowOf(1));
+  d.set(idx, LibraryIndex::kNone);
+  TEST_ASSERT_EQUAL_UINT32(0, d.dividers());
+  // A path-only album whose subfolders each hold a disc 1 and a disc 2
+  // ("1-01", "2-01"): sorted folder by folder, the discs alternate, a change
+  // per file; past kMax changes, no dividers.
+  LibraryIndex alt;
+  TEST_ASSERT_TRUE(alt.begin("/music"));
+  char p[96];
+  for (int f = 0; f < 40; ++f) {
+    snprintf(p, sizeof(p), "/music/A/Big/Part %02d/1-01 a.mp3", f);
+    TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, alt.addFile(p));
+    snprintf(p, sizeof(p), "/music/A/Big/Part %02d/2-01 b.mp3", f);
+    TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, alt.addFile(p));
+  }
+  TEST_ASSERT_TRUE(alt.finish());
+  const uint32_t big = albumOf(alt, "/music/A/Big/Part 00/1-01 a.mp3");
+  TEST_ASSERT_EQUAL_UINT8(2, alt.album(big).discs);
+  d.set(alt, big);
+  TEST_ASSERT_EQUAL_UINT32(0, d.dividers());
+  TEST_ASSERT_EQUAL_UINT32(80, d.rows(80));
+}
+
+// The catalog: the tag's title, the track's own artist else the album's
+// line, the album's name and year, the record's length; then the overlay
+// (the playing track's fresh tags, 3.3.3) for that track in that index
+// only, the loose tracks still nameless, gone with clear() and with
+// another build.
+void test_catalog_names_and_overlay() {
+  LibraryIndex idx;
+  buildTagged(idx);
+  TrackCatalog c(&idx);
+  const uint32_t dawn = idx.findTrack("/music/Lantern Choir/First Light/01 - Dawn.mp3");
+  const uint32_t dusk = idx.findTrack("/music/Lantern Choir/First Light/03 - Dusk.mp3");
+  const uint32_t gale = idx.findTrack("/music/Lantern Choir/Second Wind/01 - Gale.flac");
+  const uint32_t sketch = idx.findTrack("/music/Lantern Choir/Demos/01 - Sketch.mp3");
+  const uint32_t stray = idx.findTrack("/music/Lantern Choir/04 - Stray.mp3");
+  const uint32_t wave = idx.findTrack("/music/Various/Summer Mix/01 - Wave.mp3");
+  TEST_ASSERT_EQUAL_STRING("Dawn", titleOf(c, dawn).c_str());
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir", c.artist(dawn));
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir, Mara Quill", c.artist(dusk));
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir", c.artist(sketch));  // no record: its artist's elected name
+  TEST_ASSERT_EQUAL_STRING("Ola Brenmark", c.artist(wave));
+  TEST_ASSERT_EQUAL_STRING("Various Artists", c.albumArtist(wave));
+  TEST_ASSERT_EQUAL_STRING("First Light", c.album(dawn));
+  TEST_ASSERT_EQUAL_STRING("", c.album(stray));
+  TEST_ASSERT_EQUAL_UINT16(2001, c.year(dawn));
+  TEST_ASSERT_EQUAL_UINT16(0, c.year(stray));
+  TEST_ASSERT_EQUAL_UINT16(0, c.year(sketch));
+  TEST_ASSERT_EQUAL_UINT32(201000, c.durationHintMs(dawn));
+  TEST_ASSERT_EQUAL_UINT32(199000, c.durationHintMs(gale));  // whole seconds, rounded
+  TEST_ASSERT_EQUAL_UINT32(0, c.durationHintMs(sketch));
+  TEST_ASSERT_EQUAL_UINT32(60000, c.durationHintMs(TrackCatalog::builtins()[3]));  // the click tracks', as before
+  // The overlay: the playing track's tags, read after the build.
+  TrackCatalog::Overlay o;
+  c.setOverlay(&o);
+  const uint32_t v0 = c.namesVersion();
+  o.set(idx, sketch,
+        View().title("Sketch (Final)").artist("The Lantern Choir\x1FGuest Horn").album("Demos 2003").year(2003).ms(123456).v);
+  TEST_ASSERT_TRUE(c.namesVersion() != v0);
+  TEST_ASSERT_EQUAL_STRING("Sketch (Final)", titleOf(c, sketch).c_str());
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir, Guest Horn", c.artist(sketch));
+  TEST_ASSERT_EQUAL_STRING("Demos 2003", c.album(sketch));
+  TEST_ASSERT_EQUAL_UINT16(2003, c.year(sketch));
+  TEST_ASSERT_EQUAL_UINT32(123456, c.durationHintMs(sketch));
+  TEST_ASSERT_EQUAL_STRING("Dawn", titleOf(c, dawn).c_str());  // the others: the index's
+  // A field the record lacks stays the index's.
+  o.set(idx, dawn, View().title("Dawn (Live)").v);
+  TEST_ASSERT_EQUAL_STRING("Dawn (Live)", titleOf(c, dawn).c_str());
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir", c.artist(dawn));
+  TEST_ASSERT_EQUAL_STRING("First Light", c.album(dawn));
+  TEST_ASSERT_EQUAL_UINT16(2001, c.year(dawn));
+  TEST_ASSERT_EQUAL_UINT32(201000, c.durationHintMs(dawn));
+  TEST_ASSERT_EQUAL_STRING("Sketch", titleOf(c, sketch).c_str());  // one slot
+  // The loose tracks stay nameless (the next build would show them so).
+  o.set(idx, stray, View().title("Stray (Edit)").album("Another Single").year(2006).v);
+  TEST_ASSERT_EQUAL_STRING("Stray (Edit)", titleOf(c, stray).c_str());
+  TEST_ASSERT_EQUAL_STRING("", c.album(stray));
+  TEST_ASSERT_EQUAL_UINT16(0, c.year(stray));
+  // A field cut to 255 bytes at a character boundary.
+  std::string longTitle;
+  while (longTitle.size() < 300) longTitle += "\xC3\xA9";  // é, 2 bytes
+  o.set(idx, dawn, View().title(longTitle.c_str()).v);
+  TEST_ASSERT_EQUAL_UINT32(254, strlen(o.title));
+  // Another build renumbers the tracks: the overlay is ignored there.
+  o.set(idx, sketch, View().title("Sketch (Final)").v);
+  LibraryIndex other;
+  TEST_ASSERT_TRUE(other.begin("/music"));
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, other.addFile("/music/Lantern Choir/Demos/01 - Sketch.mp3"));
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, other.addFile("/music/Lantern Choir/Demos/00 - Intro.mp3"));
+  TEST_ASSERT_TRUE(other.finish());
+  TEST_ASSERT_TRUE(other.buildStamp() != idx.buildStamp());
+  c.setIndex(&other);
+  for (uint32_t i = 0; i < other.trackCount(); ++i) TEST_ASSERT_TRUE(titleOf(c, i) != "Sketch (Final)");
+  c.setIndex(&idx);
+  TEST_ASSERT_EQUAL_STRING("Sketch (Final)", titleOf(c, sketch).c_str());
+  const uint32_t v1 = c.namesVersion();
+  o.clear();
+  TEST_ASSERT_TRUE(c.namesVersion() != v1);
+  TEST_ASSERT_EQUAL_STRING("Sketch", titleOf(c, sketch).c_str());
+  c.setOverlay(nullptr);
+  TEST_ASSERT_EQUAL_UINT32(0, c.namesVersion());
+  // The library update's fence (docs/METADATA.md 3.4.2, N12): the catalog
+  // has no index while the build runs; the playing track's names come from
+  // the copy taken before (Now Playing keeps them), its path doesn't (the
+  // player starts nothing), every other library id is unknown.
+  TrackCatalog::Held h;
+  TEST_ASSERT_TRUE(c.take(dawn, &h));
+  TEST_ASSERT_EQUAL_UINT32(dawn, h.track);
+  const uint32_t v2 = c.namesVersion();
+  c.setHeld(&h);
+  TEST_ASSERT_TRUE(c.namesVersion() != v2);
+  TEST_ASSERT_EQUAL_STRING("Dawn", titleOf(c, dawn).c_str());  // the index still answers while it is there
+  c.setIndex(nullptr);
+  TEST_ASSERT_EQUAL_STRING("Dawn", titleOf(c, dawn).c_str());
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir", c.artist(dawn));
+  TEST_ASSERT_EQUAL_STRING("First Light", c.album(dawn));
+  TEST_ASSERT_EQUAL_UINT16(2001, c.year(dawn));
+  TEST_ASSERT_EQUAL_UINT32(201000, c.durationHintMs(dawn));
+  char p[TrackCatalog::kMaxPath];
+  TEST_ASSERT_EQUAL_size_t(0, c.path(dawn, p, sizeof(p)));
+  TEST_ASSERT_FALSE(c.valid(dawn));
+  TEST_ASSERT_EQUAL_STRING("", titleOf(c, gale).c_str());
+  TEST_ASSERT_EQUAL_STRING("", c.artist(gale));
+  TEST_ASSERT_EQUAL_STRING("Built-in", c.album(TrackCatalog::builtins()[0]));  // the built-in tracks as ever
+  // The index back (the new build's): it answers, the copy is dropped.
+  c.setIndex(&idx);
+  const uint32_t v3 = c.namesVersion();
+  c.setHeld(nullptr);
+  TEST_ASSERT_TRUE(c.namesVersion() != v3);
+  TEST_ASSERT_EQUAL_STRING("Dawn", titleOf(c, dawn).c_str());
+  TEST_ASSERT_FALSE(c.take(TrackCatalog::kNone, &h));
+  TEST_ASSERT_EQUAL_UINT32(TrackCatalog::kNone, h.track);
+}
+
+// The A-Z rail, a row's letter and the jump grid key on the sort keys
+// (an elected sort tag, else the name): "Daniel Bowery" tagged "Bowery,
+// Daniel" is a B, an album tagged " Zebra Songs" a Z (its leading
+// White_Space doesn't count: run 4's review), and on the synthetic tagged
+// library (2 % of tracks with sort tags) the letters
+// librarytext::railName() gives are the index's buckets, row for row, in
+// both lists.
+void test_rail_follows_the_sort_keys() {
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added,
+                    idx.addRecord("/music/Daniel Bowery/Rooms/01 - Hall.mp3",
+                                  View().title("Hall").artist("Daniel Bowery").artistSort("Bowery, Daniel").album("Rooms").v));
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added,
+                    idx.addRecord("/music/Ada Crane/The Quiet Year/01 - Snow.mp3",
+                                  View().title("Snow").artist("Ada Crane").album("The Quiet Year").albumSort("Quiet Year").v));
+  // An album value keeps its bytes, White_Space first too (2.3.6 stores a
+  // tab as a space); its sort key doesn't (5.4's orderName: the nameKey,
+  // trimmed).
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added,
+                    idx.addRecord("/music/Pell Corrin/Zebra/01 - Stripe.mp3",
+                                  View().title("Stripe").artist("Pell Corrin").album(" Zebra Songs").v));
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added,
+                    idx.addRecord("/music/Pell Corrin/Apple/01 - Core.mp3",
+                                  View().title("Core").artist("Pell Corrin").album("Apple Pie").v));
+  TEST_ASSERT_EQUAL(LibraryIndex::Add::Added,
+                    idx.addRecord("/music/Pell Corrin/Orchard/01 - Bough.mp3",
+                                  View().title("Bough").artist("Pell Corrin").album("\xE3\x80\x80The Orchard").v));
+  TEST_ASSERT_TRUE(idx.finish());
+  const uint32_t bowery = artistNamed(idx, "Daniel Bowery");
+  TEST_ASSERT_EQUAL_STRING("Bowery, Daniel", librarytext::railName(idx, LibraryIndex::View::Artists, bowery));
+  TEST_ASSERT_EQUAL('B', textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Artists, bowery)));
+  TEST_ASSERT_EQUAL_UINT32(bowery, idx.artistsAZ()[1]);  // after Ada Crane (A), as a B
+  const uint32_t quiet = albumOf(idx, "/music/Ada Crane/The Quiet Year/01 - Snow.mp3");
+  TEST_ASSERT_EQUAL('Q', textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, quiet)));
+  // " Zebra Songs" is shown as it is and sorts as a Z: last in the Albums
+  // A-Z, in the Z bucket, not first among the '#' rows; an ideographic
+  // space then "The Orchard" under O (past the article too).
+  const uint32_t zebra = albumOf(idx, "/music/Pell Corrin/Zebra/01 - Stripe.mp3");
+  const uint32_t orchard = albumOf(idx, "/music/Pell Corrin/Orchard/01 - Bough.mp3");
+  const uint32_t apple = albumOf(idx, "/music/Pell Corrin/Apple/01 - Core.mp3");
+  TEST_ASSERT_EQUAL_STRING(" Zebra Songs", idx.albumName(zebra));
+  TEST_ASSERT_EQUAL_STRING(" Zebra Songs", librarytext::albumShown(idx, zebra));
+  TEST_ASSERT_EQUAL_STRING("Zebra Songs", idx.albumSortKey(zebra));
+  TEST_ASSERT_EQUAL_STRING("The Orchard", idx.albumSortKey(orchard));
+  TEST_ASSERT_EQUAL('Z', textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, zebra)));
+  TEST_ASSERT_EQUAL('O', textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, orchard)));
+  const LibraryIndex::Span albums = idx.albumsAZ();
+  TEST_ASSERT_EQUAL_UINT32(5, albums.count);
+  const uint32_t want[] = {apple, orchard, quiet, albumOf(idx, "/music/Daniel Bowery/Rooms/01 - Hall.mp3"), zebra};
+  for (uint32_t i = 0; i < albums.count; ++i) {
+    TEST_ASSERT_EQUAL_UINT32(want[i], albums[i]);
+    TEST_ASSERT_EQUAL_INT(idx.bucketAt(LibraryIndex::View::Albums, i),
+                          textfold::bucketOf(textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums,
+                                                                                     albums[i]))));
+  }
+  TEST_ASSERT_EQUAL_UINT32(0, idx.bucketStart(LibraryIndex::View::Albums, 1));  // no '#' rows
+  TEST_ASSERT_EQUAL_UINT32(4, idx.bucketStart(LibraryIndex::View::Albums, textfold::bucketOf('Z')));
+  // Pell Corrin's albums: no years, so A-Z by the same keys.
+  const LibraryIndex::Span pell = idx.albumsOf(artistNamed(idx, "Pell Corrin"));
+  TEST_ASSERT_EQUAL_UINT32(3, pell.count);
+  TEST_ASSERT_EQUAL_UINT32(zebra, pell[2]);
+
+  LibraryIndex big;
+  const synth::Spec spec = synth::specFor(3000);
+  TEST_ASSERT_TRUE(big.begin(spec.root, spec.tracks));
+  synth::Tagged t;
+  uint32_t sorted = 0;
+  for (uint32_t i = 0; i < spec.tracks; ++i) {
+    TEST_ASSERT_TRUE(synth::tagged(spec, i, &t));
+    if (t.noTags) {
+      big.addFile(t.path);
+      continue;
+    }
+    View v;
+    v.title(t.title).artist(t.artist).album(t.album).albumArtist(t.albumArtist).year(t.year).track(t.track).disc(t.disc);
+    v.artistSort(t.artistSort).albumSort(t.albumSort);
+    v.set(&v.v.albumArtistSort, &v.v.albumArtistSortLen, t.albumArtistSort);
+    if (t.compilation == 1) v.compilation();
+    sorted += t.artistSort[0] || t.albumSort[0] || t.albumArtistSort[0];
+    TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, big.addRecord(t.path, v.v));
+  }
+  TEST_ASSERT_TRUE(big.finish());
+  TEST_ASSERT_TRUE(sorted > 0);
+  struct Rows {
+    const LibraryIndex* idx;
+    LibraryIndex::View view;
+    LibraryIndex::Span span;
+  };
+  for (const LibraryIndex::View view : {LibraryIndex::View::Artists, LibraryIndex::View::Albums}) {
+    Rows rows{&big, view, view == LibraryIndex::View::Artists ? big.artistsAZ() : big.albumsAZ()};
+    auto name = [](void* ctx, uint32_t row) {
+      const Rows& r = *static_cast<Rows*>(ctx);
+      return librarytext::railName(*r.idx, r.view, r.span[row]);
+    };
+    int32_t first[jump::kCells], end[jump::kCells];
+    jump::letters(rows.span.count, name, &rows, first, end);
+    for (int b = 0; b < jump::kCells; ++b) {
+      const uint32_t start = big.bucketStart(view, b);
+      const uint32_t stop = big.bucketStart(view, b + 1);
+      if (start == stop) {
+        TEST_ASSERT_EQUAL_INT32(-1, first[b]);
+        continue;
+      }
+      TEST_ASSERT_EQUAL_INT32(static_cast<int32_t>(start), first[b]);
+      TEST_ASSERT_EQUAL_INT32(static_cast<int32_t>(stop), end[b]);
+    }
+    for (uint32_t i = 0; i < rows.span.count; ++i) {
+      TEST_ASSERT_EQUAL_INT(big.bucketAt(view, i), textfold::bucketOf(textfold::railKey(name(&rows, i))));
+    }
+  }
+}
+
+// The names the tags don't give (docs/METADATA.md 5.4; the 2026-10-09
+// device run, B1). An album with no album value keeps its folder's name, and
+// so does one whose values are all blank (White_Space alone: a space, a tab,
+// an ideographic space), never "": in the lists, in its sort key and its
+// rail letter, in the catalog (Now Playing, the sheet, the queue's lines).
+// One real value among blanks names it. An artist with no artist tag is its
+// folder's; a track with no title, or a blank one, its file name's. The
+// blank albums the console's `ql` listed on N11's card were the artist
+// folders' own tracks, named "" in the index by design (3.4.3) and before
+// the tags too: every place that names them says "(loose tracks)", and
+// "(no artist folder)" for the artist of the files right under /music
+// (librarytext, which the console's lines use now).
+void test_names_without_tags() {
+  using librarytext::AlbumPlace;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  auto add = [&](const char* path, const View& v) {
+    TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addRecord(path, v.v));
+  };
+  add("/music/Kelvar Moss/Wind Harbour (2020)/01 - Gull.mp3",
+      View().title("Gull").artist("Kelvar Moss").track(1).year(2020));
+  add("/music/Kelvar Moss/Wind Harbour (2020)/02 - Tern.mp3", View().title("Tern").artist("Kelvar Moss").track(2));
+  add("/music/Kelvar Moss/Salt Road/01 - Ferry.mp3", View().title(" ").artist("Kelvar Moss").album(" "));
+  add("/music/Kelvar Moss/Salt Road/02 - Pier.mp3", View().title("\t").artist("Kelvar Moss").album("\xE3\x80\x80"));
+  add("/music/Kelvar Moss/Mixed/01 - One.mp3", View().title("One").album(" "));
+  add("/music/Kelvar Moss/Mixed/02 - Two.mp3", View().title("Two").album("Mixed Signals"));
+  add("/music/Kelvar Moss/Mixed/03 - Three.mp3", View().title("Three").album("  "));
+  add("/music/Orvel Tasse/Night Ride/01 - Road.mp3", View().album("Night Ride").track(1));
+  add("/music/Orvel Tasse/Night Ride/02 - Turn.mp3", View().title("Turn").album("Night Ride").track(2));
+  add("/music/Orvel Tasse/03 - Stray.mp3", View().title("Stray").artist("Orvel Tasse").album("A Single"));
+  add("/music/Top Level.mp3", View().title("Top Level"));
+  TEST_ASSERT_TRUE(idx.finish());
+  TrackCatalog c(&idx);
+  const uint32_t gull = idx.findTrack("/music/Kelvar Moss/Wind Harbour (2020)/01 - Gull.mp3");
+  const uint32_t ferry = idx.findTrack("/music/Kelvar Moss/Salt Road/01 - Ferry.mp3");
+  const uint32_t pier = idx.findTrack("/music/Kelvar Moss/Salt Road/02 - Pier.mp3");
+  const uint32_t road = idx.findTrack("/music/Orvel Tasse/Night Ride/01 - Road.mp3");
+  const uint32_t stray = idx.findTrack("/music/Orvel Tasse/03 - Stray.mp3");
+  const uint32_t top = idx.findTrack("/music/Top Level.mp3");
+  // The albums: the folder's name, the year still voted; the one real value.
+  const uint32_t wind = idx.track(gull).album, salt = idx.track(ferry).album, night = idx.track(road).album;
+  const uint32_t mixed = albumOf(idx, "/music/Kelvar Moss/Mixed/01 - One.mp3");
+  TEST_ASSERT_EQUAL_STRING("Wind Harbour (2020)", idx.albumName(wind));
+  TEST_ASSERT_EQUAL_UINT16(2020, idx.album(wind).year);
+  TEST_ASSERT_EQUAL_STRING("Salt Road", idx.albumName(salt));
+  TEST_ASSERT_EQUAL_STRING("Mixed Signals", idx.albumName(mixed));
+  TEST_ASSERT_EQUAL_STRING("Night Ride", idx.albumName(night));
+  TEST_ASSERT_EQUAL_STRING("Wind Harbour (2020)", librarytext::albumShown(idx, wind));
+  TEST_ASSERT_EQUAL_STRING("Wind Harbour (2020)", c.album(gull));
+  TEST_ASSERT_EQUAL_STRING("Salt Road", c.album(pier));
+  // Their sort keys and rail letters are the folders' names too: W and S,
+  // not '#' (a blank name would sort first, under '#').
+  TEST_ASSERT_EQUAL_STRING("Wind Harbour (2020)", idx.albumSortKey(wind));
+  TEST_ASSERT_EQUAL('W', textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, wind)));
+  TEST_ASSERT_EQUAL('S', textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, salt)));
+  // Every album that isn't an artist folder's own tracks has a name that
+  // isn't blank; the rail's letters are the index's buckets row for row.
+  const LibraryIndex::Span az = idx.albumsAZ();
+  for (uint32_t i = 0; i < az.count; ++i) {
+    const uint32_t a = az[i];
+    if (!(idx.album(a).flags & LibraryIndex::kLoose)) TEST_ASSERT_FALSE(namekey::blank(idx.albumName(a), strlen(idx.albumName(a))));
+    TEST_ASSERT_EQUAL_INT(idx.bucketAt(LibraryIndex::View::Albums, i),
+                          textfold::bucketOf(textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, a))));
+  }
+  // The titles: the file name's for none and for blank ones.
+  TEST_ASSERT_EQUAL_STRING("Ferry", titleOf(c, ferry).c_str());
+  TEST_ASSERT_EQUAL_STRING("Pier", titleOf(c, pier).c_str());
+  TEST_ASSERT_EQUAL_STRING("Road", titleOf(c, road).c_str());
+  TEST_ASSERT_EQUAL_UINT16(1, idx.track(road).number);
+  // No artist tag: the artist folder's name, everywhere.
+  const uint32_t orvel = idx.track(road).artist;
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse", librarytext::artistShown(idx, orvel));
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse", c.artist(road));
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse", c.albumArtist(road));
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse \xC2\xB7 2 tracks", text(librarytext::albumHeader, idx, night).c_str());
+  // The loose tracks and the top of /music: "" in the index, named so by
+  // librarytext (the rows, the sheet, the console's `ql` and queue lines).
+  const uint32_t loose = idx.track(stray).album, topAlbum = idx.track(top).album;
+  TEST_ASSERT_TRUE(idx.album(loose).flags & LibraryIndex::kLoose);
+  TEST_ASSERT_EQUAL_STRING("", idx.albumName(loose));
+  TEST_ASSERT_EQUAL_STRING("", c.album(stray));  // Now Playing: kLooseTracks
+  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, loose));
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse", librarytext::artistShown(idx, idx.album(loose).artist));
+  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, topAlbum));
+  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, librarytext::artistShown(idx, idx.album(topAlbum).artist));
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse", albumSub(idx, loose, AlbumPlace::AZ).c_str());
+  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, albumSub(idx, topAlbum, AlbumPlace::AZ).c_str());
+  // The overlay (the playing track's record read after the build): a blank
+  // title or album is none there too, the index's names stay.
+  TrackCatalog::Overlay o;
+  c.setOverlay(&o);
+  o.set(idx, road, View().title(" ").album("\t").year(1999).v);
+  TEST_ASSERT_EQUAL_STRING("Road", titleOf(c, road).c_str());
+  TEST_ASSERT_EQUAL_STRING("Night Ride", c.album(road));
+  TEST_ASSERT_EQUAL_UINT16(1999, c.year(road));
+  c.setOverlay(nullptr);
+  // The helper itself: White_Space alone, or nothing.
+  TEST_ASSERT_TRUE(namekey::blank(nullptr, 0));
+  TEST_ASSERT_TRUE(namekey::blank("", 0));
+  TEST_ASSERT_TRUE(namekey::blank(" \t\xC2\xA0\xE3\x80\x80", 7));
+  TEST_ASSERT_FALSE(namekey::blank(" a ", 3));
+  TEST_ASSERT_FALSE(namekey::blank("_", 1));
+}
+
+// The Library's and Now Playing's new texts in their rooms: the empty
+// state's lines (reworded: tags are read), the placeholders and "Unknown
+// artist" in Now Playing's rows, a disc divider up to disc 255, the scan's
+// status line up to 99,999 tracks and its toasts on one line.
+void test_library_texts_fit() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  fits(title, kNoMusicTitle, kEmptyTitleW);
+  for (const char* l : kNoMusicLines) fits(small, l, kEmptyLineW);
+  for (const char* l : kNoCard.lines) fits(small, l, kEmptyLineW);
+  for (const char* l : {kUnknownArtist, kNoArtistFolder, kLooseTracks}) fits(body, l, kNowPlayingTextW);
+  // The album row with its year: a short album name keeps it.
+  fits(body, "First Light \xC2\xB7 2001", kNowPlayingTextW);
+  char t[64];
+  librarytext::discText(255, t, sizeof(t));
+  fits(bold, t, kDiscTextW);
+  using P = librarytext::Status::Phase;
+  for (const P phase : {P::Checking, P::Reading, P::Updating, P::Unfinished}) {
+    librarytext::Status s;
+    s.phase = phase;
+    s.done = 99999;
+    s.total = 99999;
+    TEST_ASSERT_TRUE(librarytext::statusText(s, t, sizeof(t)) > 0);
+    fits(small, t, kStatusW);
+  }
+  librarytext::Status s;
+  TEST_ASSERT_EQUAL_UINT32(0, librarytext::statusText(s, t, sizeof(t)));  // Idle: no line
+  s.phase = P::Reading;
+  s.done = 1234;
+  s.total = 19410;
+  librarytext::statusText(s, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Reading tags 1,234 / 19,410", t);
+  librarytext::foundText(1, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Found 1 new track", t);
+  fits(body, t, kToastTextRight - kToastTextX);
+  librarytext::foundText(99999, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Found 99,999 new tracks", t);
+  fits(body, t, kToastTextRight - kToastTextX);
+  fits(body, kLibraryUpdated, kToastTextRight - kToastTextX);
+  fits(body, kLibraryAtBoot, kToastTextRight - kToastTextX);
+  TEST_ASSERT_TRUE(small.hasAll(kStatusChecking) && small.hasAll(kStatusUpdating));
+  // The update step's fence (N12): the lists' line, and the note for what waits.
+  fits(body, kUpdatingList, 320 - 24);
+  TEST_ASSERT_TRUE(body.hasAll(kUpdatingList));
+  fits(body, kUpdatingWait, kToastTextRight - kToastTextX);
+  // A card swapped while on: the toasts before the restart.
+  fits(body, kAnotherCard, kToastTextRight - kToastTextX);
+  fits(body, kCardBack, kToastTextRight - kToastTextX);
+}
+
+// ---- the console's tag commands (tagtext, docs/METADATA.md 3.3.6) ----
+
+namespace {
+void collect(void* ctx, const char* line) { static_cast<std::vector<std::string>*>(ctx)->push_back(line); }
+bool hasLine(const std::vector<std::string>& lines, const std::string& want) {
+  for (const std::string& l : lines) {
+    if (l == want) return true;
+  }
+  return false;
+}
+}  // namespace
+
+// g's argument: today's g, g0 and g<n>, and the tags' gs, gt, gr, gr!,
+// gw, gb, gv; anything else is the help.
+void test_console_tag_commands() {
+  using C = tagtext::Command;
+  TEST_ASSERT_EQUAL(C::Report, tagtext::parse("").command);
+  TEST_ASSERT_EQUAL(C::Report, tagtext::parse(nullptr).command);
+  TEST_ASSERT_EQUAL(C::Report, tagtext::parse("  ").command);
+  TEST_ASSERT_EQUAL(C::Rebuild, tagtext::parse("0").command);
+  TEST_ASSERT_EQUAL(C::Rebuild, tagtext::parse("00").command);
+  TEST_ASSERT_EQUAL(C::Synthetic, tagtext::parse("12").command);
+  TEST_ASSERT_EQUAL_UINT32(12, tagtext::parse("12").n);
+  TEST_ASSERT_EQUAL_UINT32(50000, tagtext::parse("50000").n);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("50001").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("99999999999999").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("12a").command);
+  TEST_ASSERT_EQUAL(C::Status, tagtext::parse("s").command);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::parse("s").n);
+  TEST_ASSERT_EQUAL(C::Rescan, tagtext::parse("r").command);
+  TEST_ASSERT_EQUAL(C::RescanAll, tagtext::parse("r!").command);
+  TEST_ASSERT_EQUAL(C::Walk, tagtext::parse("w").command);
+  TEST_ASSERT_EQUAL(C::Build, tagtext::parse("b").command);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::parse("b").n);
+  // gs0: the worker's figures from now (L3); gb!: the update step deferred
+  // to the next boot (L4.4).
+  TEST_ASSERT_EQUAL(C::Status, tagtext::parse("s0").command);
+  TEST_ASSERT_EQUAL_UINT32(1, tagtext::parse("s0").n);
+  TEST_ASSERT_EQUAL(C::Build, tagtext::parse(" b! ").command);
+  TEST_ASSERT_EQUAL_UINT32(1, tagtext::parse("b!").n);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("s1").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("b0").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("w!").command);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gs0") != nullptr);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gb!") != nullptr);
+  TEST_ASSERT_EQUAL(C::Verify, tagtext::parse("v").command);
+  // The sector cache (gc: the counts; gc0-gc2 the switch) and L0's bench.
+  TEST_ASSERT_EQUAL(C::Cache, tagtext::parse("c").command);
+  TEST_ASSERT_EQUAL_UINT32(tagtext::kCacheReport, tagtext::parse("c").n);
+  for (uint32_t k = 0; k <= 2; ++k) {
+    const char arg[3] = {'c', static_cast<char>('0' + k), 0};
+    TEST_ASSERT_EQUAL(C::Cache, tagtext::parse(arg).command);
+    TEST_ASSERT_EQUAL_UINT32(k, tagtext::parse(arg).n);
+  }
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("c3").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("c12").command);
+  TEST_ASSERT_EQUAL(C::Bench, tagtext::parse("l").command);
+  TEST_ASSERT_EQUAL_UINT32(0, tagtext::parse("l").n);
+  TEST_ASSERT_EQUAL(C::Bench, tagtext::parse(" lw ").command);
+  TEST_ASSERT_EQUAL_UINT32(1, tagtext::parse("lw").n);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("lx").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("x").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("?").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("ss").command);
+  TEST_ASSERT_EQUAL(C::Bad, tagtext::parse("t").command);
+  const tagtext::Parsed d = tagtext::parse("t  /music/A B/01 - x.mp3");
+  TEST_ASSERT_EQUAL(C::Dump, d.command);
+  TEST_ASSERT_EQUAL_STRING("/music/A B/01 - x.mp3", d.path);
+  TEST_ASSERT_TRUE(strstr(tagtext::kHelp, "gt</music/...>") != nullptr);
+}
+
+// A record as the console prints it: each text field the run has (lists
+// as "a" | "b"), the numbers on one line, the ReplayGain, the picture's
+// anchor, the flags; an UNREADABLE record in one line. And a real file's
+// record (the parity corpus's flac_full.flac, read by TagScan): a line per
+// field its run holds.
+void test_console_tag_dump() {
+  namespace mptg = cardcontract::mptg;
+  mptg::Record r;
+  r.known = mptg::kKnownRules1;
+  r.container = mptg::kContainerMp3;
+  r.year = 2001;
+  r.track = 3;
+  r.trackTotal = 12;
+  r.disc = 1;
+  r.discTotal = 2;
+  r.durationMs = 201250;
+  r.bpm10 = 1280;
+  r.camelot = 8;
+  r.flags = 1 | mptg::kHasRgTrack | mptg::kHasRgAlbum | mptg::kTruncated;  // a compilation
+  r.rgTrackGain = -650;
+  r.rgTrackPeak = 9876;
+  r.rgAlbumGain = 125;
+  r.picOffset = 1234;
+  r.picLength = 23456;
+  r.picType = 3;
+  r.picMime = mptg::kMimeJpeg;
+  r.picCoding = mptg::kCodingRaw;
+  cardcontract::RunFields run;
+  run.set(cardcontract::kTitle, "Dawn", 4);
+  run.set(cardcontract::kArtist, "Ada Crane\x1FMara Quill", 20);
+  run.set(cardcontract::kAlbum, "First Light", 11);
+  std::vector<std::string> lines;
+  tagtext::dumpRecord(r, &run, collect, &lines);
+  TEST_ASSERT_TRUE(hasLine(lines, "  title: \"Dawn\""));
+  TEST_ASSERT_TRUE(hasLine(lines, "  artist: \"Ada Crane\" | \"Mara Quill\""));
+  TEST_ASSERT_TRUE(hasLine(lines, "  album: \"First Light\""));
+  TEST_ASSERT_TRUE(
+      hasLine(lines, "  MP3, year 2001, track 3/12, disc 1/2, length 3:21.250, BPM 128.0, key 8A, a compilation"));
+  TEST_ASSERT_TRUE(hasLine(lines, "  ReplayGain: track -6.50 dB peak 0.9876, album +1.25 dB"));
+  TEST_ASSERT_TRUE(hasLine(lines, "  picture: JPEG, type 3 (front cover), 23,456 B at 1,234 (raw)"));
+  TEST_ASSERT_TRUE(hasLine(lines, "  flags: TRUNCATED"));
+  for (const std::string& l : lines) TEST_ASSERT_TRUE(l.find("looked for") == std::string::npos);
+  // What it looked for, when that isn't everything.
+  r.known = mptg::kKnownTitle;
+  lines.clear();
+  tagtext::dumpRecord(r, &run, collect, &lines);
+  TEST_ASSERT_TRUE(hasLine(lines, "  looked for: 0x00001 (rules 1 look for all of 0x1ffff)"));
+  // UNREADABLE: one line.
+  mptg::Record u;
+  u.flags = mptg::kUnreadable;
+  lines.clear();
+  tagtext::dumpRecord(u, nullptr, collect, &lines);
+  TEST_ASSERT_EQUAL_UINT32(1, lines.size());
+  // The small pieces.
+  char t[64];
+  tagtext::fatTimeText(cardcontract::fatTime(2026, 10, 1, 12, 34, 56), t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("2026-10-01 12:34:56", t);
+  tagtext::fatTimeText(0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("none", t);
+  tagtext::lengthText(0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("unknown", t);
+  TEST_ASSERT_EQUAL_STRING("1B", tagtext::camelotName(13));
+  TEST_ASSERT_EQUAL_STRING("12B", tagtext::camelotName(24));
+  TEST_ASSERT_EQUAL_STRING("", tagtext::camelotName(25));
+  tagtext::flagsText(mptg::kNoTags | mptg::kFromApi, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("NO_TAGS, FROM_API", t);
+  // A real file's record.
+  const tagfixtures::Bytes bytes = tagfixtures::fileBytes(tagfixtures::dir() + "/flac_full.flac");
+  TEST_ASSERT_TRUE(bytes.size() > 0);
+  cardcontract::MemSource src(bytes.data(), static_cast<uint32_t>(bytes.size()));
+  static tagscan::Scanner scanner;  // (about 10 KB: off the stack)
+  static uint8_t buf[4096];
+  TEST_ASSERT_EQUAL(tagscan::Result::Ok, scanner.scan(src, tagscan::Kind::Flac, buf, sizeof(buf)));
+  static cardcontract::RunFields full;
+  scanner.record().toRunFields(&full);
+  lines.clear();
+  tagtext::dumpRecord(scanner.record().rec, &full, collect, &lines);
+  static const char* const kNames[cardcontract::kRunFields] = {
+      "title", "artist", "album", "album artist", "genre", "composer", "title sort", "artist sort", "album sort",
+      "album artist sort", "MusicBrainz album", "MusicBrainz recording"};
+  uint32_t fields = 0;
+  for (uint32_t f = 0; f < cardcontract::kRunFields; ++f) {
+    if (!full.has(f)) continue;
+    ++fields;
+    bool found = false;
+    for (const std::string& l : lines) found = found || l.rfind(std::string("  ") + kNames[f] + ": \"", 0) == 0;
+    TEST_ASSERT_TRUE_MESSAGE(found, kNames[f]);
+  }
+  TEST_ASSERT_EQUAL_UINT32(cardcontract::kRunFields, fields);  // every field (expected.json's)
+  TEST_ASSERT_TRUE(hasLine(lines, "  title: \"Lantern Song\""));
+  TEST_ASSERT_TRUE(hasLine(lines, "  artist: \"Mike Duo\" | \"November\""));
+  TEST_ASSERT_TRUE(hasLine(lines, "  genre: \"Folk\" | \"Acoustic\""));
+  TEST_ASSERT_TRUE(
+      hasLine(lines, "  FLAC, year 2003, track 3/12, disc 1/2, length 0:30.000, BPM 96.0, key 8B, a compilation"));
+  TEST_ASSERT_TRUE(hasLine(lines, "  ReplayGain: track -6.79 dB peak 0.9886, album +1.01 dB peak 1.0000"));
+  TEST_ASSERT_TRUE(hasLine(lines, "  picture: JPEG, type 3 (front cover), 96 B at 748 (raw)"));
+}
+
+// Where the index's names came from: g's line.
+void test_console_sources() {
+  LibraryIndex idx;
+  buildTagged(idx);
+  const tagtext::Sources s = tagtext::countSources(idx);
+  TEST_ASSERT_EQUAL_UINT32(13, s.tracks);
+  TEST_ASSERT_EQUAL_UINT32(1, s.transfer);
+  TEST_ASSERT_EQUAL_UINT32(10, s.device);
+  TEST_ASSERT_EQUAL_UINT32(2, s.path);
+  TEST_ASSERT_EQUAL_UINT32(1, s.pending);
+  char t[192];
+  tagtext::sourcesText(s, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING(
+      "13 tracks: 1 from the transfer's records, 10 from the device's, 2 by their paths (1 for the scan)", t);
+  LibraryIndex paths;
+  TEST_ASSERT_TRUE(paths.begin("/music"));
+  paths.addFile("/music/A/B/01 - x.mp3");
+  TEST_ASSERT_TRUE(paths.finish());
+  tagtext::sourcesText(tagtext::countSources(paths), t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("1 track: 1 named by their paths", t);
+  LibraryIndex none;
+  tagtext::sourcesText(tagtext::countSources(none), t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("0 tracks", t);
+}
+
 // The Dance tab's bottom line while a computer drives the dancer (the USB
 // visualizer): the title in Bold, the hint in Small, each in kW - 16.
 void test_dance_texts_fit() {
@@ -1080,6 +2056,89 @@ void test_dance_texts_fit() {
   snprintf(msg, sizeof(msg), "\"%s\" %d px, \"%s\" %d px, in %d", kVizTitle, bold.width(kVizTitle), kVizHint,
            small.width(kVizHint), kDanceBottomW);
   TEST_MESSAGE(msg);
+}
+
+// The Output tab's Library row (3.3.6, N12): its title, where its names
+// come from (the longest form that fits; the shortest always does), the
+// Rescan pill and its dialog.
+void test_library_row_texts() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
+  char t[96];
+  librarytext::libraryRowTitle(19410, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Library: 19,410 tracks", t);
+  fits(body, t, kLibraryRowW);
+  librarytext::libraryRowTitle(99999, t, sizeof(t), 1);  // the short form, when the long one doesn't fit
+  TEST_ASSERT_EQUAL_STRING("99,999 tracks", t);
+  fits(body, t, kLibraryRowW);
+  librarytext::libraryRowTitle(0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Library: no tracks", t);
+  librarytext::Sources s;
+  s.transfer = 18000;
+  s.device = 1400;
+  s.none = 10;
+  librarytext::sourcesText(s, 0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("18,000 from the transfer, 1,400 read here, 10 without tags", t);
+  librarytext::sourcesText(s, 1, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("18,000 transfer, 1,400 here, 10 none", t);
+  librarytext::sourcesText(s, 2, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("99% tagged", t);
+  // The parts with a count only; all from one source.
+  s = librarytext::Sources{};
+  s.device = 77;
+  librarytext::sourcesText(s, 0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("77 read here", t);
+  fits(small, t, kLibraryRowW);
+  librarytext::sourcesText(s, 2, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("100% tagged", t);
+  s.none = 1;
+  librarytext::sourcesText(s, 2, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("98% tagged", t);  // rounded down: 100% only when all are
+  s = librarytext::Sources{};
+  s.none = 5;
+  librarytext::sourcesText(s, 0, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("names from the files", t);
+  // The shortest form fits whatever the counts; the short one for a card
+  // of the user's shape (most from the transfer, some read here).
+  s.transfer = 99999;
+  s.device = 99999;
+  s.none = 99999;
+  librarytext::sourcesText(s, librarytext::kSourceForms - 1, t, sizeof(t));
+  fits(small, t, kLibraryRowW);
+  s.transfer = 18000;
+  s.device = 1400;
+  s.none = 0;
+  librarytext::sourcesText(s, 1, t, sizeof(t));
+  fits(small, t, kLibraryRowW);
+  for (const char* l : {kLibraryRowPaths, kLibraryRowNoCard, kLibraryRowUpdating}) fits(small, l, kLibraryRowW);
+  TEST_ASSERT_TRUE(small.hasAll(kLibraryRowUpdating));
+  fits(body, kRescanPill, kRescanPillW - kSettingPillPad);
+  fits(body, kRescanStarted, kToastTextRight - kToastTextX);
+  fits(body, kRescanNoCard, kToastTextRight - kToastTextX);
+  // The dialog: its title in Bold, its body in Small on its 3 lines (as
+  // the calibration's Remove), its button.
+  fits(bold, kRescanTitle, kDialogTitleW);
+  fits(bold, kRescanPill, kDialogButtonTextW);
+  {
+    textfit::Font f;
+    f.ctx = const_cast<Vlw*>(&small);
+    f.width = [](void* ctx, const char* text) { return static_cast<const Vlw*>(ctx)->width(text); };
+    TEST_ASSERT_TRUE(strlen(kRescanBody) < 128);
+    char lines[4][96];
+    const int n =
+        textfit::wrap(f, kRescanBody, strlen(kRescanBody), kDialogTitleW, 3, &lines[0][0], sizeof(lines[0]));
+    TEST_ASSERT_TRUE(n <= 3);
+    std::string joined;
+    for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
+    TEST_ASSERT_EQUAL_STRING(kRescanBody, joined.c_str());
+  }
+  // A buffer too small: cut, never past it.
+  char tiny[12];
+  s.transfer = 18000;
+  s.device = 1400;
+  s.none = 10;
+  TEST_ASSERT_TRUE(librarytext::sourcesText(s, 0, tiny, sizeof(tiny)) < sizeof(tiny));
+  TEST_ASSERT_TRUE(strlen(tiny) < sizeof(tiny));
 }
 
 int main(int, char**) {
@@ -1094,6 +2153,8 @@ int main(int, char**) {
   RUN_TEST(test_tabbar_texts_fit_in_every_state);
   RUN_TEST(test_coach_texts_fit);
   RUN_TEST(test_toast_names_fit);
+  RUN_TEST(test_queue_cap_texts_fit);
+  RUN_TEST(test_push_out_texts_fit);
   RUN_TEST(test_empty_state_texts_fit);
   RUN_TEST(test_no_card_texts_fit);
   RUN_TEST(test_board_guard_texts_fit);
@@ -1108,5 +2169,16 @@ int main(int, char**) {
   RUN_TEST(test_touch_calibration_texts_fit);
   RUN_TEST(test_dance_texts_fit);
   RUN_TEST(test_right_half_neighbours_survive_the_lab_panel);
+  RUN_TEST(test_library_rows_from_tags);
+  RUN_TEST(test_library_rows_from_paths);
+  RUN_TEST(test_disc_dividers);
+  RUN_TEST(test_catalog_names_and_overlay);
+  RUN_TEST(test_rail_follows_the_sort_keys);
+  RUN_TEST(test_names_without_tags);
+  RUN_TEST(test_library_texts_fit);
+  RUN_TEST(test_library_row_texts);
+  RUN_TEST(test_console_tag_commands);
+  RUN_TEST(test_console_tag_dump);
+  RUN_TEST(test_console_sources);
   return UNITY_END();
 }

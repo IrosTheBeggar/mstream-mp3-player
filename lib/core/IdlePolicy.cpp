@@ -50,6 +50,7 @@ IdlePolicy::Blocker IdlePolicy::blockerOf(const In& in) const {
   if (in.usb) return Blocker::Usb;
   if (in.pairing) return Blocker::Pairing;
   if (in.queueWrite) return Blocker::QueueWrite;
+  if (in.libraryWrite) return Blocker::LibraryWrite;
   if (in.busy) return Blocker::Busy;
   return Blocker::None;
 }
@@ -144,6 +145,7 @@ const char* IdlePolicy::blockerName(Blocker b) {
     case Blocker::Usb: return "on USB power";
     case Blocker::Pairing: return "pairing";
     case Blocker::QueueWrite: return "the queue is being saved";
+    case Blocker::LibraryWrite: return "the library is being updated";
     case Blocker::Busy: return "a screen of its own is up";
   }
   return "?";

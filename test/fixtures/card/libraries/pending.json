@@ -1,0 +1,51 @@
+{
+ "format": "MSPD",
+ "file": "pending.bin",
+ "generation": 43,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "runId": "0x00C0FFEE00C0FFEE",
+ "baseGeneration": 42,
+ "note": "A run's plan, given out of order: the writer sorts it.",
+ "ops": [
+  {
+   "op": "write",
+   "path": "New Artist/New Album/01 - New.mp3",
+   "expectedSize": 4321
+  },
+  {
+   "op": "folder",
+   "path": "New Artist/New Album"
+  },
+  {
+   "op": "delete",
+   "path": "Artist/x.mp3"
+  },
+  {
+   "op": "write",
+   "path": "A B/y.mp3",
+   "expectedSize": 77
+  },
+  {
+   "op": "folder",
+   "path": "New Artist"
+  },
+  {
+   "op": "delete",
+   "path": "A/x.mp3"
+  },
+  {
+   "op": "write",
+   "path": "Loose New.mp3",
+   "expectedSize": 12
+  },
+  {
+   "op": "write",
+   "path": "A/z.mp3",
+   "expectedSize": 5
+  },
+  {
+   "op": "folder",
+   "path": "A B/Sub"
+  }
+ ]
+}

@@ -31,6 +31,67 @@ uint16_t crc16(const uint8_t* p, size_t n) {
   return crc;
 }
 
+namespace {
+
+// The frame at buf[i] (its header read into `f`) into *out: its Xing/Info or
+// VBRI header, and LAME's extension when it fits in the frame and the buffer.
+void readFrame(const uint8_t* buf, size_t n, size_t i, const progress::Mp3Frame& f, Info* out) {
+  const size_t next = i + static_cast<size_t>(f.length);
+  Info& o = *out;
+  o.frame = true;
+  o.frameAt = static_cast<uint32_t>(i);
+  o.rate = static_cast<uint32_t>(f.rate);
+  o.spf = static_cast<uint32_t>(f.samples);
+  o.kbps = static_cast<uint32_t>(f.kbps);
+  const bool crc = (buf[i + 1] & 1) == 0;  // protection bit 0: a CRC after the header
+  const size_t xing = i + 4 + (crc ? 2 : 0) + static_cast<size_t>(f.sideInfo);
+  const size_t vbri = i + 4 + 32;
+  if (xing + 8 <= n && (std::memcmp(buf + xing, "Xing", 4) == 0 || std::memcmp(buf + xing, "Info", 4) == 0)) {
+    o.header = true;
+    o.xing = true;
+    o.info = buf[xing] == 'I';
+    o.headerLength = static_cast<uint32_t>(f.length);
+    const uint32_t flags = be32(buf + xing + 4);
+    size_t p = xing + 8;
+    if (flags & 1) {
+      if (p + 4 > n) return;
+      o.frames = be32(buf + p);
+      p += 4;
+    }
+    if (flags & 2) p += 4;
+    if (flags & 4) p += 100;
+    if (flags & 8) p += 4;
+    // LAME's extension, if it fits in the frame and the buffer.
+    if (p + 36 > n || p + 36 > next) return;
+    const uint8_t* e = buf + p;
+    std::memcpy(o.encoder, e, 9);
+    o.encoder[9] = 0;
+    for (int k = 0; k < 9; ++k) {
+      if (o.encoder[k] < 0x20 || o.encoder[k] > 0x7E) o.encoder[k] = '.';
+    }
+    const uint16_t delay = static_cast<uint16_t>((e[21] << 4) | (e[22] >> 4));
+    const uint16_t padding = static_cast<uint16_t>(((e[22] & 0x0F) << 8) | e[23]);
+    o.crcChecked = true;
+    o.crcBytes = static_cast<uint32_t>(p + 34 - i);
+    o.crcStored = static_cast<uint16_t>((e[34] << 8) | e[35]);
+    o.crcComputed = crc16(buf + i, o.crcBytes);
+    o.crcOk = o.crcStored == o.crcComputed;
+    if (trustedEncoder(e) && o.frames > 0 &&
+        static_cast<uint64_t>(delay) + padding < static_cast<uint64_t>(o.frames) * o.spf) {
+      o.lame = true;
+      o.delay = delay;
+      o.padding = padding;
+    }
+  } else if (vbri + 18 <= n && std::memcmp(buf + vbri, "VBRI", 4) == 0) {
+    o.header = true;
+    o.vbri = true;
+    o.headerLength = static_cast<uint32_t>(f.length);
+    o.frames = be32(buf + vbri + 14);
+  }
+}
+
+}  // namespace
+
 bool parse(const uint8_t* buf, size_t n, Info* out) {
   *out = Info{};
   for (size_t i = 0; i + 4 <= n; ++i) {
@@ -39,60 +100,18 @@ bool parse(const uint8_t* buf, size_t n, Info* out) {
     const size_t next = i + static_cast<size_t>(f.length);
     progress::Mp3Frame g;
     if (next + 4 <= n && !progress::parseMp3Frame(buf + next, &g)) continue;
-    Info& o = *out;
-    o.frame = true;
-    o.frameAt = static_cast<uint32_t>(i);
-    o.rate = static_cast<uint32_t>(f.rate);
-    o.spf = static_cast<uint32_t>(f.samples);
-    o.kbps = static_cast<uint32_t>(f.kbps);
-    const bool crc = (buf[i + 1] & 1) == 0;  // protection bit 0: a CRC after the header
-    const size_t xing = i + 4 + (crc ? 2 : 0) + static_cast<size_t>(f.sideInfo);
-    const size_t vbri = i + 4 + 32;
-    if (xing + 8 <= n && (std::memcmp(buf + xing, "Xing", 4) == 0 || std::memcmp(buf + xing, "Info", 4) == 0)) {
-      o.header = true;
-      o.xing = true;
-      o.info = buf[xing] == 'I';
-      o.headerLength = static_cast<uint32_t>(f.length);
-      const uint32_t flags = be32(buf + xing + 4);
-      size_t p = xing + 8;
-      if (flags & 1) {
-        if (p + 4 > n) return true;
-        o.frames = be32(buf + p);
-        p += 4;
-      }
-      if (flags & 2) p += 4;
-      if (flags & 4) p += 100;
-      if (flags & 8) p += 4;
-      // LAME's extension, if it fits in the frame and the buffer.
-      if (p + 36 > n || p + 36 > next) return true;
-      const uint8_t* e = buf + p;
-      std::memcpy(o.encoder, e, 9);
-      o.encoder[9] = 0;
-      for (int k = 0; k < 9; ++k) {
-        if (o.encoder[k] < 0x20 || o.encoder[k] > 0x7E) o.encoder[k] = '.';
-      }
-      const uint16_t delay = static_cast<uint16_t>((e[21] << 4) | (e[22] >> 4));
-      const uint16_t padding = static_cast<uint16_t>(((e[22] & 0x0F) << 8) | e[23]);
-      o.crcChecked = true;
-      o.crcBytes = static_cast<uint32_t>(p + 34 - i);
-      o.crcStored = static_cast<uint16_t>((e[34] << 8) | e[35]);
-      o.crcComputed = crc16(buf + i, o.crcBytes);
-      o.crcOk = o.crcStored == o.crcComputed;
-      if (trustedEncoder(e) && o.frames > 0 &&
-          static_cast<uint64_t>(delay) + padding < static_cast<uint64_t>(o.frames) * o.spf) {
-        o.lame = true;
-        o.delay = delay;
-        o.padding = padding;
-      }
-    } else if (vbri + 18 <= n && std::memcmp(buf + vbri, "VBRI", 4) == 0) {
-      o.header = true;
-      o.vbri = true;
-      o.headerLength = static_cast<uint32_t>(f.length);
-      o.frames = be32(buf + vbri + 14);
-    }
+    readFrame(buf, n, i, f, out);
     return true;
   }
   return false;
+}
+
+bool parseFirst(const uint8_t* buf, size_t n, Info* out) {
+  *out = Info{};
+  progress::Mp3Frame f;
+  if (n < 4 || !progress::parseMp3Frame(buf, &f)) return false;
+  readFrame(buf, n, 0, f, out);
+  return true;
 }
 
 uint64_t keptSamples(const Info& info) {

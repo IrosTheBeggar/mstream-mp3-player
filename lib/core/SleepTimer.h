@@ -187,9 +187,10 @@ public:
   static bool endsAt(Choice choice, bool lastOfAlbum, bool lastOfQueue);
 
   // End of album: the next queue entry's track `b` is on another album
-  // than `a`: the album's; with no album information (the "loose tracks",
-  // album ""), the folder. A built-in track, or one the index doesn't
-  // have, is an album of its own. `b` kNone (no next entry): true.
+  // than `a`: the album's; with no album information (an artist folder's
+  // loose tracks, LibraryIndex::kLoose), the folder. A built-in track, or
+  // one the index doesn't have, is an album of its own. `b` kNone (no next
+  // entry): true.
   static bool albumEndsBetween(const LibraryIndex* index, uint32_t a, uint32_t b);
 
   // In::lastOfQueue: the current entry (`current`, -1 none, of `size`) is
@@ -242,6 +243,12 @@ public:
   // position. True: they are this entry's.
   bool update(uint32_t key, uint32_t startSeq, uint32_t positionMs);
   bool started() const { return started_; }
+  // The same entry under a new key (a library rebuild reads the queue back
+  // with fresh keys: docs/METADATA.md 3.4.2): it keeps what it knew, as if
+  // the key had always been this one.
+  void rekey(uint32_t key) {
+    if (seen_) key_ = key;
+  }
 
 private:
   bool seen_ = false;

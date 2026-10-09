@@ -114,6 +114,12 @@ void test_cpu_restart_waits_for_the_headphones_and_the_amp() {
   TEST_ASSERT_FALSE(pc::cpuRestartDue(at - 7, at, true, false));
   TEST_ASSERT_FALSE(pc::cpuRestartDue(at - 7, at, false, true));
   TEST_ASSERT_TRUE(pc::cpuRestartDue(at - 7, at, false, false));
+  // The library being written (a compaction, an update step from its fence
+  // to its save's end): it waits, past the 3 s too, and goes once it's done.
+  TEST_ASSERT_FALSE(pc::cpuRestartDue(at + 40, at, false, false, true));
+  TEST_ASSERT_FALSE(pc::cpuRestartDue(at + 3000, at, true, true, true));
+  TEST_ASSERT_FALSE(pc::cpuRestartDue(at + 60000, at, false, false, true));
+  TEST_ASSERT_TRUE(pc::cpuRestartDue(at + 60000, at, false, false, false));
   // millis() wrapping around between the ask and now.
   TEST_ASSERT_FALSE(pc::cpuRestartDue(0x00000100u, 0xFFFFFF00u, true, true));  // 512 ms
   TEST_ASSERT_TRUE(pc::cpuRestartDue(0x00000C00u, 0xFFFFFF00u, true, true));   // 3328 ms

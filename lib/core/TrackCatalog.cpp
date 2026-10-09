@@ -5,6 +5,10 @@
 
 #include <cstring>
 
+#include "CardContract.h"
+#include "LibraryText.h"
+#include "NameKey.h"
+
 namespace {
 
 struct Builtin {
@@ -94,31 +98,129 @@ size_t TrackCatalog::path(uint32_t id, char* buf, size_t size) const {
   return copyOut("", 0, buf, size);
 }
 
+// ---- the overlay ----
+
+namespace {
+
+// `n` bytes of `s` into an overlay's field, cut at a character boundary;
+// "" for none.
+void fill(char* field, const char* s, size_t n) {
+  const size_t len = s && n ? cardcontract::utf8CutLength(s, n, TrackCatalog::Overlay::kField - 1) : 0;
+  if (len) std::memcpy(field, s, len);
+  field[len] = 0;
+}
+
+}  // namespace
+
+void TrackCatalog::Overlay::set(const LibraryIndex& index, uint32_t id, const LibraryIndex::TagView& tags) {
+  track = id;
+  stamp = index.buildStamp();
+  ++version;
+  // (A blank title or album, White_Space alone, is none: the index's, as
+  // the next build would show it.)
+  fill(title, tags.title, namekey::blank(tags.title, tags.titleLen) ? 0 : tags.titleLen);
+  fill(album, tags.album, namekey::blank(tags.album, tags.albumLen) ? 0 : tags.albumLen);
+  artist[0] = 0;
+  if (tags.artist && tags.artistLen) namekey::displayJoin(tags.artist, tags.artistLen, artist, sizeof(artist));
+  year = tags.year;
+  durationMs = tags.durationMs;
+}
+
+void TrackCatalog::Overlay::clear() {
+  track = kNone;
+  stamp = 0;
+  ++version;
+  title[0] = artist[0] = album[0] = 0;
+  year = 0;
+  durationMs = 0;
+}
+
+const TrackCatalog::Overlay* TrackCatalog::overlayFor(uint32_t id) const {
+  if (!overlay_ || overlay_->track != id || !inIndex(id)) return nullptr;
+  return overlay_->stamp == index_->buildStamp() ? overlay_ : nullptr;
+}
+
+// ---- the names ----
+
 size_t TrackCatalog::title(uint32_t id, char* buf, size_t size) const {
   if (isBuiltin(id)) {
     const char* t = kBuiltins[id - kBuiltin].title;
     return copyCut(t, std::strlen(t), buf, size);
   }
   if (inIndex(id)) {
+    const Overlay* o = overlayFor(id);
+    if (o && o->title[0]) return copyCut(o->title, std::strlen(o->title), buf, size);
     uint8_t len = 0;
     const char* t = index_->trackTitle(id, &len);
     return copyCut(t, len, buf, size);
   }
+  if (const Held* h = heldFor(id)) return copyCut(h->title, std::strlen(h->title), buf, size);
   return copyOut("", 0, buf, size);
 }
 
 const char* TrackCatalog::artist(uint32_t id) const {
   if (isBuiltin(id)) return "built-in";
-  return inIndex(id) ? index_->artistName(index_->track(id).artist) : "";
+  if (const Held* h = heldFor(id)) return h->artist;
+  if (!inIndex(id)) return "";
+  const Overlay* o = overlayFor(id);
+  if (o && o->artist[0]) return o->artist;
+  return librarytext::trackArtist(*index_, id);
+}
+
+// An artist folder's own tracks keep the name "" and no year whatever their
+// tags say (Stage A, 5.4): the overlay doesn't name them either, so the
+// next build changes nothing on screen.
+bool TrackCatalog::loose(uint32_t id) const {
+  return (index_->album(index_->track(id).album).flags & LibraryIndex::kLoose) != 0;
 }
 
 const char* TrackCatalog::album(uint32_t id) const {
   if (isBuiltin(id)) return "Built-in";
-  return inIndex(id) ? index_->albumName(index_->track(id).album) : "";
+  if (const Held* h = heldFor(id)) return h->album;
+  if (!inIndex(id)) return "";
+  const Overlay* o = overlayFor(id);
+  if (o && o->album[0] && !loose(id)) return o->album;
+  return index_->albumName(index_->track(id).album);
+}
+
+const char* TrackCatalog::albumArtist(uint32_t id) const {
+  if (const Held* h = heldFor(id)) return h->albumArtist;
+  return inIndex(id) ? librarytext::albumArtist(*index_, index_->track(id).album) : "";
+}
+
+uint16_t TrackCatalog::year(uint32_t id) const {
+  if (const Held* h = heldFor(id)) return h->year;
+  if (!inIndex(id)) return 0;
+  const Overlay* o = overlayFor(id);
+  if (o && o->year && !loose(id)) return o->year;
+  return index_->album(index_->track(id).album).year;
 }
 
 uint32_t TrackCatalog::durationHintMs(uint32_t id) const {
-  return isBuiltin(id) ? kBuiltins[id - kBuiltin].durationMs : 0;
+  if (isBuiltin(id)) return kBuiltins[id - kBuiltin].durationMs;
+  if (const Held* h = heldFor(id)) return h->durationMs;
+  if (!inIndex(id)) return 0;
+  const Overlay* o = overlayFor(id);
+  if (o && o->durationMs) return o->durationMs;
+  return static_cast<uint32_t>(index_->track(id).durationS) * 1000u;
+}
+
+bool TrackCatalog::take(uint32_t id, Held* h) const {
+  *h = Held{};
+  if (!inIndex(id)) return false;
+  h->track = id;
+  title(id, h->title, sizeof(h->title));
+  const auto copy = [](const char* s, char* out, size_t cap) {
+    const size_t n = s ? cardcontract::utf8CutLength(s, std::strlen(s), cap - 1) : 0;
+    if (n) std::memcpy(out, s, n);
+    out[n] = 0;
+  };
+  copy(artist(id), h->artist, sizeof(h->artist));
+  copy(album(id), h->album, sizeof(h->album));
+  copy(albumArtist(id), h->albumArtist, sizeof(h->albumArtist));
+  h->year = year(id);
+  h->durationMs = durationHintMs(id);
+  return true;
 }
 
 uint32_t TrackCatalog::find(const char* path) const {

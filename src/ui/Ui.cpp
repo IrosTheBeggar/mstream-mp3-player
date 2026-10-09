@@ -16,6 +16,7 @@
 #include "TextFit.h"
 #include "TextFold.h"
 #include "UiText.h"
+#include "app/LoopStack.h"
 #include "app/Psram.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
@@ -209,6 +210,10 @@ void Ui::retryCard() {
 }
 
 void Ui::shuffleAll() {
+  if (state_.libraryFenced) {  // the library update's fence: the index is the build's
+    toast(uitext::kUpdatingWait, false);
+    return;
+  }
   const LibraryIndex* index = library_.index();
   if (browse_ || !index || !index->ready() || index->trackCount() == 0) {
     warn("No music on the card to shuffle");
@@ -220,23 +225,37 @@ void Ui::shuffleAll() {
   // it, so the toast's Undo puts back the queue and the mode it found
   // (QueueModel copies the ids and shuffles them: docs/QUEUE-MODES.md
   // sections 2.5 and 2.6).
+  // Past the queue's cap (QueueModel::kMaxEntries), a random 5,000 of the
+  // library (docs/QUEUE-MODES.md section 15), and the toast says so.
   const LibraryIndex::Span all = index->allTracks();
   const bool was = player_.shuffle();
   const bool ok = player_.playNow(all.ids, all.count, PlaybackController::kAnyStart, /*shuffle=*/true);
   if (ok) added_.clear();  // a new queue: nothing "added" to show in it
-  Serial.printf("[ui] shuffle all: %lu tracks (shuffle on; was %s)%s\n", (unsigned long)all.count, was ? "on" : "off",
-                ok ? "" : ": NO MEMORY");
-  char text[48];
-  snprintf(text, sizeof(text), "Shuffling %lu tracks", (unsigned long)all.count);
+  const uint32_t took = all.count < QueueModel::kMaxEntries ? all.count : QueueModel::kMaxEntries;
+  char capped[64] = "";
+  if (took < all.count) {
+    snprintf(capped, sizeof(capped), ", a random %lu of them (the queue holds %lu)", (unsigned long)took,
+             (unsigned long)QueueModel::kMaxEntries);
+  }
+  Serial.printf("[ui] shuffle all: %lu tracks%s (shuffle on; was %s)%s\n", (unsigned long)all.count, capped,
+                was ? "on" : "off", ok ? "" : ": NO MEMORY");
+  char text[96];
+  if (took < all.count) {
+    queueview::cappedText(queueview::Capped::Shuffle, took, all.count, text, sizeof(text));
+  } else {
+    snprintf(text, sizeof(text), "Shuffling %lu tracks", (unsigned long)all.count);
+  }
   toast(ok ? text : "Not enough memory for that", ok);
 }
 
 void Ui::showTop() {
   Page* next = pageFor(nav_.top().kind);
   if (page_) page_->leave();
-  // A page that shortened the list band (the Queue's selection mode) has
-  // let it go in leave(); be sure.
+  // A page that shortened the list band (the Queue's selection mode, the
+  // Library's status line) has let it go in leave(); be sure.
   if (list_.height() != ListView::kHeight) setListBand(ListView::kHeight);
+  statusBand_ = false;
+  statusHash_ = 0;
   ensureScroller(next->scrolls());
   page_ = next;
   applyCover();
@@ -382,6 +401,15 @@ void Ui::libraryChanged() {
   // and the Library's pages start over at the root.
   thumbs_.libraryChanged();
   resetLibraryTab();
+  if (started_ && !suspended_ && list_.attached()) list_.reload();  // (the Queue's rows: new keys)
+}
+
+void Ui::libraryUpdating() {
+  // The snapshot says so from now (the pages' lines): taken again, so the
+  // pages drawn below see it.
+  host_.snapshot(state_);
+  resetLibraryTab();
+  if (started_ && !suspended_ && list_.attached()) list_.reload();
 }
 
 void Ui::browse(LibraryIndex* index) {
@@ -443,6 +471,7 @@ bool Ui::closeModal(bool notify) {
 
 void Ui::repaintUnder() {
   applyCover();
+  statusHash_ = 0;  // the status line again, if it shows (a sheet covered it)
   if (jumpGrid_.up()) {
     jumpGrid_.draw();
   } else if (coach_.up()) {
@@ -491,6 +520,22 @@ void Ui::toast(const char* text, bool undo, uint32_t viewKey) {
   uncover(was);
   Serial.printf("[ui] toast: %s%s%s\n", text, undo ? " (Undo)" : "",
                 viewKey != QueueModel::kNone ? " (View)" : "");
+}
+
+void Ui::refuse(const char* text) {
+  const queueview::ToastButtons keep =
+      queueview::keptByRefusal(toast_.up(), toast_.undo(), toast_.view(), viewKey_, queue_.undoable());
+  if (!started_ || suspended_) {
+    Serial.printf("[ui] toast not shown (the UI isn't on screen): %s\n", text);
+    return;
+  }
+  // Not toast(): the View kept was noted as an add when it was offered.
+  viewKey_ = keep.viewKey;
+  const int was = toast_.bottom();
+  toast_.show(text, keep.undo, keep.viewKey != QueueModel::kNone, accent(), nowMs_);
+  uncover(was);
+  Serial.printf("[ui] toast: %s%s%s (refused: the last toast's buttons kept)\n", text, keep.undo ? " (Undo)" : "",
+                keep.viewKey != QueueModel::kNone ? " (View)" : "");
 }
 
 void Ui::warn(const char* text) {
@@ -1043,7 +1088,7 @@ void Ui::loop(uint32_t nowMs) {
       dance_.setActive(false);  // (a console tab change while dark)
       danceWasOn_ = true;
     }
-    thumbs_.loop(nowMs, /*busy=*/true);
+    thumbs_.loop(nowMs);
     return;
   }
   if (!hud_.up()) tabBar_.update(tabState(nowMs));
@@ -1078,10 +1123,12 @@ void Ui::loop(uint32_t nowMs) {
       clock_.msUntilDue(millis()) >= kAheadMinMs) {
     list_.renderAhead();
   }
-  // Covers: a new job only while no list moves; one that arrived is drawn
-  // where it shows (a modal's page draws it all when the modal goes).
-  const uint32_t arrived = thumbs_.loop(nowMs, page_ && page_->animating());
+  // Covers: one that arrived is drawn where it shows (a modal's page draws
+  // it all when the modal goes). New ones are the card worker's, never
+  // started while a list moves (app/CardTasks).
+  const uint32_t arrived = thumbs_.loop(nowMs);
   if (arrived != Thumbs::kNone && page_ && !modalUp()) page_->thumbReady(arrived);
+  updateStatus(nowMs);
   if (nowMs - framesWindowStart_ >= 1000) {
     const uint32_t ms = nowMs - framesWindowStart_;
     if (framesInWindow_ > 1) fps_ = framesInWindow_ * 1000.0f / ms;
@@ -1118,6 +1165,51 @@ void Ui::trackMotion(uint32_t nowMs) {
                 motion_.list ? "scroll" : "scrub", (unsigned long)ms, (unsigned long)motion_.frames,
                 ms ? motion_.frames * 1000.0f / ms : 0.0f, motion_.sumUs / 1000.0f / motion_.frames, motion_.maxUs / 1000.0f, (unsigned long)motion_.slow, ring,
                 (unsigned long)(state_.underruns - motion_.underruns), ScrollGovernor::name(budget_.level));
+}
+
+LibraryIndex::Span Ui::shownTracks() const {
+  if (!started_ || suspended_ || page_ != &libraryPage_ || browse_) return {};
+  return libraryPage_.shownTracks();
+}
+
+// The Library's status line (docs/METADATA.md 3.3.6): Small, across the
+// list's width (uitext::kStatusW), at the bottom of a Library page while
+// the card worker has something to say; the list's band ends above it.
+void Ui::updateStatus(uint32_t nowMs) {
+  char text[64] = "";
+  const bool library = page_ == &libraryPage_ && !browse_;
+  if (library) librarytext::statusText(state_.libraryStatus, text, sizeof(text));
+  // The band changes only while the list stands still (a fling isn't cut).
+  if (list_.attached() && list_.animating()) return;
+  if (!text[0]) {
+    if (statusBand_) {
+      statusBand_ = false;
+      statusHash_ = 0;
+      setListBand(ListView::kHeight);
+      list_.invalidate();
+    }
+    return;
+  }
+  if (modalUp() || jumpGrid_.up() || coach_.up()) return;  // drawn again when they go
+  if (!statusBand_) {
+    statusBand_ = true;
+    statusHash_ = 0;
+    setListBand(ListView::kHeight - kStatusH);
+    list_.invalidate();
+  }
+  uint32_t h = 2166136261u;
+  for (const char* p = text; *p; ++p) h = (h ^ static_cast<uint8_t>(*p)) * 16777619u;
+  if (h == 0) h = 1;
+  // At most twice a second (at 10 Hz the redraw cost 5%: MEASURED, 3.3.6).
+  if (h == statusHash_ || (statusHash_ != 0 && nowMs - statusAtMs_ < 500)) return;
+  statusHash_ = h;
+  statusAtMs_ = nowMs;
+  M5Canvas& c = gfx::strip();
+  Fonts& f = Fonts::instance();
+  c.fillRect(0, 0, kW, kStatusH, col::HEAD);
+  c.drawFastHLine(0, 0, kW, col::DIV);
+  f.draw(c, Font::Small, text, 8, kStatusH / 2 + 1, uitext::kStatusW, col::DIM, col::HEAD);
+  gfx::push(c, 0, kH - kStatusH, kW, kStatusH);
 }
 
 uint32_t Ui::idleMs(uint32_t nowMs) const {
@@ -1339,10 +1431,17 @@ void Ui::route(const InputEvent& e) {
           host_.sleepChoose(hit == Toast::kHitExtend ? SleepSheet::kExtend : SleepSheet::kTurnOff);
         } else if (hit == 2) {
           const bool shuffled = player_.shuffle();
+          // (An add that pushed out what played: those come back where they were.)
+          const uint32_t pushed = queue_.undoPushed();
           const bool undone = player_.undo();
           // (Shuffle all's: the mode it found comes back with the queue.)
-          Serial.printf("[ui] undo: %s%s\n", undone ? "done" : "nothing to undo",
-                        player_.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)");
+          char back[48] = "";
+          if (undone && pushed) {
+            snprintf(back, sizeof(back), " (%lu played track%s back)", (unsigned long)pushed, pushed == 1 ? "" : "s");
+          }
+          Serial.printf("[ui] undo: %s%s%s\n", undone ? "done" : "nothing to undo",
+                        player_.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)",
+                        back);
           toast_.show(undone ? "Undone" : "Nothing to undo", false, false, accent(), nowMs_);
           uncover(was);
         } else if (hit == 3) {
@@ -1427,6 +1526,7 @@ void Ui::setDark(bool on) {
 // was off, and what was drawn before (its GRAM) may be stale.
 void Ui::redrawAll() {
   const uint32_t t0 = millis();
+  statusHash_ = 0;
   // The panel keeps its scroll registers through sleep-in; sent again anyway.
   if (vscroll_.active()) vscroll_.resend();
   // A volume HUD that came up in the dark is old news.
@@ -1574,9 +1674,11 @@ void Ui::printState() const {
                   (unsigned long)browse_->albumCount());
   }
   thumbs_.printState();
-  // This runs on the loop task (the console): its stack's low-water mark.
-  Serial.printf("[ui] loop task stack: %u B never used (of 8 KB)\n",
-                static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)));
+  // This runs on the loop task (the console): its stack's low-water mark
+  // since the boot (the console paints the stack again before each command,
+  // so FreeRTOS's own mark is the command's: app/LoopStack).
+  Serial.printf("[ui] loop task stack: %lu B never used since the boot (of 8 KB)\n",
+                static_cast<unsigned long>(loopstack::lowestLeft()));
 }
 
 void Ui::command(const char* a) {

@@ -258,6 +258,11 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawnCalibrated_ = ui_.input().calibrated();
       list.refreshRow(Calibrate);
     }
+    const uint32_t lib = librarySig(ui_.state());
+    if (lib != drawnLibrary_ && still) {
+      drawnLibrary_ = lib;
+      list.refreshRow(LibraryRow);
+    }
     const uint32_t sc = screenSig(ui_.state());
     if (sc != drawnScreen_ && still) {
       drawnScreen_ = sc;
@@ -404,12 +409,75 @@ void OutputPage::drawRow(ListView::Row& r) {
       drawSetting(r, icons::kGear, uitext::kCalRowTitle,
                   ui_.input().calibrated() ? uitext::kCalSubOn : uitext::kCalSubOff, col::TXT, true);
       break;
+    case LibraryRow: drawLibraryRow(r); break;
     case AboutRow:
       drawSetting(r, icons::kInfo, "About", "battery, storage, library, version", col::TXT, true);
       break;
     default: break;
   }
   (void)s;
+}
+
+// The Library row (docs/METADATA.md 3.3.6): "Library: 19,410 tracks", where
+// their names come from (the longest of librarytext::sourcesText()'s forms
+// that fits), and Rescan tags in the settings' pill: dim when there are no
+// card's records here, or while the library updates.
+void OutputPage::drawLibraryRow(ListView::Row& r) {
+  using namespace uitext;
+  const AppState& s = ui_.state();
+  Fonts& f = Fonts::instance();
+  icons::drawCentred(r.c, icons::kLibrary, r.x + 22, 21, col::SOFT);
+  const int x = r.x + 44;
+  const int pillX = r.right - 8 - kRescanPillW;
+  char title[48], sub[96];
+  librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title));
+  if (f.width(Font::Body, title) > pillX - 8 - x) librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title), 1);
+  const bool can = s.libraryRecords && !s.libraryFenced;
+  if (!s.libraryRecords) {
+    snprintf(sub, sizeof(sub), "%s", kLibraryRowNoCard);
+  } else if (s.libraryFenced) {
+    snprintf(sub, sizeof(sub), "%s", kLibraryRowUpdating);
+  } else {
+    librarytext::Sources src;
+    src.transfer = s.libTransfer;
+    src.device = s.libDevice;
+    src.none = s.libNone;
+    for (int form = 0; form < librarytext::kSourceForms; ++form) {
+      librarytext::sourcesText(src, form, sub, sizeof(sub));
+      if (f.width(Font::Small, sub) <= pillX - 8 - x) break;
+    }
+  }
+  ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
+  const uint16_t pill = r.pressed && can ? col::BTN_HI : col::BTN;
+  r.c.fillRoundRect(pillX, 9, kRescanPillW, 24, 8, pill);
+  f.draw(r.c, Font::Body, kRescanPill, pillX + kRescanPillW / 2, 21, kRescanPillW - kSettingPillPad,
+         can ? col::TXT : col::FAINT, pill, Fonts::Align::Centre);
+}
+
+uint32_t OutputPage::librarySig(const AppState& s) {
+  uint32_t h = 2166136261u;
+  for (uint32_t v : {s.libraryTracks, s.libTransfer, s.libDevice, s.libNone,
+                     static_cast<uint32_t>(s.libraryRecords) | static_cast<uint32_t>(s.libraryFenced) << 1}) {
+    h = (h ^ v) * 16777619u;
+  }
+  return h;
+}
+
+// A tap on the Library row: Rescan tags, asked first (minutes of reading on
+// a big card).
+void OutputPage::onRescan() {
+  const AppState& s = ui_.state();
+  if (!s.libraryRecords) {
+    ui_.warn(uitext::kRescanNoCard);
+    return;
+  }
+  if (s.libraryFenced) {
+    ui_.toast(uitext::kUpdatingWait, false);
+    return;
+  }
+  static const char* const kButtons[2] = {"Cancel", uitext::kRescanPill};
+  ask_ = Ask::Rescan;
+  ui_.openDialog(this, uitext::kRescanTitle, uitext::kRescanBody, kButtons, 2);
 }
 
 void OutputPage::drawSetting(ListView::Row& r, const icons::Icon& icon, const char* title, const char* sub,
@@ -830,6 +898,7 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
       ui_.host().setBtPower(powerchoice::nextBt(s.btPower));
       break;
     case Calibrate: onTouch(); break;
+    case LibraryRow: onRescan(); break;
     case AboutRow: ui_.push(page(PageKind::About)); break;
     default: break;
   }
@@ -1008,6 +1077,15 @@ void OutputPage::onDialog(int button) {
     ui_.input().resetCalibration();
     Serial.println("[ui] touch calibration removed: no correction");
     ui_.toast(uitext::kCalRemoved, false);  // (its row follows: tick())
+    return;
+  }
+  if (ask == Ask::Rescan) {
+    if (button != 1 || kind_ != PageKind::Output) return;
+    if (ui_.host().rescanTags()) {
+      ui_.toast(uitext::kRescanStarted, false);
+    } else {
+      ui_.warn(uitext::kRescanNoCard);
+    }
     return;
   }
   if (ask == Ask::CpuRestart) {

@@ -150,6 +150,11 @@ void ThumbCache::done(uint32_t id) {
   if (making_ == id) making_ = kNone;
 }
 
+void ThumbCache::release() {
+  clear();
+  drop();
+}
+
 void ThumbCache::clear() {
   for (Pool& p : pools_) {
     for (uint32_t i = 0; i < p.n; ++i) {

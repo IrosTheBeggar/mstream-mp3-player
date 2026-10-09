@@ -14,7 +14,7 @@ The version reads:
 - "v0.5.0": a release, built from its tag;
 - "v0.5.0-3-gabc1234-dirty": 3 commits past v0.5.0, with uncommitted changes
   (git describe; "-dirty" only for tracked files);
-- "v0.7.0-dev+abc1234[-dirty]": no v* tag reachable (before the first
+- "v0.8.0-dev+abc1234[-dirty]": no v* tag reachable (before the first
   release, or a clone without its tags), so the next release's dev build.
 
 With RELEASE=1 in the environment (CI sets it when it builds a tag), the build
@@ -51,7 +51,7 @@ Import("env")  # noqa: F821  (provided by PlatformIO)
 # Set it to the version about to be tagged before tagging it (a release build
 # warns when they differ); once that tag exists, git describe names builds
 # after it and this only matters in clones without tags.
-NEXT_RELEASE = "0.7.0"
+NEXT_RELEASE = "0.8.0"
 
 # SemVer 2.0.0 with a "v": v0.5.0, v1.2.3-beta.1, v1.2.3+build.5.
 SEMVER = re.compile(r"^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
