@@ -2717,9 +2717,10 @@ static void stepCardGuard() {
   const tagstore::TagStore::Opened o = library.store()->open();
   const bool begun = cardTasks->begin();
   Serial.printf("[card] the card answered again (the same card): its records opened again (D %s, %lu journal "
-                "chunks), the card jobs %s\n",
+                "chunks), the card jobs %s%s\n",
                 library.store()->device().present ? "present" : "none", (unsigned long)o.chunks,
-                begun ? "begun again" : "COULDN'T begin again");
+                begun ? "begun again" : "COULDN'T begin again",
+                library.store()->tmpKept() ? "; tags.tmp KEPT: alone and unchecked (no PSRAM for its check)" : "");
 }
 
 // ---- the card worker (docs/METADATA.md 3.3.4, 3.4.2) ----
@@ -2759,22 +2760,21 @@ static bool enterFence() {
   const LibraryIndex* index = library.index();
   f.libraryTracks = index && index->ready() ? index->trackCount() : 0;
   fencePsramBefore = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-  // The fence's own lowest PSRAM free (leaveFence()'s "lowest", the
-  // since-boot one beside it): the 2026-10-09 run's line gave only the
-  // since-boot lowest, 0 B from a moment outside the fence.
-  fenceLowWindow = diag::beginLowWindow();
   // 1. queue.txt is the queue; its memory the build's.
-  if (!queueStore.remapBegin(library.update()->spare())) {
-    diag::endLowWindow();
-    fenceLowWindow = false;
-    return false;
-  }
+  if (!queueStore.remapBegin(library.update()->spare())) return false;
   frozen = f;
   // 2. The readers: the names kept, the index hidden.
   library.fence(f.trackId);
   if (userInterface) userInterface->thumbs().lend();  // 3. Thumbs' pools (about 315 KB)
   // 3. The old index (and the scan's memory); then the UI, which sees none.
   cardTasks->fenceUp();
+  // The fence's own lowest PSRAM free (leaveFence()'s "lowest", the
+  // since-boot one beside it), from here: the IDF's window starts at the
+  // free of the moment, so begun before the frees above it would give their
+  // level (the "before" figure, often under the build's own low), not the
+  // build's margin (3.5; the r3 review). The 2026-10-09 run's line gave
+  // only the since-boot lowest, 0 B from a moment outside the fence.
+  fenceLowWindow = diag::beginLowWindow();
   if (userInterface) userInterface->libraryUpdating();
   Serial.printf("[lib] the update step (%s): the fence is up; the build on the card worker (the loop goes on); PSRAM "
                 "free %u B before, %u B now\n",

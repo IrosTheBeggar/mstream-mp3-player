@@ -1628,6 +1628,12 @@ device can then take turns on one card. The device MUST NOT write
   - The window is two sector writes, and the `LibraryWrite` blocker
     (3.3.5) keeps the power on through it; a brownout or a crash is what
     remains.
+- **Only the tmp** (`X` missing: a cut between the remove of `X` and the
+  rename) is renamed `X` when its check says it is whole, and removed
+  when it says torn. A check that can't run (no memory for it) is no
+  verdict: the tmp is kept as it is, and nothing removes it until a
+  check runs (the next boot's). For `tags.tmp`, then the only D, the
+  compaction is refused meanwhile (the r3 review, 3.3.2).
 
 ### 2.13 AutoDJ: `autodj-<gen>.bin` (MPDJ v1)
 
@@ -2618,8 +2624,10 @@ at priority 0, about twice that, as before (the loop draws then). Since
 the r3 fixes (the fixes after 2026-10-09's third L1-L5 run on the
 device, on 6c2a928: "r3" from here on; 3.3.7) a compaction and the
 update step's save run level with the loop too while the screen is dark
-(3.3.9): at 0 the run measured them 1.75x (compactions) and 2-4.5x (the
-save) their time at 1.
+(3.3.9): at 0 the run measured a compaction about 1.75x its modelled
+card time (no compaction ran at 1 on the device: the share of that
+excess that is the merge's own CPU is unmeasured, 3.3.7) and the save
+2-4.5x its time on the loop at the boot (priority 1).
 
 **Risk:** the worker's 6 KB stack is held for the whole scan, and
 Bluetooth mode has the least internal RAM. Nothing large lives on it:
@@ -2769,6 +2777,21 @@ fake FAT trees into it). What the code decided where 3.3.2 left room:
   `prepareTmp()`, `replace()` and `collectTwins()` take any file's names,
   so `library.idx`, `queue.txt` and `device.txt` can use them
   (`library.idx` and `device.txt` do since N10; `LibraryUpdate`, N12).
+- **`tags.tmp` alone, checked** (`TagStore::open()`, `DeviceCheck`): the
+  check walks it as a reader does, through `Config::deviceBuffer` (8 KB
+  since the r3 fixes: about 12.9 KB with the reader), or through the
+  walker's least (`DeviceReader::kMinScratch`, about 5.3 KB in all) when
+  that block can't be had; with neither it gives no verdict
+  (`TmpCheck::Verdict::Unknown`): `settle()` keeps the tmp
+  (`Settle::Kept`), D is absent for the session, `tmpKept()` says so (the
+  boot's `[lib] the card: ...` line and the remount's end `; tags.tmp
+  KEPT: ...`), and `compact()` refuses, since its `prepareTmp()` would
+  remove it; the next `open()` checks it again. Before the r3 review a
+  refused block removed a whole `tags.tmp`, D lost and the whole card
+  read again (`test_tag_store`'s
+  `test_a_failed_check_allocation_keeps_a_whole_tmp`). `library.tmp`'s
+  check (a load) still counts no memory as torn: `library.idx` is a
+  cache the records rebuild.
 - **The builder's inputs** (3.4.4): `BuilderRows` (DSTA, its CRC checked
   first: N2's walker doesn't know the section) and `BuilderFacts` (DFLD
   through a folder cursor) are `LibraryBuilder::DeviceRows` and
@@ -2816,7 +2839,8 @@ fake FAT trees into it). What the code decided where 3.3.2 left room:
   one-sector `FIL` buffer and writes alone; every refill of a 512 B or 1 KB
   read buffer (`cc::Stream`) a partial sector at each end too, through the
   same buffer, evicted by the other streams on the file. And the worker
-  ran them at priority 0 (about 1.75x: 3.3.9). The fixes, each the same
+  ran them at priority 0 (about 1.75x their modelled card time: 3.3.9;
+  some of it may be the merge's own CPU). The fixes, each the same
   bytes on the card (D byte for byte, `test_card_io`):
   - a section's buffer (`Cursor`) ends on the file's 4 KB boundaries (a
     sector's with a buffer under 4 KB, none under 512 B): every flush
@@ -2858,7 +2882,13 @@ fake FAT trees into it). What the code decided where 3.3.2 left room:
   last compaction is about 12-13 s of card time, about 12-16 s with the
   screen dark (priority 1) and 20-28 s lit (0); the 8 of a 20k scan about
   1.4-1.6 min dark against about 12.5 min on 6c2a928 (ESTIMATED; L3.7
-  measures). No card write is over 8 sectors: the decoder waits for
+  measures). The dark figure counts 6c2a928's whole excess over its card
+  time (0.75x) as the priority's, and no compaction ran at priority 1 on
+  the device: the merge's own CPU (its two passes, HIDX's sort, FatFs's
+  cached lookups) is unmeasured, and a higher priority doesn't shrink
+  it. If it is a real share, a dark compaction takes up to about 20 s;
+  L3.7 times one dark against `gc`'s counters, which give its card
+  time. No card write is over 8 sectors: the decoder waits for
   FatFs's lock one 4 KB piece at most, as before.
 
 #### 3.3.8 As built (N6)
@@ -3059,10 +3089,10 @@ where 3.3.3-3.3.5 left room:
   loop only reads touches every 20 ms. The rest stay at 0 (a compaction,
   the save, the DJNB check). The decoder (2) is above both either way.
   **Since the r3 fixes a compaction and the save run at 1 too while the
-  screen is dark** (the 2026-10-09 run: a compaction about 1.75x its card
-  time at 0, the save 4.5-9.9 s on the worker against 2.2 s on the loop
-  at the boot, the slowest when idle, where the idle task's ticks wait
-  for an interrupt): unsliced (a compaction is 12-16 s, the save 1-2 s),
+  screen is dark** (the 2026-10-09 run: a compaction about 1.75x its
+  modelled card time at 0, the save 4.5-9.9 s on the worker against
+  2.2 s on the loop at the boot, the slowest when idle, where the idle
+  task's ticks wait for an interrupt): unsliced (a compaction is 12-16 s, the save 1-2 s),
   they drop to 0 the pass the screen lights and run on below the loop;
   the DJNB check stays at 0.
   L2, L3 and L5 measure it (6.3.1): `gs`'s slices, the times, the
@@ -3072,7 +3102,7 @@ where 3.3.3-3.3.5 left room:
   10-20 s on an unchanged card, 20-30 s on a first walk (it was 2.7 min
   with the screen dark, 50 s lit at best); the scan 2.6-3.0 min idle with
   the screen dark, about 6 min lit. MEASURED on 6c2a928 (2026-10-09): an
-  unchanged card's walk 27.3 s dark, 28.1 s partly lit, 8.4-9.0 ms a
+  unchanged card's walk 27.3 s dark, 28.1 s 34% lit, 8.4-9.0 ms a
   folder on the worker against `glw`'s 5.4 ms (13.9 s: 3.2.7). Where the
   rest went: KnownD read `tags.bin` (3.7-4.1 MB) through a 4 KB scratch,
   its walker's streams 768 B each, so about 7,000 single-sector card
@@ -3244,14 +3274,17 @@ L4 measures a pause over about 16 s, the safe point grows with it.
 
 **MEASURED on N11's card (6c2a928, 2026-10-09), and the r3 fixes.** The
 update step's build took 16.2 s with the screen dark and nothing playing,
-18.2-18.8 s with a stub playing and the screen lit; the same D built at
-the boot, alone on the loop, 13.6 s. Against the table: `finish()` is
+18.3 s with the screen dark and the hour of silence's tone playing, and
+18.8 s with the screen lit by the runner's probes (a stub played about
+4 s of it); no build ran while an MP3 decoded. The same D built at the
+boot, alone on the loop, 13.6 s. Against the table: `finish()` is
 about 3.8 s at 19,410 tracks, not 1.3 (its views' sorts reach into the
 track table and the strings in PSRAM, and on the records' order
 `std::sort` made about 1.54 million compares on the two big views: 3.9);
 reading D's 3.6 MB was about 3,300 card commands, nearly all of one
-sector (about 4-5 s); and the build shares core 1 with the loop (+2.6 s
-dark, +4.6-5.2 s playing lit). The save took 4.5-9.9 s on the card worker
+sector (about 4-5 s); and the build shares core 1 with the loop and the
+audio (+2.6 s dark and idle, +4.7 s with the tone, +5.2 s lit). The save
+took 4.5-9.9 s on the card worker
 at priority 0 (the slowest idle) against 2.2 s at the boot on the loop:
 `library.idx`'s pieces started mid-sector, half its 863 card writes a
 single sector. Since the r3 fixes: the views' sorts are `idsort`'s (about
@@ -3259,11 +3292,14 @@ single sector. Since the r3 fixes: the views' sorts are `idsort`'s (about
 sectors (2,041 card commands, `test_card_io`), the save's pieces end on
 the file's 4 KB boundaries (424 card writes, 25 of one sector) and runs
 at priority 1 while the screen is dark. ESTIMATED: the build about
-13-15.5 s idle or dark, 15.5-18 s playing; the save about 1-2 s dark,
+13-15.5 s dark with nothing playing, 15.5-18 s lit or with audio playing
+(about 1.4-2.4 s off each; the tone's build measured, an MP3 decode's
+not, and likely slower than the tone's); the save about 1-2 s dark,
 2-4 s lit. 7-9 s is out of reach on this card (D alone is about 3.6 s of
-card time, and the build shares core 1 by design). The playing build
-was over 16 s on 6c2a928 and may still be: the safe point isn't grown
-yet, since a track that ends inside the fence is safe either way
+card time, and the build shares core 1 by design). The lit and the
+playing builds were over 16 s on 6c2a928 and may still be: the safe
+point isn't grown yet, since a track that ends inside the fence is safe
+either way
 (gapless on, it joins; off, the next waits, paused: 3.9) and the next
 run's L4.1 measures the fixed build first.
 
@@ -3422,7 +3458,10 @@ counts):
   outside the step (the boot, the UI's start, the walk or a compaction),
   with no failure logged by the code that asked. Since the r3 fixes the
   line gives the fence's own lowest (heap_caps' local minimum, from
-  `enterFence()` to `leaveFence()`) and the since-boot one beside it; the
+  the fence's frees, right after `CardTasks::fenceUp()`, to `leaveFence()`:
+  the IDF's window starts at the free of its moment, so begun before the
+  frees, as in the r3 fixes, it gave the level before them, often under
+  the build's own low; the r3 review) and the since-boot one beside it; the
   `[stats]` line's `pmin=` and the `[heap]` stage lines' `min=` give the
   since-boot lowest every 5 s; and a hook logs every failed allocation of
   PSRAM or of 4 KB or more (`[heap] FAILED: N B (caps 0x..) in <function>,
@@ -4209,7 +4248,8 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
      without its index); Thumbs' pools lent; `CardTasks::fenceUp()`: the
      scan's View closed, its chunk out, its memory back, and the old index
      cleared (`fencedUp()`; its track table's block kept for the build,
-     N10's `keepTrackBlock()`; `index()` nullptr from here); then the UI's
+     N10's `keepTrackBlock()`; `index()` nullptr from here); the fence's
+     own PSRAM low window from here (3.5); then the UI's
      lists to their line (after the clear: they count no rows, so the
      "Updating the library…" line shows, not the old index's rows drawn
      blank). The queue can't be carried (no PSRAM for the carry, or its
@@ -4359,7 +4399,12 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   +368 B in core2 (639,048 to 639,416) and +384 B in core2-dio (639,080 to
   639,464), `firmware.bin` 2,627,856 to 2,628,688 B in core2, the app 2.51
   MB (42% of its slot); `iram_diet`, `cache_guard`, `flash_guard` and
-  `version` pass in both.
+  `version` pass in both. The r3 review's fixes (the kept `tags.tmp`, the
+  low window after the frees), against dbfae3e, both built clean: IRAM
+  and internal DRAM unchanged; flash `.text` +124 B (1,759,312 to
+  1,759,436, the same in both builds) and `.rodata` +256 B in core2
+  (639,432 to 639,688), `firmware.bin` 2,628,704 to 2,629,088 B in core2;
+  every guard passes in both.
   PSRAM (from the code): `LibraryUpdate` and its step about 0.4 KB, the
   held names about 1 KB, the carry about 0.1 KB, and when the card can't
   take `queue.txt` the queue's text through the build (up to about 400 KB
@@ -5017,11 +5062,15 @@ the next epoch). Then:
    and every walk merges again (115 on N11's card); S = F + 2 (a step a
    folder: 2,593 on N11's card; 7,774 before 2026-10-09), M about 19-31
    s at 20k with the cache (3.3.9, ESTIMATED since the r3 fixes: 25-31 s
-   lit, 19-23 s dark; 28.1 s and 27.3 s MEASURED on 6c2a928; 2.7 min with
+   lit, 19-23 s dark, in between by the share of the walk the screen was
+   lit; 28.1 s 34% lit and 27.3 s dark MEASURED on 6c2a928; 2.7 min with
    the screen dark before 2026-10-09), under 0.05 s at 77. Then `gs`:
    `[card] walk: H slices (S walk steps), mean m ms, longest l ms`:
-   several walk steps a slice (S/H about 3-7 lit, 20-40 dark, at 8-9 ms a
-   folder on the worker), m near the slice (18 ms lit, 250 ms dark since
+   walk steps a slice, S/H about 1-3 lit (an 18 ms slice takes the next
+   folder only while the time so far and the last folder's fit in it,
+   `CardJobs::sliceGoesOn()`: 2 at 8-9 ms a folder, 3 under 6 ms; about
+   1.7 in 6c2a928's lit part), 20-40 dark (8-9 ms a folder on the
+   worker), m near the slice (18 ms lit, 250 ms dark since
    the r3 fixes; 60 ms before), l under about 100 ms lit, 350 ms dark (a
    slice and one unit; a 3,000-file folder's pass, 0.3-0.6 s, is the
    exception). The same walk with the screen dark: `gs0`, then `gw`
@@ -5110,12 +5159,16 @@ page) and `gs` at its end.
    about every 2,400 (`tags.jnl` reaching 512 KB first: 8 in 20k on the
    host, 3.3.7); `gs`'s `[card] compaction: S steps, mean m ms, longest
    l ms`: the last one about 12-16 s at 20k with the screen dark (priority
-   1), 20-28 s lit (0), the mean a little under (3.3.7, ESTIMATED since
-   the r3 fixes; 6c2a928: mean 94 s, longest 107 s). `gc`'s card counters
-   across one (`gc` before and after it, nothing else reading): about
-   1,100 writes for 7,900 sectors at 20k, a tenth of them single-sector,
-   and about 7,000 reads past the cache (on 6c2a928 every write and read
-   a single sector).
+   1), 20-28 s lit (0), in between by the share of its span the screen was
+   lit, the mean a little under (3.3.7, ESTIMATED since the r3 fixes;
+   6c2a928: mean 94 s, longest 107 s). `gc`'s card counters across one
+   (`gc` before and after it, nothing else reading): about 1,100 writes
+   for 7,900 sectors at 20k, a tenth of them single-sector, and about
+   7,000 reads past the cache (on 6c2a928 every write and read a single
+   sector). The dark figure is the priority's if 6c2a928's excess over its
+   card time was; the merge's own CPU is unmeasured (3.3.7): a dark
+   compaction of 16-20 s whose counters match is that share, a finding
+   to record, and one near the lit figure is the priority not applied.
 
 **L4, the update step at 20k** (3.4.2, 3.9; risk 8). With the queue full
 (Shuffle all: 5,000) and an MP3 playing. Since N12 the build and the save
@@ -5134,13 +5187,18 @@ figures through it are what L4 records.
    the card worker (the loop live; the fence up F ms); PSRAM free X B
    before, Y B after, lowest Z B` and `[lib] built from the records: ...
    peak P B` (3.4.4: 1.99 MB at 20k). N against 3.4.2's reads, adds and
-   finish (about 13-15.5 s idle or dark, 15.5-18 s while an MP3 plays,
-   ESTIMATED since the r3 fixes; 16.2 s and 18.2-18.8 s MEASURED on
-   6c2a928, 3.4.2; the build shares the CPU with the loop: record both);
-   F about N and a pass; over 16 s grows the safe point. Since the r3
-   fixes the line ends `lowest Z B during the fence (W B since the
-   boot)`: Z the fence's own lowest, about 0.85-0.95 MB (3.5: 0.93-0.97
-   MB replayed for 6c2a928; at least 3.5's 0.7 MB), W the since-boot one
+   finish (about 13-15.5 s with the screen dark and nothing playing,
+   15.5-18 s lit or with audio playing, ESTIMATED since the r3 fixes;
+   MEASURED on 6c2a928, 3.4.2: 16.2 s dark and idle, 18.3 s dark with the
+   tone, 18.8 s lit with the probes; a build while an MP3 decodes is
+   unmeasured, likely slower than the tone's: L4.1-mp3; the build shares
+   the CPU with the loop: record both); F about N and a pass; over 16 s
+   grows the safe point. Since the r3 fixes the line ends `lowest Z B
+   during the fence (W B since the boot)`: Z the fence's own lowest from
+   its frees on (since the r3 review the window starts after
+   `CardTasks::fenceUp()`, so Z is at most Y and is the build's margin,
+   not X's level), about 0.85-0.95 MB (3.5: 0.93-0.97 MB replayed for
+   6c2a928; at least 3.5's 0.7 MB), W the since-boot one
    (0 B in every session on 6c2a928; with `pmin=` and any `[heap] FAILED`
    line, above; `lowest W B since the boot (no window)` if the IDF
    refused the window). Record `[lib] the update step waits for the next
@@ -5157,7 +5215,8 @@ figures through it are what L4 records.
    underruns.
 3. The save: `[lib] the update step: library.idx saved in X ms on the
    card worker` (about 1-2 s at 20k with the screen dark, at priority 1,
-   2-4 s lit, at 0: ESTIMATED since the r3 fixes; 4.9-9.9 s MEASURED on
+   2-4 s lit, at 0, in between by the share of it the screen was lit:
+   ESTIMATED since the r3 fixes; 4.9-9.9 s MEASURED on
    6c2a928, 2.2 s at the boot on the loop); `g`'s `[index] the last update step
    (gb): built in ... the fence up ... saved in ...`.
 4. The queue survives: `[queue] after the rebuild, carried through

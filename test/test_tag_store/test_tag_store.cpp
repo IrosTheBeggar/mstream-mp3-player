@@ -9,8 +9,9 @@
 // every write, sync, remove and rename of a session (a rename cut between its
 // two directory writes included) in three ways (the steps before it, the
 // unsynced writes lost, the cut write torn) with the recovery itself cut
-// again, the compaction's memory fixed whatever the journal holds, N2's
-// builder fed through the adapters, and the compaction at 20k.
+// again, a whole tags.tmp kept when its check has no memory, the
+// compaction's memory fixed whatever the journal holds, N2's builder fed
+// through the adapters, and the compaction at 20k.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -1049,11 +1050,16 @@ namespace {
 
 class Whole : public ts::TmpCheck {
 public:
-  explicit Whole(bool w) : w_(w) {}
-  bool whole(ts::Fs&, const char*) override { return w_; }
+  explicit Whole(bool w) : v_(w ? Verdict::Whole : Verdict::Torn) {}
+  explicit Whole(Verdict v) : v_(v) {}
+  Verdict check(ts::Fs&, const char*) override {
+    ++asked;
+    return v_;
+  }
+  int asked = 0;
 
 private:
-  bool w_;
+  Verdict v_;
 };
 
 }  // namespace
@@ -1079,6 +1085,22 @@ void test_cut_rename_rule() {
     fs.put("/p/x.tmp", {1, 2, 3});
     TEST_ASSERT_TRUE(ts::settle(fs, n, &no).what == ts::Settle::Removed);
     TEST_ASSERT_TRUE(fs.names().empty());
+  }
+  {
+    // A tmp alone whose check couldn't run (no memory for it): no verdict,
+    // so it stays as it is for the next settle(), which checks it again.
+    CutFs fs;
+    fs.put("/p/x.tmp", {1, 2, 3});
+    Whole unknown(ts::TmpCheck::Verdict::Unknown);
+    TEST_ASSERT_TRUE(ts::settle(fs, n, &unknown).what == ts::Settle::Kept);
+    TEST_ASSERT_TRUE(fs.bytes("/p/x.tmp") == std::vector<uint8_t>({1, 2, 3}));
+    TEST_ASSERT_FALSE(fs.exists("/p/x.idx"));
+    TEST_ASSERT_TRUE(ts::settle(fs, n, &yes).what == ts::Settle::Promoted);
+    TEST_ASSERT_TRUE(fs.bytes("/p/x.idx") == std::vector<uint8_t>({1, 2, 3}));
+    // Beside X the tmp is a leftover whatever a check would say: not asked.
+    fs.put("/p/x.tmp", {4});
+    TEST_ASSERT_TRUE(ts::settle(fs, n, &unknown).what == ts::Settle::Removed);
+    TEST_ASSERT_EQUAL_INT(1, unknown.asked);
   }
   {
     // Both, on different chains: the tmp is a leftover.
@@ -1153,6 +1175,108 @@ void test_cut_rename_rule() {
     fs.link("/p/x.idx", "/p/x.xl1");
     TEST_ASSERT_EQUAL_UINT32(0, ts::collectTwins(fs, n));
   }
+}
+
+// ---------------------------------------------------------------------------
+// A whole tags.tmp alone (a cut between replace()'s remove of tags.bin and
+// its rename: the only D left) and an open() short of memory for its check
+// (the r3 review: Config::deviceBuffer's 8 KB made the check's block about
+// 12.9 KB, and a refused block removed the tmp, D lost, the whole card read
+// again): the check reads through the walker's least instead, and with no
+// memory at all it gives no verdict, the tmp kept and the compaction (whose
+// prepareTmp() would remove it) refused until an open() checks it.
+// ---------------------------------------------------------------------------
+namespace {
+
+struct Refusing {
+  static size_t exact, from;
+  static uint32_t refused;
+  static void set(size_t e, size_t f) {
+    exact = e;
+    from = f;
+    refused = 0;
+  }
+  static void* alloc(size_t n) {
+    if ((exact && n == exact) || (from && n >= from)) {
+      ++refused;
+      return nullptr;
+    }
+    return Heap::alloc(n);
+  }
+};
+size_t Refusing::exact = 0;
+size_t Refusing::from = 0;
+uint32_t Refusing::refused = 0;
+
+}  // namespace
+
+void test_a_failed_check_allocation_keeps_a_whole_tmp() {
+  CutFs fs;
+  State m;
+  {
+    ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+    st.open();
+    TEST_ASSERT_TRUE(walk(st, m, commit(1), 0,
+                          {wFile("A/1.mp3", 1000, kT), wFile("A/2.mp3", 1001, kT), wFolder("A", facts(1))}));
+    TEST_ASSERT_TRUE(st.compact().ok);
+    compacted(m, false);
+  }
+  const std::vector<uint8_t> d = fs.bytes("/.player/tags.bin");
+  TEST_ASSERT_TRUE(d.size() > 0);
+  auto cut = [&]() {
+    fs.remove("/.player/tags.bin");
+    fs.put("/.player/tags.tmp", d);
+  };
+  const size_t full = sizeof(ts::DeviceReader) + config().deviceBuffer + 16;
+  // Config::deviceBuffer's block refused: the check reads through
+  // DeviceReader::kMinScratch, and the tmp is promoted.
+  cut();
+  {
+    Refusing::set(full, 0);
+    ts::TagStore st(fs, config(), Refusing::alloc, Heap::release);
+    const ts::TagStore::Opened o = st.open();
+    const uint32_t refused = Refusing::refused;
+    Refusing::set(0, 0);
+    TEST_ASSERT_EQUAL_UINT32(1, refused);
+    TEST_ASSERT_TRUE(o.settled.what == ts::Settle::Promoted);
+    TEST_ASSERT_FALSE(st.tmpKept());
+    TEST_ASSERT_TRUE(st.device().present);
+    TEST_ASSERT_TRUE(fs.bytes("/.player/tags.bin") == d);
+    TEST_ASSERT_FALSE(fs.exists("/.player/tags.tmp"));
+    assertDevice(fs, st, m);
+  }
+  // No memory for the check at all: no verdict, the tmp kept as it is, D
+  // absent this session, and the compaction refused...
+  cut();
+  {
+    Refusing::set(0, sizeof(ts::DeviceReader));
+    ts::TagStore st(fs, config(), Refusing::alloc, Heap::release);
+    const ts::TagStore::Opened o = st.open();
+    TEST_ASSERT_TRUE(Refusing::refused >= 2);
+    TEST_ASSERT_TRUE(o.settled.what == ts::Settle::Kept);
+    TEST_ASSERT_TRUE(st.tmpKept());
+    TEST_ASSERT_FALSE(st.device().present);
+    Refusing::set(0, 0);
+    const ts::TagStore::Compacted c = st.compact();
+    TEST_ASSERT_FALSE(c.ok);
+    TEST_ASSERT_NOT_NULL(c.error);
+    TEST_ASSERT_TRUE(fs.bytes("/.player/tags.tmp") == d);
+    TEST_ASSERT_FALSE(fs.exists("/.player/tags.bin"));
+  }
+  // ...until the next open(), with the memory: promoted, D as it was.
+  {
+    ts::TagStore st(fs, config(), Heap::alloc, Heap::release);
+    const ts::TagStore::Opened o = st.open();
+    TEST_ASSERT_TRUE(o.settled.what == ts::Settle::Promoted);
+    TEST_ASSERT_FALSE(st.tmpKept());
+    TEST_ASSERT_TRUE(fs.bytes("/.player/tags.bin") == d);
+    assertDevice(fs, st, m);
+    TEST_ASSERT_TRUE(st.compact().ok);
+    compacted(m, false);
+    assertDevice(fs, st, m);
+  }
+  TEST_ASSERT_TRUE(fs.violations.empty());
+  TEST_ASSERT_EQUAL_size_t(0, Heap::live);
 }
 
 // ---------------------------------------------------------------------------
@@ -1646,6 +1770,7 @@ int main(int, char**) {
   RUN_TEST(test_a_bad_device_is_left_out);
   RUN_TEST(test_rescan_and_new_parser);
   RUN_TEST(test_cut_rename_rule);
+  RUN_TEST(test_a_failed_check_allocation_keeps_a_whole_tmp);
   RUN_TEST(test_power_cut_at_every_step);
   RUN_TEST(test_power_cut_during_recovery);
   RUN_TEST(test_compaction_memory_is_bounded);

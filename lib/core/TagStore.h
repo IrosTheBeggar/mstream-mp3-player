@@ -181,7 +181,9 @@ public:
 // and X.tmp on one chain, and the next X.tmp opened with FA_CREATE_ALWAYS (or
 // a remove of either) would free clusters the other still uses. So:
 //   - settle(), at boot: X.tmp alone is renamed X when `check` says it is
-//     whole (it was synced before X went), else removed; X and X.tmp on
+//     whole (it was synced before X went), removed when it says torn, and
+//     left as it is when the check couldn't run (no memory for it: a
+//     failed allocation is no verdict on the file); X and X.tmp on
 //     different chains: the tmp is a leftover, removed; on one chain: the
 //     tmp is renamed to a twin (X.xl1, a rename frees nothing);
 //   - prepareTmp(), before X.tmp is created: a leftover the same way;
@@ -205,9 +207,13 @@ bool twinName(const Names& n, int i, char* out, size_t cap);
 
 class TmpCheck {
 public:
+  enum class Verdict : uint8_t {
+    Torn,     // not a whole file of its kind (or it couldn't be opened)
+    Whole,    // a whole file of its kind (its checksums hold)
+    Unknown,  // the check couldn't run (no memory for it): no verdict
+  };
   virtual ~TmpCheck() = default;
-  // The tmp is a whole file of its kind (its checksums hold).
-  virtual bool whole(Fs& fs, const char* tmp) = 0;
+  virtual Verdict check(Fs& fs, const char* tmp) = 0;
 };
 
 enum class Settle : uint8_t {
@@ -216,6 +222,7 @@ enum class Settle : uint8_t {
   Promoted,     // X was missing and the tmp whole: renamed X
   Quarantined,  // the tmp shared a chain: renamed to a twin
   Failed,       // a remove or rename failed (or no twin name was free)
+  Kept,         // X was missing and the check couldn't run: the tmp left for the next settle()
 };
 struct Settled {
   Settle what = Settle::Clean;
@@ -596,7 +603,7 @@ public:
   };
 
   struct Opened {
-    Settled settled;           // tags.tmp's fate (2.12.6)
+    Settled settled;           // tags.tmp's fate (2.12.6); Kept: tmpKept()
     Why deviceWhy = Why::Ok;   // D's frame: Ok, or why it is absent
     uint32_t chunks = 0;       // tags.jnl's chunks that extend D
     bool journalTorn = false;  // a torn or foreign tail, cut off at the next append
@@ -646,6 +653,11 @@ public:
   // Twins on the card: it wants a disk check on a PC (the console and the
   // Library row say so).
   uint32_t twins() const { return twins_; }
+  // open() found tags.tmp alone (a cut between replace()'s remove and its
+  // rename, or in a first D's write) and had no memory to check it: it is
+  // left as it is, D is absent this session, and compact() refuses (its
+  // prepareTmp() would remove the tmp) until an open() checks it.
+  bool tmpKept() const { return tmpKept_; }
   const Config& config() const { return cfg_; }
   Fs& fs() { return fs_; }
   // The paths.
@@ -728,6 +740,7 @@ private:
   Names names_;
   DeviceInfo dev_;
   uint32_t twins_ = 0;
+  bool tmpKept_ = false;  // open(): tags.tmp alone, unchecked (Settle::Kept)
   // tags.jnl
   Chunk* chunks_ = nullptr;  // maxChunks of them
   uint32_t chunkN_ = 0;

@@ -73,15 +73,15 @@ void onBuild(const char* path, void* p) {
 // device.tmp: whole when it reads as a device.txt.
 class TxtCheck : public tagstore::TmpCheck {
 public:
-  bool whole(tagstore::Fs& fs, const char* tmp) override {
+  Verdict check(tagstore::Fs& fs, const char* tmp) override {
     tagstore::File* f = fs.open(tmp, tagstore::Fs::Mode::Read);
-    if (!f) return false;
+    if (!f) return Verdict::Torn;
     char text[512];
     const uint32_t n = std::min<uint32_t>(f->size(), sizeof(text));
     bool ok = n > 0 && f->read(0, text, n);
     fs.close(f);
     cardcontract::devicetxt::Info info;
-    return ok && cardcontract::devicetxt::parse(text, n, &info);
+    return ok && cardcontract::devicetxt::parse(text, n, &info) ? Verdict::Whole : Verdict::Torn;
   }
 };
 
@@ -369,10 +369,13 @@ bool Library::beginCard() {
   char rootLine[200];
   cardroot::describe(*root_, rootLine, sizeof(rootLine));
   const tagstore::DeviceInfo& di = store_->device();
-  Serial.printf("[lib] the card: %s; D %s (%lu records, %lu journal chunks%s), read in %.0f ms + %.0f ms%s\n",
+  Serial.printf("[lib] the card: %s; D %s (%lu records, %lu journal chunks%s), read in %.0f ms + %.0f ms%s%s\n",
                 rootLine, di.present ? "present" : "none", (unsigned long)(di.present ? di.tags.recordCount : 0),
                 (unsigned long)store_->chunkCount(), store_->hasWalk() ? ", a walk to merge" : "", stats_.rootMs,
-                stats_.openMs, store_->twins() || b.tmpSettled.twins ? "; TWINS: the card wants a disk check on a PC" : "");
+                stats_.openMs, store_->twins() || b.tmpSettled.twins ? "; TWINS: the card wants a disk check on a PC" : "",
+                store_->tmpKept() ? "; tags.tmp KEPT: alone and unchecked (no PSRAM for its check), no compaction "
+                                    "until the next boot checks it"
+                                  : "");
   Serial.printf("[lib] library.idx %s%s%s: %s (%s)%s in %.0f ms (header %.0f ms)\n", libraryboot::savedName(b.saved),
                 b.tmpSettled.what == tagstore::Settle::Promoted ? " (library.tmp taken: a cut fell mid-save)" : "",
                 b.marker ? ", the build-at-boot marker set" : "", libraryboot::actionName(b.decision.action),

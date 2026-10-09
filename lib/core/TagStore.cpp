@@ -409,10 +409,14 @@ Settled settle(Fs& fs, const Names& n, TmpCheck* check) {
   if (fs.exists(n.tmp)) {
     const uint32_t ct = fs.firstCluster(n.tmp);
     const bool shared = ct != 0 && ((fs.exists(n.path) && fs.firstCluster(n.path) == ct) || twinShares(fs, n, ct, 0));
+    const TmpCheck::Verdict v = shared || fs.exists(n.path) || !check ? TmpCheck::Verdict::Torn
+                                                                       : check->check(fs, n.tmp);
     if (shared) {
       s.what = toTwin(fs, n, n.tmp) ? Settle::Quarantined : Settle::Failed;
-    } else if (!fs.exists(n.path) && check && check->whole(fs, n.tmp)) {
+    } else if (v == TmpCheck::Verdict::Whole) {
       s.what = fs.rename(n.tmp, n.path) ? Settle::Promoted : Settle::Failed;
+    } else if (v == TmpCheck::Verdict::Unknown) {
+      s.what = Settle::Kept;  // no verdict: the next settle() checks it again
     } else {
       s.what = fs.remove(n.tmp) ? Settle::Removed : Settle::Failed;
     }
@@ -1224,36 +1228,50 @@ bool TagStore::wantsCompaction() const {
 }
 
 // D whole (tags.tmp before it is promoted): every check a reader makes.
+// It runs once, after a cut, so its speed doesn't matter: without the
+// memory for Config::deviceBuffer it reads through the walker's least
+// (DeviceReader::kMinScratch), and without even that it gives no verdict
+// (Unknown: the tmp is kept), since a failed allocation says nothing of the
+// file (a whole tags.tmp alone is the only D left: the 2026-10-09 r3
+// review).
 namespace {
 
 class DeviceCheck : public TmpCheck {
 public:
   DeviceCheck(TagStore::Config c, void* (*alloc)(size_t), void (*release)(void*))
       : cfg_(c), alloc_(alloc), free_(release) {}
-  bool whole(Fs& fs, const char* tmp) override {
+  Verdict check(Fs& fs, const char* tmp) override {
     File* f = fs.open(tmp, Fs::Mode::Read);
-    if (!f) return false;
-    const size_t bytes = sizeof(DeviceReader) + cfg_.deviceBuffer + 16;
+    if (!f) return Verdict::Torn;
+    uint32_t scratchBytes = cfg_.deviceBuffer > DeviceReader::kMinScratch ? cfg_.deviceBuffer
+                                                                           : DeviceReader::kMinScratch;
+    size_t bytes = sizeof(DeviceReader) + scratchBytes + 16;
     void* mem = alloc_(bytes);
-    bool ok = false;
+    if (!mem && scratchBytes > DeviceReader::kMinScratch) {
+      scratchBytes = DeviceReader::kMinScratch;
+      bytes = sizeof(DeviceReader) + scratchBytes + 16;
+      mem = alloc_(bytes);
+    }
+    Verdict v = Verdict::Unknown;
     if (mem) {
       Bump b{static_cast<uint8_t*>(mem), bytes};
       // (Zeroed, then default-initialized in place: compact()'s note.)
       void* rm = b.take(sizeof(DeviceReader));
       std::memset(rm, 0, sizeof(DeviceReader));
       DeviceReader* r = new (rm) DeviceReader;
-      uint8_t* scratch = static_cast<uint8_t*>(b.take(cfg_.deviceBuffer));
-      if (r->begin(*f, scratch, cfg_.deviceBuffer, nullptr, true) == Why::Ok) {
+      uint8_t* scratch = static_cast<uint8_t*>(b.take(scratchBytes));
+      v = Verdict::Torn;
+      if (r->begin(*f, scratch, scratchBytes, nullptr, true) == Why::Ok) {
         DeviceReader::Step s;
         while ((s = r->next()) == DeviceReader::Step::Folder || s == DeviceReader::Step::Record) {
         }
-        ok = s == DeviceReader::Step::End;
+        if (s == DeviceReader::Step::End) v = Verdict::Whole;
       }
       r->~DeviceReader();
       free_(mem);
     }
     fs.close(f);
-    return ok;
+    return v;
   }
 
 private:
@@ -1280,6 +1298,7 @@ TagStore::Opened TagStore::open() {
   DeviceCheck check(cfg_, alloc_, free_);
   o.settled = settle(fs_, names_, &check);
   twins_ = o.settled.twins;
+  tmpKept_ = o.settled.what == Settle::Kept;
   if (fs_.exists(hidxPath_)) fs_.remove(hidxPath_);
   dev_ = DeviceInfo();
   if (fs_.exists(binPath_)) {
@@ -2213,6 +2232,8 @@ TagStore::Compacted TagStore::compact(bool rescan) {
     return res;
   };
   if (walking_) return fail("a walk is being written");
+  // (prepareTmp() would remove a tags.tmp open() couldn't check: the only D.)
+  if (tmpKept_) return fail("tags.tmp alone, unchecked (no memory for its check at the open): the next open checks it");
   const uint32_t epoch = (dev_.present ? dev_.header.epoch : 0) + (rescan ? 1u : 0u);
 
   // The work memory: the fixed part, then the arena.

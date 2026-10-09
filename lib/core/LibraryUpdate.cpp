@@ -48,13 +48,14 @@ private:
 // library.tmp left alone by a cut (2.12.6's settle()): whole when its
 // header reads and its sum holds (an older version's is taken as it is: it
 // is rebuilt anyway). It is loaded once to know (the boot's index is empty
-// then), and cleared.
+// then), and cleared. No memory to load it counts as torn: library.idx is
+// a cache the records rebuild (tags.tmp's check keeps its tmp instead).
 class IdxCheck : public tagstore::TmpCheck {
 public:
   explicit IdxCheck(LibraryIndex& idx) : idx_(idx) {}
-  bool whole(tagstore::Fs& fs, const char* tmp) override {
+  Verdict check(tagstore::Fs& fs, const char* tmp) override {
     tagstore::File* f = fs.open(tmp, tagstore::Fs::Mode::Read);
-    if (!f) return false;
+    if (!f) return Verdict::Torn;
     FileIn head(*f);
     LibraryIndex::Inputs got;
     const LibraryIndex::Load r = LibraryIndex::peek(head, &got);
@@ -65,7 +66,7 @@ public:
       idx_.clear();
     }
     fs.close(f);
-    return ok;
+    return ok ? Verdict::Whole : Verdict::Torn;
   }
 
 private:
