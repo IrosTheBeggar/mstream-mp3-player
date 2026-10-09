@@ -422,6 +422,19 @@ inline constexpr const char* kSourceUrl = "https://github.com/IrosTheBeggar/mstr
 // ELF's SHA-256 (for crash reports) in the label (Small), over the version
 // (Body, or Small for a long dev build's "v0.5.0-12-gabc1234-dirty").
 inline constexpr const char* kAboutVersionLabel = "Version (%s, ELF %s)";
+// About's row to Device info (after Memory free): the title (Body) over
+// its line (Small), from the icon's column (x 44) to the chevron (the
+// list's right edge, a scroll bar's 312, less 26).
+inline constexpr const char* kDeviceInfoTitle = "Device info";
+inline constexpr const char* kDeviceInfoRowSub = "board, chips, memory, uptime";
+inline constexpr int kDeviceInfoRowW = 312 - 26 - 44;
+// Device info (Output > About > Device info; DeviceInfo's rows): the
+// header's line after its title, and each row's label (Small) over its
+// value (Body, or Small when Body doesn't fit), from x kDeviceInfoX to 8 px
+// before the scroll bar (14 rows: the list always has one).
+inline constexpr const char* kDeviceInfoHeaderSub = "this Core2";
+inline constexpr int kDeviceInfoX = 14;
+inline constexpr int kDeviceInfoW = 312 - 8 - kDeviceInfoX;
 
 // ---- the touch check and calibration (ui/CalibrationScreen; TouchCheck) ----
 // The whole screen. A 26 px header: at its left, on the pages that have one,

@@ -3,9 +3,9 @@
 
 // The Output tab (the tab bar spec §6.6, mockups 19-21 and 23, with the
 // review's grafts; the page's shape is in Pages.h): where the music plays,
-// each output's volume, the Pair screen, the settings and About. One page
-// object for the tab's three kinds of page (Output, Pair, About), each a
-// list on the hardware scroll.
+// each output's volume, the Pair screen, the settings, About and its Device
+// info. One page object for the tab's four kinds of page (Output, Pair,
+// About, Device info), each a list on the hardware scroll.
 //
 // What the Bluetooth card shows and offers is OutputModel's (host-tested);
 // what its buttons do goes through the UiHost to BtSink. The rules it keeps:
@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "DeviceInfo.h"
 #include "IdlePolicy.h"
 #include "LibraryIndex.h"
 #include "PowerChoices.h"
@@ -139,6 +140,10 @@ void OutputPage::enter(NavModel::PageRef& ref) {
     ui_.host().about(about_);
     nextAboutMs_ = millis() + kAboutMs;
   }
+  if (kind_ == PageKind::DeviceInfo) {
+    ui_.host().deviceInfo(info_);
+    nextAboutMs_ = millis() + kAboutMs;
+  }
   repaintHeader();
   ui_.list().attach(this, &ref, 0);
 }
@@ -199,6 +204,11 @@ Header OutputPage::header() const {
       h.back = true;
       h.title = "About";
       h.sub = "this player";
+      break;
+    case PageKind::DeviceInfo:
+      h.back = true;
+      h.title = uitext::kDeviceInfoTitle;
+      h.sub = uitext::kDeviceInfoHeaderSub;
       break;
     default:
       h.title = "Output";
@@ -305,6 +315,16 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       list.refreshRow(Battery);
       list.refreshRow(Memory);
     }
+  } else if (kind_ == PageKind::DeviceInfo) {
+    // The rows that can change (the battery, memory, the uptime...), in
+    // place; refreshRow() draws only the ones on screen.
+    if (static_cast<int32_t>(nowMs - nextAboutMs_) >= 0 && still) {
+      nextAboutMs_ = nowMs + kAboutMs;
+      ui_.host().deviceInfo(info_);
+      for (int i = 0; i < deviceinfo::kItems; ++i) {
+        if (deviceinfo::changes(static_cast<deviceinfo::Item>(i))) list.refreshRow(static_cast<uint32_t>(i));
+      }
+    }
   }
   return list.update(nowMs, frameDue, wholeRows);
 }
@@ -352,6 +372,7 @@ uint32_t OutputPage::rows() {
   switch (kind_) {
     case PageKind::Pair: return 1 + static_cast<uint32_t>(scan_.count());
     case PageKind::About: return kAboutRows;
+    case PageKind::DeviceInfo: return deviceinfo::kItems;
     default: return kRootRows;
   }
 }
@@ -372,6 +393,10 @@ void OutputPage::drawRow(ListView::Row& r) {
   }
   if (kind_ == PageKind::About) {
     drawAbout(r);
+    return;
+  }
+  if (kind_ == PageKind::DeviceInfo) {
+    drawDeviceInfo(r);
     return;
   }
   const AppState& s = ui_.state();
@@ -740,6 +765,15 @@ void OutputPage::drawAbout(ListView::Row& r) {
       label = uitext::kAboutSourceLabel;
       snprintf(value, sizeof(value), "%s", uitext::kAboutSourceRepo);
       break;
+    case DeviceInfoRow: {
+      // A page of its own (what the boot screen used to list).
+      const int x = ListView::icon(r, icons::kInfo, col::SOFT);
+      const int right = ListView::chevron(r);
+      using namespace uitext;
+      ListView::lines(r, x, right, kDeviceInfoTitle, strlen(kDeviceInfoTitle), kDeviceInfoRowSub,
+                      strlen(kDeviceInfoRowSub), col::TXT);
+      return;
+    }
     case Tips: {
       const int x = ListView::icon(r, icons::kInfo, accent::Output);
       const char* t = "Show the tips again";
@@ -755,6 +789,22 @@ void OutputPage::drawAbout(ListView::Row& r) {
   const int x = ListView::icon(r, *icon, col::DIM);
   const int room = r.right - 8 - x;
   f.draw(r.c, Font::Small, label, x, 12, room, col::DIM, r.bg);
+  f.draw(r.c, f.width(Font::Body, value) <= room ? Font::Body : Font::Small, value, x, 30, room, col::TXT, r.bg);
+}
+
+// A Device info row: its label (Small) over its value (Body, or Small when
+// it's long: "cc13597, 2026-10-09, ELF 1a2b3c4d"), no icon: the values get
+// the width (UiText's kDeviceInfoX and kDeviceInfoW, measured by
+// test_ui_library).
+void OutputPage::drawDeviceInfo(ListView::Row& r) {
+  if (r.row >= static_cast<uint32_t>(deviceinfo::kItems)) return;
+  const auto item = static_cast<deviceinfo::Item>(r.row);
+  char value[64];
+  deviceinfo::value(item, info_, value, sizeof(value));
+  Fonts& f = Fonts::instance();
+  const int x = r.x + uitext::kDeviceInfoX;
+  const int room = r.right - 8 - x;
+  f.draw(r.c, Font::Small, deviceinfo::label(item), x, 12, room, col::DIM, r.bg);
   f.draw(r.c, f.width(Font::Body, value) <= room ? Font::Body : Font::Small, value, x, 30, room, col::TXT, r.bg);
 }
 
@@ -778,9 +828,14 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
     return ListView::Tap::Handled;
   }
   if (kind_ == PageKind::About) {
-    if (row == Tips) ui_.showCoach();
+    if (row == DeviceInfoRow) {
+      ui_.push(page(PageKind::DeviceInfo));
+    } else if (row == Tips) {
+      ui_.showCoach();
+    }
     return ListView::Tap::Handled;
   }
+  if (kind_ == PageKind::DeviceInfo) return ListView::Tap::Handled;  // nothing to tap
   const AppState& s = ui_.state();
   switch (static_cast<RootRow>(row)) {
     case BtTop: onCard(); break;

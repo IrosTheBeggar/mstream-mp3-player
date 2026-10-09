@@ -16,6 +16,7 @@
 #include <esp_chip_info.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
+#include <esp_timer.h>
 #include <nvs_flash.h>
 
 #include <cmath>
@@ -23,6 +24,7 @@
 
 #include "ButtonPolicy.h"
 #include "ChipRevision.h"
+#include "DeviceInfo.h"
 #include "HeadsetKeys.h"
 #include "IdlePolicy.h"
 #include "InputEvent.h"
@@ -103,7 +105,7 @@ static bool calibrationUp() { return calibration && calibration->active(); }
 // accuracy to reach. The UI's start waits while that finger is down. (A
 // strip press isn't one: B's hold would switch the output at 500 ms.)
 // The start-up screen stays at least kRescueWindowMs after its line about
-// it shows (at the end of setup(), which may outlast kDiagnosticsScreenMs).
+// it shows (at the end of setup(), which may outlast kBootScreenMs).
 static constexpr uint32_t kRescueHoldMs = 2000;
 static constexpr uint32_t kRescueWindowMs = 1500;
 static bool rescueFinger = false;
@@ -122,7 +124,8 @@ static bool silent = false;
 // turns red) until they're back or the output moves.
 static bool btLost = false;
 // The UI (ui/Ui): the tab bar and its pages. In PSRAM, made in setup(); up
-// once the boot screen has been shown for kDiagnosticsScreenMs.
+// once the boot screen (the logo and the version) has been shown for
+// kBootScreenMs.
 static ui::Ui* userInterface = nullptr;
 // What the listener asked of Bluetooth (OutputModel): the audio waits on
 // its output until the headphones they asked for are linked.
@@ -157,33 +160,54 @@ static queueview::DurationBook durations(psramAlloc, psramFree);
 // shows first). 0: none.
 static uint32_t restartAtMs = 0;
 
-static constexpr uint32_t kDiagnosticsScreenMs = 3000;
+static constexpr uint32_t kBootScreenMs = 3000;
 // Volume keys of headphones without absolute volume (AVRCP passthrough):
 // about 1/16 of the range per press, like a phone.
 static constexpr int kHeadphoneVolumeStep = 6;
 
-static String kb(uint32_t bytes) { return String(bytes / 1024) + "K"; }
-
-static std::vector<BootScreen::Row> diagnosticsRows() {
+// What the device is and has (DeviceInfo's facts, its texts host-tested):
+// Output > About > Device info, and the boot log's [diag] lines (the rows
+// the boot screen used to show). The battery is read from the power chip
+// each time (I2C; the page asks every 3 s while it's open).
+static void deviceFacts(deviceinfo::Facts& f) {
   esp_chip_info_t chip;
   esp_chip_info(&chip);
   const diag::Heap h = diag::heap();
-  std::vector<BootScreen::Row> rows;
-  rows.push_back({"Board", diag::boardName()});
-  rows.push_back({"Power chip", diag::pmicName()});
-  rows.push_back({"IMU", diag::imuName()});
-  rows.push_back({"Chip", String(ESP.getChipModel()) + " rev " + (chip.revision / 100) + "." +
-                              (chip.revision % 100)});
-  rows.push_back({"Flash", String(ESP.getFlashChipSize() / (1024 * 1024)) + " MB"});
-  rows.push_back({"PSRAM", kb(ESP.getPsramSize()) + " (" + kb(h.psramFree) + " free)"});
-  rows.push_back({"Last reset", diag::resetReason()});
-  rows.push_back({"Battery", String(M5.Power.getBatteryLevel()) + "%"});
+  f.board = diag::boardName();
+  f.pmic = diag::pmicName();
+  f.imu = diag::imuName();
+  f.chip = ESP.getChipModel();
+  f.chipRevision = chip.revision;
+  f.cpuMhz = static_cast<uint16_t>(getCpuFrequencyMhz());
+  f.flashBytes = ESP.getFlashChipSize();
+  f.psramBytes = ESP.getPsramSize();
+  f.psramFree = h.psramFree;
+  f.lastReset = diag::resetReason();
+  f.battery = M5.Power.getBatteryLevel();
+  const int16_t mv = M5.Power.getBatteryVoltage();
+  f.batteryMv = mv > 0 ? static_cast<uint16_t>(mv) : 0;
+  f.charging = M5.Power.isCharging() == m5::Power_Class::is_charging;
+  f.storage = storage.name();
   const LibraryIndex* index = library.index();
-  const uint32_t tracks = index && index->ready() ? index->trackCount() : 0;
-  rows.push_back({"Library", String(storage.name()) + ", " + tracks + " tracks"});
-  rows.push_back({"RAM free", kb(h.internalFree) + " (min " + kb(h.internalMin) + ", block " +
-                                  kb(h.internalLargest) + ")"});
-  return rows;
+  f.tracks = index && index->ready() ? index->trackCount() : 0;
+  f.ramFree = h.internalFree;
+  f.ramMin = h.internalMin;
+  f.ramBlock = h.internalLargest;
+  f.uptimeS = static_cast<uint32_t>(esp_timer_get_time() / 1000000);
+  f.version = version::player();
+  f.commit = version::commit();
+  f.built = version::commitDate();
+  f.elf = version::elfSha();
+}
+
+static void logDeviceFacts() {
+  deviceinfo::Facts f;
+  deviceFacts(f);
+  char value[64];
+  for (int i = 0; i < deviceinfo::kLogged; ++i) {
+    const auto item = static_cast<deviceinfo::Item>(i);
+    Serial.printf("[diag] %-10s %s\n", deviceinfo::label(item), deviceinfo::value(item, f, value, sizeof(value)));
+  }
 }
 
 // ---- actions shared by the touch buttons and the serial console ----
@@ -745,6 +769,7 @@ struct MainUiHost : ui::UiHost {
     a.ramMin = h.internalMin;
     a.psramFree = h.psramFree;
   }
+  void deviceInfo(deviceinfo::Facts& f) override { deviceFacts(f); }
   void sleepChoose(int pick) override;
   // The Sleep timer sheet's outlined pill (SleepSheet's 0-7), or -1.
   static int sleepPick() {
@@ -2569,9 +2594,9 @@ void setup() {
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);
   diag::logHeap("library");
 
-  const auto rows = diagnosticsRows();
-  for (const auto& row : rows) Serial.printf("[diag] %-10s %s\n", row.label.c_str(), row.value.c_str());
-  bootScreen.show(rows);
+  // The device's facts in the log (Output > About > Device info shows them
+  // on the screen).
+  logDeviceFacts();
   {
     BtSink& bt = audio.bluetooth();
     const char* headphones = bt.sinkName();
@@ -2748,7 +2773,7 @@ void loop() {
     // The first boot with nothing calibrated: the touch check, before the
     // UI (and so before its tips). The UI waits for it, and for a finger
     // resting on the start-up screen (the rescue hold).
-    const bool bootShown = now >= kDiagnosticsScreenMs && now - bootHintMs >= kRescueWindowMs;
+    const bool bootShown = now >= kBootScreenMs && now - bootHintMs >= kRescueWindowMs;
     if (!userInterface->started() && bootShown && !screenTaken() && !rescueFinger && !touchCheckOffered) {
       touchCheckOffered = true;
       if (touchcheck::due(input.calibrated(), input.touchCheckAnswered())) {

@@ -396,3 +396,10 @@ It contains:
   third-party images or icon fonts). GPL-3.0-or-later, like the rest.
 - **The dancing crab** (lib/core/CrabArt.*, from tools/art/crab.json):
   drawn for this project. GPL-3.0-or-later.
+- **The mStream logo** on the boot screen (lib/core/LogoArt.*, made by
+  tools/make_logo.py from tools/art/mstream-logo.svg): the logo of
+  mStream, the music server this player syncs from, by the same author
+  (IrosTheBeggar). The SVG is mStream's webapp/assets/img/mstream-logo.svg
+  as it is in https://github.com/IrosTheBeggar/mStream, unchanged; the
+  firmware has it rendered at 240 px and recoloured for the dark screen.
+  Licence: GPL-3.0, as mStream (the text is [LICENSE](LICENSE)).

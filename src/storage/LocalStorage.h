@@ -30,7 +30,7 @@ public:
 
   // The mounted filesystem; only valid when available().
   fs::FS& fs() { return *fs_; }
-  // "SD", "flash" or "none", for the diagnostics screen.
+  // "SD", "flash" or "none", for Device info and the boot log.
   const char* name() const { return name_; }
   // The microSD card is what's mounted (not the flash fallback).
   bool onCard() const { return name_[0] == 'S'; }  // "SD"

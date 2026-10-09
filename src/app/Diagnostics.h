@@ -4,7 +4,8 @@
 #pragma once
 #include <cstdint>
 
-// System facts and heap numbers for the bring-up screen and the serial log.
+// System facts and heap numbers for Device info (Output > About) and the
+// serial log.
 namespace diag {
 
 struct Heap {
