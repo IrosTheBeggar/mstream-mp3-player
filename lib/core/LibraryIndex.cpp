@@ -972,8 +972,9 @@ LibraryIndex::Add LibraryIndex::addRecord(const char* path, const TagView& tv) {
   t.flags = tv.source & kSourceMask;
 
   // The title: a slice of the file name when it is inside it (most are),
-  // else a string of its own.
-  if (tv.title && tv.titleLen) {
+  // else a string of its own. A blank one (White_Space alone) is none: the
+  // file name's, as without a tag (5.4).
+  if (!namekey::blank(tv.title, tv.titleLen)) {
     const size_t len = cardcontract::utf8CutLength(tv.title, tv.titleLen, 255);
     const char* hit = nullptr;
     for (size_t i = 0; len && i + len <= leafLen && !hit; ++i) {
@@ -1053,8 +1054,10 @@ LibraryIndex::Add LibraryIndex::addRecord(const char* path, const TagView& tv) {
     if (trackArtistEntry) ++trackArtistEntry->trackArtist;
     if (albumArtistEntry) ++albumArtistEntry->albumArtist;
   }
-  // The album's name and year (a loose album keeps "" and no year).
-  if (vote && !loose && tv.album && tv.albumLen) {
+  // The album's name and year (a loose album keeps "" and no year). A blank
+  // value (White_Space alone) doesn't vote: with no other, the album keeps
+  // its folder's name (5.4: the tag, else the folder), never a blank one.
+  if (vote && !loose && !namekey::blank(tv.album, tv.albumLen)) {
     Votes::Entry* e = nullptr;
     const uint32_t off = runString(tv.album, tv.albumLen, albumFolderName, &e);
     if (off == kNone) return Add::NoMemory;

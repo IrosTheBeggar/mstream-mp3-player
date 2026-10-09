@@ -980,6 +980,80 @@ void test_a_track_end_near_the_safe_point() {
 }
 
 // ---------------------------------------------------------------------------
+// The safe point follows the measured pause (3.4.2; the 2026-10-09 device
+// run, B2: the fence up 17.8-18.6 s with audio at 20k, over the 16 s that
+// should grow it). The pure rule: the pause and kSafeMarginMs, at least
+// 20 s, at most kSafeCapMs; before any step, the estimate from the tracks
+// (about 24 s at N11's 19,410, the floor below about 15,000). Then on the
+// rig: a step whose fence lasts 22 s moves the next one's safe point to
+// 27 s: with 26 s left of the track it waits, with 27 s it goes; a failed
+// build's fence doesn't count.
+// ---------------------------------------------------------------------------
+void test_the_safe_point_follows_the_pause() {
+  using U = LibraryUpdate;
+  TEST_ASSERT_EQUAL_UINT32(20000, U::safeLeftFor(0));
+  TEST_ASSERT_EQUAL_UINT32(20000, U::safeLeftFor(15000));
+  TEST_ASSERT_EQUAL_UINT32(20001, U::safeLeftFor(15001));
+  TEST_ASSERT_EQUAL_UINT32(23600, U::safeLeftFor(18600));  // the lit fence of 6c2a928's and 062bd1f's gb
+  TEST_ASSERT_EQUAL_UINT32(30000, U::safeLeftFor(25000));
+  TEST_ASSERT_EQUAL_UINT32(30000, U::safeLeftFor(UINT32_MAX));
+  TEST_ASSERT_EQUAL_UINT32(19410, U::pauseFor(19410));
+  TEST_ASSERT_EQUAL_UINT32(24410, U::safeLeftFor(U::pauseFor(19410)));
+  TEST_ASSERT_EQUAL_UINT32(20000, U::safeLeftFor(U::pauseFor(2000)));
+  TEST_ASSERT_TRUE(U::safePoint(true, false, 24410, U::kSeekQuietMs, 24410));
+  TEST_ASSERT_FALSE(U::safePoint(true, false, 24409, U::kSeekQuietMs, 24410));
+  TEST_ASSERT_TRUE(U::safePoint(false, false, 0, 0, 24410));  // nothing plays: safe whatever it wants
+
+  CutFs fs;
+  TestCard card;
+  handFilled(fs, card);
+  Device d(fs, card);
+  d.boot();
+  // Before any step: the estimate (six tracks: the floor).
+  TEST_ASSERT_EQUAL_UINT32(0, d.upd->lastPauseMs());
+  TEST_ASSERT_EQUAL_UINT32(U::kSafeLeftMs, d.upd->safeLeftMs());
+  // A build of 1,100 passes of 20 ms: the fence up about 22 s.
+  d.buildPasses = 1100;
+  d.update("the scan's end");
+  TEST_ASSERT_TRUE(d.upd->last().saved);
+  const uint32_t pause = d.upd->lastPauseMs();
+  TEST_ASSERT_EQUAL_UINT32(d.upd->last().fenceMs, pause);
+  TEST_ASSERT_TRUE(pause >= 22000 && pause <= 22100);
+  const uint32_t want = pause + U::kSafeMarginMs;
+  TEST_ASSERT_EQUAL_UINT32(want, d.upd->safeLeftMs());
+  // The next step: a track with a second less than that left waits; then
+  // the next track, long enough, goes.
+  d.buildPasses = 5;
+  d.upd->ask("gb");
+  Env e;
+  e.playing = true;
+  e.trackLeftMs = want - 1000;
+  for (int i = 0; i < 40; ++i) {
+    d.pass(e);
+    TEST_ASSERT_FALSE(d.lastOut.fenced);
+  }
+  TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::SafePoint);
+  e.trackLeftMs = want;
+  const size_t from = d.acts.size();
+  d.runUntil([&] { return std::find(d.acts.begin() + static_cast<long>(from), d.acts.end(), Do::Saved) != d.acts.end(); },
+             e);
+  // That fence was short (5 passes): the safe point comes back down, to the floor.
+  TEST_ASSERT_TRUE(d.upd->lastPauseMs() < 1000);
+  TEST_ASSERT_EQUAL_UINT32(U::kSafeLeftMs, d.upd->safeLeftMs());
+  // A build that fails (out of PSRAM) leaves the last measure as it was.
+  d.buildPasses = 1100;
+  d.update("gb");
+  const uint32_t measured = d.upd->lastPauseMs();
+  TEST_ASSERT_TRUE(measured >= 22000);
+  g_ceiling = g_live;  // nothing more for the build
+  d.buildPasses = 5;
+  d.update("gb");
+  g_ceiling = SIZE_MAX;
+  TEST_ASSERT_FALSE(d.upd->last().built);
+  TEST_ASSERT_EQUAL_UINT32(measured, d.upd->lastPauseMs());
+}
+
+// ---------------------------------------------------------------------------
 // A compaction asked during a build (gr, the journal's limits) waits for
 // the save: nothing writes tags.bin or the journals while the build streams
 // them. The worker's steps, in order: the compaction the step asked for,
@@ -1618,6 +1692,7 @@ int main(int, char**) {
   RUN_TEST(test_library_tmp_after_a_cut);
   RUN_TEST(test_a_deferral_then_a_boot_that_builds);
   RUN_TEST(test_a_track_end_near_the_safe_point);
+  RUN_TEST(test_the_safe_point_follows_the_pause);
   RUN_TEST(test_a_compaction_asked_during_a_build);
   RUN_TEST(test_a_bad_transfer_found_at_the_end_of_a_build);
   RUN_TEST(test_a_power_cut_at_each_stage);

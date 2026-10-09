@@ -116,8 +116,10 @@ void TrackCatalog::Overlay::set(const LibraryIndex& index, uint32_t id, const Li
   track = id;
   stamp = index.buildStamp();
   ++version;
-  fill(title, tags.title, tags.titleLen);
-  fill(album, tags.album, tags.albumLen);
+  // (A blank title or album, White_Space alone, is none: the index's, as
+  // the next build would show it.)
+  fill(title, tags.title, namekey::blank(tags.title, tags.titleLen) ? 0 : tags.titleLen);
+  fill(album, tags.album, namekey::blank(tags.album, tags.albumLen) ? 0 : tags.albumLen);
   artist[0] = 0;
   if (tags.artist && tags.artistLen) namekey::displayJoin(tags.artist, tags.artistLen, artist, sizeof(artist));
   year = tags.year;

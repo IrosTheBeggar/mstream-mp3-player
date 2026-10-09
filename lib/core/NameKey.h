@@ -90,6 +90,11 @@ size_t orderName(const char* name, size_t n, const char* sortTag, size_t sortLen
 // *len.
 const char* trim(const char* s, size_t n, size_t* len);
 
+// s[0, n) is blank: empty, or White_Space alone (5.1's word; nullptr too).
+// A blank title or album value names nothing (5.4: the file name's title,
+// the folder's name), as a missing one doesn't.
+bool blank(const char* s, size_t n);
+
 // The artist display (mStream's credit_display, 5.4) of a list field (its
 // values separated by U+001F): each value trimmed, the empty ones dropped;
 // one value as it is; several deduplicated by nameKey (the first kept, by

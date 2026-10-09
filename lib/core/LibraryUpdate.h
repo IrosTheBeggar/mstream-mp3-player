@@ -36,8 +36,9 @@
 //             goes on to its end (its walk.jnl must be merged first); the
 //             journals are compacted (Out::compact: the card worker's
 //             compaction step); then, with the worker free, the safe point
-//             reached (nothing plays, or the heard track has 20 s left at
-//             least and no seek came in the last 2 s), the worker's task up
+//             reached (nothing plays, or the heard track has the pause's
+//             length left and a margin, 20-30 s: safeLeftMs(), and no seek
+//             came in the last 2 s), the worker's task up
 //             (Out::wantWorker: the caller makes it; no internal RAM for its
 //             stack, the step waits here, the index untouched, rather than
 //             behind a fence no build can start under) and the card
@@ -124,15 +125,41 @@ public:
   static constexpr const char* kMarker = "/.player/build.req";
 
   // ---- the safe point (3.4.2) ----
-  // The heard track has this long left at least (the pause and a margin:
-  // 3.4.2's 11-14 s while an MP3 plays, ESTIMATED; L4 measures), and no
-  // seek came in the last kSeekQuietMs.
+  // The heard track has the pause's length left at least, and a margin: the
+  // last step's pause (its fence, Fence to Live on the loop's clock) when
+  // one built this session, else the build's estimate from the index's
+  // tracks, whichever is longer; kSafeMarginMs more, at least kSafeLeftMs
+  // (3.4.2's first figure, the floor) and at most kSafeCapMs. MEASURED
+  // (2026-10-09, N11's 19,410 tracks): the fence up 15.5 s dark and idle,
+  // 17.8-18.6 s with the tone playing or the screen lit, so about 1 ms a
+  // track while audio plays (kPauseUsPerTrack): about 24 s at 20k, 20 s
+  // below about 15,000 tracks. And no seek came in the last kSeekQuietMs.
+  // A track that ends inside the fence anyway is safe (3.9: it joins the
+  // next, or the next waits, paused): the safe point keeps that rare.
   static constexpr uint32_t kSafeLeftMs = 20000;
+  static constexpr uint32_t kSafeMarginMs = 5000;
+  static constexpr uint32_t kSafeCapMs = 30000;
+  static constexpr uint32_t kPauseUsPerTrack = 1000;
   static constexpr uint32_t kSeekQuietMs = 2000;
-  // Nothing plays (stopped, or paused), or it plays with kSafeLeftMs left
+  // What the safe point wants left of the heard track for a pause of
+  // `pauseMs`: pauseMs + kSafeMarginMs, at least kSafeLeftMs, at most
+  // kSafeCapMs (a track shorter than that never makes one: the step waits
+  // for the queue to stop, or a longer track).
+  static uint32_t safeLeftFor(uint32_t pauseMs);
+  // The pause a build of `tracks` tracks is expected to take (the estimate
+  // before any step ran this session): kPauseUsPerTrack each.
+  static uint32_t pauseFor(uint32_t tracks);
+  // Nothing plays (stopped, or paused), or it plays with `needLeftMs` left
   // and no seek for kSeekQuietMs. A play waiting for the headphones isn't a
   // safe point: its start, when they connect, needs the path.
-  static bool safePoint(bool playing, bool waiting, uint32_t trackLeftMs, uint32_t sinceSeekMs);
+  static bool safePoint(bool playing, bool waiting, uint32_t trackLeftMs, uint32_t sinceSeekMs,
+                        uint32_t needLeftMs = kSafeLeftMs);
+  // This session's: safeLeftFor() the longer of the last step's measured
+  // pause (lastPauseMs()) and pauseFor() the index's tracks now.
+  uint32_t safeLeftMs() const;
+  // The last update step's pause this session (its fence, from Fence to
+  // Live, of a step whose build ran whole); 0: none yet.
+  uint32_t lastPauseMs() const { return lastPauseMs_; }
 
   // ---- the memory check (3.4.2; ESTIMATED, L4 measures) ----
   struct Room {
@@ -400,6 +427,7 @@ private:
   uint32_t lastSeekMs_ = 0;
   bool seekSeen_ = false;       // a seek since the start (lastSeekMs_ means something)
   uint32_t fenceAtMs_ = 0;
+  uint32_t lastPauseMs_ = 0;    // the last step's fence (a whole build's): the safe point's measure
   bool liveDue_ = false;        // the build ended: Do::Live
   bool savedDue_ = false;       // the save ended: Do::Saved
   bool deferredDue_ = false;    // cantFence(): Do::Deferred

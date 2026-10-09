@@ -141,10 +141,28 @@ float LibraryUpdate::msSince(uint64_t t0) const {
 
 // ---- the pure parts ----
 
-bool LibraryUpdate::safePoint(bool playing, bool waiting, uint32_t trackLeftMs, uint32_t sinceSeekMs) {
+bool LibraryUpdate::safePoint(bool playing, bool waiting, uint32_t trackLeftMs, uint32_t sinceSeekMs,
+                              uint32_t needLeftMs) {
   if (waiting) return false;
   if (!playing) return true;
-  return trackLeftMs >= kSafeLeftMs && sinceSeekMs >= kSeekQuietMs;
+  return trackLeftMs >= needLeftMs && sinceSeekMs >= kSeekQuietMs;
+}
+
+uint32_t LibraryUpdate::safeLeftFor(uint32_t pauseMs) {
+  const uint64_t want = static_cast<uint64_t>(pauseMs) + kSafeMarginMs;
+  if (want < kSafeLeftMs) return kSafeLeftMs;
+  return want > kSafeCapMs ? kSafeCapMs : static_cast<uint32_t>(want);
+}
+
+uint32_t LibraryUpdate::pauseFor(uint32_t tracks) {
+  const uint64_t ms = static_cast<uint64_t>(tracks) * kPauseUsPerTrack / 1000u;
+  return ms > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(ms);
+}
+
+uint32_t LibraryUpdate::safeLeftMs() const {
+  const uint32_t tracks = c_.index && c_.index->ready() ? c_.index->trackCount() : 0;
+  const uint32_t estimate = pauseFor(tracks);
+  return safeLeftFor(lastPauseMs_ > estimate ? lastPauseMs_ : estimate);
 }
 
 LibraryUpdate::Verdict LibraryUpdate::roomToBuild(const Room& r) {
@@ -517,7 +535,7 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
         break;
       }
       const uint32_t sinceSeek = seekSeen_ ? in.nowMs - lastSeekMs_ : UINT32_MAX;
-      if (!safePoint(in.playing, in.waiting, in.trackLeftMs, sinceSeek)) {
+      if (!safePoint(in.playing, in.waiting, in.trackLeftMs, sinceSeek, safeLeftMs())) {
         o.wait = Wait::SafePoint;
         break;
       }
@@ -592,6 +610,9 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
     case Phase::Live:
       if (liveDue_) {
         step_.fenceMs = in.nowMs - fenceAtMs_;
+        // The pause the next safe point allows for (a whole build's: a
+        // failed one's fence says nothing of the next).
+        if (step_.built) lastPauseMs_ = step_.fenceMs;
         o.act = Do::Live;
       }
       break;

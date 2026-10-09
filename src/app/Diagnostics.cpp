@@ -20,11 +20,37 @@
 namespace diag {
 
 namespace {
-// The low window (beginLowWindow()): the since-boot lowests when it began.
+// The lows (lowest()): heap_caps' local window runs from the first
+// restartLows() on (s_lows); the floors hold the lowest of the windows
+// closed since (internal RAM's from the boot, PSRAM's from the last
+// restartLows()). s_window: the one running is a low window (the fence's).
+bool s_lows = false;
 bool s_window = false;
-uint32_t s_internalLowBefore = 0;
-uint32_t s_psramLowBefore = 0;
+uint32_t s_floorInternal = UINT32_MAX;
+uint32_t s_floorPsram = UINT32_MAX;
+uint32_t s_psramBootLow = UINT32_MAX;  // PSRAM's since-boot lowest at the first restartLows()
 std::atomic<uint32_t> s_failedAllocs{0};
+
+uint32_t minimum(uint32_t caps) { return static_cast<uint32_t>(heap_caps_get_minimum_free_size(caps)); }
+uint32_t lower(uint32_t a, uint32_t b) { return a < b ? a : b; }
+
+// The running window's lowests into the floors, and a new window from now
+// (heap_caps puts its since-boot minimum back on a stop: nothing here reads
+// that while a window runs).
+void reopen() {
+  if (s_lows) {
+    s_floorInternal = lower(s_floorInternal, minimum(MALLOC_CAP_INTERNAL));
+    s_floorPsram = lower(s_floorPsram, minimum(MALLOC_CAP_SPIRAM));
+    heap_caps_monitor_local_minimum_free_size_stop();
+  } else {
+    // The first: internal RAM's since-boot lowest is its floor; PSRAM's
+    // (the init's 0 B) is set aside.
+    s_floorInternal = minimum(MALLOC_CAP_INTERNAL);
+    s_psramBootLow = minimum(MALLOC_CAP_SPIRAM);
+    s_floorPsram = UINT32_MAX;
+  }
+  s_lows = heap_caps_monitor_local_minimum_free_size_start() == ESP_OK;
+}
 
 // heap_caps' failed-allocation hook: on the task that asked, outside the
 // heap's locks. No allocation and no lock of ours here: the ROM's printf.
@@ -41,28 +67,35 @@ void onAllocFailed(size_t size, uint32_t caps, const char* function) {
 }
 }  // namespace
 
-uint32_t lowestSinceBoot(uint32_t caps) {
-  const uint32_t now = static_cast<uint32_t>(heap_caps_get_minimum_free_size(caps));
-  if (!s_window) return now;
-  const uint32_t before = caps == MALLOC_CAP_SPIRAM ? s_psramLowBefore : s_internalLowBefore;
-  return now < before ? now : before;
+uint32_t lowest(uint32_t caps) {
+  const uint32_t now = minimum(caps);
+  if (!s_lows) return now;  // no window: heap_caps' since-boot lowest
+  return lower(now, caps == MALLOC_CAP_SPIRAM ? s_floorPsram : s_floorInternal);
 }
+
+uint32_t restartLows() {
+  const uint32_t psram = lowest(MALLOC_CAP_SPIRAM);
+  if (s_window) return psram;  // the fence's window runs: not now (setup() has none)
+  const bool first = !s_lows;
+  reopen();
+  if (!first) s_floorPsram = UINT32_MAX;  // PSRAM's lowest starts again (internal RAM's goes on)
+  return psram;
+}
+
+uint32_t psramLowBeforeSetup() { return s_psramBootLow; }
 
 bool beginLowWindow() {
   if (s_window) return false;
-  s_internalLowBefore = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
-  s_psramLowBefore = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
-  s_window = heap_caps_monitor_local_minimum_free_size_start() == ESP_OK;
+  reopen();
+  s_window = s_lows;
   return s_window;
 }
 
 uint32_t endLowWindow() {
-  const uint32_t low = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
-  if (!s_window) return low;
-  // (The IDF puts each heap's since-boot lowest back as the lower of the
-  // two: nothing the window saw is lost.)
-  heap_caps_monitor_local_minimum_free_size_stop();
+  if (!s_window) return lowest(MALLOC_CAP_SPIRAM);
+  const uint32_t low = minimum(MALLOC_CAP_SPIRAM);  // the window's own
   s_window = false;
+  reopen();  // its lowest into the floor; the running window from here
   return low;
 }
 
@@ -72,10 +105,10 @@ uint32_t failedAllocs() { return s_failedAllocs.load(); }
 Heap heap() {
   return {
       static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
-      lowestSinceBoot(MALLOC_CAP_INTERNAL),
+      lowest(MALLOC_CAP_INTERNAL),
       static_cast<uint32_t>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)),
       static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_SPIRAM)),
-      lowestSinceBoot(MALLOC_CAP_SPIRAM),
+      lowest(MALLOC_CAP_SPIRAM),
   };
 }
 

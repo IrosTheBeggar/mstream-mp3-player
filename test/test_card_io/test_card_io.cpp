@@ -31,6 +31,10 @@
 //   scratch (CardJobs' kKnownScratch), and the update step's build from it:
 //   cc::Stream's refills are whole sectors from a sector's start, few
 //   single-sector reads.
+// - A Rescan's compaction at 20k and the next (no chunks: the merge's small
+//   arena), HIDX's sort in the buffers the second pass left idle and 4 KB
+//   reads: 7 passes, not 15, about 3,000 card reads fewer (B4 of the
+//   2026-10-09 device run).
 // Run: pio test -e native -f test_card_io
 #include <unity.h>
 
@@ -155,10 +159,18 @@ uint64_t fileHash(const char* path, uint32_t* bytes) {
   return h;
 }
 
+// The host's clock for a compaction's parts (the firmware's esp_timer).
+uint64_t hostUs() {
+  return static_cast<uint64_t>(
+      std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch())
+          .count());
+}
+
 ts::TagStore::Config config() {
   ts::TagStore::Config c;  // the firmware's buffers: its defaults (src/app/Library.cpp)
   c.producer = "mstream-player 0.8.0";
   c.parserVersion = 1;
+  c.nowUs = hostUs;
   return c;
 }
 
@@ -176,6 +188,7 @@ struct Compaction {
   uint32_t dBytes = 0;
   uint64_t dHash = 0;
   uint32_t hidxPasses = 0;
+  ts::TagStore::Compacted parts;  // its times (the host's)
 };
 
 // A fresh card's first walk (every file Pending, every folder's facts),
@@ -239,6 +252,7 @@ bool scanCard(fatmodel::ModelFs& fs, const Card& card, const ts::TagStore::Confi
     if (!c.ok) return false;
     Compaction k;
     k.took = p.took();
+    k.parts = c;
     k.hidxPasses = c.hidxPasses;
     k.dHash = fileHash("0:/.player/tags.bin", &k.dBytes);
     out->push_back(k);
@@ -288,6 +302,12 @@ void test_compactions_write_whole_pieces() {
     snprintf(what, sizeof(what), "compaction %u (D %u B, HIDX %u passes)", (unsigned)(i + 1), ks[i].dBytes,
              ks[i].hidxPasses);
     print(what, t);
+    // Its parts' times (TagStore::Config::nowUs; the host's, the device's
+    // line gives the Core2's): each counted, within the whole.
+    const ts::TagStore::Compacted& c = ks[i].parts;
+    printf("[card io]   its time on the host: %u ms (the first pass %u, the second %u, HIDX's sort %u)\n",
+           (unsigned)c.totalMs, (unsigned)c.pass1Ms, (unsigned)c.pass2Ms, (unsigned)c.sortMs);
+    TEST_ASSERT_TRUE_MESSAGE(c.pass1Ms + c.pass2Ms + c.sortMs <= c.totalMs + 3, what);
     // Whole 4 KB pieces: a single-sector write is a section's first or last
     // piece (or FatFs's FAT and directory sectors), not every write.
     TEST_ASSERT_TRUE_MESSAGE(mostlyWhole(t, 0.15), what);
@@ -301,6 +321,10 @@ void test_compactions_write_whole_pieces() {
     // Bounded by D's sectors: about 2.8 reads a sector of D at 20k (it was
     // about 3.6 before, every one a single sector).
     TEST_ASSERT_TRUE_MESSAGE(t.reads <= 4u * (ks[i].dBytes / 512u + 1000u), what);
+    // HIDX's sort in the buffers the second pass left idle too, hidx.tmp
+    // read 4 KB at a time: 4 passes at 19,410 pairs (5-6 in the arena alone,
+    // 1 KB at a time: about 1,000 more reads a compaction, B4).
+    TEST_ASSERT_TRUE_MESSAGE(ks[i].hidxPasses <= 4, what);
     all.writes += t.writes;
     all.singleWrites += t.singleWrites;
     all.writeSectors += t.writeSectors;
@@ -493,11 +517,52 @@ void test_walk_and_build_read_in_runs() {
   TEST_ASSERT_TRUE(b.readSectors <= 8000);
 }
 
+// A compaction with no chunks at 20k: a Rescan's (every Scanned row turned
+// Pending), as `gr` asks, and the one right after (nothing to merge). Its
+// arena is the merge's small one (D and two walk runs), where HIDX's sort
+// took 15 passes over hidx.tmp in 1 KB reads (the 2026-10-09 run's B4: the
+// Rescan's compaction 20.8 s on the device); the sort has the buffers the
+// second pass left idle too now, and reads 4 KB at a time.
+void test_a_rescans_compaction() {
+  Card card;
+  TEST_ASSERT_TRUE(card.ok);
+  fatmodel::ModelFs fs;
+  std::vector<Compaction> ks;
+  TEST_ASSERT_TRUE(scanCard(fs, card, config(), 19410, &ks));
+  for (int k = 0; k < 2; ++k) {
+    ts::TagStore st(fs, config());
+    st.open();
+    card.cache.clear();
+    const Probe p(card, fs);
+    const ts::TagStore::Compacted c = st.compact(k == 0);
+    TEST_ASSERT_TRUE(c.ok);
+    TEST_ASSERT_EQUAL(k == 0, c.rescanned);
+    TEST_ASSERT_EQUAL_UINT32(0, c.chunksMerged);
+    uint32_t bytes = 0;
+    fileHash("0:/.player/tags.bin", &bytes);
+    const Took t = p.took();
+    char what[128];
+    snprintf(what, sizeof(what), "%s compaction, no chunks (D %u B, HIDX %u passes, %u B of work memory)",
+             k == 0 ? "a Rescan's" : "the next", bytes, c.hidxPasses, (unsigned)c.workBytes);
+    print(what, t);
+    printf("[card io]   its time on the host: %u ms (the first pass %u, the second %u, HIDX's sort %u)\n",
+           (unsigned)c.totalMs, (unsigned)c.pass1Ms, (unsigned)c.pass2Ms, (unsigned)c.sortMs);
+    // 15 passes before (about 3,400 reads of 2 sectors for hidx.tmp alone).
+    TEST_ASSERT_TRUE_MESSAGE(c.hidxPasses <= 8, what);
+    // The reads: D twice (2.46 MB of Pending rows) and hidx.tmp's passes:
+    // 9,002 reads (25,531 sectors) before.
+    TEST_ASSERT_TRUE_MESSAGE(t.reads <= 6500, what);
+    TEST_ASSERT_TRUE_MESSAGE(t.readSectors <= 23000, what);
+    TEST_ASSERT_TRUE_MESSAGE(mostlyWhole(t, 0.15), what);
+  }
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_compactions_write_whole_pieces);
   RUN_TEST(test_aligned_buffers_write_the_same_bytes);
   RUN_TEST(test_save_writes_whole_pieces);
   RUN_TEST(test_walk_and_build_read_in_runs);
+  RUN_TEST(test_a_rescans_compaction);
   return UNITY_END();
 }

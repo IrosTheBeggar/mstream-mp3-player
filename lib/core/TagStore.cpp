@@ -2250,11 +2250,19 @@ TagStore::Compacted TagStore::compact(bool rescan) {
   void* wm = b.take(sizeof(CompactWork));
   std::memset(wm, 0, sizeof(CompactWork));
   CompactWork* w = new (wm) CompactWork;
+  // HIDX's section buffer first: the sort writes through it. The others and
+  // the arena after it, in one run (each piece rounded to 8): once the
+  // second pass is over, all of them are HIDX's sort's (its `region`).
+  w->outBuf[6] = static_cast<uint8_t*>(b.take(cfg_.writeBuffer));
   w->binFolderBuf = static_cast<uint8_t*>(b.take(3 * cfg_.runBuffer));
   for (int r = 0; r < 2; ++r) w->walkBuf[r] = static_cast<uint8_t*>(b.take(cfg_.runBuffer));
-  for (int k = 0; k < 7; ++k) w->outBuf[k] = static_cast<uint8_t*>(b.take(cfg_.writeBuffer));
+  for (int k = 0; k < 6; ++k) w->outBuf[k] = static_cast<uint8_t*>(b.take(cfg_.writeBuffer));
   w->arena = static_cast<uint8_t*>(b.take(arena));
   w->arenaBytes = arena;
+  const uint64_t t0 = cfg_.nowUs ? cfg_.nowUs() : 0;
+  auto msSince = [&](uint64_t from) -> uint32_t {
+    return cfg_.nowUs ? static_cast<uint32_t>((cfg_.nowUs() - from) / 1000u) : 0u;
+  };
 
   File* hidxF = nullptr;
   File* binF = nullptr;
@@ -2342,6 +2350,7 @@ TagStore::Compacted TagStore::compact(bool rescan) {
   // Pass 1: the counts, and HIDX's pairs into hidx.tmp.
   Cursor* outs[7] = {&w->fold, &w->recs, &w->strsF, &w->strsR, &w->dsta, &w->dfld, &w->hidx};
   int r;
+  uint64_t tPass = cfg_.nowUs ? cfg_.nowUs() : 0;
   for (;;) {
     for (Cursor* c : outs) c->begin(nullptr, 0, nullptr, 0);
     if (hidxF) fs_.close(hidxF);
@@ -2364,6 +2373,7 @@ TagStore::Compacted TagStore::compact(bool rescan) {
   }
   if (r != 1) return finish("read");
   if (!w->hidx.flush()) return finish("hidx.tmp");
+  res.pass1Ms = msSince(tPass);
   res.rescanned = w->m.converted;
   const uint32_t records = w->records, folders = w->folders, ownRecords = w->ownRecords, ownFolders = w->ownFolders;
   const uint32_t strsFolder = w->strsFolder, strsRecords = w->strsRecords, dfldBytes = w->dfldBytes;
@@ -2408,6 +2418,7 @@ TagStore::Compacted TagStore::compact(bool rescan) {
   w->dfld.begin(out, s[kODfld].offset, w->outBuf[5], cfg_.writeBuffer);
   w->hidx.begin(nullptr, 0, nullptr, 0);
   w->split = strsFolder;
+  tPass = cfg_.nowUs ? cfg_.nowUs() : 0;
   {
     uint8_t h[kDstaHeader] = {};
     cc::put32(h, records);
@@ -2438,23 +2449,37 @@ TagStore::Compacted TagStore::compact(bool rescan) {
   if (walkF) fs_.close(walkF);
   walkF = nullptr;
 
-  // HIDX: sorted in passes over hidx.tmp, in the arena the merge gave back.
+  res.pass2Ms = msSince(tPass);
+  tPass = cfg_.nowUs ? cfg_.nowUs() : 0;
+
+  // HIDX: sorted in passes over hidx.tmp, in the memory the merge gave back
+  // and the buffers idle since the second pass (the folder cursor's, the
+  // walk runs', the six sections' flushed: one run from binFolderBuf to the
+  // arena's end, after HIDX's own buffer). hidx.tmp is read kSortRead at a
+  // time, whole sectors from a boundary. 2026-10-09 (B4): in the arena
+  // alone, with 1 KB reads, a compaction with few chunks (a Rescan's, the
+  // update step's, a walk's merge: its arena the merge's small one) sorted
+  // 19,410 pairs in 15 passes, about 3,400 card reads; now in 7 (4 for one
+  // of 32 chunks, 5-6 before), 8 sectors a read.
   if (records) {
     struct Pair {
       uint64_t h;
       uint32_t r;
     };
     auto less = [](const Pair& a, const Pair& b) { return a.h != b.h ? a.h < b.h : a.r < b.r; };
-    uint8_t* sbuf = w->arena;
-    Pair* heap = reinterpret_cast<Pair*>(w->arena + cfg_.runBuffer);
-    const uint32_t cap = static_cast<uint32_t>((w->arenaBytes - cfg_.runBuffer) / sizeof(Pair));
+    uint8_t* const region = w->binFolderBuf;
+    const size_t regionBytes = static_cast<size_t>(w->arena + w->arenaBytes - region);
+    const uint32_t readBytes = regionBytes >= 4u * kSortRead ? kSortRead : cfg_.runBuffer;
+    uint8_t* sbuf = region;
+    Pair* heap = reinterpret_cast<Pair*>(region + align8(readBytes));
+    const uint32_t cap = static_cast<uint32_t>((regionBytes - align8(readBytes)) / sizeof(Pair));
     Cursor& hc = w->hidx;
     hc.begin(out, s[kOHidx].offset, w->outBuf[6], cfg_.writeBuffer);
     uint32_t emitted = 0;
     Pair last{0, 0};
     while (emitted < records) {
       cc::Stream st;
-      st.begin(hidxF, 0, records * mptg::kHidxStride, sbuf, cfg_.runBuffer);
+      st.begin(hidxF, 0, records * mptg::kHidxStride, sbuf, readBytes);
       uint32_t n = 0;
       for (uint32_t i = 0; i < records; ++i) {
         uint8_t e[mptg::kHidxStride];
@@ -2485,6 +2510,7 @@ TagStore::Compacted TagStore::compact(bool rescan) {
     if (!hc.flush()) return finish("write");
     s[kOHidx].crc = hc.crc;
   }
+  res.sortMs = msSince(tPass);
   fs_.close(hidxF);
   hidxF = nullptr;
 
@@ -2593,6 +2619,7 @@ TagStore::Compacted TagStore::compact(bool rescan) {
   res.walkMerged = walkRuns_ > 0;
   res.records = records;
   res.folders = folders;
+  res.totalMs = msSince(t0);
   if (fs_.exists(walkPath_)) fs_.remove(walkPath_);
   if (fs_.exists(jnlPath_)) fs_.remove(jnlPath_);
   cleanup();

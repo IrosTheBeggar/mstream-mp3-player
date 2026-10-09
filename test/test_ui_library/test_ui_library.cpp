@@ -26,6 +26,7 @@
 #include "LibrarySynth.h"
 #include "LibraryText.h"
 #include "ListLayout.h"
+#include "NameKey.h"
 #include "OutputModel.h"
 #include "PowerChoices.h"
 #include "QueueView.h"
@@ -1655,6 +1656,110 @@ void test_rail_follows_the_sort_keys() {
   }
 }
 
+// The names the tags don't give (docs/METADATA.md 5.4; the 2026-10-09
+// device run, B1). An album with no album value keeps its folder's name, and
+// so does one whose values are all blank (White_Space alone: a space, a tab,
+// an ideographic space), never "": in the lists, in its sort key and its
+// rail letter, in the catalog (Now Playing, the sheet, the queue's lines).
+// One real value among blanks names it. An artist with no artist tag is its
+// folder's; a track with no title, or a blank one, its file name's. The
+// blank albums the console's `ql` listed on N11's card were the artist
+// folders' own tracks, named "" in the index by design (3.4.3) and before
+// the tags too: every place that names them says "(loose tracks)", and
+// "(no artist folder)" for the artist of the files right under /music
+// (librarytext, which the console's lines use now).
+void test_names_without_tags() {
+  using librarytext::AlbumPlace;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  auto add = [&](const char* path, const View& v) {
+    TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, idx.addRecord(path, v.v));
+  };
+  add("/music/Kelvar Moss/Wind Harbour (2020)/01 - Gull.mp3",
+      View().title("Gull").artist("Kelvar Moss").track(1).year(2020));
+  add("/music/Kelvar Moss/Wind Harbour (2020)/02 - Tern.mp3", View().title("Tern").artist("Kelvar Moss").track(2));
+  add("/music/Kelvar Moss/Salt Road/01 - Ferry.mp3", View().title(" ").artist("Kelvar Moss").album(" "));
+  add("/music/Kelvar Moss/Salt Road/02 - Pier.mp3", View().title("\t").artist("Kelvar Moss").album("\xE3\x80\x80"));
+  add("/music/Kelvar Moss/Mixed/01 - One.mp3", View().title("One").album(" "));
+  add("/music/Kelvar Moss/Mixed/02 - Two.mp3", View().title("Two").album("Mixed Signals"));
+  add("/music/Kelvar Moss/Mixed/03 - Three.mp3", View().title("Three").album("  "));
+  add("/music/Orvel Tasse/Night Ride/01 - Road.mp3", View().album("Night Ride").track(1));
+  add("/music/Orvel Tasse/Night Ride/02 - Turn.mp3", View().title("Turn").album("Night Ride").track(2));
+  add("/music/Orvel Tasse/03 - Stray.mp3", View().title("Stray").artist("Orvel Tasse").album("A Single"));
+  add("/music/Top Level.mp3", View().title("Top Level"));
+  TEST_ASSERT_TRUE(idx.finish());
+  TrackCatalog c(&idx);
+  const uint32_t gull = idx.findTrack("/music/Kelvar Moss/Wind Harbour (2020)/01 - Gull.mp3");
+  const uint32_t ferry = idx.findTrack("/music/Kelvar Moss/Salt Road/01 - Ferry.mp3");
+  const uint32_t pier = idx.findTrack("/music/Kelvar Moss/Salt Road/02 - Pier.mp3");
+  const uint32_t road = idx.findTrack("/music/Orvel Tasse/Night Ride/01 - Road.mp3");
+  const uint32_t stray = idx.findTrack("/music/Orvel Tasse/03 - Stray.mp3");
+  const uint32_t top = idx.findTrack("/music/Top Level.mp3");
+  // The albums: the folder's name, the year still voted; the one real value.
+  const uint32_t wind = idx.track(gull).album, salt = idx.track(ferry).album, night = idx.track(road).album;
+  const uint32_t mixed = albumOf(idx, "/music/Kelvar Moss/Mixed/01 - One.mp3");
+  TEST_ASSERT_EQUAL_STRING("Wind Harbour (2020)", idx.albumName(wind));
+  TEST_ASSERT_EQUAL_UINT16(2020, idx.album(wind).year);
+  TEST_ASSERT_EQUAL_STRING("Salt Road", idx.albumName(salt));
+  TEST_ASSERT_EQUAL_STRING("Mixed Signals", idx.albumName(mixed));
+  TEST_ASSERT_EQUAL_STRING("Night Ride", idx.albumName(night));
+  TEST_ASSERT_EQUAL_STRING("Wind Harbour (2020)", librarytext::albumShown(idx, wind));
+  TEST_ASSERT_EQUAL_STRING("Wind Harbour (2020)", c.album(gull));
+  TEST_ASSERT_EQUAL_STRING("Salt Road", c.album(pier));
+  // Their sort keys and rail letters are the folders' names too: W and S,
+  // not '#' (a blank name would sort first, under '#').
+  TEST_ASSERT_EQUAL_STRING("Wind Harbour (2020)", idx.albumSortKey(wind));
+  TEST_ASSERT_EQUAL('W', textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, wind)));
+  TEST_ASSERT_EQUAL('S', textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, salt)));
+  // Every album that isn't an artist folder's own tracks has a name that
+  // isn't blank; the rail's letters are the index's buckets row for row.
+  const LibraryIndex::Span az = idx.albumsAZ();
+  for (uint32_t i = 0; i < az.count; ++i) {
+    const uint32_t a = az[i];
+    if (!(idx.album(a).flags & LibraryIndex::kLoose)) TEST_ASSERT_FALSE(namekey::blank(idx.albumName(a), strlen(idx.albumName(a))));
+    TEST_ASSERT_EQUAL_INT(idx.bucketAt(LibraryIndex::View::Albums, i),
+                          textfold::bucketOf(textfold::railKey(librarytext::railName(idx, LibraryIndex::View::Albums, a))));
+  }
+  // The titles: the file name's for none and for blank ones.
+  TEST_ASSERT_EQUAL_STRING("Ferry", titleOf(c, ferry).c_str());
+  TEST_ASSERT_EQUAL_STRING("Pier", titleOf(c, pier).c_str());
+  TEST_ASSERT_EQUAL_STRING("Road", titleOf(c, road).c_str());
+  TEST_ASSERT_EQUAL_UINT16(1, idx.track(road).number);
+  // No artist tag: the artist folder's name, everywhere.
+  const uint32_t orvel = idx.track(road).artist;
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse", librarytext::artistShown(idx, orvel));
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse", c.artist(road));
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse", c.albumArtist(road));
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse \xC2\xB7 2 tracks", text(librarytext::albumHeader, idx, night).c_str());
+  // The loose tracks and the top of /music: "" in the index, named so by
+  // librarytext (the rows, the sheet, the console's `ql` and queue lines).
+  const uint32_t loose = idx.track(stray).album, topAlbum = idx.track(top).album;
+  TEST_ASSERT_TRUE(idx.album(loose).flags & LibraryIndex::kLoose);
+  TEST_ASSERT_EQUAL_STRING("", idx.albumName(loose));
+  TEST_ASSERT_EQUAL_STRING("", c.album(stray));  // Now Playing: kLooseTracks
+  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, loose));
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse", librarytext::artistShown(idx, idx.album(loose).artist));
+  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, topAlbum));
+  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, librarytext::artistShown(idx, idx.album(topAlbum).artist));
+  TEST_ASSERT_EQUAL_STRING("Orvel Tasse", albumSub(idx, loose, AlbumPlace::AZ).c_str());
+  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, albumSub(idx, topAlbum, AlbumPlace::AZ).c_str());
+  // The overlay (the playing track's record read after the build): a blank
+  // title or album is none there too, the index's names stay.
+  TrackCatalog::Overlay o;
+  c.setOverlay(&o);
+  o.set(idx, road, View().title(" ").album("\t").year(1999).v);
+  TEST_ASSERT_EQUAL_STRING("Road", titleOf(c, road).c_str());
+  TEST_ASSERT_EQUAL_STRING("Night Ride", c.album(road));
+  TEST_ASSERT_EQUAL_UINT16(1999, c.year(road));
+  c.setOverlay(nullptr);
+  // The helper itself: White_Space alone, or nothing.
+  TEST_ASSERT_TRUE(namekey::blank(nullptr, 0));
+  TEST_ASSERT_TRUE(namekey::blank("", 0));
+  TEST_ASSERT_TRUE(namekey::blank(" \t\xC2\xA0\xE3\x80\x80", 7));
+  TEST_ASSERT_FALSE(namekey::blank(" a ", 3));
+  TEST_ASSERT_FALSE(namekey::blank("_", 1));
+}
+
 // The Library's and Now Playing's new texts in their rooms: the empty
 // state's lines (reworded: tags are read), the placeholders and "Unknown
 // artist" in Now Playing's rows, a disc divider up to disc 255, the scan's
@@ -2028,6 +2133,7 @@ int main(int, char**) {
   RUN_TEST(test_disc_dividers);
   RUN_TEST(test_catalog_names_and_overlay);
   RUN_TEST(test_rail_follows_the_sort_keys);
+  RUN_TEST(test_names_without_tags);
   RUN_TEST(test_library_texts_fit);
   RUN_TEST(test_library_row_texts);
   RUN_TEST(test_console_tag_commands);

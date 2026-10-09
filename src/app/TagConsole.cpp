@@ -18,6 +18,7 @@
 #include "QueueView.h"
 #include "TagScan.h"
 #include "TagStore.h"
+#include "UiText.h"
 #include "app/Psram.h"
 #include "storage/CardFat.h"
 #include "storage/SectorDisk.h"
@@ -690,12 +691,15 @@ void TagConsole::dump(const char* arg) {
     static const char* const kSources[4] = {"its path", "the device's record", "the transfer's record", "?"};
     char* title = w->title;
     library_.catalog().title(id, title, sizeof(w->title));
+    // (An artist folder's own tracks have no album: "(loose tracks)", as the
+    // Library calls them.)
+    const char* album = library_.catalog().album(id);
     tagtext::lengthText(static_cast<uint32_t>(tr.durationS) * 1000u, t, sizeof(t));
     Serial.printf("[tags] the index: track %lu, named by %s%s: \"%s\" by \"%s\", album \"%s\" (%u), line \"%s\", disc "
                   "%u, number %u, length %s\n",
                   static_cast<unsigned long>(id), kSources[tr.flags & LibraryIndex::kSourceMask],
                   (tr.flags & LibraryIndex::kTrackPending) ? ", the scan's to read" : "", title,
-                  library_.catalog().artist(id), library_.catalog().album(id),
+                  library_.catalog().artist(id), album[0] ? album : uitext::kLooseTracks,
                   static_cast<unsigned>(library_.catalog().year(id)), library_.catalog().albumArtist(id),
                   static_cast<unsigned>(tr.disc), static_cast<unsigned>(tr.number), t);
   }

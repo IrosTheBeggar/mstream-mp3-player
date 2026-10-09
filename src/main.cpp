@@ -26,6 +26,7 @@
 #include "HeadsetKeys.h"
 #include "IdlePolicy.h"
 #include "InputEvent.h"
+#include "LibraryText.h"
 #include "OutputModel.h"
 #include "PlayGate.h"
 #include "PlaybackController.h"
@@ -1043,11 +1044,15 @@ static void queueCommand(const char* a) {
       break;
     }
     case 'l':
+      // The names the Library shows (librarytext): an artist folder's own
+      // tracks are "(loose tracks)" and the files right under /music "(no
+      // artist folder)", as its rows call them (their index names are "").
       if (!haveLibrary) break;
       for (uint32_t i = 0; i < index->albumCount(); ++i) {
         const uint32_t album = index->albumsAZ()[i];
-        Serial.printf("  %lu  %s - %s (%lu)\n", (unsigned long)i, index->artistName(index->album(album).artist),
-                      index->albumName(album), (unsigned long)index->album(album).trackCount);
+        Serial.printf("  %lu  %s - %s (%lu)\n", (unsigned long)i,
+                      librarytext::artistShown(*index, index->album(album).artist),
+                      librarytext::albumShown(*index, album), (unsigned long)index->album(album).trackCount);
       }
       break;
     case 'p':
@@ -1089,7 +1094,7 @@ static void queueCommand(const char* a) {
         snprintf(why, sizeof(why), " (%s%s)", took, went);
       }
       Serial.printf("[queue] %s %s: %lu tracks%s\n", c == 'p' ? "playing" : c == 'n' ? "plays next:" : "added",
-                    index->albumName(index->albumsAZ()[n]), (unsigned long)t.count, why);
+                    librarytext::albumShown(*index, index->albumsAZ()[n]), (unsigned long)t.count, why);
       break;
     }
     case 'r': {
@@ -2791,13 +2796,15 @@ static bool enterFence() {
 static void leaveFence() {
   const LibraryUpdate::Step& s = library.update()->last();
   const uint32_t fenceLow = diag::endLowWindow();
-  const uint32_t bootLow = diag::lowestSinceBoot(MALLOC_CAP_SPIRAM);
-  char lowest[64];
+  // Beside it, the running player's lowest (since setup()'s end: PSRAM's
+  // since-boot lowest is the init's 0 B, diag::restartLows()).
+  const uint32_t runLow = diag::lowest(MALLOC_CAP_SPIRAM);
+  char lowest[96];
   if (fenceLowWindow) {
-    snprintf(lowest, sizeof(lowest), "%u B during the fence (%u B since the boot)", (unsigned)fenceLow,
-             (unsigned)bootLow);
+    snprintf(lowest, sizeof(lowest), "%u B during the fence (%u B since the player started)", (unsigned)fenceLow,
+             (unsigned)runLow);
   } else {
-    snprintf(lowest, sizeof(lowest), "%u B since the boot (no window)", (unsigned)bootLow);
+    snprintf(lowest, sizeof(lowest), "%u B since the player started (no window)", (unsigned)runLow);
   }
   fenceLowWindow = false;
   library.unfence();
@@ -3002,6 +3009,11 @@ void setup() {
   // the first: PSRAM's lowest since the boot read 0 B in every session of
   // the 2026-10-09 device run, and no caller logged a failure.
   diag::watchFailedAllocs();
+  // That 0 B was there at the first [heap] line, before any of our code: the
+  // IDF's and the Arduino core's init. PSRAM's lowest counts from here (the
+  // [heap] stage lines give setup()'s own), and again from setup()'s end
+  // (the running player's: [stats]' pmin=).
+  diag::restartLows();
   ensureNvs();  // before the first Preferences read
   nvsschema::check();  // the layout's number, migrated if older, before anything reads a key
   // The CPU speed saved (or the default), before Bluetooth starts.
@@ -3183,6 +3195,13 @@ void setup() {
                  "RAM / high PSRAM, Ot1/Ot0 the converter's table copy in the pinned PSRAM block (the default) / "
                  "internal RAM); "
                  "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md), never commands");
+  // PSRAM's lowest from here is the running player's ([stats]' pmin=, the
+  // [heap] lines' min=, the update step's line beside its fence's own):
+  // setup()'s (the boot's library build among it) and the init's, once.
+  const uint32_t setupLow = diag::restartLows();
+  Serial.printf("[heap] PSRAM's lowest free: %u B over setup(), %u B before it (the IDF's and the Arduino core's "
+                "init); pmin= and min= count from here\n",
+                (unsigned)setupLow, (unsigned)diag::psramLowBeforeSetup());
 }
 
 void loop() {

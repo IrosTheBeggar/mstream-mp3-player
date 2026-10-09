@@ -293,6 +293,13 @@ const char* trim(const char* s, size_t n, size_t* len) {
   return s + a;
 }
 
+bool blank(const char* s, size_t n) {
+  if (!s || !n) return true;
+  size_t len = 0;
+  trim(s, n, &len);
+  return len == 0;
+}
+
 size_t displayJoin(const char* list, size_t n, char* out, size_t cap) {
   constexpr uint32_t kMaxKeys = 32;  // beyond 2.3.6's 16 values: no more deduplication
   uint64_t keys[kMaxKeys];

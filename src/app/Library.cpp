@@ -261,6 +261,7 @@ bool Library::openRecords() {
   c.producer = s_producer;
   c.parserVersion = tagscan::kParserVersion;
   c.cardId = root_->present ? root_->identity.cardId : 0;
+  c.nowUs = nowUs;  // a compaction's parts (CardTasks' line)
   t0 = esp_timer_get_time();
   store_ = psramNew<tagstore::TagStore>(*fat_, c, psramAlloc, psramFree);
   if (!store_) return false;
@@ -517,6 +518,18 @@ void Library::report() const {
                     s.why, s.built ? (s.walked ? "walked" : "built") : "FAILED", s.buildMs, (unsigned long)s.fenceMs,
                     s.saved ? "saved" : "NOT saved", s.saveMs, s.markerRemoved ? " (the marker removed)" : "",
                     (unsigned long)update_->steps(), (unsigned long)update_->deferrals());
+    }
+    if (update_) {
+      // The next step's safe point (3.4.2): the longer of the last pause and
+      // the estimate from the tracks, a margin on it, 20-30 s.
+      const uint32_t last = update_->lastPauseMs();
+      char measured[48] = "no step yet";
+      if (last) snprintf(measured, sizeof(measured), "the last fence %.1f s", last / 1000.0);
+      Serial.printf("[index] the update step's safe point: %.1f s left of the heard track (%s; the estimate %.1f s "
+                    "for %lu tracks; a margin of %.0f s, %.0f-%.0f s)\n",
+                    update_->safeLeftMs() / 1000.0, measured,
+                    LibraryUpdate::pauseFor(t) / 1000.0, (unsigned long)t, LibraryUpdate::kSafeMarginMs / 1000.0,
+                    LibraryUpdate::kSafeLeftMs / 1000.0, LibraryUpdate::kSafeCapMs / 1000.0);
     }
   } else if (stats_.fromCache) {
     Serial.printf("[index] time: signature walk %.1f ms (%lu files), cache load %.1f ms\n", stats_.walk.ms,

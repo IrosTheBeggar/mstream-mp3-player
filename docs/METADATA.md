@@ -2864,13 +2864,14 @@ fake FAT trees into it). What the code decided where 3.3.2 left room:
   16 KB clusters, a `FatFile` like the firmware's) for a 20k scan's 8
   compactions, as the firmware's jobs write them:
 
-  | The last compaction (D 3.75 MB) | Before (6c2a928) | Now |
-  |---|---|---|
-  | Card writes | 13,825, all of one sector | 1,080 (105 of one sector, the rest 8) |
-  | Reads past the cache | 26,110, all of one sector | 7,036 (210 of one sector; 17,832 sectors) |
-  | HIDX's passes | 8 | 6 |
-  | Syncs | 3 | 3 |
-  | The 8 compactions | 91,905 writes, all of one sector; 18,810-26,110 reads each, all of one sector | 7,527 writes (810 of one sector); 50,474 reads (1,469 of one sector; 123,037 sectors) |
+  | The last compaction (D 3.75 MB) | Before (6c2a928) | The r3 fixes (062bd1f) | Now (B4, below) |
+  |---|---|---|---|
+  | Card writes | 13,825, all of one sector | 1,080 (105 of one sector, the rest 8) | the same |
+  | Reads past the cache | 26,110, all of one sector | 7,036 (210 of one sector; 17,832 sectors) | 5,902 (210 of one sector; 16,924 sectors) |
+  | HIDX's passes | 8 | 6 | 4 |
+  | Syncs | 3 | 3 | 3 |
+  | The 8 compactions | 91,905 writes, all of one sector; 18,810-26,110 reads each, all of one sector | 7,527 writes (810 of one sector); 50,474 reads (1,469 of one sector; 123,037 sectors) | the same writes; 42,991 reads (1,469 of one sector; 118,951 sectors) |
+  | A Rescan's (no chunks, D 2.46 MB) | | 9,002 reads (25,531 sectors), 757 writes, HIDX 15 passes | 5,996 reads (21,899 sectors), 757 writes, HIDX 7 passes |
 
   (The "before" column is the r3 investigation's host model of 6c2a928's
   code: the same FatFs, cache and card. It matches the device's own
@@ -2890,6 +2891,46 @@ fake FAT trees into it). What the code decided where 3.3.2 left room:
   L3.7 times one dark against `gc`'s counters, which give its card
   time. No card write is over 8 sectors: the decoder waits for
   FatFs's lock one 4 KB piece at most, as before.
+
+- **MEASURED on N11's card (062bd1f, 2026-10-09, run 4), and what
+  remains (B4).** After a restart mid-Rescan, the scan's six compactions
+  (five of 32 chunks, one of 1) took 22.5 s on average, 25.1 s the
+  longest, the screen dark the whole time (priority 1) and nothing
+  playing; the Rescan's own (no chunks) 20.8 s; the soak's, under `gc2`'s
+  verify, 29.5 s mean and 43.9 s at most. Not the priority, then (these
+  ran at 1), and not the card alone. `gc`'s counters around the Rescan's
+  agree with the host model's count for it (748 card writes against the
+  model's 757; the reads in that window also hold `gs`'s 12 s check of D
+  through the VFS), and at the per-command costs above the model's
+  counts make a 32-chunk compaction at 20k about 8 s of card reads (D
+  twice, about three quarters of them; the journal's 32 runs; HIDX's
+  passes about 1.2 s) and 2-3 s of writes: about 10-11.5 s of card time,
+  half of the 22.5 s. The rest is the merge's own work on core 1, its
+  two passes alike (the host's clock: 47% each, the sort 6%; the k-way
+  merge compares every input's head for each of D's 19,410 rows, 34
+  inputs at 32 chunks, in both passes; D's checks and the output's
+  CRCs; the distinct values' hashes), which 3.3.7's 10-16 s didn't
+  count. The safe, clear part is fixed: HIDX's sort now has the buffers
+  the second pass left idle besides the arena (one run, 29 KB more at
+  the defaults, no new memory) and reads `hidx.tmp` 4 KB at a time, 8
+  sectors a command (`TagStore::kSortRead`): at 20k 4 passes, not 5-6,
+  for a 32-chunk compaction (about 1,000 card reads fewer, about 0.5 s);
+  7, not 15, for one with no chunks or few, whose arena is the merge's
+  small one (a Rescan's, the walk's merge, the update step's own before
+  its build: about 3,000 reads and 3,600 sectors fewer, about 2.5 s),
+  D byte for byte the same (`test_card_io`). The merge's CPU is the next
+  lever (a tournament over the inputs' heads instead of a scan of all of
+  them, one pass instead of two), not taken blind: each compaction now
+  logs where its time went, `[card] the compaction's time: T s (the step
+  S s, priority P): the first pass a s, the second b s, HIDX's sort c s
+  (N passes); the card meanwhile R reads (K sectors) in X s, W writes`
+  (`TagStore::Config::nowUs`, `sectordisk::stats()`; the decoder's reads
+  count too while a track plays), so the next run splits it. The new
+  expectation at 20k: a 32-chunk compaction about 20-25 s dark (22.5 s
+  measured, less the sort's 0.5 s), about 25-40 s lit (priority 0,
+  ESTIMATED: the measured dark figure over the lit share); one with no
+  chunks about 17-20 s dark; the 8 of a fresh scan about 2.7-3.3 min
+  dark.
 
 #### 3.3.8 As built (N6)
 
@@ -3193,9 +3234,12 @@ where 3.3.3-3.3.5 left room:
 **Preconditions:**
 
 - the journals compacted;
-- a safe point: nothing plays, or the playing track has at least 20 s
-  left and there was no seek in the last 2 s (so the decoder can't reach
-  its end of file and ask for the next path while the index is down);
+- a safe point: nothing plays, or the playing track has at least the
+  pause's length left with a margin (20 s at first; since 2026-10-09 the
+  last step's measured pause and 5 s, at least 20 s and at most 30 s:
+  "As built" below) and there was no seek in the last 2 s (so the decoder
+  can't reach its end of file and ask for the next path while the index
+  is down);
 - a memory check: free PSRAM plus what the step frees is at least 1.1 ×
   the estimated build peak, and the largest free block
   (`heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)`) at least the
@@ -3303,6 +3347,30 @@ either way
 (gapless on, it joins; off, the next waits, paused: 3.9) and the next
 run's L4.1 measures the fixed build first.
 
+**MEASURED on N11's card (062bd1f, 2026-10-09, run 4), and the safe point
+as built.** The step's build took 15.4 s (the fence up 15.5 s) dark with
+nothing playing, 17.5 s (17.8 s) with the hour of silence's tone and the
+screen dark, 18.4 s (18.6 s) lit with the runner's probes and a stub
+playing; the same D built at the boot, alone on the loop, 11.3 s. So the
+r3 fixes took about 0.4-0.8 s off, not the 1.4-2.4 s estimated: dark and
+idle at the top of its 13-15.5 s, and with audio or the screen lit about
+17.5-18.5 s at 20k, over the 15.5-18 s (an MP3 decode is still
+unmeasured). Over 16 s, so the safe point grows with the pause
+(`LibraryUpdate::safeLeftMs()`, `test_the_safe_point_follows_the_pause`):
+the heard track must have the longer of the last step's measured pause
+(its fence, Fence to Live on the loop's clock, of a build that ran
+whole) and the estimate from the index's tracks (1 ms a track, from the
+fence with audio: about 19.4 s at 19,410) left, and 5 s more, at least
+20 s, at most 30 s: 24.4 s on N11's card (its estimate, 19.4 s, is over
+the lit 18.6 s fence), more after a longer fence (an MP3's, say), 20 s
+below about 15,000 tracks. The 30 s cap keeps tracks of half a
+minute and more able to make one; a pause past 25 s isn't covered whole,
+and the fence's own rule (a track that ends inside it joins the next, or
+the next waits, paused) is the backstop as before. `g` prints the safe
+point (`[index] the update step's safe point: …`), and `gs`'s scan line
+the length it waits for (`waiting for the safe point (24.4 s left of the
+heard track)`).
+
 **Callers:** the end of a scan; a walk that found changes; `g0` and `gb`;
 the UI's "Try again"; the boot (3.2.2). Today's `rebuildLibrary()` in
 `main.cpp` becomes this step, and `QueueStore::remap()` goes through
@@ -3324,7 +3392,18 @@ which fails at about 15k entries (metascan section 6.2).
   `buildStamp`, the counts, the A-Z buckets, the FNV trailer as today.
 - **The loose-tracks album** keeps the name "" and gets `kLoose`:
   `SleepTimer`'s end-of-album rule and the "(loose tracks)" rows test
-  that "" today, and switch to the flag.
+  that "" today, and switch to the flag. Every place that names an album
+  goes through `librarytext::albumShown()` (and an artist through
+  `artistShown()`): the rows, headers and sheets, Now Playing, and since
+  2026-10-09 (B1) the console's `ql` and its `[queue] playing …` lines,
+  which printed the index's "" (`DJ Yagal -  (3)` on N11's card: the 12
+  artist folders with loose tracks, blank before the tags too). Its sort
+  key is "" as well: the loose albums open the Albums A-Z under '#', as
+  "(loose tracks)" would.
+- **`rulesVersion` 2** (2026-10-09): a blank title or album value
+  (White_Space alone) names nothing (5.4), so no album is ever named by a
+  blank value. The first boot after that firmware finds library.idx
+  Outdated and builds from the records once.
 - **`load()`:** Loaded (compare the inputs: a hard mismatch, or the
   build-at-boot marker (3.4.2), rebuilds from the records at boot; a soft
   one keeps the index and rebuilds at the
@@ -3470,6 +3549,24 @@ counts):
   buffers (above) are given back before the build (the View closes at the
   fence, the compaction frees its block), so the build's margin is as
   measured.
+  **That since-boot 0 B came before the player (062bd1f, 2026-10-09, run
+  4, B3):** the very first `[heap] boot` line, early in `setup()`, read
+  `psram ... min=0K`, and no `[heap] FAILED` line followed in any session:
+  the IDF's and the Arduino core's init emptied PSRAM for a moment, and
+  heap_caps' since-boot minimum never moves again. So `diag::restartLows()`
+  opens heap_caps' local window at `setup()`'s first line (the `[heap]`
+  stage lines' `min=` give `setup()`'s own lowest, the boot's library
+  build among it) and again at its end, with one line,
+  `[heap] PSRAM's lowest free: N B over setup(), 0 B before it (the
+  IDF's and the Arduino core's init); pmin= and min= count from here`;
+  from there `pmin=` and `min=` are the running player's lowest. The IDF
+  has one local window at a time and resets the minimum only through it,
+  so `diag` keeps the window running and its own floor across the windows
+  it closes: the fence's window (above) reopens it, and the update step's
+  line says `lowest Z B during the fence (W B since the player started)`.
+  Internal RAM's lowests stay since the boot (its floor starts at the
+  since-boot one). A dip in the microseconds between closing one window
+  and opening the next isn't seen.
   Afterwards, in order: AutoDJ's join (a sorted array of (path hash,
   track id), 240 KB transient, then 2 × 40 KB of u16 maps; rows whose
   file is gone are skipped), the queue's re-read (at most 20 KB
@@ -3983,7 +4080,8 @@ src/. What the code decided where 3.2-3.4 left room:
   g0's walk); the scan and the walk hold (`updateWanted`) while the
   journals are compacted (a worker step, the chunk with it); then, with
   the worker free and the safe point reached (not playing, or 20 s left at
-  least and no seek in the last 2 s), the status line says "Updating
+  least and no seek in the last 2 s; since 2026-10-09 the last pause and
+  5 s, 20-30 s: 3.4.2), the status line says "Updating
   library…" (0.6 s, so it is drawn before the loop stops), and
   `runUpdateStep()` checks the memory
   (`Library::roomToBuild()`: free PSRAM with the index's and the queue's
@@ -4355,7 +4453,11 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   it).
 - **The safe point** is N10's, and a play waiting for the headphones
   isn't one (its start would need a path). The last seek's time is the
-  machine's (`In::seekSeq`).
+  machine's (`In::seekSeq`). Since 2026-10-09 (run 4, B2) its length
+  follows the pause (3.4.2's "MEASURED ... run 4"): `safeLeftMs()`, the
+  longer of the last whole build's fence (`lastPauseMs()`, kept from the
+  pass that says `Do::Live`) and `pauseFor()` the index's tracks, plus
+  5 s, 20-30 s.
 - **The Output tab's Library row** (3.3.6; it fits the budgets: Sizes
   below), before About: "Library: 19,410 tracks" (Body; "19,410 tracks"
   when that doesn't fit), where their names come from
@@ -4719,7 +4821,8 @@ the same.
 
 **Per track:**
 
-- **Title:** the record's, else the file name's (today's parse).
+- **Title:** the record's, else the file name's (today's parse); a blank
+  one (White_Space alone) is none.
 - **Artist display:** the record's artist values trimmed; one value as is;
   several deduplicated by nameKey (the first kept) and joined with ", "
   (mStream's `credit_display`). Shown where it differs from the album's
@@ -4737,7 +4840,9 @@ first), then the file name.
 
 - **Name:** the most common album value among its tracks' records (exact
   bytes); ties to the smallest by bytes (mStream's tie rule); none: the
-  folder name.
+  folder name. A blank value (White_Space alone, 5.1's word) doesn't
+  vote, so an album whose values are all blank is its folder's too, never
+  a blank name (`library.idx` rules 2, 3.4.3).
 - **Year:** the most common year; ties to the earliest.
 - **Artist line:** the most common album-artist display; else "Various
   Artists" when any track says compilation; else the most common track
@@ -4912,9 +5017,12 @@ way. `ui`'s `[ui] loop task stack: N B never used since the boot` is M.
 **Before.** The core2 (QIO) build of `feature/metadata` at N10's commit or
 later, flashed with the user's go-ahead. The card: N11's synthetic 20k
 card (`tools/synthcard.py`, seed 1: no `/.mstream`, every file the
-listener's), or the real library. The first boot of this firmware on a
-card walks /music and saves; the console's first lines say so, in this
-order:
+listener's), or the real library. (A card that already ran an earlier
+firmware of this branch: the first boot after the 2026-10-09 run 4's
+fixes finds library.idx Outdated, `rulesVersion` 2 (3.4.3), and builds
+from the records once, about 11-14 s at 20k before the UI; the next
+boots load.) The first boot of this firmware on a fresh card walks
+/music and saves; the console's first lines say so, in this order:
 
 - `[storage] SD card on FatFs drive 0; the sector cache: on (256 sectors,
   135168 B of PSRAM)`
@@ -4948,12 +5056,22 @@ then are expected, and count only from the put-back on.
 
 **PSRAM, through the whole batch** (since the r3 fixes, 3.5): the
 `[stats]` line's `pmin=` (and the `[heap]` stage lines' `min=` after
-`psram free=`) is PSRAM's lowest since the boot; record its value at
-each part's end, and any `[heap] FAILED: N B (caps 0x..) in <function>,
-task <name>; PSRAM free F B, largest block L B` line with the step it fell
-in. On 6c2a928 the since-boot lowest was 0 B in every session (a moment
-the heap was full, outside the update step, no failure logged): a FAILED
-line now names what met it, and `pmin=` brackets when.
+`psram free=`) is PSRAM's lowest; record its value at each part's end,
+and any `[heap] FAILED: N B (caps 0x..) in <function>, task <name>;
+PSRAM free F B, largest block L B` line with the step it fell in. On
+6c2a928 and 062bd1f the since-boot lowest was 0 B in every session from
+the first `[heap] boot` line on, with no FAILED line: the IDF's and the
+Arduino core's init, before the player (3.5, B3 of run 4). Since run 4's
+fixes the lowest counts from `setup()`'s first line (the `[heap]` stage
+lines: `setup()`'s own, the boot's library build among it) and again
+from its end, where one line says both, `[heap] PSRAM's lowest free: N B
+over setup(), 0 B before it (the IDF's and the Arduino core's init);
+pmin= and min= count from here`; record N. From there `pmin=` is the
+running player's lowest: above 0 (ESTIMATED about 0.5-0.65 MB at 20k
+with the UI up: `psram=` read 0.63-0.74 MB through compactions and
+0.65-0.88 MB idle on 062bd1f), under each part's `psram=` lows; a 0
+again would be the player's own, with a FAILED line naming it or a
+moment the heap was full.
 
 **L0, the bench** (the stock driver; 3.2.1, 3.2.7). Playback stopped (the
 decoder's reads would count):
@@ -5158,17 +5276,23 @@ page) and `gs` at its end.
    3,200 files (`append()` refuses a 33rd chunk of at most 100 files),
    about every 2,400 (`tags.jnl` reaching 512 KB first: 8 in 20k on the
    host, 3.3.7); `gs`'s `[card] compaction: S steps, mean m ms, longest
-   l ms`: the last one about 12-16 s at 20k with the screen dark (priority
-   1), 20-28 s lit (0), in between by the share of its span the screen was
-   lit, the mean a little under (3.3.7, ESTIMATED since the r3 fixes;
-   6c2a928: mean 94 s, longest 107 s). `gc`'s card counters across one
-   (`gc` before and after it, nothing else reading): about 1,100 writes
-   for 7,900 sectors at 20k, a tenth of them single-sector, and about
-   7,000 reads past the cache (on 6c2a928 every write and read a single
-   sector). The dark figure is the priority's if 6c2a928's excess over its
-   card time was; the merge's own CPU is unmeasured (3.3.7): a dark
-   compaction of 16-20 s whose counters match is that share, a finding
-   to record, and one near the lit figure is the priority not applied.
+   l ms`: about 20-25 s at 20k with the screen dark (priority 1), 25-40 s
+   lit (0, ESTIMATED), in between by the share of its span the screen was
+   lit (3.3.7: MEASURED on 062bd1f, run 4, 22.5 s mean and 25.1 s longest
+   dark, of which HIDX's sort in 4 KB reads now takes about 0.5 s off;
+   6c2a928: mean 94 s, longest 107 s); one with no chunks or few (a
+   Rescan's, the update step's own) about 17-20 s dark (20.8 s for the
+   Rescan's on 062bd1f, about 2.5 s less now). Each compaction's own line,
+   `[card] the compaction's time: T s (the step S s, priority P): the
+   first pass a s, the second b s, HIDX's sort c s (N passes); the card
+   meanwhile R reads (K sectors) in X s, W writes`, splits it: record a,
+   b, c and N, and X against T (host model, 3.3.7: about 1,080 writes and
+   5,900 reads, 16,900 sectors for the last at 20k; N 4, 7 with no
+   chunks; nothing playing, or the decoder's reads count in R). The
+   card's share was about half on 062bd1f (ESTIMATED from the model's
+   counts at the per-command costs): what T has over X and the writes
+   (about 2-3 s) is the merge's own work (both passes alike on the
+   host), the next lever; record it.
 
 **L4, the update step at 20k** (3.4.2, 3.9; risk 8). With the queue full
 (Shuffle all: 5,000) and an MP3 playing. Since N12 the build and the save
@@ -5187,20 +5311,25 @@ figures through it are what L4 records.
    the card worker (the loop live; the fence up F ms); PSRAM free X B
    before, Y B after, lowest Z B` and `[lib] built from the records: ...
    peak P B` (3.4.4: 1.99 MB at 20k). N against 3.4.2's reads, adds and
-   finish (about 13-15.5 s with the screen dark and nothing playing,
-   15.5-18 s lit or with audio playing, ESTIMATED since the r3 fixes;
-   MEASURED on 6c2a928, 3.4.2: 16.2 s dark and idle, 18.3 s dark with the
-   tone, 18.8 s lit with the probes; a build while an MP3 decodes is
-   unmeasured, likely slower than the tone's: L4.1-mp3; the build shares
-   the CPU with the loop: record both); F about N and a pass; over 16 s
-   grows the safe point. Since the r3 fixes the line ends `lowest Z B
-   during the fence (W B since the boot)`: Z the fence's own lowest from
+   finish (MEASURED on 062bd1f, run 4: 15.4 s with the screen dark and
+   nothing playing, 17.5 s dark with the tone, 18.4 s lit with the probes;
+   so about 14.5-16.5 s dark and idle, 17-19.5 s lit or with audio
+   playing; 6c2a928's were 16.2, 18.3 and 18.8 s; a build while an MP3
+   decodes is unmeasured, likely slower than the tone's: L4.1-mp3; the
+   build shares the CPU with the loop: record both); F about N and a pass.
+   F sets the next step's safe point (3.4.2: F + 5 s, 20-30 s): `g` prints
+   it, `[index] the update step's safe point: S s left of the heard track
+   (the last fence F s; the estimate E s for T tracks; a margin of 5 s,
+   20-30 s)`; record S against F + 5. The line ends `lowest Z B during the
+   fence (W B since the player started)` (`since the boot` before the
+   2026-10-09 run 4's fixes): Z the fence's own lowest from
    its frees on (since the r3 review the window starts after
    `CardTasks::fenceUp()`, so Z is at most Y and is the build's margin,
    not X's level), about 0.85-0.95 MB (3.5: 0.93-0.97 MB replayed for
-   6c2a928; at least 3.5's 0.7 MB), W the since-boot one
-   (0 B in every session on 6c2a928; with `pmin=` and any `[heap] FAILED`
-   line, above; `lowest W B since the boot (no window)` if the IDF
+   6c2a928; at least 3.5's 0.7 MB; 0.95 MB MEASURED on 062bd1f), W the
+   running player's lowest since `setup()`'s end (0 B on 6c2a928 and
+   062bd1f, the init's: 3.5; now the player's own, under Z and `pmin=`'s
+   lows; `lowest W B since the player started (no window)` if the IDF
    refused the window). Record `[lib] the update step waits for the next
    boot (...)` if it comes instead: its reason says which test failed
    (the room, or the track table fitting neither the old one's block nor
@@ -5446,10 +5575,11 @@ The user answered U8, U11, U12, U13 and U14 on 2026-10-07 (marked
    the skew rule and qfp; the worst case is about 2.7 min of checks once.
 7. **Long scans during Bluetooth playback** are unmeasured: the ring gate
    and the back-off are the guard, L3 the proof.
-8. **A track end during the update step.** The safe-point rule (20 s left,
-   no recent seek) covers it, with about 6 s to spare at 20k while an MP3
-   plays (3.4.2); L4 measures the pause. Now Playing keeps its copy of
-   the names.
+8. **A track end during the update step.** The safe-point rule (the last
+   pause and 5 s left, 20-30 s; no recent seek) covers it (3.4.2: the
+   pause MEASURED 17.5-18.6 s at 20k with audio, run 4); past it, the
+   fence's own rule (the track joins the next, or the next waits,
+   paused: 3.9). Now Playing keeps its copy of the names.
 9. **Retags the identity can't see:** a retag that keeps the size and the
    time, in the middle of the file. Rescan tags on the device, and the
    software's next run against the server's hashes, catch most.

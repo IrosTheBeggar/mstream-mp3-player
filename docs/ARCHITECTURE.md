@@ -1219,9 +1219,13 @@ boundaries (`tagstore::writePiece()`), the device's records' writers end
 their buffers on those boundaries too, and `cardcontract::Stream` refills
 whole sectors from a sector's boundary: on 6c2a928 a compaction's card
 writes and reads were every one a single sector (94 s a compaction at 20k;
-about 12-16 s now with the screen dark, ESTIMATED), and `library.idx`'s save half
+22.5 s on average on 062bd1f with the screen dark, MEASURED, about half
+of it card time and half the merge's own two passes; HIDX's sort now
+reads its scratch 4 KB at a time in the buffers the merge left idle, 4
+passes at 20k, 7 with no chunks), and `library.idx`'s save half
 (METADATA.md 3.3.7, 3.4.2; `test_card_io` counts them on the host FatFs
-model).
+model; each compaction's `[card] the compaction's time: …` line splits
+its time on the device).
 
 **A card that isn't FAT32.** The framework's FatFs is built without exFAT
 and without GPT (`FF_FS_EXFAT 0`, `FF_LBA64 0`), so such a card doesn't
@@ -1819,8 +1823,10 @@ the browsing UI hold its **track ids**, never strings.
   the scan's end when the journal took records since the last one, or a
   walk that found 200 new files or more (they show with their file names
   at once). Once asked it holds the scan; after the journals' compaction,
-  with the worker free and a safe point (nothing plays, or 20 s left and no
-  seek in 2 s), the worker's task there (made first: the build must start
+  with the worker free and a safe point (nothing plays, or the heard track
+  has the pause's length left and 5 s: the last step's measured fence, or
+  1 ms a track before one, at least 20 s and at most 30 s; and no seek in
+  2 s), the worker's task there (made first: the build must start
   at once), and memory for it (else `/.player/build.req`, and the next
   boot builds), the loop puts up a **fence**: the queue flushed and its
   memory lent to the build (the player fenced: pause and resume still
@@ -1853,7 +1859,13 @@ the browsing UI hold its **track ids**, never strings.
   ("2001 · 14 tracks", "Artist · 2001 · 14 tracks", a guest artist under
   its track, "Disc 2" dividers, the rail's sort names). An album with no
   record shows its artist's name as its line, so a path-only index reads
-  as before. One track can have fresher names than the index
+  as before; an album whose records give no album value, or only blank
+  ones (White_Space alone), keeps its folder's name, and a blank title is
+  the file name's (`library.idx` rules 2). An artist folder's own tracks
+  are an album named "" in the index, and every place that names one,
+  the console's `ql` and `[queue] playing …` lines included, says "(loose
+  tracks)" (`librarytext::albumShown()`; "(no artist folder)" for the
+  files right under `/music`). One track can have fresher names than the index
   (`TrackCatalog::Overlay`: the scan reads the playing track at once), for
   that index's build only, set by the scan (above). The console's `gs`,
   `gt</music/...>`, `gr`, `gw`, `gb` and `gv` (`app/TagConsole`,
@@ -2080,7 +2092,13 @@ the browsing UI hold its **track ids**, never strings.
   impossible at a few thousand). Now the library, the queue and its undo are
   in PSRAM; the boot log's `[lib] library + queue` line and `[heap] library`
   show what is left in internal RAM, and `[heap] playing` the figure while
-  playing.
+  playing. The `[heap]` lines' and `[stats]`' lowests (`min=`, `pmin=`;
+  app/Diagnostics): internal RAM's since the boot; PSRAM's since
+  `setup()`'s first line in its stage lines, and from its end on the
+  running player's (`diag::restartLows()`, one `[heap] PSRAM's lowest
+  free: …` line between): heap_caps' since-boot PSRAM minimum reads 0 B
+  from the first line on, the IDF's and the Arduino core's init
+  (METADATA.md 3.5).
 
 ## Input
 

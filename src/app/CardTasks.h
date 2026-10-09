@@ -229,6 +229,13 @@ private:
   size_t pickLen_[kSlots] = {};
   uint32_t playing_ = LibraryIndex::kNone;
   bool compacting_ = false;
+  // The card's counters when the compaction under way began
+  // (sectordisk::stats()), its priority then and whether a track played
+  // (the decoder's reads count too): its line splits its time (3.3.7, B4).
+  uint32_t compactReads_ = 0, compactSectors_ = 0, compactWrites_ = 0;
+  uint64_t compactReadUs_ = 0;
+  uint8_t compactPriority_ = 0;
+  bool compactPlaying_ = false;
   // The update step.
   LibraryUpdate::Out lastUpdate_;
   LibraryUpdate::Do act_ = LibraryUpdate::Do::None;

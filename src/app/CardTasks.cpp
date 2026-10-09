@@ -293,8 +293,18 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     const char* rel = slot >= 0 ? picks_[slot] : nullptr;
     const size_t len = slot >= 0 ? pickLen_[slot] : 0;
     jobs_.setSlice(!in.dark ? kLitSliceUs : o.job == Job::Walk ? kDarkWalkSliceUs : kDarkSliceUs);
+    // (The card's counters before the start: the step may begin at once.)
+    const sectordisk::Stats card = o.job == Job::Compact ? sectordisk::stats() : sectordisk::Stats{};
     if (jobs_.prepare(o.job, o.source, rel, len, now) && worker_.start(o.job, o.priority, stepEntry, this, now)) {
-      if (o.job == Job::Compact) compacting_ = true;
+      if (o.job == Job::Compact) {
+        compacting_ = true;
+        compactReads_ = card.cardReads;
+        compactSectors_ = card.cardReadSectors;
+        compactReadUs_ = card.cardReadUs;
+        compactWrites_ = card.cardWrites;
+        compactPriority_ = o.priority;
+        compactPlaying_ = in.playing;
+      }
       if (o.job == Job::Walk && !walkSeen_) {
         walkSeen_ = true;
         walkStartMs_ = now;
@@ -360,6 +370,29 @@ void CardTasks::taken(Job job, uint32_t nowMs, uint32_t ms) {
                     (unsigned long)d.compaction.folders, (unsigned long)d.compaction.chunksMerged,
                     d.compaction.walkMerged ? ", the walk's" : "", d.compaction.rescanned ? ", a Rescan" : "");
       if (!d.compacted && d.compaction.error) Serial.printf("[card] compaction: %s\n", d.compaction.error);
+      if (d.compacted) {
+        // Where its time went (3.3.7; the 2026-10-09 run's B4): its parts,
+        // and what the card did meanwhile (the decoder's reads too while a
+        // track plays). The rest of the step is the merge's own work, and
+        // the loop's and the audio's on the same core.
+        const sectordisk::Stats st = sectordisk::stats();
+        const tagstore::TagStore::Compacted& k = d.compaction;
+        char card[112];
+        if (st.cardReads < compactReads_ || st.cardReadSectors < compactSectors_ || st.cardReadUs < compactReadUs_ ||
+            st.cardWrites < compactWrites_) {
+          snprintf(card, sizeof(card), "its counts reset meanwhile (gc)");
+        } else {
+          snprintf(card, sizeof(card), "%lu reads (%lu sectors) in %.1f s, %lu writes",
+                   (unsigned long)(st.cardReads - compactReads_),
+                   (unsigned long)(st.cardReadSectors - compactSectors_), (st.cardReadUs - compactReadUs_) / 1e6,
+                   (unsigned long)(st.cardWrites - compactWrites_));
+        }
+        Serial.printf("[card] the compaction's time: %.1f s (the step %.1f s, priority %u%s): the first pass %.1f s, "
+                      "the second %.1f s, HIDX's sort %.1f s (%lu passes); the card meanwhile %s\n",
+                      k.totalMs / 1000.0, ms / 1000.0, (unsigned)compactPriority_,
+                      compactPlaying_ ? ", a track playing" : "", k.pass1Ms / 1000.0, k.pass2Ms / 1000.0,
+                      k.sortMs / 1000.0, (unsigned long)k.hidxPasses, card);
+      }
       break;
     case Job::Scan: afterScan(d, nowMs); break;
     default: break;
@@ -640,11 +673,17 @@ void CardTasks::state(librarytext::Status* s, char* line, size_t size) const {
   }
   const cardjobs::Jobs::Counts& c = jobs_.counts();
   static const char* const kUpdateWaits[] = {"", "a walk's end", "its compaction", "the worker", "the safe point"};
-  char update[64] = "";
+  char update[112] = "";
   if (updateAsked()) {
     const int w = static_cast<int>(lastUpdate_.wait);
-    snprintf(update, sizeof(update), "; the update step is asked%s%s", w ? ", waiting for " : "",
-             w > 0 && w < 5 ? kUpdateWaits[w] : "");
+    // The safe point's length (3.4.2: the last pause and a margin, 20-30 s).
+    char left[48] = "";
+    if (lastUpdate_.wait == LibraryUpdate::Wait::SafePoint) {
+      snprintf(left, sizeof(left), " (%.1f s left of the heard track)",
+               const_cast<Library&>(lib_).update()->safeLeftMs() / 1000.0);
+    }
+    snprintf(update, sizeof(update), "; the update step is asked%s%s%s", w ? ", waiting for " : "",
+             w > 0 && w < 5 ? kUpdateWaits[w] : "", left);
   }
   snprintf(line, size, "%lu read (%lu unreadable, %lu partial, %lu read errors, %lu skipped); waiting for %s%s",
            (unsigned long)c.scanned, (unsigned long)c.unreadable, (unsigned long)c.partial,
@@ -684,7 +723,7 @@ void CardTasks::report() const {
                 (unsigned long)worker_.stackLeastLeft(), (unsigned long)worker_.stackLeft(),
                 worker_.failedStarts() ? " (it couldn't always start)" : "",
                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL), lowest,
-                (unsigned)diag::lowestSinceBoot(MALLOC_CAP_INTERNAL));
+                (unsigned)diag::lowest(MALLOC_CAP_INTERNAL));
   if (!active_) return;
   const cardjobs::Jobs::Counts& c = jobs_.counts();
   Serial.printf("[card] jobs: %lu walks (%lu steps, %lu failed), %lu compactions (%lu failed), %lu files read, %lu "

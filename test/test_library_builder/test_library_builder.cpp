@@ -482,6 +482,77 @@ void test_older_device_parser() {
   TEST_ASSERT_EQUAL_UINT32(card.files.size(), r.pending);
 }
 
+// The names the records don't give, through the build from D (docs/METADATA.md
+// 5.4; the 2026-10-09 device run, B1): a record whose producer looked for
+// the album and found none, or found a blank one (White_Space alone), leaves
+// the album its folder's name, never ""; a missing or blank title is the
+// file name's; a missing artist the folder's. An artist folder's own tracks
+// stay the nameless loose album (3.4.3) whatever they say.
+void test_untagged_names_come_from_the_folders() {
+  struct R {
+    const char* path;
+    const char* title;
+    const char* artist;
+    const char* album;
+  };
+  const R rs[] = {
+      {"Fenna Dray/04 - Loose.mp3", "Loose", "Fenna Dray", "Somewhere"},
+      {"Fenna Dray/Low Tide/01 - Ebb.mp3", " ", "Fenna Dray", "Low Tide"},
+      {"Fenna Dray/Low Tide/02 - Flow.mp3", nullptr, nullptr, "Low Tide"},
+      {"Fenna Dray/Quiet Hours/01 - Lamp.mp3", "Lamp", "Fenna Dray", nullptr},
+      {"Fenna Dray/Quiet Hours/02 - Moth.mp3", "Moth", "Fenna Dray", " "},
+      {"Fenna Dray/Quiet Hours/03 - Wick.mp3", "Wick", nullptr, "\xE3\x80\x80"},  // an ideographic space
+  };
+  std::vector<mptg::RecordIn> in(sizeof(rs) / sizeof(rs[0]));
+  for (size_t i = 0; i < in.size(); ++i) {
+    in[i].path = rs[i].path;
+    in[i].rec.size = 1000 + static_cast<uint32_t>(i);
+    in[i].rec.fatTime = kT;
+    in[i].rec.known = mptg::kKnownRules1;  // looked for every field: an absent one is none
+    in[i].rec.container = 1;
+    in[i].fields[cc::kTitle] = rs[i].title;
+    in[i].fields[cc::kArtist] = rs[i].artist;
+    in[i].fields[cc::kAlbum] = rs[i].album;
+  }
+  mptg::Meta meta;
+  meta.source = mptg::kSourceDevice;
+  meta.generation = 7;
+  meta.parserVersion = 1;
+  synthcard::VecSink out;
+  const char* error = nullptr;
+  TEST_ASSERT_TRUE_MESSAGE(mptg::write(out, meta, in.data(), in.size(), nullptr, 0, nullptr, 0, nullptr, &error),
+                           error ? error : "write");
+  cc::MemSource ds(out.bytes.data(), static_cast<uint32_t>(out.bytes.size()));
+  B::Config c;
+  c.device = &ds;
+  LibraryIndex idx(Heap::alloc, Heap::release, Heap::shrink);
+  B builder(Heap::alloc, Heap::release);
+  const B::Result r = builder.build(idx, c);
+  TEST_ASSERT_TRUE(r.built);
+  TEST_ASSERT_EQUAL_UINT32(6, r.fromDevice);
+  const uint32_t quiet = findAlbumByFolder(idx, "/music/Fenna Dray/Quiet Hours");
+  const uint32_t low = findAlbumByFolder(idx, "/music/Fenna Dray/Low Tide");
+  TEST_ASSERT_NOT_EQUAL(LibraryIndex::kNone, quiet);
+  TEST_ASSERT_EQUAL_STRING("Quiet Hours", idx.albumName(quiet));  // none, " " and U+3000: the folder's
+  TEST_ASSERT_EQUAL_STRING("Quiet Hours", idx.albumSortKey(quiet));
+  TEST_ASSERT_TRUE(idx.album(quiet).flags & LibraryIndex::kTagged);
+  TEST_ASSERT_EQUAL_STRING("Low Tide", idx.albumName(low));
+  TEST_ASSERT_EQUAL_STRING("Ebb", title(idx, findPath(idx, "Fenna Dray/Low Tide/01 - Ebb.mp3")).c_str());
+  TEST_ASSERT_EQUAL_STRING("Flow", title(idx, findPath(idx, "Fenna Dray/Low Tide/02 - Flow.mp3")).c_str());
+  TEST_ASSERT_EQUAL_STRING("Lamp", title(idx, findPath(idx, "Fenna Dray/Quiet Hours/01 - Lamp.mp3")).c_str());
+  const uint32_t flow = findPath(idx, "Fenna Dray/Low Tide/02 - Flow.mp3");
+  TEST_ASSERT_EQUAL_STRING("Fenna Dray", idx.artistName(idx.track(flow).artist));
+  TEST_ASSERT_EQUAL_STRING("Fenna Dray", idx.trackArtistName(flow));
+  const uint32_t loose = idx.track(findPath(idx, "Fenna Dray/04 - Loose.mp3")).album;
+  TEST_ASSERT_TRUE(idx.album(loose).flags & LibraryIndex::kLoose);
+  TEST_ASSERT_EQUAL_STRING("", idx.albumName(loose));
+  // No album but the loose one is blank, in A-Z order.
+  for (uint32_t i = 0; i < idx.albumCount(); ++i) {
+    const uint32_t a = idx.albumsAZ()[i];
+    if (a != loose) TEST_ASSERT_TRUE(idx.albumName(a)[0] != 0 && idx.albumName(a)[0] != ' ');
+  }
+}
+
 // The folders' facts are asked once per folder entered, and give the
 // covers; THUMB album folders get the transfer thumbnail unless a cover the
 // transfer doesn't own is there.
@@ -752,6 +823,7 @@ int main(int, char**) {
   RUN_TEST(test_restarts);
   RUN_TEST(test_skew_confirmations_and_ghosts);
   RUN_TEST(test_older_device_parser);
+  RUN_TEST(test_untagged_names_come_from_the_folders);
   RUN_TEST(test_facts_and_thumbnails);
   RUN_TEST(test_20k_memory_and_peak);
   RUN_TEST(test_track_slots);

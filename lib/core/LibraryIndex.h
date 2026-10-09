@@ -47,7 +47,8 @@
 // each field the record lacks from the path as above; its artists' display
 // join as the track's artist. Each album (still its folder) elects, over its
 // tracks' records, its name (the most common album value; ties to the
-// smallest by bytes; none: the folder's name), its year (the most common;
+// smallest by bytes; none, or blank ones alone: the folder's name; a
+// blank title is none too), its year (the most common;
 // ties to the earliest), its artist line (the most common album-artist
 // display, else "Various Artists" when a track says compilation, else the
 // most common track-artist display, else the artist folder) and its discs
@@ -103,8 +104,10 @@ public:
   static constexpr uint32_t kNone = 0xFFFFFFFFu;
   static constexpr int kBuckets = 27;  // '#', 'A'..'Z'
   // Stage A's rules (docs/METADATA.md 5.4): a saved index of other rules
-  // is Outdated, so a change of the votes or the orders rebuilds it.
-  static constexpr uint16_t kRulesVersion = 1;
+  // is Outdated, so a change of the votes or the orders rebuilds it. 2: a
+  // blank title or album value (White_Space alone) names nothing (the file
+  // name's title; the folder's name when no other value votes).
+  static constexpr uint16_t kRulesVersion = 2;
   // The strings' chunks: an offset is its chunk's number, then its place.
   static constexpr uint32_t kChunkBits = 16;
   static constexpr uint32_t kChunkBytes = 1u << kChunkBits;

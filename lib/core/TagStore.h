@@ -86,7 +86,9 @@
 // tags.jnl's chunks in two passes: the first counts the new D's sections and
 // writes HIDX's pairs to hidx.tmp, the second writes each section at its
 // place (FOLD, RECS, STRS's two runs, DSTA, DFLD), then HIDX is sorted in
-// passes over hidx.tmp in the memory the merge gave back, then DHDR, the
+// passes over hidx.tmp (read kSortRead at a time) in the memory the merge
+// gave back and the buffers the second pass left idle (every one but HIDX's
+// own section buffer), then DHDR, the
 // directory and the header, a sync, and the rename: remove tags.bin (or
 // rename it to a twin), rename tags.tmp, remove the journals. Every input is
 // read through a small buffer and nothing is read whole: the work memory is
@@ -143,6 +145,10 @@ public:
 // single-sector write at each end, each read first.
 constexpr uint32_t kSectorBytes = 512;
 constexpr uint32_t kWriteAlign = 4096;
+// HIDX's sort reads hidx.tmp this much at a time (8 sectors a card command;
+// a 1 KB run buffer read it 2 at a time: the 2026-10-09 run's compactions,
+// B4).
+constexpr uint32_t kSortRead = 4096;
 // The first piece of a write of `left` bytes at `offset`: up to the next
 // kWriteAlign boundary of the file, at most `left`.
 inline uint32_t writePiece(uint32_t offset, uint32_t left) {
@@ -600,6 +606,9 @@ public:
     uint32_t writeBuffer = 4096;    // each output section's buffer (whole 4 KB pieces from a 4 KB boundary)
     uint32_t maxChunks = 32;        // chunks a compaction merges (append() refuses more)
     uint32_t compactBytes = 512u * 1024u;  // the journal's size that asks for a compaction
+    // A microsecond clock for a compaction's parts (Compacted's ms); nullptr:
+    // none (0).
+    uint64_t (*nowUs)() = nullptr;
   };
 
   struct Opened {
@@ -623,6 +632,11 @@ public:
     bool rescanned = false;          // Scanned rows turned Pending (another parser or epoch)
     size_t workBytes = 0;            // the memory it took from the hooks
     uint32_t hidxPasses = 0;
+    // Where its time went (Config::nowUs; 0 without one): the first pass
+    // (the counts, HIDX's pairs to hidx.tmp), the second (the sections
+    // written), HIDX's sort, and the whole (with the rest: the opens, DHDR,
+    // the header, the sync, the rename).
+    uint32_t pass1Ms = 0, pass2Ms = 0, sortMs = 0, totalMs = 0;
   };
 
   TagStore(Fs& fs, const Config& config, AllocFn alloc = nullptr, FreeFn release = nullptr);
