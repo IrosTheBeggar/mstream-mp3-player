@@ -1458,6 +1458,52 @@ void test_sort_keys_are_kept_and_blank_ones_ignored() {
   }
 }
 
+// Artists in a script Full folding can't spell (docs/I18N.md, phase 0;
+// made-up names): an artist folder whose tags name it the same way, by its
+// letters in Unicode lower case, takes the tags' spelling and their
+// ARTISTSORT, as a Latin one does (the gate dropped both before: sameName()
+// saw no letter in them). A Latin folder for a Cyrillic tag is another
+// name. The names without a sort tag sort under '#' by script (Greek
+// before Cyrillic), then by letter, not by length.
+void test_other_scripts_take_their_sort_tags() {
+  LibraryIndex idx(Heap::alloc, Heap::release);
+  TEST_ASSERT_TRUE(idx.begin("/music"));
+  idx.addRecord("/music/Кот Лампа/Мост/01 - x.mp3", View().artist("Кот Лампа").artistSort("Kot Lampa").v);
+  idx.addRecord("/music/Кот Лампа/Мост/02 - y.mp3", View().artist("Кот Лампа").artistSort("Kot Lampa").v);
+  idx.addRecord("/music/Синий Мост/Утро/01 - x.mp3", View().artist("СИНИЙ МОСТ").artistSort("Siniy Most").v);
+  idx.addRecord("/music/山川/海/01 - x.mp3", View().artist("山川").artistSort("Yamakawa").v);
+  idx.addRecord("/music/Ruby Ferns/Dawn/01 - x.mp3", View().artist("Рубин Папоротник").artistSort("Rubin").v);
+  idx.addRecord("/music/Νησί/Ήλιος/01 - x.mp3", View().artist("Νησί").v);
+  idx.addRecord("/music/Ая Море/Песни/01 - x.mp3", View().artist("Ая Море").v);
+  idx.addRecord("/music/Аквамарин/Песни/01 - x.mp3", View().artist("Аквамарин").v);
+  idx.addRecord("/music/Amber Fold/Album/01 - x.mp3", View().artist("Amber Fold").v);
+  TEST_ASSERT_TRUE(idx.finish());
+
+  struct Row {
+    const char* name;
+    const char* key;
+    char rail;
+  } want[] = {
+      {"Νησί", "Νησί", '#'},            // Greek
+      {"Аквамарин", "Аквамарин", '#'},  // Cyrillic: А-к before А-я (by length, it came after)
+      {"Ая Море", "Ая Море", '#'},
+      {"Amber Fold", "Amber Fold", 'A'},
+      {"Кот Лампа", "Kot Lampa", 'K'},  // the tags' sort name
+      {"Ruby Ferns", "Ruby Ferns", 'R'},  // a Latin folder: its own name, no sort tag
+      {"СИНИЙ МОСТ", "Siniy Most", 'S'},  // the tags' spelling (case), and sort name
+      {"山川", "Yamakawa", 'Y'},
+  };
+  const LibraryIndex::Span az = idx.artistsAZ();
+  TEST_ASSERT_EQUAL_UINT32(sizeof(want) / sizeof(want[0]), az.count);
+  for (uint32_t i = 0; i < az.count; ++i) {
+    TEST_ASSERT_EQUAL_STRING(want[i].name, idx.artistName(az[i]));
+    TEST_ASSERT_EQUAL_STRING(want[i].key, idx.artistSortKey(az[i]));
+    TEST_ASSERT_EQUAL_INT(textfold::bucketOf(want[i].rail), idx.bucketAt(LibraryIndex::View::Artists, i));
+  }
+  expectRailAgrees(idx, LibraryIndex::View::Artists);
+  expectRailAgrees(idx, LibraryIndex::View::Albums);
+}
+
 // The library roots (the transfer's LIBR, 2.8.6): a file's artist and album
 // are its folders at depths 1 and 2 below the longest root that holds it.
 void test_library_roots() {
@@ -1552,6 +1598,13 @@ void test_inputs_of_the_cache() {
   std::vector<uint8_t> rules = bytes;
   rules[12] = static_cast<uint8_t>(LibraryIndex::kRulesVersion + 1);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), load(rules, in));
+  // Rules 3 (docs/I18N.md, phase 0: textfold's order and sameName()): an
+  // index of rules 2 or 1, as the firmware before it saved, rebuilds once.
+  TEST_ASSERT_EQUAL_UINT16(3, LibraryIndex::kRulesVersion);
+  for (const uint8_t older : {uint8_t{1}, uint8_t{2}}) {
+    rules[12] = older;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), load(rules, in));
+  }
   // The build stamp: what a track id means. Two builds of the same files
   // agree; another file changes it.
   LibraryIndex again(Heap::alloc, Heap::release);
@@ -1886,6 +1939,7 @@ int main(int, char**) {
   RUN_TEST(test_artist_display_names);
   RUN_TEST(test_stage_a_orders);
   RUN_TEST(test_sort_keys_are_kept_and_blank_ones_ignored);
+  RUN_TEST(test_other_scripts_take_their_sort_tags);
   RUN_TEST(test_library_roots);
   RUN_TEST(test_inputs_of_the_cache);
   RUN_TEST(test_peek_and_clear_pending);

@@ -76,6 +76,7 @@ int bucketOfRow(const std::vector<std::string>& v, uint32_t row) {
 struct Vlw {
   std::vector<std::pair<uint32_t, int>> advance;  // code point, xAdvance
   int lineH = 0;  // the ascent and the descent (the header's)
+  int space = 0;  // what a missing glyph measures (M5GFX's spaceWidth)
   explicit Vlw(const uint8_t* d) {
     auto be32 = [&](size_t at) {
       return static_cast<uint32_t>(d[at]) << 24 | static_cast<uint32_t>(d[at + 1]) << 16 |
@@ -83,32 +84,33 @@ struct Vlw {
     };
     const uint32_t n = be32(0);
     lineH = static_cast<int>(be32(16) + be32(20));
+    // VLWfont::loadFont: the larger of the size and the ascent + descent,
+    // times 2 / 7, before the glyphs' metrics move the line height.
+    space = std::max(static_cast<int>(be32(8)), lineH) * 2 / 7;
     for (uint32_t i = 0; i < n; ++i) {
       const size_t g = 24 + static_cast<size_t>(i) * 28;
       advance.push_back({be32(g), static_cast<int>(be32(g + 12))});
     }
   }
-  // Every character has a glyph (width() counts a missing one as nothing;
-  // the firmware draws it folded, and measures it as a space).
+  int find(uint32_t cp) const {
+    for (const auto& a : advance) {
+      if (a.first == cp) return a.second;
+    }
+    return -1;
+  }
+  // Every character has a glyph (the firmware draws a missing one folded).
   bool hasAll(const char* s) const {
     for (const char* p = s; *p;) {
-      const uint32_t cp = textfold::decode(p);
-      bool found = false;
-      for (const auto& a : advance) found = found || a.first == cp;
-      if (!found) return false;
+      if (find(textfold::decode(p)) < 0) return false;
     }
     return true;
   }
+  // As ui/Fonts measures: a missing glyph as the space width.
   int width(const char* s) const {
     int w = 0;
     for (const char* p = s; *p;) {
-      const uint32_t cp = textfold::decode(p);
-      for (const auto& a : advance) {
-        if (a.first == cp) {
-          w += a.second;
-          break;
-        }
-      }
+      const int a = find(textfold::decode(p));
+      w += a >= 0 ? a : space;
     }
     return w;
   }
@@ -323,12 +325,67 @@ void test_tabbar_texts_fit_in_every_state() {
 // ---- the other fixed texts (UiText: each next to its room) ----
 
 namespace {
+// It fits, and the font has every glyph of it: one it lacks would be drawn
+// folded ('?' for a letter of another script), so a text that fits by its
+// widths alone (a translation, say) could still not be what is drawn.
 void fits(const Vlw& font, const char* text, int room) {
   char msg[160];
   snprintf(msg, sizeof(msg), "\"%s\": %d px in %d", text, font.width(text), room);
   TEST_ASSERT_TRUE_MESSAGE(font.width(text) <= room, msg);
+  snprintf(msg, sizeof(msg), "\"%s\": a glyph the font doesn't have", text);
+  TEST_ASSERT_TRUE_MESSAGE(font.hasAll(text), msg);
 }
 }  // namespace
+
+// ---- names as the screen draws them (docs/I18N.md, phase 0) ----
+
+namespace {
+
+int vlwWidth(void* ctx, const char* s) { return static_cast<const Vlw*>(ctx)->width(s); }
+bool vlwHas(void* ctx, uint32_t cp) { return static_cast<const Vlw*>(ctx)->find(cp) >= 0; }
+
+// `name` as ui/Fonts::draw fits it (its 200-byte buffer), in `font`.
+std::string drawn(const Vlw& font, const char* name, int maxW = 300) {
+  textfit::Font f;
+  f.ctx = const_cast<Vlw*>(&font);
+  f.width = vlwWidth;
+  f.has = vlwHas;
+  char buf[200];
+  textfit::fit(f, name, std::strlen(name), buf, sizeof(buf), maxW);
+  return buf;
+}
+
+}  // namespace
+
+// TextFit with the fonts the firmware draws with: decomposed text composed
+// first, a cp1252 byte (U+0080-009F) as its character, the Latin letters
+// the fonts lack as their base letters; the other scripts wait for fonts
+// (phase 1). The tests measure a missing glyph as the firmware does: the
+// space width M5GFX gives it, 5 px in DejaVu Sans 16.
+void test_names_drawn_with_the_fonts() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  TEST_ASSERT_EQUAL_INT(5, body.space);
+  TEST_ASSERT_EQUAL_INT(4, small.space);
+  TEST_ASSERT_EQUAL_INT(body.width("a") + body.space + body.width("b"), body.width("a\xD0\x96" "b"));
+  TEST_ASSERT_FALSE(body.hasAll("Ж"));
+  TEST_ASSERT_TRUE(body.hasAll("Café ’…€"));
+  TEST_ASSERT_EQUAL_STRING("Don’t Stop – Live…", drawn(body, "Don\xC2\x92t Stop \xC2\x96 Live\xC2\x85").c_str());
+  TEST_ASSERT_EQUAL_STRING("€ ™ Š Ÿ “x”", drawn(body, "\xC2\x80 \xC2\x99 \xC2\x8A \xC2\x9F \xC2\x93x\xC2\x94").c_str());
+  TEST_ASSERT_EQUAL_STRING("f^~?", drawn(body, "\xC2\x83\xC2\x88\xC2\x98\xC2\x81").c_str());  // no glyph: folded
+  TEST_ASSERT_EQUAL_STRING("Beyoncé", drawn(body, "Beyonce\xCC\x81").c_str());
+  TEST_ASSERT_EQUAL_STRING("Stefan Banica", drawn(body, "Ștefan Bănică").c_str());
+  TEST_ASSERT_EQUAL_STRING("My Tâm", drawn(body, "Mỹ Tâm").c_str());
+  TEST_ASSERT_EQUAL_STRING("My Tâm", drawn(body, "My\xCC\x83 Ta\xCC\x82m").c_str());  // NFD: â is the font's
+  TEST_ASSERT_EQUAL_STRING("ABC", drawn(body, "ＡＢＣ").c_str());
+  TEST_ASSERT_EQUAL_STRING("????", drawn(body, "Кино").c_str());
+  TEST_ASSERT_EQUAL_STRING("Ninja ? Beats", drawn(body, "Ninja 🥷 Beats").c_str());
+  TEST_ASSERT_EQUAL_STRING("?", drawn(body, "\xE2\x9D\xA4\xEF\xB8\x8F").c_str());  // ❤ + VS16: one '?'
+  // Cut to the room as before, the composed text measured.
+  const std::string cut = drawn(body, "Beyonce\xCC\x81 Beyonce\xCC\x81 Beyonce\xCC\x81", 100);
+  TEST_ASSERT_TRUE(body.width(cut.c_str()) <= 100);
+  TEST_ASSERT_TRUE(body.hasAll(cut.c_str()));
+  TEST_ASSERT_EQUAL_STRING("Beyoncé…", cut.c_str());  // whole letters, the é one glyph
+}
 
 // The first-boot tips: the first screen a new user sees.
 void test_coach_texts_fit() {
@@ -2322,6 +2379,7 @@ int main(int, char**) {
   RUN_TEST(test_tabbar_texts_fit_in_every_state);
   RUN_TEST(test_coach_texts_fit);
   RUN_TEST(test_toast_names_fit);
+  RUN_TEST(test_names_drawn_with_the_fonts);
   RUN_TEST(test_queue_cap_texts_fit);
   RUN_TEST(test_push_out_texts_fit);
   RUN_TEST(test_empty_state_texts_fit);

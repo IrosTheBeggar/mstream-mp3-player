@@ -107,8 +107,13 @@ public:
   // Stage A's rules (docs/METADATA.md 5.4): a saved index of other rules
   // is Outdated, so a change of the votes or the orders rebuilds it. 2: a
   // blank title or album value (White_Space alone) names nothing (the file
-  // name's title; the folder's name when no other value votes).
-  static constexpr uint16_t kRulesVersion = 2;
+  // name's title; the folder's name when no other value votes). 3
+  // (docs/I18N.md, phase 0): textfold's new order and matching, in one
+  // step: names composed (NFC) to sort, U+0080-009F as cp1252, fullwidth
+  // ASCII and Latin Extended-B and Additional folded, other scripts by
+  // script and letter (not by length), and an artist folder in another
+  // script taking its tags' spelling and sort tag (sameName()).
+  static constexpr uint16_t kRulesVersion = 3;
   // The strings' chunks: an offset is its chunk's number, then its place.
   static constexpr uint32_t kChunkBits = 16;
   static constexpr uint32_t kChunkBytes = 1u << kChunkBits;

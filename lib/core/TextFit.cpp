@@ -14,28 +14,6 @@ namespace {
 
 constexpr size_t kTmp = 256;
 
-// One code point of [p, end), advancing p; a malformed or cut sequence is
-// U+FFFD and one byte.
-uint32_t next(const char*& p, const char* end) {
-  const auto c = static_cast<unsigned char>(*p);
-  const int n = c < 0x80 ? 1 : (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 0;
-  if (n == 0 || p + n > end) {
-    ++p;
-    return 0xFFFD;
-  }
-  uint32_t cp = n == 1 ? c : n == 2 ? (c & 0x1Fu) : n == 3 ? (c & 0x0Fu) : (c & 0x07u);
-  for (int i = 1; i < n; ++i) {
-    const auto cc = static_cast<unsigned char>(p[i]);
-    if ((cc & 0xC0) != 0x80) {
-      ++p;
-      return 0xFFFD;
-    }
-    cp = (cp << 6) | (cc & 0x3Fu);
-  }
-  p += n;
-  return cp;
-}
-
 bool has(const Font& f, uint32_t cp) { return !f.has || f.has(f.ctx, cp); }
 
 const char* ellipsis(const Font& f) { return has(f, 0x2026) ? "\xE2\x80\xA6" : "..."; }
@@ -84,26 +62,29 @@ Result prepareBounded(const Font& f, const char* in, size_t inLen, char* out, si
   Result r;
   *truncated = false;
   if (outSize == 0) return r;
-  const char* p = in;
-  const char* end = in + inLen;
+  textfold::Composer c(in, in + inLen);
   size_t o = 0;
-  while (p < end && *p) {
-    const char* start = p;
-    const uint32_t cp = next(p, end);
-    const char* rep = nullptr;
-    size_t len = static_cast<size_t>(p - start);
-    if (!has(f, cp)) {
-      rep = textfold::replacement(cp, textfold::Mode::Full);
-      if (rep) {
-        len = std::strlen(rep);
-        r.folded = true;
-      }
+  while (const uint32_t cp = c.next()) {
+    char utf8[4];
+    const char* bytes = utf8;
+    size_t len;
+    if (has(f, cp)) {
+      len = textfold::encode(cp, utf8);
+    } else if (textfold::fromC1(cp) != cp && has(f, textfold::fromC1(cp))) {
+      len = textfold::encode(textfold::fromC1(cp), utf8);  // a cp1252 byte, as its character
+      r.folded = true;
+    } else if (const char* rep = textfold::replacement(cp, textfold::Mode::Full)) {
+      bytes = rep;
+      len = std::strlen(rep);
+      r.folded = true;
+    } else {
+      len = textfold::encode(cp, utf8);  // ASCII the font lacks: as it is
     }
     if (o + len + 1 > outSize) {
       *truncated = true;
       break;
     }
-    std::memcpy(out + o, rep ? rep : start, len);
+    std::memcpy(out + o, bytes, len);
     o += len;
   }
   out[o] = 0;

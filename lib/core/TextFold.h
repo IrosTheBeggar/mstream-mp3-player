@@ -15,9 +15,20 @@
 //     spaces -> space, soft hyphens and zero-width characters dropped.
 //     Letters are kept, so a name that still has non-ASCII afterwards
 //     ("Pénélope") can be drawn with a Unicode font instead.
-//   - Full: the same, plus Latin-1 and Latin Extended-A letters without their
-//     accents (é -> e, Æ -> AE, ß -> ss, Ł -> L), a few symbols (© -> (c),
-//     ½ -> 1/2), and '?' for anything else. The result is pure ASCII.
+//   - Full: the same, plus the Latin letters without their accents (Latin-1,
+//     Extended-A, Extended-B and Extended Additional: é -> e, Æ -> AE,
+//     ß -> ss, Ł -> L, ș -> s, ỹ -> y, ǆ -> dz), fullwidth ASCII as ASCII
+//     (Ａ -> A), combining marks, variation selectors and tag characters
+//     dropped, a few symbols (© -> (c), ½ -> 1/2), and '?' for anything
+//     else. The result is pure ASCII.
+// U+0080-009F (Latin-1 tags keep a cp1252 byte so: docs/METADATA.md 5.2)
+// fold as their Windows-1252 characters: in Full mode all of them (U+0092
+// as ', U+008A as S), in Punctuation mode only cp1252's punctuation (its
+// quotes, dashes, …, • and ‹ ›); its letters and symbols (U+008A Š, U+0080
+// €) stay as the C1 code point there.
+//
+// Composer gives a text's code points composed as NFC composes them, for
+// drawing and sorting only (docs/I18N.md, phase 0).
 namespace textfold {
 
 enum class Mode : uint8_t { Punctuation, Full };
@@ -25,11 +36,22 @@ enum class Mode : uint8_t { Punctuation, Full };
 // Decodes the code point at `s` and advances past it. Returns 0 at the end
 // of the string; a malformed byte decodes as U+FFFD and advances one byte.
 uint32_t decode(const char*& s);
+// The same within [s, end) (end nullptr: to the NUL): 0 at `end`; a
+// sequence `end` cuts decodes as U+FFFD and advances one byte.
+uint32_t decode(const char*& s, const char* end);
+// `cp` as UTF-8 into out: its length (1-4).
+size_t encode(uint32_t cp, char out[4]);
 
 // The ASCII replacement for `cp` in `mode` ("" drops it), or nullptr when
 // there is none (ASCII itself, or a letter Punctuation mode keeps). In Full
 // mode every non-ASCII code point has one ("?" when nothing better).
 const char* replacement(uint32_t cp, Mode mode);
+
+// U+0080-009F as Windows-1252's characters (U+0092 -> U+2019 ’, U+008A ->
+// U+0160 Š): docs/METADATA.md 5.2 lets a device draw them so, the record
+// keeping them. `cp` itself for every other code point, and for the five
+// that cp1252 leaves undefined (U+0081 U+008D U+008F U+0090 U+009D).
+uint32_t fromC1(uint32_t cp);
 
 struct Result {
   size_t length = 0;       // bytes written, not counting the NUL
@@ -44,10 +66,95 @@ Result fold(const char* in, char* out, size_t outSize, Mode mode);
 // Same for the first `inLen` bytes of `in`.
 Result fold(const char* in, size_t inLen, char* out, size_t outSize, Mode mode);
 
+// ---- Canonical composition: for drawing and sorting only ----
+//
+// NFD text (a name another system stored decomposed, as macOS lists names;
+// some tag editors decompose) draws and sorts as its NFC form: the code
+// points come out with each combining mark composed into the letter before
+// it where NFC would, by NFC's own pairs for Latin, Greek, Cyrillic and
+// kana (tables::kPairs) and Hangul's jamo by arithmetic, the marks left
+// over after it in canonical order. Never applied to what is stored:
+// records keep their bytes, and the index's track names (files are opened
+// by them) and the path hashes are compared byte for byte (docs/METADATA.md
+// 2.3.3, 2.3.6, 2.8.5; CardContract.h).
+//
+// The output is NFC's for NFD text and for NFC text in those scripts
+// (test_text_fold checks random strings against Python's unicodedata). Not
+// done: the singletons NFC maps alone (Greek oxia letters to their tonos
+// twins, U+037E to ';'), and a mark after a precomposed letter that NFC
+// would sort before the letter's own marks (ǖ + U+0323): both are left as
+// they are. A run of more than 16 marks is not composed. Other scripts'
+// compositions aren't made either (Arabic's hamza and madda letters,
+// Devanagari's nukta letters, the Indic two-part vowel signs): their NFD
+// and NFC spellings stay two texts.
+class Composer {
+public:
+  // [s, end); end nullptr: up to the NUL.
+  explicit Composer(const char* s, const char* end = nullptr) : s_(s), end_(end) {}
+  // The next code point, 0 at the end.
+  uint32_t next();
+
+private:
+  uint32_t leftover();
+
+  const char* s_;
+  const char* end_;
+  // The marks after the last letter that it didn't take, still to come
+  // out: `count_` marks from `run_`, a bit each in `taken_` for the ones it
+  // took; `level_` the class coming out, `at_` the next mark to look at.
+  const char* run_ = nullptr;
+  const char* runEnd_ = nullptr;
+  uint16_t taken_ = 0;
+  uint8_t count_ = 0;
+  uint8_t level_ = 0;
+  uint8_t at_ = 0;
+};
+
+// Canonical_Combining_Class of the marks the composer knows (U+0300-036F,
+// U+0483-0487, U+3099-309A); 0 for every other code point.
+uint8_t combiningClass(uint32_t cp);
+// NFC's primary composite of `first` + `second` (Latin, Greek, Cyrillic,
+// kana, and Hangul's LV and LVT), 0 when there is none.
+uint32_t composePair(uint32_t first, uint32_t second);
+
+// ---- The library's order ----
+
+// The scripts of the letters Full folding can't spell, in the order they
+// sort: after the digits, before the ASCII letters, so under the A-Z
+// rail's '#' with the digits and symbols (docs/METADATA.md 5.4). Latin
+// here is the Latin letters with no fold (IPA's, Latin Extended-C to -E).
+enum class Script : uint8_t {
+  None,  // not a letter: a symbol, a punctuation mark, a combining mark
+  Latin,
+  Greek,
+  Cyrillic,
+  Armenian,
+  Hebrew,
+  Arabic,
+  Thai,
+  Hangul,
+  Hiragana,
+  Katakana,
+  Han,
+  Other,  // the letters of any other script
+};
+// The script of `cp` by its Unicode block (a curated table, not the Script
+// property: a block's own punctuation counts with its letters). The CJK
+// symbols block is None but for its letters: 々 〆 〇, the Hangzhou
+// numerals, 〻 and 〼 are Han, the vertical kana repeat marks Hiragana.
+Script scriptOf(uint32_t cp);
+
 // The library's order: letters case- and accent-insensitive (Full folding,
 // lowercased), everything that isn't a letter or digit before the digits,
-// the digits before the letters. Ties (names that fold alike) fall back to
-// the raw bytes, so the order is total. <0, 0, >0 like strcmp.
+// the digits before the letters. A letter Full folding can't spell sorts
+// by its script (Script's order) and then its lower-case code point
+// (namekey's lowercase; ς as σ), between the digits and the ASCII letters:
+// "Ая" before "Би-2", Greek before Cyrillic before Hangul, kana and Han.
+// Composed first (Composer): NFD and NFC sort alike in the scripts it
+// composes (Latin, Greek, Cyrillic, kana, Hangul), not in the others (an
+// NFD alef with hamza, U+0627 U+0654, sorts apart from its NFC U+0623).
+// Ties (names that fold alike) fall back to the raw bytes, so the order is
+// total. <0, 0, >0 like strcmp.
 int compare(const char* a, const char* b);
 
 // The name as the Artists and Albums lists sort it: past one leading
@@ -62,20 +169,23 @@ const char* sortName(const char* s);
 int compareSorted(const char* a, const char* b);
 
 // Whether two names are the same artist as a folder and a file name write
-// it: Full folding, lower case, letters and digits only (so "AC/DC",
-// "AC_DC" and "ACDC" agree: a FAT name can't hold / : ? " * < > | \ and
-// tools replace or drop them), and one leading "The " dropped on either
-// side. A name with no letter or digit (empty, or a script Full folding
-// can't spell) matches nothing. The slices lie inside NUL-terminated
-// strings (a UTF-8 sequence a slice's end cuts ends it).
+// it: their letters and digits alike, in compare()'s terms (Full folding,
+// lower case; a letter Full folding can't spell by its lower-case code
+// point, so "Кино" is "КИНО" and not "Kino"), everything else skipped (so
+// "AC/DC", "AC_DC" and "ACDC" agree: a FAT name can't hold / : ? " * < > |
+// \ and tools replace or drop them), and one leading "The " dropped on
+// either side. A name with no letter or digit (empty, or symbols alone)
+// matches nothing. The slices lie inside NUL-terminated strings (a UTF-8
+// sequence a slice's end cuts ends it).
 bool sameName(const char* a, size_t aLen, const char* b, size_t bLen);
 // Whether `s` begins with `name` that way, the word ending there: "Artist
 // feat. Guest" and "Artist & Band" begin with "Artist"; "Artistry" doesn't.
 bool startsWithName(const char* s, size_t sLen, const char* name, size_t nameLen);
 
 // The A-Z rail's key: the first character, folded and upper-cased, when it
-// is a letter; '#' otherwise (digits, symbols, empty). The Artists and
-// Albums lists take it of their sortName().
+// is an ASCII letter; '#' otherwise (digits, symbols, the letters Full
+// folding can't spell, empty). The Artists and Albums lists take it of
+// their sortName().
 char railKey(const char* s);
 // '#' -> 0, 'A'..'Z' -> 1..26 (27 buckets, in the order compare() sorts them).
 int bucketOf(char key);
@@ -84,5 +194,37 @@ int bucketOf(char key);
 // symbol, a space, or no second character). Within one railKey() its
 // bucket (bucketOf) never goes down in compare() order.
 char secondKey(const char* s);
+
+// The generated tables (TextFoldTables.cpp, tools/gen_text_tables.py, from
+// Python's unicodedata).
+namespace tables {
+// NFC's composition pairs: first << 18 | the second's index in kPairMarks
+// << 13 | the composite's low 13 bits, sorted; the composite is those
+// bits | (first & 0x2000).
+extern const uint32_t kPairs[];
+extern const uint32_t kPairCount;
+extern const uint16_t kPairMarks[];
+extern const uint32_t kPairMarkCount;
+// Canonical_Combining_Class of U+0300..U+036F.
+extern const uint8_t kCombiningClass[0x70];
+// U+0180..U+024F and U+1E00..U+1EFF: the base letter, '\0' for none or for
+// more than one (then kFolds).
+extern const char kLatinExtB[0xD0 + 1];
+extern const char kLatinExtAdditional[0x100 + 1];
+struct Fold {
+  uint16_t cp;
+  char to[3];
+};
+// Two-letter folds of the two blocks, and the IPA letters that are a
+// folded Extended-B letter's other case; by code point.
+extern const Fold kFolds[];
+extern const uint32_t kFoldCount;
+// U+0080..U+009F as Windows-1252 (0: undefined there).
+extern const uint16_t kCp1252[32];
+// The generator's digest of what the tables say (test_text_fold
+// recomputes it through composePair(), combiningClass(), replacement() and
+// fromC1()).
+extern const uint64_t kDigest;
+}  // namespace tables
 
 }  // namespace textfold

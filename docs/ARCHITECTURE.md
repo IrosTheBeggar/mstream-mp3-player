@@ -1784,7 +1784,9 @@ the browsing UI hold its **track ids**, never strings.
     part before a ` - ` is the folder's artist as `textfold::sameName()`
     compares them (Full folding and lower case, letters and digits only,
     so the `/ : ? " * < > |` a FAT name can't hold don't count, and one
-    leading "The"), something follows, and no shorter part before a ` - `
+    leading "The"; a letter of another script by its Unicode lowercase,
+    since [I18N.md](I18N.md)'s phase 0, which also lets a folder in
+    another script take its tags' spelling and ARTISTSORT), something follows, and no shorter part before a ` - `
     is (2,667 names: 2,615 after a plain number, the rest after the other
     rules; since, past later ` - `s too, for an artist named `A - B`).
     `Title - Live` and a compilation's `Other Artist - Title` stay whole:
@@ -2689,13 +2691,35 @@ Queue, Dance and Output (with its Pair and About pages).
   row can have buttons of its own (the Output card's): the source gets
   where on the row it was tapped (`onTapAt()`) and where a finger presses
   (`Row::pressX`).
-- **Text** (`ui/Fonts`, `TextFit`, host-tested): DejaVu Sans 16 and 13 and
-  DejaVu Sans Bold 16 and 22 as anti-aliased VLW fonts in flash (~170 KB;
-  `tools/vlw_font.py`), which cover ASCII, Latin-1, the common Latin
-  Extended-A letters and the typographic punctuation. A character without a
-  glyph is folded by `TextFold` (e.g. "Ł" to "L"); a name too wide is cut
-  with "…". efont is out of the build (the font probe keeps it behind
-  `UI_SPIKE_EFONT`). Licence: `LICENSES/DejaVu-Fonts.txt`.
+- **Text** (`ui/Fonts`, `TextFit`, `TextFold`, host-tested): DejaVu Sans 16
+  and 13 and DejaVu Sans Bold 16 and 22 as anti-aliased VLW fonts in flash
+  (~170 KB; `tools/vlw_font.py`), which cover ASCII, Latin-1, the common
+  Latin Extended-A letters and the typographic punctuation. A name is
+  composed before it is drawn (`textfold::Composer`: NFD text, a name
+  another system stored decomposed or a tag editor's, as NFC in Latin,
+  Greek, Cyrillic and kana; Hangul jamo as syllables), for the screen
+  only. A character without a glyph is then a C1 control's cp1252
+  character when the font has that (a Latin-1 tag's U+0092 as ’), else
+  folded by `TextFold` ("Ł" to "L", "ș" to "s", "Ａ" to "A", a stray
+  combining mark or a variation selector dropped, '?' for the scripts the
+  fonts lack); a name too
+  wide is cut with "…". The fonts' other scripts, and the plan for them
+  and for a translated UI: [I18N.md](I18N.md). efont is out of the build
+  (the font probe keeps it behind `UI_SPIKE_EFONT`). Licence:
+  `LICENSES/DejaVu-Fonts.txt`.
+  - **The order** the library's lists sort by and its rail's letters
+    (`textfold::compare`, `compareSorted`, `railKey`, `secondKey`):
+    composed, case and accents folded, symbols before digits before
+    letters; the C1 controls as cp1252, fullwidth ASCII as ASCII, Latin
+    Extended-B and Extended Additional by base letter (tables generated
+    from Python's unicodedata by `tools/gen_text_tables.py`); a letter of
+    another script by its script, then its Unicode lowercase, after the
+    digits and before A-Z, so under the rail's `#`. `library.idx` rules 3
+    (the first boot of that firmware rebuilds it once: from the records,
+    or by a walk on a card that has none).
+  - **The width tests** measure each fixed text with the fonts' own data
+    (test_ui_library's `fits()`), check that the font has every glyph in
+    it, and count a missing one as the space width, as `ui/Fonts` does.
 - **Icons**: 1-bit bitmaps in flash (`tools/ui_icons.py` -> `IconData.cpp`).
 - **Now Playing** (spec §6.1, mockups 01-04; its two menus, shuffle and
   repeat: [QUEUE-MODES.md](QUEUE-MODES.md)): the album's cover (96 x 96,
