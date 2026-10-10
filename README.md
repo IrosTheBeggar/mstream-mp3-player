@@ -933,7 +933,9 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*);
                       make_logo.py + art/mstream-logo.svg (the boot screen's
                       mStream logo -> lib/core/LogoArt.*);
-                      vlw_font.py (the UI's DejaVu VLW fonts -> src/ui/VlwFonts.cpp);
+                      vlw_font.py (the UI's DejaVu VLW fonts -> src/ui/VlwFonts.cpp,
+                      --check; tests: python -m unittest discover -s tools
+                      -p "test_vlw_font.py");
                       ui_icons.py (the UI's 1-bit icons -> src/ui/IconData.cpp);
                       gen_resampler_tables.py (the rate converter's filters ->
                       lib/core/ResamplerTables.cpp);
@@ -976,8 +978,8 @@ LovyanGFX and fonts under BSD-style licences), the Arduino-ESP32 core
 (LGPL-2.1-or-later and Apache-2.0), ESP-IDF with Espressif's binary
 Bluetooth and radio libraries (Apache-2.0, with BSD- and MIT-licensed parts
 such as TinyCrypt, TLSF and littlefs), newlib and the GCC runtime, and
-the DejaVu fonts the UI is drawn in (Bitstream Vera licence). Each is listed
-with its version, copyright and licence in
+the DejaVu fonts the UI is drawn in (Bitstream Vera and Arev licences).
+Each is listed with its version, copyright and licence in
 [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md); the licence texts are in
 [LICENSES/](LICENSES). The Core2 shows the licence in Output > About and
 prints it on the serial console at boot. Each release carries its source
