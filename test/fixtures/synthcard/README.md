@@ -19,3 +19,16 @@ and builds the plan, writing no card. Given a dump of a card's tree too
 `test_card_jobs` walks it: a step a folder (2,593 steps, where the
 device's one-move-a-step walk took 7,774), in slices on a fake clock
 (docs/METADATA.md 3.2.3, 3.3.9).
+
+# N11's synthetic card's names
+
+`names.txt`: 4,588 names from the same plan, one a line (made by
+`names.py`: `python -I test/fixtures/synthcard/names.py .
+test/fixtures/synthcard/names.txt`): every artist folder's name, every
+artist, album artist, album and sort tag value, every 4th album folder's
+name, every 40th title, every 80th file name, every 4th accented one, and
+every name in another script. All made up by `tools/synthcard.py`
+(invented syllables, common English words, its accents, its made-up
+Cyrillic, Greek, kana and Hangul strings). `test_text_fold` sorts them by
+the order of c97ff3c and by today's: the names the old folding could spell
+keep their order (docs/I18N.md, phase 0).

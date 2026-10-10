@@ -112,11 +112,38 @@ uint32_t composePair(uint32_t first, uint32_t second);
 
 // ---- The library's order ----
 
+// The scripts of the letters Full folding can't spell, in the order they
+// sort: after the digits, before the ASCII letters, so under the A-Z
+// rail's '#' with the digits and symbols (docs/METADATA.md 5.4). Latin
+// here is the Latin letters with no fold (IPA's, Latin Extended-C to -E).
+enum class Script : uint8_t {
+  None,  // not a letter: a symbol, a punctuation mark, a combining mark
+  Latin,
+  Greek,
+  Cyrillic,
+  Armenian,
+  Hebrew,
+  Arabic,
+  Thai,
+  Hangul,
+  Hiragana,
+  Katakana,
+  Han,
+  Other,  // the letters of any other script
+};
+// The script of `cp` by its Unicode block (a curated table, not the Script
+// property: a block's own punctuation counts with its letters).
+Script scriptOf(uint32_t cp);
+
 // The library's order: letters case- and accent-insensitive (Full folding,
 // lowercased), everything that isn't a letter or digit before the digits,
-// the digits before the letters. Composed first (Composer): NFD and NFC
-// sort alike. Ties (names that fold alike) fall back to the raw bytes, so
-// the order is total. <0, 0, >0 like strcmp.
+// the digits before the letters. A letter Full folding can't spell sorts
+// by its script (Script's order) and then its lower-case code point
+// (namekey's lowercase; ς as σ), between the digits and the ASCII letters:
+// "Ая" before "Би-2", Greek before Cyrillic before Hangul, kana and Han.
+// Composed first (Composer): NFD and NFC sort alike. Ties (names that fold
+// alike) fall back to the raw bytes, so the order is total. <0, 0, >0 like
+// strcmp.
 int compare(const char* a, const char* b);
 
 // The name as the Artists and Albums lists sort it: past one leading
@@ -131,20 +158,23 @@ const char* sortName(const char* s);
 int compareSorted(const char* a, const char* b);
 
 // Whether two names are the same artist as a folder and a file name write
-// it: Full folding (composed first), lower case, letters and digits only
-// (so "AC/DC", "AC_DC" and "ACDC" agree: a FAT name can't hold / : ? " * <
-// > | \ and tools replace or drop them), and one leading "The " dropped on
-// either side. A name with no letter or digit (empty, or a script Full
-// folding can't spell) matches nothing. The slices lie inside
-// NUL-terminated strings (a UTF-8 sequence a slice's end cuts ends it).
+// it: their letters and digits alike, in compare()'s terms (Full folding,
+// lower case; a letter Full folding can't spell by its lower-case code
+// point, so "Кино" is "КИНО" and not "Kino"), everything else skipped (so
+// "AC/DC", "AC_DC" and "ACDC" agree: a FAT name can't hold / : ? " * < > |
+// \ and tools replace or drop them), and one leading "The " dropped on
+// either side. A name with no letter or digit (empty, or symbols alone)
+// matches nothing. The slices lie inside NUL-terminated strings (a UTF-8
+// sequence a slice's end cuts ends it).
 bool sameName(const char* a, size_t aLen, const char* b, size_t bLen);
 // Whether `s` begins with `name` that way, the word ending there: "Artist
 // feat. Guest" and "Artist & Band" begin with "Artist"; "Artistry" doesn't.
 bool startsWithName(const char* s, size_t sLen, const char* name, size_t nameLen);
 
 // The A-Z rail's key: the first character, folded and upper-cased, when it
-// is a letter; '#' otherwise (digits, symbols, empty). The Artists and
-// Albums lists take it of their sortName().
+// is an ASCII letter; '#' otherwise (digits, symbols, the letters Full
+// folding can't spell, empty). The Artists and Albums lists take it of
+// their sortName().
 char railKey(const char* s);
 // '#' -> 0, 'A'..'Z' -> 1..26 (27 buckets, in the order compare() sorts them).
 int bucketOf(char key);

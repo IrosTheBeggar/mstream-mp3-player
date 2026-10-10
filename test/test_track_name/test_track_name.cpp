@@ -548,6 +548,31 @@ void test_artist_off_titles() {
   expectRead(va[0], 0, 1, "Act One - Song");
 }
 
+// Names in a script Full folding can't spell (docs/I18N.md, phase 0): the
+// folder's artist comes off a title, and starts an "Artist - NN - Title"
+// name, as a Latin one does, compared by its letters in Unicode lower case
+// (they were left whole: textfold::sameName() saw no letter in them).
+void test_artist_off_titles_other_scripts() {
+  const auto r = readFolder("Кот Лампа", {"01 - Кот Лампа - Песня", "02 - КОТ ЛАМПА - Вторая",
+                                          "03 - Синий Мост - Третья", "04 - Кот Лампа - "});
+  expectRead(r[0], 0, 1, "Песня");
+  expectRead(r[1], 0, 2, "Вторая");
+  expectRead(r[2], 0, 3, "Синий Мост - Третья");  // someone else
+  expectRead(r[3], 0, 4, "Кот Лампа - ");          // nothing after it
+  // "Artist - NN - Title", a guest on one: the artist's names differ, so
+  // only the artist's own match reads them.
+  const auto p = readFolder("山川", {"山川 - 01 - 海", "山川 feat. 森 - 02 - 空"});
+  expectRead(p[0], 0, 1, "海");
+  expectRead(p[1], 0, 2, "空");
+  // NFD Hangul in the file name (as macOS writes it), NFC in the folder's.
+  expectRead(readOne("한강", "01 - \xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB\xE1\x84\x80\xE1\x85\xA1\xE1\x86\xBC - 노래"),
+             0, 1, "노래");
+  // A Latin folder for a Cyrillic name is another name: left whole.
+  expectRead(readOne("Kot Lampa", "01 - Кот Лампа - Песня"), 0, 1, "Кот Лампа - Песня");
+  TEST_ASSERT_EQUAL_UINT32(std::strlen("Кот Лампа - "),
+                           trackname::afterArtist("Кот Лампа - Песня", std::strlen("Кот Лампа - Песня"), "кот лампа"));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_plain_numbers);
@@ -565,5 +590,6 @@ int main(int, char**) {
   RUN_TEST(test_prefixed_needs_track_numbers);
   RUN_TEST(test_artists_named_with_digits);
   RUN_TEST(test_artist_off_titles);
+  RUN_TEST(test_artist_off_titles_other_scripts);
   return UNITY_END();
 }

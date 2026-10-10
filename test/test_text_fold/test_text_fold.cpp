@@ -222,7 +222,7 @@ void test_same_name() {
   TEST_ASSERT_FALSE(same("Brass & Bone", "Brass and Bone"));  // words aren't guessed
   TEST_ASSERT_FALSE(same("", ""));                            // nothing matches nothing
   TEST_ASSERT_FALSE(same("...", "..."));
-  TEST_ASSERT_FALSE(same("日本", "日本"));                    // a script Full folding can't spell
+  TEST_ASSERT_TRUE(same("日本", "日本"));  // a script Full folding can't spell: by its code points
   // The slice's length counts, not the NUL.
   const char* title = "Glass Orchard - Opening";
   TEST_ASSERT_TRUE(textfold::sameName(title, 13, "Glass Orchard", 13));
@@ -261,6 +261,8 @@ std::string composed(const char* in, const char* end = nullptr) {
   }
   return out;
 }
+
+bool same(const char* a, const char* b) { return textfold::sameName(a, std::strlen(a), b, std::strlen(b)); }
 
 }  // namespace
 
@@ -418,6 +420,248 @@ void test_tables_digest() {
   TEST_ASSERT_EQUAL_UINT64(textfold::tables::kDigest, h);
 }
 
+// Letters Full folding can't spell: by script, then lower-case code point,
+// after the digits and before the ASCII letters; no longer by length.
+void test_script_order() {
+  const char* order[] = {
+      "(What's)",     // symbols
+      "1999",         // digits
+      "ʃa",           // IPA: Latin with no fold
+      "Αθήνα",        // Greek
+      "Ακρόπολη",
+      "Аквариум",     // Cyrillic, case aside
+      "Ая",
+      "би-2",
+      "Би-2 Live",
+      "Яблоко",
+      "Արամ",         // Armenian
+      "עומר אדם",     // Hebrew
+      "فيروز",        // Arabic
+      "ธงไชย",        // Thai
+      "방탄소년단",   // Hangul
+      "아이유",
+      "きゃりー",     // Hiragana
+      "ヒカル",       // Katakana
+      "周杰倫",       // Han
+      "宇多田ヒカル",
+      "लता मंगेशकर",  // Devanagari: another script
+      "Abba",         // then the ASCII letters
+      "Zebra",
+  };
+  const size_t n = sizeof(order) / sizeof(order[0]);
+  for (size_t i = 0; i < n; ++i) {
+    for (size_t j = 0; j < n; ++j) {
+      const int c = textfold::compare(order[i], order[j]);
+      char msg[128];
+      std::snprintf(msg, sizeof(msg), "%s vs %s", order[i], order[j]);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(i < j ? -1 : i > j ? 1 : 0, c, msg);
+    }
+    TEST_ASSERT_EQUAL_CHAR_MESSAGE(i + 2 < n ? '#' : order[i][0], textfold::railKey(order[i]), order[i]);
+  }
+  // Not by length: the old order had "Ая" before "Аквариум" (2 '?' < 8).
+  TEST_ASSERT_TRUE(legacy::compare("Ая", "Аквариум") < 0);
+  TEST_ASSERT_TRUE(textfold::compare("Ая", "Аквариум") > 0);
+  // Case aside, ties by bytes; ς as σ; NFD as NFC.
+  TEST_ASSERT_TRUE(textfold::compare("кино", "КИНОМАН") < 0);
+  TEST_ASSERT_TRUE(textfold::compare("КИНО", "киноман") < 0);
+  TEST_ASSERT_TRUE(textfold::compare("σοφιας x", "ΣΟΦΙΑΣ Y") < 0);
+  TEST_ASSERT_TRUE(textfold::compare("σοφιας y", "ΣΟΦΙΑΣ X") > 0);
+  const char* nfd = "\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB\xE1\x84\x80\xE1\x85\xB3\xE1\x86\xAF";  // 한글
+  TEST_ASSERT_TRUE(textfold::compare(nfd, "한국") > 0);
+  TEST_ASSERT_TRUE(textfold::compare(nfd, "한기") < 0);
+  TEST_ASSERT_TRUE(textfold::compare("Beyonce\xCC\x81 Live", "Beyoncé Kin") > 0);
+  TEST_ASSERT_TRUE(textfold::Script::Greek == textfold::scriptOf(0x03B1));
+  TEST_ASSERT_TRUE(textfold::Script::None == textfold::scriptOf(0x037E));  // ; the Greek question mark
+  TEST_ASSERT_TRUE(textfold::Script::None == textfold::scriptOf(0x30FB));  // ・ katakana middle dot
+  TEST_ASSERT_TRUE(textfold::Script::None == textfold::scriptOf(0x1F600));
+  TEST_ASSERT_TRUE(textfold::Script::Han == textfold::scriptOf(0x20000));
+  TEST_ASSERT_TRUE(textfold::Script::Hangul == textfold::scriptOf(0x3131));
+  TEST_ASSERT_TRUE(textfold::Script::Katakana == textfold::scriptOf(0xFF76));
+}
+
+// std::sort's strict weak ordering over a mix of every kind, and the rail's
+// buckets (and the jump grid's second level) in that order.
+void test_mixed_order_is_total_and_bucketed() {
+  std::vector<std::string> v = {"Кино", "КИНО", "кино", "Kino", "kino", "Ая", "Би-2", "Би/2", "1999", "1999 Кино",
+                                "(x)", "★ Stars", "Ninja 🥷 Beats", "Ştefan", "Ștefan", "Stefan", "Mỹ Tâm", "My Tam",
+                                "Beyonce\xCC\x81", "Beyoncé", "Beyonce", "ＡＢＣ", "ABC", "Don\xC2\x92t", "Don't",
+                                "Don’t", "ガ", "\xE3\x82\xAB\xE3\x82\x99", "カ", "周杰倫", "", "Ἀθῆναι", "αθηναι",
+                                "Æon", "Aeon", "Ka\xD0\xB8", "Kz", "E\xCC\x81mile", "Emile", "Emma"};
+  for (const auto& a : v) {
+    TEST_ASSERT_EQUAL_INT(0, textfold::compare(a.c_str(), a.c_str()));
+    for (const auto& b : v) {
+      const int ab = textfold::compare(a.c_str(), b.c_str());
+      TEST_ASSERT_EQUAL_INT(-ab, textfold::compare(b.c_str(), a.c_str()));
+      if (a != b) TEST_ASSERT_TRUE(ab != 0);
+      for (const auto& c : v) {
+        if (ab < 0 && textfold::compare(b.c_str(), c.c_str()) < 0) {
+          TEST_ASSERT_TRUE(textfold::compare(a.c_str(), c.c_str()) < 0);
+        }
+      }
+    }
+  }
+  std::sort(v.begin(), v.end(), [](const std::string& a, const std::string& b) {
+    return textfold::compare(a.c_str(), b.c_str()) < 0;
+  });
+  for (size_t i = 1; i < v.size(); ++i) {
+    const int b0 = textfold::bucketOf(textfold::railKey(v[i - 1].c_str()));
+    const int b1 = textfold::bucketOf(textfold::railKey(v[i].c_str()));
+    TEST_ASSERT_TRUE_MESSAGE(b0 <= b1, v[i].c_str());
+    if (b0 == b1 && b0 > 0) {  // a letter's ("Ka"...; '#' has symbols and digits first, as before)
+      TEST_ASSERT_TRUE_MESSAGE(textfold::bucketOf(textfold::secondKey(v[i - 1].c_str())) <=
+                                   textfold::bucketOf(textfold::secondKey(v[i].c_str())),
+                               v[i].c_str());
+    }
+  }
+  TEST_ASSERT_EQUAL_CHAR('m', textfold::secondKey("E\xCC\x81mile"));  // the mark isn't a character of its own
+}
+
+// sameName() and startsWithName() for names Full folding can't spell: their
+// letters and digits by their lower-case code points (namekey's lowercase),
+// so the artist election and the title's artist drop work for them too.
+void test_same_name_other_scripts() {
+  TEST_ASSERT_TRUE(same("Кино", "Кино"));
+  TEST_ASSERT_TRUE(same("Кино", "КИНО"));
+  TEST_ASSERT_TRUE(same("The Кино", "Кино"));
+  TEST_ASSERT_TRUE(same("Би/2", "Би_2"));  // what a FAT name can't hold
+  TEST_ASSERT_TRUE(same("ΣΟΦΙΑΣ", "σοφιας"));
+  TEST_ASSERT_TRUE(same("周杰倫", "周杰倫"));
+  TEST_ASSERT_TRUE(same("Beyonce\xCC\x81", "Beyoncé"));
+  TEST_ASSERT_TRUE(same("\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB", "한"));
+  TEST_ASSERT_TRUE(same("Ștefan Bănică", "Stefan Banica"));  // folded, as Latin always was
+  TEST_ASSERT_FALSE(same("Кино", "Kino"));  // another script is another name
+  TEST_ASSERT_FALSE(same("Би-2", "Ая-2"));  // was the same ("2" alone)
+  TEST_ASSERT_FALSE(same("Кино", "Киноман"));
+  TEST_ASSERT_FALSE(same("周杰倫", "周杰伦"));
+  TEST_ASSERT_FALSE(same("...", "..."));  // still: no letter or digit, no match
+  TEST_ASSERT_FALSE(same("★", "★"));
+  TEST_ASSERT_FALSE(same("", ""));
+  auto starts = [](const char* s, const char* name) {
+    return textfold::startsWithName(s, std::strlen(s), name, std::strlen(name));
+  };
+  TEST_ASSERT_TRUE(starts("Кино feat. Мумий Тролль", "Кино"));
+  TEST_ASSERT_TRUE(starts("周杰倫 & 費玉清", "周杰倫"));
+  TEST_ASSERT_FALSE(starts("Киноман", "Кино"));
+  TEST_ASSERT_FALSE(starts("Кино", "Kino"));
+}
+
+// ---- the old order kept: N11's synthetic card's names ----
+
+namespace {
+
+std::string fixturesDir() {
+  const char* tries[] = {"test/fixtures", "../test/fixtures", "../../test/fixtures"};
+  for (const char* t : tries) {
+    const std::string p = std::string(t) + "/synthcard/names.txt";
+    if (FILE* f = std::fopen(p.c_str(), "rb")) {
+      std::fclose(f);
+      return t;
+    }
+  }
+  std::string self = __FILE__;
+  for (int up = 0; up < 2; ++up) self = self.substr(0, self.find_last_of("/\\"));
+  return self + "/fixtures";
+}
+
+std::vector<std::string> synthNames() {
+  const std::string path = fixturesDir() + "/synthcard/names.txt";
+  FILE* f = std::fopen(path.c_str(), "rb");
+  TEST_ASSERT_NOT_NULL_MESSAGE(f, path.c_str());
+  std::vector<std::string> out;
+  char line[1024];
+  while (std::fgets(line, sizeof(line), f)) {
+    std::string s(line);
+    while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+    if (s.empty() || s[0] == '#') continue;
+    out.push_back(s);
+  }
+  std::fclose(f);
+  return out;
+}
+
+// Each 7th name again with one letter swapped for a Latin-1 or Extended-A
+// one (synthcard's accents are Latin-1's few), or its '-' and '\'' for the
+// typographic ones: characters the old folding spelled too.
+void addVariants(std::vector<std::string>* names) {
+  static const char* const kSwaps[][2] = {{"l", "ł"}, {"o", "ő"}, {"z", "ž"}, {"c", "č"}, {"e", "ę"}, {"s", "ś"},
+                                          {"n", "ň"}, {"a", "å"}, {"u", "ű"}, {"i", "ı"}, {"-", "‐"}, {"'", "’"},
+                                          {"S", "Š"}, {"T", "Ţ"}, {"D", "Đ"}, {"G", "Ğ"}};
+  const size_t n = names->size();
+  for (size_t i = 0; i < n; i += 7) {
+    std::string s = (*names)[i];
+    const auto& sw = kSwaps[(i / 7) % (sizeof(kSwaps) / sizeof(kSwaps[0]))];
+    const size_t at = s.find(sw[0]);
+    if (at == std::string::npos) continue;
+    s.replace(at, std::strlen(sw[0]), sw[1]);
+    names->push_back(s);
+  }
+}
+
+template <typename Cmp>
+std::vector<std::string> sortedBy(std::vector<std::string> v, Cmp cmp) {
+  std::sort(v.begin(), v.end(), [&](const std::string& a, const std::string& b) { return cmp(a.c_str(), b.c_str()) < 0; });
+  return v;
+}
+
+void assertSameOrder(const std::vector<std::string>& want, const std::vector<std::string>& got, const char* what) {
+  TEST_ASSERT_EQUAL_UINT32(want.size(), got.size());
+  for (size_t i = 0; i < want.size(); ++i) {
+    if (want[i] != got[i]) {
+      char msg[512];
+      std::snprintf(msg, sizeof(msg), "%s: row %u was \"%s\", now \"%s\"", what, static_cast<unsigned>(i),
+                    want[i].c_str(), got[i].c_str());
+      TEST_FAIL_MESSAGE(msg);
+    }
+  }
+}
+
+}  // namespace
+
+// Names the old folding spelled (ASCII, Latin-1, Extended-A, the
+// typographic punctuation) sort exactly as before, on their own and among
+// the others, and keep their rail letters. Only the rest (other scripts)
+// moves.
+void test_latin_order_unchanged() {
+  std::vector<std::string> all = synthNames();
+  TEST_ASSERT_TRUE(all.size() > 4000);
+  addVariants(&all);
+  std::vector<std::string> latin;
+  for (const auto& s : all) {
+    if (legacy::oldSpells(s.c_str())) latin.push_back(s);
+  }
+  TEST_ASSERT_TRUE(latin.size() > 4500);
+  TEST_ASSERT_TRUE(all.size() - latin.size() > 100);  // the made-up names in other scripts
+  // The Artists and Albums lists' order (sort names), and the folders' and files'.
+  const std::vector<std::string> before = sortedBy(latin, legacy::compareSorted);
+  assertSameOrder(before, sortedBy(latin, textfold::compareSorted), "compareSorted");
+  assertSameOrder(sortedBy(latin, legacy::compare), sortedBy(latin, textfold::compare), "compare");
+  for (const auto& s : latin) {
+    TEST_ASSERT_EQUAL_CHAR_MESSAGE(legacy::railKey(textfold::sortName(s.c_str())),
+                                   textfold::railKey(textfold::sortName(s.c_str())), s.c_str());
+  }
+  // Among the other scripts' names: the same order between themselves.
+  const std::vector<std::string> after = sortedBy(all, textfold::compareSorted);
+  std::vector<std::string> mixed;
+  for (const auto& s : after) {
+    if (legacy::oldSpells(s.c_str())) mixed.push_back(s);
+  }
+  assertSameOrder(before, mixed, "among the others");
+  // The others: under '#', each script's names together, in Script's order.
+  int lastScript = 0;
+  for (const auto& s : after) {
+    const char* p = textfold::sortName(s.c_str());
+    const uint32_t first = textfold::decode(p);
+    const auto script = static_cast<int>(textfold::scriptOf(first));
+    if (first < 0x80 || legacy::oldSpells(s.c_str()) || script == 0) continue;
+    TEST_ASSERT_EQUAL_CHAR_MESSAGE('#', textfold::railKey(textfold::sortName(s.c_str())), s.c_str());
+    TEST_ASSERT_TRUE_MESSAGE(script >= lastScript, s.c_str());
+    lastScript = script;
+  }
+  std::printf("[text_fold] %u names, %u the old folding spelled (their order kept), %u others\n",
+              static_cast<unsigned>(all.size()), static_cast<unsigned>(latin.size()),
+              static_cast<unsigned>(all.size() - latin.size()));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_decode_utf8);
@@ -438,5 +682,9 @@ int main(int, char**) {
   RUN_TEST(test_compose_matches_unicodedata);
   RUN_TEST(test_compose_examples);
   RUN_TEST(test_tables_digest);
+  RUN_TEST(test_script_order);
+  RUN_TEST(test_mixed_order_is_total_and_bucketed);
+  RUN_TEST(test_same_name_other_scripts);
+  RUN_TEST(test_latin_order_unchanged);
   return UNITY_END();
 }

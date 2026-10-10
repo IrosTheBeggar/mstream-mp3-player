@@ -5,6 +5,8 @@
 
 #include <cstring>
 
+#include "NameKey.h"
+
 namespace textfold {
 
 namespace {
@@ -147,17 +149,32 @@ const char* foldOf(uint32_t cp) {
 // ---- the order's units ----
 //
 // compare() walks two texts a unit at a time: a character of the Full
-// folding, lower-cased. 0 is the end. Where two texts first differ, rank()
-// orders the two units: other < digits < letters, one rank per character,
+// folding, lower-cased (1-127), or a letter Full folding can't spell, as its
+// script and its lower-case code point (kScriptUnit + script << 21 | code
+// point). 0 is the end. Where two texts first differ, rank() orders the two
+// units: other < digits < those letters < ASCII letters, one rank per unit,
 // so compare() stays a strict weak ordering for std::sort.
+constexpr uint32_t kScriptUnit = 0x01000000;
+constexpr uint32_t kLetterRank = 0x40000000;  // + 'a'..'z'
+
 uint32_t rank(uint32_t u) {
-  if (u >= 'a' && u <= 'z') return 256 + u;
+  if (u >= 'a' && u <= 'z') return kLetterRank + u;
   if (u >= '0' && u <= '9') return 128 + u;
-  return u;
+  return u;  // other characters (below 128), and the other scripts' letters
+}
+
+// A letter of a script Full folding can't spell: its unit, else 0.
+uint32_t scriptUnit(uint32_t cp) {
+  const Script s = scriptOf(cp);
+  if (s == Script::None) return 0;
+  uint32_t low[3];
+  namekey::toLower(cp, low);
+  if (low[0] == 0x03C2) low[0] = 0x03C3;  // final sigma: σ
+  return kScriptUnit + (static_cast<uint32_t>(s) << 21) + low[0];
 }
 
 // A unit is a letter or a digit (sameName()'s key).
-bool isKey(uint32_t u) { return (u >= 'a' && u <= 'z') || (u >= '0' && u <= '9'); }
+bool isKey(uint32_t u) { return (u >= 'a' && u <= 'z') || (u >= '0' && u <= '9') || u >= kScriptUnit; }
 
 struct Units {
   Composer c;
@@ -169,7 +186,11 @@ struct Units {
       if (pending && *pending) return static_cast<unsigned char>(lower(*pending++));
       const uint32_t cp = c.next();
       if (cp < 0x80) return static_cast<unsigned char>(lower(static_cast<char>(cp)));  // 0 too: the end
-      pending = replacement(cp, Mode::Full);
+      const char* rep = replacement(cp, Mode::Full);
+      if (rep[0] == '?' && rep[1] == 0) {
+        if (const uint32_t u = scriptUnit(cp)) return u;
+      }
+      pending = rep;
     }
   }
   // The next letter or digit, 0 at the end.
@@ -487,6 +508,62 @@ uint32_t Composer::leftover() {
 }
 
 // ---- the order ----
+
+Script scriptOf(uint32_t cp) {
+  // Each entry: a block's first code point << 8 | its Script, up to the
+  // next entry's.
+  using S = Script;
+  static constexpr uint32_t kBlocks[] = {
+#define R(first, s) (static_cast<uint32_t>(first) << 8 | static_cast<uint32_t>(S::s))
+      R(0x0000, None),     R(0x0041, Latin),    R(0x005B, None),     R(0x0061, Latin),    R(0x007B, None),
+      R(0x00AA, Latin),    R(0x00AB, None),     R(0x00BA, Latin),    R(0x00BB, None),     R(0x00C0, Latin),
+      R(0x00D7, None),     R(0x00D8, Latin),    R(0x00F7, None),     R(0x00F8, Latin),
+      R(0x02B0, None),     // spacing modifiers, combining marks
+      R(0x0370, Greek),    R(0x0374, None),     R(0x0376, Greek),    R(0x037E, None),     R(0x037F, Greek),
+      R(0x0384, None),     R(0x0386, Greek),    R(0x0387, None),     R(0x0388, Greek),    R(0x03F6, None),
+      R(0x03F7, Greek),
+      R(0x0400, Cyrillic), R(0x0482, None),     R(0x048A, Cyrillic),
+      R(0x0530, Armenian), R(0x0590, Hebrew),   R(0x0600, Arabic),   R(0x0700, Other),    R(0x0750, Arabic),
+      R(0x0780, Other),    R(0x08A0, Arabic),   R(0x0900, Other),
+      R(0x0E00, Thai),     R(0x0E80, Other),
+      R(0x1100, Hangul),   R(0x1200, Other),
+      R(0x1AB0, None),     R(0x1B00, Other),    // combining marks extended
+      R(0x1C80, Cyrillic), R(0x1C90, Other),
+      R(0x1D00, Latin),    R(0x1DC0, None),     R(0x1E00, Latin),    // phonetic extensions; marks
+      R(0x1F00, Greek),
+      R(0x2000, None),     // punctuation, letterlike, arrows, maths, boxes, symbols, dingbats...
+      R(0x2C00, Other),    R(0x2C60, Latin),    R(0x2C80, Other),    // Glagolitic; Latin Ext-C; Coptic...
+      R(0x2DE0, Cyrillic), R(0x2E00, None),     // Cyrillic Ext-A; supplemental punctuation
+      R(0x2E80, Han),      R(0x2FE0, None),     // radicals
+      R(0x3000, None),     // CJK symbols and punctuation
+      R(0x3040, Hiragana), R(0x3099, None),     R(0x309D, Hiragana), R(0x30A0, None),     R(0x30A1, Katakana),
+      R(0x30FB, None),     R(0x30FC, Katakana), R(0x3100, Other),    // Bopomofo
+      R(0x3130, Hangul),   R(0x3190, None),     R(0x31A0, Other),    R(0x31C0, None),     // compatibility jamo
+      R(0x31F0, Katakana), R(0x3200, None),     // enclosed CJK, compatibility
+      R(0x3400, Han),      R(0x4DC0, None),     R(0x4E00, Han),      R(0xA000, Other),    // Yi...
+      R(0xA640, Cyrillic), R(0xA6A0, Other),    R(0xA720, Latin),    R(0xA800, Other),    // Ext-B; Ext-D
+      R(0xA960, Hangul),   R(0xA980, Other),    R(0xAB30, Latin),    R(0xAB70, Other),    // jamo Ext-A; Latin Ext-E
+      R(0xAC00, Hangul),   R(0xD800, None),     // syllables, jamo Ext-B; surrogates, private use
+      R(0xF900, Han),      R(0xFB00, Latin),    R(0xFB07, None),     R(0xFB13, Armenian), R(0xFB1D, Hebrew),
+      R(0xFB50, Arabic),   R(0xFE00, None),     R(0xFE70, Arabic),   R(0xFF00, None),     // fullwidth forms
+      R(0xFF21, Latin),    R(0xFF3B, None),     R(0xFF41, Latin),    R(0xFF5B, None),     R(0xFF66, Katakana),
+      R(0xFFA0, Hangul),   R(0xFFDD, None),
+      R(0x10000, Other),   R(0x1D000, None),    R(0x1E000, Other),   R(0x1F000, None),    // symbols, emoji
+      R(0x20000, Han),     R(0x40000, None),
+#undef R
+  };
+  constexpr uint32_t n = sizeof(kBlocks) / sizeof(kBlocks[0]);
+  uint32_t lo = 0, hi = n;
+  while (lo < hi) {
+    const uint32_t mid = lo + (hi - lo) / 2;
+    if ((kBlocks[mid] >> 8) <= cp) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo == 0 ? Script::None : static_cast<Script>(kBlocks[lo - 1] & 0xFF);
+}
 
 int compare(const char* a, const char* b) {
   Units ua(a, nullptr), ub(b, nullptr);
