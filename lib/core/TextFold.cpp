@@ -125,12 +125,14 @@ const char* single(char c) { return c >= 0x20 && c < 0x7F ? kAscii.s[c - 0x20] :
 char lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
 
 // The combining marks Full folding drops: the generic blocks, the Cyrillic
-// ones and kana's voicing marks (what the composer didn't put on a letter),
-// and the variation selectors.
+// ones and kana's voicing marks (what the composer didn't put on a letter);
+// the variation selectors (VS1-16, the ideographic VS17-256 and
+// Mongolian's); and the tag characters (an emoji flag's subdivision).
 bool dropped(uint32_t cp) {
   return (cp >= 0x0300 && cp <= 0x036F) || (cp >= 0x0483 && cp <= 0x0489) || (cp >= 0x1AB0 && cp <= 0x1AFF) ||
          (cp >= 0x1DC0 && cp <= 0x1DFF) || (cp >= 0x20D0 && cp <= 0x20FF) || (cp >= 0xFE00 && cp <= 0xFE0F) ||
-         (cp >= 0xFE20 && cp <= 0xFE2F) || cp == 0x3099 || cp == 0x309A;
+         (cp >= 0xFE20 && cp <= 0xFE2F) || cp == 0x3099 || cp == 0x309A || (cp >= 0x180B && cp <= 0x180D) ||
+         cp == 0x180F || (cp >= 0xE0100 && cp <= 0xE01EF) || cp == 0xE0001 || (cp >= 0xE0020 && cp <= 0xE007F);
 }
 
 const char* foldOf(uint32_t cp) {
@@ -535,7 +537,9 @@ Script scriptOf(uint32_t cp) {
       R(0x2C00, Other),    R(0x2C60, Latin),    R(0x2C80, Other),    // Glagolitic; Latin Ext-C; Coptic...
       R(0x2DE0, Cyrillic), R(0x2E00, None),     // Cyrillic Ext-A; supplemental punctuation
       R(0x2E80, Han),      R(0x2FE0, None),     // radicals
-      R(0x3000, None),     // CJK symbols and punctuation
+      R(0x3000, None),     // CJK symbols and punctuation, but its letters: 々 〆 〇,
+      R(0x3005, Han),      R(0x3008, None),     R(0x3021, Han),      R(0x302A, None),     // Hangzhou numerals,
+      R(0x3031, Hiragana), R(0x3036, None),     R(0x3038, Han),      R(0x303D, None),     // kana repeat marks, 〻 〼
       R(0x3040, Hiragana), R(0x3099, None),     R(0x309D, Hiragana), R(0x30A0, None),     R(0x30A1, Katakana),
       R(0x30FB, None),     R(0x30FC, Katakana), R(0x3100, Other),    // Bopomofo
       R(0x3130, Hangul),   R(0x3190, None),     R(0x31A0, Other),    R(0x31C0, None),     // compatibility jamo

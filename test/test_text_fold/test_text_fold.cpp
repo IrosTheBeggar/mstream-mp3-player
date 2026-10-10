@@ -7,11 +7,13 @@
 #include <unity.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
+#include "NameKey.h"
 #include "TextFold.h"
 #include "compose_cases.h"
 #include "legacy_fold.h"
@@ -333,16 +335,63 @@ void test_latin_extended_folds() {
   TEST_ASSERT_TRUE(textfold::compare("Şerban", "Ștefan") < 0);
   TEST_ASSERT_TRUE(textfold::compare("Ștefan", "Stefano") < 0);
   TEST_ASSERT_TRUE(textfold::compare("Mỹ Tâm", "My Tank") < 0);
+  // A capital and its small letter fold alike: ǯ by its base ʒ (whose
+  // capital is Ʒ, Z), Ƕ hwair by its small ƕ (HV).
+  TEST_ASSERT_EQUAL_STRING("Z z Z z HV hv", folded("Ǯ ǯ Ʒ ʒ Ƕ ƕ", Mode::Full, &r).c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, r.unknown);
+  TEST_ASSERT_TRUE(same("Ǯoro", "ǯoro"));
+  TEST_ASSERT_TRUE(same("Ƕa", "ƕa"));
+  TEST_ASSERT_EQUAL_CHAR('Z', textfold::railKey("ǯaa"));
+  TEST_ASSERT_EQUAL_CHAR('H', textfold::railKey("Ƕa"));
+  // Every letter of the two blocks against its small letter (namekey's
+  // lowercase, one code point): the same letters, case aside.
+  for (uint32_t cp = 0x0180; cp <= 0x1EFF; ++cp) {
+    if (cp == 0x0250) cp = 0x1E00;
+    uint32_t low[3];
+    if (namekey::toLower(cp, low) != 1 || low[0] == cp) continue;
+    std::string a = textfold::replacement(cp, Mode::Full), b = textfold::replacement(low[0], Mode::Full);
+    for (char& c : a) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    for (char& c : b) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    char msg[32];
+    std::snprintf(msg, sizeof(msg), "U+%04X", static_cast<unsigned>(cp));
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(a.c_str(), b.c_str(), msg);
+  }
 }
 
 // What composition didn't put on a letter can't be drawn: dropped, not a
-// '?' (a variation selector too).
+// '?' (a variation selector and a tag character too).
 void test_marks_and_selectors_drop() {
   textfold::Result r;
   TEST_ASSERT_EQUAL_STRING("x", folded("x\xCC\x81", Mode::Full, &r).c_str());
   TEST_ASSERT_EQUAL_UINT32(0, r.unknown);
   TEST_ASSERT_EQUAL_STRING("?", folded("\xE2\x9D\xA4\xEF\xB8\x8F", Mode::Full).c_str());  // ❤ + VS16
   TEST_ASSERT_EQUAL_STRING("e\xCC\x81", folded("e\xCC\x81", Mode::Punctuation).c_str());  // kept there
+  // An ideographic variation sequence (VS17, U+E0100): a '?' for each
+  // letter, nothing for the selector, and it sorts and matches as the
+  // letter alone.
+  const char* ivs = "葛\xF3\xA0\x84\x80飾";
+  TEST_ASSERT_EQUAL_STRING("??", folded(ivs, Mode::Full, &r).c_str());
+  TEST_ASSERT_EQUAL_UINT32(2, r.unknown);
+  TEST_ASSERT_EQUAL_INT(textfold::compare("葛飾", "葛西"), textfold::compare(ivs, "葛西"));
+  TEST_ASSERT_TRUE(textfold::compare(ivs, "葛西") > 0);
+  TEST_ASSERT_TRUE(same(ivs, "葛飾"));
+  // The flag of England: U+1F3F4, five tag letters and the cancel tag.
+  TEST_ASSERT_EQUAL_STRING("? x", folded("\xF0\x9F\x8F\xB4\xF3\xA0\x81\xA7\xF3\xA0\x81\xA2\xF3\xA0\x81\xA5"
+                                         "\xF3\xA0\x81\xAE\xF3\xA0\x81\xA7\xF3\xA0\x81\xBF x",
+                                         Mode::Full, &r)
+                                      .c_str());
+  TEST_ASSERT_EQUAL_UINT32(1, r.unknown);
+  TEST_ASSERT_EQUAL_STRING("??", folded("ᠠ\xE1\xA0\x8Bᠡ", Mode::Full).c_str());  // Mongolian FVS1
+}
+
+// Punctuation mode folds only cp1252's punctuation of U+0080-009F; its
+// letters and symbols stay the C1 code point (Full mode folds them all).
+void test_c1_in_punctuation_mode() {
+  TEST_ASSERT_EQUAL_STRING("\xC2\x8A" "ostak \xC2\x80 ' \"x\" - ...",
+                           folded("\xC2\x8A" "ostak \xC2\x80 \xC2\x92 \xC2\x93x\xC2\x94 \xC2\x96 \xC2\x85",
+                                  Mode::Punctuation)
+                               .c_str());
+  TEST_ASSERT_EQUAL_STRING("Sostak EUR '", folded("\xC2\x8A" "ostak \xC2\x80 \xC2\x92", Mode::Full).c_str());
 }
 
 // The generator's random strings (tools/gen_text_tables.py), against
@@ -477,6 +526,18 @@ void test_script_order() {
   TEST_ASSERT_TRUE(textfold::Script::Han == textfold::scriptOf(0x20000));
   TEST_ASSERT_TRUE(textfold::Script::Hangul == textfold::scriptOf(0x3131));
   TEST_ASSERT_TRUE(textfold::Script::Katakana == textfold::scriptOf(0xFF76));
+  // The CJK symbols block: punctuation, but its letters are Han (々, the
+  // iteration mark, in many names), and kana's vertical repeat marks.
+  TEST_ASSERT_TRUE(textfold::Script::None == textfold::scriptOf(0x3001));  // 、
+  TEST_ASSERT_TRUE(textfold::Script::Han == textfold::scriptOf(0x3005));   // 々
+  TEST_ASSERT_TRUE(textfold::Script::Han == textfold::scriptOf(0x3007));   // 〇
+  TEST_ASSERT_TRUE(textfold::Script::None == textfold::scriptOf(0x300C));  // 「
+  TEST_ASSERT_TRUE(textfold::Script::Han == textfold::scriptOf(0x3029));
+  TEST_ASSERT_TRUE(textfold::Script::None == textfold::scriptOf(0x302A));  // a tone mark
+  TEST_ASSERT_TRUE(textfold::Script::Hiragana == textfold::scriptOf(0x3031));
+  TEST_ASSERT_TRUE(textfold::Script::Han == textfold::scriptOf(0x303B));
+  TEST_ASSERT_TRUE(textfold::Script::None == textfold::scriptOf(0x303F));
+  TEST_ASSERT_TRUE(textfold::compare("人々", "人人") < 0);  // a letter, by its code point
 }
 
 // std::sort's strict weak ordering over a mix of every kind, and the rail's
@@ -543,6 +604,12 @@ void test_same_name_other_scripts() {
   TEST_ASSERT_TRUE(starts("周杰倫 & 費玉清", "周杰倫"));
   TEST_ASSERT_FALSE(starts("Киноман", "Кино"));
   TEST_ASSERT_FALSE(starts("Кино", "Kino"));
+  // 々 is a letter: a name with it is another name than one without.
+  TEST_ASSERT_TRUE(same("時々", "時々"));
+  TEST_ASSERT_FALSE(same("時々", "時"));
+  TEST_ASSERT_FALSE(same("山々木", "山木"));
+  TEST_ASSERT_FALSE(starts("時々 - 海", "時"));
+  TEST_ASSERT_TRUE(starts("時々 - 海", "時々"));
 }
 
 // ---- the old order kept: N11's synthetic card's names ----
@@ -679,6 +746,7 @@ int main(int, char**) {
   RUN_TEST(test_fullwidth_ascii_folds);
   RUN_TEST(test_latin_extended_folds);
   RUN_TEST(test_marks_and_selectors_drop);
+  RUN_TEST(test_c1_in_punctuation_mode);
   RUN_TEST(test_compose_matches_unicodedata);
   RUN_TEST(test_compose_examples);
   RUN_TEST(test_tables_digest);

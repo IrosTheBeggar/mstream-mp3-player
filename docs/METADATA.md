@@ -3414,8 +3414,10 @@ which fails at about 15k entries (metascan section 6.2).
   fullwidth ASCII and Latin Extended-B and Additional folded, other
   scripts by script and letter, an artist folder in another script
   matched to its tags. Again the first boot after that firmware finds
-  library.idx Outdated and builds from the records once: no walk, no
-  scan, the records as they are.
+  library.idx Outdated and rebuilds it once: from the records on a card
+  that has them (no walk, no scan, the records as they are); by a walk on
+  a card with none (a card-reader card before its scan has written D), as
+  `load()`'s Outdated says.
 - **`load()`:** Loaded (compare the inputs: a hard mismatch, or the
   build-at-boot marker (3.4.2), rebuilds from the records at boot; a soft
   one keeps the index and rebuilds at the
@@ -4904,8 +4906,9 @@ White_Space doesn't count: " Zebra Songs" sorts as a Z); **an artist's
 albums newest first** (year descending, no year last, then name); the
 Folders view raw; no Genres view (the records keep the genres, so one
 later is a rebuild). The device's order (`textfold::compare`): case and
-accents folded; symbols, then digits, then letters; a name composed (NFC)
-before it is compared, never in what is stored; U+0080-009F as their
+accents folded; symbols, then digits, then letters; a name composed (NFC,
+in Latin, Greek, Cyrillic, kana and Hangul) before it is compared, never
+in what is stored; U+0080-009F as their
 cp1252 characters (5.2), fullwidth ASCII as ASCII, Latin Extended-B and
 Extended Additional by their base letters; a letter Full folding can't
 spell (Greek, Cyrillic, Hangul, kana, Han...) by its script and then its
@@ -4947,7 +4950,8 @@ no collation key (2.6.5).
    the research's "never merged" (mStream's code fills from ID3v1).
 2. **Several values:** lists (2.3.6), not one value joined with "; ".
 3. **Latin-1:** ISO-8859-1 in the record; the research's cp1252 fix moves
-   to drawing.
+   to the device: drawing (5.2), and on the Core2 its order and name
+   matching (5.4), never the record.
 4. **Invalid UTF-8:** U+FFFD, not re-read as Latin-1.
 5. **TCON with several values:** every item kept (the research's
    "17\0Pop" fix stands); the first-item rule is the election's (5.4).
@@ -5672,7 +5676,7 @@ they disagreed:
 | 2 | The path hash's input | The full card path with `/music`; the path relative to `/music` | **The full path with a literal lowercase `/music`**: the device's thumbnails already hash the index's `"/music/.../cover.jpg"` (`Thumbs.cpp`, `thumbfile::pathHash`) |
 | 3 | Where the software's tag fields come from | mStream's API first, lofty for the rest; the card file through lofty | **The card file** (2.7): the manifest's `artist` and `album` are server-wide consensus spellings (`artist-aggregate.js`, `album-aggregate.js`) that a device scan can't reproduce. The API is a flagged fallback (FROM_API) and the source of what only the server knows |
 | 4 | Tag precedence | "One tag, never merged" (the research); ID3v1 fills six blank fields, ID3v1 before APE | **mStream's code** (5.1): `rust-parser/src/main.rs` fills title, artist, album, genre, year and track from ID3v1, and lofty orders ID3v2, ID3v1, APE |
-| 5 | Latin-1 | cp1252 for 0x80-0x9F; ISO-8859-1 | **ISO-8859-1 in records** (lofty's `latin1_decode`), cp1252 only when drawing |
+| 5 | Latin-1 | cp1252 for 0x80-0x9F; ISO-8859-1 | **ISO-8859-1 in records** (lofty's `latin1_decode`); cp1252 only on the device, to draw (and on the Core2 to sort and match: 5.2, 5.4), never stored |
 | 6 | Several values | "; " joined (the prototype); U+001F lists; ", " joined | **U+001F lists in records**, the ", " join in the election (5.4): records keep what the file says |
 | 7 | When a transfer record is fresh | Size and time within 2 s, or a fingerprint; ±1 h exactly; the uniform-skew rule | **The skew rule plus qfp** (2.3.4, 2.9), confirmations saved by the device: it covers any constant time-zone error, not only DST |
 | 8 | The fingerprint | CRC-32 of the first and last 4 KiB; FNV-1a 64 of the size, head and tail | **qfp** (2.3.5), and it moves from the ledger into RECS so the device can read it |

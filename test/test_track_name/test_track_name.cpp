@@ -564,13 +564,19 @@ void test_artist_off_titles_other_scripts() {
   const auto p = readFolder("山川", {"山川 - 01 - 海", "山川 feat. 森 - 02 - 空"});
   expectRead(p[0], 0, 1, "海");
   expectRead(p[1], 0, 2, "空");
-  // NFD Hangul in the file name (as macOS writes it), NFC in the folder's.
+  // NFD Hangul in the file name (as another system may store it), NFC in
+  // the folder's.
   expectRead(readOne("한강", "01 - \xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB\xE1\x84\x80\xE1\x85\xA1\xE1\x86\xBC - 노래"),
              0, 1, "노래");
   // A Latin folder for a Cyrillic name is another name: left whole.
   expectRead(readOne("Kot Lampa", "01 - Кот Лампа - Песня"), 0, 1, "Кот Лампа - Песня");
   TEST_ASSERT_EQUAL_UINT32(std::strlen("Кот Лампа - "),
                            trackname::afterArtist("Кот Лампа - Песня", std::strlen("Кот Лампа - Песня"), "кот лампа"));
+  // 々 is a letter: "山々木" is another artist than the folder's "山木".
+  TEST_ASSERT_EQUAL_UINT32(0, trackname::afterArtist("山々木 - 海", std::strlen("山々木 - 海"), "山木"));
+  TEST_ASSERT_EQUAL_UINT32(std::strlen("山々木 - "),
+                           trackname::afterArtist("山々木 - 海", std::strlen("山々木 - 海"), "山々木"));
+  expectRead(readOne("山木", "01 - 山々木 - 海"), 0, 1, "山々木 - 海");
 }
 
 int main(int, char**) {

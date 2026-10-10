@@ -183,7 +183,7 @@ const char kLatinExtB[0xD0 + 1] =
     "u\0VYyZzZ\0\0z\0\0\0\0w"
     "\0\0\0\0\0\0\0\0\0\0\0\0\0AaI"
     "iOoUuUuUuUuUueAa"
-    "Aa\0\0GgGgKkOoOoZ\0"
+    "Aa\0\0GgGgKkOoOoZz"
     "j\0\0\0Gg\0WNnAa\0\0Oo"
     "AaAaEeEeIiIiOoOo"
     "RrRrUuUuSsTt\0\0Hh"
@@ -230,6 +230,7 @@ const Fold kFolds[] = {
     {0x01F1, "DZ"},  // Ǳ latin capital letter dz
     {0x01F2, "Dz"},  // ǲ latin capital letter d with small letter z
     {0x01F3, "dz"},  // ǳ latin small letter dz
+    {0x01F6, "HV"},  // Ƕ latin capital letter hwair
     {0x01FC, "AE"},  // Ǽ latin capital letter ae with acute
     {0x01FD, "ae"},  // ǽ latin small letter ae with acute
     {0x0222, "OU"},  // Ȣ latin capital letter ou
@@ -270,7 +271,7 @@ const uint16_t kCp1252[32] = {
     0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x0000, 0x017E, 0x0178,
 };
 
-const uint64_t kDigest = 0xB8A37088581DA9F3ull;
+const uint64_t kDigest = 0xD71F0A5AD2794419ull;
 
 }  // namespace tables
 }  // namespace textfold

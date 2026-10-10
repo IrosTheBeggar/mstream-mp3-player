@@ -30,8 +30,11 @@ docs/I18N.md, phase 0. The tables:
         to its canonical decomposition's base letter (ș -> s, ỹ -> y), else
         its compatibility decomposition's letters (ǆ -> dz), else to the
         letter its name is built on (ƀ "B WITH STROKE" -> b, Ɔ "OPEN O" ->
-        O, ǝ "TURNED E" -> e, ȸ "DB DIGRAPH" -> db), else to EXPLICIT's.
-        The rest (ƍ, Ʃ, Ȝ, the tone letters, the clicks) stays '?'.
+        O, ǝ "TURNED E" -> e, ȸ "DB DIGRAPH" -> db), else to EXPLICIT's,
+        else to its other case's, in its own case (ǯ by its base ʒ, whose
+        capital Ʒ is Z: z; Ƕ hwair by ƕ "HV": HV). The rest (ƍ, Ʃ, Ȝ, the
+        tone letters, the clicks) stays '?'. A letter and its other case
+        fold alike, case aside: the generator checks every pair.
   kCp1252     U+0080-009F as their Windows-1252 characters (0: one
         cp1252 leaves undefined): docs/METADATA.md 5.2 lets a device draw
         them so.
@@ -77,8 +80,9 @@ EXPLICIT = {
     0x1E9E: "SS",  # ẞ capital sharp s
 }
 # A precomposed letter's base that isn't ASCII but folds (Latin-1's own
-# multi-letter folds, TextFold.cpp's latin1Multi).
-KNOWN = {0x00C6: "AE", 0x00E6: "ae", 0x00D8: "O", 0x00F8: "o"}
+# multi-letter folds, TextFold.cpp's latin1Multi), and ß (ẞ's other case,
+# for the case check).
+KNOWN = {0x00C6: "AE", 0x00E6: "ae", 0x00D8: "O", 0x00F8: "o", 0x00DF: "ss"}
 NAME_RULE = re.compile(r"^LATIN (CAPITAL|SMALL) LETTER (?:(?:OPEN|TURNED|REVERSED|AFRICAN|DOTLESS|MIDDLE-WELSH|LONG|SMALL) )?"
                        r"([A-Z]{1,2})(?: WITH .*| BAR| DIGRAPH)?$")
 OTHER_MARKS = {0x0483: 230, 0x0484: 230, 0x0485: 230, 0x0486: 230, 0x0487: 230, 0x3099: 8, 0x309A: 8}
@@ -106,8 +110,9 @@ def pairs():
     return out
 
 
-def fold_of(cp):
-    """The ASCII letters `cp` folds to, or None."""
+def fold_of(cp, partner=True):
+    """The ASCII letters `cp` folds to, or None. With `partner`, a letter no
+    other rule folds takes its other case's fold."""
     if cp in EXPLICIT:
         return EXPLICIT[cp]
     if cp in KNOWN:
@@ -130,7 +135,27 @@ def fold_of(cp):
     m = NAME_RULE.match(name)
     if m:
         return m.group(2) if m.group(1) == "CAPITAL" else m.group(2).lower()
+    if partner:
+        for other, case in ((ch.upper(), str.lower), (ch.lower(), str.upper)):
+            if len(other) == 1 and other != ch:
+                f = fold_of(ord(other), partner=False)
+                if f:
+                    return case(f)
     return None
+
+
+def check_cases(fold_map):
+    """Each code point of the two blocks folds as its other case does, case
+    aside, so a capital and its small letter sort and match alike."""
+    for lo, hi in (EXT_B, EXT_ADDITIONAL):
+        for cp in range(lo, hi + 1):
+            ch = chr(cp)
+            for other in (ch.lower(), ch.upper()):
+                if len(other) != 1 or other == ch:
+                    continue
+                p = ord(other)
+                theirs = fold_map.get(p) if p >= 0x0180 else fold_of(p)
+                assert (fold_map.get(cp) or "").lower() == (theirs or "").lower(), (hex(cp), hex(p))
 
 
 def folds():
@@ -210,6 +235,7 @@ def generate():
     entries = sorted(first << 18 | marks.index(m) << 13 | (comp & 0x1FFF) for (first, m), comp in pair_map.items())
 
     fold_map = folds()
+    check_cases(fold_map)
     ext_b = [fold_map.get(cp) for cp in range(EXT_B[0], EXT_B[1] + 1)]
     ext_add = [fold_map.get(cp) for cp in range(EXT_ADDITIONAL[0], EXT_ADDITIONAL[1] + 1)]
     multi = sorted((cp, f) for cp, f in fold_map.items()

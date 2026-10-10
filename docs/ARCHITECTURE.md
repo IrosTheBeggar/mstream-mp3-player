@@ -2695,12 +2695,14 @@ Queue, Dance and Output (with its Pair and About pages).
   and 13 and DejaVu Sans Bold 16 and 22 as anti-aliased VLW fonts in flash
   (~170 KB; `tools/vlw_font.py`), which cover ASCII, Latin-1, the common
   Latin Extended-A letters and the typographic punctuation. A name is
-  composed before it is drawn (`textfold::Composer`: NFD text, as macOS
-  writes file names, as NFC; Hangul jamo as syllables), for the screen
+  composed before it is drawn (`textfold::Composer`: NFD text, a name
+  another system stored decomposed or a tag editor's, as NFC in Latin,
+  Greek, Cyrillic and kana; Hangul jamo as syllables), for the screen
   only. A character without a glyph is then a C1 control's cp1252
   character when the font has that (a Latin-1 tag's U+0092 as ’), else
   folded by `TextFold` ("Ł" to "L", "ș" to "s", "Ａ" to "A", a stray
-  combining mark dropped, '?' for the scripts the fonts lack); a name too
+  combining mark or a variation selector dropped, '?' for the scripts the
+  fonts lack); a name too
   wide is cut with "…". The fonts' other scripts, and the plan for them
   and for a translated UI: [I18N.md](I18N.md). efont is out of the build
   (the font probe keeps it behind `UI_SPIKE_EFONT`). Licence:
@@ -2713,7 +2715,8 @@ Queue, Dance and Output (with its Pair and About pages).
     from Python's unicodedata by `tools/gen_text_tables.py`); a letter of
     another script by its script, then its Unicode lowercase, after the
     digits and before A-Z, so under the rail's `#`. `library.idx` rules 3
-    (the first boot of that firmware rebuilds it from the records).
+    (the first boot of that firmware rebuilds it once: from the records,
+    or by a walk on a card that has none).
   - **The width tests** measure each fixed text with the fonts' own data
     (test_ui_library's `fits()`), check that the font has every glyph in
     it, and count a missing one as the space width, as `ui/Fonts` does.
