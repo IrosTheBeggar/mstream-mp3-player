@@ -337,6 +337,56 @@ void fits(const Vlw& font, const char* text, int room) {
 }
 }  // namespace
 
+// ---- names as the screen draws them (docs/I18N.md, phase 0) ----
+
+namespace {
+
+int vlwWidth(void* ctx, const char* s) { return static_cast<const Vlw*>(ctx)->width(s); }
+bool vlwHas(void* ctx, uint32_t cp) { return static_cast<const Vlw*>(ctx)->find(cp) >= 0; }
+
+// `name` as ui/Fonts::draw fits it (its 200-byte buffer), in `font`.
+std::string drawn(const Vlw& font, const char* name, int maxW = 300) {
+  textfit::Font f;
+  f.ctx = const_cast<Vlw*>(&font);
+  f.width = vlwWidth;
+  f.has = vlwHas;
+  char buf[200];
+  textfit::fit(f, name, std::strlen(name), buf, sizeof(buf), maxW);
+  return buf;
+}
+
+}  // namespace
+
+// TextFit with the fonts the firmware draws with: decomposed text composed
+// first, a cp1252 byte (U+0080-009F) as its character, the Latin letters
+// the fonts lack as their base letters; the other scripts wait for fonts
+// (phase 1). The tests measure a missing glyph as the firmware does: the
+// space width M5GFX gives it, 5 px in DejaVu Sans 16.
+void test_names_drawn_with_the_fonts() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  TEST_ASSERT_EQUAL_INT(5, body.space);
+  TEST_ASSERT_EQUAL_INT(4, small.space);
+  TEST_ASSERT_EQUAL_INT(body.width("a") + body.space + body.width("b"), body.width("a\xD0\x96" "b"));
+  TEST_ASSERT_FALSE(body.hasAll("Ж"));
+  TEST_ASSERT_TRUE(body.hasAll("Café ’…€"));
+  TEST_ASSERT_EQUAL_STRING("Don’t Stop – Live…", drawn(body, "Don\xC2\x92t Stop \xC2\x96 Live\xC2\x85").c_str());
+  TEST_ASSERT_EQUAL_STRING("€ ™ Š Ÿ “x”", drawn(body, "\xC2\x80 \xC2\x99 \xC2\x8A \xC2\x9F \xC2\x93x\xC2\x94").c_str());
+  TEST_ASSERT_EQUAL_STRING("f^~?", drawn(body, "\xC2\x83\xC2\x88\xC2\x98\xC2\x81").c_str());  // no glyph: folded
+  TEST_ASSERT_EQUAL_STRING("Beyoncé", drawn(body, "Beyonce\xCC\x81").c_str());
+  TEST_ASSERT_EQUAL_STRING("Stefan Banica", drawn(body, "Ștefan Bănică").c_str());
+  TEST_ASSERT_EQUAL_STRING("My Tâm", drawn(body, "Mỹ Tâm").c_str());
+  TEST_ASSERT_EQUAL_STRING("My Tâm", drawn(body, "My\xCC\x83 Ta\xCC\x82m").c_str());  // NFD: â is the font's
+  TEST_ASSERT_EQUAL_STRING("ABC", drawn(body, "ＡＢＣ").c_str());
+  TEST_ASSERT_EQUAL_STRING("????", drawn(body, "Кино").c_str());
+  TEST_ASSERT_EQUAL_STRING("Ninja ? Beats", drawn(body, "Ninja 🥷 Beats").c_str());
+  TEST_ASSERT_EQUAL_STRING("?", drawn(body, "\xE2\x9D\xA4\xEF\xB8\x8F").c_str());  // ❤ + VS16: one '?'
+  // Cut to the room as before, the composed text measured.
+  const std::string cut = drawn(body, "Beyonce\xCC\x81 Beyonce\xCC\x81 Beyonce\xCC\x81", 100);
+  TEST_ASSERT_TRUE(body.width(cut.c_str()) <= 100);
+  TEST_ASSERT_TRUE(body.hasAll(cut.c_str()));
+  TEST_ASSERT_EQUAL_STRING("Beyoncé…", cut.c_str());  // whole letters, the é one glyph
+}
+
 // The first-boot tips: the first screen a new user sees.
 void test_coach_texts_fit() {
   using namespace uitext;
@@ -2329,6 +2379,7 @@ int main(int, char**) {
   RUN_TEST(test_tabbar_texts_fit_in_every_state);
   RUN_TEST(test_coach_texts_fit);
   RUN_TEST(test_toast_names_fit);
+  RUN_TEST(test_names_drawn_with_the_fonts);
   RUN_TEST(test_queue_cap_texts_fit);
   RUN_TEST(test_push_out_texts_fit);
   RUN_TEST(test_empty_state_texts_fit);

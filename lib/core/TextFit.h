@@ -8,11 +8,16 @@
 // Names made to fit a column in a given font: the UI's text layer (the
 // VLW DejaVu fonts), portable and host-tested with a fake font.
 //
-//   - A code point the font has no glyph for becomes its TextFold
-//     look-alike (Full mode: "Ł" -> "L", "½" -> "1/2", "?" when nothing
-//     better): the DejaVu set covers Latin-1, the common Latin Extended-A
-//     letters and the typographic punctuation, so this is rare, but a
-//     missing glyph would otherwise draw as a blank box.
+//   - The text is composed first (textfold::Composer: NFD "e" + U+0301
+//     draws as the font's "é"), for the screen only.
+//   - A code point the font has no glyph for becomes, in this order: its
+//     Windows-1252 character when it is a C1 control the font has that for
+//     (U+0092 as ’: Latin-1 tags keep cp1252 bytes so, docs/METADATA.md
+//     5.2); else its TextFold look-alike (Full mode: "Ł" -> "L", "ș" ->
+//     "s", "Ａ" -> "A", "½" -> "1/2", a stray combining mark dropped, "?"
+//     when nothing better): the DejaVu set covers Latin-1, the common Latin
+//     Extended-A letters and the typographic punctuation, so this is rare,
+//     but a missing glyph would otherwise draw as a blank box.
 //   - Too wide: cut at a character boundary, trailing spaces dropped, and an
 //     ellipsis added ("…" when the font has it, else "...").
 //   - wrap(): up to n lines, broken at spaces, the last one ellipsised

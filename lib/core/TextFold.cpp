@@ -99,55 +99,115 @@ const char* symbols(uint32_t cp) {
     case 0x0153: return "oe";
     case 0x0132: return "IJ";
     case 0x0133: return "ij";
+    case 0x02C6: return "^";  // ˆ and ˜: cp1252's 0x88 and 0x98, which no font of ours has
+    case 0x02DC: return "~";
     case 0x20AC: return "EUR";
     case 0x2122: return "TM";
     default: return nullptr;
   }
 }
 
-// One-character strings for the table lookups.
-const char* single(char c) {
-  static const char kChars[] =
-      "A\0B\0C\0D\0E\0F\0G\0H\0I\0J\0K\0L\0M\0N\0O\0P\0Q\0R\0S\0T\0U\0V\0W\0X\0Y\0Z\0"
-      "a\0b\0c\0d\0e\0f\0g\0h\0i\0j\0k\0l\0m\0n\0o\0p\0q\0r\0s\0t\0u\0v\0w\0x\0y\0z\0";
-  if (c >= 'A' && c <= 'Z') return kChars + 2 * (c - 'A');
-  if (c >= 'a' && c <= 'z') return kChars + 52 + 2 * (c - 'a');
-  return "?";
-}
+// One-character strings for the table lookups: printable ASCII.
+struct AsciiStrings {
+  char s[95][2];
+  constexpr AsciiStrings() : s{} {
+    for (int i = 0; i < 95; ++i) {
+      s[i][0] = static_cast<char>(0x20 + i);
+      s[i][1] = 0;
+    }
+  }
+};
+constexpr AsciiStrings kAscii{};
+const char* single(char c) { return c >= 0x20 && c < 0x7F ? kAscii.s[c - 0x20] : "?"; }
 
-bool isAlpha(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
-bool isDigit(char c) { return c >= '0' && c <= '9'; }
 char lower(char c) { return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c; }
 
-// Order of a folded, lowercased character: other < digits < letters. One
-// rank per character (a folded character is ASCII, so `u` < 128 for the
-// others), which keeps compare() a strict weak ordering for std::sort.
-int rank(char c) {
-  const auto u = static_cast<unsigned char>(c);
-  if (isAlpha(c)) return 256 + u;
-  if (isDigit(c)) return 128 + u;
+// The combining marks Full folding drops: the generic blocks, the Cyrillic
+// ones and kana's voicing marks (what the composer didn't put on a letter),
+// and the variation selectors.
+bool dropped(uint32_t cp) {
+  return (cp >= 0x0300 && cp <= 0x036F) || (cp >= 0x0483 && cp <= 0x0489) || (cp >= 0x1AB0 && cp <= 0x1AFF) ||
+         (cp >= 0x1DC0 && cp <= 0x1DFF) || (cp >= 0x20D0 && cp <= 0x20FF) || (cp >= 0xFE00 && cp <= 0xFE0F) ||
+         (cp >= 0xFE20 && cp <= 0xFE2F) || cp == 0x3099 || cp == 0x309A;
+}
+
+const char* foldOf(uint32_t cp) {
+  uint32_t lo = 0, hi = tables::kFoldCount;
+  while (lo < hi) {
+    const uint32_t mid = lo + (hi - lo) / 2;
+    if (tables::kFolds[mid].cp < cp) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo < tables::kFoldCount && tables::kFolds[lo].cp == cp ? tables::kFolds[lo].to : nullptr;
+}
+
+// ---- the order's units ----
+//
+// compare() walks two texts a unit at a time: a character of the Full
+// folding, lower-cased. 0 is the end. Where two texts first differ, rank()
+// orders the two units: other < digits < letters, one rank per character,
+// so compare() stays a strict weak ordering for std::sort.
+uint32_t rank(uint32_t u) {
+  if (u >= 'a' && u <= 'z') return 256 + u;
+  if (u >= '0' && u <= '9') return 128 + u;
   return u;
 }
 
-// Full folding of a string, one ASCII character at a time.
-struct Cursor {
-  const char* s;
+// A unit is a letter or a digit (sameName()'s key).
+bool isKey(uint32_t u) { return (u >= 'a' && u <= 'z') || (u >= '0' && u <= '9'); }
+
+struct Units {
+  Composer c;
   const char* pending = nullptr;
-  explicit Cursor(const char* str) : s(str) {}
-  char next() {
+  Units(const char* s, const char* end) : c(s, end) {}
+  // The next unit, 0 at the end.
+  uint32_t next() {
     for (;;) {
-      if (pending && *pending) return *pending++;
-      const uint32_t cp = decode(s);
-      if (cp == 0) return 0;
-      if (cp < 0x80) return static_cast<char>(cp);
+      if (pending && *pending) return static_cast<unsigned char>(lower(*pending++));
+      const uint32_t cp = c.next();
+      if (cp < 0x80) return static_cast<unsigned char>(lower(static_cast<char>(cp)));  // 0 too: the end
       pending = replacement(cp, Mode::Full);
+    }
+  }
+  // The next letter or digit, 0 at the end.
+  uint32_t nextKey() {
+    for (;;) {
+      const uint32_t u = next();
+      if (u == 0 || isKey(u)) return u;
     }
   }
 };
 
+// A unit's ASCII letter, upper-cased (railKey()) or not, else '#'.
+char letterOf(uint32_t u, bool upper) {
+  if (u < 'a' || u > 'z') return '#';
+  return static_cast<char>(upper ? u - 'a' + 'A' : u);
+}
+
+// Hangul's composition (Unicode 3.12).
+constexpr uint32_t kSBase = 0xAC00, kLBase = 0x1100, kVBase = 0x1161, kTBase = 0x11A7;
+constexpr uint32_t kLCount = 19, kVCount = 21, kTCount = 28, kSCount = kLCount * kVCount * kTCount;
+
+// The composer's longest run of marks (a bit each in its taken_).
+constexpr int kMaxRun = 16;
+
+// Whether a mark the composer knows can start at `p` (its lead byte): the
+// fast path for the text in between.
+bool maybeMark(const char* p, const char* end) {
+  if (end && p >= end) return false;
+  const auto b = static_cast<unsigned char>(*p);
+  return b == 0xCC || b == 0xCD || b == 0xD2 || b == 0xE3;
+}
+
 }  // namespace
 
-uint32_t decode(const char*& s) {
+uint32_t decode(const char*& s) { return decode(s, nullptr); }
+
+uint32_t decode(const char*& s, const char* end) {
+  if (end && s >= end) return 0;
   const auto* p = reinterpret_cast<const unsigned char*>(s);
   const unsigned char c = p[0];
   if (c == 0) return 0;
@@ -174,6 +234,10 @@ uint32_t decode(const char*& s) {
     ++s;
     return 0xFFFD;
   }
+  if (end && end - s <= extra) {  // cut by `end`
+    ++s;
+    return 0xFFFD;
+  }
   for (int i = 1; i <= extra; ++i) {
     if ((p[i] & 0xC0) != 0x80) {
       ++s;
@@ -189,14 +253,51 @@ uint32_t decode(const char*& s) {
   return cp;
 }
 
+size_t encode(uint32_t cp, char out[4]) {
+  if (cp < 0x80) {
+    out[0] = static_cast<char>(cp);
+    return 1;
+  }
+  if (cp < 0x800) {
+    out[0] = static_cast<char>(0xC0 | cp >> 6);
+    out[1] = static_cast<char>(0x80 | (cp & 0x3F));
+    return 2;
+  }
+  if (cp < 0x10000) {
+    out[0] = static_cast<char>(0xE0 | cp >> 12);
+    out[1] = static_cast<char>(0x80 | (cp >> 6 & 0x3F));
+    out[2] = static_cast<char>(0x80 | (cp & 0x3F));
+    return 3;
+  }
+  out[0] = static_cast<char>(0xF0 | cp >> 18);
+  out[1] = static_cast<char>(0x80 | (cp >> 12 & 0x3F));
+  out[2] = static_cast<char>(0x80 | (cp >> 6 & 0x3F));
+  out[3] = static_cast<char>(0x80 | (cp & 0x3F));
+  return 4;
+}
+
+uint32_t fromC1(uint32_t cp) {
+  if (cp < 0x80 || cp > 0x9F) return cp;
+  const uint32_t to = tables::kCp1252[cp - 0x80];
+  return to ? to : cp;
+}
+
 const char* replacement(uint32_t cp, Mode mode) {
   if (cp < 0x80) return nullptr;
+  cp = fromC1(cp);
   if (const char* p = punctuation(cp)) return p;
   if (mode == Mode::Punctuation) return nullptr;
+  if (dropped(cp)) return "";
   if (const char* m = latin1Multi(cp)) return m;
   if (const char* sym = symbols(cp)) return sym;
   if (cp >= 0xC0 && cp <= 0xFF && kLatin1[cp - 0xC0]) return single(kLatin1[cp - 0xC0]);
   if (cp >= 0x100 && cp <= 0x17F) return single(kLatinExtA[cp - 0x100]);
+  if (cp >= 0x180 && cp <= 0x24F && tables::kLatinExtB[cp - 0x180]) return single(tables::kLatinExtB[cp - 0x180]);
+  if (cp >= 0x1E00 && cp <= 0x1EFF && tables::kLatinExtAdditional[cp - 0x1E00]) {
+    return single(tables::kLatinExtAdditional[cp - 0x1E00]);
+  }
+  if (cp >= 0xFF01 && cp <= 0xFF5E) return single(static_cast<char>(cp - 0xFEE0));  // fullwidth ASCII
+  if (const char* f = foldOf(cp)) return f;
   return "?";
 }
 
@@ -250,11 +351,148 @@ Result fold(const char* in, size_t inLen, char* out, size_t outSize, Mode mode) 
   return r;
 }
 
-int compare(const char* a, const char* b) {
-  Cursor ca(a), cb(b);
+// ---- composition ----
+
+uint8_t combiningClass(uint32_t cp) {
+  if (cp >= 0x0300 && cp <= 0x036F) return tables::kCombiningClass[cp - 0x0300];
+  if (cp >= 0x0483 && cp <= 0x0487) return 230;
+  if (cp == 0x3099 || cp == 0x309A) return 8;
+  return 0;
+}
+
+uint32_t composePair(uint32_t first, uint32_t second) {
+  if (first >= kLBase && first < kLBase + kLCount && second >= kVBase && second < kVBase + kVCount) {
+    return kSBase + ((first - kLBase) * kVCount + (second - kVBase)) * kTCount;
+  }
+  if (first >= kSBase && first < kSBase + kSCount && (first - kSBase) % kTCount == 0 && second > kTBase &&
+      second < kTBase + kTCount) {
+    return first + (second - kTBase);
+  }
+  if (first >= 0x4000) return 0;
+  uint32_t m = 0;
+  while (m < tables::kPairMarkCount && tables::kPairMarks[m] != second) ++m;
+  if (m == tables::kPairMarkCount) return 0;
+  const uint32_t key = first << 5 | m;
+  uint32_t lo = 0, hi = tables::kPairCount;
+  while (lo < hi) {
+    const uint32_t mid = lo + (hi - lo) / 2;
+    if ((tables::kPairs[mid] >> 13) < key) {
+      lo = mid + 1;
+    } else {
+      hi = mid;
+    }
+  }
+  if (lo == tables::kPairCount || (tables::kPairs[lo] >> 13) != key) return 0;
+  return (tables::kPairs[lo] & 0x1FFF) | (first & 0x2000);
+}
+
+uint32_t Composer::next() {
+  if (run_) {
+    if (const uint32_t m = leftover()) return m;
+    s_ = runEnd_;
+    run_ = nullptr;
+  }
+  // ASCII with no mark after it (most of every name): as it is.
+  if (!end_ || s_ < end_) {
+    const auto b = static_cast<unsigned char>(*s_);
+    if (b != 0 && b < 0x80 && !maybeMark(s_ + 1, end_)) {
+      ++s_;
+      return b;
+    }
+  }
+  uint32_t cp = decode(s_, end_);
+  if (cp == 0) return 0;
+  // Hangul: L + V, then LV + T (jamo are starters: nothing blocks them).
+  while (cp >= kLBase && ((cp < kLBase + kLCount) || (cp >= kSBase && cp < kSBase + kSCount))) {
+    const char* p = s_;
+    const uint32_t c = composePair(cp, decode(p, end_));
+    if (!c) break;
+    cp = c;
+    s_ = p;
+  }
+  if (!maybeMark(s_, end_)) return cp;
+  // The marks after it: [s_, p), n of them.
+  const char* p = s_;
+  int n = 0;
   for (;;) {
-    const char x = lower(ca.next());
-    const char y = lower(cb.next());
+    const char* q = p;
+    const uint32_t m = decode(q, end_);
+    if (m == 0 || combiningClass(m) == 0) break;
+    if (n == kMaxRun) return cp;  // too many to track: left as they are
+    ++n;
+    p = q;
+  }
+  if (n == 0) return cp;
+  // NFC's composition over the marks in canonical order (by class, each
+  // class in text order): a mark joins the letter unless a mark it didn't
+  // take, of the same class, comes first (blocked), or there's no pair.
+  uint16_t taken = 0;
+  int level = 0, blocked = 0;
+  for (;;) {
+    int nextLevel = 256;
+    const char* q = s_;
+    for (int i = 0; i < n; ++i) {
+      const int c = combiningClass(decode(q, end_));
+      if (c > level && c < nextLevel) nextLevel = c;
+    }
+    if (nextLevel == 256) break;
+    level = nextLevel;
+    q = s_;
+    for (int i = 0; i < n; ++i) {
+      const uint32_t m = decode(q, end_);
+      if (combiningClass(m) != level) continue;
+      if (blocked != level) {
+        if (const uint32_t c = composePair(cp, m)) {
+          cp = c;
+          taken = static_cast<uint16_t>(taken | 1u << i);
+          continue;
+        }
+      }
+      blocked = level;
+    }
+  }
+  if (taken == (1u << n) - 1) {
+    s_ = p;
+    return cp;
+  }
+  run_ = s_;
+  runEnd_ = p;
+  taken_ = taken;
+  count_ = static_cast<uint8_t>(n);
+  level_ = 0;
+  at_ = 0;
+  return cp;
+}
+
+// The next mark of the run the letter didn't take, in canonical order; 0
+// when none is left.
+uint32_t Composer::leftover() {
+  for (;;) {
+    const char* q = run_;
+    int nextLevel = 256;
+    for (int i = 0; i < count_; ++i) {
+      const uint32_t m = decode(q, end_);
+      if (taken_ >> i & 1) continue;
+      const int c = combiningClass(m);
+      if (c == level_ && i >= at_) {
+        at_ = static_cast<uint8_t>(i + 1);
+        return m;
+      }
+      if (c > level_ && c < nextLevel) nextLevel = c;
+    }
+    if (nextLevel == 256) return 0;
+    level_ = static_cast<uint8_t>(nextLevel);
+    at_ = 0;
+  }
+}
+
+// ---- the order ----
+
+int compare(const char* a, const char* b) {
+  Units ua(a, nullptr), ub(b, nullptr);
+  for (;;) {
+    const uint32_t x = ua.next();
+    const uint32_t y = ub.next();
     if (x != y) {
       if (x == 0) return -1;
       if (y == 0) return 1;
@@ -288,54 +526,30 @@ int compareSorted(const char* a, const char* b) {
 
 namespace {
 
-bool isAlnum(char c) { return isAlpha(c) || isDigit(c); }
-
-// A slice's characters, Full-folded and lower-cased, one at a time; with
-// `article`, past a leading "the " that a letter or digit follows.
-struct SliceCursor {
-  const char* s;
-  const char* end;
-  const char* pending = nullptr;
-  SliceCursor(const char* str, size_t len, bool article) : s(str), end(str + len) {
-    if (!article) return;
+// A slice's units; with `article`, past a leading "the " that a letter or
+// digit follows.
+Units sliceUnits(const char* s, size_t len, bool article) {
+  const char* end = s + len;
+  if (article) {
     const char* p = s;
     while (p < end && *p == ' ') ++p;
-    if (end - p < 4 || lower(p[0]) != 't' || lower(p[1]) != 'h' || lower(p[2]) != 'e' || p[3] != ' ') return;
-    SliceCursor rest(p + 4, static_cast<size_t>(end - (p + 4)), false);
-    if (rest.nextKey()) s = p + 4;
-  }
-  // The next character, 0 at the end.
-  char next() {
-    for (;;) {
-      if (pending && *pending) return lower(*pending++);
-      if (s >= end) return 0;
-      const uint32_t cp = decode(s);
-      if (cp == 0 || s > end) {  // the string's end, or a sequence the slice cuts
-        s = end;
-        return 0;
-      }
-      if (cp < 0x80) return lower(static_cast<char>(cp));
-      pending = replacement(cp, Mode::Full);
+    if (end - p >= 4 && lower(p[0]) == 't' && lower(p[1]) == 'h' && lower(p[2]) == 'e' && p[3] == ' ') {
+      Units rest(p + 4, end);
+      if (rest.nextKey()) return Units(p + 4, end);
     }
   }
-  // The next letter or digit, 0 at the end.
-  char nextKey() {
-    for (;;) {
-      const char c = next();
-      if (c == 0 || isAlnum(c)) return c;
-    }
-  }
-};
+  return Units(s, end);
+}
 
 }  // namespace
 
 bool sameName(const char* a, size_t aLen, const char* b, size_t bLen) {
   if (!a || !b) return false;
-  SliceCursor x(a, aLen, true), y(b, bLen, true);
+  Units x = sliceUnits(a, aLen, true), y = sliceUnits(b, bLen, true);
   bool any = false;
   for (;;) {
-    const char cx = x.nextKey();
-    const char cy = y.nextKey();
+    const uint32_t cx = x.nextKey();
+    const uint32_t cy = y.nextKey();
     if (cx != cy) return false;
     if (cx == 0) return any;
     any = true;
@@ -344,31 +558,28 @@ bool sameName(const char* a, size_t aLen, const char* b, size_t bLen) {
 
 bool startsWithName(const char* s, size_t sLen, const char* name, size_t nameLen) {
   if (!s || !name) return false;
-  SliceCursor n(name, nameLen, true), x(s, sLen, true);
-  char want = n.nextKey();
+  Units n = sliceUnits(name, nameLen, true), x = sliceUnits(s, sLen, true);
+  uint32_t want = n.nextKey();
   if (want == 0) return false;
   for (;;) {
-    const char c = x.next();
+    const uint32_t c = x.next();
     if (c == 0) return false;  // `s` ended first
-    if (!isAlnum(c)) continue;
+    if (!isKey(c)) continue;
     if (c != want) return false;
     want = n.nextKey();
-    if (want == 0) return !isAlnum(x.next());  // the word ends with the name
+    if (want == 0) return !isKey(x.next());  // the word ends with the name
   }
 }
 
 char railKey(const char* s) {
-  Cursor c(s);
-  const char first = c.next();
-  if (isAlpha(first)) return first >= 'a' ? static_cast<char>(first - 'a' + 'A') : first;
-  return '#';
+  Units u(s, nullptr);
+  return letterOf(u.next(), true);
 }
 
 char secondKey(const char* s) {
-  Cursor c(s);
-  if (c.next() == 0) return '#';
-  const char second = lower(c.next());
-  return isAlpha(second) ? second : '#';
+  Units u(s, nullptr);
+  if (u.next() == 0) return '#';
+  return letterOf(u.next(), false);
 }
 
 int bucketOf(char key) {
