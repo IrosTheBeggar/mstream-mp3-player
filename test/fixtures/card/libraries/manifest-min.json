@@ -1,0 +1,20 @@
+{
+ "format": "MSMF",
+ "file": "manifest-min.bin",
+ "generation": 1,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "commitTime": 1791300000,
+ "flags": 0,
+ "commitId": "0x0000000000000001",
+ "producer": "mstream-terminal 0.13.0",
+ "serverRevision": "",
+ "baseGeneration": 0,
+ "serverUrlKey": "0",
+ "note": "A checkpoint (FINAL clear): one companion, no LIBR, unknown server.",
+ "companions": [
+  {
+   "file": "tags-00000001.bin"
+  }
+ ],
+ "roots": []
+}

@@ -13,6 +13,7 @@
 #include "LibraryIndex.h"
 #include "PlaybackController.h"
 #include "QueueModel.h"
+#include "QueueView.h"
 #include "TrackCatalog.h"
 #include "TrackSeek.h"
 #include "hal/IAudioBackend.h"
@@ -404,6 +405,23 @@ void test_cue_while_paused_stays_paused_and_play_starts_it() {
   p.togglePlayPause();
   TEST_ASSERT_EQUAL_INT(2, a.playCount);
   TEST_ASSERT_FALSE(a.paused);
+}
+
+// What a play/pause would do now (playStartsEntry(): the firmware's note
+// behind the library update's fence): start an entry when stopped or on a
+// cued one; pause or resume the track the backend holds otherwise.
+void test_play_starts_entry_says_what_a_play_would_do() {
+  Rig r(3);
+  PlaybackController& p = r.player;
+  TEST_ASSERT_TRUE(p.playStartsEntry());  // stopped: a play starts entry 0
+  p.play(0);
+  TEST_ASSERT_FALSE(p.playStartsEntry());  // playing: a pause
+  p.togglePlayPause();
+  TEST_ASSERT_FALSE(p.playStartsEntry());  // paused, held: a resume
+  p.cueNext();
+  TEST_ASSERT_TRUE(p.playStartsEntry());  // cued at 0:00: a start
+  p.togglePlayPause();
+  TEST_ASSERT_FALSE(p.playStartsEntry());  // playing it
 }
 
 void test_cue_while_playing_skips() {
@@ -1759,7 +1777,11 @@ void test_a_start_point_on_a_cued_entry_keeps_its_told_length() {
   p.setRepeat(Repeat::One);
   p.play(1);
   a.duration = 207000;
+  TEST_ASSERT_EQUAL_UINT32(0, p.seeks());
   TEST_ASSERT_EQUAL(PlaybackController::Seek::Started, p.seek(r.queue.keyAt(1), 201000, 207000));
+  TEST_ASSERT_EQUAL_UINT32(1, p.seeks());  // counted (the card worker's seekSeq)
+  TEST_ASSERT_EQUAL(PlaybackController::Seek::Moved, p.seek(r.queue.keyAt(0), 1000, 207000));
+  TEST_ASSERT_EQUAL_UINT32(1, p.seeks());  // nothing done: not counted
   p.setPauseAfterTrack(true);
   a.position = 207000;
   a.finish();
@@ -1930,6 +1952,351 @@ void test_play_now_while_shuffled() {
   const uint32_t first = r.queue.currentTrack();
   p.setShuffle(false);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(first), p.currentIndex());  // the given order around it
+}
+
+// The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15)
+// through the player: a Play of 6,000 plays its chosen track from the
+// window that holds it. The tracks before a tapped start never played:
+// with the queue full, Play next and + Queue are refused (nothing to push
+// out, 15.8). One track on, the tapped one has played, and makes way;
+// nothing that plays changes. A tap on the first entry: nothing before
+// it, refused again; a remove makes room.
+void test_the_queue_cap_through_the_player() {
+  Rig r(8);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  std::vector<uint32_t> ids(6000);
+  for (uint32_t i = 0; i < 6000; ++i) ids[i] = i % 8;  // (the ids repeat: the queue doesn't mind)
+  TEST_ASSERT_TRUE(p.playNow(ids.data(), 6000, 5500));
+  TEST_ASSERT_EQUAL_UINT32(5000, r.queue.size());
+  TEST_ASSERT_EQUAL_INT(4500, p.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("/music/e.mp3", a.lastPath.c_str());  // 5,500 % 8: e
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  const uint32_t one[] = {7};
+  TEST_ASSERT_EQUAL_UINT32(0, r.queue.room());
+  TEST_ASSERT_FALSE(p.playNext(one, 1));
+  TEST_ASSERT_FALSE(p.addToQueue(one, 1));
+  TEST_ASSERT_EQUAL_UINT32(5000, r.queue.size());
+  p.next();  // the tapped track played
+  const uint32_t tapped = r.queue.keyAt(4500);
+  const int plays = a.playCount;
+  TEST_ASSERT_TRUE(p.playNext(one, 1));  // it makes room
+  TEST_ASSERT_EQUAL_UINT32(5000, r.queue.size());
+  TEST_ASSERT_EQUAL_INT(4500, p.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, r.queue.positionOf(tapped));
+  TEST_ASSERT_EQUAL_UINT32(1, r.queue.undoPushed());
+  TEST_ASSERT_EQUAL_UINT32(7, r.queue.trackAt(4501));  // right after the current entry
+  TEST_ASSERT_EQUAL_INT(plays, a.playCount);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  // The first entry plays: nothing played before it, nothing can go: refused.
+  p.play(0);
+  const int plays0 = a.playCount;
+  const uint32_t content = r.queue.contentVersion();
+  TEST_ASSERT_FALSE(p.playNext(one, 1));
+  TEST_ASSERT_FALSE(p.addToQueue(one, 1));
+  TEST_ASSERT_EQUAL_UINT32(content, r.queue.contentVersion());
+  TEST_ASSERT_EQUAL_INT(plays0, a.playCount);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+  const uint32_t at = 4999;
+  p.remove(&at, 1);
+  TEST_ASSERT_TRUE(p.playNext(one, 1));
+  TEST_ASSERT_EQUAL_UINT32(5000, r.queue.size());
+  TEST_ASSERT_EQUAL_UINT32(7, r.queue.trackAt(1));
+  TEST_ASSERT_EQUAL_INT(plays0, a.playCount);
+}
+
+namespace {
+// A full queue (the cap, 5,000) of the eight tracks over and over (entry i
+// is track i % 8: a, b, ... h, a, ...), played from the first to entry
+// `at`, one track after another: the `at` before it played (each heard,
+// docs/QUEUE-MODES.md 15.8).
+void playFull(Rig& r, uint32_t at) {
+  std::vector<uint32_t> ids(QueueModel::kMaxEntries);
+  for (uint32_t i = 0; i < ids.size(); ++i) ids[i] = i % 8;
+  TEST_ASSERT_TRUE(r.player.playNow(ids.data(), static_cast<uint32_t>(ids.size()), 0));
+  for (uint32_t i = 0; i < at; ++i) r.player.next();
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(at), r.player.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(at, r.queue.played());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
+}
+std::vector<uint32_t> keysOf(const QueueModel& q) {
+  std::vector<uint32_t> k;
+  for (uint32_t i = 0; i < q.size(); ++i) k.push_back(q.keyAt(i));
+  return k;
+}
+}  // namespace
+
+// The push-out (docs/QUEUE-MODES.md 15.8) changes nothing that plays: the
+// same entry (its key) plays on, a position or more further up, nothing
+// starts or stops, and the word on what follows keeps its token while the
+// next entry stays the same (nothing cut), changing only when the add
+// itself puts a new entry next. A join heard just before an add is taken
+// first: the joined entry is current, never pushed out. Shuffled the same.
+void test_a_push_out_changes_nothing_that_plays() {
+  for (int shuffled = 0; shuffled < 2; ++shuffled) {
+    Rig r(8);
+    FakeAudioBackend& a = r.audio;
+    PlaybackController& p = r.player;
+    p.setRepeat(PlaybackController::Repeat::Off);
+    playFull(r, 4500);
+    if (shuffled) p.setShuffle(true);  // what is up next shuffled; the 4,500 played stay
+    const uint32_t key = r.queue.currentKey();
+    const uint32_t nextKey = r.queue.keyAt(4501);
+    const int plays = a.playCount, stops = a.stopCount;
+    const size_t words = a.nexts.size();
+    const uint32_t t = p.offeredToken();
+    TEST_ASSERT_EQUAL_UINT32(nextKey, p.offeredKey());
+    const uint32_t h = 7;
+    TEST_ASSERT_TRUE(p.addToQueue(&h, 1));  // the oldest played entry goes; the next stays next
+    TEST_ASSERT_EQUAL_INT(4499, p.currentIndex());
+    TEST_ASSERT_EQUAL_UINT32(key, r.queue.currentKey());
+    TEST_ASSERT_EQUAL_UINT32(nextKey, r.queue.keyAt(4500));
+    TEST_ASSERT_EQUAL_INT(plays, a.playCount);
+    TEST_ASSERT_EQUAL_INT(stops, a.stopCount);
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+    TEST_ASSERT_EQUAL_size_t(words, a.nexts.size());  // nothing sent: nothing cut
+    TEST_ASSERT_EQUAL_UINT32(t, p.offeredToken());
+    // Play next puts h next: a new word, as with room to spare.
+    TEST_ASSERT_TRUE(p.playNext(&h, 1));
+    TEST_ASSERT_EQUAL_INT(4498, p.currentIndex());
+    TEST_ASSERT_EQUAL_UINT32(key, r.queue.currentKey());
+    TEST_ASSERT_TRUE(p.offeredToken() != t);
+    TEST_ASSERT_EQUAL_STRING("/music/h.mp3", a.nexts.back().path.c_str());
+    TEST_ASSERT_EQUAL_INT(plays, a.playCount);
+    // h's join heard, then an add: h is current first (no play), then
+    // the oldest entry goes from before it; what followed h follows it.
+    a.advances.push_back(p.offeredToken());
+    const uint32_t c = 2;
+    TEST_ASSERT_TRUE(p.addToQueue(&c, 1));
+    TEST_ASSERT_EQUAL_INT(4498, p.currentIndex());  // 4,499 once adopted, less the one pushed out
+    TEST_ASSERT_EQUAL_UINT32(7, r.queue.currentTrack());
+    TEST_ASSERT_EQUAL_INT(plays, a.playCount);
+    TEST_ASSERT_EQUAL_UINT32(1, p.gaplessStats().adopted);
+    TEST_ASSERT_EQUAL_UINT32(0, p.gaplessStats().restarted);
+    TEST_ASSERT_EQUAL_UINT32(nextKey, p.offeredKey());
+  }
+}
+
+// Repeat and the push-out (15.8). All: on the last entry the word is the
+// first (the oldest played); an add pushes it out and puts its own entry
+// next, so the loop is shorter by what went: after the added track it
+// wraps to the oldest entry still there. One: the word is the entry
+// itself, and stays (nothing cut); the loop goes on. Off: at the last
+// entry, an add gives it a next where it would have stopped.
+void test_a_push_out_under_each_repeat_mode() {
+  const uint32_t c = 2;
+  {
+    Rig r(8);
+    FakeAudioBackend& a = r.audio;
+    PlaybackController& p = r.player;
+    p.setRepeat(PlaybackController::Repeat::All);
+    playFull(r, 4999);  // h
+    TEST_ASSERT_EQUAL_STRING("/music/a.mp3", a.nexts.back().path.c_str());  // the first, round again
+    const uint32_t t = p.offeredToken();
+    TEST_ASSERT_TRUE(p.addToQueue(&c, 1));  // entry 0 (a) goes
+    TEST_ASSERT_EQUAL_INT(4998, p.currentIndex());
+    TEST_ASSERT_TRUE(p.offeredToken() != t);
+    TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.nexts.back().path.c_str());
+    a.finish();
+    p.update(0);
+    TEST_ASSERT_EQUAL_INT(4999, p.currentIndex());
+    TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.lastPath.c_str());
+    TEST_ASSERT_EQUAL_STRING("/music/b.mp3", a.nexts.back().path.c_str());  // round to the oldest left
+    a.finish();
+    p.update(0);
+    TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+    TEST_ASSERT_EQUAL_STRING("/music/b.mp3", a.lastPath.c_str());
+  }
+  {
+    Rig r(8);
+    FakeAudioBackend& a = r.audio;
+    PlaybackController& p = r.player;
+    p.setRepeat(PlaybackController::Repeat::One);
+    playFull(r, 2000);  // a
+    TEST_ASSERT_EQUAL_STRING("/music/a.mp3", a.nexts.back().path.c_str());  // itself
+    const uint32_t t = p.offeredToken();
+    const size_t words = a.nexts.size();
+    TEST_ASSERT_TRUE(p.addToQueue(&c, 1));
+    TEST_ASSERT_TRUE(p.playNext(&c, 1));
+    TEST_ASSERT_EQUAL_INT(1998, p.currentIndex());
+    TEST_ASSERT_EQUAL_UINT32(t, p.offeredToken());
+    TEST_ASSERT_EQUAL_size_t(words, a.nexts.size());
+    const int plays = a.playCount;
+    a.finish();
+    p.update(0);  // One: the same entry again
+    TEST_ASSERT_EQUAL_INT(1998, p.currentIndex());
+    TEST_ASSERT_EQUAL_STRING("/music/a.mp3", a.lastPath.c_str());
+    TEST_ASSERT_EQUAL_INT(plays + 1, a.playCount);
+    TEST_ASSERT_EQUAL_UINT32(1, p.repeats());
+  }
+  {
+    Rig r(8);
+    FakeAudioBackend& a = r.audio;
+    PlaybackController& p = r.player;
+    p.setRepeat(PlaybackController::Repeat::Off);
+    playFull(r, 4999);  // h, the last: nothing follows
+    TEST_ASSERT_EQUAL_UINT32(0, p.offeredToken());
+    TEST_ASSERT_TRUE(p.addToQueue(&c, 1));
+    TEST_ASSERT_EQUAL_INT(4998, p.currentIndex());
+    TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.nexts.back().path.c_str());
+    a.finish();
+    p.update(0);
+    TEST_ASSERT_EQUAL_INT(4999, p.currentIndex());
+    TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.lastPath.c_str());
+    a.finish();
+    p.update(0);  // Off: the end
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+    TEST_ASSERT_EQUAL_INT(4999, p.currentIndex());
+  }
+}
+
+// The Previous button's history is the queue's positions before the
+// current one: what an add pushed out is gone from it. With every played
+// entry gone (the current one first), prev at the first entry: Off, the
+// first again from 0:00; All, round to the last.
+void test_prev_after_a_push_out() {
+  Rig r(8);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.setRepeat(PlaybackController::Repeat::Off);
+  playFull(r, 3);  // d
+  const uint32_t h = 7;
+  TEST_ASSERT_TRUE(p.addToQueue(&h, 1));  // a goes
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  p.prev();  // within its first 3 s: the entry before
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.lastPath.c_str());
+  p.prev();
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+  const int plays = a.playCount;
+  p.prev();  // the first now: itself again (a is gone)
+  TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("/music/b.mp3", a.lastPath.c_str());
+  TEST_ASSERT_EQUAL_INT(plays + 1, a.playCount);
+  // d again (entry 2), and an add of 3 that takes every played entry (2)
+  // and then fits only 2: d first.
+  p.play(2);
+  const uint32_t three[] = {7, 7, 7};
+  TEST_ASSERT_TRUE(p.addToQueue(three, 3));
+  TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(3, r.queue.currentTrack());
+  TEST_ASSERT_EQUAL_UINT32(2, r.queue.undoPushed());
+  p.setRepeat(PlaybackController::Repeat::All);
+  p.prev();
+  TEST_ASSERT_EQUAL_INT(4999, p.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("/music/h.mp3", a.lastPath.c_str());
+}
+
+// The Undo of an add that pushed out (the toast's, or the console's qu):
+// what went comes back where it was, and what plays plays on (the same
+// entry, at its old position, nothing started). Once the player moved on
+// into the add, the Undo goes back to the entry that was current, as any
+// add's Undo does.
+void test_undo_of_a_push_out_through_the_player() {
+  Rig r(8);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  playFull(r, 100);  // e
+  const std::vector<uint32_t> before = keysOf(r.queue);
+  const int plays = a.playCount;
+  const uint32_t twelve[12] = {7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7};
+  TEST_ASSERT_TRUE(p.addToQueue(twelve, 12));
+  TEST_ASSERT_EQUAL_INT(88, p.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(12, r.queue.undoPushed());
+  TEST_ASSERT_TRUE(p.undo());
+  TEST_ASSERT_EQUAL_INT(100, p.currentIndex());
+  TEST_ASSERT_TRUE(keysOf(r.queue) == before);
+  TEST_ASSERT_EQUAL_INT(plays, a.playCount);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  // Play next, then on into it; the Undo: the entry that was current.
+  const uint32_t c = 2;
+  TEST_ASSERT_TRUE(p.playNext(&c, 1));
+  TEST_ASSERT_EQUAL_INT(99, p.currentIndex());
+  p.next();
+  TEST_ASSERT_EQUAL_STRING("/music/c.mp3", a.lastPath.c_str());
+  TEST_ASSERT_TRUE(p.undo());
+  TEST_ASSERT_EQUAL_INT(100, p.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("/music/e.mp3", a.lastPath.c_str());
+  TEST_ASSERT_TRUE(keysOf(r.queue) == before);
+}
+
+// What an add did is read off the queue after the call
+// (queueview::addOutcome()), never worked out before it: the call takes a
+// heard gapless join first, which moves the current entry, and what an add
+// can push out with it (docs/QUEUE-MODES.md 15.8). Repeat All on a full
+// queue's last entry, its join round to the first heard: room() read
+// before says 4,999, but the add finds the first entry current and nothing
+// played before it, and is refused (the refusal's note, not "Not enough
+// memory"). Entry 100 with its join to 101 heard: a + Queue of 300 takes
+// 101 and pushes out 101, the first of them at 4,899 (not 100, 100 and
+// 4,900, as read before). Play next the same, right after the entry the
+// join made current. An add to an empty queue: its first is current.
+void test_an_add_is_read_after_a_heard_join() {
+  const uint32_t c = 2;
+  {
+    Rig r(8);
+    FakeAudioBackend& a = r.audio;
+    PlaybackController& p = r.player;
+    p.setRepeat(PlaybackController::Repeat::All);
+    playFull(r, 4999);
+    TEST_ASSERT_EQUAL_UINT32(4999, r.queue.room());  // (stale by the time the add looks)
+    a.advances.push_back(p.offeredToken());          // the first entry's join, heard
+    const uint32_t sizeBefore = r.queue.size();
+    const bool ok = p.addToQueue(&c, 1);
+    TEST_ASSERT_FALSE(ok);
+    TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+    const queueview::AddOutcome o = queueview::addOutcome(r.queue, sizeBefore, 1, false, ok);
+    TEST_ASSERT_TRUE(o.refused);
+    TEST_ASSERT_EQUAL_UINT32(0, o.took);
+    TEST_ASSERT_EQUAL_UINT32(0, o.pushed);
+    TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, o.first);
+  }
+  {
+    Rig r(8);
+    FakeAudioBackend& a = r.audio;
+    PlaybackController& p = r.player;
+    p.setRepeat(PlaybackController::Repeat::Off);
+    playFull(r, 100);
+    TEST_ASSERT_EQUAL_UINT32(100, r.queue.pushedBy(300));  // (stale too)
+    a.advances.push_back(p.offeredToken());               // 101's join, heard
+    const std::vector<uint32_t> many(300, c);
+    uint32_t sizeBefore = r.queue.size();
+    bool ok = p.addToQueue(many.data(), 300);
+    TEST_ASSERT_TRUE(ok);
+    queueview::AddOutcome o = queueview::addOutcome(r.queue, sizeBefore, 300, false, ok);
+    TEST_ASSERT_FALSE(o.refused);
+    TEST_ASSERT_EQUAL_UINT32(101, o.took);
+    TEST_ASSERT_EQUAL_UINT32(101, o.pushed);
+    TEST_ASSERT_EQUAL_UINT32(4899, o.first);
+    TEST_ASSERT_EQUAL_UINT32(7, r.queue.trackAt(o.first - 1));  // the last entry before the add (h)
+    for (uint32_t i = o.first; i < 5000; ++i) TEST_ASSERT_EQUAL_UINT32(c, r.queue.trackAt(i));
+    TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+    // Its Undo (the 101 back, the 101 added gone), then Play next with a
+    // join heard again: right after the entry the join made current.
+    TEST_ASSERT_TRUE(p.undo());
+    TEST_ASSERT_EQUAL_INT(101, p.currentIndex());
+    a.advances.push_back(p.offeredToken());  // 102's join, heard
+    sizeBefore = r.queue.size();
+    const uint32_t three[] = {c, c, c};
+    ok = p.playNext(three, 3);
+    TEST_ASSERT_TRUE(ok);
+    o = queueview::addOutcome(r.queue, sizeBefore, 3, true, ok);
+    TEST_ASSERT_EQUAL_UINT32(3, o.took);
+    TEST_ASSERT_EQUAL_UINT32(3, o.pushed);
+    TEST_ASSERT_EQUAL_INT(99, p.currentIndex());  // 102 once the join was taken, less the 3
+    TEST_ASSERT_EQUAL_UINT32(100, o.first);
+    for (uint32_t i = 0; i < 3; ++i) TEST_ASSERT_EQUAL_UINT32(c, r.queue.trackAt(o.first + i));
+  }
+  {
+    QueueModel q;
+    const uint32_t three[] = {c, c, c};
+    TEST_ASSERT_TRUE(q.insertNext(three, 3));
+    const queueview::AddOutcome o = queueview::addOutcome(q, 0, 3, true, true);
+    TEST_ASSERT_EQUAL_UINT32(3, o.took);
+    TEST_ASSERT_EQUAL_UINT32(0, o.first);
+    TEST_ASSERT_EQUAL_UINT32(0, queueview::addOutcome(q, 3, 0, true, true).took);  // nothing asked
+  }
 }
 
 // Shuffle all (Ui::shuffleAll()): a Play that turns shuffle on, one edit;
@@ -2632,6 +2999,7 @@ int main(int, char**) {
   RUN_TEST(test_user_skip_resets_the_failure_count);
   RUN_TEST(test_cue_while_stopped_only_moves);
   RUN_TEST(test_cue_while_paused_stays_paused_and_play_starts_it);
+  RUN_TEST(test_play_starts_entry_says_what_a_play_would_do);
   RUN_TEST(test_cue_while_playing_skips);
   RUN_TEST(test_next_after_a_cue_while_paused_plays);
   RUN_TEST(test_cue_on_an_empty_queue_does_nothing);
@@ -2696,6 +3064,12 @@ int main(int, char**) {
   RUN_TEST(test_set_shuffle_changes_nothing_that_plays);
   RUN_TEST(test_shuffle_off_with_the_same_next_keeps_the_word);
   RUN_TEST(test_play_now_while_shuffled);
+  RUN_TEST(test_the_queue_cap_through_the_player);
+  RUN_TEST(test_a_push_out_changes_nothing_that_plays);
+  RUN_TEST(test_a_push_out_under_each_repeat_mode);
+  RUN_TEST(test_prev_after_a_push_out);
+  RUN_TEST(test_undo_of_a_push_out_through_the_player);
+  RUN_TEST(test_an_add_is_read_after_a_heard_join);
   RUN_TEST(test_shuffle_all_and_its_undo);
   RUN_TEST(test_a_start_points_anchor_reaches_the_play_once);
   RUN_TEST(test_a_start_points_anchor_goes_with_it);

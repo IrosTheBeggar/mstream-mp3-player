@@ -58,7 +58,12 @@ the prebuilt ESP-IDF libraries; WiFi (net80211, pp, wpa_supplicant, lwIP,
 mesh, ESP-NOW: pulled into the link, then collected to 0 bytes); the Arduino
 core's HTTPClient, Network and SPIFFS; Mbed TLS itself (only Espressif's
 SHA-256 port file is linked, see ESP-IDF). The Unity test framework is used
-by the host tests only.
+by the host tests only, and so is the copy of ChaN's FatFs R0.15 in
+`test/support/fatfs` (elm-chan.org's ff15.zip, SHA-256
+e0d76654d877e6c74be5ea3c395808794d495169514e98cbf6046168b8f4f070, with
+`ffunicode.c` cut to its CP850 table; its licence is that folder's
+LICENSE.txt, as in [LICENSES/FatFs.txt](LICENSES/FatFs.txt)): a host model
+of the firmware's FatFs, which is ESP-IDF's (below).
 
 A new dependency, a version bump or a change of what the firmware calls can
 change this list: check the map again before a release.
@@ -280,6 +285,17 @@ It contains:
     "Copyright (c) 2014 Neil Thiessen" (sd_diskio_crc.c).
   - HardwareSerial.cpp and chip-debug-report.cpp carry no notice (the
     package's LGPL-2.1-or-later applies).
+- **Its SD library is built from this repository's copy**, `lib/SD`
+  (SD.cpp, SD.h, sd_defines.h, sd_diskio.cpp, sd_diskio.h,
+  sd_diskio_crc.c, library.properties, from the package's
+  `libraries/SD` at 3.3.12), which PlatformIO takes before the
+  framework's. Apache-2.0 by the files' headers ("Copyright 2015-2016
+  Espressif Systems (Shanghai) PTE LTD"; sd_diskio_crc.c "Copyright (c)
+  2014 Neil Thiessen"); two files are modified: `sd_diskio.cpp` (it says
+  so at its top, and each change is marked: the card's busy waited out
+  after a write) and `library.properties` (its `version`, 3.3.12+mstream.1,
+  and its `paragraph`); the other files are unchanged (the SHA-256 sums of
+  every original and the changes are in lib/SD/README.md).
 - Source: https://github.com/espressif/arduino-esp32/tree/3.3.12
 - Also in the merged image: boot_app0.bin (at 0xE000), from this package.
 

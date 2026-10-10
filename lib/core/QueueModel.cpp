@@ -27,9 +27,19 @@ QueueModel::~QueueModel() {
   drop(undo_);
 }
 
+QueueModel::Window QueueModel::window(uint32_t n, int32_t current) {
+  if (n <= kMaxEntries) return Window{0, n};
+  const uint32_t cur = current < 0 ? 0 : static_cast<uint32_t>(current);
+  if (cur < kMaxEntries) return Window{0, kMaxEntries};
+  return Window{std::min(cur, n - kMaxEntries), kMaxEntries};
+}
+
 bool QueueModel::reserve(Array& a, uint32_t n) {
   if (n <= a.cap) return true;
-  uint32_t cap = a.cap ? a.cap * 2 : 16;
+  // Doubling, never past the cap (nothing asks for more), never less than
+  // asked.
+  uint32_t cap = !a.cap ? 16 : a.cap * 2;
+  if (cap > kMaxEntries) cap = kMaxEntries;
   if (cap < n) cap = n;
   auto* p = static_cast<Entry*>(allocFn_(static_cast<size_t>(cap) * sizeof(Entry)));
   if (!p) return false;
@@ -48,6 +58,13 @@ void QueueModel::drop(Array& a) {
 void QueueModel::changed() {
   ++contentVersion_;
   ++positionVersion_;
+  hear();  // whatever the edit made current (the class: heard)
+}
+
+uint32_t QueueModel::newKey() {
+  const uint32_t k = nextKey_;
+  nextKey_ = (nextKey_ + 1) & ~kHeard;
+  return k;
 }
 
 uint32_t QueueModel::draw(uint32_t bound) {
@@ -64,16 +81,34 @@ uint32_t QueueModel::draw(uint32_t bound) {
   return bound ? static_cast<uint32_t>((static_cast<uint64_t>(x) * bound) >> 32) : x;
 }
 
-uint32_t QueueModel::maxRank() const {
+uint32_t QueueModel::maxRank(uint32_t skip) const {
   uint32_t top = 0;
-  for (uint32_t i = 0; i < q_.size; ++i) top = std::max(top, q_.data[i].rank);
+  for (uint32_t i = 0; i < q_.size; ++i) {
+    if (skip && static_cast<int32_t>(i) < current_ && isHeard(q_.data[i])) {
+      --skip;
+      continue;
+    }
+    top = std::max(top, q_.data[i].rank);
+  }
   return top;
+}
+
+uint32_t QueueModel::played() const {
+  uint32_t n = 0;
+  for (int32_t i = 0; i < current_; ++i) n += isHeard(q_.data[i]) ? 1 : 0;
+  return n;
+}
+
+uint32_t QueueModel::pushedBy(uint32_t n) const {
+  const uint32_t open = spare();
+  const uint32_t lack = n > open ? n - open : 0;
+  return lack ? std::min(lack, played()) : 0;
 }
 
 uint32_t QueueModel::positionOf(uint32_t key) const {
   if (key == kNone) return kNone;
   for (uint32_t i = 0; i < q_.size; ++i) {
-    if (q_.data[i].key == key) return i;
+    if (keyOf(q_.data[i]) == key) return i;
   }
   return kNone;
 }
@@ -85,6 +120,7 @@ bool QueueModel::snapshot(Edit edit) {
   undo_.size = q_.size;
   undoCurrent_ = current_;
   undoShuffled_ = shuffled_;
+  undoPushed_ = 0;  // (an add that pushes out says so after)
   undoEdit_ = edit;
   return true;
 }
@@ -107,29 +143,60 @@ uint32_t* QueueModel::selection(const uint32_t* positions, uint32_t n, uint32_t*
 
 bool QueueModel::insertAt(uint32_t at, const uint32_t* tracks, uint32_t n, Edit edit) {
   if (n == 0) return true;
-  if (!tracks || q_.size + n < q_.size) return false;
+  if (!tracks) return false;
+  // As many as fit under the cap, the first ones, once what played (the
+  // heard entries before the current one) is pushed out to make room,
+  // oldest first, as many as the spare places lack; none: refused (full,
+  // and no played entry to push out).
+  const uint32_t open = spare();
+  const uint32_t room = open + played();
+  if (n > room) n = room;
+  if (n == 0) return false;
+  const uint32_t push = n > open ? n - open : 0;  // (at most played())
   const bool wasEmpty = current_ < 0;
   // Shuffled, the new entries' ranks: Play next's right after the current
-  // entry's (those above it go up by n), + Queue's after the highest. The
+  // entry's (those above it go up by n), + Queue's after the highest of
+  // what stays (the pushed-out ranks leave gaps, which ranks allow). The
   // highest rank grows by n either way: refused past 0xFFFFFFFF.
   uint32_t base = 0;
   if (shuffled_ && !wasEmpty) {
-    const uint32_t top = maxRank();
+    const uint32_t top = maxRank(push);
     if (top > kNone - n) return false;
     base = edit == Edit::InsertNext ? q_.data[current_].rank + 1 : top + 1;
   }
-  if (!reserve(q_, q_.size + n)) return false;
+  if (!reserve(q_, q_.size - push + n)) return false;
+  // What played goes only with a way back: no memory for the snapshot (the
+  // whole queue as it is, at most the cap's 60 KB), no push-out, and the
+  // add is refused as out of memory, the last edit's undo kept (reserve()
+  // copies the snapshot it holds).
+  if (push && !reserve(undo_, q_.size)) return false;
   snapshot(edit);
+  if (push) {
+    // The oldest played entries go: the first heard ones before the
+    // current entry. The unheard ones before it, the current entry and
+    // what follows it move up, in their order, and keep their keys.
+    const auto cur = static_cast<uint32_t>(current_);
+    uint32_t w = 0, left = push;
+    for (uint32_t i = 0; i < cur; ++i) {
+      if (left && isHeard(q_.data[i])) {
+        --left;
+        continue;
+      }
+      q_.data[w++] = q_.data[i];
+    }
+    std::memmove(q_.data + w, q_.data + cur, static_cast<size_t>(q_.size - cur) * sizeof(Entry));
+    q_.size -= push;
+    current_ -= static_cast<int32_t>(push);
+    at -= push;
+    undoPushed_ = push;
+  }
   if (shuffled_ && !wasEmpty && edit == Edit::InsertNext) {
     for (uint32_t i = 0; i < q_.size; ++i) {
       if (q_.data[i].rank >= base) q_.data[i].rank += n;
     }
   }
   std::memmove(q_.data + at + n, q_.data + at, static_cast<size_t>(q_.size - at) * sizeof(Entry));
-  for (uint32_t i = 0; i < n; ++i) {
-    q_.data[at + i] = Entry{tracks[i], nextKey_++, base + i};
-    if (nextKey_ == kNone) nextKey_ = 0;
-  }
+  for (uint32_t i = 0; i < n; ++i) q_.data[at + i] = Entry{tracks[i], newKey(), base + i};
   q_.size += n;
   if (wasEmpty) {
     current_ = static_cast<int32_t>(at);  // the queue was empty: the first new entry
@@ -150,30 +217,48 @@ bool QueueModel::insertNext(const uint32_t* tracks, uint32_t n) {
 
 bool QueueModel::append(const uint32_t* tracks, uint32_t n) { return insertAt(q_.size, tracks, n, Edit::Append); }
 
+void QueueModel::put(uint32_t pos, uint32_t track, uint32_t rank) { q_.data[pos] = Entry{track, newKey(), rank}; }
+
 bool QueueModel::replace(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffled) {
   if (n == 0 && shuffled == shuffled_) return clear();
-  if (n && (!tracks || !reserve(q_, n))) return false;
+  // Past the cap, kMaxEntries of them (the class): a block of that.
+  const uint32_t keep = n < kMaxEntries ? n : kMaxEntries;
+  if (n && (!tracks || !reserve(q_, keep))) return false;
   // The snapshot first: it holds the mode the queue was in (undo() puts it
   // back with the entries), then the mode this Play is laid out in.
   snapshot(n ? Edit::Replace : Edit::Clear);
   shuffled_ = shuffled;
-  for (uint32_t i = 0; i < n; ++i) {
-    q_.data[i] = Entry{tracks[i], nextKey_++, i};
-    if (nextKey_ == kNone) nextKey_ = 0;
-  }
-  q_.size = n;
+  q_.size = keep;
   if (n == 0) {
     current_ = -1;
   } else if (shuffled_) {
     // The chosen track first (kAnyStart: a random one), every other one
     // shuffled after it, those before it in the list too; the ranks the
-    // given order.
+    // given order (each track's place in the list).
     const uint32_t s = start == kAnyStart ? draw(n) : (start < n ? start : n - 1);
-    std::swap(q_.data[0], q_.data[s]);
-    shuffle::permute(q_.data + 1, n - 1, draw());
+    if (keep == n) {
+      for (uint32_t i = 0; i < n; ++i) put(i, tracks[i], i);
+      std::swap(q_.data[0], q_.data[s]);
+    } else {
+      // Past the cap: the chosen one, then a random kMaxEntries - 1 of the
+      // others, picked in the list's order (the rank of each its place in
+      // the whole list: Off gives them in the given order, gaps and all).
+      put(0, tracks[s], s);
+      uint32_t w = 1;
+      shuffle::sample(n - 1, keep - 1, draw(), [&](uint32_t j) {
+        const uint32_t i = j < s ? j : j + 1;  // (s itself is first already)
+        put(w++, tracks[i], i);
+      });
+    }
+    shuffle::permute(q_.data + 1, keep - 1, draw());
     current_ = 0;
   } else {
-    current_ = static_cast<int32_t>(start == kAnyStart ? 0 : start < n ? start : n - 1);
+    // From `start` (kAnyStart: the first); past the cap, the window that
+    // holds it.
+    const uint32_t s = start == kAnyStart ? 0 : (start < n ? start : n - 1);
+    const Window w = window(n, static_cast<int32_t>(s));
+    for (uint32_t i = 0; i < w.count; ++i) put(i, tracks[w.first + i], i);
+    current_ = static_cast<int32_t>(s - w.first);
   }
   changed();
   return true;
@@ -297,6 +382,7 @@ bool QueueModel::setCurrent(uint32_t pos) {
     current_ = static_cast<int32_t>(pos);
     ++positionVersion_;
   }
+  hear();  // (a jump: only where it lands; what it passed over isn't)
   return true;
 }
 
@@ -305,6 +391,7 @@ bool QueueModel::step(int delta, bool wrap) {
   if (next == kNone) return false;
   current_ = static_cast<int32_t>(next);
   ++positionVersion_;
+  hear();
   return true;
 }
 
@@ -325,11 +412,32 @@ bool QueueModel::undo() {
   std::swap(q_, undo_);  // undo_ keeps the edited entries' memory for the next snapshot
   undoEdit_ = Edit::None;
   shuffled_ = undoShuffled_;  // the snapshot's mode (a Play that set it: the one before)
+  carryHeard();
   const uint32_t pos = positionOf(key);
   current_ = pos != kNone ? static_cast<int32_t>(pos) : undoCurrent_;
   if (current_ >= static_cast<int32_t>(q_.size)) current_ = static_cast<int32_t>(q_.size) - 1;
   changed();
   return true;
+}
+
+void QueueModel::carryHeard() {
+  // The snapshot's marks are as old as its edit; an entry heard since (a
+  // track played on, a skip, a tap) is marked in the queue left behind.
+  // That one is of no further use (undo_ now, the next snapshot's memory):
+  // sorted by key in place (introsort allocates nothing), each entry put
+  // back looks its key up there. Marks are only ever set, so nothing is
+  // cleared.
+  Entry* const old = undo_.data;
+  const uint32_t n = undo_.size;
+  if (n == 0 || q_.size == 0) return;
+  std::sort(old, old + n, [](const Entry& a, const Entry& b) { return keyOf(a) < keyOf(b); });
+  for (uint32_t i = 0; i < q_.size; ++i) {
+    Entry& e = q_.data[i];
+    if (isHeard(e)) continue;
+    const uint32_t k = keyOf(e);
+    const Entry* hit = std::lower_bound(old, old + n, k, [](const Entry& a, uint32_t key) { return keyOf(a) < key; });
+    if (hit != old + n && keyOf(*hit) == k && isHeard(*hit)) e.key |= kHeard;
+  }
 }
 
 void QueueModel::dropUndo() {
@@ -351,7 +459,7 @@ bool QueueModel::setShuffled(bool on) {
     // sort would ask the heap for a buffer.
     const uint32_t key = currentKey();
     std::sort(q_.data, q_.data + q_.size, [](const Entry& a, const Entry& b) {
-      return a.rank != b.rank ? a.rank < b.rank : a.key < b.key;
+      return a.rank != b.rank ? a.rank < b.rank : keyOf(a) < keyOf(b);
     });
     if (current_ >= 0) current_ = static_cast<int32_t>(positionOf(key));
   }
@@ -362,11 +470,33 @@ bool QueueModel::setShuffled(bool on) {
 }
 
 bool QueueModel::assign(const uint32_t* tracks, uint32_t n, int32_t current, bool shuffled, const uint32_t* ranks) {
-  if (n && (!tracks || !reserve(q_, n))) return false;
-  for (uint32_t i = 0; i < n; ++i) {
-    q_.data[i] = Entry{tracks[i], nextKey_++, ranks ? ranks[i] : i};
-    if (nextKey_ == kNone) nextKey_ = 0;
+  if (n && !tracks) return false;
+  // Past the cap, the window that holds the current entry (its ranks with
+  // it: gaps are fine).
+  const Window kept = window(n, current);
+  if (kept.first) {
+    tracks += kept.first;
+    if (ranks) ranks += kept.first;
+    current -= static_cast<int32_t>(kept.first);  // (>= 0: the window starts at most at it)
   }
+  n = kept.count;
+  // A block of exactly n entries (docs/METADATA.md section 3.5): the new
+  // one first, so a failure leaves the queue as it was; what it held isn't
+  // copied (all of it is replaced). A smaller n with no new block to be had
+  // keeps the bigger one; nothing to hold gives the block back.
+  if (n == 0) {
+    drop(q_);
+  } else if (n != q_.cap) {
+    auto* p = static_cast<Entry*>(allocFn_(static_cast<size_t>(n) * sizeof(Entry)));
+    if (p) {
+      if (q_.data) freeFn_(q_.data);
+      q_.data = p;
+      q_.cap = n;
+    } else if (n > q_.cap) {
+      return false;
+    }
+  }
+  for (uint32_t i = 0; i < n; ++i) q_.data[i] = Entry{tracks[i], newKey(), ranks ? ranks[i] : i};
   shuffled_ = shuffled;
   q_.size = n;
   if (n == 0) {
@@ -374,7 +504,17 @@ bool QueueModel::assign(const uint32_t* tracks, uint32_t n, int32_t current, boo
   } else {
     current_ = current < 0 ? 0 : (current >= static_cast<int32_t>(n) ? static_cast<int32_t>(n) - 1 : current);
   }
+  // What played isn't in the file: every entry before the current one
+  // counts as heard (the class; docs/QUEUE-MODES.md 15.8).
+  for (int32_t i = 0; i < current_; ++i) q_.data[i].key |= kHeard;
   dropUndo();
   changed();
   return true;
+}
+
+void QueueModel::release() {
+  drop(q_);
+  current_ = -1;
+  dropUndo();
+  changed();
 }

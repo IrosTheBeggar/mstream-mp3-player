@@ -103,6 +103,7 @@ public:
   // ‹ zone, and its pill's zone when the toast has no buttons there.
   bool passesThrough(const InputEvent& e) const;
   bool undo() const { return undo_; }
+  bool view() const { return view_; }
   bool expired(uint32_t nowMs) const { return up_ && static_cast<int32_t>(nowMs - untilMs_) >= 0; }
   // `pressed`: the button under a finger (hit()'s 2 or 3), 0 none.
   void draw(int pressed = 0);

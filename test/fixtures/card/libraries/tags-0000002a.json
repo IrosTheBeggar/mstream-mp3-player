@@ -1,0 +1,588 @@
+{
+ "format": "MPTG",
+ "file": "tags-0000002a.bin",
+ "generation": 42,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "minor": 0,
+ "source": 2,
+ "parserVersion": 1,
+ "readRules": 1,
+ "producer": "mstream-terminal 0.13.0",
+ "note": "The transfer's tags file of the fixture card: tag values are raw (each writer applies 2.3.6 and sets TRUNCATED); flags, known and the enums as given.",
+ "folders": [
+  {
+   "path": "Artist/Album",
+   "flags": 2
+  },
+  {
+   "path": "Owned Empty",
+   "flags": 1
+  },
+  {
+   "path": "Owned Parent/Owned Child",
+   "flags": 1
+  },
+  {
+   "path": "Artist/Album/CD1",
+   "flags": 1
+  }
+ ],
+ "records": [
+  {
+   "path": "Artist/Album/01 - Title.mp3",
+   "size": 1000,
+   "fatTime": "0x5D4773D5",
+   "durationMs": 180000,
+   "qfp": "0x511914291A7734FD",
+   "known": 131071,
+   "container": 1,
+   "note": "every field; a list artist; ReplayGain; a JPEG front cover",
+   "tags": {
+    "title": [
+     "Title"
+    ],
+    "artist": [
+     "Lantern Choir",
+     "Guest Voice"
+    ],
+    "album": [
+     "Album"
+    ],
+    "albumArtist": [
+     "Lantern Choir"
+    ],
+    "genre": [
+     "Ambient",
+     "Electronic"
+    ],
+    "composer": [
+     "Pale Ferns"
+    ],
+    "titleSort": [
+     "Title"
+    ],
+    "artistSort": [
+     "Choir, Lantern"
+    ],
+    "albumSort": [
+     "Album"
+    ],
+    "albumArtistSort": [
+     "Choir, Lantern"
+    ],
+    "mbAlbumId": [
+     "7a1c0d3e-1111-4222-8333-944455556666"
+    ],
+    "mbRecordingId": [
+     "0b2c3d4e-5555-4666-8777-988899990000"
+    ]
+   },
+   "year": 2019,
+   "track": 1,
+   "trackTotal": 10,
+   "disc": 1,
+   "discTotal": 2,
+   "bpm10": 1210,
+   "camelot": 8,
+   "rgTrackGain": -679,
+   "rgAlbumGain": -650,
+   "rgTrackPeak": 9886,
+   "rgAlbumPeak": 9990,
+   "flags": 14,
+   "picture": {
+    "offset": 1024,
+    "length": 50000,
+    "type": 3,
+    "mime": 1,
+    "coding": 0
+   },
+   "ledger": {
+    "serverPath": "Music/Artist/Album/01 - Title.mp3",
+    "mstreamId": 100,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "de630421a12d8680abea38a63f9f80ee",
+    "fileHash": "5eccb9f4bf885831cebc6d802638ddc7",
+    "serverModified": 1790000000000,
+    "serverSize": 1000,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist/Album/02 - Other.mp3",
+   "size": 1037,
+   "fatTime": "0x5D4773D7",
+   "durationMs": 181000,
+   "qfp": "0x5F5180909F2F652C",
+   "known": 131071,
+   "container": 1,
+   "note": "repeats dropped; a TAB to a space; an ID3 unsynchronised picture",
+   "tags": {
+    "title": [
+     "A\tB"
+    ],
+    "artist": [
+     "X",
+     "X",
+     "Y"
+    ],
+    "album": [
+     "Album"
+    ],
+    "genre": [
+     "Rock",
+     "",
+     "Rock"
+    ]
+   },
+   "year": 2019,
+   "track": 2,
+   "trackTotal": 10,
+   "disc": 1,
+   "discTotal": 2,
+   "picture": {
+    "offset": 600,
+    "length": 4000,
+    "type": 0,
+    "mime": 1,
+    "coding": 1
+   },
+   "ledger": {
+    "serverPath": "Music/Artist/Album/02 - Other.mp3",
+    "mstreamId": 101,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "8d4c144cb61756e9e792a2d6e657cd1c",
+    "fileHash": "0229f8c33c8b9b2bf0c8b831d76a852b",
+    "serverModified": 1790000000001,
+    "serverSize": 1037,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist/Album/cover.jpg",
+   "size": 1074,
+   "fatTime": "0x5D4773D9",
+   "durationMs": 0,
+   "qfp": "0x71FC8D9AF3938D9F",
+   "known": 0,
+   "container": 255,
+   "note": "an owned non-audio file: container 255, no run, known 0",
+   "ledger": {
+    "serverPath": "",
+    "originFlags": 0
+   }
+  },
+  {
+   "path": "Artist/Album/CD1/01 - Disc One.flac",
+   "size": 1111,
+   "fatTime": "0x5D4773DB",
+   "durationMs": 183000,
+   "qfp": "0x9F7C73C4FF70A227",
+   "known": 131071,
+   "container": 2,
+   "note": "FLAC; compilation yes; the server's BPM; a PNG picture",
+   "tags": {
+    "title": [
+     "Disc One"
+    ],
+    "artist": [
+     "Lantern Choir"
+    ],
+    "album": [
+     "Album"
+    ]
+   },
+   "disc": 1,
+   "discTotal": 2,
+   "track": 1,
+   "bpm10": 1280,
+   "camelot": 13,
+   "flags": 257,
+   "picture": {
+    "offset": 300,
+    "length": 9000,
+    "type": 3,
+    "mime": 2,
+    "coding": 0
+   },
+   "ledger": {
+    "serverPath": "Music/Artist/Album/CD1/01 - Disc One.flac",
+    "mstreamId": 103,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "34efaa2cb3b3cb487ba8995798142087",
+    "fileHash": "4f3df78465b9217752512f885ad1eb70",
+    "serverModified": 1790000000003,
+    "serverSize": 1111,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist/Album/CD2/01 - Disc Two.opus",
+   "size": 1148,
+   "fatTime": "0x5D4773DD",
+   "durationMs": 184000,
+   "qfp": "0xD92390AA36A0C5EF",
+   "known": 131071,
+   "container": 3,
+   "note": "Opus: an R128 gain; a picture across Ogg pages",
+   "tags": {
+    "title": [
+     "Disc Two"
+    ],
+    "artist": [
+     "Lantern Choir"
+    ],
+    "album": [
+     "Album"
+    ]
+   },
+   "disc": 2,
+   "discTotal": 2,
+   "track": 1,
+   "rgTrackGain": 513,
+   "flags": 20,
+   "picture": {
+    "offset": 120,
+    "length": 12000,
+    "type": 3,
+    "mime": 1,
+    "coding": 2
+   },
+   "ledger": {
+    "serverPath": "Music/Artist/Album/CD2/01 - Disc Two.opus",
+    "mstreamId": 104,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "57213fca5d1f7e6c81a85895bc7c25fb",
+    "fileHash": "c4f2294b043f99cd20422bda6ca6060a",
+    "serverModified": 1790000000004,
+    "serverSize": 1148,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Artist/x.mp3",
+   "size": 1185,
+   "fatTime": "0x5D4773DF",
+   "durationMs": 0,
+   "qfp": "0x34CF351FEF48DB69",
+   "known": 0,
+   "container": 1,
+   "note": "UNREADABLE without FROM_API: known 0, no run",
+   "flags": 64,
+   "ledger": {
+    "serverPath": "Music/Artist/x.mp3",
+    "mstreamId": 105,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "964babacf57a5e53eb4b9d191e183f96",
+    "fileHash": "6cdda826652e06030ce318780af0843b",
+    "serverModified": 1790000000005,
+    "serverSize": 1185,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "A/x.mp3",
+   "size": 1222,
+   "fatTime": "0x5D4773E1",
+   "durationMs": 186000,
+   "qfp": "0x5B025D0A25478D5B",
+   "known": 131071,
+   "container": 1,
+   "note": "NO_TAGS: every known bit, no run",
+   "flags": 32,
+   "ledger": {
+    "serverPath": "Music/A/x.mp3",
+    "mstreamId": 106,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "0a729058ae250b9082415ea16cfcb65d",
+    "fileHash": "aa5f771ee2e91491f667f838e4705a0e",
+    "serverModified": 1790000000006,
+    "serverSize": 1222,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "A B/y.mp3",
+   "size": 1259,
+   "fatTime": "0x5D4773E3",
+   "durationMs": 187000,
+   "qfp": "0x93D368FD48F5978E",
+   "known": 20247,
+   "container": 1,
+   "note": "FROM_API: only the bits of the fields filled",
+   "tags": {
+    "title": [
+     "Why"
+    ],
+    "artist": [
+     "Some Band, Other Band"
+    ],
+    "album": [
+     "Collected"
+    ],
+    "genre": [
+     "Pop"
+    ]
+   },
+   "year": 2001,
+   "track": 3,
+   "disc": 1,
+   "rgTrackGain": -512,
+   "flags": 516,
+   "ledger": {
+    "serverPath": "Music/A B/y.mp3",
+    "mstreamId": 107,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "534f744554e546a339bf7db5019ac212",
+    "fileHash": "c7e917210dddd412c83a93b98a57f27c",
+    "serverModified": 1790000000007,
+    "serverSize": 1259,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "A-/z.flac",
+   "size": 1296,
+   "fatTime": "0x5D4773E5",
+   "durationMs": 188000,
+   "qfp": "0xE0AFEE554EB7A402",
+   "known": 131071,
+   "container": 2,
+   "note": "five 204-byte artist values: four kept, TRUNCATED",
+   "tags": {
+    "title": [
+     "Zed"
+    ],
+    "artist": [
+     "PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP",
+     "QQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQQ",
+     "RRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRRR",
+     "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+     "TTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTTT"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Music/A-/z.flac",
+    "mstreamId": 108,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "bcba281c62902ce6e13bdb916f811b7c",
+    "fileHash": "6892e53cc6533ace0d9797501bc7713b",
+    "serverModified": 1790000000008,
+    "serverSize": 1296,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "B/w.opus",
+   "size": 1333,
+   "fatTime": "0x5D4773E7",
+   "durationMs": 189000,
+   "qfp": "0xCA04D00DDDA519B4",
+   "known": 131071,
+   "container": 3,
+   "note": "values of 255, 255, 255, 250, 10 and 1 bytes: four kept",
+   "tags": {
+    "title": [
+     "Double U"
+    ],
+    "genre": [
+     "ggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggggg",
+     "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh",
+     "iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii",
+     "jjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjjj",
+     "kkkkkkkkkk",
+     "l"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Music/B/w.opus",
+    "mstreamId": 109,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "e419a1ffdb8c389398639aaca8ffdd20",
+    "fileHash": "061043f27f31896c7a6efc96f68c44b2",
+    "serverModified": 1790000000009,
+    "serverSize": 1333,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "a/v.mp3",
+   "size": 1370,
+   "fatTime": "0x5D4773E9",
+   "durationMs": 190000,
+   "qfp": "0xC1AFB373B5C46FC5",
+   "known": 131071,
+   "container": 1,
+   "note": "a 300-byte title cut to 255; 254 bytes and an e-acute cut to 254",
+   "tags": {
+    "title": [
+     "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt"
+    ],
+    "album": [
+     "uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuué"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Music/a/v.mp3",
+    "mstreamId": 110,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "a71f1bc094d924191740e70eb5f90d0c",
+    "fileHash": "81774dadaac627e197275c652c102949",
+    "serverModified": 1790000000010,
+    "serverSize": 1370,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "É/u.mp3",
+   "size": 1407,
+   "fatTime": "0x5D4773EB",
+   "durationMs": 191000,
+   "qfp": "0xB303FAD1C9821355",
+   "known": 131071,
+   "container": 1,
+   "note": "U+0080-U+009F kept; U+007F and U+001F to spaces",
+   "tags": {
+    "title": [
+     "x"
+    ],
+    "artist": [
+     "DelName",
+     "Unit\u001fSep"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Music/É/u.mp3",
+    "mstreamId": 111,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "b686846e28a0bd712d4494e18dc0037f",
+    "fileHash": "acfebcd6608cdf659f568e6bd97b5ad0",
+    "serverModified": 1790000000011,
+    "serverSize": 1407,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Café/Album/01 - Title.mp3",
+   "size": 1444,
+   "fatTime": "0x5D4773ED",
+   "durationMs": 192000,
+   "qfp": "0x4C6900CDAB95DD90",
+   "known": 131071,
+   "container": 1,
+   "note": "NFC: hashes as F1B24FC757494F2B",
+   "tags": {
+    "title": [
+     "Title"
+    ],
+    "artist": [
+     "Café Trio"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Music/Café/Album/01 - Title.mp3",
+    "mstreamId": 112,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "ee222598cb53108eac676529f0bebb7f",
+    "fileHash": "78c0962bd4da6c9ebd5a39c5cfe8741e",
+    "serverModified": 1790000000012,
+    "serverSize": 1444,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Café/Album/01 - Title.mp3",
+   "size": 1481,
+   "fatTime": "0x5D4773EF",
+   "durationMs": 193000,
+   "qfp": "0x8E0D68D93A4F2A0E",
+   "known": 131071,
+   "container": 1,
+   "note": "NFD: another name, another hash (57017C0CC011BB1B)",
+   "tags": {
+    "title": [
+     "Title"
+    ],
+    "artist": [
+     "Café Trio"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Music/Café/Album/01 - Title.mp3",
+    "mstreamId": 113,
+    "albumId": 7,
+    "artistId": 3,
+    "audioHash": "cec2c941737698aff73c360b47b9f957",
+    "fileHash": "ac981ead4828ee29a3b292755eb2366e",
+    "serverModified": 1790000000013,
+    "serverSize": 1481,
+    "createdAt": 1790000000,
+    "hashV": 2,
+    "originFlags": 2
+   }
+  },
+  {
+   "path": "Loose Intro.mp3",
+   "size": 1518,
+   "fatTime": "0x5D4773F1",
+   "durationMs": 194000,
+   "qfp": "0x06285D2F61887807",
+   "known": 131071,
+   "container": 1,
+   "note": "a loose file at /music; a conversion; a sampled hash",
+   "tags": {
+    "title": [
+     "Loose Intro"
+    ]
+   },
+   "ledger": {
+    "serverPath": "Music/Loose Intro.flac",
+    "mstreamId": 99,
+    "audioHash": "b3b44e43aa5421d268e5747dd2d5f5c8",
+    "fileHash": "2628552b1acb13567656cfb6d8ef4538",
+    "serverModified": 1790000000999,
+    "serverSize": 26214400,
+    "createdAt": 1790000001,
+    "hashV": 2,
+    "originFlags": 1,
+    "convertedTo": 1,
+    "convertKbps": 320
+   }
+  }
+ ]
+}

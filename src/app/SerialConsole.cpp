@@ -5,6 +5,8 @@
 
 #include <Arduino.h>
 
+#include "app/LoopStack.h"
+
 void SerialConsole::begin() {
   const uint32_t t0 = millis();
   while (Serial.available() == 0 && millis() - t0 < HostLine::kQuietMs) delay(1);
@@ -36,7 +38,7 @@ bool SerialConsole::poll() {
     const HostLine::Byte kind = host_.push(c, pending_ == Pending::Rate && arg_.length() > 0, now);
     switch (kind) {
       case HostLine::Byte::Console:
-        key(c);
+        take(c);
         break;
       case HostLine::Byte::Start:
         if (pending_ != Pending::None) {
@@ -63,7 +65,7 @@ bool SerialConsole::poll() {
   // moment, and a byte it held was a keypress.
   if (host_.syncing()) {
     char c = 0;
-    if (host_.quiet(millis(), &c)) key(c);
+    if (host_.quiet(millis(), &c)) take(c);
     if (!host_.syncing()) {
       if (!syncLogged_ && host_.dropped() > 0) {
         Serial.printf("[console] dropped %lu bytes of a computer's line already under way (a boot or lost input; "
@@ -76,11 +78,35 @@ bool SerialConsole::poll() {
   return any;
 }
 
-void SerialConsole::key(char c) {
+void SerialConsole::take(char c) {
+  // A byte that can run a command (Enter after an argument, or a key of
+  // its own): the stack under the console painted again first, so the
+  // low-water mark after it is the command's own.
+  const bool entered = pending_ != Pending::None;
+  if (!entered || c == '\n' || c == '\r') loopstack::arm();
+  const char ran = key(c);
+  if (!ran) return;
+  const uint32_t left = loopstack::leftSinceArm();
+  const bool low = left < loopstack::kMinLeft;
+  if (!low && !entered && ran != 'l' && ran != 's' && ran != 'L') return;
+  // (The command as typed: its letter, and its argument's first 40 bytes.)
+  Serial.printf("[console] %c%.40s: the loop task's stack: %lu B never used during it (of %lu KB; %lu B the lowest "
+                "since the boot)",
+                ran, entered ? arg_.c_str() : "", static_cast<unsigned long>(left),
+                static_cast<unsigned long>(loopstack::kSize / 1024), static_cast<unsigned long>(loopstack::lowestLeft()));
+  if (low) {
+    Serial.printf(": LOW, under %lu B (an interrupt, or the SD driver's log line after a card error, on top of it "
+                  "could overflow the stack)",
+                  static_cast<unsigned long>(loopstack::kMinLeft));
+  }
+  Serial.println();
+}
+
+char SerialConsole::key(char c) {
   if (pending_ != Pending::None) {
     if (c != '\n' && c != '\r') {  // collect the argument up to Enter
       arg_ += c;
-      return;
+      return 0;
     }
     const Pending what = pending_;
     pending_ = Pending::None;
@@ -196,7 +222,7 @@ void SerialConsole::key(char c) {
       case Pending::None:
         break;
     }
-    return;
+    return pendingKey_;
   }
   switch (c) {
     case 'n': Serial.println("> next"); actions_.next(); break;
@@ -236,7 +262,11 @@ void SerialConsole::key(char c) {
     case 'R': pending_ = Pending::Rate; arg_ = ""; break;
     case 'G': pending_ = Pending::Gapless; arg_ = ""; break;
     case 'O': pending_ = Pending::Opus; arg_ = ""; break;
-    default: break;  // newlines etc.
+    default: return 0;  // newlines etc.
   }
-  if (pending_ != Pending::None) pendingKey_ = c;
+  if (pending_ != Pending::None) {
+    pendingKey_ = c;
+    return 0;  // its argument next
+  }
+  return c;
 }

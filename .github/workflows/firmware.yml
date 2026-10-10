@@ -96,6 +96,12 @@ jobs:
       - name: Host tests
         run: pio test -e native
 
+      # The card contract's shared fixtures (test/fixtures/card) are frozen:
+      # tools/card_fixtures.py, their second implementation, must still make
+      # them byte for byte (docs/METADATA.md 2.17).
+      - name: Card fixtures
+        run: python tools/card_fixtures.py --check
+
       # On a tag, RELEASE=1: the build fails unless HEAD is exactly that tag,
       # the tree is clean and no local flags are set (tools/version.py).
       # RELEASE_TAG makes the version the tag that triggered the run, not

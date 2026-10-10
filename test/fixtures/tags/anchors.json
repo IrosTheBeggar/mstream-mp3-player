@@ -1,0 +1,521 @@
+{
+ "ape_long_value.mp3": {
+  "note": "an APE item of two values, the first past 255 bytes (cut, TRUNCATED): the second kept",
+  "pictures": []
+ },
+ "ape_lower_key.mp3": {
+  "note": "an APE cover under a lowercase key (mStream reads it)",
+  "pictures": [
+   {
+    "coding": 3,
+    "fnv": "19236ad6734f20c2",
+    "length": 96,
+    "offset": 496
+   }
+  ]
+ },
+ "ape_only.mp3": {
+  "note": "APEv2 alone: a repeated key's last item; values on NUL; 'Track' 4/9; covers",
+  "pictures": [
+   {
+    "coding": 3,
+    "fnv": "09784cbef55913f0",
+    "length": 96,
+    "offset": 883
+   },
+   {
+    "coding": 3,
+    "fnv": "b9a48ad5770d8720",
+    "length": 96,
+    "offset": 1015
+   }
+  ]
+ },
+ "ape_v1.mp3": {
+  "note": "APE beside ID3v1, no ID3v2: ID3v1 is the tag (lofty's order)",
+  "pictures": []
+ },
+ "apic_election.mp3": {
+  "note": "the first front cover among several pictures; an empty one unseen",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "cb155b981fdd21c8",
+    "length": 96,
+    "offset": 34
+   },
+   {
+    "coding": 0,
+    "fnv": "0f5594c91de56340",
+    "length": 96,
+    "offset": 153
+   },
+   {
+    "coding": 0,
+    "fnv": "a4c5f4bfd45184d6",
+    "length": 96,
+    "offset": 272
+   },
+   {
+    "coding": 0,
+    "fnv": "f3501009eb9ccf88",
+    "length": 96,
+    "offset": 391
+   }
+  ]
+ },
+ "bad_utf8.mp3": {
+  "note": "UTF-8 that isn't: one U+FFFD per maximal invalid subpart",
+  "pictures": []
+ },
+ "cbr.mp3": {
+  "note": "no Xing header: the length from the bitrate",
+  "pictures": []
+ },
+ "compressed_apic.mp3": {
+  "note": "a compressed APIC (front) is passed over: the back cover is elected",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "e7f203fa8c23ac32",
+    "length": 96,
+    "offset": 104
+   }
+  ]
+ },
+ "date_0.mp3": {
+  "note": "TDRC month 13: fails lofty's verify(), no year",
+  "pictures": []
+ },
+ "date_1.mp3": {
+  "note": "TDRC after spaces",
+  "pictures": []
+ },
+ "date_2.mp3": {
+  "note": "TDRC with '/': lofty's timestamp parse fails, no year",
+  "pictures": []
+ },
+ "date_3.mp3": {
+  "note": "v2.3 TYER with a month: lofty drops it, no year",
+  "pictures": []
+ },
+ "date_4.mp3": {
+  "note": "v2.3 TYER with a TDAT of month 13: no year",
+  "pictures": []
+ },
+ "date_5.mp3": {
+  "note": "TDRC with no separators",
+  "pictures": []
+ },
+ "date_6.mp3": {
+  "note": "two TDRC frames: the first in the list",
+  "pictures": []
+ },
+ "dup_frames.mp3": {
+  "note": "a repeated frame replaces; an empty one doesn't; TXXX by its exact description",
+  "pictures": []
+ },
+ "empty_id3.mp3": {
+  "note": "an ID3v2 tag with only padding: NO_TAGS",
+  "pictures": []
+ },
+ "encrypted_apic.mp3": {
+  "note": "an encrypted APIC is passed over; no front: the first picture",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "196587c4b1df97e6",
+    "length": 96,
+    "offset": 199
+   },
+   {
+    "coding": 0,
+    "fnv": "e01ac9e21cde2398",
+    "length": 96,
+    "offset": 319
+   }
+  ]
+ },
+ "flac_full.flac": {
+  "note": "FLAC: every field; ALBUMARTIST and ALBUM ARTIST the same value once",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "8dee2b28f33e5c1a",
+    "length": 96,
+    "offset": 748
+   }
+  ]
+ },
+ "flac_id3_and_comments.flac": {
+  "note": "a FLAC with a front ID3v2 and comments: the comments",
+  "pictures": []
+ },
+ "flac_id3_only.flac": {
+  "note": "a FLAC with a front ID3v2 and no comment block: the ID3v2",
+  "pictures": []
+ },
+ "flac_id3_picture.flac": {
+  "note": "a FLAC with a front ID3v2 and a PICTURE block: no title",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "e4aa2cea080af232",
+    "length": 96,
+    "offset": 189
+   }
+  ]
+ },
+ "flac_many_comments.flac": {
+  "note": "224 comments: empty and repeated genres, later albums and BPMs, 120 artists (the list keeps 16), then the title, the composer, the track",
+  "pictures": []
+ },
+ "flac_numbers_0.flac": {
+  "note": "TRACKNUMBER ' 3' (parse_num_of), 'x/2'",
+  "pictures": []
+ },
+ "flac_numbers_1.flac": {
+  "note": "a later TRACKNUMBER replaces",
+  "pictures": []
+ },
+ "flac_numbers_2.flac": {
+  "note": "TRACKNUMBER's total replaces TRACKTOTAL; DISCTOTAL 'x' first",
+  "pictures": []
+ },
+ "flac_numbers_3.flac": {
+  "note": "YEAR before DATE",
+  "pictures": []
+ },
+ "flac_numbers_4.flac": {
+  "note": "DATE after Unicode whitespace",
+  "pictures": []
+ },
+ "flac_numbers_5.flac": {
+  "note": "DATE with three digits: none",
+  "pictures": []
+ },
+ "flac_pictures.flac": {
+  "note": "a comment picture before a PICTURE block, whatever the file order",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "4b32aacbb721882a",
+    "length": 96,
+    "offset": 87
+   },
+   {
+    "coding": 2,
+    "fnv": "6f9df5d10d36d1fc",
+    "length": 184,
+    "offset": 250
+   }
+  ]
+ },
+ "flac_rules_0.flac": {
+  "note": "2.18: -6.5 DB, -400 dB, 19.5; KEY",
+  "pictures": []
+ },
+ "flac_rules_1.flac": {
+  "note": "2.18: inf, 1e2, 300.5, peak 7",
+  "pictures": []
+ },
+ "flac_rules_2.flac": {
+  "note": "2.18: 0x78 (the first BPM); the first key",
+  "pictures": []
+ },
+ "flac_rules_3.flac": {
+  "note": "2.18: 120 BPM; COMPILATION 0",
+  "pictures": []
+ },
+ "flac_text.flac": {
+  "note": "a value that isn't UTF-8 is dropped; trailing NULs trimmed; an inner NUL kept",
+  "pictures": []
+ },
+ "flac_two_comments.flac": {
+  "note": "two comment blocks: the second (lofty, relaxed)",
+  "pictures": []
+ },
+ "frame_overrun.mp3": {
+  "note": "a frame running past the tag's end: cut there",
+  "pictures": []
+ },
+ "junk_id3.mp3": {
+  "note": "an ID3v2 tag after junk (lofty's max_junk_bytes)",
+  "pictures": []
+ },
+ "latin1.mp3": {
+  "note": "ISO-8859-1 bytes 0x80-0x9F stay U+0080-U+009F; trailing NULs trimmed",
+  "pictures": []
+ },
+ "leading_zeros.mp3": {
+  "note": "zero bytes before the tag (lofty skips them)",
+  "pictures": []
+ },
+ "lofty_fails_nobom.mp3": {
+  "note": "UTF-16 with no BOM: lofty fails the file; little-endian here",
+  "pictures": []
+ },
+ "lofty_fails_surrogate.mp3": {
+  "note": "an unpaired surrogate: lofty fails the file; U+FFFD here",
+  "pictures": []
+ },
+ "long_tdrc.mp3": {
+  "note": "a TDRC of three values, its text longer than a value holds: the year from its start",
+  "pictures": []
+ },
+ "long_values.mp3": {
+  "note": "a 300-byte title cut; five 204-byte artists keep four; 20 composers keep 16",
+  "pictures": []
+ },
+ "many_text_v23.mp3": {
+  "note": "v2.3: two pictures, 100 other text frames, TYER (its removal swaps the first picture behind the second), the title, the artist",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "a1ab3b1f0aaa5826",
+    "length": 96,
+    "offset": 34
+   },
+   {
+    "coding": 0,
+    "fnv": "b497ba1d708b1c02",
+    "length": 96,
+    "offset": 153
+   }
+  ]
+ },
+ "many_txxx.mp3": {
+  "note": "v2.4: 120 TXXX frames no field comes from, then the title, the artist, a gain, a cover",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "522edb4729d2707a",
+    "length": 96,
+    "offset": 2884
+   }
+  ]
+ },
+ "mpeg2.mp3": {
+  "note": "MPEG-2 Layer III",
+  "pictures": []
+ },
+ "multivalue.mp3": {
+  "note": "NUL-separated values: lists, a repeat dropped, the first non-empty title",
+  "pictures": []
+ },
+ "no_tags.mp3": {
+  "note": "no tag at all: NO_TAGS",
+  "pictures": []
+ },
+ "nonsyncsafe.mp3": {
+  "note": "v2.4 sizes written as plain integers: re-read where they land on a frame",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "ce281c38537e2b8c",
+    "length": 300,
+    "offset": 290
+   }
+  ]
+ },
+ "numbers_0.mp3": {
+  "note": "gain -6.5 DB, a negative peak, BPM 19.5, key 'f#m', 'true'",
+  "pictures": []
+ },
+ "numbers_1.mp3": {
+  "note": "gain -400 dB, peak 7 saturates, BPM 300.5, 'FALSE'",
+  "pictures": []
+ },
+ "numbers_2.mp3": {
+  "note": "inf, 1e2, 0x78, 'yes' (not said)",
+  "pictures": []
+ },
+ "numbers_3.mp3": {
+  "note": "1e2, 120 BPM, an unknown key, '0'",
+  "pictures": []
+ },
+ "odd_utf16.mp3": {
+  "note": "an odd-length UTF-16 frame's stray byte: U+FFFD (with a BOM, and big-endian)",
+  "pictures": []
+ },
+ "opus_basic.opus": {
+  "note": "Opus: R128 gains (the REPLAYGAIN gain ignored); a peak",
+  "pictures": []
+ },
+ "opus_many_comments.opus": {
+  "note": "110 genres across pages, then the title, the artist, the date",
+  "pictures": []
+ },
+ "opus_pages.opus": {
+  "note": "OpusTags across pages of two segments: values split by page headers",
+  "pictures": []
+ },
+ "opus_picture.opus": {
+  "note": "an Opus picture across several pages; a comment after it",
+  "pictures": [
+   {
+    "coding": 2,
+    "fnv": "677cadeefb6ce7da",
+    "length": 40056,
+    "offset": 193
+   }
+  ]
+ },
+ "opus_r128.opus": {
+  "note": "R128 0 and -5888",
+  "pictures": []
+ },
+ "picture_first.mp3": {
+  "note": "a 20 KB picture before the text frames (5% of MP3s)",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "c51d0cb0657dcd90",
+    "length": 20000,
+    "offset": 34
+   }
+  ]
+ },
+ "tcon_0.mp3": {
+  "note": "'(17)\\0Pop': a NUL-ended segment whole",
+  "pictures": []
+ },
+ "tcon_1.mp3": {
+  "note": "RX, CR, a number past the table",
+  "pictures": []
+ },
+ "tcon_2.mp3": {
+  "note": "a bracketed refinement",
+  "pictures": []
+ },
+ "tcon_3.mp3": {
+  "note": "empty values and trailing NULs",
+  "pictures": []
+ },
+ "trck_0.mp3": {
+  "note": "TRCK '07/12', TPOS ' 1 / 2 ' (trimmed)",
+  "pictures": []
+ },
+ "trck_1.mp3": {
+  "note": "TRCK '5/x' and TPOS 'A1': none",
+  "pictures": []
+ },
+ "trck_2.mp3": {
+  "note": "TRCK '5\\0abc': lofty's map makes 5 the total; TPOS '+3' (Rust's u32)",
+  "pictures": []
+ },
+ "trck_3.mp3": {
+  "note": "TRCK '0' (none, though lofty has one: no ID3v1 fill); TPOS 99999 saturates",
+  "pictures": []
+ },
+ "two_tags.mp3": {
+  "note": "two ID3v2 tags: frame by frame, the later replacing (an empty one too)",
+  "pictures": []
+ },
+ "txxx_albumartist.mp3": {
+  "note": "no TPE2: the first TXXX album artist that isn't blank, whole",
+  "pictures": []
+ },
+ "unicode.mp3": {
+  "note": "a code point past the BMP in UTF-8 and UTF-16; control characters to spaces",
+  "pictures": []
+ },
+ "url_misread.mp3": {
+  "note": "lofty reads a URL to its NUL and the rest as the next header",
+  "pictures": []
+ },
+ "url_nul.mp3": {
+  "note": "a URL frame with a NUL in front: the repair pass drops it",
+  "pictures": []
+ },
+ "utf16_values.mp3": {
+  "note": "UTF-16 values each with a BOM; UTF-16BE (in a v2.3 tag)",
+  "pictures": []
+ },
+ "v1_fill.mp3": {
+  "note": "ID3v1 fills a blank title, the absent album, year, track, genre; not the artist",
+  "pictures": []
+ },
+ "v1_only.mp3": {
+  "note": "ID3v1 alone, padded with spaces: trimmed",
+  "pictures": []
+ },
+ "v1_year.mp3": {
+  "note": "ID3v1: year 0999 is no year (lofty writes it 999); genre 191; no track",
+  "pictures": []
+ },
+ "v22.mp3": {
+  "note": "ID3v2.2 three-letter ids; TCON '(4)(17)'; a PIC",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "f71c85b4a4978c0e",
+    "length": 96,
+    "offset": 112
+   }
+  ]
+ },
+ "v23_exthdr.mp3": {
+  "note": "a v2.3 extended header: lofty reads no frame; ID3v1 fills",
+  "pictures": []
+ },
+ "v23_unsync.mp3": {
+  "note": "v2.3 whole-tag unsynchronisation: read through; the picture's stored length",
+  "pictures": [
+   {
+    "coding": 1,
+    "fnv": "549840abb6df8a06",
+    "length": 113,
+    "offset": 63
+   }
+  ]
+ },
+ "v23_utf16.mp3": {
+  "note": "ID3v2.3, UTF-16 with a BOM; TYER with TDAT; TCON '(17)Rock'",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "405b9084c9ab3b5e",
+    "length": 96,
+    "offset": 214
+   }
+  ]
+ },
+ "v24_exthdr.mp3": {
+  "note": "a v2.4 extended header",
+  "pictures": []
+ },
+ "v24_frame_unsync.mp3": {
+  "note": "v2.4 frame-level unsynchronisation with a data length indicator",
+  "pictures": [
+   {
+    "coding": 1,
+    "fnv": "8f32f854e5ea5846",
+    "length": 113,
+    "offset": 54
+   }
+  ]
+ },
+ "v24_full.mp3": {
+  "note": "ID3v2.4, UTF-8, every field of 5.3; 2.18's gains and peaks",
+  "pictures": [
+   {
+    "coding": 0,
+    "fnv": "2252beceb681976a",
+    "length": 96,
+    "offset": 657
+   }
+  ]
+ },
+ "v24_unsync_tag.mp3": {
+  "note": "v2.4 tag-level unsynchronisation, undone frame by frame; the picture's coding 1",
+  "pictures": [
+   {
+    "coding": 1,
+    "fnv": "ebb85e16e1c16d88",
+    "length": 113,
+    "offset": 69
+   }
+  ]
+ }
+}

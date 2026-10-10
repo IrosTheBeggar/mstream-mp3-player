@@ -35,7 +35,9 @@ struct QueueResume {
 // - The position (the current entry): at most once a second while it
 //   moves, and only for the file of the same generation: a position saved
 //   for a newer queue than the file holds (an edit not yet written) is
-//   never paired with the older file.
+//   never paired with the older file. Nor while the file holds more than
+//   the queue (keptFile(): its library tracks left out when there was no
+//   library): the file's line stays where it was.
 //
 // - The resume point (the second the current entry picks up at after a
 //   boot; ENERGY.md item 6): saved at every pause, so at every orderly
@@ -120,9 +122,24 @@ public:
   // The queue as it is now came from the file of `generation`; `rewrite`:
   // write it again (tracks gone, or read from the temporary file).
   void loaded(uint32_t generation, bool rewrite, uint32_t nowMs);
-  // The queue as it is now counts as saved (it isn't the listener's edit:
-  // a rebuild that left no library).
-  void markSaved();
+  // The queue as it is now is less than the file of `generation`: what was
+  // left of it when its library tracks couldn't be found (a boot or a
+  // rebuild with no library), or nothing (a queue that couldn't come across
+  // a rebuild). That isn't the listener's edit, so nothing is written: the
+  // file keeps the whole queue, and `fileLine` (its current line, as a boot
+  // picks it: the position saved for it, -1 for its header's) as the place
+  // to come back to. Until the queue is the file's again (an edit written,
+  // or loaded()), positions and resume points aren't saved (they would pair
+  // this queue's positions with the file's lines), and fileIsQueue() is
+  // false: the remap then reads the file from fileLine(), as a boot would,
+  // not from the queue's own current entry.
+  void keptFile(uint32_t generation, int32_t fileLine);
+  // Whether the file's lines are the queue's positions (or will be once the
+  // write waiting is done): false after keptFile().
+  bool fileIsQueue() const { return fileIsQueue_; }
+  // The file's current line, as a boot would pick it: the position last
+  // saved for it, keptFile()'s, or -1 (the file's own, in its header).
+  int32_t fileLine() const { return fileLine_; }
   // What the store holds as the resume point (at boot, applied or not: one
   // that doesn't apply is cleared at the next pass).
   void loadedResume(const QueueResume& r) { resume_ = r; }
@@ -167,6 +184,8 @@ private:
   const TrackCatalog& catalog_;
 
   uint32_t generation_ = 0;     // of the queue file
+  bool fileIsQueue_ = true;     // false after keptFile(): the file holds more than the queue
+  int32_t fileLine_ = -1;       // the file's current line (fileLine())
   uint32_t savedContent_ = 0;   // the queue's contentVersion() the file holds
   uint32_t savedPosition_ = 0;  // positionVersion() last saved
   bool contentDirty_ = false;

@@ -104,9 +104,13 @@ struct CardMessage {
   const char* lines[2];
   const char* still;  // Try again's note
 };
+// (The tracks are named by their tags since metadata's N9, by their file
+// names only where a file has none: so the folders, which still make the
+// artists and the albums, are what the lines ask for, not a file-name
+// pattern.)
 inline constexpr CardMessage kNoCard = {
     "No microSD card",
-    {"Insert a card with your music in /music,", "as /music/Artist/Album/01 - Title.mp3"},
+    {"Insert a card with your music in /music,", "one folder per album: /music/Artist/Album/"},
     "Still no card: is it all the way in?"};
 inline constexpr CardMessage kExFatCard = {
     "This card is exFAT",
@@ -135,6 +139,11 @@ constexpr const CardMessage& cardMessage(cardformat::Kind k) {
   }
 }
 inline constexpr const char* kTryAgain = "Try again";
+// A card with no music on it (the Library's and the Queue's root): the
+// title (Title) and two lines (Small, kEmptyLineW), with [Try again].
+inline constexpr const char* kNoMusicTitle = "No music found";
+inline constexpr const char* kNoMusicLines[2] = {"Put your albums in /music/Artist/Album/",
+                                                 "(MP3, FLAC or Opus), then tap Try again."};
 
 // ---- Now Playing (ui/NowPlayingPage) ----
 // The progress line's middle (Small), centred between the times (from
@@ -162,9 +171,21 @@ inline constexpr const char* kSeekCancel = "Release to cancel";
 // (sheet::detailRoom(): 183, 174 and 177 px): the artist or
 // kNoArtistFolder, the album or kLooseTracks, the folder cut from the left
 // ("…/Daft Punk/Discovery").
+// Go to artist and Go to album open the folder entities Stage A keeps
+// (docs/METADATA.md 5.4), so their details name those: the artist's name
+// (its folder's, or the spelling its tags elected), the album's.
+// kNoArtistFolder and kLooseTracks are the entities with no name (the files
+// right under /music; an artist folder's own tracks): the Library's rows,
+// headers and toasts call them so too (librarytext).
 inline constexpr const char* kGoTo[3] = {"Go to artist", "Go to album", "Go to folder"};
 inline constexpr const char* kNoArtistFolder = "(no artist folder)";
 inline constexpr const char* kLooseTracks = "(loose tracks)";
+// Now Playing's artist row names the track's artist (its tag's, else its
+// album's line, else its artist folder): with none of them, this (Body, the
+// row's kTextW, x 120-310). Its album row: the album's name, then its year
+// (librarytext::kDot, "2001") when the whole fits, else the name alone.
+inline constexpr const char* kUnknownArtist = "Unknown artist";
+inline constexpr int kNowPlayingTextW = 190;
 // When nothing in it could act, no menu but a toast (Body, one line: 264
 // and 209 px of kToastTextRight - kToastTextX).
 inline constexpr const char* kBuiltinNotInLibrary = "A built-in track isn't in the Library";
@@ -280,6 +301,77 @@ inline constexpr int kRemoveX = 6, kRemoveW = 140;
 inline constexpr int kRemoveTextX = 32;  // from the button's left, after the icon
 inline constexpr int kQueueNextX = 152, kQueueNextW = 80;
 inline constexpr int kQueueClearX = 238, kQueueClearW = 76;
+
+// ---- the queue's cap (QueueModel::kMaxEntries; docs/QUEUE-MODES.md 15) ----
+// Play next or + Queue with the queue full and no played track to push
+// out (none heard before the track that plays, 15.8: right after a Play
+// that filled it, once every played one has gone, after Repeat All comes
+// round to the first): nothing went in. Not "nothing played yet": tracks
+// may well have played, and still none of them can go. The why under the
+// what, as Toast folds "what: why" when it is too wide for one line: the
+// what in Small, the why in Body if it fits, else Small, in the room the
+// buttons it keeps leave it (Ui::refuse(): none, Undo, or Undo and View;
+// test_ui_library measures all three).
+inline constexpr const char* kQueueFull = "No played track can make way: the queue holds 5,000 tracks";
+// A Play (an artist's, an album's, "Play all N"), Shuffle all, or an add
+// the cap cut short: "<what>: <why>" (queueview::cappedText() puts in the
+// counts, grouped: "Shuffling 5,000 of 19,412"), on the toast's two lines
+// beside Undo (and View after an add): what in Small, kCapWhy in Body if
+// it fits, else Small (test_ui_library: each in its room).
+inline constexpr const char* kCapWhy = "the queue holds 5,000 tracks";
+inline constexpr const char* kCapShuffling = "Shuffling %s of %s";
+inline constexpr const char* kCapPlaying = "Playing %s of %s";
+inline constexpr const char* kCapAdded = "Added %s of %s";
+inline constexpr const char* kCapNext = "%s of %s play next";
+// An add that made room by pushing out tracks that already played (the
+// heard entries before the current one, oldest first; 15.8): the add's what,
+// then one line of how many went, "Added 12 tracks: 12 played tracks made
+// way" (queueview::pushedText()), on the toast's two lines beside Undo and
+// View: the what in Small over the line, in Body if it fits, else Small
+// (test_ui_library: each in its room, at 4,999 pushed out). Cut short by
+// the cap as well, the what is kCapAdded's or kCapNext's ("Added 37 of
+// 300").
+inline constexpr const char* kPushedOne = "1 played track made way";
+inline constexpr const char* kPushedMany = "%s played tracks made way";
+inline constexpr const char* kPushAddedOne = "Added";
+inline constexpr const char* kPushAddedMany = "Added %s tracks";
+inline constexpr const char* kPushNextOne = "Plays next";
+inline constexpr const char* kPushNextMany = "%s tracks play next";
+
+// ---- the Library's names (ui/LibraryPage; librarytext, docs/METADATA.md 5.4) ----
+// An album of more than one disc: a divider row before each disc's first
+// track ("Disc 2", Bold in the Library's accent, from 12 px into the row to
+// 8 px short of its right; disc numbers up to 255).
+inline constexpr const char* kDisc = "Disc %u";
+inline constexpr int kDiscTextX = 12;
+inline constexpr int kDiscTextW = 320 - kDiscTextX - 8;
+
+// ---- the scan's texts (docs/METADATA.md 3.3.6; librarytext::statusText()) ----
+// The Library's status line while the card worker works (Small, across the
+// list's width, x 8-312), drawn by the scan's glue (N10, N12): the counts
+// grouped ("Reading tags 1,234 / 19,410", up to 99,999).
+inline constexpr int kStatusW = 304;
+inline constexpr const char* kStatusChecking = "Checking the card\xE2\x80\xA6";
+inline constexpr const char* kStatusReading = "Reading tags %s / %s";
+inline constexpr const char* kStatusUpdating = "Updating library\xE2\x80\xA6";
+inline constexpr const char* kStatusUnfinished = "The last transfer didn't finish";
+// Its toasts (Body, one line, no buttons: kToastTextX to kToastTextRight):
+// the walk's news, the update step's end, and its deferral (3.4.2).
+inline constexpr const char* kFoundOne = "Found 1 new track";
+inline constexpr const char* kFoundMany = "Found %s new tracks";
+inline constexpr const char* kLibraryUpdated = "Library updated";
+inline constexpr const char* kLibraryAtBoot = "Library updates at next boot";
+// The update step's fence (3.4.2, N12): the lists' line (Body, centred, the
+// list's width less 24) while the library is rebuilt on the card worker,
+// and the note for a skip, a seek or an edit tried meanwhile (a toast).
+inline constexpr const char* kUpdatingList = "Updating the library\xE2\x80\xA6";
+inline constexpr const char* kUpdatingWait = "Updating the library: a moment";
+// A card swapped while the player is on (3.8; main.cpp's stepCardGuard()):
+// the toast before the restart (Body, one line, no buttons). Another card
+// (write-protected until then), or the same card back with a card job
+// under way.
+inline constexpr const char* kAnotherCard = "Another card: restarting";
+inline constexpr const char* kCardBack = "Card back: restarting";
 
 // ---- the Output tab (ui/OutputPage) ----
 // The Bluetooth card's status line (Small, x 52 to the radio).
@@ -402,6 +494,28 @@ inline constexpr int kIdleToastPad = 8;  // a label has its pill less this
 // The next boot's toast (IdlePolicy::offText(): "Turned off after 20
 // minutes idle"): Body on one line, no buttons, kToastTextX to
 // kToastTextRight.
+// The Output tab's Library row (docs/METADATA.md 3.3.6, N12): its title
+// (Body: "Library: 19,410 tracks"), where its tracks' names come from
+// (Small: librarytext::sourcesText(), the longest form that fits), and its
+// Rescan tags button in a pill (a dialog asks first) narrower than the
+// settings' (its one word). Both lines kLibraryRowW wide.
+inline constexpr int kRescanPillW = 68;  // "Rescan" (58 px) in its pill
+inline constexpr int kLibraryRowW = 312 - 8 - kRescanPillW - 8 - 44;  // from x 44, the row's right 312
+inline constexpr const char* kLibraryRowTitle = "Library: %s tracks";
+inline constexpr const char* kLibraryRowTitleShort = "%s tracks";  // (when the title doesn't fit)
+inline constexpr const char* kLibraryRowEmpty = "Library: no tracks";
+inline constexpr const char* kLibrarySrcLong[3] = {"%s from the transfer", "%s read here", "%s without tags"};
+inline constexpr const char* kLibrarySrcShort[3] = {"%s transfer", "%s here", "%s none"};
+inline constexpr const char* kLibrarySrcTagged = "%s%% tagged";
+inline constexpr const char* kLibraryRowPaths = "names from the files";
+inline constexpr const char* kLibraryRowNoCard = "tags need a card";
+inline constexpr const char* kLibraryRowUpdating = "updating\xE2\x80\xA6";
+inline constexpr const char* kRescanPill = "Rescan";
+inline constexpr const char* kRescanTitle = "Rescan tags?";
+inline constexpr const char* kRescanBody =
+    "The player reads the tags of its own files again (the transfer's stay as they are). Minutes on a big card.";
+inline constexpr const char* kRescanStarted = "Reading the tags again";
+inline constexpr const char* kRescanNoCard = "Tags are read on a card only";
 // About: a value (Body, or Small when Body doesn't fit).
 inline constexpr int kAboutValueW = 260;
 inline constexpr const char* kAboutMemory = "RAM %lu KB (low %lu), PSRAM %.1f MB";

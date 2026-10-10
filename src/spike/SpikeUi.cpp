@@ -4,9 +4,12 @@
 #include "spike/SpikeUi.h"
 
 #include <M5Unified.h>
+#include <esp_heap_caps.h>
 
 #include <algorithm>
 #include <cstring>
+
+#include "app/Diagnostics.h"
 
 namespace spike {
 
@@ -150,6 +153,8 @@ void ellipsize(lgfx::LovyanGFX& g, char* out, size_t outSize, int maxW) {
 }
 
 uint32_t internalFree() { return static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)); }
-uint32_t internalMinEver() { return static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL)); }
+// diag's: heap_caps' own minimum counts only since its local window last
+// opened (setup()'s end, the update step's fence), diag keeps the floor.
+uint32_t internalMinEver() { return diag::lowest(MALLOC_CAP_INTERNAL); }
 
 }  // namespace spike

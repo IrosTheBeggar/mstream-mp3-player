@@ -1,0 +1,3 @@
+# The fixtures are compared byte for byte (golden files, device.txt, the
+# JSON): never convert their line ends.
+* -text

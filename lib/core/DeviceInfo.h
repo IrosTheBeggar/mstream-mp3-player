@@ -10,7 +10,9 @@
 // screen used to show. The firmware fills the facts (MainUiHost::
 // deviceInfo(), from app/Diagnostics, the card and the library); the rows'
 // labels and values are made here, so the host tests measure them
-// (test_device_info; their widths in test_ui_library).
+// (test_device_info; their widths in test_ui_library). The Library row's
+// count and where the names come from are the Output tab's Library row's
+// (lib/core/LibraryText, docs/METADATA.md 3.3.6), in their shortest form.
 namespace deviceinfo {
 
 struct Facts {
@@ -32,7 +34,13 @@ struct Facts {
   int battery = -1;            // %, -1 when the power chip doesn't say
   uint16_t batteryMv = 0;      // 0: not known
   bool charging = false;
-  uint32_t tracks = 0;         // the library's (0 while it isn't ready)
+  uint32_t tracks = 0;         // the library's (0 while it isn't ready; while it updates, the count before)
+  // Where the tracks' names come from (librarytext::Sources: the
+  // transfer's records, the device's own reading, none: the paths); all 0:
+  // not counted, and the row doesn't say. `updating`: the library update's
+  // fence is up (docs/METADATA.md 3.4.2), the row says so instead.
+  uint32_t fromTransfer = 0, fromDevice = 0, fromNone = 0;
+  bool updating = false;
   uint32_t ramFree = 0, ramMin = 0, ramBlock = 0;  // internal RAM: free, lowest since boot, largest block
   uint32_t uptimeS = 0;
 };

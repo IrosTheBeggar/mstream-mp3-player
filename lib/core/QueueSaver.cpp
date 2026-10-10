@@ -30,12 +30,20 @@ void QueueSaver::loaded(uint32_t generation, bool rewrite, uint32_t nowMs) {
   positionDirty_ = false;
   failedSinceEdit_ = false;
   contentChangedMs_ = nowMs;
+  fileIsQueue_ = true;
+  // Read whole, the queue's entries are the file's lines; with tracks
+  // dropped (to be written again), the file's line isn't the entry's: its
+  // own, until the write.
+  fileLine_ = rewrite ? -1 : queue_.current();
 }
 
-void QueueSaver::markSaved() {
+void QueueSaver::keptFile(uint32_t generation, int32_t fileLine) {
+  generation_ = generation;
   savedContent_ = lastContent_ = queue_.contentVersion();
   savedPosition_ = lastPosition_ = queue_.positionVersion();
   contentDirty_ = positionDirty_ = false;
+  fileIsQueue_ = false;
+  fileLine_ = fileLine;
 }
 
 void QueueSaver::noteChanges(uint32_t nowMs) {
@@ -131,6 +139,7 @@ void QueueSaver::finishWrite(uint32_t nowMs) {
   generation_ = writeGeneration_;
   savedContent_ = queue_.contentVersion();  // Done: unchanged since begin()
   contentDirty_ = false;
+  fileIsQueue_ = true;  // (after keptFile(): the listener's edit replaced the file's queue)
   ++writes_;
   lastWriteMs_ = nowMs - writeStartMs_;
   savePosition();  // paired with this generation from now on
@@ -150,7 +159,12 @@ void QueueSaver::failed(uint32_t nowMs) {
 }
 
 void QueueSaver::savePosition() {
-  store_.savePosition(generation_, queue_.current());
+  // A position of a queue that is less than the file (keptFile()) isn't one
+  // of its lines: the file's line stays.
+  if (fileIsQueue_) {
+    store_.savePosition(generation_, queue_.current());
+    fileLine_ = queue_.current();
+  }
   savedPosition_ = queue_.positionVersion();
   positionDirty_ = false;
 }
@@ -168,8 +182,9 @@ void QueueSaver::stepResume() {
     return;
   }
   // Paired with a file only once it holds the queue as it is (an edit
-  // waiting its write: after it, with the new generation).
-  if (contentDirty_ || writing_) return;
+  // waiting its write: after it, with the new generation; a file that holds
+  // more than the queue, keptFile(): not until it is the queue's again).
+  if (contentDirty_ || writing_ || !fileIsQueue_) return;
   const uint32_t pos = transport_.positionMs;
   if (resume_.valid && resume_.generation == generation_ && resume_.entry == cur) {
     const uint32_t moved = pos > resume_.positionMs ? pos - resume_.positionMs : resume_.positionMs - pos;

@@ -62,7 +62,8 @@ std::string uptime(uint32_t s) {
 }  // namespace
 
 // Each row, as the boot screen wrote it before (the [diag] lines keep
-// those texts) and as the new ones read.
+// those texts; the Library's count is grouped now, as the Output tab's
+// Library row has it) and as the new ones read.
 void test_values() {
   const deviceinfo::Facts f = core2();
   TEST_ASSERT_EQUAL_STRING("M5Stack Core2", value(Item::Board, f).c_str());
@@ -74,7 +75,7 @@ void test_values() {
   TEST_ASSERT_EQUAL_STRING("4096K (3210K free)", value(Item::Psram, f).c_str());
   TEST_ASSERT_EQUAL_STRING("power-on", value(Item::LastReset, f).c_str());
   TEST_ASSERT_EQUAL_STRING("87%, 4.05 V", value(Item::Battery, f).c_str());
-  TEST_ASSERT_EQUAL_STRING("SD, 1234 tracks", value(Item::Library, f).c_str());
+  TEST_ASSERT_EQUAL_STRING("SD, 1,234 tracks", value(Item::Library, f).c_str());
   TEST_ASSERT_EQUAL_STRING("180K (min 120K, block 110K)", value(Item::RamFree, f).c_str());
   TEST_ASSERT_EQUAL_STRING("2 min 05 s", value(Item::Uptime, f).c_str());
   TEST_ASSERT_EQUAL_STRING("v0.8.0-dev+abc1234", value(Item::Firmware, f).c_str());
@@ -106,6 +107,35 @@ void test_value_variants() {
   f.tracks = 0;
   f.storage = "none";
   TEST_ASSERT_EQUAL_STRING("none, 0 tracks", value(Item::Library, f).c_str());
+  // A card filled by hand, its tags not read yet; then read: where the names
+  // come from in the Output tab's Library row's shortest form (100% only
+  // when all are).
+  f.storage = "SD";
+  f.tracks = 19410;
+  f.fromNone = 19410;
+  TEST_ASSERT_EQUAL_STRING("SD, 19,410 tracks, names from the files", value(Item::Library, f).c_str());
+  f.fromTransfer = 18000;
+  f.fromDevice = 1400;
+  f.fromNone = 10;
+  TEST_ASSERT_EQUAL_STRING("SD, 19,410 tracks, 99% tagged", value(Item::Library, f).c_str());
+  f.tracks = 19400;
+  f.fromNone = 0;
+  TEST_ASSERT_EQUAL_STRING("SD, 19,400 tracks, 100% tagged", value(Item::Library, f).c_str());
+  // Behind the library update's fence: the count from before it, and that
+  // it updates, whatever the counts.
+  f.updating = true;
+  TEST_ASSERT_EQUAL_STRING("SD, 19,400 tracks, updating\xE2\x80\xA6", value(Item::Library, f).c_str());
+  // No tracks: no more than the count.
+  f.tracks = 0;
+  TEST_ASSERT_EQUAL_STRING("SD, 0 tracks", value(Item::Library, f).c_str());
+  f.updating = false;
+  TEST_ASSERT_EQUAL_STRING("SD, 0 tracks", value(Item::Library, f).c_str());
+  // A buffer that the count fills: cut, nothing after it.
+  f.tracks = 19400;
+  char cut[18];
+  TEST_ASSERT_EQUAL_STRING("SD, 19,400 tracks", deviceinfo::value(Item::Library, f, cut, sizeof(cut)));
+  char cut2[22];
+  TEST_ASSERT_EQUAL_STRING("SD, 19,400 tracks, 10", deviceinfo::value(Item::Library, f, cut2, sizeof(cut2)));
   // A build without git: no commit.
   f.commit = "";
   TEST_ASSERT_EQUAL_STRING("2026-10-09, ELF 1a2b3c4d", value(Item::Build, f).c_str());

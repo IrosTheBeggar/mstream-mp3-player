@@ -6,6 +6,9 @@
 #include <cstdio>
 
 #include "ChipRevision.h"
+#include "LibraryText.h"
+#include "QueueView.h"
+#include "UiText.h"
 
 namespace deviceinfo {
 
@@ -38,7 +41,7 @@ bool changes(Item i) {
     case Item::Cpu:  // the console's Pc80 lowers the clock for a while
     case Item::Psram:
     case Item::Battery:
-    case Item::Library:  // "Try again" with no music walks the card again
+    case Item::Library:  // "Try again" with no music walks the card again; the scan's updates
     case Item::RamFree:
     case Item::Uptime: return true;
     default: return false;
@@ -90,10 +93,28 @@ const char* value(Item i, const Facts& f, char* out, size_t size) {
       if (f.charging && n > 0 && static_cast<size_t>(n) < size) snprintf(out + n, size - n, ", charging");
       break;
     }
-    case Item::Library:
-      snprintf(out, size, "%s, %lu %s", f.storage, static_cast<unsigned long>(f.tracks),
-               f.tracks == 1 ? "track" : "tracks");
+    case Item::Library: {
+      // "SD, 19,410 tracks, 99% tagged": the count grouped as the Output
+      // tab's Library row has it, and where the names come from in that
+      // row's shortest form ("names from the files" with no tags read);
+      // "updating..." behind the update's fence.
+      char n[16];
+      queueview::grouped(f.tracks, n, sizeof(n));
+      const int at = snprintf(out, size, "%s, %s %s", f.storage, n, f.tracks == 1 ? "track" : "tracks");
+      if (!f.tracks || at <= 0 || static_cast<size_t>(at) >= size) break;
+      librarytext::Sources src;
+      src.transfer = f.fromTransfer;
+      src.device = f.fromDevice;
+      src.none = f.fromNone;
+      if (f.updating) {
+        snprintf(out + at, size - at, ", %s", uitext::kLibraryRowUpdating);
+      } else if (src.total()) {
+        char names[32];
+        librarytext::sourcesText(src, librarytext::kSourceForms - 1, names, sizeof(names));
+        snprintf(out + at, size - at, ", %s", names);
+      }
       break;
+    }
     case Item::RamFree:
       snprintf(out, size, "%luK (min %luK, block %luK)", kb(f.ramFree), kb(f.ramMin), kb(f.ramBlock));
       break;

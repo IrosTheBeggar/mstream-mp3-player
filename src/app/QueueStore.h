@@ -7,6 +7,7 @@
 
 #include "PlaybackController.h"
 #include "QueueModel.h"
+#include "QueueRemap.h"
 #include "QueueSaver.h"
 #include "QueueText.h"
 #include "TrackCatalog.h"
@@ -51,21 +52,41 @@ public:
   PlaybackController::Repeat loadRepeat();
   // A change of mode (the menu, the console): written at once.
   void saveRepeat(PlaybackController::Repeat r);
-  // Saves what changed; call every loop pass.
+  // Saves what changed; call every loop pass (nothing while the queue is
+  // carried across a build: remapBegin()).
   void loop(uint32_t nowMs);
   // Everything now, synchronously (before a power-off: ENERGY.md item 4):
   // a write under way finished (or written again whole if the queue
   // changed since it began), an edit not yet written, the position, the
   // resume point. True: the card has the queue as it is (or there is no
-  // storage).
+  // storage; or it is carried across a build: queue.txt was flushed then,
+  // and the queue's memory is the build's).
   bool flushNow();
   // Something on its way to the card (a write under way, an edit or a
   // move waiting its delay; not a failed one waiting its retry).
   bool busy() const { return storage_.available() && saver_.busy(); }
   // Runs `rebuild` (a library rebuild: every library id changes) with the
-  // queue carried across it by its paths; the track that plays keeps
-  // playing if it's still there. Returns what `rebuild` returned.
+  // queue carried across it by its paths, through queue.txt: flushed, the
+  // queue's memory given to the rebuild, read back after
+  // (lib/core/QueueRemap; as text in PSRAM only when the card can't take
+  // the file). The track that plays keeps playing if it's still there.
+  // Returns what `rebuild` returned.
   bool remap(bool (*rebuild)(void* ctx), void* ctx);
+  // The same in two halves around a build that runs while the loop goes on
+  // (the update step's on the card worker, docs/METADATA.md 3.4.2):
+  // remapBegin() flushes and gives the queue's memory to the build (the
+  // player fenced); remapFinish() reads queue.txt back with the new ids
+  // (`rebuilt`: the build's result). Between them the queue is empty and
+  // nothing here writes. When the card can't take queue.txt, the queue's
+  // text is held in PSRAM through the build instead, at most `textRoom`
+  // (what the build's memory check had to spare: LibraryUpdate::spare()).
+  // False: the queue can't be carried (no PSRAM for the carry, or the text
+  // over `textRoom` or without memory): nothing done, the queue as it is
+  // (the caller doesn't start the build: LibraryUpdate::cantFence()).
+  bool remapBegin(size_t textRoom = SIZE_MAX);
+  // True: the current entry is the same file as before (its key is new).
+  bool remapFinish(bool rebuilt);
+  bool carrying() const { return carry_ && carry_->carrying(); }
   // "[queue] ..." for the console.
   void printStatus() const;
 
@@ -80,6 +101,9 @@ private:
   void noteTransport();
   void paths(char* file, char* temp, size_t size);
   void noteFailures();
+  // The card side of the remap (lib/core QueueRemap: queueremap::Card).
+  struct RemapCard;
+  void logRemap(const queueremap::Result& r);
 
   LocalStorage& storage_;
   QueueModel& queue_;
@@ -91,4 +115,7 @@ private:
   File file_;
   uint8_t* buf_ = nullptr;  // PSRAM
   BufferedFileSink sink_;
+  queueremap::Carry* carry_ = nullptr;  // PSRAM: the two-halves remap's state (remapBegin())
+  RemapCard* card_ = nullptr;           // PSRAM
+  uint32_t fenceStopsSeen_ = 0;
 };

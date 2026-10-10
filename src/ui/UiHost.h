@@ -7,6 +7,7 @@
 #include "ButtonPolicy.h"
 #include "CardFormat.h"
 #include "DeviceInfo.h"
+#include "LibraryText.h"
 #include "OutputModel.h"
 #include "PlayGate.h"
 #include "PlaybackController.h"
@@ -65,6 +66,21 @@ struct AppState {
   // the empty state's message); Unreadable with none in, or one mounted.
   cardformat::Kind cardKind = cardformat::Kind::Unreadable;
   uint32_t libraryTracks = 0;
+  // The card worker's news for the Library's status line (3.3.6): checking
+  // the card, reading tags (done / total), updating, a transfer that didn't
+  // finish; Idle: no line.
+  librarytext::Status libraryStatus;
+  // The library update's fence (docs/METADATA.md 3.4.2, N12): the index and
+  // the queue are the build's. The lists show their "Updating" line and the
+  // status line; the player's fields above are the queue as it was at the
+  // fence (Now Playing keeps its track, its names from the catalog's held
+  // copy); skips, seeks and edits wait.
+  bool libraryFenced = false;
+  // The Output tab's Library row (3.3.6): where the index's tracks' names
+  // come from (librarytext::sourcesOf(), counted at each build or load),
+  // and whether the card's records are here (Rescan tags is the card's).
+  uint32_t libTransfer = 0, libDevice = 0, libNone = 0;
+  bool libraryRecords = false;
   // The rest.
   uint8_t battery = 0;
   bool charging = false;
@@ -177,6 +193,11 @@ public:
   virtual bool retryCard() = 0;
   // "Try again" with no music: walks /music again (the queue follows).
   virtual void rescanLibrary() = 0;
+  // Rescan tags (the Output tab's Library row, after its dialog: 3.3.6):
+  // the device's own files' tags read again, the transfer's left as they
+  // are; the library updates at the scan's end. False: no card's records
+  // here.
+  virtual bool rescanTags() = 0;
   // What the player learned of track lengths (the Queue's summary).
   virtual const queueview::DurationBook& durations() = 0;
   virtual void about(AboutInfo& a) = 0;

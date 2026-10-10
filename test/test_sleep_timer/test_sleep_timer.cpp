@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <random>
 #include <string>
 #include <vector>
@@ -792,6 +793,17 @@ void test_entry_start_waits_for_the_backend() {
   TEST_ASSERT_TRUE(e.update(12, 6, 1500));  // and it stays started
   // An entry that changes while the last one had barely begun.
   TEST_ASSERT_TRUE(e.update(13, 6, 400));
+  // A library update read the queue back: the same entry, a new key
+  // (rekey()): still started, its position this entry's.
+  TEST_ASSERT_TRUE(e.update(13, 6, 90000));
+  e.rekey(40);
+  TEST_ASSERT_TRUE(e.update(40, 6, 90040));
+  TEST_ASSERT_TRUE(e.started());
+  // Not told: the new key looks like a skip until the backend starts one.
+  EntryStart g;
+  TEST_ASSERT_TRUE(g.update(13, 6, 400));
+  TEST_ASSERT_TRUE(g.update(13, 6, 90000));
+  TEST_ASSERT_FALSE(g.update(41, 6, 90040));
 }
 
 // Where each choice ends: what PlaybackController's NextGate asks (the
@@ -954,6 +966,52 @@ void test_album_ends_between() {
   TEST_ASSERT_TRUE(SleepTimer::albumEndsBetween(&index, a, TrackCatalog::builtins().ids[0]));
 }
 
+// With tags (docs/METADATA.md 5.4): an album is still its folder, named by
+// its tracks' votes, and the loose tracks are told by their flag
+// (LibraryIndex::kLoose), not by a name: two folders whose tracks share one
+// album tag are two albums; one folder whose tracks disagree is one; an
+// artist folder's own tracks, tagged with an album, are still no album.
+void test_album_ends_between_with_tags() {
+  LibraryIndex index;
+  index.begin("/music");
+  auto add = [&](const char* path, const char* album) {
+    LibraryIndex::TagView tv;
+    tv.title = "Song";
+    tv.titleLen = 4;
+    tv.album = album;
+    tv.albumLen = strlen(album);
+    tv.year = 2001;
+    TEST_ASSERT_EQUAL(LibraryIndex::Add::Added, index.addRecord(path, tv));
+  };
+  add("/music/A/Hits 1/01 - a.mp3", "Greatest Hits");  // album "Hits 1", named Greatest Hits
+  add("/music/A/Hits 1/02 - b.mp3", "Greatest Hits");
+  add("/music/A/Hits 2/01 - c.mp3", "Greatest Hits");  // another folder, the same name
+  add("/music/A/Live/01 - d.mp3", "Live, Night One");  // one folder, two names: one album
+  add("/music/A/Live/02 - e.mp3", "Live, Night Two");
+  add("/music/A/03 - f.mp3", "A Single");  // A's loose tracks, tagged
+  add("/music/A/04 - g.mp3", "Another Single");
+  add("/music/B/05 - h.mp3", "B Single");  // B's
+  TEST_ASSERT_TRUE(index.finish());
+  auto id = [&](const char* path) { return TrackCatalog(&index).find(path); };
+  const uint32_t a = id("/music/A/Hits 1/01 - a.mp3"), b = id("/music/A/Hits 1/02 - b.mp3"),
+                 c = id("/music/A/Hits 2/01 - c.mp3"), d = id("/music/A/Live/01 - d.mp3"),
+                 e = id("/music/A/Live/02 - e.mp3"), f = id("/music/A/03 - f.mp3"), g = id("/music/A/04 - g.mp3"),
+                 h = id("/music/B/05 - h.mp3");
+  // The two Greatest Hits share a name, not an album.
+  TEST_ASSERT_EQUAL_STRING(index.albumName(index.track(b).album), index.albumName(index.track(c).album));
+  TEST_ASSERT_FALSE(SleepTimer::albumEndsBetween(&index, a, b));
+  TEST_ASSERT_TRUE(SleepTimer::albumEndsBetween(&index, b, c));
+  TEST_ASSERT_FALSE(SleepTimer::albumEndsBetween(&index, d, e));
+  // The loose tracks: flagged, named "" whatever their tags, and ended by
+  // their folder.
+  TEST_ASSERT_TRUE(index.album(index.track(f).album).flags & LibraryIndex::kLoose);
+  TEST_ASSERT_EQUAL_STRING("", index.albumName(index.track(f).album));
+  TEST_ASSERT_TRUE(SleepTimer::albumEndsBetween(&index, e, f));
+  TEST_ASSERT_FALSE(SleepTimer::albumEndsBetween(&index, f, g));
+  TEST_ASSERT_TRUE(SleepTimer::albumEndsBetween(&index, g, h));
+  TEST_ASSERT_TRUE(SleepTimer::albumEndsBetween(&index, h, a));
+}
+
 // The fade toast's buttons (SleepTimer::toastTap()): +10 min and Turn off,
 // each to half the gap, Turn off to the edge. Neither on a clamped
 // reading (a pocket's fabric), nor on the touch that attended a screen
@@ -1008,5 +1066,6 @@ int main(int, char**) {
   RUN_TEST(test_texts);
   RUN_TEST(test_the_curve);
   RUN_TEST(test_album_ends_between);
+  RUN_TEST(test_album_ends_between_with_tags);
   return UNITY_END();
 }

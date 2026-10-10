@@ -39,6 +39,12 @@ uint32_t id3v2Size(const uint8_t* head, size_t n);
 // byte count says has its length scaled down (truncatedMs(), as the tail
 // rule's: docs/SEEK.md section 7).
 uint32_t mp3HeaderDurationMs(const uint8_t* buf, size_t n, uint32_t fileSize = 0, uint32_t audioStart = 0);
+// The same, the first frame known: `buf` starts with it (TagScan finds it by
+// lofty's rule, and lofty reads the length from that frame). No search, so
+// the answer doesn't depend on how much of the file `buf` holds past the
+// header's fields (lametag::parseFirst()). 0: `buf` doesn't start with a
+// Layer III header, or the frame says no length.
+uint32_t mp3FrameDurationMs(const uint8_t* buf, size_t n, uint32_t fileSize = 0, uint32_t audioStart = 0);
 
 // A file shorter than its header says (docs/SEEK.md section 7): the header
 // counts `headerBytes` from its first frame, the file holds `haveBytes`

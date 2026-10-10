@@ -339,8 +339,15 @@ bool SleepTimer::albumEndsBetween(const LibraryIndex* index, uint32_t a, uint32_
   if (!haveA || !haveB) return true;  // a built-in track (or one not in the index): an album of its own
   const LibraryIndex::Track& ta = index->track(a);
   const LibraryIndex::Track& tb = index->track(b);
-  const bool albumA = ta.album != LibraryIndex::kNone && index->albumName(ta.album)[0];
-  const bool albumB = tb.album != LibraryIndex::kNone && index->albumName(tb.album)[0];
+  // The loose tracks are flagged, not told by their name: an album's name
+  // is its tags' now (docs/METADATA.md 3.4.3), and only the flag says
+  // "no album".
+  auto isAlbum = [&](uint32_t album) {
+    return album != LibraryIndex::kNone && album < index->albumCount() &&
+           !(index->album(album).flags & LibraryIndex::kLoose);
+  };
+  const bool albumA = isAlbum(ta.album);
+  const bool albumB = isAlbum(tb.album);
   if (albumA && albumB) return ta.album != tb.album;
   if (albumA != albumB) return true;
   return ta.folder != tb.folder;  // no album information: the folder

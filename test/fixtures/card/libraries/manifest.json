@@ -1,0 +1,27 @@
+{
+ "format": "MSMF",
+ "file": "manifest.bin",
+ "generation": 42,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "commitTime": 1791400000,
+ "flags": 1,
+ "commitId": "0x0DDBA11CAFEF00D5",
+ "serverInstance": "00112233-4455-6677-8899-aabbccddeeff",
+ "producer": "mstream-terminal 0.13.0",
+ "serverRevision": "\"r-412-99-1790000000999-300\"",
+ "baseGeneration": 41,
+ "serverUrl": "HTTP://Music.Example:3000/",
+ "note": "The root of the fixture card: the tags file of this commit and an AutoDJ table carried from the last (generation 41); the vpath layout's roots, given unsorted.",
+ "companions": [
+  {
+   "file": "tags-0000002a.bin"
+  },
+  {
+   "file": "autodj-00000029.bin"
+  }
+ ],
+ "roots": [
+  "Lib B",
+  "Lib A"
+ ]
+}
