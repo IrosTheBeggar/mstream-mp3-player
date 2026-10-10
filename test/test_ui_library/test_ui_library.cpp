@@ -18,8 +18,10 @@
 #include <string>
 #include <vector>
 
+#include "BootLayout.h"
 #include "CardContract.h"
 #include "CardTags.h"
+#include "DeviceInfo.h"
 #include "IdlePolicy.h"
 #include "JumpIndex.h"
 #include "LibraryIndex.h"
@@ -72,12 +74,14 @@ int bucketOfRow(const std::vector<std::string>& v, uint32_t row) {
 
 struct Vlw {
   std::vector<std::pair<uint32_t, int>> advance;  // code point, xAdvance
+  int lineH = 0;  // the ascent and the descent (the header's)
   explicit Vlw(const uint8_t* d) {
     auto be32 = [&](size_t at) {
       return static_cast<uint32_t>(d[at]) << 24 | static_cast<uint32_t>(d[at + 1]) << 16 |
              static_cast<uint32_t>(d[at + 2]) << 8 | d[at + 3];
     };
     const uint32_t n = be32(0);
+    lineH = static_cast<int>(be32(16) + be32(20));
     for (uint32_t i = 0; i < n; ++i) {
       const size_t g = 24 + static_cast<size_t>(i) * 28;
       advance.push_back({be32(g), static_cast<int>(be32(g + 12))});
@@ -2058,6 +2062,144 @@ void test_dance_texts_fit() {
   TEST_MESSAGE(msg);
 }
 
+// The boot screen (BootLayout, ui/BootScreen): the version under the logo
+// in Body, or Small when Body doesn't fit (a long dev build's), and the
+// rescue line; the line heights the layout keeps room for are the fonts'.
+void test_boot_texts_fit() {
+  using namespace bootlayout;
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  TEST_ASSERT_EQUAL_INT(kBodyH, body.lineH);
+  TEST_ASSERT_EQUAL_INT(kSmallH, small.lineH);
+  fits(body, "v10.10.10", kTextW);
+  fits(body, "v10.10.10-rc.10", kTextW);
+  fits(body, "v0.8.0-dev+abcdef1-dirty", kTextW);
+  fits(small, "v10.10.10-rc.10-9999-gabcdef12-dirty", kTextW);
+  fits(small, uitext::kBootTouchHint, kTextW);
+}
+
+// Device info (Output > About > Device info): About's row to it, the
+// page's header, and every row with the widest facts the firmware can
+// give (app/Diagnostics' names, Arduino's chip models): the label in
+// Small, the value in Body when it fits and Small otherwise, so Small
+// must always fit. The usual values read in Body.
+void test_device_info_texts_fit() {
+  using namespace uitext;
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
+  fits(body, kDeviceInfoTitle, kDeviceInfoRowW);
+  fits(small, kDeviceInfoRowSub, kDeviceInfoRowW);
+  // The header: the title (Bold) after the back chevron (x 28), the line
+  // (Small) 8 px after it, to x 310; drawn only when it starts 16 px
+  // before that (Ui::drawHeader()).
+  const int subX = 28 + bold.width(kDeviceInfoTitle) + 8;
+  TEST_ASSERT_TRUE(subX < 310 - 16);
+  fits(small, kDeviceInfoHeaderSub, 310 - subX);
+  TEST_ASSERT_EQUAL_INT(312 - 8, kDeviceInfoX + kDeviceInfoW);
+
+  char v[96];
+  deviceinfo::Facts f;
+  f.chipRevision = 399;
+  f.cpuMhz = 240;
+  f.flashBytes = 16u * 1024 * 1024;
+  f.psramBytes = 8192u * 1024;
+  f.psramFree = 8191u * 1024;
+  f.battery = 100;
+  f.batteryMv = 4999;
+  f.charging = true;
+  f.tracks = 99999;
+  f.ramFree = f.ramMin = f.ramBlock = 999u * 1024;
+  f.commit = "abcdef1";
+  f.built = "2026-12-31";
+  f.board = "M5Stack Core2";
+  f.pmic = f.imu = "none found";
+  f.chip = "ESP32-PICO-V3-02";
+  f.lastReset = "interrupt watchdog";
+  f.storage = "flash";
+  f.version = "v10.10.10-rc.10-9999-gabcdef12-dirty";
+  f.elf = "dddddddd";
+  // Every row with these, then each fact's other values in turn (a value
+  // depends on its own facts only).
+  auto all = [&]() {
+    for (int i = 0; i < deviceinfo::kItems; ++i) {
+      const auto item = static_cast<deviceinfo::Item>(i);
+      fits(small, deviceinfo::label(item), kDeviceInfoW);
+      fits(small, deviceinfo::value(item, f, v, sizeof(v)), kDeviceInfoW);
+    }
+  };
+  all();
+  for (const char* board : {"M5Stack Core2", "unknown"}) {
+    f.board = board;
+    all();
+  }
+  for (const char* name : {"AXP192", "AXP2101", "none found", "other", "BMI270", "MPU6886"}) {
+    f.pmic = f.imu = name;
+    all();
+  }
+  for (const char* chip : {"ESP32-D0WDQ6-V3", "ESP32-D0WDR2-V3", "ESP32-PICO-V3-02", "ESP32-D2WDQ5", "Unknown"}) {
+    f.chip = chip;
+    all();
+  }
+  for (const char* reset : {"interrupt watchdog", "task watchdog", "BROWNOUT", "deep sleep", "PANIC"}) {
+    f.lastReset = reset;
+    all();
+  }
+  for (const char* storage : {"SD", "flash", "none"}) {
+    f.storage = storage;
+    all();
+  }
+  // The library's names: each form the row takes (none counted, all from
+  // the files, some tagged, all tagged, behind the update's fence), with
+  // the widest storage; the widest last, for the loops after.
+  struct Src {
+    uint32_t transfer, device, none;
+    bool updating;
+  };
+  f.storage = "flash";
+  for (const Src src : {Src{0, 0, 0, false}, Src{99998, 0, 1, false}, Src{0, 99999, 0, false},
+                        Src{50000, 49999, 0, true}, Src{0, 0, 99999, false}}) {
+    f.fromTransfer = src.transfer;
+    f.fromDevice = src.device;
+    f.fromNone = src.none;
+    f.updating = src.updating;
+    all();
+  }
+  for (const uint32_t up : {3599u, 86399u, 49u * 86400 + 23 * 3600, 0xFFFFFFFFu}) {
+    f.uptimeS = up;
+    all();
+  }
+  std::string elf;
+  for (const char* hex = "0123456789abcdef"; *hex; ++hex) {
+    elf.assign(8, *hex);
+    f.elf = elf.c_str();
+    all();
+  }
+  f.elf = "dddddddd";
+  for (const char* ver : {"v10.10.10-rc.10-9999-gabcdef12-dirty", "v0.8.0-dev+abcdef1-dirty", "v10.10.10"}) {
+    f.version = ver;
+    all();
+  }
+  // What a Core2 shows: in Body.
+  f.board = "M5Stack Core2";
+  f.chip = "ESP32-D0WDQ6-V3";
+  f.chipRevision = 301;
+  f.psramBytes = 4096u * 1024;
+  f.psramFree = 3210u * 1024;
+  f.ramFree = 180u * 1024;
+  f.ramMin = 120u * 1024;
+  f.ramBlock = 110u * 1024;
+  f.storage = "SD";
+  f.tracks = 19410;  // most from the transfer, some read here
+  f.fromTransfer = 18000;
+  f.fromDevice = 1400;
+  f.fromNone = 10;
+  f.uptimeS = 23 * 3600 + 59 * 60;
+  f.version = "v0.8.0";
+  for (const auto item : {deviceinfo::Item::Chip, deviceinfo::Item::Psram, deviceinfo::Item::Battery,
+                          deviceinfo::Item::Library, deviceinfo::Item::RamFree, deviceinfo::Item::Uptime,
+                          deviceinfo::Item::Firmware}) {
+    fits(body, deviceinfo::value(item, f, v, sizeof(v)), kDeviceInfoW);
+  }
+}
+
 // The Output tab's Library row (3.3.6, N12): its title, where its names
 // come from (the longest form that fits; the shortest always does), the
 // Rescan pill and its dialog.
@@ -2168,6 +2310,8 @@ int main(int, char**) {
   RUN_TEST(test_power_settings_texts_fit);
   RUN_TEST(test_touch_calibration_texts_fit);
   RUN_TEST(test_dance_texts_fit);
+  RUN_TEST(test_boot_texts_fit);
+  RUN_TEST(test_device_info_texts_fit);
   RUN_TEST(test_right_half_neighbours_survive_the_lab_panel);
   RUN_TEST(test_library_rows_from_tags);
   RUN_TEST(test_library_rows_from_paths);

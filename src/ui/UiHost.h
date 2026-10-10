@@ -6,6 +6,7 @@
 
 #include "ButtonPolicy.h"
 #include "CardFormat.h"
+#include "DeviceInfo.h"
 #include "LibraryText.h"
 #include "OutputModel.h"
 #include "PlayGate.h"
@@ -200,6 +201,10 @@ public:
   // What the player learned of track lengths (the Queue's summary).
   virtual const queueview::DurationBook& durations() = 0;
   virtual void about(AboutInfo& a) = 0;
+  // Device info (About's): the board, the chips, memory, the battery, the
+  // library, the uptime, the build. The battery is read from the power
+  // chip each time (I2C: the page asks every 3 s while it's open).
+  virtual void deviceInfo(deviceinfo::Facts& f) = 0;
 
   // ---- the screen (ScreenPower; saved) ----
   // "Screen off after" and "Brightness": ScreenPower's choice indices.

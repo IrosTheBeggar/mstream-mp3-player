@@ -32,6 +32,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  ScreenPower (and WakeLatch)  AmpGate                         |
               |  SleepTimer  FadeStage  IdlePolicy  QueueSaver                |
               |  PowerChoices  TrackName                                      |
+              |  DeviceInfo  BootLayout  LogoArt (generated)  RleImage        |
               |  HopFrontEnd  HostLine  HostLink  HostClock (USB visualizer)  |
               +------------------------------+--------------------------------+
                                              |
@@ -52,7 +53,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
               |         Fonts (VLW DejaVu), Icons, Gfx, Thumbs (covers),      |
               |         EmptyState                                            |
-              |  ui/BootScreen                                                |
+              |  ui/BootScreen (the mStream logo and the version)             |
               |  app/Version (the version from git, the app description)      |
               |  app/UsbViz (the USB visualizer: a computer drives the dancer)|
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
@@ -1615,10 +1616,11 @@ a beta); the README has how to cut one.
   long dev version doesn't fit) under "Version (2026-09-30, ELF
   1a2b3c4d)": the commit's date and the first 8 hex digits of the ELF's
   SHA-256 (`uitext::kAboutVersionLabel`, measured by test_ui_library with
-  every hex digit and the longest versions). The boot screen's title,
-  "mStream Player v0.5.0 - starting" (without "- starting" when a dev
-  version is too long for the bar, measured at run time: it is the
-  TFT_eSPI Font2, not a UiText font). The first serial line,
+  every hex digit and the longest versions). The boot screen, under the
+  mStream logo (Body, or Small for a long dev version; measured by
+  test_ui_library). Output > About > Device info's Firmware and Build
+  rows (the version; the commit, its date and the ELF digits). The first
+  serial line,
   `mstream-mp3-player v0.5.0 (commit abc1234, 2026-10-01), ELF 1a2b3c4d`.
   The console's `L`, the running image's app description. The ELF digits
   match a crash report to the `firmware.elf` that decodes its backtrace.
@@ -2963,13 +2965,62 @@ Queue, Dance and Output (with its Pair and About pages).
   20 / 60 min / Never, a power symbol), **CPU speed** (240 / 160 MHz, a
   chip, "Smoothest lists, dancing" / "Slower lists, saves a little"; a
   restart, asked first) and **Bluetooth power** (Low / Normal /
-  High, signal bars), **Touch calibration**, **About** (battery,
+  High, signal bars), **Touch calibration**, the **Library** row (the
+  tracks, where their names come from, Rescan tags: METADATA.md 3.3.6),
+  **About** (battery,
   storage, the library, the headphones, the CPU speed and Bluetooth power,
-  memory, the version (under the commit's date and the ELF's hash:
-  [Versions](#versions)), the licence and the source URL (GPLv3 section
-  5(d); UiText's texts, measured by test_ui_library), and "Show the tips again"). The tab bar's Output icon is amber while a connection the
+  memory, **Device info** (below), the version (under the commit's date
+  and the ELF's hash: [Versions](#versions)), the licence and the source
+  URL (GPLv3 section 5(d); UiText's texts, measured by test_ui_library),
+  and "Show the tips again"). The tab bar's Output icon is amber while a connection the
   listener asked for is on its way, and while the link looks for them; the
   plain icon while the search rests (`tabbar::outputFor()`, host-tested).
+- **Device info** (Output > About > Device info, `PageKind::DeviceInfo`,
+  OutputPage's fourth kind of page): what the boot screen used to list,
+  and a little more, one row each, a label (Small) over its value (Body,
+  or Small when Body doesn't fit), no icons: Board, Power chip, IMU, Chip
+  (model and revision), CPU (the clock now), Flash, PSRAM (its size and
+  free part), Last reset, Battery (level, voltage, charging), Library (the
+  storage, its tracks and where their names come from: the Output tab's
+  Library row's count and its shortest form, "SD, 19,410 tracks, 99%
+  tagged"; behind the library update's fence the count from before it and
+  "updating..."), RAM free (internal: now, the lowest since boot,
+  the largest block), Uptime, Firmware (the version) and Build (the
+  commit, its date, the ELF digits). The facts come from the host
+  (`UiHost::deviceInfo()`: main.cpp's `deviceFacts()`, the battery read
+  from the power chip each time), the texts from `deviceinfo::value()`
+  (lib/core/DeviceInfo, host-tested; test_ui_library measures every row
+  with the widest facts). Like About, it asks again every 3 s while it's
+  open and redraws the rows that can change (`deviceinfo::changes()`) in
+  place, only those on screen. The boot log's `[diag]` lines are the same
+  rows' texts, Board to RAM free (the version and the build are in the
+  banner above them).
+- **The boot screen** (ui/BootScreen; lib/core/BootLayout): from the
+  start of `setup()` until the UI starts (3 s at least; about 20 s on a
+  new card's first boot, while the library is built), the mStream logo
+  centred (240 x 47 px at y 80) and the player's version under it (Body,
+  centred on y 150, Small for a long dev version). The rescue hold's line
+  at the bottom comes later: once the UI is made, at the end of `setup()`
+  (after the library, so up to ~20 s on a new card's first boot), which is
+  also when a hold starts to count (the glass's events are read in
+  `loop()`); the screen then stays at least 1.5 s more. The logo is
+  mStream's own (tools/art/mstream-logo.svg, the web app's), navy on
+  white there; on the dark screen the bars of its "m" keep their two
+  blues (#6684B2 outside, #26477B in the middle) and the word is white
+  (col::TXT). tools/make_logo.py renders it with Pillow (the paths'
+  curves flattened, each part filled 8x8 supersampled and averaged) into
+  three parts and a coverage per pixel, run-length coded a row at a time
+  (lib/core/LogoArt, ~2.2 KB of flash; RGB565 would be 22 KB): a byte is
+  a run of nothing, a run of a part wholly covered, or one edge pixel and
+  its coverage in 32 steps. `rleimage::Reader` reads a row into codes, a
+  `Palette` (each part blended into the background at every coverage,
+  byte-swapped for the panel: 264 B) turns them into a 240-pixel row on
+  the stack, and each row is pushed: a few ms in all, logged as `[boot]
+  the boot screen: ...`. `BootScreen::begin()` loads the UI's fonts
+  (`Fonts::load()`, ~10 KB of PSRAM glyph tables) so the version is in
+  DejaVu. That puts them ahead of libmad's block in PSRAM, ~10 KB further
+  up: still in the fast lower 2 MB, where every offset tried decoded the
+  same ([Audio pipeline](#audio-pipeline); RESAMPLER.md section 10d).
 - **States** (spec §7): no microSD card (and no music on the flash
   fallback): the Library, and the Queue and Now Playing while nothing is
   queued, show "No microSD card" (or, when one is in that doesn't mount,
@@ -3124,8 +3175,8 @@ Queue, Dance and Output (with its Pair and About pages).
 
 The UI costs ~200 B of static internal RAM (the font slots' pointer, the
 drawing helpers' state, the host adapter; the pages' text buffers, the
-Pair screen's device list copy and About's texts are members, in PSRAM
-with the Ui); the Queue and Output screens added ~160 B more (the
+Pair screen's device list copy and About's and Device info's facts are
+members, in PSRAM with the Ui); the Queue and Output screens added ~160 B more (the
 Bluetooth session and the link's published state, the pairing's name; the
 scan list and the learned track lengths are in PSRAM). The boot log's
 `[ui] internal RAM ... before the UI, ... after` line has the rest. The covers add ~340 KB of PSRAM (the

@@ -524,9 +524,14 @@ private:
 // Pair (mockup 21): "Searching", the audio devices found (their kind and a
 // signal of 4 bars); a tap pairs (after a confirmation when it replaces
 // the remembered headphones), and the card shows how it goes.
-// About: the battery, storage, the library, the headphones, memory, the
-// version, the licence and where the source is, and "Show the tips again"
-// (the coach cards).
+// About: the battery, storage, the library, the headphones, memory,
+// Device info >, the version, the licence and where the source is, and
+// "Show the tips again" (the coach cards).
+// Device info: what the boot screen used to list (the board, the power
+// chip, the IMU, the chip, flash, PSRAM, the last reset, the battery, the
+// library, internal RAM), with the CPU's clock, the uptime, the firmware
+// and its build: DeviceInfo's rows, a label over each value, refreshed
+// every 3 s while the page is open, as About.
 class OutputPage : public Page, public ListView::Source {
 public:
   explicit OutputPage(Ui& ui) : Page(ui) {}
@@ -584,6 +589,7 @@ private:
     Headphones,
     PowerInfo,
     Memory,
+    DeviceInfoRow,
     Version,
     LicenceInfo,
     SourceInfo,
@@ -617,6 +623,7 @@ private:
   void drawDevice(ListView::Row& r, const BtDevice& d);
   void drawPairStatus(ListView::Row& r);
   void drawAbout(ListView::Row& r);
+  void drawDeviceInfo(ListView::Row& r);
   // The card's buttons: how many, and each one's x and width.
   int buttonBoxes(const BtCardView& v, int* x, int* w) const;
   void onCardButton(BtButton b);
@@ -649,8 +656,9 @@ private:
   int picked_ = -1;
   Ask ask_ = Ask::None;
   uint16_t askCpuMhz_ = 0;  // Ask::CpuRestart: the speed it restarts at
-  // About: refreshed on the way in and every few seconds.
+  // About and Device info: refreshed on the way in and every few seconds.
   AboutInfo about_;
+  deviceinfo::Facts info_;
   uint32_t nextAboutMs_ = 0;
   mutable char headerSub_[48] = "";
 };

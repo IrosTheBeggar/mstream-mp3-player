@@ -231,7 +231,7 @@ build shows is its commit's, not the day it was built.
 
 The version shows in **About** (the Version row: the version, under the
 commit's date and `ELF` with the first 8 hex digits of the firmware's ELF
-SHA-256), in the boot screen's title, in the first serial line
+SHA-256), under the mStream logo on the boot screen, in the first serial line
 (`mstream-mp3-player v0.5.0 (commit abc1234, 2026-10-01), ELF 1a2b3c4d`), and
 in the console's `L`, which shows the image's app description, the version
 a later WiFi update will compare. With a crash report, the ELF digits say
@@ -345,6 +345,14 @@ and at that commit. To try the page, serve `dist/site` over
 
 ## Using it
 
+Switched on, the Core2 shows the mStream logo and the player's version
+for about 3 s, or until the library is ready: about 20 s the first time a
+new card of 20,000 tracks is read. Once the library is ready, the touch
+rescue's line (**Touch calibration**, below) shows at the bottom, for at
+least 1.5 s, and only then does a finger held on the screen count. Then
+the tabs. What the boot screen used to list (the board and its chips,
+memory, the battery, the library) is in **Output > About > Device info**.
+
 The three touch buttons under the screen do the same on every screen:
 **prev** (past a track's first 3 s: back to its start, and paused it
 stays paused; within them: the track before) (hold: volume down 5 %, again
@@ -449,9 +457,20 @@ pages do:
   music pauses, and after it waits at the same second until you play) and
   **Bluetooth power** (Low, Normal,
   High), **Touch calibration** ("Not calibrated", or "Calibrated on this
-  Core2": below), and **About** (battery, storage, library, headphones,
-  CPU speed and Bluetooth power, memory, version, the licence and where
-  the source is, and the tips again).
+  Core2": below), **Library** (how many tracks, where their names come
+  from, and **Rescan** to read the tags again, asked first), and **About**
+  (battery, storage, library, headphones, CPU speed and Bluetooth power,
+  memory, **Device info**, version, the licence and where the source is,
+  and the tips again). **Device info** is the device's own facts, for a
+  bug report or out of curiosity: the board, the power chip and the IMU,
+  the chip and its revision, the CPU's clock, flash, PSRAM and its free
+  part, the last reset's cause, the battery (level, voltage, charging),
+  the library's storage, its tracks and where their names come from
+  ("99% tagged"), internal RAM free (now, the lowest since boot, the
+  largest block), the uptime, and the firmware's version and build
+  (commit, date, ELF hash);
+  the rows that change are redrawn every 3 s while it's open. The boot
+  log's `[diag]` lines are the same texts.
 
 The first time, two tips show what the three red buttons do and that
 tapping the tab you're on goes back to its start (console `uic` shows them
@@ -622,10 +641,11 @@ label on the screen does the same).
   the ring should land under your finger (a grey dot: where it would land
   without the calibration); A undoes the Save there.
 - **The rescue.** If the taps are too far off to reach the Output tab,
-  switch the Core2 off and on, and once the start-up screen shows (it says
-  "Touch trouble? Hold a finger on the screen."), hold a finger anywhere
-  on the screen for 2 s: the calibration opens. Put the finger on after
-  the screen lights, not while switching on.
+  switch the Core2 off and on, and once the start-up screen's bottom line
+  says "Touch trouble? Hold a finger on the screen." (under the logo, when
+  the library is ready), hold a finger anywhere on the screen for 2 s: the
+  calibration opens. Put the finger on after the screen lights, not while
+  switching on.
 
 On the console: `a` + Enter opens the crosses (`a5` for 5), `ac` the check
 page, `ab` the first-start touch check (`ab0` has it ask again at the next
@@ -795,6 +815,14 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       at its end; the ring from the Bluetooth task
   UiText              The UI's fixed texts next to their room (the host
                       tests measure them with the firmware's fonts)
+  BootLayout, LogoArt, RleImage
+                      The boot screen: where the logo, the version and the
+                      rescue line go, and their colours; the mStream logo
+                      as run-length coded parts and coverage (generated
+                      from tools/art/mstream-logo.svg), read a row at a
+                      time and blended into any background
+  DeviceInfo          Output > About > Device info's rows (and the boot
+                      log's [diag] lines): each fact's label and text
   QueueView           The Queue's summary from learned track lengths, the
                       mark on what a Library add put in, the failed-track
                       ring
@@ -853,7 +881,8 @@ src/                  Core2 firmware
                       bus lock), Theme; Input (the one input layer: corrected
                       touches and the buttons as events, haptic feedback,
                       settings in NVS); CalibrationScreen (touch calibration);
-                      BootScreen (the boot diagnostics); DanceView;
+                      BootScreen (the mStream logo and the version);
+                      DanceView;
                       ListScroller (hardware scroll); LcdLock (times how long
                       the LCD holds the SPI bus)
   app/                Library (the index at boot: load, build from the
@@ -883,6 +912,8 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       package_release.py (the QIO and DIO builds' release
                       files, install page and release notes -> dist/);
                       crab_art.py + art/crab.json (the crab's art -> lib/core/CrabArt.*);
+                      make_logo.py + art/mstream-logo.svg (the boot screen's
+                      mStream logo -> lib/core/LogoArt.*);
                       vlw_font.py (the UI's DejaVu VLW fonts -> src/ui/VlwFonts.cpp);
                       ui_icons.py (the UI's 1-bit icons -> src/ui/IconData.cpp);
                       gen_resampler_tables.py (the rate converter's filters ->

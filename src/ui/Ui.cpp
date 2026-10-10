@@ -49,6 +49,7 @@ const char* pageKindName(uint8_t kind) {
     case PageKind::Output: return "Output";
     case PageKind::Pair: return "Pair";
     case PageKind::About: return "About";
+    case PageKind::DeviceInfo: return "DeviceInfo";
     default: return "-";
   }
 }
@@ -157,7 +158,8 @@ Page* Ui::pageFor(uint8_t kind) {
     case PageKind::Dance: return &dancePage_;
     case PageKind::Output:
     case PageKind::Pair:
-    case PageKind::About: return &outputPage_;
+    case PageKind::About:
+    case PageKind::DeviceInfo: return &outputPage_;
     default: return &nowPlaying_;
   }
 }
