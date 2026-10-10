@@ -76,6 +76,7 @@ int bucketOfRow(const std::vector<std::string>& v, uint32_t row) {
 struct Vlw {
   std::vector<std::pair<uint32_t, int>> advance;  // code point, xAdvance
   int lineH = 0;  // the ascent and the descent (the header's)
+  int space = 0;  // what a missing glyph measures (M5GFX's spaceWidth)
   explicit Vlw(const uint8_t* d) {
     auto be32 = [&](size_t at) {
       return static_cast<uint32_t>(d[at]) << 24 | static_cast<uint32_t>(d[at + 1]) << 16 |
@@ -83,32 +84,33 @@ struct Vlw {
     };
     const uint32_t n = be32(0);
     lineH = static_cast<int>(be32(16) + be32(20));
+    // VLWfont::loadFont: the larger of the size and the ascent + descent,
+    // times 2 / 7, before the glyphs' metrics move the line height.
+    space = std::max(static_cast<int>(be32(8)), lineH) * 2 / 7;
     for (uint32_t i = 0; i < n; ++i) {
       const size_t g = 24 + static_cast<size_t>(i) * 28;
       advance.push_back({be32(g), static_cast<int>(be32(g + 12))});
     }
   }
-  // Every character has a glyph (width() counts a missing one as nothing;
-  // the firmware draws it folded, and measures it as a space).
+  int find(uint32_t cp) const {
+    for (const auto& a : advance) {
+      if (a.first == cp) return a.second;
+    }
+    return -1;
+  }
+  // Every character has a glyph (the firmware draws a missing one folded).
   bool hasAll(const char* s) const {
     for (const char* p = s; *p;) {
-      const uint32_t cp = textfold::decode(p);
-      bool found = false;
-      for (const auto& a : advance) found = found || a.first == cp;
-      if (!found) return false;
+      if (find(textfold::decode(p)) < 0) return false;
     }
     return true;
   }
+  // As ui/Fonts measures: a missing glyph as the space width.
   int width(const char* s) const {
     int w = 0;
     for (const char* p = s; *p;) {
-      const uint32_t cp = textfold::decode(p);
-      for (const auto& a : advance) {
-        if (a.first == cp) {
-          w += a.second;
-          break;
-        }
-      }
+      const int a = find(textfold::decode(p));
+      w += a >= 0 ? a : space;
     }
     return w;
   }
@@ -323,10 +325,15 @@ void test_tabbar_texts_fit_in_every_state() {
 // ---- the other fixed texts (UiText: each next to its room) ----
 
 namespace {
+// It fits, and the font has every glyph of it: one it lacks would be drawn
+// folded ('?' for a letter of another script), so a text that fits by its
+// widths alone (a translation, say) could still not be what is drawn.
 void fits(const Vlw& font, const char* text, int room) {
   char msg[160];
   snprintf(msg, sizeof(msg), "\"%s\": %d px in %d", text, font.width(text), room);
   TEST_ASSERT_TRUE_MESSAGE(font.width(text) <= room, msg);
+  snprintf(msg, sizeof(msg), "\"%s\": a glyph the font doesn't have", text);
+  TEST_ASSERT_TRUE_MESSAGE(font.hasAll(text), msg);
 }
 }  // namespace
 
