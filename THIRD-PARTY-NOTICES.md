@@ -409,6 +409,20 @@ It contains:
   licences' texts: [LICENSES/DejaVu-Fonts.txt](LICENSES/DejaVu-Fonts.txt),
   checked against the licence text inside the TTF files used. Source:
   https://github.com/dejavu-fonts/dejavu-fonts/releases/tag/version_2_37
+- **Noto Sans CJK Regular 2.004** (the Japanese face of
+  NotoSansCJK-Regular.ttc), rasterised by tools/glyph_store.py into a
+  16 px, 4-bit glyph store, lib/core/CjkGlyphs16.cpp: Hangul (KS X 1001's
+  syllables and the compatibility jamo), JIS X 0208, GB2312's level 1
+  hanzi, the kana and CJK punctuation, less what DejaVu draws (10,558
+  glyphs). Licence: the SIL Open Font License 1.1 (the font's notice:
+  "© 2014-2021 Adobe (http://www.adobe.com/)."; its upstream licence
+  reserves the font name "Source"). The glyph data is a Modified Version of
+  the font: it stays under the OFL, not the GPL, carries that notice in
+  its header, and is named without the font's names (kCjkGlyphs16). The
+  licence's text: [LICENSES/OFL-1.1.txt](LICENSES/OFL-1.1.txt). Source:
+  https://github.com/notofonts/noto-cjk (Sans, version 2.004); the
+  generated file's header names the SHA-256 of the font file it was made
+  from.
 - **The UI icons** (src/ui/IconData.cpp): drawn for this project by
   tools/ui_icons.py (Pillow shapes and ASCII art in the script; no
   third-party images or icon fonts). GPL-3.0-or-later, like the rest.

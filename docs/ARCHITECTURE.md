@@ -33,6 +33,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  SleepTimer  FadeStage  IdlePolicy  QueueSaver                |
               |  PowerChoices  TrackName                                      |
               |  DeviceInfo  BootLayout  LogoArt (generated)  RleImage        |
+              |  GlyphStore  CjkGlyphs16 (generated)                          |
               |  HopFrontEnd  HostLine  HostLink  HostClock (USB visualizer)  |
               +------------------------------+--------------------------------+
                                              |
