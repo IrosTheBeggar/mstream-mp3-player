@@ -3408,6 +3408,14 @@ which fails at about 15k entries (metascan section 6.2).
   (White_Space alone) names nothing (5.4), so no album is ever named by a
   blank value. The first boot after that firmware finds library.idx
   Outdated and builds from the records once.
+- **`rulesVersion` 3** (2026-10-10, [I18N.md](I18N.md) phase 0):
+  textfold's order and `sameName()` changed, in one step (5.4's "Views"
+  and "As built"): names composed to sort, U+0080-009F as cp1252,
+  fullwidth ASCII and Latin Extended-B and Additional folded, other
+  scripts by script and letter, an artist folder in another script
+  matched to its tags. Again the first boot after that firmware finds
+  library.idx Outdated and builds from the records once: no walk, no
+  scan, the records as they are.
 - **`load()`:** Loaded (compare the inputs: a hard mismatch, or the
   build-at-boot marker (3.4.2), rebuilds from the records at boot; a soft
   one keeps the index and rebuilds at the
@@ -4767,7 +4775,9 @@ the file has no comment block and no PICTURE block.
 - **Latin-1 is ISO-8859-1:** each byte becomes U+00xx, trailing NULs
   trimmed (lofty's `latin1_decode`). Bytes 0x80-0x9F become U+0080-U+009F
   in the record, *not* cp1252. A device MAY draw U+0080-U+009F as their
-  cp1252 characters on screen; the record keeps them.
+  cp1252 characters on screen; the record keeps them. (The Core2 does,
+  and sorts and matches them as those characters too, since
+  [I18N.md](I18N.md)'s phase 0.)
 - **UTF-16** with a BOM, and UTF-16BE; **UTF-8**.
 - **Repairs** (mStream's ID3v2 repair pass): invalid UTF-8 becomes U+FFFD
   per maximal invalid subpart (as Rust's `String::from_utf8_lossy`); an
@@ -4845,7 +4855,7 @@ the same.
 - **orderName:** the nameKey of the sort tag when there is one, else of
   the name, minus one leading article from `the, el, la, los, las, le,
   les` followed by a space. The device's `textfold::compareSorted` already
-  sorts this way, with accents folded too.
+  sorts this way, with accents folded too, and more (5.4's "Views").
 
 **Per track:**
 
@@ -4883,16 +4893,40 @@ first), then the file name.
 **Per artist** (still the artist folder in Stage A): the most common
 album-artist display (else the track artist display) among its tracks,
 when `textfold::sameName()` matches it to the folder name loosely (case,
-accents, the FAT-illegal characters, one leading "The"); otherwise the
-folder name. That fixes the about 9% of artist folders that differ from
-the tag only in case or punctuation (metascan section 4) without
-regrouping.
+accents, the FAT-illegal characters, one leading "The"; a letter in a
+script Full folding can't spell by its Unicode lowercase); otherwise the
+folder name. The display's elected ARTISTSORT comes with it. That fixes
+the about 9% of artist folders that differ from the tag only in case or
+punctuation (metascan section 4) without regrouping.
 
 **Views:** artists and albums A-Z by orderName (a name's leading
 White_Space doesn't count: " Zebra Songs" sorts as a Z); **an artist's
 albums newest first** (year descending, no year last, then name); the
 Folders view raw; no Genres view (the records keep the genres, so one
-later is a rebuild).
+later is a rebuild). The device's order (`textfold::compare`): case and
+accents folded; symbols, then digits, then letters; a name composed (NFC)
+before it is compared, never in what is stored; U+0080-009F as their
+cp1252 characters (5.2), fullwidth ASCII as ASCII, Latin Extended-B and
+Extended Additional by their base letters; a letter Full folding can't
+spell (Greek, Cyrillic, Hangul, kana, Han...) by its script and then its
+Unicode lowercase, after the digits and before the ASCII letters, so
+under the A-Z rail's `#`; ties by the bytes.
+
+**As built (2026-10-10, [I18N.md](I18N.md) phase 0, `library.idx` rules
+3):** before it, every letter Full folding couldn't spell folded to `?`,
+so names in other scripts sorted by their length, scripts mixed, and
+`sameName()` matched none of them: an artist folder `Кино` dropped its
+tags' `Кино` and their ARTISTSORT `Kino` and sorted under `#`. Now it
+sorts as `Kino`, under K. The match compares the two names' letters and
+digits (not whole nameKeys), so the FAT-illegal characters still don't
+count, and `Би-2` and `Ая-2`, alike before by their "2", differ; a name
+with no letter or digit still matches nothing. Romanian `Ștefan` sorts
+under S (it was `?tefan`, under `#`), NFD `Beyonce` + U+0301 as
+`Beyoncé`. Latin and ASCII names keep their order, apart from those folds
+(test_text_fold's old-against-new test over N11's synthetic card's
+names). TrackName's artist drop uses the same match. The transfer is
+untouched: the records keep their bytes (2.3.6), and the software stores
+no collation key (2.6.5).
 
 **For later (Stage B and AutoDJ):**
 
