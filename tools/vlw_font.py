@@ -149,14 +149,18 @@ def squeeze(rows, n, zone, marks):
       3. a row of a mark 3 rows tall or more: in a run of rows with ink
          taller than 2 rows a mark (the glyph's marks spread over its runs:
          Ǘ's acute touching its diaeresis is one run of two marks), the
-         tallest run's two rows most alike merge, the innermost of equals
-         (Ǖ's diaeresis before its macron);
+         tallest run loses the row inside it (not its first or last) that
+         is nearest the mean of its two neighbours, the innermost of equals
+         (Ǖ's diaeresis before its macron; a 3-row mark's middle row). The
+         rows left keep their shapes: a tilde keeps its wave and a caron
+         its V, where a merge would fill them in (a macron, a breve);
       4. a blank row between two marks;
       5. the blank row left between the marks and the letter;
       6. any run's two rows most alike merge.
     So the marks stay apart from the letter, and each keeps two rows (an
-    acute isn't a grave), as long as there is room. A merge keeps the darker
-    pixel of the two rows, so no stroke is lost."""
+    acute isn't a grave), as long as there is room. A merge (step 6: a mark
+    down to one row) keeps the darker pixel of the two rows, so no stroke
+    is lost."""
     rows = [bytearray(r) for r in rows]
 
     def blank(i):
@@ -165,6 +169,10 @@ def squeeze(rows, n, zone, marks):
     def alike(i):  # rows i and i + 1: their shared ink over their joint ink
         both = sum(max(a, b) for a, b in zip(rows[i], rows[i + 1]))
         return sum(min(a, b) for a, b in zip(rows[i], rows[i + 1])) / both
+
+    def between(i):  # row i's distance from its neighbours' mean, over the three rows' ink
+        trio = list(zip(rows[i - 1], rows[i], rows[i + 1]))
+        return sum(abs(2 * b - a - c) for a, b, c in trio) / (2 * sum(max(t) for t in trio))
 
     def runs():  # the runs of rows with ink, [start, end)
         out, i = [], 0
@@ -179,13 +187,22 @@ def squeeze(rows, n, zone, marks):
             i = j
         return out
 
-    def merge(tall):  # in the runs at least `tall` rows: the tallest, the most alike, the innermost
+    def inner(tall):  # runs of `tall` (3+) rows or more: the tallest's inner row nearest its neighbours
         best = None
         for a, b in runs():
-            if b - a < max(2, tall):
+            if b - a < tall:
                 continue
+            for i in range(a + 1, b - 1):
+                key = (b - a, -between(i), i)
+                if best is None or key > best[0]:
+                    best = (key, i)
+        return None if best is None else best[1]
+
+    def merge():  # in any run: the two rows most alike, the innermost of equals
+        best = None
+        for a, b in runs():
             for i in range(a, b - 1):
-                key = (b - a if tall else 0, alike(i), i)
+                key = (alike(i), i)
                 if best is None or key > best[0]:
                     best = (key, i)
         if best is None:
@@ -202,10 +219,10 @@ def squeeze(rows, n, zone, marks):
         steps = (
             lambda: 0 if gap > 0 and blank(0) else None,
             lambda: gap if zone - gap >= 2 else None,
-            lambda: merge(2 * per_run + 1),
+            lambda: inner(2 * per_run + 1),
             lambda: next((i for i in range(gap) if blank(i)), None),
             lambda: gap if zone - gap == 1 else None,
-            lambda: merge(0),
+            merge,
         )
         drop = next((d for d in (step() for step in steps) if d is not None), None)
         if drop is None:

@@ -3080,10 +3080,11 @@ Queue, Dance and Output (with its Pair and About pages).
   byte-swapped for the panel: 264 B) turns them into a 240-pixel row on
   the stack, and each row is pushed: a few ms in all, logged as `[boot]
   the boot screen: ...`. `BootScreen::begin()` loads the UI's fonts
-  (`Fonts::load()`, ~10 KB of PSRAM glyph tables) so the version is in
-  DejaVu. That puts them ahead of libmad's block in PSRAM, ~10 KB further
-  up: still in the fast lower 2 MB, where every offset tried decoded the
-  same ([Audio pipeline](#audio-pipeline); RESAMPLER.md section 10d).
+  (`Fonts::load()`, ~26 KB of PSRAM glyph tables since I18N.md's phase 1,
+  ~9 KB before) so the version is in DejaVu. That puts them ahead of
+  libmad's block in PSRAM, ~26 KB further up: still in the fast lower
+  2 MB, where every offset tried decoded the same
+  ([Audio pipeline](#audio-pipeline); RESAMPLER.md section 10d).
 - **States** (spec §7): no microSD card (and no music on the flash
   fallback): the Library, and the Queue and Now Playing while nothing is
   queued, show "No microSD card" (or, when one is in that doesn't mount,

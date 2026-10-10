@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import vlw_font  # noqa: E402
 
 SANS = vlw_font.DEFAULT_FONTS.split(";")[0].rsplit(":", 2)[0]
+BOLD = vlw_font.DEFAULT_FONTS.split(";")[1].rsplit(":", 2)[0]
 
 
 def rows(*lines):
@@ -40,10 +41,24 @@ class Squeeze(unittest.TestCase):
         self.assertEqual(art(vlw_font.squeeze(g, 1, 3, 1)), ["  #  ", "     ", "#####"])
 
     def test_a_tall_mark_loses_a_row_before_its_gap(self):
-        # A three-row tilde keeps its gap: its two rows most alike merge,
-        # the darker pixel kept.
-        g = rows(" +#  #", "#  ## ", "#  ## ", "      ", "  ##  ")
-        self.assertEqual(art(vlw_font.squeeze(g, 1, 4, 1)), [" +#  #", "#  ## ", "      ", "  ##  "])
+        # A three-row tilde keeps its gap: its middle row goes, so the two
+        # left keep the wave (merged, the rows would fill it in: "# ####",
+        # a macron's bar).
+        g = rows(" ##  #", "# ## #", "#  ## ", "      ", "  ##  ")
+        self.assertEqual(art(vlw_font.squeeze(g, 1, 4, 1)), [" ##  #", "#  ## ", "      ", "  ##  "])
+
+    def test_a_caron_keeps_its_v(self):
+        # Merged, the V's lower rows would make a cup: a breve.
+        g = rows("#   #", " # # ", "  #  ", "     ", "#   #")
+        self.assertEqual(art(vlw_font.squeeze(g, 1, 4, 1)), ["#   #", "  #  ", "     ", "#   #"])
+
+    def test_stacked_marks_lose_the_row_nearest_its_neighbours(self):
+        # Ǖ at 22 px: a macron on a three-row diaeresis, one run of two marks.
+        # The diaeresis's middle row is its neighbours' mean: it goes, and
+        # both marks keep two rows.
+        g = rows("#####", "#####", "## ##", "## ##", "## ##", "     ", "#   #")
+        self.assertEqual(art(vlw_font.squeeze(g, 1, 6, 2)),
+                         ["#####", "#####", "## ##", "## ##", "     ", "#   #"])
 
     def test_stacked_marks_keep_the_tone_mark(self):
         # Ǘ at 16 px: an acute touching a diaeresis (one run, two marks), one
@@ -92,6 +107,27 @@ class Font(unittest.TestCase):
         same, changed = vlw_font.fit_to_line(font, ord("U"), u, ascent, descent)
         self.assertFalse(changed)
         self.assertEqual(same, u)
+
+    @unittest.skipUnless(os.path.exists(BOLD), f"no {BOLD}")
+    def test_tildes_and_carons_lose_a_row_not_their_shape(self):
+        # Bold 16's three-row tildes (Ã Ñ Õ Ĩ Ũ) and Bold 22's three-row caron
+        # (Ǚ) are fitted by dropping rows: every row left is one of
+        # FreeType's, in order, none a merge of two; a tilde's two rows differ.
+        from PIL import ImageFont
+        for size, text in ((16, "ÃÑÕĨŨ"), (22, "Ǚ")):
+            font = ImageFont.truetype(BOLD, size)
+            ascent, descent = font.getmetrics()
+            for ch in text:
+                raw = vlw_font.glyph(font, ord(ch))
+                fitted, changed = vlw_font.fit_to_line(font, ord(ch), raw, ascent, descent)
+                self.assertTrue(changed, ch)
+                h, w = raw[0], raw[1]
+                before = [raw[5][r * w:(r + 1) * w] for r in range(h)]
+                after = [fitted[5][r * w:(r + 1) * w] for r in range(fitted[0])]
+                it = iter(before)
+                self.assertTrue(all(any(r == b for b in it) for r in after), ch)  # a subsequence
+                if size == 16:
+                    self.assertNotEqual(after[0], after[1], ch)
 
 
 if __name__ == "__main__":

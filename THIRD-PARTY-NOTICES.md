@@ -401,12 +401,13 @@ It contains:
 - **DejaVu Sans and DejaVu Sans Bold 2.37**, rasterised to VLW by
   tools/vlw_font.py into src/ui/VlwFonts.cpp (16 and 13 px; Bold 16 and
   22 px; ASCII, Latin-1, Latin Extended-A, a few Latin Extended-B letters,
-  Greek and Cyrillic). Licence: the Bitstream
-  Vera Fonts licence ("Copyright (c) 2003 by Bitstream, Inc. All Rights
-  Reserved. Bitstream Vera is a trademark of Bitstream, Inc."); DejaVu's
-  changes are in the public domain; glyphs from Arev are "(c) Tavmjong Bah".
-  Text: [LICENSES/DejaVu-Fonts.txt](LICENSES/DejaVu-Fonts.txt), checked
-  against the licence text inside the TTF files used. Source:
+  Greek and Cyrillic). Licence: the Bitstream Vera Fonts licence
+  ("Copyright (c) 2003 by Bitstream, Inc. All Rights Reserved. Bitstream
+  Vera is a trademark of Bitstream, Inc.") and, for the glyphs imported
+  from Arev, the Arev Fonts licence ("Copyright (c) 2006 by Tavmjong Bah.
+  All Rights Reserved."); DejaVu's changes are in the public domain. Both
+  licences' texts: [LICENSES/DejaVu-Fonts.txt](LICENSES/DejaVu-Fonts.txt),
+  checked against the licence text inside the TTF files used. Source:
   https://github.com/dejavu-fonts/dejavu-fonts/releases/tag/version_2_37
 - **The UI icons** (src/ui/IconData.cpp): drawn for this project by
   tools/ui_icons.py (Pillow shapes and ASCII art in the script; no
