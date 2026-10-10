@@ -306,13 +306,13 @@ counted. An error changes nothing.
   banner once the panel is awake), `hostQuery.loop()` every pass, the
   screen kept lit for the banner, the idle power-off held while a count
   runs.
-- **Cost**, against aed9014 (v0.8.0 and the 0.9.0 version bump), both
-  builds: IRAM unchanged (`.iram0.text` 124,883 B); internal DRAM +224 B
-  (`.dram0.data` +16, `.dram0.bss` +208: the count's state, `HostQuery`'s
-  hooks, the pending label); flash `.text` +7,024 B and `.rodata` +1,352
-  B; `firmware.bin` +9,216 B (core2 2,633,728 to 2,642,944; core2-dio
-  2,633,760 to 2,642,976), the app 42 % of its slot. Every guard passes
-  in both (`cache_guard`, `flash_guard`, the version's). While a count
+- **Cost**, 9899eb4 against aed9014 (v0.8.0 and the 0.9.0 version
+  bump), both builds: IRAM unchanged (`.iram0.text` 124,883 B); internal
+  DRAM +224 B (`.dram0.data` +16, `.dram0.bss` +208: the count's state,
+  `HostQuery`'s hooks, the pending label); flash `.text` +7,024 B and
+  `.rodata` +1,336 B; `firmware.bin` +9,200 B (core2 2,633,728 to
+  2,642,928; core2-dio 2,633,760 to 2,642,960), the app 42 % of its slot.
+  Every guard passes in both (`cache_guard`, `flash_guard`, the version's). While a count
   runs, 32 KB and its table in PSRAM; `@status` takes about 0.6 KB of the
   loop task's stack for its line (ESTIMATED: the console's stack line
   after it, `[console] ...`, isn't printed for an `@` line).
