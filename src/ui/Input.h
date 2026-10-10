@@ -122,6 +122,9 @@ public:
   // tick), or dropped while playing (one long buzz, 80 ms).
   void connectedTick();
   void alertBuzz();
+  // A computer asked which board this is (@identify: ui/Ui::identify()):
+  // one 0.2 s buzz, the longest the board gives.
+  void identifyBuzz();
   // Whether holdTick() was called since the last call (the Ui: a long press
   // nobody used ends as a tap).
   bool takeHoldUsed();

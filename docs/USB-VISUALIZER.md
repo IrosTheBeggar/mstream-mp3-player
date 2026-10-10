@@ -527,12 +527,18 @@ never changes state.
 | 1 | syntax | wrong field count or format, a byte outside 0x20-0x7E, a line that is only `@` | a bug: log it, don't retry the line |
 | 2 | version | `@hello`'s protocol is below the Core2's lowest. Detail: `<min>-<max>` | speaks a version in range, or tells the user to update one side |
 | 3 | nosession | `@e`, `@h`, `@c`, `@log` with no session (the Core2 rebooted, or timed out) | sends `@hello` (a new session) |
-| 4 | busy | `@hello` can't start host mode now. Detail: `ui` (the start-up screen; the UI starts ~3 s after boot), `screen` (the touch calibration or a spike screen is up), `pairing` (a Bluetooth pairing is under way), `dance` (no PSRAM for the dancer: permanent) | retries `@hello` every 1 s; gives up on `dance`, or after 20 s, and says why |
+| 4 | busy | `@hello` can't start host mode now. Detail: `ui` (the start-up screen; the UI starts ~3 s after boot), `screen` (the touch calibration or a spike screen is up, or a computer's `@identify` banner, 5 s at most: [HOST-STATUS.md](HOST-STATUS.md#identify)), `pairing` (a Bluetooth pairing is under way), `dance` (no PSRAM for the dancer: permanent) | retries `@hello` every 1 s; gives up on `dance`, or after 20 s, and says why |
 | 5 | range | a field out of range: rate not 44100/48000, prior not 0 or 30-300, an energy negative, over 1e4 or not finite, `@log` over 2, a rate change within an epoch | a bug |
 | 6 | long | over 255 bytes (the verb is `-`: it may be cut off) | a bug |
 | 7 | verb | a verb this firmware doesn't know, or `@hello` with no feature it knows | stops sending that verb (it should have checked `caps`) |
 | 8 | declined | the user ended the session on the Core2 and lines keep coming | stops; waits for its own user |
 | 9 | noepoch | `@h` or `@c` in a session before any `@e` | sends `@e` for the current epoch |
+
+The board's questions (since 0.9.0: `@status`, `@count`, `@identify`,
+[HOST-STATUS.md](HOST-STATUS.md)) share these codes and the rate limit:
+`@err 4 count <why>` and `@err 4 identify <why>` (busy), `@err 1 identify`
+(no label), `@err 5 identify` (a label over 16 bytes); older firmware
+answers them `@err 7`.
 
 ## Host mode on the Core2
 
@@ -540,8 +546,8 @@ never changes state.
 VBUS bits look the same for a phone charger as for a computer):
 
 1. Refuse with `@err 4` if it can't: the UI hasn't started, another screen
-   owns the display, a Bluetooth pairing is under way, or the dancer has no
-   PSRAM.
+   owns the display (or a computer's `@identify` banner covers it), a
+   Bluetooth pairing is under way, or the dancer has no PSRAM.
 2. **Pause the player**: Playing becomes Paused, a play waiting for the
    headphones is cancelled (Paused). Stopped and Paused stay as they are.
    A test track the console's `Rt`/`Rf` started on its own is stopped.
@@ -644,6 +650,10 @@ the terminal player (its `src/device/`). What is fixed now:
   itself. One sender can ask for both (`viz,setup`). A session's features
   are fixed at `@hello`; to change them, send a new `@hello` (a new session
   id; host mode stays up if `viz` is still asked for).
+- **The board's questions** came first (0.9.0, [HOST-STATUS.md](HOST-STATUS.md)):
+  `@status`, `@count` and `@identify <label>` need no session (and no
+  `@hello`): any line any time, answered by the firmware's state; they
+  neither keep a session alive nor count against a decline.
 - **Reserved verbs.** One-letter verbs are the visualizer's high-rate
   stream (`e h c s t`), plus `log`. Reserved for Phase 13 and answered
   `@err 7` until then: the namespaces `wifi.*` (`wifi.set <ssid> <pass>`,

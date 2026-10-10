@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "FrameClock.h"
+#include "HostStatus.h"
 #include "InputEvent.h"
 #include "NavModel.h"
 #include "QueueModel.h"
@@ -128,7 +129,7 @@ public:
   // A list moves (the page's animating(): a drag, a fling, a snap).
   bool listMoving() const { return started_ && !suspended_ && page_ && page_->animating(); }
   // A cover may be made now: the UI is up and lit.
-  bool coversAllowed() const { return started_ && !suspended_ && !dark_; }
+  bool coversAllowed() const { return started_ && !suspended_ && !dark_ && !identifying_; }
   // The Library tab's open album, artist or folder: its tracks (the scan's
   // "shown" source, 3.3.3); none when another page is up.
   LibraryIndex::Span shownTracks() const;
@@ -144,6 +145,20 @@ public:
   // tips: shown again at the next boot). False: the UI isn't up (not started,
   // or another screen has the display).
   bool showDance();
+  // A computer asked which board this is (@identify, docs/HOST-STATUS.md):
+  // "This one" over its label (its name for the port: COM5) on the whole
+  // screen, in a frame of the Output tab's blue, for kIdentifyMs or until
+  // a touch on the glass (which does nothing else), with one buzz
+  // (Input::identifyBuzz(): not with haptics off). Nothing else changes:
+  // the player plays on, the page and whatever is over it carry on under
+  // it with nothing drawn (as while the screen is dark: gfx's pushes go
+  // nowhere, the list's frames wait, the dancer stops), and all of it is
+  // drawn again when it goes (redrawAll(), as on a wake). Again while it is
+  // up: the new label, kIdentifyMs from now. False: the UI isn't up and lit
+  // (not started, suspended, dark: main.cpp wakes the screen first).
+  static constexpr uint32_t kIdentifyMs = 5000;
+  bool identify(const char* label, uint32_t nowMs);
+  bool identifying() const { return identifying_; }
   // The sleep timer's fade runs and the listener touched the device (or
   // the fade just began): the toast "Sleep timer: fading" with +10 min and
   // Turn off, the only controls that act on the timer. It goes when the
@@ -365,6 +380,12 @@ private:
   bool started_ = false;
   bool suspended_ = false;
   bool dark_ = false;         // the screen is off: nothing drawn
+  // identify()'s banner is up, until identifyUntilMs_.
+  bool identifying_ = false;
+  uint32_t identifyUntilMs_ = 0;
+  char identifyLabel_[hoststatus::kMaxLabel + 1] = "";
+  void drawIdentify();
+  void endIdentify();
   bool danceWasOn_ = false;   // the dancer was up when it went dark
   // The screen woke: draw everything again.
   void redrawAll();
