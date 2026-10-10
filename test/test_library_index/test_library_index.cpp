@@ -1598,6 +1598,13 @@ void test_inputs_of_the_cache() {
   std::vector<uint8_t> rules = bytes;
   rules[12] = static_cast<uint8_t>(LibraryIndex::kRulesVersion + 1);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), load(rules, in));
+  // Rules 3 (docs/I18N.md, phase 0: textfold's order and sameName()): an
+  // index of rules 2 or 1, as the firmware before it saved, rebuilds once.
+  TEST_ASSERT_EQUAL_UINT16(3, LibraryIndex::kRulesVersion);
+  for (const uint8_t older : {uint8_t{1}, uint8_t{2}}) {
+    rules[12] = older;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), load(rules, in));
+  }
   // The build stamp: what a track id means. Two builds of the same files
   // agree; another file changes it.
   LibraryIndex again(Heap::alloc, Heap::release);
