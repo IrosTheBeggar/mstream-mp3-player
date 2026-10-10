@@ -21,7 +21,9 @@
 #include "BootLayout.h"
 #include "CardContract.h"
 #include "CardTags.h"
+#include "CjkGlyphs16.h"
 #include "DeviceInfo.h"
+#include "GlyphStore.h"
 #include "HostStatus.h"
 #include "IdlePolicy.h"
 #include "JumpIndex.h"
@@ -69,6 +71,17 @@ const char* nameOf(void* ctx, uint32_t row) { return (*static_cast<std::vector<s
 
 int bucketOfRow(const std::vector<std::string>& v, uint32_t row) {
   return textfold::bucketOf(textfold::railKey(v[row].c_str()));
+}
+
+// ---- the glyph store behind the fonts (ui/Fonts: docs/I18N.md, phase 2) ----
+
+const glyphstore::Store& cjk() {
+  static const glyphstore::Store store = [] {
+    glyphstore::Store s;
+    s.open(kCjkGlyphs16, kCjkGlyphs16Size);
+    return s;
+  }();
+  return store;
 }
 
 // ---- the VLW fonts' metrics (what ui/Fonts measures with) ----
@@ -121,18 +134,23 @@ struct Vlw {
     }
     return -1;
   }
+  // The font's glyph, else the glyph store's (as ui/Fonts: VLW first).
+  bool has(uint32_t cp) const { return find(cp) >= 0 || cjk().contains(cp); }
   // Every character has a glyph (the firmware draws a missing one folded).
   bool hasAll(const char* s) const {
     for (const char* p = s; *p;) {
-      if (find(textfold::decode(p)) < 0) return false;
+      if (!has(textfold::decode(p))) return false;
     }
     return true;
   }
-  // As ui/Fonts measures: a missing glyph as the space width.
+  // As ui/Fonts measures: the font's advance, else the store's, else (a
+  // missing glyph) the space width.
   int width(const char* s) const {
     int w = 0;
     for (const char* p = s; *p;) {
-      const int a = find(textfold::decode(p));
+      const uint32_t cp = textfold::decode(p);
+      int a = find(cp);
+      if (a < 0) a = cjk().advance(cp);
       w += a >= 0 ? a : space;
     }
     return w;
@@ -365,7 +383,7 @@ void fits(const Vlw& font, const char* text, int room) {
 namespace {
 
 int vlwWidth(void* ctx, const char* s) { return static_cast<const Vlw*>(ctx)->width(s); }
-bool vlwHas(void* ctx, uint32_t cp) { return static_cast<const Vlw*>(ctx)->find(cp) >= 0; }
+bool vlwHas(void* ctx, uint32_t cp) { return static_cast<const Vlw*>(ctx)->has(cp); }
 
 // `name` as ui/Fonts::draw fits it (its 200-byte buffer), in `font`.
 std::string drawn(const Vlw& font, const char* name, int maxW = 300) {
@@ -382,16 +400,19 @@ std::string drawn(const Vlw& font, const char* name, int maxW = 300) {
 
 // TextFit with the fonts the firmware draws with: decomposed text composed
 // first, a cp1252 byte (U+0080-009F) as its character, Greek, Cyrillic,
-// Romanian's and Pinyin's letters drawn as they are (phase 1), the Latin
-// letters the fonts still lack (Vietnamese's) as their base letters; the
-// scripts with no glyphs yet stay '?'. The tests measure a missing glyph as
-// the firmware does: the space width M5GFX gives it, 5 px in DejaVu Sans 16.
+// Romanian's and Pinyin's letters drawn as they are (phase 1), Chinese,
+// Japanese and Korean from the glyph store (phase 2), the Latin letters the
+// fonts still lack (Vietnamese's) as their base letters; the scripts with
+// no glyphs yet stay '?'. The tests measure a missing glyph as the firmware
+// does: the space width M5GFX gives it, 5 px in DejaVu Sans 16.
 void test_names_drawn_with_the_fonts() {
   const Vlw body(kVlwSans16), small(kVlwSans13);
   TEST_ASSERT_EQUAL_INT(5, body.space);
   TEST_ASSERT_EQUAL_INT(4, small.space);
-  TEST_ASSERT_EQUAL_INT(body.width("a") + body.space + body.width("b"), body.width("a\xE4\xB8\xAD" "b"));  // 中
-  TEST_ASSERT_FALSE(body.hasAll("中"));
+  TEST_ASSERT_EQUAL_INT(body.width("a") + body.space + body.width("b"), body.width("a\xD5\x80" "b"));  // Հ
+  TEST_ASSERT_EQUAL_INT(body.width("a") + 16 + body.width("b"), body.width("a\xE4\xB8\xAD" "b"));  // 中: the store's
+  TEST_ASSERT_FALSE(body.hasAll("Հ"));
+  TEST_ASSERT_TRUE(body.hasAll("中"));
   TEST_ASSERT_TRUE(body.hasAll("Ж"));
   TEST_ASSERT_TRUE(body.hasAll("Café ’…€"));
   TEST_ASSERT_EQUAL_STRING("Don’t Stop – Live…", drawn(body, "Don\xC2\x92t Stop \xC2\x96 Live\xC2\x85").c_str());
@@ -411,9 +432,31 @@ void test_names_drawn_with_the_fonts() {
   // NFD Greek and Cyrillic compose to the fonts' letters: Χάρις, Ёлка, Й.
   TEST_ASSERT_EQUAL_STRING("Χάρις", drawn(body, "Χα\xCC\x81ρις").c_str());
   TEST_ASSERT_EQUAL_STRING("Ёлка Й", drawn(body, "Е\xCC\x88лка И\xCC\x86").c_str());
-  // Scripts the fonts don't have yet: '?' a letter, as before.
+  // Chinese, Japanese and Korean from the glyph store (phase 2); NFD
+  // Hangul composed to the store's syllables; halfwidth katakana as the
+  // fullwidth.
+  TEST_ASSERT_EQUAL_STRING("中文", drawn(body, "中文").c_str());
+  TEST_ASSERT_EQUAL_STRING("王菲", drawn(body, "王菲").c_str());
+  TEST_ASSERT_EQUAL_STRING("周杰倫", drawn(small, "周杰倫").c_str());
+  TEST_ASSERT_EQUAL_STRING("宇多田ヒカル", drawn(body, "宇多田ヒカル").c_str());
+  TEST_ASSERT_EQUAL_STRING("坂本龍一", drawn(body, "坂本龍一").c_str());
+  TEST_ASSERT_EQUAL_STRING("아이유", drawn(body, "아이유").c_str());
+  TEST_ASSERT_EQUAL_STRING("한글", drawn(body, "\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB\xE1\x84\x80\xE1\x85\xB3\xE1\x86\xAF").c_str());
+  TEST_ASSERT_EQUAL_STRING("カタカナ", drawn(body, "ｶﾀｶﾅ").c_str());
+  TEST_ASSERT_EQUAL_STRING("ガ パ ア゛", drawn(body, "ｶﾞ ﾊﾟ ｱﾞ").c_str());  // no ア with the mark: the spacing ゛
+  TEST_ASSERT_EQUAL_STRING("「東京」 ・ ㄱ ー", drawn(body, "「東京」 ・ ㄱ ー").c_str());
+  TEST_ASSERT_EQUAL_STRING("Tokyo 東京事変 – Live", drawn(body, "Tokyo 東京事変 \xE2\x80\x93 Live").c_str());
+  TEST_ASSERT_EQUAL_INT(16 * 6, body.width("宇多田ヒカル"));  // Han and kana 16 px, Hangul 15
+  TEST_ASSERT_EQUAL_INT(15 * 3, body.width("아이유"));
+  // Cut at a character to the room, with the font's "…".
+  const std::string cjkCut = drawn(body, "東京事変の夜明けのスキャット", 100);
+  TEST_ASSERT_EQUAL_STRING("東京事変の…", cjkCut.c_str());
+  TEST_ASSERT_TRUE(body.width(cjkCut.c_str()) <= 100);
+  // Scripts with no glyphs yet: '?' a letter, as before; the store's set
+  // has KS X 1001's Hangul and JIS X 0208 and GB2312's level 1, not all of them.
   TEST_ASSERT_EQUAL_STRING("???", drawn(body, "Հայ").c_str());  // Armenian
-  TEST_ASSERT_EQUAL_STRING("??", drawn(body, "中文").c_str());
+  TEST_ASSERT_EQUAL_STRING("?", drawn(body, "똠").c_str());     // a Hangul syllable outside KS X 1001
+  TEST_ASSERT_EQUAL_STRING("?", drawn(body, "\xF0\xA0\x80\x80").c_str());  // U+20000, past the BMP
   TEST_ASSERT_EQUAL_STRING("Ninja ? Beats", drawn(body, "Ninja 🥷 Beats").c_str());
   TEST_ASSERT_EQUAL_STRING("?", drawn(body, "\xE2\x9D\xA4\xEF\xB8\x8F").c_str());  // ❤ + VS16: one '?'
   // Cut to the room as before, the composed text measured.
@@ -452,6 +495,51 @@ void test_fonts_keep_their_line_heights() {
   // The Body and Small heights the boot screen keeps room for.
   TEST_ASSERT_EQUAL_INT(bootlayout::kBodyH, Vlw(kVlwSans16).yAdvance);
   TEST_ASSERT_EQUAL_INT(bootlayout::kSmallH, Vlw(kVlwSans13).yAdvance);
+}
+
+// The glyph store's glyphs in the four rows (docs/I18N.md, phase 2), placed
+// as ui/Fonts places them: 16 px in every role, on the role's baseline, the
+// Small row's a pixel lower (on DejaVu Sans 13's, 13 rows down, 8,902 of
+// the 10,558 would reach above its 17 px: the em box is 14 above and 2
+// below), and nothing outside the row. A glyph whose ink reaches above the
+// row moves down into it (Å in Body and Bold; in Small, 31: box drawing,
+// Å, ヷ and nine kanji), and only the full-height box drawing lose a row,
+// in Small (12). No kana, Hangul or Han is cut in any role.
+void test_store_glyphs_sit_in_the_rows() {
+  const glyphstore::Store& s = cjk();
+  TEST_ASSERT_TRUE(s.valid());
+  struct Role {
+    const uint8_t* data;
+    int baseline, moved, cut;
+  };
+  const Role roles[] = {{kVlwSans16, 15, 1, 0}, {kVlwSans13, 14, 31, 12}, {kVlwSansBold16, 15, 1, 0},
+                        {kVlwSansBold22, 21, 0, 0}};
+  for (const Role& role : roles) {
+    const Vlw f(role.data);
+    const int base = s.baselineIn(f.maxAscent, f.yAdvance);
+    TEST_ASSERT_EQUAL_INT(role.baseline, base);
+    int moved = 0, cut = 0, glyphs = 0;
+    for (uint32_t cp = 0; cp <= 0xFFFF; ++cp) {
+      const glyphstore::Glyph g = s.find(cp);
+      if (!g) continue;
+      ++glyphs;
+      const glyphstore::Metrics m = s.metrics(g);
+      if (m.w == 0) continue;
+      const glyphstore::Placement p = glyphstore::place(m, base, f.yAdvance);
+      char msg[48];
+      snprintf(msg, sizeof(msg), "U+%04X in a %d px row", static_cast<unsigned>(cp), f.yAdvance);
+      TEST_ASSERT_TRUE_MESSAGE(p.top >= 0 && p.rows > 0 && p.top + p.rows <= f.yAdvance, msg);
+      if (p.top != base - m.y) ++moved;
+      if (p.rows < m.h) {
+        ++cut;
+        TEST_ASSERT_TRUE_MESSAGE(cp >= 0x2500 && cp <= 0x257F, msg);  // box drawing only
+        TEST_ASSERT_EQUAL_INT_MESSAGE(m.h - 1, p.rows, msg);
+      }
+    }
+    TEST_ASSERT_EQUAL_UINT32(s.glyphCount(), static_cast<uint32_t>(glyphs));
+    TEST_ASSERT_EQUAL_INT(role.moved, moved);
+    TEST_ASSERT_EQUAL_INT(role.cut, cut);
+  }
 }
 
 // What each of the four fonts covers since phase 1, and what it leaves to
@@ -2510,6 +2598,7 @@ int main(int, char**) {
   RUN_TEST(test_toast_names_fit);
   RUN_TEST(test_names_drawn_with_the_fonts);
   RUN_TEST(test_fonts_keep_their_line_heights);
+  RUN_TEST(test_store_glyphs_sit_in_the_rows);
   RUN_TEST(test_fonts_cover_greek_cyrillic_and_latin);
   RUN_TEST(test_queue_cap_texts_fit);
   RUN_TEST(test_push_out_texts_fit);

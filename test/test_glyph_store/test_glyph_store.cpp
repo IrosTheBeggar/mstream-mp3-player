@@ -329,6 +329,43 @@ void test_bad_bitmap_blanks_the_box() {
   TEST_ASSERT_TRUE(s.decode(s.find(0x3042), ok, 5, sizeof(ok)));
 }
 
+// Where a glyph goes in a line (ui/Fonts): on the line's baseline; one
+// whose ink reaches above the line moves down into it, only as far as it
+// must; rows past the line's bottom aren't drawn. And the baseline a store
+// takes in a font's line: the font's, lower when the em box would reach
+// above the line, never so low that the em box leaves it.
+void test_place_in_a_line() {
+  Metrics m;
+  m.w = 16, m.h = 16, m.x = 0, m.y = 14, m.advance = 16;  // the em box: 14 above, 2 below
+  glyphstore::Placement p = glyphstore::place(m, 15, 19);
+  TEST_ASSERT_EQUAL_INT(1, p.top);
+  TEST_ASSERT_EQUAL_INT(16, p.rows);
+  m.y = 16, m.h = 17;  // Å: 16 above, 1 below
+  p = glyphstore::place(m, 15, 19);
+  TEST_ASSERT_EQUAL_INT(0, p.top);  // a row down
+  TEST_ASSERT_EQUAL_INT(17, p.rows);
+  m.y = 15, m.h = 18;  // ├: 15 above, 3 below, in the Small row (14, 17 rows)
+  p = glyphstore::place(m, 14, 17);
+  TEST_ASSERT_EQUAL_INT(0, p.top);
+  TEST_ASSERT_EQUAL_INT(17, p.rows);  // its last row cut
+  m.y = -2, m.h = 1;  // a low line
+  p = glyphstore::place(m, 15, 19);
+  TEST_ASSERT_EQUAL_INT(17, p.top);
+  TEST_ASSERT_EQUAL_INT(1, p.rows);
+  p = glyphstore::place(m, 15, 10);  // a line too short for it: nothing
+  TEST_ASSERT_EQUAL_INT(0, p.rows);
+  // The built-in store (14 above, 2 below) in the four rows: Body and Bold
+  // (baseline 15 of 19) and Title (21 of 27) on DejaVu's; Small (13 of 17)
+  // a row lower, so the em box fits.
+  const Store& s = builtin();
+  TEST_ASSERT_EQUAL_INT(15, s.baselineIn(15, 19));
+  TEST_ASSERT_EQUAL_INT(14, s.baselineIn(13, 17));
+  TEST_ASSERT_EQUAL_INT(21, s.baselineIn(21, 27));
+  TEST_ASSERT_EQUAL_INT(13, s.baselineIn(10, 15));  // short: the em box's bottom stays in
+  Store none;
+  TEST_ASSERT_EQUAL_INT(13, none.baselineIn(13, 17));  // an empty store: the font's
+}
+
 // ---- the built-in store ----
 
 void test_builtin_header() {
@@ -492,6 +529,7 @@ int main(int, char**) {
   RUN_TEST(test_decode_buffers);
   RUN_TEST(test_open_refuses);
   RUN_TEST(test_bad_bitmap_blanks_the_box);
+  RUN_TEST(test_place_in_a_line);
   RUN_TEST(test_builtin_header);
   RUN_TEST(test_builtin_every_glyph);
   RUN_TEST(test_builtin_draws_names);

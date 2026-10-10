@@ -9,20 +9,25 @@
 // VLW DejaVu fonts), portable and host-tested with a fake font.
 //
 //   - The text is composed first (textfold::Composer: NFD "e" + U+0301
-//     draws as the font's "é"), for the screen only.
+//     draws as the font's "é", halfwidth "ｶﾞ" as "ガ"), for the screen
+//     only. A kana voicing mark left over (ア + U+3099: no such kana) is
+//     the spacing mark the font has, ゛ or ゜.
 //   - A code point the font has no glyph for becomes, in this order: its
 //     Windows-1252 character when it is a C1 control the font has that for
 //     (U+0092 as ’: Latin-1 tags keep cp1252 bytes so, docs/METADATA.md
 //     5.2); else its TextFold look-alike (Full mode: "ỹ" -> "y", "ǆ" ->
 //     "dz", "Ａ" -> "A", "½" -> "1/2", a stray combining mark dropped, "?"
 //     when nothing better): the DejaVu set covers Latin-1, Latin
-//     Extended-A, Greek, Cyrillic and the typographic punctuation, so in
-//     those scripts this is rare, but a missing glyph would otherwise draw
-//     as a blank box.
-//   - Too wide: cut at a character boundary, trailing spaces dropped, and an
-//     ellipsis added ("…" when the font has it, else "...").
-//   - wrap(): up to n lines, broken at spaces, the last one ellipsised
-//     (Now Playing's title).
+//     Extended-A, Greek, Cyrillic and the typographic punctuation, and the
+//     glyph store behind it (ui/Fonts: docs/I18N.md, phase 2) Chinese,
+//     Japanese and Korean, so this is rare, but a missing glyph would
+//     otherwise draw as a blank box.
+//   - Too wide: cut at a character boundary (never between a letter and a
+//     combining mark on it), trailing spaces dropped, and an ellipsis added
+//     ("…" when the font has it, else "...").
+//   - wrap(): up to n lines, broken at spaces and between Chinese and
+//     Japanese characters (not before a closing mark or a small kana, not
+//     after an opening mark), the last one ellipsised (Now Playing's title).
 //
 // The font is two callbacks: a string's width in pixels, and whether it has
 // a glyph for a code point (nullptr: every one).
@@ -49,10 +54,14 @@ Result fit(const Font& f, const char* in, size_t inLen, char* out, size_t outSiz
 // Cuts `text` (prepared, NUL-terminated, in a buffer of `size`) in place.
 bool ellipsize(const Font& f, char* text, size_t size, int maxW);
 
-// Up to `maxLines` lines of at most `maxW` px, broken after spaces (a word
-// wider than a line is cut where it overflows); the last line holds the
-// rest, ellipsised. Line k goes to out + k * lineSize. Returns the lines
-// written (0 for an empty text).
+// Up to `maxLines` lines of at most `maxW` px, broken after spaces, and
+// between two characters where one is Han, kana or CJK punctuation (the
+// other may be Latin), but never before a closing mark (、。」』）...), a
+// small kana, ー, 々 or an iteration mark, nor after an opening one (「『（...).
+// Hangul breaks at its spaces. A word with no such place that is wider than
+// a line is cut where it overflows. The last line holds the rest,
+// ellipsised. Line k goes to out + k * lineSize. Returns the lines written
+// (0 for an empty text).
 int wrap(const Font& f, const char* in, size_t inLen, int maxW, int maxLines, char* out, size_t lineSize);
 
 // `path` cut from the left by whole folders to fit `maxW` px, the nearest

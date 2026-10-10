@@ -165,10 +165,29 @@ uint32_t rank(uint32_t u) {
   return u;  // other characters (below 128), and the other scripts' letters
 }
 
+// Hangul's composition (Unicode 3.12).
+constexpr uint32_t kSBase = 0xAC00, kLBase = 0x1100, kVBase = 0x1161, kTBase = 0x11A7;
+constexpr uint32_t kLCount = 19, kVCount = 21, kTCount = 28, kSCount = kLCount * kVCount * kTCount;
+
+// A Hangul letter's place among Hangul's: a syllable at 2 x its index + 1
+// (code point order), a lone initial consonant at 2 x the index of the
+// first syllable it begins (just before it: ㄱ before 가), any other jamo
+// after the syllables, by code point.
+uint32_t hangulKey(uint32_t cp) {
+  if (cp >= kSBase && cp < kSBase + kSCount) return 2 * (cp - kSBase) + 1;
+  const int l = jamoInitial(cp);
+  if (l >= 0) return 2 * static_cast<uint32_t>(l) * kVCount * kTCount;
+  return 2 * kSCount + cp;
+}
+
 // A letter of a script Full folding can't spell: its unit, else 0.
 uint32_t scriptUnit(uint32_t cp) {
   const Script s = scriptOf(cp);
   if (s == Script::None) return 0;
+  if (s == Script::Hiragana || s == Script::Katakana) {
+    return kScriptUnit + (static_cast<uint32_t>(Script::Hiragana) << 21) + kanaKey(cp);  // the kana: one script
+  }
+  if (s == Script::Hangul) return kScriptUnit + (static_cast<uint32_t>(s) << 21) + hangulKey(cp);
   uint32_t low[3];
   namekey::toLower(cp, low);
   if (low[0] == 0x03C2) low[0] = 0x03C3;  // final sigma: σ
@@ -210,20 +229,19 @@ char letterOf(uint32_t u, bool upper) {
   return static_cast<char>(upper ? u - 'a' + 'A' : u);
 }
 
-// Hangul's composition (Unicode 3.12).
-constexpr uint32_t kSBase = 0xAC00, kLBase = 0x1100, kVBase = 0x1161, kTBase = 0x11A7;
-constexpr uint32_t kLCount = 19, kVCount = 21, kTCount = 28, kSCount = kLCount * kVCount * kTCount;
-
 // The composer's longest run of marks (a bit each in its taken_).
 constexpr int kMaxRun = 16;
 
-// Whether a mark the composer knows can start at `p` (its lead byte): the
-// fast path for the text in between.
+// Whether a mark the composer knows can start at `p` (its lead byte; 0xEF
+// for the halfwidth ﾞ ﾟ): the fast path for the text in between.
 bool maybeMark(const char* p, const char* end) {
   if (end && p >= end) return false;
   const auto b = static_cast<unsigned char>(*p);
-  return b == 0xCC || b == 0xCD || b == 0xD2 || b == 0xE3;
+  return b == 0xCC || b == 0xCD || b == 0xD2 || b == 0xE3 || b == 0xEF;
 }
+
+// The composer's code points: halfwidth katakana as the fullwidth.
+uint32_t decodeFolded(const char*& s, const char* end) { return fromHalfwidth(decode(s, end)); }
 
 }  // namespace
 
@@ -303,6 +321,22 @@ uint32_t fromC1(uint32_t cp) {
   if (cp < 0x80 || cp > 0x9F) return cp;
   const uint32_t to = tables::kCp1252[cp - 0x80];
   return to ? to : cp;
+}
+
+uint32_t fromHalfwidth(uint32_t cp) { return cp >= 0xFF61 && cp <= 0xFF9F ? tables::kHalfwidth[cp - 0xFF61] : cp; }
+
+uint32_t kanaKey(uint32_t cp) {
+  if (cp >= 0x3041 && cp <= 0x30FF) return tables::kKanaKey[cp - 0x3041];
+  if (cp >= 0x31F0 && cp <= 0x31FF) return tables::kKanaKeyExt[cp - 0x31F0];
+  return cp;
+}
+
+int jamoInitial(uint32_t cp) {
+  if (cp >= 0x1100 && cp <= 0x1112) return static_cast<int>(cp - 0x1100);
+  if (cp >= 0x3131 && cp <= 0x314E && tables::kJamoInitial[cp - 0x3131] != 255) {
+    return tables::kJamoInitial[cp - 0x3131];
+  }
+  return -1;
 }
 
 const char* replacement(uint32_t cp, Mode mode) {
@@ -423,12 +457,12 @@ uint32_t Composer::next() {
       return b;
     }
   }
-  uint32_t cp = decode(s_, end_);
+  uint32_t cp = decodeFolded(s_, end_);
   if (cp == 0) return 0;
   // Hangul: L + V, then LV + T (jamo are starters: nothing blocks them).
   while (cp >= kLBase && ((cp < kLBase + kLCount) || (cp >= kSBase && cp < kSBase + kSCount))) {
     const char* p = s_;
-    const uint32_t c = composePair(cp, decode(p, end_));
+    const uint32_t c = composePair(cp, decodeFolded(p, end_));
     if (!c) break;
     cp = c;
     s_ = p;
@@ -439,7 +473,7 @@ uint32_t Composer::next() {
   int n = 0;
   for (;;) {
     const char* q = p;
-    const uint32_t m = decode(q, end_);
+    const uint32_t m = decodeFolded(q, end_);
     if (m == 0 || combiningClass(m) == 0) break;
     if (n == kMaxRun) return cp;  // too many to track: left as they are
     ++n;
@@ -455,14 +489,14 @@ uint32_t Composer::next() {
     int nextLevel = 256;
     const char* q = s_;
     for (int i = 0; i < n; ++i) {
-      const int c = combiningClass(decode(q, end_));
+      const int c = combiningClass(decodeFolded(q, end_));
       if (c > level && c < nextLevel) nextLevel = c;
     }
     if (nextLevel == 256) break;
     level = nextLevel;
     q = s_;
     for (int i = 0; i < n; ++i) {
-      const uint32_t m = decode(q, end_);
+      const uint32_t m = decodeFolded(q, end_);
       if (combiningClass(m) != level) continue;
       if (blocked != level) {
         if (const uint32_t c = composePair(cp, m)) {
@@ -494,7 +528,7 @@ uint32_t Composer::leftover() {
     const char* q = run_;
     int nextLevel = 256;
     for (int i = 0; i < count_; ++i) {
-      const uint32_t m = decode(q, end_);
+      const uint32_t m = decodeFolded(q, end_);
       if (taken_ >> i & 1) continue;
       const int c = combiningClass(m);
       if (c == level_ && i >= at_) {

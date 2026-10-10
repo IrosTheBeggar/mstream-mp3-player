@@ -898,7 +898,8 @@ src/                  Core2 firmware
                       the pages (NowPlaying, Library, Queue, Dance, Output
                       with Pair and About), Thumbs (album covers: the
                       card worker decodes them below the loop),
-                      Fonts + VlwFonts (DejaVu, anti-aliased), Icons +
+                      Fonts + VlwFonts (DejaVu, anti-aliased; CJK and
+                      Hangul from the glyph store behind it), Icons +
                       IconData, Gfx (pushes through the scroll and the
                       bus lock), Theme; Input (the one input layer: corrected
                       touches and the buttons as events, haptic feedback,

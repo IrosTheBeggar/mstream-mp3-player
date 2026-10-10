@@ -46,6 +46,18 @@ enum class Alpha : uint8_t {
   Byte,    // 0-255 (a nibble times 17)
 };
 
+// Where a glyph's box goes in a line of text (ui/Fonts draws the store's
+// glyphs in the DejaVu fonts' rows): nothing is drawn outside the line.
+struct Placement {
+  int top = 0;   // the box's first row, from the line's top
+  int rows = 0;  // its rows drawn, from its first: all of them unless the line is too short
+};
+// `m`'s box on the line's `baseline` (rows from its top) in a line `lineH`
+// rows tall: a glyph whose ink reaches above the line moves down into it,
+// only as far as it must (a few marks and kanji in the Small rows), and the
+// rows past the line's bottom aren't drawn.
+Placement place(const Metrics& m, int baseline, int lineH);
+
 class Store {
 public:
   // Reads the header of the store at `data` (`size` bytes, staying there
@@ -67,6 +79,11 @@ public:
   int maxWidth() const { return maxW_; }
   int maxHeight() const { return maxH_; }
   uint32_t glyphCount() const { return count_; }
+  // The baseline the glyphs take in a line `lineH` rows tall whose font's
+  // baseline is `fontBaseline` rows from its top: the font's, lower where
+  // the em box would reach above the line (DejaVu Sans 13's rows: 14 rows
+  // down, not 13), never so low that the em box leaves the line's bottom.
+  int baselineIn(int fontBaseline, int lineH) const;
 
   Glyph find(uint32_t cp) const;
   bool contains(uint32_t cp) const { return static_cast<bool>(find(cp)); }

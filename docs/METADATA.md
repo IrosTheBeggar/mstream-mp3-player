@@ -3418,6 +3418,11 @@ which fails at about 15k entries (metascan section 6.2).
   that has them (no walk, no scan, the records as they are); by a walk on
   a card with none (a card-reader card before its scan has written D), as
   `load()`'s Outdated says.
+- **`rulesVersion` 4** (2026-10-10, [I18N.md](I18N.md) phase 2): the kana
+  sort as one script (katakana as hiragana, a small kana as its large
+  one), halfwidth katakana as the fullwidth, and a Hangul consonant alone
+  just before the syllables it begins; `sameName()` the same way. The
+  first boot after that firmware rebuilds library.idx once, as for 3.
 - **`load()`:** Loaded (compare the inputs: a hard mismatch, or the
   build-at-boot marker (3.4.2), rebuilds from the records at boot; a soft
   one keeps the index and rebuilds at the
@@ -4913,7 +4918,11 @@ cp1252 characters (5.2), fullwidth ASCII as ASCII, Latin Extended-B and
 Extended Additional by their base letters; a letter Full folding can't
 spell (Greek, Cyrillic, Hangul, kana, Han...) by its script and then its
 Unicode lowercase, after the digits and before the ASCII letters, so
-under the A-Z rail's `#`; ties by the bytes.
+under the A-Z rail's `#`; the kana as one script (katakana as hiragana, a
+small kana as its large one; halfwidth katakana as the fullwidth),
+Hangul syllables by code point with a lone consonant just before the
+syllables it begins, Han by code point (`library.idx` rules 4); ties by
+the bytes.
 
 **As built (2026-10-10, [I18N.md](I18N.md) phase 0, `library.idx` rules
 3):** before it, every letter Full folding couldn't spell folded to `?`,

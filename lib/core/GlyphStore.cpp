@@ -201,6 +201,21 @@ int Store::advance(uint32_t cp) const {
   return g ? metrics(g).advance : -1;
 }
 
+int Store::baselineIn(int fontBaseline, int lineH) const {
+  int b = fontBaseline > ascent_ ? fontBaseline : ascent_;
+  if (b + descent_ > lineH) b = lineH - descent_;
+  return b;
+}
+
+Placement place(const Metrics& m, int baseline, int lineH) {
+  Placement p;
+  p.top = baseline - m.y;
+  if (p.top < 0) p.top = 0;
+  p.rows = m.h < lineH - p.top ? m.h : lineH - p.top;
+  if (p.rows < 0) p.rows = 0;
+  return p;
+}
+
 bool Store::decode(const Glyph& g, uint8_t* out, size_t stride, size_t outSize, Alpha alpha) const {
   if (!g || g.index >= count_ || g.page >= pageCount_) return false;
   const Metrics m = metrics(g);

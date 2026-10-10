@@ -22,6 +22,7 @@
 #include "SheetLayout.h"
 #include "TabBarModel.h"
 #include "TextFit.h"
+#include "TextFold.h"
 #include "TrackProgress.h"
 #include "UiText.h"
 
@@ -440,6 +441,149 @@ void test_textfit_wraps_two_lines() {
   TEST_ASSERT_EQUAL_INT(0, textfit::wrap(f, "", 0, 140, 2, &lines[0][0], sizeof(lines[0])));
 }
 
+namespace {
+
+// A font with the glyph store behind it (ui/Fonts since docs/I18N.md's
+// phase 2): ASCII 7 px, "…" 9, Han, kana and CJK punctuation 16 (the
+// ideographic space too), Hangul 15, the kana's combining voicing marks 0.
+int cjkAdvance(uint32_t cp) {
+  if (cp == 0x2026) return 9;
+  if (cp == 0x3099 || cp == 0x309A) return 0;
+  if (cp >= 0xAC00 && cp <= 0xD7A3) return 15;
+  return cp >= 0x2E80 ? 16 : 7;
+}
+int cjkWidth(void*, const char* s) {
+  int w = 0;
+  for (const char* p = s; *p;) w += cjkAdvance(textfold::decode(p));
+  return w;
+}
+bool cjkHas(void*, uint32_t cp) { return cp != 0x141 && !(cp >= 0xFF61 && cp <= 0xFF9F); }
+// The same with no spacing voicing marks (゛ ゜): a combining one stays.
+bool cjkHasNoSpacingMarks(void* ctx, uint32_t cp) { return cp != 0x309B && cp != 0x309C && cjkHas(ctx, cp); }
+
+textfit::Font cjkFont() {
+  textfit::Font f;
+  f.width = cjkWidth;
+  f.has = cjkHas;
+  return f;
+}
+
+std::vector<std::string> wrapped(const char* in, int maxW, int maxLines) {
+  char lines[4][96];
+  const int n = textfit::wrap(cjkFont(), in, strlen(in), maxW, maxLines, &lines[0][0], sizeof(lines[0]));
+  std::vector<std::string> v;
+  for (int i = 0; i < n; ++i) v.push_back(lines[i]);
+  return v;
+}
+
+}  // namespace
+
+// Chinese, Japanese and Korean names fitted (docs/I18N.md, phase 2): drawn
+// as they are, cut with "…" at a character, never between a letter and the
+// voicing mark on it; halfwidth katakana as the fullwidth.
+void test_textfit_fits_cjk() {
+  const textfit::Font f = cjkFont();
+  char out[96];
+  textfit::Result r = textfit::fit(f, "宇多田ヒカル", strlen("宇多田ヒカル"), out, sizeof(out), 200);
+  TEST_ASSERT_EQUAL_STRING("宇多田ヒカル", out);
+  TEST_ASSERT_FALSE(r.folded);
+  TEST_ASSERT_FALSE(r.cut);
+  // 6 x 16 + 9 = 105 > 100: five characters and the ellipsis.
+  const char* longName = "東京事変の夜明けのスキャット";
+  r = textfit::fit(f, longName, strlen(longName), out, sizeof(out), 100);
+  TEST_ASSERT_TRUE(r.cut);
+  TEST_ASSERT_EQUAL_STRING("東京事変の…", out);
+  TEST_ASSERT_TRUE(cjkWidth(nullptr, out) <= 100);
+  textfit::fit(f, "아이유 방탄소년단", strlen("아이유 방탄소년단"), out, sizeof(out), 100);
+  TEST_ASSERT_EQUAL_STRING("아이유 방탄…", out);  // 45 + 7 + 30 + 9 = 91
+  // A voicing mark the composer leaves (あ + U+3099: no such kana) is the
+  // spacing ゛ when the font has it; else it stays, and a cut keeps the
+  // letter with it (two code points, 16 px).
+  const char* marked = "あ\xE3\x82\x99あ\xE3\x82\x99あ\xE3\x82\x99";
+  r = textfit::fit(f, marked, strlen(marked), out, sizeof(out), 200);
+  TEST_ASSERT_EQUAL_STRING("あ゛あ゛あ゛", out);
+  TEST_ASSERT_TRUE(r.folded);
+  textfit::fit(f, "ｱﾞ", strlen("ｱﾞ"), out, sizeof(out), 200);
+  TEST_ASSERT_EQUAL_STRING("ア゛", out);
+  textfit::Font noSpacing = f;
+  noSpacing.has = cjkHasNoSpacingMarks;
+  for (int w = 25; w <= 47; ++w) {
+    textfit::fit(noSpacing, marked, strlen(marked), out, sizeof(out), w);
+    const std::string s = out;
+    TEST_ASSERT_TRUE(s.size() >= 3);
+    TEST_ASSERT_TRUE_MESSAGE(s.compare(s.size() - 3, 3, "\xE2\x80\xA6") == 0, out);
+    const std::string body = s.substr(0, s.size() - 3);
+    TEST_ASSERT_TRUE_MESSAGE(body.size() % 6 == 0, out);  // whole あ + U+3099 pairs
+  }
+  // Halfwidth katakana: the fullwidth (the composer's NFKC), the voicing composed.
+  r = textfit::fit(f, "ｶﾞｸｼﾞﾁｮｳ", strlen("ｶﾞｸｼﾞﾁｮｳ"), out, sizeof(out), 200);
+  TEST_ASSERT_EQUAL_STRING("ガクジチョウ", out);
+  TEST_ASSERT_FALSE(r.folded);
+  // A font with no store: '?' as before.
+  textfit::fit(fakeFont(), "東京", strlen("東京"), out, sizeof(out), 200);
+  TEST_ASSERT_EQUAL_STRING("??", out);
+}
+
+// wrap() breaks between Chinese and Japanese characters, by the kinsoku
+// rules' commonest: never before a closing mark, a small kana, ー or 々,
+// never after an opening mark; beside Latin too. Hangul breaks at spaces.
+void test_textfit_wraps_cjk() {
+  // 16 px a character: 80 px is five.
+  std::vector<std::string> l = wrapped("東京事変の夜明け", 80, 2);
+  TEST_ASSERT_EQUAL_INT(2, static_cast<int>(l.size()));
+  TEST_ASSERT_EQUAL_STRING("東京事変の", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("夜明け", l[1].c_str());
+  // Not before 。: the line ends a character sooner.
+  l = wrapped("あいうえお。かきくけこ", 80, 3);
+  TEST_ASSERT_EQUAL_INT(3, static_cast<int>(l.size()));
+  TEST_ASSERT_EQUAL_STRING("あいうえ", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("お。かきく", l[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("けこ", l[2].c_str());
+  // Not after 「.
+  l = wrapped("あいうえ「おか」", 80, 2);
+  TEST_ASSERT_EQUAL_STRING("あいうえ", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("「おか」", l[1].c_str());
+  // Not before ー or a small kana, nor 々.
+  l = wrapped("きゃりーぱみゅぱみゅ", 48, 4);
+  for (size_t i = 1; i < l.size(); ++i) {
+    const char* p = l[i].c_str();
+    const uint32_t first = textfold::decode(p);
+    TEST_ASSERT_TRUE_MESSAGE(first != 0x30FC && textfold::kanaKey(first) == first, l[i].c_str());
+  }
+  TEST_ASSERT_EQUAL_STRING("きゃ", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("りーぱ", l[1].c_str());
+  l = wrapped("山田人々時々", 48, 3);
+  TEST_ASSERT_EQUAL_STRING("山田", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("人々", l[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("時々", l[2].c_str());
+  // Beside Latin: a break between them, not inside the Latin word.
+  l = wrapped("Tokyo東京Jihen事変", 70, 2);
+  TEST_ASSERT_EQUAL_STRING("Tokyo東京", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("Jihen事変", l[1].c_str());
+  l = wrapped("東京Jihen", 50, 2);
+  TEST_ASSERT_EQUAL_STRING("東京", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("Jihen", l[1].c_str());
+  // Hangul: at its spaces; inside a word only when the word alone is too wide.
+  l = wrapped("아이유 방탄소년단", 90, 2);
+  TEST_ASSERT_EQUAL_STRING("아이유", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("방탄소년단", l[1].c_str());
+  l = wrapped("방탄소년단 아이유", 70, 2);
+  TEST_ASSERT_EQUAL_STRING("방탄소년", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("단 아이유", l[1].c_str());
+  // The ideographic space: a break, dropped at the line's end and start.
+  l = wrapped("宇多田\xE3\x80\x80ヒカル", 64, 2);
+  TEST_ASSERT_EQUAL_STRING("宇多田", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("ヒカル", l[1].c_str());
+  // The last line ellipsised, as before.
+  l = wrapped("東京事変の夜明けのスキャットの歌", 80, 2);
+  TEST_ASSERT_EQUAL_STRING("東京事変の", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("夜明けの…", l[1].c_str());
+  // Latin alone wraps as it always did.
+  l = wrapped("Harder, Better, Faster, Stronger", 140, 2);
+  TEST_ASSERT_EQUAL_STRING("Harder, Better,", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("Faster, Stronger", l[1].c_str());
+}
+
 // ---- TabBarModel ----
 
 void test_tabbar_hit_areas_reach_the_right_edge() {
@@ -702,6 +846,8 @@ int main(int, char**) {
   RUN_TEST(test_textfit_ellipsises_to_the_width);
   RUN_TEST(test_textfit_short_buffer_still_ends_in_an_ellipsis);
   RUN_TEST(test_textfit_wraps_two_lines);
+  RUN_TEST(test_textfit_fits_cjk);
+  RUN_TEST(test_textfit_wraps_cjk);
   RUN_TEST(test_tabbar_hit_areas_reach_the_right_edge);
   RUN_TEST(test_tabbar_redraws_only_what_changed);
   RUN_TEST(test_tabbar_output_state);

@@ -112,8 +112,11 @@ public:
   // step: names composed (NFC) to sort, U+0080-009F as cp1252, fullwidth
   // ASCII and Latin Extended-B and Additional folded, other scripts by
   // script and letter (not by length), and an artist folder in another
-  // script taking its tags' spelling and sort tag (sameName()).
-  static constexpr uint16_t kRulesVersion = 3;
+  // script taking its tags' spelling and sort tag (sameName()). 4
+  // (phase 2): the kana as one script (katakana as hiragana, small kana as
+  // large), halfwidth katakana as the fullwidth, a Hangul consonant just
+  // before the syllables it begins.
+  static constexpr uint16_t kRulesVersion = 4;
   // The strings' chunks: an offset is its chunk's number, then its place.
   static constexpr uint32_t kChunkBits = 16;
   static constexpr uint32_t kChunkBytes = 1u << kChunkBits;

@@ -419,7 +419,10 @@ It contains:
   reserves the font name "Source"). The glyph data is a Modified Version of
   the font: it stays under the OFL, not the GPL, carries that notice in
   its header, and is named without the font's names (kCjkGlyphs16). The
-  licence's text: [LICENSES/OFL-1.1.txt](LICENSES/OFL-1.1.txt). Source:
+  firmware binary contains it (src/ui/Fonts draws the CJK and Hangul
+  names from it: 1,098,308 B of the image), so a binary release carries
+  the notice above and the licence with it. The licence's text:
+  [LICENSES/OFL-1.1.txt](LICENSES/OFL-1.1.txt). Source:
   https://github.com/notofonts/noto-cjk (Sans, version 2.004); the
   generated file's header names the SHA-256 of the font file it was made
   from.
