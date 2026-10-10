@@ -19,6 +19,7 @@ class InputLab;
 class ScrollLab;
 class FontProbe;
 class ThumbProbe;
+class TagConsole;
 
 // The UI spike's pieces behind one door (docs/UI-SPIKE.md): the input lab
 // (u), the scroll lab (w), the library index and its probe (g), the font
@@ -32,7 +33,8 @@ class ThumbProbe;
 // main.cpp gives, which carries the queue across). g<n> builds a synthetic
 // library of n tracks in an index of the spike's own, which the scroll lab
 // and the thumbnail probe then use instead, until g0; the player never sees
-// it.
+// it. The tags' commands (gs, gt, gr, gw, gb, gv: tagtext, docs/METADATA.md
+// 3.3.6) go to app/TagConsole, made in PSRAM at its first use.
 //
 // The screens get the glass from the input layer (ui/Input: corrected,
 // as events) through onGlass(), like every other screen. The input lab is
@@ -70,6 +72,9 @@ public:
   // The synthetic library g<n> made (nullptr: none). The UI's Library can
   // browse it (console uil<n>); g0 drops it.
   LibraryIndex* synthetic() { return synth_ && synth_->ready() ? synth_ : nullptr; }
+  // The tags' console (nullptr: no PSRAM): the card worker hands it its
+  // jobs (TagConsole::setJobs()).
+  TagConsole* tags();
 
 private:
   enum class Screen : uint8_t { None, Input, Scroll, Font, Thumb };
@@ -88,6 +93,7 @@ private:
   ScrollLab* scroll_ = nullptr;
   FontProbe* font_ = nullptr;
   ThumbProbe* thumb_ = nullptr;
+  TagConsole* tags_ = nullptr;     // PSRAM, on first use
   std::function<void()> released_;
   std::function<bool()> rebuild_;
   bool owned_ = false;

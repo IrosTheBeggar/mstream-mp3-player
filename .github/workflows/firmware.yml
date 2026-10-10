@@ -107,6 +107,12 @@ jobs:
       - name: Host tests
         run: pio test -e native
 
+      # The card contract's shared fixtures (test/fixtures/card) are frozen:
+      # tools/card_fixtures.py, their second implementation, must still make
+      # them byte for byte (docs/METADATA.md 2.17).
+      - name: Card fixtures
+        run: python tools/card_fixtures.py --check
+
       # The dance pack reader and blitter under ASan and UBSan
       # (docs/DANCE-SPRITES.md, Appendix D.5): Linux g++ only.
       # ASan in GCC's older runtimes can hang at start-up (DEADLYSIGNAL

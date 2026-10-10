@@ -602,6 +602,11 @@ uint32_t Core2AudioBackend::bufferedMsNow() const {
   return static_cast<uint32_t>(static_cast<uint64_t>(ring_->size()) * 1000 / kRingRate);
 }
 
+uint32_t Core2AudioBackend::ringCapacityMs() const {
+  if (!ring_) return 0;
+  return static_cast<uint32_t>(static_cast<uint64_t>(ring_->capacity()) * 1000 / kRingRate);
+}
+
 // ---- sharing core 1 with the UI (see the header) ----
 
 void Core2AudioBackend::setRefillPacing(bool enabled, uint32_t capX10) {
@@ -1934,6 +1939,7 @@ Core2AudioBackend::Produced Core2AudioBackend::produceDecoded() {
   const auto passUs = static_cast<uint64_t>(esp_timer_get_time() - t0);
   busyUs_ += passUs;
   busyTotalUs_ += passUs;
+  raiseTo(passPeakUs_, static_cast<uint32_t>(passUs));  // the card worker's yield (ScanScheduler, DecodePass)
   if (passUs > maxPassUs_.load(std::memory_order_relaxed)) {
     maxPassUs_.store(static_cast<uint32_t>(passUs));
     // The heard track's figure too (the console's pass_max: docs/OPUS.md

@@ -72,6 +72,12 @@ struct Info {
 // follows it (or would lie past the buffer), as TrackProgress finds it.
 // False: none found (`out` then says frame = false).
 bool parse(const uint8_t* buf, size_t n, Info* out);
+// The same, the first frame known: `buf` starts with it (a caller that found
+// it by its own rule, as TagScan by lofty's). No search and no look at the
+// next frame, so the answer depends on the buffer only within the frame's
+// first 194 bytes (the furthest LAME's extension reaches). False: `buf`
+// doesn't start with a Layer III header.
+bool parseFirst(const uint8_t* buf, size_t n, Info* out);
 
 // The samples the encoder was given (kept), or the header's frames x spf
 // without a trusted extension; 0: the header doesn't say.

@@ -3,7 +3,9 @@
 
 #include "QueueText.h"
 
+#include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace queuetext {
@@ -128,6 +130,48 @@ private:
   size_t at_ = 0, have_ = 0;
 };
 
+// A block of exactly `n` words from the hooks, given back at the end of
+// the read. The header says how many lines follow, so the read's ids (and,
+// shuffled, ranks) never grow by doubling: a full queue's 5,000 lines take
+// 20 KB (40 KB shuffled) next to the queue's own 60 KB, and a longer file
+// (written before the queue's cap) no more, since only the cap's window is
+// read in (docs/METADATA.md section 3.4.2, step 5). A header that claims
+// more than memory holds fails here, as its file would at the line count.
+class Words {
+public:
+  Words(MemorySink::AllocFn alloc, MemorySink::FreeFn release)
+      : alloc_(alloc ? alloc : heapAlloc), free_(release ? release : heapFree) {}
+  ~Words() {
+    if (data_) free_(data_);
+  }
+  Words(const Words&) = delete;
+  Words& operator=(const Words&) = delete;
+
+  bool reserve(uint32_t n) {
+    if (n == 0) return true;
+    if (n > SIZE_MAX / sizeof(uint32_t)) return false;
+    data_ = static_cast<uint32_t*>(alloc_(static_cast<size_t>(n) * sizeof(uint32_t)));
+    cap_ = data_ ? n : 0;
+    return data_ != nullptr;
+  }
+  // False past the block's end (more lines than the header said).
+  bool push(uint32_t w) {
+    if (size_ >= cap_) return false;
+    data_[size_++] = w;
+    return true;
+  }
+  const uint32_t* data() const { return data_; }
+
+private:
+  static void* heapAlloc(size_t n) { return std::malloc(n); }
+  static void heapFree(void* p) { std::free(p); }
+
+  MemorySink::AllocFn alloc_;
+  MemorySink::FreeFn free_;
+  uint32_t* data_ = nullptr;
+  uint32_t cap_ = 0, size_ = 0;
+};
+
 }  // namespace
 
 void Writer::begin(const QueueModel& q, uint32_t generation) {
@@ -169,9 +213,14 @@ Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_
   if (!lines.next(&line, &overflow) || overflow || !parseHeader(line, &r.header)) return r;
   const int32_t target = pickCurrent ? pickCurrent(r.header, ctx) : r.header.current;
 
-  MemorySink ids(alloc, release);    // the tracks that survive, 4 bytes each
-  MemorySink ranks(alloc, release);  // version 2: their ranks, 4 bytes each
   const bool shuffled = r.header.shuffled;
+  // The lines read in: all of them, or past the queue's cap the window
+  // that holds the current line (QueueModel::window()).
+  const QueueModel::Window w = QueueModel::window(r.header.entries, target);
+  r.first = w.first;
+  Words ids(alloc, release);    // the tracks that survive
+  Words ranks(alloc, release);  // version 2: their ranks
+  if (!ids.reserve(w.count) || (shuffled && !ranks.reserve(w.count))) return r;
   uint32_t count = 0;
   int32_t current = -1;
   while (lines.next(&line, &overflow)) {
@@ -180,9 +229,16 @@ Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_
     // A version 2 line that isn't "<rank> ...": not a whole file (a long
     // path's line, cut, still starts with its rank).
     if (shuffled && !parseRank(path, &rank)) return r;
+    // More lines than the header said: not what it says (the queue left
+    // alone, as for fewer).
+    if (r.lines == r.header.entries) return r;
+    const uint32_t at = r.lines++;
+    if (at < w.first || at - w.first >= w.count) {
+      ++r.capped;  // outside the window: not looked up, not kept
+      continue;
+    }
     const uint32_t id = overflow || !*path ? TrackCatalog::kNone : catalog.find(path);
-    const bool isTarget = static_cast<int32_t>(r.lines) == target;
-    ++r.lines;
+    const bool isTarget = static_cast<int32_t>(at) == target;
     if (id == TrackCatalog::kNone) {
       ++r.dropped;
       if (isTarget) current = static_cast<int32_t>(count);  // the next survivor, if any
@@ -192,16 +248,14 @@ Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_
       current = static_cast<int32_t>(count);
       r.currentKept = true;
     }
-    if (!ids.write(&id, sizeof(id))) return r;
-    if (shuffled && !ranks.write(&rank, sizeof(rank))) return r;  // (dropped tracks leave gaps: fine)
+    // (Room for every line read in, so these can't fail.)
+    if (!ids.push(id)) return r;
+    if (shuffled && !ranks.push(rank)) return r;  // (dropped tracks leave gaps: fine)
     ++count;
   }
-  if (r.lines != r.header.entries) return r;  // cut short, or not what it says: leave the queue alone
+  if (r.lines != r.header.entries) return r;  // cut short: leave the queue alone
   if (current >= static_cast<int32_t>(count)) current = static_cast<int32_t>(count) - 1;
-  if (!q.assign(reinterpret_cast<const uint32_t*>(ids.data()), count, current, shuffled,
-                shuffled ? reinterpret_cast<const uint32_t*>(ranks.data()) : nullptr)) {
-    return r;
-  }
+  if (!q.assign(ids.data(), count, current, shuffled, shuffled ? ranks.data() : nullptr)) return r;
   r.entries = count;
   r.ok = true;
   return r;

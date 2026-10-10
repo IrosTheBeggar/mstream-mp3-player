@@ -1,0 +1,10 @@
+contract=1
+firmware=0.8.0
+read.msmf=1
+read.mptg=1
+read.mpdj=1
+read.mpth=1
+codecs=mp3,flac,opus
+extensions=mp3,flac,opus
+max_rate=48000
+max_channels=2

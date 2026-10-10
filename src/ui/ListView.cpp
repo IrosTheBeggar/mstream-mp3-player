@@ -588,6 +588,7 @@ void ListView::tapItem(int32_t item, const InputEvent& e) {
     }
     case ListLayout::Kind::Row: {
       const auto row = static_cast<uint32_t>(it.row);
+      if (!src_->pressable(row)) break;  // a divider: no control, no tick
       input_->tapTick();
       if (src_->selecting()) {
         src_->onTap(row);
@@ -671,6 +672,7 @@ void ListView::onEvent(const InputEvent& e) {
     pressedX_ = e.atRightEdge() ? kW - 1 : e.x;
     if (downItem_ >= 0 && !wasMoving && drawnOffset_ == offset()) {
       const ListLayout::Item it = layout_.item(static_cast<uint32_t>(downItem_));
+      if (it.kind == ListLayout::Kind::Row && !src_->pressable(static_cast<uint32_t>(it.row))) return;
       int button = -1;
       if (it.kind != ListLayout::Kind::Row) {
         const char* labels[3] = {"", "", ""};

@@ -1069,6 +1069,182 @@ void test_shuffle_with_a_mixed_queue() {
   TEST_ASSERT_EQUAL_UINT32(0, w.audio.engine.counters().cuts);
 }
 
+// ---- the library update's fence (docs/METADATA.md 3.4.2, N12) ----
+// The queue's memory goes to a build on the card worker while the loop goes
+// on (queueremap::Carry): the player is fenced, the queue released; the
+// index is rebuilt with every id renumbered (a file added that sorts first);
+// then the queue comes back from queue.txt (here: the same tracks by their
+// new ids, the same current line, fresh keys) and the player is told.
+namespace {
+void fenceUp(World& w) {
+  w.player.setFenced(true);
+  w.queue.release();
+}
+// The rebuild (`extra` files added) and the read back: `names` in order, the
+// one at `current` current.
+void fenceDown(World& w, std::initializer_list<const char*> names, uint32_t current,
+               std::initializer_list<const char*> extra = {"0 first"}) {
+  w.index.clear();
+  w.index.begin("/music");
+  for (const char* e : extra) w.index.addFile(World::path(e).c_str());
+  for (const std::string& n : w.names) w.index.addFile(World::path(n).c_str());
+  TEST_ASSERT_TRUE(w.index.finish());
+  std::vector<uint32_t> ids;
+  for (const char* n : names) ids.push_back(w.index.findTrack(World::path(n).c_str()));
+  TEST_ASSERT_TRUE(w.queue.assign(ids.data(), static_cast<uint32_t>(ids.size()), current));
+  w.player.setFenced(false);
+  w.player.queueReplaced(true);
+}
+}  // namespace
+
+// The safe point's case: the heard track has time left through the fence.
+// Every id changed under it, and the join after it still plays gaplessly:
+// the word keeps its token (the same file next, by its path), one play().
+void test_a_rebuild_behind_the_fence_keeps_the_join() {
+  World w({"a", "b", "c"}, {"a", "b", "c"});
+  w.put("a", track(44100, 600000, 41));
+  w.put("b", track(44100, 30000, 42));
+  w.put("c", track(44100, 30000, 43));
+  w.player.setRepeat(PlaybackController::Repeat::Off);
+  w.player.play(0);
+  for (int i = 0; i < 50; ++i) w.tick();
+  const uint32_t offered = w.player.offeredToken();
+  TEST_ASSERT_TRUE(offered != 0);
+  fenceUp(w);
+  for (int i = 0; i < 200; ++i) w.tick();  // the loop goes on: nothing read, nothing said
+  TEST_ASSERT_EQUAL_UINT32(offered, w.player.offeredToken());
+  TEST_ASSERT_TRUE(w.audio.advances.empty());  // a plays on
+  fenceDown(w, {"a", "b", "c"}, 0);
+  TEST_ASSERT_EQUAL_UINT32(offered, w.player.offeredToken());  // the same file next: no cut
+  w.runToStop();
+  assertSame(concat({w.get("a").kept(), w.get("b").kept(), w.get("c").kept()}), w.audio.heard);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+  TEST_ASSERT_EQUAL_UINT32(0, w.audio.engine.counters().cuts);
+  TEST_ASSERT_EQUAL_UINT32(0, w.player.fenceStops());
+}
+
+// The build outlasted the safe point's margin: the heard track reached its
+// end inside the fence and joined the next on the word it had (the music
+// goes on). After it, the join is taken by its path though every id and key
+// is new: the joined entry is current, nothing restarts, one play().
+void test_a_join_inside_the_fence_is_taken_after_it() {
+  World w({"a", "b", "c"}, {"a", "b", "c"});
+  w.put("a", track(44100, 60000, 44));
+  w.put("b", track(44100, 50000, 45));
+  w.put("c", track(44100, 30000, 46));
+  w.player.setRepeat(PlaybackController::Repeat::Off);
+  w.player.play(0);
+  for (int i = 0; i < 50; ++i) w.tick();
+  fenceUp(w);
+  // a ends and b is heard, all inside the fence.
+  w.runUntil([&] { return w.audio.engine.boundaryUp() && w.audio.ring.readPos() > w.heardAt() + 2000; });
+  TEST_ASSERT_TRUE(w.player.fenced());
+  TEST_ASSERT_EQUAL_INT(-1, w.player.currentIndex());  // (the queue is away)
+  // queue.txt says a (its line before the fence).
+  fenceDown(w, {"a", "b", "c"}, 0);
+  TEST_ASSERT_EQUAL_INT(1, w.player.currentIndex());
+  TEST_ASSERT_TRUE(w.player.state() == PlayState::Playing);
+  TEST_ASSERT_EQUAL_UINT32(1, w.player.gaplessStats().adopted);
+  TEST_ASSERT_EQUAL_UINT32(0, w.player.gaplessStats().restarted);
+  w.runToStop();
+  assertSame(concat({w.get("a").kept(), w.get("b").kept(), w.get("c").kept()}), w.audio.heard);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+}
+
+// The heard track ended inside the fence with nothing to join (gapless off,
+// "pause after this track", the queue's end): silence since. Nothing starts
+// after the fence: the next entry is cued at 0:00, paused (the queue's end
+// with repeat Off: stopped). A play then starts it.
+void test_a_track_that_ends_inside_the_fence_starts_nothing() {
+  for (int kind = 0; kind < 2; ++kind) {
+    World w({"a", "b", "c"}, {"a", "b", "c"});
+    w.put("a", track(44100, 30000, 47));
+    w.put("b", track(44100, 30000, 48));
+    w.put("c", track(44100, 30000, 49));
+    w.player.setRepeat(PlaybackController::Repeat::Off);
+    if (kind == 0) w.player.setGapless(false);
+    // kind 1: the queue's last entry, repeat Off (nothing follows it).
+    w.player.play(kind == 0 ? 0 : 2);
+    for (int i = 0; i < 20; ++i) w.tick();
+    fenceUp(w);
+    w.runUntil([&] { return w.audio.finished(); });
+    for (int i = 0; i < 500; ++i) w.tick();  // the silence: the player does nothing
+    TEST_ASSERT_TRUE(w.player.state() == PlayState::Playing);
+    const int plays = w.audio.plays;
+    if (kind == 0) {
+      fenceDown(w, {"a", "b", "c"}, 0);
+      TEST_ASSERT_TRUE(w.player.state() == PlayState::Paused);
+      TEST_ASSERT_EQUAL_INT(1, w.player.currentIndex());  // b, cued
+      TEST_ASSERT_FALSE(w.player.pausedByTimer());
+      TEST_ASSERT_EQUAL_UINT32(1, w.player.fenceStops());
+      for (int i = 0; i < 500; ++i) w.tick();
+      TEST_ASSERT_EQUAL_INT(plays, w.audio.plays);  // nothing started by itself
+      TEST_ASSERT_TRUE(w.player.state() == PlayState::Paused);
+      w.player.togglePlayPause();  // the listener's play: b from its start
+      TEST_ASSERT_EQUAL_INT(plays + 1, w.audio.plays);
+      w.runToStop();
+      assertSame(concat({w.get("a").kept(), w.get("b").kept(), w.get("c").kept()}), w.audio.heard);
+    } else {
+      fenceDown(w, {"a", "b", "c"}, 2);
+      TEST_ASSERT_TRUE(w.player.state() == PlayState::Stopped);
+      TEST_ASSERT_EQUAL_INT(plays, w.audio.plays);
+    }
+  }
+}
+
+// Inside the fence the listener can always pause and resume what plays;
+// the rest (next, prev, a play from the start, a seek) finds no queue and
+// does nothing, and the queue's edits refuse (the Queue tab's Clear would
+// have stopped the music, cleared nothing, and the queue come back whole
+// after the fence).
+void test_inside_the_fence_only_pause_and_resume_act() {
+  World w({"a", "b", "c"}, {"a", "b", "c"});
+  w.put("a", track(44100, 90000, 50));
+  w.put("b", track(44100, 30000, 51));
+  w.put("c", track(44100, 30000, 52));
+  w.player.setRepeat(PlaybackController::Repeat::Off);
+  w.player.play(0);
+  for (int i = 0; i < 100; ++i) w.tick();
+  const uint32_t key = w.queue.currentKey();
+  fenceUp(w);
+  w.player.togglePlayPause();
+  TEST_ASSERT_TRUE(w.player.state() == PlayState::Paused);
+  const uint32_t at = w.player.positionMs();
+  for (int i = 0; i < 300; ++i) w.tick();
+  TEST_ASSERT_EQUAL_UINT32(at, w.player.positionMs());
+  w.player.next();
+  w.player.prev();
+  w.player.play(1);
+  const PlaybackController::Seek sk = w.player.seek(key, 30000, 2000);
+  TEST_ASSERT_TRUE(sk != PlaybackController::Seek::Started && sk != PlaybackController::Seek::Waits);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+  TEST_ASSERT_TRUE(w.player.state() == PlayState::Paused);
+  w.player.togglePlayPause();  // resume: the track the backend holds
+  TEST_ASSERT_TRUE(w.player.state() == PlayState::Playing);
+  w.player.clearQueue();
+  TEST_ASSERT_TRUE(w.player.state() == PlayState::Playing);
+  TEST_ASSERT_FALSE(w.player.clearUpNext());
+  const uint32_t positions[1] = {0};
+  TEST_ASSERT_FALSE(w.player.moveNext(positions, 1));
+  TEST_ASSERT_EQUAL_UINT32(0, w.player.remove(positions, 1).count);
+  const uint32_t ids[1] = {w.index.findTrack(World::path("b").c_str())};
+  TEST_ASSERT_FALSE(w.player.playNow(ids, 1, 0));
+  TEST_ASSERT_FALSE(w.player.playNext(ids, 1));
+  TEST_ASSERT_FALSE(w.player.addToQueue(ids, 1));
+  TEST_ASSERT_FALSE(w.player.undo());
+  w.player.setShuffle(true);
+  TEST_ASSERT_FALSE(w.player.shuffle());
+  TEST_ASSERT_TRUE(w.queue.empty());
+  TEST_ASSERT_TRUE(w.player.state() == PlayState::Playing);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+  for (int i = 0; i < 100; ++i) w.tick();
+  fenceDown(w, {"a", "b", "c"}, 0);
+  TEST_ASSERT_EQUAL_UINT32(3, w.queue.size());
+  w.runToStop();
+  assertSame(concat({w.get("a").kept(), w.get("b").kept(), w.get("c").kept()}), w.audio.heard);
+  TEST_ASSERT_EQUAL_INT(1, w.audio.plays);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_an_album_plays_as_one_stream);
@@ -1099,5 +1275,9 @@ int main(int, char**) {
   RUN_TEST(test_repeat_all_wraps_from_the_last_opus_entry);
   RUN_TEST(test_an_empty_entry_is_a_failure_under_repeat);
   RUN_TEST(test_shuffle_with_a_mixed_queue);
+  RUN_TEST(test_a_rebuild_behind_the_fence_keeps_the_join);
+  RUN_TEST(test_a_join_inside_the_fence_is_taken_after_it);
+  RUN_TEST(test_a_track_that_ends_inside_the_fence_starts_nothing);
+  RUN_TEST(test_inside_the_fence_only_pause_and_resume_act);
   return UNITY_END();
 }

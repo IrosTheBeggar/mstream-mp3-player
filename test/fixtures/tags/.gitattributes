@@ -1,0 +1,3 @@
+# The files are compared byte for byte (the audio, anchors.json, the
+# README, expected.json): never convert their line ends.
+* -text

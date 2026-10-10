@@ -28,7 +28,12 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // the one playing isn't in the restored queue, in the shuffle mode the edit
 // was made in (Shuffle all's Play turns it on; its undo, off again). Edits
 // that don't touch it (Play next, + Queue, Clear up next) change nothing
-// that plays.
+// that plays. That holds for an add that pushes out what already played
+// to make room in a full queue (QueueModel's cap, docs/QUEUE-MODES.md
+// 15.8): only entries before the current one go, so the current entry
+// (by its key: its start point, length and failure with it) and what
+// follows it stay as they were, a position or more further up; the word
+// on what follows changes only when the add itself puts a new entry next.
 //
 // Repeat (setRepeat(), docs/QUEUE-MODES.md section 3): Off, All or One.
 // The rule: a natural end follows the mode; a skip wraps unless the mode is
@@ -333,8 +338,18 @@ public:
   bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start) { return playNow(tracks, n, start, shuffle()); }
   // Play with the shuffle mode set as part of it (Shuffle all: on): one
   // edit (QueueModel::replace(.., shuffled)), so undo() puts the queue and
-  // the mode back. Out of memory: false, and neither changed.
+  // the mode back. Out of memory: false, and neither changed. Past the
+  // queue's cap (QueueModel::kMaxEntries), 5,000 of the tracks: the first
+  // (or the window that holds `start`), or shuffled a random 5,000.
   bool playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle);
+  // As many as fit under the cap (QueueModel::room()), the first ones,
+  // after pushing out the entries that already played to make room
+  // (QueueModel::pushedBy(): the heard ones before the current entry,
+  // oldest first, never the current entry); false when none fit (the
+  // queue full and no played entry to push out) or out of memory. What
+  // the add did is read off the queue after the call
+  // (queueview::addOutcome()): the call takes a heard join first, which
+  // moves the current entry.
   bool playNext(const uint32_t* tracks, uint32_t n);
   bool addToQueue(const uint32_t* tracks, uint32_t n);
   QueueModel::Removed remove(const uint32_t* positions, uint32_t n);
@@ -345,8 +360,38 @@ public:
   // The queue was replaced behind our back (restored from the card, or
   // remapped after a library rebuild). `currentKept`: the current entry is
   // still the track the backend has; otherwise, if it plays, the new
-  // current one starts.
+  // current one starts. After a fence (setFenced()), a heard track that
+  // ended inside it with nothing joined starts nothing: the entry after it
+  // (by the repeat mode; not `currentKept`, the new current one) is cued at
+  // 0:00, paused (fenceStops()).
   void queueReplaced(bool currentKept);
+
+  // ---- the library update's fence (docs/METADATA.md 3.4.2; N12) ----
+  // The queue's memory goes to a library build that runs on the card
+  // worker while the loop goes on (queueremap::Carry): from setFenced(true)
+  // to setFenced(false), the queue is empty and the catalog has no index,
+  // so nothing here reads them: no heard join is taken (the backend keeps
+  // it: queueReplaced() takes it after, its entry found by its path, since
+  // every id changed), no word goes to the backend (it keeps the one it
+  // had: a track that reaches its end inside the fence joins the next as
+  // before), update() does nothing (a natural end is queueReplaced()'s).
+  // The actions find the queue empty and do nothing, but for pause, and
+  // resume of the track the backend holds: the listener can always stop
+  // the sound, and nothing starts that needs a path. The queue's edits
+  // (playNow() to undo(), and setShuffle()) refuse at once: false, nothing
+  // removed (clearQueue() would otherwise stop the held track and clear
+  // nothing, the queue coming back whole after the fence).
+  void setFenced(bool on);
+  bool fenced() const { return fenced_; }
+  // togglePlayPause() now would start an entry (stopped, or an entry cued
+  // at 0:00, paused), not pause or resume a track the backend holds. Behind
+  // the fence that start does nothing (it needs a path): the firmware says
+  // the play waits instead of ignoring it in silence (the 2026-10-09 device
+  // run's L4.7b pressed play on a cued entry inside the fence).
+  bool playStartsEntry() const { return state_ == PlayState::Stopped || (state_ == PlayState::Paused && cued_); }
+  // Heard tracks that ended inside a fence with nothing joined (cued after
+  // it, paused), free-running.
+  uint32_t fenceStops() const { return fenceStops_; }
 
   // The last track that couldn't be played (skipped by update()), for the
   // UI's note ("Skipped 07 - x.flac: can't play it", why its sample rate
@@ -380,6 +425,9 @@ public:
   // Repeat One's loops (a natural end that played the entry again),
   // free-running: main's "[queue] repeat one" line.
   uint32_t repeats() const { return repeats_; }
+  // The seeks that did something (Started or Waits), free-running: the
+  // card worker waits 2 s after one (ScanScheduler's seekSeq).
+  uint32_t seeks() const { return seeks_; }
 
   PlayState state() const { return state_; }
   int currentIndex() const { return queue_.current(); }
@@ -407,6 +455,9 @@ private:
     uint32_t token = 0;
     uint32_t key = QueueModel::kNone;
     uint32_t track = QueueModel::kNone;
+    // Its path's FNV-1a (QueueSaver::pathHash()'s): the same file when its
+    // key went and its id may mean another track (a library rebuild).
+    uint32_t pathHash = 0;
   };
   struct Signature {
     uint32_t position = 0, content = 0, heard = 0;
@@ -481,6 +532,7 @@ private:
   PlayState state_ = PlayState::Stopped;
   Repeat repeat_ = Repeat::All;
   uint32_t repeats_ = 0;
+  uint32_t seeks_ = 0;
   // Paused (or Waiting) on a cued track: the backend holds nothing, so a
   // resume starts it.
   bool cued_ = false;
@@ -519,4 +571,11 @@ private:
   uint32_t sentAfter_ = 0;
   Signature signature_;
   GaplessStats gaplessStats_;
+
+  // The library update's fence (setFenced()).
+  bool fenced_ = false;
+  bool endedInFence_ = false;  // the heard track ended inside it (taken by queueReplaced())
+  uint32_t fenceStops_ = 0;
+  // The file the entry at `pos` names (its path's FNV-1a; 0: none).
+  uint32_t pathHashAt(uint32_t pos) const;
 };

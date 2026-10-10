@@ -58,7 +58,12 @@ the prebuilt ESP-IDF libraries; WiFi (net80211, pp, wpa_supplicant, lwIP,
 mesh, ESP-NOW: pulled into the link, then collected to 0 bytes); the Arduino
 core's HTTPClient, Network and SPIFFS; Mbed TLS itself (only Espressif's
 SHA-256 port file is linked, see ESP-IDF). The Unity test framework is used
-by the host tests only.
+by the host tests only, and so is the copy of ChaN's FatFs R0.15 in
+`test/support/fatfs` (elm-chan.org's ff15.zip, SHA-256
+e0d76654d877e6c74be5ea3c395808794d495169514e98cbf6046168b8f4f070, with
+`ffunicode.c` cut to its CP850 table; its licence is that folder's
+LICENSE.txt, as in [LICENSES/FatFs.txt](LICENSES/FatFs.txt)): a host model
+of the firmware's FatFs, which is ESP-IDF's (below).
 
 A new dependency, a version bump or a change of what the firmware calls can
 change this list: check the map again before a release.
@@ -280,6 +285,17 @@ It contains:
     "Copyright (c) 2014 Neil Thiessen" (sd_diskio_crc.c).
   - HardwareSerial.cpp and chip-debug-report.cpp carry no notice (the
     package's LGPL-2.1-or-later applies).
+- **Its SD library is built from this repository's copy**, `lib/SD`
+  (SD.cpp, SD.h, sd_defines.h, sd_diskio.cpp, sd_diskio.h,
+  sd_diskio_crc.c, library.properties, from the package's
+  `libraries/SD` at 3.3.12), which PlatformIO takes before the
+  framework's. Apache-2.0 by the files' headers ("Copyright 2015-2016
+  Espressif Systems (Shanghai) PTE LTD"; sd_diskio_crc.c "Copyright (c)
+  2014 Neil Thiessen"); two files are modified: `sd_diskio.cpp` (it says
+  so at its top, and each change is marked: the card's busy waited out
+  after a write) and `library.properties` (its `version`, 3.3.12+mstream.1,
+  and its `paragraph`); the other files are unchanged (the SHA-256 sums of
+  every original and the changes are in lib/SD/README.md).
 - Source: https://github.com/espressif/arduino-esp32/tree/3.3.12
 - Also in the merged image: boot_app0.bin (at 0xE000), from this package.
 
@@ -396,3 +412,16 @@ It contains:
   third-party images or icon fonts). GPL-3.0-or-later, like the rest.
 - **The dancing crab** (lib/core/CrabArt.*, from tools/art/crab.json):
   drawn for this project. GPL-3.0-or-later.
+- **The mStream logo** on the boot screen (lib/core/LogoArt.*, made by
+  tools/make_logo.py from tools/art/mstream-logo.svg): the logo of
+  mStream, the music server this player syncs from, by the same author
+  (IrosTheBeggar). The SVG is mStream's webapp/assets/img/mstream-logo.svg,
+  unchanged, as it is in mStream v6.24.0 (where it last changed in commit
+  b0cfd005b331cdc2362d7e43bf24a0f0be175332, 2021-02-02; git blob
+  164177d7a5283463bd48e82aae20bb31077a9581); the firmware has it rendered
+  at 240 px and recoloured for the dark screen. Licence: mStream declares
+  GPL-3.0 (its package.json); the logo's author, who is also this
+  firmware's, licenses it here (the SVG copy and the files made from it)
+  under GPL-3.0-or-later, like the rest of the firmware (the text is
+  [LICENSE](LICENSE)). Source:
+  https://github.com/IrosTheBeggar/mStream/blob/v6.24.0/webapp/assets/img/mstream-logo.svg

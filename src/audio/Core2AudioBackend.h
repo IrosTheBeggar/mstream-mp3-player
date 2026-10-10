@@ -263,6 +263,18 @@ public:
   uint32_t bufferedMsNow() const;
   // The outputs' underrun count (free-running).
   uint32_t underrunsNow() const { return shared_.underruns.load(std::memory_order_relaxed); }
+  // The ring's size in ms (about 1,490).
+  uint32_t ringCapacityMs() const;
+  // The card worker's inputs (docs/METADATA.md 3.3.9; ScanScheduler::In):
+  // the longest decode pass finished since the last call, then 0 (the decode
+  // task raises it after each pass; the loop takes it once a pass); and
+  // whether the decoder is past the heard track's end of file (the next
+  // decoding ahead into the same ring, or a drain): the track-change window.
+  uint32_t takePassPeakUs() { return passPeakUs_.exchange(0, std::memory_order_relaxed); }
+  bool heardSourceEnded() const {
+    uint32_t ms = 0;
+    return book_.frozenLength(&ms);
+  }
   // Decode task time spent producing, since boot (never reset; per-second
   // deltas give the decoder's share of core 1, SD waits included).
   uint64_t decodeBusyUsTotal() const { return busyTotalUs_.load(std::memory_order_relaxed); }
@@ -612,6 +624,7 @@ private:
                                              // the track decoding, frozen while the next decodes ahead, the joined
                                              // track's once its join is heard (takeAdvance())
   std::atomic<uint32_t> heardToken_{0};      // the heard track's token (0: the request's own; GaplessJoin)
+  std::atomic<uint32_t> passPeakUs_{0};      // the longest pass since takePassPeakUs() (the card worker's yield)
   std::atomic<bool> ringSteady_{false};  // see ringSteady()
   std::atomic<uint64_t> producedFrames_{0};  // ring frames (44.1 kHz) of the current track
   // For durationMs(): the file's position when the first audio came and

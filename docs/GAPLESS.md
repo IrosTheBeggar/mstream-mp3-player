@@ -1754,6 +1754,24 @@ next file (it needs a file renamed on the card); the hold's cost by
   screenshot) during a track shorter than the ring can cost that one join
   the same way. Such tracks are rare, and v0.5.0's gap is all that
   happens.
+- **The library's update step** (docs/METADATA.md 3.4.2; 3.9 as built in
+  its N12) builds on the card worker while the loop goes on, behind a
+  fence: the queue's memory is the build's, so the player reads neither
+  the queue nor the catalog. It starts only with 20 s of the playing
+  track left at least and no seek in the last 2 s, against a build of
+  about 9-14 s at 20,000 tracks (ESTIMATED; the device batch's L4
+  measures it). Inside the fence no word goes and none changes (the
+  decoder keeps the one it had: a track that reaches its end joins the
+  next as ever, the music goes on), and a join heard meanwhile is taken
+  after the fence by its entry's path (`queueReplaced()`: every id and
+  key is new; the same file next keeps its token, so a decode-ahead isn't
+  cut). A track that ends inside it with nothing joined (gapless off, the
+  sleep timer's end, the queue's end, or a paused track resumed near its
+  end) **starts nothing**: after the fence the entry after it is cued at
+  0:00, paused (stopped at the queue's end with repeat Off), and a play
+  starts it (`fenceStops()`). Hearing safety holds: nothing starts by
+  itself that `advance()` wouldn't have, and only pause and resume act
+  inside the fence.
 - **A FLAC with a big embedded picture** is read through at its open
   (libFLAC skips metadata it doesn't keep through the read callback). At
   a join that must finish within the ~1.4 s of N left in the ring; on an

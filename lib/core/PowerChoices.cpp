@@ -34,7 +34,8 @@ CpuTap cpuTap(uint16_t saved, uint16_t running, bool pairing) {
   return pairing ? CpuTap::WaitPairing : CpuTap::AskRestart;
 }
 
-bool cpuRestartDue(uint32_t nowMs, uint32_t askedMs, bool linked, bool ampOn) {
+bool cpuRestartDue(uint32_t nowMs, uint32_t askedMs, bool linked, bool ampOn, bool libraryWrite) {
+  if (libraryWrite) return false;  // the card's library is being written: never cut
   const int32_t elapsedMs = static_cast<int32_t>(nowMs - askedMs);  // < 0: asked later in this pass
   return (!linked && !ampOn) || elapsedMs >= static_cast<int32_t>(kRestartWaitMs);
 }

@@ -73,6 +73,13 @@
 //   e...  font probe (e all, e1-e5 one option)
 //   j...  thumbnail probe (j first cover, j<n>, jw<n> with .565 files, ja all)
 // (No 'f' for fonts: f forgets the headphones and restarts.)
+//
+// After each command ended with Enter, and after l, s and L, a line with
+// how much of the loop task's 8 KB stack the command left unused (the
+// stack under the console is painted again before each: app/LoopStack);
+// after any other key only when it left under loopstack::kMinLeft (the
+// line then says LOW):
+//   [console] gs: the loop task's stack: 4416 B never used during it (of 8 KB; 2008 B the lowest since the boot)
 class SerialConsole {
 public:
   struct Actions {
@@ -144,7 +151,11 @@ public:
   bool poll();
 
 private:
-  void key(char c);  // a byte that is the console's
+  // A byte that is the console's: key() with the loop task's stack
+  // measured around it.
+  void take(char c);
+  // The command's letter when the byte ran one, else 0.
+  char key(char c);
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
     InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle, BluetoothTest,

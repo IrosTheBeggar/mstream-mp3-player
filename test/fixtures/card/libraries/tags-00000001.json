@@ -1,0 +1,18 @@
+{
+ "format": "MPTG",
+ "file": "tags-00000001.bin",
+ "generation": 1,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "source": 2,
+ "parserVersion": 1,
+ "readRules": 1,
+ "producer": "mstream-terminal 0.13.0",
+ "note": "No records: FOLD holds /music and an OWNED empty folder; no HIDX, ORIG or OSTR.",
+ "folders": [
+  {
+   "path": "Owned Empty",
+   "flags": 1
+  }
+ ],
+ "records": []
+}

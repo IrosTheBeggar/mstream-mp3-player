@@ -72,6 +72,10 @@ public:
 
   // Every id means something else now: all of it goes (the pools stay).
   void clear();
+  // The pools given back (the library's update step, docs/METADATA.md
+  // 3.4.2: about 315 KB for its build), with everything clear() drops;
+  // begin() makes them again. Meanwhile nothing is stored or asked for.
+  void release();
   const Stats& stats() const { return stats_; }
 
 private:

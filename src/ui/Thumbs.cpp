@@ -17,8 +17,10 @@
 #include <cstring>
 #include <new>
 
+#include "CardContract.h"
 #include "JpegInfo.h"
 #include "LibraryIndex.h"
+#include "app/CardWorker.h"
 #include "app/Library.h"
 #include "app/Psram.h"
 
@@ -45,9 +47,12 @@ struct Thumbs::Job {
   uint8_t sizes = 0;          // wanted (ThumbCache::bit)
   bool pickLargest = false;   // no well-named cover: the largest .jpg in `folder`
   bool skipCard = false;      // decode even if the card has a copy (console uiT: timings)
+  bool transfer = false;      // the album has the transfer's thumbnail (kTransferThumb)
+  uint64_t folderHash = 0;    // ... keyed by its album folder's path hash (2.14.1)
   char root[16] = "";         // the VFS mount point
   char thumbDir[48] = "";     // "<root>/.player/thumbs"
-  char image[288] = "";       // the index's cover ("/music/.../cover.jpg"): the card copy's key
+  char transferDir[48] = "";  // "<root>/.mstream/thumbs"
+  char image[288] = "";       // the index's cover ("/music/.../cover.jpg"): the card copy's key; "" none
   char folder[256] = "";
   // Out.
   bool ok = false;
@@ -55,19 +60,20 @@ struct Thumbs::Job {
   bool noPicture = false;     // it can't be decoded (and is remembered as such on the card)
   bool known = false;         // ... the card said so already
   bool fromCard = false;
+  bool fromTransfer = false;
   bool progressive = false;
   uint16_t width = 0, height = 0;
   uint8_t scale = 0;
   uint32_t bytes = 0;
   uint32_t ms = 0;
-  uint32_t readMs = 0, decodeMs = 0, writeMs = 0;  // ms's parts: the file in, TJpgDec + scaler, the card copy
+  uint32_t readMs = 0, decodeMs = 0, writeMs = 0;  // ms's parts: the header and the file in, TJpgDec + scaler, the card copy
   uint32_t internalMin = 0;
-  uint32_t stackLeft = 0;
   char used[288] = "";        // the file decoded
   char note[64] = "";
   // The worker's buffers (PSRAM, kept).
   uint16_t* pixels[2] = {nullptr, nullptr};
   uint8_t* pool = nullptr;
+  uint8_t* input = nullptr;   // the JPEG's input, kInputBytes
   ThumbScaler* scaler = nullptr;
   char path[320] = "";        // scratch: VFS paths
   char tmp[320] = "";
@@ -103,18 +109,20 @@ bool writeAll(int fd, const void* src, size_t n) {
   return true;
 }
 
-// The card's copy of this cover's thumbnails: the sizes asked, or that it
-// can't be decoded. False: none (or not ours: a hash clash, another version).
-bool readCardCopy(Job& j, uint64_t hash) {
-  if (!thumbfile::path(j.thumbDir, hash, j.path, sizeof(j.path))) return false;
-  const int fd = open(j.path, O_RDONLY);
+// A thumbnail file (MPTH v1: the device's own copy, or the transfer's) at
+// `path` for `hash`: the sizes asked, or that it can't be decoded. False:
+// none (or not ours: a hash clash, another version).
+bool readThumbFile(Job& j, const char* path, uint64_t hash, bool* noPicture) {
+  const int fd = open(path, O_RDONLY);
   if (fd < 0) return false;
   uint8_t head[thumbfile::kHeaderBytes];
   thumbfile::Header h;
   bool ok = readAll(fd, head, sizeof(head)) && thumbfile::read(head, sizeof(head), &h) && h.pathHash == hash;
+  *noPicture = false;
   if (ok && (h.flags & thumbfile::kNoPicture)) {
-    j.noPicture = j.known = true;
+    *noPicture = true;
   } else if (ok) {
+    j.made = 0;
     for (int k = 0; k < 2 && ok; ++k) {
       const auto s = static_cast<ThumbCache::Size>(k);
       if (!(j.sizes & ThumbCache::sizeBit(s))) continue;
@@ -122,10 +130,36 @@ bool readCardCopy(Job& j, uint64_t hash) {
            readAll(fd, j.pixels[k], ThumbCache::slotBytes(s));
       if (ok) j.made = static_cast<uint8_t>(j.made | ThumbCache::sizeBit(s));
     }
-    j.ok = ok;
   }
   close(fd);
+  return ok;
+}
+
+// The card's copy of this cover's thumbnails (/.player/thumbs).
+bool readCardCopy(Job& j, uint64_t hash) {
+  if (!thumbfile::path(j.thumbDir, hash, j.path, sizeof(j.path))) return false;
+  bool noPicture = false;
+  const bool ok = readThumbFile(j, j.path, hash, &noPicture);
+  if (ok && noPicture) {
+    j.noPicture = j.known = true;
+  } else if (ok) {
+    j.ok = true;
+  }
   j.fromCard = ok;
+  return ok;
+}
+
+// The transfer's thumbnail (2.14.1): /.mstream/thumbs, read only. One that
+// says "no picture" isn't the software's (it never writes one): a miss.
+bool readTransferThumb(Job& j) {
+  if (!cardcontract::transferThumbPath(j.transferDir, j.folderHash, j.path, sizeof(j.path))) return false;
+  bool noPicture = false;
+  const bool ok = readThumbFile(j, j.path, j.folderHash, &noPicture) && !noPicture;
+  if (ok) {
+    j.ok = true;
+    j.fromTransfer = true;
+    snprintf(j.used, sizeof(j.used), "%s", j.path);
+  }
   return ok;
 }
 
@@ -184,21 +218,39 @@ void pickLargest(Job& j) {
   closedir(d);
 }
 
+// The JPEG streamed from its file: TJpgDec asks a few hundred bytes at a
+// time; they come from `input`, refilled from the card in kInputBytes
+// reads (multi-sector reads, not one card access per TJpgDec request).
 struct Stream {
-  const uint8_t* data;
-  size_t size;
-  size_t pos;
+  int fd;
+  uint8_t* buf;
+  uint32_t fill;  // valid bytes in buf
+  uint32_t pos;   // the next one
+  bool failed;
   ThumbScaler* scaler;
   uint32_t outputs;
   uint32_t* internalMin;
 };
 
+bool refill(Stream& s) {
+  const ssize_t got = read(s.fd, s.buf, Thumbs::kInputBytes);
+  if (got < 0) s.failed = true;
+  s.fill = got > 0 ? static_cast<uint32_t>(got) : 0;
+  s.pos = 0;
+  return s.fill > 0;
+}
+
 uint32_t jpegIn(void* dev, uint8_t* buf, uint32_t len) {
   auto* s = static_cast<Stream*>(dev);
-  const size_t n = std::min<size_t>(len, s->size - s->pos);
-  if (buf) memcpy(buf, s->data + s->pos, n);
-  s->pos += n;
-  return static_cast<uint32_t>(n);
+  uint32_t done = 0;
+  while (done < len) {
+    if (s->pos >= s->fill && !refill(*s)) break;
+    const uint32_t k = std::min(len - done, s->fill - s->pos);
+    if (buf) memcpy(buf + done, s->buf + s->pos, k);
+    s->pos += k;
+    done += k;
+  }
+  return done;
 }
 
 uint32_t jpegOut(void* dev, void* bitmap, JRECT* r) {
@@ -221,11 +273,17 @@ const char* jresName(JRESULT r) {
   }
 }
 
-// Decodes j.used (read whole into PSRAM) into both sizes. False: j.note says why.
+// The header walk's reads (jpeg::parseFile()): at offsets of the open file.
+bool readAt(uint32_t offset, uint8_t* out, uint32_t n, void* ctx) {
+  const int fd = *static_cast<const int*>(ctx);
+  return lseek(fd, static_cast<off_t>(offset), SEEK_SET) >= 0 && readAll(fd, out, n);
+}
+
+// Decodes j.used, streamed from the card, into both sizes. False: j.note says why.
 bool decode(Job& j, uint32_t* sourceBytes, bool* undecodable) {
   *undecodable = false;
   snprintf(j.path, sizeof(j.path), "%s%s", j.root, j.used);
-  const int fd = open(j.path, O_RDONLY);
+  int fd = open(j.path, O_RDONLY);
   if (fd < 0) {
     snprintf(j.note, sizeof(j.note), "can't open it");
     return false;
@@ -235,30 +293,20 @@ bool decode(Job& j, uint32_t* sourceBytes, bool* undecodable) {
   const size_t size = sized ? static_cast<size_t>(st.st_size) : 0;
   *sourceBytes = static_cast<uint32_t>(size);
   j.bytes = static_cast<uint32_t>(size);
-  if (!sized || size < 64 || size > Thumbs::kMaxJpegBytes) {
+  if (!sized || size < 64) {
     close(fd);
-    snprintf(j.note, sizeof(j.note), "%s (%u bytes)", size > Thumbs::kMaxJpegBytes ? "too big" : "too small",
-             static_cast<unsigned>(size));
+    snprintf(j.note, sizeof(j.note), "too small (%u bytes)", static_cast<unsigned>(size));
     *undecodable = sized;
     return false;
   }
-  auto* data = static_cast<uint8_t*>(psramAlloc(size));
-  if (!data) {
-    close(fd);
-    snprintf(j.note, sizeof(j.note), "no PSRAM for %u bytes", static_cast<unsigned>(size));
-    return false;
-  }
-  const bool read = readAll(fd, data, size);
-  close(fd);
-  const int64_t readAt = esp_timer_get_time();
+  // Its frame header, wherever it is (EXIF, XMP, a Photoshop block and an
+  // ICC profile can put it past 64 KB): segments skipped by their lengths.
+  const jpeg::Info info = jpeg::parseFile(readAt, &fd, static_cast<uint32_t>(size));
+  const int64_t readAt0 = esp_timer_get_time();
   j.internalMin = std::min(j.internalMin, internalFree());
   bool ok = false;
-  // The whole file is in memory: its markers are walked to the frame
-  // header wherever that is (EXIF, XMP, a Photoshop block and an ICC
-  // profile can put it past 64 KB; parse() skips each by its length).
-  const jpeg::Info info = read ? jpeg::parse(data, size) : jpeg::Info{};
-  if (!read) {
-    snprintf(j.note, sizeof(j.note), "a read failed");
+  if (info.readFailed) {
+    snprintf(j.note, sizeof(j.note), "a read failed");  // the card, not the picture: tried again later
   } else if (!info.ok) {
     snprintf(j.note, sizeof(j.note), "not a JPEG the decoder can read");
     *undecodable = true;
@@ -268,12 +316,14 @@ bool decode(Job& j, uint32_t* sourceBytes, bool* undecodable) {
     j.height = info.height;
     snprintf(j.note, sizeof(j.note), "progressive JPEG (the decoder reads baseline only)");
     *undecodable = true;
+  } else if (lseek(fd, 0, SEEK_SET) < 0) {
+    snprintf(j.note, sizeof(j.note), "a read failed");
   } else {
     j.width = info.width;
     j.height = info.height;
     const int scale = ThumbScaler::decoderScale(info.width, info.height, ThumbCache::kLargePx);
     j.scale = static_cast<uint8_t>(scale);
-    Stream s{data, size, 0, j.scaler, 0, &j.internalMin};
+    Stream s{fd, j.input, 0, 0, false, j.scaler, 0, &j.internalMin};
     lgfxJdec jd;
     JRESULT r = lgfx_jd_prepare(&jd, jpegIn, j.pool, kPoolBytes, &s);
     static const int kSizes[2] = {ThumbCache::kSmallPx, ThumbCache::kLargePx};
@@ -284,20 +334,22 @@ bool decode(Job& j, uint32_t* sourceBytes, bool* undecodable) {
       j.scaler->finish(1, j.pixels[1]);
       j.made = ThumbCache::sizeBit(ThumbCache::Size::Small) | ThumbCache::sizeBit(ThumbCache::Size::Large);
       ok = true;
+    } else if (s.failed) {
+      snprintf(j.note, sizeof(j.note), "a read failed");  // the card, not the picture: tried again later
     } else {
       snprintf(j.note, sizeof(j.note), "the decoder: %s", jresName(r));
       *undecodable = r != JDR_MEM1;
     }
     j.scaler->end();
   }
-  j.decodeMs = static_cast<uint32_t>((esp_timer_get_time() - readAt) / 1000);
-  psramFree(data);
+  close(fd);
+  j.decodeMs = static_cast<uint32_t>((esp_timer_get_time() - readAt0) / 1000);
   return ok;
 }
 
 void run(Job& j) {
   const int64_t t0 = esp_timer_get_time();
-  j.ok = j.noPicture = j.known = j.fromCard = j.progressive = false;
+  j.ok = j.noPicture = j.known = j.fromCard = j.fromTransfer = j.progressive = false;
   j.made = 0;
   j.width = j.height = 0;
   j.scale = 0;
@@ -306,6 +358,18 @@ void run(Job& j) {
   j.internalMin = internalFree();
   snprintf(j.used, sizeof(j.used), "%s", j.image);
   j.readMs = j.decodeMs = j.writeMs = 0;
+  // 1. The transfer's thumbnail (2.14.3, step 1).
+  if (j.transfer && readTransferThumb(j)) {
+    j.ms = static_cast<uint32_t>((esp_timer_get_time() - t0) / 1000);
+    j.readMs = j.ms;
+    return;
+  }
+  // 2. The folder's image: the card's copy, else decoded (and copied).
+  if (!j.image[0]) {
+    snprintf(j.note, sizeof(j.note), "the transfer's thumbnail is missing or damaged, and no image");
+    j.ms = static_cast<uint32_t>((esp_timer_get_time() - t0) / 1000);
+    return;
+  }
   const uint64_t hash = thumbfile::pathHash(j.image);
   if (j.skipCard || !readCardCopy(j, hash)) {
     if (j.pickLargest) pickLargest(j);
@@ -338,15 +402,17 @@ bool Thumbs::begin() {
   job_->pixels[0] = static_cast<uint16_t*>(psramAlloc(ThumbCache::slotBytes(Size::Small)));
   job_->pixels[1] = static_cast<uint16_t*>(psramAlloc(ThumbCache::slotBytes(Size::Large)));
   job_->pool = static_cast<uint8_t*>(psramAlloc(kPoolBytes));
+  job_->input = static_cast<uint8_t*>(psramAlloc(kInputBytes));
   job_->scaler = psramNew<ThumbScaler>(psramAlloc, psramFree);
-  if (!job_->pixels[0] || !job_->pixels[1] || !job_->pool || !job_->scaler) return false;
+  if (!job_->pixels[0] || !job_->pixels[1] || !job_->pool || !job_->input || !job_->scaler) return false;
   ready_ = true;
   return true;
 }
 
 bool Thumbs::hasCover(uint32_t album) const {
   const LibraryIndex* idx = const_cast<Library&>(library_).index();
-  return ready_ && idx && idx->ready() && album < idx->albumCount() && idx->albumCover(album) != LibraryIndex::kNone;
+  if (!ready_ || !idx || !idx->ready() || album >= idx->albumCount()) return false;
+  return idx->albumCover(album) != LibraryIndex::kNone || (idx->album(album).flags & LibraryIndex::kTransferThumb);
 }
 
 const uint16_t* Thumbs::get(uint32_t album, Size s) {
@@ -361,51 +427,64 @@ void Thumbs::libraryChanged() {
   cache_.clear();
 }
 
+void Thumbs::lend() {
+  if (!ready_ || lent_) return;
+  ++generation_;  // (a job taken in after this is dropped)
+  cache_.release();
+  lent_ = true;
+}
+
+bool Thumbs::restore() {
+  if (!lent_) return true;
+  if (!cache_.begin(kSmallSlots, kLargeSlots)) {
+    Serial.println("[thumb] no PSRAM for the covers' cache after the library update: placeholders until the next");
+    return false;
+  }
+  lent_ = false;
+  return true;
+}
+
 void Thumbs::redecode() {
   libraryChanged();
   skipCard_ = true;
   Serial.println("[thumb] the covers are decoded again this session (the card's copies are rewritten)");
 }
 
-void Thumbs::taskEntry(void* self) { static_cast<Thumbs*>(self)->work(); }
-
-void Thumbs::work() {
-  for (;;) {
-    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    const uint8_t st = job_->state.load();
-    if (st == Exit) {
-      job_->stackLeft = uxTaskGetStackHighWaterMark(nullptr);
-      // Not alive first, then Idle: the loop (which can run between the
-      // two) never sees Idle with this task still counted as alive, which
-      // would queue a job for a task about to delete itself (that job would
-      // stay Queued, and no cover would come again). Seeing it not alive
-      // and Exit, the loop waits; Idle and not alive, it makes a new worker
-      // (this one only deletes itself).
-      taskAlive_.store(false);
-      job_->state.store(Idle);
-      vTaskDelete(nullptr);
-    }
-    if (st != Queued) continue;
-    job_->state.store(Working);
-    run(*job_);
-    job_->stackLeft = uxTaskGetStackHighWaterMark(nullptr);
-    job_->state.store(Done);
-  }
+void Thumbs::stepEntry(void* self) {
+  Job& j = *static_cast<Thumbs*>(self)->job_;
+  j.state.store(Working);
+  run(j);
+  j.state.store(Done);
 }
 
 bool Thumbs::prepare(uint32_t album, uint8_t sizes) {
   LibraryIndex* idx = library_.index();
   if (!idx || !idx->ready() || album >= idx->albumCount()) return false;
-  const uint32_t f = idx->albumCover(album);
-  if (f == LibraryIndex::kNone) return false;
-  Job& j = *job_;
-  if (!idx->imagePath(f, j.image, sizeof(j.image)) || !idx->folderPath(f, j.folder, sizeof(j.folder))) return false;
   LocalStorage& storage = library_.storage();
   if (!storage.available()) return false;
+  Job& j = *job_;
+  const LibraryIndex::Album& a = idx->album(album);
+  j.transfer = (a.flags & LibraryIndex::kTransferThumb) != 0;
+  j.image[0] = 0;
+  j.folder[0] = 0;
+  j.pickLargest = false;
+  if (j.transfer) {
+    // Its key: the album folder's path hash (2.14.1).
+    char folder[256];
+    if (!idx->folderPath(a.folder, folder, sizeof(folder))) return false;
+    j.folderHash = thumbfile::pathHash(folder);
+  }
+  const uint32_t f = idx->albumCover(album);
+  if (f != LibraryIndex::kNone) {
+    if (!idx->imagePath(f, j.image, sizeof(j.image)) || !idx->folderPath(f, j.folder, sizeof(j.folder))) return false;
+    const LibraryIndex::Folder& folder = idx->folder(f);
+    j.pickLargest = folder.imageRank == 3 && folder.imageCount > 1;
+  } else if (!j.transfer) {
+    return false;
+  }
   snprintf(j.root, sizeof(j.root), "%s", storage.vfsRoot());
   snprintf(j.thumbDir, sizeof(j.thumbDir), "%s%s/thumbs", storage.vfsRoot(), storage.stateDir());
-  const LibraryIndex::Folder& folder = idx->folder(f);
-  j.pickLargest = folder.imageRank == 3 && folder.imageCount > 1;
+  snprintf(j.transferDir, sizeof(j.transferDir), "%s/.mstream/thumbs", storage.vfsRoot());
   j.album = album;
   j.sizes = sizes;
   j.skipCard = skipCard_;
@@ -416,7 +495,6 @@ bool Thumbs::prepare(uint32_t album, uint8_t sizes) {
 void Thumbs::finish(uint32_t* arrived) {
   Job& j = *job_;
   const uint32_t album = j.album;
-  stackLeft_ = j.stackLeft;
   internalMin_ = std::min(internalMin_, j.internalMin);
   if (j.generation == generation_) {
     if (j.ok) {
@@ -430,14 +508,16 @@ void Thumbs::finish(uint32_t* arrived) {
     }
     cache_.done(album);
   }
-  if (j.ok && j.fromCard) {
+  if (j.ok && j.fromTransfer) {
+    ++fromTransfer_;
+  } else if (j.ok && j.fromCard) {
     ++fromCard_;
   } else if (j.ok) {
     ++decoded_;
     decodeMsSum_ += j.ms;
     decodeMsMax_ = std::max(decodeMsMax_, j.ms);
-    Serial.printf("[thumb] %s: %ux%u at 1/%d, 40 + 96 px in %lu ms (read %lu, decode %lu, card copy %lu; %lu KB); "
-                  "internal RAM %lu B free at the lowest\n",
+    Serial.printf("[thumb] %s: %ux%u at 1/%d, 40 + 96 px in %lu ms (header and reads %lu, decode %lu, card copy %lu; "
+                  "%lu KB streamed); internal RAM %lu B free at the lowest\n",
                   j.used, j.width, j.height, 1 << j.scale, (unsigned long)j.ms, (unsigned long)j.readMs,
                   (unsigned long)j.decodeMs, (unsigned long)j.writeMs, (unsigned long)(j.bytes / 1024),
                   (unsigned long)j.internalMin);
@@ -451,59 +531,37 @@ void Thumbs::finish(uint32_t* arrived) {
   j.state.store(Idle);
 }
 
-uint32_t Thumbs::loop(uint32_t nowMs, bool busy) {
+uint32_t Thumbs::loop(uint32_t nowMs) {
+  (void)nowMs;
   if (!ready_) return kNone;
   uint32_t arrived = kNone;
   if (job_->state.load() == Done) finish(&arrived);
-  if (job_->state.load() == Idle && !busy && static_cast<int32_t>(nowMs - retryAtMs_) >= 0) {
-    uint32_t album;
-    uint8_t sizes;
-    if (cache_.next(&album, &sizes)) {
-      if (!prepare(album, sizes)) {
-        cache_.markFailed(album);
-        cache_.done(album);
-      } else {
-        if (!taskAlive_.load()) {
-          // The worker: made for the first job, gone after kIdleExitMs without one.
-          taskAlive_.store(true);
-          workerPrio_ = kWorkPriority;
-          if (xTaskCreatePinnedToCore(taskEntry, "thumbs", kStackBytes, this, kWorkPriority, &task_, 1) != pdPASS) {
-            taskAlive_.store(false);
-            task_ = nullptr;
-            cache_.done(album);  // asked again when a row draws it
-            retryAtMs_ = nowMs + 5000;
-            Serial.printf("[thumb] no internal RAM for the worker's %lu B stack: covers later\n",
-                          (unsigned long)kStackBytes);
-            return arrived;
-          }
-        }
-        // Nothing moves (no job starts while a list does): the worker
-        // runs level with the loop, not time-sliced with the idle task.
-        setWorkerPriority(kWorkPriority);
-        job_->state.store(Queued);
-        xTaskNotifyGive(task_);
-        lastJobMs_ = nowMs;
-      }
-    }
-  }
-  // A list started moving under a job: the worker drops below the loop, so
-  // no frame waits for it. (Queued or Working: it can't be exiting.)
-  const uint8_t st = job_->state.load();
-  if (busy && (st == Queued || st == Working)) setWorkerPriority(tskIDLE_PRIORITY);
-  // Nothing to do for a while: the worker ends, its stack goes back.
-  if (taskAlive_.load() && job_->state.load() == Idle && nowMs - lastJobMs_ >= kIdleExitMs) {
-    job_->state.store(Exit);
-    xTaskNotifyGive(task_);
-  }
   return arrived;
 }
 
-// Only while the worker is alive and not exiting (a job in hand, or about
-// to be handed one).
-void Thumbs::setWorkerPriority(UBaseType_t prio) {
-  if (!task_ || !taskAlive_.load() || workerPrio_ == prio) return;
-  vTaskPrioritySet(task_, prio);
-  workerPrio_ = prio;
+bool Thumbs::wantsCover(uint32_t nowMs) const {
+  return ready_ && !lent_ && job_->state.load() == Idle && cache_.wanted() > 0 && cache_.making() == kNone &&
+         static_cast<int32_t>(nowMs - retryAtMs_) >= 0;
+}
+
+bool Thumbs::startCover(CardWorker& worker, uint8_t priority, uint32_t nowMs) {
+  if (!wantsCover(nowMs)) return false;
+  uint32_t album;
+  uint8_t sizes;
+  if (!cache_.next(&album, &sizes)) return false;
+  if (!prepare(album, sizes)) {
+    cache_.markFailed(album);
+    cache_.done(album);
+    return false;
+  }
+  job_->state.store(Queued);
+  if (!worker.start(CardWorker::Job::Cover, priority, stepEntry, this, nowMs)) {
+    job_->state.store(Idle);
+    cache_.done(album);  // asked again when a row draws it
+    retryAtMs_ = nowMs + 1000;
+    return false;
+  }
+  return true;
 }
 
 void Thumbs::printState() const {
@@ -517,12 +575,11 @@ void Thumbs::printState() const {
                 static_cast<unsigned>(cache_.bytes() / 1024), (unsigned long)cache_.slots(Size::Small),
                 (unsigned long)cache_.slots(Size::Large), (unsigned long)s.hits, (unsigned long)s.misses,
                 (unsigned long)s.stored, (unsigned long)s.evicted, (unsigned long)cache_.wanted());
-  Serial.printf("[thumb] made: %lu decoded (mean %lu ms, max %lu), %lu from the card, %lu failed (%lu progressive); "
-                "worker %s, its stack's least left %lu of %lu B; internal RAM during jobs %s%lu B at the lowest\n",
+  Serial.printf("[thumb] made: %lu decoded (mean %lu ms, max %lu), %lu from the card, %lu transfer thumbnails, %lu "
+                "failed (%lu progressive); internal RAM during jobs %s%lu B at the lowest (the card worker: gs)\n",
                 (unsigned long)decoded_, (unsigned long)(decoded_ ? decodeMsSum_ / decoded_ : 0),
-                (unsigned long)decodeMsMax_, (unsigned long)fromCard_, (unsigned long)failures_,
-                (unsigned long)progressive_, taskAlive_.load() ? "up" : "not running", (unsigned long)stackLeft_,
-                (unsigned long)kStackBytes, internalMin_ == UINT32_MAX ? "(none yet) " : "",
+                (unsigned long)decodeMsMax_, (unsigned long)fromCard_, (unsigned long)fromTransfer_,
+                (unsigned long)failures_, (unsigned long)progressive_, internalMin_ == UINT32_MAX ? "(none yet) " : "",
                 (unsigned long)(internalMin_ == UINT32_MAX ? 0 : internalMin_));
 }
 

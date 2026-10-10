@@ -1,0 +1,7 @@
+{
+ "format": "MPTH",
+ "file": "B1F7E69F.565",
+ "folder": "Artist/Album",
+ "sourceBytes": 123456,
+ "note": "The transfer thumbnail of /music/Artist/Album, its pixels the synthetic picture of thumb_pixels(): pixel (x, y) of an n x n slot is RGB (x*255/(n-1), y*255/(n-1), (x+y)*255/(2n-2)), integer division, as big-endian RGB565. The scaling is not pinned."
+}

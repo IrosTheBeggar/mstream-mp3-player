@@ -1,0 +1,72 @@
+{
+ "format": "MPTG",
+ "file": "tags-device.bin",
+ "generation": 0,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "source": 1,
+ "parserVersion": 3,
+ "readRules": 1,
+ "producer": "mstream-player 0.8.0",
+ "note": "A device's /.player/tags.bin (source 1): no ledger.",
+ "records": [
+  {
+   "path": "Hand Copied/Album/01 - First.flac",
+   "size": 4000,
+   "fatTime": "0x5A5CBF7D",
+   "durationMs": 200000,
+   "known": 131071,
+   "container": 2,
+   "track": 1,
+   "tags": {
+    "title": [
+     "First"
+    ],
+    "artist": [
+     "Quiet Harbour"
+    ],
+    "album": [
+     "Album"
+    ]
+   }
+  },
+  {
+   "path": "Hand Copied/Album/02 - Second.flac",
+   "size": 4100,
+   "fatTime": "0x5A5CBF7D",
+   "durationMs": 201000,
+   "known": 131071,
+   "container": 2,
+   "track": 2,
+   "tags": {
+    "title": [
+     "Second"
+    ],
+    "artist": [
+     "Quiet Harbour"
+    ],
+    "album": [
+     "Album"
+    ]
+   }
+  },
+  {
+   "path": "Hand Copied/notags.mp3",
+   "size": 300,
+   "fatTime": 0,
+   "durationMs": 1000,
+   "known": 131071,
+   "container": 1,
+   "flags": 32,
+   "note": "NO_TAGS, an unknown time"
+  },
+  {
+   "path": "Hand Copied/broken.mp3",
+   "size": 10,
+   "fatTime": "0x5A5CBF7D",
+   "known": 0,
+   "container": 1,
+   "flags": 64,
+   "note": "UNREADABLE"
+  }
+ ]
+}

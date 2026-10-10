@@ -13,6 +13,15 @@
 // to 0:00).
 static_assert(trackseek::kSeekGuardMs > trackseek::kTailMs, "a seek must never land in the tail");
 
+namespace {
+// A path's FNV-1a 32 (QueueSaver::pathHash()'s: the resume point's check).
+uint32_t hashOfPath(const char* path) {
+  uint32_t h = 2166136261u;
+  for (const char* p = path; p && *p; ++p) h = (h ^ static_cast<uint8_t>(*p)) * 16777619u;
+  return h;
+}
+}  // namespace
+
 void PlaybackController::startCurrent() {
   if (!hasTrack()) return;
   if (held()) {
@@ -153,6 +162,7 @@ void PlaybackController::setRepeat(Repeat r) {
 }
 
 void PlaybackController::setShuffle(bool on) {
+  if (fenced_) return;  // (the mode comes back with the queue, from queue.txt)
   Act act(*this);
   // The same entry (its key) stays current in the same state: nothing to
   // start, stop or cue, and its start point and length belong to the key.
@@ -250,6 +260,7 @@ void PlaybackController::stop() {
   audio_.stop();
   state_ = PlayState::Stopped;
   cued_ = false;
+  endedInFence_ = false;
   pausedByTimer_ = pausedByComputer_ = false;  // (stopped: headphone Play starts nothing anyway)
 }
 
@@ -368,6 +379,7 @@ PlaybackController::Seek PlaybackController::seek(uint32_t key, uint32_t ms, uin
   } else {
     placeStart(ms, durationMs, nullptr);  // (no nested Act between the check and the start)
   }
+  ++seeks_;
   return state_ == PlayState::Playing ? Seek::Started : Seek::Waits;
 }
 
@@ -446,6 +458,7 @@ void PlaybackController::pauseAtBoundary() {
 
 void PlaybackController::update(uint32_t nowMs) {
   (void)nowMs;  // the backend owns the clock via its own loop(); reserved here
+  if (fenced_) return;  // the queue is away: a natural end is queueReplaced()'s
   Act act(*this);  // a joined track heard first: its end, if it ended too, is its own
   checkEnd();
 }
@@ -514,6 +527,7 @@ void PlaybackController::currentMoved() {
 }
 
 bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle) {
+  if (fenced_) return false;  // (the queue is the build's: nothing to edit)
   Act act(*this);
   if (!queue_.replace(tracks, n, start, shuffle)) return false;
   failuresInARow_ = 0;
@@ -527,26 +541,31 @@ bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t st
 }
 
 bool PlaybackController::playNext(const uint32_t* tracks, uint32_t n) {
+  if (fenced_) return false;
   Act act(*this);
   return queue_.insertNext(tracks, n);
 }
 
 bool PlaybackController::addToQueue(const uint32_t* tracks, uint32_t n) {
+  if (fenced_) return false;
   Act act(*this);
   return queue_.append(tracks, n);
 }
 
 bool PlaybackController::moveNext(const uint32_t* positions, uint32_t n) {
+  if (fenced_) return false;
   Act act(*this);
   return queue_.moveNext(positions, n);
 }
 
 bool PlaybackController::clearUpNext() {
+  if (fenced_) return false;
   Act act(*this);
   return queue_.clearUpNext();
 }
 
 QueueModel::Removed PlaybackController::remove(const uint32_t* positions, uint32_t n) {
+  if (fenced_) return QueueModel::Removed{};
   Act act(*this);
   const QueueModel::Removed r = queue_.remove(positions, n);
   if (!r.current) return r;
@@ -560,6 +579,7 @@ QueueModel::Removed PlaybackController::remove(const uint32_t* positions, uint32
 }
 
 void PlaybackController::clearQueue() {
+  if (fenced_) return;  // (it would stop the held track, and clear nothing)
   Act act(*this);
   clearStartPoint();  // an undo brings the queue back, not the second
   stop();
@@ -567,6 +587,7 @@ void PlaybackController::clearQueue() {
 }
 
 bool PlaybackController::undo() {
+  if (fenced_) return false;
   Act act(*this);
   const uint32_t key = queue_.currentKey();
   if (!queue_.undo()) return false;
@@ -575,8 +596,48 @@ bool PlaybackController::undo() {
 }
 
 void PlaybackController::queueReplaced(bool currentKept) {
+  fenced_ = false;  // (the queue is back: a fence, if one was up, is down)
   Act act(*this);  // (kept: the keys are new; the word keeps its token for the same next track)
+  if (endedInFence_) {
+    endedInFence_ = false;
+    // The heard track ended while the queue was away (the build outlasted
+    // the safe point's margin, or the listener resumed a paused track near
+    // its end), and nothing joined: silence since. Nothing starts after it:
+    // the entry after it (by the repeat mode; One: itself), cued at 0:00,
+    // paused. Not the current entry kept: the new current one, cued.
+    if (state_ == PlayState::Playing && (audio_.finished() || audio_.failed())) {
+      ++fenceStops_;
+      failuresInARow_ = 0;
+      clearStartPoint();
+      if (!hasTrack() || (currentKept && repeat_ != Repeat::One && !queue_.step(+1, wraps()))) {
+        stop();  // the end of the queue, repeat Off: the natural stop
+        return;
+      }
+      audio_.stop();
+      state_ = PlayState::Paused;
+      cued_ = true;
+      return;
+    }
+  }
   if (!currentKept) currentMoved();
+}
+
+void PlaybackController::setFenced(bool on) {
+  if (on == fenced_) return;
+  if (on) {
+    fenced_ = true;
+    endedInFence_ = false;
+    return;
+  }
+  fenced_ = false;
+  // A track that reached its end inside the fence with nothing joined: the
+  // backend is done with it (taken by the queueReplaced() that follows).
+  endedInFence_ = state_ == PlayState::Playing && (audio_.finished() || audio_.failed());
+}
+
+uint32_t PlaybackController::pathHashAt(uint32_t pos) const {
+  char path[TrackCatalog::kMaxPath];
+  return catalog_.path(queue_.trackAt(pos), path, sizeof(path)) ? hashOfPath(path) : 0;
 }
 
 // ---- gapless playback ----
@@ -599,6 +660,8 @@ const PlaybackController::Offered* PlaybackController::offered(uint32_t token) c
 }
 
 void PlaybackController::refreshOffer() {
+  // The queue is away (a library build): the backend keeps the word it had.
+  if (fenced_) return;
   // Only while the backend holds this entry's track: otherwise its next
   // play() comes first (and the word after it).
   const bool holding = hasTrack() && state_ != PlayState::Stopped && !cued_;
@@ -634,24 +697,33 @@ void PlaybackController::refreshOffer() {
     offer_ = Offered{};
   } else {
     const uint32_t key = queue_.keyAt(pos);
+    const uint32_t hash = hashOfPath(path);
     // The same track still next keeps its token (no cut): its own entry,
     // or the entry that took its place when its key went (a library
-    // rebuild's fresh keys, one of two duplicates removed). Never the
-    // heard token: the backend took it already, and would answer a word
-    // with it "nothing follows" (Repeat One, or a queue of one on repeat:
-    // the same entry after itself, a new token each time round).
-    const bool same = offer_.token != 0 && offer_.token != heardToken_ && offer_.track == track &&
-                      (offer_.key == key || queue_.positionOf(offer_.key) == QueueModel::kNone);
+    // rebuild's fresh keys and ids: the same file by its path; one of two
+    // duplicates removed). Never the heard token: the backend took it
+    // already, and would answer a word with it "nothing follows" (Repeat
+    // One, or a queue of one on repeat: the same entry after itself, a new
+    // token each time round).
+    const bool same =
+        offer_.token != 0 && offer_.token != heardToken_ &&
+        (offer_.key == key ? offer_.track == track
+                           : queue_.positionOf(offer_.key) == QueueModel::kNone && offer_.pathHash == hash);
     if (same) {
       offer_.key = key;
+      offer_.track = track;
       for (Offered& o : history_) {
-        if (o.token == offer_.token) o.key = key;
+        if (o.token == offer_.token) {
+          o.key = key;
+          o.track = track;
+        }
       }
     } else {
       if (++nextToken_ == 0) ++nextToken_;
       offer_.token = nextToken_;
       offer_.key = key;
       offer_.track = track;
+      offer_.pathHash = hash;
       remember(offer_);
     }
   }
@@ -671,6 +743,9 @@ void PlaybackController::refreshOffer() {
 }
 
 void PlaybackController::syncHeard() {
+  // The queue is away (a library build): a join heard waits in the backend
+  // for queueReplaced().
+  if (fenced_) return;
   uint32_t token = 0;
   while (audio_.takeAdvance(&token)) {
     // (Stopped or cued, the backend has started something else since: a
@@ -688,9 +763,13 @@ void PlaybackController::syncHeard() {
     }
     const Offered* o = offered(token);
     const uint32_t expected = endNext();
+    // Its entry by its key; or, the key gone (a library rebuild's fresh
+    // keys and ids, one of two duplicates removed), the entry that comes
+    // next naming the same file.
     const bool match = o && expected != QueueModel::kNone &&
                        (queue_.keyAt(expected) == o->key ||
-                        (queue_.positionOf(o->key) == QueueModel::kNone && queue_.trackAt(expected) == o->track));
+                        (queue_.positionOf(o->key) == QueueModel::kNone && o->pathHash != 0 &&
+                         pathHashAt(expected) == o->pathHash));
     if (match && !(state_ == PlayState::Playing && held())) {
       // No play(): the backend plays it already. Repeat One: the same
       // position (nothing bumps; the heard token moved, so the next word

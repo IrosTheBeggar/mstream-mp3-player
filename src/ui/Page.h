@@ -30,6 +30,7 @@ enum class PageKind : uint8_t {
   Output,
   Pair,   // the Output tab's Pair screen (a scan list)
   About,  // the Output tab's About
+  DeviceInfo,  // About's Device info (the board, chips, memory, uptime)
 };
 // The Library root's segments (its PageRef::id).
 enum class LibrarySegment : uint8_t { Artists = 0, Albums = 1, Folders = 2 };

@@ -3,9 +3,9 @@
 
 // The Output tab (the tab bar spec §6.6, mockups 19-21 and 23, with the
 // review's grafts; the page's shape is in Pages.h): where the music plays,
-// each output's volume, the Pair screen, the settings and About. One page
-// object for the tab's three kinds of page (Output, Pair, About), each a
-// list on the hardware scroll.
+// each output's volume, the Pair screen, the settings, About and its Device
+// info. One page object for the tab's four kinds of page (Output, Pair,
+// About, Device info), each a list on the hardware scroll.
 //
 // What the Bluetooth card shows and offers is OutputModel's (host-tested);
 // what its buttons do goes through the UiHost to BtSink. The rules it keeps:
@@ -16,6 +16,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "DeviceInfo.h"
 #include "IdlePolicy.h"
 #include "LibraryIndex.h"
 #include "PowerChoices.h"
@@ -139,6 +140,10 @@ void OutputPage::enter(NavModel::PageRef& ref) {
     ui_.host().about(about_);
     nextAboutMs_ = millis() + kAboutMs;
   }
+  if (kind_ == PageKind::DeviceInfo) {
+    ui_.host().deviceInfo(info_);
+    nextAboutMs_ = millis() + kAboutMs;
+  }
   repaintHeader();
   ui_.list().attach(this, &ref, 0);
 }
@@ -200,6 +205,11 @@ Header OutputPage::header() const {
       h.title = "About";
       h.sub = "this player";
       break;
+    case PageKind::DeviceInfo:
+      h.back = true;
+      h.title = uitext::kDeviceInfoTitle;
+      h.sub = uitext::kDeviceInfoHeaderSub;
+      break;
     default:
       h.title = "Output";
       h.sub = "where the music plays";
@@ -258,6 +268,11 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawnCalibrated_ = ui_.input().calibrated();
       list.refreshRow(Calibrate);
     }
+    const uint32_t lib = librarySig(ui_.state());
+    if (lib != drawnLibrary_ && still) {
+      drawnLibrary_ = lib;
+      list.refreshRow(LibraryRow);
+    }
     const uint32_t sc = screenSig(ui_.state());
     if (sc != drawnScreen_ && still) {
       drawnScreen_ = sc;
@@ -304,6 +319,16 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       ui_.host().about(about_);
       list.refreshRow(Battery);
       list.refreshRow(Memory);
+    }
+  } else if (kind_ == PageKind::DeviceInfo) {
+    // The rows that can change (the battery, memory, the uptime...), in
+    // place; refreshRow() draws only the ones on screen.
+    if (static_cast<int32_t>(nowMs - nextAboutMs_) >= 0 && still) {
+      nextAboutMs_ = nowMs + kAboutMs;
+      ui_.host().deviceInfo(info_);
+      for (int i = 0; i < deviceinfo::kItems; ++i) {
+        if (deviceinfo::changes(static_cast<deviceinfo::Item>(i))) list.refreshRow(static_cast<uint32_t>(i));
+      }
     }
   }
   return list.update(nowMs, frameDue, wholeRows);
@@ -352,6 +377,7 @@ uint32_t OutputPage::rows() {
   switch (kind_) {
     case PageKind::Pair: return 1 + static_cast<uint32_t>(scan_.count());
     case PageKind::About: return kAboutRows;
+    case PageKind::DeviceInfo: return deviceinfo::kItems;
     default: return kRootRows;
   }
 }
@@ -372,6 +398,10 @@ void OutputPage::drawRow(ListView::Row& r) {
   }
   if (kind_ == PageKind::About) {
     drawAbout(r);
+    return;
+  }
+  if (kind_ == PageKind::DeviceInfo) {
+    drawDeviceInfo(r);
     return;
   }
   const AppState& s = ui_.state();
@@ -404,12 +434,75 @@ void OutputPage::drawRow(ListView::Row& r) {
       drawSetting(r, icons::kGear, uitext::kCalRowTitle,
                   ui_.input().calibrated() ? uitext::kCalSubOn : uitext::kCalSubOff, col::TXT, true);
       break;
+    case LibraryRow: drawLibraryRow(r); break;
     case AboutRow:
       drawSetting(r, icons::kInfo, "About", "battery, storage, library, version", col::TXT, true);
       break;
     default: break;
   }
   (void)s;
+}
+
+// The Library row (docs/METADATA.md 3.3.6): "Library: 19,410 tracks", where
+// their names come from (the longest of librarytext::sourcesText()'s forms
+// that fits), and Rescan tags in the settings' pill: dim when there are no
+// card's records here, or while the library updates.
+void OutputPage::drawLibraryRow(ListView::Row& r) {
+  using namespace uitext;
+  const AppState& s = ui_.state();
+  Fonts& f = Fonts::instance();
+  icons::drawCentred(r.c, icons::kLibrary, r.x + 22, 21, col::SOFT);
+  const int x = r.x + 44;
+  const int pillX = r.right - 8 - kRescanPillW;
+  char title[48], sub[96];
+  librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title));
+  if (f.width(Font::Body, title) > pillX - 8 - x) librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title), 1);
+  const bool can = s.libraryRecords && !s.libraryFenced;
+  if (!s.libraryRecords) {
+    snprintf(sub, sizeof(sub), "%s", kLibraryRowNoCard);
+  } else if (s.libraryFenced) {
+    snprintf(sub, sizeof(sub), "%s", kLibraryRowUpdating);
+  } else {
+    librarytext::Sources src;
+    src.transfer = s.libTransfer;
+    src.device = s.libDevice;
+    src.none = s.libNone;
+    for (int form = 0; form < librarytext::kSourceForms; ++form) {
+      librarytext::sourcesText(src, form, sub, sizeof(sub));
+      if (f.width(Font::Small, sub) <= pillX - 8 - x) break;
+    }
+  }
+  ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
+  const uint16_t pill = r.pressed && can ? col::BTN_HI : col::BTN;
+  r.c.fillRoundRect(pillX, 9, kRescanPillW, 24, 8, pill);
+  f.draw(r.c, Font::Body, kRescanPill, pillX + kRescanPillW / 2, 21, kRescanPillW - kSettingPillPad,
+         can ? col::TXT : col::FAINT, pill, Fonts::Align::Centre);
+}
+
+uint32_t OutputPage::librarySig(const AppState& s) {
+  uint32_t h = 2166136261u;
+  for (uint32_t v : {s.libraryTracks, s.libTransfer, s.libDevice, s.libNone,
+                     static_cast<uint32_t>(s.libraryRecords) | static_cast<uint32_t>(s.libraryFenced) << 1}) {
+    h = (h ^ v) * 16777619u;
+  }
+  return h;
+}
+
+// A tap on the Library row: Rescan tags, asked first (minutes of reading on
+// a big card).
+void OutputPage::onRescan() {
+  const AppState& s = ui_.state();
+  if (!s.libraryRecords) {
+    ui_.warn(uitext::kRescanNoCard);
+    return;
+  }
+  if (s.libraryFenced) {
+    ui_.toast(uitext::kUpdatingWait, false);
+    return;
+  }
+  static const char* const kButtons[2] = {"Cancel", uitext::kRescanPill};
+  ask_ = Ask::Rescan;
+  ui_.openDialog(this, uitext::kRescanTitle, uitext::kRescanBody, kButtons, 2);
 }
 
 void OutputPage::drawSetting(ListView::Row& r, const icons::Icon& icon, const char* title, const char* sub,
@@ -740,6 +833,15 @@ void OutputPage::drawAbout(ListView::Row& r) {
       label = uitext::kAboutSourceLabel;
       snprintf(value, sizeof(value), "%s", uitext::kAboutSourceRepo);
       break;
+    case DeviceInfoRow: {
+      // A page of its own (what the boot screen used to list).
+      const int x = ListView::icon(r, icons::kInfo, col::SOFT);
+      const int right = ListView::chevron(r);
+      using namespace uitext;
+      ListView::lines(r, x, right, kDeviceInfoTitle, strlen(kDeviceInfoTitle), kDeviceInfoRowSub,
+                      strlen(kDeviceInfoRowSub), col::TXT);
+      return;
+    }
     case Tips: {
       const int x = ListView::icon(r, icons::kInfo, accent::Output);
       const char* t = "Show the tips again";
@@ -755,6 +857,22 @@ void OutputPage::drawAbout(ListView::Row& r) {
   const int x = ListView::icon(r, *icon, col::DIM);
   const int room = r.right - 8 - x;
   f.draw(r.c, Font::Small, label, x, 12, room, col::DIM, r.bg);
+  f.draw(r.c, f.width(Font::Body, value) <= room ? Font::Body : Font::Small, value, x, 30, room, col::TXT, r.bg);
+}
+
+// A Device info row: its label (Small) over its value (Body, or Small when
+// it's long: "cc13597, 2026-10-09, ELF 1a2b3c4d"), no icon: the values get
+// the width (UiText's kDeviceInfoX and kDeviceInfoW, measured by
+// test_ui_library).
+void OutputPage::drawDeviceInfo(ListView::Row& r) {
+  if (r.row >= static_cast<uint32_t>(deviceinfo::kItems)) return;
+  const auto item = static_cast<deviceinfo::Item>(r.row);
+  char value[64];
+  deviceinfo::value(item, info_, value, sizeof(value));
+  Fonts& f = Fonts::instance();
+  const int x = r.x + uitext::kDeviceInfoX;
+  const int room = r.right - 8 - x;
+  f.draw(r.c, Font::Small, deviceinfo::label(item), x, 12, room, col::DIM, r.bg);
   f.draw(r.c, f.width(Font::Body, value) <= room ? Font::Body : Font::Small, value, x, 30, room, col::TXT, r.bg);
 }
 
@@ -778,9 +896,14 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
     return ListView::Tap::Handled;
   }
   if (kind_ == PageKind::About) {
-    if (row == Tips) ui_.showCoach();
+    if (row == DeviceInfoRow) {
+      ui_.push(page(PageKind::DeviceInfo));
+    } else if (row == Tips) {
+      ui_.showCoach();
+    }
     return ListView::Tap::Handled;
   }
+  if (kind_ == PageKind::DeviceInfo) return ListView::Tap::Handled;  // nothing to tap
   const AppState& s = ui_.state();
   switch (static_cast<RootRow>(row)) {
     case BtTop: onCard(); break;
@@ -830,6 +953,7 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
       ui_.host().setBtPower(powerchoice::nextBt(s.btPower));
       break;
     case Calibrate: onTouch(); break;
+    case LibraryRow: onRescan(); break;
     case AboutRow: ui_.push(page(PageKind::About)); break;
     default: break;
   }
@@ -1008,6 +1132,15 @@ void OutputPage::onDialog(int button) {
     ui_.input().resetCalibration();
     Serial.println("[ui] touch calibration removed: no correction");
     ui_.toast(uitext::kCalRemoved, false);  // (its row follows: tick())
+    return;
+  }
+  if (ask == Ask::Rescan) {
+    if (button != 1 || kind_ != PageKind::Output) return;
+    if (ui_.host().rescanTags()) {
+      ui_.toast(uitext::kRescanStarted, false);
+    } else {
+      ui_.warn(uitext::kRescanNoCard);
+    }
     return;
   }
   if (ask == Ask::CpuRestart) {
