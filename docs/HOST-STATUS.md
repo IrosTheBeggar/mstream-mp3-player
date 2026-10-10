@@ -223,6 +223,11 @@ up: the new label, 5 s from then.
   `screen` another screen has the display (the touch calibration, a spike
   tool); `viz` a computer drives the dancer (the Dance tab shows it
   already).
+- **The visualizer waits for it**: an `@hello` while the banner is up is
+  refused `@err 4 hello screen` (its sender retries every second, so the
+  session starts once the banner goes). Entering under the banner would
+  stop the dancer the session needs, and end the session in the same
+  loop pass (`@bye dance`).
 
 ## Errors
 

@@ -527,7 +527,7 @@ never changes state.
 | 1 | syntax | wrong field count or format, a byte outside 0x20-0x7E, a line that is only `@` | a bug: log it, don't retry the line |
 | 2 | version | `@hello`'s protocol is below the Core2's lowest. Detail: `<min>-<max>` | speaks a version in range, or tells the user to update one side |
 | 3 | nosession | `@e`, `@h`, `@c`, `@log` with no session (the Core2 rebooted, or timed out) | sends `@hello` (a new session) |
-| 4 | busy | `@hello` can't start host mode now. Detail: `ui` (the start-up screen; the UI starts ~3 s after boot), `screen` (the touch calibration or a spike screen is up), `pairing` (a Bluetooth pairing is under way), `dance` (no PSRAM for the dancer: permanent) | retries `@hello` every 1 s; gives up on `dance`, or after 20 s, and says why |
+| 4 | busy | `@hello` can't start host mode now. Detail: `ui` (the start-up screen; the UI starts ~3 s after boot), `screen` (the touch calibration or a spike screen is up, or a computer's `@identify` banner, 5 s at most: [HOST-STATUS.md](HOST-STATUS.md#identify)), `pairing` (a Bluetooth pairing is under way), `dance` (no PSRAM for the dancer: permanent) | retries `@hello` every 1 s; gives up on `dance`, or after 20 s, and says why |
 | 5 | range | a field out of range: rate not 44100/48000, prior not 0 or 30-300, an energy negative, over 1e4 or not finite, `@log` over 2, a rate change within an epoch | a bug |
 | 6 | long | over 255 bytes (the verb is `-`: it may be cut off) | a bug |
 | 7 | verb | a verb this firmware doesn't know, or `@hello` with no feature it knows | stops sending that verb (it should have checked `caps`) |
@@ -546,8 +546,8 @@ answers them `@err 7`.
 VBUS bits look the same for a phone charger as for a computer):
 
 1. Refuse with `@err 4` if it can't: the UI hasn't started, another screen
-   owns the display, a Bluetooth pairing is under way, or the dancer has no
-   PSRAM.
+   owns the display (or a computer's `@identify` banner covers it), a
+   Bluetooth pairing is under way, or the dancer has no PSRAM.
 2. **Pause the player**: Playing becomes Paused, a play waiting for the
    headphones is cancelled (Paused). Stopped and Paused stay as they are.
    A test track the console's `Rt`/`Rf` started on its own is stopped.

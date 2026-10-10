@@ -1767,6 +1767,10 @@ static bool pairingUnderWay();
 static HostLink::Busy vizBusy() {
   if (!userInterface || !userInterface->started()) return HostLink::Busy::Ui;  // the start-up screen
   if (screenTaken() || uiHeld || userInterface->suspended()) return HostLink::Busy::Screen;
+  // A computer's @identify banner (5 s at most): under it the UI stops the
+  // dancer as in the dark, and vizDanceGone() would end the session in the
+  // pass it began (@bye dance). The sender's retry comes after it.
+  if (userInterface->identifying()) return HostLink::Busy::Screen;
   if (pairingUnderWay()) return HostLink::Busy::Pairing;
   if (!danceMode.ready()) return HostLink::Busy::Dance;  // no PSRAM for the dancer: for good
   return HostLink::Busy::None;
