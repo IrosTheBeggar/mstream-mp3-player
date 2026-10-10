@@ -75,22 +75,45 @@ int bucketOfRow(const std::vector<std::string>& v, uint32_t row) {
 
 struct Vlw {
   std::vector<std::pair<uint32_t, int>> advance;  // code point, xAdvance
+  struct Box {
+    uint32_t cp;
+    int height, top;  // rows, and the top's height above the baseline (dY)
+  };
+  std::vector<Box> boxes;
+  int ascent = 0, descent = 0;  // the header's
   int lineH = 0;  // the ascent and the descent (the header's)
   int space = 0;  // what a missing glyph measures (M5GFX's spaceWidth)
+  // M5GFX's line height (VLWfont::loadFont, what ui/Fonts::height() gives)
+  // and baseline: the header's ascent and descent, grown by any glyph of
+  // ASCII or above U+00FF that reaches further.
+  int maxAscent = 0, yAdvance = 0;
   explicit Vlw(const uint8_t* d) {
     auto be32 = [&](size_t at) {
       return static_cast<uint32_t>(d[at]) << 24 | static_cast<uint32_t>(d[at + 1]) << 16 |
              static_cast<uint32_t>(d[at + 2]) << 8 | d[at + 3];
     };
     const uint32_t n = be32(0);
-    lineH = static_cast<int>(be32(16) + be32(20));
+    ascent = static_cast<int>(be32(16));
+    descent = static_cast<int>(be32(20));
+    lineH = ascent + descent;
     // VLWfont::loadFont: the larger of the size and the ascent + descent,
     // times 2 / 7, before the glyphs' metrics move the line height.
     space = std::max(static_cast<int>(be32(8)), lineH) * 2 / 7;
+    int maxDescent = descent;
+    maxAscent = ascent;
     for (uint32_t i = 0; i < n; ++i) {
       const size_t g = 24 + static_cast<size_t>(i) * 28;
-      advance.push_back({be32(g), static_cast<int>(be32(g + 12))});
+      const uint32_t cp = be32(g);
+      const int h = static_cast<int>(be32(g + 4));
+      const int top = static_cast<int>(static_cast<int32_t>(be32(g + 16)));
+      advance.push_back({cp, static_cast<int>(be32(g + 12))});
+      boxes.push_back({cp, h, top});
+      if (cp > 0xFF || (cp > 0x20 && cp < 0xA0 && cp != 0x7F)) {
+        maxAscent = std::max(maxAscent, top);
+        maxDescent = std::max(maxDescent, h - top);
+      }
     }
+    yAdvance = maxAscent + maxDescent;
   }
   int find(uint32_t cp) const {
     for (const auto& a : advance) {
@@ -358,26 +381,39 @@ std::string drawn(const Vlw& font, const char* name, int maxW = 300) {
 }  // namespace
 
 // TextFit with the fonts the firmware draws with: decomposed text composed
-// first, a cp1252 byte (U+0080-009F) as its character, the Latin letters
-// the fonts lack as their base letters; the other scripts wait for fonts
-// (phase 1). The tests measure a missing glyph as the firmware does: the
-// space width M5GFX gives it, 5 px in DejaVu Sans 16.
+// first, a cp1252 byte (U+0080-009F) as its character, Greek, Cyrillic,
+// Romanian's and Pinyin's letters drawn as they are (phase 1), the Latin
+// letters the fonts still lack (Vietnamese's) as their base letters; the
+// scripts with no glyphs yet stay '?'. The tests measure a missing glyph as
+// the firmware does: the space width M5GFX gives it, 5 px in DejaVu Sans 16.
 void test_names_drawn_with_the_fonts() {
   const Vlw body(kVlwSans16), small(kVlwSans13);
   TEST_ASSERT_EQUAL_INT(5, body.space);
   TEST_ASSERT_EQUAL_INT(4, small.space);
-  TEST_ASSERT_EQUAL_INT(body.width("a") + body.space + body.width("b"), body.width("a\xD0\x96" "b"));
-  TEST_ASSERT_FALSE(body.hasAll("Ж"));
+  TEST_ASSERT_EQUAL_INT(body.width("a") + body.space + body.width("b"), body.width("a\xE4\xB8\xAD" "b"));  // 中
+  TEST_ASSERT_FALSE(body.hasAll("中"));
+  TEST_ASSERT_TRUE(body.hasAll("Ж"));
   TEST_ASSERT_TRUE(body.hasAll("Café ’…€"));
   TEST_ASSERT_EQUAL_STRING("Don’t Stop – Live…", drawn(body, "Don\xC2\x92t Stop \xC2\x96 Live\xC2\x85").c_str());
   TEST_ASSERT_EQUAL_STRING("€ ™ Š Ÿ “x”", drawn(body, "\xC2\x80 \xC2\x99 \xC2\x8A \xC2\x9F \xC2\x93x\xC2\x94").c_str());
   TEST_ASSERT_EQUAL_STRING("f^~?", drawn(body, "\xC2\x83\xC2\x88\xC2\x98\xC2\x81").c_str());  // no glyph: folded
   TEST_ASSERT_EQUAL_STRING("Beyoncé", drawn(body, "Beyonce\xCC\x81").c_str());
-  TEST_ASSERT_EQUAL_STRING("Stefan Banica", drawn(body, "Ștefan Bănică").c_str());
+  TEST_ASSERT_EQUAL_STRING("Ștefan Bănică", drawn(body, "Ștefan Bănică").c_str());
+  TEST_ASSERT_EQUAL_STRING("Ştefan", drawn(body, "Ştefan").c_str());  // the cedilla spelling, Latin Extended-A's
   TEST_ASSERT_EQUAL_STRING("My Tâm", drawn(body, "Mỹ Tâm").c_str());
   TEST_ASSERT_EQUAL_STRING("My Tâm", drawn(body, "My\xCC\x83 Ta\xCC\x82m").c_str());  // NFD: â is the font's
   TEST_ASSERT_EQUAL_STRING("ABC", drawn(body, "ＡＢＣ").c_str());
-  TEST_ASSERT_EQUAL_STRING("????", drawn(body, "Кино").c_str());
+  TEST_ASSERT_EQUAL_STRING("Кино", drawn(body, "Кино").c_str());
+  TEST_ASSERT_EQUAL_STRING("Χάρις Αλεξίου", drawn(body, "Χάρις Αλεξίου").c_str());
+  TEST_ASSERT_EQUAL_STRING("Ђорђе Балашевић", drawn(body, "Ђорђе Балашевић").c_str());
+  TEST_ASSERT_EQUAL_STRING("Łódź Wołanie", drawn(body, "Łódź Wołanie").c_str());
+  TEST_ASSERT_EQUAL_STRING("Lǚ", drawn(body, "Lǚ").c_str());
+  // NFD Greek and Cyrillic compose to the fonts' letters: Χάρις, Ёлка, Й.
+  TEST_ASSERT_EQUAL_STRING("Χάρις", drawn(body, "Χα\xCC\x81ρις").c_str());
+  TEST_ASSERT_EQUAL_STRING("Ёлка Й", drawn(body, "Е\xCC\x88лка И\xCC\x86").c_str());
+  // Scripts the fonts don't have yet: '?' a letter, as before.
+  TEST_ASSERT_EQUAL_STRING("???", drawn(body, "Հայ").c_str());  // Armenian
+  TEST_ASSERT_EQUAL_STRING("??", drawn(body, "中文").c_str());
   TEST_ASSERT_EQUAL_STRING("Ninja ? Beats", drawn(body, "Ninja 🥷 Beats").c_str());
   TEST_ASSERT_EQUAL_STRING("?", drawn(body, "\xE2\x9D\xA4\xEF\xB8\x8F").c_str());  // ❤ + VS16: one '?'
   // Cut to the room as before, the composed text measured.
@@ -385,6 +421,99 @@ void test_names_drawn_with_the_fonts() {
   TEST_ASSERT_TRUE(body.width(cut.c_str()) <= 100);
   TEST_ASSERT_TRUE(body.hasAll(cut.c_str()));
   TEST_ASSERT_EQUAL_STRING("Beyoncé…", cut.c_str());  // whole letters, the é one glyph
+}
+
+// Phase 1's glyphs (docs/I18N.md; tools/vlw_font.py's RANGES) keep every
+// row of the UI as it was: M5GFX makes a font's line height its tallest
+// glyph's ascent plus its deepest one's descent, and the generator fits
+// the tall ones (Ǘ, Ă, ΐ) inside the header's. The line heights and
+// baselines are the 256-glyph fonts' (3a1835a), and no glyph at all, Latin-1
+// included (M5GFX doesn't measure it, so it would draw over the row
+// above), leaves the line.
+void test_fonts_keep_their_line_heights() {
+  struct Want {
+    const uint8_t* data;
+    int ascent, descent;
+  };
+  const Want want[] = {{kVlwSans16, 15, 4}, {kVlwSans13, 13, 4}, {kVlwSansBold16, 15, 4}, {kVlwSansBold22, 21, 6}};
+  const int line[] = {19, 17, 19, 27};
+  for (int i = 0; i < 4; ++i) {
+    const Vlw f(want[i].data);
+    TEST_ASSERT_EQUAL_INT(want[i].ascent, f.ascent);
+    TEST_ASSERT_EQUAL_INT(want[i].descent, f.descent);
+    TEST_ASSERT_EQUAL_INT(want[i].ascent, f.maxAscent);  // the baseline
+    TEST_ASSERT_EQUAL_INT(line[i], f.yAdvance);
+    for (const Vlw::Box& b : f.boxes) {
+      char msg[48];
+      snprintf(msg, sizeof(msg), "U+%04X in font %d", static_cast<unsigned>(b.cp), i);
+      TEST_ASSERT_TRUE_MESSAGE(b.top <= f.ascent && b.height - b.top <= f.descent, msg);
+    }
+  }
+  // The Body and Small heights the boot screen keeps room for.
+  TEST_ASSERT_EQUAL_INT(bootlayout::kBodyH, Vlw(kVlwSans16).yAdvance);
+  TEST_ASSERT_EQUAL_INT(bootlayout::kSmallH, Vlw(kVlwSans13).yAdvance);
+}
+
+// What each of the four fonts covers since phase 1, and what it leaves to
+// TextFit (docs/I18N.md, phase 1: the blocks left out and their cost).
+void test_fonts_cover_greek_cyrillic_and_latin() {
+  const uint8_t* fonts[] = {kVlwSans16, kVlwSans13, kVlwSansBold16, kVlwSansBold22};
+  for (const uint8_t* data : fonts) {
+    const Vlw f(data);
+    TEST_ASSERT_EQUAL_UINT32(734, f.advance.size());
+    auto all = [&](uint32_t a, uint32_t b) {
+      for (uint32_t cp = a; cp <= b; ++cp) {
+        char msg[24];
+        snprintf(msg, sizeof(msg), "U+%04X", static_cast<unsigned>(cp));
+        TEST_ASSERT_TRUE_MESSAGE(f.find(cp) >= 0, msg);
+      }
+    };
+    auto none = [&](uint32_t a, uint32_t b) {
+      for (uint32_t cp = a; cp <= b; ++cp) {
+        char msg[24];
+        snprintf(msg, sizeof(msg), "U+%04X", static_cast<unsigned>(cp));
+        TEST_ASSERT_TRUE_MESSAGE(f.find(cp) < 0, msg);
+      }
+    };
+    all(0x20, 0x7E);
+    all(0xA0, 0xFF);
+    all(0x100, 0x17F);  // Latin Extended-A, all of it
+    all(0x1CD, 0x1DC);  // Pinyin: ǎ ě ǐ ǒ ǔ, ǖ ǘ ǚ ǜ and their capitals
+    all(0x218, 0x21B);  // Romanian: Ș ș Ț ț
+    // Greek: the letters with tonos and dialytika, the alphabet, final
+    // sigma, the symbols' letter forms and the archaic letters.
+    all(0x386, 0x386);
+    all(0x388, 0x38A);
+    all(0x38C, 0x38C);
+    all(0x38E, 0x3A1);
+    all(0x3A3, 0x3E1);
+    all(0x3F0, 0x3FF);
+    all(0x384, 0x385);  // tonos, dialytika tonos
+    all(0x37E, 0x37E);  // the Greek question mark, ano teleia
+    all(0x387, 0x387);
+    // Cyrillic: Russian, Ukrainian, Belarusian, Serbian, Macedonian,
+    // Bulgarian, and the Central Asian and Caucasian letters.
+    all(0x400, 0x482);
+    all(0x48A, 0x4FF);
+    // Left out: Church Slavonic's combining marks, the Coptic letters,
+    // Cyrillic Supplement, Armenian, Georgian, the rest of Latin
+    // Extended-B, Latin Extended Additional (Vietnamese), Greek Extended.
+    none(0x483, 0x489);
+    none(0x3E2, 0x3EF);
+    none(0x500, 0x52F);
+    none(0x531, 0x587);
+    none(0x10A0, 0x10FF);
+    none(0x180, 0x1CC);
+    none(0x1DD, 0x217);
+    none(0x21C, 0x24F);
+    none(0x1E00, 0x1EFF);
+    none(0x1F00, 0x1FFF);
+    // The sample names, every glyph.
+    TEST_ASSERT_TRUE(f.hasAll("Кино Земфира Ёлка Ђорђе Балашевић Ґанна Їжак Ўладзімір Қазақ"));
+    TEST_ASSERT_TRUE(f.hasAll("Χάρις Αλεξίου Ϊ ϋ ΐ ΰ ς"));
+    TEST_ASSERT_TRUE(f.hasAll("Ștefan Bănică Łódź Wołanie İstanbul Dvořák Ģirts Ļ ŀ ŉ ſ"));
+    TEST_ASSERT_TRUE(f.hasAll("Lǚ Nǚ ǎ Ǎ ǜ Ǜ"));
+  }
 }
 
 // The first-boot tips: the first screen a new user sees.
@@ -2152,8 +2281,8 @@ void test_identify_texts_fit() {
 void test_boot_texts_fit() {
   using namespace bootlayout;
   const Vlw body(kVlwSans16), small(kVlwSans13);
-  TEST_ASSERT_EQUAL_INT(kBodyH, body.lineH);
-  TEST_ASSERT_EQUAL_INT(kSmallH, small.lineH);
+  TEST_ASSERT_EQUAL_INT(kBodyH, body.yAdvance);
+  TEST_ASSERT_EQUAL_INT(kSmallH, small.yAdvance);
   fits(body, "v10.10.10", kTextW);
   fits(body, "v10.10.10-rc.10", kTextW);
   fits(body, "v0.8.0-dev+abcdef1-dirty", kTextW);
@@ -2380,6 +2509,8 @@ int main(int, char**) {
   RUN_TEST(test_coach_texts_fit);
   RUN_TEST(test_toast_names_fit);
   RUN_TEST(test_names_drawn_with_the_fonts);
+  RUN_TEST(test_fonts_keep_their_line_heights);
+  RUN_TEST(test_fonts_cover_greek_cyrillic_and_latin);
   RUN_TEST(test_queue_cap_texts_fit);
   RUN_TEST(test_push_out_texts_fit);
   RUN_TEST(test_empty_state_texts_fit);

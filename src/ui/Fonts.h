@@ -10,10 +10,11 @@
 #include "TextFit.h"
 
 // The UI's text layer: DejaVu Sans as anti-aliased VLW fonts from flash
-// (ui/VlwFonts, as the UI spike recommended: it looked best and has every
-// character in the library's names, ’ ‐ é É included), and the fitting that
-// every label goes through (TextFit): a character the font lacks is folded
-// to ASCII (TextFold), and a name too wide for its column is cut with "…".
+// (ui/VlwFonts, as the UI spike recommended: it looked best, ’ ‐ é É
+// included; Latin, Greek and Cyrillic since docs/I18N.md's phase 1), and the
+// fitting that every label goes through (TextFit): a character the font
+// lacks is folded (TextFold: to ASCII, or '?' in another script), and a name
+// too wide for its column is cut with "…".
 //
 // Four roles:
 //   Body   DejaVu Sans 16      row titles, buttons, the artist on Now Playing
@@ -21,10 +22,10 @@
 //   Bold   DejaVu Sans Bold 16 headers, the current row, primary buttons
 //   Title  DejaVu Sans Bold 22 Now Playing's title, big numbers
 //
-// load() reads the fonts' glyph tables into PSRAM (M5GFX does, ~5 KB each)
-// once; the glyph bitmaps stay in flash. Text is drawn with a background
-// colour (sprites, or the LCD in small strips), so a redraw in place never
-// flickers. Loop task only.
+// load() reads the fonts' glyph tables into PSRAM (M5GFX does: 9 B a glyph,
+// 6.6 KB a font) once; the glyph bitmaps stay in flash. Text is drawn with
+// a background colour (sprites, or the LCD in small strips), so a redraw in
+// place never flickers. Loop task only.
 namespace ui {
 
 enum class Font : uint8_t { Body, Small, Bold, Title };

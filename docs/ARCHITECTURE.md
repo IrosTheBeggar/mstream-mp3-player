@@ -2693,17 +2693,25 @@ Queue, Dance and Output (with its Pair and About pages).
   (`Row::pressX`).
 - **Text** (`ui/Fonts`, `TextFit`, `TextFold`, host-tested): DejaVu Sans 16
   and 13 and DejaVu Sans Bold 16 and 22 as anti-aliased VLW fonts in flash
-  (~170 KB; `tools/vlw_font.py`), which cover ASCII, Latin-1, the common
-  Latin Extended-A letters and the typographic punctuation. A name is
+  (546,165 B; `tools/vlw_font.py`), which cover ASCII, Latin-1, Latin
+  Extended-A, Romanian's and Pinyin's letters, Greek, Cyrillic and the
+  typographic punctuation (734 glyphs each). M5GFX makes a VLW font's line
+  height its tallest glyph's ascent plus its deepest one's descent, so the
+  generator fits the few glyphs that reach further (a capital with two
+  marks, Ǘ; a breve on a capital, Ă) inside the font's own ascent and
+  descent, taking rows from their marks and the gaps around them, never
+  from the letter: the rows stay 19, 17, 19 and 27 px high, as with Latin
+  alone (a host test checks M5GFX's rule on the arrays). M5GFX keeps 9 B a
+  glyph of tables in PSRAM (26 KB for the four). A name is
   composed before it is drawn (`textfold::Composer`: NFD text, a name
   another system stored decomposed or a tag editor's, as NFC in Latin,
   Greek, Cyrillic and kana; Hangul jamo as syllables), for the screen
   only. A character without a glyph is then a C1 control's cp1252
   character when the font has that (a Latin-1 tag's U+0092 as ’), else
-  folded by `TextFold` ("Ł" to "L", "ș" to "s", "Ａ" to "A", a stray
-  combining mark or a variation selector dropped, '?' for the scripts the
-  fonts lack); a name too
-  wide is cut with "…". The fonts' other scripts, and the plan for them
+  folded by `TextFold` ("ỹ" to "y", "Ａ" to "A", a stray combining mark
+  or a variation selector dropped, '?' for the scripts the fonts lack:
+  Armenian, Georgian, Hebrew, Arabic, CJK...); a name too wide is cut
+  with "…". The fonts' other scripts, and the plan for them
   and for a translated UI: [I18N.md](I18N.md). efont is out of the build
   (the font probe keeps it behind `UI_SPIKE_EFONT`). Licence:
   `LICENSES/DejaVu-Fonts.txt`.

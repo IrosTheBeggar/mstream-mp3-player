@@ -400,7 +400,8 @@ It contains:
 
 - **DejaVu Sans and DejaVu Sans Bold 2.37**, rasterised to VLW by
   tools/vlw_font.py into src/ui/VlwFonts.cpp (16 and 13 px; Bold 16 and
-  22 px; ASCII, Latin-1 and common Latin Extended-A). Licence: the Bitstream
+  22 px; ASCII, Latin-1, Latin Extended-A, a few Latin Extended-B letters,
+  Greek and Cyrillic). Licence: the Bitstream
   Vera Fonts licence ("Copyright (c) 2003 by Bitstream, Inc. All Rights
   Reserved. Bitstream Vera is a trademark of Bitstream, Inc."); DejaVu's
   changes are in the public domain; glyphs from Arev are "(c) Tavmjong Bah".

@@ -13,11 +13,12 @@
 //   - A code point the font has no glyph for becomes, in this order: its
 //     Windows-1252 character when it is a C1 control the font has that for
 //     (U+0092 as ’: Latin-1 tags keep cp1252 bytes so, docs/METADATA.md
-//     5.2); else its TextFold look-alike (Full mode: "Ł" -> "L", "ș" ->
-//     "s", "Ａ" -> "A", "½" -> "1/2", a stray combining mark dropped, "?"
-//     when nothing better): the DejaVu set covers Latin-1, the common Latin
-//     Extended-A letters and the typographic punctuation, so this is rare,
-//     but a missing glyph would otherwise draw as a blank box.
+//     5.2); else its TextFold look-alike (Full mode: "ỹ" -> "y", "ǆ" ->
+//     "dz", "Ａ" -> "A", "½" -> "1/2", a stray combining mark dropped, "?"
+//     when nothing better): the DejaVu set covers Latin-1, Latin
+//     Extended-A, Greek, Cyrillic and the typographic punctuation, so in
+//     those scripts this is rare, but a missing glyph would otherwise draw
+//     as a blank box.
 //   - Too wide: cut at a character boundary, trailing spaces dropped, and an
 //     ellipsis added ("…" when the font has it, else "...").
 //   - wrap(): up to n lines, broken at spaces, the last one ellipsised
