@@ -1005,6 +1005,11 @@ void Ui::loop(uint32_t nowMs) {
   nowMs_ = nowMs;
   if (!started_ || suspended_) return;
   host_.snapshot(state_);
+  // identify()'s banner, its 5 s over: everything drawn again.
+  if (identifying_ && static_cast<int32_t>(nowMs - identifyUntilMs_) >= 0) {
+    endIdentify();
+    Serial.println("[ui] identify: over");
+  }
 
   updateHud(nowMs);
   noteFailures();
@@ -1083,9 +1088,10 @@ void Ui::loop(uint32_t nowMs) {
     lastContent_ = state_.contentVersion;
   }
   lastUpNext_ = state_.upNext;
-  if (dark_) {
-    // The screen is off: nothing drawn (the page, the tab bar, frames);
-    // what the cover worker made comes in, and no new job starts.
+  if (dark_ || identifying_) {
+    // The screen is off, or identify()'s banner covers it: nothing drawn
+    // (the page, the tab bar, frames); what the cover worker made comes
+    // in, and no new job starts.
     if (dance_.active()) {
       dance_.setActive(false);  // (a console tab change while dark)
       danceWasOn_ = true;
@@ -1225,6 +1231,17 @@ uint32_t Ui::idleMs(uint32_t nowMs) const {
 void Ui::onEvent(const InputEvent& e) {
   using T = InputEvent::Type;
   if (!started_ || suspended_ || !e.isGlass()) return;
+  if (identifying_) {
+    // identify()'s banner: a touch ends it and does nothing else (the rest
+    // of it goes nowhere: touch_ None until the next one lands).
+    if (e.type == T::Down || (e.type == T::DragStart && e.fromStrip)) {
+      touch_ = TouchOn::None;
+      holdUnused_ = false;
+      endIdentify();
+      Serial.println("[ui] identify: ended by a touch");
+    }
+    return;
+  }
   if (e.type == T::LongPress) {
     // Whatever is under the finger says it used the hold (holdTick()).
     input_.takeHoldUsed();
@@ -1472,6 +1489,7 @@ void Ui::route(const InputEvent& e) {
 void Ui::suspend() {
   if (suspended_) return;
   suspended_ = true;
+  identifying_ = false;  // (the screen that takes over draws its own)
   // The screen that takes the display draws as ever (it keeps it lit).
   gfx::setDark(false);
   danceWasOn_ = false;  // its page is left below
@@ -1502,6 +1520,7 @@ void Ui::resume() {
 void Ui::setDark(bool on) {
   if (on == dark_) return;
   dark_ = on;
+  if (on) identifying_ = false;  // (the banner goes with the light; the wake draws it all)
   if (on) {
     if (!suspended_) gfx::setDark(true);
     if (!started_ || suspended_) return;
@@ -1553,6 +1572,63 @@ void Ui::redrawAll() {
   if (dialog_.up()) dialog_.draw();
   if (toast_.up()) toast_.draw();
   Serial.printf("[ui] awake: drawn again in %lu ms\n", (unsigned long)(millis() - t0));
+}
+
+// ---- a computer's @identify ----
+
+bool Ui::identify(const char* label, uint32_t nowMs) {
+  if (!started_ || suspended_ || dark_) return false;
+  std::snprintf(identifyLabel_, sizeof(identifyLabel_), "%s", label);
+  identifyUntilMs_ = nowMs + kIdentifyMs;
+  if (!identifying_) {
+    // As the screen going dark: the page's touch ends, a fling stops where
+    // it is (the list's band must not move under the banner), the dancer
+    // stops (it draws its own frames); redrawAll() brings it back.
+    endPageTouch();
+    touch_ = TouchOn::None;
+    holdUnused_ = false;
+    if (list_.attached() && list_.animating()) list_.scrollTo(list_.offset());
+    if (dance_.active()) {
+      dance_.setActive(false);
+      danceWasOn_ = true;
+    }
+    identifying_ = true;
+  }
+  gfx::setDark(false);
+  drawIdentify();
+  gfx::setDark(true);  // the UI's own drawing goes nowhere until it ends
+  input_.identifyBuzz();
+  return true;
+}
+
+void Ui::drawIdentify() {
+  const uint16_t blue = accent::Output;
+  const int f = uitext::kIdentifyFrame;
+  // Over everything, through the list band's hardware scroll (gfx maps it).
+  gfx::fill(0, 0, kW, kH, col::BG, true);
+  gfx::fill(0, 0, kW, f, blue, true);
+  gfx::fill(0, kH - f, kW, f, blue, true);
+  gfx::fill(0, 0, f, kH, blue, true);
+  gfx::fill(kW - f, 0, f, kH, blue, true);
+  M5Canvas& s = gfx::strip();
+  Fonts& fonts = Fonts::instance();
+  const int w = kW - 2 * f;  // between the frame's sides
+  constexpr int kLineH = 34;
+  s.fillRect(0, 0, w, kLineH, col::BG);
+  fonts.draw(s, Font::Title, uitext::kIdentifyTitle, w / 2, kLineH / 2, uitext::kIdentifyW, col::TXT, col::BG,
+             Fonts::Align::Centre);
+  gfx::push(s, f, uitext::kIdentifyTitleY - kLineH / 2, w, kLineH, true);
+  s.fillRect(0, 0, w, kLineH, col::BG);
+  const Font lf = fonts.width(Font::Title, identifyLabel_) <= uitext::kIdentifyW ? Font::Title : Font::Bold;
+  fonts.draw(s, lf, identifyLabel_, w / 2, kLineH / 2, uitext::kIdentifyW, blue, col::BG, Fonts::Align::Centre);
+  gfx::push(s, f, uitext::kIdentifyLabelY - kLineH / 2, w, kLineH, true);
+}
+
+void Ui::endIdentify() {
+  if (!identifying_) return;
+  identifying_ = false;
+  gfx::setDark(dark_);
+  if (!dark_) redrawAll();
 }
 
 // ---- the header every list page has ----

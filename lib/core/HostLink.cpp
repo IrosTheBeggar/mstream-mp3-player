@@ -128,9 +128,20 @@ HostLink::Out HostLink::bad(HostLine::Byte kind, uint32_t nowMs) {
 }
 
 HostLink::Out HostLink::line(char* text, uint32_t nowMs, Busy busy) {
-  heardFrom(nowMs);
   HostFields f;
-  if (!splitHostLine(text, &f)) return error(nowMs, kSyntax, "-");
+  const bool split = splitHostLine(text, &f);
+  // The board's questions (docs/HOST-STATUS.md): in a session or not,
+  // declined or not; the firmware carries them out. Not the dancer's
+  // lines: a decline's quiet goes on through them (a player that asks for
+  // @status every second can start the dancer again once its user asks).
+  if (split && (sameVerb(f, "status") || sameVerb(f, "count"))) {
+    Out o;
+    o.event = sameVerb(f, "status") ? Event::Status : Event::Count;
+    return o;
+  }
+  if (split && sameVerb(f, "identify")) return identifyLine(f, nowMs);
+  heardFrom(nowMs);
+  if (!split) return error(nowMs, kSyntax, "-");
   if (sameVerb(f, "hello")) return hello(f, nowMs, busy);
   if (sameVerb(f, "bye")) {
     if (!active_) return Out{};  // outside a session: ignored
@@ -298,6 +309,15 @@ HostLink::Out HostLink::logLine(const HostFields& f, uint32_t nowMs) {
   log_ = static_cast<uint8_t>(level);
   o.event = Event::Log;
   o.level = log_;
+  return o;
+}
+
+HostLink::Out HostLink::identifyLine(const HostFields& f, uint32_t nowMs) {
+  if (f.count < 1) return error(nowMs, kSyntax, "identify");
+  if (!hoststatus::validLabel(f.field[0])) return error(nowMs, kRange, "identify");  // over 16 bytes
+  Out o;
+  o.event = Event::Identify;
+  std::snprintf(o.label, sizeof(o.label), "%s", f.field[0]);
   return o;
 }
 

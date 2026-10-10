@@ -16,6 +16,7 @@
 
 #include "UiText.h"
 #include "storage/CardFat.h"
+#include "storage/CardSpace.h"
 #include "storage/SectorDisk.h"
 #include "diskio.h"  // FatFs: disk_initialize(), disk_read() (after ff.h's ffconf names them)
 #include "ff.h"
@@ -136,6 +137,9 @@ bool LocalStorage::begin() {
                   !cached                     ? " (no guard: a card swapped while on isn't noticed)"
                   : sectordisk::guard().known ? ""
                                               : " (any remount restarts: nothing to compare it with)");
+    // The volume FatFs mounted, for its free count (the computer's @status
+    // and @count: storage/CardSpace).
+    cardspace::begin(pdrv);
     return true;
   }
   lookAtCard(cs);  // a card that isn't FAT32 says so (the empty state)
@@ -161,11 +165,16 @@ bool LocalStorage::probeCard() {
 void LocalStorage::lookAtCard(int cs) {
   const uint32_t t0 = millis();
   cardKind_ = cardformat::Kind::Unreadable;
+  cardAnswered_ = false;
+  unmountedBytes_ = 0;
   // The same driver SD.begin() used (it let go of its drive when the mount
   // failed), without the mount: the card initialised, its sectors read.
   uint8_t pdrv = sdcard_init(static_cast<uint8_t>(cs), &SPI, kSdHz);
   if (pdrv != 0xFF) {
     if ((disk_initialize(pdrv) & STA_NOINIT) == 0) {
+      cardAnswered_ = true;
+      // (Its CSD's sector count, which the init read.)
+      unmountedBytes_ = static_cast<uint64_t>(sdcard_num_sectors(pdrv)) * cardformat::kSectorBytes;
       uint8_t sector[cardformat::kSectorBytes];
       cardKind_ = cardformat::classify(readRawSector, &pdrv, sector);
     }
@@ -191,10 +200,12 @@ uint64_t LocalStorage::totalBytes() const {
     // About asked for it at its first open after each boot (the count is
     // kept for the mount after that). The card's size is the volume's
     // plus what comes before it and its FATs (~0.03% more on a big card).
-    // Nothing on the device needs the free space today. The WiFi sync
-    // will ("does it fit?"): it must count it once, in one controlled
-    // scan with progress, outside playback and never at boot; not
-    // through About, or a usedBytes() here.
+    // The free space is storage/CardSpace's: FatFs's count when it is one
+    // (FSINFO's, read as a word), else unknown until the computer's
+    // @count counts it, once, a piece of the FAT at a time, outside
+    // playback and never at boot (docs/HOST-STATUS.md); never through
+    // About, or a usedBytes() here. (The WiFi sync's "does it fit?" will
+    // ask the same.)
     return SD.cardSize();
   }
   // The flash's: its partition's size, which is the LittleFS's (its

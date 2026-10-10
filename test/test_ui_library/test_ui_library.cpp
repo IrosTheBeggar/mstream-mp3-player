@@ -22,6 +22,7 @@
 #include "CardContract.h"
 #include "CardTags.h"
 #include "DeviceInfo.h"
+#include "HostStatus.h"
 #include "IdlePolicy.h"
 #include "JumpIndex.h"
 #include "LibraryIndex.h"
@@ -2062,6 +2063,32 @@ void test_dance_texts_fit() {
   TEST_MESSAGE(msg);
 }
 
+// A computer's @identify (ui/Ui::identify()): "This one" in Title, and the
+// computer's name for its port in Title when it fits (the usual ones do),
+// else Bold, which takes 16 of the widest printable ASCII character
+// (hoststatus::kMaxLabel), so a label is never cut.
+void test_identify_texts_fit() {
+  using namespace uitext;
+  const Vlw bold(kVlwSansBold16), title(kVlwSansBold22);
+  TEST_ASSERT_TRUE(title.hasAll(kIdentifyTitle));
+  fits(title, kIdentifyTitle, kIdentifyW);
+  for (const char* port : {"COM5", "COM256", "ttyACM0", "ttyUSB10", "cu.usbmodem14101", "cu.SLAB_USBtoUART"}) {
+    fits(title, port, kIdentifyW);
+  }
+  // The widest of 0x21-0x7E in Bold, 16 of it.
+  char widest = '!';
+  for (char c = '!'; c <= '~'; ++c) {
+    const char a[2] = {c, 0}, b[2] = {widest, 0};
+    TEST_ASSERT_TRUE(bold.hasAll(a));
+    if (bold.width(a) > bold.width(b)) widest = c;
+  }
+  const std::string worst(hoststatus::kMaxLabel, widest);
+  fits(bold, worst.c_str(), kIdentifyW);
+  char msg[96];
+  snprintf(msg, sizeof(msg), "16 x '%c' in Bold: %d px in %d", widest, bold.width(worst.c_str()), kIdentifyW);
+  TEST_MESSAGE(msg);
+}
+
 // The boot screen (BootLayout, ui/BootScreen): the version under the logo
 // in Body, or Small when Body doesn't fit (a long dev build's), and the
 // rescue line; the line heights the layout keeps room for are the fonts'.
@@ -2319,6 +2346,7 @@ int main(int, char**) {
   RUN_TEST(test_catalog_names_and_overlay);
   RUN_TEST(test_rail_follows_the_sort_keys);
   RUN_TEST(test_names_without_tags);
+  RUN_TEST(test_identify_texts_fit);
   RUN_TEST(test_library_texts_fit);
   RUN_TEST(test_library_row_texts);
   RUN_TEST(test_console_tag_commands);

@@ -10,6 +10,7 @@
 #include "HostLine.h"
 #include "HostLink.h"
 #include "app/DanceMode.h"
+#include "app/HostQuery.h"
 
 // The USB visualizer on the Core2 (docs/USB-VISUALIZER.md): while a
 // computer plays music, it sends the beat tracker's hop energies and its
@@ -30,6 +31,11 @@
 //            tab stays on Dance.
 //   Epoch, Prior, Hop, Clock, Log: to the dancer (DanceMode's host*()).
 //
+// The same lines carry the computer's questions about the board
+// (docs/HOST-STATUS.md): Status, Count and Identify go to app/HostQuery,
+// in a session or not; a refusal it gives (a count while playing) goes
+// back as HostLink's @err, under its rate limit.
+//
 // Each reply goes out with one printf. Logged: a line on entry and one on
 // exit; nothing per line (the [dance] line every 5 s has the counters).
 class UsbViz {
@@ -46,7 +52,7 @@ public:
     std::function<bool()> danceGone;
   };
 
-  UsbViz(DanceMode& dance, Hooks hooks) : dance_(dance), hooks_(std::move(hooks)) {}
+  UsbViz(DanceMode& dance, HostQuery& query, Hooks hooks) : dance_(dance), query_(query), hooks_(std::move(hooks)) {}
 
   // The firmware version @ok names.
   void begin(const char* fw) { link_.begin(fw); }
@@ -65,6 +71,7 @@ private:
   void apply(const HostLink::Out& o, uint32_t nowUs);
 
   DanceMode& dance_;
+  HostQuery& query_;
   Hooks hooks_;
   HostLink link_;
   HostLink::Busy lastRefusal_ = HostLink::Busy::None;  // logged once per reason

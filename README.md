@@ -676,6 +676,16 @@ python tools/usb_viz.py --selftest                            # no Core2 needed
 It plays nothing on the computer unless `--play` is given, and nothing
 plays on the Core2.
 
+**The board's status over USB** ([docs/HOST-STATUS.md](docs/HOST-STATUS.md)):
+the mStream terminal player's MP3 Player tab asks the running firmware,
+without resetting it, for its version, its card (its size and free
+space), its library's tracks, the battery, what plays and the paired
+headphones (`@status`); counts the card's free space once when asked
+(`@count`, never while music plays, and FatFs keeps the count after it);
+and can light the screen with "This one" and the port's name for 5 s,
+with a buzz (`@identify COM5`), to tell two boards apart. Since 0.9.0;
+older firmware answers `@err 7 status`.
+
 ![The crab over two beats, phase 0/8 to 7/8 of each](docs/img/crab-phases.png)
 
 The serial console (115200 baud) is there for scripted testing:
@@ -698,7 +708,7 @@ The serial console (115200 baud) is there for scripted testing:
 | | | `O...` | Opus knobs for the device checks ([docs/OPUS.md](docs/OPUS.md); a file the library doesn't list plays by its path, `Rf</bench/opus/x.opus>` in silent mode, or benches by it, `b</bench/opus/x.opus>`): `O` status, `Ol` / `Oi` / `Oh` the decoder's state in the pinned PSRAM block / internal RAM / the PSRAM above 0x3FA00000 from the next open (an A/B of where it decodes fastest), `Ot1` / `Ot0` the rate converter's 7.6 KB table copy in a PSRAM block pinned next to it (the default: 7.6 KB of internal RAM stay free, for about 3 points of a core) / in internal RAM, from the next converted track |
 | | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
-| | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else. `tools/usb_viz.py` sends them (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
+| | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md); the board's status for the terminal player's MP3 Player tab, `@status`, `@count` and `@identify <port>`, [docs/HOST-STATUS.md](docs/HOST-STATUS.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else (but `@status` answers, `@count` counts and `@identify COM5` shows the banner, as a computer's would). `tools/usb_viz.py` sends the visualizer's (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
 
 The UI spike's tools ([docs/UI-SPIKE.md](docs/UI-SPIKE.md)) measure the
 browsing UI's risks before its screens are built. Each is a letter, an
@@ -839,6 +849,11 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       build's name only; never by signal but for console Bs)
   CardFormat          What a card that didn't mount is (exFAT, NTFS, GPT),
                       from its first sectors
+  HostStatus, FreeCount
+                      A computer's questions (docs/HOST-STATUS.md): the
+                      @status line, the FSINFO rule, @identify's label; the
+                      card's free clusters counted a piece of the FAT at a
+                      time, exact with FatFs writing between the pieces
   CardContract, CardContainer, CardTags, CardManifest, CardAutoDj
                       The card contract with the transfer software
                       (docs/METADATA.md part 2): its files' readers and
@@ -868,7 +883,9 @@ src/                  Core2 firmware
   storage/            LocalStorage: SD card if present, else LittleFS; FileStream;
                       CardFat (FatFs itself: the walk's lister, the records'
                       files), SectorDisk (the sector cache under the card,
-                      and its guard against a card swapped while on)
+                      and its guard against a card swapped while on),
+                      CardSpace (the card's free space: FatFs's count, and
+                      @count's steps under FatFs's lock)
   ui/                 Ui (the one owner of the display: navigation, tab bar,
                       overlays, pages), TabBar, ListView (lists on the
                       hardware scroll), Overlays (toast, HUD, sheet, volume
@@ -894,7 +911,9 @@ src/                  Core2 firmware
                       PowerProbe + PowerLab (power measurement and its knobs),
                       Version (the build's version and ELF hash; the image's
                       app description), BoardGuard (not a Core2: says so
-                      and stops), NvsSchema (the NVS layout's number)
+                      and stops), NvsSchema (the NVS layout's number),
+                      UsbViz (the USB visualizer), HostQuery (a computer's
+                      @status, @count and @identify: docs/HOST-STATUS.md)
   spike/              UI spike tools: input lab, scroll lab, font and thumbnail
                       probes (docs/UI-SPIKE.md)
   main.cpp            Wires it together; input events (the buttons' policy),
@@ -930,7 +949,7 @@ site/                 The web installer's page (filled in by package_release.py)
                       release-notes.md (the release notes' template)
 docker/               mStream dev server
 docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.md,
-                      RESAMPLER.md, BEAT-TRACKER-EVAL.md
+                      RESAMPLER.md, BEAT-TRACKER-EVAL.md, HOST-STATUS.md
 LICENSES/             The licence texts THIRD-PARTY-NOTICES.md refers to
 THIRD-PARTY-NOTICES.md What else is in the firmware binary, and its licences
 ```

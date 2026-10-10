@@ -60,11 +60,18 @@
 // its line goes to hostLine, never to the keys above, and is never echoed.
 // An '@' abandons a command still waiting for its argument (logged), except
 // inside an R argument that has text ("Rttone:1000@48000"). Typed by hand
-// such a line gets an "@err" reply and does nothing else. Reading that
-// starts mid-line (a boot while a computer sends, input lost to an
-// overflow) drops the line's tail instead of running it as keys (HostLine's
-// Sync, logged): the first key after a boot, sent with its Enter, may need
-// sending again.
+// such a line gets an "@err" reply and does nothing else, but for the
+// computer's questions about the board (docs/HOST-STATUS.md; app/HostQuery),
+// which answer anyone:
+//   @status            one line: the version, the card, its size and free
+//                      space, the tracks, the battery, the player, the headphones
+//   @count             the card's free space counted once (not while playing),
+//                      with progress lines
+//   @identify <label>  "This one" and the label on the screen for 5 s, a buzz
+// Reading that starts mid-line (a boot while a computer sends, input lost
+// to an overflow) drops the line's tail instead of running it as keys
+// (HostLine's Sync, logged): the first key after a boot, sent with its
+// Enter, may need sending again.
 // and the UI spike's tools (docs/UI-SPIKE.md), also ended with Enter, the
 // text after the letter passed on as it is:
 //   u...  input lab (u toggles; u0-u3 modes; us summary)

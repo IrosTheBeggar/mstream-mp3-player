@@ -633,6 +633,18 @@ inline constexpr int kDanceBottomW = 320 - 16;
 inline constexpr const char* kVizTitle = "Dancing to your computer";
 inline constexpr const char* kVizHint = "Tap a button or a tab to stop";
 
+// ---- a computer's @identify (docs/HOST-STATUS.md; ui/Ui::identify()) ----
+// Over the whole screen, inside a kIdentifyFrame px frame in the Output
+// tab's blue: the title (Title, white) centred on y kIdentifyTitleY, over
+// the computer's name for its port (at most 16 bytes of printable ASCII:
+// hoststatus::kMaxLabel) centred on y kIdentifyLabelY in the blue, in Title
+// when it fits kIdentifyW, else Bold (16 of the widest character fit:
+// test_ui_library), as wide as the frame leaves less a margin.
+inline constexpr const char* kIdentifyTitle = "This one";
+inline constexpr int kIdentifyFrame = 3;
+inline constexpr int kIdentifyW = 320 - 2 * kIdentifyFrame - 16;
+inline constexpr int kIdentifyTitleY = 102, kIdentifyLabelY = 140;
+
 // ---- another board than the Core2 (app/BoardGuard) ----
 // Drawn in Font2, M5GFX's built-in 16 px bitmap font (the VLW fonts need
 // PSRAM, which an M5Stack Basic lacks), one line each from x 4 on a

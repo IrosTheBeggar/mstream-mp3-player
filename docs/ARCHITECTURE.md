@@ -1183,6 +1183,24 @@ happens during a session: its epochs are the computer's alone.)
   no console command run; a reset mid-session back to dancing in ~8 s
   ([USB-VISUALIZER.md](USB-VISUALIZER.md#checked-on-the-device-october-2026)).
 
+## Host status
+
+The terminal player's MP3 Player tab asks the running firmware, over the
+same USB serial port and the same `@` lines as the visualizer, without a
+reset and without a session, about the board ([HOST-STATUS.md](HOST-STATUS.md)):
+`@status` (one line at once, from what the firmware holds: the version,
+the card's kind, size and free space, the library's tracks, the battery,
+the player's state, the paired headphones), `@count` (the card's free
+clusters counted once, on request: Storage, "The free space") and
+`@identify <label>` (a full-screen "This one" banner for 5 s and a buzz,
+to tell two boards apart). `HostLink` routes them (in a session or not,
+declined or not, and none keeps a session alive or a decline going);
+`app/HostQuery` answers, with `lib/core/HostStatus` (the line, the FSINFO
+rule, the label's rule), `lib/core/FreeCount` and `storage/CardSpace` (the
+count), and `Ui::identify()` (the banner: drawn over everything, then the
+UI's own drawing gated as while the screen is dark, everything drawn again
+when it goes). Older firmware answers `@err 7 status`.
+
 ## Storage
 
 `LocalStorage` mounts the SD card (shared SPI bus with the LCD, 25 MHz) if one
@@ -1282,9 +1300,22 @@ throughout; the decode task's reads would fail after
 shown is now the card's rather than the volume's data area, ~0.03% more on
 a big card. The flash fallback's size is its partition's
 (`esp_partition_find_first()`), not `LittleFS.totalBytes()`, which walks
-the whole file system for a used count it throws away. Nothing needs the
-free space yet; the WiFi sync will, and must count it once, in one
-controlled scan with progress, outside playback and never at boot.
+the whole file system for a used count it throws away.
+
+**The free space** is FatFs's own count (`FATFS::free_clst`), which the
+mount takes from FAT32's FSINFO sector and FatFs then follows cluster by
+cluster: `storage/CardSpace` reads it as a word, with no lock and no card
+access, and only when it is a count (at most the volume's clusters: the
+FSINFO rule). Otherwise it is unknown until a computer asks for one count
+(`@count`, [HOST-STATUS.md](HOST-STATUS.md)): never at boot, never while
+music plays, a 32 KB piece of the FAT per loop pass under FatFs's own
+volume lock, exact although FatFs may write the FAT between two pieces
+(the sector cache's wrapper reports every write, and FatFs's window is
+read in place of the card's copy of the sector it holds changed). Its
+result becomes FatFs's count, and FSINFO is marked to be written at
+FatFs's next sync, as `f_getfree()` does after its own count, so the
+next mount knows it at once. The WiFi sync's "does it fit?" will ask the
+same.
 
 **The PSRAM sector cache.** FatFs here has no
 relative paths (`FF_FS_RPATH 0`) and the SD driver caches nothing, so every

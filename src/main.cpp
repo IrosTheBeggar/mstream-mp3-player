@@ -9,7 +9,8 @@
 // (touch buttons and glass) and a serial console. The queue is restored
 // from the card at boot; the first time it's the whole library followed by
 // the built-in test tones. A computer can drive the Dance tab's dancer over
-// the same USB serial port (app/UsbViz: the USB visualizer).
+// the same USB serial port (app/UsbViz: the USB visualizer), and ask
+// what the board is and has (app/HostQuery: @status, @count, @identify).
 
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -26,6 +27,7 @@
 #include "ChipRevision.h"
 #include "DeviceInfo.h"
 #include "HeadsetKeys.h"
+#include "HostStatus.h"
 #include "IdlePolicy.h"
 #include "InputEvent.h"
 #include "LibraryText.h"
@@ -48,6 +50,7 @@
 #include "app/BoardPower.h"
 #include "app/Diagnostics.h"
 #include "app/Haptics.h"
+#include "app/HostQuery.h"
 #include "app/IdlePower.h"
 #include "app/Library.h"
 #include "app/NvsSchema.h"
@@ -63,6 +66,7 @@
 #include "app/Version.h"
 #include "audio/Core2AudioBackend.h"
 #include "spike/Spike.h"
+#include "storage/CardSpace.h"
 #include "storage/LocalStorage.h"
 #include "storage/SectorDisk.h"
 #include "ui/BootScreen.h"
@@ -1790,7 +1794,85 @@ static bool vizEnter() {
 // stops then, and comes back when it wakes (host mode wakes it, keeps it lit).
 static bool vizDanceGone() { return !danceMode.active() && !(userInterface && userInterface->dark()); }
 
-static UsbViz usbViz(danceMode, {vizBusy, vizEnter, vizDanceGone});
+// ---- the computer's questions (docs/HOST-STATUS.md; app/HostQuery) ----
+
+static bool hostModeOn();  // (the visualizer's session: below)
+
+// What @status says, from what the firmware holds (the free space is
+// app/HostQuery's: storage/CardSpace). No card I/O, no lock: the card's
+// size is the CSD's kept since the mount (About's), the battery the UI's
+// reading (every 10 s), the library the index's count.
+static void hostFacts(hoststatus::Facts& f) {
+  using hoststatus::Card;
+  f.fw = version::appDesc();
+  f.elf = version::elfSha();
+  if (storage.onCard()) {
+    f.card = cardspace::card();
+    f.sizeBytes = storage.totalBytes();
+  } else {
+    switch (storage.cardKind()) {
+      case cardformat::Kind::ExFat: f.card = Card::ExFat; break;
+      case cardformat::Kind::Ntfs: f.card = Card::Ntfs; break;
+      case cardformat::Kind::Gpt: f.card = Card::Gpt; break;
+      case cardformat::Kind::Other: f.card = Card::Other; break;
+      case cardformat::Kind::Unreadable: f.card = storage.cardAnswered() ? Card::Unreadable : Card::None; break;
+    }
+    f.sizeBytes = storage.unmountedBytes();
+  }
+  // Behind the library update's fence the index is hidden: "building".
+  const LibraryIndex* index = library.index();
+  if (!storage.onCard()) {
+    f.tracks = hoststatus::Tracks::None;
+  } else if (frozen.on) {
+    f.tracks = hoststatus::Tracks::Building;
+  } else if (index && index->ready()) {
+    f.tracks = hoststatus::Tracks::Count;
+    f.trackCount = index->trackCount();
+  }
+  f.battery = uiHost.batteryRaw;  // (-1 until the UI's first reading)
+  const PlayState s = player.state();
+  f.state = hostModeOn()                                         ? hoststatus::State::Host
+            : s == PlayState::Playing || s == PlayState::Waiting ? hoststatus::State::Playing
+            : s == PlayState::Paused                             ? hoststatus::State::Paused
+                                                                 : hoststatus::State::Idle;
+  // The paired headphones' name (theirs once linked, else the one saved at
+  // the pairing: BtSink::shownName()); none with nothing paired.
+  BtSink& bt = audio.bluetooth();
+  f.bt = bt.link().remembered ? bt.shownName() : nullptr;
+}
+
+// Why @count can't start, or go on, now: music (a play waiting for the
+// headphones, a console test track too), the library update (its build
+// behind the fence, then its save).
+static const char* countBlocked() {
+  const PlayState s = player.state();
+  if (s == PlayState::Playing || s == PlayState::Waiting || audio.isPlaying()) return "playing";
+  if (frozen.on || (cardTasks && cardTasks->updating())) return "library";
+  return nullptr;
+}
+
+// @identify: the banner (ui/Ui::identify()), once the panel is awake.
+static char identifyPending[hoststatus::kMaxLabel + 1] = "";
+static const char* identifyBoard(const char* label) {
+  if (!userInterface || !userInterface->started()) return "ui";  // the start-up screen
+  if (screenTaken() || uiHeld || userInterface->suspended()) return "screen";
+  if (hostModeOn()) return "viz";  // (the dancer is on screen for the computer already)
+  Serial.printf("[host] identify: \"%s\" and \"%s\" on the screen for %lu s\n", uitext::kIdentifyTitle, label,
+                static_cast<unsigned long>(ui::Ui::kIdentifyMs / 1000));
+  screen.wake("a computer's @identify");
+  if (screen.off() || screen.panelAsleep() || userInterface->dark()) {
+    snprintf(identifyPending, sizeof(identifyPending), "%s", label);  // loop(): once it is awake
+    return nullptr;
+  }
+  userInterface->identify(label, millis());
+  return nullptr;
+}
+
+static HostQuery hostQuery({hostFacts, countBlocked, identifyBoard});
+
+static UsbViz usbViz(danceMode, hostQuery, {vizBusy, vizEnter, vizDanceGone});
+
+static bool hostModeOn() { return usbViz.active(); }
 
 // (Behind the library update's fence, the commands that read the queue or
 // the library wait: waitsForLibrary(), cardBusyForConsole().)
@@ -2552,7 +2634,9 @@ static void stepIdle(uint32_t now, bool input) {
   in.pairing = pairingUnderWay();
   in.queueWrite = queueStore.busy();
   in.libraryWrite = cardTasks && cardTasks->libraryWrite();
-  in.busy = screenTaken() || usbViz.active();  // (the visualizer: someone is watching)
+  // (The visualizer: someone is watching. A count a computer asked for:
+  // it waits for the answer.)
+  in.busy = screenTaken() || usbViz.active() || hostQuery.counting();
   in.linked = bt.linkUp();  // (until the disconnect is done: connected() drops as it starts)
   IdlePolicy& p = idlePower.policy();
   const IdlePolicy::Phase before = p.phase();
@@ -3241,7 +3325,8 @@ void setup() {
                  "the cut's stress test); O Opus (O status, Ol/Oi/Oh the decoder's state in the pinned block / internal "
                  "RAM / high PSRAM, Ot1/Ot0 the converter's table copy in the pinned PSRAM block (the default) / "
                  "internal RAM); "
-                 "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md), never commands");
+                 "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md; @status, @count, @identify, "
+                 "docs/HOST-STATUS.md), never commands");
   // PSRAM's lowest from here is the running player's ([stats]' pmin=, the
   // [heap] lines' min=, the update step's line beside its fence's own):
   // setup()'s (the boot's library build among it) and the init's, once.
@@ -3384,6 +3469,9 @@ void loop() {
   if (!cardHeld) stepCard(now, anyInput);
   // The computer's visualizer: its timeout, USB unplugged, the Dance tab gone.
   usbViz.loop(now, screen.externalPower());
+  // A count of the card's free space a computer asked for: a piece of the
+  // FAT a pass (docs/HOST-STATUS.md).
+  hostQuery.loop(now);
   shot.poll();
   // The screen, last: the countdown, and what keeps it lit (a screen of its
   // own, a play waiting for the headphones, a pairing, a computer driving
@@ -3401,7 +3489,8 @@ void loop() {
     const BtLink link = audio.bluetooth().link();
     // (A pairing under way, not one whose failure the card still shows.)
     const bool keepLit = screenTaken() || player.state() == PlayState::Waiting ||
-                         link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay() || usbViz.active();
+                         link.phase == BtLink::Phase::Pairing || btSession.pairingUnderWay() || usbViz.active() ||
+                         identifyPending[0] || (userInterface && userInterface->identifying());
     using Hold = ScreenControl::Hold;
     const Hold hold = idlePower.policy().phase() == IdlePolicy::Phase::Warning || sleepTimer.fadeCountingDown()
                           ? Hold::Toast
@@ -3412,6 +3501,12 @@ void loop() {
   // A calibration asked for in the dark: now that the panel is awake.
   if (calibrationPending && !screen.off() && !screen.panelAsleep()) {
     openCalibration(pendingHow, pendingTargets);
+  }
+  // A computer's @identify in the dark, likewise (dropped if another screen
+  // took the display meanwhile).
+  if (identifyPending[0] && !screen.off() && !screen.panelAsleep() && userInterface && !userInterface->dark()) {
+    if (!screenTaken() && !uiHeld && !usbViz.active()) userInterface->identify(identifyPending, now);
+    identifyPending[0] = 0;
   }
 
   static uint32_t lastStats = 0;

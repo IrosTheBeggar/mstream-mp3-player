@@ -52,10 +52,18 @@ public:
   // empty state's message (uitext::cardMessage(): "No microSD card", "This
   // card is exFAT", ... "Can't read this card").
   cardformat::Kind cardKind() const { return cardKind_; }
+  // ... and whether a card answered then (the SD driver's init and FatFs's
+  // disk_initialize()): Unreadable with one is a card whose first sector
+  // couldn't be read; without, no card. Its size in bytes, from its CSD
+  // (0: none answered, or it didn't say): the computer's @status
+  // (docs/HOST-STATUS.md) names an exFAT card's size too.
+  bool cardAnswered() const { return cardAnswered_; }
+  uint64_t unmountedBytes() const { return unmountedBytes_; }
   // The storage's size in bytes (0: none), for About: the card's (its
   // CSD's sector count, kept since the mount) or the flash partition's.
   // Never reads the card or takes its lock (not SD.totalBytes(), a hidden
-  // free-space count: LocalStorage.cpp); there is no free space here.
+  // free-space count: LocalStorage.cpp); the free space is storage/
+  // CardSpace's (FatFs's count, or the computer's @count).
   uint64_t totalBytes() const;
   // The VFS mount point ("/sd", "/littlefs"): a path the fs sees as
   // "/music/x" is "<vfsRoot>/music/x" to POSIX calls (open, stat, opendir),
@@ -68,8 +76,10 @@ private:
   const char* mount_ = "";  // the VFS mount point: "/sd", "/littlefs"
   bool stateDirMade_ = false;
   cardformat::Kind cardKind_ = cardformat::Kind::Unreadable;
+  bool cardAnswered_ = false;
+  uint64_t unmountedBytes_ = 0;
 
   // SD.begin() failed: the card's sectors 0 (and its type 0x07 partition's
-  // first), read raw, into cardKind_.
+  // first), read raw, into cardKind_ (and cardAnswered_, unmountedBytes_).
   void lookAtCard(int cs);
 };

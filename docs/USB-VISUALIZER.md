@@ -534,6 +534,12 @@ never changes state.
 | 8 | declined | the user ended the session on the Core2 and lines keep coming | stops; waits for its own user |
 | 9 | noepoch | `@h` or `@c` in a session before any `@e` | sends `@e` for the current epoch |
 
+The board's questions (since 0.9.0: `@status`, `@count`, `@identify`,
+[HOST-STATUS.md](HOST-STATUS.md)) share these codes and the rate limit:
+`@err 4 count <why>` and `@err 4 identify <why>` (busy), `@err 1 identify`
+(no label), `@err 5 identify` (a label over 16 bytes); older firmware
+answers them `@err 7`.
+
 ## Host mode on the Core2
 
 **Enter**, on `@hello ... viz` (never on USB power alone: the AXP192's
@@ -644,6 +650,10 @@ the terminal player (its `src/device/`). What is fixed now:
   itself. One sender can ask for both (`viz,setup`). A session's features
   are fixed at `@hello`; to change them, send a new `@hello` (a new session
   id; host mode stays up if `viz` is still asked for).
+- **The board's questions** came first (0.9.0, [HOST-STATUS.md](HOST-STATUS.md)):
+  `@status`, `@count` and `@identify <label>` need no session (and no
+  `@hello`): any line any time, answered by the firmware's state; they
+  neither keep a session alive nor count against a decline.
 - **Reserved verbs.** One-letter verbs are the visualizer's high-rate
   stream (`e h c s t`), plus `log`. Reserved for Phase 13 and answered
   `@err 7` until then: the namespaces `wifi.*` (`wifi.set <ssid> <pass>`,

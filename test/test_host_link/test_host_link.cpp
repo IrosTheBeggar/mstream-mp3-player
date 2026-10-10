@@ -520,6 +520,56 @@ void test_a_session_line_by_line() {
   TEST_ASSERT_EQUAL_UINT32(0, s.errors);  // (the busy @err came before the session: not counted in it)
 }
 
+// ---- the board's questions (docs/HOST-STATUS.md) ----
+
+// @status, @count and @identify are events for the firmware, with no reply
+// of HostLink's own, in a session or not; extra fields are ignored; a bad
+// label is refused here.
+void test_board_questions() {
+  HostLink l;
+  l.begin(kFw);
+  HostLink::Out o = send(l, "@status", 0);
+  TEST_ASSERT_TRUE(o.event == E::Status);
+  expectReply(o, "");
+  TEST_ASSERT_TRUE(send(l, "@status now please", 0).event == E::Status);
+  TEST_ASSERT_TRUE(send(l, "@count", 0).event == E::Count);
+  o = send(l, "@identify COM5", 0);
+  TEST_ASSERT_TRUE(o.event == E::Identify);
+  TEST_ASSERT_EQUAL_STRING("COM5", o.label);
+  expectReply(o, "");
+  o = send(l, "@identify cu.usbmodem14101 and more", 0);  // 16 bytes, the most
+  TEST_ASSERT_TRUE(o.event == E::Identify);
+  TEST_ASSERT_EQUAL_STRING("cu.usbmodem14101", o.label);
+  expectReply(send(l, "@identify", 2000), "@err 1 identify");
+  expectReply(send(l, "@identify cu.usbserial-14130", 2000), "@err 5 identify");  // 18
+  TEST_ASSERT_FALSE(l.active());
+  // A firmware's refusal (the count while playing), as an @err of its own.
+  expectReply(l.refuse(4000, HostLink::kBusy, "count", "playing"), "@err 4 count playing");
+  TEST_ASSERT_EQUAL_UINT32(3, l.stats().errors);
+  // In a session: they keep nothing alive and count as no line of it.
+  l = inSession(10000);
+  TEST_ASSERT_TRUE(send(l, "@status", 11000).event == E::Status);
+  TEST_ASSERT_TRUE(send(l, "@identify COM5", 12000).event == E::Identify);
+  TEST_ASSERT_TRUE(send(l, "@count", 12500).event == E::Count);
+  TEST_ASSERT_EQUAL_UINT32(2, l.stats().lines);  // @hello and @e
+  TEST_ASSERT_TRUE(l.poll(13000, true).event == E::Exit);  // 3 s after @e: timed out
+  // Declined (the listener ended it): still answered, and they don't keep
+  // the decline going (a player asking every second can start again).
+  l = inSession(0);
+  l.end(W::Touch, 1000);
+  TEST_ASSERT_TRUE(send(l, "@status", 2000).event == E::Status);
+  TEST_ASSERT_TRUE(send(l, "@identify COM5", 3000).event == E::Identify);
+  TEST_ASSERT_TRUE(send(l, "@status", 3900).event == E::Status);
+  TEST_ASSERT_TRUE(l.declined());
+  TEST_ASSERT_TRUE(send(l, "@hello 1 back viz", 4000).event == E::Enter);  // 3 s after the exit
+  // The refusals share the rate limit with the rest: 4 a second.
+  HostLink m;
+  m.begin(kFw);
+  int sent = 0;
+  for (int i = 0; i < 6; ++i) sent += m.refuse(20000 + i, HostLink::kBusy, "count", "playing").reply[0] != '\0';
+  TEST_ASSERT_EQUAL_INT(4, sent);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_hello_enters);
@@ -542,5 +592,6 @@ int main(int, char**) {
   RUN_TEST(test_bad_lines_and_unknown_verbs);
   RUN_TEST(test_error_rate_limit);
   RUN_TEST(test_a_session_line_by_line);
+  RUN_TEST(test_board_questions);
   return UNITY_END();
 }

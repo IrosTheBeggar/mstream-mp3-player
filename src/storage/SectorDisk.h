@@ -115,6 +115,15 @@ Guard guard();
 // "62333952 sectors, sector 0 CRC 1a2b3c4d, boot sector 8192 CRC ...".
 size_t identityText(char* buf, size_t size, bool last = false);
 
+// The free-space count's watch (storage/CardSpace, docs/HOST-STATUS.md):
+// `fn(lba, count, ctx)` for every write FatFs makes through the wrapper,
+// just before it goes to the card (refused ones to another card aside),
+// under FatFs's volume lock, on whichever task wrote. Set and cleared with
+// that lock held (no write under way then); nullptr: none. Without the
+// wrapper (installed() false) nothing is watched.
+using WriteWatch = void (*)(uint32_t lba, uint32_t count, void* ctx);
+void watchWrites(WriteWatch fn, void* ctx);
+
 // L0's per-sector figure: `n` single-sector reads straight from the SD
 // driver (never the cache) at sectors spread over the card, timed. The
 // mean, the fastest and the slowest in microseconds.
