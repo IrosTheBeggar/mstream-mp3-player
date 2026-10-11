@@ -31,6 +31,7 @@
 
 #include "QueueView.h"
 #include "TrackCatalog.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "app/Psram.h"
 #include "ui/Fonts.h"
@@ -42,8 +43,10 @@
 
 namespace ui {
 
+using uistr::S;
+
 namespace {
-const char* const kActions[3] = {"Play now", "Play next", "Remove"};
+const S kActions[3] = {S::queue_action_play_now, S::queue_action_play_next, S::queue_action_remove};
 
 // The bottom bar's buttons (selection mode): x ranges; the last reaches the
 // edge. Remove has the room for "Remove 16" (uitext; test_ui_library).
@@ -54,9 +57,8 @@ constexpr int kEditBarH = kH - QueuePage::kBarY;  // 42
 
 uint32_t hintMs(void* ctx, uint32_t id) { return static_cast<const TrackCatalog*>(ctx)->durationHintMs(id); }
 
-void plural(char* buf, size_t size, const char* verb, uint32_t n) {
-  snprintf(buf, size, "%s %lu track%s", verb, static_cast<unsigned long>(n), n == 1 ? "" : "s");
-}
+// "Removed 3 tracks", "Playing next: 1 track", "Cleared 12 tracks".
+void plural(char* buf, size_t size, S id, uint32_t n) { trnf(buf, size, id, n, n); }
 }  // namespace
 
 QueuePage::QueuePage(Ui& ui) : Page(ui), selection_(psramAlloc, psramFree) {}
@@ -153,22 +155,22 @@ Header QueuePage::header() const {
   Fonts& f = Fonts::instance();
   if (selecting_) {
     h.cross = true;
-    snprintf(title, sizeof(headerTitle_), "%lu selected", static_cast<unsigned long>(selection_.count()));
-    snprintf(sub, sizeof(headerSub_), "of %lu", static_cast<unsigned long>(s.queueSize));
-    h.right = selection_.count() == s.queueSize && s.queueSize > 0 ? "None" : "All";
+    trnf(title, sizeof(headerTitle_), S::queue_selected, selection_.count(), selection_.count());
+    trf(sub, sizeof(headerSub_), S::queue_selected_of, s.queueSize);
+    h.right = tr(selection_.count() == s.queueSize && s.queueSize > 0 ? S::queue_none : S::queue_all);
   } else {
-    snprintf(title, sizeof(headerTitle_), "Queue");
+    trf(title, sizeof(headerTitle_), S::queue_title);
     if (s.queueSize == 0) {
-      snprintf(sub, sizeof(headerSub_), "empty");
+      trf(sub, sizeof(headerSub_), S::queue_empty_sub);
     } else {
       // Behind the library update's fence the size is the queue's as it
       // was (AppState's Frozen), its entries the build's: nothing to edit.
-      if (!s.libraryFenced) h.right = "Edit";
+      if (!s.libraryFenced) h.right = tr(S::queue_edit);
       // The long form if it fits beside the title and the pill (the room
       // drawHeader() leaves); else the position and the time (where the
       // queue is is what the header is for: spec §6.4); else the rest.
-      const int pill = f.width(Font::Bold, "Edit") + 24;
-      const int room = (kW - 6 - pill - 8) - (12 + f.width(Font::Bold, "Queue") + 8);
+      const int pill = f.width(Font::Bold, tr(S::queue_edit)) + 24;
+      const int room = (kW - 6 - pill - 8) - (12 + f.width(Font::Bold, tr(S::queue_title)) + 8);
       const char* pickFrom[3] = {summaryLong_, summaryMid_, summaryShort_};
       const char* pick = summaryShort_;
       for (const char* c : pickFrom) {
@@ -293,11 +295,11 @@ void QueuePage::drawBar() {
       c.drawRoundRect(kRemoveX, 5, kRemoveW, 32, 8, col::FAINT);
     }
     const uint16_t ink = on ? col::DARK : col::FAINT;
-    char t[16];
+    char t[48];
     if (n > 0) {
-      snprintf(t, sizeof(t), "Remove %lu", static_cast<unsigned long>(n));
+      trf(t, sizeof(t), S::queue_remove_n, n);
     } else {
-      snprintf(t, sizeof(t), "Remove");
+      trf(t, sizeof(t), S::queue_remove);
     }
     // The count must show (it's what the finger is about to remove): the
     // icon makes way for a big one ("Remove 120").
@@ -314,8 +316,8 @@ void QueuePage::drawBar() {
     const bool on = n > 0;
     const uint16_t fill = barPressed_ == 1 ? col::BTN_HI : col::BTN;
     c.fillRoundRect(kNextX, 5, kNextW, 32, 8, fill);
-    f.draw(c, Font::Body, "Play next", kNextX + kNextW / 2, 21, kNextW - 6, on ? col::TXT : col::FAINT, fill,
-           Fonts::Align::Centre);
+    f.draw(c, Font::Body, tr(S::queue_play_next_bar), kNextX + kNextW / 2, 21, kNextW - 6, on ? col::TXT : col::FAINT,
+           fill, Fonts::Align::Centre);
   }
   // Clear...: red outline.
   {
@@ -323,7 +325,7 @@ void QueuePage::drawBar() {
     c.fillRoundRect(kClearX, 5, kClearW, 32, 8, fill);
     c.drawRoundRect(kClearX, 5, kClearW, 32, 8, col::RED);
     c.drawRoundRect(kClearX + 1, 6, kClearW - 2, 30, 7, col::RED);
-    f.draw(c, Font::Body, "Clear\xE2\x80\xA6", kClearX + kClearW / 2, 21, kClearW - 8, col::RED, fill,
+    f.draw(c, Font::Body, tr(S::queue_clear_bar), kClearX + kClearW / 2, 21, kClearW - 8, col::RED, fill,
            Fonts::Align::Centre);
   }
   gfx::push(c, 0, kBarY, kW, kEditBarH);
@@ -350,7 +352,7 @@ void QueuePage::selectAll() {
 bool QueuePage::fenced() {
   if (!ui_.state().libraryFenced) return false;
   setSelecting(false);
-  ui_.toast(uitext::kUpdatingWait, false);
+  ui_.toast(tr(S::library_updating_wait), false);
   return true;
 }
 
@@ -360,15 +362,15 @@ void QueuePage::removeSelected() {
   if (n == 0) return;
   auto* positions = static_cast<uint32_t*>(psramAlloc(n * sizeof(uint32_t)));
   if (!positions) {
-    ui_.toast("Not enough memory for that", false);
+    ui_.toast(tr(S::toast_no_memory), false);
     return;
   }
   const uint32_t got = selection_.list(positions, n);
   const QueueModel::Removed r = ui_.player().remove(positions, got);
   psramFree(positions);
   setSelecting(false);
-  char text[48];
-  plural(text, sizeof(text), "Removed", r.count);
+  char text[96];
+  plural(text, sizeof(text), S::queue_removed_n, r.count);
   Serial.printf("[ui] queue: removed %lu%s\n", static_cast<unsigned long>(r.count),
                 r.current ? " (the playing one too: the next plays)" : "");
   ui_.toast(text, true);
@@ -380,7 +382,7 @@ void QueuePage::playSelectedNext() {
   if (n == 0) return;
   auto* positions = static_cast<uint32_t*>(psramAlloc(n * sizeof(uint32_t)));
   if (!positions) {
-    ui_.toast("Not enough memory for that", false);
+    ui_.toast(tr(S::toast_no_memory), false);
     return;
   }
   const uint32_t got = selection_.list(positions, n);
@@ -389,12 +391,12 @@ void QueuePage::playSelectedNext() {
   psramFree(positions);
   setSelecting(false);
   if (!ok) {
-    ui_.toast("Not enough memory for that", false);
+    ui_.toast(tr(S::toast_no_memory), false);
   } else if (ui_.queue().contentVersion() == before) {
-    ui_.toast("That's what plays now", false);  // only the playing one was selected
+    ui_.toast(tr(S::queue_thats_playing), false);  // only the playing one was selected
   } else {
-    char text[48];
-    plural(text, sizeof(text), "Playing next:", got);
+    char text[96];
+    plural(text, sizeof(text), S::queue_playing_next_n, got);
     Serial.printf("[ui] queue: %lu to play next\n", static_cast<unsigned long>(got));
     ui_.toast(text, true);
   }
@@ -405,14 +407,14 @@ void QueuePage::clearUpNext() {
   const uint32_t n = ui_.state().upNext;
   setSelecting(false);
   if (n == 0) {
-    ui_.toast("Nothing after the playing track", false);
+    ui_.toast(tr(S::queue_nothing_after), false);
     return;
   }
   const bool ok = ui_.player().clearUpNext();
-  char text[48];
-  plural(text, sizeof(text), "Cleared", n);
+  char text[96];
+  plural(text, sizeof(text), S::queue_cleared_n, n);
   Serial.printf("[ui] queue: clear up next (%lu)\n", static_cast<unsigned long>(n));
-  ui_.toast(ok ? text : "Not enough memory for that", ok);
+  ui_.toast(ok ? text : tr(S::toast_no_memory), ok);
 }
 
 void QueuePage::clearQueue() {
@@ -420,8 +422,8 @@ void QueuePage::clearQueue() {
   const uint32_t n = ui_.state().queueSize;
   setSelecting(false);
   ui_.player().clearQueue();
-  char text[48];
-  plural(text, sizeof(text), "Cleared", n);
+  char text[96];
+  plural(text, sizeof(text), S::queue_cleared_n, n);
   Serial.printf("[ui] queue: cleared (%lu), stopped\n", static_cast<unsigned long>(n));
   ui_.toast(text, true);
 }
@@ -433,12 +435,12 @@ void QueuePage::onSheet(int choice) {
     clearUpNext();
   } else if (choice == 1) {
     // The one edit that stops the music: asked once more.
-    static const char* const kButtons[2] = {"Cancel", "Clear"};
-    char body[128];
-    snprintf(body, sizeof(body), "All %lu tracks go and the music stops. Undo, on the note that follows, brings them back.",
-             static_cast<unsigned long>(ui_.state().queueSize));
+    const char* const buttons[2] = {tr(S::dialog_cancel), tr(S::queue_clear_confirm_button)};
+    char body[256];
+    const uint32_t n = ui_.state().queueSize;
+    trnf(body, sizeof(body), S::queue_clear_confirm_body, n, n);
     ask_ = Ask::ClearConfirm;
-    ui_.openDialog(this, "Clear the whole queue?", body, kButtons, 2, true);
+    ui_.openDialog(this, tr(S::queue_clear_confirm_title), body, buttons, 2, true);
   }
 }
 
@@ -492,10 +494,10 @@ void QueuePage::onEvent(const InputEvent& e) {
         } else if (b == 1) {
           playSelectedNext();
         } else {
-          static const char* const kRows[2] = {"Clear up next", "Clear queue"};
-          static const char* const kDetails[2] = {"keeps what's playing", "stops the music"};
+          const char* const rows[2] = {tr(S::queue_clear_up_next), tr(S::queue_clear_all)};
+          const char* const details[2] = {tr(S::queue_clear_up_next_detail), tr(S::queue_clear_all_detail)};
           ask_ = Ask::ClearSheet;
-          ui_.openSheet(this, "Clear the queue", kRows, 2, kDetails, -1, /*danger=*/1);
+          ui_.openSheet(this, tr(S::queue_clear_sheet_title), rows, 2, details, -1, /*danger=*/1);
         }
       } else if (e.type == T::DragStart || e.type == T::Release || e.type == T::Cancel) {
         if (barPressed_ >= 0) {
@@ -579,7 +581,7 @@ void QueuePage::drawRow(ListView::Row& r) {
     right = r.right - 32;
   }
   char title[128];
-  if (!cat.title(track, title, sizeof(title))) snprintf(title, sizeof(title), "(not in the library)");
+  if (!cat.title(track, title, sizeof(title))) snprintf(title, sizeof(title), "%s", tr(S::queue_not_in_library));
   const char* artist = cat.artist(track);
   const uint16_t colour = isCurrent ? accent::Queue : played ? col::DIM : col::TXT;
   ListView::lines(r, x, right, title, strlen(title), artist, strlen(artist), colour,
@@ -588,7 +590,7 @@ void QueuePage::drawRow(ListView::Row& r) {
 
 int QueuePage::actions(int32_t row, const char* labels[3]) {
   (void)row;
-  for (int k = 0; k < 3; ++k) labels[k] = kActions[k];
+  for (int k = 0; k < 3; ++k) labels[k] = tr(kActions[k]);
   return 3;
 }
 
@@ -597,8 +599,10 @@ void QueuePage::onAction(int32_t row, int action) {
   auto pos = static_cast<uint32_t>(row);
   PlaybackController& p = ui_.player();
   char title[96];
-  if (!p.catalog().title(ui_.queue().trackAt(pos), title, sizeof(title))) snprintf(title, sizeof(title), "it");
-  char text[128];
+  if (!p.catalog().title(ui_.queue().trackAt(pos), title, sizeof(title))) {
+    snprintf(title, sizeof(title), "%s", tr(S::queue_it));
+  }
+  char text[160];
   ui_.list().collapse();
   switch (action) {
     case 0:
@@ -610,8 +614,11 @@ void QueuePage::onAction(int32_t row, int action) {
       if (p.state() == PlayState::Waiting) {
         // The headphones aren't connected: it plays once they are (Now
         // Playing shows the wait, and its way out).
-        snprintf(text, sizeof(text), "Waiting for %s: %s",
-                 ui_.state().btName[0] ? ui_.state().btName : "the headphones", title);
+        if (ui_.state().btName[0]) {
+          trf(text, sizeof(text), S::library_waiting_for, ui_.state().btName, title);
+        } else {
+          trf(text, sizeof(text), S::library_waiting_for_headphones, title);
+        }
         ui_.warn(text);
       }
       break;
@@ -620,13 +627,13 @@ void QueuePage::onAction(int32_t row, int action) {
       // (and saves no undo), so the toast mustn't offer one.
       const uint32_t before = ui_.queue().contentVersion();
       if (!p.moveNext(&pos, 1)) {
-        ui_.toast("Not enough memory for that", false);
+        ui_.toast(tr(S::toast_no_memory), false);
       } else if (ui_.queue().contentVersion() == before) {
-        snprintf(text, sizeof(text), "Playing now: %s", title);
+        trf(text, sizeof(text), S::queue_playing_now, title);
         ui_.toast(text, false);
       } else {
         Serial.printf("[ui] queue: entry %lu to play next\n", static_cast<unsigned long>(pos + 1));
-        snprintf(text, sizeof(text), "Plays next: %s", title);
+        trf(text, sizeof(text), S::library_plays_next, title);
         ui_.toast(text, true);
       }
       break;
@@ -636,7 +643,7 @@ void QueuePage::onAction(int32_t row, int action) {
       if (r.count) {
         Serial.printf("[ui] queue: removed entry %lu%s\n", static_cast<unsigned long>(pos + 1),
                       r.current ? " (it was playing: the next plays)" : "");
-        snprintf(text, sizeof(text), "Removed: %s", title);
+        trf(text, sizeof(text), S::queue_removed_one, title);
         ui_.toast(text, true);
       }
       break;
@@ -664,7 +671,7 @@ void QueuePage::onHold(uint32_t row) {
 // ---- empty ----
 
 const char* QueuePage::emptyText() {
-  return ui_.state().libraryFenced ? uitext::kUpdatingList : "The queue is empty";
+  return tr(ui_.state().libraryFenced ? S::library_updating_list : S::queue_empty_text);
 }
 
 bool QueuePage::emptyState(EmptyState& e) {
@@ -674,12 +681,12 @@ bool QueuePage::emptyState(EmptyState& e) {
     return true;
   }
   e.icon = &icons::kQueue;
-  e.title = "Your queue is empty";
-  e.line1 = uitext::kPickInLibrary;
-  e.buttons[0] = "Open Library";
+  e.title = tr(S::empty_queue_title);
+  e.lines = tr(S::empty_pick_in_library);
+  e.buttons[0] = tr(S::empty_open_library);
   e.buttonIcons[0] = &icons::kLibrary;
   if (ui_.state().libraryTracks > 0) {
-    e.buttons[1] = "Shuffle all";
+    e.buttons[1] = tr(S::empty_shuffle_all);
     e.buttonIcons[1] = &icons::kShuffle;
   }
   return true;

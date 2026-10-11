@@ -49,11 +49,24 @@
 #include "TouchCalibration.h"
 #include "TouchCheck.h"
 #include "TrackCatalog.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "../support/TagFixtures.h"
 
 // The fonts' data, as the firmware has it (src/ui/VlwFonts.cpp: arrays only).
 #include "../../src/ui/VlwFonts.cpp"
+
+// The texts are the catalogue's (i18n/en.json, English here): uistr::tr().
+using uistr::S;
+
+namespace {
+// Line k of a message whose lines the layout places one by one.
+std::string lineOf(S id, int k) {
+  char b[256];
+  uistr::line(uistr::tr(id), k, b, sizeof(b));
+  return b;
+}
+}  // namespace
 
 void setUp() {}
 void tearDown() {}
@@ -348,7 +361,7 @@ void test_tabbar_texts_fit_in_every_state() {
   const Vlw small(kVlwSans13);
   // The active tab's label on its plate, every tab.
   for (int t = 0; t < tabbar::kTabs; ++t) {
-    TEST_ASSERT_TRUE_MESSAGE(small.width(tabbar::kLabels[t]) <= tabbar::labelWidth(t), tabbar::kLabels[t]);
+    TEST_ASSERT_TRUE_MESSAGE(small.width(tabbar::label(t)) <= tabbar::labelWidth(t), tabbar::label(t));
   }
   // The volume beside the output icon and the battery under its icon, at
   // every level (0-100 %).
@@ -876,16 +889,18 @@ void test_fonts_cover_greek_cyrillic_and_latin() {
 void test_coach_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
-  fits(bold, kCoachTitle, kCoachTextW);
-  fits(small, kCoachLine, kCoachTextW);
+  fits(bold, tr(S::coach_title), kCoachTextW);
+  fits(small, tr(S::coach_line), kCoachTextW);
   TEST_ASSERT_TRUE(3 * kCoachBoxW + 2 * 4 <= 320);
-  for (int b = 0; b < 3; ++b) {
-    fits(bold, kCoachClick[b], kCoachBoxTextW);
-    fits(small, kCoachHold[b], kCoachBoxTextW);
-    fits(small, kCoachHold2[b], kCoachBoxTextW);
+  for (S id : {S::coach_click_prev, S::coach_click_play, S::coach_click_next}) fits(bold, tr(id), kCoachBoxTextW);
+  for (S id : {S::coach_hold_prev, S::coach_hold_play, S::coach_hold_next}) {
+    for (int k = 0; k < 2; ++k) fits(small, lineOf(id, k).c_str(), kCoachBoxTextW);
   }
-  for (const char* t : kCoachTab) fits(title, t, kCoachTextW);
-  for (const char* t : kCoachTabMore) fits(small, t, kCoachTextW);
+  for (int k = 0; k < 2; ++k) {
+    fits(title, lineOf(S::coach_tab, k).c_str(), kCoachTextW);
+    fits(small, lineOf(S::coach_tab_more, k).c_str(), kCoachTextW);
+  }
+  fits(small, tr(S::coach_tips_where), kCoachTextW);
   (void)body;
 }
 
@@ -898,7 +913,7 @@ void test_toast_names_fit() {
   fits(body, "Can'T Tell Me Nothing", room);
   fits(body, "One More Time", room);
   fits(small, "Harder, Better, Faster, Stronger", room);
-  fits(small, "Plays next", room);
+  fits(small, uistr::trn(S::queue_cap_push_next, 1), room);
 }
 
 // The queue's cap (docs/QUEUE-MODES.md 15): the refusal (full, and no
@@ -913,6 +928,9 @@ void test_queue_cap_texts_fit() {
   using queueview::Capped;
   const Vlw body(kVlwSans16), small(kVlwSans13);
   {
+    char full[128];
+    uistr::trnf(full, sizeof(full), S::queue_cap_full, 5000, uistr::grouped(5000));
+    const char* kQueueFull = full;
     const std::string s(kQueueFull);
     const size_t colon = s.find(": ");
     TEST_ASSERT_TRUE(colon != std::string::npos);
@@ -990,17 +1008,19 @@ void test_push_out_texts_fit() {
     TEST_MESSAGE(msg);
   }
   // One played track's line is Body.
-  fits(body, kPushedOne, room);
+  char one[64];
+  uistr::trnf(one, sizeof(one), S::queue_cap_pushed, 1, 1);
+  fits(body, one, room);
 }
 
 // The empty states' two buttons (the empty queue, Nothing playing) and line.
 void test_empty_state_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  TEST_ASSERT_TRUE(bold.width("Open Library") + kEmptyIconW[0] + 8 <= kEmptyPrimaryW - 12);
-  TEST_ASSERT_TRUE(body.width("Shuffle all") + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);
+  TEST_ASSERT_TRUE(bold.width(tr(S::empty_open_library)) + kEmptyIconW[0] + 8 <= kEmptyPrimaryW - 12);
+  TEST_ASSERT_TRUE(body.width(tr(S::empty_shuffle_all)) + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);
   TEST_ASSERT_TRUE(kEmptyPrimaryX + kEmptyPrimaryW < kEmptySecondX && kEmptySecondX + kEmptySecondW <= 320 - 6);
-  fits(small, kPickInLibrary, kEmptyLineW);
+  fits(small, tr(S::empty_pick_in_library), kEmptyLineW);
 }
 
 // No card, and each kind of card that didn't mount (cardMessage(): exFAT,
@@ -1010,20 +1030,23 @@ void test_no_card_texts_fit() {
   using namespace uitext;
   using cardformat::Kind;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
-  fits(bold, kTryAgain, 320 - 140 - 12);  // the one button: x 70, 180 px, 6 px in at each end
+  fits(bold, tr(S::empty_try_again), 320 - 140 - 12);  // the one button: x 70, 180 px, 6 px in at each end
   for (Kind k : {Kind::Unreadable, Kind::Other, Kind::ExFat, Kind::Ntfs, Kind::Gpt}) {
     const CardMessage& m = cardMessage(k);
-    fits(title, m.title, kEmptyTitleW);
-    for (const char* t : m.lines) fits(small, t, kEmptyLineW);
-    const std::string n(m.still);
+    fits(title, tr(m.title), kEmptyTitleW);
+    TEST_ASSERT_EQUAL_INT(2, uistr::lineCount(tr(m.lines)));
+    const std::string line0 = lineOf(m.lines, 0), line1 = lineOf(m.lines, 1);
+    fits(small, line0.c_str(), kEmptyLineW);
+    fits(small, line1.c_str(), kEmptyLineW);
+    const std::string n(tr(m.still));
     const size_t colon = n.find(": ");
     TEST_ASSERT_TRUE(colon != std::string::npos);
     fits(small, n.substr(0, colon).c_str(), kToastTwoLineW);
-    fits(body, m.still + colon + 2, kToastTwoLineW);
+    fits(body, tr(m.still) + colon + 2, kToastTwoLineW);
     char msg[200];
-    snprintf(msg, sizeof(msg), "%s: title %d; lines %d, %d; note %d, %d", cardformat::name(k), title.width(m.title),
-             small.width(m.lines[0]), small.width(m.lines[1]), small.width(n.substr(0, colon).c_str()),
-             body.width(m.still + colon + 2));
+    snprintf(msg, sizeof(msg), "%s: title %d; lines %d, %d; note %d, %d", cardformat::name(k),
+             title.width(tr(m.title)), small.width(line0.c_str()), small.width(line1.c_str()),
+             small.width(n.substr(0, colon).c_str()), body.width(tr(m.still) + colon + 2));
     TEST_MESSAGE(msg);
   }
 }
@@ -1061,13 +1084,13 @@ void test_queue_texts_fit() {
       fits(bold, t, kRemoveW - 8);
     }
   }
-  fits(body, "Play next", kQueueNextW - 6);
-  fits(body, "Clear\xE2\x80\xA6", kQueueClearW - 8);
+  fits(body, tr(S::queue_play_next_bar), kQueueNextW - 6);
+  fits(body, tr(S::queue_clear_bar), kQueueClearW - 8);
   TEST_ASSERT_TRUE(kRemoveX + kRemoveW < kQueueNextX && kQueueNextX + kQueueNextW < kQueueClearX &&
                    kQueueClearX + kQueueClearW <= 320);
   // The header: "4 of 16 · 49 min" beside "Queue" and the Edit pill (the
   // room QueuePage::header() computes), up to 999 entries and 16 hours.
-  const int room = (320 - 6 - (bold.width("Edit") + 24) - 8) - (12 + bold.width("Queue") + 8);
+  const int room = (320 - 6 - (bold.width(tr(S::queue_edit)) + 24) - 8) - (12 + bold.width(tr(S::queue_title)) + 8);
   queueview::Time time;
   time.knownS = 999 * 60;
   time.unknown = 1;
@@ -1125,7 +1148,7 @@ void test_output_texts_fit() {
               TEST_ASSERT_TRUE(18 <= room);  // its icon
             } else {
               fits(b == BtButton::Pair ? bold : body, btButtonLabel(b, w < kBtWideButtonW), room);
-              if (b == BtButton::Forget) fits(bold, kForgetArmed, room);
+              if (b == BtButton::Forget) fits(bold, tr(S::bt_tap_again), room);
             }
           }
           char line[80];
@@ -1134,8 +1157,8 @@ void test_output_texts_fit() {
           if (v.hint) {
             // Resting: its two lines beside the one button, right of it.
             TEST_ASSERT_EQUAL_INT(1, n);
-            fits(small, kBtHintLine1, kBtHintW);
-            fits(small, kBtHintLine2, kBtHintW);
+            fits(small, lineOf(S::bt_hint, 0).c_str(), kBtHintW);
+            fits(small, lineOf(S::bt_hint, 1).c_str(), kBtHintW);
           }
         }
       }
@@ -1148,76 +1171,82 @@ void test_output_texts_fit() {
   TEST_ASSERT_TRUE(small.width("Here until SPYDRONE connects") > kSpeakerLineW);
   fits(small, "Waits for SPYDRONE", kSpeakerLineW);
   fits(small, "Here until they connect", kSpeakerLineW);
-  fits(small, kSilentMode, kSpeakerLineW);
+  fits(small, tr(S::speaker_silent_mode), kSpeakerLineW);
   fits(body, "100%", kSpeakerChipW - 2);
   TEST_ASSERT_TRUE(52 + kSpeakerLineW <= kSpeakerChipX);
-  fits(small, kPairHint, kPairHintW);
+  fits(small, tr(S::pair_hint), kPairHintW);
   // The resting card's hint starts past its button and ends before the edge.
   TEST_ASSERT_TRUE(kBtHintX >= kBtButtons1X + kBtButtons1W + 8);
   TEST_ASSERT_TRUE(kBtHintX + kBtHintW <= 320 - 8);
   // The lost dialog's line while resting (Small over the dialog's 288 px).
-  fits(small, kBtLostRestingLine, 320 - 32);
+  fits(small, tr(S::dialog_lost_resting), 320 - 32);
   // The resting card's hint when they dropped while the output.
-  fits(small, kBtLostHintLine1, kBtHintW);
-  fits(small, kBtLostHintLine2, kBtHintW);
+  fits(small, lineOf(S::bt_lost_hint, 0).c_str(), kBtHintW);
+  fits(small, lineOf(S::bt_lost_hint, 1).c_str(), kBtHintW);
   // The pocket rule's note (Ui::warn: Body on one line, no buttons).
-  fits(body, kTouchFirst, kToastTextRight - kToastTextX);
+  fits(body, tr(S::toast_touch_first), kToastTextRight - kToastTextX);
   // None paired (a B hold, a play on Bluetooth): too long for one line, so
   // the toast takes its two ("No headphones paired" in Small over "Output
   // > Pair new headphones" in Body).
   {
-    const char* colon = strstr(kNoHeadphones, ": ");
+    const char* colon = strstr(tr(S::toast_no_headphones), ": ");
     TEST_ASSERT_NOT_NULL(colon);
-    TEST_ASSERT_TRUE(body.width(kNoHeadphones) > kToastTextRight - kToastTextX);
-    const std::string what(kNoHeadphones, colon);
+    TEST_ASSERT_TRUE(body.width(tr(S::toast_no_headphones)) > kToastTextRight - kToastTextX);
+    const std::string what(tr(S::toast_no_headphones), colon);
     fits(small, what.c_str(), kToastTwoLineW);
     fits(body, colon + 2, kToastTwoLineW);
   }
   // A skipped track's why ("Skipped <title>: <why>"; a long title takes
   // the toast's two lines, the why in Body): each, with the widest rates
   // a refusal can name (RateConverter::rateText()).
-  fits(body, kSkipped, kToastTwoLineW);
-  fits(body, kSkippedCpu, kToastTwoLineW);
+  fits(body, tr(S::toast_why_cant_play), kToastTwoLineW);
+  fits(body, tr(S::toast_why_cpu), kToastTwoLineW);
   for (uint32_t hz : {96000u, 88200u, 176400u, 352800u, 705600u, 44056u, 655350u, 1048575u}) {
     char rate[16], why[48];
     RateConverter::rateText(hz, rate, sizeof(rate));
-    snprintf(why, sizeof(why), kSkippedRate, rate);
+    uistr::trf(why, sizeof(why), S::toast_why_rate, rate);
     fits(body, why, kToastTwoLineW);
   }
   // The Pair screen once its search stopped.
-  fits(bold, kPairSearchAgain, 320 - 60);
-  fits(small, kPairSearchStopped, kPairHintW);
-  fits(small, kLineOutSub, kSettingSubW);
+  fits(bold, tr(S::pair_search_again), 320 - 60);
+  fits(small, tr(S::pair_search_stopped), kPairHintW);
+  fits(small, tr(S::output_line_out_sub), kSettingSubW);
   // The screen settings: every choice in its pill, the lines beside it.
   for (int c = 0; c < ScreenPower::kTimeouts; ++c) fits(body, ScreenPower::timeoutLabel(c), kSettingPillW - kSettingPillPad);
   for (int c = 0; c < ScreenPower::kBrightnesses; ++c) {
     fits(body, ScreenPower::brightnessLabel(c), kSettingPillW - kSettingPillPad);
   }
-  fits(body, kScreenOffTitle, kSettingValueSubW);
-  fits(body, kBrightnessTitle, kSettingValueSubW);
-  fits(small, kScreenOffSub, kSettingValueSubW);
-  fits(small, kScreenNeverSub, kSettingValueSubW);
-  fits(small, kBrightnessSub, kSettingValueSubW);
+  fits(body, tr(S::settings_screen_off), kSettingValueSubW);
+  fits(body, tr(S::settings_brightness), kSettingValueSubW);
+  fits(small, tr(S::settings_screen_off_sub), kSettingValueSubW);
+  fits(small, tr(S::settings_screen_never_sub), kSettingValueSubW);
+  fits(small, tr(S::settings_brightness_sub), kSettingValueSubW);
   TEST_ASSERT_TRUE(kSettingValueSubW > 100);
   // About: a long value falls back to Small, which fits.
   char v[80];
-  snprintf(v, sizeof(v), kAboutMemory, 263ul, 158ul, 3.2f);
+  uistr::trf(v, sizeof(v), S::about_memory_value, 263ul, 158ul, uistr::decimal(3.2f, 1));
   fits(small, v, kAboutValueW);
-  snprintf(v, sizeof(v), kAboutLibrary, 10000ul, 600ul, 1500ul);
+  {
+    char tracks[40], artists[40], albums[40];
+    uistr::trnf(tracks, sizeof(tracks), S::library_tracks_n, 10000, 10000);
+    uistr::trnf(artists, sizeof(artists), S::library_artists_n, 600, 600);
+    uistr::trnf(albums, sizeof(albums), S::library_albums_n, 1500, 1500);
+    uistr::trf(v, sizeof(v), S::about_library_value, tracks, artists, albums);
+  }
   fits(small, v, kAboutValueW);
   // The licence rows, each line in the font it's drawn in (the values fit
   // in Body), and the source row's two lines put back together are the URL.
-  fits(small, kAboutLicenceLabel, kAboutValueW);
-  fits(body, kAboutLicence, kAboutValueW);
-  fits(small, kAboutSourceLabel, kAboutValueW);
+  fits(small, tr(S::about_licence_label), kAboutValueW);
+  fits(body, tr(S::about_licence), kAboutValueW);
+  fits(small, tr(S::about_source_label), kAboutValueW);
   fits(body, kAboutSourceRepo, kAboutValueW);
-  const std::string url = std::string("https://") + (kAboutSourceLabel + strlen("Source: ")) + kAboutSourceRepo;
+  const std::string url = std::string("https://") + (tr(S::about_source_label) + strlen("Source: ")) + kAboutSourceRepo;
   TEST_ASSERT_EQUAL_STRING(kSourceUrl, url.c_str());
   // The version row: the label with the date and any 8 hex digits of the
   // ELF's hash; a release's version in Body, a long dev build's in Small
   // (tools/version.py: git describe, at most 31 characters in the image).
   for (const char* hex = "0123456789abcdef"; *hex; ++hex) {
-    snprintf(v, sizeof(v), kAboutVersionLabel, "2026-09-30", std::string(8, *hex).c_str());
+    uistr::trf(v, sizeof(v), S::about_version_label, "2026-09-30", std::string(8, *hex).c_str());
     fits(small, v, kAboutValueW);
   }
   fits(body, "v10.10.10", kAboutValueW);
@@ -1236,7 +1265,7 @@ void test_output_texts_fit() {
 void test_seek_bar_texts_fit() {
   using namespace uitext;
   const Vlw small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
-  fits(bold, kSeekCancel, 296);
+  fits(bold, tr(S::now_playing_seek_cancel), 296);
   // The figures are all as wide (in both fonts), so the extremes below
   // stand for every time of as many digits.
   for (char d = '1'; d <= '9'; ++d) {
@@ -1252,7 +1281,7 @@ void test_seek_bar_texts_fit() {
     SeekBar::timeText(len, big, sizeof(big));
     TEST_ASSERT_TRUE_MESSAGE(title.hasAll(big), big);
     const int room = kSeekReadoutW - title.width(big) - kSeekReadoutGap;
-    fits(small, kSeekStay, room);
+    fits(small, tr(S::now_playing_seek_stay), room);
     SeekBar::changeText(len, 0, change, sizeof(change));
     TEST_ASSERT_TRUE_MESSAGE(small.hasAll(change), change);
     fits(small, change, room);
@@ -1276,20 +1305,20 @@ void test_waiting_texts_fit() {
   const int panelW = 320 - 112;  // the title strip and the rows under it
   fits(small, "Waiting for SPYDRONE\xE2\x80\xA6", kWaitTextW);
   fits(small, "Waiting for WH-1000XM4\xE2\x80\xA6", kWaitTextW);
-  fits(small, "Waiting for the headphones\xE2\x80\xA6", kWaitTextW);
+  fits(small, tr(S::now_playing_waiting_for_headphones), kWaitTextW);
   fits(small, "try 3 of 3", kWaitTextW);
-  fits(small, "looking for them", kWaitTextW);
+  fits(small, tr(S::now_playing_wait_looking), kWaitTextW);
   TEST_ASSERT_TRUE(kWaitTextX + kWaitTextW <= panelW);
-  fits(body, kPlayOnSpeaker, kWaitSpeakerW - kWaitButtonPad);
-  fits(body, kWaitCancel, kWaitCancelW - kWaitButtonPad);
+  fits(body, tr(S::now_playing_play_on_speaker), kWaitSpeakerW - kWaitButtonPad);
+  fits(body, tr(S::now_playing_wait_cancel), kWaitCancelW - kWaitButtonPad);
   TEST_ASSERT_TRUE(kWaitSpeakerX + kWaitSpeakerW < kWaitCancelX);
   TEST_ASSERT_TRUE(kWaitCancelX + kWaitCancelW <= panelW - 2);
   // The notice (a Dialog): its title, its buttons (the primary in Bold; a
   // label too wide for Body is drawn in Small).
   fits(bold, "Couldn't reach SPYDRONE", kDialogTitleW);
-  TEST_ASSERT_TRUE(body.width(kPlayOnSpeaker) > kDialogButtonTextW);
-  fits(small, kPlayOnSpeaker, kDialogButtonTextW);
-  fits(bold, "Try again", kDialogButtonTextW);
+  TEST_ASSERT_TRUE(body.width(tr(S::now_playing_play_on_speaker)) > kDialogButtonTextW);
+  fits(small, tr(S::now_playing_play_on_speaker), kDialogButtonTextW);
+  fits(bold, tr(S::dialog_failed_try_again), kDialogButtonTextW);
   // The progress line's middle.
   fits(small, "SPYDRONE (not connected)", kNowPlayingMidW);
   fits(small, "Waiting, 24 of 86", kNowPlayingMidW);
@@ -1306,27 +1335,36 @@ void test_waiting_texts_fit() {
 void test_now_playing_menu_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  for (const char* l : {kGoTo[0], kGoTo[1], kGoTo[2], kShuffleRow, kRepeatRow, kSleepRow}) fits(body, l, 320 - 32);
+  const char* const kGoTo[3] = {tr(S::now_playing_go_to_artist), tr(S::now_playing_go_to_album),
+                                tr(S::now_playing_go_to_folder)};
+  for (const char* l : {kGoTo[0], kGoTo[1], kGoTo[2], tr(S::now_playing_shuffle), tr(S::now_playing_repeat),
+                        tr(S::now_playing_sleep_timer)}) {
+    fits(body, l, 320 - 32);
+  }
   // The rooms, as measured with the firmware's fonts.
   TEST_ASSERT_EQUAL_INT(183, sheet::detailRoom(body.width(kGoTo[0])));
   TEST_ASSERT_EQUAL_INT(174, sheet::detailRoom(body.width(kGoTo[1])));
   TEST_ASSERT_EQUAL_INT(177, sheet::detailRoom(body.width(kGoTo[2])));
-  TEST_ASSERT_EQUAL_INT(216, sheet::detailRoom(body.width(kShuffleRow)));
-  TEST_ASSERT_EQUAL_INT(215, sheet::detailRoom(body.width(kRepeatRow)));
-  TEST_ASSERT_EQUAL_INT(180, sheet::detailRoom(body.width(kSleepRow)));
-  for (const char* s : kOnOff) fits(small, s, sheet::detailRoom(body.width(kShuffleRow)));
-  for (const char* s : kRepeatModes) fits(small, s, sheet::detailRoom(body.width(kRepeatRow)));
+  TEST_ASSERT_EQUAL_INT(216, sheet::detailRoom(body.width(tr(S::now_playing_shuffle))));
+  TEST_ASSERT_EQUAL_INT(215, sheet::detailRoom(body.width(tr(S::now_playing_repeat))));
+  TEST_ASSERT_EQUAL_INT(180, sheet::detailRoom(body.width(tr(S::now_playing_sleep_timer))));
+  for (S s : {S::now_playing_off, S::now_playing_on}) {
+    fits(small, tr(s), sheet::detailRoom(body.width(tr(S::now_playing_shuffle))));
+  }
+  for (unsigned m = 0; m < 3; ++m) {
+    fits(small, tr(repeatMode(m)), sheet::detailRoom(body.width(tr(S::now_playing_repeat))));
+  }
   TEST_ASSERT_TRUE(small.width("One") <= 26);
   // The sleep states as before, against the Sleep timer row's room.
   for (const char* t : {"Off", "90 min", "59 s", "End of track", "End of album", "End of queue", "Fading"}) {
-    fits(small, t, sheet::detailRoom(body.width(kSleepRow)));
+    fits(small, t, sheet::detailRoom(body.width(tr(S::now_playing_sleep_timer))));
   }
-  fits(small, kNoArtistFolder, sheet::detailRoom(body.width(kGoTo[0])));
-  fits(small, kLooseTracks, sheet::detailRoom(body.width(kGoTo[1])));
+  fits(small, tr(S::library_no_artist_folder), sheet::detailRoom(body.width(kGoTo[0])));
+  fits(small, tr(S::library_loose_tracks), sheet::detailRoom(body.width(kGoTo[1])));
   // The refusals' toasts, and the sheet's title.
-  fits(body, kBuiltinNotInLibrary, kToastTextRight - kToastTextX);
-  fits(body, kLibraryNotReady, kToastTextRight - kToastTextX);
-  fits(small, kPlaybackTitle, kSleepTitleW);
+  fits(body, tr(S::now_playing_builtin_not_in_library), kToastTextRight - kToastTextX);
+  fits(body, tr(S::now_playing_library_not_ready), kToastTextRight - kToastTextX);
+  fits(small, tr(S::now_playing_playback_title), kSleepTitleW);
   // The folder: cut from the left by whole folders to Go to folder's room.
   textfit::Font f;
   f.ctx = const_cast<Vlw*>(&small);
@@ -1367,19 +1405,19 @@ void test_sleep_timer_texts_fit() {
   // The playback menu's row (Body from x 16), its state right-aligned
   // (Small) in what the label leaves (Sheet::render: 16 px each side and
   // between).
-  const int stateRoom = sheet::detailRoom(body.width(kSleepRow));
+  const int stateRoom = sheet::detailRoom(body.width(tr(S::now_playing_sleep_timer)));
   for (const char* t : {"Off", "90 min", "59 s", "End of track", "End of album", "End of queue", "Fading"}) {
     fits(small, t, stateRoom);
   }
-  // The sheet's title (Small), left of its close pill: "Sleep timer: " and
-  // SleepTimer::titleText(), lower case after the colon (as the toasts), in
-  // every state: off, each end-of choice, the longest counts, fading.
+  // The sheet's title (Small), left of its close pill: SleepTimer::
+  // titleText(), "Sleep timer: " and its state lower case (as the toasts),
+  // in every state: off, each end-of choice, the longest counts, fading.
   {
     std::vector<std::string> titles;
     auto add = [&](const SleepTimer& t, uint32_t now) {
-      char buf[24];
+      char buf[96];
       t.titleText(now, buf, sizeof(buf));
-      titles.push_back(std::string(kSleepRow) + ": " + buf);
+      titles.push_back(buf);
     };
     SleepTimer t;
     add(t, 0);
@@ -1403,24 +1441,25 @@ void test_sleep_timer_texts_fit() {
   // The pills: each label in its pill less the pad; the rows inside the
   // screen with gaps between the pills.
   for (int i = 0; i < 5; ++i) {
-    fits(body, kSleepMinutes[i], kSleepMinW[i] - kSleepPillPad);
+    fits(body, i < 4 ? kSleepMinutes[i] : tr(S::sleep_minutes_90), kSleepMinW[i] - kSleepPillPad);
     if (i > 0) TEST_ASSERT_TRUE(kSleepMinX[i - 1] + kSleepMinW[i - 1] < kSleepMinX[i]);
   }
   TEST_ASSERT_TRUE(kSleepMinX[4] + kSleepMinW[4] <= 312);
   for (int i = 0; i < 3; ++i) {
-    TEST_ASSERT_TRUE(body.width(kSleepEnds[1]) > kSleepEndW[1] - kSleepPillPad);  // why they are in Small
-    fits(small, kSleepEnds[i], kSleepEndW[i] - kSleepPillPad);
+    const S kSleepEnds[3] = {S::sleep_end_track, S::sleep_end_album, S::sleep_end_queue};
+    TEST_ASSERT_TRUE(body.width(tr(kSleepEnds[1])) > kSleepEndW[1] - kSleepPillPad);  // why they are in Small
+    fits(small, tr(kSleepEnds[i]), kSleepEndW[i] - kSleepPillPad);
     if (i > 0) TEST_ASSERT_TRUE(kSleepEndX[i - 1] + kSleepEndW[i - 1] < kSleepEndX[i]);
   }
   TEST_ASSERT_TRUE(kSleepEndX[2] + kSleepEndW[2] <= 312);
-  fits(body, kSleepExtend, kSleepExtendW - kSleepPillPad);
-  fits(body, kSleepTurnOff, kSleepOffW - kSleepPillPad);
+  fits(body, tr(S::sleep_extend), kSleepExtendW - kSleepPillPad);
+  fits(body, tr(S::sleep_turn_off), kSleepOffW - kSleepPillPad);
   TEST_ASSERT_TRUE(kSleepExtendX + kSleepExtendW < kSleepOffX && kSleepOffX + kSleepOffW <= 312);
-  fits(small, kSleepHint, kSleepHintW);
+  fits(small, tr(S::sleep_hint), kSleepHintW);
   // The fade's toast: its line (Small) before +10 min, the two buttons (Body).
-  fits(small, kSleepFading, kSleepToastPlusX - 6 - kToastTextX);
-  fits(body, kSleepExtend, kSleepToastPlusW - kSleepToastPad);
-  fits(body, kSleepTurnOff, kSleepToastOffW - kSleepToastPad);
+  fits(small, tr(S::sleep_fading_toast), kSleepToastPlusX - 6 - kToastTextX);
+  fits(body, tr(S::sleep_extend), kSleepToastPlusW - kSleepToastPad);
+  fits(body, tr(S::sleep_turn_off), kSleepToastOffW - kSleepToastPad);
   TEST_ASSERT_TRUE(kSleepToastPlusX + kSleepToastPlusW < kSleepToastOffX && kSleepToastOffX + kSleepToastOffW <= 312);
   // The toasts a choice gives (one line, no buttons).
   for (const char* t : {"Sleep timer: 90 min", "Sleep timer: end of album", "Sleep timer: end of queue",
@@ -1482,14 +1521,14 @@ void test_idle_power_off_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13);
   for (int c = 0; c < IdlePolicy::kChoices; ++c) fits(body, IdlePolicy::choiceLabel(c), kSettingPillW - kSettingPillPad);
-  fits(body, kIdleOffTitle, kSettingValueSubW);
-  fits(small, kIdleOffSub, kSettingValueSubW);
-  fits(small, kIdleNeverSub, kSettingValueSubW);
+  fits(body, tr(S::settings_idle_off), kSettingValueSubW);
+  fits(small, tr(S::settings_idle_off_sub), kSettingValueSubW);
+  fits(small, tr(S::settings_idle_never_sub), kSettingValueSubW);
   // The warning: its longest count, then [Keep on] to the edge.
   char t[48];
   IdlePolicy::warnText(30, t, sizeof(t));
   fits(body, t, kIdleToastKeepX - 6 - kToastTextX);
-  fits(body, kIdleKeepOn, kIdleToastKeepW - kIdleToastPad);
+  fits(body, tr(S::settings_idle_keep_on), kIdleToastKeepW - kIdleToastPad);
   TEST_ASSERT_TRUE(kIdleToastKeepX + kIdleToastKeepW <= 312);
   // The next boot's toast: each setting, and the console's test lengths.
   for (uint32_t ms : {10u * 60000u, 20u * 60000u, 60u * 60000u, 60000u, 59000u, 90u * 60000u}) {
@@ -1506,8 +1545,8 @@ void test_power_settings_texts_fit() {
   using namespace uitext;
   namespace pc = powerchoice;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  fits(body, kCpuTitle, kSettingValueSubW);
-  fits(body, kBtPowerTitle, kSettingValueSubW);
+  fits(body, tr(S::settings_cpu), kSettingValueSubW);
+  fits(body, tr(S::settings_bt_power), kSettingValueSubW);
   char buf[64];
   for (uint16_t mhz : pc::kCpuMhz) {
     fits(body, pc::cpuLabel(mhz), kSettingPillW - kSettingPillPad);
@@ -1541,11 +1580,11 @@ void test_power_settings_texts_fit() {
     for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
     TEST_ASSERT_EQUAL_STRING(dialogBody, joined.c_str());
   }
-  fits(bold, kCpuRestart, kDialogButtonTextW);
-  fits(body, kCpuWaitPairing, kToastTextRight - kToastTextX);
+  fits(bold, tr(S::settings_cpu_restart), kDialogButtonTextW);
+  fits(body, tr(S::settings_cpu_wait_pairing), kToastTextRight - kToastTextX);
   // About: its label (Small), and every value in Body (all fit; Small is
   // the fallback).
-  fits(small, kAboutPower, kAboutValueW);
+  fits(small, tr(S::about_power), kAboutValueW);
   for (uint16_t mhz : pc::kCpuMhz) {
     for (int c = 0; c < pc::kBtChoices; ++c) {
       pc::aboutText(mhz, c, buf, sizeof(buf));
@@ -1562,64 +1601,71 @@ void test_touch_calibration_texts_fit() {
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
   // Output: the row, its sheet (Calibrate the primary, its detail beside
   // it), the dialog, the toast.
-  fits(body, kCalRowTitle, kSettingSubW);
-  fits(small, kCalSubOff, kSettingSubW);
-  fits(small, kCalSubOn, kSettingSubW);
+  fits(body, tr(S::settings_cal), kSettingSubW);
+  fits(small, tr(S::settings_cal_off), kSettingSubW);
+  fits(small, tr(S::settings_cal_on), kSettingSubW);
   const int sheetLabelW = 320 - 32;
-  fits(bold, kCalCalibrate, sheetLabelW);
-  fits(small, kCalCalibrateDetail, 320 - 16 - (16 + bold.width(kCalCalibrate) + 16));
-  fits(body, kCalCheckTitle, sheetLabelW);
-  fits(body, kCalRemoveRow, sheetLabelW);
-  fits(bold, kCalRemoveTitle, kDialogTitleW);
+  fits(bold, tr(S::settings_cal_calibrate), sheetLabelW);
+  fits(small, tr(S::settings_cal_calibrate_detail), 320 - 16 - (16 + bold.width(tr(S::settings_cal_calibrate)) + 16));
+  fits(body, tr(S::settings_cal_test_taps), sheetLabelW);
+  fits(body, tr(S::settings_cal_remove_row), sheetLabelW);
+  fits(bold, tr(S::settings_cal_remove_title), kDialogTitleW);
   textfit::Font f;
   f.ctx = const_cast<Vlw*>(&small);
   f.width = [](void* ctx, const char* t) { return static_cast<const Vlw*>(ctx)->width(t); };
   {
-    TEST_ASSERT_TRUE(strlen(kCalRemoveBody) < 128);
+    TEST_ASSERT_TRUE(strlen(tr(S::settings_cal_remove_body)) < 128);
     char lines[4][96];
-    const int n = textfit::wrap(f, kCalRemoveBody, strlen(kCalRemoveBody), kDialogTitleW, 3, &lines[0][0],
+    const char* removeBody = tr(S::settings_cal_remove_body);
+    const int n = textfit::wrap(f, removeBody, strlen(removeBody), kDialogTitleW, 3, &lines[0][0],
                                 sizeof(lines[0]));
     TEST_ASSERT_TRUE(n <= 3);
     std::string joined;
     for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
-    TEST_ASSERT_EQUAL_STRING(kCalRemoveBody, joined.c_str());
+    TEST_ASSERT_EQUAL_STRING(tr(S::settings_cal_remove_body), joined.c_str());
   }
-  fits(bold, kCalRemove, kDialogButtonTextW);
-  fits(body, kCalRemoved, kToastTextRight - kToastTextX);
+  fits(bold, tr(S::settings_cal_remove), kDialogButtonTextW);
+  fits(body, tr(S::settings_cal_removed), kToastTextRight - kToastTextX);
 
   // The header: each pill before the title, the titles, the progress.
-  for (const char* pill : {kCalCancel, kCalSkip}) {
+  for (const char* pill : {tr(S::calibration_cancel), tr(S::calibration_skip)}) {
     TEST_ASSERT_TRUE(kCalPillX + bold.width(pill) + kCalPillPad <= kCalTitleX - 4);
   }
-  fits(bold, kCalTitle, kCalTitleW);
-  fits(bold, kCheckTitle, kCalTitleW);
-  fits(bold, kCalCheckTitle, kCalTitleW);
+  fits(bold, tr(S::calibration_title), kCalTitleW);
+  fits(bold, tr(S::calibration_check_title), kCalTitleW);
+  fits(bold, tr(S::settings_cal_test_taps), kCalTitleW);
   fits(small, "9 of 9", kCalProgressW);
-  fits(small, kCalSaved, kCalProgressW);
-  fits(small, kCalUndone, kCalProgressW);
+  fits(small, tr(S::calibration_saved), kCalProgressW);
+  fits(small, tr(S::calibration_undone), kCalProgressW);
   TEST_ASSERT_TRUE(kCalTitleX + kCalTitleW + 6 + kCalProgressW <= 312);
   // The Cancel pill's hit area covers it.
-  TEST_ASSERT_TRUE(kCalPillX + bold.width(kCalCancel) + kCalPillPad <= touchcheck::kCancelW);
+  TEST_ASSERT_TRUE(kCalPillX + bold.width(tr(S::calibration_cancel)) + kCalPillPad <= touchcheck::kCancelW);
   TEST_ASSERT_EQUAL_INT(kCalHeaderH, touchcheck::kCancelH);
 
   // The lines (Body; the result's numbers fall back to Small).
   char buf[96];
-  fits(body, kCalFirstHint[0], kCalLineW);
-  snprintf(buf, sizeof(buf), kCalFirstHint[1], 9);
+  char hint[160];
+  uistr::trnf(hint, sizeof(hint), S::calibration_first_hint, 9, 9);
+  fits(body, lineOf(S::calibration_first_hint, 0).c_str(), kCalLineW);
+  uistr::line(hint, 1, buf, sizeof(buf));
   fits(body, buf, kCalLineW);
-  for (const char* t : {kCalHint, kCalMissed, kCheckHint, kCheckMissed, kCheckFirstHint[0], kCheckFirstHint[1],
-                        kCalCheckLines[0], kCalCheckLines[1], kCalSaveLine, kCalAccurate, kCalNoBetter,
-                        kCalDisagree[0], kCalDisagree[1], kCheckGoOn}) {
-    fits(body, t, kCalLineW);
+  std::vector<std::string> calLines = {tr(S::calibration_hint), tr(S::calibration_missed), tr(S::check_hint),
+                                       tr(S::check_missed), tr(S::calibration_save_line), tr(S::calibration_accurate),
+                                       tr(S::calibration_no_better), tr(S::check_go_on)};
+  for (S two : {S::check_first_hint, S::calibration_check_lines, S::calibration_disagree}) {
+    for (int k = 0; k < 2; ++k) calLines.push_back(lineOf(two, k));
   }
-  fits(bold, kCheckAsk, kCalLineW);
-  fits(title, kCheckAccurate, kCalLineW);
+  for (const std::string& t : calLines) {
+    fits(body, t.c_str(), kCalLineW);
+  }
+  fits(bold, tr(S::check_ask), kCalLineW);
+  fits(title, tr(S::check_accurate), kCalLineW);
   // Typical results in Body; the widest possible in Small.
-  touchcheck::errorText(kCalNow, touchcheck::Error{42, 21}, buf, sizeof(buf));
+  touchcheck::errorText(touchcheck::Table::InUse, touchcheck::Error{42, 21}, buf, sizeof(buf));
   fits(body, buf, kCalLineW);
-  touchcheck::errorText(kCalNew, touchcheck::Error{5, 3}, buf, sizeof(buf));
+  touchcheck::errorText(touchcheck::Table::New, touchcheck::Error{5, 3}, buf, sizeof(buf));
   fits(body, buf, kCalLineW);
-  touchcheck::errorText(kCalNew, touchcheck::Error{999, 999}, buf, sizeof(buf));
+  touchcheck::errorText(touchcheck::Table::New, touchcheck::Error{999, 999}, buf, sizeof(buf));
   fits(small, buf, kCalLineW);
   // The check's verdict: two Body lines at most, the longest way and size.
   f.ctx = const_cast<Vlw*>(&body);
@@ -1633,31 +1679,36 @@ void test_touch_calibration_texts_fit() {
 
   // The rows: centred labels, and labels with their details.
   const int rowText = kCalRowW - 2 * kCalRowPad;
-  for (const char* t : {kCalSave, kCalTryAgain, kCalDiscard, kCalDone}) {
+  for (S id : {S::calibration_save, S::calibration_try_again, S::calibration_discard, S::calibration_done}) {
+    const char* t = tr(id);
     fits(bold, t, rowText);
     fits(body, t, rowText);
   }
-  TEST_ASSERT_TRUE(bold.width(kCalCalibrate) + small.width(kCalCalibrateDetail) + 3 * kCalRowPad <= kCalRowW);
-  TEST_ASSERT_TRUE(body.width(kCheckNotNow) + small.width(kCheckLater) + 3 * kCalRowPad <= kCalRowW);
+  TEST_ASSERT_TRUE(bold.width(tr(S::settings_cal_calibrate)) + small.width(tr(S::settings_cal_calibrate_detail)) +
+                       3 * kCalRowPad <=
+                   kCalRowW);
+  TEST_ASSERT_TRUE(body.width(tr(S::check_not_now)) + small.width(tr(S::check_later)) + 3 * kCalRowPad <= kCalRowW);
   // Three rows, the lines above them, and the A hint under them.
   TEST_ASSERT_TRUE(kCalRowsBottom - 3 * 40 >= 86 + 11 && kCalRowsBottom <= kCalHintY);
 
   // The A hints: "A: " and each page's verb.
-  for (const char* verb : {kCalCancel, kCalSkip, kCheckNotNow, kCalDiscard, kCalDone, kCalUndo}) {
-    snprintf(buf, sizeof(buf), "A: %s", verb);
+  for (S id : {S::calibration_cancel, S::calibration_skip, S::check_not_now, S::calibration_discard,
+               S::calibration_done, S::calibration_undo}) {
+    const char* verb = tr(id);
+    uistr::trf(buf, sizeof(buf), S::calibration_a_hint, verb);
     fits(small, buf, kCalAHintW);
   }
   // The test taps page's key, after its A hint (Done, or Undo after a
   // Save; 6 px clear of it) and its dot, to the band's end.
-  for (const char* verb : {kCalDone, kCalUndo}) {
-    snprintf(buf, sizeof(buf), "A: %s", verb);
+  for (const char* verb : {tr(S::calibration_done), tr(S::calibration_undo)}) {
+    uistr::trf(buf, sizeof(buf), S::calibration_a_hint, verb);
     TEST_ASSERT_TRUE(kCalAHintX + small.width(buf) + 6 <= kCalKeyX);
   }
   TEST_ASSERT_TRUE(kCalKeyX + 6 < kCalKeyTextX);
-  fits(small, kCalCheckKey, kCalKeyTextW);
+  fits(small, tr(S::calibration_check_key), kCalKeyTextW);
   TEST_ASSERT_EQUAL_INT(312, kCalKeyTextX + kCalKeyTextW);
   // The boot screen's rescue line.
-  fits(small, kBootTouchHint, kCalLineW);
+  fits(small, tr(S::boot_touch_hint), kCalLineW);
 }
 
 // With no correction (the default, until the owner calibrates), a panel
@@ -1871,7 +1922,7 @@ void test_library_rows_from_tags() {
   TEST_ASSERT_EQUAL_STRING("2 tracks", albumSub(idx, demos, AlbumPlace::OfArtist).c_str());
   // The loose tracks keep no name and no year, whatever their tags say.
   TEST_ASSERT_EQUAL_STRING("1 track", albumSub(idx, loose, AlbumPlace::OfArtist).c_str());
-  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, loose));
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_loose_tracks), librarytext::albumShown(idx, loose));
   // The root's Albums: the line and the year; an album with no records
   // shows its artist's (elected) name.
   TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 2001", albumSub(idx, first, AlbumPlace::AZ).c_str());
@@ -1934,9 +1985,9 @@ void test_library_rows_from_paths() {
   TEST_ASSERT_EQUAL_STRING("2 tracks", albumSub(idx, morning, AlbumPlace::OfArtist).c_str());
   TEST_ASSERT_EQUAL_STRING("Glass Orchard \xC2\xB7 2 tracks", text(librarytext::albumHeader, idx, morning).c_str());
   TEST_ASSERT_EQUAL_STRING("", trackSub(idx, "/music/Glass Orchard/Morning Set/01 - Opening.mp3", false).c_str());
-  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, albumSub(idx, top, AlbumPlace::AZ).c_str());
-  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, librarytext::artistShown(idx, idx.album(top).artist));
-  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, top));
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_no_artist_folder), albumSub(idx, top, AlbumPlace::AZ).c_str());
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_no_artist_folder), librarytext::artistShown(idx, idx.album(top).artist));
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_loose_tracks), librarytext::albumShown(idx, top));
   // The rail keys on the names (no sort tags): "The" aside, as before.
   for (uint32_t i = 0; i < idx.artistCount(); ++i) {
     const uint32_t a = idx.artistsAZ()[i];
@@ -1952,7 +2003,7 @@ void test_library_rows_from_paths() {
   TEST_ASSERT_EQUAL_STRING("Morning Set", c.album(opening));
   TEST_ASSERT_EQUAL_UINT16(0, c.year(opening));
   TEST_ASSERT_EQUAL_UINT32(0, c.durationHintMs(opening));
-  TEST_ASSERT_EQUAL_STRING("", c.artist(idx.findTrack("/music/Top Level.mp3")));  // Now Playing: kUnknownArtist
+  TEST_ASSERT_EQUAL_STRING("", c.artist(idx.findTrack("/music/Top Level.mp3")));  // Now Playing: now_playing.unknown_artist
   // "1-01", "1-02", "2-01": two discs from the names, a divider each.
   librarytext::Discs d;
   d.set(idx, late);
@@ -2324,13 +2375,13 @@ void test_names_without_tags() {
   const uint32_t loose = idx.track(stray).album, topAlbum = idx.track(top).album;
   TEST_ASSERT_TRUE(idx.album(loose).flags & LibraryIndex::kLoose);
   TEST_ASSERT_EQUAL_STRING("", idx.albumName(loose));
-  TEST_ASSERT_EQUAL_STRING("", c.album(stray));  // Now Playing: kLooseTracks
-  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, loose));
+  TEST_ASSERT_EQUAL_STRING("", c.album(stray));  // Now Playing: library.loose_tracks
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_loose_tracks), librarytext::albumShown(idx, loose));
   TEST_ASSERT_EQUAL_STRING("Orvel Tasse", librarytext::artistShown(idx, idx.album(loose).artist));
-  TEST_ASSERT_EQUAL_STRING(uitext::kLooseTracks, librarytext::albumShown(idx, topAlbum));
-  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, librarytext::artistShown(idx, idx.album(topAlbum).artist));
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_loose_tracks), librarytext::albumShown(idx, topAlbum));
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_no_artist_folder), librarytext::artistShown(idx, idx.album(topAlbum).artist));
   TEST_ASSERT_EQUAL_STRING("Orvel Tasse", albumSub(idx, loose, AlbumPlace::AZ).c_str());
-  TEST_ASSERT_EQUAL_STRING(uitext::kNoArtistFolder, albumSub(idx, topAlbum, AlbumPlace::AZ).c_str());
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_no_artist_folder), albumSub(idx, topAlbum, AlbumPlace::AZ).c_str());
   // The overlay (the playing track's record read after the build): a blank
   // title or album is none there too, the index's names stay.
   TrackCatalog::Overlay o;
@@ -2355,10 +2406,13 @@ void test_names_without_tags() {
 void test_library_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
-  fits(title, kNoMusicTitle, kEmptyTitleW);
-  for (const char* l : kNoMusicLines) fits(small, l, kEmptyLineW);
-  for (const char* l : kNoCard.lines) fits(small, l, kEmptyLineW);
-  for (const char* l : {kUnknownArtist, kNoArtistFolder, kLooseTracks}) fits(body, l, kNowPlayingTextW);
+  fits(title, tr(S::empty_no_music_title), kEmptyTitleW);
+  for (int k = 0; k < 2; ++k) fits(small, lineOf(S::empty_no_music_lines, k).c_str(), kEmptyLineW);
+  for (int k = 0; k < 2; ++k) fits(small, lineOf(kNoCard.lines, k).c_str(), kEmptyLineW);
+  for (const char* l :
+       {tr(S::now_playing_unknown_artist), tr(S::library_no_artist_folder), tr(S::library_loose_tracks)}) {
+    fits(body, l, kNowPlayingTextW);
+  }
   // The album row with its year: a short album name keeps it.
   fits(body, "First Light \xC2\xB7 2001", kNowPlayingTextW);
   char t[64];
@@ -2386,16 +2440,16 @@ void test_library_texts_fit() {
   librarytext::foundText(99999, t, sizeof(t));
   TEST_ASSERT_EQUAL_STRING("Found 99,999 new tracks", t);
   fits(body, t, kToastTextRight - kToastTextX);
-  fits(body, kLibraryUpdated, kToastTextRight - kToastTextX);
-  fits(body, kLibraryAtBoot, kToastTextRight - kToastTextX);
-  TEST_ASSERT_TRUE(small.hasAll(kStatusChecking) && small.hasAll(kStatusUpdating));
+  fits(body, tr(S::library_updated), kToastTextRight - kToastTextX);
+  fits(body, tr(S::library_updates_at_boot), kToastTextRight - kToastTextX);
+  TEST_ASSERT_TRUE(small.hasAll(tr(S::library_status_checking)) && small.hasAll(tr(S::library_status_updating)));
   // The update step's fence (N12): the lists' line, and the note for what waits.
-  fits(body, kUpdatingList, 320 - 24);
-  TEST_ASSERT_TRUE(body.hasAll(kUpdatingList));
-  fits(body, kUpdatingWait, kToastTextRight - kToastTextX);
+  fits(body, tr(S::library_updating_list), 320 - 24);
+  TEST_ASSERT_TRUE(body.hasAll(tr(S::library_updating_list)));
+  fits(body, tr(S::library_updating_wait), kToastTextRight - kToastTextX);
   // A card swapped while on: the toasts before the restart.
-  fits(body, kAnotherCard, kToastTextRight - kToastTextX);
-  fits(body, kCardBack, kToastTextRight - kToastTextX);
+  fits(body, tr(S::card_another), kToastTextRight - kToastTextX);
+  fits(body, tr(S::card_back), kToastTextRight - kToastTextX);
 }
 
 // ---- the console's tag commands (tagtext, docs/METADATA.md 3.3.6) ----
@@ -2597,11 +2651,12 @@ void test_console_sources() {
 void test_dance_texts_fit() {
   using namespace uitext;
   const Vlw small(kVlwSans13), bold(kVlwSansBold16);
-  fits(bold, kVizTitle, kDanceBottomW);
-  fits(small, kVizHint, kDanceBottomW);
+  fits(bold, tr(S::dance_viz_title), kDanceBottomW);
+  fits(small, tr(S::dance_viz_hint), kDanceBottomW);
   char msg[96];
-  snprintf(msg, sizeof(msg), "\"%s\" %d px, \"%s\" %d px, in %d", kVizTitle, bold.width(kVizTitle), kVizHint,
-           small.width(kVizHint), kDanceBottomW);
+  snprintf(msg, sizeof(msg), "\"%s\" %d px, \"%s\" %d px, in %d", tr(S::dance_viz_title),
+           bold.width(tr(S::dance_viz_title)), tr(S::dance_viz_hint),
+           small.width(tr(S::dance_viz_hint)), kDanceBottomW);
   TEST_MESSAGE(msg);
 }
 
@@ -2643,7 +2698,7 @@ void test_boot_texts_fit() {
   fits(body, "v10.10.10-rc.10", kTextW);
   fits(body, "v0.8.0-dev+abcdef1-dirty", kTextW);
   fits(small, "v10.10.10-rc.10-9999-gabcdef12-dirty", kTextW);
-  fits(small, uitext::kBootTouchHint, kTextW);
+  fits(small, tr(S::boot_touch_hint), kTextW);
 }
 
 // Device info (Output > About > Device info): About's row to it, the
@@ -2654,14 +2709,14 @@ void test_boot_texts_fit() {
 void test_device_info_texts_fit() {
   using namespace uitext;
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
-  fits(body, kDeviceInfoTitle, kDeviceInfoRowW);
-  fits(small, kDeviceInfoRowSub, kDeviceInfoRowW);
+  fits(body, tr(S::about_device_info), kDeviceInfoRowW);
+  fits(small, tr(S::about_device_info_sub), kDeviceInfoRowW);
   // The header: the title (Bold) after the back chevron (x 28), the line
   // (Small) 8 px after it, to x 310; drawn only when it starts 16 px
   // before that (Ui::drawHeader()).
-  const int subX = 28 + bold.width(kDeviceInfoTitle) + 8;
+  const int subX = 28 + bold.width(tr(S::about_device_info)) + 8;
   TEST_ASSERT_TRUE(subX < 310 - 16);
-  fits(small, kDeviceInfoHeaderSub, 310 - subX);
+  fits(small, tr(S::device_info_subtitle), 310 - subX);
   TEST_ASSERT_EQUAL_INT(312 - 8, kDeviceInfoX + kDeviceInfoW);
 
   char v[96];
@@ -2821,27 +2876,29 @@ void test_library_row_texts() {
   s.none = 0;
   librarytext::sourcesText(s, 1, t, sizeof(t));
   fits(small, t, kLibraryRowW);
-  for (const char* l : {kLibraryRowPaths, kLibraryRowNoCard, kLibraryRowUpdating}) fits(small, l, kLibraryRowW);
-  TEST_ASSERT_TRUE(small.hasAll(kLibraryRowUpdating));
-  fits(body, kRescanPill, kRescanPillW - kSettingPillPad);
-  fits(body, kRescanStarted, kToastTextRight - kToastTextX);
-  fits(body, kRescanNoCard, kToastTextRight - kToastTextX);
+  for (S id : {S::library_row_paths, S::library_row_no_card, S::library_row_updating}) {
+    fits(small, tr(id), kLibraryRowW);
+  }
+  TEST_ASSERT_TRUE(small.hasAll(tr(S::library_row_updating)));
+  fits(body, tr(S::library_row_rescan), kRescanPillW - kSettingPillPad);
+  fits(body, tr(S::library_row_rescan_started), kToastTextRight - kToastTextX);
+  fits(body, tr(S::library_row_rescan_no_card), kToastTextRight - kToastTextX);
   // The dialog: its title in Bold, its body in Small on its 3 lines (as
   // the calibration's Remove), its button.
-  fits(bold, kRescanTitle, kDialogTitleW);
-  fits(bold, kRescanPill, kDialogButtonTextW);
+  fits(bold, tr(S::library_row_rescan_title), kDialogTitleW);
+  fits(bold, tr(S::library_row_rescan), kDialogButtonTextW);
   {
     textfit::Font f;
     f.ctx = const_cast<Vlw*>(&small);
     f.width = [](void* ctx, const char* text) { return static_cast<const Vlw*>(ctx)->width(text); };
-    TEST_ASSERT_TRUE(strlen(kRescanBody) < 128);
+    TEST_ASSERT_TRUE(strlen(tr(S::library_row_rescan_body)) < 128);
     char lines[4][96];
-    const int n =
-        textfit::wrap(f, kRescanBody, strlen(kRescanBody), kDialogTitleW, 3, &lines[0][0], sizeof(lines[0]));
+    const char* rescanBody = tr(S::library_row_rescan_body);
+    const int n = textfit::wrap(f, rescanBody, strlen(rescanBody), kDialogTitleW, 3, &lines[0][0], sizeof(lines[0]));
     TEST_ASSERT_TRUE(n <= 3);
     std::string joined;
     for (int i = 0; i < n; ++i) joined += std::string(i ? " " : "") + lines[i];
-    TEST_ASSERT_EQUAL_STRING(kRescanBody, joined.c_str());
+    TEST_ASSERT_EQUAL_STRING(tr(S::library_row_rescan_body), joined.c_str());
   }
   // A buffer too small: cut, never past it.
   char tiny[12];

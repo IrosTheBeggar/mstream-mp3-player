@@ -111,6 +111,8 @@ private:
   // A line centred across the screen at `y` (Body, else Small if Body
   // doesn't fit; or `font` as given).
   void drawLine(int y, const char* text, uint16_t colour, int font = -1);
+  // A message's lines ('\n' between them) from y, `pitch` px apart.
+  void drawLines(int y, const char* text, uint16_t colour, int pitch);
   void drawHintBand(int y, int lines);
   void drawAHint(const char* verb, const char* key = nullptr);
   void setRows(const Row* rows, int n);

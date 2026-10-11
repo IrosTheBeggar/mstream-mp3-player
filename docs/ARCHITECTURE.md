@@ -1684,7 +1684,7 @@ a beta); the README has how to cut one.
 - **Where it shows.** About's Version row: the version (Body, Small when a
   long dev version doesn't fit) under "Version (2026-09-30, ELF
   1a2b3c4d)": the commit's date and the first 8 hex digits of the ELF's
-  SHA-256 (`uitext::kAboutVersionLabel`, measured by test_ui_library with
+  SHA-256 (`about.version_label`, measured by test_ui_library with
   every hex digit and the longest versions). The boot screen, under the
   mStream logo (Body, or Small for a long dev version; measured by
   test_ui_library). Output > About > Device info's Firmware and Build
@@ -2603,12 +2603,13 @@ Queue, Dance and Output (with its Pair and About pages).
   while a sleep timer runs (amber while it fades). The Library
   icon is a record half out of its sleeve, unlike Now Playing's bars. Only
   the cells whose state changed are drawn (a 54x36 push, ~1 ms).
-- **Texts that must fit**: the fixed texts with a fixed room (the coach
-  cards, the empty states' buttons, the Queue's bar, the Output tab's
-  buttons, status lines and hints, the two-line toast's name) are in
-  `lib/core/UiText.h` next to their room, and `test_ui_library` measures
-  each with the firmware's own DejaVu data (as it does the tab bar's), so
-  a label cut to "Remov…" or "Tap ag…" on the device fails a host test.
+- **Texts that must fit**: every text the UI draws is in the catalogue,
+  `i18n/en.json` (one file a language; `uistr::tr()`: docs/I18N.md, phase
+  3), each with its room (the font, the pixels, the lines); the rooms are
+  `lib/core/UiText.h`'s too. `test_ui_strings` measures every text in
+  every room it has, and `test_ui_library` the layouts' details, with the
+  firmware's own DejaVu data (as it does the tab bar's), so a label cut to
+  "Remov…" or "Tap ag…" on the device fails a host test.
 - **Overlays**: the **toast** (with Undo for 4 s after a queue edit, else
   1.8 s) sits at the **top of the content area** (y 36-71, over the page
   header: the usability walk found the spec's bottom toast right above

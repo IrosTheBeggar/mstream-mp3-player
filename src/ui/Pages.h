@@ -348,7 +348,7 @@ private:
   bool touchInList_ = false;
   int headerPressed_ = 0;  // Header::hit() of the finger on the header; the root: 10 + its segment
   int32_t segScroll_[3] = {-1, -1, -1};
-  char playAll_[24] = "";  // the Folders root's "Play all N"
+  char playAll_[48] = "";  // the Folders root's "Play all N"
   // The header's texts (here, in PSRAM with the Ui, not in static RAM).
   mutable char headerSub_[64] = "";
   mutable char headerPath_[160] = "";
@@ -470,7 +470,7 @@ private:
   char summaryLong_[64] = "";   // "4 of 16 · 12 up next · 49 min"
   char summaryMid_[48] = "";    // "4 of 16 · 49 min" (the long one too wide)
   char summaryShort_[48] = "";  // "12 up next · 49 min" (no position)
-  mutable char headerTitle_[32] = "";  // the header's texts (PSRAM, with the Ui)
+  mutable char headerTitle_[48] = "";  // the header's texts (PSRAM, with the Ui)
   mutable char headerSub_[64] = "";
 };
 

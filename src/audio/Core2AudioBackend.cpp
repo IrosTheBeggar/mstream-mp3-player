@@ -27,6 +27,7 @@
 #include "ToneTrack.h"
 #include "TrackProgress.h"
 #include "TrackSeek.h"
+#include "UiStrings.h"
 #include "app/Psram.h"
 #include "audio/GuardedSource.h"
 #include "audio/OpusGenerator.h"
@@ -1062,7 +1063,8 @@ bool Core2AudioBackend::prepare(const std::string& path, const StartAt& at, Prep
     // reader's plan (planOpus()), begun by the generator (beginPrepared()).
     OpusGenerator* g = opusGenerator();
     if (!g) {
-      prepareWhy_ = prepareNote_ = "no RAM for the Opus decoder";
+      prepareWhy_ = "no RAM for the Opus decoder";
+      prepareNote_ = uistr::tr(uistr::S::toast_why_opus_no_ram);
       return false;
     }
     g->setPlacement(static_cast<OpusGenerator::Placement>(opusPlacement_.load(std::memory_order_relaxed)));

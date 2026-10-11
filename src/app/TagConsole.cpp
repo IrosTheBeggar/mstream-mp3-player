@@ -18,6 +18,7 @@
 #include "QueueView.h"
 #include "TagScan.h"
 #include "TagStore.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "app/Psram.h"
 #include "storage/CardFat.h"
@@ -702,7 +703,7 @@ void TagConsole::dump(const char* arg) {
                   "%u, number %u, length %s\n",
                   static_cast<unsigned long>(id), kSources[tr.flags & LibraryIndex::kSourceMask],
                   (tr.flags & LibraryIndex::kTrackPending) ? ", the scan's to read" : "", title,
-                  library_.catalog().artist(id), album[0] ? album : uitext::kLooseTracks,
+                  library_.catalog().artist(id), album[0] ? album : uistr::tr(uistr::S::library_loose_tracks),
                   static_cast<unsigned>(library_.catalog().year(id)), library_.catalog().albumArtist(id),
                   static_cast<unsigned>(tr.disc), static_cast<unsigned>(tr.number), t);
   }

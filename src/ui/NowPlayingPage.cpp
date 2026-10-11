@@ -28,6 +28,7 @@
 #include "TitleLayout.h"
 #include "TrackCatalog.h"
 #include "TrackSeek.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "app/Psram.h"
 #include "ui/Fonts.h"
@@ -38,6 +39,9 @@
 #include "ui/Ui.h"
 
 namespace ui {
+
+using uistr::S;
+using uitext::repeatMode;
 
 namespace {
 
@@ -226,7 +230,8 @@ void NowPlayingPage::drawTitle() {
   // would erase the ink of the line above in the rows they share: a
   // descender's or a CJK glyph's lowest row.
   c.fillRect(0, 0, w, kTitleH, bg);
-  char title[160] = "Nothing playing";
+  char title[160];
+  snprintf(title, sizeof(title), "%s", tr(S::now_playing_title_none));
   if (s.current >= 0) ui_.player().catalog().title(s.trackId, title, sizeof(title));
   const uint16_t ink = s.current >= 0 ? col::TXT : col::DIM;
   const int x = kTextX - kColumnX;
@@ -234,17 +239,20 @@ void NowPlayingPage::drawTitle() {
     // The wait's status takes the strip's lower lines: the title on one
     // line over "Waiting for SPYDRONE…" (amber) and "try 2 of 3".
     f.draw(c, Font::Bold, title, x, 9, kTextW, ink, ink);
-    char line[64];
-    snprintf(line, sizeof(line), "Waiting for %s\xE2\x80\xA6", s.btName[0] ? s.btName : "the headphones");
+    char line[96];
+    if (s.btName[0]) {
+      trf(line, sizeof(line), S::now_playing_waiting_for, s.btName);
+    } else {
+      trf(line, sizeof(line), S::now_playing_waiting_for_headphones);
+    }
     f.draw(c, Font::Small, line, kWaitTextX, 26, kWaitTextW, col::AMBER, col::AMBER);
     const BtLink& l = s.btLink;
     if (l.phase == BtLink::Phase::Paging && l.attempt > 0) {
-      snprintf(line, sizeof(line), "try %u of %u", static_cast<unsigned>(l.attempt),
-               static_cast<unsigned>(l.attempts > l.attempt ? l.attempts : l.attempt));
+      trf(line, sizeof(line), S::now_playing_wait_try, l.attempt, l.attempts > l.attempt ? l.attempts : l.attempt);
     } else if (l.phase == BtLink::Phase::Scanning || l.phase == BtLink::Phase::Backoff) {
-      snprintf(line, sizeof(line), "looking for them");
+      trf(line, sizeof(line), S::now_playing_wait_looking);
     } else {
-      snprintf(line, sizeof(line), "connecting");
+      trf(line, sizeof(line), S::now_playing_wait_connecting);
     }
     f.draw(c, Font::Small, line, kWaitTextX, 43, kWaitTextW, col::DIM, col::DIM);
     gfx::push(c, kColumnX, kTitleY, w, kTitleH);
@@ -277,12 +285,12 @@ void NowPlayingPage::drawArtistAlbum() {
   c.fillRect(0, 0, w, kArtistH + kAlbumH, bg);
   // The track's artist (its tag's, else its album's line, else its artist
   // folder); its album's name, and its year when the whole fits.
-  const char* artist = lib ? cat.artist(s.trackId) : s.current >= 0 ? "Built-in test track" : "";
-  if (lib && !artist[0]) artist = uitext::kUnknownArtist;
+  const char* artist = lib ? cat.artist(s.trackId) : s.current >= 0 ? tr(S::now_playing_builtin_artist) : "";
+  if (lib && !artist[0]) artist = tr(S::now_playing_unknown_artist);
   f.draw(c, Font::Body, artist, x, kArtistH / 2, kTextW, col::SOFT, bg);
   if (lib) {
     const char* album = cat.album(s.trackId);
-    if (!album[0]) album = uitext::kLooseTracks;
+    if (!album[0]) album = tr(S::library_loose_tracks);
     const uint16_t year = cat.year(s.trackId);
     char line[300];
     if (year) {
@@ -390,31 +398,30 @@ void NowPlayingPage::drawProgressText(M5Canvas& c, bool paused) {
     }
     f.draw(c, Font::Small, t, x0 + w, kTextY, 60, col::SOFT, col::BG, Fonts::Align::Right);
   }
-  char mid[72];
-  char base[40] = "";  // "Paused, 4 of 16": the line without its output
-  char warn[48] = "";  // "SPYDRONE (not connected)": never dropped for the timer
+  char mid[128];
+  char base[64] = "";  // "Paused, 4 of 16": the line without its output
+  char warn[96] = "";  // "WH-1000XM4 (not connected)": never dropped for the timer
   uint16_t mc = col::DIM;
   if (s.failed) {
-    snprintf(mid, sizeof(mid), "Can't play this track");
+    trf(mid, sizeof(mid), S::now_playing_cant_play);
     mc = col::RED;
   } else if (s.current < 0) {
-    snprintf(mid, sizeof(mid), "The queue is empty");
+    trf(mid, sizeof(mid), S::now_playing_queue_empty);
   } else {
-    const char* state = s.play == PlayState::Paused    ? "Paused, "
-                        : s.play == PlayState::Stopped ? "Stopped, "
-                        : s.play == PlayState::Waiting ? "Waiting, "
-                                                       : "";
-    snprintf(mid, sizeof(mid), "%s%lu of %lu", state, static_cast<unsigned long>(s.current + 1),
-             static_cast<unsigned long>(s.queueSize));
+    const S where = s.play == PlayState::Paused    ? S::now_playing_position_paused
+                    : s.play == PlayState::Stopped ? S::now_playing_position_stopped
+                    : s.play == PlayState::Waiting ? S::now_playing_position_waiting
+                                                   : S::now_playing_position;
+    trf(mid, sizeof(mid), where, s.current + 1, s.queueSize);
     snprintf(base, sizeof(base), "%s", mid);
     if (s.play != PlayState::Playing) mc = col::AMBER;
     // Where it plays (mockup 01's output line): "4 of 16 · SPYDRONE", when
     // it fits between the times. The headphones not connected (and no
     // wait saying so above): that alone, if both don't fit.
-    char where[48], withOutput[96];
-    const char* out = outputName(where, sizeof(where));
+    char name[96], withOutput[192];
+    const char* out = outputName(name, sizeof(name));
     if (s.onBluetooth && !s.btConnected && s.play != PlayState::Waiting) snprintf(warn, sizeof(warn), "%s", out);
-    snprintf(withOutput, sizeof(withOutput), "%s \xC2\xB7 %s", mid, out);
+    snprintf(withOutput, sizeof(withOutput), "%s%s%s", mid, librarytext::kDot, out);
     if (f.width(Font::Small, withOutput) <= kMidW) {
       snprintf(mid, sizeof(mid), "%s", withOutput);
     } else if (s.onBluetooth && !s.btConnected && s.play != PlayState::Waiting) {
@@ -454,15 +461,16 @@ void NowPlayingPage::drawReadout() {
   // roughly agree.
   constexpr int kBigY = 16, kSmallY = 19;
   if (bar_.phase() == SeekBar::Phase::Off) {
-    f.draw(c, Font::Bold, kSeekCancel, kW / 2, kBigY, SeekBar::kLineW, col::AMBER, col::BG, Fonts::Align::Centre);
+    f.draw(c, Font::Bold, tr(S::now_playing_seek_cancel), kW / 2, kBigY, SeekBar::kLineW, col::AMBER, col::BG,
+           Fonts::Align::Centre);
   } else {
     // The finger's second and the change; back where it plays, that second
     // and "no change". On the side away from the knob (a finger on the bar
     // covers what is above it).
-    char big[16], small[24];
+    char big[16], small[48];
     if (bar_.staying()) {
       mmss(bar_.liveMs(), big, sizeof(big));
-      snprintf(small, sizeof(small), "%s", kSeekStay);
+      snprintf(small, sizeof(small), "%s", tr(S::now_playing_seek_stay));
     } else {
       mmss(bar_.targetMs(), big, sizeof(big));
       SeekBar::changeText(bar_.targetMs(), bar_.liveMs(), small, sizeof(small));
@@ -504,12 +512,15 @@ void NowPlayingPage::endScrub() {
 
 const char* NowPlayingPage::outputName(char* buf, size_t size) const {
   const AppState& s = ui_.state();
-  if (!s.onBluetooth) return "Speaker";
-  const char* name = s.btName[0] ? s.btName : "Headphones";
-  if (s.btConnected) return name;
+  if (!s.onBluetooth) return tr(S::now_playing_output_speaker);
+  if (s.btConnected) return s.btName[0] ? s.btName : tr(S::now_playing_output_headphones);
   // Not "connecting...": after a night they may only be looked for now
   // and then, and a play would wait for them.
-  snprintf(buf, size, "%s (not connected)", name);
+  if (s.btName[0]) {
+    trf(buf, size, S::now_playing_not_connected, s.btName);
+  } else {
+    trf(buf, size, S::now_playing_headphones_not_connected);
+  }
   return buf;
 }
 
@@ -552,12 +563,12 @@ void NowPlayingPage::drawWaiting() {
   c.fillRect(0, 0, w, h, col::BG);
   const uint16_t sp = pressed_ == WaitSpeaker ? col::BTN_HI : col::BTN;
   c.fillRoundRect(kWaitSpeakerX, 4, kWaitSpeakerW, 36, 8, sp);
-  f.draw(c, Font::Body, kPlayOnSpeaker, kWaitSpeakerX + kWaitSpeakerW / 2, 22, kWaitSpeakerW - kWaitButtonPad,
-         col::TXT, sp, Fonts::Align::Centre);
+  f.draw(c, Font::Body, tr(S::now_playing_play_on_speaker), kWaitSpeakerX + kWaitSpeakerW / 2, 22,
+         kWaitSpeakerW - kWaitButtonPad, col::TXT, sp, Fonts::Align::Centre);
   const uint16_t cn = pressed_ == WaitCancel ? col::BTN_HI : col::BTN;
   c.fillRoundRect(kWaitCancelX, 4, kWaitCancelW, 36, 8, cn);
-  f.draw(c, Font::Body, kWaitCancel, kWaitCancelX + kWaitCancelW / 2, 22, kWaitCancelW - kWaitButtonPad, col::TXT, cn,
-         Fonts::Align::Centre);
+  f.draw(c, Font::Body, tr(S::now_playing_wait_cancel), kWaitCancelX + kWaitCancelW / 2, 22,
+         kWaitCancelW - kWaitButtonPad, col::TXT, cn, Fonts::Align::Centre);
   gfx::push(c, kColumnX, kArtistY, w, h);
 }
 
@@ -576,8 +587,8 @@ void NowPlayingPage::drawTransport() {
         const uint16_t off = s.btLost || s.btSession.failed() ? col::RED : col::AMBER;
         const uint16_t ic = s.onBluetooth ? (s.btConnected ? col::CYAN : off) : col::SOFT;
         icons::drawCentred(c, s.onBluetooth ? icons::kHeadphones : icons::kSpeaker, cx, cy - 9, ic);
-        char v[6];
-        snprintf(v, sizeof(v), "%u%%", static_cast<unsigned>(s.volume));
+        char v[16];
+        trf(v, sizeof(v), S::format_percent, s.volume);
         f.draw(c, Font::Small, v, cx, cy + 14, kZoneW, col::DIM, down ? col::BTN_HI : col::BG, Fonts::Align::Centre);
         break;
       }
@@ -652,12 +663,12 @@ bool NowPlayingPage::emptyState(EmptyState& e) const {
     return true;
   }
   e.icon = &icons::kNote;
-  e.title = "Nothing playing";
-  e.line1 = uitext::kPickInLibrary;  // (fits: the longer one didn't)
-  e.buttons[0] = "Open Library";
+  e.title = tr(S::empty_nothing_playing_title);
+  e.lines = tr(S::empty_pick_in_library);  // (fits: the longer one didn't)
+  e.buttons[0] = tr(S::empty_open_library);
   e.buttonIcons[0] = &icons::kLibrary;
   if (s.libraryTracks > 0) {
-    e.buttons[1] = "Shuffle all";
+    e.buttons[1] = tr(S::empty_shuffle_all);
     e.buttonIcons[1] = &icons::kShuffle;
   }
   return true;
@@ -834,17 +845,17 @@ void NowPlayingPage::openNavMenu() {
   // No sheet when nothing in it could act: a toast says why.
   if (TrackCatalog::isBuiltin(navTrack_)) {
     Serial.println("[ui] now playing: no navigation menu (a built-in track)");
-    ui_.toast(kBuiltinNotInLibrary, false);
+    ui_.toast(tr(S::now_playing_builtin_not_in_library), false);
     return;
   }
   if (!index || !index->ready() || navTrack_ >= index->trackCount()) {
     Serial.println("[ui] now playing: no navigation menu (the Library isn't ready)");
-    ui_.toast(kLibraryNotReady, false);
+    ui_.toast(tr(S::now_playing_library_not_ready), false);
     return;
   }
   if (ui_.browsingSynthetic()) {
     Serial.println("[ui] now playing: no navigation menu (a synthetic library)");
-    ui_.toast("Browsing a synthetic library (uil0: the card's)", false);
+    ui_.toast(tr(S::now_playing_synthetic_library), false);
     return;
   }
   const TrackCatalog& cat = ui_.player().catalog();
@@ -854,7 +865,7 @@ void NowPlayingPage::openNavMenu() {
   char path[256];
   if (index->folderPath(index->track(navTrack_).folder, path, sizeof(path))) {
     Fonts& f = Fonts::instance();
-    const int room = sheet::detailRoom(f.width(Font::Body, kGoTo[2]));
+    const int room = sheet::detailRoom(f.width(Font::Body, tr(S::now_playing_go_to_folder)));
     textfit::cutPathLeft(f.fit(Font::Small), path, room, navFolder_, sizeof(navFolder_));
   }
   // Go to artist and Go to album open the folder entities (Stage A keeps
@@ -865,19 +876,22 @@ void NowPlayingPage::openNavMenu() {
   char title[128];
   cat.title(navTrack_, title, sizeof(title));
   Serial.println("[ui] now playing: the navigation menu");
-  ui_.openSheet(this, title, kGoTo, 3, details);
+  const char* const rows[3] = {tr(S::now_playing_go_to_artist), tr(S::now_playing_go_to_album),
+                               tr(S::now_playing_go_to_folder)};
+  ui_.openSheet(this, title, rows, 3, details);
   ask_ = Ask::Nav;
 }
 
 void NowPlayingPage::openPlaybackMenu() {
   using namespace uitext;
   const AppState& s = ui_.state();
-  static const char* const kRows[3] = {kShuffleRow, kRepeatRow, kSleepRow};
+  const char* const rows[3] = {tr(S::now_playing_shuffle), tr(S::now_playing_repeat), tr(S::now_playing_sleep_timer)};
   const uint8_t repeat = s.repeat < 3 ? s.repeat : 0;
-  const char* details[3] = {kOnOff[s.shuffle ? 1 : 0], kRepeatModes[repeat], s.sleepRow};
+  const char* details[3] = {tr(s.shuffle ? S::now_playing_on : S::now_playing_off), tr(repeatMode(repeat)),
+                            s.sleepRow};
   Serial.printf("[ui] now playing: the playback menu (shuffle %s, repeat %s, sleep timer %s)\n",
                 s.shuffle ? "on" : "off", repeatName(repeat), s.sleepRow);
-  ui_.openSheet(this, kPlaybackTitle, kRows, 3, details);
+  ui_.openSheet(this, tr(S::now_playing_playback_title), rows, 3, details);
   // Each row's state follows while it is up (a change from the console
   // shows too); Shuffle and Repeat change in place, the sheet staying.
   ui_.sheetFollows(0, Ui::SheetFollow::Shuffle);
@@ -895,15 +909,15 @@ void NowPlayingPage::goToLibrary(Go where, uint32_t track) {
   const LibraryIndex* index = ui_.library().index();
   if (track == TrackCatalog::kNone) return;
   if (TrackCatalog::isBuiltin(track)) {
-    ui_.toast(uitext::kBuiltinNotInLibrary, false);
+    ui_.toast(tr(S::now_playing_builtin_not_in_library), false);
     return;
   }
   if (!index || !index->ready() || track >= index->trackCount()) {
-    ui_.toast(uitext::kLibraryNotReady, false);
+    ui_.toast(tr(S::now_playing_library_not_ready), false);
     return;
   }
   if (ui_.browsingSynthetic()) {
-    ui_.toast("Browsing a synthetic library (uil0: the card's)", false);
+    ui_.toast(tr(S::now_playing_synthetic_library), false);
     return;
   }
   const LibraryIndex::Track& t = index->track(track);

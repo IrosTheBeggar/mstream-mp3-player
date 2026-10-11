@@ -174,11 +174,11 @@ struct BtCardView {
   int buttonCount = 0;
   bool spinner = false;     // something is under way (connecting, searching)
   bool pairFailed = false;  // Failed: it was a pairing
-  // Resting: two lines beside the one button (uitext::kBtHintLine1/2):
+  // Resting: two lines beside the one button (bt.hint):
   // "They'll reconnect" / "when switched on."
   bool hint = false;
   // ... dropped while the output (resting only after the whole back-off):
-  // "Back in range?" / "Tap Connect." (uitext::kBtLostHintLine1/2).
+  // "Back in range?" / "Tap Connect." (bt.lost_hint).
   bool lostHint = false;
 };
 BtCardView btCardView(const BtLink& link, const BtSession& session, bool lost);

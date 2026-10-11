@@ -21,6 +21,7 @@
 #include "LibraryIndex.h"
 #include "PowerChoices.h"
 #include "ScreenPower.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
@@ -30,6 +31,8 @@
 #include "ui/Ui.h"
 
 namespace ui {
+
+using uistr::S;
 
 namespace {
 
@@ -196,23 +199,23 @@ Header OutputPage::header() const {
   switch (kind_) {
     case PageKind::Pair:
       h.back = true;
-      h.title = "Pair headphones";
-      snprintf(headerSub_, sizeof(headerSub_), "%d found", scan_.count());
+      h.title = tr(S::pair_title);
+      trnf(headerSub_, sizeof(headerSub_), S::pair_found, scan_.count(), scan_.count());
       h.sub = scan_.count() ? headerSub_ : "";
       break;
     case PageKind::About:
       h.back = true;
-      h.title = "About";
-      h.sub = "this player";
+      h.title = tr(S::about_title);
+      h.sub = tr(S::about_subtitle);
       break;
     case PageKind::DeviceInfo:
       h.back = true;
-      h.title = uitext::kDeviceInfoTitle;
-      h.sub = uitext::kDeviceInfoHeaderSub;
+      h.title = tr(S::about_device_info);
+      h.sub = tr(S::device_info_subtitle);
       break;
     default:
-      h.title = "Output";
-      h.sub = "where the music plays";
+      h.title = tr(S::output_title);
+      h.sub = tr(S::output_subtitle);
       break;
   }
   return h;
@@ -410,14 +413,15 @@ void OutputPage::drawRow(ListView::Row& r) {
     case BtButtons: drawBtButtons(r); break;
     case SpeakerRow: drawSpeaker(r); break;
     case LineOut:
-      drawSetting(r, icons::kJack, "Line out", uitext::kLineOutSub, col::DIM, false);
+      drawSetting(r, icons::kJack, tr(S::output_line_out), tr(S::output_line_out_sub), col::DIM, false);
       break;
     case PairNew:
-      drawSetting(r, icons::kPlus, "Pair new headphones", "", accent::Output, true);
+      drawSetting(r, icons::kPlus, tr(S::output_pair_new), "", accent::Output, true);
       break;
     case Haptics: {
       const bool on = ui_.input().hapticsOn();
-      drawSetting(r, icons::kVibrate, "Haptics", on ? "a tick for taps, two for holds" : "off", col::TXT, false);
+      drawSetting(r, icons::kVibrate, tr(S::output_haptics), tr(on ? S::output_haptics_on : S::output_haptics_off),
+                  col::TXT, false);
       // The switch.
       const int x = r.right - 58;
       const uint16_t track = on ? accent::Output : col::BTN;
@@ -431,12 +435,12 @@ void OutputPage::drawRow(ListView::Row& r) {
     case CpuSpeed: drawPowerSetting(r, false); break;
     case BtPower: drawPowerSetting(r, true); break;
     case Calibrate:
-      drawSetting(r, icons::kGear, uitext::kCalRowTitle,
-                  ui_.input().calibrated() ? uitext::kCalSubOn : uitext::kCalSubOff, col::TXT, true);
+      drawSetting(r, icons::kGear, tr(S::settings_cal),
+                  tr(ui_.input().calibrated() ? S::settings_cal_on : S::settings_cal_off), col::TXT, true);
       break;
     case LibraryRow: drawLibraryRow(r); break;
     case AboutRow:
-      drawSetting(r, icons::kInfo, "About", "battery, storage, library, version", col::TXT, true);
+      drawSetting(r, icons::kInfo, tr(S::output_about), tr(S::output_about_sub), col::TXT, true);
       break;
     default: break;
   }
@@ -454,14 +458,14 @@ void OutputPage::drawLibraryRow(ListView::Row& r) {
   icons::drawCentred(r.c, icons::kLibrary, r.x + 22, 21, col::SOFT);
   const int x = r.x + 44;
   const int pillX = r.right - 8 - kRescanPillW;
-  char title[48], sub[96];
+  char title[96], sub[160];
   librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title));
   if (f.width(Font::Body, title) > pillX - 8 - x) librarytext::libraryRowTitle(s.libraryTracks, title, sizeof(title), 1);
   const bool can = s.libraryRecords && !s.libraryFenced;
   if (!s.libraryRecords) {
-    snprintf(sub, sizeof(sub), "%s", kLibraryRowNoCard);
+    trf(sub, sizeof(sub), S::library_row_no_card);
   } else if (s.libraryFenced) {
-    snprintf(sub, sizeof(sub), "%s", kLibraryRowUpdating);
+    trf(sub, sizeof(sub), S::library_row_updating);
   } else {
     librarytext::Sources src;
     src.transfer = s.libTransfer;
@@ -475,7 +479,7 @@ void OutputPage::drawLibraryRow(ListView::Row& r) {
   ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
   const uint16_t pill = r.pressed && can ? col::BTN_HI : col::BTN;
   r.c.fillRoundRect(pillX, 9, kRescanPillW, 24, 8, pill);
-  f.draw(r.c, Font::Body, kRescanPill, pillX + kRescanPillW / 2, 21, kRescanPillW - kSettingPillPad,
+  f.draw(r.c, Font::Body, tr(S::library_row_rescan), pillX + kRescanPillW / 2, 21, kRescanPillW - kSettingPillPad,
          can ? col::TXT : col::FAINT, pill, Fonts::Align::Centre);
 }
 
@@ -493,16 +497,16 @@ uint32_t OutputPage::librarySig(const AppState& s) {
 void OutputPage::onRescan() {
   const AppState& s = ui_.state();
   if (!s.libraryRecords) {
-    ui_.warn(uitext::kRescanNoCard);
+    ui_.warn(tr(S::library_row_rescan_no_card));
     return;
   }
   if (s.libraryFenced) {
-    ui_.toast(uitext::kUpdatingWait, false);
+    ui_.toast(tr(S::library_updating_wait), false);
     return;
   }
-  static const char* const kButtons[2] = {"Cancel", uitext::kRescanPill};
+  const char* const buttons[2] = {tr(S::dialog_cancel), tr(S::library_row_rescan)};
   ask_ = Ask::Rescan;
-  ui_.openDialog(this, uitext::kRescanTitle, uitext::kRescanBody, kButtons, 2);
+  ui_.openDialog(this, tr(S::library_row_rescan_title), tr(S::library_row_rescan_body), buttons, 2);
 }
 
 void OutputPage::drawSetting(ListView::Row& r, const icons::Icon& icon, const char* title, const char* sub,
@@ -537,10 +541,10 @@ void OutputPage::drawScreenSetting(ListView::Row& r, bool brightness) {
   }
   const int x = r.x + 44;
   const int pillX = r.right - 8 - kSettingPillW;
-  const char* title = brightness ? kBrightnessTitle : kScreenOffTitle;
-  const char* sub = brightness                                 ? kBrightnessSub
-                    : s.screenTimeout == ScreenPower::kNever ? kScreenNeverSub
-                                                               : kScreenOffSub;
+  const char* title = tr(brightness ? S::settings_brightness : S::settings_screen_off);
+  const char* sub = tr(brightness                                 ? S::settings_brightness_sub
+                       : s.screenTimeout == ScreenPower::kNever ? S::settings_screen_never_sub
+                                                                  : S::settings_screen_off_sub);
   ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
   const uint16_t pill = r.pressed ? col::BTN_HI : col::BTN;
   r.c.fillRoundRect(pillX, 9, kSettingPillW, 24, 8, pill);
@@ -563,8 +567,9 @@ void OutputPage::drawIdleSetting(ListView::Row& r) {
   r.c.fillRect(cx - 1, 11, 2, 10, ink);
   const int x = r.x + 44;
   const int pillX = r.right - 8 - kSettingPillW;
-  const char* sub = s.idleOff == IdlePolicy::kNever ? kIdleNeverSub : kIdleOffSub;
-  ListView::lines(r, x, pillX - 8, kIdleOffTitle, strlen(kIdleOffTitle), sub, strlen(sub), col::TXT);
+  const char* sub = tr(s.idleOff == IdlePolicy::kNever ? S::settings_idle_never_sub : S::settings_idle_off_sub);
+  const char* title = tr(S::settings_idle_off);
+  ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
   const uint16_t pill = r.pressed ? col::BTN_HI : col::BTN;
   r.c.fillRoundRect(pillX, 9, kSettingPillW, 24, 8, pill);
   Fonts::instance().draw(r.c, Font::Body, IdlePolicy::choiceLabel(s.idleOff), pillX + kSettingPillW / 2, 21,
@@ -580,13 +585,13 @@ void OutputPage::drawPowerSetting(ListView::Row& r, bool bluetooth) {
   namespace pc = powerchoice;
   const AppState& s = ui_.state();
   const int cx = r.x + 22;
-  char line[32];
+  char line[64];
   const char* title;
   const char* sub;
   const char* value;
   if (bluetooth) {
     bars(r.c, cx - 9, 28, s.btPower + 2, col::SOFT);
-    title = kBtPowerTitle;
+    title = tr(S::settings_bt_power);
     sub = pc::btSub(s.btPower, s.btPowerPending);
     value = pc::btLabel(s.btPower);
   } else {
@@ -599,7 +604,7 @@ void OutputPage::drawPowerSetting(ListView::Row& r, bool bluetooth) {
       r.c.drawFastVLine(cx + at, 12, 3, col::SOFT);
       r.c.drawFastVLine(cx + at, 28, 3, col::SOFT);
     }
-    title = kCpuTitle;
+    title = tr(S::settings_cpu);
     sub = pc::cpuSub(s.cpuMhz, s.cpuRunMhz, line, sizeof(line));
     value = pc::cpuLabel(s.cpuMhz);
   }
@@ -632,9 +637,9 @@ void OutputPage::drawBtTop(ListView::Row& r) {
   icons::drawCentred(r.c, icons::kHeadphones, 30, 22, v.card == BtCard::Connected ? col::CYAN : tone);
   if (v.card == BtCard::Lost) r.c.drawLine(19, 31, 41, 13, col::RED);
   const char* name = btName();
-  f.draw(r.c, Font::Bold, name[0] ? name : v.card == BtCard::NotPaired ? "Bluetooth headphones" : "Headphones", 52, 14,
-         220, col::TXT, bg);
-  char line[80];
+  f.draw(r.c, Font::Bold, name[0] ? name : tr(v.card == BtCard::NotPaired ? S::bt_name_not_paired : S::bt_name_default),
+         52, 14, 220, col::TXT, bg);
+  char line[128];
   btStatusLine(v, s.btLink, name, s.btDetail, line, sizeof(line));
   f.draw(r.c, Font::Small, line, 52, 32, uitext::kBtStatusW, tone, bg);
   if (v.spinner) {
@@ -692,24 +697,26 @@ void OutputPage::drawBtButtons(ListView::Row& r) {
     r.c.fillRoundRect(x[i], 6, w[i], 28, 8, fill);
     if (b == BtButton::Volume) {
       icons::drawCentred(r.c, icons::kSpeaker, x[i] + 16, 20, col::SOFT);
-      char t[8];
-      snprintf(t, sizeof(t), "%u%%", static_cast<unsigned>(s.btVolume));
+      char t[16];
+      trf(t, sizeof(t), S::format_percent, s.btVolume);
       f.draw(r.c, Font::Body, t, x[i] + uitext::kBtChipTextX, 20, w[i] - uitext::kBtChipTextX - 4, ink, fill);
     } else if (b == BtButton::More) {
       icons::drawCentred(r.c, icons::kMore, x[i] + w[i] / 2, 20, ink);
     } else {
       // (Pair in a narrow box, beside Try again: "Pair new".)
       f.draw(r.c, b == BtButton::Pair || armed ? Font::Bold : Font::Body,
-             armed ? uitext::kForgetArmed : btButtonLabel(b, w[i] < uitext::kBtWideButtonW), x[i] + w[i] / 2, 20,
+             armed ? tr(S::bt_tap_again) : btButtonLabel(b, w[i] < uitext::kBtWideButtonW), x[i] + w[i] / 2, 20,
              w[i] - uitext::kBtButtonPad, ink, fill, Fonts::Align::Centre);
     }
   }
   if (v.hint) {
     // Resting: why nothing is under way, beside [Connect] (lost: what to try).
-    f.draw(r.c, Font::Small, v.lostHint ? uitext::kBtLostHintLine1 : uitext::kBtHintLine1, uitext::kBtHintX, 12,
-           uitext::kBtHintW, col::DIM, bg);
-    f.draw(r.c, Font::Small, v.lostHint ? uitext::kBtLostHintLine2 : uitext::kBtHintLine2, uitext::kBtHintX, 28,
-           uitext::kBtHintW, col::DIM, bg);
+    const char* hint = tr(v.lostHint ? S::bt_lost_hint : S::bt_hint);
+    for (int k = 0; k < 2; ++k) {
+      char line[96];
+      uistr::line(hint, k, line, sizeof(line));
+      f.draw(r.c, Font::Small, line, uitext::kBtHintX, 12 + 16 * k, uitext::kBtHintW, col::DIM, bg);
+    }
   }
 }
 
@@ -721,26 +728,36 @@ void OutputPage::drawSpeaker(ListView::Row& r) {
   const uint16_t bg = r.pressed && !onChip ? col::BTN_HI : active ? col::ROW_SEL : col::CARD;
   card(r.c, 0, r.right, bg, active, accent::Output);
   icons::drawCentred(r.c, icons::kSpeaker, 30, 21, active ? col::SOFT : col::DIM);
-  f.draw(r.c, Font::Bold, "Speaker", 52, 13, 150, col::TXT, bg);
+  f.draw(r.c, Font::Bold, tr(S::speaker_name), 52, 13, 150, col::TXT, bg);
   // The line: why it plays here while the headphones connect (the
   // spec's "Here until SPYDRONE connects", shorter for a long name).
-  char line[64];
+  char line[96];
   if (s.btSession.wanted() && !s.onBluetooth) {
-    const char* them = s.btName[0] ? s.btName : "the headphones";
-    snprintf(line, sizeof(line), "Here until %s connects", them);
-    if (f.width(Font::Small, line) > uitext::kSpeakerLineW) snprintf(line, sizeof(line), "Waits for %s", them);
+    const bool named = s.btName[0] != 0;
+    if (named) {
+      trf(line, sizeof(line), S::speaker_here_until, s.btName);
+    } else {
+      trf(line, sizeof(line), S::speaker_here_until_headphones);
+    }
+    if (f.width(Font::Small, line) > uitext::kSpeakerLineW) {
+      if (named) {
+        trf(line, sizeof(line), S::speaker_waits_for, s.btName);
+      } else {
+        trf(line, sizeof(line), S::speaker_waits_for_headphones);
+      }
+    }
   } else if (s.silent) {
-    snprintf(line, sizeof(line), "%s", uitext::kSilentMode);
+    trf(line, sizeof(line), S::speaker_silent_mode);
   } else {
-    snprintf(line, sizeof(line), "Built-in");
+    trf(line, sizeof(line), S::speaker_built_in);
   }
   f.draw(r.c, Font::Small, line, 52, 30, uitext::kSpeakerLineW, col::DIM, bg);
   // Its volume chip: the speaker's sheet.
   const bool chipDown = r.pressed && onChip;
   const uint16_t chip = chipDown ? col::BTN_HI : col::BTN;
   r.c.fillRoundRect(uitext::kSpeakerChipX, 9, uitext::kSpeakerChipW, 24, 8, chip);
-  char v[8];
-  snprintf(v, sizeof(v), "%u%%", static_cast<unsigned>(s.speakerVolume));
+  char v[16];
+  trf(v, sizeof(v), S::format_percent, s.speakerVolume);
   f.draw(r.c, Font::Body, v, uitext::kSpeakerChipX + uitext::kSpeakerChipW / 2, 21, uitext::kSpeakerChipW - 2,
          col::TXT, chip, Fonts::Align::Centre);
   radio(r.c, 290, 21, active, accent::Output, bg);
@@ -755,24 +772,26 @@ void OutputPage::drawPairStatus(ListView::Row& r) {
     // Stopped after its 2 minutes (or the screen went off): a tap on this
     // row searches again.
     icons::drawCentred(r.c, icons::kPlus, 24, 21, accent::Output);
-    f.draw(r.c, Font::Bold, uitext::kPairSearchAgain, 48, 13, kW - 60, accent::Output, col::BG);
-    f.draw(r.c, Font::Small, uitext::kPairSearchStopped, 48, 31, uitext::kPairHintW, col::DIM, col::BG);
+    f.draw(r.c, Font::Bold, tr(S::pair_search_again), 48, 13, kW - 60, accent::Output, col::BG);
+    f.draw(r.c, Font::Small, tr(S::pair_search_stopped), 48, 31, uitext::kPairHintW, col::DIM, col::BG);
     return;
   }
   spinner(r.c, 24, 21, spin_, col::CYAN);
-  f.draw(r.c, Font::Bold, pairing ? "Pairing..." : "Searching", 48, 13, kW - 60, col::TXT, col::BG);
-  f.draw(r.c, Font::Small, uitext::kPairHint, 48, 31, uitext::kPairHintW, col::DIM, col::BG);
+  f.draw(r.c, Font::Bold, tr(pairing ? S::pair_pairing : S::pair_searching), 48, 13, kW - 60, col::TXT, col::BG);
+  f.draw(r.c, Font::Small, tr(S::pair_hint), 48, 31, uitext::kPairHintW, col::DIM, col::BG);
 }
 
 void OutputPage::drawDevice(ListView::Row& r, const BtDevice& d) {
   const icons::Icon& icon = d.kind == BtDevice::Kind::Speaker ? icons::kSpeaker : icons::kHeadphones;
   const int x = ListView::icon(r, icon, col::SOFT);
   bars(r.c, r.right - 30, 30, BtScanList::bars(d.rssi), col::SOFT);
-  char name[40];
+  char name[64];
   if (d.name[0]) {
     snprintf(name, sizeof(name), "%s", d.name);
   } else {
-    snprintf(name, sizeof(name), "Unnamed %02X:%02X:%02X", d.addr[3], d.addr[4], d.addr[5]);
+    char addr[12];
+    snprintf(addr, sizeof(addr), "%02X:%02X:%02X", d.addr[3], d.addr[4], d.addr[5]);
+    trf(name, sizeof(name), S::pair_unnamed, addr);
   }
   const char* kind = BtScanList::kindName(d.kind);
   ListView::lines(r, x, r.right - 40, name, strlen(name), kind, strlen(kind), col::TXT);
@@ -780,72 +799,81 @@ void OutputPage::drawDevice(ListView::Row& r, const BtDevice& d) {
 
 void OutputPage::drawAbout(ListView::Row& r) {
   const AppState& s = ui_.state();
-  char value[80] = "";
-  char labelText[64];
+  char value[128] = "";
+  char labelText[96];
   const char* label = "";
   const icons::Icon* icon = &icons::kInfo;
   switch (static_cast<AboutItem>(r.row)) {
     case Battery:
-      label = "Battery";
-      snprintf(value, sizeof(value), "%u%%%s", static_cast<unsigned>(s.battery), s.charging ? ", charging" : "");
+      label = tr(S::about_battery);
+      if (s.charging) {
+        char pct[16];
+        trf(pct, sizeof(pct), S::format_percent, s.battery);
+        trf(value, sizeof(value), S::about_battery_charging, pct);
+      } else {
+        trf(value, sizeof(value), S::format_percent, s.battery);
+      }
       break;
     case Storage:
-      label = "Storage";
+      label = tr(S::about_storage);
       snprintf(value, sizeof(value), "%s", about_.storage);
       icon = &icons::kSdCard;
       break;
     case LibraryInfo: {
-      label = "Library";
+      label = tr(S::about_library);
       const LibraryIndex* i = ui_.library().index();
       if (i && i->ready()) {
-        snprintf(value, sizeof(value), uitext::kAboutLibrary, static_cast<unsigned long>(i->trackCount()),
-                 static_cast<unsigned long>(i->artistCount()), static_cast<unsigned long>(i->albumCount()));
+        char tracks[40], artists[40], albums[40];
+        trnf(tracks, sizeof(tracks), S::library_tracks_n, i->trackCount(), i->trackCount());
+        trnf(artists, sizeof(artists), S::library_artists_n, i->artistCount(), i->artistCount());
+        trnf(albums, sizeof(albums), S::library_albums_n, i->albumCount(), i->albumCount());
+        trf(value, sizeof(value), S::about_library_value, tracks, artists, albums);
       } else {
-        snprintf(value, sizeof(value), "no music found");
+        trf(value, sizeof(value), S::about_no_music);
       }
       icon = &icons::kLibrary;
       break;
     }
     case Headphones:
-      label = "Headphones";
+      label = tr(S::about_headphones);
       snprintf(value, sizeof(value), "%s", about_.bluetooth);
       icon = &icons::kHeadphones;
       break;
     case PowerInfo:
-      label = uitext::kAboutPower;
+      label = tr(S::about_power);
       snprintf(value, sizeof(value), "%s", about_.power);
       break;
     case Memory:
-      label = "Memory free";
-      snprintf(value, sizeof(value), uitext::kAboutMemory, static_cast<unsigned long>(about_.ramFree / 1024),
-               static_cast<unsigned long>(about_.ramMin / 1024), about_.psramFree / (1024.0f * 1024.0f));
+      label = tr(S::about_memory);
+      trf(value, sizeof(value), S::about_memory_value, about_.ramFree / 1024, about_.ramMin / 1024,
+          uistr::decimal(about_.psramFree / (1024.0f * 1024.0f), 1));
       break;
     case Version:
-      snprintf(labelText, sizeof(labelText), uitext::kAboutVersionLabel, about_.built, about_.elf);
+      trf(labelText, sizeof(labelText), S::about_version_label, about_.built, about_.elf);
       label = labelText;
       snprintf(value, sizeof(value), "%s", about_.version);
       break;
     case LicenceInfo:
-      label = uitext::kAboutLicenceLabel;
-      snprintf(value, sizeof(value), "%s", uitext::kAboutLicence);
+      label = tr(S::about_licence_label);
+      trf(value, sizeof(value), S::about_licence);
       break;
     case SourceInfo:
-      label = uitext::kAboutSourceLabel;
+      label = tr(S::about_source_label);
       snprintf(value, sizeof(value), "%s", uitext::kAboutSourceRepo);
       break;
     case DeviceInfoRow: {
       // A page of its own (what the boot screen used to list).
       const int x = ListView::icon(r, icons::kInfo, col::SOFT);
       const int right = ListView::chevron(r);
-      using namespace uitext;
-      ListView::lines(r, x, right, kDeviceInfoTitle, strlen(kDeviceInfoTitle), kDeviceInfoRowSub,
-                      strlen(kDeviceInfoRowSub), col::TXT);
+      const char* t = tr(S::about_device_info);
+      const char* sub = tr(S::about_device_info_sub);
+      ListView::lines(r, x, right, t, strlen(t), sub, strlen(sub), col::TXT);
       return;
     }
     case Tips: {
       const int x = ListView::icon(r, icons::kInfo, accent::Output);
-      const char* t = "Show the tips again";
-      const char* sub = "the touch buttons and the tabs";
+      const char* t = tr(S::about_tips);
+      const char* sub = tr(S::about_tips_sub);
       ListView::lines(r, x, r.right - 8, t, strlen(t), sub, strlen(sub), accent::Output);
       return;
     }
@@ -867,7 +895,7 @@ void OutputPage::drawAbout(ListView::Row& r) {
 void OutputPage::drawDeviceInfo(ListView::Row& r) {
   if (r.row >= static_cast<uint32_t>(deviceinfo::kItems)) return;
   const auto item = static_cast<deviceinfo::Item>(r.row);
-  char value[64];
+  char value[128];
   deviceinfo::value(item, info_, value, sizeof(value));
   Fonts& f = Fonts::instance();
   const int x = r.x + uitext::kDeviceInfoX;
@@ -926,7 +954,7 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
         ui_.host().selectOutput(false);  // paused first when it leaves the headphones
       }
       break;
-    case LineOut: ui_.warn("The line-out module isn't fitted yet"); break;
+    case LineOut: ui_.warn(tr(S::output_line_out_note)); break;
     case PairNew: ui_.push(page(PageKind::Pair)); break;
     case Haptics: {
       Input& in = ui_.input();
@@ -999,9 +1027,9 @@ void OutputPage::onCardButton(BtButton b) {
     case BtButton::Cancel: ui_.host().btDisconnect(); break;
     case BtButton::Disconnect:
       ui_.host().btDisconnect();
-      ui_.toast((s.play == PlayState::Playing || s.play == PlayState::Waiting) && s.onBluetooth
-                    ? "Disconnected: paused on the speaker"
-                    : "Disconnected",
+      ui_.toast(tr((s.play == PlayState::Playing || s.play == PlayState::Waiting) && s.onBluetooth
+                       ? S::bt_disconnected_paused
+                       : S::bt_disconnected),
                 false);
       break;
     case BtButton::Forget:
@@ -1012,10 +1040,14 @@ void OutputPage::onCardButton(BtButton b) {
     case BtButton::Volume: ui_.openVolume(1); break;
     case BtButton::More: {
       // Connected: what is used rarely, away from Disconnect and the volume.
-      char forgetRow[48], title[48];
-      snprintf(forgetRow, sizeof(forgetRow), "Forget %s", s.btName[0] ? s.btName : "these headphones");
-      snprintf(title, sizeof(title), "%s", s.btName[0] ? s.btName : "Headphones");
-      const char* rows[3] = {"Disconnect", "Pair new headphones", forgetRow};
+      char forgetRow[96], title[48];
+      if (s.btName[0]) {
+        trf(forgetRow, sizeof(forgetRow), S::bt_more_forget, s.btName);
+      } else {
+        trf(forgetRow, sizeof(forgetRow), S::bt_more_forget_these);
+      }
+      snprintf(title, sizeof(title), "%s", s.btName[0] ? s.btName : tr(S::bt_more_title_default));
+      const char* rows[3] = {tr(S::bt_more_disconnect), tr(S::bt_more_pair_new), forgetRow};
       ask_ = Ask::More;
       ui_.openSheet(this, title, rows, 3, nullptr, -1, /*danger=*/2);
       break;
@@ -1026,8 +1058,12 @@ void OutputPage::onCardButton(BtButton b) {
 
 void OutputPage::forget() {
   const AppState& s = ui_.state();
-  char text[64];
-  snprintf(text, sizeof(text), "Forgot %s", s.btName[0] ? s.btName : "the headphones");
+  char text[96];
+  if (s.btName[0]) {
+    trf(text, sizeof(text), S::bt_forgot, s.btName);
+  } else {
+    trf(text, sizeof(text), S::bt_forgot_headphones);
+  }
   ui_.host().btForget();
   ui_.toast(text, false);
 }
@@ -1035,12 +1071,11 @@ void OutputPage::forget() {
 // "Touch calibration": the choices as full-width rows (y is what the panel
 // reads true, so a stack of rows works whatever x does).
 void OutputPage::onTouch() {
-  using namespace uitext;
   const bool saved = ui_.input().calibrated();
-  const char* rows[3] = {kCalCalibrate, kCalCheckTitle, kCalRemoveRow};
-  const char* details[3] = {kCalCalibrateDetail, "", ""};
+  const char* rows[3] = {tr(S::settings_cal_calibrate), tr(S::settings_cal_test_taps), tr(S::settings_cal_remove_row)};
+  const char* details[3] = {tr(S::settings_cal_calibrate_detail), "", ""};
   ask_ = Ask::Touch;
-  ui_.openSheet(this, kCalRowTitle, rows, saved ? 3 : 2, details, /*primary=*/0, /*danger=*/saved ? 2 : -1);
+  ui_.openSheet(this, tr(S::settings_cal), rows, saved ? 3 : 2, details, /*primary=*/0, /*danger=*/saved ? 2 : -1);
 }
 
 void OutputPage::onSheet(int choice) {
@@ -1051,9 +1086,10 @@ void OutputPage::onSheet(int choice) {
     } else if (choice == 2) {
       // Remove, from the sheet: a dialog (as Forget: a second tap on a row
       // that isn't there any more can't confirm it).
-      static const char* const kButtons[2] = {"Cancel", uitext::kCalRemove};
+      const char* const buttons[2] = {tr(S::dialog_cancel), tr(S::settings_cal_remove)};
       ask_ = Ask::RemoveCal;
-      ui_.openDialog(this, uitext::kCalRemoveTitle, uitext::kCalRemoveBody, kButtons, 2, /*danger=*/true);
+      ui_.openDialog(this, tr(S::settings_cal_remove_title), tr(S::settings_cal_remove_body), buttons, 2,
+                     /*danger=*/true);
     }
     return;
   }
@@ -1066,12 +1102,15 @@ void OutputPage::onSheet(int choice) {
     case 2: {
       // Forget, from the sheet: a dialog (the sheet is gone; a second tap
       // on a row that isn't there any more can't confirm it).
-      static const char* const kButtons[2] = {"Cancel", "Forget"};
-      char title[48];
-      snprintf(title, sizeof(title), "Forget %s?", s.btName[0] ? s.btName : "the headphones");
+      const char* const buttons[2] = {tr(S::dialog_cancel), tr(S::bt_forget_button)};
+      char title[96];
+      if (s.btName[0]) {
+        trf(title, sizeof(title), S::bt_forget_title, s.btName);
+      } else {
+        trf(title, sizeof(title), S::bt_forget_title_headphones);
+      }
       ask_ = Ask::Forget;
-      ui_.openDialog(this, title, "They won't connect again until you pair them on Pair new headphones.", kButtons,
-                     2, /*danger=*/true);
+      ui_.openDialog(this, title, tr(S::bt_forget_body), buttons, 2, /*danger=*/true);
       break;
     }
     default: break;
@@ -1089,15 +1128,15 @@ void OutputPage::onCpuSpeed() {
   const uint16_t to = pc::otherCpuMhz(s.cpuMhz);
   switch (pc::cpuTap(s.cpuMhz, s.cpuRunMhz, pairingUnderWay(s))) {
     case pc::CpuTap::SaveOnly: ui_.host().setCpuSpeed(to); return;
-    case pc::CpuTap::WaitPairing: ui_.toast(uitext::kCpuWaitPairing, false); return;
+    case pc::CpuTap::WaitPairing: ui_.toast(tr(S::settings_cpu_wait_pairing), false); return;
     case pc::CpuTap::AskRestart: break;
   }
-  static const char* const kButtons[2] = {"Cancel", uitext::kCpuRestart};
-  char title[48];
+  const char* const buttons[2] = {tr(S::dialog_cancel), tr(S::settings_cpu_restart)};
+  char title[96];
   pc::cpuDialogTitle(to, title, sizeof(title));
   ask_ = Ask::CpuRestart;
   askCpuMhz_ = to;
-  ui_.openDialog(this, title, pc::cpuDialogBody(to), kButtons, 2);
+  ui_.openDialog(this, title, pc::cpuDialogBody(to), buttons, 2);
 }
 
 // A device on the Pair screen: pair (asked first when it replaces the
@@ -1109,12 +1148,19 @@ void OutputPage::pick(int device) {
   const BtDevice& d = scan_.at(device);
   ask_ = Ask::Pair;
   if (s.btLink.remembered) {
-    static const char* const kButtons[2] = {"Cancel", "Pair"};
-    char title[48], body[128];
-    snprintf(title, sizeof(title), "Pair with %s?", d.name[0] ? d.name : "this device");
-    snprintf(body, sizeof(body), "It replaces %s once it's connected; if pairing fails, %s stays.",
-             s.btName[0] ? s.btName : "the headphones paired now", s.btName[0] ? s.btName : "they");
-    ui_.openDialog(this, title, body, kButtons, 2);
+    const char* const buttons[2] = {tr(S::dialog_cancel), tr(S::pair_confirm_button)};
+    char title[96], body[256];
+    if (d.name[0]) {
+      trf(title, sizeof(title), S::pair_confirm_title, d.name);
+    } else {
+      trf(title, sizeof(title), S::pair_confirm_title_device);
+    }
+    if (s.btName[0]) {
+      trf(body, sizeof(body), S::pair_confirm_body, s.btName);
+    } else {
+      trf(body, sizeof(body), S::pair_confirm_body_unnamed);
+    }
+    ui_.openDialog(this, title, body, buttons, 2);
     return;
   }
   onDialog(1);
@@ -1131,15 +1177,15 @@ void OutputPage::onDialog(int button) {
     if (button != 1 || kind_ != PageKind::Output) return;
     ui_.input().resetCalibration();
     Serial.println("[ui] touch calibration removed: no correction");
-    ui_.toast(uitext::kCalRemoved, false);  // (its row follows: tick())
+    ui_.toast(tr(S::settings_cal_removed), false);  // (its row follows: tick())
     return;
   }
   if (ask == Ask::Rescan) {
     if (button != 1 || kind_ != PageKind::Output) return;
     if (ui_.host().rescanTags()) {
-      ui_.toast(uitext::kRescanStarted, false);
+      ui_.toast(tr(S::library_row_rescan_started), false);
     } else {
-      ui_.warn(uitext::kRescanNoCard);
+      ui_.warn(tr(S::library_row_rescan_no_card));
     }
     return;
   }
@@ -1151,11 +1197,11 @@ void OutputPage::onDialog(int button) {
     if (ui_.host().setCpuSpeed(mhz)) {
       // Up until the restart (at most 3 s: the headphones let go, the amp
       // off), so the screen never goes dark without it.
-      char text[48];
+      char text[96];
       powerchoice::cpuRestartingText(mhz, text, sizeof(text));
       ui_.note(text, powerchoice::kRestartToastMs);
     } else if (pairingUnderWay(ui_.state())) {
-      ui_.toast(uitext::kCpuWaitPairing, false);  // (one began while the dialog was up: nothing saved)
+      ui_.toast(tr(S::settings_cpu_wait_pairing), false);  // (one began while the dialog was up: nothing saved)
     }
     return;
   }
@@ -1163,12 +1209,18 @@ void OutputPage::onDialog(int button) {
   const BtDevice d = scan_.at(picked_);
   picked_ = -1;
   searchEnded_ = false;
-  char text[64];
+  char text[96];
   if (ui_.host().btPairWith(d)) {
-    snprintf(text, sizeof(text), "Pairing with %s...", d.name[0] ? d.name : "it");
-  } else {
+    if (d.name[0]) {
+      trf(text, sizeof(text), S::pair_pairing_with, d.name);
+    } else {
+      trf(text, sizeof(text), S::pair_pairing_with_it);
+    }
+  } else if (d.name[0]) {
     // The headphones linked now: nothing to pair (they're the output now).
-    snprintf(text, sizeof(text), "Connected to %s already", d.name[0] ? d.name : "them");
+    trf(text, sizeof(text), S::pair_connected_already, d.name);
+  } else {
+    trf(text, sizeof(text), S::pair_connected_already_them);
   }
   ui_.back();  // the card shows how it goes
   ui_.toast(text, false);

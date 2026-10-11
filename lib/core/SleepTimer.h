@@ -155,10 +155,13 @@ public:
   // "23 min", "45 s", "track", "album", "queue", "fading" (Now Playing's
   // progress line, beside the moon); "" when it doesn't run.
   void shortText(uint32_t nowMs, char* buf, size_t size) const;
-  // The same in a sentence, lower case: "23 min left", "45 s left", "end
-  // of track", "fading", "off" (the Sleep timer sheet's title, after
-  // "Sleep timer: ").
+  // The Sleep timer sheet's title: "Sleep timer: 23 min left", "Sleep
+  // timer: 45 s left", "Sleep timer: end of track", "Sleep timer: fading",
+  // "Sleep timer: off" (the toast after +10 min too).
   void titleText(uint32_t nowMs, char* buf, size_t size) const;
+  // "Sleep timer: end of album": the title, and the toast, of an End of
+  // choice (EndOfTrack, EndOfAlbum, EndOfQueue).
+  static void endText(Choice c, char* buf, size_t size);
   static const char* phaseName(Phase p);
   static const char* choiceName(Choice c);
 

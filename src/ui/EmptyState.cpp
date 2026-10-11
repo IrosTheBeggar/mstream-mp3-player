@@ -5,6 +5,7 @@
 
 #include <algorithm>
 
+#include "UiStrings.h"
 #include "UiText.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
@@ -23,7 +24,7 @@ struct Layout {
 };
 
 Layout layoutOf(const EmptyState& e, int h) {
-  const bool two = e.line2 && e.line2[0];
+  const bool two = uistr::lineCount(e.lines) > 1;
   const bool buttons = e.buttonCount() > 0;
   const int content = 2 * kDiscR + 6 + 22 + 18 + (two ? 16 : 0) + (buttons ? 10 + kButtonH : 0);
   const int top = std::max(4, (h - content) / 2);
@@ -54,10 +55,9 @@ void noCardState(EmptyState& e, cardformat::Kind card) {
   const uitext::CardMessage& m = uitext::cardMessage(card);
   e.icon = &icons::kSdCard;
   if (card != cardformat::Kind::Unreadable) e.iconColour = col::AMBER;  // one is in: it's the card
-  e.title = m.title;
-  e.line1 = m.lines[0];
-  e.line2 = m.lines[1];
-  e.buttons[0] = uitext::kTryAgain;
+  e.title = uistr::tr(m.title);
+  e.lines = uistr::tr(m.lines);
+  e.buttons[0] = uistr::tr(uistr::S::empty_try_again);
 }
 
 void drawEmptyState(const EmptyState& e, int y0, int h, uint16_t accent, int pressed) {
@@ -77,11 +77,13 @@ void drawEmptyState(const EmptyState& e, int y0, int h, uint16_t accent, int pre
     if (l.titleY + o > -20 && l.titleY + o < gfx::kStripH + 20) {
       f.draw(s, Font::Title, e.title, kW / 2, l.titleY + o, kW - 16, col::TXT, col::BG, Fonts::Align::Centre);
     }
-    if (e.line1 && e.line1[0] && l.line1Y + o > -12 && l.line1Y + o < gfx::kStripH + 12) {
-      f.draw(s, Font::Small, e.line1, kW / 2, l.line1Y + o, kW - 16, col::DIM, col::BG, Fonts::Align::Centre);
-    }
-    if (e.line2 && e.line2[0] && l.line2Y + o > -12 && l.line2Y + o < gfx::kStripH + 12) {
-      f.draw(s, Font::Small, e.line2, kW / 2, l.line2Y + o, kW - 16, col::DIM, col::BG, Fonts::Align::Centre);
+    const int lineY[2] = {l.line1Y, l.line2Y};
+    for (int k = 0; k < 2; ++k) {
+      char line[128];
+      if (!uistr::line(e.lines, k, line, sizeof(line)) || lineY[k] + o <= -12 || lineY[k] + o >= gfx::kStripH + 12) {
+        continue;
+      }
+      f.draw(s, Font::Small, line, kW / 2, lineY[k] + o, kW - 16, col::DIM, col::BG, Fonts::Align::Centre);
     }
     for (int i = 0; i < e.buttonCount(); ++i) {
       int x, w;

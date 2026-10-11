@@ -43,6 +43,7 @@
 #include "SleepTimer.h"
 #include "ToneTrack.h"
 #include "TrackCatalog.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "app/CardTasks.h"
 #include "app/CardWorker.h"
@@ -168,7 +169,7 @@ static ui::Ui* userInterface = nullptr;
 static bool waitsForLibrary(const char* what) {
   if (!frozen.on) return false;
   Serial.printf("[lib] the library is updating: %s waits (try again in a few seconds)\n", what);
-  if (userInterface) userInterface->note(uitext::kUpdatingWait, 1500);
+  if (userInterface) userInterface->note(uistr::tr(uistr::S::library_updating_wait), 1500);
   return true;
 }
 // B, the console's ' ', the UI's play and play/pause: behind the fence a
@@ -481,7 +482,7 @@ bool ButtonTransport::selectOutput(bool bluetooth) {
       return true;
     }
     if (bt.nothingToFind()) {
-      // (The UI's note says where: uitext::kNoHeadphones.)
+      // (The UI's note says where: toast.no_headphones.)
       Serial.println("[output] bluetooth: no headphones paired: pair them on Output > Pair new headphones (nothing is "
                      "scanned for); the output stays on the speaker");
       return false;
@@ -676,11 +677,11 @@ struct MainUiHost : ui::UiHost {
       const uint32_t delayMs = bt.delayReportUs() / 1000;
       const char* codec = bt.codec();
       if (codec[0] && delayMs) {
-        snprintf(s.btDetail, sizeof(s.btDetail), "%s, %lu ms", codec, (unsigned long)delayMs);
+        uistr::trf(s.btDetail, sizeof(s.btDetail), uistr::S::bt_detail_codec_delay, codec, delayMs);
       } else if (codec[0]) {
         snprintf(s.btDetail, sizeof(s.btDetail), "%s", codec);
       } else if (delayMs) {
-        snprintf(s.btDetail, sizeof(s.btDetail), "%lu ms delay", (unsigned long)delayMs);
+        uistr::trf(s.btDetail, sizeof(s.btDetail), uistr::S::bt_detail_delay, delayMs);
       }
     }
     s.card = storage.onCard();
@@ -816,7 +817,7 @@ struct MainUiHost : ui::UiHost {
     // Refused: none paired (the card's Connect or Try again after the
     // fresh-unit test, say). Nothing is scanned: the note says where
     // pairing is, as for a B hold.
-    if (!ok && userInterface) userInterface->warn(uitext::kNoHeadphones);
+    if (!ok && userInterface) userInterface->warn(uistr::tr(uistr::S::toast_no_headphones));
     return ok;
   }
   void openCalibration(bool check) override;
@@ -827,7 +828,7 @@ struct MainUiHost : ui::UiHost {
     }
     if (audio.bluetooth().nothingToFind()) {
       Serial.println("[ui] bluetooth: connect: no headphones paired");
-      if (userInterface) userInterface->warn(uitext::kNoHeadphones);
+      if (userInterface) userInterface->warn(uistr::tr(uistr::S::toast_no_headphones));
       return;
     }
     btSession.connect(millis());
@@ -871,7 +872,7 @@ struct MainUiHost : ui::UiHost {
   bool retryCard() override {
     if (!storage.probeCard()) {
       Serial.printf("[storage] try again: still %s (\"%s\")\n", cardformat::name(storage.cardKind()),
-                    uitext::cardMessage(storage.cardKind()).title);
+                    uistr::tr(uitext::cardMessage(storage.cardKind()).title));
       return false;
     }
     Serial.println("[storage] try again: a card is in: restarting to use it");
@@ -890,24 +891,31 @@ struct MainUiHost : ui::UiHost {
     // About is open (OutputPage's refresh). No free space: counting it can
     // hold the card for minutes (LocalStorage::totalBytes()).
     const uint64_t bytes = storage.totalBytes();
+    using uistr::S;
     if (!storage.available()) {
-      snprintf(a.storage, sizeof(a.storage), "No storage");
+      uistr::trf(a.storage, sizeof(a.storage), S::about_storage_none);
     } else if (storage.onCard()) {
       if (bytes) {
-        snprintf(a.storage, sizeof(a.storage), "microSD card, %.1f GB", bytes / 1e9);
+        uistr::trf(a.storage, sizeof(a.storage), S::about_storage_card_size, uistr::decimal(bytes / 1e9, 1));
       } else {
-        snprintf(a.storage, sizeof(a.storage), "microSD card");  // its CSD didn't say (the driver's 0)
+        uistr::trf(a.storage, sizeof(a.storage), S::about_storage_card);  // its CSD didn't say (the driver's 0)
       }
     } else {
-      snprintf(a.storage, sizeof(a.storage), "Internal flash, %.1f MB (no card)", bytes / 1e6);
+      uistr::trf(a.storage, sizeof(a.storage), S::about_storage_flash, uistr::decimal(bytes / 1e6, 1));
     }
     snprintf(a.version, sizeof(a.version), "%s", version::player());
     snprintf(a.built, sizeof(a.built), "%s", version::commitDate());
     snprintf(a.elf, sizeof(a.elf), "%s", version::elfSha());
     BtSink& bt = audio.bluetooth();
     const BtLink l = bt.link();
-    snprintf(a.bluetooth, sizeof(a.bluetooth), "%s%s", l.remembered ? (bt.deviceName()[0] ? bt.deviceName() : "paired") : "none paired",
-             bt.connected() ? ", connected" : "");
+    const char* paired = !l.remembered          ? uistr::tr(S::about_headphones_none)
+                         : bt.deviceName()[0] ? bt.deviceName()
+                                              : uistr::tr(S::about_headphones_paired);
+    if (bt.connected()) {
+      uistr::trf(a.bluetooth, sizeof(a.bluetooth), S::about_headphones_connected, paired);
+    } else {
+      snprintf(a.bluetooth, sizeof(a.bluetooth), "%s", paired);
+    }
     powerchoice::aboutText(PowerSettings::cpuBootMhz(), powerSettings.btChoice(), a.power, sizeof(a.power));
     const diag::Heap h = diag::heap();
     a.ramFree = h.internalFree;
@@ -2036,7 +2044,7 @@ static void handleButton(const InputEvent& e) {
       // has touched the glass since. A tap on the glass, then B plays.
       Serial.println("[button] B click: not played: the screen woke from off and nothing touched the glass since "
                      "(a pocket?); the speaker would play out loud");
-      if (userInterface) userInterface->warn(uitext::kTouchFirst);
+      if (userInterface) userInterface->warn(uistr::tr(uistr::S::toast_touch_first));
       return;
     }
     Serial.printf("[button] %c click: nothing to play\n", b);
@@ -2346,7 +2354,7 @@ static void stepPlayGate(uint32_t now) {
     case PlayGate::Do::NotPaired:
       // Nothing to wait for: paused, the output left as it is, no scan.
       Serial.println("[play] no headphones paired: not waiting (paused); pair them on Output > Pair new headphones");
-      if (userInterface) userInterface->warn(uitext::kNoHeadphones);
+      if (userInterface) userInterface->warn(uistr::tr(uistr::S::toast_no_headphones));
       break;
     case PlayGate::Do::Ended:
       // Cancelled (or the speaker, or stopped): a link that comes later
@@ -2419,15 +2427,13 @@ static void chooseSleep(int pick) {
   char text[48];
   if (pick >= 0 && pick < SleepTimer::kTimedChoices) {
     sleepTimer.setTimed(SleepTimer::kMinutes[pick] * 60000u, now);
-    snprintf(text, sizeof(text), "Sleep timer: %lu min", (unsigned long)SleepTimer::kMinutes[pick]);
+    uistr::trf(text, sizeof(text), uistr::S::sleep_toast_minutes, SleepTimer::kMinutes[pick]);
   } else if (pick >= ui::SleepSheet::kTrack && pick <= ui::SleepSheet::kQueue) {
     const SleepTimer::Choice c = pick == ui::SleepSheet::kTrack   ? SleepTimer::Choice::EndOfTrack
                                  : pick == ui::SleepSheet::kAlbum ? SleepTimer::Choice::EndOfAlbum
                                                                   : SleepTimer::Choice::EndOfQueue;
     sleepTimer.setEnd(c);
-    snprintf(text, sizeof(text), "Sleep timer: %s", c == SleepTimer::Choice::EndOfTrack   ? "end of track"
-                                                    : c == SleepTimer::Choice::EndOfAlbum ? "end of album"
-                                                                                          : "end of queue");
+    SleepTimer::endText(c, text, sizeof(text));
     Serial.printf("[sleep] pauses at %s\n", sleepEndName(c));
   } else if (pick == ui::SleepSheet::kExtend) {
     if (!sleepTimer.extend(now, trackLeftMs())) {
@@ -2438,12 +2444,10 @@ static void chooseSleep(int pick) {
                                                                    : "no timer runs");
       return;
     }
-    char left[24];
-    sleepTimer.titleText(now, left, sizeof(left));
-    snprintf(text, sizeof(text), "Sleep timer: %s", left);
+    sleepTimer.titleText(now, text, sizeof(text));
   } else if (pick == ui::SleepSheet::kTurnOff) {
     sleepTimer.cancel();
-    snprintf(text, sizeof(text), "Sleep timer off");
+    uistr::trf(text, sizeof(text), uistr::S::sleep_toast_off);
   } else {
     return;
   }
@@ -2736,7 +2740,7 @@ bool MainUiHost::setCpuSpeed(uint16_t mhz) {
   // would cut a save.
   if (restart && cardTasks && cardTasks->libraryWrite()) {
     Serial.printf("[power] CPU speed %u MHz: not now, the library is updating (nothing saved)\n", (unsigned)mhz);
-    if (userInterface) userInterface->note(uitext::kUpdatingWait, 1500);
+    if (userInterface) userInterface->note(uistr::tr(uistr::S::library_updating_wait), 1500);
     return false;
   }
   const uint16_t before = powerSettings.cpuSaved();
@@ -2830,7 +2834,7 @@ static void stepCardGuard() {
     Serial.printf("[card] ANOTHER CARD in the slot (FatFs mounted it again: %s): every write to it refused; the card "
                   "jobs and the queue's saves stop; restarting to use it\n",
                   id);
-    if (userInterface) userInterface->note(uitext::kAnotherCard, 3000);
+    if (userInterface) userInterface->note(uistr::tr(uistr::S::card_another), 3000);
     restartAtMs = millis() + 1200;  // the toast first
     return;
   }
@@ -2849,7 +2853,7 @@ static void stepCardGuard() {
     Serial.println("[card] the card answered again (the same card) with a card job under way: the queue saved, "
                    "restarting");
     queueStore.flushNow();
-    if (userInterface) userInterface->note(uitext::kCardBack, 3000);
+    if (userInterface) userInterface->note(uistr::tr(uistr::S::card_back), 3000);
     restartAtMs = millis() + 1200;
     return;
   }
@@ -3192,8 +3196,9 @@ void setup() {
   console.begin();
   Serial.printf("\nmstream-mp3-player %s (commit %s, %s), ELF %s\n", version::player(),
                 version::commit()[0] ? version::commit() : "none", version::commitDate(), version::elfSha());
-  // The licence notice once (GPLv3 section 5(d); About shows it too).
-  Serial.printf("Copyright (C) 2026 IrosTheBeggar. Licence: %s.\n", uitext::kAboutLicence);
+  // The licence notice once (GPLv3 section 5(d); About shows it too, in the
+  // UI's language: about.licence).
+  Serial.printf("Copyright (C) 2026 IrosTheBeggar. Licence: %s.\n", "GPL-3.0-or-later, no warranty");
   Serial.printf("Source, licence texts and third-party notices: %s\n", uitext::kSourceUrl);
   board::requireCore2();  // another board: says so and stops here, before the card, audio and Bluetooth
   diag::logRunningPartition();  // the flash layout (console L: the whole table)
@@ -3326,7 +3331,7 @@ void setup() {
   // to wait for (the fonts are BootScreen::begin()'s). A hold counts from
   // here on: loop() reads the glass.
   if (userInterface) {
-    bootScreen.hint(uitext::kBootTouchHint);
+    bootScreen.hint(uistr::tr(uistr::S::boot_touch_hint));
     bootHintMs = millis();
   }
   diag::logHeap("ui");

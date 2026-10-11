@@ -5,6 +5,7 @@
 
 #include <cstdio>
 
+#include "UiStrings.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
@@ -56,8 +57,8 @@ void drawBattery(M5Canvas& c, int x, int y, const tabbar::State& s, uint16_t bg)
     c.fillRect(x + 22, y + 3, 2, 5, col::SOFT);
     c.fillRect(x + 2, y + 2, 18 * s.battery / 100, 7, fill);
   }
-  char t[6];
-  snprintf(t, sizeof(t), "%u%%", static_cast<unsigned>(s.battery));
+  char t[16];
+  trf(t, sizeof(t), uistr::S::format_percent, s.battery);
   f.draw(c, Font::Small, t, x + 12, 27, tabbar::kBatteryTextW, s.charging ? col::GREEN : col::DIM, bg,
          Fonts::Align::Centre);
 }
@@ -132,15 +133,15 @@ void TabBar::drawCell(int t, const tabbar::State& s) {
       }
       // The volume, beside the icon: part of the Output tab (a separate
       // chip in the corner stole every tap meant for this tab).
-      char v[6];
-      snprintf(v, sizeof(v), "%u%%", static_cast<unsigned>(s.volume));
+      char v[16];
+      trf(v, sizeof(v), uistr::S::format_percent, s.volume);
       f.draw(c, Font::Small, v, tabbar::kVolumeX, iconTop + 9, tabbar::kVolumeW, active ? col::TXT : col::SOFT, bg);
       drawBattery(c, tabbar::kBatteryX, 6, s, col::SURF);
       break;
     }
   }
   if (active) {
-    f.draw(c, Font::Small, tabbar::kLabels[t], cx, 27, plateW, acc, bg, Fonts::Align::Centre);
+    f.draw(c, Font::Small, tabbar::label(t), cx, 27, plateW, acc, bg, Fonts::Align::Centre);
     c.fillRect(cx - 12, 33, 24, 2, acc);
   }
   c.drawFastHLine(0, tabbar::kHeight - 1, w, col::DIV);

@@ -104,9 +104,11 @@ struct AppState {
   bool sleepFading = false;
   bool sleepCanExtend = false;
   int8_t sleepPick = -1;
-  char sleepRow[16] = "Off";
-  char sleepTitle[24] = "off";
-  char sleepShort[12] = "";
+  // (Their texts are SleepTimer's, the snapshot's: the first one fills
+  // them before anything is drawn.)
+  char sleepRow[48] = "";
+  char sleepTitle[96] = "";
+  char sleepShort[32] = "";
   // The idle power-off (IdlePolicy; ENERGY.md item 4): the setting ("Turn
   // off when idle": its choice), and while it warns (its last 30 s), the
   // seconds left (0: no warning).
@@ -125,12 +127,12 @@ struct AppState {
 
 // About (the Output tab): what the device is and has.
 struct AboutInfo {
-  char storage[48] = "";   // "microSD card, 29.7 GB"
+  char storage[96] = "";   // "microSD card, 29.7 GB"
   char version[40] = "";   // "v0.5.0", "v0.5.0-3-gabc1234-dirty" (app/Version)
   char built[12] = "";     // the commit's date, "2026-09-30"
   char elf[12] = "";       // the ELF's SHA-256, 8 hex digits
-  char bluetooth[48] = ""; // "SPYDRONE (12:34:56:78:9A:BC)"
-  char power[48] = "";     // "160 MHz; Normal (-12..+3 dBm)" (PowerChoices::aboutText())
+  char bluetooth[96] = ""; // "WH-1000XM4, connected", "paired", "none paired"
+  char power[96] = "";     // "160 MHz; Normal (-12..+3 dBm)" (PowerChoices::aboutText())
   uint32_t ramFree = 0, ramMin = 0, psramFree = 0;
 };
 

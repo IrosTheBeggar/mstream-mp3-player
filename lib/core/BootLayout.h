@@ -8,7 +8,7 @@
 
 // The boot screen (ui/BootScreen), 320 x 240, on the UI's dark background:
 // the mStream logo centred, the player's version under it, and at the
-// bottom the rescue hold's line (uitext::kBootTouchHint). It shows from
+// bottom the rescue hold's line (boot.touch_hint). It shows from
 // M5.begin() until the UI starts (3 s at least; ~20 s on a new card's
 // first boot, while the library is built). The device's facts it used to
 // list are Output > About > Device info (DeviceInfo) and the boot log's

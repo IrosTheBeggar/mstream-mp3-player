@@ -10,6 +10,7 @@
 
 #include "QueueView.h"
 #include "TagText.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "app/Diagnostics.h"
 #include "app/Psram.h"
@@ -210,7 +211,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
         updateOver();
         // (No marker on the card, no promise: none written, or none wanted
         // after this boot's own build ran short.)
-        if (up->last().markerWritten) toast(uitext::kLibraryAtBoot);
+        if (up->last().markerWritten) toast(uistr::tr(uistr::S::library_updates_at_boot));
         break;
       case LibraryUpdate::Do::Failed:
         ++updates_;
@@ -566,7 +567,7 @@ void CardTasks::live() {
     jobs_.libraryRebuilt();
     scanTotal_ = indexPending();
     scanDone_ = 0;
-    toast(uitext::kLibraryUpdated);
+    toast(uistr::tr(uistr::S::library_updated));
   }
   Serial.printf("[card] the update step (%s): %s%s\n", s.why,
                 s.built ? "the library is rebuilt (its save next, on the card worker)"

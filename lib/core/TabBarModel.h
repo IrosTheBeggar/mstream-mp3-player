@@ -4,6 +4,8 @@
 #pragma once
 #include <cstdint>
 
+#include "UiStrings.h"
+
 // The tab bar's layout, what it shows, and what must be redrawn when that
 // changes (the tab bar spec §3.2, with the review's grafts and the user's
 // measurements). Portable, host-tested; ui/TabBar draws it.
@@ -93,7 +95,8 @@ constexpr int kBatteryTextW = 38;            // its "100%", centred under it (kB
 constexpr int kBadgeRight = 23;              // the Queue badge's right edge, from the icon's centre
 constexpr int kBadgePad = 8;                 // the badge pill: its text + this
 inline int labelWidth(int tab) { return tab == kTabs - 1 ? kOutputPlateW : kLabelW; }
-extern const char* const kLabels[kTabs];     // "Playing", "Library", "Queue", "Dance", "Output"
+extern const uistr::S kLabels[kTabs];        // "Playing", "Library", "Queue", "Dance", "Output"
+inline const char* label(int tab) { return uistr::tr(kLabels[tab]); }
 
 // Bit t: tab cell t must be redrawn to go from `drawn` to `now`.
 uint8_t dirty(const State& drawn, const State& now);

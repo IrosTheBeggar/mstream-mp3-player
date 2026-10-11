@@ -11,8 +11,10 @@
 
 #include <cstdio>
 #include <initializer_list>
+#include <string>
 
 #include "OutputModel.h"
+#include "UiStrings.h"
 #include "UiText.h"
 
 void setUp() {}
@@ -34,6 +36,15 @@ const uint8_t kB[6] = {1, 2, 3, 4, 5, 7};
 
 // Class of device: major Audio/Video (4), a minor.
 uint32_t cod(uint32_t minor) { return (4u << 8) | (minor << 2); }
+
+// A hint's two lines (the card draws them one over the other) as one.
+std::string hintOf(uistr::S id) {
+  std::string s = uistr::tr(id);
+  for (char& c : s) {
+    if (c == '\n') c = ' ';
+  }
+  return s;
+}
 
 }  // namespace
 
@@ -466,7 +477,7 @@ void test_the_resting_card() {
   TEST_ASSERT_EQUAL_STRING("Not connected", btStatusLine(v, link(P::Resting), "SPYDRONE", "", buf, sizeof(buf)));
   // With the hint: "Not connected. They'll reconnect when switched on."
   char whole[96];
-  snprintf(whole, sizeof(whole), "%s. %s %s", buf, uitext::kBtHintLine1, uitext::kBtHintLine2);
+  snprintf(whole, sizeof(whole), "%s. %s", buf, hintOf(uistr::S::bt_hint).c_str());
   TEST_ASSERT_EQUAL_STRING("Not connected. They'll reconnect when switched on.", whole);
   // Dropped while the output: still the resting card (not "Lost: looking
   // for them", a spinner and Cancel), red as the tab bar is.
@@ -479,7 +490,7 @@ void test_the_resting_card() {
   // the drop's pause): maybe back in range, their own reconnect given up.
   TEST_ASSERT_TRUE(v.hint);
   TEST_ASSERT_TRUE(v.lostHint);
-  snprintf(whole, sizeof(whole), "%s. %s %s", buf, uitext::kBtLostHintLine1, uitext::kBtLostHintLine2);
+  snprintf(whole, sizeof(whole), "%s. %s", buf, hintOf(uistr::S::bt_lost_hint).c_str());
   TEST_ASSERT_EQUAL_STRING("Not connected. Back in range? Tap Connect.", whole);
   // Nothing remembered: nothing to rest for, the pairing card.
   TEST_ASSERT_EQUAL(BtCard::NotPaired, btCardView(link(P::Resting, false), s, false).card);

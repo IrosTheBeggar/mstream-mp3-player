@@ -21,6 +21,7 @@
 #include <cstring>
 
 #include "DanceSkin.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "ui/DanceView.h"
 #include "ui/Fonts.h"
@@ -30,6 +31,8 @@
 #include "ui/Ui.h"
 
 namespace ui {
+
+using uistr::S;
 
 namespace {
 constexpr uint32_t kPanelMs = 500;
@@ -52,8 +55,11 @@ void DancePage::repaint() {
   if (!d.ready()) {
     M5Canvas& s = gfx::strip();
     s.fillRect(0, 0, 120, 40, col::BG);
-    Fonts::instance().draw(s, Font::Small, "No PSRAM for", 60, 12, 116, col::DIM, col::BG, Fonts::Align::Centre);
-    Fonts::instance().draw(s, Font::Small, "the dancer", 60, 28, 116, col::DIM, col::BG, Fonts::Align::Centre);
+    for (int k = 0; k < 2; ++k) {
+      char line[64];
+      uistr::line(tr(S::dance_no_psram), k, line, sizeof(line));
+      Fonts::instance().draw(s, Font::Small, line, 60, 12 + 16 * k, 116, col::DIM, col::BG, Fonts::Align::Centre);
+    }
     gfx::push(s, DanceView::kBoxX, 100, 120, 40);
   }
   drawPanels(true);
@@ -73,7 +79,7 @@ void DancePage::drawPanels(bool all) {
   // The left panel: the beat.
   if (all || bpmX10 / 10 != bpmX10_ / 10) {
     c.fillRect(0, 0, 100, 56, col::BG);
-    f.draw(c, Font::Small, "BPM", 50, 14, 96, col::DIM, col::BG, Fonts::Align::Centre);
+    f.draw(c, Font::Small, tr(S::dance_bpm), 50, 14, 96, col::DIM, col::BG, Fonts::Align::Centre);
     char v[8];
     if (bpmX10) {
       snprintf(v, sizeof(v), "%d", (bpmX10 + 5) / 10);
@@ -87,26 +93,26 @@ void DancePage::drawPanels(bool all) {
     c.fillRect(0, 0, 100, 32, col::BG);
     const uint16_t pill = lock == 2 ? col::GREEN : lock == 1 ? col::AMBER : col::BTN;
     c.fillRoundRect(14, 4, 72, 24, 12, pill);
-    f.draw(c, Font::Small, lock == 2 ? "locked" : lock == 1 ? "listening" : "no beat", 50, 16, 68,
-           lock ? col::DARK : col::DIM, pill, Fonts::Align::Centre);
+    f.draw(c, Font::Small, tr(lock == 2 ? S::dance_locked : lock == 1 ? S::dance_listening : S::dance_no_beat), 50, 16,
+           68, lock ? col::DARK : col::DIM, pill, Fonts::Align::Centre);
     gfx::push(c, 0, 102, 100, 32);
   }
   if (all || conf != conf_) {
     c.fillRect(0, 0, 100, 56, col::BG);
-    f.draw(c, Font::Small, "confidence", 50, 10, 96, col::DIM, col::BG, Fonts::Align::Centre);
+    f.draw(c, Font::Small, tr(S::dance_confidence), 50, 10, 96, col::DIM, col::BG, Fonts::Align::Centre);
     c.fillRoundRect(14, 22, 72, 6, 3, col::DIV);
     const int fill = 72 * std::max(0, std::min(100, conf)) / 100;
     if (fill > 0) c.fillRoundRect(14, 22, fill, 6, 3, conf >= 60 ? col::GREEN : col::AMBER);
-    char v[8];
-    snprintf(v, sizeof(v), "%d%%", conf);
+    char v[16];
+    trf(v, sizeof(v), S::format_percent, conf);
     f.draw(c, Font::Small, v, 50, 42, 96, col::SOFT, col::BG, Fonts::Align::Centre);
     gfx::push(c, 0, 138, 100, 56);
   }
   // The right panel: the dancer.
   if (all || skin != skin_) {
     c.fillRect(0, 0, 100, 56, col::BG);
-    f.draw(c, Font::Small, "dancer", 50, 14, 96, col::DIM, col::BG, Fonts::Align::Centre);
-    const char* name = d.skin() == dance::Skin::Crab ? "Crab" : "Stick";
+    f.draw(c, Font::Small, tr(S::dance_dancer), 50, 14, 96, col::DIM, col::BG, Fonts::Align::Centre);
+    const char* name = tr(d.skin() == dance::Skin::Crab ? S::dance_crab : S::dance_stick);
     f.draw(c, Font::Title, name, 50, 40, 96, col::TXT, col::BG, Fonts::Align::Centre);
     gfx::push(c, 220, 44, 100, 56);
     c.fillRect(0, 0, 100, 56, col::BG);
@@ -117,20 +123,24 @@ void DancePage::drawPanels(bool all) {
         c.drawCircle(42 + i * 16, 8, 4, col::FAINT);
       }
     }
-    f.draw(c, Font::Small, "tap the dancer", 50, 30, 98, col::FAINT, col::BG, Fonts::Align::Centre);
-    f.draw(c, Font::Small, "to switch", 50, 46, 98, col::FAINT, col::BG, Fonts::Align::Centre);
+    for (int k = 0; k < 2; ++k) {
+      char line[64];
+      uistr::line(tr(S::dance_switch), k, line, sizeof(line));
+      f.draw(c, Font::Small, line, 50, 30 + 16 * k, 98, col::FAINT, col::BG, Fonts::Align::Centre);
+    }
     gfx::push(c, 220, 102, 100, 56);
   }
   // The bottom: the track, or the computer that drives the dancer.
   if (all || s.trackId != track_ || host != host_) {
     c.fillRect(0, 0, kW, 40, col::BG);
     if (host) {
-      f.draw(c, Font::Bold, uitext::kVizTitle, kW / 2, 12, uitext::kDanceBottomW, col::TXT, col::BG,
+      f.draw(c, Font::Bold, tr(S::dance_viz_title), kW / 2, 12, uitext::kDanceBottomW, col::TXT, col::BG,
              Fonts::Align::Centre);
-      f.draw(c, Font::Small, uitext::kVizHint, kW / 2, 31, uitext::kDanceBottomW, col::DIM, col::BG,
+      f.draw(c, Font::Small, tr(S::dance_viz_hint), kW / 2, 31, uitext::kDanceBottomW, col::DIM, col::BG,
              Fonts::Align::Centre);
     } else {
-      char title[96] = "Nothing playing";
+      char title[96];
+      snprintf(title, sizeof(title), "%s", tr(S::dance_title_none));
       if (s.current >= 0) ui_.player().catalog().title(s.trackId, title, sizeof(title));
       f.draw(c, Font::Bold, title, kW / 2, 12, kW - 16, col::TXT, col::BG, Fonts::Align::Centre);
       const char* artist = s.current >= 0 ? ui_.player().catalog().artist(s.trackId) : "";

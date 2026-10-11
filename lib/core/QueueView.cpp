@@ -7,7 +7,8 @@
 #include <cstdlib>
 #include <cstring>
 
-#include "UiText.h"
+#include "LibraryText.h"
+#include "UiStrings.h"
 
 namespace queueview {
 
@@ -62,17 +63,22 @@ Time upNextTime(const QueueModel& q, const DurationBook& book, uint32_t (*hintMs
 }
 
 namespace {
+using uistr::S;
+
 // " · 49 min" (or " · 2 h 5 min", "+" when only part is known) at buf + n.
 void appendTime(const Time& t, char* buf, size_t bufSize, int n) {
   if (t.knownS == 0 || n < 0 || static_cast<size_t>(n) >= bufSize) return;
   const uint32_t mins = (t.knownS + 59) / 60;
   const char* more = t.unknown ? "+" : "";
+  char m[16], time[48];
   if (mins > 99) {
-    snprintf(buf + n, bufSize - n, " \xC2\xB7 %lu h %lu%s min", static_cast<unsigned long>(mins / 60),
-             static_cast<unsigned long>(mins % 60), more);
+    snprintf(m, sizeof(m), "%lu%s", static_cast<unsigned long>(mins % 60), more);
+    trf(time, sizeof(time), S::format_hours_minutes, mins / 60, m);
   } else {
-    snprintf(buf + n, bufSize - n, " \xC2\xB7 %lu%s min", static_cast<unsigned long>(mins), more);
+    snprintf(m, sizeof(m), "%lu%s", static_cast<unsigned long>(mins), more);
+    trf(time, sizeof(time), S::format_minutes, m);
   }
+  snprintf(buf + n, bufSize - n, "%s%s", librarytext::kDot, time);
 }
 }  // namespace
 
@@ -80,23 +86,22 @@ char* summary(uint32_t upNext, const Time& t, uint32_t position, uint32_t size, 
               bool withUpNext) {
   if (!buf || bufSize == 0) return buf;
   if (!withUpNext && position > 0) {
-    const int n = snprintf(buf, bufSize, "%lu of %lu", static_cast<unsigned long>(position),
-                           static_cast<unsigned long>(size));
+    const int n = static_cast<int>(trf(buf, bufSize, S::queue_summary_position, position, size));
     if (upNext > 0) appendTime(t, buf, bufSize, n);
     return buf;
   }
-  int n = 0;
+  size_t n = 0;
   if (position > 0) {
-    n = snprintf(buf, bufSize, "%lu of %lu \xC2\xB7 ", static_cast<unsigned long>(position),
-                 static_cast<unsigned long>(size));
-    if (n < 0 || static_cast<size_t>(n) >= bufSize) return buf;
+    n = trf(buf, bufSize, S::queue_summary_position, position, size);
+    n += uistr::format(buf + n, bufSize - n, librarytext::kDot);
+    if (n + 1 >= bufSize) return buf;
   }
   if (upNext == 0) {
-    snprintf(buf + n, bufSize - n, "Nothing up next");
+    trf(buf + n, bufSize - n, S::queue_summary_nothing_next);
     return buf;
   }
-  n += snprintf(buf + n, bufSize - n, "%lu up next", static_cast<unsigned long>(upNext));
-  appendTime(t, buf, bufSize, n);
+  n += trnf(buf + n, bufSize - n, S::queue_summary_up_next, upNext, upNext);
+  appendTime(t, buf, bufSize, static_cast<int>(n));
   return buf;
 }
 
@@ -111,8 +116,6 @@ uint32_t AddedMark::firstPosition(const QueueModel& q) const {
 }
 
 // ---- the queue's cap ----
-
-static_assert(QueueModel::kMaxEntries == 5000, "uitext's cap texts say 5,000");
 
 char* grouped(uint32_t n, char* buf, size_t size) {
   if (!buf || size == 0) return buf;
@@ -130,44 +133,38 @@ char* grouped(uint32_t n, char* buf, size_t size) {
   return buf;
 }
 
+namespace {
+// "<what>: <why>" (toast.what_why): the toast splits there onto two lines.
+char* whatWhy(const char* what, const char* why, char* buf, size_t size) {
+  trf(buf, size, S::toast_what_why, what, why);
+  return buf;
+}
+}  // namespace
+
 char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t size) {
   if (!buf || size == 0) return buf;
-  char a[16], b[16];
-  grouped(took, a, sizeof(a));
-  grouped(asked, b, sizeof(b));
-  const char* fmt = what == Capped::Shuffle ? uitext::kCapShuffling
-                    : what == Capped::Play  ? uitext::kCapPlaying
-                    : what == Capped::Add   ? uitext::kCapAdded
-                                            : uitext::kCapNext;
-  const int n = snprintf(buf, size, fmt, a, b);
-  if (n > 0 && static_cast<size_t>(n) < size) snprintf(buf + n, size - n, ": %s", uitext::kCapWhy);
-  return buf;
+  const S id = what == Capped::Shuffle ? S::queue_cap_shuffling
+               : what == Capped::Play  ? S::queue_cap_playing
+               : what == Capped::Add   ? S::queue_cap_added
+                                       : S::queue_cap_next;
+  char head[64], why[64];
+  trf(head, sizeof(head), id, uistr::grouped(took), uistr::grouped(asked));
+  trnf(why, sizeof(why), S::queue_cap_why, QueueModel::kMaxEntries, uistr::grouped(QueueModel::kMaxEntries));
+  return whatWhy(head, why, buf, size);
 }
 
 char* pushedText(Capped what, uint32_t took, uint32_t asked, uint32_t pushed, char* buf, size_t size) {
   if (!buf || size == 0) return buf;
-  char a[16], b[16];
-  grouped(took, a, sizeof(a));
-  grouped(asked, b, sizeof(b));
   const bool next = what == Capped::Next;
-  int n;
+  char head[64], line[64];
   if (took < asked) {
-    n = snprintf(buf, size, next ? uitext::kCapNext : uitext::kCapAdded, a, b);
-  } else if (took == 1) {
-    n = snprintf(buf, size, "%s", next ? uitext::kPushNextOne : uitext::kPushAddedOne);
+    trf(head, sizeof(head), next ? S::queue_cap_next : S::queue_cap_added, uistr::grouped(took),
+        uistr::grouped(asked));
   } else {
-    n = snprintf(buf, size, next ? uitext::kPushNextMany : uitext::kPushAddedMany, a);
+    trnf(head, sizeof(head), next ? S::queue_cap_push_next : S::queue_cap_push_added, took, uistr::grouped(took));
   }
-  if (n <= 0 || static_cast<size_t>(n) + 2 >= size) return buf;
-  if (pushed == 1) {
-    snprintf(buf + n, size - n, ": %s", uitext::kPushedOne);
-  } else {
-    char c[16], line[48];
-    grouped(pushed, c, sizeof(c));
-    snprintf(line, sizeof(line), uitext::kPushedMany, c);
-    snprintf(buf + n, size - n, ": %s", line);
-  }
-  return buf;
+  trnf(line, sizeof(line), S::queue_cap_pushed, pushed, uistr::grouped(pushed));
+  return whatWhy(head, line, buf, size);
 }
 
 AddOutcome addOutcome(const QueueModel& q, uint32_t sizeBefore, uint32_t asked, bool next, bool ok) {

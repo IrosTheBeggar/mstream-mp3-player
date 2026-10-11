@@ -59,7 +59,7 @@ struct Verdict {
 // `taps`: one per kDot, in order.
 Verdict verdict(const Tap* taps, int n = kDots);
 // "Taps land about 40 px to the right of your finger." (the result page
-// wraps it over two lines: UiText's room).
+// wraps it over two lines: its room is the catalogue's, check.verdict_*).
 void verdictText(const Verdict& v, char* buf, size_t size);
 
 // Whether the check shows after this boot: no table saved, and it hasn't
@@ -165,8 +165,9 @@ inline constexpr float kAccurateMeanPx = 8.0f;
 enum class Outcome : uint8_t { Disagree, Accurate, NoBetter, Better };
 Outcome outcome(bool fitOk, const Error& now, const Error& unseen);
 
-// "Now: up to 42 px off, average 21" / "Calibrated: up to 5 px off, average
-// 3" (UiText's rooms).
-void errorText(const char* what, const Error& e, char* buf, size_t size);
+// "Now: up to 42 px off, average 21" (the table in use) / "Calibrated: up
+// to 5 px off, average 3" (the new one).
+enum class Table : uint8_t { InUse, New };
+void errorText(Table which, const Error& e, char* buf, size_t size);
 
 }  // namespace touchcheck

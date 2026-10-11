@@ -9,6 +9,7 @@
 
 #include "IdlePolicy.h"
 #include "SleepTimer.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "app/Psram.h"
 #include "ui/Fonts.h"
@@ -17,6 +18,8 @@
 #include "ui/Theme.h"
 
 namespace ui {
+
+using uistr::S;
 
 namespace {
 
@@ -87,7 +90,7 @@ void Toast::show(const char* text, bool undo, bool view, uint16_t accent, uint32
 }
 
 void Toast::showSleep(uint16_t accent, uint32_t nowMs) {
-  copy(text_, sizeof(text_), uitext::kSleepFading);
+  copy(text_, sizeof(text_), tr(S::sleep_fading_toast));
   sleep_ = true;
   idle_ = false;
   undo_ = view_ = compact_ = false;
@@ -127,12 +130,12 @@ void Toast::draw(int pressed) {
     f.draw(s, Font::Small, text_, kTextX, 18, kSleepToastPlusX - 6 - kTextX, col::TXT, col::CARD);
     const uint16_t pb = pressed == kHitExtend ? col::BTN_HI : col::BTN;
     s.fillRoundRect(kSleepToastPlusX, 6, kSleepToastPlusW, 24, 6, pb);
-    f.draw(s, Font::Body, kSleepExtend, kSleepToastPlusX + kSleepToastPlusW / 2, 18,
+    f.draw(s, Font::Body, tr(S::sleep_extend), kSleepToastPlusX + kSleepToastPlusW / 2, 18,
            kSleepToastPlusW - kSleepToastPad, accent_, pb, Fonts::Align::Centre);
     const uint16_t ob = pressed == kHitTurnOff ? col::BTN_HI : col::BTN;
     s.fillRoundRect(kSleepToastOffX, 6, kSleepToastOffW, 24, 6, ob);
-    f.draw(s, Font::Body, kSleepTurnOff, kSleepToastOffX + kSleepToastOffW / 2, 18, kSleepToastOffW - kSleepToastPad,
-           col::RED, ob, Fonts::Align::Centre);
+    f.draw(s, Font::Body, tr(S::sleep_turn_off), kSleepToastOffX + kSleepToastOffW / 2, 18,
+           kSleepToastOffW - kSleepToastPad, col::RED, ob, Fonts::Align::Centre);
     gfx::push(s, 0, kY, kW, kH, true);
     return;
   }
@@ -143,8 +146,8 @@ void Toast::draw(int pressed) {
     f.draw(s, Font::Body, text_, kTextX, 18, kIdleToastKeepX - 6 - kTextX, col::TXT, col::CARD);
     const uint16_t kb = pressed == kHitKeepOn ? col::BTN_HI : col::BTN;
     s.fillRoundRect(kIdleToastKeepX, 6, kIdleToastKeepW, 24, 6, kb);
-    f.draw(s, Font::Body, kIdleKeepOn, kIdleToastKeepX + kIdleToastKeepW / 2, 18, kIdleToastKeepW - kIdleToastPad,
-           accent_, kb, Fonts::Align::Centre);
+    f.draw(s, Font::Body, tr(S::settings_idle_keep_on), kIdleToastKeepX + kIdleToastKeepW / 2, 18,
+           kIdleToastKeepW - kIdleToastPad, accent_, kb, Fonts::Align::Centre);
     gfx::push(s, 0, kY, kW, kH, true);
     return;
   }
@@ -169,7 +172,7 @@ void Toast::draw(int pressed) {
       icons::drawCentred(s, icons::kUndo, kUndoCX + kUndoCW / 2, 18, accent_);
     } else {
       s.fillRoundRect(kUndoX, 6, kUndoW, 24, 6, b);
-      f.draw(s, Font::Bold, "Undo", kUndoX + kUndoW / 2, 18, kUndoW - 4, accent_, b, Fonts::Align::Centre);
+      f.draw(s, Font::Bold, tr(S::toast_undo), kUndoX + kUndoW / 2, 18, kUndoW - 4, accent_, b, Fonts::Align::Centre);
     }
   }
   if (view_) {
@@ -179,7 +182,7 @@ void Toast::draw(int pressed) {
       icons::drawCentred(s, icons::kQueue, kViewCX + kViewCW / 2, 18, col::TXT);
     } else {
       s.fillRoundRect(kViewX, 6, kViewW, 24, 6, b);
-      f.draw(s, Font::Bold, "View", kViewX + kViewW / 2, 18, kViewW - 4, col::TXT, b, Fonts::Align::Centre);
+      f.draw(s, Font::Bold, tr(S::toast_view), kViewX + kViewW / 2, 18, kViewW - 4, col::TXT, b, Fonts::Align::Centre);
     }
   }
   gfx::push(s, 0, kY, kW, kH, true);
@@ -250,8 +253,8 @@ void Hud::draw() {
     // 20 blocks of 5 %, lit up to the level.
     const int lit = (volume_ + 2) / 5;
     for (int i = 0; i < 20; ++i) s.fillRect(38 + i * 11, 10, 9, 14, i < lit ? col::CORAL : col::BTN);
-    char v[6];
-    snprintf(v, sizeof(v), "%d%%", volume_);
+    char v[16];
+    trf(v, sizeof(v), S::format_percent, volume_);
     f.draw(s, Font::Bold, v, 312, 17, 60, col::TXT, col::HUD, Fonts::Align::Right);
   } else {
     f.draw(s, Font::Body, line_, 38, 17, 274, col::TXT, col::HUD);
@@ -456,18 +459,22 @@ void SleepSheet::render() {
     }
     f.draw(s, font, label, x + w / 2, y + kSleepPillH / 2, w - kSleepPillPad, ink, bg, Fonts::Align::Centre);
   };
-  for (int i = 0; i < 5; ++i) pill(i, kSleepMinX[i], kSleepMinW[i], kSleepRow0, Font::Body, kSleepMinutes[i], col::TXT);
+  for (int i = 0; i < 5; ++i) {
+    pill(i, kSleepMinX[i], kSleepMinW[i], kSleepRow0, Font::Body, i < 4 ? kSleepMinutes[i] : tr(S::sleep_minutes_90),
+         col::TXT);
+  }
+  static const S kEnds[3] = {S::sleep_end_track, S::sleep_end_album, S::sleep_end_queue};
   for (int i = 0; i < 3; ++i) {
-    pill(kTrack + i, kSleepEndX[i], kSleepEndW[i], kSleepRow0 + kSleepPitch, Font::Small, kSleepEnds[i], col::TXT);
+    pill(kTrack + i, kSleepEndX[i], kSleepEndW[i], kSleepRow0 + kSleepPitch, Font::Small, tr(kEnds[i]), col::TXT);
   }
   const int y2 = kSleepRow0 + 2 * kSleepPitch;
   if (running_) {
     // +10 min dim when there is nothing to add to (End of album / queue
     // before its last track: what is left isn't known).
-    pill(kExtend, kSleepExtendX, kSleepExtendW, y2, Font::Body, kSleepExtend, extend_ ? accent_ : col::FAINT);
-    pill(kTurnOff, kSleepOffX, kSleepOffW, y2, Font::Body, kSleepTurnOff, col::RED);
+    pill(kExtend, kSleepExtendX, kSleepExtendW, y2, Font::Body, tr(S::sleep_extend), extend_ ? accent_ : col::FAINT);
+    pill(kTurnOff, kSleepOffX, kSleepOffW, y2, Font::Body, tr(S::sleep_turn_off), col::RED);
   } else {
-    f.draw(s, Font::Small, kSleepHint, kW / 2, y2 + kSleepPillH / 2, kSleepHintW, col::DIM, col::CARD,
+    f.draw(s, Font::Small, tr(S::sleep_hint), kW / 2, y2 + kSleepPillH / 2, kSleepHintW, col::DIM, col::CARD,
            Fonts::Align::Centre);
   }
 }
@@ -557,12 +564,12 @@ void VolumeSheet::render() {
   // The output and the value.
   const uint16_t ic = bluetooth_ ? col::CYAN : col::SOFT;
   icons::drawCentred(s, bluetooth_ ? icons::kHeadphones : icons::kSpeaker, 28, 26, ic);
-  char v[8];
-  snprintf(v, sizeof(v), "%d%%", volume_);
+  char v[16];
+  trf(v, sizeof(v), S::format_percent, volume_);
   const int vw = f.draw(s, Font::Title, v, kW - 12, 26, 90, col::TXT, col::CARD, Fonts::Align::Right);
   const int nameW = f.draw(s, Font::Bold, name_, 46, 26, kW - 12 - vw - 12 - 46, col::TXT, col::CARD);
   const int room = kW - 12 - vw - 12 - (46 + nameW + 6);
-  if (room > 40) f.draw(s, Font::Small, "volume", 46 + nameW + 6, 27, room, col::DIM, col::CARD);
+  if (room > 40) f.draw(s, Font::Small, tr(S::volume_label), 46 + nameW + 6, 27, room, col::DIM, col::CARD);
   // − and +.
   const uint16_t minus = pressed_ == Minus ? col::BTN_HI : col::BTN;
   const uint16_t plus = pressed_ == Plus ? col::BTN_HI : col::BTN;
@@ -579,8 +586,7 @@ void VolumeSheet::render() {
   s.fillCircle(kx, ty + 2, 11, pressed_ == Slider ? col::SOFT : col::TXT);
   s.fillCircle(kx, ty + 2, 5, accent_);
   // The hint.
-  f.draw(s, Font::Small,
-         bluetooth_ ? "The headphones' own buttons change it too" : "Hold A or C to change it on any screen", kW / 2,
+  f.draw(s, Font::Small, tr(bluetooth_ ? S::volume_hint_headphones : S::volume_hint_speaker), kW / 2,
          kRowY + kCtlH + 12, kW - 24, col::FAINT, col::CARD, Fonts::Align::Centre);
 }
 
@@ -689,7 +695,7 @@ void JumpGrid::drawHeader() {
   M5Canvas& s = gfx::strip();
   Fonts& f = Fonts::instance();
   s.fillRect(0, 0, kW, kHeaderH, col::HEAD);
-  const int w = f.draw(s, Font::Bold, "Jump to", 12, 17, 120, col::TXT, col::HEAD);
+  const int w = f.draw(s, Font::Bold, tr(S::jump_title), 12, 17, 120, col::TXT, col::HEAD);
   f.draw(s, Font::Small, title_, 12 + w + 8, 18, 250 - (12 + w + 8), col::DIM, col::HEAD);
   const uint16_t pill = pressed_ == -2 ? col::BTN_HI : col::BTN;
   s.fillRoundRect(262, 5, 50, 26, 13, pill);
@@ -889,11 +895,11 @@ void Coach::drawHeader() {
   M5Canvas& s = gfx::strip();
   Fonts& f = Fonts::instance();
   s.fillRect(0, 0, kW, kHeaderH, col::HEAD);
-  char t[24];
-  snprintf(t, sizeof(t), "Tip %d of %d", card_ + 1, kCards);
+  char t[48];
+  trf(t, sizeof(t), S::coach_header_tip, card_ + 1, kCards);
   const int w = f.draw(s, Font::Bold, t, 12, 17, 140, col::TXT, col::HEAD);
-  f.draw(s, Font::Small, "tap to go on", 12 + w + 8, 18, 120, col::DIM, col::HEAD);
-  const char* label = card_ + 1 < kCards ? "Next" : "Got it";
+  f.draw(s, Font::Small, tr(S::coach_header_hint), 12 + w + 8, 18, 120, col::DIM, col::HEAD);
+  const char* label = tr(card_ + 1 < kCards ? S::coach_next : S::coach_got_it);
   const int pw = f.width(Font::Bold, label) + 28;
   const uint16_t pill = pressed_ ? col::SOFT : accent_;
   s.fillRoundRect(kW - 6 - pw, 5, pw, 26, 13, pill);
@@ -910,17 +916,21 @@ void Coach::render() {
   if (card_ == 0) {
     // The three red dots under the glass, and what each does (spec §4).
     // Every text fits its room (test_ui_library measures them).
-    f.draw(s, Font::Bold, kCoachTitle, kW / 2, 14, kCoachTextW, col::TXT, col::BG, Fonts::Align::Centre);
-    f.draw(s, Font::Small, kCoachLine, kW / 2, 34, kCoachTextW, col::DIM, col::BG, Fonts::Align::Centre);
+    f.draw(s, Font::Bold, tr(S::coach_title), kW / 2, 14, kCoachTextW, col::TXT, col::BG, Fonts::Align::Centre);
+    f.draw(s, Font::Small, tr(S::coach_line), kW / 2, 34, kCoachTextW, col::DIM, col::BG, Fonts::Align::Centre);
+    static const S kClick[3] = {S::coach_click_prev, S::coach_click_play, S::coach_click_next};
+    static const S kHold[3] = {S::coach_hold_prev, S::coach_hold_play, S::coach_hold_next};
     for (int b = 0; b < 3; ++b) {
       const int cx = 54 + b * 106;  // boxes of 102 with 4 px between them
       s.fillRoundRect(cx - kCoachBoxW / 2, 48, kCoachBoxW, 90, 10, col::CARD);
       const int tw = kCoachBoxTextW;
-      f.draw(s, Font::Bold, kCoachClick[b], cx, 64, tw, col::TXT, col::CARD, Fonts::Align::Centre);
-      f.draw(s, Font::Small, "hold:", cx, 86, tw, col::DIM, col::CARD, Fonts::Align::Centre);
-      f.draw(s, Font::Small, kCoachHold[b], cx, 103, tw, col::SOFT, col::CARD, Fonts::Align::Centre);
-      if (kCoachHold2[b][0]) {
-        f.draw(s, Font::Small, kCoachHold2[b], cx, 119, tw, col::SOFT, col::CARD, Fonts::Align::Centre);
+      f.draw(s, Font::Bold, tr(kClick[b]), cx, 64, tw, col::TXT, col::CARD, Fonts::Align::Centre);
+      f.draw(s, Font::Small, tr(S::coach_hold_label), cx, 86, tw, col::DIM, col::CARD, Fonts::Align::Centre);
+      // What the hold does, on one line or two ("speaker or" over "headphones").
+      for (int k = 0; k < 2; ++k) {
+        char line[64];
+        if (!uistr::line(tr(kHold[b]), k, line, sizeof(line))) continue;
+        f.draw(s, Font::Small, line, cx, 103 + 16 * k, tw, col::SOFT, col::CARD, Fonts::Align::Centre);
       }
       // An arrow down to its dot.
       s.fillRect(cx - 2, 142, 4, 12, col::RED);
@@ -931,11 +941,14 @@ void Coach::render() {
     const int cx = kW / 2;
     s.fillTriangle(cx - 12, 16, cx + 12, 16, cx, 2, accent_);
     s.fillRect(cx - 3, 14, 6, 16, accent_);
-    f.draw(s, Font::Title, kCoachTab[0], cx, 52, kCoachTextW, col::TXT, col::BG, Fonts::Align::Centre);
-    f.draw(s, Font::Title, kCoachTab[1], cx, 78, kCoachTextW, col::TXT, col::BG, Fonts::Align::Centre);
-    f.draw(s, Font::Small, kCoachTabMore[0], cx, 108, kCoachTextW, col::DIM, col::BG, Fonts::Align::Centre);
-    f.draw(s, Font::Small, kCoachTabMore[1], cx, 125, kCoachTextW, col::DIM, col::BG, Fonts::Align::Centre);
-    f.draw(s, Font::Small, kCoachTabMore[2], cx, 152, kCoachTextW, col::FAINT, col::BG, Fonts::Align::Centre);
+    char line[96];
+    for (int k = 0; k < 2; ++k) {
+      uistr::line(tr(S::coach_tab), k, line, sizeof(line));
+      f.draw(s, Font::Title, line, cx, 52 + 26 * k, kCoachTextW, col::TXT, col::BG, Fonts::Align::Centre);
+      uistr::line(tr(S::coach_tab_more), k, line, sizeof(line));
+      f.draw(s, Font::Small, line, cx, 108 + 17 * k, kCoachTextW, col::DIM, col::BG, Fonts::Align::Centre);
+    }
+    f.draw(s, Font::Small, tr(S::coach_tips_where), cx, 152, kCoachTextW, col::FAINT, col::BG, Fonts::Align::Centre);
   }
 }
 

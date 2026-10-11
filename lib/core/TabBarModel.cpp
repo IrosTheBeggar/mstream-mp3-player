@@ -7,7 +7,8 @@
 
 namespace tabbar {
 
-const char* const kLabels[kTabs] = {"Playing", "Library", "Queue", "Dance", "Output"};
+const uistr::S kLabels[kTabs] = {uistr::S::tabs_playing, uistr::S::tabs_library, uistr::S::tabs_queue,
+                                 uistr::S::tabs_dance, uistr::S::tabs_output};
 
 uint8_t dirty(const State& a, const State& b) {
   uint8_t d = 0;

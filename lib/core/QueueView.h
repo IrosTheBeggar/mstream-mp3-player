@@ -95,13 +95,14 @@ private:
 
 // ---- the queue's cap (QueueModel::kMaxEntries: docs/QUEUE-MODES.md 15) ----
 //
-// `n` with its thousands grouped ("19,412"), as the cap's texts write
-// their counts. Returns buf.
+// `n` with its thousands grouped by commas ("19,412"): the console's and
+// the logs' way, whatever the UI's language (the UI's texts group as the
+// language does: uistr::grouped()). Returns buf.
 char* grouped(uint32_t n, char* buf, size_t size);
 // The toast of a Play, a Shuffle all or an add the cap cut short, `took`
 // of `asked`: "Shuffling 5,000 of 19,412: the queue holds 5,000 tracks",
 // "Playing ...", "Added 37 of 300: ...", "37 of 300 play next: ..."
-// (uitext's kCap* texts). Returns buf.
+// (the catalogue's queue_cap.* texts). Returns buf.
 enum class Capped : uint8_t { Shuffle, Play, Add, Next };
 char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t size);
 // The toast of an add (`what`: Next, Play next; anything else, + Queue)
@@ -109,7 +110,7 @@ char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t s
 // 15.8; `took` of `asked` went in): "Added 12 tracks: 12 played tracks made
 // way", "Plays next: 1 played track made way" (one track: its title gives
 // way to the news), "Added 37 of 300: 37 played tracks made way" (cut short
-// by the cap too). uitext's kPush* texts. Returns buf.
+// by the cap too). queue_cap.push_* and queue_cap.pushed. Returns buf.
 char* pushedText(Capped what, uint32_t took, uint32_t asked, uint32_t pushed, char* buf, size_t size);
 
 // ---- what an add did ----

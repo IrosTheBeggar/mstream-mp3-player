@@ -14,6 +14,7 @@
 
 #include <cstring>
 
+#include "UiStrings.h"
 #include "UiText.h"
 #include "storage/CardFat.h"
 #include "storage/CardSpace.h"
@@ -182,7 +183,7 @@ void LocalStorage::lookAtCard(int cs) {
   }
   Serial.printf("[storage] no card mounted; its first sectors: %s%s; the pages say \"%s\" (%lu ms)\n",
                 cardformat::name(cardKind_), cardformat::notFat32(cardKind_) ? ": not FAT32 (MBR)" : "",
-                uitext::cardMessage(cardKind_).title, (unsigned long)(millis() - t0));
+                uistr::tr(uitext::cardMessage(cardKind_).title), (unsigned long)(millis() - t0));
 }
 
 uint64_t LocalStorage::totalBytes() const {

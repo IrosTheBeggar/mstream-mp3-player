@@ -15,6 +15,7 @@
 #include "SleepTimer.h"
 #include "TextFit.h"
 #include "TextFold.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "app/LoopStack.h"
 #include "app/Psram.h"
@@ -24,6 +25,8 @@
 #include "ui/Theme.h"
 
 namespace ui {
+
+using uistr::S;
 
 namespace {
 
@@ -199,7 +202,7 @@ void Ui::setListBand(int height) {
 
 void Ui::retryCard() {
   if (host_.retryCard()) {
-    toast("Card found: starting again", false);
+    toast(tr(S::toast_card_found), false);
     return;
   }
   // What is in may have changed (an exFAT card taken out, or put in, or
@@ -208,17 +211,17 @@ void Ui::retryCard() {
   const cardformat::Kind was = state_.cardKind;
   host_.snapshot(state_);
   if (state_.cardKind != was && page_ && !modalUp()) page_->repaint();
-  warn(uitext::cardMessage(state_.cardKind).still);
+  warn(tr(uitext::cardMessage(state_.cardKind).still));
 }
 
 void Ui::shuffleAll() {
   if (state_.libraryFenced) {  // the library update's fence: the index is the build's
-    toast(uitext::kUpdatingWait, false);
+    toast(tr(S::library_updating_wait), false);
     return;
   }
   const LibraryIndex* index = library_.index();
   if (browse_ || !index || !index->ready() || index->trackCount() == 0) {
-    warn("No music on the card to shuffle");
+    warn(tr(S::toast_no_music_to_shuffle));
     return;
   }
   // The whole library from a random track, with shuffle on (the mode, not
@@ -245,9 +248,9 @@ void Ui::shuffleAll() {
   if (took < all.count) {
     queueview::cappedText(queueview::Capped::Shuffle, took, all.count, text, sizeof(text));
   } else {
-    snprintf(text, sizeof(text), "Shuffling %lu tracks", (unsigned long)all.count);
+    trnf(text, sizeof(text), S::toast_shuffling, all.count, all.count);
   }
-  toast(ok ? text : "Not enough memory for that", ok);
+  toast(ok ? text : tr(S::toast_no_memory), ok);
 }
 
 void Ui::showTop() {
@@ -619,8 +622,8 @@ void Ui::followSheet(int pressed) {
     const char* text = nullptr;
     switch (sheetFollow_[i]) {
       case SheetFollow::Sleep: text = state_.sleepRow; break;
-      case SheetFollow::Shuffle: text = uitext::kOnOff[state_.shuffle ? 1 : 0]; break;
-      case SheetFollow::Repeat: text = uitext::kRepeatModes[state_.repeat < 3 ? state_.repeat : 0]; break;
+      case SheetFollow::Shuffle: text = tr(state_.shuffle ? S::now_playing_on : S::now_playing_off); break;
+      case SheetFollow::Repeat: text = tr(uitext::repeatMode(state_.repeat)); break;
       default: continue;
     }
     if (sheet_.setDetail(i, text) && i == pressed) pressedDrawn = true;
@@ -629,15 +632,16 @@ void Ui::followSheet(int pressed) {
 }
 
 void Ui::sleepTitle(char* buf, size_t size) const {
-  // Lower case after the colon, as the toasts say it ("Sleep timer: end of
-  // track"); the "..." row's detail alone is capitalised ("End of track").
-  snprintf(buf, size, "%s: %s", uitext::kSleepRow, state_.sleepTitle);
+  // SleepTimer::titleText()'s: lower case after the colon, as the toasts
+  // say it ("Sleep timer: end of track"); the "..." row's detail alone is
+  // capitalised ("End of track").
+  snprintf(buf, size, "%s", state_.sleepTitle);
 }
 
 void Ui::openSleepSheet() {
   endPageTouch();
   closeModal(true);
-  char title[40];
+  char title[96];
   sleepTitle(title, sizeof(title));
   sheetOpenedMs_ = millis();  // (the settle, as every sheet's)
   sleepSheet_.open(state_.sleepPick, state_.sleepRunning, state_.sleepCanExtend, title, accent::NowPlaying);
@@ -647,7 +651,7 @@ void Ui::openSleepSheet() {
 
 void Ui::refreshSleepSheet() {
   if (!sleepSheet_.up()) return;
-  char title[40];
+  char title[96];
   sleepTitle(title, sizeof(title));
   sleepSheet_.refresh(state_.sleepPick, state_.sleepRunning, state_.sleepCanExtend, title);
 }
@@ -666,7 +670,7 @@ void Ui::openVolume(int output) {
   endPageTouch();
   closeModal(true);
   const bool bt = output < 0 ? state_.onBluetooth : output == 1;
-  const char* name = !bt ? "Speaker" : state_.btName[0] ? state_.btName : "Headphones";
+  const char* name = !bt ? tr(S::volume_speaker) : state_.btName[0] ? state_.btName : tr(S::volume_headphones);
   const int v = bt ? state_.btVolume : state_.speakerVolume;
   volumeSheetBt_ = bt;
   volumeAsked_ = v;
@@ -734,8 +738,9 @@ void Ui::onJumpCell(int cell) {
       }
       labels[JumpGrid::kBack][0] = '<';
       enabled[JumpGrid::kBack] = true;
-      char title[40];
-      snprintf(title, sizeof(title), "%s, %c: %lu", jumpSource_->jumpTitle(), letter, (unsigned long)rows);
+      char title[64];
+      const char key[2] = {letter, 0};
+      trf(title, sizeof(title), S::jump_second_title, jumpSource_->jumpTitle(), key, rows);
       jumpLevel_ = 2;
       jumpGrid_.open(title, labels, enabled, -1, accent());
       return;
@@ -779,21 +784,29 @@ void Ui::headphonesLost() {
   host_.wakeScreen("the headphones dropped");  // the dialog needs the listener
   if (!started_ || suspended_) return;
   // "SPYDRONE disconnected" if it fits beside the icon; else the name goes
-  // into the body ("WH-1000XM4 disconnected" is 15 px too wide).
-  const char* name = state_.btName[0] ? state_.btName : "Headphones";
-  char title[48], body[128];
-  snprintf(title, sizeof(title), "%s disconnected", name);
-  if (Fonts::instance().width(Font::Bold, title) <= Dialog::titleRoom(true)) {
-    snprintf(body, sizeof(body), "Paused, so the speaker doesn't suddenly play out loud.");
+  // into the body ("WH-1000XM4 disconnected" is 15 px too wide). With no
+  // name, "Headphones disconnected" (English's too wide: "Headphones:" in
+  // the body too).
+  const bool named = state_.btName[0] != 0;
+  char title[96], body[192];
+  if (named) {
+    trf(title, sizeof(title), S::dialog_lost_title, state_.btName);
   } else {
-    snprintf(title, sizeof(title), "Headphones disconnected");
-    snprintf(body, sizeof(body), "%s: paused, so the speaker doesn't suddenly play out loud.", name);
+    trf(title, sizeof(title), S::dialog_lost_title_generic);
   }
-  static const char* const kButtons[2] = {"Use speaker", "OK"};
+  if (Fonts::instance().width(Font::Bold, title) <= Dialog::titleRoom(true)) {
+    trf(body, sizeof(body), S::dialog_lost_body);
+  } else if (named) {
+    trf(title, sizeof(title), S::dialog_lost_title_generic);
+    trf(body, sizeof(body), S::dialog_lost_body_named, state_.btName);
+  } else {
+    trf(body, sizeof(body), S::dialog_lost_body_headphones);
+  }
+  const char* const buttons[2] = {tr(S::dialog_lost_use_speaker), tr(S::dialog_lost_ok)};
   endPageTouch();
   closeModal(true);
   dialogOwner_ = this;
-  dialog_.open(title, body, kButtons, 2, col::AMBER);
+  dialog_.open(title, body, buttons, 2, col::AMBER);
   dialog_.setIcon(&icons::kHeadphones, col::AMBER, true);
   lostDialog_ = true;
   ownDialog_ = OwnDialog::Lost;
@@ -804,26 +817,29 @@ void Ui::headphonesLost() {
 void Ui::headphonesConnected() {
   input_.connectedTick();
   if (!started_ || suspended_) return;
-  char text[64];
-  snprintf(text, sizeof(text), "Now playing on %s", state_.btName[0] ? state_.btName : "the headphones");
+  char text[96];
+  if (state_.btName[0]) {
+    trf(text, sizeof(text), S::toast_now_playing_on, state_.btName);
+  } else {
+    trf(text, sizeof(text), S::toast_now_playing_on_headphones);
+  }
   toast(text, false);
 }
 
 void Ui::updateLostDialog() {
   if (!lostDialog_ || !dialog_.up()) return;
   const BtLink& l = state_.btLink;
-  char line[64];
+  char line[96];
   if (l.phase == BtLink::Phase::Paging && l.attempt > 0) {
-    snprintf(line, sizeof(line), "Trying to reconnect: try %u of %u", (unsigned)l.attempt,
-             (unsigned)std::max(l.attempt, l.attempts));
+    trf(line, sizeof(line), S::dialog_lost_trying, l.attempt, std::max(l.attempt, l.attempts));
   } else if (l.phase == BtLink::Phase::Off) {
-    snprintf(line, sizeof(line), "Not trying to reconnect");
+    trf(line, sizeof(line), S::dialog_lost_not_trying);
   } else if (l.phase == BtLink::Phase::Resting) {
     // (Lost: resting only after the whole back-off; they may be back in
     // range with their own reconnect given up.)
-    snprintf(line, sizeof(line), "%s", uitext::kBtLostRestingLine);
+    trf(line, sizeof(line), S::dialog_lost_resting);
   } else {
-    snprintf(line, sizeof(line), "Looking for them...");
+    trf(line, sizeof(line), S::dialog_lost_looking);
   }
   dialog_.setStatus(line, col::AMBER);
 }
@@ -835,22 +851,31 @@ void Ui::playFailed() {
   input_.alertBuzz();  // they may be waiting with the device in a pocket
   host_.wakeScreen("couldn't reach the headphones");
   if (!started_ || suspended_) return;
-  const char* name = state_.btName[0] ? state_.btName : "the headphones";
-  char title[48], body[128];
-  snprintf(title, sizeof(title), "Couldn't reach %s", name);
+  const bool named = state_.btName[0] != 0;
+  char title[96], body[192];
+  if (named) {
+    trf(title, sizeof(title), S::dialog_failed_title, state_.btName);
+  } else {
+    trf(title, sizeof(title), S::dialog_failed_title_headphones);
+  }
   // No icon: the title's whole width (a name as long as "WH-1000XM4" fits).
   if (Fonts::instance().width(Font::Bold, title) <= Dialog::titleRoom(false)) {
-    snprintf(body, sizeof(body), "%s", uitext::kPlayFailedBody);
+    trf(body, sizeof(body), S::dialog_failed_body);
   } else {
-    // (A long name: it goes into the body, as headphonesLost() does.)
-    snprintf(title, sizeof(title), "Couldn't reach them");
-    snprintf(body, sizeof(body), "%s: on, out of the case, and not connected to your phone?", name);
+    // (A long name: it goes into the body, as headphonesLost() does; with
+    // none, English's "Couldn't reach the headphones" is too wide too.)
+    trf(title, sizeof(title), S::dialog_failed_title_them);
+    if (named) {
+      trf(body, sizeof(body), S::dialog_failed_body_named, state_.btName);
+    } else {
+      trf(body, sizeof(body), S::dialog_failed_body_headphones);
+    }
   }
-  static const char* const kButtons[2] = {uitext::kPlayOnSpeaker, "Try again"};
+  const char* const buttons[2] = {tr(S::now_playing_play_on_speaker), tr(S::dialog_failed_try_again)};
   endPageTouch();
   closeModal(true);
   dialogOwner_ = this;
-  dialog_.open(title, body, kButtons, 2, col::AMBER);
+  dialog_.open(title, body, buttons, 2, col::AMBER);
   playFailedDialog_ = true;
   ownDialog_ = OwnDialog::PlayFailed;
   applyCover();
@@ -897,25 +922,29 @@ void Ui::noteFailures() {
   failuresSeen_ = f.count;
   failedKeys_.add(f.key);
   char title[64];
-  if (!player_.catalog().title(f.track, title, sizeof(title))) snprintf(title, sizeof(title), "a track");
+  const bool titled = player_.catalog().title(f.track, title, sizeof(title));
   // Why, when it was the track's sample rate: a refused rate isn't a
   // broken file, and at 160 MHz a setting would play it. Else the
   // backend's own few words when it has them (an Opus file refused at its
   // open: "surround Opus isn't supported"), else "can't play it".
-  char why[48];
+  char why[96];
   if (f.rate.hz != 0 && f.rate.needsCpu) {
-    snprintf(why, sizeof(why), "%s", uitext::kSkippedCpu);
+    trf(why, sizeof(why), S::toast_why_cpu);
   } else if (f.rate.hz != 0) {
-    char rate[16];
+    char rate[24];
     RateConverter::rateText(f.rate.hz, rate, sizeof(rate));
-    snprintf(why, sizeof(why), uitext::kSkippedRate, rate);
+    trf(why, sizeof(why), S::toast_why_rate, rate);
   } else if (f.note[0]) {
     snprintf(why, sizeof(why), "%s", f.note);
   } else {
-    snprintf(why, sizeof(why), "%s", uitext::kSkipped);
+    trf(why, sizeof(why), S::toast_why_cant_play);
   }
-  char text[112];
-  snprintf(text, sizeof(text), "Skipped %s: %s", title, why);
+  char text[128];
+  if (titled) {
+    trf(text, sizeof(text), S::toast_skipped, title, why);
+  } else {
+    trf(text, sizeof(text), S::toast_skipped_untitled, why);
+  }
   warn(text);
   host_.wakeScreen("a track couldn't be played");
   if (page_ == &queuePage_) list_.refreshAll();
@@ -934,15 +963,17 @@ void Ui::updateHud(uint32_t nowMs) {
       // from a button that works on every tab and from a pocket (its scan
       // would start from a press that asked for no such thing). The output
       // stays on the speaker; nothing plays.
-      warn(uitext::kNoHeadphones);
+      warn(tr(S::toast_no_headphones));
     } else if (f.kind == ButtonPolicy::Hud::Output) {
-      char line[48];
+      char line[96];
       if (f.refused) {
-        snprintf(line, sizeof(line), "%s", "Stays on the speaker (silent test mode)");
+        trf(line, sizeof(line), S::hud_silent_mode);
+      } else if (f.toBluetooth && state_.btConnected) {
+        trf(line, sizeof(line), S::hud_bluetooth, state_.btName);
       } else if (f.toBluetooth) {
-        snprintf(line, sizeof(line), "Bluetooth: %s", state_.btConnected ? state_.btName : "connecting...");
+        trf(line, sizeof(line), S::hud_bluetooth_connecting);
       } else {
-        snprintf(line, sizeof(line), "%s", f.paused ? "Speaker, paused: B plays" : "Speaker");
+        trf(line, sizeof(line), f.paused ? S::hud_speaker_paused : S::hud_speaker);
       }
       hud_.showOutput(f.toBluetooth && !f.refused, line, nowMs);
     }
@@ -1461,7 +1492,7 @@ void Ui::route(const InputEvent& e) {
           Serial.printf("[ui] undo: %s%s%s\n", undone ? "done" : "nothing to undo",
                         player_.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)",
                         back);
-          toast_.show(undone ? "Undone" : "Nothing to undo", false, false, accent(), nowMs_);
+          toast_.show(tr(undone ? S::toast_undone : S::toast_nothing_to_undo), false, false, accent(), nowMs_);
           uncover(was);
         } else if (hit == 3) {
           toast_.hide();

@@ -154,7 +154,7 @@ private:
   Kind kind_ = Kind::Volume;
   int volume_ = 0;
   bool bluetooth_ = false;
-  char line_[48] = "";
+  char line_[96] = "";
   bool up_ = false;
   uint32_t untilMs_ = 0;
 };
@@ -194,8 +194,8 @@ private:
   void render();
   void pushRow(int i);
   void pushTitle();
-  char title_[64] = "";
-  char rows_[kMaxRows][32] = {};
+  char title_[96] = "";
+  char rows_[kMaxRows][64] = {};
   char details_[kMaxRows][96] = {};
   int n_ = 0;
   int y0_ = 240;
@@ -238,7 +238,7 @@ private:
   int current_ = -1;
   bool running_ = false;
   bool extend_ = false;
-  char state_[40] = "";
+  char state_[96] = "";
   int pressed_ = -1;
   bool up_ = false;
   uint16_t accent_ = 0;
@@ -302,7 +302,7 @@ private:
   int cellAt(const InputEvent& e) const;
   void renderGrid();
   void drawHeader();
-  char title_[40] = "";
+  char title_[64] = "";
   char labels_[jump::kGridCells][4] = {};
   bool enabled_[jump::kGridCells] = {};
   int current_ = -1;
@@ -334,11 +334,11 @@ public:
 private:
   void render();
   int buttonAt(int x, int y) const;
-  char title_[48] = "";
-  char body_[128] = "";
-  char status_[64] = "";
+  char title_[96] = "";
+  char body_[256] = "";
+  char status_[96] = "";
   uint16_t statusColour_ = 0;
-  char buttons_[2][20] = {};
+  char buttons_[2][48] = {};
   int n_ = 0;
   int pressed_ = -1;
   bool up_ = false;

@@ -6,6 +6,10 @@
 #include <cstdio>
 #include <cstring>
 
+#include "UiStrings.h"
+
+using uistr::S;
+
 const char* btPhaseName(BtLink::Phase p) {
   switch (p) {
     case BtLink::Phase::Off: return "off";
@@ -37,14 +41,14 @@ const char* btCardName(BtCard c) {
 
 const char* btButtonLabel(BtButton b, bool narrow) {
   switch (b) {
-    case BtButton::Pair: return narrow ? "Pair new" : "Pair new headphones";
-    case BtButton::Connect: return "Connect";
-    case BtButton::Forget: return "Forget";
-    case BtButton::Cancel: return "Cancel";
-    case BtButton::Disconnect: return "Disconnect";
-    case BtButton::TryAgain: return "Try again";
-    case BtButton::Volume: return "Volume";
-    case BtButton::More: return "More";
+    case BtButton::Pair: return tr(narrow ? S::bt_pair_new : S::bt_pair_new_headphones);
+    case BtButton::Connect: return tr(S::bt_connect);
+    case BtButton::Forget: return tr(S::bt_forget);
+    case BtButton::Cancel: return tr(S::bt_cancel);
+    case BtButton::Disconnect: return tr(S::bt_disconnect);
+    case BtButton::TryAgain: return tr(S::bt_try_again);
+    case BtButton::Volume: return "Volume";  // (never drawn: an icon and the %)
+    case BtButton::More: return "More";      // (never drawn: "...")
     case BtButton::None: break;
   }
   return "";
@@ -237,37 +241,60 @@ BtCardView btCardView(const BtLink& link, const BtSession& session, bool lost) {
 char* btStatusLine(const BtCardView& v, const BtLink& link, const char* name, const char* detail, char* buf,
                    size_t size) {
   if (!buf || size == 0) return buf;
-  char tries[24] = "";
-  if (link.attempt > 0 && link.attempts > 0) {
-    snprintf(tries, sizeof(tries), "  try %u of %u", static_cast<unsigned>(link.attempt),
-             static_cast<unsigned>(link.attempts > link.attempt ? link.attempts : link.attempt));
-  }
-  const char* them = name && name[0] ? name : "headphones";
+  // "  try 2 of 3" after the state while a try is under way.
+  const bool tries = link.attempt > 0 && link.attempts > 0;
+  const unsigned attempt = link.attempt;
+  const unsigned attempts = link.attempts > link.attempt ? link.attempts : link.attempt;
+  const bool named = name && name[0];
   switch (v.card) {
-    case BtCard::NotPaired: snprintf(buf, size, "No headphones paired"); break;
+    case BtCard::NotPaired: trf(buf, size, S::bt_status_not_paired); break;
     case BtCard::Off:
     case BtCard::Resting:  // (and the hint beside its button)
-      snprintf(buf, size, "Not connected");
+      trf(buf, size, S::bt_status_not_connected);
       break;
-    case BtCard::Connecting: snprintf(buf, size, "Connecting...%s", tries); break;
-    case BtCard::Searching: snprintf(buf, size, "Looking for %s...", them); break;
-    case BtCard::Pairing: snprintf(buf, size, "Pairing...%s", tries); break;
+    case BtCard::Connecting:
+      if (tries) {
+        trf(buf, size, S::bt_status_connecting_try, attempt, attempts);
+      } else {
+        trf(buf, size, S::bt_status_connecting);
+      }
+      break;
+    case BtCard::Searching:
+      if (named) {
+        trf(buf, size, S::bt_status_looking, name);
+      } else {
+        trf(buf, size, S::bt_status_looking_headphones);
+      }
+      break;
+    case BtCard::Pairing:
+      if (tries) {
+        trf(buf, size, S::bt_status_pairing_try, attempt, attempts);
+      } else {
+        trf(buf, size, S::bt_status_pairing);
+      }
+      break;
     case BtCard::Connected:
       if (detail && detail[0]) {
-        snprintf(buf, size, "Connected  %s", detail);
+        trf(buf, size, S::bt_status_connected_detail, detail);
       } else {
-        snprintf(buf, size, "Connected");
+        trf(buf, size, S::bt_status_connected);
       }
       break;
     case BtCard::Failed:
       // Short enough for the card's line (222 px, DejaVu 13).
-      snprintf(buf, size, "%s", v.pairFailed ? "Couldn't pair. In pairing mode?" : "Couldn't connect. On and nearby?");
+      trf(buf, size, v.pairFailed ? S::bt_status_couldnt_pair : S::bt_status_couldnt_connect);
       break;
     case BtCard::Lost:
       if (link.phase == BtLink::Phase::Paging) {
-        snprintf(buf, size, "Lost: reconnecting...%s", tries);
+        if (tries) {
+          trf(buf, size, S::bt_status_lost_reconnecting_try, attempt, attempts);
+        } else {
+          trf(buf, size, S::bt_status_lost_reconnecting);
+        }
+      } else if (named) {
+        trf(buf, size, S::bt_status_lost_looking, name);
       } else {
-        snprintf(buf, size, "Lost: looking for %s...", them);
+        trf(buf, size, S::bt_status_lost_looking_headphones);
       }
       break;
   }
@@ -360,10 +387,10 @@ BtDevice::Kind BtScanList::kindOf(uint32_t cod) {
 
 const char* BtScanList::kindName(BtDevice::Kind k) {
   switch (k) {
-    case BtDevice::Kind::Headphones: return "headphones";
-    case BtDevice::Kind::Speaker: return "speaker";
-    case BtDevice::Kind::Car: return "car audio";
+    case BtDevice::Kind::Headphones: return tr(S::pair_kind_headphones);
+    case BtDevice::Kind::Speaker: return tr(S::pair_kind_speaker);
+    case BtDevice::Kind::Car: return tr(S::pair_kind_car);
     case BtDevice::Kind::Other: break;
   }
-  return "audio device";
+  return tr(S::pair_kind_other);
 }
