@@ -6,13 +6,15 @@
 // tools/glyph_store.py --fixture), with runs and raw, against the glyphs
 // as drawn; stores it must refuse; and the built-in 16 px CJK store
 // (CjkGlyphs16): every glyph against the generator's digest, the set it
-// holds, and nothing the VLW DejaVu fonts draw.
+// holds, and nothing the VLW DejaVu fonts draw; the synthetic bold (the
+// Bold and Title roles') on rows drawn by hand and on every glyph.
 // Run: pio test -e native
 #include <unity.h>
 
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "CjkGlyphs16.h"
@@ -380,10 +382,10 @@ void test_builtin_header() {
   TEST_ASSERT_TRUE(s.inkDescent() >= 2 && s.inkDescent() <= 4);
   TEST_ASSERT_TRUE(s.maxWidth() <= 16 + 2);
   TEST_ASSERT_TRUE(s.maxHeight() <= 16 + 4);
-  // ui/Fonts' drawGlyph() has room for the largest box (a glyph larger
-  // than its buffers would draw as a blank cell).
-  TEST_ASSERT_TRUE_MESSAGE(s.maxWidth() * s.maxHeight() <= kCjkGlyphs16MaxBox,
-                           "a glyph box larger than kCjkGlyphs16MaxBox");
+  // ui/Fonts' drawGlyph() has room for the largest box, bold (a column
+  // wider) too: a glyph larger than its buffers would draw as a blank cell.
+  TEST_ASSERT_TRUE_MESSAGE((s.maxWidth() + glyphstore::kBoldGrow) * s.maxHeight() <= kCjkGlyphs16MaxBox,
+                           "a bold glyph box larger than kCjkGlyphs16MaxBox");
   // The flash it costs: the "pan" set measured 1.05 MB (docs/I18N.md).
   TEST_ASSERT_TRUE(kCjkGlyphs16Size < 1150u * 1024);
   TEST_ASSERT_TRUE(kCjkGlyphs16Size % 4 == 0);
@@ -435,6 +437,112 @@ void test_builtin_every_glyph() {
   TEST_ASSERT_EQUAL_INT(s.inkAscent(), up);
   TEST_ASSERT_EQUAL_INT(s.inkDescent(), down);
   TEST_ASSERT_TRUE_MESSAGE(f.h == kCjkGlyphs16Digest, "the generator's digest");
+}
+
+// ---- the synthetic bold (the Bold and Title roles) ----
+
+namespace {
+
+// One row through embolden(), `w` values at a stride of w + 2 (a sentinel
+// after the new column), as a string of hex digits with the new column.
+std::string bolded(const char* row) {
+  const int w = static_cast<int>(std::strlen(row));
+  uint8_t buf[2][34];
+  std::memset(buf, 0xEE, sizeof(buf));
+  for (int r = 0; r < 2; ++r) {
+    for (int x = 0; x < w; ++x) buf[r][x] = static_cast<uint8_t>(hexValue(row[x]));
+  }
+  glyphstore::embolden(&buf[0][0], w, 2, sizeof(buf[0]));
+  std::string out;
+  for (int x = 0; x <= w; ++x) {
+    TEST_ASSERT_EQUAL_UINT8(buf[0][x], buf[1][x]);  // every row the same way
+    out += "0123456789abcdef"[buf[0][x] & 15];
+  }
+  TEST_ASSERT_EQUAL_HEX8(0xEE, buf[0][w + 1]);  // nothing past the new column
+  TEST_ASSERT_EQUAL_HEX8(0xEE, buf[1][w + 1]);
+  return out;
+}
+
+}  // namespace
+
+// a'(x) = min(15, a(x) + a(x - 1) / 2), from the values as they were: a
+// stroke a pixel wider at half strength, a 1 px gap between two strokes
+// grey (7) rather than closed, the sum held at 15.
+void test_bold_rule() {
+  TEST_ASSERT_EQUAL_STRING("0f7f70", bolded("0f0f0").c_str());   // two strokes, a 1 px gap kept
+  TEST_ASSERT_EQUAL_STRING("0ff700", bolded("0ff00").c_str());   // a 2 px stroke: 3 px, its edge 7
+  TEST_ASSERT_EQUAL_STRING("8ff7", bolded("8ff").c_str());       // held at 15
+  TEST_ASSERT_EQUAL_STRING("4200", bolded("400").c_str());       // from the original left value (not 4, 2, 1)
+  TEST_ASSERT_EQUAL_STRING("1100", bolded("110").c_str());       // 1 / 2 is 0
+  TEST_ASSERT_EQUAL_STRING("00000", bolded("0000").c_str());
+  TEST_ASSERT_EQUAL_STRING("f7", bolded("f").c_str());
+  // Nothing to do without room for the new column, or with no box.
+  uint8_t row[4] = {15, 15, 15, 0xEE};
+  glyphstore::embolden(row, 3, 1, 3);
+  TEST_ASSERT_EQUAL_HEX8(0xEE, row[3]);
+  glyphstore::embolden(nullptr, 3, 1, 4);
+  glyphstore::embolden(row, 0, 1, 4);
+  // The metrics: a column wider and a pixel further; the place, the
+  // height, a mark's 0 advance and a space's empty box as they were.
+  Metrics m;
+  m.w = 16, m.h = 15, m.x = 0, m.y = 13, m.advance = 16;
+  Metrics b = glyphstore::bold(m);
+  TEST_ASSERT_EQUAL_INT(17, b.w);
+  TEST_ASSERT_EQUAL_INT(17, b.advance);
+  TEST_ASSERT_EQUAL_INT(15, b.h);
+  TEST_ASSERT_EQUAL_INT(0, b.x);
+  TEST_ASSERT_EQUAL_INT(13, b.y);
+  m.w = 5, m.x = -6, m.advance = 0;  // a combining voicing mark
+  b = glyphstore::bold(m);
+  TEST_ASSERT_EQUAL_INT(6, b.w);
+  TEST_ASSERT_EQUAL_INT(0, b.advance);
+  TEST_ASSERT_EQUAL_INT(-6, b.x);
+  m = Metrics();
+  m.advance = 16;  // the ideographic space
+  b = glyphstore::bold(m);
+  TEST_ASSERT_EQUAL_INT(0, b.w);
+  TEST_ASSERT_EQUAL_INT(17, b.advance);
+  TEST_ASSERT_EQUAL_INT(16, glyphstore::boldAdvance(15));
+  TEST_ASSERT_EQUAL_INT(0, glyphstore::boldAdvance(0));
+  TEST_ASSERT_EQUAL_INT(-1, glyphstore::boldAdvance(-1));  // no glyph
+}
+
+// Every glyph of the built-in store emboldened as ui/Fonts' drawGlyph()
+// does it (decoded into rows a column wider, then embolden() in place)
+// against the rule computed apart, and inside drawGlyph()'s buffers. The
+// bold has about 30 % more ink (MEASURED x1.30 for Han; DejaVu Sans Bold
+// has x1.81 DejaVu Sans's: only the vertical strokes grow).
+void test_bold_every_glyph() {
+  const Store& s = builtin();
+  std::vector<uint8_t> plain(64 * 64), bold(64 * 64);
+  uint64_t inkBefore = 0, inkAfter = 0;
+  uint32_t glyphs = 0;
+  for (uint32_t cp = 0; cp <= 0xFFFF; ++cp) {
+    const Glyph g = s.find(cp);
+    if (!g) continue;
+    const Metrics m = s.metrics(g), b = glyphstore::bold(m);
+    if (m.w == 0) continue;
+    ++glyphs;
+    char msg[16];
+    snprintf(msg, sizeof(msg), "U+%04X", static_cast<unsigned>(cp));
+    TEST_ASSERT_TRUE_MESSAGE(b.w * b.h <= kCjkGlyphs16MaxBox, msg);
+    TEST_ASSERT_TRUE(s.decode(g, plain.data(), m.w, plain.size(), Alpha::Nibble));
+    TEST_ASSERT_TRUE(s.decode(g, bold.data(), b.w, static_cast<size_t>(b.w) * b.h, Alpha::Nibble));
+    glyphstore::embolden(bold.data(), m.w, m.h, b.w);
+    for (int r = 0; r < m.h; ++r) {
+      for (int x = 0; x < b.w; ++x) {
+        const int a = x < m.w ? plain[r * m.w + x] : 0, left = x > 0 ? plain[r * m.w + x - 1] : 0;
+        const int want = a + left / 2 < 15 ? a + left / 2 : 15;
+        TEST_ASSERT_EQUAL_INT_MESSAGE(want, bold[r * b.w + x], msg);
+        TEST_ASSERT_TRUE_MESSAGE(bold[r * b.w + x] >= a, msg);
+        inkBefore += a;
+        inkAfter += bold[r * b.w + x];
+      }
+    }
+  }
+  TEST_ASSERT_TRUE(glyphs > 10000);
+  const double ratio = static_cast<double>(inkAfter) / static_cast<double>(inkBefore);
+  TEST_ASSERT_TRUE(ratio > 1.2 && ratio < 1.4);
 }
 
 // Names in Hangul, kana and Han (public ones) draw whole, at the em's
@@ -553,5 +661,7 @@ int main(int, char**) {
   RUN_TEST(test_builtin_draws_names);
   RUN_TEST(test_builtin_leaves_out);
   RUN_TEST(test_builtin_set);
+  RUN_TEST(test_bold_rule);
+  RUN_TEST(test_bold_every_glyph);
   return UNITY_END();
 }

@@ -216,6 +216,25 @@ Placement place(const Metrics& m, int baseline, int lineH) {
   return p;
 }
 
+Metrics bold(const Metrics& m) {
+  Metrics b = m;
+  if (b.w) b.w = static_cast<uint8_t>(b.w + kBoldGrow);
+  b.advance = static_cast<uint8_t>(boldAdvance(b.advance));
+  return b;
+}
+
+void embolden(uint8_t* a, int w, int h, size_t stride) {
+  if (!a || w <= 0 || stride <= static_cast<size_t>(w)) return;
+  for (int r = 0; r < h; ++r) {
+    uint8_t* row = a + r * stride;
+    // Right to left, so the value at x - 1 is still the original.
+    for (int x = w; x > 0; --x) {
+      const int v = (x < w ? row[x] : 0) + (row[x - 1] >> 1);
+      row[x] = static_cast<uint8_t>(v < 15 ? v : 15);
+    }
+  }
+}
+
 bool Store::decode(const Glyph& g, uint8_t* out, size_t stride, size_t outSize, Alpha alpha) const {
   if (!g || g.index >= count_ || g.page >= pageCount_) return false;
   const Metrics m = metrics(g);

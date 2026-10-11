@@ -684,6 +684,57 @@ void test_textfit_measures_what_draws() {
   TEST_ASSERT_EQUAL_STRING((std::string("\xE2\x80\xA6") + std::strchr(nfdPath + 1, '/')).c_str(), cut);
 }
 
+namespace {
+
+// The store-like font's glyphs past U+2E80 (Han, kana, Hangul), as
+// ui/Fonts::fromStore() asks for the store's. Counts the code points asked.
+int asked = 0;
+bool cjkGlyph(void*, uint32_t cp) {
+  ++asked;
+  return cp >= 0x2E80 && cjkHas(nullptr, cp);
+}
+bool askedFor(void* ctx, uint32_t cp) { return cp == *static_cast<uint32_t*>(ctx); }
+
+}  // namespace
+
+// drawnAny() asks about the text as fit() draws it (composed and folded),
+// as Now Playing chooses its title's font: halfwidth katakana as the
+// fullwidth, NFD jamo as their syllable, a fold as what it folds to; and
+// stops at the first yes.
+void test_textfit_asks_about_what_draws() {
+  const textfit::Font f = cjkFont();
+  TEST_ASSERT_TRUE(textfit::drawnAny(f, "Tokyo 東京", cjkGlyph, nullptr));
+  TEST_ASSERT_TRUE(textfit::drawnAny(f, "ｶﾀｶﾅ", cjkGlyph, nullptr));  // the font has no halfwidth: カタカナ
+  TEST_ASSERT_TRUE(textfit::drawnAny(f, "\xE1\x84\x89\xE1\x85\xA5", cjkGlyph, nullptr));  // NFD 서
+  TEST_ASSERT_FALSE(textfit::drawnAny(f, "Łódź", cjkGlyph, nullptr));
+  TEST_ASSERT_FALSE(textfit::drawnAny(f, "", cjkGlyph, nullptr));
+  TEST_ASSERT_FALSE(textfit::drawnAny(f, nullptr, cjkGlyph, nullptr));
+  TEST_ASSERT_FALSE(textfit::drawnAny(f, "abc", nullptr, nullptr));
+  // The code points asked are the drawn ones: Ł as L, ｶﾞ as ガ (one), a
+  // missing emoji as '?'.
+  uint32_t want = 'L';
+  TEST_ASSERT_TRUE(textfit::drawnAny(f, "Łódź", askedFor, &want));
+  want = 0x0141;
+  TEST_ASSERT_FALSE(textfit::drawnAny(f, "Łódź", askedFor, &want));
+  want = 0x30AC;  // ガ
+  TEST_ASSERT_TRUE(textfit::drawnAny(f, "ｶﾞ", askedFor, &want));
+  want = 0xFF76;  // ｶ
+  TEST_ASSERT_FALSE(textfit::drawnAny(f, "ｶﾞ", askedFor, &want));
+  want = 0xC11C;  // 서
+  TEST_ASSERT_TRUE(textfit::drawnAny(f, "\xE1\x84\x89\xE1\x85\xA5", askedFor, &want));
+  want = 0x1100 + 9;  // its jamo
+  TEST_ASSERT_FALSE(textfit::drawnAny(f, "\xE1\x84\x89\xE1\x85\xA5", askedFor, &want));
+  want = 'A';
+  TEST_ASSERT_TRUE(textfit::drawnAny(fakeFont(), "Ａ", askedFor, &want));  // fakeFont has no fullwidth: A
+  // It stops at the first yes.
+  asked = 0;
+  TEST_ASSERT_TRUE(textfit::drawnAny(f, "東abcdef", cjkGlyph, nullptr));
+  TEST_ASSERT_EQUAL_INT(1, asked);
+  asked = 0;
+  TEST_ASSERT_FALSE(textfit::drawnAny(f, "abcdef", cjkGlyph, nullptr));
+  TEST_ASSERT_EQUAL_INT(6, asked);
+}
+
 // ---- TabBarModel ----
 
 void test_tabbar_hit_areas_reach_the_right_edge() {
@@ -949,6 +1000,7 @@ int main(int, char**) {
   RUN_TEST(test_textfit_fits_cjk);
   RUN_TEST(test_textfit_wraps_cjk);
   RUN_TEST(test_textfit_measures_what_draws);
+  RUN_TEST(test_textfit_asks_about_what_draws);
   RUN_TEST(test_tabbar_hit_areas_reach_the_right_edge);
   RUN_TEST(test_tabbar_redraws_only_what_changed);
   RUN_TEST(test_tabbar_output_state);

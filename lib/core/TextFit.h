@@ -60,6 +60,13 @@ bool ellipsize(const Font& f, char* text, size_t size, int maxW);
 // No buffer: the text is measured in pieces, so the font's widths must add
 // up (ui/Fonts' are sums of advances).
 int drawnWidth(const Font& f, const char* text);
+// Whether `test` holds for a code point of `text` (UTF-8, NUL-terminated,
+// as stored) as fit() draws it: composed and folded first, as
+// drawnWidth() measures, so halfwidth "ｶﾀｶﾅ" is asked about as "カタカナ",
+// NFD jamo as their syllable, "Ａ" as "A". No buffer; it stops at the first
+// yes. What a caller asks of a text before it chooses a font
+// (ui/Fonts::fromStore(): a glyph from the store, Now Playing's title).
+bool drawnAny(const Font& f, const char* text, bool (*test)(void* ctx, uint32_t cp), void* ctx);
 
 // Up to `maxLines` lines of at most `maxW` px, broken after spaces, and
 // between two characters where one is Han, kana or CJK punctuation (the

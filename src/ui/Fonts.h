@@ -22,10 +22,13 @@
 //   Body   DejaVu Sans 16      row titles, buttons, the artist on Now Playing
 //   Small  DejaVu Sans 13      secondary lines, labels, times
 //   Bold   DejaVu Sans Bold 16 headers, the current row, primary buttons
-//   Title  DejaVu Sans Bold 22 Now Playing's title, big numbers
+//   Title  DejaVu Sans Bold 22 Now Playing's title (one with CJK in it:
+//                              Bold, TitleLayout), big numbers
 // The store has one size and one weight: every role draws its CJK glyphs
-// at 16 px, regular, on the role's baseline in its row (the Small row's a
-// pixel lower, so the 16 px em box fits its 17 px), inside the row.
+// at 16 px on the role's baseline in its row (the Small row's a pixel
+// lower, so the 16 px em box fits its 17 px), inside the row; Bold and
+// Title draw them a synthetic bold (glyphstore::embolden(): a column
+// wider, a pixel further), and measure them so.
 //
 // load() reads the fonts' glyph tables into PSRAM (M5GFX does: 9 B a glyph,
 // 6.6 KB a font) once; the glyph bitmaps stay in flash, and the store is
@@ -50,6 +53,11 @@ public:
   // fullwidth, NFD Hangul as its syllables), each glyph by its advance.
   int width(Font f, const char* s) const;
   int height(Font f) const;
+  // Whether `s` as draw() draws it in `f` (composed and folded first) has a
+  // glyph from the store: a Chinese, Japanese or Korean character. Now
+  // Playing's title then takes the Bold rows (TitleLayout). A lookup a
+  // character, no buffer: cheap enough for each new title.
+  bool fromStore(Font f, const char* s) const;
 
   // Draws `text` (the first `len` bytes; UTF-8, not necessarily
   // NUL-terminated) fitted to `maxW` px, vertically centred on `y`,
@@ -73,12 +81,16 @@ private:
     lgfx::VLWfont font;
   };
   const lgfx::VLWfont* vlw(Font f) const { return loaded_ ? &slots_[static_cast<int>(f)].font : nullptr; }
+  // TextFit's width: the Body and Small fonts', and the Bold and Title
+  // fonts' (a store glyph bold: a pixel wider).
   static int widthOf(void* ctx, const char* s);
+  static int boldWidthOf(void* ctx, const char* s);
   static bool hasGlyph(void* ctx, uint32_t cp);
   // A fitted line with a glyph from the store: aligned from its own width
   // and drawn a glyph at a time, the VLW ones by M5GFX's VLWfont::drawChar
-  // (what drawString() calls), the store's by ours.
-  static int drawMixed(lgfx::LovyanGFX& g, const lgfx::VLWfont& v, const char* s, int x, int y, Align align);
+  // (what drawString() calls), the store's by ours (bold in Bold and
+  // Title). Only with the fonts loaded.
+  static int drawMixed(lgfx::LovyanGFX& g, Font f, const char* s, int x, int y, Align align);
 
   Slot* slots_ = nullptr;  // PSRAM, 4
   bool loaded_ = false;

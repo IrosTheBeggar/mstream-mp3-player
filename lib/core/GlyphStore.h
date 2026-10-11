@@ -58,6 +58,27 @@ struct Placement {
 // rows past the line's bottom aren't drawn.
 Placement place(const Metrics& m, int baseline, int lineH);
 
+// A synthetic bold (ui/Fonts draws the store's glyphs so in the Bold and
+// Title roles, beside DejaVu Sans Bold; a store has one weight): each row's
+// coverage spread a pixel to the right at half strength, on the 4-bit
+// values, a'(x) = min(15, a(x) + a(x - 1) / 2), from the values as they
+// were (not the ones already spread). A vertical stroke grows by a pixel, a
+// horizontal one doesn't; a 1 px gap between two strokes goes grey rather
+// than closing (docs/I18N.md, phase 2: the rules compared). The box grows
+// by a column, and the advance by a pixel, so two glyphs don't touch.
+constexpr int kBoldGrow = 1;
+// An advance as drawn bold: one that moves the pen a pixel longer (a mark's
+// 0 stays 0, a missing glyph's -1 stays -1).
+inline int boldAdvance(int advance) { return advance > 0 ? advance + kBoldGrow : advance; }
+// `m` as drawn bold: the box, if it has one, a column wider; the advance as
+// boldAdvance(). Its place (x, y) and height are the same.
+Metrics bold(const Metrics& m);
+// Makes a glyph's coverage bold in place: h rows of w 4-bit values
+// (decode()'s Alpha::Nibble), row r at a + r * stride, into the column at
+// w, which the row must have room for (stride > w; what is there is never
+// read).
+void embolden(uint8_t* a, int w, int h, size_t stride);
+
 class Store {
 public:
   // Reads the header of the store at `data` (`size` bytes, staying there

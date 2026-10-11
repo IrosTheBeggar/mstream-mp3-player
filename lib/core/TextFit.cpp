@@ -240,6 +240,23 @@ int drawnWidth(const Font& f, const char* text) {
   return n ? w + width(f, piece) : w;
 }
 
+bool drawnAny(const Font& f, const char* text, bool (*test)(void* ctx, uint32_t cp), void* ctx) {
+  if (!text || !test) return false;
+  textfold::Composer c(text);
+  while (const uint32_t cp = c.next()) {
+    char utf8[4];
+    size_t len;
+    bool folded = false;
+    const char* bytes = spell(f, cp, utf8, &len, &folded);
+    for (const char* p = bytes; p < bytes + len;) {
+      const uint32_t drawn = textfold::decode(p, bytes + len);
+      if (drawn == 0) break;
+      if (test(ctx, drawn)) return true;
+    }
+  }
+  return false;
+}
+
 bool ellipsize(const Font& f, char* text, size_t size, int maxW) {
   if (width(f, text) <= maxW) return false;
   cutToFit(f, text, size, maxW);

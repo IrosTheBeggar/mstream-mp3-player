@@ -31,8 +31,10 @@ extern const size_t kCjkGlyphs16Size;  // bytes
 extern const uint64_t kCjkGlyphs16Digest;
 
 // The largest glyph box, in values (width x height), that ui/Fonts'
-// drawGlyph() has room for on the stack (its coverage and its pixels). The
-// store's widest box times its tallest must not pass it: test_glyph_store
-// checks, so a store regenerated with a larger glyph (another FreeType can
-// hint a pixel differently) fails there, not as a blank cell on the screen.
-constexpr int kCjkGlyphs16MaxBox = 16 * 18;
+// drawGlyph() has room for on the stack (its coverage and its pixels): the
+// store's 16 x 18, a column wider for the Bold and Title roles' synthetic
+// bold (glyphstore::kBoldGrow). The store's widest box, so widened, times
+// its tallest must not pass it: test_glyph_store checks, so a store
+// regenerated with a larger glyph (another FreeType can hint a pixel
+// differently) fails there, not as a blank cell on the screen.
+constexpr int kCjkGlyphs16MaxBox = (16 + 1) * 18;
