@@ -26,16 +26,30 @@ The catalogue (i18n/README.md says it for translators):
   A translation's "@<id>" may also say "overflow": true: a text the width
   test lets be in that language until its layout is fixed (as en.json's).
 
-Validation fails the run (and --check) on: an id English hasn't; a plural
-message given as a string or the other way round; a category the language
-hasn't, or one it needs missing (one, other; one, few, many in pl and ru;
-other in ja and zh: "many" in es, fr, it, pt and "other" in pl, ru are
-optional, as no count here reaches them); placeholders that differ from
-English's (a form whose category is n = 1 alone may leave out the count);
-more lines than the room has; a stray brace or a control character; an
-@@autonym that isn't the language's name in itself. A
-message a translation leaves out is English on the device (--report counts
-them).
+Validation fails the run (and --check) on: a file that isn't UTF-8; an id
+English hasn't; a plural message given as a string or the other way round;
+a category the language hasn't, or one it needs missing (one, other; one,
+few, many in pl and ru; other in ja and zh: "many" in es, fr, it, pt and
+"other" in pl, ru are optional, as no count here reaches them);
+placeholders that differ from English's (a form whose category is n = 1
+alone may leave out the count); more lines than the room has; a stray
+brace, a control character or a lone surrogate; a character the device
+can't draw as itself (one the four VLW fonts, src/ui/VlwFonts.cpp, and the
+CJK store, lib/core/CjkGlyphs16.cpp, both lack, or one TextFold always
+folds: the fullwidth forms U+FF01-FF5E, the halfwidth katakana, the minus
+sign U+2212), every one in a file named at once with its code point; a
+text with no placeholders longer than its "bytes" (or a line longer than
+its "line_bytes"); an @@autonym that isn't the language's name in itself.
+A message a translation leaves out is English on the device (--report
+counts them).
+
+"bytes" in a message's metadata is the smallest buffer (its NUL included)
+the text goes through on the device, filled; "line_bytes" the same for
+each line, where the code copies the text a line at a time. The generator
+checks a text without placeholders; test_ui_strings checks every text
+filled at worst. A placeholder's "or" lists the other messages that may
+fill it (each at its own worst): the width test tries each in the UI's
+language, and keeps the widest (the byte test the longest).
 
 Out: per language, one blob of the messages (UTF-8, NUL after each form,
 the same text once) and an offset per id (0xFFFF: none, English is used);
@@ -51,7 +65,9 @@ import argparse
 import json
 import math
 import re
+import struct
 import sys
+import unicodedata
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -59,6 +75,10 @@ CATALOGUE = ROOT / "i18n"
 OUT_IDS = ROOT / "lib" / "core" / "UiStringIds.h"
 OUT_DATA = ROOT / "lib" / "core" / "UiStringsData.cpp"
 OUT_TEST = ROOT / "test" / "test_ui_strings" / "catalogue.h"
+# What the device draws text with: the four VLW fonts (the same characters
+# each) and the CJK glyph store behind them.
+VLW = ROOT / "src" / "ui" / "VlwFonts.cpp"
+STORE = ROOT / "lib" / "core" / "CjkGlyphs16.cpp"
 
 CATEGORIES = ["zero", "one", "two", "few", "many", "other"]
 
@@ -105,10 +125,11 @@ ONLY_ONE = {("en", "one"), ("de", "one"), ("es", "one"), ("it", "one"), ("pl", "
 FONTS = ["Body", "Small", "Bold", "Title"]
 LAYOUTS = ["line", "wrap", "toast"]
 FILLS = ["grouped", "digits", "decimal", "text", "message"]
-META_KEYS = {"context", "room", "placeholders", "count", "translate", "overflow", "note"}
+META_KEYS = {"context", "room", "placeholders", "count", "translate", "overflow", "note", "bytes", "line_bytes"}
 ROOM_KEYS = {"font", "else", "px", "lines", "layout", "const", "two_line_px", "optional"}
-PH_KEYS = {"means", "type", "worst", "places"}
+PH_KEYS = {"means", "type", "worst", "places", "or"}
 TRANSLATE = {"yes", "maybe", "dev"}
+MAX_OR = 20  # a placeholder's other fills (catalogue.h's Placeholder::alt)
 
 ID_RE = re.compile(r"^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$")
 PH_RE = re.compile(r"\{([0-3])\}")
@@ -123,7 +144,8 @@ def placeholders(text):
 
 
 def check_text(where, text, max_lines):
-    """A message's text: no stray brace, no control character but '\\n'."""
+    """A message's text: no stray brace, no control character but '\\n',
+    no lone surrogate (JSON's "\\ud800")."""
     if not isinstance(text, str):
         raise Bad(f"{where}: not a string")
     rest = PH_RE.sub("", text)
@@ -132,14 +154,120 @@ def check_text(where, text, max_lines):
     for ch in text:
         if (ord(ch) < 0x20 and ch != "\n") or 0x7F <= ord(ch) < 0xA0:
             raise Bad(f"{where}: control character U+{ord(ch):04X}")
+        if 0xD800 <= ord(ch) <= 0xDFFF:
+            raise Bad(f"{where}: a lone surrogate U+{ord(ch):04X} (not a character)")
     if text.count("\n") + 1 > max_lines:
         raise Bad(f"{where}: {text.count(chr(10)) + 1} lines, the room has {max_lines}")
+
+
+def check_bytes(where, text, meta):
+    """A text with no placeholders against its buffers (meta's "bytes" and
+    "line_bytes", a NUL included); a filled one is test_ui_strings'."""
+    if placeholders(text):
+        return
+    n = len(text.encode("utf-8"))
+    if "bytes" in meta and n + 1 > meta["bytes"]:
+        raise Bad(f"{where}: {n} bytes of UTF-8, its buffer holds {meta['bytes'] - 1}")
+    for line in text.split("\n"):
+        n = len(line.encode("utf-8"))
+        if "line_bytes" in meta and n + 1 > meta["line_bytes"]:
+            raise Bad(f"{where}: a line of {n} bytes of UTF-8, its buffer holds {meta['line_bytes'] - 1}")
+
+
+# ---- what the device draws ----
+
+_drawn = {}
+
+
+def vlw_codepoints(path=VLW):
+    """The code points the VLW fonts draw (tools/vlw_font.py's arrays: a
+    glyph count, then 28 B of metrics a glyph from byte 24, the code point
+    first). The four fonts have the same characters (test_ui_strings
+    checks): the first's are read."""
+    text = path.read_text(encoding="utf-8")
+    m = re.search(r"const uint8_t \w+\[\d+\] = \{", text)
+    if not m:
+        raise Bad(f"{path.name}: no VLW font")
+    head = bytes(int(x, 16) for x in re.findall(r"0x([0-9a-f]{2})", text[m.end():m.end() + 6 * 24]))
+    count = struct.unpack(">I", head[:4])[0]
+    need = 24 + 28 * count
+    raw = bytes(int(x, 16) for x in re.findall(r"0x([0-9a-f]{2})", text[m.end():m.end() + 7 * need]))[:need]
+    return {struct.unpack(">I", raw[24 + 28 * i:28 + 28 * i])[0] for i in range(count)}
+
+
+def store_codepoints(path=STORE):
+    """The code points of the CJK glyph store (tools/glyph_store.py's
+    format: its PAGE and PMAP sections, a presence bit a code point)."""
+    text = path.read_text(encoding="utf-8")
+    m = re.search(r"const uint32_t \w+\[\d+\] = \{(.*?)\};", text, re.S)
+    if not m:
+        raise Bad(f"{path.name}: no glyph store")
+    words = [int(w, 16) for w in re.findall(r"0x([0-9a-f]{8})", m.group(1))]
+    store = struct.pack(f"<{len(words)}I", *words)
+    if store[:4] != b"GLYS":
+        raise Bad(f"{path.name}: not a glyph store")
+    nsec = struct.unpack_from("<H", store, 6)[0]
+    npages = struct.unpack_from("<I", store, 24)[0]
+    sec = {}
+    for i in range(nsec):
+        tag, at, length = struct.unpack_from("<4sII", store, 32 + 12 * i)
+        sec[tag] = store[at:at + length]
+    pages = struct.unpack(f"<{npages}H", sec[b"PAGE"])
+    out = set()
+    for p, page in enumerate(pages):
+        bitmap = struct.unpack_from("<8I", sec[b"PMAP"], 48 * p)
+        out |= {page << 8 | bit for bit in range(256) if bitmap[bit >> 5] >> (bit & 31) & 1}
+    return out
+
+
+def drawn(cp):
+    """Whether the device draws `cp` as itself: in the VLW fonts, else in
+    the CJK store (read only when a text needs it)."""
+    if "vlw" not in _drawn:
+        _drawn["vlw"] = vlw_codepoints()
+    if cp in _drawn["vlw"]:
+        return True
+    if "store" not in _drawn:
+        _drawn["store"] = store_codepoints()
+    return cp in _drawn["store"]
+
+
+def why_not_drawn(cp):
+    """What the device does with a code point it can't draw as itself, and
+    what to write instead."""
+    ch = chr(cp)
+    if 0xFF01 <= cp <= 0xFF5E:
+        return (f"fullwidth {ch!r}: drawn as the ASCII {chr(cp - 0xFEE0)!r} (TextFold folds U+FF01-FF5E): write "
+                "that instead, or a sign the CJK store has (、 。 「 」)")
+    if 0xFF61 <= cp <= 0xFF9F:
+        return f"halfwidth katakana {ch!r}: drawn as the fullwidth kana: write that"
+    if cp == 0x2212:
+        return "the minus sign: drawn as '-' (TextFold): write that"
+    return (f"{ch!r} is in neither the fonts nor the CJK store (drawn as '?' or a look-alike): write another, or "
+            "add it to the store (tools/glyph_store.py takes the characters of i18n/*.json; the font is needed)")
+
+
+def check_glyphs(name, texts):
+    """Every character of a catalogue's texts ((id, text) pairs) drawn as
+    itself (composed, as TextFit draws: NFC): one failure naming each code
+    point the device can't draw, and the ids that use it."""
+    missing = {}
+    for mid, text in texts:
+        for ch in unicodedata.normalize("NFC", text):
+            if ch != "\n" and not drawn(ord(ch)):
+                missing.setdefault(ord(ch), []).append(mid)
+    if missing:
+        lines = [f"U+{cp:04X} {why_not_drawn(cp)}; in {', '.join(sorted(set(ids)))}"
+                 for cp, ids in sorted(missing.items())]
+        raise Bad(f"{name}: {len(missing)} character(s) the device can't draw:\n  " + "\n  ".join(lines))
 
 
 def load(path):
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f, object_pairs_hook=pairs)
+    except UnicodeDecodeError as e:
+        raise Bad(f"{path.name}: not UTF-8 ({e})") from None
     except (json.JSONDecodeError, Bad) as e:
         raise Bad(f"{path.name}: {e}") from None
     if not isinstance(data, dict):
@@ -230,6 +358,9 @@ def check_english(data):
             check_room(where, room)
         if meta.get("translate", "yes") not in TRANSLATE:
             raise Bad(f"{where}: translate is one of {sorted(TRANSLATE)}")
+        for k in ("bytes", "line_bytes"):
+            if k in meta and (not isinstance(meta[k], int) or isinstance(meta[k], bool) or meta[k] < 2):
+                raise Bad(f"{where}: {k} is a buffer's size (a whole number, 2 or more)")
         m = Message(key, value, meta)
         lines = max_lines(meta)
         if m.plural:
@@ -237,8 +368,10 @@ def check_english(data):
                 raise Bad(f"{where}: English's forms are one and other")
             for c, t in value.items():
                 check_text(f"{where} [{c}]", t, lines)
+                check_bytes(f"{where} [{c}]", t, meta)
         else:
             check_text(where, value, lines)
+            check_bytes(where, value, meta)
         used = m.all_placeholders()
         phs = meta.get("placeholders", {})
         if not isinstance(phs, dict):
@@ -270,6 +403,12 @@ def check_english(data):
         for k, ph in m.meta.get("placeholders", {}).items():
             if ph.get("type") == "message" and ph.get("worst") not in msgs:
                 raise Bad(f"en.json {m.id} {{{k}}}: worst names no message")
+            for other in ph.get("or", []):
+                if other not in msgs:
+                    raise Bad(f"en.json {m.id} {{{k}}}: or names {other!r}, no message")
+                if other == m.id:
+                    raise Bad(f"en.json {m.id} {{{k}}}: or names the message itself")
+    check_glyphs("en.json", [(mid, t) for mid in order for t in msgs[mid].forms().values()])
     return msgs, order
 
 
@@ -312,6 +451,14 @@ def check_placeholder(where, ph):
         raise Bad(f"{where}: worst is a number")
     if ph["type"] in ("text", "message") and not isinstance(w, str):
         raise Bad(f"{where}: worst is a string")
+    if "or" in ph:
+        alts = ph["or"]
+        if ph["type"] not in ("text", "message"):
+            raise Bad(f"{where}: or is for a text or a message")
+        if not isinstance(alts, list) or not alts or not all(isinstance(a, str) for a in alts):
+            raise Bad(f"{where}: or is a list of message ids")
+        if len(alts) > MAX_OR or len(set(alts)) != len(alts) or w in alts:
+            raise Bad(f"{where}: or holds up to {MAX_OR} other messages, each once")
 
 
 def check_translation(tag, data, english, overflows=None):
@@ -359,13 +506,17 @@ def check_translation(tag, data, english, overflows=None):
                 ok = got == want or (count is not None and (tag, c) in ONLY_ONE and got == want - {int(count)})
                 if not ok:
                     raise Bad(f"{where} [{c}]: placeholders {sorted(got)}, English has {sorted(want)}")
+                check_bytes(f"{where} [{c}]", t, en.meta)
         else:
             if isinstance(value, dict):
                 raise Bad(f"{where}: not plural in English, so a string")
             check_text(where, value, lines)
             if placeholders(value) != want:
                 raise Bad(f"{where}: placeholders {sorted(placeholders(value))}, English has {sorted(want)}")
+            check_bytes(where, value, en.meta)
         out[key] = value
+    texts = [(mid, t) for mid, v in out.items() for t in (v.values() if isinstance(v, dict) else [v])]
+    check_glyphs(where0, texts + [("@@autonym", data["@@autonym"])])
     return out
 
 
@@ -574,7 +725,8 @@ def gen_test(order, english, langs, overflows):
          "enum class Layout : uint8_t { Line, Wrap, Toast };\n",
          "enum class Fill : uint8_t { None, Grouped, Digits, Decimal, Text, Message };\n",
          "struct Placeholder {\n  Fill type;\n  const char* text;  // Text\n  double value;      // Grouped, Digits, Decimal\n",
-         "  int places;        // Decimal\n  uistr::S message;  // Message\n};\n",
+         "  int places;        // Decimal\n  uistr::S message;  // Message\n",
+         f"  int alts;          // \"or\": the other messages that may fill it\n  uistr::S alt[{MAX_OR}];\n}};\n",
          "struct Entry {\n  uistr::S id;\n  const char* name;\n  bool plural;\n",
          "  const char* one;    // the English (a plural's one form)\n  const char* other;  // a plural's other form\n",
          "  Font font, elseFont;  // None: no room of its own (a fragment)\n  int px, lines;\n",
@@ -582,7 +734,9 @@ def gen_test(order, english, langs, overflows):
          "  int count;  // the placeholder that is the count (-1: none)\n",
          "  bool knownOverflow;  // too wide in English already (\"overflow\" in en.json)\n",
          "  bool optional;  // drawn only when it fits (another message else): never an overflow\n",
-         "  bool dev;  // \"translate\": \"dev\"\n  Placeholder ph[4];\n};\n\n"]
+         "  bool dev;  // \"translate\": \"dev\"\n",
+         "  int bytes, lineBytes;  // its buffers on the device, a NUL included (0: none)\n",
+         "  Placeholder ph[4];\n};\n\n"]
 
     def lit(s):
         return '"' + c_escape(s) + '"'
@@ -597,15 +751,18 @@ def gen_test(order, english, langs, overflows):
         for k in range(4):
             ph = m.meta.get("placeholders", {}).get(str(k))
             if not ph:
-                phs.append("{Fill::None, nullptr, 0, 0, uistr::S{}}")
+                phs.append("{Fill::None, nullptr, 0, 0, uistr::S{}, 0, {}}")
                 continue
             t = ph["type"]
+            alts = ph.get("or", [])
+            alt = f"{len(alts)}, {{{', '.join('uistr::S::' + cname(a) for a in alts)}}}"
             if t == "text":
-                phs.append(f"{{Fill::Text, {lit(ph['worst'])}, 0, 0, uistr::S{{}}}}")
+                phs.append(f"{{Fill::Text, {lit(ph['worst'])}, 0, 0, uistr::S{{}}, {alt}}}")
             elif t == "message":
-                phs.append(f"{{Fill::Message, nullptr, 0, 0, uistr::S::{cname(ph['worst'])}}}")
+                phs.append(f"{{Fill::Message, nullptr, 0, 0, uistr::S::{cname(ph['worst'])}, {alt}}}")
             else:
-                phs.append(f"{{Fill::{t.capitalize()}, nullptr, {ph['worst']}, {ph.get('places', 0)}, uistr::S{{}}}}")
+                phs.append(f"{{Fill::{t.capitalize()}, nullptr, {ph['worst']}, {ph.get('places', 0)}, uistr::S{{}}, "
+                           f"{alt}}}")
         # An entry a room: a message drawn in several places is measured in each.
         for room in rooms_of(m.meta) or [{}]:
             font = "Font::" + room["font"] if room else "Font::None"
@@ -616,7 +773,8 @@ def gen_test(order, english, langs, overflows):
                      f"{room.get('two_line_px', 0)}, {int(count) if count is not None else -1}, "
                      f"{'true' if m.meta.get('overflow') else 'false'}, "
                      f"{'true' if room.get('optional') else 'false'}, "
-                     f"{'true' if m.meta.get('translate') == 'dev' else 'false'},\n"
+                     f"{'true' if m.meta.get('translate') == 'dev' else 'false'}, "
+                     f"{m.meta.get('bytes', 0)}, {m.meta.get('line_bytes', 0)},\n"
                      f"     {{{', '.join(phs)}}}}},\n")
     o.append("};\n\n")
     o.append("// Each language's categories (bit 1 << uistr::Plural), as the generator\n")
@@ -731,8 +889,9 @@ def main():
     ap.add_argument("--report", action="store_true", help="each language's coverage")
     ap.add_argument("--dump", metavar="TAG", help="print every message of a language")
     args = ap.parse_args()
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8")
+    for stream in (sys.stdout, sys.stderr):  # (the code points' characters, on any console)
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     try:
         files, english, order, translations, tables = generate()
     except Bad as e:

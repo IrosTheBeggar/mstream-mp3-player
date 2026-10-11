@@ -2,8 +2,9 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host tests for the Output screen's decisions (OutputModel): the
-// Bluetooth card for every link state, when a connection the listener
-// asked for has failed, Forget's second tap, and the pairing scan's list.
+// Bluetooth card for every link state and its connected line's detail,
+// when a connection the listener asked for has failed, Forget's second
+// tap, and the pairing scan's list.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -14,11 +15,12 @@
 #include <string>
 
 #include "OutputModel.h"
+#include "RateConverter.h"
 #include "UiStrings.h"
 #include "UiText.h"
 
 void setUp() {}
-void tearDown() {}
+void tearDown() { uistr::setLang(uistr::Lang::En); }
 
 namespace {
 
@@ -99,6 +101,30 @@ void test_card_for_every_link_state() {
                            btStatusLine(v, link(P::Paging, true, 1, 3), "SPYDRONE", "", buf, sizeof(buf)));
   // ... but not once the listener stopped it trying.
   TEST_ASSERT_EQUAL(BtCard::Off, btCardView(link(P::Off), s, true).card);
+}
+
+// The connected line's detail, made from numbers each pass: the codec
+// and its rate as the UI's language writes a rate, the delay.
+void test_the_connected_detail() {
+  char buf[40];
+  TEST_ASSERT_EQUAL_STRING("SBC 44.1 kHz, 175 ms", btDetailText("SBC", 44100, 175, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("SBC 48 kHz", btDetailText("SBC", 48000, 0, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("SBC 16 kHz, 40 ms", btDetailText("SBC", 16000, 40, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("SBC ?", btDetailText("SBC", 0, 0, buf, sizeof(buf)));  // no rate named
+  TEST_ASSERT_EQUAL_STRING("150 ms delay", btDetailText("", 0, 150, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("", btDetailText("", 44100, 0, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("", btDetailText(nullptr, 0, 0, buf, sizeof(buf)));
+  // German (its catalogue's texts or English's): its decimal mark, as a
+  // skipped track's rate has it (RateConverter::rateText()).
+  uistr::setLang(uistr::Lang::De);
+  TEST_ASSERT_EQUAL_STRING("SBC 44,1 kHz, 175 ms", btDetailText("SBC", 44100, 175, buf, sizeof(buf)));
+  char rate[24];
+  RateConverter::rateText(44100, rate, sizeof(rate));
+  TEST_ASSERT_EQUAL_STRING("44,1 kHz", rate);
+  uistr::setLang(uistr::Lang::En);
+  // Cut short: at a character boundary.
+  char six[6];
+  TEST_ASSERT_EQUAL_STRING("SBC 4", btDetailText("SBC", 44100, 175, six, sizeof(six)));
 }
 
 // A connection the listener asked for: wanted until it links; failed when
@@ -548,6 +574,7 @@ void test_the_pair_search_stops_after_2_minutes() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_card_for_every_link_state);
+  RUN_TEST(test_the_connected_detail);
   RUN_TEST(test_a_connect_that_runs_out_of_tries_fails);
   RUN_TEST(test_a_connect_that_links_is_satisfied);
   RUN_TEST(test_a_withdrawn_connect_answers_nothing);

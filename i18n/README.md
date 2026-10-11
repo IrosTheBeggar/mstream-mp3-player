@@ -16,7 +16,7 @@ and the width tests' view of them (`test/test_ui_strings/catalogue.h`):
     python tools/gen_ui_strings.py            # check and regenerate
     python tools/gen_ui_strings.py --report   # how much of each language there is
     python tools/gen_ui_strings.py --dump de  # every text of a language, one a line
-    pio test -e native -f test_ui_strings     # every text in its room, in every language
+    pio test -e native -f test_ui_strings     # every text's glyphs, buffers and rooms, in every language
 
 Commit the three generated files with the catalogue; CI fails when they
 are out of date (`--check`).
@@ -62,8 +62,14 @@ After each text, `@<id>` holds what a translator needs:
   `null`: a piece another text holds (its room is that one's).
 - `placeholders`: `{0}` to `{3}`, what fills each and its worst case
   (`type`: a count written `grouped` or as plain `digits`, a `decimal`,
-  a `text` such as a name, or another `message`).
+  a `text` such as a name, or another `message`), and in `or` the other
+  texts that may fill it: the tests try each in your language.
 - `count`: the placeholder that picks a plural text's form.
+- `bytes`: the buffer the text goes through on the device, filled (its
+  UTF-8, plus one): a Cyrillic letter takes two bytes, a CJK character
+  three. `line_bytes`: the same for each line. A text that doesn't fit
+  fails the check (the generator for a text with no placeholders, the
+  host test for the rest): shorten it, or the buffer grows in the code.
 - `translate`: `maybe` for technical words a language may keep
   (CPU, PSRAM, BPM, MHz, the reset reasons), `dev` for what only a
   developer sees (may stay English).
@@ -104,10 +110,22 @@ space before the colon is fine).
 
 **Characters.** The fonts have Latin-1, Latin Extended-A, Greek,
 Cyrillic, the typographic punctuation (– — ‘ ’ “ ” „ … « » ‹ › •), and
-Chinese, Japanese and Korean at 16 px. A character they lack fails the
-width test (`test_every_language_fits_its_rooms`, which measures every
-text of every language as the screen draws it). The no-break space is U+00A0: the narrow one (U+202F) isn't
-in the fonts, and a plain space may break a line there.
+Chinese, Japanese and Korean at 16 px: the CJK store's kana, JIS X
+0208's kanji, GB2312's level 1 hanzi, Hangul, and CJK Symbols and
+Punctuation (、 。 「 」 『 』 〜). A character neither has fails the
+generator's check, which names every one at once (U+XXXX and the ids
+that use it), and `test_every_text_has_its_glyphs`: write another, or
+add it to the store (`tools/glyph_store.py` takes every character of
+`i18n/*.json`; it needs the CJK font, and the store is committed with
+the file). **No fullwidth forms** (U+FF01-FF5E: ， ： （ ） ！ ？ ；):
+the device folds them to ASCII before drawing, so they fail the check
+too. In Chinese and Japanese write the ASCII sign (`,` `:` `(` `)` `!`
+`?`, a space after where it reads better), or the store's 、 。 「 」;
+the mobile app's and the terminal player's texts use the fullwidth
+ones throughout, so change them when you take their words. No halfwidth
+katakana, and `-` for a minus. The no-break space is U+00A0: the narrow
+one (U+202F) isn't in the fonts, and a plain space may break a line
+there.
 
 **Numbers.** The code writes the counts, with the language's thousands
 mark (`19.410`, `19 410`) and decimal mark: a text holds `{0}`, not

@@ -677,15 +677,8 @@ struct MainUiHost : ui::UiHost {
     s.gateFailures = playGate.failures();
     s.btDetail[0] = 0;
     if (s.btConnected) {
-      const uint32_t delayMs = bt.delayReportUs() / 1000;
-      const char* codec = bt.codec();
-      if (codec[0] && delayMs) {
-        uistr::trf(s.btDetail, sizeof(s.btDetail), uistr::S::bt_detail_codec_delay, codec, delayMs);
-      } else if (codec[0]) {
-        snprintf(s.btDetail, sizeof(s.btDetail), "%s", codec);
-      } else if (delayMs) {
-        uistr::trf(s.btDetail, sizeof(s.btDetail), uistr::S::bt_detail_delay, delayMs);
-      }
+      const BtSink::Codec codec = bt.codec();
+      btDetailText(codec.name, codec.hz, bt.delayReportUs() / 1000, s.btDetail, sizeof(s.btDetail));
     }
     s.card = storage.onCard();
     s.cardKind = s.card ? cardformat::Kind::Unreadable : storage.cardKind();
@@ -2409,7 +2402,7 @@ static uint32_t trackLeftMs() {
 
 static void printSleep() {
   const uint32_t now = millis();
-  char row[16];
+  char row[48];  // (AppState::sleepRow's: a translation's row whole)
   sleepTimer.rowText(now, row, sizeof(row));
   const uint16_t target = audio.fadeTargetQ15(), level = audio.fadeLevelQ15();
   char fade[40] = "none";
@@ -2427,7 +2420,7 @@ static void printSleep() {
 // SleepSheet's 0-4 (15-90 min), kTrack, kAlbum, kQueue, kExtend, kTurnOff.
 static void chooseSleep(int pick) {
   const uint32_t now = millis();
-  char text[48];
+  char text[96];  // (AppState::sleepTitle's: the sleep.title_* texts whole in any language)
   if (pick >= 0 && pick < SleepTimer::kTimedChoices) {
     sleepTimer.setTimed(SleepTimer::kMinutes[pick] * 60000u, now);
     uistr::trf(text, sizeof(text), uistr::S::sleep_toast_minutes, SleepTimer::kMinutes[pick]);
@@ -3503,7 +3496,7 @@ void loop() {
       if (cardTasks) cardTasks->armWalk(now);  // the validation walk 2 s after the first frame (3.2.3)
       // It turned itself off last time, or restarted for a new CPU speed:
       // say so, once (stopped or paused where it was).
-      char note[48];
+      char note[96];  // (settings.idle_off_note_*, settings.cpu_boot_note: i18n/en.json's "bytes")
       if (idlePower.takeBootNote(note, sizeof(note)) || powerSettings.takeBootNote(note, sizeof(note))) {
         userInterface->note(note, 6000);
       }

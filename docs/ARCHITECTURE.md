@@ -825,8 +825,9 @@ out what it returns.
   (Disconnect, Forget, the speaker card, pairing others); a cancelled
   connection leaves music already on the speaker playing, whether the
   Speaker row or a B hold cancels it. The
-  card's codec line comes from the SBC configuration ("SBC 44.1 kHz") and
-  the delay report. A pairing scan while headphones stream costs airtime:
+  card's codec line comes from the SBC configuration ("SBC 44.1 kHz": its
+  rate kept in Hz, written as the UI's language writes a rate,
+  `btDetailText()`) and the delay report. A pairing scan while headphones stream costs airtime:
   the Pair screen is the only thing that runs one.
 - **Developer tests that leave the pairing alone** (the console's `B`):
   `Bs` arms auto-pair by signal for the next scan (RAM only, off at boot,

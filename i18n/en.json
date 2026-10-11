@@ -1,7 +1,7 @@
 {
   "@@locale": "en",
   "@@autonym": "English",
-  "@@comment": "The UI's messages in English, the catalogue's source (docs/I18N.md, phase 3; i18n/README.md for translators). After each message, @<id>: its context, its room (font, px, lines), its placeholders and what fills them at worst.",
+  "@@comment": "The UI's messages in English, the catalogue's source (docs/I18N.md, phase 3; i18n/README.md for translators). After each message, @<id>: its context, its room (font, px, lines), its placeholders and what fills them at worst, the buffer it goes through on the device (bytes).",
   "boot.touch_hint": "Touch trouble? Hold a finger on the screen.",
   "@boot.touch_hint": {
     "context": "The boot screen's last line, under the logo and the version: the rescue when the touch is too far off to reach Output > Touch calibration. Holding a finger opens the calibration.",
@@ -29,7 +29,8 @@
         "type": "digits",
         "worst": 2
       }
-    }
+    },
+    "bytes": 48
   },
   "coach.header_hint": "tap to go on",
   "@coach.header_hint": {
@@ -119,7 +120,8 @@
       "px": 98,
       "lines": 2,
       "const": "uitext::kCoachBoxTextW"
-    }
+    },
+    "line_bytes": 64
   },
   "coach.hold_play": "speaker or\nheadphones",
   "@coach.hold_play": {
@@ -129,7 +131,8 @@
       "px": 98,
       "lines": 2,
       "const": "uitext::kCoachBoxTextW"
-    }
+    },
+    "line_bytes": 64
   },
   "coach.hold_next": "volume up",
   "@coach.hold_next": {
@@ -139,7 +142,8 @@
       "px": 98,
       "lines": 2,
       "const": "uitext::kCoachBoxTextW"
-    }
+    },
+    "line_bytes": 64
   },
   "coach.tab": "Tap the tab you're on\nagain: back to its start",
   "@coach.tab": {
@@ -149,7 +153,8 @@
       "px": 308,
       "lines": 2,
       "const": "uitext::kCoachTextW"
-    }
+    },
+    "line_bytes": 96
   },
   "coach.tab_more": "The Library goes back to its lists, the Queue to\nthe playing track, Output leaves pairing.",
   "@coach.tab_more": {
@@ -159,7 +164,8 @@
       "px": 308,
       "lines": 2,
       "const": "uitext::kCoachTextW"
-    }
+    },
+    "line_bytes": 96
   },
   "coach.tips_where": "These tips are in Output > About.",
   "@coach.tips_where": {
@@ -235,7 +241,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "toast.nothing_to_undo": "Nothing to undo",
   "@toast.nothing_to_undo": {
@@ -245,7 +252,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "toast.no_memory": "Not enough memory for that",
   "@toast.no_memory": {
@@ -255,7 +263,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "toast.touch_first": "Tap the screen first, then B plays",
   "@toast.touch_first": {
@@ -265,7 +274,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "toast.no_headphones": "No headphones paired: Output > Pair new headphones",
   "@toast.no_headphones": {
@@ -276,6 +286,7 @@
       "layout": "toast",
       "two_line_px": 284
     },
+    "bytes": 128,
     "note": "The toast splits at the first ': ' onto two lines when it is too long for one: keep ': ' there. 'Output > Pair new headphones' names the tab and its row (tabs.output, output.pair_new)."
   },
   "toast.card_found": "Card found: starting again",
@@ -286,7 +297,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "toast.no_music_to_shuffle": "No music on the card to shuffle",
   "@toast.no_music_to_shuffle": {
@@ -296,7 +308,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "toast.shuffling": {
     "one": "Shuffling {0} track",
@@ -317,7 +330,8 @@
         "worst": 5000
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 96
   },
   "toast.now_playing_on": "Now playing on {0}",
   "@toast.now_playing_on": {
@@ -334,7 +348,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 96
   },
   "toast.now_playing_on_headphones": "Now playing on the headphones",
   "@toast.now_playing_on_headphones": {
@@ -344,7 +359,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 96
   },
   "toast.skipped": "Skipped {0}: {1}",
   "@toast.skipped": {
@@ -364,9 +380,30 @@
       "1": {
         "means": "why: one of the toast.why_* texts",
         "type": "message",
-        "worst": "toast.why_cpu"
+        "worst": "toast.why_cpu",
+        "or": [
+          "toast.why_rate",
+          "toast.why_cant_play",
+          "toast.why_opus_not_ogg",
+          "toast.why_opus_ogg_vorbis",
+          "toast.why_opus_ogg_flac",
+          "toast.why_opus_speex",
+          "toast.why_opus_ogg_video",
+          "toast.why_opus_ogg_not_opus",
+          "toast.why_opus_multiplexed",
+          "toast.why_opus_bad_header",
+          "toast.why_opus_mapping",
+          "toast.why_opus_surround",
+          "toast.why_opus_layout",
+          "toast.why_opus_no_audio",
+          "toast.why_opus_bad_start",
+          "toast.why_opus_family",
+          "toast.why_opus_frames",
+          "toast.why_opus_no_ram"
+        ]
       }
     },
+    "bytes": 128,
     "note": "Split at ': ' onto two lines when too long: the title over the why."
   },
   "toast.skipped_untitled": "Skipped a track: {0}",
@@ -382,9 +419,30 @@
       "0": {
         "means": "why: one of the toast.why_* texts",
         "type": "message",
-        "worst": "toast.why_cpu"
+        "worst": "toast.why_cpu",
+        "or": [
+          "toast.why_rate",
+          "toast.why_cant_play",
+          "toast.why_opus_not_ogg",
+          "toast.why_opus_ogg_vorbis",
+          "toast.why_opus_ogg_flac",
+          "toast.why_opus_speex",
+          "toast.why_opus_ogg_video",
+          "toast.why_opus_ogg_not_opus",
+          "toast.why_opus_multiplexed",
+          "toast.why_opus_bad_header",
+          "toast.why_opus_mapping",
+          "toast.why_opus_surround",
+          "toast.why_opus_layout",
+          "toast.why_opus_no_audio",
+          "toast.why_opus_bad_start",
+          "toast.why_opus_family",
+          "toast.why_opus_frames",
+          "toast.why_opus_no_ram"
+        ]
       }
-    }
+    },
+    "bytes": 128
   },
   "toast.why_cant_play": "can't play it",
   "@toast.why_cant_play": {
@@ -394,7 +452,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 96
   },
   "toast.why_rate": "{0} isn't supported",
   "@toast.why_rate": {
@@ -408,10 +467,14 @@
     "placeholders": {
       "0": {
         "means": "the sample rate (format.khz or format.hz)",
-        "type": "text",
-        "worst": "37.8 kHz"
+        "type": "message",
+        "worst": "format.khz",
+        "or": [
+          "format.hz"
+        ]
       }
-    }
+    },
+    "bytes": 96
   },
   "toast.why_cpu": "needs the 240 MHz CPU speed",
   "@toast.why_cpu": {
@@ -422,6 +485,7 @@
       "px": 284,
       "const": "uitext::kToastTwoLineW"
     },
+    "bytes": 96,
     "note": "'CPU speed' is the setting's name (settings.cpu)."
   },
   "toast.why_opus_not_ogg": "not an Ogg file",
@@ -432,7 +496,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_ogg_vorbis": "Ogg Vorbis isn't supported",
   "@toast.why_opus_ogg_vorbis": {
@@ -442,7 +507,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_ogg_flac": "Ogg FLAC isn't supported",
   "@toast.why_opus_ogg_flac": {
@@ -452,7 +518,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_speex": "Speex isn't supported",
   "@toast.why_opus_speex": {
@@ -462,7 +529,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_ogg_video": "an Ogg video, not Opus",
   "@toast.why_opus_ogg_video": {
@@ -472,7 +540,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_ogg_not_opus": "an Ogg file, but not Opus",
   "@toast.why_opus_ogg_not_opus": {
@@ -482,7 +551,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_multiplexed": "several Ogg streams aren't supported",
   "@toast.why_opus_multiplexed": {
@@ -492,7 +562,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_bad_header": "damaged Opus header",
   "@toast.why_opus_bad_header": {
@@ -502,7 +573,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_mapping": "an unusual Opus channel mapping",
   "@toast.why_opus_mapping": {
@@ -512,7 +584,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_surround": "surround Opus isn't supported",
   "@toast.why_opus_surround": {
@@ -522,7 +595,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_layout": "an unusual Opus channel layout",
   "@toast.why_opus_layout": {
@@ -532,7 +606,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_no_audio": "no audio in it",
   "@toast.why_opus_no_audio": {
@@ -542,7 +617,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_bad_start": "damaged Opus start",
   "@toast.why_opus_bad_start": {
@@ -552,7 +628,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_family": "Opus mapping family {0} isn't supported",
   "@toast.why_opus_family": {
@@ -569,7 +646,8 @@
         "type": "digits",
         "worst": 255
       }
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_frames": "Opus with {0} ms frames isn't supported",
   "@toast.why_opus_frames": {
@@ -587,7 +665,8 @@
         "worst": 2.5,
         "places": 1
       }
-    }
+    },
+    "bytes": 48
   },
   "toast.why_opus_no_ram": "no RAM for the Opus decoder",
   "@toast.why_opus_no_ram": {
@@ -597,7 +676,8 @@
       "else": "Small",
       "px": 284,
       "const": "uitext::kToastTwoLineW"
-    }
+    },
+    "bytes": 48
   },
   "toast.what_why": "{0}: {1}",
   "@toast.what_why": {
@@ -607,15 +687,26 @@
       "0": {
         "means": "what happened",
         "type": "message",
-        "worst": "queue_cap.shuffling"
+        "worst": "queue_cap.shuffling",
+        "or": [
+          "queue_cap.playing",
+          "queue_cap.added",
+          "queue_cap.next",
+          "queue_cap.push_added",
+          "queue_cap.push_next"
+        ]
       },
       "1": {
         "means": "why",
         "type": "message",
-        "worst": "queue_cap.why"
+        "worst": "queue_cap.why",
+        "or": [
+          "queue_cap.pushed"
+        ]
       }
     },
     "translate": "maybe",
+    "bytes": 96,
     "note": "Keep ': ' (a no-break space before it, as French writes, is fine): the toast looks for it."
   },
   "hud.bluetooth": "Bluetooth: {0}",
@@ -631,7 +722,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 96
   },
   "hud.bluetooth_connecting": "Bluetooth: connecting...",
   "@hud.bluetooth_connecting": {
@@ -639,7 +731,8 @@
     "room": {
       "font": "Body",
       "px": 274
-    }
+    },
+    "bytes": 96
   },
   "hud.speaker_paused": "Speaker, paused: B plays",
   "@hud.speaker_paused": {
@@ -647,7 +740,8 @@
     "room": {
       "font": "Body",
       "px": 274
-    }
+    },
+    "bytes": 96
   },
   "hud.speaker": "Speaker",
   "@hud.speaker": {
@@ -655,7 +749,8 @@
     "room": {
       "font": "Body",
       "px": 274
-    }
+    },
+    "bytes": 96
   },
   "hud.silent_mode": "Stays on the speaker (silent test mode)",
   "@hud.silent_mode": {
@@ -665,7 +760,8 @@
       "px": 274
     },
     "translate": "dev",
-    "overflow": "English: 313 px in 274 (developer only)."
+    "overflow": "English: 313 px in 274 (developer only).",
+    "bytes": 96
   },
   "now_playing.title_none": "Nothing playing",
   "@now_playing.title_none": {
@@ -675,7 +771,8 @@
       "px": 190,
       "lines": 2,
       "layout": "wrap"
-    }
+    },
+    "bytes": 160
   },
   "now_playing.unknown_artist": "Unknown artist",
   "@now_playing.unknown_artist": {
@@ -703,7 +800,8 @@
       "font": "Small",
       "px": 190,
       "const": "uitext::kNowPlayingMidW"
-    }
+    },
+    "bytes": 128
   },
   "now_playing.queue_empty": "The queue is empty",
   "@now_playing.queue_empty": {
@@ -712,7 +810,8 @@
       "font": "Small",
       "px": 190,
       "const": "uitext::kNowPlayingMidW"
-    }
+    },
+    "bytes": 128
   },
   "now_playing.position": "{0} of {1}",
   "@now_playing.position": {
@@ -733,7 +832,8 @@
         "type": "digits",
         "worst": 5000
       }
-    }
+    },
+    "bytes": 64
   },
   "now_playing.position_paused": "Paused, {0} of {1}",
   "@now_playing.position_paused": {
@@ -754,7 +854,8 @@
         "type": "digits",
         "worst": 5000
       }
-    }
+    },
+    "bytes": 64
   },
   "now_playing.position_stopped": "Stopped, {0} of {1}",
   "@now_playing.position_stopped": {
@@ -775,7 +876,8 @@
         "type": "digits",
         "worst": 5000
       }
-    }
+    },
+    "bytes": 64
   },
   "now_playing.position_waiting": "Waiting, {0} of {1}",
   "@now_playing.position_waiting": {
@@ -796,7 +898,8 @@
         "type": "digits",
         "worst": 5000
       }
-    }
+    },
+    "bytes": 64
   },
   "now_playing.output_speaker": "Speaker",
   "@now_playing.output_speaker": {
@@ -823,7 +926,8 @@
         "worst": "WH-1000XM4"
       }
     },
-    "overflow": "English: 'WH-1000XM4 (not connected)' is too wide with a 10-character name (cut with …)."
+    "overflow": "English: 'WH-1000XM4 (not connected)' is too wide with a 10-character name (cut with …).",
+    "bytes": 96
   },
   "now_playing.headphones_not_connected": "Headphones (not connected)",
   "@now_playing.headphones_not_connected": {
@@ -832,7 +936,8 @@
       "font": "Small",
       "px": 190,
       "const": "uitext::kNowPlayingMidW"
-    }
+    },
+    "bytes": 96
   },
   "now_playing.waiting_for": "Waiting for {0}…",
   "@now_playing.waiting_for": {
@@ -848,7 +953,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 96
   },
   "now_playing.waiting_for_headphones": "Waiting for the headphones…",
   "@now_playing.waiting_for_headphones": {
@@ -857,7 +963,8 @@
       "font": "Small",
       "px": 196,
       "const": "uitext::kWaitTextW"
-    }
+    },
+    "bytes": 96
   },
   "now_playing.wait_try": "try {0} of {1}",
   "@now_playing.wait_try": {
@@ -878,7 +985,8 @@
         "type": "digits",
         "worst": 3
       }
-    }
+    },
+    "bytes": 96
   },
   "now_playing.wait_looking": "looking for them",
   "@now_playing.wait_looking": {
@@ -887,7 +995,8 @@
       "font": "Small",
       "px": 196,
       "const": "uitext::kWaitTextW"
-    }
+    },
+    "bytes": 96
   },
   "now_playing.wait_connecting": "connecting",
   "@now_playing.wait_connecting": {
@@ -896,7 +1005,8 @@
       "font": "Small",
       "px": 196,
       "const": "uitext::kWaitTextW"
-    }
+    },
+    "bytes": 96
   },
   "now_playing.play_on_speaker": "Play on speaker",
   "@now_playing.play_on_speaker": {
@@ -913,6 +1023,7 @@
         "const": "uitext::kDialogButtonTextW"
       }
     ],
+    "bytes": 48,
     "note": "Also the left button of the 'Couldn't reach' dialog (drawn in Small there when Body is too wide)."
   },
   "now_playing.wait_cancel": "Cancel",
@@ -929,7 +1040,8 @@
     "room": {
       "font": "Small",
       "px": 68
-    }
+    },
+    "bytes": 48
   },
   "now_playing.seek_cancel": "Release to cancel",
   "@now_playing.seek_cancel": {
@@ -945,7 +1057,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "now_playing.go_to_album": "Go to album",
   "@now_playing.go_to_album": {
@@ -953,7 +1066,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "now_playing.go_to_folder": "Go to folder",
   "@now_playing.go_to_folder": {
@@ -961,7 +1075,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "now_playing.builtin_not_in_library": "A built-in track isn't in the Library",
   "@now_playing.builtin_not_in_library": {
@@ -972,7 +1087,8 @@
       "layout": "toast",
       "two_line_px": 284
     },
-    "translate": "dev"
+    "translate": "dev",
+    "bytes": 128
   },
   "now_playing.library_not_ready": "The Library isn't ready yet",
   "@now_playing.library_not_ready": {
@@ -982,7 +1098,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "now_playing.synthetic_library": "Browsing a synthetic library (uil0: the card's)",
   "@now_playing.synthetic_library": {
@@ -993,7 +1110,8 @@
       "layout": "toast",
       "two_line_px": 284
     },
-    "translate": "dev"
+    "translate": "dev",
+    "bytes": 128
   },
   "now_playing.playback_title": "Playback",
   "@now_playing.playback_title": {
@@ -1001,7 +1119,8 @@
     "room": {
       "font": "Small",
       "px": 226
-    }
+    },
+    "bytes": 96
   },
   "now_playing.shuffle": "Shuffle",
   "@now_playing.shuffle": {
@@ -1009,7 +1128,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "now_playing.repeat": "Repeat",
   "@now_playing.repeat": {
@@ -1017,7 +1137,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "now_playing.sleep_timer": "Sleep timer",
   "@now_playing.sleep_timer": {
@@ -1025,7 +1146,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "now_playing.off": "Off",
   "@now_playing.off": {
@@ -1033,7 +1155,8 @@
     "room": {
       "font": "Small",
       "px": 216
-    }
+    },
+    "bytes": 96
   },
   "now_playing.on": "On",
   "@now_playing.on": {
@@ -1041,7 +1164,8 @@
     "room": {
       "font": "Small",
       "px": 216
-    }
+    },
+    "bytes": 96
   },
   "now_playing.repeat_off": "Off",
   "@now_playing.repeat_off": {
@@ -1049,7 +1173,8 @@
     "room": {
       "font": "Small",
       "px": 215
-    }
+    },
+    "bytes": 96
   },
   "now_playing.repeat_all": "All",
   "@now_playing.repeat_all": {
@@ -1057,7 +1182,8 @@
     "room": {
       "font": "Small",
       "px": 215
-    }
+    },
+    "bytes": 96
   },
   "now_playing.repeat_one": "One",
   "@now_playing.repeat_one": {
@@ -1065,7 +1191,8 @@
     "room": {
       "font": "Small",
       "px": 215
-    }
+    },
+    "bytes": 96
   },
   "sleep.title_left": "Sleep timer: {0} left",
   "@sleep.title_left": {
@@ -1086,10 +1213,14 @@
     "placeholders": {
       "0": {
         "means": "the time left: format.minutes or format.seconds",
-        "type": "text",
-        "worst": "90 min"
+        "type": "message",
+        "worst": "format.minutes",
+        "or": [
+          "format.seconds"
+        ]
       }
-    }
+    },
+    "bytes": 96
   },
   "sleep.title_end_track": "Sleep timer: end of track",
   "@sleep.title_end_track": {
@@ -1106,7 +1237,8 @@
         "layout": "toast",
         "two_line_px": 284
       }
-    ]
+    ],
+    "bytes": 96
   },
   "sleep.title_end_album": "Sleep timer: end of album",
   "@sleep.title_end_album": {
@@ -1123,7 +1255,8 @@
         "layout": "toast",
         "two_line_px": 284
       }
-    ]
+    ],
+    "bytes": 96
   },
   "sleep.title_end_queue": "Sleep timer: end of queue",
   "@sleep.title_end_queue": {
@@ -1140,7 +1273,8 @@
         "layout": "toast",
         "two_line_px": 284
       }
-    ]
+    ],
+    "bytes": 96
   },
   "sleep.title_fading": "Sleep timer: fading",
   "@sleep.title_fading": {
@@ -1157,7 +1291,8 @@
         "layout": "toast",
         "two_line_px": 284
       }
-    ]
+    ],
+    "bytes": 96
   },
   "sleep.title_off": "Sleep timer: off",
   "@sleep.title_off": {
@@ -1174,7 +1309,8 @@
         "layout": "toast",
         "two_line_px": 284
       }
-    ]
+    ],
+    "bytes": 96
   },
   "sleep.minutes_90": "90 min",
   "@sleep.minutes_90": {
@@ -1241,7 +1377,8 @@
     "room": {
       "font": "Small",
       "px": 130
-    }
+    },
+    "bytes": 128
   },
   "sleep.row_end_track": "End of track",
   "@sleep.row_end_track": {
@@ -1249,7 +1386,8 @@
     "room": {
       "font": "Small",
       "px": 180
-    }
+    },
+    "bytes": 48
   },
   "sleep.row_end_album": "End of album",
   "@sleep.row_end_album": {
@@ -1257,7 +1395,8 @@
     "room": {
       "font": "Small",
       "px": 180
-    }
+    },
+    "bytes": 48
   },
   "sleep.row_end_queue": "End of queue",
   "@sleep.row_end_queue": {
@@ -1265,7 +1404,8 @@
     "room": {
       "font": "Small",
       "px": 180
-    }
+    },
+    "bytes": 48
   },
   "sleep.row_fading": "Fading",
   "@sleep.row_fading": {
@@ -1273,7 +1413,8 @@
     "room": {
       "font": "Small",
       "px": 180
-    }
+    },
+    "bytes": 48
   },
   "sleep.row_off": "Off",
   "@sleep.row_off": {
@@ -1281,7 +1422,8 @@
     "room": {
       "font": "Small",
       "px": 180
-    }
+    },
+    "bytes": 48
   },
   "sleep.short_track": "track",
   "@sleep.short_track": {
@@ -1289,7 +1431,8 @@
     "room": {
       "font": "Small",
       "px": 177
-    }
+    },
+    "bytes": 32
   },
   "sleep.short_album": "album",
   "@sleep.short_album": {
@@ -1297,7 +1440,8 @@
     "room": {
       "font": "Small",
       "px": 177
-    }
+    },
+    "bytes": 32
   },
   "sleep.short_queue": "queue",
   "@sleep.short_queue": {
@@ -1305,7 +1449,8 @@
     "room": {
       "font": "Small",
       "px": 177
-    }
+    },
+    "bytes": 32
   },
   "sleep.short_fading": "fading",
   "@sleep.short_fading": {
@@ -1313,7 +1458,8 @@
     "room": {
       "font": "Small",
       "px": 177
-    }
+    },
+    "bytes": 32
   },
   "sleep.toast_minutes": "Sleep timer: {0} min",
   "@sleep.toast_minutes": {
@@ -1330,7 +1476,8 @@
         "type": "digits",
         "worst": 90
       }
-    }
+    },
+    "bytes": 96
   },
   "sleep.toast_off": "Sleep timer off",
   "@sleep.toast_off": {
@@ -1340,7 +1487,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 96
   },
   "volume.speaker": "Speaker",
   "@volume.speaker": {
@@ -1348,7 +1496,8 @@
     "room": {
       "font": "Bold",
       "px": 183
-    }
+    },
+    "bytes": 32
   },
   "volume.headphones": "Headphones",
   "@volume.headphones": {
@@ -1356,7 +1505,8 @@
     "room": {
       "font": "Bold",
       "px": 183
-    }
+    },
+    "bytes": 32
   },
   "volume.label": "volume",
   "@volume.label": {
@@ -1401,7 +1551,11 @@
       "0": {
         "means": "the list (library.segment_*) or a folder's name",
         "type": "message",
-        "worst": "library.segment_folders"
+        "worst": "library.segment_folders",
+        "or": [
+          "library.segment_artists",
+          "library.segment_albums"
+        ]
       },
       "1": {
         "means": "the letter",
@@ -1414,7 +1568,8 @@
         "worst": 9999
       }
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "library.segment_artists": "Artists",
   "@library.segment_artists": {
@@ -1446,7 +1601,8 @@
     "room": {
       "font": "Bold",
       "px": 77
-    }
+    },
+    "bytes": 64
   },
   "library.action_play_next": "Play next",
   "@library.action_play_next": {
@@ -1454,7 +1610,8 @@
     "room": {
       "font": "Body",
       "px": 77
-    }
+    },
+    "bytes": 64
   },
   "library.action_queue": "+ Queue",
   "@library.action_queue": {
@@ -1462,7 +1619,8 @@
     "room": {
       "font": "Body",
       "px": 77
-    }
+    },
+    "bytes": 64
   },
   "library.play_all": {
     "one": "Play all {0}",
@@ -1483,6 +1641,7 @@
     },
     "count": "0",
     "overflow": "English: 'Play all 19410' is 126 px in 123 when the Folders root shows the A-Z rail.",
+    "bytes": 48,
     "note": "The count is plural only where your language makes the words agree with it."
   },
   "library.hold_title": {
@@ -1499,7 +1658,10 @@
       "0": {
         "means": "the artist's, album's or folder's name (cut to fit)",
         "type": "text",
-        "worst": "A Long Album Name"
+        "worst": "A Long Album Name",
+        "or": [
+          "library.everything"
+        ]
       },
       "1": {
         "means": "its tracks",
@@ -1507,7 +1669,8 @@
         "worst": 1234
       }
     },
-    "count": "1"
+    "count": "1",
+    "bytes": 96
   },
   "library.header_artist": "Artist",
   "@library.header_artist": {
@@ -1564,7 +1727,8 @@
         "worst": 9999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 160
   },
   "library.crumb": "Library",
   "@library.crumb": {
@@ -1599,7 +1763,8 @@
         "worst": 99999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 24
   },
   "library.albums_n": {
     "one": "{0} album",
@@ -1618,7 +1783,8 @@
         "worst": 1500
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 40
   },
   "library.artists_n": {
     "one": "{0} artist",
@@ -1639,7 +1805,8 @@
         "worst": 9999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 40
   },
   "library.artist_counts": "{0}, {1}",
   "@library.artist_counts": {
@@ -1660,7 +1827,8 @@
         "worst": "library.tracks_n"
       }
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "library.folders_n": {
     "one": "{0} folder",
@@ -1679,7 +1847,8 @@
         "worst": 999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 64
   },
   "library.audio_files_n": {
     "one": "{0} audio file",
@@ -1698,7 +1867,8 @@
         "worst": 9999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 64
   },
   "library.files_n": {
     "one": "{0} file",
@@ -1717,7 +1887,8 @@
         "worst": 9999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 64
   },
   "library.other_n": {
     "one": "{0} other",
@@ -1736,7 +1907,8 @@
         "worst": 9999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 64
   },
   "library.folder_empty": "empty",
   "@library.folder_empty": {
@@ -1744,7 +1916,8 @@
     "room": {
       "font": "Small",
       "px": 214
-    }
+    },
+    "bytes": 64
   },
   "library.disc": "Disc {0}",
   "@library.disc": {
@@ -1760,7 +1933,8 @@
         "type": "digits",
         "worst": 255
       }
-    }
+    },
+    "bytes": 24
   },
   "library.no_artist_folder": "(no artist folder)",
   "@library.no_artist_folder": {
@@ -1774,7 +1948,8 @@
         "font": "Body",
         "px": 190
       }
-    ]
+    ],
+    "bytes": 64
   },
   "library.loose_tracks": "(loose tracks)",
   "@library.loose_tracks": {
@@ -1788,7 +1963,8 @@
         "font": "Body",
         "px": 190
       }
-    ]
+    ],
+    "bytes": 64
   },
   "library.various_artists": "Various Artists",
   "@library.various_artists": {
@@ -1803,6 +1979,7 @@
         "px": 190
       }
     ],
+    "bytes": 64,
     "note": "An album artist tag that says 'Various Artists' itself is a name, and stays as tagged."
   },
   "library.empty_no_music": "No music found: put folders in /music",
@@ -1838,7 +2015,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "library.synthetic": "A synthetic library: browsing only",
   "@library.synthetic": {
@@ -1849,7 +2027,8 @@
       "layout": "toast",
       "two_line_px": 284
     },
-    "translate": "dev"
+    "translate": "dev",
+    "bytes": 128
   },
   "library.waiting_for": "Waiting for {0}: {1}",
   "@library.waiting_for": {
@@ -1869,9 +2048,13 @@
       "1": {
         "means": "what plays: a track's title, or the artist's, album's or folder's name",
         "type": "text",
-        "worst": "A Fairly Long Track Title"
+        "worst": "A Fairly Long Track Title",
+        "or": [
+          "library.everything"
+        ]
       }
-    }
+    },
+    "bytes": 128
   },
   "library.waiting_for_headphones": "Waiting for the headphones: {0}",
   "@library.waiting_for_headphones": {
@@ -1886,9 +2069,13 @@
       "0": {
         "means": "what plays: a track's title, or the artist's, album's or folder's name",
         "type": "text",
-        "worst": "A Fairly Long Track Title"
+        "worst": "A Fairly Long Track Title",
+        "or": [
+          "library.everything"
+        ]
       }
-    }
+    },
+    "bytes": 128
   },
   "library.playing": "Playing: {0}",
   "@library.playing": {
@@ -1903,9 +2090,13 @@
       "0": {
         "means": "a track's title, or the artist's, album's or folder's name",
         "type": "text",
-        "worst": "A Fairly Long Track Title"
+        "worst": "A Fairly Long Track Title",
+        "or": [
+          "library.everything"
+        ]
       }
-    }
+    },
+    "bytes": 128
   },
   "library.everything": "everything",
   "@library.everything": {
@@ -1928,6 +2119,7 @@
         "worst": "A Fairly Long Track Title"
       }
     },
+    "bytes": 128,
     "note": "Also the Queue's toast after a row's Play next."
   },
   "library.plays_next_many": {
@@ -1949,7 +2141,8 @@
         "worst": 4999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 128
   },
   "library.added": "Added: {0}",
   "@library.added": {
@@ -1966,7 +2159,8 @@
         "type": "text",
         "worst": "A Fairly Long Track Title"
       }
-    }
+    },
+    "bytes": 128
   },
   "library.added_many": {
     "one": "Added {0} track",
@@ -1987,7 +2181,8 @@
         "worst": 4999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 128
   },
   "library.status_checking": "Checking the card…",
   "@library.status_checking": {
@@ -1996,7 +2191,8 @@
       "font": "Small",
       "px": 304,
       "const": "uitext::kStatusW"
-    }
+    },
+    "bytes": 64
   },
   "library.status_reading": "Reading tags {0} / {1}",
   "@library.status_reading": {
@@ -2017,7 +2213,8 @@
         "type": "grouped",
         "worst": 99999
       }
-    }
+    },
+    "bytes": 64
   },
   "library.status_updating": "Updating library…",
   "@library.status_updating": {
@@ -2026,7 +2223,8 @@
       "font": "Small",
       "px": 304,
       "const": "uitext::kStatusW"
-    }
+    },
+    "bytes": 64
   },
   "library.status_unfinished": "The last transfer didn't finish",
   "@library.status_unfinished": {
@@ -2035,7 +2233,8 @@
       "font": "Small",
       "px": 304,
       "const": "uitext::kStatusW"
-    }
+    },
+    "bytes": 64
   },
   "library.found": {
     "one": "Found {0} new track",
@@ -2056,7 +2255,8 @@
         "worst": 99999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 48
   },
   "library.updated": "Library updated",
   "@library.updated": {
@@ -2066,7 +2266,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 64
   },
   "library.updates_at_boot": "Library updates at next boot",
   "@library.updates_at_boot": {
@@ -2076,7 +2277,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 64
   },
   "library.updating_list": "Updating the library…",
   "@library.updating_list": {
@@ -2094,7 +2296,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "card.another": "Another card: restarting",
   "@card.another": {
@@ -2104,7 +2307,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "card.back": "Card back: restarting",
   "@card.back": {
@@ -2114,7 +2318,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "queue_cap.full": {
     "one": "No played track can make way: the queue holds {0} track",
@@ -2136,6 +2341,7 @@
       }
     },
     "count": "0",
+    "bytes": 128,
     "note": "Split at ': ' onto two lines (what over why)."
   },
   "queue_cap.why": {
@@ -2156,7 +2362,8 @@
         "worst": 5000
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 64
   },
   "queue_cap.shuffling": "Shuffling {0} of {1}",
   "@queue_cap.shuffling": {
@@ -2176,7 +2383,8 @@
         "type": "grouped",
         "worst": 99999
       }
-    }
+    },
+    "bytes": 64
   },
   "queue_cap.playing": "Playing {0} of {1}",
   "@queue_cap.playing": {
@@ -2196,7 +2404,8 @@
         "type": "grouped",
         "worst": 99999
       }
-    }
+    },
+    "bytes": 64
   },
   "queue_cap.added": "Added {0} of {1}",
   "@queue_cap.added": {
@@ -2216,7 +2425,8 @@
         "type": "grouped",
         "worst": 99999
       }
-    }
+    },
+    "bytes": 64
   },
   "queue_cap.next": "{0} of {1} play next",
   "@queue_cap.next": {
@@ -2236,7 +2446,8 @@
         "type": "grouped",
         "worst": 99999
       }
-    }
+    },
+    "bytes": 64
   },
   "queue_cap.pushed": {
     "one": "{0} played track made way",
@@ -2256,7 +2467,8 @@
         "worst": 4999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 64
   },
   "queue_cap.push_added": {
     "one": "Added",
@@ -2275,7 +2487,8 @@
         "worst": 4999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 64
   },
   "queue_cap.push_next": {
     "one": "Plays next",
@@ -2294,7 +2507,8 @@
         "worst": 4999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 64
   },
   "queue.title": "Queue",
   "@queue.title": {
@@ -2302,7 +2516,8 @@
     "room": {
       "font": "Bold",
       "px": 235
-    }
+    },
+    "bytes": 48
   },
   "queue.empty_sub": "empty",
   "@queue.empty_sub": {
@@ -2310,7 +2525,8 @@
     "room": {
       "font": "Small",
       "px": 200
-    }
+    },
+    "bytes": 64
   },
   "queue.edit": "Edit",
   "@queue.edit": {
@@ -2338,7 +2554,8 @@
         "worst": 5000
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 48
   },
   "queue.selected_of": "of {0}",
   "@queue.selected_of": {
@@ -2353,7 +2570,8 @@
         "type": "digits",
         "worst": 5000
       }
-    }
+    },
+    "bytes": 64
   },
   "queue.all": "All",
   "@queue.all": {
@@ -2389,7 +2607,8 @@
         "type": "digits",
         "worst": 5000
       }
-    }
+    },
+    "bytes": 48
   },
   "queue.summary_nothing_next": "Nothing up next",
   "@queue.summary_nothing_next": {
@@ -2397,7 +2616,8 @@
     "room": {
       "font": "Small",
       "px": 169
-    }
+    },
+    "bytes": 48
   },
   "queue.summary_up_next": {
     "one": "{0} up next",
@@ -2416,7 +2636,8 @@
         "worst": 4999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 48
   },
   "queue.remove_n": "Remove {0}",
   "@queue.remove_n": {
@@ -2432,6 +2653,7 @@
         "worst": 999
       }
     },
+    "bytes": 48,
     "note": "104 px beside the trash icon, which makes way for a long count (132 px then)."
   },
   "queue.remove": "Remove",
@@ -2440,7 +2662,8 @@
     "room": {
       "font": "Bold",
       "px": 104
-    }
+    },
+    "bytes": 48
   },
   "queue.play_next_bar": "Play next",
   "@queue.play_next_bar": {
@@ -2488,7 +2711,8 @@
     "room": {
       "font": "Small",
       "px": 226
-    }
+    },
+    "bytes": 96
   },
   "queue.clear_up_next": "Clear up next",
   "@queue.clear_up_next": {
@@ -2496,7 +2720,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "queue.clear_all": "Clear queue",
   "@queue.clear_all": {
@@ -2504,7 +2729,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "queue.clear_up_next_detail": "keeps what's playing",
   "@queue.clear_up_next_detail": {
@@ -2512,7 +2738,8 @@
     "room": {
       "font": "Small",
       "px": 165
-    }
+    },
+    "bytes": 96
   },
   "queue.clear_all_detail": "stops the music",
   "@queue.clear_all_detail": {
@@ -2520,7 +2747,8 @@
     "room": {
       "font": "Small",
       "px": 175
-    }
+    },
+    "bytes": 96
   },
   "queue.clear_confirm_title": "Clear the whole queue?",
   "@queue.clear_confirm_title": {
@@ -2529,7 +2757,8 @@
       "font": "Bold",
       "px": 260,
       "const": "uitext::kDialogTitleW"
-    }
+    },
+    "bytes": 96
   },
   "queue.clear_confirm_body": {
     "one": "{0} track goes and the music stops. Undo, on the note that follows, brings it back.",
@@ -2550,7 +2779,8 @@
         "worst": 5000
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 256
   },
   "queue.clear_confirm_button": "Clear",
   "@queue.clear_confirm_button": {
@@ -2560,7 +2790,8 @@
       "else": "Small",
       "px": 123,
       "const": "uitext::kDialogButtonTextW"
-    }
+    },
+    "bytes": 48
   },
   "queue.removed_n": {
     "one": "Removed {0} track",
@@ -2581,7 +2812,8 @@
         "worst": 5000
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 96
   },
   "queue.playing_next_n": {
     "one": "Playing next: {0} track",
@@ -2602,7 +2834,8 @@
         "worst": 4999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 96
   },
   "queue.cleared_n": {
     "one": "Cleared {0} track",
@@ -2623,7 +2856,8 @@
         "worst": 5000
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 96
   },
   "queue.thats_playing": "That's what plays now",
   "@queue.thats_playing": {
@@ -2633,7 +2867,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "queue.nothing_after": "Nothing after the playing track",
   "@queue.nothing_after": {
@@ -2643,7 +2878,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "queue.playing_now": "Playing now: {0}",
   "@queue.playing_now": {
@@ -2658,9 +2894,13 @@
       "0": {
         "means": "the entry's title (cut to fit), or queue.it",
         "type": "text",
-        "worst": "A Fairly Long Track Title"
+        "worst": "A Fairly Long Track Title",
+        "or": [
+          "queue.it"
+        ]
       }
-    }
+    },
+    "bytes": 128
   },
   "queue.removed_one": "Removed: {0}",
   "@queue.removed_one": {
@@ -2675,14 +2915,19 @@
       "0": {
         "means": "the entry's title (cut to fit), or queue.it",
         "type": "text",
-        "worst": "A Fairly Long Track Title"
+        "worst": "A Fairly Long Track Title",
+        "or": [
+          "queue.it"
+        ]
       }
-    }
+    },
+    "bytes": 128
   },
   "queue.it": "it",
   "@queue.it": {
     "context": "Stands for a queue entry with no title after a colon ('Removed: it', 'Plays next: it'): a short word for 'this track'.",
-    "room": null
+    "room": null,
+    "bytes": 96
   },
   "queue.not_in_library": "(not in the library)",
   "@queue.not_in_library": {
@@ -2690,7 +2935,8 @@
     "room": {
       "font": "Body",
       "px": 264
-    }
+    },
+    "bytes": 128
   },
   "queue.empty_text": "The queue is empty",
   "@queue.empty_text": {
@@ -2725,7 +2971,8 @@
       "font": "Small",
       "px": 304,
       "const": "uitext::kEmptyLineW"
-    }
+    },
+    "line_bytes": 128
   },
   "empty.open_library": "Open Library",
   "@empty.open_library": {
@@ -2770,7 +3017,8 @@
       "px": 304,
       "lines": 2,
       "const": "uitext::kEmptyLineW"
-    }
+    },
+    "line_bytes": 128
   },
   "card.none_title": "No microSD card",
   "@card.none_title": {
@@ -2789,7 +3037,8 @@
       "px": 304,
       "lines": 2,
       "const": "uitext::kEmptyLineW"
-    }
+    },
+    "line_bytes": 128
   },
   "card.none_still": "Still no card: is it all the way in?",
   "@card.none_still": {
@@ -2799,7 +3048,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "card.exfat_title": "This card is exFAT",
   "@card.exfat_title": {
@@ -2818,7 +3068,8 @@
       "px": 304,
       "lines": 2,
       "const": "uitext::kEmptyLineW"
-    }
+    },
+    "line_bytes": 128
   },
   "card.exfat_still": "Still exFAT: format it FAT32 (MBR)",
   "@card.exfat_still": {
@@ -2828,7 +3079,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "card.ntfs_title": "This card is NTFS",
   "@card.ntfs_title": {
@@ -2847,7 +3099,8 @@
       "px": 304,
       "lines": 2,
       "const": "uitext::kEmptyLineW"
-    }
+    },
+    "line_bytes": 128
   },
   "card.ntfs_still": "Still NTFS: format it FAT32 (MBR)",
   "@card.ntfs_still": {
@@ -2857,7 +3110,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "card.gpt_title": "This card uses GPT",
   "@card.gpt_title": {
@@ -2876,7 +3130,8 @@
       "px": 304,
       "lines": 2,
       "const": "uitext::kEmptyLineW"
-    }
+    },
+    "line_bytes": 128
   },
   "card.gpt_still": "Still GPT: erase it with an MBR",
   "@card.gpt_still": {
@@ -2886,7 +3141,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "card.unknown_title": "Can't read this card",
   "@card.unknown_title": {
@@ -2905,7 +3161,8 @@
       "px": 304,
       "lines": 2,
       "const": "uitext::kEmptyLineW"
-    }
+    },
+    "line_bytes": 128
   },
   "card.unknown_still": "Still can't read it: check it on a computer",
   "@card.unknown_still": {
@@ -2915,7 +3172,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "output.title": "Output",
   "@output.title": {
@@ -2958,7 +3216,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "output.pair_new": "Pair new headphones",
   "@output.pair_new": {
@@ -3166,7 +3425,8 @@
     "room": {
       "font": "Body",
       "px": 70
-    }
+    },
+    "bytes": 24
   },
   "settings.idle_20min": "20 min",
   "@settings.idle_20min": {
@@ -3174,7 +3434,8 @@
     "room": {
       "font": "Body",
       "px": 70
-    }
+    },
+    "bytes": 24
   },
   "settings.idle_60min": "60 min",
   "@settings.idle_60min": {
@@ -3182,7 +3443,8 @@
     "room": {
       "font": "Body",
       "px": 70
-    }
+    },
+    "bytes": 24
   },
   "settings.idle_never": "Never",
   "@settings.idle_never": {
@@ -3190,7 +3452,8 @@
     "room": {
       "font": "Body",
       "px": 70
-    }
+    },
+    "bytes": 24
   },
   "settings.cpu": "CPU speed",
   "@settings.cpu": {
@@ -3233,7 +3496,8 @@
         "type": "digits",
         "worst": 240
       }
-    }
+    },
+    "bytes": 64
   },
   "settings.cpu_240": "240 MHz",
   "@settings.cpu_240": {
@@ -3334,9 +3598,13 @@
       "0": {
         "means": "the speed (settings.cpu_160 or _240)",
         "type": "message",
-        "worst": "settings.cpu_160"
+        "worst": "settings.cpu_160",
+        "or": [
+          "settings.cpu_240"
+        ]
       }
-    }
+    },
+    "bytes": 96
   },
   "settings.cpu_dialog_body": "The speed changes at a restart. The music pauses and picks up at the same second.",
   "@settings.cpu_dialog_body": {
@@ -3346,7 +3614,8 @@
       "px": 260,
       "lines": 3,
       "layout": "wrap"
-    }
+    },
+    "bytes": 256
   },
   "settings.cpu_dialog_body_160": "Saves a little battery; lists scroll at half speed while music plays. Music pauses and picks up at the same second.",
   "@settings.cpu_dialog_body_160": {
@@ -3356,7 +3625,8 @@
       "px": 260,
       "lines": 3,
       "layout": "wrap"
-    }
+    },
+    "bytes": 256
   },
   "settings.cpu_restart": "Restart",
   "@settings.cpu_restart": {
@@ -3366,7 +3636,8 @@
       "else": "Small",
       "px": 123,
       "const": "uitext::kDialogButtonTextW"
-    }
+    },
+    "bytes": 48
   },
   "settings.cpu_wait_pairing": "Wait for the pairing to finish",
   "@settings.cpu_wait_pairing": {
@@ -3376,7 +3647,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "settings.cpu_restarting": "Restarting at {0}…",
   "@settings.cpu_restarting": {
@@ -3391,9 +3663,13 @@
       "0": {
         "means": "the speed (settings.cpu_160 or _240)",
         "type": "message",
-        "worst": "settings.cpu_160"
+        "worst": "settings.cpu_160",
+        "or": [
+          "settings.cpu_240"
+        ]
       }
-    }
+    },
+    "bytes": 96
   },
   "settings.cpu_boot_note": "CPU speed: {0}",
   "@settings.cpu_boot_note": {
@@ -3408,9 +3684,13 @@
       "0": {
         "means": "the speed (settings.cpu_160 or _240)",
         "type": "message",
-        "worst": "settings.cpu_160"
+        "worst": "settings.cpu_160",
+        "or": [
+          "settings.cpu_240"
+        ]
       }
-    }
+    },
+    "bytes": 96
   },
   "settings.idle_warning": "Turning off in {0} s",
   "@settings.idle_warning": {
@@ -3425,7 +3705,8 @@
         "type": "digits",
         "worst": 30
       }
-    }
+    },
+    "bytes": 128
   },
   "settings.idle_keep_on": "Keep on",
   "@settings.idle_keep_on": {
@@ -3450,7 +3731,8 @@
         "type": "digits",
         "worst": 59
       }
-    }
+    },
+    "bytes": 96
   },
   "settings.idle_off_note_min": {
     "one": "Turned off after {0} minute idle",
@@ -3471,7 +3753,8 @@
         "worst": 60
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 96
   },
   "settings.cal": "Touch calibration",
   "@settings.cal": {
@@ -3479,7 +3762,8 @@
     "room": {
       "font": "Body",
       "px": 242
-    }
+    },
+    "bytes": 96
   },
   "settings.cal_off": "Not calibrated",
   "@settings.cal_off": {
@@ -3503,7 +3787,8 @@
     "room": {
       "font": "Bold",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "settings.cal_calibrate_detail": "9 crosses, 20 s",
   "@settings.cal_calibrate_detail": {
@@ -3511,7 +3796,8 @@
     "room": {
       "font": "Small",
       "px": 190
-    }
+    },
+    "bytes": 96
   },
   "settings.cal_test_taps": "Test taps",
   "@settings.cal_test_taps": {
@@ -3526,7 +3812,8 @@
         "px": 162,
         "const": "uitext::kCalTitleW"
       }
-    ]
+    ],
+    "bytes": 64
   },
   "settings.cal_remove_row": "Remove calibration",
   "@settings.cal_remove_row": {
@@ -3534,7 +3821,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "settings.cal_remove_title": "Remove the calibration?",
   "@settings.cal_remove_title": {
@@ -3543,7 +3831,8 @@
       "font": "Bold",
       "px": 260,
       "const": "uitext::kDialogTitleW"
-    }
+    },
+    "bytes": 96
   },
   "settings.cal_remove_body": "Then taps are read as the panel reports them. Calibrate again here any time.",
   "@settings.cal_remove_body": {
@@ -3553,7 +3842,8 @@
       "px": 260,
       "lines": 3,
       "layout": "wrap"
-    }
+    },
+    "bytes": 256
   },
   "settings.cal_remove": "Remove",
   "@settings.cal_remove": {
@@ -3563,7 +3853,8 @@
       "else": "Small",
       "px": 123,
       "const": "uitext::kDialogButtonTextW"
-    }
+    },
+    "bytes": 48
   },
   "settings.cal_removed": "Calibration removed",
   "@settings.cal_removed": {
@@ -3573,7 +3864,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "settings.language": "Language",
   "@settings.language": {
@@ -3623,6 +3915,7 @@
       "layout": "toast",
       "two_line_px": 284
     },
+    "bytes": 128,
     "note": "Keep ': ' (the toast splits there onto two lines when it is too wide for one)."
   },
   "library_row.title": {
@@ -3644,6 +3937,7 @@
       }
     },
     "count": "0",
+    "bytes": 96,
     "note": "When it doesn't fit, library.tracks_n alone."
   },
   "library_row.empty": "Library: no tracks",
@@ -3653,7 +3947,8 @@
       "font": "Body",
       "px": 184,
       "const": "uitext::kLibraryRowW"
-    }
+    },
+    "bytes": 96
   },
   "library_row.src_transfer": {
     "one": "{0} from the transfer",
@@ -3673,7 +3968,8 @@
         "worst": 99999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 160
   },
   "library_row.src_device": {
     "one": "{0} read here",
@@ -3693,7 +3989,8 @@
         "worst": 99999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 160
   },
   "library_row.src_none": {
     "one": "{0} without tags",
@@ -3713,7 +4010,8 @@
         "worst": 99999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 160
   },
   "library_row.src_transfer_short": {
     "one": "{0} transfer",
@@ -3733,7 +4031,8 @@
         "worst": 99999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 160
   },
   "library_row.src_device_short": {
     "one": "{0} here",
@@ -3753,7 +4052,8 @@
         "worst": 99999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 160
   },
   "library_row.src_none_short": {
     "one": "{0} none",
@@ -3773,7 +4073,8 @@
         "worst": 99999
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 160
   },
   "library_row.tagged": "{0}% tagged",
   "@library_row.tagged": {
@@ -3789,7 +4090,8 @@
         "type": "digits",
         "worst": 99
       }
-    }
+    },
+    "bytes": 64
   },
   "library_row.paths": "names from the files",
   "@library_row.paths": {
@@ -3798,7 +4100,8 @@
       "font": "Small",
       "px": 184,
       "const": "uitext::kLibraryRowW"
-    }
+    },
+    "bytes": 64
   },
   "library_row.no_card": "tags need a card",
   "@library_row.no_card": {
@@ -3807,7 +4110,8 @@
       "font": "Small",
       "px": 184,
       "const": "uitext::kLibraryRowW"
-    }
+    },
+    "bytes": 160
   },
   "library_row.updating": "updating…",
   "@library_row.updating": {
@@ -3824,7 +4128,8 @@
         "px": 290,
         "const": "uitext::kDeviceInfoW"
       }
-    ]
+    ],
+    "bytes": 160
   },
   "library_row.rescan": "Rescan",
   "@library_row.rescan": {
@@ -3840,7 +4145,8 @@
         "px": 123,
         "const": "uitext::kDialogButtonTextW"
       }
-    ]
+    ],
+    "bytes": 48
   },
   "library_row.rescan_title": "Rescan tags?",
   "@library_row.rescan_title": {
@@ -3849,7 +4155,8 @@
       "font": "Bold",
       "px": 260,
       "const": "uitext::kDialogTitleW"
-    }
+    },
+    "bytes": 96
   },
   "library_row.rescan_body": "The player reads the tags of its own files again (the transfer's stay as they are). Minutes on a big card.",
   "@library_row.rescan_body": {
@@ -3859,7 +4166,8 @@
       "px": 260,
       "lines": 3,
       "layout": "wrap"
-    }
+    },
+    "bytes": 256
   },
   "library_row.rescan_started": "Reading the tags again",
   "@library_row.rescan_started": {
@@ -3869,7 +4177,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "library_row.rescan_no_card": "Tags are read on a card only",
   "@library_row.rescan_no_card": {
@@ -3879,7 +4188,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "bt.name_not_paired": "Bluetooth headphones",
   "@bt.name_not_paired": {
@@ -3904,7 +4214,8 @@
       "font": "Small",
       "px": 222,
       "const": "uitext::kBtStatusW"
-    }
+    },
+    "bytes": 128
   },
   "bt.status_not_connected": "Not connected",
   "@bt.status_not_connected": {
@@ -3913,7 +4224,8 @@
       "font": "Small",
       "px": 222,
       "const": "uitext::kBtStatusW"
-    }
+    },
+    "bytes": 128
   },
   "bt.status_connecting": "Connecting...",
   "@bt.status_connecting": {
@@ -3922,7 +4234,8 @@
       "font": "Small",
       "px": 222,
       "const": "uitext::kBtStatusW"
-    }
+    },
+    "bytes": 128
   },
   "bt.status_connecting_try": "Connecting...  try {0} of {1}",
   "@bt.status_connecting_try": {
@@ -3943,7 +4256,8 @@
         "type": "digits",
         "worst": 3
       }
-    }
+    },
+    "bytes": 128
   },
   "bt.status_looking": "Looking for {0}...",
   "@bt.status_looking": {
@@ -3959,7 +4273,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 128
   },
   "bt.status_looking_headphones": "Looking for headphones...",
   "@bt.status_looking_headphones": {
@@ -3968,7 +4283,8 @@
       "font": "Small",
       "px": 222,
       "const": "uitext::kBtStatusW"
-    }
+    },
+    "bytes": 128
   },
   "bt.status_pairing": "Pairing...",
   "@bt.status_pairing": {
@@ -3977,7 +4293,8 @@
       "font": "Small",
       "px": 222,
       "const": "uitext::kBtStatusW"
-    }
+    },
+    "bytes": 128
   },
   "bt.status_pairing_try": "Pairing...  try {0} of {1}",
   "@bt.status_pairing_try": {
@@ -3998,7 +4315,8 @@
         "type": "digits",
         "worst": 3
       }
-    }
+    },
+    "bytes": 128
   },
   "bt.status_connected": "Connected",
   "@bt.status_connected": {
@@ -4007,7 +4325,8 @@
       "font": "Small",
       "px": 222,
       "const": "uitext::kBtStatusW"
-    }
+    },
+    "bytes": 128
   },
   "bt.status_connected_detail": "Connected  {0}",
   "@bt.status_connected_detail": {
@@ -4020,10 +4339,14 @@
     "placeholders": {
       "0": {
         "means": "the codec and the delay (bt.detail_codec_delay, bt.detail_delay, or the codec alone)",
-        "type": "text",
-        "worst": "SBC 44.1 kHz, 150 ms"
+        "type": "message",
+        "worst": "bt.detail_codec_delay",
+        "or": [
+          "bt.detail_delay"
+        ]
       }
-    }
+    },
+    "bytes": 128
   },
   "bt.detail_codec_delay": "{0}, {1} ms",
   "@bt.detail_codec_delay": {
@@ -4041,7 +4364,8 @@
         "worst": 150
       }
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 40
   },
   "bt.detail_delay": "{0} ms delay",
   "@bt.detail_delay": {
@@ -4053,7 +4377,8 @@
         "type": "digits",
         "worst": 150
       }
-    }
+    },
+    "bytes": 40
   },
   "bt.status_couldnt_pair": "Couldn't pair. In pairing mode?",
   "@bt.status_couldnt_pair": {
@@ -4062,7 +4387,8 @@
       "font": "Small",
       "px": 222,
       "const": "uitext::kBtStatusW"
-    }
+    },
+    "bytes": 128
   },
   "bt.status_couldnt_connect": "Couldn't connect. On and nearby?",
   "@bt.status_couldnt_connect": {
@@ -4071,7 +4397,8 @@
       "font": "Small",
       "px": 222,
       "const": "uitext::kBtStatusW"
-    }
+    },
+    "bytes": 128
   },
   "bt.status_lost_reconnecting": "Lost: reconnecting...",
   "@bt.status_lost_reconnecting": {
@@ -4080,7 +4407,8 @@
       "font": "Small",
       "px": 222,
       "const": "uitext::kBtStatusW"
-    }
+    },
+    "bytes": 128
   },
   "bt.status_lost_reconnecting_try": "Lost: reconnecting...  try {0} of {1}",
   "@bt.status_lost_reconnecting_try": {
@@ -4101,7 +4429,8 @@
         "type": "digits",
         "worst": 3
       }
-    }
+    },
+    "bytes": 128
   },
   "bt.status_lost_looking": "Lost: looking for {0}...",
   "@bt.status_lost_looking": {
@@ -4117,7 +4446,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 128
   },
   "bt.status_lost_looking_headphones": "Lost: looking for headphones...",
   "@bt.status_lost_looking_headphones": {
@@ -4126,7 +4456,8 @@
       "font": "Small",
       "px": 222,
       "const": "uitext::kBtStatusW"
-    }
+    },
+    "bytes": 128
   },
   "bt.pair_new_headphones": "Pair new headphones",
   "@bt.pair_new_headphones": {
@@ -4199,7 +4530,8 @@
       "font": "Small",
       "px": 164,
       "lines": 2
-    }
+    },
+    "line_bytes": 96
   },
   "bt.lost_hint": "Back in range?\nTap Connect.",
   "@bt.lost_hint": {
@@ -4208,7 +4540,8 @@
       "font": "Small",
       "px": 164,
       "lines": 2
-    }
+    },
+    "line_bytes": 96
   },
   "bt.more_title_default": "Headphones",
   "@bt.more_title_default": {
@@ -4216,7 +4549,8 @@
     "room": {
       "font": "Small",
       "px": 226
-    }
+    },
+    "bytes": 48
   },
   "bt.more_disconnect": "Disconnect",
   "@bt.more_disconnect": {
@@ -4224,7 +4558,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "bt.more_pair_new": "Pair new headphones",
   "@bt.more_pair_new": {
@@ -4232,7 +4567,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "bt.more_forget": "Forget {0}",
   "@bt.more_forget": {
@@ -4247,7 +4583,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 64
   },
   "bt.more_forget_these": "Forget these headphones",
   "@bt.more_forget_these": {
@@ -4255,7 +4592,8 @@
     "room": {
       "font": "Body",
       "px": 288
-    }
+    },
+    "bytes": 64
   },
   "bt.forget_title": "Forget {0}?",
   "@bt.forget_title": {
@@ -4271,7 +4609,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 96
   },
   "bt.forget_title_headphones": "Forget the headphones?",
   "@bt.forget_title_headphones": {
@@ -4280,7 +4619,8 @@
       "font": "Bold",
       "px": 260,
       "const": "uitext::kDialogTitleW"
-    }
+    },
+    "bytes": 96
   },
   "bt.forget_body": "They won't connect again until you pair them on Pair new headphones.",
   "@bt.forget_body": {
@@ -4291,6 +4631,7 @@
       "lines": 3,
       "layout": "wrap"
     },
+    "bytes": 256,
     "note": "'Pair new headphones' names the Output tab's row (output.pair_new)."
   },
   "bt.forget_button": "Forget",
@@ -4301,7 +4642,8 @@
       "else": "Small",
       "px": 123,
       "const": "uitext::kDialogButtonTextW"
-    }
+    },
+    "bytes": 48
   },
   "bt.forgot": "Forgot {0}",
   "@bt.forgot": {
@@ -4318,7 +4660,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 96
   },
   "bt.forgot_headphones": "Forgot the headphones",
   "@bt.forgot_headphones": {
@@ -4328,7 +4671,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 96
   },
   "bt.disconnected_paused": "Disconnected: paused on the speaker",
   "@bt.disconnected_paused": {
@@ -4338,7 +4682,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "bt.disconnected": "Disconnected",
   "@bt.disconnected": {
@@ -4348,7 +4693,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 128
   },
   "speaker.name": "Speaker",
   "@speaker.name": {
@@ -4374,6 +4720,7 @@
         "worst": "WH-1000XM4"
       }
     },
+    "bytes": 96,
     "note": "Shown when it fits; else speaker.waits_for."
   },
   "speaker.here_until_headphones": "Here until the headphones connect",
@@ -4385,6 +4732,7 @@
       "const": "uitext::kSpeakerLineW",
       "optional": true
     },
+    "bytes": 96,
     "note": "Shown when it fits; else speaker.waits_for_headphones."
   },
   "speaker.waits_for": "Waits for {0}",
@@ -4401,7 +4749,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 96
   },
   "speaker.waits_for_headphones": "Waits for the headphones",
   "@speaker.waits_for_headphones": {
@@ -4411,7 +4760,8 @@
       "px": 160,
       "const": "uitext::kSpeakerLineW"
     },
-    "overflow": "English: 167 px in 160 (cut)."
+    "overflow": "English: 167 px in 160 (cut).",
+    "bytes": 96
   },
   "speaker.built_in": "Built-in",
   "@speaker.built_in": {
@@ -4420,7 +4770,8 @@
       "font": "Small",
       "px": 160,
       "const": "uitext::kSpeakerLineW"
-    }
+    },
+    "bytes": 96
   },
   "speaker.silent_mode": "Silent test mode",
   "@speaker.silent_mode": {
@@ -4430,7 +4781,8 @@
       "px": 160,
       "const": "uitext::kSpeakerLineW"
     },
-    "translate": "dev"
+    "translate": "dev",
+    "bytes": 96
   },
   "pair.title": "Pair headphones",
   "@pair.title": {
@@ -4457,7 +4809,8 @@
         "worst": 99
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 48
   },
   "pair.searching": "Searching",
   "@pair.searching": {
@@ -4514,7 +4867,8 @@
         "type": "text",
         "worst": "AB:CD:EF"
       }
-    }
+    },
+    "bytes": 64
   },
   "pair.kind_headphones": "headphones",
   "@pair.kind_headphones": {
@@ -4562,7 +4916,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 96
   },
   "pair.confirm_title_device": "Pair with this device?",
   "@pair.confirm_title_device": {
@@ -4571,7 +4926,8 @@
       "font": "Bold",
       "px": 260,
       "const": "uitext::kDialogTitleW"
-    }
+    },
+    "bytes": 96
   },
   "pair.confirm_body": "It replaces {0} once it's connected; if pairing fails, {0} stays.",
   "@pair.confirm_body": {
@@ -4588,7 +4944,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 256
   },
   "pair.confirm_body_unnamed": "It replaces the headphones paired now once it's connected; if pairing fails, they stay.",
   "@pair.confirm_body_unnamed": {
@@ -4598,7 +4955,8 @@
       "px": 260,
       "lines": 3,
       "layout": "wrap"
-    }
+    },
+    "bytes": 256
   },
   "pair.confirm_button": "Pair",
   "@pair.confirm_button": {
@@ -4608,7 +4966,8 @@
       "else": "Small",
       "px": 123,
       "const": "uitext::kDialogButtonTextW"
-    }
+    },
+    "bytes": 48
   },
   "pair.pairing_with": "Pairing with {0}...",
   "@pair.pairing_with": {
@@ -4625,7 +4984,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 96
   },
   "pair.pairing_with_it": "Pairing with it...",
   "@pair.pairing_with_it": {
@@ -4635,7 +4995,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 96
   },
   "pair.connected_already": "Connected to {0} already",
   "@pair.connected_already": {
@@ -4653,7 +5014,8 @@
         "worst": "WH-1000XM4"
       }
     },
-    "overflow": "English: too wide with a 10-character name."
+    "overflow": "English: too wide with a 10-character name.",
+    "bytes": 96
   },
   "pair.connected_already_them": "Connected to them already",
   "@pair.connected_already_them": {
@@ -4663,7 +5025,8 @@
       "px": 284,
       "layout": "toast",
       "two_line_px": 284
-    }
+    },
+    "bytes": 96
   },
   "about.title": "About",
   "@about.title": {
@@ -4710,10 +5073,15 @@
     "placeholders": {
       "0": {
         "means": "the level (format.percent), or device_info.battery_unknown",
-        "type": "text",
-        "worst": "100%"
+        "type": "message",
+        "worst": "format.percent",
+        "or": [
+          "device_info.battery_volts",
+          "device_info.battery_unknown"
+        ]
       }
-    }
+    },
+    "bytes": 64
   },
   "about.storage": "Storage",
   "@about.storage": {
@@ -4732,7 +5100,8 @@
       "else": "Small",
       "px": 260,
       "const": "uitext::kAboutValueW"
-    }
+    },
+    "bytes": 96
   },
   "about.storage_card_size": "microSD card, {0} GB",
   "@about.storage_card_size": {
@@ -4750,7 +5119,8 @@
         "worst": 512.0,
         "places": 1
       }
-    }
+    },
+    "bytes": 96
   },
   "about.storage_card": "microSD card",
   "@about.storage_card": {
@@ -4760,7 +5130,8 @@
       "else": "Small",
       "px": 260,
       "const": "uitext::kAboutValueW"
-    }
+    },
+    "bytes": 96
   },
   "about.storage_flash": "Internal flash, {0} MB (no card)",
   "@about.storage_flash": {
@@ -4778,7 +5149,8 @@
         "worst": 3.8,
         "places": 1
       }
-    }
+    },
+    "bytes": 96
   },
   "about.library": "Library",
   "@about.library": {
@@ -4816,7 +5188,8 @@
       }
     },
     "translate": "maybe",
-    "overflow": "English: 261 px in Small's 260 with 5-, 4- and 4-digit counts."
+    "overflow": "English: 261 px in Small's 260 with 5-, 4- and 4-digit counts.",
+    "bytes": 128
   },
   "about.no_music": "no music found",
   "@about.no_music": {
@@ -4826,7 +5199,8 @@
       "else": "Small",
       "px": 260,
       "const": "uitext::kAboutValueW"
-    }
+    },
+    "bytes": 128
   },
   "about.headphones": "Headphones",
   "@about.headphones": {
@@ -4845,7 +5219,8 @@
       "else": "Small",
       "px": 260,
       "const": "uitext::kAboutValueW"
-    }
+    },
+    "bytes": 96
   },
   "about.headphones_none": "none paired",
   "@about.headphones_none": {
@@ -4855,7 +5230,8 @@
       "else": "Small",
       "px": 260,
       "const": "uitext::kAboutValueW"
-    }
+    },
+    "bytes": 96
   },
   "about.headphones_connected": "{0}, connected",
   "@about.headphones_connected": {
@@ -4870,9 +5246,13 @@
       "0": {
         "means": "their name, or about.headphones_paired",
         "type": "text",
-        "worst": "WH-1000XM4"
+        "worst": "WH-1000XM4",
+        "or": [
+          "about.headphones_paired"
+        ]
       }
-    }
+    },
+    "bytes": 96
   },
   "about.power": "CPU speed, Bluetooth power",
   "@about.power": {
@@ -4902,7 +5282,11 @@
       "1": {
         "means": "the Bluetooth power (settings.bt_power_*)",
         "type": "message",
-        "worst": "settings.bt_power_normal"
+        "worst": "settings.bt_power_normal",
+        "or": [
+          "settings.bt_power_low",
+          "settings.bt_power_high"
+        ]
       },
       "2": {
         "means": "its range",
@@ -4910,7 +5294,8 @@
         "worst": "-12..+9 dBm"
       }
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 96
   },
   "about.memory": "Memory free",
   "@about.memory": {
@@ -4947,7 +5332,8 @@
         "worst": 7.9,
         "places": 1
       }
-    }
+    },
+    "bytes": 128
   },
   "about.version_label": "Version ({0}, ELF {1})",
   "@about.version_label": {
@@ -4968,7 +5354,8 @@
         "type": "text",
         "worst": "1a2b3c4d"
       }
-    }
+    },
+    "bytes": 96
   },
   "about.licence_label": "Licence (© 2026 IrosTheBeggar)",
   "@about.licence_label": {
@@ -4989,6 +5376,7 @@
       "px": 260,
       "const": "uitext::kAboutValueW"
     },
+    "bytes": 128,
     "note": "'GPL-3.0-or-later' is the licence's identifier: keep it."
   },
   "about.source_label": "Source: github.com/IrosTheBeggar/",
@@ -5184,7 +5572,8 @@
       "else": "Small",
       "px": 290,
       "const": "uitext::kDeviceInfoW"
-    }
+    },
+    "bytes": 64
   },
   "device_info.none_found": "none found",
   "@device_info.none_found": {
@@ -5194,7 +5583,8 @@
       "else": "Small",
       "px": 290,
       "const": "uitext::kDeviceInfoW"
-    }
+    },
+    "bytes": 64
   },
   "device_info.other": "other",
   "@device_info.other": {
@@ -5204,7 +5594,8 @@
       "else": "Small",
       "px": 290,
       "const": "uitext::kDeviceInfoW"
-    }
+    },
+    "bytes": 64
   },
   "device_info.reset_poweron": "power-on",
   "@device_info.reset_poweron": {
@@ -5215,7 +5606,8 @@
       "px": 290,
       "const": "uitext::kDeviceInfoW"
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "device_info.reset_ext": "reset pin",
   "@device_info.reset_ext": {
@@ -5226,7 +5618,8 @@
       "px": 290,
       "const": "uitext::kDeviceInfoW"
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "device_info.reset_sw": "software",
   "@device_info.reset_sw": {
@@ -5237,7 +5630,8 @@
       "px": 290,
       "const": "uitext::kDeviceInfoW"
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "device_info.reset_panic": "PANIC",
   "@device_info.reset_panic": {
@@ -5248,7 +5642,8 @@
       "px": 290,
       "const": "uitext::kDeviceInfoW"
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "device_info.reset_int_wdt": "interrupt watchdog",
   "@device_info.reset_int_wdt": {
@@ -5259,7 +5654,8 @@
       "px": 290,
       "const": "uitext::kDeviceInfoW"
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "device_info.reset_task_wdt": "task watchdog",
   "@device_info.reset_task_wdt": {
@@ -5270,7 +5666,8 @@
       "px": 290,
       "const": "uitext::kDeviceInfoW"
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "device_info.reset_wdt": "watchdog",
   "@device_info.reset_wdt": {
@@ -5281,7 +5678,8 @@
       "px": 290,
       "const": "uitext::kDeviceInfoW"
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "device_info.reset_deepsleep": "deep sleep",
   "@device_info.reset_deepsleep": {
@@ -5292,7 +5690,8 @@
       "px": 290,
       "const": "uitext::kDeviceInfoW"
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "device_info.reset_brownout": "BROWNOUT",
   "@device_info.reset_brownout": {
@@ -5303,7 +5702,8 @@
       "px": 290,
       "const": "uitext::kDeviceInfoW"
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "device_info.chip_rev": "{0} rev {1}",
   "@device_info.chip_rev": {
@@ -5325,7 +5725,8 @@
         "type": "text",
         "worst": "3.1"
       }
-    }
+    },
+    "bytes": 64
   },
   "device_info.psram_value": "{0}K ({1}K free)",
   "@device_info.psram_value": {
@@ -5347,7 +5748,8 @@
         "type": "digits",
         "worst": 4096
       }
-    }
+    },
+    "bytes": 64
   },
   "device_info.battery_unknown": "not known",
   "@device_info.battery_unknown": {
@@ -5357,7 +5759,8 @@
       "else": "Small",
       "px": 290,
       "const": "uitext::kDeviceInfoW"
-    }
+    },
+    "bytes": 40
   },
   "device_info.battery_volts": "{0}, {1} V",
   "@device_info.battery_volts": {
@@ -5371,8 +5774,8 @@
     "placeholders": {
       "0": {
         "means": "the level (format.percent)",
-        "type": "text",
-        "worst": "100%"
+        "type": "message",
+        "worst": "format.percent"
       },
       "1": {
         "means": "the voltage",
@@ -5381,7 +5784,8 @@
         "places": 2
       }
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 40
   },
   "device_info.library_value": "{0}, {1}",
   "@device_info.library_value": {
@@ -5396,7 +5800,11 @@
       "0": {
         "means": "SD, or device_info.storage_flash",
         "type": "text",
-        "worst": "SD"
+        "worst": "SD",
+        "or": [
+          "device_info.storage_flash",
+          "device_info.storage_none"
+        ]
       },
       "1": {
         "means": "library.tracks_n",
@@ -5404,7 +5812,8 @@
         "worst": "library.tracks_n"
       }
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "device_info.library_more": "{0}, {1}, {2}",
   "@device_info.library_more": {
@@ -5419,7 +5828,11 @@
       "0": {
         "means": "SD, or device_info.storage_flash",
         "type": "text",
-        "worst": "SD"
+        "worst": "SD",
+        "or": [
+          "device_info.storage_flash",
+          "device_info.storage_none"
+        ]
       },
       "1": {
         "means": "library.tracks_n",
@@ -5429,10 +5842,15 @@
       "2": {
         "means": "library_row.tagged, library_row.paths or library_row.updating",
         "type": "message",
-        "worst": "library_row.paths"
+        "worst": "library_row.paths",
+        "or": [
+          "library_row.tagged",
+          "library_row.updating"
+        ]
       }
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "device_info.storage_flash": "flash",
   "@device_info.storage_flash": {
@@ -5469,7 +5887,8 @@
         "type": "digits",
         "worst": 999
       }
-    }
+    },
+    "bytes": 64
   },
   "calibration.title": "Touch calibration",
   "@calibration.title": {
@@ -5524,7 +5943,8 @@
         "type": "digits",
         "worst": 9
       }
-    }
+    },
+    "bytes": 32
   },
   "calibration.first_hint": {
     "one": "Tap the centre of each cross\nwith the finger you use. {0} cross.",
@@ -5546,7 +5966,9 @@
         "worst": 9
       }
     },
-    "count": "0"
+    "count": "0",
+    "bytes": 160,
+    "line_bytes": 128
   },
   "calibration.hint": "Tap the centre of the cross",
   "@calibration.hint": {
@@ -5588,7 +6010,8 @@
         "type": "digits",
         "worst": 99
       }
-    }
+    },
+    "bytes": 96
   },
   "calibration.error_calibrated": "Calibrated: up to {0} px off, average {1}",
   "@calibration.error_calibrated": {
@@ -5610,7 +6033,8 @@
         "type": "digits",
         "worst": 99
       }
-    }
+    },
+    "bytes": 96
   },
   "calibration.save_line": "Save it to use it from now on.",
   "@calibration.save_line": {
@@ -5651,7 +6075,8 @@
       "px": 304,
       "lines": 2,
       "const": "uitext::kCalLineW"
-    }
+    },
+    "line_bytes": 128
   },
   "calibration.save": "Save",
   "@calibration.save": {
@@ -5701,9 +6126,17 @@
       "0": {
         "means": "the page's way out: a verb (calibration.cancel, .skip, .done, .undo, .discard, check.not_now)",
         "type": "message",
-        "worst": "check.not_now"
+        "worst": "check.not_now",
+        "or": [
+          "calibration.cancel",
+          "calibration.skip",
+          "calibration.done",
+          "calibration.undo",
+          "calibration.discard"
+        ]
       }
     },
+    "bytes": 64,
     "note": "'A' is the button's name (the left red dot): keep it."
   },
   "calibration.check_lines": "Tap anywhere. The ring should land\nright under your finger.",
@@ -5715,7 +6148,8 @@
       "px": 304,
       "lines": 2,
       "const": "uitext::kCalLineW"
-    }
+    },
+    "line_bytes": 128
   },
   "calibration.check_key": "without calibration",
   "@calibration.check_key": {
@@ -5753,7 +6187,8 @@
       "px": 304,
       "lines": 2,
       "const": "uitext::kCalLineW"
-    }
+    },
+    "line_bytes": 128
   },
   "check.hint": "Tap the centre of the dot",
   "@check.hint": {
@@ -5791,7 +6226,8 @@
         "type": "digits",
         "worst": 95
       }
-    }
+    },
+    "bytes": 160
   },
   "check.verdict_left": "Taps land about {0} px to the left of your finger.",
   "@check.verdict_left": {
@@ -5809,7 +6245,8 @@
         "type": "digits",
         "worst": 95
       }
-    }
+    },
+    "bytes": 160
   },
   "check.verdict_below": "Taps land about {0} px below your finger.",
   "@check.verdict_below": {
@@ -5827,7 +6264,8 @@
         "type": "digits",
         "worst": 95
       }
-    }
+    },
+    "bytes": 160
   },
   "check.verdict_above": "Taps land about {0} px above your finger.",
   "@check.verdict_above": {
@@ -5845,7 +6283,8 @@
         "type": "digits",
         "worst": 95
       }
-    }
+    },
+    "bytes": 160
   },
   "check.verdict_unknown": "Taps land away from your finger.",
   "@check.verdict_unknown": {
@@ -5856,7 +6295,8 @@
       "lines": 2,
       "layout": "wrap",
       "const": "uitext::kCalLineW"
-    }
+    },
+    "bytes": 160
   },
   "check.ask": "Calibrate now?",
   "@check.ask": {
@@ -5910,7 +6350,8 @@
       "font": "Small",
       "px": 116,
       "lines": 2
-    }
+    },
+    "line_bytes": 64
   },
   "dance.bpm": "BPM",
   "@dance.bpm": {
@@ -5984,7 +6425,8 @@
       "font": "Small",
       "px": 98,
       "lines": 2
-    }
+    },
+    "line_bytes": 64
   },
   "dance.title_none": "Nothing playing",
   "@dance.title_none": {
@@ -5992,7 +6434,8 @@
     "room": {
       "font": "Bold",
       "px": 304
-    }
+    },
+    "bytes": 96
   },
   "dance.viz_title": "Dancing to your computer",
   "@dance.viz_title": {
@@ -6020,7 +6463,8 @@
       "else": "Small",
       "px": 123,
       "const": "uitext::kDialogButtonTextW"
-    }
+    },
+    "bytes": 48
   },
   "dialog.lost_title": "{0} disconnected",
   "@dialog.lost_title": {
@@ -6037,6 +6481,7 @@
         "worst": "WH-1000XM4"
       }
     },
+    "bytes": 96,
     "note": "Shown when it fits beside the icon; else dialog.lost_title_generic, the name in the body (dialog.lost_body_named)."
   },
   "dialog.lost_title_generic": "Headphones disconnected",
@@ -6046,7 +6491,8 @@
       "font": "Bold",
       "px": 232
     },
-    "overflow": "English: 235 px in the 232 beside the icon (the last letter cut)."
+    "overflow": "English: 235 px in the 232 beside the icon (the last letter cut).",
+    "bytes": 96
   },
   "dialog.lost_body": "Paused, so the speaker doesn't suddenly play out loud.",
   "@dialog.lost_body": {
@@ -6056,7 +6502,8 @@
       "px": 260,
       "lines": 2,
       "layout": "wrap"
-    }
+    },
+    "bytes": 192
   },
   "dialog.lost_body_named": "{0}: paused, so the speaker doesn't suddenly play out loud.",
   "@dialog.lost_body_named": {
@@ -6073,7 +6520,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 192
   },
   "dialog.lost_body_headphones": "Headphones: paused, so the speaker doesn't suddenly play out loud.",
   "@dialog.lost_body_headphones": {
@@ -6083,7 +6531,8 @@
       "px": 260,
       "lines": 2,
       "layout": "wrap"
-    }
+    },
+    "bytes": 192
   },
   "dialog.lost_trying": "Trying to reconnect: try {0} of {1}",
   "@dialog.lost_trying": {
@@ -6103,7 +6552,8 @@
         "type": "digits",
         "worst": 3
       }
-    }
+    },
+    "bytes": 96
   },
   "dialog.lost_not_trying": "Not trying to reconnect",
   "@dialog.lost_not_trying": {
@@ -6111,7 +6561,8 @@
     "room": {
       "font": "Small",
       "px": 260
-    }
+    },
+    "bytes": 96
   },
   "dialog.lost_resting": "Stopped looking for them: Play tries again",
   "@dialog.lost_resting": {
@@ -6121,6 +6572,7 @@
       "px": 260
     },
     "overflow": "English: 274 px in 260 (the dialog's status line).",
+    "bytes": 96,
     "note": "'Play' is the button B's action."
   },
   "dialog.lost_looking": "Looking for them...",
@@ -6129,7 +6581,8 @@
     "room": {
       "font": "Small",
       "px": 260
-    }
+    },
+    "bytes": 96
   },
   "dialog.lost_use_speaker": "Use speaker",
   "@dialog.lost_use_speaker": {
@@ -6139,7 +6592,8 @@
       "else": "Small",
       "px": 123,
       "const": "uitext::kDialogButtonTextW"
-    }
+    },
+    "bytes": 48
   },
   "dialog.lost_ok": "OK",
   "@dialog.lost_ok": {
@@ -6149,7 +6603,8 @@
       "else": "Small",
       "px": 123,
       "const": "uitext::kDialogButtonTextW"
-    }
+    },
+    "bytes": 48
   },
   "dialog.failed_title": "Couldn't reach {0}",
   "@dialog.failed_title": {
@@ -6167,6 +6622,7 @@
         "worst": "WH-1000XM4"
       }
     },
+    "bytes": 96,
     "note": "Shown when it fits; else dialog.failed_title_them, the name in the body (dialog.failed_body_named)."
   },
   "dialog.failed_title_headphones": "Couldn't reach the headphones",
@@ -6178,6 +6634,7 @@
       "const": "uitext::kDialogTitleW",
       "optional": true
     },
+    "bytes": 96,
     "note": "Shown when it fits; else dialog.failed_title_them and dialog.failed_body_headphones (English: too wide)."
   },
   "dialog.failed_title_them": "Couldn't reach them",
@@ -6187,7 +6644,8 @@
       "font": "Bold",
       "px": 260,
       "const": "uitext::kDialogTitleW"
-    }
+    },
+    "bytes": 96
   },
   "dialog.failed_body": "Are they on, out of the case, and not connected to your phone?",
   "@dialog.failed_body": {
@@ -6197,7 +6655,8 @@
       "px": 260,
       "lines": 3,
       "layout": "wrap"
-    }
+    },
+    "bytes": 192
   },
   "dialog.failed_body_named": "{0}: on, out of the case, and not connected to your phone?",
   "@dialog.failed_body_named": {
@@ -6214,7 +6673,8 @@
         "type": "text",
         "worst": "WH-1000XM4"
       }
-    }
+    },
+    "bytes": 192
   },
   "dialog.failed_body_headphones": "the headphones: on, out of the case, and not connected to your phone?",
   "@dialog.failed_body_headphones": {
@@ -6224,7 +6684,8 @@
       "px": 260,
       "lines": 3,
       "layout": "wrap"
-    }
+    },
+    "bytes": 192
   },
   "dialog.failed_try_again": "Try again",
   "@dialog.failed_try_again": {
@@ -6234,7 +6695,8 @@
       "else": "Small",
       "px": 123,
       "const": "uitext::kDialogButtonTextW"
-    }
+    },
+    "bytes": 48
   },
   "format.percent": "{0}%",
   "@format.percent": {
@@ -6265,6 +6727,7 @@
       }
     },
     "translate": "maybe",
+    "bytes": 16,
     "note": "The tab bar has 36 px for '100%' in Small: a space before % (as de, fr and ru write it) needs a no-break one, and may not fit."
   },
   "format.minutes": "{0} min",
@@ -6280,7 +6743,8 @@
         "type": "text",
         "worst": "999+"
       }
-    }
+    },
+    "bytes": 24
   },
   "format.seconds": "{0} s",
   "@format.seconds": {
@@ -6295,7 +6759,8 @@
         "type": "digits",
         "worst": 59
       }
-    }
+    },
+    "bytes": 24
   },
   "format.minutes_seconds": "{0} min {1} s",
   "@format.minutes_seconds": {
@@ -6317,7 +6782,8 @@
         "type": "text",
         "worst": "59"
       }
-    }
+    },
+    "bytes": 128
   },
   "format.hours_minutes": "{0} h {1} min",
   "@format.hours_minutes": {
@@ -6345,7 +6811,8 @@
         "type": "text",
         "worst": "59+"
       }
-    }
+    },
+    "bytes": 48
   },
   "format.days_hours": "{0} d {1} h",
   "@format.days_hours": {
@@ -6367,7 +6834,8 @@
         "type": "digits",
         "worst": 23
       }
-    }
+    },
+    "bytes": 128
   },
   "format.mhz": "{0} MHz",
   "@format.mhz": {
@@ -6385,7 +6853,8 @@
         "worst": 240
       }
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "format.mb": "{0} MB",
   "@format.mb": {
@@ -6403,7 +6872,8 @@
         "worst": 16
       }
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 64
   },
   "format.khz": "{0} kHz",
   "@format.khz": {
@@ -6417,7 +6887,8 @@
         "places": 1
       }
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 24
   },
   "format.hz": "{0} Hz",
   "@format.hz": {
@@ -6430,7 +6901,8 @@
         "worst": 44056
       }
     },
-    "translate": "maybe"
+    "translate": "maybe",
+    "bytes": 24
   },
   "format.list_sep": ", ",
   "@format.list_sep": {

@@ -32,6 +32,8 @@ namespace {
 const uint16_t kDiscColours[] = {0xFB49, 0x3EBE, 0xFE07, 0x4ECF, 0xA45F, 0xF396};
 const S kActions[3] = {S::library_action_play, S::library_action_play_next, S::library_action_queue};
 const S kSegments[3] = {S::library_segment_artists, S::library_segment_albums, S::library_segment_folders};
+// The console's names for them (it speaks English, whatever the UI's language).
+const char* const kSegmentNames[3] = {"Artists", "Albums", "Folders"};
 
 uint16_t discColour(const char* name) {
   uint32_t h = 2166136261u;
@@ -371,7 +373,7 @@ void LibraryPage::switchSegment(LibrarySegment seg) {
   }
   drawSegments();
   list.attach(this, ref_, 0);
-  Serial.printf("[ui] library: %s\n", tr(kSegments[static_cast<int>(seg)]));
+  Serial.printf("[ui] library: %s\n", kSegmentNames[static_cast<int>(seg)]);
 }
 
 // Two levels down (the root > an artist > an album), the root crumb.
@@ -494,7 +496,7 @@ void LibraryPage::onEvent(const InputEvent& e) {
 void LibraryPage::describe(char* buf, size_t size) const {
   snprintf(buf, size, "Library%s: %s %lu%s%s, %lu rows, what plays: track %ld", real() ? "" : " (SYNTHETIC)",
            pageKindName(static_cast<uint8_t>(kind_)), static_cast<unsigned long>(id_), root() ? " " : "",
-           root() ? tr(kSegments[static_cast<int>(segment())]) : "",
+           root() ? kSegmentNames[static_cast<int>(segment())] : "",
            static_cast<unsigned long>(const_cast<LibraryPage*>(this)->rows()),
            playTrack_ == LibraryIndex::kNone ? -1L : static_cast<long>(playTrack_));
 }

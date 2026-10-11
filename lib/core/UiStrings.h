@@ -129,6 +129,11 @@ Arg fixed(long long scaled, int places, const char* tag = nullptr);
 
 // ---- filling a message ----
 
+// `text` as it is (no placeholders read: a name's braces too) into `out`
+// (`size` > 0, always NUL-terminated), cut at a character boundary when
+// it is too long, as format() cuts: snprintf's "%s" would cut through a
+// UTF-8 sequence. Returns the bytes written.
+size_t copy(char* out, size_t size, const char* text);
 // `pattern` with {0}..{3} replaced by the arguments (a {N} past them, and
 // any other brace, is kept as written), into `out` (`size` > 0, always
 // NUL-terminated). Returns the bytes written; a text too long for `out` is

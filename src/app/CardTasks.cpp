@@ -659,12 +659,12 @@ librarytext::Status CardTasks::status() const {
 
 bool CardTasks::takeToast(char* buf, size_t size) {
   if (!toast_[0]) return false;
-  snprintf(buf, size, "%s", toast_);
+  uistr::copy(buf, size, toast_);  // (cut at a character boundary: a UI text)
   toast_[0] = 0;
   return true;
 }
 
-void CardTasks::toast(const char* text) { snprintf(toast_, sizeof(toast_), "%s", text); }
+void CardTasks::toast(const char* text) { uistr::copy(toast_, sizeof(toast_), text); }
 
 void CardTasks::state(librarytext::Status* s, char* line, size_t size) const {
   *s = status();

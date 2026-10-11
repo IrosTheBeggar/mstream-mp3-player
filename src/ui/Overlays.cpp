@@ -25,9 +25,10 @@ namespace {
 
 M5Canvas* panel_ = nullptr;  // PSRAM, 320 x 204: a sheet, a dialog, the jump grid
 
-void copy(char* dst, size_t size, const char* src) {
-  snprintf(dst, size, "%s", src ? src : "");
-}
+// A text too long for its buffer is cut at a character boundary, never
+// through a UTF-8 sequence (a translation's longer text; i18n/en.json's
+// "bytes" says each buffer, and test_ui_strings checks every language).
+void copy(char* dst, size_t size, const char* src) { uistr::copy(dst, size, src); }
 
 // A sheet's card: rounded at the top only, with its handle.
 void sheetCard(M5Canvas& s, int h) {

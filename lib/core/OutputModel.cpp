@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "RateConverter.h"
 #include "UiStrings.h"
 
 using uistr::S;
@@ -297,6 +298,27 @@ char* btStatusLine(const BtCardView& v, const BtLink& link, const char* name, co
         trf(buf, size, S::bt_status_lost_looking_headphones);
       }
       break;
+  }
+  return buf;
+}
+
+char* btDetailText(const char* codec, uint32_t hz, uint32_t delayMs, char* buf, size_t size) {
+  if (!buf || size == 0) return buf;
+  buf[0] = 0;
+  // The codec and its rate: a name and a number, joined here (as the
+  // codecs' badges are); the rate's decimal mark the language's.
+  char named[32] = "";
+  if (codec && codec[0]) {
+    char rate[24] = "?";
+    if (hz) RateConverter::rateText(hz, rate, sizeof(rate));
+    uistr::format(named, sizeof(named), "{0} {1}", codec, rate);
+  }
+  if (named[0] && delayMs) {
+    trf(buf, size, S::bt_detail_codec_delay, named, delayMs);
+  } else if (named[0]) {
+    uistr::copy(buf, size, named);
+  } else if (delayMs) {
+    trf(buf, size, S::bt_detail_delay, delayMs);
   }
   return buf;
 }

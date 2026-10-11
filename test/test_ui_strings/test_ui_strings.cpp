@@ -5,13 +5,16 @@
 // 3): the tables read back as the catalogue has them (catalogue.h, made by
 // tools/gen_ui_strings.py from i18n/en.json), CLDR 46's plural rules for
 // the ten languages against CLDR's own samples, the {0} formatter, the
-// numbers as each language writes them, and every message of every
-// language in its room, through TextFit with the firmware's own fonts and
-// CJK store: English and each translation must fit (but where its
-// catalogue says "overflow"), the pseudo-locale en-XA (a third longer) is
-// a report, never a failure. The languages' names in themselves in their
-// rows. With UI_STRINGS_REPORT set to a path, the overflows of every
-// language but English go there as JSON.
+// numbers as each language writes them, and every text of every language
+// with a catalogue checked three ways, with the firmware's own fonts and
+// CJK store: every character drawn as itself (every form, line and
+// fragment), every text within the buffers it goes through on the device,
+// and every message in its room through TextFit. English and each
+// translation must pass (a room's "overflow" marks excepted); the
+// pseudo-locale en-XA (a third longer) is a report, never a failure. The
+// languages' names in themselves in their rows. With UI_STRINGS_REPORT set
+// to a path, the overflows of every language but English, the characters
+// missing and the texts cut go there as JSON.
 // Run: pio test -e native -f test_ui_strings
 #include <unity.h>
 
@@ -130,14 +133,24 @@ const catalogue::Entry* entryOf(S id) {
   return nullptr;
 }
 
+// How a placeholder's other fills ("or") are chosen: the widest in the
+// room's font (the width test), or the longest in bytes (the buffers').
+struct Pick {
+  const Vlw* font = nullptr;  // nullptr: by bytes
+  int measure(const std::string& s) const {
+    return font ? textfit::drawnWidth(viewOf(*font), s.c_str()) : static_cast<int>(s.size());
+  }
+};
+
 // A placeholder's worst fill in the UI's language: a count as the code
 // writes it (grouped or its digits), a decimal, a name, or another
-// message (a plural one at its own worst count).
-std::string fill(const catalogue::Placeholder& p, int depth = 0);
+// message (a plural one at its own worst count); of it and the messages
+// its "or" names, the one `pick` says.
+std::string fill(const catalogue::Placeholder& p, const Pick& pick, int depth = 0);
 
 // `e`'s text for the count `n` (its forms by the UI's language's rules),
 // filled at worst; the count placeholder with `n`.
-std::string render(const catalogue::Entry& e, uint32_t n, int depth = 0) {
+std::string render(const catalogue::Entry& e, uint32_t n, const Pick& pick, int depth = 0) {
   const char* pattern = e.plural ? uistr::trn(e.id, n) : uistr::tr(e.id);
   std::vector<std::string> fills(4);
   for (int k = 0; k < 4; ++k) {
@@ -145,7 +158,7 @@ std::string render(const catalogue::Entry& e, uint32_t n, int depth = 0) {
     if (k == e.count) {
       fills[k] = e.ph[k].type == catalogue::Fill::Grouped ? uistr::grouped(n).str() : Arg(n).str();
     } else {
-      fills[k] = fill(e.ph[k], depth);
+      fills[k] = fill(e.ph[k], pick, depth);
     }
   }
   char out[512];
@@ -158,25 +171,37 @@ uint32_t worstCount(const catalogue::Entry& e) {
   return static_cast<uint32_t>(e.ph[e.count].value);
 }
 
-std::string fill(const catalogue::Placeholder& p, int depth) {
+std::string message(uistr::S id, const Pick& pick, int depth) {
+  const catalogue::Entry* m = entryOf(id);
+  if (!m || depth > 2) return "";
+  return render(*m, worstCount(*m), pick, depth + 1);
+}
+
+std::string fill(const catalogue::Placeholder& p, const Pick& pick, int depth) {
   using catalogue::Fill;
+  std::string best;
   switch (p.type) {
     case Fill::Grouped: return uistr::grouped(static_cast<uint64_t>(p.value)).str();
     case Fill::Digits: return Arg(static_cast<long long>(p.value)).str();
     case Fill::Decimal: return uistr::decimal(p.value, p.places).str();
-    case Fill::Text: return p.text;
-    case Fill::Message: {
-      const catalogue::Entry* m = entryOf(p.message);
-      if (!m || depth > 2) return "";
-      return render(*m, worstCount(*m), depth + 1);
-    }
-    case Fill::None: break;
+    case Fill::Text: best = p.text; break;
+    case Fill::Message: best = message(p.message, pick, depth); break;
+    case Fill::None: return "";
   }
-  return "";
+  for (int k = 0; k < p.alts; ++k) {
+    const std::string other = message(p.alt[k], pick, depth);
+    if (pick.measure(other) > pick.measure(best)) best = other;
+  }
+  return best;
 }
 
-// The counts a plural message is tried with: its forms' typical ones, up
-// to its worst.
+// The counts a plural message is tried with, in the UI's language: its
+// forms' typical ones up to its worst, and each of the language's
+// categories at its largest count up to the worst (99,994 is Russian's
+// "few" and 99,991 its "one", wider than "1 002" and "1 001"). CLDR's
+// integer rules here repeat every 100 counts past 1 (a million's "many"
+// is past any worst), so the 200 below the worst find every category but
+// the ones of 0 and 1 alone, which the typical counts have.
 std::vector<uint32_t> countsFor(const catalogue::Entry& e) {
   if (!e.plural) return {0};
   const uint32_t worst = worstCount(e);
@@ -184,7 +209,14 @@ std::vector<uint32_t> countsFor(const catalogue::Entry& e) {
   for (uint32_t n : {0u, 1u, 2u, 3u, 5u, 11u, 21u, 22u, 25u, 101u, 1000u, 1001u, 1002u, 1005u}) {
     if (n <= worst) out.push_back(n);
   }
-  out.push_back(worst);
+  const char* tag = uistr::tag(uistr::lang());
+  unsigned found = 0;
+  for (uint32_t n = worst;; --n) {
+    const unsigned bit = 1u << static_cast<unsigned>(uistr::pluralOf(tag, n));
+    if (!(found & bit) && std::find(out.begin(), out.end(), n) == out.end()) out.push_back(n);
+    found |= bit;
+    if (n == 0 || worst - n >= 200) break;
+  }
   return out;
 }
 
@@ -197,12 +229,10 @@ bool drawable(const textfit::Font& f, const char* s) {
   return !textfit::prepare(f, s, std::strlen(s), out, sizeof(out)).folded;
 }
 
-// A line's width as drawn (TextFit: composed, in pieces), -1 when a glyph
-// is missing from the font and the store.
-int drawnWidth(const Vlw& v, const char* s) {
-  const textfit::Font f = viewOf(v);
-  return drawable(f, s) ? textfit::drawnWidth(f, s) : -1;
-}
+// A line's width as drawn (TextFit: composed, a character the fonts lack
+// as what stands in for it, in pieces). Whether every glyph is there is
+// test_every_text_has_its_glyphs's.
+int drawnWidth(const Vlw& v, const char* s) { return textfit::drawnWidth(viewOf(v), s); }
 
 struct Fit {
   bool ok = true;
@@ -210,21 +240,29 @@ struct Fit {
   std::string why;   // what doesn't fit
 };
 
-// One line in the room's font, else its other font. A glyph the fonts
-// lack doesn't fit (the width then is the font's own sum).
+// One line in the room's font, else its other font.
 bool lineFits(const catalogue::Entry& e, const char* line, int px, int* width) {
-  const Vlw& f = font(e.font);
-  const int w = drawnWidth(f, line);
-  *width = w >= 0 ? w : f.width(line);
-  if (w >= 0 && w <= px) return true;
+  *width = drawnWidth(font(e.font), line);
+  if (*width <= px) return true;
   if (e.elseFont != catalogue::Font::None) {
     const int g = drawnWidth(font(e.elseFont), line);
-    if (g >= 0 && g <= px) {
+    if (g <= px) {
       *width = g;
       return true;
     }
   }
   return false;
+}
+
+// `e` with another font and room (a toast's parts).
+catalogue::Entry roomOf(const catalogue::Entry& e, catalogue::Font f, catalogue::Font elseFont, int px) {
+  catalogue::Entry r = e;
+  r.font = f;
+  r.elseFont = elseFont;
+  r.px = px;
+  r.lines = 1;
+  r.layout = catalogue::Layout::Line;
+  return r;
 }
 
 Fit fits(const catalogue::Entry& e, const std::string& text) {
@@ -236,7 +274,7 @@ Fit fits(const catalogue::Entry& e, const std::string& text) {
     std::vector<char> lines(static_cast<size_t>(e.lines + 1) * 160);
     const int n = textfit::wrap(viewOf(f), text.c_str(), text.size(), e.px, e.lines + 1, lines.data(), 160);
     for (int i = 0; i < n; ++i) r.width = std::max(r.width, textfit::drawnWidth(viewOf(f), lines.data() + i * 160));
-    if (n > e.lines || !drawable(viewOf(f), text.c_str())) {
+    if (n > e.lines) {
       r.ok = false;
       r.why = std::to_string(n) + " lines of " + std::to_string(e.lines);
     }
@@ -246,9 +284,7 @@ Fit fits(const catalogue::Entry& e, const std::string& text) {
     // One Body line; else the what (Small, before ": ") over the rest
     // (Body, else Small), each its two-line room.
     int w = 0;
-    const catalogue::Entry body{e.id, e.name, e.plural, e.one, e.other, catalogue::Font::Body,
-                                catalogue::Font::None, e.px, 1, Layout::Line, 0, e.count, false, false, false, {}};
-    if (lineFits(body, text.c_str(), e.px, &w)) {
+    if (lineFits(roomOf(e, catalogue::Font::Body, catalogue::Font::None, e.px), text.c_str(), e.px, &w)) {
       r.width = w;
       return r;
     }
@@ -260,15 +296,12 @@ Fit fits(const catalogue::Entry& e, const std::string& text) {
       return r;
     }
     const std::string what = text.substr(0, colon), rest = text.substr(colon + 2);
-    const Vlw& small = font(catalogue::Font::Small);
-    const int drawnWhat = drawnWidth(small, what.c_str());
-    const int ww = drawnWhat >= 0 ? drawnWhat : small.width(what.c_str());
-    const catalogue::Entry restRoom{e.id, e.name, e.plural, e.one, e.other, catalogue::Font::Body,
-                                    catalogue::Font::Small, e.twoLinePx, 1, Layout::Line, 0, e.count, false, false, false, {}};
+    const int ww = drawnWidth(font(catalogue::Font::Small), what.c_str());
     int rw = 0;
-    const bool restOk = lineFits(restRoom, rest.c_str(), e.twoLinePx, &rw);
+    const bool restOk = lineFits(roomOf(e, catalogue::Font::Body, catalogue::Font::Small, e.twoLinePx), rest.c_str(),
+                                 e.twoLinePx, &rw);
     r.width = std::max(ww, rw);
-    if (drawnWhat < 0 || ww > e.twoLinePx || !restOk) {
+    if (ww > e.twoLinePx || !restOk) {
       r.ok = false;
       r.why = "two lines: " + std::to_string(ww) + " and " + std::to_string(rw) + " px";
     }
@@ -286,8 +319,7 @@ Fit fits(const catalogue::Entry& e, const std::string& text) {
     int w = 0;
     if (!lineFits(e, line, e.px, &w)) {
       r.ok = false;
-      r.why = "line " + std::to_string(k + 1) + ": " + std::to_string(w) + " px" +
-              (w <= e.px ? ", a character the fonts lack" : "");
+      r.why = "line " + std::to_string(k + 1) + ": " + std::to_string(w) + " px";
     }
     r.width = std::max(r.width, w);
   }
@@ -349,13 +381,34 @@ bool hasCatalogueFile(const char* tag) {
   return false;
 }
 
-// UI_STRINGS_REPORT (a path): the overflows as JSON, for the layout fixes.
+// A character of a language's text that the fonts and the CJK store lack
+// (0: a fold with no one character to name, a voicing mark's).
+struct Missing {
+  std::string lang, id, text;
+  uint32_t cp;
+};
+// A text, filled at worst, longer than a buffer it goes through.
+struct Cut {
+  std::string lang, id, text;
+  int bytes;  // its bytes, the NUL with them
+  int room;   // the buffer's ("bytes"; "line_bytes" for a line)
+  bool line;
+};
+// What test_every_text_has_its_glyphs and test_every_text_fits_its_buffers
+// found, for the report the width test writes (it runs last).
+std::vector<Missing> gMissing;
+std::vector<Cut> gCuts;
+
+// UI_STRINGS_REPORT (a path): the overflows as JSON, for the layout fixes;
+// with the characters the fonts lack and the texts a buffer cuts.
 void writeReport(const std::vector<Overflow>& over, int rooms) {
   const char* path = std::getenv("UI_STRINGS_REPORT");
   if (!path || !path[0]) return;
   FILE* f = std::fopen(path, "wb");
   TEST_ASSERT_NOT_NULL_MESSAGE(f, path);
-  std::fprintf(f, "{\n  \"what\": \"Messages that overflow their room (test_ui_strings), by language\",\n");
+  std::fprintf(f,
+               "{\n  \"what\": \"Messages that overflow their room, characters the fonts and the CJK store lack, "
+               "texts a buffer cuts (test_ui_strings), by language\",\n");
   std::fprintf(f, "  \"rooms\": %d,\n  \"overflows\": [\n", rooms);
   for (size_t i = 0; i < over.size(); ++i) {
     const Overflow& o = over[i];
@@ -366,18 +419,34 @@ void writeReport(const std::vector<Overflow>& over, int rooms) {
                  o.width, static_cast<unsigned long>(o.n), jsonString(o.why).c_str(), jsonString(o.text).c_str(),
                  i + 1 < over.size() ? "," : "");
   }
+  std::fprintf(f, "  ],\n  \"glyphs\": [\n");
+  for (size_t i = 0; i < gMissing.size(); ++i) {
+    const Missing& m = gMissing[i];
+    std::fprintf(f, "    {\"lang\": %s, \"code_point\": \"U+%04lX\", \"id\": %s, \"text\": %s}%s\n",
+                 jsonString(m.lang).c_str(), static_cast<unsigned long>(m.cp), jsonString(m.id).c_str(),
+                 jsonString(m.text).c_str(), i + 1 < gMissing.size() ? "," : "");
+  }
+  std::fprintf(f, "  ],\n  \"cuts\": [\n");
+  for (size_t i = 0; i < gCuts.size(); ++i) {
+    const Cut& c = gCuts[i];
+    std::fprintf(f, "    {\"lang\": %s, \"id\": %s, \"bytes\": %d, \"%s\": %d, \"text\": %s}%s\n",
+                 jsonString(c.lang).c_str(), jsonString(c.id).c_str(), c.bytes, c.line ? "line_bytes" : "buffer",
+                 c.room, jsonString(c.text).c_str(), i + 1 < gCuts.size() ? "," : "");
+  }
   std::fprintf(f, "  ]\n}\n");
   std::fclose(f);
 }
 
-// Every entry with a room, in the UI's language: what doesn't fit.
+// Every entry with a room, in the UI's language: what doesn't fit (its
+// placeholders' other fills at their widest in its font).
 std::vector<Overflow> overflows() {
   std::vector<Overflow> out;
   const char* tag = uistr::tag(uistr::lang());
   for (const auto& e : catalogue::kEntries) {
     if (e.font == catalogue::Font::None || e.optional) continue;  // (optional: another message when it doesn't)
+    const Pick widest{&font(e.font)};
     for (uint32_t n : countsFor(e)) {
-      const std::string text = render(e, n);
+      const std::string text = render(e, n, widest);
       const Fit f = fits(e, text);
       if (!f.ok) {
         out.push_back({e.name, tag, text, f.why, &e, f.width, n});
@@ -385,6 +454,25 @@ std::vector<Overflow> overflows() {
       }
     }
   }
+  return out;
+}
+
+// The texts a language's table holds for `id`: its forms, one a category
+// the language has, in their order (none where its catalogue hasn't the
+// message: English's is drawn, and checked as English's).
+std::vector<std::string> formsOf(Lang l, S id) {
+  const uistr::detail::Table& t = uistr::detail::kTables[static_cast<unsigned>(l)];
+  if (!t.blob) return {};
+  const uint16_t off = t.off[static_cast<unsigned>(id)];
+  if (off == uistr::detail::kMissing) return {};
+  int n = 1;
+  if (uistr::plural(id)) {
+    n = 0;
+    for (unsigned set = uistr::pluralSet(t.tag); set; set &= set - 1) ++n;
+  }
+  std::vector<std::string> out;
+  const char* p = t.blob + off;
+  for (int k = 0; k < n; ++k, p += std::strlen(p) + 1) out.push_back(p);
   return out;
 }
 
@@ -606,6 +694,21 @@ void test_format() {
   char one[1];
   TEST_ASSERT_EQUAL_size_t(0, uistr::format(one, sizeof(one), "abc"));
   TEST_ASSERT_EQUAL_STRING("", one);
+  // copy(): a text as it is (a name's braces too), cut as format() cuts
+  // (the overlays' and the card's toast's copies: snprintf cut through).
+  TEST_ASSERT_EQUAL_size_t(8, uistr::copy(b, sizeof(b), "{0} 100%"));
+  TEST_ASSERT_EQUAL_STRING("{0} 100%", b);
+  TEST_ASSERT_EQUAL_size_t(5, uistr::copy(six, sizeof(six), "ab\xE2\x80\xA6x"));
+  TEST_ASSERT_EQUAL_STRING("ab\xE2\x80\xA6", six);
+  TEST_ASSERT_EQUAL_size_t(2, uistr::copy(five, sizeof(five), "ab\xE2\x80\xA6x"));
+  TEST_ASSERT_EQUAL_STRING("ab", five);
+  TEST_ASSERT_EQUAL_size_t(4, uistr::copy(five, sizeof(five), "\xD0\x92\xD1\x8B\xD0\xBA"));  // "Вык": 2 of 3 letters
+  TEST_ASSERT_EQUAL_STRING("\xD0\x92\xD1\x8B", five);
+  TEST_ASSERT_EQUAL_size_t(0, uistr::copy(b, sizeof(b), nullptr));
+  TEST_ASSERT_EQUAL_STRING("", b);
+  TEST_ASSERT_EQUAL_size_t(0, uistr::copy(one, sizeof(one), "abc"));
+  TEST_ASSERT_EQUAL_STRING("", one);
+  TEST_ASSERT_EQUAL_size_t(0, uistr::copy(nullptr, 4, "abc"));
   // An Arg copied keeps its own text (a number's digits live in it).
   const Arg a = 1234;
   const Arg copy = a;
@@ -711,15 +814,185 @@ void test_rooms_are_the_codes() {
   }
 }
 
+// A plural message is tried at each category's widest count up to its
+// worst: Russian's and Polish's "few" at 99,994 and 994, not only 1,002
+// and 22; Russian's "one" at 99,991.
+void test_counts_reach_every_category_at_its_widest() {
+  const catalogue::Entry* tracks = entryOf(S::library_tracks_n);  // worst 99,999
+  const catalogue::Entry* folders = entryOf(S::library_folders_n);  // worst 999
+  TEST_ASSERT_EQUAL_UINT32(99999, worstCount(*tracks));
+  TEST_ASSERT_EQUAL_UINT32(999, worstCount(*folders));
+  auto has = [](const std::vector<uint32_t>& v, uint32_t n) { return std::find(v.begin(), v.end(), n) != v.end(); };
+  uistr::setLang(Lang::Ru);
+  std::vector<uint32_t> c = countsFor(*tracks);
+  for (uint32_t n : {1u, 2u, 5u, 1001u, 1002u, 99991u, 99994u, 99999u}) TEST_ASSERT_TRUE_MESSAGE(has(c, n), "ru");
+  c = countsFor(*folders);
+  for (uint32_t n : {991u, 994u, 999u}) TEST_ASSERT_TRUE_MESSAGE(has(c, n), "ru 999");
+  uistr::setLang(Lang::Pl);
+  c = countsFor(*tracks);
+  TEST_ASSERT_TRUE(has(c, 99994));  // few
+  TEST_ASSERT_TRUE(has(c, 99999));  // many
+  TEST_ASSERT_FALSE(has(c, 99991));  // Polish's one is 1 alone: many, as 99,999
+  uistr::setLang(Lang::En);
+  c = countsFor(*tracks);
+  TEST_ASSERT_TRUE(has(c, 1));
+  TEST_ASSERT_TRUE(has(c, 99999));
+  for (size_t i = 0; i < c.size(); ++i) {
+    for (size_t j = i + 1; j < c.size(); ++j) TEST_ASSERT_TRUE(c[i] != c[j]);  // each once
+  }
+  TEST_ASSERT_EQUAL_size_t(1, countsFor(*entryOf(S::toast_undone)).size());  // not plural
+}
+
+// A placeholder that another message may fill ("or" in en.json) is tried
+// with each: the widest in the room's font, the longest in bytes.
+void test_other_fills_are_tried() {
+  const catalogue::Entry& lib = *entryOf(S::device_info_library_value);  // {0}: SD, or the flash, or none
+  TEST_ASSERT_EQUAL_STRING("flash, 99,999 tracks", render(lib, 0, Pick{}).c_str());  // 5 bytes
+  // "none" is the wider in DejaVu Sans 16 (40 px; "flash" 38).
+  const Vlw& body = font(catalogue::Font::Body);
+  TEST_ASSERT_GREATER_THAN_INT(drawnWidth(body, "flash"), drawnWidth(body, "none"));
+  TEST_ASSERT_EQUAL_STRING("none, 99,999 tracks", render(lib, 0, Pick{&body}).c_str());
+  // A text fill retyped as the messages that make it: the minutes or the
+  // seconds; the rate in kHz or Hz; the codec's line or the delay alone.
+  TEST_ASSERT_EQUAL_STRING("Sleep timer: 999+ min left", render(*entryOf(S::sleep_title_left), 0, Pick{}).c_str());
+  TEST_ASSERT_EQUAL_STRING("37.8 kHz isn't supported", render(*entryOf(S::toast_why_rate), 0, Pick{}).c_str());
+  // (As many bytes, the worst stays; "44056 Hz" is the wider in Body.)
+  const std::string rate = fill(entryOf(S::toast_why_rate)->ph[0], Pick{&font(catalogue::Font::Body)});
+  TEST_ASSERT_EQUAL_STRING("44056 Hz", rate.c_str());
+  TEST_ASSERT_EQUAL_STRING("Connected  SBC 44.1 kHz, 150 ms",
+                           render(*entryOf(S::bt_status_connected_detail), 0, Pick{}).c_str());
+  // The skipped track's why: the longest of every toast.why_*.
+  TEST_ASSERT_EQUAL_STRING("Skipped A Fairly Long Track Title: Opus mapping family 255 isn't supported",
+                           render(*entryOf(S::toast_skipped), 0, Pick{}).c_str());
+  // In the pseudo-locale, its own texts (longer, accented).
+  uistr::setLang(Lang::EnXA);
+  const std::string p = render(lib, 0, Pick{});
+  TEST_ASSERT_TRUE_MESSAGE(p.find(uistr::tr(S::device_info_storage_flash)) != std::string::npos, p.c_str());
+  uistr::setLang(Lang::En);
+}
+
+// Every text of every language with a catalogue has a glyph for each of
+// its characters, as TextFit draws it (composed; folded to a look-alike or
+// '?' is a failure): every form of a plural, every line, the fragments
+// that have no room of their own, the optional rooms' and the ones marked
+// "overflow" too (the width test passes those by). Each character missing
+// is named, U+XXXX, with the ids that use it (UI_STRINGS_REPORT's
+// "glyphs"): the CJK store takes it (tools/glyph_store.py reads i18n/), or
+// the text says it otherwise. The four fonts have the same characters, so
+// one font's view (and the store) says it for every role.
+void test_every_text_has_its_glyphs() {
+  const Vlw& body = font(catalogue::Font::Body);
+  for (const auto f : {catalogue::Font::Small, catalogue::Font::Bold, catalogue::Font::Title}) {
+    TEST_ASSERT_EQUAL_size_t(body.advance.size(), font(f).advance.size());
+    for (size_t i = 0; i < body.advance.size(); ++i) {
+      TEST_ASSERT_EQUAL_UINT32(body.advance[i].first, font(f).advance[i].first);
+    }
+  }
+  const textfit::Font view = viewOf(body);
+  gMissing.clear();
+  int texts = 0;
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const Lang l = static_cast<Lang>(i);
+    const char* tag = uistr::tag(l);
+    if (!uistr::hasCatalogue(l)) continue;
+    const size_t before = gMissing.size();
+    for (unsigned id = 0; id < uistr::kStrings; ++id) {
+      for (const std::string& form : formsOf(l, static_cast<S>(id))) {
+        ++texts;
+        for (int k = 0; k < uistr::lineCount(form.c_str()); ++k) {
+          char line[512];
+          uistr::line(form.c_str(), k, line, sizeof(line));
+          if (drawable(view, line)) continue;
+          const char* name = entryOf(static_cast<S>(id))->name;
+          bool named = false;
+          textfold::Composer c(line);
+          while (const uint32_t cp = c.next()) {
+            if (body.has(cp)) continue;
+            gMissing.push_back({tag, name, line, cp});
+            named = true;
+          }
+          if (!named) gMissing.push_back({tag, name, line, 0});
+        }
+      }
+    }
+    for (size_t k = before; k < gMissing.size(); ++k) {
+      printf("%s: U+%04lX isn't in the fonts or the CJK store: %s: \"%s\"\n", tag,
+             static_cast<unsigned long>(gMissing[k].cp), gMissing[k].id.c_str(), gMissing[k].text.c_str());
+    }
+  }
+  printf("%d texts, every language's: %d characters missing\n", texts, static_cast<int>(gMissing.size()));
+  TEST_ASSERT_EQUAL_INT_MESSAGE(0, static_cast<int>(gMissing.size()), "characters the fonts and the store lack: above");
+}
+
+// Every text of every language with a catalogue, filled at worst (its
+// placeholders' other fills at their longest, each count a plural form can
+// show), fits the smallest buffer it goes through on the device (en.json's
+// "bytes", a NUL in it; "line_bytes" for each line where the code copies
+// it a line at a time). A text cut there would be cut at a character
+// boundary at best (uistr's copies), through one at worst (an snprintf):
+// so a translation that doesn't fit fails, whatever its width, and the
+// buffer grows or the text gets shorter. The pseudo-locale's are a report.
+void test_every_text_fits_its_buffers() {
+  gCuts.clear();
+  int bad = 0, checked = 0;
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const Lang l = static_cast<Lang>(i);
+    const char* tag = uistr::tag(l);
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    const Pick longest{};
+    std::vector<S> seen;
+    int cuts = 0;
+    for (const auto& e : catalogue::kEntries) {
+      if ((!e.bytes && !e.lineBytes) || std::find(seen.begin(), seen.end(), e.id) != seen.end()) continue;
+      seen.push_back(e.id);  // (an entry a room: the buffers are the message's)
+      ++checked;
+      for (uint32_t n : countsFor(e)) {
+        const std::string text = render(e, n, longest);
+        const int bytes = static_cast<int>(text.size()) + 1;
+        bool cut = false;
+        if (e.bytes && bytes > e.bytes) {
+          gCuts.push_back({tag, e.name, text, bytes, e.bytes, false});
+          cut = true;
+        }
+        for (int k = 0; e.lineBytes && !cut && k < uistr::lineCount(text.c_str()); ++k) {
+          char line[512];
+          const int lb = static_cast<int>(uistr::line(text.c_str(), k, line, sizeof(line))) + 1;
+          if (lb > e.lineBytes) {
+            gCuts.push_back({tag, e.name, line, lb, e.lineBytes, true});
+            cut = true;
+          }
+        }
+        if (!cut) continue;
+        ++cuts;
+        if (l != Lang::EnXA) {
+          const Cut& c = gCuts.back();
+          printf("%s: CUT: %s: \"%s\": %d bytes, its buffer %d%s\n", tag, c.id.c_str(), c.text.c_str(), c.bytes, c.room,
+                 c.line ? " a line" : "");
+          ++bad;
+        }
+        break;  // one count is enough to say so
+      }
+    }
+    printf("%s: %d texts longer than a buffer they go through%s\n", tag, cuts,
+           l == Lang::EnXA ? " (the pseudo-locale: a report)" : "");
+  }
+  uistr::setLang(Lang::En);
+  printf("%d texts with a buffer, every language's\n", checked);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(0, bad, "texts longer than their buffers: above");
+}
+
 // Every language with a catalogue, every message in every room it has, as
-// TextFit draws it with the firmware's fonts and CJK store (composed, no
-// glyph missing), its placeholders at their worst. A real language
-// (English, and each translation as it lands in i18n/) must fit, but where
-// its catalogue says "overflow" (a layout fix to come; English's marks
-// count for all), and each of its own marks must still overflow (else the
-// mark goes). The pseudo-locale (accented, a third longer) is where a
-// longer language won't fit: a report (UI_STRINGS_REPORT: JSON), never a
-// failure. A language with no catalogue yet draws English: nothing more.
+// TextFit draws it with the firmware's fonts and CJK store (composed),
+// its placeholders at their worst (the widest of their other fills too).
+// A real language (English, and each translation as it lands in i18n/)
+// must fit, but where its catalogue says "overflow" (a layout fix to come;
+// English's marks count for all), and each of its own marks must still
+// overflow (else the mark goes). The pseudo-locale (accented, a third
+// longer) is where a longer language won't fit: a report
+// (UI_STRINGS_REPORT: JSON), never a failure. A language with no catalogue
+// yet draws English: nothing more. Widths only: a character the fonts lack
+// is test_every_text_has_its_glyphs's.
 void test_every_language_fits_its_rooms() {
   std::vector<Overflow> report;  // every language's but English's
   int bad = 0;
@@ -779,6 +1052,7 @@ void test_autonyms_fit() {
   for (unsigned i = 0; i < uistr::kLangs; ++i) {
     const char* a = uistr::autonym(static_cast<Lang>(i));
     for (const Room& r : rooms) {
+      TEST_ASSERT_TRUE_MESSAGE(drawable(viewOf(font(r.font)), a), a);
       const int w = drawnWidth(font(r.font), a);
       TEST_ASSERT_TRUE_MESSAGE(w > 0, a);
       TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(r.px, w, a);
@@ -798,7 +1072,11 @@ int main(int, char**) {
   RUN_TEST(test_numbers);
   RUN_TEST(test_pseudo_locale);
   RUN_TEST(test_rooms_are_the_codes);
-  RUN_TEST(test_every_language_fits_its_rooms);
+  RUN_TEST(test_counts_reach_every_category_at_its_widest);
+  RUN_TEST(test_other_fills_are_tried);
+  RUN_TEST(test_every_text_has_its_glyphs);
+  RUN_TEST(test_every_text_fits_its_buffers);
+  RUN_TEST(test_every_language_fits_its_rooms);  // (last: it writes UI_STRINGS_REPORT with the two above's)
   RUN_TEST(test_autonyms_fit);
   return UNITY_END();
 }

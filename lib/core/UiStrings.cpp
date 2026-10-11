@@ -329,6 +329,14 @@ Arg fixed(long long scaled, int places, const char* t) {
 
 // ---- filling a message ----
 
+size_t copy(char* out, size_t size, const char* text) {
+  if (!out || size == 0) return 0;
+  size_t at = 0;
+  put(out, size, &at, text ? text : "", text ? std::strlen(text) : 0);
+  out[at] = 0;
+  return at;
+}
+
 size_t formatArgs(char* out, size_t size, const char* pattern, const Arg* args, int count) {
   if (!out || size == 0) return 0;
   size_t at = 0;

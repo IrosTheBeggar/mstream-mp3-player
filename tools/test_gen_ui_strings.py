@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 IrosTheBeggar
 """Tests for tools/gen_ui_strings.py: what the catalogue's check refuses
-(English's metadata, a translation's ids, placeholders, plural forms and
-lines), the pseudo-locale, and the C literal of the tables read back
-(docs/I18N.md, phase 3).
+(English's metadata, a placeholder's other fills, a translation's ids,
+placeholders, plural forms, lines, buffers and characters the device
+can't draw, a file that isn't UTF-8), the pseudo-locale, and the C
+literal of the tables read back (docs/I18N.md, phase 3).
 
     python -m unittest discover -s tools -p "test_gen_ui_strings.py"
 
@@ -135,6 +136,47 @@ class English(unittest.TestCase):
         d["a.two"] = "1\n2\n3"
         self.bad(d, "3 lines, the room has 2")
 
+    def test_buffers(self):
+        # "bytes" and "line_bytes": the buffers on the device, a NUL in
+        # them; the generator checks a text with no placeholders.
+        d = english()
+        d["@a.plain"]["bytes"] = 5
+        checked(d)  # "Undo" and its NUL
+        d["@a.plain"]["bytes"] = 4
+        self.bad(d, "4 bytes of UTF-8, its buffer holds 3")
+        d = english()
+        d["@a.of"]["bytes"] = 2  # {0} of {1}: filled, test_ui_strings' to check
+        checked(d)
+        d = english()
+        d["@a.two"]["line_bytes"] = 6
+        self.bad(d, "a line of 6 bytes of UTF-8, its buffer holds 5")
+        d["@a.two"]["line_bytes"] = 7
+        checked(d)
+        for bad in (0, 1, "8", 2.5, True):
+            d = english()
+            d["@a.plain"]["bytes"] = bad
+            self.bad(d, "a buffer's size")
+
+    def test_other_fills(self):
+        # "or": the other messages a placeholder may hold.
+        d = english()
+        d["@a.of"]["placeholders"]["0"] = {"means": "m", "type": "message", "worst": "a.plain", "or": ["a.two"]}
+        checked(d)
+        d["@a.of"]["placeholders"]["0"]["or"] = ["a.nothing"]
+        self.bad(d, "or names 'a.nothing'")
+        d["@a.of"]["placeholders"]["0"]["or"] = ["a.of"]
+        self.bad(d, "the message itself")
+        d["@a.of"]["placeholders"]["0"]["or"] = ["a.two", "a.two"]
+        self.bad(d, "each once")
+        d["@a.of"]["placeholders"]["0"]["or"] = ["a.plain"]  # the worst again
+        self.bad(d, "each once")
+        d["@a.of"]["placeholders"]["0"]["or"] = []
+        self.bad(d, "a list of message ids")
+        d["@a.of"]["placeholders"]["0"] = {"means": "m", "type": "digits", "worst": 9, "or": ["a.two"]}
+        self.bad(d, "or is for a text or a message")
+        d["@a.of"]["placeholders"]["0"] = {"means": "m", "type": "text", "worst": "SD", "or": ["a.plain"]}
+        checked(d)
+
     def test_rooms(self):
         d = english()
         d["@a.plain"]["room"] = None  # a fragment
@@ -222,6 +264,54 @@ class Translations(unittest.TestCase):
         translate("de", {"a.two": "eine Zeile"})
         self.bad("de", {"a.two": "1\n2\n3"}, "3 lines")
         self.bad("de", {"a.plain": "Rück\ngängig"}, "2 lines")
+
+    def test_buffers(self):
+        eng, _ = checked(english({"@a.plain": {"context": "a button", "room": ROOM, "bytes": 11}}))
+        data = {"@@locale": "ru", "@@autonym": "Русский", "a.plain": "Отменить"}  # 16 bytes
+        with self.assertRaises(g.Bad) as e:
+            g.check_translation("ru", data, eng)
+        self.assertIn("ru.json a.plain: 16 bytes of UTF-8, its buffer holds 10", str(e.exception))
+        data["a.plain"] = "Отмена"  # 12: still not
+        with self.assertRaises(g.Bad):
+            g.check_translation("ru", data, eng)
+        data["a.plain"] = "Назад"  # 10
+        g.check_translation("ru", data, eng)
+
+    def test_characters_the_device_draws(self):
+        # The fonts' (Latin, Greek, Cyrillic) and the CJK store's, composed.
+        translate("ja", {"a.plain": "元に戻す", "a.of": "{1} 曲中 {0}"})
+        translate("zh", {"a.plain": "撤销。「完成」、"})
+        translate("de", {"a.plain": "Rückgängig"})  # NFD: composed as the device does
+        # Fullwidth forms are folded to ASCII on the device: refused, named.
+        with self.assertRaises(g.Bad) as e:
+            translate("zh", {"a.plain": "撤销（全部），完成：", "a.two": "第一行\n第二行！"})
+        msg = str(e.exception)
+        for cp in ("U+FF08", "U+FF09", "U+FF0C", "U+FF1A", "U+FF01"):
+            self.assertIn(cp, msg)
+        self.assertIn("5 character(s)", msg)  # every one at once
+        self.assertIn("drawn as the ASCII ','", msg)
+        self.assertIn("a.two", msg)
+        # A hanzi neither the fonts nor the store has (GB2312 level 2).
+        with self.assertRaises(g.Bad) as e:
+            translate("zh", {"a.plain": "锂电池"})
+        self.assertIn("U+9502", str(e.exception))
+        self.assertIn("tools/glyph_store.py", str(e.exception))
+        self.bad("ja", {"a.plain": "ｶﾀｶﾅ"}, "halfwidth katakana")
+        self.bad("ru", {"a.plain": "−"}, "the minus sign")
+
+    def test_not_utf8_or_a_surrogate(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "de.json"
+            path.write_bytes(b'{"@@locale": "de", "a.plain": "R\xe9sum\xe9"}')
+            with self.assertRaises(g.Bad) as e:
+                g.load(path)
+            self.assertIn("de.json: not UTF-8", str(e.exception))
+            path.write_text('{"@@locale": "de", "@@autonym": "Deutsch", "a.plain": "Weiter \\ud800"}', encoding="utf-8")
+            eng, _ = checked(english())
+            with self.assertRaises(g.Bad) as e:
+                g.check_translation("de", g.load(path), eng)
+            self.assertIn("de.json a.plain: a lone surrogate U+D800", str(e.exception))
 
     def test_unknown_language(self):
         self.assertNotIn("xx", g.LANGS)
@@ -322,6 +412,19 @@ class Tables(unittest.TestCase):
         self.assertIn("kLangs = 10;", ids)
         self.assertIn("kLangs = 11;", ids)
         self.assertEqual(list(g.AUTONYMS), g.ORDER + [g.PSEUDO])
+
+    def test_the_tests_view(self):
+        # catalogue.h: a placeholder's other fills, a message's buffers.
+        d = english()
+        d["@a.of"]["placeholders"]["0"] = {"means": "m", "type": "text", "worst": "SD", "or": ["a.plain", "a.two"]}
+        d["@a.of"]["bytes"] = 48
+        d["@a.two"]["line_bytes"] = 64
+        eng, order = checked(d)
+        view = g.gen_test(order, eng, ["en"], {})
+        self.assertIn('{Fill::Text, "SD", 0, 0, uistr::S{}, 2, {uistr::S::a_plain, uistr::S::a_two}}', view)
+        self.assertIn("false, 48, 0,\n", view)  # a.of's bytes
+        self.assertIn("false, 0, 64,\n", view)  # a.two's line_bytes
+        self.assertIn(f"uistr::S alt[{g.MAX_OR}];", view)
 
     def test_the_real_catalogue_is_current(self):
         files, *_ = g.generate()
