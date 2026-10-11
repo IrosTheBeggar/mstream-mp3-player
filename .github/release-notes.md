@@ -12,15 +12,16 @@ Source for this binary: {{SOURCE_URL}}, and with its libraries in
 - **Names in Greek, Cyrillic and more Latin.** Titles, artists, albums
   and folders in Greek (Χάρις Αλεξίου) and Cyrillic (Кино, Земфира) are
   drawn as they are, where 0.8.0 showed `?`. So are the accented letters
-  of Romanian (Ș, Ț), Turkish (İ, Ğ), Czech, Polish, the Baltic
-  languages, Maltese, Esperanto and Welsh, and Pinyin's tones (Lǚ), which
-  0.8.0 drew bare or as `?`. The rows are as high as before. Latin
-  letters the player still has no glyph for lose only their accents
-  instead of turning to `?` (Vietnamese: Mỹ Tâm shows as My Tâm). A tag
-  that keeps Windows' curly quotes, dashes, € or ™ in an old Latin-1
-  frame shows them (Don’t Stop – Live, not Don?t Stop ? Live), full-width
-  letters (ＡＢＣ) show as ABC, and a name stored decomposed, as macOS and
-  some tag editors write them, keeps its accents (Beyoncé, not Beyonce?).
+  of Romanian (Ș, Ț), Turkish (İ, Ğ), Croatian and Serbian Latin (Đ),
+  Slovak (Ľ, Ĺ), the Baltic languages, Maltese, Esperanto and Welsh, and
+  Pinyin's tones (Lǚ), which 0.8.0 drew bare or as `?`. The rows are as
+  high as before. Latin letters the player still has no glyph for lose
+  only their accents instead of turning to `?` (Vietnamese: Mỹ Tâm shows
+  as My Tâm). A tag that keeps Windows' curly quotes, dashes, € or ™ in
+  an old Latin-1 frame shows them (Don’t Stop – Live, not Don?t Stop ?
+  Live), full-width letters (ＡＢＣ) show as ABC, and a name stored
+  decomposed, as macOS and some tag editors write them, keeps its accents
+  (Beyoncé, not Beyonce?).
 - **Chinese, Japanese and Korean names** are drawn from a set of 10,557
   characters built into the firmware, at 16 px: the 2,350 common Korean
   Hangul syllables (KS X 1001), the kana and 6,355 kanji of Japanese's
@@ -50,8 +51,10 @@ Source for this binary: {{SOURCE_URL}}, and with its libraries in
   Hiragana and katakana are one alphabet (ひかる next to ヒカル, ガ just
   after カ, ヴ next to ウ, a small kana with its large one), half-width
   katakana sort as full-width, and a lone Hangul consonant (ㄱ) sorts just
-  before the syllables it starts (가). Latin names keep their order, but a
-  Romanian name with Ș or Ț, under `#` in 0.8.0, is under S or T. An
+  before the syllables it starts (가). Latin names keep their order,
+  except that a letter 0.8.0 showed as `?` now sorts as its base letter:
+  a name that starts with one (Romanian's Ș or Ț, Vietnamese's Ư,
+  full-width ＡＢＣ), under `#` in 0.8.0, is under S, T, U or A. An
   artist folder in another script whose tags give a sort name
   (ARTISTSORT) is listed by it: `Кино` with the sort name `Kino` under K.
 - **A computer can ask the player how it is**, over USB, without
@@ -65,16 +68,17 @@ Source for this binary: {{SOURCE_URL}}, and with its libraries in
   don't know the question, so the tab can tell they need an update.
 - **Fixed: a long listing on the serial console could restart the
   player.** While a computer read a long list from the console (a
-  20,000-track library's albums take about 9 s), a line the player logged
+  20,000-track library's albums take about 6 s), a line the player logged
   meanwhile, as it does when it calls headphones that are out of reach,
   waited for the list to end, and after 5 s the watchdog restarted the
   player. 0.8.0 does this too. Now both print whole and the player
   carries on.
-- Tested on a Core2 with a card of 19,410 tracks: Japanese, Korean, Greek
-  and Cyrillic names on Now Playing, in the Queue and in the Library's
-  lists, in their new order, and the lists scroll as smoothly with them as
-  before (30 frames a second). What those tests turned up was fixed
-  first: the console restart above.
+- Tested on a Core2 with a card of 19,410 tracks: Japanese kana names on
+  Now Playing, in the Queue and in the Library's lists, a Cyrillic title
+  on Now Playing and in the Queue, a Korean one on Now Playing, and Greek
+  album names in the Library, in their new order; the lists scroll as
+  smoothly with them as before (30 frames a second). What those tests
+  turned up was fixed first: the console restart above.
 - **The first start of 0.9.0 on a card 0.8.0 used** builds the library
   again, once, from the tags 0.8.0 read, since the order changed: about
   10 s for 20,000 tracks, with the start-up screen up meanwhile (on a card
