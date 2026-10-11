@@ -219,6 +219,12 @@ void NowPlayingPage::drawTitle() {
   Fonts& f = Fonts::instance();
   const int w = kW - kColumnX;
   const uint16_t bg = navBg();
+  // The strip is filled here, so its lines are drawn with no background
+  // (the ink as both colours: blended over the strip, Fonts::draw()). A
+  // line's row is taller than the pitch (Bold's 19 rows 17 apart, Title's
+  // 27 rows 26 apart: TitleLayout), so a line drawn with its background
+  // would erase the ink of the line above in the rows they share: a
+  // descender's or a CJK glyph's lowest row.
   c.fillRect(0, 0, w, kTitleH, bg);
   char title[160] = "Nothing playing";
   if (s.current >= 0) ui_.player().catalog().title(s.trackId, title, sizeof(title));
@@ -227,10 +233,10 @@ void NowPlayingPage::drawTitle() {
   if (s.play == PlayState::Waiting) {
     // The wait's status takes the strip's lower lines: the title on one
     // line over "Waiting for SPYDRONE…" (amber) and "try 2 of 3".
-    f.draw(c, Font::Bold, title, x, 9, kTextW, ink, bg);
+    f.draw(c, Font::Bold, title, x, 9, kTextW, ink, ink);
     char line[64];
     snprintf(line, sizeof(line), "Waiting for %s\xE2\x80\xA6", s.btName[0] ? s.btName : "the headphones");
-    f.draw(c, Font::Small, line, kWaitTextX, 26, kWaitTextW, col::AMBER, bg);
+    f.draw(c, Font::Small, line, kWaitTextX, 26, kWaitTextW, col::AMBER, col::AMBER);
     const BtLink& l = s.btLink;
     if (l.phase == BtLink::Phase::Paging && l.attempt > 0) {
       snprintf(line, sizeof(line), "try %u of %u", static_cast<unsigned>(l.attempt),
@@ -240,18 +246,19 @@ void NowPlayingPage::drawTitle() {
     } else {
       snprintf(line, sizeof(line), "connecting");
     }
-    f.draw(c, Font::Small, line, kWaitTextX, 43, kWaitTextW, col::DIM, bg);
+    f.draw(c, Font::Small, line, kWaitTextX, 43, kWaitTextW, col::DIM, col::DIM);
     gfx::push(c, kColumnX, kTitleY, w, kTitleH);
     return;
   }
   // Two big lines (Title), else up to three smaller ones (Bold): too long
-  // for two, or with Chinese, Japanese or Korean in it, whose 16 px glyphs
-  // are then drawn bold beside Latin of their size (TitleLayout).
+  // for two, or with a glyph from the store in it (Chinese, Japanese,
+  // Korean, or a symbol only the store has, such as ☆ or ♪), whose 16 px
+  // glyphs are then drawn bold beside Latin of their size (TitleLayout).
   char lines[titlelayout::kMaxLines][titlelayout::kLineSize];
   const titlelayout::Lines l =
       titlelayout::wrap(f.fit(Font::Title), f.fit(Font::Bold), f.fromStore(Font::Title, title), title, kTextW, lines);
   for (int i = 0; i < l.count; ++i) {
-    f.draw(c, l.bold ? Font::Bold : Font::Title, lines[i], x, titlelayout::lineY(l, i), kTextW, ink, bg);
+    f.draw(c, l.bold ? Font::Bold : Font::Title, lines[i], x, titlelayout::lineY(l, i), kTextW, ink, ink);
   }
   gfx::push(c, kColumnX, kTitleY, w, kTitleH);
 }

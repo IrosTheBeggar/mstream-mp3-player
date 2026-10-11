@@ -623,6 +623,24 @@ void test_now_playing_title_rows() {
   l = lay("Tokyo 東京事変 Live 2004");  // two Title lines would have held it
   TEST_ASSERT_TRUE(l.bold);
   TEST_ASSERT_EQUAL_INT(2, l.count);
+  // Any glyph from the store, not only Han, kana and Hangul: JIS X 0208's
+  // symbols that the UI fonts lack are the store's too (16 px, bold here),
+  // and so is the ideographic space. A Latin title with one is Bold.
+  for (const char* sym : {"★", "☆", "♪", "→", "∞", "√", "※", "○", "●", "℃", "‥", "〜", "・", "\xE3\x80\x80"}) {
+    TEST_ASSERT_TRUE_MESSAGE(fromStore(title, sym), sym);
+  }
+  l = lay("Lucky ☆ Star");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
+  TEST_ASSERT_EQUAL_INT(26, titlelayout::lineY(l, 0));
+  l = lay("A → B");
+  TEST_ASSERT_TRUE(l.bold);
+  l = lay("Hello\xE3\x80\x80World");
+  TEST_ASSERT_TRUE(l.bold);
+  // A sign the UI fonts draw stays theirs: Title.
+  l = lay("Star · 1° ©");
+  TEST_ASSERT_FALSE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
   // 11 bold Han to a line (17 px: 187 of 190), wrapped between them.
   l = lay("東京の夜明けに歌う小さな歌とその続き");
   TEST_ASSERT_TRUE(l.bold);
@@ -722,6 +740,73 @@ void test_store_glyphs_sit_in_the_rows() {
     TEST_ASSERT_EQUAL_UINT32(s.glyphCount(), static_cast<uint32_t>(glyphs));
     TEST_ASSERT_EQUAL_INT(role.moved, moved);
     TEST_ASSERT_EQUAL_INT(role.cut, cut);
+  }
+}
+
+// Now Playing's title lines share rows (TitleLayout): each line's row,
+// centred on lineY() as draw() centres it, is taller than the pitch, so
+// the next line's row starts over its last rows: Bold's two (19 rows 17
+// apart, in two lines as in three) and Title's one (27 rows 26 apart). In
+// Bold the ink of the line above reaches them: 157 of DejaVu Sans Bold's
+// glyphs (J g j p q y _ { | }, letters with a cedilla or an ogonek, Greek's
+// and Cyrillic's descenders: ç ą ρ щ у) and the store's glyphs 3 px under
+// the baseline (283 Han, 19 Hangul, 20 box drawing); in Title nothing does.
+// So NowPlayingPage::drawTitle() fills its strip and draws the lines with
+// no background: a line's own would erase that row (docs/I18N.md, phase 2;
+// the drawing is checked on the PC).
+void test_now_playing_title_lines_share_rows() {
+  const glyphstore::Store& s = cjk();
+  struct Layout {
+    const uint8_t* data;
+    bool bold;
+    int count, shared, vlw, han, hangul, other;
+  };
+  const Layout layouts[] = {{kVlwSansBold16, true, 2, 2, 157, 283, 19, 20},
+                            {kVlwSansBold16, true, 3, 2, 157, 283, 19, 20},
+                            {kVlwSansBold22, false, 2, 1, 0, 0, 0, 0}};
+  for (const Layout& want : layouts) {
+    const Vlw f(want.data);
+    titlelayout::Lines l;
+    l.bold = want.bold;
+    l.count = want.count;
+    const int base = s.baselineIn(f.maxAscent, f.yAdvance);
+    for (int i = 0; i + 1 < l.count; ++i) {
+      const int top = titlelayout::lineY(l, i) - (f.yAdvance >> 1);
+      const int next = titlelayout::lineY(l, i + 1) - (f.yAdvance >> 1);
+      TEST_ASSERT_EQUAL_INT(want.shared, top + f.yAdvance - next);
+      const int from = next - top;  // line i's first row under the next line's
+      // A VLW glyph's rows start at the baseline less its top (M5GFX).
+      int vlw = 0;
+      std::string some;
+      for (const Vlw::Box& b : f.boxes) {
+        if (b.height > 0 && f.maxAscent - b.top + b.height - 1 >= from) {
+          ++vlw;
+          if (b.cp < 0x80) some += static_cast<char>(b.cp);
+        }
+      }
+      TEST_ASSERT_EQUAL_INT(want.vlw, vlw);
+      if (want.vlw) TEST_ASSERT_EQUAL_STRING("J_gjpqy{|}", some.c_str());
+      int han = 0, hangul = 0, other = 0;
+      for (uint32_t cp = 0; cp <= 0xFFFF; ++cp) {
+        const glyphstore::Glyph g = s.find(cp);
+        if (!g) continue;
+        const glyphstore::Metrics m = s.metrics(g);
+        if (m.w == 0) continue;
+        const glyphstore::Placement p = glyphstore::place(m, base, f.yAdvance);
+        if (p.top + p.rows - 1 < from) continue;
+        if (textfold::scriptOf(cp) == textfold::Script::Han) {
+          ++han;
+        } else if (cp >= 0xAC00 && cp <= 0xD7A3) {
+          ++hangul;
+        } else {
+          ++other;
+          TEST_ASSERT_TRUE(cp >= 0x2500 && cp <= 0x257F);  // box drawing
+        }
+      }
+      TEST_ASSERT_EQUAL_INT(want.han, han);
+      TEST_ASSERT_EQUAL_INT(want.hangul, hangul);
+      TEST_ASSERT_EQUAL_INT(want.other, other);
+    }
   }
 }
 
@@ -2785,6 +2870,7 @@ int main(int, char**) {
   RUN_TEST(test_now_playing_title_rows);
   RUN_TEST(test_fonts_keep_their_line_heights);
   RUN_TEST(test_store_glyphs_sit_in_the_rows);
+  RUN_TEST(test_now_playing_title_lines_share_rows);
   RUN_TEST(test_fonts_cover_greek_cyrillic_and_latin);
   RUN_TEST(test_queue_cap_texts_fit);
   RUN_TEST(test_push_out_texts_fit);

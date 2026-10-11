@@ -2763,9 +2763,12 @@ Queue, Dance and Output (with its Pair and About pages).
 - **Now Playing** (spec §6.1, mockups 01-04; its two menus, shuffle and
   repeat: [QUEUE-MODES.md](QUEUE-MODES.md)): the album's cover (96 x 96,
   its thumbnail, a note until it's made), the title (Bold 22 on up to two
-  lines, else Bold 16 on up to three; a title with Chinese, Japanese or
-  Korean in it always Bold 16, its CJK bold: `TitleLayout`), the artist
-  and the album as two plain rows under it, the progress and times
+  lines, else Bold 16 on up to three; a title with a glyph from the glyph
+  store in it (Chinese, Japanese, Korean, or a symbol only the store has,
+  such as ☆ ♪ →) always Bold 16, those glyphs bold: `TitleLayout`; its
+  lines drawn with no background over the filled strip, as a line's row
+  reaches into the next one's), the artist and the album as two plain
+  rows under it, the progress and times
   (between them "4 of 16 · SPYDRONE": where it plays, mockup 01's
   output line, when it fits; the
   headphones not connected, "SPYDRONE (not connected)" alone when both
@@ -2783,8 +2786,9 @@ Queue, Dance and Output (with its Pair and About pages).
         39-136    the cover's 1 px frame; the cover 96 x 96 at (12, 40)
         38-89     the title, x 120-310 (190 px): Bold 22, one line
                   centred at y 64 or two at 51 and 77; else (too long
-                  for two, or with CJK) Bold 16, centred: three at 47,
-                  64 and 81, two at 55 and 72, one at 64
+                  for two, or with a glyph from the store: CJK, ☆ ♪ →)
+                  Bold 16, centred: three at 47, 64 and 81, two at 55
+                  and 72, one at 64
         90-112    the artist (Body, soft), centred at y 101, x 120-310
         113-135   the album (Body, dim), centred at y 124, x 120-310
         136-145   background

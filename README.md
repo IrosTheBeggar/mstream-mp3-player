@@ -812,7 +812,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       buttons (only a touch that went down on one, and
                       stays), their click/hold/repeat, and what they do
   TitleLayout         Now Playing's title in its strip: two big lines, else
-                      up to three Bold ones (too long for two, or with CJK)
+                      up to three Bold ones (too long for two, or with a
+                      glyph from the glyph store: CJK, or a symbol like ☆)
   SeekBar             Now Playing's seek bar: x to whole seconds and back,
                       the ends and the reach, one touch's tap or scrub, the
                       stay detent and sliding off (docs/SEEK-BAR.md)

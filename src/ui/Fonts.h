@@ -22,8 +22,9 @@
 //   Body   DejaVu Sans 16      row titles, buttons, the artist on Now Playing
 //   Small  DejaVu Sans 13      secondary lines, labels, times
 //   Bold   DejaVu Sans Bold 16 headers, the current row, primary buttons
-//   Title  DejaVu Sans Bold 22 Now Playing's title (one with CJK in it:
-//                              Bold, TitleLayout), big numbers
+//   Title  DejaVu Sans Bold 22 Now Playing's title (one with a glyph from
+//                              the store in it, CJK or ★ ♪: Bold,
+//                              TitleLayout), big numbers
 // The store has one size and one weight: every role draws its CJK glyphs
 // at 16 px on the role's baseline in its row (the Small row's a pixel
 // lower, so the 16 px em box fits its 17 px), inside the row; Bold and
@@ -34,7 +35,8 @@
 // 6.6 KB a font) once; the glyph bitmaps stay in flash, and the store is
 // read where it lies (no load, no copy). Text is drawn with a background
 // colour (sprites, or the LCD in small strips), so a redraw in place never
-// flickers. Loop task only.
+// flickers; Now Playing's title strip, whose lines share rows, is filled
+// and its lines drawn with none. Loop task only.
 namespace ui {
 
 enum class Font : uint8_t { Body, Small, Bold, Title };
@@ -54,9 +56,10 @@ public:
   int width(Font f, const char* s) const;
   int height(Font f) const;
   // Whether `s` as draw() draws it in `f` (composed and folded first) has a
-  // glyph from the store: a Chinese, Japanese or Korean character. Now
-  // Playing's title then takes the Bold rows (TitleLayout). A lookup a
-  // character, no buffer: cheap enough for each new title.
+  // glyph from the store: Han, kana or Hangul, or a symbol the store has
+  // and `f` lacks (★ ♪ →, the ideographic space). Now Playing's title then
+  // takes the Bold rows (TitleLayout). A lookup a character, no buffer:
+  // cheap enough for each new title.
   bool fromStore(Font f, const char* s) const;
 
   // Draws `text` (the first `len` bytes; UTF-8, not necessarily

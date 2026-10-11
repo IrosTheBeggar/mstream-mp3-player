@@ -13,11 +13,16 @@
 //   - Bold (DejaVu Sans Bold 16, rows of 19 px): up to three lines 17 rows
 //     apart, centred: 9, 26 and 43; 17 and 34 for two; 26 for one.
 // Bold when two Title lines would cut the title short, and for any title
-// with a glyph from the glyph store (a Chinese, Japanese or Korean
-// character): the store's glyphs are 16 px in every role, so beside 22 px
-// Latin they look small; in Bold the Latin is their size, and they are
-// drawn bold too (docs/I18N.md, phase 2). Portable, host-tested
-// (test_ui_library, with the fonts' own data and the store).
+// with a glyph from the glyph store: Han, kana and Hangul, and the symbols
+// the store has and the UI fonts don't (JIS X 0208's ★ ☆ ♪ → ∞ ※ ...,
+// the ideographic space U+3000). The store's glyphs are 16 px in every
+// role, so beside 22 px Latin they look small; in Bold the Latin is their
+// size, and they are drawn bold too (docs/I18N.md, phase 2). A line's row
+// is taller than the pitch (Bold's 19 rows 17 apart, Title's 27 rows 26
+// apart), so the page draws the lines with no background, over the strip
+// it filled: a line's own background would erase the lowest row of the
+// ink above it. Portable, host-tested (test_ui_library, with the fonts'
+// own data and the store).
 namespace titlelayout {
 
 constexpr int kStripH = 52;
