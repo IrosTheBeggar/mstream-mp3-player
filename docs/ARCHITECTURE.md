@@ -2712,16 +2712,19 @@ Queue, Dance and Output (with its Pair and About pages).
     width and glyph test take the VLW font's glyph first, then the
     store's; `Fonts::width()` measures a stored text as it will be drawn,
     composed and folded first (`textfit::drawnWidth()`: a halfwidth or
-    NFD name as its glyphs). Every role draws them at 16 px, regular, on
-    the role's baseline (Small's a pixel lower, so the 16 px em box fits
-    its 17 px row), moved down or cut so nothing leaves the row. A line
-    with a store glyph is drawn by `Fonts::drawMixed()` a glyph at a time:
-    the VLW glyphs by M5GFX's own `VLWfont::drawChar()` (what
-    `drawString()` calls), the store's composed in a 16 x 18 box on the
-    stack (RGB565 as the sprite keeps it, M5GFX's `swap565_t`) and pushed,
-    over the cell's background, or read back and blended when there is
-    none; aligned from its own width, as M5GFX's `textWidth()` would count
-    a store glyph as wide as the line is tall. Every other line is M5GFX's
+    NFD name as its glyphs). Every role draws them at 16 px on the role's
+    baseline (Small's a pixel lower, so the 16 px em box fits its 17 px
+    row), moved down or cut so nothing leaves the row; Bold and Title draw
+    them a synthetic bold (`glyphstore::embolden()`: each row's coverage
+    spread a pixel right at half strength, the box a column wider and the
+    advance a pixel longer), and measure them so. A line with a store
+    glyph is drawn by `Fonts::drawMixed()` a glyph at a time: the VLW
+    glyphs by M5GFX's own `VLWfont::drawChar()` (what `drawString()`
+    calls), the store's composed in a box of up to 17 x 18 on the stack
+    (RGB565 as the sprite keeps it, M5GFX's `swap565_t`) and pushed, over
+    the cell's background, or read back and blended when there is none;
+    aligned from its own width, as M5GFX's `textWidth()` would count a
+    store glyph as wide as the line is tall. Every other line is M5GFX's
     `drawString()`, as before.
   - A name is composed before it is drawn (`textfold::Composer`: NFD
     text, a name another system stored decomposed or a tag editor's, as NFC
@@ -2760,9 +2763,11 @@ Queue, Dance and Output (with its Pair and About pages).
 - **Now Playing** (spec §6.1, mockups 01-04; its two menus, shuffle and
   repeat: [QUEUE-MODES.md](QUEUE-MODES.md)): the album's cover (96 x 96,
   its thumbnail, a note until it's made), the title (Bold 22 on up to two
-  lines, else Bold 16 on up to three), the artist and the album as two
-  plain rows under it, the progress and times (between them "4 of 16 ·
-  SPYDRONE": where it plays, mockup 01's output line, when it fits; the
+  lines, else Bold 16 on up to three; a title with Chinese, Japanese or
+  Korean in it always Bold 16, its CJK bold: `TitleLayout`), the artist
+  and the album as two plain rows under it, the progress and times
+  (between them "4 of 16 · SPYDRONE": where it plays, mockup 01's
+  output line, when it fits; the
   headphones not connected, "SPYDRONE (not connected)" alone when both
   don't fit), and the transport row (the volume, prev, play/pause, next,
   "..."), which has the room the old 40 px artist and album bands gave
@@ -2777,8 +2782,9 @@ Queue, Dance and Output (with its Pair and About pages).
         36-37     background
         39-136    the cover's 1 px frame; the cover 96 x 96 at (12, 40)
         38-89     the title, x 120-310 (190 px): Bold 22, one line
-                  centred at y 64 or two at 51 and 77; else Bold 16,
-                  three at 47, 64 and 81
+                  centred at y 64 or two at 51 and 77; else (too long
+                  for two, or with CJK) Bold 16, centred: three at 47,
+                  64 and 81, two at 55 and 72, one at 64
         90-112    the artist (Body, soft), centred at y 101, x 120-310
         113-135   the album (Body, dim), centred at y 124, x 120-310
         136-145   background

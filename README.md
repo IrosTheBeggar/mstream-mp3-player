@@ -811,6 +811,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       The glass's tap/hold/drag/fling events; the touch
                       buttons (only a touch that went down on one, and
                       stays), their click/hold/repeat, and what they do
+  TitleLayout         Now Playing's title in its strip: two big lines, else
+                      up to three Bold ones (too long for two, or with CJK)
   SeekBar             Now Playing's seek bar: x to whole seconds and back,
                       the ends and the reach, one touch's tap or scrub, the
                       stay detent and sliding off (docs/SEEK-BAR.md)
@@ -834,8 +836,9 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   GlyphStore, CjkGlyphs16
                       The CJK and Hangul glyphs behind the DejaVu fonts: a
                       glyph store's reader (a code point's glyph, metrics
-                      and 4-bit coverage) and the built-in 16 px store
-                      (generated from Noto Sans CJK; SIL OFL 1.1)
+                      and 4-bit coverage, the Bold roles' synthetic bold)
+                      and the built-in 16 px store (generated from Noto
+                      Sans CJK; SIL OFL 1.1)
   DeviceInfo          Output > About > Device info's rows (and the boot
                       log's [diag] lines): each fact's label and text
   QueueView           The Queue's summary from learned track lengths, the
