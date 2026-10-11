@@ -17,6 +17,7 @@
 #include <esp_chip_info.h>
 #include <esp_heap_caps.h>
 #include <esp_random.h>
+#include <esp_rom_sys.h>
 #include <esp_timer.h>
 #include <nvs_flash.h>
 
@@ -3106,6 +3107,28 @@ static void logNvs() {
   }
 }
 
+// The libraries' log lines (log_w()/log_e(), and ESP_LOGW/ESP_LOGE in
+// Arduino code, which the core turns into those: ESP32-A2DP's connect_to(),
+// the SD driver, Preferences) go out through the ROM's printf, straight
+// into the UART's FIFO, and then the Arduino core spins, with no yield,
+// until the line is idle. The console prints through the UART driver, so
+// during a long list printed in one go (ql, l) the line never goes idle: on
+// 2026-10-11 a page of the headphones during ql held Bluetooth's task on
+// CPU 0 in that spin past 5 s, and the task watchdog reset the board. With
+// the core's debug UART off, log lines skip the spin;
+// turning it off also unhooks the ROM printf's output, so put back the
+// ROM's own UART writer, the one the IDF installed at boot and every line
+// went through until now (in ROM: fine with the flash cache off, no IRAM).
+// The lines come out byte for byte as before; each character still waits
+// for room in the FIFO (87 us at 115200 under a flood), never for the line.
+// After M5.begin(): setDebugOutput() does nothing before Serial starts.
+// Nothing turns it on again (Serial.begin() leaves it; Serial.end() resets
+// it only while it is Serial's). docs/ARCHITECTURE.md, Tasks and cores.
+static void stopLogLineWait() {
+  Serial.setDebugOutput(false);
+  esp_rom_install_uart_printf();
+}
+
 // The build leaves the rev-1 PSRAM cache workaround out of the code it
 // compiles (tools/no_psram_fix.py, docs/ENERGY.md section 5, P3a), which is
 // safe only from revision 3 (every Core2 is an ESP32-D0WDQ6-V3), and the
@@ -3163,6 +3186,7 @@ void setup() {
   // 9, still to check by ear on battery). The console's Pe1 turns it on.
   cfg.output_power = false;
   M5.begin(cfg);
+  stopLogLineWait();  // before anything can print for long (the console, Bluetooth)
   // Before the banner (a sender waits for it): was a computer's line under
   // way as Serial started? (HostLine's Sync: its tail is no key.)
   console.begin();

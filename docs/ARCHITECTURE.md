@@ -487,6 +487,43 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   KB; `gt` with the log line leaves 1,536 B, and an interrupt's frame on
   top would take its line under LOW, not over the end.)
 
+### Library log lines and the serial port
+
+The console and the firmware's own `[...]` lines print through `Serial`,
+the IDF's UART driver: a writer sleeps while the driver's FIFO is full.
+The libraries' warnings and errors (`CORE_DEBUG_LEVEL=2` prints W and E:
+`log_w()`/`log_e()`, and `ESP_LOGW`/`ESP_LOGE` in Arduino code, which the
+core turns into those: ESP32-A2DP's `connect_to()` at every page of the
+headphones, the SD driver, Preferences) go out on whatever task logs them,
+through the ROM's printf, a character at a time straight into the FIFO.
+
+- **What was wrong.** After each such line the Arduino core spun, with no
+  yield, until the UART was idle. While the console prints a long list in
+  one go (`ql` on a 20k-track card, about 100 KB: 9 s at 115200 baud; `l`
+  with a full queue, longer) the UART is never idle, so the logging task
+  spun until the list ended. On 2026-10-11 a page of the headphones
+  during `ql` held Bluetooth's task on CPU 0 there for over 5 s: the task
+  watchdog fired ("IDLE0 (CPU 0) did not reset the watchdog", "CPU 0:
+  BtAppT") and the board restarted.
+- **What the firmware does now.** Right after `M5.begin()` starts Serial,
+  `setup()` turns the core's debug UART off (`Serial.setDebugOutput(false)`:
+  no wait after a line) and puts the ROM's own UART writer back under the
+  ROM's printf (`esp_rom_install_uart_printf()`, the one the IDF installs
+  at boot, which turning the debug UART off unhooks). Library lines still
+  print, byte for byte as before; each character waits only for room in
+  the FIFO (87 us at 115200 under a flood), never for the line. The writer
+  is in ROM: safe with the flash cache off, no IRAM. Nothing turns the
+  debug UART back on (`Serial.begin()` leaves it alone, `Serial.end()`
+  resets it only while it is Serial's).
+- **Unchanged.** A library line lands among the console's bytes as before
+  (two writers to one FIFO: it can split a console line, a screenshot's
+  row among them, and comes out whole unless its task is held off for
+  about 10 ms in the middle of it). The IDF's own log lines and the
+  panic output (the task watchdog's lines, a Guru Meditation, the
+  backtrace) never waited for the line and print as before. The console's
+  long prints don't pause for the line: with nothing waiting for it to go
+  idle, a pause would only slow them.
+
 ## Bluetooth
 
 `BtSink` connects to the headphones the listener paired on the Pair screen
