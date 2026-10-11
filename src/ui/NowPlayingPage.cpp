@@ -21,11 +21,11 @@
 // touch on the bar, when it ends.
 #include <algorithm>
 #include <cstdio>
-#include <cstring>
 
 #include "LibraryText.h"
 #include "SheetLayout.h"
 #include "TextFit.h"
+#include "TitleLayout.h"
 #include "TrackCatalog.h"
 #include "TrackSeek.h"
 #include "UiText.h"
@@ -76,6 +76,7 @@ constexpr int kNavBottom = kCoverY + kCoverPx + 1;  // 137: under the cover's fr
 constexpr int kModesGap = 4;
 
 static_assert(SeekBar::kLineX + SeekBar::kLineW == kW - 12, "the seek bar's line is drawProgress()'s");
+static_assert(kTitleH == titlelayout::kStripH, "the title's lines are TitleLayout's");
 static_assert(kArtistY == kTitleY + kTitleH, "the artist row starts where the title strip ends");
 static_assert(kAlbumY == kArtistY + kArtistH, "the album row follows the artist's");
 static_assert(kAlbumY + kAlbumH == kCoverY + kCoverPx, "the album row ends on the cover's last row");
@@ -99,13 +100,6 @@ static_assert(SeekBar::kLineX + uitext::kSeekReadoutW < SeekBar::kReadoutLeftX &
 // m:ss, as the seek bar's readout has it (what the finger read is what the
 // band shows after the lift).
 void mmss(uint32_t ms, char* buf, size_t size) { SeekBar::timeText(ms, buf, size); }
-
-// The last line of a wrap was cut ("…" added): the text needs more room.
-bool cutShort(const char* line, const char* text) {
-  const size_t n = strlen(line), t = strlen(text);
-  const bool ends = (n >= 3 && strcmp(line + n - 3, "\xE2\x80\xA6") == 0) || (n >= 3 && strcmp(line + n - 3, "...") == 0);
-  return ends && !(t >= 3 && strcmp(text + t - 3, line + n - 3) == 0);
-}
 
 const char* repeatName(uint8_t mode) { return mode == 2 ? "one" : mode == 1 ? "all" : "off"; }
 
@@ -225,6 +219,12 @@ void NowPlayingPage::drawTitle() {
   Fonts& f = Fonts::instance();
   const int w = kW - kColumnX;
   const uint16_t bg = navBg();
+  // The strip is filled here, so its lines are drawn with no background
+  // (the ink as both colours: blended over the strip, Fonts::draw()). A
+  // line's row is taller than the pitch (Bold's 19 rows 17 apart, Title's
+  // 27 rows 26 apart: TitleLayout), so a line drawn with its background
+  // would erase the ink of the line above in the rows they share: a
+  // descender's or a CJK glyph's lowest row.
   c.fillRect(0, 0, w, kTitleH, bg);
   char title[160] = "Nothing playing";
   if (s.current >= 0) ui_.player().catalog().title(s.trackId, title, sizeof(title));
@@ -233,10 +233,10 @@ void NowPlayingPage::drawTitle() {
   if (s.play == PlayState::Waiting) {
     // The wait's status takes the strip's lower lines: the title on one
     // line over "Waiting for SPYDRONE…" (amber) and "try 2 of 3".
-    f.draw(c, Font::Bold, title, x, 9, kTextW, ink, bg);
+    f.draw(c, Font::Bold, title, x, 9, kTextW, ink, ink);
     char line[64];
     snprintf(line, sizeof(line), "Waiting for %s\xE2\x80\xA6", s.btName[0] ? s.btName : "the headphones");
-    f.draw(c, Font::Small, line, kWaitTextX, 26, kWaitTextW, col::AMBER, bg);
+    f.draw(c, Font::Small, line, kWaitTextX, 26, kWaitTextW, col::AMBER, col::AMBER);
     const BtLink& l = s.btLink;
     if (l.phase == BtLink::Phase::Paging && l.attempt > 0) {
       snprintf(line, sizeof(line), "try %u of %u", static_cast<unsigned>(l.attempt),
@@ -246,18 +246,19 @@ void NowPlayingPage::drawTitle() {
     } else {
       snprintf(line, sizeof(line), "connecting");
     }
-    f.draw(c, Font::Small, line, kWaitTextX, 43, kWaitTextW, col::DIM, bg);
+    f.draw(c, Font::Small, line, kWaitTextX, 43, kWaitTextW, col::DIM, col::DIM);
     gfx::push(c, kColumnX, kTitleY, w, kTitleH);
     return;
   }
-  char lines[3][112];
-  int n = textfit::wrap(f.fit(Font::Title), title, strlen(title), kTextW, 2, &lines[0][0], sizeof(lines[0]));
-  if (n == 2 && cutShort(lines[1], title)) {
-    // Too long for two big lines: three smaller ones.
-    n = textfit::wrap(f.fit(Font::Bold), title, strlen(title), kTextW, 3, &lines[0][0], sizeof(lines[0]));
-    for (int i = 0; i < n; ++i) f.draw(c, Font::Bold, lines[i], x, 9 + i * 17, kTextW, ink, bg);
-  } else {
-    for (int i = 0; i < n; ++i) f.draw(c, Font::Title, lines[i], x, n == 1 ? 26 : 13 + i * 26, kTextW, ink, bg);
+  // Two big lines (Title), else up to three smaller ones (Bold): too long
+  // for two, or with a glyph from the store in it (Chinese, Japanese,
+  // Korean, or a symbol only the store has, such as ☆ or ♪), whose 16 px
+  // glyphs are then drawn bold beside Latin of their size (TitleLayout).
+  char lines[titlelayout::kMaxLines][titlelayout::kLineSize];
+  const titlelayout::Lines l =
+      titlelayout::wrap(f.fit(Font::Title), f.fit(Font::Bold), f.fromStore(Font::Title, title), title, kTextW, lines);
+  for (int i = 0; i < l.count; ++i) {
+    f.draw(c, l.bold ? Font::Bold : Font::Title, lines[i], x, titlelayout::lineY(l, i), kTextW, ink, ink);
   }
   gfx::push(c, kColumnX, kTitleY, w, kTitleH);
 }

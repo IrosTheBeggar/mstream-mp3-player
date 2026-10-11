@@ -811,6 +811,9 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       The glass's tap/hold/drag/fling events; the touch
                       buttons (only a touch that went down on one, and
                       stays), their click/hold/repeat, and what they do
+  TitleLayout         Now Playing's title in its strip: two big lines, else
+                      up to three Bold ones (too long for two, or with a
+                      glyph from the glyph store: CJK, or a symbol like ☆)
   SeekBar             Now Playing's seek bar: x to whole seconds and back,
                       the ends and the reach, one touch's tap or scrub, the
                       stay detent and sliding off (docs/SEEK-BAR.md)
@@ -831,6 +834,12 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       as run-length coded parts and coverage (generated
                       from tools/art/mstream-logo.svg), read a row at a
                       time and blended into any background
+  GlyphStore, CjkGlyphs16
+                      The CJK and Hangul glyphs behind the DejaVu fonts: a
+                      glyph store's reader (a code point's glyph, metrics
+                      and 4-bit coverage, the Bold roles' synthetic bold)
+                      and the built-in 16 px store (generated from Noto
+                      Sans CJK; SIL OFL 1.1)
   DeviceInfo          Output > About > Device info's rows (and the boot
                       log's [diag] lines): each fact's label and text
   QueueView           The Queue's summary from learned track lengths, the
@@ -893,7 +902,8 @@ src/                  Core2 firmware
                       the pages (NowPlaying, Library, Queue, Dance, Output
                       with Pair and About), Thumbs (album covers: the
                       card worker decodes them below the loop),
-                      Fonts + VlwFonts (DejaVu, anti-aliased), Icons +
+                      Fonts + VlwFonts (DejaVu, anti-aliased; CJK and
+                      Hangul from the glyph store behind it), Icons +
                       IconData, Gfx (pushes through the scroll and the
                       bus lock), Theme; Input (the one input layer: corrected
                       touches and the buttons as events, haptic feedback,
@@ -936,6 +946,10 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       vlw_font.py (the UI's DejaVu VLW fonts -> src/ui/VlwFonts.cpp,
                       --check; tests: python -m unittest discover -s tools
                       -p "test_vlw_font.py");
+                      glyph_store.py (the CJK glyph store ->
+                      lib/core/CjkGlyphs16.cpp, from a CJK font, --check,
+                      --sizes; tests: python -m unittest discover -s tools
+                      -p "test_glyph_store.py");
                       ui_icons.py (the UI's 1-bit icons -> src/ui/IconData.cpp);
                       gen_resampler_tables.py (the rate converter's filters ->
                       lib/core/ResamplerTables.cpp);

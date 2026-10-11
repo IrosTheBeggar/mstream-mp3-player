@@ -33,6 +33,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  SleepTimer  FadeStage  IdlePolicy  QueueSaver                |
               |  PowerChoices  TrackName                                      |
               |  DeviceInfo  BootLayout  LogoArt (generated)  RleImage        |
+              |  GlyphStore  CjkGlyphs16 (generated)                          |
               |  HopFrontEnd  HostLine  HostLink  HostClock (USB visualizer)  |
               +------------------------------+--------------------------------+
                                              |
@@ -51,7 +52,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/IdlePower (the idle power-off: setting, note, power off) |
               |  app/PowerSettings (CPU speed, Bluetooth power: NVS, restart) |
               |  ui/Ui: TabBar, ListView (ui/ListScroller), Overlays, pages,  |
-              |         Fonts (VLW DejaVu), Icons, Gfx, Thumbs (covers),      |
+              |         Fonts (VLW DejaVu + CJK store), Icons, Gfx, Thumbs,   |
               |         EmptyState                                            |
               |  ui/BootScreen (the mStream logo and the version)             |
               |  app/Version (the version from git, the app description)      |
@@ -2702,19 +2703,45 @@ Queue, Dance and Output (with its Pair and About pages).
   descent, taking rows from their marks and the gaps around them, never
   from the letter: the rows stay 19, 17, 19 and 27 px high, as with Latin
   alone (a host test checks M5GFX's rule on the arrays). M5GFX keeps 9 B a
-  glyph of tables in PSRAM (26 KB for the four). A name is
-  composed before it is drawn (`textfold::Composer`: NFD text, a name
-  another system stored decomposed or a tag editor's, as NFC in Latin,
-  Greek, Cyrillic and kana; Hangul jamo as syllables), for the screen
-  only. A character without a glyph is then a C1 control's cp1252
-  character when the font has that (a Latin-1 tag's U+0092 as ’), else
-  folded by `TextFold` ("ỹ" to "y", "Ａ" to "A", a stray combining mark
-  or a variation selector dropped, '?' for the scripts the fonts lack:
-  Armenian, Georgian, Hebrew, Arabic, CJK...); a name too wide is cut
-  with "…". The fonts' other scripts, and the plan for them
-  and for a translated UI: [I18N.md](I18N.md). efont is out of the build
-  (the font probe keeps it behind `UI_SPIKE_EFONT`). Licence:
-  `LICENSES/DejaVu-Fonts.txt`.
+  glyph of tables in PSRAM (26 KB for the four).
+  - **CJK and Hangul** come from a glyph store behind the fonts
+    (`GlyphStore`, `CjkGlyphs16`: [I18N.md](I18N.md) phase 2): 10,557
+    glyphs at 16 px, 4 bits a pixel, 1.05 MB of flash, read where they lie
+    (no load, no PSRAM; `tools/glyph_store.py` from Noto Sans CJK's
+    Japanese face, SIL OFL 1.1, `LICENSES/OFL-1.1.txt`). `Fonts::fit()`'s
+    width and glyph test take the VLW font's glyph first, then the
+    store's; `Fonts::width()` measures a stored text as it will be drawn,
+    composed and folded first (`textfit::drawnWidth()`: a halfwidth or
+    NFD name as its glyphs). Every role draws them at 16 px on the role's
+    baseline (Small's a pixel lower, so the 16 px em box fits its 17 px
+    row), moved down or cut so nothing leaves the row; Bold and Title draw
+    them a synthetic bold (`glyphstore::embolden()`: each row's coverage
+    spread a pixel right at half strength, the box a column wider and the
+    advance a pixel longer), and measure them so. A line with a store
+    glyph is drawn by `Fonts::drawMixed()` a glyph at a time: the VLW
+    glyphs by M5GFX's own `VLWfont::drawChar()` (what `drawString()`
+    calls), the store's composed in a box of up to 17 x 18 on the stack
+    (RGB565 as the sprite keeps it, M5GFX's `swap565_t`) and pushed, over
+    the cell's background, or read back and blended when there is none;
+    aligned from its own width, as M5GFX's `textWidth()` would count a
+    store glyph as wide as the line is tall. Every other line is M5GFX's
+    `drawString()`, as before.
+  - A name is composed before it is drawn (`textfold::Composer`: NFD
+    text, a name another system stored decomposed or a tag editor's, as NFC
+    in Latin, Greek, Cyrillic and kana; Hangul jamo as syllables; halfwidth
+    katakana as the fullwidth, ｶﾞ as ガ), for the screen only. A character
+    with no glyph in the font or the store is then a C1 control's cp1252
+    character when the font has that (a Latin-1 tag's U+0092 as ’), else
+    folded by `TextFold` ("ỹ" to "y", "Ａ" to "A", a stray combining mark
+    or a variation selector dropped, '?' for the scripts neither has:
+    Armenian, Georgian, Hebrew, Arabic, a Hangul syllable outside KS X
+    1001...); a name too wide is cut with "…" (never between a letter and
+    its combining mark). `textfit::wrap()` breaks lines at spaces and
+    between Chinese and Japanese characters (not before a closing mark or a
+    small kana, not after an opening one). The fonts' other scripts, and
+    the plan for them and for a translated UI: [I18N.md](I18N.md). efont is
+    out of the build (the font probe keeps it behind `UI_SPIKE_EFONT`).
+    Licence: `LICENSES/DejaVu-Fonts.txt`.
   - **The order** the library's lists sort by and its rail's letters
     (`textfold::compare`, `compareSorted`, `railKey`, `secondKey`):
     composed, case and accents folded, symbols before digits before
@@ -2722,19 +2749,28 @@ Queue, Dance and Output (with its Pair and About pages).
     Extended-B and Extended Additional by base letter (tables generated
     from Python's unicodedata by `tools/gen_text_tables.py`); a letter of
     another script by its script, then its Unicode lowercase, after the
-    digits and before A-Z, so under the rail's `#`. `library.idx` rules 3
-    (the first boot of that firmware rebuilds it once: from the records,
-    or by a walk on a card that has none).
+    digits and before A-Z, so under the rail's `#`: the kana as one script
+    (katakana as hiragana, a small kana as its large one), Hangul by code
+    point with a lone consonant just before the syllables it begins, Han
+    by code point. `library.idx` rules 4 (the first boot of that firmware
+    rebuilds it once: from the records, or by a walk on a card that has
+    none).
   - **The width tests** measure each fixed text with the fonts' own data
-    (test_ui_library's `fits()`), check that the font has every glyph in
-    it, and count a missing one as the space width, as `ui/Fonts` does.
+    and the store's (test_ui_library's `fits()`), check that the font or
+    the store has every glyph in it, and count a missing one as the space
+    width, as `ui/Fonts` does.
 - **Icons**: 1-bit bitmaps in flash (`tools/ui_icons.py` -> `IconData.cpp`).
 - **Now Playing** (spec §6.1, mockups 01-04; its two menus, shuffle and
   repeat: [QUEUE-MODES.md](QUEUE-MODES.md)): the album's cover (96 x 96,
   its thumbnail, a note until it's made), the title (Bold 22 on up to two
-  lines, else Bold 16 on up to three), the artist and the album as two
-  plain rows under it, the progress and times (between them "4 of 16 ·
-  SPYDRONE": where it plays, mockup 01's output line, when it fits; the
+  lines, else Bold 16 on up to three; a title with a glyph from the glyph
+  store in it (Chinese, Japanese, Korean, or a symbol only the store has,
+  such as ☆ ♪ →) always Bold 16, those glyphs bold: `TitleLayout`; its
+  lines drawn with no background over the filled strip, as a line's row
+  reaches into the next one's), the artist and the album as two plain
+  rows under it, the progress and times
+  (between them "4 of 16 · SPYDRONE": where it plays, mockup 01's
+  output line, when it fits; the
   headphones not connected, "SPYDRONE (not connected)" alone when both
   don't fit), and the transport row (the volume, prev, play/pause, next,
   "..."), which has the room the old 40 px artist and album bands gave
@@ -2749,8 +2785,10 @@ Queue, Dance and Output (with its Pair and About pages).
         36-37     background
         39-136    the cover's 1 px frame; the cover 96 x 96 at (12, 40)
         38-89     the title, x 120-310 (190 px): Bold 22, one line
-                  centred at y 64 or two at 51 and 77; else Bold 16,
-                  three at 47, 64 and 81
+                  centred at y 64 or two at 51 and 77; else (too long
+                  for two, or with a glyph from the store: CJK, ☆ ♪ →)
+                  Bold 16, centred: three at 47, 64 and 81, two at 55
+                  and 72, one at 64
         90-112    the artist (Body, soft), centred at y 101, x 120-310
         113-135   the album (Body, dim), centred at y 124, x 120-310
         136-145   background

@@ -266,6 +266,11 @@ std::string composed(const char* in, const char* end = nullptr) {
 
 bool same(const char* a, const char* b) { return textfold::sameName(a, std::strlen(a), b, std::strlen(b)); }
 
+std::string utf8(uint32_t cp) {
+  char b[4];
+  return std::string(b, textfold::encode(cp, b));
+}
+
 }  // namespace
 
 // Latin-1 tags keep a cp1252 byte as U+0080-009F (docs/METADATA.md 5.2):
@@ -440,6 +445,161 @@ void test_compose_examples() {
   TEST_ASSERT_EQUAL_INT(0, textfold::combiningClass('a'));
 }
 
+// Halfwidth katakana come out of the composer as the fullwidth ones
+// (NFKC), their voicing marks composed with the kana before them
+// (docs/I18N.md, phase 2): so the glyph store draws them, and they sort
+// and match as the kana.
+void test_halfwidth_katakana_compose() {
+  TEST_ASSERT_EQUAL_STRING("カタカナ", composed("ｶﾀｶﾅ").c_str());
+  TEST_ASSERT_EQUAL_STRING("ガ", composed("ｶﾞ").c_str());
+  TEST_ASSERT_EQUAL_STRING("パ", composed("ﾊﾟ").c_str());
+  TEST_ASSERT_EQUAL_STRING("ヴ", composed("ｳﾞ").c_str());
+  TEST_ASSERT_EQUAL_STRING("ガギグ", composed("ｶﾞｷﾞｸﾞ").c_str());
+  TEST_ASSERT_EQUAL_STRING("ガ", composed("ｶ\xE3\x82\x99").c_str());  // with the fullwidth mark too
+  TEST_ASSERT_EQUAL_STRING("ハ゜", composed("ﾊ\xE3\x82\x9C").c_str());  // the spacing ゜ isn't a mark
+  // No composite: the kana and the combining mark, as NFKC leaves them.
+  TEST_ASSERT_EQUAL_STRING("ア\xE3\x82\x99", composed("ｱﾞ").c_str());
+  TEST_ASSERT_EQUAL_STRING("\xE3\x82\x99", composed("ﾞ").c_str());
+  TEST_ASSERT_EQUAL_STRING("ー「。」、・ヲッ", composed("ｰ｢｡｣､･ｦｯ").c_str());
+  TEST_ASSERT_EQUAL_STRING("Aガ", composed("Aｶﾞ").c_str());  // after ASCII (the fast path looks ahead)
+  // Bounded: a mark past `end` isn't read.
+  const char* s = "ｶﾞ";
+  TEST_ASSERT_EQUAL_STRING("カ", composed(s, s + 3).c_str());
+  TEST_ASSERT_EQUAL_UINT32(0x30AB, textfold::fromHalfwidth(0xFF76));
+  TEST_ASSERT_EQUAL_UINT32(0x3099, textfold::fromHalfwidth(0xFF9E));
+  TEST_ASSERT_EQUAL_UINT32(0x30FC, textfold::fromHalfwidth(0xFF70));
+  TEST_ASSERT_EQUAL_UINT32(0xFF60, textfold::fromHalfwidth(0xFF60));  // ｠: not halfwidth
+  TEST_ASSERT_EQUAL_UINT32(0xFFA0, textfold::fromHalfwidth(0xFFA0));  // halfwidth Hangul: as it is
+  // Sorted and matched as the kana.
+  TEST_ASSERT_TRUE(textfold::compare("ｶﾞｸ", "ガク") > 0);  // alike but for the bytes
+  TEST_ASSERT_TRUE(textfold::compare("ｶﾞｸ", "ガケ") < 0);
+  TEST_ASSERT_TRUE(textfold::compare("ｶﾞｸ", "カク") > 0);
+  TEST_ASSERT_TRUE(textfold::sameName("ｶﾀｶﾅ", 12, "カタカナ", 12));
+  TEST_ASSERT_EQUAL_CHAR('#', textfold::railKey("ｶﾀｶﾅ"));
+}
+
+// The kana sort as one script (docs/I18N.md, phase 2): katakana as
+// hiragana, a small kana as its large one (as a capital sorts with its
+// small letter: ties by the bytes), ヽ ヾ as ゝ ゞ; ー a letter of its own,
+// after the kana; voiced kana just after their unvoiced ones, ゔ and ヷ-ヺ
+// too (the code charts have them after ん).
+void test_kana_order() {
+  const char* order[] = {
+      "あい",             // あ...
+      "アイス",           // ア as あ: after あい (い = イ, then the longer)
+      "ヴィヴァルディ",   // ヴ as ゔ: after every う, before ぇ/え
+      "あう",
+      "ぁお",             // small ぁ as あ
+      "ンジャメナ",       // ん: the last letter
+      "アオ",
+      "ウタダ",
+      "エレファント",
+      "ｳﾞｨﾚｯｼﾞ",         // halfwidth: ヴィレッジ
+      "かき",
+      "カキ",             // a tie on the kana: the bytes, hiragana first
+      "がか",             // voiced: after か
+      "キャ",             // き + ゃ as や: a tie with きや, the bytes
+      "きや",
+      "きゆ",
+      "すゞ",             // ゞ
+      "スヾ",             // ヾ as ゞ: the bytes
+      "ラーメン",         // ー after every kana: らあ < らー
+      "らあめん",
+      "ヲタク",
+      "ワルツ",
+      "ヷイン",           // ヷ: after わ, before ゐ
+      "ゐる",
+      "ヺ",               // after を
+  };
+  const char* sorted[] = {"あい", "アイス", "あう", "ぁお", "アオ", "ウタダ", "ヴィヴァルディ", "ｳﾞｨﾚｯｼﾞ",
+                          "エレファント", "かき", "カキ", "がか", "きや", "キャ", "きゆ", "すゞ", "スヾ",
+                          "らあめん", "ラーメン", "ワルツ", "ヷイン", "ゐる", "ヲタク", "ヺ", "ンジャメナ"};
+  TEST_ASSERT_EQUAL_size_t(sizeof(order) / sizeof(order[0]), sizeof(sorted) / sizeof(sorted[0]));
+  std::vector<std::string> v(order, order + sizeof(order) / sizeof(order[0]));
+  std::sort(v.begin(), v.end(), [](const std::string& a, const std::string& b) {
+    return textfold::compare(a.c_str(), b.c_str()) < 0;
+  });
+  for (size_t i = 0; i < v.size(); ++i) TEST_ASSERT_EQUAL_STRING(sorted[i], v[i].c_str());
+  // The keys.
+  TEST_ASSERT_EQUAL_UINT32(0x304B, textfold::kanaKey(0x30AB));  // カ as か
+  TEST_ASSERT_EQUAL_UINT32(0x304C, textfold::kanaKey(0x30AC));  // ガ as が
+  TEST_ASSERT_EQUAL_UINT32(0x3042, textfold::kanaKey(0x3041));  // ぁ as あ
+  TEST_ASSERT_EQUAL_UINT32(0x3042, textfold::kanaKey(0x30A1));  // ァ as あ
+  TEST_ASSERT_EQUAL_UINT32(0x3064, textfold::kanaKey(0x30C3));  // ッ as つ
+  TEST_ASSERT_EQUAL_UINT32(0x3051, textfold::kanaKey(0x30F6));  // ヶ as け
+  TEST_ASSERT_EQUAL_UINT32(0x304F, textfold::kanaKey(0x31F0));  // ㇰ as く
+  TEST_ASSERT_EQUAL_UINT32(0x3094, textfold::kanaKey(0x30F4));  // ヴ as ゔ
+  TEST_ASSERT_EQUAL_UINT32(0x309D, textfold::kanaKey(0x30FD));  // ヽ as ゝ
+  TEST_ASSERT_EQUAL_UINT32(0x309E, textfold::kanaKey(0x30FE));  // ヾ as ゞ
+  TEST_ASSERT_EQUAL_UINT32(0x30FC, textfold::kanaKey(0x30FC));  // ー itself
+  TEST_ASSERT_EQUAL_UINT32(0x30F7, textfold::kanaKey(0x30F7));  // ヷ: no hiragana
+  TEST_ASSERT_EQUAL_UINT32(0x4E00, textfold::kanaKey(0x4E00));
+  // Every voiced kana (a kana and U+3099 or U+309A composed) just after
+  // its unvoiced one: after it, before the next large unvoiced letter of
+  // the chart (か が き, は ば ぱ ひ, う ゔ え, わ ヷ ゐ, を ヺ ん).
+  bool composite[0x3100] = {};
+  for (uint32_t b = 0x3041; b < 0x3100; ++b) {
+    for (uint32_t m = 0x3099; m <= 0x309A; ++m) {
+      const uint32_t c = textfold::composePair(b, m);
+      if (c) composite[c] = true;
+    }
+  }
+  int voiced = 0;
+  for (uint32_t b = 0x3041; b < 0x3100; ++b) {
+    for (uint32_t m = 0x3099; m <= 0x309A; ++m) {
+      const uint32_t c = textfold::composePair(b, m);
+      if (!c) continue;
+      ++voiced;
+      uint32_t next = textfold::kanaKey(b) + 1;
+      while (next < 0x309F && (composite[next] || textfold::kanaKey(next) != next)) ++next;
+      const std::string sb = utf8(b), sc = utf8(c), sn = utf8(next);
+      TEST_ASSERT_TRUE_MESSAGE(textfold::compare(sb.c_str(), sc.c_str()) < 0, sc.c_str());
+      TEST_ASSERT_TRUE_MESSAGE(textfold::compare(sc.c_str(), sn.c_str()) < 0, sc.c_str());
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(2 * 25 + 4 + 4, voiced);  // が-ぽ and ガ-ポ, ゔ ヴ ゞ ヾ, ヷ-ヺ
+  // Same name: the kana alike (as case is), Han by code point.
+  TEST_ASSERT_TRUE(same("ヒカル", "ひかる"));
+  TEST_ASSERT_TRUE(same("キャリー", "きゃりー"));
+  TEST_ASSERT_FALSE(same("ヒカル", "ビカル"));
+  TEST_ASSERT_FALSE(same("宇多田ヒカル", "宇多田"));
+  // Han unchanged: by code point, after the kana, all under '#'.
+  TEST_ASSERT_TRUE(textfold::compare("ヲ", "一") < 0);
+  TEST_ASSERT_TRUE(textfold::compare("一", "丁") < 0);
+  TEST_ASSERT_EQUAL_CHAR('#', textfold::railKey("アイス"));
+  TEST_ASSERT_EQUAL_CHAR('#', textfold::railKey("ひかる"));
+}
+
+// Hangul: syllables by code point (the dictionary's order), a lone
+// consonant just before the first syllable it begins, other jamo after the
+// syllables; Hangul before the kana and Han.
+void test_hangul_order() {
+  const char* sorted[] = {"ㄱ", "가", "각", "갛", "개", "기", "ㄲ", "까", "ㄴ", "나", "ㅎ", "하", "힣", "ㄳ", "ㅏ",
+                          "あ"};
+  std::vector<std::string> v(sorted, sorted + sizeof(sorted) / sizeof(sorted[0]));
+  std::reverse(v.begin(), v.end());
+  std::sort(v.begin(), v.end(), [](const std::string& a, const std::string& b) {
+    return textfold::compare(a.c_str(), b.c_str()) < 0;
+  });
+  for (size_t i = 0; i < v.size(); ++i) TEST_ASSERT_EQUAL_STRING(sorted[i], v[i].c_str());
+  // The conjoining initial (U+1100, alone: nothing to compose with) is ㄱ's letter.
+  TEST_ASSERT_TRUE(textfold::compare("\xE1\x84\x80", "가") < 0);
+  TEST_ASSERT_TRUE(textfold::compare("\xE1\x84\x80", "ㄱ") != 0);
+  TEST_ASSERT_TRUE(same("\xE1\x84\x80", "ㄱ"));
+  TEST_ASSERT_FALSE(same("ㄳ", "ㄱ"));  // a cluster is a letter of its own
+  TEST_ASSERT_TRUE(textfold::compare("아이유", "방탄소년단") > 0);
+  TEST_ASSERT_TRUE(textfold::compare("서울", "ㅅ") > 0);
+  TEST_ASSERT_TRUE(textfold::compare("서울", "ㅇ") < 0);
+  for (uint32_t l = 0; l < 19; ++l) TEST_ASSERT_EQUAL_INT(static_cast<int>(l), textfold::jamoInitial(0x1100 + l));
+  TEST_ASSERT_EQUAL_INT(0, textfold::jamoInitial(0x3131));   // ㄱ
+  TEST_ASSERT_EQUAL_INT(2, textfold::jamoInitial(0x3134));   // ㄴ
+  TEST_ASSERT_EQUAL_INT(18, textfold::jamoInitial(0x314E));  // ㅎ
+  TEST_ASSERT_EQUAL_INT(-1, textfold::jamoInitial(0x3133));  // ㄳ
+  TEST_ASSERT_EQUAL_INT(-1, textfold::jamoInitial(0x314F));  // ㅏ
+  TEST_ASSERT_EQUAL_INT(-1, textfold::jamoInitial(0xAC00));
+  TEST_ASSERT_EQUAL_CHAR('#', textfold::railKey("서울"));
+}
+
 // What the generated tables say, every entry, against the generator's
 // digest of it (as test_name_key checks NameKey's tables).
 void test_tables_digest() {
@@ -466,6 +626,10 @@ void test_tables_digest() {
   for (uint32_t cp = 0x0180; cp < 0x02B0; ++cp) fold(cp);
   for (uint32_t cp = 0x1E00; cp < 0x1F00; ++cp) fold(cp);
   for (uint32_t cp = 0x80; cp < 0xA0; ++cp) add(textfold::fromC1(cp), 2);
+  for (uint32_t cp = 0xFF61; cp < 0xFFA0; ++cp) add(textfold::fromHalfwidth(cp), 4);
+  for (uint32_t cp = 0x3041; cp < 0x3100; ++cp) add(textfold::kanaKey(cp), 4);
+  for (uint32_t cp = 0x31F0; cp < 0x3200; ++cp) add(textfold::kanaKey(cp), 4);
+  for (uint32_t cp = 0x3131; cp < 0x314F; ++cp) add(static_cast<uint32_t>(textfold::jamoInitial(cp)) & 0xFF, 1);
   TEST_ASSERT_EQUAL_UINT64(textfold::tables::kDigest, h);
 }
 
@@ -713,12 +877,15 @@ void test_latin_order_unchanged() {
     if (legacy::oldSpells(s.c_str())) mixed.push_back(s);
   }
   assertSameOrder(before, mixed, "among the others");
-  // The others: under '#', each script's names together, in Script's order.
+  // The others: under '#', each script's names together, in Script's order
+  // (the kana one script: phase 2).
   int lastScript = 0;
   for (const auto& s : after) {
     const char* p = textfold::sortName(s.c_str());
     const uint32_t first = textfold::decode(p);
-    const auto script = static_cast<int>(textfold::scriptOf(first));
+    textfold::Script sc = textfold::scriptOf(first);
+    if (sc == textfold::Script::Katakana) sc = textfold::Script::Hiragana;
+    const auto script = static_cast<int>(sc);
     if (first < 0x80 || legacy::oldSpells(s.c_str()) || script == 0) continue;
     TEST_ASSERT_EQUAL_CHAR_MESSAGE('#', textfold::railKey(textfold::sortName(s.c_str())), s.c_str());
     TEST_ASSERT_TRUE_MESSAGE(script >= lastScript, s.c_str());
@@ -749,6 +916,9 @@ int main(int, char**) {
   RUN_TEST(test_c1_in_punctuation_mode);
   RUN_TEST(test_compose_matches_unicodedata);
   RUN_TEST(test_compose_examples);
+  RUN_TEST(test_halfwidth_katakana_compose);
+  RUN_TEST(test_kana_order);
+  RUN_TEST(test_hangul_order);
   RUN_TEST(test_tables_digest);
   RUN_TEST(test_script_order);
   RUN_TEST(test_mixed_order_is_total_and_bucketed);

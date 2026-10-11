@@ -195,7 +195,11 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
   the music files isn't shown yet, and neither is a progressive JPEG (the
   album shows a note instead).
 - The queue holds up to 5,000 tracks.
-- Text is drawn in Latin scripts only.
+- Text is drawn in Latin, Greek and Cyrillic, and Chinese, Japanese and
+  Korean names from a built-in 16 px set (KS X 1001's Hangul, JIS X
+  0208, GB2312's level 1 and the kana; Han drawn the Japanese way). Other
+  scripts (Hebrew, Arabic, Thai, Devanagari and others) and rarer
+  characters show as `?`. The menus are in English.
 - No WiFi yet: syncing with an mStream server comes later.
 
 ## Files

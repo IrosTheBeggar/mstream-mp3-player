@@ -21,7 +21,9 @@
 #include "BootLayout.h"
 #include "CardContract.h"
 #include "CardTags.h"
+#include "CjkGlyphs16.h"
 #include "DeviceInfo.h"
+#include "GlyphStore.h"
 #include "HostStatus.h"
 #include "IdlePolicy.h"
 #include "JumpIndex.h"
@@ -43,6 +45,7 @@
 #include "TagText.h"
 #include "TextFit.h"
 #include "TextFold.h"
+#include "TitleLayout.h"
 #include "TouchCalibration.h"
 #include "TouchCheck.h"
 #include "TrackCatalog.h"
@@ -71,6 +74,17 @@ int bucketOfRow(const std::vector<std::string>& v, uint32_t row) {
   return textfold::bucketOf(textfold::railKey(v[row].c_str()));
 }
 
+// ---- the glyph store behind the fonts (ui/Fonts: docs/I18N.md, phase 2) ----
+
+const glyphstore::Store& cjk() {
+  static const glyphstore::Store store = [] {
+    glyphstore::Store s;
+    s.open(kCjkGlyphs16, kCjkGlyphs16Size);
+    return s;
+  }();
+  return store;
+}
+
 // ---- the VLW fonts' metrics (what ui/Fonts measures with) ----
 
 struct Vlw {
@@ -87,7 +101,10 @@ struct Vlw {
   // and baseline: the header's ascent and descent, grown by any glyph of
   // ASCII or above U+00FF that reaches further.
   int maxAscent = 0, yAdvance = 0;
-  explicit Vlw(const uint8_t* d) {
+  // The Bold and Title roles' fonts (DejaVu Sans Bold) draw the store's
+  // glyphs bold: a pixel further (glyphstore::boldAdvance()).
+  bool boldCjk = false;
+  explicit Vlw(const uint8_t* d) : boldCjk(d == kVlwSansBold16 || d == kVlwSansBold22) {
     auto be32 = [&](size_t at) {
       return static_cast<uint32_t>(d[at]) << 24 | static_cast<uint32_t>(d[at + 1]) << 16 |
              static_cast<uint32_t>(d[at + 2]) << 8 | d[at + 3];
@@ -121,22 +138,33 @@ struct Vlw {
     }
     return -1;
   }
+  // The font's glyph, else the glyph store's (as ui/Fonts: VLW first).
+  bool has(uint32_t cp) const { return find(cp) >= 0 || cjk().contains(cp); }
   // Every character has a glyph (the firmware draws a missing one folded).
   bool hasAll(const char* s) const {
     for (const char* p = s; *p;) {
-      if (find(textfold::decode(p)) < 0) return false;
+      if (!has(textfold::decode(p))) return false;
     }
     return true;
   }
-  // As ui/Fonts measures: a missing glyph as the space width.
+  // As ui/Fonts measures: the font's advance, else the store's (bold in
+  // the Bold and Title roles), else (a missing glyph) the space width.
   int width(const char* s) const {
     int w = 0;
     for (const char* p = s; *p;) {
-      const int a = find(textfold::decode(p));
+      const uint32_t cp = textfold::decode(p);
+      int a = find(cp);
+      if (a < 0) {
+        a = cjk().advance(cp);
+        if (boldCjk) a = glyphstore::boldAdvance(a);
+      }
       w += a >= 0 ? a : space;
     }
     return w;
   }
+  // A glyph the store draws in this font: one the font lacks and the store
+  // has (ui/Fonts::fromStore()'s test).
+  bool fromStore(uint32_t cp) const { return find(cp) < 0 && cjk().contains(cp); }
 };
 
 }  // namespace
@@ -365,7 +393,22 @@ void fits(const Vlw& font, const char* text, int room) {
 namespace {
 
 int vlwWidth(void* ctx, const char* s) { return static_cast<const Vlw*>(ctx)->width(s); }
-bool vlwHas(void* ctx, uint32_t cp) { return static_cast<const Vlw*>(ctx)->find(cp) >= 0; }
+bool vlwHas(void* ctx, uint32_t cp) { return static_cast<const Vlw*>(ctx)->has(cp); }
+bool vlwFromStore(void* ctx, uint32_t cp) { return static_cast<const Vlw*>(ctx)->fromStore(cp); }
+
+// The TextFit view of a font, as ui/Fonts::fit() makes it.
+textfit::Font viewOf(const Vlw& v) {
+  textfit::Font f;
+  f.ctx = const_cast<Vlw*>(&v);
+  f.width = vlwWidth;
+  f.has = vlwHas;
+  return f;
+}
+
+// ui/Fonts::fromStore(): a glyph from the store in the text as drawn.
+bool fromStore(const Vlw& v, const char* s) {
+  return textfit::drawnAny(viewOf(v), s, vlwFromStore, const_cast<Vlw*>(&v));
+}
 
 // `name` as ui/Fonts::draw fits it (its 200-byte buffer), in `font`.
 std::string drawn(const Vlw& font, const char* name, int maxW = 300) {
@@ -382,16 +425,19 @@ std::string drawn(const Vlw& font, const char* name, int maxW = 300) {
 
 // TextFit with the fonts the firmware draws with: decomposed text composed
 // first, a cp1252 byte (U+0080-009F) as its character, Greek, Cyrillic,
-// Romanian's and Pinyin's letters drawn as they are (phase 1), the Latin
-// letters the fonts still lack (Vietnamese's) as their base letters; the
-// scripts with no glyphs yet stay '?'. The tests measure a missing glyph as
-// the firmware does: the space width M5GFX gives it, 5 px in DejaVu Sans 16.
+// Romanian's and Pinyin's letters drawn as they are (phase 1), Chinese,
+// Japanese and Korean from the glyph store (phase 2), the Latin letters the
+// fonts still lack (Vietnamese's) as their base letters; the scripts with
+// no glyphs yet stay '?'. The tests measure a missing glyph as the firmware
+// does: the space width M5GFX gives it, 5 px in DejaVu Sans 16.
 void test_names_drawn_with_the_fonts() {
   const Vlw body(kVlwSans16), small(kVlwSans13);
   TEST_ASSERT_EQUAL_INT(5, body.space);
   TEST_ASSERT_EQUAL_INT(4, small.space);
-  TEST_ASSERT_EQUAL_INT(body.width("a") + body.space + body.width("b"), body.width("a\xE4\xB8\xAD" "b"));  // 中
-  TEST_ASSERT_FALSE(body.hasAll("中"));
+  TEST_ASSERT_EQUAL_INT(body.width("a") + body.space + body.width("b"), body.width("a\xD5\x80" "b"));  // Հ
+  TEST_ASSERT_EQUAL_INT(body.width("a") + 16 + body.width("b"), body.width("a\xE4\xB8\xAD" "b"));  // 中: the store's
+  TEST_ASSERT_FALSE(body.hasAll("Հ"));
+  TEST_ASSERT_TRUE(body.hasAll("中"));
   TEST_ASSERT_TRUE(body.hasAll("Ж"));
   TEST_ASSERT_TRUE(body.hasAll("Café ’…€"));
   TEST_ASSERT_EQUAL_STRING("Don’t Stop – Live…", drawn(body, "Don\xC2\x92t Stop \xC2\x96 Live\xC2\x85").c_str());
@@ -411,9 +457,31 @@ void test_names_drawn_with_the_fonts() {
   // NFD Greek and Cyrillic compose to the fonts' letters: Χάρις, Ёлка, Й.
   TEST_ASSERT_EQUAL_STRING("Χάρις", drawn(body, "Χα\xCC\x81ρις").c_str());
   TEST_ASSERT_EQUAL_STRING("Ёлка Й", drawn(body, "Е\xCC\x88лка И\xCC\x86").c_str());
-  // Scripts the fonts don't have yet: '?' a letter, as before.
+  // Chinese, Japanese and Korean from the glyph store (phase 2); NFD
+  // Hangul composed to the store's syllables; halfwidth katakana as the
+  // fullwidth.
+  TEST_ASSERT_EQUAL_STRING("中文", drawn(body, "中文").c_str());
+  TEST_ASSERT_EQUAL_STRING("王菲", drawn(body, "王菲").c_str());
+  TEST_ASSERT_EQUAL_STRING("周杰倫", drawn(small, "周杰倫").c_str());
+  TEST_ASSERT_EQUAL_STRING("宇多田ヒカル", drawn(body, "宇多田ヒカル").c_str());
+  TEST_ASSERT_EQUAL_STRING("坂本龍一", drawn(body, "坂本龍一").c_str());
+  TEST_ASSERT_EQUAL_STRING("아이유", drawn(body, "아이유").c_str());
+  TEST_ASSERT_EQUAL_STRING("한글", drawn(body, "\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB\xE1\x84\x80\xE1\x85\xB3\xE1\x86\xAF").c_str());
+  TEST_ASSERT_EQUAL_STRING("カタカナ", drawn(body, "ｶﾀｶﾅ").c_str());
+  TEST_ASSERT_EQUAL_STRING("ガ パ ア゛", drawn(body, "ｶﾞ ﾊﾟ ｱﾞ").c_str());  // no ア with the mark: the spacing ゛
+  TEST_ASSERT_EQUAL_STRING("「東京」 ・ ㄱ ー", drawn(body, "「東京」 ・ ㄱ ー").c_str());
+  TEST_ASSERT_EQUAL_STRING("Tokyo 東京事変 – Live", drawn(body, "Tokyo 東京事変 \xE2\x80\x93 Live").c_str());
+  TEST_ASSERT_EQUAL_INT(16 * 6, body.width("宇多田ヒカル"));  // Han and kana 16 px, Hangul 15
+  TEST_ASSERT_EQUAL_INT(15 * 3, body.width("아이유"));
+  // Cut at a character to the room, with the font's "…".
+  const std::string cjkCut = drawn(body, "東京事変の夜明けのスキャット", 100);
+  TEST_ASSERT_EQUAL_STRING("東京事変の…", cjkCut.c_str());
+  TEST_ASSERT_TRUE(body.width(cjkCut.c_str()) <= 100);
+  // Scripts with no glyphs yet: '?' a letter, as before; the store's set
+  // has KS X 1001's Hangul and JIS X 0208 and GB2312's level 1, not all of them.
   TEST_ASSERT_EQUAL_STRING("???", drawn(body, "Հայ").c_str());  // Armenian
-  TEST_ASSERT_EQUAL_STRING("??", drawn(body, "中文").c_str());
+  TEST_ASSERT_EQUAL_STRING("?", drawn(body, "똠").c_str());     // a Hangul syllable outside KS X 1001
+  TEST_ASSERT_EQUAL_STRING("?", drawn(body, "\xF0\xA0\x80\x80").c_str());  // U+20000, past the BMP
   TEST_ASSERT_EQUAL_STRING("Ninja ? Beats", drawn(body, "Ninja 🥷 Beats").c_str());
   TEST_ASSERT_EQUAL_STRING("?", drawn(body, "\xE2\x9D\xA4\xEF\xB8\x8F").c_str());  // ❤ + VS16: one '?'
   // Cut to the room as before, the composed text measured.
@@ -421,6 +489,182 @@ void test_names_drawn_with_the_fonts() {
   TEST_ASSERT_TRUE(body.width(cut.c_str()) <= 100);
   TEST_ASSERT_TRUE(body.hasAll(cut.c_str()));
   TEST_ASSERT_EQUAL_STRING("Beyoncé…", cut.c_str());  // whole letters, the é one glyph
+}
+
+// What a page measures (ui/Fonts::width(): textfit::drawnWidth()) is what
+// is drawn: a halfwidth or NFD name as its composed glyphs, a missing glyph
+// as its fold. Measured raw, a halfwidth kana or a jamo is a 4-5 px blank,
+// a third of what the store draws: a path kept whole that the draw then
+// cuts at its end, an album line given its year and then cut.
+void test_names_measured_as_drawn() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  auto view = [](const Vlw& v) {
+    textfit::Font f;
+    f.ctx = const_cast<Vlw*>(&v);
+    f.width = vlwWidth;
+    f.has = vlwHas;
+    return f;
+  };
+  const char* nfdPath =
+      "/music/\xE1\x84\x8B\xE1\x85\xA1\xE1\x84\x8B\xE1\x85\xB5\xE1\x84\x8B\xE1\x85\xB2/"  // 아이유
+      "\xE1\x84\x89\xE1\x85\xA5\xE1\x84\x8B\xE1\x85\xAE\xE1\x86\xAF\xE1\x84\x8B\xE1\x85\xB4"  // 서울의
+      " \xE1\x84\x87\xE1\x85\xA1\xE1\x86\xB7";                                              // 밤
+  const char* names[] = {"/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", "ﾀﾞﾌﾞﾙﾌｧﾝﾀｼﾞｰ · 2002", nfdPath, "Beyonce\xCC\x81",
+                         "Mỹ Tâm", "Հայ", "Ninja 🥷 Beats", "Don\xC2\x92t", "Tokyo 東京事変 – Live"};
+  for (const Vlw* v : {&body, &small}) {
+    for (const char* n : names) {
+      TEST_ASSERT_EQUAL_INT_MESSAGE(v->width(drawn(*v, n, 10000).c_str()), textfit::drawnWidth(view(*v), n), n);
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(99, small.width("/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ"));  // raw: the 12 halfwidth ones blank
+  TEST_ASSERT_EQUAL_INT(227, textfit::drawnWidth(view(small), "/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ"));
+  // The Folders header and Go to folder: the last folders kept, as for
+  // the fullwidth path.
+  char out[160];
+  textfit::cutPathLeft(view(small), "/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", 200, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("…/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", out);
+  TEST_ASSERT_EQUAL_STRING("…/アニメ/サウンドトラック", drawn(small, out, 200).c_str());  // whole
+  textfit::cutPathLeft(view(small), nfdPath, 150, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("…/아이유/서울의 밤", drawn(small, out, 150).c_str());
+  // Now Playing's album line (190 px of Body): the year only when it fits.
+  TEST_ASSERT_EQUAL_INT(199, textfit::drawnWidth(view(body), "ﾀﾞﾌﾞﾙﾌｧﾝﾀｼﾞｰ · 2002"));
+}
+
+// The Bold and Title roles draw the store's glyphs bold, a pixel wider
+// (docs/I18N.md, phase 2), and measure them so: a Bold label, the current
+// row, a cut, all as wide as drawn. Body and Small as before; the VLW
+// glyphs unchanged in every role.
+void test_store_glyphs_bold_in_bold_and_title() {
+  const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
+  TEST_ASSERT_FALSE(body.boldCjk || small.boldCjk);
+  TEST_ASSERT_TRUE(bold.boldCjk && title.boldCjk);
+  TEST_ASSERT_EQUAL_INT(16 * 4, body.width("東京事変"));
+  TEST_ASSERT_EQUAL_INT(16 * 4, small.width("東京事変"));
+  TEST_ASSERT_EQUAL_INT(17 * 4, bold.width("東京事変"));
+  TEST_ASSERT_EQUAL_INT(17 * 4, title.width("東京事変"));
+  TEST_ASSERT_EQUAL_INT(15 * 3, body.width("아이유"));
+  TEST_ASSERT_EQUAL_INT(16 * 3, bold.width("아이유"));
+  TEST_ASSERT_EQUAL_INT(17, bold.width("\xE3\x80\x80"));  // the ideographic space moves the pen: a pixel more
+  TEST_ASSERT_EQUAL_INT(bold.width("Tokyo ") + 17 * 2, bold.width("Tokyo 東京"));
+  // A cut in Bold fits by the bold measure: in the Queue's 270 px, 14 Han
+  // and "…" where Body has 15.
+  const char* han = "東京事変の夜明けに歌う小さな歌とその続き";
+  const std::string inBody = drawn(body, han, 270), inBold = drawn(bold, han, 270);
+  TEST_ASSERT_TRUE(body.width(inBody.c_str()) <= 270);
+  TEST_ASSERT_TRUE(bold.width(inBold.c_str()) <= 270);
+  TEST_ASSERT_EQUAL_STRING("東京事変の夜明けに歌う小さな歌…", inBody.c_str());
+  TEST_ASSERT_EQUAL_STRING("東京事変の夜明けに歌う小さな…", inBold.c_str());
+  // What a page measures (Fonts::width(): textfit::drawnWidth()) is the
+  // bold width too: halfwidth kana as the fullwidth, bold.
+  TEST_ASSERT_EQUAL_INT(17 * 4, textfit::drawnWidth(viewOf(bold), "ｶﾀｶﾅ"));
+}
+
+// Now Playing's title (TitleLayout, 190 px): two lines of Title (22 px),
+// else three of Bold (16 px), centred in the strip. A title with a glyph
+// from the store goes to the Bold rows whatever its length: its CJK is
+// 16 px in every role, small beside 22 px Latin. Decided on the text as
+// drawn (composed and folded), with the real fonts and the store.
+void test_now_playing_title_rows() {
+  const Vlw bold(kVlwSansBold16), title(kVlwSansBold22);
+  constexpr int kW = uitext::kNowPlayingTextW;
+  char lines[titlelayout::kMaxLines][titlelayout::kLineSize];
+  auto lay = [&](const char* t) {
+    return titlelayout::wrap(viewOf(title), viewOf(bold), fromStore(title, t), t, kW, lines);
+  };
+  // Which texts have a glyph from the store, as drawn.
+  TEST_ASSERT_TRUE(fromStore(title, "只爱陌生人"));
+  TEST_ASSERT_TRUE(fromStore(title, "봄날"));
+  TEST_ASSERT_TRUE(fromStore(title, "Tokyo 東京 Live"));
+  TEST_ASSERT_TRUE(fromStore(title, "ｶﾀｶﾅ"));  // halfwidth: drawn as the store's カタカナ
+  TEST_ASSERT_TRUE(fromStore(title, "\xE1\x84\x92\xE1\x85\xA1\xE1\x86\xAB"));  // NFD 한
+  TEST_ASSERT_TRUE(fromStore(title, "Live\xE3\x80\x80"));  // the ideographic space is the store's
+  TEST_ASSERT_FALSE(fromStore(title, "Кино – Группа крови"));
+  TEST_ASSERT_FALSE(fromStore(title, "Minus \xE2\x88\x92" "1"));  // − (U+2212) is drawn as '-'
+  TEST_ASSERT_FALSE(fromStore(title, "ＡＢＣ"));                    // as ABC
+  TEST_ASSERT_FALSE(fromStore(title, "\xEB\x98\xA0"));           // 똠: not in the store, drawn '?'
+  TEST_ASSERT_FALSE(fromStore(title, ""));
+  TEST_ASSERT_FALSE(fromStore(title, nullptr));
+
+  // Latin as before: one Title line in the middle, two at 13 and 39.
+  titlelayout::Lines l = lay("Glass Harbour");
+  TEST_ASSERT_FALSE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
+  TEST_ASSERT_EQUAL_INT(26, titlelayout::lineY(l, 0));
+  l = lay("Glass Harbour at Night");
+  TEST_ASSERT_FALSE(l.bold);
+  TEST_ASSERT_EQUAL_INT(2, l.count);
+  TEST_ASSERT_EQUAL_INT(13, titlelayout::lineY(l, 0));
+  TEST_ASSERT_EQUAL_INT(39, titlelayout::lineY(l, 1));
+  // Too long for two Title lines: Bold, three lines at 9, 26 and 43.
+  l = lay("The Longest Title Anyone Ever Gave a Song About a Very Long Road");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(3, l.count);
+  TEST_ASSERT_EQUAL_INT(9, titlelayout::lineY(l, 0));
+  TEST_ASSERT_EQUAL_INT(26, titlelayout::lineY(l, 1));
+  TEST_ASSERT_EQUAL_INT(43, titlelayout::lineY(l, 2));
+  // ... or two of Bold, centred: 17 and 34.
+  l = lay("Glass Harbour at Night and the Pier");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(2, l.count);
+  TEST_ASSERT_EQUAL_INT(17, titlelayout::lineY(l, 0));
+  TEST_ASSERT_EQUAL_INT(34, titlelayout::lineY(l, 1));
+  // CJK: Bold, however short. One line in the middle.
+  l = lay("只爱陌生人");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
+  TEST_ASSERT_EQUAL_INT(26, titlelayout::lineY(l, 0));
+  TEST_ASSERT_EQUAL_STRING("只爱陌生人", lines[0]);
+  l = lay("봄날");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
+  l = lay("ｶﾀｶﾅ ﾊﾟﾗﾀﾞｲｽ");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_STRING("カタカナ パラダイス", lines[0]);
+  l = lay("Tokyo 東京事変 Live 2004");  // two Title lines would have held it
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(2, l.count);
+  // Any glyph from the store, not only Han, kana and Hangul: JIS X 0208's
+  // symbols that the UI fonts lack are the store's too (16 px, bold here),
+  // and so is the ideographic space. A Latin title with one is Bold.
+  for (const char* sym : {"★", "☆", "♪", "→", "∞", "√", "※", "○", "●", "℃", "‥", "〜", "・", "\xE3\x80\x80"}) {
+    TEST_ASSERT_TRUE_MESSAGE(fromStore(title, sym), sym);
+  }
+  l = lay("Lucky ☆ Star");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
+  TEST_ASSERT_EQUAL_INT(26, titlelayout::lineY(l, 0));
+  l = lay("A → B");
+  TEST_ASSERT_TRUE(l.bold);
+  l = lay("Hello\xE3\x80\x80World");
+  TEST_ASSERT_TRUE(l.bold);
+  // A sign the UI fonts draw stays theirs: Title.
+  l = lay("Star · 1° ©");
+  TEST_ASSERT_FALSE(l.bold);
+  TEST_ASSERT_EQUAL_INT(1, l.count);
+  // 11 bold Han to a line (17 px: 187 of 190), wrapped between them.
+  l = lay("東京の夜明けに歌う小さな歌とその続き");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(2, l.count);
+  TEST_ASSERT_EQUAL_STRING("東京の夜明けに歌う小さ", lines[0]);
+  TEST_ASSERT_EQUAL_STRING("な歌とその続き", lines[1]);
+  TEST_ASSERT_EQUAL_INT(17, titlelayout::lineY(l, 0));
+  // Three lines at most, the last ellipsised; every line in its 190 px.
+  l = lay("東京事変の夜明けに歌う小さな歌とその続きの物語、そして最後の朝の光と長い長い帰り道");
+  TEST_ASSERT_TRUE(l.bold);
+  TEST_ASSERT_EQUAL_INT(3, l.count);
+  for (int i = 0; i < l.count; ++i) TEST_ASSERT_TRUE(bold.width(lines[i]) <= kW);
+  TEST_ASSERT_TRUE(titlelayout::cutShort(lines[2], "東京事変の夜明けに歌う小さな歌とその続きの物語、そして最後の朝の光と長い長い帰り道"));
+  // Only a '?' where the store has none: Title, as a Latin title.
+  l = lay("\xEB\x98\xA0");
+  TEST_ASSERT_FALSE(l.bold);
+  TEST_ASSERT_EQUAL_STRING("?", lines[0]);
+  l = lay("");
+  TEST_ASSERT_EQUAL_INT(0, l.count);
+  // cutShort(): the last line ends in an ellipsis the text didn't have.
+  TEST_ASSERT_TRUE(titlelayout::cutShort("abc…", "abcdef"));
+  TEST_ASSERT_TRUE(titlelayout::cutShort("abc...", "abcdef"));
+  TEST_ASSERT_FALSE(titlelayout::cutShort("abc…", "abc…"));
+  TEST_ASSERT_FALSE(titlelayout::cutShort("abc", "abc"));
 }
 
 // Phase 1's glyphs (docs/I18N.md; tools/vlw_font.py's RANGES) keep every
@@ -452,6 +696,118 @@ void test_fonts_keep_their_line_heights() {
   // The Body and Small heights the boot screen keeps room for.
   TEST_ASSERT_EQUAL_INT(bootlayout::kBodyH, Vlw(kVlwSans16).yAdvance);
   TEST_ASSERT_EQUAL_INT(bootlayout::kSmallH, Vlw(kVlwSans13).yAdvance);
+}
+
+// The glyph store's glyphs in the four rows (docs/I18N.md, phase 2), placed
+// as ui/Fonts places them: 16 px in every role, on the role's baseline, the
+// Small row's a pixel lower (on DejaVu Sans 13's, 13 rows down, 8,902 of
+// the 10,557 would reach above its 17 px: the em box is 14 above and 2
+// below), and nothing outside the row. A glyph whose ink reaches above the
+// row moves down into it (Å in Body and Bold; in Small, 31: box drawing,
+// Å, ヷ and nine kanji), and only the full-height box drawing lose a row,
+// in Small (12). No kana, Hangul or Han is cut in any role.
+void test_store_glyphs_sit_in_the_rows() {
+  const glyphstore::Store& s = cjk();
+  TEST_ASSERT_TRUE(s.valid());
+  struct Role {
+    const uint8_t* data;
+    int baseline, moved, cut;
+  };
+  const Role roles[] = {{kVlwSans16, 15, 1, 0}, {kVlwSans13, 14, 31, 12}, {kVlwSansBold16, 15, 1, 0},
+                        {kVlwSansBold22, 21, 0, 0}};
+  for (const Role& role : roles) {
+    const Vlw f(role.data);
+    const int base = s.baselineIn(f.maxAscent, f.yAdvance);
+    TEST_ASSERT_EQUAL_INT(role.baseline, base);
+    int moved = 0, cut = 0, glyphs = 0;
+    for (uint32_t cp = 0; cp <= 0xFFFF; ++cp) {
+      const glyphstore::Glyph g = s.find(cp);
+      if (!g) continue;
+      ++glyphs;
+      const glyphstore::Metrics m = s.metrics(g);
+      if (m.w == 0) continue;
+      const glyphstore::Placement p = glyphstore::place(m, base, f.yAdvance);
+      char msg[48];
+      snprintf(msg, sizeof(msg), "U+%04X in a %d px row", static_cast<unsigned>(cp), f.yAdvance);
+      TEST_ASSERT_TRUE_MESSAGE(p.top >= 0 && p.rows > 0 && p.top + p.rows <= f.yAdvance, msg);
+      if (p.top != base - m.y) ++moved;
+      if (p.rows < m.h) {
+        ++cut;
+        TEST_ASSERT_TRUE_MESSAGE(cp >= 0x2500 && cp <= 0x257F, msg);  // box drawing only
+        TEST_ASSERT_EQUAL_INT_MESSAGE(m.h - 1, p.rows, msg);
+      }
+    }
+    TEST_ASSERT_EQUAL_UINT32(s.glyphCount(), static_cast<uint32_t>(glyphs));
+    TEST_ASSERT_EQUAL_INT(role.moved, moved);
+    TEST_ASSERT_EQUAL_INT(role.cut, cut);
+  }
+}
+
+// Now Playing's title lines share rows (TitleLayout): each line's row,
+// centred on lineY() as draw() centres it, is taller than the pitch, so
+// the next line's row starts over its last rows: Bold's two (19 rows 17
+// apart, in two lines as in three) and Title's one (27 rows 26 apart). In
+// Bold the ink of the line above reaches them: 157 of DejaVu Sans Bold's
+// glyphs (J g j p q y _ { | }, letters with a cedilla or an ogonek, Greek's
+// and Cyrillic's descenders: ç ą ρ щ у) and the store's glyphs 3 px under
+// the baseline (283 Han, 19 Hangul, 20 box drawing); in Title nothing does.
+// So NowPlayingPage::drawTitle() fills its strip and draws the lines with
+// no background: a line's own would erase that row (docs/I18N.md, phase 2;
+// the drawing is checked on the PC).
+void test_now_playing_title_lines_share_rows() {
+  const glyphstore::Store& s = cjk();
+  struct Layout {
+    const uint8_t* data;
+    bool bold;
+    int count, shared, vlw, han, hangul, other;
+  };
+  const Layout layouts[] = {{kVlwSansBold16, true, 2, 2, 157, 283, 19, 20},
+                            {kVlwSansBold16, true, 3, 2, 157, 283, 19, 20},
+                            {kVlwSansBold22, false, 2, 1, 0, 0, 0, 0}};
+  for (const Layout& want : layouts) {
+    const Vlw f(want.data);
+    titlelayout::Lines l;
+    l.bold = want.bold;
+    l.count = want.count;
+    const int base = s.baselineIn(f.maxAscent, f.yAdvance);
+    for (int i = 0; i + 1 < l.count; ++i) {
+      const int top = titlelayout::lineY(l, i) - (f.yAdvance >> 1);
+      const int next = titlelayout::lineY(l, i + 1) - (f.yAdvance >> 1);
+      TEST_ASSERT_EQUAL_INT(want.shared, top + f.yAdvance - next);
+      const int from = next - top;  // line i's first row under the next line's
+      // A VLW glyph's rows start at the baseline less its top (M5GFX).
+      int vlw = 0;
+      std::string some;
+      for (const Vlw::Box& b : f.boxes) {
+        if (b.height > 0 && f.maxAscent - b.top + b.height - 1 >= from) {
+          ++vlw;
+          if (b.cp < 0x80) some += static_cast<char>(b.cp);
+        }
+      }
+      TEST_ASSERT_EQUAL_INT(want.vlw, vlw);
+      if (want.vlw) TEST_ASSERT_EQUAL_STRING("J_gjpqy{|}", some.c_str());
+      int han = 0, hangul = 0, other = 0;
+      for (uint32_t cp = 0; cp <= 0xFFFF; ++cp) {
+        const glyphstore::Glyph g = s.find(cp);
+        if (!g) continue;
+        const glyphstore::Metrics m = s.metrics(g);
+        if (m.w == 0) continue;
+        const glyphstore::Placement p = glyphstore::place(m, base, f.yAdvance);
+        if (p.top + p.rows - 1 < from) continue;
+        if (textfold::scriptOf(cp) == textfold::Script::Han) {
+          ++han;
+        } else if (cp >= 0xAC00 && cp <= 0xD7A3) {
+          ++hangul;
+        } else {
+          ++other;
+          TEST_ASSERT_TRUE(cp >= 0x2500 && cp <= 0x257F);  // box drawing
+        }
+      }
+      TEST_ASSERT_EQUAL_INT(want.han, han);
+      TEST_ASSERT_EQUAL_INT(want.hangul, hangul);
+      TEST_ASSERT_EQUAL_INT(want.other, other);
+    }
+  }
 }
 
 // What each of the four fonts covers since phase 1, and what it leaves to
@@ -2509,7 +2865,12 @@ int main(int, char**) {
   RUN_TEST(test_coach_texts_fit);
   RUN_TEST(test_toast_names_fit);
   RUN_TEST(test_names_drawn_with_the_fonts);
+  RUN_TEST(test_names_measured_as_drawn);
+  RUN_TEST(test_store_glyphs_bold_in_bold_and_title);
+  RUN_TEST(test_now_playing_title_rows);
   RUN_TEST(test_fonts_keep_their_line_heights);
+  RUN_TEST(test_store_glyphs_sit_in_the_rows);
+  RUN_TEST(test_now_playing_title_lines_share_rows);
   RUN_TEST(test_fonts_cover_greek_cyrillic_and_latin);
   RUN_TEST(test_queue_cap_texts_fit);
   RUN_TEST(test_push_out_texts_fit);

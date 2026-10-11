@@ -87,6 +87,12 @@ Result fold(const char* in, size_t inLen, char* out, size_t outSize, Mode mode);
 // compositions aren't made either (Arabic's hamza and madda letters,
 // Devanagari's nukta letters, the Indic two-part vowel signs): their NFD
 // and NFC spellings stay two texts.
+//
+// One compatibility fold besides (docs/I18N.md, phase 2): halfwidth
+// katakana come out as the fullwidth ones, as NFKC has them
+// (fromHalfwidth()), their voicing marks ﾞ ﾟ as the combining U+3099 and
+// U+309A, so composed with the kana before them: ｶﾞ is ガ, ﾊﾟ is パ. So
+// they draw from the glyph store, and sort and match as the kana.
 class Composer {
 public:
   // [s, end); end nullptr: up to the NUL.
@@ -116,6 +122,10 @@ uint8_t combiningClass(uint32_t cp);
 // NFC's primary composite of `first` + `second` (Latin, Greek, Cyrillic,
 // kana, and Hangul's LV and LVT), 0 when there is none.
 uint32_t composePair(uint32_t first, uint32_t second);
+// U+FF61-FF9F, the halfwidth katakana and their punctuation, as NFKC has
+// them (ｶ U+30AB, ｰ U+30FC ー, ｡ U+3002 。, ﾞ U+3099); `cp` itself
+// otherwise.
+uint32_t fromHalfwidth(uint32_t cp);
 
 // ---- The library's order ----
 
@@ -123,6 +133,7 @@ uint32_t composePair(uint32_t first, uint32_t second);
 // sort: after the digits, before the ASCII letters, so under the A-Z
 // rail's '#' with the digits and symbols (docs/METADATA.md 5.4). Latin
 // here is the Latin letters with no fold (IPA's, Latin Extended-C to -E).
+// Hiragana and Katakana sort as one script, the kana (kanaKey()).
 enum class Script : uint8_t {
   None,  // not a letter: a symbol, a punctuation mark, a combining mark
   Latin,
@@ -144,12 +155,31 @@ enum class Script : uint8_t {
 // numerals, 〻 and 〼 are Han, the vertical kana repeat marks Hiragana.
 Script scriptOf(uint32_t cp);
 
+// The kana letter `cp` sorts and matches as (docs/I18N.md, phase 2): a
+// katakana letter as the hiragana one (カ as か, ヴ as ゔ), a small kana as
+// its large one, as a capital letter sorts with its small one (ぁ and ァ as
+// あ, ッ as つ, ヶ as け), the iteration marks ヽ ヾ as ゝ ゞ. The voiced
+// kana stay themselves, each just after its unvoiced one (が after か,
+// before き: the code charts' order; compare() puts ゔ after う and ヷ-ヺ
+// after わ-を, which the charts have after ん). `cp` itself for the rest:
+// ー, ヷ-ヺ, ゟ, ヿ, and anything that isn't kana.
+uint32_t kanaKey(uint32_t cp);
+// The initial consonant (0-18: ㄱ ㄲ ㄴ ㄷ ㄸ ㄹ ㅁ ㅂ ㅃ ㅅ ㅆ ㅇ ㅈ ㅉ ㅊ ㅋ ㅌ ㅍ ㅎ) a
+// Hangul compatibility consonant (U+3131-314E) or a conjoining initial
+// (U+1100-1112) is; -1 for anything else, a cluster such as ㄳ included.
+int jamoInitial(uint32_t cp);
+
 // The library's order: letters case- and accent-insensitive (Full folding,
 // lowercased), everything that isn't a letter or digit before the digits,
 // the digits before the letters. A letter Full folding can't spell sorts
 // by its script (Script's order) and then its lower-case code point
 // (namekey's lowercase; ς as σ), between the digits and the ASCII letters:
 // "Ая" before "Би-2", Greek before Cyrillic before Hangul, kana and Han.
+// Kana by kanaKey() (ヒカル with ひかる; ties by the bytes, so ひかる
+// first; ゔ and ヴ just after う, ヷ-ヺ after わ-を); Hangul syllables by
+// code point (Unicode's order is the dictionary's), a lone consonant (ㄱ)
+// just before the first syllable it begins (가), the other jamo after the
+// syllables; Han by code point.
 // Composed first (Composer): NFD and NFC sort alike in the scripts it
 // composes (Latin, Greek, Cyrillic, kana, Hangul), not in the others (an
 // NFD alef with hamza, U+0627 U+0654, sorts apart from its NFC U+0623).
@@ -221,9 +251,16 @@ extern const Fold kFolds[];
 extern const uint32_t kFoldCount;
 // U+0080..U+009F as Windows-1252 (0: undefined there).
 extern const uint16_t kCp1252[32];
+// U+FF61..U+FF9F as NFKC has them.
+extern const uint16_t kHalfwidth[0x3F];
+// The kana letter U+3041..U+30FF and U+31F0..U+31FF sort as (kanaKey()).
+extern const uint16_t kKanaKey[0xBF];
+extern const uint16_t kKanaKeyExt[0x10];
+// U+3131..U+314E: the initial consonant (0-18), 255 for a cluster.
+extern const uint8_t kJamoInitial[0x1E];
 // The generator's digest of what the tables say (test_text_fold
-// recomputes it through composePair(), combiningClass(), replacement() and
-// fromC1()).
+// recomputes it through composePair(), combiningClass(), replacement(),
+// fromC1(), fromHalfwidth(), kanaKey() and jamoInitial()).
 extern const uint64_t kDigest;
 }  // namespace tables
 
