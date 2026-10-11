@@ -7,88 +7,92 @@ ELF {{ELF}} for this build; ELF {{DIO_ELF}} for the `-dio-full.bin`).
 Source for this binary: {{SOURCE_URL}}, and with its libraries in
 `{{SOURCE_TAR}}` below.
 
-## What's new in 0.8.0
+## What's new in 0.9.0
 
-- **The library comes from the tags.** The player reads each file's tags
-  itself (ID3 in MP3s, Vorbis comments in FLAC, OpusTags in Opus), in the
-  background after it starts, while it plays and on battery too. The
-  Library, Now Playing and the Queue then name each track by its tags: its
-  title and artist (a guest artist shows under the title), and its
-  album's name, year and artist; an album plays in the tags' disc and
-  track order. Where a file has no tags, the names come from the file
-  name, as before. The artists and the albums are still the folders
-  (`/music/Artist/Album/`): the tags name them but don't regroup them. An
-  artist's albums are listed newest first, the A-Z lists follow the tags'
-  sort names where there are any, and the Folders list shows the card as
-  it is.
-- **Disc dividers:** an album of more than one disc (by its tags, or
-  `1-01`, `2-01` names) has a "Disc 1", "Disc 2" row before each disc's
-  first track. Now Playing shows the album with its year ("Glass Harbour ·
-  2001") when both fit.
-- **The Library says what the player is doing**, on a line at its bottom:
-  "Checking the card…", "Reading tags 1,234 / 19,410", "Updating
-  library…", then "Library updated". Files added on a computer are found
-  at the next start ("Found 12 new tracks") and show once their tags are
-  read (a big batch shows by its file names first). **Output > Library**
-  says how many tracks have tags, and its **Rescan** reads them all again
-  (it asks first). Below 10 % battery the reading waits for USB or 15 %.
-- **While the library updates** (a moment on a small card, up to about
-  20 s at 20,000 tracks) the music plays on. The lists say "Updating the
-  library…", and a skip, a seek or a change to the queue waits ("Updating
-  the library: a moment"). An update starts only when the playing track
-  has enough time left; should a track end meanwhile all the same, the
-  next one waits, paused, unless it was already joined gaplessly.
-- **Big cards start in seconds.** The player no longer reads through the
-  whole card at every start: it loads the library it saved and checks the
-  card in the background ("Checking the card…"). On a card of 20,000
-  tracks the library is ready about 1.5 s after the card mounts, where
-  0.7.0 took about 90 s at every start; the check takes about 20 s more,
-  behind the scenes. A new card of 20,000 tracks is ready in about 20 s the
-  first time (0.7.0: about 3 minutes).
-- **The first start of 0.8.0 on a card 0.7.0 used** lists the card once by
-  its folders and file names, as 0.7.0 did at every start (the start-up
-  screen stays up meanwhile: about 20 s for 20,000 tracks). Then it reads
-  every file's tags in the background, and until that's done the Library
-  shows the file names, as 0.7.0 did. For 20,000 tracks that takes several
-  minutes with nothing playing, and longer while music plays, which it
-  gives way to. Then "Updating library…" and "Library updated". It happens
-  once: the next starts load the library as it was left. The queue, its
-  place and the resume point are kept.
-- **The queue holds up to 5,000 tracks.** Play all, an artist's or a big
-  folder's Play, and Shuffle all on a bigger library take 5,000 of them
-  (the first 5,000 in order, or with shuffle on a random 5,000: each
-  Shuffle all another), and the message says so. Play next and + Queue on
-  a full queue first push out tracks you have heard, oldest first: the
-  message says how many, and its Undo puts them back. When no heard track
-  can make way the add is refused ("No played track can make way: the
-  queue holds 5,000 tracks"). A longer queue that 0.7.0 saved (on a new
-  card the first queue was the whole library) comes back as the 5,000
-  tracks around the one it was on.
-- **The start-up screen** shows the mStream logo and the player's version,
-  for about 3 s or until the library is ready; then the touch rescue's
-  line ("Touch trouble? Hold a finger on the screen.") shows at the bottom
-  for at least 1.5 s. What it used to list (the board and its chips,
-  memory, the battery, the library) is in **Output > About > Device
-  info**, with the CPU's clock, the battery's voltage, the uptime and the
-  build; it updates every 3 s while it's open.
-- **Writes to the card are more reliable.** The SD card driver (a patched
-  copy of the Arduino core's, in this repository) now waits until the card
-  has finished each write. The stock one sometimes took the card's busy
-  signal for its answer, and the write failed.
-- **A card swapped while the player is on** is never written to: the
-  player says "Another card: restarting" and restarts to use it, so one
-  card's queue or library can't end up on another. The same card taken
-  out and put back carries on (or restarts, "Card back: restarting", if it
-  was busy with the card).
-- All of this was tested on a Core2 with a card of 19,410 tracks, and what
-  those tests turned up was fixed first: the card writes above, a console
-  command that ran out of stack and restarted the player, and too little
-  stack to spare while the library rebuilds.
-- **Going back to 0.7.0 later:** 0.7.0 can't read 0.8.0's library file,
-  so its first start builds its own again from the folders and file names
-  (minutes on a big card). Coming back to 0.8.0 then builds the library
-  from the tags it read before, without reading them again. The queue is
-  kept both ways.
+- **Names in Greek, Cyrillic and more Latin.** Titles, artists, albums
+  and folders in Greek (Χάρις Αλεξίου) and Cyrillic (Кино, Земфира) are
+  drawn as they are, where 0.8.0 showed `?`. So are the accented letters
+  of Romanian (Ș, Ț), Turkish (İ, Ğ), Czech, Polish, the Baltic
+  languages, Maltese, Esperanto and Welsh, and Pinyin's tones (Lǚ), which
+  0.8.0 drew bare or as `?`. The rows are as high as before. Latin
+  letters the player still has no glyph for lose only their accents
+  instead of turning to `?` (Vietnamese: Mỹ Tâm shows as My Tâm). A tag
+  that keeps Windows' curly quotes, dashes, € or ™ in an old Latin-1
+  frame shows them (Don’t Stop – Live, not Don?t Stop ? Live), full-width
+  letters (ＡＢＣ) show as ABC, and a name stored decomposed, as macOS and
+  some tag editors write them, keeps its accents (Beyoncé, not Beyonce?).
+- **Chinese, Japanese and Korean names** are drawn from a set of 10,557
+  characters built into the firmware, at 16 px: the 2,350 common Korean
+  Hangul syllables (KS X 1001), the kana and 6,355 kanji of Japanese's
+  JIS X 0208, the 3,755 common Chinese characters (GB2312's level 1), and
+  their punctuation and symbols (☆, ♪, → and ℃ among them): 宇多田ヒカル,
+  王菲, 아이유. Han characters are drawn the Japanese way, which a Chinese
+  reader reads too, though a few differ by a stroke. Rarer characters
+  still show as `?`: the Hangul syllables outside the 2,350 (똠),
+  Traditional Chinese characters outside these sets, and the very rare
+  Han of Unicode's extension blocks. Half-width katakana (ｶﾀｶﾅ) show as
+  the full-width ones (カタカナ). In bold text (Now Playing's title, the
+  Queue's current track) they are drawn semi-bold, to sit beside the bold
+  Latin.
+- **Now Playing's title:** a title with any of these characters, ☆ or ♪
+  included, is drawn in the 16 px bold rows (up to three lines) instead of
+  the 22 px ones, so its Latin letters are the size of its CJK; one or two
+  lines are centred. A Latin title too long for the large rows is centred
+  in the small ones too, a little lower than in 0.8.0, and its lines no
+  longer clip the bottom of the g, j, p and y in the line above. A
+  Chinese or Japanese title breaks between characters, by the usual rules
+  (never before 。, 」, ー or a small kana, never after 「); Korean breaks at
+  its spaces.
+- **The order across scripts.** 0.8.0 sorted names in other scripts by
+  their length, the scripts mixed. Now they sort by script, then by
+  letter, all under the A-Z rail's `#` after the digits: Greek, Cyrillic,
+  Korean, the Japanese kana, then Han (by code point, not by reading).
+  Hiragana and katakana are one alphabet (ひかる next to ヒカル, ガ just
+  after カ, ヴ next to ウ, a small kana with its large one), half-width
+  katakana sort as full-width, and a lone Hangul consonant (ㄱ) sorts just
+  before the syllables it starts (가). Latin names keep their order, but a
+  Romanian name with Ș or Ț, under `#` in 0.8.0, is under S or T. An
+  artist folder in another script whose tags give a sort name
+  (ARTISTSORT) is listed by it: `Кино` with the sort name `Kino` under K.
+- **A computer can ask the player how it is**, over USB, without
+  restarting it or stopping the music: its version, the card's size and
+  free space, how many tracks it has, the battery, whether it's playing,
+  and the paired headphones. Asked to, it counts the card's free space
+  (never while music plays: about 2½ minutes for a 1 TB card), and it
+  shows "This one" and the port's name full screen for 5 s, with a buzz,
+  to tell two players apart. This is for the MP3 Player tab of the mStream
+  terminal player, which is coming. 0.6.0 to 0.8.0 answer that they
+  don't know the question, so the tab can tell they need an update.
+- **Fixed: a long listing on the serial console could restart the
+  player.** While a computer read a long list from the console (a
+  20,000-track library's albums take about 9 s), a line the player logged
+  meanwhile, as it does when it calls headphones that are out of reach,
+  waited for the list to end, and after 5 s the watchdog restarted the
+  player. 0.8.0 does this too. Now both print whole and the player
+  carries on.
+- Tested on a Core2 with a card of 19,410 tracks: Japanese, Korean, Greek
+  and Cyrillic names on Now Playing, in the Queue and in the Library's
+  lists, in their new order, and the lists scroll as smoothly with them as
+  before (30 frames a second). What those tests turned up was fixed
+  first: the console restart above.
+- **The first start of 0.9.0 on a card 0.8.0 used** builds the library
+  again, once, from the tags 0.8.0 read, since the order changed: about
+  10 s for 20,000 tracks, with the start-up screen up meanwhile (on a card
+  of 19,410 tracks the library was ready 11.8 s after the card mounted).
+  No file is read again, and the queue and its place are kept. The next
+  starts load the library as it was left, in about 1.5 s. A card that
+  0.7.0 used last gets 0.8.0's first start instead (0.8.0's notes say
+  what it does).
+- **The firmware is bigger:** about 4.1 MB, up from 2.6 MB in 0.8.0, for
+  the Chinese, Japanese and Korean characters and the larger fonts (66 %
+  of the space it has on the flash, 42 % before). Installing and updating
+  take a little longer; the steps below are the same, and an update still
+  keeps the settings.
+- **Going back to 0.8.0 later:** its first start rebuilds the library the
+  same way, from the tags read before (about 10 s for 20,000 tracks):
+  nothing is read from the files again, and the queue and its place are
+  kept. It then draws and sorts the names as 0.8.0 did. Coming back to
+  0.9.0 rebuilds it once more, the same way.
 
 ## Hardware
 
@@ -195,9 +199,10 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
   the music files isn't shown yet, and neither is a progressive JPEG (the
   album shows a note instead).
 - The queue holds up to 5,000 tracks.
-- Text is drawn in Latin, Greek and Cyrillic, and Chinese, Japanese and
-  Korean names from a built-in 16 px set (KS X 1001's Hangul, JIS X
-  0208, GB2312's level 1 and the kana; Han drawn the Japanese way). Other
+- Text is drawn in Latin (Vietnamese and some rarer letters without
+  their accents), Greek and Cyrillic, and Chinese, Japanese and Korean
+  names from a built-in 16 px set (KS X 1001's Hangul, JIS X 0208,
+  GB2312's level 1 and the kana; Han drawn the Japanese way). Other
   scripts (Hebrew, Arabic, Thai, Devanagari and others) and rarer
   characters show as `?`. The menus are in English.
 - No WiFi yet: syncing with an mStream server comes later.
