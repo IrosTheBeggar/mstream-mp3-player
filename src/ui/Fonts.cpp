@@ -59,7 +59,8 @@ bool vlwHas(const lgfx::VLWfont& v, uint32_t cp, uint16_t* idx) {
 
 // The largest glyph box drawGlyph() takes: the built-in store's is 16 x 18
 // (288 B of coverage and 576 B of pixels on the stack while it draws).
-constexpr int kMaxBox = 16 * 18;
+// test_glyph_store checks the store against it.
+constexpr int kMaxBox = kCjkGlyphs16MaxBox;
 
 // fore over back (0xRRGGBB) at coverage a (0-255), as M5GFX blends a VLW
 // glyph's pixels (VLWfont::drawChar).
@@ -216,7 +217,7 @@ textfit::Font Fonts::fit(Font f) const {
 }
 
 int Fonts::width(Font f, const char* s) const {
-  if (const lgfx::VLWfont* v = vlw(f)) return widthOf(const_cast<lgfx::VLWfont*>(v), s);
+  if (vlw(f)) return textfit::drawnWidth(fit(f), s);  // composed and folded, as draw() draws it
   M5.Display.setFont(fallback(f));
   return M5.Display.textWidth(s);
 }

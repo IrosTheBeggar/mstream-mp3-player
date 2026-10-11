@@ -3420,7 +3420,8 @@ which fails at about 15k entries (metascan section 6.2).
   `load()`'s Outdated says.
 - **`rulesVersion` 4** (2026-10-10, [I18N.md](I18N.md) phase 2): the kana
   sort as one script (katakana as hiragana, a small kana as its large
-  one), halfwidth katakana as the fullwidth, and a Hangul consonant alone
+  one, a voiced kana just after its unvoiced one: ヴ after ウ), halfwidth
+  katakana as the fullwidth, and a Hangul consonant alone
   just before the syllables it begins; `sameName()` the same way. The
   first boot after that firmware rebuilds library.idx once, as for 3.
 - **`load()`:** Loaded (compare the inputs: a hard mismatch, or the

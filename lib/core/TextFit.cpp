@@ -68,8 +68,9 @@ size_t trimEnd(const char* s, size_t keep) {
 // Chinese or Japanese (Han, kana, CJK punctuation, the fullwidth forms),
 // which are written without spaces: a line may end between two of them, or
 // between one of them and a Latin letter or digit; but it never starts
-// with a closing mark, a small kana, ー, 々 or an iteration mark (the
-// commonest of the kinsoku rules), nor ends with an opening mark. Hangul is
+// with a closing mark (the curly quotes ” ’ too, which Chinese uses), an
+// ellipsis, 〜, a small kana, ー, 々 or an iteration mark (the commonest of
+// the kinsoku rules), nor ends with an opening mark (“ ‘ too). Hangul is
 // written with spaces between its words: it breaks at them, and inside a
 // word only when the word alone is wider than the line (as any word).
 
@@ -92,6 +93,8 @@ bool noBreakBefore(uint32_t cp) {
     case 0x3001: case 0x3002: case 0xFF0C: case 0xFF0E: case 0x30FB: case 0xFF1A: case 0xFF1B: case 0xFF1F:
     case 0xFF01: case 0xFF09: case 0x300D: case 0x300F: case 0x3011: case 0x3015: case 0x3009: case 0x300B:
     case 0x3019: case 0x3017:  // 、。，．・：；？！）」』】〕〉》〙〗
+    case 0x201D: case 0x2019: case 0x301F: case 0x301E:  // ” ’ 〟 〞
+    case 0x2026: case 0x2025: case 0x301C:  // … ‥ 〜
     case 0x309D: case 0x309E: case 0x30FD: case 0x30FE: case 0x30FC: case 0x3005:  // ゝゞヽヾー々
     case 0x309B: case 0x309C:  // ゛゜
     case ',': case '.': case ':': case ';': case '?': case '!': case ')': case ']': case '}':
@@ -106,6 +109,7 @@ bool noBreakAfter(uint32_t cp) {
   switch (cp) {
     case 0xFF08: case 0x300C: case 0x300E: case 0x3010: case 0x3014: case 0x3008: case 0x300A: case 0x3018:
     case 0x3016:  // （「『【〔〈《〘〖
+    case 0x201C: case 0x2018: case 0x301D:  // “ ‘ 〝
     case '(': case '[': case '{':
       return true;
     default:
@@ -152,6 +156,36 @@ void cutToFit(const Font& f, char* text, size_t size, int maxW) {
   cutInto(text, cluster(text, lo), ell, text, size);
 }
 
+// What prepare() puts out for a composed code point: its bytes (in `utf8`,
+// or a TextFold replacement) and their length in *len; *folded set when
+// they aren't the code point's own.
+const char* spell(const Font& f, uint32_t cp, char utf8[4], size_t* len, bool* folded) {
+  if ((cp == 0x3099 || cp == 0x309A) && has(f, cp + 2)) {
+    // A kana voicing mark the composer couldn't put on its letter (ア +
+    // U+3099: no such kana) as the spacing mark, ゛ or ゜: drawn
+    // combining, it would sit on the letter's own strokes at 16 px.
+    *len = textfold::encode(cp + 2, utf8);
+    *folded = true;
+    return utf8;
+  }
+  if (has(f, cp)) {
+    *len = textfold::encode(cp, utf8);
+    return utf8;
+  }
+  if (textfold::fromC1(cp) != cp && has(f, textfold::fromC1(cp))) {
+    *len = textfold::encode(textfold::fromC1(cp), utf8);  // a cp1252 byte, as its character
+    *folded = true;
+    return utf8;
+  }
+  if (const char* rep = textfold::replacement(cp, textfold::Mode::Full)) {
+    *len = std::strlen(rep);
+    *folded = true;
+    return rep;
+  }
+  *len = textfold::encode(cp, utf8);  // ASCII the font lacks: as it is
+  return utf8;
+}
+
 Result prepareBounded(const Font& f, const char* in, size_t inLen, char* out, size_t outSize, bool* truncated) {
   Result r;
   *truncated = false;
@@ -160,26 +194,8 @@ Result prepareBounded(const Font& f, const char* in, size_t inLen, char* out, si
   size_t o = 0;
   while (const uint32_t cp = c.next()) {
     char utf8[4];
-    const char* bytes = utf8;
     size_t len;
-    if ((cp == 0x3099 || cp == 0x309A) && has(f, cp + 2)) {
-      // A kana voicing mark the composer couldn't put on its letter (ア +
-      // U+3099: no such kana) as the spacing mark, ゛ or ゜: drawn
-      // combining, it would sit on the letter's own strokes at 16 px.
-      len = textfold::encode(cp + 2, utf8);
-      r.folded = true;
-    } else if (has(f, cp)) {
-      len = textfold::encode(cp, utf8);
-    } else if (textfold::fromC1(cp) != cp && has(f, textfold::fromC1(cp))) {
-      len = textfold::encode(textfold::fromC1(cp), utf8);  // a cp1252 byte, as its character
-      r.folded = true;
-    } else if (const char* rep = textfold::replacement(cp, textfold::Mode::Full)) {
-      bytes = rep;
-      len = std::strlen(rep);
-      r.folded = true;
-    } else {
-      len = textfold::encode(cp, utf8);  // ASCII the font lacks: as it is
-    }
+    const char* bytes = spell(f, cp, utf8, &len, &r.folded);
     if (o + len + 1 > outSize) {
       *truncated = true;
       break;
@@ -197,6 +213,31 @@ Result prepareBounded(const Font& f, const char* in, size_t inLen, char* out, si
 Result prepare(const Font& f, const char* in, size_t inLen, char* out, size_t outSize) {
   bool truncated = false;
   return prepareBounded(f, in, inLen, out, outSize, &truncated);
+}
+
+int drawnWidth(const Font& f, const char* text) {
+  if (!text) return 0;
+  // prepare()'s text a piece at a time, measured in pieces (the widths add
+  // up): no buffer as long as the text.
+  char piece[64];
+  size_t n = 0;
+  int w = 0;
+  textfold::Composer c(text);
+  while (const uint32_t cp = c.next()) {
+    char utf8[4];
+    size_t len;
+    bool folded = false;
+    const char* bytes = spell(f, cp, utf8, &len, &folded);
+    if (n + len >= sizeof(piece)) {
+      piece[n] = 0;
+      w += width(f, piece);
+      n = 0;
+    }
+    std::memcpy(piece + n, bytes, len);
+    n += len;
+  }
+  piece[n] = 0;
+  return n ? w + width(f, piece) : w;
 }
 
 bool ellipsize(const Font& f, char* text, size_t size, int maxW) {
@@ -230,12 +271,13 @@ Result fit(const Font& f, const char* in, size_t inLen, char* out, size_t outSiz
 void cutPathLeft(const Font& f, const char* path, int maxW, char* out, size_t size) {
   if (!out || size == 0) return;
   const char* p = path ? path : "";
-  if (width(f, p) > maxW) {
+  if (drawnWidth(f, p) > maxW) {
     // Whole folders off the left until "…/the rest" fits (a cut path
-    // always says so, even where the rest alone would fit without it).
+    // always says so, even where the rest alone would fit without it),
+    // measured as drawn (a halfwidth or NFD folder name composed).
     for (const char* rest = std::strchr(p + 1, '/'); rest; rest = std::strchr(p + 1, '/')) {
       std::snprintf(out, size, "\xE2\x80\xA6%s", rest);
-      if (width(f, out) <= maxW) return;
+      if (drawnWidth(f, out) <= maxW) return;
       p = rest;
     }
   }

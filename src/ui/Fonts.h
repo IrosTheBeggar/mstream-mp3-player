@@ -45,7 +45,9 @@ public:
   // The TextFit view of a font (width and glyph coverage: the VLW font's,
   // then the glyph store's).
   textfit::Font fit(Font f) const;
-  // Pixel width of a UTF-8 string (what fit() measures with).
+  // Pixel width of a UTF-8 string as draw() draws it, uncut: composed and
+  // folded first (textfit::drawnWidth(): halfwidth katakana as the
+  // fullwidth, NFD Hangul as its syllables), each glyph by its advance.
   int width(Font f, const char* s) const;
   int height(Font f) const;
 

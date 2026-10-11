@@ -266,6 +266,11 @@ std::string composed(const char* in, const char* end = nullptr) {
 
 bool same(const char* a, const char* b) { return textfold::sameName(a, std::strlen(a), b, std::strlen(b)); }
 
+std::string utf8(uint32_t cp) {
+  char b[4];
+  return std::string(b, textfold::encode(cp, b));
+}
+
 }  // namespace
 
 // Latin-1 tags keep a cp1252 byte as U+0080-009F (docs/METADATA.md 5.2):
@@ -476,27 +481,40 @@ void test_halfwidth_katakana_compose() {
 // The kana sort as one script (docs/I18N.md, phase 2): katakana as
 // hiragana, a small kana as its large one (as a capital sorts with its
 // small letter: ties by the bytes), ヽ ヾ as ゝ ゞ; ー a letter of its own,
-// after the kana; voiced kana after their unvoiced ones, by code point.
+// after the kana; voiced kana just after their unvoiced ones, ゔ and ヷ-ヺ
+// too (the code charts have them after ん).
 void test_kana_order() {
   const char* order[] = {
-      "あい",         // あ...
-      "アイス",       // ア as あ: after あい (い = イ, then the longer)
+      "あい",             // あ...
+      "アイス",           // ア as あ: after あい (い = イ, then the longer)
+      "ヴィヴァルディ",   // ヴ as ゔ: after every う, before ぇ/え
       "あう",
-      "ぁお",         // small ぁ as あ
+      "ぁお",             // small ぁ as あ
+      "ンジャメナ",       // ん: the last letter
       "アオ",
+      "ウタダ",
+      "エレファント",
+      "ｳﾞｨﾚｯｼﾞ",         // halfwidth: ヴィレッジ
       "かき",
-      "カキ",         // a tie on the kana: the bytes, hiragana first
-      "がか",         // voiced: after か
-      "キャ",         // き + ゃ as や: a tie with きや, the bytes
+      "カキ",             // a tie on the kana: the bytes, hiragana first
+      "がか",             // voiced: after か
+      "キャ",             // き + ゃ as や: a tie with きや, the bytes
       "きや",
       "きゆ",
-      "すゞ",         // ゞ
-      "スヾ",         // ヾ as ゞ: the bytes
-      "ラーメン",     // ー after every kana: らあ < らー
+      "すゞ",             // ゞ
+      "スヾ",             // ヾ as ゞ: the bytes
+      "ラーメン",         // ー after every kana: らあ < らー
       "らあめん",
+      "ヲタク",
+      "ワルツ",
+      "ヷイン",           // ヷ: after わ, before ゐ
+      "ゐる",
+      "ヺ",               // after を
   };
-  const char* sorted[] = {"あい", "アイス", "あう", "ぁお", "アオ", "かき", "カキ", "がか", "きや", "キャ", "きゆ",
-                          "すゞ", "スヾ", "らあめん", "ラーメン"};
+  const char* sorted[] = {"あい", "アイス", "あう", "ぁお", "アオ", "ウタダ", "ヴィヴァルディ", "ｳﾞｨﾚｯｼﾞ",
+                          "エレファント", "かき", "カキ", "がか", "きや", "キャ", "きゆ", "すゞ", "スヾ",
+                          "らあめん", "ラーメン", "ワルツ", "ヷイン", "ゐる", "ヲタク", "ヺ", "ンジャメナ"};
+  TEST_ASSERT_EQUAL_size_t(sizeof(order) / sizeof(order[0]), sizeof(sorted) / sizeof(sorted[0]));
   std::vector<std::string> v(order, order + sizeof(order) / sizeof(order[0]));
   std::sort(v.begin(), v.end(), [](const std::string& a, const std::string& b) {
     return textfold::compare(a.c_str(), b.c_str()) < 0;
@@ -516,6 +534,30 @@ void test_kana_order() {
   TEST_ASSERT_EQUAL_UINT32(0x30FC, textfold::kanaKey(0x30FC));  // ー itself
   TEST_ASSERT_EQUAL_UINT32(0x30F7, textfold::kanaKey(0x30F7));  // ヷ: no hiragana
   TEST_ASSERT_EQUAL_UINT32(0x4E00, textfold::kanaKey(0x4E00));
+  // Every voiced kana (a kana and U+3099 or U+309A composed) just after
+  // its unvoiced one: after it, before the next large unvoiced letter of
+  // the chart (か が き, は ば ぱ ひ, う ゔ え, わ ヷ ゐ, を ヺ ん).
+  bool composite[0x3100] = {};
+  for (uint32_t b = 0x3041; b < 0x3100; ++b) {
+    for (uint32_t m = 0x3099; m <= 0x309A; ++m) {
+      const uint32_t c = textfold::composePair(b, m);
+      if (c) composite[c] = true;
+    }
+  }
+  int voiced = 0;
+  for (uint32_t b = 0x3041; b < 0x3100; ++b) {
+    for (uint32_t m = 0x3099; m <= 0x309A; ++m) {
+      const uint32_t c = textfold::composePair(b, m);
+      if (!c) continue;
+      ++voiced;
+      uint32_t next = textfold::kanaKey(b) + 1;
+      while (next < 0x309F && (composite[next] || textfold::kanaKey(next) != next)) ++next;
+      const std::string sb = utf8(b), sc = utf8(c), sn = utf8(next);
+      TEST_ASSERT_TRUE_MESSAGE(textfold::compare(sb.c_str(), sc.c_str()) < 0, sc.c_str());
+      TEST_ASSERT_TRUE_MESSAGE(textfold::compare(sc.c_str(), sn.c_str()) < 0, sc.c_str());
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(2 * 25 + 4 + 4, voiced);  // が-ぽ and ガ-ポ, ゔ ヴ ゞ ヾ, ヷ-ヺ
   // Same name: the kana alike (as case is), Han by code point.
   TEST_ASSERT_TRUE(same("ヒカル", "ひかる"));
   TEST_ASSERT_TRUE(same("キャリー", "きゃりー"));

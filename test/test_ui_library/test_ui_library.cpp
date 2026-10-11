@@ -466,6 +466,45 @@ void test_names_drawn_with_the_fonts() {
   TEST_ASSERT_EQUAL_STRING("Beyoncé…", cut.c_str());  // whole letters, the é one glyph
 }
 
+// What a page measures (ui/Fonts::width(): textfit::drawnWidth()) is what
+// is drawn: a halfwidth or NFD name as its composed glyphs, a missing glyph
+// as its fold. Measured raw, a halfwidth kana or a jamo is a 4-5 px blank,
+// a third of what the store draws: a path kept whole that the draw then
+// cuts at its end, an album line given its year and then cut.
+void test_names_measured_as_drawn() {
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  auto view = [](const Vlw& v) {
+    textfit::Font f;
+    f.ctx = const_cast<Vlw*>(&v);
+    f.width = vlwWidth;
+    f.has = vlwHas;
+    return f;
+  };
+  const char* nfdPath =
+      "/music/\xE1\x84\x8B\xE1\x85\xA1\xE1\x84\x8B\xE1\x85\xB5\xE1\x84\x8B\xE1\x85\xB2/"  // 아이유
+      "\xE1\x84\x89\xE1\x85\xA5\xE1\x84\x8B\xE1\x85\xAE\xE1\x86\xAF\xE1\x84\x8B\xE1\x85\xB4"  // 서울의
+      " \xE1\x84\x87\xE1\x85\xA1\xE1\x86\xB7";                                              // 밤
+  const char* names[] = {"/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", "ﾀﾞﾌﾞﾙﾌｧﾝﾀｼﾞｰ · 2002", nfdPath, "Beyonce\xCC\x81",
+                         "Mỹ Tâm", "Հայ", "Ninja 🥷 Beats", "Don\xC2\x92t", "Tokyo 東京事変 – Live"};
+  for (const Vlw* v : {&body, &small}) {
+    for (const char* n : names) {
+      TEST_ASSERT_EQUAL_INT_MESSAGE(v->width(drawn(*v, n, 10000).c_str()), textfit::drawnWidth(view(*v), n), n);
+    }
+  }
+  TEST_ASSERT_EQUAL_INT(99, small.width("/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ"));  // raw: the 12 halfwidth ones blank
+  TEST_ASSERT_EQUAL_INT(227, textfit::drawnWidth(view(small), "/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ"));
+  // The Folders header and Go to folder: the last folders kept, as for
+  // the fullwidth path.
+  char out[160];
+  textfit::cutPathLeft(view(small), "/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", 200, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("…/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", out);
+  TEST_ASSERT_EQUAL_STRING("…/アニメ/サウンドトラック", drawn(small, out, 200).c_str());  // whole
+  textfit::cutPathLeft(view(small), nfdPath, 150, out, sizeof(out));
+  TEST_ASSERT_EQUAL_STRING("…/아이유/서울의 밤", drawn(small, out, 150).c_str());
+  // Now Playing's album line (190 px of Body): the year only when it fits.
+  TEST_ASSERT_EQUAL_INT(199, textfit::drawnWidth(view(body), "ﾀﾞﾌﾞﾙﾌｧﾝﾀｼﾞｰ · 2002"));
+}
+
 // Phase 1's glyphs (docs/I18N.md; tools/vlw_font.py's RANGES) keep every
 // row of the UI as it was: M5GFX makes a font's line height its tallest
 // glyph's ascent plus its deepest one's descent, and the generator fits
@@ -500,7 +539,7 @@ void test_fonts_keep_their_line_heights() {
 // The glyph store's glyphs in the four rows (docs/I18N.md, phase 2), placed
 // as ui/Fonts places them: 16 px in every role, on the role's baseline, the
 // Small row's a pixel lower (on DejaVu Sans 13's, 13 rows down, 8,902 of
-// the 10,558 would reach above its 17 px: the em box is 14 above and 2
+// the 10,557 would reach above its 17 px: the em box is 14 above and 2
 // below), and nothing outside the row. A glyph whose ink reaches above the
 // row moves down into it (Å in Body and Bold; in Small, 31: box drawing,
 // Å, ヷ and nine kanji), and only the full-height box drawing lose a row,
@@ -2597,6 +2636,7 @@ int main(int, char**) {
   RUN_TEST(test_coach_texts_fit);
   RUN_TEST(test_toast_names_fit);
   RUN_TEST(test_names_drawn_with_the_fonts);
+  RUN_TEST(test_names_measured_as_drawn);
   RUN_TEST(test_fonts_keep_their_line_heights);
   RUN_TEST(test_store_glyphs_sit_in_the_rows);
   RUN_TEST(test_fonts_cover_greek_cyrillic_and_latin);

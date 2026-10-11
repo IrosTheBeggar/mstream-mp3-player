@@ -159,8 +159,10 @@ Script scriptOf(uint32_t cp);
 // katakana letter as the hiragana one (カ as か, ヴ as ゔ), a small kana as
 // its large one, as a capital letter sorts with its small one (ぁ and ァ as
 // あ, ッ as つ, ヶ as け), the iteration marks ヽ ヾ as ゝ ゞ. The voiced
-// kana stay themselves (が after か, before き: the code charts' order). `cp`
-// itself for the rest: ー, ヷ-ヺ, ゟ, ヿ, and anything that isn't kana.
+// kana stay themselves, each just after its unvoiced one (が after か,
+// before き: the code charts' order; compare() puts ゔ after う and ヷ-ヺ
+// after わ-を, which the charts have after ん). `cp` itself for the rest:
+// ー, ヷ-ヺ, ゟ, ヿ, and anything that isn't kana.
 uint32_t kanaKey(uint32_t cp);
 // The initial consonant (0-18: ㄱ ㄲ ㄴ ㄷ ㄸ ㄹ ㅁ ㅂ ㅃ ㅅ ㅆ ㅇ ㅈ ㅉ ㅊ ㅋ ㅌ ㅍ ㅎ) a
 // Hangul compatibility consonant (U+3131-314E) or a conjoining initial
@@ -174,9 +176,10 @@ int jamoInitial(uint32_t cp);
 // (namekey's lowercase; ς as σ), between the digits and the ASCII letters:
 // "Ая" before "Би-2", Greek before Cyrillic before Hangul, kana and Han.
 // Kana by kanaKey() (ヒカル with ひかる; ties by the bytes, so ひかる
-// first); Hangul syllables by code point (Unicode's order is the
-// dictionary's), a lone consonant (ㄱ) just before the first syllable it
-// begins (가), the other jamo after the syllables; Han by code point.
+// first; ゔ and ヴ just after う, ヷ-ヺ after わ-を); Hangul syllables by
+// code point (Unicode's order is the dictionary's), a lone consonant (ㄱ)
+// just before the first syllable it begins (가), the other jamo after the
+// syllables; Han by code point.
 // Composed first (Composer): NFD and NFC sort alike in the scripts it
 // composes (Latin, Greek, Cyrillic, kana, Hangul), not in the others (an
 // NFD alef with hamza, U+0627 U+0654, sorts apart from its NFC U+0623).

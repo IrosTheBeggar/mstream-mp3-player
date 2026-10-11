@@ -53,11 +53,19 @@ Result prepare(const Font& f, const char* in, size_t inLen, char* out, size_t ou
 Result fit(const Font& f, const char* in, size_t inLen, char* out, size_t outSize, int maxW);
 // Cuts `text` (prepared, NUL-terminated, in a buffer of `size`) in place.
 bool ellipsize(const Font& f, char* text, size_t size, int maxW);
+// The width of `text` (UTF-8, NUL-terminated, as stored) as fit() draws it
+// uncut: composed and folded first, so halfwidth "ｶﾞ" measures as "ガ", NFD
+// jamo as their syllable, a missing glyph as its fold. What a caller
+// compares with its room to choose a font or a line (ui/Fonts::width()).
+// No buffer: the text is measured in pieces, so the font's widths must add
+// up (ui/Fonts' are sums of advances).
+int drawnWidth(const Font& f, const char* text);
 
 // Up to `maxLines` lines of at most `maxW` px, broken after spaces, and
 // between two characters where one is Han, kana or CJK punctuation (the
-// other may be Latin), but never before a closing mark (、。」』）...), a
-// small kana, ー, 々 or an iteration mark, nor after an opening one (「『（...).
+// other may be Latin), but never before a closing mark (、。」』）” ’...), an
+// ellipsis, 〜, a small kana, ー, 々 or an iteration mark, nor after an
+// opening one (「『（“ ‘...): TextFit.cpp lists them.
 // Hangul breaks at its spaces. A word with no such place that is wider than
 // a line is cut where it overflows. The last line holds the rest,
 // ellipsised. Line k goes to out + k * lineSize. Returns the lines written
@@ -68,7 +76,8 @@ int wrap(const Font& f, const char* in, size_t inLen, int maxW, int maxLines, ch
 // kept: "…/Daft Punk/Discovery" (the Folders header's path, Now Playing's
 // Go to folder). A path that fits stays whole; a cut one always starts
 // with "…". If even "…/<last>" is too wide, "/<last>" (the draw cuts its
-// end). Into `out` (`size` > 0).
+// end). Measured as drawn (drawnWidth()); the folders' bytes are kept as
+// they are. Into `out` (`size` > 0).
 void cutPathLeft(const Font& f, const char* path, int maxW, char* out, size_t size);
 
 }  // namespace textfit

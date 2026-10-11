@@ -446,18 +446,26 @@ namespace {
 // A font with the glyph store behind it (ui/Fonts since docs/I18N.md's
 // phase 2): ASCII 7 px, "…" 9, Han, kana and CJK punctuation 16 (the
 // ideographic space too), Hangul 15, the kana's combining voicing marks 0.
+// No glyph for Ł, the halfwidth katakana or the conjoining jamo (the store
+// has neither), which measure 5 px, as M5GFX draws a missing glyph: a blank
+// of the space's width.
 int cjkAdvance(uint32_t cp) {
   if (cp == 0x2026) return 9;
   if (cp == 0x3099 || cp == 0x309A) return 0;
   if (cp >= 0xAC00 && cp <= 0xD7A3) return 15;
   return cp >= 0x2E80 ? 16 : 7;
 }
+bool cjkHas(void*, uint32_t cp) {
+  return cp != 0x141 && !(cp >= 0xFF61 && cp <= 0xFF9F) && !(cp >= 0x1100 && cp <= 0x11FF);
+}
 int cjkWidth(void*, const char* s) {
   int w = 0;
-  for (const char* p = s; *p;) w += cjkAdvance(textfold::decode(p));
+  for (const char* p = s; *p;) {
+    const uint32_t cp = textfold::decode(p);
+    w += cjkHas(nullptr, cp) ? cjkAdvance(cp) : 5;
+  }
   return w;
 }
-bool cjkHas(void*, uint32_t cp) { return cp != 0x141 && !(cp >= 0xFF61 && cp <= 0xFF9F); }
 // The same with no spacing voicing marks (゛ ゜): a combining one stays.
 bool cjkHasNoSpacingMarks(void* ctx, uint32_t cp) { return cp != 0x309B && cp != 0x309C && cjkHas(ctx, cp); }
 
@@ -515,6 +523,34 @@ void test_textfit_fits_cjk() {
     const std::string body = s.substr(0, s.size() - 3);
     TEST_ASSERT_TRUE_MESSAGE(body.size() % 6 == 0, out);  // whole あ + U+3099 pairs
   }
+  // The mark is 0 px, so a cut by width always takes it: the cuts a buffer
+  // makes are the ones that could part them. fit() into a buffer that ends
+  // inside a pair, and wrap() into lines that do (the last line, and one
+  // broken between pairs, 64 px).
+  for (size_t size = 4; size <= 18; ++size) {
+    char small[18];
+    textfit::fit(noSpacing, marked, strlen(marked), small, size, 1000);
+    const std::string s = small;
+    TEST_ASSERT_TRUE(s.size() < size);
+    TEST_ASSERT_TRUE_MESSAGE(s.size() >= 3 && s.compare(s.size() - 3, 3, "\xE2\x80\xA6") == 0, small);
+    TEST_ASSERT_TRUE_MESSAGE((s.size() - 3) % 6 == 0, small);
+  }
+  const char* five = "あ\xE3\x82\x99あ\xE3\x82\x99あ\xE3\x82\x99あ\xE3\x82\x99あ\xE3\x82\x99";
+  for (size_t lineSize = 4; lineSize <= 19; ++lineSize) {
+    char lines[2][19];
+    for (int maxLines = 1; maxLines <= 2; ++maxLines) {
+      const int n = textfit::wrap(noSpacing, five, strlen(five), maxLines == 1 ? 1000 : 64, maxLines, &lines[0][0],
+                                  lineSize);
+      TEST_ASSERT_EQUAL_INT(maxLines, n);
+      for (int i = 0; i < n; ++i) {
+        const char* line = &lines[0][0] + static_cast<size_t>(i) * lineSize;
+        std::string body = line;
+        TEST_ASSERT_TRUE(body.size() < lineSize);
+        if (body.size() >= 3 && body.compare(body.size() - 3, 3, "\xE2\x80\xA6") == 0) body.resize(body.size() - 3);
+        TEST_ASSERT_TRUE_MESSAGE(body.size() % 6 == 0, line);
+      }
+    }
+  }
   // Halfwidth katakana: the fullwidth (the composer's NFKC), the voicing composed.
   r = textfit::fit(f, "ｶﾞｸｼﾞﾁｮｳ", strlen("ｶﾞｸｼﾞﾁｮｳ"), out, sizeof(out), 200);
   TEST_ASSERT_EQUAL_STRING("ガクジチョウ", out);
@@ -543,6 +579,26 @@ void test_textfit_wraps_cjk() {
   l = wrapped("あいうえ「おか」", 80, 2);
   TEST_ASSERT_EQUAL_STRING("あいうえ", l[0].c_str());
   TEST_ASSERT_EQUAL_STRING("「おか」", l[1].c_str());
+  // The curly quotes Chinese uses (DejaVu's, 7 px here): not after “, not
+  // before ”.
+  l = wrapped("他说“周杰倫”好", 40, 3);
+  TEST_ASSERT_EQUAL_INT(3, static_cast<int>(l.size()));
+  TEST_ASSERT_EQUAL_STRING("他说", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("“周杰", l[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("倫”好", l[2].c_str());
+  l = wrapped("他说“周杰倫”好", 88, 2);
+  TEST_ASSERT_EQUAL_STRING("他说“周杰", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("倫”好", l[1].c_str());
+  l = wrapped("他说‘周杰倫’好", 88, 2);
+  TEST_ASSERT_EQUAL_STRING("他说‘周杰", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("倫’好", l[1].c_str());
+  // Not before an ellipsis or 〜.
+  l = wrapped("さよなら…また", 64, 2);
+  TEST_ASSERT_EQUAL_STRING("さよな", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("ら…また", l[1].c_str());
+  l = wrapped("あいうえ〜おか", 64, 2);
+  TEST_ASSERT_EQUAL_STRING("あいう", l[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("え〜おか", l[1].c_str());
   // Not before ー or a small kana, nor 々.
   l = wrapped("きゃりーぱみゅぱみゅ", 48, 4);
   for (size_t i = 1; i < l.size(); ++i) {
@@ -582,6 +638,50 @@ void test_textfit_wraps_cjk() {
   l = wrapped("Harder, Better, Faster, Stronger", 140, 2);
   TEST_ASSERT_EQUAL_STRING("Harder, Better,", l[0].c_str());
   TEST_ASSERT_EQUAL_STRING("Faster, Stronger", l[1].c_str());
+}
+
+// drawnWidth() measures a stored text as fit() draws it, so a page that
+// measures a name to choose a font, a line or a cut gets what is drawn:
+// halfwidth katakana as the fullwidth, NFD Hangul as its syllables, a
+// missing glyph as its fold. Measured raw, each of those code points would
+// be a 5 px blank.
+void test_textfit_measures_what_draws() {
+  const textfit::Font f = cjkFont();
+  const char* nfdSeoul = "\xE1\x84\x89\xE1\x85\xA5\xE1\x84\x8B\xE1\x85\xAE\xE1\x86\xAF";  // 서울
+  TEST_ASSERT_EQUAL_INT(64, textfit::drawnWidth(f, "ｶﾀｶﾅ"));  // カタカナ
+  TEST_ASSERT_EQUAL_INT(20, cjkWidth(nullptr, "ｶﾀｶﾅ"));        // raw
+  TEST_ASSERT_EQUAL_INT(textfit::drawnWidth(f, "ダブルファンタジー"), textfit::drawnWidth(f, "ﾀﾞﾌﾞﾙﾌｧﾝﾀｼﾞｰ"));
+  TEST_ASSERT_EQUAL_INT(30, textfit::drawnWidth(f, nfdSeoul));
+  TEST_ASSERT_EQUAL_INT(25, cjkWidth(nullptr, nfdSeoul));
+  TEST_ASSERT_EQUAL_INT(28, textfit::drawnWidth(f, "Łódź"));  // Ł as L
+  TEST_ASSERT_EQUAL_INT(0, textfit::drawnWidth(f, ""));
+  TEST_ASSERT_EQUAL_INT(0, textfit::drawnWidth(f, nullptr));
+  // Always the width of what prepare() makes, longer than a piece too.
+  std::string longText;
+  for (int i = 0; i < 40; ++i) longText += "ｶﾞ ";
+  const char* texts[] = {"ｶﾀｶﾅ ﾊﾟﾗﾀﾞｲｽ", "ｱﾞ", "あ\xE3\x82\x99", "Tokyo 東京事変 · 서울", "Beyonce\xCC\x81",
+                         "ＡＢＣ ½", "Don\xC2\x92t", "Ninja \xF0\x9F\xA5\xB7", nfdSeoul, longText.c_str()};
+  for (const char* t : texts) {
+    char prepared[256];
+    textfit::prepare(f, t, strlen(t), prepared, sizeof(prepared));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(cjkWidth(nullptr, prepared), textfit::drawnWidth(f, t), t);
+  }
+  TEST_ASSERT_EQUAL_INT(40 * 23, textfit::drawnWidth(f, longText.c_str()));
+  // A path is cut as it draws: the last folder kept, halfwidth or not.
+  char cut[96];
+  textfit::cutPathLeft(f, "/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", 150, cut, sizeof(cut));
+  TEST_ASSERT_EQUAL_STRING("…/ｻｳﾝﾄﾞﾄﾗｯｸ", cut);
+  textfit::cutPathLeft(f, "/music/アニメ/サウンドトラック", 150, cut, sizeof(cut));
+  TEST_ASSERT_EQUAL_STRING("…/サウンドトラック", cut);
+  textfit::cutPathLeft(f, "/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", 232, cut, sizeof(cut));  // fits: whole
+  TEST_ASSERT_EQUAL_STRING("/music/ｱﾆﾒ/ｻｳﾝﾄﾞﾄﾗｯｸ", cut);
+  const char* nfdPath =
+      "/music/\xE1\x84\x8B\xE1\x85\xA1\xE1\x84\x8B\xE1\x85\xB5\xE1\x84\x8B\xE1\x85\xB2/"  // 아이유
+      "\xE1\x84\x89\xE1\x85\xA5\xE1\x84\x8B\xE1\x85\xAE\xE1\x86\xAF\xE1\x84\x8B\xE1\x85\xB4"  // 서울의
+      " \xE1\x84\x87\xE1\x85\xA1\xE1\x86\xB7";                                              // 밤
+  TEST_ASSERT_EQUAL_INT(168, textfit::drawnWidth(f, nfdPath));
+  textfit::cutPathLeft(f, nfdPath, 150, cut, sizeof(cut));
+  TEST_ASSERT_EQUAL_STRING((std::string("\xE2\x80\xA6") + std::strchr(nfdPath + 1, '/')).c_str(), cut);
 }
 
 // ---- TabBarModel ----
@@ -848,6 +948,7 @@ int main(int, char**) {
   RUN_TEST(test_textfit_wraps_two_lines);
   RUN_TEST(test_textfit_fits_cjk);
   RUN_TEST(test_textfit_wraps_cjk);
+  RUN_TEST(test_textfit_measures_what_draws);
   RUN_TEST(test_tabbar_hit_areas_reach_the_right_edge);
   RUN_TEST(test_tabbar_redraws_only_what_changed);
   RUN_TEST(test_tabbar_output_state);

@@ -180,12 +180,25 @@ uint32_t hangulKey(uint32_t cp) {
   return 2 * kSCount + cp;
 }
 
+// A kana letter's place among the kana: 2 x the code point of its
+// kanaKey() letter, so that the voiced kana the code charts put after ん,
+// having no code point beside their unvoiced one, can sit just after it,
+// at 2 x its code point + 1: ゔ (and ヴ) after う, ヷ ヸ ヹ ヺ after わ ゐ ゑ
+// を. Every other voiced kana already follows its unvoiced one (か が, は ば
+// ぱ; test_text_fold checks them all).
+uint32_t kanaRank(uint32_t cp) {
+  const uint32_t k = kanaKey(cp);
+  if (k == 0x3094) return 2 * 0x3046 + 1;                                  // ゔ: after う
+  if (k >= 0x30F7 && k <= 0x30FA) return 2 * (0x308F + (k - 0x30F7)) + 1;  // ヷ-ヺ: after わ-を
+  return 2 * k;
+}
+
 // A letter of a script Full folding can't spell: its unit, else 0.
 uint32_t scriptUnit(uint32_t cp) {
   const Script s = scriptOf(cp);
   if (s == Script::None) return 0;
   if (s == Script::Hiragana || s == Script::Katakana) {
-    return kScriptUnit + (static_cast<uint32_t>(Script::Hiragana) << 21) + kanaKey(cp);  // the kana: one script
+    return kScriptUnit + (static_cast<uint32_t>(Script::Hiragana) << 21) + kanaRank(cp);  // the kana: one script
   }
   if (s == Script::Hangul) return kScriptUnit + (static_cast<uint32_t>(s) << 21) + hangulKey(cp);
   uint32_t low[3];

@@ -16,8 +16,9 @@
 // The characters ("pan"): KS X 1001's 2,350 Hangul syllables and the
 // compatibility jamo, JIS X 0208 (both kanji levels, kana, its symbols),
 // GB2312's 3,755 level 1 hanzi, the kana blocks and CJK punctuation, less
-// what the VLW fonts draw: 10,558 glyphs, 1.05 MB. A character outside it
-// TextFit folds as before ('?').
+// what the VLW fonts draw and what TextFold folds first (fullwidth ASCII
+// and − to ASCII, halfwidth katakana to the fullwidth): 10,557 glyphs,
+// 1.05 MB. A character outside it TextFit folds as before ('?').
 //
 // Words, so the store is 4-byte aligned; their bytes are the store
 // (little-endian, as the ESP32 and the host are):
@@ -28,3 +29,10 @@ extern const size_t kCjkGlyphs16Size;  // bytes
 // 4-bit values; tools/glyph_store.py's digest()): test_glyph_store
 // recomputes it through the decoder.
 extern const uint64_t kCjkGlyphs16Digest;
+
+// The largest glyph box, in values (width x height), that ui/Fonts'
+// drawGlyph() has room for on the stack (its coverage and its pixels). The
+// store's widest box times its tallest must not pass it: test_glyph_store
+// checks, so a store regenerated with a larger glyph (another FreeType can
+// hint a pixel differently) fails there, not as a blank cell on the screen.
+constexpr int kCjkGlyphs16MaxBox = 16 * 18;

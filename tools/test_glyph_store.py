@@ -159,10 +159,11 @@ class Sets(unittest.TestCase):
         self.assertTrue(gs.gb2312_level1() <= pan)
 
     def test_folded_ones_are_left_out(self):
-        for cp in (0xFF01, 0xFF21, 0xFF5E, 0xFF61, 0xFF76, 0xFF9F):
+        for cp in (0xFF01, 0xFF21, 0xFF5E, 0xFF61, 0xFF76, 0xFF9F, 0x2212):
             self.assertTrue(gs.folded(cp))
-        for cp in (0xFF5F, 0xFF60, 0xFFE0, 0xFFE5, 0x3000, 0x30AB):
+        for cp in (0xFF5F, 0xFF60, 0xFFE0, 0xFFE5, 0x3000, 0x30AB, 0x2015):
             self.assertFalse(gs.folded(cp))
+        self.assertIn(0x2212, gs.jis0208())  # JIS X 0208's minus (1-1-61), as euc_jp has it
         vlw = {0x41}
         self.assertFalse(any(gs.folded(cp) for cp in gs.wanted("pan", vlw)))
 

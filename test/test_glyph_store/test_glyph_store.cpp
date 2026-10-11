@@ -11,6 +11,7 @@
 #include <unity.h>
 
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -379,6 +380,10 @@ void test_builtin_header() {
   TEST_ASSERT_TRUE(s.inkDescent() >= 2 && s.inkDescent() <= 4);
   TEST_ASSERT_TRUE(s.maxWidth() <= 16 + 2);
   TEST_ASSERT_TRUE(s.maxHeight() <= 16 + 4);
+  // ui/Fonts' drawGlyph() has room for the largest box (a glyph larger
+  // than its buffers would draw as a blank cell).
+  TEST_ASSERT_TRUE_MESSAGE(s.maxWidth() * s.maxHeight() <= kCjkGlyphs16MaxBox,
+                           "a glyph box larger than kCjkGlyphs16MaxBox");
   // The flash it costs: the "pan" set measured 1.05 MB (docs/I18N.md).
   TEST_ASSERT_TRUE(kCjkGlyphs16Size < 1150u * 1024);
   TEST_ASSERT_TRUE(kCjkGlyphs16Size % 4 == 0);
@@ -465,8 +470,9 @@ void test_builtin_draws_names() {
 }
 
 // What it leaves out: what the VLW fonts draw, what TextFold folds first
-// (fullwidth ASCII, halfwidth katakana), the Hangul KS X 1001 lacks, the
-// marks only vertical text uses, the planes past the BMP.
+// (fullwidth ASCII and − to ASCII, halfwidth katakana to the fullwidth),
+// the Hangul KS X 1001 lacks, the marks only vertical text uses, the planes
+// past the BMP.
 void test_builtin_leaves_out() {
   const Store& s = builtin();
   const std::vector<uint32_t> vlw = vlwCodePoints();
@@ -475,7 +481,19 @@ void test_builtin_leaves_out() {
   for (uint32_t cp = 0; cp < 0x2000; ++cp) TEST_ASSERT_FALSE(s.contains(cp));
   for (uint32_t cp = 0xFF01; cp <= 0xFF5E; ++cp) TEST_ASSERT_FALSE(s.contains(cp));
   for (uint32_t cp = 0xFF61; cp <= 0xFF9F; ++cp) TEST_ASSERT_FALSE(s.contains(cp));
+  // Nothing TextFold spells in ASCII (DejaVu draws that, so a Latin name
+  // with − stays DejaVu's): every glyph's fold is '?' or nothing (the
+  // voicing marks), but the ideographic space's ' ' (a line breaks at it).
+  for (uint32_t cp = 0x80; cp <= 0xFFFF; ++cp) {
+    if (!s.contains(cp) || cp == 0x3000) continue;
+    const char* fold = textfold::replacement(cp, textfold::Mode::Full);
+    char msg[16];
+    snprintf(msg, sizeof(msg), "U+%04X", static_cast<unsigned>(cp));
+    TEST_ASSERT_NOT_NULL_MESSAGE(fold, msg);
+    TEST_ASSERT_TRUE_MESSAGE(std::strcmp(fold, "?") == 0 || fold[0] == 0, msg);
+  }
   const uint32_t absent[] = {0xB620,  // 똠, outside KS X 1001's 2,350
+                             0x2212,  // −: TextFold's '-'
                              0xD7A3,  // 힣, the last syllable
                              0x3031, 0x3032, 0x302A,  // vertical text's marks
                              0x3100,  // Bopomofo

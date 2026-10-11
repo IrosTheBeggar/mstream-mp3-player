@@ -27,12 +27,12 @@ winning, and what the face has no glyph for):
   pan-big5  pan and Big5's level 1 hanzi (5,401): what Traditional Chinese
           would add
 The standards come from Python's own codecs (euc_kr, euc_jp, cp932, gb2312,
-big5). Left out everywhere: fullwidth ASCII (U+FF01-FF5E) and halfwidth
-katakana (U+FF61-FF9F), which TextFold folds (to ASCII; to the fullwidth
-kana), and a glyph whose ink reaches more than 2 px past the em box (fits():
-the vertical kana repeat marks 〱 〲 and the ideographic tone marks, which
-only vertical text uses, and the halfwidth bar ￨). The generated file names
-those.
+big5). Left out everywhere: fullwidth ASCII (U+FF01-FF5E), the minus sign
+− (U+2212) and halfwidth katakana (U+FF61-FF9F), which TextFold folds (to
+ASCII, which DejaVu draws; to the fullwidth kana), and a glyph whose ink
+reaches more than 2 px past the em box (fits(): the vertical kana repeat
+marks 〱 〲 and the ideographic tone marks, which only vertical text uses,
+and the halfwidth bar ￨). The generated file names those.
 
 One store draws a Han character in one regional style: --region picks the
 TTC's face by its name (JP, KR, SC, TC or HK; the default JP suits Japanese
@@ -73,10 +73,10 @@ aligned):
           starting on a byte. Raw (encoding 0), or as runs (1), a nibble
           each: 0 n is n + 1 zeros, 15 n is n + 1 fifteens (n 0-15), and
           1-14 is that value once; a run may cross rows.
-The runs save 17.9 % of pan's bitmaps (measured: 1,252,182 B raw, 1,028,116 B
-as runs; the store 1,322,376 B against 1,098,308 B) for a decoder of a few
+The runs save 17.9 % of pan's bitmaps (measured: 1,252,173 B raw, 1,028,108 B
+as runs; the store 1,322,364 B against 1,098,296 B) for a decoder of a few
 lines, so the store uses them (--raw writes the other). The index (PAGE,
-PMAP, METR, OFFS) is 6 B a glyph and 50 B a page: 70,192 B of pan's store.
+PMAP, METR, OFFS) is 6 B a glyph and 50 B a page: 70,188 B of pan's store.
 
 Usage (the font is not in this repository: --font, or GLYPH_STORE_FONT):
 
@@ -191,8 +191,12 @@ def signs():
 
 def folded(cp):
     """Code points TextFold folds before drawing, so no store needs them:
-    fullwidth ASCII (to ASCII) and halfwidth katakana (to the fullwidth)."""
-    return 0xFF01 <= cp <= 0xFF5E or 0xFF61 <= cp <= 0xFF9F
+    fullwidth ASCII and JIS X 0208's minus sign − U+2212 (to ASCII, which
+    DejaVu draws: a Latin name with − stays DejaVu's), and halfwidth katakana
+    (to the fullwidth). The ideographic space U+3000, which TextFold folds to
+    ' ' too, stays: a line breaks at it. test_glyph_store checks that no
+    other glyph has an ASCII fold."""
+    return 0xFF01 <= cp <= 0xFF5E or 0xFF61 <= cp <= 0xFF9F or cp == 0x2212
 
 
 SETS = {
@@ -601,7 +605,8 @@ def generate(path, args):
            f"//   store   {len(store)} bytes; bitmaps {head['bits']} bytes, "
            f"{'raw' if encoding == RAW else 'as runs'}",
            f"//   em box  {facts['ascent']} px above the baseline, {facts['descent']} below; ink "
-           f"{head['ink_ascent']} above, {head['ink_descent']} below"]
+           f"{head['ink_ascent']} above, {head['ink_descent']} below; boxes up to {head['widest']} x "
+           f"{head['tallest']} px"]
     text = NL.join(src) + NL
     if outside:
         text += wrap_list("// Left out, their ink more than 2 px past the em box:", [f"U+{cp:04X}" for cp in outside])

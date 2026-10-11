@@ -2705,22 +2705,24 @@ Queue, Dance and Output (with its Pair and About pages).
   alone (a host test checks M5GFX's rule on the arrays). M5GFX keeps 9 B a
   glyph of tables in PSRAM (26 KB for the four).
   - **CJK and Hangul** come from a glyph store behind the fonts
-    (`GlyphStore`, `CjkGlyphs16`: [I18N.md](I18N.md) phase 2): 10,558
+    (`GlyphStore`, `CjkGlyphs16`: [I18N.md](I18N.md) phase 2): 10,557
     glyphs at 16 px, 4 bits a pixel, 1.05 MB of flash, read where they lie
     (no load, no PSRAM; `tools/glyph_store.py` from Noto Sans CJK's
     Japanese face, SIL OFL 1.1, `LICENSES/OFL-1.1.txt`). `Fonts::fit()`'s
     width and glyph test take the VLW font's glyph first, then the
-    store's. Every role draws them at 16 px, regular, on the role's
-    baseline (Small's a pixel lower, so the 16 px em box fits its 17 px
-    row), moved down or cut so nothing leaves the row. A line with a store
-    glyph is drawn by `Fonts::drawMixed()` a glyph at a time: the VLW
-    glyphs by M5GFX's own `VLWfont::drawChar()` (what `drawString()`
-    calls), the store's composed in a 16 x 18 box on the stack (RGB565 as
-    the sprite keeps it, M5GFX's `swap565_t`) and pushed, over the cell's
-    background, or read back and blended when there is none; aligned from
-    its own width, as M5GFX's `textWidth()` would count a store glyph as
-    wide as the line is tall. Every other line is M5GFX's `drawString()`,
-    as before.
+    store's; `Fonts::width()` measures a stored text as it will be drawn,
+    composed and folded first (`textfit::drawnWidth()`: a halfwidth or
+    NFD name as its glyphs). Every role draws them at 16 px, regular, on
+    the role's baseline (Small's a pixel lower, so the 16 px em box fits
+    its 17 px row), moved down or cut so nothing leaves the row. A line
+    with a store glyph is drawn by `Fonts::drawMixed()` a glyph at a time:
+    the VLW glyphs by M5GFX's own `VLWfont::drawChar()` (what
+    `drawString()` calls), the store's composed in a 16 x 18 box on the
+    stack (RGB565 as the sprite keeps it, M5GFX's `swap565_t`) and pushed,
+    over the cell's background, or read back and blended when there is
+    none; aligned from its own width, as M5GFX's `textWidth()` would count
+    a store glyph as wide as the line is tall. Every other line is M5GFX's
+    `drawString()`, as before.
   - A name is composed before it is drawn (`textfold::Composer`: NFD
     text, a name another system stored decomposed or a tag editor's, as NFC
     in Latin, Greek, Cyrillic and kana; Hangul jamo as syllables; halfwidth
