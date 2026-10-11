@@ -11,7 +11,8 @@ speaker as a fallback.
 > Now Playing with the album cover, the Library (artists, albums with
 > covers, folders, the A-Z jump grid), the Queue (editing, Undo), Output
 > (Bluetooth pairing, per-output volume, settings, About); library sync and
-> AutoDJ come next. The library is indexed from the card (and cached there), and the
+> AutoDJ come next. The UI's language can be set to the mobile app's ten
+> (Output > Language); only English is translated so far. The library is indexed from the card (and cached there), and the
 > play queue survives a restart. Measurements: [docs/POC-RESULTS.md](docs/POC-RESULTS.md).
 > Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -350,7 +351,8 @@ for about 3 s, or until the library is ready: about 20 s the first time a
 new card of 20,000 tracks is read. Once the library is ready, the touch
 rescue's line (**Touch calibration**, below) shows at the bottom, for at
 least 1.5 s, and only then does a finger held on the screen count. Then
-the tabs. What the boot screen used to list (the board and its chips,
+the tabs. A new Core2 first asks for its language (the ten, each in its
+own name: tap one), then shows the touch check and the tips in it. What the boot screen used to list (the board and its chips,
 memory, the battery, the library) is in **Output > About > Device info**.
 
 The three touch buttons under the screen do the same on every screen:
@@ -457,7 +459,10 @@ pages do:
   music pauses, and after it waits at the same second until you play) and
   **Bluetooth power** (Low, Normal,
   High), **Touch calibration** ("Not calibrated", or "Calibrated on this
-  Core2": below), **Library** (how many tracks, where their names come
+  Core2": below), **Language** (English, Deutsch, Español, Français,
+  Italiano, 日本語, Polski, Português, Русский or 中文, each in its own
+  name; a tap changes every text at once and is remembered; a language
+  not translated yet shows English), **Library** (how many tracks, where their names come
   from, and **Rescan** to read the tags again, asked first), and **About**
   (battery, storage, library, headphones, CPU speed and Bluetooth power,
   memory, **Device info**, version, the licence and where the source is,
@@ -699,7 +704,7 @@ The serial console (115200 baud) is there for scripted testing:
 | `s` / `l` | stats / list the queue | `t<bpm>` | tempo prior for the dance (`t` clears) |
 | `f` | forget the paired headphones and restart | `y<ms>` | dance latency offset (not saved) |
 | `z` | silent test mode: speaker at volume 0, Bluetooth doesn't take over (until restart) | `k<n>` | freeze the dance pose, 0-15 (`k` unfreezes) |
-| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/t/g/u/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, exFAT-card, NTFS-card, GPT-card, can't-read-the-card or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
+| `d` / `v` | the Dance tab (again: back) / per-beat log | `ui` (`ui0`-`ui4`, `uib`) | the UI's navigation state: each tab's stack, scroll positions, frames, bus holds, the loop's stack; `ui<n>` taps tab n, `uib` goes back; a scripted finger for tests: `uit<x>,<y>` tap, `uih<x>,<y>` long press, `uis<x0>,<y0>,<x1>,<y1>,<ms>` swipe (a fling when fast), `uid...` drag, `uip<x>,<ms>` a press on the button strip (y >= 240 is the strip in all of them); `uil<n>` the Library shows a made-up library of n tracks (look only, to see the lists at scale), `uil0` the card's again; `uic` the coach cards, `uiL` the languages (`uiL<tag>` uses one, `uiL-` forgets it and the tips, `uiP` the first start's picker), `uiT` decode the covers again (timings), `uiV` the volume HUD, `uiF<c/s/p/r/l/n/f/t/g/u/w>` show a faked Bluetooth (connecting, searching, pairing, resting, lost), no-card, exFAT-card, NTFS-card, GPT-card, can't-read-the-card or waiting-for-the-headphones state for screenshots, `uiF0` the real one; `uk1` the scripted finger on a skewed panel (the measured one's x), `uk2` the same with up to 4 px of jitter, `uk0` off: the touch check and the calibration run end to end without a hand |
 | `m` | next dancer: crab (default) / stick figure | | |
 | `x` / `X` | screenshot of the dancer / whole screen (base64 RGB565) | `q...` | the queue: `q` status, `qa` play everything, `qb` the built-in tracks, `ql` list albums, `qp<n>` / `qn<n>` / `q+<n>` album n: play / play next / add, `qr<n>` remove entry n, `qc` clear up next, `qx` clear, `qu` undo, `qs<sec>` start the current entry that far in, as a resume point would (`qs0` none), `qS` shuffle on/off (`qS0` / `qS1`), `qR` repeat off / all / one in turn (`qR0`-`qR2`) |
 | `L` | the partition table as flashed, the running app slot and the next, NVS use (the boot log has a `[flash]` line too) | `P...` | power measurement ([ARCHITECTURE.md](docs/ARCHITECTURE.md#power-measurement)): `P` a line (5 s of the power chip's readings: USB in, battery, the state), `Pl` one every 5 s, `Pw` to `/.player/power.csv`, `Pm<name>` a marker, `Pq1` the coulomb counter; A/B knobs (`P?`): backlight, screen off, CPU clock, Bluetooth TX power, 5 V boost, LED, IMU, speaker amp, loop delay, the dance tracker, the background reconnect; `Pz` plays an hour of silence |

@@ -3424,6 +3424,12 @@ which fails at about 15k entries (metascan section 6.2).
   katakana as the fullwidth, and a Hangul consonant alone
   just before the syllables it begins; `sameName()` the same way. The
   first boot after that firmware rebuilds library.idx once, as for 3.
+- **`rulesVersion` 5** (2026-10-11, [I18N.md](I18N.md) phase 3): a
+  compilation's elected line, "Various Artists" (stored in English as
+  before), marks its album `kVarious`, so the line is drawn in the UI's
+  language; the votes and the orders are 4's. The first boot after that
+  firmware rebuilds library.idx once, as for 3 (from the records: about
+  10 s at 20,000 tracks).
 - **`load()`:** Loaded (compare the inputs: a hard mismatch, or the
   build-at-boot marker (3.4.2), rebuilds from the records at boot; a soft
   one keeps the index and rebuilds at the
@@ -4891,9 +4897,11 @@ first), then the file name.
   a blank name (`library.idx` rules 2, 3.4.3).
 - **Year:** the most common year; ties to the earliest.
 - **Artist line:** the most common album-artist display; else "Various
-  Artists" when any track says compilation; else the most common track
-  artist display (mStream's chain, `artist-extraction.js`); else the
-  folder.
+  Artists" when any track says compilation (stored in English, the album
+  flagged `kVarious` and the line drawn in the UI's language:
+  `library.idx` rules 5, [I18N.md](I18N.md) phase 3); else the most
+  common track artist display (mStream's chain, `artist-extraction.js`);
+  else the folder.
 - **Discs:** the highest disc number; "Disc 2" dividers only when over 1.
 - A vote counts over the album's run of tracks in a fixed scratch of 512
   candidates; a longer album votes on its first 512.

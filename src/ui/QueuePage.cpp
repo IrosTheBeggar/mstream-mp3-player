@@ -132,7 +132,12 @@ void QueuePage::repaint() {
 void QueuePage::refreshSummary() {
   const AppState& s = ui_.state();
   const queueview::DurationBook& book = ui_.host().durations();
-  if (s.contentVersion == sumContent_ && s.positionVersion == sumPosition_ && book.version() == sumBook_) return;
+  const auto lang = static_cast<uint8_t>(uistr::lang());
+  if (s.contentVersion == sumContent_ && s.positionVersion == sumPosition_ && book.version() == sumBook_ &&
+      lang == sumLang_) {
+    return;
+  }
+  sumLang_ = lang;
   sumContent_ = s.contentVersion;
   sumPosition_ = s.positionVersion;
   sumBook_ = book.version();

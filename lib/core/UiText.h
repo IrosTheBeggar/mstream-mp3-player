@@ -407,6 +407,14 @@ inline constexpr int kDeviceInfoRowW = 312 - 26 - 44;
 // value (Body, or Small when Body doesn't fit), from x kDeviceInfoX to 8 px
 // before the scroll bar (14 rows: the list always has one).
 inline constexpr int kDeviceInfoX = 14;
+// ---- Output > Language (ui/OutputPage) ----
+// A language's row: its name in itself (Body; Bold for the one in use)
+// from x 16 to the radio's column at the row's right (312 - 44): never
+// translated, test_ui_strings measures the ten (the Output row's line
+// under "Language" has settings.language's 242 px, in Small).
+inline constexpr int kLangRowX = 16;
+inline constexpr int kLangRowW = 312 - 44 - kLangRowX;
+inline constexpr int kLangLineW = 242;
 inline constexpr int kDeviceInfoW = 312 - 8 - kDeviceInfoX;
 
 // ---- the touch check and calibration (ui/CalibrationScreen; TouchCheck) ----

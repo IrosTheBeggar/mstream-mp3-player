@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "NvsLayout.h"
 #include "RateConverter.h"
 #include "SleepTimer.h"
 #include "TextFit.h"
@@ -19,6 +20,7 @@
 #include "UiText.h"
 #include "app/LoopStack.h"
 #include "app/Psram.h"
+#include "app/UiLang.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
@@ -53,6 +55,7 @@ const char* pageKindName(uint8_t kind) {
     case PageKind::Pair: return "Pair";
     case PageKind::About: return "About";
     case PageKind::DeviceInfo: return "DeviceInfo";
+    case PageKind::Language: return "Language";
     default: return "-";
   }
 }
@@ -102,6 +105,14 @@ bool Ui::begin() {
   nav_.setRoot(NavModel::Tab::Queue, ref(PageKind::Queue));
   nav_.setRoot(NavModel::Tab::Dance, ref(PageKind::Dance));
   nav_.setRoot(NavModel::Tab::Output, ref(PageKind::Output));
+  // The first-boot tips seen (NVS "ui"/"coach"), and a fresh unit's
+  // language picker (no language saved either: nvslayout).
+  Preferences prefs;
+  if (prefs.begin(nvslayout::kUiNamespace, true)) {
+    coachSeen_ = prefs.getBool(nvslayout::kCoachKey, false);
+    prefs.end();
+  }
+  pickerDue_ = nvslayout::langPickerDue(uilang::chosen(), coachSeen_);
   return true;
 }
 
@@ -114,19 +125,85 @@ void Ui::start(uint32_t nowMs) {
   lastUpNext_ = state_.upNext;
   failuresSeen_ = player_.lastFailure().count;
   started_ = true;
+  // A fresh unit: the language first (the touch check and the tips then
+  // speak it).
+  if (pickerDue_) {
+    pickerNav();
+    tipsAfterPicker_ = !coachSeen_;
+  }
   gfx::fill(0, 0, kW, kH, col::BG, true);
   tabBar_.invalidate();
   tabBar_.update(tabState(nowMs));
   showTop();
+  if (pickerDue_) {
+    Serial.println("[ui] up: the first boot's language picker (then the touch check and the tips; console ui: the "
+                   "navigation state)");
+    return;
+  }
   Serial.println("[ui] up: tab bar, Now Playing (console ui: the navigation state)");
   // The first-boot tips, once (NVS "ui"/"coach").
-  Preferences prefs;
-  bool seen = false;
-  if (prefs.begin("ui", true)) {
-    seen = prefs.getBool("coach", false);
-    prefs.end();
+  if (!coachSeen_) showCoach();
+}
+
+void Ui::pickerNav() {
+  nav_.popToRoot(NavModel::Tab::Output);
+  nav_.select(NavModel::Tab::Output);
+  nav_.push(ref(PageKind::Language, kFirstBootPicker));
+}
+
+bool Ui::pickerOnTop() const {
+  const NavModel::PageRef& top = nav_.top();
+  return nav_.tab() == NavModel::Tab::Output && static_cast<PageKind>(top.kind) == PageKind::Language &&
+         top.id == kFirstBootPicker;
+}
+
+void Ui::chooseLanguage(uistr::Lang l) {
+  const bool first = pickerDue_ && pickerOnTop();
+  uilang::choose(l);
+  // Said in the language itself, where its catalogue has it: never for
+  // English, nor for a language with no catalogue yet.
+  const bool note = uistr::lang() != uistr::Lang::En && uistr::translated(S::language_machine_note);
+  if (!started_ || suspended_) return;  // (resume() draws it all)
+  if (!first) {
+    languageChanged();
+    if (note) toast(tr(S::language_machine_note), false);
+    return;
   }
-  if (!seen) showCoach();
+  // The first boot goes on: Now Playing (the Output tab back at its root),
+  // the touch check if it is due (main.cpp, before the next loop()), then
+  // the tips and the note (loop()).
+  pickerDue_ = false;
+  noteAfterPicker_ = note;
+  closeModal(true);
+  if (toast_.up()) toast_.hide();
+  hud_.hide();
+  if (page_) page_->leave();
+  page_ = nullptr;
+  nav_.popToRoot(NavModel::Tab::Output);
+  nav_.select(NavModel::Tab::NowPlaying);
+  tabBar_.invalidate();  // its labels in the language picked
+  showTop();
+  Serial.println("[ui] first boot: the language picked; the touch check (if due), then the tips");
+}
+
+// What holds a text in the old language goes: a sheet or a dialog (closed
+// as a tab tap closes them), the toast (its Undo with it), the HUD. The
+// page is entered again where it was (its ref keeps the place), so what it
+// made of texts on its way in (the Folders root's "Play all N") is made
+// again; then the tab bar, and the tips over the page if they are up.
+void Ui::languageChanged() {
+  if (!started_ || suspended_) return;
+  closeModal(true);
+  if (toast_.up()) {
+    if (toast_.undo()) queue_.dropUndo();
+    toast_.hide();
+  }
+  if (hud_.up()) hud_.hide();
+  tabBar_.invalidate();
+  if (page_) page_->leave();
+  page_ = nullptr;
+  showTop();
+  if (coach_.up()) coach_.draw();
 }
 
 void Ui::showCoach() {
@@ -142,9 +219,10 @@ void Ui::showCoach() {
 void Ui::coachDone() {
   coach_.close();
   applyCover();
+  coachSeen_ = true;
   Preferences prefs;
-  if (prefs.begin("ui", false)) {
-    prefs.putBool("coach", true);
+  if (prefs.begin(nvslayout::kUiNamespace, false)) {
+    prefs.putBool(nvslayout::kCoachKey, true);
     prefs.end();
   }
   Serial.println("[ui] coach cards: seen (Output > About shows them again)");
@@ -162,7 +240,8 @@ Page* Ui::pageFor(uint8_t kind) {
     case PageKind::Output:
     case PageKind::Pair:
     case PageKind::About:
-    case PageKind::DeviceInfo: return &outputPage_;
+    case PageKind::DeviceInfo:
+    case PageKind::Language: return &outputPage_;
     default: return &nowPlaying_;
   }
 }
@@ -254,6 +333,14 @@ void Ui::shuffleAll() {
 }
 
 void Ui::showTop() {
+  // The first boot's picker left without a pick (a tab tapped): English
+  // stays, nothing saved (the next boot asks again only if the tips haven't
+  // been seen by then); the touch check and the tips follow.
+  if (pickerDue_ && started_ && !pickerOnTop()) {
+    pickerDue_ = false;
+    nav_.popToRoot(NavModel::Tab::Output);
+    Serial.println("[ui] first boot: the language picker left: English (Output > Language changes it)");
+  }
   Page* next = pageFor(nav_.top().kind);
   if (page_) page_->leave();
   // A page that shortened the list band (the Queue's selection mode, the
@@ -1036,6 +1123,15 @@ void Ui::loop(uint32_t nowMs) {
   nowMs_ = nowMs;
   if (!started_ || suspended_) return;
   host_.snapshot(state_);
+  // The first boot, its language picked (or its picker left), and the
+  // touch check main.cpp opened then closed (it suspended the UI until
+  // now): the tips, and the language's note over them.
+  if (tipsAfterPicker_ && !pickerDue_) {
+    tipsAfterPicker_ = false;
+    if (!coachSeen_) showCoach();
+    if (noteAfterPicker_) toast(tr(S::language_machine_note), false);
+    noteAfterPicker_ = false;
+  }
   // identify()'s banner, its 5 s over: everything drawn again.
   if (identifying_ && static_cast<int32_t>(nowMs - identifyUntilMs_) >= 0) {
     endIdentify();
@@ -1777,6 +1873,9 @@ void Ui::printState() const {
                 state_.btSession.pairing() ? " pairing" : "", PlayGate::stateName(state_.gate),
                 (unsigned long)state_.gateFailures,
                 added_.pending() ? (long)added_.since() : -1L, failedKeys_.count());
+  Serial.printf("[ui] language: %s (%s)%s%s\n", uistr::tag(uistr::lang()), uistr::autonym(uistr::lang()),
+                uistr::hasCatalogue(uistr::lang()) ? "" : ", no catalogue yet: English's texts",
+                pickerDue_ ? "; the first boot's picker is up" : "");
   if (browse_) {
     Serial.printf("[ui] the Library browses a SYNTHETIC library: %lu tracks, %lu artists, %lu albums (uil0: the card's)\n",
                   (unsigned long)browse_->trackCount(), (unsigned long)browse_->artistCount(),
@@ -1788,6 +1887,32 @@ void Ui::printState() const {
   // so FreeRTOS's own mark is the command's: app/LoopStack).
   Serial.printf("[ui] loop task stack: %lu B never used since the boot (of 8 KB)\n",
                 static_cast<unsigned long>(loopstack::lowestLeft()));
+}
+
+// uiL: the languages; uiL<tag> one of them (as a tap on its row); uiL-
+// the language and the tips forgotten (English now; the next boot is a
+// fresh unit's: its picker, the touch check if due, the tips).
+void Ui::languageCommand(const char* a) {
+  if (a[0] == '-') {
+    uilang::forget();
+    coachSeen_ = false;
+    languageChanged();
+    return;
+  }
+  if (a[0]) {
+    uistr::Lang l = uistr::Lang::En;
+    if (!uistr::langOf(a, &l)) {
+      Serial.printf("[ui] uiL%s: not one of the languages (uiL: the list)\n", a);
+      return;
+    }
+    chooseLanguage(l);
+    return;
+  }
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const auto l = static_cast<uistr::Lang>(i);
+    Serial.printf("[ui] %s %-3s %s%s\n", l == uistr::lang() ? "*" : " ", uistr::tag(l), uistr::autonym(l),
+                  uistr::hasCatalogue(l) ? "" : " (no catalogue yet: English)");
+  }
 }
 
 void Ui::command(const char* a) {
@@ -1806,13 +1931,27 @@ void Ui::command(const char* a) {
     back();
   } else if (a[0] == 'c') {
     showCoach();
+  } else if (a[0] == 'L') {
+    languageCommand(a + 1);
+    return;
+  } else if (a[0] == 'P') {
+    // The first boot's picker, now (no touch check or tips after it).
+    closeModal(true);
+    if (coach_.up()) coach_.close();
+    if (page_) page_->leave();
+    page_ = nullptr;
+    pickerDue_ = true;
+    pickerNav();
+    showTop();
   } else if (a[0] == 'T') {
     thumbs_.redecode();
     list_.refreshAll();  // the rows on screen ask again
   } else {
     Serial.println("[ui] ui: the navigation state; ui0-ui4 tap a tab (0 Now Playing, 1 Library, 2 Queue, 3 Dance, "
-                   "4 Output); uib back; uic the coach cards; uiT the covers decoded again (timings); uil<n> the Library browses a synthetic library of n "
-                   "tracks (uil0: the card's); uit/uih/uis/uid/uip a scripted finger");
+                   "4 Output); uib back; uic the coach cards; uiL<tag> the language (uiL the list, uiL- forget it and "
+                   "the tips: the next boot is a fresh unit's); uiP the first boot's language picker; uiT the covers "
+                   "decoded again (timings); uil<n> the Library browses a synthetic library of n tracks (uil0: the "
+                   "card's); uit/uih/uis/uid/uip a scripted finger");
     return;
   }
   printState();

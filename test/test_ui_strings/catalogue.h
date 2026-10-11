@@ -699,6 +699,18 @@ inline const Entry kEntries[] = {
      {{Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}}},
     {uistr::S::settings_cal_removed, "settings.cal_removed", false, "Calibration removed", "", Font::Body, Font::None, 284, 1, Layout::Toast, 284, -1, false, false, false,
      {{Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}}},
+    {uistr::S::settings_language, "settings.language", false, "Language", "", Font::Body, Font::None, 242, 1, Layout::Line, 0, -1, false, false, false,
+     {{Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}}},
+    {uistr::S::language_title, "language.title", false, "Language", "", Font::Bold, Font::None, 282, 1, Layout::Line, 0, -1, false, false, false,
+     {{Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}}},
+    {uistr::S::language_title, "language.title", false, "Language", "", Font::Bold, Font::None, 298, 1, Layout::Line, 0, -1, false, false, false,
+     {{Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}}},
+    {uistr::S::language_subtitle, "language.subtitle", false, "menus and messages", "", Font::Small, Font::None, 187, 1, Layout::Line, 0, -1, false, false, false,
+     {{Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}}},
+    {uistr::S::language_first_boot_sub, "language.first_boot_sub", false, "later: Output > Language", "", Font::Small, Font::None, 203, 1, Layout::Line, 0, -1, false, false, false,
+     {{Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}}},
+    {uistr::S::language_machine_note, "language.machine_note", false, "Machine-translated: expect rough edges", "", Font::Body, Font::None, 284, 1, Layout::Toast, 284, -1, false, false, false,
+     {{Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}}},
     {uistr::S::library_row_title, "library_row.title", true, "Library: {0} track", "Library: {0} tracks", Font::Body, Font::None, 184, 1, Layout::Line, 0, 0, false, false, false,
      {{Fill::Grouped, nullptr, 99999, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}, {Fill::None, nullptr, 0, 0, uistr::S{}}}},
     {uistr::S::library_row_empty, "library_row.empty", false, "Library: no tracks", "", Font::Body, Font::None, 184, 1, Layout::Line, 0, -1, false, false, false,
@@ -1199,6 +1211,18 @@ inline constexpr LangSet kLangSets[] = {
     {"ru", 0x3A},
     {"zh", 0x20},
     {"en-XA", 0x22},
+};
+
+// The languages with a catalogue (English, then each translation), and the
+// texts a translation marks "overflow" (too wide in it until a layout
+// fix: the width test lets them be, and fails a mark that fits).
+inline constexpr const char* kCatalogues[] = {"en"};
+struct LangOverflow {
+  const char* tag;
+  uistr::S id;
+};
+inline const LangOverflow kLangOverflows[] = {
+    {"", uistr::S{}},  // (none yet)
 };
 
 // Rooms that are a uitext constant ("const" in en.json): the same number.

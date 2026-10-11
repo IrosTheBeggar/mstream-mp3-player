@@ -68,8 +68,8 @@ std::string lineOf(S id, int k) {
 }
 }  // namespace
 
-void setUp() {}
-void tearDown() {}
+void setUp() { uistr::setLang(uistr::Lang::En); }  // (a test that changes it may fail half-way)
+void tearDown() { uistr::setLang(uistr::Lang::En); }
 
 namespace {
 
@@ -1928,6 +1928,14 @@ void test_library_rows_from_tags() {
   TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 2001", albumSub(idx, first, AlbumPlace::AZ).c_str());
   TEST_ASSERT_EQUAL_STRING("The Lantern Choir", albumSub(idx, demos, AlbumPlace::AZ).c_str());
   TEST_ASSERT_EQUAL_STRING("Various Artists \xC2\xB7 2015", albumSub(idx, mix, AlbumPlace::AZ).c_str());
+  // A compilation's line is the UI's words (LibraryIndex::kVarious): in
+  // the pseudo-locale here, the index keeping its English.
+  uistr::setLang(uistr::Lang::EnXA);
+  TEST_ASSERT_EQUAL_STRING(tr(S::library_various_artists), librarytext::albumArtist(idx, mix));
+  TEST_ASSERT_EQUAL_INT(0, static_cast<int>(albumSub(idx, mix, AlbumPlace::AZ).find(tr(S::library_various_artists))));
+  TEST_ASSERT_EQUAL_STRING("Various Artists", idx.albumArtistLine(mix));
+  TEST_ASSERT_EQUAL_STRING("The Lantern Choir", librarytext::albumArtist(idx, first));  // a name stays
+  uistr::setLang(uistr::Lang::En);
   TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 2001 \xC2\xB7 3 tracks",
                            text(librarytext::albumHeader, idx, first).c_str());
   TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 2 tracks", text(librarytext::albumHeader, idx, demos).c_str());

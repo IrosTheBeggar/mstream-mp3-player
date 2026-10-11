@@ -325,6 +325,11 @@ enum class S : uint16_t {
   settings_cal_remove_body,  // Then taps are read as the panel reports them. Calibrate again here ...
   settings_cal_remove,  // Remove
   settings_cal_removed,  // Calibration removed
+  settings_language,  // Language
+  language_title,  // Language
+  language_subtitle,  // menus and messages
+  language_first_boot_sub,  // later: Output > Language
+  language_machine_note,  // Machine-translated: expect rough edges
   library_row_title,  // Library: {0} tracks
   library_row_empty,  // Library: no tracks
   library_row_src_transfer,  // {0} from the transfer
@@ -558,20 +563,30 @@ enum class S : uint16_t {
   format_hz,  // {0} Hz
   format_list_sep,  // , 
 };
-inline constexpr unsigned kStrings = 549;
+inline constexpr unsigned kStrings = 554;
 
-// The languages with a catalogue (en.json first), and the pseudo-locale
-// where UISTR_PSEUDO is defined.
+// The languages, English first: the mobile app's ten (one without a
+// catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO
+// is defined.
 enum class Lang : uint8_t {
   En,  // en
+  De,  // de
+  Es,  // es
+  Fr,  // fr
+  It,  // it
+  Ja,  // ja
+  Pl,  // pl
+  Pt,  // pt
+  Ru,  // ru
+  Zh,  // zh
 #ifdef UISTR_PSEUDO
   EnXA,  // en-XA
 #endif
 };
 #ifdef UISTR_PSEUDO
-inline constexpr unsigned kLangs = 2;
+inline constexpr unsigned kLangs = 11;
 #else
-inline constexpr unsigned kLangs = 1;
+inline constexpr unsigned kLangs = 10;
 #endif
 
 }  // namespace uistr

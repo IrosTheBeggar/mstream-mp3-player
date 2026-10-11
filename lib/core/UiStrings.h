@@ -31,14 +31,22 @@ namespace uistr {
 
 // ---- the UI's language ----
 
-// English until set (the boot sets it from NVS: docs/I18N.md, phase 3).
+// The ten languages (Lang, English first, in the mobile app's order: en,
+// de, es, fr, it, ja, pl, pt, ru, zh), each with its table; one with no
+// catalogue yet draws English (hasCatalogue()).
+
+// English until set (the boot sets it from NVS "ui"/"lang": app/UiLang).
 void setLang(Lang l);
 Lang lang();
-// Its BCP-47 tag ("en", "pt", "en-XA") and its name in itself ("English").
+// Its BCP-47 tag ("en", "pt", "en-XA") and its name in itself ("English",
+// "Deutsch", "日本語": the Language setting's rows; never translated).
 const char* tag(Lang l);
 const char* autonym(Lang l);
-// The language of a tag, false when there is no catalogue for it.
+// The language of a tag, false when it isn't one of the languages (a later
+// firmware's, read after a downgrade).
 bool langOf(const char* tag, Lang* out);
+// Whether a language has a catalogue (i18n/<tag>.json) in this firmware.
+bool hasCatalogue(Lang l);
 
 // ---- messages ----
 
@@ -52,6 +60,10 @@ const char* tr(S id);
 const char* trn(S id, uint32_t n);
 // Whether a message is plural (has forms by count).
 bool plural(S id);
+// Whether the UI's language has its own text for a message (English
+// always; a translation where its catalogue has it): what is said only in
+// the language itself (language.machine_note) shows only then.
+bool translated(S id);
 
 // ---- plural rules (CLDR 46's cardinal rules, for whole numbers) ----
 
@@ -153,7 +165,8 @@ size_t line(const char* text, int k, char* out, size_t size);
 namespace detail {
 // One language's messages (UiStringsData.cpp, generated): `off[id]` is
 // where message `id` starts in `blob`, kMissing where the catalogue hasn't
-// it (English's then). A plural message is its forms one after the other,
+// it (English's then); `blob` and `off` are nullptr for a language with no
+// catalogue yet. A plural message is its forms one after the other,
 // each NUL-terminated, in Plural's order of the categories the language
 // has; an empty one is a form the catalogue left out.
 inline constexpr uint16_t kMissing = 0xFFFF;

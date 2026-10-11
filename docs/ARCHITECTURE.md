@@ -1533,7 +1533,14 @@ schema 1's keys and `queue`/`repeat`, the repeat mode (a u8: 0 Off, 1 All,
 change, so the number moved. Its `migrate(1, 2)` step, the first, does
 nothing: an absent key reads as Off. Older firmware leaves a schema-2 NVS
 as it is (`... newer than this firmware's 1 (a downgrade)`), never reads
-the key, and its queue wraps at the end as it always did.
+the key, and its queue wraps at the end as it always did. Schema 3 (from
+0.10.0) is schema 2's keys and `ui`/`lang`, the UI's language (a BCP-47
+tag: [I18N.md](I18N.md), phase 3). Its `migrate(2, 3)` step (and from 1)
+writes "en" there when there is none, so an updated unit stays in English
+and never gets the first boot's language picker, which is a fresh NVS's
+alone (no `schema` key, no step). 0.9.0 leaves a schema-3 NVS as it is,
+never reads `lang` (it draws English) and keeps every other setting; back
+on 0.10.0 the language is still there.
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
@@ -1559,12 +1566,13 @@ The rules:
   atomic.
 - Keys are at most 15 characters (NVS's limit).
 
-The keys of schema 2, by namespace: `meta` (schema); `input` (cal,
+The keys of schema 3, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
 ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu_mhz,
 bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
-(coach); `queue` (gen, pos, resume, and schema 2's repeat). Schema 1's are
-the same without `queue`/`repeat`. The Bluetooth stack keeps its bonds in
+(coach, and schema 3's lang); `queue` (gen, pos, resume, and schema 2's
+repeat). Schema 2's are the same without `ui`/`lang`, schema 1's without
+`queue`/`repeat` too. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
 
 ### Moving an existing unit to the new layout
@@ -1632,8 +1640,8 @@ read back byte-identical before and after, and after the reboot `as`, `B`,
 `q`, the settings and `L` matched the lines from before the migration.
 
 **Or start clean:** `esptool --port COM3 erase-flash`, then `upload` (and
-`uploadfs`): the unit starts as new (the touch check, pairing, the coach
-cards).
+`uploadfs`): the unit starts as new (the language picker, the touch check,
+pairing, the coach cards).
 
 ## Versions
 
@@ -2606,10 +2614,24 @@ Queue, Dance and Output (with its Pair and About pages).
 - **Texts that must fit**: every text the UI draws is in the catalogue,
   `i18n/en.json` (one file a language; `uistr::tr()`: docs/I18N.md, phase
   3), each with its room (the font, the pixels, the lines); the rooms are
-  `lib/core/UiText.h`'s too. `test_ui_strings` measures every text in
-  every room it has, and `test_ui_library` the layouts' details, with the
-  firmware's own DejaVu data (as it does the tab bar's), so a label cut to
-  "Remov…" or "Tap ag…" on the device fails a host test.
+  `lib/core/UiText.h`'s too. `test_ui_strings` measures every text of
+  every language in every room it has, and `test_ui_library` the
+  layouts' details, with the firmware's own DejaVu data and CJK store (as
+  it does the tab bar's), so a label cut to "Remov…" or "Tap ag…" on the
+  device fails a host test.
+- **The language**: the mobile app's ten (English, Deutsch, Español,
+  Français, Italiano, 日本語, Polski, Português, Русский, 中文), each
+  named in itself; one whose catalogue isn't in `i18n/` yet draws English.
+  Saved in NVS `ui`/`lang` (schema 3) and read at boot before any text is
+  drawn (`app/UiLang`). **Output > Language** lists them (full-width rows
+  hit by y); a tap uses one at once: saved, and everything drawn again in
+  it (`Ui::chooseLanguage()`: the tab bar, the page, the tips; a sheet,
+  dialog, toast or HUD up goes, its text being the old language's). A
+  fresh unit (no language saved, the tips never seen) starts on that page
+  as its picker, with no back arrow; main.cpp's first-boot touch check
+  waits for the pick, so it speaks the language picked, and the tips
+  follow both. An update from an older firmware is English with no picker
+  (NVS schema 3's step). [I18N.md](I18N.md), phase 3.
 - **Overlays**: the **toast** (with Undo for 4 s after a queue edit, else
   1.8 s) sits at the **top of the content area** (y 36-71, over the page
   header: the usability walk found the spec's bottom toast right above
@@ -2653,7 +2675,8 @@ Queue, Dance and Output (with its Pair and About pages).
   the Output cards' chips the speaker's or the headphones' whichever
   plays (`UiHost::stepOutputVolume()`: the active one's as the buttons
   do, the headphones' as their own keys do, the speaker's directly). The
-  **coach cards** (first boot, once: NVS `ui`/`coach`; About's "Show the
+  **coach cards** (first boot, once, after a fresh unit's language picker
+  and touch check: NVS `ui`/`coach`; About's "Show the
   tips again" and console `uic`): the three red buttons' clicks and holds,
   each over its button with an arrow down to its dot, then "tap the tab
   you're on again: back to its start"; a tap anywhere goes on, a tab tap
@@ -2792,7 +2815,8 @@ Queue, Dance and Output (with its Pair and About pages).
     point with a lone consonant just before the syllables it begins, Han
     by code point. `library.idx` rules 4 (the first boot of that firmware
     rebuilds it once: from the records, or by a walk on a card that has
-    none).
+    none). Rules 5 (phase 3) marks a compilation's "Various Artists"
+    line, drawn in the UI's language (`LibraryIndex::kVarious`).
   - **The width tests** measure each fixed text with the fonts' own data
     and the store's (test_ui_library's `fits()`), check that the font or
     the store has every glyph in it, and count a missing one as the space
@@ -3104,7 +3128,9 @@ Queue, Dance and Output (with its Pair and About pages).
   20 / 60 min / Never, a power symbol), **CPU speed** (240 / 160 MHz, a
   chip, "Smoothest lists, dancing" / "Slower lists, saves a little"; a
   restart, asked first) and **Bluetooth power** (Low / Normal /
-  High, signal bars), **Touch calibration**, the **Library** row (the
+  High, signal bars), **Touch calibration**, **Language** (a globe, the
+  language in use in its own name; its page lists the ten: above), the
+  **Library** row (the
   tracks, where their names come from, Rescan tags: METADATA.md 3.3.6),
   **About** (battery,
   storage, the library, the headphones, the CPU speed and Bluetooth power,
@@ -3260,7 +3286,10 @@ Queue, Dance and Output (with its Pair and About pages).
   frames and fps, the governor, the UI's bus holds (count, mean, max), the
   overlays, the covers (above) and the loop task's stack never used since
   the boot ("The loop task's stack", above). `ui0`-`ui4`
-  tap a tab, `uib` goes back, `uic` shows the coach cards, `uiT` decodes
+  tap a tab, `uib` goes back, `uic` shows the coach cards, `uiL` lists the
+  languages and `uiL<tag>` uses one (`uiL-` forgets it and the tips: the
+  next boot is a fresh unit's), `uiP` shows the first boot's language
+  picker, `uiT` decodes
   the covers again (their timings), `uiV` shows the volume HUD, and
   **`uiF<c/s/p/r/l/n/f/t/g/u/w>`** shows a faked state for screenshots of what a test
   can't safely cause (display only: the radio and the card are left

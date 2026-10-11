@@ -5,12 +5,13 @@
 // 3): the tables read back as the catalogue has them (catalogue.h, made by
 // tools/gen_ui_strings.py from i18n/en.json), CLDR 46's plural rules for
 // the ten languages against CLDR's own samples, the {0} formatter, the
-// numbers as each language writes them, and every message in its room,
-// measured with the firmware's own fonts: in English (each must fit,
-// but the few en.json says overflow already), and in the pseudo-locale
-// en-XA (a third longer: a report, never a failure). With UI_STRINGS_REPORT
-// set to a path, the overflows of every language but English go there as
-// JSON.
+// numbers as each language writes them, and every message of every
+// language in its room, through TextFit with the firmware's own fonts and
+// CJK store: English and each translation must fit (but where its
+// catalogue says "overflow"), the pseudo-locale en-XA (a third longer) is
+// a report, never a failure. The languages' names in themselves in their
+// rows. With UI_STRINGS_REPORT set to a path, the overflows of every
+// language but English go there as JSON.
 // Run: pio test -e native -f test_ui_strings
 #include <unity.h>
 
@@ -187,7 +188,21 @@ std::vector<uint32_t> countsFor(const catalogue::Entry& e) {
   return out;
 }
 
-// ---- does it fit ----
+// ---- does it fit (as TextFit draws it) ----
+
+// Every character of `s` has a glyph as drawn: composed (NFD as NFC), none
+// folded to a look-alike or '?' (TextFit::prepare()'s "folded").
+bool drawable(const textfit::Font& f, const char* s) {
+  char out[1024];
+  return !textfit::prepare(f, s, std::strlen(s), out, sizeof(out)).folded;
+}
+
+// A line's width as drawn (TextFit: composed, in pieces), -1 when a glyph
+// is missing from the font and the store.
+int drawnWidth(const Vlw& v, const char* s) {
+  const textfit::Font f = viewOf(v);
+  return drawable(f, s) ? textfit::drawnWidth(f, s) : -1;
+}
 
 struct Fit {
   bool ok = true;
@@ -195,16 +210,17 @@ struct Fit {
   std::string why;   // what doesn't fit
 };
 
-// One line in the room's font, else its other font.
+// One line in the room's font, else its other font. A glyph the fonts
+// lack doesn't fit (the width then is the font's own sum).
 bool lineFits(const catalogue::Entry& e, const char* line, int px, int* width) {
   const Vlw& f = font(e.font);
-  *width = f.width(line);
-  if (*width <= px && f.hasAll(line)) return true;
+  const int w = drawnWidth(f, line);
+  *width = w >= 0 ? w : f.width(line);
+  if (w >= 0 && w <= px) return true;
   if (e.elseFont != catalogue::Font::None) {
-    const Vlw& g = font(e.elseFont);
-    const int w = g.width(line);
-    if (w <= px && g.hasAll(line)) {
-      *width = w;
+    const int g = drawnWidth(font(e.elseFont), line);
+    if (g >= 0 && g <= px) {
+      *width = g;
       return true;
     }
   }
@@ -219,8 +235,8 @@ Fit fits(const catalogue::Entry& e, const std::string& text) {
     const Vlw& f = font(e.font);
     std::vector<char> lines(static_cast<size_t>(e.lines + 1) * 160);
     const int n = textfit::wrap(viewOf(f), text.c_str(), text.size(), e.px, e.lines + 1, lines.data(), 160);
-    for (int i = 0; i < n; ++i) r.width = std::max(r.width, f.width(lines.data() + i * 160));
-    if (n > e.lines || !f.hasAll(text.c_str())) {
+    for (int i = 0; i < n; ++i) r.width = std::max(r.width, textfit::drawnWidth(viewOf(f), lines.data() + i * 160));
+    if (n > e.lines || !drawable(viewOf(f), text.c_str())) {
       r.ok = false;
       r.why = std::to_string(n) + " lines of " + std::to_string(e.lines);
     }
@@ -245,13 +261,14 @@ Fit fits(const catalogue::Entry& e, const std::string& text) {
     }
     const std::string what = text.substr(0, colon), rest = text.substr(colon + 2);
     const Vlw& small = font(catalogue::Font::Small);
-    const int ww = small.width(what.c_str());
+    const int drawnWhat = drawnWidth(small, what.c_str());
+    const int ww = drawnWhat >= 0 ? drawnWhat : small.width(what.c_str());
     const catalogue::Entry restRoom{e.id, e.name, e.plural, e.one, e.other, catalogue::Font::Body,
                                     catalogue::Font::Small, e.twoLinePx, 1, Layout::Line, 0, e.count, false, false, false, {}};
     int rw = 0;
     const bool restOk = lineFits(restRoom, rest.c_str(), e.twoLinePx, &rw);
     r.width = std::max(ww, rw);
-    if (ww > e.twoLinePx || !small.hasAll(what.c_str()) || !restOk) {
+    if (drawnWhat < 0 || ww > e.twoLinePx || !restOk) {
       r.ok = false;
       r.why = "two lines: " + std::to_string(ww) + " and " + std::to_string(rw) + " px";
     }
@@ -269,7 +286,8 @@ Fit fits(const catalogue::Entry& e, const std::string& text) {
     int w = 0;
     if (!lineFits(e, line, e.px, &w)) {
       r.ok = false;
-      r.why = "line " + std::to_string(k + 1) + ": " + std::to_string(w) + " px";
+      r.why = "line " + std::to_string(k + 1) + ": " + std::to_string(w) + " px" +
+              (w <= e.px ? ", a character the fonts lack" : "");
     }
     r.width = std::max(r.width, w);
   }
@@ -313,6 +331,45 @@ struct Overflow {
   uint32_t n;
 };
 
+// A message the UI's language's catalogue says overflows (until a layout
+// fix): English's "overflow" marks count for every language (the room is
+// too small already), a translation's own only for it.
+bool markedIn(const char* tag, const catalogue::Entry& e) {
+  if (e.knownOverflow) return true;
+  for (const auto& m : catalogue::kLangOverflows) {
+    if (m.tag[0] && std::strcmp(m.tag, tag) == 0 && m.id == e.id) return true;
+  }
+  return false;
+}
+
+bool hasCatalogueFile(const char* tag) {
+  for (const char* t : catalogue::kCatalogues) {
+    if (std::strcmp(t, tag) == 0) return true;
+  }
+  return false;
+}
+
+// UI_STRINGS_REPORT (a path): the overflows as JSON, for the layout fixes.
+void writeReport(const std::vector<Overflow>& over, int rooms) {
+  const char* path = std::getenv("UI_STRINGS_REPORT");
+  if (!path || !path[0]) return;
+  FILE* f = std::fopen(path, "wb");
+  TEST_ASSERT_NOT_NULL_MESSAGE(f, path);
+  std::fprintf(f, "{\n  \"what\": \"Messages that overflow their room (test_ui_strings), by language\",\n");
+  std::fprintf(f, "  \"rooms\": %d,\n  \"overflows\": [\n", rooms);
+  for (size_t i = 0; i < over.size(); ++i) {
+    const Overflow& o = over[i];
+    std::fprintf(f,
+                 "    {\"id\": %s, \"lang\": %s, \"font\": \"%s\", \"px\": %d, \"lines\": %d, \"width\": %d, "
+                 "\"count\": %lu, \"why\": %s, \"text\": %s}%s\n",
+                 jsonString(o.id).c_str(), jsonString(o.lang).c_str(), fontName(o.e->font), o.e->px, o.e->lines,
+                 o.width, static_cast<unsigned long>(o.n), jsonString(o.why).c_str(), jsonString(o.text).c_str(),
+                 i + 1 < over.size() ? "," : "");
+  }
+  std::fprintf(f, "  ]\n}\n");
+  std::fclose(f);
+}
+
 // Every entry with a room, in the UI's language: what doesn't fit.
 std::vector<Overflow> overflows() {
   std::vector<Overflow> out;
@@ -355,6 +412,46 @@ void test_english_is_the_catalogue() {
 }
 
 void test_the_languages() {
+  // The ten (the mobile app's and the terminal player's), English first,
+  // in their order, each by its name in itself; then the pseudo-locale.
+  static const char* const kTags[] = {"en", "de", "es", "fr", "it", "ja", "pl", "pt", "ru", "zh", "en-XA"};
+  static const char* const kNames[] = {"English",
+                                       "Deutsch",
+                                       "Espa\xC3\xB1ol",
+                                       "Fran\xC3\xA7"
+                                       "ais",
+                                       "Italiano",
+                                       "\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E",
+                                       "Polski",
+                                       "Portugu\xC3\xAAs",
+                                       "\xD0\xA0\xD1\x83\xD1\x81\xD1\x81\xD0\xBA\xD0\xB8\xD0\xB9",
+                                       "\xE4\xB8\xAD\xE6\x96\x87"};
+  TEST_ASSERT_EQUAL_UINT(11, uistr::kLangs);
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const Lang l = static_cast<Lang>(i);
+    TEST_ASSERT_EQUAL_STRING(kTags[i], uistr::tag(l));
+    if (i < 10) TEST_ASSERT_EQUAL_STRING(kNames[i], uistr::autonym(l));
+    Lang back = Lang::En;
+    TEST_ASSERT_TRUE(uistr::langOf(kTags[i], &back));
+    TEST_ASSERT_TRUE(back == l);
+    // A catalogue where i18n/ has its file (English's and the pseudo's
+    // always).
+    TEST_ASSERT_EQUAL_MESSAGE(i == 10 || hasCatalogueFile(kTags[i]), uistr::hasCatalogue(l), kTags[i]);
+  }
+  // One with no catalogue yet draws English: every message, its plural
+  // forms by English's rule; translated() says none is its own.
+  for (unsigned i = 1; i < 10; ++i) {
+    const Lang l = static_cast<Lang>(i);
+    if (uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    for (const auto& e : catalogue::kEntries) {
+      TEST_ASSERT_EQUAL_STRING_MESSAGE(e.one, e.plural ? uistr::trn(e.id, 1) : uistr::tr(e.id), e.name);
+      TEST_ASSERT_FALSE_MESSAGE(uistr::translated(e.id), e.name);
+    }
+  }
+  uistr::setLang(Lang::En);
+  TEST_ASSERT_TRUE(uistr::translated(S::language_machine_note));
+  TEST_ASSERT_FALSE(uistr::translated(static_cast<S>(uistr::kStrings)));
   TEST_ASSERT_EQUAL_STRING("en", uistr::tag(Lang::En));
   TEST_ASSERT_EQUAL_STRING("English", uistr::autonym(Lang::En));
   Lang l = Lang::EnXA;
@@ -614,57 +711,79 @@ void test_rooms_are_the_codes() {
   }
 }
 
-// English: every message fits every room it has, with its placeholders at
-// their worst, the glyphs all in the fonts; but those en.json says
-// overflow already (a layout fix later), which must still overflow (or the
-// mark goes).
-void test_english_fits_its_rooms() {
-  const std::vector<Overflow> over = overflows();
-  int known = 0, bad = 0;
-  for (const Overflow& o : over) {
-    printf("%s overflow: %s: \"%s\" (%s %d px, %d lines): %s\n", o.e->knownOverflow ? "known" : "NEW", o.id.c_str(),
-           o.text.c_str(), fontName(o.e->font), o.e->px, o.e->lines, o.why.c_str());
-    ++(o.e->knownOverflow ? known : bad);
-  }
-  // Each marked one does overflow.
-  for (const auto& e : catalogue::kEntries) {
-    if (!e.knownOverflow) continue;
-    bool any = false;
-    for (const Overflow& o : over) any = any || o.id == e.name;
-    if (!any) {
-      printf("marked, but fits: %s\n", e.name);
-      ++bad;
-    }
-  }
-  printf("English: %d messages overflow as en.json says\n", known);
-  TEST_ASSERT_EQUAL_INT_MESSAGE(0, bad, "English overflows en.json doesn't say (or says and it fits): above");
-}
-
-// The pseudo-locale (accented, a third longer): where a longer language
-// won't fit. A report (UI_STRINGS_REPORT: JSON), never a failure.
-void test_pseudo_locale_report() {
-  uistr::setLang(Lang::EnXA);
-  const std::vector<Overflow> over = overflows();
+// Every language with a catalogue, every message in every room it has, as
+// TextFit draws it with the firmware's fonts and CJK store (composed, no
+// glyph missing), its placeholders at their worst. A real language
+// (English, and each translation as it lands in i18n/) must fit, but where
+// its catalogue says "overflow" (a layout fix to come; English's marks
+// count for all), and each of its own marks must still overflow (else the
+// mark goes). The pseudo-locale (accented, a third longer) is where a
+// longer language won't fit: a report (UI_STRINGS_REPORT: JSON), never a
+// failure. A language with no catalogue yet draws English: nothing more.
+void test_every_language_fits_its_rooms() {
+  std::vector<Overflow> report;  // every language's but English's
+  int bad = 0;
   int rooms = 0;
   for (const auto& e : catalogue::kEntries) rooms += e.font != catalogue::Font::None;
-  printf("en-XA: %d of %d rooms overflow\n", static_cast<int>(over.size()), rooms);
-  const char* path = std::getenv("UI_STRINGS_REPORT");
-  if (!path || !path[0]) return;
-  FILE* f = std::fopen(path, "wb");
-  TEST_ASSERT_NOT_NULL_MESSAGE(f, path);
-  std::fprintf(f, "{\n  \"what\": \"Messages that overflow their room (test_ui_strings), by language\",\n");
-  std::fprintf(f, "  \"rooms\": %d,\n  \"overflows\": [\n", rooms);
-  for (size_t i = 0; i < over.size(); ++i) {
-    const Overflow& o = over[i];
-    std::fprintf(f,
-                 "    {\"id\": %s, \"lang\": %s, \"font\": \"%s\", \"px\": %d, \"lines\": %d, \"width\": %d, "
-                 "\"count\": %lu, \"why\": %s, \"text\": %s}%s\n",
-                 jsonString(o.id).c_str(), jsonString(o.lang).c_str(), fontName(o.e->font), o.e->px, o.e->lines,
-                 o.width, static_cast<unsigned long>(o.n), jsonString(o.why).c_str(), jsonString(o.text).c_str(),
-                 i + 1 < over.size() ? "," : "");
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const Lang l = static_cast<Lang>(i);
+    const char* tag = uistr::tag(l);
+    if (!uistr::hasCatalogue(l)) {
+      printf("%s: no catalogue yet (its texts are English's)\n", tag);
+      continue;
+    }
+    uistr::setLang(l);
+    const std::vector<Overflow> over = overflows();
+    if (l == Lang::EnXA) {
+      printf("%s: %d of %d rooms overflow (the pseudo-locale: a report)\n", tag, static_cast<int>(over.size()), rooms);
+      report.insert(report.end(), over.begin(), over.end());
+      continue;
+    }
+    int known = 0;
+    for (const Overflow& o : over) {
+      const bool marked = markedIn(tag, *o.e);
+      printf("%s: %s overflow: %s: \"%s\" (%s %d px, %d lines): %s\n", tag, marked ? "known" : "NEW", o.id.c_str(),
+             o.text.c_str(), fontName(o.e->font), o.e->px, o.e->lines, o.why.c_str());
+      ++(marked ? known : bad);
+      if (l != Lang::En) report.push_back(o);
+    }
+    // Each of its own marks does overflow (English's: in English).
+    for (const auto& e : catalogue::kEntries) {
+      const bool own = l == Lang::En ? e.knownOverflow : markedIn(tag, e) && !e.knownOverflow;
+      if (!own) continue;
+      bool any = false;
+      for (const Overflow& o : over) any = any || o.id == e.name;
+      if (!any) {
+        printf("%s: marked, but fits: %s\n", tag, e.name);
+        ++bad;
+      }
+    }
+    printf("%s: %d messages overflow as its catalogue says\n", tag, known);
   }
-  std::fprintf(f, "  ]\n}\n");
-  std::fclose(f);
+  uistr::setLang(Lang::En);
+  writeReport(report, rooms);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(0, bad, "overflows a catalogue doesn't say (or says and it fits): above");
+}
+
+// The languages' names in themselves (never translated): each in its row
+// on the Language page (Body, Bold for the one in use) and as the line
+// under Output's "Language" (Small), every glyph in the fonts or the store.
+void test_autonyms_fit() {
+  struct Room {
+    catalogue::Font font;
+    int px;
+  };
+  const Room rooms[] = {{catalogue::Font::Body, uitext::kLangRowW},
+                        {catalogue::Font::Bold, uitext::kLangRowW},
+                        {catalogue::Font::Small, uitext::kLangLineW}};
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const char* a = uistr::autonym(static_cast<Lang>(i));
+    for (const Room& r : rooms) {
+      const int w = drawnWidth(font(r.font), a);
+      TEST_ASSERT_TRUE_MESSAGE(w > 0, a);
+      TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(r.px, w, a);
+    }
+  }
 }
 
 int main(int, char**) {
@@ -679,7 +798,7 @@ int main(int, char**) {
   RUN_TEST(test_numbers);
   RUN_TEST(test_pseudo_locale);
   RUN_TEST(test_rooms_are_the_codes);
-  RUN_TEST(test_english_fits_its_rooms);
-  RUN_TEST(test_pseudo_locale_report);
+  RUN_TEST(test_every_language_fits_its_rooms);
+  RUN_TEST(test_autonyms_fit);
   return UNITY_END();
 }

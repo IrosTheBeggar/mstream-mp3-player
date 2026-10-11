@@ -18,11 +18,13 @@ The catalogue (i18n/README.md says it for translators):
   placeholder that is a plural message's count. The other files hold only
   their messages ("<id>": text), and "@<id>": {"note": ...} if they like.
   "@@locale" is the file's tag and "@@autonym" the language's name in
-  itself.
+  itself (AUTONYMS', the apps' spelling).
 
   A message is a string, or a plural message's forms by CLDR category
   ({"one": ..., "other": ...}). {0} to {3} are its placeholders, the only
   special characters; '\\n' a line break the layout keeps (its room's lines).
+  A translation's "@<id>" may also say "overflow": true: a text the width
+  test lets be in that language until its layout is fixed (as en.json's).
 
 Validation fails the run (and --check) on: an id English hasn't; a plural
 message given as a string or the other way round; a category the language
@@ -30,16 +32,20 @@ hasn't, or one it needs missing (one, other; one, few, many in pl and ru;
 other in ja and zh: "many" in es, fr, it, pt and "other" in pl, ru are
 optional, as no count here reaches them); placeholders that differ from
 English's (a form whose category is n = 1 alone may leave out the count);
-more lines than the room has; a stray brace or a control character. A
+more lines than the room has; a stray brace or a control character; an
+@@autonym that isn't the language's name in itself. A
 message a translation leaves out is English on the device (--report counts
 them).
 
 Out: per language, one blob of the messages (UTF-8, NUL after each form,
 the same text once) and an offset per id (0xFFFF: none, English is used);
-a bit per id for the plural ones. Plus the pseudo-locale en-XA (English,
-accented and a third longer, in brackets), compiled where UISTR_PSEUDO is
-defined (the host tests): what the width tests run every room with, to
-show where a longer language won't fit. Standard library only.
+a bit per id for the plural ones. All ten languages are in the firmware's
+list (the Language setting offers each, by its name in itself): one with
+no catalogue yet has no blob, and draws English. Plus the pseudo-locale
+en-XA (English, accented and a third longer, in brackets), compiled where
+UISTR_PSEUDO is defined (the host tests): what the width tests run every
+room with, to show where a longer language won't fit. Standard library
+only.
 """
 import argparse
 import json
@@ -75,6 +81,23 @@ LANGS = {
 }
 ORDER = list(LANGS)
 PSEUDO = "en-XA"
+# Each language's name in itself, as the mobile app's Language setting and
+# the terminal player's picker write it (mstream_music's
+# lib/l10n/language_names.dart; mstream-terminal-player's LANGS): never
+# translated. A catalogue's @@autonym must be the same.
+AUTONYMS = {
+    "en": "English",
+    "de": "Deutsch",
+    "es": "Español",
+    "fr": "Français",
+    "it": "Italiano",
+    "ja": "日本語",
+    "pl": "Polski",
+    "pt": "Português",
+    "ru": "Русский",
+    "zh": "中文",
+    PSEUDO: "[Éñĝĺíšĥ]",
+}
 # A category that holds exactly one whole number (1): its form may say the
 # count in words ("Added", "1 played track made way") instead of {N}.
 ONLY_ONE = {("en", "one"), ("de", "one"), ("es", "one"), ("it", "one"), ("pl", "one")}
@@ -138,6 +161,8 @@ def header(where, data, tag):
         raise Bad(f"{where}: @@locale is {data.get('@@locale')!r}, the file says {tag!r}")
     if not isinstance(data.get("@@autonym"), str) or not data["@@autonym"]:
         raise Bad(f"{where}: no @@autonym (the language's name in itself)")
+    if data["@@autonym"] != AUTONYMS.get(tag):
+        raise Bad(f"{where}: @@autonym is {data['@@autonym']!r}; {tag}'s name in itself is {AUTONYMS.get(tag)!r}")
 
 
 def rooms_of(meta):
@@ -289,8 +314,9 @@ def check_placeholder(where, ph):
         raise Bad(f"{where}: worst is a string")
 
 
-def check_translation(tag, data, english):
-    """A translation: its messages, checked against English's."""
+def check_translation(tag, data, english, overflows=None):
+    """A translation: its messages, checked against English's. The ids its
+    "@<id>" marks "overflow" go into `overflows` (a set), if given."""
     where0 = f"{tag}.json"
     header(where0, data, tag)
     have, need = (set(s.split()) for s in LANGS[tag])
@@ -301,8 +327,15 @@ def check_translation(tag, data, english):
         if key.startswith("@"):
             if key[1:] not in english:
                 raise Bad(f"{where0}: {key} describes no message")
-            if not isinstance(value, dict) or set(value) - {"note"}:
-                raise Bad(f"{where0}: {key} holds a note only")
+            if not isinstance(value, dict) or set(value) - {"note", "overflow"}:
+                raise Bad(f"{where0}: {key} holds a note and an overflow mark only")
+            if "overflow" in value:
+                if value["overflow"] is not True:
+                    raise Bad(f"{where0}: {key}'s overflow is true, or left out")
+                if key[1:] not in data:
+                    raise Bad(f"{where0}: {key} marks an overflow, and the file hasn't the text")
+                if overflows is not None:
+                    overflows.add(key[1:])
             continue
         where = f"{where0} {key}"
         en = english.get(key)
@@ -452,23 +485,24 @@ def gen_ids(order, english, langs):
         o.append(f"  {cname(mid)},  // {shown}\n")
     o.append("};\n")
     o.append(f"inline constexpr unsigned kStrings = {len(order)};\n\n")
-    o.append("// The languages with a catalogue (en.json first), and the pseudo-locale\n")
-    o.append("// where UISTR_PSEUDO is defined.\n")
+    o.append("// The languages, English first: the mobile app's ten (one without a\n")
+    o.append("// catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO\n")
+    o.append("// is defined.\n")
     o.append("enum class Lang : uint8_t {\n")
-    for tag in langs:
+    for tag in ORDER:
         o.append(f"  {lang_enum(tag)},  // {tag}\n")
     o.append("#ifdef UISTR_PSEUDO\n")
     o.append(f"  {lang_enum(PSEUDO)},  // {PSEUDO}\n")
     o.append("#endif\n};\n")
     o.append("#ifdef UISTR_PSEUDO\n")
-    o.append(f"inline constexpr unsigned kLangs = {len(langs) + 1};\n")
+    o.append(f"inline constexpr unsigned kLangs = {len(ORDER) + 1};\n")
     o.append("#else\n")
-    o.append(f"inline constexpr unsigned kLangs = {len(langs)};\n")
+    o.append(f"inline constexpr unsigned kLangs = {len(ORDER)};\n")
     o.append("#endif\n\n}  // namespace uistr\n")
     return "".join(o)
 
 
-def gen_data(order, english, tables, pseudo_table, autonyms):
+def gen_data(order, english, tables, pseudo_table):
     o = [LICENCE, "// Generated by tools/gen_ui_strings.py from i18n/*.json: don't edit.\n",
          "// The messages of each language: a blob of UTF-8 (NUL after each form, each\n",
          "// text once) and an offset per id (0xFFFF: none, English's is used).\n\n",
@@ -488,12 +522,16 @@ def gen_data(order, english, tables, pseudo_table, autonyms):
     o.append("#ifdef UISTR_PSEUDO\n")
     one(PSEUDO, *pseudo_table)
     o.append("#endif\n\n}  // namespace\n\n")
+    o.append("// A language with no catalogue yet has no blob: every message English's.\n")
     o.append("const Table kTables[kLangs] = {\n")
-    for tag in tables:
+    for tag in ORDER:
         v = cname(tag.replace("-", "_"))
-        o.append(f'    {{"{tag}", "{c_escape(autonyms[tag])}", kBlob_{v}, kOff_{v}}},\n')
+        if tag in tables:
+            o.append(f'    {{"{tag}", "{c_escape(AUTONYMS[tag])}", kBlob_{v}, kOff_{v}}},\n')
+        else:
+            o.append(f'    {{"{tag}", "{c_escape(AUTONYMS[tag])}", nullptr, nullptr}},\n')
     o.append("#ifdef UISTR_PSEUDO\n")
-    o.append(f'    {{"{PSEUDO}", "{c_escape(autonyms[PSEUDO])}", kBlob_en_XA, kOff_en_XA}},\n')
+    o.append(f'    {{"{PSEUDO}", "{c_escape(AUTONYMS[PSEUDO])}", kBlob_en_XA, kOff_en_XA}},\n')
     o.append("#endif\n};\n\n")
     bits = [0] * ((len(order) + 7) // 8)
     for i, mid in enumerate(order):
@@ -526,7 +564,7 @@ def c_escape(s):
     return out
 
 
-def gen_test(order, english, langs):
+def gen_test(order, english, langs, overflows):
     o = [LICENCE, "// Generated by tools/gen_ui_strings.py from i18n/en.json: don't edit.\n",
          "// The catalogue as test_ui_strings checks it: each message's English and\n",
          "// room (the font, the pixels, the lines; what fills its placeholders at\n",
@@ -590,6 +628,19 @@ def gen_test(order, english, langs):
         mask = sum(1 << CATEGORIES.index(c) for c in cats)
         o.append(f'    {{"{tag}", 0x{mask:02X}}},\n')
     o.append("};\n\n")
+    o.append("// The languages with a catalogue (English, then each translation), and the\n")
+    o.append("// texts a translation marks \"overflow\" (too wide in it until a layout\n")
+    o.append("// fix: the width test lets them be, and fails a mark that fits).\n")
+    tags = ", ".join('"' + t + '"' for t in langs)
+    o.append(f"inline constexpr const char* kCatalogues[] = {{{tags}}};\n")
+    o.append("struct LangOverflow {\n  const char* tag;\n  uistr::S id;\n};\n")
+    o.append("inline const LangOverflow kLangOverflows[] = {\n")
+    marks = [(t, mid) for t in langs[1:] for mid in order if mid in overflows.get(t, set())]
+    for t, mid in marks:
+        o.append(f'    {{"{t}", uistr::S::{cname(mid)}}},\n')
+    if not marks:
+        o.append('    {"", uistr::S{}},  // (none yet)\n')
+    o.append("};\n\n")
     # The constants a room says it is (uitext's): the test checks each.
     consts = [(mid, r["const"], r["px"]) for mid in order for r in rooms_of(english[mid].meta) if r.get("const")]
     o.append("// Rooms that are a uitext constant (\"const\" in en.json): the same number.\n")
@@ -608,8 +659,8 @@ def load_all():
         raise Bad("no i18n/en.json")
     en_data = load(CATALOGUE / "en.json")
     english, order = check_english(en_data)
-    autonyms = {"en": en_data["@@autonym"], PSEUDO: "[Éñĝĺíšĥ]"}
     translations = {}
+    overflows = {}
     for path in sorted(CATALOGUE.glob("*.json")):
         tag = path.stem
         if tag == "en":
@@ -617,13 +668,13 @@ def load_all():
         if tag not in LANGS:
             raise Bad(f"{path.name}: {tag} isn't one of the languages ({', '.join(ORDER)})")
         data = load(path)
-        translations[tag] = check_translation(tag, data, english)
-        autonyms[tag] = data["@@autonym"]
-    return english, order, translations, autonyms
+        overflows[tag] = set()
+        translations[tag] = check_translation(tag, data, english, overflows[tag])
+    return english, order, translations, overflows
 
 
 def generate():
-    english, order, translations, autonyms = load_all()
+    english, order, translations, overflows = load_all()
     langs = ["en"] + [t for t in ORDER if t in translations]
     tables = {}
     en_msgs = {mid: english[mid].value for mid in order}
@@ -637,8 +688,8 @@ def generate():
     pseudo_table = build_table(PSEUDO, ps, english, order)
     return {
         OUT_IDS: gen_ids(order, english, langs),
-        OUT_DATA: gen_data(order, english, tables, pseudo_table, autonyms),
-        OUT_TEST: gen_test(order, english, langs),
+        OUT_DATA: gen_data(order, english, tables, pseudo_table),
+        OUT_TEST: gen_test(order, english, langs, overflows),
     }, english, order, translations, tables
 
 
@@ -648,7 +699,7 @@ def report(english, order, translations):
     print(f"en: {total} messages ({total - len(yes)} developer-only)")
     for tag in ORDER[1:]:
         if tag not in translations:
-            print(f"{tag}: no catalogue")
+            print(f"{tag}: no catalogue (English everywhere)")
             continue
         got = translations[tag]
         missing = [m for m in yes if m not in got]

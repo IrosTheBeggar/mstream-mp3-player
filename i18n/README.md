@@ -4,8 +4,10 @@ Every text the player draws, one file a language: `en.json` is the
 source, and each translation is `<tag>.json` beside it (`de.json`,
 `pt.json`, ...). The languages are the mobile app's and the terminal
 player's: de, es, fr, it, ja, pl, pt (Brazilian), ru and zh (Simplified).
-A text a translation leaves out is drawn in English. How it all works is
-in [docs/I18N.md](../docs/I18N.md), phase 3.
+All ten are on the player's Language page already (Output > Language);
+one with no file here yet draws English, and a text a translation leaves
+out is drawn in English. How it all works is in
+[docs/I18N.md](../docs/I18N.md), phase 3.
 
 `tools/gen_ui_strings.py` reads the files, checks them, and makes the
 firmware's tables (`lib/core/UiStringIds.h`, `lib/core/UiStringsData.cpp`)
@@ -31,11 +33,16 @@ are out of date (`--check`).
 ```
 
 - `@@locale` is the file's tag; `@@autonym` the language's name in
-  itself (the Language setting lists it so).
+  itself, as the mobile app writes it (English, Deutsch, Español,
+  Français, Italiano, 日本語, Polski, Português, Русский, 中文: the
+  generator checks it; the Language page lists it so, never translated).
+- `@@note` says how the file was made (below).
 - Each id is `en.json`'s. An id it doesn't have fails the check; one
   left out is English on the device.
 - `"@coach.title": {"note": "..."}` may say why a text is as it is; the
-  generator ignores it.
+  generator ignores it. `"overflow": true` there marks a text that is too
+  wide in this language for now (its room needs a layout fix): the width
+  test lets it be, and fails once it fits (then the mark goes).
 - UTF-8, no BOM. Keep `en.json`'s order: a diff then reads as a list.
 
 ## What en.json says about each text
@@ -61,7 +68,7 @@ After each text, `@<id>` holds what a translator needs:
   (CPU, PSRAM, BPM, MHz, the reset reasons), `dev` for what only a
   developer sees (may stay English).
 - `overflow`: too wide already in English (a layout fix is to come);
-  the tests let these be.
+  the tests let these be, in every language.
 
 ## The rules
 
@@ -98,7 +105,8 @@ space before the colon is fine).
 **Characters.** The fonts have Latin-1, Latin Extended-A, Greek,
 Cyrillic, the typographic punctuation (– — ‘ ’ “ ” „ … « » ‹ › •), and
 Chinese, Japanese and Korean at 16 px. A character they lack fails the
-width test. The no-break space is U+00A0: the narrow one (U+202F) isn't
+width test (`test_every_language_fits_its_rooms`, which measures every
+text of every language as the screen draws it). The no-break space is U+00A0: the narrow one (U+202F) isn't
 in the fonts, and a plain space may break a line there.
 
 **Numbers.** The code writes the counts, with the language's thousands

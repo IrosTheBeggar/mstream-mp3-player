@@ -64,6 +64,7 @@
 #include "app/Screenshot.h"
 #include "app/SerialConsole.h"
 #include "app/TagConsole.h"
+#include "app/UiLang.h"
 #include "app/UsbViz.h"
 #include "app/Version.h"
 #include "audio/Core2AudioBackend.h"
@@ -143,6 +144,8 @@ static bool rescueFinger = false;
 static uint32_t rescueDownMs = 0;
 static uint32_t bootHintMs = 0;
 // The first boot's touch check was offered (or the rescue used) this boot.
+// On a fresh unit it waits for the language picker (Ui::languageFirst()),
+// so it speaks the language picked.
 static bool touchCheckOffered = false;
 // UI spike tools (docs/UI-SPIKE.md): input lab, scroll lab, library index,
 // font and thumbnail probes. Created in PSRAM on first use.
@@ -3176,6 +3179,7 @@ void setup() {
   diag::restartLows();
   ensureNvs();  // before the first Preferences read
   nvsschema::check();  // the layout's number, migrated if older, before anything reads a key
+  uilang::begin();     // the UI's language, before any text is drawn (the boot screen's hint)
   // The CPU speed saved (or the default), before Bluetooth starts.
   PowerSettings::applyBootClock();
   // The computer's visualizer lines (docs/USB-VISUALIZER.md: ~3.7 KB/s)
@@ -3204,6 +3208,7 @@ void setup() {
   diag::logRunningPartition();  // the flash layout (console L: the whole table)
   logNvs();  // only when NVS needed ensureNvs()
   nvsschema::log();
+  uilang::log();
   powerSettings.begin();  // what the boot clock is, the Bluetooth power, and whether it restarted for the speed
   board::applyBootPower();  // the IMU suspended: nothing reads it
   diag::logHeap("boot");
@@ -3342,7 +3347,8 @@ void setup() {
                  "a touch calibration (a5-a9 fewer crosses, ac check, ab first-boot check, ab0 ask it again, "
                  "as status, ad remove it, ah0/1 haptics, ar0/1 rail ticks), "
                  "t<bpm> tempo prior (t clears), y<ms> dance latency offset, k<n> freeze pose 0-15 (k unfreezes); "
-                 "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uit/uih/uis/uid/uip scripted finger, "
+                 "ui the UI's navigation (ui0-ui4 tab, uib back, uic coach cards, uiL<tag> language (uiL the list, "
+                 "uiL- forget it), uiP the first boot's language picker, uit/uih/uis/uid/uip scripted finger, "
                  "uk1/uk2/uk0 the scripted finger on a skewed panel (uk2 with jitter) or not, "
                  "uiF<c/s/p/r/l/n/f/t/g/u/w> show a faked Bluetooth, no-card, exFAT/NTFS/GPT/can't-read card or waiting state "
                  "(uiF0 the real one), uiV the volume HUD, uil<n> a synthetic "
@@ -3479,9 +3485,14 @@ void loop() {
   if (userInterface) {
     // The first boot with nothing calibrated: the touch check, before the
     // UI (and so before its tips). The UI waits for it, and for a finger
-    // resting on the start-up screen (the rescue hold).
+    // resting on the start-up screen (the rescue hold). A fresh unit picks
+    // its language first (the UI starts on its picker: rows hit by y, as
+    // the check's), and the check follows the pick, in that language,
+    // before the tips (Ui::loop() shows them once the UI is back).
     const bool bootShown = now >= kBootScreenMs && now - bootHintMs >= kRescueWindowMs;
-    if (!userInterface->started() && bootShown && !screenTaken() && !rescueFinger && !touchCheckOffered) {
+    const bool checkNow = !touchCheckOffered && !screenTaken() && !userInterface->languageFirst() &&
+                          (userInterface->started() || (bootShown && !rescueFinger));
+    if (checkNow) {
       touchCheckOffered = true;
       if (touchcheck::due(input.calibrated(), input.touchCheckAnswered())) {
         openCalibration(CalibrationScreen::Start::FirstBoot);

@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "QueueSaver.h"  // QueueResume
+#include "UiStringIds.h"  // uistr::Lang
 
 // What the firmware keeps in NVS changes shape only through a schema
 // number (docs/ARCHITECTURE.md, "NVS: the rules"): "meta"/"schema", a u16,
@@ -18,7 +19,13 @@
 // is schema 1's keys and "queue"/"repeat" (the repeat mode, a u8:
 // docs/QUEUE-MODES.md section 3.6); its migrate(1, 2) step does nothing
 // (an absent key reads as Off), and older firmware leaves a schema-2 NVS
-// as it is (never reading the key: its queue wraps, as it always did). A
+// as it is (never reading the key: its queue wraps, as it always did).
+// Schema 3 is schema 2's keys and "ui"/"lang", the UI's language (a BCP-47
+// tag: docs/I18N.md, phase 3); its migrate(2, 3) step writes "en" there
+// when it is absent, so a unit that ran an older firmware keeps English
+// and never gets the first boot's language picker, which only a fresh NVS
+// (no "schema") shows. Older firmware leaves a schema-3 NVS as it is: it
+// never reads "lang" and draws English, every other key as it wrote them. A
 // unit that ran the Opus work before it joined the queue modes (schema 1
 // with a kind-3 resume blob, no repeat key) takes the same step and keeps
 // its resume point: a blob's kinds are its own version's business
@@ -36,7 +43,7 @@ namespace nvslayout {
 
 inline constexpr const char* kMetaNamespace = "meta";
 inline constexpr const char* kSchemaKey = "schema";
-inline constexpr uint16_t kCurrent = 2;
+inline constexpr uint16_t kCurrent = 3;
 
 // What the boot does about the stored number.
 struct SchemaStep {
@@ -84,6 +91,29 @@ inline constexpr uint8_t kRepeatModes = 3;
 // The mode to use: `stored` if the key is there (`have`) and known; absent
 // or another value: 0 (Off, the saved default).
 uint8_t repeatFrom(bool have, uint8_t stored);
+
+// ---- the UI's language ("ui"/"lang", schema 3) ----
+// A string: the language's BCP-47 tag ("de", "pt": uistr::tag()), written
+// at once when the listener picks one (Output > Language, or the first
+// boot's picker). "ui"/"coach" (a bool, since schema 1) says the first-boot
+// tips were seen.
+inline constexpr const char* kUiNamespace = "ui";
+inline constexpr const char* kLangKey = "lang";
+inline constexpr const char* kCoachKey = "coach";
+// A tag's room, its NUL included ("en-XA" is 5).
+inline constexpr size_t kLangMaxBytes = 16;
+// The language to use: `stored`'s when the key is there (`have`) and names
+// one of the languages; absent, or a tag this firmware hasn't (a later
+// firmware's language, after a downgrade): English.
+uistr::Lang langFrom(bool have, const char* stored);
+// Whether the first boot's picker shows: no language saved and the
+// first-boot tips not seen. A fresh unit only: an update from an older
+// firmware has "en" from migrate(2, 3) (and has mostly seen the tips).
+bool langPickerDue(bool haveLang, bool coachSeen);
+// Whether migrate(from, kCurrent) writes "en" to "ui"/"lang": from a
+// schema before 3, when there is none (`haveLang`: a schema-3 firmware
+// was there before, and a downgrade left its choice).
+bool migrateWritesLang(uint16_t from, bool haveLang);
 
 // Writes r (valid or not: the caller removes the key for an invalid one)
 // as version kResumeVersion; returns kResumeBytes.

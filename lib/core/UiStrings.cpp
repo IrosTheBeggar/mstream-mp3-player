@@ -110,7 +110,7 @@ const char* find(S id, const detail::Table** t) {
     return "";
   }
   const detail::Table& own = table(g_lang);
-  if (own.off[i] != detail::kMissing) {
+  if (own.off && own.off[i] != detail::kMissing) {
     *t = &own;
     return own.blob + own.off[i];
   }
@@ -182,6 +182,14 @@ bool langOf(const char* t, Lang* out) {
 }
 
 // ---- messages ----
+
+bool translated(S id) {
+  const unsigned i = static_cast<unsigned>(id);
+  const detail::Table& own = table(g_lang);
+  return i < kStrings && own.off && own.off[i] != detail::kMissing;
+}
+
+bool hasCatalogue(Lang l) { return table(l).off != nullptr; }
 
 bool plural(S id) {
   const unsigned i = static_cast<unsigned>(id);

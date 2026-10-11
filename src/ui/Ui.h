@@ -12,6 +12,7 @@
 #include "QueueView.h"
 #include "ScrollGovernor.h"
 #include "TabBarModel.h"
+#include "UiStrings.h"
 #include "app/DanceMode.h"
 #include "app/Library.h"
 #include "ui/Input.h"
@@ -49,6 +50,12 @@
 //   - Overlays (ui/Overlays): the toast with Undo at the top of the content,
 //     the volume HUD over the tab bar, a bottom sheet, the volume sheet (per
 //     output), the A-Z jump grid, a dialog, the first-boot coach cards.
+//   - The language (docs/I18N.md, phase 3): every text is uistr's, in the
+//     language app/UiLang read at boot. Output > Language changes it at
+//     once (chooseLanguage()): everything is drawn again, and what held a
+//     text in the old one (a sheet, a dialog, the toast, the HUD) goes. A
+//     fresh unit (no language saved, the tips never seen) starts on that
+//     page as its picker, before the touch check and the tips.
 //   - States: a track that can't be played is a note (an amber toast) and
 //     a "!" on its Queue row; the headphones lost while playing are a
 //     dialog that follows their reconnecting; the pages have their empty
@@ -87,10 +94,18 @@ public:
   Ui(UiHost& host, Input& input, PlaybackController& player, QueueModel& queue, Library& library,
      DanceMode& dance);
 
-  // Fonts, sprites (PSRAM). False: can't run (no memory).
+  // Fonts, sprites (PSRAM), and whether this is a fresh unit's first boot
+  // (NVS: no language saved, the tips not seen). False: can't run (no
+  // memory).
   bool begin();
-  // The boot screen is done: draws the tab bar and the first page.
+  // The boot screen is done: draws the tab bar and the first page (the
+  // tips over it if they haven't been seen); on a fresh unit, the language
+  // picker first.
   void start(uint32_t nowMs);
+  // A fresh unit's language picker is due or up: main.cpp's first-boot
+  // touch check waits for it (then speaks the language picked), and the
+  // tips follow both.
+  bool languageFirst() const { return pickerDue_; }
   bool started() const { return started_; }
   // Every loop pass (after the input and the player).
   void loop(uint32_t nowMs);
@@ -171,7 +186,18 @@ public:
 
   // ---- console ----
   void printState() const;     // ui
-  void command(const char* a); // ui<n>: tab n; uib back; uic the coach cards
+  // ui<n>: tab n; uib back; uic the coach cards; uiL<tag> the language
+  // (uiL the list, uiL- forget it and the tips); uiP the first boot's picker.
+  void command(const char* a);
+
+  // ---- the language ----
+  // The UI's language from now on (the Language page's tap, the console's
+  // uiL<tag>): saved (app/UiLang), and everything drawn again in it; a
+  // sheet, dialog or toast up (their texts are the old language's) goes.
+  // On the first boot's picker it goes on: Now Playing, then the touch
+  // check (main.cpp) and the tips. A language whose catalogue says so
+  // shows its machine translation's note (language.machine_note).
+  void chooseLanguage(uistr::Lang l);
 
   // ---- for the pages ----
   const AppState& state() const { return state_; }
@@ -310,6 +336,14 @@ private:
   uint32_t statusHash_ = 0;   // the text drawn (0: none, or to be drawn again)
   uint32_t statusAtMs_ = 0;   // when it was drawn
   void coachDone();
+  // The Output tab at its Language page as the first boot's picker (the
+  // nav only: showTop() draws it).
+  void pickerNav();
+  bool pickerOnTop() const;
+  // Every text drawn again in the language just set (chooseLanguage(), the
+  // console's uiL-).
+  void languageChanged();
+  void languageCommand(const char* a);
   void updateLostDialog();
   // A play that waited for the headphones failed (PlayGate): "Couldn't
   // reach SPYDRONE" with Play on speaker and Try again; it closes itself
@@ -361,7 +395,13 @@ private:
   // cleared as a dialog closes, before its owner hears the button).
   enum class OwnDialog : uint8_t { None, Lost, PlayFailed } ownDialog_ = OwnDialog::None;
   uint32_t gateFailuresSeen_ = 0;
-  bool coachDue_ = false;    // the first-boot tips haven't been seen (NVS)
+  // The first boot: the tips seen (NVS "ui"/"coach"); a fresh unit's
+  // language picker due or up; the tips (and the language's note) to show
+  // once it is done, after the touch check main.cpp opens then.
+  bool coachSeen_ = false;
+  bool pickerDue_ = false;
+  bool tipsAfterPicker_ = false;
+  bool noteAfterPicker_ = false;
   queueview::AddedMark added_;
   queueview::KeyRing failedKeys_;
   uint32_t failuresSeen_ = 0;

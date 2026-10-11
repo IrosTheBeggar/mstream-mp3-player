@@ -467,6 +467,7 @@ private:
   uint32_t headerSig_ = 0;
   // The summary and what it was made from.
   uint32_t sumContent_ = 0xFFFFFFFFu, sumPosition_ = 0xFFFFFFFFu, sumBook_ = 0xFFFFFFFFu;
+  uint8_t sumLang_ = 0xFF;  // ... and the language they were written in
   char summaryLong_[64] = "";   // "4 of 16 · 12 up next · 49 min"
   char summaryMid_[48] = "";    // "4 of 16 · 49 min" (the long one too wide)
   char summaryShort_[48] = "";  // "12 up next · 49 min" (no position)
@@ -520,13 +521,19 @@ private:
 //   + Pair new headphones  >  the Pair screen
 //   Haptics (on / off), Screen off after (15 s ... Never), Brightness
 //   (Low ... Max), Turn off when idle (10 min ... Never), Touch
-//   calibration >, About >
+//   calibration >, Language > (the one in use, in its own name), About >
 // Pair (mockup 21): "Searching", the audio devices found (their kind and a
 // signal of 4 bars); a tap pairs (after a confirmation when it replaces
 // the remembered headphones), and the card shows how it goes.
 // About: the battery, storage, the library, the headphones, memory,
 // Device info >, the version, the licence and where the source is, and
 // "Show the tips again" (the coach cards).
+// Language: the ten languages, each in its own name (English, Deutsch,
+// 日本語...), a radio on the one in use; a tap uses one at once (saved, and
+// the whole UI drawn again in it: Ui::chooseLanguage()). The same page is a
+// fresh unit's first screen (kFirstBootPicker: no back arrow; a pick goes
+// on to Now Playing, the touch check and the tips). Full-width rows hit by
+// y, as the touch check's: a panel that reads x wrong still picks right.
 // Device info: what the boot screen used to list (the board, the power
 // chip, the IMU, the chip, flash, PSRAM, the last reset, the battery, the
 // library, internal RAM), with the CPU's clock, the uptime, the firmware
@@ -578,6 +585,7 @@ private:
     CpuSpeed,
     BtPower,
     Calibrate,
+    LanguageRow,
     LibraryRow,
     AboutRow,
     kRootRows
@@ -622,6 +630,10 @@ private:
   static uint32_t screenSig(const AppState& s);
   void drawDevice(ListView::Row& r, const BtDevice& d);
   void drawPairStatus(ListView::Row& r);
+  // "Language" on the Output list (a globe drawn here), and a language on
+  // its page.
+  void drawLanguageRow(ListView::Row& r);
+  void drawLanguage(ListView::Row& r);
   void drawAbout(ListView::Row& r);
   void drawDeviceInfo(ListView::Row& r);
   // The card's buttons: how many, and each one's x and width.
@@ -637,6 +649,7 @@ private:
 
   PageKind kind_ = PageKind::Output;
   NavModel::PageRef* ref_ = nullptr;
+  bool firstBoot_ = false;  // the Language page as the first boot's picker
   bool touchInList_ = false;
   int headerPressed_ = 0;
   ConfirmTap forget_;

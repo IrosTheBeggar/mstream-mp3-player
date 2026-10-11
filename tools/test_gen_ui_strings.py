@@ -54,7 +54,7 @@ def checked(d):
 
 def translate(tag, messages):
     eng, _ = checked(english())
-    data = {"@@locale": tag, "@@autonym": tag.upper()}
+    data = {"@@locale": tag, "@@autonym": g.AUTONYMS[tag]}
     data.update(messages)
     return g.check_translation(tag, data, eng)
 
@@ -168,13 +168,29 @@ class Translations(unittest.TestCase):
         with self.assertRaises(g.Bad):
             g.check_translation("de", {"@@locale": "de"}, eng)
         g.check_translation("de", {"@@locale": "de", "@@autonym": "Deutsch", "@@note": "machine"}, eng)
+        # The name in itself is the mobile app's, never another spelling.
+        with self.assertRaises(g.Bad) as e:
+            g.check_translation("de", {"@@locale": "de", "@@autonym": "German"}, eng)
+        self.assertIn("'Deutsch'", str(e.exception))
 
     def test_ids_and_kinds(self):
         self.bad("de", {"a.nothing": "x"}, "no such id")
         self.bad("de", {"a.tracks": "{0} Titel"}, "forms by category")
         self.bad("de", {"a.plain": {"one": "x", "other": "y"}}, "a string")
-        self.bad("de", {"@a.plain": {"why": "x"}}, "a note only")
+        self.bad("de", {"@a.plain": {"why": "x"}}, "a note and an overflow mark only")
         translate("de", {"@a.plain": {"note": "kurz"}})
+
+    def test_overflow_marks(self):
+        # A text too wide in the language until its layout is fixed: the
+        # width test lets it be (catalogue.h's kLangOverflows).
+        eng, _ = checked(english())
+        marks = set()
+        data = {"@@locale": "de", "@@autonym": "Deutsch", "a.plain": "Rückgängig machen",
+                "@a.plain": {"note": "zu lang", "overflow": True}}
+        g.check_translation("de", data, eng, marks)
+        self.assertEqual(marks, {"a.plain"})
+        self.bad("de", {"a.plain": "x", "@a.plain": {"overflow": "yes"}}, "true, or left out")
+        self.bad("de", {"@a.plain": {"overflow": True}}, "hasn't the text")
 
     def test_placeholders(self):
         self.bad("de", {"a.of": "{0} von"}, "placeholders [0]")
@@ -288,6 +304,24 @@ class Tables(unittest.TestCase):
         ru = {"a.tracks": {"one": "1", "few": "2", "many": "5"}}
         ru_blob, ru_offs = g.build_table("ru", ru, eng, order)
         self.assertEqual(ru_blob[ru_offs[order.index("a.tracks")]:], b"1\x002\x005\x00\x00")
+
+    def test_every_language_is_listed(self):
+        # The ten, English first, each by its name in itself; one with no
+        # catalogue has no blob (English is drawn).
+        eng, order = checked(english())
+        msgs = {m: eng[m].value for m in order}
+        tables = {"en": g.build_table("en", msgs, eng, order)}
+        data = g.gen_data(order, eng, tables, g.build_table(g.PSEUDO, msgs, eng, order))
+        rows = re.findall(r'\{"([a-zA-Z-]+)", (.*?), (\w+), (\w+)\},', data)
+        self.assertEqual([r[0] for r in rows], g.ORDER + [g.PSEUDO])
+        self.assertEqual(rows[0][2:], ("kBlob_en", "kOff_en"))
+        self.assertTrue(all(r[2:] == ("nullptr", "nullptr") for r in rows[1:-1]))
+        self.assertEqual(rows[1][1], '"Deutsch"')
+        self.assertEqual(unescape(rows[3][1]), "Français".encode("utf-8"))  # (a hex escape before "a": split)
+        ids = g.gen_ids(order, eng, ["en"])
+        self.assertIn("kLangs = 10;", ids)
+        self.assertIn("kLangs = 11;", ids)
+        self.assertEqual(list(g.AUTONYMS), g.ORDER + [g.PSEUDO])
 
     def test_the_real_catalogue_is_current(self):
         files, *_ = g.generate()

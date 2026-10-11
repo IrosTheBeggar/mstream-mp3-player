@@ -51,7 +51,11 @@ bool ready(const LibraryIndex& index) { return index.ready(); }
 const char* albumArtist(const LibraryIndex& index, uint32_t album) {
   if (!ready(index) || album >= index.albumCount()) return "";
   const LibraryIndex::Album& a = index.album(album);
-  if (a.flags & LibraryIndex::kTagged) return index.albumArtistLine(album);
+  if (a.flags & LibraryIndex::kTagged) {
+    // A compilation's line (no album artist tagged): the UI's words.
+    if (a.flags & LibraryIndex::kVarious) return uistr::tr(uistr::S::library_various_artists);
+    return index.albumArtistLine(album);
+  }
   return a.artist < index.artistCount() ? index.artistName(a.artist) : "";
 }
 

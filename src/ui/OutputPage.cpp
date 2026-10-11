@@ -3,9 +3,10 @@
 
 // The Output tab (the tab bar spec §6.6, mockups 19-21 and 23, with the
 // review's grafts; the page's shape is in Pages.h): where the music plays,
-// each output's volume, the Pair screen, the settings, About and its Device
-// info. One page object for the tab's four kinds of page (Output, Pair,
-// About, Device info), each a list on the hardware scroll.
+// each output's volume, the Pair screen, the settings, the language, About
+// and its Device info. One page object for the tab's five kinds of page
+// (Output, Pair, Language, About, Device info), each a list on the
+// hardware scroll.
 //
 // What the Bluetooth card shows and offers is OutputModel's (host-tested);
 // what its buttons do goes through the UiHost to BtSink. The rules it keeps:
@@ -120,6 +121,7 @@ const char* OutputPage::btName() const {
 void OutputPage::enter(NavModel::PageRef& ref) {
   kind_ = static_cast<PageKind>(ref.kind);
   ref_ = &ref;
+  firstBoot_ = kind_ == PageKind::Language && ref.id == kFirstBootPicker;
   touchInList_ = false;
   headerPressed_ = 0;
   forget_.reset();
@@ -148,7 +150,9 @@ void OutputPage::enter(NavModel::PageRef& ref) {
     nextAboutMs_ = millis() + kAboutMs;
   }
   repaintHeader();
-  ui_.list().attach(this, &ref, 0);
+  // The languages open at the one in use (with the one before it above).
+  const int lang = static_cast<int>(uistr::lang());
+  ui_.list().attach(this, &ref, kind_ == PageKind::Language && lang > 0 ? (lang - 1) * ListLayout::kPitch : 0);
 }
 
 void OutputPage::leave() {
@@ -212,6 +216,12 @@ Header OutputPage::header() const {
       h.back = true;
       h.title = tr(S::about_device_info);
       h.sub = tr(S::device_info_subtitle);
+      break;
+    case PageKind::Language:
+      // The first boot's: nothing behind it, and where it is found later.
+      h.back = !firstBoot_;
+      h.title = tr(S::language_title);
+      h.sub = tr(firstBoot_ ? S::language_first_boot_sub : S::language_subtitle);
       break;
     default:
       h.title = tr(S::output_title);
@@ -381,6 +391,7 @@ uint32_t OutputPage::rows() {
     case PageKind::Pair: return 1 + static_cast<uint32_t>(scan_.count());
     case PageKind::About: return kAboutRows;
     case PageKind::DeviceInfo: return deviceinfo::kItems;
+    case PageKind::Language: return uistr::kLangs;
     default: return kRootRows;
   }
 }
@@ -405,6 +416,10 @@ void OutputPage::drawRow(ListView::Row& r) {
   }
   if (kind_ == PageKind::DeviceInfo) {
     drawDeviceInfo(r);
+    return;
+  }
+  if (kind_ == PageKind::Language) {
+    drawLanguage(r);
     return;
   }
   const AppState& s = ui_.state();
@@ -438,6 +453,7 @@ void OutputPage::drawRow(ListView::Row& r) {
       drawSetting(r, icons::kGear, tr(S::settings_cal),
                   tr(ui_.input().calibrated() ? S::settings_cal_on : S::settings_cal_off), col::TXT, true);
       break;
+    case LanguageRow: drawLanguageRow(r); break;
     case LibraryRow: drawLibraryRow(r); break;
     case AboutRow:
       drawSetting(r, icons::kInfo, tr(S::output_about), tr(S::output_about_sub), col::TXT, true);
@@ -445,6 +461,35 @@ void OutputPage::drawRow(ListView::Row& r) {
     default: break;
   }
   (void)s;
+}
+
+// "Language", and under it the one in use in its own name ("Deutsch",
+// "日本語": never translated). Its icon, a globe, is drawn here: a ring,
+// a meridian, the equator and two parallels.
+void OutputPage::drawLanguageRow(ListView::Row& r) {
+  const int cx = r.x + 22;
+  r.c.drawCircle(cx, 21, 9, col::SOFT);
+  r.c.drawEllipse(cx, 21, 4, 9, col::SOFT);
+  r.c.drawFastHLine(cx - 9, 21, 19, col::SOFT);
+  r.c.drawFastHLine(cx - 7, 16, 15, col::SOFT);
+  r.c.drawFastHLine(cx - 7, 26, 15, col::SOFT);
+  const int x = r.x + 44;
+  const int right = ListView::chevron(r);
+  const char* title = tr(S::settings_language);
+  const char* sub = uistr::autonym(uistr::lang());
+  ListView::lines(r, x, right, title, strlen(title), sub, strlen(sub), col::TXT);
+}
+
+// A language on its page: its name in itself, Bold with the radio on for
+// the one in use (UiText's kLangRowX and kLangRowW, measured by
+// test_ui_strings).
+void OutputPage::drawLanguage(ListView::Row& r) {
+  if (r.row >= uistr::kLangs) return;
+  const auto l = static_cast<uistr::Lang>(r.row);
+  const bool on = l == uistr::lang();
+  Fonts::instance().draw(r.c, on ? Font::Bold : Font::Body, uistr::autonym(l), r.x + uitext::kLangRowX, 21,
+                         uitext::kLangRowW, col::TXT, r.bg);
+  radio(r.c, r.right - 22, 21, on, accent::Output, r.bg);
 }
 
 // The Library row (docs/METADATA.md 3.3.6): "Library: 19,410 tracks", where
@@ -932,6 +977,12 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
     return ListView::Tap::Handled;
   }
   if (kind_ == PageKind::DeviceInfo) return ListView::Tap::Handled;  // nothing to tap
+  if (kind_ == PageKind::Language) {
+    // At once: saved, and everything drawn again in it (the first boot's
+    // goes on to Now Playing).
+    if (row < uistr::kLangs) ui_.chooseLanguage(static_cast<uistr::Lang>(row));
+    return ListView::Tap::Handled;
+  }
   const AppState& s = ui_.state();
   switch (static_cast<RootRow>(row)) {
     case BtTop: onCard(); break;
@@ -981,6 +1032,7 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
       ui_.host().setBtPower(powerchoice::nextBt(s.btPower));
       break;
     case Calibrate: onTouch(); break;
+    case LanguageRow: ui_.push(page(PageKind::Language)); break;
     case LibraryRow: onRescan(); break;
     case AboutRow: ui_.push(page(PageKind::About)); break;
     default: break;

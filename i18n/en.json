@@ -1792,7 +1792,7 @@
   },
   "library.various_artists": "Various Artists",
   "@library.various_artists": {
-    "context": "The artist line of a compilation album (its records say compilation and elect no album artist): album rows, the Album header, Now Playing's artist row, Queue rows.",
+    "context": "The artist line of a compilation album (its records say compilation and elect no album artist; library.idx marks it, and it is drawn in the UI's language): album rows, the Album header, Now Playing's artist row, Queue rows.",
     "room": [
       {
         "font": "Small",
@@ -1803,7 +1803,7 @@
         "px": 190
       }
     ],
-    "note": "Not shown translated yet: library.idx stores it (docs/I18N.md, phase 3: a sentinel there, drawn in the UI's language)."
+    "note": "An album artist tag that says 'Various Artists' itself is a name, and stays as tagged."
   },
   "library.empty_no_music": "No music found: put folders in /music",
   "@library.empty_no_music": {
@@ -3574,6 +3574,56 @@
       "layout": "toast",
       "two_line_px": 284
     }
+  },
+  "settings.language": "Language",
+  "@settings.language": {
+    "context": "Output row (chevron): opens the Language page. Its line under it is the language now, in its own name (never translated: Deutsch, 日本語).",
+    "room": {
+      "font": "Body",
+      "px": 242
+    }
+  },
+  "language.title": "Language",
+  "@language.title": {
+    "context": "The Language page's header title (Output > Language, and the first boot's picker before the touch check and the tips). Its rows are the ten languages, each in its own name.",
+    "room": [
+      {
+        "font": "Bold",
+        "px": 282
+      },
+      {
+        "font": "Bold",
+        "px": 298
+      }
+    ]
+  },
+  "language.subtitle": "menus and messages",
+  "@language.subtitle": {
+    "context": "The Language header's line after its title (Output > Language): what the language changes (the names of tracks, artists and albums stay as they are).",
+    "room": {
+      "font": "Small",
+      "px": 187
+    }
+  },
+  "language.first_boot_sub": "later: Output > Language",
+  "@language.first_boot_sub": {
+    "context": "The Language header's line on the first boot's picker (no back arrow): where the language can be changed later.",
+    "room": {
+      "font": "Small",
+      "px": 203
+    },
+    "note": "'Output > Language' names the Output tab and its Language row: use their words (tabs.output, settings.language)."
+  },
+  "language.machine_note": "Machine-translated: expect rough edges",
+  "@language.machine_note": {
+    "context": "A toast after a language is chosen, in that language (never in English: shown only where the language's catalogue has it). Says the translation is machine-made, as the mobile app and the terminal player do.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "note": "Keep ': ' (the toast splits there onto two lines when it is too wide for one)."
   },
   "library_row.title": {
     "one": "Library: {0} track",

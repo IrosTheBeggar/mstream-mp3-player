@@ -24,10 +24,12 @@ namespace librarytext {
 inline constexpr const char* kDot = " \xC2\xB7 ";
 
 // An album's artist line as shown: the line its tracks' records elected
-// (the album-artist display, "Various Artists", the track-artist display)
-// when it has records (LibraryIndex::kTagged), else its artist's name (the
-// folder's, or the spelling the artist's other albums elected for it). ""
-// when there is none (the files right under /music).
+// (the album-artist display; "Various Artists" in the UI's language, a
+// compilation's with no album artist tagged, LibraryIndex::kVarious; the
+// track-artist display) when it has records (LibraryIndex::kTagged), else
+// its artist's name (the folder's, or the spelling the artist's other
+// albums elected for it). "" when there is none (the files right under
+// /music).
 const char* albumArtist(const LibraryIndex& index, uint32_t album);
 // A track's own artist: its record's display join, where it differs from
 // its album's line (the builder drops it where it is the same); nullptr
