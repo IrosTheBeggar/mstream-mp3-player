@@ -106,7 +106,10 @@ char* summary(uint32_t upNext, const Time& t, uint32_t position, uint32_t size, 
 }
 
 int pickSummary(const int (&widths)[kSummaryForms], int room) {
-  for (int k = 0; k < kSummaryForms; ++k) {
+  // The count and the time (the last form) only with no position: where
+  // the queue is comes first.
+  const int forms = widths[kSummaryPosition] >= 0 ? kSummaryShort : kSummaryForms;
+  for (int k = 0; k < forms; ++k) {
     if (widths[k] >= 0 && widths[k] <= room) return k;
   }
   return -1;
@@ -114,8 +117,9 @@ int pickSummary(const int (&widths)[kSummaryForms], int room) {
 
 SummaryPick placeSummary(const int (&widths)[kSummaryForms], int beside, int below) {
   SummaryPick p;
-  // Beside the title while where the queue is fits there (a count alone
-  // that fits, "noch 20", would hide it).
+  // Beside the title while where the queue is fits there, else under it
+  // (a count alone that fits beside, "noch 20", would hide it; pickSummary()
+  // doesn't try it while there is a position).
   const int position = widths[kSummaryPosition];
   if (position < 0 || position <= beside) p.form = pickSummary(widths, beside);
   if (p.form < 0) {

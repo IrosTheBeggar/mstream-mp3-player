@@ -71,24 +71,30 @@ char* summary(uint32_t upNext, const Time& t, uint32_t position, uint32_t size, 
 // beside German's "Warteschlange"; or under the title): the first of its
 // forms that fits `room` px whole, in this order: the long one ("4 of 16 ·
 // 12 up next · 49 min"), the position and the time ("4 of 16 · 49 min"),
-// the count and the time ("12 up next · 49 min"), the position alone ("4
-// of 16": summary(0, Time{}, position, size, ..., false)). `widths[k]`:
-// form k's (Small), < 0 when it is empty (no position: nothing current).
-// -1: none fits: never one cut ("noch 9 · 3…").
+// the position alone ("4 of 16": summary(0, Time{}, position, size, ...,
+// false)), and only when there is no position (nothing current) the count
+// and the time ("12 up next · 49 min"; with no position the first two say
+// the same). Where the queue is comes before how many are left (the
+// owner's call, 2026-10-12: with the count and the time before the
+// position alone, Russian at 100 of 120 with an hour next said "ещё 20 ·
+// 60 мин", where "100 из 120" fitted). `widths[k]`: form k's (Small), < 0
+// when it is empty (the position alone with no position). -1: none fits:
+// never one cut ("noch 9 · 3…").
 inline constexpr int kSummaryForms = 4;
-enum SummaryForm : int { kSummaryLong, kSummaryMid, kSummaryShort, kSummaryPosition };
+// The forms in the order they are tried.
+enum SummaryForm : int { kSummaryLong, kSummaryMid, kSummaryPosition, kSummaryShort };
 int pickSummary(const int (&widths)[kSummaryForms], int room);
 // Where the header draws it (QueuePage::header()): beside the title, the
 // first form that fits `beside` px (pickSummary()), while the position
 // alone fits there (the narrowest form that says where the queue is), or
 // there is none; else on the header's second line, under the title, the
-// first that fits `below` px there (Header::subBelow: the Folder page's
-// two lines, in the same 36 px header; from the title's x to 8 px before
-// the pill: 235 px in English, 221 in German, whose position alone doesn't
-// fit beside "Warteschlange" once it takes six digits, "100 von 120"; the
-// count that would, "noch 20" with no time known, would hide where the
-// queue is); else none (form -1). English's position alone always fits
-// beside, so its picks are as before.
+// first that fits `below` px there, in the same order (Header::subBelow:
+// the Folder page's two lines, in the same 36 px header; from the title's
+// x to 8 px before the pill: 235 px in English, 221 in German, whose
+// position alone doesn't fit beside "Warteschlange" once it takes six
+// digits, "100 von 120"; the count that would, "noch 20" with no time
+// known, would hide where the queue is); else none (form -1). English's
+// position alone always fits beside, so it never goes under its title.
 struct SummaryPick {
   int form = -1;
   bool below = false;  // on the second line

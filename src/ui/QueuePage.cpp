@@ -183,12 +183,13 @@ Header QueuePage::header() const {
       // The long form if it fits beside the title and the pill (the room
       // drawHeader() leaves: their words in the UI's language); else the
       // position and the time (where the queue is is what the header is
-      // for: spec §6.4); else the count and the time; else the position
-      // alone. When the position alone doesn't fit there (German's
-      // "Warteschlange" once it takes six digits), the first that fits on
-      // the header's second line, under the title (the Folder page's two
-      // lines: the header keeps its height, the list its rows); else none
-      // (queueview::placeSummary()).
+      // for: spec §6.4); else the position alone; the count and the time
+      // only with nothing current (no position: the owner's call). When
+      // the position alone doesn't fit there (German's "Warteschlange"
+      // once it takes six digits), the first that fits on the header's
+      // second line, under the title, in the same order (the Folder page's
+      // two lines: the header keeps its height, the list its rows); else
+      // none (queueview::placeSummary()).
       const int pill = Header::pillW(tr(S::queue_edit), uitext::kQueuePillTextW, false);
       const int right = uitext::headerRight(pill);
       const int room = uitext::headerSubRoom(12, f.width(Font::Bold, tr(S::queue_title)), right);
@@ -197,7 +198,7 @@ Header QueuePage::header() const {
         queueview::summary(0, queueview::Time{}, static_cast<uint32_t>(s.current + 1), s.queueSize, sub,
                            sizeof(headerSub_), /*withUpNext=*/false);
       }
-      const char* forms[queueview::kSummaryForms] = {summaryLong_, summaryMid_, summaryShort_, sub};
+      const char* forms[queueview::kSummaryForms] = {summaryLong_, summaryMid_, sub, summaryShort_};
       int widths[queueview::kSummaryForms];
       for (int k = 0; k < queueview::kSummaryForms; ++k) {
         widths[k] = forms[k][0] ? f.width(Font::Small, forms[k]) : -1;

@@ -3100,7 +3100,7 @@ Queue, Dance and Output (with its Pair and About pages).
   up next · 49 min" (`QueueView`: the lengths are learned as tracks play
   into a `DurationBook`, 2 bytes a track in PSRAM, reset with the library;
   "49+ min" while some are unknown; "4 of 16 · 49 min" when the long one
-  doesn't fit beside Edit: the position is kept first); a tap on the title goes to the playing track,
+  doesn't fit beside Edit, then "4 of 16": the position is kept first); a tap on the title goes to the playing track,
   the top, the end in turn; a row's bar **Play now / Play next / Remove**.
   **After an add in the Library** (Play next, + Queue) the next visit
   scrolls to the first added entry and highlights what was added
