@@ -11,6 +11,7 @@
 #include <cstring>
 #include <new>
 
+#include "UiText.h"
 #include "app/Psram.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
@@ -260,8 +261,11 @@ void ListView::renderBar(M5Canvas& c, int32_t row, bool inline_) {
     const bool down = thisPressed && pressedButton_ == i;
     const uint16_t fill = primary ? (down ? col::SOFT : src_->accent()) : (down ? col::BTN_HI : col::BTN);
     c.fillRoundRect(x, 5, bw, 32, 8, fill);
-    f.draw(c, primary ? Font::Bold : Font::Body, labels[i], x + bw / 2, 21, bw - 8, primary ? col::DARK : col::TXT,
-           fill, Fonts::Align::Centre);
+    // Centred, in Small when its font doesn't fit ("Play all 19410" beside
+    // the rail fits in Bold: uitext::kListBarPad).
+    const int room = bw - uitext::kListBarPad;
+    f.draw(c, f.fitting(primary ? Font::Bold : Font::Body, labels[i], room), labels[i], x + bw / 2, 21, room,
+           primary ? col::DARK : col::TXT, fill, Fonts::Align::Centre);
   }
 }
 
@@ -418,8 +422,8 @@ void ListView::drawEmpty() {
   }
   M5Canvas& s = gfx::strip();
   s.fillSprite(col::BG);
-  Fonts::instance().draw(s, Font::Body, src_ ? src_->emptyText() : "", kW / 2, 24, kW - 24, col::DIM, col::BG,
-                         Fonts::Align::Centre);
+  Fonts::instance().draw(s, Font::Body, src_ ? src_->emptyText() : "", kW / 2, 24, uitext::kListLineW, col::DIM,
+                         col::BG, Fonts::Align::Centre);
   gfx::push(s, 0, kTop + 40, kW, gfx::kStripH);
 }
 

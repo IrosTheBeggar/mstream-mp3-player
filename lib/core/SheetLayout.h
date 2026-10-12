@@ -25,6 +25,9 @@ inline constexpr int kRowH = 40;
 inline constexpr int kMaxRows = 4;
 inline constexpr int kMargin = 4;
 inline constexpr int kPanelH = kScreenH - kContentY;  // 204
+// The title (Small, dim): from x 16 to 8 px before the ✕ pill's hit area
+// (x 250 to the edge).
+inline constexpr int kTitleW = 226;
 
 // The sheet's height with `rows` rows (title, rows, margin).
 constexpr int height(int rows) { return kTitleH + rows * kRowH + kMargin; }

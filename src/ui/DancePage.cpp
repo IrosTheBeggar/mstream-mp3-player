@@ -112,8 +112,10 @@ void DancePage::drawPanels(bool all) {
   if (all || skin != skin_) {
     c.fillRect(0, 0, 100, 56, col::BG);
     f.draw(c, Font::Small, tr(S::dance_dancer), 50, 14, 96, col::DIM, col::BG, Fonts::Align::Centre);
+    // Title, else Bold (Spanish's "Cangrejo").
     const char* name = tr(d.skin() == dance::Skin::Crab ? S::dance_crab : S::dance_stick);
-    f.draw(c, Font::Title, name, 50, 40, 96, col::TXT, col::BG, Fonts::Align::Centre);
+    f.draw(c, f.fitting(Font::Title, name, uitext::kDanceNameW, Font::Bold), name, 50, 40, uitext::kDanceNameW,
+           col::TXT, col::BG, Fonts::Align::Centre);
     gfx::push(c, 220, 44, 100, 56);
     c.fillRect(0, 0, 100, 56, col::BG);
     for (int i = 0; i < 2; ++i) {  // which of the two dancers

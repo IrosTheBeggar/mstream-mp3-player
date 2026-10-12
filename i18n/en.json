@@ -81,7 +81,7 @@
     "context": "Tip 1, the left box: what a click on the left red dot (button A) does: the previous track.",
     "room": {
       "font": "Bold",
-      "px": 98,
+      "px": 100,
       "const": "uitext::kCoachBoxTextW"
     }
   },
@@ -90,7 +90,7 @@
     "context": "Tip 1, the middle box: a click on the middle dot (button B) plays or pauses.",
     "room": {
       "font": "Bold",
-      "px": 98,
+      "px": 100,
       "const": "uitext::kCoachBoxTextW"
     }
   },
@@ -99,7 +99,7 @@
     "context": "Tip 1, the right box: a click on the right dot (button C): the next track.",
     "room": {
       "font": "Bold",
-      "px": 98,
+      "px": 100,
       "const": "uitext::kCoachBoxTextW"
     }
   },
@@ -108,7 +108,7 @@
     "context": "Card 1, each box: introduces what a hold on that dot does.",
     "room": {
       "font": "Small",
-      "px": 98,
+      "px": 100,
       "const": "uitext::kCoachBoxTextW"
     }
   },
@@ -117,7 +117,7 @@
     "context": "Tip 1, the left box, under 'hold:': holding A turns the volume down. Two lines at most.",
     "room": {
       "font": "Small",
-      "px": 98,
+      "px": 100,
       "lines": 2,
       "const": "uitext::kCoachBoxTextW"
     },
@@ -128,7 +128,7 @@
     "context": "Tip 1, the middle box, under 'hold:': holding B switches between the speaker and the headphones. Two lines at most.",
     "room": {
       "font": "Small",
-      "px": 98,
+      "px": 100,
       "lines": 2,
       "const": "uitext::kCoachBoxTextW"
     },
@@ -139,7 +139,7 @@
     "context": "Tip 1, the right box, under 'hold:': holding C turns the volume up. Two lines at most.",
     "room": {
       "font": "Small",
-      "px": 98,
+      "px": 100,
       "lines": 2,
       "const": "uitext::kCoachBoxTextW"
     },
@@ -182,56 +182,70 @@
     "context": "The tab bar's label under the active tab's icon (Playing). Only the active tab shows its label.",
     "room": {
       "font": "Small",
-      "px": 52
-    }
+      "px": 52,
+      "optional": true
+    },
+    "note": "On its plate (52 px) when it fits; Library and Queue may run over the plate's edges up to 72 px; wider, the tab shows its icon alone."
   },
   "tabs.library": "Library",
   "@tabs.library": {
     "context": "The tab bar's label under the active tab's icon (Library). Only the active tab shows its label.",
     "room": {
       "font": "Small",
-      "px": 52
-    }
+      "px": 72,
+      "optional": true
+    },
+    "note": "On its plate (52 px) when it fits; Library and Queue may run over the plate's edges up to 72 px; wider, the tab shows its icon alone."
   },
   "tabs.queue": "Queue",
   "@tabs.queue": {
     "context": "The tab bar's label under the active tab's icon (Queue). Only the active tab shows its label.",
     "room": {
       "font": "Small",
-      "px": 52
-    }
+      "px": 72,
+      "optional": true
+    },
+    "note": "On its plate (52 px) when it fits; Library and Queue may run over the plate's edges up to 72 px; wider, the tab shows its icon alone."
   },
   "tabs.dance": "Dance",
   "@tabs.dance": {
     "context": "The tab bar's label under the active tab's icon (Dance). Only the active tab shows its label.",
     "room": {
       "font": "Small",
-      "px": 52
-    }
+      "px": 52,
+      "optional": true
+    },
+    "note": "On its plate (52 px) when it fits; Library and Queue may run over the plate's edges up to 72 px; wider, the tab shows its icon alone."
   },
   "tabs.output": "Output",
   "@tabs.output": {
     "context": "The tab bar's label under the active tab's icon (Output). Only the active tab shows its label.",
     "room": {
       "font": "Small",
-      "px": 64
-    }
+      "px": 64,
+      "optional": true
+    },
+    "note": "On its plate (64 px, the icon and the volume's); wider, the tab shows its icon alone."
   },
   "toast.undo": "Undo",
   "@toast.undo": {
     "context": "The toast's Undo button (takes back the edit the toast reports).",
     "room": {
       "font": "Bold",
-      "px": 50
-    }
+      "px": 50,
+      "optional": true
+    },
+    "note": "When it (or toast.view) doesn't fit its pill, the toast's buttons are its icons."
   },
   "toast.view": "View",
   "@toast.view": {
     "context": "The toast's View button after an add: shows the added tracks in the Queue.",
     "room": {
       "font": "Bold",
-      "px": 52
-    }
+      "px": 52,
+      "optional": true
+    },
+    "note": "When it (or toast.undo) doesn't fit its pill, the toast's buttons are its icons."
   },
   "toast.undone": "Undone",
   "@toast.undone": {
@@ -752,7 +766,7 @@
     },
     "bytes": 96
   },
-  "hud.silent_mode": "Stays on the speaker (silent test mode)",
+  "hud.silent_mode": "Speaker only (silent test mode)",
   "@hud.silent_mode": {
     "context": "The HUD when a B hold was refused in the silent test mode (a developer mode, entered from the serial console only).",
     "room": {
@@ -760,7 +774,6 @@
       "px": 274
     },
     "translate": "dev",
-    "overflow": "English: 313 px in 274 (developer only).",
     "bytes": 96
   },
   "now_playing.title_none": "Nothing playing",
@@ -916,8 +929,8 @@
     "context": "The progress line (amber) when the output is the headphones but they aren't connected: never dropped for the sleep timer.",
     "room": {
       "font": "Small",
-      "px": 190,
-      "const": "uitext::kNowPlayingMidW"
+      "px": 200,
+      "const": "uitext::kNowPlayingWarnW"
     },
     "placeholders": {
       "0": {
@@ -926,7 +939,6 @@
         "worst": "WH-1000XM4"
       }
     },
-    "overflow": "English: 'WH-1000XM4 (not connected)' is too wide with a 10-character name (cut with …).",
     "bytes": 96
   },
   "now_playing.headphones_not_connected": "Headphones (not connected)",
@@ -934,8 +946,8 @@
     "context": "As now_playing.not_connected, for headphones with no name.",
     "room": {
       "font": "Small",
-      "px": 190,
-      "const": "uitext::kNowPlayingMidW"
+      "px": 200,
+      "const": "uitext::kNowPlayingWarnW"
     },
     "bytes": 96
   },
@@ -1317,7 +1329,8 @@
     "context": "Sleep sheet pill: 90 minutes; says what the numbers are.",
     "room": {
       "font": "Body",
-      "px": 64
+      "else": "Small",
+      "px": 68
     },
     "note": "The other pills are bare numbers (15, 30, 45, 60): this one says what they are."
   },
@@ -1326,7 +1339,7 @@
     "context": "Sleep sheet, row 2 pill: pause at the end of this track.",
     "room": {
       "font": "Small",
-      "px": 86
+      "px": 90
     }
   },
   "sleep.end_album": "End of album",
@@ -1334,7 +1347,7 @@
     "context": "Sleep sheet pill: pause at the end of the album.",
     "room": {
       "font": "Small",
-      "px": 86
+      "px": 90
     }
   },
   "sleep.end_queue": "End of queue",
@@ -1342,7 +1355,7 @@
     "context": "Sleep sheet pill: pause at the end of the queue.",
     "room": {
       "font": "Small",
-      "px": 88
+      "px": 92
     }
   },
   "sleep.extend": "+10 min",
@@ -1513,7 +1526,8 @@
     "context": "After the output's name on the volume sheet (dim): 'Speaker volume'.",
     "room": {
       "font": "Small",
-      "px": 66
+      "px": 66,
+      "optional": true
     }
   },
   "volume.hint_headphones": "The headphones' own buttons change it too",
@@ -1576,7 +1590,8 @@
     "context": "The Library's root header: the Artists segment (one of three); also the jump grid's title on that list.",
     "room": {
       "font": "Bold",
-      "px": 94
+      "else": "Small",
+      "px": 96
     }
   },
   "library.segment_albums": "Albums",
@@ -1584,7 +1599,8 @@
     "context": "The Library's root header: the Albums segment (one of three); also the jump grid's title on that list.",
     "room": {
       "font": "Bold",
-      "px": 94
+      "else": "Small",
+      "px": 96
     }
   },
   "library.segment_folders": "Folders",
@@ -1592,7 +1608,8 @@
     "context": "The Library's root header: the Folders segment (one of three); also the jump grid's title on that list.",
     "room": {
       "font": "Bold",
-      "px": 94
+      "else": "Small",
+      "px": 96
     }
   },
   "library.action_play": "Play",
@@ -1600,7 +1617,8 @@
     "context": "A Library row's action (inline bar under a tapped row, and the hold sheet's primary row): play it now.",
     "room": {
       "font": "Bold",
-      "px": 77
+      "else": "Small",
+      "px": 81
     },
     "bytes": 64
   },
@@ -1609,7 +1627,8 @@
     "context": "A Library row's action: play after the current track.",
     "room": {
       "font": "Body",
-      "px": 77
+      "else": "Small",
+      "px": 81
     },
     "bytes": 64
   },
@@ -1618,7 +1637,8 @@
     "context": "A Library row's action: add to the end of the queue ('+' = add). Also the Folders root's second button.",
     "room": {
       "font": "Body",
-      "px": 77
+      "else": "Small",
+      "px": 81
     },
     "bytes": 64
   },
@@ -1630,7 +1650,8 @@
     "context": "The Folders root's first button: play every track on the card.",
     "room": {
       "font": "Bold",
-      "px": 123
+      "else": "Small",
+      "px": 127
     },
     "placeholders": {
       "0": {
@@ -1640,7 +1661,6 @@
       }
     },
     "count": "0",
-    "overflow": "English: 'Play all 19410' is 126 px in 123 when the Folders root shows the A-Z rail.",
     "bytes": 48,
     "note": "The count is plural only where your language makes the words agree with it."
   },
@@ -1656,9 +1676,9 @@
     },
     "placeholders": {
       "0": {
-        "means": "the artist's, album's or folder's name (cut to fit)",
+        "means": "the artist's, album's or folder's name, cut to what the rest leaves (the worst: a name cut to its first letters)",
         "type": "text",
-        "worst": "A Long Album Name",
+        "worst": "A Long…",
         "or": [
           "library.everything"
         ]
@@ -1735,9 +1755,10 @@
     "context": "The header's right pill two levels down (with a back chevron): back to the Library's root.",
     "room": {
       "font": "Bold",
-      "px": 80
+      "else": "Small",
+      "px": 82
     },
-    "note": "A pill as wide as its label at the header's right: the page's title gets what is left."
+    "note": "A pill as wide as its label at the header's right: the page's title gets what is left. Small when Bold doesn't fit."
   },
   "library.tracks_n": {
     "one": "{0} track",
@@ -1987,16 +2008,17 @@
     "context": "A Library list's line when the index isn't loaded (no music).",
     "room": {
       "font": "Body",
-      "px": 296
-    },
-    "overflow": "English: 297 px in 296."
+      "px": 300,
+      "const": "uitext::kListLineW"
+    }
   },
   "library.empty_no_audio": "No audio files here",
   "@library.empty_no_audio": {
     "context": "A Folder list with nothing in it.",
     "room": {
       "font": "Body",
-      "px": 296
+      "px": 300,
+      "const": "uitext::kListLineW"
     }
   },
   "library.empty_nothing": "Nothing here",
@@ -2004,7 +2026,8 @@
     "context": "An empty list's line (the default for any list).",
     "room": {
       "font": "Body",
-      "px": 296
+      "px": 300,
+      "const": "uitext::kListLineW"
     }
   },
   "library.looking_again": "Looking in /music again...",
@@ -2285,7 +2308,8 @@
     "context": "Every list's line while the library is rebuilt (the lists are fenced).",
     "room": {
       "font": "Body",
-      "px": 296
+      "px": 300,
+      "const": "uitext::kListLineW"
     }
   },
   "library.updating_wait": "Updating the library: a moment",
@@ -2533,6 +2557,7 @@
     "context": "The Queue header's pill: enter selection mode.",
     "room": {
       "font": "Bold",
+      "else": "Small",
       "px": 60
     },
     "note": "A pill as wide as its label: the header's summary gets what is left."
@@ -2578,6 +2603,7 @@
     "context": "Selection mode's header pill: select every entry.",
     "room": {
       "font": "Bold",
+      "else": "Small",
       "px": 60
     }
   },
@@ -2586,6 +2612,7 @@
     "context": "Selection mode's header pill when all are selected: select none.",
     "room": {
       "font": "Bold",
+      "else": "Small",
       "px": 60
     }
   },
@@ -2670,7 +2697,8 @@
     "context": "Selection mode's bottom bar: move the selected entries to play next.",
     "room": {
       "font": "Body",
-      "px": 74
+      "else": "Small",
+      "px": 76
     }
   },
   "queue.clear_bar": "Clear…",
@@ -2678,6 +2706,7 @@
     "context": "Selection mode's bottom bar, red outline: opens the Clear sheet.",
     "room": {
       "font": "Body",
+      "else": "Small",
       "px": 68
     }
   },
@@ -2686,7 +2715,8 @@
     "context": "A Queue row's inline action: play this entry now.",
     "room": {
       "font": "Bold",
-      "px": 86
+      "else": "Small",
+      "px": 90
     }
   },
   "queue.action_play_next": "Play next",
@@ -2694,7 +2724,8 @@
     "context": "A Queue row's inline action: move it to play next.",
     "room": {
       "font": "Body",
-      "px": 86
+      "else": "Small",
+      "px": 90
     }
   },
   "queue.action_remove": "Remove",
@@ -2702,7 +2733,8 @@
     "context": "A Queue row's inline action: remove this entry.",
     "room": {
       "font": "Body",
-      "px": 86
+      "else": "Small",
+      "px": 90
     }
   },
   "queue.clear_sheet_title": "Clear the queue",
@@ -2943,7 +2975,8 @@
     "context": "The Queue list's line when empty (when the empty state isn't drawn).",
     "room": {
       "font": "Body",
-      "px": 296
+      "px": 300,
+      "const": "uitext::kListLineW"
     }
   },
   "empty.nothing_playing_title": "Nothing playing",
@@ -3299,7 +3332,8 @@
     "context": "Screen off after's value (a tap takes the next).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.screen_off_30s": "30 s",
@@ -3307,7 +3341,8 @@
     "context": "Screen off after's value (a tap takes the next).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.screen_off_1min": "1 min",
@@ -3315,7 +3350,8 @@
     "context": "Screen off after's value (a tap takes the next).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.screen_off_2min": "2 min",
@@ -3323,7 +3359,8 @@
     "context": "Screen off after's value (a tap takes the next).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.screen_off_5min": "5 min",
@@ -3331,7 +3368,8 @@
     "context": "Screen off after's value (a tap takes the next).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.screen_off_never": "Never",
@@ -3339,7 +3377,8 @@
     "context": "Screen off after's value (a tap takes the next).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.brightness": "Brightness",
@@ -3365,7 +3404,8 @@
     "context": "Brightness's value (a screen brightness level).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.brightness_medium": "Medium",
@@ -3373,7 +3413,8 @@
     "context": "Brightness's value (a screen brightness level).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.brightness_high": "High",
@@ -3381,7 +3422,8 @@
     "context": "Brightness's value (a screen brightness level).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.brightness_max": "Max",
@@ -3389,7 +3431,8 @@
     "context": "Brightness's value (a screen brightness level).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.idle_off": "Turn off when idle",
@@ -3424,7 +3467,8 @@
     "context": "Turn off when idle's value.",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     },
     "bytes": 24
   },
@@ -3433,7 +3477,8 @@
     "context": "Turn off when idle's value.",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     },
     "bytes": 24
   },
@@ -3442,7 +3487,8 @@
     "context": "Turn off when idle's value.",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     },
     "bytes": 24
   },
@@ -3451,7 +3497,8 @@
     "context": "Turn off when idle's value.",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     },
     "bytes": 24
   },
@@ -3504,7 +3551,8 @@
     "context": "The CPU speed row's value: 240 MHz.",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     },
     "translate": "maybe"
   },
@@ -3513,7 +3561,8 @@
     "context": "The CPU speed row's value: 160 MHz.",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     },
     "translate": "maybe"
   },
@@ -3567,7 +3616,8 @@
     "context": "Bluetooth power's value (also in About's power row).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.bt_power_normal": "Normal",
@@ -3575,7 +3625,8 @@
     "context": "Bluetooth power's value (also in About's power row).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.bt_power_high": "High",
@@ -3583,7 +3634,8 @@
     "context": "Bluetooth power's value (also in About's power row).",
     "room": {
       "font": "Body",
-      "px": 70
+      "else": "Small",
+      "px": 74
     }
   },
   "settings.cpu_dialog_title": "Restart at {0}?",
@@ -3927,7 +3979,8 @@
     "room": {
       "font": "Body",
       "px": 184,
-      "const": "uitext::kLibraryRowW"
+      "const": "uitext::kLibraryRowW",
+      "optional": true
     },
     "placeholders": {
       "0": {
@@ -4137,7 +4190,8 @@
     "room": [
       {
         "font": "Body",
-        "px": 60
+        "else": "Small",
+        "px": 64
       },
       {
         "font": "Bold",
@@ -4464,7 +4518,8 @@
     "context": "The Bluetooth card's one button when nothing is paired (accent, Bold): opens the Pair screen.",
     "room": {
       "font": "Bold",
-      "px": 280
+      "else": "Small",
+      "px": 282
     }
   },
   "bt.pair_new": "Pair new",
@@ -4472,7 +4527,8 @@
     "context": "The same button in a narrow box (beside Try again): opens the Pair screen.",
     "room": {
       "font": "Bold",
-      "px": 92
+      "else": "Small",
+      "px": 94
     }
   },
   "bt.connect": "Connect",
@@ -4480,7 +4536,8 @@
     "context": "The Bluetooth card's button: connect to the paired headphones.",
     "room": {
       "font": "Body",
-      "px": 92
+      "else": "Small",
+      "px": 94
     }
   },
   "bt.forget": "Forget",
@@ -4488,7 +4545,8 @@
     "context": "The Bluetooth card's button: unpair them (a second tap within a moment confirms: bt.tap_again).",
     "room": {
       "font": "Body",
-      "px": 92
+      "else": "Small",
+      "px": 94
     }
   },
   "bt.tap_again": "Tap again",
@@ -4496,7 +4554,8 @@
     "context": "The Forget button armed (red, Bold): tap again to forget them.",
     "room": {
       "font": "Bold",
-      "px": 92
+      "else": "Small",
+      "px": 94
     }
   },
   "bt.cancel": "Cancel",
@@ -4504,7 +4563,8 @@
     "context": "The Bluetooth card's button while connecting/pairing: stop.",
     "room": {
       "font": "Body",
-      "px": 112
+      "else": "Small",
+      "px": 114
     }
   },
   "bt.disconnect": "Disconnect",
@@ -4512,7 +4572,8 @@
     "context": "The Bluetooth card's first button while connected (and the More sheet's row).",
     "room": {
       "font": "Body",
-      "px": 92
+      "else": "Small",
+      "px": 94
     }
   },
   "bt.try_again": "Try again",
@@ -4520,7 +4581,8 @@
     "context": "The Bluetooth card's button after a failure.",
     "room": {
       "font": "Body",
-      "px": 112
+      "else": "Small",
+      "px": 114
     }
   },
   "bt.hint": "They'll reconnect\nwhen switched on.",
@@ -4752,7 +4814,7 @@
     },
     "bytes": 96
   },
-  "speaker.waits_for_headphones": "Waits for the headphones",
+  "speaker.waits_for_headphones": "Waits for headphones",
   "@speaker.waits_for_headphones": {
     "context": "As speaker.waits_for, for headphones with no name.",
     "room": {
@@ -4760,7 +4822,6 @@
       "px": 160,
       "const": "uitext::kSpeakerLineW"
     },
-    "overflow": "English: 167 px in 160 (cut).",
     "bytes": 96
   },
   "speaker.built_in": "Built-in",
@@ -4998,7 +5059,7 @@
     },
     "bytes": 96
   },
-  "pair.connected_already": "Connected to {0} already",
+  "pair.connected_already": "Already connected: {0}",
   "@pair.connected_already": {
     "context": "Toast when the picked device is the one linked now.",
     "room": {
@@ -5014,7 +5075,6 @@
         "worst": "WH-1000XM4"
       }
     },
-    "overflow": "English: too wide with a 10-character name.",
     "bytes": 96
   },
   "pair.connected_already_them": "Connected to them already",
@@ -5168,7 +5228,8 @@
       "font": "Body",
       "else": "Small",
       "px": 260,
-      "const": "uitext::kAboutValueW"
+      "const": "uitext::kAboutValueW",
+      "optional": true
     },
     "placeholders": {
       "0": {
@@ -5188,8 +5249,33 @@
       }
     },
     "translate": "maybe",
-    "overflow": "English: 261 px in Small's 260 with 5-, 4- and 4-digit counts.",
-    "bytes": 128
+    "bytes": 128,
+    "note": "When it doesn't fit (Body, else Small): about.library_value_short."
+  },
+  "about.library_value_short": "{0}, {1}",
+  "@about.library_value_short": {
+    "context": "About's library when about.library_value doesn't fit: its tracks and albums (the artists left out): \"99,999 tracks, 1500 albums\".",
+    "room": {
+      "font": "Body",
+      "else": "Small",
+      "px": 260,
+      "const": "uitext::kAboutValueW"
+    },
+    "placeholders": {
+      "0": {
+        "means": "library.tracks_n",
+        "type": "message",
+        "worst": "library.tracks_n"
+      },
+      "1": {
+        "means": "library.albums_n",
+        "type": "message",
+        "worst": "library.albums_n"
+      }
+    },
+    "translate": "maybe",
+    "bytes": 128,
+    "note": "Join the two counts as about.library_value joins its three."
   },
   "about.no_music": "no music found",
   "@about.no_music": {
@@ -6165,8 +6251,8 @@
     "context": "The test taps header's right after a Save.",
     "room": {
       "font": "Small",
-      "px": 52,
-      "const": "uitext::kCalProgressW"
+      "px": 134,
+      "const": "uitext::kCalStatusW"
     }
   },
   "calibration.undone": "Undone",
@@ -6174,8 +6260,8 @@
     "context": "The test taps header's right after an Undo.",
     "room": {
       "font": "Small",
-      "px": 52,
-      "const": "uitext::kCalProgressW"
+      "px": 134,
+      "const": "uitext::kCalStatusW"
     }
   },
   "check.first_hint": "Is the touch right? Tap the centre\nof each dot, one at a time.",
@@ -6407,7 +6493,9 @@
     "context": "The dancer's name: the crab mascot.",
     "room": {
       "font": "Title",
-      "px": 96
+      "else": "Bold",
+      "px": 96,
+      "const": "uitext::kDanceNameW"
     }
   },
   "dance.stick": "Stick",
@@ -6415,7 +6503,9 @@
     "context": "The dancer's name: the stick figure.",
     "room": {
       "font": "Title",
-      "px": 96
+      "else": "Bold",
+      "px": 96,
+      "const": "uitext::kDanceNameW"
     }
   },
   "dance.switch": "tap the dancer\nto switch",
@@ -6471,7 +6561,8 @@
     "context": "Dialog (amber, a struck-out headphones icon) when the headphones dropped while playing: paused.",
     "room": {
       "font": "Bold",
-      "px": 232,
+      "px": 236,
+      "const": "uitext::kDialogIconTitleW",
       "optional": true
     },
     "placeholders": {
@@ -6489,9 +6580,9 @@
     "context": "The lost dialog's title when the name doesn't fit beside the icon (the name goes into the body).",
     "room": {
       "font": "Bold",
-      "px": 232
+      "px": 236,
+      "const": "uitext::kDialogIconTitleW"
     },
-    "overflow": "English: 235 px in the 232 beside the icon (the last letter cut).",
     "bytes": 96
   },
   "dialog.lost_body": "Paused, so the speaker doesn't suddenly play out loud.",
@@ -6564,14 +6655,13 @@
     },
     "bytes": 96
   },
-  "dialog.lost_resting": "Stopped looking for them: Play tries again",
+  "dialog.lost_resting": "Stopped looking: Play tries again",
   "@dialog.lost_resting": {
     "context": "The lost dialog's status when the search rested after its back-off (15 min): Play looks again.",
     "room": {
       "font": "Small",
       "px": 260
     },
-    "overflow": "English: 274 px in 260 (the dialog's status line).",
     "bytes": 96,
     "note": "'Play' is the button B's action."
   },

@@ -61,8 +61,10 @@ namespace {
 // lab's panel uncorrected, is still View). The text has what's left of them.
 // Two lines ("Plays next" over a long name): the buttons as icons (Undo's
 // arrow, View as the Queue tab's icon), so the name has most of the width
-// (uitext::kToastCompactTextRight; test_ui_library measures). The geometry
-// and the hit test are UiText's (toastButtonAt(), host-tested).
+// (uitext::kToastCompactTextRight; test_ui_library measures). The icons
+// too when a label doesn't fit its pill (uitext::toastIcons(): German's
+// "Rückgängig"), the text then on one line beside them if it fits. The
+// geometry and the hit test are UiText's (toastButtonAt(), host-tested).
 constexpr int kUndoX = uitext::kToastUndoX, kUndoW = uitext::kToastUndoW;
 constexpr int kViewX = uitext::kToastViewX, kViewW = uitext::kToastViewW;
 constexpr int kUndoCX = uitext::kToastUndoCX, kUndoCW = uitext::kToastUndoCW;
@@ -70,8 +72,8 @@ constexpr int kViewCX = uitext::kToastViewCX, kViewCW = uitext::kToastViewCW;
 constexpr int kTextX = uitext::kToastTextX;
 constexpr int kBackZone = 56;  // the page header's ‹ (Header::hit)
 
-int textRightOf(bool compact, bool undo, bool view) {
-  if (compact) return view ? uitext::kToastCompactTextRight : undo ? kUndoCX - 6 : 306;
+int textRightOf(bool icons, bool undo, bool view) {
+  if (icons) return view ? uitext::kToastCompactTextRight : undo ? kUndoCX - 6 : 306;
   return view ? kViewX - 6 : undo ? kUndoX - 6 : 306;
 }
 }  // namespace
@@ -84,9 +86,14 @@ void Toast::show(const char* text, bool undo, bool view, uint16_t accent, uint32
   accent_ = accent;
   up_ = true;
   untilMs_ = nowMs + (holdMs ? holdMs : undo ? 4000 : 1800);
-  // One line if it fits beside the buttons; else "what: <name>" on two,
-  // with the buttons as icons.
-  compact_ = strstr(text_, ": ") && Fonts::instance().width(Font::Body, text_) > textRightOf(false, undo, view) - kTextX;
+  // The buttons as icons when a label doesn't fit its pill. One line if it
+  // fits beside the buttons; else "what: <name>" on two, with the buttons
+  // as icons.
+  Fonts& f = Fonts::instance();
+  const bool labels = uitext::toastIcons(undo, undo ? f.width(Font::Bold, tr(S::toast_undo)) : 0, view,
+                                         view ? f.width(Font::Bold, tr(S::toast_view)) : 0);
+  compact_ = strstr(text_, ": ") && f.width(Font::Body, text_) > textRightOf(labels, undo, view) - kTextX;
+  icons_ = labels || compact_;
   draw();
 }
 
@@ -94,7 +101,7 @@ void Toast::showSleep(uint16_t accent, uint32_t nowMs) {
   copy(text_, sizeof(text_), tr(S::sleep_fading_toast));
   sleep_ = true;
   idle_ = false;
-  undo_ = view_ = compact_ = false;
+  undo_ = view_ = compact_ = icons_ = false;
   accent_ = accent;
   up_ = true;
   untilMs_ = nowMs + 0x40000000u;  // until the fade ends (the Ui hides it)
@@ -103,7 +110,7 @@ void Toast::showSleep(uint16_t accent, uint32_t nowMs) {
 
 void Toast::showIdle(uint32_t seconds, uint16_t accent, uint32_t nowMs) {
   idle_ = true;
-  sleep_ = undo_ = view_ = compact_ = false;
+  sleep_ = undo_ = view_ = compact_ = icons_ = false;
   accent_ = accent;
   up_ = true;
   untilMs_ = nowMs + 0x40000000u;  // until the warning ends (the Ui hides it)
@@ -152,7 +159,7 @@ void Toast::draw(int pressed) {
     gfx::push(s, 0, kY, kW, kH, true);
     return;
   }
-  const int textW = textRightOf(compact_, undo_, view_) - kTextX;
+  const int textW = textRightOf(icons_, undo_, view_) - kTextX;
   if (!compact_) {
     f.draw(s, Font::Body, text_, kTextX, 18, textW, col::TXT, col::CARD);
   } else {
@@ -168,22 +175,24 @@ void Toast::draw(int pressed) {
   }
   if (undo_) {
     const uint16_t b = pressed == 2 ? col::BTN_HI : col::BTN;
-    if (compact_) {
+    if (icons_) {
       s.fillRoundRect(kUndoCX, 6, kUndoCW, 24, 6, b);
       icons::drawCentred(s, icons::kUndo, kUndoCX + kUndoCW / 2, 18, accent_);
     } else {
       s.fillRoundRect(kUndoX, 6, kUndoW, 24, 6, b);
-      f.draw(s, Font::Bold, tr(S::toast_undo), kUndoX + kUndoW / 2, 18, kUndoW - 4, accent_, b, Fonts::Align::Centre);
+      f.draw(s, Font::Bold, tr(S::toast_undo), kUndoX + kUndoW / 2, 18, kUndoW - uitext::kToastLabelPad, accent_, b,
+             Fonts::Align::Centre);
     }
   }
   if (view_) {
     const uint16_t b = pressed == 3 ? col::BTN_HI : col::BTN;
-    if (compact_) {
+    if (icons_) {
       s.fillRoundRect(kViewCX, 6, kViewCW, 24, 6, b);
       icons::drawCentred(s, icons::kQueue, kViewCX + kViewCW / 2, 18, col::TXT);
     } else {
       s.fillRoundRect(kViewX, 6, kViewW, 24, 6, b);
-      f.draw(s, Font::Bold, tr(S::toast_view), kViewX + kViewW / 2, 18, kViewW - 4, col::TXT, b, Fonts::Align::Centre);
+      f.draw(s, Font::Bold, tr(S::toast_view), kViewX + kViewW / 2, 18, kViewW - uitext::kToastLabelPad, col::TXT, b,
+             Fonts::Align::Centre);
     }
   }
   gfx::push(s, 0, kY, kW, kH, true);
@@ -212,7 +221,7 @@ int Toast::hit(const InputEvent& e, bool slop) const {
   }
   if (idle_) return e.x >= uitext::kIdleToastKeepX - 6 || e.inRightEdgeZone(uitext::kIdleToastKeepX) ? kHitKeepOn : 1;
   // Undo reaches the screen's edge (and takes a clamped reading).
-  return uitext::toastButtonAt(e.x, e.atRightEdge(), compact_, undo_, view_);
+  return uitext::toastButtonAt(e.x, e.atRightEdge(), icons_, undo_, view_);
 }
 
 bool Toast::passesThrough(const InputEvent& e) const {
@@ -302,6 +311,7 @@ void Sheet::drawRow(int i) {
 // The ✕ pill: x 262-311 of the title row (its hit area 250 to the edge).
 namespace {
 constexpr int kSheetCrossX = 262, kSheetCrossW = 50, kSheetCrossHitX = 250;
+static_assert(16 + sheet::kTitleW == kSheetCrossHitX - 8, "the title ends 8 px before the cross's hit area");
 }  // namespace
 
 void Sheet::render() {
@@ -309,7 +319,7 @@ void Sheet::render() {
   Fonts& f = Fonts::instance();
   const int h = kH - y0_;
   sheetCard(s, h);
-  f.draw(s, Font::Small, title_, 16, 22, kSheetCrossHitX - 8 - 16, col::DIM, col::CARD);
+  f.draw(s, Font::Small, title_, 16, 22, sheet::kTitleW, col::DIM, col::CARD);
   const uint16_t pill = pressed_ == kCross ? col::BTN_HI : col::BTN;
   s.fillRoundRect(kSheetCrossX, 9, kSheetCrossW, 24, 12, pill);
   icons::drawCentred(s, icons::kCross, kSheetCrossX + kSheetCrossW / 2, 21, col::TXT);
@@ -458,7 +468,8 @@ void SleepSheet::render() {
       s.drawRoundRect(x, y, w, kSleepPillH, 10, accent_);
       s.drawRoundRect(x + 1, y + 1, w - 2, kSleepPillH - 2, 9, accent_);
     }
-    f.draw(s, font, label, x + w / 2, y + kSleepPillH / 2, w - kSleepPillPad, ink, bg, Fonts::Align::Centre);
+    f.draw(s, f.fitting(font, label, w - kSleepPillPad), label, x + w / 2, y + kSleepPillH / 2, w - kSleepPillPad, ink,
+           bg, Fonts::Align::Centre);
   };
   for (int i = 0; i < 5; ++i) {
     pill(i, kSleepMinX[i], kSleepMinW[i], kSleepRow0, Font::Body, i < 4 ? kSleepMinutes[i] : tr(S::sleep_minutes_90),
@@ -569,8 +580,10 @@ void VolumeSheet::render() {
   trf(v, sizeof(v), S::format_percent, volume_);
   const int vw = f.draw(s, Font::Title, v, kW - 12, 26, 90, col::TXT, col::CARD, Fonts::Align::Right);
   const int nameW = f.draw(s, Font::Bold, name_, 46, 26, kW - 12 - vw - 12 - 46, col::TXT, col::CARD);
+  // "volume" after the name, whole or not at all (a long name leaves no room).
   const int room = kW - 12 - vw - 12 - (46 + nameW + 6);
-  if (room > 40) f.draw(s, Font::Small, tr(S::volume_label), 46 + nameW + 6, 27, room, col::DIM, col::CARD);
+  const char* label = tr(S::volume_label);
+  if (room >= f.width(Font::Small, label)) f.draw(s, Font::Small, label, 46 + nameW + 6, 27, room, col::DIM, col::CARD);
   // − and +.
   const uint16_t minus = pressed_ == Minus ? col::BTN_HI : col::BTN;
   const uint16_t plus = pressed_ == Plus ? col::BTN_HI : col::BTN;
@@ -806,9 +819,11 @@ void Dialog::setStatus(const char* text, uint16_t colour) {
 }
 
 int Dialog::titleRoom(bool icon) {
-  // As render() lays it out: the icon (the headphones, 24 px) and a gap.
+  // As render() lays it out: the icon (the headphones, 22 px) and a gap, the
+  // title then to 12 px from the edge (uitext::kDialogIconTitleW); with no
+  // icon, 16 px in at each end (kDialogTitleW).
   const int tx = icon ? 14 + icons::kHeadphones.w + 8 : 16;
-  return kW - 16 - tx;
+  return kW - (icon ? 12 : 16) - tx;
 }
 
 int Dialog::buttonAt(int x, int y) const {
@@ -830,7 +845,7 @@ void Dialog::render() {
     if (slashed_) s.drawLine(14, 22 + icon_->h / 2, 14 + icon_->w, 22 - icon_->h / 2, col::RED);
     tx = 14 + icon_->w + 8;
   }
-  f.draw(s, Font::Bold, title_, tx, 22, kW - 16 - tx, col::TXT, col::CARD);
+  f.draw(s, Font::Bold, title_, tx, 22, kW - (icon_ ? 12 : 16) - tx, col::TXT, col::CARD);
   char lines[3][64];
   const int maxLines = status_[0] ? 2 : 3;
   const int nl =
@@ -845,8 +860,7 @@ void Dialog::render() {
     s.fillRoundRect(x, kH - 46, bw, 36, 8, b);
     // A label too wide for its button ("Play on speaker": 127 px of 123)
     // in Small, not cut.
-    Font font = primary ? Font::Bold : Font::Body;
-    if (f.width(font, buttons_[i]) > bw - 8) font = Font::Small;
+    const Font font = f.fitting(primary ? Font::Bold : Font::Body, buttons_[i], bw - 8);
     f.draw(s, font, buttons_[i], x + bw / 2, kH - 28, bw - 8,
            primary && i != pressed_ ? col::DARK : col::TXT, b, Fonts::Align::Centre);
   }

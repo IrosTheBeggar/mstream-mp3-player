@@ -11,10 +11,6 @@
   "coach.line": "Unterm Bildschirm: kurz drücken oder halten",
   "coach.click_prev": "Zurück",
   "coach.click_play": "Play/Pause",
-  "@coach.click_play": {
-    "overflow": true,
-    "note": "'Play/Pause' is 99 px in Bold, the box (uitext::kCoachBoxTextW) 98 px: 1 px over, and every separator (a space, a bar, a dot) gives the same width. 'Play/pause' (98 px) would fit only by lowercasing the noun; 'Abspielen' (87 px) drops the pause. Layout: 2 px more for the box, or a Small fallback (71 px)."
-  },
   "coach.click_next": "Weiter",
   "coach.hold_label": "halten:",
   "coach.hold_prev": "leiser",
@@ -25,27 +21,11 @@
   "coach.tips_where": "Diese Tipps findest du unter Ausgabe > Über.",
   "tabs.playing": "Aktuell",
   "tabs.library": "Bibliothek",
-  "@tabs.library": {
-    "overflow": true,
-    "note": "'Bibliothek' (the apps' word, and the tab's name in coach.tab_more, library.crumb and empty.open_library) is 66 px in Small, the tab label's room 52 px (Output's is 64). 'Musik' (38 px) would fit, but would name the tab otherwise than the texts that point to it. Layout: let the active tab's label spill over its neighbours, which show only icons (the label row under them is free), or draw no label where it doesn't fit (the icon says it)."
-  },
   "tabs.queue": "Warteschlange",
-  "@tabs.queue": {
-    "overflow": true,
-    "note": "'Warteschlange' (the apps' word) is 97 px in Small, the room 52 px; German has no natural short form ('Queue', 42 px, is an anglicism; 'Liste', 31 px, is vague). Layout: as tabs.library, let the active tab's label spill over its icon-only neighbours (97 px needs about 20 px each side), or draw no label where it doesn't fit."
-  },
   "tabs.dance": "Dance",
   "tabs.output": "Ausgabe",
   "toast.undo": "Rückgängig",
-  "@toast.undo": {
-    "overflow": true,
-    "note": "'Rückgängig' (the standard German for Undo) is 103 px in Bold, the button 50 px; 'Zurück' (62 px) would still overflow and reads as 'back'; 'Undo' (46 px) fits but is an anglicism the clear dialog's body would then have to quote. Layout: the toast already has a compact mode (Overlays.cpp: the Undo and View buttons as icons, the note on two lines at its ': ') for a note that doesn't fit beside the buttons; use it too when a button's label doesn't fit its button."
-  },
   "toast.view": "Zeigen",
-  "@toast.view": {
-    "overflow": true,
-    "note": "'Zeigen' is 61 px in Bold, the button 52 px ('Sehen' 56, 'Öffnen' 61; 'Liste', 44 px, fits but is vague). Layout: as toast.undo, the compact mode's icons when a label doesn't fit."
-  },
   "toast.undone": "Rückgängig gemacht",
   "toast.nothing_to_undo": "Nichts rückgängig zu machen",
   "toast.no_memory": "Dafür reicht der Speicher nicht",
@@ -172,10 +152,6 @@
   "volume.speaker": "Lautsprecher",
   "volume.headphones": "Kopfhörer",
   "volume.label": "Lautstärke",
-  "@volume.label": {
-    "overflow": true,
-    "note": "'Lautstärke' is 69 px in Small, the test's room 66 px (what 'Headphones' in Bold and '100%' leave; Overlays.cpp computes it from the name and the value: with 'Lautsprecher' it is 58 px at 100% and 73 px below, with 'Kopfhörer' 87 px or more, so the device cuts it only on the speaker at 100%). 'Volumen' (58 px) isn't what German audio UIs say; 'Pegel' (36 px) is the engineer's word. Layout: 3 px more for the test's figure, 11 for the speaker at 100%; or draw the label (dim, secondary) only when it fits."
-  },
   "volume.hint_headphones": "Auch die Tasten der Kopfhörer ändern sie",
   "volume.hint_speaker": "Auf jedem Bildschirm: A oder C halten",
   "jump.title": "Springe zu",
@@ -215,10 +191,6 @@
     "other": "{0} Titel, Album für Album"
   },
   "library.crumb": "Bibliothek",
-  "@library.crumb": {
-    "overflow": true,
-    "note": "'Bibliothek' is 90 px in Bold, the pill's budget 80 px (Ui::drawHeader sizes the pill by its label and the chevron, and the title gets the rest: the device draws it whole and the title loses 10 px). German has no shorter name for the Library ('Start', 47 px, is the web's breadcrumb root, but names nothing here). Layout: 10 px of the title's budget, or a Small fallback for the pill (66 px)."
-  },
   "library.tracks_n": {
     "one": "{0} Titel",
     "other": "{0} Titel"
@@ -319,10 +291,6 @@
   "queue.title": "Warteschlange",
   "queue.empty_sub": "leer",
   "queue.edit": "Wählen",
-  "@queue.edit": {
-    "overflow": true,
-    "note": "'Wählen' (select: the pill enters selection mode) is 67 px in Bold, the pill's budget 60 px; 'Ändern' is 64, the mobile app's 'Bearbeiten' 90; 'Wahl' (45 px) and 'Wähle' (56 px) aren't button labels; 'Edit' (35 px) would fit. QueuePage.cpp sizes the pill by its label and picks the summary that fits the rest, so the device draws it whole and the summary has 7 px less (the German summaries are short). Layout: 7 px of the summary's budget, or a Small fallback for the pill (49 px)."
-  },
   "queue.selected": {
     "one": "{0} ausgewählt",
     "other": "{0} ausgewählt"
@@ -702,15 +670,7 @@
   "calibration.check_lines": "Tipp irgendwohin. Der Ring sollte genau\nunter deinem Finger erscheinen.",
   "calibration.check_key": "ohne Kalibrierung",
   "calibration.saved": "Gespeichert",
-  "@calibration.saved": {
-    "overflow": true,
-    "note": "'Gespeichert' is 78 px in Small; the header's right slot (uitext::kCalProgressW, calibration.progress's '9 von 9' at 48 px) is 52 px, so the device would cut it. German has no shorter word for 'saved' ('Fertig', 37 px, is the Done button's word; 'Aktiv', 34 px, says something else). Layout: let the slot take what the title leaves (CalibrationScreen::drawHeader draws 'Tippen testen', 125 px in Bold, from x 10 and the slot right-aligned at 312: about 160 px are free between them)."
-  },
   "calibration.undone": "Rückgängig",
-  "@calibration.undone": {
-    "overflow": true,
-    "note": "'Rückgängig' is 76 px in Small, the slot 52 px: as calibration.saved. 'Zurück' (45 px) would fit but reads as 'back'; 'Vorher' (43 px) is unclear as a state."
-  },
   "check.first_hint": "Stimmt der Touch? Tipp nacheinander\nin die Mitte jedes Punktes.",
   "check.hint": "Tipp in die Mitte des Punktes",
   "check.missed": "Daneben: tipp auf den Punkt selbst",

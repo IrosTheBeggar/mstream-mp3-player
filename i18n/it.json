@@ -25,10 +25,6 @@
   "tabs.dance": "Dance",
   "tabs.output": "Uscita",
   "toast.undo": "Annulla",
-  "@toast.undo": {
-    "overflow": true,
-    "note": "Annulla is the Italian Undo (the mobile app's word, as Gmail and Android write it): 66 px in the 50 px pill. A pill of about 70 px fixes it; 'Undo' (46 px) would fit but isn't Italian."
-  },
   "toast.view": "Vedi",
   "toast.undone": "Annullato",
   "toast.nothing_to_undo": "Niente da annullare",
@@ -284,10 +280,6 @@
   "queue.remove_n": "Rimuovi {0}",
   "queue.remove": "Rimuovi",
   "queue.play_next_bar": "A seguire",
-  "@queue.play_next_bar": {
-    "overflow": true,
-    "note": "A seguire (Play next, the same word as the row actions and the toasts): 75 px in the 74 px bar button, 1 px over. One more pixel for the bar's middle button fixes it."
-  },
   "queue.clear_bar": "Svuota",
   "queue.action_play_now": "Ascolta",
   "queue.action_play_next": "A seguire",
@@ -649,10 +641,6 @@
   "dance.confidence": "certezza",
   "dance.dancer": "ballerino",
   "dance.crab": "Granchio",
-  "@dance.crab": {
-    "overflow": true,
-    "note": "Granchio is the only Italian word for the crab: 112 px in the 96 px Title panel. A Bold 16 fallback for the dancer's name, or a 116 px panel, fixes it."
-  },
   "dance.stick": "Omino",
   "dance.switch": "toccalo per\ncambiarlo",
   "dance.title_none": "Niente in riproduzione",

@@ -69,6 +69,15 @@ int Header::hit(const InputEvent& e) const {
   return 3;
 }
 
+Font Header::pillFont(const char* label, int maxW) {
+  return maxW > 0 ? Fonts::instance().fitting(Font::Bold, label, maxW) : Font::Bold;
+}
+
+int Header::pillW(const char* label, int maxW, bool chevron) {
+  return Fonts::instance().width(pillFont(label, maxW), label) + uitext::kHeaderPillPad +
+         (chevron ? uitext::kHeaderChevronW : 0);
+}
+
 Ui::Ui(UiHost& host, Input& input, PlaybackController& player, QueueModel& queue, Library& library, DanceMode& dance)
     : host_(host),
       input_(input),
@@ -870,10 +879,11 @@ void Ui::headphonesLost() {
   input_.alertBuzz();  // felt in a pocket too (spec §8: 80 ms)
   host_.wakeScreen("the headphones dropped");  // the dialog needs the listener
   if (!started_ || suspended_) return;
-  // "SPYDRONE disconnected" if it fits beside the icon; else the name goes
-  // into the body ("WH-1000XM4 disconnected" is 15 px too wide). With no
-  // name, "Headphones disconnected" (English's too wide: "Headphones:" in
-  // the body too).
+  // "SPYDRONE disconnected" if it fits beside the icon (236 px:
+  // uitext::kDialogIconTitleW); else the name goes into the body
+  // ("WH-1000XM4 disconnected" is 9 px too wide). With no name, "Headphones
+  // disconnected" (a language's too wide for it: "Headphones:" in the body
+  // too).
   const bool named = state_.btName[0] != 0;
   char title[96], body[192];
   if (named) {
@@ -1111,7 +1121,18 @@ tabbar::State Ui::tabState(uint32_t nowMs) const {
   s.sleep = state_.sleepFading    ? tabbar::Sleep::Fading
             : state_.sleepRunning ? tabbar::Sleep::Running
                                   : tabbar::Sleep::None;
+  s.label = tabLabelFit(s.active);
   return s;
+}
+
+tabbar::LabelFit Ui::tabLabelFit(int tab) const {
+  const int lang = static_cast<int>(uistr::lang());
+  if (tabFitsLang_ != lang) {
+    Fonts& f = Fonts::instance();
+    for (int t = 0; t < tabbar::kTabs; ++t) tabFits_[t] = tabbar::labelFit(t, f.width(Font::Small, tabbar::label(t)));
+    tabFitsLang_ = lang;
+  }
+  return tabFits_[tab];
 }
 
 // A row renders in ~5 ms unhurried: renderAhead() only this far before a frame.
@@ -1772,14 +1793,17 @@ void Ui::drawHeader(const Header& h) {
   }
   int right = kW - 10;
   if (h.right) {
-    const int iconW = h.rightBack ? 12 : 0;
-    const int w = f.width(Font::Bold, h.right) + 24 + iconW;
+    // As wide as its label: Bold, or Small past its budget (h.rightMaxW:
+    // the crumb's "Bibliothek"), so the title keeps its room.
+    const int iconW = h.rightBack ? uitext::kHeaderChevronW : 0;
+    const Font font = Header::pillFont(h.right, h.rightMaxW);
+    const int w = Header::pillW(h.right, h.rightMaxW, h.rightBack);
     const int px = kW - 6 - w;
     const uint16_t pill = h.rightDanger ? (h.pressed ? col::SOFT : col::RED) : h.pressed ? col::BTN_HI : col::BTN;
     s.fillRoundRect(px, 5, w, 26, 13, pill);
     if (h.rightBack) icons::drawCentred(s, icons::kChevronLeft, px + 14, 18, acc);
-    f.draw(s, Font::Bold, h.right, px + iconW + (w - iconW) / 2, 17, w - iconW, h.rightDanger ? col::DARK : col::TXT,
-           pill, Fonts::Align::Centre);
+    f.draw(s, font, h.right, px + iconW + (w - iconW) / 2, 17, w - iconW, h.rightDanger ? col::DARK : col::TXT, pill,
+           Fonts::Align::Centre);
     right = px - 8;
   }
   if (h.path) {

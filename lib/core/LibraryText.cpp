@@ -244,6 +244,16 @@ Sources sourcesOf(const LibraryIndex& index) {
   return s;
 }
 
+size_t holdTitle(const textfit::Font& small, int maxW, const char* name, uint32_t tracks, char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  if (!name) name = "";
+  // The rest alone (no name): what it leaves the name.
+  trnf(buf, size, S::library_hold_title, tracks, "", tracks);
+  char cut[96];
+  textfit::fit(small, name, strlen(name), cut, sizeof(cut), maxW - textfit::drawnWidth(small, buf));
+  return trnf(buf, size, S::library_hold_title, tracks, cut, tracks);
+}
+
 size_t libraryRowTitle(uint32_t tracks, char* buf, size_t size, int form) {
   if (!buf || size == 0) return 0;
   if (tracks == 0) return trf(buf, size, S::library_row_empty);

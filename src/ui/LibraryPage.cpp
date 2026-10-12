@@ -349,7 +349,10 @@ void LibraryPage::drawSegments() {
       bg = down ? col::ROW_SEL : col::BTN_HI;
       s.fillRoundRect(x, 6, w, 24, 8, bg);
     }
-    f.draw(s, Font::Bold, tr(kSegments[k]), x + w / 2, 18, w - 6, active ? col::TXT : col::DIM, bg,
+    // Bold, or Small when it doesn't fit (Japanese's アーティスト).
+    const char* label = tr(kSegments[k]);
+    const int room = w - uitext::kSegmentPad;
+    f.draw(s, f.fitting(Font::Bold, label, room), label, x + w / 2, 18, room, active ? col::TXT : col::DIM, bg,
            Fonts::Align::Centre);
   }
   s.fillRect(0, kHeaderH - 2, kW, 2, accent::Library);
@@ -418,6 +421,7 @@ Header LibraryPage::header() const {
   }
   if (crumb()) {
     h.right = tr(S::library_crumb);
+    h.rightMaxW = uitext::kCrumbTextW;  // Small past it ("Bibliothek"): the title keeps its room
     h.rightBack = true;
     h.pressed = headerPressed_ == 2;
   }
@@ -902,7 +906,8 @@ void LibraryPage::onHold(uint32_t row) {
   LibraryIndex::Span span;
   const char* name = "";
   if (container(held_, &span, &name)) {
-    trnf(title, sizeof(title), S::library_hold_title, span.count, name, span.count);
+    // The name cut to what the count leaves (Sheet draws the title in Small).
+    librarytext::holdTitle(Fonts::instance().fit(Font::Small), sheet::kTitleW, name, span.count, title, sizeof(title));
   } else {
     titleOf(held_.id, title, sizeof(title));
   }

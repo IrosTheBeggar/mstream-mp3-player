@@ -66,6 +66,11 @@ std::string lineOf(S id, int k) {
   uistr::line(uistr::tr(id), k, b, sizeof(b));
   return b;
 }
+// The ten languages, English first: a test that measures each sets it
+// (tearDown() puts English back); one with no catalogue draws English.
+constexpr uistr::Lang kAllLangs[] = {uistr::Lang::En, uistr::Lang::De, uistr::Lang::Es, uistr::Lang::Fr,
+                                     uistr::Lang::It, uistr::Lang::Ja, uistr::Lang::Pl, uistr::Lang::Pt,
+                                     uistr::Lang::Ru, uistr::Lang::Zh};
 }  // namespace
 
 void setUp() { uistr::setLang(uistr::Lang::En); }  // (a test that changes it may fail half-way)
@@ -359,9 +364,71 @@ void test_list_steps_in_whole_rows_never_exceed_the_cap() {
 
 void test_tabbar_texts_fit_in_every_state() {
   const Vlw small(kVlwSans13);
-  // The active tab's label on its plate, every tab.
+  // The active tab's label on its plate, every tab (English).
   for (int t = 0; t < tabbar::kTabs; ++t) {
     TEST_ASSERT_TRUE_MESSAGE(small.width(tabbar::label(t)) <= tabbar::labelWidth(t), tabbar::label(t));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::Plate, tabbar::labelFit(t, small.width(tabbar::label(t))));
+  }
+  // Wider than its plate, the Library's and the Queue's label spills over
+  // the plate's edges, centred under the icon, up to kLabelSpillW: clear of
+  // what the neighbours draw in the label row (screen x; the icons as
+  // ui/TabBar draws them, centred, the Queue's 3 px left), and below the
+  // Queue's badge (y 1-14) and the sleep timer's moon (y 4-10).
+  {
+    using namespace tabbar;
+    const int lib = cellX0(1) + kTabW / 2, queue = cellX0(2) + kTabW / 2;  // 81, 135
+    const int hairlineRight = cellX0(0) + kTabW / 2 - kProgressW / 2 + kProgressW - 1;  // 42
+    const int libIconRight = lib - kLibraryIconW / 2 + kLibraryIconW - 1;            // 93
+    const int queueIconLeft = queue - kQueueIconShift - kQueueIconW / 2;              // 120
+    const int crabLeft = cellX0(3) + kTabW / 2 - kCrabIconW / 2;                      // 178
+    TEST_ASSERT_TRUE(lib - kLabelSpillW / 2 >= hairlineRight + 2);
+    TEST_ASSERT_TRUE(lib - kLabelSpillW / 2 + kLabelSpillW - 1 <= queueIconLeft - 2);
+    TEST_ASSERT_TRUE(queue - kLabelSpillW / 2 >= libIconRight + 2);
+    TEST_ASSERT_TRUE(queue - kLabelSpillW / 2 + kLabelSpillW - 1 <= crabLeft - 2);
+    TEST_ASSERT_TRUE(27 - small.yAdvance / 2 > 14);  // the label row's top (centred on y 27)
+    TEST_ASSERT_TRUE(27 - small.yAdvance / 2 + small.yAdvance - 1 <= kHeight - 1);  // its last row the bar's rule's (drawn after)
+    TEST_ASSERT_TRUE(spills(1) && spills(2) && !spills(0) && !spills(3) && !spills(4));
+    TEST_ASSERT_EQUAL_INT(kLabelSpillW, labelMax(1));
+    TEST_ASSERT_EQUAL_INT(kLabelW, labelMax(0));
+    TEST_ASSERT_EQUAL_INT(kOutputPlateW, labelMax(4));
+    TEST_ASSERT_EQUAL(LabelFit::Plate, labelFit(1, kLabelW));
+    TEST_ASSERT_EQUAL(LabelFit::Spill, labelFit(1, kLabelW + 1));
+    TEST_ASSERT_EQUAL(LabelFit::Spill, labelFit(2, kLabelSpillW));
+    TEST_ASSERT_EQUAL(LabelFit::None, labelFit(2, kLabelSpillW + 1));
+    TEST_ASSERT_EQUAL(LabelFit::None, labelFit(0, kLabelW + 1));  // Playing, Dance: their plate only
+    TEST_ASSERT_EQUAL(LabelFit::Plate, labelFit(4, kOutputPlateW));
+  }
+  // Each language's labels: where each goes. Those that spill (German's
+  // "Bibliothek"), those shown as the icon alone (Japanese's and Russian's
+  // Library, German's Queue).
+  {
+    using L = uistr::Lang;
+    std::string report;
+    for (L l : kAllLangs) {
+      if (!uistr::hasCatalogue(l)) continue;
+      uistr::setLang(l);
+      for (int t = 0; t < tabbar::kTabs; ++t) {
+        const tabbar::LabelFit fit = tabbar::labelFit(t, small.width(tabbar::label(t)));
+        TEST_ASSERT_TRUE(tabbar::spills(t) || fit != tabbar::LabelFit::Spill);
+        if (fit == tabbar::LabelFit::Plate) continue;
+        char m[96];
+        snprintf(m, sizeof(m), "%s %s %d px: %s; ", uistr::tag(l), tabbar::label(t), small.width(tabbar::label(t)),
+                 fit == tabbar::LabelFit::Spill ? "spills" : "icon alone");
+        report += m;
+      }
+    }
+    TEST_MESSAGE(report.c_str());
+    auto fitIn = [&](L l, int t) {
+      uistr::setLang(l);
+      return tabbar::labelFit(t, small.width(tabbar::label(t)));
+    };
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::Spill, fitIn(L::De, 1));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::None, fitIn(L::De, 2));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::None, fitIn(L::Ru, 1));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::Spill, fitIn(L::Ru, 2));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::None, fitIn(L::Ja, 1));
+    TEST_ASSERT_EQUAL(tabbar::LabelFit::Plate, fitIn(L::Zh, 1));
+    uistr::setLang(L::En);
   }
   // The volume beside the output icon and the battery under its icon, at
   // every level (0-100 %).
@@ -399,6 +466,13 @@ void fits(const Vlw& font, const char* text, int room) {
   snprintf(msg, sizeof(msg), "\"%s\": a glyph the font doesn't have", text);
   TEST_ASSERT_TRUE_MESSAGE(font.hasAll(text), msg);
 }
+
+// It fits in `font`, or else in `smaller` (the label's fallback: a
+// button's, a pill's, as ui/Fonts::fitting() picks).
+void fitsIn(const Vlw& font, const Vlw& smaller, const char* text, int room) {
+  fits(font.width(text) <= room ? font : smaller, text, room);
+}
+
 }  // namespace
 
 // ---- names as the screen draws them (docs/I18N.md, phase 0) ----
@@ -1084,13 +1158,26 @@ void test_queue_texts_fit() {
       fits(bold, t, kRemoveW - 8);
     }
   }
-  fits(body, tr(S::queue_play_next_bar), kQueueNextW - 6);
-  fits(body, tr(S::queue_clear_bar), kQueueClearW - 8);
+  fits(body, tr(S::queue_play_next_bar), kQueueNextW - kQueueNextPad);
+  fits(body, tr(S::queue_clear_bar), kQueueClearW - kQueueClearPad);
   TEST_ASSERT_TRUE(kRemoveX + kRemoveW < kQueueNextX && kQueueNextX + kQueueNextW < kQueueClearX &&
                    kQueueClearX + kQueueClearW <= 320);
+  // Every language: Play next and Clear in Body, else Small.
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    fitsIn(body, small, tr(S::queue_play_next_bar), kQueueNextW - kQueueNextPad);
+    fitsIn(body, small, tr(S::queue_clear_bar), kQueueClearW - kQueueClearPad);
+  }
+  uistr::setLang(uistr::Lang::En);
   // The header: "4 of 16 · 49 min" beside "Queue" and the Edit pill (the
-  // room QueuePage::header() computes), up to 999 entries and 16 hours.
-  const int room = (320 - 6 - (bold.width(tr(S::queue_edit)) + 24) - 8) - (12 + bold.width(tr(S::queue_title)) + 8);
+  // room QueuePage::header() computes: the pill's label in Bold within
+  // kQueuePillTextW, else Small, Header::pillW()), up to 999 entries and 16
+  // hours.
+  const char* edit = tr(S::queue_edit);
+  const int pillW = (bold.width(edit) <= kQueuePillTextW ? bold : small).width(edit) + kHeaderPillPad;
+  TEST_ASSERT_EQUAL_INT(bold.width(edit) + 24, pillW);  // English: Bold, as before
+  const int room = (320 - 6 - pillW - 8) - (12 + bold.width(tr(S::queue_title)) + 8);
   queueview::Time time;
   time.knownS = 999 * 60;
   time.unknown = 1;
@@ -1112,6 +1199,11 @@ void test_output_texts_fit() {
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
   const P phases[] = {P::Off, P::Paging, P::Scanning, P::Linked, P::PairScan, P::Pairing, P::Backoff, P::Resting};
   int cards = 0;
+  struct Box {
+    BtButton b;
+    int w;
+  };
+  std::vector<Box> boxes;  // every button in every box it is drawn in (for the other languages)
   for (int sess = 0; sess < 5; ++sess) {
     for (P phase : phases) {
       for (int remembered = 0; remembered < 2; ++remembered) {
@@ -1149,6 +1241,7 @@ void test_output_texts_fit() {
             } else {
               fits(b == BtButton::Pair ? bold : body, btButtonLabel(b, w < kBtWideButtonW), room);
               if (b == BtButton::Forget) fits(bold, tr(S::bt_tap_again), room);
+              boxes.push_back({b, w});
             }
           }
           char line[80];
@@ -1166,6 +1259,18 @@ void test_output_texts_fit() {
   }
   TEST_ASSERT_TRUE(cards > 100);
   TEST_ASSERT_TRUE(kBtButtons3X[2] + kBtButtons3W[2] <= 320 - 16);
+  // Every language: each label in its font (Bold for Pair and the armed
+  // Forget), else Small (OutputPage::drawBtButtons()).
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    for (const Box& x : boxes) {
+      const int room = x.w - kBtButtonPad;
+      fitsIn(x.b == BtButton::Pair ? bold : body, small, btButtonLabel(x.b, x.w < kBtWideButtonW), room);
+      if (x.b == BtButton::Forget) fitsIn(bold, small, tr(S::bt_tap_again), room);
+    }
+  }
+  uistr::setLang(uistr::Lang::En);
   // The speaker card: "Here until SPYDRONE connects" doesn't fit beside the
   // chip; its shorter form does (OutputPage::drawSpeaker picks).
   TEST_ASSERT_TRUE(small.width("Here until SPYDRONE connects") > kSpeakerLineW);
@@ -1178,8 +1283,9 @@ void test_output_texts_fit() {
   // The resting card's hint starts past its button and ends before the edge.
   TEST_ASSERT_TRUE(kBtHintX >= kBtButtons1X + kBtButtons1W + 8);
   TEST_ASSERT_TRUE(kBtHintX + kBtHintW <= 320 - 8);
-  // The lost dialog's line while resting (Small over the dialog's 288 px).
-  fits(small, tr(S::dialog_lost_resting), 320 - 32);
+  // The lost dialog's line while resting (Small over the dialog's text
+  // width: its body's, kDialogTitleW).
+  fits(small, tr(S::dialog_lost_resting), kDialogTitleW);
   // The resting card's hint when they dropped while the output.
   fits(small, lineOf(S::bt_lost_hint, 0).c_str(), kBtHintW);
   fits(small, lineOf(S::bt_lost_hint, 1).c_str(), kBtHintW);
@@ -1211,11 +1317,24 @@ void test_output_texts_fit() {
   fits(bold, tr(S::pair_search_again), 320 - 60);
   fits(small, tr(S::pair_search_stopped), kPairHintW);
   fits(small, tr(S::output_line_out_sub), kSettingSubW);
-  // The screen settings: every choice in its pill, the lines beside it.
+  // The screen settings: every choice in its pill, the lines beside it;
+  // in every language in Body, else Small.
   for (int c = 0; c < ScreenPower::kTimeouts; ++c) fits(body, ScreenPower::timeoutLabel(c), kSettingPillW - kSettingPillPad);
   for (int c = 0; c < ScreenPower::kBrightnesses; ++c) {
     fits(body, ScreenPower::brightnessLabel(c), kSettingPillW - kSettingPillPad);
   }
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    for (int c = 0; c < ScreenPower::kTimeouts; ++c) {
+      fitsIn(body, small, ScreenPower::timeoutLabel(c), kSettingPillW - kSettingPillPad);
+    }
+    for (int c = 0; c < ScreenPower::kBrightnesses; ++c) {
+      fitsIn(body, small, ScreenPower::brightnessLabel(c), kSettingPillW - kSettingPillPad);
+    }
+    fitsIn(body, small, tr(S::library_row_rescan), kRescanPillW - kSettingPillPad);
+  }
+  uistr::setLang(uistr::Lang::En);
   fits(body, tr(S::settings_screen_off), kSettingValueSubW);
   fits(body, tr(S::settings_brightness), kSettingValueSubW);
   fits(small, tr(S::settings_screen_off_sub), kSettingValueSubW);
@@ -1234,6 +1353,32 @@ void test_output_texts_fit() {
     uistr::trf(v, sizeof(v), S::about_library_value, tracks, artists, albums);
   }
   fits(small, v, kAboutValueW);
+  // Bigger still, the three counts don't fit in Small: the tracks and the
+  // albums (about.library_value_short, OutputPage::drawAbout()), in every
+  // language.
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    char tracks[40], artists[40], albums[40];
+    uistr::trnf(tracks, sizeof(tracks), S::library_tracks_n, 99999, uistr::grouped(99999));
+    uistr::trnf(artists, sizeof(artists), S::library_artists_n, 9999, 9999);
+    uistr::trnf(albums, sizeof(albums), S::library_albums_n, 1500, 1500);
+    uistr::trf(v, sizeof(v), S::about_library_value, tracks, artists, albums);
+    if (l == uistr::Lang::En) TEST_ASSERT_TRUE(small.width(v) > kAboutValueW);  // why it exists
+    uistr::trf(v, sizeof(v), S::about_library_value_short, tracks, albums);
+    fitsIn(body, small, v, kAboutValueW);
+    if (l == uistr::Lang::En) TEST_ASSERT_EQUAL_STRING("99,999 tracks, 1500 albums", v);
+  }
+  uistr::setLang(uistr::Lang::En);
+  // The volume sheet: "volume" whole beside the speaker's and the
+  // headphones' names at 100 % (VolumeSheet::render(): whole or not at all).
+  {
+    const Vlw title(kVlwSansBold22);
+    for (S name : {S::volume_speaker, S::volume_headphones}) {
+      const int room = 320 - 12 - title.width("100%") - 12 - (46 + bold.width(tr(name)) + 6);
+      fits(small, tr(S::volume_label), room);
+    }
+  }
   // The licence rows, each line in the font it's drawn in (the values fit
   // in Body), and the source row's two lines put back together are the URL.
   fits(small, tr(S::about_licence_label), kAboutValueW);
@@ -1325,6 +1470,21 @@ void test_waiting_texts_fit() {
   fits(small, "24 of 86 \xC2\xB7 SPYDRONE", kNowPlayingMidW);
   // ... clear of the times either side (x 12 and 308), long ones too.
   TEST_ASSERT_TRUE(12 + small.width("88:88") + 4 <= 160 - kNowPlayingMidW / 2);
+  // The amber warning drawn alone has kNowPlayingWarnW: a 10-character
+  // name whole, and still clear of a 16-hour mix's "999:59".
+  char warn[96];
+  uistr::trf(warn, sizeof(warn), S::now_playing_not_connected, "WH-1000XM4");
+  TEST_ASSERT_TRUE(small.width(warn) > kNowPlayingMidW);
+  fits(small, warn, kNowPlayingWarnW);
+  fits(small, tr(S::now_playing_headphones_not_connected), kNowPlayingWarnW);
+  TEST_ASSERT_TRUE(12 + small.width("999:59") + 4 <= 160 - kNowPlayingWarnW / 2);
+  // The lost dialog's title beside its icon (x 14, the headphones' 22 px,
+  // 8 px) to 12 px from the dialog's right edge (292 wide): the title with
+  // no name whole; "SPYDRONE disconnected" too.
+  TEST_ASSERT_EQUAL_INT(292, 14 + 22 + 8 + kDialogIconTitleW + 12);
+  fits(bold, tr(S::dialog_lost_title_generic), kDialogIconTitleW);
+  uistr::trf(warn, sizeof(warn), S::dialog_lost_title, "SPYDRONE");
+  fits(bold, warn, kDialogIconTitleW);
 }
 
 // Now Playing's two menus (docs/QUEUE-MODES.md section 4.6): the rows'
@@ -1635,9 +1795,13 @@ void test_touch_calibration_texts_fit() {
   fits(bold, tr(S::calibration_check_title), kCalTitleW);
   fits(bold, tr(S::settings_cal_test_taps), kCalTitleW);
   fits(small, "9 of 9", kCalProgressW);
-  fits(small, tr(S::calibration_saved), kCalProgressW);
-  fits(small, tr(S::calibration_undone), kCalProgressW);
   TEST_ASSERT_TRUE(kCalTitleX + kCalTitleW + 6 + kCalProgressW <= 312);
+  // The test taps page (no pill): its title from x 10, its status after a
+  // Save or an Undo in what that leaves (CalibrationScreen::drawHeader()).
+  fits(small, tr(S::calibration_saved), kCalStatusW);
+  fits(small, tr(S::calibration_undone), kCalStatusW);
+  TEST_ASSERT_TRUE(10 + kCalTitleW + 6 + kCalStatusW <= 312);
+  TEST_ASSERT_TRUE(kCalStatusW > kCalProgressW);
   // The Cancel pill's hit area covers it.
   TEST_ASSERT_TRUE(kCalPillX + bold.width(tr(S::calibration_cancel)) + kCalPillPad <= touchcheck::kCancelW);
   TEST_ASSERT_EQUAL_INT(kCalHeaderH, touchcheck::kCancelH);
@@ -1763,8 +1927,27 @@ void test_right_half_neighbours_survive_the_lab_panel() {
     TEST_ASSERT_TRUE(r.edge || r.x >= kSpeakerChipHitEnd);
   }
   // The compact toast still has the room its long names need (Small).
-  const Vlw small(kVlwSans13);
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
   fits(small, "Harder, Better, Faster, Stronger", kToastCompactTextRight - kToastTextX);
+  // The buttons are icons (the geometry and hit test above) when a label
+  // doesn't fit its pill (toastIcons()): either one, both or neither.
+  TEST_ASSERT_FALSE(toastIcons(true, bold.width(tr(S::toast_undo)), true, bold.width(tr(S::toast_view))));
+  TEST_ASSERT_FALSE(toastIcons(true, kToastUndoW - kToastLabelPad, true, kToastViewW - kToastLabelPad));
+  TEST_ASSERT_TRUE(toastIcons(true, kToastUndoW - kToastLabelPad + 1, false, 0));  // Polish's "Cofnij", 51 px
+  TEST_ASSERT_TRUE(toastIcons(true, 46, true, kToastViewW - kToastLabelPad + 1));  // View alone too wide
+  TEST_ASSERT_FALSE(toastIcons(true, 46, false, 999));                              // no View: its label is no matter
+  TEST_ASSERT_FALSE(toastIcons(false, 999, false, 999));                            // no buttons
+  // Every language: words only where both fit their pills.
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    const int undoW = bold.width(tr(S::toast_undo)), viewW = bold.width(tr(S::toast_view));
+    if (!toastIcons(true, undoW, true, viewW)) {
+      fits(bold, tr(S::toast_undo), kToastUndoW - kToastLabelPad);
+      fits(bold, tr(S::toast_view), kToastViewW - kToastLabelPad);
+    }
+  }
+  uistr::setLang(uistr::Lang::En);
 }
 
 // ---- the Library's names from the tags (docs/METADATA.md 5.4, 3.6; N9) ----
@@ -2452,8 +2635,50 @@ void test_library_texts_fit() {
   fits(body, tr(S::library_updates_at_boot), kToastTextRight - kToastTextX);
   TEST_ASSERT_TRUE(small.hasAll(tr(S::library_status_checking)) && small.hasAll(tr(S::library_status_updating)));
   // The update step's fence (N12): the lists' line, and the note for what waits.
-  fits(body, tr(S::library_updating_list), 320 - 24);
+  fits(body, tr(S::library_updating_list), kListLineW);
   TEST_ASSERT_TRUE(body.hasAll(tr(S::library_updating_list)));
+  // A list's other lone lines (centred, nothing beside them).
+  for (S id : {S::library_empty_no_music, S::library_empty_no_audio, S::library_empty_nothing, S::queue_empty_text}) {
+    fits(body, tr(id), kListLineW);
+  }
+  TEST_ASSERT_TRUE(320 - kListLineW >= 2 * 10);
+  // The action bars (ListView::renderBar()): the Folders root's two buttons
+  // beside the A-Z rail (a 284 px list), "Play all 19410" Bold; a row's
+  // three, in the Library's 284 px and the Queue's 312 (a scroll bar), each
+  // in its font, else Small, in every language.
+  {
+    const int rootW = (284 - 16 - 6) / 2 - kListBarPad;
+    const int rowW = (284 - 16 - 12) / 3 - kListBarPad;
+    const int queueW = (312 - 16 - 12) / 3 - kListBarPad;
+    TEST_ASSERT_EQUAL_INT(127, rootW);
+    char all[48];
+    uistr::trnf(all, sizeof(all), S::library_play_all, 19410, 19410);
+    TEST_ASSERT_EQUAL_STRING("Play all 19410", all);
+    fits(bold, all, rootW);
+    for (uistr::Lang l : kAllLangs) {
+      if (!uistr::hasCatalogue(l)) continue;
+      uistr::setLang(l);
+      for (uint32_t n : {1u, 2u, 5u, 1234u, 19410u, 99999u}) {
+        uistr::trnf(all, sizeof(all), S::library_play_all, n, n);
+        fitsIn(bold, small, all, rootW);
+      }
+      fitsIn(body, small, tr(S::library_action_queue), rootW);
+      fitsIn(bold, small, tr(S::library_action_play), rowW);
+      fitsIn(body, small, tr(S::library_action_play_next), rowW);
+      fitsIn(body, small, tr(S::library_action_queue), rowW);
+      fitsIn(bold, small, tr(S::queue_action_play_now), queueW);
+      fitsIn(body, small, tr(S::queue_action_play_next), queueW);
+      fitsIn(body, small, tr(S::queue_action_remove), queueW);
+      // The Library root's segments (Bold, else Small: Japanese's アーティスト).
+      for (S seg : {S::library_segment_artists, S::library_segment_albums, S::library_segment_folders}) {
+        fitsIn(bold, small, tr(seg), 100 - kSegmentPad);
+      }
+    }
+    uistr::setLang(uistr::Lang::En);
+    for (S seg : {S::library_segment_artists, S::library_segment_albums, S::library_segment_folders}) {
+      fits(bold, tr(seg), 100 - kSegmentPad);  // English in Bold
+    }
+  }
   fits(body, tr(S::library_updating_wait), kToastTextRight - kToastTextX);
   // A card swapped while on: the toasts before the restart.
   fits(body, tr(S::card_another), kToastTextRight - kToastTextX);
@@ -2658,9 +2883,19 @@ void test_console_sources() {
 // visualizer): the title in Bold, the hint in Small, each in kW - 16.
 void test_dance_texts_fit() {
   using namespace uitext;
-  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16), title(kVlwSansBold22);
   fits(bold, tr(S::dance_viz_title), kDanceBottomW);
   fits(small, tr(S::dance_viz_hint), kDanceBottomW);
+  // The dancer's name: Title (English), else Bold (every language).
+  fits(title, tr(S::dance_crab), kDanceNameW);
+  fits(title, tr(S::dance_stick), kDanceNameW);
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    fitsIn(title, bold, tr(S::dance_crab), kDanceNameW);
+    fitsIn(title, bold, tr(S::dance_stick), kDanceNameW);
+  }
+  uistr::setLang(uistr::Lang::En);
   char msg[96];
   snprintf(msg, sizeof(msg), "\"%s\" %d px, \"%s\" %d px, in %d", tr(S::dance_viz_title),
            bold.width(tr(S::dance_viz_title)), tr(S::dance_viz_hint),
@@ -2707,6 +2942,81 @@ void test_boot_texts_fit() {
   fits(body, "v0.8.0-dev+abcdef1-dirty", kTextW);
   fits(small, "v10.10.10-rc.10-9999-gabcdef12-dirty", kTextW);
   fits(small, tr(S::boot_touch_hint), kTextW);
+}
+
+// The header's pill (Ui::drawHeader(), Header::pillW()): as wide as its
+// label (Bold within its budget, else Small), the crumb's with its chevron.
+// In every language the label fits its budget in one of the two, and the
+// pill leaves the title its room: the crumb starts at x 196 or right of it
+// (the title from x 28 keeps 160 px); the Queue's Edit, All and None at
+// 240 or right of it, inside the pill's hit area (Header::hit(): x 240 to
+// the edge).
+void test_header_pills_fit() {
+  using namespace uitext;
+  const Vlw small(kVlwSans13), bold(kVlwSansBold16);
+  auto pill = [&](const char* label, int maxW, bool chevron) {
+    const Vlw& font = bold.width(label) <= maxW ? bold : small;
+    fits(font, label, maxW);
+    return 320 - 6 - (font.width(label) + kHeaderPillPad + (chevron ? kHeaderChevronW : 0));
+  };
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    const int crumbX = pill(tr(S::library_crumb), kCrumbTextW, true);
+    TEST_ASSERT_TRUE_MESSAGE(crumbX >= 196, tr(S::library_crumb));
+    TEST_ASSERT_TRUE(28 + 160 + 8 <= crumbX);
+    int leftmost = 320;
+    for (S id : {S::queue_edit, S::queue_all, S::queue_none}) {
+      const int x = pill(tr(id), kQueuePillTextW, false);
+      leftmost = std::min(leftmost, x);
+    }
+    char m[64];
+    snprintf(m, sizeof(m), "%s: crumb from x %d, the Queue's pills from %d; ", uistr::tag(l), crumbX, leftmost);
+    report += m;
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+  // English: Bold, as before ("‹ Library" from x 215).
+  TEST_ASSERT_TRUE(bold.width(tr(S::library_crumb)) <= kCrumbTextW);
+  for (S id : {S::queue_edit, S::queue_all, S::queue_none}) TEST_ASSERT_TRUE(bold.width(tr(id)) <= kQueuePillTextW);
+}
+
+// The hold sheet's title (librarytext::holdTitle()): a long name is cut to
+// what the count leaves, never the count, in every language; a short one
+// is whole, as the message formats it.
+void test_hold_title_keeps_its_count() {
+  const Vlw small(kVlwSans13);
+  const textfit::Font f = viewOf(small);
+  const std::string longName = "The Very Long Name Of A Compilation Album Of Songs Remastered";  // 61 characters
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    for (uint32_t n : {1u, 14u, 1234u}) {
+      char t[128], rest[96], plain[128], digits[16];
+      librarytext::holdTitle(f, sheet::kTitleW, longName.c_str(), n, t, sizeof(t));
+      fits(small, t, sheet::kTitleW);
+      // The rest (the name empty) whole in it, and the count's digits.
+      uistr::trnf(rest, sizeof(rest), S::library_hold_title, n, "", n);
+      snprintf(digits, sizeof(digits), "%u", static_cast<unsigned>(n));
+      TEST_ASSERT_NOT_NULL_MESSAGE(strstr(t, digits), t);
+      TEST_ASSERT_TRUE_MESSAGE(strstr(t, "\xE2\x80\xA6") != nullptr, t);  // the name cut
+      TEST_ASSERT_TRUE_MESSAGE(small.width(rest) + 30 <= sheet::kTitleW, rest);  // a name keeps room
+      // A short name: whole, the message as it is.
+      librarytext::holdTitle(f, sheet::kTitleW, "Discovery", n, t, sizeof(t));
+      uistr::trnf(plain, sizeof(plain), S::library_hold_title, n, "Discovery", n);
+      TEST_ASSERT_EQUAL_STRING(plain, t);
+    }
+  }
+  uistr::setLang(uistr::Lang::En);
+  char t[128];
+  librarytext::holdTitle(f, sheet::kTitleW, "Harder, Better, Faster, Stronger, and Longer Still", 14, t, sizeof(t));
+  const size_t len = strlen(t);
+  TEST_ASSERT_TRUE(len > 11 && strcmp(t + len - 11, ", 14 tracks") == 0);
+  fits(small, t, sheet::kTitleW);
+  librarytext::holdTitle(f, sheet::kTitleW, "Discovery", 14, t, sizeof(t));
+  TEST_ASSERT_EQUAL_STRING("Discovery, 14 tracks", t);
+  TEST_ASSERT_EQUAL_INT(226, sheet::kTitleW);
 }
 
 // Device info (Output > About > Device info): About's row to it, the
@@ -2954,6 +3264,8 @@ int main(int, char**) {
   RUN_TEST(test_dance_texts_fit);
   RUN_TEST(test_boot_texts_fit);
   RUN_TEST(test_device_info_texts_fit);
+  RUN_TEST(test_header_pills_fit);
+  RUN_TEST(test_hold_title_keeps_its_count);
   RUN_TEST(test_right_half_neighbours_survive_the_lab_panel);
   RUN_TEST(test_library_rows_from_tags);
   RUN_TEST(test_library_rows_from_paths);

@@ -60,8 +60,10 @@ After each text, `@<id>` holds what a translator needs:
   `layout` is `wrap` for a text the code wraps over its lines itself (a
   dialog's body), and `toast` for a note (one line in Body; else split
   at the first `": "`, the part before it in Small over the rest, each
-  `two_line_px` wide). `optional`: the code draws it only when it fits,
-  another text otherwise. A list of rooms: the text is drawn in each.
+  `two_line_px` wide). `optional`: the code draws it only when it fits;
+  otherwise another text, or nothing (a tab's label: the tab shows its
+  icon alone; the toast's Undo and View: their icons). A list of rooms:
+  the text is drawn in each.
   `null`: a piece another text holds (its room is that one's).
 - `placeholders`: `{0}` to `{3}`, what fills each and its worst case
   (`type`: a count written `grouped` or as plain `digits`, a `decimal`,
@@ -77,7 +79,8 @@ After each text, `@<id>` holds what a translator needs:
   (CPU, PSRAM, BPM, MHz, the reset reasons), `dev` for what only a
   developer sees (may stay English).
 - `overflow`: too wide already in English (a layout fix is to come);
-  the tests let these be, in every language.
+  the tests let these be, in every language. None is now: the layout
+  fixes of phase 3 made room for every language's texts.
 
 ## The rules
 

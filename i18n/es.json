@@ -24,10 +24,6 @@
     "note": "'Reproduciendo' (the mobile app's Now Playing) is 96 px in the tab label's 52 (Small), 'Sonando' 56: 'Ahora' (now) names the tab under its icon."
   },
   "tabs.library": "Biblioteca",
-  "@tabs.library": {
-    "overflow": true,
-    "note": "65 px in the tab label's 52 (Small): the room fits 'Library' only; 'Biblioteca' is the Library's name in both apps, and 'Música' would not match the page's title. Layout fix: only the active tab shows its label, so the label could be allowed the neighbours' width, or drawn smaller."
-  },
   "tabs.queue": "Cola",
   "tabs.dance": "Baile",
   "@tabs.dance": {
@@ -35,10 +31,6 @@
   },
   "tabs.output": "Salida",
   "toast.undo": "Deshacer",
-  "@toast.undo": {
-    "overflow": true,
-    "note": "84 px in the Undo button's 50 (Bold): Spanish has no short word for undo ('Anular' is 58 and less clear). Layout fix: size the toast's button to its label (de 'Rückgängig' needs more still)."
-  },
   "toast.view": "Ver",
   "toast.undone": "Deshecho",
   "toast.nothing_to_undo": "Nada que deshacer",
@@ -471,10 +463,6 @@
     "one": "Biblioteca: {0} pista",
     "other": "Biblioteca: {0} pistas"
   },
-  "@library_row.title": {
-    "overflow": true,
-    "note": "194 px in the row's 184 (Body) at 99.999; the code then draws library.tracks_n alone, as en.json says, so nothing is cut on the device. Layout fix: make this room optional in the catalogue (the fallback exists)."
-  },
   "library_row.empty": "Biblioteca: sin pistas",
   "library_row.src_transfer": {
     "one": "{0} de la transferencia",
@@ -534,19 +522,11 @@
   "bt.status_lost_looking_headphones": "Sin señal: buscando auriculares...",
   "bt.pair_new_headphones": "Emparejar auriculares nuevos",
   "bt.pair_new": "Emparejar",
-  "@bt.pair_new": {
-    "overflow": true,
-    "note": "93 px in the narrow box's 92 (Bold), 1 px; 'Vincular' (72) would fit but the apps say 'emparejar'. Layout fix: 1 px of the pill's padding."
-  },
   "bt.connect": "Conectar",
   "bt.forget": "Olvidar",
   "bt.tap_again": "Confirmar",
   "bt.cancel": "Cancelar",
   "bt.disconnect": "Desconectar",
-  "@bt.disconnect": {
-    "overflow": true,
-    "note": "101 px in the card's button box of 92 (Body): no shorter Spanish word for disconnect. Layout fix: the card's three buttons could take the card's full width, or the box 10 px more."
-  },
   "bt.try_again": "Reintentar",
   "bt.hint": "Se reconectan solos\nal encenderlos.",
   "bt.lost_hint": "¿Ya están cerca?\nToca Conectar.",
@@ -605,10 +585,6 @@
   "about.storage_flash": "Flash interna, {0} MB (sin tarjeta)",
   "about.library": "Biblioteca",
   "about.library_value": "{0}, {1}, {2}",
-  "@about.library_value": {
-    "overflow": true,
-    "note": "'99.999 pistas, 9999 artistas, 1500 álbumes' is 343 px in the value's 260 (Body), 280 in Small (its else font): the three are the UI's own count texts (library.tracks_n, artists_n, albums_n), with no shorter Spanish forms, and the separator saves nothing. Layout fix: two lines (the tracks; the artists and albums), as English overflows this room too."
-  },
   "about.no_music": "sin música",
   "about.headphones": "Auriculares",
   "about.headphones_paired": "emparejados",
@@ -716,10 +692,6 @@
   "dance.confidence": "confianza",
   "dance.dancer": "bailarín",
   "dance.crab": "Cangrejo",
-  "@dance.crab": {
-    "overflow": true,
-    "note": "112 px in the name box's 96 (Title); the Spanish for crab has no shorter form. Layout fix: an 'else Bold' font for the dancer's name (80 px in Bold)."
-  },
   "dance.stick": "Palitos",
   "@dance.stick": {
     "note": "The stick figure: 'Monigote' is 118 px in the name box's 96 (Title); 'Palitos' (a 'muñeco de palitos') fits."

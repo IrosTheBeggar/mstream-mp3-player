@@ -68,7 +68,7 @@ enum class S : uint16_t {
   hud_bluetooth_connecting,  // Bluetooth: connecting...
   hud_speaker_paused,  // Speaker, paused: B plays
   hud_speaker,  // Speaker
-  hud_silent_mode,  // Stays on the speaker (silent test mode)
+  hud_silent_mode,  // Speaker only (silent test mode)
   now_playing_title_none,  // Nothing playing
   now_playing_unknown_artist,  // Unknown artist
   now_playing_builtin_artist,  // Built-in test track
@@ -394,7 +394,7 @@ enum class S : uint16_t {
   speaker_here_until,  // Here until {0} connects
   speaker_here_until_headphones,  // Here until the headphones connect
   speaker_waits_for,  // Waits for {0}
-  speaker_waits_for_headphones,  // Waits for the headphones
+  speaker_waits_for_headphones,  // Waits for headphones
   speaker_built_in,  // Built-in
   speaker_silent_mode,  // Silent test mode
   pair_title,  // Pair headphones
@@ -416,7 +416,7 @@ enum class S : uint16_t {
   pair_confirm_button,  // Pair
   pair_pairing_with,  // Pairing with {0}...
   pair_pairing_with_it,  // Pairing with it...
-  pair_connected_already,  // Connected to {0} already
+  pair_connected_already,  // Already connected: {0}
   pair_connected_already_them,  // Connected to them already
   about_title,  // About
   about_subtitle,  // this player
@@ -429,6 +429,7 @@ enum class S : uint16_t {
   about_storage_flash,  // Internal flash, {0} MB (no card)
   about_library,  // Library
   about_library_value,  // {0}, {1}, {2}
+  about_library_value_short,  // {0}, {1}
   about_no_music,  // no music found
   about_headphones,  // Headphones
   about_headphones_paired,  // paired
@@ -540,7 +541,7 @@ enum class S : uint16_t {
   dialog_lost_body_headphones,  // Headphones: paused, so the speaker doesn't suddenly play out loud.
   dialog_lost_trying,  // Trying to reconnect: try {0} of {1}
   dialog_lost_not_trying,  // Not trying to reconnect
-  dialog_lost_resting,  // Stopped looking for them: Play tries again
+  dialog_lost_resting,  // Stopped looking: Play tries again
   dialog_lost_looking,  // Looking for them...
   dialog_lost_use_speaker,  // Use speaker
   dialog_lost_ok,  // OK
@@ -563,7 +564,7 @@ enum class S : uint16_t {
   format_hz,  // {0} Hz
   format_list_sep,  // , 
 };
-inline constexpr unsigned kStrings = 554;
+inline constexpr unsigned kStrings = 555;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO

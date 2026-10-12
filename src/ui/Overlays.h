@@ -25,7 +25,9 @@
 //           next" small over the name, and the buttons as icons (Undo's
 //           arrow, View as the Queue tab's icon), so the name has 216 px
 //           (on one line View and Undo left it ~50 px: "Plays next: Aer…";
-//           two lines beside the word buttons, 168). It stays 36 px, out
+//           two lines beside the word buttons, 168). The icons too when a
+//           button's label doesn't fit its pill (German's "Rückgängig":
+//           uitext::toastIcons()). It stays 36 px, out
 //           of the list's hardware-scrolled band (from y 72), which would
 //           carry a taller toast's lower rows away with the list. The
 //           header's ‹ (x < 56), and its pill when the toast has no
@@ -126,7 +128,8 @@ private:
   bool undo_ = false;
   bool view_ = false;
   bool up_ = false;
-  bool compact_ = false;  // two lines, the buttons as icons
+  bool compact_ = false;  // two lines ("what" over the rest), the buttons as icons
+  bool icons_ = false;    // the buttons as icons (two lines, or a label too wide for its pill)
   bool sleep_ = false;    // the sleep timer's (showSleep())
   bool idle_ = false;     // the idle warning (showIdle())
   uint32_t idleSeconds_ = 0;

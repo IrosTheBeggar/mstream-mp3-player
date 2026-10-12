@@ -163,6 +163,7 @@ Header QueuePage::header() const {
     trnf(title, sizeof(headerTitle_), S::queue_selected, selection_.count(), selection_.count());
     trf(sub, sizeof(headerSub_), S::queue_selected_of, s.queueSize);
     h.right = tr(selection_.count() == s.queueSize && s.queueSize > 0 ? S::queue_none : S::queue_all);
+    h.rightMaxW = uitext::kQueuePillTextW;
   } else {
     trf(title, sizeof(headerTitle_), S::queue_title);
     if (s.queueSize == 0) {
@@ -170,11 +171,14 @@ Header QueuePage::header() const {
     } else {
       // Behind the library update's fence the size is the queue's as it
       // was (AppState's Frozen), its entries the build's: nothing to edit.
-      if (!s.libraryFenced) h.right = tr(S::queue_edit);
+      if (!s.libraryFenced) {
+        h.right = tr(S::queue_edit);
+        h.rightMaxW = uitext::kQueuePillTextW;  // Small past it ("Wählen"): the summary keeps its room
+      }
       // The long form if it fits beside the title and the pill (the room
       // drawHeader() leaves); else the position and the time (where the
       // queue is is what the header is for: spec §6.4); else the rest.
-      const int pill = f.width(Font::Bold, tr(S::queue_edit)) + 24;
+      const int pill = Header::pillW(tr(S::queue_edit), uitext::kQueuePillTextW, false);
       const int room = (kW - 6 - pill - 8) - (12 + f.width(Font::Bold, tr(S::queue_title)) + 8);
       const char* pickFrom[3] = {summaryLong_, summaryMid_, summaryShort_};
       const char* pick = summaryShort_;
@@ -321,8 +325,10 @@ void QueuePage::drawBar() {
     const bool on = n > 0;
     const uint16_t fill = barPressed_ == 1 ? col::BTN_HI : col::BTN;
     c.fillRoundRect(kNextX, 5, kNextW, 32, 8, fill);
-    f.draw(c, Font::Body, tr(S::queue_play_next_bar), kNextX + kNextW / 2, 21, kNextW - 6, on ? col::TXT : col::FAINT,
-           fill, Fonts::Align::Centre);
+    const char* label = tr(S::queue_play_next_bar);
+    const int room = kNextW - uitext::kQueueNextPad;
+    f.draw(c, f.fitting(Font::Body, label, room), label, kNextX + kNextW / 2, 21, room, on ? col::TXT : col::FAINT, fill,
+           Fonts::Align::Centre);
   }
   // Clear...: red outline.
   {
@@ -330,7 +336,9 @@ void QueuePage::drawBar() {
     c.fillRoundRect(kClearX, 5, kClearW, 32, 8, fill);
     c.drawRoundRect(kClearX, 5, kClearW, 32, 8, col::RED);
     c.drawRoundRect(kClearX + 1, 6, kClearW - 2, 30, 7, col::RED);
-    f.draw(c, Font::Body, tr(S::queue_clear_bar), kClearX + kClearW / 2, 21, kClearW - 8, col::RED, fill,
+    const char* label = tr(S::queue_clear_bar);
+    const int room = kClearW - uitext::kQueueClearPad;
+    f.draw(c, f.fitting(Font::Body, label, room), label, kClearX + kClearW / 2, 21, room, col::RED, fill,
            Fonts::Align::Centre);
   }
   gfx::push(c, 0, kBarY, kW, kEditBarH);

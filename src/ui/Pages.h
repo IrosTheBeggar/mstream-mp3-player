@@ -31,6 +31,7 @@ struct Header {
   bool back = false;
   bool cross = false;           // "✕" instead of "‹" (leave a mode)
   const char* right = nullptr;  // the pill's label
+  int rightMaxW = 0;            // its label in Bold within this, else Small (0: Bold)
   bool rightDanger = false;     // red (Remove)
   bool rightBack = false;       // a "‹" before the pill's label (the Library root crumb)
   bool pressed = false;         // the pill is under a finger
@@ -39,6 +40,12 @@ struct Header {
   // What a touch in the header row hits: 1 back (or ✕), 2 the pill, 3 the
   // rest of the row (the title), 0 not the header.
   int hit(const InputEvent& e) const;
+  // The pill's label font (Bold within `maxW`, else Small; 0: Bold) and the
+  // pill's width (the label, uitext::kHeaderPillPad, and the crumb's
+  // chevron): as Ui::drawHeader() draws it, for a page that measures what
+  // its header leaves.
+  static Font pillFont(const char* label, int maxW);
+  static int pillW(const char* label, int maxW, bool chevron);
 };
 
 // ---- Now Playing (spec §6.1, mockups 01-04; docs/QUEUE-MODES.md) ----

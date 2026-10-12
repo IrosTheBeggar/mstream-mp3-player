@@ -24,27 +24,11 @@
   "coach.tips_where": "Эти советы — в Вывод > О плеере.",
   "tabs.playing": "Играет",
   "tabs.library": "Библиотека",
-  "@tabs.library": {
-    "overflow": true,
-    "note": "The active tab's label has 52 px in Small; Библиотека, both apps' word for the Library, is 81 (Фонотека 68, Медиатека 76). Музыка (52) would fit, but it renames the Library against the crumb, About and the coach cards, which all say Библиотека. A layout fix: let the active label use its neighbours' slots (they show no label), or draw it smaller."
-  },
   "tabs.queue": "Очередь",
-  "@tabs.queue": {
-    "overflow": true,
-    "note": "Очередь, both apps' word for the Queue, is 59 px in the active tab's 52 (Список, 49, means a list). The same layout fix as tabs.library."
-  },
   "tabs.dance": "Танец",
   "tabs.output": "Вывод",
   "toast.undo": "Отмена",
-  "@toast.undo": {
-    "overflow": true,
-    "note": "Undo is Отмена (69 px in Bold; the dialogs name the button so) in a 50 px pill; nothing Russian fits it: Откат is 54, Назад 57. The pill could grow by 20 px, or take an icon."
-  },
   "toast.view": "Показать",
-  "@toast.view": {
-    "overflow": true,
-    "note": "View is Показать (85 px in Bold; the mobile app's Show) in a 52 px pill; no Russian verb fits it (Открыть 78, Список 65; Туда, 45, is slang). The pill could grow, or take an icon (a list)."
-  },
   "toast.undone": "Отменено",
   "toast.nothing_to_undo": "Нечего отменять",
   "toast.no_memory": "Не хватает памяти",
@@ -211,10 +195,6 @@
     "many": "{0} треков по альбомам"
   },
   "library.crumb": "Библиотека",
-  "@library.crumb": {
-    "overflow": true,
-    "note": "Библиотека is 110 px in Bold (81 in Small: a Small fallback still misses the 80 by 1); the pill is as wide as its label and takes the 30 px from the page's title. Главная (75) or Начало (69) would fit but don't name the Library as the tab does. A layout fix: an icon, or a narrower font for the pill."
-  },
   "library.tracks_n": {
     "one": "{0} трек",
     "few": "{0} трека",
@@ -445,15 +425,7 @@
   "settings.brightness_sub": "выше — больше расход",
   "settings.brightness_low": "Низкая",
   "settings.brightness_medium": "Средняя",
-  "@settings.brightness_medium": {
-    "overflow": true,
-    "note": "Низкая / Средняя / Высокая / Макс. are the standard grades of a яркость; Средняя is 72 px in the 70 px value column (Высокая 73). A fix: 4 px more, or a Small fallback (59 and 58 px). What fits in Body breaks the set: the adverbs Средне (62) and Ярко (41), or Яркая (51) for High."
-  },
   "settings.brightness_high": "Высокая",
-  "@settings.brightness_high": {
-    "overflow": true,
-    "note": "As settings.brightness_medium (73 px in 70; 58 in Small)."
-  },
   "settings.brightness_max": "Макс.",
   "settings.idle_off": "Автовыключение",
   "settings.idle_off_sub": "на паузе, от батареи",
@@ -751,15 +723,7 @@
   "calibration.check_lines": "Коснитесь где угодно. Кольцо должно\nпоявиться прямо под пальцем.",
   "calibration.check_key": "без калибровки",
   "calibration.saved": "Сохранено",
-  "@calibration.saved": {
-    "overflow": true,
-    "note": "Сохранено (the apps' Saved) is 75 px in the header's 52 px right slot, the progress's. Готово (48) fits but is this page's Done row and A hint; what else fits (Учтено 49, Задано 50) doesn't say saved. A fix: let the status take the slot plus the pill's gap, or draw it smaller."
-  },
   "calibration.undone": "Отменено",
-  "@calibration.undone": {
-    "overflow": true,
-    "note": "Отменено is 70 px in the 52 px slot, the pair of the A hint's Отменить (calibration.undo); Откат (42) or Снято (42) would fit but break that pair, and the slot needs the fix for Сохранено anyway (calibration.saved)."
-  },
   "check.first_hint": "Сенсор точен? Касайтесь центра\nкаждой точки по очереди.",
   "check.hint": "Коснитесь центра точки",
   "check.missed": "Мимо: коснитесь самой точки",

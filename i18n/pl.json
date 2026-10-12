@@ -27,10 +27,6 @@
   "coach.tips_where": "Te porady są w: Wyjście > Informacje.",
   "tabs.playing": "Teraz",
   "tabs.library": "Biblioteka",
-  "@tabs.library": {
-    "overflow": true,
-    "note": "'Biblioteka' is both apps' word and the only natural one: 66 px in the tab plate's 52 (the device cuts it). 'Muzyka' (50 px) would fit, but the coach cards, the Output row, About and the crumb all name the tab 'Biblioteka'. The fix serves several languages (de Bibliothek 66, es Biblioteca 65, fr Bibliothèque 82, ru Библиотека 81, ja ライブラリ 80 px): let the active tab's label use its neighbours' room (only the active tab shows one), or Small with the icon above shifted up."
-  },
   "tabs.queue": "Kolejka",
   "tabs.dance": "Taniec",
   "tabs.output": "Wyjście",
@@ -38,15 +34,7 @@
     "note": "'Wyjście' (audio output, as in 'wyjście audio'); the page's line 'gdzie gra muzyka' says which. Named in toast.no_headphones, coach.tips_where, language.first_boot_sub and check.later."
   },
   "toast.undo": "Cofnij",
-  "@toast.undo": {
-    "overflow": true,
-    "note": "'Cofnij' is Polish's Undo, and the only word for it (51 px in the button's 50: kToastUndoW 54 less a 4 px inset; the device cuts it). A 2 px inset fits it, and toast.view's 'Pokaż' with it."
-  },
   "toast.view": "Pokaż",
-  "@toast.view": {
-    "overflow": true,
-    "note": "'Pokaż' is both apps' Show (54 px in 52: kToastViewW 56 less a 4 px inset; the device cuts it); 'Widok' (56) and 'Zobacz' (63) are wider still. A 2 px inset fits it, as toast.undo's."
-  },
   "toast.undone": "Cofnięto",
   "toast.nothing_to_undo": "Nie ma czego cofnąć",
   "toast.no_memory": "Za mało pamięci, by to zrobić",
@@ -207,10 +195,6 @@
     "many": "{0} utworów wg albumów"
   },
   "library.crumb": "Biblioteka",
-  "@library.crumb": {
-    "overflow": true,
-    "note": "'Biblioteka' (90 px in the pill's 80). Nothing is cut: the pill is as wide as its label and takes 10 px from the page title, which is cut sooner. No shorter Polish word for the Library (tabs.library); a fix: the pill's label in Small (59 px) when Bold doesn't fit."
-  },
   "library.tracks_n": {
     "one": "{0} utwór",
     "few": "{0} utwory",
@@ -350,10 +334,6 @@
   "queue.remove_n": "Usuń {0}",
   "queue.remove": "Usuń",
   "queue.play_next_bar": "Następny",
-  "@queue.play_next_bar": {
-    "overflow": true,
-    "note": "'Następny' as in the row actions (75 px in 74: kQueueNextW 80 less a 6 px inset; the device cuts it). 'Dalej' would fit but reads as Continue, 'Potem' as Later. A 4 px inset fits it (es 'Siguiente' is 74)."
-  },
   "queue.clear_bar": "Wyczyść",
   "@queue.clear_bar": {
     "note": "No ellipsis: 'Wyczyść…' is 84 px in 68; 'Wyczyść' is exactly 68."
@@ -521,10 +501,6 @@
     "one": "Biblioteka: {0} utwór",
     "few": "Biblioteka: {0} utwory",
     "many": "Biblioteka: {0} utworów"
-  },
-  "@library_row.title": {
-    "overflow": true,
-    "note": "No layout fix needed: the row draws library.tracks_n alone ('99 999 utworów') when this is wider than its 184 px, which in Polish is from 100 tracks up ('Biblioteka: 101 utworów' 192 px, '99 999 utworów' 217). The mark only records the width; 'Biblioteka: {0} utw.' would fit (182) but the full short form reads better."
   },
   "library_row.empty": "Biblioteka: pusta",
   "library_row.src_transfer": {
@@ -747,15 +723,7 @@
   "calibration.check_lines": "Dotknij gdziekolwiek. Pierścień powinien\npojawić się tuż pod palcem.",
   "calibration.check_key": "bez kalibracji",
   "calibration.saved": "Zapisano",
-  "@calibration.saved": {
-    "overflow": true,
-    "note": "'Zapisano' is the apps' Saved (60 px in the header's 52 px status slot, kCalProgressW, the progress's room; the device cuts it). Polish past forms are 8 letters; 'Gotowe' would fit but is the Done row's word, 'OK' says nothing. de Gespeichert (78) and ru Сохранено (75) overflow too: let the status take what the title leaves (the title is short), or a 64 px slot."
-  },
   "calibration.undone": "Cofnięto",
-  "@calibration.undone": {
-    "overflow": true,
-    "note": "'Cofnięto' (55 px in 52; the device cuts it), as calibration.saved: the same slot fixes both."
-  },
   "check.first_hint": "Dotyk działa dobrze? Dotknij środka\nkażdej kropki, po kolei.",
   "check.hint": "Dotknij środka kropki",
   "check.missed": "Nie trafiono: dotknij samej kropki",

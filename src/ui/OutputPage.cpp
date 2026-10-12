@@ -109,6 +109,15 @@ NavModel::PageRef page(PageKind kind) {
   return p;
 }
 
+// A setting's value (and the Library row's Rescan) in its pill at the row's
+// right, centred: Body, or Small when it doesn't fit (Russian's "Средняя").
+void valuePill(ListView::Row& r, int pillX, int pillW, const char* value, uint16_t ink, uint16_t pill) {
+  Fonts& f = Fonts::instance();
+  r.c.fillRoundRect(pillX, 9, pillW, 24, 8, pill);
+  const int room = pillW - uitext::kSettingPillPad;
+  f.draw(r.c, f.fitting(Font::Body, value, room), value, pillX + pillW / 2, 21, room, ink, pill, Fonts::Align::Centre);
+}
+
 }  // namespace
 
 const char* OutputPage::btName() const {
@@ -522,10 +531,8 @@ void OutputPage::drawLibraryRow(ListView::Row& r) {
     }
   }
   ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
-  const uint16_t pill = r.pressed && can ? col::BTN_HI : col::BTN;
-  r.c.fillRoundRect(pillX, 9, kRescanPillW, 24, 8, pill);
-  f.draw(r.c, Font::Body, tr(S::library_row_rescan), pillX + kRescanPillW / 2, 21, kRescanPillW - kSettingPillPad,
-         can ? col::TXT : col::FAINT, pill, Fonts::Align::Centre);
+  valuePill(r, pillX, kRescanPillW, tr(S::library_row_rescan), can ? col::TXT : col::FAINT,
+            r.pressed && can ? col::BTN_HI : col::BTN);
 }
 
 uint32_t OutputPage::librarySig(const AppState& s) {
@@ -591,12 +598,9 @@ void OutputPage::drawScreenSetting(ListView::Row& r, bool brightness) {
                        : s.screenTimeout == ScreenPower::kNever ? S::settings_screen_never_sub
                                                                   : S::settings_screen_off_sub);
   ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
-  const uint16_t pill = r.pressed ? col::BTN_HI : col::BTN;
-  r.c.fillRoundRect(pillX, 9, kSettingPillW, 24, 8, pill);
   const char* value =
       brightness ? ScreenPower::brightnessLabel(s.brightness) : ScreenPower::timeoutLabel(s.screenTimeout);
-  Fonts::instance().draw(r.c, Font::Body, value, pillX + kSettingPillW / 2, 21, kSettingPillW - kSettingPillPad,
-                         col::TXT, pill, Fonts::Align::Centre);
+  valuePill(r, pillX, kSettingPillW, value, col::TXT, r.pressed ? col::BTN_HI : col::BTN);
 }
 
 // "Turn off when idle" (IdlePolicy's choices, saved: ENERGY.md item 4): as
@@ -615,10 +619,7 @@ void OutputPage::drawIdleSetting(ListView::Row& r) {
   const char* sub = tr(s.idleOff == IdlePolicy::kNever ? S::settings_idle_never_sub : S::settings_idle_off_sub);
   const char* title = tr(S::settings_idle_off);
   ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
-  const uint16_t pill = r.pressed ? col::BTN_HI : col::BTN;
-  r.c.fillRoundRect(pillX, 9, kSettingPillW, 24, 8, pill);
-  Fonts::instance().draw(r.c, Font::Body, IdlePolicy::choiceLabel(s.idleOff), pillX + kSettingPillW / 2, 21,
-                         kSettingPillW - kSettingPillPad, col::TXT, pill, Fonts::Align::Centre);
+  valuePill(r, pillX, kSettingPillW, IdlePolicy::choiceLabel(s.idleOff), col::TXT, r.pressed ? col::BTN_HI : col::BTN);
 }
 
 // "CPU speed" and "Bluetooth power" (PowerChoices, saved: ENERGY.md items
@@ -656,10 +657,7 @@ void OutputPage::drawPowerSetting(ListView::Row& r, bool bluetooth) {
   const int x = r.x + 44;
   const int pillX = r.right - 8 - kSettingPillW;
   ListView::lines(r, x, pillX - 8, title, strlen(title), sub, strlen(sub), col::TXT);
-  const uint16_t pill = r.pressed ? col::BTN_HI : col::BTN;
-  r.c.fillRoundRect(pillX, 9, kSettingPillW, 24, 8, pill);
-  Fonts::instance().draw(r.c, Font::Body, value, pillX + kSettingPillW / 2, 21, kSettingPillW - kSettingPillPad,
-                         col::TXT, pill, Fonts::Align::Centre);
+  valuePill(r, pillX, kSettingPillW, value, col::TXT, r.pressed ? col::BTN_HI : col::BTN);
 }
 
 uint32_t OutputPage::screenSig(const AppState& s) {
@@ -748,10 +746,12 @@ void OutputPage::drawBtButtons(ListView::Row& r) {
     } else if (b == BtButton::More) {
       icons::drawCentred(r.c, icons::kMore, x[i] + w[i] / 2, 20, ink);
     } else {
-      // (Pair in a narrow box, beside Try again: "Pair new".)
-      f.draw(r.c, b == BtButton::Pair || armed ? Font::Bold : Font::Body,
-             armed ? tr(S::bt_tap_again) : btButtonLabel(b, w[i] < uitext::kBtWideButtonW), x[i] + w[i] / 2, 20,
-             w[i] - uitext::kBtButtonPad, ink, fill, Fonts::Align::Centre);
+      // (Pair in a narrow box, beside Try again: "Pair new".) A label too
+      // wide for its font in Small (Spanish's "Desconectar"), as the Dialog.
+      const char* label = armed ? tr(S::bt_tap_again) : btButtonLabel(b, w[i] < uitext::kBtWideButtonW);
+      const int room = w[i] - uitext::kBtButtonPad;
+      f.draw(r.c, f.fitting(b == BtButton::Pair || armed ? Font::Bold : Font::Body, label, room), label,
+             x[i] + w[i] / 2, 20, room, ink, fill, Fonts::Align::Centre);
     }
   }
   if (v.hint) {
@@ -846,6 +846,9 @@ void OutputPage::drawAbout(ListView::Row& r) {
   const AppState& s = ui_.state();
   char value[128] = "";
   char labelText[96];
+  // The library's counts: the line, or its short form where it doesn't fit.
+  char tracks[40] = "", albums[40] = "";
+  bool library = false;
   const char* label = "";
   const icons::Icon* icon = &icons::kInfo;
   switch (static_cast<AboutItem>(r.row)) {
@@ -868,11 +871,12 @@ void OutputPage::drawAbout(ListView::Row& r) {
       label = tr(S::about_library);
       const LibraryIndex* i = ui_.library().index();
       if (i && i->ready()) {
-        char tracks[40], artists[40], albums[40];
+        char artists[40];
         trnf(tracks, sizeof(tracks), S::library_tracks_n, i->trackCount(), i->trackCount());
         trnf(artists, sizeof(artists), S::library_artists_n, i->artistCount(), i->artistCount());
         trnf(albums, sizeof(albums), S::library_albums_n, i->albumCount(), i->albumCount());
         trf(value, sizeof(value), S::about_library_value, tracks, artists, albums);
+        library = true;
       } else {
         trf(value, sizeof(value), S::about_no_music);
       }
@@ -925,12 +929,16 @@ void OutputPage::drawAbout(ListView::Row& r) {
     default: return;
   }
   // The label small over its value (small too when it's long: "10000
-  // tracks, 600 artists, 1500 albums").
+  // tracks, 600 artists, 1500 albums"; longer still, the library's tracks
+  // and albums: "99,999 tracks, 1500 albums").
   Fonts& f = Fonts::instance();
   const int x = ListView::icon(r, *icon, col::DIM);
   const int room = r.right - 8 - x;
+  if (library && f.width(Font::Small, value) > room) {
+    trf(value, sizeof(value), S::about_library_value_short, tracks, albums);
+  }
   f.draw(r.c, Font::Small, label, x, 12, room, col::DIM, r.bg);
-  f.draw(r.c, f.width(Font::Body, value) <= room ? Font::Body : Font::Small, value, x, 30, room, col::TXT, r.bg);
+  f.draw(r.c, f.fitting(Font::Body, value, room), value, x, 30, room, col::TXT, r.bg);
 }
 
 // A Device info row: its label (Small) over its value (Body, or Small when

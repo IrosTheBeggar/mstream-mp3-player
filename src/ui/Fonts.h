@@ -54,6 +54,11 @@ public:
   // folded first (textfit::drawnWidth(): halfwidth katakana as the
   // fullwidth, NFD Hangul as its syllables), each glyph by its advance.
   int width(Font f, const char* s) const;
+  // `f` when `s` fits `maxW` px in it, else `smaller`: a label's font (a
+  // button's, a pill's: Small when its own doesn't fit, as the Dialog's).
+  Font fitting(Font f, const char* s, int maxW, Font smaller = Font::Small) const {
+    return width(f, s) <= maxW ? f : smaller;
+  }
   int height(Font f) const;
   // Whether `s` as draw() draws it in `f` (composed and folded first) has a
   // glyph from the store: Han, kana or Hangul, or a symbol the store has

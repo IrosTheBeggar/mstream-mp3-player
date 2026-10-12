@@ -21,27 +21,39 @@ namespace uitext {
 // Card 1: the title (Bold) and its line (Small) across the width.
 inline constexpr int kCoachTextW = 308;
 // Its three boxes (102 px, 4 px apart), each: the click (Bold) and the hold
-// (Small, two lines at most: coach.hold_*).
+// (Small, two lines at most: coach.hold_*), centred, a pixel in from each
+// side (a glyph's advance holds a pixel or two of space after its ink:
+// German's "Play/Pause" is 99 px, about 96 of ink).
 inline constexpr int kCoachBoxW = 102;
-inline constexpr int kCoachBoxTextW = kCoachBoxW - 4;
+inline constexpr int kCoachBoxTextW = kCoachBoxW - 2;
 // Card 2: two Title lines (coach.tab), then two Small ones (coach.tab_more)
 // and coach.tips_where.
 
 // ---- the toast (ui/Overlays) ----
 // Undo at the screen's edge (its hit area to the edge, a clamped reading
-// too), View left of it; on two lines ("Plays next" over a long name) both
-// as icons. The split between them sits well right of View's centre: with
-// no correction (the default), a panel that reads right like the lab's
-// (+28 px at x 214, +27 at 244: TouchCalibration::labFitX()) still hits
-// View there, never Undo, which would take the add back (test_ui_library).
+// too), View left of it; as icons (Undo's arrow, View as the Queue tab's
+// icon) on two lines ("Plays next" over a long name), and whenever a label
+// doesn't fit its pill (toastIcons(): German's "Rückgängig"). The split
+// between them sits well right of View's centre: with no correction (the
+// default), a panel that reads right like the lab's (+28 px at x 214, +27
+// at 244: TouchCalibration::labFitX()) still hits View there, never Undo,
+// which would take the add back (test_ui_library).
 inline constexpr int kToastUndoX = 256, kToastUndoW = 54, kToastUndoHitX = 250;
 inline constexpr int kToastViewX = 186, kToastViewW = 56, kToastViewHitX = 180;
 inline constexpr int kToastUndoCX = 282, kToastUndoCW = 30, kToastUndoCHitX = 278;
 inline constexpr int kToastViewCX = 230, kToastViewCW = 28, kToastViewCHitX = 214;
-// What a tap on the toast is: 2 Undo, 3 View, 1 elsewhere on it.
-constexpr int toastButtonAt(int x, bool rightEdge, bool compact, bool undo, bool view) {
-  const int undoHit = compact ? kToastUndoCHitX : kToastUndoHitX;
-  const int viewHit = compact ? kToastViewCHitX : kToastViewHitX;
+inline constexpr int kToastLabelPad = 4;  // a label (Bold) has its pill less this
+// The buttons as their icons because a label (`undoLabelW`, `viewLabelW`:
+// the Bold widths of toast.undo and toast.view) doesn't fit its pill: both
+// or neither. (Two lines are icons too: Toast::show().)
+constexpr bool toastIcons(bool undo, int undoLabelW, bool view, int viewLabelW) {
+  return (undo && undoLabelW > kToastUndoW - kToastLabelPad) || (view && viewLabelW > kToastViewW - kToastLabelPad);
+}
+// What a tap on the toast is: 2 Undo, 3 View, 1 elsewhere on it. `icons`:
+// the buttons are drawn as icons.
+constexpr int toastButtonAt(int x, bool rightEdge, bool icons, bool undo, bool view) {
+  const int undoHit = icons ? kToastUndoCHitX : kToastUndoHitX;
+  const int viewHit = icons ? kToastViewCHitX : kToastViewHitX;
   if (undo && (rightEdge || x >= undoHit)) return 2;
   if (view && !rightEdge && x >= viewHit && x < undoHit) return 3;
   return 1;
@@ -121,6 +133,10 @@ constexpr const CardMessage& cardMessage(cardformat::Kind k) {
 // x 12 and to 308): "4 of 16 · SPYDRONE", or the headphones' "SPYDRONE (not
 // connected)" (177 px: 170 cut it).
 inline constexpr int kNowPlayingMidW = 190;
+// The amber warning drawn alone ("WH-1000XM4 (not connected)", 194 px: the
+// line and it don't fit together) has a little more: centred, it still
+// ends 4 px short of a 16-hour mix's "999:59" either side (test_ui_library).
+inline constexpr int kNowPlayingWarnW = 200;
 // The seek bar's readout (docs/SEEK-BAR.md section 4.2), in the row above
 // the line while a finger scrubs, on the side away from the knob: the
 // finger's second ("2:31", Title) and, kSeekReadoutGap px after it, the
@@ -178,6 +194,10 @@ inline constexpr int kWaitButtonPad = 8;  // a label has the box less this
 // is 4 px too wide in Body, so the Dialog draws it in Small).
 inline constexpr int kDialogTitleW = 260;
 inline constexpr int kDialogButtonTextW = 123;
+// A title after the dialog's icon (the lost dialog's struck-out headphones,
+// 22 px, from x 14, then 8 px): to 12 px from the dialog's right edge (the
+// body keeps its 16), so "Headphones disconnected" (235 px) is whole.
+inline constexpr int kDialogIconTitleW = 236;
 
 // ---- the sleep timer (SleepTimer; docs/ENERGY.md section 3) ----
 // Now Playing's "..." sheet (the playback menu): its last row (Body), the
@@ -187,9 +207,10 @@ inline constexpr int kDialogButtonTextW = 123;
 // 168 from y 72): its title (Small, SleepTimer::titleText()) left of the ✕
 // pill (x 16 to 242), then three rows of pills 36 px tall, 44 px apart. The
 // running choice is outlined in the Now Playing accent. A label has its
-// pill less kSleepPillPad.
+// pill less kSleepPillPad (centred: 2 px a side), in Small when its font
+// doesn't fit (SleepSheet::render()).
 inline constexpr int kSleepTitleW = 226;
-inline constexpr int kSleepPillPad = 8;
+inline constexpr int kSleepPillPad = 4;
 // Row 1 (Body): the minutes; sleep.minutes_90 ("90 min") says what the
 // numbers are.
 inline constexpr const char* kSleepMinutes[4] = {"15", "30", "45", "60"};
@@ -254,11 +275,13 @@ constexpr SleepLine sleepLineFit(int fullW, int baseW, int warnW, int moonTextW,
 
 // ---- the Queue's selection bar (ui/QueuePage) ----
 // Remove N (Bold, after the trash icon; without it when it doesn't fit),
-// Play next and Clear… (Body).
+// Play next and Clear… (Body, else Small: each label its button less its
+// pad, centred; Clear's red outline keeps its 4 px a side).
 inline constexpr int kRemoveX = 6, kRemoveW = 140;
 inline constexpr int kRemoveTextX = 32;  // from the button's left, after the icon
 inline constexpr int kQueueNextX = 152, kQueueNextW = 80;
 inline constexpr int kQueueClearX = 238, kQueueClearW = 76;
+inline constexpr int kQueueNextPad = 4, kQueueClearPad = 8;
 
 // ---- the queue's cap (QueueModel::kMaxEntries; docs/QUEUE-MODES.md 15) ----
 // Play next or + Queue with the queue full and no played track to push
@@ -283,6 +306,27 @@ inline constexpr int kQueueClearX = 238, kQueueClearW = 76;
 // (test_ui_library: each in its room, at 4,999 pushed out). Cut short by
 // the cap as well, the what is queue_cap.added's or queue_cap.next's
 // ("Added 37 of 300").
+
+// ---- the lists (ui/ListView), the headers (ui/Ui) ----
+// A list's action bar (the top bar, a row's inline bar): each label (Bold
+// for the first, Body) in its button less kListBarPad, centred, in Small
+// when its font doesn't fit. The Folders root's "Play all 19410" (126 px
+// in Bold) beside the A-Z rail has (284 - 16 - 6) / 2 - 4 = 127.
+inline constexpr int kListBarPad = 4;
+// A list's lone line when it has no rows (Body, centred: "Nothing here",
+// library.updating_list), 10 px from each edge: nothing is beside it.
+inline constexpr int kListLineW = 300;
+// The Library root's segments (Artists | Albums | Folders, 100 px each):
+// a label (Bold) in its segment less kSegmentPad, else Small.
+inline constexpr int kSegmentPad = 4;
+// A header's pill (Ui::drawHeader(): as wide as its label, kHeaderPillPad
+// of pill around it, and the crumb's chevron, kHeaderChevronW): its label
+// in Bold within a budget, else Small, so the title and the summary keep
+// their room. The Library's root crumb ("‹ Library"), and the Queue's
+// Edit, All and None. (Its hit area stays x 240 to the edge: Header::hit.)
+inline constexpr int kHeaderPillPad = 24, kHeaderChevronW = 12;
+inline constexpr int kCrumbTextW = 82;
+inline constexpr int kQueuePillTextW = 60;
 
 // ---- the Library's names (ui/LibraryPage; librarytext, docs/METADATA.md 5.4) ----
 // An album of more than one disc: a divider row before each disc's first
@@ -309,11 +353,13 @@ inline constexpr int kStatusW = 304;
 // ---- the Output tab (ui/OutputPage) ----
 // The Bluetooth card's status line (Small, x 52 to the radio).
 inline constexpr int kBtStatusW = 222;
-// Its buttons, by how many (x, width); Bold for Pair and an armed Forget.
+// Its buttons, by how many (x, width); Bold for Pair and an armed Forget,
+// else Body; a label that doesn't fit in its font is drawn in Small (the
+// Dialog's rule: Spanish's "Desconectar").
 inline constexpr int kBtButtons1X = 16, kBtButtons1W = 120;  // Cancel, Try again (Pair: the width)
 inline constexpr int kBtButtons2X[2] = {16, 142}, kBtButtons2W[2] = {120, 100};
 inline constexpr int kBtButtons3X[3] = {16, 124, 192}, kBtButtons3W[3] = {100, 60, 112};
-inline constexpr int kBtButtonPad = 8;       // a label has the box less this
+inline constexpr int kBtButtonPad = 6;       // a label has the box less this (centred)
 inline constexpr int kBtWideButtonW = 200;   // narrower boxes take the short labels (btButtonLabel)
 inline constexpr int kBtChipTextX = 30;      // the volume chip: its % after the speaker icon
 // The resting card (the background search stopped): "Not connected" on the
@@ -349,7 +395,7 @@ inline constexpr int kSettingSubW = 204;
 // with an MP3 playing (8 against 16 fps), the dancer at ~18 of 24, for ~5
 // mA (ENERGY.md step 6a).
 inline constexpr int kSettingPillW = 78;  // "160 MHz" (69 px) in its pill
-inline constexpr int kSettingPillPad = 8;  // a value has the pill less this
+inline constexpr int kSettingPillPad = 4;  // a value has the pill less this (centred), else Small
 inline constexpr int kSettingValueSubW = 312 - 8 - kSettingPillW - 8 - 44;  // from x 44, the row's right 312
 // A CPU speed change: the dialog (ui/Overlays' Dialog, no icon: the title
 // in Bold over kDialogTitleW, the body in Small over the same 260 px, 3
@@ -386,7 +432,10 @@ inline constexpr int kIdleToastPad = 8;  // a label has its pill less this
 // settings' (its one word). Both lines kLibraryRowW wide.
 inline constexpr int kRescanPillW = 68;  // "Rescan" (58 px) in its pill
 inline constexpr int kLibraryRowW = 312 - 8 - kRescanPillW - 8 - 44;  // from x 44, the row's right 312
-// About: a value (Body, or Small when Body doesn't fit).
+// About: a value (Body, or Small when Body doesn't fit). Its library:
+// "19,410 tracks, 600 artists, 1500 albums" where that fits in Small,
+// else the tracks and the albums (about.library_value_short: "99,999
+// tracks, 1500 albums").
 inline constexpr int kAboutValueW = 260;
 // About's licence rows (GPLv3 section 5(d); main.cpp prints the licence
 // once at boot): the copyright and licence (Small) over "no warranty"
@@ -428,6 +477,11 @@ inline constexpr int kCalPillX = 4, kCalPillPad = 20;
 inline constexpr int kCalTitleX = 92;
 inline constexpr int kCalProgressW = 52;
 inline constexpr int kCalTitleW = 312 - kCalProgressW - 6 - kCalTitleX;
+// The test taps page has no pill: its title from x 10 (in kCalTitleW, as
+// on the other pages), and its status after a Save or an Undo
+// (calibration.saved, calibration.undone: Small, right-aligned at x 312)
+// has the rest.
+inline constexpr int kCalStatusW = 312 - 6 - (10 + kCalTitleW);
 // Every line (Body, else Small when Body doesn't fit) across x 8-312. The
 // crosses: the first one's hint on two lines (calibration.first_hint), then
 // one; a miss (amber). The result (TouchCheck's errorText(): "Now" with the
@@ -459,6 +513,9 @@ inline constexpr int kCalAHintX = 68, kCalAHintW = 120;
 // rescue when the glass is too far off to reach the Output tab (main.cpp).
 
 // ---- the Dance tab (ui/DancePage) ----
+// The dancer's name in the right panel (x 220-319, centred): Title, else
+// Bold (Spanish's "Cangrejo").
+inline constexpr int kDanceNameW = 96;
 // The USB visualizer (docs/USB-VISUALIZER.md): while a computer drives the
 // dancer, the bottom line (y 196-239, where the track's title and artist
 // go, centred, kW - 16 px) says so, the title in Bold over the hint in Small.

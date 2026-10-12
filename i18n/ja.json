@@ -21,10 +21,6 @@
   "coach.tips_where": "このヒントは出力 > 情報にあります。",
   "tabs.playing": "再生中",
   "tabs.library": "ライブラリ",
-  "@tabs.library": {
-    "overflow": true,
-    "note": "ライブラリ is both apps' word and the one the coach card names the tab by (coach.tab_more); the CJK glyphs are 16 px each, so it is 80 px in the 52 px label, and no word of 3 characters names the Library (楽曲, 音楽 and 曲一覧 name the music, not the tab). A layout fix: let the active tab's label spill past its tab's edges, centred, 80 px wide (its neighbours show no label), or an icon-only tab."
-  },
   "tabs.queue": "キュー",
   "tabs.dance": "ダンス",
   "tabs.output": "出力",
@@ -139,10 +135,6 @@
   "jump.title": "移動先",
   "jump.second_title": "{0} {1}: {2}",
   "library.segment_artists": "アーティスト",
-  "@library.segment_artists": {
-    "overflow": true,
-    "note": "アーティスト is both apps' word, and Japanese has no shorter one for an artist (歌手 is a singer, アーチスト a dated spelling): 6 CJK glyphs are 102 px in Bold's 94 px segment, and 96 px in Body, still 2 px over. A layout fix: widen the three segments to 106 px (318 of the 320) and give the label w - 4, 102 px."
-  },
   "library.segment_albums": "アルバム",
   "library.segment_folders": "フォルダ",
   "library.action_play": "再生",
@@ -165,10 +157,6 @@
     "other": "{0} 曲、アルバム順"
   },
   "library.crumb": "ライブラリ",
-  "@library.crumb": {
-    "overflow": true,
-    "note": "ライブラリ (both apps' word; no shorter word names the Library) is 85 px in Bold's 80 px pill. A layout fix: let the pill's label take 86 px (the title has the rest), or draw a CJK pill label in Body, where it is exactly 80 px."
-  },
   "library.tracks_n": {
     "other": "{0} 曲"
   },
@@ -506,10 +494,6 @@
   "about.storage_flash": "内蔵フラッシュ {0} MB (カードなし)",
   "about.library": "ライブラリ",
   "about.library_value": "{0}、{1}、{2}",
-  "@about.library_value": {
-    "overflow": true,
-    "note": "Three Japanese counts don't fit one line: 99,999 曲、アーティスト 9999 組、アルバム 1500 枚 is 400 px in Body and 368 px in Small, for 260 (English is over by 1 px); even without the counters (9999 アーティスト、1500 アルバム) it is 358 px in Small, so the natural forms stay. A layout fix: two lines for About's library value, the tracks and the artists on the first (254 px in Body) and the albums on the second (130 px), or three rows (曲, アーティスト, アルバム)."
-  },
   "about.no_music": "音楽がありません",
   "about.headphones": "ヘッドホン",
   "about.headphones_paired": "ペアリング済み",

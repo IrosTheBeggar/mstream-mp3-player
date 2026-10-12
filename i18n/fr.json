@@ -31,10 +31,6 @@
   },
   "tabs.output": "Sortie",
   "toast.undo": "Annuler",
-  "@toast.undo": {
-    "note": "Le seul mot français pour Undo (comme pour Cancel) : 69 px en Bold dans les 50 du bouton (kToastUndoW 54, moins 4) ; « Défaire » fait 66, « Retour » 61, rien ne tient. Mise en page : quand tr(toast_undo) dépasse kToastUndoW - 4, dessiner l'icône (icons::kUndo, dans les 30 px de kToastUndoCW) comme le fait déjà le toast compact sur deux lignes ; ou un bouton de 74 px.",
-    "overflow": true
-  },
   "toast.view": "Voir",
   "toast.undone": "Annulé",
   "toast.nothing_to_undo": "Rien à annuler",
@@ -161,17 +157,9 @@
     "one": "Tout lire ({0})",
     "other": "Lire les {0}"
   },
-  "@library.play_all": {
-    "note": "« Lire les 19410 » (comme « Voir les 12 commentaires ») fait 127 px en Bold dans les 123 du bouton quand la racine des dossiers montre le rail A-Z : 4 px de trop à 5 chiffres, comme l'anglais (126), et ça tient jusqu'à 9999 (116 px). « Tout lire ({0}) », le mot de l'application mobile, débordait dès 3 chiffres (129 px à 999) ; il reste pour 0 et 1 (« Tout lire (1) », 107 px), où « Lire les 1 » ne se dit pas. Mise en page : celle de l'anglais (un bouton plus large avec le rail, ou le compte en Small).",
-    "overflow": true
-  },
   "library.hold_title": {
     "one": "{0}, {1} morceau",
     "other": "{0}, {1} morceaux"
-  },
-  "@library.hold_title": {
-    "note": "« morceaux » fait 20 px de plus que « tracks » : 234 px avec le nom le plus long dans les 226 du titre de la feuille (242 à 1000 morceaux). « {0}, {1} titres » tiendrait (211 px), au prix d'un second mot pour un morceau. Mise en page : le titre est formaté entier puis coupé par la fin à l'affichage (« A Long Album Name, 1000 morce… ») ; couper le nom ({0}) à la place qu'il reste après le compte garderait « 1000 morceaux » entier, quel que soit le nom.",
-    "overflow": true
   },
   "library.header_artist": "Artiste",
   "library.header_album": "Album",
@@ -436,10 +424,6 @@
     "one": "Bibliothèque : {0} morceau",
     "other": "Bibliothèque : {0} morceaux"
   },
-  "@library_row.title": {
-    "note": "201 px déjà à 0 dans les 184 de la ligne (255 à 99 999) : le code dessine alors library.tracks_n seul (« 19 410 morceaux », 141 px), sans le nom de la ligne, et le fait toujours en français. Un repli en Small n'y changerait rien (207 px à 99 999, 199 à 9 999). Mise en page : une ligne plus large (kLibraryRowW : 184, ce que laissent l'icône et la pastille Rescanner), ou le compte sur le sous-titre de la ligne.",
-    "overflow": true
-  },
   "library_row.empty": "Bibliothèque vide",
   "library_row.src_transfer": {
     "one": "{0} du transfert",
@@ -562,10 +546,6 @@
   "about.storage_flash": "Flash interne, {0} Mo (pas de carte)",
   "about.library": "Bibliothèque",
   "about.library_value": "{0}, {1}, {2}",
-  "@about.library_value": {
-    "note": "« 99 999 morceaux, 9999 artistes, 1500 albums » fait 298 px dans les 260 de la valeur en Small (368 en Body) ; une bibliothèque courante déborde aussi (« 19 410 morceaux, 600 artistes, 1500 albums », environ 283 px). Rien à raccourcir dans la jointure, et « morceaux » est le mot des applications (« titres » ferait encore 267 px). Mise en page : la valeur sur deux lignes (les morceaux, 113 px ; puis « 9999 artistes, 1500 albums », 177 px), ou kAboutValueW à 300.",
-    "overflow": true
-  },
   "about.no_music": "aucune musique trouvée",
   "about.headphones": "Casque",
   "about.headphones_paired": "appairé",
@@ -645,10 +625,6 @@
   "calibration.check_lines": "Touchez n'importe où. L'anneau doit\napparaître juste sous votre doigt.",
   "calibration.check_key": "sans calibrage",
   "calibration.saved": "Enregistré",
-  "@calibration.saved": {
-    "note": "66 px dans les 52 de la case (kCalProgressW) ; c'est le mot des applications, et aucun mot propre plus court ne convient : « Sauvé » (40 px) est familier, « Validé » (41) se lirait comme le verdict du test. Mise en page : donner à la case ce que le titre laisse (« Test tactile » fait 103 px des 162 du titre : il en reste 111 à droite), ou kCalProgressW à 70 avec le titre dessiné dans le reste.",
-    "overflow": true
-  },
   "calibration.undone": "Annulé",
   "check.first_hint": "Le tactile est-il précis ? Touchez le\ncentre de chaque point, un par un.",
   "check.hint": "Touchez le centre du point",

@@ -312,6 +312,9 @@ private:
   void applyCover();
   void updateHud(uint32_t nowMs);
   tabbar::State tabState(uint32_t nowMs) const;
+  // Where each tab's label goes in the UI's language (tabbar::labelFit()),
+  // measured once a language (not every pass).
+  tabbar::LabelFit tabLabelFit(int tab) const;
   void onDialog(int button) override;
   void trackMotion(uint32_t nowMs);
   bool modalUp() const {
@@ -368,6 +371,8 @@ private:
   ListScroller vscroll_;
   ListView list_;
   TabBar tabBar_;
+  mutable tabbar::LabelFit tabFits_[tabbar::kTabs] = {};
+  mutable int tabFitsLang_ = -1;  // the language tabFits_ were measured in (-1: none yet)
   Toast toast_;
   Hud hud_;
   Sheet sheet_;

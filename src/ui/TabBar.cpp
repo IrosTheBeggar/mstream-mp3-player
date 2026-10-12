@@ -88,8 +88,10 @@ void TabBar::drawCell(int t, const tabbar::State& s) {
     c.fillRoundRect(plateX, 3, plateW, 30, 6, col::ACT_BG);
     bg = col::ACT_BG;
   }
-  // Active: the icon moves up for its label, and the accent underlines it.
-  const int iconTop = active ? 3 : 7;
+  // Active: the icon moves up for its label (none when the label fits
+  // nowhere: tabbar::labelFit()), and the accent underlines it.
+  const bool labelled = active && s.label != tabbar::LabelFit::None;
+  const int iconTop = labelled ? 3 : 7;
   const uint16_t ink = active ? acc : col::ICON;
   switch (tab) {
     case NavModel::Tab::NowPlaying:
@@ -140,9 +142,22 @@ void TabBar::drawCell(int t, const tabbar::State& s) {
       break;
     }
   }
-  if (active) {
+  if (labelled && s.label == tabbar::LabelFit::Spill) {
+    // Wider than its plate (the Library's or the Queue's): centred over the
+    // plate's edges, glyphs only (blended into the strip, so neither the
+    // plate nor the bar behind is cut); its neighbours draw its ends.
+    f.draw(c, Font::Small, tabbar::label(t), cx, 27, tabbar::kLabelSpillW, acc, acc, Fonts::Align::Centre);
+  } else if (labelled) {
     f.draw(c, Font::Small, tabbar::label(t), cx, 27, plateW, acc, bg, Fonts::Align::Centre);
-    c.fillRect(cx - 12, 33, 24, 2, acc);
+  }
+  if (active) c.fillRect(cx - 12, 33, 24, 2, acc);
+  if (!active && s.label == tabbar::LabelFit::Spill && (t == s.active - 1 || t == s.active + 1)) {
+    // The active neighbour's label runs into this cell's label row (its
+    // icon is clear of it): its end, at the active cell's centre (the strip
+    // is 320 wide; only this cell's columns are pushed).
+    const int ax = tabbar::cellX0(s.active) + tabbar::kTabW / 2 - x0;
+    const uint16_t aacc = accent::of(static_cast<NavModel::Tab>(s.active));
+    f.draw(c, Font::Small, tabbar::label(s.active), ax, 27, tabbar::kLabelSpillW, aacc, aacc, Fonts::Align::Centre);
   }
   c.drawFastHLine(0, tabbar::kHeight - 1, w, col::DIV);
   gfx::push(c, x0, 0, w, tabbar::kHeight, true);

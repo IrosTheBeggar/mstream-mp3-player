@@ -10,10 +10,25 @@ namespace tabbar {
 const uistr::S kLabels[kTabs] = {uistr::S::tabs_playing, uistr::S::tabs_library, uistr::S::tabs_queue,
                                  uistr::S::tabs_dance, uistr::S::tabs_output};
 
+namespace {
+// The cells either side of tab `t` (a spilled label's ends are theirs).
+uint8_t neighbours(int t) {
+  uint8_t n = 0;
+  if (t > 0) n |= static_cast<uint8_t>(1u << (t - 1));
+  if (t < kTabs - 1) n |= static_cast<uint8_t>(1u << (t + 1));
+  return n;
+}
+}  // namespace
+
 uint8_t dirty(const State& a, const State& b) {
   uint8_t d = 0;
-  // The active tab moving redraws the old and the new cell (plate, label, colour).
-  if (a.active != b.active) d |= static_cast<uint8_t>((1u << a.active) | (1u << b.active));
+  // The active tab moving redraws the old and the new cell (plate, label,
+  // colour), and a spilled label's neighbours, where its ends are.
+  if (a.active != b.active || a.label != b.label) {
+    d |= static_cast<uint8_t>((1u << a.active) | (1u << b.active));
+    if (a.label == LabelFit::Spill) d |= neighbours(a.active);
+    if (b.label == LabelFit::Spill) d |= neighbours(b.active);
+  }
   const bool eqMoves = b.play == Play::Playing && a.eqStep != b.eqStep;
   if (a.play != b.play || eqMoves || a.progressPx != b.progressPx || a.progressKnown != b.progressKnown ||
       a.sleep != b.sleep) {

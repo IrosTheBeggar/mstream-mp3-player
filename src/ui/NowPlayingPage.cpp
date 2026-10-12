@@ -402,6 +402,7 @@ void NowPlayingPage::drawProgressText(M5Canvas& c, bool paused) {
   char base[64] = "";  // "Paused, 4 of 16": the line without its output
   char warn[96] = "";  // "WH-1000XM4 (not connected)": never dropped for the timer
   uint16_t mc = col::DIM;
+  int midW = kMidW;  // the warning drawn alone has a little more (kNowPlayingWarnW)
   if (s.failed) {
     trf(mid, sizeof(mid), S::now_playing_cant_play);
     mc = col::RED;
@@ -427,6 +428,7 @@ void NowPlayingPage::drawProgressText(M5Canvas& c, bool paused) {
     } else if (s.onBluetooth && !s.btConnected && s.play != PlayState::Waiting) {
       snprintf(mid, sizeof(mid), "%s", out);
       mc = col::AMBER;
+      midW = uitext::kNowPlayingWarnW;
     }
   }
   // The sleep timer: a moon and "23 min" ("track", "45 s", "fading") after
@@ -436,11 +438,13 @@ void NowPlayingPage::drawProgressText(M5Canvas& c, bool paused) {
     using namespace uitext;
     using Text = SleepLine::Text;
     const int sw = kSleepMoonW + f.width(Font::Small, s.sleepShort);
-    const SleepLine fit = sleepLineFit(f.width(Font::Small, mid), f.width(Font::Small, base),
-                                       warn[0] ? f.width(Font::Small, warn) : -1, sw, kMidW);
+    // (The warning in its room at most: a longer name is cut, as without
+    // the timer.)
+    const int warnW = warn[0] ? std::min(f.width(Font::Small, warn), kNowPlayingWarnW) : -1;
+    const SleepLine fit = sleepLineFit(f.width(Font::Small, mid), f.width(Font::Small, base), warnW, sw, kMidW);
     const char* text = fit.text == Text::Full ? mid : fit.text == Text::Base ? base : fit.text == Text::Warn ? warn : "";
     const uint16_t tc = fit.text == Text::Warn ? col::AMBER : mc;
-    const int tw = text[0] ? f.width(Font::Small, text) : 0;
+    const int tw = !text[0] ? 0 : fit.text == Text::Warn ? warnW : f.width(Font::Small, text);
     const int x0 = kW / 2 - fit.width / 2;
     if (text[0]) f.draw(c, Font::Small, text, x0, kTextY, tw, tc, col::BG);
     const int sx = text[0] ? x0 + tw + kSleepGap : x0;
@@ -448,7 +452,7 @@ void NowPlayingPage::drawProgressText(M5Canvas& c, bool paused) {
     if (fit.moon) icons::drawMoon(c, sx, kTextY - 6, 11, sc);
     if (fit.moonText) f.draw(c, Font::Small, s.sleepShort, sx + kSleepMoonW, kTextY, sw - kSleepMoonW, sc, col::BG);
   } else {
-    f.draw(c, Font::Small, mid, kW / 2, kTextY, kMidW, mc, col::BG, Fonts::Align::Centre);
+    f.draw(c, Font::Small, mid, kW / 2, kTextY, midW, mc, col::BG, Fonts::Align::Centre);
   }
 }
 

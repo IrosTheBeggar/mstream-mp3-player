@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "LibraryIndex.h"
+#include "TextFit.h"
 
 // What the Library's rows and headers, Now Playing and the catalog say about
 // the index's entries (docs/METADATA.md 5.4 and 3.6; milestone N9): the
@@ -71,6 +72,12 @@ const char* railName(const LibraryIndex& index, LibraryIndex::View view, uint32_
 
 // "Disc 2" (library.disc).
 size_t discText(uint32_t disc, char* buf, size_t size);
+
+// The hold sheet's title (library.hold_title: "Discovery, 14 tracks") in
+// `maxW` px of `small` (the sheet's title: sheet::kTitleW): the name cut to
+// what the rest leaves, never the count ("Harder, Better, Faster, Str…,
+// 14 tracks"). The name as TextFit draws it (composed, folded).
+size_t holdTitle(const textfit::Font& small, int maxW, const char* name, uint32_t tracks, char* buf, size_t size);
 
 // An album's disc dividers (5.4: "Disc 2" rows only when it has more than
 // one disc): the Album page's rows are its tracks (tracksOfAlbum()) with a

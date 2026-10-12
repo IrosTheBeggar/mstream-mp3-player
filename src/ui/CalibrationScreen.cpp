@@ -5,6 +5,7 @@
 
 #include <M5Unified.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -93,10 +94,12 @@ void CalibrationScreen::drawHeader(const char* title, const char* pill, const ch
     x = kCalTitleX;
     room = kCalTitleW;
   }
+  // The right text: the progress beside a pill; on the test taps page (no
+  // pill) its status, which has what the title leaves (kCalStatusW).
+  const int rightW = pill ? kCalProgressW : kCalStatusW;
+  if (right && !pill) room = std::min(room, 312 - 6 - std::min(f.width(Font::Small, right), rightW) - x);
   f.draw(s, Font::Bold, title, x, kHeaderH / 2, room, col::TXT, col::SURF);
-  if (right) {
-    f.draw(s, Font::Small, right, 312, kHeaderH / 2, kCalProgressW, rightColour, col::SURF, Fonts::Align::Right);
-  }
+  if (right) f.draw(s, Font::Small, right, 312, kHeaderH / 2, rightW, rightColour, col::SURF, Fonts::Align::Right);
   s.fillRect(0, kHeaderH - 2, kW, 2, kAccent);
   ui::gfx::push(s, 0, 0, kW, kHeaderH, true);
 }

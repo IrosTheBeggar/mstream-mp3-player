@@ -2602,7 +2602,13 @@ Queue, Dance and Output (with its Pair and About pages).
   every tap meant for the Output tab), with the battery in the same cell. The
   active tab gets a plate, a text label and an underline **in its section's
   colour** (Now Playing coral, Library violet, Queue teal, Dance pink, Output
-  blue; the page headers and primary buttons carry it too). Status: the Now
+  blue; the page headers and primary buttons carry it too). The label sits
+  on the plate when it fits; the Library's and the Queue's may run over
+  the plate's edges, centred, up to 72 px, into the label row of their
+  neighbours, which show no label (German's "Bibliothek"); wider than that
+  the tab shows its icon alone, the plate and the underline saying which
+  (Japanese's and Russian's Library, German's Queue: `tabbar::labelFit()`).
+  A tap is still the cell's tab wherever the label runs. Status: the Now
   Playing icon's EQ bars move 4 times a second while playing, with a progress
   hairline (dotted while the length isn't known); the Queue's up-next badge
   (flashing for 1.5 s when tracks are added); the Output icon's colour is the
@@ -2619,7 +2625,15 @@ Queue, Dance and Output (with its Pair and About pages).
   every language in every room it has, and `test_ui_library` the
   layouts' details, with the firmware's own DejaVu data and CJK store (as
   it does the tab bar's), so a label cut to "Remov…" or "Tap ag…" on the
-  device fails a host test.
+  device fails a host test. Where a language is wider than English, the
+  layout gives way, never the text: a button's or a pill's label is
+  centred with 2 px a side or more, and drawn in Small when its own font still
+  doesn't fit (the Dialog's rule: the Bluetooth card's buttons, the
+  lists' and the Queue's bars, the settings' and the sleep timer's pills,
+  the Library's segments, the header's pill past its budget); a button
+  with an icon shows the icon (the toast's, the tab bar's); a line with
+  counts or a name has a shorter form (About's library, the Library row's
+  title) or cuts the name and keeps the rest (the hold sheet's title).
 - **The language**: the mobile app's ten (English, Deutsch, Español,
   Français, Italiano, 日本語, Polski, Português, Русский, 中文), each
   named in itself; one whose catalogue isn't in `i18n/` yet draws English.
@@ -2643,7 +2657,10 @@ Queue, Dance and Output (with its Pair and About pages).
   two lines, "Plays next" small over the name, and the buttons become
   icons (Undo's arrow, View as the Queue tab's icon; hit areas 228-263 and
   264 to the edge), so the name has 216 px (Body, else Small): "Can'T
-  Tell Me Nothing" and "Harder, Better, Faster, Stronger" both fit. It
+  Tell Me Nothing" and "Harder, Better, Faster, Stronger" both fit. The
+  buttons are the icons too, the text on one line beside them when it
+  fits, whenever a label doesn't fit its pill (German's "Rückgängig":
+  `uitext::toastIcons()`). It
   stays 36 px tall: a taller toast would reach the list's hardware-scrolled
   band, which carries whatever is in it along with the list. The header's
   ‹ (and its pill, when the toast has no buttons) still works under it: a
@@ -2835,8 +2852,10 @@ Queue, Dance and Output (with its Pair and About pages).
   (between them "4 of 16 · SPYDRONE": where it plays, mockup 01's
   output line, when it fits; the
   headphones not connected, "SPYDRONE (not connected)" alone when both
-  don't fit), and the transport row (the volume, prev, play/pause, next,
-  "..."), which has the room the old 40 px artist and album bands gave
+  don't fit, in 200 px: "WH-1000XM4 (not connected)" whole, 4 px clear of
+  a 16-hour mix's times), and the transport row (the volume, prev,
+  play/pause, next, "..."), which has the room the old 40 px artist and
+  album bands gave
   up. **Two menus, one job each** (the user's split): a tap anywhere on
   the cover, the title, the artist or the album opens the **navigation
   menu** (Go to artist, Go to album, Go to folder); "..." opens the
@@ -3068,7 +3087,8 @@ Queue, Dance and Output (with its Pair and About pages).
   or file opens the **inline action row** under it (Play: its album or
   folder from it, the rest following; Play next and + Queue: it alone);
   **a long press on any row** gives the same three in a sheet. Deeper than
-  one level the header's pill is **"‹ Library"**, the root crumb. The row
+  one level the header's pill is **"‹ Library"**, the root crumb (its
+  label in Bold up to 82 px, else Small: the title keeps its room). The row
   holding what plays (its artist, album, track, the folders on its path) is
   tinted in every list. The rail and the jump grid are on the Artists and
   Albums lists and on folders of folders, once over 30.
@@ -3134,7 +3154,9 @@ Queue, Dance and Output (with its Pair and About pages).
   **Library** row (the
   tracks, where their names come from, Rescan tags: METADATA.md 3.3.6),
   **About** (battery,
-  storage, the library, the headphones, the CPU speed and Bluetooth power,
+  storage, the library ("19,410 tracks, 600 artists, 1500 albums"; where
+  the three counts don't fit, the tracks and the albums), the headphones,
+  the CPU speed and Bluetooth power,
   memory, **Device info** (below), the version (under the commit's date
   and the ELF's hash: [Versions](#versions)), the licence and the source
   URL (GPLv3 section 5(d); UiText's texts, measured by test_ui_library),
@@ -3205,8 +3227,9 @@ Queue, Dance and Output (with its Pair and About pages).
   disconnected. Paused, so the speaker doesn't suddenly play out loud.";
   a name too long for the title goes into the body; the reconnecting as a
   live line: "Trying to reconnect: try 2 of 3", then "Looking for
-  them...", and after the whole back-off "Stopped looking for them: Play
-  tries again"), Use speaker (paused: B plays) or OK; from a dark screen
+  them...", and after the whole back-off "Stopped looking: Play tries
+  again"; the title beside the icon has 236 px, "Headphones disconnected"
+  whole), Use speaker (paused: B plays) or OK; from a dark screen
   its first touch only answers the wake (the pocket rule); it closes itself when they're back, and whatever it was
   over (the coach cards too) is drawn again. A play that waited for the
   headphones and failed: a buzz and the dialog "Couldn't reach SPYDRONE"

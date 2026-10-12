@@ -24,18 +24,10 @@
     "note": "'Agora' (now), the mobile app's 'Tocando agora' cut to what the 52 px label holds: 'Tocando' is 55 px."
   },
   "tabs.library": "Biblioteca",
-  "@tabs.library": {
-    "overflow": true,
-    "note": "'Biblioteca' is the apps' word, and the UI's everywhere else (the Library row, About, the Open Library button); 65 px in Small, 13 over the tab label's 52. 'Músicas' (52) or 'Acervo' (45) would fit the label but name the tab differently from the texts that send you to it. Layout: let the active tab's label use the tab's full width, or a smaller label font."
-  },
   "tabs.queue": "Fila",
   "tabs.dance": "Dança",
   "tabs.output": "Saída",
   "toast.undo": "Desfazer",
-  "@toast.undo": {
-    "overflow": true,
-    "note": "'Desfazer' is the only Portuguese word for Undo (Android's snackbars use it); 80 px in Bold, 30 over the pill's 50. Nothing shorter fits either: 'Voltar' (back) is 55, 'Anular' 58. Layout: a wider Undo pill, or an icon (an undo arrow) in its place."
-  },
   "toast.view": "Ver",
   "toast.undone": "Desfeito",
   "toast.nothing_to_undo": "Nada a desfazer",
@@ -135,10 +127,6 @@
   "sleep.minutes_90": "90 min",
   "sleep.end_track": "Fim da faixa",
   "sleep.end_album": "Fim do álbum",
-  "@sleep.end_album": {
-    "overflow": true,
-    "note": "'Fim do álbum' is 89 px in Small, 3 over the pill's 86; its siblings 'Fim da faixa' and 'Fim da fila' fit. 'Fim do disco' (82) would fit, but 'disco' isn't the UI's word for an album ('álbum', as the apps). Layout: 90 px for the row's pills."
-  },
   "sleep.end_queue": "Fim da fila",
   "sleep.extend": "+10 min",
   "sleep.turn_off": "Desligar",
@@ -454,10 +442,6 @@
     "one": "Biblioteca: {0} faixa",
     "other": "Biblioteca: {0} faixas"
   },
-  "@library_row.title": {
-    "overflow": true,
-    "note": "'Biblioteca: 99.999 faixas' is 195 px in Body, the row has 184 ('Biblioteca: 1.000 faixas' is 185, so the label goes from 1.000 tracks on); the code already falls back to library.tracks_n alone when it doesn't fit, so nothing is cut on the device. 'Biblioteca: {0}' (143) would fit but drops the unit; 'Acervo: {0} faixas' (173) renames the library. Layout: let the title take the Rescan pill's slack."
-  },
   "library_row.empty": "Biblioteca: sem faixas",
   "library_row.src_transfer": {
     "one": "{0} da transferência",
@@ -519,10 +503,6 @@
   "bt.tap_again": "Confirmar",
   "bt.cancel": "Cancelar",
   "bt.disconnect": "Desconectar",
-  "@bt.disconnect": {
-    "overflow": true,
-    "note": "'Desconectar' is the apps' word; 101 px in Body, 9 over the card's 92 px button (81 in Small). 'Desligar' would fit but also means 'turn off' (the device's own Turn off, sleep.turn_off). Layout: a Small fallback for the card's buttons, or 102 px."
-  },
   "bt.try_again": "De novo",
   "@bt.try_again": {
     "note": "'De novo' (again): 'Tentar de novo', the button's word everywhere else, is 122 px in the card's 112 px button."
@@ -584,10 +564,6 @@
   "about.storage_flash": "Flash interna, {0} MB (sem cartão)",
   "about.library": "Biblioteca",
   "about.library_value": "{0}, {1}, {2}",
-  "@about.library_value": {
-    "overflow": true,
-    "note": "'99.999 faixas, 9999 artistas, 1500 álbuns' is 328 px in Body and 268 in Small, 8 over the 260 px value (English is 261 in Small). The counts' words (faixas, artistas, álbuns) have no shorter form; only dropping the spaces after the commas would fit (260). Layout: the fix English needs, a few px more for the value or a second line."
-  },
   "about.no_music": "nenhuma música",
   "about.headphones": "Fones de ouvido",
   "about.headphones_paired": "pareados",
