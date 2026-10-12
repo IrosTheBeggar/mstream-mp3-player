@@ -7,96 +7,98 @@ ELF {{ELF}} for this build; ELF {{DIO_ELF}} for the `-dio-full.bin`).
 Source for this binary: {{SOURCE_URL}}, and with its libraries in
 `{{SOURCE_TAR}}` below.
 
-## What's new in 0.9.0
+## What's new in 0.10.0
 
-- **Names in Greek, Cyrillic and more Latin.** Titles, artists, albums
-  and folders in Greek (Χάρις Αλεξίου) and Cyrillic (Кино, Земфира) are
-  drawn as they are, where 0.8.0 showed `?`. So are the accented letters
-  of Romanian (Ș, Ț), Turkish (İ, Ğ), Croatian and Serbian Latin (Đ),
-  Slovak (Ľ, Ĺ), the Baltic languages, Maltese, Esperanto and Welsh, and
-  Pinyin's tones (Lǚ), which 0.8.0 drew bare or as `?`. The rows are as
-  high as before. Latin letters the player still has no glyph for lose
-  only their accents instead of turning to `?` (Vietnamese: Mỹ Tâm shows
-  as My Tâm). A tag that keeps Windows' curly quotes, dashes, € or ™ in
-  an old Latin-1 frame shows them (Don’t Stop – Live, not Don?t Stop ?
-  Live), full-width letters (ＡＢＣ) show as ABC, and a name stored
-  decomposed, as macOS and some tag editors write them, keeps its accents
-  (Beyoncé, not Beyonce?).
-- **Chinese, Japanese and Korean names** are drawn from a set of 10,557
-  characters built into the firmware, at 16 px: the 2,350 common Korean
-  Hangul syllables (KS X 1001), the kana and 6,355 kanji of Japanese's
-  JIS X 0208, the 3,755 common Chinese characters (GB2312's level 1), and
-  their punctuation and symbols (☆, ♪, → and ℃ among them): 宇多田ヒカル,
-  王菲, 아이유. Han characters are drawn the Japanese way, which a Chinese
-  reader reads too, though a few differ by a stroke. Rarer characters
-  still show as `?`: the Hangul syllables outside the 2,350 (똠),
-  Traditional Chinese characters outside these sets, and the very rare
-  Han of Unicode's extension blocks. Half-width katakana (ｶﾀｶﾅ) show as
-  the full-width ones (カタカナ). In bold text (Now Playing's title, the
-  Queue's current track) they are drawn semi-bold, to sit beside the bold
-  Latin.
-- **Now Playing's title:** a title with any of these characters, ☆ or ♪
-  included, is drawn in the 16 px bold rows (up to three lines) instead of
-  the 22 px ones, so its Latin letters are the size of its CJK; one or two
-  lines are centred. A Latin title too long for the large rows is centred
-  in the small ones too, a little lower than in 0.8.0, and its lines no
-  longer clip the bottom of the g, j, p and y in the line above. A
-  Chinese or Japanese title breaks between characters, by the usual rules
-  (never before 。, 」, ー or a small kana, never after 「); Korean breaks at
-  its spaces.
-- **The order across scripts.** 0.8.0 sorted names in other scripts by
-  their length, the scripts mixed. Now they sort by script, then by
-  letter, all under the A-Z rail's `#` after the digits: Greek, Cyrillic,
-  Korean, the Japanese kana, then Han (by code point, not by reading).
-  Hiragana and katakana are one alphabet (ひかる next to ヒカル, ガ just
-  after カ, ヴ next to ウ, a small kana with its large one), half-width
-  katakana sort as full-width, and a lone Hangul consonant (ㄱ) sorts just
-  before the syllables it starts (가). Latin names keep their order,
-  except that a letter 0.8.0 showed as `?` now sorts as its base letter:
-  a name that starts with one (Romanian's Ș or Ț, Vietnamese's Ư,
-  full-width ＡＢＣ), under `#` in 0.8.0, is under S, T, U or A. An
-  artist folder in another script whose tags give a sort name
-  (ARTISTSORT) is listed by it: `Кино` with the sort name `Kino` under K.
-- **A computer can ask the player how it is**, over USB, without
-  restarting it or stopping the music: its version, the card's size and
-  free space, how many tracks it has, the battery, whether it's playing,
-  and the paired headphones. Asked to, it counts the card's free space
-  (never while music plays: about 2½ minutes for a 1 TB card), and it
-  shows "This one" and the port's name full screen for 5 s, with a buzz,
-  to tell two players apart. This is for the MP3 Player tab of the mStream
-  terminal player, which is coming. 0.6.0 to 0.8.0 answer that they
-  don't know the question, so the tab can tell they need an update.
-- **Fixed: a long listing on the serial console could restart the
-  player.** While a computer read a long list from the console (a
-  20,000-track library's albums take about 6 s), a line the player logged
-  meanwhile, as it does when it calls headphones that are out of reach,
-  waited for the list to end, and after 5 s the watchdog restarted the
-  player. 0.8.0 does this too. Now both print whole and the player
-  carries on.
-- Tested on a Core2 with a card of 19,410 tracks: Japanese kana names on
-  Now Playing, in the Queue and in the Library's lists, a Cyrillic title
-  on Now Playing and in the Queue, a Korean one on Now Playing, and Greek
-  album names in the Library, in their new order; the lists scroll as
-  smoothly with them as before (30 frames a second). What those tests
-  turned up was fixed first: the console restart above.
-- **The first start of 0.9.0 on a card 0.8.0 used** builds the library
-  again, once, from the tags 0.8.0 read, since the order changed: about
-  10 s for 20,000 tracks, with the start-up screen up meanwhile (on a card
-  of 19,410 tracks the library was ready 11.8 s after the card mounted).
-  No file is read again, and the queue and its place are kept. The next
-  starts load the library as it was left, in about 1.5 s. A card that
-  0.7.0 used last gets 0.8.0's first start instead (0.8.0's notes say
-  what it does).
-- **The firmware is bigger:** about 4.1 MB, up from 2.6 MB in 0.8.0, for
-  the Chinese, Japanese and Korean characters and the larger fonts (66 %
-  of the space it has on the flash, 42 % before). Installing and updating
-  take a little longer; the steps below are the same, and an update still
+- **The menus in ten languages:** English, Deutsch, Español, Français,
+  Italiano, 日本語, Polski, Português (Brazilian), Русский and 中文
+  (Simplified), the languages of mStream's mobile app and terminal
+  player. **Output > Language** lists each in its own name, and a tap
+  changes the whole screen to it at once, without a restart; the player
+  keeps it. The menus, the notes, the dialogs, the tips and the touch
+  check are all in it, and counts are written its way (19.410 in German,
+  19 410 in French). The serial console stays in English.
+- **A new unit asks first.** Installed fresh (the first install below,
+  which erases), the player starts on the Language page, before the
+  touch check and the tips, which then speak the language picked; the
+  page's header says where to change it later. Leaving it by a tab keeps
+  English. A unit updated from 0.9.0 or older doesn't ask: it stays in
+  English, with every setting it had.
+- **The nine translations are machine translations**, not yet read by a
+  native speaker. They were made from the words mStream's mobile app and
+  terminal player already use, so the three use the same words for the
+  same things, and by Fable agents for the rest, each language then
+  checked by another agent. Picking one of the nine shows a note in it
+  that says so ("Maschinell übersetzt: Fehler sind möglich"), as the
+  terminal player does. A native speaker's corrections are welcome, as a
+  pull request on the language's file in `i18n/` (its README says how).
+- **Room for every language.** Where a translation is longer than the
+  English, a button's label is drawn in the smaller font (Spanish's
+  "Desconectar" on the Bluetooth card), the Undo and View buttons on a
+  note show their icons, a tab whose name is too long shows its icon
+  alone (Japanese's and Russian's Library, German's Queue), a header puts
+  what doesn't fit beside its title on a second line under it (German's
+  Queue: "Warteschlange" over "100 von 113 · noch 13 · 45 min", the list
+  keeping its rows), and a menu row puts its detail under its label (the
+  Sleep timer's state in Spanish and Portuguese). Every text of the ten
+  languages was measured with the player's own fonts, in each place it
+  is drawn and with the biggest counts: each fits whole or gives way to
+  a shorter form, and only names are cut, with "…".
+- **"Various Artists" in the menus' language:** the line a compilation
+  gets when its tracks say compilation and none names an album artist
+  reads "Verschiedene Künstler" in German, "Artistes divers" in French,
+  "群星" in Chinese. An album artist tag that says "Various Artists"
+  itself is a name, and is shown as tagged.
+- **English, fixed where it was wrong:** "Shuffling 1 track", "Added 1
+  track", "Plays next: 1 track" and "Library: 1 track", where 0.9.0 said
+  "1 tracks", and "Here until the headphones connect" for headphones
+  without a name. Four texts that didn't fit are shorter: "Stopped
+  looking: Play tries again", "Waits for headphones", "Already connected:
+  WH-1000XM4" and "Speaker only (silent test mode)". Others that 0.9.0
+  cut are whole: "Headphones disconnected", "WH-1000XM4 (not connected)"
+  on Now Playing, "No music found: put folders in /music" and "Play all
+  19410"; About's library line leaves out the artists when the three
+  counts don't fit.
+- **Long names and long queues in English:** the menu a long press opens
+  cuts a long name, never the count of tracks after it (0.9.0 cut "14
+  tr…"); the volume menu leaves out its "volume" label beside a long name
+  rather than draw "vol…"; an artist's All tracks puts a long name under
+  its title; an album opened from its artist puts its line under the
+  title, the year left out before the count ("Daft Punk · 14 tracks"
+  under "Discovery"); a folder's counts say "files" where "audio files"
+  doesn't fit ("12 folders, 140 files"). The Queue's header gives the
+  position before the count: near the end of a queue of 1,000 tracks or
+  more with hours to go, "1980 of 2000" where 0.9.0 showed "20 up next ·
+  1 h 40+ min".
+- Tested on a Core2: each of the ten languages picked in turn, on Now
+  Playing, the Library, the Queue, the Output tab, the Language page,
+  About, both tips cards, a new unit's first start and the note on
+  picking a language; and, on a card of 113 tracks, the update from
+  0.9.0 and the way back. What those tests turned up was fixed first and
+  checked again on the device: German's Queue header, which cut its line
+  mid-number, and the tips' hint, drawn under their button in French,
+  German and Russian.
+- **The first start of 0.10.0 on a card 0.9.0 used** builds the library
+  again, once, from the tags 0.9.0 read, so that a compilation's line
+  follows the language: 60-62 ms on a card of 113 tracks, and about 10 s
+  to expect for 20,000 (the same kind of rebuild took 10.1 s for 19,410
+  in 0.9.0). No file is read again, and the queue is kept. So are the
+  settings, and the menus stay in English until a language is picked
+  (the serial log says `[nvs] schema 2 -> 3: migrated (the UI's language:
+  English, as before)`). A card that 0.8.0 used last gets the same
+  rebuild; one that 0.7.0 used last gets 0.8.0's first start instead
+  (0.8.0's notes say what it does).
+- **The firmware is a little bigger:** about 4.27 MB, up from 4.13 MB in
+  0.9.0, for the nine languages' texts (68 % of the space it has on the
+  flash, 66 % before). The steps below are the same, and an update still
   keeps the settings.
-- **Going back to 0.8.0 later:** its first start rebuilds the library the
-  same way, from the tags read before (about 10 s for 20,000 tracks):
-  nothing is read from the files again, and the queue and its place are
-  kept. It then draws and sorts the names as 0.8.0 did. Coming back to
-  0.9.0 rebuilds it once more, the same way.
+- **Going back to 0.9.0 later:** its first start rebuilds the library the
+  same way, from the tags read before (63 ms on the card of 113 tracks;
+  about 10 s for 20,000): nothing is read from the files again, and the
+  queue and the settings are kept. 0.9.0 is in English only: it sees
+  that a newer version saved the settings, leaves them as they are and
+  uses all it knows, which is every one but the language; that stays
+  saved, unread. Coming back to 0.10.0 rebuilds the library once more,
+  the same way, and its menus are in the language picked before.
 
 ## Hardware
 
@@ -206,9 +208,11 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
 - Text is drawn in Latin (Vietnamese and some rarer letters without
   their accents), Greek and Cyrillic, and Chinese, Japanese and Korean
   names from a built-in 16 px set (KS X 1001's Hangul, JIS X 0208,
-  GB2312's level 1 and the kana; Han drawn the Japanese way). Other
-  scripts (Hebrew, Arabic, Thai, Devanagari and others) and rarer
-  characters show as `?`. The menus are in English.
+  GB2312's level 1 and the kana; Han drawn the Japanese way, in the
+  Chinese menus too). Other scripts (Hebrew, Arabic, Thai, Devanagari
+  and others) and rarer characters show as `?`. The menus are in ten
+  languages, nine of them machine translations no native speaker has
+  read yet; the serial console is in English.
 - No WiFi yet: syncing with an mStream server comes later.
 
 ## Files
