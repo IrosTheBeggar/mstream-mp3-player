@@ -198,7 +198,13 @@ Header QueuePage::header() const {
         queueview::summary(0, queueview::Time{}, static_cast<uint32_t>(s.current + 1), s.queueSize, sub,
                            sizeof(headerSub_), /*withUpNext=*/false);
       }
-      const char* forms[queueview::kSummaryForms] = {summaryLong_, summaryMid_, sub, summaryShort_};
+      // Each form at its SummaryForm (the order they are tried is the
+      // enum's, which the host tests check: QueuePage isn't built there).
+      const char* forms[queueview::kSummaryForms];
+      forms[queueview::kSummaryLong] = summaryLong_;
+      forms[queueview::kSummaryMid] = summaryMid_;
+      forms[queueview::kSummaryPosition] = sub;
+      forms[queueview::kSummaryShort] = summaryShort_;
       int widths[queueview::kSummaryForms];
       for (int k = 0; k < queueview::kSummaryForms; ++k) {
         widths[k] = forms[k][0] ? f.width(Font::Small, forms[k]) : -1;
