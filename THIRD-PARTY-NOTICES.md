@@ -10,10 +10,10 @@ The firmware binary also contains the third-party components below. Each
 entry gives the exact version, its licence, the copyright lines found in its
 sources, and where it comes from. The full licence texts are in
 [LICENSES/](LICENSES); GPL-3.0 is [LICENSE](LICENSE). Every licence here is
-compatible with distributing the whole under GPL-3.0-or-later, but one:
-the terminal player's strings in the UI's translations are GPL-3.0-only
-until their relicensing is confirmed ([below](#the-uis-translations)), and
-with them the whole goes under GPL-3.0.
+compatible with distributing the whole under GPL-3.0-or-later. (The words
+the UI's translations took from the terminal player, GPL-3.0-only there,
+are licensed here under GPL-3.0-or-later by their author, who is also this
+firmware's: [below](#the-uis-translations).)
 
 A binary release (firmware.bin, or firmware.factory.bin, the merged image
 flashed at 0x0) is built from the tagged source with the versions pinned in
@@ -471,9 +471,9 @@ mStream's apps say the same thing; each file's `@@note` says what it took:
   translations are machine translations (its docs say so). Source:
   https://github.com/IrosTheBeggar/mstream-terminal-player
 
-Both are compatible with this firmware's GPL-3.0-or-later. The author of
-both can license the strings taken from them here as GPL-3.0-or-later;
-for the terminal player that waits on confirming five of its locale
-commits made under another git author name (2026-08-25). Until then the
-strings taken from it stay GPL-3.0-only, and a binary with them is passed
-on under GPL-3.0.
+The author of both, who is also this firmware's, licenses the strings
+taken from them here under GPL-3.0-or-later, like the rest of the firmware
+(the text is [LICENSE](LICENSE)). For the terminal player, GPL-3.0-only
+there, that covers every commit to its `locales/`: the five of 2026-08-25
+made under another git author name are the author's own too (confirmed
+2026-10-12).

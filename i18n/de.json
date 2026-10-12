@@ -288,9 +288,9 @@
     "one": "Als Nächstes",
     "other": "{0} Titel als Nächstes"
   },
-  "queue.title": "Warteliste",
+  "queue.title": "Warteschlange",
   "@queue.title": {
-    "note": "'Warteschlange' (the apps' word) is 135 px in Bold; beside the 'Wählen' pill the header's line must hold the position alone, '4999 von 5000' (96 px in Small), which leaves the title 117 px: 'Warteliste' (95 px) is the same thing in a shorter everyday word. The tab's tip, the empty state and the clear sheet keep 'Warteschlange'."
+    "note": "The apps' word (the mobile app's and the terminal player's), as in the tab's tip, the empty states, the sleep timer and the Clear sheet. 135 px in Bold: beside the 'Wählen' pill it leaves the header's summary 78 px, the position alone ('1 von 10', '99 von 999') while it takes five digits or fewer; from six ('100 von 120', '10 von 1000') no form fits there, and the summary goes on the header's second line, 221 px ('999 von 999 · 16 h 39+ min', '4999 von 5000 · 99 h 59+ min'). The fitters' 'Warteliste' (95 px), which kept it on one line, went back to the apps' word."
   },
   "queue.empty_sub": "leer",
   "queue.edit": "Wählen",

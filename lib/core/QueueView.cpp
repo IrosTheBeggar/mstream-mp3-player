@@ -112,6 +112,16 @@ int pickSummary(const int (&widths)[kSummaryForms], int room) {
   return -1;
 }
 
+SummaryPick placeSummary(const int (&widths)[kSummaryForms], int beside, int below) {
+  SummaryPick p;
+  p.form = pickSummary(widths, beside);
+  if (p.form < 0) {
+    p.form = pickSummary(widths, below);
+    p.below = p.form >= 0;
+  }
+  return p;
+}
+
 // ---- AddedMark ----
 
 uint32_t AddedMark::firstPosition(const QueueModel& q) const {

@@ -363,19 +363,20 @@ inline constexpr int headerPillZoneX(int pillX, bool chevron) {
 // 12, 28 after the ‹, 36 after the ✕) to the header's right: 8 px before the
 // pill (a pill `pillW` px wide: Header::pillW()), or x 310 with none. Its
 // room so depends on the title's and the pill's words in the UI's language
-// (the Queue's summary has 169 px beside English's "Queue" and Edit, 118
-// beside German's "Warteliste" and "Wählen"; 78 beside "Warteschlange", the
-// device check's). What is drawn (headerSub()):
+// (the Queue's summary has 169 px beside English's "Queue" and Edit, 78
+// beside German's "Warteschlange" and "Wählen", the device check's). What
+// is drawn (headerSub()):
 //   a name (the default): beside the title, cut with "…" to its room, when
 //   that is more than kHeaderSubMinRoom (else none);
 //   a phrase or a count (Header::subWhole: Output's, About's, Device info's,
 //   the Language page's, the Pair screen's, the Queue's): beside it whole,
 //   or not at all;
 //   a line that may go under the title (Header::subBelow: an Artist's and
-//   an Album's counts, an artist's name on its All tracks): beside it
-//   whole, else on the header's second line (Small, from `x` to the right;
-//   a name cut there with "…"), the title over it: the Folder page's two
-//   lines.
+//   an Album's counts, an artist's name on its All tracks, the Queue's
+//   summary when none of its forms fits beside: queueview::placeSummary()):
+//   beside it whole, else on the header's second line (Small, from `x` to
+//   the right; a name cut there with "…"), the title over it: the Folder
+//   page's two lines.
 inline constexpr int kHeaderSubGap = 8;
 inline constexpr int kHeaderSubMinRoom = 16;
 constexpr int headerRight(int pillW) { return pillW > 0 ? 320 - 6 - pillW - 8 : 320 - 10; }

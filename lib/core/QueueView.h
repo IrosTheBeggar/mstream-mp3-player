@@ -66,18 +66,31 @@ Time upNextTime(const QueueModel& q, const DurationBook& book, uint32_t (*hintMs
 // the queue is matters more than how many are left. Returns buf.
 char* summary(uint32_t upNext, const Time& t, uint32_t position, uint32_t size, char* buf, size_t bufSize,
               bool withUpNext = true);
-// The Queue header's summary beside its title and the Edit pill
-// (uitext::headerSubRoom(): 169 px beside English's "Queue", 118 beside
-// German's "Warteliste"): the first of its forms that fits `room` px
-// whole, in this order: the long one ("4 of 16 · 12 up next · 49 min"), the
-// position and the time ("4 of 16 · 49 min"), the count and the time ("12
-// up next · 49 min"), the position alone ("4 of 16": summary(0, Time{},
-// position, size, ..., false)). `widths[k]`: form k's (Small), < 0 when it
-// is empty (no position: nothing current). -1: none fits, and no summary
-// is drawn: never one cut ("noch 9 · 3…").
+// The Queue header's summary in a room (beside its title and the Edit
+// pill, uitext::headerSubRoom(): 169 px beside English's "Queue", 78
+// beside German's "Warteschlange"; or under the title): the first of its
+// forms that fits `room` px whole, in this order: the long one ("4 of 16 ·
+// 12 up next · 49 min"), the position and the time ("4 of 16 · 49 min"),
+// the count and the time ("12 up next · 49 min"), the position alone ("4
+// of 16": summary(0, Time{}, position, size, ..., false)). `widths[k]`:
+// form k's (Small), < 0 when it is empty (no position: nothing current).
+// -1: none fits: never one cut ("noch 9 · 3…").
 inline constexpr int kSummaryForms = 4;
 enum SummaryForm : int { kSummaryLong, kSummaryMid, kSummaryShort, kSummaryPosition };
 int pickSummary(const int (&widths)[kSummaryForms], int room);
+// Where the header draws it (QueuePage::header()): beside the title, the
+// first form that fits `beside` px (pickSummary()); when none does, on the
+// header's second line, under the title, the first that fits `below` px
+// there (Header::subBelow: the Folder page's two lines, in the same 36 px
+// header; from the title's x to 8 px before the pill: 235 px in English,
+// 221 in German, which has none beside "Warteschlange" once the position
+// takes six digits, "100 von 120"); else none (form -1). English's always
+// fits beside, as before.
+struct SummaryPick {
+  int form = -1;
+  bool below = false;  // on the second line
+};
+SummaryPick placeSummary(const int (&widths)[kSummaryForms], int beside, int below);
 
 // ---- what a Library add put in the queue ----
 //

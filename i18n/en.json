@@ -2548,7 +2548,7 @@
   },
   "queue.title": "Queue",
   "@queue.title": {
-    "context": "The Queue page's header title. Its width and queue.edit's set the room of the summary beside it (queue.summary_position): the position alone, '4999 of 5000', must fit whole there in every language (test_ui_library; German's 'Warteliste' leaves 118 px).",
+    "context": "The Queue page's header title. Its width and queue.edit's set the room of the summary beside it (queue.summary_position): where none of the summary's forms fits whole there, the summary goes on the header's second line, under the title (test_ui_library; German's 'Warteschlange' leaves it 78 px beside, 221 under).",
     "room": {
       "font": "Bold",
       "px": 235
@@ -2631,7 +2631,7 @@
   },
   "queue.summary_position": "{0} of {1}",
   "@queue.summary_position": {
-    "context": "The Queue header's line: where the queue is ('4 of 16'), then ' · 49 min' when known; alone, the summary's last form. The header draws the first of the summary's forms that fits whole beside its title and the Edit pill (QueuePage: the long one, the position and the time, the count and the time, the position alone), else none: 169 px is English's room, and another language's queue.title and queue.edit leave it more or less (German's 118 px; test_ui_library wants the position alone whole at 4999 of 5000 in every language).",
+    "context": "The Queue header's line: where the queue is ('4 of 16'), then ' · 49 min' when known; alone, the summary's last form. The header draws the first of the summary's forms that fits whole beside its title and the Edit pill (QueuePage: the long one, the position and the time, the count and the time, the position alone); when none does, the first that fits whole on the header's second line, under the title; else none. 169 px is English's room beside the title (235 under it), and another language's queue.title and queue.edit leave it more or less (German's 78 px beside, 221 under; test_ui_library wants a form with the position at every queue in every language).",
     "room": {
       "font": "Small",
       "px": 169,
@@ -2653,7 +2653,7 @@
   },
   "queue.summary_nothing_next": "Nothing up next",
   "@queue.summary_nothing_next": {
-    "context": "The Queue header's line when the current entry is the last. The header draws the first of the summary's forms that fits whole beside its title and the Edit pill (QueuePage: the long one, the position and the time, the count and the time, the position alone), else none: 169 px is English's room, and another language's queue.title and queue.edit leave it more or less (German's 118 px; test_ui_library wants the position alone whole at 4999 of 5000 in every language).",
+    "context": "The Queue header's line when the current entry is the last. The header draws the first of the summary's forms that fits whole beside its title and the Edit pill (QueuePage: the long one, the position and the time, the count and the time, the position alone); when none does, the first that fits whole on the header's second line, under the title; else none. 169 px is English's room beside the title (235 under it), and another language's queue.title and queue.edit leave it more or less (German's 78 px beside, 221 under; test_ui_library wants a form with the position at every queue in every language).",
     "room": {
       "font": "Small",
       "px": 169,
@@ -2666,7 +2666,7 @@
     "other": "{0} up next"
   },
   "@queue.summary_up_next": {
-    "context": "The Queue header's line: entries after the current one ('12 up next'). The header draws the first of the summary's forms that fits whole beside its title and the Edit pill (QueuePage: the long one, the position and the time, the count and the time, the position alone), else none: 169 px is English's room, and another language's queue.title and queue.edit leave it more or less (German's 118 px; test_ui_library wants the position alone whole at 4999 of 5000 in every language).",
+    "context": "The Queue header's line: entries after the current one ('12 up next'). The header draws the first of the summary's forms that fits whole beside its title and the Edit pill (QueuePage: the long one, the position and the time, the count and the time, the position alone); when none does, the first that fits whole on the header's second line, under the title; else none. 169 px is English's room beside the title (235 under it), and another language's queue.title and queue.edit leave it more or less (German's 78 px beside, 221 under; test_ui_library wants a form with the position at every queue in every language).",
     "room": {
       "font": "Small",
       "px": 169,

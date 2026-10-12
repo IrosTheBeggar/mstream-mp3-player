@@ -1232,12 +1232,14 @@ void test_queue_texts_fit() {
 
 // The Queue header's summary in every language (QueuePage::header()): the
 // first of its four forms that fits whole beside that language's title and
-// Edit pill (queueview::pickSummary()), or none: never one cut (the device
-// check's German "noch 9 · 3…" in 78 px). Where the queue is shows at
-// every queue in every language, 4999 of 5000 too (German's "Warteliste",
-// the fitters', leaves "4999 von 5000" 118 px); English's picks are as
-// before but where it was cut (a long queue with hours: the position alone
-// now).
+// Edit pill (queueview::pickSummary()); when none does, the first that
+// fits whole on the header's second line, under the title
+// (queueview::placeSummary(): German's "Warteschlange", the apps' word,
+// leaves 78 px beside it, none from six digits of position, and 221 under
+// it); else none: never one cut (the device check's German "noch 9 · 3…" in
+// 78 px). Where the queue is shows at every queue in every language, 4999
+// of 5000 too; English's picks are as before but where it was cut (a long
+// queue with hours: the position alone now), and never under the title.
 void test_queue_summary_fits_every_language() {
   using namespace uitext;
   const Vlw small(kVlwSans13), bold(kVlwSansBold16);
@@ -1248,6 +1250,28 @@ void test_queue_summary_fits_every_language() {
   TEST_ASSERT_EQUAL_INT(-1, queueview::pickSummary({120, 110, 101, 101}, 100));
   TEST_ASSERT_EQUAL_INT(1, queueview::pickSummary({-1, 60, 50, -1}, 100));  // an empty form is never picked
   TEST_ASSERT_EQUAL_INT(-1, queueview::pickSummary({-1, -1, -1, -1}, 100));
+  // Where: beside the title while a form fits there (the position alone
+  // too, over a fuller form under it), else under it, else none.
+  {
+    queueview::SummaryPick p = queueview::placeSummary({100, 90, 80, 40}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(0, p.form);
+    TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({120, 110, 101, 40}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(3, p.form);
+    TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({190, 180, 160, 101}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(0, p.form);
+    TEST_ASSERT_TRUE(p.below);
+    p = queueview::placeSummary({250, 180, 160, 101}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(1, p.form);
+    TEST_ASSERT_TRUE(p.below);
+    p = queueview::placeSummary({250, 240, 230, 201}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(-1, p.form);
+    TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({-1, -1, -1, -1}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(-1, p.form);
+    TEST_ASSERT_FALSE(p.below);
+  }
   struct Case {
     uint32_t upNext, mins;
     bool more;
@@ -1256,87 +1280,123 @@ void test_queue_summary_fits_every_language() {
   const Case cases[] = {{9, 37, false, 1, 10},          {12, 49, false, 4, 16},  {500, 999, true, 999, 999},
                         {4999, 5999, true, 4999, 5000}, {0, 0, false, 10, 10},   {99, 120, false, 1, 100},
                         {999, 999, true, 1, 1000},      {8, 0, false, 2, 10},    {4998, 5999, true, 1, 4999}};
+  // The UI's language's rooms and pick at a queue, as QueuePage::header()
+  // makes them: beside the title (to 8 px before the Edit pill, the pill's
+  // label in Bold within kQueuePillTextW, else Small: Header::pillW()) and
+  // under it (from x 12 to the same right).
+  struct Placed {
+    int titleW, right, beside, below;
+    char forms[queueview::kSummaryForms][64];
+    int widths[queueview::kSummaryForms];
+    queueview::SummaryPick pick;
+  };
+  auto place = [&](const Case& c, Placed& p) {
+    const char* edit = tr(S::queue_edit);
+    const int pillW = (bold.width(edit) <= kQueuePillTextW ? bold : small).width(edit) + kHeaderPillPad;
+    p.titleW = bold.width(tr(S::queue_title));
+    p.right = headerRight(pillW);
+    p.beside = headerSubRoom(12, p.titleW, p.right);
+    p.below = p.right - 12;
+    queueview::Time t;
+    t.knownS = c.mins * 60;
+    t.unknown = c.more ? 1 : 0;
+    queueview::summary(c.upNext, t, c.pos, c.size, p.forms[0], sizeof(p.forms[0]));
+    queueview::summary(c.upNext, t, c.pos, c.size, p.forms[1], sizeof(p.forms[1]), false);
+    queueview::summary(c.upNext, t, 0, c.size, p.forms[2], sizeof(p.forms[2]));
+    queueview::summary(0, queueview::Time{}, c.pos, c.size, p.forms[3], sizeof(p.forms[3]), false);
+    for (int k = 0; k < queueview::kSummaryForms; ++k) p.widths[k] = p.forms[k][0] ? small.width(p.forms[k]) : -1;
+    p.pick = queueview::placeSummary(p.widths, p.beside, p.below);
+  };
+  static const char* const kFormNames[queueview::kSummaryForms] = {"long", "mid", "short", "position"};
   std::string report;
+  Placed p;
   for (uistr::Lang l : kAllLangs) {
     if (!uistr::hasCatalogue(l)) continue;
     uistr::setLang(l);
-    const char* edit = tr(S::queue_edit);
-    const int pillW = (bold.width(edit) <= kQueuePillTextW ? bold : small).width(edit) + kHeaderPillPad;
-    const int room = headerSubRoom(12, bold.width(tr(S::queue_title)), headerRight(pillW));
+    place(cases[0], p);
     char m[160];
-    snprintf(m, sizeof(m), "%s (%d px):", uistr::tag(l), room);
+    snprintf(m, sizeof(m), "%s (%d px beside, %d under):", uistr::tag(l), p.beside, p.below);
     report += m;
     for (const Case& c : cases) {
-      queueview::Time t;
-      t.knownS = c.mins * 60;
-      t.unknown = c.more ? 1 : 0;
-      char forms[queueview::kSummaryForms][64];
-      queueview::summary(c.upNext, t, c.pos, c.size, forms[0], sizeof(forms[0]));
-      queueview::summary(c.upNext, t, c.pos, c.size, forms[1], sizeof(forms[1]), false);
-      queueview::summary(c.upNext, t, 0, c.size, forms[2], sizeof(forms[2]));
-      queueview::summary(0, queueview::Time{}, c.pos, c.size, forms[3], sizeof(forms[3]), false);
-      int widths[queueview::kSummaryForms];
-      for (int k = 0; k < queueview::kSummaryForms; ++k) widths[k] = forms[k][0] ? small.width(forms[k]) : -1;
-      const int pick = queueview::pickSummary(widths, room);
-      if (pick >= 0) {
-        fits(small, forms[pick], room);
-        // Drawn whole beside the title (Ui::drawHeader()'s rule for it).
-        TEST_ASSERT_TRUE(headerSub(12, bold.width(tr(S::queue_title)), headerRight(pillW), widths[pick], true,
-                                   false) == HeaderSub::Beside);
-      } else {
-        for (int k = 0; k < queueview::kSummaryForms; ++k) TEST_ASSERT_TRUE(widths[k] < 0 || widths[k] > room);
+      place(c, p);
+      const int k = p.pick.form;
+      // The first form that fits its room: none before it fits there.
+      const int room = p.pick.below ? p.below : p.beside;
+      for (int j = 0; j < (k < 0 ? queueview::kSummaryForms : k); ++j) {
+        TEST_ASSERT_TRUE(p.widths[j] < 0 || p.widths[j] > room);
+      }
+      if (k >= 0) {
+        fits(small, p.forms[k], room);
+        // Ui::drawHeader() draws it where the pick says, whole: beside the
+        // title, or under it (it doesn't fit beside).
+        const HeaderSub how = headerSub(12, p.titleW, p.right, p.widths[k], true, true);
+        TEST_ASSERT_TRUE(how == (p.pick.below ? HeaderSub::Below : HeaderSub::Beside));
+      }
+      // Under the title only when no form fits beside it.
+      if (p.pick.below) {
+        for (int j = 0; j < queueview::kSummaryForms; ++j) {
+          TEST_ASSERT_TRUE(p.widths[j] < 0 || p.widths[j] > p.beside);
+        }
       }
       // Where the queue is, in every language, at every queue: a form with
       // the position (never the count and the time alone at these).
-      TEST_ASSERT_TRUE_MESSAGE(pick >= 0 && pick != queueview::kSummaryShort, forms[3]);
-      TEST_ASSERT_TRUE_MESSAGE(strncmp(forms[pick < 0 ? 3 : pick], forms[3], strlen(forms[3])) == 0, forms[3]);
-      snprintf(m, sizeof(m), " %u/%u %s", static_cast<unsigned>(c.pos), static_cast<unsigned>(c.size),
-               pick < 0 ? "none" : pick == 0 ? "long" : pick == 1 ? "mid" : pick == 2 ? "short" : "position");
+      TEST_ASSERT_TRUE_MESSAGE(k >= 0 && k != queueview::kSummaryShort, p.forms[3]);
+      TEST_ASSERT_TRUE_MESSAGE(strncmp(p.forms[k < 0 ? 3 : k], p.forms[3], strlen(p.forms[3])) == 0, p.forms[3]);
+      // English: beside the title at every queue, as before.
+      if (l == uistr::Lang::En) TEST_ASSERT_FALSE_MESSAGE(p.pick.below, p.forms[3]);
+      snprintf(m, sizeof(m), " %u/%u %s%s", static_cast<unsigned>(c.pos), static_cast<unsigned>(c.size),
+               k < 0 ? "none" : kFormNames[k], p.pick.below ? " under" : "");
       report += m;
     }
     report += "; ";
   }
   TEST_MESSAGE(report.c_str());
-  // The device check's: German at 1 of 10 says where the queue is, whole.
-  auto pickIn = [&](uistr::Lang l, const Case& c, char* out) {
-    uistr::setLang(l);
-    const char* edit = tr(S::queue_edit);
-    const int pillW = (bold.width(edit) <= kQueuePillTextW ? bold : small).width(edit) + kHeaderPillPad;
-    const int room = headerSubRoom(12, bold.width(tr(S::queue_title)), headerRight(pillW));
-    queueview::Time t;
-    t.knownS = c.mins * 60;
-    t.unknown = c.more ? 1 : 0;
-    char forms[queueview::kSummaryForms][64];
-    queueview::summary(c.upNext, t, c.pos, c.size, forms[0], sizeof(forms[0]));
-    queueview::summary(c.upNext, t, c.pos, c.size, forms[1], sizeof(forms[1]), false);
-    queueview::summary(c.upNext, t, 0, c.size, forms[2], sizeof(forms[2]));
-    queueview::summary(0, queueview::Time{}, c.pos, c.size, forms[3], sizeof(forms[3]), false);
-    int widths[queueview::kSummaryForms];
-    for (int k = 0; k < queueview::kSummaryForms; ++k) widths[k] = forms[k][0] ? small.width(forms[k]) : -1;
-    const int pick = queueview::pickSummary(widths, room);
-    snprintf(out, 64, "%s", pick < 0 ? "" : forms[pick]);
-    return pick;
-  };
-  char got[64];
-  // ("Warteliste" leaves 118 px: the position and the time), and the
-  // position alone from 3-digit queues (none beside "Warteschlange").
-  TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, pickIn(uistr::Lang::De, cases[0], got));
-  TEST_ASSERT_EQUAL_STRING("1 von 10 \xC2\xB7 37 min", got);
-  TEST_ASSERT_EQUAL_INT(queueview::kSummaryPosition, pickIn(uistr::Lang::De, cases[2], got));
-  TEST_ASSERT_EQUAL_STRING("999 von 999", got);
-  TEST_ASSERT_EQUAL_INT(queueview::kSummaryPosition, pickIn(uistr::Lang::De, cases[3], got));
-  TEST_ASSERT_EQUAL_STRING("4999 von 5000", got);
+  // German: the apps' word (the mobile app's and the terminal player's,
+  // as its other texts that name the queue), 78 px beside it and 221 under.
+  uistr::setLang(uistr::Lang::De);
+  TEST_ASSERT_EQUAL_STRING("Warteschlange", tr(S::queue_title));
+  place(cases[0], p);
+  TEST_ASSERT_EQUAL_INT(78, p.beside);
+  TEST_ASSERT_EQUAL_INT(221, p.below);
+  // The device check's queue, 1 of 10: the position alone, beside it.
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryPosition, p.pick.form);
+  TEST_ASSERT_FALSE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("1 von 10", p.forms[p.pick.form]);
+  // From six digits of position none fits beside it: under it, the
+  // fullest form that fits there.
+  place(cases[2], p);
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, p.pick.form);
+  TEST_ASSERT_TRUE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("999 von 999 \xC2\xB7 16 h 39+ min", p.forms[p.pick.form]);
+  place(cases[3], p);
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, p.pick.form);
+  TEST_ASSERT_TRUE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("4999 von 5000 \xC2\xB7 99 h 59+ min", p.forms[p.pick.form]);
+  place(Case{20, 60, false, 100, 120}, p);  // six digits: "100 von 120" is 80 px
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryLong, p.pick.form);
+  TEST_ASSERT_TRUE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("100 von 120 \xC2\xB7 noch 20 \xC2\xB7 60 min", p.forms[p.pick.form]);
   // English as before: the position and the time, the long form when
-  // nothing is next; the position alone only where all three were cut.
-  TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, pickIn(uistr::Lang::En, cases[0], got));
-  TEST_ASSERT_EQUAL_STRING("1 of 10 \xC2\xB7 37 min", got);
-  TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, pickIn(uistr::Lang::En, cases[1], got));
-  TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, pickIn(uistr::Lang::En, cases[2], got));
-  TEST_ASSERT_EQUAL_STRING("999 of 999 \xC2\xB7 16 h 39+ min", got);
-  TEST_ASSERT_EQUAL_INT(queueview::kSummaryLong, pickIn(uistr::Lang::En, cases[4], got));
-  TEST_ASSERT_EQUAL_STRING("10 of 10 \xC2\xB7 Nothing up next", got);
-  TEST_ASSERT_EQUAL_INT(queueview::kSummaryPosition, pickIn(uistr::Lang::En, cases[3], got));
-  TEST_ASSERT_EQUAL_STRING("4999 of 5000", got);
+  // nothing is next; the position alone only where all three were cut;
+  // beside the title, 169 px (235 under it, never used).
+  uistr::setLang(uistr::Lang::En);
+  place(cases[0], p);
+  TEST_ASSERT_EQUAL_INT(169, p.beside);
+  TEST_ASSERT_EQUAL_INT(235, p.below);
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, p.pick.form);
+  TEST_ASSERT_EQUAL_STRING("1 of 10 \xC2\xB7 37 min", p.forms[p.pick.form]);
+  place(cases[1], p);
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, p.pick.form);
+  place(cases[2], p);
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, p.pick.form);
+  TEST_ASSERT_EQUAL_STRING("999 of 999 \xC2\xB7 16 h 39+ min", p.forms[p.pick.form]);
+  place(cases[4], p);
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryLong, p.pick.form);
+  TEST_ASSERT_EQUAL_STRING("10 of 10 \xC2\xB7 Nothing up next", p.forms[p.pick.form]);
+  place(cases[3], p);
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryPosition, p.pick.form);
+  TEST_ASSERT_FALSE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("4999 of 5000", p.forms[p.pick.form]);
   uistr::setLang(uistr::Lang::En);
 }
 

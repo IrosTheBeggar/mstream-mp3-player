@@ -8,7 +8,9 @@
 //     Queue tab again goes back to it; a tap on the header's title goes to
 //     the playing track, the top, the end, in turn (the review's graft).
 //   - The header says what's left: "4 of 16 · 12 up next · 49 min" (the
-//     lengths are learned as tracks play: "49+ min" while some aren't).
+//     lengths are learned as tracks play: "49+ min" while some aren't),
+//     beside the title, or under it where a language's title leaves it
+//     too little.
 //   - A tap on a row opens its bar: Play now / Play next / Remove (the
 //     usability walk: a tap that played at once surprised first-time
 //     users, and removing one track took edit mode).
@@ -182,10 +184,14 @@ Header QueuePage::header() const {
       // drawHeader() leaves: their words in the UI's language); else the
       // position and the time (where the queue is is what the header is
       // for: spec §6.4); else the count and the time; else the position
-      // alone; else none (queueview::pickSummary()).
+      // alone. When none fits there (German's "Warteschlange" once the
+      // position takes six digits), the first that fits on the header's
+      // second line, under the title (the Folder page's two lines: the
+      // header keeps its height, the list its rows); else none
+      // (queueview::placeSummary()).
       const int pill = Header::pillW(tr(S::queue_edit), uitext::kQueuePillTextW, false);
-      const int room =
-          uitext::headerSubRoom(12, f.width(Font::Bold, tr(S::queue_title)), uitext::headerRight(pill));
+      const int right = uitext::headerRight(pill);
+      const int room = uitext::headerSubRoom(12, f.width(Font::Bold, tr(S::queue_title)), right);
       // The position alone, made in the header's buffer.
       if (s.current >= 0) {
         queueview::summary(0, queueview::Time{}, static_cast<uint32_t>(s.current + 1), s.queueSize, sub,
@@ -196,11 +202,14 @@ Header QueuePage::header() const {
       for (int k = 0; k < queueview::kSummaryForms; ++k) {
         widths[k] = forms[k][0] ? f.width(Font::Small, forms[k]) : -1;
       }
-      const int pick = queueview::pickSummary(widths, room);
-      if (pick < 0) {
+      const queueview::SummaryPick pick = queueview::placeSummary(widths, room, right - 12);
+      // (drawHeader() puts it under the title: it is wider than the room
+      // beside it.)
+      h.subBelow = pick.below;
+      if (pick.form < 0) {
         sub[0] = 0;
-      } else if (pick != queueview::kSummaryPosition) {
-        snprintf(sub, sizeof(headerSub_), "%s", forms[pick]);
+      } else if (pick.form != queueview::kSummaryPosition) {
+        snprintf(sub, sizeof(headerSub_), "%s", forms[pick.form]);
       }
     }
   }

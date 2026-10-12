@@ -384,7 +384,9 @@ private:
 //
 // Normal:
 //   36-71    "Queue  4 of 16 · 12 up next · 49 min"                 [Edit]
-//            (too wide: "4 of 16 · 49 min", the position kept)
+//            (too wide: "4 of 16 · 49 min", the position kept; none
+//            beside the title, as German's "Warteschlange" from "100 von
+//            120": on a second line under it, the Folder page's two)
 //            (a tap on the title: the playing track, the top, the end)
 //   72-239   every entry; the playing one tinted with the accent's edge,
 //            the played ones dim, a failed one with an amber "!", what a
