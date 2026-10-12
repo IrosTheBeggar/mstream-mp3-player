@@ -184,10 +184,10 @@ Header QueuePage::header() const {
       // drawHeader() leaves: their words in the UI's language); else the
       // position and the time (where the queue is is what the header is
       // for: spec §6.4); else the count and the time; else the position
-      // alone. When none fits there (German's "Warteschlange" once the
-      // position takes six digits), the first that fits on the header's
-      // second line, under the title (the Folder page's two lines: the
-      // header keeps its height, the list its rows); else none
+      // alone. When the position alone doesn't fit there (German's
+      // "Warteschlange" once it takes six digits), the first that fits on
+      // the header's second line, under the title (the Folder page's two
+      // lines: the header keeps its height, the list its rows); else none
       // (queueview::placeSummary()).
       const int pill = Header::pillW(tr(S::queue_edit), uitext::kQueuePillTextW, false);
       const int right = uitext::headerRight(pill);

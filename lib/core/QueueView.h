@@ -79,13 +79,16 @@ inline constexpr int kSummaryForms = 4;
 enum SummaryForm : int { kSummaryLong, kSummaryMid, kSummaryShort, kSummaryPosition };
 int pickSummary(const int (&widths)[kSummaryForms], int room);
 // Where the header draws it (QueuePage::header()): beside the title, the
-// first form that fits `beside` px (pickSummary()); when none does, on the
-// header's second line, under the title, the first that fits `below` px
-// there (Header::subBelow: the Folder page's two lines, in the same 36 px
-// header; from the title's x to 8 px before the pill: 235 px in English,
-// 221 in German, which has none beside "Warteschlange" once the position
-// takes six digits, "100 von 120"); else none (form -1). English's always
-// fits beside, as before.
+// first form that fits `beside` px (pickSummary()), while the position
+// alone fits there (the narrowest form that says where the queue is), or
+// there is none; else on the header's second line, under the title, the
+// first that fits `below` px there (Header::subBelow: the Folder page's
+// two lines, in the same 36 px header; from the title's x to 8 px before
+// the pill: 235 px in English, 221 in German, whose position alone doesn't
+// fit beside "Warteschlange" once it takes six digits, "100 von 120"; the
+// count that would, "noch 20" with no time known, would hide where the
+// queue is); else none (form -1). English's position alone always fits
+// beside, so its picks are as before.
 struct SummaryPick {
   int form = -1;
   bool below = false;  // on the second line

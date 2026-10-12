@@ -1232,14 +1232,15 @@ void test_queue_texts_fit() {
 
 // The Queue header's summary in every language (QueuePage::header()): the
 // first of its four forms that fits whole beside that language's title and
-// Edit pill (queueview::pickSummary()); when none does, the first that
-// fits whole on the header's second line, under the title
-// (queueview::placeSummary(): German's "Warteschlange", the apps' word,
-// leaves 78 px beside it, none from six digits of position, and 221 under
-// it); else none: never one cut (the device check's German "noch 9 · 3…" in
-// 78 px). Where the queue is shows at every queue in every language, 4999
-// of 5000 too; English's picks are as before but where it was cut (a long
-// queue with hours: the position alone now), and never under the title.
+// Edit pill (queueview::pickSummary()); when the position alone doesn't
+// fit there, the first that fits whole on the header's second line, under
+// the title (queueview::placeSummary(): German's "Warteschlange", the apps'
+// word, leaves 78 px beside it, too little for the position from six
+// digits, and 221 under it); else none: never one cut (the device check's
+// German "noch 9 · 3…" in 78 px). Where the queue is shows at each of these
+// queues in every language, 4999 of 5000 too, and with no time known;
+// English's picks are as before but where it was cut (a long queue with
+// hours: the position alone now), and never under the title.
 void test_queue_summary_fits_every_language() {
   using namespace uitext;
   const Vlw small(kVlwSans13), bold(kVlwSansBold16);
@@ -1250,8 +1251,12 @@ void test_queue_summary_fits_every_language() {
   TEST_ASSERT_EQUAL_INT(-1, queueview::pickSummary({120, 110, 101, 101}, 100));
   TEST_ASSERT_EQUAL_INT(1, queueview::pickSummary({-1, 60, 50, -1}, 100));  // an empty form is never picked
   TEST_ASSERT_EQUAL_INT(-1, queueview::pickSummary({-1, -1, -1, -1}, 100));
-  // Where: beside the title while a form fits there (the position alone
-  // too, over a fuller form under it), else under it, else none.
+  // Where: beside the title while the position alone fits there (over a
+  // fuller form under it), the first form that fits there; else under it,
+  // the first that fits there, else none. A count that fits beside the
+  // title never hides where the queue is (German's "noch 20", 51 px in 78,
+  // over "100 von 120 · noch 20" under it when no time is known); with no
+  // position (nothing current), beside while a form fits there.
   {
     queueview::SummaryPick p = queueview::placeSummary({100, 90, 80, 40}, 100, 200);
     TEST_ASSERT_EQUAL_INT(0, p.form);
@@ -1271,6 +1276,15 @@ void test_queue_summary_fits_every_language() {
     p = queueview::placeSummary({-1, -1, -1, -1}, 100, 200);
     TEST_ASSERT_EQUAL_INT(-1, p.form);
     TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({143, 80, 51, 80}, 78, 221);
+    TEST_ASSERT_EQUAL_INT(0, p.form);
+    TEST_ASSERT_TRUE(p.below);
+    p = queueview::placeSummary({100, 100, 100, -1}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(0, p.form);
+    TEST_ASSERT_FALSE(p.below);
+    p = queueview::placeSummary({120, 120, 120, -1}, 100, 200);
+    TEST_ASSERT_EQUAL_INT(0, p.form);
+    TEST_ASSERT_TRUE(p.below);
   }
   struct Case {
     uint32_t upNext, mins;
@@ -1279,7 +1293,8 @@ void test_queue_summary_fits_every_language() {
   };
   const Case cases[] = {{9, 37, false, 1, 10},          {12, 49, false, 4, 16},  {500, 999, true, 999, 999},
                         {4999, 5999, true, 4999, 5000}, {0, 0, false, 10, 10},   {99, 120, false, 1, 100},
-                        {999, 999, true, 1, 1000},      {8, 0, false, 2, 10},    {4998, 5999, true, 1, 4999}};
+                        {999, 999, true, 1, 1000},      {8, 0, false, 2, 10},    {4998, 5999, true, 1, 4999},
+                        {20, 0, false, 100, 120}};  // (no time known: "100 von 120 · noch 20", "noch 20")
   // The UI's language's rooms and pick at a queue, as QueuePage::header()
   // makes them: beside the title (to 8 px before the Edit pill, the pill's
   // label in Bold within kQueuePillTextW, else Small: Header::pillW()) and
@@ -1332,12 +1347,11 @@ void test_queue_summary_fits_every_language() {
         const HeaderSub how = headerSub(12, p.titleW, p.right, p.widths[k], true, true);
         TEST_ASSERT_TRUE(how == (p.pick.below ? HeaderSub::Below : HeaderSub::Beside));
       }
-      // Under the title only when no form fits beside it.
-      if (p.pick.below) {
-        for (int j = 0; j < queueview::kSummaryForms; ++j) {
-          TEST_ASSERT_TRUE(p.widths[j] < 0 || p.widths[j] > p.beside);
-        }
-      }
+      // Under the title exactly when the position alone doesn't fit beside
+      // it (these queues all have one).
+      TEST_ASSERT_TRUE(p.widths[queueview::kSummaryPosition] >= 0);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(p.widths[queueview::kSummaryPosition] > p.beside ? 1 : 0, p.pick.below ? 1 : 0,
+                                    p.forms[3]);
       // Where the queue is, in every language, at every queue: a form with
       // the position (never the count and the time alone at these).
       TEST_ASSERT_TRUE_MESSAGE(k >= 0 && k != queueview::kSummaryShort, p.forms[3]);
@@ -1362,8 +1376,8 @@ void test_queue_summary_fits_every_language() {
   TEST_ASSERT_EQUAL_INT(queueview::kSummaryPosition, p.pick.form);
   TEST_ASSERT_FALSE(p.pick.below);
   TEST_ASSERT_EQUAL_STRING("1 von 10", p.forms[p.pick.form]);
-  // From six digits of position none fits beside it: under it, the
-  // fullest form that fits there.
+  // From six digits the position alone doesn't fit beside it: under it,
+  // the fullest form that fits there.
   place(cases[2], p);
   TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, p.pick.form);
   TEST_ASSERT_TRUE(p.pick.below);
@@ -1376,6 +1390,14 @@ void test_queue_summary_fits_every_language() {
   TEST_ASSERT_EQUAL_INT(queueview::kSummaryLong, p.pick.form);
   TEST_ASSERT_TRUE(p.pick.below);
   TEST_ASSERT_EQUAL_STRING("100 von 120 \xC2\xB7 noch 20 \xC2\xB7 60 min", p.forms[p.pick.form]);
+  // With no time known the count alone, "noch 20", would fit beside it:
+  // under it, with the position, all the same.
+  place(cases[9], p);
+  TEST_ASSERT_EQUAL_STRING("noch 20", p.forms[queueview::kSummaryShort]);
+  TEST_ASSERT_TRUE(p.widths[queueview::kSummaryShort] <= p.beside);
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryLong, p.pick.form);
+  TEST_ASSERT_TRUE(p.pick.below);
+  TEST_ASSERT_EQUAL_STRING("100 von 120 \xC2\xB7 noch 20", p.forms[p.pick.form]);
   // English as before: the position and the time, the long form when
   // nothing is next; the position alone only where all three were cut;
   // beside the title, 169 px (235 under it, never used).

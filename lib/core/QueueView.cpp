@@ -114,7 +114,10 @@ int pickSummary(const int (&widths)[kSummaryForms], int room) {
 
 SummaryPick placeSummary(const int (&widths)[kSummaryForms], int beside, int below) {
   SummaryPick p;
-  p.form = pickSummary(widths, beside);
+  // Beside the title while where the queue is fits there (a count alone
+  // that fits, "noch 20", would hide it).
+  const int position = widths[kSummaryPosition];
+  if (position < 0 || position <= beside) p.form = pickSummary(widths, beside);
   if (p.form < 0) {
     p.form = pickSummary(widths, below);
     p.below = p.form >= 0;

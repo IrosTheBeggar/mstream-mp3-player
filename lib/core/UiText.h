@@ -373,7 +373,8 @@ inline constexpr int headerPillZoneX(int pillX, bool chevron) {
 //   or not at all;
 //   a line that may go under the title (Header::subBelow: an Artist's and
 //   an Album's counts, an artist's name on its All tracks, the Queue's
-//   summary when none of its forms fits beside: queueview::placeSummary()):
+//   summary when its position alone doesn't fit beside:
+//   queueview::placeSummary()):
 //   beside it whole, else on the header's second line (Small, from `x` to
 //   the right; a name cut there with "…"), the title over it: the Folder
 //   page's two lines.
