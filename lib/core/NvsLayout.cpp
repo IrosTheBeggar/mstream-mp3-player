@@ -3,6 +3,8 @@
 
 #include "NvsLayout.h"
 
+#include "UiStrings.h"
+
 namespace nvslayout {
 namespace {
 
@@ -50,6 +52,16 @@ SchemaStep schemaStep(bool have, uint16_t stored, uint16_t current) {
 }
 
 uint8_t repeatFrom(bool have, uint8_t stored) { return have && stored < kRepeatModes ? stored : 0; }
+
+uistr::Lang langFrom(bool have, const char* stored) {
+  uistr::Lang l = uistr::Lang::En;
+  if (!have || !stored || !uistr::langOf(stored, &l)) return uistr::Lang::En;
+  return l;
+}
+
+bool langPickerDue(bool haveLang, bool coachSeen) { return !haveLang && !coachSeen; }
+
+bool migrateWritesLang(uint16_t from, bool haveLang) { return from < 3 && !haveLang; }
 
 size_t encodeResume(const QueueResume& r, uint8_t out[kResumeBytes]) {
   for (size_t i = 0; i < kResumeBytes; ++i) out[i] = 0;

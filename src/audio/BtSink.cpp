@@ -597,7 +597,7 @@ void PlayerA2dp::linkDown(const esp_a2d_cb_param_t& a2d) {
   Serial.printf("[bt] A2DP down (%s)\n",
                 a2d.conn_stat.disc_rsn == ESP_A2D_DISC_RSN_ABNORMAL ? "signal lost" : "closed");
   ctl_.linkDown(millis());
-  sink->setCodec("");
+  sink->setCodec("", 0);
   // The headphones may come back by themselves (unless the listener let go).
   set_scan_mode_connectable(!userOff_);
   if (pendingPair_) {
@@ -757,17 +757,18 @@ void PlayerA2dp::rememberPeer(const uint8_t* bda) {
 void PlayerA2dp::logCodec(const esp_a2d_mcc_t& mcc) {
   codecLogged_ = true;
   if (mcc.type != ESP_A2D_MCT_SBC) {
-    sink->setCodec("");
+    sink->setCodec("", 0);
     Serial.printf("[bt] codec type 0x%02x\n", static_cast<unsigned>(mcc.type));
     return;
   }
   esp_a2d_cie_sbc_t c;  // packed bitfields: copy out
   std::memcpy(&c, &mcc.cie.sbc_info, sizeof(c));
-  {
-    char text[24];
-    snprintf(text, sizeof(text), "SBC %s", bitName(c.samp_freq, "16 kHz", "32 kHz", "44.1 kHz", "48 kHz"));
-    sink->setCodec(text);
-  }
+  // The rate as a number: the Output card writes it in the UI's language.
+  sink->setCodec("SBC", c.samp_freq == 0x8   ? 16000
+                        : c.samp_freq == 0x4 ? 32000
+                        : c.samp_freq == 0x2 ? 44100
+                        : c.samp_freq == 0x1 ? 48000
+                                             : 0);
   Serial.printf("[bt] codec: SBC %s, %s, %s blocks, %s subbands, %s allocation, bitpool %u-%u\n",
                 bitName(c.samp_freq, "16 kHz", "32 kHz", "44.1 kHz", "48 kHz"),
                 bitName(c.ch_mode, "mono", "dual channel", "stereo", "joint stereo"),
@@ -1923,9 +1924,10 @@ void BtSink::closeFinds() {
   Serial.printf("[bt] pair: %s\n", line);
 }
 
-void BtSink::setCodec(const char* text) {
+void BtSink::setCodec(const char* name, uint32_t hz) {
   const uint8_t next = codecIdx_.load() ^ 1;
-  strlcpy(codecs_[next], text, sizeof(codecs_[next]));
+  strlcpy(codecs_[next].name, name, sizeof(codecs_[next].name));
+  codecs_[next].hz = hz;
   codecIdx_.store(next);
 }
 

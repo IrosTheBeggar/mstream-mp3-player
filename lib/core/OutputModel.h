@@ -174,19 +174,27 @@ struct BtCardView {
   int buttonCount = 0;
   bool spinner = false;     // something is under way (connecting, searching)
   bool pairFailed = false;  // Failed: it was a pairing
-  // Resting: two lines beside the one button (uitext::kBtHintLine1/2):
+  // Resting: two lines beside the one button (bt.hint):
   // "They'll reconnect" / "when switched on."
   bool hint = false;
   // ... dropped while the output (resting only after the whole back-off):
-  // "Back in range?" / "Tap Connect." (uitext::kBtLostHintLine1/2).
+  // "Back in range?" / "Tap Connect." (bt.lost_hint).
   bool lostHint = false;
 };
 BtCardView btCardView(const BtLink& link, const BtSession& session, bool lost);
 // The status line: "Connecting... try 2 of 3". `name`: the headphones'
 // ("" if unknown); `detail`: the connected line's codec and delay ("SBC
-// 44.1 kHz, 175 ms"), or "". Returns buf.
+// 44.1 kHz, 175 ms": btDetailText()), or "". Returns buf.
 char* btStatusLine(const BtCardView& v, const BtLink& link, const char* name, const char* detail, char* buf,
                    size_t size);
+// The connected line's detail: the codec ("SBC", "" when unknown) and its
+// sample rate as the UI's language writes a rate (RateConverter::rateText():
+// "SBC 44.1 kHz", German's "SBC 44,1 kHz"; `hz` 0, a configuration that
+// names none: "SBC ?"), and the delay the headphones report, in ms (0:
+// none): "SBC 44.1 kHz, 175 ms", either alone, or "". Made each pass from
+// numbers (main.cpp's snapshot), so a new language shows at once. Returns
+// buf.
+char* btDetailText(const char* codec, uint32_t hz, uint32_t delayMs, char* buf, size_t size);
 
 // The Pair screen's scan: it stops by itself after kForMs (its inquiry
 // costs ~30 mA while it runs), and the screen offers "Search again".

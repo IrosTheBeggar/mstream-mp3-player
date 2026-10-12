@@ -8,6 +8,7 @@
 #include <string>
 
 #include "TrackSeek.h"
+#include "UiStrings.h"
 
 // The seek bar's reach stops short of the tail rule (a start there would go
 // to 0:00).
@@ -482,7 +483,7 @@ void PlaybackController::checkEnd() {
     failure_.key = queue_.currentKey();
     failure_.rate = audio_.rateRefusal();
     if (empty) {
-      snprintf(failure_.note, sizeof(failure_.note), "no audio in it");
+      trf(failure_.note, sizeof(failure_.note), uistr::S::toast_why_opus_no_audio);
     } else {
       audio_.failureNote(failure_.note, sizeof(failure_.note));
     }

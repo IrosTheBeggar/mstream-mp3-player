@@ -66,6 +66,40 @@ Time upNextTime(const QueueModel& q, const DurationBook& book, uint32_t (*hintMs
 // the queue is matters more than how many are left. Returns buf.
 char* summary(uint32_t upNext, const Time& t, uint32_t position, uint32_t size, char* buf, size_t bufSize,
               bool withUpNext = true);
+// The Queue header's summary in a room (beside its title and the Edit
+// pill, uitext::headerSubRoom(): 169 px beside English's "Queue", 78
+// beside German's "Warteschlange"; or under the title): the first of its
+// forms that fits `room` px whole, in this order: the long one ("4 of 16 ·
+// 12 up next · 49 min"), the position and the time ("4 of 16 · 49 min"),
+// the position alone ("4 of 16": summary(0, Time{}, position, size, ...,
+// false)), and only when there is no position (nothing current) the count
+// and the time ("12 up next · 49 min"; with no position the first two say
+// the same). Where the queue is comes before how many are left (the
+// owner's call, 2026-10-12: with the count and the time before the
+// position alone, Russian at 100 of 120 with an hour next said "ещё 20 ·
+// 60 мин", where "100 из 120" fitted). `widths[k]`: form k's (Small), < 0
+// when it is empty (the position alone with no position). -1: none fits:
+// never one cut ("noch 9 · 3…").
+inline constexpr int kSummaryForms = 4;
+// The forms in the order they are tried.
+enum SummaryForm : int { kSummaryLong, kSummaryMid, kSummaryPosition, kSummaryShort };
+int pickSummary(const int (&widths)[kSummaryForms], int room);
+// Where the header draws it (QueuePage::header()): beside the title, the
+// first form that fits `beside` px (pickSummary()), while the position
+// alone fits there (the narrowest form that says where the queue is), or
+// there is none; else on the header's second line, under the title, the
+// first that fits `below` px there, in the same order (Header::subBelow:
+// the Folder page's two lines, in the same 36 px header; from the title's
+// x to 8 px before the pill: 235 px in English, 221 in German, whose
+// position alone doesn't fit beside "Warteschlange" once it takes six
+// digits, "100 von 120"; the count that would, "noch 20" with no time
+// known, would hide where the queue is); else none (form -1). English's
+// position alone always fits beside, so it never goes under its title.
+struct SummaryPick {
+  int form = -1;
+  bool below = false;  // on the second line
+};
+SummaryPick placeSummary(const int (&widths)[kSummaryForms], int beside, int below);
 
 // ---- what a Library add put in the queue ----
 //
@@ -95,13 +129,14 @@ private:
 
 // ---- the queue's cap (QueueModel::kMaxEntries: docs/QUEUE-MODES.md 15) ----
 //
-// `n` with its thousands grouped ("19,412"), as the cap's texts write
-// their counts. Returns buf.
+// `n` with its thousands grouped by commas ("19,412"): the console's and
+// the logs' way, whatever the UI's language (the UI's texts group as the
+// language does: uistr::grouped()). Returns buf.
 char* grouped(uint32_t n, char* buf, size_t size);
 // The toast of a Play, a Shuffle all or an add the cap cut short, `took`
 // of `asked`: "Shuffling 5,000 of 19,412: the queue holds 5,000 tracks",
 // "Playing ...", "Added 37 of 300: ...", "37 of 300 play next: ..."
-// (uitext's kCap* texts). Returns buf.
+// (the catalogue's queue_cap.* texts). Returns buf.
 enum class Capped : uint8_t { Shuffle, Play, Add, Next };
 char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t size);
 // The toast of an add (`what`: Next, Play next; anything else, + Queue)
@@ -109,7 +144,7 @@ char* cappedText(Capped what, uint32_t took, uint32_t asked, char* buf, size_t s
 // 15.8; `took` of `asked` went in): "Added 12 tracks: 12 played tracks made
 // way", "Plays next: 1 played track made way" (one track: its title gives
 // way to the news), "Added 37 of 300: 37 played tracks made way" (cut short
-// by the cap too). uitext's kPush* texts. Returns buf.
+// by the cap too). queue_cap.push_* and queue_cap.pushed. Returns buf.
 char* pushedText(Capped what, uint32_t took, uint32_t asked, uint32_t pushed, char* buf, size_t size);
 
 // ---- what an add did ----

@@ -15,6 +15,7 @@
 
 #include <atomic>
 
+#include "UiStrings.h"
 #include "app/Version.h"
 
 namespace diag {
@@ -123,7 +124,7 @@ void logHeap(const char* stage) {
 const char* boardName() {
   switch (M5.getBoard()) {
     case m5::board_t::board_M5StackCore2: return "M5Stack Core2";
-    default: return "unknown";
+    default: return uistr::tr(uistr::S::device_info_unknown_board);
   }
 }
 
@@ -131,8 +132,8 @@ const char* pmicName() {
   switch (M5.Power.getType()) {
     case m5::Power_Class::pmic_axp192: return "AXP192";
     case m5::Power_Class::pmic_axp2101: return "AXP2101";
-    case m5::Power_Class::pmic_unknown: return "none found";
-    default: return "other";
+    case m5::Power_Class::pmic_unknown: return uistr::tr(uistr::S::device_info_none_found);
+    default: return uistr::tr(uistr::S::device_info_other);
   }
 }
 
@@ -140,23 +141,23 @@ const char* imuName() {
   switch (M5.Imu.getType()) {
     case m5::imu_t::imu_bmi270: return "BMI270";
     case m5::imu_t::imu_mpu6886: return "MPU6886";
-    case m5::imu_t::imu_none: return "none found";
-    default: return "other";
+    case m5::imu_t::imu_none: return uistr::tr(uistr::S::device_info_none_found);
+    default: return uistr::tr(uistr::S::device_info_other);
   }
 }
 
 const char* resetReason() {
   switch (esp_reset_reason()) {
-    case ESP_RST_POWERON: return "power-on";
-    case ESP_RST_EXT: return "reset pin";
-    case ESP_RST_SW: return "software";
-    case ESP_RST_PANIC: return "PANIC";
-    case ESP_RST_INT_WDT: return "interrupt watchdog";
-    case ESP_RST_TASK_WDT: return "task watchdog";
-    case ESP_RST_WDT: return "watchdog";
-    case ESP_RST_DEEPSLEEP: return "deep sleep";
-    case ESP_RST_BROWNOUT: return "BROWNOUT";
-    default: return "other";
+    case ESP_RST_POWERON: return uistr::tr(uistr::S::device_info_reset_poweron);
+    case ESP_RST_EXT: return uistr::tr(uistr::S::device_info_reset_ext);
+    case ESP_RST_SW: return uistr::tr(uistr::S::device_info_reset_sw);
+    case ESP_RST_PANIC: return uistr::tr(uistr::S::device_info_reset_panic);
+    case ESP_RST_INT_WDT: return uistr::tr(uistr::S::device_info_reset_int_wdt);
+    case ESP_RST_TASK_WDT: return uistr::tr(uistr::S::device_info_reset_task_wdt);
+    case ESP_RST_WDT: return uistr::tr(uistr::S::device_info_reset_wdt);
+    case ESP_RST_DEEPSLEEP: return uistr::tr(uistr::S::device_info_reset_deepsleep);
+    case ESP_RST_BROWNOUT: return uistr::tr(uistr::S::device_info_reset_brownout);
+    default: return uistr::tr(uistr::S::device_info_other);
   }
 }
 

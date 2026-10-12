@@ -13,7 +13,11 @@
 #include <initializer_list>
 
 #include "PowerChoices.h"
+#include "UiStrings.h"
 #include "UiText.h"
+
+using uistr::S;
+using uistr::tr;
 
 void setUp() {}
 void tearDown() {}
@@ -47,8 +51,8 @@ void test_cpu_labels_and_lines() {
   TEST_ASSERT_EQUAL_STRING("240 MHz", pc::cpuLabel(80));  // (the default's)
   TEST_ASSERT_EQUAL(160, pc::otherCpuMhz(240));
   TEST_ASSERT_EQUAL(240, pc::otherCpuMhz(160));
-  TEST_ASSERT_EQUAL_STRING(uitext::kCpu240Sub, pc::cpuSub(240, 240, buf, sizeof(buf)));
-  TEST_ASSERT_EQUAL_STRING(uitext::kCpu160Sub, pc::cpuSub(160, 160, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING(tr(S::settings_cpu_240_sub), pc::cpuSub(240, 240, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING(tr(S::settings_cpu_160_sub), pc::cpuSub(160, 160, buf, sizeof(buf)));
   // Saved but not running yet (the console's Pcb since this boot): what
   // runs, until a restart.
   TEST_ASSERT_EQUAL_STRING("240 MHz until a restart", pc::cpuSub(160, 240, buf, sizeof(buf)));
@@ -58,9 +62,9 @@ void test_cpu_labels_and_lines() {
   pc::cpuDialogTitle(240, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING("Restart at 240 MHz?", buf);
   // To 160 the dialog says what it costs; to 240 only what the restart does.
-  TEST_ASSERT_EQUAL_STRING(uitext::kCpuDialogBody160, pc::cpuDialogBody(160));
-  TEST_ASSERT_EQUAL_STRING(uitext::kCpuDialogBody, pc::cpuDialogBody(240));
-  TEST_ASSERT_EQUAL_STRING(uitext::kCpuDialogBody, pc::cpuDialogBody(80));  // (the default's)
+  TEST_ASSERT_EQUAL_STRING(tr(S::settings_cpu_dialog_body_160), pc::cpuDialogBody(160));
+  TEST_ASSERT_EQUAL_STRING(tr(S::settings_cpu_dialog_body), pc::cpuDialogBody(240));
+  TEST_ASSERT_EQUAL_STRING(tr(S::settings_cpu_dialog_body), pc::cpuDialogBody(80));  // (the default's)
   pc::cpuRestartingText(240, buf, sizeof(buf));
   TEST_ASSERT_EQUAL_STRING("Restarting at 240 MHz\xE2\x80\xA6", buf);
   pc::cpuBootText(160, buf, sizeof(buf));
@@ -174,10 +178,10 @@ void test_bt_stored_values_and_taps() {
   TEST_ASSERT_EQUAL_STRING("Low", pc::btLabel(pc::kBtLow));
   TEST_ASSERT_EQUAL_STRING("Normal", pc::btLabel(pc::kBtNormal));
   TEST_ASSERT_EQUAL_STRING("High", pc::btLabel(pc::kBtHigh));
-  TEST_ASSERT_EQUAL_STRING(uitext::kBtLowSub, pc::btSub(pc::kBtLow, false));
-  TEST_ASSERT_EQUAL_STRING(uitext::kBtNormalSub, pc::btSub(pc::kBtNormal, false));
-  TEST_ASSERT_EQUAL_STRING(uitext::kBtHighSub, pc::btSub(pc::kBtHigh, false));
-  TEST_ASSERT_EQUAL_STRING(uitext::kBtPendingSub, pc::btSub(pc::kBtHigh, true));
+  TEST_ASSERT_EQUAL_STRING(tr(S::settings_bt_low_sub), pc::btSub(pc::kBtLow, false));
+  TEST_ASSERT_EQUAL_STRING(tr(S::settings_bt_normal_sub), pc::btSub(pc::kBtNormal, false));
+  TEST_ASSERT_EQUAL_STRING(tr(S::settings_bt_high_sub), pc::btSub(pc::kBtHigh, false));
+  TEST_ASSERT_EQUAL_STRING(tr(S::settings_bt_pending_sub), pc::btSub(pc::kBtHigh, true));
 }
 
 // A link that is up keeps its level: a change while linked is pending until

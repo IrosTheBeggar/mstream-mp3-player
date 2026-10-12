@@ -1247,9 +1247,11 @@ void test_records_name_an_album() {
 }
 
 // The artist line's chain (5.4): the album-artist display, else "Various
-// Artists" for a compilation, else the most common track-artist display,
-// else the artist folder. Ties go to the smallest bytes, years to the
-// earliest; an artist's own loose tracks keep "" and no year.
+// Artists" for a compilation (marked kVarious: drawn in the UI's language,
+// stored in English), else the most common track-artist display, else the
+// artist folder. Ties go to the smallest bytes, years to the earliest; an
+// artist's own loose tracks keep "" and no year. An album artist tag that
+// says "Various Artists" itself is a name: not marked.
 void test_album_votes() {
   LibraryIndex idx(Heap::alloc, Heap::release);
   TEST_ASSERT_TRUE(idx.begin("/music"));
@@ -1265,6 +1267,7 @@ void test_album_votes() {
   add("/music/Act/Three/03 - c.mp3", View().artist("Act"));
   idx.addFile("/music/Act/Four/01 - a.mp3");
   add("/music/Act/Loose.mp3", View().album("Some Album").year(1999));
+  add("/music/Act/Five/01 - a.mp3", View().artist("Somebody").albumArtist("Various Artists").compilation());
   TEST_ASSERT_TRUE(idx.finish());
   auto albumOf = [&](const char* path) { return idx.track(trackAt(idx, path)).album; };
   const uint32_t one = albumOf("/music/Act/One/01 - a.mp3");
@@ -1274,7 +1277,12 @@ void test_album_votes() {
   TEST_ASSERT_EQUAL_STRING("Guest", idx.trackArtistName(trackAt(idx, "/music/Act/One/01 - a.mp3")));
   const uint32_t two = albumOf("/music/Act/Two/01 - a.mp3");
   TEST_ASSERT_EQUAL_STRING("Various Artists", idx.albumArtistLine(two));
+  TEST_ASSERT_TRUE(idx.album(two).flags & LibraryIndex::kVarious);
+  TEST_ASSERT_FALSE(idx.album(one).flags & LibraryIndex::kVarious);
   TEST_ASSERT_EQUAL_STRING("Somebody", idx.trackArtistName(trackAt(idx, "/music/Act/Two/01 - a.mp3")));
+  const uint32_t five = albumOf("/music/Act/Five/01 - a.mp3");
+  TEST_ASSERT_EQUAL_STRING("Various Artists", idx.albumArtistLine(five));  // the tag's
+  TEST_ASSERT_FALSE(idx.album(five).flags & LibraryIndex::kVarious);
   const uint32_t three = albumOf("/music/Act/Three/01 - a.mp3");
   TEST_ASSERT_EQUAL_STRING("Act", idx.albumArtistLine(three));  // "Act" (twice: the display dedups) against "Other"
   TEST_ASSERT_EQUAL_STRING("Three", idx.albumName(three));
@@ -1598,11 +1606,12 @@ void test_inputs_of_the_cache() {
   std::vector<uint8_t> rules = bytes;
   rules[12] = static_cast<uint8_t>(LibraryIndex::kRulesVersion + 1);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), load(rules, in));
-  // Rules 3 (docs/I18N.md, phase 0: textfold's order and sameName()) and 4
-  // (phase 2: the kana as one script, the Hangul consonants): an index of
-  // older rules, as the firmware before saved, rebuilds once.
-  TEST_ASSERT_EQUAL_UINT16(4, LibraryIndex::kRulesVersion);
-  for (const uint8_t older : {uint8_t{1}, uint8_t{2}, uint8_t{3}}) {
+  // Rules 3 (docs/I18N.md, phase 0: textfold's order and sameName()), 4
+  // (phase 2: the kana as one script, the Hangul consonants) and 5 (phase
+  // 3: a compilation's line marked kVarious): an index of older rules, as
+  // the firmware before saved, rebuilds once.
+  TEST_ASSERT_EQUAL_UINT16(5, LibraryIndex::kRulesVersion);
+  for (const uint8_t older : {uint8_t{1}, uint8_t{2}, uint8_t{3}, uint8_t{4}}) {
     rules[12] = older;
     TEST_ASSERT_EQUAL_INT(static_cast<int>(LibraryIndex::Load::Outdated), load(rules, in));
   }

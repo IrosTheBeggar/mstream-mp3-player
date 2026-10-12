@@ -11,19 +11,24 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "NvsLayout.h"
 #include "RateConverter.h"
 #include "SleepTimer.h"
 #include "TextFit.h"
 #include "TextFold.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "app/LoopStack.h"
 #include "app/Psram.h"
+#include "app/UiLang.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
 #include "ui/Icons.h"
 #include "ui/Theme.h"
 
 namespace ui {
+
+using uistr::S;
 
 namespace {
 
@@ -50,6 +55,7 @@ const char* pageKindName(uint8_t kind) {
     case PageKind::Pair: return "Pair";
     case PageKind::About: return "About";
     case PageKind::DeviceInfo: return "DeviceInfo";
+    case PageKind::Language: return "Language";
     default: return "-";
   }
 }
@@ -59,8 +65,21 @@ void Page::describe(char* buf, size_t size) const { snprintf(buf, size, "%s", na
 int Header::hit(const InputEvent& e) const {
   if (e.y < kHeaderY || e.y >= kHeaderY + kHeaderH) return 0;
   if ((back || cross) && e.x < 56) return 1;
-  if (right && e.inRightEdgeZone(240)) return 2;
+  // The pill's: x 240 to the edge, or from its round end and chevron when
+  // it starts further left (uitext::headerPillZoneX(): Russian's crumb).
+  if (right && e.inRightEdgeZone(uitext::headerPillZoneX(kW - 6 - pillW(right, rightMaxW, rightBack), rightBack))) {
+    return 2;
+  }
   return 3;
+}
+
+Font Header::pillFont(const char* label, int maxW) {
+  return maxW > 0 ? Fonts::instance().fitting(Font::Bold, label, maxW) : Font::Bold;
+}
+
+int Header::pillW(const char* label, int maxW, bool chevron) {
+  return Fonts::instance().width(pillFont(label, maxW), label) + uitext::kHeaderPillPad +
+         (chevron ? uitext::kHeaderChevronW : 0);
 }
 
 Ui::Ui(UiHost& host, Input& input, PlaybackController& player, QueueModel& queue, Library& library, DanceMode& dance)
@@ -99,6 +118,14 @@ bool Ui::begin() {
   nav_.setRoot(NavModel::Tab::Queue, ref(PageKind::Queue));
   nav_.setRoot(NavModel::Tab::Dance, ref(PageKind::Dance));
   nav_.setRoot(NavModel::Tab::Output, ref(PageKind::Output));
+  // The first-boot tips seen (NVS "ui"/"coach"), and a fresh unit's
+  // language picker (no language saved either: nvslayout).
+  Preferences prefs;
+  if (prefs.begin(nvslayout::kUiNamespace, true)) {
+    coachSeen_ = prefs.getBool(nvslayout::kCoachKey, false);
+    prefs.end();
+  }
+  pickerDue_ = nvslayout::langPickerDue(uilang::chosen(), coachSeen_);
   return true;
 }
 
@@ -111,19 +138,85 @@ void Ui::start(uint32_t nowMs) {
   lastUpNext_ = state_.upNext;
   failuresSeen_ = player_.lastFailure().count;
   started_ = true;
+  // A fresh unit: the language first (the touch check and the tips then
+  // speak it).
+  if (pickerDue_) {
+    pickerNav();
+    tipsAfterPicker_ = !coachSeen_;
+  }
   gfx::fill(0, 0, kW, kH, col::BG, true);
   tabBar_.invalidate();
   tabBar_.update(tabState(nowMs));
   showTop();
+  if (pickerDue_) {
+    Serial.println("[ui] up: the first boot's language picker (then the touch check and the tips; console ui: the "
+                   "navigation state)");
+    return;
+  }
   Serial.println("[ui] up: tab bar, Now Playing (console ui: the navigation state)");
   // The first-boot tips, once (NVS "ui"/"coach").
-  Preferences prefs;
-  bool seen = false;
-  if (prefs.begin("ui", true)) {
-    seen = prefs.getBool("coach", false);
-    prefs.end();
+  if (!coachSeen_) showCoach();
+}
+
+void Ui::pickerNav() {
+  nav_.popToRoot(NavModel::Tab::Output);
+  nav_.select(NavModel::Tab::Output);
+  nav_.push(ref(PageKind::Language, kFirstBootPicker));
+}
+
+bool Ui::pickerOnTop() const {
+  const NavModel::PageRef& top = nav_.top();
+  return nav_.tab() == NavModel::Tab::Output && static_cast<PageKind>(top.kind) == PageKind::Language &&
+         top.id == kFirstBootPicker;
+}
+
+void Ui::chooseLanguage(uistr::Lang l) {
+  const bool first = pickerDue_ && pickerOnTop();
+  uilang::choose(l);
+  // Said in the language itself, where its catalogue has it: never for
+  // English, nor for a language with no catalogue yet.
+  const bool note = uistr::lang() != uistr::Lang::En && uistr::translated(S::language_machine_note);
+  if (!started_ || suspended_) return;  // (resume() draws it all)
+  if (!first) {
+    languageChanged();
+    if (note) toast(tr(S::language_machine_note), false);
+    return;
   }
-  if (!seen) showCoach();
+  // The first boot goes on: Now Playing (the Output tab back at its root),
+  // the touch check if it is due (main.cpp, before the next loop()), then
+  // the tips and the note (loop()).
+  pickerDue_ = false;
+  noteAfterPicker_ = note;
+  closeModal(true);
+  if (toast_.up()) toast_.hide();
+  hud_.hide();
+  if (page_) page_->leave();
+  page_ = nullptr;
+  nav_.popToRoot(NavModel::Tab::Output);
+  nav_.select(NavModel::Tab::NowPlaying);
+  tabBar_.invalidate();  // its labels in the language picked
+  showTop();
+  Serial.println("[ui] first boot: the language picked; the touch check (if due), then the tips");
+}
+
+// What holds a text in the old language goes: a sheet or a dialog (closed
+// as a tab tap closes them), the toast (its Undo with it), the HUD. The
+// page is entered again where it was (its ref keeps the place), so what it
+// made of texts on its way in (the Folders root's "Play all N") is made
+// again; then the tab bar, and the tips over the page if they are up.
+void Ui::languageChanged() {
+  if (!started_ || suspended_) return;
+  closeModal(true);
+  if (toast_.up()) {
+    if (toast_.undo()) queue_.dropUndo();
+    toast_.hide();
+  }
+  if (hud_.up()) hud_.hide();
+  tabBar_.invalidate();
+  if (page_) page_->leave();
+  page_ = nullptr;
+  showTop();
+  if (coach_.up()) coach_.draw();
 }
 
 void Ui::showCoach() {
@@ -139,9 +232,10 @@ void Ui::showCoach() {
 void Ui::coachDone() {
   coach_.close();
   applyCover();
+  coachSeen_ = true;
   Preferences prefs;
-  if (prefs.begin("ui", false)) {
-    prefs.putBool("coach", true);
+  if (prefs.begin(nvslayout::kUiNamespace, false)) {
+    prefs.putBool(nvslayout::kCoachKey, true);
     prefs.end();
   }
   Serial.println("[ui] coach cards: seen (Output > About shows them again)");
@@ -159,7 +253,8 @@ Page* Ui::pageFor(uint8_t kind) {
     case PageKind::Output:
     case PageKind::Pair:
     case PageKind::About:
-    case PageKind::DeviceInfo: return &outputPage_;
+    case PageKind::DeviceInfo:
+    case PageKind::Language: return &outputPage_;
     default: return &nowPlaying_;
   }
 }
@@ -199,7 +294,7 @@ void Ui::setListBand(int height) {
 
 void Ui::retryCard() {
   if (host_.retryCard()) {
-    toast("Card found: starting again", false);
+    toast(tr(S::toast_card_found), false);
     return;
   }
   // What is in may have changed (an exFAT card taken out, or put in, or
@@ -208,17 +303,17 @@ void Ui::retryCard() {
   const cardformat::Kind was = state_.cardKind;
   host_.snapshot(state_);
   if (state_.cardKind != was && page_ && !modalUp()) page_->repaint();
-  warn(uitext::cardMessage(state_.cardKind).still);
+  warn(tr(uitext::cardMessage(state_.cardKind).still));
 }
 
 void Ui::shuffleAll() {
   if (state_.libraryFenced) {  // the library update's fence: the index is the build's
-    toast(uitext::kUpdatingWait, false);
+    toast(tr(S::library_updating_wait), false);
     return;
   }
   const LibraryIndex* index = library_.index();
   if (browse_ || !index || !index->ready() || index->trackCount() == 0) {
-    warn("No music on the card to shuffle");
+    warn(tr(S::toast_no_music_to_shuffle));
     return;
   }
   // The whole library from a random track, with shuffle on (the mode, not
@@ -245,12 +340,20 @@ void Ui::shuffleAll() {
   if (took < all.count) {
     queueview::cappedText(queueview::Capped::Shuffle, took, all.count, text, sizeof(text));
   } else {
-    snprintf(text, sizeof(text), "Shuffling %lu tracks", (unsigned long)all.count);
+    trnf(text, sizeof(text), S::toast_shuffling, all.count, all.count);
   }
-  toast(ok ? text : "Not enough memory for that", ok);
+  toast(ok ? text : tr(S::toast_no_memory), ok);
 }
 
 void Ui::showTop() {
+  // The first boot's picker left without a pick (a tab tapped): English
+  // stays, nothing saved (the next boot asks again only if the tips haven't
+  // been seen by then); the touch check and the tips follow.
+  if (pickerDue_ && started_ && !pickerOnTop()) {
+    pickerDue_ = false;
+    nav_.popToRoot(NavModel::Tab::Output);
+    Serial.println("[ui] first boot: the language picker left: English (Output > Language changes it)");
+  }
   Page* next = pageFor(nav_.top().kind);
   if (page_) page_->leave();
   // A page that shortened the list band (the Queue's selection mode, the
@@ -619,8 +722,8 @@ void Ui::followSheet(int pressed) {
     const char* text = nullptr;
     switch (sheetFollow_[i]) {
       case SheetFollow::Sleep: text = state_.sleepRow; break;
-      case SheetFollow::Shuffle: text = uitext::kOnOff[state_.shuffle ? 1 : 0]; break;
-      case SheetFollow::Repeat: text = uitext::kRepeatModes[state_.repeat < 3 ? state_.repeat : 0]; break;
+      case SheetFollow::Shuffle: text = tr(state_.shuffle ? S::now_playing_on : S::now_playing_off); break;
+      case SheetFollow::Repeat: text = tr(uitext::repeatMode(state_.repeat)); break;
       default: continue;
     }
     if (sheet_.setDetail(i, text) && i == pressed) pressedDrawn = true;
@@ -629,15 +732,16 @@ void Ui::followSheet(int pressed) {
 }
 
 void Ui::sleepTitle(char* buf, size_t size) const {
-  // Lower case after the colon, as the toasts say it ("Sleep timer: end of
-  // track"); the "..." row's detail alone is capitalised ("End of track").
-  snprintf(buf, size, "%s: %s", uitext::kSleepRow, state_.sleepTitle);
+  // SleepTimer::titleText()'s: lower case after the colon, as the toasts
+  // say it ("Sleep timer: end of track"); the "..." row's detail alone is
+  // capitalised ("End of track").
+  snprintf(buf, size, "%s", state_.sleepTitle);
 }
 
 void Ui::openSleepSheet() {
   endPageTouch();
   closeModal(true);
-  char title[40];
+  char title[96];
   sleepTitle(title, sizeof(title));
   sheetOpenedMs_ = millis();  // (the settle, as every sheet's)
   sleepSheet_.open(state_.sleepPick, state_.sleepRunning, state_.sleepCanExtend, title, accent::NowPlaying);
@@ -647,7 +751,7 @@ void Ui::openSleepSheet() {
 
 void Ui::refreshSleepSheet() {
   if (!sleepSheet_.up()) return;
-  char title[40];
+  char title[96];
   sleepTitle(title, sizeof(title));
   sleepSheet_.refresh(state_.sleepPick, state_.sleepRunning, state_.sleepCanExtend, title);
 }
@@ -666,7 +770,7 @@ void Ui::openVolume(int output) {
   endPageTouch();
   closeModal(true);
   const bool bt = output < 0 ? state_.onBluetooth : output == 1;
-  const char* name = !bt ? "Speaker" : state_.btName[0] ? state_.btName : "Headphones";
+  const char* name = !bt ? tr(S::volume_speaker) : state_.btName[0] ? state_.btName : tr(S::volume_headphones);
   const int v = bt ? state_.btVolume : state_.speakerVolume;
   volumeSheetBt_ = bt;
   volumeAsked_ = v;
@@ -734,8 +838,9 @@ void Ui::onJumpCell(int cell) {
       }
       labels[JumpGrid::kBack][0] = '<';
       enabled[JumpGrid::kBack] = true;
-      char title[40];
-      snprintf(title, sizeof(title), "%s, %c: %lu", jumpSource_->jumpTitle(), letter, (unsigned long)rows);
+      char title[64];
+      const char key[2] = {letter, 0};
+      trf(title, sizeof(title), S::jump_second_title, jumpSource_->jumpTitle(), key, rows);
       jumpLevel_ = 2;
       jumpGrid_.open(title, labels, enabled, -1, accent());
       return;
@@ -778,22 +883,31 @@ void Ui::headphonesLost() {
   input_.alertBuzz();  // felt in a pocket too (spec §8: 80 ms)
   host_.wakeScreen("the headphones dropped");  // the dialog needs the listener
   if (!started_ || suspended_) return;
-  // "SPYDRONE disconnected" if it fits beside the icon; else the name goes
-  // into the body ("WH-1000XM4 disconnected" is 15 px too wide).
-  const char* name = state_.btName[0] ? state_.btName : "Headphones";
-  char title[48], body[128];
-  snprintf(title, sizeof(title), "%s disconnected", name);
-  if (Fonts::instance().width(Font::Bold, title) <= Dialog::titleRoom(true)) {
-    snprintf(body, sizeof(body), "Paused, so the speaker doesn't suddenly play out loud.");
+  // "SPYDRONE disconnected" if it fits beside the icon (236 px:
+  // uitext::kDialogIconTitleW); else the name goes into the body
+  // ("WH-1000XM4 disconnected" is 9 px too wide). With no name, "Headphones
+  // disconnected" (a language's too wide for it: "Headphones:" in the body
+  // too).
+  const bool named = state_.btName[0] != 0;
+  char title[96], body[192];
+  if (named) {
+    trf(title, sizeof(title), S::dialog_lost_title, state_.btName);
   } else {
-    snprintf(title, sizeof(title), "Headphones disconnected");
-    snprintf(body, sizeof(body), "%s: paused, so the speaker doesn't suddenly play out loud.", name);
+    trf(title, sizeof(title), S::dialog_lost_title_generic);
   }
-  static const char* const kButtons[2] = {"Use speaker", "OK"};
+  if (Fonts::instance().width(Font::Bold, title) <= Dialog::titleRoom(true)) {
+    trf(body, sizeof(body), S::dialog_lost_body);
+  } else if (named) {
+    trf(title, sizeof(title), S::dialog_lost_title_generic);
+    trf(body, sizeof(body), S::dialog_lost_body_named, state_.btName);
+  } else {
+    trf(body, sizeof(body), S::dialog_lost_body_headphones);
+  }
+  const char* const buttons[2] = {tr(S::dialog_lost_use_speaker), tr(S::dialog_lost_ok)};
   endPageTouch();
   closeModal(true);
   dialogOwner_ = this;
-  dialog_.open(title, body, kButtons, 2, col::AMBER);
+  dialog_.open(title, body, buttons, 2, col::AMBER);
   dialog_.setIcon(&icons::kHeadphones, col::AMBER, true);
   lostDialog_ = true;
   ownDialog_ = OwnDialog::Lost;
@@ -804,26 +918,29 @@ void Ui::headphonesLost() {
 void Ui::headphonesConnected() {
   input_.connectedTick();
   if (!started_ || suspended_) return;
-  char text[64];
-  snprintf(text, sizeof(text), "Now playing on %s", state_.btName[0] ? state_.btName : "the headphones");
+  char text[96];
+  if (state_.btName[0]) {
+    trf(text, sizeof(text), S::toast_now_playing_on, state_.btName);
+  } else {
+    trf(text, sizeof(text), S::toast_now_playing_on_headphones);
+  }
   toast(text, false);
 }
 
 void Ui::updateLostDialog() {
   if (!lostDialog_ || !dialog_.up()) return;
   const BtLink& l = state_.btLink;
-  char line[64];
+  char line[96];
   if (l.phase == BtLink::Phase::Paging && l.attempt > 0) {
-    snprintf(line, sizeof(line), "Trying to reconnect: try %u of %u", (unsigned)l.attempt,
-             (unsigned)std::max(l.attempt, l.attempts));
+    trf(line, sizeof(line), S::dialog_lost_trying, l.attempt, std::max(l.attempt, l.attempts));
   } else if (l.phase == BtLink::Phase::Off) {
-    snprintf(line, sizeof(line), "Not trying to reconnect");
+    trf(line, sizeof(line), S::dialog_lost_not_trying);
   } else if (l.phase == BtLink::Phase::Resting) {
     // (Lost: resting only after the whole back-off; they may be back in
     // range with their own reconnect given up.)
-    snprintf(line, sizeof(line), "%s", uitext::kBtLostRestingLine);
+    trf(line, sizeof(line), S::dialog_lost_resting);
   } else {
-    snprintf(line, sizeof(line), "Looking for them...");
+    trf(line, sizeof(line), S::dialog_lost_looking);
   }
   dialog_.setStatus(line, col::AMBER);
 }
@@ -835,22 +952,31 @@ void Ui::playFailed() {
   input_.alertBuzz();  // they may be waiting with the device in a pocket
   host_.wakeScreen("couldn't reach the headphones");
   if (!started_ || suspended_) return;
-  const char* name = state_.btName[0] ? state_.btName : "the headphones";
-  char title[48], body[128];
-  snprintf(title, sizeof(title), "Couldn't reach %s", name);
+  const bool named = state_.btName[0] != 0;
+  char title[96], body[192];
+  if (named) {
+    trf(title, sizeof(title), S::dialog_failed_title, state_.btName);
+  } else {
+    trf(title, sizeof(title), S::dialog_failed_title_headphones);
+  }
   // No icon: the title's whole width (a name as long as "WH-1000XM4" fits).
   if (Fonts::instance().width(Font::Bold, title) <= Dialog::titleRoom(false)) {
-    snprintf(body, sizeof(body), "%s", uitext::kPlayFailedBody);
+    trf(body, sizeof(body), S::dialog_failed_body);
   } else {
-    // (A long name: it goes into the body, as headphonesLost() does.)
-    snprintf(title, sizeof(title), "Couldn't reach them");
-    snprintf(body, sizeof(body), "%s: on, out of the case, and not connected to your phone?", name);
+    // (A long name: it goes into the body, as headphonesLost() does; with
+    // none, English's "Couldn't reach the headphones" is too wide too.)
+    trf(title, sizeof(title), S::dialog_failed_title_them);
+    if (named) {
+      trf(body, sizeof(body), S::dialog_failed_body_named, state_.btName);
+    } else {
+      trf(body, sizeof(body), S::dialog_failed_body_headphones);
+    }
   }
-  static const char* const kButtons[2] = {uitext::kPlayOnSpeaker, "Try again"};
+  const char* const buttons[2] = {tr(S::now_playing_play_on_speaker), tr(S::dialog_failed_try_again)};
   endPageTouch();
   closeModal(true);
   dialogOwner_ = this;
-  dialog_.open(title, body, kButtons, 2, col::AMBER);
+  dialog_.open(title, body, buttons, 2, col::AMBER);
   playFailedDialog_ = true;
   ownDialog_ = OwnDialog::PlayFailed;
   applyCover();
@@ -897,25 +1023,29 @@ void Ui::noteFailures() {
   failuresSeen_ = f.count;
   failedKeys_.add(f.key);
   char title[64];
-  if (!player_.catalog().title(f.track, title, sizeof(title))) snprintf(title, sizeof(title), "a track");
+  const bool titled = player_.catalog().title(f.track, title, sizeof(title));
   // Why, when it was the track's sample rate: a refused rate isn't a
   // broken file, and at 160 MHz a setting would play it. Else the
   // backend's own few words when it has them (an Opus file refused at its
   // open: "surround Opus isn't supported"), else "can't play it".
-  char why[48];
+  char why[96];
   if (f.rate.hz != 0 && f.rate.needsCpu) {
-    snprintf(why, sizeof(why), "%s", uitext::kSkippedCpu);
+    trf(why, sizeof(why), S::toast_why_cpu);
   } else if (f.rate.hz != 0) {
-    char rate[16];
+    char rate[24];
     RateConverter::rateText(f.rate.hz, rate, sizeof(rate));
-    snprintf(why, sizeof(why), uitext::kSkippedRate, rate);
+    trf(why, sizeof(why), S::toast_why_rate, rate);
   } else if (f.note[0]) {
     snprintf(why, sizeof(why), "%s", f.note);
   } else {
-    snprintf(why, sizeof(why), "%s", uitext::kSkipped);
+    trf(why, sizeof(why), S::toast_why_cant_play);
   }
-  char text[112];
-  snprintf(text, sizeof(text), "Skipped %s: %s", title, why);
+  char text[128];
+  if (titled) {
+    trf(text, sizeof(text), S::toast_skipped, title, why);
+  } else {
+    trf(text, sizeof(text), S::toast_skipped_untitled, why);
+  }
   warn(text);
   host_.wakeScreen("a track couldn't be played");
   if (page_ == &queuePage_) list_.refreshAll();
@@ -934,15 +1064,17 @@ void Ui::updateHud(uint32_t nowMs) {
       // from a button that works on every tab and from a pocket (its scan
       // would start from a press that asked for no such thing). The output
       // stays on the speaker; nothing plays.
-      warn(uitext::kNoHeadphones);
+      warn(tr(S::toast_no_headphones));
     } else if (f.kind == ButtonPolicy::Hud::Output) {
-      char line[48];
+      char line[96];
       if (f.refused) {
-        snprintf(line, sizeof(line), "%s", "Stays on the speaker (silent test mode)");
+        trf(line, sizeof(line), S::hud_silent_mode);
+      } else if (f.toBluetooth && state_.btConnected) {
+        trf(line, sizeof(line), S::hud_bluetooth, state_.btName);
       } else if (f.toBluetooth) {
-        snprintf(line, sizeof(line), "Bluetooth: %s", state_.btConnected ? state_.btName : "connecting...");
+        trf(line, sizeof(line), S::hud_bluetooth_connecting);
       } else {
-        snprintf(line, sizeof(line), "%s", f.paused ? "Speaker, paused: B plays" : "Speaker");
+        trf(line, sizeof(line), f.paused ? S::hud_speaker_paused : S::hud_speaker);
       }
       hud_.showOutput(f.toBluetooth && !f.refused, line, nowMs);
     }
@@ -993,7 +1125,18 @@ tabbar::State Ui::tabState(uint32_t nowMs) const {
   s.sleep = state_.sleepFading    ? tabbar::Sleep::Fading
             : state_.sleepRunning ? tabbar::Sleep::Running
                                   : tabbar::Sleep::None;
+  s.label = tabLabelFit(s.active);
   return s;
+}
+
+tabbar::LabelFit Ui::tabLabelFit(int tab) const {
+  const int lang = static_cast<int>(uistr::lang());
+  if (tabFitsLang_ != lang) {
+    Fonts& f = Fonts::instance();
+    for (int t = 0; t < tabbar::kTabs; ++t) tabFits_[t] = tabbar::labelFit(t, f.width(Font::Small, tabbar::label(t)));
+    tabFitsLang_ = lang;
+  }
+  return tabFits_[tab];
 }
 
 // A row renders in ~5 ms unhurried: renderAhead() only this far before a frame.
@@ -1005,6 +1148,15 @@ void Ui::loop(uint32_t nowMs) {
   nowMs_ = nowMs;
   if (!started_ || suspended_) return;
   host_.snapshot(state_);
+  // The first boot, its language picked (or its picker left), and the
+  // touch check main.cpp opened then closed (it suspended the UI until
+  // now): the tips, and the language's note over them.
+  if (tipsAfterPicker_ && !pickerDue_) {
+    tipsAfterPicker_ = false;
+    if (!coachSeen_) showCoach();
+    if (noteAfterPicker_) toast(tr(S::language_machine_note), false);
+    noteAfterPicker_ = false;
+  }
   // identify()'s banner, its 5 s over: everything drawn again.
   if (identifying_ && static_cast<int32_t>(nowMs - identifyUntilMs_) >= 0) {
     endIdentify();
@@ -1461,7 +1613,7 @@ void Ui::route(const InputEvent& e) {
           Serial.printf("[ui] undo: %s%s%s\n", undone ? "done" : "nothing to undo",
                         player_.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)",
                         back);
-          toast_.show(undone ? "Undone" : "Nothing to undo", false, false, accent(), nowMs_);
+          toast_.show(tr(undone ? S::toast_undone : S::toast_nothing_to_undo), false, false, accent(), nowMs_);
           uncover(was);
         } else if (hit == 3) {
           toast_.hide();
@@ -1645,14 +1797,17 @@ void Ui::drawHeader(const Header& h) {
   }
   int right = kW - 10;
   if (h.right) {
-    const int iconW = h.rightBack ? 12 : 0;
-    const int w = f.width(Font::Bold, h.right) + 24 + iconW;
+    // As wide as its label: Bold, or Small past its budget (h.rightMaxW:
+    // the crumb's "Bibliothek"), so the title keeps its room.
+    const int iconW = h.rightBack ? uitext::kHeaderChevronW : 0;
+    const Font font = Header::pillFont(h.right, h.rightMaxW);
+    const int w = Header::pillW(h.right, h.rightMaxW, h.rightBack);
     const int px = kW - 6 - w;
     const uint16_t pill = h.rightDanger ? (h.pressed ? col::SOFT : col::RED) : h.pressed ? col::BTN_HI : col::BTN;
     s.fillRoundRect(px, 5, w, 26, 13, pill);
     if (h.rightBack) icons::drawCentred(s, icons::kChevronLeft, px + 14, 18, acc);
-    f.draw(s, Font::Bold, h.right, px + iconW + (w - iconW) / 2, 17, w - iconW, h.rightDanger ? col::DARK : col::TXT,
-           pill, Fonts::Align::Centre);
+    f.draw(s, font, h.right, px + iconW + (w - iconW) / 2, 17, w - iconW, h.rightDanger ? col::DARK : col::TXT, pill,
+           Fonts::Align::Centre);
     right = px - 8;
   }
   if (h.path) {
@@ -1683,9 +1838,30 @@ void Ui::drawHeader(const Header& h) {
     // descenders ("Discoverv" on the device).
     f.draw(s, Font::Bold, h.title, x, 10, right - x, col::TXT, col::HEAD);
   } else {
-    const int tw = f.draw(s, Font::Bold, h.title, x, 17, right - x, col::TXT, col::HEAD);
-    if (h.sub && h.sub[0] && x + tw + 8 < right - 16) {
-      f.draw(s, Font::Small, h.sub, x + tw + 8, 18, right - (x + tw + 8), col::DIM, col::HEAD);
+    // The sub beside the title in what it and the pill leave (their words
+    // in the UI's language): a name cut there, a phrase or a count whole or
+    // not at all, or under the title (uitext::headerSub(), from the widths
+    // as measured: as the tests and the Queue's summary measure them).
+    using uitext::HeaderSub;
+    const bool hasSub = h.sub && h.sub[0];
+    const int subW = hasSub && (h.subWhole || h.subBelow) ? f.width(Font::Small, h.sub) : 0;
+    const HeaderSub how =
+        hasSub ? uitext::headerSub(x, std::min(f.width(Font::Bold, h.title), right - x), right, subW, h.subWhole,
+                                   h.subBelow)
+               : HeaderSub::None;
+    if (how == HeaderSub::Below) {
+      // Two lines, as the Folder page's: the sub under the title (a name
+      // cut at its end), the title last (the line's background would cut
+      // its descenders).
+      f.draw(s, Font::Small, h.sub, x, 26, right - x, col::DIM, col::HEAD);
+      f.draw(s, Font::Bold, h.title, x, 10, right - x, col::TXT, col::HEAD);
+    } else {
+      const int tw = f.draw(s, Font::Bold, h.title, x, 17, right - x, col::TXT, col::HEAD);
+      const int sx = x + tw + uitext::kHeaderSubGap;
+      // (A whole one never cut, should the title draw a pixel wider than measured.)
+      if (how == HeaderSub::Beside) {
+        f.draw(s, Font::Small, h.sub, sx, 18, std::max(right - sx, subW), col::DIM, col::HEAD);
+      }
     }
   }
   s.fillRect(0, kHeaderH - 2, kW, 2, acc);
@@ -1746,6 +1922,9 @@ void Ui::printState() const {
                 state_.btSession.pairing() ? " pairing" : "", PlayGate::stateName(state_.gate),
                 (unsigned long)state_.gateFailures,
                 added_.pending() ? (long)added_.since() : -1L, failedKeys_.count());
+  Serial.printf("[ui] language: %s (%s)%s%s\n", uistr::tag(uistr::lang()), uistr::autonym(uistr::lang()),
+                uistr::hasCatalogue(uistr::lang()) ? "" : ", no catalogue yet: English's texts",
+                pickerDue_ ? "; the first boot's picker is up" : "");
   if (browse_) {
     Serial.printf("[ui] the Library browses a SYNTHETIC library: %lu tracks, %lu artists, %lu albums (uil0: the card's)\n",
                   (unsigned long)browse_->trackCount(), (unsigned long)browse_->artistCount(),
@@ -1757,6 +1936,32 @@ void Ui::printState() const {
   // so FreeRTOS's own mark is the command's: app/LoopStack).
   Serial.printf("[ui] loop task stack: %lu B never used since the boot (of 8 KB)\n",
                 static_cast<unsigned long>(loopstack::lowestLeft()));
+}
+
+// uiL: the languages; uiL<tag> one of them (as a tap on its row); uiL-
+// the language and the tips forgotten (English now; the next boot is a
+// fresh unit's: its picker, the touch check if due, the tips).
+void Ui::languageCommand(const char* a) {
+  if (a[0] == '-') {
+    uilang::forget();
+    coachSeen_ = false;
+    languageChanged();
+    return;
+  }
+  if (a[0]) {
+    uistr::Lang l = uistr::Lang::En;
+    if (!uistr::langOf(a, &l)) {
+      Serial.printf("[ui] uiL%s: not one of the languages (uiL: the list)\n", a);
+      return;
+    }
+    chooseLanguage(l);
+    return;
+  }
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const auto l = static_cast<uistr::Lang>(i);
+    Serial.printf("[ui] %s %-3s %s%s\n", l == uistr::lang() ? "*" : " ", uistr::tag(l), uistr::autonym(l),
+                  uistr::hasCatalogue(l) ? "" : " (no catalogue yet: English)");
+  }
 }
 
 void Ui::command(const char* a) {
@@ -1775,13 +1980,27 @@ void Ui::command(const char* a) {
     back();
   } else if (a[0] == 'c') {
     showCoach();
+  } else if (a[0] == 'L') {
+    languageCommand(a + 1);
+    return;
+  } else if (a[0] == 'P') {
+    // The first boot's picker, now (no touch check or tips after it).
+    closeModal(true);
+    if (coach_.up()) coach_.close();
+    if (page_) page_->leave();
+    page_ = nullptr;
+    pickerDue_ = true;
+    pickerNav();
+    showTop();
   } else if (a[0] == 'T') {
     thumbs_.redecode();
     list_.refreshAll();  // the rows on screen ask again
   } else {
     Serial.println("[ui] ui: the navigation state; ui0-ui4 tap a tab (0 Now Playing, 1 Library, 2 Queue, 3 Dance, "
-                   "4 Output); uib back; uic the coach cards; uiT the covers decoded again (timings); uil<n> the Library browses a synthetic library of n "
-                   "tracks (uil0: the card's); uit/uih/uis/uid/uip a scripted finger");
+                   "4 Output); uib back; uic the coach cards; uiL<tag> the language (uiL the list, uiL- forget it and "
+                   "the tips: the next boot is a fresh unit's); uiP the first boot's language picker; uiT the covers "
+                   "decoded again (timings); uil<n> the Library browses a synthetic library of n tracks (uil0: the "
+                   "card's); uit/uih/uis/uid/uip a scripted finger");
     return;
   }
   printState();

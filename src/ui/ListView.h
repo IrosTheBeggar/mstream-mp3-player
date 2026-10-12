@@ -10,6 +10,7 @@
 #include "KineticScroll.h"
 #include "ListLayout.h"
 #include "NavModel.h"
+#include "UiStrings.h"
 #include "ui/EmptyState.h"
 #include "ui/Fonts.h"
 #include "ui/Icons.h"
@@ -164,7 +165,7 @@ public:
       return false;
     }
     // Shown in the band when there are no rows.
-    virtual const char* emptyText() { return "Nothing here"; }
+    virtual const char* emptyText() { return uistr::tr(uistr::S::library_empty_nothing); }
     // The rail's rows: the first railRows() rows are sorted by name (the
     // rest, a folder's files after its folders, aren't in the jump grid).
     virtual uint32_t railRows() { return rows(); }

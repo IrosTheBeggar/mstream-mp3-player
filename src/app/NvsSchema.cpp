@@ -17,16 +17,28 @@ nvslayout::SchemaStep step;
 bool opened = false;
 bool migrated = true;
 bool written = false;
+bool langWritten = false;  // migrate()'s step to 3 wrote "ui"/"lang" "en"
 
 // One step per schema bump, from `from` up to `to` (each step the next
 // number's changes: a key moved, a blob rewritten). Schema 1 is the first.
 // The step from 1 to 2 is nothing: schema 2 only adds "queue"/"repeat",
-// and an absent key reads as Off (QueueStore::loadRepeat()). False: a step
-// failed; the number then stays where it was, so the next boot tries again.
+// and an absent key reads as Off (QueueStore::loadRepeat()). The step from
+// 2 to 3 writes "ui"/"lang" "en" when there is none: a unit that ran an
+// older firmware keeps English, with no first-boot language picker (a
+// fresh NVS has no "schema" and takes no step: the picker is its).
+// False: a step failed; the number then stays where it was, so the next
+// boot tries again.
 bool migrate(uint16_t from, uint16_t to) {
-  (void)from;
-  (void)to;
-  return true;
+  if (to < 3) return true;
+  Preferences ui;
+  if (!ui.begin(nvslayout::kUiNamespace, false)) return false;
+  bool ok = true;
+  if (nvslayout::migrateWritesLang(from, ui.isKey(nvslayout::kLangKey))) {
+    ok = ui.putString(nvslayout::kLangKey, "en") == 2;
+    langWritten = ok;
+  }
+  ui.end();
+  return ok;
 }
 
 }  // namespace
@@ -59,10 +71,11 @@ void log() {
                     written ? "written" : "NOT written");
       break;
     case Action::Migrate:
-      Serial.printf("[nvs] schema %u -> %u: %s\n", from, cur,
+      Serial.printf("[nvs] schema %u -> %u: %s%s\n", from, cur,
                     !migrated ? "a migration step FAILED (tried again at the next boot)"
                     : written ? "migrated"
-                              : "migrated, the number NOT written");
+                              : "migrated, the number NOT written",
+                    langWritten ? " (the UI's language: English, as before)" : "");
       break;
     case Action::Newer:
       Serial.printf("[nvs] schema %u, newer than this firmware's %u (a downgrade): left as it is; "

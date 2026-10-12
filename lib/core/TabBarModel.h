@@ -4,6 +4,8 @@
 #pragma once
 #include <cstdint>
 
+#include "UiStrings.h"
+
 // The tab bar's layout, what it shows, and what must be redrawn when that
 // changes (the tab bar spec §3.2, with the review's grafts and the user's
 // measurements). Portable, host-tested; ui/TabBar draws it.
@@ -25,7 +27,11 @@
 // with a progress hairline under it; the Queue icon has an up-next badge,
 // which flashes for 1.5 s when tracks are added; the Output icon's colour
 // is the Bluetooth state; the active tab has a plate, an underline and a
-// text label in its section's colour.
+// text label in its section's colour: on its plate when it fits; the
+// Library's and the Queue's may run over the plate's edges into the label
+// row of their neighbours (which show no label: only the active tab does),
+// up to kLabelSpillW; wider than that, the tab shows its icon alone
+// (labelFit()).
 namespace tabbar {
 
 constexpr int kTabs = 5;
@@ -58,6 +64,11 @@ enum class Play : uint8_t { Nothing, Stopped, Paused, Playing, Waiting };
 // The sleep timer's badge on the Now Playing cell (a 7 x 7 moon in its
 // top-right corner): none, running (counting or armed), fading (amber).
 enum class Sleep : uint8_t { None, Running, Fading };
+// Where the active tab's label goes (labelFit()): on its plate; over the
+// plate's edges, centred (the Library's and the Queue's); or nowhere (the
+// icon alone, centred as on an inactive tab; the plate and the underline
+// still say which tab).
+enum class LabelFit : uint8_t { Plate, Spill, None };
 
 // Everything the bar shows. Two states compare cell by cell (dirty()).
 struct State {
@@ -74,6 +85,7 @@ struct State {
   bool charging = false;
   bool lowBlink = false;           // battery at 10 % or less: its blink phase
   Sleep sleep = Sleep::None;       // the sleep timer's moon (no minutes: no redraw as they pass)
+  LabelFit label = LabelFit::Plate;  // the active tab's label (its language's width: labelFit())
 };
 constexpr int kMoonPx = 7;         // the sleep timer's badge
 constexpr int kMoonRight = 25;     // its right edge, from the Now Playing icon's centre
@@ -93,9 +105,28 @@ constexpr int kBatteryTextW = 38;            // its "100%", centred under it (kB
 constexpr int kBadgeRight = 23;              // the Queue badge's right edge, from the icon's centre
 constexpr int kBadgePad = 8;                 // the badge pill: its text + this
 inline int labelWidth(int tab) { return tab == kTabs - 1 ? kOutputPlateW : kLabelW; }
-extern const char* const kLabels[kTabs];     // "Playing", "Library", "Queue", "Dance", "Output"
+extern const uistr::S kLabels[kTabs];        // "Playing", "Library", "Queue", "Dance", "Output"
+inline const char* label(int tab) { return uistr::tr(kLabels[tab]); }
+// The Library's and the Queue's label may spill over its plate's edges,
+// centred under the icon, up to this: what the label row (y 19-35) has
+// between the neighbours' drawings. The Library's (x 45-116) clears the
+// Now Playing cell's progress hairline (x 11-42) and the Queue icon
+// (x 120-143); the Queue's (x 99-170), the Library icon (68-93) and the
+// crab (178-199). (The icons' widths are ui/IconData's: kLibraryIconW and
+// the rest below; test_ui_library checks the geometry.)
+constexpr int kLabelSpillW = 72;
+constexpr int kLibraryIconW = 26, kQueueIconW = 24, kQueueIconShift = 3, kCrabIconW = 22;
+inline bool spills(int tab) { return tab == 1 || tab == 2; }
+// The widest the active tab's label may be drawn.
+inline int labelMax(int tab) { return spills(tab) ? kLabelSpillW : labelWidth(tab); }
+// Where a label `labelW` px wide (Small) goes on tab `tab`.
+inline LabelFit labelFit(int tab, int labelW) {
+  if (labelW <= labelWidth(tab)) return LabelFit::Plate;
+  return labelW <= labelMax(tab) ? LabelFit::Spill : LabelFit::None;
+}
 
-// Bit t: tab cell t must be redrawn to go from `drawn` to `now`.
+// Bit t: tab cell t must be redrawn to go from `drawn` to `now`. A label
+// that spills is drawn by its neighbours too: they redraw with it.
 uint8_t dirty(const State& drawn, const State& now);
 constexpr uint8_t kAll = (1u << kTabs) - 1u;
 

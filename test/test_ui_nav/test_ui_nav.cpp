@@ -785,6 +785,41 @@ void test_tabbar_redraws_only_what_changed() {
   // It fits in the cell, clear of the EQ bars (x -9..+9 from the centre).
   TEST_ASSERT_TRUE(tabbar::kTabW / 2 + tabbar::kMoonRight <= tabbar::kTabW);
   TEST_ASSERT_TRUE(tabbar::kMoonRight - tabbar::kMoonPx > 9);
+  // A label that spills over its plate (tabbar::labelFit(): the Library's,
+  // the Queue's) is drawn by its neighbours too: they redraw with it. On
+  // its plate (every English label), the bits are as above.
+  using F = tabbar::LabelFit;
+  a = tabbar::State{};
+  a.active = 1;
+  a.label = F::Spill;
+  b = a;
+  b.active = 3;
+  b.label = F::Plate;
+  TEST_ASSERT_EQUAL_UINT8((1u << 0) | (1u << 1) | (1u << 2) | (1u << 3), tabbar::dirty(a, b));
+  TEST_ASSERT_EQUAL_UINT8((1u << 0) | (1u << 1) | (1u << 2) | (1u << 3), tabbar::dirty(b, a));
+  b = a;
+  b.active = 2;  // the Queue's spills too
+  TEST_ASSERT_EQUAL_UINT8((1u << 0) | (1u << 1) | (1u << 2) | (1u << 3), tabbar::dirty(a, b));
+  b.active = 4;
+  b.label = F::Plate;
+  a.active = 2;
+  TEST_ASSERT_EQUAL_UINT8((1u << 1) | (1u << 2) | (1u << 3) | (1u << 4), tabbar::dirty(a, b));
+  // The label alone changing (another language): the active cell, and a
+  // spill's neighbours.
+  a = tabbar::State{};
+  a.active = 1;
+  b = a;
+  b.label = F::Spill;
+  TEST_ASSERT_EQUAL_UINT8((1u << 0) | (1u << 1) | (1u << 2), tabbar::dirty(a, b));
+  b.label = F::None;  // the icon alone
+  TEST_ASSERT_EQUAL_UINT8(1u << 1, tabbar::dirty(a, b));
+  // A spill leaves the other changes as they were: the Now Playing cell's
+  // EQ redraws it alone (its drawing has the label's end in it).
+  a.label = F::Spill;
+  a.play = tabbar::Play::Playing;
+  b = a;
+  b.eqStep = 9;
+  TEST_ASSERT_EQUAL_UINT8(1u << 0, tabbar::dirty(a, b));
 }
 
 // The Output icon: amber only while something is on its way; resting

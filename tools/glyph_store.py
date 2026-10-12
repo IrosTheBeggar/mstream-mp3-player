@@ -27,7 +27,11 @@ winning, and what the face has no glyph for):
   pan-big5  pan and Big5's level 1 hanzi (5,401): what Traditional Chinese
           would add
 The standards come from Python's own codecs (euc_kr, euc_jp, cp932, gb2312,
-big5). Left out everywhere: fullwidth ASCII (U+FF01-FF5E), the minus sign
+big5). Every set also takes the characters the UI's catalogues use
+(--chars-from, i18n/ by default: every text of i18n/*.json, composed as
+the device draws it), so a translation's Chinese or Japanese is drawn
+whatever the set leaves out (a GB2312 level 2 hanzi in zh.json, say); the
+generated file names the ones the set hadn't. Left out everywhere: fullwidth ASCII (U+FF01-FF5E), the minus sign
 − (U+2212) and halfwidth katakana (U+FF61-FF9F), which TextFold folds (to
 ASCII, which DejaVu draws; to the fullwidth kana), and a glyph whose ink
 reaches more than 2 px past the em box (fits(): the vertical kana repeat
@@ -83,7 +87,12 @@ Usage (the font is not in this repository: --font, or GLYPH_STORE_FONT):
     python tools/glyph_store.py --font NotoSansCJK-Regular.ttc
     python tools/glyph_store.py --font ... --check   # exit 1 if a generated file differs
     python tools/glyph_store.py --font ... --sizes   # each set's flash cost; writes nothing
+    python tools/glyph_store.py --font ... --chars-from ''  # the set alone, not the catalogues' too
     python tools/glyph_store.py --fixture            # test_glyph_store's fixture store only (no font)
+
+A translation with a character the store lacks fails the catalogue's check
+(tools/gen_ui_strings.py names the code point) until this is run again
+with the font, and the store committed with the catalogue.
 
 The checked-in file was made with Pillow 12.2.0 (FreeType 2.14.3); another
 FreeType can hint a pixel differently. Its header names the font file, its
@@ -96,11 +105,14 @@ store, file or symbol is named after the font (its Reserved Font Name is
 "Source"; "Noto" is a trademark): kCjkGlyphs16.
 """
 import argparse
+import glob
 import hashlib
+import json
 import os
 import re
 import struct
 import sys
+import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, ".."))
@@ -205,6 +217,28 @@ SETS = {
     "hangul": lambda: ks_hangul() | jamo() | signs(),
     "pan-big5": lambda: ks_hangul() | jamo() | jis0208() | gb2312_level1() | kana() | signs() | big5_level1(),
 }
+
+
+def catalogue_chars(folder):
+    """The code points the UI's texts use: every message of i18n/*.json (a
+    plural's forms too) and each file's language name in itself, composed
+    (NFC, as TextFit draws). Metadata ("@<id>", "@@note") is left out: the
+    device never draws it. An empty set for no folder."""
+    out = set()
+    if not folder:
+        return out
+    for path in sorted(glob.glob(os.path.join(folder, "*.json"))):
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        texts = [data.get("@@autonym", "")]
+        for key, value in data.items():
+            if key.startswith("@"):
+                continue
+            texts += list(value.values()) if isinstance(value, dict) else [value]
+        for t in texts:
+            if isinstance(t, str):
+                out |= {ord(ch) for ch in unicodedata.normalize("NFC", t) if ch >= " "}
+    return out
 
 
 def vlw_codepoints(path):
@@ -553,9 +587,10 @@ def wrap_list(prefix, items, width=100):
     return NL.join(lines) + NL
 
 
-def wanted(name, vlw):
-    """A set's code points, less what TextFold folds and the VLW fonts draw."""
-    return {cp for cp in SETS[name]() if not folded(cp)} - vlw
+def wanted(name, vlw, extra=frozenset()):
+    """A set's code points and `extra` (the catalogues'), less what TextFold
+    folds and the VLW fonts draw."""
+    return {cp for cp in SETS[name]() | set(extra) if not folded(cp)} - vlw
 
 
 def draw(path, args, want):
@@ -584,7 +619,10 @@ def draw(path, args, want):
 
 
 def generate(path, args):
-    facts, glyphs, outside, missing = draw(path, args, wanted(args.set, vlw_codepoints(args.vlw)))
+    vlw = vlw_codepoints(args.vlw)
+    extra = catalogue_chars(args.chars_from)
+    beyond = sorted(wanted(args.set, vlw, extra) - wanted(args.set, vlw))  # what the catalogues add
+    facts, glyphs, outside, missing = draw(path, args, wanted(args.set, vlw, extra))
     encoding = RAW if args.raw else RUNS
     store = build(glyphs, args.size, facts["ascent"], facts["descent"], encoding)
     head, back = parse(store)
@@ -608,6 +646,8 @@ def generate(path, args):
            f"{head['ink_ascent']} above, {head['ink_descent']} below; boxes up to {head['widest']} x "
            f"{head['tallest']} px"]
     text = NL.join(src) + NL
+    if beyond:
+        text += wrap_list("// The catalogues' (i18n/*.json) beyond the set:", [f"U+{cp:04X}" for cp in beyond])
     if outside:
         text += wrap_list("// Left out, their ink more than 2 px past the em box:", [f"U+{cp:04X}" for cp in outside])
     if missing:
@@ -775,6 +815,8 @@ def main():
     ap.add_argument("--out", help="default lib/core/CjkGlyphs<size>.cpp")
     ap.add_argument("--vlw", default=os.path.join(ROOT, "src", "ui", "VlwFonts.cpp"),
                     help="the VLW fonts whose code points the store leaves to them")
+    ap.add_argument("--chars-from", default=os.path.join(ROOT, "i18n"),
+                    help="the UI's catalogues, whose characters the store takes too ('' for none)")
     ap.add_argument("--fixture-out", default=os.path.join(ROOT, "test", "test_glyph_store", "fixture_store.h"))
     ap.add_argument("--check", action="store_true", help="fail if a generated file isn't what this makes")
     ap.add_argument("--sizes", action="store_true", help="print each set's size; write nothing")

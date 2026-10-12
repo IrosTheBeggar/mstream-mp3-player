@@ -10,6 +10,7 @@
 
 #include "QueueView.h"
 #include "TagText.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "app/Diagnostics.h"
 #include "app/Psram.h"
@@ -210,7 +211,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
         updateOver();
         // (No marker on the card, no promise: none written, or none wanted
         // after this boot's own build ran short.)
-        if (up->last().markerWritten) toast(uitext::kLibraryAtBoot);
+        if (up->last().markerWritten) toast(uistr::tr(uistr::S::library_updates_at_boot));
         break;
       case LibraryUpdate::Do::Failed:
         ++updates_;
@@ -566,7 +567,7 @@ void CardTasks::live() {
     jobs_.libraryRebuilt();
     scanTotal_ = indexPending();
     scanDone_ = 0;
-    toast(uitext::kLibraryUpdated);
+    toast(uistr::tr(uistr::S::library_updated));
   }
   Serial.printf("[card] the update step (%s): %s%s\n", s.why,
                 s.built ? "the library is rebuilt (its save next, on the card worker)"
@@ -658,12 +659,12 @@ librarytext::Status CardTasks::status() const {
 
 bool CardTasks::takeToast(char* buf, size_t size) {
   if (!toast_[0]) return false;
-  snprintf(buf, size, "%s", toast_);
+  uistr::copy(buf, size, toast_);  // (cut at a character boundary: a UI text)
   toast_[0] = 0;
   return true;
 }
 
-void CardTasks::toast(const char* text) { snprintf(toast_, sizeof(toast_), "%s", text); }
+void CardTasks::toast(const char* text) { uistr::copy(toast_, sizeof(toast_), text); }
 
 void CardTasks::state(librarytext::Status* s, char* line, size_t size) const {
   *s = status();

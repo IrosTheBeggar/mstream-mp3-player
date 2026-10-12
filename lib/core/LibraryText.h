@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "LibraryIndex.h"
+#include "TextFit.h"
 
 // What the Library's rows and headers, Now Playing and the catalog say about
 // the index's entries (docs/METADATA.md 5.4 and 3.6; milestone N9): the
@@ -24,10 +25,12 @@ namespace librarytext {
 inline constexpr const char* kDot = " \xC2\xB7 ";
 
 // An album's artist line as shown: the line its tracks' records elected
-// (the album-artist display, "Various Artists", the track-artist display)
-// when it has records (LibraryIndex::kTagged), else its artist's name (the
-// folder's, or the spelling the artist's other albums elected for it). ""
-// when there is none (the files right under /music).
+// (the album-artist display; "Various Artists" in the UI's language, a
+// compilation's with no album artist tagged, LibraryIndex::kVarious; the
+// track-artist display) when it has records (LibraryIndex::kTagged), else
+// its artist's name (the folder's, or the spelling the artist's other
+// albums elected for it). "" when there is none (the files right under
+// /music).
 const char* albumArtist(const LibraryIndex& index, uint32_t album);
 // A track's own artist: its record's display join, where it differs from
 // its album's line (the builder drops it where it is the same); nullptr
@@ -42,7 +45,7 @@ size_t artistCounts(const LibraryIndex& index, uint32_t artist, char* buf, size_
 size_t trackCount(uint32_t n, char* buf, size_t size);
 
 // An album row's subtitle. AZ (the root's Albums): its artist line and its
-// year ("Artist · 2001"; uitext::kNoArtistFolder when there is no line).
+// year ("Artist · 2001"; library.no_artist_folder when there is no line).
 // OfArtist (an artist's albums, newest first): its year and its tracks
 // ("2001 · 14 tracks", or "14 tracks").
 enum class AlbumPlace : uint8_t { AZ, OfArtist };
@@ -50,14 +53,30 @@ size_t albumSub(const LibraryIndex& index, uint32_t album, AlbumPlace place, cha
 // The Album page's header line: "Artist · 2001 · 14 tracks" (the parts it
 // has).
 size_t albumHeader(const LibraryIndex& index, uint32_t album, char* buf, size_t size);
+// ... in `maxW` px of `small`: the room it has under the title (beside the
+// title it is drawn only whole: Ui::drawHeader(), Header::subBelow). Whole
+// when it fits; else without the year ("Daft Punk · 14 tracks"); else the
+// artist's line cut with "…" to what the count leaves ("The Lantern C… ·
+// 14 tracks"); else the year and the count ("1999 · 14 tracks"): a phrase
+// there (library.no_artist_folder, "Various Artists") is whole or left
+// out, as a name left less than kAlbumLineMinNameW px. Never the count cut,
+// nor a part pushed out of `buf` by a long name.
+inline constexpr int kAlbumLineMinNameW = 32;
+size_t albumHeader(const textfit::Font& small, int maxW, const LibraryIndex& index, uint32_t album, char* buf,
+                   size_t size);
+// The line from its parts: `artist` (a name; a phrase with `phrase`),
+// `year` (0: none) and the tracks; fitted to `maxW` px of `*small` as above,
+// or whole with no font.
+size_t albumHeaderLine(const textfit::Font* small, int maxW, const char* artist, bool phrase, uint32_t year,
+                       uint32_t tracks, char* buf, size_t size);
 // A track row's subtitle: its own artist (ownArtist()), and with `album`
 // (an artist's All tracks) its album's name after it ("Guest · Album", or
-// "Album"; uitext::kLooseTracks for the loose tracks). "" when there is
+// "Album"; library.loose_tracks for the loose tracks). "" when there is
 // nothing to say.
 size_t trackSub(const LibraryIndex& index, uint32_t track, bool album, char* buf, size_t size);
-// The album's name, or uitext::kLooseTracks.
+// The album's name, or library.loose_tracks.
 const char* albumShown(const LibraryIndex& index, uint32_t album);
-// The artist's name, or uitext::kNoArtistFolder.
+// The artist's name, or library.no_artist_folder.
 const char* artistShown(const LibraryIndex& index, uint32_t artist);
 
 // What the A-Z rail, a row's letter and the jump grid key an Artists or
@@ -67,8 +86,30 @@ const char* artistShown(const LibraryIndex& index, uint32_t artist);
 // " Zebra Songs" under Z).
 const char* railName(const LibraryIndex& index, LibraryIndex::View view, uint32_t id);
 
-// "Disc 2" (uitext::kDisc).
+// "Disc 2" (library.disc).
 size_t discText(uint32_t disc, char* buf, size_t size);
+
+// A folder's counts, the parts that aren't 0, joined by format.list_sep:
+// its folders, its audio files ("audio files" with `audioWord`, else
+// "files": a folder row's) and its other files ("3 folders, 12 files, 1
+// other"); library.folder_empty when it has none.
+size_t folderCounts(uint32_t folders, uint32_t files, uint32_t other, bool audioWord, char* buf, size_t size);
+// The Folder page's header counts (its second line, right of the path:
+// Ui::drawHeader()) in `maxW` px of `small`: the first of these that fits
+// whole, never one cut ("14 Audiodateien, 1 sonst…" beside German's crumb):
+// the three parts with "audio files" ("12 folders, 140 audio files, 3
+// other"); with "files"; without the other files ("12 folders, 140
+// files"); the files alone (else the folders, else the other files: one
+// part). The last when none fits (the draw cuts it: never on this screen,
+// test_ui_library).
+size_t folderHeaderCounts(const textfit::Font& small, int maxW, uint32_t folders, uint32_t files, uint32_t other,
+                          char* buf, size_t size);
+
+// The hold sheet's title (library.hold_title: "Discovery, 14 tracks") in
+// `maxW` px of `small` (the sheet's title: sheet::kTitleW): the name cut to
+// what the rest leaves, never the count ("Harder, Better, Faster, Str…,
+// 14 tracks"). The name as TextFit draws it (composed, folded).
+size_t holdTitle(const textfit::Font& small, int maxW, const char* name, uint32_t tracks, char* buf, size_t size);
 
 // An album's disc dividers (5.4: "Disc 2" rows only when it has more than
 // one disc): the Album page's rows are its tracks (tracksOfAlbum()) with a

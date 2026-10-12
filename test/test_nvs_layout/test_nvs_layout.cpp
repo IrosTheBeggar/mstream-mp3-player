@@ -2,15 +2,18 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host unit tests for nvslayout: the NVS schema number's boot step, the
-// resume point's versioned blob and the repeat mode's key. Run: pio test -e native
+// resume point's versioned blob, the repeat mode's key and the UI's
+// language (schema 3). Run: pio test -e native
 #include <unity.h>
 
 #include <cstdint>
 #include <cstring>
 
 #include "NvsLayout.h"
+#include "UiStrings.h"
 
 using nvslayout::SchemaStep;
+using uistr::Lang;
 
 void setUp() {}
 void tearDown() {}
@@ -32,10 +35,15 @@ void test_schema_steps() {
   s = nvslayout::schemaStep(true, 2, 1);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(2, s.from);
-  TEST_ASSERT_EQUAL_UINT16(2, nvslayout::kCurrent);
-  s = nvslayout::schemaStep(true, 1);  // a schema-1 unit (v0.5.0 to v0.6.0): migrated to 2
+  TEST_ASSERT_EQUAL_UINT16(3, nvslayout::kCurrent);
+  s = nvslayout::schemaStep(true, 1);  // a schema-1 unit (v0.5.0 to v0.6.0): migrated to 3
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(1, s.from);
+  s = nvslayout::schemaStep(true, 2);  // a schema-2 unit (0.7.0 to 0.9.0): migrated to 3
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
+  TEST_ASSERT_EQUAL_UINT16(2, s.from);
+  s = nvslayout::schemaStep(true, 3, 2);  // 0.9.0 on this firmware's NVS: left as it is
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_STRING("meta", nvslayout::kMetaNamespace);
   TEST_ASSERT_EQUAL_STRING("schema", nvslayout::kSchemaKey);  // (NVS keys: 15 characters at most)
 }
@@ -241,9 +249,10 @@ void test_resume_blob_unknown_kind_keeps_the_position() {
 
 // The blob gained its version 2 under schema 1 (its own version byte; every
 // older version still read): no schema bump for that. A new key is a
-// layout change: schema 2 is schema 1's keys and "queue"/"repeat".
-void test_the_schema_is_two() {
-  TEST_ASSERT_EQUAL_UINT16(2, nvslayout::kCurrent);
+// layout change: schema 2 is schema 1's keys and "queue"/"repeat", schema
+// 3 schema 2's and "ui"/"lang".
+void test_the_schema_is_three() {
+  TEST_ASSERT_EQUAL_UINT16(3, nvslayout::kCurrent);
   TEST_ASSERT_EQUAL_UINT8(2, nvslayout::kResumeVersion);
   TEST_ASSERT_EQUAL_UINT32(64, nvslayout::kResumeMaxBytes);
 }
@@ -262,15 +271,52 @@ void test_repeat_from_what_is_saved() {
   TEST_ASSERT_TRUE(std::strlen(nvslayout::kRepeatKey) <= 15);
 }
 
+// The UI's language as saved: one of the ten by its tag; absent, or a tag
+// this firmware hasn't (a later one's, after a downgrade), English. The
+// keys fit NVS's 15 characters, and every tag its room.
+void test_language_from_what_is_saved() {
+  TEST_ASSERT_TRUE(nvslayout::langFrom(false, "de") == Lang::En);
+  TEST_ASSERT_TRUE(nvslayout::langFrom(true, "de") == Lang::De);
+  TEST_ASSERT_TRUE(nvslayout::langFrom(true, "zh") == Lang::Zh);
+  TEST_ASSERT_TRUE(nvslayout::langFrom(true, "en") == Lang::En);
+  TEST_ASSERT_TRUE(nvslayout::langFrom(true, "ko") == Lang::En);  // a later firmware's
+  TEST_ASSERT_TRUE(nvslayout::langFrom(true, "DE") == Lang::En);  // tags as uistr::tag() writes them
+  TEST_ASSERT_TRUE(nvslayout::langFrom(true, "") == Lang::En);
+  TEST_ASSERT_TRUE(nvslayout::langFrom(true, nullptr) == Lang::En);
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const Lang l = static_cast<Lang>(i);
+    TEST_ASSERT_TRUE_MESSAGE(nvslayout::langFrom(true, uistr::tag(l)) == l, uistr::tag(l));
+    TEST_ASSERT_TRUE(std::strlen(uistr::tag(l)) < nvslayout::kLangMaxBytes);
+  }
+  TEST_ASSERT_EQUAL_STRING("ui", nvslayout::kUiNamespace);
+  TEST_ASSERT_EQUAL_STRING("lang", nvslayout::kLangKey);
+  TEST_ASSERT_EQUAL_STRING("coach", nvslayout::kCoachKey);
+}
+
+// The first boot's picker: a fresh unit only (no language, the tips not
+// seen); migrate() gives every older unit English before it can ask.
+void test_language_picker_and_its_migration() {
+  TEST_ASSERT_TRUE(nvslayout::langPickerDue(false, false));
+  TEST_ASSERT_FALSE(nvslayout::langPickerDue(true, false));  // chosen (or an update's "en")
+  TEST_ASSERT_FALSE(nvslayout::langPickerDue(false, true));  // the tips seen: not a fresh unit
+  TEST_ASSERT_FALSE(nvslayout::langPickerDue(true, true));
+  TEST_ASSERT_TRUE(nvslayout::migrateWritesLang(1, false));
+  TEST_ASSERT_TRUE(nvslayout::migrateWritesLang(2, false));
+  TEST_ASSERT_FALSE(nvslayout::migrateWritesLang(2, true));  // a downgrade left one: kept
+  TEST_ASSERT_FALSE(nvslayout::migrateWritesLang(3, false));
+}
+
 // The migration matrix: every unit this firmware can boot on, and what
 // the boot keeps of each. The Opus work added the resume blob's kind 3
 // under schema 1 (a blob's kinds are its own version's business, no
 // bump), and the queue modes moved the schema to 2 for "queue"/"repeat";
-// a unit may have run either build before this one, or 0.6.0, or none.
-// The schema's step, the repeat mode and the resume point, as the boot
-// reads them (NvsSchema::check(), QueueStore::loadRepeat() and
-// loadResume()): the resume point survives whole on every row, and the
-// mode where a unit had one.
+// a unit may have run either build before this one, or 0.6.0, or 0.9.0
+// (schema 2), or none; schema 3 added "ui"/"lang". The schema's step, the
+// repeat mode, the resume point and the UI's language, as the boot reads
+// them (NvsSchema::check(), QueueStore::loadRepeat() and loadResume(),
+// app/UiLang): the resume point survives whole on every row, the mode
+// where a unit had one, and every unit but a fresh one is in English with
+// no language picker unless it chose a language.
 void test_migration_matrix() {
   using A = SchemaStep::Action;
   using Kind = ResumeAnchor::Kind;
@@ -281,23 +327,45 @@ void test_migration_matrix() {
     bool haveRepeat;
     uint8_t repeat;
     Kind kind;  // its saved resume point's anchor
+    const char* lang;  // "ui"/"lang" (nullptr: none)
+    bool coachSeen;    // "ui"/"coach"
     A want;
     uint8_t wantRepeat;
+    Lang wantLang;
+    bool wantPicker;  // the first boot's language picker shows
   };
   const Unit units[] = {
-      {"a fresh unit, or v0.5.0-beta.1's", false, 0, false, 0, Kind::None, A::Write, 0},
-      {"v0.5.0 (schema 1, no anchor)", true, 1, false, 0, Kind::None, A::Migrate, 0},
-      {"0.6.0 (schema 1, an MP3 anchor)", true, 1, false, 0, Kind::Mp3, A::Migrate, 0},
-      {"0.6.0 (schema 1, a FLAC anchor)", true, 1, false, 0, Kind::Flac, A::Migrate, 0},
-      {"the Opus build before the merge (schema 1, an Opus anchor)", true, 1, false, 0, Kind::Opus, A::Migrate, 0},
-      {"the queue modes build before the merge (schema 2, Repeat One)", true, 2, true, 2, Kind::Mp3, A::None, 2},
-      {"this firmware (schema 2, Repeat All, an Opus anchor)", true, 2, true, 1, Kind::Opus, A::None, 1},
+      {"a fresh unit", false, 0, false, 0, Kind::None, nullptr, false, A::Write, 0, Lang::En, true},
+      {"v0.5.0-beta.1 (no schema, the tips seen)", false, 0, false, 0, Kind::None, nullptr, true, A::Write, 0,
+       Lang::En, false},
+      {"v0.5.0 (schema 1, no anchor)", true, 1, false, 0, Kind::None, nullptr, true, A::Migrate, 0, Lang::En, false},
+      {"0.6.0 (schema 1, an MP3 anchor)", true, 1, false, 0, Kind::Mp3, nullptr, true, A::Migrate, 0, Lang::En, false},
+      {"0.6.0 (schema 1, a FLAC anchor, the tips never seen)", true, 1, false, 0, Kind::Flac, nullptr, false,
+       A::Migrate, 0, Lang::En, false},
+      {"the Opus build before the merge (schema 1, an Opus anchor)", true, 1, false, 0, Kind::Opus, nullptr, true,
+       A::Migrate, 0, Lang::En, false},
+      {"the queue modes build before the merge (schema 2, Repeat One)", true, 2, true, 2, Kind::Mp3, nullptr, true,
+       A::Migrate, 2, Lang::En, false},
+      {"0.9.0 (schema 2, Repeat All, an Opus anchor, the tips never seen)", true, 2, true, 1, Kind::Opus, nullptr,
+       false, A::Migrate, 1, Lang::En, false},
+      {"this firmware, back from a downgrade to 0.9.0 (schema 3 kept, German)", true, 3, true, 1, Kind::Mp3, "de",
+       true, A::None, 1, Lang::De, false},
+      {"this firmware (schema 3, Polish, Repeat One)", true, 3, true, 2, Kind::Flac, "pl", true, A::None, 2, Lang::Pl,
+       false},
+      {"this firmware, its picker left without a choice (the tips not seen yet)", true, 3, false, 0, Kind::None,
+       nullptr, false, A::None, 0, Lang::En, true},
   };
   for (const Unit& u : units) {
     const SchemaStep s = nvslayout::schemaStep(u.haveSchema, u.schema);
     TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(u.want), static_cast<int>(s.action), u.ran);
-    if (u.want == A::Migrate) TEST_ASSERT_EQUAL_UINT16_MESSAGE(1, s.from, u.ran);  // (its step does nothing)
+    if (u.want == A::Migrate) TEST_ASSERT_EQUAL_UINT16_MESSAGE(u.schema, s.from, u.ran);
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(u.wantRepeat, nvslayout::repeatFrom(u.haveRepeat, u.repeat), u.ran);
+    // The language after the boot's step (NvsSchema's migrate()) and its
+    // read (app/UiLang); the picker, as Ui::begin() asks.
+    const char* lang = u.lang;
+    if (u.want == A::Migrate && nvslayout::migrateWritesLang(s.from, lang != nullptr)) lang = "en";
+    TEST_ASSERT_TRUE_MESSAGE(nvslayout::langFrom(lang != nullptr, lang) == u.wantLang, u.ran);
+    TEST_ASSERT_EQUAL_MESSAGE(u.wantPicker, nvslayout::langPickerDue(lang != nullptr, u.coachSeen), u.ran);
     QueueResume saved = u.kind == Kind::None ? sample() : anchored();
     saved.anchor.kind = u.kind;
     if (u.kind == Kind::Flac || u.kind == Kind::Opus) {  // the FLAC model: no byte fields
@@ -310,7 +378,10 @@ void test_migration_matrix() {
     assertSame(saved, r);
     TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(u.kind), static_cast<int>(r.anchor.kind), u.ran);
   }
-  // The downgrades from this firmware (schema 2, perhaps an Opus anchor),
+  // The downgrade to 0.9.0 (schema 2) from this firmware: "newer, left as
+  // it is", every key as 0.9.0 wrote it ("lang" never read: English).
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 3, 2).action));
+  // The downgrades from schema 2 (perhaps an Opus anchor),
   // each modelled by the rule that build has: to the queue modes build
   // (schema 2: nothing to do; its reader knew the kinds up to FLAC, so an
   // Opus anchor's blob is refused and that resume point is lost once, as
@@ -342,8 +413,10 @@ int main(int, char**) {
   RUN_TEST(test_resume_blob_unknown_is_ignored);
   RUN_TEST(test_resume_blob_opus_anchor);
   RUN_TEST(test_resume_blob_unknown_kind_keeps_the_position);
-  RUN_TEST(test_the_schema_is_two);
+  RUN_TEST(test_the_schema_is_three);
   RUN_TEST(test_repeat_from_what_is_saved);
+  RUN_TEST(test_language_from_what_is_saved);
+  RUN_TEST(test_language_picker_and_its_migration);
   RUN_TEST(test_migration_matrix);
   return UNITY_END();
 }

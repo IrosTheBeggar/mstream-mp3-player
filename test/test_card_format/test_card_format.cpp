@@ -216,29 +216,31 @@ void test_linux_and_empty_tables_arent_recognised() {
 // was recognised on (it may be FAT32 that failed to mount once, music and
 // all) is never told to be formatted or erased.
 void test_each_kind_has_its_own_message() {
+  using uistr::tr;
   const Kind kinds[] = {Kind::Unreadable, Kind::Other, Kind::ExFat, Kind::Ntfs, Kind::Gpt};
   for (Kind a : kinds) {
     const uitext::CardMessage& m = uitext::cardMessage(a);
-    TEST_ASSERT_TRUE(m.title && m.title[0] && m.lines[0] && m.lines[0][0] && m.lines[1] && m.lines[1][0]);
-    TEST_ASSERT_NOT_NULL(std::strstr(m.still, ": "));  // Toast's "what: where"
+    TEST_ASSERT_TRUE(tr(m.title)[0] && tr(m.lines)[0]);
+    TEST_ASSERT_EQUAL_INT(2, uistr::lineCount(tr(m.lines)));  // two lines, each drawn
+    TEST_ASSERT_NOT_NULL(std::strstr(tr(m.still), ": "));  // Toast's "what: where"
     for (Kind b : kinds) {
       if (a == b) continue;
-      TEST_ASSERT_TRUE(std::strcmp(m.title, uitext::cardMessage(b).title) != 0);
-      TEST_ASSERT_TRUE(std::strcmp(m.still, uitext::cardMessage(b).still) != 0);
+      TEST_ASSERT_TRUE(std::strcmp(tr(m.title), tr(uitext::cardMessage(b).title)) != 0);
+      TEST_ASSERT_TRUE(std::strcmp(tr(m.still), tr(uitext::cardMessage(b).still)) != 0);
     }
   }
-  TEST_ASSERT_EQUAL_STRING("No microSD card", uitext::cardMessage(Kind::Unreadable).title);
-  TEST_ASSERT_NOT_NULL(std::strstr(uitext::cardMessage(Kind::ExFat).title, "exFAT"));
-  TEST_ASSERT_NOT_NULL(std::strstr(uitext::cardMessage(Kind::Ntfs).title, "NTFS"));
-  TEST_ASSERT_NOT_NULL(std::strstr(uitext::cardMessage(Kind::Gpt).title, "GPT"));
-  TEST_ASSERT_NOT_NULL(std::strstr(uitext::cardMessage(Kind::Gpt).lines[1], "Master Boot Record"));
+  TEST_ASSERT_EQUAL_STRING("No microSD card", tr(uitext::cardMessage(Kind::Unreadable).title));
+  TEST_ASSERT_NOT_NULL(std::strstr(tr(uitext::cardMessage(Kind::ExFat).title), "exFAT"));
+  TEST_ASSERT_NOT_NULL(std::strstr(tr(uitext::cardMessage(Kind::Ntfs).title), "NTFS"));
+  TEST_ASSERT_NOT_NULL(std::strstr(tr(uitext::cardMessage(Kind::Gpt).title), "GPT"));
+  TEST_ASSERT_NOT_NULL(std::strstr(tr(uitext::cardMessage(Kind::Gpt).lines), "\nMaster Boot Record"));
   const uitext::CardMessage& other = uitext::cardMessage(Kind::Other);
-  for (const char* t : {other.title, other.lines[0], other.lines[1], other.still}) {
+  for (const char* t : {tr(other.title), tr(other.lines), tr(other.still)}) {
     TEST_ASSERT_NULL(std::strstr(t, "ormat it"));
     TEST_ASSERT_NULL(std::strstr(t, "rase"));
   }
   // An unknown value (a newer Kind, a bad byte): the plain message.
-  TEST_ASSERT_EQUAL_STRING("No microSD card", uitext::cardMessage(static_cast<Kind>(200)).title);
+  TEST_ASSERT_EQUAL_STRING("No microSD card", tr(uitext::cardMessage(static_cast<Kind>(200)).title));
 }
 
 int main(int, char**) {

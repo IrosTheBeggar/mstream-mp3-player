@@ -13,6 +13,7 @@
 #include "LibraryText.h"
 #include "QueueView.h"
 #include "TextFold.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "ui/Fonts.h"
 #include "ui/Gfx.h"
@@ -24,11 +25,15 @@
 
 namespace ui {
 
+using uistr::S;
+
 namespace {
 
 const uint16_t kDiscColours[] = {0xFB49, 0x3EBE, 0xFE07, 0x4ECF, 0xA45F, 0xF396};
-const char* const kActions[3] = {"Play", "Play next", "+ Queue"};
-const char* const kSegments[3] = {"Artists", "Albums", "Folders"};
+const S kActions[3] = {S::library_action_play, S::library_action_play_next, S::library_action_queue};
+const S kSegments[3] = {S::library_segment_artists, S::library_segment_albums, S::library_segment_folders};
+// The console's names for them (it speaks English, whatever the UI's language).
+const char* const kSegmentNames[3] = {"Artists", "Albums", "Folders"};
 
 uint16_t discColour(const char* name) {
   uint32_t h = 2166136261u;
@@ -41,21 +46,6 @@ NavModel::PageRef page(PageKind kind, uint32_t id) {
   p.kind = static_cast<uint8_t>(kind);
   p.id = id;
   return p;
-}
-
-// "N folders, M audio files, K other" (the parts that aren't 0).
-void folderCounts(const LibraryIndex& i, uint32_t f, bool audioWord, char* buf, size_t size) {
-  const LibraryIndex::Folder& d = i.folder(f);
-  int n = 0;
-  buf[0] = 0;
-  auto part = [&](uint32_t count, const char* one, const char* many) {
-    if (!count || n >= static_cast<int>(size) - 1) return;
-    n += snprintf(buf + n, size - n, "%s%lu %s", n ? ", " : "", static_cast<unsigned long>(count), count == 1 ? one : many);
-  };
-  part(d.folderCount, "folder", "folders");
-  part(d.fileCount, audioWord ? "audio file" : "file", audioWord ? "audio files" : "files");
-  part(d.otherCount, "other", "other");
-  if (!n) snprintf(buf, size, "empty");
 }
 
 }  // namespace
@@ -192,7 +182,7 @@ bool LibraryPage::container(const RowRef& r, LibraryIndex::Span* span, const cha
         case PageKind::Library:
           if (segment() != LibrarySegment::Folders) return false;
           *span = i->treeTracks(LibraryIndex::rootFolder());
-          *name = "everything";
+          *name = tr(S::library_everything);
           return true;
         default:
           return false;
@@ -289,8 +279,8 @@ void LibraryPage::enter(NavModel::PageRef& ref) {
   if (kind_ == PageKind::Album && index()) discs_.set(*index(), id_);
   notePlaying();
   if (root() && segment() == LibrarySegment::Folders && index()) {
-    snprintf(playAll_, sizeof(playAll_), "Play all %lu",
-             static_cast<unsigned long>(index()->treeTracks(LibraryIndex::rootFolder()).count));
+    const uint32_t n = index()->treeTracks(LibraryIndex::rootFolder()).count;
+    trnf(playAll_, sizeof(playAll_), S::library_play_all, n, n);
   }
   repaintHeader();
   const bool showPlaying = ref.scrollPx == kShowPlaying;
@@ -343,7 +333,11 @@ void LibraryPage::drawSegments() {
       bg = down ? col::ROW_SEL : col::BTN_HI;
       s.fillRoundRect(x, 6, w, 24, 8, bg);
     }
-    f.draw(s, Font::Bold, kSegments[k], x + w / 2, 18, w - 6, active ? col::TXT : col::DIM, bg, Fonts::Align::Centre);
+    // Bold, or Small when it doesn't fit (Japanese's アーティスト).
+    const char* label = tr(kSegments[k]);
+    const int room = w - uitext::kSegmentPad;
+    f.draw(s, f.fitting(Font::Bold, label, room), label, x + w / 2, 18, room, active ? col::TXT : col::DIM, bg,
+           Fonts::Align::Centre);
   }
   s.fillRect(0, kHeaderH - 2, kW, 2, accent::Library);
   gfx::push(s, 0, kHeaderY, kW, kHeaderH);
@@ -361,12 +355,12 @@ void LibraryPage::switchSegment(LibrarySegment seg) {
   ref_->scrollPx = segScroll_[static_cast<int>(seg)];
   ref_->expanded = -1;
   if (seg == LibrarySegment::Folders && index()) {
-    snprintf(playAll_, sizeof(playAll_), "Play all %lu",
-             static_cast<unsigned long>(index()->treeTracks(LibraryIndex::rootFolder()).count));
+    const uint32_t n = index()->treeTracks(LibraryIndex::rootFolder()).count;
+    trnf(playAll_, sizeof(playAll_), S::library_play_all, n, n);
   }
   drawSegments();
   list.attach(this, ref_, 0);
-  Serial.printf("[ui] library: %s\n", kSegments[static_cast<int>(seg)]);
+  Serial.printf("[ui] library: %s\n", kSegmentNames[static_cast<int>(seg)]);
 }
 
 // Two levels down (the root > an artist > an album), the root crumb.
@@ -381,26 +375,42 @@ Header LibraryPage::header() const {
   sub[0] = 0;
   h.back = true;
   const LibraryIndex* i = index();
+  // The counts and the artist's name beside the title when they fit whole
+  // there (what the name and the crumb leave), else under it: never cut
+  // beside it, nor left out (French's "Tous les morceaux" leaves the name
+  // 16 px), and a long name's counts are on the second line.
+  h.subBelow = true;
+  // The header's second line: from x 28 to 8 px before the crumb, or to x 310.
+  auto lineW = [this]() {
+    return uitext::headerRight(crumb() ? Header::pillW(tr(S::library_crumb), uitext::kCrumbTextW, true) : 0) - 28;
+  };
   switch (kind_) {
     case PageKind::Artist:
-      h.title = i ? librarytext::artistShown(*i, id_) : "Artist";
+      h.title = i ? librarytext::artistShown(*i, id_) : tr(S::library_header_artist);
       if (i) librarytext::artistCounts(*i, id_, sub, subSize);
       break;
     case PageKind::Album:
-      // Its name, then "Artist · 2001 · 14 tracks" (the elected line and year).
-      h.title = i ? librarytext::albumShown(*i, id_) : "Album";
-      if (i) librarytext::albumHeader(*i, id_, sub, subSize);
+      // Its name, then "Artist · 2001 · 14 tracks" (the elected line and
+      // year), made for the second line's room: the year gives way, then a
+      // long artist is cut, never the count ("Daft Punk · 14 tracks" beside
+      // English's crumb).
+      h.title = i ? librarytext::albumShown(*i, id_) : tr(S::library_header_album);
+      if (i) librarytext::albumHeader(Fonts::instance().fit(Font::Small), lineW(), *i, id_, sub, subSize);
       break;
     case PageKind::ArtistTracks:
-      h.title = "All tracks";
+      h.title = tr(S::library_all_tracks);
       if (i) snprintf(sub, subSize, "%s", librarytext::artistShown(*i, id_));
       break;
     case PageKind::Folder:
-      h.title = i ? i->folderName(id_) : "Folder";
+      h.title = i ? i->folderName(id_) : tr(S::library_header_folder);
       if (i) {
-        // The one thin line: where it is, and what's in it.
-        if (!i->folderPath(i->folder(id_).parent, path, pathSize)) snprintf(path, pathSize, "…");
-        folderCounts(*i, id_, true, sub, subSize);
+        // The one thin line: where it is, and what's in it: the counts in
+        // the first form that fits whole beside the crumb (the language's),
+        // never one cut ("14 Audiodateien, 1 sonst…").
+        const LibraryIndex::Folder& d = i->folder(id_);
+        if (!i->folderPath(d.parent, path, pathSize)) snprintf(path, pathSize, "…");
+        librarytext::folderHeaderCounts(Fonts::instance().fit(Font::Small), lineW(), d.folderCount, d.fileCount,
+                                        d.otherCount, sub, subSize);
         h.path = path;
         h.counts = sub;
         h.sub = "";
@@ -410,7 +420,8 @@ Header LibraryPage::header() const {
       break;
   }
   if (crumb()) {
-    h.right = "Library";
+    h.right = tr(S::library_crumb);
+    h.rightMaxW = uitext::kCrumbTextW;  // Small past it ("Bibliothek"): the title keeps its room
     h.rightBack = true;
     h.pressed = headerPressed_ == 2;
   }
@@ -489,7 +500,7 @@ void LibraryPage::onEvent(const InputEvent& e) {
 void LibraryPage::describe(char* buf, size_t size) const {
   snprintf(buf, size, "Library%s: %s %lu%s%s, %lu rows, what plays: track %ld", real() ? "" : " (SYNTHETIC)",
            pageKindName(static_cast<uint8_t>(kind_)), static_cast<unsigned long>(id_), root() ? " " : "",
-           root() ? kSegments[static_cast<int>(segment())] : "",
+           root() ? kSegmentNames[static_cast<int>(segment())] : "",
            static_cast<unsigned long>(const_cast<LibraryPage*>(this)->rows()),
            playTrack_ == LibraryIndex::kNone ? -1L : static_cast<long>(playTrack_));
 }
@@ -566,7 +577,7 @@ const char* LibraryPage::railName(uint32_t row) {
 char LibraryPage::railKey(uint32_t row) { return textfold::railKey(railName(row)); }
 
 const char* LibraryPage::jumpTitle() {
-  if (root()) return kSegments[static_cast<int>(segment())];
+  if (root()) return tr(kSegments[static_cast<int>(segment())]);
   const LibraryIndex* i = index();
   return i && kind_ == PageKind::Folder ? i->folderName(id_) : "";
 }
@@ -574,10 +585,10 @@ const char* LibraryPage::jumpTitle() {
 bool LibraryPage::tinted(uint32_t row) { return playing(rowAt(row)); }
 
 const char* LibraryPage::emptyText() {
-  if (real() && ui_.state().libraryFenced) return uitext::kUpdatingList;  // (the status line says it too)
+  if (real() && ui_.state().libraryFenced) return tr(S::library_updating_list);  // (the status line says it too)
   const LibraryIndex* i = const_cast<Ui&>(ui_).browseIndex();
-  if (!i || !i->ready()) return "No music found: put folders in /music";
-  return folderList() ? "No audio files here" : "Nothing here";
+  if (!i || !i->ready()) return tr(S::library_empty_no_music);
+  return tr(folderList() ? S::library_empty_no_audio : S::library_empty_nothing);
 }
 
 // The root with nothing to show (spec §7): no card, or a card without
@@ -593,10 +604,9 @@ bool LibraryPage::emptyState(EmptyState& e) {
   if (s.libraryTracks == 0) {
     e.icon = &icons::kFolder;
     e.iconColour = col::AMBER;
-    e.title = uitext::kNoMusicTitle;
-    e.line1 = uitext::kNoMusicLines[0];
-    e.line2 = uitext::kNoMusicLines[1];
-    e.buttons[0] = uitext::kTryAgain;
+    e.title = tr(S::empty_no_music_title);
+    e.lines = tr(S::empty_no_music_lines);
+    e.buttons[0] = tr(S::empty_try_again);
     return true;
   }
   return false;
@@ -609,7 +619,7 @@ void LibraryPage::onEmptyAction(int i) {
     ui_.retryCard();
     return;
   }
-  ui_.toast("Looking in /music again...", false);
+  ui_.toast(tr(S::library_looking_again), false);
   ui_.host().rescanLibrary();  // the Library starts over (libraryChanged)
 }
 
@@ -650,9 +660,10 @@ void LibraryPage::drawRow(ListView::Row& r) {
       const int right = ListView::chevron(r);
       r.c.fillRoundRect(r.x + 6, 1, 40, 40, 4, col::BTN);
       icons::drawCentred(r.c, icons::kQueue, r.x + 26, 21, accent::Library);
-      const size_t n = librarytext::trackCount(i->artist(id_).trackCount, sub, sizeof(sub));
-      snprintf(sub + n, sizeof(sub) - n, ", album by album");
-      ListView::lines(r, r.x + 54, right, "All tracks", 10, sub, strlen(sub), col::TXT);
+      const uint32_t n = i->artist(id_).trackCount;
+      trnf(sub, sizeof(sub), S::library_all_tracks_sub, n, n);
+      const char* all = tr(S::library_all_tracks);
+      ListView::lines(r, r.x + 54, right, all, strlen(all), sub, strlen(sub), col::TXT);
       break;
     }
     case RowKind::Track: {
@@ -680,7 +691,8 @@ void LibraryPage::drawRow(ListView::Row& r) {
     case RowKind::Folder: {
       const int x = ListView::icon(r, icons::kFolder, col::AMBER);
       const int right = ListView::chevron(r);
-      folderCounts(*i, rr.id, false, sub, sizeof(sub));
+      const LibraryIndex::Folder& d = i->folder(rr.id);
+      librarytext::folderCounts(d.folderCount, d.fileCount, d.otherCount, false, sub, sizeof(sub));
       const char* name = i->folderName(rr.id);
       ListView::lines(r, x, right, name, strlen(name), sub, strlen(sub), titleInk, titleFont);
       break;
@@ -707,16 +719,16 @@ int LibraryPage::actions(int32_t row, const char* labels[3]) {
   if (row < 0 && root()) {
     // The Folders root: the whole card, said as it is (the review's graft).
     labels[0] = playAll_;
-    labels[1] = "+ Queue";
+    labels[1] = tr(S::library_action_queue);
     return 2;
   }
-  for (int k = 0; k < 3; ++k) labels[k] = kActions[k];
+  for (int k = 0; k < 3; ++k) labels[k] = tr(kActions[k]);
   return 3;
 }
 
 void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const char* name) {
   if (!real()) {
-    ui_.toast("A synthetic library: browsing only", false);
+    ui_.toast(tr(S::library_synthetic), false);
     return;
   }
   const LibraryIndex* i = index();
@@ -764,13 +776,17 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       if (ok && p.state() == PlayState::Waiting) {
         // The headphones aren't connected: it plays once they are (Now
         // Playing shows the wait, and its way out).
-        const char* them = ui_.state().btName[0] ? ui_.state().btName : "the headphones";
-        snprintf(text, sizeof(text), "Waiting for %s: %s", them, start >= 0 ? what : name);
+        const char* plays = start >= 0 ? what : name;
+        if (ui_.state().btName[0]) {
+          trf(text, sizeof(text), S::library_waiting_for, ui_.state().btName, plays);
+        } else {
+          trf(text, sizeof(text), S::library_waiting_for_headphones, plays);
+        }
       } else if (start < 0 && took < span.count) {
         // A container past the cap: the news is what the queue took.
         queueview::cappedText(queueview::Capped::Play, took, span.count, text, sizeof(text));
       } else {
-        snprintf(text, sizeof(text), "Playing: %s", start >= 0 ? what : name);
+        trf(text, sizeof(text), S::library_playing, start >= 0 ? what : name);
       }
       break;
     case 1:
@@ -780,9 +796,9 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       } else if (took < span.count) {
         queueview::cappedText(queueview::Capped::Next, took, span.count, text, sizeof(text));
       } else if (span.count == 1) {
-        snprintf(text, sizeof(text), "Plays next: %s", what);
+        trf(text, sizeof(text), S::library_plays_next, what);
       } else {
-        snprintf(text, sizeof(text), "Plays next: %lu tracks", static_cast<unsigned long>(span.count));
+        trnf(text, sizeof(text), S::library_plays_next_many, span.count, span.count);
       }
       break;
     default:
@@ -791,9 +807,9 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
       } else if (took < span.count) {
         queueview::cappedText(queueview::Capped::Add, took, span.count, text, sizeof(text));
       } else if (span.count == 1) {
-        snprintf(text, sizeof(text), "Added: %s", what);
+        trf(text, sizeof(text), S::library_added, what);
       } else {
-        snprintf(text, sizeof(text), "Added %lu tracks", static_cast<unsigned long>(span.count));
+        trnf(text, sizeof(text), S::library_added_many, span.count, span.count);
       }
       break;
   }
@@ -819,11 +835,13 @@ void LibraryPage::act(LibraryIndex::Span span, int32_t start, int action, const 
   if (full) {
     // Nothing changed: the Undo (and View) the last toast offered stay on
     // the note (docs/QUEUE-MODES.md 15.5).
-    ui_.refuse(uitext::kQueueFull);
+    char note[128];
+    trnf(note, sizeof(note), S::queue_cap_full, QueueModel::kMaxEntries, uistr::grouped(QueueModel::kMaxEntries));
+    ui_.refuse(note);
     return;
   }
   const uint32_t viewKey = ok && action != 0 ? q.keyAt(added.first) : QueueModel::kNone;
-  ui_.toast(ok ? text : "Not enough memory for that", ok, viewKey);
+  ui_.toast(ok ? text : tr(S::toast_no_memory), ok, viewKey);
 }
 
 void LibraryPage::onRowAction(const RowRef& r, int action) {
@@ -885,16 +903,17 @@ void LibraryPage::onHold(uint32_t row) {
     held_ = RowRef{};
     return;
   }
-  char title[96];
+  char title[128];
   LibraryIndex::Span span;
   const char* name = "";
   if (container(held_, &span, &name)) {
-    snprintf(title, sizeof(title), "%s, %lu track%s", name, static_cast<unsigned long>(span.count),
-             span.count == 1 ? "" : "s");
+    // The name cut to what the count leaves (Sheet draws the title in Small).
+    librarytext::holdTitle(Fonts::instance().fit(Font::Small), sheet::kTitleW, name, span.count, title, sizeof(title));
   } else {
     titleOf(held_.id, title, sizeof(title));
   }
-  ui_.openSheet(this, title, kActions, 3, nullptr, /*primary=*/0);  // Play
+  const char* const rows[3] = {tr(kActions[0]), tr(kActions[1]), tr(kActions[2])};
+  ui_.openSheet(this, title, rows, 3, nullptr, /*primary=*/0);  // Play
 }
 
 void LibraryPage::onSheet(int choice) {

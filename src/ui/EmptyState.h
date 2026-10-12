@@ -28,8 +28,7 @@ struct EmptyState {
   const icons::Icon* icon = nullptr;
   uint16_t iconColour = 0;
   const char* title = "";
-  const char* line1 = "";
-  const char* line2 = "";
+  const char* lines = "";  // one line, or two ('\n' between them)
   const char* buttons[2] = {nullptr, nullptr};
   const icons::Icon* buttonIcons[2] = {nullptr, nullptr};
   int buttonCount() const { return (buttons[0] ? 1 : 0) + (buttons[1] ? 1 : 0); }

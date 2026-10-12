@@ -899,8 +899,13 @@ void LibraryIndex::closeAlbumRun() {
     if (const Votes::Entry* aa = best(&Votes::Entry::albumArtist)) {
       a.artistLine = aa->off;
     } else if (v.compilation) {
+      // In English, as before (the orders and the track artists' dedup
+      // below compare it); kVarious draws it in the UI's language.
       if (various_ == kNone) various_ = intern("Various Artists", 15);
-      if (various_ != kNone) a.artistLine = various_;
+      if (various_ != kNone) {
+        a.artistLine = various_;
+        a.flags |= kVarious;
+      }
     } else if (const Votes::Entry* ta = best(&Votes::Entry::trackArtist)) {
       a.artistLine = ta->off;
     }

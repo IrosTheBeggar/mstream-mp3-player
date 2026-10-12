@@ -54,7 +54,7 @@ uint16_t otherCpuMhz(uint16_t mhz);
 // other one is what runs: it is saved and nothing restarts. While a pairing
 // is under way (`pairing`) a restart would drop it, maybe half-bonded (the
 // idle power-off waits for one too): it isn't offered, the toast says to
-// wait (kCpuWaitPairing), and nothing is saved.
+// wait (settings.cpu_wait_pairing), and nothing is saved.
 enum class CpuTap : uint8_t { AskRestart, SaveOnly, WaitPairing };
 CpuTap cpuTap(uint16_t saved, uint16_t running, bool pairing);
 // Once asked, the restart waits for the headphones to be let go and the
@@ -81,7 +81,7 @@ const char* cpuSub(uint16_t saved, uint16_t running, char* buf, size_t size);
 // The dialog's title: "Restart at 160 MHz?"
 void cpuDialogTitle(uint16_t mhz, char* buf, size_t size);
 // Its body for a restart at `mhz`: to 160 what it costs as well
-// (kCpuDialogBody160), to 240 only what the restart does.
+// (settings.cpu_dialog_body_160), to 240 only what the restart does.
 const char* cpuDialogBody(uint16_t mhz);
 // The toast while it restarts: "Restarting at 160 MHz..."
 void cpuRestartingText(uint16_t mhz, char* buf, size_t size);

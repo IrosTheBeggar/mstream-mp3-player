@@ -167,6 +167,36 @@ class Sets(unittest.TestCase):
         vlw = {0x41}
         self.assertFalse(any(gs.folded(cp) for cp in gs.wanted("pan", vlw)))
 
+    def test_the_catalogues_characters(self):
+        # Every text of i18n/*.json (a plural's forms, the language's name),
+        # composed; not the metadata, not '\n'.
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "zh.json"), "w", encoding="utf-8") as f:
+                json.dump({"@@locale": "zh", "@@autonym": "中文", "@@note": "注释",
+                           "a.x": "锂电池\n两行", "@a.x": {"note": "说明"},
+                           "a.n": {"other": "{0} 首"}}, f, ensure_ascii=False)
+            with open(os.path.join(d, "de.json"), "w", encoding="utf-8") as f:
+                json.dump({"@@locale": "de", "@@autonym": "Deutsch", "a.x": "Müde"}, f, ensure_ascii=False)
+            cps = gs.catalogue_chars(d)
+        for ch in "中文锂电池两行{0} 首Deutschü":
+            self.assertIn(ord(ch), cps, ch)
+        for ch in "注释说明\n̈":
+            self.assertNotIn(ord(ch), cps, ch)
+        self.assertEqual(gs.catalogue_chars(""), set())
+        # Taken with the set, less what the fonts draw and what TextFold folds.
+        vlw = {0x41}
+        want = gs.wanted("pan", vlw, {0x9502, 0x41, 0xFF0C})
+        self.assertIn(0x9502, want)  # 锂: GB2312 level 2, not pan's
+        self.assertNotIn(0x41, want)
+        self.assertNotIn(0xFF0C, want)
+        self.assertNotIn(0x9502, gs.wanted("pan", vlw))
+        # Today's catalogues add nothing to pan: the checked-in store is pan's.
+        real = gs.vlw_codepoints(os.path.join(gs.ROOT, "src", "ui", "VlwFonts.cpp"))
+        self.assertEqual(gs.wanted("pan", real, gs.catalogue_chars(os.path.join(gs.ROOT, "i18n"))),
+                         gs.wanted("pan", real))
+
     def test_vlw_codepoints(self):
         path = os.path.join(gs.ROOT, "src", "ui", "VlwFonts.cpp")
         cps = gs.vlw_codepoints(path)

@@ -30,7 +30,7 @@ void IdlePower::begin(uint32_t nowMs) {
   Serial.printf("[power] turn off when idle: %s (stopped or paused, on battery, no input)\n",
                 IdlePolicy::choiceLabel(policy_.choice()));
   if (bootNoteMs_) {
-    char text[48];
+    char text[96];  // (main.cpp's boot note's: the text whole in any language)
     IdlePolicy::offText(bootNoteMs_, text, sizeof(text));
     Serial.printf("[power] the last power-off was the idle one: %s\n", text);
   }

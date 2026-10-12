@@ -825,8 +825,9 @@ out what it returns.
   (Disconnect, Forget, the speaker card, pairing others); a cancelled
   connection leaves music already on the speaker playing, whether the
   Speaker row or a B hold cancels it. The
-  card's codec line comes from the SBC configuration ("SBC 44.1 kHz") and
-  the delay report. A pairing scan while headphones stream costs airtime:
+  card's codec line comes from the SBC configuration ("SBC 44.1 kHz": its
+  rate kept in Hz, written as the UI's language writes a rate,
+  `btDetailText()`) and the delay report. A pairing scan while headphones stream costs airtime:
   the Pair screen is the only thing that runs one.
 - **Developer tests that leave the pairing alone** (the console's `B`):
   `Bs` arms auto-pair by signal for the next scan (RAM only, off at boot,
@@ -1533,7 +1534,14 @@ schema 1's keys and `queue`/`repeat`, the repeat mode (a u8: 0 Off, 1 All,
 change, so the number moved. Its `migrate(1, 2)` step, the first, does
 nothing: an absent key reads as Off. Older firmware leaves a schema-2 NVS
 as it is (`... newer than this firmware's 1 (a downgrade)`), never reads
-the key, and its queue wraps at the end as it always did.
+the key, and its queue wraps at the end as it always did. Schema 3 (from
+0.10.0) is schema 2's keys and `ui`/`lang`, the UI's language (a BCP-47
+tag: [I18N.md](I18N.md), phase 3). Its `migrate(2, 3)` step (and from 1)
+writes "en" there when there is none, so an updated unit stays in English
+and never gets the first boot's language picker, which is a fresh NVS's
+alone (no `schema` key, no step). 0.9.0 leaves a schema-3 NVS as it is,
+never reads `lang` (it draws English) and keeps every other setting; back
+on 0.10.0 the language is still there.
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
@@ -1559,12 +1567,13 @@ The rules:
   atomic.
 - Keys are at most 15 characters (NVS's limit).
 
-The keys of schema 2, by namespace: `meta` (schema); `input` (cal,
+The keys of schema 3, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
 ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu_mhz,
 bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
-(coach); `queue` (gen, pos, resume, and schema 2's repeat). Schema 1's are
-the same without `queue`/`repeat`. The Bluetooth stack keeps its bonds in
+(coach, and schema 3's lang); `queue` (gen, pos, resume, and schema 2's
+repeat). Schema 2's are the same without `ui`/`lang`, schema 1's without
+`queue`/`repeat` too. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
 
 ### Moving an existing unit to the new layout
@@ -1632,8 +1641,8 @@ read back byte-identical before and after, and after the reboot `as`, `B`,
 `q`, the settings and `L` matched the lines from before the migration.
 
 **Or start clean:** `esptool --port COM3 erase-flash`, then `upload` (and
-`uploadfs`): the unit starts as new (the touch check, pairing, the coach
-cards).
+`uploadfs`): the unit starts as new (the language picker, the touch check,
+pairing, the coach cards).
 
 ## Versions
 
@@ -1684,7 +1693,7 @@ a beta); the README has how to cut one.
 - **Where it shows.** About's Version row: the version (Body, Small when a
   long dev version doesn't fit) under "Version (2026-09-30, ELF
   1a2b3c4d)": the commit's date and the first 8 hex digits of the ELF's
-  SHA-256 (`uitext::kAboutVersionLabel`, measured by test_ui_library with
+  SHA-256 (`about.version_label`, measured by test_ui_library with
   every hex digit and the longest versions). The boot screen, under the
   mStream logo (Body, or Small for a long dev version; measured by
   test_ui_library). Output > About > Device info's Firmware and Build
@@ -2593,7 +2602,13 @@ Queue, Dance and Output (with its Pair and About pages).
   every tap meant for the Output tab), with the battery in the same cell. The
   active tab gets a plate, a text label and an underline **in its section's
   colour** (Now Playing coral, Library violet, Queue teal, Dance pink, Output
-  blue; the page headers and primary buttons carry it too). Status: the Now
+  blue; the page headers and primary buttons carry it too). The label sits
+  on the plate when it fits; the Library's and the Queue's may run over
+  the plate's edges, centred, up to 72 px, into the label row of their
+  neighbours, which show no label (German's "Bibliothek"); wider than that
+  the tab shows its icon alone, the plate and the underline saying which
+  (Japanese's and Russian's Library, German's Queue: `tabbar::labelFit()`).
+  A tap is still the cell's tab wherever the label runs. Status: the Now
   Playing icon's EQ bars move 4 times a second while playing, with a progress
   hairline (dotted while the length isn't known); the Queue's up-next badge
   (flashing for 1.5 s when tracks are added); the Output icon's colour is the
@@ -2603,12 +2618,35 @@ Queue, Dance and Output (with its Pair and About pages).
   while a sleep timer runs (amber while it fades). The Library
   icon is a record half out of its sleeve, unlike Now Playing's bars. Only
   the cells whose state changed are drawn (a 54x36 push, ~1 ms).
-- **Texts that must fit**: the fixed texts with a fixed room (the coach
-  cards, the empty states' buttons, the Queue's bar, the Output tab's
-  buttons, status lines and hints, the two-line toast's name) are in
-  `lib/core/UiText.h` next to their room, and `test_ui_library` measures
-  each with the firmware's own DejaVu data (as it does the tab bar's), so
-  a label cut to "Remov…" or "Tap ag…" on the device fails a host test.
+- **Texts that must fit**: every text the UI draws is in the catalogue,
+  `i18n/en.json` (one file a language; `uistr::tr()`: docs/I18N.md, phase
+  3), each with its room (the font, the pixels, the lines); the rooms are
+  `lib/core/UiText.h`'s too. `test_ui_strings` measures every text of
+  every language in every room it has, and `test_ui_library` the
+  layouts' details, with the firmware's own DejaVu data and CJK store (as
+  it does the tab bar's), so a label cut to "Remov…" or "Tap ag…" on the
+  device fails a host test. Where a language is wider than English, the
+  layout gives way, never the text: a button's or a pill's label is
+  centred with 2 px a side or more, and drawn in Small when its own font still
+  doesn't fit (the Dialog's rule: the Bluetooth card's buttons, the
+  lists' and the Queue's bars, the settings' and the sleep timer's pills,
+  the Library's segments, the header's pill past its budget); a button
+  with an icon shows the icon (the toast's, the tab bar's); a line with
+  counts or a name has a shorter form (About's library, the Library row's
+  title) or cuts the name and keeps the rest (the hold sheet's title).
+- **The language**: the mobile app's ten (English, Deutsch, Español,
+  Français, Italiano, 日本語, Polski, Português, Русский, 中文), each
+  named in itself; one whose catalogue isn't in `i18n/` yet draws English.
+  Saved in NVS `ui`/`lang` (schema 3) and read at boot before any text is
+  drawn (`app/UiLang`). **Output > Language** lists them (full-width rows
+  hit by y); a tap uses one at once: saved, and everything drawn again in
+  it (`Ui::chooseLanguage()`: the tab bar, the page, the tips; a sheet,
+  dialog, toast or HUD up goes, its text being the old language's). A
+  fresh unit (no language saved, the tips never seen) starts on that page
+  as its picker, with no back arrow; main.cpp's first-boot touch check
+  waits for the pick, so it speaks the language picked, and the tips
+  follow both. An update from an older firmware is English with no picker
+  (NVS schema 3's step). [I18N.md](I18N.md), phase 3.
 - **Overlays**: the **toast** (with Undo for 4 s after a queue edit, else
   1.8 s) sits at the **top of the content area** (y 36-71, over the page
   header: the usability walk found the spec's bottom toast right above
@@ -2619,7 +2657,10 @@ Queue, Dance and Output (with its Pair and About pages).
   two lines, "Plays next" small over the name, and the buttons become
   icons (Undo's arrow, View as the Queue tab's icon; hit areas 228-263 and
   264 to the edge), so the name has 216 px (Body, else Small): "Can'T
-  Tell Me Nothing" and "Harder, Better, Faster, Stronger" both fit. It
+  Tell Me Nothing" and "Harder, Better, Faster, Stronger" both fit. The
+  buttons are the icons too, the text on one line beside them when it
+  fits, whenever a label doesn't fit its pill (German's "Rückgängig":
+  `uitext::toastIcons()`). It
   stays 36 px tall: a taller toast would reach the list's hardware-scrolled
   band, which carries whatever is in it along with the list. The header's
   ‹ (and its pill, when the toast has no buttons) still works under it: a
@@ -2652,7 +2693,8 @@ Queue, Dance and Output (with its Pair and About pages).
   the Output cards' chips the speaker's or the headphones' whichever
   plays (`UiHost::stepOutputVolume()`: the active one's as the buttons
   do, the headphones' as their own keys do, the speaker's directly). The
-  **coach cards** (first boot, once: NVS `ui`/`coach`; About's "Show the
+  **coach cards** (first boot, once, after a fresh unit's language picker
+  and touch check: NVS `ui`/`coach`; About's "Show the
   tips again" and console `uic`): the three red buttons' clicks and holds,
   each over its button with an arrow down to its dot, then "tap the tab
   you're on again: back to its start"; a tap anywhere goes on, a tab tap
@@ -2791,7 +2833,8 @@ Queue, Dance and Output (with its Pair and About pages).
     point with a lone consonant just before the syllables it begins, Han
     by code point. `library.idx` rules 4 (the first boot of that firmware
     rebuilds it once: from the records, or by a walk on a card that has
-    none).
+    none). Rules 5 (phase 3) marks a compilation's "Various Artists"
+    line, drawn in the UI's language (`LibraryIndex::kVarious`).
   - **The width tests** measure each fixed text with the fonts' own data
     and the store's (test_ui_library's `fits()`), check that the font or
     the store has every glyph in it, and count a missing one as the space
@@ -2809,8 +2852,10 @@ Queue, Dance and Output (with its Pair and About pages).
   (between them "4 of 16 · SPYDRONE": where it plays, mockup 01's
   output line, when it fits; the
   headphones not connected, "SPYDRONE (not connected)" alone when both
-  don't fit), and the transport row (the volume, prev, play/pause, next,
-  "..."), which has the room the old 40 px artist and album bands gave
+  don't fit, in 200 px: "WH-1000XM4 (not connected)" whole, 4 px clear of
+  a 16-hour mix's times), and the transport row (the volume, prev,
+  play/pause, next, "..."), which has the room the old 40 px artist and
+  album bands gave
   up. **Two menus, one job each** (the user's split): a tap anywhere on
   the cover, the title, the artist or the album opens the **navigation
   menu** (Go to artist, Go to album, Go to folder); "..." opens the
@@ -3042,7 +3087,10 @@ Queue, Dance and Output (with its Pair and About pages).
   or file opens the **inline action row** under it (Play: its album or
   folder from it, the rest following; Play next and + Queue: it alone);
   **a long press on any row** gives the same three in a sheet. Deeper than
-  one level the header's pill is **"‹ Library"**, the root crumb. The row
+  one level the header's pill is **"‹ Library"**, the root crumb (its
+  label in Bold up to 82 px, else Small: the title keeps its room; hit
+  from x 240 to the edge, or, when it starts left of English's, from its
+  round end and chevron in: `uitext::headerPillZoneX()`). The row
   holding what plays (its artist, album, track, the folders on its path) is
   tinted in every list. The rail and the jump grid are on the Artists and
   Albums lists and on folders of folders, once over 30.
@@ -3052,7 +3100,7 @@ Queue, Dance and Output (with its Pair and About pages).
   up next · 49 min" (`QueueView`: the lengths are learned as tracks play
   into a `DurationBook`, 2 bytes a track in PSRAM, reset with the library;
   "49+ min" while some are unknown; "4 of 16 · 49 min" when the long one
-  doesn't fit beside Edit: the position is kept first); a tap on the title goes to the playing track,
+  doesn't fit beside Edit, then "4 of 16": the position is kept first); a tap on the title goes to the playing track,
   the top, the end in turn; a row's bar **Play now / Play next / Remove**.
   **After an add in the Library** (Play next, + Queue) the next visit
   scrolls to the first added entry and highlights what was added
@@ -3103,10 +3151,14 @@ Queue, Dance and Output (with its Pair and About pages).
   20 / 60 min / Never, a power symbol), **CPU speed** (240 / 160 MHz, a
   chip, "Smoothest lists, dancing" / "Slower lists, saves a little"; a
   restart, asked first) and **Bluetooth power** (Low / Normal /
-  High, signal bars), **Touch calibration**, the **Library** row (the
+  High, signal bars), **Touch calibration**, **Language** (a globe, the
+  language in use in its own name; its page lists the ten: above), the
+  **Library** row (the
   tracks, where their names come from, Rescan tags: METADATA.md 3.3.6),
   **About** (battery,
-  storage, the library, the headphones, the CPU speed and Bluetooth power,
+  storage, the library ("19,410 tracks, 600 artists, 1500 albums"; where
+  the three counts don't fit, the tracks and the albums), the headphones,
+  the CPU speed and Bluetooth power,
   memory, **Device info** (below), the version (under the commit's date
   and the ELF's hash: [Versions](#versions)), the licence and the source
   URL (GPLv3 section 5(d); UiText's texts, measured by test_ui_library),
@@ -3177,8 +3229,9 @@ Queue, Dance and Output (with its Pair and About pages).
   disconnected. Paused, so the speaker doesn't suddenly play out loud.";
   a name too long for the title goes into the body; the reconnecting as a
   live line: "Trying to reconnect: try 2 of 3", then "Looking for
-  them...", and after the whole back-off "Stopped looking for them: Play
-  tries again"), Use speaker (paused: B plays) or OK; from a dark screen
+  them...", and after the whole back-off "Stopped looking: Play tries
+  again"; the title beside the icon has 236 px, "Headphones disconnected"
+  whole), Use speaker (paused: B plays) or OK; from a dark screen
   its first touch only answers the wake (the pocket rule); it closes itself when they're back, and whatever it was
   over (the coach cards too) is drawn again. A play that waited for the
   headphones and failed: a buzz and the dialog "Couldn't reach SPYDRONE"
@@ -3259,7 +3312,10 @@ Queue, Dance and Output (with its Pair and About pages).
   frames and fps, the governor, the UI's bus holds (count, mean, max), the
   overlays, the covers (above) and the loop task's stack never used since
   the boot ("The loop task's stack", above). `ui0`-`ui4`
-  tap a tab, `uib` goes back, `uic` shows the coach cards, `uiT` decodes
+  tap a tab, `uib` goes back, `uic` shows the coach cards, `uiL` lists the
+  languages and `uiL<tag>` uses one (`uiL-` forgets it and the tips: the
+  next boot is a fresh unit's), `uiP` shows the first boot's language
+  picker, `uiT` decodes
   the covers again (their timings), `uiV` shows the volume HUD, and
   **`uiF<c/s/p/r/l/n/f/t/g/u/w>`** shows a faked state for screenshots of what a test
   can't safely cause (display only: the radio and the card are left

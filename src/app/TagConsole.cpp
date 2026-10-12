@@ -18,6 +18,7 @@
 #include "QueueView.h"
 #include "TagScan.h"
 #include "TagStore.h"
+#include "UiStrings.h"
 #include "UiText.h"
 #include "app/Psram.h"
 #include "storage/CardFat.h"
@@ -695,15 +696,23 @@ void TagConsole::dump(const char* arg) {
     char* title = w->title;
     library_.catalog().title(id, title, sizeof(w->title));
     // (An artist folder's own tracks have no album: "(loose tracks)", as the
-    // Library calls them.)
+    // Library calls them in English.)
     const char* album = library_.catalog().album(id);
+    // The console speaks English: a compilation's line as library.idx holds
+    // it ("Various Artists"), where the catalog gives the UI's words for it
+    // (librarytext::albumArtist() returns that very text, so the pointer
+    // says which; a track's own artist is the index's, never it).
+    const char* various = uistr::tr(uistr::S::library_various_artists);
+    const char* artist = library_.catalog().artist(id);
+    const char* line = library_.catalog().albumArtist(id);
+    if (artist == various) artist = index->albumArtistLine(tr.album);
+    if (line == various) line = index->albumArtistLine(tr.album);
     tagtext::lengthText(static_cast<uint32_t>(tr.durationS) * 1000u, t, sizeof(t));
     Serial.printf("[tags] the index: track %lu, named by %s%s: \"%s\" by \"%s\", album \"%s\" (%u), line \"%s\", disc "
                   "%u, number %u, length %s\n",
                   static_cast<unsigned long>(id), kSources[tr.flags & LibraryIndex::kSourceMask],
-                  (tr.flags & LibraryIndex::kTrackPending) ? ", the scan's to read" : "", title,
-                  library_.catalog().artist(id), album[0] ? album : uitext::kLooseTracks,
-                  static_cast<unsigned>(library_.catalog().year(id)), library_.catalog().albumArtist(id),
+                  (tr.flags & LibraryIndex::kTrackPending) ? ", the scan's to read" : "", title, artist,
+                  album[0] ? album : "(loose tracks)", static_cast<unsigned>(library_.catalog().year(id)), line,
                   static_cast<unsigned>(tr.disc), static_cast<unsigned>(tr.number), t);
   }
   psramDelete(w);

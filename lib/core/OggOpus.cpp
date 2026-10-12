@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "TrackSeek.h"  // trackseek::startMs(): the tail rule
+#include "UiStrings.h"
 
 namespace oggopus {
 
@@ -393,47 +394,41 @@ const char* Reader::refusal(char* buf, size_t n) const {
 }
 
 const char* Reader::refusalNote(char* buf, size_t n) const {
+  using uistr::S;
+  if (!buf || n == 0) return buf;
   switch (open_) {
-    case Open::Ok:
-      snprintf(buf, n, "%s", "");
-      break;
-    case Open::NotOgg:
-      snprintf(buf, n, "not an Ogg file");
-      break;
+    case Open::Ok: buf[0] = 0; break;
+    case Open::NotOgg: trf(buf, n, S::toast_why_opus_not_ogg); break;
     case Open::NotOpus:
       switch (codec_) {
-        case Codec::Vorbis: snprintf(buf, n, "Ogg Vorbis isn't supported"); break;
-        case Codec::Flac: snprintf(buf, n, "Ogg FLAC isn't supported"); break;
-        case Codec::Speex: snprintf(buf, n, "Speex isn't supported"); break;
-        case Codec::Theora: snprintf(buf, n, "an Ogg video, not Opus"); break;
-        default: snprintf(buf, n, "an Ogg file, but not Opus"); break;
+        case Codec::Vorbis: trf(buf, n, S::toast_why_opus_ogg_vorbis); break;
+        case Codec::Flac: trf(buf, n, S::toast_why_opus_ogg_flac); break;
+        case Codec::Speex: trf(buf, n, S::toast_why_opus_speex); break;
+        case Codec::Theora: trf(buf, n, S::toast_why_opus_ogg_video); break;
+        default: trf(buf, n, S::toast_why_opus_ogg_not_opus); break;
       }
       break;
-    case Open::Multiplexed:
-      snprintf(buf, n, "several Ogg streams aren't supported");
-      break;
-    case Open::BadHead:
-      snprintf(buf, n, "damaged Opus header");
-      break;
+    case Open::Multiplexed: trf(buf, n, S::toast_why_opus_multiplexed); break;
+    case Open::BadHead: trf(buf, n, S::toast_why_opus_bad_header); break;
     case Open::Unsupported:
       if (headCheck_ == HeadCheck::Family) {
-        snprintf(buf, n, "Opus mapping family %u isn't supported", static_cast<unsigned>(head_.family));
+        trf(buf, n, S::toast_why_opus_family, head_.family);
       } else if (headCheck_ == HeadCheck::Mapping) {
-        snprintf(buf, n, "an unusual Opus channel mapping");
+        trf(buf, n, S::toast_why_opus_mapping);
       } else if (head_.channels > 2) {
-        snprintf(buf, n, "surround Opus isn't supported");
+        trf(buf, n, S::toast_why_opus_surround);
       } else {
-        snprintf(buf, n, "an unusual Opus channel layout");
+        trf(buf, n, S::toast_why_opus_layout);
       }
       break;
-    case Open::NoAudio:
-      snprintf(buf, n, "no audio in it");
-      break;
-    case Open::BadStart:
-      snprintf(buf, n, "damaged Opus start");
-      break;
+    case Open::NoAudio: trf(buf, n, S::toast_why_opus_no_audio); break;
+    case Open::BadStart: trf(buf, n, S::toast_why_opus_bad_start); break;
     case Open::ShortFrames:
-      snprintf(buf, n, "Opus with %s ms frames isn't supported", shortFrame_ <= 120 ? "2.5" : "5");
+      if (shortFrame_ <= 120) {
+        trf(buf, n, S::toast_why_opus_frames, uistr::fixed(25, 1));
+      } else {
+        trf(buf, n, S::toast_why_opus_frames, 5);
+      }
       break;
   }
   return buf;

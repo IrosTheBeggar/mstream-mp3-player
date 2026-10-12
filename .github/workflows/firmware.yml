@@ -93,6 +93,14 @@ jobs:
           path: .pio/libdeps
           key: libdeps-${{ runner.os }}-${{ env.PLATFORMIO_VERSION }}-${{ hashFiles('platformio.ini') }}
 
+      # The UI's texts (i18n/*.json): the catalogue checked, and the tables
+      # made from it (lib/core/UiStringIds.h, UiStringsData.cpp,
+      # test_ui_strings' catalogue.h) as tools/gen_ui_strings.py makes them.
+      - name: UI strings
+        run: |
+          python tools/gen_ui_strings.py --check
+          python -m unittest discover -s tools -p "test_gen_ui_strings.py"
+
       - name: Host tests
         run: pio test -e native
 

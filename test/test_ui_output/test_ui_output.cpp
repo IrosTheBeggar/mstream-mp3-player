@@ -2,8 +2,9 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host tests for the Output screen's decisions (OutputModel): the
-// Bluetooth card for every link state, when a connection the listener
-// asked for has failed, Forget's second tap, and the pairing scan's list.
+// Bluetooth card for every link state and its connected line's detail,
+// when a connection the listener asked for has failed, Forget's second
+// tap, and the pairing scan's list.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -11,12 +12,15 @@
 
 #include <cstdio>
 #include <initializer_list>
+#include <string>
 
 #include "OutputModel.h"
+#include "RateConverter.h"
+#include "UiStrings.h"
 #include "UiText.h"
 
 void setUp() {}
-void tearDown() {}
+void tearDown() { uistr::setLang(uistr::Lang::En); }
 
 namespace {
 
@@ -34,6 +38,15 @@ const uint8_t kB[6] = {1, 2, 3, 4, 5, 7};
 
 // Class of device: major Audio/Video (4), a minor.
 uint32_t cod(uint32_t minor) { return (4u << 8) | (minor << 2); }
+
+// A hint's two lines (the card draws them one over the other) as one.
+std::string hintOf(uistr::S id) {
+  std::string s = uistr::tr(id);
+  for (char& c : s) {
+    if (c == '\n') c = ' ';
+  }
+  return s;
+}
 
 }  // namespace
 
@@ -88,6 +101,30 @@ void test_card_for_every_link_state() {
                            btStatusLine(v, link(P::Paging, true, 1, 3), "SPYDRONE", "", buf, sizeof(buf)));
   // ... but not once the listener stopped it trying.
   TEST_ASSERT_EQUAL(BtCard::Off, btCardView(link(P::Off), s, true).card);
+}
+
+// The connected line's detail, made from numbers each pass: the codec
+// and its rate as the UI's language writes a rate, the delay.
+void test_the_connected_detail() {
+  char buf[40];
+  TEST_ASSERT_EQUAL_STRING("SBC 44.1 kHz, 175 ms", btDetailText("SBC", 44100, 175, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("SBC 48 kHz", btDetailText("SBC", 48000, 0, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("SBC 16 kHz, 40 ms", btDetailText("SBC", 16000, 40, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("SBC ?", btDetailText("SBC", 0, 0, buf, sizeof(buf)));  // no rate named
+  TEST_ASSERT_EQUAL_STRING("150 ms delay", btDetailText("", 0, 150, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("", btDetailText("", 44100, 0, buf, sizeof(buf)));
+  TEST_ASSERT_EQUAL_STRING("", btDetailText(nullptr, 0, 0, buf, sizeof(buf)));
+  // German (its catalogue's texts or English's): its decimal mark, as a
+  // skipped track's rate has it (RateConverter::rateText()).
+  uistr::setLang(uistr::Lang::De);
+  TEST_ASSERT_EQUAL_STRING("SBC 44,1 kHz, 175 ms", btDetailText("SBC", 44100, 175, buf, sizeof(buf)));
+  char rate[24];
+  RateConverter::rateText(44100, rate, sizeof(rate));
+  TEST_ASSERT_EQUAL_STRING("44,1 kHz", rate);
+  uistr::setLang(uistr::Lang::En);
+  // Cut short: at a character boundary.
+  char six[6];
+  TEST_ASSERT_EQUAL_STRING("SBC 4", btDetailText("SBC", 44100, 175, six, sizeof(six)));
 }
 
 // A connection the listener asked for: wanted until it links; failed when
@@ -466,7 +503,7 @@ void test_the_resting_card() {
   TEST_ASSERT_EQUAL_STRING("Not connected", btStatusLine(v, link(P::Resting), "SPYDRONE", "", buf, sizeof(buf)));
   // With the hint: "Not connected. They'll reconnect when switched on."
   char whole[96];
-  snprintf(whole, sizeof(whole), "%s. %s %s", buf, uitext::kBtHintLine1, uitext::kBtHintLine2);
+  snprintf(whole, sizeof(whole), "%s. %s", buf, hintOf(uistr::S::bt_hint).c_str());
   TEST_ASSERT_EQUAL_STRING("Not connected. They'll reconnect when switched on.", whole);
   // Dropped while the output: still the resting card (not "Lost: looking
   // for them", a spinner and Cancel), red as the tab bar is.
@@ -479,7 +516,7 @@ void test_the_resting_card() {
   // the drop's pause): maybe back in range, their own reconnect given up.
   TEST_ASSERT_TRUE(v.hint);
   TEST_ASSERT_TRUE(v.lostHint);
-  snprintf(whole, sizeof(whole), "%s. %s %s", buf, uitext::kBtLostHintLine1, uitext::kBtLostHintLine2);
+  snprintf(whole, sizeof(whole), "%s. %s", buf, hintOf(uistr::S::bt_lost_hint).c_str());
   TEST_ASSERT_EQUAL_STRING("Not connected. Back in range? Tap Connect.", whole);
   // Nothing remembered: nothing to rest for, the pairing card.
   TEST_ASSERT_EQUAL(BtCard::NotPaired, btCardView(link(P::Resting, false), s, false).card);
@@ -537,6 +574,7 @@ void test_the_pair_search_stops_after_2_minutes() {
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_card_for_every_link_state);
+  RUN_TEST(test_the_connected_detail);
   RUN_TEST(test_a_connect_that_runs_out_of_tries_fails);
   RUN_TEST(test_a_connect_that_links_is_satisfied);
   RUN_TEST(test_a_withdrawn_connect_answers_nothing);

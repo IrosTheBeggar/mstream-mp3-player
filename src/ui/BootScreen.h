@@ -15,7 +15,7 @@ public:
   // UI's fonts first (ui/Fonts, kept for the UI), so the version is in
   // DejaVu as everything after it.
   void begin(const char* version);
-  // A line at the bottom (Small): the rescue hold (uitext::kBootTouchHint),
+  // A line at the bottom (Small): the rescue hold (boot.touch_hint),
   // drawn by setup() once the UI is made.
   void hint(const char* text);
 };

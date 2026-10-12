@@ -5,16 +5,20 @@
 
 #include <cstdio>
 
+#include "UiStrings.h"
+
 namespace {
+using uistr::S;
 constexpr uint32_t kChoiceMs[IdlePolicy::kChoices] = {10u * 60000u, 20u * 60000u, 60u * 60000u, 0};
-constexpr const char* kChoiceLabel[IdlePolicy::kChoices] = {"10 min", "20 min", "60 min", "Never"};
+constexpr S kChoiceLabel[IdlePolicy::kChoices] = {S::settings_idle_10min, S::settings_idle_20min,
+                                                  S::settings_idle_60min, S::settings_idle_never};
 
 int clampChoice(int c) { return c < 0 || c >= IdlePolicy::kChoices ? IdlePolicy::kDefaultChoice : c; }
 }  // namespace
 
 uint32_t IdlePolicy::choiceMs(int choice) { return kChoiceMs[clampChoice(choice)]; }
 
-const char* IdlePolicy::choiceLabel(int choice) { return kChoiceLabel[clampChoice(choice)]; }
+const char* IdlePolicy::choiceLabel(int choice) { return tr(kChoiceLabel[clampChoice(choice)]); }
 
 void IdlePolicy::begin(int choice, uint32_t nowMs) {
   choice_ = clampChoice(choice);
@@ -152,15 +156,15 @@ const char* IdlePolicy::blockerName(Blocker b) {
 }
 
 void IdlePolicy::warnText(uint32_t seconds, char* buf, size_t size) {
-  snprintf(buf, size, "Turning off in %lu s", static_cast<unsigned long>(seconds));
+  trf(buf, size, S::settings_idle_warning, seconds);
 }
 
 void IdlePolicy::offText(uint32_t ms, char* buf, size_t size) {
   const uint32_t s = (ms + 500) / 1000;
   if (s < 60) {
-    snprintf(buf, size, "Turned off after %lu s idle", static_cast<unsigned long>(s));
+    trf(buf, size, S::settings_idle_off_note_s, s);
     return;
   }
   const uint32_t min = (s + 30) / 60;
-  snprintf(buf, size, "Turned off after %lu minute%s idle", static_cast<unsigned long>(min), min == 1 ? "" : "s");
+  trnf(buf, size, S::settings_idle_off_note_min, min, min);
 }

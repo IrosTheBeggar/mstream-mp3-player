@@ -6,11 +6,12 @@
 #include <cstdio>
 #include <cstring>
 
-#include "QueueView.h"
 #include "TextFold.h"
-#include "UiText.h"
+#include "UiStrings.h"
 
 namespace librarytext {
+
+using uistr::S;
 
 namespace {
 
@@ -50,7 +51,11 @@ bool ready(const LibraryIndex& index) { return index.ready(); }
 const char* albumArtist(const LibraryIndex& index, uint32_t album) {
   if (!ready(index) || album >= index.albumCount()) return "";
   const LibraryIndex::Album& a = index.album(album);
-  if (a.flags & LibraryIndex::kTagged) return index.albumArtistLine(album);
+  if (a.flags & LibraryIndex::kTagged) {
+    // A compilation's line (no album artist tagged): the UI's words.
+    if (a.flags & LibraryIndex::kVarious) return uistr::tr(uistr::S::library_various_artists);
+    return index.albumArtistLine(album);
+  }
   return a.artist < index.artistCount() ? index.artistName(a.artist) : "";
 }
 
@@ -70,7 +75,7 @@ const char* trackArtist(const LibraryIndex& index, uint32_t track) {
 
 size_t trackCount(uint32_t n, char* buf, size_t size) {
   if (!buf || size == 0) return 0;
-  return done(snprintf(buf, size, "%lu track%s", static_cast<unsigned long>(n), n == 1 ? "" : "s"), buf, size);
+  return trnf(buf, size, S::library_tracks_n, n, n);
 }
 
 size_t artistCounts(const LibraryIndex& index, uint32_t artist, char* buf, size_t size) {
@@ -78,22 +83,22 @@ size_t artistCounts(const LibraryIndex& index, uint32_t artist, char* buf, size_
   buf[0] = 0;
   if (!ready(index) || artist >= index.artistCount()) return 0;
   const LibraryIndex::Artist& a = index.artist(artist);
-  return done(snprintf(buf, size, "%lu album%s, %lu track%s", static_cast<unsigned long>(a.albumCount),
-                       a.albumCount == 1 ? "" : "s", static_cast<unsigned long>(a.trackCount),
-                       a.trackCount == 1 ? "" : "s"),
-              buf, size);
+  char albums[48], tracks[48];
+  trnf(albums, sizeof(albums), S::library_albums_n, a.albumCount, a.albumCount);
+  trackCount(a.trackCount, tracks, sizeof(tracks));
+  return trf(buf, size, S::library_artist_counts, albums, tracks);
 }
 
 const char* albumShown(const LibraryIndex& index, uint32_t album) {
-  if (!ready(index) || album >= index.albumCount()) return uitext::kLooseTracks;
+  if (!ready(index) || album >= index.albumCount()) return tr(S::library_loose_tracks);
   const char* n = index.albumName(album);
-  return n[0] ? n : uitext::kLooseTracks;
+  return n[0] ? n : tr(S::library_loose_tracks);
 }
 
 const char* artistShown(const LibraryIndex& index, uint32_t artist) {
-  if (!ready(index) || artist >= index.artistCount()) return uitext::kNoArtistFolder;
+  if (!ready(index) || artist >= index.artistCount()) return tr(S::library_no_artist_folder);
   const char* n = index.artistName(artist);
-  return n[0] ? n : uitext::kNoArtistFolder;
+  return n[0] ? n : tr(S::library_no_artist_folder);
 }
 
 size_t albumSub(const LibraryIndex& index, uint32_t album, AlbumPlace place, char* buf, size_t size) {
@@ -106,7 +111,7 @@ size_t albumSub(const LibraryIndex& index, uint32_t album, AlbumPlace place, cha
   size_t at = 0;
   if (place == AlbumPlace::AZ) {
     const char* line = albumArtist(index, album);
-    part(line[0] ? line : uitext::kNoArtistFolder, buf, size, &at);
+    part(line[0] ? line : tr(S::library_no_artist_folder), buf, size, &at);
     part(year, buf, size, &at);
   } else {
     char tracks[24];
@@ -117,20 +122,70 @@ size_t albumSub(const LibraryIndex& index, uint32_t album, AlbumPlace place, cha
   return at;
 }
 
+size_t albumHeaderLine(const textfit::Font* small, int maxW, const char* artist, bool phrase, uint32_t year,
+                       uint32_t tracks, char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  char y[8] = "", t[24];
+  if (year) snprintf(y, sizeof(y), "%u", static_cast<unsigned>(year));
+  trackCount(tracks, t, sizeof(t));
+  // The line from `a` (may be ""), `yr` (may be "") and the count; whole
+  // when every part is in `buf` (a long name in a short buffer would push
+  // out the count) and it fits `maxW`.
+  const size_t dotLen = strlen(kDot);
+  auto line = [&](const char* a, const char* yr) {
+    size_t at = 0;
+    buf[0] = 0;
+    part(a, buf, size, &at);
+    part(yr, buf, size, &at);
+    part(t, buf, size, &at);
+    const size_t len = strlen(a) + (yr[0] ? (a[0] ? dotLen : 0) + strlen(yr) : 0) + (a[0] || yr[0] ? dotLen : 0) +
+                       strlen(t);
+    const bool whole = at == len && (!small || textfit::drawnWidth(*small, buf) <= maxW);
+    return whole ? at : static_cast<size_t>(0);
+  };
+  const char* name = artist ? artist : "";
+  const size_t all = line(name, y);
+  if (all || !small) return strlen(buf);
+  // The year gives way first ("Daft Punk · 14 tracks"), then the name is cut
+  // to what the count leaves ("The Lantern C… · 14 tracks"); a phrase,
+  // or a name left less than kAlbumLineMinNameW px, is left out ("1999 ·
+  // 14 tracks").
+  if (y[0] && line(name, "")) return strlen(buf);
+  if (!phrase && name[0]) {
+    const int room = maxW - textfit::drawnWidth(*small, t) - textfit::drawnWidth(*small, kDot);
+    const size_t tLen = strlen(t);
+    if (room >= kAlbumLineMinNameW && tLen + dotLen + 2 <= size) {
+      char cut[96];
+      const size_t cutSize = size - tLen - dotLen < sizeof(cut) ? size - tLen - dotLen : sizeof(cut);
+      textfit::fit(*small, name, strlen(name), cut, cutSize, room);
+      if (line(cut, "")) return strlen(buf);
+    }
+  }
+  line("", y);  // (whole: the year and a count fit any room this line has)
+  return strlen(buf);
+}
+
+size_t albumHeader(const textfit::Font& small, int maxW, const LibraryIndex& index, uint32_t album, char* buf,
+                   size_t size) {
+  if (!buf || size == 0) return 0;
+  buf[0] = 0;
+  if (!ready(index) || album >= index.albumCount()) return 0;
+  const LibraryIndex::Album& a = index.album(album);
+  const char* line = albumArtist(index, album);
+  // No artist folder, or a compilation's "Various Artists": the UI's words.
+  const bool phrase = !line[0] || line == tr(S::library_various_artists);
+  return albumHeaderLine(&small, maxW, line[0] ? line : tr(S::library_no_artist_folder), phrase, a.year,
+                         a.trackCount, buf, size);
+}
+
 size_t albumHeader(const LibraryIndex& index, uint32_t album, char* buf, size_t size) {
   if (!buf || size == 0) return 0;
   buf[0] = 0;
   if (!ready(index) || album >= index.albumCount()) return 0;
   const LibraryIndex::Album& a = index.album(album);
-  char year[8] = "", tracks[24];
-  if (a.year) snprintf(year, sizeof(year), "%u", static_cast<unsigned>(a.year));
-  trackCount(a.trackCount, tracks, sizeof(tracks));
   const char* line = albumArtist(index, album);
-  size_t at = 0;
-  part(line[0] ? line : uitext::kNoArtistFolder, buf, size, &at);
-  part(year, buf, size, &at);
-  part(tracks, buf, size, &at);
-  return at;
+  return albumHeaderLine(nullptr, 0, line[0] ? line : tr(S::library_no_artist_folder), true, a.year, a.trackCount,
+                         buf, size);
 }
 
 size_t trackSub(const LibraryIndex& index, uint32_t track, bool album, char* buf, size_t size) {
@@ -153,7 +208,40 @@ const char* railName(const LibraryIndex& index, LibraryIndex::View view, uint32_
 
 size_t discText(uint32_t disc, char* buf, size_t size) {
   if (!buf || size == 0) return 0;
-  return done(snprintf(buf, size, uitext::kDisc, static_cast<unsigned>(disc)), buf, size);
+  return trf(buf, size, S::library_disc, disc);
+}
+
+size_t folderCounts(uint32_t folders, uint32_t files, uint32_t other, bool audioWord, char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  size_t n = 0;
+  buf[0] = 0;
+  auto add = [&](uint32_t count, S id) {
+    if (!count || n + 1 >= size) return;
+    if (n) n += uistr::format(buf + n, size - n, tr(S::format_list_sep));
+    n += trnf(buf + n, size - n, id, count, count);
+  };
+  add(folders, S::library_folders_n);
+  add(files, audioWord ? S::library_audio_files_n : S::library_files_n);
+  add(other, S::library_other_n);
+  if (!n) n = trf(buf, size, S::library_folder_empty);
+  return n;
+}
+
+size_t folderHeaderCounts(const textfit::Font& small, int maxW, uint32_t folders, uint32_t files, uint32_t other,
+                          char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  size_t n = folderCounts(folders, files, other, true, buf, size);  // all of it
+  if (textfit::drawnWidth(small, buf) <= maxW) return n;
+  n = folderCounts(folders, files, other, false, buf, size);  // "files"
+  if (textfit::drawnWidth(small, buf) <= maxW) return n;
+  if (folders || files) {  // without the other files
+    n = folderCounts(folders, files, 0, false, buf, size);
+    if (textfit::drawnWidth(small, buf) <= maxW) return n;
+  }
+  // One part: the files, else the folders, else the other files.
+  return files ? folderCounts(0, files, 0, false, buf, size)
+         : folders ? folderCounts(folders, 0, 0, false, buf, size)
+                   : folderCounts(0, 0, other, false, buf, size);
 }
 
 // ---- Discs ----
@@ -212,25 +300,18 @@ size_t statusText(const Status& s, char* buf, size_t size) {
   buf[0] = 0;
   switch (s.phase) {
     case Status::Phase::Idle: return 0;
-    case Status::Phase::Checking: return done(snprintf(buf, size, "%s", uitext::kStatusChecking), buf, size);
-    case Status::Phase::Reading: {
-      char a[16], b[16];
-      queueview::grouped(s.done, a, sizeof(a));
-      queueview::grouped(s.total, b, sizeof(b));
-      return done(snprintf(buf, size, uitext::kStatusReading, a, b), buf, size);
-    }
-    case Status::Phase::Updating: return done(snprintf(buf, size, "%s", uitext::kStatusUpdating), buf, size);
-    case Status::Phase::Unfinished: return done(snprintf(buf, size, "%s", uitext::kStatusUnfinished), buf, size);
+    case Status::Phase::Checking: return trf(buf, size, S::library_status_checking);
+    case Status::Phase::Reading:
+      return trf(buf, size, S::library_status_reading, uistr::grouped(s.done), uistr::grouped(s.total));
+    case Status::Phase::Updating: return trf(buf, size, S::library_status_updating);
+    case Status::Phase::Unfinished: return trf(buf, size, S::library_status_unfinished);
   }
   return 0;
 }
 
 size_t foundText(uint32_t n, char* buf, size_t size) {
   if (!buf || size == 0) return 0;
-  if (n == 1) return done(snprintf(buf, size, "%s", uitext::kFoundOne), buf, size);
-  char a[16];
-  queueview::grouped(n, a, sizeof(a));
-  return done(snprintf(buf, size, uitext::kFoundMany, a), buf, size);
+  return trnf(buf, size, S::library_found, n, uistr::grouped(n));
 }
 
 Sources sourcesOf(const LibraryIndex& index) {
@@ -246,37 +327,42 @@ Sources sourcesOf(const LibraryIndex& index) {
   return s;
 }
 
+size_t holdTitle(const textfit::Font& small, int maxW, const char* name, uint32_t tracks, char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  if (!name) name = "";
+  // The rest alone (no name): what it leaves the name.
+  trnf(buf, size, S::library_hold_title, tracks, "", tracks);
+  char cut[96];
+  textfit::fit(small, name, strlen(name), cut, sizeof(cut), maxW - textfit::drawnWidth(small, buf));
+  return trnf(buf, size, S::library_hold_title, tracks, cut, tracks);
+}
+
 size_t libraryRowTitle(uint32_t tracks, char* buf, size_t size, int form) {
   if (!buf || size == 0) return 0;
-  if (tracks == 0) return done(snprintf(buf, size, "%s", uitext::kLibraryRowEmpty), buf, size);
-  char a[16];
-  queueview::grouped(tracks, a, sizeof(a));
-  return done(snprintf(buf, size, form == 0 ? uitext::kLibraryRowTitle : uitext::kLibraryRowTitleShort, a), buf,
-              size);
+  if (tracks == 0) return trf(buf, size, S::library_row_empty);
+  return trnf(buf, size, form == 0 ? S::library_row_title : S::library_tracks_n, tracks, uistr::grouped(tracks));
 }
 
 size_t sourcesText(const Sources& s, int form, char* buf, size_t size) {
   if (!buf || size == 0) return 0;
   buf[0] = 0;
-  if (s.transfer == 0 && s.device == 0) return done(snprintf(buf, size, "%s", uitext::kLibraryRowPaths), buf, size);
+  if (s.transfer == 0 && s.device == 0) return trf(buf, size, S::library_row_paths);
   if (form >= 2) {
     const uint64_t tagged = static_cast<uint64_t>(s.transfer) + s.device;
     const uint32_t pct = static_cast<uint32_t>(tagged * 100 / s.total());
-    char p[8];
-    snprintf(p, sizeof(p), "%lu", static_cast<unsigned long>(pct));
-    return done(snprintf(buf, size, uitext::kLibrarySrcTagged, p), buf, size);
+    return trf(buf, size, S::library_row_tagged, pct);
   }
-  const char* const* forms = form == 0 ? uitext::kLibrarySrcLong : uitext::kLibrarySrcShort;
+  static const S kLong[3] = {S::library_row_src_transfer, S::library_row_src_device, S::library_row_src_none};
+  static const S kShort[3] = {S::library_row_src_transfer_short, S::library_row_src_device_short,
+                              S::library_row_src_none_short};
+  const S* forms = form == 0 ? kLong : kShort;
   const uint32_t counts[3] = {s.transfer, s.device, s.none};
   size_t at = 0;
   for (int k = 0; k < 3; ++k) {
     if (counts[k] == 0) continue;
-    char a[16], part[48];
-    queueview::grouped(counts[k], a, sizeof(a));
-    snprintf(part, sizeof(part), forms[k], a);
-    const int n = snprintf(buf + at, size - at, "%s%s", at ? ", " : "", part);
-    if (n < 0 || static_cast<size_t>(n) >= size - at) return done(n, buf, size);
-    at += static_cast<size_t>(n);
+    if (at) at += uistr::format(buf + at, size - at, tr(S::format_list_sep));
+    at += trnf(buf + at, size - at, forms[k], counts[k], uistr::grouped(counts[k]));
+    if (at + 1 >= size) break;
   }
   return at;
 }
