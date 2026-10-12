@@ -1219,13 +1219,65 @@ inline constexpr LangSet kLangSets[] = {
 // The languages with a catalogue (English, then each translation), and the
 // texts a translation marks "overflow" (too wide in it until a layout
 // fix: the width test lets them be, and fails a mark that fits).
-inline constexpr const char* kCatalogues[] = {"en"};
+inline constexpr const char* kCatalogues[] = {"en", "de", "es", "fr", "it", "ja", "pl", "pt", "ru", "zh"};
 struct LangOverflow {
   const char* tag;
   uistr::S id;
 };
 inline const LangOverflow kLangOverflows[] = {
-    {"", uistr::S{}},  // (none yet)
+    {"de", uistr::S::coach_click_play},
+    {"de", uistr::S::tabs_library},
+    {"de", uistr::S::tabs_queue},
+    {"de", uistr::S::toast_undo},
+    {"de", uistr::S::toast_view},
+    {"de", uistr::S::volume_label},
+    {"de", uistr::S::library_crumb},
+    {"de", uistr::S::queue_edit},
+    {"de", uistr::S::calibration_saved},
+    {"de", uistr::S::calibration_undone},
+    {"es", uistr::S::tabs_library},
+    {"es", uistr::S::toast_undo},
+    {"es", uistr::S::library_row_title},
+    {"es", uistr::S::bt_pair_new},
+    {"es", uistr::S::bt_disconnect},
+    {"es", uistr::S::about_library_value},
+    {"es", uistr::S::dance_crab},
+    {"fr", uistr::S::toast_undo},
+    {"fr", uistr::S::library_play_all},
+    {"fr", uistr::S::library_hold_title},
+    {"fr", uistr::S::library_row_title},
+    {"fr", uistr::S::about_library_value},
+    {"fr", uistr::S::calibration_saved},
+    {"it", uistr::S::toast_undo},
+    {"it", uistr::S::queue_play_next_bar},
+    {"it", uistr::S::dance_crab},
+    {"ja", uistr::S::tabs_library},
+    {"ja", uistr::S::library_segment_artists},
+    {"ja", uistr::S::library_crumb},
+    {"ja", uistr::S::about_library_value},
+    {"pl", uistr::S::tabs_library},
+    {"pl", uistr::S::toast_undo},
+    {"pl", uistr::S::toast_view},
+    {"pl", uistr::S::library_crumb},
+    {"pl", uistr::S::queue_play_next_bar},
+    {"pl", uistr::S::library_row_title},
+    {"pl", uistr::S::calibration_saved},
+    {"pl", uistr::S::calibration_undone},
+    {"pt", uistr::S::tabs_library},
+    {"pt", uistr::S::toast_undo},
+    {"pt", uistr::S::sleep_end_album},
+    {"pt", uistr::S::library_row_title},
+    {"pt", uistr::S::bt_disconnect},
+    {"pt", uistr::S::about_library_value},
+    {"ru", uistr::S::tabs_library},
+    {"ru", uistr::S::tabs_queue},
+    {"ru", uistr::S::toast_undo},
+    {"ru", uistr::S::toast_view},
+    {"ru", uistr::S::library_crumb},
+    {"ru", uistr::S::settings_brightness_medium},
+    {"ru", uistr::S::settings_brightness_high},
+    {"ru", uistr::S::calibration_saved},
+    {"ru", uistr::S::calibration_undone},
 };
 
 // Rooms that are a uitext constant ("const" in en.json): the same number.

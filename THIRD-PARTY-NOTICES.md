@@ -10,7 +10,10 @@ The firmware binary also contains the third-party components below. Each
 entry gives the exact version, its licence, the copyright lines found in its
 sources, and where it comes from. The full licence texts are in
 [LICENSES/](LICENSES); GPL-3.0 is [LICENSE](LICENSE). Every licence here is
-compatible with distributing the whole under GPL-3.0-or-later.
+compatible with distributing the whole under GPL-3.0-or-later, but one:
+the terminal player's strings in the UI's translations are GPL-3.0-only
+until their relicensing is confirmed ([below](#the-uis-translations)), and
+with them the whole goes under GPL-3.0.
 
 A binary release (firmware.bin, or firmware.factory.bin, the merged image
 flashed at 0x0) is built from the tagged source with the versions pinned in
@@ -444,3 +447,33 @@ It contains:
   under GPL-3.0-or-later, like the rest of the firmware (the text is
   [LICENSE](LICENSE)). Source:
   https://github.com/IrosTheBeggar/mStream/blob/v6.24.0/webapp/assets/img/mstream-logo.svg
+
+## The UI's translations
+
+The nine translations of the UI's texts (i18n/de.json, es, fr, it, ja, pl,
+pt, ru and zh; the firmware holds them in lib/core/UiStringsData.cpp) are
+machine translations made for this project by Fable agents (Claude), not
+yet reviewed by native speakers (docs/I18N.md, phase 3, "The
+translations"). Where they had the text or its words, they take them from
+two apps by the same author as this firmware (IrosTheBeggar), so that
+mStream's apps say the same thing; each file's `@@note` says what it took:
+
+- **The mStream mobile app** (mstream_music), `lib/l10n/app_<lang>.arb`,
+  branch master at commit bdb174e0ea3a6333f820b593888d5a662c9ae976
+  (2026-09-21). Licence: GPL-3.0 (its LICENSE). Its translations are
+  machine translations (its README says so). Source:
+  https://github.com/IrosTheBeggar/mstream_music
+- **The mStream terminal player** (mstream-terminal-player, mstream-player
+  0.12.1), `locales/<lang>.yml`, chiefly its MP3-player tab's words for
+  this device, branch main at commit
+  b89ad0a97d4add4d47ac0c7404953cc6a0147679 (2026-10-10). Licence:
+  GPL-3.0-only (its Cargo.toml; LICENSE is the GPL-3 text). Its
+  translations are machine translations (its docs say so). Source:
+  https://github.com/IrosTheBeggar/mstream-terminal-player
+
+Both are compatible with this firmware's GPL-3.0-or-later. The author of
+both can license the strings taken from them here as GPL-3.0-or-later;
+for the terminal player that waits on confirming five of its locale
+commits made under another git author name (2026-08-25). Until then the
+strings taken from it stay GPL-3.0-only, and a binary with them is passed
+on under GPL-3.0.

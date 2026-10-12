@@ -12,7 +12,8 @@ speaker as a fallback.
 > covers, folders, the A-Z jump grid), the Queue (editing, Undo), Output
 > (Bluetooth pairing, per-output volume, settings, About); library sync and
 > AutoDJ come next. The UI's language can be set to the mobile app's ten
-> (Output > Language); only English is translated so far. The library is indexed from the card (and cached there), and the
+> (Output > Language): the nine besides English are machine translations,
+> from the mStream apps' words, not yet reviewed by native speakers. The library is indexed from the card (and cached there), and the
 > play queue survives a restart. Measurements: [docs/POC-RESULTS.md](docs/POC-RESULTS.md).
 > Design: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -461,8 +462,9 @@ pages do:
   High), **Touch calibration** ("Not calibrated", or "Calibrated on this
   Core2": below), **Language** (English, Deutsch, Español, Français,
   Italiano, 日本語, Polski, Português, Русский or 中文, each in its own
-  name; a tap changes every text at once and is remembered; a language
-  not translated yet shows English), **Library** (how many tracks, where their names come
+  name; a tap changes every text at once and is remembered; the nine
+  other than English are machine translations, as a toast says when one
+  is picked), **Library** (how many tracks, where their names come
   from, and **Rescan** to read the tags again, asked first), and **About**
   (battery, storage, library, headphones, CPU speed and Bluetooth power,
   memory, **Device info**, version, the licence and where the source is,

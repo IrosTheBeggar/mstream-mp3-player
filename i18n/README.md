@@ -4,9 +4,12 @@ Every text the player draws, one file a language: `en.json` is the
 source, and each translation is `<tag>.json` beside it (`de.json`,
 `pt.json`, ...). The languages are the mobile app's and the terminal
 player's: de, es, fr, it, ja, pl, pt (Brazilian), ru and zh (Simplified).
-All ten are on the player's Language page already (Output > Language);
-one with no file here yet draws English, and a text a translation leaves
-out is drawn in English. How it all works is in
+All ten are on the player's Language page (Output > Language), and each
+has its file: machine translations, made from the two apps' words where
+they had them and by Fable agents for the rest, **not yet reviewed by a
+native speaker** (a review is welcome: below). A text a translation
+leaves out is drawn in English (as a language with no file would be).
+How it all works, and how the translations were made, is in
 [docs/I18N.md](../docs/I18N.md), phase 3.
 
 `tools/gen_ui_strings.py` reads the files, checks them, and makes the
@@ -147,5 +150,9 @@ has the device's words (card, firmware, headphones, battery).
 
 A file says in `@@note` how it was made: a machine translation (as the
 mobile app's and the terminal player's are) says so, and names what it
-took from those two (both GPL-3.0, the same author's). A native
-speaker's review is welcome, as a pull request on the language's file.
+took from those two and from which commit (both GPL-3.0, the same
+author's; THIRD-PARTY-NOTICES.md, "The UI's translations"). A native
+speaker's review is welcome, as a pull request on the language's file:
+say in `@@note` that it was reviewed, and where a word the mobile app or
+the terminal player uses too should change, say so in the pull request,
+so the apps can change with it and mStream's apps keep the same words.
