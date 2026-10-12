@@ -105,6 +105,13 @@ char* summary(uint32_t upNext, const Time& t, uint32_t position, uint32_t size, 
   return buf;
 }
 
+int pickSummary(const int (&widths)[kSummaryForms], int room) {
+  for (int k = 0; k < kSummaryForms; ++k) {
+    if (widths[k] >= 0 && widths[k] <= room) return k;
+  }
+  return -1;
+}
+
 // ---- AddedMark ----
 
 uint32_t AddedMark::firstPosition(const QueueModel& q) const {

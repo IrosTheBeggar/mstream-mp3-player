@@ -48,22 +48,6 @@ NavModel::PageRef page(PageKind kind, uint32_t id) {
   return p;
 }
 
-// "N folders, M audio files, K other" (the parts that aren't 0).
-void folderCounts(const LibraryIndex& i, uint32_t f, bool audioWord, char* buf, size_t size) {
-  const LibraryIndex::Folder& d = i.folder(f);
-  size_t n = 0;
-  buf[0] = 0;
-  auto part = [&](uint32_t count, S id) {
-    if (!count || n + 1 >= size) return;
-    if (n) n += uistr::format(buf + n, size - n, tr(S::format_list_sep));
-    n += trnf(buf + n, size - n, id, count, count);
-  };
-  part(d.folderCount, S::library_folders_n);
-  part(d.fileCount, audioWord ? S::library_audio_files_n : S::library_files_n);
-  part(d.otherCount, S::library_other_n);
-  if (!n) trf(buf, size, S::library_folder_empty);
-}
-
 }  // namespace
 
 // ---- where things are ----
@@ -391,6 +375,11 @@ Header LibraryPage::header() const {
   sub[0] = 0;
   h.back = true;
   const LibraryIndex* i = index();
+  // The counts and the artist's name beside the title when they fit whole
+  // there (what the name and the crumb leave), else under it: never cut
+  // beside it, nor left out (French's "Tous les morceaux" leaves the name
+  // 16 px), and a long name's counts are on the second line.
+  h.subBelow = true;
   switch (kind_) {
     case PageKind::Artist:
       h.title = i ? librarytext::artistShown(*i, id_) : tr(S::library_header_artist);
@@ -408,9 +397,14 @@ Header LibraryPage::header() const {
     case PageKind::Folder:
       h.title = i ? i->folderName(id_) : tr(S::library_header_folder);
       if (i) {
-        // The one thin line: where it is, and what's in it.
-        if (!i->folderPath(i->folder(id_).parent, path, pathSize)) snprintf(path, pathSize, "…");
-        folderCounts(*i, id_, true, sub, subSize);
+        // The one thin line: where it is, and what's in it: the counts in
+        // the first form that fits whole beside the crumb (the language's),
+        // never one cut ("14 Audiodateien, 1 sonst…").
+        const LibraryIndex::Folder& d = i->folder(id_);
+        if (!i->folderPath(d.parent, path, pathSize)) snprintf(path, pathSize, "…");
+        const int pill = crumb() ? Header::pillW(tr(S::library_crumb), uitext::kCrumbTextW, true) : 0;
+        librarytext::folderHeaderCounts(Fonts::instance().fit(Font::Small), uitext::headerRight(pill) - 28,
+                                        d.folderCount, d.fileCount, d.otherCount, sub, subSize);
         h.path = path;
         h.counts = sub;
         h.sub = "";
@@ -691,7 +685,8 @@ void LibraryPage::drawRow(ListView::Row& r) {
     case RowKind::Folder: {
       const int x = ListView::icon(r, icons::kFolder, col::AMBER);
       const int right = ListView::chevron(r);
-      folderCounts(*i, rr.id, false, sub, sizeof(sub));
+      const LibraryIndex::Folder& d = i->folder(rr.id);
+      librarytext::folderCounts(d.folderCount, d.fileCount, d.otherCount, false, sub, sizeof(sub));
       const char* name = i->folderName(rr.id);
       ListView::lines(r, x, right, name, strlen(name), sub, strlen(sub), titleInk, titleFont);
       break;

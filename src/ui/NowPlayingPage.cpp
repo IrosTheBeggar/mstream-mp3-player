@@ -21,6 +21,7 @@
 // touch on the bar, when it ends.
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 #include "LibraryText.h"
 #include "SheetLayout.h"
@@ -873,10 +874,25 @@ void NowPlayingPage::openNavMenu() {
     textfit::cutPathLeft(f.fit(Font::Small), path, room, navFolder_, sizeof(navFolder_));
   }
   // Go to artist and Go to album open the folder entities (Stage A keeps
-  // them, 5.4): their details name those, not the track's own tags.
+  // them, 5.4): their details name those, not the track's own tags. A name
+  // is cut with "…" to its row's room here (as the sheet cut it before), so
+  // it stays beside its label; the entities with no name are phrases
+  // (library.no_artist_folder, library.loose_tracks), drawn whole: under
+  // the label where they don't fit beside it (Sheet::render(): Polish's
+  // "(bez wykonawcy)" under "Przejdź do wykonawcy").
   const LibraryIndex::Track& t = index->track(navTrack_);
   const char* details[3] = {librarytext::artistShown(*index, t.artist), librarytext::albumShown(*index, t.album),
                             navFolder_};
+  const S labels[2] = {S::now_playing_go_to_artist, S::now_playing_go_to_album};
+  const S phrases[2] = {S::library_no_artist_folder, S::library_loose_tracks};
+  for (int k = 0; k < 2; ++k) {
+    if (details[k] == tr(phrases[k])) continue;
+    Fonts& f = Fonts::instance();
+    const int room = sheet::detailRoom(f.width(Font::Body, tr(labels[k])));
+    if (room <= sheet::kMinDetailRoom) continue;
+    textfit::fit(f.fit(Font::Small), details[k], std::strlen(details[k]), navNames_[k], sizeof(navNames_[k]), room);
+    details[k] = navNames_[k];
+  }
   char title[128];
   cat.title(navTrack_, title, sizeof(title));
   Serial.println("[ui] now playing: the navigation menu");

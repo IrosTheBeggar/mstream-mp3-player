@@ -1838,9 +1838,30 @@ void Ui::drawHeader(const Header& h) {
     // descenders ("Discoverv" on the device).
     f.draw(s, Font::Bold, h.title, x, 10, right - x, col::TXT, col::HEAD);
   } else {
-    const int tw = f.draw(s, Font::Bold, h.title, x, 17, right - x, col::TXT, col::HEAD);
-    if (h.sub && h.sub[0] && x + tw + 8 < right - 16) {
-      f.draw(s, Font::Small, h.sub, x + tw + 8, 18, right - (x + tw + 8), col::DIM, col::HEAD);
+    // The sub beside the title in what it and the pill leave (their words
+    // in the UI's language): a name cut there, a phrase or a count whole or
+    // not at all, or under the title (uitext::headerSub(), from the widths
+    // as measured: as the tests and the Queue's summary measure them).
+    using uitext::HeaderSub;
+    const bool hasSub = h.sub && h.sub[0];
+    const int subW = hasSub && (h.subWhole || h.subBelow) ? f.width(Font::Small, h.sub) : 0;
+    const HeaderSub how =
+        hasSub ? uitext::headerSub(x, std::min(f.width(Font::Bold, h.title), right - x), right, subW, h.subWhole,
+                                   h.subBelow)
+               : HeaderSub::None;
+    if (how == HeaderSub::Below) {
+      // Two lines, as the Folder page's: the sub under the title (a name
+      // cut at its end), the title last (the line's background would cut
+      // its descenders).
+      f.draw(s, Font::Small, h.sub, x, 26, right - x, col::DIM, col::HEAD);
+      f.draw(s, Font::Bold, h.title, x, 10, right - x, col::TXT, col::HEAD);
+    } else {
+      const int tw = f.draw(s, Font::Bold, h.title, x, 17, right - x, col::TXT, col::HEAD);
+      const int sx = x + tw + uitext::kHeaderSubGap;
+      // (A whole one never cut, should the title draw a pixel wider than measured.)
+      if (how == HeaderSub::Beside) {
+        f.draw(s, Font::Small, h.sub, sx, 18, std::max(right - sx, subW), col::DIM, col::HEAD);
+      }
     }
   }
   s.fillRect(0, kHeaderH - 2, kW, 2, acc);

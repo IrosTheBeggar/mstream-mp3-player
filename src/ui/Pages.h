@@ -26,10 +26,16 @@ namespace ui {
 // left: uitext::headerPillZoneX()). A 2 px rule in the section's colour
 // under it. With a `path`, two lines: the title over the path (left, cut
 // from the left: "…/Kavinsky") and `counts` (right): the Folders
-// explorer's one thin line.
+// explorer's one thin line. The `sub` beside the title has what the title
+// and the pill leave it (uitext::headerSub()): a name is cut with "…"
+// there; `subWhole`, a phrase or a count, is drawn whole or not at all;
+// `subBelow` goes on a second line under the title when it doesn't fit
+// beside it.
 struct Header {
   const char* title = "";
   const char* sub = "";
+  bool subWhole = false;
+  bool subBelow = false;
   bool back = false;
   bool cross = false;           // "✕" instead of "‹" (leave a mode)
   const char* right = nullptr;  // the pill's label
@@ -249,6 +255,7 @@ private:
   Ask ask_ = Ask::None;
   uint32_t navTrack_ = 0xFFFFFFFFu;  // the navigation menu's track (its TrackCatalog id)
   char navFolder_[96] = "";          // its Go to folder detail, cut from the left
+  char navNames_[2][96] = {};        // Go to artist's and Go to album's names, cut to their rooms
 };
 
 // ---- Library (spec §6.2, mockups 07-15, with the review's grafts) ----

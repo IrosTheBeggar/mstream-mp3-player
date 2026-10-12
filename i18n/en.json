@@ -34,10 +34,12 @@
   },
   "coach.header_hint": "tap to go on",
   "@coach.header_hint": {
-    "context": "Beside 'Tip 1 of 2': a tap anywhere on the card goes on.",
+    "context": "Beside 'Tip 1 of 2' (coach.header_tip), before the Next / Got it pill: a tap anywhere on the card goes on. Drawn only when it fits whole in what the tip and that card's pill leave it, 120 px at most (uitext::coachHintRoom()); the pill says the same.",
     "room": {
       "font": "Small",
-      "px": 120
+      "px": 120,
+      "const": "uitext::kCoachHintW",
+      "optional": true
     }
   },
   "coach.next": "Next",
@@ -1395,46 +1397,51 @@
   },
   "sleep.row_end_track": "End of track",
   "@sleep.row_end_track": {
-    "context": "The playback sheet's Sleep timer row detail (capitalised state). Same English as sleep.end_* (the pills).",
+    "context": "The playback sheet's Sleep timer row detail (capitalised state). Same English as sleep.end_* (the pills). Beside the row's label (now_playing.sleep_timer) when it fits whole there (180 px in English), else under it: never cut.",
     "room": {
       "font": "Small",
-      "px": 180
+      "px": 288,
+      "const": "sheet::kTwoLineW"
     },
     "bytes": 48
   },
   "sleep.row_end_album": "End of album",
   "@sleep.row_end_album": {
-    "context": "The playback sheet's Sleep timer row detail (capitalised state). Same English as sleep.end_* (the pills).",
+    "context": "The playback sheet's Sleep timer row detail (capitalised state). Same English as sleep.end_* (the pills). Beside the row's label (now_playing.sleep_timer) when it fits whole there (180 px in English), else under it: never cut.",
     "room": {
       "font": "Small",
-      "px": 180
+      "px": 288,
+      "const": "sheet::kTwoLineW"
     },
     "bytes": 48
   },
   "sleep.row_end_queue": "End of queue",
   "@sleep.row_end_queue": {
-    "context": "The playback sheet's Sleep timer row detail (capitalised state). Same English as sleep.end_* (the pills).",
+    "context": "The playback sheet's Sleep timer row detail (capitalised state). Same English as sleep.end_* (the pills). Beside the row's label (now_playing.sleep_timer) when it fits whole there (180 px in English), else under it: never cut.",
     "room": {
       "font": "Small",
-      "px": 180
+      "px": 288,
+      "const": "sheet::kTwoLineW"
     },
     "bytes": 48
   },
   "sleep.row_fading": "Fading",
   "@sleep.row_fading": {
-    "context": "The playback sheet's Sleep timer row detail (capitalised state).",
+    "context": "The playback sheet's Sleep timer row detail (capitalised state). Beside the row's label (now_playing.sleep_timer) when it fits whole there (180 px in English), else under it: never cut.",
     "room": {
       "font": "Small",
-      "px": 180
+      "px": 288,
+      "const": "sheet::kTwoLineW"
     },
     "bytes": 48
   },
   "sleep.row_off": "Off",
   "@sleep.row_off": {
-    "context": "The playback sheet's Sleep timer row detail (capitalised state).",
+    "context": "The playback sheet's Sleep timer row detail (capitalised state). Beside the row's label (now_playing.sleep_timer) when it fits whole there (180 px in English), else under it: never cut.",
     "room": {
       "font": "Small",
-      "px": 180
+      "px": 288,
+      "const": "sheet::kTwoLineW"
     },
     "bytes": 48
   },
@@ -1556,7 +1563,7 @@
   },
   "jump.second_title": "{0}, {1}: {2}",
   "@jump.second_title": {
-    "context": "The jump grid's second level: where it jumps in, the letter tapped, and how many rows start with it (\"Artists, K: 12\").",
+    "context": "The jump grid's second level: where it jumps in, the letter tapped, and how many rows start with it (\"Artists, K: 12\"). Beside jump.title, in what it leaves (160 px in English; uitext::jumpSubRoom()).",
     "room": {
       "font": "Small",
       "px": 160
@@ -1834,7 +1841,7 @@
   },
   "library.artist_counts": "{0}, {1}",
   "@library.artist_counts": {
-    "context": "An artist's row and header: its albums and its tracks (\"3 albums, 41 tracks\").",
+    "context": "An artist's row and header: its albums and its tracks (\"3 albums, 41 tracks\"). The Artist page's header draws it beside the artist's name when it fits whole there, else on the header's second line.",
     "room": {
       "font": "Small",
       "px": 208
@@ -1859,7 +1866,7 @@
     "other": "{0} folders"
   },
   "@library.folders_n": {
-    "context": "A folder row's and the Folder header's counts: its folders (\"3 folders, 12 audio files\").",
+    "context": "A folder row's and the Folder header's counts: its folders (\"3 folders, 12 audio files\"). The Folder page's header draws the first form that fits whole beside the ‹ Library pill (librarytext::folderHeaderCounts(): its audio files, then library.files_n, then without library.other_n, then one part).",
     "room": {
       "font": "Small",
       "px": 214
@@ -1879,7 +1886,7 @@
     "other": "{0} audio files"
   },
   "@library.audio_files_n": {
-    "context": "The Folder page's header: the folder's audio files (in a list with format.list_sep).",
+    "context": "The Folder page's header: the folder's audio files (in a list with format.list_sep). The Folder page's header draws the first form that fits whole beside the ‹ Library pill (librarytext::folderHeaderCounts(): its audio files, then library.files_n, then without library.other_n, then one part).",
     "room": {
       "font": "Small",
       "px": 214
@@ -1899,7 +1906,7 @@
     "other": "{0} files"
   },
   "@library.files_n": {
-    "context": "A folder row's counts: its audio files (in a list with format.list_sep).",
+    "context": "A folder row's counts: its audio files (in a list with format.list_sep). The Folder page's header draws the first form that fits whole beside the ‹ Library pill (librarytext::folderHeaderCounts(): its audio files, then library.files_n, then without library.other_n, then one part).",
     "room": {
       "font": "Small",
       "px": 214
@@ -1919,7 +1926,7 @@
     "other": "{0} other"
   },
   "@library.other_n": {
-    "context": "A folder's counts: its files that aren't audio (in a list with format.list_sep).",
+    "context": "A folder's counts: its files that aren't audio (in a list with format.list_sep). The Folder page's header draws the first form that fits whole beside the ‹ Library pill (librarytext::folderHeaderCounts(): its audio files, then library.files_n, then without library.other_n, then one part).",
     "room": {
       "font": "Small",
       "px": 214
@@ -1962,11 +1969,12 @@
   },
   "library.no_artist_folder": "(no artist folder)",
   "@library.no_artist_folder": {
-    "context": "The name of the artist entity for files right under /music (no artist folder): Library rows and headers, Now Playing's navigation sheet detail, toasts.",
+    "context": "The name of the artist entity for files right under /music (no artist folder): Library rows and headers, Now Playing's navigation sheet detail, toasts. In the navigation sheet beside Go to artist when it fits whole there (183 px in English), else under it: never cut.",
     "room": [
       {
         "font": "Small",
-        "px": 183
+        "px": 288,
+        "const": "sheet::kTwoLineW"
       },
       {
         "font": "Body",
@@ -1977,11 +1985,12 @@
   },
   "library.loose_tracks": "(loose tracks)",
   "@library.loose_tracks": {
-    "context": "The name of the album entity for an artist folder's own tracks (not in an album folder): album rows, headers, Now Playing's album row, the navigation sheet.",
+    "context": "The name of the album entity for an artist folder's own tracks (not in an album folder): album rows, headers, Now Playing's album row, the navigation sheet. In the navigation sheet beside Go to album when it fits whole there (174 px in English), else under it: never cut.",
     "room": [
       {
         "font": "Small",
-        "px": 174
+        "px": 288,
+        "const": "sheet::kTwoLineW"
       },
       {
         "font": "Body",
@@ -2587,10 +2596,11 @@
   },
   "queue.selected_of": "of {0}",
   "@queue.selected_of": {
-    "context": "Beside 'N selected': of how many entries.",
+    "context": "Beside 'N selected' (queue.selected): of how many entries. Drawn whole in what the title and the All / None pill leave it, or not at all.",
     "room": {
       "font": "Small",
-      "px": 80
+      "px": 80,
+      "optional": true
     },
     "placeholders": {
       "0": {
@@ -2621,10 +2631,11 @@
   },
   "queue.summary_position": "{0} of {1}",
   "@queue.summary_position": {
-    "context": "The Queue header's line, mid form: where the queue is ('4 of 16'), then ' · 49 min' when known.",
+    "context": "The Queue header's line: where the queue is ('4 of 16'), then ' · 49 min' when known; alone, the summary's last form. The header draws the first of the summary's forms that fits whole beside its title and the Edit pill (QueuePage: the long one, the position and the time, the count and the time, the position alone), else none: 169 px is English's room, and another language's queue.title and queue.edit leave it more or less (German's 78 px).",
     "room": {
       "font": "Small",
-      "px": 169
+      "px": 169,
+      "optional": true
     },
     "placeholders": {
       "0": {
@@ -2642,10 +2653,11 @@
   },
   "queue.summary_nothing_next": "Nothing up next",
   "@queue.summary_nothing_next": {
-    "context": "The Queue header's line when the current entry is the last.",
+    "context": "The Queue header's line when the current entry is the last. The header draws the first of the summary's forms that fits whole beside its title and the Edit pill (QueuePage: the long one, the position and the time, the count and the time, the position alone), else none: 169 px is English's room, and another language's queue.title and queue.edit leave it more or less (German's 78 px).",
     "room": {
       "font": "Small",
-      "px": 169
+      "px": 169,
+      "optional": true
     },
     "bytes": 48
   },
@@ -2654,10 +2666,11 @@
     "other": "{0} up next"
   },
   "@queue.summary_up_next": {
-    "context": "The Queue header's line: entries after the current one ('12 up next').",
+    "context": "The Queue header's line: entries after the current one ('12 up next'). The header draws the first of the summary's forms that fits whole beside its title and the Edit pill (QueuePage: the long one, the position and the time, the count and the time, the position alone), else none: 169 px is English's room, and another language's queue.title and queue.edit leave it more or less (German's 78 px).",
     "room": {
       "font": "Small",
-      "px": 169
+      "px": 169,
+      "optional": true
     },
     "placeholders": {
       "0": {
@@ -2769,19 +2782,21 @@
   },
   "queue.clear_up_next_detail": "keeps what's playing",
   "@queue.clear_up_next_detail": {
-    "context": "Clear up next's detail: the playing track stays.",
+    "context": "Clear up next's detail: the playing track stays. Beside its label when it fits whole there (165 px in English), else under it: never cut.",
     "room": {
       "font": "Small",
-      "px": 165
+      "px": 288,
+      "const": "sheet::kTwoLineW"
     },
     "bytes": 96
   },
   "queue.clear_all_detail": "stops the music",
   "@queue.clear_all_detail": {
-    "context": "Clear queue's detail.",
+    "context": "Clear queue's detail. Beside its label when it fits whole there (175 px in English), else under it: never cut.",
     "room": {
       "font": "Small",
-      "px": 175
+      "px": 288,
+      "const": "sheet::kTwoLineW"
     },
     "bytes": 96
   },
@@ -3847,10 +3862,11 @@
   },
   "settings.cal_calibrate_detail": "9 crosses, 20 s",
   "@settings.cal_calibrate_detail": {
-    "context": "Calibrate's detail: what it takes (9 targets, about 20 seconds).",
+    "context": "Calibrate's detail: what it takes (9 targets, about 20 seconds). Beside Calibrate (Bold) when it fits whole there (190 px in English in the Output tab's sheet, 186 on the touch check's row), else under it: never cut.",
     "room": {
       "font": "Small",
-      "px": 190
+      "px": 280,
+      "const": "uitext::kCalRowTextW"
     },
     "bytes": 96
   },
@@ -4861,10 +4877,11 @@
     "other": "{0} found"
   },
   "@pair.found": {
-    "context": "The Pair header's line: devices found so far.",
+    "context": "The Pair header's line: devices found so far. Drawn whole in what pair.title leaves it (123 px in English), or not at all.",
     "room": {
       "font": "Small",
-      "px": 123
+      "px": 123,
+      "optional": true
     },
     "placeholders": {
       "0": {
@@ -5518,10 +5535,11 @@
   },
   "device_info.subtitle": "this Core2",
   "@device_info.subtitle": {
-    "context": "The Device info header's line after its title.",
+    "context": "The Device info header's line after its title (about.device_info): drawn whole in what the title leaves it (175 px in English), or not at all.",
     "room": {
       "font": "Small",
-      "px": 175
+      "px": 175,
+      "optional": true
     }
   },
   "device_info.board": "Board",
@@ -6406,10 +6424,11 @@
   },
   "check.later": "Output > Touch calibration",
   "@check.later": {
-    "context": "Not now's detail: where to calibrate later (the Output tab's row).",
+    "context": "Not now's detail: where to calibrate later (the Output tab's row). Beside Not now when it fits whole there (202 px in English), else under it: never cut.",
     "room": {
       "font": "Small",
-      "px": 202
+      "px": 280,
+      "const": "uitext::kCalRowTextW"
     },
     "note": "'Output > Touch calibration' names the tab and its row (tabs.output, settings.cal)."
   },
@@ -6890,7 +6909,8 @@
       },
       {
         "font": "Small",
-        "px": 169
+        "px": 169,
+        "optional": true
       }
     ],
     "placeholders": {

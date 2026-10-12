@@ -85,6 +85,16 @@ After each text, `@<id>` holds what a translator needs:
   the tests let these be, in every language. None is now: the layout
   fixes of phase 3 made room for every language's texts.
 
+A room beside another text (a header's line beside its title and pill,
+a sheet row's detail beside its label, the Queue's summary, the tips'
+hint) is English's in `px`, the context says so: your words for the
+neighbour leave it more or less. The code measures them: where they
+leave too little, the text goes under its neighbour (a sheet row's
+detail: its room is then the second line's, the `px` given) or is left
+out (an `optional` one), never cut or drawn under another, and
+`test_ui_library` measures each language's real room (docs/I18N.md,
+"The rooms beside a translated neighbour").
+
 ## The rules
 
 **Placeholders.** `{0}` to `{3}` are the only special characters: keep

@@ -73,6 +73,22 @@ const char* railName(const LibraryIndex& index, LibraryIndex::View view, uint32_
 // "Disc 2" (library.disc).
 size_t discText(uint32_t disc, char* buf, size_t size);
 
+// A folder's counts, the parts that aren't 0, joined by format.list_sep:
+// its folders, its audio files ("audio files" with `audioWord`, else
+// "files": a folder row's) and its other files ("3 folders, 12 files, 1
+// other"); library.folder_empty when it has none.
+size_t folderCounts(uint32_t folders, uint32_t files, uint32_t other, bool audioWord, char* buf, size_t size);
+// The Folder page's header counts (its second line, right of the path:
+// Ui::drawHeader()) in `maxW` px of `small`: the first of these that fits
+// whole, never one cut ("14 Audiodateien, 1 sonst…" beside German's crumb):
+// the three parts with "audio files" ("12 folders, 140 audio files, 3
+// other"); with "files"; without the other files ("12 folders, 140
+// files"); the files alone (else the folders, else the other files: one
+// part). The last when none fits (the draw cuts it: never on this screen,
+// test_ui_library).
+size_t folderHeaderCounts(const textfit::Font& small, int maxW, uint32_t folders, uint32_t files, uint32_t other,
+                          char* buf, size_t size);
+
 // The hold sheet's title (library.hold_title: "Discovery, 14 tracks") in
 // `maxW` px of `small` (the sheet's title: sheet::kTitleW): the name cut to
 // what the rest leaves, never the count ("Harder, Better, Faster, Str…,

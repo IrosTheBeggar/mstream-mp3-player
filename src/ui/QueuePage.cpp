@@ -158,6 +158,9 @@ Header QueuePage::header() const {
   sub[0] = 0;
   const AppState& s = ui_.state();
   Fonts& f = Fonts::instance();
+  // "of 16", "empty", the summary: whole, or not at all (a cut "noch 9 · 3…"
+  // said nothing).
+  h.subWhole = true;
   if (selecting_) {
     h.cross = true;
     trnf(title, sizeof(headerTitle_), S::queue_selected, selection_.count(), selection_.count());
@@ -176,19 +179,29 @@ Header QueuePage::header() const {
         h.rightMaxW = uitext::kQueuePillTextW;  // Small past it ("Wählen"): the summary keeps its room
       }
       // The long form if it fits beside the title and the pill (the room
-      // drawHeader() leaves); else the position and the time (where the
-      // queue is is what the header is for: spec §6.4); else the rest.
+      // drawHeader() leaves: their words in the UI's language); else the
+      // position and the time (where the queue is is what the header is
+      // for: spec §6.4); else the count and the time; else the position
+      // alone; else none (queueview::pickSummary()).
       const int pill = Header::pillW(tr(S::queue_edit), uitext::kQueuePillTextW, false);
-      const int room = (kW - 6 - pill - 8) - (12 + f.width(Font::Bold, tr(S::queue_title)) + 8);
-      const char* pickFrom[3] = {summaryLong_, summaryMid_, summaryShort_};
-      const char* pick = summaryShort_;
-      for (const char* c : pickFrom) {
-        if (c[0] && f.width(Font::Small, c) <= room) {
-          pick = c;
-          break;
-        }
+      const int room =
+          uitext::headerSubRoom(12, f.width(Font::Bold, tr(S::queue_title)), uitext::headerRight(pill));
+      // The position alone, made in the header's buffer.
+      if (s.current >= 0) {
+        queueview::summary(0, queueview::Time{}, static_cast<uint32_t>(s.current + 1), s.queueSize, sub,
+                           sizeof(headerSub_), /*withUpNext=*/false);
       }
-      snprintf(sub, sizeof(headerSub_), "%s", pick);
+      const char* forms[queueview::kSummaryForms] = {summaryLong_, summaryMid_, summaryShort_, sub};
+      int widths[queueview::kSummaryForms];
+      for (int k = 0; k < queueview::kSummaryForms; ++k) {
+        widths[k] = forms[k][0] ? f.width(Font::Small, forms[k]) : -1;
+      }
+      const int pick = queueview::pickSummary(widths, room);
+      if (pick < 0) {
+        sub[0] = 0;
+      } else if (pick != queueview::kSummaryPosition) {
+        snprintf(sub, sizeof(headerSub_), "%s", forms[pick]);
+      }
     }
   }
   h.pressed = headerPressed_ == 2;

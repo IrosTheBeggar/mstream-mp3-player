@@ -28,6 +28,24 @@ inline constexpr int kCoachBoxW = 102;
 inline constexpr int kCoachBoxTextW = kCoachBoxW - 2;
 // Card 2: two Title lines (coach.tab), then two Small ones (coach.tab_more)
 // and coach.tips_where.
+// The header: "Tip 1 of 2" (Bold, from kCoachTipX, kCoachTipW at most), the
+// hint (Small, coach.header_hint) 8 px after it, and the Next / Got it pill
+// (Bold, kCoachPillPad wider than its label) 6 px from the screen's edge.
+// The hint says what the pill does (a tap anywhere goes on), so it is drawn
+// only when it fits whole in what the tip and that card's pill leave it, 8
+// px clear of the pill, kCoachHintW at most (coachHintRoom()): never under
+// the pill, never cut ("touchez : s…"). English's, Japanese's and Chinese's
+// show on both cards; German's, French's and the others' are left out.
+inline constexpr int kCoachTipX = 12, kCoachTipW = 140;
+inline constexpr int kCoachHintW = 120;
+inline constexpr int kCoachPillPad = 28;
+constexpr int coachPillX(int labelW) { return 320 - 6 - (labelW + kCoachPillPad); }
+// The hint's room beside a tip `tipW` px wide (as measured, kCoachTipW at
+// most) and a pill whose label is `labelW` px (Bold).
+constexpr int coachHintRoom(int tipW, int labelW) {
+  const int room = coachPillX(labelW) - 8 - (kCoachTipX + tipW + 8);
+  return room < kCoachHintW ? room : kCoachHintW;
+}
 
 // ---- the toast (ui/Overlays) ----
 // Undo at the screen's edge (its hit area to the edge, a clamped reading
@@ -340,6 +358,40 @@ inline constexpr int headerPillZoneX(int pillX, bool chevron) {
              ? pillX + kHeaderPillEndW + (chevron ? kHeaderChevronW : 0)
              : kHeaderPillZoneX;
 }
+// A header's line beside its title (Ui::drawHeader(), Header::sub): from
+// kHeaderSubGap px after the title (Bold, `titleW` px as measured, from `x`:
+// 12, 28 after the ‹, 36 after the ✕) to the header's right: 8 px before the
+// pill (a pill `pillW` px wide: Header::pillW()), or x 310 with none. Its
+// room so depends on the title's and the pill's words in the UI's language
+// (German's "Warteschlange" leaves the Queue's summary 78 px, English's
+// "Queue" 169). What is drawn (headerSub()):
+//   a name (the default): beside the title, cut with "…" to its room, when
+//   that is more than kHeaderSubMinRoom (else none);
+//   a phrase or a count (Header::subWhole: Output's, About's, Device info's,
+//   the Language page's, the Pair screen's, the Queue's): beside it whole,
+//   or not at all;
+//   a line that may go under the title (Header::subBelow: an Artist's and
+//   an Album's counts, an artist's name on its All tracks): beside it
+//   whole, else on the header's second line (Small, from `x` to the right;
+//   a name cut there with "…"), the title over it: the Folder page's two
+//   lines.
+inline constexpr int kHeaderSubGap = 8;
+inline constexpr int kHeaderSubMinRoom = 16;
+constexpr int headerRight(int pillW) { return pillW > 0 ? 320 - 6 - pillW - 8 : 320 - 10; }
+constexpr int headerSubRoom(int x, int titleW, int right) { return right - (x + titleW + kHeaderSubGap); }
+enum class HeaderSub : unsigned char { None, Beside, Below };
+// `subW`: the line's width (Small), for a whole one or one that may go below.
+constexpr HeaderSub headerSub(int x, int titleW, int right, int subW, bool whole, bool below) {
+  const int room = headerSubRoom(x, titleW, right);
+  if (whole || below) return subW <= room ? HeaderSub::Beside : below ? HeaderSub::Below : HeaderSub::None;
+  return room > kHeaderSubMinRoom ? HeaderSub::Beside : HeaderSub::None;
+}
+// The jump grid's header (ui/Overlays' JumpGrid): jump.title (Bold, from x
+// 12, kJumpTitleW at most), then what it jumps in (Small: the segment's
+// name, jump.second_title, or a folder's name, cut) 8 px after it, to x
+// kJumpSubRight (12 px before its ✕ pill).
+inline constexpr int kJumpTitleW = 120, kJumpSubRight = 250;
+constexpr int jumpSubRoom(int titleW) { return kJumpSubRight - (12 + titleW + 8); }
 
 // ---- the Library's names (ui/LibraryPage; librarytext, docs/METADATA.md 5.4) ----
 // An album of more than one disc: a divider row before each disc's first
@@ -506,6 +558,14 @@ inline constexpr int kCalLineW = 304;
 // dim) right-aligned in what it leaves (kCalRowPad in from each end, a
 // kCalRowPad gap).
 inline constexpr int kCalRowX = 8, kCalRowW = 304, kCalRowPad = 12, kCalRowsBottom = 220;
+// A detail that doesn't fit whole beside its label goes under it, never
+// cut (German's "Ausgabe > Touch-Kalibrierung" under "Nicht jetzt"): the
+// label centred on y kCalRowLabelY of the row's 40 px, the detail (Small)
+// on kCalRowDetailY, both from kCalRowPad in, kCalRowTextW wide, inside
+// the button (y 2-37).
+inline constexpr int kCalRowTextW = kCalRowW - 2 * kCalRowPad;
+inline constexpr int kCalRowLabelY = 11, kCalRowDetailY = 29;
+constexpr bool calDetailBelow(int labelW, int detailW) { return detailW > kCalRowW - 3 * kCalRowPad - labelW; }
 // The test taps page: two lines (gone at the first tap: the marks draw
 // there), and while a table is saved the grey mark's key in the A hint's
 // band, after the page's "A: Done" / "A: Undo": a grey dot (r 3) at

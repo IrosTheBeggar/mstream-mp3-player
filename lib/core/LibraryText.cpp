@@ -161,6 +161,39 @@ size_t discText(uint32_t disc, char* buf, size_t size) {
   return trf(buf, size, S::library_disc, disc);
 }
 
+size_t folderCounts(uint32_t folders, uint32_t files, uint32_t other, bool audioWord, char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  size_t n = 0;
+  buf[0] = 0;
+  auto add = [&](uint32_t count, S id) {
+    if (!count || n + 1 >= size) return;
+    if (n) n += uistr::format(buf + n, size - n, tr(S::format_list_sep));
+    n += trnf(buf + n, size - n, id, count, count);
+  };
+  add(folders, S::library_folders_n);
+  add(files, audioWord ? S::library_audio_files_n : S::library_files_n);
+  add(other, S::library_other_n);
+  if (!n) n = trf(buf, size, S::library_folder_empty);
+  return n;
+}
+
+size_t folderHeaderCounts(const textfit::Font& small, int maxW, uint32_t folders, uint32_t files, uint32_t other,
+                          char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  size_t n = folderCounts(folders, files, other, true, buf, size);  // all of it
+  if (textfit::drawnWidth(small, buf) <= maxW) return n;
+  n = folderCounts(folders, files, other, false, buf, size);  // "files"
+  if (textfit::drawnWidth(small, buf) <= maxW) return n;
+  if (folders || files) {  // without the other files
+    n = folderCounts(folders, files, 0, false, buf, size);
+    if (textfit::drawnWidth(small, buf) <= maxW) return n;
+  }
+  // One part: the files, else the folders, else the other files.
+  return files ? folderCounts(0, files, 0, false, buf, size)
+         : folders ? folderCounts(folders, 0, 0, false, buf, size)
+                   : folderCounts(0, 0, other, false, buf, size);
+}
+
 // ---- Discs ----
 
 void Discs::set(const LibraryIndex& index, uint32_t album) {

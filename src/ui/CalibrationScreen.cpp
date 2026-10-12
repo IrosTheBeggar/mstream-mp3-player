@@ -167,11 +167,21 @@ void CalibrationScreen::drawRow(int i, bool pressed) {
   const uint16_t ink = r.primary ? col::DARK : col::TXT;
   s.fillRoundRect(kCalRowX, 2, kCalRowW, kRowH - 4, 10, bg);
   const Font font = r.primary ? Font::Bold : Font::Body;
+  const int textW = kCalRowTextW;
   if (r.detail && r.detail[0]) {
-    const int w = f.draw(s, font, r.label, kCalRowX + kCalRowPad, kRowH / 2, kCalRowW - 2 * kCalRowPad, ink, bg);
-    const int room = kCalRowW - 3 * kCalRowPad - w;
-    f.draw(s, Font::Small, r.detail, kCalRowX + kCalRowW - kCalRowPad, kRowH / 2, room,
-           r.primary ? col::DARK : col::DIM, bg, Fonts::Align::Right);
+    const uint16_t dim = r.primary ? col::DARK : col::DIM;
+    const int dw = f.width(Font::Small, r.detail);
+    if (calDetailBelow(std::min(f.width(font, r.label), textW), dw)) {
+      // Under the label, whole (the label's words in the UI's language:
+      // German's "Nicht jetzt" leaves "Ausgabe > Touch-Kalibrierung" 188 px).
+      f.draw(s, font, r.label, kCalRowX + kCalRowPad, kCalRowLabelY, textW, ink, bg);
+      f.draw(s, Font::Small, r.detail, kCalRowX + kCalRowPad, kCalRowDetailY, textW, dim, bg);
+    } else {
+      const int w = f.draw(s, font, r.label, kCalRowX + kCalRowPad, kRowH / 2, textW, ink, bg);
+      const int room = std::max(kCalRowW - 3 * kCalRowPad - w, dw);  // (whole, as measured)
+      f.draw(s, Font::Small, r.detail, kCalRowX + kCalRowW - kCalRowPad, kRowH / 2, room, dim, bg,
+             Fonts::Align::Right);
+    }
   } else {
     f.draw(s, font, r.label, kW / 2, kRowH / 2, kCalRowW - 2 * kCalRowPad, ink, bg, Fonts::Align::Centre);
   }

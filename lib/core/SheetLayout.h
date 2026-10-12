@@ -14,7 +14,8 @@
 // kPanelH tall: the content area, the tallest any overlay needs. A row's
 // label (Body) starts 16 px in; its detail (Small, dim) is right-aligned
 // 16 px from the edge, in what the label leaves less 16 px between
-// (detailRoom()). Portable, host-tested (test_ui_nav).
+// (detailRoom()), or under the label when it doesn't fit there
+// (detailOnTwoLines()). Portable, host-tested (test_ui_nav, test_ui_library).
 namespace sheet {
 
 inline constexpr int kScreenW = 320;
@@ -34,8 +35,23 @@ constexpr int height(int rows) { return kTitleH + rows * kRowH + kMargin; }
 // Its top on the screen.
 constexpr int top(int rows) { return kScreenH - height(rows); }
 // The room a row's detail has beside a label `labelW` px wide
-// (Sheet::render() draws it there; Now Playing cuts the folder to it).
+// (Sheet::render() draws it there; Now Playing cuts the folder, the artist's
+// name and the album's to it).
 constexpr int detailRoom(int labelW) { return kScreenW - 16 - (16 + labelW + 16); }
+// A detail (`detailW` px, Small) that doesn't fit whole beside its label
+// (or with kMinDetailRoom px or less there) is drawn under it, never cut:
+// the label centred on y kTwoLineLabelY of the row, the detail (Small, dim)
+// on kTwoLineDetailY, both from x 16, kTwoLineW wide, as a list's two-line
+// row (ui/ListView::lines()). Spanish's "Fin de la cola" under
+// "Temporizador de apagado", German's "der laufende Titel bleibt" under
+// "Alles danach entfernen". A label that leaves it room keeps one line, as
+// every English one does.
+inline constexpr int kMinDetailRoom = 24;
+inline constexpr int kTwoLineW = kScreenW - 32;
+inline constexpr int kTwoLineLabelY = 13, kTwoLineDetailY = 31;
+constexpr bool detailOnTwoLines(int labelW, int detailW) {
+  return detailW > detailRoom(labelW) || detailRoom(labelW) <= kMinDetailRoom;
+}
 
 static_assert(top(kMaxRows) >= kContentY, "a sheet never covers the tab bar");
 static_assert(height(kMaxRows) <= kPanelH, "the panel sprite holds the tallest sheet");

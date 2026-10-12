@@ -334,10 +334,22 @@ void Sheet::render() {
     // that can't be taken back (red).
     const bool primary = i == primary_;
     const uint16_t ink = primary ? accent_ : i == danger_ ? col::RED : col::TXT;
-    const int w = f.draw(s, primary ? Font::Bold : Font::Body, rows_[i], 16, y + kRowH / 2, kW - 32, ink, bg);
-    // The detail, right-aligned in what the label left.
-    const int room = sheet::detailRoom(w);
-    if (details_[i][0] && room > 24) {
+    const Font lf = primary ? Font::Bold : Font::Body;
+    // The detail, right-aligned in what the label leaves; under the label
+    // when it doesn't fit whole there (the label's words in the UI's
+    // language: Spanish's "Temporizador de apagado" leaves 60 px), never
+    // cut (sheet::detailOnTwoLines(), as measured). A name the page cut to
+    // the room first stays beside it.
+    const int dw = details_[i][0] ? f.width(Font::Small, details_[i]) : -1;
+    if (dw >= 0 && sheet::detailOnTwoLines(std::min(f.width(lf, rows_[i]), sheet::kTwoLineW), dw)) {
+      f.draw(s, lf, rows_[i], 16, y + sheet::kTwoLineLabelY, sheet::kTwoLineW, ink, bg);
+      f.draw(s, Font::Small, details_[i], 16, y + sheet::kTwoLineDetailY, sheet::kTwoLineW, col::DIM, bg);
+      continue;
+    }
+    const int w = f.draw(s, lf, rows_[i], 16, y + kRowH / 2, kW - 32, ink, bg);
+    if (dw >= 0) {
+      // (Whole, should the label draw a pixel wider than measured.)
+      const int room = std::max(sheet::detailRoom(w), dw);
       f.draw(s, Font::Small, details_[i], kW - 16, y + kRowH / 2, room, col::DIM, bg, Fonts::Align::Right);
     }
   }
@@ -711,8 +723,8 @@ void JumpGrid::drawHeader() {
   M5Canvas& s = gfx::strip();
   Fonts& f = Fonts::instance();
   s.fillRect(0, 0, kW, kHeaderH, col::HEAD);
-  const int w = f.draw(s, Font::Bold, tr(S::jump_title), 12, 17, 120, col::TXT, col::HEAD);
-  f.draw(s, Font::Small, title_, 12 + w + 8, 18, 250 - (12 + w + 8), col::DIM, col::HEAD);
+  const int w = f.draw(s, Font::Bold, tr(S::jump_title), 12, 17, uitext::kJumpTitleW, col::TXT, col::HEAD);
+  f.draw(s, Font::Small, title_, 12 + w + 8, 18, uitext::jumpSubRoom(w), col::DIM, col::HEAD);
   const uint16_t pill = pressed_ == -2 ? col::BTN_HI : col::BTN;
   s.fillRoundRect(262, 5, 50, 26, 13, pill);
   icons::drawCentred(s, icons::kCross, 287, 18, col::TXT);
@@ -909,15 +921,23 @@ void Coach::open(int card, uint16_t accent) {
 }
 
 void Coach::drawHeader() {
+  using namespace uitext;
   M5Canvas& s = gfx::strip();
   Fonts& f = Fonts::instance();
   s.fillRect(0, 0, kW, kHeaderH, col::HEAD);
   char t[48];
   trf(t, sizeof(t), S::coach_header_tip, card_ + 1, kCards);
-  const int w = f.draw(s, Font::Bold, t, 12, 17, 140, col::TXT, col::HEAD);
-  f.draw(s, Font::Small, tr(S::coach_header_hint), 12 + w + 8, 18, 120, col::DIM, col::HEAD);
+  const int w = f.draw(s, Font::Bold, t, kCoachTipX, 17, kCoachTipW, col::TXT, col::HEAD);
   const char* label = tr(card_ + 1 < kCards ? S::coach_next : S::coach_got_it);
-  const int pw = f.width(Font::Bold, label) + 28;
+  const int lw = f.width(Font::Bold, label);
+  // The hint only whole, in what the tip and this card's pill leave it
+  // (coachHintRoom(), as measured): never under the pill, never cut. Left
+  // out, the pill still says what it said.
+  const char* hint = tr(S::coach_header_hint);
+  if (f.width(Font::Small, hint) <= coachHintRoom(std::min(f.width(Font::Bold, t), kCoachTipW), lw)) {
+    f.draw(s, Font::Small, hint, kCoachTipX + w + 8, 18, kCoachHintW, col::DIM, col::HEAD);
+  }
+  const int pw = lw + kCoachPillPad;
   const uint16_t pill = pressed_ ? col::SOFT : accent_;
   s.fillRoundRect(kW - 6 - pw, 5, pw, 26, 13, pill);
   f.draw(s, Font::Bold, label, kW - 6 - pw / 2, 17, pw - 6, col::DARK, pill, Fonts::Align::Centre);

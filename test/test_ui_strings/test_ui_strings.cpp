@@ -28,6 +28,7 @@
 
 #include "CjkGlyphs16.h"
 #include "GlyphStore.h"
+#include "SheetLayout.h"
 #include "TextFit.h"
 #include "TextFold.h"
 #include "UiStrings.h"
