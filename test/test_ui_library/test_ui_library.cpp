@@ -2949,8 +2949,14 @@ void test_boot_texts_fit() {
 // In every language the label fits its budget in one of the two, and the
 // pill leaves the title its room: the crumb starts at x 196 or right of it
 // (the title from x 28 keeps 160 px); the Queue's Edit, All and None at
-// 240 or right of it, inside the pill's hit area (Header::hit(): x 240 to
-// the edge).
+// 230 or right of it. The pill's hit area (Header::hit(),
+// uitext::headerPillZoneX()) runs to the edge from x 240, or from the
+// pill's round end and the crumb's chevron when it starts further left:
+// no more of any pill is left of its zone than of English's crumb (from x
+// 215, hit from 240, as it always was). The titles drawn beside the crumb
+// (an artist's All tracks, an album's or a folder's while the index isn't
+// ready) fit what it leaves them, in Bold (Ui::drawHeader(): from x 28 to
+// 8 px short of the pill), with that language's crumb.
 void test_header_pills_fit() {
   using namespace uitext;
   const Vlw small(kVlwSans13), bold(kVlwSansBold16);
@@ -2959,6 +2965,7 @@ void test_header_pills_fit() {
     fits(font, label, maxW);
     return 320 - 6 - (font.width(label) + kHeaderPillPad + (chevron ? kHeaderChevronW : 0));
   };
+  TEST_ASSERT_EQUAL_INT(240, kHeaderPillZoneX);
   std::string report;
   for (uistr::Lang l : kAllLangs) {
     if (!uistr::hasCatalogue(l)) continue;
@@ -2966,20 +2973,41 @@ void test_header_pills_fit() {
     const int crumbX = pill(tr(S::library_crumb), kCrumbTextW, true);
     TEST_ASSERT_TRUE_MESSAGE(crumbX >= 196, tr(S::library_crumb));
     TEST_ASSERT_TRUE(28 + 160 + 8 <= crumbX);
-    int leftmost = 320;
+    // Its zone: at most its round end and its chevron left of it (25 px,
+    // English's), never right of x 240, and 40 px wide or more.
+    const int crumbZone = headerPillZoneX(crumbX, true);
+    TEST_ASSERT_TRUE_MESSAGE(crumbZone <= crumbX + kHeaderPillEndW + kHeaderChevronW, tr(S::library_crumb));
+    TEST_ASSERT_TRUE(crumbZone == kHeaderPillZoneX || crumbZone == crumbX + 25);
+    TEST_ASSERT_TRUE(320 - crumbZone >= 40);
+    for (S id : {S::library_all_tracks, S::library_header_album, S::library_header_folder}) {
+      TEST_ASSERT_TRUE_MESSAGE(bold.width(tr(id)) <= crumbX - 8 - 28, tr(id));
+    }
+    int leftmost = 320, zone = 320;
     for (S id : {S::queue_edit, S::queue_all, S::queue_none}) {
       const int x = pill(tr(id), kQueuePillTextW, false);
+      TEST_ASSERT_TRUE_MESSAGE(x >= 230, tr(id));
+      // At most its round end left of its zone.
+      TEST_ASSERT_TRUE_MESSAGE(headerPillZoneX(x, false) <= x + kHeaderPillEndW, tr(id));
       leftmost = std::min(leftmost, x);
+      zone = std::min(zone, headerPillZoneX(x, false));
     }
-    char m[64];
-    snprintf(m, sizeof(m), "%s: crumb from x %d, the Queue's pills from %d; ", uistr::tag(l), crumbX, leftmost);
+    char m[96];
+    snprintf(m, sizeof(m), "%s: crumb from x %d (hit from %d), the Queue's pills from %d (hit from %d); ",
+             uistr::tag(l), crumbX, crumbZone, leftmost, zone);
     report += m;
   }
   TEST_MESSAGE(report.c_str());
   uistr::setLang(uistr::Lang::En);
-  // English: Bold, as before ("‹ Library" from x 215).
+  // English: Bold, as before ("‹ Library" from x 215), and every pill hit
+  // from x 240 as before.
   TEST_ASSERT_TRUE(bold.width(tr(S::library_crumb)) <= kCrumbTextW);
-  for (S id : {S::queue_edit, S::queue_all, S::queue_none}) TEST_ASSERT_TRUE(bold.width(tr(id)) <= kQueuePillTextW);
+  const int enCrumbX = pill(tr(S::library_crumb), kCrumbTextW, true);
+  TEST_ASSERT_EQUAL_INT(215, enCrumbX);
+  TEST_ASSERT_EQUAL_INT(240, headerPillZoneX(enCrumbX, true));
+  for (S id : {S::queue_edit, S::queue_all, S::queue_none}) {
+    TEST_ASSERT_TRUE(bold.width(tr(id)) <= kQueuePillTextW);
+    TEST_ASSERT_EQUAL_INT(240, headerPillZoneX(pill(tr(id), kQueuePillTextW, false), false));
+  }
 }
 
 // The hold sheet's title (librarytext::holdTitle()): a long name is cut to

@@ -1,7 +1,7 @@
 {
   "@@locale": "zh",
   "@@autonym": "中文",
-  "@@note": "Simplified Chinese, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_zh.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/zh.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words and register are kept: informal 你, 曲目 for a track counted with 首, 曲库 for the Library, 队列, 艺术家, 专辑, 群星, and a space between Latin letters or digits and hanzi; their fullwidth punctuation is written as the ASCII signs, 、 and 。, which is what the device can draw), and translated by a Fable agent (Claude) otherwise. A machine translation, reviewed by a second Fable agent, not yet by a native speaker: a review as a pull request on this file is welcome.",
+  "@@note": "Simplified Chinese, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_zh.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/zh.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words and register are kept: informal 你, 曲目 for a track counted with 首, 曲库 for the Library, 队列, 艺术家, 专辑, 群星, and a space between Latin letters or digits and hanzi; their fullwidth punctuation is written as the ASCII signs, 、 and 。, which is what the device can draw), and translated by a Fable agent (Claude) otherwise. A machine translation, reviewed by a second Fable agent, not yet by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
   "boot.touch_hint": "触摸不灵? 长按屏幕。",
   "coach.header_tip": "提示 {0} / {1}",
   "coach.header_hint": "点一下继续",
@@ -162,7 +162,7 @@
     "other": "播放 {0} 首"
   },
   "@library.play_all": {
-    "note": "'播放 {0} 首' (play N tracks): the count says it is everything, and it fits the 123 px where '全部播放 {0} 首' (the mobile app's Play all with the count) is 130 px at three digits and 160 at five. en.json marks the room."
+    "note": "'播放 {0} 首' (play N tracks): the count says it is everything, and it fits the 127 px button, where '全部播放 {0} 首' (the mobile app's Play all with the count) is 130 px at three digits and 160 at five (too wide at five digits in Small too)."
   },
   "library.hold_title": {
     "other": "{0}, {1} 首曲目"
@@ -550,6 +550,10 @@
   "about.library_value": "{0}·{1}·{2}",
   "@about.library_value": {
     "note": "'·' (the interpunct, unspaced as Chinese sets it) joins the three counts: '99,999 首·9999 位艺术家·1500 张专辑' is 256 px in Small, its else font, for 260. With '、' (format.list_sep) it is 310 px, with ', ' 264; the apps' ' · ' with spaces 268."
+  },
+  "about.library_value_short": "{0}、{1}",
+  "@about.library_value_short": {
+    "note": "'、' (format.list_sep) joins the two counts, as device_info.library_value and library.artist_counts join theirs: '99,999 首、1500 张专辑' is 185 px in Body, for 260. The three-count line keeps its unspaced '·' for width (with '、' it is 310 px in Small); here the natural mark has room."
   },
   "about.no_music": "未找到音乐",
   "about.headphones": "耳机",

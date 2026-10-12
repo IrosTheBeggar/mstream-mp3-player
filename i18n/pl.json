@@ -1,7 +1,7 @@
 {
   "@@locale": "pl",
   "@@autonym": "Polski",
-  "@@note": "Machine-made (a Fable agent), not yet reviewed by a native speaker. Where the mStream mobile app (mstream_music, lib/l10n/app_pl.arb) or the terminal player (mstream-terminal-player, locales/pl.yml; master bdb174e of 2026-09-21 and main b89ad0a of 2026-10-10) had the same text or phrase, their Polish wording and terms were taken (both GPL-3.0, by this repository's owner); the rest was translated by the agent, and a second agent reviewed every message against the English and the apps' words. Register: informal (ty), as both apps. 'zakładka' names a tab (karta is the microSD card), 'Wyjście' the Output tab, 'Informacje' the About page.",
+  "@@note": "Machine-made (a Fable agent), not yet reviewed by a native speaker. Where the mStream mobile app (mstream_music, lib/l10n/app_pl.arb) or the terminal player (mstream-terminal-player, locales/pl.yml; master bdb174e of 2026-09-21 and main b89ad0a of 2026-10-10) had the same text or phrase, their Polish wording and terms were taken (both GPL-3.0, by this repository's owner); the rest was translated by the agent, and a second agent reviewed every message against the English and the apps' words. Register: informal (ty), as both apps. 'zakładka' names a tab (karta is the microSD card), 'Wyjście' the Output tab, 'Informacje' the About page. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
   "boot.touch_hint": "Dotyk nie działa? Trzymaj palec na ekranie.",
   "coach.header_tip": "Porada {0} z {1}",
   "coach.header_hint": "dotknij, by przejść",
@@ -77,7 +77,7 @@
   "hud.speaker": "Głośnik",
   "hud.silent_mode": "Zostaje na głośniku (cichy test)",
   "@hud.silent_mode": {
-    "note": "248 px in the HUD's 274 (en.json marks the English); '(cichy tryb testowy)', the mode's full name, made it 317."
+    "note": "248 px in the HUD's 274; '(cichy tryb testowy)', the mode's full name, made it 317."
   },
   "now_playing.title_none": "Nic nie gra",
   "now_playing.unknown_artist": "Nieznany wykonawca",
@@ -238,7 +238,7 @@
   "library.various_artists": "Różni wykonawcy",
   "library.empty_no_music": "Brak muzyki: wgraj foldery do /music",
   "@library.empty_no_music": {
-    "note": "'wgraj foldery do /music' (copy folders onto the card): 295 px in 296; 'umieść foldery w /music' was 301 (en.json marks the English, 297)."
+    "note": "'wgraj foldery do /music' (copy folders onto the card): 295 px in 300; 'umieść foldery w /music' is 301."
   },
   "library.empty_no_audio": "Brak plików audio",
   "library.empty_nothing": "Nic tu nie ma",
@@ -641,7 +641,11 @@
   "about.library": "Biblioteka",
   "about.library_value": "{0}, {1}, {2}",
   "@about.library_value": {
-    "note": "en.json marks it (English 261 px in Small's 260). Polish is 340 in Small ('99 999 utworów, 9999 wykonawców, 1500 albumów'): the three counts are shared messages, and no abbreviation of them fits ('wyk.' 283, 'artystów' 309). A fix: two lines (the tracks; the artists and albums), or the artists left out when the line doesn't fit."
+    "note": "Optional room: the three counts are 340 px in Small for 260 ('99 999 utworów, 9999 wykonawców, 1500 albumów'; 418 in Body), the count messages are shared, and no abbreviation of them fits ('wyk.' 283, 'artystów' 309): About draws about.library_value_short (the tracks and the albums) when this doesn't fit."
+  },
+  "about.library_value_short": "{0}, {1}",
+  "@about.library_value_short": {
+    "note": "', ' joins the two as about.library_value joins its three (the apps' join): '99 999 utworów, 1500 albumów' is 257 px in Body for 260 (3 px to spare), so the line stays in Body. '{0} i {1}' reads as prose but doesn't fit in Body (212 px in Small)."
   },
   "about.no_music": "nie znaleziono muzyki",
   "about.headphones": "Słuchawki",
@@ -760,7 +764,7 @@
   "dialog.lost_not_trying": "Nie próbuje łączyć ponownie",
   "dialog.lost_resting": "Nie szuka już: Odtwórz ponowi próbę",
   "@dialog.lost_resting": {
-    "note": "'Nie szuka już' (it no longer looks), 241 px in the status line's 260 (en.json marks the English, 274); 'Przestano szukać: ...' was 267. 'Odtwórz' is the B button's word."
+    "note": "'Nie szuka już' (it no longer looks), 241 px in the status line's 260; 'Przestano szukać: ...' was 267. 'Odtwórz' is the B button's word."
   },
   "dialog.lost_looking": "Szukanie słuchawek…",
   "dialog.lost_use_speaker": "Użyj głośnika",

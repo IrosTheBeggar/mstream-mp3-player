@@ -3088,7 +3088,9 @@ Queue, Dance and Output (with its Pair and About pages).
   folder from it, the rest following; Play next and + Queue: it alone);
   **a long press on any row** gives the same three in a sheet. Deeper than
   one level the header's pill is **"‹ Library"**, the root crumb (its
-  label in Bold up to 82 px, else Small: the title keeps its room). The row
+  label in Bold up to 82 px, else Small: the title keeps its room; hit
+  from x 240 to the edge, or, when it starts left of English's, from its
+  round end and chevron in: `uitext::headerPillZoneX()`). The row
   holding what plays (its artist, album, track, the folders on its path) is
   tinted in every list. The rail and the jump grid are on the Artists and
   Albums lists and on folders of folders, once over 30.

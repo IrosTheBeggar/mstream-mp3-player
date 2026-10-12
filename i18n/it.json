@@ -1,7 +1,7 @@
 {
   "@@locale": "it",
   "@@autonym": "Italiano",
-  "@@note": "Italiano: traduzione automatica, non ancora rivista da un madrelingua. Fatta dalle traduzioni dell'app mobile (mstream_music, lib/l10n/app_it.arb, master bdb174e, GPL-3.0) e del lettore da terminale (mstream-terminal-player, locales/it.yml, main b89ad0a, GPL-3.0-only), dello stesso autore, dove avevano il testo o le parole (termini, registro 'tu', tipografia); il resto lo ha tradotto un agente Fable (Claude), e un secondo agente lo ha riletto. Machine translation: made from the mobile app's and the terminal player's translations where they had the text, and translated by a Fable agent otherwise, then reviewed by a second Fable agent; not yet reviewed by a native speaker.",
+  "@@note": "Italiano: traduzione automatica, non ancora rivista da un madrelingua. Fatta dalle traduzioni dell'app mobile (mstream_music, lib/l10n/app_it.arb, master bdb174e, GPL-3.0) e del lettore da terminale (mstream-terminal-player, locales/it.yml, main b89ad0a, GPL-3.0-only), dello stesso autore, dove avevano il testo o le parole (termini, registro 'tu', tipografia); il resto lo ha tradotto un agente Fable (Claude), e un secondo agente lo ha riletto. Machine translation: made from the mobile app's and the terminal player's translations where they had the text, and translated by a Fable agent otherwise, then reviewed by a second Fable agent; not yet reviewed by a native speaker. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
   "boot.touch_hint": "Tocco impreciso? Tieni un dito sullo schermo.",
   "coach.header_tip": "Consiglio {0} di {1}",
   "coach.header_hint": "tocca e vai avanti",
@@ -82,7 +82,7 @@
   "now_playing.output_headphones": "Cuffie",
   "now_playing.not_connected": "{0}: non connesse",
   "@now_playing.not_connected": {
-    "note": "A colon instead of the brackets: '{0} (non connesse)' is 191 px in the 190 px line with a 10-character name, '{0}: non connesse' 185 px. The words stay bt.status_not_connected's."
+    "note": "A colon instead of the brackets: '{0} (non connesse)' is 191 px with a 10-character name, '{0}: non connesse' 185 px; the line has 200 (190, too narrow for the brackets, when this was chosen). The words stay bt.status_not_connected's."
   },
   "now_playing.headphones_not_connected": "Cuffie (non connesse)",
   "now_playing.waiting_for": "In attesa di {0}…",
@@ -155,7 +155,7 @@
     "other": "Tutti e {0}"
   },
   "@library.play_all": {
-    "note": "The button has 123 px: 'Tutti e 19410' (121 px) is 'all 19410 of them'; 'Riproduci tutti i 19410 brani' is far too wide. The one form is a noun phrase like it ('1 brano'): 'Riproduci 1 brano' was 158 px and cut."
+    "note": "The button has 127 px: 'Tutti e 19410' (121 px) is 'all 19410 of them'; 'Riproduci tutti i 19410 brani' is far too wide. The one form is a noun phrase like it ('1 brano'): 'Riproduci 1 brano' is 158 px in Bold (114 in Small, which the button would draw now)."
   },
   "library.hold_title": {
     "one": "{0}, {1} brano",
@@ -537,6 +537,7 @@
   "about.storage_flash": "Flash interna, {0} MB (senza scheda SD)",
   "about.library": "Libreria",
   "about.library_value": "{0}, {1}, {2}",
+  "about.library_value_short": "{0}, {1}",
   "about.no_music": "nessuna musica trovata",
   "about.headphones": "Cuffie",
   "about.headphones_paired": "abbinate",

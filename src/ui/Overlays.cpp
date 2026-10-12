@@ -228,7 +228,9 @@ bool Toast::passesThrough(const InputEvent& e) const {
   if (!up_ || e.y < kY || e.y >= kY + kHeaderH) return false;  // the header row only
   if (e.x < kBackZone) return true;
   // The header pill's zone (x 240 to the edge), unless Undo or View (or
-  // the sleep timer's buttons) is there.
+  // the sleep timer's buttons) is there. The toast covers the whole header
+  // row, the pill too, so this is where a pill is in every language; a
+  // wider one's own left end (Header::hit()) shows again with the header.
   return !undo_ && !view_ && !sleep_ && !idle_ && e.inRightEdgeZone(240);
 }
 

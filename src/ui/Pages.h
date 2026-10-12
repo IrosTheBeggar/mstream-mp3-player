@@ -22,9 +22,11 @@ namespace ui {
 
 // A page header (y 36-71): "‹" (back, x 0-55), a title and a dim summary,
 // and an optional pill button at the right (its hit area x 240 to the
-// screen's edge). A 2 px rule in the section's colour under it. With a
-// `path`, two lines: the title over the path (left, cut from the left:
-// "…/Kavinsky") and `counts` (right): the Folders explorer's one thin line.
+// screen's edge, or from its round end and chevron when it starts further
+// left: uitext::headerPillZoneX()). A 2 px rule in the section's colour
+// under it. With a `path`, two lines: the title over the path (left, cut
+// from the left: "…/Kavinsky") and `counts` (right): the Folders
+// explorer's one thin line.
 struct Header {
   const char* title = "";
   const char* sub = "";

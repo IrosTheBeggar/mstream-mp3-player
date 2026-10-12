@@ -43,9 +43,12 @@ are out of date (`--check`).
 - Each id is `en.json`'s. An id it doesn't have fails the check; one
   left out is English on the device.
 - `"@coach.title": {"note": "..."}` may say why a text is as it is; the
-  generator ignores it. `"overflow": true` there marks a text that is too
-  wide in this language for now (its room needs a layout fix): the width
-  test lets it be, and fails once it fits (then the mark goes).
+  generator ignores it. A note's widths are measured, but its rooms are
+  those it was written against: `en.json` has the rooms as they are now
+  (the layout fixes widened some). `"overflow": true` there marks a text
+  that is too wide in this language for now (its room needs a layout
+  fix): the width test lets it be, and fails once it fits (then the mark
+  goes).
 - UTF-8, no BOM. Keep `en.json`'s order: a diff then reads as a list.
 
 ## What en.json says about each text

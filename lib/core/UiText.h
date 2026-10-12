@@ -323,10 +323,23 @@ inline constexpr int kSegmentPad = 4;
 // of pill around it, and the crumb's chevron, kHeaderChevronW): its label
 // in Bold within a budget, else Small, so the title and the summary keep
 // their room. The Library's root crumb ("‹ Library"), and the Queue's
-// Edit, All and None. (Its hit area stays x 240 to the edge: Header::hit.)
+// Edit, All and None.
 inline constexpr int kHeaderPillPad = 24, kHeaderChevronW = 12;
 inline constexpr int kCrumbTextW = 82;
 inline constexpr int kQueuePillTextW = 60;
+// The pill's hit area (Header::hit()) runs to the screen's edge from x 240
+// (kHeaderPillZoneX: the lab panel reads +35-45 px there), or, for a pill
+// that starts further left, from its round end (kHeaderPillEndW, its
+// radius: Ui::drawHeader()) and the crumb's chevron: no more of a pill is
+// left of its zone than of English's crumb, from x 215, its zone from 240.
+// Russian's crumb from x 197 is hit from 222; the Queue's pills, from x
+// 231 or right of it, from 240. English's are as they were.
+inline constexpr int kHeaderPillZoneX = 240, kHeaderPillEndW = 13;
+inline constexpr int headerPillZoneX(int pillX, bool chevron) {
+  return pillX + kHeaderPillEndW + (chevron ? kHeaderChevronW : 0) < kHeaderPillZoneX
+             ? pillX + kHeaderPillEndW + (chevron ? kHeaderChevronW : 0)
+             : kHeaderPillZoneX;
+}
 
 // ---- the Library's names (ui/LibraryPage; librarytext, docs/METADATA.md 5.4) ----
 // An album of more than one disc: a divider row before each disc's first

@@ -1,7 +1,7 @@
 {
   "@@locale": "ru",
   "@@autonym": "Русский",
-  "@@note": "Russian, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_ru.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/ru.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: formal вы), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome.",
+  "@@note": "Russian, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_ru.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/ru.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: formal вы), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
   "boot.touch_hint": "Касания мимо? Держите палец на экране.",
   "coach.header_tip": "Совет {0} из {1}",
   "coach.header_hint": "тап: дальше",
@@ -629,8 +629,9 @@
   "about.library": "Библиотека",
   "about.library_value": "{0}, {1}, {2}",
   "@about.library_value": {
-    "note": "Overflows in English already (en.json marks it). In Russian the three counts with their nouns are 384 px in Body and 313 in Small for 260 (99 999 треков, 9999 артистов, 1500 альбомов); the nouns are library.tracks_n, library.artists_n and library.albums_n, shared with the album rows, so no wording here shortens it. A layout fix: two lines (the tracks, then the artists and albums), or drop the artists' count from the row."
+    "note": "Optional room: the three counts with their nouns are 384 px in Body and 313 in Small for 260 at the worst counts (99 999 треков, 9999 артистов, 1500 альбомов); the nouns are library.tracks_n, library.artists_n and library.albums_n, shared with the album rows, so no wording here shortens it. About draws about.library_value_short (the tracks and the albums) when this doesn't fit."
   },
+  "about.library_value_short": "{0}, {1}",
   "about.no_music": "музыка не найдена",
   "about.headphones": "Наушники",
   "about.headphones_paired": "сопряжены",

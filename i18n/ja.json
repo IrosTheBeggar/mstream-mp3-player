@@ -1,7 +1,7 @@
 {
   "@@locale": "ja",
   "@@autonym": "日本語",
-  "@@note": "Machine translation, not yet reviewed by a native speaker. Made from the mobile app's (mstream_music, lib/l10n/app_ja.arb, master at bdb174e) and the terminal player's (mstream-terminal-player, locales/ja.yml, main at b89ad0a) Japanese where they had the text or the phrase, both GPL-3.0 by this repository's owner; the rest translated by a Fable agent (Claude), in their words and register, then reviewed message by message by a second Fable agent. Fullwidth punctuation written as ASCII, as the device draws it.",
+  "@@note": "Machine translation, not yet reviewed by a native speaker. Made from the mobile app's (mstream_music, lib/l10n/app_ja.arb, master at bdb174e) and the terminal player's (mstream-terminal-player, locales/ja.yml, main at b89ad0a) Japanese where they had the text or the phrase, both GPL-3.0 by this repository's owner; the rest translated by a Fable agent (Claude), in their words and register, then reviewed message by message by a second Fable agent. Fullwidth punctuation written as ASCII, as the device draws it. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
   "boot.touch_hint": "タッチがおかしい? 画面を長押し",
   "coach.header_tip": "ヒント {0}/{1}",
   "coach.header_hint": "タップで次へ",
@@ -144,7 +144,7 @@
     "other": "{0} 曲再生"
   },
   "@library.play_all": {
-    "note": "N曲再生, the compact button form (as 全曲再生), 112 px in Bold's 123: with the particle (19410 曲を再生) it was 129 px, over by 6 where English is over by 3."
+    "note": "N曲再生, the compact button form (as 全曲再生), 112 px in Bold in the button's 127: with the particle (19410 曲を再生) it is 129 px in Bold, which the button would draw in Small (108 px)."
   },
   "library.hold_title": {
     "other": "{0}、{1} 曲"
@@ -494,6 +494,7 @@
   "about.storage_flash": "内蔵フラッシュ {0} MB (カードなし)",
   "about.library": "ライブラリ",
   "about.library_value": "{0}、{1}、{2}",
+  "about.library_value_short": "{0}、{1}",
   "about.no_music": "音楽がありません",
   "about.headphones": "ヘッドホン",
   "about.headphones_paired": "ペアリング済み",

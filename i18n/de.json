@@ -1,7 +1,7 @@
 {
   "@@locale": "de",
   "@@autonym": "Deutsch",
-  "@@note": "German. A machine translation, not yet reviewed by a native speaker. Made from the mobile app's translations (mstream_music, master at bdb174e, lib/l10n/app_de.arb, GPL-3.0) and the terminal player's (mstream-terminal-player, main at b89ad0a, locales/de.yml, GPL-3.0-only; both by this repository's owner) where they had the text or its words: du, „…“, Titel, Album, Künstler, Ordner, Bibliothek, Warteschlange, Abspielen, Als Nächstes, Zufallswiedergabe, Kopfhörer, gekoppelt, Verbinden, Trennen, Vergessen, Akku, Karte, Sleep-Timer, Touch-Kalibrierung, Erneut versuchen, Speichern, Fertig. Translated by a Fable agent (Claude) otherwise, then reviewed by a second Fable agent (meaning against each text's context, terms, grammar and plurals, register, typography, the rooms). Notes in \"@<id>\" say where a shorter word replaced the apps' one for the room, and which texts are marked overflow until a layout fix.",
+  "@@note": "German. A machine translation, not yet reviewed by a native speaker. Made from the mobile app's translations (mstream_music, master at bdb174e, lib/l10n/app_de.arb, GPL-3.0) and the terminal player's (mstream-terminal-player, main at b89ad0a, locales/de.yml, GPL-3.0-only; both by this repository's owner) where they had the text or its words: du, „…“, Titel, Album, Künstler, Ordner, Bibliothek, Warteschlange, Abspielen, Als Nächstes, Zufallswiedergabe, Kopfhörer, gekoppelt, Verbinden, Trennen, Vergessen, Akku, Karte, Sleep-Timer, Touch-Kalibrierung, Erneut versuchen, Speichern, Fertig. Translated by a Fable agent (Claude) otherwise, then reviewed by a second Fable agent (meaning against each text's context, terms, grammar and plurals, register, typography, the rooms). Notes in \"@<id>\" say where a shorter word replaced the apps' one for the room. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
   "boot.touch_hint": "Touch-Probleme? Finger aufs Display halten.",
   "coach.header_tip": "Tipp {0} von {1}",
   "coach.header_hint": "tippen: weiter",
@@ -70,7 +70,7 @@
   "hud.speaker": "Lautsprecher",
   "hud.silent_mode": "Lautsprecher bleibt (stiller Test)",
   "@hud.silent_mode": {
-    "note": "'Bleibt auf dem Lautsprecher (stiller Testmodus)' is 381 px in the HUD's 274 (the English, 313, is marked in en.json): this line is 254 px. Developer only (translate: dev); the speaker card names the mode 'Stiller Testmodus'."
+    "note": "'Bleibt auf dem Lautsprecher (stiller Testmodus)' is 381 px in the HUD's 274: this line is 254 px. Developer only (translate: dev); the speaker card names the mode 'Stiller Testmodus'."
   },
   "now_playing.title_none": "Es läuft gerade nichts",
   "now_playing.unknown_artist": "Unbekannter Künstler",
@@ -85,7 +85,7 @@
   "now_playing.output_headphones": "Kopfhörer",
   "now_playing.not_connected": "{0} (getrennt)",
   "@now_playing.not_connected": {
-    "note": "'{0} (nicht verbunden)' is 207 px in Small with a 10-letter name, the line 190 px (the English's 194 is marked in en.json), so the device would cut it: 'getrennt' (disconnected) says it of paired headphones in 157 px, with room for a longer name; now_playing.headphones_not_connected says it too, so the line reads alike with and without a name. The Bluetooth card keeps 'Nicht verbunden' (bt.status_not_connected), where it has the room."
+    "note": "'{0} (nicht verbunden)' is 207 px in Small with a 10-letter name, the line 200 px, so the device would cut it: 'getrennt' (disconnected) says it of paired headphones in 157 px, with room for a longer name; now_playing.headphones_not_connected says it too, so the line reads alike with and without a name. The Bluetooth card keeps 'Nicht verbunden' (bt.status_not_connected), where it has the room."
   },
   "now_playing.headphones_not_connected": "Kopfhörer (getrennt)",
   "now_playing.waiting_for": "Wartet auf {0}…",
@@ -176,7 +176,7 @@
     "other": "{0} spielen"
   },
   "@library.play_all": {
-    "note": "'Alle {0} abspielen' (the apps' 'Alle abspielen' with the count) is 186 px in the 123 px button at 19410 and 175 at 1234: cut on most cards, where the English (126 px at 19410, marked in en.json) is cut only at five digits. '{0} spielen' fits to four digits (114 px) and is 125 px at 19410, the English's own case; 'one' says '1 Titel spielen' (127 px: 'Alle 1 abspielen' and '1 spielen' aren't German), 4 px over only on a card with a single track. 'Alle spielen' (103 px) would fit at every count but drop the count the English shows."
+    "note": "'Alle {0} abspielen' (the apps' 'Alle abspielen' with the count) is 186 px in Bold at 19410 and 175 at 1234, 136 and 128 in Small: wider than the 127 px button from four digits on, in either font. '{0} spielen' is 114 px to four digits and 125 at 19410, as the English's 126; 'one' says '1 Titel spielen' (127 px: 'Alle 1 abspielen' and '1 spielen' aren't German). 'Alle spielen' (103 px) would fit at every count but drop the count the English shows."
   },
   "library.hold_title": {
     "one": "{0}, {1} Titel",
@@ -230,7 +230,7 @@
   },
   "library.empty_no_music": "Keine Musik: Ordner in /music legen",
   "@library.empty_no_music": {
-    "note": "'Keine Musik gefunden: Ordner nach /music legen' is 393 px in the line's 296 (the English's 297 is marked in en.json): 'Keine Musik: Ordner in /music legen' (287 px) keeps the instruction and drops 'gefunden'."
+    "note": "'Keine Musik gefunden: Ordner nach /music legen' is 393 px in the line's 300: 'Keine Musik: Ordner in /music legen' (287 px) keeps the instruction and drops 'gefunden'."
   },
   "library.empty_no_audio": "Keine Audiodateien hier",
   "library.empty_nothing": "Hier ist nichts",
@@ -520,7 +520,7 @@
   "bt.forget": "Vergessen",
   "bt.tap_again": "Sicher?",
   "@bt.tap_again": {
-    "note": "'Nochmal tippen' doesn't fit the 92 px button: 'Sicher?' asks for the confirming tap."
+    "note": "'Nochmal tippen' doesn't fit the 94 px button (140 px in Bold, 103 in Small): 'Sicher?' asks for the confirming tap."
   },
   "bt.cancel": "Abbrechen",
   "bt.disconnect": "Trennen",
@@ -585,6 +585,7 @@
   "about.storage_flash": "Interner Flash, {0} MB (keine Karte)",
   "about.library": "Bibliothek",
   "about.library_value": "{0}, {1}, {2}",
+  "about.library_value_short": "{0}, {1}",
   "about.no_music": "keine Musik gefunden",
   "about.headphones": "Kopfhörer",
   "about.headphones_paired": "gekoppelt",

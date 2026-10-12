@@ -1705,16 +1705,18 @@
     "context": "An Album page's header title while the index isn't ready.",
     "room": {
       "font": "Bold",
-      "px": 282
-    }
+      "px": 179
+    },
+    "note": "Two levels down the ‹ Library pill is beside it (library.crumb): the title gets what that language's pill leaves, 179 px beside English's and 160 at least (test_ui_library's test_header_pills_fit measures each language's with its own crumb)."
   },
   "library.header_folder": "Folder",
   "@library.header_folder": {
     "context": "A Folder page's header title while the index isn't ready.",
     "room": {
       "font": "Bold",
-      "px": 282
-    }
+      "px": 179
+    },
+    "note": "Two levels down the ‹ Library pill is beside it (library.crumb): the title gets what that language's pill leaves, 179 px beside English's and 160 at least (test_ui_library's test_header_pills_fit measures each language's with its own crumb)."
   },
   "library.all_tracks": "All tracks",
   "@library.all_tracks": {
@@ -1726,9 +1728,10 @@
       },
       {
         "font": "Bold",
-        "px": 282
+        "px": 179
       }
-    ]
+    ],
+    "note": "The header's title on the artist's All tracks page, which is two levels down: the ‹ Library pill is beside it (library.crumb), and the title gets what that language's pill leaves, 179 px beside English's and 160 at least (test_ui_library's test_header_pills_fit measures each language's with its own crumb)."
   },
   "library.all_tracks_sub": {
     "one": "{0} track, album by album",

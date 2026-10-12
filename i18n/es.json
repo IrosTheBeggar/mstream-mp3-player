@@ -1,7 +1,7 @@
 {
   "@@locale": "es",
   "@@autonym": "Español",
-  "@@note": "Spanish, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_es.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/es.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: informal tú), and translated by a Fable agent (Claude) otherwise. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. Reviewed message by message by a second Fable agent against en.json's contexts and rooms (meaning, agreement, the apps' words, typography, the fit checker); still no native speaker's review.",
+  "@@note": "Spanish, made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_es.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/es.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept: informal tú), and translated by a Fable agent (Claude) otherwise. A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. Reviewed message by message by a second Fable agent against en.json's contexts and rooms (meaning, agreement, the apps' words, typography, the fit checker); still no native speaker's review. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
   "boot.touch_hint": "¿Falla el táctil? Mantén un dedo en la pantalla.",
   "coach.header_tip": "Consejo {0} de {1}",
   "coach.header_hint": "toca para seguir",
@@ -585,6 +585,7 @@
   "about.storage_flash": "Flash interna, {0} MB (sin tarjeta)",
   "about.library": "Biblioteca",
   "about.library_value": "{0}, {1}, {2}",
+  "about.library_value_short": "{0}, {1}",
   "about.no_music": "sin música",
   "about.headphones": "Auriculares",
   "about.headphones_paired": "emparejados",

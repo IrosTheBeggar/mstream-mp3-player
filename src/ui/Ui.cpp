@@ -65,7 +65,11 @@ void Page::describe(char* buf, size_t size) const { snprintf(buf, size, "%s", na
 int Header::hit(const InputEvent& e) const {
   if (e.y < kHeaderY || e.y >= kHeaderY + kHeaderH) return 0;
   if ((back || cross) && e.x < 56) return 1;
-  if (right && e.inRightEdgeZone(240)) return 2;
+  // The pill's: x 240 to the edge, or from its round end and chevron when
+  // it starts further left (uitext::headerPillZoneX(): Russian's crumb).
+  if (right && e.inRightEdgeZone(uitext::headerPillZoneX(kW - 6 - pillW(right, rightMaxW, rightBack), rightBack))) {
+    return 2;
+  }
   return 3;
 }
 

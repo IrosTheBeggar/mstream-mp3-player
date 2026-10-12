@@ -1,7 +1,7 @@
 {
   "@@locale": "fr",
   "@@autonym": "Français",
-  "@@note": "Machine translation, not yet reviewed by a native French speaker. Made from the mobile app's French (mstream_music, lib/l10n/app_fr.arb, master at bdb174e, GPL-3.0) and the terminal player's (mstream-terminal-player, locales/fr.yml, main at b89ad0a, GPL-3.0) wherever they had the text or its words (vous, « morceau » for a track, « file » for the queue, « casque », « carte SD », « calibrage tactile », « Minuterie de veille », « Aléatoire »), and translated by a Fable agent (Claude) for the rest, then reviewed by a second Fable agent (meaning, terms, grammar, typography), fitted to the rooms with the width checker. Paths (/music/Artist/Album/) and format names stay as they are.",
+  "@@note": "Machine translation, not yet reviewed by a native French speaker. Made from the mobile app's French (mstream_music, lib/l10n/app_fr.arb, master at bdb174e, GPL-3.0) and the terminal player's (mstream-terminal-player, locales/fr.yml, main at b89ad0a, GPL-3.0) wherever they had the text or its words (vous, « morceau » for a track, « file » for the queue, « casque », « carte SD », « calibrage tactile », « Minuterie de veille », « Aléatoire »), and translated by a Fable agent (Claude) for the rest, then reviewed by a second Fable agent (meaning, terms, grammar, typography), fitted to the rooms with the width checker. Paths (/music/Artist/Album/) and format names stay as they are. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
   "boot.touch_hint": "Tactile déréglé ? Gardez un doigt sur l'écran.",
   "coach.header_tip": "Astuce {0} sur {1}",
   "coach.header_hint": "touchez : suite",
@@ -73,7 +73,7 @@
   "hud.speaker": "Haut-parleur",
   "hud.silent_mode": "Haut-parleur, test silencieux",
   "@hud.silent_mode": {
-    "note": "225 px dans les 274 du HUD, sur le modèle de ses autres lignes (« Haut-parleur, pause : B pour lire ») ; « Reste sur le haut-parleur (mode test silencieux) » faisait 380 px, et « Haut-parleur, mode test silencieux » 276. Texte de développement : l'anglais déborde lui aussi."
+    "note": "225 px dans les 274 du HUD, sur le modèle de ses autres lignes (« Haut-parleur, pause : B pour lire ») ; « Reste sur le haut-parleur (mode test silencieux) » faisait 380 px, et « Haut-parleur, mode test silencieux » 276. Texte de développement."
   },
   "now_playing.title_none": "Aucune lecture",
   "now_playing.unknown_artist": "Artiste inconnu",
@@ -546,6 +546,7 @@
   "about.storage_flash": "Flash interne, {0} Mo (pas de carte)",
   "about.library": "Bibliothèque",
   "about.library_value": "{0}, {1}, {2}",
+  "about.library_value_short": "{0}, {1}",
   "about.no_music": "aucune musique trouvée",
   "about.headphones": "Casque",
   "about.headphones_paired": "appairé",
