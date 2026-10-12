@@ -603,9 +603,12 @@
   "speaker.silent_mode": "Cichy tryb testowy",
   "pair.title": "Parowanie słuchawek",
   "pair.found": {
-    "one": "znaleziono {0}",
-    "few": "znaleziono {0}",
-    "many": "znaleziono {0}"
+    "one": "wykryto {0}",
+    "few": "wykryto {0}",
+    "many": "wykryto {0}"
+  },
+  "@pair.found": {
+    "note": "'wykryto' (detected: the usual word for a Bluetooth scan's results) rather than 'znaleziono': 'znaleziono 11' is 90 px in the 78 'Parowanie słuchawek' leaves beside it; 'wykryto 11' is 73."
   },
   "pair.searching": "Wyszukiwanie",
   "pair.pairing": "Parowanie…",

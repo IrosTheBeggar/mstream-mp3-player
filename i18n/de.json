@@ -288,7 +288,10 @@
     "one": "Als Nächstes",
     "other": "{0} Titel als Nächstes"
   },
-  "queue.title": "Warteschlange",
+  "queue.title": "Warteliste",
+  "@queue.title": {
+    "note": "'Warteschlange' (the apps' word) is 135 px in Bold; beside the 'Wählen' pill the header's line must hold the position alone, '4999 von 5000' (96 px in Small), which leaves the title 117 px: 'Warteliste' (95 px) is the same thing in a shorter everyday word. The tab's tip, the empty state and the clear sheet keep 'Warteschlange'."
+  },
   "queue.empty_sub": "leer",
   "queue.edit": "Wählen",
   "queue.selected": {

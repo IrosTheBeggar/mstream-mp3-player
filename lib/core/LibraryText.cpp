@@ -122,20 +122,70 @@ size_t albumSub(const LibraryIndex& index, uint32_t album, AlbumPlace place, cha
   return at;
 }
 
+size_t albumHeaderLine(const textfit::Font* small, int maxW, const char* artist, bool phrase, uint32_t year,
+                       uint32_t tracks, char* buf, size_t size) {
+  if (!buf || size == 0) return 0;
+  char y[8] = "", t[24];
+  if (year) snprintf(y, sizeof(y), "%u", static_cast<unsigned>(year));
+  trackCount(tracks, t, sizeof(t));
+  // The line from `a` (may be ""), `yr` (may be "") and the count; whole
+  // when every part is in `buf` (a long name in a short buffer would push
+  // out the count) and it fits `maxW`.
+  const size_t dotLen = strlen(kDot);
+  auto line = [&](const char* a, const char* yr) {
+    size_t at = 0;
+    buf[0] = 0;
+    part(a, buf, size, &at);
+    part(yr, buf, size, &at);
+    part(t, buf, size, &at);
+    const size_t len = strlen(a) + (yr[0] ? (a[0] ? dotLen : 0) + strlen(yr) : 0) + (a[0] || yr[0] ? dotLen : 0) +
+                       strlen(t);
+    const bool whole = at == len && (!small || textfit::drawnWidth(*small, buf) <= maxW);
+    return whole ? at : static_cast<size_t>(0);
+  };
+  const char* name = artist ? artist : "";
+  const size_t all = line(name, y);
+  if (all || !small) return strlen(buf);
+  // The year gives way first ("Daft Punk · 14 tracks"), then the name is cut
+  // to what the count leaves ("The Lantern C… · 14 tracks"); a phrase,
+  // or a name left less than kAlbumLineMinNameW px, is left out ("1999 ·
+  // 14 tracks").
+  if (y[0] && line(name, "")) return strlen(buf);
+  if (!phrase && name[0]) {
+    const int room = maxW - textfit::drawnWidth(*small, t) - textfit::drawnWidth(*small, kDot);
+    const size_t tLen = strlen(t);
+    if (room >= kAlbumLineMinNameW && tLen + dotLen + 2 <= size) {
+      char cut[96];
+      const size_t cutSize = size - tLen - dotLen < sizeof(cut) ? size - tLen - dotLen : sizeof(cut);
+      textfit::fit(*small, name, strlen(name), cut, cutSize, room);
+      if (line(cut, "")) return strlen(buf);
+    }
+  }
+  line("", y);  // (whole: the year and a count fit any room this line has)
+  return strlen(buf);
+}
+
+size_t albumHeader(const textfit::Font& small, int maxW, const LibraryIndex& index, uint32_t album, char* buf,
+                   size_t size) {
+  if (!buf || size == 0) return 0;
+  buf[0] = 0;
+  if (!ready(index) || album >= index.albumCount()) return 0;
+  const LibraryIndex::Album& a = index.album(album);
+  const char* line = albumArtist(index, album);
+  // No artist folder, or a compilation's "Various Artists": the UI's words.
+  const bool phrase = !line[0] || line == tr(S::library_various_artists);
+  return albumHeaderLine(&small, maxW, line[0] ? line : tr(S::library_no_artist_folder), phrase, a.year,
+                         a.trackCount, buf, size);
+}
+
 size_t albumHeader(const LibraryIndex& index, uint32_t album, char* buf, size_t size) {
   if (!buf || size == 0) return 0;
   buf[0] = 0;
   if (!ready(index) || album >= index.albumCount()) return 0;
   const LibraryIndex::Album& a = index.album(album);
-  char year[8] = "", tracks[24];
-  if (a.year) snprintf(year, sizeof(year), "%u", static_cast<unsigned>(a.year));
-  trackCount(a.trackCount, tracks, sizeof(tracks));
   const char* line = albumArtist(index, album);
-  size_t at = 0;
-  part(line[0] ? line : tr(S::library_no_artist_folder), buf, size, &at);
-  part(year, buf, size, &at);
-  part(tracks, buf, size, &at);
-  return at;
+  return albumHeaderLine(nullptr, 0, line[0] ? line : tr(S::library_no_artist_folder), true, a.year, a.trackCount,
+                         buf, size);
 }
 
 size_t trackSub(const LibraryIndex& index, uint32_t track, bool album, char* buf, size_t size) {

@@ -594,9 +594,12 @@
   "speaker.silent_mode": "Тихий тестовый режим",
   "pair.title": "Сопряжение наушников",
   "pair.found": {
-    "one": "найдено {0}",
-    "few": "найдено {0}",
-    "many": "найдено {0}"
+    "one": "{0} шт.",
+    "few": "{0} шт.",
+    "many": "{0} шт."
+  },
+  "@pair.found": {
+    "note": "99 шт. (the count alone, 44 px): найдено 99 is 79 px in the 50 px Сопряжение наушников leaves beside it, нашли 99 65, есть 99 51; шт. never declines, so the three forms are one."
   },
   "pair.searching": "Поиск",
   "pair.pairing": "Сопряжение…",

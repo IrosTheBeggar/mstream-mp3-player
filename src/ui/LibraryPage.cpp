@@ -380,15 +380,22 @@ Header LibraryPage::header() const {
   // beside it, nor left out (French's "Tous les morceaux" leaves the name
   // 16 px), and a long name's counts are on the second line.
   h.subBelow = true;
+  // The header's second line: from x 28 to 8 px before the crumb, or to x 310.
+  auto lineW = [this]() {
+    return uitext::headerRight(crumb() ? Header::pillW(tr(S::library_crumb), uitext::kCrumbTextW, true) : 0) - 28;
+  };
   switch (kind_) {
     case PageKind::Artist:
       h.title = i ? librarytext::artistShown(*i, id_) : tr(S::library_header_artist);
       if (i) librarytext::artistCounts(*i, id_, sub, subSize);
       break;
     case PageKind::Album:
-      // Its name, then "Artist · 2001 · 14 tracks" (the elected line and year).
+      // Its name, then "Artist · 2001 · 14 tracks" (the elected line and
+      // year), made for the second line's room: the year gives way, then a
+      // long artist is cut, never the count ("Daft Punk · 14 tracks" beside
+      // English's crumb).
       h.title = i ? librarytext::albumShown(*i, id_) : tr(S::library_header_album);
-      if (i) librarytext::albumHeader(*i, id_, sub, subSize);
+      if (i) librarytext::albumHeader(Fonts::instance().fit(Font::Small), lineW(), *i, id_, sub, subSize);
       break;
     case PageKind::ArtistTracks:
       h.title = tr(S::library_all_tracks);
@@ -402,9 +409,8 @@ Header LibraryPage::header() const {
         // never one cut ("14 Audiodateien, 1 sonst…").
         const LibraryIndex::Folder& d = i->folder(id_);
         if (!i->folderPath(d.parent, path, pathSize)) snprintf(path, pathSize, "…");
-        const int pill = crumb() ? Header::pillW(tr(S::library_crumb), uitext::kCrumbTextW, true) : 0;
-        librarytext::folderHeaderCounts(Fonts::instance().fit(Font::Small), uitext::headerRight(pill) - 28,
-                                        d.folderCount, d.fileCount, d.otherCount, sub, subSize);
+        librarytext::folderHeaderCounts(Fonts::instance().fit(Font::Small), lineW(), d.folderCount, d.fileCount,
+                                        d.otherCount, sub, subSize);
         h.path = path;
         h.counts = sub;
         h.sub = "";

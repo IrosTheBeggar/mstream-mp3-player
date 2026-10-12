@@ -53,6 +53,22 @@ size_t albumSub(const LibraryIndex& index, uint32_t album, AlbumPlace place, cha
 // The Album page's header line: "Artist · 2001 · 14 tracks" (the parts it
 // has).
 size_t albumHeader(const LibraryIndex& index, uint32_t album, char* buf, size_t size);
+// ... in `maxW` px of `small`: the room it has under the title (beside the
+// title it is drawn only whole: Ui::drawHeader(), Header::subBelow). Whole
+// when it fits; else without the year ("Daft Punk · 14 tracks"); else the
+// artist's line cut with "…" to what the count leaves ("The Lantern C… ·
+// 14 tracks"); else the year and the count ("1999 · 14 tracks"): a phrase
+// there (library.no_artist_folder, "Various Artists") is whole or left
+// out, as a name left less than kAlbumLineMinNameW px. Never the count cut,
+// nor a part pushed out of `buf` by a long name.
+inline constexpr int kAlbumLineMinNameW = 32;
+size_t albumHeader(const textfit::Font& small, int maxW, const LibraryIndex& index, uint32_t album, char* buf,
+                   size_t size);
+// The line from its parts: `artist` (a name; a phrase with `phrase`),
+// `year` (0: none) and the tracks; fitted to `maxW` px of `*small` as above,
+// or whole with no font.
+size_t albumHeaderLine(const textfit::Font* small, int maxW, const char* artist, bool phrase, uint32_t year,
+                       uint32_t tracks, char* buf, size_t size);
 // A track row's subtitle: its own artist (ownArtist()), and with `album`
 // (an artist's All tracks) its album's name after it ("Guest · Album", or
 // "Album"; library.loose_tracks for the loose tracks). "" when there is

@@ -210,7 +210,8 @@ void OutputPage::tick(uint32_t nowMs) {
 Header OutputPage::header() const {
   Header h;
   // Each line is a phrase or a count: whole beside the title, or not at all
-  // (Spanish's "Información del dispositivo" leaves "este Core2" 31 px).
+  // (a title of 243 px, as Spanish's "Información del dispositivo" was,
+  // leaves "este Core2" 31 px).
   h.subWhole = true;
   switch (kind_) {
     case PageKind::Pair:

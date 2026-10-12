@@ -578,7 +578,10 @@
   "about.licence_label": "Licença (© 2026 IrosTheBeggar)",
   "about.licence": "GPL-3.0-or-later, sem garantia",
   "about.source_label": "Fonte: github.com/IrosTheBeggar/",
-  "about.device_info": "Informações do dispositivo",
+  "about.device_info": "Dados do dispositivo",
+  "@about.device_info": {
+    "note": "'Dados do dispositivo' (the device's data: the page's facts): 'Informações do dispositivo' is 243 px in Bold as the Device info page's title, and leaves 'este Core2' (70 px) 31 of the header's 282; the title has 204 px beside it, and this one is 187. 'dispositivo' is the mobile app's word (Este dispositivo)."
+  },
   "about.device_info_sub": "placa, chips, memória, tempo ligado",
   "about.tips": "Mostrar as dicas de novo",
   "about.tips_sub": "os botões de toque e as abas",

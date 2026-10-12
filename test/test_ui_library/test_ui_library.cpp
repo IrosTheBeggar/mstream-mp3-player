@@ -1233,9 +1233,11 @@ void test_queue_texts_fit() {
 // The Queue header's summary in every language (QueuePage::header()): the
 // first of its four forms that fits whole beside that language's title and
 // Edit pill (queueview::pickSummary()), or none: never one cut (the device
-// check's German "noch 9 · 3…" in 78 px). Where the queue is shows at a
-// short queue in every language; English's picks are as before but where
-// it was cut (a long queue with hours: the position alone now).
+// check's German "noch 9 · 3…" in 78 px). Where the queue is shows at
+// every queue in every language, 4999 of 5000 too (German's "Warteliste",
+// the fitters', leaves "4999 von 5000" 118 px); English's picks are as
+// before but where it was cut (a long queue with hours: the position alone
+// now).
 void test_queue_summary_fits_every_language() {
   using namespace uitext;
   const Vlw small(kVlwSans13), bold(kVlwSansBold16);
@@ -1284,8 +1286,10 @@ void test_queue_summary_fits_every_language() {
       } else {
         for (int k = 0; k < queueview::kSummaryForms; ++k) TEST_ASSERT_TRUE(widths[k] < 0 || widths[k] > room);
       }
-      // A short queue: where it is, in every language.
-      if (c.size <= 16) TEST_ASSERT_TRUE_MESSAGE(pick >= 0, forms[3]);
+      // Where the queue is, in every language, at every queue: a form with
+      // the position (never the count and the time alone at these).
+      TEST_ASSERT_TRUE_MESSAGE(pick >= 0 && pick != queueview::kSummaryShort, forms[3]);
+      TEST_ASSERT_TRUE_MESSAGE(strncmp(forms[pick < 0 ? 3 : pick], forms[3], strlen(forms[3])) == 0, forms[3]);
       snprintf(m, sizeof(m), " %u/%u %s", static_cast<unsigned>(c.pos), static_cast<unsigned>(c.size),
                pick < 0 ? "none" : pick == 0 ? "long" : pick == 1 ? "mid" : pick == 2 ? "short" : "position");
       report += m;
@@ -1314,8 +1318,14 @@ void test_queue_summary_fits_every_language() {
     return pick;
   };
   char got[64];
-  TEST_ASSERT_EQUAL_INT(queueview::kSummaryPosition, pickIn(uistr::Lang::De, cases[0], got));
-  TEST_ASSERT_EQUAL_STRING("1 von 10", got);
+  // ("Warteliste" leaves 118 px: the position and the time), and the
+  // position alone from 3-digit queues (none beside "Warteschlange").
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, pickIn(uistr::Lang::De, cases[0], got));
+  TEST_ASSERT_EQUAL_STRING("1 von 10 \xC2\xB7 37 min", got);
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryPosition, pickIn(uistr::Lang::De, cases[2], got));
+  TEST_ASSERT_EQUAL_STRING("999 von 999", got);
+  TEST_ASSERT_EQUAL_INT(queueview::kSummaryPosition, pickIn(uistr::Lang::De, cases[3], got));
+  TEST_ASSERT_EQUAL_STRING("4999 von 5000", got);
   // English as before: the position and the time, the long form when
   // nothing is next; the position alone only where all three were cut.
   TEST_ASSERT_EQUAL_INT(queueview::kSummaryMid, pickIn(uistr::Lang::En, cases[0], got));
@@ -3487,9 +3497,86 @@ void test_library_header_lines() {
         }
       }
     }
+    // An Album's line ("Artist · 2001 · 14 tracks"), one level down and two
+    // (beside the crumb), in the second line's room (beside the title it is
+    // drawn only whole): whole; else without the year; else the artist's
+    // name cut to what the count leaves; else the year and the count. A
+    // phrase whole or left out, never cut; the count always whole.
+    const textfit::Font f = viewOf(small);
+    struct AlbumArtist {
+      const char* name;
+      bool phrase;
+    };
+    for (const int right : {headerRight(0), headerRight(pillW)}) {
+      const int room = right - 28;
+      for (const AlbumArtist a : {AlbumArtist{"Air", false}, AlbumArtist{"Daft Punk", false},
+                                  AlbumArtist{"The Lantern Choir", false},
+                                  AlbumArtist{"The Lantern Choir and the Longest Name of All", false},
+                                  AlbumArtist{tr(S::library_various_artists), true},
+                                  AlbumArtist{tr(S::library_no_artist_folder), true}}) {
+        for (uint32_t year : {0u, 2001u}) {
+          for (uint32_t tracks : {1u, 14u, 999u}) {
+            char line[64], whole[160], count[48], noYear[160];
+            librarytext::albumHeaderLine(&f, room, a.name, a.phrase, year, tracks, line, sizeof(line));
+            librarytext::albumHeaderLine(nullptr, 0, a.name, a.phrase, year, tracks, whole, sizeof(whole));
+            librarytext::albumHeaderLine(nullptr, 0, a.name, a.phrase, 0, tracks, noYear, sizeof(noYear));
+            librarytext::trackCount(tracks, count, sizeof(count));
+            fits(small, line, room);
+            const size_t ln = strlen(line), cn = strlen(count);
+            TEST_ASSERT_TRUE_MESSAGE(ln >= cn && strcmp(line + ln - cn, count) == 0, line);  // the count, whole
+            if (strcmp(line, whole) == 0) continue;
+            TEST_ASSERT_TRUE_MESSAGE(small.width(whole) > room, whole);
+            if (strcmp(line, noYear) == 0) continue;  // the year gave way
+            TEST_ASSERT_TRUE_MESSAGE(small.width(noYear) > room, noYear);
+            if (a.phrase) {  // left out, never cut
+              TEST_ASSERT_NULL_MESSAGE(strstr(line, a.name), line);
+              TEST_ASSERT_NULL_MESSAGE(strstr(line, "\xE2\x80\xA6"), line);
+            }
+            if (tracks == 14 && year) {
+              char m[192];
+              snprintf(m, sizeof(m), "%s %d px: \"%s\" for \"%s\"; ", uistr::tag(l), room, line, a.name);
+              report += m;
+            }
+          }
+        }
+      }
+    }
   }
   TEST_MESSAGE(report.c_str());
   uistr::setLang(uistr::Lang::En);
+  {
+    // English's Album lines: whole where they fit, as before; where they
+    // were cut, the year gives way, then the artist's name: never the count
+    // (beside the crumb "Daft Punk · 2001 · 14 tracks", 180 px in 179, was cut).
+    const textfit::Font f = viewOf(small);
+    const int crumbRoom = headerRight(bold.width(tr(S::library_crumb)) + kHeaderPillPad + kHeaderChevronW) - 28;
+    TEST_ASSERT_EQUAL_INT(179, crumbRoom);
+    char line[64];
+    librarytext::albumHeaderLine(&f, 282, "Daft Punk", false, 2001, 14, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("Daft Punk \xC2\xB7 2001 \xC2\xB7 14 tracks", line);
+    librarytext::albumHeaderLine(&f, crumbRoom, "Daft Punk", false, 2001, 14, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("Daft Punk \xC2\xB7 14 tracks", line);
+    librarytext::albumHeaderLine(&f, 282, "The Lantern Choir", false, 1999, 11, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("The Lantern Choir \xC2\xB7 1999 \xC2\xB7 11 tracks", line);
+    librarytext::albumHeaderLine(&f, crumbRoom, "The Lantern Choir", false, 1999, 11, line, sizeof(line));
+    TEST_ASSERT_EQUAL_INT(0, strncmp(line, "The Lantern", 11));
+    TEST_ASSERT_NOT_NULL(strstr(line, "\xE2\x80\xA6 \xC2\xB7 11 tracks"));
+    TEST_ASSERT_TRUE(small.width(line) <= crumbRoom);
+    librarytext::albumHeaderLine(&f, 100, tr(S::library_various_artists), true, 2001, 14, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("2001 \xC2\xB7 14 tracks", line);
+    librarytext::albumHeaderLine(&f, 40, "Daft Punk", false, 2001, 14, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("2001 \xC2\xB7 14 tracks", line);  // (no room: the name left out)
+    // A name that fits the pixels but not the header's buffer (two bytes a
+    // Cyrillic letter): cut in the buffer, with "…", the count whole.
+    const char* cyr = "\xD0\x90\xD0\xB1\xD0\xB2\xD0\xB3\xD0\xB4\xD0\xB5\xD0\xB6\xD0\xB7\xD0\xB8\xD0\xBA "
+                      "\xD0\xBB\xD0\xBC\xD0\xBD\xD0\xBE\xD0\xBF\xD1\x80\xD1\x81\xD1\x82\xD1\x83\xD1\x84 "
+                      "\xD1\x85\xD1\x86\xD1\x87\xD1\x88\xD1\x89\xD1\x8A\xD1\x8B\xD1\x8C";  // 28 letters: 58 B
+    TEST_ASSERT_TRUE(small.width(cyr) + small.width(" \xC2\xB7 2001 \xC2\xB7 14 tracks") <= 400);
+    librarytext::albumHeaderLine(&f, 400, cyr, false, 2001, 14, line, sizeof(line));
+    TEST_ASSERT_TRUE(strlen(line) < sizeof(line));
+    TEST_ASSERT_NOT_NULL(strstr(line, "\xE2\x80\xA6 \xC2\xB7 14 tracks"));
+    TEST_ASSERT_EQUAL_INT(0, strncmp(line, cyr, 20));
+  }
   // English: a short name beside "All tracks" as before; a long one, cut
   // there before, under it.
   const int right = headerRight(bold.width(tr(S::library_crumb)) + kHeaderPillPad + kHeaderChevronW);

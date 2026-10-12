@@ -363,8 +363,9 @@ inline constexpr int headerPillZoneX(int pillX, bool chevron) {
 // 12, 28 after the ‹, 36 after the ✕) to the header's right: 8 px before the
 // pill (a pill `pillW` px wide: Header::pillW()), or x 310 with none. Its
 // room so depends on the title's and the pill's words in the UI's language
-// (German's "Warteschlange" leaves the Queue's summary 78 px, English's
-// "Queue" 169). What is drawn (headerSub()):
+// (the Queue's summary has 169 px beside English's "Queue" and Edit, 118
+// beside German's "Warteliste" and "Wählen"; 78 beside "Warteschlange", the
+// device check's). What is drawn (headerSub()):
 //   a name (the default): beside the title, cut with "…" to its room, when
 //   that is more than kHeaderSubMinRoom (else none);
 //   a phrase or a count (Header::subWhole: Output's, About's, Device info's,

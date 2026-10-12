@@ -552,8 +552,11 @@
   "speaker.silent_mode": "Prueba silenciosa",
   "pair.title": "Emparejar auriculares",
   "pair.found": {
-    "one": "{0} encontrado",
-    "other": "{0} encontrados"
+    "one": "{0} hallado",
+    "other": "{0} hallados"
+  },
+  "@pair.found": {
+    "note": "'99 encontrados' (the apps' word) is 100 px in what 'Emparejar auriculares' (199, Bold) leaves the line beside it: 75 (Small, the header's 282 less an 8 px gap), drawn whole or not at all. '99 hallados' (found, the same meaning) is 75; '1 hallado' 60."
   },
   "pair.searching": "Buscando",
   "pair.pairing": "Emparejando...",
@@ -599,7 +602,10 @@
   "about.licence_label": "Licencia (© 2026 IrosTheBeggar)",
   "about.licence": "GPL-3.0-or-later, sin garantía",
   "about.source_label": "Código: github.com/IrosTheBeggar/",
-  "about.device_info": "Información del dispositivo",
+  "about.device_info": "Datos del dispositivo",
+  "@about.device_info": {
+    "note": "'Información del dispositivo' is 243 px in Bold: as the Device info header's title it leaves 'este Core2' (70, Small) 31 px of the header's 282 (8 px gap), so the line is dropped. 'Datos del dispositivo' (the device's data) is 189, 163 in the row's Body 242; as Portuguese's 'Dados do dispositivo' and Polish's 'Dane urządzenia'."
+  },
   "about.device_info_sub": "placa, chips, memoria, tiempo activo",
   "about.tips": "Ver los consejos otra vez",
   "about.tips_sub": "los botones táctiles y las pestañas",

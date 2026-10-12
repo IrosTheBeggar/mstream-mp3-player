@@ -67,8 +67,8 @@ Time upNextTime(const QueueModel& q, const DurationBook& book, uint32_t (*hintMs
 char* summary(uint32_t upNext, const Time& t, uint32_t position, uint32_t size, char* buf, size_t bufSize,
               bool withUpNext = true);
 // The Queue header's summary beside its title and the Edit pill
-// (uitext::headerSubRoom(): 169 px beside English's "Queue", 78 beside
-// German's "Warteschlange"): the first of its forms that fits `room` px
+// (uitext::headerSubRoom(): 169 px beside English's "Queue", 118 beside
+// German's "Warteliste"): the first of its forms that fits `room` px
 // whole, in this order: the long one ("4 of 16 · 12 up next · 49 min"), the
 // position and the time ("4 of 16 · 49 min"), the count and the time ("12
 // up next · 49 min"), the position alone ("4 of 16": summary(0, Time{},
