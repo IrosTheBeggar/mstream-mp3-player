@@ -16,7 +16,9 @@ Source for this binary: {{SOURCE_URL}}, and with its libraries in
   changes the whole screen to it at once, without a restart; the player
   keeps it. The menus, the notes, the dialogs, the tips and the touch
   check are all in it, and counts are written its way (19.410 in German,
-  19 410 in French). The serial console stays in English.
+  19 410 in French). The serial console stays in English, but for its
+  lines that quote the screen (a note, the card's message): those are in
+  the language picked.
 - **A new unit asks first.** Installed fresh (the first install below,
   which erases), the player starts on the Language page, before the
   touch check and the tips, which then speak the language picked; the
@@ -26,11 +28,12 @@ Source for this binary: {{SOURCE_URL}}, and with its libraries in
 - **The nine translations are machine translations**, not yet read by a
   native speaker. They were made from the words mStream's mobile app and
   terminal player already use, so the three use the same words for the
-  same things, and by Fable agents for the rest, each language then
-  checked by another agent. Picking one of the nine shows a note in it
-  that says so ("Maschinell übersetzt: Fehler sind möglich"), as the
-  terminal player does. A native speaker's corrections are welcome, as a
-  pull request on the language's file in `i18n/` (its README says how).
+  same things, and by AI agents (Anthropic's Claude Fable) for the rest,
+  each language then checked by a second agent. Picking one of the nine
+  shows a note in it that says so ("Maschinell übersetzt: Fehler sind
+  möglich"), as the terminal player does. A native speaker's corrections
+  are welcome, as a pull request on the language's file in `i18n/` (its
+  README says how).
 - **Room for every language.** Where a translation is longer than the
   English, a button's label is drawn in the smaller font (Spanish's
   "Desconectar" on the Bluetooth card), the Undo and View buttons on a
@@ -41,23 +44,26 @@ Source for this binary: {{SOURCE_URL}}, and with its libraries in
   keeping its rows), and a menu row puts its detail under its label (the
   Sleep timer's state in Spanish and Portuguese). Every text of the ten
   languages was measured with the player's own fonts, in each place it
-  is drawn and with the biggest counts: each fits whole or gives way to
-  a shorter form, and only names are cut, with "…".
+  is drawn and with the biggest counts: each fits whole, gives way to a
+  shorter form, or is left out where something beside it says the same
+  (the tips' "tap to go on", beside their button, in most translations);
+  only names are cut, with "…".
 - **"Various Artists" in the menus' language:** the line a compilation
   gets when its tracks say compilation and none names an album artist
   reads "Verschiedene Künstler" in German, "Artistes divers" in French,
   "群星" in Chinese. An album artist tag that says "Various Artists"
   itself is a name, and is shown as tagged.
-- **English, fixed where it was wrong:** "Shuffling 1 track", "Added 1
-  track", "Plays next: 1 track" and "Library: 1 track", where 0.9.0 said
-  "1 tracks", and "Here until the headphones connect" for headphones
-  without a name. Four texts that didn't fit are shorter: "Stopped
-  looking: Play tries again", "Waits for headphones", "Already connected:
-  WH-1000XM4" and "Speaker only (silent test mode)". Others that 0.9.0
-  cut are whole: "Headphones disconnected", "WH-1000XM4 (not connected)"
-  on Now Playing, "No music found: put folders in /music" and "Play all
-  19410"; About's library line leaves out the artists when the three
-  counts don't fit.
+- **English, fixed where it was wrong:** "Shuffling 1 track", "Library: 1
+  track" and About's "1 track, 1 artist, 1 album", where 0.9.0 said "1
+  tracks"; "1 track goes and the music stops" on clearing a queue of one,
+  where it said "All 1 tracks go"; and "if pairing fails, they stay" for
+  headphones without a name. Four texts that didn't fit are shorter:
+  "Stopped looking: Play tries again", "Waits for headphones", "Already
+  connected: WH-1000XM4" and "Speaker only (silent test mode)". Others
+  that 0.9.0 cut are whole: "Headphones disconnected", "WH-1000XM4 (not
+  connected)" on Now Playing, "No music found: put folders in /music"
+  and "Play all 19410"; About's library line leaves out the artists when
+  the three counts don't fit.
 - **Long names and long queues in English:** the menu a long press opens
   cuts a long name, never the count of tracks after it (0.9.0 cut "14
   tr…"); the volume menu leaves out its "volume" label beside a long name
@@ -65,10 +71,12 @@ Source for this binary: {{SOURCE_URL}}, and with its libraries in
   its title; an album opened from its artist puts its line under the
   title, the year left out before the count ("Daft Punk · 14 tracks"
   under "Discovery"); a folder's counts say "files" where "audio files"
-  doesn't fit ("12 folders, 140 files"). The Queue's header gives the
-  position before the count: near the end of a queue of 1,000 tracks or
-  more with hours to go, "1980 of 2000" where 0.9.0 showed "20 up next ·
-  1 h 40+ min".
+  doesn't fit ("12 folders, 140 files"). The Queue's header no longer
+  cuts its line, and gives the position before the count: on a long
+  queue with many hours to go, "250 of 5000" where 0.9.0 cut "4750 up
+  next · 316 h 40…"; near the end of a queue of 1,000 tracks or more
+  with hours to go, "1980 of 2000" where 0.9.0 showed "20 up next · 1 h
+  40+ min".
 - Tested on a Core2: each of the ten languages picked in turn, on Now
   Playing, the Library, the Queue, the Output tab, the Language page,
   About, both tips cards, a new unit's first start and the note on
@@ -82,11 +90,9 @@ Source for this binary: {{SOURCE_URL}}, and with its libraries in
   follows the language: 60-62 ms on a card of 113 tracks, and about 10 s
   to expect for 20,000 (the same kind of rebuild took 10.1 s for 19,410
   in 0.9.0). No file is read again, and the queue is kept. So are the
-  settings, and the menus stay in English until a language is picked
-  (the serial log says `[nvs] schema 2 -> 3: migrated (the UI's language:
-  English, as before)`). A card that 0.8.0 used last gets the same
-  rebuild; one that 0.7.0 used last gets 0.8.0's first start instead
-  (0.8.0's notes say what it does).
+  settings, and the menus stay in English until a language is picked. A
+  card that 0.8.0 used last gets the same rebuild; one that 0.7.0 used
+  last gets 0.8.0's first start instead (0.8.0's notes say what it does).
 - **The firmware is a little bigger:** about 4.27 MB, up from 4.13 MB in
   0.9.0, for the nine languages' texts (68 % of the space it has on the
   flash, 66 % before). The steps below are the same, and an update still
@@ -212,7 +218,8 @@ if unsure, install both. On Linux, add yourself to the `dialout` group.
   Chinese menus too). Other scripts (Hebrew, Arabic, Thai, Devanagari
   and others) and rarer characters show as `?`. The menus are in ten
   languages, nine of them machine translations no native speaker has
-  read yet; the serial console is in English.
+  read yet; the serial console is in English, but for the lines that
+  quote the screen.
 - No WiFi yet: syncing with an mStream server comes later.
 
 ## Files
