@@ -261,6 +261,7 @@ bool QueueModel::replace(const uint32_t* tracks, uint32_t n, uint32_t start, boo
     current_ = static_cast<int32_t>(s - w.first);
   }
   changed();
+  ++playEpoch_;
   return true;
 }
 
@@ -368,10 +369,68 @@ bool QueueModel::clearUpNext() {
 }
 
 bool QueueModel::clear() {
+  ++playEpoch_;  // (an empty queue's too: a fresh start asked for)
   if (q_.size == 0) return true;
   snapshot(Edit::Clear);
   q_.size = 0;
   current_ = -1;
+  changed();
+  return true;
+}
+
+bool QueueModel::appendQuiet(uint32_t track) {
+  // Room as for an add of one: a spare place, else the oldest played entry
+  // pushed out; neither, refused.
+  const bool push = spare() == 0;
+  if (push && played() == 0) return false;
+  const bool wasEmpty = current_ < 0;
+  // Shuffled, after the highest rank of what stays (as + Queue's); else
+  // its position (ranks mean nothing then).
+  uint32_t rank = q_.size - (push ? 1 : 0);
+  if (shuffled_ && !wasEmpty) {
+    const uint32_t top = maxRank(push ? 1 : 0);
+    if (top == kNone) return false;  // past 0xFFFFFFFF
+    rank = top + 1;
+  } else if (shuffled_) {
+    rank = 0;  // (an empty queue's first: laid out as a Play from it)
+  }
+  if (!push && !reserve(q_, q_.size + 1)) return false;
+  // The last edit's undo: an in-place edit's keeps this entry at its
+  // snapshot's end; dropped when it can't, and at a push-out (no snapshot
+  // would put back what it pushes out). A Play's or a Clear's is kept as
+  // it is.
+  bool mirror = false;
+  uint32_t undoRank = undo_.size;
+  if (undoEdit_ != Edit::None && push) {
+    dropUndo();
+  } else if (undoEdit_ != Edit::None && undoEdit_ != Edit::Replace && undoEdit_ != Edit::Clear) {
+    bool fits = undo_.size < kMaxEntries;
+    if (fits && undoShuffled_) {
+      uint32_t top = 0;
+      for (uint32_t i = 0; i < undo_.size; ++i) top = std::max(top, undo_.data[i].rank);
+      fits = top != kNone;
+      undoRank = undo_.size ? top + 1 : 0;
+    }
+    mirror = fits && reserve(undo_, undo_.size + 1);
+    if (!mirror) dropUndo();
+  }
+  if (push) {
+    // The oldest played entry goes (the first heard one before the current
+    // entry, which played() says there is); what follows moves up a place.
+    const auto cur = static_cast<uint32_t>(current_);
+    uint32_t i = 0;
+    while (i < cur && !isHeard(q_.data[i])) ++i;
+    std::memmove(q_.data + i, q_.data + i + 1, static_cast<size_t>(q_.size - i - 1) * sizeof(Entry));
+    --q_.size;
+    --current_;
+  }
+  const uint32_t key = newKey();
+  q_.data[q_.size++] = Entry{track, key, rank};
+  if (mirror) {
+    undo_.data[undo_.size++] = Entry{track, key, undoRank};
+    if (undoCurrent_ < 0) undoCurrent_ = 0;  // (an add's to an empty queue: its first is current there)
+  }
+  if (wasEmpty) current_ = 0;  // an add to an empty queue: the new entry is current
   changed();
   return true;
 }
@@ -408,6 +467,8 @@ uint32_t QueueModel::peek(int delta, bool wrap) const {
 
 bool QueueModel::undo() {
   if (undoEdit_ == Edit::None) return false;
+  // A Play's or a Clear's undo brings back another queue: a new one.
+  if (undoEdit_ == Edit::Replace || undoEdit_ == Edit::Clear) ++playEpoch_;
   const uint32_t key = currentKey();
   std::swap(q_, undo_);  // undo_ keeps the edited entries' memory for the next snapshot
   undoEdit_ = Edit::None;

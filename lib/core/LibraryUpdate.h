@@ -38,7 +38,9 @@
 //             compaction step); then, with the worker free, the safe point
 //             reached (nothing plays, or the heard track has the pause's
 //             length left and a margin, 20-30 s: safeLeftMs(), and no seek
-//             came in the last 2 s), the worker's task up
+//             came in the last 2 s), no Auto DJ pick owed (In::autoDjOwed:
+//             the queue's last entry waits for its next while Auto DJ's
+//             index joins), the worker's task up
 //             (Out::wantWorker: the caller makes it; no internal RAM for its
 //             stack, the step waits here, the index untouched, rather than
 //             behind a fence no build can start under) and the card
@@ -259,7 +261,7 @@ public:
     Saved,     // step 6 ended (lastSave() says how): the step is over
   };
   // What the step waits for before its fence (the console).
-  enum class Wait : uint8_t { None, Walk, Compaction, Worker, SafePoint };
+  enum class Wait : uint8_t { None, Walk, Compaction, Worker, SafePoint, AutoDj };
 
   struct In {
     uint32_t nowMs = 0;
@@ -273,6 +275,12 @@ public:
     bool waiting = false;       // ... Waiting for the headphones
     uint32_t trackLeftMs = 0;   // what is left of the heard track (0: not known)
     uint32_t seekSeq = 0;       // the seeks asked for, free-running (PlaybackController::seeks())
+    // Auto DJ owes the queue's last entry a next track its engine can't
+    // pick yet (its index joins or reopens: autodj::decide()'s owed, the
+    // engine design's 2.3): no fence until it is added (Wait::AutoDj).
+    // Never set by Auto DJ's holds (Repeat One, the sleep timer, its
+    // failure pause): a held Auto DJ never blocks a step.
+    bool autoDjOwed = false;
     // The memory check: free PSRAM, its largest block, what the step frees
     // besides the index (the queue's entries, Thumbs' pools).
     size_t psramFree = 0;

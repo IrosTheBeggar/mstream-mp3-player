@@ -163,6 +163,12 @@ public:
   uint32_t tagsGeneration() const { return tagsGeneration_; }
   const uint8_t* selectionSig() const { return sig_; }
   uint32_t slotsOffset() const { return c_.section(kSecSlots).offset; }
+  // The frame open() checked: the sections (kSecSlots..kSecStrs) with their
+  // offsets, strides, counts and CRCs, and the file. For a reader that
+  // streams them itself (the device's join: STRS, DJRF and DJPH, each
+  // record read by its prefix and passed by the section's stride, so a
+  // later minor's longer records still read, 9.2).
+  const Container& container() const { return c_; }
   // The header's strings: 0 modelId, 1 modelVersion, 2 metric, 3 license,
   // 4 attribution.
   Why string(uint32_t which, char* out, size_t cap) const;

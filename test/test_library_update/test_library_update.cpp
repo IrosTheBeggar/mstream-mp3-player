@@ -15,13 +15,17 @@
 // an update; the fence (no reader sees a half-built index); a card that
 // fails while the build reads it; the worker's task before the fence; the
 // marker's build out of PSRAM at the boot; a failed first walk that must
-// not shrink the library (2026-10-09). What a track that ends inside the
-// fence does is test_gapless_player's.
+// not shrink the library (2026-10-09); Auto DJ's: a pick owed while its
+// index joins holds the fence, a held Auto DJ never does, and its join
+// released at the fence runs again after the Live step on the new ids. What
+// a track that ends inside the fence does is test_gapless_player's.
 // Run: pio test -e native -f test_library_update
 #include <unity.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <map>
 #include <memory>
@@ -31,6 +35,9 @@
 
 #include "../support/CutFs.h"
 #include "../support/FakeFat.h"
+#include "AutoDjJoin.h"
+#include "AutoDjTrigger.h"
+#include "CardAutoDj.h"
 #include "CardContract.h"
 #include "CardJobs.h"
 #include "CardManifest.h"
@@ -46,6 +53,7 @@
 
 namespace cc = cardcontract;
 namespace mptg = cardcontract::mptg;
+namespace mpdj = cardcontract::mpdj;
 namespace ts = tagstore;
 namespace cj = cardjobs;
 using cutfs::CutFs;
@@ -345,6 +353,7 @@ struct Env {
   bool waiting = false;
   uint32_t trackLeftMs = 0;
   uint32_t seekSeq = 0;
+  bool autoDjOwed = false;  // (autodj::decide()'s owed)
   size_t psramFree = 64u << 20;
   size_t psramLargest = 64u << 20;
   size_t alsoFreed = 0;
@@ -383,6 +392,9 @@ struct Device {
   // (Out::wantWorker) unless there's no internal RAM for its stack.
   bool workerUp = true;
   bool canMakeWorker = true;
+  // Auto DJ's hooks around the fence (main.cpp's enterFence(), before the
+  // index goes; leaveFence(), once the new one is readable).
+  std::function<void()> beforeFence, afterLive;
 
   Device(CutFs& c, TestCard& t) : cut(c), fs(c), card(t), jobs(nullptr, nullptr) {
     index.keepTrackBlock(true);
@@ -438,6 +450,7 @@ struct Device {
     ui.waiting = e.waiting;
     ui.trackLeftMs = e.trackLeftMs;
     ui.seekSeq = e.seekSeq;
+    ui.autoDjOwed = e.autoDjOwed;
     ui.psramFree = e.psramFree;
     ui.psramLargest = e.psramLargest;
     ui.alsoFreed = e.alsoFreed;
@@ -450,6 +463,7 @@ struct Device {
     } else if (uo.act == Do::Fence) {
       // Steps 1-3 (the queue's would go here): the playing track's names
       // kept, the catalog's index gone, then the old index cleared.
+      if (beforeFence) beforeFence();
       const uint32_t playing = index.ready() && index.trackCount() ? index.findTrack(kFlac) : LibraryIndex::kNone;
       catalog.take(playing, &held);
       catalog.setHeld(&held);
@@ -463,6 +477,7 @@ struct Device {
       catalog.setHeld(nullptr);
       jobs.libraryRebuilt();
       jobs.markRecords();
+      if (afterLive) afterLive();
     }
     ScanScheduler::In in;
     in.nowMs = now;
@@ -1685,6 +1700,231 @@ void test_a_failed_first_walk_keeps_the_library() {
   TEST_ASSERT_EQUAL_STRING(kFlacTitle, titleOf(d.index, kFlac).c_str());
 }
 
+// ---------------------------------------------------------------------------
+// Auto DJ and the update step (the engine design's 2.3, 3.2 and 3.3).
+// ---------------------------------------------------------------------------
+namespace {
+
+// A pick due as the queue's last entry plays, Auto DJ on; its index joining.
+autodj::TriggerIn owedPick() {
+  autodj::TriggerIn in;
+  in.on = true;
+  in.joining = true;
+  in.queueSize = 3;
+  in.upNext = 0;
+  in.play = PlayState::Playing;
+  return in;
+}
+
+class VecSink : public cc::Sink {
+public:
+  bool write(uint32_t offset, const void* data, uint32_t n) override {
+    if (offset + n > bytes.size()) bytes.resize(offset + n);
+    if (n) std::memcpy(bytes.data() + offset, data, n);
+    return true;
+  }
+  std::vector<uint8_t> bytes;
+};
+
+// An AutoDJ index of the card's files `rels` (row i is rels[i]), as the
+// transfer software would write it.
+std::vector<uint8_t> autoDjIndexOf(const std::vector<std::string>& rels) {
+  const size_t n = rels.size();
+  std::vector<uint64_t> paths(n);
+  std::vector<float> e(2 * n);
+  std::vector<mpdj::RowIn> rows(n);
+  for (size_t i = 0; i < n; ++i) {
+    paths[i] = cc::pathHash(rels[i].c_str());
+    e[2 * i] = static_cast<float>(std::cos(0.4 * static_cast<double>(i)));
+    e[2 * i + 1] = static_cast<float>(std::sin(0.4 * static_cast<double>(i)));
+    rows[i].hash[0] = static_cast<uint8_t>(i + 1);  // (canonical-hash order: row i)
+    rows[i].paths = &paths[i];
+    rows[i].pathCount = 1;
+    rows[i].bpm10 = static_cast<uint16_t>(1000 + 50 * i);
+    rows[i].embedding = &e[2 * i];
+  }
+  mpdj::TableIn t;
+  t.generation = 2;
+  t.cardId = kCardId;
+  t.k = 4;
+  t.selKind = mpdj::kSelTop;
+  t.modelId = "synthetic-embedding";
+  t.modelVersion = "1";
+  t.license = "CC0-1.0";
+  t.dim = 2;
+  t.rows = rows.data();
+  t.rowCount = static_cast<uint32_t>(n);
+  VecSink out;
+  uint8_t sig[16];
+  const char* error = nullptr;
+  if (!mpdj::write(out, t, sig, nullptr, nullptr, &error)) TEST_FAIL_MESSAGE(error);
+  return out.bytes;
+}
+
+}  // namespace
+
+// A pick owed while Auto DJ's index joins (autodj::decide()'s owed) keeps
+// the fence off (Wait::AutoDj), after the safe point; once it is made the
+// step goes on. Behind the fence it changes nothing. A held Auto DJ (Repeat
+// One, the sleep timer's End of queue, its failure pause) owes none, its
+// join running or not: it never blocks a step.
+void test_auto_dj_owed_holds_the_fence() {
+  CutFs fs;
+  TestCard card;
+  handFilled(fs, card);
+  Device d(fs, card);
+  d.boot();
+  d.upd->ask("the scan's end");
+  Env e;
+  e.playing = true;
+  e.trackLeftMs = 180000;
+  e.autoDjOwed = autodj::decide(owedPick()).owed;
+  TEST_ASSERT_TRUE(e.autoDjOwed);
+  // The compaction first (nothing of the fence's), then the wait.
+  d.runUntil([&] { return !d.store->hasJournals() && d.running == Job::None; }, e);
+  for (int i = 0; i < 200; ++i) {
+    d.pass(e);
+    TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::AutoDj);
+    TEST_ASSERT_TRUE(d.lastOut.holdScan);
+    TEST_ASSERT_FALSE(d.lastOut.fenced);
+    TEST_ASSERT_FALSE(d.lastOut.updating);
+  }
+  TEST_ASSERT_FALSE(d.did(Do::Fence));
+  // The safe point is asked first: a track near its end is that wait.
+  e.trackLeftMs = 1000;
+  d.pass(e);
+  TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::SafePoint);
+  e.trackLeftMs = 180000;
+  d.pass(e);
+  TEST_ASSERT_TRUE(d.lastOut.wait == LibraryUpdate::Wait::AutoDj);
+  // The pick made (the last entry has a next): the fence goes up; owed
+  // again behind it, nothing changes.
+  e.autoDjOwed = false;
+  d.runUntil([&] { return d.did(Do::Fence); }, e);
+  e.autoDjOwed = true;
+  d.runUntil([&] { return d.did(Do::Saved); }, e);
+  TEST_ASSERT_TRUE(d.upd->last().saved);
+  // Held: no pick owed, the step goes on whatever the join does.
+  const std::function<void(autodj::TriggerIn&)> holds[] = {
+      [](autodj::TriggerIn& in) { in.repeatOne = true; },
+      [](autodj::TriggerIn& in) { in.sleepEndOfQueue = true; },
+      [](autodj::TriggerIn& in) { in.failurePaused = true; },
+  };
+  for (const auto& hold : holds) {
+    autodj::TriggerIn in = owedPick();
+    hold(in);
+    const autodj::TriggerOut o = autodj::decide(in);
+    TEST_ASSERT_TRUE(o.hold != autodj::Hold::None);
+    Env h;
+    h.playing = true;
+    h.trackLeftMs = 180000;
+    h.autoDjOwed = o.owed;
+    TEST_ASSERT_FALSE(h.autoDjOwed);
+    d.acts.clear();
+    d.update("gb", h);
+    TEST_ASSERT_TRUE(d.did(Do::Saved));
+  }
+}
+
+// The join and the update step: a join under way when the step is asked
+// owes the playing last entry its pick, so the fence waits for it; the pick
+// made, the fence goes up and releases the join's maps first (enterFence():
+// autoDj.fence(), its bytes the step's to count); after the Live step the
+// join runs again on the rebuilt index (leaveFence()), and its maps are the
+// new library's: a file added since has its row, every id the new one.
+void test_the_join_after_a_live_step() {
+  CutFs fs;
+  TestCard card;
+  handFilled(fs, card);
+  const std::vector<std::string> rels = {"Artist/Album/01 - a.flac", "Artist/Album/02 - b.opus",
+                                         "Artist/Other/01 - c.mp3",  "Band/Live/01 - d.mp3",
+                                         "Band/Live/02 - e.mp3",     "Loose/03 - f.mp3",
+                                         "Aardvark Band/Sample/01 - g.mp3"};
+  const std::vector<uint8_t> file = autoDjIndexOf(rels);
+  cc::MemSource src(file.data(), static_cast<uint32_t>(file.size()));
+  mpdj::Table table;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(table.open(src)));
+  Device d(fs, card);
+  d.boot();
+  d.update("the scan's end");  // (the index of the files' readings)
+  TEST_ASSERT_EQUAL_UINT32(kAudio, d.index.trackCount());
+
+  // Joined on this library: six of the seven rows have a track.
+  autodj::Join join;
+  TEST_ASSERT_TRUE(join.begin(table, d.upd->readable()) == autodj::Join::Status::Working);
+  while (join.status() == autodj::Join::Status::Working) join.step(d.upd->readable());
+  TEST_ASSERT_TRUE(join.status() == autodj::Join::Status::Ready);
+  TEST_ASSERT_EQUAL_UINT32(kAudio, join.maps()->mapped);
+  TEST_ASSERT_EQUAL_HEX16(autodj::kNoTrack, join.maps()->rowToTrack[6]);
+  std::vector<uint32_t> before(rels.size(), LibraryIndex::kNone);
+  for (size_t i = 0; i < kAudio; ++i) before[i] = d.index.findTrack(("/music/" + rels[i]).c_str());
+
+  // A new file, walked in; the step asked. A join begins (the card came
+  // back, say) while the queue's last entry plays: until it is ready, the
+  // pick is owed. Its slices are skipped while a list moves (every 8th
+  // pass here).
+  card.addBytes(rels[6], corpus("ape_v1.mp3"));
+  d.jobs.askWalk();
+  d.drain();
+  d.acts.clear();
+  d.upd->ask("a walk's news");
+  Env e;
+  e.playing = true;
+  e.trackLeftMs = 1000;  // (held at the safe point until the join begins)
+  d.runUntil([&] { return d.lastOut.wait == LibraryUpdate::Wait::SafePoint; }, e);
+  join.setConfig(autodj::Join::Config{4096, 1, 1024});
+  TEST_ASSERT_TRUE(join.begin(table, d.upd->readable()) == autodj::Join::Status::Working);
+  e.trackLeftMs = 180000;
+  size_t freed = 0;
+  int owedWaits = 0, rejoins = 0;
+  bool picked = false;
+  d.beforeFence = [&] {
+    TEST_ASSERT_TRUE(picked);  // (no fence while it was owed)
+    TEST_ASSERT_TRUE(join.status() == autodj::Join::Status::Ready);
+    freed = join.release();
+  };
+  d.afterLive = [&] {
+    TEST_ASSERT_TRUE(join.status() == autodj::Join::Status::Idle);
+    TEST_ASSERT_TRUE(join.begin(table, d.upd->readable()) == autodj::Join::Status::Working);
+    ++rejoins;
+  };
+  for (int i = 0; i < 20000 && !d.did(Do::Saved); ++i) {
+    if (i % 8 == 0 && join.status() == autodj::Join::Status::Working) join.step(d.upd->readable());
+    // Auto DJ's step: owed while it joins; picked as soon as it is ready.
+    autodj::TriggerIn in = owedPick();
+    in.joining = join.status() == autodj::Join::Status::Working;
+    in.upNext = picked ? 1 : 0;
+    if (!in.joining && !picked && autodj::decide(in).pick) picked = true;
+    in.upNext = picked ? 1 : 0;
+    e.autoDjOwed = autodj::decide(in).owed;
+    d.pass(e);
+    if (d.lastOut.wait == LibraryUpdate::Wait::AutoDj) ++owedWaits;
+  }
+  TEST_ASSERT_TRUE(d.did(Do::Saved));
+  TEST_ASSERT_TRUE(owedWaits > 10);
+  TEST_ASSERT_TRUE(picked);
+  TEST_ASSERT_TRUE(freed > 0);
+  TEST_ASSERT_EQUAL_INT(1, rejoins);
+  // The rejoin, to its end, on the new index.
+  while (join.status() == autodj::Join::Status::Working) join.step(d.upd->readable());
+  TEST_ASSERT_TRUE(join.status() == autodj::Join::Status::Ready);
+  const autodj::Maps& m = *join.maps();
+  TEST_ASSERT_EQUAL_UINT32(kAudio + 1, d.index.trackCount());
+  TEST_ASSERT_EQUAL_UINT32(kAudio + 1, m.tracks);
+  TEST_ASSERT_EQUAL_UINT32(kAudio + 1, m.mapped);
+  bool moved = false;
+  for (size_t i = 0; i < rels.size(); ++i) {
+    const uint32_t t = d.index.findTrack(("/music/" + rels[i]).c_str());
+    TEST_ASSERT_TRUE(t != LibraryIndex::kNone);
+    TEST_ASSERT_EQUAL_UINT16(i, m.trackToRow[t]);
+    TEST_ASSERT_EQUAL_UINT16(t, m.rowToTrack[i]);
+    moved = moved || (i < kAudio && t != before[i]);
+  }
+  TEST_ASSERT_TRUE(moved);  // (the new file took an id before others: the old maps were stale)
+  const size_t held = join.heldBytes();
+  TEST_ASSERT_EQUAL_size_t(held, join.release());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_safe_point_and_the_memory_check);
@@ -1702,5 +1942,7 @@ int main(int, char**) {
   RUN_TEST(test_the_worker_s_task_before_the_fence);
   RUN_TEST(test_the_marker_s_build_out_of_psram);
   RUN_TEST(test_a_failed_first_walk_keeps_the_library);
+  RUN_TEST(test_auto_dj_owed_holds_the_fence);
+  RUN_TEST(test_the_join_after_a_live_step);
   return UNITY_END();
 }

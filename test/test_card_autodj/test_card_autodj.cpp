@@ -10,9 +10,10 @@
 // one slot's checks, each in its turn (8.4); the writer's edge cases (one
 // row, one song, path-hash collisions down to an empty DJPH, both slot
 // sizes, both kinds, m below, at and just past k) and a refusal no fixture
-// can hold; rows with no song
-// key; the level's rounding and its summation order; the selection
-// signature's text, byte for byte, and every input it covers.
+// can hold; the sections streamed through Table::container() by their
+// strides, as the device's join reads them; rows with no song key; the
+// level's rounding and its summation order; the selection signature's
+// text, byte for byte, and every input it covers.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -579,6 +580,110 @@ void test_writer_edge_cases() {
   TEST_ASSERT_NOT_NULL(error);
 }
 
+// ---------------------------------------------------------------------------
+// The sections through the container (the device's join reads them so).
+// ---------------------------------------------------------------------------
+// Table::container() is the frame open() checked: the four sections in
+// their order, DJSL's the slots'. DJRF and DJPH streamed through it as the
+// join streams them, each record by its prefix and passed by the section's
+// stride (a minor's longer records, 9.2), read as filter() and rowOf() read
+// them, and their CRCs the directory's. On a written file, the goldens, a
+// minor 1's 12-byte records and an empty DJPH.
+void test_the_container() {
+  Library lib;
+  lib.add(1, {1, 0}, {"A/x.mp3", "A/x2.mp3"}, "a|x");
+  lib.add(2, {0.6f, 0.8f}, {"B/y.mp3"}, "b|y");
+  lib.add(3, {0, 1}, {"C/z.mp3"}, "c|z");
+  const mpdj::TableIn in = lib.table(4);
+  lib.in[0].bpm10 = 1285;
+  lib.in[0].camelot = 8;
+  lib.in[0].flags = mpdj::kFilterBpmAnalysed;
+  lib.in[0].artistKey = 0x12345678;
+  lib.in[2].camelot = 24;
+  lib.in[2].artistKey = 7;
+  struct File {
+    std::string name;
+    Bytes bytes;
+  };
+  std::vector<File> files = {{"written", build(in)}};
+  for (const char* rel : {"golden/autodj-00000029.bin", "golden/autodj-small-default.bin",
+                          "hardening/mpdj-minor-1.bin", "hardening/mpdj-paths-empty.bin"}) {
+    const std::string b = cardfixtures::bytes(rel);
+    TEST_ASSERT_FALSE_MESSAGE(b.empty(), rel);
+    files.push_back({rel, Bytes(b.begin(), b.end())});
+  }
+  bool longer = false, empty = false;
+  for (const File& f : files) {
+    const char* name = f.name.c_str();
+    cc::MemSource src(f.bytes.data(), static_cast<uint32_t>(f.bytes.size()));
+    mpdj::Table t;
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(t.open(src)), name);
+    const cc::Container& c = t.container();
+    TEST_ASSERT_TRUE_MESSAGE(c.source() == &src, name);
+    TEST_ASSERT_EQUAL_HEX32_MESSAGE(t.frame().headerCrc, c.header().headerCrc, name);
+    const uint32_t types[mpdj::kSecCount] = {mpdj::kDjsl, mpdj::kDjrf, mpdj::kDjph, cc::kStrs};
+    for (uint32_t i = 0; i < mpdj::kSecCount; ++i) TEST_ASSERT_EQUAL_HEX32_MESSAGE(types[i], c.section(i).type, name);
+    const cc::Section& slots = c.section(mpdj::kSecSlots);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(t.slotsOffset(), slots.offset, name);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(t.slotBytes(), slots.stride, name);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(t.rowCount(), slots.count, name);
+
+    // DJRF: 8 bytes a row, then the rest of its stride.
+    const cc::Section& rf = c.section(mpdj::kSecFilters);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(t.rowCount(), rf.count, name);
+    TEST_ASSERT_TRUE_MESSAGE(rf.stride >= mpdj::kFilterStride, name);
+    longer = longer || rf.stride > mpdj::kFilterStride;
+    uint8_t buf[64];
+    cc::Stream s;
+    s.begin(c.source(), rf.offset, rf.offset + rf.bytes, buf, sizeof(buf));
+    for (uint32_t r = 0; r < rf.count; ++r) {
+      uint8_t e[mpdj::kFilterStride];
+      TEST_ASSERT_TRUE_MESSAGE(s.read(e, sizeof(e)) && s.skipTo(s.position() + rf.stride - sizeof(e)), name);
+      mpdj::Filter want;
+      TEST_ASSERT_TRUE_MESSAGE(t.filter(r, &want), name);
+      TEST_ASSERT_EQUAL_UINT16_MESSAGE(want.bpm10, cc::get16(e), name);
+      TEST_ASSERT_EQUAL_UINT8_MESSAGE(want.camelot, e[2] <= 24 ? e[2] : 0, name);
+      TEST_ASSERT_EQUAL_UINT8_MESSAGE(want.flags, e[3] & mpdj::kFilterBpmAnalysed, name);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(want.artistKey, cc::get32(e + 4), name);
+    }
+    TEST_ASSERT_TRUE_MESSAGE(s.drain(), name);
+    TEST_ASSERT_EQUAL_HEX32_MESSAGE(rf.crc, s.crc(), name);
+
+    // DJPH: 10 bytes an entry, the same way; each entry's row is its hash's.
+    const cc::Section& ph = c.section(mpdj::kSecPaths);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(t.pathCount(), ph.count, name);
+    TEST_ASSERT_TRUE_MESSAGE(ph.stride >= mpdj::kPathStride, name);
+    empty = empty || ph.count == 0;
+    s.begin(c.source(), ph.offset, ph.offset + ph.bytes, buf, sizeof(buf));
+    for (uint32_t i = 0; i < ph.count; ++i) {
+      uint8_t e[mpdj::kPathStride];
+      TEST_ASSERT_TRUE_MESSAGE(s.read(e, sizeof(e)) && s.skipTo(s.position() + ph.stride - sizeof(e)), name);
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(t.rowOf(cc::get64(e)), cc::get16(e + 8), name);
+    }
+    TEST_ASSERT_TRUE_MESSAGE(s.drain(), name);
+    TEST_ASSERT_EQUAL_HEX32_MESSAGE(ph.crc, s.crc(), name);
+  }
+  TEST_ASSERT_TRUE(longer);  // mpdj-minor-1's 12-byte records
+  TEST_ASSERT_TRUE(empty);   // mpdj-paths-empty
+
+  // The written file's records are the rows' (in the order added: the ids rise).
+  cc::MemSource src(files[0].bytes.data(), static_cast<uint32_t>(files[0].bytes.size()));
+  mpdj::Table t;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.open(src)));
+  mpdj::Filter f;
+  TEST_ASSERT_TRUE(t.filter(0, &f));
+  TEST_ASSERT_EQUAL_UINT16(1285, f.bpm10);
+  TEST_ASSERT_EQUAL_UINT8(8, f.camelot);
+  TEST_ASSERT_EQUAL_UINT8(mpdj::kFilterBpmAnalysed, f.flags);
+  TEST_ASSERT_EQUAL_HEX32(0x12345678, f.artistKey);
+  TEST_ASSERT_TRUE(t.filter(2, &f));
+  TEST_ASSERT_EQUAL_UINT16(0, f.bpm10);
+  TEST_ASSERT_EQUAL_UINT8(24, f.camelot);
+  TEST_ASSERT_EQUAL_UINT32(7, f.artistKey);
+  TEST_ASSERT_EQUAL_UINT32(4, t.pathCount());
+  TEST_ASSERT_EQUAL_UINT32(0, t.rowOf(cc::pathHash("A/x2.mp3")));
+}
+
 // A row with no song key (a blank title) is nobody's same song: two such
 // rows of one artist list each other; it lists, and is listed by, rows of
 // a song. Two rows of one song key don't list each other.
@@ -791,6 +896,7 @@ int main(int, char**) {
   RUN_TEST(test_strided_ranks);
   RUN_TEST(test_check_slot);
   RUN_TEST(test_writer_edge_cases);
+  RUN_TEST(test_the_container);
   RUN_TEST(test_no_song_key);
   RUN_TEST(test_level_rounding);
   RUN_TEST(test_selection_signature);

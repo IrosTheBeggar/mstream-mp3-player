@@ -168,42 +168,63 @@ struct AddOutcome {
 // `ok`: what the call returned.
 AddOutcome addOutcome(const QueueModel& q, uint32_t sizeBefore, uint32_t asked, bool next, bool ok);
 
-// ---- tracks that failed to play ----
+// ---- marked entries: tracks that failed to play ----
 //
-// The last few queue entries (by key) whose track couldn't be played, so
-// their rows keep a small amber "!" (spec §7). A ring: the oldest goes.
+// The last N queue entries (by key) whose rows carry a mark. A ring: the
+// oldest goes; a key in it already isn't added twice. Its size is its
+// user's: FailedKeys, the last 16 whose track couldn't be played, so their
+// rows keep a small amber "!" (spec §7).
+template <int N>
 class KeyRing {
 public:
-  static constexpr int kSize = 16;
-  void add(uint32_t key);
-  bool has(uint32_t key) const;
-  void clear() { n_ = 0; }
+  static constexpr int kSize = N;
+  void add(uint32_t key) {
+    if (key == QueueModel::kNone || has(key)) return;
+    k_[next_] = key;
+    next_ = (next_ + 1) % N;
+    if (n_ < N) ++n_;
+  }
+  bool has(uint32_t key) const {
+    for (int i = 0; i < n_; ++i) {
+      if (k_[i] == key) return true;
+    }
+    return false;
+  }
+  void clear() { n_ = next_ = 0; }
   int count() const { return n_; }
 
 private:
-  uint32_t k_[kSize] = {};
+  static_assert(N > 0, "a ring holds at least one key");
+  uint32_t k_[N] = {};
   int n_ = 0;
   int next_ = 0;
 };
+using FailedKeys = KeyRing<16>;
 
 // ---- the Undo toast, when the undo goes from under it ----
 //
 // The queue's one undo can go while a toast still offers it: a shuffle
-// toggle drops it (docs/QUEUE-MODES.md 2.6), and the console's qu uses it.
-// That toast's Undo would then answer "Nothing to undo", so it goes, and
-// the log says why. Ui calls pass() once a loop. Shuffle all's Play sets
-// the mode inside the edit (still undoable: its toast stays), so qu's undo
-// of it puts the mode back: a change of mode that is no toggle, which
-// undone() tells apart.
+// toggle drops it (docs/QUEUE-MODES.md 2.6), the console's qu uses it, and
+// Auto DJ's quiet append can drop it (QueueModel::appendQuiet(): the
+// snapshot at the cap or out of memory, an entry pushed out at a full
+// queue). That toast's Undo would then answer "Nothing to undo", so it
+// goes, and the log says why. Ui calls pass() once a loop. Shuffle all's
+// Play sets the mode inside the edit (still undoable: its toast stays), so
+// qu's undo of it puts the mode back: a change of mode that is no toggle,
+// which undone() tells apart.
 class UndoWatch {
 public:
-  enum class Gone : uint8_t { Stays, Toggle, Undone };
+  enum class Gone : uint8_t { Stays, Toggle, Undone, Dropped };
   // The console's qu undid the queue's last edit (since the last pass).
   void undone() { undone_ = true; }
+  // Auto DJ's pick dropped the undo (since the last pass): undoable() was
+  // an edit before addFromAutoDj() and None after.
+  void dropped() { dropped_ = true; }
   // `shuffled`: the mode now; `undoToast`: a toast offering Undo is up;
   // `undoable`: the queue's. Whether that toast goes, and why: Undone
-  // (qu undid since the last pass) before Toggle (the mode changed since
-  // the last pass); Stays while the undo is there, or nothing took it.
+  // (qu undid since the last pass), then Dropped (Auto DJ's pick took it),
+  // then Toggle (the mode changed since the last pass); Stays while the
+  // undo is there, or nothing took it.
   Gone pass(bool shuffled, bool undoToast, QueueModel::Edit undoable);
   // The last pass saw the mode change (a toggle, or an undo that put it
   // back): no Queue badge flash for it (Off can grow "up next" without
@@ -213,6 +234,7 @@ public:
 private:
   bool last_ = false;
   bool undone_ = false;
+  bool dropped_ = false;
   bool changed_ = false;
 };
 

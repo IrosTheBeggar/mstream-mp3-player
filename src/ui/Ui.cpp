@@ -1216,9 +1216,10 @@ void Ui::loop(uint32_t nowMs) {
   }
   // The page's deadlines (under a modal too, and in the dark).
   if (page_) page_->tick(nowMs);
-  // A shuffle toggle drops the queue's undo (docs/QUEUE-MODES.md 2.6), and
-  // the console's qu uses it: an Undo toast still up would answer "Nothing
-  // to undo", so it goes, its line saying which. (Shuffle all's toast
+  // A shuffle toggle drops the queue's undo (docs/QUEUE-MODES.md 2.6), the
+  // console's qu uses it, and Auto DJ's pick can drop it (queueUndoDropped()):
+  // an Undo toast still up would answer "Nothing to undo", so it goes, its
+  // line saying which. (Shuffle all's toast
   // stays: its Play set the mode as part of the edit, and its Undo puts
   // both back; qu's undo of it changes the mode back, no toggle.) And no
   // badge flash for a change of mode: Off can grow "up next" without
@@ -1229,9 +1230,10 @@ void Ui::loop(uint32_t nowMs) {
     const int was = toast_.bottom();
     toast_.hide();
     uncover(was);
-    Serial.printf("[ui] the Undo toast went: %s\n", gone == queueview::UndoWatch::Gone::Undone
-                                                        ? "undone from the console"
-                                                        : "a shuffle toggle took the undo");
+    using Gone = queueview::UndoWatch::Gone;
+    Serial.printf("[ui] the Undo toast went: %s\n", gone == Gone::Undone    ? "undone from the console"
+                                                    : gone == Gone::Dropped ? "Auto DJ's pick took the undo"
+                                                                            : "a shuffle toggle took the undo");
   }
   const bool toggled = undoWatch_.modeChanged();
   // Tracks added: the Queue badge flashes.

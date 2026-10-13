@@ -107,8 +107,9 @@ size_t displayJoin(const char* list, size_t n, char* out, size_t cap);
 
 // DJRF's artistKey (docs/AUTODJ-INDEX.md 2.4): the low 32 bits of the
 // FNV-1a 64 of the nameKey of a list's first value that isn't blank; 0
-// when it has none. The device's artist cooldown keys a track without a
-// row by the same function of its record's artist list.
+// when it has none. A device that keys a track without a row (its artist
+// cooldown) must use the same function of that track's record's artist
+// list; the Auto DJ engine keys none (they add nothing to its cooldown).
 uint32_t artistKey(const char* list, size_t n);
 
 }  // namespace namekey

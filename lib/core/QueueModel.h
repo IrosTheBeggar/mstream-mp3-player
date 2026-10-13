@@ -69,6 +69,14 @@
 // last one. What the player does about an edit (start the new current
 // track, stop) is PlaybackController's.
 //
+// Auto DJ (the engine design's 2.12) adds one track at a time through
+// appendQuiet(): an append that is no edit of the listener's, so their
+// last edit stays the one Undo undoes (its toast's Undo never takes Auto
+// DJ's pick away instead), with the new entry mirrored into that edit's
+// snapshot. A new queue (a Play, a Clear, or the undo of either) is a new
+// Auto DJ session: playEpoch() counts them, so no caller of Play or Clear
+// has to say so.
+//
 // Shuffle (docs/QUEUE-MODES.md section 2) reorders the entries themselves,
 // so a position is a play position everywhere (the Queue tab, the saver,
 // step() and peek()) and the Queue tab shows the order that plays. Each
@@ -183,6 +191,15 @@ public:
   uint32_t contentVersion() const { return contentVersion_; }
   // Bumped whenever the current position or the entries change.
   uint32_t positionVersion() const { return positionVersion_; }
+  // Bumped by every Play (replace(), Shuffle all's too; a Play of nothing
+  // is a Clear) and every Clear (clear(), of an empty queue too: the
+  // listener asked for a fresh start), and by undo() when the edit it undid
+  // was one of those: the queue is a new one (Auto DJ's session starts
+  // again from its current track: the engine design's 2.12). Not by
+  // assign() or release() (the boot's restore, a library rebuild's
+  // read-back: the same queue with fresh keys), the other edits, a toggle,
+  // a move of the current position, or appendQuiet(). Free-running.
+  uint32_t playEpoch() const { return playEpoch_; }
   // The bytes the queue holds from the hooks: the entries' block and the
   // undo snapshot's, at their capacity (the console's q, the remap's log).
   size_t memoryBytes() const {
@@ -227,6 +244,24 @@ public:
   bool moveNext(const uint32_t* positions, uint32_t n);
   bool clearUpNext();
   bool clear();
+  // Auto DJ's add (the class; the engine design's 2.12): `track` at the
+  // end, as an append() of one (ranked after the highest rank while
+  // shuffled; the current entry when the queue was empty), but no edit: no
+  // snapshot is taken, and the last edit's undo stays, the new entry (its
+  // key, unheard) added at the end of that edit's snapshot as well, so
+  // undo() puts back the queue the listener had with Auto DJ's entry still
+  // last. In the snapshot it ranks after the snapshot's own highest rank
+  // when the snapshot was taken shuffled (undoShuffled()), else at its
+  // position; in a snapshot of an empty queue it is the current entry
+  // there, as an add's first. Not into a Play's or a Clear's snapshot
+  // (undoable() Replace, Clear): their undo brings back the queue from
+  // before, which never held it. The undo is dropped instead (undoable() None) when that snapshot
+  // already holds kMaxEntries, can't grow (no memory) or would rank past
+  // 0xFFFFFFFF; and when the queue is full: the oldest played entry is
+  // pushed out, as an add's is (room()), and the undo goes with it. The
+  // new entry is the last one (keyAt(size() - 1)). False, nothing changed:
+  // full with nothing played, a rank past 0xFFFFFFFF, or no memory.
+  bool appendQuiet(uint32_t track);
 
   // ---- the current position ----
   bool setCurrent(uint32_t pos);
@@ -337,6 +372,7 @@ private:
   uint32_t nextKey_ = 0;
   uint32_t contentVersion_ = 0;
   uint32_t positionVersion_ = 0;
+  uint32_t playEpoch_ = 0;
 
   Array undo_;
   int32_t undoCurrent_ = -1;

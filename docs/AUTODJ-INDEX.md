@@ -193,9 +193,10 @@ then B" means one CRC run over A's bytes followed by B's: with zlib,
   compared as a string.
 - **artistKey:** the low 32 bits of the FNV-1a 64 of the UTF-8 bytes of
   the nameKey of the **first non-blank** artist value; 0 when there is
-  none. The device's own artist key for a track without a row (its artist
-  cooldown) MUST be the same function of the record it chose for that
-  track (M 2.13.2).
+  none. A device that keys a track without a row (for its artist
+  cooldown) MUST use the same function of the record it chose for that
+  track (M 2.13.2); a device need not key such tracks at all (the
+  Core2's Auto DJ doesn't: they add nothing to its artist cooldown).
 
 The title and the artist values are those of the row's primary file's
 record (5.3).

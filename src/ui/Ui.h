@@ -273,12 +273,15 @@ public:
   // (it scrolls to them and highlights them), and the entries whose track
   // failed (their "!").
   queueview::AddedMark& added() { return added_; }
-  const queueview::KeyRing& failedKeys() const { return failedKeys_; }
+  const queueview::FailedKeys& failedKeys() const { return failedKeys_; }
   // Shuffle all: the whole library, shuffled, playing (the empty states).
   void shuffleAll();
   // The console's qu undid the queue's last edit: an Undo toast still up
   // goes at the next pass, and its line says so (UndoWatch).
   void queueUndone() { undoWatch_.undone(); }
+  // Auto DJ's pick dropped the queue's undo (QueueModel::appendQuiet()):
+  // the same, its line saying so.
+  void queueUndoDropped() { undoWatch_.dropped(); }
   // Try again on a no-card page: a card that mounts restarts the player
   // (a toast first); else the note, the kind's (uitext::cardMessage(kind)
   // .still: "Still no card: ...", "Still exFAT: ...", "Still GPT: ..."),
@@ -408,7 +411,7 @@ private:
   bool tipsAfterPicker_ = false;
   bool noteAfterPicker_ = false;
   queueview::AddedMark added_;
-  queueview::KeyRing failedKeys_;
+  queueview::FailedKeys failedKeys_;
   uint32_t failuresSeen_ = 0;
 
   NowPlayingPage nowPlaying_;

@@ -24,6 +24,12 @@
 // whose source is the software's (2 or 3). Its sections' CRCs are checked
 // by whoever streams it (the walk, the builder): a T that fails then is
 // absent for that job, which carries on without it.
+//
+// The root's MPDJ entry (the AutoDJ index, docs/AUTODJ-INDEX.md 7.2) is
+// kept as COMP names it, only while T is present: an MPDJ without a valid
+// MPTG companion isn't used. The file itself isn't opened here: Auto DJ
+// opens it after the library's load and checks it against the entry
+// (mpdj::Table::open, msmf::companionMatches).
 namespace cardroot {
 
 // The library roots (LIBR, 2.8.6) the boot keeps: at most this many, each
@@ -56,6 +62,16 @@ struct Root {
   // A transfer's plan (pending.bin, or a valid pending.tmp when it is
   // missing: 2.12.5): the last transfer didn't finish (the status line).
   bool plan = false;
+  // The AutoDJ index the root names (AUTODJ-INDEX.md 7.2): present only
+  // when T is and COMP has an MPDJ entry. `entry` is that entry (its
+  // generation, fileBytes, headerCrc and key, the selection signature:
+  // msmf::companionMatches(entry, table.frame(), 0, table.selectionSig())
+  // says whether the file opened is the one named).
+  struct AutoDj {
+    bool present = false;
+    char path[48] = "";  // "/.mstream/autodj-00000029.bin"
+    cardcontract::msmf::Comp entry;
+  } autoDj;
 
 private:
   const char* rootPtrs_[kMaxRoots] = {};

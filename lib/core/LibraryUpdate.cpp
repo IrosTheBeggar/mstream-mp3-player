@@ -539,6 +539,12 @@ LibraryUpdate::Out LibraryUpdate::update(const In& in) {
         o.wait = Wait::SafePoint;
         break;
       }
+      // Auto DJ's pick first (its join or reopen takes a second or so; the
+      // fence would take the index it joins and the queue it adds to).
+      if (in.autoDjOwed) {
+        o.wait = Wait::AutoDj;
+        break;
+      }
       // The worker's task, made now if it ended (3 s after its last step):
       // no internal RAM for its stack, and the step waits here, the index
       // as it is, never behind a fence whose build can't start.

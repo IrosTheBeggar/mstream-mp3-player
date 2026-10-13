@@ -4,9 +4,9 @@
 // Host tests for the Queue screen's portable pieces (QueueView): the
 // "12 up next · 49 min" summary from learned track lengths, the mark on
 // what a Library add put in the queue, the failed-track ring, when an
-// Undo toast goes because the undo went from under it (UndoWatch), and the
-// texts of the queue's cap. (The shuffle's loop moved to
-// lib/core/Shuffle.h: test_queue.)
+// Undo toast goes because the undo went from under it (UndoWatch: a
+// toggle, qu, Auto DJ's pick), and the texts of the queue's cap. (The
+// shuffle's loop moved to lib/core/Shuffle.h: test_queue.)
 // Run: pio test -e native
 #include <unity.h>
 
@@ -141,19 +141,43 @@ void test_added_mark_finds_what_was_added() {
   TEST_ASSERT_FALSE(m.pending());
 }
 
-void test_failed_keys_ring() {
-  KeyRing r;
+// A ring of N keys: a key once, the oldest goes, kNone never; cleared, it
+// starts again from empty. FailedKeys holds 16; a larger one the same way.
+template <int N>
+void ringOf() {
+  KeyRing<N> r;
   r.add(5);
   r.add(5);
   TEST_ASSERT_EQUAL_INT(1, r.count());
   TEST_ASSERT_TRUE(r.has(5));
-  for (uint32_t k = 100; k < 100 + KeyRing::kSize; ++k) r.add(k);
-  TEST_ASSERT_EQUAL_INT(KeyRing::kSize, r.count());
+  for (uint32_t k = 100; k < 100 + N; ++k) r.add(k);
+  TEST_ASSERT_EQUAL_INT(N, r.count());
   TEST_ASSERT_FALSE(r.has(5));  // the oldest went
   TEST_ASSERT_TRUE(r.has(100));
-  TEST_ASSERT_TRUE(r.has(100 + KeyRing::kSize - 1));
+  TEST_ASSERT_TRUE(r.has(100 + N - 1));
+  r.add(100);  // there already: the ring doesn't move
+  TEST_ASSERT_TRUE(r.has(100));
   r.add(QueueModel::kNone);
   TEST_ASSERT_FALSE(r.has(QueueModel::kNone));
+  // Cleared part way round: empty, then filled from its start again.
+  r.add(1000);
+  r.clear();
+  TEST_ASSERT_EQUAL_INT(0, r.count());
+  TEST_ASSERT_FALSE(r.has(1000));
+  for (uint32_t k = 2000; k < 2000 + N + 1; ++k) {
+    r.add(k);
+    TEST_ASSERT_TRUE(r.has(k));
+  }
+  TEST_ASSERT_EQUAL_INT(N, r.count());
+  TEST_ASSERT_FALSE(r.has(2000));
+  TEST_ASSERT_TRUE(r.has(2001));
+}
+
+void test_failed_keys_ring() {
+  TEST_ASSERT_EQUAL_INT(16, FailedKeys::kSize);
+  ringOf<FailedKeys::kSize>();
+  ringOf<64>();
+  ringOf<1>();
 }
 
 // Ui's pass, as Ui::loop makes it: the mode, an Undo toast up, the undo.
@@ -236,6 +260,49 @@ void test_undo_watch_qu_of_any_edit() {
   TEST_ASSERT_TRUE(q.insertNext(one, 1));
   w.undone();
   TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));
+}
+
+// Auto DJ's pick (QueueModel::appendQuiet()) can drop the undo a toast
+// offers: at a full queue it pushes out the oldest played entry, and the
+// undo goes with it. The glue tells the watch (dropped(): undoable() was an
+// edit before the pick and None after): the toast goes, "Auto DJ's pick
+// took the undo". Not told, the toast stays (an undo gone for no known
+// reason, as before); a pick mirrored into the undo keeps its toast,
+// whatever was said, and the word is told once.
+void test_undo_watch_auto_dj_s_pick_drops_the_undo() {
+  QueueModel q;
+  fill(q, QueueModel::kMaxEntries, 100);  // 100 played
+  UndoWatch w;
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, false));
+  const uint32_t pos[] = {200};
+  TEST_ASSERT_TRUE(q.moveNext(pos, 1));  // Play next, its toast with Undo
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));
+  TEST_ASSERT_TRUE(q.undoable() != QueueModel::Edit::None);
+  TEST_ASSERT_TRUE(q.appendQuiet(7));
+  TEST_ASSERT_EQUAL(QueueModel::kMaxEntries, q.size());
+  TEST_ASSERT_EQUAL(QueueModel::Edit::None, q.undoable());
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));  // not told
+  w.dropped();
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Dropped, pass(w, q, true));
+  TEST_ASSERT_FALSE(w.modeChanged());
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, false));
+  // qu and a drop told in one pass: qu's.
+  TEST_ASSERT_TRUE(q.moveNext(pos, 1));
+  TEST_ASSERT_TRUE(q.undo());
+  w.undone();
+  w.dropped();
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Undone, pass(w, q, true));
+  // Room in the queue: the pick mirrored into the undo, which stays.
+  QueueModel r;
+  fill(r, 5, 1);
+  const uint32_t one[] = {12};
+  TEST_ASSERT_TRUE(r.insertNext(one, 1));
+  TEST_ASSERT_TRUE(r.appendQuiet(8));
+  TEST_ASSERT_TRUE(r.undoable() != QueueModel::Edit::None);
+  w.dropped();
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, r, true));
+  TEST_ASSERT_TRUE(r.setShuffled(true));
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Toggle, pass(w, r, true));  // (the word went)
 }
 
 // The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15): its
@@ -330,5 +397,6 @@ int main(int, char**) {
   RUN_TEST(test_undo_watch_a_toggle_takes_the_undo);
   RUN_TEST(test_undo_watch_qu_of_shuffle_all_is_no_toggle);
   RUN_TEST(test_undo_watch_qu_of_any_edit);
+  RUN_TEST(test_undo_watch_auto_dj_s_pick_drops_the_undo);
   return UNITY_END();
 }

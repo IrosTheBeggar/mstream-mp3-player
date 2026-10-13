@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+#include "AutoDjTrigger.h"
+#include "HeadsetKeys.h"
 #include "LibraryIndex.h"
 #include "PlaybackController.h"
 #include "QueueModel.h"
@@ -2982,6 +2984,506 @@ void test_a_seek_to_0_while_a_start_is_pending_keeps_the_bars_length() {
   TEST_ASSERT_EQUAL_UINT32(180000, len);
 }
 
+// ---- Auto DJ (the engine design's 2.3, 2.3.1, 2.11 and 2.12) ----
+
+namespace {
+// Auto DJ's step as the firmware will run it, the engine left out: the
+// trigger read off the player, and `track` added when it says so.
+// True: added.
+bool autoDjPass(PlaybackController& p, uint32_t track, autodj::TriggerIn in = autodj::TriggerIn()) {
+  in.on = true;
+  const autodj::TriggerOut o = autodj::decide(autodj::fromPlayer(p, in));
+  if (!o.pick) return false;
+  TEST_ASSERT_TRUE(p.addFromAutoDj(track, o.cue));
+  return true;
+}
+}  // namespace
+
+// The pick added as the last entry starts: the word on it goes to the
+// backend in the same call (one Act), nothing restarts, and the listener's
+// last edit stays the one Undo undoes. Late (1.2 s left: a skip into a
+// short last entry) the backend still has the word in time and joins it.
+void test_auto_dj_s_pick_sends_the_word_at_once() {
+  Rig r(8);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.setRepeat(PlaybackController::Repeat::Off);
+  const uint32_t album[] = {0, 1, 2};
+  TEST_ASSERT_TRUE(p.playNow(album, 3, 2));  // c.mp3, the last entry, starts
+  TEST_ASSERT_EQUAL_UINT32(0, a.nexts.back().token);  // the end, Off: nothing follows
+  const uint32_t epoch = r.queue.playEpoch();
+  a.duration = 200000;
+  a.position = 198800;  // 1.2 s left
+  const size_t words = a.nexts.size();
+  TEST_ASSERT_TRUE(p.addFromAutoDj(5, false));
+  TEST_ASSERT_EQUAL_UINT32(words + 1, a.nexts.size());
+  TEST_ASSERT_EQUAL_STRING("/music/f.mp3", a.nexts.back().path.c_str());
+  TEST_ASSERT_TRUE(a.nexts.back().token != 0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT(1, a.playCount);
+  TEST_ASSERT_EQUAL_UINT32(4, r.queue.size());
+  TEST_ASSERT_TRUE(r.queue.undoable() == QueueModel::Edit::Replace);  // the Play's, not the pick's
+  TEST_ASSERT_EQUAL_UINT32(epoch, r.queue.playEpoch());
+  // The backend joins it: no play(), the pick current.
+  a.advances.push_back(a.nexts.back().token);
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(3, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT(1, a.playCount);
+  TEST_ASSERT_EQUAL_UINT32(1, p.gaplessStats().adopted);
+  // Repeat All: the word when the last entry starts is the first (the
+  // wrap); the pick's replaces it at once, with a new token.
+  Rig w(8);
+  const uint32_t two[] = {0, 1};
+  TEST_ASSERT_TRUE(w.player.playNow(two, 2, 1));
+  TEST_ASSERT_EQUAL_STRING("/music/a.mp3", w.audio.nexts.back().path.c_str());
+  const uint32_t wrap = w.audio.nexts.back().token;
+  TEST_ASSERT_TRUE(w.player.addFromAutoDj(6, false));
+  TEST_ASSERT_EQUAL_STRING("/music/g.mp3", w.audio.nexts.back().path.c_str());
+  TEST_ASSERT_TRUE(w.audio.nexts.back().token != wrap);
+  // + Queue after it, then Undo: the listener's add goes, the pick stays.
+  const uint32_t d = 3;
+  TEST_ASSERT_TRUE(w.player.addToQueue(&d, 1));
+  TEST_ASSERT_TRUE(w.player.addFromAutoDj(7, false));
+  TEST_ASSERT_TRUE(w.player.undo());
+  TEST_ASSERT_EQUAL_UINT32(4, w.queue.size());
+  TEST_ASSERT_EQUAL_UINT32(6, w.queue.trackAt(2));
+  TEST_ASSERT_EQUAL_UINT32(7, w.queue.trackAt(3));
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)w.player.state());
+  TEST_ASSERT_EQUAL_INT(1, w.player.currentIndex());
+}
+
+// Behind the library update's fence the queue is the build's: refused,
+// nothing sent.
+void test_auto_dj_s_pick_is_refused_behind_the_fence() {
+  Rig r(8);
+  PlaybackController& p = r.player;
+  p.play(7);
+  const size_t words = r.audio.nexts.size();
+  p.setFenced(true);
+  TEST_ASSERT_FALSE(p.addFromAutoDj(5, false));
+  TEST_ASSERT_FALSE(p.addFromAutoDj(5, true));
+  TEST_ASSERT_EQUAL_UINT32(8, r.queue.size());
+  TEST_ASSERT_EQUAL_UINT32(words, r.audio.nexts.size());
+  autodj::TriggerIn in;
+  in.on = true;
+  TEST_ASSERT_TRUE(autodj::decide(autodj::fromPlayer(p, in)).wait == autodj::Wait::Fenced);
+  p.setFenced(false);
+  TEST_ASSERT_TRUE(p.addFromAutoDj(5, false));
+  TEST_ASSERT_EQUAL_UINT32(9, r.queue.size());
+}
+
+// Repeat All with Auto DJ adding: the queue never reaches its end, so it
+// never wraps (the mobile app's), whether the tracks end by a natural end
+// or a gapless join.
+void test_repeat_all_never_wraps_with_auto_dj() {
+  Rig r(8);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  TEST_ASSERT_TRUE(p.repeat() == PlaybackController::Repeat::All);
+  const uint32_t two[] = {0, 1};
+  TEST_ASSERT_TRUE(p.playNow(two, 2, 0));
+  int ends = 0, picks = 0;
+  for (int pass = 0; pass < 40; ++pass) {
+    if (autoDjPass(p, 2 + static_cast<uint32_t>(picks) % 6)) ++picks;
+    if (pass % 2 == 0) continue;
+    // The track ends: by its natural end, or joined.
+    const int before = p.currentIndex();
+    if (pass % 4 == 1) {
+      a.finish();
+    } else {
+      a.advances.push_back(a.nexts.back().token);
+    }
+    p.update(0);
+    ++ends;
+    TEST_ASSERT_EQUAL_INT(before + 1, p.currentIndex());  // never back to the first
+    TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  }
+  TEST_ASSERT_EQUAL_INT(20, ends);
+  TEST_ASSERT_EQUAL_INT(20, p.currentIndex());
+  TEST_ASSERT_EQUAL_INT(19, picks);
+  TEST_ASSERT_EQUAL_UINT32(21, r.queue.size());  // (the last pick plays now; the next comes at the next pass)
+}
+
+// Repeat One holds Auto DJ ("Waiting"): the track loops, nothing added;
+// once One is off a pick follows. The sleep timer's End of queue holds it
+// too: the queue stops at its end; once the timer's choice is over, the
+// pick is cued, paused at 0:00, and Play starts it, not the last track
+// again; headphone Play leaves it.
+void test_auto_dj_holds_for_repeat_one_and_end_of_queue() {
+  Rig r(8);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  const uint32_t two[] = {0, 1};
+  TEST_ASSERT_TRUE(p.playNow(two, 2, 1));
+  p.setRepeat(PlaybackController::Repeat::One);
+  autodj::TriggerIn on;
+  on.on = true;
+  autodj::TriggerOut o = autodj::decide(autodj::fromPlayer(p, on));
+  TEST_ASSERT_FALSE(o.pick);
+  TEST_ASSERT_TRUE(o.hold == autodj::Hold::RepeatOne);
+  a.finish();
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(1, p.repeats());
+  TEST_ASSERT_FALSE(autoDjPass(p, 5));
+  TEST_ASSERT_EQUAL_UINT32(2, r.queue.size());
+  p.setRepeat(PlaybackController::Repeat::Off);
+  TEST_ASSERT_TRUE(autoDjPass(p, 5));
+  TEST_ASSERT_EQUAL_UINT32(3, r.queue.size());
+
+  // End of queue (the timer arms "pause after this track" on the last entry).
+  Rig s(8);
+  PlaybackController& q = s.player;
+  q.setRepeat(PlaybackController::Repeat::Off);
+  TEST_ASSERT_TRUE(q.playNow(two, 2, 1));
+  autodj::TriggerIn timer;
+  timer.sleepEndOfQueue = true;
+  TEST_ASSERT_FALSE(autoDjPass(q, 5, timer));
+  TEST_ASSERT_TRUE(autodj::decide(autodj::fromPlayer(q, on)).pick);  // (without the timer it would)
+  q.setPauseAfterTrack(true);
+  s.audio.finish();
+  q.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)q.state());
+  TEST_ASSERT_EQUAL_UINT32(1, q.timerStops());
+  TEST_ASSERT_TRUE(q.endedAtEnd());
+  TEST_ASSERT_FALSE(autoDjPass(q, 5, timer));  // the timer's choice not over yet
+  const int plays = s.audio.playCount;
+  TEST_ASSERT_TRUE(autoDjPass(q, 5));          // over: the pick, cued
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)q.state());
+  TEST_ASSERT_EQUAL_INT(2, q.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(5, q.currentTrack());
+  TEST_ASSERT_EQUAL_INT(plays, s.audio.playCount);  // nothing started
+  TEST_ASSERT_FALSE(q.endedAtEnd());
+  TEST_ASSERT_TRUE(q.cuedByAutoDj());
+  TEST_ASSERT_TRUE(q.pausedNotByListener());
+  TEST_ASSERT_FALSE(autoDjPass(q, 6));  // (cued: no second pick)
+  TEST_ASSERT_TRUE(HeadsetKeys::decide(q.state(), HeadsetKeys::Key::Play, q.pausedNotByListener()) ==
+                   HeadsetKeys::Action::Ignore);
+  // Play: the pick from its start.
+  q.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)q.state());
+  TEST_ASSERT_EQUAL_STRING("/music/f.mp3", s.audio.lastPath.c_str());
+  TEST_ASSERT_EQUAL_UINT32(0, s.audio.lastStartMs);
+  TEST_ASSERT_FALSE(q.cuedByAutoDj());
+  TEST_ASSERT_FALSE(q.pausedNotByListener());
+}
+
+// endedAtEnd(): set where the queue stops at its end with repeat Off (a
+// natural end, a skip past the last, a failure there; the sleep timer's
+// boundary; a track that ended inside the fence), cleared by any start, a
+// jump, a cue that moves and an edit that moves the current entry; kept
+// across a read-back that keeps the current entry. fromPlayer() reads it.
+void test_ended_at_end_is_set_and_cleared() {
+  Rig r(8);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.setRepeat(PlaybackController::Repeat::Off);
+  const uint32_t three[] = {0, 1, 2};
+  TEST_ASSERT_TRUE(p.playNow(three, 3, 2));
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  const auto end = [&] {
+    p.play(2);
+    TEST_ASSERT_FALSE(p.endedAtEnd());
+    a.finish();
+    p.update(0);
+    TEST_ASSERT_TRUE(p.endedAtEnd());
+    TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  };
+  end();
+  autodj::TriggerIn in = autodj::fromPlayer(p);
+  TEST_ASSERT_TRUE(in.finished);
+  TEST_ASSERT_EQUAL_UINT32(3, in.queueSize);
+  TEST_ASSERT_EQUAL_UINT32(0, in.upNext);
+  TEST_ASSERT_TRUE(in.play == PlayState::Stopped);
+  TEST_ASSERT_FALSE(in.repeatOne);
+  TEST_ASSERT_FALSE(in.fenced);
+  // A cue that can't move (the end), a stop: still finished.
+  p.cueNext();
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  p.stop();
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  // Play: the last track again (no Auto DJ): not finished; nor once it is
+  // stopped part of the way through.
+  p.togglePlayPause();
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  p.stop();
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  p.togglePlayPause();
+  a.finish();
+  p.update(0);
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  // next at the last entry stops there: finished.
+  p.play(2);
+  p.next();
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  // A cue back (it moves), a jump: not finished.
+  p.cuePrev();
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  end();
+  p.play(0);
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  // + Queue after it: still finished (nothing moved), but not last.
+  end();
+  const uint32_t d = 3;
+  TEST_ASSERT_TRUE(p.addToQueue(&d, 1));
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  autodj::TriggerIn on;
+  on.on = true;
+  TEST_ASSERT_TRUE(autodj::decide(autodj::fromPlayer(p, on)).wait == autodj::Wait::UpNext);
+  const uint32_t last = 3;
+  TEST_ASSERT_EQUAL_UINT32(1, p.remove(&last, 1).count);  // removed again: last, and finished
+  TEST_ASSERT_TRUE(autodj::decide(autodj::fromPlayer(p, on)).cue);
+  // An edit that moves the current entry: not finished.
+  const uint32_t cur = 2;
+  TEST_ASSERT_TRUE(p.remove(&cur, 1).current);
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  TEST_ASSERT_TRUE(p.undo());
+  end();
+  p.clearQueue();
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  TEST_ASSERT_TRUE(p.undo());
+  end();
+  TEST_ASSERT_TRUE(p.playNow(three, 3, 2));
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  // A failure at the last entry stops there: finished.
+  a.failEverything = true;
+  p.play(2);
+  p.update(0);
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  a.failEverything = false;
+  // The sleep timer's boundary at the last entry.
+  p.play(2);
+  p.setPauseAfterTrack(true);
+  a.finish();
+  p.update(0);
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  TEST_ASSERT_FALSE(p.pauseAfterTrack());
+  // A join heard while paused at the last entry, the queue's end since
+  // (repeat Off now): stopped there, as an end would.
+  p.setRepeat(PlaybackController::Repeat::All);
+  p.play(2);
+  const uint32_t wrap = a.nexts.back().token;  // the first entry, after the last
+  p.togglePlayPause();
+  p.setRepeat(PlaybackController::Repeat::Off);
+  a.advances.push_back(wrap);
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  // A read-back (a library rebuild's: fresh keys) keeping the current
+  // entry keeps it; one that doesn't, doesn't.
+  r.queue.assign(three, 3, 2);
+  p.queueReplaced(true);
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  r.queue.assign(three, 3, 1);
+  p.queueReplaced(false);
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  // A track that ends inside the fence with nothing after it.
+  p.play(2);
+  p.setFenced(true);
+  a.finish();
+  p.update(0);
+  TEST_ASSERT_FALSE(p.endedAtEnd());  // (the queue is away)
+  p.setFenced(false);
+  r.queue.assign(three, 3, 2);
+  p.queueReplaced(true);
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  TEST_ASSERT_EQUAL_UINT32(1, p.fenceStops());
+  // Repeat All wraps: never.
+  p.setRepeat(PlaybackController::Repeat::All);
+  p.play(2);
+  a.finish();
+  p.update(0);
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+}
+
+// Every track failing in a row stops the player after one pass. With
+// repeat Off that pass ends on the last entry: the queue's end, so Auto DJ
+// cues a pick there (a one-track Play whose track fails, then the pick
+// plays). Repeat All's pass wraps and may stop anywhere: not finished.
+void test_every_track_failing_finishes_the_queue_at_its_end() {
+  Rig r(8);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.setRepeat(PlaybackController::Repeat::Off);
+  a.failEverything = true;
+  const uint32_t one[] = {0};
+  TEST_ASSERT_TRUE(p.playNow(one, 1, 0));
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  autodj::TriggerIn on;
+  on.on = true;
+  TEST_ASSERT_TRUE(autodj::decide(autodj::fromPlayer(p, on)).cue);
+  a.failEverything = false;
+  TEST_ASSERT_TRUE(p.addFromAutoDj(5, true));
+  TEST_ASSERT_TRUE(p.cuedByAutoDj());
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  p.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  TEST_ASSERT_EQUAL_STRING("/music/f.mp3", a.lastPath.c_str());
+  // Two entries played from the first, both failing: stopped on the last.
+  a.failEverything = true;
+  const uint32_t two[] = {0, 1};
+  TEST_ASSERT_TRUE(p.playNow(two, 2, 0));
+  p.update(0);
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  // Repeat All: from the middle, round to the first entry, stopped there.
+  p.setRepeat(PlaybackController::Repeat::All);
+  const uint32_t three[] = {0, 1, 2};
+  TEST_ASSERT_TRUE(p.playNow(three, 3, 1));
+  for (int i = 0; i < 3; ++i) p.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  // ... and on the last one (from the first): still not the end (it wraps).
+  TEST_ASSERT_TRUE(p.playNow(three, 3, 0));
+  for (int i = 0; i < 3; ++i) p.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+}
+
+// The cue applies only to a finished queue: while a track plays it is a
+// plain append. Its mark goes with any play, and with a stop.
+void test_auto_dj_s_cue_only_at_a_finished_queue() {
+  Rig r(8);
+  PlaybackController& p = r.player;
+  p.setRepeat(PlaybackController::Repeat::Off);
+  const uint32_t two[] = {0, 1};
+  TEST_ASSERT_TRUE(p.playNow(two, 2, 1));
+  TEST_ASSERT_TRUE(p.addFromAutoDj(5, true));
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_FALSE(p.cuedByAutoDj());
+  // Stopped but not at the end (a paused queue stopped): no cue either.
+  p.stop();
+  p.play(0);
+  p.stop();
+  TEST_ASSERT_FALSE(p.endedAtEnd());
+  TEST_ASSERT_TRUE(p.addFromAutoDj(6, true));
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(0, p.currentIndex());
+  // At a finished queue: cued; the mark goes with a stop, and with a skip
+  // that plays.
+  p.play(3);
+  r.audio.finish();
+  p.update(0);
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  TEST_ASSERT_TRUE(p.addFromAutoDj(7, true));
+  TEST_ASSERT_TRUE(p.cuedByAutoDj());
+  p.cuePrev();  // (paused: it only moves; still Auto DJ's cue)
+  TEST_ASSERT_TRUE(p.cuedByAutoDj());
+  p.stop();
+  TEST_ASSERT_FALSE(p.cuedByAutoDj());
+  p.play(4);
+  r.audio.finish();
+  p.update(0);
+  TEST_ASSERT_TRUE(p.addFromAutoDj(2, true));
+  TEST_ASSERT_TRUE(p.cuedByAutoDj());
+  p.prev();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  TEST_ASSERT_FALSE(p.cuedByAutoDj());
+}
+
+// Auto DJ starts a new session whenever the queue is a new one: every
+// entry point the firmware has for a Play or a Clear bumps
+// QueueModel::playEpoch(), so no call site is hooked. From the code
+// (src/): the Library's Play (LibraryPage.cpp: a tapped track, a
+// container's Play, "Play all N"), Shuffle all (Ui.cpp), the Queue's Clear
+// (QueuePage.cpp), the Undo toast (Ui.cpp), the console's qa, qb, qp, qx
+// and qu (main.cpp), the power lab's silence (PowerLab.cpp); later Auto DJ's
+// own (its empty-state button, "Auto DJ from here": one-track Plays). They
+// all reach playNow(), clearQueue() or undo(). Nothing else does.
+void test_every_play_and_clear_bumps_the_epoch() {
+  Rig r(8);
+  PlaybackController& p = r.player;
+  const QueueModel& q = r.queue;
+  uint32_t e = q.playEpoch();
+  const auto bumped = [&](const char* what) {
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(e + 1, q.playEpoch(), what);
+    e = q.playEpoch();
+  };
+  const auto same = [&](const char* what) { TEST_ASSERT_EQUAL_UINT32_MESSAGE(e, q.playEpoch(), what); };
+  const uint32_t album[] = {1, 2, 3};
+  const uint32_t all[] = {0, 1, 2, 3, 4, 5, 6, 7};
+  TEST_ASSERT_TRUE(p.playNow(album, 3, 1));
+  bumped("Library: a tapped track's Play");
+  TEST_ASSERT_TRUE(p.playNow(album, 3, PlaybackController::kAnyStart));
+  bumped("Library: a container's Play, Play all");
+  TEST_ASSERT_TRUE(p.playNow(all, 8, PlaybackController::kAnyStart, /*shuffle=*/true));
+  bumped("Shuffle all");
+  TEST_ASSERT_TRUE(p.undo());
+  bumped("Undo (the toast, qu) of Shuffle all");
+  TEST_ASSERT_TRUE(p.playNow(all, 8, 0));
+  bumped("console qa");
+  const LibraryIndex::Span b = TrackCatalog::builtins();
+  TEST_ASSERT_TRUE(p.playNow(b.ids, b.count, 0));
+  bumped("console qb");
+  TEST_ASSERT_TRUE(p.playNow(album, 3, 0));
+  bumped("console qp");
+  const uint32_t one = 4;
+  TEST_ASSERT_TRUE(p.playNow(&one, 1, 0));
+  bumped("the power lab's silence; Auto DJ's one-track Plays");
+  p.clearQueue();
+  bumped("Queue: Clear");
+  TEST_ASSERT_TRUE(p.undo());
+  bumped("Undo of a Clear");
+  p.clearQueue();
+  bumped("console qx");
+  p.clearQueue();
+  bumped("console qx of an empty queue");
+  TEST_ASSERT_TRUE(p.playNow(nullptr, 0, 0));
+  bumped("a Play of nothing (a Clear)");
+  // Not a new queue.
+  TEST_ASSERT_TRUE(p.playNow(all, 8, 2));
+  bumped("a Play");
+  TEST_ASSERT_TRUE(p.playNext(album, 2));
+  TEST_ASSERT_TRUE(p.addToQueue(album, 2));
+  TEST_ASSERT_TRUE(p.undo());
+  const uint32_t pos[] = {5};
+  TEST_ASSERT_EQUAL_UINT32(1, p.remove(pos, 1).count);
+  TEST_ASSERT_TRUE(p.moveNext(pos, 1));
+  TEST_ASSERT_TRUE(p.clearUpNext());
+  TEST_ASSERT_TRUE(p.undo());
+  p.setShuffle(true);
+  p.setShuffle(false);
+  p.setRepeat(PlaybackController::Repeat::One);
+  p.setRepeat(PlaybackController::Repeat::All);
+  p.next();
+  p.prev();
+  p.play(4);
+  p.cueNext();
+  p.cuePrev();
+  p.togglePlayPause();
+  p.togglePlayPause();
+  TEST_ASSERT_TRUE(p.addFromAutoDj(6, false));
+  same("the other edits, the transport, Auto DJ's own append");
+  // The boot's restore (QueueStore: queuetext::read() assigns, then
+  // queueReplaced()), main.cpp's queue of everything at boot, a library
+  // rebuild's read-back (QueueRemap: release(), then assign()): the same
+  // queue, kept.
+  r.queue.assign(all, 8, 2);
+  p.queueReplaced(false);
+  r.queue.release();
+  r.queue.assign(all, 8, 2);
+  p.queueReplaced(true);
+  same("a restore, a remap");
+  // Behind the fence every edit is refused: no Play, no new session.
+  p.setFenced(true);
+  TEST_ASSERT_FALSE(p.playNow(album, 3, 0));
+  p.clearQueue();
+  TEST_ASSERT_FALSE(p.undo());
+  same("fenced");
+  p.setFenced(false);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
@@ -3091,5 +3593,13 @@ int main(int, char**) {
   RUN_TEST(test_the_resume_point_while_a_start_is_pending);
   RUN_TEST(test_the_shown_time_never_lends_the_track_befores_length);
   RUN_TEST(test_a_seek_to_0_while_a_start_is_pending_keeps_the_bars_length);
+  RUN_TEST(test_auto_dj_s_pick_sends_the_word_at_once);
+  RUN_TEST(test_auto_dj_s_pick_is_refused_behind_the_fence);
+  RUN_TEST(test_repeat_all_never_wraps_with_auto_dj);
+  RUN_TEST(test_auto_dj_holds_for_repeat_one_and_end_of_queue);
+  RUN_TEST(test_ended_at_end_is_set_and_cleared);
+  RUN_TEST(test_every_track_failing_finishes_the_queue_at_its_end);
+  RUN_TEST(test_auto_dj_s_cue_only_at_a_finished_queue);
+  RUN_TEST(test_every_play_and_clear_bumps_the_epoch);
   return UNITY_END();
 }
