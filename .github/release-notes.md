@@ -69,8 +69,8 @@ Source for this binary: {{SOURCE_URL}}, and with its libraries in
   tr…"); the volume menu leaves out its "volume" label beside a long name
   rather than draw "vol…"; an artist's All tracks puts a long name under
   its title; an album opened from its artist puts its line under the
-  title, the year left out before the count ("Daft Punk · 14 tracks"
-  under "Discovery"); a folder's counts say "files" where "audio files"
+  title, the year left out before the count ("Glass Harbour · 14 tracks"
+  under "Tidewater"); a folder's counts say "files" where "audio files"
   doesn't fit ("12 folders, 140 files"). The Queue's header no longer
   cuts its line, and gives the position before the count: on a long
   queue with many hours to go, "250 of 5000" where 0.9.0 cut "4750 up
