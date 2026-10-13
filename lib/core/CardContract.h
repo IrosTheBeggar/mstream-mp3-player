@@ -364,14 +364,17 @@ struct Info {
   uint16_t contract = 1;
   char firmware[kValueMax] = "";
   // The majors the firmware reads, one bit per major (bit 0: major 1).
-  uint32_t readMsmf = 1, readMptg = 1, readMpdj = 1, readMpth = 1;
+  // MPDJ none: no firmware reads the AutoDJ index yet (released 0.8.0 to
+  // 0.10.0 wrote 1, for a draft no reader read), so a writer writes none;
+  // the firmware that ships its engine writes 2 (docs/AUTODJ-INDEX.md 7.4).
+  uint32_t readMsmf = 1, readMptg = 1, readMpdj = 0, readMpth = 1;
   char codecs[kValueMax] = "mp3,flac";
   char extensions[kValueMax] = "mp3,flac";
   uint32_t maxRate = 48000;
   uint32_t maxChannels = 2;
 };
 // What a card with no device.txt means (firmware before this design):
-// majors 1, mp3 and flac, 48 kHz, 2 channels.
+// majors 1 (MPDJ none), mp3 and flac, 48 kHz, 2 channels.
 Info defaults();
 // This firmware's file (the example of 2.15, for `firmware`).
 Info current(const char* firmware);

@@ -8,8 +8,11 @@
 // file with its own implementation), and the rules around them: CRC-32 and
 // its combination, the path hash, qfp, the FAT time and the skew, the
 // number rule, the text decoders and 2.3.6's limits, the string run, the
-// canonical order, the album folder, the root election, the selection
-// signature and device.txt. The binary formats are test_card_files'.
+// canonical order, the album folder, the root election, device.txt, and
+// the AutoDJ index's primitives (docs/AUTODJ-INDEX.md 13.3: the level, the
+// geometry, the strided ranks, the slot CRC, the selection signature). The
+// binary formats are test_card_files' (MPDJ's own unit tests:
+// test_card_autodj).
 // Run: pio test -e native
 #include <unity.h>
 
@@ -658,11 +661,13 @@ void test_bytes_and_the_thumbnail() {
   const std::vector<uint8_t> want0 = hexBytes(t["head0to15"].str()), want20 = hexBytes(t["head20to23"].str());
   TEST_ASSERT_EQUAL_MEMORY(want0.data(), head, 16);
   TEST_ASSERT_EQUAL_MEMORY(want20.data(), head + 20, 4);
-  // Stored byte strings: a UUID in RFC 4122 order, a hash prefix as its hex.
+  // Stored byte strings: a UUID in RFC 4122 order, a canonical hash as its
+  // hex (ORIG's audioHash: the 16 bytes the 32 digits encode).
   const std::vector<uint8_t> uuid = hexBytes(b["serverInstance"]["uuid"].str());
   TEST_ASSERT_EQUAL_MEMORY(hexBytes(b["serverInstance"]["stored"].str()).data(), uuid.data(), 16);
-  const std::vector<uint8_t> audio = hexBytes(b["hashPrefix"]["audioHash"].str());
-  TEST_ASSERT_EQUAL_MEMORY(hexBytes(b["hashPrefix"]["stored"].str()).data(), audio.data(), 8);
+  const std::vector<uint8_t> audio = hexBytes(b["audioHash"]["audioHash"].str());
+  TEST_ASSERT_EQUAL_size_t(16, audio.size());
+  TEST_ASSERT_EQUAL_MEMORY(hexBytes(b["audioHash"]["stored"].str()).data(), audio.data(), 16);
   // An integer id is little-endian: B1F7E69FBD466B59 is 59 6B 46 BD 9F E6 F7 B1.
   uint8_t le[8];
   cc::put64(le, 0xB1F7E69FBD466B59ull);
@@ -670,37 +675,148 @@ void test_bytes_and_the_thumbnail() {
   TEST_ASSERT_EQUAL_MEMORY(wantLe, le, 8);
 }
 
-void test_selection_signature() {
+void test_autodj_primitives() {
+  namespace mpdj = cc::mpdj;
+  const Value& v = gVectors["mpdj"];
   // SHA-256 itself: FIPS 180-2's "abc" and the two-block message.
   uint8_t d[32];
-  cc::mpdj::Sha256 a;
+  mpdj::Sha256 a;
   a.update("abc", 3);
   a.final(d);
   TEST_ASSERT_EQUAL_MEMORY(hexBytes("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad").data(), d, 32);
-  cc::mpdj::Sha256 two;
+  mpdj::Sha256 two;
   const char* m = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
   two.update(m, std::strlen(m));
   two.final(d);
   TEST_ASSERT_EQUAL_MEMORY(hexBytes("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1").data(), d, 32);
-  const Value& v = gVectors["selectionSignature"];
-  for (size_t i = 0; i < v.size(); ++i) {
-    std::vector<std::vector<uint8_t>> hs;
-    for (size_t k = 0; k < v[i]["hashes"].size(); ++k) hs.push_back(hexBytes(v[i]["hashes"][k].str()));
-    std::vector<uint8_t> flat;
-    for (auto& h : hs) flat.insert(flat.end(), h.begin(), h.end());
-    uint8_t sig[16];
-    cc::mpdj::selectionSignature(v[i]["modelId"].c_str(), v[i]["modelVersion"].c_str(), v[i]["metric"].c_str(),
-                                 static_cast<uint32_t>(v[i]["k"].u64()),
-                                 reinterpret_cast<const uint8_t(*)[16]>(flat.data()), hs.size(), sig);
-    TEST_ASSERT_EQUAL_MEMORY(hexBytes(v[i]["sig"].str()).data(), sig, 16);
+  // The level: half away from zero, clamped; the float32 trap pair's exact
+  // cosine is on one side of 139.5, its float32 sum on the other.
+  TEST_ASSERT_TRUE(v["levels"].size() >= 9);
+  for (size_t i = 0; i < v["levels"].size(); ++i) {
+    const Value& e = v["levels"][i];
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(e["level"].u64(), mpdj::level(e["cos"].num()), e["cos"].c_str());
   }
-  TEST_ASSERT_EQUAL_MEMORY(hexBytes(gVectors["bytes"]["selectionSigStored"].str()).data(),
-                           hexBytes(v[0]["sig"].str()).data(), 16);
-  // The score: half away from zero, clamped.
-  const float e[2] = {0.5f, 0.5f}, f[2] = {0.5f, 0.5f}, g[2] = {-1.0f, 0.0f}, h[2] = {1.0f, 1.0f};
-  TEST_ASSERT_EQUAL_UINT8(128, cc::mpdj::score(e, f, 2));  // 127.5
-  TEST_ASSERT_EQUAL_UINT8(0, cc::mpdj::score(e, g, 2));
-  TEST_ASSERT_EQUAL_UINT8(255, cc::mpdj::score(h, h, 2));
+  // The geometry.
+  for (size_t i = 0; i < v["slotBytes"].size(); ++i)
+    TEST_ASSERT_EQUAL_UINT32(v["slotBytes"][i]["slotBytes"].u64(),
+                             mpdj::slotBytesFor(static_cast<uint32_t>(v["slotBytes"][i]["k"].u64())));
+  for (size_t i = 0; i < v["headerBytes"].size(); ++i) {
+    const Value& e = v["headerBytes"][i];
+    TEST_ASSERT_EQUAL_UINT32(e["headerBytes"].u64(),
+                             mpdj::headerBytesFor(static_cast<uint32_t>(e["sectionCount"].u64()),
+                                                  static_cast<uint32_t>(e["slotBytes"].u64()),
+                                                  static_cast<uint32_t>(e["minimum"].u64())));
+  }
+  // The strided ranks (and the top k when m <= k).
+  for (size_t i = 0; i < v["stridedRanks"].size(); ++i) {
+    const Value& e = v["stridedRanks"][i];
+    const uint32_t k = static_cast<uint32_t>(e["k"].u64()), h = static_cast<uint32_t>(e["head"].u64()),
+                   mm = static_cast<uint32_t>(e["m"].u64());
+    if (e.has("ranks")) {
+      TEST_ASSERT_EQUAL_size_t(k, e["ranks"].size());
+      for (uint32_t j = 0; j < k; ++j)
+        TEST_ASSERT_EQUAL_UINT32(e["ranks"][static_cast<size_t>(j)].u64(), mpdj::strideRank(j, k, h, mm));
+    } else {
+      TEST_ASSERT_TRUE(e["pairs"].size() > 0);
+      for (size_t q = 0; q < e["pairs"].size(); ++q) {
+        const uint32_t j = static_cast<uint32_t>(e["pairs"][q]["j"].u64());
+        TEST_ASSERT_EQUAL_UINT32(e["pairs"][q]["rank"].u64(), mpdj::strideRank(j, k, h, mm));
+      }
+    }
+  }
+  // A slot's CRC, seeded with its row.
+  const Value& sc = v["slotCrc"];
+  const std::string file = cardfixtures::bytes("golden/" + sc["file"].str());
+  cc::MemSource src(file.data(), static_cast<uint32_t>(file.size()));
+  mpdj::Table t;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.open(src)));
+  const uint32_t row = static_cast<uint32_t>(sc["row"].u64());
+  const uint8_t* slot = reinterpret_cast<const uint8_t*>(file.data()) + t.slotsOffset() + row * t.slotBytes();
+  TEST_ASSERT_EQUAL_HEX32(sc["crc"].u64(), mpdj::slotCrc(slot, t.slotBytes(), row));
+  TEST_ASSERT_EQUAL_HEX32(sc["crc"].u64(), cc::get32(slot + t.slotBytes() - 4));
+  TEST_ASSERT_EQUAL_HEX32(sc["unseeded"].u64(), cc::crc32(slot, t.slotBytes() - 4));
+  // The selection signature: its text's digest, and the header's bytes.
+  const Value& sig = v["signature"];
+  const std::string& text = sig["text"].str();
+  mpdj::Sha256 st;
+  st.update(text.data(), text.size());
+  st.final(d);
+  TEST_ASSERT_EQUAL_MEMORY(hexBytes(sig["sig"].str()).data(), d, 16);
+  TEST_ASSERT_EQUAL_STRING(sc["file"].c_str(), sig["file"].c_str());
+  TEST_ASSERT_EQUAL_MEMORY(hexBytes(sig["sig"].str()).data(), t.selectionSig(), 16);
+  TEST_ASSERT_EQUAL_MEMORY(hexBytes(gVectors["bytes"]["selectionSigStored"].str()).data(), t.selectionSig(), 16);
+  // The same text from its parts (the hashes and the group as it lists
+  // them), through selectionSignature().
+  std::vector<std::string> lines;
+  for (size_t at = 0; at < text.size();) {
+    const size_t nl = text.find('\n', at);
+    TEST_ASSERT_TRUE(nl != std::string::npos);  // every line ends with LF
+    lines.push_back(text.substr(at, nl - at));
+    at = nl + 1;
+  }
+  TEST_ASSERT_TRUE(lines.size() > 6);
+  TEST_ASSERT_EQUAL_STRING("MPDJ-SEL 2", lines[0].c_str());
+  TEST_ASSERT_EQUAL_STRING("model synthetic-embedding 1", lines[1].c_str());
+  TEST_ASSERT_EQUAL_STRING("metric cosine", lines[2].c_str());
+  TEST_ASSERT_EQUAL_STRING("k 4", lines[3].c_str());
+  TEST_ASSERT_EQUAL_STRING("sel strided 1 100", lines[4].c_str());
+  TEST_ASSERT_EQUAL_STRING(("vec 8 " + v["vec"]["sha256"].str()).c_str(), lines[5].c_str());
+  std::vector<uint8_t> hashes;
+  std::vector<uint32_t> groupRows, groupEnds;
+  for (size_t i = 6; i < lines.size(); ++i) {
+    if (lines[i].compare(0, 5, "same ") == 0) {
+      for (size_t at = 5; at < lines[i].size();) {
+        size_t sp = lines[i].find(' ', at);
+        if (sp == std::string::npos) sp = lines[i].size();
+        groupRows.push_back(static_cast<uint32_t>(std::stoul(lines[i].substr(at, sp - at))));
+        at = sp + 1;
+      }
+      groupEnds.push_back(static_cast<uint32_t>(groupRows.size()));
+    } else {
+      const std::vector<uint8_t> h = hexBytes(lines[i]);
+      TEST_ASSERT_EQUAL_size_t(16, h.size());
+      hashes.insert(hashes.end(), h.begin(), h.end());
+    }
+  }
+  mpdj::SigIn in;
+  in.modelId = "synthetic-embedding";
+  in.modelVersion = "1";
+  in.metric = "cosine";
+  in.k = 4;
+  in.selKind = mpdj::kSelStrided;
+  in.selHead = 1;
+  in.selFloor = 100;
+  in.dim = 8;
+  const std::vector<uint8_t> vec = hexBytes(v["vec"]["sha256"].str());
+  TEST_ASSERT_EQUAL_size_t(32, vec.size());
+  std::memcpy(in.vecSha256, vec.data(), 32);
+  in.hashes = reinterpret_cast<const uint8_t(*)[16]>(hashes.data());
+  in.rowCount = static_cast<uint32_t>(hashes.size() / 16);
+  in.groupRows = groupRows.data();
+  in.groupEnds = groupEnds.data();
+  in.groupCount = static_cast<uint32_t>(groupEnds.size());
+  TEST_ASSERT_EQUAL_UINT32(6, in.rowCount);
+  TEST_ASSERT_EQUAL_UINT32(1, in.groupCount);
+  uint8_t got[16];
+  mpdj::selectionSignature(in, got);
+  TEST_ASSERT_EQUAL_MEMORY(hexBytes(sig["sig"].str()).data(), got, 16);
+  // The vec line: every row's f32 values in row order (the description's
+  // rows sorted by their hashes).
+  Value lib;
+  TEST_ASSERT_TRUE(cardfixtures::json("libraries/autodj-00000029.json", &lib));
+  TEST_ASSERT_EQUAL_STRING(v["vec"]["file"].c_str(), lib["file"].c_str());
+  std::vector<std::pair<std::string, std::vector<float>>> rows;
+  for (size_t i = 0; i < lib["rows"].size(); ++i) {
+    std::vector<float> e;
+    for (size_t k = 0; k < lib["rows"][i]["embedding"].size(); ++k)
+      e.push_back(static_cast<float>(lib["rows"][i]["embedding"][k].num()));
+    rows.emplace_back(lib["rows"][i]["hash"].str(), e);
+  }
+  std::sort(rows.begin(), rows.end());
+  std::vector<const float*> emb;
+  for (auto& r : rows) emb.push_back(r.second.data());
+  mpdj::vecDigest(emb.data(), static_cast<uint32_t>(emb.size()), 8, d);
+  TEST_ASSERT_EQUAL_MEMORY(vec.data(), d, 32);
 }
 
 void test_root_election() {
@@ -734,6 +850,16 @@ void test_root_election() {
   const uint8_t pend[6] = {'M', 'S', 'P', 'D', 3, 0}, dj[6] = {'M', 'P', 'D', 'J', 9, 9};
   TEST_ASSERT_TRUE(cc::unknownMajor(pend, 6));
   TEST_ASSERT_TRUE(cc::unknownMajor(dj, 6));
+  // MPDJ's majors: 2 is this contract's, 1 the retired draft a v2 writer
+  // replaces; 3 is newer.
+  uint8_t mpdj[6] = {'M', 'P', 'D', 'J', 2, 0};
+  TEST_ASSERT_FALSE(cc::unknownMajor(mpdj, 6));
+  mpdj[4] = 1;
+  TEST_ASSERT_FALSE(cc::unknownMajor(mpdj, 6));
+  mpdj[4] = 3;
+  TEST_ASSERT_TRUE(cc::unknownMajor(mpdj, 6));
+  const uint8_t tags2[6] = {'M', 'P', 'T', 'G', 2, 0};
+  TEST_ASSERT_TRUE(cc::unknownMajor(tags2, 6));  // the others' majors are 1
 }
 
 void test_device_txt() {
@@ -741,22 +867,34 @@ void test_device_txt() {
   const std::string want = gVectors["deviceTxt"]["text"].str();
   TEST_ASSERT_EQUAL_STRING(cardfixtures::bytes("golden/device.txt").c_str(), want.c_str());
   char buf[512];
-  const size_t n = dt::format(dt::current("0.8.0"), buf, sizeof(buf));
+  const size_t n = dt::format(dt::current("0.11.0"), buf, sizeof(buf));
   TEST_ASSERT_EQUAL_size_t(want.size(), n);
   TEST_ASSERT_EQUAL_STRING(want.c_str(), buf);
-  // Read back.
+  // Read back. This firmware reads no MPDJ (docs/AUTODJ-INDEX.md 7.4).
   dt::Info i;
   TEST_ASSERT_TRUE(dt::parse(buf, n, &i));
-  TEST_ASSERT_EQUAL_STRING("0.8.0", i.firmware);
+  TEST_ASSERT_EQUAL_STRING("0.11.0", i.firmware);
   TEST_ASSERT_TRUE(dt::readsMajor(i.readMptg, 1));
   TEST_ASSERT_FALSE(dt::readsMajor(i.readMptg, 2));
+  TEST_ASSERT_EQUAL_UINT32(0, i.readMpdj);
+  TEST_ASSERT_TRUE(std::strstr(buf, "\nread.mpdj=\n") != nullptr);
   TEST_ASSERT_TRUE(dt::listHas(i.codecs, "opus"));
   TEST_ASSERT_TRUE(dt::listHas(i.extensions, "FLAC"));
   TEST_ASSERT_EQUAL_UINT32(48000, i.maxRate);
-  // No file: majors 1, mp3 and flac.
+  // No file: majors 1 (MPDJ none), mp3 and flac; each key as the vectors
+  // say, through the text format() makes of the defaults.
   const dt::Info none = dt::defaults();
-  TEST_ASSERT_EQUAL_STRING(gVectors["deviceTxt"]["noFile"]["codecs"].c_str(), none.codecs);
-  TEST_ASSERT_EQUAL_STRING(gVectors["deviceTxt"]["noFile"]["extensions"].c_str(), none.extensions);
+  const Value& noFile = gVectors["deviceTxt"]["noFile"];
+  TEST_ASSERT_EQUAL_size_t(8, noFile.size());
+  char dflt[512];
+  TEST_ASSERT_TRUE(dt::format(none, dflt, sizeof(dflt)) > 0);
+  for (const auto& kv : noFile.members) {
+    const std::string line = "\n" + kv.first + "=" + kv.second.str() + "\n";
+    TEST_ASSERT_TRUE_MESSAGE(std::strstr(dflt, line.c_str()) != nullptr, kv.first.c_str());
+  }
+  TEST_ASSERT_EQUAL_UINT32(0, none.readMpdj);
+  TEST_ASSERT_EQUAL_STRING(noFile["codecs"].c_str(), none.codecs);
+  TEST_ASSERT_EQUAL_STRING(noFile["extensions"].c_str(), none.extensions);
   TEST_ASSERT_FALSE(dt::listHas(none.codecs, "opus"));
   TEST_ASSERT_EQUAL_UINT32(48000, none.maxRate);
   TEST_ASSERT_EQUAL_UINT32(2, none.maxChannels);
@@ -774,7 +912,19 @@ void test_device_txt() {
   TEST_ASSERT_EQUAL_STRING("mp3,flac", i.extensions);
   TEST_ASSERT_FALSE(dt::listHas("mp3,flac", "mp"));
   TEST_ASSERT_FALSE(dt::listHas("", "mp3"));
-  TEST_ASSERT_EQUAL_size_t(0, dt::format(dt::current("0.8.0"), buf, 40));  // doesn't fit
+  TEST_ASSERT_EQUAL_size_t(0, dt::format(dt::current("0.11.0"), buf, 40));  // doesn't fit
+  // Whether a writer writes MPDJ v2: only when read.mpdj lists 2; no file,
+  // or no read.mpdj key, reads as none.
+  const Value& cases = gVectors["mpdj"]["deviceTxt"]["cases"];
+  TEST_ASSERT_TRUE(cases.size() >= 6);
+  for (size_t c = 0; c < cases.size(); ++c) {
+    const Value& e = cases[c];
+    dt::Info got = dt::defaults();
+    std::string t = "contract=1\n";
+    if (e.has("readMpdj")) t += "read.mpdj=" + e["readMpdj"].str() + "\n";
+    if (!e["noFile"].boolean()) TEST_ASSERT_TRUE(dt::parse(t.data(), t.size(), &got));
+    TEST_ASSERT_EQUAL_MESSAGE(e["writesV2"].boolean(), dt::readsMajor(got.readMpdj, 2), t.c_str());
+  }
 }
 
 int main(int, char**) {
@@ -795,7 +945,7 @@ int main(int, char**) {
   RUN_TEST(test_names_and_the_canonical_order);
   RUN_TEST(test_album_folder);
   RUN_TEST(test_bytes_and_the_thumbnail);
-  RUN_TEST(test_selection_signature);
+  RUN_TEST(test_autodj_primitives);
   RUN_TEST(test_root_election);
   RUN_TEST(test_device_txt);
   return UNITY_END();

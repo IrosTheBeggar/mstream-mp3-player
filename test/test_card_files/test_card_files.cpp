@@ -3,13 +3,14 @@
 
 // Host unit tests for the card contract's binary files (lib/core/
 // CardContainer, CardTags, CardManifest, CardAutoDj; docs/METADATA.md 2.4-
-// 2.6, 2.12.5, 2.13, 2.17): the C++ writers make the shared golden files
-// (test/fixtures/card/golden, made by tools/card_fixtures.py, a second
-// implementation) byte for byte from the library descriptions; the readers
-// read them back field for field; every hardening file (each check of 2.4.3
-// broken under valid CRCs) reads as absent for the reason it breaks, and
-// the newer minor as present; truncation at every byte, every flipped bit
-// and a resealed-CRC fuzz pass make every file absent (or, for padding and
+// 2.6, 2.12.5, 2.17; docs/AUTODJ-INDEX.md): the C++ writers make the shared
+// golden files (test/fixtures/card/golden, made by tools/card_fixtures.py
+// and tools/mpdj.py, a second implementation) byte for byte from the
+// library descriptions; the readers read them back field for field; every
+// hardening file (each check of 2.4.3 and AUTODJ-INDEX.md 8 broken under
+// valid CRCs) reads as absent for the reason it breaks, and the newer minor
+// as present; truncation at every byte, every flipped bit and a
+// resealed-CRC fuzz pass make every file absent (or, for padding and
 // sections a reader doesn't use, leave it present) with no crash and no
 // endless loop; a large synthetic library round-trips through the walker's
 // smallest buffers. Run: pio test -e native
@@ -23,6 +24,7 @@
 #include <map>
 #include <memory>
 #include <random>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -32,6 +34,7 @@
 #include "CardContract.h"
 #include "CardManifest.h"
 #include "CardTags.h"
+#include "NameKey.h"
 #include "ThumbCache.h"
 
 namespace cc = cardcontract;
@@ -269,7 +272,8 @@ cc::Why readAs(const std::string& format, const Bytes& file, bool deviceUses = f
   if (format == "MPDJ") {
     mpdj::Table t;
     const cc::Why w = t.open(src);
-    return w != cc::Why::Ok ? w : t.check(mpdj::Table::kUseAll, scratch, sizeof(scratch));
+    return w != cc::Why::Ok ? w : t.check(deviceUses ? mpdj::Table::kUseDevice : mpdj::Table::kUseAll, scratch,
+                                          sizeof(scratch));
   }
   return cc::Why::Magic;
 }
@@ -280,8 +284,9 @@ std::string formatOf(const Bytes& b) {
 }
 
 // The byte ranges a reader doesn't check: the gaps between sections (zero
-// padding, which readers ignore), and the sections a device-uses MPTG
-// reader skips.
+// padding, which readers ignore), and the sections a device-uses reader
+// skips (MPTG's HIDX, ORIG and OSTR; MPDJ's DJSL, whose slots the device
+// checks as it reads them).
 std::vector<bool> unchecked(const Bytes& b, bool deviceUses) {
   std::vector<bool> skip(b.size(), false);
   const uint32_t hb = cc::get32(&b[8]), n = cc::get32(&b[12]);
@@ -290,11 +295,45 @@ std::vector<bool> unchecked(const Bytes& b, bool deviceUses) {
     const uint8_t* e = &b[hb + 32 * i];
     const uint32_t type = cc::get32(e), off = cc::get32(e + 8), len = cc::get32(e + 12);
     for (uint32_t k = end; k < off; ++k) skip[k] = true;
-    if (deviceUses && (type == mptg::kHidx || type == mptg::kOrig || type == mptg::kOstr))
+    if (deviceUses && (type == mptg::kHidx || type == mptg::kOrig || type == mptg::kOstr || type == mpdj::kDjsl))
       for (uint32_t k = off; k < off + len; ++k) skip[k] = true;
     end = off + len;
   }
   return skip;
+}
+
+// A source whose reads fail on demand (the card gone mid-session).
+class FlakySource : public cc::Source {
+public:
+  explicit FlakySource(const Bytes& b) : m_(b.data(), static_cast<uint32_t>(b.size())) {}
+  uint32_t size() const override { return m_.size(); }
+  bool read(uint32_t offset, void* out, uint32_t n) override { return !fail && m_.read(offset, out, n); }
+  bool fail = false;
+
+private:
+  cc::MemSource m_;
+};
+
+// An MPDJ file's slot CRCs made right again (when its rowCount, slotBytes
+// and DJSL's place make sense), so a mutation inside DJSL meets the slot's
+// list checks (S2-S4), not its CRC (S1). Before reseal(): DJSL's own CRC
+// covers the slots.
+void resealSlots(Bytes& b) {
+  if (b.size() < mpdj::kMinHeaderBytes || std::memcmp(b.data(), "MPDJ", 4) != 0) return;
+  const uint32_t hb = cc::get32(&b[8]), n = cc::get32(&b[12]);
+  const uint32_t rows = cc::get32(&b[40]), sb = cc::get16(&b[50]);
+  if (n > 64 || static_cast<uint64_t>(hb) + 32ull * n > b.size() || (sb != mpdj::kSmallSlot && sb != mpdj::kLargeSlot))
+    return;
+  for (uint32_t i = 0; i < n; ++i) {
+    const uint8_t* e = &b[hb + 32 * i];
+    if (cc::get32(e) != mpdj::kDjsl) continue;
+    const uint64_t off = cc::get32(e + 8);
+    if (off + static_cast<uint64_t>(rows) * sb > b.size()) return;
+    for (uint32_t r = 0; r < rows; ++r) {
+      uint8_t* slot = &b[off + static_cast<uint64_t>(r) * sb];
+      cc::put32(slot + sb - 4, mpdj::slotCrc(slot, sb, r));
+    }
+  }
 }
 
 // Recomputes every section's CRC (where the directory makes sense) and the
@@ -312,9 +351,213 @@ void reseal(Bytes& b) {
   cc::put32(&b[32], cc::crc32(b.data(), hb + 32 * n));
 }
 
-const char* const kGoldenBinaries[] = {"tags-0000002a.bin",  "tags-device.bin",  "tags-00000001.bin", "manifest.bin",
-                                       "manifest-min.bin",   "pending.bin",      "autodj-00000029.bin",
-                                       "autodj-small.bin"};
+// An MPDJ description (docs/AUTODJ-INDEX.md 13.2) as the writer's input:
+// each row's record values are its primary file's (the smallest path hash,
+// a tie by the path's bytes), its keys computed here with namekey and
+// checked against the ones the description gives, its embedding the
+// description's or its row of the vectors file the description names.
+std::string nameKeyOf(const std::string& s) {
+  std::string out(s.size() * 3 / 2 + 8, '\0');
+  const size_t n = namekey::nameKey(s.data(), s.size(), &out[0], out.size());
+  out.resize(n);
+  return out;
+}
+
+struct AutoDjInput {
+  Value d;
+  mpdj::TableIn in;
+  std::vector<mpdj::RowIn> rows;  // the description's order
+  std::vector<std::vector<uint64_t>> paths;  // the primary file's first
+  std::vector<std::vector<float>> emb;
+  std::vector<std::string> songs;
+  std::vector<size_t> order;  // row r (canonical-hash order) is rows[order[r]]
+
+  explicit AutoDjInput(const Value& desc) : d(desc) {
+    const Value& rs = d["rows"];
+    const size_t n = rs.size();
+    const uint32_t dim = static_cast<uint32_t>(d["dim"].u64());
+    rows.resize(n);
+    paths.resize(n);
+    emb.resize(n);
+    songs.resize(n);
+    std::string side;
+    if (d.has("vectors")) {
+      side = cardfixtures::bytes("libraries/" + d["vectors"].str());
+      TEST_ASSERT_EQUAL_size_t_MESSAGE(4ull * dim * n, side.size(), d["vectors"].c_str());
+    }
+    for (size_t i = 0; i < n; ++i) {
+      const Value& r = rs[i];
+      mpdj::RowIn& x = rows[i];
+      const Bytes h = hexBytes(r["hash"].str());
+      TEST_ASSERT_EQUAL_size_t(16, h.size());
+      std::memcpy(x.hash, h.data(), 16);
+      for (uint32_t k = 0; k < dim; ++k) {
+        if (side.empty()) {
+          emb[i].push_back(static_cast<float>(r["embedding"][static_cast<size_t>(k)].num()));
+        } else {
+          const uint32_t u = cc::get32(reinterpret_cast<const uint8_t*>(side.data()) + 4 * (i * dim + k));
+          float f;
+          std::memcpy(&f, &u, 4);
+          emb[i].push_back(f);
+        }
+      }
+      const Value* primary = nullptr;
+      for (size_t f = 0; f < r["files"].size(); ++f) {
+        const Value& file = r["files"][f];
+        const uint64_t ph = cc::pathHash(file["path"].c_str());
+        if (!primary || ph < paths[i][0] || (ph == paths[i][0] && file["path"].str() < (*primary)["path"].str())) {
+          primary = &file;
+          paths[i].insert(paths[i].begin(), ph);
+        } else {
+          paths[i].push_back(ph);
+        }
+      }
+      TEST_ASSERT_NOT_NULL(primary);
+      if (r.has("primaryPath")) TEST_ASSERT_EQUAL_STRING(r["primaryPath"].c_str(), (*primary)["path"].c_str());
+      const Value& p = *primary;
+      x.bpm10 = static_cast<uint16_t>(p["bpm10"].u64());
+      x.camelot = static_cast<uint8_t>(p["camelot"].u64());
+      x.flags = p["bpmAnalysed"].boolean() ? mpdj::kFilterBpmAnalysed : 0;
+      // The keys (2.4): the record's artist list, its values joined by U+001F.
+      std::string list, first;
+      for (size_t a = 0; a < p["artists"].size(); ++a) {
+        const std::string& v = p["artists"][a].str();
+        if (a) list += '\x1F';
+        list += v;
+        if (first.empty() && !namekey::blank(v.data(), v.size())) first = nameKeyOf(v);
+      }
+      x.artistKey = namekey::artistKey(list.data(), list.size());
+      TEST_ASSERT_EQUAL_UINT32(first.empty() ? 0 : static_cast<uint32_t>(cc::fnv1a64Str(first.c_str())), x.artistKey);
+      if (r.has("artistNameKey")) TEST_ASSERT_EQUAL_STRING(r["artistNameKey"].c_str(), first.c_str());
+      const std::string& title = p["title"].str();
+      if (p.has("title") && !namekey::blank(title.data(), title.size())) {
+        char display[namekey::kDisplayMax + 1];
+        namekey::displayJoin(list.data(), list.size(), display, sizeof(display));
+        songs[i] = nameKeyOf(display) + "|" + nameKeyOf(title);
+        x.songKey = songs[i].c_str();
+        if (r.has("songKey")) TEST_ASSERT_EQUAL_STRING(r["songKey"].c_str(), x.songKey);
+      } else {
+        x.songKey = nullptr;
+        if (r.has("songKey")) TEST_ASSERT_TRUE_MESSAGE(r["songKey"].isNull(), r["hash"].c_str());
+      }
+      x.paths = paths[i].data();
+      x.pathCount = static_cast<uint32_t>(paths[i].size());
+      x.embedding = emb[i].data();
+    }
+    order.resize(n);
+    for (size_t i = 0; i < n; ++i) order[i] = i;
+    std::sort(order.begin(), order.end(),
+              [&](size_t a, size_t b) { return std::memcmp(rows[a].hash, rows[b].hash, 16) < 0; });
+    in.generation = static_cast<uint32_t>(d["generation"].u64());
+    in.cardId = d["cardId"].u64();
+    in.minor = static_cast<uint16_t>(d["minor"].u64());
+    in.k = static_cast<uint32_t>(d["k"].u64(mpdj::kDefaultK));
+    in.selKind = static_cast<uint8_t>(d["selKind"].u64(mpdj::kSelStrided));
+    in.selHead = static_cast<uint32_t>(d["selHead"].u64(mpdj::kDefaultHead));
+    in.selFloor = static_cast<uint32_t>(d["selFloor"].u64(mpdj::kDefaultFloor));
+    in.builtTime = static_cast<uint32_t>(d["builtTime"].u64());
+    in.tagsGeneration = static_cast<uint32_t>(d["tagsGeneration"].u64());
+    in.modelId = d["modelId"].c_str();
+    in.modelVersion = d["modelVersion"].c_str();
+    in.metric = d["metric"].c_str();
+    in.license = d["license"].c_str();
+    in.attribution = d["attribution"].c_str();
+    in.dim = dim;
+    in.rows = rows.data();
+    in.rowCount = static_cast<uint32_t>(n);
+  }
+  AutoDjInput(const AutoDjInput&) = delete;
+  AutoDjInput& operator=(const AutoDjInput&) = delete;
+
+  const mpdj::RowIn& row(uint32_t r) const { return rows[order[r]]; }
+  // Every row's list by 5's rule, as plainly as it reads: every candidate's
+  // level, a sort by (level desc, row asc), the ranks.
+  std::vector<std::vector<mpdj::Entry>> ruleLists() const {
+    const uint32_t n = in.rowCount, k = in.k;
+    std::vector<std::vector<mpdj::Entry>> out(n);
+    for (uint32_t a = 0; a < n; ++a) {
+      std::vector<std::pair<int, uint32_t>> cand;  // (-level, row)
+      for (uint32_t b = 0; b < n; ++b) {
+        if (b == a) continue;
+        if (row(a).songKey && row(b).songKey && std::strcmp(row(a).songKey, row(b).songKey) == 0) continue;
+        cand.emplace_back(-static_cast<int>(mpdj::level(row(a).embedding, row(b).embedding, in.dim)), b);
+      }
+      std::sort(cand.begin(), cand.end());
+      uint32_t m = 0;
+      while (m < cand.size() && -cand[m].first >= static_cast<int>(in.selFloor)) ++m;
+      const bool strided = in.selKind == mpdj::kSelStrided && m > k;
+      for (uint32_t j = 0; j < k && j < cand.size(); ++j) {
+        const uint32_t h = in.selHead;
+        const uint32_t r = !strided || j < h ? j : h + (j - h) * (m - 1 - h) / (k - 1 - h);
+        mpdj::Entry e;
+        e.row = static_cast<uint16_t>(cand[r].second);
+        e.level = static_cast<uint8_t>(-cand[r].first);
+        out[a].push_back(e);
+      }
+    }
+    return out;
+  }
+};
+
+// A file's DJPH entries (hash, row), read as they stand.
+std::vector<std::pair<uint64_t, uint32_t>> djphOf(const Bytes& file) {
+  cc::MemSource src(file.data(), static_cast<uint32_t>(file.size()));
+  cc::Container c;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(c.open(src, mpdj::kSpec, nullptr)));
+  const cc::Section& s = c.section(mpdj::kSecPaths);
+  std::vector<std::pair<uint64_t, uint32_t>> out;
+  for (uint32_t i = 0; i < s.count; ++i) {
+    const uint8_t* e = file.data() + s.offset + i * s.stride;
+    out.emplace_back(cc::get64(e), cc::get16(e + 8));
+  }
+  return out;
+}
+
+// Two MPDJ files read the same (the hardening's `same`): every row's filter
+// record and slot, every DJPH hash's row, the five strings.
+void assertSameAutoDj(const Bytes& want, const Bytes& got, const char* what) {
+  cc::MemSource ws(want.data(), static_cast<uint32_t>(want.size())), gs(got.data(), static_cast<uint32_t>(got.size()));
+  mpdj::Table w, g;
+  TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(w.open(ws)), what);
+  TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(g.open(gs)), what);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(w.rowCount(), g.rowCount(), what);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(w.k(), g.k(), what);
+  uint8_t wb[mpdj::kLargeSlot], gb[mpdj::kLargeSlot];
+  mpdj::Entry we[mpdj::kMaxK], ge[mpdj::kMaxK];
+  for (uint32_t r = 0; r < w.rowCount(); ++r) {
+    mpdj::Filter wf, gf;
+    TEST_ASSERT_TRUE(w.filter(r, &wf) && g.filter(r, &gf));
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE(wf.bpm10, gf.bpm10, what);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(wf.camelot, gf.camelot, what);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(wf.flags, gf.flags, what);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(wf.artistKey, gf.artistKey, what);
+    uint32_t wc = 0, gc = 0;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(w.slot(r, wb, we, &wc)), static_cast<int>(g.slot(r, gb, ge, &gc)),
+                                  what);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(wc, gc, what);
+    for (uint32_t j = 0; j < wc; ++j) {
+      TEST_ASSERT_EQUAL_UINT16_MESSAGE(we[j].row, ge[j].row, what);
+      TEST_ASSERT_EQUAL_UINT8_MESSAGE(we[j].level, ge[j].level, what);
+    }
+  }
+  TEST_ASSERT_TRUE_MESSAGE(djphOf(want) == djphOf(got), what);
+  for (uint32_t i = 0; i < 5; ++i) {
+    char a[300], b[300];
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(w.string(i, a, sizeof(a))));
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(g.string(i, b, sizeof(b))));
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(a, b, what);
+  }
+}
+
+const char* const kAutoDjLibraries[] = {"autodj-00000029", "autodj-small-top", "autodj-small-default", "autodj-tiny",
+                                        "autodj-pair",     "autodj-mid",       "autodj-mid-default"};
+
+// The goldens the byte loops run over (not autodj-mid's two: too big for
+// a check per flipped bit).
+const char* const kGoldenBinaries[] = {"tags-0000002a.bin",        "tags-device.bin",     "tags-00000001.bin",
+                                       "manifest.bin",             "manifest-min.bin",    "pending.bin",
+                                       "autodj-00000029.bin",      "autodj-small-top.bin", "autodj-small-default.bin",
+                                       "autodj-tiny.bin",          "autodj-pair.bin"};
 
 }  // namespace
 
@@ -350,53 +593,30 @@ void test_golden_tags_writer_is_order_free() {
 }
 
 void test_golden_autodj_files() {
-  for (const char* name : {"autodj-00000029", "autodj-small"}) {
-    const Value d = library(name);
-    const Value& rs = d["rows"];
-    const uint32_t dim = static_cast<uint32_t>(d["dim"].u64());
-    std::vector<mpdj::RowIn> rows(rs.size());
-    std::vector<std::vector<uint64_t>> paths(rs.size());
-    std::vector<std::vector<float>> emb(rs.size());
-    std::vector<std::string> songs(rs.size());
-    for (size_t i = 0; i < rs.size(); ++i) {
-      const Bytes h = hexBytes(rs[i]["hash"].str());
-      std::memcpy(rows[i].hash, h.data(), 16);
-      for (size_t k = 0; k < rs[i]["paths"].size(); ++k) paths[i].push_back(cc::pathHash(rs[i]["paths"][k].c_str()));
-      for (size_t k = 0; k < rs[i]["embedding"].size(); ++k)
-        emb[i].push_back(static_cast<float>(rs[i]["embedding"][k].num()));
-      songs[i] = rs[i]["songKey"].str();
-      rows[i].paths = paths[i].data();
-      rows[i].pathCount = static_cast<uint32_t>(paths[i].size());
-      rows[i].bpm10 = static_cast<uint16_t>(rs[i]["bpm10"].u64());
-      rows[i].camelot = static_cast<uint8_t>(rs[i]["camelot"].u64());
-      rows[i].flags = static_cast<uint8_t>(rs[i]["flags"].u64());
-      const std::string& ak = rs[i]["artistNameKey"].str();
-      rows[i].artistKey = ak.empty() ? 0 : static_cast<uint32_t>(cc::fnv1a64(ak.data(), ak.size()));
-      rows[i].songKey = songs[i].c_str();
-      rows[i].embedding = emb[i].data();
-    }
-    mpdj::TableIn in;
-    in.generation = static_cast<uint32_t>(d["generation"].u64());
-    in.cardId = d["cardId"].u64();
-    in.k = static_cast<uint32_t>(d["k"].u64());
-    in.builtTime = static_cast<uint32_t>(d["builtTime"].u64());
-    in.tagsGeneration = static_cast<uint32_t>(d["tagsGeneration"].u64());
-    in.modelId = d["modelId"].c_str();
-    in.modelVersion = d["modelVersion"].c_str();
-    in.metric = d["metric"].c_str();
-    in.license = d["license"].c_str();
-    in.attribution = d["attribution"].c_str();
-    in.dim = dim;
-    in.rows = rows.data();
-    in.rowCount = static_cast<uint32_t>(rows.size());
+  for (const char* name : kAutoDjLibraries) {
+    AutoDjInput x(library(name));
     VecSink out;
     uint8_t sig[16];
+    uint32_t fileBytes = 0, headerCrc = 0;
     const char* error = nullptr;
-    TEST_ASSERT_TRUE_MESSAGE(mpdj::write(out, in, sig, nullptr, nullptr, &error), error ? error : name);
-    const Bytes want = golden(d["file"].str());
+    TEST_ASSERT_TRUE_MESSAGE(mpdj::write(out, x.in, sig, &fileBytes, &headerCrc, &error), error ? error : name);
+    const Bytes want = golden(x.d["file"].str());
+    TEST_ASSERT_TRUE_MESSAGE(!want.empty(), name);
     TEST_ASSERT_EQUAL_size_t_MESSAGE(want.size(), out.b.size(), name);
     TEST_ASSERT_EQUAL_MEMORY_MESSAGE(want.data(), out.b.data(), want.size(), name);
+    TEST_ASSERT_EQUAL_UINT32(want.size(), fileBytes);
+    TEST_ASSERT_EQUAL_HEX32(cc::get32(&want[32]), headerCrc);
+    TEST_ASSERT_EQUAL_MEMORY_MESSAGE(&want[64], sig, 16, name);  // the header's selectionSig
   }
+  // The writer takes its rows in any order.
+  AutoDjInput x(library("autodj-00000029"));
+  std::mt19937 rng(11);
+  std::shuffle(x.rows.begin(), x.rows.end(), rng);
+  for (auto& p : x.paths) std::reverse(p.begin(), p.end());
+  VecSink out;
+  uint8_t sig[16];
+  TEST_ASSERT_TRUE(mpdj::write(out, x.in, sig, nullptr, nullptr, nullptr));
+  TEST_ASSERT_TRUE(out.b == golden("autodj-00000029.bin"));
 }
 
 msmf::CompIn compFrom(const Bytes& file) {
@@ -735,84 +955,195 @@ void test_manifest_read_back() {
 }
 
 void test_autodj_read_back() {
-  const Value d = library("autodj-00000029");
+  // Every golden: its slots are 5's lists, recomputed here as plainly as
+  // the rule reads; filters and paths are its primary files'; the bytes a
+  // slot doesn't use are zeros.
+  using L = std::vector<std::vector<std::pair<int, int>>>;
+  const L g1 = {{{2, 200}, {5, 185}, {4, 162}, {3, 100}}, {{0, 100}, {2, 51}, {4, 40}, {3, 0}},
+                {{0, 200}, {5, 171}, {4, 150}, {3, 128}}, {{2, 128}, {0, 100}, {1, 0}},
+                {{0, 162}, {2, 150}, {1, 40}},            {{0, 185}, {2, 171}, {1, 0}}};
+  L g2 = g1, g3 = g1;
+  g2[0] = {{2, 200}, {5, 185}, {4, 162}, {1, 100}};
+  g3[0] = {{2, 200}, {5, 185}, {4, 162}, {1, 100}, {3, 100}};
+  g3[1] = {{0, 100}, {2, 51}, {4, 40}, {3, 0}, {5, 0}};
+  g3[2] = {{0, 200}, {5, 171}, {4, 150}, {3, 128}, {1, 51}};
+  // AUTODJ-INDEX.md 13.4-13.5's lists, typed.
+  const std::map<std::string, L> typed = {{"autodj-00000029", g1},
+                                          {"autodj-small-top", g2},
+                                          {"autodj-small-default", g3},
+                                          {"autodj-tiny", {{}, {}}},
+                                          {"autodj-pair", {{{1, 0}}, {{0, 0}}}}};
+  uint8_t scratch[1024], buf[mpdj::kLargeSlot];
+  mpdj::Entry e[mpdj::kMaxK];
+  for (const char* name : kAutoDjLibraries) {
+    AutoDjInput x(library(name));
+    const Bytes file = golden(x.d["file"].str());
+    cc::MemSource src(file.data(), static_cast<uint32_t>(file.size()));
+    mpdj::Table t;
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(t.open(src)), name);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(t.check(mpdj::Table::kUseAll, scratch, sizeof(scratch))), name);
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.check(mpdj::Table::kUseDevice, scratch, 64)));
+    TEST_ASSERT_EQUAL_UINT32(x.in.rowCount, t.rowCount());
+    TEST_ASSERT_EQUAL_UINT32(x.in.k, t.k());
+    TEST_ASSERT_EQUAL_UINT32(mpdj::slotBytesFor(x.in.k), t.slotBytes());
+    TEST_ASSERT_EQUAL_UINT8(x.in.selKind, t.selKind());
+    TEST_ASSERT_EQUAL_UINT32(x.in.selKind == mpdj::kSelTop ? x.in.k : x.in.selHead, t.selHead());
+    TEST_ASSERT_EQUAL_UINT32(x.in.selKind == mpdj::kSelTop ? 0 : x.in.selFloor, t.selFloor());
+    TEST_ASSERT_EQUAL_UINT32(x.in.builtTime, t.builtTime());
+    TEST_ASSERT_EQUAL_UINT32(x.in.tagsGeneration, t.tagsGeneration());
+    TEST_ASSERT_EQUAL_UINT32(x.in.generation, t.frame().generation);
+    TEST_ASSERT_TRUE(t.frame().cardId == x.in.cardId);
+    TEST_ASSERT_EQUAL_UINT16(mpdj::kMajor2, t.frame().major);
+    // The alignment rule: DJSL right after the directory, on a slot boundary.
+    TEST_ASSERT_EQUAL_UINT32(mpdj::headerBytesFor(4, t.slotBytes()), t.frame().headerBytes);
+    TEST_ASSERT_EQUAL_UINT32(t.frame().headerBytes + 4 * cc::kDirEntryBytes, t.slotsOffset());
+    TEST_ASSERT_EQUAL_UINT32(0, t.slotsOffset() % t.slotBytes());
+    const char* const strings[5] = {"modelId", "modelVersion", "metric", "license", "attribution"};
+    for (uint32_t i = 0; i < 5; ++i) {
+      char s[300];
+      TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.string(i, s, sizeof(s))));
+      TEST_ASSERT_EQUAL_STRING(x.d[strings[i]].c_str(), s);
+    }
+    const auto lists = x.ruleLists();
+    const auto it = typed.find(name);
+    std::set<uint64_t> seen, twice;
+    for (uint32_t r = 0; r < t.rowCount(); ++r)
+      for (uint32_t p = 0; p < x.row(r).pathCount; ++p)
+        if (!seen.insert(x.row(r).paths[p]).second) twice.insert(x.row(r).paths[p]);
+    uint32_t paths = 0;
+    for (uint32_t r = 0; r < t.rowCount(); ++r) {
+      const mpdj::RowIn& want = x.row(r);
+      mpdj::Filter f;
+      TEST_ASSERT_TRUE(t.filter(r, &f));
+      TEST_ASSERT_EQUAL_UINT16(want.bpm10, f.bpm10);
+      TEST_ASSERT_EQUAL_UINT8(want.camelot <= 24 ? want.camelot : 0, f.camelot);
+      TEST_ASSERT_EQUAL_UINT8(want.flags, f.flags);
+      TEST_ASSERT_EQUAL_UINT32(want.artistKey, f.artistKey);
+      for (uint32_t p = 0; p < want.pathCount; ++p) {
+        const bool kept = !twice.count(want.paths[p]);
+        TEST_ASSERT_EQUAL_UINT32(kept ? r : mpdj::kNoRow, t.rowOf(want.paths[p]));
+        paths += kept;
+      }
+      uint32_t c = 0;
+      cc::Why why = cc::Why::Io;
+      TEST_ASSERT_EQUAL_INT(static_cast<int>(mpdj::SlotRead::Ok), static_cast<int>(t.slot(r, buf, e, &c, &why)));
+      TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(why));
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(lists[r].size(), c, name);
+      for (uint32_t j = 0; j < c; ++j) {
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(lists[r][j].row, e[j].row, name);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(lists[r][j].level, e[j].level, name);
+      }
+      if (it != typed.end()) {
+        TEST_ASSERT_EQUAL_size_t_MESSAGE(it->second[r].size(), c, name);
+        for (uint32_t j = 0; j < c; ++j) {
+          TEST_ASSERT_EQUAL_UINT16_MESSAGE(it->second[r][j].first, e[j].row, name);
+          TEST_ASSERT_EQUAL_UINT8_MESSAGE(it->second[r][j].second, e[j].level, name);
+        }
+      }
+      // Unused entries: 0xFFFF and level 0; then zeros to the CRC.
+      const uint32_t k = t.k(), sb = t.slotBytes();
+      for (uint32_t j = c; j < k; ++j) {
+        TEST_ASSERT_EQUAL_HEX16(mpdj::kUnused, cc::get16(buf + 2 * j));
+        TEST_ASSERT_EQUAL_UINT8(0, buf[2 * k + j]);
+      }
+      for (uint32_t b = 3 * k; b < sb - 4; ++b) TEST_ASSERT_EQUAL_UINT8(0, buf[b]);
+      TEST_ASSERT_EQUAL_HEX32(mpdj::slotCrc(buf, sb, r), cc::get32(buf + sb - 4));
+    }
+    TEST_ASSERT_EQUAL_UINT32(paths, t.pathCount());
+    TEST_ASSERT_EQUAL_UINT32(mpdj::kNoRow, t.rowOf(12345));
+  }
+
+  // autodj-00000029 field by field (13.4).
   const Bytes dj = golden("autodj-00000029.bin");
+  TEST_ASSERT_EQUAL_size_t(1973, dj.size());
   cc::MemSource src(dj.data(), static_cast<uint32_t>(dj.size()));
   mpdj::Table t;
   TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.open(src)));
-  uint8_t scratch[128];
-  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.check(mpdj::Table::kUseAll, scratch, sizeof(scratch))));
   TEST_ASSERT_EQUAL_UINT32(6, t.rowCount());
   TEST_ASSERT_EQUAL_UINT32(7, t.pathCount());  // one recording at two paths
-  TEST_ASSERT_EQUAL_UINT32(3, t.k());
-  TEST_ASSERT_EQUAL_UINT32(2, t.indexBytes());
+  TEST_ASSERT_EQUAL_UINT32(4, t.k());
+  TEST_ASSERT_EQUAL_UINT32(256, t.slotBytes());
+  TEST_ASSERT_EQUAL_UINT8(mpdj::kSelStrided, t.selKind());
+  TEST_ASSERT_EQUAL_UINT32(1, t.selHead());
+  TEST_ASSERT_EQUAL_UINT32(100, t.selFloor());
+  TEST_ASSERT_EQUAL_UINT32(128, t.frame().headerBytes);
+  TEST_ASSERT_EQUAL_UINT32(41, t.frame().generation);
+  TEST_ASSERT_EQUAL_UINT32(1790000000u, t.builtTime());
+  TEST_ASSERT_EQUAL_UINT32(256, t.slotsOffset());
   char s[64];
   TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.string(0, s, sizeof(s))));
   TEST_ASSERT_EQUAL_STRING("synthetic-embedding", s);
   TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.string(3, s, sizeof(s))));
   TEST_ASSERT_EQUAL_STRING("CC0-1.0", s);
-  // The rows in canonical-hash order; every path finds its row; the
-  // neighbours are 2.13.2's, recomputed here from the description.
-  struct R {
-    Bytes hash;
-    std::vector<float> e;
-    std::string song;
-    std::vector<std::string> paths;
-  };
-  std::vector<R> rows;
-  for (size_t i = 0; i < d["rows"].size(); ++i) {
-    R r;
-    r.hash = hexBytes(d["rows"][i]["hash"].str());
-    for (size_t k = 0; k < d["rows"][i]["embedding"].size(); ++k)
-      r.e.push_back(static_cast<float>(d["rows"][i]["embedding"][k].num()));
-    r.song = d["rows"][i]["songKey"].str();
-    for (size_t k = 0; k < d["rows"][i]["paths"].size(); ++k) r.paths.push_back(d["rows"][i]["paths"][k].str());
-    rows.push_back(r);
+  // Row 1, one recording at two paths: its NFC file is the primary (the
+  // smaller hash), bpm10 0; the NFD file's 1000 isn't the row's.
+  mpdj::Filter f;
+  TEST_ASSERT_TRUE(t.filter(1, &f));
+  TEST_ASSERT_EQUAL_UINT16(0, f.bpm10);
+  TEST_ASSERT_EQUAL_UINT32(0, f.artistKey);  // no artist
+  const char* nfc = "Generated Artist 02/Sample Album 02/01 - Sample Caf\xC3\xA9.flac";
+  const char* nfd = "Generated Artist 02/Sample Album 02/01 - Sample Cafe\xCC\x81.flac";
+  TEST_ASSERT_TRUE(cc::pathHash(nfc) < cc::pathHash(nfd));
+  TEST_ASSERT_EQUAL_UINT32(1, t.rowOf(cc::pathHash(nfc)));
+  TEST_ASSERT_EQUAL_UINT32(1, t.rowOf(cc::pathHash(nfd)));
+  // Row 2: three artist values, key 1B, BPM analysed.
+  TEST_ASSERT_TRUE(t.filter(2, &f));
+  TEST_ASSERT_EQUAL_UINT16(1280, f.bpm10);
+  TEST_ASSERT_EQUAL_UINT8(13, f.camelot);
+  TEST_ASSERT_EQUAL_UINT8(mpdj::kFilterBpmAnalysed, f.flags);
+  TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(cc::fnv1a64Str("generated artist 04")), f.artistKey);
+  // The cosine of rows 2 and 3 is exactly 0.5: 127.5, level 128.
+  uint8_t slot[256];
+  uint32_t c = 0;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(mpdj::SlotRead::Ok), static_cast<int>(t.slot(3, slot, e, &c)));
+  TEST_ASSERT_EQUAL_UINT32(3, c);  // rows 4 and 5 are its song: an unused entry
+  TEST_ASSERT_EQUAL_UINT16(2, e[0].row);
+  TEST_ASSERT_EQUAL_UINT8(128, e[0].level);
+  // A slot read for the wrong row: its CRC fails.
+  cc::Why why = cc::Why::Ok;
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(mpdj::SlotRead::Damaged),
+                        static_cast<int>(mpdj::checkSlot(slot, 256, 4, 2, 6, e, &c, &why)));
+  TEST_ASSERT_EQUAL_STRING("djSlotCrc", cc::whyName(why));
+  // No row 6: no checked row names it, so the caller is wrong (Broken).
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(mpdj::SlotRead::Broken), static_cast<int>(t.slot(6, slot, e, &c, &why)));
+  TEST_ASSERT_EQUAL_STRING("djSlotIndex", cc::whyName(why));
+  // A read that fails is the card's: Damaged, worth one more read.
+  {
+    FlakySource fs(dj);
+    mpdj::Table ft;
+    TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(ft.open(fs)));
+    fs.fail = true;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(mpdj::SlotRead::Damaged), static_cast<int>(ft.slot(3, slot, e, &c, &why)));
+    TEST_ASSERT_EQUAL_STRING("io", cc::whyName(why));
+    fs.fail = false;
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(mpdj::SlotRead::Ok), static_cast<int>(ft.slot(3, slot, e, &c, &why)));
   }
-  std::sort(rows.begin(), rows.end(), [](const R& a, const R& b) { return a.hash < b.hash; });
-  for (uint32_t i = 0; i < rows.size(); ++i) {
-    mpdj::Row row;
-    TEST_ASSERT_TRUE(t.row(i, &row));
-    TEST_ASSERT_EQUAL_MEMORY(rows[i].hash.data(), row.hashPrefix, 8);
-    uint64_t smallest = ~0ull;
-    for (auto& p : rows[i].paths) {
-      const uint64_t h = cc::pathHash(p.c_str());
-      smallest = std::min(smallest, h);
-      TEST_ASSERT_EQUAL_UINT32(i, t.rowOf(h));
-    }
-    TEST_ASSERT_TRUE(row.pathHash == smallest);
-    std::vector<std::pair<int, uint32_t>> cand;
-    for (uint32_t j = 0; j < rows.size(); ++j)
-      if (j != i && rows[j].song != rows[i].song)
-        cand.emplace_back(-static_cast<int>(mpdj::score(rows[i].e.data(), rows[j].e.data(), 4)), j);
-    std::sort(cand.begin(), cand.end());
-    mpdj::Neighbour nb[8];
-    const uint32_t n = t.neighbours(i, nb, 8);
-    TEST_ASSERT_EQUAL_UINT32(std::min<size_t>(3, cand.size()), n);
-    for (uint32_t k = 0; k < n; ++k) {
-      TEST_ASSERT_EQUAL_UINT32(cand[k].second, nb[k].row);
-      TEST_ASSERT_EQUAL_UINT8(-cand[k].first, nb[k].score);
-      TEST_ASSERT_TRUE(rows[nb[k].row].song != rows[i].song);  // never the same song
-    }
-  }
-  // Row 0's list: 223, then three at 128 for the last two places, the
-  // lower rows first: the K boundary cuts a tie.
-  mpdj::Neighbour nb[3];
-  TEST_ASSERT_EQUAL_UINT32(3, t.neighbours(0, nb, 3));
-  TEST_ASSERT_EQUAL_UINT8(223, nb[0].score);
-  TEST_ASSERT_EQUAL_UINT8(128, nb[1].score);
-  TEST_ASSERT_EQUAL_UINT8(128, nb[2].score);
-  TEST_ASSERT_TRUE(nb[1].row < nb[2].row);
-  TEST_ASSERT_EQUAL_UINT32(mpdj::kNoRow, t.rowOf(12345));
-  // The small table: fewer rows than K, unused slots dropped.
-  const Bytes small = golden("autodj-small.bin");
-  cc::MemSource ss(small.data(), static_cast<uint32_t>(small.size()));
-  mpdj::Table st;
-  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(st.open(ss)));
-  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(st.check(mpdj::Table::kUseAll, scratch, sizeof(scratch))));
-  TEST_ASSERT_EQUAL_UINT32(1, st.neighbours(0, nb, 3));
-  TEST_ASSERT_EQUAL_UINT8(0, nb[0].score);  // a negative cosine
-  TEST_ASSERT_EQUAL_UINT32(1, nb[0].row);
+
+  // autodj-small-default (13.5): 512-byte slots, the 1-byte padding at 507.
+  const Bytes big = golden("autodj-small-default.bin");
+  cc::MemSource bs(big.data(), static_cast<uint32_t>(big.size()));
+  mpdj::Table bt;
+  TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(bt.open(bs)));
+  TEST_ASSERT_EQUAL_UINT32(512, bt.slotBytes());
+  TEST_ASSERT_EQUAL_UINT32(384, bt.frame().headerBytes);
+  TEST_ASSERT_EQUAL_UINT32(512, bt.slotsOffset());
+  TEST_ASSERT_EQUAL_UINT32(mpdj::kDefaultK, bt.k());
+  TEST_ASSERT_EQUAL_UINT32(mpdj::kDefaultHead, bt.selHead());
+  TEST_ASSERT_EQUAL_UINT32(mpdj::kDefaultFloor, bt.selFloor());
+
+  // autodj-mid (13.5): the float32 trap. The rule's level of rows A and B is
+  // 140, the floor; a float32 sum gives 139.
+  Value vectors;
+  TEST_ASSERT_TRUE(cardfixtures::json("vectors.json", &vectors));
+  const Value& tv = vectors["mpdj"]["trap"];
+  AutoDjInput mid(library("autodj-mid"));
+  TEST_ASSERT_EQUAL_STRING(tv["file"].c_str(), mid.d["file"].c_str());
+  const mpdj::RowIn& ra = mid.row(static_cast<uint32_t>(tv["rowA"].u64()));
+  const mpdj::RowIn& rb = mid.row(static_cast<uint32_t>(tv["rowB"].u64()));
+  TEST_ASSERT_EQUAL_UINT8(tv["level"].u64(), mpdj::level(ra.embedding, rb.embedding, mid.in.dim));
+  float s32 = 0;
+  for (uint32_t i = 0; i < mid.in.dim; ++i) s32 = s32 + ra.embedding[i] * rb.embedding[i];
+  TEST_ASSERT_EQUAL_UINT8(tv["levelF32"].u64(), mpdj::level(static_cast<double>(s32)));
 }
 
 void test_plan_read_back() {
@@ -859,11 +1190,34 @@ void test_hardening_files() {
     const cc::Why why = readAs(e["format"].str(), b, e["uses"].str() == "device");
     const std::string what = file + ": " + e["check"].str();
     TEST_ASSERT_EQUAL_STRING_MESSAGE(e["why"].c_str(), cc::whyName(why), what.c_str());
-    if (e.has("same")) {
+    if (e.has("same") && e["format"].str() == "MPDJ") {
+      assertSameAutoDj(golden(e["same"].str()), b, what.c_str());
+    } else if (e.has("same")) {
       std::vector<Event> a, g;
       TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(b, mptg::kUseAll, &a)));
       TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(walk(golden(e["same"].str()), mptg::kUseAll, &g)));
       assertSameWalk(g, a);
+    }
+    if (e.has("slot")) {
+      // One slot as the device reads it, the join's sections good:
+      // damaged (its CRC) or broken (its list, under a good CRC).
+      cc::MemSource src(b.data(), static_cast<uint32_t>(b.size()));
+      uint8_t scratch[64], buf[mpdj::kLargeSlot];
+      mpdj::Entry entries[mpdj::kMaxK];
+      uint32_t count = 0;
+      mpdj::Table t;
+      TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(t.open(src)), what.c_str());
+      TEST_ASSERT_EQUAL_STRING_MESSAGE("ok", cc::whyName(t.check(mpdj::Table::kUseDevice, scratch, sizeof(scratch))),
+                                       what.c_str());
+      const std::string& read = e["slot"]["read"].str();
+      const mpdj::SlotRead want = read == "damaged" ? mpdj::SlotRead::Damaged : mpdj::SlotRead::Broken;
+      TEST_ASSERT_TRUE_MESSAGE(read == "damaged" || read == "broken", what.c_str());
+      cc::Why slotWhy = cc::Why::Ok;
+      const mpdj::SlotRead got = t.slot(static_cast<uint32_t>(e["slot"]["row"].u64()), buf, entries, &count, &slotWhy);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(want), static_cast<int>(got), what.c_str());
+      TEST_ASSERT_EQUAL_UINT32(0, count);
+      if (e["why"].str() != "ok")
+        TEST_ASSERT_EQUAL_STRING_MESSAGE(e["why"].c_str(), cc::whyName(slotWhy), what.c_str());
     }
     if (file == "mspd-op-9.bin") {
       cc::MemSource src(b.data(), static_cast<uint32_t>(b.size()));
@@ -880,8 +1234,10 @@ void test_hardening_files() {
       TEST_ASSERT_EQUAL_STRING("tags-0000002a.bin", m.tagsName());
       TEST_ASSERT_EQUAL_STRING("autodj-00000029.bin", m.autoDjName());
     }
-    // The software's guard reads a newer major on the magic and major alone.
-    if (e["why"].str() == "major") TEST_ASSERT_TRUE(cc::unknownMajor(b.data(), b.size()));
+    // The software's guard reads a newer major on the magic and major alone
+    // (MPDJ's major 1, the retired draft, is an older one it replaces).
+    if (e["why"].str() == "major")
+      TEST_ASSERT_EQUAL_MESSAGE(file != "mpdj-major-1.bin", cc::unknownMajor(b.data(), b.size()), what.c_str());
   }
 }
 
@@ -913,7 +1269,7 @@ void test_every_flipped_bit() {
     const Bytes g = golden(name);
     const std::string format = formatOf(g);
     for (bool device : {false, true}) {
-      if (device && format != "MPTG") continue;
+      if (device && format != "MPTG" && format != "MPDJ") continue;
       const std::vector<bool> skip = unchecked(g, device);
       Bytes b = g;
       for (size_t i = 0; i < b.size(); ++i)
@@ -934,12 +1290,12 @@ void test_every_flipped_bit() {
 }
 
 void test_fuzz_with_resealed_crcs() {
-  // Random edits of a golden file, its CRCs made right again, so the
-  // structural checks (not the CRCs) meet them: whatever comes out, no
-  // crash, no endless loop, and a file that still reads is walkable and
-  // its random access stays in bounds.
+  // Random edits of a golden file, its CRCs made right again (an MPDJ
+  // file's slot CRCs too), so the structural checks (not the CRCs) meet
+  // them: whatever comes out, no crash, no endless loop, and a file that
+  // still reads is walkable and its random access stays in bounds.
   std::mt19937 rng(20261007);
-  int stillOk = 0, absent = 0;
+  int stillOk = 0, absent = 0, slotLists = 0;
   for (const char* name : kGoldenBinaries) {
     const Bytes g = golden(name);
     const std::string format = formatOf(g);
@@ -958,10 +1314,12 @@ void test_fuzz_with_resealed_crcs() {
           default: b[at] = 0xFF; break;
         }
       }
+      resealSlots(b);
       reseal(b);
       const cc::Why w = readAs(format, b);
       if (w != cc::Why::Ok) {
         ++absent;
+        slotLists += w == cc::Why::DjSlotUnused || w == cc::Why::DjSlotIndex || w == cc::Why::DjSlotOrder;
         continue;
       }
       ++stillOk;
@@ -977,11 +1335,28 @@ void test_fuzz_with_resealed_crcs() {
           cc::RunFields run;
           if (f.record(r, &rec)) f.run(rec.strings, &run);
         }
+      } else if (format == "MPDJ") {
+        // Every filter and slot reads; every path finds its row.
+        cc::MemSource src(b.data(), static_cast<uint32_t>(b.size()));
+        mpdj::Table t;
+        TEST_ASSERT_EQUAL_STRING("ok", cc::whyName(t.open(src)));
+        uint8_t buf[mpdj::kLargeSlot];
+        mpdj::Entry entries[mpdj::kMaxK];
+        for (uint32_t r = 0; r < t.rowCount(); ++r) {
+          mpdj::Filter f;
+          TEST_ASSERT_TRUE(t.filter(r, &f));
+          uint32_t c = 0;
+          TEST_ASSERT_EQUAL_INT(static_cast<int>(mpdj::SlotRead::Ok), static_cast<int>(t.slot(r, buf, entries, &c)));
+          for (uint32_t j = 0; j < c; ++j) TEST_ASSERT_TRUE(entries[j].row < t.rowCount());
+        }
+        for (const auto& ph : djphOf(b)) TEST_ASSERT_EQUAL_UINT32(ph.second, t.rowOf(ph.first));
       }
     }
   }
   TEST_ASSERT_TRUE(absent > 0);
   TEST_ASSERT_TRUE(stillOk > 0);  // edits inside tag text are harmless
+  // The slots' CRCs made right, edits in DJSL reach the lists' own checks.
+  TEST_ASSERT_TRUE(slotLists > 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1163,10 +1538,90 @@ void test_writer_refuses_what_breaks_the_rules() {
   op.op = mspd::kOpDelete;
   op.path = "../x";
   TEST_ASSERT_FALSE(mspd::write(out, pi, nullptr, nullptr, nullptr));
-  mpdj::TableIn ti;
-  ti.k = 0;
+  // MPDJ (docs/AUTODJ-INDEX.md 4, 5): one valid table, then each rule
+  // broken in turn.
+  const uint64_t pa = cc::pathHash("A/x.mp3"), pb = cc::pathHash("B/y.mp3");
+  const float ea[2] = {1, 0}, eb[2] = {0.6f, 0.8f};
+  mpdj::RowIn ra, rb;
+  ra.hash[0] = 1;
+  ra.paths = &pa;
+  ra.pathCount = 1;
+  ra.embedding = ea;
+  rb.hash[0] = 2;
+  rb.paths = &pb;
+  rb.pathCount = 1;
+  rb.embedding = eb;
+  mpdj::RowIn rows[2] = {ra, rb};
+  mpdj::TableIn good;
+  good.k = 4;
+  good.selHead = 1;
+  good.selFloor = 100;
+  good.dim = 2;
+  good.rows = rows;
+  good.rowCount = 2;
   uint8_t sig[16];
-  TEST_ASSERT_FALSE(mpdj::write(out, ti, sig, nullptr, nullptr, nullptr));
+  const char* error = nullptr;
+  TEST_ASSERT_TRUE(mpdj::write(out, good, sig, nullptr, nullptr, &error));
+  auto djRefuses = [&](mpdj::TableIn ti, const char* what) {
+    VecSink o;
+    const char* why = nullptr;
+    TEST_ASSERT_FALSE_MESSAGE(mpdj::write(o, ti, sig, nullptr, nullptr, &why), what);
+    TEST_ASSERT_NOT_NULL(why);
+  };
+  mpdj::TableIn ti = good;
+  ti.k = 1;
+  djRefuses(ti, "k 1");
+  ti.k = 170;
+  djRefuses(ti, "k 170");
+  ti = good;
+  ti.selHead = 0;
+  djRefuses(ti, "selKind 1, selHead 0");
+  ti.selHead = 3;
+  djRefuses(ti, "selKind 1, selHead k - 1");
+  ti = good;
+  ti.k = 2;  // selKind 1 needs k >= 3 (AUTODJ-INDEX.md 4.1)
+  djRefuses(ti, "selKind 1 at k 2");
+  ti = good;
+  ti.k = 50;
+  ti.selHead = mpdj::kDefaultHead;  // 84 doesn't fit k 50
+  djRefuses(ti, "selKind 1, the default head at k 50");
+  ti = good;
+  ti.selFloor = 0;
+  djRefuses(ti, "selKind 1, selFloor 0");
+  ti.selFloor = 256;
+  djRefuses(ti, "selKind 1, selFloor 256");
+  ti = good;
+  ti.selKind = 2;
+  djRefuses(ti, "selKind 2");
+  ti = good;
+  ti.rowCount = 0;
+  djRefuses(ti, "no row");
+  ti = good;
+  ti.dim = 0;
+  djRefuses(ti, "dim 0");
+  const std::string longest(mpdj::kMaxString, 'x'), overLong(mpdj::kMaxString + 1, 'x');
+  ti = good;
+  ti.attribution = longest.c_str();
+  TEST_ASSERT_TRUE(mpdj::write(out, ti, sig, nullptr, nullptr, nullptr));
+  ti.attribution = overLong.c_str();
+  djRefuses(ti, "a string over 255 bytes");
+  mpdj::RowIn twice[2] = {ra, ra};
+  ti = good;
+  ti.rows = twice;
+  djRefuses(ti, "a hash twice");
+  mpdj::RowIn noPath[2] = {ra, rb};
+  noPath[1].pathCount = 0;
+  ti.rows = noPath;
+  djRefuses(ti, "a row with no path");
+  mpdj::RowIn noVector[2] = {ra, rb};
+  noVector[1].embedding = nullptr;
+  ti.rows = noVector;
+  djRefuses(ti, "a row with no embedding");
+  const float notANumber[2] = {std::nanf(""), 0};
+  mpdj::RowIn notFinite[2] = {ra, rb};
+  notFinite[1].embedding = notANumber;
+  ti.rows = notFinite;
+  djRefuses(ti, "a NaN");
 }
 
 void test_container_frame() {
@@ -1219,6 +1674,21 @@ void test_container_frame() {
   cc::ContainerWriter bad;
   TEST_ASSERT_FALSE(bad.begin(out, fm, th, 52, s, 0));
   TEST_ASSERT_FALSE(bad.begin(out, fm, th, 32, s, 0));
+  // A type header shorter than headerBytes - 40 (MPDJ's 64 bytes in a
+  // header of up to 384): zeros up to headerBytes, under the header's CRC;
+  // the same file as a whole type header of those zeros.
+  uint8_t typed[8] = {1, 2, 3, 4, 5, 6, 7, 8}, whole[88] = {1, 2, 3, 4, 5, 6, 7, 8};
+  VecSink padded, full;
+  cc::ContainerWriter wp, wf;
+  TEST_ASSERT_TRUE(wp.begin(padded, fm, typed, 128, s, 0, sizeof(typed)));
+  TEST_ASSERT_TRUE(wp.finish());
+  TEST_ASSERT_TRUE(wf.begin(full, fm, whole, 128, s, 0));
+  TEST_ASSERT_TRUE(wf.finish());
+  TEST_ASSERT_EQUAL_size_t(128, padded.b.size());
+  TEST_ASSERT_TRUE(padded.b == full.b);
+  TEST_ASSERT_FALSE(bad.begin(out, fm, typed, 128, s, 0, 89));   // past headerBytes
+  TEST_ASSERT_FALSE(bad.begin(out, fm, whole, 304, s, 0, 257));  // past the writer's 256
+  TEST_ASSERT_TRUE(bad.begin(out, fm, whole, 400, s, 0, 64));
   // The stream reads what it was given, and no further.
   const uint8_t data[10] = {'a', 'b', 0, 'c', 0, 'd', 'e', 'f', 'g', 'h'};
   cc::MemSource ds(data, sizeof(data));

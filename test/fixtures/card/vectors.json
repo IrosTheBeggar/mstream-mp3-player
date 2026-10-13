@@ -290,33 +290,12 @@
    "uuid": "00112233-4455-6677-8899-aabbccddeeff",
    "stored": "00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF"
   },
-  "hashPrefix": {
+  "audioHash": {
    "audioHash": "0123456789abcdef0123456789abcdef",
-   "stored": "01 23 45 67 89 AB CD EF"
+   "stored": "01 23 45 67 89 AB CD EF 01 23 45 67 89 AB CD EF"
   },
-  "selectionSigStored": "9F 0A E9 1F 22 0E 2E 76 EC 5A 40 E4 9F C8 0B 2D"
+  "selectionSigStored": "AF 47 52 82 9A A5 0A FA 2B 5F 2E 6A EC C5 6D 59"
  },
- "selectionSignature": [
-  {
-   "modelId": "discogs-effnet",
-   "modelVersion": "1",
-   "metric": "cosine",
-   "k": 100,
-   "hashes": [
-    "0123456789abcdef0123456789abcdef",
-    "fedcba9876543210fedcba9876543210"
-   ],
-   "sig": "9f0ae91f220e2e76ec5a40e49fc80b2d"
-  },
-  {
-   "modelId": "discogs-effnet",
-   "modelVersion": "1",
-   "metric": "cosine",
-   "k": 100,
-   "hashes": [],
-   "sig": "efdb6ffa02a177c18593a3ed34f7016b"
-  }
- ],
  "canonicalOrder": {
   "siblings": [
    "A",
@@ -689,13 +668,652 @@
   ]
  },
  "deviceTxt": {
-  "text": "contract=1\nfirmware=0.8.0\nread.msmf=1\nread.mptg=1\nread.mpdj=1\nread.mpth=1\ncodecs=mp3,flac,opus\nextensions=mp3,flac,opus\nmax_rate=48000\nmax_channels=2\n",
+  "text": "contract=1\nfirmware=0.11.0\nread.msmf=1\nread.mptg=1\nread.mpdj=\nread.mpth=1\ncodecs=mp3,flac,opus\nextensions=mp3,flac,opus\nmax_rate=48000\nmax_channels=2\n",
   "noFile": {
-   "read": "1",
+   "read.msmf": "1",
+   "read.mptg": "1",
+   "read.mpdj": "",
+   "read.mpth": "1",
    "codecs": "mp3,flac",
    "extensions": "mp3,flac",
    "max_rate": "48000",
    "max_channels": "2"
+  }
+ },
+ "mpdj": {
+  "note": "AUTODJ-INDEX.md 13.3. 'who': both unless said. Byte strings are lowercase hex; integers in hex strings are 0x-prefixed.",
+  "levels": [
+   {
+    "cos": 1.0,
+    "level": 255
+   },
+   {
+    "cos": 0.75,
+    "level": 191
+   },
+   {
+    "cos": 0.5,
+    "level": 128
+   },
+   {
+    "cos": 0.390625,
+    "level": 100
+   },
+   {
+    "cos": 0.25,
+    "level": 64
+   },
+   {
+    "cos": 0.0,
+    "level": 0
+   },
+   {
+    "cos": -0.5,
+    "level": 0
+   },
+   {
+    "cos": 0.5470588389514506,
+    "level": 140,
+    "note": "the float32 trap pair, by the rule"
+   },
+   {
+    "cos": 0.5470588207244873,
+    "level": 139,
+    "note": "the float32 trap pair, by a float32 sum"
+   }
+  ],
+  "floors": {
+   "who": "informative",
+   "cases": [
+    {
+     "percent": 20,
+     "level": 51
+    },
+    {
+     "percent": 30,
+     "level": 77
+    },
+    {
+     "percent": 45,
+     "level": 115
+    },
+    {
+     "percent": 55,
+     "level": 141
+    },
+    {
+     "percent": 65,
+     "level": 166
+    },
+    {
+     "percent": 75,
+     "level": 192
+    },
+    {
+     "percent": 85,
+     "level": 217
+    },
+    {
+     "percent": 90,
+     "level": 230
+    }
+   ]
+  },
+  "slotBytes": [
+   {
+    "k": 1,
+    "slotBytes": 0
+   },
+   {
+    "k": 2,
+    "slotBytes": 256
+   },
+   {
+    "k": 84,
+    "slotBytes": 256
+   },
+   {
+    "k": 85,
+    "slotBytes": 512
+   },
+   {
+    "k": 169,
+    "slotBytes": 512
+   },
+   {
+    "k": 170,
+    "slotBytes": 0
+   }
+  ],
+  "headerBytes": [
+   {
+    "sectionCount": 4,
+    "slotBytes": 256,
+    "minimum": 104,
+    "headerBytes": 128
+   },
+   {
+    "sectionCount": 4,
+    "slotBytes": 512,
+    "minimum": 104,
+    "headerBytes": 384
+   },
+   {
+    "sectionCount": 5,
+    "slotBytes": 256,
+    "minimum": 104,
+    "headerBytes": 352
+   },
+   {
+    "sectionCount": 5,
+    "slotBytes": 512,
+    "minimum": 104,
+    "headerBytes": 352
+   },
+   {
+    "sectionCount": 8,
+    "slotBytes": 512,
+    "minimum": 104,
+    "headerBytes": 256
+   },
+   {
+    "sectionCount": 8,
+    "slotBytes": 256,
+    "minimum": 104,
+    "headerBytes": 256
+   },
+   {
+    "sectionCount": 4,
+    "slotBytes": 256,
+    "minimum": 112,
+    "headerBytes": 128
+   }
+  ],
+  "stridedRanks": [
+   {
+    "k": 4,
+    "head": 1,
+    "m": 5,
+    "ranks": [
+     0,
+     1,
+     2,
+     4
+    ]
+   },
+   {
+    "k": 24,
+    "head": 8,
+    "m": 100,
+    "ranks": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     14,
+     20,
+     26,
+     32,
+     38,
+     44,
+     50,
+     56,
+     62,
+     68,
+     74,
+     80,
+     86,
+     92,
+     99
+    ]
+   },
+   {
+    "k": 169,
+    "head": 84,
+    "m": 170,
+    "ranks": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31,
+     32,
+     33,
+     34,
+     35,
+     36,
+     37,
+     38,
+     39,
+     40,
+     41,
+     42,
+     43,
+     44,
+     45,
+     46,
+     47,
+     48,
+     49,
+     50,
+     51,
+     52,
+     53,
+     54,
+     55,
+     56,
+     57,
+     58,
+     59,
+     60,
+     61,
+     62,
+     63,
+     64,
+     65,
+     66,
+     67,
+     68,
+     69,
+     70,
+     71,
+     72,
+     73,
+     74,
+     75,
+     76,
+     77,
+     78,
+     79,
+     80,
+     81,
+     82,
+     83,
+     84,
+     85,
+     86,
+     87,
+     88,
+     89,
+     90,
+     91,
+     92,
+     93,
+     94,
+     95,
+     96,
+     97,
+     98,
+     99,
+     100,
+     101,
+     102,
+     103,
+     104,
+     105,
+     106,
+     107,
+     108,
+     109,
+     110,
+     111,
+     112,
+     113,
+     114,
+     115,
+     116,
+     117,
+     118,
+     119,
+     120,
+     121,
+     122,
+     123,
+     124,
+     125,
+     126,
+     127,
+     128,
+     129,
+     130,
+     131,
+     132,
+     133,
+     134,
+     135,
+     136,
+     137,
+     138,
+     139,
+     140,
+     141,
+     142,
+     143,
+     144,
+     145,
+     146,
+     147,
+     148,
+     149,
+     150,
+     151,
+     152,
+     153,
+     154,
+     155,
+     156,
+     157,
+     158,
+     159,
+     160,
+     161,
+     162,
+     163,
+     164,
+     165,
+     166,
+     167,
+     169
+    ],
+    "note": "rank 168 skipped"
+   },
+   {
+    "k": 169,
+    "head": 84,
+    "m": 2258,
+    "pairs": [
+     {
+      "j": 0,
+      "rank": 0
+     },
+     {
+      "j": 83,
+      "rank": 83
+     },
+     {
+      "j": 84,
+      "rank": 84
+     },
+     {
+      "j": 85,
+      "rank": 109
+     },
+     {
+      "j": 126,
+      "rank": 1170
+     },
+     {
+      "j": 168,
+      "rank": 2257
+     }
+    ]
+   },
+   {
+    "k": 169,
+    "head": 84,
+    "m": 169,
+    "ranks": [
+     0,
+     1,
+     2,
+     3,
+     4,
+     5,
+     6,
+     7,
+     8,
+     9,
+     10,
+     11,
+     12,
+     13,
+     14,
+     15,
+     16,
+     17,
+     18,
+     19,
+     20,
+     21,
+     22,
+     23,
+     24,
+     25,
+     26,
+     27,
+     28,
+     29,
+     30,
+     31,
+     32,
+     33,
+     34,
+     35,
+     36,
+     37,
+     38,
+     39,
+     40,
+     41,
+     42,
+     43,
+     44,
+     45,
+     46,
+     47,
+     48,
+     49,
+     50,
+     51,
+     52,
+     53,
+     54,
+     55,
+     56,
+     57,
+     58,
+     59,
+     60,
+     61,
+     62,
+     63,
+     64,
+     65,
+     66,
+     67,
+     68,
+     69,
+     70,
+     71,
+     72,
+     73,
+     74,
+     75,
+     76,
+     77,
+     78,
+     79,
+     80,
+     81,
+     82,
+     83,
+     84,
+     85,
+     86,
+     87,
+     88,
+     89,
+     90,
+     91,
+     92,
+     93,
+     94,
+     95,
+     96,
+     97,
+     98,
+     99,
+     100,
+     101,
+     102,
+     103,
+     104,
+     105,
+     106,
+     107,
+     108,
+     109,
+     110,
+     111,
+     112,
+     113,
+     114,
+     115,
+     116,
+     117,
+     118,
+     119,
+     120,
+     121,
+     122,
+     123,
+     124,
+     125,
+     126,
+     127,
+     128,
+     129,
+     130,
+     131,
+     132,
+     133,
+     134,
+     135,
+     136,
+     137,
+     138,
+     139,
+     140,
+     141,
+     142,
+     143,
+     144,
+     145,
+     146,
+     147,
+     148,
+     149,
+     150,
+     151,
+     152,
+     153,
+     154,
+     155,
+     156,
+     157,
+     158,
+     159,
+     160,
+     161,
+     162,
+     163,
+     164,
+     165,
+     166,
+     167,
+     168
+    ],
+    "note": "m <= k: the top k"
+   }
+  ],
+  "slotCrc": {
+   "file": "autodj-00000029.bin",
+   "row": 3,
+   "crc": "0x790748C6",
+   "unseeded": "0x5BD60073",
+   "note": "CRC-32 over the row as u32 LE, then the slot's first slotBytes - 4 bytes; 'unseeded' is the CRC of those bytes alone"
+  },
+  "signature": {
+   "file": "autodj-00000029.bin",
+   "text": "MPDJ-SEL 2\nmodel synthetic-embedding 1\nmetric cosine\nk 4\nsel strided 1 100\nvec 8 038912838c44e3d8a2814ac75a927d6bf32122302c0ff5fca53f52f623a2370f\n0123456789abcdef0123456789abcdef\n1c3e5a7092b4d6f81c3e5a7092b4d6f8\n5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\n9e1f00000000000000000000000000a1\nb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0\nfedcba9876543210fedcba9876543210\nsame 3 4 5\n",
+   "sig": "af4752829aa50afa2b5f2e6aecc56d59"
+  },
+  "vec": {
+   "file": "autodj-00000029.bin",
+   "dim": 8,
+   "sha256": "038912838c44e3d8a2814ac75a927d6bf32122302c0ff5fca53f52f623a2370f"
+  },
+  "deviceTxt": {
+   "who": "software",
+   "note": "a writer writes MPDJ v2 only when /.player/device.txt's read.mpdj lists 2; no file, or no read.mpdj key, reads as none",
+   "cases": [
+    {
+     "readMpdj": "",
+     "writesV2": false
+    },
+    {
+     "readMpdj": "1",
+     "writesV2": false
+    },
+    {
+     "readMpdj": "2",
+     "writesV2": true
+    },
+    {
+     "readMpdj": "1,2",
+     "writesV2": true
+    },
+    {
+     "noFile": true,
+     "writesV2": false
+    },
+    {
+     "keyMissing": true,
+     "writesV2": false
+    }
+   ]
+  },
+  "trap": {
+   "file": "autodj-mid.bin",
+   "rowA": 101,
+   "rowB": 159,
+   "level": 140,
+   "levelF32": 139,
+   "cos": 0.5470588389514506,
+   "cosF32": 0.5470588207244873,
+   "note": "the rule's cosine x 255 is just above 139.5; a float32 sum's is just below it"
   }
  }
 }
