@@ -7,8 +7,8 @@ brings the tags in, two ways at once:
 
 1. **The transfer software** copies music from an mStream server onto the
    card through mStream's APIs, and writes next to it what it knows about
-   each file: the tags, the AutoDJ neighbour table and the album
-   thumbnails. It will be part of mstream-terminal (Rust).
+   each file: the tags, the AutoDJ index and the album thumbnails. It will
+   be part of mstream-terminal (Rust).
 2. **The on-device scanner** reads the tags of the files the listener
    copied to the card by hand, which no transfer described.
 
@@ -110,10 +110,12 @@ one batch when it is free.
   when its inputs match and checks the card in the background. At 20,000
   tracks that is about 1.5-3.5 s to a browsable library, against 89-148 s
   for today's walk at every boot (ESTIMATED).
-- **AutoDJ** rides on the same commit: a top-K neighbour table
-  (`autodj-<gen>.bin`, MPDJ) built by the transfer software from mStream's
-  embeddings, keyed by path hash. Files without a row (the listener's own,
-  tracks not yet embedded) use "random with filters".
+- **AutoDJ** rides on the same commit: a neighbour index
+  (`autodj-<gen>.bin`, MPDJ v2, specified apart in docs/AUTODJ-INDEX.md)
+  built by the transfer software from mStream's embeddings, one 512-byte
+  slot of similar tracks per track, mapped by path hash. Files without a
+  row (the listener's own, tracks not yet embedded) use "random with
+  filters".
 
 Where the facts come from:
 
@@ -122,9 +124,11 @@ Where the facts come from:
 - **Two research reports** of 2026-10-06 and 2026-10-07, in the
   scratchpad: `metascan/RESEARCH.md` (the tag scan: the parser prototype
   `metascan/parsing/TagScan.{h,cpp}`, the costs, the MPTG sketch, the
-  milestones) and `autodj/RESEARCH.md` (the top-K table, its MPDJ sketch).
-  Their labels are kept: **MEASURED** (run, or recorded in the repo's docs
-  and logs), **READ** (code or docs), **ESTIMATED** (a model or arithmetic).
+  milestones) and `autodj/RESEARCH.md` (the top-K table, its MPDJ sketch;
+  the AutoDJ index research of 2026-10-12/13 superseded it, and
+  docs/AUTODJ-INDEX.md Appendix C names it). Their labels are kept:
+  **MEASURED** (run, or recorded in the repo's docs and logs), **READ**
+  (code or docs), **ESTIMATED** (a model or arithmetic).
   Their library figures are aggregates of the user's library (about
   19,400 playable files in about 2,600 folders, 705 of them directly
   under `/music`); no names.
@@ -171,6 +175,19 @@ Where the facts come from:
   by **a cap on the queue, 5,000 tracks** (3.5; built: QUEUE-MODES.md
   section 15). A spare card is ready for N11's synthetic 20k card and
   later tests (U1).
+- **AutoDJ's index** (2026-10-13, after the AutoDJ index research's two
+  rounds; docs/AUTODJ-INDEX.md replaces 2.13's MPDJ v1 draft, which never
+  had a reader):
+  - **D1:** 512-byte slots of plain entries, 169 a slot, filled by the
+    "long head" (the exact 84 nearest, then 85 evenly spaced down to
+    cosine 0.547), the selection's parameters in the header; the engine's
+    two-hop fallback for "stay on seed" needs nothing in the file (U15);
+  - **D2:** mStream's exact DJ planned now, as cell-ordered codes in a
+    later minor version; the read budget relaxed to about 4 card reads a
+    pick for AutoDJ's code path; an aggregate-only run on the server's real
+    vectors approved, not yet run, so what depends on them is provisional;
+  - **D3:** the terminal builds the file now, an mStream bulk-embeddings
+    route (A2) maybe later (T8).
 
 **What this design decided** (the defaults didn't say; each is open to
 change, and part 7 lists the questions):
@@ -213,7 +230,7 @@ change, and part 7 lists the questions):
 ```
 
 - **The transfer software** writes its music files, the per-file records
-  (tags and its ledger), the AutoDJ table and the album thumbnails, all
+  (tags and its ledger), the AutoDJ index and the album thumbnails, all
   under one commit (section 2.5). Its records cover exactly the files it
   wrote.
 - **The device** reads `/.mstream/` and never writes it (except, later,
@@ -293,7 +310,7 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
 │   ├─ manifest.bin             MSMF: the commit point (a few KB)
 │   ├─ manifest.tmp             only while a commit is being written
 │   ├─ tags-<gen>.bin           MPTG, source 2: the tag records and the ledger
-│   ├─ autodj-<gen>.bin         MPDJ: the AutoDJ neighbour table (optional)
+│   ├─ autodj-<gen>.bin         MPDJ v2: the AutoDJ index (optional; docs/AUTODJ-INDEX.md)
 │   ├─ pending.bin              MSPD: an unfinished run's plan (only while one is; written through pending.tmp)
 │   ├─ stage/<8 hex>.tmp        files being downloaded
 │   ├─ thumbs/<h>/<8 HEX>.565   MPTH v1: album thumbnails
@@ -328,8 +345,8 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
     unsigned integers: B1F7E69FBD466B59 is the bytes
     `59 6B 46 BD 9F E6 F7 B1`.
   - **Byte strings:** MD5 digests (`hash`, `audio-hash`), the SHA-256
-    prefixes (COMP `key`, MPDJ `selectionSig`), DJRW `hashPrefix` and
-    UUIDs (`serverInstance`). Stored as their bytes in the order of their
+    prefixes (COMP `key`, MPDJ `selectionSig`) and UUIDs
+    (`serverInstance`). Stored as their bytes in the order of their
     hex text, RFC 4122 order for a UUID, never parsed into an integer
     (not as a Windows GUID, not as a u64), and compared byte by byte
     (`memcmp`).
@@ -527,7 +544,7 @@ header, a section directory, then the sections, each 8-byte aligned.
 | Off | Size | Field | Meaning |
 |---|---|---|---|
 | 0 | 4 | magic | fourcc: `MSMF`, `MPTG`, `MPDJ` or `MSPD` |
-| 4 | 2 | major | incompatible format version (1) |
+| 4 | 2 | major | incompatible format version (1; MPDJ: 2) |
 | 6 | 2 | minor | compatible additions (0) |
 | 8 | 4 | headerBytes | the whole header (common + type-specific), a multiple of 8; the directory starts here |
 | 12 | 4 | sectionCount | directory entries, ≤ 64 |
@@ -560,10 +577,11 @@ file.
 So that two writers produce the same bytes:
 
 - **Order.** Sections are written in the order of their format's section
-  table (2.5.3, 2.6.2, 2.12.5, 2.13.2), and the directory lists them in
-  that order. The first starts right after the directory (at headerBytes
-  + 32 × sectionCount); each next one at the previous one's end, rounded
-  up to 8.
+  table (2.5.3, 2.6.2, 2.12.5, AUTODJ-INDEX.md 4.2), and the directory
+  lists them in that order. The first starts right after the directory (at
+  headerBytes + 32 × sectionCount); each next one at the previous one's
+  end, rounded up to 8. (MPDJ pads its header so that its first section
+  starts on a slot boundary: AUTODJ-INDEX.md 3.3.)
 - **Presence.** A REQUIRED section is always present, even with no
   records. An optional section is present exactly when its format's
   table says so, and is never written empty.
@@ -578,7 +596,8 @@ So that two writers produce the same bytes:
 A reader MUST treat a file as **absent** when any of these fails:
 
 - **the frame:** the magic; a supported major; headerBytes a multiple of
-  8 and at least its format's v1 header; at most 64 sections; headerCrc;
+  8 and at least its format's v1 header (MPDJ's: v2's 104 bytes); at
+  most 64 sections; headerCrc;
   fileBytes equal to the length on the card;
 - **the directory:** 2.4.2's layout rules (offsets multiples of 8 in
   increasing order, the first at the directory's end, each next one under
@@ -639,12 +658,11 @@ absent:
   generation.
 - **LIBR:** each root a relative path made of names (as above), the
   roots strictly increasing by bytes.
-- **MPDJ:** indexBytes is 2 or 4, and 2 exactly when rowCount is 65,535
-  or less; k is at least 1; DJNB's stride is k × (indexBytes + 1);
-  scoreKind is 1 (2.4.5); DJRW rows are in non-decreasing hashPrefix
-  order (2.13.2); DJPH strictly increases by (pathHash, row); every DJPH
-  row and every DJNB index is below rowCount, except a DJNB unused slot's
-  all-ones index.
+- **MPDJ:** AUTODJ-INDEX.md section 8's checks: the header's values, the
+  selection fields, the sections' order, DJPH strictly increasing with
+  its rows in range, and each slot as it is used (a slot whose own CRC
+  fails is one bad slot to the device, not an absent file:
+  AUTODJ-INDEX.md 8.5).
 - **MSPD:** entries are in 2.12.5's order, each group strictly increasing;
   an op of 0 makes the plan absent; paths are non-empty, relative and
   made of names (no empty, `.` or `..` component), so no plan can name a
@@ -677,7 +695,7 @@ generation) and noted it in `/.player`.
     order; then the LIBR roots in LIBR order;
   - MPTG: `producer`; then 2.6.8's order;
   - MPDJ: `modelId`, `modelVersion`, `metric`, `license`, `attribution`;
-    nothing else;
+    nothing else in its minor 0 (AUTODJ-INDEX.md 4.6);
   - MSPD: the PEND paths in PEND order.
 - `OSTR` follows 2.6.8.
 - Readers check that the strings they use come in this order (2.4.3): a
@@ -685,14 +703,16 @@ generation) and noted it in `/.player`.
 
 #### 2.4.5 Versions and compatibility
 
-- **Major.** A reader supports a set of majors (v1 readers: {1}); a file
-  of another major is absent to it. The device then behaves as if the file
-  weren't there. The software MUST NOT write to a card where **any**
-  contract-named file in `/.mstream` (`manifest.bin`, `manifest.tmp`,
-  `pending.bin`, `pending.tmp`, `tags-*.bin`, `autodj-*.bin`) carries a
-  known magic with a major it doesn't know. It checks the magic and the
-  major alone, before any CRC, so a newer writer's half-finished commit
-  stops it too; it reports the card read-only and asks for an update.
+- **Major.** A reader supports a set of majors (v1 readers: {1}; MPDJ's
+  readers: {2}, AUTODJ-INDEX.md 9.1); a file of another major is absent to
+  it. The device then behaves as if the file weren't there. The software
+  MUST NOT write to a card where **any** contract-named file in
+  `/.mstream` (`manifest.bin`, `manifest.tmp`, `pending.bin`,
+  `pending.tmp`, `tags-*.bin`, `autodj-*.bin`) carries a known magic with
+  a major it doesn't know (for MPDJ it knows 1, the retired v1 draft, and
+  2). It checks the magic and the major alone, before any CRC, so a newer
+  writer's half-finished commit stops it too; it reports the card
+  read-only and asks for an update.
 - **Minor.** Readers accept any minor.
   - New fields go only at the **end** of a record (a larger stride) or of
     the header (a larger headerBytes).
@@ -721,6 +741,7 @@ generation) and noted it in `/.player`.
 | RECS `flags` compilation (3) | 0, not said |
 | MPTG `source` (0, or above 3) | the file is absent |
 | MPDJ `scoreKind` (not 1) | the file is absent |
+| MPDJ `selKind` (above 1) | read: readers use only selHead and selFloor (AUTODJ-INDEX.md 9.3) |
 | MSMF COMP `kind` | the entry is ignored |
 | MSPD `op` (above 3) | the software MUST NOT write, as for an unknown major |
 | ORIG `convertedTo` (not a container code) | a conversion of unknown kind: not VERIFIED, never adopted |
@@ -729,7 +750,7 @@ generation) and noted it in `/.player`.
   older readers can't skip safely.
 - **Writers** write the newest minor they know, in the newest major both
   sides read (the device lists its majors in `/.player/device.txt`,
-  2.15).
+  2.15). MPDJ has one: v2, written only when the device lists it.
 
 ### 2.5 `manifest.bin` (MSMF): the commit point
 
@@ -801,7 +822,7 @@ reads the root with one small read at every boot.
 | 12 | 4 | headerCrc | its headerCrc |
 | 16 | 4 | name | STRS: its file name inside `/.mstream/` (`tags-0000002a.bin`) |
 | 20 | 4 | reserved | 0 |
-| 24 | 16 | key | MPDJ: the selection signature (2.13.3); zeros for MPTG |
+| 24 | 16 | key | MPDJ: the selection signature (AUTODJ-INDEX.md 6); zeros for MPTG |
 
 - A root MUST list exactly one MPTG companion (source 2 or 3), and at most
   one MPDJ, in that order. Each name is `tags-<gen>.bin` or
@@ -1504,8 +1525,10 @@ rules handle.
     bytes, and its header's pathHash is the folder's; rewrite any that
     isn't. (Whether the art changed is in the software's private state,
     which a cut can leave ahead of the card.)
-11. **AutoDJ:** write `autodj-<g>.bin` when 2.13.4 says so; otherwise the
-    new root names the old one again.
+11. **AutoDJ:** when `device.txt`'s `read.mpdj` lists 2, write
+    `autodj-<g>.bin` when AUTODJ-INDEX.md 7.3 says so, and otherwise the
+    new root names the old one again; when it doesn't, no MPDJ (the new
+    root names none).
 12. **The final commit** is step 9's write and rename with FINAL set; then
     delete `pending.bin`.
 13. **Collect:** delete the companions the root doesn't name, thumbnails
@@ -1635,136 +1658,90 @@ device can then take turns on one card. The device MUST NOT write
   check runs (the next boot's). For `tags.tmp`, then the only D, the
   compaction is refused meanwhile (the r3 review, 3.3.2).
 
-### 2.13 AutoDJ: `autodj-<gen>.bin` (MPDJ v1)
+### 2.13 AutoDJ: `autodj-<gen>.bin` (MPDJ v2)
 
-A precomputed top-K neighbour table over the card's tracks, built by the
-software from mStream's embeddings (pulled through
-`/api/v1/discovery/local/embeddings`, or later a bulk route: part 4, A2).
-On the device a pick reads one row of K neighbours (300 B at K = 100) and
-merges the last few picks' rows (autodj research, sections 2 and 7).
+#### 2.13.1 What it is, and where it is specified
 
-#### 2.13.1 Header (type-specific part; headerBytes = 96)
+- An optional companion of a commit: for each recording on the card that
+  has an embedding (a row), a list of up to k similar recordings (169 by
+  default) with their scores, in a fixed 256- or 512-byte slot (512 at the
+  default k) that the device reads in one sector; beside the slots, each
+  row's BPM, key and artist key (DJRF), and a map from each card file's
+  path hash to its row (DJPH). The software builds it from
+  mStream's embeddings (pulled through
+  `/api/v1/discovery/local/embeddings`, or later a bulk route: part 4, A2).
+- **Its format is specified apart, in docs/AUTODJ-INDEX.md** (MPDJ major
+  2, 2026-10-13): the header and the sections, the exact neighbour rule and
+  the selection, the selection signature, when to write a file, the
+  reader's checks, the sizes, the device's engine (informative), the test
+  vectors, and the planned codes of a later minor. Both sides follow it;
+  this section keeps only what ties the file to the rest of the contract.
+- **It replaces the MPDJ v1 draft** this section held from 2026-10-07
+  (headerBytes 96; DJRW, DJNB and a 12-byte DJPH; the signature
+  `MPDJ-SEL 1`). Nothing ever read v1, and released firmware 0.8.0-0.10.0
+  advertised it without reading it (2.15). AUTODJ-INDEX.md Appendix B
+  lists the changes.
 
-| Off | Size | Field | Meaning |
-|---|---|---|---|
-| 40 | 4 | rowCount | rows (one per distinct embedded recording on the card) |
-| 44 | 4 | pathCount | DJPH entries |
-| 48 | 2 | k | neighbours per row (100 recommended) |
-| 50 | 1 | indexBytes | 2 when rowCount ≤ 65,535, else 4 |
-| 51 | 1 | scoreKind | 1: u8 = clamp(round(cosine × 255), 0, 255), computed as 2.13.2 says; any other value: the file is absent |
-| 52 | 4 | builtTime | Unix seconds; informational |
-| 56 | 16 | selectionSig | 2.13.3, the digest's first 16 bytes in order (2.3.1) |
-| 72 | 4 | modelId | STRS: the embedding model's id, as mStream reports it |
-| 76 | 4 | modelVersion | STRS |
-| 80 | 4 | metric | STRS: `cosine` |
-| 84 | 4 | tagsGeneration | the MPTG companion's generation the rows were built against (diagnostic) |
-| 88 | 4 | license | STRS: the licence of the data the table derives from, as mStream's model block gives it (`CC-BY-NC-SA-4.0` today) |
-| 92 | 4 | attribution | STRS: the model's attribution string |
+#### 2.13.2 The keys both sides share
 
-#### 2.13.2 Sections
+AUTODJ-INDEX.md 2.4 and 5.3 give them in full; nameKey is 5.4's.
 
-| Type | Flags | Stride | Content |
-|---|---|---|---|
-| `DJRW` | REQUIRED | 24 | rows |
-| `DJNB` | REQUIRED | k × (indexBytes + 1) | each row's neighbours |
-| `DJPH` | REQUIRED | 12 | card files → rows |
-| `STRS` | REQUIRED | blob | strings |
-
-**`DJRW`** (24 bytes):
-
-| Off | Size | Field |
-|---|---|---|
-| 0 | 8 | pathHash: the smallest path hash, as an unsigned integer, among the row's card files (its primary file) |
-| 8 | 8 | hashPrefix: the first 8 bytes of the canonical hash (`audio-hash`, else `hash`), as bytes in their hex order (2.3.1) |
-| 16 | 2 | bpm10, as in RECS (the file's tag, else the server's analysis) |
-| 18 | 1 | camelot, as in RECS |
-| 19 | 1 | flags: bit 0 BPM_ANALYSED |
-| 20 | 4 | artistKey: the low 32 bits of the FNV-1a 64 of nameKey (5.4) of the primary file's first artist value; 0 none |
-
-**Row order:** DJRW is sorted by the canonical hash, ascending, as 16
-bytes (`memcmp`): the order of 2.13.3's hash lines. A row's index is its
-position in that order.
-
-**`DJNB`:** row r's list starts at r × stride.
-
-- Each entry is a row index (indexBytes, little-endian), then a score byte.
-- Entries are sorted by score descending, then index ascending.
-- Unused slots have an index of all ones and a score of 0.
-- A list never holds its own row, nor a row of the same song: equal
-  `nameKey(artist display) + "|" + nameKey(title)` (5.4) of the rows'
-  primary files.
-
-**The scores, exactly** (so two writers pick the same neighbours):
-
-1. The cosine of rows a and b is the dot product of their embeddings
-   (mStream L2-normalises them; nothing is normalised again): the sum,
-   in index order 0 to dim − 1, of the products of the f32 components,
-   each product and each partial sum in f64. A product of two f32 is
-   exact in f64, so the result doesn't depend on a fused multiply-add.
-2. The score is `clamp(round(cosine × 255), 0, 255)`, computed in f64
-   and rounded half away from zero.
-3. **Quantise first, then select:** row a's list is the K best other rows
-   by (score descending, row index ascending), leaving out a's own row
-   and the rows of the same song. Fewer than K: unused slots.
-
-**`DJPH`:** `pathHash` u64, then `row` u32, sorted by (pathHash as an
-unsigned integer, row). Every card file that has a row appears;
-duplicates (one recording at several paths) share one row.
+- **The primary file** of a row is its card file with the smallest path
+  hash, and **its record** is that file's RECS record in the tags file of
+  the same commit (2.6.4-2.6.5). Every key and filter value of the row
+  comes from that record: the title (the run's field 0), the artist
+  values (field 1), bpm10, camelot and BPM_ANALYSED.
+- **The song key** is `nameKey(artist display) + "|" + nameKey(title)`,
+  the artist display being the values trimmed of White_Space, the blank
+  ones dropped, and several deduplicated by nameKey and joined with ", ".
+  A **blank title** (absent, empty or White_Space only) gives **no song
+  key**: such a row is never "the same song" as another. No title is ever
+  taken from the file name.
+- **artistKey** is the low 32 bits of the FNV-1a 64 of the nameKey of the
+  **first non-blank** artist value, 0 when there is none. The device's own
+  artist key for a track without a row (its artist cooldown, from the
+  record it chose for that track, 2.9) MUST be the same function, so that
+  a track with a row and one without compare alike.
 
 #### 2.13.3 The selection signature
 
-The first 16 bytes of the SHA-256 of this text, every line (the last
-included) ended by one LF:
+The 16 bytes at the header's offset 64, and the root's COMP `key` (2.5.3):
+the first 16 bytes of a SHA-256 over a text that names the rows, their
+vectors, the model, the metric, k, the selection and the same-song groups
+(AUTODJ-INDEX.md 6). Equal signatures mean equal lists. The device never
+computes it; it compares bytes.
 
-```
-MPDJ-SEL 1
-model <modelId> <modelVersion>
-metric <metric>
-k <k>
-<canonical hash>        one line per row: 32 lowercase hex digits, sorted ascending, no duplicates
-```
+#### 2.13.4 Its tie to the root, the gaps, the licence
 
-The canonical hash is `audio-hash`, else `hash`, the key mStream files
-embeddings under. Only tracks with an embedding have rows, so the
-signature changes whenever the set of rows would: the selection changes,
-a track gets its embedding, or the model, the metric or K change.
-
-**Test vector:** model `discogs-effnet` version `1`, metric `cosine`,
-k 100, and the hashes `0123456789abcdef0123456789abcdef` and
-`fedcba9876543210fedcba9876543210` give
-**9f0ae91f220e2e76ec5a40e49fc80b2d**.
-
-#### 2.13.4 Its tie to the root, and the gaps
-
-- The root's `COMP` entry for the table carries its selection signature
-  as `key`; the table is valid only when the root names it and the keys
-  agree (2.5.3).
-- **The software** writes a new table when the signature it computes
-  differs from the root's key (a new neighbour pass), or when DJPH would
-  change (a recording's card path changed: the rows and neighbours are
-  reused, the map rewritten). Otherwise each new root names the old file
-  again. The device skips neighbours whose path hash isn't on the card.
-- **The device** never computes the signature; it compares bytes.
-- **Gaps:** the listener's own files, and tracks not yet embedded, have
-  no row. With one of those as the anchor, AutoDJ uses **random with
-  filters**, narrowed in v1 to the data that is resident:
-  - the anchor's BPM and key come from its chosen record (one read of
-    its record at pick time);
-  - candidates are filtered by the BPM and key of their DJRW rows, the
-    only per-track filter data in PSRAM (3.5); candidates without a row
-    are eligible only when the anchor has neither BPM nor key;
+- **The root** names the file in COMP with its signature as `key`; the file
+  is valid only when the root names it, it validates and the keys agree
+  (2.5.3). When to write a new file, and when to name the old one again,
+  is AUTODJ-INDEX.md 7.3. The software writes MPDJ v2 only when
+  `device.txt`'s `read.mpdj` lists 2 (2.15); otherwise the root names no
+  MPDJ.
+- **Gaps:** the listener's own files, and tracks not yet embedded, have no
+  row. With one of those as the anchor, AutoDJ uses **random with
+  filters**, narrowed to the data that is resident:
+  - the anchor's BPM and key come from its chosen record (one read of its
+    record at pick time);
+  - candidates are filtered by the BPM and key of their DJRF records, the
+    only per-track filter data in PSRAM (3.5); candidates without a row are
+    eligible only when the anchor has neither BPM nor key;
   - no genre filter: genres aren't resident (no Genres view yet);
-  - a card with no MPDJ at all gets plain random.
+  - a card with no MPDJ at all, or an absent one, gets plain random.
 
   A per-track filter block in `library.idx` (bpm10 and camelot, about
-  4 B per track, 80 KB at 20k) would widen this to every file; it is a
-  lever for part 7, U15, not in the 3.5 budget.
+  4 B per track, 80 KB at 20k) would widen this to every file; it is on
+  the firmware's backlog (part 7, U15), not in the 3.5 budget.
 - **Licence.** The embeddings come from a CC BY-NC-SA 4.0 model
-  (mStream's `discovery-features-lib.js`), so the table is derived data
-  under that licence. Personal use on the device is fine; no table goes
-  into the firmware, a release, the test fixtures or a card made for
-  others. mStream's rule that discovery is never gated by or bundled into
-  a paid offering holds here too.
+  (mStream's `discovery-features-lib.js`), so the index is derived data
+  under that licence. The file's `license` and `attribution` strings carry
+  it: for `effnet-discogs` version 1, the exact strings of AUTODJ-INDEX.md
+  4.1 (the embeddings route gives only the model's id and version).
+  Personal use on the device is fine; no index goes into the firmware, a
+  release, the test fixtures or a card made for others (the fixtures are
+  synthetic, AUTODJ-INDEX.md 12.5). mStream's rule that discovery is never
+  gated by or bundled into a paid offering holds here too.
 
 ### 2.14 Covers
 
@@ -1867,10 +1844,10 @@ boot when its content would change.
 
 ```
 contract=1
-firmware=0.8.0
+firmware=0.11.0
 read.msmf=1
 read.mptg=1
-read.mpdj=1
+read.mpdj=
 read.mpth=1
 codecs=mp3,flac,opus
 extensions=mp3,flac,opus
@@ -1879,17 +1856,23 @@ max_channels=2
 ```
 
 - `read.*` lists the majors the firmware reads, separated by commas.
+  Firmware 0.8.0-0.10.0 writes `read.mpdj=1`, though it reads no MPDJ;
+  from 0.11.0 the firmware writes `read.mpdj=` (none) until its AutoDJ
+  engine ships, and then `read.mpdj=2`.
 - `codecs` lists what it decodes; `extensions` the file extensions its
   walk lists as audio (any case). The device recognises audio by
   extension, not by content, so both matter.
 - **The software** writes the newest major of each format that the device
   lists, and converts (or skips) anything not in `codecs`, or above
   `max_rate` or `max_channels`. A card file's extension MUST be one of
-  `extensions` (2.8.3, step 3).
+  `extensions` (2.8.3, step 3). **MPDJ is the exception:** the software
+  writes MPDJ v2 only when `read.mpdj` lists 2, and no MPDJ otherwise
+  (AUTODJ-INDEX.md 7.4): no reader of v1 exists.
 - **No file** (a new card, or firmware before this design) means
-  `read.*=1`, `codecs=mp3,flac`, `extensions=mp3,flac`, `max_rate=48000`
-  and `max_channels=2`. Firmware 0.7.0 plays Opus but can't say so; the
-  software MAY ask the listener rather than convert.
+  `read.*=1` except `read.mpdj`, which is none, and `codecs=mp3,flac`,
+  `extensions=mp3,flac`, `max_rate=48000` and `max_channels=2`. Firmware
+  0.7.0 plays Opus but can't say so; the software MAY ask the listener
+  rather than convert.
 - **A key missing** from a file reads as its no-file value; a key with an
   empty value (`read.mpdj=`) says "none". The `contract` line is what
   makes a file a `device.txt`; a reader reads the keys it knows whatever
@@ -1907,8 +1890,8 @@ max_channels=2
 | An unknown COMP kind | Ignored |
 | An unknown flag bit | Ignored |
 | An unknown enum value | As 2.4.5's table says for that field |
-| Firmware with no `device.txt` | The software writes v1 of everything |
-| Damage (any CRC) | That file is absent; a damaged root means no transfer data |
+| Firmware with no `device.txt` | The software writes v1 of everything, and no MPDJ (2.15) |
+| Damage (any CRC) | That file is absent; a damaged root means no transfer data. One MPDJ slot whose own CRC fails is the exception: only that slot is unused (AUTODJ-INDEX.md 8.5) |
 | A new string field | Appended to the run; older readers stop at the fields they know |
 
 ### 2.17 Conformance (no device needed)
@@ -1930,9 +1913,10 @@ on any difference. The folder's README says how to read them.
    MUST produce byte-identical MPTG files (2.6.8), and the same for MSMF,
    MPDJ, MSPD and MPTH (an MPTH from given pixels: the scaling filter
    isn't pinned, and PCs' JPEG decoders differ anyway). Tag values go in
-   raw: each writer applies 2.3.6 and sets TRUNCATED. MPDJ's fixture uses
-   small synthetic embeddings (no real table: 2.13.4's licence), with ties
-   at the K boundary and same-song pairs.
+   raw: each writer applies 2.3.6 and sets TRUNCATED. MPDJ's fixtures
+   (AUTODJ-INDEX.md 13) use small synthetic embeddings (no real index:
+   2.13.4's licence), with ties at the floor and at a stride, same-song
+   groups, title-less rows and a float32 trap.
 3. **Reader parity.** A corpus of synthetic audio files (no real
    library's files) goes through the software's reference reader and the
    device's TagScan built on the host. Their records MUST be field-equal,
@@ -1949,10 +1933,12 @@ on any difference. The folder's README says how to read them.
    section, offsets out of range, strings with no NUL, counts that
    disagree, and every structural check of 2.4.3 broken with valid CRCs
    (a folder that is its own parent, records in path-string order, a
-   wrong firstRecord, an unsorted DJPH, an out-of-range neighbour): all
-   make the file absent, with no crash and no endless loop. Fuzzed on the
-   host. The shared `hardening/` folder has a file for each check of
-   2.4.3, so a reader that skips one fails there.
+   wrong firstRecord, an unsorted DJPH, a slot that lists its own row):
+   all make the file absent, with no crash and no endless loop (one MPDJ
+   slot whose own CRC fails is the exception the device reads past:
+   AUTODJ-INDEX.md 8.5). Fuzzed on the host. The shared `hardening/`
+   folder has a file for each check of 2.4.3 and of AUTODJ-INDEX.md 8
+   (13.6 there), so a reader that skips one fails there.
 5. **The builder** (host test): a walk listing plus T plus D gives the
    expected `library.idx` checksum; a card filled by the software and the
    same files scanned by the device give the same index (the research's
@@ -2028,15 +2014,18 @@ follow from the sections cited.
   `28 00 60 00`.
 - serverInstance `00112233-4455-6677-8899-aabbccddeeff` is stored as
   `00 11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF`.
-- The hashPrefix of the audio hash `0123456789abcdef…` is
-  `01 23 45 67 89 AB CD EF`.
-- 2.13.3's selection signature is stored as
-  `9F 0A E9 1F 22 0E 2E 76 EC 5A 40 E4 9F C8 0B 2D`.
+- The audio hash `0123456789abcdef0123456789abcdef` is stored as the 16
+  bytes `01 23 45 67 89 AB CD EF 01 23 45 67 89 AB CD EF` (ORIG's
+  audioHash, 2.6.6).
+- autodj-00000029's selection signature (AUTODJ-INDEX.md 6) is stored as
+  `AF 47 52 82 9A A5 0A FA 2B 5F 2E 6A EC C5 6D 59`.
 
-**The selection signature** (2.13.3): 2.13.3's vector gives
-9f0ae91f220e2e76ec5a40e49fc80b2d; the same header with no hash lines
-gives efdb6ffa02a177c18593a3ed34f7016b. With those two hashes, DJRW row 0
-is `0123…` and row 1 `fedc…` (2.13.2's row order).
+**The AutoDJ index** (AUTODJ-INDEX.md 13.3): its vectors are
+`vectors.json`'s `mpdj` group: the levels of cosines (half away from
+zero, the float32 trap's pair), the slider's least levels, slotBytes and
+headerBytes, the strided ranks, a slot's seeded CRC, autodj-00000029's
+selection signature with its text and its vectors' digest, device.txt's
+cases, and the float32 trap.
 
 **Canonical order** (2.6.8, 2.4.3):
 
@@ -2123,7 +2112,7 @@ goes on the card as `x.opus`, its bytes unchanged, convertedTo 0.
 |---|---|
 | `manifest.bin` | under 4 KB |
 | `tags-<g>.bin` | about 6.9 MB: RECS 1.44 MB, STRS about 2.4 MB (names about 31 B and runs about 87 B per track), HIDX 0.24 MB, ORIG 1.6 MB, OSTR about 1.2 MB. The device reads FOLD, RECS and STRS: about 3.9 MB, 2.3-3.3 s at 1.2-1.7 MB/s, during a build only |
-| `autodj-<g>.bin`, K = 100 | about 6.7 MB (DJNB 6.0 MB); one 300-byte row read per pick |
+| `autodj-<g>.bin`, MPDJ v2 at k = 169 | about 10.6 MB (DJSL 10.24 MB; DJRF, DJPH and STRS 0.36 MB, the join's); one 512-byte slot read per pick (AUTODJ-INDEX.md 10.2) |
 | `/.mstream/thumbs` | about 39 MB for 1,800 albums |
 | `/.player/tags.bin` | about 2.3 MB when the software covers every file (status rows, names); about 4.1 MB when the device scanned everything (HIDX, 0.24 MB, included) |
 
@@ -2352,7 +2341,7 @@ falls from about 50 ms to about 2 ms (ESTIMATED, metascan section 5.2).
 | Background walk, cached | under 0.05 s | 9-11 s, plus 2.3-3.3 s on the first walk after a transfer |
 | qfp checks (only after a PC wrote times the skew rule can't explain) | none | at most about 2.7 min once |
 | The update step's pause (3.4.2) | under 0.1 s | about 9-12 s idle, 11-14 s while an MP3 plays (a 20k-line queue; a full one since the cap is about 1-1.5 s less) |
-| MPDJ's DJNB check, once per commit, on the card worker (3.4.2) | none | 3.5-5 s of reads (6 MB) |
+| MPDJ's whole-file check | none (MPDJ v2 has none: each slot is checked as it is read, AUTODJ-INDEX.md 8.5) | none (v1's DJNB check was 3.5-5 s of reads, 6 MB) |
 
 If L2 measures more than 3 s for the queue, a binary fast path (track ids
 saved with the index's build stamp, used when the stamp matches) can come
@@ -2589,8 +2578,9 @@ loop's priority 1 time-slices with the loop for its whole length, and
 back-to-back steps would halve the loop's share for minutes. So:
 
 - **priority 0** for the walk, the scan, the compaction and the DJNB
-  check: they run in the time the loop and the decoder leave, and the
-  loop preempts them whenever it is ready;
+  check (MPDJ v1's; v2 has no whole-file check, 3.4.2): they run in the
+  time the loop and the decoder leave, and the loop preempts them
+  whenever it is ready;
 - **priority 1** only for a cover job whose row is on screen (Thumbs'
   rule today), and for the update step's build, which the listener is
   waiting for (3.4.2);
@@ -3283,14 +3273,20 @@ several seconds on the loop would freeze touch, the redraw,
 5. Live again, on the loop: re-read `queue.txt` with `restore()`'s logic,
    carrying the resume start point as `remap()` does today, its sinks
    pre-sized from the file's entry count; lengths from the index;
-   AutoDJ's join (3.5), reading DJRW and DJPH and checking their CRCs as
-   it reads (0.7 MB); Thumbs' pools back; `userInterface->libraryChanged()`.
+   AutoDJ's join (3.5), reading DJRF, DJPH and STRS and checking their
+   CRCs as it reads (0.36 MB at 20k; AUTODJ-INDEX.md 11.2); Thumbs' pools
+   back; `userInterface->libraryChanged()`.
 6. Save `library.idx` on the card worker, aside then renamed, under the
    `LibraryWrite` blocker; then remove the marker if there was one. The
-   index isn't changed while it is written. Then, once per commit, the
-   worker checks DJNB's CRC (6 MB, 3.5-5 s, priority 0); until it passes,
-   AutoDJ uses random with filters (2.13.4), and a failure makes the
-   MPDJ absent.
+   index isn't changed while it is written. AutoDJ may use the MPDJ as
+   soon as step 5's join ends: it checks each slot as it reads it
+   (AUTODJ-INDEX.md 8.5).
+
+(2026-10-13: MPDJ v1's whole-file check, a 6 MB pass over DJNB once per
+commit at priority 0, is gone with v1. ScanScheduler's DJ check job, built
+for it and mentioned in 3.3.4, 3.3.9, 3.8 and 3.9 as built, stays in the
+code unused until the AutoDJ engine's PR removes it, AUTODJ-INDEX.md
+11.8.)
 
 **Time (ESTIMATED from MEASURED rates):** docs/UI-SPIKE.md measured the
 index build on the device at 10,000 synthetic tracks: adding them
@@ -3529,11 +3525,11 @@ counts):
 | Free with the UI up, today (77-track card) | **2.77-2.90** | MEASURED (dev.log `psram=`) |
 | `library.idx` v6 | −1.75 to −1.85 | 3.4.3 |
 | The queue, full (the cap: 5,000 entries), with its undo snapshot | −0.12 | 12 B per entry, twice (`QueueModel`). With no saved queue the boot queues the library's first 5,000 (`queueEverything`), so a full queue is the *default* on a big new card; `assign()` takes no snapshot (0.06 MB), and the first edit after it adds one. A whole-library queue of 20k was −0.48 (−0.96 untrimmed) before the cap |
-| AutoDJ: u16 maps, filters, 5 cached rows | −0.17 to −0.33 | autodj research section 5 |
+| AutoDJ: u16 maps, filters, 7 cached slots | −0.16 to −0.17 | MPDJ v2's engine, AUTODJ-INDEX.md 11.6 (the v1 draft's estimate was −0.17 to −0.33) |
 | The sector cache | −0.13 | 3.2.4: 256 sectors, 135,168 B (3.2.7: 0.06 MB more than the 128 first planned) |
 | `DurationBook` | −0.04, or 0 once lengths come from the index | `lib/core/QueueView.h` |
 | The card worker's job, only while one runs (one at a time) | −0.08 to −0.12 | the largest job: the compaction since 2026-10-09 (115 KB: its 4 KB section buffers, 1 KB run buffers, D's 8 KB; 66 KB before, 3.3.7), then the walk (about 110 KB: the 64 KB scratch, KnownD's 16 KB, DFLD's 8 KB buffer, the 2 KB Δ histogram, the journal's write buffer). The scan: its 4 KB buffer, the record, the `FIL`, a 100-record chunk, the resume set (about 60 KB), and its View (about 74 KB at 32 chunks, 53 KB before). The doubtful files go to `walk.jnl`, not RAM (3.2.3) |
-| **Headroom** | **about 0.20 to 0.65** | positive in the worst case since the queue's cap (it was about −0.16 to 0.29 with a whole-library queue); the sector cache's 256 sectors took 0.06 MB of it (3.2.7) |
+| **Headroom** | **about 0.34 to 0.66** | positive in the worst case since the queue's cap (it was about −0.16 to 0.29 with a whole-library queue); the sector cache's 256 sectors took 0.06 MB of it (3.2.7); 0.20 to 0.65 with the v1 draft's AutoDJ estimate |
 
 **What that forces:**
 
@@ -3601,7 +3597,9 @@ counts):
   and opening the next isn't seen.
   Afterwards, in order: AutoDJ's join (a sorted array of (path hash,
   track id), 240 KB transient, then 2 × 40 KB of u16 maps; rows whose
-  file is gone are skipped), the queue's re-read (at most 20 KB
+  file is gone are skipped; above about 21-22k tracks the transient passes
+  the 256 KB a single block may take, so the engine builds it in pieces,
+  AUTODJ-INDEX.md 11.2), the queue's re-read (at most 20 KB
   transient, 40 KB shuffled, then 60 KB), Thumbs' pools (315 KB).
 - **Fragmentation:** the arena (about 0.8 MB) and the track table (640 KB)
   are single blocks; the memory check (3.4.2) defers a build to the next
@@ -3613,9 +3611,10 @@ counts):
 - **Nothing is read whole** into PSRAM by the walk, the scan or the
   compaction: their temporaries are fixed buffers (above), whatever the
   card holds.
-- **AutoDJ's filter data** is the DJRW rows' (bpm10, camelot) only;
-  random with filters is narrowed to it (2.13.4). A per-track filter
-  block for every file would cost about 80 KB more (part 7, U15).
+- **AutoDJ's filter data** is the DJRF records' (bpm10, camelot,
+  artistKey) only; random with filters is narrowed to it (2.13.4). A
+  per-track filter block for every file would cost about 80 KB more (part
+  7, U15).
 
 **Levers, if L0 or L4 measure less** (part 7, U12, which the cap
 answered):
@@ -3625,7 +3624,7 @@ answered):
 | ~~No undo snapshot for queues over about 5,000 entries~~ | taken another way: the cap saves 0.36 MB against a whole-library queue of 20k and keeps the undo |
 | File names kept on the card instead of in PSRAM (about 31 B per track) | 0.62 MB |
 | `DurationBook` folded into the index | 0.04 MB |
-| AutoDJ at its compact layout | up to 0.16 MB |
+| ~~AutoDJ at its compact layout~~ | taken: MPDJ v2's estimate, −0.16 to −0.17 MB, is the compact one (the v1 draft's range reached −0.33) |
 
 The ceiling was about 25k tracks with a full queue (metascan section
 6.2). Since the cap the queue no longer grows with the library; the
@@ -3643,9 +3642,10 @@ part it links added 76.2 KB of code and 16.7 KB of rodata, 472 B of
 internal DRAM and no IRAM; the app is 2.48 MB, 41% of its slot.)
 
 **Card time** at 20k (ESTIMATED): reading T's FOLD, RECS and STRS, about
-3.9 MB, takes 2.3-3.3 s, only during a build; checking DJNB's CRC, 6 MB,
-takes 3.5-5 s once per commit in the background; an AutoDJ pick reads
-one 300 B row (about 3 ms).
+3.9 MB, takes 2.3-3.3 s, only during a build; AutoDJ's join reads DJRF,
+DJPH and STRS (0.36 MB) after each build, and there is no whole-file
+check; an AutoDJ pick reads one 512-byte slot (about 3 ms with an MP3
+playing, AUTODJ-INDEX.md 11.6).
 
 ### 3.6 What changes, file by file
 
@@ -4713,13 +4713,13 @@ with tests.
 | # | Addition | Why | Fallback without it | Size |
 |---|---|---|---|---|
 | A1 | Manifest entries gain `bpm-source`, `sample-rate`, `channels`, `bit-depth`, `track-total`, `disc-total` and `art-source` (`album_art_source`); all are on `t.*`, which the query already selects. A ping key `syncManifest: 2`, `sync: true` kept. | Removes the `metadata/batch` round trips; tells analysed BPM from tag BPM and folder art from embedded. | `metadata/batch` per page. | 0.25 |
-| A2 | Bulk embeddings: the cap from 8 to 256, `audioHashes` accepted as well as paths, optionally `Accept: application/octet-stream` (dim × 4 bytes per row). | 1,250 calls become 40; 68 MB becomes 51 MB. | 8 per call, 4-8 calls in parallel. | 0.5 |
+| A2 | Bulk embeddings: the cap from 8 to 256, `audioHashes` accepted as well as paths, optionally `Accept: application/octet-stream` (dim × 4 bytes per row). | 1,250 calls become 40; 68 MB becomes 51 MB. The planned route for AutoDJ's embeddings, whenever convenient (the user's D3, 2026-10-13). | 8 per call, 4-8 calls in parallel. | 0.5 |
 | A3 | A `rules` block on the manifest's first page: `artistSplitExceptions` (admin-only today, default empty), the split delimiters, the ignored articles, `albumArtPriority`, the scanner engine and its lofty version, the schema version. | Stage B's credits and any later rule change agree on both sides without a code change. | The defaults in part 5. | 0.25 |
 | A4 | `includeImages: true` on `POST /api/v1/file-explorer`, returning `.jpg`, `.jpeg` and `.png` names with sizes. | The folder-first cover source exact, "the largest other .jpg" included. | HEAD probes of the named files. | 0.25 |
 | A5 | `/transcode` bitrates 256k and 320k, and an optional `sampleRate`. | MP3 as the conversion target, if wanted over Opus (part 7, U3). | Opus 192k. | 0.25 |
 | A6 | A stable server instance id in ping. mStream already makes one (`discovery.mdns.instanceId`, a random UUID in its config, sent only over mDNS). | Binds a card to a server (MSMF `serverInstance`) without storing a URL or a token on the card, whichever URL reaches it. | serverUrlKey, the hash of the base URL (2.5.1), which v1 always writes; a second URL for the same server asks once. | 0.25 |
 | A7 | Raw per-file tags in the manifest (`tag_album`, `tag_album_artist`, `tag_compilation`, the release id, raw credits). | Only if a route ever needs the file's own tags without its bytes. A transfer downloads the bytes and reads them, so likely never. | Reading the bytes (2.7). | 0.5-1 |
-| A8 | A server-side table, `POST /api/v1/sync/autodj` (autodj research section 6): the selection in, one MPDJ out, built in a worker and cached. | Only if building in the terminal is unwanted. | The terminal builds it (about 3-25 s of compute at 10k, ESTIMATED). | 2-3 |
+| A8 | A server-side table, `POST /api/v1/sync/autodj` (autodj research section 6): the selection in, one MPDJ out, built in a worker and cached. | Not planned: the terminal builds the file (the user's D3, 2026-10-13); a server route would return the same bytes. | The terminal builds it (about 35-50 s of compute for the synthetic card's 19,410 tracks, MEASURED-HOST: AUTODJ-INDEX.md 12.1). | 2-3 |
 | A9 | ReplayGain album gain and peaks stored (a migration and both scanner engines). | Only if the device will apply album gain (part 7, U16); the records carry it from the file either way. | The device's and the software's own reading. | 1-2 |
 | A10 | A manifest `revision` that sees changes in place: add `SUM(t.modified)` to the four aggregates, or a hash over (id, modified, file_hash). | Today's revision misses a file replaced by one whose mtime isn't the library's newest, since the scanner's UPSERT keeps the row's id (2.10.2). | A full manifest read every 7 days or 10th run, and in the deep check. | 0.25 |
 
@@ -4857,12 +4857,14 @@ the same.
 - **nameKey:** collapse whitespace runs to one space and trim; fold the
   Unicode quotes (`‘ ’ ‚ ‛ ′` to `'`, `“ ” „ ‟ ″` to `"`) and dashes
   (`‐ ‑ ‒ – — ― −` to `-`); lowercase. No accent folding.
-  - **Pinned for the contract** (DJRW's artistKey and the same-song rule,
+  - **Pinned for the contract** (MPDJ's artistKey and the same-song rule,
     2.13.2, are written by one side and compared by the other):
     whitespace is the Unicode `White_Space` property (Rust's
     `char::is_whitespace`); lowercase is the Unicode default full
-    lowercase mapping with `Final_Sigma` (Rust's `str::to_lowercase`).
-    So `ΣΟΦΙΑΣ` gives `σοφιας`, where a per-character `towlower` gives
+    lowercase mapping with `Final_Sigma` (Rust's `str::to_lowercase`),
+    with Unicode 17.0's tables, the version the player's
+    `NameKeyTables.cpp` was made from (by `tools/unicode_case.rs`). So
+    `ΣΟΦΙΑΣ` gives `σοφιας`, where a per-character `towlower` gives
     `σοφιασ`. mStream's `name-key.js` notes the gap between its own JS
     and Rust engines (U+FEFF, a few case mappings); the contract follows
     the Rust side.
@@ -4875,10 +4877,10 @@ the same.
 
 - **Title:** the record's, else the file name's (today's parse); a blank
   one (White_Space alone) is none.
-- **Artist display:** the record's artist values trimmed; one value as is;
-  several deduplicated by nameKey (the first kept) and joined with ", "
-  (mStream's `credit_display`). Shown where it differs from the album's
-  artist line.
+- **Artist display:** the record's artist values trimmed (of
+  White_Space); one value as is; several deduplicated by nameKey (the
+  first kept) and joined with ", " (mStream's `credit_display`). Shown
+  where it differs from the album's artist line.
 - **Disc:** the record's, else the file name's (`1-01`), else the disc
   subfolder's rank as today; missing counts as 1.
 - **Number:** the record's, else the file name's.
@@ -4959,7 +4961,10 @@ no collation key (2.6.5).
   server's split exceptions (A3; none by default); then deduplicated by
   nameKey. The primary artist is the first credit.
 - **The same song** (AutoDJ's rule, 2.13.2): equal
-  `nameKey(artist display) + "|" + nameKey(title)`.
+  `nameKey(artist display) + "|" + nameKey(title)` of the rows' primary
+  files' records; a row whose title is blank has no song key and is never
+  the same song as another (AUTODJ-INDEX.md 2.4). AutoDJ's artist key is
+  the nameKey of the first non-blank artist value.
 
 ### 5.5 Where the prototype parser must change (`metascan/parsing/TagScan`)
 
@@ -5032,7 +5037,7 @@ is adopted as written:
 | S3 | The reference reader: lofty 0.25 with part 5's rules ported from the rust-parser (GPL-3.0 to GPL-3.0-only is fine) | 1-1.5 |
 | S4 | The MPTG, MSMF and MSPD writers, generations, checkpoints, recovery and the cut-rename check (2.12), 2.4.3's checks in its readers, against the shared fixtures | 2-2.5 |
 | S5 | Covers: the folder-first source (2.14.2) and MPTH thumbnails with the `image` crate it ships | 1 |
-| S6 | AutoDJ: embeddings, an exact cosine top-K over the selection only (blocks across threads, no new crate), the MPDJ writer | 1-1.5 |
+| S6 | AutoDJ: embeddings, the exact levels and the strided selection over the selection only (an f64 matrix product with a guard band, or the rule on threads; no new crate), the MPDJ v2 writer against its fixtures (AUTODJ-INDEX.md 12, 13) | 1-1.5 |
 | S7 | The page (a `mstream-player device card` command, later a page in the GUI's MP3 Player tab) and the e2e leg | 1.5-2.5 |
 | | **Total** | **about 10.5-13.5** |
 
@@ -5040,7 +5045,8 @@ is adopted as written:
 1.5-2 days; A8 2-3; A9 1-2.
 
 **Outside this plan's totals:** the device's AutoDJ engine (the autodj
-research's M2, 2-3 days host-tested, and M3, 1.5-2 days with the device);
+research's M2, 2-3 days host-tested, and M3, 1.5-2 days with the device;
+AUTODJ-INDEX.md 11.8 lists what it holds);
 the embedded-cover decode beyond JPEG (PNG, progressive: metascan's M6).
 
 ### 6.3 LATER: needs the Core2 (about 4-7 days, one batch; flashing needs the user's go-ahead)
@@ -5579,9 +5585,13 @@ The user answered U8, U11, U12, U13 and U14 on 2026-10-07 (marked
 - **U15. AutoDJ's table:** K = 100 (about 6 MB per 20k tracks on the
   card)? Rows only for embedded tracks, or also rows with filter data
   only (BPM, key) for tracks not yet embedded? And random with filters
-  (2.13.4): enough with the DJRW rows' BPM and key, or worth about 80 KB
+  (2.13.4): enough with the rows' BPM and key, or worth about 80 KB
   of PSRAM at 20k for a per-track filter block that covers the
-  listener's own files too?
+  listener's own files too? **Answered (2026-10-13):** k = 169 in
+  512-byte slots, the long head S84-55-169, about 10.6 MB per 20k tracks
+  (the user's D1, AUTODJ-INDEX.md); rows only for embedded tracks; the
+  per-track filter block is a firmware backlog item, not part of the file
+  (AUTODJ-INDEX.md 11.8).
 - **U16. ReplayGain album gain:** will the device apply it? If so, A9
   makes mStream agree; the records carry it from the file either way.
 - **U17. "No new APIs" for v1** (2026-10-01): still the rule, or may A1-A4
@@ -5620,7 +5630,10 @@ The user answered U8, U11, U12, U13 and U14 on 2026-10-07 (marked
   the software's records cover its ledger only.
 - **T7. Folder images:** HEAD probes now, A4 later?
 - **T8. AutoDJ:** built in the terminal (proposed; no API change) or A8 on
-  the server? K, and the same-song rule (2.13.2).
+  the server? K, and the same-song rule (2.13.2). **Answered
+  (2026-10-13):** the terminal builds it now (the user's D3), and a bulk
+  embeddings route (A2) may come later; k, the selection and the
+  same-song rule are AUTODJ-INDEX.md's.
 - **T9. Quick Connect tunnels:** fine for the manifest and the
   embeddings, slow for gigabytes of music. Warn, or refuse a transfer over
   a relay?
@@ -5672,7 +5685,7 @@ The user answered U8, U11, U12, U13 and U14 on 2026-10-07 (marked
 9. **Retags the identity can't see:** a retag that keeps the size and the
    time, in the middle of the file. Rescan tags on the device, and the
    software's next run against the server's hashes, catch most.
-10. **Licences.** The AutoDJ table is CC BY-NC-SA derived data (2.13.4);
+10. **Licences.** The AutoDJ index is CC BY-NC-SA derived data (2.13.4);
     analysed BPM and key come from an AGPL library on the server, an
     owner question mStream already records; neither is code in the
     firmware.
@@ -5723,7 +5736,11 @@ they disagreed:
   builder, `library.idx` v6), "Storage" (the sector cache, `/.player`
   files), and the Roadmap's first three items: the sync now ships
   per-file records (this contract), not mStream-built index files; covers
-  and lengths come from it; AutoDJ's table is MPDJ.
+  and lengths come from it; AutoDJ's index is MPDJ v2 (done 2026-10-13:
+  the roadmap's item 3 names docs/AUTODJ-INDEX.md).
+- **docs/AUTODJ-INDEX.md:** the AutoDJ index's own specification (MPDJ
+  v2), apart from this document since 2026-10-13; 2.13 points to it and
+  keeps what ties it to the contract.
 - **docs/UI-SPIKE.md:** the per-track memory figures.
 - **docs/GAPLESS.md** and **docs/QUEUE-MODES.md:** the update step's safe
   point and the queue's remap through `queue.txt`.
@@ -5752,7 +5769,9 @@ they disagreed:
   `OpusOpenCache`, `NvsLayout`, `IdlePolicy`, `CardFormat`, `TrackProgress`,
   `src/main.cpp`.
 - **The research** (scratchpad): `metascan/RESEARCH.md` and its prototype
-  `metascan/parsing/TagScan.{h,cpp}`; `autodj/RESEARCH.md`.
+  `metascan/parsing/TagScan.{h,cpp}`; `autodj/RESEARCH.md`; the AutoDJ
+  index research of 2026-10-12/13 (two rounds, a critique and two checks:
+  AUTODJ-INDEX.md Appendix C).
 - **mStream** master 926b97b1: `src/api/sync.js`, `src/api/db.js`,
   `src/api/discovery.js`, `src/api/transcode.js`, `src/api/album-art.js`,
   `src/api/random.js` (`CAMELOT_TO_KEYS`), `src/api/server-info.js`,
@@ -5766,6 +5785,6 @@ they disagreed:
 - **mstream-terminal** origin/main 2b04dbe: `Cargo.toml` (GPL-3.0-only;
   `image` 0.25, `sha2`), `src/device/page.rs`, `src/dj.rs`, `PLAN.md`;
   `claude/gui-mp3-player`: `docs/ux-contracts/mp3-player-screen.md`.
-- **The test vectors** of 2.3 and 2.13.3 were computed for this document
-  (a short Python check of CRC-32, FNV-1a 64, qfp, the FAT fields and the
-  SHA-256 signature).
+- **The test vectors** of 2.3 were computed for this document (a short
+  Python check of CRC-32, FNV-1a 64, qfp, the FAT fields); the AutoDJ
+  index's come from `tools/mpdj.py` (AUTODJ-INDEX.md 13).

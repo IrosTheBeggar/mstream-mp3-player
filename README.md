@@ -873,7 +873,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   CardContract, CardContainer, CardTags, CardManifest, CardAutoDj
                       The card contract with the transfer software
                       (docs/METADATA.md part 2): its files' readers and
-                      writers, CRC-32, the path hash, the fingerprint
+                      writers, CRC-32, the path hash, the fingerprint;
+                      CardAutoDj the AutoDJ index (docs/AUTODJ-INDEX.md)
   LibraryIndex, LibraryBuilder, LibraryBoot
                       The library index (library.idx v6), its build from
                       the tag records, the boot's decision
@@ -962,7 +963,13 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       lib/core/ResamplerTables.cpp);
                       usb_viz.py + test_usb_viz.py (the USB visualizer's
                       reference sender, and its tests: python -m unittest
-                      discover -s tools -p "test_usb_viz.py")
+                      discover -s tools -p "test_usb_viz.py");
+                      card_fixtures.py (the card contract's shared fixtures
+                      -> test/fixtures/card, --check; docs/METADATA.md 2.17);
+                      mpdj.py + test_mpdj.py (the AutoDJ index's reference
+                      writer, reader and test vectors, docs/AUTODJ-INDEX.md;
+                      tests: python -m unittest discover -s tools -p
+                      "test_mpdj.py")
                       beat_eval/ (the beat tracker's evaluation harness: the
                       firmware's tracker on a music corpus, scored against
                       reference beats; docs/BEAT-TRACKER-EVAL.md)
@@ -972,7 +979,9 @@ site/                 The web installer's page (filled in by package_release.py)
                       release-notes.md (the release notes' template)
 docker/               mStream dev server
 docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.md,
-                      RESAMPLER.md, BEAT-TRACKER-EVAL.md, HOST-STATUS.md
+                      RESAMPLER.md, BEAT-TRACKER-EVAL.md, HOST-STATUS.md,
+                      METADATA.md (the card contract), AUTODJ-INDEX.md
+                      (the AutoDJ index, MPDJ v2)
 LICENSES/             The licence texts THIRD-PARTY-NOTICES.md refers to
 THIRD-PARTY-NOTICES.md What else is in the firmware binary, and its licences
 ```

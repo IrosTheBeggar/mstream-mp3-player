@@ -106,9 +106,12 @@ jobs:
 
       # The card contract's shared fixtures (test/fixtures/card) are frozen:
       # tools/card_fixtures.py, their second implementation, must still make
-      # them byte for byte (docs/METADATA.md 2.17).
+      # them byte for byte (docs/METADATA.md 2.17); tools/mpdj.py, the AutoDJ
+      # index's reference (docs/AUTODJ-INDEX.md), passes its own tests.
       - name: Card fixtures
-        run: python tools/card_fixtures.py --check
+        run: |
+          python tools/card_fixtures.py --check
+          python -m unittest discover -s tools -p "test_mpdj.py"
 
       # On a tag, RELEASE=1: the build fails unless HEAD is exactly that tag,
       # the tree is clean and no local flags are set (tools/version.py).
