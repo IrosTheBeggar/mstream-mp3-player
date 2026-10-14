@@ -10,6 +10,7 @@
 #include <cstring>
 
 #include "LibraryText.h"
+#include "app/AutoDjContract.h"
 #include "app/Psram.h"
 #include "app/Version.h"
 #include "storage/FileStream.h"
@@ -399,7 +400,9 @@ void Library::writeDeviceTxt() {
   const char* v = version::player();
   if (v[0] == 'v') ++v;
   char want[400];
-  const size_t n = cardcontract::devicetxt::format(cardcontract::devicetxt::current(v), want, sizeof(want));
+  cardcontract::devicetxt::Info info = cardcontract::devicetxt::current(v);
+  info.readMpdj = autoDjReadMpdj();  // (the contract's; major 2 in a build with AUTODJ_READ_MPDJ)
+  const size_t n = cardcontract::devicetxt::format(info, want, sizeof(want));
   if (n == 0) return;
   TxtCheck check;
   tagstore::settle(*fat_, kTxtNames, &check);

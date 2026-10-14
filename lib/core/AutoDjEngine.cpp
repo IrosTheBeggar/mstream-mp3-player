@@ -111,9 +111,16 @@ void Engine::trackStarted(uint32_t track, const Maps* maps, bool byAutoDj) {
 }
 
 void Engine::trackLeft(uint32_t track, const Maps* maps, uint32_t playedMs, bool naturalEnd) {
+  rowLeft(rowOf(maps, track), playedMs, naturalEnd);
+}
+
+void Engine::rowLeft(uint16_t row, uint32_t playedMs, bool naturalEnd) {
   if (naturalEnd || playedMs >= kQuickSkipMs) return;
   ++stats_.quickSkips;
-  const uint16_t row = rowOf(maps, track);
+  if (row != kNoRow) ses_.ring.remove(row);
+}
+
+void Engine::pickRefused(uint16_t row) {
   if (row != kNoRow) ses_.ring.remove(row);
 }
 

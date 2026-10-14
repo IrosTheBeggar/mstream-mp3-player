@@ -3484,6 +3484,82 @@ void test_every_play_and_clear_bumps_the_epoch() {
   p.setFenced(false);
 }
 
+// naturalEnds(): the tracks that played to their end, whichever way the
+// player took the end (an end update() saw, a join heard, Repeat One's
+// loop, the sleep timer's pause, the queue's end, an end inside the
+// fence), and never a skip, a prev, a failure or an edit: Auto DJ tells a
+// quick skip from an end by it.
+void test_natural_ends_are_counted_and_skips_are_not() {
+  Rig r(5);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  p.setRepeat(PlaybackController::Repeat::Off);
+  TEST_ASSERT_EQUAL_UINT32(0, p.naturalEnds());
+  p.play(0);
+  a.position = 5000;
+  a.finish();
+  p.update(0);  // a's end: b plays
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(1, p.naturalEnds());
+  a.position = 5000;
+  p.next();  // a skip
+  p.prev();  // ... and back (the entry before)
+  p.next();
+  TEST_ASSERT_EQUAL_UINT32(1, p.naturalEnds());
+  a.advances.push_back(a.nexts.back().token);
+  p.update(0);  // c joined to d: c's end
+  TEST_ASSERT_EQUAL_INT(3, p.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(2, p.naturalEnds());
+  a.failedFlag = true;
+  p.update(0);  // d failed: a skip to e, no end
+  TEST_ASSERT_EQUAL_INT(4, p.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(2, p.naturalEnds());
+  // Repeat One's loop, then the queue's end (repeat Off): both ends.
+  p.setRepeat(PlaybackController::Repeat::One);
+  a.failedFlag = false;
+  a.position = 5000;
+  a.finish();
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(4, p.currentIndex());
+  TEST_ASSERT_EQUAL_UINT32(3, p.naturalEnds());
+  p.setRepeat(PlaybackController::Repeat::Off);
+  a.position = 5000;
+  a.finish();
+  p.update(0);
+  TEST_ASSERT_TRUE(p.endedAtEnd());
+  TEST_ASSERT_EQUAL_UINT32(4, p.naturalEnds());
+  // The sleep timer's pause at a boundary: an end.
+  p.play(0);
+  p.setPauseAfterTrack(true);
+  a.position = 5000;
+  a.finish();
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
+  TEST_ASSERT_EQUAL_UINT32(5, p.naturalEnds());
+  p.setPauseAfterTrack(false);
+  // An edit that moves the current entry, and a Play: no end.
+  p.play(1);
+  const uint32_t cur = 1;
+  p.remove(&cur, 1);
+  const uint32_t two[] = {2, 3};
+  p.playNow(two, 2, 0);
+  TEST_ASSERT_EQUAL_UINT32(5, p.naturalEnds());
+  // A track that ends inside the fence with nothing joined: an end; one
+  // that failed there: none.
+  p.setFenced(true);
+  a.position = 5000;
+  a.finish();
+  p.setFenced(false);
+  p.queueReplaced(true);
+  TEST_ASSERT_EQUAL_UINT32(6, p.naturalEnds());
+  p.play(0);
+  p.setFenced(true);
+  a.failedFlag = true;
+  p.setFenced(false);
+  p.queueReplaced(true);
+  TEST_ASSERT_EQUAL_UINT32(6, p.naturalEnds());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
@@ -3601,5 +3677,6 @@ int main(int, char**) {
   RUN_TEST(test_every_track_failing_finishes_the_queue_at_its_end);
   RUN_TEST(test_auto_dj_s_cue_only_at_a_finished_queue);
   RUN_TEST(test_every_play_and_clear_bumps_the_epoch);
+  RUN_TEST(test_natural_ends_are_counted_and_skips_are_not);
   return UNITY_END();
 }

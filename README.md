@@ -969,7 +969,15 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       mpdj.py + test_mpdj.py (the AutoDJ index's reference
                       writer, reader and test vectors, docs/AUTODJ-INDEX.md;
                       tests: python -m unittest discover -s tools -p
-                      "test_mpdj.py")
+                      "test_mpdj.py");
+                      synthtransfer.py + test_synthtransfer.py (a test
+                      card's /.mstream: a tags file with no records, an
+                      AutoDJ index, synthetic or given, and the root
+                      written last, so a synthcard.py tree or any FAT32
+                      card gets an index the firmware accepts; --dry-run,
+                      --check; it writes nothing outside /.mstream;
+                      tests: python -m unittest discover -s tools -p
+                      "test_synthtransfer.py")
                       beat_eval/ (the beat tracker's evaluation harness: the
                       firmware's tracker on a music corpus, scored against
                       reference beats; docs/BEAT-TRACKER-EVAL.md)

@@ -258,6 +258,14 @@ public:
   // A track stopped being the current entry after `playedMs`: not a natural
   // end and under kQuickSkipMs, it leaves the ring (a quick skip).
   void trackLeft(uint32_t track, const Maps* maps, uint32_t playedMs, bool naturalEnd);
+  // The same by its row (kNoRow: none leaves): the firmware's loop step
+  // remembers a track's row while the maps are away (the join again after
+  // a library update's fence; rows don't change there).
+  void rowLeft(uint16_t row, uint32_t playedMs, bool naturalEnd);
+  // A pick the queue refused (full of tracks not played yet, or no
+  // memory): out of the ring, as it never played; no quick skip; it stays
+  // in the cooldowns.
+  void pickRefused(uint16_t row);
   // Anchor changed: the pin goes; the next Stay on seed pick takes it.
   void modeChanged();
   // The index file was (re)opened: the slot cache, the damaged ring and

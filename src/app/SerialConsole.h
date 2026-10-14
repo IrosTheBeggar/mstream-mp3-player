@@ -55,6 +55,13 @@
 //   G... gapless playback (docs/GAPLESS.md): G status, G0/G1 off/on, Gt0/Gt1
 //        trimming by the LAME tag off/on, Gx<n> the ring's cut against a reader
 //        on the other core (stops the player)
+//   D... Auto DJ (lib/core AutoDjCommand.h has the list; app/AutoDj): D status,
+//        D0/D1 off/on, Dm0/Dm1 Anchor, Df55-Df75 strictness, Dt0/Dt1 and Dk0/Dk1
+//        BPM continuity and Harmonic mixing, Ds<hex> the next session's seed, Dr
+//        a new session, Dp a pick now, Dn<k> dry-run picks on a copy, Dj the
+//        join again, Dc the file reopened, Db<n> slot reads timed, Dh/Dh<id>
+//        and De "Auto DJ from here" and the Auto DJ button, Dx stop Dn/Db
+//        (Dn and Db run one step a loop pass: the loop never freezes)
 // '@' lines are a computer's, not commands (docs/USB-VISUALIZER.md: the USB
 // visualizer's protocol; HostLine): every byte from an '@' to the end of
 // its line goes to hostLine, never to the keys above, and is never echoed.
@@ -137,6 +144,8 @@ public:
     std::function<void(const char*)> gapless;
     // Opus (O): the argument as typed (may be "").
     std::function<void(const char*)> opus;
+    // Auto DJ (D): the argument as typed (may be "").
+    std::function<void(const char*)> autoDj;
     // A computer's '@' line: complete (HostLine::Byte::Line: `line` is its
     // text from the '@', writable) or not one (Bad, Long, Restart: `line`
     // nullptr).
@@ -166,7 +175,7 @@ private:
   enum class Pending {
     None, PlayIndex, Bench, HeadphonesName, Headroom, TempoPrior, DanceOffset, Freeze,
     InputLab, ScrollLab, LibraryIndex, FontProbe, ThumbProbe, Queue, Touch, Power, Sleep, Idle, BluetoothTest,
-    Rate, Gapless, Opus,
+    Rate, Gapless, Opus, AutoDj,
   };
 
   Actions actions_;

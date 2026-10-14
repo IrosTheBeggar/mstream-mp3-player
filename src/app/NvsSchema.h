@@ -7,8 +7,9 @@
 // "NVS: the rules"): checked at every boot before anything else reads NVS,
 // migrated when older, written when absent. The other namespaces' keys
 // (the touch calibration, the Bluetooth pairing and bond, the settings,
-// the queue) are never touched here unless a migration step says so:
-// schema 3's writes "ui"/"lang" (English) on a unit that has none.
+// the queue, Auto DJ's) are never touched here unless a migration step
+// says so: schema 3's writes "ui"/"lang" (English) on a unit that has none;
+// schema 4's (the "autodj" namespace) writes nothing.
 namespace nvsschema {
 
 // setup(), right after NVS is up (ensureNvs()) and before the first other

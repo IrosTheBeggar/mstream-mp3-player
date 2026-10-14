@@ -463,6 +463,14 @@ public:
   // Repeat One's loops (a natural end that played the entry again),
   // free-running: main's "[queue] repeat one" line.
   uint32_t repeats() const { return repeats_; }
+  // The tracks that played to their natural end, free-running: an end
+  // update() took (whatever followed it: the next entry, Repeat One's loop,
+  // the sleep timer's pause, the queue's end), a join heard (the track
+  // before it ended), and a track that ended inside the library update's
+  // fence (queueReplaced()). Not a failure, a skip or an edit. Auto DJ
+  // tells a track that ended from one skipped by it (its quick skip: the
+  // engine design's 2.5).
+  uint32_t naturalEnds() const { return naturalEnds_; }
   // The seeks that did something (Started or Waits), free-running: the
   // card worker waits 2 s after one (ScanScheduler's seekSeq).
   uint32_t seeks() const { return seeks_; }
@@ -572,6 +580,7 @@ private:
   PlayState state_ = PlayState::Stopped;
   Repeat repeat_ = Repeat::All;
   uint32_t repeats_ = 0;
+  uint32_t naturalEnds_ = 0;
   uint32_t seeks_ = 0;
   // Paused (or Waiting) on a cued track: the backend holds nothing, so a
   // resume starts it.

@@ -508,6 +508,7 @@ void PlaybackController::checkEnd() {
     advance(false);  // a failure moves on (a skip), even with Repeat One
   } else if (audio_.finished()) {
     failuresInARow_ = 0;
+    ++naturalEnds_;
     if (pauseAfter_) {
       pauseAtBoundary();  // the sleep timer: the next entry (One: this one), paused at 0:00
       return;
@@ -645,6 +646,7 @@ void PlaybackController::queueReplaced(bool currentKept) {
     // paused. Not the current entry kept: the new current one, cued.
     if (state_ == PlayState::Playing && (audio_.finished() || audio_.failed())) {
       ++fenceStops_;
+      if (!audio_.failed()) ++naturalEnds_;
       failuresInARow_ = 0;
       clearStartPoint();
       if (!hasTrack() || (currentKept && repeat_ != Repeat::One && !queue_.step(+1, wraps()))) {
@@ -789,6 +791,7 @@ void PlaybackController::syncHeard() {
     // (Stopped or cued, the backend has started something else since: a
     // new request drops its joins. Not reached.)
     if (!hasTrack() || state_ == PlayState::Stopped || cued_) continue;
+    ++naturalEnds_;       // (the track before played to its end)
     heardToken_ = token;  // the backend is on it, whatever follows here
     failuresInARow_ = 0;  // the track before played through
     playedFromMs_ = 0;
