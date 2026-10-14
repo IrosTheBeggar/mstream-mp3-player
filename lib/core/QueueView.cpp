@@ -131,12 +131,17 @@ SummaryPick placeSummary(const int (&widths)[kSummaryForms], int beside, int bel
 
 // ---- AddedMark ----
 
-uint32_t AddedMark::firstPosition(const QueueModel& q) const {
+uint32_t AddedMark::firstPosition(const QueueModel& q, const Quiet& quiet) const {
   if (since_ == kNone) return kNone;
   for (uint32_t p = 0; p < q.size(); ++p) {
-    if (marks(q.keyAt(p))) return p;
+    if (marks(q.keyAt(p), quiet)) return p;
   }
   return kNone;
+}
+
+bool badgeFlashes(uint32_t upNextWas, uint32_t upNextNow, bool contentChanged, bool modeChanged, uint32_t djAdds) {
+  if (!contentChanged || modeChanged || upNextNow <= upNextWas) return false;
+  return upNextNow - upNextWas > djAdds;
 }
 
 // ---- the queue's cap ----

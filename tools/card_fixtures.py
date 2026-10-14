@@ -758,7 +758,7 @@ def thumb_main():
 
 def device_main():
     return {"format": "device.txt", "file": "device.txt", "contract": "1", "firmware": "0.11.0", "read.msmf": "1",
-            "read.mptg": "1", "read.mpdj": "", "read.mpth": "1", "codecs": "mp3,flac,opus",
+            "read.mptg": "1", "read.mpdj": "2", "read.mpth": "1", "codecs": "mp3,flac,opus",
             "extensions": "mp3,flac,opus", "max_rate": "48000", "max_channels": "2"}
 
 

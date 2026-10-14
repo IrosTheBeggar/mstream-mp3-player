@@ -4,6 +4,7 @@
 #pragma once
 #include <cstdint>
 
+#include "AutoDjView.h"
 #include "ButtonPolicy.h"
 #include "CardFormat.h"
 #include "DeviceInfo.h"
@@ -123,6 +124,11 @@ struct AppState {
   uint16_t cpuRunMhz = 160;
   uint8_t btPower = 1;
   bool btPowerPending = false;
+  // Auto DJ (app/AutoDj::view(); lib/core/AutoDjView): on or off, its
+  // settings, whether the card's index is usable (the empty states'
+  // button, "Auto DJ from here", Output > Auto DJ's live rows), what holds
+  // it, the index's state and coverage, its appends (no badge flash).
+  autodjview::State autoDj;
 };
 
 // About (the Output tab): what the device is and has.
@@ -241,6 +247,29 @@ public:
   // "Bluetooth power": PowerChoices' choice, saved and applied at once (a
   // link that is up keeps its level until the next connection).
   virtual void setBtPower(int choice) = 0;
+
+  // ---- Auto DJ (app/AutoDj; the engine design's 5.1) ----
+  // Its settings (Now Playing's "..." row, Output > Auto DJ): applied,
+  // saved in NVS and logged. True: changed (false: as it was). Switching
+  // on never starts playback: Auto DJ adds a track when the queue's last
+  // one starts (a finished queue's pick is cued, paused).
+  virtual bool autoDjSetOn(bool on) = 0;
+  virtual bool autoDjSetMode(autodj::Mode m) = 0;
+  virtual bool autoDjSetFloor(uint8_t pct) = 0;
+  virtual bool autoDjSetMatch(bool tempo, bool key) = 0;
+  // The empty states' Auto DJ button (D4, the listener's tap): a random
+  // track the index knows plays as a new queue, Auto DJ on (refused
+  // behind the library update's fence).
+  virtual autodjview::Started autoDjStart() = 0;
+  // "Auto DJ from here" (the Library's long-press sheet, the listener's
+  // tap): `track` plays as a new queue, Auto DJ on, seeded by it. False:
+  // nothing played (the fence, no memory).
+  virtual bool autoDjFromHere(uint32_t track) = 0;
+  // Library track `track` has neighbours in a usable index (the sheet's
+  // 4th row; a few small reads before the index is joined).
+  virtual bool autoDjHasNeighbours(uint32_t track) = 0;
+  // Queue entry `key` is one Auto DJ added (its DJ mark; no "added" mark).
+  virtual bool autoDjMarked(uint32_t key) const = 0;
 
   // ---- the screen's pocket rule (ScreenPower) ----
   // The touch on the glass now landed on a screen woken from off that

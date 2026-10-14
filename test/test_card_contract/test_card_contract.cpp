@@ -870,14 +870,17 @@ void test_device_txt() {
   const size_t n = dt::format(dt::current("0.11.0"), buf, sizeof(buf));
   TEST_ASSERT_EQUAL_size_t(want.size(), n);
   TEST_ASSERT_EQUAL_STRING(want.c_str(), buf);
-  // Read back. This firmware reads no MPDJ (docs/AUTODJ-INDEX.md 7.4).
+  // Read back. This firmware reads the AutoDJ index's major 2, and only it
+  // (docs/AUTODJ-INDEX.md 7.4: the engine ships with its UI, M5).
   dt::Info i;
   TEST_ASSERT_TRUE(dt::parse(buf, n, &i));
   TEST_ASSERT_EQUAL_STRING("0.11.0", i.firmware);
   TEST_ASSERT_TRUE(dt::readsMajor(i.readMptg, 1));
   TEST_ASSERT_FALSE(dt::readsMajor(i.readMptg, 2));
-  TEST_ASSERT_EQUAL_UINT32(0, i.readMpdj);
-  TEST_ASSERT_TRUE(std::strstr(buf, "\nread.mpdj=\n") != nullptr);
+  TEST_ASSERT_EQUAL_UINT32(2, i.readMpdj);  // (bit 1: major 2)
+  TEST_ASSERT_TRUE(dt::readsMajor(i.readMpdj, 2));
+  TEST_ASSERT_FALSE(dt::readsMajor(i.readMpdj, 1));
+  TEST_ASSERT_TRUE(std::strstr(buf, "\nread.mpdj=2\n") != nullptr);
   TEST_ASSERT_TRUE(dt::listHas(i.codecs, "opus"));
   TEST_ASSERT_TRUE(dt::listHas(i.extensions, "FLAC"));
   TEST_ASSERT_EQUAL_UINT32(48000, i.maxRate);

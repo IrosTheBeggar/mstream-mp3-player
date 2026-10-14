@@ -18,20 +18,14 @@
 #include "app/Psram.h"
 #include "storage/SectorDisk.h"
 
-#ifndef AUTODJ_READ_MPDJ
-#define AUTODJ_READ_MPDJ 0
-#endif
-
 namespace cc = cardcontract;
 namespace mpdj = cardcontract::mpdj;
 using autodj::Began;
 using autodj::Pass;
 
-uint32_t autoDjReadMpdj() {
-  uint32_t mask = cc::devicetxt::current("").readMpdj;
-  if (AUTODJ_READ_MPDJ) mask |= 1u << (mpdj::kMajor2 - 1);
-  return mask;
-}
+// The contract's: MPDJ major 2 since M5, the release that reaches Auto DJ
+// from the UI (docs/AUTODJ-INDEX.md 7.4).
+uint32_t autoDjReadMpdj() { return cc::devicetxt::current("").readMpdj; }
 
 namespace {
 
@@ -170,7 +164,7 @@ void AutoDj::open(const cardroot::Root::AutoDj& e, const char* when) {
   snprintf(filePath_, sizeof(filePath_), "%s", e.path);
   if (!cc::devicetxt::readsMajor(autoDjReadMpdj(), mpdj::kMajor2)) {
     file_ = File::NotRead;
-    whyText_ = "this build doesn't read it yet (read.mpdj: a build with AUTODJ_READ_MPDJ does)";
+    whyText_ = "this build doesn't read its major (read.mpdj)";
     Serial.printf("[dj] index %s: not read (%s): picks at random\n", filePath_, whyText_);
     return;
   }
@@ -523,6 +517,7 @@ const char* AutoDj::pathOf(uint32_t track) {
 }
 
 void AutoDj::logSession(Began why, uint32_t track) {
+  newsWatch_.sessionBegan();  // (the UI's: a session's first pick, its random picks said once)
   Serial.printf("[dj] session %lu (%s): seed %08lx, %s%s\n", (unsigned long)dj_.sessions(), autodj::beganName(why),
                 (unsigned long)dj_.sessionSeed(), track == autodj::kNoTrackId ? "no seed track" : "seeded by ",
                 track == autodj::kNoTrackId ? "" : pathOf(track));
@@ -572,6 +567,11 @@ void AutoDj::report(const Pass& p) {
   }
   if (p.picked) logPick(p, "pick");
   if (p.undoDropped) undoDropped_ = true;
+  // The UI's toasts (autodjview::NewsWatch): a finished queue's cued pick;
+  // the failure pause; a session's first pick random because its track
+  // has no row (Stay on seed: that pick becomes the seed); picks by track
+  // id for want of an index (once a switch on, or a boot).
+  news_ |= newsWatch_.pass(p, dj_.settings().mode, dj_.settings().on);
   const bool broken = (p.picked && p.pick.broken) || (p.prefetched && p.prefetch == autodj::SlotResult::Broken);
   if (broken && !brokenSaid_) {
     brokenSaid_ = true;
@@ -603,6 +603,9 @@ bool AutoDj::setOn(bool on) {
                                      : "Auto DJ on: it adds a track when the queue's last one starts (a finished "
                                        "queue: one cued, paused)");
   if (on) logSession(Began::On, autodj::kNoTrackId);
+  // No index it can use: its picks are random (the UI says so now, and
+  // not again until the next switch on).
+  if (on) news_ |= newsWatch_.switchedOn(usable());
   if (!on) releaseJoin("Auto DJ off");
   // Switched on again: a join that failed for memory (or a library too
   // big) is tried again, as the listener may have freed some since (a
@@ -652,12 +655,19 @@ bool AutoDj::fromHere(uint32_t track) {
 // Auto DJ on. Joined, a row of the maps (Driver::surprise()); not (Auto DJ
 // off: the join follows the switch), library tracks drawn and looked up by
 // their path's hash in DJPH, so playback never waits for a join.
-bool AutoDj::start() {
+autodjview::Started AutoDj::start() {
+  if (!usable()) {
+    // (Gone since the button was drawn: a remount without it, a check
+    // failed. The empty states draw Shuffle all again at the next pass.)
+    Serial.printf("[dj] the Auto DJ button: no usable index (%s): nothing played\n",
+                  whyText_ && whyText_[0] ? whyText_ : "found broken, or a library too big");
+    return autodjview::Started::NoIndex;
+  }
   uint32_t track = autodj::kNoTrackId;
   if (joined()) {
     const autodj::Pick s = dj_.surprise(index());
     if (s.ok) track = s.track;
-  } else if (usable()) {
+  } else {
     const LibraryIndex* idx = lib_.index();
     const uint32_t tracks = idx && idx->ready() ? idx->trackCount() : 0;
     const int64_t t0 = esp_timer_get_time();
@@ -668,18 +678,66 @@ bool AutoDj::start() {
                   track != autodj::kNoTrackId ? "one has neighbours" : "none had neighbours");
   }
   if (track == autodj::kNoTrackId) {
-    Serial.printf("[dj] the Auto DJ button: no track with neighbours (%s): nothing played\n",
-                  usable() ? "none found in the draws" : "no usable index");
-    return false;
+    Serial.println("[dj] the Auto DJ button: no track with neighbours in the draws: nothing played");
+    return autodjview::Started::NoTrack;
   }
   bool switched = false;
   if (!dj_.playFrom(player_, track, Began::Surprise, index().maps, &switched)) {
     Serial.println("[dj] the Auto DJ button: the Play was refused (the library updating, or no memory)");
-    return false;
+    return autodjview::Started::Refused;
   }
   if (switched) saveSettings("Auto DJ on");
   logSession(Began::Surprise, track);
-  return true;
+  return autodjview::Started::Played;
+}
+
+uint8_t AutoDj::takeNews() {
+  const uint8_t n = news_;
+  news_ = 0;
+  return n;
+}
+
+void AutoDj::view(autodjview::State* v) const {
+  using autodjview::Index;
+  if (!v) return;
+  const autodj::Settings& s = dj_.settings();
+  *v = autodjview::State{};
+  v->on = s.on;
+  v->mode = s.mode;
+  v->floorPct = s.floorPct;
+  v->floorShown = file_ == File::Open ? autodjview::shownFloor(s.floorPct, table_.selFloor()) : s.floorPct;
+  v->matchTempo = s.matchTempo;
+  v->matchKey = s.matchKey;
+  v->usable = usable();
+  v->hold = s.on ? dj_.lastTrigger().hold : autodj::Hold::None;
+  v->adds = newsWatch_.adds();
+  const LibraryIndex* index = lib_.index();
+  if (file_ == File::Absent && why_ == cc::Why::Io) {
+    // A read failed (the file the root names didn't open, a card read
+    // error, no PSRAM to read the root after a remount): not the index's
+    // checks; a remount or the next boot tries again.
+    v->index = Index::Unreadable;
+  } else if (file_ == File::Absent || (file_ == File::Open && dj_.engine().broken())) {
+    v->index = Index::Bad;
+  } else if (file_ != File::Open) {
+    v->index = Index::None;
+  } else if (index && index->ready() && index->trackCount() > autodj::kMaxTracks) {
+    v->index = Index::TooBig;
+  } else if (joined()) {
+    const autodj::Maps& m = *join_.maps();
+    v->index = Index::Ready;
+    v->mapped = m.mapped;
+    v->tracks = m.tracks;
+    v->bpmPct = static_cast<uint8_t>(pct(m.withBpm, m.mapped));
+    v->keyPct = static_cast<uint8_t>(pct(m.withKey, m.mapped));
+  } else if (block_ == Block::Build) {
+    v->index = Index::NoMemory;
+  } else if (!s.on) {
+    v->index = Index::Found;
+    v->rows = table_.rowCount();
+  } else {
+    v->index = Index::Reading;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -723,6 +781,7 @@ void AutoDj::command(const char* arg, const Env& env) {
       const Pass p = dj_.pickNow(player_, index(), driverEnv(env));
       logPick(p, "Dp");
       if (p.undoDropped) undoDropped_ = true;
+      news_ |= newsWatch_.pass(p, dj_.settings().mode, dj_.settings().on);  // (its append: no badge flash)
       Serial.print("[dj] Dp: the anchors (rows, oldest first):");
       const autodj::Engine& e = dj_.engine();
       for (uint8_t i = 0; i < e.anchors(); ++i) Serial.printf(" %u", (unsigned)e.anchor(i));

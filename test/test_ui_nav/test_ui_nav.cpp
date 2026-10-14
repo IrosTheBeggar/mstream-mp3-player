@@ -988,9 +988,10 @@ void test_progress_id3v2_size() {
 }
 
 // Every sheet row is at least 40 px, the touch minimum, however many rows
-// (a 4th would rise into the header row, never onto the tab bar, and keep
-// 4 px off the touch strip); up to 3 stay in the list's band (Now
-// Playing's two menus: 3 rows from y 80). The panel sprite holds the
+// (a 4th rises into the header row, never onto the tab bar, and keeps 4
+// px off the touch strip: Now Playing's playback menu with Auto DJ, the
+// Library's long-press sheet with "Auto DJ from here", both from y 40); up
+// to 3 stay in the list's band (the navigation menu: 3 rows from y 80). The panel sprite holds the
 // tallest. A row's detail has what its label leaves (Sheet::render()).
 void test_sheet_rows_are_never_under_40_px() {
   TEST_ASSERT_TRUE(sheet::kRowH >= 40);

@@ -1847,7 +1847,7 @@ contract=1
 firmware=0.11.0
 read.msmf=1
 read.mptg=1
-read.mpdj=
+read.mpdj=2
 read.mpth=1
 codecs=mp3,flac,opus
 extensions=mp3,flac,opus
@@ -1857,8 +1857,9 @@ max_channels=2
 
 - `read.*` lists the majors the firmware reads, separated by commas.
   Firmware 0.8.0-0.10.0 writes `read.mpdj=1`, though it reads no MPDJ;
-  from 0.11.0 the firmware writes `read.mpdj=` (none) until its AutoDJ
-  engine ships, and then `read.mpdj=2`.
+  from 0.11.0, which ships the AutoDJ engine, the firmware writes
+  `read.mpdj=2` (a development build between them wrote `read.mpdj=`,
+  none).
 - `codecs` lists what it decodes; `extensions` the file extensions its
   walk lists as audio (any case). The device recognises audio by
   extension, not by content, so both matter.

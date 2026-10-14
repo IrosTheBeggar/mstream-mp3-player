@@ -912,15 +912,72 @@ void LibraryPage::onHold(uint32_t row) {
   } else {
     titleOf(held_.id, title, sizeof(title));
   }
-  const char* const rows[3] = {tr(kActions[0]), tr(kActions[1]), tr(kActions[2])};
-  ui_.openSheet(this, title, rows, 3, nullptr, /*primary=*/0);  // Play
+  // A 4th row on a track the card's Auto DJ index knows (the engine
+  // design's 2.4): "Auto DJ from here". Albums, artists and folders keep
+  // three, as the inline bar does. (Before the index is joined, whether it
+  // knows the track is a few small reads: once a long press.) It is the
+  // sheet's first row: a sheet rises from the bottom (SheetLayout.h), so
+  // Play, Play next and + Queue stay where a 3-row sheet has them, and a
+  // tap from habit never lands on another action (as the 4th, it would sit
+  // where + Queue is on an album's sheet, and Play would be where Play
+  // next is).
+  const AppState& s = ui_.state();
+  heldDj_ = (held_.kind == RowKind::Track || held_.kind == RowKind::File) && real() && s.autoDj.usable &&
+            !s.libraryFenced && ui_.host().autoDjHasNeighbours(held_.id);
+  const char* const rows[4] = {tr(S::library_autodj_here), tr(kActions[0]), tr(kActions[1]), tr(kActions[2])};
+  if (heldDj_) {
+    ui_.openSheet(this, title, rows, 4, nullptr, /*primary=*/1);  // Play
+  } else {
+    ui_.openSheet(this, title, rows + 1, 3, nullptr, /*primary=*/0);  // Play
+  }
 }
 
 void LibraryPage::onSheet(int choice) {
   if (choice < 0 || held_.kind == RowKind::None) return;
   const RowRef r = held_;
+  const bool dj = heldDj_;
   held_ = RowRef{};
-  onRowAction(r, choice);
+  heldDj_ = false;
+  if (dj && choice == 0) {
+    autoDjFromHere(r.id);
+    return;
+  }
+  onRowAction(r, dj ? choice - 1 : choice);
+}
+
+// "Auto DJ from here": the track as a new queue (a Play: its toast has
+// Undo), Auto DJ on, a session seeded by it (app/AutoDj::fromHere()).
+void LibraryPage::autoDjFromHere(uint32_t track) {
+  if (!real()) {
+    ui_.toast(tr(S::library_synthetic), false);
+    return;
+  }
+  if (ui_.state().libraryFenced) {
+    ui_.toast(tr(S::library_updating_wait), false);
+    return;
+  }
+  char what[96];
+  if (!titleOf(track, what, sizeof(what))) snprintf(what, sizeof(what), "%s", tr(S::queue_it));
+  const bool wasOn = ui_.state().autoDj.on;
+  if (!ui_.host().autoDjFromHere(track)) {
+    Serial.printf("[ui] library: Auto DJ from here (%s): NO MEMORY\n", what);
+    ui_.toast(tr(S::toast_no_memory), false);
+    return;
+  }
+  ui_.added().clear();  // a new queue: nothing "added" to show in it
+  char text[128];
+  if (ui_.player().state() == PlayState::Waiting) {
+    // The headphones aren't connected: it plays once they are.
+    if (ui_.state().btName[0]) {
+      trf(text, sizeof(text), S::library_waiting_for, ui_.state().btName, what);
+    } else {
+      trf(text, sizeof(text), S::library_waiting_for_headphones, what);
+    }
+  } else {
+    trf(text, sizeof(text), S::toast_autodj_from_here, what);
+  }
+  Serial.printf("[ui] library: Auto DJ from here: %s\n", what);
+  ui_.autoDjToast(text, !wasOn);  // (Undo: the queue as it was, and Auto DJ off if this switched it on)
 }
 
 }  // namespace ui

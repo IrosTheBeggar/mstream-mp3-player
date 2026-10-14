@@ -364,9 +364,10 @@ struct Info {
   uint16_t contract = 1;
   char firmware[kValueMax] = "";
   // The majors the firmware reads, one bit per major (bit 0: major 1).
-  // MPDJ none: no firmware reads the AutoDJ index yet (released 0.8.0 to
-  // 0.10.0 wrote 1, for a draft no reader read), so a writer writes none;
-  // the firmware that ships its engine writes 2 (docs/AUTODJ-INDEX.md 7.4).
+  // MPDJ none here, the no-file default (released 0.8.0 to 0.10.0 wrote 1,
+  // for a draft no reader read, so a writer writes none for them); this
+  // firmware, which ships the AutoDJ engine, reads major 2 (current():
+  // docs/AUTODJ-INDEX.md 7.4).
   uint32_t readMsmf = 1, readMptg = 1, readMpdj = 0, readMpth = 1;
   char codecs[kValueMax] = "mp3,flac";
   char extensions[kValueMax] = "mp3,flac";

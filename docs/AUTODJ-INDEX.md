@@ -700,8 +700,9 @@ copy, and refuses when the signatures differ.
   instead.
 - No device.txt, or no `read.mpdj` key in it, reads as none.
 - Released firmware 0.8.0-0.10.0 writes `read.mpdj=1`, yet reads no MPDJ:
-  no MPDJ for them. From 0.11.0 the firmware writes `read.mpdj=` (none)
-  until its AutoDJ engine ships, then `read.mpdj=2`.
+  no MPDJ for them. From 0.11.0, which ships the AutoDJ engine, the
+  firmware writes `read.mpdj=2` (a development build between them wrote
+  `read.mpdj=`, none).
 
 | `read.mpdj` | Writes MPDJ v2? |
 |---|---|
@@ -1138,7 +1139,7 @@ the plain top-84 table (S84's head alone):
 - Two-hop through the head in seed mode, with its j rule tuned (11.5).
 - An optional "tight" setting that uses the head only.
 - A seedable random stream, for tests and reproducible bug reports.
-- `read.mpdj=2` in device.txt once the engine ships (7.4).
+- `read.mpdj=2` in device.txt once the engine ships (7.4): done in 0.11.0.
 - ScanScheduler's DJ check job, made for v1's whole-file check, removed.
 - A device bench: 200 slot reads from an open 10 MB file while an MP3 and
   a FLAC play, the same in two-hop pairs, and the slot check's time. It

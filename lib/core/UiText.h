@@ -99,7 +99,7 @@ inline constexpr int kToastTwoLineW = 306 - kToastTextX;
 // (Body, its icon), each with 6 px inside at each end.
 inline constexpr int kEmptyPrimaryX = 12, kEmptyPrimaryW = 166;
 inline constexpr int kEmptySecondX = 184, kEmptySecondW = 124;
-inline constexpr int kEmptyIconW[2] = {26, 20};  // the Library's and Shuffle's icons (ui/IconData.cpp)
+inline constexpr int kEmptyIconW[2] = {26, 20};  // the Library's, and Shuffle's or Auto DJ's (ui/IconData.cpp)
 inline constexpr int kEmptyLineW = 304;  // a line (Small), centred
 // The title (Title, centred in kW - 16).
 inline constexpr int kEmptyTitleW = 304;
@@ -533,6 +533,29 @@ inline constexpr int kLangRowX = 16;
 inline constexpr int kLangRowW = 312 - 44 - kLangRowX;
 inline constexpr int kLangLineW = 242;
 inline constexpr int kDeviceInfoW = 312 - 8 - kDeviceInfoX;
+
+// ---- Output > Auto DJ (ui/OutputPage; the engine design's 5.1) ----
+// A list (Language's: no icons, from x 16; the scroll bar's 312 the
+// rows' right). Its switches (Auto DJ, BPM continuity, Harmonic mixing):
+// the title (Body) over its line (Small) up to the switch (Haptics', 64 px
+// from the right). Anchor and Match strictness: the title (Body) and its
+// value (Small, the section's blue) right-aligned on the first line, when
+// the value fits whole in what the title leaves it less kAutoDjValueGap
+// (autoDjValueBeside()); else the value on the second line, in the hint's
+// place: the value is the setting. The hint (Small, dim) on the second
+// line. The status row (not a control): two lines of Small. Each line
+// kAutoDjLineW wide.
+// Output's row to it (an icon, a chevron): the title (Body) over its line
+// (Small, autodjview::rootLine()), from the icon's column (x 44) to the
+// chevron: the state and the Anchor in use when that fits whole, else the
+// state alone.
+inline constexpr int kAutoDjRowW = 312 - 26 - 44;  // 242
+inline constexpr int kAutoDjX = 16;
+inline constexpr int kAutoDjSwitchW = 312 - 64 - kAutoDjX;  // 232
+inline constexpr int kAutoDjLineW = 312 - 8 - kAutoDjX;     // 288
+inline constexpr int kAutoDjValueGap = 16;
+constexpr int autoDjValueRoom(int titleW) { return kAutoDjLineW - titleW - kAutoDjValueGap; }
+constexpr bool autoDjValueBeside(int titleW, int valueW) { return valueW <= autoDjValueRoom(titleW); }
 
 // ---- the touch check and calibration (ui/CalibrationScreen; TouchCheck) ----
 // The whole screen. A 26 px header: at its left, on the pages that have one,

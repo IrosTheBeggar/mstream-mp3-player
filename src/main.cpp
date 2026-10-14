@@ -741,6 +741,11 @@ struct MainUiHost : ui::UiHost {
     s.cpuRunMhz = PowerSettings::cpuBootMhz();
     s.btPower = static_cast<uint8_t>(powerSettings.btChoice());
     s.btPowerPending = powerSettings.btPending();
+    if (autoDj) {
+      autoDj->view(&s.autoDj);
+    } else {
+      s.autoDj = autodjview::State{};  // (no PSRAM for it: off, no index)
+    }
     fake(s);
   }
   static void fake(ui::AppState& s) {
@@ -961,6 +966,21 @@ struct MainUiHost : ui::UiHost {
   }
   void setBrightness(int choice) override { screen.setBrightness(choice); }
   void wakeScreen(const char* why) override { screen.wake(why); }
+  // Auto DJ (app/AutoDj). Its own [dj] lines say what each did. The Plays
+  // (the button, "Auto DJ from here") are the listener's taps; behind the
+  // library update's fence they wait (the queue is the build's).
+  bool autoDjSetOn(bool on) override { return autoDj && autoDj->setOn(on); }
+  bool autoDjSetMode(autodj::Mode m) override { return autoDj && autoDj->setMode(m); }
+  bool autoDjSetFloor(uint8_t pct) override { return autoDj && autoDj->setFloor(pct); }
+  bool autoDjSetMatch(bool tempo, bool key) override { return autoDj && autoDj->setMatch(tempo, key); }
+  autodjview::Started autoDjStart() override {
+    if (!autoDj) return autodjview::Started::NoIndex;  // (no PSRAM for it at boot)
+    if (frozen.on) return autodjview::Started::Refused;
+    return autoDj->start();
+  }
+  bool autoDjFromHere(uint32_t track) override { return autoDj && !frozen.on && autoDj->fromHere(track); }
+  bool autoDjHasNeighbours(uint32_t track) override { return autoDj && !frozen.on && autoDj->hasNeighbours(track); }
+  bool autoDjMarked(uint32_t key) const override { return autoDj && autoDj->marked(key); }
 };
 static MainUiHost uiHost;
 
@@ -2947,6 +2967,10 @@ static void stepAutoDj(uint32_t now) {
   autoDj->step(autoDjEnv(now));
   // Its pick took the listener's undo: an Undo toast still up goes.
   if (autoDj->takeUndoDropped() && userInterface) userInterface->queueUndoDropped();
+  // What it has to say on the screen (a cued pick, the failure pause, a
+  // seed with no neighbours, picks at random): a toast.
+  const uint8_t news = autoDj->takeNews();
+  if (news && userInterface) userInterface->autoDjNews(news);
 }
 
 // ---- the card worker (docs/METADATA.md 3.3.4, 3.4.2) ----

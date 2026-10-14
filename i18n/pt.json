@@ -1,7 +1,7 @@
 {
   "@@locale": "pt",
   "@@autonym": "Português",
-  "@@note": "Brazilian Portuguese (pt-BR, você), made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_pt.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/pt.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept; the terminal's MP3-player tab is European Portuguese, so its words were reworded to Brazilian: fones de ouvido, tela, arquivo, parear, reiniciando), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent (a Brazilian Portuguese review: wording, agreement, terms, widths). A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
+  "@@note": "Brazilian Portuguese (pt-BR, você), made for the device's UI from the mobile app's (mstream_music, lib/l10n/app_pt.arb, master bdb174e) and the terminal player's (mstream-terminal-player, locales/pt.yml, main b89ad0a) translations where they had the text or the term (both GPL-3.0, the same author's; their words, register and typography are kept; the terminal's MP3-player tab is European Portuguese, so its words were reworded to Brazilian: fones de ouvido, tela, arquivo, parear, reiniciando), and translated by a Fable agent (Claude) otherwise, then reviewed message by message by a second Fable agent (a Brazilian Portuguese review: wording, agreement, terms, widths). A machine translation, not yet reviewed by a native speaker: a review as a pull request on this file is welcome. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Âncora, Seguir o clima, Manter a semente, Limite de semelhança, Continuidade de BPM, Mixagem harmônica, 'a partir daqui') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker.",
   "boot.touch_hint": "O toque falha? Segure um dedo na tela.",
   "coach.header_tip": "Dica {0} de {1}",
   "coach.header_hint": "toque para seguir",
@@ -64,6 +64,16 @@
   "toast.why_opus_frames": "quadros Opus de {0} ms não suportados",
   "toast.why_opus_no_ram": "sem RAM para o decodificador Opus",
   "toast.what_why": "{0}: {1}",
+  "toast.autodj_on_empty": "Auto DJ ligado: continua após a próxima faixa",
+  "toast.autodj_cued": "Auto DJ: próxima faixa pronta, aperte Play",
+  "toast.autodj_random": "Sem índice do Auto DJ: seleção aleatória",
+  "toast.autodj_paused": "Auto DJ pausado: várias faixas não tocaram",
+  "toast.autodj_no_neighbours": "Faixa ainda sem vizinhos no Auto DJ: a próxima é aleatória",
+  "toast.autodj_seed_moved": "Faixa ainda sem vizinhos no Auto DJ: a primeira escolha vira a semente",
+  "toast.autodj_from_here": "Auto DJ a partir daqui: {0}",
+  "toast.autodj_started": "Auto DJ: {0}",
+  "toast.autodj_no_start": "Nenhuma faixa com vizinhos no Auto DJ: tente de novo",
+  "toast.autodj_needs_index": "Precisa de um índice do Auto DJ: a transferência ao cartão cria um",
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: conectando...",
   "hud.speaker_paused": "Alto-falante, pausado: B toca",
@@ -118,6 +128,11 @@
   "now_playing.repeat_off": "Desligado",
   "now_playing.repeat_all": "Tudo",
   "now_playing.repeat_one": "Uma faixa",
+  "now_playing.autodj": "Auto DJ",
+  "now_playing.autodj_on": "Ligado",
+  "now_playing.autodj_off": "Desligado",
+  "now_playing.autodj_waiting": "Esperando",
+  "now_playing.autodj_paused": "Pausado",
   "sleep.title_left": "Temporizador: fim em {0}",
   "sleep.title_end_track": "Temporizador: fim da faixa",
   "sleep.title_end_album": "Temporizador: fim do álbum",
@@ -156,6 +171,7 @@
   "library.action_play": "Tocar",
   "library.action_play_next": "A seguir",
   "library.action_queue": "+ Fila",
+  "library.autodj_here": "Auto DJ a partir daqui",
   "library.play_all": {
     "one": "Tocar {0}",
     "other": "Tocar {0}"
@@ -340,6 +356,7 @@
   "@empty.shuffle_all": {
     "note": "'Aleatório', the mobile app's word for Shuffle: the verb 'Embaralhar' is 94 px in the 84 px button. The toasts say 'Embaralhando' (shuffling)."
   },
+  "empty.autodj": "Auto DJ",
   "empty.try_again": "Tentar de novo",
   "empty.no_music_title": "Nenhuma música",
   "empty.no_music_lines": "Ponha seus álbuns em /music/Artist/Album/\n(MP3, FLAC ou Opus) e tente de novo.",
@@ -372,6 +389,55 @@
   "@output.about_sub": {
     "note": "'cartão' for storage: 'armazenamento' makes the line 275 px in 242."
   },
+  "output.autodj": "Auto DJ",
+  "output.autodj_sub_on": "Ligado · {0}",
+  "output.autodj_sub_waiting": "Esperando · {0}",
+  "output.autodj_sub_paused": "Pausado · {0}",
+  "output.autodj_sub_off": "Desligado",
+  "autodj.subtitle": "mantém a fila andando",
+  "autodj.on_sub": "nova faixa ao começar a última",
+  "@autodj.on_sub": {
+    "note": "'adiciona uma faixa ao tocar a última' is 240 px in 232."
+  },
+  "autodj.anchor": "Âncora",
+  "autodj.anchor_rolling": "Seguir o clima",
+  "autodj.anchor_locked": "Manter a semente",
+  "autodj.anchor_rolling_sub": "cada escolha segue as últimas faixas",
+  "autodj.anchor_locked_sub": "cada escolha fica perto da faixa semente",
+  "autodj.strictness": "Limite de semelhança",
+  "autodj.strictness_value": "{0}% ou mais próximo",
+  "@autodj.strictness_value": {
+    "note": "The mobile app's words: they don't fit beside 'Limite de semelhança', so the value takes the row's second line, in the hint's place, as in German and Italian."
+  },
+  "autodj.strictness_sub": "quão parecida cada escolha deve soar",
+  "autodj.bpm": "Continuidade de BPM",
+  "autodj.bpm_sub": "± 8 BPM, ou metade ou dobro",
+  "autodj.harmonic": "Mixagem harmônica",
+  "autodj.harmonic_sub": "tons que combinam bem",
+  "autodj.needs_index": "precisa de um índice do Auto DJ",
+  "autodj.status_ready": {
+    "one": "{0} de {1} faixa com vizinhos",
+    "other": "{0} de {1} faixas com vizinhos"
+  },
+  "@autodj.status_ready": {
+    "note": "'com vizinhos' with no verb: a verb would agree with {0}, which doesn't pick the form ({1} does)."
+  },
+  "autodj.status_coverage": "BPM {0}% · tom {1}%",
+  "autodj.status_found": {
+    "one": "Índice do Auto DJ: {0} faixa",
+    "other": "Índice do Auto DJ: {0} faixas"
+  },
+  "autodj.status_found_sub": "lido ao ligar o Auto DJ",
+  "autodj.status_reading": "Lendo o índice do Auto DJ…",
+  "autodj.status_none": "Sem índice do Auto DJ neste cartão",
+  "autodj.status_bad": "O índice do Auto DJ falhou na verificação",
+  "autodj.status_unreadable": "Índice do Auto DJ ilegível",
+  "autodj.status_no_memory": "Sem memória para o índice do Auto DJ",
+  "autodj.status_too_big": "Faixas demais para o índice do Auto DJ",
+  "autodj.status_random": "seleção aleatória",
+  "autodj.status_waits_repeat": "Esperando: repetindo uma faixa",
+  "autodj.status_waits_sleep": "Esperando: temporizador no fim da fila",
+  "autodj.status_paused": "Pausado: várias faixas não tocaram",
   "settings.screen_off": "Desligar tela após",
   "settings.screen_off_sub": "escurece; o toque acorda",
   "settings.screen_never_sub": "fica ligada: gasta mais",

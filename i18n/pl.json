@@ -1,7 +1,7 @@
 {
   "@@locale": "pl",
   "@@autonym": "Polski",
-  "@@note": "Machine-made (a Fable agent), not yet reviewed by a native speaker. Where the mStream mobile app (mstream_music, lib/l10n/app_pl.arb) or the terminal player (mstream-terminal-player, locales/pl.yml; master bdb174e of 2026-09-21 and main b89ad0a of 2026-10-10) had the same text or phrase, their Polish wording and terms were taken (both GPL-3.0, by this repository's owner); the rest was translated by the agent, and a second agent reviewed every message against the English and the apps' words. Register: informal (ty), as both apps. 'zakładka' names a tab (karta is the microSD card), 'Wyjście' the Output tab, 'Informacje' the About page. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
+  "@@note": "Machine-made (a Fable agent), not yet reviewed by a native speaker. Where the mStream mobile app (mstream_music, lib/l10n/app_pl.arb) or the terminal player (mstream-terminal-player, locales/pl.yml; master bdb174e of 2026-09-21 and main b89ad0a of 2026-10-10) had the same text or phrase, their Polish wording and terms were taken (both GPL-3.0, by this repository's owner); the rest was translated by the agent, and a second agent reviewed every message against the English and the apps' words. Register: informal (ty), as both apps. 'zakładka' names a tab (karta is the microSD card), 'Wyjście' the Output tab, 'Informacje' the About page. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, with the Auto DJ engine's UI) were made the same way: the mobile app's Auto DJ words (Auto DJ, Kotwica, Podążaj za klimatem, Próg podobieństwa, '{0}% lub bliżej', Ciągłość BPM, Miksowanie harmoniczne, 'od tego miejsca'; its 'Trzymaj się utworu startowego' is too wide for the Output row's line, so the Anchor's value says 'Przy utworze startowym') and a Fable agent's translation for the rest, fitted with the same checker; not yet reviewed by a native speaker.",
   "boot.touch_hint": "Dotyk nie działa? Trzymaj palec na ekranie.",
   "coach.header_tip": "Porada {0} z {1}",
   "coach.header_hint": "dotknij, by przejść",
@@ -71,6 +71,16 @@
   "toast.why_opus_frames": "nieobsługiwane ramki Opus {0} ms",
   "toast.why_opus_no_ram": "brak RAM dla dekodera Opus",
   "toast.what_why": "{0}: {1}",
+  "toast.autodj_on_empty": "Auto DJ włączony: zacznie po następnym utworze",
+  "toast.autodj_cued": "Auto DJ: utwór gotowy, naciśnij Play",
+  "toast.autodj_random": "Brak indeksu Auto DJ: wybór losowy",
+  "toast.autodj_paused": "Auto DJ wstrzymany: kilka utworów nie zagrało",
+  "toast.autodj_no_neighbours": "Utwór nie ma jeszcze sąsiadów w Auto DJ: następny będzie losowy",
+  "toast.autodj_seed_moved": "Utwór nie ma jeszcze sąsiadów w Auto DJ: pierwszy wybór będzie startowym",
+  "toast.autodj_from_here": "Auto DJ od tego miejsca: {0}",
+  "toast.autodj_started": "Auto DJ: {0}",
+  "toast.autodj_no_start": "Brak utworów z sąsiadami w Auto DJ: spróbuj ponownie",
+  "toast.autodj_needs_index": "Potrzebny indeks Auto DJ: doda go transfer na kartę",
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: łączenie…",
   "hud.speaker_paused": "Głośnik, pauza: B odtwarza",
@@ -119,6 +129,14 @@
   "now_playing.repeat_off": "Wyłączone",
   "now_playing.repeat_all": "Wszystko",
   "now_playing.repeat_one": "Jeden utwór",
+  "now_playing.autodj": "Auto DJ",
+  "now_playing.autodj_on": "Włączony",
+  "now_playing.autodj_off": "Wyłączony",
+  "now_playing.autodj_waiting": "Czeka",
+  "now_playing.autodj_paused": "Pauza",
+  "@now_playing.autodj_paused": {
+    "note": "'Pauza', the catalogue's word for paused (now_playing.position_paused); the toast says 'Auto DJ wstrzymany'."
+  },
   "sleep.title_left": "Wyłącznik czasowy: {0}",
   "@sleep.title_left": {
     "note": "'left' dropped: 'Wyłącznik czasowy: jeszcze 999+ min' is 251 px in the sheet title's 226."
@@ -169,6 +187,7 @@
     "note": "'Następny' (next) in the three 74-86 px buttons: the apps' 'Dodaj jako następny' is twice as wide. The toasts say 'Jako następny: ...'."
   },
   "library.action_queue": "+ Kolejka",
+  "library.autodj_here": "Auto DJ od tego miejsca",
   "library.play_all": {
     "one": "Graj {0}",
     "few": "Graj {0}",
@@ -383,6 +402,7 @@
   "empty.pick_in_library": "Wybierz album, folder lub utwór w Bibliotece.",
   "empty.open_library": "Do Biblioteki",
   "empty.shuffle_all": "Losowo",
+  "empty.autodj": "Auto DJ",
   "empty.try_again": "Spróbuj ponownie",
   "@empty.try_again": {
     "note": "The terminal's 'Spróbuj ponownie'; bt.try_again (112 px) has the mobile app's 'Ponów'."
@@ -421,6 +441,51 @@
     "note": "'Informacje' (Info) for About: the mobile app's 'O aplikacji' is about an app; the page's line is the terminal's 'ten odtwarzacz'."
   },
   "output.about_sub": "bateria, nośnik, biblioteka, wersja",
+  "output.autodj": "Auto DJ",
+  "output.autodj_sub_on": "Włączony · {0}",
+  "output.autodj_sub_waiting": "Czeka · {0}",
+  "output.autodj_sub_paused": "Pauza · {0}",
+  "output.autodj_sub_off": "Wyłączony",
+  "autodj.subtitle": "kolejka się nie kończy",
+  "autodj.on_sub": "dodaje utwór, gdy gra ostatni",
+  "autodj.anchor": "Kotwica",
+  "autodj.anchor_rolling": "Podążaj za klimatem",
+  "autodj.anchor_locked": "Trzymaj się utworu startowego",
+  "autodj.anchor_rolling_sub": "każdy wybór podąża za ostatnimi utworami",
+  "autodj.anchor_locked_sub": "każdy wybór trzyma się utworu startowego",
+  "autodj.strictness": "Próg podobieństwa",
+  "autodj.strictness_value": "{0}% lub bliżej",
+  "autodj.strictness_sub": "jak podobnie musi brzmieć każdy wybór",
+  "autodj.bpm": "Ciągłość BPM",
+  "autodj.bpm_sub": "± 8 BPM, pół lub podwójne tempo",
+  "autodj.harmonic": "Miksowanie harmoniczne",
+  "autodj.harmonic_sub": "dobrze pasujące tonacje",
+  "autodj.needs_index": "wymaga indeksu Auto DJ",
+  "autodj.status_ready": {
+    "one": "{0} z {1} utworu ma sąsiadów",
+    "few": "{0} z {1} utworów ma sąsiadów",
+    "many": "{0} z {1} utworów ma sąsiadów"
+  },
+  "@autodj.status_ready": {
+    "note": "'{0} z {1} utworów ma sąsiadów': the verb agrees with the 'X z Y' phrase, as Polish software writes it ('3 z 10 plików ma…'), not with {0}."
+  },
+  "autodj.status_coverage": "BPM {0}% · tonacja {1}%",
+  "autodj.status_found": {
+    "one": "Indeks Auto DJ: {0} utwór",
+    "few": "Indeks Auto DJ: {0} utwory",
+    "many": "Indeks Auto DJ: {0} utworów"
+  },
+  "autodj.status_found_sub": "odczytywany po włączeniu Auto DJ",
+  "autodj.status_reading": "Odczyt indeksu Auto DJ…",
+  "autodj.status_none": "Brak indeksu Auto DJ na tej karcie",
+  "autodj.status_bad": "Indeks Auto DJ nie przeszedł kontroli",
+  "autodj.status_unreadable": "Indeks Auto DJ jest nieczytelny",
+  "autodj.status_no_memory": "Za mało pamięci na indeks Auto DJ",
+  "autodj.status_too_big": "Za dużo utworów na indeks Auto DJ",
+  "autodj.status_random": "wybór losowy",
+  "autodj.status_waits_repeat": "Czeka: powtarza się jeden utwór",
+  "autodj.status_waits_sleep": "Czeka: wyłącznik czasowy kończy kolejkę",
+  "autodj.status_paused": "Pauza: kilka utworów nie zagrało",
   "settings.screen_off": "Wygaszanie ekranu",
   "settings.screen_off_sub": "ściemnia; dotyk budzi",
   "settings.screen_never_sub": "nie gaśnie: zużywa baterię",

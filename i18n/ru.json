@@ -68,6 +68,19 @@
   "toast.why_opus_frames": "кадры Opus по {0} мс",
   "toast.why_opus_no_ram": "нет RAM для декодера Opus",
   "toast.what_why": "{0}: {1}",
+  "toast.autodj_on_empty": "Авто-DJ включён: продолжит после следующего трека",
+  "toast.autodj_cued": "Авто-DJ: следующий трек готов, нажмите Пуск",
+  "toast.autodj_random": "Нет индекса Авто-DJ: выбор случайный",
+  "toast.autodj_paused": "Авто-DJ на паузе: треки не воспроизвелись",
+  "toast.autodj_no_neighbours": "У трека пока нет похожих треков: следующий трек случайный",
+  "@toast.autodj_no_neighbours": {
+    "note": "похожие (similar ones) for the index's 'neighbours', here and in toast.autodj_seed_moved, toast.autodj_no_start and autodj.status_ready: 'у трека нет соседей' reads as a flat's neighbours."
+  },
+  "toast.autodj_seed_moved": "У трека пока нет похожих треков: стартовым станет первый выбор",
+  "toast.autodj_from_here": "Авто-DJ отсюда: {0}",
+  "toast.autodj_started": "Авто-DJ: {0}",
+  "toast.autodj_no_start": "Не найден трек с похожими треками: попробуйте ещё раз",
+  "toast.autodj_needs_index": "Нужен индекс Авто-DJ: его создаёт перенос на карту",
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: подключение…",
   "hud.speaker_paused": "Динамик, пауза: нажмите B",
@@ -119,6 +132,11 @@
   "now_playing.repeat_off": "Выкл.",
   "now_playing.repeat_all": "Все",
   "now_playing.repeat_one": "Один",
+  "now_playing.autodj": "Авто-DJ",
+  "now_playing.autodj_on": "Вкл.",
+  "now_playing.autodj_off": "Выкл.",
+  "now_playing.autodj_waiting": "Ожидание",
+  "now_playing.autodj_paused": "Пауза",
   "sleep.title_left": "Таймер сна: осталось {0}",
   "sleep.title_end_track": "Таймер сна: до конца трека",
   "sleep.title_end_album": "Таймер сна: до конца альбома",
@@ -172,6 +190,7 @@
   "@library.action_queue": {
     "note": "В конец (to the end of the queue): + Очередь is 90 px in 77, and В конец is the usual Russian for the add-to-queue action."
   },
+  "library.autodj_here": "Авто-DJ отсюда",
   "library.play_all": {
     "one": "Играть {0}",
     "few": "Играть {0}",
@@ -380,6 +399,7 @@
   "@empty.shuffle_all": {
     "note": "Наугад (at random): Случайно also reads 'by accident'; Перемешать (the mobile app's, the playback sheet's row) is 107 px in 84."
   },
+  "empty.autodj": "Авто-DJ",
   "empty.try_again": "Повторить",
   "empty.no_music_title": "Музыка не найдена",
   "empty.no_music_lines": "Положите альбомы в /music/Artist/Album/\n(MP3, FLAC, Opus), затем «Повторить».",
@@ -409,6 +429,62 @@
   "output.haptics_off": "выкл.",
   "output.about": "О плеере",
   "output.about_sub": "батарея, карта, библиотека…",
+  "output.autodj": "Авто-DJ",
+  "output.autodj_sub_on": "Вкл. · {0}",
+  "output.autodj_sub_waiting": "Ожидание · {0}",
+  "output.autodj_sub_paused": "Пауза · {0}",
+  "output.autodj_sub_off": "Выкл.",
+  "autodj.subtitle": "продолжает очередь",
+  "autodj.on_sub": "добавляет трек в конец очереди",
+  "autodj.anchor": "Якорь",
+  "autodj.anchor_rolling": "Следовать настроению",
+  "autodj.anchor_locked": "Держаться стартового трека",
+  "autodj.anchor_rolling_sub": "выбор следует за последними треками",
+  "autodj.anchor_locked_sub": "все треки близки к стартовому треку",
+  "autodj.strictness": "Порог похожести",
+  "autodj.strictness_value": "{0}% и ближе",
+  "autodj.strictness_sub": "насколько похожим должен быть трек",
+  "autodj.bpm": "Непрерывность по BPM",
+  "autodj.bpm_sub": "±8 BPM или половинный/двойной",
+  "@autodj.bpm_sub": {
+    "note": "половинный/двойной (the tempo implied), with no comma before или: the mobile app's 'эквивалентность половинного/двойного темпа' is far wider than the 232 px line ('±8 BPM, или половинный/двойной темп' is 273, with the comma 234)."
+  },
+  "autodj.harmonic": "Гармоническое сведение",
+  "autodj.harmonic_sub": "сочетающиеся тональности",
+  "@autodj.harmonic_sub": {
+    "note": "сочетающиеся тональности: 'хорошо сочетающиеся тональности' (the mobile app's phrase) is 250 px in 232."
+  },
+  "autodj.needs_index": "нужен индекс Авто-DJ",
+  "autodj.status_ready": {
+    "one": "Похожие есть у {0} из {1} трека",
+    "few": "Похожие есть у {0} из {1} треков",
+    "many": "Похожие есть у {0} из {1} треков",
+    "other": "Похожие есть у {0} из {1} треков"
+  },
+  "autodj.status_coverage": "BPM {0}% · тональность {1}%",
+  "autodj.status_found": {
+    "one": "Индекс Авто-DJ: {0} трек",
+    "few": "Индекс Авто-DJ: {0} трека",
+    "many": "Индекс Авто-DJ: {0} треков",
+    "other": "Индекс Авто-DJ: {0} треков"
+  },
+  "autodj.status_found_sub": "читается при включении Авто-DJ",
+  "autodj.status_reading": "Чтение индекса Авто-DJ…",
+  "autodj.status_none": "На карте нет индекса Авто-DJ",
+  "autodj.status_bad": "Индекс Авто-DJ не прошёл проверку",
+  "autodj.status_unreadable": "Индекс Авто-DJ не читается",
+  "autodj.status_no_memory": "Не хватает памяти для индекса Авто-DJ",
+  "autodj.status_too_big": "Слишком много треков для индекса",
+  "@autodj.status_too_big": {
+    "note": "Without Авто-DJ: with it 307 px in 288."
+  },
+  "autodj.status_random": "выбор случайный",
+  "autodj.status_waits_repeat": "Ожидание: включён повтор одного",
+  "@autodj.status_waits_repeat": {
+    "note": "повтор одного (the playback sheet's Повтор: Один): with трека 290 px in 288."
+  },
+  "autodj.status_waits_sleep": "Ожидание: таймер сна до конца очереди",
+  "autodj.status_paused": "Пауза: треки не воспроизвелись",
   "settings.screen_off": "Отключение экрана",
   "@settings.screen_off": {
     "note": "Отключение экрана with its values 15 с … Выкл.: Никогда is 71 px in the 70 px value column, and 'Выкл.' reads well after a noun."

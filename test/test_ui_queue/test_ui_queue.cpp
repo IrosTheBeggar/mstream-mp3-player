@@ -384,6 +384,61 @@ void test_a_refusal_keeps_the_last_undo() {
   TEST_ASSERT_FALSE(k.undo);
 }
 
+// Auto DJ's appends (the engine design's 2.14) aren't the listener's add:
+// after a + Queue they have higher keys, yet neither the highlight nor the
+// scroll-to takes them; with only its appends left, nothing shows.
+void test_added_mark_leaves_auto_dj_s_appends() {
+  QueueModel q;
+  fill(q, 4, 1);
+  AddedMark m;
+  const uint32_t two[] = {10, 11};
+  const uint32_t at = q.size();
+  q.append(two, 2);
+  m.noteAdded(q.keyAt(at));
+  // Auto DJ appends two after them (its DJ marks: their keys).
+  TEST_ASSERT_TRUE(q.appendQuiet(20));
+  TEST_ASSERT_TRUE(q.appendQuiet(21));
+  const uint32_t djKeys[2] = {q.keyAt(q.size() - 2), q.keyAt(q.size() - 1)};
+  AddedMark::Quiet quiet;
+  quiet.ctx = djKeys;
+  quiet.has = [](uint32_t key, const void* ctx) {
+    const uint32_t* k = static_cast<const uint32_t*>(ctx);
+    return key == k[0] || key == k[1];
+  };
+  int marked = 0, markedQuiet = 0;
+  for (uint32_t p = 0; p < q.size(); ++p) {
+    marked += m.marks(q.keyAt(p)) ? 1 : 0;
+    markedQuiet += m.marks(q.keyAt(p), quiet) ? 1 : 0;
+  }
+  TEST_ASSERT_EQUAL_INT(4, marked);       // (keys alone: every key since the add's)
+  TEST_ASSERT_EQUAL_INT(2, markedQuiet);  // the listener's two
+  TEST_ASSERT_FALSE(m.marks(djKeys[0], quiet));
+  TEST_ASSERT_EQUAL_UINT32(at, m.firstPosition(q, quiet));
+  // The listener's two removed: only Auto DJ's are left above the add's
+  // key, and there is nothing to show.
+  const uint32_t mine[] = {at, at + 1};
+  q.remove(mine, 2);
+  TEST_ASSERT_EQUAL_UINT32(at, m.firstPosition(q));  // (keys alone: Auto DJ's first)
+  TEST_ASSERT_EQUAL_UINT32(AddedMark::kNone, m.firstPosition(q, quiet));
+  TEST_ASSERT_FALSE(AddedMark::Quiet().of(djKeys[0]));
+}
+
+// The Queue tab's badge: up next growing flashes it, unless the growth is
+// Auto DJ's own append (one a track: it would flash every track), a change
+// of mode, or no change of the queue's content at all.
+void test_the_badge_and_auto_dj_s_appends() {
+  TEST_ASSERT_TRUE(badgeFlashes(0, 3, true, false, 0));    // a Library add
+  TEST_ASSERT_FALSE(badgeFlashes(0, 1, true, false, 1));   // Auto DJ's pick
+  TEST_ASSERT_FALSE(badgeFlashes(3, 4, true, false, 1));
+  TEST_ASSERT_TRUE(badgeFlashes(0, 2, true, false, 1));    // the listener's add in the same pass
+  TEST_ASSERT_FALSE(badgeFlashes(0, 2, true, false, 2));
+  TEST_ASSERT_FALSE(badgeFlashes(0, 5, true, true, 0));    // a shuffle toggle
+  TEST_ASSERT_FALSE(badgeFlashes(0, 5, false, false, 0));  // no content change (a skip back)
+  TEST_ASSERT_FALSE(badgeFlashes(5, 4, true, false, 0));   // fewer
+  TEST_ASSERT_FALSE(badgeFlashes(5, 5, true, false, 0));
+  TEST_ASSERT_FALSE(badgeFlashes(1, 1, true, false, 1));   // its pick while the one before played out
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_capped_texts);
@@ -398,5 +453,7 @@ int main(int, char**) {
   RUN_TEST(test_undo_watch_qu_of_shuffle_all_is_no_toggle);
   RUN_TEST(test_undo_watch_qu_of_any_edit);
   RUN_TEST(test_undo_watch_auto_dj_s_pick_drops_the_undo);
+  RUN_TEST(test_added_mark_leaves_auto_dj_s_appends);
+  RUN_TEST(test_the_badge_and_auto_dj_s_appends);
   return UNITY_END();
 }

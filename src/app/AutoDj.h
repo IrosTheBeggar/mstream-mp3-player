@@ -8,6 +8,7 @@
 #include "AutoDjDriver.h"
 #include "AutoDjEngine.h"
 #include "AutoDjJoin.h"
+#include "AutoDjView.h"
 #include "CardAutoDj.h"
 #include "CardManifest.h"
 #include "CardRoot.h"
@@ -24,7 +25,11 @@
 // to this library's tracks, in slices), and the loop step
 // (autodj::Driver: the sessions, the trigger, the picks, the DJ marks),
 // and keeps the settings in NVS (app/AutoDjStore). The console's D drives
-// it (AutoDjCommand.h has the list); M5 adds the UI.
+// it (AutoDjCommand.h has the list), and the UI (M5: lib/core/AutoDjView
+// has what it shows) through main.cpp's UiHost: view() each pass, the
+// settings, the empty states' button (start()), "Auto DJ from here"
+// (fromHere()), the Queue's DJ marks (marked()) and the toasts
+// (takeNews()).
 //
 //   setup(), after the library and the queue: begin(): the settings (on
 //     after a boot if it was: the restored queue waits for Play), the
@@ -123,15 +128,27 @@ public:
   bool setMode(autodj::Mode m);
   bool setFloor(uint8_t pct);
   bool setMatch(bool tempo, bool key);
-  // "Auto DJ from here" on `track`; the empty states' button. False:
-  // nothing played.
+  // "Auto DJ from here" on `track`; the empty states' button. False /
+  // not Played: nothing played.
   bool fromHere(uint32_t track);
-  bool start();
+  autodjview::Started start();
   // The card has an index this build reads, open and checked (joined or
   // not: it joins while Auto DJ is on), for a library it can join (not
   // over 65,534 tracks) and not found broken.
   bool usable() const;
   const autodj::Marks& marks() const { return dj_.marks(); }
+  // ---- the UI's (M5) ----
+  // What the screen shows of it (the UI's snapshot, every pass).
+  void view(autodjview::State* v) const;
+  // Queue entry `key` is one Auto DJ added (the Queue's DJ mark).
+  bool marked(uint32_t key) const { return dj_.marks().has(key); }
+  // Library track `track` has neighbours in a usable index (the Library's
+  // "Auto DJ from here"): the maps' when joined, else its path's hash
+  // looked up in DJPH (a binary search: a few small reads).
+  bool hasNeighbours(uint32_t track) { return usable() && hasRow(track); }
+  // What the loop's passes (and a switch on) had to say since the last
+  // call: autodjview::News bits (main.cpp: Ui::autoDjNews(), a toast).
+  uint8_t takeNews();
 
 private:
   enum class File : uint8_t {
@@ -227,5 +244,10 @@ private:
   bool brokenSaid_ = false;  // the index's broken list logged (once a file)
   // main.cpp's.
   bool undoDropped_ = false;
+  // The UI's: its news since takeNews() (autodjview::News), from the
+  // passes and the switch (NewsWatch: the toasts' rule, host-tested; it
+  // counts Auto DJ's appends too: no Queue badge flash for them).
+  autodjview::NewsWatch newsWatch_;
+  uint8_t news_ = 0;
   char path_[TrackCatalog::kMaxPath] = "";
 };

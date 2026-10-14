@@ -1,7 +1,7 @@
 {
   "@@locale": "fr",
   "@@autonym": "Français",
-  "@@note": "Machine translation, not yet reviewed by a native French speaker. Made from the mobile app's French (mstream_music, lib/l10n/app_fr.arb, master at bdb174e, GPL-3.0) and the terminal player's (mstream-terminal-player, locales/fr.yml, main at b89ad0a, GPL-3.0) wherever they had the text or its words (vous, « morceau » for a track, « file » for the queue, « casque », « carte SD », « calibrage tactile », « Minuterie de veille », « Aléatoire »), and translated by a Fable agent (Claude) for the rest, then reviewed by a second Fable agent (meaning, terms, grammar, typography), fitted to the rooms with the width checker. Paths (/music/Artist/Album/) and format names stay as they are. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
+  "@@note": "Machine translation, not yet reviewed by a native French speaker. Made from the mobile app's French (mstream_music, lib/l10n/app_fr.arb, master at bdb174e, GPL-3.0) and the terminal player's (mstream-terminal-player, locales/fr.yml, main at b89ad0a, GPL-3.0) wherever they had the text or its words (vous, « morceau » for a track, « file » for the queue, « casque », « carte SD », « calibrage tactile », « Minuterie de veille », « Aléatoire »), and translated by a Fable agent (Claude) for the rest, then reviewed by a second Fable agent (meaning, terms, grammar, typography), fitted to the rooms with the width checker. Paths (/music/Artist/Album/) and format names stay as they are. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, the engine's UI: toast.autodj_*, now_playing.autodj*, library.autodj_here, empty.autodj, output.autodj*, autodj.*) were made the same way: the mobile app's words for Auto DJ, Ancre, Suivre l'ambiance, titre de départ, Seuil de similarité, Continuité du BPM and Mixage harmonique (its autoDj* keys), translated by a Fable agent otherwise, fitted to en.json's rooms (the notes say where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "Tactile déréglé ? Gardez un doigt sur l'écran.",
   "coach.header_tip": "Astuce {0} sur {1}",
   "coach.header_hint": "touchez : suite",
@@ -67,6 +67,25 @@
   "toast.why_opus_frames": "trames Opus {0} ms non prises en charge",
   "toast.why_opus_no_ram": "pas de RAM pour le décodeur Opus",
   "toast.what_why": "{0} : {1}",
+  "toast.autodj_on_empty": "Auto DJ activé : il suivra le prochain morceau lu",
+  "toast.autodj_cued": "Auto DJ : morceau suivant prêt, B pour lire",
+  "@toast.autodj_cued": {
+    "note": "« B pour lire », comme la ligne du HUD (hud.speaker_paused) : « le prochain morceau est prêt, appuyez sur lecture » fait 401 px en Body dans les 284."
+  },
+  "toast.autodj_random": "Pas d'index Auto DJ : sélection aléatoire",
+  "toast.autodj_paused": "Auto DJ en pause : morceaux impossibles à lire",
+  "toast.autodj_no_neighbours": "Morceau encore sans voisins Auto DJ : le suivant est aléatoire",
+  "@toast.autodj_no_neighbours": {
+    "note": "« Ce morceau n'a pas encore de voisins Auto DJ » fait 299 px en Small, la première ligne du message en a 284 : « Morceau encore sans voisins Auto DJ » (239 px). Aussi la première ligne de toast.autodj_seed_moved."
+  },
+  "toast.autodj_seed_moved": "Morceau encore sans voisins Auto DJ : le 1er choix sert de titre de départ",
+  "@toast.autodj_seed_moved": {
+    "note": "« le premier choix devient le titre de départ » fait 334 px en Body, la deuxième ligne du message 284 (« le 1er choix devient le titre de départ » 297) : « le 1er choix sert de titre de départ » (275 px)."
+  },
+  "toast.autodj_from_here": "Auto DJ à partir d'ici : {0}",
+  "toast.autodj_started": "Auto DJ : {0}",
+  "toast.autodj_no_start": "Aucun morceau avec des voisins Auto DJ : réessayez",
+  "toast.autodj_needs_index": "Il faut un index Auto DJ : le transfert l'écrit sur la carte",
   "hud.bluetooth": "Bluetooth : {0}",
   "hud.bluetooth_connecting": "Bluetooth : connexion…",
   "hud.speaker_paused": "Haut-parleur, pause : B pour lire",
@@ -112,6 +131,11 @@
   "now_playing.repeat_off": "Désactivé",
   "now_playing.repeat_all": "Tout",
   "now_playing.repeat_one": "Un seul",
+  "now_playing.autodj": "Auto DJ",
+  "now_playing.autodj_on": "Activé",
+  "now_playing.autodj_off": "Désactivé",
+  "now_playing.autodj_waiting": "En attente",
+  "now_playing.autodj_paused": "En pause",
   "sleep.title_left": "Minuterie : encore {0}",
   "@sleep.title_left": {
     "note": "« Minuterie de veille : … » dépasse les 226 px du titre de la feuille (245 px avec « encore 999+ min ») : « Minuterie : … » dans ces titres ; le nom complet reste sur la ligne du menu et dans ses toasts."
@@ -153,6 +177,7 @@
   "library.action_play": "Lire",
   "library.action_play_next": "À la suite",
   "library.action_queue": "+ File",
+  "library.autodj_here": "Auto DJ à partir d'ici",
   "library.play_all": {
     "one": "Tout lire ({0})",
     "other": "Lire les {0}"
@@ -325,6 +350,7 @@
   "empty.pick_in_library": "Choisissez quoi écouter dans la Bibliothèque.",
   "empty.open_library": "Bibliothèque",
   "empty.shuffle_all": "Aléatoire",
+  "empty.autodj": "Auto DJ",
   "empty.try_again": "Réessayer",
   "empty.no_music_title": "Aucune musique",
   "empty.no_music_lines": "Mettez vos albums dans /music/Artist/Album/\n(MP3, FLAC ou Opus), puis touchez Réessayer.",
@@ -354,6 +380,49 @@
   "output.haptics_off": "désactivées",
   "output.about": "À propos",
   "output.about_sub": "batterie, stockage, musique, version",
+  "output.autodj": "Auto DJ",
+  "output.autodj_sub_on": "Activé · {0}",
+  "output.autodj_sub_waiting": "En attente · {0}",
+  "output.autodj_sub_paused": "En pause · {0}",
+  "output.autodj_sub_off": "Désactivé",
+  "autodj.subtitle": "enchaîne les morceaux",
+  "autodj.on_sub": "ajoute un morceau dès le dernier",
+  "autodj.anchor": "Ancre",
+  "autodj.anchor_rolling": "Suivre l'ambiance",
+  "autodj.anchor_locked": "Rester sur le titre de départ",
+  "autodj.anchor_rolling_sub": "chaque choix suit les derniers morceaux",
+  "autodj.anchor_locked_sub": "tout reste proche du titre de départ",
+  "autodj.strictness": "Seuil de similarité",
+  "autodj.strictness_value": "{0} % ou plus proche",
+  "@autodj.strictness_value": {
+    "note": "Les mots de l'application mobile : « 75 % ou plus proche » fait 131 px en Small, juste ce que « Seuil de similarité » (141 px en Body) lui laisse à côté (131 px) ; un mot de plus et la valeur passerait sur la deuxième ligne, à la place de l'explication."
+  },
+  "autodj.strictness_sub": "à quel point chaque choix doit ressembler",
+  "autodj.bpm": "Continuité du BPM",
+  "autodj.bpm_sub": "à 8 BPM près, moitié ou double",
+  "autodj.harmonic": "Mixage harmonique",
+  "autodj.harmonic_sub": "des tonalités qui se mixent bien",
+  "autodj.needs_index": "nécessite un index Auto DJ",
+  "autodj.status_ready": {
+    "one": "{0} sur {1} morceau avec voisins",
+    "other": "{0} sur {1} morceaux avec voisins"
+  },
+  "autodj.status_coverage": "BPM {0} % · tonalité {1} %",
+  "autodj.status_found": {
+    "one": "Index Auto DJ : {0} morceau",
+    "other": "Index Auto DJ : {0} morceaux"
+  },
+  "autodj.status_found_sub": "lu quand Auto DJ est activé",
+  "autodj.status_reading": "Lecture de l'index Auto DJ…",
+  "autodj.status_none": "Pas d'index Auto DJ sur cette carte",
+  "autodj.status_bad": "Index Auto DJ : échec des vérifications",
+  "autodj.status_unreadable": "Index Auto DJ illisible",
+  "autodj.status_no_memory": "Index Auto DJ : mémoire insuffisante",
+  "autodj.status_too_big": "Trop de morceaux pour l'index Auto DJ",
+  "autodj.status_random": "sélection aléatoire",
+  "autodj.status_waits_repeat": "En attente : Répéter « Un seul » est activé",
+  "autodj.status_waits_sleep": "En attente : minuterie en fin de file",
+  "autodj.status_paused": "En pause : morceaux impossibles à lire",
   "settings.screen_off": "Écran éteint après",
   "settings.screen_off_sub": "baisse, un appui rallume",
   "settings.screen_never_sub": "allumé : consomme plus",

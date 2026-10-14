@@ -108,24 +108,48 @@ SummaryPick placeSummary(const int (&widths)[kSummaryForms], int beside, int bel
 // entry's key is given when it joins and only grows, so everything added
 // since the first add after the last visit has a key at or above that
 // add's first key (a Play in between replaces the queue: clear()).
+//
+// Auto DJ's appends (the engine design's 2.14) come after the add with
+// higher keys, but aren't the listener's: `quiet` says which keys are its
+// (its DJ marks), and those are never marked, nor scrolled to.
+// Whether an entry (by its key) is Auto DJ's, not an add's.
+struct QuietKeys {
+  bool (*has)(uint32_t key, const void* ctx) = nullptr;
+  const void* ctx = nullptr;
+  bool of(uint32_t key) const { return has && has(key, ctx); }
+};
 class AddedMark {
 public:
   static constexpr uint32_t kNone = QueueModel::kNone;
+  using Quiet = QuietKeys;
   // An add; `firstKey` its first entry's key (keys are consecutive).
   void noteAdded(uint32_t firstKey) {
     if (since_ == kNone || firstKey < since_) since_ = firstKey;
   }
   void clear() { since_ = kNone; }
   bool pending() const { return since_ != kNone; }
-  bool marks(uint32_t key) const { return since_ != kNone && key != kNone && key >= since_; }
+  bool marks(uint32_t key, const Quiet& quiet = Quiet()) const {
+    return since_ != kNone && key != kNone && key >= since_ && !quiet.of(key);
+  }
   // The first position holding a marked entry (the one to scroll to), or
   // kNone (all undone or removed). A pass over the queue.
-  uint32_t firstPosition(const QueueModel& q) const;
+  uint32_t firstPosition(const QueueModel& q, const Quiet& quiet = Quiet()) const;
   uint32_t since() const { return since_; }
 
 private:
   uint32_t since_ = kNone;
 };
+
+// ---- the Queue tab's badge ----
+//
+// The badge flashes when "up next" grows (Ui's loop: a Library add, a
+// Play next), not for a change of mode (a shuffle toggle can grow it
+// with nothing added: UndoWatch::modeChanged()) and not for Auto DJ's own
+// appends (the engine design's 2.14: it adds one each time the last track
+// starts, and the badge would flash every track): `djAdds` of them since
+// the last pass. Growth beyond them (the listener's add in the same pass)
+// still flashes.
+bool badgeFlashes(uint32_t upNextWas, uint32_t upNextNow, bool contentChanged, bool modeChanged, uint32_t djAdds);
 
 // ---- the queue's cap (QueueModel::kMaxEntries: docs/QUEUE-MODES.md 15) ----
 //

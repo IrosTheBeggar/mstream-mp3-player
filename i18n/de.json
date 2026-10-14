@@ -1,7 +1,7 @@
 {
   "@@locale": "de",
   "@@autonym": "Deutsch",
-  "@@note": "German. A machine translation, not yet reviewed by a native speaker. Made from the mobile app's translations (mstream_music, master at bdb174e, lib/l10n/app_de.arb, GPL-3.0) and the terminal player's (mstream-terminal-player, main at b89ad0a, locales/de.yml, GPL-3.0-only; both by this repository's owner) where they had the text or its words: du, „…“, Titel, Album, Künstler, Ordner, Bibliothek, Warteschlange, Abspielen, Als Nächstes, Zufallswiedergabe, Kopfhörer, gekoppelt, Verbinden, Trennen, Vergessen, Akku, Karte, Sleep-Timer, Touch-Kalibrierung, Erneut versuchen, Speichern, Fertig. Translated by a Fable agent (Claude) otherwise, then reviewed by a second Fable agent (meaning against each text's context, terms, grammar and plurals, register, typography, the rooms). Notes in \"@<id>\" say where a shorter word replaced the apps' one for the room. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review).",
+  "@@note": "German. A machine translation, not yet reviewed by a native speaker. Made from the mobile app's translations (mstream_music, master at bdb174e, lib/l10n/app_de.arb, GPL-3.0) and the terminal player's (mstream-terminal-player, main at b89ad0a, locales/de.yml, GPL-3.0-only; both by this repository's owner) where they had the text or its words: du, „…“, Titel, Album, Künstler, Ordner, Bibliothek, Warteschlange, Abspielen, Als Nächstes, Zufallswiedergabe, Kopfhörer, gekoppelt, Verbinden, Trennen, Vergessen, Akku, Karte, Sleep-Timer, Touch-Kalibrierung, Erneut versuchen, Speichern, Fertig. Translated by a Fable agent (Claude) otherwise, then reviewed by a second Fable agent (meaning against each text's context, terms, grammar and plurals, register, typography, the rooms). Notes in \"@<id>\" say where a shorter word replaced the apps' one for the room. The rooms the notes give are those the texts were fitted to (42356b7); the layout fixes since gave most buttons and pills 2-4 px more and Small when their font doesn't fit, so a few of the apps' words a note set aside would fit now (docs/I18N.md, phase 3, lists them for a native review). The Auto DJ texts (October 2026, the engine's UI: toast.autodj_*, now_playing.autodj*, library.autodj_here, empty.autodj, output.autodj*, autodj.*) were made the same way: the mobile app's words for Auto DJ, Anker, Der Stimmung folgen, Ausgangssong, Ähnlichkeitsschwelle, BPM-Kontinuität and Harmonisches Mixen (its autoDj* keys), translated by a Fable agent otherwise, fitted to en.json's rooms (the notes say where a room made a text shorter), not yet reviewed by a native speaker.",
   "boot.touch_hint": "Touch-Probleme? Finger aufs Display halten.",
   "coach.header_tip": "Tipp {0} von {1}",
   "coach.header_hint": "tippen: weiter",
@@ -64,6 +64,22 @@
   "toast.why_opus_frames": "Opus mit {0}-ms-Frames nicht unterstützt",
   "toast.why_opus_no_ram": "kein RAM für den Opus-Decoder",
   "toast.what_why": "{0}: {1}",
+  "toast.autodj_on_empty": "Auto DJ an: folgt deinem nächsten Titel",
+  "toast.autodj_cued": "Auto DJ: der nächste Titel wartet auf Play",
+  "toast.autodj_random": "Kein Auto-DJ-Index: die Auswahl bleibt zufällig",
+  "toast.autodj_paused": "Auto DJ pausiert: Titel ließen sich nicht abspielen",
+  "toast.autodj_no_neighbours": "Titel noch ohne Auto-DJ-Nachbarn: der nächste Titel ist zufällig",
+  "@toast.autodj_no_neighbours": {
+    "note": "'Dieser Titel hat noch keine Auto-DJ-Nachbarn' is 295 px in Small, the toast's first line 284: 'Titel noch ohne Auto-DJ-Nachbarn' (220 px). Also toast.autodj_seed_moved's first line."
+  },
+  "toast.autodj_seed_moved": "Titel noch ohne Auto-DJ-Nachbarn: der erste wird zum Ausgangssong",
+  "toast.autodj_from_here": "Auto DJ ab hier: {0}",
+  "toast.autodj_started": "Auto DJ: {0}",
+  "toast.autodj_no_start": "Kein Titel mit Auto-DJ-Nachbarn gefunden: erneut versuchen",
+  "toast.autodj_needs_index": "Braucht einen Auto-DJ-Index: eine Übertragung legt ihn an",
+  "@toast.autodj_needs_index": {
+    "note": "'eine Übertragung auf die Karte legt ihn an' is 339 px in Body, the toast's second line 284: 'eine Übertragung legt ihn an' (the transfer is to the card by definition: library_row.src_transfer)."
+  },
   "hud.bluetooth": "Bluetooth: {0}",
   "hud.bluetooth_connecting": "Bluetooth: Verbinden…",
   "hud.speaker_paused": "Lautsprecher, pausiert: B spielt",
@@ -118,6 +134,11 @@
   "now_playing.repeat_off": "Aus",
   "now_playing.repeat_all": "Alle",
   "now_playing.repeat_one": "Titel",
+  "now_playing.autodj": "Auto DJ",
+  "now_playing.autodj_on": "An",
+  "now_playing.autodj_off": "Aus",
+  "now_playing.autodj_waiting": "Wartet",
+  "now_playing.autodj_paused": "Pausiert",
   "sleep.title_left": "Sleep-Timer: noch {0}",
   "sleep.title_end_track": "Sleep-Timer: Ende des Titels",
   "sleep.title_end_album": "Sleep-Timer: Ende des Albums",
@@ -171,6 +192,7 @@
   "@library.action_queue": {
     "note": "'+ Queue' as a verb: 'Einreihen' (to put into the queue, as VLC's German says for Enqueue) is 75 px in the 77 px button; 'Hinzufügen' is 90 px. The toast says 'Hinzugefügt: …'."
   },
+  "library.autodj_here": "Auto DJ ab hier",
   "library.play_all": {
     "one": "{0} Titel spielen",
     "other": "{0} spielen"
@@ -355,6 +377,7 @@
   "@empty.shuffle_all": {
     "note": "'Alles mischen' is 109 px in the 84 px button (112 without the icon): 'Mischen'."
   },
+  "empty.autodj": "Auto DJ",
   "empty.try_again": "Erneut versuchen",
   "empty.no_music_title": "Keine Musik gefunden",
   "empty.no_music_lines": "Leg deine Alben in /music/Artist/Album/\n(MP3, FLAC, Opus) und tipp Erneut versuchen.",
@@ -384,6 +407,52 @@
   "output.haptics_off": "aus",
   "output.about": "Über",
   "output.about_sub": "Akku, Speicher, Bibliothek, Version",
+  "output.autodj": "Auto DJ",
+  "output.autodj_sub_on": "An · {0}",
+  "output.autodj_sub_waiting": "Wartet · {0}",
+  "output.autodj_sub_paused": "Pausiert · {0}",
+  "output.autodj_sub_off": "Aus",
+  "autodj.subtitle": "füllt die Warteschlange nach",
+  "autodj.on_sub": "legt beim letzten Titel einen nach",
+  "autodj.anchor": "Anker",
+  "autodj.anchor_rolling": "Der Stimmung folgen",
+  "autodj.anchor_locked": "Beim Ausgangssong bleiben",
+  "autodj.anchor_rolling_sub": "jeder Titel folgt den letzten Titeln",
+  "autodj.anchor_locked_sub": "jeder Titel bleibt nah am Ausgangssong",
+  "autodj.strictness": "Ähnlichkeitsschwelle",
+  "autodj.strictness_value": "{0} % oder ähnlicher",
+  "@autodj.strictness_value": {
+    "note": "The mobile app's words ('{0} % oder ähnlicher', 129 px in Small at 75) don't fit beside 'Ähnlichkeitsschwelle' (163 px in Body, 109 px left), so the value takes the row's second line, in the hint's place: the row reads 'Ähnlichkeitsschwelle / 75 % oder ähnlicher'."
+  },
+  "autodj.strictness_sub": "wie ähnlich jeder Titel klingen muss",
+  "autodj.bpm": "BPM-Kontinuität",
+  "autodj.bpm_sub": "±8 BPM, auch halb oder doppelt",
+  "autodj.harmonic": "Harmonisches Mixen",
+  "autodj.harmonic_sub": "Tonarten, die gut harmonieren",
+  "autodj.needs_index": "braucht einen Auto-DJ-Index",
+  "autodj.status_ready": {
+    "one": "{0} von {1} Titel hat Nachbarn",
+    "other": "{0} von {1} Titeln haben Nachbarn"
+  },
+  "autodj.status_coverage": "BPM {0} % · Tonart {1} %",
+  "autodj.status_found": {
+    "one": "Auto-DJ-Index: {0} Titel",
+    "other": "Auto-DJ-Index: {0} Titel"
+  },
+  "autodj.status_found_sub": "wird gelesen, sobald Auto DJ an ist",
+  "autodj.status_reading": "Auto-DJ-Index wird gelesen…",
+  "autodj.status_none": "Kein Auto-DJ-Index auf dieser Karte",
+  "autodj.status_bad": "Auto-DJ-Index: Prüfung fehlgeschlagen",
+  "autodj.status_unreadable": "Auto-DJ-Index nicht lesbar",
+  "autodj.status_no_memory": "Auto-DJ-Index: zu wenig Speicher",
+  "autodj.status_too_big": "Zu viele Titel für den Auto-DJ-Index",
+  "autodj.status_random": "die Auswahl bleibt zufällig",
+  "autodj.status_waits_repeat": "Wartet: Titelwiederholung ist an",
+  "autodj.status_waits_sleep": "Wartet: Sleep-Timer bis zum letzten Titel",
+  "@autodj.status_waits_sleep": {
+    "note": "'Wartet: Sleep-Timer endet mit der Warteschlange' is 324 px in Small, the line 288: 'bis zum letzten Titel', the sleep timer's own pill (sleep.end_queue)."
+  },
+  "autodj.status_paused": "Pausiert: Titel ließen sich nicht abspielen",
   "settings.screen_off": "Bildschirm aus nach",
   "settings.screen_off_sub": "dimmt erst; Tippen weckt",
   "settings.screen_never_sub": "bleibt an: kostet Akku",

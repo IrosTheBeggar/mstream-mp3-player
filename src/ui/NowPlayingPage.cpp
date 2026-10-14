@@ -672,7 +672,11 @@ bool NowPlayingPage::emptyState(EmptyState& e) const {
   e.lines = tr(S::empty_pick_in_library);  // (fits: the longer one didn't)
   e.buttons[0] = tr(S::empty_open_library);
   e.buttonIcons[0] = &icons::kLibrary;
-  if (s.libraryTracks > 0) {
+  if (autodjview::emptyButton(s.autoDj, s.libraryTracks)) {
+    // A usable Auto DJ index: Auto DJ in Shuffle all's place (D4).
+    e.buttons[1] = tr(S::empty_autodj);
+    e.buttonIcons[1] = &icons::kAutoDj;
+  } else if (s.libraryTracks > 0) {
     e.buttons[1] = tr(S::empty_shuffle_all);
     e.buttonIcons[1] = &icons::kShuffle;
   }
@@ -700,6 +704,8 @@ void NowPlayingPage::onEmptyEvent(const InputEvent& e) {
     ui_.retryCard();
   } else if (was == 0) {
     ui_.showTab(NavModel::Tab::Library);
+  } else if (es.buttonIcons[1] == &icons::kAutoDj) {
+    ui_.autoDjStart();  // (the button this pass's emptyState() has: the one drawn)
   } else {
     ui_.shuffleAll();
   }
@@ -723,7 +729,9 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   const bool empty = s.current < 0;
   const bool noCard = !s.card && s.libraryTracks == 0;
   if (empty) {
-    if (!drawn_.valid || !drawn_.empty || drawn_.noCard != noCard || drawn_.cardKind != s.cardKind) {
+    const bool dj = autodjview::emptyButton(s.autoDj, s.libraryTracks);
+    if (!drawn_.valid || !drawn_.empty || drawn_.noCard != noCard || drawn_.cardKind != s.cardKind ||
+        drawn_.autoDjButton != dj) {
       EmptyState es;
       emptyState(es);
       drawEmptyState(es, kContentY, kH - kContentY, accent::NowPlaying, emptyPressed_);
@@ -732,6 +740,7 @@ bool NowPlayingPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawn_.empty = true;
       drawn_.noCard = noCard;
       drawn_.cardKind = s.cardKind;
+      drawn_.autoDjButton = dj;
     }
     return false;
   }
@@ -905,20 +914,27 @@ void NowPlayingPage::openNavMenu() {
 void NowPlayingPage::openPlaybackMenu() {
   using namespace uitext;
   const AppState& s = ui_.state();
-  const char* const rows[3] = {tr(S::now_playing_shuffle), tr(S::now_playing_repeat), tr(S::now_playing_sleep_timer)};
+  // Auto DJ the 4th row (the user's D6): the sheet rises into the header
+  // row (SheetLayout.h), its rows 40 px as ever.
+  const char* const rows[4] = {tr(S::now_playing_shuffle), tr(S::now_playing_repeat), tr(S::now_playing_sleep_timer),
+                               tr(S::now_playing_autodj)};
   const uint8_t repeat = s.repeat < 3 ? s.repeat : 0;
-  const char* details[3] = {tr(s.shuffle ? S::now_playing_on : S::now_playing_off), tr(repeatMode(repeat)),
-                            s.sleepRow};
-  Serial.printf("[ui] now playing: the playback menu (shuffle %s, repeat %s, sleep timer %s)\n",
-                s.shuffle ? "on" : "off", repeatName(repeat), s.sleepRow);
-  ui_.openSheet(this, tr(S::now_playing_playback_title), rows, 3, details);
+  const char* dj = tr(autodjview::rowText(autodjview::rowState(s.autoDj)));
+  const char* details[4] = {tr(s.shuffle ? S::now_playing_on : S::now_playing_off), tr(repeatMode(repeat)),
+                            s.sleepRow, dj};
+  Serial.printf("[ui] now playing: the playback menu (shuffle %s, repeat %s, sleep timer %s, Auto DJ %s)\n",
+                s.shuffle ? "on" : "off", repeatName(repeat), s.sleepRow, dj);
+  ui_.openSheet(this, tr(S::now_playing_playback_title), rows, 4, details);
   // Each row's state follows while it is up (a change from the console
-  // shows too); Shuffle and Repeat change in place, the sheet staying.
+  // shows too); Shuffle, Repeat and Auto DJ change in place, the sheet
+  // staying.
   ui_.sheetFollows(0, Ui::SheetFollow::Shuffle);
   ui_.sheetFollows(1, Ui::SheetFollow::Repeat);
   ui_.sheetFollows(2, Ui::SheetFollow::Sleep);
+  ui_.sheetFollows(3, Ui::SheetFollow::AutoDj);
   ui_.sheetStays(0);
   ui_.sheetStays(1);
+  ui_.sheetStays(3);
   ask_ = Ask::Playback;
 }
 
@@ -1129,6 +1145,13 @@ void NowPlayingPage::onSheet(int choice) {
     case 2:
       ask_ = Ask::None;
       ui_.openSleepSheet();
+      break;
+    case 3:
+      // In place, as Shuffle. On, it adds a track as the queue's last one
+      // starts (it never starts playback); with no usable index its picks
+      // are random, and its toast says so (app/AutoDj's news).
+      Serial.printf("[ui] now playing: Auto DJ %s\n", s.autoDj.on ? "off" : "on");
+      ui_.host().autoDjSetOn(!s.autoDj.on);
       break;
     default: break;
   }

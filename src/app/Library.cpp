@@ -401,7 +401,7 @@ void Library::writeDeviceTxt() {
   if (v[0] == 'v') ++v;
   char want[400];
   cardcontract::devicetxt::Info info = cardcontract::devicetxt::current(v);
-  info.readMpdj = autoDjReadMpdj();  // (the contract's; major 2 in a build with AUTODJ_READ_MPDJ)
+  info.readMpdj = autoDjReadMpdj();  // (the contract's: major 2)
   const size_t n = cardcontract::devicetxt::format(info, want, sizeof(want));
   if (n == 0) return;
   TxtCheck check;

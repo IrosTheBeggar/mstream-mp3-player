@@ -32,6 +32,7 @@ enum class PageKind : uint8_t {
   About,  // the Output tab's About
   DeviceInfo,  // About's Device info (the board, chips, memory, uptime)
   Language,    // Output > Language: the ten languages (id kFirstBootPicker: the first boot's)
+  AutoDj,      // Output > Auto DJ: its switch, settings and status (the engine design's 5.1)
 };
 // PageRef::id of the Language page shown as a fresh unit's first screen
 // (no back arrow; a pick goes on to the touch check and the tips).

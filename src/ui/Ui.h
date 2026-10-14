@@ -248,9 +248,10 @@ public:
                  const char* const* details = nullptr, int primary = -1, int danger = -1);
   // What a row of the sheet just opened shows as its detail, and follows
   // while it is up: the sleep timer's state ("23 min", "Fading", "Off"),
-  // shuffle ("On", "Off") or repeat ("Off", "All", "One"), from the
-  // snapshot each pass (a change from the console shows too).
-  enum class SheetFollow : uint8_t { None, Sleep, Shuffle, Repeat };
+  // shuffle ("On", "Off"), repeat ("Off", "All", "One") or Auto DJ ("On",
+  // "Off", "Waiting", "Paused"), from the snapshot each pass (a change
+  // from the console shows too).
+  enum class SheetFollow : uint8_t { None, Sleep, Shuffle, Repeat, AutoDj };
   void sheetFollows(int row, SheetFollow what);
   // A tap on row `row` of the sheet just opened doesn't close it: the
   // owner's onSheet(row) acts, the row's highlight goes and its followed
@@ -276,6 +277,25 @@ public:
   const queueview::FailedKeys& failedKeys() const { return failedKeys_; }
   // Shuffle all: the whole library, shuffled, playing (the empty states).
   void shuffleAll();
+  // The empty states' Auto DJ button (D4; in Shuffle all's place while the
+  // card has a usable index): a random track the index knows plays as a
+  // new queue, Auto DJ on (UiHost::autoDjStart()), and the toast says
+  // which (with Undo, as Shuffle all's: autoDjToast()); none found, or
+  // the index gone since the button was drawn, a note.
+  void autoDjStart();
+  // The toast after a Play that also switched Auto DJ on (the button,
+  // "Auto DJ from here"), with Undo: the queue as it was and, when this
+  // tap switched Auto DJ on (`switchedOn`), Auto DJ off again: the tap
+  // undone whole.
+  void autoDjToast(const char* text, bool switchedOn);
+  // What Auto DJ's loop step had to say (autodjview::News bits, main.cpp
+  // after its step): one toast (autodjview::newsToast(): a note for the
+  // failure pause). While a toast with Undo is up, it waits until that
+  // goes (the failure pause doesn't), and an Undo tapped drops it.
+  void autoDjNews(uint8_t news);
+  // The Queue's entries that are Auto DJ's (its DJ marks): never marked as
+  // a Library add, nor scrolled to (queueview::AddedMark).
+  queueview::QuietKeys djKeys() const;
   // The console's qu undid the queue's last edit: an Undo toast still up
   // goes at the next pass, and its line says so (UndoWatch).
   void queueUndone() { undoWatch_.undone(); }
@@ -449,6 +469,9 @@ private:
   bool hudFollows_ = false;  // the HUD tracks the Bluetooth volume (the headphones' keys)
   uint32_t lastContent_ = 0;
   uint32_t lastUpNext_ = 0;
+  uint32_t lastDjAdds_ = 0;  // Auto DJ's appends the last pass saw (no badge flash for them)
+  uint8_t pendingNews_ = 0;  // Auto DJ's news held while an Undo toast is up (autoDjNews())
+  bool undoSwitchesDjOff_ = false;  // the toast's Undo also switches Auto DJ off (autoDjToast())
   uint32_t badgeUntilMs_ = 0;
   uint32_t nowMs_ = 0;
   // Frames, for 'ui'.
