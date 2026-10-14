@@ -23,7 +23,13 @@ at most 5,000 tracks** (section 15: the user's answer to
 docs/METADATA.md's U12; host-tested, not yet on the device), **and
 since 2026-10-08 an add to a full queue pushes out what already
 played** to make room (15.8: the user's answer to 15.7's question;
-host-tested, not yet on the device). What Now Playing looks like and how it takes touches is the spec
+host-tested, not yet on the device). **Since 2026-10-14 Auto DJ adds a
+track when the queue's last entry starts** (section 16: with shuffle,
+repeat, the sleep timer and a finished queue; the engine is
+[AUTODJ.md](AUTODJ.md)), and Now Playing's "..." menu has a 4th row,
+Auto DJ. (Auto DJ's 2-hour soak on the device, 2026-10-13, ran a queue
+to the cap and pushed out played entries at every pick: 16.6.) What Now
+Playing looks like and how it takes touches is the spec
 in [ARCHITECTURE.md](ARCHITECTURE.md) ("Now Playing", under UI): the
 layout, the hit areas, the two menus and their texts, the indicator, the
 haptics. This document is the rest:
@@ -2094,3 +2100,182 @@ nothing interrupted (no `[audio] ... starting` line, no `cut` in the
 playing row lands mid-queue, and + Queue is refused (or takes only the
 played tracks that sorted in before it), never the unplayed ones above
 the playing row.
+
+## 16. Auto DJ with shuffle, repeat and the sleep timer (2026-10-14)
+
+Auto DJ ([AUTODJ.md](AUTODJ.md)) adds one track when the queue's last
+entry starts. Its rule for when is `autodj::decide()` (lib/core
+`AutoDjTrigger`), read every loop pass, so it is level based: whatever
+made the last entry current (a natural end, a skip, a remove or a Clear
+up next of what followed, Auto DJ switched on while it plays) is seen the
+same way. The add is `PlaybackController::addFromAutoDj()` over
+`QueueModel::appendQuiet()` ([ARCHITECTURE.md](ARCHITECTURE.md), "Library
+and queue"). This section is what it does with this document's modes and
+with a queue that has finished. Host-tested in test_autodj_trigger,
+test_playback, test_autodj_driver and test_queue.
+
+### 16.1 When a pick is added
+
+`decide()` takes the first of these that applies:
+
+| The queue and the player | A pick? | The "..." row |
+|---|---|---|
+| Auto DJ off | no | Off |
+| Empty, or entries after the current one in play order | no: it waits for the last one to start | On |
+| Paused, stopped, or a queue restored at boot, and not a finished queue | no: it waits for Play | On |
+| Behind the library update's fence; the card held; a restart set | not this pass | On |
+| The index still joins or reopens | not this pass (owed: the update step waits for it, ARCHITECTURE.md's loop pass) | On |
+| Repeat One | no (a hold) | Waiting |
+| The sleep timer at End of queue | no (a hold) | Waiting |
+| 3 of its picks in a row failed to play | no (a hold, until a track plays, or Auto DJ is switched off and on) | Paused |
+| The last entry, Playing or Waiting for the headphones | one, appended | On |
+| A finished queue (16.5) | one, cued | On |
+
+The "..." row shows the holds whatever the queue does: Waiting under
+Repeat One on any entry, Paused after the failures. A due pick also
+waits while the decoder fills the ring after a start or a skip (until it
+holds 500 ms, the track's source ends, or 1.5 s have passed): a pick
+timed across that refill measured the decoder (108 ms on 2026-10-13). It
+isn't owed: a few hundred milliseconds. A gapless join is no refill. One
+pick at a time: once it is appended the last entry has a next, and the
+next pick comes when the pick starts.
+
+### 16.2 Shuffle
+
+- **A pick is never shuffled in** as it is added: it is ranked after the
+  highest rank, as + Queue is (2.4), so it is last in the order that
+  plays and in the queue's own order.
+- **"The last entry" is the last in play order:** shuffled, the last of
+  the shuffled order (`QueueModel::upNext()` 0).
+- **Shuffle on** shuffles what is up next, Auto DJ's picks among it, as
+  any entry. Right after a pick that is the pick alone, so nothing moves.
+- **Shuffle off** sorts the queue back by rank, the current entry in its
+  own place. Each pick ranks after everything that was there when it
+  came, so the picks keep their places at the end of the own order; the
+  entries after the current one are up next again, and Auto DJ waits
+  until the last one starts.
+- **A toggle is no new session:** the session's anchors, seed and
+  cooldowns go on (AUTODJ.md). Nor is a repeat change, an add, a remove
+  or a move.
+- **Shuffle all is a Play**, so it starts a new session seeded by its
+  first track. While the card has a usable Auto DJ index, the empty
+  states offer Auto DJ in Shuffle all's place (the user's D4;
+  ARCHITECTURE.md's UI).
+
+### 16.3 Repeat
+
+- **Off** (the default): a pick is appended as the last entry starts, so
+  the queue doesn't end while Auto DJ can pick. A pick that can't be made
+  before the last track ends (the fence, the card held, a restart set,
+  the join still running behind a short track) leaves a finished queue,
+  and the pick is cued there (16.5).
+- **All: the queue doesn't wrap while Auto DJ adds.** The last entry
+  starts, a pick is appended after it, and that pick is what plays next,
+  not the first entry (`test_repeat_all_never_wraps_with_auto_dj`). A
+  pick held off for the whole of the last track (the same causes as
+  above, or the failure pause) leaves the queue to wrap to its first
+  entry, as Repeat All does; Auto DJ then waits until the last entry
+  starts again.
+- **One is a hold:** the "..." row says Waiting, Output > Auto DJ's status
+  "Waiting: Repeat One is on". The track loops as Repeat One does and
+  nothing is added; the session stays. Repeat set to Off or All while the
+  last entry plays: the pick comes in that pass.
+- Next and prev are unchanged. Next on a last entry that has its pick
+  goes to the pick; next in a track's first 30 s is a quick skip, which
+  takes that track out of the anchors (AUTODJ.md).
+
+### 16.4 The sleep timer
+
+- **End of queue is a hold** while the timer runs ("Waiting: sleep timer
+  set to End of queue"): the queue doesn't grow, so the timer's boundary
+  stays the queue's last entry, and it stops there as asked. Once its
+  pause has stopped the queue at its end, its choice is over and the
+  queue is a finished queue: Auto DJ cues a pick, paused at 0:00, with its
+  toast (16.5). Nothing plays.
+- **A time, End of track, End of album:** no hold. Auto DJ appends as
+  ever, and the timer pauses where it would. End of album reads the
+  current entry and the one after it, so a pick from another album
+  appended after an album's last track makes that track the album's end,
+  as in any queue. At a boundary the timer's own pause cues the next
+  entry at 0:00 (`pausedByTimer()`).
+
+### 16.5 A finished queue: the cued pick
+
+- **A finished queue** is `PlaybackController::endedAtEnd()`: stopped on
+  its last entry at its end with repeat Off, and nothing has moved or
+  started since. It comes from a natural end, a next on the last entry,
+  the last track failing, a queue whose every track failed in a row
+  (stopped on its last entry: `stopAtEnd()`, since the engine's first
+  commit, 2026-10-13), the sleep timer's End of queue, or a track that
+  ended behind the library update's fence with none after it. With Auto
+  DJ on it means a pick couldn't be appended in time, the sleep timer
+  held it, or Auto DJ was switched on after the queue had finished.
+- **The pick is cued, never played:** it becomes the current entry,
+  Paused at 0:00, marked `cuedByAutoDj()`. Nothing starts by itself after
+  the silence. The toast says "Auto DJ: the next track is ready, press
+  play".
+- **Play starts it** (B, Now Playing's play button, the console's space),
+  from 0:00, not the last track again, and the next pick lands as it
+  starts (it is the last entry again). **The headphones' Play doesn't**
+  (`pausedNotByListener()`, as after the sleep timer's pause: the queue
+  had stopped, and an earbud put in sends Play).
+- **One pick only:** a cued pick is no finished queue (nothing has
+  ended), so nothing more is added until it plays.
+- **Not finished:** a queue stopped another way (a Clear, a boot's
+  restore, a pause on the last entry). Auto DJ waits for Play there.
+- **On the device** (2026-10-13, the first device check's check 9, on the
+  build before the fix round): the pick was cued and paused at 0:00,
+  nothing started by itself, Play started it and the next pick landed
+  0.2 s later; while the sleep timer's End of queue ran nothing was added,
+  and `D` named the reason.
+
+### 16.6 Undo, sessions and the cap
+
+- **Auto DJ's add is no edit** (`appendQuiet()`): it takes no undo of its
+  own, so the toast's Undo still undoes the listener's last edit, never
+  the pick. The pick is mirrored into that edit's snapshot, so the Undo of
+  a + Queue, Play next, Remove, move or Clear up next keeps it last; the
+  Undo of a Play or a Clear brings back a queue that never held it.
+- **A new queue is a new session** (`QueueModel::playEpoch()`): every
+  Play (the Library's, Shuffle all's, the console's), every Clear, and the
+  Undo of either. A jump in the Queue (Play now on a row) is no new
+  queue. The Auto DJ button and "Auto DJ from here" are one-track Plays
+  that also switch Auto DJ on; their toast's Undo puts the queue back
+  and, when that tap switched Auto DJ on, switches it off again.
+- **At the cap** (5,000 entries, section 15) each pick pushes out the
+  oldest played entry, as an add does (15.8), and the listener's undo goes
+  with it (an Undo toast still up goes too). Full with nothing played, the
+  queue refuses the pick: it leaves the anchors, stays in the cooldowns,
+  and is tried again 5 s later. On the device's 2-hour soak (2026-10-13)
+  the queue reached 5,000 entries after 79.5 minutes and stayed there,
+  the oldest played entries pushed out at each pick, none refused.
+- **`queue.txt` keeps up** with a pick every second: a write more than
+  30 s behind runs from a snapshot of the queue to its end, whatever edits
+  arrive (ARCHITECTURE.md, "Persistence"; `QueueSaver::kMaxStaleMs`).
+  The soak of 2026-10-13, before that change, wrote nothing for its last
+  59 minutes. Host-tested since
+  (`test_the_saver_keeps_up_with_appends_every_second`: an hour of
+  appends every second, at most about 32 s between two writes); not yet
+  re-run on the device.
+- **Gapless:** the pick is appended inside an action, so the word on what
+  follows reaches the backend at once and the pick joins without a gap
+  (GAPLESS.md). On the soak's 1-second tracks: 7,521 gapless joins, 0
+  cuts, 0 underruns.
+
+### 16.7 What it changed in sections 4-6's code
+
+- **The playback menu has 4 rows**, from y 40 (Shuffle 76-115, Repeat
+  116-155, Sleep timer 156-195, Auto DJ 196-235;
+  `NowPlayingPage::openPlaybackMenu()`, `lib/core/SheetLayout`'s
+  `kMaxRows` 4). Auto DJ's row stays up and follows as Shuffle's does
+  (`Ui::SheetFollow::AutoDj`, `sheetStays(3)`). The navigation menu
+  keeps 4.1-4.4's 3 rows from y 80.
+- **`queueview::UndoWatch`** gained `dropped()` and `Gone::Dropped`: a pick
+  of Auto DJ's that takes the listener's undo (at the cap, or a snapshot
+  that can't hold it) takes the Undo toast down, as a `qu` does
+  (`Ui::queueUndoDropped()`; logged `[ui] the Undo toast went: Auto DJ's
+  pick took the undo`).
+- **The Queue badge** doesn't flash for Auto DJ's appends
+  (`queueview::badgeFlashes()`'s `djAdds`), as it doesn't for a toggle.
+- **`UiHost`** gained the Auto DJ calls, and `AppState` its
+  `autodjview::State` (ARCHITECTURE.md's UI).

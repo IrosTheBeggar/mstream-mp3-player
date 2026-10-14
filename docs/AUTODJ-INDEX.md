@@ -1,13 +1,15 @@
 # AutoDJ index: `autodj-<gen>.bin` (MPDJ v2)
 
-**Status (2026-10-13):** the format of record for the AutoDJ index that
-the transfer software writes to the card, mstream-terminal first. It
-replaces the MPDJ v1 draft that docs/METADATA.md 2.13 held, which never had
-a reader. No released firmware reads this file yet: the player's reader and
-writer are in `lib/core/CardAutoDj` (host-tested), and the AutoDJ engine
-that will use them is a later PR (11.8). This document is minor 0; minor 1,
-the cell-ordered codes of Appendix A, is planned. Every test vector (13) is
-synthetic.
+**Status (2026-10-13; the device notes 2026-10-14):** the format of
+record for the AutoDJ index that the transfer software writes to the card,
+mstream-terminal first. It replaces the MPDJ v1 draft that
+docs/METADATA.md 2.13 held, which never had a reader. The player's reader
+and writer are in `lib/core/CardAutoDj` (host-tested), and since
+2026-10-14 the firmware's Auto DJ reads the file (docs/AUTODJ.md; section
+11 is the engine as built). 0.11.0 is the first release that does, and
+the first to write `read.mpdj=2` (7.4); 0.8.0-0.10.0 read no MPDJ. This
+document is minor 0; minor 1, the cell-ordered codes of Appendix A, is
+planned. Every test vector (13) is synthetic.
 
 Reading a file needs nothing but this document, in any language, without
 the player's code. Writing one also follows a few rules of the card
@@ -969,62 +971,119 @@ version 1, 4.1):
 ## 11. What the device does (informative)
 
 Nothing here is part of the format. It is the engine the format was
-designed for, so that a reader knows what the fields are for. Device
-figures are ESTIMATED at 20,000 tracks from the Core2's measured card and
-CPU rates unless labelled; session figures are MEASURED-SYN on the
-synthetic test card (Appendix C).
+designed for, so that a reader knows what the fields are for. **Since
+2026-10-14 it is the Core2's Auto DJ as built** (firmware 0.11.0):
+docs/AUTODJ.md has the whole engine, its settings, its UI and its tests;
+this section keeps what concerns the file. Labels (Appendix C): MEASURED
+on the Core2 at 240 MHz with the synthetic test card's 19,410-row index
+(the first Auto DJ device check, 2026-10-13, on the build before the fix
+round of 2026-10-14); ESTIMATED at 20,000 tracks from the Core2's
+measured card and CPU rates; MEASURED-SYN for session figures on the
+synthetic test card; READ from the firmware's code.
 
 ### 11.1 At boot
 
 - One small read: the header and the directory are the file's first 256 or
   512 bytes (3.3). The device checks them (8.1, 8.2) and the root's COMP
-  entry (7.2).
+  entry (7.2), whether Auto DJ is on or off: 5.5-6.5 ms (MEASURED). A
+  failure makes the file absent; the device says why (Output > Auto DJ's
+  status row, the console's `D`).
+- The file then stays open (11.3).
 
-### 11.2 The join (after each library build: the boot's and the update step's)
+### 11.2 The join (while Auto DJ is on)
 
+- **When:** Auto DJ switched on; at a boot with it on, after the UI's
+  first frame; after each library build (the update step's Live); after a
+  remount that found another index. Switched off, the join is given back,
+  so a listener who never uses Auto DJ never holds its memory.
 - One sequential pass over DJRF, DJPH and STRS: 18 bytes a track, 360,000
-  bytes at 20k, CRC-checked as it streams (8.3).
+  bytes at 20k, CRC-checked as it streams (8.3). Its verdict on a file is
+  8.6's device check, reason for reason.
 - It builds **track → row** and **row → track,** a u16 each. Each library
-  track's path hash, computed from its path, is merged with DJPH. A row
-  whose files are all gone stays unmapped. For a row with several files on
-  the card, row → track takes the present file with the smallest path hash
-  (the first DJPH entry of that row that maps to a track).
-- And **the resident filters** from DJRF: the BPM, the Camelot key and the
-  artistKey, as compact as the device likes.
-- **Its transient,** a sorted array of (path hash, track) pairs at 12 bytes
-  a track, is 233-240 KB at 19-20k tracks, against the device budget's
-  limit of about 256 KB for one allocation (H5). It passes that limit above
-  about 21,000-22,000 tracks, inside the device's 23-27k ceiling, so the
-  engine must build the join in pieces (11.8).
-- **No whole-file check of DJSL:** AutoDJ may use the file as soon as the
-  join ends.
+  track's path hash, computed from its path (2.3), is kept as its top 32
+  bits and its track id, in runs of 4,096 (6 bytes a track, 24 KB a
+  block), each run sorted; then DJPH streams past a cursor in every run,
+  and a 32-bit match is confirmed by the full 64-bit hash. A row whose
+  files are all gone stays unmapped. For a row with several files on the
+  card, row → track takes the present file with the smallest path hash
+  (the first DJPH entry of that row that maps to a track). An entry that
+  two of the library's own paths hash to maps neither, as a writer leaves
+  out a hash two card files share (4.5).
+- And **the resident filters** from DJRF, one u32 word a row: the BPM
+  rounded to a whole number ((bpm10 + 5) div 10, 0 none), the Camelot
+  code, BPM_ANALYSED, a present bit, and the artistKey's low 16 bits (0
+  made 1 when the key isn't 0, so 0 means no artist).
+- **Memory** (READ; ESTIMATED at 20k): kept, the two maps 40 + 40 KB and
+  the filters 80 KB; while it runs, the runs 120 KB and a 4 KB read
+  buffer, 284 KB at the peak. MEASURED at 19,410 tracks: 155,284 B kept,
+  275,952 B at the peak. **The transient is 6 bytes a track, in 24 KB
+  blocks:** the earlier plan's single sorted array of (path hash, track)
+  pairs, 12 bytes a track, passed the device budget's limit of about
+  256 KB for one allocation (H5) above about 21,000-22,000 tracks. The
+  largest block now is the filters' (rows × 4: 108 KB at 27k). The blocks
+  go to the top of PSRAM's largest free block, and a library update's
+  memory check can have them given back (docs/AUTODJ.md).
+- **Slices:** on the loop, between frames. A slice hashes 250 tracks,
+  sorts one run, or takes what one 4 KB read of DJRF or DJPH holds (at
+  most 100 full hashes confirmed); up to 8 ms of slices and one card read
+  a loop pass, none while a list moves, the loop's sleep at most 2 ms
+  meanwhile (READ). MEASURED on the build before those sizes (1,000
+  hashes a slice, the loop's usual sleep): 2.1 s and 112 slices at boot,
+  idle; 4.6 s paused and 7.2 s with an MP3 playing, after a library
+  update's fence; 30 fps kept while a list scrolled. The new sizes aren't
+  measured yet (docs/AUTODJ.md's costs estimate them).
+- **No whole-file check of DJSL:** Auto DJ uses the file as soon as the
+  join ends. Before the join (Auto DJ off), the device can still tell
+  whether a track has a row: DJPH is in hash order, so a binary search
+  takes about 15 small reads (the empty states' Auto DJ button, "Auto DJ
+  from here" in the Library's long-press sheet).
+- A library over 65,534 tracks isn't joined (the maps hold u16 ids): the
+  picks are random library tracks.
 
 ### 11.3 One pick, and the read path
 
-1. The anchor's row, from track → row. A track with no row gets random
-   with filters for this pick.
-2. **One read:** slotBytes bytes at DJSL.offset + row × slotBytes.
-3. The slot checked (8.4, 8.5) and decoded: about 7-8 k cycles for a
-   512-byte slot (the CRC about 10-12 cycles a byte), tens of
-   microseconds.
-4. Merged with the cached slots of the session's anchors (the last few
-   picks, or the seed), then gated (11.4), filtered (cooldowns, the BPM and
-   key tiers, the artist key, from the resident DJRF data) and drawn; the
-   chosen row mapped to a track. Rows that map to no track are skipped.
+1. **The anchors:** in "follow the vibe", the rows of the last 5 tracks
+   that played (Auto DJ's picks join when picked, the listener's tracks
+   when they start; a track skipped in its first 30 s leaves them); in
+   "stay on seed", the seed's row alone. A track with no row is never an
+   anchor.
+2. **Their slots** come from a cache of 6 (the anchors' never evicted).
+   Each anchor's slot is read ahead as its row joins, one read a loop
+   pass, so a pick usually reads nothing. A missing one is read at the
+   pick, newest first, **at most 2 reads a pick** (a CRC re-read
+   included); the rest sit out that pick.
+3. **Each slot is checked** (8.4, 8.5) as it is read, and its used entries
+   kept sorted by row with their levels and filter words (made at the
+   read-ahead).
+4. **The candidates:** the union of the anchors' entries (one merge),
+   minus the anchors, the playing track's row and rows that map to no
+   track, each with its best level and the sum of its levels. Then the
+   gate (11.4), the cooldowns (the last 50 rows, the last 3 artists), the
+   BPM and key preferences (off by default) and one uniform draw; the
+   chosen row mapped to a track. With no anchor's list (every anchor
+   without a row, or its slot damaged), 64 draws at random over the rows
+   that map to a track, in the same classes.
 
 **The read path matters more than the layout:**
 
 - "One card command a pick" holds only on the raw FatFs path: a `FIL` kept
   open, with the file's FAT-chain sectors in the sector cache. Fast seek is
   off on the device, so a cold seek walks the chain: about 5 FAT sectors
-  for a 10.6 MB file with 16 KB clusters.
+  for a 10.6 MB file with 16 KB clusters. **The Core2 does this:** its
+  `FIL` is opened at boot and kept in PSRAM.
 - Through Arduino's `File` (the VFS), a read costs about 3 ms plus 0.65 ms
   a KB whatever the layout (MEASURED fit), so the slot layout's gain exists
-  only on the raw path. The firmware should read slots on the raw path, and
-  never through the card worker's queue (H9: one of its jobs can hold it
-  for seconds).
+  only on the raw path. The firmware reads slots on the raw path, on the
+  loop, and never through the card worker's queue (H9: one of its jobs
+  can hold it for seconds).
 - Each pick puts one sector into the 256-sector cache the card shares with
   `/music`'s directories.
+- **MEASURED** (the console's `Db`: 200 reads of random rows, 512-byte
+  slots, the file open): p50 1.2-1.4 ms; at most 13.2 and 20.7 ms with a
+  320 kbps MP3 playing (two runs), 17.0 and 17.3 ms with a FLAC; none
+  failed. During the boot's validation walk, which shares the card: p50
+  11.9 ms, p90 40.8 ms, at most 88 ms. In a 2-hour soak, 7,519 of 7,520
+  picks read no slot.
 
 ### 11.4 The gate and the slider
 
@@ -1052,19 +1111,35 @@ synthetic test card (Appendix C).
   it, two-hop (11.5) at 0.45 cuts BPM/key breaks to 1.2 % (MEASURED-SYN).
 - **The slider works from 0.55 to about 0.75** (the pick cosine's span is
   0.099, against mStream's 0.149). At 0.85 every table puts 39-43 % of
-  rolling picks below the floor, where mStream puts 2.7 %.
+  rolling picks below the floor, where mStream puts 2.7 %. The Core2's
+  Match strictness is 55 to 75 % in steps of 5, 55 % by default; it shows
+  an index's own floor when that is above the setting.
 - **Honesty:** with the default lists 6.5 / 9.4 / 18.6 % of rolling picks
   land below the floor at 0.55 / 0.65 / 0.75, about half of them within
   0.05 (mStream: 0 / 0.1 / 0.4 %, 11.7). At 0.75 every table, tight or
   not, puts 16-22 % there (MEASURED-SYN).
 - **When the gate passes nothing:** relax to the 50 best-ranked listed
-  tracks and keep playing; never stop or go silent. (Round 1 asked the user
-  this; it is engine policy now.)
+  tracks (the 50 with the highest sum of levels to the anchors, ties by
+  row) and keep playing; never stop or go silent. (Round 1 asked the user
+  this; it is engine policy now.) And **loosen before repeating** (the
+  user's decision, 2026-10-14): when every row of that pool (the gated
+  candidates, or the 50) is in the 50-track cooldown and a candidate
+  outside it is left, the pool becomes the 50 candidates outside the
+  cooldown with the highest sum, below the floor if need be, before
+  anything repeats. Only when every candidate is cooled does a track
+  repeat. MEASURED before it: a seed with 3 rows above 0.75 made "stay on
+  seed" at 0.75 repeat them on 197 of 200 picks. A replay of that case on
+  a PC with the rule: 188 of 200 picks loosened, none repeated.
 - **"More like this"** and any ranked list are exact for the first selHead
   entries. An engine may play the tight DJ from the head alone: S84's head
   is the plain top-84 table.
 
 ### 11.5 Two-hop in "stay on seed"
+
+**Not built on the Core2** (the user's decision D5, 2026-10-13: later,
+if needed): in "stay on seed" it reads only the seed's slot.
+docs/AUTODJ.md lists it as deferred work (its milestone M7). What
+follows is the design, kept for when it is built.
 
 - With the default lists, seed mode needs a second read at times. When the
   seed's pool has no tier-0 BPM/key row, or fewer than 4, or nothing left
@@ -1080,21 +1155,42 @@ synthetic test card (Appendix C).
 - **The default lists need it** for their seed continuity. Without it seed
   mode breaks BPM/key continuity on 23 / 47 / 58 % of picks at 0.55 / 0.65
   / 0.75; with it, on 7 / 30 / 53 % (MEASURED-SYN).
+- **MEASURED without it** (one seed, 200 picks a setting, BPM continuity
+  and Harmonic mixing on): "stay on seed" broke continuity on 26 % and
+  53 % of picks at 0.55 and 0.65, near the 23 / 47 % above; "follow the
+  vibe" on 0 / 0 / 1 % at 0.55 / 0.65 / 0.75. At 0.75 that seed had 3
+  rows above the floor (11.4's repeat case).
 - The j rule is untuned: "uniform over the top 20" beat "uniform over the
   head" by 0.7 / 2.5 / 1.2 points and 0.2-0.4 reads a pick (an engine item,
   11.8).
 
-### 11.6 Costs at 20,000 tracks (ESTIMATED)
+### 11.6 Costs
 
-| | Rolling ("follow the vibe") | Stay on seed, with two-hop |
+| A pick | ESTIMATED at 20k (the design) | MEASURED (2026-10-13, 19,410 rows) |
 |---|---|---|
-| Card reads a pick | 1.0 | 1.0-1.7 on average, at most 2 |
-| Time with an MP3 playing, typical | about 3 ms | 2.7-3.0 ms |
-| Time at worst (each read behind the decoder's longest) | 14 ms (29 ms behind a FLAC) | 26 ms (55 ms behind a FLAC); about 33 ms through Arduino's `File` |
-| CPU a pick | 1.4-1.9 ms (1.7-1.9 at the 0.55 floor) | 0.7-0.9 ms |
+| Card reads | 1.0 in "follow the vibe"; 1.0-1.7, at most 2, in "stay on seed" with two-hop | usually 0 (read ahead: 7,519 of 7,520 soak picks), at most 2 |
+| A slot read with an MP3 playing | about 3 ms typical; 14 ms at worst | p50 1.4 ms; at most 13.2-20.7 ms |
+| ... with a FLAC playing | 29 ms at worst | p50 1.2 ms; at most 17.0-17.3 ms |
+| CPU, "follow the vibe" | 1.4-1.9 ms (1.7-1.9 at the 0.55 floor) | p90 4.8-9.0 ms at 0.55-0.75, either matching; 6.3-12.0 ms at 160 MHz; a 2-hour soak at 0.55: p50 7.9, p90 8.4, at most 23 ms |
+| CPU, "stay on seed" | 0.7-0.9 ms (with two-hop) | p90 0.6-1.7 ms; 1.6-1.9 ms at 160 MHz |
 
-- **PSRAM:** 159-165 KB for all of AutoDJ: the u16 maps, the filters, 7
-  cached slots (3.5 KB) and about 1 KB of hop rows.
+- **"Follow the vibe" missed its CPU target** (2 ms at 240 MHz, 3 ms at
+  160) on the device: the time went mostly to PSRAM line fills, a sort of
+  the union and a scan of the 50 cooled rows for each candidate. The fix
+  round (2026-10-14) keeps each cached slot's entries sorted by row with
+  their levels and filter words, so a pick merges up to 5 runs, walks the
+  cooled rows beside them and reads no map but the chosen row's. The picks
+  are the same (960,000 picks on the test card's index against the old
+  engine: 0 differences). ESTIMATED (a model of the ESP32's PSRAM cache):
+  PSRAM line misses a pick 2,138 → 309 at 0.55 (1,342 → 256 at 0.75;
+  "stay on seed" 416 → 65); docs/AUTODJ.md's costs turn that and a host
+  benchmark into estimated device times. **The device figure is not
+  re-measured yet** (docs/AUTODJ.md's device checks, the pick CPU).
+- **PSRAM** (READ and MEASURED): the join's maps and filters, 155,284 B
+  at 19,410 tracks, only while Auto DJ is on (275,952 B at the join's
+  peak); the engine's one block, 19,016 B (its 7 slot buffers, their
+  sorted runs and the pick's scratch), from the boot. The design's
+  estimate was 159-165 KB for all of it.
 - **The device budget's H1** (at most 2 card commands and 1 KB a pick) is
   met at its limit: 2 × 512 bytes.
 - Appendix A's codes take about 4 reads a pick; the user relaxed H1 to
@@ -1127,25 +1223,38 @@ the plain top-84 table (S84's head alone):
   mode stays stable. A writer can shorten the head later: the header's
   fields change, the format doesn't.
 - These figures measure distance from mStream's rule, not listening
-  quality.
+  quality. They come from the research's simulator, not from the Core2's
+  engine (11.5 has the device's own break shares).
 
 ### 11.8 Engine items (for the AutoDJ engine's PR)
 
-- The join built in pieces (11.2).
+Their state on 2026-10-14 (docs/AUTODJ.md):
+
+- The join built in pieces (11.2): **done** (runs of 4,096, slices).
 - Slot reads from a raw FatFs `FIL` kept open, never through the card
-  worker (11.3).
-- The per-slot check, damaged against broken (8.5).
-- The gate, with the floor clamped at selFloor (11.4); the dry fallback.
-- Two-hop through the head in seed mode, with its j rule tuned (11.5).
-- An optional "tight" setting that uses the head only.
-- A seedable random stream, for tests and reproducible bug reports.
-- `read.mpdj=2` in device.txt once the engine ships (7.4): done in 0.11.0.
-- ScanScheduler's DJ check job, made for v1's whole-file check, removed.
+  worker (11.3): **done.**
+- The per-slot check, damaged against broken (8.5): **done.** A slot whose
+  CRC fails twice is not read again until the file is reopened (a ring of
+  8 rows); a failed read is skipped and never counted as damage; a broken
+  slot makes the file absent until it is reopened.
+- The gate, with the floor clamped at selFloor (11.4); the dry fallback:
+  **done**, with loosen before repeating.
+- Two-hop through the head in seed mode, with its j rule tuned (11.5):
+  **not built** (D5: later, if needed).
+- An optional "tight" setting that uses the head only: **not built.**
+- A seedable random stream, for tests and reproducible bug reports:
+  **done** (a PCG32; the console's `Ds<hex>` seeds the next session).
+- `read.mpdj=2` in device.txt once the engine ships (7.4): **done** in
+  0.11.0.
+- ScanScheduler's DJ check job, made for v1's whole-file check:
+  **removed** (2026-10-13).
 - A device bench: 200 slot reads from an open 10 MB file while an MP3 and
   a FLAC play, the same in two-hop pairs, and the slot check's time. It
-  confirms 11.6.
+  confirms 11.6: **run** on 2026-10-13 (the console's `Db`, 11.3), without
+  the two-hop pairs.
 - A synthetic transfer for the synthetic test card's tree (a tags file, a
-  root and an MPDJ), so that the bench has a card.
+  root and an MPDJ), so that the bench has a card: **done**,
+  `tools/synthtransfer.py`.
 - Backlog, not this format: a per-track BPM/key block in `library.idx`
   (about 80 KB at 20k) for tracks without a row, so that random with
   filters covers them too (M 7.1, U15).
@@ -1661,8 +1770,8 @@ Present, each reading the same as autodj-00000029 unless said:
   the rule as written in 47.5 s on 4 threads, and read as present by both
   (MEASURED-HOST). Its lists equal the research's on every row. It stays
   out of the repo: its vectors are 99 MB, and it conforms only beside a
-  tags file and a root, which the synthetic card doesn't have yet (11.8's
-  synthetic transfer).
+  tags file and a root, which the synthetic card didn't have then (11.8's
+  synthetic transfer, `tools/synthtransfer.py`, gives it them since).
 - The player's own reader and writer (`lib/core/CardAutoDj`) are tested
   against the same fixtures in `test/test_card_files`,
   `test/test_card_contract` and `test/test_card_autodj`.
@@ -1934,10 +2043,12 @@ choice: the space buys the long head and the wander.
     profile, floors 0.55 / 0.65 / 0.75, the same seeds and draws for every
     candidate.
   - **MEASURED-HOST:** timed on a PC.
-  - **MEASURED:** on the Core2 (11.3's read-path fit, docs/OPUS.md 10.1).
+  - **MEASURED:** on the Core2 (11.3's read-path fit, docs/OPUS.md 10.1;
+    since 2026-10-13, the first Auto DJ device check, 11.1-11.6).
   - **READ:** read in mStream's source by the research (round 1): the
     model registry's id, version, licence and attribution (4.1), and the
-    similarity's summation (5.2).
+    similarity's summation (5.2); in section 11, read in the firmware's
+    code (its sizes and constants).
   - **ESTIMATED:** device time and memory, worked out from the Core2's
     measured card and CPU rates.
 - **The device budget's limits** quoted here: **H1** at most 2 card
@@ -1948,7 +2059,9 @@ choice: the space buys the long head and the wander.
 - **What this can't tell:** listening quality (every session figure is a
   distance from mStream's rule, which is not ground truth); the real
   library's spectrum, hubness and near-duplicate cliffs (the synthetic
-  vectors match its aggregates only); device timing (every millisecond is
-  an estimate until 11.8's bench runs). The long head was measured on the
+  vectors match its aggregates only); device timing (every millisecond was
+  an estimate until 11.8's bench ran, on 2026-10-13: 11.3 and 11.6 give
+  what it measured, and "follow the vibe"'s pick time since the fix round
+  is still an estimate). The long head was measured on the
   test card with one replicate; on the 10k and 50k sets, only without
   two-hop.

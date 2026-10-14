@@ -266,7 +266,7 @@ public:
   // nothing played (the fence, no memory).
   virtual bool autoDjFromHere(uint32_t track) = 0;
   // Library track `track` has neighbours in a usable index (the sheet's
-  // 4th row; a few small reads before the index is joined).
+  // first row; a few small reads before the index is joined).
   virtual bool autoDjHasNeighbours(uint32_t track) = 0;
   // Queue entry `key` is one Auto DJ added (its DJ mark; no "added" mark).
   virtual bool autoDjMarked(uint32_t key) const = 0;

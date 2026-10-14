@@ -12,7 +12,7 @@
 //   D            status: the settings, the index (or why there is none),
 //                the join, the session, the counters, the memory, the last
 //                pick's reads and time
-//   D0 / D1      off / on (saved, as the UI will)
+//   D0 / D1      off / on (saved, as the UI's switch is)
 //   Dm0 / Dm1    Anchor: Follow the vibe / Stay on seed (saved)
 //   Df55..Df75   Match strictness, by 5 (saved)
 //   Dt0 / Dt1    BPM continuity off / on (saved)

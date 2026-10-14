@@ -81,7 +81,10 @@ agent-days of the player's work and all of the terminal's (about 10.5-13.5)
 are host-only: portable code under `lib/core` with `pio test -e native`,
 firmware glue that compiles without a flash, the shared fixtures. The
 Core2 is needed for about 4-7 days of measurement and soak, best done as
-one batch when it is free.
+one batch when it is free. **Since 2026-10-14 the firmware reads 2.13's
+AutoDJ index:** the device's Auto DJ is built (docs/AUTODJ.md;
+`device.txt` says `read.mpdj=2` from 0.11.0, 2.15), its join and its
+memory part of the update step and the budget (3.4.2, 3.5).
 
 **In short:**
 
@@ -115,7 +118,9 @@ one batch when it is free.
   built by the transfer software from mStream's embeddings, one 512-byte
   slot of similar tracks per track, mapped by path hash. Files without a
   row (the listener's own, tracks not yet embedded) use "random with
-  filters".
+  filters" (as built on the Core2, 2026-10-14: such a track never steers,
+  and a pick with no anchor's list is drawn at random from the tracks
+  that have a row: 2.13.4).
 
 Where the facts come from:
 
@@ -1698,10 +1703,12 @@ AUTODJ-INDEX.md 2.4 and 5.3 give them in full; nameKey is 5.4's.
   key**: such a row is never "the same song" as another. No title is ever
   taken from the file name.
 - **artistKey** is the low 32 bits of the FNV-1a 64 of the nameKey of the
-  **first non-blank** artist value, 0 when there is none. The device's own
-  artist key for a track without a row (its artist cooldown, from the
-  record it chose for that track, 2.9) MUST be the same function, so that
-  a track with a row and one without compare alike.
+  **first non-blank** artist value, 0 when there is none. A device that
+  keys a track without a row (for its artist cooldown, from the record it
+  chose for that track, 2.9) MUST use the same function, so that a track
+  with a row and one without compare alike; a device need not key such
+  tracks at all (AUTODJ-INDEX.md 2.4: the Core2's Auto DJ doesn't, so
+  they add nothing to its artist cooldown).
 
 #### 2.13.3 The selection signature
 
@@ -1729,6 +1736,24 @@ computes it; it compares bytes.
     eligible only when the anchor has neither BPM nor key;
   - no genre filter: genres aren't resident (no Genres view yet);
   - a card with no MPDJ at all, or an absent one, gets plain random.
+
+  **As built on the Core2** (2026-10-14, docs/AUTODJ.md), narrower still;
+  nothing of it asks anything more of a writer:
+  - a track without a row never steers: it is no anchor and no pin, and
+    the session goes on from the tracks with rows around it;
+  - when no anchor has a list (every track so far without a row, or their
+    slots damaged), the pick is random over the index's rows: 64 draws
+    among the rows that map to a library track, classed by the cooldowns
+    and, with BPM continuity or Harmonic mixing on, by their DJRF BPM and
+    key against the playing track's row (none for a track without one)
+    and the session's key anchor, then one uniform draw. No record is
+    read at pick time;
+  - while the index is joined a track without a row is never picked;
+    while the join is under way the pick waits for it; with the join
+    away (given back to a library update's memory check, retrying after
+    a read error, short of memory) or none usable (no MPDJ, absent,
+    broken, or a library over 65,534 tracks) the picks are random
+    library tracks by id, any track.
 
   A per-track filter block in `library.idx` (bpm10 and camelot, about
   4 B per track, 80 KB at 20k) would widen this to every file; it is on
@@ -2578,10 +2603,10 @@ build, a compaction and a scan never overlap (3.4.2).
 loop's priority 1 time-slices with the loop for its whole length, and
 back-to-back steps would halve the loop's share for minutes. So:
 
-- **priority 0** for the walk, the scan, the compaction and the DJNB
-  check (MPDJ v1's; v2 has no whole-file check, 3.4.2): they run in the
-  time the loop and the decoder leave, and the loop preempts them
-  whenever it is ready;
+- **priority 0** for the walk, the scan and the compaction (and, until
+  2026-10-13, MPDJ v1's DJNB check: gone, 3.4.2): they run in the time
+  the loop and the decoder leave, and the loop preempts them whenever it
+  is ready;
 - **priority 1** only for a cover job whose row is on screen (Thumbs'
   rule today), and for the update step's build, which the listener is
   waiting for (3.4.2);
@@ -3005,7 +3030,10 @@ N10 by the card worker through a FatFs `Source` (3.8). What the code decided whe
 (`app/CardTasks`, 3.8); N12's `LibraryUpdate` asks it for the build and the
 save, and holds the rest from its fence to the save's end (3.9).
 `IdlePolicy` has
-the `LibraryWrite` blocker (`test_idle_policy`). What the code decided
+the `LibraryWrite` blocker (`test_idle_policy`). (The "DJNB check" below,
+MPDJ v1's whole-file check, was a job of ScanScheduler's until
+2026-10-13, when it went with the AutoDJ engine's first commit: 3.4.2.
+This section tells it as it was built.) What the code decided
 where 3.3.3-3.3.5 left room:
 
 - **The loop decides, the worker steps.** `update()` runs every loop
@@ -3231,6 +3259,12 @@ where 3.3.3-3.3.5 left room:
   "As built" below) and there was no seek in the last 2 s (so the decoder
   can't reach its end of file and ask for the next path while the index
   is down);
+- no Auto DJ pick owed (since 2026-10-13: docs/AUTODJ.md): when the
+  queue's last entry plays and Auto DJ's pick is due but its index still
+  joins or reopens, the step waits before its fence until the pick lands
+  (`UpdateEnv::autoDjOwed`, `LibraryUpdate::Wait::AutoDj`, "Auto DJ's
+  pick" in `gs`). A held Auto DJ (Repeat One, the sleep timer's End of
+  queue, its failure pause) never owes one;
 - a memory check: free PSRAM plus what the step frees is at least 1.1 ×
   the estimated build peak, and the largest free block
   (`heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM)`) at least the
@@ -3239,7 +3273,14 @@ where 3.3.3-3.3.5 left room:
   `/.player/build.req` (an empty file), and the next boot builds before
   the UI, on a fresh heap (3.2.2's first row). Without the marker that
   boot would load the old index, whose hard inputs still match, and meet
-  the same memory check again, every time.
+  the same memory check again, every time. Auto DJ's join counts in what
+  the step frees, but its blocks sit at the top of the largest free block
+  (since 2026-10-14), which the check's look at that block can't see
+  past: when the check fails only because the new track table fits no
+  block (not for room, and not after `gb!`), the join is given back,
+  PSRAM measured again and the check made once more
+  (`LibraryUpdate::setGiveBack()`; the join comes back after the step's
+  Live, or at once when it defers). So Auto DJ never defers a step.
 
 **Who runs what.** `LibraryIndex` is loop-task only, and a build of
 several seconds on the loop would freeze touch, the redraw,
@@ -3283,11 +3324,20 @@ several seconds on the loop would freeze touch, the redraw,
    soon as step 5's join ends: it checks each slot as it reads it
    (AUTODJ-INDEX.md 8.5).
 
+**Auto DJ as built** (2026-10-13/14, docs/AUTODJ.md; ARCHITECTURE.md's
+loop pass): step 3 is `AutoDj::fence()`, before the old index goes (the
+maps' bytes in the step's `alsoFreed`; its DJ marks' positions noted
+first). Step 5's join isn't part of the pause: `AutoDj::live()` after the
+read-back carries the marks and the session, and the join runs again
+afterwards in slices on the loop, on the new track ids, only while Auto
+DJ is on (switched off, nothing is joined and the step frees nothing of
+it). Behind the fence Auto DJ picks nothing.
+
 (2026-10-13: MPDJ v1's whole-file check, a 6 MB pass over DJNB once per
 commit at priority 0, is gone with v1. ScanScheduler's DJ check job, built
-for it and mentioned in 3.3.4, 3.3.9, 3.8 and 3.9 as built, stays in the
-code unused until the AutoDJ engine's PR removes it, AUTODJ-INDEX.md
-11.8.)
+for it and mentioned in 3.3.4, 3.3.9, 3.8 and 3.9 as built, was removed
+the same day by the AutoDJ engine's first commit (AUTODJ-INDEX.md 11.8);
+those sections tell it as it was built.)
 
 **Time (ESTIMATED from MEASURED rates):** docs/UI-SPIKE.md measured the
 index build on the device at 10,000 synthetic tracks: adding them
@@ -3303,6 +3353,11 @@ finish as n log n, at 20k:
 | The queue's re-read, 20k lines (3.2.5; at most 5,000 since the cap: 0.4-0.5 s) | 1.5-2 s | 1.5-2 s |
 | AutoDJ's join | 0.3-0.5 s | 0.3-0.5 s |
 | **The pause** | **about 9-12 s** | **about 11-14 s** |
+
+(As built, the join is after the pause, not in it: above. MEASURED on
+2026-10-13 at 19,410 tracks, on the build before the fix round: 2.1 s
+idle, 7.2 s after a fence with an MP3 playing; the fix round's shorter
+slices and 2 ms loop wait are not measured yet: docs/AUTODJ.md.)
 
 The card reads busy-wait the CPU (3.3.4), so they don't overlap the
 adds. A short queue takes 1.5-2 s off; a full one since the queue's cap
@@ -3526,7 +3581,7 @@ counts):
 | Free with the UI up, today (77-track card) | **2.77-2.90** | MEASURED (dev.log `psram=`) |
 | `library.idx` v6 | −1.75 to −1.85 | 3.4.3 |
 | The queue, full (the cap: 5,000 entries), with its undo snapshot | −0.12 | 12 B per entry, twice (`QueueModel`). With no saved queue the boot queues the library's first 5,000 (`queueEverything`), so a full queue is the *default* on a big new card; `assign()` takes no snapshot (0.06 MB), and the first edit after it adds one. A whole-library queue of 20k was −0.48 (−0.96 untrimmed) before the cap |
-| AutoDJ: u16 maps, filters, 7 cached slots | −0.16 to −0.17 | MPDJ v2's engine, AUTODJ-INDEX.md 11.6 (the v1 draft's estimate was −0.17 to −0.33) |
+| AutoDJ: u16 maps, filters, 7 cached slots | −0.16 to −0.17 | MPDJ v2's engine, AUTODJ-INDEX.md 11.6 (the v1 draft's estimate was −0.17 to −0.33). As built (docs/AUTODJ.md): the join's maps and filters 160 KB at 20k, only while Auto DJ is on (155,284 B MEASURED at 19,410 tracks, 2026-10-13); the engine's one block, 19,016 B (its 7 slots in it), the glue's few KB and its `FIL`'s 4.1 KB from the boot, on or off |
 | The sector cache | −0.13 | 3.2.4: 256 sectors, 135,168 B (3.2.7: 0.06 MB more than the 128 first planned) |
 | `DurationBook` | −0.04, or 0 once lengths come from the index | `lib/core/QueueView.h` |
 | The card worker's job, only while one runs (one at a time) | −0.08 to −0.12 | the largest job: the compaction since 2026-10-09 (115 KB: its 4 KB section buffers, 1 KB run buffers, D's 8 KB; 66 KB before, 3.3.7), then the walk (about 110 KB: the 64 KB scratch, KnownD's 16 KB, DFLD's 8 KB buffer, the 2 KB Δ histogram, the journal's write buffer). The scan: its 4 KB buffer, the record, the `FIL`, a 100-record chunk, the resume set (about 60 KB), and its View (about 74 KB at 32 chunks, 53 KB before). The doubtful files go to `walk.jnl`, not RAM (3.2.3) |
@@ -3602,6 +3657,20 @@ counts):
   the 256 KB a single block may take, so the engine builds it in pieces,
   AUTODJ-INDEX.md 11.2), the queue's re-read (at most 20 KB
   transient, 40 KB shuffled, then 60 KB), Thumbs' pools (315 KB).
+  **As built** (docs/AUTODJ.md): the queue's re-read and Thumbs' pools
+  at Live, and Auto DJ's join after it, in slices on the loop, only while
+  Auto DJ is on. Its transient is runs of 4,096 (top 32 bits of the path
+  hash and a u16 track id: 6 B a track, 24 KB a block, 120 KB at 20k)
+  and a 4 KB read buffer; it keeps the two u16 maps and a u32 filter
+  word a row (40 + 40 + 80 KB at 20k): 284 KB at its peak at 20k
+  (ESTIMATED), 275,952 B MEASURED at 19,410 tracks (2026-10-13). Its
+  blocks are the runs (24 KB each) and the 4 KB buffer while it runs,
+  and the kept ones: the two u16 maps (40 + 40 KB at 20k) and the
+  filters, the largest (rows × 4: 108 KB at 27k). Its blocks go to the
+  top of PSRAM's largest free block (spacers hold the bottom while it
+  takes them), so what is carved later comes from below them, and giving
+  them back (switched off, or the memory check's give-back, 3.4.2) leaves
+  one block again, as if Auto DJ had never joined.
 - **Fragmentation:** the arena (about 0.8 MB) and the track table (640 KB)
   are single blocks; the memory check (3.4.2) defers a build to the next
   boot rather than fail, and the build-at-boot marker makes sure that
@@ -3615,7 +3684,9 @@ counts):
 - **AutoDJ's filter data** is the DJRF records' (bpm10, camelot,
   artistKey) only; random with filters is narrowed to it (2.13.4). A
   per-track filter block for every file would cost about 80 KB more (part
-  7, U15).
+  7, U15). As built, one u32 word a row: the BPM rounded to a whole
+  number, the Camelot code, the analysed and present bits, and the
+  artistKey's low 16 bits (`autodj::filterWord()`).
 
 **Levers, if L0 or L4 measure less** (part 7, U12, which the cap
 answered):
@@ -3646,7 +3717,10 @@ internal DRAM and no IRAM; the app is 2.48 MB, 41% of its slot.)
 3.9 MB, takes 2.3-3.3 s, only during a build; AutoDJ's join reads DJRF,
 DJPH and STRS (0.36 MB) after each build, and there is no whole-file
 check; an AutoDJ pick reads one 512-byte slot (about 3 ms with an MP3
-playing, AUTODJ-INDEX.md 11.6).
+playing, AUTODJ-INDEX.md 11.6). MEASURED on 2026-10-13 (19,410 rows): a
+slot read p50 1.2-1.4 ms, at most 13-21 ms with an MP3 playing and 17 ms
+with a FLAC; read ahead, one a loop pass, so 7,519 of 7,520 picks in a
+2-hour soak read nothing (AUTODJ-INDEX.md 11.6; docs/AUTODJ.md).
 
 ### 3.6 What changes, file by file
 
@@ -3664,7 +3738,7 @@ playing, AUTODJ-INDEX.md 11.6).
 | `lib/core/SleepTimer.cpp` | End of album tests `kLoose`, not an empty album name. Built (N9). |
 | `src/spike/Spike.cpp`, new `src/app/TagConsole`, new `lib/core/TagText` | The console's `g` commands (3.3.6). Built (N9, 3.7); the card worker's jobs (`gr`, `gw`, `gb`, `gv`) are filled (N10, 3.8), with `gc` and `gl` (6.3.1). |
 | `lib/core/IdlePolicy.{h,cpp}`, `src/main.cpp` | The `LibraryWrite` blocker; the journal flush at shutdown; the boot and `rebuildLibrary()`. Built (N7, N10): `LibraryWrite` during a compaction and the update step, the scan's chunk written at the idle power-off and the CPU speed's restart, the update step run when the card worker's jobs ask (3.8). |
-| `lib/core/NvsLayout.h` | **No change** (`kCurrent` stays 2): the library's state lives on the card and moves with it. AutoDJ's on/off would be schema 3 (autodj research section 7), outside this plan. |
+| `lib/core/NvsLayout.h` | **No change** (`kCurrent` stays 2): the library's state lives on the card and moves with it. AutoDJ's on/off would be schema 3 (autodj research section 7), outside this plan. (Since then schema 3 is the UI's language, 0.10.0, and schema 4 Auto DJ's switch and settings, the `autodj` namespace, 0.11.0: ARCHITECTURE.md's NVS rules.) |
 | `lib/core/OpusOpenCache` | **Unchanged:** keyed by path hash and size and checked at the open, so rebuilds don't touch it. |
 
 ### 3.7 As built (N9): the catalog, the UI and the texts
@@ -4247,8 +4321,9 @@ src/. What the code decided where 3.2-3.4 left room:
   nothing of the records exists (no D, no walk, no scan: today's signature
   walk), not the POSIX walk 3.2.3 kept for it; `queue.txt` keeps its own
   write-aside rule, not 2.12.6's twins; the DJNB check is never asked (no
-  AutoDJ engine yet). (N12's review found the compaction's frame 13 KB
-  deep on the 6 KB card worker: fixed, 3.9.)
+  AutoDJ engine yet; since 2026-10-13 the job is gone and the engine is
+  built: 3.4.2, docs/AUTODJ.md). (N12's review found the compaction's
+  frame 13 KB deep on the 6 KB card worker: fixed, 3.9.)
 - **Proven on the host:** `test_card_jobs` (12 tests): every row of
   3.2.2's table and `matches()`'s inputs; the root's election, T against
   its COMP entry, LIBR, the plan; a hand-filled card (tagged corpus files
@@ -4420,7 +4495,8 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
      marker removed if one is on the card (a deferral's earlier in the
      session included); `Do::Saved`.
   From the fence to the save's end `Out::updating` holds the walk, the
-  compactions, the scan and the DJNB check (ScanScheduler's `updating`
+  compactions, the scan and the DJNB check (gone since 2026-10-13: 3.4.2;
+  ScanScheduler's `updating`
   input: a compaction asked meanwhile, `gr`'s or the journal's, runs
   after the save), and `Out::libraryWrite` holds IdlePolicy's
   `LibraryWrite`. ScanScheduler's `build`, `save` and `updating` inputs,
@@ -4504,7 +4580,10 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   device's own records only) and a toast, "Reading the tags again"; the
   status line then counts the scan.
 - **Not as 3.2-3.4 said:** AutoDJ's maps, its join and the DJNB check
-  aren't there (no AutoDJ engine yet); the queue is carried by N3's
+  aren't there (no AutoDJ engine yet; since 2026-10-13 the maps and the
+  join are, released at the fence and joined again after the Live step
+  while Auto DJ is on, and the DJNB check is gone: 3.4.2, 3.5); the queue
+  is carried by N3's
   `Carry` (its read pre-sized from the file's header, as 3.4.2 asks), not
   `restore()`'s code; with no records at the step (an update asked before
   the boot's walk made D) the walk runs on the worker, not the loop.
@@ -4677,7 +4756,8 @@ worker steps, the loop goes on behind a fence. Built for `core2` and
   (`idsort` against `std::sort` on seven shapes to 65,535 ids, its frames
   bounded; names in the records' byte order sorted by textfold),
   `test_scan_scheduler` (a compaction and the save level with the loop
-  only in the dark, the DJNB check never; the model too), `test_playback`
+  only in the dark, the DJNB check never; the model too; the DJNB
+  check's cases went with the job, 2026-10-13), `test_playback`
   (`playStartsEntry()`), `test_tag_store` (the compaction's memory at the
   firmware's buffers, under 120 KB).
 
@@ -5047,7 +5127,8 @@ is adopted as written:
 
 **Outside this plan's totals:** the device's AutoDJ engine (the autodj
 research's M2, 2-3 days host-tested, and M3, 1.5-2 days with the device;
-AUTODJ-INDEX.md 11.8 lists what it holds);
+AUTODJ-INDEX.md 11.8 lists what it holds; built 2026-10-13/14 with its UI:
+docs/AUTODJ.md);
 the embedded-cover decode beyond JPEG (PNG, progressive: metascan's M6).
 
 ### 6.3 LATER: needs the Core2 (about 4-7 days, one batch; flashing needs the user's go-ahead)
@@ -5742,6 +5823,9 @@ they disagreed:
 - **docs/AUTODJ-INDEX.md:** the AutoDJ index's own specification (MPDJ
   v2), apart from this document since 2026-10-13; 2.13 points to it and
   keeps what ties it to the contract.
+- **docs/AUTODJ.md:** the device's Auto DJ as built (2026-10-14): the
+  engine that reads 2.13's file, its join and memory (3.4.2, 3.5), its
+  settings, UI and console, and its device checks.
 - **docs/UI-SPIKE.md:** the per-track memory figures.
 - **docs/GAPLESS.md** and **docs/QUEUE-MODES.md:** the update step's safe
   point and the queue's remap through `queue.txt`.

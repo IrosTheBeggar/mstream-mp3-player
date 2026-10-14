@@ -122,8 +122,8 @@ bool langPickerDue(bool haveLang, bool coachSeen);
 bool migrateWritesLang(uint16_t from, bool haveLang);
 
 // ---- Auto DJ ("autodj", schema 4) ----
-// Four u8s, each written at once when it changes (the console's D, from
-// M5 the "..." row and Output > Auto DJ), each read with isKey() first:
+// Four u8s, all four written at once whenever one changes (the console's
+// D, the "..." row and Output > Auto DJ), each read with isKey() first:
 //   on     1 on, 0 off (after a boot nothing plays until Play: the
 //          restored queue waits, and Auto DJ adds at its last entry)
 //   mode   0 Follow the vibe, 1 Stay on seed (autodj::Mode's values)
