@@ -87,19 +87,13 @@ void SerialConsole::take(char c) {
   const char ran = key(c);
   if (!ran) return;
   const uint32_t left = loopstack::leftSinceArm();
+  // (The command as typed: its letter, and its argument's first 40 bytes.)
+  const char* typed = entered ? arg_.c_str() : "";
+  // A command that goes on over the next passes (gs) prints it at its end.
+  if (loopstack::lineHeld(ran, typed, left)) return;
   const bool low = left < loopstack::kMinLeft;
   if (!low && !entered && ran != 'l' && ran != 's' && ran != 'L') return;
-  // (The command as typed: its letter, and its argument's first 40 bytes.)
-  Serial.printf("[console] %c%.40s: the loop task's stack: %lu B never used during it (of %lu KB; %lu B the lowest "
-                "since the boot)",
-                ran, entered ? arg_.c_str() : "", static_cast<unsigned long>(left),
-                static_cast<unsigned long>(loopstack::kSize / 1024), static_cast<unsigned long>(loopstack::lowestLeft()));
-  if (low) {
-    Serial.printf(": LOW, under %lu B (an interrupt, or the SD driver's log line after a card error, on top of it "
-                  "could overflow the stack)",
-                  static_cast<unsigned long>(loopstack::kMinLeft));
-  }
-  Serial.println();
+  loopstack::printLine(ran, typed, left);
 }
 
 char SerialConsole::key(char c) {

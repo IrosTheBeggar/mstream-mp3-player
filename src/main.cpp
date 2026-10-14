@@ -3402,6 +3402,13 @@ void setup() {
       if (cardTasks) cardTasks->resetStats();
     };
     j.idle = [] { return !cardTasks || cardTasks->waitIdle(10000); };
+    // gs reads the records a piece a loop pass: the step under way taken
+    // in first, no compaction meanwhile, no piece while a list moves.
+    j.hold = [](tagcheck::Hold h) {
+      if (cardTasks) cardTasks->holdForConsole(h);
+    };
+    j.busy = [] { return cardTasks && cardTasks->worker().busy(); };
+    j.listMoving = [] { return userInterface && userInterface->listMoving(); };
     tc->setJobs(j);
   }
   // Auto DJ: its settings, and the index the card's root names, opened and

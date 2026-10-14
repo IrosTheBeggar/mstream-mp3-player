@@ -553,7 +553,8 @@ Why DeviceReader::begin(cc::Source& src, uint8_t* scratch, uint32_t scratchBytes
 
 DeviceReader::Step DeviceReader::next() {
   if (why_ != Why::Ok) return Step::Bad;
-  const mptg::Walker::Step s = w_.next();
+  mptg::Walker::Step s = w_.next();
+  while (s == mptg::Walker::Step::Checking) s = w_.next();  // (never: no setEndPiece())
   switch (s) {
     case mptg::Walker::Step::Folder:
       if (factsOn_ && !readFacts(dfld_, &facts_)) return fail(dfld_.failed() ? Why::Io : Why::Shape);
@@ -575,6 +576,7 @@ DeviceReader::Step DeviceReader::next() {
       return Step::End;
     }
     case mptg::Walker::Step::Bad:
+    case mptg::Walker::Step::Checking:
       break;
   }
   return fail(w_.why());
@@ -741,6 +743,59 @@ bool BuilderRows::ownCounts(uint32_t* records, uint32_t* folders) {
   if (!ok_) return false;
   *records = info_.ownRecords;
   *folders = info_.ownFolders;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// RowTally
+// ---------------------------------------------------------------------------
+void RowTally::refuse() {
+  for (uint32_t& n : counts_) n = 0;
+  done_ = true;
+}
+
+bool RowTally::begin(cc::Source& src, uint8_t* buf, uint32_t bufBytes) {
+  records_ = next_ = 0;
+  for (uint32_t& n : counts_) n = 0;
+  done_ = false;
+  cc::Container c;
+  DeviceInfo info;
+  if (!buf || bufBytes == 0 || openDev(c, src, &info) != Why::Ok) {
+    refuse();
+    return false;
+  }
+  dsta_ = c.section(kDDsta);
+  records_ = info.tags.recordCount;  // (openDev(): DSTA holds its header and a byte for each)
+  s_.begin(&src, dsta_.offset, dsta_.offset + dsta_.bytes, buf, bufBytes);
+  if (!s_.skipTo(dsta_.offset + kDstaHeader)) {
+    refuse();
+    return false;
+  }
+  return true;
+}
+
+bool RowTally::step(uint32_t rows) {
+  if (done_) return true;
+  if (rows == 0) rows = records_ - next_;  // (all the rest: Walker::setEndPiece()'s 0)
+  for (uint32_t k = 0; k < rows && next_ < records_; ++k, ++next_) {
+    uint8_t b = 0;
+    if (!s_.readByte(&b)) {
+      refuse();
+      return true;
+    }
+    // BuilderRows::row()'s: a byte with bits above a row's three is Pending.
+    Status s = Status::Pending;
+    if (!(b & ~7u)) s = builderRow(decodeRow(b)).status;
+    ++counts_[static_cast<int>(s) & 3];
+  }
+  if (next_ < records_) return false;
+  // DSTA's CRC over the bytes passed (BuilderRows::begin()'s check, whole
+  // first there): none left to drain in a D openDev() took.
+  if (!s_.drain() || s_.crc() != dsta_.crc) {
+    refuse();
+    return true;
+  }
+  done_ = true;
   return true;
 }
 

@@ -199,7 +199,8 @@ Why openFile(Container& c, Source& src, Info* info);
 // or PSRAM object, like the scratch and the RunFields it is given.
 class Walker {
 public:
-  enum class Step : uint8_t { Folder, Record, End, Bad };
+  // Checking: the end's HIDX check goes on (only after setEndPiece()).
+  enum class Step : uint8_t { Folder, Record, End, Bad, Checking };
   // The smallest scratch begin() takes: seven stream buffers of 64 bytes.
   static constexpr uint32_t kMinScratch = 7 * 64;
   // The deepest folder a valid file can hold: "/music/" + its path within
@@ -215,6 +216,15 @@ public:
   // the file is absent.
   Why begin(Source& src, uint32_t uses, uint8_t* scratch, uint32_t scratchBytes, RunFields* run = nullptr);
   Step next();
+  // The end's HIDX check (kUseHidx) a piece at a time: the call to next()
+  // that reaches the walk's end checks the other sections' CRCs and the
+  // first `entries` of HIDX's entries, each call after it the next
+  // `entries`, Step::Checking until the call that has the last, which
+  // gives End (or Bad). 0, as begin() leaves it: the whole check in that
+  // one call (HIDX is 12 bytes a record: 233 KB read at once at 19,412
+  // records). After begin(); the console's gs walks D a piece a loop pass
+  // (lib/core TagCheck).
+  void setEndPiece(uint32_t entries) { endPiece_ = entries; }
   Why why() const { return why_; }
   const Info& info() const { return info_; }
   const Container& container() const { return c_; }
@@ -287,6 +297,14 @@ private:
   // HIDX's check: two order-free digests of (path hash, record) over the
   // records, compared with the same over HIDX's entries.
   uint64_t digestA_ = 0, digestB_ = 0;
+  // The end's checks (finish()): under way once the other sections' CRCs
+  // passed; HIDX's entries checked so far, their digests and the last
+  // pair, kept between setEndPiece()'s pieces.
+  uint32_t endPiece_ = 0;
+  bool ending_ = false;
+  uint32_t hidxAt_ = 0;
+  uint64_t hidxA_ = 0, hidxB_ = 0, prevHash_ = 0;
+  uint32_t prevRec_ = 0;
   // The ledger.
   bool ledgerOn_ = false;
   LedgerRow ledger_;

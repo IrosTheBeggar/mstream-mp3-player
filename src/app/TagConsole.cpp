@@ -16,10 +16,12 @@
 #include "CardWalk.h"
 #include "LibraryBuilder.h"
 #include "QueueView.h"
+#include "TagCheck.h"
 #include "TagScan.h"
 #include "TagStore.h"
 #include "UiStrings.h"
 #include "UiText.h"
+#include "app/LoopStack.h"
 #include "app/Psram.h"
 #include "storage/CardFat.h"
 #include "storage/SectorDisk.h"
@@ -31,21 +33,29 @@ namespace {
 
 constexpr const char* kDevicePath = "/.player/tags.bin";
 
-// A cardcontract::Source over an open file (the loop task's reads).
+// A cardcontract::Source over an open file (the loop task's reads); gs's
+// over the file it keeps open across passes (reset()).
 class FileAt : public cc::Source {
 public:
-  explicit FileAt(fs::File& f) : f_(f), size_(static_cast<uint32_t>(f.size())) {}
+  FileAt() = default;
+  explicit FileAt(fs::File& f) { reset(f); }
+  void reset(fs::File& f) {
+    f_ = &f;
+    size_ = static_cast<uint32_t>(f.size());
+  }
   uint32_t size() const override { return size_; }
   bool read(uint32_t offset, void* out, uint32_t n) override {
-    if (offset > size_ || n > size_ - offset) return false;
-    if (f_.position() != offset && !f_.seek(offset)) return false;
-    return f_.read(static_cast<uint8_t*>(out), n) == n;
+    if (!f_ || offset > size_ || n > size_ - offset) return false;
+    if (f_->position() != offset && !f_->seek(offset)) return false;
+    return f_->read(static_cast<uint8_t*>(out), n) == n;
   }
 
 private:
-  fs::File& f_;
-  uint32_t size_;
+  fs::File* f_ = nullptr;
+  uint32_t size_ = 0;
 };
+
+uint64_t nowUs() { return static_cast<uint64_t>(esp_timer_get_time()); }
 
 void printLine(void*, const char* line) { Serial.printf("[tags] %s\n", line); }
 
@@ -92,7 +102,7 @@ struct TagConsole::Found {
 // on the stack, and gs overflowed the loop task's on N11's 20k card).
 struct TagConsole::Work {
   tagscan::Scanner scanner;
-  mptg::Walker walker;  // the check's walk (find())
+  mptg::Walker walker;  // the check's walk (find(); gs's check)
   cc::RunFields run;
   mptg::File file;
   cc::msmf::Manifest manifest;
@@ -102,6 +112,11 @@ struct TagConsole::Work {
   char title[260];
   uint8_t buf[4096];
   uint8_t scratch[8192];
+  // gs: the file its check reads (D, then T) across passes, and the check.
+  fs::File handle;
+  FileAt src;
+  tagstore::RowTally tally;
+  tagcheck::Check check;
 };
 
 void TagConsole::command(const tagtext::Parsed& p) {
@@ -119,8 +134,11 @@ void TagConsole::command(const tagtext::Parsed& p) {
                        "worker's stack and internal RAM's lowest while a step ran");
         return;
       }
-      if (jobs_.idle) jobs_.idle();
-      status();
+      if (gs_ != Gs::Idle) {
+        Serial.println("[tags] gs: the last one still reads the card's records (its lines follow): not run again");
+        return;
+      }
+      status();  // (it waits for the worker's step under way itself, a pass at a time)
       return;
     case C::Dump:
       if (jobs_.idle) jobs_.idle();
@@ -475,92 +493,208 @@ bool TagConsole::transferFile(Work& w, char* path, size_t size, uint64_t* commit
   return true;
 }
 
+// ---- gs: the lines that read no card, then D's and T's a piece a pass ----
+
 void TagConsole::status() {
   if (!storage_.available()) {
     Serial.println("[tags] no storage: no card, no tags");
     return;
   }
-  scanLine();
-  if (jobs_.report) jobs_.report();
-  cache(tagtext::kCacheReport);
-  const LibraryIndex* index = library_.index();
-  if (index && index->ready()) {
-    char t[192];
-    tagtext::sourcesText(tagtext::countSources(*index), t, sizeof(t));
-    Serial.printf("[tags] the index's names: %s\n", t);
+  // The worker's step under way first, nothing handed after it (Wait);
+  // then no compaction until the last line (it would replace tags.bin
+  // under the reads).
+  gs_ = Gs::Wait;
+  gsStartMs_ = millis();
+  gsLeast_ = UINT32_MAX;
+  if (jobs_.hold) jobs_.hold(tagcheck::Hold::Worker);
+  statusStep(gsStartMs_);
+  // Its [console] line at its end (loop()), its pieces' depth with this.
+  if (gs_ != Gs::Idle) loopstack::holdLine();
+}
+
+void TagConsole::loop(uint32_t nowMs) {
+  if (gs_ == Gs::Idle) return;
+  // No piece while a list moves: its frames first (ScanScheduler's rule).
+  if (jobs_.listMoving && jobs_.listMoving()) return;
+  // Each piece's own depth: the stack under it painted again first.
+  loopstack::arm();
+  statusStep(nowMs);
+  const uint32_t left = loopstack::leftSinceArm();
+  if (left < gsLeast_) gsLeast_ = left;
+  if (gs_ == Gs::Idle) loopstack::heldLine(gsLeast_);
+}
+
+// One piece: a phase's lines, or a slice of D's or T's check (kSliceUs).
+void TagConsole::statusStep(uint32_t nowMs) {
+  switch (gs_) {
+    case Gs::Idle: return;
+    case Gs::Wait: {
+      // The worker's step under way taken in first (as idle()'s wait: at
+      // most kWaitMs, then on regardless). `nowMs` is the pass's: in gs's
+      // own pass, earlier than gsStartMs_ (waitOver()).
+      if (jobs_.busy && !tagcheck::waitOver(jobs_.busy(), gsStartMs_, nowMs, kWaitMs)) return;
+      scanLine();
+      if (jobs_.report) jobs_.report();
+      cache(tagtext::kCacheReport);
+      const LibraryIndex* index = library_.index();
+      if (index && index->ready()) {
+        char t[192];
+        tagtext::sourcesText(tagtext::countSources(*index), t, sizeof(t));
+        Serial.printf("[tags] the index's names: %s\n", t);
+      }
+      // The reads: the worker goes on, but for a compaction.
+      if (jobs_.hold) jobs_.hold(tagcheck::Hold::Records);
+      gsWork_ = psramNew<Work>();
+      if (!gsWork_) {
+        Serial.println("[tags] no PSRAM for the readers");
+        statusEnd();
+        return;
+      }
+      // D, its rows by status, its journals.
+      if (openCheck(kDevicePath, true)) {
+        gs_ = Gs::Device;
+      } else {
+        deviceLines();
+        gs_ = Gs::Journals;
+      }
+      return;
+    }
+    case Gs::Device: {
+      Work& w = *gsWork_;
+      if (w.check.step() != tagcheck::Check::Step::Done) return;
+      w.d.why = w.check.why();
+      w.d.valid = w.check.valid();
+      w.d.device = w.check.device();
+      w.handle.close();
+      deviceLines();
+      gs_ = Gs::Journals;
+      return;
+    }
+    case Gs::Journals: {
+      char a[24], b[24];
+      sizeOf(storage_.fs(), "/.player/tags.jnl", a, sizeof(a));
+      sizeOf(storage_.fs(), "/.player/walk.jnl", b, sizeof(b));
+      Serial.printf("[tags]   journals: tags.jnl %s, walk.jnl %s\n", a, b);
+      gs_ = Gs::Root;
+      return;
+    }
+    case Gs::Root:
+      // T: the root and its tags file.
+      gs_ = Gs::Plan;
+      if (!transferFile(*gsWork_, gsPath_, sizeof(gsPath_), &gsCommit_, &gsGeneration_)) {
+        Serial.println("[tags] T: no transfer data (no valid /.mstream/manifest.bin or manifest.tmp)");
+      } else if (openCheck(gsPath_, false)) {
+        gs_ = Gs::Transfer;
+      } else {
+        transferLine();
+      }
+      return;
+    case Gs::Transfer: {
+      Work& w = *gsWork_;
+      if (w.check.step() != tagcheck::Check::Step::Done) return;
+      w.t.why = w.check.why();
+      w.t.valid = w.check.valid();
+      w.handle.close();
+      transferLine();
+      gs_ = Gs::Plan;
+      return;
+    }
+    case Gs::Plan: {
+      // An unfinished transfer (2.12.5): its plan's presence.
+      const bool plan = storage_.fs().exists("/.mstream/pending.bin") || storage_.fs().exists("/.mstream/pending.tmp");
+      if (plan) Serial.println("[tags] a transfer's plan is on the card (pending.bin): the last transfer didn't finish");
+      statusEnd();
+      return;
+    }
   }
-  Work* w = psramNew<Work>();
-  if (!w) {
-    Serial.println("[tags] no PSRAM for the readers");
+}
+
+void TagConsole::statusEnd() {
+  psramDelete(gsWork_);  // (its file closed)
+  gsWork_ = nullptr;
+  gs_ = Gs::Idle;
+  if (jobs_.hold) jobs_.hold(tagcheck::Hold::None);
+}
+
+bool TagConsole::openCheck(const char* path, bool device) {
+  Work& w = *gsWork_;
+  Found& f = device ? w.d : w.t;
+  new (&f) Found();  // in place (`f = Found()` builds one on the stack first)
+  w.handle = storage_.fs().open(path, FILE_READ);
+  if (!w.handle || w.handle.isDirectory()) {
+    w.handle.close();
+    return false;
+  }
+  f.file = true;
+  w.src.reset(w.handle);
+  tagcheck::Memory m;
+  m.walker = &w.walker;
+  m.file = &w.file;
+  m.rows = &w.tally;
+  m.scratch = w.scratch;
+  m.scratchBytes = sizeof(w.scratch);
+  m.buf = w.buf;
+  m.bufBytes = sizeof(w.buf);
+  tagcheck::Config c;
+  c.sliceUs = kSliceUs;
+  c.nowUs = nowUs;
+  w.check.begin(w.src, device, m, c);
+  return true;
+}
+
+void TagConsole::deviceLines() {
+  const Work& w = *gsWork_;
+  const Found& d = w.d;
+  if (!d.file) {
+    Serial.printf("[tags] D %s: none (the device has read no tags on this card)\n", kDevicePath);
+    return;
+  }
+  if (!d.valid) {
+    Serial.printf("[tags] D %s: ABSENT, it fails its checks (%s): the walk and the scan make it again\n", kDevicePath,
+                  cc::whyName(d.why));
     return;
   }
   char n[16], m[16];
-  // D, its rows by status, its journals.
-  Found& d = w->d;
-  find(kDevicePath, nullptr, true, *w, &d);
-  if (!d.file) {
-    Serial.printf("[tags] D %s: none (the device has read no tags on this card)\n", kDevicePath);
-  } else if (!d.valid) {
-    Serial.printf("[tags] D %s: ABSENT, it fails its checks (%s): the walk and the scan make it again\n", kDevicePath,
-                  cc::whyName(d.why));
-  } else {
-    const tagstore::DeviceInfo& di = d.device;
-    uint32_t count[4] = {};
-    fs::File f = storage_.fs().open(kDevicePath, FILE_READ);
-    FileAt src(f);
-    if (w->rows.begin(src, w->buf, sizeof(w->buf))) {
-      for (uint32_t i = 0; i < di.tags.recordCount; ++i) ++count[static_cast<int>(w->rows.row(i).status) & 3];
-    }
-    Serial.printf("[tags] D %s: %s records in %s folders, parser %u, rules %u, epoch %lu; %s\n", kDevicePath,
-                  queueview::grouped(di.tags.recordCount, n, sizeof(n)), queueview::grouped(di.tags.folderCount, m, sizeof(m)),
-                  static_cast<unsigned>(di.tags.parserVersion), static_cast<unsigned>(di.tags.readRules),
-                  static_cast<unsigned long>(di.header.epoch),
-                  di.header.walked ? "walked" : "not walked since its last change");
-    if (di.header.walked) {
-      Serial.printf("[tags]   the walk compared against %s (generation %lu, commit %016llx), skew %ld s\n",
-                    di.header.walk.present ? "the transfer's root" : "no transfer data",
-                    static_cast<unsigned long>(di.header.walk.generation),
-                    static_cast<unsigned long long>(di.header.walk.commitId), static_cast<long>(di.header.skew));
-    }
-    using S = LibraryBuilder::Status;
-    Serial.printf("[tags]   rows: %lu %s, %lu %s, %lu %s, %lu %s\n", static_cast<unsigned long>(count[0]),
-                  tagtext::statusName(S::Scanned), static_cast<unsigned long>(count[1]), tagtext::statusName(S::Software),
-                  static_cast<unsigned long>(count[2]), tagtext::statusName(S::Pending),
-                  static_cast<unsigned long>(count[3]), tagtext::statusName(S::Unreadable));
+  const tagstore::DeviceInfo& di = d.device;
+  const uint32_t* count = w.check.rows();  // (all 0 when DSTA fails, as BuilderRows' refusal)
+  Serial.printf("[tags] D %s: %s records in %s folders, parser %u, rules %u, epoch %lu; %s\n", kDevicePath,
+                queueview::grouped(di.tags.recordCount, n, sizeof(n)), queueview::grouped(di.tags.folderCount, m, sizeof(m)),
+                static_cast<unsigned>(di.tags.parserVersion), static_cast<unsigned>(di.tags.readRules),
+                static_cast<unsigned long>(di.header.epoch),
+                di.header.walked ? "walked" : "not walked since its last change");
+  if (di.header.walked) {
+    Serial.printf("[tags]   the walk compared against %s (generation %lu, commit %016llx), skew %ld s\n",
+                  di.header.walk.present ? "the transfer's root" : "no transfer data",
+                  static_cast<unsigned long>(di.header.walk.generation),
+                  static_cast<unsigned long long>(di.header.walk.commitId), static_cast<long>(di.header.skew));
   }
-  char a[24], b[24];
-  sizeOf(storage_.fs(), "/.player/tags.jnl", a, sizeof(a));
-  sizeOf(storage_.fs(), "/.player/walk.jnl", b, sizeof(b));
-  Serial.printf("[tags]   journals: tags.jnl %s, walk.jnl %s\n", a, b);
-  // T: the root and its tags file.
-  char tpath[64];
-  uint64_t commit = 0;
-  uint32_t gen = 0;
-  if (!transferFile(*w, tpath, sizeof(tpath), &commit, &gen)) {
-    Serial.println("[tags] T: no transfer data (no valid /.mstream/manifest.bin or manifest.tmp)");
+  using S = LibraryBuilder::Status;
+  Serial.printf("[tags]   rows: %lu %s, %lu %s, %lu %s, %lu %s\n", static_cast<unsigned long>(count[0]),
+                tagtext::statusName(S::Scanned), static_cast<unsigned long>(count[1]), tagtext::statusName(S::Software),
+                static_cast<unsigned long>(count[2]), tagtext::statusName(S::Pending),
+                static_cast<unsigned long>(count[3]), tagtext::statusName(S::Unreadable));
+}
+
+void TagConsole::transferLine() {
+  const Work& w = *gsWork_;
+  const Found& t = w.t;
+  const uint32_t gen = gsGeneration_;
+  if (!t.file) {
+    Serial.printf("[tags] T: the root (generation %lu, commit %016llx) names %s, which ISN'T THERE\n",
+                  static_cast<unsigned long>(gen), static_cast<unsigned long long>(gsCommit_), gsPath_);
+  } else if (!t.valid) {
+    Serial.printf("[tags] T: the root (generation %lu) names %s, ABSENT: it fails its checks (%s)\n",
+                  static_cast<unsigned long>(gen), gsPath_, cc::whyName(t.why));
   } else {
-    Found& t = w->t;
-    find(tpath, nullptr, false, *w, &t);
-    if (!t.file) {
-      Serial.printf("[tags] T: the root (generation %lu, commit %016llx) names %s, which ISN'T THERE\n",
-                    static_cast<unsigned long>(gen), static_cast<unsigned long long>(commit), tpath);
-    } else if (!t.valid) {
-      Serial.printf("[tags] T: the root (generation %lu) names %s, ABSENT: it fails its checks (%s)\n",
-                    static_cast<unsigned long>(gen), tpath, cc::whyName(t.why));
-    } else {
-      // find() opened it (its frame and header: mptg::openFile()).
-      const mptg::Info& info = w->file.info();
-      const bool matches = cc::msmf::companionMatches(w->manifest.tags(), info.frame, info.source, nullptr);
-      Serial.printf("[tags] T: generation %lu, commit %016llx: %s, %s records in %s folders%s\n",
-                    static_cast<unsigned long>(gen), static_cast<unsigned long long>(commit), tpath,
-                    queueview::grouped(info.recordCount, n, sizeof(n)), queueview::grouped(info.folderCount, m, sizeof(m)),
-                    matches ? "" : "; NOT the file the root names (its size or CRC differ): absent");
-    }
+    // The check opened it (its frame and header: mptg::openFile()).
+    char n[16], m[16];
+    const mptg::Info& info = w.file.info();
+    const bool matches = cc::msmf::companionMatches(w.manifest.tags(), info.frame, info.source, nullptr);
+    Serial.printf("[tags] T: generation %lu, commit %016llx: %s, %s records in %s folders%s\n",
+                  static_cast<unsigned long>(gen), static_cast<unsigned long long>(gsCommit_), gsPath_,
+                  queueview::grouped(info.recordCount, n, sizeof(n)), queueview::grouped(info.folderCount, m, sizeof(m)),
+                  matches ? "" : "; NOT the file the root names (its size or CRC differ): absent");
   }
-  // An unfinished transfer (2.12.5): its plan's presence.
-  const bool plan = storage_.fs().exists("/.mstream/pending.bin") || storage_.fs().exists("/.mstream/pending.tmp");
-  if (plan) Serial.println("[tags] a transfer's plan is on the card (pending.bin): the last transfer didn't finish");
-  psramDelete(w);
 }
 
 void TagConsole::dump(const char* arg) {

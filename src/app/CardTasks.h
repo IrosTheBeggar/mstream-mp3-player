@@ -10,6 +10,7 @@
 #include "LibraryUpdate.h"
 #include "QueueModel.h"
 #include "ScanScheduler.h"
+#include "TagCheck.h"
 #include "app/CardWorker.h"
 #include "app/Library.h"
 #include "storage/CardFat.h"
@@ -171,9 +172,21 @@ public:
   // RAM's lowest start again (L3's figures, one condition at a time).
   void resetStats();
   // Waits for the worker's step to finish and takes it in (before the
-  // loop reads the card's records itself: gs, gt; the idle power-off). A
+  // loop reads the card's records itself: gt, gl; the idle power-off). A
   // slice under way is cut first: it ends after its unit.
   bool waitIdle(uint32_t maxMs);
+  // gs reads the card's records itself a piece a loop pass
+  // (app/TagConsole), over seconds (tagcheck::Hold). Worker, while gs waits
+  // for the step under way (finished and taken in as ever: worker().busy()
+  // until then): no step handed, covers included (or the wait could last
+  // as long as they come), and no chunk written; a slice under way is cut
+  // (it ends after its unit); the scan line's waits stay as they were.
+  // Records, while gs reads: no compaction, which replaces tags.bin under
+  // the reads (the scan waits with it, as it waits for any compaction);
+  // covers, the walk and the scan go on. Both: the update step stays as
+  // asked, its wait as it was (its compaction and its fence once gs's last
+  // line is out). gs can't begin past the fence (cardBusyForConsole()).
+  void holdForConsole(tagcheck::Hold h);
 
   // ---- the rest of the firmware ----
   // The Library tab's status line (3.3.6).
@@ -242,6 +255,7 @@ private:
   LibraryUpdate::Do act_ = LibraryUpdate::Do::None;
   bool updateAfterWalk_ = false;
   bool lastCompactFailed_ = false;
+  tagcheck::Hold consoleHold_ = tagcheck::Hold::None;  // holdForConsole()
   bool pendingAfterScan_ = false;  // the scan's end rebuilds (a walk's changes, a soft-stale index, a Rescan)
   bool restFailed_ = false;        // the rest's last end was a read error (no update at the scan's end)
   bool scanOver_ = true;

@@ -217,6 +217,9 @@ Why Walker::begin(Source& src, uint32_t uses, uint8_t* scratch, uint32_t scratch
   producer_[0] = 0;
   serverPath_[0] = 0;
   digestA_ = digestB_ = 0;
+  endPiece_ = 0;
+  ending_ = false;
+  hidxAt_ = 0;
   ledgerOn_ = false;
   folder_ = Folder();
   rec_ = Record();
@@ -462,33 +465,41 @@ Walker::Step Walker::emitRecord() {
 }
 
 Walker::Step Walker::finish() {
-  if (!fold_.drain() || !recs_.drain() || !names_.drain() || !runs_.drain()) return fail(Why::Io);
-  if (fold_.crc() != c_.section(kSecFold).crc || recs_.crc() != c_.section(kSecRecs).crc) return fail(Why::SectionCrc);
-  const uint32_t strsCrc = crc32Combine(names_.crc(), runs_.crc(), runs_.end() - runs_.start());
-  if (strsCrc != c_.section(kSecStrs).crc) return fail(Why::SectionCrc);
+  if (!ending_) {
+    if (!fold_.drain() || !recs_.drain() || !names_.drain() || !runs_.drain()) return fail(Why::Io);
+    if (fold_.crc() != c_.section(kSecFold).crc || recs_.crc() != c_.section(kSecRecs).crc)
+      return fail(Why::SectionCrc);
+    const uint32_t strsCrc = crc32Combine(names_.crc(), runs_.crc(), runs_.end() - runs_.start());
+    if (strsCrc != c_.section(kSecStrs).crc) return fail(Why::SectionCrc);
+    ending_ = true;
+    hidxAt_ = 0;
+    hidxA_ = hidxB_ = prevHash_ = 0;
+    prevRec_ = 0;
+  }
   const Section& hidx = c_.section(kSecHidx);
   if ((uses_ & kUseHidx) && hidx.present()) {
-    uint64_t a = 0, b = 0, prevHash = 0;
-    uint32_t prevRec = 0;
-    for (uint32_t i = 0; i < hidx.count; ++i) {
+    // (setEndPiece(): at most endPiece_ entries a call; the next call goes
+    // on from the entry after.)
+    for (uint32_t piece = 0; hidxAt_ < hidx.count; ++hidxAt_, ++piece) {
+      if (endPiece_ && piece == endPiece_) return Step::Checking;
       uint8_t e[kHidxStride];
       if (!hidx_.read(e, kHidxStride) || !hidx_.skipTo(hidx_.position() + hidx.stride - kHidxStride))
         return fail(Why::Io);
       const uint64_t h = get64(e);
       const uint32_t r = get32(e + 8);
       if (r >= info_.recordCount) return fail(Why::Hidx);
-      if (i > 0 && (h < prevHash || (h == prevHash && r <= prevRec))) return fail(Why::Hidx);
-      a += digestA(h, r);
-      b += digestB(h, r);
-      prevHash = h;
-      prevRec = r;
+      if (hidxAt_ > 0 && (h < prevHash_ || (h == prevHash_ && r <= prevRec_))) return fail(Why::Hidx);
+      hidxA_ += digestA(h, r);
+      hidxB_ += digestB(h, r);
+      prevHash_ = h;
+      prevRec_ = r;
     }
     if (!hidx_.drain()) return fail(Why::Io);
     if (hidx_.crc() != hidx.crc) return fail(Why::SectionCrc);
     // Strictly increasing pairs, as many as records, whose digests equal
     // the records' (path hash, index) pairs': each record once, with its
     // own hash.
-    if (a != digestA_ || b != digestB_) return fail(Why::Hidx);
+    if (hidxA_ != digestA_ || hidxB_ != digestB_) return fail(Why::Hidx);
   }
   if (ledgerOn_) {
     if (!orig_.drain() || !ostr_.drain()) return fail(Why::Io);

@@ -4286,6 +4286,42 @@ src/. What the code decided where 3.2-3.4 left room:
   the loop task's stack: N B never used during it (of 8 KB; M B the
   lowest since the boot)` (app/LoopStack paints the stack under the
   console again before it), LOW under 1,536 B.
+- **`gs` a piece a loop pass (2026-10-14).** On a synthetic 19,412-track
+  card `gs` held the loop 12.4 s (MEASURED: `> library index "s"` at
+  1228.143, its D line at 1240.512, nothing of the loop's between: the
+  5 s `[stats]` line 16.9 s apart, a gapless join taken 980 ms late): its one
+  call checked D whole on the loop task (`find()`: `openDevice()`, the
+  walk with HIDX, `File::open()`; then DSTA twice through `BuilderRows`),
+  about 3.7 MB through the VFS (2,555 reads on the host's count), and T
+  the same way on a transfer card. It reads them a piece a loop pass now
+  (`lib/core/TagCheck`, run by `TagConsole::loop()`): units of a few KB (a
+  walker step; HIDX's end check 256 entries at a time,
+  `Walker::setEndPiece()`; DSTA's rows 2,048 at a time, its CRC checked
+  as they pass, `tagstore::RowTally`) until 10 ms have passed, each unit
+  whole. The same answers (`test_tag_check` holds them to the one call's
+  on valid and broken D and T), the same lines in the same order, D's and
+  T's as each check ends, and the `[console] gs:` line after the last:
+  the least left over the command and each piece, each painted again
+  first (`loopstack::holdLine()`). At 19,412 records the host counts
+  23,700 units of 5.2 KB at most, in three reads at most but for the four
+  opens (D's header, the walk's begin, `File::open()`, the rows' begin:
+  27 to 39 reads each, most of them small ones of the header and the
+  section table, within 1 to 11 of the card's sectors), where the one
+  call read 3.7 MB in one go
+  (a read through the VFS took about 4.8 ms on the device: 2,555 in
+  12.4 s). No piece runs while a list moves (the scan's slices yield to
+  it too). Its reads start once the card worker's step under way is
+  taken in, a pass at a time (10 s at most, as `waitIdle()` waited
+  before, blocking the loop), nothing handed meanwhile, so its scan
+  line's waits are the ones from before it, as when it blocked
+  (`CardTasks::holdForConsole()`); while it reads, the worker goes on
+  (covers, the walk, the scan) but for a compaction, which would replace
+  `tags.bin` under it, and the update step stays as asked (its compaction
+  and its fence after `gs`'s last line). ESTIMATED: the same 12 s of
+  reads over about 20 s with the screen lit, 40 s dark (the loop's 1-5 ms
+  and 20 ms sleeps between pieces), longer while the worker's steps share
+  the card; a second `gs` meanwhile says so and doesn't run. `gt` and
+  `gl` still read in one go (`gt` checks D and T whole: seconds at 20k).
 - **Sizes (MEASURED, the build).** IRAM unchanged in both builds
   (`.iram0.vectors` 1,028 + `.iram0.text` 124,867 = 125,895 B); internal
   DRAM +472 B (`.dram0.data` 24,328 to 24,440, `.dram0.bss` 32,168 to

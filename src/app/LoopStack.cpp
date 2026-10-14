@@ -3,6 +3,7 @@
 
 #include "app/LoopStack.h"
 
+#include <Arduino.h>
 #include <esp_cpu.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -27,6 +28,13 @@ constexpr uint32_t kBelowSp = 256;
 
 uint32_t s_lowest = UINT32_MAX;  // the lowest low-water mark before an arm()
 
+// A command's line held for its end (holdLine()): asked, then kept.
+bool s_holdAsked = false;
+bool s_held = false;
+char s_key = 0;
+char s_arg[41] = "";  // (the line prints an argument's first 40 bytes)
+uint32_t s_left = UINT32_MAX;
+
 }  // namespace
 
 void arm() {
@@ -45,6 +53,37 @@ uint32_t leftSinceArm() { return uxTaskGetStackHighWaterMark(nullptr); }
 uint32_t lowestLeft() {
   const uint32_t now = leftSinceArm();
   return now < s_lowest ? now : s_lowest;
+}
+
+void printLine(char key, const char* arg, uint32_t left) {
+  Serial.printf("[console] %c%.40s: the loop task's stack: %lu B never used during it (of %lu KB; %lu B the lowest "
+                "since the boot)",
+                key, arg ? arg : "", static_cast<unsigned long>(left), static_cast<unsigned long>(kSize / 1024),
+                static_cast<unsigned long>(lowestLeft()));
+  if (left < kMinLeft) {
+    Serial.printf(": LOW, under %lu B (an interrupt, or the SD driver's log line after a card error, on top of it "
+                  "could overflow the stack)",
+                  static_cast<unsigned long>(kMinLeft));
+  }
+  Serial.println();
+}
+
+void holdLine() { s_holdAsked = true; }
+
+bool lineHeld(char key, const char* arg, uint32_t left) {
+  if (!s_holdAsked) return false;
+  s_holdAsked = false;
+  s_held = true;
+  s_key = key;
+  snprintf(s_arg, sizeof(s_arg), "%s", arg ? arg : "");
+  s_left = left;
+  return true;
+}
+
+void heldLine(uint32_t left) {
+  if (!s_held) return;
+  s_held = false;
+  printLine(s_key, s_arg, left < s_left ? left : s_left);
 }
 
 }  // namespace loopstack

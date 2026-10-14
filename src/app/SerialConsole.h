@@ -92,7 +92,10 @@
 // how much of the loop task's 8 KB stack the command left unused (the
 // stack under the console is painted again before each: app/LoopStack);
 // after any other key only when it left under loopstack::kMinLeft (the
-// line then says LOW):
+// line then says LOW). A command that goes on over the next loop passes
+// (gs: the card's records a piece a pass, app/TagConsole) prints it at its
+// end, the least left over the command and each piece
+// (loopstack::holdLine()):
 //   [console] gs: the loop task's stack: 4416 B never used during it (of 8 KB; 2008 B the lowest since the boot)
 class SerialConsole {
 public:
