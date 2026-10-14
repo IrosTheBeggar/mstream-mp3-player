@@ -3,6 +3,7 @@
 
 #include "AutoDjEngine.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
@@ -17,6 +18,7 @@ namespace mpdj = cardcontract::mpdj;
 namespace {
 
 constexpr uint32_t kSlotSpan = mpdj::kLargeSlot;
+constexpr uint32_t kRunSpan = mpdj::kMaxK + 1;  // a run's entries and its end
 
 void* defaultAlloc(size_t n) { return std::malloc(n); }
 void defaultFree(void* p) { std::free(p); }
@@ -31,40 +33,151 @@ uint8_t camelot(uint32_t f) {
   return c <= 24 ? c : 0;
 }
 
+// The dry rule's order: the highest sum first, ties by row (distinct keys).
+uint32_t dryKey(uint16_t sum, uint16_t row) { return static_cast<uint32_t>(2047 - sum) << 16 | row; }
+
+// A Cand's bits.
+uint8_t coolOf(uint8_t bits) { return bits & 3; }
+Tempo tempoOf(uint8_t bits) { return static_cast<Tempo>((bits >> 2) & 7); }
+Key keyOf(uint8_t bits) { return static_cast<Key>((bits >> 5) & 3); }
+uint8_t withTempo(uint8_t bits, Tempo t) { return static_cast<uint8_t>((bits & ~(7 << 2)) | static_cast<int>(t) << 2); }
+uint8_t withKey(uint8_t bits, Key k) { return static_cast<uint8_t>((bits & ~(3 << 5)) | static_cast<int>(k) << 5); }
+uint8_t classOf(uint8_t bits) {
+  return static_cast<uint8_t>(coolOf(bits) * kRanks + musicRank(tempoOf(bits), keyOf(bits)));
+}
+
+// Sorts n (at most a few dozen) rows into out, then kNoRow.
+template <typename Get>
+void sortedRows(uint8_t n, Get get, uint16_t* out) {
+  for (uint8_t i = 0; i < n; ++i) {
+    const uint16_t v = get(i);
+    uint8_t q = i;
+    for (; q > 0 && out[q - 1] > v; --q) out[q] = out[q - 1];
+    out[q] = v;
+  }
+  out[n] = kNoRow;
+}
+
 }  // namespace
+
+// One pick's view of the session (see the header).
+struct Engine::Scope {
+  uint16_t anc[kAnchors + 1];
+  uint16_t cool[kTrackCooldown + 1];
+  uint16_t arts[kArtistCooldown] = {};
+  uint16_t playingRow;
+  uint8_t gate;
+  bool tempoOn;
+  KeyRef key;
+  const uint8_t* tempo;  // tempoStatus() of every BPM against the pick's (all Na with BPM continuity off)
+
+  // `table`: 256 bytes for the tempo statuses (the engine's block).
+  Scope(const Session& ses, const Settings& s, const Maps& m, uint16_t playing, const uint16_t* anchors, uint8_t na,
+        uint8_t selFloor, uint8_t* table)
+      : playingRow(playing), gate(floorLevel(s.floorPct, selFloor)), key(ses.keyAnchor, s.matchKey), tempo(table) {
+    sortedRows(na, [&](uint8_t i) { return anchors[i]; }, anc);
+    sortedRows(ses.cool.size(), [&](uint8_t i) { return ses.cool.at(i); }, cool);
+    for (uint8_t i = 0; i < ses.arts.size(); ++i) arts[i] = ses.arts.at(i);
+    const uint8_t ref = s.matchTempo && playing != kNoRow ? filterBpm(m.filters[playing]) : 0;
+    tempoOn = ref != 0;
+    tempoStatuses(ref, table);
+  }
+  // BPM continuity or Harmonic mixing on for this pick (off: every status Na).
+  bool ranked() const { return tempoOn || key.on(); }
+  // The artist cooldown (artist 0 never cooled; an empty place holds 0).
+  bool artistCooled(uint32_t word) const {
+    const uint16_t a = filterArtist(word);
+    return a && (a == arts[0] || a == arts[1] || a == arts[2]);
+  }
+  uint8_t bits(uint8_t cooldownLevel, uint32_t word) const {
+    return static_cast<uint8_t>(cooldownLevel | tempo[filterBpm(word)] << 2 |
+                                static_cast<int>(key.status(filterCamelot(word))) << 5);
+  }
+};
+
+// A pool counted as it is made, by its candidates' bits (one count each):
+// its classes, its tempo and key statuses (D3's odds) and its cooldown
+// levels come from them; D3's draws move the drawn ones.
+struct Engine::Counts {
+  uint16_t n[128] = {};
+  void add(uint8_t bits) { ++n[bits]; }
+  void move(uint8_t from, uint8_t to) {
+    --n[from];
+    ++n[to];
+  }
+  // Outside the track cooldown (cooldown levels 0 and 1).
+  uint32_t fresh() const {
+    uint32_t f = 0;
+    for (uint32_t b = 0; b < 128; ++b) f += (b & 3) < 2 ? n[b] : 0;
+    return f;
+  }
+  // By tempo status (5) and by key status (4).
+  void statuses(uint32_t* tempo, uint32_t* key) const {
+    for (uint32_t b = 0; b < 128; ++b) {
+      tempo[(b >> 2) & 7] += n[b];  // (patterns above Unknown never counted)
+      key[(b >> 5) & 3] += n[b];
+    }
+  }
+  // The lowest class present and its count.
+  uint8_t best(uint32_t* in) const {
+    uint32_t cls[kClasses] = {};
+    for (uint32_t b = 0; b < 128; ++b)
+      if (n[b]) cls[classOf(static_cast<uint8_t>(b))] += n[b];
+    uint8_t c = 0;
+    while (c + 1 < kClasses && cls[c] == 0) ++c;
+    *in = cls[c];
+    return c;
+  }
+};
 
 Engine::~Engine() { end(); }
 
+namespace {
+constexpr size_t kRunBytes = kSlotCache * kRunSpan * 8;
+constexpr size_t kKeyBytes = kMaxUnion * sizeof(uint32_t);
+constexpr size_t kCandBytes = kMaxUnion * 4;
+constexpr size_t kCacheBytes = (kSlotCache + 1) * kSlotSpan;
+constexpr size_t kTempoBytes = 256;
+constexpr size_t kCountBytes = 256;
+constexpr size_t kBlockBytes = kRunBytes + kKeyBytes + kCandBytes + kCacheBytes + kTempoBytes + kCountBytes;
+}  // namespace
+
 bool Engine::begin(AllocFn alloc, FreeFn release) {
+  static_assert(sizeof(RunEntry) == 8 && sizeof(Cand) == 4 && sizeof(Counts) == kCountBytes, "the block's layout");
   end();
   alloc_ = alloc ? alloc : defaultAlloc;
   free_ = release ? release : defaultFree;
-  slotBytes_ = static_cast<uint8_t*>(alloc_((kSlotCache + 1) * kSlotSpan));
-  keys_ = static_cast<uint32_t*>(alloc_(kMaxUnion * sizeof(uint32_t)));
-  cand_ = static_cast<Cand*>(alloc_(kMaxUnion * sizeof(Cand)));
-  if (!slotBytes_ || !keys_ || !cand_) {
-    end();
-    return false;
-  }
+  block_ = alloc_(kBlockBytes);
+  if (!block_) return false;
+  uint8_t* p = static_cast<uint8_t*>(block_);
+  runs_ = reinterpret_cast<RunEntry*>(p);
+  p += kRunBytes;
+  keys_ = reinterpret_cast<uint32_t*>(p);
+  p += kKeyBytes;
+  cand_ = reinterpret_cast<Cand*>(p);
+  p += kCandBytes;
+  counts_ = reinterpret_cast<Counts*>(p);
+  p += kCountBytes;
+  tempo_ = p;
+  p += kTempoBytes;
+  slotBytes_ = p;
   fileReopened();
   return true;
 }
 
 void Engine::end() {
-  if (free_) {
-    if (slotBytes_) free_(slotBytes_);
-    if (keys_) free_(keys_);
-    if (cand_) free_(cand_);
-  }
-  slotBytes_ = nullptr;
+  if (free_ && block_) free_(block_);
+  block_ = nullptr;
+  runs_ = nullptr;
   keys_ = nullptr;
   cand_ = nullptr;
+  counts_ = nullptr;
+  tempo_ = nullptr;
+  slotBytes_ = nullptr;
   for (CacheSlot& c : cache_) c = CacheSlot();
 }
 
-size_t Engine::heldBytes() const {
-  return slotBytes_ ? (kSlotCache + 1) * kSlotSpan + kMaxUnion * (sizeof(uint32_t) + sizeof(Cand)) : 0;
-}
+size_t Engine::heldBytes() const { return block_ ? kBlockBytes : 0; }
 
 // ---------------------------------------------------------------------------
 // The session
@@ -72,7 +185,16 @@ size_t Engine::heldBytes() const {
 void Engine::newSession(uint32_t seedValue, uint32_t seedTrack, const Maps* maps) {
   ses_ = Session();
   ses_.rng.reseed(seedValue);
-  if (seedTrack != kNoTrackId) seed(seedTrack, maps, true);
+  if (seedTrack == kNoTrackId) return;
+  seed(seedTrack, maps, true);
+  if (!maps) ses_.seedAwaits = seedTrack;
+}
+
+void Engine::mapsArrived(const Maps& maps) {
+  const uint32_t track = ses_.seedAwaits;
+  ses_.seedAwaits = kNoTrackId;
+  if (track == kNoTrackId || ses_.pin != kNoRow) return;
+  ses_.pin = rowOf(&maps, track);
 }
 
 // The session's first anchor; `pin` also Stay on seed's (newSession()'s
@@ -110,21 +232,24 @@ void Engine::trackStarted(uint32_t track, const Maps* maps, bool byAutoDj) {
   if (row != kNoRow) join(row, *maps);
 }
 
-void Engine::trackLeft(uint32_t track, const Maps* maps, uint32_t playedMs, bool naturalEnd) {
-  rowLeft(rowOf(maps, track), playedMs, naturalEnd);
+bool Engine::trackLeft(uint32_t track, const Maps* maps, uint32_t playedMs, bool naturalEnd) {
+  return rowLeft(rowOf(maps, track), playedMs, naturalEnd);
 }
 
-void Engine::rowLeft(uint16_t row, uint32_t playedMs, bool naturalEnd) {
-  if (naturalEnd || playedMs >= kQuickSkipMs) return;
+bool Engine::rowLeft(uint16_t row, uint32_t playedMs, bool naturalEnd) {
+  if (naturalEnd || playedMs >= kQuickSkipMs) return false;
   ++stats_.quickSkips;
-  if (row != kNoRow) ses_.ring.remove(row);
+  return row != kNoRow && ses_.ring.remove(row);
 }
 
 void Engine::pickRefused(uint16_t row) {
   if (row != kNoRow) ses_.ring.remove(row);
 }
 
-void Engine::modeChanged() { ses_.pin = kNoRow; }
+void Engine::modeChanged() {
+  ses_.pin = kNoRow;
+  ses_.seedAwaits = kNoTrackId;
+}
 
 void Engine::fileReopened() {
   for (CacheSlot& c : cache_) c = CacheSlot();
@@ -133,11 +258,16 @@ void Engine::fileReopened() {
   broken_ = false;
 }
 
-void Engine::tracksRenumbered() { ses_.ids.clear(); }
+void Engine::tracksRenumbered() {
+  ses_.ids.clear();
+  ses_.seedAwaits = kNoTrackId;
+}
 
 void Engine::copySession(const Engine& from) {
   ses_ = from.ses_;
   clock_ = from.clock_;
+  mapsGen_ = from.mapsGen_;
+  print_ = from.print_;
   damaged_ = from.damaged_;
   suspect_ = from.suspect_;
   broken_ = from.broken_;
@@ -145,15 +275,17 @@ void Engine::copySession(const Engine& from) {
   for (uint8_t i = 0; i < kSlotCache; ++i) {
     cache_[i] = from.cache_[i];
     if (cache_[i].row == kNoRow) continue;
-    if (slotBytes_ && from.slotBytes_)
+    if (slotBytes_ && from.slotBytes_) {
       std::memcpy(slotBytes_ + i * kSlotSpan, from.slotBytes_ + i * kSlotSpan, kSlotSpan);
-    else
+      std::memcpy(runs_ + i * kRunSpan, from.runs_ + i * kRunSpan, kRunSpan * sizeof(RunEntry));
+    } else {
       cache_[i] = CacheSlot();
+    }
   }
 }
 
 // ---------------------------------------------------------------------------
-// The slot cache and reads
+// The slot cache, reads and runs
 // ---------------------------------------------------------------------------
 int Engine::find(uint16_t row) const {
   if (row == kNoRow) return -1;
@@ -181,6 +313,7 @@ void Engine::insert(uint16_t row, uint16_t count) {
       if (cache_[i].stamp < cache_[at].stamp) at = i;
   }
   std::memcpy(slotBytes_ + at * kSlotSpan, slotBytes_ + kSlotCache * kSlotSpan, kSlotSpan);
+  cache_[at] = CacheSlot();
   cache_[at].row = row;
   cache_[at].count = count;
   cache_[at].stamp = ++clock_;
@@ -215,6 +348,48 @@ SlotResult Engine::read(SlotReader& slots, uint16_t row) {
   return SlotResult::Suspect;
 }
 
+Engine::MapsPrint Engine::printOf(const Maps& m) {
+  MapsPrint p;
+  p.filters = m.filters;
+  p.rowToTrack = m.rowToTrack;
+  p.rows = m.rows;
+  p.tracks = m.tracks;
+  p.mapped = m.mapped;
+  return p;
+}
+
+bool Engine::runFresh(int i, const Maps& m, uint32_t k) const {
+  return cache_[i].runGen == mapsGen_ && cache_[i].runK == k && print_ == printOf(m);
+}
+
+// Slot i's run for these maps and k: its first min(count, k) entries (the
+// levels from byte 2k), those whose row maps to a track, sorted by row
+// (then by place: a row listed twice keeps both, as the union does).
+void Engine::buildRun(int i, const Maps& m, uint32_t k) {
+  const MapsPrint p = printOf(m);
+  if (!(print_ == p)) {
+    print_ = p;
+    ++mapsGen_;  // other maps: every run made before is stale
+  }
+  const uint8_t* b = slotBytes_ + i * kSlotSpan;
+  const uint32_t n = cache_[i].count < k ? cache_[i].count : k;
+  uint32_t nk = 0;
+  for (uint32_t j = 0; j < n; ++j) {
+    const uint16_t row = cardcontract::get16(b + 2 * j);
+    if (row >= m.rows || m.rowToTrack[row] == kNoTrack) continue;
+    keys_[nk++] = static_cast<uint32_t>(row) << 8 | j;
+  }
+  idsort::sort(keys_, keys_ + nk, std::less<uint32_t>());
+  RunEntry* r = runs_ + i * kRunSpan;
+  for (uint32_t q = 0; q < nk; ++q) {
+    const uint16_t row = static_cast<uint16_t>(keys_[q] >> 8);
+    r[q] = RunEntry{row, b[2 * k + (keys_[q] & 0xFF)], 0, m.filters[row]};
+  }
+  r[nk] = RunEntry{kNoRow, 0, 0, 0};
+  cache_[i].runGen = mapsGen_;
+  cache_[i].runK = static_cast<uint16_t>(k);
+}
+
 bool Engine::prefetchDue(const Settings& s, uint16_t* row) const {
   if (broken_ || !slotBytes_) return false;
   if (s.mode == Mode::Locked) {
@@ -232,15 +407,119 @@ bool Engine::prefetchDue(const Settings& s, uint16_t* row) const {
   return false;
 }
 
-SlotResult Engine::prefetch(SlotReader& slots, uint16_t row) {
+SlotResult Engine::prefetch(SlotReader& slots, uint16_t row, const Maps* maps, uint16_t k) {
   ++stats_.prefetchReads;
   if (!slotBytes_) return SlotResult::Io;
-  return read(slots, row);
+  const SlotResult r = read(slots, row);
+  if (r == SlotResult::Ok && maps && maps->rows && k) buildRun(find(row), *maps, k <= mpdj::kMaxK ? k : mpdj::kMaxK);
+  return r;
+}
+
+bool Engine::runDue(const Settings& s, const Maps& maps, uint16_t k, uint16_t* row) const {
+  if (broken_ || !slotBytes_ || maps.rows == 0 || k == 0) return false;
+  const uint32_t kk = k <= mpdj::kMaxK ? k : mpdj::kMaxK;
+  auto due = [&](uint16_t r) {
+    if (r == kNoRow || damaged_.has(r)) return false;
+    const int i = find(r);
+    return i >= 0 && !runFresh(i, maps, kk);
+  };
+  if (s.mode == Mode::Locked) {
+    if (!due(ses_.pin)) return false;
+    *row = ses_.pin;
+    return true;
+  }
+  for (int i = ses_.ring.size() - 1; i >= 0; --i) {
+    const uint16_t r = ses_.ring.at(static_cast<uint8_t>(i));
+    if (!due(r)) continue;
+    *row = r;
+    return true;
+  }
+  return false;
+}
+
+void Engine::makeRun(uint16_t row, const Maps& maps, uint16_t k) {
+  const int i = find(row);
+  if (i < 0 || !slotBytes_ || maps.rows == 0 || k == 0) return;
+  buildRun(i, maps, k <= mpdj::kMaxK ? k : mpdj::kMaxK);
 }
 
 // ---------------------------------------------------------------------------
 // The pick
 // ---------------------------------------------------------------------------
+// The union of the usable slots' runs in row order: visit(row, best level,
+// level sum, word) for each row but the anchors and the playing track's.
+template <typename Visit>
+void Engine::merge(const int8_t* usable, uint8_t nu, const Scope& sc, Visit&& visit) const {
+  // The runs' next entries, as heads (row << 8 | run) kept in order (an
+  // insertion sort of at most 5, then a sentinel): the first is the union's
+  // next row. A run moved on goes back in its place, past the heads below
+  // its next row (two on average).
+  const RunEntry* at[kAnchors];
+  uint32_t head[kAnchors + 1];
+  for (uint8_t u = 0; u < nu; ++u) {
+    at[u] = runs_ + usable[u] * kRunSpan;
+    const uint32_t h = static_cast<uint32_t>(at[u]->row) << 8 | u;
+    uint8_t i = u;
+    for (; i > 0 && head[i - 1] > h; --i) head[i] = head[i - 1];
+    head[i] = h;
+  }
+  head[nu] = 0xFFFFFFFFu;
+  const uint16_t* anc = sc.anc;
+  while (nu) {
+    const uint32_t row = head[0] >> 8;
+    if (row == kNoRow) return;
+    uint32_t best = 0, sum = 0, word = 0;
+    do {
+      const uint32_t u = head[0] & 0xFF;
+      const RunEntry* p = at[u];
+      do {
+        const uint32_t level = p->level;
+        best = level > best ? level : best;
+        sum += level;
+        word = p->word;
+        ++p;
+      } while (p->row == row);
+      at[u] = p;
+      const uint32_t h = static_cast<uint32_t>(p->row) << 8 | u;
+      uint32_t* q = head;
+      for (; q[1] < h; ++q) q[0] = q[1];
+      *q = h;
+    } while (head[0] >> 8 == row);
+    if (row == sc.playingRow) continue;
+    while (*anc < row) ++anc;
+    if (*anc == row) continue;
+    visit(static_cast<uint16_t>(row), static_cast<uint8_t>(best), static_cast<uint16_t>(sum), word);
+  }
+}
+
+// The kDry candidates (all, or only those outside the track cooldown) with
+// the highest sums, ties by row, into cand_ in row order, counted into
+// *counts; their count. None (0): cand_ and *counts are left as they were.
+uint32_t Engine::closest(const int8_t* usable, uint8_t nu, const Scope& sc, bool freshOnly, Counts* counts) {
+  uint32_t n = 0;
+  const uint16_t* cp = sc.cool;
+  merge(usable, nu, sc, [&](uint16_t row, uint8_t, uint16_t sum, uint32_t) {
+    while (*cp < row) ++cp;
+    if (!freshOnly || *cp != row) keys_[n++] = dryKey(sum, row);
+  });
+  if (n == 0) return 0;
+  const uint32_t keep = n < kDry ? n : kDry;
+  std::nth_element(keys_, keys_ + (keep - 1), keys_ + n);
+  const uint32_t last = keys_[keep - 1];
+  *counts = Counts();
+  uint32_t ng = 0;
+  cp = sc.cool;
+  merge(usable, nu, sc, [&](uint16_t row, uint8_t best, uint16_t sum, uint32_t w) {
+    while (*cp < row) ++cp;
+    const bool cooled = *cp == row;
+    if ((freshOnly && cooled) || dryKey(sum, row) > last) return;
+    const uint8_t b = sc.bits(cooled ? 2 : sc.artistCooled(w) ? 1 : 0, w);
+    counts->add(b);
+    cand_[ng++] = Cand{row, best, b};
+  });
+  return ng;
+}
+
 Pick Engine::pick(const Settings& s, const PickIn& in) {
   Pick out;
   if (!in.maps || !in.slots || !slotBytes_ || in.maps->rows == 0) return byId(s, in, out);
@@ -284,134 +563,159 @@ Pick Engine::pick(const Settings& s, const PickIn& in) {
     }
   }
   out.broken = broken_;
+  const Scope sc(ses_, s, m, playingRow, anchors, na, in.selFloor, tempo_);
   if (broken_ || nu == 0) {
     // A damaged pin would make every Stay on seed pick random until the
     // file is reopened: this pick's row becomes the pin, as for a seed
     // without a row.
     if (s.mode == Mode::Locked && damaged_.has(ses_.pin)) ses_.pin = kNoRow;
-    return randomPick(s, in, playingRow, anchors, na, out);
+    return randomPick(s, in, sc, out);
   }
   for (int u = nu - 1; u >= 0; --u) touch(usable[u]);
 
-  // 2. The union: (row << 8 | level) sorted, then merged by row.
   const uint32_t k = in.k <= mpdj::kMaxK ? in.k : mpdj::kMaxK;
-  uint32_t nk = 0;
-  for (uint8_t u = 0; u < nu; ++u) {
-    const CacheSlot& c = cache_[usable[u]];
-    const uint8_t* b = slotBytes_ + usable[u] * kSlotSpan;
-    const uint32_t count = c.count < k ? c.count : k;
-    for (uint32_t j = 0; j < count; ++j) {
-      const uint16_t row = cardcontract::get16(b + 2 * j);
-      if (row >= m.rows || row == playingRow || m.rowToTrack[row] == kNoTrack) continue;
-      bool anchor = false;
-      for (uint8_t a = 0; a < na && !anchor; ++a) anchor = anchors[a] == row;
-      if (anchor) continue;
-      keys_[nk++] = static_cast<uint32_t>(row) << 8 | b[2 * k + j];
-    }
-  }
-  idsort::sort(keys_, keys_ + nk, std::less<uint32_t>());
-  uint32_t nc = 0;
-  for (uint32_t i = 0; i < nk; ++i) {
-    const uint16_t row = static_cast<uint16_t>(keys_[i] >> 8);
-    const uint8_t level = static_cast<uint8_t>(keys_[i]);
-    if (nc && cand_[nc - 1].row == row) {
-      cand_[nc - 1].best = level;  // sorted: the run's last is its best
-      cand_[nc - 1].sum = static_cast<uint16_t>(cand_[nc - 1].sum + level);
+  const Rng start = ses_.rng;
+  for (uint8_t attempt = 0;; ++attempt) {
+    for (uint8_t u = 0; u < nu; ++u)
+      if (!runFresh(usable[u], m, k)) buildRun(usable[u], m, k);
+
+    // 2-3. The candidates, counted, and the gate's pool (with each one's
+    // cooldown level and statuses), counted. Matching off, every status is
+    // Na: the pool's bits are its cooldown levels, its classes 0, 8, 16.
+    uint32_t nc = 0, ng = 0;
+    Counts& counts = *counts_;
+    counts = Counts();
+    const uint16_t* cp = sc.cool;
+    auto census = [&](auto count) {
+      merge(usable, nu, sc, [&](uint16_t row, uint8_t best, uint16_t, uint32_t w) {
+        ++nc;
+        if (best < sc.gate) return;
+        while (*cp < row) ++cp;
+        cand_[ng++] = Cand{row, best, count(*cp == row ? 2 : sc.artistCooled(w) ? 1 : 0, w)};
+      });
+    };
+    if (sc.ranked()) {
+      census([&](uint8_t cl, uint32_t w) {
+        const uint8_t b = sc.bits(cl, w);
+        counts.add(b);
+        return b;
+      });
     } else {
-      cand_[nc++] = Cand{row, level, level, 0, Tempo::Na, Tempo::Na, Key::Na, Key::Na};
+      census([&](uint8_t cl, uint32_t) {
+        counts.add(cl);
+        return cl;
+      });
     }
-  }
-  out.candidates = static_cast<uint16_t>(nc);
-  if (nc == 0) return randomPick(s, in, playingRow, anchors, na, out);
+    out.candidates = static_cast<uint16_t>(nc);
+    out.dry = out.loosened = false;
+    if (nc == 0) return randomPick(s, in, sc, out);
+    // Dry: the kDry best sums. Every row of the pool cooled: loosen before
+    // repeating, the kDry best sums outside the track cooldown, if any.
+    if (ng == 0) {
+      out.dry = true;
+      ng = closest(usable, nu, sc, false, &counts);
+    }
+    if (counts.fresh() == 0) {
+      const uint32_t fresh = closest(usable, nu, sc, true, &counts);
+      if (fresh) {
+        out.loosened = true;
+        ng = fresh;
+      }
+    }
+    out.gated = static_cast<uint16_t>(ng);
 
-  // 3. The gate, or dry: the kDry best sums (ties by row).
-  const uint8_t gate = floorLevel(s.floorPct, in.selFloor);
-  uint32_t ng = 0;
-  for (uint32_t i = 0; i < nc; ++i)
-    if (cand_[i].best >= gate) cand_[ng++] = cand_[i];
-  if (ng == 0) {
-    out.dry = true;
-    auto dryKey = [](const Cand& c) { return static_cast<uint32_t>(2047 - c.sum) << 16 | c.row; };
-    for (uint32_t i = 0; i < nc; ++i) keys_[i] = dryKey(cand_[i]);
-    idsort::sort(keys_, keys_ + nc, std::less<uint32_t>());
-    const uint32_t last = keys_[(nc < kDry ? nc : kDry) - 1];
-    for (uint32_t i = 0; i < nc; ++i)
-      if (dryKey(cand_[i]) <= last) cand_[ng++] = cand_[i];
+    // 4-5. The classes, the draw, the pick.
+    const uint32_t j = choose(sc, m, ng, counts, out);
+    const uint16_t row = cand_[j].row;
+    if (attempt == 0 && (row >= m.rows || m.rowToTrack[row] == kNoTrack)) {
+      // Runs from maps that changed in place, unannounced: remade, and the
+      // same stream picks again.
+      ++mapsGen_;
+      ses_.rng = start;
+      continue;
+    }
+    out.level = cand_[j].best;
+    return finish(s, m, row, out);
   }
-  out.gated = static_cast<uint16_t>(ng);
-
-  // 4-5. The classes, the draw, the pick.
-  const uint32_t j = choose(s, m, ng, playingRow, out);
-  out.level = cand_[j].best;
-  return finish(s, m, cand_[j].row, out);
 }
 
-Pick Engine::randomPick(const Settings& s, const PickIn& in, uint16_t playingRow, const uint16_t* anchors,
-                        uint8_t na, Pick out) {
+Pick Engine::randomPick(const Settings& s, const PickIn& in, const Scope& sc, Pick out) {
   out.random = true;
   const Maps& m = *in.maps;
   uint32_t n = 0;
+  Counts& counts = *counts_;
+  counts = Counts();
   for (uint8_t d = 0; d < kRandomDraws; ++d) {
     const uint16_t r = static_cast<uint16_t>(ses_.rng.below(m.rows));
-    if (r == playingRow || m.rowToTrack[r] == kNoTrack) continue;
+    if (r == sc.playingRow || m.rowToTrack[r] == kNoTrack) continue;
     bool skip = false;
-    for (uint8_t a = 0; a < na && !skip; ++a) skip = anchors[a] == r;
+    for (const uint16_t* a = sc.anc; *a != kNoRow && !skip; ++a) skip = *a == r;
     for (uint32_t i = 0; i < n && !skip; ++i) skip = cand_[i].row == r;
     if (skip) continue;
-    cand_[n++] = Cand{r, 0, 0, 0, Tempo::Na, Tempo::Na, Key::Na, Key::Na};
+    const uint32_t w = m.filters[r];
+    const uint8_t b = sc.bits(ses_.cool.has(r) ? 2 : sc.artistCooled(w) ? 1 : 0, w);
+    counts.add(b);
+    cand_[n++] = Cand{r, 0, b};
   }
   out.candidates = out.gated = static_cast<uint16_t>(n);
   if (n == 0) return byId(s, in, out);
-  const uint32_t j = choose(s, m, n, playingRow, out);
+  const uint32_t j = choose(sc, m, n, counts, out);
   out.level = 0;
   return finish(s, m, cand_[j].row, out);
 }
 
-uint32_t Engine::choose(const Settings& s, const Maps& m, uint32_t n, uint16_t playingRow, Pick& out) {
-  const uint8_t ref = s.matchTempo && playingRow != kNoRow ? filterBpm(m.filters[playingRow]) : 0;
-  const uint8_t anchor = ses_.keyAnchor;
-  TempoOdds to;
-  KeyOdds ko;
-  for (uint32_t i = 0; i < n; ++i) {
-    Cand& c = cand_[i];
-    const uint32_t f = m.filters[c.row];
-    c.t = c.ti = tempoStatus(filterBpm(f), ref);
-    c.k = c.ki = keyStatus(camelot(f), anchor, s.matchKey);
-    to.add(c.t);
-    ko.add(c.k);
+// The pool's classes and the draw; `counts` the pool's (classes before D3).
+uint32_t Engine::choose(const Scope& sc, const Maps& m, uint32_t n, Counts& counts, Pick& out) {
+  const bool ranked = sc.ranked();
+  if (ranked) {
+    // D3: every unknown tempo, then every unknown key, in the pool's order,
+    // with the odds of the pool's known ones; each drawn one changes class.
+    uint32_t tempo[8] = {}, key[4] = {};
+    counts.statuses(tempo, key);
+    TempoOdds to;
+    to.tight = tempo[static_cast<int>(Tempo::Tight)];
+    to.wide = tempo[static_cast<int>(Tempo::Wide)];
+    to.wrong = tempo[static_cast<int>(Tempo::Wrong)];
+    KeyOdds ko;
+    ko.good = key[static_cast<int>(Key::Good)];
+    ko.wrong = key[static_cast<int>(Key::Wrong)];
+    if (to.known() && tempo[static_cast<int>(Tempo::Unknown)])
+      for (uint32_t i = 0; i < n; ++i) {
+        Cand& c = cand_[i];
+        if (tempoOf(c.bits) != Tempo::Unknown) continue;
+        const uint8_t was = c.bits;
+        c.bits = withTempo(c.bits, to.draw(ses_.rng));
+        counts.move(was, c.bits);
+      }
+    if (ko.known() && key[static_cast<int>(Key::Unknown)])
+      for (uint32_t i = 0; i < n; ++i) {
+        Cand& c = cand_[i];
+        if (keyOf(c.bits) != Key::Unknown) continue;
+        const uint8_t was = c.bits;
+        c.bits = withKey(c.bits, ko.draw(ses_.rng));
+        counts.move(was, c.bits);
+      }
   }
-  // D3: every unknown tempo, then every unknown key, in the candidates' order.
-  if (to.known())
-    for (uint32_t i = 0; i < n; ++i)
-      if (cand_[i].t == Tempo::Unknown) cand_[i].ti = to.draw(ses_.rng);
-  if (ko.known())
-    for (uint32_t i = 0; i < n; ++i)
-      if (cand_[i].k == Key::Unknown) cand_[i].ki = ko.draw(ses_.rng);
-  uint8_t best = 0xFF;
   uint32_t inBest = 0;
-  for (uint32_t i = 0; i < n; ++i) {
-    Cand& c = cand_[i];
-    const uint16_t a = filterArtist(m.filters[c.row]);
-    const uint8_t level = ses_.cool.has(c.row) ? 2 : a && ses_.arts.has(a) ? 1 : 0;
-    c.cls = static_cast<uint8_t>(level * kRanks + musicRank(c.ti, c.ki));
-    if (c.cls < best) {
-      best = c.cls;
-      inBest = 0;
-    }
-    if (c.cls == best) ++inBest;
-  }
+  const uint8_t best = counts.best(&inBest);  // (n > 0: one class holds them)
   uint32_t nth = ses_.rng.below(inBest);
   uint32_t j = 0;
   for (; j < n; ++j)
-    if (cand_[j].cls == best && nth-- == 0) break;
+    if (classOf(cand_[j].bits) == best && nth-- == 0) break;
   const Cand& c = cand_[j];
   out.cooldownLevel = best / kRanks;
   out.musicRank = best % kRanks;
   out.inClass = static_cast<uint16_t>(inBest);
-  out.imputedTempo = c.t != c.ti;
-  out.imputedKey = c.k != c.ki;
-  out.tempoBreak = c.t == Tempo::Wide || c.t == Tempo::Wrong;
-  out.keyBreak = c.k == Key::Wrong;
+  if (ranked) {
+    // The statuses it had before D3 (its row's word: the run's).
+    const uint32_t w = m.filters[c.row];
+    const Tempo t = static_cast<Tempo>(sc.tempo[filterBpm(w)]);
+    const Key k = sc.key.status(filterCamelot(w));
+    out.imputedTempo = t != tempoOf(c.bits);
+    out.imputedKey = k != keyOf(c.bits);
+    out.tempoBreak = t == Tempo::Wide || t == Tempo::Wrong;
+    out.keyBreak = k == Key::Wrong;
+  }
   return j;
 }
 
@@ -465,6 +769,7 @@ Pick Engine::counted(const Settings& s, const Pick& out) {
   ++stats_.modePicks[static_cast<int>(s.mode)];
   ++stats_.readsAtPick[out.reads];
   stats_.dry += out.dry;
+  stats_.loosened += out.loosened;
   stats_.random += out.random;
   stats_.noIndex += out.noIndex;
   return out;

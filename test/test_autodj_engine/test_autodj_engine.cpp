@@ -2,25 +2,31 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host unit tests for the Auto DJ engine (lib/core/AutoDjEngine; the
-// engine design's 1.4 and 2.5-2.9 with the user's decisions D1-D3 and D5).
+// engine design's 1.4 and 2.5-2.9 with the user's decisions D1-D3 and D5,
+// and "Loosen before repeating", 2026-10-14).
 // First every session of test/fixtures/autodj/sessions.json, made by
 // tools/autodj_ref.py (the rule in Python), replayed pick for pick: the
 // same row, track, level, class, imputed statuses, breaks, reads and
 // counts, every prefetch read and the counters at the end, on the golden
-// MPDJ files (read through mpdj::Table) and a synthetic table, with slots
-// damaged, failing or broken by a fake reader, and the index away and back.
-// Then the rules one by one on small tables: the defaults (D2: both off);
-// the gate at every step and its clamp at selFloor; dry (the 50 best sums,
-// ties by row); the ring (5, move-to-end, rows only, D1's joins, the quick
-// skip, a pick by track id joining once the index is there); the pin and
-// Anchor changes; a seed without a row, and none (the pin at the first
-// pick); the lazy key anchor; the cooldowns (50 rows, 3 artists, artist 0
-// never cooled, all cooled: repeats); cooldown before music; no BPM or key
-// anywhere; empty lists; the read budget and the prefetch; the cache
-// keeping the ring and the pin; damaged (a damaged pin giving way), failed
-// and broken slots, in hand-made readers and in the hardening files; picks
-// by track id; the empty states' button; the same seed giving the same
-// session; no allocation in pick(); the console's dry-run copy.
+// MPDJ files (read through mpdj::Table) and synthetic tables, with slots
+// damaged, failing or broken by a fake reader, and the index away and back;
+// each session twice, the slots' runs made at the read ahead and at the
+// pick. Then the rules one by one on small tables: the defaults (D2: both
+// off); the gate at every step and its clamp at selFloor; dry (the 50 best
+// sums, ties by row); the ring (5, move-to-end, rows only, D1's joins, the
+// quick skip and whether it steered, a pick by track id joining once the
+// index is there); the pin and Anchor changes; a seed without a row, and
+// none (the pin at the first pick); the lazy key anchor; the cooldowns (50
+// rows, 3 artists, artist 0 never cooled, all cooled: repeats); loosen
+// before repeating (the device's case: 3 rows above 75 %; Follow the vibe;
+// dry and loosened at once); cooldown before music; no BPM or key
+// anywhere; empty lists; the read budget and the prefetch; the runs
+// following the maps (mapsChanged(), runDue(), moved arrays, arrays filled
+// again unannounced); the cache keeping the ring and the pin; damaged (a
+// damaged pin giving way), failed and broken slots, in hand-made readers
+// and in the hardening files; picks by track id; the empty states' button;
+// the same seed giving the same session; no allocation in pick(); the
+// console's dry-run copy.
 // Run: pio test -e native
 #include <unity.h>
 
@@ -263,6 +269,7 @@ void expectPick(const Where& w, const Value& x, const Pick& p) {
   expectField(w, x, "cl", p.cooldownLevel);
   expectField(w, x, "mr", p.musicRank);
   expectField(w, x, "dry", p.dry);
+  expectField(w, x, "loose", p.loosened);
   expectField(w, x, "random", p.random);
   expectField(w, x, "noIndex", p.noIndex);
   expectField(w, x, "impT", p.imputedTempo);
@@ -291,6 +298,7 @@ void expectStats(const Where& w, const Value& x, const Stats& s) {
   expectField(w, x, "ioSkips", s.ioSkips);
   expectField(w, x, "broken", s.broken);
   expectField(w, x, "dry", s.dry);
+  expectField(w, x, "loosened", s.loosened);
   expectField(w, x, "random", s.random);
   expectField(w, x, "noIndex", s.noIndex);
   expectField(w, x, "imputedTempo", s.imputedTempo);
@@ -341,8 +349,13 @@ void test_sessions_match_the_reference() {
     tables[t.first] = std::move(l);
   }
   size_t sessions = 0, picks = 0, prefetches = 0;
-  for (const Value& sv : fx["sessions"].items) {
-    Where w{sv["name"].str(), 0};
+  // Twice: the runs made at the read ahead (prefetch() given the maps and
+  // k, as the firmware), then at the pick (prefetch() without them).
+  const size_t count = fx["sessions"].size();
+  for (size_t run = 0; run < 2 * count; ++run) {
+    const bool lazy = run >= count;
+    const Value& sv = fx["sessions"][run % count];
+    Where w{sv["name"].str() + (lazy ? " (runs at the pick)" : ""), 0};
     const bool indexed = !sv["table"].isNull();
     Loaded* t = indexed ? tables[sv["table"].str()].get() : nullptr;
     TEST_ASSERT_TRUE_MESSAGE(!indexed || t, w.msg("table").c_str());
@@ -380,6 +393,9 @@ void test_sessions_match_the_reference() {
         live = ev["on"].u64() != 0;
       } else if (op == "mode") {
         e.modeChanged();
+      } else if (op == "arrived") {
+        TEST_ASSERT_NOT_NULL_MESSAGE(maps, w.msg("arrived without the maps").c_str());
+        e.mapsArrived(*maps);
       } else if (op == "reopen") {
         e.fileReopened();
       } else if (op == "renumber") {
@@ -391,9 +407,12 @@ void test_sessions_match_the_reference() {
         uint16_t row = kNoRow;
         const bool due = e.prefetchDue(s, &row);
         expectField(w, ev, "row", due ? row : kNoRow);
-        if (due) TEST_ASSERT_EQUAL_STRING_MESSAGE(ev["res"].c_str(), resultName(e.prefetch(reader, row)),
-                                                  w.msg("res").c_str());
-        ++prefetches;
+        if (due) {
+          const SlotResult r = lazy || !t ? e.prefetch(reader, row)
+                                          : e.prefetch(reader, row, maps, static_cast<uint16_t>(t->k));
+          TEST_ASSERT_EQUAL_STRING_MESSAGE(ev["res"].c_str(), resultName(r), w.msg("res").c_str());
+        }
+        prefetches += lazy == 0;
       } else if (op == "pick" || op == "surprise") {
         const Value& sj = ev["s"];
         const Settings s = settings(sj["m"].u64() ? Mode::Locked : Mode::Rolling,
@@ -413,7 +432,7 @@ void test_sessions_match_the_reference() {
         expectPick(w, ev["expect"], p);
         TEST_ASSERT_EQUAL_MESSAGE(p.reads, reader.reads - readsBefore, w.msg("reader's reads").c_str());
         TEST_ASSERT_TRUE(p.reads <= kReadsPerPick);
-        if (op == "pick") ++picks;
+        if (op == "pick" && !lazy) ++picks;
       } else {
         TEST_FAIL_MESSAGE(w.msg(op.c_str()).c_str());
       }
@@ -421,8 +440,8 @@ void test_sessions_match_the_reference() {
     }
     expectStats(w, sv["stats"], e.stats());
     TEST_ASSERT_EQUAL_MESSAGE(afterBegin, gAllocs, w.msg("allocations after begin()").c_str());
-    TEST_ASSERT_EQUAL(3, afterBegin - allocs);
-    ++sessions;
+    TEST_ASSERT_EQUAL(1, afterBegin - allocs);
+    sessions += lazy == 0;
   }
   char line[96];
   std::snprintf(line, sizeof line, "%u sessions, %u picks, %u prefetch passes replayed",
@@ -745,6 +764,234 @@ void test_every_candidate_cooled_gives_repeats() {
     TEST_ASSERT_EQUAL(2, p.cooldownLevel);  // a repeat, never silence
     TEST_ASSERT_EQUAL(5, p.inClass);
   }
+}
+
+// Loosen before repeating (the user's decision, 2026-10-14), the device's
+// case: Stay on seed at 75 % from a seed listing 3 rows above the floor
+// (level 192) and 57 below. The old rule repeated the 3 (on the device:
+// 197 of 200 picks cooled, 3 artists); now, once they are cooled, the 50
+// nearest rows outside the track cooldown, so no pick repeats inside the
+// cooldown while 60 rows are listed; the 3 come back as they leave it.
+void test_loosen_before_repeating_the_device_case() {
+  const int n = 61;
+  std::vector<Entries> lists(n);
+  std::vector<uint32_t> f(n);
+  auto level = [](int r) { return static_cast<uint8_t>(r <= 3 ? 202 - 2 * r : 195 - r); };  // 200 198 196, 191..135
+  for (int r = 1; r < n; ++r) {
+    lists[0].push_back({static_cast<uint16_t>(r), level(r)});
+    lists[r].push_back({0, 200});
+    f[r] = filterWord(1200, static_cast<uint8_t>(1 + r % 24), 0, static_cast<uint32_t>(1 + r % 12));
+  }
+  Table t(lists, f);
+  for (bool matching : {false, true}) {
+    auto e = engine();
+    e->newSession(0x717feda5, 0, &t.maps.m);
+    const Settings s = settings(Mode::Locked, 75, matching, matching);
+    uint32_t playing = 0, loosened = 0;
+    std::set<uint16_t> seen;
+    for (int i = 0; i < 200; ++i) {
+      uint16_t row;
+      if (e->prefetchDue(s, &row)) e->prefetch(t.reader, row, &t.maps.m, static_cast<uint16_t>(t.k));
+      std::vector<uint16_t> fresh, freshGated;  // before the pick, in row order (the level falls with the row)
+      for (uint16_t r = 1; r < n; ++r) {
+        if (e->rowCooled(r) || r == playing) continue;
+        fresh.push_back(r);
+        if (r <= 3) freshGated.push_back(r);
+      }
+      const Pick p = e->pick(s, t.in(playing));
+      TEST_ASSERT_TRUE(p.ok && !p.random && !p.dry);
+      TEST_ASSERT_TRUE(p.cooldownLevel < 2);  // never a repeat inside the cooldown
+      if (freshGated.empty()) {
+        TEST_ASSERT_TRUE(p.loosened);
+        TEST_ASSERT_EQUAL(std::min<size_t>(50, fresh.size()), p.gated);
+        TEST_ASSERT_TRUE(p.level < 192);
+        TEST_ASSERT_TRUE(p.row <= fresh[std::min<size_t>(50, fresh.size()) - 1]);  // among the 50 nearest fresh
+        ++loosened;
+      } else {
+        TEST_ASSERT_FALSE(p.loosened);
+        TEST_ASSERT_TRUE(std::find(freshGated.begin(), freshGated.end(), p.row) != freshGated.end());
+      }
+      if (i < 3) TEST_ASSERT_FALSE(p.loosened);
+      seen.insert(p.row);
+      playing = p.track;
+    }
+    TEST_ASSERT_TRUE(loosened >= 180 && loosened <= 194);  // the 3 above the floor come back every 50 picks
+    TEST_ASSERT_EQUAL(60, seen.size());
+    TEST_ASSERT_EQUAL(loosened, e->stats().loosened);
+  }
+}
+
+// The same starvation in Follow the vibe: rows 0-7 list each other above
+// every step and the rest below 75 %, the others list rows 0-7 above it.
+// From row 0 at 75 % the clique's rows are cooled after 8 picks while the
+// anchors list nothing else above the floor: loosened, never a repeat.
+void test_loosen_in_follow_the_vibe() {
+  const int n = 70;
+  std::vector<Entries> lists(n);
+  for (int a = 0; a < n; ++a) {
+    for (int b = 0; b < n; ++b) {
+      if (a == b) continue;
+      int lv;
+      if (a < 8 && b < 8) lv = 230 - 2 * std::abs(a - b);
+      else if (a < 8) lv = 150 + (a * 11 + b * 7) % 40;
+      else if (b < 8) lv = 195 + (a + b) % 5;
+      else lv = 145 + (a * 13 + b * 17) % 46;
+      lists[a].push_back({static_cast<uint16_t>(b), static_cast<uint8_t>(lv)});
+    }
+    lists[a] = sorted(lists[a]);
+  }
+  Table t(lists);
+  auto e = engine();
+  e->newSession(33, 0, &t.maps.m);
+  uint32_t playing = 0, loosened = 0;
+  for (int i = 0; i < 90; ++i) {
+    uint16_t row;
+    if (e->prefetchDue(settings(), &row)) e->prefetch(t.reader, row, &t.maps.m, static_cast<uint16_t>(t.k));
+    const Pick p = e->pick(settings(Mode::Rolling, 75), t.in(playing));
+    TEST_ASSERT_TRUE(p.ok && !p.random);
+    TEST_ASSERT_TRUE(p.cooldownLevel < 2);
+    if (p.loosened) {
+      ++loosened;
+      TEST_ASSERT_TRUE(p.level < 192 && p.row >= 8);
+    }
+    if (i < 7) TEST_ASSERT_TRUE(!p.loosened && p.row < 8);
+    playing = p.track;
+  }
+  TEST_ASSERT_TRUE(loosened >= 40);
+}
+
+// Dry and loosened at once: the anchor lists 60 rows, all below the gate
+// (dry: the 50 best sums, rows 1-50 here); the listener's tracks, each
+// skipped at once, have cooled exactly those 50, and the track playing has
+// no row: the 50 best sums outside the track cooldown, rows 51-60.
+void test_dry_and_loosened() {
+  const int n = 61;
+  std::vector<Entries> lists(n);
+  for (int r = 1; r < n; ++r) {
+    lists[0].push_back({static_cast<uint16_t>(r), static_cast<uint8_t>(139 - (r - 1) / 2)});
+    lists[r].push_back({0, 139});
+  }
+  std::vector<uint16_t> tracks;
+  for (int r = 0; r < n; ++r) tracks.push_back(static_cast<uint16_t>(r));
+  tracks.push_back(kNoRow);  // track 61: no row
+  Table t(lists, {}, tracks);
+  const Maps* m = &t.maps.m;
+  for (uint32_t seed = 0; seed < 20; ++seed) {
+    auto e = engine();
+    e->newSession(seed, 0, m);
+    for (uint32_t r = 1; r <= 50; ++r) {
+      e->trackStarted(r, m, false);
+      TEST_ASSERT_TRUE(e->trackLeft(r, m, 1000, false));
+    }
+    e->trackStarted(61, m, false);
+    TEST_ASSERT_EQUAL(1, e->anchors());
+    const Pick p = e->pick(settings(), t.in(61));
+    TEST_ASSERT_TRUE(p.ok && p.dry && p.loosened);
+    TEST_ASSERT_EQUAL(60, p.candidates);
+    TEST_ASSERT_EQUAL(10, p.gated);
+    TEST_ASSERT_TRUE(p.row >= 51 && p.row <= 60);
+    TEST_ASSERT_EQUAL(0, p.cooldownLevel);
+  }
+}
+
+// A cached slot's run belongs to the maps it was made from. mapsChanged()
+// (the join ready again) makes runDue() name each cached anchor once, and
+// makeRun() remake it without a read; maps whose arrays moved are noticed
+// alone; arrays filled again in place, unannounced, still never give a row
+// with no track (the pick remakes its runs and draws again from the same
+// stream: the pick a fresh engine makes).
+void test_runs_follow_the_maps() {
+  Table t(full(30));
+  const Maps* m = &t.maps.m;
+  const uint16_t k = static_cast<uint16_t>(t.k);
+  auto e = engine();
+  e->newSession(5, 0, m);
+  for (uint32_t tr = 1; tr <= 4; ++tr) e->trackStarted(tr, m, false);
+  uint16_t row = 0;
+  while (e->prefetchDue(settings(), &row)) e->prefetch(t.reader, row, m, k);
+  TEST_ASSERT_FALSE(e->runDue(settings(), *m, k, &row));  // made at the read ahead
+  e->mapsChanged();
+  int remade = 0;
+  const int reads = t.reader.reads;
+  while (e->runDue(settings(), *m, k, &row)) {
+    e->makeRun(row, *m, k);
+    ++remade;
+  }
+  TEST_ASSERT_EQUAL(5, remade);
+  TEST_ASSERT_EQUAL(reads, t.reader.reads);  // no read
+  TEST_ASSERT_TRUE(e->runDue(settings(), *m, static_cast<uint16_t>(k - 1), &row));  // another k
+  TEST_ASSERT_EQUAL(4, row);                                                     // newest first
+  // Every row but the anchors and row 20 loses its track.
+  std::vector<uint16_t> r2t = t.maps.r2t, t2r = t.maps.t2r;
+  for (uint16_t r = 5; r < 30; ++r) {
+    if (r == 20) continue;
+    t2r[t.maps.r2t[r]] = kNoRow;
+    r2t[r] = kNoTrack;
+  }
+  // Moved arrays (another join's blocks): noticed without mapsChanged().
+  MapsHolder moved;
+  moved.t2r = t2r;
+  moved.r2t = r2t;
+  moved.f = t.maps.f;
+  moved.set();
+  PickIn in = t.in(4);
+  in.maps = &moved.m;
+  for (uint32_t seed = 0; seed < 10; ++seed) {
+    auto c = engine();
+    c->copySession(*e);
+    c->newSession(seed, 0, m);
+    for (uint32_t tr = 1; tr <= 4; ++tr) c->trackStarted(tr, m, false);
+    const Pick p = c->pick(settings(), in);
+    TEST_ASSERT_EQUAL(20, p.row);
+    TEST_ASSERT_EQUAL(0, p.reads);
+  }
+  // The same arrays filled again in place, no call: the stale runs list 25
+  // rows, 24 of them without a track now; a draw of one of those is drawn
+  // again from fresh runs (row 20), and a draw of row 20 itself stands. An
+  // engine told (mapsChanged()) counts the one candidate from the start.
+  t.maps.r2t = r2t;
+  t.maps.t2r = t2r;
+  t.maps.set();
+  TEST_ASSERT_TRUE(t.maps.m.rowToTrack == m->rowToTrack);
+  int redrawn = 0;
+  for (uint32_t seed = 0; seed < 20; ++seed) {
+    auto stale = engine();
+    stale->copySession(*e);
+    stale->newSession(seed, 0, m);
+    for (uint32_t tr = 1; tr <= 4; ++tr) stale->trackStarted(tr, m, false);
+    auto told = engine();
+    told->copySession(*stale);
+    told->mapsChanged();
+    const Pick a = stale->pick(settings(), t.in(4));
+    const Pick b = told->pick(settings(), t.in(4));
+    TEST_ASSERT_EQUAL(20, a.row);
+    TEST_ASSERT_EQUAL(t.maps.r2t[20], a.track);
+    TEST_ASSERT_EQUAL(20, b.row);
+    TEST_ASSERT_EQUAL(1, b.candidates);
+    redrawn += a.candidates == 1;
+  }
+  TEST_ASSERT_TRUE(redrawn >= 10);  // 24 in 25 draws
+}
+
+// trackLeft() says whether the track stopped steering: a row in the ring
+// leaves it; a track with no row (the console's '[dj] a quick skip' line,
+// 2026-10-13) or one already out never steered. Each quick skip counts.
+void test_a_quick_skip_says_whether_it_steered() {
+  Table t(star(8), {}, {0, 1, 2, 3, 4, 5, 6, 7, kNoRow});  // track 8: no row
+  const Maps* m = &t.maps.m;
+  auto e = engine();
+  e->newSession(1, 0, m);
+  e->trackStarted(3, m, false);
+  TEST_ASSERT_TRUE(e->trackLeft(3, m, 2000, false));
+  TEST_ASSERT_FALSE(e->trackLeft(3, m, 2000, false));  // out of the ring already
+  e->trackStarted(8, m, false);
+  TEST_ASSERT_FALSE(e->trackLeft(8, m, 2500, false));  // no row
+  TEST_ASSERT_FALSE(e->rowLeft(kNoRow, 2500, false));
+  TEST_ASSERT_EQUAL(4, e->stats().quickSkips);
+  TEST_ASSERT_FALSE(e->trackLeft(0, m, 1000, true));          // a natural end
+  TEST_ASSERT_FALSE(e->trackLeft(0, m, kQuickSkipMs, false));  // played 30 s
+  TEST_ASSERT_EQUAL(1, e->anchors());
+  TEST_ASSERT_EQUAL(4, e->stats().quickSkips);
 }
 
 void test_cooldown_before_music() {
@@ -1123,7 +1370,7 @@ void test_no_allocation_in_pick() {
   TEST_ASSERT_TRUE(e->heldBytes() > 0 && e->heldBytes() < 20 * 1024);
   const long frees = gFrees;
   e.reset();
-  TEST_ASSERT_EQUAL(frees + 3, gFrees);
+  TEST_ASSERT_EQUAL(frees + 1, gFrees);  // begin()'s one block
 }
 
 void test_a_failed_begin_picks_by_id() {
@@ -1180,6 +1427,11 @@ int main(int, char**) {
   RUN_TEST(test_the_key_anchor_is_lazy);
   RUN_TEST(test_the_cooldowns);
   RUN_TEST(test_every_candidate_cooled_gives_repeats);
+  RUN_TEST(test_loosen_before_repeating_the_device_case);
+  RUN_TEST(test_loosen_in_follow_the_vibe);
+  RUN_TEST(test_dry_and_loosened);
+  RUN_TEST(test_runs_follow_the_maps);
+  RUN_TEST(test_a_quick_skip_says_whether_it_steered);
   RUN_TEST(test_cooldown_before_music);
   RUN_TEST(test_no_bpm_or_key_anywhere);
   RUN_TEST(test_imputation_gives_missing_values_their_share);

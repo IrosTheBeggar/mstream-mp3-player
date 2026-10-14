@@ -51,21 +51,26 @@ Key keyStatus(uint8_t code, uint8_t anchor, bool on) {
   return Key::Wrong;
 }
 
-uint8_t musicRank(Tempo t, Key k) {
-  if (t != Tempo::Na && k != Key::Na) {
-    // [tempo: Tight, Wide, Wrong, Unknown][key: Good, Wrong, Unknown]
-    static const uint8_t kBoth[4][3] = {{0, 3, 2}, {1, 4, 4}, {7, 7, 7}, {5, 7, 6}};
-    return kBoth[static_cast<int>(t) - 1][static_cast<int>(k) - 1];
+void tempoStatuses(uint8_t ref, uint8_t out[256]) {
+  if (ref == 0) {
+    for (int b = 0; b < 256; ++b) out[b] = static_cast<uint8_t>(Tempo::Na);
+    return;
   }
-  if (t != Tempo::Na) {
-    static const uint8_t kTempo[4] = {0, 1, 3, 2};  // Tight, Wide, Wrong, Unknown
-    return kTempo[static_cast<int>(t) - 1];
+  for (int b = 0; b < 256; ++b) out[b] = static_cast<uint8_t>(Tempo::Wrong);
+  Window w[3];
+  const int tolerance[2] = {kWideBpm, kTightBpm};
+  const Tempo status[2] = {Tempo::Wide, Tempo::Tight};
+  for (int pass = 0; pass < 2; ++pass) {
+    windows(ref, tolerance[pass], w);
+    for (const Window& x : w)
+      for (int b = x.lo < 1 ? 1 : x.lo; b <= x.hi && b <= 255; ++b) out[b] = static_cast<uint8_t>(status[pass]);
   }
-  if (k != Key::Na) {
-    static const uint8_t kKey[3] = {0, 2, 1};  // Good, Wrong, Unknown
-    return kKey[static_cast<int>(k) - 1];
-  }
-  return 0;
+  out[0] = static_cast<uint8_t>(Tempo::Unknown);
+}
+
+KeyRef::KeyRef(uint8_t anchor, bool on) : on_(on) {
+  for (uint8_t c = 1; c <= 24; ++c)
+    if (anchor == 0 || camelotNear(anchor, c)) good_ |= 1u << c;
 }
 
 }  // namespace autodj

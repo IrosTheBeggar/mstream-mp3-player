@@ -16,8 +16,10 @@
 // fails while the build reads it; the worker's task before the fence; the
 // marker's build out of PSRAM at the boot; a failed first walk that must
 // not shrink the library (2026-10-09); Auto DJ's: a pick owed while its
-// index joins holds the fence, a held Auto DJ never does, and its join
-// released at the fence runs again after the Live step on the new ids. What
+// index joins holds the fence, a held Auto DJ never does, its join
+// released at the fence runs again after the Live step on the new ids, and
+// the memory check has the join given back when the new track table's
+// block is short (setGiveBack()). What
 // a track that ends inside the fence does is test_gapless_player's.
 // Run: pio test -e native -f test_library_update
 #include <unity.h>
@@ -1925,6 +1927,151 @@ void test_the_join_after_a_live_step() {
   TEST_ASSERT_EQUAL_size_t(held, join.release());
 }
 
+// The memory check and Auto DJ's join (LibraryUpdate::setGiveBack(), the
+// device checks' first boot of 2026-10-13): a file walked in makes the new
+// track table a little bigger than the old one's block, and the largest
+// free block doesn't hold it while the join is held at that block's top.
+// The check has the join given back (its bytes leave alsoFreed for the free
+// count, PSRAM measured again) and the step goes on as with Auto DJ off;
+// still short, it defers. Never asked when the table fits (the old block,
+// or the largest free one), when the room is short (the join is counted in
+// it already), when gb! defers, or more than once a step.
+namespace {
+
+struct GiveBack {
+  int calls = 0;
+  size_t give = 0;          // the join's bytes (0: none held)
+  size_t freeGain = SIZE_MAX;  // the free bytes measured again grow by this (SIZE_MAX: the bytes given)
+  size_t largestAfter = 0;  // PSRAM's largest free block once they are back
+  size_t freeSeen = 0, largestSeen = 0;
+};
+
+size_t giveBackHook(void* ctx, size_t* psramFree, size_t* psramLargest) {
+  GiveBack* g = static_cast<GiveBack*>(ctx);
+  ++g->calls;
+  g->freeSeen = *psramFree;
+  g->largestSeen = *psramLargest;
+  if (!g->give) return 0;
+  *psramFree += g->freeGain == SIZE_MAX ? g->give : g->freeGain;
+  *psramLargest = g->largestAfter;
+  const size_t given = g->give;
+  g->give = 0;  // (given back: none held until it joins again)
+  return given;
+}
+
+}  // namespace
+
+void test_the_memory_check_has_auto_djs_join_given_back() {
+  CutFs fs;
+  TestCard card;
+  handFilled(fs, card);
+  Device d(fs, card);
+  d.boot();
+  d.update("the scan's end");  // (the index of the files' readings)
+  const uint32_t tracks = d.index.trackCount();
+  // A file walked in: the next build's table (after the step's
+  // compaction) is a track bigger than the old one's block (trimmed to its
+  // tracks), so it needs a free block of its own.
+  card.addBytes("Aardvark Band/Sample/01 - g.mp3", corpus("ape_v1.mp3"));
+  d.jobs.askWalk();
+  d.drain();
+  GiveBack g;
+  d.upd->setGiveBack(giveBackHook, &g);
+  Env e;
+  e.psramLargest = 16;  // the join at the largest block's top (a 7-track table: a few hundred bytes)
+  e.alsoFreed = 155284;   // (its bytes, in what the step frees)
+
+  // Nothing to give back (Auto DJ off, or not joined): deferred.
+  d.update("nothing held", e);
+  TEST_ASSERT_TRUE(d.did(Do::Deferred));
+  TEST_ASSERT_TRUE(d.upd->verdict().shortOf == LibraryUpdate::Short::Table);
+  TEST_ASSERT_EQUAL_INT(1, g.calls);
+  TEST_ASSERT_EQUAL_size_t(16, g.largestSeen);
+  TEST_ASSERT_EQUAL_size_t(0, d.upd->last().givenBack);
+  // Given back, but the block still short (the join's blocks not next to
+  // it): deferred, the hook asked once.
+  d.acts.clear();
+  g = GiveBack();
+  g.give = 155284;
+  g.largestAfter = 16;
+  d.update("still short", e);
+  TEST_ASSERT_TRUE(d.did(Do::Deferred));
+  TEST_ASSERT_FALSE(d.did(Do::Fence));
+  TEST_ASSERT_EQUAL_INT(1, g.calls);
+  TEST_ASSERT_TRUE(d.upd->verdict().shortOf == LibraryUpdate::Short::Table);
+  TEST_ASSERT_EQUAL_size_t(155284, d.upd->last().givenBack);
+  TEST_ASSERT_EQUAL_size_t(16, d.upd->last().largestBefore);
+  // The room short (free PSRAM, the join already counted): not asked.
+  d.acts.clear();
+  g = GiveBack();
+  g.give = 155284;
+  g.largestAfter = 64u << 20;
+  Env room = e;
+  room.psramFree = 1024;
+  room.alsoFreed = 0;
+  d.update("short of room", room);
+  TEST_ASSERT_TRUE(d.did(Do::Deferred));
+  TEST_ASSERT_TRUE(d.upd->verdict().shortOf == LibraryUpdate::Short::Room);
+  TEST_ASSERT_EQUAL_INT(0, g.calls);
+  // gb!: deferred as asked, not asked.
+  d.acts.clear();
+  d.update("gb!", e, true);
+  TEST_ASSERT_TRUE(d.did(Do::Deferred));
+  TEST_ASSERT_TRUE(d.upd->deferForced());
+  TEST_ASSERT_EQUAL_INT(0, g.calls);
+  TEST_ASSERT_EQUAL_UINT32(tracks, d.index.trackCount());  // (the index as it was every time)
+  TEST_ASSERT_EQUAL_UINT32(4, d.upd->deferrals());
+  // The free bytes after the give-back are what the heap says then: the
+  // join's bytes leave alsoFreed whatever it says, never counted twice.
+  // Here the heap shows none of them free (taken again meanwhile): the
+  // room falls short by them and the step defers (counted twice, it would
+  // pass, a build 155 KB short of the check).
+  d.acts.clear();
+  g = GiveBack();
+  g.give = 155284;
+  g.freeGain = 0;
+  g.largestAfter = 64u << 20;
+  Env tight = e;
+  tight.psramFree = 0;
+  d.update("given back, no freer", tight);
+  TEST_ASSERT_TRUE(d.did(Do::Deferred));
+  TEST_ASSERT_FALSE(d.did(Do::Fence));
+  TEST_ASSERT_EQUAL_INT(1, g.calls);
+  TEST_ASSERT_EQUAL_size_t(155284, d.upd->last().givenBack);
+  const LibraryUpdate::Verdict v = d.upd->verdict();
+  TEST_ASSERT_TRUE(v.shortOf == LibraryUpdate::Short::Room);
+  TEST_ASSERT_TRUE(static_cast<uint64_t>(v.room) * 10 < static_cast<uint64_t>(v.peak) * 11);
+  TEST_ASSERT_TRUE(static_cast<uint64_t>(v.room + 155284) * 10 >= static_cast<uint64_t>(v.peak) * 11);
+  TEST_ASSERT_EQUAL_UINT32(5, d.upd->deferrals());
+  // Given back next to the block: the step goes on as with Auto DJ off,
+  // the join's bytes out of alsoFreed (they're free now), and builds.
+  d.acts.clear();
+  g = GiveBack();
+  g.give = 155284;
+  g.largestAfter = 64u << 20;
+  d.update("given back", e);
+  TEST_ASSERT_TRUE(d.did(Do::Fence));
+  TEST_ASSERT_TRUE(d.did(Do::Saved));
+  TEST_ASSERT_EQUAL_INT(1, g.calls);
+  TEST_ASSERT_EQUAL_size_t(64u << 20, g.freeSeen);
+  TEST_ASSERT_EQUAL_size_t(155284, d.upd->last().givenBack);
+  TEST_ASSERT_TRUE(d.upd->verdict().shortOf == LibraryUpdate::Short::None);
+  TEST_ASSERT_TRUE(d.upd->last().saved);
+  TEST_ASSERT_TRUE(d.upd->last().markerRemoved);  // (the deferrals' marker)
+  TEST_ASSERT_EQUAL_UINT32(tracks + 1, d.index.trackCount());
+  // The table fits now (the old block is the new one's size): never asked,
+  // however small the largest free block.
+  d.acts.clear();
+  g = GiveBack();
+  g.give = 155284;
+  e.psramLargest = 16;
+  d.update("fits", e);
+  TEST_ASSERT_TRUE(d.did(Do::Saved));
+  TEST_ASSERT_EQUAL_INT(0, g.calls);
+  TEST_ASSERT_EQUAL_size_t(0, d.upd->last().givenBack);
+  TEST_ASSERT_TRUE(fs.violations.empty());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_safe_point_and_the_memory_check);
@@ -1944,5 +2091,6 @@ int main(int, char**) {
   RUN_TEST(test_a_failed_first_walk_keeps_the_library);
   RUN_TEST(test_auto_dj_owed_holds_the_fence);
   RUN_TEST(test_the_join_after_a_live_step);
+  RUN_TEST(test_the_memory_check_has_auto_djs_join_given_back);
   return UNITY_END();
 }

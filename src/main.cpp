@@ -105,6 +105,8 @@ static AutoDj* autoDj = nullptr;
 // What Auto DJ's step and its console commands are told of the rest of the
 // firmware this pass (below, with the card's guard and the restarts).
 static AutoDj::Env autoDjEnv(uint32_t now);
+// The loop's idle wait while Auto DJ's join works (loop()'s end).
+static constexpr uint32_t kJoinLoopDelayMs = 2;
 // The library update's fence (docs/METADATA.md 3.4.2; N12): while the
 // update step's build runs on the card worker, the queue's memory is the
 // build's and the index is hidden from the loop. What the loop shows and
@@ -2882,6 +2884,43 @@ static void stepCardGuard() {
 
 // ---- Auto DJ (app/AutoDj; the engine design's 2.3, 3.2) ----
 
+// The decoder fills the ring from empty after a start or a skip: flat out
+// until it holds 500 ms (Core2AudioBackend's pacer), above the loop on its
+// core. Auto DJ's due pick waits for that (autodj::Env::refilling: a pick
+// timed across it measured the decoder, 108 ms on 2026-10-13), until the
+// track's source has ended (one shorter than 500 ms: a jingle as the
+// queue's last entry would end before the pick), and at most
+// kRefillWaitMs after the start was seen (one that never fills: a file
+// that didn't open). A gapless join is no start: nothing waits then.
+static constexpr uint32_t kRefillWaitMs = 1500;
+static bool decoderRefilling(uint32_t now) {
+  static uint32_t seq = 0, seenMs = 0;
+  const Core2AudioBackend::StartTiming t = audio.startTiming();
+  if (t.seq != seq) {
+    seq = t.seq;
+    seenMs = now;
+  }
+  return t.ring500Ms < 0 && now - seenMs < kRefillWaitMs && !audio.heardSourceEnded();
+}
+
+// The library update's memory check (LibraryUpdate::setGiveBack()): a new
+// track table that doesn't fit the largest free block while Auto DJ's join
+// is held at its top (AutoDjJoin's placement): the join given back, PSRAM
+// measured again. It joins again after the update's Live, or at once when
+// the update waits for the next boot after all.
+static size_t autoDjGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
+  if (!autoDj) return 0;
+  const size_t before = *psramLargest;
+  const size_t given = autoDj->giveBack();
+  if (!given) return 0;
+  *psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  *psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+  Serial.printf("[dj] the library update's memory check: the join given back (%u B): PSRAM's largest free block %u B "
+                "-> %u B (up to %u B with its blocks at that block's top); it joins again after the update\n",
+                (unsigned)given, (unsigned)before, (unsigned)*psramLargest, (unsigned)(before + given));
+  return given;
+}
+
 static AutoDj::Env autoDjEnv(uint32_t now) {
   AutoDj::Env e;
   e.nowMs = now;
@@ -2894,6 +2933,7 @@ static AutoDj::Env autoDjEnv(uint32_t now) {
   e.sleepEndOfQueue = sleepTimer.running() && sleepTimer.choice() == SleepTimer::Choice::EndOfQueue;
   e.listMoving = userInterface && userInterface->listMoving();
   e.uiStarted = !userInterface || userInterface->started();
+  e.refilling = decoderRefilling(now);
   return e;
 }
 
@@ -3076,8 +3116,8 @@ static void stepCard(uint32_t now, bool input) {
   env.waiting = player.state() == PlayState::Waiting || cpuRestartMhz != 0;
   env.trackLeftMs = trackLeftMs();
   env.seekSeq = player.seeks();
-  env.alsoFreed = queue.memoryBytes() + (userInterface ? userInterface->thumbs().poolBytes() : 0) +
-                  (autoDj ? autoDj->fenceBytes() : 0);
+  env.alsoFreed = queue.memoryBytes() + queueStore.savingBytes() +
+                  (userInterface ? userInterface->thumbs().poolBytes() : 0) + (autoDj ? autoDj->fenceBytes() : 0);
   // A pick owed while Auto DJ's index joins: no fence until it lands
   // (autodj::decide(), this pass's: stepAutoDj() ran before).
   env.autoDjOwed = autoDj && autoDj->owed();
@@ -3343,6 +3383,7 @@ void setup() {
   autoDj = psramNew<AutoDj>(library, player);
   if (autoDj) {
     autoDj->begin();
+    if (library.update()) library.update()->setGiveBack(autoDjGiveBack, nullptr);
   } else {
     Serial.println("[dj] no PSRAM for Auto DJ: off for this boot");
   }
@@ -3631,5 +3672,10 @@ void loop() {
   // says so: nothing to draw, touches only wake; ENERGY.md item 9).
   // (A power measurement's Pd stretches the wait while nothing animates.)
   const uint32_t uiIdleMs = userInterface ? userInterface->idleMs(millis()) : screen.off() ? 20 : 5;
-  delay(powerLab.loopDelayMs(uiIdleMs, danceMode.active()));
+  uint32_t loopDelayMs = powerLab.loopDelayMs(uiIdleMs, danceMode.active());
+  // Auto DJ's join under way (a second or two): a short wait, as its slices
+  // come a pass at a time (2026-10-13: 20 ms a pass in the dark made a join
+  // 4.6-7.2 s).
+  if (autoDj && autoDj->joinWorking() && loopDelayMs > kJoinLoopDelayMs) loopDelayMs = kJoinLoopDelayMs;
+  delay(loopDelayMs);
 }

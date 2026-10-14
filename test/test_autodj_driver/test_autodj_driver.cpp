@@ -20,8 +20,11 @@
 // - the fence: nothing behind it, the marks, the current entry and the
 //   pick up next carried by position after the read-back;
 // - the index arriving after a session began; "Auto DJ from here" and the
-//   empty states' button; Dp; Dn's dry run on a copy (the live session
-//   untouched).
+//   empty states' button (joined, and before a join: tracks looked up by
+//   their path's hash in DJPH, which agrees with the join); Dp; Dn's dry
+//   run on a copy (the live session untouched);
+// - a due pick waiting while the decoder refills the ring from empty; a
+//   quick skip's row (none for a file the index doesn't have).
 // An AutoDJ index written with mpdj::write for a made-up library, joined
 // (AutoDjJoin), its slots read through mpdj::Table::slot(), and a real
 // PlaybackController over a small backend.
@@ -1158,6 +1161,270 @@ void test_an_entry_that_never_started_is_no_quick_skip() {
   TEST_ASSERT_EQUAL_UINT32(skips, r.dj.engine().stats().quickSkips);
 }
 
+// ---------------------------------------------------------------------------
+// The device checks' fixes (2026-10-14)
+// ---------------------------------------------------------------------------
+
+// The decoder refilling the ring from empty (a start, a skip: the device's
+// 108 ms pick was the decoder's time): a due pick waits, nothing is read
+// ahead, the wait counted once; the refill over, the pick lands. A refill
+// owes nothing to the update step, and holds nothing when nothing is due.
+void test_a_due_pick_waits_for_the_decoders_refill() {
+  Rig r;
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  const uint32_t two[] = {r.card.trackOf(3), r.card.trackOf(9)};
+  TEST_ASSERT_TRUE(r.player.playNow(two, 2, 0));
+  // Not due: a refill reads nothing ahead (the first track's slot is due
+  // one once it starts).
+  r.env.refilling = true;
+  Pass p = r.playTo(600);
+  TEST_ASSERT_TRUE(p.started);
+  TEST_ASSERT_FALSE(p.picked);
+  TEST_ASSERT_FALSE(p.prefetched);
+  for (int i = 0; i < 3; ++i) {
+    p = r.pass();
+    TEST_ASSERT_FALSE(p.prefetched);
+    TEST_ASSERT_FALSE(p.refillWait);
+  }
+  r.env.refilling = false;
+  TEST_ASSERT_TRUE(r.pass().prefetched);
+  // A skip into the last entry: due, and the decoder refills.
+  r.player.next();
+  r.env.refilling = true;
+  for (int i = 0; i < 4; ++i) {
+    p = r.playTo(100);
+    TEST_ASSERT_TRUE(p.trigger.pick);
+    TEST_ASSERT_FALSE(p.trigger.owed);
+    TEST_ASSERT_FALSE(p.picked);
+    TEST_ASSERT_FALSE(p.prefetched);
+    TEST_ASSERT_TRUE(p.refillWait);
+  }
+  TEST_ASSERT_EQUAL_UINT32(1, r.dj.refillWaits());
+  TEST_ASSERT_EQUAL_UINT32(2, r.queue.size());
+  TEST_ASSERT_FALSE(r.dj.owed());
+  r.env.refilling = false;
+  p = r.playTo(300);
+  TEST_ASSERT_TRUE(p.picked && p.added);
+  TEST_ASSERT_FALSE(p.refillWait);
+  TEST_ASSERT_EQUAL_UINT32(3, r.queue.size());
+  TEST_ASSERT_EQUAL_UINT32(1, r.dj.refillWaits());
+  // Off: nothing is due, nothing waits.
+  TEST_ASSERT_TRUE(r.dj.setOn(false));
+  r.env.refilling = true;
+  r.player.next();
+  p = r.pass();
+  TEST_ASSERT_FALSE(p.refillWait);
+  TEST_ASSERT_EQUAL_UINT32(1, r.dj.refillWaits());
+}
+
+// A quick skip says the row the track had and whether it left the ring:
+// none for a file the index doesn't have (it never steered: the log line
+// says so, 2026-10-13's "no longer steers" for the bench MP3 was wrong);
+// a row that steered, out of the ring now; a row that wasn't steering (the
+// track playing when Auto DJ was switched on: it joins at the first pick),
+// nothing changes (Engine::rowLeft()'s answer).
+void test_a_quick_skip_says_the_row_it_had() {
+  Rig r;
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  const uint32_t three[] = {r.card.loose(), r.card.trackOf(5), r.card.trackOf(11)};
+  TEST_ASSERT_TRUE(r.player.playNow(three, 3, 0));
+  r.playTo(2500);
+  r.player.next();
+  Pass p = r.pass();
+  TEST_ASSERT_TRUE(p.quickSkip);
+  TEST_ASSERT_EQUAL_UINT32(r.card.loose(), p.leftTrack);
+  TEST_ASSERT_EQUAL_UINT16(autodj::kNoRow, p.leftRow);
+  TEST_ASSERT_FALSE(p.leftSteered);
+  r.playTo(2500);
+  TEST_ASSERT_TRUE(r.inRing(5));
+  r.player.next();
+  p = r.pass();
+  TEST_ASSERT_TRUE(p.quickSkip);
+  TEST_ASSERT_EQUAL_UINT32(r.card.trackOf(5), p.leftTrack);
+  TEST_ASSERT_EQUAL_UINT16(5, p.leftRow);
+  TEST_ASSERT_TRUE(p.leftSteered);
+  TEST_ASSERT_FALSE(r.inRing(5));
+  // Switched on while a track plays: it isn't in the ring yet.
+  TEST_ASSERT_TRUE(r.dj.setOn(false));
+  const uint32_t two[] = {r.card.trackOf(7), r.card.trackOf(12)};
+  TEST_ASSERT_TRUE(r.player.playNow(two, 2, 0));
+  r.playTo(700);
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  r.playTo(2500);
+  TEST_ASSERT_FALSE(r.inRing(7));
+  r.player.next();
+  p = r.pass();
+  TEST_ASSERT_TRUE(p.quickSkip);
+  TEST_ASSERT_EQUAL_UINT16(7, p.leftRow);
+  TEST_ASSERT_FALSE(p.leftSteered);
+}
+
+// A session seeded while the index joins ("Auto DJ from here", the empty
+// states' button with Auto DJ off: playback doesn't wait for the join), the
+// listener on to another track before the maps come: once they do, the
+// seed's row is Stay on seed's pin (Engine::mapsArrived(), the design's
+// 2.2), not the playing track's; the playing track steers the ring. An
+// Anchor change meanwhile drops it: the playing track's row then.
+void test_a_seed_before_the_join_is_the_pin() {
+  for (int changed = 0; changed < 2; ++changed) {
+    Rig r;
+    r.dj.setMode(autodj::Mode::Locked);
+    r.indexed = false;
+    r.joining = true;
+    bool switched = false;
+    TEST_ASSERT_TRUE(r.dj.playFrom(r.player, r.card.trackOf(8), Began::FromHere, nullptr, &switched));
+    TEST_ASSERT_TRUE(switched);
+    TEST_ASSERT_EQUAL_UINT16(autodj::kNoRow, r.dj.engine().pin());
+    r.playTo(1500);
+    const uint32_t next = r.card.trackOf(3);
+    TEST_ASSERT_TRUE(r.player.playNext(&next, 1));
+    r.player.next();
+    Pass p = r.playTo(400);
+    TEST_ASSERT_TRUE(p.quickSkip);  // (the seed: its row unknown, nothing left the ring)
+    TEST_ASSERT_TRUE(p.trigger.owed);
+    TEST_ASSERT_FALSE(p.picked);
+    if (changed) {
+      r.dj.setMode(autodj::Mode::Rolling);
+      r.dj.setMode(autodj::Mode::Locked);
+    }
+    r.indexed = true;
+    r.joining = false;
+    p = r.pass();
+    TEST_ASSERT_TRUE(p.mapsArrived);
+    TEST_ASSERT_EQUAL_UINT16(changed ? 3 : 8, r.dj.engine().pin());
+    TEST_ASSERT_TRUE(p.picked && p.added);
+    TEST_ASSERT_FALSE(p.pick.random);
+    TEST_ASSERT_EQUAL_UINT8(1, p.pick.reads);  // (the pin's slot: the only one read)
+    TEST_ASSERT_TRUE(r.dj.engine().cached(changed ? 3 : 8));
+    TEST_ASSERT_TRUE(r.inRing(3));  // (the playing track steers the ring)
+  }
+}
+
+// The empty states' button while nothing is joined (Auto DJ off): library
+// tracks drawn, the first the index has a row for (the firmware: its
+// path's hash in DJPH, mpdj::Table::rowOf()); kSurpriseTries at most; the
+// next session's seed (Ds) untouched. The path's hash and DJPH agree with
+// the join for every track.
+namespace {
+
+struct RowsByPath {
+  const LibraryIndex* index;
+  const mpdj::Table* table;
+  int lookups = 0;
+};
+
+bool rowByPath(uint32_t track, void* ctx) {
+  RowsByPath* r = static_cast<RowsByPath*>(ctx);
+  ++r->lookups;
+  char path[autodj::Join::kPathBytes];
+  uint64_t h = 0;
+  if (!autodj::trackPathHash(*r->index, track, path, sizeof(path), &h)) return false;
+  return r->table->rowOf(h) != mpdj::kNoRow;
+}
+
+bool never(uint32_t, void* ctx) {
+  ++*static_cast<int*>(ctx);
+  return false;
+}
+
+}  // namespace
+
+void test_the_button_looks_tracks_up_by_their_path() {
+  Rig r;
+  RowsByPath by{&r.card.index, &r.card.table};
+  // The path's hash finds the row the join gave every track (none for the
+  // loose file).
+  const autodj::Maps& m = *r.card.join.maps();
+  for (uint32_t t = 0; t < r.card.index.trackCount(); ++t) {
+    TEST_ASSERT_EQUAL(m.trackToRow[t] != autodj::kNoRow, rowByPath(t, &by));
+  }
+  TEST_ASSERT_FALSE(rowByPath(r.card.loose(), &by));
+  // Drawn: a track with a row, in a few lookups (all but one have one).
+  r.dj.setSeed(0x1234u);
+  for (int i = 0; i < 20; ++i) {
+    by.lookups = 0;
+    uint8_t tries = 0;
+    const uint32_t t = r.dj.surpriseTrack(r.card.index.trackCount(), rowByPath, &by, &tries);
+    TEST_ASSERT_TRUE(t < r.card.index.trackCount());
+    TEST_ASSERT_TRUE(m.trackToRow[t] != autodj::kNoRow);
+    TEST_ASSERT_EQUAL_INT(tries, by.lookups);
+    TEST_ASSERT_TRUE(tries >= 1 && tries <= autodj::kSurpriseTries);
+  }
+  // None has one: kSurpriseTries lookups, no track; no library: none.
+  int lookups = 0;
+  uint8_t tries = 0;
+  TEST_ASSERT_EQUAL_UINT32(autodj::kNoTrackId, r.dj.surpriseTrack(r.card.index.trackCount(), never, &lookups, &tries));
+  TEST_ASSERT_EQUAL_INT(autodj::kSurpriseTries, lookups);
+  TEST_ASSERT_EQUAL_UINT8(autodj::kSurpriseTries, tries);
+  TEST_ASSERT_EQUAL_UINT32(autodj::kNoTrackId, r.dj.surpriseTrack(0, never, &lookups, &tries));
+  TEST_ASSERT_EQUAL_UINT8(0, tries);
+  // The draws took nothing from the seed Ds set.
+  TEST_ASSERT_TRUE(r.dj.seedSet());
+  // Played from it before any join (the maps away): Auto DJ on, a session
+  // seeded by it; once the maps come, it steers.
+  r.indexed = false;
+  r.joining = true;
+  const uint32_t t = r.dj.surpriseTrack(r.card.index.trackCount(), rowByPath, &by);
+  bool switched = false;
+  TEST_ASSERT_TRUE(r.dj.playFrom(r.player, t, Began::Surprise, nullptr, &switched));
+  TEST_ASSERT_TRUE(switched);
+  TEST_ASSERT_TRUE(r.dj.settings().on);
+  TEST_ASSERT_EQUAL_UINT32(0x1234u, r.dj.sessionSeed());
+  Pass p = r.playTo(700);
+  TEST_ASSERT_TRUE(p.trigger.owed);  // (the pick waits for the join, the fence too)
+  TEST_ASSERT_FALSE(p.picked);
+  r.indexed = true;
+  r.joining = false;
+  p = r.pass();
+  TEST_ASSERT_TRUE(p.mapsArrived);
+  TEST_ASSERT_TRUE(p.picked && p.added);
+  TEST_ASSERT_TRUE(r.inRing(r.card.rowOf(t)));
+}
+
+// The join ready again (a fence, a remount: the glue calls
+// Engine::mapsChanged()): each cached slot's run is made again, one a loop
+// pass while nothing else is due, without a read; none while a list moves.
+// A read ahead makes its slot's run with it.
+void test_runs_are_made_again_for_new_maps() {
+  Rig r;
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  const uint32_t three[] = {r.card.trackOf(3), r.card.trackOf(9), r.card.trackOf(12)};
+  TEST_ASSERT_TRUE(r.player.playNow(three, 3, 0));
+  int prefetches = r.playTo(5000).prefetched ? 1 : 0;
+  r.end();  // (its natural end: it stays in the ring)
+  prefetches += r.playTo(600).prefetched ? 1 : 0;
+  for (int i = 0; i < 6; ++i) {
+    const Pass p = r.pass();
+    prefetches += p.prefetched ? 1 : 0;
+    TEST_ASSERT_FALSE(p.runMade);  // (made with each read)
+  }
+  TEST_ASSERT_TRUE(prefetches >= 1);
+  TEST_ASSERT_TRUE(r.dj.engine().cached(3) && r.dj.engine().cached(9));
+  const int reads = r.reader.reads;
+  r.dj.engine().mapsChanged();
+  r.env.listMoving = true;
+  for (int i = 0; i < 3; ++i) TEST_ASSERT_FALSE(r.pass().runMade);
+  r.env.listMoving = false;
+  int made = 0;
+  uint16_t rows[4] = {};
+  for (int i = 0; i < 6; ++i) {
+    const Pass p = r.pass();
+    TEST_ASSERT_FALSE(p.prefetched);
+    if (p.runMade && made < 4) rows[made++] = p.runRow;
+  }
+  TEST_ASSERT_EQUAL_INT(2, made);  // the two anchors, newest first, a pass each
+  TEST_ASSERT_EQUAL_UINT16(9, rows[0]);
+  TEST_ASSERT_EQUAL_UINT16(3, rows[1]);
+  TEST_ASSERT_EQUAL_INT(reads, r.reader.reads);
+  // The pick as the last entry starts (its own slot read then: it joined
+  // the ring as it started); nothing left to make.
+  r.player.next();
+  const Pass p = r.playTo(100);
+  TEST_ASSERT_TRUE(p.picked && p.added);
+  TEST_ASSERT_TRUE(p.pick.reads <= 1);
+  TEST_ASSERT_FALSE(r.pass().runMade);
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_the_command_parses_every_form);
@@ -1185,5 +1452,10 @@ int main(int, char**) {
   RUN_TEST(test_the_by_id_cooldown_is_cleared_at_the_read_back);
   RUN_TEST(test_a_refused_pick_leaves_the_ring);
   RUN_TEST(test_an_entry_that_never_started_is_no_quick_skip);
+  RUN_TEST(test_a_due_pick_waits_for_the_decoders_refill);
+  RUN_TEST(test_a_quick_skip_says_the_row_it_had);
+  RUN_TEST(test_a_seed_before_the_join_is_the_pin);
+  RUN_TEST(test_the_button_looks_tracks_up_by_their_path);
+  RUN_TEST(test_runs_are_made_again_for_new_maps);
   return UNITY_END();
 }

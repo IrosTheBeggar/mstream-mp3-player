@@ -41,7 +41,16 @@ counters. The rule (docs/AUTODJ-INDEX.md 11 is the index's side):
 - **The gate.** Best level >= L = max((255 p + 99) div 100, selFloor) for
   the slider p (11.4). Nothing passes (dry): the 50 with the highest sum,
   ties by row.
-- **The class** of a gated candidate: cooldown level x 8 + music rank. The
+- **Loosen before repeating** (the user's decision, 2026-10-14). When every
+  row of that pool (the gated candidates, or dry's 50) is among the last
+  50 played or picked, and a candidate outside them is left, the pool is
+  the 50 candidates outside them with the highest sum, ties by row: the
+  dry rule over the fresh candidates, below the gate if need be (the pick
+  is "loosened"). Only when every candidate is cooled does the pool stay as
+  it was, and the pick repeats. The classes below order a loosened pool as
+  any other (it holds no cooled row: the artist cooldown, then the tempo
+  and key preferences). Random picks have no lists and don't loosen.
+- **The class** of a pooled candidate: cooldown level x 8 + music rank. The
   cooldown level: 0 fresh; 1 its artist among the last 3 (an artistKey of
   0 is never cooled); 2 its row among the last 50 played or picked (a row
   that comes back moves to the end, as mStream's ignoreList). The
@@ -52,7 +61,7 @@ counters. The rule (docs/AUTODJ-INDEX.md 11 is the index's side):
   one either side, A or B; before there is an anchor any known key), then
   RANKS below. BPM continuity and Harmonic mixing default to off (D2).
 - **A missing BPM or key** (D3) gets a status drawn with the odds of this
-  pick's gated candidates that have one: below(n) over their tight / wide
+  pick's pooled candidates that have one: below(n) over their tight / wide
   / wrong (good / wrong) counts, for each candidate missing it in the
   candidates' order, every tempo draw before every key draw. With no known
   value among them, it stays unknown and ranks as mStream ranks unknown.
@@ -349,7 +358,7 @@ class PickIn:
 
 
 class Pick:
-    FIELDS = ("ok", "track", "row", "level", "cooldown_level", "music_rank", "dry", "random", "no_index",
+    FIELDS = ("ok", "track", "row", "level", "cooldown_level", "music_rank", "dry", "loosened", "random", "no_index",
               "imputed_tempo", "imputed_key", "tempo_break", "key_break", "reads", "broken", "candidates", "gated",
               "in_class")
 
@@ -358,7 +367,7 @@ class Pick:
         self.track = NO_TRACK
         self.row = NO_ROW
         self.level = self.cooldown_level = self.music_rank = 0
-        self.dry = self.random = self.no_index = False
+        self.dry = self.loosened = self.random = self.no_index = False
         self.imputed_tempo = self.imputed_key = self.tempo_break = self.key_break = False
         self.reads = 0
         self.broken = False
@@ -370,8 +379,8 @@ class Pick:
 
 class Stats:
     FIELDS = ("picks", "failed", "reads_at_pick", "prefetch_reads", "left_out", "damaged", "io_skips", "broken",
-              "dry", "random", "no_index", "imputed_tempo", "imputed_key", "classes", "mode_picks", "tempo_breaks",
-              "key_breaks", "quick_skips")
+              "dry", "loosened", "random", "no_index", "imputed_tempo", "imputed_key", "classes", "mode_picks",
+              "tempo_breaks", "key_breaks", "quick_skips")
 
     def __init__(self):
         for f in self.FIELDS:
@@ -393,6 +402,12 @@ def ring_add(ring, v, cap):
         del ring[0]
 
 
+def closest(cand):
+    """The dry rule: of (row, best, sum) candidates, the DRY with the highest
+    sum of levels, ties by row; in row order."""
+    return sorted(sorted(cand, key=lambda c: (-c[2], c[0]))[:DRY])
+
+
 class Engine:
     def __init__(self):
         self.cache = [None] * SLOT_CACHE    # [row, entries, stamp]
@@ -410,8 +425,19 @@ class Engine:
         self.pin = NO_ROW
         self.key_anchor = 0
         self.seeded = False
+        self.seed_awaits = NO_TRACK
         if seed_track != NO_TRACK:
             self._seed(seed_track, maps, True)
+            if maps is None:
+                self.seed_awaits = seed_track
+
+    def maps_arrived(self, maps):
+        """The index joined after the session began with a seed track and no
+        maps: that track's row is the pin now (not once the Anchor changed or
+        a pick took the pin); only the pin. Once a session."""
+        track, self.seed_awaits = self.seed_awaits, NO_TRACK
+        if track != NO_TRACK and self.pin == NO_ROW:
+            self.pin = row_of(maps, track)
 
     def _seed(self, track, maps, pin):
         """The session's first anchor; `pin` also Stay on seed's (the seed
@@ -448,15 +474,19 @@ class Engine:
             self._join(row, maps)
 
     def track_left(self, track, maps, played_ms, natural_end):
+        """A quick skip leaves the ring; True when it was there (it steered)."""
         if natural_end or played_ms >= QUICK_SKIP_MS:
-            return
+            return False
         self.stats.quick_skips += 1
         row = row_of(maps, track)
         if row in self.ring:
             self.ring.remove(row)
+            return True
+        return False
 
     def mode_changed(self):
         self.pin = NO_ROW
+        self.seed_awaits = NO_TRACK
 
     def file_reopened(self):
         self.cache = [None] * SLOT_CACHE
@@ -466,6 +496,7 @@ class Engine:
 
     def tracks_renumbered(self):
         self.ids = []
+        self.seed_awaits = NO_TRACK
 
     # ---- the slot cache and reads ----
     def _find(self, row):
@@ -597,7 +628,13 @@ class Engine:
         gated = [c for c in cand if c[1] >= gate]
         if not gated:
             out.dry = True
-            gated = sorted(sorted(cand, key=lambda c: (-c[2], c[0]))[:DRY])
+            gated = closest(cand)
+        if all(c[0] in self.cool for c in gated):
+            # Loosen before repeating: the dry rule over the fresh candidates.
+            fresh = [c for c in cand if c[0] not in self.cool]
+            if fresh:
+                out.loosened = True
+                gated = closest(fresh)
         out.gated = len(gated)
         rows = [c[0] for c in gated]
         j = self._choose(s, maps, rows, playing_row, out)
@@ -686,6 +723,7 @@ class Engine:
         st.mode_picks[s.mode] += 1
         st.reads_at_pick[out.reads] += 1
         st.dry += out.dry
+        st.loosened += out.loosened
         st.random += out.random
         st.no_index += out.no_index
         return out
@@ -790,6 +828,44 @@ def ties_table(n=100):
     return {"rows": n + 1, "k": n, "selHead": 16, "selFloor": 140, "lists": lists, "filters": [0] * (n + 1)}
 
 
+STARVE_CLIQUE = 8   # rows 0-7
+STARVE_SEED = 8     # lists exactly 3 rows above 75 % (the device's case, 2026-10-13)
+
+
+def starve_level(a, b):
+    """The starving table's level from row a to row b (75 % is level 192)."""
+    c = STARVE_CLIQUE
+    if a < c and b < c:
+        return 230 - 2 * abs(a - b)                       # the clique, above every step
+    if a == STARVE_SEED:
+        return {9: 200, 10: 197, 11: 194}.get(b, 189 - (b * 5) % 48)
+    if a < c:
+        return 150 + (a * 11 + b * 7) % 40                # the clique lists the rest below 75 %
+    if b < c:
+        return 195 + (a + b) % 5                          # the rest list the clique above it
+    return 145 + (a * 13 + b * 17) % 46                   # ... and each other below it
+
+
+def starve_table(rows=100, k=60):
+    """A table made to starve the gate at 75 %: rows 0-7 a clique listing
+    each other above every step and the rest below 75 %; every other row
+    lists the clique above 75 % and the rest below; row 8, the device's case
+    (Stay on seed at 75 %, seed 717feda5 on the synthetic card: 3 rows above
+    the floor, 197 repeats in 200 picks), lists exactly 3 rows above 75 %.
+    Each list its k best by (level desc, row asc). Filters: 12 artists,
+    BPMs 100-139 and keys in a cycle, a few of each missing."""
+    lists = []
+    for a in range(rows):
+        lst = sorted(((b, starve_level(a, b)) for b in range(rows) if b != a), key=lambda e: (-e[1], e[0]))
+        lists.append(lst[:k])
+    filters = []
+    for r in range(rows):
+        bpm10 = 0 if r % 17 == 5 else (100 + (r * 7) % 40) * 10
+        cam = 0 if r % 13 == 4 else 1 + (r * 5) % 24
+        filters.append(pack_filter(bpm10, cam, r % 2 == 0, 1 + r % 12))
+    return {"rows": rows, "k": k, "selHead": 16, "selFloor": 140, "lists": lists, "filters": filters}
+
+
 def encode_lists(lists):
     return ["".join("%04x%02x" % (r, lv) for r, lv in lst) for lst in lists]
 
@@ -827,7 +903,8 @@ def settings_json(s):
 def pick_json(p):
     """Every field of a Pick; those at 0 (false) left out."""
     d = {"ok": int(p.ok), "track": p.track, "row": p.row, "level": p.level, "cl": p.cooldown_level,
-         "mr": p.music_rank, "dry": int(p.dry), "random": int(p.random), "noIndex": int(p.no_index),
+         "mr": p.music_rank, "dry": int(p.dry), "loose": int(p.loosened), "random": int(p.random),
+         "noIndex": int(p.no_index),
          "impT": int(p.imputed_tempo), "impK": int(p.imputed_key), "tb": int(p.tempo_break),
          "kb": int(p.key_break), "reads": p.reads, "broken": int(p.broken), "cand": p.candidates,
          "gated": p.gated, "inClass": p.in_class}
@@ -837,7 +914,7 @@ def pick_json(p):
 def stats_json(st):
     return {"picks": st.picks, "failed": st.failed, "readsAtPick": st.reads_at_pick,
             "prefetchReads": st.prefetch_reads, "leftOut": st.left_out, "damaged": st.damaged,
-            "ioSkips": st.io_skips, "broken": st.broken, "dry": st.dry, "random": st.random,
+            "ioSkips": st.io_skips, "broken": st.broken, "dry": st.dry, "loosened": st.loosened, "random": st.random,
             "noIndex": st.no_index, "imputedTempo": st.imputed_tempo, "imputedKey": st.imputed_key,
             "classes": st.classes, "modePicks": st.mode_picks, "tempoBreaks": st.tempo_breaks,
             "keyBreaks": st.key_breaks, "quickSkips": st.quick_skips}
@@ -891,6 +968,13 @@ class Scene:
     def mode(self):
         self.e.mode_changed()
         self.events.append({"op": "mode"})
+
+    def arrived(self):
+        """The index joined (after `index` on): the firmware's loop step tells
+        the engine (a seed track given no maps becomes the pin)."""
+        assert self.cur() is not None
+        self.e.maps_arrived(self.cur())
+        self.events.append({"op": "arrived"})
 
     def reopen(self):
         self.e.file_reopened()
@@ -1215,6 +1299,96 @@ def scenes():
     sc.start(m.row_to_track[60], False)
     sc.run(Settings(ROLLING, 65), 6)
     out.append(sc)
+
+    # 20-23. Loosen before repeating (2026-10-14), on a table made to starve
+    # the gate at 75 % (after every session above: their maps stay put).
+    tables["starve"] = starve = starve_table()
+    m = maps_for(starve, extra=50, unmapped=0)
+    sc = Scene("loosen-locked-75", starve, "starve", m, seed=32,
+               note="the device's case: Stay on seed at 75 % from a seed with 3 rows above the floor; once they "
+                    "are cooled, the 50 nearest rows outside the track cooldown below it, so no repeat while a "
+                    "fresh listed row is left (the old rule repeated the 3); matching off, then both on")
+    sc.new(3200, m.row_to_track[STARVE_SEED])
+    sc.run(Settings(LOCKED, 75), 120)
+    sc.new(3201, m.row_to_track[STARVE_SEED])
+    sc.run(Settings(LOCKED, 75, True, True), 80, prefetch=0)
+    out.append(sc)
+
+    m = maps_for(starve, extra=0, unmapped=50)
+    seed_row = next(r for r in range(STARVE_CLIQUE) if m.row_to_track[r] != NO_ROW)
+    sc = Scene("loosen-rolling-75", starve, "starve", m, seed=33,
+               note="Follow the vibe starving the same way: from the clique at 75 %, its rows cooled while the "
+                    "anchors list nothing else above the floor; loosened until they leave the cooldown; the "
+                    "listener's tracks, quick skips, rows without a track")
+    sc.new(3300, m.row_to_track[seed_row])
+    sc.run(Settings(ROLLING, 75), 90, user=60, skips=60,
+           flips=[Settings(ROLLING, 75), Settings(ROLLING, 75, True, True), Settings(ROLLING, 70, False, True)])
+    out.append(sc)
+
+    m = maps_for(starve, extra=100, unmapped=0)
+    rowless = [t for t in range(m.tracks) if m.track_to_row[t] == NO_ROW]
+    sc = Scene("loosen-dry", starve, "starve", m, seed=34,
+               note="nothing passes 100 % (dry): the 50 best sums, which keep a fresh row while the anchors and "
+                    "the playing row hold part of the cooldown; then 50 of the listener's tracks, each quickly "
+                    "skipped, cool row 0's 50 nearest and a track with no row plays: dry and loosened, the 50 "
+                    "best sums outside the track cooldown")
+    sc.new(3400, m.row_to_track[STARVE_SEED])
+    sc.run(Settings(LOCKED, 100, True, False), 64, prefetch=1)
+    sc.new(3401, m.row_to_track[0])
+    for b, _ in starve["lists"][0][:DRY]:
+        sc.start(m.row_to_track[b], False)
+        sc.left(m.row_to_track[b], 1000, False)
+    sc.start(rowless[0], False)
+    sc.run(Settings(ROLLING, 100), 12)
+    out.append(sc)
+
+    short = [r for r in range(syn["rows"]) if len(syn["lists"][r]) == 3]
+    m = maps_for(syn, extra=0, unmapped=0)
+    sc = Scene("loosen-all-cooled", syn, "syn", m, seed=35,
+               note="Stay on seed from rows listing 3 rows, all above the gate: once every listed row is "
+                    "cooled, nothing is left to loosen to: the repeat (cooldown level 2), as before")
+    for n, r in enumerate(short[:2]):
+        sc.new(3500 + n, m.row_to_track[r])
+        sc.run(Settings(LOCKED, 75, n == 0, True), 8)
+    out.append(sc)
+
+    # 24. Join only while on (2026-10-14): "Auto DJ from here" and the empty
+    # states' button play at once, so the session's seed track comes before
+    # the maps; once they come, its row is Stay on seed's pin.
+    m = maps_for(syn, extra=20, unmapped=0)
+    rowless = [t for t in range(m.tracks) if m.track_to_row[t] == NO_ROW]
+    sc = Scene("seed-before-the-join", syn, "syn", m, seed=36,
+               note="a session seeded while the index joins: the seed skipped and another track playing when "
+                    "the maps come, the seed's row is the pin; not after an Anchor change, a library rebuild, "
+                    "a pick that took the pin, or for a seed without a row (the playing track's row then); "
+                    "maps that come again later change nothing")
+    for n, steps in enumerate(("skip", "mode", "renumber", "rowless", "taken")):
+        sc.index(False)
+        seed = rowless[n] if steps == "rowless" else m.row_to_track[10 + 40 * n]
+        sc.new(3600 + n, seed)
+        sc.left(seed, 1500, False)
+        sc.start(m.row_to_track[200 - 30 * n], False)
+        if steps == "mode":
+            sc.mode()
+        if steps == "renumber":
+            sc.renumber()
+        if steps == "taken":
+            sc.index(True)
+            sc.pick(Settings(LOCKED, 60))
+            sc.index(False)
+            sc.index(True)
+            sc.arrived()
+        else:
+            sc.index(True)
+            sc.arrived()
+            sc.start(sc.playing, False)
+        sc.prefetch(Settings(LOCKED, 60))  # (the pin's slot, read ahead: the seed's, or none yet)
+        sc.run(Settings(LOCKED, 60), 5, prefetch=1)
+    sc.index(False)
+    sc.index(True)
+    sc.arrived()
+    sc.run(Settings(LOCKED, 60), 3)
+    out.append(sc)
     return tables, out
 
 
@@ -1254,7 +1428,9 @@ tests the reference itself.
   DJ's pick), `left` (a track leaves: ms played, a natural end or not),
   `mode` (Anchor changed), `reopen` (the file reopened), `renumber` (the
   library rebuilt: the by-id cooldown cleared), `index` (`on` 0: the index
-  away from now, the engine given no maps and no slots; 1: back), `prefetch` (one loop pass
+  away from now, the engine given no maps and no slots; 1: back),
+  `arrived` (the index joined: a seed track given without maps becomes the
+  pin), `prefetch` (one loop pass
   in mode `m`: the row it reads, 65535 none, and the read's result),
   `pick` and `surprise` (the settings, the playing track, and every field
   of the result, a field left out being 0).

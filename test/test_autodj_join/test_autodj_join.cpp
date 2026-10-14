@@ -22,15 +22,21 @@
 //   runs, two library tracks of one 64-bit hash (neither mapped), tracks
 //   without a hash; longer minor-version DJRF and DJPH strides; each
 //   section's CRC;
-// - the slices: at most one read of at most 4 KB, 1,000 hashes, one run's
-//   sort; two joins interleaved; a fence (release()) and an index change
+// - the slices: at most one read of at most 4 KB, 250 hashes, 100
+//   confirms, one run's sort; a loop pass's slices (stepPass()): one card
+//   read at most; two joins interleaved; a fence (release()) and an index change
 //   (another pointer, none, the same object rebuilt) at every slice
 //   boundary, everything freed; every allocation failing in turn; every
 //   read failing in turn; 65,534 tracks and 65,535;
 // - the same file on the host FatFs model (FatModelFs.h), read in its 4 KB
 //   pieces;
 // - the memory and the slices at 20,000, 22,000 and 27,000 tracks against
-//   the design's figures (printed as [join] lines).
+//   the design's figures (printed as [join] lines);
+// - the placement hook (the blocks' order under a spacer, and without
+//   one), the spacers, and the placement under a model of the device's
+//   heap: a first boot's walk carving its buffers during the join, then a
+//   library update's track table (LibraryUpdate::roomToBuild()) that fits
+//   once the join is given back, as with Auto DJ off.
 // Run: pio test -e native -f test_autodj_join
 #include <unity.h>
 
@@ -58,6 +64,7 @@
 #include "CardContract.h"
 #include "LibraryIndex.h"
 #include "LibrarySynth.h"
+#include "LibraryUpdate.h"
 
 namespace cc = cardcontract;
 namespace mpdj = cardcontract::mpdj;
@@ -1162,7 +1169,7 @@ void test_slice_budget() {
   g_hashCalls = 0;
   runJoin(j, s.idx.get(), &f.src, &log);
   assertMaps(j, e, "6000");
-  uint32_t per[8] = {};
+  uint32_t per[8] = {}, reading[8] = {};
   const Phase order[] = {Phase::Hash, Phase::Sort, Phase::Strings, Phase::Filters, Phase::Paths};
   size_t at = 0;
   for (const Slice& sl : log) {
@@ -1170,30 +1177,39 @@ void test_slice_budget() {
     while (at < 5 && order[at] != sl.phase) ++at;
     TEST_ASSERT_TRUE(at < 5);
     ++per[static_cast<int>(sl.phase)];
+    reading[static_cast<int>(sl.phase)] += static_cast<uint32_t>(sl.reads);
     TEST_ASSERT_TRUE(sl.reads <= 1);
     TEST_ASSERT_TRUE(sl.most <= 4096);
-    if (sl.phase == Phase::Hash) TEST_ASSERT_TRUE(sl.hashes <= 1000);
+    if (sl.phase == Phase::Hash) TEST_ASSERT_TRUE(sl.hashes <= 250);
     if (sl.phase == Phase::Hash || sl.phase == Phase::Sort) TEST_ASSERT_EQUAL_UINT64(0, sl.reads);
-    if (sl.phase != Phase::Hash) TEST_ASSERT_TRUE(sl.hashes <= 4096 / 10 + 8);  // Paths' confirms
+    // Paths' confirms: 100 a slice (an entry's own may pass it by a few).
+    if (sl.phase != Phase::Hash) TEST_ASSERT_TRUE(sl.hashes <= 100 + 4);
   }
   const cc::Section& rf = f.table.container().section(mpdj::kSecFilters);
   const cc::Section& ph = f.table.container().section(mpdj::kSecPaths);
-  TEST_ASSERT_EQUAL_UINT32(6, per[static_cast<int>(Phase::Hash)]);
+  TEST_ASSERT_EQUAL_UINT32(24, per[static_cast<int>(Phase::Hash)]);
   TEST_ASSERT_EQUAL_UINT32(2, per[static_cast<int>(Phase::Sort)]);  // runs of 4,096 and 1,904
   TEST_ASSERT_EQUAL_UINT32(1, per[static_cast<int>(Phase::Strings)]);
-  TEST_ASSERT_TRUE(per[static_cast<int>(Phase::Filters)] <= rf.bytes / 4096 + 2);
-  TEST_ASSERT_TRUE(per[static_cast<int>(Phase::Paths)] <= ph.bytes / 4096 + 2);
-  // Every slice that reads, reads a piece: the reads are the pieces.
-  TEST_ASSERT_EQUAL_UINT64(log.size() - 8, f.src.reads);
+  TEST_ASSERT_TRUE(reading[static_cast<int>(Phase::Filters)] <= rf.bytes / 4096 + 2);
+  TEST_ASSERT_TRUE(reading[static_cast<int>(Phase::Paths)] <= ph.bytes / 4096 + 2);
+  // Paths' slices that go on in the buffer (the confirms' limit) read nothing.
+  TEST_ASSERT_TRUE(per[static_cast<int>(Phase::Paths)] > reading[static_cast<int>(Phase::Paths)]);
+  // Every slice that reads, reads a piece: the reads are the pieces, and the
+  // join's own count.
+  uint64_t readingSlices = 0;
+  for (const Slice& sl : log) readingSlices += sl.reads;
+  TEST_ASSERT_EQUAL_UINT64(readingSlices, f.src.reads);
+  TEST_ASSERT_EQUAL_UINT64(f.src.reads, j.stats().reads);
   // Ready: a step does nothing more.
   const uint64_t reads = f.src.reads;
   TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Ready), static_cast<int>(j.step(s.idx.get())));
   TEST_ASSERT_EQUAL_UINT64(reads, f.src.reads);
   TEST_ASSERT_TRUE(j.matches(s.idx.get()));
   TEST_ASSERT_FALSE(j.matches(nullptr));
-  printf("[join] 6000 tracks, default slices: %u slices (hash %u, sort %u, strings %u, filters %u, paths %u), "
-         "%u reads\n",
-         static_cast<unsigned>(log.size()), per[1], per[2], per[3], per[4], per[5], static_cast<unsigned>(f.src.reads));
+  printf("[join] 6000 tracks, default slices: %u slices (hash %u, sort %u, strings %u, filters %u, paths %u of "
+         "which %u read), %u reads\n",
+         static_cast<unsigned>(log.size()), per[1], per[2], per[3], per[4], per[5], reading[5],
+         static_cast<unsigned>(f.src.reads));
 
   // Two joins, a slice each in turn: each its own.
   Scale t = scale(1500, 4);
@@ -1604,7 +1620,8 @@ void test_memory_at_scale() {
       if (log[i].phase == Phase::Paths) mostConfirm = std::max(mostConfirm, log[i].hashes);
       mostMs = std::max(mostMs, ms[i]);
     }
-    TEST_ASSERT_TRUE(mostHash <= 1000);
+    TEST_ASSERT_TRUE(mostHash <= 250);
+    TEST_ASSERT_TRUE(mostConfirm <= 100 + 4);
     const uint32_t joinBytes = f.table.container().section(mpdj::kSecFilters).bytes +
                                f.table.container().section(mpdj::kSecPaths).bytes +
                                f.table.container().section(mpdj::kSecStrs).bytes;
@@ -1618,13 +1635,405 @@ void test_memory_at_scale() {
            static_cast<unsigned>(Heap::largest), static_cast<unsigned>(log.size()), per[1], per[2], per[3], per[4],
            per[5], static_cast<unsigned>(f.src.reads), static_cast<unsigned>(joinBytes),
            static_cast<unsigned>(mostHash), static_cast<unsigned>(mostConfirm), total, mostMs);
-    // The slices: ceil(n / 1,000) hashing, a run's sort each, one STRS,
-    // and one 4 KB piece a slice for DJRF and DJPH.
-    TEST_ASSERT_EQUAL_UINT32((n + 999) / 1000, per[static_cast<int>(Phase::Hash)]);
+    // The slices: ceil(n / 250) hashing, a run's sort each, one STRS,
+    // and one 4 KB piece a reading slice for DJRF and DJPH.
+    TEST_ASSERT_EQUAL_UINT32((n + 249) / 250, per[static_cast<int>(Phase::Hash)]);
     TEST_ASSERT_EQUAL_UINT32((n + 4095) / 4096, per[static_cast<int>(Phase::Sort)]);
-    const uint32_t pieces = per[static_cast<int>(Phase::Filters)] + per[static_cast<int>(Phase::Paths)];
-    TEST_ASSERT_TRUE(pieces <= joinBytes / 4096 + 3);
+    TEST_ASSERT_TRUE(f.src.reads <= joinBytes / 4096 + 4);
   }
+}
+
+// ---------------------------------------------------------------------------
+// A loop pass's slices (stepPass()): as many as its clock allows, never a
+// second card read; the join is the slice-by-slice one.
+// ---------------------------------------------------------------------------
+namespace {
+
+struct SliceBudget {
+  uint32_t left = 0;  // slices the pass may still take after this one
+};
+bool slicesLeft(void* ctx) {
+  SliceBudget* b = static_cast<SliceBudget*>(ctx);
+  if (b->left == 0) return false;
+  --b->left;
+  return true;
+}
+
+}  // namespace
+
+void test_a_pass_of_slices() {
+  Scale s = scale(6001, 4);
+  File f(s.file);
+  const Expect e = reference(*s.idx, f.table, byPath(*s.idx));
+  // The slices one at a time: the reference count.
+  uint32_t slices = 0;
+  {
+    Join j;
+    j.begin(f.table, s.idx.get());
+    runJoin(j, s.idx.get());
+    slices = j.stats().slices;
+    assertMaps(j, e, "slice by slice");
+  }
+  // A pass with time for everything: one card read a pass ends it.
+  {
+    Join j;
+    j.begin(f.table, s.idx.get());
+    f.src.reads = 0;
+    uint32_t passes = 0, noRead = 0;
+    while (j.status() == Status::Working) {
+      const uint64_t r0 = f.src.reads;
+      const uint32_t s0 = j.stats().slices;
+      j.stepPass(s.idx.get(), nullptr, nullptr);
+      ++passes;
+      TEST_ASSERT_TRUE(f.src.reads - r0 <= 1);
+      TEST_ASSERT_TRUE(j.stats().slices > s0);
+      if (f.src.reads == r0) ++noRead;
+    }
+    assertMaps(j, e, "a pass up to a read");
+    TEST_ASSERT_EQUAL_UINT32(slices, j.stats().slices);
+    // Every pass reads but the last, if its slices found the rest in the
+    // buffer (the hashing and the sorts ride along with STRS's read).
+    TEST_ASSERT_TRUE(noRead <= 1);
+    TEST_ASSERT_EQUAL_UINT32(f.src.reads + noRead, passes);
+    TEST_ASSERT_TRUE(passes * 2 < slices);
+    printf("[join] 6,001 tracks: %u slices in %u passes of one read at most (%u reads)\n", (unsigned)slices,
+           (unsigned)passes, (unsigned)f.src.reads);
+  }
+  // A pass's clock for three slices: the hashing takes a third of the
+  // passes, a read still ends one early.
+  {
+    Join j;
+    j.begin(f.table, s.idx.get());
+    f.src.reads = 0;
+    uint32_t passes = 0, hashPasses = 0;
+    while (j.status() == Status::Working) {
+      const uint64_t r0 = f.src.reads;
+      const uint32_t s0 = j.stats().slices;
+      const bool hashing = j.phase() == Phase::Hash;
+      SliceBudget b{2};
+      j.stepPass(s.idx.get(), slicesLeft, &b);
+      ++passes;
+      hashPasses += hashing ? 1 : 0;
+      TEST_ASSERT_TRUE(f.src.reads - r0 <= 1);
+      TEST_ASSERT_TRUE(j.stats().slices - s0 <= 3);
+    }
+    assertMaps(j, e, "three slices a pass");
+    TEST_ASSERT_EQUAL_UINT32(slices, j.stats().slices);
+    TEST_ASSERT_EQUAL_UINT32((25 + 2) / 3, hashPasses);  // 25 slices of 250 hashes
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The placement hook: what begin() takes under it, and in which order.
+// ---------------------------------------------------------------------------
+namespace {
+
+struct PlaceSpy {
+  int befores = 0, afters = 0;
+  size_t bytes = 0, kept = 0;  // the first call's, the second's (the kept blocks')
+  bool give = true;  // a token
+  void* token = nullptr;
+};
+std::string g_order;  // a letter a block, as begin() takes them
+uint32_t g_rows = 0, g_tracks = 0;
+void* spyBefore(size_t bytes, void* ctx) {
+  PlaceSpy* s = static_cast<PlaceSpy*>(ctx);
+  if (++s->befores == 1) {
+    s->bytes = bytes;
+  } else {
+    s->kept = bytes;
+  }
+  return s->give ? s : nullptr;
+}
+void spyAfter(void* token, void* ctx) {
+  PlaceSpy* s = static_cast<PlaceSpy*>(ctx);
+  ++s->afters;
+  s->token = token;
+}
+void* orderAlloc(size_t n) {
+  void* p = Heap::alloc(n);
+  if (!p) return nullptr;
+  char c = '?';
+  if (n == static_cast<size_t>(g_rows) * 4) {
+    c = 'F';  // the filters
+  } else if (n == static_cast<size_t>(g_rows) * 2 || n == static_cast<size_t>(g_tracks) * 2) {
+    c = 'M';  // rowToTrack, trackToRow
+  } else if (n == 4096) {
+    c = 'B';  // the stream's buffer
+  } else if (n % 6 == 0 && n >= 6 * 1000) {
+    c = 'R';  // a run
+  } else if (n < 1024) {
+    c = 'T';  // the runs' table
+  }
+  g_order += c;
+  return p;
+}
+
+}  // namespace
+
+void test_the_placement_hook() {
+  Scale s = scale(6001, 4);  // (6,001: no map's size a multiple of 6)
+  File f(s.file);
+  const Expect e = reference(*s.idx, f.table, byPath(*s.idx));
+  g_rows = s.rows;
+  g_tracks = s.idx->trackCount();
+  size_t all = 0;
+  for (int placed = 0; placed < 2; ++placed) {
+    Heap::reset();
+    g_order.clear();
+    PlaceSpy spy;
+    spy.give = placed != 0;
+    {
+      Join j(orderAlloc, Heap::release);
+      Join::Placement p;
+      p.before = spyBefore;
+      p.after = spyAfter;
+      p.ctx = &spy;
+      j.setPlacement(p);
+      TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Working), static_cast<int>(j.begin(f.table, s.idx.get())));
+      // The hook is told every byte begin() takes; placed, again the kept
+      // ones' once the transient ones are taken.
+      TEST_ASSERT_EQUAL_INT(placed ? 2 : 1, spy.befores);
+      TEST_ASSERT_EQUAL_size_t(Heap::live, spy.bytes);
+      TEST_ASSERT_EQUAL_size_t(placed ? static_cast<size_t>(g_rows) * 6 + static_cast<size_t>(g_tracks) * 2 : 0,
+                               spy.kept);
+      all = spy.bytes;
+      TEST_ASSERT_EQUAL(placed != 0, j.stats().placed);
+      if (placed) {
+        // Under a spacer: the transient blocks, then the kept ones above
+        // them; the token back once they are taken.
+        TEST_ASSERT_EQUAL_STRING("TRRBFMM", g_order.c_str());
+        TEST_ASSERT_EQUAL_INT(1, spy.afters);
+        TEST_ASSERT_EQUAL_PTR(&spy, spy.token);
+      } else {
+        // None: the kept ones first, as ever.
+        TEST_ASSERT_EQUAL_STRING("FMMTRRB", g_order.c_str());
+        TEST_ASSERT_EQUAL_INT(0, spy.afters);
+      }
+      runJoin(j, s.idx.get());
+      assertMaps(j, e, placed ? "placed" : "not placed");
+    }
+    TEST_ASSERT_EQUAL_size_t(0, Heap::live);
+  }
+  // (The maps, the runs, the buffer, and the runs' small table.)
+  const size_t blocks = static_cast<size_t>(g_rows) * 6 + static_cast<size_t>(g_tracks) * 8 + 4096;
+  TEST_ASSERT_TRUE(all > blocks && all < blocks + 1024);
+  // A block that fails under the spacer: the token still back, nothing held.
+  for (long k = 0; k < 7; ++k) {
+    Heap::reset();
+    Heap::failAt = k;
+    PlaceSpy spy;
+    Join j(Heap::alloc, Heap::release);
+    Join::Placement p;
+    p.before = spyBefore;
+    p.after = spyAfter;
+    p.ctx = &spy;
+    j.setPlacement(p);
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::NoMemory), static_cast<int>(j.begin(f.table, s.idx.get())));
+    TEST_ASSERT_EQUAL_INT(1, spy.afters);
+    TEST_ASSERT_EQUAL_size_t(0, Heap::live);
+    TEST_ASSERT_EQUAL_size_t(0, j.heldBytes());
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The placement under a model of the device's heap (problem 3 of the
+// device checks, 2026-10-13): the first boot of the 19k card joined at
+// once, the card's walk carved its buffers while the join ran, and a
+// library update then needed a track table a little bigger than the old
+// one's block, so a free block of 17/16 of it. With the join's blocks
+// where the heap put them (low in the largest block) giving them back
+// doesn't help; at that block's top (the spacers), giving them back makes
+// the block Auto DJ off would have left, and the update's memory check
+// passes as it would have.
+// ---------------------------------------------------------------------------
+namespace {
+
+// A heap that serves a request nearly as ESP-IDF's TLSF does: from the
+// free block of the smallest size that holds it (TLSF: the closest size
+// class), carved from that block's low end; a freed block joins its free
+// neighbours. Real memory (the join writes its maps).
+struct ModelHeap {
+  static std::vector<uint8_t>& mem() {
+    static std::vector<uint8_t> m;
+    return m;
+  }
+  static std::map<size_t, std::pair<size_t, bool>>& blocks() {  // offset: (size, used)
+    static std::map<size_t, std::pair<size_t, bool>> b;
+    return b;
+  }
+  static void reset(size_t bytes) {
+    mem().assign(bytes, 0);
+    blocks().clear();
+    blocks()[0] = {bytes, false};
+  }
+  static void* alloc(size_t n) {
+    n = n ? (n + 7) & ~static_cast<size_t>(7) : 8;
+    auto best = blocks().end();
+    for (auto it = blocks().begin(); it != blocks().end(); ++it) {
+      if (it->second.second || it->second.first < n) continue;
+      if (best == blocks().end() || it->second.first < best->second.first) best = it;
+    }
+    if (best == blocks().end()) return nullptr;
+    const size_t at = best->first, size = best->second.first;
+    best->second = {n, true};
+    if (size > n) blocks()[at + n] = {size - n, false};
+    return mem().data() + at;
+  }
+  static void release(void* p) {
+    if (!p) return;
+    auto it = blocks().find(static_cast<size_t>(static_cast<uint8_t*>(p) - mem().data()));
+    TEST_ASSERT_TRUE_MESSAGE(it != blocks().end() && it->second.second, "not a block of the model's");
+    it->second.second = false;
+    auto next = std::next(it);
+    if (next != blocks().end() && !next->second.second) {
+      it->second.first += next->second.first;
+      blocks().erase(next);
+    }
+    if (it != blocks().begin()) {
+      auto prev = std::prev(it);
+      if (!prev->second.second) {
+        prev->second.first += it->second.first;
+        blocks().erase(it);
+      }
+    }
+  }
+  static size_t largest() {
+    size_t m = 0;
+    for (const auto& b : blocks())
+      if (!b.second.second) m = std::max(m, b.second.first);
+    return m;
+  }
+};
+
+autodj::Spacers g_spacers;
+void* modelBefore(size_t bytes, void*) {
+  const bool first = g_spacers.n == 0;  // (as the firmware's hook: the second call adds to the first's)
+  if (autodj::takeSpacers(bytes, ModelHeap::largest, ModelHeap::alloc, ModelHeap::release, &g_spacers) || !first) {
+    return &g_spacers;
+  }
+  autodj::giveSpacers(&g_spacers, ModelHeap::release);
+  return nullptr;
+}
+void modelAfter(void* token, void*) { autodj::giveSpacers(static_cast<autodj::Spacers*>(token), ModelHeap::release); }
+
+enum class Dj { Off, Placed, WhereThe };
+struct Boot {
+  size_t largestAtJoin = 0;  // before the join's blocks
+  size_t largestJoined = 0;  // the join ready, the walk's blocks taken
+  size_t givenBack = 0;      // ... and the join given back
+  size_t joinBytes = 0;
+  bool placed = false;
+};
+
+// The boot's heap: the library's blocks, then smaller ones with 8 holes of
+// `hole` bytes between them, then the free tail; the walk's 4 blocks of
+// `walk` bytes.
+struct Shape {
+  size_t heap, hole, walk;
+};
+
+Boot firstBoot(Dj dj, const Shape& sh, File& f, const LibraryIndex& idx, const Expect& e) {
+  Boot b;
+  ModelHeap::reset(sh.heap);
+  TEST_ASSERT_NOT_NULL(ModelHeap::alloc(640000));
+  std::vector<void*> small;
+  for (int i = 0; i < 16; ++i) small.push_back(ModelHeap::alloc(sh.hole));
+  for (int i = 0; i < 16; i += 2) ModelHeap::release(small[i]);
+  TEST_ASSERT_NOT_NULL(ModelHeap::alloc(20000));
+  b.largestAtJoin = ModelHeap::largest();
+  Join j(ModelHeap::alloc, ModelHeap::release);
+  if (dj == Dj::Placed) {
+    Join::Placement p;
+    p.before = modelBefore;
+    p.after = modelAfter;
+    j.setPlacement(p);
+  }
+  if (dj != Dj::Off) {
+    TEST_ASSERT_EQUAL_INT(static_cast<int>(Status::Working), static_cast<int>(j.begin(f.table, &idx)));
+    b.placed = j.stats().placed;
+    runJoin(j, &idx, nullptr, nullptr, 20);  // (the walk begins 2 s after the UI's first frame)
+  }
+  // The card's walk and scan: four blocks, while the join runs.
+  for (int i = 0; i < 4; ++i) TEST_ASSERT_NOT_NULL(ModelHeap::alloc(sh.walk));
+  if (dj != Dj::Off) {
+    runJoin(j, &idx);
+    assertMaps(j, e, "the model heap");
+    b.joinBytes = j.heldBytes();
+  }
+  b.largestJoined = ModelHeap::largest();
+  j.release();
+  b.givenBack = ModelHeap::largest();
+  return b;
+}
+
+}  // namespace
+
+void test_the_placement_in_a_model_heap() {
+  Scale s = scale(20000, 4);
+  File f(s.file);
+  const Expect e = reference(*s.idx, f.table, byPath(*s.idx));
+  // Small holes (the runs come from the largest block), then holes the
+  // runs fit (they go there, and the maps still to the top).
+  const Shape shapes[] = {{1500000, 4000, 30000}, {1900000, 30000, 35000}};
+  Boot off, placed, heaps;
+  for (const Shape& sh : shapes) {
+    off = firstBoot(Dj::Off, sh, f, *s.idx, e);
+    placed = firstBoot(Dj::Placed, sh, f, *s.idx, e);
+    heaps = firstBoot(Dj::WhereThe, sh, f, *s.idx, e);
+    printf("[join] the model heap, holes of %u B, 20,000 tracks (the join %u B kept): the largest free block %u B at "
+           "the join; then with the walk's 4 x %u B: Auto DJ off %u B; joined at the top %u B, given back %u B; "
+           "joined where the heap puts it %u B, given back %u B\n",
+           (unsigned)sh.hole, (unsigned)placed.joinBytes, (unsigned)off.largestAtJoin, (unsigned)sh.walk,
+           (unsigned)off.givenBack, (unsigned)placed.largestJoined, (unsigned)placed.givenBack,
+           (unsigned)heaps.largestJoined, (unsigned)heaps.givenBack);
+    TEST_ASSERT_TRUE(placed.placed);
+    TEST_ASSERT_FALSE(heaps.placed);
+    // Off: the walk's blocks from the largest block's low end.
+    TEST_ASSERT_EQUAL_size_t(off.largestAtJoin - 4 * sh.walk, off.givenBack);
+    // At the top: the maps take the block's top (less than 24 KB above
+    // them), the walk its bottom, and the join given back leaves the very
+    // block Auto DJ off leaves.
+    TEST_ASSERT_TRUE(placed.largestJoined <= off.givenBack - placed.joinBytes);
+    TEST_ASSERT_TRUE(placed.largestJoined + placed.joinBytes + 24 * 1024 >= off.givenBack);
+    TEST_ASSERT_EQUAL_size_t(off.givenBack, placed.givenBack);
+    // Where the heap puts it: the maps and the walk's blocks low in the
+    // block; given back, the block is still short by more than the runs.
+    TEST_ASSERT_TRUE(heaps.givenBack + 100000 < off.givenBack);
+  }
+
+  // The update's memory check (LibraryUpdate::roomToBuild()): a new track
+  // table a little over the old one's block, which fits the largest block
+  // Auto DJ off leaves, with its sixteenth.
+  LibraryUpdate::Room r;
+  r.psramFree = 64u << 20;
+  r.indexBytes = 1000000;
+  r.tableBytes = (off.givenBack - 64) * 16 / 17;
+  r.trackBlock = r.tableBytes - 64;
+  r.psramLargest = off.givenBack;
+  TEST_ASSERT_TRUE(LibraryUpdate::roomToBuild(r).shortOf == LibraryUpdate::Short::None);
+  r.psramLargest = placed.largestJoined;  // joined: short (setGiveBack()'s case)
+  TEST_ASSERT_TRUE(LibraryUpdate::roomToBuild(r).shortOf == LibraryUpdate::Short::Table);
+  r.psramLargest = placed.givenBack;      // given back: as Auto DJ off
+  TEST_ASSERT_TRUE(LibraryUpdate::roomToBuild(r).shortOf == LibraryUpdate::Short::None);
+  r.psramLargest = heaps.givenBack;       // (unplaced, given back: still short)
+  TEST_ASSERT_TRUE(LibraryUpdate::roomToBuild(r).shortOf == LibraryUpdate::Short::Table);
+
+  // The spacers themselves: one from the largest block, one more on what
+  // it left; a heap with nothing to space takes none.
+  ModelHeap::reset(1000000);
+  autodj::Spacers sp;
+  TEST_ASSERT_TRUE(autodj::takeSpacers(300000, ModelHeap::largest, ModelHeap::alloc, ModelHeap::release, &sp));
+  TEST_ASSERT_TRUE(sp.n >= 1 && sp.n <= autodj::Spacers::kMax);
+  const size_t top = ModelHeap::largest();
+  TEST_ASSERT_TRUE(top >= 300000 + 300000 / 32);
+  TEST_ASSERT_TRUE(top <= 300000 + 300000 / 32 + 1024 + top / 32 + 4096 + 8);
+  autodj::giveSpacers(&sp, ModelHeap::release);
+  TEST_ASSERT_EQUAL_INT(0, sp.n);
+  TEST_ASSERT_EQUAL_size_t(1000000, ModelHeap::largest());
+  TEST_ASSERT_FALSE(autodj::takeSpacers(990000, ModelHeap::largest, ModelHeap::alloc, ModelHeap::release, &sp));
+  TEST_ASSERT_EQUAL_INT(0, sp.n);
+  TEST_ASSERT_EQUAL_size_t(0, autodj::spacerFor(300000 + 300000 / 32 + 1024 + 4096, 300000));
 }
 
 int main(int, char**) {
@@ -1645,5 +2054,8 @@ int main(int, char**) {
   RUN_TEST(test_library_limit);
   RUN_TEST(test_fat_model);
   RUN_TEST(test_memory_at_scale);
+  RUN_TEST(test_a_pass_of_slices);
+  RUN_TEST(test_the_placement_hook);
+  RUN_TEST(test_the_placement_in_a_model_heap);
   return UNITY_END();
 }

@@ -5,8 +5,10 @@
 // shuffle and its ranks: docs/QUEUE-MODES.md; its memory: release() and
 // the exact trim), TrackCatalog (library and built-in ids), QueueText (the
 // queue saved as paths, and read back after a library rebuild), QueueSaver
-// and QueueRemap (the queue carried across a rebuild through queue.txt:
-// docs/METADATA.md 3.4.2, milestone N3). Run: pio test -e native
+// (its timing; edits that never settle: an hour of Auto DJ appending a
+// track every second, written from snapshots) and QueueRemap (the queue
+// carried across a rebuild through queue.txt: docs/METADATA.md 3.4.2,
+// milestone N3). Run: pio test -e native
 #include <unity.h>
 
 #include <algorithm>
@@ -4871,6 +4873,305 @@ void test_random_quiet_appends_match_a_model() {
   TEST_ASSERT_TRUE(undone > 100);
 }
 
+// ---------------------------------------------------------------------------
+// Edits that never settle (Auto DJ's appends of 1-second tracks, the
+// device's soak of 2026-10-13: no queue.txt for 59 minutes): once the
+// file is QueueSaver::kMaxStaleMs behind, a snapshot's write that edits
+// don't drop.
+// ---------------------------------------------------------------------------
+namespace {
+
+// The file's lines after its header (the queue's tracks, as text).
+std::string bodyOf(const std::string& text) {
+  const size_t nl = text.find('\n');
+  return nl == std::string::npos ? std::string() : text.substr(nl + 1);
+}
+
+// The header's numbers: entries, current, generation; false: not a header.
+bool headerOf(const std::string& text, uint32_t* entries, int32_t* current, uint32_t* generation) {
+  unsigned version = 0, n = 0, g = 0;
+  long cur = 0;
+  if (std::sscanf(text.c_str(), "mstream-queue %u %u %ld %u", &version, &n, &cur, &g) != 4) return false;
+  *entries = n;
+  *current = static_cast<int32_t>(cur);
+  *generation = g;
+  return version == 1 || version == 2;
+}
+
+// The file a boot would read at any moment: whole (queuetext::read()
+// takes it, every line a track), and the line it picks, the position
+// saved for its generation (else its header's), one of its lines.
+void expectWhole(const std::string& file, const TrackCatalog& c, const MemStore& st, const char* when) {
+  QueueModel back;
+  MemorySource in(file.data(), file.size());
+  const queuetext::Restored r = queuetext::read(in, c, back);
+  TEST_ASSERT_TRUE_MESSAGE(r.ok, when);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(r.header.entries, back.size(), when);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.dropped, when);
+  if (st.posGeneration == r.header.generation) {
+    TEST_ASSERT_TRUE_MESSAGE(st.pos >= 0 && static_cast<uint32_t>(st.pos) < r.header.entries, when);
+  }
+}
+
+struct Soak {
+  uint32_t commits = 0, snapshots = 0;
+  uint32_t longestGapMs = 0;  // the longest between two writes (the first: from the first edit)
+  uint32_t staleStarts = 0;   // snapshot writes begun, each kMaxStaleMs after the first edit the last one missed
+  uint32_t positionsForTheFile = 0;
+  size_t mostSnapshot = 0;
+};
+
+// `ms` of Auto DJ on 1-second tracks: every second the playing track ends
+// (the next one current: the last) and Auto DJ appends one (appendQuiet():
+// at the cap, the oldest played entry goes); a loop pass every 20 ms.
+Soak soak(QueueModel& q, QueueSaver& saver, MemStore& st, const TrackCatalog& c, uint32_t ms, uint32_t tracks) {
+  Soak s;
+  std::string expected;  // the snapshot's text, when its write began
+  uint32_t expectedGen = 0, next = 1, lastCommit = 1000;  // (the first edit's second)
+  // The first edit the file doesn't have yet (none: kNone), from which
+  // the next snapshot's write is kMaxStaleMs away (QueueSaver's rule: not
+  // from the end of the write before).
+  // (A queue loaded to be written again is behind the file from then: 0.)
+  constexpr uint32_t kNone = 0xFFFFFFFFu;
+  uint32_t firstEdit = saver.contentDirty() ? 0 : kNone;
+  bool wasWriting = false;
+  int commits = st.commits, positions = st.positions;
+  Meter::mark();
+  for (uint32_t t = 20; t <= ms; t += 20) {
+    if (t % 1000 == 0) {
+      TEST_ASSERT_TRUE(q.step(1, false));
+      TEST_ASSERT_TRUE(q.appendQuiet((next++ * 7919u) % tracks));
+      if (firstEdit == kNone) firstEdit = t;
+    }
+    saver.loop(t);
+    if (saver.writingSnapshot() && !wasWriting) {
+      // (This pass took the snapshot: nothing edited the queue since.)
+      expectedGen = saver.generation() + 1;
+      expected = wholeText(q, c, expectedGen);
+      TEST_ASSERT_TRUE(firstEdit != kNone);
+      const uint32_t stale = t - firstEdit;
+      TEST_ASSERT_TRUE_MESSAGE(stale >= QueueSaver::kMaxStaleMs && stale <= QueueSaver::kMaxStaleMs + 40,
+                               "a snapshot's write kMaxStaleMs after the first edit the file missed");
+      firstEdit = kNone;  // (this one has every edit so far)
+      ++s.staleStarts;
+    }
+    wasWriting = saver.writing();
+    if (st.commits != commits) {
+      commits = st.commits;
+      ++s.commits;
+      uint32_t n = 0, gen = 0;
+      int32_t cur = -1;
+      TEST_ASSERT_TRUE(headerOf(st.file, &n, &cur, &gen));
+      TEST_ASSERT_EQUAL_UINT32(saver.generation(), gen);
+      if (!expected.empty() && expectedGen == gen) {
+        TEST_ASSERT_EQUAL_STRING(expected.c_str(), st.file.c_str());  // the snapshot, whole, as QueueText writes it
+        ++s.snapshots;
+      }
+      expected.clear();
+      expectWhole(st.file, c, st, "a write");
+      s.longestGapMs = std::max(s.longestGapMs, t - lastCommit);
+      lastCommit = t;
+    }
+    if (st.positions != positions) {
+      positions = st.positions;
+      // A position is saved only for a file that is the queue.
+      uint32_t n = 0, gen = 0;
+      int32_t cur = -1;
+      TEST_ASSERT_TRUE(headerOf(st.file, &n, &cur, &gen));
+      TEST_ASSERT_EQUAL_UINT32(gen, st.posGeneration);
+      TEST_ASSERT_EQUAL_STRING(bodyOf(wholeText(q, c, gen)).c_str(), bodyOf(st.file).c_str());
+      TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+      ++s.positionsForTheFile;
+    }
+    // A cut at any moment (every 13th second, mid-write or not): the last
+    // good file, whole.
+    if (t % 13000 == 0) expectWhole(st.file, c, st, "a cut");
+  }
+  s.mostSnapshot = Meter::peak;
+  return s;
+}
+
+}  // namespace
+
+// The device's soak on the host: an hour of a track appended every second
+// to a queue that reaches the cap (5,000) and stays there. queue.txt is
+// written at least every kMaxStaleMs and a write's time (each a snapshot's
+// whole queue; at any moment a file a boot reads whole), the snapshot's
+// memory given back each time; a position only ever paired with a file
+// that is the queue. The edits stop: the file catches up with the queue,
+// its position with it.
+void test_the_saver_keeps_up_with_appends_every_second() {
+  constexpr uint32_t kTracks = 20000, kStart = 3800;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kTracks));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  std::vector<uint32_t> ids;
+  for (uint32_t i = 0; i < kStart; ++i) ids.push_back((i * 31u) % kTracks);
+  TEST_ASSERT_TRUE(q.assign(ids.data(), kStart, kStart - 2));  // (Auto DJ's pick up next)
+  MemStore st;
+  Meter::reset();
+  QueueSaver saver(st, q, c, Meter::alloc, Meter::release);
+  saver.loaded(5, false, 0);
+  st.file = wholeText(q, c, 5);
+  const Soak s = soak(q, saver, st, c, 3600u * 1000u, kTracks);
+  printf("[saver] an hour of appends every second (%u entries at the end): %u writes (%u from a snapshot), at "
+         "most %u ms between two, %u positions saved for the file, the snapshot at most %u B\n",
+         (unsigned)q.size(), (unsigned)s.commits, (unsigned)saver.snapshotWrites(), (unsigned)s.longestGapMs,
+         (unsigned)s.positionsForTheFile, (unsigned)s.mostSnapshot);
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kMaxEntries, q.size());
+  // A write at least every kMaxStaleMs and a write's time (157 passes of
+  // 20 ms at the cap).
+  TEST_ASSERT_TRUE(s.longestGapMs <= QueueSaver::kMaxStaleMs + 4000);
+  TEST_ASSERT_TRUE(s.commits >= 3600 / 35);
+  TEST_ASSERT_EQUAL_UINT32(s.commits, saver.writes());
+  TEST_ASSERT_EQUAL_UINT32(s.commits, saver.snapshotWrites());
+  TEST_ASSERT_EQUAL_UINT32(s.commits, s.snapshots);
+  TEST_ASSERT_EQUAL_UINT32(s.commits, s.staleStarts);
+  TEST_ASSERT_EQUAL_INT(0, st.discards);  // (no edit dropped one)
+  TEST_ASSERT_TRUE(s.mostSnapshot <= QueueModel::kMaxEntries * 4u);
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+  // The edits stop (the queue pauses): 2 s later the queue as it is, and
+  // its position for the file.
+  for (uint32_t t = 3600u * 1000u + 20; t < 3600u * 1000u + 12000; t += 20) saver.loop(t);
+  TEST_ASSERT_FALSE(saver.busy());
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, saver.generation()).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(saver.generation(), st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+}
+
+// The same shuffled for ten minutes (version 2: each line's rank from the
+// snapshot), then a power-off in the middle of a snapshot's write: the
+// queue has moved on, so that write is dropped and the queue as it is now
+// written whole, its position with it.
+void test_a_shuffled_soak_and_a_power_off_mid_snapshot() {
+  constexpr uint32_t kTracks = 20000, kStart = 4990;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kTracks));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  std::vector<uint32_t> ids;
+  for (uint32_t i = 0; i < kStart; ++i) ids.push_back((i * 31u) % kTracks);
+  TEST_ASSERT_TRUE(q.assign(ids.data(), kStart, kStart - 2));  // (Auto DJ's pick up next)
+  TEST_ASSERT_TRUE(q.setShuffled(true));
+  MemStore st;
+  Meter::reset();
+  QueueSaver saver(st, q, c, Meter::alloc, Meter::release);
+  saver.loaded(9, true, 0);
+  st.file = wholeText(q, c, 9);
+  const Soak s = soak(q, saver, st, c, 600u * 1000u, kTracks);
+  TEST_ASSERT_TRUE(s.commits >= 600 / 35);
+  TEST_ASSERT_TRUE(s.longestGapMs <= QueueSaver::kMaxStaleMs + 4000);
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 2 "));
+  TEST_ASSERT_TRUE(s.mostSnapshot <= QueueModel::kMaxEntries * 8u);
+  // On to the next snapshot's write, an edit into it, then the power-off.
+  uint32_t t = 600u * 1000u;
+  for (bool was = true; !(saver.writingSnapshot() && !was);) {
+    was = saver.writing();
+    t += 20;
+    if (t % 1000 == 0) {
+      q.step(1, false);
+      q.appendQuiet(t % kTracks);
+    }
+    saver.loop(t);
+  }
+  const std::string before = st.file;
+  q.step(1, false);
+  q.appendQuiet(7);
+  saver.loop(t + 20);
+  TEST_ASSERT_TRUE(saver.writingSnapshot());  // (an edit doesn't drop it)
+  TEST_ASSERT_EQUAL_STRING(before.c_str(), st.file.c_str());
+  const int discards = st.discards;
+  TEST_ASSERT_TRUE(saver.flushNow(t + 40));
+  TEST_ASSERT_EQUAL_INT(discards + 1, st.discards);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, saver.generation()).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(saver.generation(), st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  TEST_ASSERT_FALSE(saver.writing());
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+}
+
+// A snapshot's write: a toggle doesn't drop it, a power-off after one does
+// (the queue isn't the snapshot's: written whole); one the queue only
+// moved in is finished (its file, then the position). No memory for a
+// snapshot: nothing is begun (no temporary file), and once the edits stop,
+// the plain write after its 2 s.
+void test_a_snapshot_write_and_no_memory_for_one() {
+  constexpr uint32_t kTracks = 6000, kStart = 3000;  // (a write of 94 passes: longer than a second)
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kTracks));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  std::vector<uint32_t> ids;
+  for (uint32_t i = 0; i < kStart; ++i) ids.push_back(i * 13u % kTracks);
+  TEST_ASSERT_TRUE(q.assign(ids.data(), kStart, 100));
+  MemStore st;
+  Meter::reset();
+  QueueSaver saver(st, q, c, Meter::alloc, Meter::release);
+  saver.loaded(2, false, 0);
+  // An edit a second: the snapshot's write begins kMaxStaleMs after the first.
+  uint32_t t = 0;
+  while (!saver.writing()) {
+    t += 20;
+    if (t % 1000 == 0) TEST_ASSERT_TRUE(q.appendQuiet(t / 1000));
+    saver.loop(t);
+    TEST_ASSERT_TRUE(t <= 1000 + QueueSaver::kMaxStaleMs);
+  }
+  TEST_ASSERT_TRUE(saver.writingSnapshot());
+  TEST_ASSERT_EQUAL_UINT32(1000 + QueueSaver::kMaxStaleMs, t);
+  TEST_ASSERT_EQUAL_size_t(static_cast<size_t>(q.size()) * 4, Meter::live);
+  q.setShuffled(true);  // a toggle: an edit, the snapshot's write goes on
+  saver.loop(t + 20);
+  TEST_ASSERT_TRUE(saver.writingSnapshot());
+  q.setShuffled(false);
+  q.step(1, false);
+  // The power-off: the queue isn't the snapshot's (two toggles are two
+  // edits), so it is written whole.
+  TEST_ASSERT_TRUE(saver.flushNow(t + 40));
+  TEST_ASSERT_EQUAL_INT(1, st.discards);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 3).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(3, st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+  // A snapshot's write the queue only moves in: finished by the power-off,
+  // its header's line the snapshot's, the position the queue's.
+  t += 1000;
+  const uint32_t from = t;
+  while (!saver.writingSnapshot()) {
+    t += 20;
+    if (t % 1000 == 0) q.appendQuiet(t / 1000);
+    saver.loop(t);
+    TEST_ASSERT_TRUE(t <= from + 1000 + QueueSaver::kMaxStaleMs + 20);
+  }
+  const std::string whole = wholeText(q, c, saver.generation() + 1);
+  q.step(1, false);  // a move, no edit
+  TEST_ASSERT_TRUE(saver.flushNow(t + 20));
+  TEST_ASSERT_EQUAL_STRING(whole.c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(saver.generation(), st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  TEST_ASSERT_EQUAL_UINT32(1, saver.snapshotWrites());
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+
+  // No memory for a snapshot: two minutes of an edit a second open no
+  // temporary file; the edits over, the plain write 2 s later.
+  const int commits = st.commits, opens = st.opens;
+  Meter::ceiling = 0;
+  const uint32_t start = t + 1000 - (t + 1000) % 1000;
+  for (t = start; t < start + 120000; t += 20) {
+    if (t % 1000 == 0) q.appendQuiet(t / 1000 % kTracks);
+    saver.loop(t);
+  }
+  TEST_ASSERT_EQUAL_INT(commits, st.commits);
+  TEST_ASSERT_EQUAL_INT(opens, st.opens);
+  TEST_ASSERT_TRUE(saver.contentDirty());
+  for (const uint32_t end = t + 10000; t < end; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(commits + 1, st.commits);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, saver.generation()).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  Meter::reset();
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -4934,6 +5235,9 @@ int main(int, char**) {
   RUN_TEST(test_a_toggle_during_a_write_restarts_it);
   RUN_TEST(test_shuffle_alls_undo_writes_version_1_again);
   RUN_TEST(test_off_while_paused_pairs_the_resume_point_again);
+  RUN_TEST(test_the_saver_keeps_up_with_appends_every_second);
+  RUN_TEST(test_a_shuffled_soak_and_a_power_off_mid_snapshot);
+  RUN_TEST(test_a_snapshot_write_and_no_memory_for_one);
   RUN_TEST(test_assign_is_exact_and_growth_is_bounded);
   RUN_TEST(test_release_gives_everything_back);
   RUN_TEST(test_window_holds_the_current_entry);

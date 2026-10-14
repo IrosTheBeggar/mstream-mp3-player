@@ -32,7 +32,9 @@ tests the reference itself.
   DJ's pick), `left` (a track leaves: ms played, a natural end or not),
   `mode` (Anchor changed), `reopen` (the file reopened), `renumber` (the
   library rebuilt: the by-id cooldown cleared), `index` (`on` 0: the index
-  away from now, the engine given no maps and no slots; 1: back), `prefetch` (one loop pass
+  away from now, the engine given no maps and no slots; 1: back),
+  `arrived` (the index joined: a seed track given without maps becomes the
+  pin), `prefetch` (one loop pass
   in mode `m`: the row it reads, 65535 none, and the read's result),
   `pick` and `surprise` (the settings, the playing track, and every field
   of the result, a field left out being 0).

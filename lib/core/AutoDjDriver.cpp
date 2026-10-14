@@ -127,6 +127,10 @@ uint32_t Driver::nextSeed() {
     seedSet_ = false;
     return seed_;
   }
+  return random32();
+}
+
+uint32_t Driver::random32() {
   if (cfg_.random) return cfg_.random();
   fallback_ ^= fallback_ << 13;
   fallback_ ^= fallback_ >> 17;
@@ -206,10 +210,13 @@ Pass Driver::step(PlaybackController& player, const Index& ix, const Env& env) {
     if (s_.on && watch_.key != QueueModel::kNone && watch_.started) {
       // (Its row: the maps', else the one they last gave: away after a
       // fence until the join is ready again.)
-      engine_.rowLeft(maps ? rowOf(maps, watch_.track) : watch_.row, watch_.playedMs, natural);
+      const uint16_t row = maps ? rowOf(maps, watch_.track) : watch_.row;
+      const bool steered = engine_.rowLeft(row, watch_.playedMs, natural);
       if (!natural && watch_.playedMs < kQuickSkipMs) {
         p.quickSkip = true;
         p.leftTrack = watch_.track;
+        p.leftRow = row;
+        p.leftSteered = steered;
         p.leftMs = watch_.playedMs;
       }
     }
@@ -238,7 +245,10 @@ Pass Driver::step(PlaybackController& player, const Index& ix, const Env& env) {
       }
     }
   }
-  // The index joined since this track started: it steers from now.
+  // The index joined since the session began: a seed track it was given
+  // without the maps is the pin now (Engine::mapsArrived()); and since this
+  // track started: it steers from now.
+  if (p.mapsArrived) engine_.mapsArrived(*maps);
   if (p.mapsArrived && s_.on && watch_.started && !p.started) {
     engine_.trackStarted(watch_.track, maps, marks_.has(key));
   }
@@ -265,7 +275,17 @@ Pass Driver::step(PlaybackController& player, const Index& ix, const Env& env) {
   trigger_ = p.trigger;
   if (s_.on && p.trigger.hold != Hold::None && p.trigger.hold != lastHold_) ++holds_;
   lastHold_ = s_.on ? p.trigger.hold : Hold::None;
-  if (p.trigger.pick && !retryWaits(env.nowMs)) {
+  const bool due = p.trigger.pick && !retryWaits(env.nowMs);
+  // The decoder's refill from empty: the pick waits a pass or two, and
+  // nothing is read ahead (the class comment's step 4).
+  if (env.refilling) {
+    p.refillWait = due;
+    if (due && !refillWaiting_) ++refillWaits_;
+    refillWaiting_ = due;
+    return p;
+  }
+  refillWaiting_ = false;
+  if (due) {
     pickInto(player, ix, env, p.trigger.cue, &p);
     return p;
   }
@@ -273,15 +293,23 @@ Pass Driver::step(PlaybackController& player, const Index& ix, const Env& env) {
   if (readWait_ && static_cast<int32_t>(env.nowMs - readAtMs_) >= 0) readWait_ = false;
   if (s_.on && maps && ix.slots && !ix.joining && !env.listMoving && !env.cardHeld && !readWait_ &&
       engine_.prefetchDue(s_, &row)) {
+    // (Given the maps and k, the slot's run is made too: the pick then
+    // reads no map.)
     TimedReader timed(ix.slots, cfg_.nowUs);
     p.prefetched = true;
     p.prefetchRow = row;
-    p.prefetch = engine_.prefetch(timed, row);
+    p.prefetch = engine_.prefetch(timed, row, maps, ix.k);
     p.prefetchUs = timed.us;
     if (p.prefetch != SlotResult::Ok) {
       readWait_ = true;
       readAtMs_ = env.nowMs + kReadAgainMs;
     }
+  } else if (s_.on && maps && !ix.joining && !env.listMoving && engine_.runDue(s_, *maps, ix.k, &row)) {
+    // A cached slot whose run the maps outdated (the join ready again):
+    // made again now, no read, one a pass.
+    engine_.makeRun(row, *maps, ix.k);
+    p.runMade = true;
+    p.runRow = row;
   }
   return p;
 }
@@ -361,6 +389,19 @@ Pick Driver::surprise(const Index& ix) {
   PickIn in;
   in.maps = ix.maps;
   return engine_.surprise(s_, in);
+}
+
+uint32_t Driver::surpriseTrack(uint32_t libraryTracks, bool (*hasRow)(uint32_t track, void* ctx), void* ctx,
+                               uint8_t* tries) {
+  uint8_t n = 0;
+  uint32_t found = kNoTrackId;
+  for (; libraryTracks && hasRow && n < kSurpriseTries && found == kNoTrackId; ++n) {
+    // (Multiply-shift: no modulo bias worth the name below 65,535 tracks.)
+    const uint32_t t = static_cast<uint32_t>((static_cast<uint64_t>(random32()) * libraryTracks) >> 32);
+    if (hasRow(t, ctx)) found = t;
+  }
+  if (tries) *tries = n;
+  return found;
 }
 
 // ---------------------------------------------------------------------------
@@ -446,7 +487,7 @@ bool DryRun::step(const Settings& s, const Index& ix, uint32_t libraryTracks, Ti
   // A read ahead first, as the loop makes one a pass between two picks.
   uint16_t row = kNoRow;
   if (!readFailed_ && ix.maps && ix.slots && copy_.prefetchDue(s, &row)) {
-    readFailed_ = copy_.prefetch(*ix.slots, row) != SlotResult::Ok;
+    readFailed_ = copy_.prefetch(*ix.slots, row, ix.maps, ix.k) != SlotResult::Ok;
     const Stats& st = copy_.stats();
     r_.prefetchReads = st.prefetchReads - base_.prefetchReads;
     return true;
@@ -485,6 +526,7 @@ bool DryRun::step(const Settings& s, const Index& ix, uint32_t libraryTracks, Ti
   r_.imputedTempo = st.imputedTempo - base_.imputedTempo;
   r_.imputedKey = st.imputedKey - base_.imputedKey;
   r_.dry = st.dry - base_.dry;
+  r_.loosened = st.loosened - base_.loosened;
   r_.random = st.random - base_.random;
   r_.noIndex = st.noIndex - base_.noIndex;
   r_.prefetchReads = st.prefetchReads - base_.prefetchReads;

@@ -30,15 +30,36 @@
 //     after a boot if it was: the restored queue waits for Play), the
 //     engine's memory, and the file the boot's root names (Library::root()),
 //     opened and checked against it (Table::open(), companionMatches(): 1-2
-//     small reads). Any failure: no index, picks at random (logged why).
+//     small reads), on or off: usable() says the card has an index (the
+//     empty states' button, the Output page). Any failure: no index, picks
+//     at random (logged why).
 //   every loop pass, after the card's guard and before the card's step
 //     (main.cpp's loop()): step(): a remount seen first (sectordisk's
 //     counter: the root read again into its own Root; the same index: the
 //     file reopened, the maps and the session kept; another: closed,
-//     opened, joined again, a new session); then a slice of the join
-//     (after the UI's first frame, never while a list moves or the card is
-//     held); then the Driver's pass (a pick appended when due; else a slot
-//     read ahead); then a long console command's step (Dn, Db: one a pass).
+//     opened, joined again, a new session); then the join's slices while
+//     Auto DJ is on (after the UI's first frame, never while a list moves
+//     or the card is held: Join::stepPass(), kJoinPassUs and one card read
+//     a pass; main.cpp shortens the loop's idle wait meanwhile:
+//     joinWorking()); then the Driver's pass (a pick appended when due,
+//     waiting while the decoder refills the ring from empty: Env::
+//     refilling; else a slot read ahead, or a slot's run made again for
+//     new maps); then a long console command's step (Dn, Db: one a pass).
+//   the join only while on (2026-10-14): switched on (the "..." menu, the
+//     page, D1, "Auto DJ from here", the empty states' button), it joins;
+//     switched off, the join is given back (155 KB at 19,410 tracks), so
+//     a listener who never uses Auto DJ keeps all of PSRAM. The empty
+//     states' button doesn't wait for a join: a random library track whose
+//     path's hash the index's DJPH has (Table::rowOf(), a binary search)
+//     plays at once, and the join follows. Its blocks go to the top of
+//     PSRAM's largest free block (Join::setPlacement(): spacers), so what
+//     comes after is carved below them.
+//   the update step's memory check (main.cpp's hook, LibraryUpdate::
+//     setGiveBack()): a new track table that doesn't fit the largest free
+//     block while the join is held next to it: giveBack() releases it there
+//     (Block::Update), so the step sees the block Auto DJ off would have
+//     left; joined again after the step's Live (or at once when it
+//     deferred or failed).
 //   the update step's fence (main.cpp): beforeFence() notes the marks'
 //     positions while the queue is there; fence() (before the old index
 //     goes) releases the join's maps (fenceBytes(): the step's memory
@@ -51,9 +72,9 @@
 // paused (PlaybackController::addFromAutoDj()). The console's Dh and De
 // play a track because the listener asked, as qp does.
 //
-// In PSRAM (psramNew: about 3 KB here, the engine's 15 KB, the maps about
-// 160 KB at 20,000 tracks, a FIL's 4.1 KB); nothing in internal RAM but
-// main.cpp's pointer. Loop task only.
+// In PSRAM (psramNew: about 4 KB here, the engine's 19 KB, the maps about
+// 160 KB at 20,000 tracks while on, a FIL's 4.1 KB); nothing in internal
+// RAM but main.cpp's pointer. Loop task only.
 class AutoDj {
 public:
   // What main.cpp knows this pass.
@@ -68,6 +89,7 @@ public:
     bool sleepEndOfQueue = false;  // the sleep timer's End of queue runs
     bool listMoving = false;     // Ui::listMoving()
     bool uiStarted = true;       // the UI's first frame is up (or there is no UI)
+    bool refilling = false;      // the decoder fills the ring from empty (autodj::Env::refilling)
   };
 
   AutoDj(Library& library, PlaybackController& player);
@@ -88,6 +110,12 @@ public:
   void beforeFence();
   size_t fence();
   void live();
+  // The update step's memory check (LibraryUpdate::setGiveBack()): the
+  // join released now, joined again after the step (its bytes; 0: none
+  // held).
+  size_t giveBack();
+  // The join works (main.cpp: the loop's idle wait short meanwhile).
+  bool joinWorking() const { return join_.status() == autodj::Join::Status::Working; }
 
   // ---- for the UI (M5) and the console ----
   const autodj::Settings& settings() const { return dj_.settings(); }
@@ -99,7 +127,9 @@ public:
   // nothing played.
   bool fromHere(uint32_t track);
   bool start();
-  // The card has an index this build reads, joined to the library.
+  // The card has an index this build reads, open and checked (joined or
+  // not: it joins while Auto DJ is on), for a library it can join (not
+  // over 65,534 tracks) and not found broken.
   bool usable() const;
   const autodj::Marks& marks() const { return dj_.marks(); }
 
@@ -110,7 +140,11 @@ private:
     Absent,   // ... one that failed its checks (why_)
     Open,     // open and checked: the join's, the picks'
   };
-  enum class Block : uint8_t { None, Retry, Build };
+  // What keeps a join from starting: nothing; a failed read's wait
+  // (retryAtMs_); the next library build (no memory, a library too big);
+  // the update step it was given back to (giveBack()), until its Live or
+  // its end.
+  enum class Block : uint8_t { None, Retry, Build, Update };
   enum class Job : uint8_t { None, DryRun, Bench };
 
   class Reader : public autodj::SlotReader {
@@ -136,6 +170,15 @@ private:
   void stepJoin(const Env& env);
   void beginJoin(const LibraryIndex* index);
   void joinStatus();
+  // Switched off (or the index closing): the join given back.
+  void releaseJoin(const char* why);
+  // Whether a library track has a row: the maps' when joined, else its
+  // path's hash looked up in DJPH (Table::rowOf()).
+  bool hasRow(uint32_t track);
+  static bool hasRowOf(uint32_t track, void* self) { return static_cast<AutoDj*>(self)->hasRow(track); }
+  // Join::Placement's hooks (the spacers: spacers_).
+  static void* placeBefore(size_t bytes, void* self);
+  static void placeAfter(void* token, void* self);
   void stepJob(const Env& env);
   void report(const autodj::Pass& p);
   void logSession(autodj::Began why, uint32_t track);
@@ -169,7 +212,10 @@ private:
   int64_t joinT0Us_ = 0;
   float joinMs_ = 0;
   uint32_t joins_ = 0;
+  uint32_t joinPasses_ = 0;   // the loop passes the join took (stepPass())
   bool joinLogged_ = false;
+  autodj::Spacers spacers_;   // placeBefore()'s, while begin() takes the blocks
+  char hashPath_[autodj::Join::kPathBytes] = "";  // hasRow()'s path
   // The console's long commands.
   Job job_ = Job::None;
   autodj::DryRun* dry_ = nullptr;   // PSRAM while Dn runs

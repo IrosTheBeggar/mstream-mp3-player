@@ -9,10 +9,12 @@ PCG32 against its published outputs; the tempo windows, the Camelot
 neighbourhood and the rank tables against a port of mStream's waterfall
 (random.js: the steps for one pick, classifyRow's tiers) cell by cell;
 D3's imputation odds; the engine's rules one by one on small hand-made
-tables (the gate and its clamp, the ring and D1's joins, the quick skip,
-the pin, the key anchor, both cooldowns, dry and random picks, the read
-budget, damaged, failed and broken slots, the stream); and the fixture
-up to date.
+tables (the gate and its clamp, the ring and D1's joins, the quick skip
+and whether it steered, the pin (a seed before the join's maps too), the
+key anchor, both cooldowns, loosen
+before repeating (the device's case, dry and loosened at once, every
+listed row cooled), dry and random picks, the read budget, damaged,
+failed and broken slots, the stream); and the fixture up to date.
 """
 import json
 import sys
@@ -412,6 +414,44 @@ class EngineRules(unittest.TestCase):
         self.assertEqual(p.row, 0)                          # row 4 lists only the centre
         self.assertEqual(e.prefetch_due(s), None)
 
+    def test_a_seed_before_the_join_becomes_the_pin(self):
+        lists = star(10)
+        maps = table(lists)
+        src = A.SlotSource(lists)
+        s = A.Settings(A.LOCKED)
+        e = A.Engine()
+        e.new_session(5, 3)                                 # "Auto DJ from here" while it joins: no maps
+        self.assertEqual((e.pin, e.ring, e.seeded), (A.NO_ROW, [], True))
+        e.track_left(3, None, 2000, False)                  # skipped before the maps came
+        e.track_started(6, None, False)
+        e.maps_arrived(maps)
+        self.assertEqual(e.pin, 3)                          # the seed's row, not the playing track's
+        self.assertEqual(e.prefetch_due(s), 3)
+        e.track_started(6, maps, False)                     # (the loop step: the playing track with the maps)
+        self.assertEqual(e.ring, [6])
+        p = e.pick(s, self.pin(maps, src, 6))
+        self.assertEqual((e.pin, p.row), (3, 0))            # row 3 lists only the centre
+        e.maps_arrived(maps)                                # once a session
+        self.assertEqual(e.pin, 3)
+        for change in ("mode", "renumber", "taken"):
+            e.new_session(5, 3)
+            if change == "mode":
+                e.mode_changed()
+            elif change == "renumber":
+                e.tracks_renumbered()
+            else:
+                e.pick(s, self.pin(maps, src, 6))           # a pick with the maps took the pin first
+            e.maps_arrived(maps)
+            self.assertEqual(e.pin, 6 if change == "taken" else A.NO_ROW, change)
+        rowless = table(lists, tracks=list(range(10)) + [A.NO_ROW])
+        e.new_session(5, 10)                                # a seed without a row: no pin
+        e.maps_arrived(rowless)
+        self.assertEqual(e.pin, A.NO_ROW)
+        e.new_session(5, 3, maps)                           # the maps at hand: nothing waits
+        e.mode_changed()
+        e.maps_arrived(maps)
+        self.assertEqual(e.pin, A.NO_ROW)
+
     def test_the_session_seed_from_the_first_pick(self):
         lists = star(8)
         maps = table(lists)
@@ -472,6 +512,81 @@ class EngineRules(unittest.TestCase):
             if p.cooldown_level == 0:
                 self.assertTrue(art[p.row] == 0 or art[p.row] not in e2.arts[:-1])
         self.assertEqual(levels[:6].count(2), 0)
+
+    def test_loosen_before_repeating_the_device_case(self):
+        # Stay on seed at 75 % (level 192) from a seed listing 3 rows above
+        # the floor and 57 below: once the 3 are cooled, the 50 nearest rows
+        # outside the track cooldown (the old rule repeated the 3).
+        n = 61
+        lv = {r: (202 - 2 * r if r <= 3 else 195 - r) for r in range(1, n)}
+        lists = [[(r, lv[r]) for r in range(1, n)]] + [[(0, 200)] for _ in range(1, n)]
+        maps = table(lists, [A.pack_filter(1200, 1 + r % 24, False, 1 + r % 12) for r in range(n)])
+        src = A.SlotSource(lists)
+        e = A.Engine()
+        e.new_session(0x717FEDA5, 0, maps)
+        playing, loosened, seen = 0, 0, set()
+        for i in range(200):
+            fresh = [r for r in range(1, n) if r not in e.cool and r != playing]
+            p = e.pick(A.Settings(A.LOCKED, 75), self.pin(maps, src, playing))
+            self.assertTrue(p.ok and not p.random and not p.dry)
+            self.assertLess(p.cooldown_level, 2)            # never a repeat inside the cooldown
+            if not [r for r in fresh if r <= 3]:
+                self.assertTrue(p.loosened, i)
+                self.assertEqual(p.gated, min(50, len(fresh)))
+                self.assertLess(p.level, 192)
+                self.assertIn(p.row, fresh[:50])            # the 50 nearest fresh rows
+                loosened += 1
+            else:
+                self.assertFalse(p.loosened, i)
+                self.assertIn(p.row, (1, 2, 3))
+            seen.add(p.row)
+            playing = p.track
+        self.assertEqual(len(seen), 60)
+        self.assertEqual(e.stats.loosened, loosened)
+        self.assertTrue(180 <= loosened <= 194, loosened)
+
+    def test_dry_and_loosened(self):
+        # The anchor lists 60 rows below the gate (dry: rows 1-50 have the
+        # best sums); quick skips have cooled exactly those, and the playing
+        # track has no row: the 50 best sums outside the cooldown, 51-60.
+        n = 61
+        lists = [[(r, 139 - (r - 1) // 2) for r in range(1, n)]] + [[(0, 139)] for _ in range(1, n)]
+        maps = table(lists, tracks=list(range(n)) + [A.NO_ROW])
+        e = A.Engine()
+        e.new_session(4, 0, maps)
+        for r in range(1, 51):
+            e.track_started(r, maps, False)
+            self.assertTrue(e.track_left(r, maps, 1000, False))
+        e.track_started(61, maps, False)
+        self.assertEqual(e.ring, [0])
+        p = e.pick(A.Settings(), self.pin(maps, A.SlotSource(lists), 61))
+        self.assertEqual((p.dry, p.loosened, p.candidates, p.gated, p.cooldown_level), (True, True, 60, 10, 0))
+        self.assertTrue(51 <= p.row <= 60)
+
+    def test_every_listed_row_cooled_repeats(self):
+        # Nothing outside the cooldown is listed: the pool stays, a repeat.
+        lists = star(6)
+        maps = table(lists)
+        src = A.SlotSource(lists)
+        e = A.Engine()
+        e.new_session(3, 0, maps)
+        for i in range(10):
+            p = e.pick(A.Settings(A.LOCKED, 75), self.pin(maps, src, 0))
+            self.assertFalse(p.loosened)
+            self.assertEqual(p.cooldown_level, 0 if i < 5 else 2)
+
+    def test_a_quick_skip_says_whether_it_steered(self):
+        lists = star(8)
+        maps = table(lists, tracks=list(range(8)) + [A.NO_ROW])
+        e = A.Engine()
+        e.new_session(1, 0, maps)
+        e.track_started(3, maps, False)
+        self.assertTrue(e.track_left(3, maps, 2000, False))
+        self.assertFalse(e.track_left(3, maps, 2000, False))  # already out of the ring
+        e.track_started(8, maps, False)
+        self.assertFalse(e.track_left(8, maps, 2500, False))  # no row: it never steered
+        self.assertFalse(e.track_left(0, maps, 1000, True))   # a natural end
+        self.assertEqual(e.stats.quick_skips, 3)
 
     def test_cooldown_before_music(self):
         # Row 1 is a tempo match but cooled; row 2 is fresh and wrong: row 2.
@@ -620,8 +735,10 @@ class Fixture(unittest.TestCase):
         doc = json.loads((FIX / "autodj" / "sessions.json").read_text(encoding="utf-8"))
         picks = [e["expect"] for s in doc["sessions"] for e in s["events"] if e["op"] == "pick"]
         self.assertGreaterEqual(len(picks), 300)
-        for flag in ("dry", "random", "noIndex", "impT", "impK", "tb", "kb", "broken"):
+        for flag in ("dry", "loose", "random", "noIndex", "impT", "impK", "tb", "kb", "broken"):
             self.assertTrue(any(p.get(flag) for p in picks), flag)
+        self.assertTrue(any(p.get("dry") and p.get("loose") for p in picks))
+        self.assertFalse(any(p.get("loose") and p.get("cl", 0) == 2 for p in picks))   # a loosened pool is fresh
         for cl in (0, 1, 2):
             self.assertTrue(any(p.get("ok") and p.get("cl", 0) == cl and not p.get("noIndex") for p in picks), cl)
         self.assertEqual({p.get("reads", 0) for p in picks}, {0, 1, 2})

@@ -48,9 +48,17 @@
 //      finished queue), its entry DJ-marked; the undo it dropped, if any,
 //      said (Pass::undoDropped: Ui::queueUndoDropped()). Not due, one slot
 //      read ahead when one is (not while a list moves or the card is held;
-//      kReadAgainMs after one that failed). A pick that gave no track, or
+//      kReadAgainMs after one that failed; its run made with it), else a
+//      cached slot's run made again for new maps (Engine::runDue(), no
+//      read; not while a list moves). A pick that gave no track, or
 //      one the queue refused (out of the ring again: Engine::pickRefused()),
-//      is tried again after kRetryMs.
+//      is tried again after kRetryMs. While the decoder fills the ring from
+//      empty (Env::refilling: a start or a skip, until it holds 500 ms) a
+//      due pick waits a pass or two and nothing is read ahead: the decode
+//      task runs above the loop on its core then, flat out, and a pick
+//      timed across it measured the decoder (108 ms on the device,
+//      2026-10-13), as a read ahead would wait behind its reads. It isn't
+//      owed (a few hundred ms; a gapless join is no refill).
 // The DJ marks (2.14) are the keys of the last kMarks entries Auto DJ
 // added (RAM only: not across a reboot); across a library rebuild's
 // read-back (fresh keys) they follow their positions (MarkCarry).
@@ -60,7 +68,10 @@
 // and clears the failure pause; off ends it (what it added stays). After a
 // boot (load()) a session starts the same way: the restored queue waits
 // for Play. The index can arrive after a session began (the join after a
-// boot or a fence): the track that plays then steers from then on.
+// boot or a fence, or after "Auto DJ from here" and the empty states'
+// button switched Auto DJ on: they don't wait for it): the track that
+// plays then steers from then on, and a seed track the session got
+// without the maps is Stay on seed's pin (Engine::mapsArrived()).
 //
 // Not thread-safe: the firmware's loop task owns it.
 namespace autodj {
@@ -75,6 +86,11 @@ constexpr uint32_t kRetryMs = 5000;
 // A slot read ahead that failed (the card pulled, a CRC): the next one
 // after (a pick still reads what it needs).
 constexpr uint32_t kReadAgainMs = 2000;
+// The empty states' Auto DJ button before the index is joined (Auto DJ
+// off: it joins only while on): library tracks drawn, each looked up in
+// the index by its path (mpdj::Table::rowOf(): a binary search of DJPH,
+// about 15 small reads), until one has a row.
+constexpr uint8_t kSurpriseTries = 8;
 
 // The DJ marks across a library rebuild (2.14): enterFence() notes where
 // the marked entries are; after the read-back (fresh keys), the entries at
@@ -131,6 +147,10 @@ struct Env {
   bool restartSet = false;
   bool sleepEndOfQueue = false;
   bool listMoving = false;     // no read ahead while a list moves
+  // The decoder fills the ring from empty after a start or a skip (below
+  // the 500 ms its pacer runs flat out to): a due pick waits, nothing is
+  // read ahead (the class comment's step 4).
+  bool refilling = false;
 };
 
 // Why a session began (the [dj] lines).
@@ -149,6 +169,8 @@ struct Pass {
   bool playing = false;       // ... and plays (kPlayingMs of it heard): the failure pause over
   bool quickSkip = false;     // the entry before went in its first 30 s, not by its end
   uint32_t leftTrack = kNoTrackId;
+  uint16_t leftRow = kNoRow;  // ... its row (kNoRow: it had none, and never steered)
+  bool leftSteered = false;   // ... and it left the ring (it steered until now; Engine::rowLeft())
   uint32_t leftMs = 0;
   bool removedPick = false;   // Auto DJ's pick taken out before it played
   uint32_t removedTrack = kNoTrackId;
@@ -157,6 +179,7 @@ struct Pass {
   bool failedPick = false;    // ... one of Auto DJ's
   bool paused = false;        // ... and Auto DJ is paused by it (the toast, once)
   // The pick.
+  bool refillWait = false;    // due, and waits for the decoder's refill (Env::refilling)
   bool picked = false;        // pick() was asked (`pick` says what it gave)
   Pick pick;
   bool added = false;         // ... and appended
@@ -170,6 +193,10 @@ struct Pass {
   uint16_t prefetchRow = kNoRow;
   SlotResult prefetch = SlotResult::Ok;
   uint32_t prefetchUs = 0;
+  // ... or, none due, a cached slot's run made again for the maps
+  // (Engine::runDue(): the join ready again since it was made).
+  bool runMade = false;
+  uint16_t runRow = kNoRow;
 };
 
 class Driver {
@@ -185,7 +212,8 @@ public:
 
   Driver() = default;
   explicit Driver(const Config& c) : cfg_(c) {}
-  // The engine's memory (about 15 KB); false: none (picks by id only).
+  // The engine's memory (one block of about 19 KB); false: none (picks by
+  // id only).
   bool begin();
 
   // ---- the settings (saved by the glue) ----
@@ -220,6 +248,12 @@ public:
   // The empty states' button's track: a random row that maps to a track
   // (not ok without an index).
   Pick surprise(const Index& ix);
+  // ... before the index is joined: up to kSurpriseTries library tracks
+  // (below `libraryTracks`) drawn, the first that `hasRow` says has a row
+  // (the firmware: its path hash in the index's DJPH); kNoTrackId: none.
+  // `*tries` (or nullptr): how many were looked up.
+  uint32_t surpriseTrack(uint32_t libraryTracks, bool (*hasRow)(uint32_t track, void* ctx), void* ctx,
+                         uint8_t* tries = nullptr);
 
   // ---- the library update's fence ----
   // enterFence(), before the queue goes: the marks' and the entries'
@@ -245,6 +279,8 @@ public:
   uint32_t refusals() const { return refusals_; }
   uint32_t undoDrops() const { return undoDrops_; }
   uint32_t removedPicks() const { return removedPicks_; }
+  // Due picks that waited for a refill (once per refill), while on.
+  uint32_t refillWaits() const { return refillWaits_; }
   // A pick's retry waits (until `nowMs` reaches it).
   bool retryWaits(uint32_t nowMs) const { return retry_ && static_cast<int32_t>(nowMs - retryAtMs_) < 0; }
   // The last pick (Pass's), for the console.
@@ -265,6 +301,9 @@ private:
     uint32_t playedMs = 0;
   };
   uint32_t nextSeed();
+  // 32 random bits: the hook's, else the fixed sequence (not the next
+  // session's seed: that one stays set).
+  uint32_t random32();
   uint64_t now() const { return cfg_.nowUs ? cfg_.nowUs() : 0; }
   TriggerIn triggerIn(const PlaybackController& player, const Index& ix, const Env& env) const;
   void pickInto(PlaybackController& player, const Index& ix, const Env& env, bool cue, Pass* p);
@@ -305,7 +344,8 @@ private:
   uint32_t sessionSeed_ = 0;
   Began began_ = Began::None;
   // Counters (the console's D).
-  uint32_t holds_ = 0, refusals_ = 0, undoDrops_ = 0, removedPicks_ = 0;
+  uint32_t holds_ = 0, refusals_ = 0, undoDrops_ = 0, removedPicks_ = 0, refillWaits_ = 0;
+  bool refillWaiting_ = false;  // the last pass's due pick waited for a refill
   bool lastPicked_ = false;
   Pass lastPick_;
 };
@@ -324,6 +364,7 @@ public:
     uint32_t tempoBreaks = 0, keyBreaks = 0;
     uint32_t imputedTempo = 0, imputedKey = 0;
     uint32_t dry = 0, random = 0, noIndex = 0;
+    uint32_t loosened = 0;  // picks whose pool was loosened (Pick::loosened)
     uint32_t repeats = 0;   // rows this run had picked before
     uint32_t artists = 0;   // distinct artist keys (0 not counted)
     uint32_t readsAtPick[kReadsPerPick + 1] = {};
@@ -337,7 +378,7 @@ public:
 
   // A copy of `live`'s session (its rings, its stream, its slot cache and
   // file state) for `picks` picks (1 to kMaxPicks), from `playingTrack`
-  // on: its memory from the hooks (the engine's 15 KB, 16 KB of tallies, 4
+  // on: its memory from the hooks (the engine's 19 KB, 16 KB of tallies, 4
   // bytes a pick for the times). False: no memory, nothing held.
   bool begin(const Engine& live, uint32_t picks, uint32_t playingTrack, Engine::AllocFn alloc = nullptr,
              Engine::FreeFn release = nullptr);

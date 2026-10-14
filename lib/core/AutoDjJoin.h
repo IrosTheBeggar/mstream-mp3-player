@@ -12,9 +12,11 @@
 // Auto DJ's join (docs/AUTODJ-INDEX.md 11.2; the engine design's 3.3): the
 // card's AutoDJ index, an open mpdj::Table, turned into this library's
 // track ids, and its DJRF filter records into one resident word a row. It
-// runs after every library build (the boot's load, each leaveFence(), a
-// remount that changed the index) on the loop, in slices: one step() a
-// loop pass, each a few milliseconds, so lists keep their 30 fps.
+// runs while Auto DJ is on (switched on, and after every library build
+// then: the boot's load, each leaveFence(), a remount that changed the
+// index) on the loop, in slices of a millisecond or two: stepPass() a loop
+// pass, as many as fit its time and at most one card read, so lists keep
+// their 30 fps and a join with a track playing takes a couple of seconds.
 // Portable, host-tested (test_autodj_join).
 //
 // The product is Maps (below), in blocks from the caller's hooks (the
@@ -40,14 +42,16 @@
 //             cursor in every run moves past the prefixes below the hash's
 //             top 32 bits; a track whose prefix equals it is confirmed by
 //             recomputing its full 64-bit hash (a 32-bit prefix collision
-//             among 20,000 tracks has about a 5 % chance anywhere). The
-//             one track it confirms gets the entry's row; the row gets its
-//             first track (DJPH is in hash order, so the present file with
-//             the smallest path hash: 11.2) and the present bit. An entry
-//             two library tracks hash to (a 64-bit collision between two
-//             of this library's paths) maps neither, as the writer leaves
-//             out a hash two card files share (4.5). Then the runs and the
-//             stream's buffer are freed: Ready.
+//             among 20,000 tracks has about a 5 % chance anywhere): at
+//             most confirmsPerSlice a slice (the next slice goes on in the
+//             buffer, reading nothing). The one track it confirms gets the
+//             entry's row; the row gets its first track (DJPH is in hash
+//             order, so the present file with the smallest path hash:
+//             11.2) and the present bit. An entry two library tracks hash
+//             to (a 64-bit collision between two of this library's paths)
+//             maps neither, as the writer leaves out a hash two card files
+//             share (4.5). Then the runs and the stream's buffer are
+//             freed: Ready.
 // The two streamed sections go through cardcontract::Stream with a buffer
 // of sliceBytes (4 KB, one FatFs piece), which refills whole sectors from
 // a sector boundary (CardContainer.h): a slice takes the records that need
@@ -62,6 +66,19 @@
 // filters' (rows x 4: 108 KB at 27k, under 256 KB up to 65,535 rows); a
 // run's is 24 KB whatever the library, where one sorted array of (hash,
 // track) would pass the 256 KB block limit above about 21,000 tracks.
+//
+// Where the blocks go (setPlacement(): the firmware's, for PSRAM's TLSF,
+// which serves a block from the low end of the free block it takes): a
+// hook told the bytes begin() is about to take holds the bottom of the
+// largest free block (a spacer: spacerFor()) while they are taken, so they
+// come from its top; the transient ones first, then the kept ones above
+// them. The runs' hole at the end then joins the free part below the maps,
+// and what is carved later comes from that part's low end: the maps stay
+// next to the rest of the block, and giving them back (release(): a
+// library update's memory check, LibraryUpdate::setGiveBack()) makes one
+// block of it again, as if Auto DJ had never joined. Without the hook (the
+// host, a heap too full for a spacer): the kept ones first, the transient
+// ones above them, whose hole joins the free tail when they go.
 //
 // Aborts: every step() is given the library's index as the loop sees it
 // now (Library::index(): nullptr behind the update step's fence). One that
@@ -104,6 +121,7 @@ uint32_t filterWord(uint16_t bpm10, uint8_t camelot, uint8_t flags, uint32_t art
 struct Maps {
   uint32_t tracks = 0;   // the library's tracks: trackToRow's length
   uint32_t rows = 0;     // the index's rows: rowToTrack's and filters' length
+  uint32_t rowsMapped = 0;  // rows with a track (the present bit): rows when every row has one
   uint32_t mapped = 0;   // tracks that have a row
   uint32_t withBpm = 0;  // of those, tracks whose row has a BPM
   uint32_t withKey = 0;  // ... a key
@@ -118,6 +136,41 @@ struct Maps {
 // part (at most lg(n / 16) + 1 frames), a heap sort after 2 lg n
 // partitions on one path, one insertion pass at the end.
 void sortPairs(uint32_t* keys, uint16_t* ids, uint32_t n);
+
+// A library track's path hash as the join takes it (AUTODJ-INDEX.md 2.3):
+// its path (index.trackPath(), through `path`, `size` bytes) from "/music/"
+// (any case) on as cardcontract::pathHash() (the root's literal
+// lowercase), any other path its bytes' FNV-1a 64. False: no path (it
+// doesn't fit). Join's default hook; the firmware's Auto DJ button looks a
+// track's row up with it (mpdj::Table::rowOf()) while nothing is joined.
+bool trackPathHash(const LibraryIndex& index, uint32_t track, char* path, size_t size, uint64_t* hash);
+
+// The spacer that puts `bytes` at the top of a free block of `largest`
+// bytes under a TLSF heap (ESP-IDF's: a request is served from the low end
+// of a free block whose size class, rounded up a thirty-second, holds it):
+// what is left above the spacer is `bytes`, a thirty-second more and 1 KB
+// (a block's rounding as it is searched for, the headers), and a
+// thirty-second of `largest` (the spacer's own rounding). 0: no room for
+// one (the blocks go where the heap puts them).
+size_t spacerFor(size_t largest, size_t bytes);
+
+// The placement hook's work (Join::Placement), over a heap's hooks:
+// spacers of spacerFor() from the largest free block, added to those `out`
+// holds (kMax in all): asked again while one comes from another block
+// (TLSF serves a request from the closest size class that holds it), and
+// once more on what is left of the largest while it is still the largest
+// (its own thirty-second less above the blocks: about 20 KB at 20,000
+// tracks); such a closer fit that lands in another block (a hole the
+// blocks themselves may want) is given back at once, and that's it. True:
+// the largest block's top is what is left; false: none could be placed
+// there. Those taken are held until giveSpacers() frees them.
+struct Spacers {
+  static constexpr int kMax = 8;
+  void* p[kMax] = {};
+  int n = 0;
+};
+bool takeSpacers(size_t bytes, size_t (*largest)(), void* (*alloc)(size_t), void (*release)(void*), Spacers* out);
+void giveSpacers(Spacers* s, void (*release)(void*));
 
 class Join {
 public:
@@ -144,16 +197,21 @@ public:
   };
   enum class Phase : uint8_t { None, Hash, Sort, Strings, Filters, Paths, Done };
 
-  // The slices' sizes (the design's 3.3); the tests shrink them.
+  // The slices' sizes (the design's 3.3; 2026-10-13: 112 slices of 1,000
+  // hashes or a piece's ~400 confirms took 2.1 s idle on the device, about
+  // 10 ms of work each: these are a quarter of that, several a pass); the
+  // tests shrink them.
   struct Config {
     uint32_t runTracks = 4096;     // a run's pairs: 24 KB
-    uint32_t hashPerSlice = 1000;  // tracks hashed a slice
+    uint32_t hashPerSlice = 250;   // tracks hashed a slice
     uint32_t sliceBytes = 4096;    // the stream's buffer (a multiple of 512, at least 1,024): a slice's read
+    uint32_t confirmsPerSlice = 100;  // Paths: full hashes recomputed a slice (0: no limit)
   };
 
   // For the console's D, the tests and the one-off measurements.
   struct Stats {
     uint32_t slices = 0;      // step()s that did work, this join
+    uint32_t reads = 0;       // card reads: the stream's pieces, STRS's check
     uint32_t hashed = 0;      // tracks in the runs
     uint32_t unhashed = 0;    // tracks without a path hash
     uint32_t paths = 0;       // DJPH entries read
@@ -163,6 +221,20 @@ public:
     uint32_t rowsMapped = 0;  // rows with a track (the present bit)
     size_t peakBytes = 0;     // the most held at once
     size_t largestBlock = 0;  // the largest single allocation
+    bool placed = false;      // begin()'s blocks taken under the placement hook's spacer
+  };
+
+  // Where begin()'s blocks go (above): `before(bytes, ctx)` is told the
+  // bytes about to be taken (every block, as asked) and returns a token
+  // (nullptr: none: the blocks go where the heap puts them). With a token
+  // it is told again, once the transient blocks are taken, the kept ones'
+  // bytes (they may have gone to holes elsewhere: the room made for them
+  // would be left above the maps), its spacers added to the first's;
+  // `after(token, ctx)` is called once they are all taken (or one failed).
+  struct Placement {
+    void* (*before)(size_t bytes, void* ctx) = nullptr;
+    void (*after)(void* token, void* ctx) = nullptr;
+    void* ctx = nullptr;
   };
 
   // nullptr hooks: malloc and free.
@@ -177,6 +249,7 @@ public:
     hash_ = fn;
     hashCtx_ = ctx;
   }
+  void setPlacement(const Placement& p) { place_ = p; }
 
   // Starts a join of `table` (opened: Table::open() said Ok) and `index`
   // (ready), dropping whatever was here: the maps, the runs and the buffer
@@ -186,6 +259,13 @@ public:
   Status begin(const cardcontract::mpdj::Table& table, const LibraryIndex* index);
   // One slice; `index` is the library's index now. The status after it.
   Status step(const LibraryIndex* index);
+  // The firmware's loop pass: slices while the join works, until one has
+  // read the card (at most one read a pass: a piece of DJRF or DJPH, or
+  // STRS, behind the decoder's own reads) or `more(ctx)`, asked after each
+  // slice, says the pass's time is up. Hashing and sorting read nothing,
+  // so a pass takes several of them; so do the Paths slices that go on in
+  // the buffer. The status after it.
+  Status stepPass(const LibraryIndex* index, bool (*more)(void* ctx), void* ctx);
   // Aborts a join under way and frees everything, the maps too: the bytes
   // given back (the fence's alsoFreed). Idle after it.
   size_t release();
@@ -229,10 +309,16 @@ private:
   uint32_t refillsTo(uint32_t recEnd, uint32_t* bufEnd) const;
   void merge(uint64_t hash, uint16_t row);
 
+  // begin()'s blocks: the kept ones (the maps), the transient ones (the
+  // runs' table, the runs, the buffer). False: one failed (fail() frees).
+  bool takeKept(uint32_t n, uint32_t rows);
+  bool takeTransient(uint32_t n);
+
   AllocFn alloc_;
   FreeFn free_;
   PathHashFn hash_;
   void* hashCtx_ = nullptr;
+  Placement place_;
   Config cfg_;
 
   const cardcontract::mpdj::Table* table_ = nullptr;

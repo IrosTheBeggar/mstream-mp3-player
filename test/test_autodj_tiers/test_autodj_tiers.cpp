@@ -11,7 +11,9 @@
 // for one pick, classifyRow's tiers) cell by cell, and the one cell where
 // the design's "any known key is good before an anchor" differs; D3's
 // integer odds and its "no known value" case; the gate's level and its
-// clamp at selFloor. Run: pio test -e native
+// clamp at selFloor; the engine's per-pick references (tempoStatuses()'
+// table, KeyRef) and the rank table against the per-call rules. Run: pio
+// test -e native
 #include <unity.h>
 
 #include <cstdint>
@@ -231,9 +233,51 @@ void test_key_statuses() {
   TEST_ASSERT_EQUAL(static_cast<int>(Key::Wrong), static_cast<int>(keyStatus(3, 1, true)));
 }
 
+// One pick's references (the engine's hot loop): tempoStatuses()' table
+// and KeyRef give tempoStatus() and keyStatus() for every value, a filter
+// word's 5-bit codes above 24 reading as none.
+void test_the_references_match_the_statuses() {
+  for (int ref = 0; ref <= 255; ++ref) {
+    uint8_t table[256];
+    tempoStatuses(static_cast<uint8_t>(ref), table);
+    for (int bpm = 0; bpm <= 255; ++bpm)
+      TEST_ASSERT_EQUAL(static_cast<int>(tempoStatus(static_cast<uint8_t>(bpm), static_cast<uint8_t>(ref))),
+                        table[bpm]);
+  }
+  for (int on = 0; on < 2; ++on) {
+    for (uint8_t anchor = 0; anchor <= 24; ++anchor) {
+      const KeyRef kr(anchor, on != 0);
+      TEST_ASSERT_EQUAL(on != 0, kr.on());
+      for (uint8_t code = 0; code < 32; ++code)
+        TEST_ASSERT_EQUAL(static_cast<int>(keyStatus(code <= 24 ? code : 0, anchor, on != 0)),
+                          static_cast<int>(kr.status(code)));
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The ranks
 // ---------------------------------------------------------------------------
+// The rank table is the header's rule: both on, tempo only, key only,
+// neither (the four tables of AutoDjTiers.h), every pair of statuses.
+void test_the_rank_table() {
+  const Tempo ts[] = {Tempo::Na, Tempo::Tight, Tempo::Wide, Tempo::Wrong, Tempo::Unknown};
+  const Key ks[] = {Key::Na, Key::Good, Key::Wrong, Key::Unknown};
+  const uint8_t both[4][3] = {{0, 3, 2}, {1, 4, 4}, {7, 7, 7}, {5, 7, 6}};  // [Tight..Unknown][Good, Wrong, Unknown]
+  const uint8_t tempoOnly[4] = {0, 1, 3, 2};
+  const uint8_t keyOnly[3] = {0, 2, 1};
+  for (Tempo t : ts) {
+    for (Key k : ks) {
+      const int ti = static_cast<int>(t), ki = static_cast<int>(k);
+      const uint8_t want = t != Tempo::Na && k != Key::Na ? both[ti - 1][ki - 1]
+                           : t != Tempo::Na             ? tempoOnly[ti - 1]
+                           : k != Key::Na               ? keyOnly[ki - 1]
+                                                        : 0;
+      TEST_ASSERT_EQUAL(want, musicRank(t, k));
+    }
+  }
+}
+
 void test_ranks_follow_the_waterfall_cell_by_cell() {
   for (int on = 0; on < 4; ++on) {
     const bool tempoOn = on & 1, keyOn = on & 2;
@@ -375,6 +419,8 @@ int main(int, char**) {
   RUN_TEST(test_tempo_statuses_at_the_edges);
   RUN_TEST(test_camelot_six_codes_with_the_wrap);
   RUN_TEST(test_key_statuses);
+  RUN_TEST(test_the_references_match_the_statuses);
+  RUN_TEST(test_the_rank_table);
   RUN_TEST(test_ranks_follow_the_waterfall_cell_by_cell);
   RUN_TEST(test_ranks_before_a_key_anchor);
   RUN_TEST(test_the_design_tables);

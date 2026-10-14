@@ -32,6 +32,20 @@ struct QueueResume {
 //   a temporary file that then replaces the queue file. An edit while a
 //   write is under way drops that write; it starts again once the edits
 //   settle. A failed write is tried again 10 s later.
+// - Edits that never settle (Auto DJ appending a 1-second track every
+//   second, each also pushing out the oldest entry at the cap: the device's
+//   soak, 2026-10-13, wrote nothing for 59 minutes): once the queue has
+//   differed from the file for kMaxStaleMs, the next write starts without
+//   its 2 s and writes a snapshot of the queue as it is then (its tracks,
+//   and ranks while shuffled: 4-8 bytes an entry, at most 40 KB, from the
+//   hooks: the firmware's PSRAM), which edits don't drop: it runs to its
+//   end, and the edits after it are the next write's. Its file is the
+//   snapshot's whole queue, its header's current line the snapshot's: a
+//   position (and a resume point) is saved for it only if the queue is
+//   still the snapshot's, else NVS keeps the older generation's, which a
+//   boot never pairs with this file (it takes the header's line). A queue
+//   that fits one pass: the plain write. No memory for the snapshot: none
+//   for kRetryMs, the plain write after 2 s of quiet meanwhile.
 // - The position (the current entry): at most once a second while it
 //   moves, and only for the file of the same generation: a position saved
 //   for a newer queue than the file holds (an edit not yet written) is
@@ -56,11 +70,12 @@ struct QueueResume {
 //   saved sample is the one the in-RAM resume would continue from.
 //
 // flushNow() does all of it at once, for a power-off (ENERGY.md item 4): a
-// write under way is finished (or, if the queue changed since it began,
-// dropped and the queue written again whole), an edit not yet written is
-// written without its 2 s, and the position and the resume point are
-// saved. The temporary file only ever replaces the queue file once
-// complete, so a flush that fails leaves the last good file.
+// write under way is finished (or, if the queue changed since it began, a
+// snapshot's too, dropped and the queue written again whole), an edit not
+// yet written is written without its 2 s, and the position and the resume
+// point are saved. The temporary file only ever replaces the queue file
+// once complete, so a flush that fails, or a cut mid-write, leaves the
+// last good file.
 //
 // Portable (host-tested: test_queue). Loop task only.
 class QueueSaver {
@@ -90,6 +105,12 @@ public:
   static constexpr uint32_t kPositionDelayMs = 1000;  // after the last move
   static constexpr uint32_t kRetryMs = 10000;         // after a failed write
   static constexpr uint32_t kLinesPerPass = 32;       // ~2 KB of paths
+  // The longest the file may lag the queue before a write that edits
+  // don't drop (above): a full queue's write takes 3-6 s of passes, so the
+  // file is at most about 36 s behind.
+  static constexpr uint32_t kMaxStaleMs = 30000;
+  using AllocFn = QueueModel::AllocFn;
+  using FreeFn = QueueModel::FreeFn;
   // A resume point that moved less than this since it was saved isn't
   // saved again (a paused output reads a few ms more as its fade ends),
   // unless its anchor changed.
@@ -113,8 +134,12 @@ public:
   // that line's track is still there (`kept`) and its path is `path`.
   static bool resumeApplies(const QueueResume& r, uint32_t fileGeneration, int32_t line, bool kept, const char* path);
 
-  QueueSaver(Store& store, const QueueModel& queue, const TrackCatalog& catalog)
-      : store_(store), queue_(queue), catalog_(catalog) {}
+  // `alloc`/`release`: the snapshot's memory (nullptr: malloc/free).
+  QueueSaver(Store& store, const QueueModel& queue, const TrackCatalog& catalog, AllocFn alloc = nullptr,
+             FreeFn release = nullptr);
+  ~QueueSaver();
+  QueueSaver(const QueueSaver&) = delete;
+  QueueSaver& operator=(const QueueSaver&) = delete;
 
   // The generation the saved position belongs to (NVS), before a file is read.
   void setGeneration(uint32_t g) { generation_ = g; }
@@ -156,21 +181,48 @@ public:
   void abort();
 
   bool writing() const { return writing_; }
+  // ... a snapshot (the class comment's kMaxStaleMs), and its memory (0:
+  // none held; flushNow() and abort() give it back).
+  bool writingSnapshot() const { return writing_ && snap_.ids != nullptr; }
+  size_t snapshotBytes() const {
+    return snap_.ids ? static_cast<size_t>(snap_.size) * sizeof(uint32_t) * (snap_.shuffled ? 2 : 1) : 0;
+  }
   bool contentDirty() const { return contentDirty_; }
   // Something is on its way to the card: a write under way, or an edit or
   // a move waiting its delay. Not one whose write failed (waiting its
   // retry, maybe forever with the card gone): that's no reason to stay on.
   bool busy() const;
   uint32_t writes() const { return writes_; }
+  uint32_t snapshotWrites() const { return snapshotWrites_; }  // of writes(), from a snapshot
   uint32_t resumeWrites() const { return resumeWrites_; }
   uint32_t failures() const { return failures_; }
   uint32_t lastWriteMs() const { return lastWriteMs_; }
 
 private:
+  // The queue as a stale write found it (the class comment): one block
+  // (takeSnapshot(); snapshotBytes()).
+  struct Snapshot {
+    uint32_t* ids = nullptr;    // size tracks, then (shuffled) size ranks: one block
+    uint32_t* ranks = nullptr;
+    uint32_t size = 0;
+    int32_t current = -1;
+    bool shuffled = false;
+    uint32_t version = 0;       // the queue's contentVersion() then
+    uint32_t next = 0;          // the next entry to write
+    bool headerDone = false;
+  };
+
   void noteChanges(uint32_t nowMs);
-  bool startWrite(uint32_t nowMs);
+  // `snapshot`: the file kMaxStaleMs behind and the edits not settled: a
+  // snapshot's write when the queue needs more than a pass (false, nothing
+  // begun: no memory for one).
+  bool startWrite(uint32_t nowMs, bool snapshot);
   // One step of the write under way: done (the file replaced), dropped, or more to write.
   void stepWrite(uint32_t nowMs, uint32_t maxLines);
+  // The snapshot's lines (QueueText's format, byte for byte).
+  queuetext::Writer::Step stepSnapshot(uint32_t maxLines);
+  bool takeSnapshot();
+  void freeSnapshot();
   void finishWrite(uint32_t nowMs);
   void dropWrite();
   void failed(uint32_t nowMs);
@@ -182,6 +234,8 @@ private:
   Store& store_;
   const QueueModel& queue_;
   const TrackCatalog& catalog_;
+  AllocFn alloc_;
+  FreeFn free_;
 
   uint32_t generation_ = 0;     // of the queue file
   bool fileIsQueue_ = true;     // false after keptFile(): the file holds more than the queue
@@ -192,17 +246,22 @@ private:
   bool positionDirty_ = false;
   bool failedSinceEdit_ = false;
   uint32_t contentChangedMs_ = 0;
+  uint32_t dirtySinceMs_ = 0;   // the queue first differed from the file (or the write under way's snapshot)
   uint32_t positionChangedMs_ = 0;
   uint32_t lastContent_ = 0, lastPosition_ = 0;  // versions seen last
 
   bool writing_ = false;
   ByteSink* sink_ = nullptr;
   queuetext::Writer writer_;
+  Snapshot snap_;
+  bool editedSinceSnap_ = false;  // an edit after the snapshot was taken ...
+  uint32_t editedSinceSnapMs_ = 0;  // ... the first one's time
+  uint32_t snapshotAtMs_ = 0;       // no memory for a snapshot: none tried before this
   uint32_t writeGeneration_ = 0;
   uint32_t writeStartMs_ = 0;
   uint32_t nextTryMs_ = 0;
   uint32_t lastWriteMs_ = 0;
-  uint32_t writes_ = 0, failures_ = 0;
+  uint32_t writes_ = 0, snapshotWrites_ = 0, failures_ = 0;
 
   Transport transport_;
   QueueResume resume_;  // what the store holds

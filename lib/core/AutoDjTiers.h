@@ -69,7 +69,43 @@ Tempo tempoStatus(uint8_t bpm, uint8_t ref);
 // `code` is one of `anchor`'s 6 codes (both 1-24).
 bool camelotNear(uint8_t anchor, uint8_t code);
 Key keyStatus(uint8_t code, uint8_t anchor, bool on);
-uint8_t musicRank(Tempo t, Key k);
+
+// The rank table above as one lookup, [tempo][key] in the enums' order.
+inline uint8_t musicRank(Tempo t, Key k) {
+  static constexpr uint8_t kRank[5][4] = {
+      // Na Good Wrong Unknown
+      {0, 0, 2, 1},  // Na: key only
+      {0, 0, 3, 2},  // Tight
+      {1, 1, 4, 4},  // Wide
+      {3, 7, 7, 7},  // Wrong
+      {2, 5, 7, 6},  // Unknown
+  };
+  return kRank[static_cast<int>(t)][static_cast<int>(k)];
+}
+
+// tempoStatus(bpm, ref) for every bpm 0-255, as Tempo values: the windows
+// filled in (wide, then tight over them), the rest Wrong, 0 Unknown; all Na
+// for ref 0. About 120 stores: the engine's table for one pick.
+void tempoStatuses(uint8_t ref, uint8_t out[256]);
+
+// keyStatus() against one pick's `anchor` as a mask of its good codes (the
+// engine's hot loop); a filter word's 5-bit code above 24 is none
+// (Unknown), as everywhere.
+class KeyRef {
+public:
+  KeyRef(uint8_t anchor, bool on);
+  bool on() const { return on_; }
+  Key status(uint8_t code) const {
+    if (!on_) return Key::Na;
+    if (code > 24 || !((kKnown >> code) & 1u)) return Key::Unknown;
+    return (good_ >> code) & 1u ? Key::Good : Key::Wrong;
+  }
+
+private:
+  static constexpr uint32_t kKnown = 0x1FFFFFEu;  // codes 1-24
+  uint32_t good_ = 0;
+  bool on_;
+};
 
 // ---- D3 ----
 struct TempoOdds {

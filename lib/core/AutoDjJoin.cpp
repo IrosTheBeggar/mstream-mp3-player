@@ -17,21 +17,8 @@ namespace {
 void* defaultAlloc(size_t n) { return std::malloc(n); }
 void defaultFree(void* p) { std::free(p); }
 
-// The path hash (AUTODJ-INDEX.md 2.3) of the track's path as the index
-// writes it: "/music/" (any case) and the rest is pathHash()'s, the root's
-// literal lowercase; any other path its bytes' FNV-1a 64.
 bool defaultPathHash(const LibraryIndex& index, uint32_t track, char* path, size_t size, uint64_t* hash, void*) {
-  const size_t n = index.trackPath(track, path, size);
-  if (n == 0) return false;
-  static const char kRoot[] = "/music/";
-  const size_t k = sizeof(kRoot) - 1;
-  bool root = n > k;
-  for (size_t i = 0; i < k && root; ++i) {
-    const char c = path[i];
-    root = (c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c) == kRoot[i];
-  }
-  *hash = root ? cc::pathHash(path + k, n - k) : cc::fnv1a64(path, n);
-  return true;
+  return trackPathHash(index, track, path, size, hash);
 }
 
 // ---- the run sort: IdSort.h's introsort over two parallel arrays ----
@@ -113,6 +100,64 @@ void introRun(Pairs& p, uint32_t first, uint32_t last, int budget) {
 }
 
 }  // namespace
+
+// The path hash (AUTODJ-INDEX.md 2.3) of the track's path as the index
+// writes it: "/music/" (any case) and the rest is pathHash()'s, the root's
+// literal lowercase; any other path its bytes' FNV-1a 64.
+bool trackPathHash(const LibraryIndex& index, uint32_t track, char* path, size_t size, uint64_t* hash) {
+  const size_t n = index.trackPath(track, path, size);
+  if (n == 0) return false;
+  static const char kRoot[] = "/music/";
+  const size_t k = sizeof(kRoot) - 1;
+  bool root = n > k;
+  for (size_t i = 0; i < k && root; ++i) {
+    const char c = path[i];
+    root = (c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c) == kRoot[i];
+  }
+  *hash = root ? cc::pathHash(path + k, n - k) : cc::fnv1a64(path, n);
+  return true;
+}
+
+size_t spacerFor(size_t largest, size_t bytes) {
+  const size_t keep = bytes + bytes / 32 + 1024 + largest / 32;
+  // (A few KB of spacer wouldn't move anything worth it.)
+  return largest > keep + 4096 ? largest - keep : 0;
+}
+
+bool takeSpacers(size_t bytes, size_t (*largest)(), void* (*alloc)(size_t), void (*release)(void*), Spacers* out) {
+  bool placed = false;
+  while (out->n < Spacers::kMax) {
+    const size_t before = largest();
+    const size_t s = spacerFor(before, bytes);
+    if (s == 0) break;
+    void* p = alloc(s);
+    if (!p) break;
+    const size_t after = largest();
+    if (after >= before) {
+      // From another block, of a size class TLSF tries first: the largest
+      // is as it was. Not placed yet: held, and asked again. Placed: a
+      // closer fit isn't worth a hole the blocks may want: given back.
+      if (placed) {
+        release(p);
+        break;
+      }
+      out->p[out->n++] = p;
+      continue;
+    }
+    // From the largest: its top is what is left of it. Another block is
+    // the largest now: that's it; else the top is closed in once more
+    // (its own thirty-second: a few KB less above the blocks).
+    out->p[out->n++] = p;
+    placed = true;
+    if (after > before - s) break;
+  }
+  return placed;
+}
+
+void giveSpacers(Spacers* s, void (*release)(void*)) {
+  for (int i = 0; i < s->n; ++i) release(s->p[i]);
+  s->n = 0;
+}
 
 uint32_t filterWord(uint16_t bpm10, uint8_t camelot, uint8_t flags, uint32_t artistKey) {
   uint32_t bpm = (static_cast<uint32_t>(bpm10) + 5) / 10;
@@ -248,45 +293,35 @@ Join::Status Join::begin(const mpdj::Table& table, const LibraryIndex* index) {
   if (c.sliceBytes < 2 * cc::Stream::kSector) c.sliceBytes = 2 * cc::Stream::kSector;
   cfg_ = c;
 
-  // The kept blocks first (the filters, the largest), then the transient
-  // ones, whose holes then come last. A failed one stays nullptr, which
-  // freeAll() passes over.
+  // The blocks (the class comment's placement): under a spacer, the
+  // transient ones first and the kept ones above them; without one, the
+  // kept ones first (the filters, the largest) and the transient ones
+  // above, whose hole then joins the free tail. A failed one stays
+  // nullptr, which freeAll() passes over.
   maps_.tracks = n;
   maps_.rows = rows;
-  maps_.filters = static_cast<uint32_t*>(take(static_cast<size_t>(rows) * sizeof(uint32_t)));
-  if (maps_.filters) maps_.rowToTrack = static_cast<uint16_t*>(take(static_cast<size_t>(rows) * sizeof(uint16_t)));
-  if (maps_.rowToTrack && n) maps_.trackToRow = static_cast<uint16_t*>(take(static_cast<size_t>(n) * sizeof(uint16_t)));
-  if (!maps_.rowToTrack || (n && !maps_.trackToRow)) {
-    fail(Status::NoMemory, cc::Why::Ok);
-    return status_;
-  }
   runCount_ = (n + c.runTracks - 1) / c.runTracks;
-  if (runCount_) {
-    runs_ = static_cast<Run*>(take(sizeof(Run) * runCount_));
-    if (!runs_) {
-      runCount_ = 0;
-      fail(Status::NoMemory, cc::Why::Ok);
-      return status_;
-    }
-    for (uint32_t r = 0; r < runCount_; ++r) runs_[r] = Run();
-    for (uint32_t r = 0; r < runCount_; ++r) {
-      const uint32_t cap = r + 1 < runCount_ ? c.runTracks : n - r * c.runTracks;
-      void* block = take(static_cast<size_t>(cap) * 6);
-      if (!block) {
-        fail(Status::NoMemory, cc::Why::Ok);
-        return status_;
-      }
-      runs_[r].keys = static_cast<uint32_t*>(block);
-      runs_[r].ids = reinterpret_cast<uint16_t*>(runs_[r].keys + cap);
-      runs_[r].cap = cap;
-    }
+  const size_t kept = static_cast<size_t>(rows) * 6 + static_cast<size_t>(n) * 2;
+  void* token = nullptr;
+  if (place_.before) {
+    token = place_.before(kept + static_cast<size_t>(n) * 6 + sizeof(Run) * runCount_ + c.sliceBytes, place_.ctx);
   }
-  buf_ = static_cast<uint8_t*>(take(c.sliceBytes));
-  if (!buf_) {
+  stats_.placed = token != nullptr;
+  bool ok;
+  if (token) {
+    ok = takeTransient(n);
+    // The kept ones at the top of what is left (the transient ones may
+    // have gone to holes elsewhere).
+    if (ok) place_.before(kept, place_.ctx);
+    ok = ok && takeKept(n, rows);
+    if (place_.after) place_.after(token, place_.ctx);
+  } else {
+    ok = takeKept(n, rows) && takeTransient(n);
+  }
+  if (!ok) {
     fail(Status::NoMemory, cc::Why::Ok);
     return status_;
   }
-  bufBytes_ = c.sliceBytes;
   if (n) std::memset(maps_.trackToRow, 0xFF, static_cast<size_t>(n) * sizeof(uint16_t));
   std::memset(maps_.rowToTrack, 0xFF, static_cast<size_t>(rows) * sizeof(uint16_t));
   std::memset(maps_.filters, 0, static_cast<size_t>(rows) * sizeof(uint32_t));
@@ -294,6 +329,44 @@ Join::Status Join::begin(const mpdj::Table& table, const LibraryIndex* index) {
   phase_ = Phase::Hash;
   status_ = Status::Working;
   why_ = cc::Why::Ok;
+  return status_;
+}
+
+bool Join::takeKept(uint32_t n, uint32_t rows) {
+  maps_.filters = static_cast<uint32_t*>(take(static_cast<size_t>(rows) * sizeof(uint32_t)));
+  if (maps_.filters) maps_.rowToTrack = static_cast<uint16_t*>(take(static_cast<size_t>(rows) * sizeof(uint16_t)));
+  if (maps_.rowToTrack && n) maps_.trackToRow = static_cast<uint16_t*>(take(static_cast<size_t>(n) * sizeof(uint16_t)));
+  return maps_.rowToTrack && (n == 0 || maps_.trackToRow);
+}
+
+bool Join::takeTransient(uint32_t n) {
+  if (runCount_) {
+    runs_ = static_cast<Run*>(take(sizeof(Run) * runCount_));
+    if (!runs_) {
+      runCount_ = 0;
+      return false;
+    }
+    for (uint32_t r = 0; r < runCount_; ++r) runs_[r] = Run();
+    for (uint32_t r = 0; r < runCount_; ++r) {
+      const uint32_t cap = r + 1 < runCount_ ? cfg_.runTracks : n - r * cfg_.runTracks;
+      void* block = take(static_cast<size_t>(cap) * 6);
+      if (!block) return false;
+      runs_[r].keys = static_cast<uint32_t*>(block);
+      runs_[r].ids = reinterpret_cast<uint16_t*>(runs_[r].keys + cap);
+      runs_[r].cap = cap;
+    }
+  }
+  buf_ = static_cast<uint8_t*>(take(cfg_.sliceBytes));
+  if (!buf_) return false;
+  bufBytes_ = cfg_.sliceBytes;
+  return true;
+}
+
+Join::Status Join::stepPass(const LibraryIndex* index, bool (*more)(void* ctx), void* ctx) {
+  const uint32_t reads = stats_.reads;
+  do {
+    step(index);
+  } while (working() && stats_.reads == reads && (!more || more(ctx)));
   return status_;
 }
 
@@ -356,6 +429,7 @@ bool Join::stringsSlice() {
   // STRS (8.3): byte 0, the header's strings in order, the CRC: the
   // reference reader's own check (its first reason is the join's).
   const cc::Why w = table_->check(0, buf_, bufBytes_);
+  ++stats_.reads;
   if (w != cc::Why::Ok) {
     // check() takes a read that failed in STRS for a bad string: STRS read
     // again tells the card's fault (ReadError: join again after the
@@ -410,6 +484,7 @@ bool Join::filtersSlice() {
     }
     bufEnd_ = be;
     refills += need;
+    stats_.reads += need;
     maps_.filters[rec_++] = filterWord(cc::get16(e), e[2], e[3], cc::get32(e + 4));
   }
   if (rec_ < sec.count) return true;
@@ -433,7 +508,10 @@ bool Join::pathsSlice() {
   // it is used; the CRC at the end.
   const cc::Section& sec = table_->container().section(mpdj::kSecPaths);
   uint32_t refills = 0;
+  const uint32_t confirms = stats_.confirms;
   for (bool first = true; rec_ < sec.count; first = false) {
+    // (The slice's confirms: the next slice goes on in the buffer.)
+    if (!first && cfg_.confirmsPerSlice && stats_.confirms - confirms >= cfg_.confirmsPerSlice) break;
     uint32_t be = bufEnd_;
     const uint32_t need = refillsTo(stream_.position() + sec.stride, &be);
     if (!first && refills + need > 1) break;
@@ -445,6 +523,7 @@ bool Join::pathsSlice() {
     }
     bufEnd_ = be;
     refills += need;
+    stats_.reads += need;
     const uint64_t h = cc::get64(e);
     const uint32_t row = cc::get16(e + 8);
     if (row >= maps_.rows || (rec_ > 0 && h <= prevHash_)) {
@@ -505,6 +584,7 @@ void Join::merge(uint64_t hash, uint16_t row) {
     maps_.rowToTrack[row] = track;
     maps_.filters[row] = f | static_cast<uint32_t>(kCamPresent) << 8;
     ++stats_.rowsMapped;
+    ++maps_.rowsMapped;
   }
 }
 

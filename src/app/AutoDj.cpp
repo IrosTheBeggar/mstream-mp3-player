@@ -95,11 +95,43 @@ unsigned pct(uint32_t part, uint32_t whole) {
 }
 
 constexpr uint32_t kJoinRetryMs = 10000;  // a join whose read failed: again after (the card's, not the file's)
+// A loop pass's slices of the join: as many as fit this (and one card read:
+// Join::stepPass()). MEASURED 2026-10-13: one 1,000-hash slice a pass, 112
+// slices, took 2.1 s idle and 7.2 s with a 320 kbps MP3 and the screen dark
+// (20 ms of idle wait a pass); slices of a millisecond or two, several a
+// pass, and main.cpp's short wait while it works (joinWorking()).
+constexpr int64_t kJoinPassUs = 8000;
+
+struct PassClock {
+  int64_t endUs;
+};
+bool passTimeLeft(void* ctx) { return esp_timer_get_time() < static_cast<PassClock*>(ctx)->endUs; }
+
+size_t psramLargest() { return heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM); }
 
 }  // namespace
 
 AutoDj::AutoDj(Library& library, PlaybackController& player)
-    : lib_(library), player_(player), dj_(driverConfig()), join_(psramAlloc, psramFree) {}
+    : lib_(library), player_(player), dj_(driverConfig()), join_(psramAlloc, psramFree) {
+  autodj::Join::Placement place;
+  place.before = placeBefore;
+  place.after = placeAfter;
+  place.ctx = this;
+  join_.setPlacement(place);
+}
+
+// The join's blocks at the top of PSRAM's largest free block (AutoDjJoin.h:
+// TLSF serves a block from the low end of the one it takes): spacers hold
+// its bottom while they are taken.
+void* AutoDj::placeBefore(size_t bytes, void* self) {
+  autodj::Spacers* s = &static_cast<AutoDj*>(self)->spacers_;
+  const bool first = s->n == 0;  // (else the kept blocks', added to the first's)
+  if (autodj::takeSpacers(bytes, psramLargest, psramAlloc, psramFree, s) || !first) return s;
+  autodj::giveSpacers(s, psramFree);  // (none placed: where the heap puts them)
+  return nullptr;
+}
+
+void AutoDj::placeAfter(void* token, void*) { autodj::giveSpacers(static_cast<autodj::Spacers*>(token), psramFree); }
 
 // ---------------------------------------------------------------------------
 // The boot
@@ -170,12 +202,13 @@ void AutoDj::open(const cardroot::Root::AutoDj& e, const char* when) {
   dj_.engine().fileReopened();
   const uint8_t* sig = table_.selectionSig();
   Serial.printf("[dj] index %s (%s): %lu rows, %lu paths, k %lu (%s, head %lu, floor %lu), slots of %lu B, "
-                "generation %lu, selection %02x%02x%02x%02x..., opened in %.1f ms; the join next\n",
+                "generation %lu, selection %02x%02x%02x%02x..., opened in %.1f ms; %s\n",
                 filePath_, when, (unsigned long)table_.rowCount(), (unsigned long)table_.pathCount(),
                 (unsigned long)table_.k(), table_.selKind() == mpdj::kSelTop ? "the top k" : "strided",
                 (unsigned long)table_.selHead(), (unsigned long)table_.selFloor(), (unsigned long)table_.slotBytes(),
                 (unsigned long)table_.frame().generation, sig[0], sig[1], sig[2], sig[3],
-                (esp_timer_get_time() - t0) / 1000.0);
+                (esp_timer_get_time() - t0) / 1000.0,
+                dj_.settings().on ? "the join next" : "joined when Auto DJ is switched on");
 }
 
 void AutoDj::closeFile() {
@@ -186,7 +219,32 @@ void AutoDj::closeFile() {
   if (file_ == File::Open) file_ = File::None;
 }
 
-bool AutoDj::usable() const { return joined() && !dj_.engine().broken(); }
+bool AutoDj::usable() const {
+  if (file_ != File::Open || dj_.engine().broken()) return false;
+  const LibraryIndex* index = lib_.index();
+  return !index || !index->ready() || index->trackCount() <= autodj::kMaxTracks;
+}
+
+void AutoDj::releaseJoin(const char* why) {
+  stopDryRun(why);
+  const size_t freed = join_.release();
+  joinLogged_ = false;
+  if (block_ == Block::Retry) block_ = Block::None;
+  if (freed) Serial.printf("[dj] the join given back (%s): %u B of PSRAM\n", why, (unsigned)freed);
+}
+
+bool AutoDj::hasRow(uint32_t track) {
+  if (joined()) {
+    const autodj::Maps& m = *join_.maps();
+    return track < m.tracks && m.trackToRow[track] != autodj::kNoRow;
+  }
+  if (file_ != File::Open || !handle_) return false;
+  const LibraryIndex* index = lib_.index();
+  if (!index || !index->ready() || track >= index->trackCount()) return false;
+  uint64_t h = 0;
+  if (!autodj::trackPathHash(*index, track, hashPath_, sizeof(hashPath_), &h)) return false;
+  return table_.rowOf(h) != mpdj::kNoRow;
+}
 
 // ---------------------------------------------------------------------------
 // The loop
@@ -217,6 +275,7 @@ autodj::Env AutoDj::driverEnv(const Env& env) const {
   e.restartSet = env.restartSet;
   e.sleepEndOfQueue = env.sleepEndOfQueue;
   e.listMoving = env.listMoving;
+  e.refilling = env.refilling;
   return e;
 }
 
@@ -302,7 +361,9 @@ void AutoDj::remount(const Env& env) {
       joinLogged_ = false;
     }
     Serial.printf("[dj] the card was mounted again (the same index): the file reopened, %s\n",
-                  wasReady ? "the maps and the session kept" : "the join again");
+                  wasReady            ? "the maps and the session kept"
+                  : dj_.settings().on ? "the join again"
+                                      : "the session kept (the index joins when Auto DJ is switched on)");
     return;
   }
   // Another index, one now, or none now.
@@ -321,11 +382,19 @@ void AutoDj::remount(const Env& env) {
   }
 }
 
-// One slice of the join a pass, once the UI's first frame is up, never
-// while a list moves (30 fps: H7); none behind the update's fence (the
-// index hidden).
+// The join while Auto DJ is on: begun once the UI's first frame is up;
+// its slices a pass up to kJoinPassUs and one card read, never while a
+// list moves (30 fps: H7) or the card is held; none behind the update's
+// fence (the index hidden).
 void AutoDj::stepJoin(const Env& env) {
-  if (file_ != File::Open) return;
+  if (file_ != File::Open || !dj_.settings().on) return;
+  if (block_ == Block::Update) {
+    // Given back to the update step's memory check: again after its Live
+    // (live()), or now that it deferred or failed (over before a fence).
+    LibraryUpdate* up = lib_.update();
+    if (up && up->asked()) return;
+    block_ = Block::None;
+  }
   LibraryIndex* index = lib_.index();
   using S = autodj::Join::Status;
   const S s = join_.status();
@@ -338,13 +407,16 @@ void AutoDj::stepJoin(const Env& env) {
     return;
   }
   if (s != S::Working || env.listMoving || env.cardHeld) return;
-  join_.step(index);
+  PassClock clock{esp_timer_get_time() + kJoinPassUs};
+  join_.stepPass(index, passTimeLeft, &clock);
+  ++joinPasses_;
   joinStatus();
 }
 
 void AutoDj::beginJoin(const LibraryIndex* index) {
   joinT0Us_ = esp_timer_get_time();
   joinLogged_ = false;
+  joinPasses_ = 0;
   ++joins_;
   join_.begin(table_, index);
   joinStatus();
@@ -360,13 +432,20 @@ void AutoDj::joinStatus() {
     case S::Ready: {
       if (joinLogged_) return;
       joinLogged_ = true;
+      // The cached slots' runs were made from the maps before (a fence, a
+      // remount): made again, a loop pass each (Engine::runDue()).
+      dj_.engine().mapsChanged();
       const autodj::Maps& m = *join_.maps();
       Serial.printf("[dj] joined: %lu of %lu tracks have neighbours (%lu rows of %lu; BPM %u %%, key %u %% of them) in "
-                    "%.0f ms, %lu slices; %u B kept, %u B at the peak (largest block %u B)%s\n",
+                    "%.0f ms, %lu slices in %lu loop passes, %lu reads; %u B kept at %p, %u B at the peak (largest "
+                    "block %u B; %s; PSRAM's largest free block now %u B)%s\n",
                     (unsigned long)m.mapped, (unsigned long)m.tracks, (unsigned long)st.rowsMapped,
                     (unsigned long)m.rows, pct(m.withBpm, m.mapped), pct(m.withKey, m.mapped), joinMs_,
-                    (unsigned long)st.slices, (unsigned)join_.heldBytes(), (unsigned)st.peakBytes,
-                    (unsigned)st.largestBlock, st.ambiguous ? "; some paths two tracks share left out" : "");
+                    (unsigned long)st.slices, (unsigned long)joinPasses_, (unsigned long)st.reads,
+                    (unsigned)join_.heldBytes(), static_cast<const void*>(m.filters), (unsigned)st.peakBytes,
+                    (unsigned)st.largestBlock,
+                    st.placed ? "at the top of the largest free one" : "where the heap put them (no spacer)",
+                    (unsigned)psramLargest(), st.ambiguous ? "; some paths two tracks share left out" : "");
       return;
     }
     case S::Absent: {
@@ -418,10 +497,19 @@ size_t AutoDj::fence() {
   return freed;
 }
 
+size_t AutoDj::giveBack() {
+  const size_t held = join_.heldBytes();
+  if (!held) return 0;
+  releaseJoin("the library update's memory check: the new track table's block");
+  block_ = Block::Update;
+  return held;
+}
+
 void AutoDj::live() {
+  if (block_ == Block::Update) block_ = Block::None;
   dj_.remapped(player_.queue());
-  Serial.printf("[dj] the library was rebuilt: %d DJ marks carried, the session kept; the join again\n",
-                dj_.marks().count());
+  Serial.printf("[dj] the library was rebuilt: %d DJ marks carried, the session kept; %s\n", dj_.marks().count(),
+                dj_.settings().on ? "the join again" : "the index joins when Auto DJ is switched on");
 }
 
 // ---------------------------------------------------------------------------
@@ -451,12 +539,14 @@ void AutoDj::logPick(const Pass& p, const char* how) {
   char row[24] = "no row";
   if (k.row != autodj::kNoRow) snprintf(row, sizeof(row), "row %u", (unsigned)k.row);
   Serial.printf("[dj] %s: %s (%s, level %u, class %u: cooldown %u, rank %u; %u candidates, %u gated, %u in its class; "
-                "%u reads; %.2f ms, reads %.2f ms)%s%s%s%s%s%s%s%s%s%s\n",
+                "%u reads; %.2f ms, reads %.2f ms)%s%s%s%s%s%s%s%s%s%s%s\n",
                 how, pathOf(k.track), row, (unsigned)k.level,
                 (unsigned)(k.cooldownLevel * autodj::kRanks + k.musicRank),
                 (unsigned)k.cooldownLevel, (unsigned)k.musicRank, (unsigned)k.candidates, (unsigned)k.gated,
                 (unsigned)k.inClass, (unsigned)k.reads, p.pickUs / 1000.0, p.readUs / 1000.0,
-                k.dry ? " [dry: the 50 closest]" : "", k.random && !k.noIndex ? " [random]" : "",
+                k.dry ? " [dry: the 50 closest]" : "",
+                k.loosened ? " [loosened: the gate's rows all played lately: the 50 closest not]" : "",
+                k.random && !k.noIndex ? " [random]" : "",
                 k.noIndex ? " [by track id: no index]" : "", k.imputedTempo ? " [tempo drawn]" : "",
                 k.imputedKey ? " [key drawn]" : "", k.tempoBreak ? " [tempo break]" : "",
                 k.keyBreak ? " [key break]" : "", p.cued ? " [cued: the queue had finished; Play starts it]" : "",
@@ -467,7 +557,10 @@ void AutoDj::logPick(const Pass& p, const char* how) {
 void AutoDj::report(const Pass& p) {
   if (p.began != Began::None) logSession(p.began, player_.queue().currentTrack());
   if (p.quickSkip) {
-    Serial.printf("[dj] a quick skip: %s after %.1f s: no longer steers\n", pathOf(p.leftTrack), p.leftMs / 1000.0);
+    Serial.printf("[dj] a quick skip: %s after %.1f s: %s\n", pathOf(p.leftTrack), p.leftMs / 1000.0,
+                  p.leftSteered                  ? "no longer steers"
+                  : p.leftRow == autodj::kNoRow ? "it has no row in the index: it never steered"
+                                                : "it wasn't among the anchors: nothing changes");
   }
   if (p.removedPick) {
     Serial.printf("[dj] Auto DJ's pick taken out before it played: %s: no longer steers (still cooled)\n",
@@ -504,10 +597,17 @@ bool AutoDj::setOn(bool on) {
     Serial.printf("[dj] Auto DJ %s already\n", on ? "on" : "off");
     return false;
   }
-  saveSettings(on ? "Auto DJ on: it adds a track when the queue's last one starts (a finished queue: one cued, "
-                    "paused)"
-                  : "Auto DJ off: what it added stays and plays out");
+  saveSettings(!on                   ? "Auto DJ off: what it added stays and plays out"
+               : file_ == File::Open ? "Auto DJ on: it adds a track when the queue's last one starts (a finished "
+                                       "queue: one cued, paused); the index joins now"
+                                     : "Auto DJ on: it adds a track when the queue's last one starts (a finished "
+                                       "queue: one cued, paused)");
   if (on) logSession(Began::On, autodj::kNoTrackId);
+  if (!on) releaseJoin("Auto DJ off");
+  // Switched on again: a join that failed for memory (or a library too
+  // big) is tried again, as the listener may have freed some since (a
+  // library too big fails again at once).
+  if (on && block_ == Block::Build) block_ = Block::None;
   return true;
 }
 
@@ -542,26 +642,43 @@ bool AutoDj::fromHere(uint32_t track) {
   }
   if (switched) saveSettings("Auto DJ on");
   logSession(Began::FromHere, track);
-  const autodj::Index ix = index();
-  if (!ix.maps || track >= ix.maps->tracks || ix.maps->trackToRow[track] == autodj::kNoRow) {
+  if (!hasRow(track)) {
     Serial.println("[dj] (that track has no neighbours in the index: the first pick is random, and becomes the seed)");
   }
   return true;
 }
 
+// The empty states' button (D4): a random track with neighbours, played,
+// Auto DJ on. Joined, a row of the maps (Driver::surprise()); not (Auto DJ
+// off: the join follows the switch), library tracks drawn and looked up by
+// their path's hash in DJPH, so playback never waits for a join.
 bool AutoDj::start() {
-  const autodj::Pick s = dj_.surprise(index());
-  if (!s.ok) {
-    Serial.println("[dj] the Auto DJ button: no track with neighbours (no index joined): nothing played");
+  uint32_t track = autodj::kNoTrackId;
+  if (joined()) {
+    const autodj::Pick s = dj_.surprise(index());
+    if (s.ok) track = s.track;
+  } else if (usable()) {
+    const LibraryIndex* idx = lib_.index();
+    const uint32_t tracks = idx && idx->ready() ? idx->trackCount() : 0;
+    const int64_t t0 = esp_timer_get_time();
+    uint8_t tries = 0;
+    track = dj_.surpriseTrack(tracks, hasRowOf, this, &tries);
+    Serial.printf("[dj] the Auto DJ button: %u library tracks looked up in the index by their path (%.1f ms): %s\n",
+                  (unsigned)tries, (esp_timer_get_time() - t0) / 1000.0,
+                  track != autodj::kNoTrackId ? "one has neighbours" : "none had neighbours");
+  }
+  if (track == autodj::kNoTrackId) {
+    Serial.printf("[dj] the Auto DJ button: no track with neighbours (%s): nothing played\n",
+                  usable() ? "none found in the draws" : "no usable index");
     return false;
   }
   bool switched = false;
-  if (!dj_.playFrom(player_, s.track, Began::Surprise, index().maps, &switched)) {
+  if (!dj_.playFrom(player_, track, Began::Surprise, index().maps, &switched)) {
     Serial.println("[dj] the Auto DJ button: the Play was refused (the library updating, or no memory)");
     return false;
   }
   if (switched) saveSettings("Auto DJ on");
-  logSession(Began::Surprise, s.track);
+  logSession(Began::Surprise, track);
   return true;
 }
 
@@ -633,6 +750,10 @@ void AutoDj::command(const char* arg, const Env& env) {
     case K::Join:
       if (file_ != File::Open) {
         Serial.printf("[dj] Dj: no index open (%s)\n", whyText_);
+        return;
+      }
+      if (!dj_.settings().on) {
+        Serial.println("[dj] Dj: Auto DJ is off: the index joins only while it is on (D1 joins it)");
         return;
       }
       stopDryRun("Dj");
@@ -767,12 +888,12 @@ void AutoDj::dryRunSummary(bool stopped) {
   float* t = dry_->times();
   if (stopped) std::sort(t, t + n);
   const Percentiles q = Percentiles::of(t, n);  // (sorted already: sorts again, cheaply)
-  Serial.printf("[dj] Dn%s: %lu picks (%lu gave no track): %lu dry, %lu random (%lu by id); repeats %lu, artists %lu; "
-                "tempo breaks %lu, key breaks %lu; drawn: tempo %lu, key %lu\n",
+  Serial.printf("[dj] Dn%s: %lu picks (%lu gave no track): %lu dry, %lu loosened, %lu random (%lu by id); repeats %lu, "
+                "artists %lu; tempo breaks %lu, key breaks %lu; drawn: tempo %lu, key %lu\n",
                 stopped ? " (stopped)" : "", (unsigned long)r.picks, (unsigned long)r.failed, (unsigned long)r.dry,
-                (unsigned long)r.random, (unsigned long)r.noIndex, (unsigned long)r.repeats, (unsigned long)r.artists,
-                (unsigned long)r.tempoBreaks, (unsigned long)r.keyBreaks, (unsigned long)r.imputedTempo,
-                (unsigned long)r.imputedKey);
+                (unsigned long)r.loosened, (unsigned long)r.random, (unsigned long)r.noIndex, (unsigned long)r.repeats,
+                (unsigned long)r.artists, (unsigned long)r.tempoBreaks, (unsigned long)r.keyBreaks,
+                (unsigned long)r.imputedTempo, (unsigned long)r.imputedKey);
   Serial.printf("[dj] Dn: reads at a pick 0/1/2: %lu/%lu/%lu, read ahead %lu, anchors left out %lu; a pick's time "
                 "p50 %.0f us, p90 %.0f us, max %.0f us\n",
                 (unsigned long)r.readsAtPick[0], (unsigned long)r.readsAtPick[1], (unsigned long)r.readsAtPick[2],
@@ -843,12 +964,17 @@ void AutoDj::status(const Env& env) {
                   (unsigned long)m.mapped, (unsigned long)m.tracks, (unsigned long)(m.tracks - m.mapped),
                   pct(m.withBpm, m.mapped), pct(m.withKey, m.mapped), joinMs_, (unsigned long)js.slices,
                   (unsigned)js.peakBytes, (unsigned)js.largestBlock, (unsigned long)joins_, (unsigned long)remounts_);
+  } else if (file_ == File::Open && !s.on && join_.status() == autodj::Join::Status::Idle) {
+    Serial.println("[dj] join: none (Auto DJ off: the index joins when it is switched on); 0 B held");
   } else if (file_ == File::Open) {
-    Serial.printf("[dj] join: %s, %s (%lu slices, %lu tracks hashed, %lu paths read)%s\n", statusName(join_.status()),
-                  phaseName(join_.phase()), (unsigned long)js.slices, (unsigned long)js.hashed, (unsigned long)js.paths,
-                  block_ == Block::Build   ? "; waits for the next library build"
-                  : block_ == Block::Retry ? "; tried again soon"
-                                           : "");
+    Serial.printf("[dj] join: %s, %s (%lu slices in %lu loop passes, %lu reads, %lu tracks hashed, %lu paths read)%s\n",
+                  statusName(join_.status()), phaseName(join_.phase()), (unsigned long)js.slices,
+                  (unsigned long)joinPasses_, (unsigned long)js.reads, (unsigned long)js.hashed,
+                  (unsigned long)js.paths,
+                  block_ == Block::Build    ? "; waits for the next library build"
+                  : block_ == Block::Retry  ? "; tried again soon"
+                  : block_ == Block::Update ? "; given back to the library update (again after its Live)"
+                                            : "");
   }
   // The session.
   const autodj::Engine& e = dj_.engine();
@@ -864,17 +990,18 @@ void AutoDj::status(const Env& env) {
   // The counters.
   const autodj::Stats& st = e.stats();
   Serial.printf("[dj] picks %lu (none %lu): reads at a pick 0/1/2 %lu/%lu/%lu, read ahead %lu, left out %lu; dry %lu, "
-                "random %lu (by id %lu); drawn tempo %lu, key %lu; damaged %lu, read failures %lu, broken %lu; quick "
-                "skips %lu, picks taken out %lu; holds %lu, failure pause %u in a row%s; refused %lu, undos "
-                "taken %lu\n",
+                "loosened %lu, random %lu (by id %lu); drawn tempo %lu, key %lu; damaged %lu, read failures %lu, "
+                "broken %lu; quick skips %lu, picks taken out %lu; holds %lu, failure pause %u in a row%s; refused "
+                "%lu, undos taken %lu; waited for a refill %lu\n",
                 (unsigned long)st.picks, (unsigned long)st.failed, (unsigned long)st.readsAtPick[0],
                 (unsigned long)st.readsAtPick[1], (unsigned long)st.readsAtPick[2], (unsigned long)st.prefetchReads,
-                (unsigned long)st.leftOut, (unsigned long)st.dry, (unsigned long)st.random, (unsigned long)st.noIndex,
+                (unsigned long)st.leftOut, (unsigned long)st.dry, (unsigned long)st.loosened, (unsigned long)st.random,
+                (unsigned long)st.noIndex,
                 (unsigned long)st.imputedTempo, (unsigned long)st.imputedKey, (unsigned long)st.damaged,
                 (unsigned long)st.ioSkips, (unsigned long)st.broken, (unsigned long)st.quickSkips,
                 (unsigned long)dj_.removedPicks(), (unsigned long)dj_.holds(), (unsigned)dj_.failurePause().inARow(),
                 dj_.failurePause().paused() ? " (PAUSED)" : "", (unsigned long)dj_.refusals(),
-                (unsigned long)dj_.undoDrops());
+                (unsigned long)dj_.undoDrops(), (unsigned long)dj_.refillWaits());
   Serial.printf("[dj] per mode: Follow the vibe %lu picks, tempo breaks %lu, key breaks %lu; Stay on seed %lu picks, "
                 "tempo breaks %lu, key breaks %lu\n",
                 (unsigned long)st.modePicks[0], (unsigned long)st.tempoBreaks[0], (unsigned long)st.keyBreaks[0],

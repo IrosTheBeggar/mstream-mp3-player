@@ -47,7 +47,9 @@
 //             answering (/music, and the records opening), the memory check:
 //             free PSRAM plus what the step frees at least 1.1 x the build's
 //             estimated peak, and the new track table fitting the old one's
-//             block or the largest free one. Short (or gb!), the marker is
+//             block or the largest free one (memory held only until a step
+//             needs it, next to that block, given back first when the
+//             table doesn't fit: setGiveBack()). Short (or gb!), the marker is
 //             written and the step ends (Do::Deferred: "Library updates at
 //             next boot"); the next boot builds before the UI, on a fresh
 //             heap. Before the memory check, the records must list the card
@@ -198,6 +200,23 @@ public:
   // doesn't fit the old one's block, the largest free block over the
   // table's need, taken as if the held bytes came out of it). 0: none.
   static size_t spareOf(const Room& r);
+
+  // Memory a part of the firmware holds only while no update step needs it
+  // (Auto DJ's join, in In::alsoFreed: it joins again after the step, or
+  // after a deferral), whose blocks may sit next to the largest free one
+  // (AutoDjJoin's placement): the check counts it in the room, but not in
+  // the largest block, which only giving it back shows. So when the check
+  // fails on the track table's block (Short::Table) and gb! didn't ask for
+  // the deferral, `fn` gives it back and measures PSRAM again (its free
+  // bytes and largest block into the two it is handed), and returns the
+  // bytes it gave back (0: none, nothing measured); the check is made
+  // again with those (the bytes no longer in alsoFreed). Once a step at
+  // most. nullptr: none.
+  using GiveBackFn = size_t (*)(void* ctx, size_t* psramFree, size_t* psramLargest);
+  void setGiveBack(GiveBackFn fn, void* ctx) {
+    giveBack_ = fn;
+    giveBackCtx_ = ctx;
+  }
 
   struct Config {
     tagstore::Fs* fs = nullptr;          // the card (its library.idx, the marker, T, D)
@@ -362,6 +381,8 @@ public:
     bool markerRemoved = false;
     bool markerWritten = false;  // Do::Deferred: the marker is on the card
     bool markerSkipped = false;  // Do::Deferred, short, after a boot whose marker build was short too: none written
+    size_t givenBack = 0;        // the memory check had setGiveBack()'s hook give this back (0: none)
+    size_t largestBefore = 0;    // ... and the largest free block then (the check's first look)
     float buildMs = 0, saveMs = 0;
     uint32_t fenceMs = 0;        // the fence's length (the loop's clock: Fence to Live)
   };
@@ -423,6 +444,8 @@ private:
   uint64_t now() const { return c_.nowUs ? c_.nowUs() : 0; }
 
   Config c_;
+  GiveBackFn giveBack_ = nullptr;
+  void* giveBackCtx_ = nullptr;
   Phase phase_ = Phase::Idle;
   const char* why_ = "";
   bool deferAsked_ = false;
