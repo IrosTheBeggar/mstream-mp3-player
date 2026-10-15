@@ -22,7 +22,8 @@
 //   1. The update step's build, at priority 1 (the loop's): the listener
 //      waits for it behind the "Updating library" fence. Nothing here holds
 //      it: LibraryUpdate's safe point decides when it is asked (N12).
-//   2. A list is moving: nothing else starts, covers included (Thumbs' rule).
+//   2. A list is moving (on a lit screen: listHolds()): nothing else
+//      starts, covers included (Thumbs' rule).
 //   3. A cover, at priority 1, dropped to 0 while a list moves under it
 //      (Thumbs' rule): rows on screen come first (3.3.3, 0). The audio's
 //      yields below don't hold it.
@@ -47,6 +48,10 @@
 // A slice under way drops to 0 and is cut after its unit (Out::cut) the
 // moment a list moves or a wait below applies: so a wait holds the walk and
 // the scan within one unit (a folder, a file) and a pass, as before slices.
+// A list holds nothing while the screen is dark (In::dark: listHolds()):
+// none is seen moving then, whatever its page still owes the wake (a list
+// reloaded in the dark owes a frame until then: on 2026-10-14 the library
+// update's save waited 260 s for "a list moving" with the screen off).
 // The scan's next file comes from the first source that has one (3.3.3):
 // the playing track, the queue's next kQueueNext entries, the kQueueSoon
 // after them, the album or folder the Library tab shows, then the rest in
@@ -169,7 +174,7 @@ public:
     bool shownPending = false;      // one in the album or folder the Library tab shows
     bool restPending = false;       // D's to-do has one (canonical order)
     // ---- the UI ----
-    bool listMoving = false;  // a list scrolls, flings or follows a finger (Page::animating())
+    bool listMoving = false;  // a list scrolls, flings or follows a finger (Page::animating()); none while `dark`
     bool input = false;       // any input this pass (a touch, a button, PWR, a headphone key, the console)
     bool dark = false;        // the screen is dark: nothing to draw (a scan's slice, a compaction, the save at 1)
     // ---- the audio ----
@@ -243,8 +248,17 @@ public:
   static Source sourceOf(const In& in);
   // A step's priority (3.3.4, 3.3.9) when no wait applies: the build 1; a
   // cover and the walk 1, 0 while a list moves; the scan, a compaction and
-  // the save 1 while the screen is dark and no list moves, else 0.
+  // the save 1 while the screen is dark, else 0. (A list "moving" in the
+  // dark is none: listHolds().)
   static uint8_t priorityOf(Job job, bool listMoving, bool dark = false);
+  // A list that moves holds work (the wait List, a slice cut, a cover or
+  // the walk below the loop) only while the screen is lit: in the dark
+  // (In::dark: nothing drawn) no list is seen moving, and one that owes the
+  // wake its frame (a reload, a fling the screen's off stopped) holds
+  // nothing. The console's gs paces its pieces by it too (lib/core
+  // TagCheck). Before 2026-10-14 a list reloaded in the dark held the
+  // update step's save 260 s, until the screen woke.
+  static bool listHolds(bool listMoving, bool dark) { return listMoving && !dark; }
 
   static const char* jobName(Job j);
   static const char* sourceName(Source s);

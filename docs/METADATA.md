@@ -3045,8 +3045,10 @@ where 3.3.3-3.3.5 left room:
   the same way today.
 - **The order**, when the worker is free: the update step's build
   (priority 1; nothing here holds it, N12's safe point decides when it is
-  asked); then nothing while a list moves, covers included (Thumbs' rule);
-  a cover (priority 1, 0 while a list moves under it), whatever the audio;
+  asked); then nothing while a list moves, covers included (Thumbs' rule;
+  on a lit screen only: in the dark none is seen moving, `listHolds()`,
+  2026-10-14); a cover (priority 1, 0 while a list moves under it),
+  whatever the audio;
   the save; then one job at a time, the first with work: the walk, a
   compaction, the scan, the DJNB check (priority 0). While the update step
   holds the worker (its fence to the save's end) the last four wait;
@@ -3181,7 +3183,9 @@ where 3.3.3-3.3.5 left room:
   `[card] the walk: ... in M ms` counts from its first slice, after it.
 - **millis()'s wrap:** a window is cleared once it has passed, so an old
   one can't come back 24.8 days later (a device on USB for weeks).
-- **The glue's inputs (N10):** `listMoving` is the page's `animating()`;
+- **The glue's inputs (N10):** `listMoving` is the page's `animating()`
+  (none while the page draws no frame: the screen dark, a modal over it,
+  since 2026-10-14);
   `input` is `stepIdle()`'s; the ring and the underruns are the backend's
   `bufferedMsNow()` and `underrunsNow()`; `decodePassUs` needs a peak the
   decode task raises after each pass and the loop takes (swapped to 0);
@@ -4080,8 +4084,10 @@ src/. What the code decided where 3.2-3.4 left room:
   a write attempt on a full one); and the scan's memory goes back after
   10 s without a scan step.
 - **The scheduler's inputs** (3.3.9's notes): `listMoving` the page's
-  `animating()`; `input` what `stepIdle()` takes (a touch, the console, a
-  key); the ring's `bufferedMsNow()` and a new `ringCapacityMs()` (1,486
+  `animating()` (none while the screen is dark or a modal is up:
+  2026-10-14, below);
+  `input` what `stepIdle()` takes (a touch, the console, a key); the
+  ring's `bufferedMsNow()` and a new `ringCapacityMs()` (1,486
   ms: 65,536 frames); `underrunsNow()`; `decodePassUs` a new peak the
   decode task raises after each pass and the loop takes back to 0
   (`takePassPeakUs()`); `decoderAtEnd` the heard track's source ended
@@ -4309,19 +4315,82 @@ src/. What the code decided where 3.2-3.4 left room:
   section table, within 1 to 11 of the card's sectors), where the one
   call read 3.7 MB in one go
   (a read through the VFS took about 4.8 ms on the device: 2,555 in
-  12.4 s). No piece runs while a list moves (the scan's slices yield to
-  it too). Its reads start once the card worker's step under way is
-  taken in, a pass at a time (10 s at most, as `waitIdle()` waited
-  before, blocking the loop), nothing handed meanwhile, so its scan
-  line's waits are the ones from before it, as when it blocked
-  (`CardTasks::holdForConsole()`); while it reads, the worker goes on
-  (covers, the walk, the scan) but for a compaction, which would replace
-  `tags.bin` under it, and the update step stays as asked (its compaction
-  and its fence after `gs`'s last line). ESTIMATED: the same 12 s of
-  reads over about 20 s with the screen lit, 40 s dark (the loop's 1-5 ms
-  and 20 ms sleeps between pieces), longer while the worker's steps share
-  the card; a second `gs` meanwhile says so and doesn't run. `gt` and
-  `gl` still read in one go (`gt` checks D and T whole: seconds at 20k).
+  12.4 s). No piece runs while a list moves on a lit screen (the scan's
+  slices yield to it too; in the dark none is seen moving: below). Its
+  first lines come once the card worker's step under way is taken in, a
+  pass at a time (10 s at most, as `waitIdle()` waited before, blocking
+  the loop), nothing handed meanwhile, so its scan line's waits are the
+  ones from before it, as when it blocked (`CardTasks::holdForConsole()`);
+  while it reads, the worker goes on (covers, the walk, the scan) but for
+  a new compaction, which would replace `tags.bin` under it (one already
+  under way is waited out: below), and the update step stays as asked
+  (its compaction and its fence after `gs`'s last line). Its `[card] the
+  worker:` line says `up` whenever the worker's task is alive (a step in
+  its last 3 s: a scan under way keeps it up) and `not running` once the
+  task has ended itself; a step under way is its waits line's `now:`.
+  MEASURED the same day, `> library index "s"` to the D line with all
+  19,412 rows Scanned (the 20 s lit and 40 s dark ESTIMATED were low):
+  32.2 s with the screen lit and 60.5 s dark, paused; 52-54 s lit and
+  72-75 s dark while 1-second tracks played (the decoder's reads, a track
+  change a second); 13.5 s of flings added 13.7 s; a D with fewer
+  Scanned rows reads faster (19.4 s with 2,518, 27.4 s with 12,563). The
+  5 s `[stats]` line kept its spacing throughout. A second `gs` meanwhile
+  says so and doesn't run. `gt` and `gl` still read in one go (`gt`
+  checks D and T whole: seconds at 20k).
+- **`gs` never reads under a compaction (2026-10-14).** The same day's
+  device run found a false ABSENT: a compaction under way when `gs` came
+  (the scan's, 33.1 s; another of 48.0 s) outlasted its 10 s wait for
+  the worker, its first lines came at that cap (`now: a step under
+  way`), and its check read `tags.bin` as the compaction put the new one
+  in its place: `[tags] D /.player/tags.bin: ABSENT, it fails its checks
+  (string)` 24 ms after `[card] compaction done`, for a D the next `gs`
+  read whole (the blocking `gs` before it had the same 10 s cap; its hold
+  stopped only new compactions). Now D's turn (`tagcheck::Turn`) waits
+  while one is under way (`CardTasks::replacing()`: from its hand-off
+  until it's taken in), a pass at a time, and says so once: `[tags] D
+  /.player/tags.bin: waiting for the compaction under way (it replaces
+  it at its end): read once it's done`; 5 min at most, then `NOT READ`,
+  never ABSENT. A file's check is judged at the pass after its last
+  read: a compaction handed since its open (`CardTasks::compactions()`)
+  or under way then, or the card mounted again meanwhile (the card's
+  guard's count, `sectordisk::guard().remounts`: the file's open handle
+  is gone and its reads fail), and its answer doesn't count: the file is
+  read again (`... as gs read it: read again`, twice at most). T's turn
+  waits for no compaction (nothing in the firmware writes `/.mstream`),
+  only a remount sends it back, and it starts afresh whatever D's came
+  to. `gs`'s phases are `tagcheck::Gs` (`app/TagConsole` reads and
+  prints for it: `tagcheck::GsIo`), so `test_tag_check` runs the
+  shipped decisions over a card in memory: `gs` at the device's timing
+  and with the compaction's end 1.5 s into the read (the old order says
+  ABSENT there, `recsOrder` on the host's zeroed clusters; the new one
+  waits and reads the new D whole), the card mounted again under D's
+  read and under T's (each read again, whole), a compaction that never
+  ends (D not read, T read), and every phase's calls in order. `gt`,
+  which reads in one go after the same 10 s wait, says a compaction is
+  under way and reads nothing.
+- **A list that can't be seen holds nothing (2026-10-14).** The same
+  run: the library update went live with the screen off on Library >
+  Albums (off since 1640.4 s), and its save of `library.idx` waited for
+  `a list moving` until the screen woke (built 2055.0, the wake 2314.6,
+  saved 2319.9; `gs` then counted `a list moving 266.0`). The list,
+  reloaded in the dark (`libraryChanged()`), owed its frame
+  (`ListView::animating()`: `force_`, or an offset not yet drawn), and
+  `Ui::loop()` draws no frame while the screen is dark, so the list read
+  as moving until the wake (a fling the screen's going off stopped can
+  leave it so too). On main since N10: `Ui::listMoving()` never looked at
+  the screen, and every background job (the scan, the walk, compactions,
+  the save) waited on it. A modal on a lit screen did the same (the
+  fix's review): `Ui::loop()` draws no page under a dialog or a sheet,
+  and a fling caught by a dialog that opens by itself (the headphones
+  lost, a play that failed) read as moving until it closed, holding
+  everything with the screen never going off. Now `Ui::listMoving()` is
+  false while its page draws no frame (the screen dark, `identify()`'s
+  banner, a modal over it), and the scheduler holds nothing for a list
+  in the dark either (`ScanScheduler::listHolds()`, by `In::dark`), nor
+  do `gs`'s pieces (`tagcheck::pieceWaits()`). `test_scan_scheduler`
+  runs the device's save (handed at once in the dark, held lit), and
+  `test_tag_check` a `gs` in the dark with its list stuck "moving"
+  (`Ui`'s own rule, the modal's included, is the device's to check).
 - **Sizes (MEASURED, the build).** IRAM unchanged in both builds
   (`.iram0.vectors` 1,028 + `.iram0.text` 124,867 = 125,895 B); internal
   DRAM +472 B (`.dram0.data` 24,328 to 24,440, `.dram0.bss` 32,168 to

@@ -24,12 +24,18 @@
 //        first, once the worker's step under way is taken in; then D's and
 //        T's as their checks end (lib/core TagCheck: D and T checked
 //        whole, about kSliceUs of it a pass, the pieces whole, none while
-//        a list moves; 12.4 s of the loop in one go on a 19,412-record
-//        card before, 2026-10-14), no compaction meanwhile (Jobs::hold);
-//        its [console] line after the last
+//        a list moves on a lit screen; 12.4 s of the loop in one go on a
+//        19,412-record card before, 2026-10-14; 32 s lit and 60 s dark
+//        there a piece a pass, paused, 52-54 s and 72-75 s while 1-second
+//        tracks played), no new compaction meanwhile (Jobs::hold), and
+//        D not read while one is under way (tagcheck::Turn: gs waits for
+//        it, and says so), either file read again if the card was mounted
+//        again under it; its [console] line after the last (the phases:
+//        tagcheck::Gs; the reads and the lines here, its GsIo)
 //   gt   one file: its tags read now (TagScan), its records in D and in T,
 //        the record the builder would take (LibraryBuilder::choose(), 2.9)
-//        and the names the index has for it
+//        and the names the index has for it (not while a compaction is
+//        still under way after idle()'s wait: it replaces D)
 //   gr, gr!, gw, gb, gv: the card worker's jobs (Rescan tags, walk, build,
 //        verify), handed in by whoever runs it (setJobs(): app/CardTasks);
 //        without them they say there is none, and change nothing; gb! the
@@ -52,7 +58,7 @@
 // FatFs's 512 B long-name buffer, the SD driver). gs once overflowed it
 // with mptg::check()'s 3.9 KB Walker on the stack; each command's own depth
 // is the [console] line after it (app/LoopStack; gs's, its pieces' too).
-class TagConsole {
+class TagConsole : private tagcheck::GsIo {
 public:
   struct Jobs {
     bool (*rescan)(bool everything) = nullptr;
@@ -73,11 +79,22 @@ public:
     // gs, over the passes its reads take (CardTasks::holdForConsole()):
     // Worker while it waits for the step under way (busy() until it's taken
     // in; kWaitMs at most, as idle()'s wait), Records while it reads (no
-    // compaction replaces tags.bin under them), None after its last line.
+    // new compaction replaces tags.bin under them), None after its last
+    // line.
     void (*hold)(tagcheck::Hold h) = nullptr;
     bool (*busy)() = nullptr;
-    // A list moves: gs's pieces wait (the scan's slices yield to it too).
+    // A compaction under way (it replaces tags.bin at its end), and the
+    // compactions handed so far (CardTasks::replacing(), compactions()): D
+    // isn't read meanwhile, and a check of D one overlapped is read again
+    // (tagcheck::Turn; the card's guard's remounts too, either file's:
+    // sectordisk::guard()).
+    bool (*replacing)() = nullptr;
+    uint32_t (*compactions)() = nullptr;
+    // A list moves, and nothing is drawn (the screen dark): gs's pieces
+    // wait for a list moving on a lit screen only (tagcheck::pieceWaits():
+    // the scan's slices yield to it too).
     bool (*listMoving)() = nullptr;
+    bool (*dark)() = nullptr;
   };
 
   // gs's piece of a pass: its units (lib/core TagCheck) until this long
@@ -85,8 +102,9 @@ public:
   // most but for the opens' small ones; about 4.8 ms a read through the
   // VFS on the device).
   static constexpr uint32_t kSliceUs = 10000;
-  // gs's wait for the worker's step under way, then its reads regardless
-  // (idle()'s 10 s, as before).
+  // gs's wait for the worker's step under way, then its first lines
+  // regardless (idle()'s 10 s, as before). Its reads wait on while that
+  // step is a compaction (tagcheck::Turn: 33-48 s were seen, 2026-10-14).
   static constexpr uint32_t kWaitMs = 10000;
 
   TagConsole(LocalStorage& storage, Library& library) : storage_(storage), library_(library) {}
@@ -102,14 +120,24 @@ public:
 private:
   struct Work;
   struct Found;
-  // gs's phases, a pass each (Device and Transfer: as many as their checks
-  // take).
-  enum class Gs : uint8_t { Idle, Wait, Device, Journals, Root, Transfer, Plan };
   void status();
-  void statusStep(uint32_t nowMs);
-  void statusEnd();
-  // gs's file at `path` opened, its check begun (false: not there).
-  bool openCheck(const char* path, bool device);
+  // What gs knows of the loop at the pass (Jobs' hooks, the card's guard).
+  tagcheck::Pass pass(uint32_t nowMs) const;
+  // gs's reads and lines (tagcheck::GsIo: tagcheck::Gs decides when).
+  void hold(tagcheck::Hold h) override;
+  void firstLines() override;
+  bool memory() override;
+  tagcheck::Check& check() override;
+  bool open(bool device) override;
+  void close() override;
+  void lines(bool device, bool read) override;
+  void waiting(bool device) override;
+  void again(bool device, const tagcheck::Turn& t) override;
+  void notRead(bool device, const tagcheck::Turn& t) override;
+  void journals() override;
+  bool root() override;
+  void plan() override;
+  void end() override;
   void deviceLines();
   void transferLine();
   void dump(const char* path);
@@ -128,8 +156,7 @@ private:
   Library& library_;
   Jobs jobs_;
   // gs under way.
-  Gs gs_ = Gs::Idle;
-  uint32_t gsStartMs_ = 0;
+  tagcheck::Gs gs_;
   uint32_t gsLeast_ = UINT32_MAX;  // the loop task's stack: the least its pieces left
   Work* gsWork_ = nullptr;
   char gsPath_[64] = "";  // T's

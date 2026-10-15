@@ -520,7 +520,9 @@ hundred bytes in PSRAM (app/TagConsole's `Work`).
   lowest since the boot. `gs` reads the card's records a piece a loop
   pass (since 2026-10-14: `TagConsole::loop()` under `Spike::loop()`, about
   10 ms of `lib/core/TagCheck` a pass; it held the loop 12.4 s in one go
-  on a 19,412-track card): each piece is painted and read on its own, and
+  on a 19,412-track card, and takes 32 s there with the screen lit, 60 s
+  dark, paused, 52-54 s and 72-75 s while 1-second tracks play, MEASURED
+  the same day): each piece is painted and read on its own, and
   its line comes after its last line, the least left over the command and
   its pieces (`loopstack::holdLine()`). A piece runs under `loop()`'s and
   the spike's frames instead of the console's, so the table's `gs` row
@@ -1991,18 +1993,20 @@ the browsing UI hold its **track ids**, never strings.
   queue's next ones, the Library tab's page, then the rest), a file a step,
   into `tags.jnl`; **compactions** fold the journals into `tags.bin`. Each
   hand-off is `ScanScheduler`'s, which holds the walk and the scan while a
-  list moves, input just came, the ring is low, a track changes, a seek or
-  a Bluetooth setup is under way, after an underrun or a long decode pass,
-  and the scan below 10% battery off USB. A hand-off of the walk or of the
-  scan's rest is a slice of steps (18 ms lit; 60 ms dark, the walk's
-  250 ms), cut after its step the moment one of those holds; the walk's
-  slices run level with the loop, the scan's, compactions and the save
-  only while the screen is dark (METADATA.md 3.3.9:
-  one step a hand-off made the loop's sleep each step's floor, 2.7 min
-  for a 20k walk). A walk that fails runs again a minute later, twice at
-  most, and while the card's records don't list it (the first boot's
-  walk failed) no update step runs: built from what the scan had read,
-  it would keep only those tracks. The **update step**
+  list moves (on a lit screen, its page drawn: in the dark or under a
+  modal none is seen moving, whatever its page owes), input just came,
+  the ring is low, a track changes, a seek or a Bluetooth setup is under
+  way, after an underrun or a long decode pass, and the scan below 10%
+  battery off USB. A hand-off of the walk or of the scan's rest is a
+  slice of steps (18 ms lit; 60 ms dark, the walk's 250 ms), cut after
+  its step the moment one of those holds; the walk's slices run level
+  with the loop, the scan's, compactions and the save only while the
+  screen is dark (METADATA.md 3.3.9: one step a hand-off made the loop's
+  sleep each step's floor, 2.7 min for a 20k walk). A walk that fails
+  runs again a minute later, twice at most, and while the card's records
+  don't list it (the first boot's walk failed) no update step runs:
+  built from what the scan had read, it would keep only those tracks.
+  The **update step**
   (lib/core `LibraryUpdate`, METADATA.md 3.4.2 and 3.9: the index built
   again from the records, the queue carried through `queue.txt`) follows
   the scan's end when the journal took records since the last one, or a
@@ -2062,9 +2066,18 @@ the browsing UI hold its **track ids**, never strings.
   next boot, `gs0` the worker's figures from now: the device batch's L4
   and L3); `gc` and `gl` are the sector cache's switches and L0's bench.
   `gs` checks `tags.bin` and the transfer's tags file a piece a loop pass
-  (`lib/core/TagCheck`, about 10 ms a pass, none while a list moves), once
-  the card worker's step under way is taken in, with no compaction
-  meanwhile (`CardTasks::holdForConsole()`); `gt` and `gl` read in one go.
+  (`lib/core/TagCheck`, about 10 ms a pass, none while a list moves on a
+  lit screen), once the card worker's step under way is taken in, with no
+  new compaction meanwhile (`CardTasks::holdForConsole()`), `tags.bin`
+  not read while one is under way (`tagcheck::Turn` waits for it, and
+  says so: a compaction puts a new `tags.bin` in place at its end, and a
+  read across that once called a whole D absent), and either file read
+  again if the card was mounted again under it (its handle gone); 32 s
+  with the screen lit and 60 s dark on a 19,412-track card, paused,
+  52-75 s while tracks play (MEASURED 2026-10-14). Its phases are
+  `tagcheck::Gs`, host-tested; `TagConsole` does its reads and prints its
+  lines (`tagcheck::GsIo`). `gt` and `gl` read in one go (`gt` not while
+  a compaction is under way).
   The Output tab's **Library row** (METADATA.md 3.3.6) counts the tracks
   and where their names come from ("18,000 from the transfer, 1,400 read
   here, 10 without tags"), with a Rescan tags button that asks first.

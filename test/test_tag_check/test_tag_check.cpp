@@ -7,8 +7,14 @@
 // openDevice(), the walk with HIDX, File::open(), BuilderRows) on D and T,
 // valid and broken; every step's reads bounded, at N11's 19,412 records,
 // where that one call read the whole of D (it held the loop 12.4 s on the
-// device, 2026-10-14); and gs's wait for the worker's step under way
-// (tagcheck::waitOver()). Run: pio test -e native
+// device, 2026-10-14); gs's wait for the worker's step under way
+// (tagcheck::waitOver()); and gs over the loop's passes, the phases
+// app/TagConsole runs (tagcheck::Gs over a card in memory, its GsIo):
+// never reading D while a compaction replaces it, reading a file again if
+// one did or the card was mounted again under it (tagcheck::Turn: the
+// device's false ABSENT of 2026-10-14), T read whatever D's wait came to,
+// its pieces going on in the dark with a list stuck "moving"
+// (tagcheck::pieceWaits()). Run: pio test -e native
 #include <unity.h>
 
 #include <cstdint>
@@ -94,8 +100,9 @@ uint8_t rowByte(uint32_t i, bool odd) {
 }
 
 // D as the device's compaction lays it out: the card's records, DSTA's rows
-// (rowByte()), a DFLD entry a folder, DHDR (walked against a commit).
-Bytes deviceFile(const synthcard::Card& card, bool odd = false) {
+// (rowByte()), a DFLD entry a folder, DHDR (walked against a commit; its
+// epoch `epoch`).
+Bytes deviceFile(const synthcard::Card& card, bool odd = false, uint32_t epoch = 8) {
   std::vector<mptg::RecordIn> recs;
   recs.reserve(card.files.size());
   std::set<std::string> folders{""};
@@ -127,7 +134,7 @@ Bytes deviceFile(const synthcard::Card& card, bool odd = false) {
   h.walk.cardId = 0x5EEDC0DE0A1B2C3Dull;
   h.walk.generation = 1;
   h.walk.commitId = 0x62e047dc90c90f42ull;
-  h.epoch = 8;
+  h.epoch = epoch;
   Bytes dhdr(ts::kDhdrBytes);
   ts::encodeHeader(h, dhdr.data());
   mptg::ExtraSection extra[3];
@@ -587,6 +594,549 @@ void test_wait_over() {
   TEST_ASSERT_TRUE(waitOver(true, late, late + max, max));
 }
 
+// ---------------------------------------------------------------------------
+// gs over the loop's passes (tagcheck::Gs, which app/TagConsole runs: its
+// first lines after waitOver(), then D's turn, tagcheck::Turn, a piece a
+// pass unless pieceWaits(), its journals, T's root and turn, the plan), on
+// a card where D is replaced, or the card mounted again under a read.
+// ---------------------------------------------------------------------------
+namespace {
+
+constexpr uint32_t kWaitMs = 10000;  // app/TagConsole's
+
+uint32_t nowMs() { return static_cast<uint32_t>(g_clockUs / 1000); }
+
+// The card under gs: D is `before` until a compaction puts `after` in its
+// place, T is `transfer` (none: no transfer data; no compaction replaces
+// it). The compaction is under way from fromUs to toUs (the worker's step,
+// CardTasks::replacing(); its end puts `after` in place). FatFs mounts the
+// card again at its remountAtRead-th read (the card's guard counts it): a
+// handle opened before reads nothing after it. A D handle opened before
+// the compaction's end reads zeros after it (the clusters it had were
+// freed: on the device, whatever they hold next).
+struct Card {
+  const Bytes* before = nullptr;
+  const Bytes* after = nullptr;
+  const Bytes* transfer = nullptr;
+  uint64_t fromUs = UINT64_MAX, toUs = UINT64_MAX;
+  uint64_t remountAtRead = 0;
+  uint32_t remounts = 0;
+  uint64_t reads = 0, readsUnder = 0, readsLost = 0;
+
+  bool replacing() const { return g_clockUs >= fromUs && g_clockUs < toUs; }
+  const Bytes& device() const { return g_clockUs >= toUs ? *after : *before; }
+  // What app/TagConsole::pass() says (the compaction the only step).
+  tagcheck::Pass pass(bool listMoving, bool dark) const {
+    tagcheck::Pass p;
+    p.nowMs = nowMs();
+    p.workerBusy = p.replacing = replacing();
+    p.compactions = g_clockUs >= fromUs ? 1 : 0;
+    p.remounts = remounts;
+    p.listMoving = listMoving;
+    p.dark = dark;
+    return p;
+  }
+};
+
+// A file open on the card (app/TagConsole's FileAt over an fs::File): its
+// reads cost what Counted's do.
+class Handle : public cc::Source {
+public:
+  Handle(Card& c, bool device)
+      : card_(c), device_(device), file_(device ? &c.device() : c.transfer), remounts_(c.remounts) {}
+  uint32_t size() const override { return static_cast<uint32_t>(file_->size()); }
+  bool read(uint32_t offset, void* out, uint32_t n) override {
+    g_clockUs += kReadUs + static_cast<uint64_t>(n * kByteUs);
+    ++card_.reads;
+    if (device_ && card_.replacing()) ++card_.readsUnder;
+    if (card_.remountAtRead && card_.reads == card_.remountAtRead) ++card_.remounts;
+    if (card_.remounts != remounts_) {
+      ++card_.readsLost;
+      return false;  // its handle gone (FatFs: FR_INVALID_OBJECT)
+    }
+    if (offset > file_->size() || n > file_->size() - offset) return false;
+    if (device_ && &card_.device() != file_) {
+      if (n) std::memset(out, 0, n);  // replaced since the open
+      return true;
+    }
+    if (n) std::memcpy(out, file_->data() + offset, n);
+    return true;
+  }
+
+private:
+  Card& card_;
+  bool device_;
+  const Bytes* file_;
+  uint32_t remounts_;
+};
+
+// gs's reads and lines on the card (app/TagConsole's GsIo): each call a
+// word in `log`, the files' answers and when their lines came.
+class Io final : public tagcheck::GsIo {
+public:
+  explicit Io(Card& c) : card(c) {
+    m_.walker = rd_.walker.get();
+    m_.file = &rd_.file;
+    m_.rows = &rd_.tally;
+    m_.scratch = rd_.scratch.data();
+    m_.scratchBytes = static_cast<uint32_t>(rd_.scratch.size());
+    m_.buf = rd_.buf.data();
+    m_.bufBytes = static_cast<uint32_t>(rd_.buf.size());
+    c_.sliceUs = 10000;  // app/TagConsole's kSliceUs
+    c_.nowUs = clockUs;
+  }
+  void hold(tagcheck::Hold h) override {
+    say(h == tagcheck::Hold::Worker ? "hold W" : h == tagcheck::Hold::Records ? "hold R" : "hold N");
+  }
+  void firstLines() override {
+    say("lines");
+    linesAtMs = nowMs();
+    replacingAtLines = card.replacing();
+  }
+  bool memory() override { return haveMemory; }
+  tagcheck::Check& check() override { return k_; }
+  bool open(bool device) override {
+    say(device ? "D open" : "T open");
+    if (device && dMissing) return false;
+    h_.reset(new Handle(card, device));
+    k_.begin(*h_, device, m_, c_);
+    return true;
+  }
+  void close() override { h_.reset(); }
+  void lines(bool device, bool read) override {
+    say(device ? (read ? "D lines" : "D none") : (read ? "T lines" : "T none"));
+    Answers& a = device ? d : t;
+    a = Answers();
+    if (read) {
+      a.why = k_.why();
+      a.valid = k_.valid();
+      a.device = k_.device();
+      for (int i = 0; i < 4; ++i) a.rows[i] = k_.rows()[i];
+      if (k_.valid()) {
+        a.records = rd_.file.info().recordCount;
+        a.folders = rd_.file.info().folderCount;
+      }
+    }
+    (device ? dAtMs : tAtMs) = nowMs();
+  }
+  void waiting(bool device) override { say(device ? "D wait" : "T wait"); }
+  void again(bool device, const tagcheck::Turn& turn) override {
+    say(device ? "D again" : "T again");
+    remounted = turn.remounted();
+  }
+  void notRead(bool device, const tagcheck::Turn& turn) override {
+    say(device ? "D not read" : "T not read");
+    waitedOut = turn.waitedOut();
+  }
+  void journals() override { say("journals"); }
+  bool root() override {
+    say("root");
+    return card.transfer != nullptr;
+  }
+  void plan() override { say("plan"); }
+  void end() override { say("end"); }
+
+  uint32_t count(const char* word) const {
+    uint32_t n = 0;
+    for (const std::string& w : words)
+      if (w == word) ++n;
+    return n;
+  }
+
+  Card& card;
+  bool haveMemory = true, dMissing = false;
+  std::vector<std::string> words;
+  std::string log;  // the words, ", " between
+  uint32_t linesAtMs = UINT32_MAX, dAtMs = UINT32_MAX, tAtMs = UINT32_MAX;
+  bool replacingAtLines = false, remounted = false, waitedOut = false;
+  Answers d, t;
+
+private:
+  void say(const char* w) {
+    words.push_back(w);
+    if (!log.empty()) log += ", ";
+    log += w;
+  }
+
+  Readers rd_;
+  tagcheck::Memory m_;
+  tagcheck::Config c_;
+  tagcheck::Check k_;
+  std::unique_ptr<Handle> h_;
+};
+
+struct GsRun {
+  bool over = false;
+  uint32_t startMs = 0, overAfterMs = 0, pieces = 0;
+};
+
+// gs as app/TagConsole runs it: begun and its first piece in the command's
+// pass (status()), then a pass every `sleepUs` (the loop's sleep: about 5
+// ms lit, 20 ms dark), a piece unless pieceWaits() (loop()), the list's
+// state and the screen's as given; until it's over, or `forUs` passed.
+GsRun runGs(Io& io, uint64_t sleepUs, bool listMoving, bool dark, uint64_t forUs) {
+  GsRun r;
+  tagcheck::Gs gs;
+  const uint64_t endUs = g_clockUs + forUs;
+  r.startMs = nowMs();
+  gs.begin(r.startMs, kWaitMs, io);
+  gs.step(io.card.pass(listMoving, dark), io);
+  while (!gs.idle() && g_clockUs < endUs) {
+    g_clockUs += sleepUs;
+    const tagcheck::Pass p = io.card.pass(listMoving, dark);
+    if (tagcheck::pieceWaits(p)) continue;
+    ++r.pieces;
+    gs.step(p, io);
+  }
+  r.over = gs.idle();
+  r.overAfterMs = nowMs() - r.startMs;
+  return r;
+}
+
+Answers answersOf(const Bytes& file, bool device = true) {
+  cc::MemSource mem(file.data(), static_cast<uint32_t>(file.size()));
+  return oneCall(mem, device);
+}
+
+const char* const kWhole = "hold W, lines, hold R, D open, D lines, journals, root, T open, T lines, plan, end, hold N";
+
+}  // namespace
+
+// FINDING A of the 2026-10-14 device run (check 3): a compaction under way
+// (the scan's, 33.1 s) when gs came, 5 s into it. gs's first lines came at
+// its 10 s cap with the compaction still under way, and its check then read
+// tags.bin as the compaction put the new one in its place: "D ...: ABSENT,
+// it fails its checks (string)" 24 ms after "[card] compaction done", for a
+// D the next gs read whole. Now D's turn waits for the compaction's end,
+// says so once, reads nothing meanwhile, and reads the new D whole; then T
+// as ever. Twice: at the device's timing, and with the compaction's end
+// 1.5 s into what was the read (the device's read of D took 32 s lit, the
+// host clock's about 4: so the old order puts the replacement inside it,
+// as on the device).
+void test_gs_waits_out_a_compaction_past_its_wait() {
+  const Bytes before = deviceFile(bigCard(), false, 8), after = deviceFile(bigCard(), false, 9);
+  const Bytes transfer = transferFile(smallCard());
+  const Answers want = answersOf(after), wantT = answersOf(transfer, false);
+  TEST_ASSERT_TRUE(want.valid);
+  TEST_ASSERT_TRUE(wantT.valid);
+  const struct {
+    const char* name;
+    uint64_t gsInUs;  // gs's command, into the compaction
+  } runs[] = {
+      {"the device's timing (gs 5.1 s into it)", 5085000ull},
+      {"its end 1.5 s into the old order's read", 33100000ull - (kWaitMs + 1500) * 1000ull},
+  };
+  constexpr int kRuns = sizeof(runs) / sizeof(runs[0]);
+  Card cards[kRuns];
+  std::unique_ptr<Io> ios[kRuns];
+  GsRun got[kRuns];
+  uint32_t leftMs[kRuns];
+  char m[kRuns][400];
+  for (int i = 0; i < kRuns; ++i) {
+    Card& card = cards[i];
+    card.before = &before;
+    card.after = &after;
+    card.transfer = &transfer;
+    g_clockUs = 1161800000ull;  // the compaction began (the device's 1161.8 s)
+    card.fromUs = g_clockUs;
+    card.toUs = g_clockUs + 33100000ull;  // ... and took 33.1 s
+    g_clockUs += runs[i].gsInUs;          // gs
+    leftMs[i] = static_cast<uint32_t>((card.toUs - g_clockUs) / 1000);
+    ios[i].reset(new Io(card));
+    const Io& io = *ios[i];
+    const GsRun& r = got[i] = runGs(*ios[i], 5000, false, false, 600000000ull);
+    char d[48];
+    if (io.count("D lines") != 1) {
+      snprintf(d, sizeof(d), "%s", io.count("D not read") ? "not read" : "no line");
+    } else if (io.d.valid) {
+      snprintf(d, sizeof(d), "valid, epoch %lu", (unsigned long)io.d.device.header.epoch);
+    } else {
+      snprintf(d, sizeof(d), "ABSENT, it fails its checks (%s)", cc::whyName(io.d.why));
+    }
+    snprintf(m[i], sizeof(m[i]),
+             "%s: lines at +%lu ms, %lu said, %lu opens, %lu again, %llu reads under it, its line at +%lu ms: D %s "
+             "[%s]",
+             runs[i].name, (unsigned long)(io.linesAtMs - r.startMs), (unsigned long)io.count("D wait"),
+             (unsigned long)io.count("D open"), (unsigned long)io.count("D again"), (unsigned long long)card.readsUnder,
+             (unsigned long)(io.dAtMs - r.startMs), d, io.log.c_str());
+    TEST_MESSAGE(m[i]);
+  }
+  for (int i = 0; i < kRuns; ++i) {
+    const Io& io = *ios[i];
+    const GsRun& r = got[i];
+    const char* msg = m[i];
+    // Its first lines at the cap, the compaction under way (the old gs read
+    // from there).
+    TEST_ASSERT_TRUE_MESSAGE(io.linesAtMs - r.startMs >= kWaitMs && io.linesAtMs - r.startMs <= kWaitMs + 5, msg);
+    TEST_ASSERT_TRUE_MESSAGE(io.replacingAtLines, msg);
+    // D: waited for, said once, nothing read under the compaction, read once
+    // after it: the new file's answers, never ABSENT; then T, the rest.
+    TEST_ASSERT_TRUE_MESSAGE(r.over, msg);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(
+        "hold W, lines, hold R, D wait, D open, D lines, journals, root, T open, T lines, plan, end, hold N",
+        io.log.c_str(), msg);
+    TEST_ASSERT_EQUAL_UINT64_MESSAGE(0, cards[i].readsUnder, msg);
+    TEST_ASSERT_TRUE_MESSAGE(io.dAtMs - r.startMs > leftMs[i], msg);  // (after the compaction's end)
+    assertSame(want, io.d, msg);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(9, io.d.device.header.epoch, msg);
+    assertSame(wantT, io.t, msg);
+  }
+}
+
+// FINDING 1 of the fix's review: the card mounted again (by FatFs: a card
+// that stopped answering, or pulled and put back) as a file was read. The
+// handle gs opened before it is gone, its reads fail (`io`), and the check
+// would call a whole file absent; the remount (the card's guard's count)
+// says it's read again, D or T. No compaction is under way.
+void test_gs_reads_again_a_file_the_card_mounted_again_under() {
+  const Bytes dFile = deviceFile(smallCard(), false, 8), transfer = transferFile(smallCard());
+  const Answers want = answersOf(dFile), wantT = answersOf(transfer, false);
+  // Undisturbed: the reads D's check takes (a gs without T), then T's.
+  Card dOnly, both;
+  dOnly.before = dOnly.after = both.before = both.after = &dFile;
+  both.transfer = &transfer;
+  g_clockUs = 0;
+  Io dIo(dOnly);
+  TEST_ASSERT_TRUE(runGs(dIo, 20000, false, true, 120000000ull).over);
+  g_clockUs = 0;
+  Io bothIo(both);
+  TEST_ASSERT_TRUE(runGs(bothIo, 20000, false, true, 120000000ull).over);
+  TEST_ASSERT_EQUAL_STRING(kWhole, bothIo.log.c_str());
+  TEST_ASSERT_TRUE(dOnly.reads > 60);               // (the remount below falls inside D's check)
+  TEST_ASSERT_TRUE(both.reads - dOnly.reads > 60);  // (... and T's)
+  // The remount 30 reads into D's check, then 30 into T's.
+  for (int file = 0; file < 2; ++file) {
+    Card card;
+    card.before = card.after = &dFile;
+    card.transfer = &transfer;
+    card.remountAtRead = 30 + (file == 1 ? dOnly.reads : 0);
+    g_clockUs = 0;
+    Io io(card);
+    const GsRun r = runGs(io, 20000, false, true, 120000000ull);
+    const char* m = io.log.c_str();
+    TEST_MESSAGE(m);
+    TEST_ASSERT_TRUE_MESSAGE(r.over, m);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(1, card.remounts, m);
+    TEST_ASSERT_TRUE_MESSAGE(card.readsLost > 0, m);  // (its reads failed: the check's answer was `io`)
+    TEST_ASSERT_TRUE_MESSAGE(io.remounted, m);
+    TEST_ASSERT_EQUAL_STRING_MESSAGE(
+        file == 0 ? "hold W, lines, hold R, D open, D again, D open, D lines, journals, root, T open, T lines, plan, "
+                    "end, hold N"
+                  : "hold W, lines, hold R, D open, D lines, journals, root, T open, T again, T open, T lines, plan, "
+                    "end, hold N",
+        m, m);
+    assertSame(want, io.d, "D after the remount");
+    assertSame(wantT, io.t, "T after the remount");
+  }
+}
+
+// A compaction that never ends (a worker stuck): gs waits kReplaceWaitMs
+// after it said so, then leaves D unread, never calling it absent. T, which
+// no compaction replaces, is read then all the same (FINDING 2 of the
+// fix's review: T's turn took D's give-up, and printed NOT READ unopened).
+void test_gs_gives_up_on_a_replacement_that_never_ends() {
+  const Bytes d = deviceFile(smallCard()), transfer = transferFile(smallCard());
+  const Answers wantT = answersOf(transfer, false);
+  Card card;
+  card.before = card.after = &d;
+  card.transfer = &transfer;
+  g_clockUs = 5000000ull;
+  card.fromUs = g_clockUs;  // (toUs: never)
+  Io io(card);
+  const GsRun r = runGs(io, 20000, false, true, 3600000000ull);
+  const char* m = io.log.c_str();
+  TEST_ASSERT_TRUE_MESSAGE(r.over, m);
+  TEST_ASSERT_EQUAL_STRING_MESSAGE(
+      "hold W, lines, hold R, D wait, D not read, journals, root, T open, T lines, plan, end, hold N", m, m);
+  TEST_ASSERT_TRUE(io.waitedOut);
+  TEST_ASSERT_EQUAL_UINT64(0, card.readsUnder);  // (D: none; T's reads aren't D's)
+  TEST_ASSERT_TRUE(io.tAtMs - r.startMs >= kWaitMs + tagcheck::kReplaceWaitMs);
+  TEST_ASSERT_TRUE(io.tAtMs - r.startMs <= kWaitMs + tagcheck::kReplaceWaitMs + 1000);
+  assertSame(wantT, io.t, "T after D's give-up");
+}
+
+// gs's phases otherwise: no memory for the reads (gs ends after its first
+// lines), D not there (its line says so), no transfer data (T's turn
+// skipped); the worker held from the command to the last line.
+void test_gs_phases() {
+  const Bytes d = deviceFile(smallCard());
+  const Answers want = answersOf(d);
+  {
+    Card card;
+    card.before = card.after = &d;
+    g_clockUs = 0;
+    Io io(card);
+    io.haveMemory = false;
+    const GsRun r = runGs(io, 5000, false, false, 60000000ull);
+    TEST_ASSERT_TRUE(r.over);
+    TEST_ASSERT_EQUAL_STRING("hold W, lines, hold R, end, hold N", io.log.c_str());
+    TEST_ASSERT_EQUAL_UINT32(0, r.pieces);  // (over in the command's pass)
+    TEST_ASSERT_EQUAL_UINT64(0, card.reads);
+  }
+  {
+    Card card;
+    card.before = card.after = &d;
+    g_clockUs = 0;
+    Io io(card);
+    io.dMissing = true;
+    TEST_ASSERT_TRUE(runGs(io, 5000, false, false, 60000000ull).over);
+    TEST_ASSERT_EQUAL_STRING("hold W, lines, hold R, D open, D none, journals, root, plan, end, hold N",
+                             io.log.c_str());
+  }
+  {
+    Card card;
+    card.before = card.after = &d;
+    g_clockUs = 0;
+    Io io(card);
+    TEST_ASSERT_TRUE(runGs(io, 5000, false, false, 60000000ull).over);
+    TEST_ASSERT_EQUAL_STRING("hold W, lines, hold R, D open, D lines, journals, root, plan, end, hold N",
+                             io.log.c_str());
+    assertSame(want, io.d, "D");
+  }
+  // A step under way that isn't a compaction (the worker busy alone): the
+  // first lines once it's taken in, and D read at once.
+  {
+    Card card;
+    card.before = card.after = &d;
+    g_clockUs = 0;
+    Io io(card);
+    tagcheck::Gs gs;
+    gs.begin(0, kWaitMs, io);
+    tagcheck::Pass p = card.pass(false, false);
+    p.workerBusy = true;
+    gs.step(p, io);
+    p.nowMs = 3000;
+    gs.step(p, io);
+    TEST_ASSERT_EQUAL_STRING("hold W", io.log.c_str());
+    TEST_ASSERT_EQUAL(tagcheck::Gs::Phase::Wait, gs.phase());
+    p.workerBusy = false;
+    gs.step(p, io);
+    TEST_ASSERT_EQUAL_STRING("hold W, lines, hold R", io.log.c_str());
+    gs.step(p, io);
+    TEST_ASSERT_EQUAL_STRING("hold W, lines, hold R, D open", io.log.c_str());
+    TEST_ASSERT_EQUAL(tagcheck::Gs::Phase::Device, gs.phase());
+  }
+}
+
+// The turn's rules: a check's answer stands only if nothing replaced the
+// file since its open and the card wasn't mounted again; kRereads reads
+// again at most, then it gives up; T's turn waits for no compaction and
+// counts none, and a new turn starts afresh; a wait's time from a pass
+// earlier than its start is none.
+void test_turn_rules() {
+  using Now = tagcheck::Turn::Now;
+  const Bytes empty;
+  Counted src(empty);
+  tagcheck::Check k;  // (no memory: each check ends at its first step)
+  tagcheck::Turn t;
+  tagcheck::Pass p;
+  const auto read = [&](bool device) {
+    TEST_ASSERT_EQUAL(Now::Open, t.pass(p, k));
+    k.begin(src, device, tagcheck::Memory());
+    t.opened(p);
+    TEST_ASSERT_EQUAL(Now::Working, t.pass(p, k));  // (its last step: judged at the next pass)
+  };
+  t.begin(true);
+  read(true);
+  TEST_ASSERT_EQUAL(Now::Done, t.pass(p, k));
+  // A compaction handed under each read: read again twice, then given up.
+  for (uint32_t n = 1; n <= tagcheck::kRereads + 1; ++n) {
+    read(true);
+    ++p.compactions;  // (handed in that pass, after its reads: seen at the next)
+    TEST_ASSERT_EQUAL(n <= tagcheck::kRereads ? Now::Again : Now::GaveUp, t.pass(p, k));
+  }
+  TEST_ASSERT_FALSE(t.waitedOut());
+  TEST_ASSERT_FALSE(t.remounted());
+  TEST_ASSERT_EQUAL_UINT32(tagcheck::kRereads + 1, t.rereads());
+  TEST_ASSERT_EQUAL(Now::GaveUp, t.pass(p, k));  // (it stays given up)
+  // The card mounted again under a read: read again, D or T.
+  for (int device = 1; device >= 0; --device) {
+    t.begin(device == 1);
+    read(device == 1);
+    ++p.remounts;
+    TEST_ASSERT_EQUAL(Now::Again, t.pass(p, k));
+    TEST_ASSERT_TRUE(t.remounted());
+    read(device == 1);
+    TEST_ASSERT_EQUAL(Now::Done, t.pass(p, k));
+  }
+  // T's turn: a compaction under way, or handed under its read, is nothing
+  // to it.
+  t.begin(false);
+  p.replacing = true;
+  read(false);
+  ++p.compactions;
+  TEST_ASSERT_EQUAL(Now::Done, t.pass(p, k));
+  // D's: one under way when the check ends: read again ...
+  t.begin(true);
+  p.replacing = false;
+  read(true);
+  p.replacing = true;
+  TEST_ASSERT_EQUAL(Now::Again, t.pass(p, k));
+  TEST_ASSERT_FALSE(t.remounted());
+  // ... and the next pass waits: said once, its time from then.
+  p.nowMs = 1000;
+  TEST_ASSERT_EQUAL(Now::Said, t.pass(p, k));
+  p.nowMs = 999;  // (a pass's time before the wait's own: none passed)
+  TEST_ASSERT_EQUAL(Now::Wait, t.pass(p, k));
+  p.nowMs = 1000 + tagcheck::kReplaceWaitMs - 1;
+  TEST_ASSERT_EQUAL(Now::Wait, t.pass(p, k));
+  p.replacing = false;  // over: read at once, and a new wait says so again
+  TEST_ASSERT_EQUAL(Now::Open, t.pass(p, k));
+  p.replacing = true;
+  TEST_ASSERT_EQUAL(Now::Said, t.pass(p, k));
+  p.nowMs += tagcheck::kReplaceWaitMs;
+  TEST_ASSERT_EQUAL(Now::GaveUp, t.pass(p, k));
+  TEST_ASSERT_TRUE(t.waitedOut());
+  // T's turn after it, the compaction still under way: read, afresh.
+  t.begin(false);
+  TEST_ASSERT_FALSE(t.waitedOut());
+  TEST_ASSERT_EQUAL(Now::Open, t.pass(p, k));
+  TEST_ASSERT_EQUAL(0, src.reads);
+}
+
+// FINDING B's gate for gs's pieces: none while a list moves on a lit
+// screen; in the dark a list "moving" (its page owing the wake a frame:
+// a reload in the dark) holds none (2026-10-14: the library update's save
+// waited 260 s on that gate, with the screen off; gs's pieces use it).
+void test_gs_pieces_in_the_dark() {
+  const Bytes d = deviceFile(smallCard());
+  const Answers want = answersOf(d);
+  {
+    // Lit, the list moving all along: its first lines (the command's own
+    // pass), then no piece, nothing read.
+    Card card;
+    card.before = card.after = &d;
+    g_clockUs = 0;
+    Io io(card);
+    const GsRun r = runGs(io, 5000, true, false, 120000000ull);
+    TEST_ASSERT_FALSE(r.over);
+    TEST_ASSERT_EQUAL_UINT32(0, r.pieces);
+    TEST_ASSERT_EQUAL_UINT64(0, card.reads);
+    TEST_ASSERT_EQUAL_STRING("hold W, lines, hold R", io.log.c_str());
+  }
+  {
+    // Dark, the list "moving" all along: gs reads on to its end.
+    Card card;
+    card.before = card.after = &d;
+    g_clockUs = 0;
+    Io io(card);
+    const GsRun r = runGs(io, 20000, true, true, 120000000ull);
+    TEST_ASSERT_TRUE_MESSAGE(r.over, "gs in the dark, a list owing its frame");
+    TEST_ASSERT_EQUAL_STRING("hold W, lines, hold R, D open, D lines, journals, root, plan, end, hold N",
+                             io.log.c_str());
+    assertSame(want, io.d, "D in the dark");
+  }
+  // The rule.
+  tagcheck::Pass p;
+  TEST_ASSERT_FALSE(tagcheck::pieceWaits(p));
+  p.listMoving = true;
+  TEST_ASSERT_TRUE(tagcheck::pieceWaits(p));
+  p.dark = true;
+  TEST_ASSERT_FALSE(tagcheck::pieceWaits(p));
+  p.listMoving = false;
+  TEST_ASSERT_FALSE(tagcheck::pieceWaits(p));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_walker_end_piece_same_verdicts);
@@ -599,5 +1149,11 @@ int main(int, char**) {
   RUN_TEST(test_check_bounded_transfer_at_19412);
   RUN_TEST(test_whole_end_breaks_the_bound);
   RUN_TEST(test_wait_over);
+  RUN_TEST(test_gs_waits_out_a_compaction_past_its_wait);
+  RUN_TEST(test_gs_reads_again_a_file_the_card_mounted_again_under);
+  RUN_TEST(test_gs_gives_up_on_a_replacement_that_never_ends);
+  RUN_TEST(test_gs_phases);
+  RUN_TEST(test_turn_rules);
+  RUN_TEST(test_gs_pieces_in_the_dark);
   return UNITY_END();
 }

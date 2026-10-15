@@ -319,6 +319,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     if (jobs_.prepare(o.job, o.source, rel, len, now) && worker_.start(o.job, o.priority, stepEntry, this, now)) {
       if (o.job == Job::Compact) {
         compacting_ = true;
+        ++compactions_;
         compactReads_ = card.cardReads;
         compactSectors_ = card.cardReadSectors;
         compactReadUs_ = card.cardReadUs;
@@ -747,6 +748,9 @@ void CardTasks::report() const {
   // task (each life's own mark starts again), internal RAM's lowest while a
   // step ran (sampled at each step's start and end and each loop pass
   // during it); and internal RAM's lowest since the boot.
+  // "up" while the task is alive (a step in its last kIdleExitMs: a scan
+  // under way keeps it up), "not running" once it ended itself; a step
+  // under way is the waits line's "now:".
   const uint32_t internalMin = worker_.internalMin();
   char lowest[24] = "(no step)";
   if (internalMin != UINT32_MAX) snprintf(lowest, sizeof(lowest), "%lu B", (unsigned long)internalMin);

@@ -92,6 +92,8 @@ ScanScheduler::Wait ScanScheduler::yieldOf(const In& in) const {
 }
 
 void ScanScheduler::decide(const In& in, Out& o) const {
+  // A list holds work only while it can be seen moving (listHolds()).
+  const bool moving = listHolds(in.listMoving, in.dark);
   if (in.running != Job::None) {
     // One step at a time: it finishes first. A cover under way drops below
     // the loop while a list moves (Thumbs' rule). A slice of the walk or the
@@ -100,19 +102,19 @@ void ScanScheduler::decide(const In& in, Out& o) const {
     // within a unit and a pass, as one-unit steps did.
     o.wait = Wait::Step;
     const bool sliced = in.running == Job::Walk || in.running == Job::Scan;
-    o.cut = sliced && (in.listMoving || yieldOf(in) != Wait::None || (in.running == Job::Scan && batteryLow_));
-    o.priority = o.cut ? kLowPriority : priorityOf(in.running, in.listMoving, in.dark);
+    o.cut = sliced && (moving || yieldOf(in) != Wait::None || (in.running == Job::Scan && batteryLow_));
+    o.priority = o.cut ? kLowPriority : priorityOf(in.running, moving, in.dark);
     return;
   }
   if (in.build) {
     o.job = Job::Build;
-    o.priority = priorityOf(Job::Build, in.listMoving);
+    o.priority = priorityOf(Job::Build, moving);
     return;
   }
   const Source src = sourceOf(in);
   const bool background = in.walk || in.compact || src != Source::None;
   if (!in.cover && !in.save && !background) return;  // nothing to do
-  if (in.listMoving) {
+  if (moving) {
     o.wait = Wait::List;
     return;
   }
@@ -158,6 +160,7 @@ ScanScheduler::Source ScanScheduler::sourceOf(const In& in) {
 }
 
 uint8_t ScanScheduler::priorityOf(Job job, bool listMoving, bool dark) {
+  listMoving = listHolds(listMoving, dark);
   switch (job) {
     case Job::Build: return kHighPriority;
     case Job::Cover:

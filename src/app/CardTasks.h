@@ -181,12 +181,21 @@ public:
   // until then): no step handed, covers included (or the wait could last
   // as long as they come), and no chunk written; a slice under way is cut
   // (it ends after its unit); the scan line's waits stay as they were.
-  // Records, while gs reads: no compaction, which replaces tags.bin under
-  // the reads (the scan waits with it, as it waits for any compaction);
-  // covers, the walk and the scan go on. Both: the update step stays as
-  // asked, its wait as it was (its compaction and its fence once gs's last
-  // line is out). gs can't begin past the fence (cardBusyForConsole()).
+  // Records, while gs reads: no new compaction, which replaces tags.bin
+  // under the reads (the scan waits with it, as it waits for any
+  // compaction); covers, the walk and the scan go on. Both: the update
+  // step stays as asked, its wait as it was (its compaction and its fence
+  // once gs's last line is out). gs can't begin past the fence
+  // (cardBusyForConsole()).
   void holdForConsole(tagcheck::Hold h);
+  // A compaction under way, from its hand-off until it's taken in: it puts
+  // tags.tmp in tags.bin's place at its end, so neither gs nor gt reads
+  // tags.bin meanwhile (tagcheck::Turn waits it out; 33-48 s were seen).
+  bool replacing() const { return compacting_; }
+  // The compactions handed so far, free-running: gs reads tags.bin again
+  // if one began as it read it (tagcheck::Turn; a remount, which leaves
+  // its open file's handle gone, is the card's guard's count).
+  uint32_t compactions() const { return compactions_; }
 
   // ---- the rest of the firmware ----
   // The Library tab's status line (3.3.6).
@@ -243,6 +252,7 @@ private:
   size_t pickLen_[kSlots] = {};
   uint32_t playing_ = LibraryIndex::kNone;
   bool compacting_ = false;
+  uint32_t compactions_ = 0;  // compactions()
   // The card's counters when the compaction under way began
   // (sectordisk::stats()), its priority then and whether a track played
   // (the decoder's reads count too): its line splits its time (3.3.7, B4).

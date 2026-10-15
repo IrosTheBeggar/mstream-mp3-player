@@ -134,7 +134,7 @@ void TagConsole::command(const tagtext::Parsed& p) {
                        "worker's stack and internal RAM's lowest while a step ran");
         return;
       }
-      if (gs_ != Gs::Idle) {
+      if (!gs_.idle()) {
         Serial.println("[tags] gs: the last one still reads the card's records (its lines follow): not run again");
         return;
       }
@@ -142,6 +142,15 @@ void TagConsole::command(const tagtext::Parsed& p) {
       return;
     case C::Dump:
       if (jobs_.idle) jobs_.idle();
+      // A compaction still under way after that wait (33-48 s were seen,
+      // 2026-10-14) puts tags.tmp in tags.bin's place as gt would read D:
+      // it would call a whole D absent. gt reads in one go: not now.
+      if (jobs_.replacing && jobs_.replacing()) {
+        Serial.printf("[tags] gt: a compaction is under way (it replaces %s): not read now, try again once it's "
+                      "done (gs says when)\n",
+                      kDevicePath);
+        return;
+      }
       dump(p.path);
       return;
     case C::Cache: cache(p.n); return;
@@ -500,127 +509,74 @@ void TagConsole::status() {
     Serial.println("[tags] no storage: no card, no tags");
     return;
   }
-  // The worker's step under way first, nothing handed after it (Wait);
-  // then no compaction until the last line (it would replace tags.bin
-  // under the reads).
-  gs_ = Gs::Wait;
-  gsStartMs_ = millis();
+  // The worker's step under way first, nothing handed after it; then no
+  // new compaction until the last line (it would replace tags.bin under
+  // the reads), and D not read while one is under way (tagcheck::Gs).
+  const uint32_t now = millis();
   gsLeast_ = UINT32_MAX;
-  if (jobs_.hold) jobs_.hold(tagcheck::Hold::Worker);
-  statusStep(gsStartMs_);
+  gs_.begin(now, kWaitMs, *this);
+  gs_.step(pass(now), *this);
   // Its [console] line at its end (loop()), its pieces' depth with this.
-  if (gs_ != Gs::Idle) loopstack::holdLine();
+  if (!gs_.idle()) loopstack::holdLine();
+}
+
+tagcheck::Pass TagConsole::pass(uint32_t nowMs) const {
+  tagcheck::Pass p;
+  p.nowMs = nowMs;
+  p.workerBusy = jobs_.busy && jobs_.busy();
+  p.replacing = jobs_.replacing && jobs_.replacing();
+  p.compactions = jobs_.compactions ? jobs_.compactions() : 0;
+  // (FatFs's mounts again: an open file's handle gone. 0 without the
+  // sector wrapper, as without a guard.)
+  p.remounts = sectordisk::guard().remounts;
+  p.listMoving = jobs_.listMoving && jobs_.listMoving();
+  p.dark = jobs_.dark && jobs_.dark();
+  return p;
 }
 
 void TagConsole::loop(uint32_t nowMs) {
-  if (gs_ == Gs::Idle) return;
-  // No piece while a list moves: its frames first (ScanScheduler's rule).
-  if (jobs_.listMoving && jobs_.listMoving()) return;
+  if (gs_.idle()) return;
+  const tagcheck::Pass p = pass(nowMs);
+  // No piece while a list moves on a lit screen: its frames first
+  // (ScanScheduler's rule; in the dark none is seen moving).
+  if (tagcheck::pieceWaits(p)) return;
   // Each piece's own depth: the stack under it painted again first.
   loopstack::arm();
-  statusStep(nowMs);
+  gs_.step(p, *this);  // a phase's lines, or a pass of D's or T's turn (kSliceUs of its check)
   const uint32_t left = loopstack::leftSinceArm();
   if (left < gsLeast_) gsLeast_ = left;
-  if (gs_ == Gs::Idle) loopstack::heldLine(gsLeast_);
+  if (gs_.idle()) loopstack::heldLine(gsLeast_);
 }
 
-// One piece: a phase's lines, or a slice of D's or T's check (kSliceUs).
-void TagConsole::statusStep(uint32_t nowMs) {
-  switch (gs_) {
-    case Gs::Idle: return;
-    case Gs::Wait: {
-      // The worker's step under way taken in first (as idle()'s wait: at
-      // most kWaitMs, then on regardless). `nowMs` is the pass's: in gs's
-      // own pass, earlier than gsStartMs_ (waitOver()).
-      if (jobs_.busy && !tagcheck::waitOver(jobs_.busy(), gsStartMs_, nowMs, kWaitMs)) return;
-      scanLine();
-      if (jobs_.report) jobs_.report();
-      cache(tagtext::kCacheReport);
-      const LibraryIndex* index = library_.index();
-      if (index && index->ready()) {
-        char t[192];
-        tagtext::sourcesText(tagtext::countSources(*index), t, sizeof(t));
-        Serial.printf("[tags] the index's names: %s\n", t);
-      }
-      // The reads: the worker goes on, but for a compaction.
-      if (jobs_.hold) jobs_.hold(tagcheck::Hold::Records);
-      gsWork_ = psramNew<Work>();
-      if (!gsWork_) {
-        Serial.println("[tags] no PSRAM for the readers");
-        statusEnd();
-        return;
-      }
-      // D, its rows by status, its journals.
-      if (openCheck(kDevicePath, true)) {
-        gs_ = Gs::Device;
-      } else {
-        deviceLines();
-        gs_ = Gs::Journals;
-      }
-      return;
-    }
-    case Gs::Device: {
-      Work& w = *gsWork_;
-      if (w.check.step() != tagcheck::Check::Step::Done) return;
-      w.d.why = w.check.why();
-      w.d.valid = w.check.valid();
-      w.d.device = w.check.device();
-      w.handle.close();
-      deviceLines();
-      gs_ = Gs::Journals;
-      return;
-    }
-    case Gs::Journals: {
-      char a[24], b[24];
-      sizeOf(storage_.fs(), "/.player/tags.jnl", a, sizeof(a));
-      sizeOf(storage_.fs(), "/.player/walk.jnl", b, sizeof(b));
-      Serial.printf("[tags]   journals: tags.jnl %s, walk.jnl %s\n", a, b);
-      gs_ = Gs::Root;
-      return;
-    }
-    case Gs::Root:
-      // T: the root and its tags file.
-      gs_ = Gs::Plan;
-      if (!transferFile(*gsWork_, gsPath_, sizeof(gsPath_), &gsCommit_, &gsGeneration_)) {
-        Serial.println("[tags] T: no transfer data (no valid /.mstream/manifest.bin or manifest.tmp)");
-      } else if (openCheck(gsPath_, false)) {
-        gs_ = Gs::Transfer;
-      } else {
-        transferLine();
-      }
-      return;
-    case Gs::Transfer: {
-      Work& w = *gsWork_;
-      if (w.check.step() != tagcheck::Check::Step::Done) return;
-      w.t.why = w.check.why();
-      w.t.valid = w.check.valid();
-      w.handle.close();
-      transferLine();
-      gs_ = Gs::Plan;
-      return;
-    }
-    case Gs::Plan: {
-      // An unfinished transfer (2.12.5): its plan's presence.
-      const bool plan = storage_.fs().exists("/.mstream/pending.bin") || storage_.fs().exists("/.mstream/pending.tmp");
-      if (plan) Serial.println("[tags] a transfer's plan is on the card (pending.bin): the last transfer didn't finish");
-      statusEnd();
-      return;
-    }
+void TagConsole::hold(tagcheck::Hold h) {
+  if (jobs_.hold) jobs_.hold(h);
+}
+
+void TagConsole::firstLines() {
+  scanLine();
+  if (jobs_.report) jobs_.report();
+  cache(tagtext::kCacheReport);
+  const LibraryIndex* index = library_.index();
+  if (index && index->ready()) {
+    char t[192];
+    tagtext::sourcesText(tagtext::countSources(*index), t, sizeof(t));
+    Serial.printf("[tags] the index's names: %s\n", t);
   }
 }
 
-void TagConsole::statusEnd() {
-  psramDelete(gsWork_);  // (its file closed)
-  gsWork_ = nullptr;
-  gs_ = Gs::Idle;
-  if (jobs_.hold) jobs_.hold(tagcheck::Hold::None);
+bool TagConsole::memory() {
+  gsWork_ = psramNew<Work>();
+  if (!gsWork_) Serial.println("[tags] no PSRAM for the readers");
+  return gsWork_ != nullptr;
 }
 
-bool TagConsole::openCheck(const char* path, bool device) {
+tagcheck::Check& TagConsole::check() { return gsWork_->check; }
+
+bool TagConsole::open(bool device) {
   Work& w = *gsWork_;
   Found& f = device ? w.d : w.t;
   new (&f) Found();  // in place (`f = Found()` builds one on the stack first)
-  w.handle = storage_.fs().open(path, FILE_READ);
+  w.handle = storage_.fs().open(device ? kDevicePath : gsPath_, FILE_READ);
   if (!w.handle || w.handle.isDirectory()) {
     w.handle.close();
     return false;
@@ -640,6 +596,71 @@ bool TagConsole::openCheck(const char* path, bool device) {
   c.nowUs = nowUs;
   w.check.begin(w.src, device, m, c);
   return true;
+}
+
+void TagConsole::close() { gsWork_->handle.close(); }
+
+void TagConsole::lines(bool device, bool read) {
+  Work& w = *gsWork_;
+  if (read) {
+    Found& f = device ? w.d : w.t;
+    f.why = w.check.why();
+    f.valid = w.check.valid();
+    if (device) f.device = w.check.device();
+  }
+  if (device) {
+    deviceLines();
+  } else {
+    transferLine();
+  }
+}
+
+void TagConsole::waiting(bool device) {
+  // (D's alone: a compaction replaces nothing else.)
+  Serial.printf("[tags] %s %s: waiting for the compaction under way (it replaces it at its end): read once it's "
+                "done\n",
+                device ? "D" : "T", device ? kDevicePath : gsPath_);
+}
+
+void TagConsole::again(bool device, const tagcheck::Turn& t) {
+  Serial.printf("[tags] %s %s: %s as gs read it: read again\n", device ? "D" : "T", device ? kDevicePath : gsPath_,
+                t.remounted() ? "the card mounted again (its open file gone)" : "a compaction replaced it");
+}
+
+void TagConsole::notRead(bool device, const tagcheck::Turn& t) {
+  const char* name = device ? "D" : "T";
+  const char* path = device ? kDevicePath : gsPath_;
+  if (t.waitedOut()) {
+    Serial.printf("[tags] %s %s: NOT READ: a compaction still replaces it after %lu s (gs again once it's done)\n",
+                  name, path, static_cast<unsigned long>(tagcheck::kReplaceWaitMs / 1000));
+  } else {
+    Serial.printf("[tags] %s %s: NOT READ: %s as gs read it, %lu times (gs again later)\n", name, path,
+                  t.remounted() ? "the card mounted again" : "replaced", static_cast<unsigned long>(t.rereads()));
+  }
+}
+
+void TagConsole::journals() {
+  char a[24], b[24];
+  sizeOf(storage_.fs(), "/.player/tags.jnl", a, sizeof(a));
+  sizeOf(storage_.fs(), "/.player/walk.jnl", b, sizeof(b));
+  Serial.printf("[tags]   journals: tags.jnl %s, walk.jnl %s\n", a, b);
+}
+
+bool TagConsole::root() {
+  if (transferFile(*gsWork_, gsPath_, sizeof(gsPath_), &gsCommit_, &gsGeneration_)) return true;
+  Serial.println("[tags] T: no transfer data (no valid /.mstream/manifest.bin or manifest.tmp)");
+  return false;
+}
+
+void TagConsole::plan() {
+  // An unfinished transfer (2.12.5): its plan's presence.
+  const bool pending = storage_.fs().exists("/.mstream/pending.bin") || storage_.fs().exists("/.mstream/pending.tmp");
+  if (pending) Serial.println("[tags] a transfer's plan is on the card (pending.bin): the last transfer didn't finish");
+}
+
+void TagConsole::end() {
+  psramDelete(gsWork_);  // (its file closed)
+  gsWork_ = nullptr;
 }
 
 void TagConsole::deviceLines() {
