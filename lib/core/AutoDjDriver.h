@@ -157,6 +157,22 @@ struct Env {
 enum class Began : uint8_t { None, Boot, On, NewQueue, Console, FromHere, Surprise, IndexChanged };
 const char* beganName(Began b);
 
+// What a quick skip changed, and why (the "[dj] a quick skip" line's
+// reason: docs/AUTODJ.md 3.2). The row is the maps', else the one they gave
+// while the track was current (away after a fence until the join is ready
+// again); unknown when they never did.
+enum class SkipWhy : uint8_t {
+  Steered,    // it was in the ring and left it
+  NoRow,      // the index has no row for it: it never steered
+  NotAnchor,  // its row wasn't among the anchors (it started before the session): nothing changes
+  NotJoined,  // its row unknown: the index joins and wasn't joined while it was current
+  NoIndex,    // its row unknown: no index joined (none usable, the join away or short of memory)
+};
+// "no longer steers", "it has no row in the index: it never steered", "it
+// wasn't among the anchors: nothing changes", "the index isn't joined yet:
+// it never steered", "no index is joined: it never steered".
+const char* skipWhyText(SkipWhy w);
+
 // What one pass did, for the glue's log lines and the UI.
 struct Pass {
   TriggerOut trigger;
@@ -169,8 +185,9 @@ struct Pass {
   bool playing = false;       // ... and plays (kPlayingMs of it heard): the failure pause over
   bool quickSkip = false;     // the entry before went in its first 30 s, not by its end
   uint32_t leftTrack = kNoTrackId;
-  uint16_t leftRow = kNoRow;  // ... its row (kNoRow: it had none, and never steered)
+  uint16_t leftRow = kNoRow;  // ... its row (kNoRow: none, or unknown before a join: leftWhy says)
   bool leftSteered = false;   // ... and it left the ring (it steered until now; Engine::rowLeft())
+  SkipWhy leftWhy = SkipWhy::NoRow;  // ... the line's reason (skipWhyText())
   uint32_t leftMs = 0;
   bool removedPick = false;   // Auto DJ's pick taken out before it played
   uint32_t removedTrack = kNoTrackId;
@@ -295,6 +312,7 @@ private:
     uint32_t key = QueueModel::kNone;
     uint32_t track = kNoTrackId;
     uint16_t row = kNoRow;  // its row, as the maps last said (they may be away when it leaves)
+    bool rowKnown = false;  // ... the maps said it (else it is unknown: never joined while current)
     bool started = false;  // current while Playing: it steers
     bool played = false;   // kPlayingMs of it heard
     bool ended = false;    // it played to its end and is still current (the queue's end, Repeat One)

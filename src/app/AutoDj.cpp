@@ -47,6 +47,7 @@ const char* phaseName(autodj::Join::Phase p) {
   using P = autodj::Join::Phase;
   switch (p) {
     case P::None: return "none";
+    case P::Folders: return "hashing the library's folders";
     case P::Hash: return "hashing the library's paths";
     case P::Sort: return "sorting the runs";
     case P::Strings: return "STRS";
@@ -102,30 +103,37 @@ struct PassClock {
 bool passTimeLeft(void* ctx) { return esp_timer_get_time() < static_cast<PassClock*>(ctx)->endUs; }
 
 size_t psramLargest() { return heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM); }
+size_t psramFreeBytes() { return heap_caps_get_free_size(MALLOC_CAP_SPIRAM); }
+
+// What the join's placement leaves free at least while its spacers hold the
+// bottom of PSRAM's largest free block (AutoDjJoin.h), the few milliseconds
+// of begin() (the 'joined' line's "in X ms"): another task's block
+// meanwhile still fits (a track's start: the MP3 probe's 4 KB, a seek's
+// 8 KB, the Opus packet buffer's 60 KB; the card worker's 4-16 KB buffers).
+// The spacers over the whole block took the free to 10 KB at every join
+// (MEASURED 2026-10-14). The maps taken after the spacers count (155 KB at
+// 19,410 tracks), and so does the free outside the largest block; when
+// they fall short, the rest of the margin is left above the blocks, which
+// then sit that much under the block's top: so not more (128 KB put the
+// filters 39 KB under it after a library update in test_autodj_join's
+// model, where the runs had taken the holes). Not covered: the first Opus
+// track's 125 KB of buffers (OpusGenerator, once a boot) starting in that
+// window (the track would fail and be skipped: docs/AUTODJ.md 6.2).
+constexpr size_t kJoinMarginBytes = 64 * 1024;
 
 }  // namespace
 
 AutoDj::AutoDj(Library& library, PlaybackController& player)
     : lib_(library), player_(player), dj_(driverConfig()), join_(psramAlloc, psramFree) {
+  // The join's blocks where they take least of PSRAM's largest free block
+  // (AutoDjJoin.h): in smaller free blocks that hold them, the rest at its
+  // top.
   autodj::Join::Placement place;
-  place.before = placeBefore;
-  place.after = placeAfter;
-  place.ctx = this;
+  place.largest = psramLargest;
+  place.freeBytes = psramFreeBytes;
+  place.margin = kJoinMarginBytes;
   join_.setPlacement(place);
 }
-
-// The join's blocks at the top of PSRAM's largest free block (AutoDjJoin.h:
-// TLSF serves a block from the low end of the one it takes): spacers hold
-// its bottom while they are taken.
-void* AutoDj::placeBefore(size_t bytes, void* self) {
-  autodj::Spacers* s = &static_cast<AutoDj*>(self)->spacers_;
-  const bool first = s->n == 0;  // (else the kept blocks', added to the first's)
-  if (autodj::takeSpacers(bytes, psramLargest, psramAlloc, psramFree, s) || !first) return s;
-  autodj::giveSpacers(s, psramFree);  // (none placed: where the heap puts them)
-  return nullptr;
-}
-
-void AutoDj::placeAfter(void* token, void*) { autodj::giveSpacers(static_cast<autodj::Spacers*>(token), psramFree); }
 
 // ---------------------------------------------------------------------------
 // The boot
@@ -413,6 +421,9 @@ void AutoDj::beginJoin(const LibraryIndex* index) {
   joinPasses_ = 0;
   ++joins_;
   join_.begin(table_, index);
+  // (Its placement asks PSRAM's largest free block a few times: the IDF
+  // walks the heap for it.)
+  beginMs_ = (esp_timer_get_time() - joinT0Us_) / 1000.0f;
   joinStatus();
 }
 
@@ -430,16 +441,30 @@ void AutoDj::joinStatus() {
       // remount): made again, a loop pass each (Engine::runDue()).
       dj_.engine().mapsChanged();
       const autodj::Maps& m = *join_.maps();
+      // Where its blocks went (AutoDjJoin.h's placement): those that fit a
+      // smaller free block there, the rest at the top of the largest.
+      char where[160];
+      if (st.topBytes == 0) {
+        snprintf(where, sizeof(where), "all in smaller free blocks");
+      } else if (st.placed) {
+        snprintf(where, sizeof(where), "%u B at the top of the largest free one, %u of 3 kept and %lu transient "
+                 "blocks in smaller ones", (unsigned)st.topBytes, (unsigned)st.keptElsewhere,
+                 (unsigned long)st.runsElsewhere);
+      } else {
+        snprintf(where, sizeof(where), "%u B where the heap put them (no spacer), %u of 3 kept and %lu transient "
+                 "blocks in smaller free ones", (unsigned)st.topBytes, (unsigned)st.keptElsewhere,
+                 (unsigned long)st.runsElsewhere);
+      }
       Serial.printf("[dj] joined: %lu of %lu tracks have neighbours (%lu rows of %lu; BPM %u %%, key %u %% of them) in "
                     "%.0f ms, %lu slices in %lu loop passes, %lu reads; %u B kept at %p, %u B at the peak (largest "
-                    "block %u B; %s; PSRAM's largest free block now %u B)%s\n",
+                    "block %u B; %s, in %.1f ms; PSRAM free at least %u B meanwhile; PSRAM's largest free block "
+                    "now %u B)%s\n",
                     (unsigned long)m.mapped, (unsigned long)m.tracks, (unsigned long)st.rowsMapped,
                     (unsigned long)m.rows, pct(m.withBpm, m.mapped), pct(m.withKey, m.mapped), joinMs_,
                     (unsigned long)st.slices, (unsigned long)joinPasses_, (unsigned long)st.reads,
                     (unsigned)join_.heldBytes(), static_cast<const void*>(m.filters), (unsigned)st.peakBytes,
-                    (unsigned)st.largestBlock,
-                    st.placed ? "at the top of the largest free one" : "where the heap put them (no spacer)",
-                    (unsigned)psramLargest(), st.ambiguous ? "; some paths two tracks share left out" : "");
+                    (unsigned)st.largestBlock, where, beginMs_, (unsigned)st.lowestFree, (unsigned)psramLargest(),
+                    st.ambiguous ? "; some paths two tracks share left out" : "");
       return;
     }
     case S::Absent: {
@@ -552,10 +577,10 @@ void AutoDj::logPick(const Pass& p, const char* how) {
 void AutoDj::report(const Pass& p) {
   if (p.began != Began::None) logSession(p.began, player_.queue().currentTrack());
   if (p.quickSkip) {
+    // (Why: docs/AUTODJ.md 3.2; before the join its row is unknown, not
+    // absent: "the index isn't joined yet".)
     Serial.printf("[dj] a quick skip: %s after %.1f s: %s\n", pathOf(p.leftTrack), p.leftMs / 1000.0,
-                  p.leftSteered                  ? "no longer steers"
-                  : p.leftRow == autodj::kNoRow ? "it has no row in the index: it never steered"
-                                                : "it wasn't among the anchors: nothing changes");
+                  autodj::skipWhyText(p.leftWhy));
   }
   if (p.removedPick) {
     Serial.printf("[dj] Auto DJ's pick taken out before it played: %s: no longer steers (still cooled)\n",

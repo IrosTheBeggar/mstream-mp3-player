@@ -8,6 +8,7 @@
 #include <cstdint>
 
 #include "TextFit.h"
+#include "TextInk.h"
 
 // The UI's text layer: DejaVu Sans as anti-aliased VLW fonts from flash
 // (ui/VlwFonts, as the UI spike recommended: it looked best, ’ ‐ é É
@@ -60,6 +61,12 @@ public:
     return width(f, s) <= maxW ? f : smaller;
   }
   int height(Font f) const;
+  // The rows `text` (its first `len` bytes) inks as draw() draws it fitted
+  // to `maxW` px, from its line's top (the line height(f) rows tall):
+  // textink::inkOf() over the fitted text, the VLW font's glyphs and the
+  // store's (a toast's two lines are placed by them: uitext::toastLines()).
+  // Without the fonts (no PSRAM): the whole line.
+  textink::Rows ink(Font f, const char* text, size_t len, int maxW) const;
   // Whether `s` as draw() draws it in `f` (composed and folded first) has a
   // glyph from the store: Han, kana or Hangul, or a symbol the store has
   // and `f` lacks (★ ♪ →, the ideographic space). Now Playing's title then

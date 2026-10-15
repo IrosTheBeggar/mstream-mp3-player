@@ -27,7 +27,10 @@
 //           (on one line View and Undo left it ~50 px: "Plays next: Aer…";
 //           two lines beside the word buttons, 168). The icons too when a
 //           button's label doesn't fit its pill (German's "Rückgängig":
-//           uitext::toastIcons()). It stays 36 px, out
+//           uitext::toastIcons()). The two lines go by the rows they ink
+//           (uitext::toastLines()), never into each other or over the
+//           card's edge: Chinese and Japanese are 16 px in the Small role
+//           too. It stays 36 px, out
 //           of the list's hardware-scrolled band (from y 72), which would
 //           carry a taller toast's lower rows away with the list. The
 //           header's ‹ (x < 56), and its pill when the toast has no
@@ -124,6 +127,9 @@ public:
   const char* text() const { return text_; }
 
 private:
+  // Two lines: where they go (uitext::toastLines()); false: they don't fit
+  // without touching (one line, cut, instead).
+  bool placeLines();
   char text_[128] = "";
   bool undo_ = false;
   bool view_ = false;
@@ -135,6 +141,14 @@ private:
   uint32_t idleSeconds_ = 0;
   uint16_t accent_ = 0;
   uint32_t untilMs_ = 0;
+  // Two lines (placeLines()): the rest in Small (too wide in Body, or too
+  // tall under the what), the card's rows (uitext::kToastBoxTop or
+  // kToastTallBoxTop) and outline (none for two lines of 17-row CJK), the
+  // lines' centres.
+  bool nameSmall_ = false;
+  int8_t boxTop_ = 2, boxH_ = 32;
+  bool border_ = true;
+  int8_t y1_ = 0, y2_ = 0;
 };
 
 class Hud {

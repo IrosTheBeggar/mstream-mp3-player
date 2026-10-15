@@ -3,6 +3,7 @@
 
 #include "AutoDjJoin.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
@@ -119,17 +120,28 @@ bool trackPathHash(const LibraryIndex& index, uint32_t track, char* path, size_t
 }
 
 size_t spacerFor(size_t largest, size_t bytes) {
-  const size_t keep = bytes + bytes / 32 + 1024 + largest / 32;
+  // (The spacer's request rounded up, by at most a thirty-second of it,
+  // stays within the block when what it leaves is that much.)
+  const size_t keep = std::max(bytes + bytes / 32 + 1024, largest / 32 + 1);
   // (A few KB of spacer wouldn't move anything worth it.)
   return largest > keep + 4096 ? largest - keep : 0;
 }
 
-bool takeSpacers(size_t bytes, size_t (*largest)(), void* (*alloc)(size_t), void (*release)(void*), Spacers* out) {
+bool takeSpacers(size_t bytes, size_t keepFree, size_t (*largest)(), size_t (*freeBytes)(), void* (*alloc)(size_t),
+                 void (*release)(void*), Spacers* out) {
   bool placed = false;
   while (out->n < Spacers::kMax) {
     const size_t before = largest();
-    const size_t s = spacerFor(before, bytes);
-    if (s == 0) break;
+    size_t s = spacerFor(before, bytes);
+    if (freeBytes) {
+      // Never less than keepFree free while it is held (and a KB for the
+      // heap's headers): a smaller one, the blocks then lower in the block
+      // and the difference above them.
+      const size_t free = freeBytes();
+      const size_t most = free > keepFree + 1024 ? free - keepFree - 1024 : 0;
+      if (s > most) s = most;
+    }
+    if (s < 4096) break;  // (spacerFor()'s: a few KB wouldn't move anything worth it)
     void* p = alloc(s);
     if (!p) break;
     const size_t after = largest();
@@ -146,7 +158,7 @@ bool takeSpacers(size_t bytes, size_t (*largest)(), void* (*alloc)(size_t), void
     }
     // From the largest: its top is what is left of it. Another block is
     // the largest now: that's it; else the top is closed in once more
-    // (its own thirty-second: a few KB less above the blocks).
+    // (spacerFor() is 0 when it is as tight as it gets).
     out->p[out->n++] = p;
     placed = true;
     if (after > before - s) break;
@@ -225,6 +237,10 @@ size_t Join::freeTransient() {
   give(buf_, bufBytes_);
   buf_ = nullptr;
   bufBytes_ = 0;
+  give(folderHash_, folderBytes());
+  folderHash_ = nullptr;
+  folderLen_ = nullptr;
+  folderCount_ = 0;
   return before - held_;
 }
 
@@ -293,31 +309,17 @@ Join::Status Join::begin(const mpdj::Table& table, const LibraryIndex* index) {
   if (c.sliceBytes < 2 * cc::Stream::kSector) c.sliceBytes = 2 * cc::Stream::kSector;
   cfg_ = c;
 
-  // The blocks (the class comment's placement): under a spacer, the
-  // transient ones first and the kept ones above them; without one, the
-  // kept ones first (the filters, the largest) and the transient ones
-  // above, whose hole then joins the free tail. A failed one stays
-  // nullptr, which freeAll() passes over.
+  // The blocks (the class comment's placement); without it, the kept ones
+  // first (the filters, the largest) and the transient ones above, whose
+  // hole then joins the free tail. A failed one stays nullptr, which
+  // freeAll() passes over.
   maps_.tracks = n;
   maps_.rows = rows;
   runCount_ = (n + c.runTracks - 1) / c.runTracks;
-  const size_t kept = static_cast<size_t>(rows) * 6 + static_cast<size_t>(n) * 2;
-  void* token = nullptr;
-  if (place_.before) {
-    token = place_.before(kept + static_cast<size_t>(n) * 6 + sizeof(Run) * runCount_ + c.sliceBytes, place_.ctx);
-  }
-  stats_.placed = token != nullptr;
-  bool ok;
-  if (token) {
-    ok = takeTransient(n);
-    // The kept ones at the top of what is left (the transient ones may
-    // have gone to holes elsewhere).
-    if (ok) place_.before(kept, place_.ctx);
-    ok = ok && takeKept(n, rows);
-    if (place_.after) place_.after(token, place_.ctx);
-  } else {
-    ok = takeKept(n, rows) && takeTransient(n);
-  }
+  // The folders' states: with the default hash, for a library of up to
+  // kMaxFolders folders.
+  folderCount_ = hash_ == defaultPathHash && index->folderCount() <= kMaxFolders ? index->folderCount() : 0;
+  const bool ok = place_.largest && place_.freeBytes ? takePlaced(n, rows) : takeKept(n, rows) && takeTransient(n);
   if (!ok) {
     fail(Status::NoMemory, cc::Why::Ok);
     return status_;
@@ -325,8 +327,8 @@ Join::Status Join::begin(const mpdj::Table& table, const LibraryIndex* index) {
   if (n) std::memset(maps_.trackToRow, 0xFF, static_cast<size_t>(n) * sizeof(uint16_t));
   std::memset(maps_.rowToTrack, 0xFF, static_cast<size_t>(rows) * sizeof(uint16_t));
   std::memset(maps_.filters, 0, static_cast<size_t>(rows) * sizeof(uint32_t));
-  nextTrack_ = fillRun_ = sortRun_ = 0;
-  phase_ = Phase::Hash;
+  nextTrack_ = fillRun_ = sortRun_ = nextFolder_ = 0;
+  phase_ = folderCount_ ? Phase::Folders : Phase::Hash;
   status_ = Status::Working;
   why_ = cc::Why::Ok;
   return status_;
@@ -359,7 +361,163 @@ bool Join::takeTransient(uint32_t n) {
   buf_ = static_cast<uint8_t*>(take(cfg_.sliceBytes));
   if (!buf_) return false;
   bufBytes_ = cfg_.sliceBytes;
+  return !folderCount_ || takeFolders(take(folderBytes()));
+}
+
+bool Join::takeFolders(void* block) {
+  if (!folderCount_) return true;
+  if (!block) {
+    folderCount_ = 0;
+    return false;
+  }
+  folderHash_ = static_cast<uint64_t*>(block);
+  folderLen_ = reinterpret_cast<uint16_t*>(folderHash_ + folderCount_);
   return true;
+}
+
+void Join::noteFree() {
+  const size_t f = place_.freeBytes();
+  if (f < stats_.lowestFree) stats_.lowestFree = f;
+}
+
+void* Join::probe(size_t bytes, size_t largest, size_t* minTop, bool* failed) {
+  if (bytes >= *minTop) return nullptr;
+  void* p = take(bytes);
+  if (!p) {
+    *failed = true;
+    return nullptr;
+  }
+  if (place_.largest() >= largest) {
+    noteFree();
+    return p;
+  }
+  give(p, bytes);  // (from the largest: it joins it again, as it was)
+  *minTop = bytes;
+  return nullptr;
+}
+
+bool Join::takePlaced(uint32_t n, uint32_t rows) {
+  stats_.lowestFree = place_.freeBytes();
+  // The runs' table (tens of bytes): where the heap puts it.
+  if (runCount_) {
+    runs_ = static_cast<Run*>(take(sizeof(Run) * runCount_));
+    if (!runs_) {
+      runCount_ = 0;
+      return false;
+    }
+    for (uint32_t r = 0; r < runCount_; ++r) runs_[r] = Run();
+  }
+  // Each kept block, then each transient one (the runs, the folders'
+  // states, the buffer), where the heap puts it unless that is the largest
+  // free block.
+  const size_t largest = place_.largest();
+  size_t minTop = SIZE_MAX;
+  bool failed = false;
+  void** const kept[3] = {reinterpret_cast<void**>(&maps_.filters), reinterpret_cast<void**>(&maps_.rowToTrack),
+                          reinterpret_cast<void**>(&maps_.trackToRow)};
+  const size_t keptBytes[3] = {static_cast<size_t>(rows) * sizeof(uint32_t),
+                               static_cast<size_t>(rows) * sizeof(uint16_t), static_cast<size_t>(n) * sizeof(uint16_t)};
+  bool onTop[3] = {};
+  size_t topKept = 0, topTransient = 0;
+  for (int i = 0; i < 3; ++i) {
+    if (keptBytes[i] == 0) continue;  // (trackToRow, with no tracks)
+    *kept[i] = probe(keptBytes[i], largest, &minTop, &failed);
+    if (failed) return false;
+    if (*kept[i]) {
+      ++stats_.keptElsewhere;
+    } else {
+      onTop[i] = true;
+      topKept += keptBytes[i];
+    }
+  }
+  for (uint32_t r = 0; r < runCount_; ++r) {
+    runs_[r].cap = r + 1 < runCount_ ? cfg_.runTracks : n - r * cfg_.runTracks;
+    void* block = probe(static_cast<size_t>(runs_[r].cap) * 6, largest, &minTop, &failed);
+    if (failed) return false;
+    if (block) {
+      runs_[r].keys = static_cast<uint32_t*>(block);
+      runs_[r].ids = reinterpret_cast<uint16_t*>(runs_[r].keys + runs_[r].cap);
+      ++stats_.runsElsewhere;
+    } else {
+      topTransient += static_cast<size_t>(runs_[r].cap) * 6;
+    }
+  }
+  if (folderCount_) {
+    void* block = probe(folderBytes(), largest, &minTop, &failed);
+    if (failed) {
+      folderCount_ = 0;
+      return false;
+    }
+    if (block) {
+      takeFolders(block);
+      ++stats_.runsElsewhere;
+    } else {
+      topTransient += folderBytes();
+    }
+  }
+  buf_ = static_cast<uint8_t*>(probe(cfg_.sliceBytes, largest, &minTop, &failed));
+  if (failed) return false;
+  if (buf_) {
+    bufBytes_ = cfg_.sliceBytes;
+    ++stats_.runsElsewhere;
+  } else {
+    topTransient += cfg_.sliceBytes;
+  }
+  // The rest at the largest free block's top: the transient ones under the
+  // spacers, then the kept ones in the room left above them (their closest
+  // fit, none smaller holding them). No transient one there: the first kept
+  // one goes under the spacers. Free never under the margin meanwhile.
+  stats_.topBytes = topKept + topTransient;
+  stats_.topKept = topKept;
+  if (stats_.topBytes == 0) return true;
+  int under = -1;
+  for (int i = 0; i < 3 && topTransient == 0; ++i) {
+    if (onTop[i]) {
+      under = i;
+      break;
+    }
+  }
+  const size_t underBytes = topTransient + (under >= 0 ? keptBytes[under] : 0);
+  Spacers sp;
+  stats_.placed = takeSpacers(stats_.topBytes, underBytes + place_.margin, place_.largest, place_.freeBytes, alloc_,
+                              free_, &sp);
+  if (!stats_.placed) giveSpacers(&sp, free_);  // (none placed: where the heap puts them, the kept ones first)
+  noteFree();
+  bool ok = true;
+  auto takeKeptOnTop = [&](int i) {
+    *kept[i] = take(keptBytes[i]);
+    ok = ok && *kept[i];
+  };
+  auto takeTransientOnTop = [&]() {
+    for (uint32_t r = 0; r < runCount_ && ok; ++r) {
+      if (runs_[r].keys) continue;
+      runs_[r].keys = static_cast<uint32_t*>(take(static_cast<size_t>(runs_[r].cap) * 6));
+      ok = runs_[r].keys != nullptr;
+      if (ok) runs_[r].ids = reinterpret_cast<uint16_t*>(runs_[r].keys + runs_[r].cap);
+    }
+    if (ok && folderCount_ && !folderHash_) ok = takeFolders(take(folderBytes()));
+    if (ok && !buf_) {
+      buf_ = static_cast<uint8_t*>(take(cfg_.sliceBytes));
+      ok = buf_ != nullptr;
+      if (ok) bufBytes_ = cfg_.sliceBytes;
+    }
+  };
+  if (stats_.placed) {
+    if (under >= 0) takeKeptOnTop(under);
+    if (ok) takeTransientOnTop();
+    noteFree();
+    giveSpacers(&sp, free_);
+    for (int i = 0; i < 3 && ok; ++i) {
+      if (onTop[i] && i != under) takeKeptOnTop(i);
+    }
+  } else {
+    for (int i = 0; i < 3 && ok; ++i) {
+      if (onTop[i]) takeKeptOnTop(i);
+    }
+    if (ok) takeTransientOnTop();
+  }
+  noteFree();
+  return ok;
 }
 
 Join::Status Join::stepPass(const LibraryIndex* index, bool (*more)(void* ctx), void* ctx) {
@@ -380,6 +538,7 @@ Join::Status Join::step(const LibraryIndex* index) {
   // A phase with nothing to do hands the slice to the next one.
   for (bool worked = false; !worked && working();) {
     switch (phase_) {
+      case Phase::Folders: worked = foldersSlice(); break;
       case Phase::Hash: worked = hashSlice(); break;
       case Phase::Sort: worked = sortSlice(); break;
       case Phase::Strings: worked = stringsSlice(); break;
@@ -391,13 +550,56 @@ Join::Status Join::step(const LibraryIndex* index) {
   return status_;
 }
 
+bool Join::foldersSlice() {
+  const uint32_t end =
+      folderCount_ - nextFolder_ > cfg_.foldersPerSlice ? nextFolder_ + cfg_.foldersPerSlice : folderCount_;
+  for (uint32_t f = nextFolder_; f < end; ++f) {
+    // trackPathHash()'s rule on the folder's path: a track's is it, '/'
+    // and its name, so "/music" (any case) alone or before a '/' starts
+    // pathHash()'s (from the root's literal lowercase), any other its bytes'.
+    const size_t n = index_->folderPath(f, path_, sizeof(path_));
+    if (n == 0) {
+      folderLen_[f] = kNoPath;
+      continue;
+    }
+    static const char kRoot[] = "/music";
+    bool root = n >= 6 && (n == 6 || path_[6] == '/');
+    for (size_t i = 0; i < 6 && root; ++i) {
+      const char c = path_[i];
+      root = (c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c) == kRoot[i];
+    }
+    folderHash_[f] = root ? cc::fnv1a64(path_ + 6, n - 6, cc::kMusicHash) : cc::fnv1a64(path_, n);
+    folderLen_[f] = static_cast<uint16_t>(n);
+  }
+  nextFolder_ = end;
+  if (end == folderCount_) {
+    stats_.folders = folderCount_;
+    phase_ = Phase::Hash;
+  }
+  return true;
+}
+
+bool Join::trackHash(uint32_t t, uint64_t* h) {
+  if (!folderHash_) return hash_(*index_, t, path_, sizeof(path_), h, hashCtx_);
+  const LibraryIndex::Track& track = index_->track(t);
+  const char* name = index_->str(track.name);
+  const size_t len = std::strlen(name);
+  // (An empty name, which no file has: trackPathHash()'s own way.)
+  if (len == 0) return hash_(*index_, t, path_, sizeof(path_), h, hashCtx_);
+  if (track.folder >= folderCount_ || folderLen_[track.folder] == kNoPath) return false;
+  // trackPath()'s: the folder's path, '/', the name and a NUL in kPathBytes.
+  if (folderLen_[track.folder] + 1 + len + 1 > kPathBytes) return false;
+  *h = cc::fnv1a64(name, len, cc::fnv1a64("/", 1, folderHash_[track.folder]));
+  return true;
+}
+
 bool Join::hashSlice() {
   const uint32_t n = maps_.tracks;
   const uint32_t end = n - nextTrack_ > cfg_.hashPerSlice ? nextTrack_ + cfg_.hashPerSlice : n;
   const bool worked = nextTrack_ < end;
   for (uint32_t t = nextTrack_; t < end; ++t) {
     uint64_t h;
-    if (!hash_(*index_, t, path_, sizeof(path_), &h, hashCtx_)) {
+    if (!trackHash(t, &h)) {
       ++stats_.unhashed;
       continue;
     }
@@ -562,7 +764,7 @@ void Join::merge(uint64_t hash, uint16_t row) {
     for (uint32_t j = run.cur; j < run.len && run.keys[j] == prefix; ++j) {
       uint64_t full;
       ++stats_.confirms;
-      if (!hash_(*index_, run.ids[j], path_, sizeof(path_), &full, hashCtx_) || full != hash) {
+      if (!trackHash(run.ids[j], &full) || full != hash) {
         ++stats_.prefixOnly;
         continue;
       }

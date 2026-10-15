@@ -2925,9 +2925,10 @@ static bool decoderRefilling(uint32_t now) {
 
 // The library update's memory check (LibraryUpdate::setGiveBack()): a new
 // track table that doesn't fit the largest free block while Auto DJ's join
-// is held at its top (AutoDjJoin's placement): the join given back, PSRAM
-// measured again. It joins again after the update's Live, or at once when
-// the update waits for the next boot after all.
+// holds blocks at its top (AutoDjJoin's placement: those that fit no
+// smaller free block): the join given back, PSRAM measured again. It joins
+// again after the update's Live, or at once when the update waits for the
+// next boot after all.
 static size_t autoDjGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
   if (!autoDj) return 0;
   const size_t before = *psramLargest;
@@ -2936,8 +2937,9 @@ static size_t autoDjGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
   *psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
   *psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
   Serial.printf("[dj] the library update's memory check: the join given back (%u B): PSRAM's largest free block %u B "
-                "-> %u B (up to %u B with its blocks at that block's top); it joins again after the update\n",
-                (unsigned)given, (unsigned)before, (unsigned)*psramLargest, (unsigned)(before + given));
+                "-> %u B (up to %u B: the join's blocks at its top); it joins again after the update\n",
+                (unsigned)given, (unsigned)before, (unsigned)*psramLargest,
+                (unsigned)(before + autoDj->joinTopBytes()));
   return given;
 }
 

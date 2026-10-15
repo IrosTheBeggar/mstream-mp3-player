@@ -56,8 +56,10 @@
 //     a listener who never uses Auto DJ keeps all of PSRAM. The empty
 //     states' button doesn't wait for a join: a random library track whose
 //     path's hash the index's DJPH has (Table::rowOf(), a binary search)
-//     plays at once, and the join follows. Its blocks go to the top of
-//     PSRAM's largest free block (Join::setPlacement(): spacers), so what
+//     plays at once, and the join follows. Its blocks take as little of
+//     PSRAM's largest free block as they can (Join::setPlacement()): each
+//     in a smaller free block that holds it, the rest at that block's top
+//     (spacers, never leaving less than kJoinMarginBytes free), so what
 //     comes after is carved below them.
 //   the update step's memory check (main.cpp's hook, LibraryUpdate::
 //     setGiveBack()): a new track table that doesn't fit the largest free
@@ -121,6 +123,9 @@ public:
   size_t giveBack();
   // The join works (main.cpp: the loop's idle wait short meanwhile).
   bool joinWorking() const { return join_.status() == autodj::Join::Status::Working; }
+  // The join's kept bytes at the top of PSRAM's largest free block when it
+  // was placed (AutoDjJoin.h): what giving it back adds to that block.
+  size_t joinTopBytes() const { return join_.stats().topKept; }
 
   // ---- for the UI (M5) and the console ----
   const autodj::Settings& settings() const { return dj_.settings(); }
@@ -193,9 +198,6 @@ private:
   // path's hash looked up in DJPH (Table::rowOf()).
   bool hasRow(uint32_t track);
   static bool hasRowOf(uint32_t track, void* self) { return static_cast<AutoDj*>(self)->hasRow(track); }
-  // Join::Placement's hooks (the spacers: spacers_).
-  static void* placeBefore(size_t bytes, void* self);
-  static void placeAfter(void* token, void* self);
   void stepJob(const Env& env);
   void report(const autodj::Pass& p);
   void logSession(autodj::Began why, uint32_t track);
@@ -228,10 +230,10 @@ private:
   uint32_t retryAtMs_ = 0;
   int64_t joinT0Us_ = 0;
   float joinMs_ = 0;
+  float beginMs_ = 0;         // the join's begin(): its blocks placed
   uint32_t joins_ = 0;
   uint32_t joinPasses_ = 0;   // the loop passes the join took (stepPass())
   bool joinLogged_ = false;
-  autodj::Spacers spacers_;   // placeBefore()'s, while begin() takes the blocks
   char hashPath_[autodj::Join::kPathBytes] = "";  // hasRow()'s path
   // The console's long commands.
   Job job_ = Job::None;

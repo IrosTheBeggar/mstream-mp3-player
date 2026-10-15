@@ -53,6 +53,20 @@ const glyphstore::Store& cjk() {
   return store;
 }
 
+// The VLW fonts' rows (TextInk: where M5GFX draws each glyph), read where
+// they lie in flash; opened at the first ink() (a pass over the glyph
+// table, as VLWfont::loadFont() makes).
+const textink::Vlw& inkFont(Font f) {
+  static textink::Vlw fonts[4];
+  static bool opened[4] = {};
+  const int i = static_cast<int>(f);
+  if (!opened[i]) {
+    fonts[i].open(kSources[i].data, *kSources[i].size);
+    opened[i] = true;
+  }
+  return fonts[i];
+}
+
 bool vlwHas(const lgfx::VLWfont& v, uint32_t cp, uint16_t* idx) {
   return cp <= 0xFFFF && v.getUnicodeIndex(static_cast<uint16_t>(cp), idx);
 }
@@ -257,6 +271,16 @@ bool Fonts::fromStore(Font f, const char* s) const {
 int Fonts::height(Font f) const {
   if (const lgfx::VLWfont* v = vlw(f)) return v->yAdvance;
   return f == Font::Title ? 26 : 16;
+}
+
+textink::Rows Fonts::ink(Font f, const char* text, size_t len, int maxW) const {
+  textink::Rows whole;
+  whole.top = 0;
+  whole.bottom = height(f) - 1;
+  if (!loaded_) return whole;
+  char buf[200];  // (as draw()'s)
+  textfit::fit(fit(f), text, len, buf, sizeof(buf), maxW);
+  return textink::inkOf(inkFont(f), cjk(), buf);
 }
 
 // Never inlined into draw(): a Latin line's stack stays as it was (and six

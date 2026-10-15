@@ -11,8 +11,17 @@ deferred, and the device checks.
 **Status (2026-10-14):** built for 0.11.0, host-tested. The first device
 check ran on 2026-10-13 on a synthetic 19,412-track card, on the build
 before the fixes (`09f91a1`, console only). Its five problems were fixed
-in `7c89673`; the UI came in `e5efd22`. Neither of those two commits has
-been on the device yet: section 14 lists what the next release must run.
+in `7c89673`; the UI came in `e5efd22`. The second device check ran on
+2026-10-14 on `a7ee54b` (the fixes and the UI, the same card): the pick's
+CPU, loosening, the queue's saves, the Auto DJ button and the UI in ten
+languages passed; the join's time, two-line toasts in Japanese and
+Chinese, the Undo of a Play over a paused queue, the join's memory and a
+quick skip's wording did not (section 14.1). The fixes since (the toasts
+placed by their ink, 9.6; Undo never louder than the edit found it, 9.4;
+the quick skip's fourth and fifth wordings, 3.2; the join's placement
+with a 64 KB margin and in smaller free blocks first, 6.2; its Folders
+phase, about half its CPU, 7.3) are host-tested only: section 14 lists
+what the next release must run.
 
 The other documents:
 
@@ -68,11 +77,11 @@ this document describes.
 - **No usable index:** random picks from the library, with a 50-track
   cooldown.
 - **Cost:** at most 2 slot reads a pick, usually 0 (a read ahead between
-  picks). The pick's CPU was 5-9 ms in Follow the vibe on the device
-  (MEASURED, before the optimisation); about 1-1.7 ms after it
-  (ESTIMATED, to be measured).
+  picks). The pick's CPU, p90: 0.38-1.70 ms at 240 MHz, 0.52-2.31 ms at
+  160 MHz (MEASURED 2026-10-14; 5-9 ms before the optimisation).
 - **Memory:** the engine's 19 KB of PSRAM from boot; the join's 155 KB at
-  19,410 tracks, only while Auto DJ is on.
+  19,410 tracks, only while Auto DJ is on (on against off: 155 KB lower,
+  MEASURED 2026-10-14).
 - **The UI:** a 4th row in Now Playing's "..." menu; Output > Auto DJ; an
   Auto DJ button on the empty Queue and Now Playing; "Auto DJ from here" in
   the Library's long-press sheet; a small DJ mark on the Queue rows it
@@ -188,10 +197,23 @@ The playing track's row is never a candidate, nor is an anchor.
   ready again): the loop remembers each track's row, so a quick skip still
   takes the right row out. Rows don't change with the library's ids.
 
-The console's line for a quick skip says which case it was: "no longer
-steers", "it has no row in the index: it never steered", or "it wasn't
-among the anchors: nothing changes" (for example a track that started
-before Auto DJ was switched on).
+The console's line for a quick skip says which case it was
+(`autodj::skipWhyText()`):
+
+- "no longer steers": it was in the ring;
+- "it has no row in the index: it never steered";
+- "it wasn't among the anchors: nothing changes": it has a row, but
+  started before the session (for example after `Dr` while it plays);
+- "the index isn't joined yet: it never steered": its row is unknown,
+  the maps weren't there while it was current (a skip between `D1` and
+  "joined");
+- "no index is joined: it never steered": the same with no join under
+  way (no usable index, the join away or short of memory).
+
+A track that is still current when the maps arrive steers from then (3.3),
+so after "joined" its skip says "no longer steers". Before the device
+check of 2026-10-14 the fourth case printed the second's wording for a
+track that has a row.
 
 ### 3.3 The seed and the pin
 
@@ -541,30 +563,72 @@ into one filter word a row.
   listener who never uses Auto DJ never pays for it (the engine's 19 KB is
   held from boot either way).
 - **The steps,** in the format's order:
-  1. **Hash:** each library track's path hash (FNV-1a 64), kept as its top
-     32 bits and its id, 6 bytes a track, in runs of 4,096 (24 KB blocks).
-  2. **Sort** each run.
-  3. **STRS** checked.
-  4. **DJRF** streamed with its CRC: each row's filter word (BPM rounded
+  1. **Folders:** each library folder's path hashed once (FNV-1a 64 is
+     sequential: a track's hash goes on from its folder's with "/" and
+     its name), with its length: 10 bytes a folder in one block (25 KB at
+     2,484 folders, the user's library's shape at 19,412 tracks), for a
+     library of up to 8,192 folders (else each track's whole path is
+     hashed, as before). Since the device check of 2026-10-14, whose join
+     was CPU-bound (7.3).
+  2. **Hash:** each library track's path hash (FNV-1a 64), from its
+     folder's state, kept as its top 32 bits and its id, 6 bytes a track,
+     in runs of 4,096 (24 KB blocks).
+  3. **Sort** each run.
+  4. **STRS** checked.
+  5. **DJRF** streamed with its CRC: each row's filter word (BPM rounded
      to a whole number, the Camelot code, the artist key's low 16 bits).
-  5. **DJPH** streamed with its CRC, in hash order: each entry's track
+  6. **DJPH** streamed with its CRC, in hash order: each entry's track
      found by a cursor in every run, an equal prefix confirmed by the full
-     64-bit hash. A row maps to its present file with the smallest path
-     hash. A hash two library tracks share maps neither.
-  6. The runs freed: ready.
-- **Slices:** 250 hashes, one run's sort, or a 4 KB piece of DJRF or DJPH
-  (100 confirms at most) a slice. A loop pass takes slices for up to 8 ms
-  and at most one card read. None while a list moves or the card is held.
-  The loop's idle wait is 2 ms while it works.
+     64-bit hash (from the folder's state too). A row maps to its present
+     file with the smallest path hash. A hash two library tracks share
+     maps neither.
+  7. The runs and the folders' states freed: ready.
+- **Slices:** 250 folders, 250 hashes, one run's sort, or a 4 KB piece of
+  DJRF or DJPH (100 confirms at most) a slice. A loop pass takes slices
+  for up to 8 ms and at most one card read. None while a list moves or
+  the card is held for a card swap's restart (not while the card worker
+  saves `library.idx`: the join goes on then, sharing the core). The
+  loop's idle wait is 2 ms while it works. `D` names the phase ("hashing
+  the library's folders" first).
 - **Its checks are the file's:** a section that fails its CRC or its
   order makes the file absent until a remount or the next boot.
 - **The library under it:** every slice checks that the library index is
   still the one it began on; otherwise it aborts and frees everything, so
   it never reads a freed index.
-- **Placement:** its blocks go to the top of PSRAM's largest free block
-  (spacers hold the block's bottom while they are taken), the short-lived
-  runs below the kept maps. What comes later is carved below them, so
-  giving the join back leaves one block, as if it had never joined.
+- **Placement:** PSRAM's largest free block is what a library update's
+  new track table needs (6.3), so the join takes as little of it as it
+  can (`Join::setPlacement()`, for ESP-IDF's TLSF heap, which serves a
+  block from the low end of the closest-fitting free block):
+  - each block (the filters, the two maps, then the runs, the folders'
+    states and the buffer) goes where the heap puts it, unless that is
+    the largest free block: then it is given back at once and goes to
+    that block's top;
+  - those go under spacers that hold the block's bottom: the short-lived
+    ones first; once the spacers are given back, the kept ones go to the
+    room left above them. What comes later is carved below them, so
+    giving the join back leaves one block, as if it had never joined;
+  - **the margin:** the spacers never leave less than 64 KB free
+    (`kJoinMarginBytes` in `src/app/AutoDj.cpp`, a KB more for the heap's
+    headers), counting the free outside the largest block and the room
+    kept for the blocks still to come; when that falls short, the rest is
+    left above the blocks, which then sit that much under the block's
+    top. 64 KB covers another task's block in those few milliseconds (a
+    track's start: the MP3 probe's 4 KB, a seek's 8 KB; the Opus packet
+    buffer's 60 KB; the card worker's buffers) but not the first Opus
+    track's 125 KB of buffers (once a boot) starting in the same
+    milliseconds: that track would fail to open and be skipped. 128 KB
+    would cover it, but in `test_autodj_join`'s model it put the filters
+    39 KB under the block's top after a library update (the runs had
+    taken the holes): left at 64 KB, a visible trade-off;
+  - before 2026-10-14 every block went to the top under spacers over the
+    whole block: PSRAM's free fell to about 10 KB at every join, and
+    after a library update the rejoin took about 170 KB of the rebuilt
+    heap's largest free block, where it takes about 80 KB now (7.4);
+  - the 'joined' line says where they went ("77640 B at the top of the
+    largest free one, 2 of 3 kept and 7 transient blocks in smaller
+    ones", or "all in smaller free blocks"), how long `begin()` took
+    (it asks for the largest free block 6-10 times, a walk of the heap
+    each), and "PSRAM free at least N B meanwhile".
 
 ### 6.3 The give-back to a library update
 
@@ -657,32 +721,41 @@ to 309.
 
 Dry runs (`Dn200`), p90 of a pick:
 
-| Setting | MEASURED 2026-10-13 (`09f91a1`) | ESTIMATED now (`7c89673`, not yet measured) |
+| Setting | MEASURED 2026-10-13 (`09f91a1`) | MEASURED 2026-10-14 (`a7ee54b`) |
 |---|---|---|
-| Follow the vibe 55 / 65 / 75 %, matching off, 240 MHz | 7.7 / 6.0 / 4.8 ms | 1.4 / 1.2 / 1.1 ms |
-| Follow the vibe 55 / 65 / 75 %, matching on, 240 MHz | 9.0 / 6.5 / 5.2 ms | 1.65 ms at 55 % |
-| Stay on seed 55 / 65 / 75 %, matching off / on, 240 MHz | 1.5 / 1.1 / 0.6 ms; 1.7 / 1.3 / 0.6 ms | about 0.35 ms |
-| Follow the vibe 55 % off / 75 % off / 55 % on, 160 MHz | 10.1 / 6.3 / 12.0 ms | 1.9 / 1.45 / 2.3 ms |
-| Stay on seed, 160 MHz: 55 % matching off / 65 % matching on | 1.9 / 1.6 ms | |
+| Follow the vibe 55 / 65 / 75 %, matching off, 240 MHz | 7.7 / 6.0 / 4.8 ms | 1.33 / 1.17 / 1.08 ms |
+| Follow the vibe 55 / 65 / 75 %, matching on, 240 MHz | 9.0 / 6.5 / 5.2 ms | 1.70 / 1.41 / 1.24 ms |
+| Stay on seed 55 / 65 / 75 %, matching off, 240 MHz | 1.5 / 1.1 / 0.6 ms | 0.42 / 0.38 / 0.57 ms |
+| Stay on seed 55 / 65 / 75 %, matching on, 240 MHz | 1.7 / 1.3 / 0.6 ms | 0.53 / 0.46 / 0.62 ms |
+| Follow the vibe 55 % off / 75 % off / 55 % on, 160 MHz | 10.1 / 6.3 / 12.0 ms | 1.73 / 1.37 / 2.31 ms |
+| Stay on seed 55 % matching off, 160 MHz | 1.9 ms | 0.52 ms |
 
-- The estimates come from a host benchmark of the same picks on the
-  synthetic card's index (p90 55.4 → 14.9 µs for Follow the vibe 55 %
-  with matching off) and a model of the PSRAM cache-line misses (2,138 →
-  309 a pick there), against the device's measured times. Only the device
-  can confirm them (section 14, check 3).
-- Live picks before the optimisation (MEASURED 2026-10-13, the 2-hour
-  soak, Follow the vibe 55 %, matching off): p50 7.9 ms, p90 8.4 ms, max
-  23.0 ms, flat over the 2 hours.
-- The targets: p90 at most 2 ms at 240 MHz, 3 ms at 160 MHz (section 14,
-  check 3).
+- So the p90 is 0.38-1.70 ms at 240 MHz and 0.52-2.31 ms at 160 MHz,
+  inside the targets (2 ms and 3 ms). Every run read 0 slots at its picks
+  (200/0/0), and Follow the vibe's repeats, artists, classes and breaks
+  were the host's (the same picks as before the optimisation). The host
+  benchmark's estimates (1.1-1.65 ms at 240 MHz, 0.35 ms for Stay on
+  seed, 1.45-2.3 ms at 160 MHz) were close, Stay on seed a little slower;
+  at 75 % it takes longer than at 65 % since it loosens (188 of its 200
+  picks).
+- A live pick, less its reads (2026-10-13's seed and queue, `Ds717feda5`
+  then `qp0`, the pick row 6880, 1 read): 1.47 ms at 240 MHz, 1.71 ms at
+  160 MHz (MEASURED 2026-10-14; 3.13 ms on 2026-10-13).
+- Live picks over 30 minutes of stubs (MEASURED 2026-10-14, Follow the
+  vibe 55 %, matching off, 1,855 picks, all 0 reads): p50 1.32 ms, p90
+  1.58 ms; max 16.18 ms, once, while an Opus 48 kHz stub played through
+  the rate converter (the next slowest 2.17 ms). On 2026-10-13, before
+  the optimisation: p50 7.9 ms, p90 8.4 ms, max 23.0 ms over 2 hours.
 
 ### 7.3 The join
 
 | | |
 |---|---|
-| Reads (READ) | DJRF, DJPH and STRS once: 18 bytes a row, in 4 KB pieces (about 90 at 19,410 rows) |
-| Time, 1,000-hash slices one a pass (MEASURED 2026-10-13) | 2.08-2.12 s idle (112 slices), 2.46 s at 160 MHz; after a fence, 4.6 s with playback paused and 7.2 s with a 320 kbps MP3 and the screen dark (20 ms of idle wait a pass); a scroll adds its own time |
-| Time now, 8 ms of smaller slices a pass and a 2 ms wait (ESTIMATED) | At most about 1.5 s idle, about 2.5 s with an MP3 and the screen dark |
+| Reads (READ) | DJRF, DJPH and STRS once: 18 bytes a row, in 4 KB pieces (about 90 at 19,410 rows; 87 MEASURED) |
+| Time, 1,000-hash slices one a pass (MEASURED 2026-10-13, `09f91a1`) | 2.08-2.12 s idle (112 slices), 2.46 s at 160 MHz; after a fence, 4.6 s with playback paused and 7.2 s with a 320 kbps MP3 and the screen dark (20 ms of idle wait a pass); a scroll adds its own time |
+| Time, 8 ms of smaller slices a pass and a 2 ms wait (MEASURED 2026-10-14, `a7ee54b`) | Idle, lit or dark: 1.97-2.00 s (317 slices in 164 loop passes, about 12 ms a pass); at a boot 1.96-1.99 s; with a 320 kbps MP3: 3.77-3.93 s (182-188 passes); after the Auto DJ button (playing at once) 2.24-2.28 s; a scroll adds its own time (30 fps kept: 9.86 s with 5.8 s of scrolling). The estimate was 1.5 s idle and 2.5 s with the MP3: it took 164 passes of 8 ms of slices, not the 110-130 estimated |
+| The rejoin after a library update (MEASURED 2026-10-14) | 6.6-6.9 s from the read-back's "the join again" to "joined", the MP3 playing and the screen dark (7.2 s before). The join went on throughout, but the card worker's save of `library.idx` (4.6-4.7 s from "the join again") runs at the loop's priority while the screen is dark (`ScanScheduler`) and shared core 1 with it and the decoder: 199-205 passes, about 32 ms a pass (12 idle, 20 with the MP3); "joined" came 2.0-2.2 s after "saved". So the join's CPU is the lever (the next row) |
+| Why, and the Folders phase (READ; host, ESTIMATED for the device) | The join was CPU-bound: 164 passes of 8 ms of slices is about 1.3 s of CPU; hashing whole paths (the Hash phase's 19,412 and DJPH's confirms) was about two thirds of it. The Folders phase (6.2) hashes each folder's path once: on the host the hashing is 3.3 times faster (3.36 → 1.0 ms) and the 19,412-track join's CPU about 46 % less (11.2 → 5.8-6.1 ms quiet, 23.4 → 12.7 ms loaded), the maps identical. The pass rule replayed on the host's slice times, scaled so the old join takes the device's 164-177 passes: about 107-110 passes and 0.55-0.65 s of join CPU (1.0-1.25 s before). **ESTIMATED:** about 1.1-1.3 s idle, 2.1-2.4 s with the MP3 dark, the rejoin about 4.5-5 s (to be measured: 14, checks 1 and 6). The pass's budget is unchanged (8 ms of slices, one read, the 2 ms wait). Not done: the save kept at priority 0 while a join runs (the join faster, the save slower), and runs of 2,048 tracks (a run's sort is one slice, about 20 ms on the device by estimate, over the 8 ms budget; as before) |
 
 ### 7.4 Memory
 
@@ -695,7 +768,8 @@ At 19,410 rows and 19,412 tracks, all in PSRAM:
 | The glue (MEASURED, the M4 build) | 2,968 | From boot |
 | The join's maps and filters: 2 B a track + 2 B a row + 4 B a row (MEASURED) | 155,284 | While Auto DJ is on and joined |
 | ... its largest block, the filters (MEASURED) | 77,640 | |
-| The join's peak: the maps + runs at 6 B a track + a 4 KB buffer (MEASURED) | 275,952 | A second or two while it joins |
+| The join's peak: the maps + runs at 6 B a track + a 4 KB buffer (MEASURED at `a7ee54b`) | 275,952 | A second or two while it joins |
+| ... since, the folders' states too, 10 B a folder (READ; at 2,484 folders, the user's library's shape, ESTIMATED) | 300,792 | |
 | `Dn`: a copy of the engine, 16 KB of tallies, 4 B a pick (READ) | about 35 KB + 4 B a pick | While a `Dn` runs |
 | `Db`: 4 B a read and one slot buffer (READ) | | While a `Db` runs |
 
@@ -705,7 +779,39 @@ At 19,410 rows and 19,412 tracks, all in PSRAM:
   engine), against the design's 180 KB. The running player's lowest free
   PSRAM was 547 KB idle or with an MP3, 459 KB with a FLAC: the join's peak
   came after the UI's boot dip and never set it.
-- Auto DJ on against off: the join's 155 KB (ESTIMATED; check 11).
+- Auto DJ on against off (MEASURED 2026-10-14, 2 minutes of a 320 kbps MP3
+  each): `[stats]` psram= 631K on and joined, 783K off, in every line; `D`'s
+  PSRAM free 646,252 B against 801,912 B: 155,660 B, the join's 155,284 B
+  and 376 B more. The engine's 19,016 B either way.
+- **The free dip (MEASURED 2026-10-14, fixed since):** every join (the
+  switch-on, a boot's, a rejoin) took PSRAM's free down to about 10 KB for
+  a moment (`[stats]` pmin= 679K → 10K at the first `D1`, and pmin= stuck
+  there until a reboot): the spacers held the whole largest free block.
+  Now they leave at least the 64 KB margin (6.2). In
+  `test_autodj_join`'s model heap (ESP-IDF's TLSF: the size classes'
+  rounding, the low-end carve, coalescing) the lowest free while placing
+  was 11,316 B with the old spacers at a boot's join and is 165,696 B now;
+  94,728 B at the rejoin after a library update; over 30 heap shapes and
+  margins, at 20,000 and 6,001 tracks, never under the margin (or under
+  what the join itself leaves, when that is less).
+- **The rebuilt heap (MEASURED 2026-10-14, fixed since):** after each
+  library update with Auto DJ on, PSRAM's largest free block was
+  180,212 B and the join kept at 0x3f94becc, against 622,580 B and
+  0x3fbd69bc before. A library rebuild itself fragments PSRAM, with Auto
+  DJ off too (`main`'s own: in `test_a_library_update_in_a_model_heap`,
+  the real `LibraryIndex` and `LibraryBuilder` at 19,412 tracks in main.cpp's
+  order, the largest free block goes from 826,008 B at the boot to
+  510,608 B after one update with Auto DJ off; the fence's frees leave
+  the same free blocks either way). What Auto DJ added was the rejoin's
+  placement: all 155 KB and about 20 KB of slack at the top of that
+  block, 340,024 B of it left while joined in the model (on the device
+  180,212 B, the join low in PSRAM where the rebuilt heap's largest block
+  was). Now the maps and every transient block fit the rebuild's holes
+  and only the filters (77,640 B) go to its top: 429,520 B while joined,
+  and 510,608 B once given back, exactly Auto DJ off's (the give-back
+  always restored the off figure, so a library update's memory check
+  sees what it would with Auto DJ off, 6.3). While joined it can't be as
+  large as off when no smaller block holds the 77.6 KB filters.
 
 ---
 
@@ -810,7 +916,14 @@ DJ on, and starts a session seeded by it. Its toast: "Auto DJ from here:
 {title}", with Undo.
 
 **Undo** of either (the button's or this row's Play) puts the queue back
-and, if that tap switched Auto DJ on, switches it off again.
+and, if that tap switched Auto DJ on, switches it off again. The queue
+comes back in the play state it had: one that was paused stays paused
+(its entry cued at 0:00, Auto DJ's cue mark kept), one that was stopped
+stays stopped, and nothing that was silent starts
+(`PlaybackController::undo()`, for every Play's and Clear's Undo). The
+device check of 2026-10-14 found a Library Play's Undo resuming a queue
+paused on Auto DJ's cued pick, and Auto DJ picking on: a rule older than
+Auto DJ (the same `undo()` on `main` at `41d6721`), fixed since.
 
 ### 9.5 The Queue
 
@@ -837,6 +950,19 @@ and, if that tap switched Auto DJ on, switches it off again.
 | Picks by id: no usable index (once a switch-on, or a boot) | No Auto DJ index: picks are random | toast |
 
 - One a pass: the most pressing, in the table's order.
+- **Two lines:** a toast too wide for one line ("Auto DJ from here: {title}",
+  the no-neighbours toasts) splits at its ": ", the part before it in
+  Small over the rest. Each line goes by the rows it inks with the
+  firmware's fonts and CJK store (`uitext::toastLines()`), an empty row
+  between them, both inside the card (rows 2-33, or all 36 when they need
+  them; two 17-row CJK lines take its top and bottom rows, and the card
+  keeps only its sides and corners then). On 2026-10-14 the Japanese and
+  Chinese ones overlapped: the store's 16-17 px glyphs are taller than the
+  Small font's Latin, and the fixed rows put the first line into the
+  second and over the card's top edge. `test_ui_strings` places every
+  two-line toast of the ten languages so. Most Japanese and Chinese ones
+  and some Latin ones now take the 36 rows (a clear row above, between
+  and below doesn't fit in the old card's 30).
 - **While a toast with Undo is up**, these wait until it goes (the failure
   pause doesn't wait). An Undo tap, or Auto DJ switched off, drops them.
 - "No Auto DJ index" is said once per switch-on or boot, not once a
@@ -890,7 +1016,8 @@ output or the volume; scripts drive them in silent test mode (`z`).
   listener's undo went with it]`.
 - **Other lines:** a session's start with its seed; the index opened (or
   why not); "joined" with its coverage, time, slices, reads, bytes kept
-  and at the peak, and where its blocks went; the join given back; a quick
+  and at the peak, where its blocks went, `begin()`'s time and PSRAM's
+  lowest free meanwhile (6.2); the join given back; a quick
   skip; a pick taken out; a pick that failed; a read ahead that failed; a
   broken slot (once a file); the library rebuilt with the marks carried.
 
@@ -905,7 +1032,7 @@ output or the volume; scripts drive them in silent test mode (`z`).
 | `lib/core/AutoDjEngine.h/.cpp` | The session and the pick (section 3); `Stats`, the console's counters |
 | `lib/core/AutoDjTiers.h/.cpp` | The tempo windows, the Camelot codes, the statuses, the ranks, D3's odds, the gate's level |
 | `lib/core/AutoDjRng.h` | PCG32, `below(n)` by Lemire's method |
-| `lib/core/AutoDjJoin.h/.cpp` | The join, its `Maps`, the placement's spacers, a track's path hash |
+| `lib/core/AutoDjJoin.h/.cpp` | The join, its `Maps`, the folders' states, the placement (smaller free blocks first, the spacers, the margin), a track's path hash |
 | `lib/core/AutoDjTrigger.h/.cpp` | `decide()`, its waits and holds, the failure pause |
 | `lib/core/AutoDjDriver.h/.cpp` | The loop pass: sessions, steering, the trigger, the pick, the read ahead, the DJ marks across a read-back, the dry run |
 | `lib/core/AutoDjCommand.h/.cpp` | The `D` command's parser |
@@ -915,7 +1042,7 @@ output or the volume; scripts drive them in silent test mode (`z`).
 | `src/app/AutoDj.h/.cpp` | The glue: the open file, the join's slices, remounts, the fence, the settings, the console, the UI's view and news |
 | `src/app/AutoDjStore.h/.cpp`, `AutoDjContract.h` | NVS; the majors this build reads |
 | `src/main.cpp` | `stepAutoDj()` after the card's guard and before the queue's save and the card's step; the refill wait; the give-back hook; the fence hooks; `UpdateEnv`; `MainUiHost`'s Auto DJ calls |
-| `src/ui/*` | The "..." row, Output > Auto DJ, the empty states, the long-press row, the DJ mark, the toasts |
+| `src/ui/*` | The "..." row, Output > Auto DJ, the empty states, the long-press row, the DJ mark, the toasts (two lines by their ink: `lib/core/TextInk`, `uitext::toastLines()`) |
 
 ### 11.2 The Python reference and the fixtures
 
@@ -948,15 +1075,15 @@ files.
 |---|---|
 | `test_autodj_tiers` | PCG32 against the reference outputs, `below(n)`, the windows, the Camelot codes, the rank tables cell by cell against the waterfall, D3's odds, the gate's levels, the filter word |
 | `test_autodj_engine` | Every fixture session replayed twice (runs made at the read ahead, then at the pick), every pick, read and counter exact; and each rule on its own: the gate, dry, loosening, the ring and the quick skip, the pin, the key anchor, the cooldowns, the read budget, the cache, damaged and broken slots, picks by id, no allocation in a pick |
-| `test_autodj_join` | The goldens and the hardening files, written files, strides and CRCs, every slice boundary with a fence or a changed index, no memory, the library limit, a FAT model, memory at scale, the placement in a model heap |
+| `test_autodj_join` | The goldens and the hardening files, written files, strides and CRCs, every slice boundary with a fence or a changed index, no memory, the library limit, a FAT model, memory at scale; the folders' hash against `trackPathHash()` (every spelling of the root, paths of 509-513 B, a folder too long, depths 31-35); the placement's order, and in a model of ESP-IDF's TLSF heap: free never under the margin (30 heap shapes and margins), the give-back leaving Auto DJ off's largest block, and a library update (the real `LibraryIndex` and `LibraryBuilder` at 19,412 tracks, main.cpp's order of frees and blocks) with Auto DJ off and on |
 | `test_autodj_trigger` | Every condition, the first that fails, the finished queue, the holds, `owed` only while joining, the failure pause |
-| `test_autodj_driver` | Sessions, steering, the cue, the marks across a read-back, refused and removed picks, the holds, the failure pause, the index arriving late, the seed before the join, the button's lookups, the refill wait, the dry run, the `D` parser |
+| `test_autodj_driver` | Sessions, steering, the cue, the marks across a read-back, refused and removed picks, the holds, the failure pause, the index arriving late, the seed before the join, the button's lookups, the refill wait, the dry run, the `D` parser; a quick skip's reason (before the join too); the Undo of "Auto DJ from here" and the button from a playing, paused, stopped, cued and empty queue, Auto DJ on and off before the tap |
 | `test_ui_autodj` | The row's state, the Output line and its fallback, the dim rows, the strictness steps, the status lines, the empty-state button, the toasts' rules |
 | `test_card_autodj` | The MPDJ v2 slots, header and selection |
 | `test_queue` | The quiet append (the listener's undo kept, its rank in the snapshot, at the cap), the play epoch, the snapshot writes under an hour of appends |
-| `test_playback` | The pick's gapless word, refused behind the fence, Repeat All, the holds, the cue, every Play and Clear bumping the epoch, natural ends |
+| `test_playback` | The pick's gapless word, refused behind the fence, Repeat All, the holds, the cue, every Play and Clear bumping the epoch, natural ends; the Undo of a Play, Shuffle all's Play and a Clear from every play state (playing, paused, paused by the timer, cued by Auto DJ, stopped, finished, waiting for the headphones), never starting what was silent |
 | `test_library_update` | `autoDjOwed` holding the fence; the memory check with the join given back |
-| `test_nvs_layout`, `test_ui_queue`, `test_ui_library`, `test_ui_strings`, `test_card_contract` | Schema 4; the badge and the "added" mark; the texts' room in ten languages; `read.mpdj=2` |
+| `test_nvs_layout`, `test_ui_queue`, `test_ui_library`, `test_ui_strings`, `test_card_contract` | Schema 4; the badge and the "added" mark; the texts' room in ten languages, and every two-line toast's rows (CJK, Hangul and accented names too) never touching; `read.mpdj=2` |
 
 ### 11.4 The device test card
 
@@ -1004,6 +1131,12 @@ host (with g++), and every refusal.
   track (about 24 s at 20,000 tracks), which 1-second stubs never have.
   With Auto DJ appending stubs, a `gb` waited until playback paused. Real
   tracks give it.
+- **A library rebuild fragments PSRAM, with Auto DJ off too** (`main`'s
+  own: in `test_autodj_join`'s model the largest free block goes from
+  826,008 B at the boot to 510,608 B after one update). A later update
+  whose new track table outgrows the kept one needs about 660 KB in one
+  block and waits for the next boot either way. Not Auto DJ's (7.4);
+  not fixed here.
 - **Stay on seed narrows over long sessions:** one slot lists 169 rows.
   Loosening walks them before repeating; after that it repeats.
 - **The synthetic card's keys are independent of the sound,** so its
@@ -1043,27 +1176,53 @@ M5). The card: the synthetic tree, two full-length bench files, and the
 research's 19,410-row index. Its five problems (the pick's CPU, Stay on
 seed repeating at 75 %, the join's memory deferring a library update, the
 first pick after a skip timing the decoder, `queue.txt` not keeping up)
-were fixed in `7c89673`. Nothing since `09f91a1` has been on the device.
+were fixed in `7c89673`, and went on the device with the UI in the
+second check (`a7ee54b`, 2026-10-14: 14.1).
 
 The next release runs every check below on the release build. "Before" is
-2026-10-13's result.
+2026-10-13's result; 2026-10-14's is in 14.1.
 
 | # | Check | Pass | Before (2026-10-13) |
 |---|---|---|---|
-| 1 | **Boot.** Boot with Auto DJ off, then `D1`, then `D0` | Off: "joined when Auto DJ is switched on", no "joined" line, `D` "0 B held", the engine 19,016 B. `D1`: "joined", "at the top of the largest free one", about 90 reads; at most about 1.5 s idle, 2.5 s with an MP3 and the screen dark; a list scrolled meanwhile stays at 30 fps. `D0`: "the join given back … 155284 B". `Dj` while off is refused. The index opened in at most 20 ms. Browsable time level with 0.10.0's on the same card | **Partial.** Opened in 5.5-6.5 ms; joined in 2.08 s, 112 slices, 155 KB kept, 276 KB at the peak; scrolling at 30 fps (the join grew by the scroll's time). The browsable comparison needed another flash: not done. The join ran with Auto DJ off too (since changed) |
+| 1 | **Boot.** Boot with Auto DJ off, then `D1`, then `D0` | Off: "joined when Auto DJ is switched on", no "joined" line, `D` "0 B held", the engine 19,016 B. `D1`: `D` during the join names "hashing the library's folders" first; "joined" with where its blocks went (6.2: "... at the top of the largest free one, ..." or "all in smaller free blocks"), about 90 reads (87 on the synthetic card), the peak 275,952 B and 10 B a folder of the card's (300,792 B at 2,484 folders); its "PSRAM free at least N B meanwhile" at least 65,536 B (the model: about 165 KB at a boot's join), `[stats]` pmin= never down to 10-14 KB (2026-10-14's), no `[heap] FAILED`; its time, idle and with the MP3 and the screen dark, against 2026-10-14's (2.0 s in 164 passes, 3.8 s: 7.3) and the estimates (about 1.1-1.3 s in about 105-115 passes, 2.1-2.4 s); a list scrolled meanwhile stays at 30 fps. `D0`: "the join given back … 155284 B". `Dj` while off is refused. The index opened in at most 20 ms. Browsable time level with 0.10.0's on the same card | **Partial.** Opened in 5.5-6.5 ms; joined in 2.08 s, 112 slices, 155 KB kept, 276 KB at the peak; scrolling at 30 fps (the join grew by the scroll's time). The browsable comparison needed another flash: not done. The join ran with Auto DJ off too (since changed) |
 | 2 | **Bench.** `Db200` with the 320 kbps MP3, then the FLAC | p50 at most about 3 ms; max at most 14 ms (MP3) and 29 ms (FLAC); 0 failed | **Partial.** p50 1.2-1.4 ms, 0 failed, FLAC max 17.0 / 17.3 ms; MP3 max 13.2 ms in one run, 20.7 ms in the other. A run during the boot's card walk (p50 11.9 ms, max 88 ms) excluded as contended |
-| 3 | **Pick CPU.** `Dn200` in both modes at 55 / 65 / 75 %, matching off then on, at 240 MHz; at 160 MHz Follow the vibe 55 % off, 75 % off, 55 % on and Stay on seed 55 % off. A live pick with 2026-10-13's seed and queue (`Ds717feda5`, then `qp0`: the same row as then), at both speeds | **The re-measure after the optimisation.** p90 at most 2 ms at 240 MHz, 3 ms at 160 MHz, every run (estimates in 7.2); reads at a pick 200/0/0; `D`'s picks unchanged by the runs; the live pick at most about 2 ms plus its reads' time (then 6.38 ms, reads 3.25 ms). Stay on seed 75 %: no class 16-23, at least 150 loosened, artists far above 3; live picks carry `[loosened …]`. Follow the vibe's repeats, artists, classes and breaks as before (0 loosened) | **Fail.** Follow the vibe p90 4.8-9.0 ms at 240 MHz, 6.3-12.0 ms at 160 MHz. Stay on seed passed (0.6-1.7 ms at 240 MHz; 1.6-1.9 ms at 160 MHz). Reads 200/0/0. Stay on seed at 75 % repeated 3 rows: "repeats 197, artists 3" |
-| 4 | **Albums and skips.** Queue an album, Auto DJ on, skip 5 tracks quickly. Then the quick-skip line's three forms: a bench file (no row), a track that started with Auto DJ on, a track that started before `D1` | No pass with more than one read ahead; no pick over 2 reads; the skipped tracks out of the anchors (`D`); quick skips +5; no pick until the album's last track. The three lines: "it has no row …", "no longer steers", "it wasn't among the anchors …" | **Pass** (run 2): one anchor left, quick skips +5, the pick at the last track read 1 slot. The line said "no longer steers" for a track with no row (since fixed) |
+| 3 | **Pick CPU.** `Dn200` in both modes at 55 / 65 / 75 %, matching off then on, at 240 MHz; at 160 MHz Follow the vibe 55 % off, 75 % off, 55 % on and Stay on seed 55 % off. A live pick with 2026-10-13's seed and queue (`Ds717feda5`, then `qp0`: the same row as then), at both speeds. Live loosening: `Dm1 Df75`, then "Auto DJ from here" (`Dh`) on the track of row 693 (Northern Feather, which plays during the `Dn` runs: its slot has 3 rows above 75 %), 2 minutes of stubs. Not with the live pick's seed: its pin, row 3392, has 57 rows above 75 % and never loosens (2026-10-14: 0 of 140) | p90 at most 2 ms at 240 MHz, 3 ms at 160 MHz, every run (7.2 has 2026-10-14's); reads at a pick 200/0/0; `D`'s picks unchanged by the runs; the live pick at most about 2 ms plus its reads' time (then 6.38 ms, reads 3.25 ms). Stay on seed 75 %: no class 16-23, at least 150 loosened, artists far above 3; the live run's picks carry `[loosened …]` (2026-10-14: 106 of 115), `D`'s loosened rises, no class 16-23. Follow the vibe's repeats, artists, classes and breaks as before (0 loosened) | **Fail.** Follow the vibe p90 4.8-9.0 ms at 240 MHz, 6.3-12.0 ms at 160 MHz. Stay on seed passed (0.6-1.7 ms at 240 MHz; 1.6-1.9 ms at 160 MHz). Reads 200/0/0. Stay on seed at 75 % repeated 3 rows: "repeats 197, artists 3" |
+| 4 | **Albums and skips.** Queue an album, Auto DJ on, skip 5 tracks quickly. Then the quick-skip line's forms (3.2), each `n` in a track's first 30 s: a bench file (no row); a track that started with Auto DJ on and joined; after `Dr` while a track with a row plays (joined); between `D1` and "joined" (Auto DJ off before), a track with a row. (`D0`, a track, `D1`, then `n` after "joined" gives "no longer steers": the playing track steers once the maps arrive) | No pass with more than one read ahead; no pick over 2 reads; the skipped tracks out of the anchors (`D`); quick skips +5; no pick until the album's last track. The four lines: "it has no row in the index: it never steered", "no longer steers", "it wasn't among the anchors: nothing changes", "the index isn't joined yet: it never steered" | **Pass** (run 2): one anchor left, quick skips +5, the pick at the last track read 1 slot. The line said "no longer steers" for a track with no row (since fixed) |
 | 5 | **Soak.** Auto DJ on, the stubs, 2 hours, the queue reaching its 5,000 cap | No reset, no underrun; a word at every start; no row again within 50 picks; the cap pushing out the oldest; PSRAM and internal lows flat once the queue stops growing; the loop stack's low-water mark. **`queue.txt` keeps up:** `q`'s write count rises by at least 8 every 5 minutes (a write at least every ~35 s), most from a snapshot; a write's dip at most about 20 KB; after a pause, written within about 6 s, and a reboot restores at the paused entry. Live picks p90 at most 2 ms | **Pass, except two.** 7,520 picks, no reset, 0 underruns, 7,521 gapless joins with 0 cuts, all class 0, the closest repeat 51 apart, the cap at 79.5 min. **`queue.txt` failed:** no write for the last 59.5 min. PSRAM's low fell 446 → 400 KB with the queue's growth, then flat 54 min (partial). Live picks p90 8.4 ms (as check 3) |
-| 6 | **Fence.** `gb` during a session with the MP3 playing, then `n` right after "joined", three times; `gb` during the boot's join | The freed bytes equal the join's; `D` says the fence; the session and the marks kept; the last entry still gets its pick; the rejoin at most about 2.5 s with the MP3; the pick after `n` lands after the new track has 500 ms buffered, 0 reads, the usual time; "waited for a refill" +1 a skip. During the boot's join: aborted, one join after, no crash | **Pass,** with two findings since fixed: the rejoin took 7.2 s with the MP3 (4.6 s paused), and the first pick after it took 108.52 ms (the decoder's refill) |
-| 7 | **Card.** (a) Pull and reinsert mid-session, paused. (b) The index replaced on a PC (`synthtransfer.py --replace`, a new generation), reinserted while running. (c) A first boot with Auto DJ on of a card with new files the records don't have | (a) "the same index: the file reopened, the maps and the session kept"; picks go on, at most 2 reads; damaged 0. (b) The new generation opened "after a remount", a new session ("another index on the card"), joined again, picks go on. (c) No "the update step waits for the next boot (the track table …)"; if the give-back line comes, the largest block grows by about the join's bytes; after the build "the join again" and "joined" | **Not run** (the card had to move). In 2026-10-13's first boot, the 155 KB join was resident when a library update deferred to the next boot for its track table's block: the give-back answers that |
+| 6 | **Fence.** `gb` during a session with the MP3 playing, then `n` right after "joined", three times; `gb` during the boot's join | The freed bytes equal the join's; `D` says the fence; the session and the marks kept; the last entry still gets its pick; the rejoin's time with the MP3 and the screen dark against 2026-10-14's 6.6-6.9 s (ESTIMATED now about 4.5-5 s: 7.3); each rejoin's "PSRAM free at least" at least 65,536 B (the model: about 95 KB) and its blocks mostly in the rebuild's holes (the model: "77640 B at the top of the largest free one, 2 of 3 kept and 7 transient blocks in smaller ones"), "PSRAM's largest free block now" about 80 KB under Auto DJ off's after a rebuild, not 175 KB (2026-10-14: 180,212 B; the model: 429,520 B against 510,608 B): `D0` and `D` ("the join given back", then the free and the largest block), `gb` with Auto DJ off and `D` again measure off's (also `main`'s own fragmentation: 7.4); the pick after `n` lands after the new track has 500 ms buffered, 0 reads, the usual time; "waited for a refill" +1 a skip. During the boot's join: aborted, one join after, no crash | **Pass,** with two findings since fixed: the rejoin took 7.2 s with the MP3 (4.6 s paused), and the first pick after it took 108.52 ms (the decoder's refill) |
+| 7 | **Card.** (a) Pull and reinsert mid-session, paused. (b) The index replaced on a PC (`synthtransfer.py --replace`, a new generation), reinserted while running. (c) A first boot with Auto DJ on of a card with new files the records don't have | (a) "the same index: the file reopened, the maps and the session kept"; picks go on, at most 2 reads; damaged 0. (b) The new generation opened "after a remount", a new session ("another index on the card"), joined again, picks go on. (c) No "the update step waits for the next boot (the track table …)"; if the give-back line comes, the largest block grows by up to its "up to N B" (the join's bytes at that block's top); after the build "the join again" and "joined" | **Not run** (the card had to move). In 2026-10-13's first boot, the 155 KB join was resident when a library update deferred to the next boot for its track table's block: the give-back answers that |
 | 8 | **Bad files.** (a) One slot's bytes changed so its CRC fails. (b) One slot rewritten with a bad list under a good CRC. (c) No index: the file renamed; and a card with no transfer data | (a) "its CRC failed (read again later)", then "DAMAGED …"; picks go on; `D` damaged ≥ 1; the file stays in use. (b) "… BROKEN, picks at random …" once; then `[random]` picks; `D`'s index line says BROKEN; a remount clears it. (c) "ABSENT (the file the root names didn't open …)", picks `[by track id: no index]`, the page "Can't read the Auto DJ index", the settings dim, the empty states show Shuffle all, `De` plays nothing; with no transfer data, "No Auto DJ index on this card", and the toast once | **Not run.** (a) and (b) need a tool to change a slot (13) |
 | 9 | **A finished queue.** An album ends with Auto DJ off; `D1`. Then the sleep timer's End of queue | A pick cued, paused at 0:00; nothing starts; Play starts it and the next pick follows; the toast. While the timer runs, no pick and `D` names it; after its stop, a pick cued | **Pass** (3 cued picks, none started by itself) |
-| 10 | **UI.** Screenshots (`X`) in all ten languages | The "..." sheet in each state (On, Off, Waiting, Paused); Output's row line, with the Anchor and the state-only fallback; the Auto DJ page live, dim, and each status; the Queue's marks; both empty states with the Auto DJ button and with Shuffle all; the long-press sheet with "Auto DJ from here" first; the toasts, waiting behind an Undo toast; Undo switching Auto DJ off. The user's real-finger taps | **Not run** (no UI then) |
-| 11 | **Memory at 20k.** The running lowest PSRAM over 2 minutes of the MP3, Auto DJ off, then on and joined | On is about 155 KB lower than off (the join); the engine's 19 KB is held either way | **Couldn't tell:** the build joined at boot either way (pmin 547 KB idle and with an MP3, 459 KB with a FLAC, in both). Resident 177,814 B, against the design's 180 KB |
+| 10 | **UI.** Screenshots (`X`) in all ten languages | The "..." sheet in each state (On, Off, Waiting, Paused); Output's row line, with the Anchor and the state-only fallback; the Auto DJ page live, dim, and each status; the Queue's marks; both empty states with the Auto DJ button and with Shuffle all; the long-press sheet with "Auto DJ from here" first; the toasts, waiting behind an Undo toast, the two-line ones (ja and zh most: "Auto DJ from here", the empty states' button, no neighbours; ru's no neighbours) with their lines apart, a clear row between them, and inside the card (most ja and zh ones, and some Latin ones such as "Auto DJ from here: Burning Memory", in the card's 36 rows, y 36-71: their look accepted or not; two 17-row CJK lines, zh "正在等待耳机" over a title with 青 or 机, without the card's top and bottom lines but with its sides and corners); Undo switching Auto DJ off; a Library Play's Undo over a queue paused on Auto DJ's cued pick leaving it paused (`[ui] undo: done`, `[queue] now at … (paused)`, no pick after), over a stopped one, stopped, over a playing one, the old entry playing from 0:00; "Auto DJ from here" over a paused queue, then Undo: paused, and Auto DJ off again if the tap switched it on. The user's real-finger taps | **Not run** (no UI then) |
+| 11 | **Memory at 20k.** The running lowest PSRAM over 2 minutes of the MP3, Auto DJ off, then on and joined | On is about 155 KB lower than off (the join), read from psram= or `D` (pmin= keeps the join's moment, now at least 64 KB: 7.4); the engine's 19 KB is held either way | **Couldn't tell:** the build joined at boot either way (pmin 547 KB idle and with an MP3, 459 KB with a FLAC, in both). Resident 177,814 B, against the design's 180 KB |
 | 12 | **The Auto DJ button with Auto DJ off.** `D0`, `qx`, `De`; again in Stay on seed | At most 8 lookups (1 expected) in at most about 50 ms; playback at once; "joined" 1.5-2.5 s later; the first pick after it (a `D` before it shows "owed"). Stay on seed: `D`'s pin is the seed's row after the join | New since 2026-10-13 |
 | 13 | **Settings across a reboot.** Change each, reboot | Each comes back "(saved)"; the boot starts its own session | **Pass** |
 | 14 | **The user's own card** (no transfer data) | No index: the toast once, the page's status, Shuffle all on the empty states; Auto DJ adds random library tracks | New since 2026-10-13 |
 
 After the checks, the device and the card are put back as the release
 docs do (the firmware, the card, and the NVS keys the checks saved).
+
+### 14.1 The second check (2026-10-14)
+
+On the user's Core2, the synthetic card (11.4) with the bench files, the
+Auto DJ build of `a7ee54b` (`7c89673`'s fixes and the UI); checks 1-7 of
+that session's list, then the UI in all ten languages (276 screenshots)
+and its flows, and a read-only verification of both logs. Silent test
+mode before anything played; no Guru, `task_wdt`, `[E]`, `[heap] FAILED`
+or LOW line; no pick over 1 read; nothing played by itself (every start
+0.1-0.8 s after a command that plays). Not run: checks 2 (the bench), 7
+and 8 (the card moves) and 14, the UI's no-index screens, and the Paused
+state (3 failed picks: nothing causes it on this card).
+
+| # | Result |
+|---|---|
+| 1 | **Partial.** Off: "joined when Auto DJ is switched on" (opened in 6.0 ms), no "joined", "0 B held"; `D1`: 87 reads, 155,284 B kept, 275,952 B at the peak, "at the top of the largest free one" every time; `D0` gave the 155,284 B back (PSRAM free exactly as before); `Dj` refused while off; 30.2 fps while scrolling; the load back to normal after it. **Fail on time:** 1.97-2.00 s idle (164 passes), 3.77-3.93 s with the MP3 (7.3). **Finding:** every join took PSRAM's free to about 10 KB for a moment, so pmin= stayed at 10-14 KB until a reboot (7.4) |
+| 3 | **Pass.** p90 0.38-1.70 ms at 240 MHz, 0.52-2.31 ms at 160 MHz (7.2); reads 200/0/0; Follow the vibe's tallies the host's; `D`'s picks unchanged; the live pick 1.47 / 1.71 ms less its reads. Stay on seed 75 %: 188 loosened, classes 0-15 only, "repeats 105-118, artists 51-53" (197 and 3 before). Live loosening with row 693: 106 of 115 picks loosened, 52 artists, 84 rows. The check's text named row 3392, whose slot never loosens (corrected above) |
+| 4 | **Partial.** "it has no row …" (a bench file) and "no longer steers" as expected. The third form wasn't reachable by the steps then written (`D0`, `D1`, `n`): the playing track steers once the maps arrive, so it said "no longer steers"; `Dr` while a track played gave "it wasn't among the anchors …" (the steps corrected above). **Finding:** `n` between `D1` and "joined" on a track with a row said "it has no row in the index": fixed, it now says "the index isn't joined yet" (3.2) |
+| 5 | **Pass** (30 minutes, not 2 hours: the `queue.txt` part). `q`'s writes +9 to +10 every 5 minutes (59 of 60 from a snapshot), the generation moving on, the queue at 5,000, refused 0, 0 underruns; a write's dip 20 KB (read from psram=, pmin= being stuck by check 1's finding); after the pause, written within 6 s with its resume point, and a reboot restored the paused entry. Live picks p90 1.58 ms (7.2) |
+| 6 | **Partial.** Three `gb`s with the MP3: the fence gave back the 155,284 B, "0 DJ marks carried, the session kept; the join again", the pick after `n` 0.35 s later, after its 500 ms buffered (250-255 ms), 0 reads, 0.64-0.70 ms, "waited for a refill" +1 each. **Fail on time:** the rejoin 6.6-6.9 s (7.3). **Finding:** after each update PSRAM's largest free block was 180,212 B and the join kept at 0x3f94becc (622,580 B and 0x3fbd69bc before) |
+| 9 | **Seen in check 12's runs:** the Auto DJ button's 1-second seed stub ended before the join; the first pick came cued, paused, and nothing started |
+| 10 | **Partial.** Screens and flows as listed pass in all ten languages: the "..." sheet (On, Off, Waiting), Output's line and its fallback, the page (live, each status), the Queue's marks, the empty states with the button, the long-press sheet, the toasts waiting behind an Undo, Undo switching Auto DJ off. **Findings:** in ja and zh the two-line toasts' first line ran into the second and over the card's top edge (ru's "й" touched the line above): fixed (9.6). A Library Play's Undo over a queue paused on Auto DJ's cued pick resumed it, and Auto DJ picked on (silent test mode: nothing heard): fixed (9.4) |
+| 11 | **Pass.** On and joined 155,660 B lower than off (7.4); the engine's 19,016 B either way |
+| 12 | **Pass.** 1 lookup in 9.1-10.0 ms, playback at once, "joined" 2.3-2.4 s after the button (the join 2.24-2.28 s), the first pick after it ("owed" before); Stay on seed: `D`'s pin the seed's row after the join |
+| 13 | **Pass,** in passing: after the soak's reboots, "[dj] settings: Auto DJ on, Follow the vibe, strictness 55 %, … (saved)" |

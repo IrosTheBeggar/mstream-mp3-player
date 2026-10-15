@@ -276,6 +276,10 @@ public:
   // The last edit, if it can be undone (None after undo(), a restore, or a
   // snapshot that didn't fit in memory).
   Edit undoable() const { return undoEdit_; }
+  // Bumped by every snapshot an edit takes (the undo is that edit's from
+  // then): PlaybackController keeps what each undoable edit found by it.
+  // Free-running.
+  uint32_t snapshots() const { return snapshots_; }
   // The mode undo() puts back: the one the last edit was made in (it
   // differs from shuffled() only after a Play that set the mode).
   bool undoShuffled() const { return undoEdit_ != Edit::None ? undoShuffled_ : shuffled_; }
@@ -379,4 +383,5 @@ private:
   bool undoShuffled_ = false;  // the mode the snapshot was taken in
   uint32_t undoPushed_ = 0;    // the played entries that edit pushed out
   Edit undoEdit_ = Edit::None;
+  uint32_t snapshots_ = 0;
 };

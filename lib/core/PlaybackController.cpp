@@ -545,7 +545,9 @@ void PlaybackController::currentMoved() {
 bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t start, bool shuffle) {
   if (fenced_) return false;  // (the queue is the build's: nothing to edit)
   Act act(*this);
+  const Found f = found();
   if (!queue_.replace(tracks, n, start, shuffle)) return false;
+  edited(f);
   failuresInARow_ = 0;
   clearStartPoint();
   if (hasTrack()) {
@@ -559,31 +561,45 @@ bool PlaybackController::playNow(const uint32_t* tracks, uint32_t n, uint32_t st
 bool PlaybackController::playNext(const uint32_t* tracks, uint32_t n) {
   if (fenced_) return false;
   Act act(*this);
-  return queue_.insertNext(tracks, n);
+  const Found f = found();
+  const bool made = queue_.insertNext(tracks, n);
+  edited(f);
+  return made;
 }
 
 bool PlaybackController::addToQueue(const uint32_t* tracks, uint32_t n) {
   if (fenced_) return false;
   Act act(*this);
-  return queue_.append(tracks, n);
+  const Found f = found();
+  const bool made = queue_.append(tracks, n);
+  edited(f);
+  return made;
 }
 
 bool PlaybackController::moveNext(const uint32_t* positions, uint32_t n) {
   if (fenced_) return false;
   Act act(*this);
-  return queue_.moveNext(positions, n);
+  const Found f = found();
+  const bool made = queue_.moveNext(positions, n);
+  edited(f);
+  return made;
 }
 
 bool PlaybackController::clearUpNext() {
   if (fenced_) return false;
   Act act(*this);
-  return queue_.clearUpNext();
+  const Found f = found();
+  const bool made = queue_.clearUpNext();
+  edited(f);
+  return made;
 }
 
 QueueModel::Removed PlaybackController::remove(const uint32_t* positions, uint32_t n) {
   if (fenced_) return QueueModel::Removed{};
   Act act(*this);
+  const Found f = found();
   const QueueModel::Removed r = queue_.remove(positions, n);
+  edited(f);
   if (!r.current) return r;
   clearStartPoint();  // (as currentMoved(); stop() doesn't)
   if (r.pastEnd) {
@@ -597,9 +613,11 @@ QueueModel::Removed PlaybackController::remove(const uint32_t* positions, uint32
 void PlaybackController::clearQueue() {
   if (fenced_) return;  // (it would stop the held track, and clear nothing)
   Act act(*this);
+  const Found f = found();
   clearStartPoint();  // an undo brings the queue back, not the second
   stop();
   queue_.clear();
+  edited(f);
 }
 
 bool PlaybackController::addFromAutoDj(uint32_t track, bool cue) {
@@ -625,8 +643,36 @@ bool PlaybackController::undo() {
   if (fenced_) return false;
   Act act(*this);
   const uint32_t key = queue_.currentKey();
+  const Found f = found_;  // what the edit undone found
   if (!queue_.undo()) return false;
-  if (queue_.currentKey() != key) currentMoved();
+  if (queue_.currentKey() == key) return true;  // what plays keeps playing
+  const bool soundedThen = f.state == PlayState::Playing || f.state == PlayState::Waiting;
+  if (soundedThen || !hasTrack()) {
+    currentMoved();  // the state now: Playing starts it, Paused cues it, Stopped waits
+    return true;
+  }
+  // Nothing sounded when the edit was made (a Play or a Clear while paused
+  // or stopped): that state again, whatever plays now. Never a start after
+  // a silence; the backend lets go of the edit's track.
+  failuresInARow_ = 0;
+  clearStartPoint();  // (the old entry's second doesn't come back: currentMoved()'s rule)
+  if (f.state == PlayState::Paused) {
+    if (state_ != PlayState::Stopped && !cued_) audio_.stop();
+    state_ = PlayState::Paused;
+    cued_ = true;
+    endedAtEnd_ = false;
+    pausedByTimer_ = f.timer;
+    pausedByComputer_ = f.computer;
+    cuedByAutoDj_ = f.autoDj;
+    return true;
+  }
+  stop();
+  if (f.ended) {
+    // A finished queue (stopped on its last entry at its end): finished
+    // again (Auto DJ's 2.3.1 cue, as before the edit).
+    endedAtEnd_ = true;
+    endedKey_ = queue_.currentKey();
+  }
   return true;
 }
 

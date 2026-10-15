@@ -1021,17 +1021,23 @@ synthetic test card; READ from the firmware's code.
   pairs, 12 bytes a track, passed the device budget's limit of about
   256 KB for one allocation (H5) above about 21,000-22,000 tracks. The
   largest block now is the filters' (rows × 4: 108 KB at 27k). The blocks
-  go to the top of PSRAM's largest free block, and a library update's
-  memory check can have them given back (docs/AUTODJ.md).
-- **Slices:** on the loop, between frames. A slice hashes 250 tracks,
-  sorts one run, or takes what one 4 KB read of DJRF or DJPH holds (at
-  most 100 full hashes confirmed); up to 8 ms of slices and one card read
-  a loop pass, none while a list moves, the loop's sleep at most 2 ms
-  meanwhile (READ). MEASURED on the build before those sizes (1,000
-  hashes a slice, the loop's usual sleep): 2.1 s and 112 slices at boot,
-  idle; 4.6 s paused and 7.2 s with an MP3 playing, after a library
-  update's fence; 30 fps kept while a list scrolled. The new sizes aren't
-  measured yet (docs/AUTODJ.md's costs estimate them).
+  take as little of PSRAM's largest free block as they can (each in a
+  smaller free block that holds it, the rest at its top), and a library
+  update's memory check can have them given back (docs/AUTODJ.md 6.2).
+  Since 2026-10-14 each folder's path is hashed once (10 B a folder while
+  the join runs) and a track's hash goes on from its folder's: the join's
+  CPU about half (docs/AUTODJ.md 7.3).
+- **Slices:** on the loop, between frames. A slice hashes 250 folders or
+  250 tracks, sorts one run, or takes what one 4 KB read of DJRF or DJPH
+  holds (at most 100 full hashes confirmed); up to 8 ms of slices and one
+  card read a loop pass, none while a list moves, the loop's sleep at
+  most 2 ms meanwhile (READ). MEASURED on the build before those sizes
+  (1,000 hashes a slice, the loop's usual sleep): 2.1 s and 112 slices at
+  boot, idle; 4.6 s paused and 7.2 s with an MP3 playing, after a library
+  update's fence; 30 fps kept while a list scrolled. MEASURED with them
+  (2026-10-14, before the folders' hashing): 2.0 s idle, 3.8 s with the
+  MP3, 6.6-6.9 s after a fence; ESTIMATED since: about 1.1-1.3 s idle and
+  2.1-2.4 s with the MP3 (docs/AUTODJ.md 7.3).
 - **No whole-file check of DJSL:** Auto DJ uses the file as soon as the
   join ends. Before the join (Auto DJ off), the device can still tell
   whether a track has a row: DJPH is in hash order, so a binary search

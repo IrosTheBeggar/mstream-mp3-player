@@ -943,6 +943,79 @@ void test_auto_dj_from_here_and_the_button() {
   r.player.setFenced(false);
 }
 
+// The Undo of "Auto DJ from here" and of the empty states' button, as the
+// toast's does it (PlaybackController::undo(), then Auto DJ off again when
+// the tap switched it on): the queue as it was, in the state it was in.
+// Nothing that was silent starts (the device check of 2026-10-14: the
+// Undo of a Play over a queue paused on Auto DJ's cued pick played it, and
+// Auto DJ picked on), and no pick comes at the restored paused or stopped
+// queue; one that played plays its entry again. With Auto DJ off before
+// the tap and on before it.
+void test_the_undo_of_from_here_and_the_button_starts_nothing() {
+  enum class Was { Playing, Paused, Stopped, CuedPick, Empty };
+  const char* names[] = {"playing", "paused", "stopped", "paused on Auto DJ's cued pick", "empty (the button)"};
+  for (int w = 0; w <= static_cast<int>(Was::Empty); ++w) {
+    for (int djOn = 0; djOn < 2; ++djOn) {
+      const Was was = static_cast<Was>(w);
+      if (was == Was::CuedPick && !djOn) continue;  // (only Auto DJ cues a pick)
+      char what[96];
+      std::snprintf(what, sizeof(what), "%s, Auto DJ %s", names[w], djOn ? "on" : "off");
+      Rig r;
+      if (djOn) TEST_ASSERT_TRUE(r.dj.setOn(true));
+      const uint32_t three[] = {r.card.trackOf(1), r.card.trackOf(2), r.card.trackOf(3)};
+      switch (was) {
+        case Was::Playing:
+        case Was::Paused:
+        case Was::Stopped:
+          TEST_ASSERT_TRUE(r.player.playNow(three, 3, 0));
+          r.playTo(1500);
+          if (was == Was::Paused) r.player.togglePlayPause();
+          if (was == Was::Stopped) r.player.stop();
+          break;
+        case Was::CuedPick:
+          TEST_ASSERT_TRUE(r.player.playNow(three, 3, 2));
+          r.audio.ended = true;  // (no pick yet: the pass sees the end first, the queue finished)
+          r.player.update(r.env.nowMs);
+          TEST_ASSERT_TRUE_MESSAGE(r.player.endedAtEnd(), what);
+          r.audio.ended = false;
+          TEST_ASSERT_TRUE_MESSAGE(r.pass().cued, what);
+          TEST_ASSERT_TRUE_MESSAGE(r.player.cuedByAutoDj(), what);
+          break;
+        case Was::Empty: r.player.clearQueue(); break;
+      }
+      const PlayState then = r.player.state();
+      const uint32_t size = r.queue.size();
+      const int index = r.player.currentIndex();
+      r.pass();
+      // The tap: the button's draw, or the long-pressed track.
+      bool switched = false;
+      const Began why = was == Was::Empty ? Began::Surprise : Began::FromHere;
+      TEST_ASSERT_TRUE_MESSAGE(r.dj.playFrom(r.player, r.card.trackOf(8), why, r.card.join.maps(), &switched), what);
+      TEST_ASSERT_EQUAL_MESSAGE(!djOn, switched, what);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(PlayState::Playing, r.player.state(), what);
+      r.playTo(600);
+      r.playTo(2000);  // (its pick appended: the one track is last)
+      const int plays = r.audio.plays;
+      // The toast's Undo.
+      TEST_ASSERT_TRUE_MESSAGE(r.player.undo(), what);
+      if (switched) TEST_ASSERT_TRUE(r.dj.setOn(false));
+      TEST_ASSERT_EQUAL_MESSAGE(djOn != 0, r.dj.settings().on, what);
+      for (int k = 0; k < 10; ++k) r.pass();
+      TEST_ASSERT_EQUAL_UINT32_MESSAGE(size, r.queue.size(), what);  // (no pick at the restored queue)
+      TEST_ASSERT_EQUAL_INT_MESSAGE(index, r.player.currentIndex(), what);
+      if (then == PlayState::Playing) {
+        TEST_ASSERT_EQUAL_INT_MESSAGE(PlayState::Playing, r.player.state(), what);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(plays + 1, r.audio.plays, what);  // its entry again, from 0:00
+        continue;
+      }
+      TEST_ASSERT_EQUAL_INT_MESSAGE(then, r.player.state(), what);
+      TEST_ASSERT_EQUAL_INT_MESSAGE(plays, r.audio.plays, what);
+      TEST_ASSERT_FALSE_MESSAGE(r.audio.isPlaying(), what);
+      TEST_ASSERT_EQUAL_MESSAGE(was == Was::CuedPick, r.player.cuedByAutoDj(), what);
+    }
+  }
+}
+
 // Dp: a pick now, whatever the trigger says; refused behind the fence.
 void test_a_pick_now() {
   Rig r;
@@ -1235,6 +1308,8 @@ void test_a_quick_skip_says_the_row_it_had() {
   TEST_ASSERT_EQUAL_UINT32(r.card.loose(), p.leftTrack);
   TEST_ASSERT_EQUAL_UINT16(autodj::kNoRow, p.leftRow);
   TEST_ASSERT_FALSE(p.leftSteered);
+  TEST_ASSERT_TRUE(p.leftWhy == autodj::SkipWhy::NoRow);
+  TEST_ASSERT_EQUAL_STRING("it has no row in the index: it never steered", autodj::skipWhyText(p.leftWhy));
   r.playTo(2500);
   TEST_ASSERT_TRUE(r.inRing(5));
   r.player.next();
@@ -1243,6 +1318,8 @@ void test_a_quick_skip_says_the_row_it_had() {
   TEST_ASSERT_EQUAL_UINT32(r.card.trackOf(5), p.leftTrack);
   TEST_ASSERT_EQUAL_UINT16(5, p.leftRow);
   TEST_ASSERT_TRUE(p.leftSteered);
+  TEST_ASSERT_TRUE(p.leftWhy == autodj::SkipWhy::Steered);
+  TEST_ASSERT_EQUAL_STRING("no longer steers", autodj::skipWhyText(p.leftWhy));
   TEST_ASSERT_FALSE(r.inRing(5));
   // Switched on while a track plays: it isn't in the ring yet.
   TEST_ASSERT_TRUE(r.dj.setOn(false));
@@ -1257,6 +1334,61 @@ void test_a_quick_skip_says_the_row_it_had() {
   TEST_ASSERT_TRUE(p.quickSkip);
   TEST_ASSERT_EQUAL_UINT16(7, p.leftRow);
   TEST_ASSERT_FALSE(p.leftSteered);
+  TEST_ASSERT_TRUE(p.leftWhy == autodj::SkipWhy::NotAnchor);
+  TEST_ASSERT_EQUAL_STRING("it wasn't among the anchors: nothing changes", autodj::skipWhyText(p.leftWhy));
+}
+
+// A quick skip before the index is joined (the device check of 2026-10-14:
+// D1, then n before "joined", printed "it has no row in the index" for a
+// track that has one): its row is unknown, and the line says the index
+// isn't joined yet; with no index joined at all (none usable), that. Once
+// the maps come while it plays it steers (Engine::trackStarted() at
+// mapsArrived), and its skip says "no longer steers". Behind a fence (the
+// maps away, the row known from before) the known row's answer.
+void test_a_quick_skip_before_the_join_says_the_index_isnt_joined() {
+  for (int joining = 0; joining < 2; ++joining) {
+    Rig r;
+    r.indexed = false;
+    r.joining = joining != 0;
+    TEST_ASSERT_TRUE(r.dj.setOn(true));
+    const uint32_t three[] = {r.card.trackOf(4), r.card.trackOf(5), r.card.trackOf(6)};
+    TEST_ASSERT_TRUE(r.player.playNow(three, 3, 0));
+    r.playTo(400);
+    r.player.next();
+    Pass p = r.pass();
+    TEST_ASSERT_TRUE(p.quickSkip);
+    TEST_ASSERT_EQUAL_UINT32(r.card.trackOf(4), p.leftTrack);
+    TEST_ASSERT_FALSE(p.leftSteered);
+    TEST_ASSERT_TRUE(p.leftWhy == (joining ? autodj::SkipWhy::NotJoined : autodj::SkipWhy::NoIndex));
+    TEST_ASSERT_EQUAL_STRING(joining ? "the index isn't joined yet: it never steered"
+                                     : "no index is joined: it never steered",
+                             autodj::skipWhyText(p.leftWhy));
+    // The maps come while track 2 plays: it steers from then.
+    r.playTo(400);
+    r.indexed = true;
+    r.joining = false;
+    p = r.playTo(600);
+    TEST_ASSERT_TRUE(p.mapsArrived);
+    TEST_ASSERT_TRUE(r.inRing(5));
+    r.player.next();
+    p = r.pass();
+    TEST_ASSERT_TRUE(p.quickSkip);
+    TEST_ASSERT_TRUE(p.leftWhy == autodj::SkipWhy::Steered);
+  }
+  // The maps away after a fence: the rows known before still answer.
+  Rig r;
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  const uint32_t three[] = {r.card.loose(), r.card.trackOf(5), r.card.trackOf(6)};
+  TEST_ASSERT_TRUE(r.player.playNow(three, 3, 0));
+  r.playTo(400);
+  r.fenceAndReadBack();
+  r.indexed = false;
+  r.joining = true;  // (the join again)
+  r.playTo(800);
+  r.player.next();
+  Pass p = r.pass();
+  TEST_ASSERT_TRUE(p.quickSkip);
+  TEST_ASSERT_TRUE(p.leftWhy == autodj::SkipWhy::NoRow);
 }
 
 // A session seeded while the index joins ("Auto DJ from here", the empty
@@ -1444,6 +1576,7 @@ int main(int, char**) {
   RUN_TEST(test_the_fence_and_the_read_back);
   RUN_TEST(test_the_index_arriving_after_the_session_began);
   RUN_TEST(test_auto_dj_from_here_and_the_button);
+  RUN_TEST(test_the_undo_of_from_here_and_the_button_starts_nothing);
   RUN_TEST(test_a_pick_now);
   RUN_TEST(test_the_dry_run_leaves_the_live_session_alone);
   RUN_TEST(test_leaving_the_ring_while_the_maps_are_away);
@@ -1454,6 +1587,7 @@ int main(int, char**) {
   RUN_TEST(test_an_entry_that_never_started_is_no_quick_skip);
   RUN_TEST(test_a_due_pick_waits_for_the_decoders_refill);
   RUN_TEST(test_a_quick_skip_says_the_row_it_had);
+  RUN_TEST(test_a_quick_skip_before_the_join_says_the_index_isnt_joined);
   RUN_TEST(test_a_seed_before_the_join_is_the_pin);
   RUN_TEST(test_the_button_looks_tracks_up_by_their_path);
   RUN_TEST(test_runs_are_made_again_for_new_maps);

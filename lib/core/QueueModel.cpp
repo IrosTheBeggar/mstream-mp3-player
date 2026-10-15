@@ -122,6 +122,7 @@ bool QueueModel::snapshot(Edit edit) {
   undoShuffled_ = shuffled_;
   undoPushed_ = 0;  // (an add that pushes out says so after)
   undoEdit_ = edit;
+  ++snapshots_;
   return true;
 }
 

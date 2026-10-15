@@ -26,7 +26,14 @@ enum class PlayState { Stopped, Playing, Paused, Waiting };
 // current entry skips to the next one that stayed (or stops if none did);
 // clearQueue() stops; undo() goes back to the track that was current if
 // the one playing isn't in the restored queue, in the shuffle mode the edit
-// was made in (Shuffle all's Play turns it on; its undo, off again). Edits
+// was made in (Shuffle all's Play turns it on; its undo, off again), and
+// never louder than the edit found it: an edit made while nothing sounded
+// (a Play or a Clear while paused or stopped) is undone to that state
+// (paused: the entry cued at 0:00 with its pause's marks; stopped: stopped,
+// a finished queue finished again), whatever plays now, so an Undo never
+// starts sound after a silence; one made while it played leaves the
+// restored entry in the state now (playing: it plays from 0:00; paused:
+// cued; stopped: stopped). Edits
 // that don't touch it (Play next, + Queue, Clear up next) change nothing
 // that plays. That holds for an add that pushes out what already played
 // to make room in a full queue (QueueModel's cap, docs/QUEUE-MODES.md
@@ -370,6 +377,17 @@ public:
   bool moveNext(const uint32_t* positions, uint32_t n);
   bool clearUpNext();
   void clearQueue();
+  // The last edit undone (QueueModel::undo()). When the entry that was
+  // current then comes back (a Play's, a Clear's undo; Shuffle all's), it
+  // takes the state the edit found if nothing sounded then (Stopped, or
+  // Paused: cued at 0:00, the timer's, the computer's and Auto DJ's marks
+  // as they were; a finished queue's endedAtEnd() again), else the state
+  // now (Playing starts it from 0:00, Waiting waits on it, Paused cues it,
+  // Stopped leaves it). Nothing that was silent starts (the device check
+  // of 2026-10-14: a Library Play over a paused queue, then its Undo, had
+  // resumed the paused queue). An edit that kept the current entry (Play
+  // next, + Queue, a move, Clear up next, a Remove of others) changes
+  // nothing that plays.
   bool undo();
   // ---- Auto DJ (see the class) ----
   // Auto DJ's pick: `track` appended (QueueModel::appendQuiet(): the
@@ -556,6 +574,29 @@ private:
   // The current entry changed under the backend: carry on from the new one
   // in the same state (Playing starts it, Paused cues it, Stopped waits).
   void currentMoved();
+  // What an undoable edit found (undo(): what comes back with the entry
+  // that was current). found() before the edit; kept (found_) when the
+  // edit took a snapshot (QueueModel::snapshots()): its undo is the
+  // queue's now.
+  struct Found {
+    PlayState state = PlayState::Stopped;
+    bool timer = false, computer = false, autoDj = false;  // a pause's marks
+    bool ended = false;                                    // endedAtEnd()
+    uint32_t snapshots = 0;
+  };
+  Found found() const {
+    Found f;
+    f.state = state_;
+    f.timer = pausedByTimer_;
+    f.computer = pausedByComputer_;
+    f.autoDj = cuedByAutoDj_;
+    f.ended = endedAtEnd();
+    f.snapshots = queue_.snapshots();
+    return f;
+  }
+  void edited(const Found& f) {
+    if (queue_.snapshots() != f.snapshots && queue_.undoable() != QueueModel::Edit::None) found_ = f;
+  }
   // The track ended with "pause after this track": the next entry, cued.
   void pauseAtBoundary();
   bool hasStartPoint() const {
@@ -597,6 +638,8 @@ private:
   // endedAtEnd(): stopped at the queue's end, on the entry with this key.
   bool endedAtEnd_ = false;
   uint32_t endedKey_ = QueueModel::kNone;
+  // What the edit the queue would undo found (edited()).
+  Found found_;
   // The start point: this far into the entry with key startKey_.
   uint32_t startMs_ = 0;
   uint32_t startDurationMs_ = 0;

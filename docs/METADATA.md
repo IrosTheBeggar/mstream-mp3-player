@@ -3274,8 +3274,9 @@ where 3.3.3-3.3.5 left room:
   the UI, on a fresh heap (3.2.2's first row). Without the marker that
   boot would load the old index, whose hard inputs still match, and meet
   the same memory check again, every time. Auto DJ's join counts in what
-  the step frees, but its blocks sit at the top of the largest free block
-  (since 2026-10-14), which the check's look at that block can't see
+  the step frees, but those of its blocks that fit no smaller free block
+  sit at the top of the largest free block (since 2026-10-14;
+  docs/AUTODJ.md 6.2), which the check's look at that block can't see
   past: when the check fails only because the new track table fits no
   block (not for room, and not after `gb!`), the join is given back,
   PSRAM measured again and the check made once more
@@ -3664,13 +3665,15 @@ counts):
   and a 4 KB read buffer; it keeps the two u16 maps and a u32 filter
   word a row (40 + 40 + 80 KB at 20k): 284 KB at its peak at 20k
   (ESTIMATED), 275,952 B MEASURED at 19,410 tracks (2026-10-13). Its
-  blocks are the runs (24 KB each) and the 4 KB buffer while it runs,
-  and the kept ones: the two u16 maps (40 + 40 KB at 20k) and the
-  filters, the largest (rows × 4: 108 KB at 27k). Its blocks go to the
-  top of PSRAM's largest free block (spacers hold the bottom while it
-  takes them), so what is carved later comes from below them, and giving
+  blocks are the runs (24 KB each), the 4 KB buffer and its folders'
+  states (10 B a folder, since 2026-10-14) while it runs, and the kept
+  ones: the two u16 maps (40 + 40 KB at 20k) and the filters, the
+  largest (rows × 4: 108 KB at 27k). Each goes to a smaller free block
+  that holds it, the rest to the top of PSRAM's largest free block
+  (spacers hold the bottom while they are taken, never leaving less than
+  64 KB free), so what is carved later comes from below them, and giving
   them back (switched off, or the memory check's give-back, 3.4.2) leaves
-  one block again, as if Auto DJ had never joined.
+  that block as if Auto DJ had never joined (docs/AUTODJ.md 6.2, 7.4).
 - **Fragmentation:** the arena (about 0.8 MB) and the track table (640 KB)
   are single blocks; the memory check (3.4.2) defers a build to the next
   boot rather than fail, and the build-at-boot marker makes sure that

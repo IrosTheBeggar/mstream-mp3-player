@@ -45,6 +45,17 @@ const char* beganName(Began b) {
   return "?";
 }
 
+const char* skipWhyText(SkipWhy w) {
+  switch (w) {
+    case SkipWhy::Steered: return "no longer steers";
+    case SkipWhy::NoRow: return "it has no row in the index: it never steered";
+    case SkipWhy::NotAnchor: return "it wasn't among the anchors: nothing changes";
+    case SkipWhy::NotJoined: return "the index isn't joined yet: it never steered";
+    case SkipWhy::NoIndex: return "no index is joined: it never steered";
+  }
+  return "?";
+}
+
 // ---------------------------------------------------------------------------
 // MarkCarry, TimedReader
 // ---------------------------------------------------------------------------
@@ -146,6 +157,7 @@ void Driver::newSession(Began why, uint32_t track, const Maps* maps) {
   pending_ = QueueModel::kNone;
   pendingRow_ = kNoRow;
   watch_.row = kNoRow;  // (another index's, maybe: the next pass with maps says it again)
+  watch_.rowKnown = false;
   retry_ = false;
 }
 
@@ -209,14 +221,20 @@ Pass Driver::step(PlaybackController& player, const Index& ix, const Env& env) {
     const bool natural = endedNow || watch_.ended;
     if (s_.on && watch_.key != QueueModel::kNone && watch_.started) {
       // (Its row: the maps', else the one they last gave: away after a
-      // fence until the join is ready again.)
+      // fence until the join is ready again. Never given: unknown, and the
+      // track never steered: no maps, no ring row.)
       const uint16_t row = maps ? rowOf(maps, watch_.track) : watch_.row;
+      const bool known = maps || watch_.rowKnown;
       const bool steered = engine_.rowLeft(row, watch_.playedMs, natural);
       if (!natural && watch_.playedMs < kQuickSkipMs) {
         p.quickSkip = true;
         p.leftTrack = watch_.track;
         p.leftRow = row;
         p.leftSteered = steered;
+        p.leftWhy = steered         ? SkipWhy::Steered
+                    : !known        ? (ix.joining ? SkipWhy::NotJoined : SkipWhy::NoIndex)
+                    : row == kNoRow ? SkipWhy::NoRow
+                                    : SkipWhy::NotAnchor;
         p.leftMs = watch_.playedMs;
       }
     }
@@ -224,7 +242,10 @@ Pass Driver::step(PlaybackController& player, const Index& ix, const Env& env) {
   } else if (endedNow) {
     watch_.ended = true;  // (still current: the queue's end, Repeat One's loop)
   }
-  if (maps) watch_.row = rowOf(maps, watch_.track);
+  if (maps) {
+    watch_.row = rowOf(maps, watch_.track);
+    watch_.rowKnown = true;
+  }
   const bool ours = entryStart_.update(key, env.trackSeq, env.positionMs);
   if (key != QueueModel::kNone && player.state() == PlayState::Playing) {
     if (!watch_.started) {

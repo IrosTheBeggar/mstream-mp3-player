@@ -589,6 +589,184 @@ void test_undo_of_play_now_goes_back_to_the_old_track() {
   TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)r.player.state());
 }
 
+// The Undo of an edit that brings another entry back (a Play, Shuffle
+// all's Play, a Clear) never starts what was silent (the device check of
+// 2026-10-14: a Library Play over a queue paused on Auto DJ's cued pick,
+// then the toast's Undo, played the paused queue again). The entry that was
+// current comes back in the state the edit found when nothing sounded then
+// (paused: cued at 0:00, the timer's and Auto DJ's marks as they were;
+// stopped: stopped; a finished queue: finished), whatever plays now; when
+// it played (or waited for the headphones) then, in the state now. Every
+// edit from every state, the edit's queue left playing or paused since.
+void test_undo_never_starts_what_was_silent() {
+  enum class Was { Playing, Paused, PausedByTimer, CuedByAutoDj, Stopped, Finished, Waiting };
+  enum class Edit { Play, ShuffleAll, Clear };
+  const char* wasNames[] = {"playing", "paused", "paused by the timer", "cued by Auto DJ", "stopped", "finished",
+                            "waiting"};
+  const char* editNames[] = {"Play", "Shuffle all", "Clear"};
+  const uint32_t ids[] = {0, 1, 2, 3, 4, 5, 6, 7};
+  for (int w = 0; w <= static_cast<int>(Was::Waiting); ++w) {
+    for (int e = 0; e <= static_cast<int>(Edit::Clear); ++e) {
+      for (int pausedSince = 0; pausedSince < 2; ++pausedSince) {
+        char what[96];
+        snprintf(what, sizeof(what), "%s, then %s%s, then Undo", wasNames[w], editNames[e],
+                 pausedSince ? " (paused since)" : "");
+        const Was was = static_cast<Was>(w);
+        Rig r(8);
+        TestHold hold;
+        FakeAudioBackend& a = r.audio;
+        PlaybackController& p = r.player;
+        p.setHold(&hold);
+        p.setRepeat(PlaybackController::Repeat::Off);
+        switch (was) {
+          case Was::Playing: p.play(2); break;
+          case Was::Paused:
+            p.play(2);
+            a.position = 30000;
+            p.togglePlayPause();
+            break;
+          case Was::PausedByTimer:
+            p.play(2);
+            a.position = 30000;
+            p.pauseByTimer();
+            break;
+          case Was::CuedByAutoDj:
+            p.play(7);
+            a.finish();
+            p.update(0);
+            TEST_ASSERT_TRUE_MESSAGE(p.addFromAutoDj(3, true), what);  // the finished queue's pick, cued
+            break;
+          case Was::Stopped:
+            p.play(2);
+            p.stop();
+            break;
+          case Was::Finished:
+            p.play(7);
+            a.finish();
+            p.update(0);
+            TEST_ASSERT_TRUE_MESSAGE(p.endedAtEnd(), what);
+            break;
+          case Was::Waiting:
+            hold.hold = true;
+            p.play(2);
+            TEST_ASSERT_EQUAL_INT_MESSAGE((int)PlayState::Waiting, (int)p.state(), what);
+            break;
+        }
+        const PlayState then = p.state();
+        const int index = p.currentIndex();
+        const uint32_t track = p.currentTrack();
+        const uint32_t size = r.queue.size();
+        const bool soundedThen = then == PlayState::Playing || then == PlayState::Waiting;
+        switch (static_cast<Edit>(e)) {
+          case Edit::Play: {
+            const uint32_t two[] = {4, 5};
+            TEST_ASSERT_TRUE_MESSAGE(p.playNow(two, 2, 0), what);
+            break;
+          }
+          case Edit::ShuffleAll:
+            TEST_ASSERT_TRUE_MESSAGE(p.playNow(ids, 8, PlaybackController::kAnyStart, true), what);
+            break;
+          case Edit::Clear: p.clearQueue(); break;
+        }
+        if (static_cast<Edit>(e) != Edit::Clear) {
+          TEST_ASSERT_EQUAL_INT_MESSAGE((int)(hold.hold ? PlayState::Waiting : PlayState::Playing), (int)p.state(),
+                                        what);
+        }
+        if (pausedSince && p.state() != PlayState::Stopped) p.togglePlayPause();
+        const PlayState now = p.state();
+        const int plays = a.playCount;
+        TEST_ASSERT_TRUE_MESSAGE(p.undo(), what);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(size, r.queue.size(), what);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(index, p.currentIndex(), what);
+        TEST_ASSERT_EQUAL_UINT32_MESSAGE(track, p.currentTrack(), what);
+        TEST_ASSERT_FALSE_MESSAGE(p.shuffle(), what);  // (Shuffle all's mode undone with it)
+        if (!soundedThen) {
+          // Silent then: that state again, nothing started, the backend
+          // holding nothing (the edit's track let go).
+          const bool paused = was == Was::Paused || was == Was::PausedByTimer || was == Was::CuedByAutoDj;
+          TEST_ASSERT_EQUAL_INT_MESSAGE((int)(paused ? PlayState::Paused : PlayState::Stopped), (int)p.state(), what);
+          TEST_ASSERT_EQUAL_INT_MESSAGE(plays, a.playCount, what);
+          TEST_ASSERT_FALSE_MESSAGE(a.isPlaying(), what);
+          TEST_ASSERT_EQUAL_MESSAGE(was == Was::PausedByTimer, p.pausedByTimer(), what);
+          TEST_ASSERT_EQUAL_MESSAGE(was == Was::CuedByAutoDj, p.cuedByAutoDj(), what);
+          TEST_ASSERT_EQUAL_MESSAGE(was == Was::Finished, p.endedAtEnd(), what);
+          // Play starts the entry from its beginning (a pause's second
+          // doesn't come back with an Undo: currentMoved()'s rule).
+          hold.hold = false;
+          p.togglePlayPause();
+          TEST_ASSERT_EQUAL_INT_MESSAGE((int)PlayState::Playing, (int)p.state(), what);
+          TEST_ASSERT_EQUAL_INT_MESSAGE(plays + 1, a.playCount, what);
+          TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, a.lastStartMs, what);
+          continue;
+        }
+        // It sounded then: the state now carries on with the entry that was
+        // current, and only a queue that sounds now sounds after.
+        if (now == PlayState::Playing) {
+          TEST_ASSERT_EQUAL_INT_MESSAGE((int)PlayState::Playing, (int)p.state(), what);
+          TEST_ASSERT_EQUAL_INT_MESSAGE(plays + 1, a.playCount, what);
+          TEST_ASSERT_EQUAL_STRING_MESSAGE("/music/c.mp3", a.lastPath.c_str(), what);
+        } else if (now == PlayState::Waiting) {
+          TEST_ASSERT_EQUAL_INT_MESSAGE((int)PlayState::Waiting, (int)p.state(), what);
+          TEST_ASSERT_EQUAL_INT_MESSAGE(plays, a.playCount, what);
+        } else {
+          TEST_ASSERT_EQUAL_INT_MESSAGE((int)now, (int)p.state(), what);  // paused: cued; stopped (a Clear's)
+          TEST_ASSERT_EQUAL_INT_MESSAGE(plays, a.playCount, what);
+          TEST_ASSERT_FALSE_MESSAGE(a.isPlaying(), what);
+        }
+      }
+    }
+  }
+}
+
+// The edits that keep the current entry (Play next, + Queue, a move, Clear
+// up next, a Remove of other entries): their Undo changes nothing that
+// plays, in any state; and an edit whose snapshot the queue didn't take (a
+// Clear of an empty queue) leaves the Undo the edit before's, with what
+// that edit found.
+void test_undo_of_an_edit_that_kept_the_entry_changes_nothing_that_plays() {
+  for (int paused = 0; paused < 2; ++paused) {
+    Rig r(8);
+    FakeAudioBackend& a = r.audio;
+    PlaybackController& p = r.player;
+    p.play(2);
+    if (paused) p.togglePlayPause();
+    const PlayState state = p.state();
+    const uint32_t e = 6;
+    const uint32_t two[] = {0, 1};
+    const uint32_t far[] = {6, 7};
+    const int plays = a.playCount;
+    TEST_ASSERT_TRUE(p.playNext(&e, 1));
+    TEST_ASSERT_TRUE(p.undo());
+    TEST_ASSERT_TRUE(p.addToQueue(&e, 1));
+    TEST_ASSERT_TRUE(p.undo());
+    TEST_ASSERT_TRUE(p.moveNext(far, 2));
+    TEST_ASSERT_TRUE(p.undo());
+    TEST_ASSERT_TRUE(p.clearUpNext());
+    TEST_ASSERT_TRUE(p.undo());
+    TEST_ASSERT_EQUAL_UINT32(2, p.remove(two, 2).count);
+    TEST_ASSERT_TRUE(p.undo());
+    TEST_ASSERT_EQUAL_INT((int)state, (int)p.state());
+    TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+    TEST_ASSERT_EQUAL_INT(plays, a.playCount);
+    TEST_ASSERT_EQUAL(!paused, a.isPlaying());
+  }
+  // A Clear while paused, then a Clear of the empty queue (no snapshot: the
+  // first Clear's Undo stays): the Undo brings the queue back paused, as
+  // the first Clear found it, not stopped as the second did.
+  Rig r(8);
+  PlaybackController& p = r.player;
+  p.play(2);
+  p.togglePlayPause();
+  p.clearQueue();
+  TEST_ASSERT_TRUE(r.queue.undoable() == QueueModel::Edit::Clear);
+  p.clearQueue();  // (empty: nothing to snapshot)
+  TEST_ASSERT_TRUE(r.queue.undoable() == QueueModel::Edit::Clear);
+  TEST_ASSERT_TRUE(p.undo());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
+  TEST_ASSERT_EQUAL_INT(2, p.currentIndex());
+  TEST_ASSERT_FALSE(r.audio.isPlaying());
+}
+
 void test_builtin_tracks_play_by_their_tone_paths() {
   Rig r(0);
   const LibraryIndex::Span b = TrackCatalog::builtins();
@@ -3591,6 +3769,8 @@ int main(int, char**) {
   RUN_TEST(test_clear_queue_stops_and_undo_brings_it_back_stopped);
   RUN_TEST(test_clear_up_next_keeps_playing);
   RUN_TEST(test_undo_of_play_now_goes_back_to_the_old_track);
+  RUN_TEST(test_undo_never_starts_what_was_silent);
+  RUN_TEST(test_undo_of_an_edit_that_kept_the_entry_changes_nothing_that_plays);
   RUN_TEST(test_builtin_tracks_play_by_their_tone_paths);
   RUN_TEST(test_an_unknown_track_is_skipped);
   RUN_TEST(test_repeat_off_stops_at_the_end);

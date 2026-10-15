@@ -11,10 +11,12 @@
 // fragment), every text within the buffers it goes through on the device,
 // and every message in its room through TextFit. English and each
 // translation must pass (a room's "overflow" marks excepted); the
-// pseudo-locale en-XA (a third longer) is a report, never a failure. The
-// languages' names in themselves in their rows. With UI_STRINGS_REPORT set
-// to a path, the overflows of every language but English, the characters
-// missing and the texts cut go there as JSON.
+// pseudo-locale en-XA (a third longer) is a report, never a failure. Every
+// two-line toast's rows (TextInk, uitext::toastLines()) apart and inside
+// its card, the pseudo-locale's too. The languages' names in themselves in
+// their rows. With UI_STRINGS_REPORT set to a path, the overflows of every
+// language but English, the characters missing and the texts cut go there
+// as JSON.
 // Run: pio test -e native -f test_ui_strings
 #include <unity.h>
 
@@ -31,6 +33,7 @@
 #include "SheetLayout.h"
 #include "TextFit.h"
 #include "TextFold.h"
+#include "TextInk.h"
 #include "UiStrings.h"
 #include "UiText.h"
 #include "catalogue.h"
@@ -150,14 +153,18 @@ struct Pick {
 std::string fill(const catalogue::Placeholder& p, const Pick& pick, int depth = 0);
 
 // `e`'s text for the count `n` (its forms by the UI's language's rules),
-// filled at worst; the count placeholder with `n`.
-std::string render(const catalogue::Entry& e, uint32_t n, const Pick& pick, int depth = 0) {
+// filled at worst; the count placeholder with `n`. `name`: what fills its
+// text placeholders instead (a title, a pair of headphones' name).
+std::string render(const catalogue::Entry& e, uint32_t n, const Pick& pick, int depth = 0,
+                   const char* name = nullptr) {
   const char* pattern = e.plural ? uistr::trn(e.id, n) : uistr::tr(e.id);
   std::vector<std::string> fills(4);
   for (int k = 0; k < 4; ++k) {
     if (e.ph[k].type == catalogue::Fill::None) continue;
     if (k == e.count) {
       fills[k] = e.ph[k].type == catalogue::Fill::Grouped ? uistr::grouped(n).str() : Arg(n).str();
+    } else if (name && e.ph[k].type == catalogue::Fill::Text) {
+      fills[k] = name;
     } else {
       fills[k] = fill(e.ph[k], pick, depth);
     }
@@ -475,6 +482,100 @@ std::vector<std::string> formsOf(Lang l, S id) {
   const char* p = t.blob + off;
   for (int k = 0; k < n; ++k, p += std::strlen(p) + 1) out.push_back(p);
   return out;
+}
+
+// ---- a toast's two lines (uitext::toastLines(), Toast in ui/Overlays) ----
+
+// The VLW fonts' rows as M5GFX draws them (TextInk), the firmware's data.
+const textink::Vlw& inkFont(catalogue::Font f) {
+  struct Both {
+    textink::Vlw body, small;
+    Both() {
+      TEST_ASSERT_TRUE(body.open(kVlwSans16, kVlwSans16Size));
+      TEST_ASSERT_TRUE(small.open(kVlwSans13, kVlwSans13Size));
+    }
+  };
+  static const Both both;
+  return f == catalogue::Font::Small ? both.small : both.body;
+}
+
+// A line as Toast draws it: `text` fitted to `px` in `f` (TextFit, as
+// ui/Fonts::draw()), and the rows it inks (ui/Fonts::ink()).
+struct InkLine {
+  std::string drawn;
+  uitext::ToastLine rows;
+};
+InkLine inkLine(catalogue::Font f, const std::string& text, int px) {
+  char buf[200];
+  textfit::fit(viewOf(font(f)), text.c_str(), text.size(), buf, sizeof(buf), px);
+  const textink::Rows r = textink::inkOf(inkFont(f), cjk(), buf);
+  InkLine l;
+  l.drawn = buf;
+  l.rows.top = r.top;
+  l.rows.bottom = r.bottom;
+  l.rows.lineH = inkFont(f).lineHeight();
+  return l;
+}
+
+// Toast::placeLines(): "what" (before ": ", Small) over the rest (Body
+// when it fits `px`, and in Small), fitted to `px`.
+struct TwoLines {
+  InkLine what, rest;
+  uitext::ToastLines at;
+};
+TwoLines twoLines(const std::string& text, size_t colon, int px) {
+  TwoLines t;
+  const std::string rest = text.substr(colon + 2);
+  t.what = inkLine(catalogue::Font::Small, text.substr(0, colon), px);
+  const bool bodyFits = drawnWidth(font(catalogue::Font::Body), rest.c_str()) <= px;
+  const InkLine body = inkLine(catalogue::Font::Body, rest, px);
+  const InkLine small = inkLine(catalogue::Font::Small, rest, px);
+  t.at = uitext::toastLines(t.what.rows, body.rows, small.rows, bodyFits);
+  t.rest = t.at.restSmall ? small : body;
+  return t;
+}
+
+// What is wrong with two placed lines ("": nothing): each line's ink inside
+// the card (inside its border, when it has one), the card inside the
+// toast's 36 rows, an empty row at least between the lines; in the 32-row
+// card a clear row above and below the ink as well.
+std::string touches(const TwoLines& t) {
+  const uitext::ToastLines& at = t.at;
+  if (!at.fits) return "they don't fit";
+  if (at.boxTop < 0 || at.boxTop + at.boxH > uitext::kToastH) return "the card leaves the toast";
+  if (!at.border && at.boxH != uitext::kToastTallBoxH) return "only the 36-row card goes without its border";
+  const int pad = at.boxTop == uitext::kToastBoxTop && at.boxH == uitext::kToastBoxH ? 1 : 0;
+  const int edge = at.border ? 1 : 0;
+  const int in0 = at.boxTop + edge + pad, in1 = at.boxTop + at.boxH - 1 - edge - pad;
+  const int top1 = at.y1 - t.what.rows.lineH / 2, top2 = at.y2 - t.rest.rows.lineH / 2;
+  const int a0 = top1 + t.what.rows.top, a1 = top1 + t.what.rows.bottom;
+  const int b0 = top2 + t.rest.rows.top, b1 = top2 + t.rest.rows.bottom;
+  char why[160] = "";
+  const bool inkA = t.what.rows.bottom >= t.what.rows.top, inkB = t.rest.rows.bottom >= t.rest.rows.top;
+  if (inkA && (a0 < in0 || a1 > in1)) {
+    snprintf(why, sizeof(why), "the first line's rows %d-%d leave %d-%d", a0, a1, in0, in1);
+  } else if (inkB && (b0 < in0 || b1 > in1)) {
+    snprintf(why, sizeof(why), "the second line's rows %d-%d leave %d-%d", b0, b1, in0, in1);
+  } else if (inkA && inkB && b0 < a1 + 2) {
+    snprintf(why, sizeof(why), "the lines' rows %d-%d and %d-%d touch", a0, a1, b0, b1);
+  }
+  return why;
+}
+
+// `cp` as UTF-8 (the BMP).
+std::string utf8(uint32_t cp) {
+  std::string u;
+  if (cp < 0x80) {
+    u += static_cast<char>(cp);
+  } else if (cp < 0x800) {
+    u += static_cast<char>(0xC0 | (cp >> 6));
+    u += static_cast<char>(0x80 | (cp & 0x3F));
+  } else {
+    u += static_cast<char>(0xE0 | (cp >> 12));
+    u += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
+    u += static_cast<char>(0x80 | (cp & 0x3F));
+  }
+  return u;
 }
 
 }  // namespace
@@ -1061,6 +1162,164 @@ void test_autonyms_fit() {
   }
 }
 
+// TextInk's rows are M5GFX's: a VLW font's line (its maxAscent and
+// yAdvance, from its glyphs as VLWfont::loadFont() works them out: DejaVu
+// Sans 16 is 15 + 4 rows, 13 is 13 + 4), a glyph `dY` above the baseline
+// from maxAscent - dY, the store's 16 px glyphs on Store::baselineIn() (the
+// Small row's a pixel lower) by place(); a space inks nothing.
+void test_text_ink_rows_are_where_the_fonts_draw() {
+  const textink::Vlw& body = inkFont(catalogue::Font::Body);
+  const textink::Vlw& small = inkFont(catalogue::Font::Small);
+  TEST_ASSERT_EQUAL_INT(15, body.baseline());
+  TEST_ASSERT_EQUAL_INT(19, body.lineHeight());
+  TEST_ASSERT_EQUAL_INT(13, small.baseline());
+  TEST_ASSERT_EQUAL_INT(17, small.lineHeight());
+  textink::Rows r;
+  TEST_ASSERT_TRUE(body.rowsOf('A', &r));
+  TEST_ASSERT_EQUAL_INT(3, r.top);
+  TEST_ASSERT_EQUAL_INT(14, r.bottom);
+  TEST_ASSERT_TRUE(small.rowsOf('g', &r));
+  TEST_ASSERT_EQUAL_INT(6, r.top);
+  TEST_ASSERT_EQUAL_INT(15, r.bottom);
+  TEST_ASSERT_TRUE(body.rowsOf(0x439, &r));  // й: its breve
+  TEST_ASSERT_EQUAL_INT(2, r.top);
+  TEST_ASSERT_FALSE(body.rowsOf(0x66F2, &r));  // 曲: the store's
+  const std::string han = utf8(0x66F2);
+  r = textink::inkOf(small, cjk(), han.c_str());
+  TEST_ASSERT_EQUAL_INT(0, r.top);  // (16 rows on the Small row's baseline, 14)
+  TEST_ASSERT_EQUAL_INT(15, r.bottom);
+  r = textink::inkOf(body, cjk(), han.c_str());
+  TEST_ASSERT_EQUAL_INT(1, r.top);
+  TEST_ASSERT_EQUAL_INT(16, r.bottom);
+  r = textink::inkOf(body, cjk(), ("Ag " + han).c_str());
+  TEST_ASSERT_EQUAL_INT(1, r.top);
+  TEST_ASSERT_EQUAL_INT(17, r.bottom);
+  TEST_ASSERT_TRUE(textink::inkOf(body, cjk(), "  ").empty());
+  TEST_ASSERT_TRUE(textink::inkOf(body, cjk(), "").empty());
+}
+
+// uitext::toastPlace() for every pair of ink rows two lines can have: what
+// fits never touches (an empty row between, inside the border, a row clear
+// of it in the 32-row card), it takes the first card that holds them (the
+// 32-row one, the 36-row one, that one without its border), and it refuses
+// only what can't fit even all 36 rows.
+void test_toast_lines_place_every_pair_of_rows() {
+  for (const int lineH1 : {17, 19}) {
+    for (const int lineH2 : {17, 19}) {
+      for (int t1 = 0; t1 < lineH1; ++t1) {
+        for (int b1 = t1 - 1; b1 < lineH1; ++b1) {
+          for (int t2 = 0; t2 < lineH2; ++t2) {
+            for (int b2 = t2 - 1; b2 < lineH2; ++b2) {
+              TwoLines t;
+              t.what.rows = {t1, b1, lineH1};
+              t.rest.rows = {t2, b2, lineH2};
+              t.at = uitext::toastPlace(t.what.rows, t.rest.rows);
+              const int h = (b1 - t1 + 1) + (b2 - t2 + 1);
+              if (!t.at.fits) {
+                TEST_ASSERT_TRUE(h + 1 > uitext::kToastH);
+                continue;
+              }
+              const std::string why = touches(t);
+              TEST_ASSERT_TRUE_MESSAGE(why.empty(), why.c_str());
+              // The 32-row card whenever the ink leaves it a row all round;
+              // the border whenever the ink fits inside it.
+              TEST_ASSERT_EQUAL(h + 3 <= uitext::kToastBoxH - 2, t.at.boxTop == uitext::kToastBoxTop);
+              TEST_ASSERT_EQUAL(h + 1 <= uitext::kToastTallBoxH - 2, t.at.border);
+            }
+          }
+        }
+      }
+    }
+  }
+  // Without the VLW fonts (no PSRAM for their tables) Fonts::ink() gives
+  // the fallback font's whole line, 16 rows: still two lines, the rest in
+  // Body, in the card's 36 rows with its border.
+  const uitext::ToastLine whole{0, 15, 16};
+  const uitext::ToastLines at = uitext::toastLines(whole, whole, whole, true);
+  TEST_ASSERT_TRUE(at.fits);
+  TEST_ASSERT_FALSE(at.restSmall);
+  TEST_ASSERT_EQUAL(uitext::kToastTallBoxTop, at.boxTop);
+  TEST_ASSERT_TRUE(at.border);
+}
+
+// Every toast of every language with a catalogue (English and the nine)
+// that Toast puts on two lines (a ": " to split at, too wide for one Body
+// line in its room), placed as Toast does with the firmware's fonts and
+// CJK store (each line's ink rows, as drawn, fitted to its room): never
+// touching, never over the card's edge (the device check of 2026-10-14: ja
+// and zh's first line ran into the second and over the top edge; ru's "й"
+// breve touched the line above). Its placeholders at their widest, and its
+// names also in Japanese, Chinese, Korean and accented Latin and Cyrillic
+// with descenders, and as the store's tallest glyphs: every one fits two
+// lines (never Toast's one-line fallback). The pseudo-locale too.
+void test_two_line_toasts_never_touch() {
+  // The store's tallest: its glyphs reaching highest and lowest.
+  std::string tallest;
+  {
+    int up = 0, down = 0;
+    for (uint32_t cp = 0x80; cp < 0x10000; ++cp) {
+      const glyphstore::Glyph g = cjk().find(cp);
+      if (!g) continue;
+      const glyphstore::Metrics m = cjk().metrics(g);
+      if (!m.w || (m.y <= up && m.h - m.y <= down)) continue;
+      tallest += utf8(cp);
+      up = std::max(up, static_cast<int>(m.y));
+      down = std::max(down, m.h - m.y);
+    }
+  }
+  // (UTF-8 in the source: the host's gcc keeps it so.)
+  const std::string names[] = {
+      "",  // the catalogue's worst
+      "群青日和 (ライブ)",
+      "我的歌声里",
+      "밤편지 삵흙",  // (17-row Hangul)
+      "Édith Ångström Йожик (gjpqy)",
+      tallest,
+  };
+  int bad = 0;
+  for (unsigned i = 0; i < uistr::kLangs; ++i) {
+    const Lang l = static_cast<Lang>(i);
+    const char* tag = uistr::tag(l);
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    int two = 0, tall = 0, bare = 0, small = 0, one = 0;
+    for (const auto& e : catalogue::kEntries) {
+      if (e.layout != catalogue::Layout::Toast) continue;
+      const Pick widest{&font(catalogue::Font::Body)};
+      for (const std::string& name : names) {
+        for (uint32_t n : countsFor(e)) {
+          const std::string text = render(e, n, widest, 0, name.empty() ? nullptr : name.c_str());
+          const size_t colon = text.find(": ");
+          if (colon == std::string::npos || drawnWidth(font(catalogue::Font::Body), text.c_str()) <= e.px) continue;
+          const TwoLines t = twoLines(text, colon, e.twoLinePx);
+          ++two;
+          if (!t.at.fits) {
+            ++one;
+            printf("%s: %s: \"%s\" / \"%s\": two lines don't fit (rows %d-%d of %d and %d-%d of %d)\n", tag, e.name,
+                   t.what.drawn.c_str(), t.rest.drawn.c_str(), t.what.rows.top, t.what.rows.bottom,
+                   t.what.rows.lineH, t.rest.rows.top, t.rest.rows.bottom, t.rest.rows.lineH);
+            ++bad;
+            continue;
+          }
+          tall += t.at.boxTop == uitext::kToastTallBoxTop;
+          bare += !t.at.border;
+          small += t.at.restSmall;
+          const std::string why = touches(t);
+          if (why.empty()) continue;
+          printf("%s: %s: \"%s\" / \"%s\": %s\n", tag, e.name, t.what.drawn.c_str(), t.rest.drawn.c_str(),
+                 why.c_str());
+          ++bad;
+        }
+      }
+    }
+    printf("%s: %d two-line toasts placed (the names too): %d in the 36-row card (%d of them without its border), %d "
+           "with the rest in Small, %d on one line\n",
+           tag, two, tall, bare, small, one);
+  }
+  uistr::setLang(Lang::En);
+  TEST_ASSERT_EQUAL_INT_MESSAGE(0, bad, "two-line toasts that touch or don't fit: above");
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_english_is_the_catalogue);
@@ -1079,5 +1338,8 @@ int main(int, char**) {
   RUN_TEST(test_every_text_fits_its_buffers);
   RUN_TEST(test_every_language_fits_its_rooms);  // (last: it writes UI_STRINGS_REPORT with the two above's)
   RUN_TEST(test_autonyms_fit);
+  RUN_TEST(test_text_ink_rows_are_where_the_fonts_draw);
+  RUN_TEST(test_toast_lines_place_every_pair_of_rows);
+  RUN_TEST(test_two_line_toasts_never_touch);
   return UNITY_END();
 }

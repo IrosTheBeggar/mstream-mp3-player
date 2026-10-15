@@ -27,9 +27,18 @@
 // The steps, in the format's order (8.6), each record read by its prefix
 // and passed by its section's stride (a later minor's longer records still
 // read, 9.2):
+//   Folders   each library folder's path hashed once (FNV-1a 64 is
+//             sequential: a track's hash goes on from its folder's with "/"
+//             and its name), with its length, 10 bytes a folder (25 KB at
+//             the 19k card's 2,484 folders), foldersPerSlice a slice. With
+//             the default hash only, and up to kMaxFolders folders (else
+//             each track's whole path, as the hook does). The 2026-10-14
+//             device check's join was CPU-bound: on the host the folders'
+//             states make the hashing 3.3 times faster, and the join
+//             (Hash and Paths' confirms, two thirds of it) about half.
 //   Hash      every library track's path hash (2.3: FNV-1a 64 of
-//             "/music/...", LibraryIndex::trackPath()), kept as its top 32
-//             bits and its id in parallel u32 and u16 arrays (6 bytes a
+//             "/music/...", as trackPathHash() takes it), kept as its top
+//             32 bits and its id in parallel u32 and u16 arrays (6 bytes a
 //             track, no padding), in runs of 4,096 (24 KB a block, so no
 //             block grows with the library): hashPerSlice tracks a slice.
 //   Sort      each run by (prefix, id), one run a slice: sortPairs(), the
@@ -62,23 +71,36 @@
 //
 // Memory, at 20,000 tracks and rows (the design's 3.4; test_autodj_join
 // measures it): the maps 40 + 40 KB and the filters 80 KB, kept; the runs
-// 120 KB and the 4 KB buffer while the join runs. The largest block is the
-// filters' (rows x 4: 108 KB at 27k, under 256 KB up to 65,535 rows); a
-// run's is 24 KB whatever the library, where one sorted array of (hash,
-// track) would pass the 256 KB block limit above about 21,000 tracks.
+// 120 KB, the 4 KB buffer and the folders' states (10 B a folder) while the
+// join runs. The largest block is the filters' (rows x 4: 108 KB at 27k,
+// under 256 KB up to 65,535 rows); a run's is 24 KB whatever the library,
+// where one sorted array of (hash, track) would pass the 256 KB block limit
+// above about 21,000 tracks.
 //
 // Where the blocks go (setPlacement(): the firmware's, for PSRAM's TLSF,
-// which serves a block from the low end of the free block it takes): a
-// hook told the bytes begin() is about to take holds the bottom of the
-// largest free block (a spacer: spacerFor()) while they are taken, so they
-// come from its top; the transient ones first, then the kept ones above
-// them. The runs' hole at the end then joins the free part below the maps,
-// and what is carved later comes from that part's low end: the maps stay
-// next to the rest of the block, and giving them back (release(): a
-// library update's memory check, LibraryUpdate::setGiveBack()) makes one
-// block of it again, as if Auto DJ had never joined. Without the hook (the
-// host, a heap too full for a spacer): the kept ones first, the transient
-// ones above them, whose hole joins the free tail when they go.
+// which serves a block from the low end of the closest-fitting free block,
+// the request rounded up a thirty-second first): PSRAM's largest free
+// block is what a library update's new track table needs, so the join
+// takes as little of it as it can. Each block, the kept ones first, goes
+// where the heap puts it when that isn't the largest free block (a smaller
+// one fits it: after a library update, the maps and the runs fit the holes
+// the rebuild left, 2026-10-14). The rest go to that block's top, out of
+// the way: spacers (spacerFor()) hold its bottom while the transient ones
+// are taken, and once they are given back the kept ones go to the room
+// left for them above, the closest fit they have. The runs' hole at the
+// end then joins the free part below the maps, and what is carved later
+// comes from that part's low end: the maps stay next to the rest of the
+// block, and giving them back (release(): a library update's memory check,
+// LibraryUpdate::setGiveBack()) makes one block of it again, as if Auto DJ
+// had never joined. The spacers never leave less than the placement's
+// margin free (the device's 2026-10-14 check: spacers over the whole block
+// took PSRAM's free to 10 KB for a moment at every join, and another task
+// allocating then would have failed): the kept ones taken after the
+// spacers are part of it (155 KB at 19,410 tracks, over the margin), and
+// when they aren't enough the spacers leave the rest of the margin above
+// the blocks. Without the hooks (the host, a heap too full for a spacer):
+// the kept ones first, the transient ones above them, whose hole joins the
+// free tail when they go.
 //
 // Aborts: every step() is given the library's index as the loop sees it
 // now (Library::index(): nullptr behind the update step's fence). One that
@@ -149,19 +171,23 @@ bool trackPathHash(const LibraryIndex& index, uint32_t track, char* path, size_t
 // bytes under a TLSF heap (ESP-IDF's: a request is served from the low end
 // of a free block whose size class, rounded up a thirty-second, holds it):
 // what is left above the spacer is `bytes`, a thirty-second more and 1 KB
-// (a block's rounding as it is searched for, the headers), and a
-// thirty-second of `largest` (the spacer's own rounding). 0: no room for
+// (a block's rounding as it is searched for, the headers), or a
+// thirty-second of `largest` when that is more (the spacer's own rounding:
+// its request rounded up must still be within the block). 0: no room for
 // one (the blocks go where the heap puts them).
 size_t spacerFor(size_t largest, size_t bytes);
 
-// The placement hook's work (Join::Placement), over a heap's hooks:
-// spacers of spacerFor() from the largest free block, added to those `out`
-// holds (kMax in all): asked again while one comes from another block
-// (TLSF serves a request from the closest size class that holds it), and
-// once more on what is left of the largest while it is still the largest
-// (its own thirty-second less above the blocks: about 20 KB at 20,000
-// tracks); such a closer fit that lands in another block (a hole the
-// blocks themselves may want) is given back at once, and that's it. True:
+// The placement's spacers (Join::Placement), over a heap's hooks: spacers
+// of spacerFor() from the largest free block, added to those `out` holds
+// (kMax in all): asked again while one comes from another block (TLSF
+// serves a request from the closest size class that holds it), and once
+// more on what is left of the largest while it is still the largest and
+// leaves room for one (a small library's block: its own thirty-second);
+// such a closer fit that lands in another block (a hole the blocks
+// themselves may want) is given back at once, and that's it. None is ever
+// so big that less than `keepFree` bytes stay free (`freeBytes`; nullptr:
+// not asked; a KB more for the headers): a smaller one leaves the
+// difference above the blocks. True:
 // the largest block's top is what is left; false: none could be placed
 // there. Those taken are held until giveSpacers() frees them.
 struct Spacers {
@@ -169,7 +195,8 @@ struct Spacers {
   void* p[kMax] = {};
   int n = 0;
 };
-bool takeSpacers(size_t bytes, size_t (*largest)(), void* (*alloc)(size_t), void (*release)(void*), Spacers* out);
+bool takeSpacers(size_t bytes, size_t keepFree, size_t (*largest)(), size_t (*freeBytes)(), void* (*alloc)(size_t),
+                 void (*release)(void*), Spacers* out);
 void giveSpacers(Spacers* s, void (*release)(void*));
 
 class Join {
@@ -195,7 +222,7 @@ public:
     NoMemory,   // an allocation failed: everything freed (random picks; retried after the next build)
     TooBig,     // a library of more than kMaxTracks tracks: the index isn't used
   };
-  enum class Phase : uint8_t { None, Hash, Sort, Strings, Filters, Paths, Done };
+  enum class Phase : uint8_t { None, Hash, Sort, Strings, Filters, Paths, Done, Folders };
 
   // The slices' sizes (the design's 3.3; 2026-10-13: 112 slices of 1,000
   // hashes or a piece's ~400 confirms took 2.1 s idle on the device, about
@@ -206,7 +233,10 @@ public:
     uint32_t hashPerSlice = 250;   // tracks hashed a slice
     uint32_t sliceBytes = 4096;    // the stream's buffer (a multiple of 512, at least 1,024): a slice's read
     uint32_t confirmsPerSlice = 100;  // Paths: full hashes recomputed a slice (0: no limit)
+    uint32_t foldersPerSlice = 250;   // Folders: folders hashed a slice
   };
+  // The folders' states up to this many folders (an 80 KB block).
+  static constexpr uint32_t kMaxFolders = 8192;
 
   // For the console's D, the tests and the one-off measurements.
   struct Stats {
@@ -215,26 +245,31 @@ public:
     uint32_t hashed = 0;      // tracks in the runs
     uint32_t unhashed = 0;    // tracks without a path hash
     uint32_t paths = 0;       // DJPH entries read
+    uint32_t folders = 0;     // folders whose path was hashed (0: each track's whole path)
     uint32_t confirms = 0;    // full hashes recomputed for an equal prefix
     uint32_t prefixOnly = 0;  // ... that weren't the entry's: 32-bit prefix collisions
     uint32_t ambiguous = 0;   // entries two or more tracks hash to (none of them mapped)
     uint32_t rowsMapped = 0;  // rows with a track (the present bit)
     size_t peakBytes = 0;     // the most held at once
     size_t largestBlock = 0;  // the largest single allocation
-    bool placed = false;      // begin()'s blocks taken under the placement hook's spacer
+    // The placement (setPlacement()), at begin():
+    bool placed = false;          // blocks taken at the largest free block's top, under spacers
+    uint8_t keptElsewhere = 0;    // the kept blocks (of 3) in a smaller free block
+    uint32_t runsElsewhere = 0;   // the transient blocks (runs, folders' states, buffer) in a smaller free block
+    size_t topBytes = 0;          // the bytes taken at the largest free block's top
+    size_t topKept = 0;           // ... of the kept blocks (what giving them back gives that block)
+    size_t lowestFree = 0;        // the heap's lowest free bytes while begin() took its blocks
   };
 
-  // Where begin()'s blocks go (above): `before(bytes, ctx)` is told the
-  // bytes about to be taken (every block, as asked) and returns a token
-  // (nullptr: none: the blocks go where the heap puts them). With a token
-  // it is told again, once the transient blocks are taken, the kept ones'
-  // bytes (they may have gone to holes elsewhere: the room made for them
-  // would be left above the maps), its spacers added to the first's;
-  // `after(token, ctx)` is called once they are all taken (or one failed).
+  // Where begin()'s blocks go (above): the heap's largest free block and
+  // its free bytes (the firmware's heap_caps_get_largest_free_block() and
+  // heap_caps_get_free_size() for PSRAM; the blocks come from the join's
+  // own alloc), and the bytes the spacers leave free at least. nullptr
+  // hooks: none (the blocks go where the heap puts them).
   struct Placement {
-    void* (*before)(size_t bytes, void* ctx) = nullptr;
-    void (*after)(void* token, void* ctx) = nullptr;
-    void* ctx = nullptr;
+    size_t (*largest)() = nullptr;
+    size_t (*freeBytes)() = nullptr;
+    size_t margin = 0;
   };
 
   // nullptr hooks: malloc and free.
@@ -298,6 +333,7 @@ private:
   bool working() const { return status_ == Status::Working; }
   // The phases: false when there was nothing to do (the next phase goes on
   // in the same slice).
+  bool foldersSlice();
   bool hashSlice();
   bool sortSlice();
   bool stringsSlice();
@@ -308,11 +344,27 @@ private:
   // `bufEnd`): a slice takes records while it needs at most one.
   uint32_t refillsTo(uint32_t recEnd, uint32_t* bufEnd) const;
   void merge(uint64_t hash, uint16_t row);
+  // A track's path hash: from its folder's state (Folders), else the hook.
+  bool trackHash(uint32_t track, uint64_t* hash);
 
   // begin()'s blocks: the kept ones (the maps), the transient ones (the
-  // runs' table, the runs, the buffer). False: one failed (fail() frees).
+  // runs' table, the runs, the buffer, the folders' states). False: one
+  // failed (fail() frees).
   bool takeKept(uint32_t n, uint32_t rows);
   bool takeTransient(uint32_t n);
+  // The folders' states in `block` (folderBytes() of it); none wanted: true.
+  bool takeFolders(void* block);
+  size_t folderBytes() const { return static_cast<size_t>(folderCount_) * (sizeof(uint64_t) + sizeof(uint16_t)); }
+  // Under the placement (setPlacement()): every block where the heap puts
+  // it unless that is the largest free block, the rest at its top.
+  bool takePlaced(uint32_t n, uint32_t rows);
+  // A block where the heap puts it, unless it came from the largest free
+  // block (`largest` before it): given back then, and nullptr (also when
+  // the allocation failed: *failed). A block at least `*minTop` bytes isn't
+  // tried (a smaller one needed the largest, so it would); one that needs
+  // it lowers *minTop.
+  void* probe(size_t bytes, size_t largest, size_t* minTop, bool* failed);
+  void noteFree();  // Stats::lowestFree
 
   AllocFn alloc_;
   FreeFn free_;
@@ -338,6 +390,14 @@ private:
   uint32_t sortRun_ = 0;    // Sort: the next run
   uint8_t* buf_ = nullptr;  // the stream's buffer
   uint32_t bufBytes_ = 0;
+  // Folders: each folder's path hash so far and its path's length
+  // (kNoPath: it has none: deeper than LibraryIndex::folderPath() goes, or
+  // longer than kPathBytes), in one block; nullptr: the hook's hash.
+  static constexpr uint16_t kNoPath = 0xFFFF;
+  uint64_t* folderHash_ = nullptr;
+  uint16_t* folderLen_ = nullptr;
+  uint32_t folderCount_ = 0;
+  uint32_t nextFolder_ = 0;
   cardcontract::Stream stream_;
   uint32_t streamEnd_ = 0;  // the section's end
   uint32_t bufEnd_ = 0;     // the end of the stream's buffered bytes (refillsTo())

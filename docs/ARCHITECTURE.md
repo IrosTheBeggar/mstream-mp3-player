@@ -2824,6 +2824,9 @@ Queue, Dance and Output (with its Pair and About pages).
   icons (Undo's arrow, View as the Queue tab's icon; hit areas 228-263 and
   264 to the edge), so the name has 216 px (Body, else Small): "Can'T
   Tell Me Nothing" and "Harder, Better, Faster, Stronger" both fit. The
+  two lines go by the rows they ink (`uitext::toastLines()`, `TextInk`),
+  a clear row between them inside the card, which takes all 36 rows when
+  they need them (CJK's 16-17 px glyphs: AUTODJ.md 9.6). The
   buttons are the icons too, the text on one line beside them when it
   fits, whenever a label doesn't fit its pill (German's "Rückgängig":
   `uitext::toastIcons()`). It

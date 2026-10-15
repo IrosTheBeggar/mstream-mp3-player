@@ -93,6 +93,83 @@ inline constexpr int kToastTextRight = 306;  // a note (Ui::warn) on one line, n
 // toast.why_opus_*: oggopus::Reader::refusalNote()); else
 // toast.why_cant_play.
 inline constexpr int kToastTwoLineW = 306 - kToastTextX;
+// The two lines' rows (Toast::show()): the toast is 36 px (y 36-71, never
+// in the list's scrolled band), its card rows 2-33 with a 1 px border. The
+// glyph store's Chinese and Japanese are 16 px in every role, 17 rows for
+// some (机, 青: docs/I18N.md), taller than the Small font's Latin, so fixed
+// rows put a CJK first line into the second and over the card's top edge
+// (the device check of 2026-10-14: H-fromhere, H-onempty, H-noneigh in ja
+// and zh; and ru's "й" breve touched the line above). So each line goes by
+// the rows it inks (textink::inkOf(), as ui/Fonts draws: the fitted text,
+// the font's glyphs and the store's): at least one empty row between the
+// two lines, both inside the card, in the first of these that holds them:
+//   1. the card at rows 2-33, a row clear above and below the ink too;
+//   2. the card at all 36 rows (kToastTallBoxTop, kToastTallBoxH), the ink
+//      inside its border;
+//   3. the same without its top and bottom border lines (`border` false):
+//      two lines of 17-row CJK need 35.
+// What's free is shared: the gap between the lines a third of it (a row at
+// least), the rest above and below (the odd row below).
+inline constexpr int kToastH = 36;
+inline constexpr int kToastBoxTop = 2, kToastBoxH = 32;
+inline constexpr int kToastTallBoxTop = 0, kToastTallBoxH = 36;
+// A line: the rows it inks from its own top (bottom < top: none), and its
+// height (its font's: Fonts::draw() centres it on y, its top y - lineH / 2).
+struct ToastLine {
+  int top = 0, bottom = -1;
+  int lineH = 0;
+};
+struct ToastLines {
+  bool fits = false;
+  bool restSmall = false;                        // the second line in Small (toastLines())
+  int boxTop = kToastBoxTop, boxH = kToastBoxH;  // the card
+  bool border = true;                            // ... with its top and bottom border lines
+  int y1 = 0, y2 = 0;                            // the lines' centres (Fonts::draw()'s y)
+};
+// `first` over `second`; fits false: they can't share the toast so.
+constexpr ToastLines toastPlace(const ToastLine& first, const ToastLine& second) {
+  const int h1 = first.bottom >= first.top ? first.bottom - first.top + 1 : 0;
+  const int h2 = second.bottom >= second.top ? second.bottom - second.top + 1 : 0;
+  // (A line with no ink takes no rows: its top as if its ink began there.)
+  const int t1 = h1 ? first.top : 0, t2 = h2 ? second.top : 0;
+  ToastLines out;
+  for (int card = 0; card < 3; ++card) {
+    const int boxTop = card ? kToastTallBoxTop : kToastBoxTop;
+    const int boxH = card ? kToastTallBoxH : kToastBoxH;
+    const int edge = card < 2 ? 1 : 0;   // a border line's row, above and below
+    const int inner = boxH - 2 * edge;
+    const int free = inner - h1 - h2;
+    if (free < (card ? 1 : 3)) continue;
+    const int gap = 1 + (free - 1) / 3;
+    const int above = (free - gap) / 2;
+    const int ink1 = boxTop + edge + above;  // the first line's top ink row
+    const int ink2 = ink1 + h1 + gap;
+    out.fits = true;
+    out.boxTop = boxTop;
+    out.boxH = boxH;
+    out.border = edge != 0;
+    out.y1 = ink1 - t1 + first.lineH / 2;
+    out.y2 = ink2 - t2 + second.lineH / 2;
+    return out;
+  }
+  return out;
+}
+// "What: the rest": the what (Small) over the rest, in Body when it fits
+// the width (`bodyFits`) and the two lines fit so, else in Small (a Latin
+// name's accented capitals and descenders under a CJK what: 17 + 18 rows
+// don't fit with a gap, 17 + 15 do). Neither: fits false, one line
+// instead, cut (no line of the fonts or the store inks more than 17 rows
+// in Small: never, test_ui_strings).
+constexpr ToastLines toastLines(const ToastLine& what, const ToastLine& restBody, const ToastLine& restSmall,
+                                bool bodyFits) {
+  if (bodyFits) {
+    const ToastLines body = toastPlace(what, restBody);
+    if (body.fits) return body;
+  }
+  ToastLines small = toastPlace(what, restSmall);
+  small.restSmall = true;
+  return small;
+}
 
 // ---- the empty states (ui/EmptyState): two buttons ----
 // The primary (Bold, its icon 26 px + 8 before the text) and the second
