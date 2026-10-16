@@ -4367,7 +4367,14 @@ src/. What the code decided where 3.2-3.4 left room:
   read and under T's (each read again, whole), a compaction that never
   ends (D not read, T read), and every phase's calls in order. `gt`,
   which reads in one go after the same 10 s wait, says a compaction is
-  under way and reads nothing.
+  under way and reads nothing. Checked on the device (2026-10-16, the
+  same card, 19adf37): seven `gs` met a compaction (Rescans of 16-64 s
+  and the scan's own), each said `waiting for the compaction under way`
+  once and then read the new D whole (its epoch 10 to 15 over five
+  Rescans), including compactions that ended 1.6-5.5 s after `gs`'s
+  first lines; no ABSENT or NOT READ anywhere, and the 5 s `[stats]` line
+  kept its spacing (4.96-5.11 s) inside every `gs`. `gt` during a
+  compaction said so 10.1 s later and read nothing.
 - **A list that can't be seen holds nothing (2026-10-14).** The same
   run: the library update went live with the screen off on Library >
   Albums (off since 1640.4 s), and its save of `library.idx` waited for
@@ -4391,6 +4398,12 @@ src/. What the code decided where 3.2-3.4 left room:
   runs the device's save (handed at once in the dark, held lit), and
   `test_tag_check` a `gs` in the dark with its list stuck "moving"
   (`Ui`'s own rule, the modal's included, is the device's to check).
+  Checked on the device (2026-10-16, 19adf37): on Library > Albums, the
+  screen off by its timeout, a `gb` built in 11.6 s and saved
+  `library.idx` 1.8 s later, the screen still dark; a `gs` in the dark
+  then counted no list wait and ended in 59 s; a lit `gs` with 16.3 s of
+  flings took 16.4 s longer, counted as `a list moving 15.4`. The modal
+  case wasn't run (it needs the headphones lost mid-fling).
 - **Sizes (MEASURED, the build).** IRAM unchanged in both builds
   (`.iram0.vectors` 1,028 + `.iram0.text` 124,867 = 125,895 B); internal
   DRAM +472 B (`.dram0.data` 24,328 to 24,440, `.dram0.bss` 32,168 to
