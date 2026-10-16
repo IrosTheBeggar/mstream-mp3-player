@@ -45,6 +45,7 @@
 #include "TrackCatalog.h"
 #include "UiStrings.h"
 #include "UiText.h"
+#include "app/AutoDj.h"
 #include "app/CardTasks.h"
 #include "app/CardWorker.h"
 #include "app/DanceMode.h"
@@ -96,6 +97,16 @@ static Library library(storage);
 // 3.3.4) and its loop side (app/CardTasks, in PSRAM, made at boot).
 static CardWorker cardWorker;
 static CardTasks* cardTasks = nullptr;
+// Auto DJ (app/AutoDj: the card's AutoDJ index, its join, the picks, the
+// console's D; in PSRAM, made at boot after the library and the queue). It
+// only ever appends to the queue (at a finished queue its pick is cued,
+// paused): it never starts playback, nor touches the output or the volume.
+static AutoDj* autoDj = nullptr;
+// What Auto DJ's step and its console commands are told of the rest of the
+// firmware this pass (below, with the card's guard and the restarts).
+static AutoDj::Env autoDjEnv(uint32_t now);
+// The loop's idle wait while Auto DJ's join works (loop()'s end).
+static constexpr uint32_t kJoinLoopDelayMs = 2;
 // The library update's fence (docs/METADATA.md 3.4.2; N12): while the
 // update step's build runs on the card worker, the queue's memory is the
 // build's and the index is hidden from the loop. What the loop shows and
@@ -730,6 +741,11 @@ struct MainUiHost : ui::UiHost {
     s.cpuRunMhz = PowerSettings::cpuBootMhz();
     s.btPower = static_cast<uint8_t>(powerSettings.btChoice());
     s.btPowerPending = powerSettings.btPending();
+    if (autoDj) {
+      autoDj->view(&s.autoDj);
+    } else {
+      s.autoDj = autodjview::State{};  // (no PSRAM for it: off, no index)
+    }
     fake(s);
   }
   static void fake(ui::AppState& s) {
@@ -950,6 +966,21 @@ struct MainUiHost : ui::UiHost {
   }
   void setBrightness(int choice) override { screen.setBrightness(choice); }
   void wakeScreen(const char* why) override { screen.wake(why); }
+  // Auto DJ (app/AutoDj). Its own [dj] lines say what each did. The Plays
+  // (the button, "Auto DJ from here") are the listener's taps; behind the
+  // library update's fence they wait (the queue is the build's).
+  bool autoDjSetOn(bool on) override { return autoDj && autoDj->setOn(on); }
+  bool autoDjSetMode(autodj::Mode m) override { return autoDj && autoDj->setMode(m); }
+  bool autoDjSetFloor(uint8_t pct) override { return autoDj && autoDj->setFloor(pct); }
+  bool autoDjSetMatch(bool tempo, bool key) override { return autoDj && autoDj->setMatch(tempo, key); }
+  autodjview::Started autoDjStart() override {
+    if (!autoDj) return autodjview::Started::NoIndex;  // (no PSRAM for it at boot)
+    if (frozen.on) return autodjview::Started::Refused;
+    return autoDj->start();
+  }
+  bool autoDjFromHere(uint32_t track) override { return autoDj && !frozen.on && autoDj->fromHere(track); }
+  bool autoDjHasNeighbours(uint32_t track) override { return autoDj && !frozen.on && autoDj->hasNeighbours(track); }
+  bool autoDjMarked(uint32_t key) const override { return autoDj && autoDj->marked(key); }
 };
 static MainUiHost uiHost;
 
@@ -2022,6 +2053,15 @@ static SerialConsole console({
       if (!waitsForLibrary("G")) gaplessCommand(a);
     },
     opusCommand,
+    [](const char* a) {
+      if (!autoDj) {
+        Serial.println("[dj] Auto DJ isn't running (no PSRAM at boot)");
+        return;
+      }
+      autoDj->command(a, autoDjEnv(millis()));
+      // (Dp's pick can take the listener's undo: the toast's Undo goes.)
+      if (autoDj->takeUndoDropped() && userInterface) userInterface->queueUndoDropped();
+    },
     [](char* line, HostLine::Byte kind) { usbViz.onLine(line, kind); },
 });
 
@@ -2862,6 +2902,79 @@ static void stepCardGuard() {
                 library.store()->tmpKept() ? "; tags.tmp KEPT: alone and unchecked (no PSRAM for its check)" : "");
 }
 
+// ---- Auto DJ (app/AutoDj; the engine design's 2.3, 3.2) ----
+
+// The decoder fills the ring from empty after a start or a skip: flat out
+// until it holds 500 ms (Core2AudioBackend's pacer), above the loop on its
+// core. Auto DJ's due pick waits for that (autodj::Env::refilling: a pick
+// timed across it measured the decoder, 108 ms on 2026-10-13), until the
+// track's source has ended (one shorter than 500 ms: a jingle as the
+// queue's last entry would end before the pick), and at most
+// kRefillWaitMs after the start was seen (one that never fills: a file
+// that didn't open). A gapless join is no start: nothing waits then.
+static constexpr uint32_t kRefillWaitMs = 1500;
+static bool decoderRefilling(uint32_t now) {
+  static uint32_t seq = 0, seenMs = 0;
+  const Core2AudioBackend::StartTiming t = audio.startTiming();
+  if (t.seq != seq) {
+    seq = t.seq;
+    seenMs = now;
+  }
+  return t.ring500Ms < 0 && now - seenMs < kRefillWaitMs && !audio.heardSourceEnded();
+}
+
+// The library update's memory check (LibraryUpdate::setGiveBack()): a new
+// track table that doesn't fit the largest free block while Auto DJ's join
+// holds blocks at its top (AutoDjJoin's placement: those that fit no
+// smaller free block): the join given back, PSRAM measured again. It joins
+// again after the update's Live, or at once when the update waits for the
+// next boot after all.
+static size_t autoDjGiveBack(void*, size_t* psramFree, size_t* psramLargest) {
+  if (!autoDj) return 0;
+  const size_t before = *psramLargest;
+  const size_t given = autoDj->giveBack();
+  if (!given) return 0;
+  *psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  *psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
+  Serial.printf("[dj] the library update's memory check: the join given back (%u B): PSRAM's largest free block %u B "
+                "-> %u B (up to %u B: the join's blocks at its top); it joins again after the update\n",
+                (unsigned)given, (unsigned)before, (unsigned)*psramLargest,
+                (unsigned)(before + autoDj->joinTopBytes()));
+  return given;
+}
+
+static AutoDj::Env autoDjEnv(uint32_t now) {
+  AutoDj::Env e;
+  e.nowMs = now;
+  e.audioPlaying = audio.isPlaying();
+  e.positionKnown = audio.positionKnown();
+  e.trackSeq = audio.trackSeq();
+  e.positionMs = audio.positionMs();
+  e.cardHeld = cardHeld;
+  e.restartSet = restartAtMs != 0 || cpuRestartMhz != 0;
+  e.sleepEndOfQueue = sleepTimer.running() && sleepTimer.choice() == SleepTimer::Choice::EndOfQueue;
+  e.listMoving = userInterface && userInterface->listMoving();
+  e.uiStarted = !userInterface || userInterface->started();
+  e.refilling = decoderRefilling(now);
+  return e;
+}
+
+// Every loop pass, right after the card's guard (a remount is seen before
+// any read of the index) and before the card's step (a pick lands before
+// the update step can raise its fence in the same pass; its owed() holds
+// that fence while the index joins): a remount, a slice of the join, the
+// trigger and a pick (or a slot read ahead), a long D command's step.
+static void stepAutoDj(uint32_t now) {
+  if (!autoDj) return;
+  autoDj->step(autoDjEnv(now));
+  // Its pick took the listener's undo: an Undo toast still up goes.
+  if (autoDj->takeUndoDropped() && userInterface) userInterface->queueUndoDropped();
+  // What it has to say on the screen (a cued pick, the failure pause, a
+  // seed with no neighbours, picks at random): a toast.
+  const uint8_t news = autoDj->takeNews();
+  if (news && userInterface) userInterface->autoDjNews(news);
+}
+
 // ---- the card worker (docs/METADATA.md 3.3.4, 3.4.2) ----
 
 // The library update's fence goes up (3.4.2, steps 1-3; Do::Fence): the
@@ -2899,12 +3012,18 @@ static bool enterFence() {
   const LibraryIndex* index = library.index();
   f.libraryTracks = index && index->ready() ? index->trackCount() : 0;
   fencePsramBefore = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+  // Auto DJ's DJ marks: their positions while the queue is here.
+  if (autoDj) autoDj->beforeFence();
   // 1. queue.txt is the queue; its memory the build's.
   if (!queueStore.remapBegin(library.update()->spare())) return false;
   frozen = f;
   // 2. The readers: the names kept, the index hidden.
   library.fence(f.trackId);
   if (userInterface) userInterface->thumbs().lend();  // 3. Thumbs' pools (about 315 KB)
+  // Auto DJ's join (its maps hold the old index's ids; a join under way
+  // reads it): given back before the index goes (counted in the memory
+  // check's alsoFreed); it joins again after the fence.
+  const size_t djFreed = autoDj ? autoDj->fence() : 0;
   // 3. The old index (and the scan's memory); then the UI, which sees none.
   cardTasks->fenceUp();
   // The fence's own lowest PSRAM free (leaveFence()'s "lowest", the
@@ -2916,9 +3035,9 @@ static bool enterFence() {
   fenceLowWindow = diag::beginLowWindow();
   if (userInterface) userInterface->libraryUpdating();
   Serial.printf("[lib] the update step (%s): the fence is up; the build on the card worker (the loop goes on); PSRAM "
-                "free %u B before, %u B now\n",
+                "free %u B before, %u B now (Auto DJ's join gave back %u B)\n",
                 library.update()->why(), (unsigned)fencePsramBefore,
-                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+                (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM), (unsigned)djFreed);
   return true;
 }
 
@@ -2949,6 +3068,9 @@ static void leaveFence() {
   // The same entry under a new key (the read back's): its time stays known
   // (the sleep timer's, the next update step's safe point).
   if (queueStore.remapFinish(s.built)) sleepEntry.rekey(queue.currentKey());
+  // Auto DJ: its DJ marks and its place in the queue under the new keys;
+  // the join again on the new index (its next steps).
+  if (autoDj) autoDj->live();
   const LibraryIndex* index = library.index();
   durations.reset(index && index->ready() ? index->trackCount() : 0);
   if (userInterface) {
@@ -3020,7 +3142,11 @@ static void stepCard(uint32_t now, bool input) {
   env.waiting = player.state() == PlayState::Waiting || cpuRestartMhz != 0;
   env.trackLeftMs = trackLeftMs();
   env.seekSeq = player.seeks();
-  env.alsoFreed = queue.memoryBytes() + (userInterface ? userInterface->thumbs().poolBytes() : 0);
+  env.alsoFreed = queue.memoryBytes() + queueStore.savingBytes() +
+                  (userInterface ? userInterface->thumbs().poolBytes() : 0) + (autoDj ? autoDj->fenceBytes() : 0);
+  // A pick owed while Auto DJ's index joins: no fence until it lands
+  // (autodj::decide(), this pass's: stepAutoDj() ran before).
+  env.autoDjOwed = autoDj && autoDj->owed();
   cardTasks->loop(in, src, userInterface ? &userInterface->thumbs() : nullptr,
                   userInterface && userInterface->coversAllowed(), env);
   switch (cardTasks->takeAct()) {
@@ -3278,6 +3404,15 @@ void setup() {
     j.idle = [] { return !cardTasks || cardTasks->waitIdle(10000); };
     tc->setJobs(j);
   }
+  // Auto DJ: its settings, and the index the card's root names, opened and
+  // checked (the join after the UI's first frame, in loop()).
+  autoDj = psramNew<AutoDj>(library, player);
+  if (autoDj) {
+    autoDj->begin();
+    if (library.update()) library.update()->setGiveBack(autoDjGiveBack, nullptr);
+  } else {
+    Serial.println("[dj] no PSRAM for Auto DJ: off for this boot");
+  }
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);
   diag::logHeap("library");
@@ -3357,6 +3492,7 @@ void setup() {
                  "the cut's stress test); O Opus (O status, Ol/Oi/Oh the decoder's state in the pinned block / internal "
                  "RAM / high PSRAM, Ot1/Ot0 the converter's table copy in the pinned PSRAM block (the default) / "
                  "internal RAM); "
+                 "D Auto DJ (D status, D0/D1 off/on, D? its commands); "
                  "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md; @status, @count, @identify, "
                  "docs/HOST-STATUS.md), never commands");
   // PSRAM's lowest from here is the running player's ([stats]' pmin=, the
@@ -3401,6 +3537,7 @@ void loop() {
   audio.loop(now);
   powerLab.loop(now);
   stepCardGuard();
+  stepAutoDj(now);
   if (!cardHeld) queueStore.loop(now);
   // What a track's length is, once the backend knows it (read from the
   // file; or its estimate 20 s in, exact for a constant bitrate): the
@@ -3561,5 +3698,10 @@ void loop() {
   // says so: nothing to draw, touches only wake; ENERGY.md item 9).
   // (A power measurement's Pd stretches the wait while nothing animates.)
   const uint32_t uiIdleMs = userInterface ? userInterface->idleMs(millis()) : screen.off() ? 20 : 5;
-  delay(powerLab.loopDelayMs(uiIdleMs, danceMode.active()));
+  uint32_t loopDelayMs = powerLab.loopDelayMs(uiIdleMs, danceMode.active());
+  // Auto DJ's join under way (a second or two): a short wait, as its slices
+  // come a pass at a time (2026-10-13: 20 ms a pass in the dark made a join
+  // 4.6-7.2 s).
+  if (autoDj && autoDj->joinWorking() && loopDelayMs > kJoinLoopDelayMs) loopDelayMs = kJoinLoopDelayMs;
+  delay(loopDelayMs);
 }

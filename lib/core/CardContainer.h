@@ -32,7 +32,8 @@ constexpr uint32_t kMagicMptg = fourcc("MPTG");
 constexpr uint32_t kMagicMpdj = fourcc("MPDJ");
 constexpr uint32_t kMagicMspd = fourcc("MSPD");
 constexpr uint32_t kMagicMpth = fourcc("MPTH");
-constexpr uint16_t kMajor = 1;  // the only major a v1 reader reads
+constexpr uint16_t kMajor = 1;      // MSMF's, MPTG's and MSPD's: the only major their readers read
+constexpr uint16_t kMajorMpdj = 2;  // MPDJ's (docs/AUTODJ-INDEX.md; its major 1 was a draft no reader read)
 constexpr uint32_t kCommonHeaderBytes = 40;
 constexpr uint32_t kDirEntryBytes = 32;
 constexpr uint32_t kMaxSections = 64;
@@ -91,17 +92,17 @@ enum class Why : uint8_t {
   Short,            // shorter than its header and directory
   Magic,            // not this format
   Major,            // a major this reader doesn't read (a newer one)
-  HeaderBytes,      // headerBytes not a multiple of 8, or below the v1 header's size
+  HeaderBytes,      // headerBytes not a multiple of 8, or below the format's header (MPDJ: 104)
   SectionCount,     // more than 64 sections
   FileBytes,        // fileBytes isn't the file's length on the card
   HeaderCrc,
   Layout,           // the directory's layout (2.4.2): offsets, order, overlaps, gaps, the end, a type twice
   UnknownRequired,  // a REQUIRED section this reader doesn't know
   Missing,          // a section the format requires isn't there
-  Shape,            // a known section's count, stride and length disagree, or its stride is below v1's
+  Shape,            // a known section's count, stride and length disagree, or its stride is below the format's
   SectionCrc,
   Counts,           // the header's counts against the sections'
-  Enum,             // a value that makes the file absent (MPTG source, MPDJ scoreKind, indexBytes, k)
+  Enum,             // a value that makes the file absent (MPTG source; MPDJ's header values, AUTODJ-INDEX.md 8.2)
   String,           // a string offset outside its section, or no NUL after it inside
   StringOrder,      // strings not in the order the format writes them (2.4.4)
   Name,             // a name empty, with a '/', "." or ".."
@@ -116,9 +117,13 @@ enum class Why : uint8_t {
   Orig,             // ORIG's count isn't recordCount
   Comp,             // COMP: the kinds, their number or order, a name
   Libr,             // LIBR: a root not a path, or roots not strictly increasing
-  DjRows,           // DJRW not in hashPrefix order
   DjPaths,          // DJPH not strictly increasing, or a row out of range
-  DjNeighbours,     // a DJNB index out of range
+  DjLayout,         // DJSL not the first section, not on a slot boundary, or the four out of order
+  DjSelection,      // selKind's selHead and selFloor out of range
+  DjSlotCrc,        // a slot's CRC (seeded with its row): one slot damaged
+  DjSlotUnused,     // a used entry after an unused one, under a good CRC
+  DjSlotIndex,      // an entry's row out of range, or the slot's own row
+  DjSlotOrder,      // levels rising, or a tie's rows not rising
   PendOrder,        // PEND not in 2.12.5's order
   PendPath,         // a PEND path empty, absolute or not made of names
   PendOp,           // an op of 0
@@ -151,8 +156,8 @@ struct Section {
   bool present() const { return type != 0; }
 };
 
-// What a reader knows of a section type: its v1 stride (0 for a blob), and
-// whether the format requires it.
+// What a reader knows of a section type: its stride in the format's first
+// minor (0 for a blob), and whether the format requires it.
 struct SectionSpec {
   uint32_t type;
   uint32_t stride;
@@ -161,9 +166,10 @@ struct SectionSpec {
 
 struct FormatSpec {
   uint32_t magic;
-  uint32_t headerBytes;  // v1's whole header
+  uint32_t headerBytes;  // the first minor's whole header
   const SectionSpec* sections;
   uint32_t count;        // at most kMaxKnown
+  uint16_t major = kMajor;  // the major this reader reads
 };
 constexpr uint32_t kMaxKnown = 8;
 
@@ -171,17 +177,17 @@ class Container {
 public:
   // Checks the frame of `src` as a file of `spec`, reading only the header
   // and the directory (at most a few KB, through a small buffer):
-  //   - the magic, the major (1), headerBytes (a multiple of 8, at least
-  //     v1's), sectionCount (at most 64), fileBytes against src.size(), the
-  //     header's CRC;
+  //   - the magic, the major (spec.major), headerBytes (a multiple of 8, at
+  //     least the first minor's), sectionCount (at most 64), fileBytes
+  //     against src.size(), the header's CRC;
   //   - the directory (2.4.2): offsets multiples of 8 in increasing order,
   //     the first at the directory's end, each next one under 8 bytes past
   //     the end of the one before, the last ending at fileBytes, a type
   //     once;
   //   - the sections: an unknown REQUIRED one makes the file absent; every
   //     section the format requires is there; a known array's stride is at
-  //     least v1's and bytes = count x stride; a known blob has count and
-  //     stride 0.
+  //     least the first minor's and bytes = count x stride; a known blob has
+  //     count and stride 0.
   // `typeHeader` receives the type's own header bytes, [40, spec.headerBytes)
   // (a newer minor's longer header is CRC'd, its tail skipped).
   Why open(Source& src, const FormatSpec& spec, uint8_t* typeHeader);
@@ -265,11 +271,14 @@ struct SectionOut {
 class ContainerWriter {
 public:
   // Lays the file out (2.4.2): the header (the common 40 bytes, then
-  // `typeHeader`'s headerBytes - 40), the directory, then `n` sections in
-  // this order, the first right after the directory and each next one at
-  // the previous one's end rounded up to 8 (the gap zeros).
+  // `typeHeader`'s `typeBytes`, then zeros up to headerBytes), the
+  // directory, then `n` sections in this order, the first right after the
+  // directory and each next one at the previous one's end rounded up to 8
+  // (the gap zeros). typeBytes 0 is headerBytes - 40 (all of it the type
+  // header's); it is at most 256 (MPDJ's 104-byte header pads to 384 bytes
+  // for its slot alignment).
   bool begin(Sink& sink, const FileMeta& meta, const uint8_t* typeHeader, uint32_t headerBytes, const SectionOut* s,
-             uint32_t n);
+             uint32_t n, uint32_t typeBytes = 0);
   // The sections' bytes, in order, in as many calls as the caller likes.
   bool write(const void* data, uint32_t n);
   // Every section whole: writes the directory and then the header with its
@@ -280,8 +289,9 @@ public:
 private:
   Sink* sink_ = nullptr;
   FileMeta meta_;
-  uint8_t head_[256];  // the type header, at most 216 bytes
+  uint8_t head_[256];  // the type header's bytes (typeBytes_ of them)
   uint32_t headerBytes_ = 0;
+  uint32_t typeBytes_ = 0;
   SectionOut s_[kMaxSections];
   uint32_t offset_[kMaxSections] = {};
   uint32_t crc_[kMaxSections] = {};
@@ -314,9 +324,11 @@ struct Election {
 Election elect(const RootCandidate& bin, const RootCandidate& tmp);
 
 // The software's guard (2.4.5): the first bytes of a contract-named file in
-// /.mstream carry one of the four magics with a major other than 1, so the
-// software MUST NOT write to the card. Checked on the magic and the major
-// alone, before any CRC. `n` < 6: false (nothing to say).
+// /.mstream carry one of the four magics with a major the software doesn't
+// know (MSMF, MPTG, MSPD: other than 1; MPDJ: other than 2 and 1, the
+// retired draft a v2 writer replaces), so the software MUST NOT write to
+// the card. Checked on the magic and the major alone, before any CRC. `n`
+// < 6: false (nothing to say).
 bool unknownMajor(const uint8_t* head, size_t n);
 
 }  // namespace cardcontract

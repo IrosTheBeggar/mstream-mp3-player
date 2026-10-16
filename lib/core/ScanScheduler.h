@@ -12,11 +12,11 @@
 // validation walk (3.2.3: its folders, or passes of a big one, for about
 // 18 ms while the screen is lit, 250 ms while it is dark: the firmware's
 // CardTasks); a compaction of tags.bin (3.3.2); a file of the scan
-// (3.3.1) a loop source names, or a slice of its rest's files; the DJNB
-// check. The loop calls update() every pass, where the inputs are, and
-// hands the worker what it says at the priority it says. So the jobs never
-// overlap (a build, a compaction and a scan never run at once), and each
-// step starts only when nothing it would disturb is under way.
+// (3.3.1) a loop source names, or a slice of its rest's files. The loop
+// calls update() every pass, where the inputs are, and hands the worker
+// what it says at the priority it says. So the jobs never overlap (a
+// build, a compaction and a scan never run at once), and each step starts
+// only when nothing it would disturb is under way.
 //
 // What starts, when the worker is free (the first that applies):
 //   1. The update step's build, at priority 1 (the loop's): the listener
@@ -31,19 +31,19 @@
 //      yields as the background work does, but not to the battery floor
 //      (the build is paid for).
 //   5. The background work, one job at a time, the first with work: the
-//      walk, a compaction, the scan, the DJNB check. None of them starts
-//      while the update step holds the worker (from its build's fence to
-//      its save's end: nothing writes tags.bin or the journals while the
-//      build streams them, 3.4.2). At priority 0, but for three (3.3.9,
-//      2026-10-09): a slice of the walk at 1, as a cover (seconds once a
-//      boot, while the Library tab says "Checking the card..."); a slice
-//      of the scan, and a compaction, at 1 while the screen is dark
-//      (In::dark: the loop has nothing to draw). At 0 they share what the
-//      loop leaves with the idle task, half of it (covers measured 2-2.5x
-//      slower at 0; the save 4.5-9.9 s on the worker against 2.2 s on the
-//      loop at boot, the 2026-10-09 device run). A compaction or a save
-//      under way drops to 0 the pass the screen lights (it isn't a slice:
-//      it runs on to its end, below the loop).
+//      walk, a compaction, the scan. None of them starts while the update
+//      step holds the worker (from its build's fence to its save's end:
+//      nothing writes tags.bin or the journals while the build streams
+//      them, 3.4.2). At priority 0, but for three (3.3.9, 2026-10-09): a
+//      slice of the walk at 1, as a cover (seconds once a boot, while the
+//      Library tab says "Checking the card..."); a slice of the scan, and a
+//      compaction, at 1 while the screen is dark (In::dark: the loop has
+//      nothing to draw). At 0 they share what the loop leaves with the idle
+//      task, half of it (covers measured 2-2.5x slower at 0; the save
+//      4.5-9.9 s on the worker against 2.2 s on the loop at boot, the
+//      2026-10-09 device run). A compaction or a save under way drops to 0
+//      the pass the screen lights (it isn't a slice: it runs on to its end,
+//      below the loop).
 // A slice under way drops to 0 and is cut after its unit (Out::cut) the
 // moment a list moves or a wait below applies: so a wait holds the walk and
 // the scan within one unit (a folder, a file) and a pass, as before slices.
@@ -53,10 +53,10 @@
 // D's canonical order.
 //
 // The save and the background work wait (3.3.4, 3.3.5) for the first of:
-//   Battery     the scan and the DJNB check only (U13): below 10% off USB
-//               they pause, and go on once on USB or above 15%. The walk, a
-//               compaction, the save, covers and the build don't: they are
-//               short, and they are what the listener sees.
+//   Battery     the scan only (U13): below 10% off USB it pauses, and goes
+//               on once on USB or above 15%. The walk, a compaction, the
+//               save, covers and the build don't: they are short, and they
+//               are what the listener sees.
 //   Input       any input in the last 0.5 s: a tap's redraw comes first.
 //   Ring        playing, with the PCM ring below half: a start's refill, a
 //               dip.
@@ -89,9 +89,9 @@ public:
   // The worker's jobs. A step: a cover; the build (one step); the save (one
   // step); a slice of the walk (its folders, or passes of a big one); a
   // compaction (one step); a file of the scan from a loop source, or a
-  // slice of its rest; the DJNB check (one step).
-  enum class Job : uint8_t { None, Cover, Build, Save, Walk, Compact, Scan, DjCheck };
-  static constexpr int kJobs = 8;
+  // slice of its rest.
+  enum class Job : uint8_t { None, Cover, Build, Save, Walk, Compact, Scan };
+  static constexpr int kJobs = 7;
   // Where the scan's next file comes from (3.3.3).
   enum class Source : uint8_t { None, Playing, QueueNext, QueueSoon, Shown, Rest };
   // What the worker's next start waits for (the first that applies, in this
@@ -101,7 +101,7 @@ public:
     Step,         // a step is under way: one at a time
     List,         // a list is moving
     Updating,     // the update step holds the worker until its save
-    Battery,      // below the floor, off USB (the scan, the DJNB check)
+    Battery,      // below the floor, off USB (the scan)
     Input,        // input in the last Config::inputQuietMs
     Ring,         // playing, the ring below Config::ringMinPct
     Underrun,     // an underrun in the last Config::underrunBackoffMs
@@ -161,7 +161,6 @@ public:
     bool cover = false;     // a cover is asked for (a row on screen)
     bool walk = false;      // the validation walk has folders left
     bool compact = false;   // a compaction is wanted (the journal's limits, a scan's end, before a build)
-    bool djCheck = false;   // DJNB's check is due (once per commit)
     // The scan's sources (3.3.3), each true when it has a file to read. The
     // glue sets them only once the scan may run (D's to-do is known).
     bool playingPending = false;    // the playing track is Pending
@@ -244,8 +243,7 @@ public:
   static Source sourceOf(const In& in);
   // A step's priority (3.3.4, 3.3.9) when no wait applies: the build 1; a
   // cover and the walk 1, 0 while a list moves; the scan, a compaction and
-  // the save 1 while the screen is dark and no list moves, else 0; the
-  // DJNB check 0.
+  // the save 1 while the screen is dark and no list moves, else 0.
   static uint8_t priorityOf(Job job, bool listMoving, bool dark = false);
 
   static const char* jobName(Job j);

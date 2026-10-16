@@ -106,9 +106,22 @@ jobs:
 
       # The card contract's shared fixtures (test/fixtures/card) are frozen:
       # tools/card_fixtures.py, their second implementation, must still make
-      # them byte for byte (docs/METADATA.md 2.17).
+      # them byte for byte (docs/METADATA.md 2.17); tools/mpdj.py, the AutoDJ
+      # index's reference (docs/AUTODJ-INDEX.md), passes its own tests.
       - name: Card fixtures
-        run: python tools/card_fixtures.py --check
+        run: |
+          python tools/card_fixtures.py --check
+          python -m unittest discover -s tools -p "test_mpdj.py"
+
+      # Auto DJ's pick rule has a Python reference (tools/autodj_ref.py) that
+      # writes the C++ engine's session fixtures (test/fixtures/autodj): they
+      # must still come out byte for byte, and the reference passes its tests,
+      # as does the device test card's tool (tools/synthtransfer.py).
+      - name: Auto DJ fixtures
+        run: |
+          python tools/autodj_ref.py --check
+          python -m unittest discover -s tools -p "test_autodj_ref.py"
+          python -m unittest discover -s tools -p "test_synthtransfer.py"
 
       # On a tag, RELEASE=1: the build fails unless HEAD is exactly that tag,
       # the tree is clean and no local flags are set (tools/version.py).

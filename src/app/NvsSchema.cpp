@@ -25,11 +25,13 @@ bool langWritten = false;  // migrate()'s step to 3 wrote "ui"/"lang" "en"
 // and an absent key reads as Off (QueueStore::loadRepeat()). The step from
 // 2 to 3 writes "ui"/"lang" "en" when there is none: a unit that ran an
 // older firmware keeps English, with no first-boot language picker (a
-// fresh NVS has no "schema" and takes no step: the picker is its).
+// fresh NVS has no "schema" and takes no step: the picker is its). The
+// step from 3 to 4 is nothing: schema 4 only adds the "autodj" namespace,
+// whose absent keys read as Auto DJ's defaults (app/AutoDjStore).
 // False: a step failed; the number then stays where it was, so the next
 // boot tries again.
 bool migrate(uint16_t from, uint16_t to) {
-  if (to < 3) return true;
+  if (to < 3 || from >= 3) return true;
   Preferences ui;
   if (!ui.begin(nvslayout::kUiNamespace, false)) return false;
   bool ok = true;

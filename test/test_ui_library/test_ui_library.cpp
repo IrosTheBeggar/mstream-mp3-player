@@ -18,6 +18,7 @@
 #include <string>
 #include <vector>
 
+#include "AutoDjView.h"
 #include "BootLayout.h"
 #include "CardContract.h"
 #include "CardTags.h"
@@ -1131,6 +1132,7 @@ void test_empty_state_texts_fit() {
   const Vlw body(kVlwSans16), small(kVlwSans13), bold(kVlwSansBold16);
   TEST_ASSERT_TRUE(bold.width(tr(S::empty_open_library)) + kEmptyIconW[0] + 8 <= kEmptyPrimaryW - 12);
   TEST_ASSERT_TRUE(body.width(tr(S::empty_shuffle_all)) + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);
+  TEST_ASSERT_TRUE(body.width(tr(S::empty_autodj)) + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);  // (Auto DJ's place)
   TEST_ASSERT_TRUE(kEmptyPrimaryX + kEmptyPrimaryW < kEmptySecondX && kEmptySecondX + kEmptySecondW <= 320 - 6);
   fits(small, tr(S::empty_pick_in_library), kEmptyLineW);
 }
@@ -3456,6 +3458,7 @@ void test_header_subs_fit() {
         {"Output", 12, S::output_title, tr(S::output_subtitle), 0, true},
         {"About", 28, S::about_title, tr(S::about_subtitle), 0, true},
         {"Language", 28, S::language_title, tr(S::language_subtitle), 0, true},
+        {"Auto DJ", 28, S::output_autodj, tr(S::autodj_subtitle), 0, true},
         {"first boot", 12, S::language_title, tr(S::language_first_boot_sub), 0, true},
         {"Queue (empty)", 12, S::queue_title, tr(S::queue_empty_sub), 0, true},
         {"Device info", 28, S::about_device_info, tr(S::device_info_subtitle), 0, false},
@@ -3562,6 +3565,10 @@ void test_sheet_details_fit() {
           tr(S::sleep_row_fading), minutes, seconds}},
         {S::now_playing_go_to_artist, false, {tr(S::library_no_artist_folder)}},
         {S::now_playing_go_to_album, false, {tr(S::library_loose_tracks)}},
+        {S::now_playing_autodj,
+         false,
+         {tr(S::now_playing_autodj_on), tr(S::now_playing_autodj_off), tr(S::now_playing_autodj_waiting),
+          tr(S::now_playing_autodj_paused)}},
         {S::queue_clear_up_next, false, {tr(S::queue_clear_up_next_detail)}},
         {S::queue_clear_all, false, {tr(S::queue_clear_all_detail)}},
         {S::settings_cal_calibrate, true, {tr(S::settings_cal_calibrate_detail)}},
@@ -3597,6 +3604,150 @@ void test_sheet_details_fit() {
   TEST_ASSERT_TRUE(strstr(cut, "\xE2\x80\xA6") != nullptr);
   TEST_ASSERT_FALSE(sheet::detailOnTwoLines(body.width(tr(S::now_playing_go_to_artist)), small.width(cut)));
   TEST_ASSERT_EQUAL_STRING(drawn(small, name, room).c_str(), cut);
+}
+
+// Auto DJ on the screen (the engine design's 5; lib/core/AutoDjView), in
+// every language: Output's row (its title and line, every state and
+// Anchor), Output > Auto DJ's rows (the switches' titles and lines beside
+// the switch; Anchor's and Match strictness's values beside their titles
+// or on the second line, never cut; the hints; the status row's two lines
+// in every state of the index and every hold, at its worst counts), the
+// Library sheet's and the playback sheet's 4th rows, and the empty states'
+// button beside its icon. The "..." row's states: test_sheet_details_fit;
+// the page's header line: test_header_subs_fit; every text's own room and
+// the toasts: test_ui_strings.
+void test_auto_dj_texts_fit() {
+  using namespace uitext;
+  namespace dv = autodjview;
+  const Vlw body(kVlwSans16), small(kVlwSans13);
+  // The layout: two lines of Small (the status row) inside the 42 px row,
+  // neither over the other; the switch rows' lines end before the switch
+  // (Haptics', 58 px from the right), the value rows' at the scroll bar's
+  // 8 px.
+  TEST_ASSERT_TRUE(12 - small.yAdvance / 2 >= 1);
+  TEST_ASSERT_TRUE(12 - small.yAdvance / 2 + small.yAdvance <= 30 - small.yAdvance / 2);
+  TEST_ASSERT_TRUE(30 - small.yAdvance / 2 + small.yAdvance <= 42);
+  TEST_ASSERT_EQUAL_INT(232, kAutoDjSwitchW);
+  TEST_ASSERT_TRUE(kAutoDjX + kAutoDjSwitchW <= 312 - 58 - 6);
+  TEST_ASSERT_EQUAL_INT(288, kAutoDjLineW);
+  TEST_ASSERT_TRUE(autoDjValueBeside(100, 172));
+  TEST_ASSERT_FALSE(autoDjValueBeside(100, 173));
+  // Every state the page and the row can be in.
+  std::vector<dv::State> states;
+  for (int on = 0; on < 2; ++on) {
+    for (dv::Index ix : {dv::Index::None, dv::Index::Bad, dv::Index::Unreadable, dv::Index::TooBig,
+                         dv::Index::NoMemory, dv::Index::Found, dv::Index::Reading, dv::Index::Ready}) {
+      for (autodj::Hold hold :
+           {autodj::Hold::None, autodj::Hold::RepeatOne, autodj::Hold::SleepTimer, autodj::Hold::Failures}) {
+        for (autodj::Mode mode : {autodj::Mode::Rolling, autodj::Mode::Locked}) {
+          dv::State s;
+          s.on = on != 0;
+          s.index = ix;
+          s.hold = hold;
+          s.mode = mode;
+          s.usable = ix == dv::Index::Found || ix == dv::Index::Reading || ix == dv::Index::Ready;
+          s.rows = s.mapped = s.tracks = 99999;  // the widest counts (grouped: "99,999")
+          s.bpmPct = s.keyPct = 100;
+          states.push_back(s);
+          s.rows = s.mapped = s.tracks = 1;  // (the "one" forms)
+          states.push_back(s);
+        }
+      }
+    }
+  }
+  std::string report;
+  for (uistr::Lang l : kAllLangs) {
+    if (!uistr::hasCatalogue(l)) continue;
+    uistr::setLang(l);
+    // Output's row: the title and its line, from the icon's column to the
+    // chevron; the line with the Anchor when it fits whole (always in
+    // English), else the state alone (OutputPage), which always fits.
+    TEST_ASSERT_EQUAL_INT(312 - 26 - 44, kAutoDjRowW);
+    fits(body, tr(S::output_autodj), kAutoDjRowW);
+    for (const dv::State& s : states) {
+      char line[96];
+      dv::rootLine(s, line, sizeof(line));
+      if (small.width(line) > kAutoDjRowW) {
+        TEST_ASSERT_TRUE_MESSAGE(l != uistr::Lang::En, line);
+        char m[200];
+        snprintf(m, sizeof(m), "%s Output's line \"%s\" (%d px) as the state alone; ", uistr::tag(l), line,
+                 small.width(line));
+        if (report.find(m) == std::string::npos) report += m;
+        dv::rootLine(s, line, sizeof(line), false);
+      }
+      fits(small, line, kAutoDjRowW);
+      // The status row.
+      char a[96], b[96];
+      dv::statusLines(s, a, sizeof(a), b, sizeof(b));
+      fits(small, a, kAutoDjLineW);
+      fits(small, b, kAutoDjLineW);
+    }
+    // The switches.
+    for (S t : {S::output_autodj, S::autodj_bpm, S::autodj_harmonic}) fits(body, tr(t), kAutoDjSwitchW);
+    for (S t : {S::autodj_on_sub, S::autodj_bpm_sub, S::autodj_harmonic_sub, S::autodj_needs_index}) {
+      fits(small, tr(t), kAutoDjSwitchW);
+    }
+    // The value rows: each value beside its title, or on the line under
+    // it; the hints (and why they're dim) on that line. Dim without the
+    // index, the value shows too: beside its title with why under it, or
+    // under it in why's place (until 2026-10-16 why took that line, and
+    // Match strictness's value went unseen in de, es, it and pt).
+    struct Value {
+      S title;
+      std::vector<std::string> values;
+    };
+    std::vector<std::string> steps;
+    for (uint8_t p = 55; p <= 75; p = static_cast<uint8_t>(p + 5)) {
+      char v[48];
+      steps.push_back(dv::strictnessText(p, v, sizeof(v)));
+    }
+    char odd[48];
+    steps.push_back(dv::strictnessText(dv::shownFloor(55, 160), odd, sizeof(odd)));  // an index's own floor: 63 %
+    const std::vector<Value> rows = {
+        {S::autodj_anchor, {tr(S::autodj_anchor_rolling), tr(S::autodj_anchor_locked)}},
+        {S::autodj_strictness, steps},
+    };
+    const char* needs = tr(S::autodj_needs_index);
+    for (const Value& r : rows) {
+      const char* title = tr(r.title);
+      fits(body, title, kAutoDjLineW);
+      for (const std::string& v : r.values) {
+        const int vw = small.width(v.c_str());
+        const char* dim = autoDjSecondLine(body.width(title), vw, v.c_str(), needs);
+        fits(small, dim, kAutoDjLineW);
+        if (autoDjValueBeside(body.width(title), vw)) {
+          fits(small, v.c_str(), autoDjValueRoom(body.width(title)));
+          TEST_ASSERT_EQUAL_STRING(needs, dim);
+          continue;
+        }
+        TEST_ASSERT_EQUAL_STRING(v.c_str(), dim);
+        fits(small, v.c_str(), kAutoDjLineW);
+        TEST_ASSERT_TRUE_MESSAGE(l != uistr::Lang::En, v.c_str());  // English: beside its title
+        char m[160];
+        snprintf(m, sizeof(m), "%s \"%s\" under \"%s\" (%d px in %d); ", uistr::tag(l), v.c_str(), title, vw,
+                 autoDjValueRoom(body.width(title)));
+        report += m;
+      }
+    }
+    for (S t : {S::autodj_anchor_rolling_sub, S::autodj_anchor_locked_sub, S::autodj_strictness_sub,
+                S::autodj_needs_index}) {
+      fits(small, tr(t), kAutoDjLineW);
+    }
+    // The sheets' 4th rows (Body, 16 px in from each side).
+    fits(body, tr(S::library_autodj_here), sheet::kTwoLineW);
+    fits(body, tr(S::now_playing_autodj), sheet::kTwoLineW);
+    // The empty states' second button: Auto DJ's label, beside its icon
+    // (as wide as Shuffle's: kEmptyIconW[1]) or alone (EmptyState draws
+    // the icon only when both fit).
+    fits(body, tr(S::empty_autodj), kEmptySecondW - 12);
+    if (body.width(tr(S::empty_autodj)) + kEmptyIconW[1] + 8 > kEmptySecondW - 12) {
+      report += std::string(uistr::tag(l)) + " Auto DJ's button without its icon; ";
+    }
+  }
+  TEST_MESSAGE(report.c_str());
+  uistr::setLang(uistr::Lang::En);
+  // English: the button with its icon.
+  TEST_ASSERT_TRUE(body.width(tr(S::empty_autodj)) + kEmptyIconW[1] + 8 <= kEmptySecondW - 12);
 }
 
 // The Folder page's header counts (librarytext::folderHeaderCounts()), in
@@ -4092,6 +4243,7 @@ int main(int, char**) {
   RUN_TEST(test_header_pills_fit);
   RUN_TEST(test_header_subs_fit);
   RUN_TEST(test_sheet_details_fit);
+  RUN_TEST(test_auto_dj_texts_fit);
   RUN_TEST(test_folder_header_counts_fit);
   RUN_TEST(test_library_header_lines);
   RUN_TEST(test_hold_title_keeps_its_count);

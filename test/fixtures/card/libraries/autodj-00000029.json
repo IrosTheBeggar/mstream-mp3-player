@@ -3,120 +3,191 @@
  "file": "autodj-00000029.bin",
  "generation": 41,
  "cardId": "0x5EEDC0DE0A1B2C3D",
- "k": 3,
  "builtTime": 1790000000,
  "tagsGeneration": 41,
+ "k": 4,
+ "selKind": 1,
+ "selHead": 1,
+ "selFloor": 100,
  "modelId": "synthetic-embedding",
  "modelVersion": "1",
  "metric": "cosine",
  "license": "CC0-1.0",
- "attribution": "synthetic fixture vectors",
- "dim": 4,
- "note": "Synthetic embeddings (multiples of 1/8, exact in f32 and in f64 products): a tie of three at the K boundary for the first row, a same-song pair, a recording at two paths. songKey and artistNameKey are nameKey's output (5.4), given.",
+ "attribution": "synthetic test vectors",
+ "dim": 8,
+ "note": "The hand-checkable file (AUTODJ-INDEX.md 13.4), the manifest fixture's AutoDJ companion: components are multiples of 1/16 with |v| = 1 exactly, so every cosine is a multiple of 1/256. k 4, strided with H 1 and Lf 100. artistNameKey, songKey and primaryPath are given for checking.",
  "rows": [
   {
    "hash": "0123456789abcdef0123456789abcdef",
-   "paths": [
-    "Artist/Album/01 - Title.mp3"
+   "files": [
+    {
+     "path": "Generated Artist 01/Sample Album 01/01 - Sample Title 01.mp3",
+     "artists": [
+      "Generated Artist 01"
+     ],
+     "title": "Sample Title 01",
+     "bpm10": 1210,
+     "camelot": 8
+    }
    ],
-   "artist": "Lantern Choir",
-   "title": "Title",
-   "artistNameKey": "lantern choir",
-   "songKey": "lantern choir|title",
-   "bpm10": 1210,
-   "camelot": 8,
    "embedding": [
-    0.5,
-    0.5,
-    0.5,
-    0.5
-   ]
-  },
-  {
-   "hash": "11111111111111111111111111111111",
-   "paths": [
-    "Artist/Album/02 - Other.mp3"
-   ],
-   "artist": "X",
-   "title": "A B",
-   "artistNameKey": "x",
-   "songKey": "x, y|a b",
-   "embedding": [
-    0.5,
-    0.5,
-    0.5,
-    -0.5
-   ]
-  },
-  {
-   "hash": "22222222222222222222222222222222",
-   "paths": [
-    "Café/Album/01 - Title.mp3",
-    "Café/Album/01 - Title.mp3"
-   ],
-   "artist": "Café Trio",
-   "title": "Title",
-   "artistNameKey": "café trio",
-   "songKey": "café trio|title",
-   "note": "one recording at two paths: one row",
-   "embedding": [
-    0.625,
-    0.5,
+    0.125,
+    0.125,
     0.375,
-    0.25
-   ]
+    0.1875,
+    0.5625,
+    0.0,
+    0.6875,
+    0.0625
+   ],
+   "note": "m 5 > k: strided ranks 0, 1, 2, 4; rows 1 and 3 tie at level 100 = Lf, and rank 4, the last at or above Lf, is row 3",
+   "primaryPath": "Generated Artist 01/Sample Album 01/01 - Sample Title 01.mp3",
+   "artistNameKey": "generated artist 01",
+   "songKey": "generated artist 01|sample title 01"
   },
   {
-   "hash": "33333333333333333333333333333333",
-   "paths": [
-    "A B/y.mp3"
+   "hash": "1c3e5a7092b4d6f81c3e5a7092b4d6f8",
+   "files": [
+    {
+     "path": "Generated Artist 02/Sample Album 02/01 - Sample Café.flac",
+     "artists": [],
+     "title": "Sample Café"
+    },
+    {
+     "path": "Generated Artist 02/Sample Album 02/01 - Sample Café.flac",
+     "artists": [],
+     "title": "Sample Café",
+     "bpm10": 1000
+    }
    ],
-   "artist": "Some Band, Other Band",
-   "title": "Why",
-   "artistNameKey": "some band, other band",
-   "songKey": "some band, other band|why",
-   "bpm10": 1280,
-   "camelot": 13,
-   "flags": 1,
    "embedding": [
-    0.5,
-    -0.5,
-    0.5,
-    0.5
-   ]
-  },
-  {
-   "hash": "44444444444444444444444444444444",
-   "paths": [
-    "B/w.opus"
+    -0.125,
+    0.75,
+    0.1875,
+    0.125,
+    0.5625,
+    -0.0625,
+    -0.125,
+    -0.1875
    ],
-   "artist": "",
-   "title": "Double U",
+   "note": "one recording at two paths (NFC and NFD names: two DJPH entries, one row); the primary file is the smaller path hash's, the NFC one (bpm10 0); no artist: artistKey 0",
+   "primaryPath": "Generated Artist 02/Sample Album 02/01 - Sample Café.flac",
    "artistNameKey": "",
-   "songKey": "|double u",
+   "songKey": "|sample café"
+  },
+  {
+   "hash": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+   "files": [
+    {
+     "path": "Generated Artist 04/Sample Album 04/03 - Sample Title 04.mp3",
+     "artists": [
+      "Generated Artist 04",
+      "Generated Artist 05",
+      "generated  artist 04"
+     ],
+     "title": "Sample Title 04",
+     "bpm10": 1280,
+     "camelot": 13,
+     "bpmAnalysed": true
+    }
+   ],
    "embedding": [
-    -0.5,
-    0.5,
-    0.5,
-    0.5
-   ]
+    0.375,
+    0.0,
+    0.1875,
+    0.0625,
+    0.4375,
+    0.375,
+    0.625,
+    -0.3125
+   ],
+   "note": "three artist values: display 'Generated Artist 04, Generated Artist 05'; cosine to row 3 exactly 0.5 (127.5: level 128); m 4 = k: the top k",
+   "primaryPath": "Generated Artist 04/Sample Album 04/03 - Sample Title 04.mp3",
+   "artistNameKey": "generated artist 04",
+   "songKey": "generated artist 04, generated artist 05|sample title 04"
+  },
+  {
+   "hash": "9e1f00000000000000000000000000a1",
+   "files": [
+    {
+     "path": "Generated Artist 03/Sample Album 03/01 - Sample Title 03.mp3",
+     "artists": [
+      "Generated Artist 03"
+     ],
+     "title": "Sample Title 03",
+     "bpm10": 954,
+     "camelot": 21,
+     "bpmAnalysed": true
+    }
+   ],
+   "embedding": [
+    0.5625,
+    -0.0625,
+    0.3125,
+    0.5625,
+    -0.0625,
+    0.4375,
+    0.1875,
+    0.1875
+   ],
+   "note": "rows 3, 4 and 5 are one song: none lists another, so each list has an unused entry",
+   "primaryPath": "Generated Artist 03/Sample Album 03/01 - Sample Title 03.mp3",
+   "artistNameKey": "generated artist 03",
+   "songKey": "generated artist 03|sample title 03"
+  },
+  {
+   "hash": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+   "files": [
+    {
+     "path": "Generated Artist 03/Sample Album 06/07 - SAMPLE TITLE 03.flac",
+     "artists": [
+      "GENERATED ARTIST 03"
+     ],
+     "title": "SAMPLE TITLE 03"
+    }
+   ],
+   "embedding": [
+    0.4375,
+    0.0625,
+    0.75,
+    0.25,
+    0.0,
+    -0.0625,
+    0.375,
+    -0.1875
+   ],
+   "note": "the same song in capitals",
+   "primaryPath": "Generated Artist 03/Sample Album 06/07 - SAMPLE TITLE 03.flac",
+   "artistNameKey": "generated artist 03",
+   "songKey": "generated artist 03|sample title 03"
   },
   {
    "hash": "fedcba9876543210fedcba9876543210",
-   "paths": [
-    "Loose Intro.mp3"
+   "files": [
+    {
+     "path": "Generated Artist 03/Sample Album 07/12 - Sample Title 03.opus",
+     "artists": [
+      "Generated Artist 03"
+     ],
+     "title": " Sample Title 03",
+     "bpm10": 960,
+     "camelot": 21
+    }
    ],
-   "artist": "Lantern Choir",
-   "title": "Title",
-   "artistNameKey": "lantern choir",
-   "songKey": "lantern choir|title",
-   "note": "the same song as the first row: never its neighbour",
    "embedding": [
-    0.5,
-    0.5,
-    0.5,
-    0.5
-   ]
+    0.25,
+    -0.1875,
+    0.5625,
+    0.125,
+    0.0,
+    0.25,
+    0.6875,
+    0.1875
+   ],
+   "note": "the same song again: a no-break space between the artist's words, a leading space in the title",
+   "primaryPath": "Generated Artist 03/Sample Album 07/12 - Sample Title 03.opus",
+   "artistNameKey": "generated artist 03",
+   "songKey": "generated artist 03|sample title 03"
   }
  ]
 }

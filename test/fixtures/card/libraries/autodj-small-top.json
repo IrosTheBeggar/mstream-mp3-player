@@ -1,0 +1,191 @@
+{
+ "format": "MPDJ",
+ "file": "autodj-small-top.bin",
+ "generation": 41,
+ "cardId": "0x5EEDC0DE0A1B2C3D",
+ "builtTime": 1790000000,
+ "tagsGeneration": 41,
+ "k": 4,
+ "selKind": 0,
+ "modelId": "synthetic-embedding",
+ "modelVersion": "1",
+ "metric": "cosine",
+ "license": "CC0-1.0",
+ "attribution": "synthetic test vectors",
+ "dim": 8,
+ "note": "autodj-00000029's rows as a plain top-k table (selKind 0: selHead k, selFloor 0): row 0 keeps row 1, the lower index of the two at level 100.",
+ "rows": [
+  {
+   "hash": "0123456789abcdef0123456789abcdef",
+   "files": [
+    {
+     "path": "Generated Artist 01/Sample Album 01/01 - Sample Title 01.mp3",
+     "artists": [
+      "Generated Artist 01"
+     ],
+     "title": "Sample Title 01",
+     "bpm10": 1210,
+     "camelot": 8
+    }
+   ],
+   "embedding": [
+    0.125,
+    0.125,
+    0.375,
+    0.1875,
+    0.5625,
+    0.0,
+    0.6875,
+    0.0625
+   ],
+   "note": "m 5 > k: strided ranks 0, 1, 2, 4; rows 1 and 3 tie at level 100 = Lf, and rank 4, the last at or above Lf, is row 3",
+   "primaryPath": "Generated Artist 01/Sample Album 01/01 - Sample Title 01.mp3",
+   "artistNameKey": "generated artist 01",
+   "songKey": "generated artist 01|sample title 01"
+  },
+  {
+   "hash": "1c3e5a7092b4d6f81c3e5a7092b4d6f8",
+   "files": [
+    {
+     "path": "Generated Artist 02/Sample Album 02/01 - Sample Café.flac",
+     "artists": [],
+     "title": "Sample Café"
+    },
+    {
+     "path": "Generated Artist 02/Sample Album 02/01 - Sample Café.flac",
+     "artists": [],
+     "title": "Sample Café",
+     "bpm10": 1000
+    }
+   ],
+   "embedding": [
+    -0.125,
+    0.75,
+    0.1875,
+    0.125,
+    0.5625,
+    -0.0625,
+    -0.125,
+    -0.1875
+   ],
+   "note": "one recording at two paths (NFC and NFD names: two DJPH entries, one row); the primary file is the smaller path hash's, the NFC one (bpm10 0); no artist: artistKey 0",
+   "primaryPath": "Generated Artist 02/Sample Album 02/01 - Sample Café.flac",
+   "artistNameKey": "",
+   "songKey": "|sample café"
+  },
+  {
+   "hash": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+   "files": [
+    {
+     "path": "Generated Artist 04/Sample Album 04/03 - Sample Title 04.mp3",
+     "artists": [
+      "Generated Artist 04",
+      "Generated Artist 05",
+      "generated  artist 04"
+     ],
+     "title": "Sample Title 04",
+     "bpm10": 1280,
+     "camelot": 13,
+     "bpmAnalysed": true
+    }
+   ],
+   "embedding": [
+    0.375,
+    0.0,
+    0.1875,
+    0.0625,
+    0.4375,
+    0.375,
+    0.625,
+    -0.3125
+   ],
+   "note": "three artist values: display 'Generated Artist 04, Generated Artist 05'; cosine to row 3 exactly 0.5 (127.5: level 128); m 4 = k: the top k",
+   "primaryPath": "Generated Artist 04/Sample Album 04/03 - Sample Title 04.mp3",
+   "artistNameKey": "generated artist 04",
+   "songKey": "generated artist 04, generated artist 05|sample title 04"
+  },
+  {
+   "hash": "9e1f00000000000000000000000000a1",
+   "files": [
+    {
+     "path": "Generated Artist 03/Sample Album 03/01 - Sample Title 03.mp3",
+     "artists": [
+      "Generated Artist 03"
+     ],
+     "title": "Sample Title 03",
+     "bpm10": 954,
+     "camelot": 21,
+     "bpmAnalysed": true
+    }
+   ],
+   "embedding": [
+    0.5625,
+    -0.0625,
+    0.3125,
+    0.5625,
+    -0.0625,
+    0.4375,
+    0.1875,
+    0.1875
+   ],
+   "note": "rows 3, 4 and 5 are one song: none lists another, so each list has an unused entry",
+   "primaryPath": "Generated Artist 03/Sample Album 03/01 - Sample Title 03.mp3",
+   "artistNameKey": "generated artist 03",
+   "songKey": "generated artist 03|sample title 03"
+  },
+  {
+   "hash": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+   "files": [
+    {
+     "path": "Generated Artist 03/Sample Album 06/07 - SAMPLE TITLE 03.flac",
+     "artists": [
+      "GENERATED ARTIST 03"
+     ],
+     "title": "SAMPLE TITLE 03"
+    }
+   ],
+   "embedding": [
+    0.4375,
+    0.0625,
+    0.75,
+    0.25,
+    0.0,
+    -0.0625,
+    0.375,
+    -0.1875
+   ],
+   "note": "the same song in capitals",
+   "primaryPath": "Generated Artist 03/Sample Album 06/07 - SAMPLE TITLE 03.flac",
+   "artistNameKey": "generated artist 03",
+   "songKey": "generated artist 03|sample title 03"
+  },
+  {
+   "hash": "fedcba9876543210fedcba9876543210",
+   "files": [
+    {
+     "path": "Generated Artist 03/Sample Album 07/12 - Sample Title 03.opus",
+     "artists": [
+      "Generated Artist 03"
+     ],
+     "title": " Sample Title 03",
+     "bpm10": 960,
+     "camelot": 21
+    }
+   ],
+   "embedding": [
+    0.25,
+    -0.1875,
+    0.5625,
+    0.125,
+    0.0,
+    0.25,
+    0.6875,
+    0.1875
+   ],
+   "note": "the same song again: a no-break space between the artist's words, a leading space in the title",
+   "primaryPath": "Generated Artist 03/Sample Album 07/12 - Sample Title 03.opus",
+   "artistNameKey": "generated artist 03",
+   "songKey": "generated artist 03|sample title 03"
+  }
+ ]
+}

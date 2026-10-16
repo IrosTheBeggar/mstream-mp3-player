@@ -16,30 +16,14 @@ constexpr char kMagic[] = "mstream-queue ";
 // A version 2 line's rank and its space, at the longest ("4294967295 ").
 constexpr size_t kRankRoom = 11;
 
-// Version 2 when shuffled (the header's version is the file's mode).
-bool writeHeader(const QueueModel& q, uint32_t generation, ByteSink& out) {
-  char line[64];
-  const int n = std::snprintf(line, sizeof(line), "%s%d %lu %ld %lu\n", kMagic, q.shuffled() ? 2 : 1,
-                              static_cast<unsigned long>(q.size()), static_cast<long>(q.current()),
-                              static_cast<unsigned long>(generation));
-  return n > 0 && static_cast<size_t>(n) < sizeof(line) && out.write(line, static_cast<size_t>(n));
+// The queue's header, and its entry at `pos` (`shuffled`: the header's
+// version).
+bool writeHeaderOf(const QueueModel& q, uint32_t generation, ByteSink& out) {
+  return writeHeader(q.shuffled(), q.size(), q.current(), generation, out);
 }
 
-// One entry: its path (shuffled: after its rank and a space), or nothing
-// for a track the catalog doesn't know (the line count stays the entry
-// count, so `current` still points at the right line). `shuffled`: the
-// header's version.
-bool writeEntry(const QueueModel& q, const TrackCatalog& catalog, uint32_t pos, bool shuffled, ByteSink& out) {
-  char line[kRankRoom + TrackCatalog::kMaxPath + 1];
-  size_t at = 0;
-  if (shuffled) {
-    const int r = std::snprintf(line, kRankRoom + 1, "%lu ", static_cast<unsigned long>(q.rankAt(pos)));
-    if (r <= 0 || static_cast<size_t>(r) > kRankRoom) return false;
-    at = static_cast<size_t>(r);
-  }
-  size_t n = at + catalog.path(q.trackAt(pos), line + at, TrackCatalog::kMaxPath);
-  line[n++] = '\n';
-  return out.write(line, n);
+bool writeEntryAt(const QueueModel& q, const TrackCatalog& catalog, uint32_t pos, bool shuffled, ByteSink& out) {
+  return writeEntry(catalog, q.trackAt(pos), shuffled, shuffled ? q.rankAt(pos) : 0, out);
 }
 
 // A version 2 line's "<rank> ": the rank, and s moved past its space;
@@ -186,22 +170,47 @@ Writer::Step Writer::step(const QueueModel& q, const TrackCatalog& catalog, Byte
   // change under the lines.)
   if (q.contentVersion() != version_) return Step::Changed;
   if (!headerDone_ && maxLines) {
-    if (!writeHeader(q, generation_, out)) return Step::Failed;
+    if (!writeHeaderOf(q, generation_, out)) return Step::Failed;
     headerDone_ = true;
     --maxLines;
   }
   for (; maxLines && next_ < q.size(); --maxLines, ++next_) {
-    if (!writeEntry(q, catalog, next_, q.shuffled(), out)) return Step::Failed;
+    if (!writeEntryAt(q, catalog, next_, q.shuffled(), out)) return Step::Failed;
   }
   return headerDone_ && next_ >= q.size() ? Step::Done : Step::More;
 }
 
 bool write(const QueueModel& q, const TrackCatalog& catalog, uint32_t generation, ByteSink& out) {
-  if (!writeHeader(q, generation, out)) return false;
+  if (!writeHeaderOf(q, generation, out)) return false;
   for (uint32_t i = 0; i < q.size(); ++i) {
-    if (!writeEntry(q, catalog, i, q.shuffled(), out)) return false;
+    if (!writeEntryAt(q, catalog, i, q.shuffled(), out)) return false;
   }
   return true;
+}
+
+// Version 2 when shuffled (the header's version is the file's mode).
+bool writeHeader(bool shuffled, uint32_t entries, int32_t current, uint32_t generation, ByteSink& out) {
+  char line[64];
+  const int n = std::snprintf(line, sizeof(line), "%s%d %lu %ld %lu\n", kMagic, shuffled ? 2 : 1,
+                              static_cast<unsigned long>(entries), static_cast<long>(current),
+                              static_cast<unsigned long>(generation));
+  return n > 0 && static_cast<size_t>(n) < sizeof(line) && out.write(line, static_cast<size_t>(n));
+}
+
+// One entry: its path (shuffled: after its rank and a space), or nothing
+// for a track the catalog doesn't know (the line count stays the entry
+// count, so `current` still points at the right line).
+bool writeEntry(const TrackCatalog& catalog, uint32_t track, bool shuffled, uint32_t rank, ByteSink& out) {
+  char line[kRankRoom + TrackCatalog::kMaxPath + 1];
+  size_t at = 0;
+  if (shuffled) {
+    const int r = std::snprintf(line, kRankRoom + 1, "%lu ", static_cast<unsigned long>(rank));
+    if (r <= 0 || static_cast<size_t>(r) > kRankRoom) return false;
+    at = static_cast<size_t>(r);
+  }
+  size_t n = at + catalog.path(track, line + at, TrackCatalog::kMaxPath);
+  line[n++] = '\n';
+  return out.write(line, n);
 }
 
 Restored read(ByteSource& in, const TrackCatalog& catalog, QueueModel& q, int32_t (*pickCurrent)(const Header&, void*),

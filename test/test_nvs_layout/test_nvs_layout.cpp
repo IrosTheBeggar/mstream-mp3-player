@@ -2,8 +2,8 @@
 // Copyright (C) 2026 IrosTheBeggar
 
 // Host unit tests for nvslayout: the NVS schema number's boot step, the
-// resume point's versioned blob, the repeat mode's key and the UI's
-// language (schema 3). Run: pio test -e native
+// resume point's versioned blob, the repeat mode's key, the UI's language
+// (schema 3) and Auto DJ's settings (schema 4). Run: pio test -e native
 #include <unity.h>
 
 #include <cstdint>
@@ -35,15 +35,21 @@ void test_schema_steps() {
   s = nvslayout::schemaStep(true, 2, 1);
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(2, s.from);
-  TEST_ASSERT_EQUAL_UINT16(3, nvslayout::kCurrent);
-  s = nvslayout::schemaStep(true, 1);  // a schema-1 unit (v0.5.0 to v0.6.0): migrated to 3
+  TEST_ASSERT_EQUAL_UINT16(4, nvslayout::kCurrent);
+  s = nvslayout::schemaStep(true, 1);  // a schema-1 unit (v0.5.0 to v0.6.0): migrated to 4
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(1, s.from);
-  s = nvslayout::schemaStep(true, 2);  // a schema-2 unit (0.7.0 to 0.9.0): migrated to 3
+  s = nvslayout::schemaStep(true, 2);  // a schema-2 unit (0.7.0 to 0.9.0): migrated to 4
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
   TEST_ASSERT_EQUAL_UINT16(2, s.from);
-  s = nvslayout::schemaStep(true, 3, 2);  // 0.9.0 on this firmware's NVS: left as it is
+  s = nvslayout::schemaStep(true, 3);  // a schema-3 unit (0.10.0): migrated to 4
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Migrate), static_cast<int>(s.action));
+  TEST_ASSERT_EQUAL_UINT16(3, s.from);
+  s = nvslayout::schemaStep(true, 3, 2);  // 0.9.0 on a schema-3 NVS: left as it is
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
+  s = nvslayout::schemaStep(true, 4, 3);  // 0.10.0 on this firmware's NVS: left as it is
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(s.action));
+  TEST_ASSERT_EQUAL_UINT16(4, s.from);
   TEST_ASSERT_EQUAL_STRING("meta", nvslayout::kMetaNamespace);
   TEST_ASSERT_EQUAL_STRING("schema", nvslayout::kSchemaKey);  // (NVS keys: 15 characters at most)
 }
@@ -250,9 +256,10 @@ void test_resume_blob_unknown_kind_keeps_the_position() {
 // The blob gained its version 2 under schema 1 (its own version byte; every
 // older version still read): no schema bump for that. A new key is a
 // layout change: schema 2 is schema 1's keys and "queue"/"repeat", schema
-// 3 schema 2's and "ui"/"lang".
-void test_the_schema_is_three() {
-  TEST_ASSERT_EQUAL_UINT16(3, nvslayout::kCurrent);
+// 3 schema 2's and "ui"/"lang", schema 4 schema 3's and the four of
+// "autodj".
+void test_the_schema_is_four() {
+  TEST_ASSERT_EQUAL_UINT16(4, nvslayout::kCurrent);
   TEST_ASSERT_EQUAL_UINT8(2, nvslayout::kResumeVersion);
   TEST_ASSERT_EQUAL_UINT32(64, nvslayout::kResumeMaxBytes);
 }
@@ -304,6 +311,106 @@ void test_language_picker_and_its_migration() {
   TEST_ASSERT_TRUE(nvslayout::migrateWritesLang(2, false));
   TEST_ASSERT_FALSE(nvslayout::migrateWritesLang(2, true));  // a downgrade left one: kept
   TEST_ASSERT_FALSE(nvslayout::migrateWritesLang(3, false));
+  TEST_ASSERT_FALSE(nvslayout::migrateWritesLang(4, false));  // (the step to 4 writes nothing)
+}
+
+// Auto DJ's settings as saved (schema 4): absent, each key's default (off,
+// Follow the vibe, 55 %, both matches off: the user's D2); a value this
+// firmware doesn't take (a later one's), that key's default; the match
+// bits each on their own, other bits ignored. What autoDjTo() writes reads
+// back the same. The names fit NVS's 15 characters.
+void test_auto_dj_from_what_is_saved() {
+  using nvslayout::AutoDjSaved;
+  using nvslayout::AutoDjStored;
+  const AutoDjSaved none = nvslayout::autoDjFrom(AutoDjStored());
+  TEST_ASSERT_FALSE(none.on);
+  TEST_ASSERT_EQUAL_UINT8(0, none.mode);
+  TEST_ASSERT_EQUAL_UINT8(55, none.floorPct);
+  TEST_ASSERT_FALSE(none.matchTempo);  // D2: BPM continuity off
+  TEST_ASSERT_FALSE(none.matchKey);    // D2: Harmonic mixing off
+  // Absent keys, whatever was read into them.
+  AutoDjStored junk;
+  junk.on = 1;
+  junk.mode = 1;
+  junk.floor = 70;
+  junk.match = 3;
+  const AutoDjSaved j = nvslayout::autoDjFrom(junk);
+  TEST_ASSERT_FALSE(j.on);
+  TEST_ASSERT_EQUAL_UINT8(0, j.mode);
+  TEST_ASSERT_EQUAL_UINT8(55, j.floorPct);
+  TEST_ASSERT_FALSE(j.matchTempo || j.matchKey);
+  // Each key.
+  AutoDjStored st;
+  st.haveOn = st.haveMode = st.haveFloor = st.haveMatch = true;
+  st.on = 1;
+  st.mode = 1;
+  st.floor = 65;
+  st.match = 1;
+  AutoDjSaved a = nvslayout::autoDjFrom(st);
+  TEST_ASSERT_TRUE(a.on);
+  TEST_ASSERT_EQUAL_UINT8(1, a.mode);
+  TEST_ASSERT_EQUAL_UINT8(65, a.floorPct);
+  TEST_ASSERT_TRUE(a.matchTempo);
+  TEST_ASSERT_FALSE(a.matchKey);
+  st.match = 2;
+  a = nvslayout::autoDjFrom(st);
+  TEST_ASSERT_FALSE(a.matchTempo);
+  TEST_ASSERT_TRUE(a.matchKey);
+  st.match = 0xFC;  // a later firmware's bits only
+  a = nvslayout::autoDjFrom(st);
+  TEST_ASSERT_FALSE(a.matchTempo || a.matchKey);
+  // Values this firmware doesn't take.
+  st.on = 2;
+  st.mode = 2;
+  st.floor = 80;
+  a = nvslayout::autoDjFrom(st);
+  TEST_ASSERT_FALSE(a.on);
+  TEST_ASSERT_EQUAL_UINT8(0, a.mode);
+  TEST_ASSERT_EQUAL_UINT8(55, a.floorPct);
+  const uint8_t floors[] = {0, 50, 54, 56, 62, 74, 76, 255};
+  for (uint8_t f : floors) {
+    st.floor = f;
+    TEST_ASSERT_EQUAL_UINT8(55, nvslayout::autoDjFrom(st).floorPct);
+    TEST_ASSERT_FALSE(nvslayout::autoDjFloorValid(f));
+  }
+  for (uint8_t f = 55; f <= 75; f += 5) {
+    st.floor = f;
+    TEST_ASSERT_EQUAL_UINT8(f, nvslayout::autoDjFrom(st).floorPct);
+    TEST_ASSERT_TRUE(nvslayout::autoDjFloorValid(f));
+  }
+  // Round trips: every combination.
+  for (int on = 0; on < 2; ++on)
+    for (uint8_t mode = 0; mode < 2; ++mode)
+      for (uint8_t f = 55; f <= 75; f += 5)
+        for (int m = 0; m < 4; ++m) {
+          AutoDjSaved w;
+          w.on = on != 0;
+          w.mode = mode;
+          w.floorPct = f;
+          w.matchTempo = (m & 1) != 0;
+          w.matchKey = (m & 2) != 0;
+          const AutoDjStored out = nvslayout::autoDjTo(w);
+          TEST_ASSERT_TRUE(out.haveOn && out.haveMode && out.haveFloor && out.haveMatch);
+          const AutoDjSaved r = nvslayout::autoDjFrom(out);
+          TEST_ASSERT_EQUAL(w.on, r.on);
+          TEST_ASSERT_EQUAL_UINT8(w.mode, r.mode);
+          TEST_ASSERT_EQUAL_UINT8(w.floorPct, r.floorPct);
+          TEST_ASSERT_EQUAL(w.matchTempo, r.matchTempo);
+          TEST_ASSERT_EQUAL(w.matchKey, r.matchKey);
+        }
+  AutoDjSaved odd;
+  odd.floorPct = 62;  // (nothing sets it: written as the default)
+  odd.mode = 7;
+  TEST_ASSERT_EQUAL_UINT8(55, nvslayout::autoDjTo(odd).floor);
+  TEST_ASSERT_EQUAL_UINT8(0, nvslayout::autoDjTo(odd).mode);
+  TEST_ASSERT_EQUAL_STRING("autodj", nvslayout::kAutoDjNamespace);
+  TEST_ASSERT_EQUAL_STRING("on", nvslayout::kAutoDjOnKey);
+  TEST_ASSERT_EQUAL_STRING("mode", nvslayout::kAutoDjModeKey);
+  TEST_ASSERT_EQUAL_STRING("floor", nvslayout::kAutoDjFloorKey);
+  TEST_ASSERT_EQUAL_STRING("match", nvslayout::kAutoDjMatchKey);
+  const char* names[] = {nvslayout::kAutoDjNamespace, nvslayout::kAutoDjOnKey, nvslayout::kAutoDjModeKey,
+                         nvslayout::kAutoDjFloorKey, nvslayout::kAutoDjMatchKey};
+  for (const char* n : names) TEST_ASSERT_TRUE(std::strlen(n) <= 15);
 }
 
 // The migration matrix: every unit this firmware can boot on, and what
@@ -311,12 +418,14 @@ void test_language_picker_and_its_migration() {
 // under schema 1 (a blob's kinds are its own version's business, no
 // bump), and the queue modes moved the schema to 2 for "queue"/"repeat";
 // a unit may have run either build before this one, or 0.6.0, or 0.9.0
-// (schema 2), or none; schema 3 added "ui"/"lang". The schema's step, the
-// repeat mode, the resume point and the UI's language, as the boot reads
-// them (NvsSchema::check(), QueueStore::loadRepeat() and loadResume(),
-// app/UiLang): the resume point survives whole on every row, the mode
-// where a unit had one, and every unit but a fresh one is in English with
-// no language picker unless it chose a language.
+// (schema 2), or 0.10.0 (schema 3), or none; schema 3 added "ui"/"lang",
+// schema 4 "autodj". The schema's step, the repeat mode, the resume point,
+// the UI's language and Auto DJ's settings, as the boot reads them
+// (NvsSchema::check(), QueueStore::loadRepeat() and loadResume(),
+// app/UiLang, app/AutoDjStore): the resume point survives whole on every
+// row, the mode where a unit had one, every unit but a fresh one is in
+// English with no language picker unless it chose a language, and Auto DJ
+// is off with its defaults unless this firmware saved it.
 void test_migration_matrix() {
   using A = SchemaStep::Action;
   using Kind = ResumeAnchor::Kind;
@@ -333,27 +442,53 @@ void test_migration_matrix() {
     uint8_t wantRepeat;
     Lang wantLang;
     bool wantPicker;  // the first boot's language picker shows
+    nvslayout::AutoDjStored dj;      // "autodj" (schema 4; none before it)
+    nvslayout::AutoDjSaved wantDj;   // what the boot reads of it (app/AutoDjStore)
   };
+  // This firmware's Auto DJ: on, Stay on seed, 70 %, Harmonic mixing.
+  nvslayout::AutoDjStored stayOnSeed;
+  stayOnSeed.haveOn = stayOnSeed.haveMode = stayOnSeed.haveFloor = stayOnSeed.haveMatch = true;
+  stayOnSeed.on = 1;
+  stayOnSeed.mode = 1;
+  stayOnSeed.floor = 70;
+  stayOnSeed.match = 2;
+  nvslayout::AutoDjSaved stayOnSeedRead;
+  stayOnSeedRead.on = true;
+  stayOnSeedRead.mode = 1;
+  stayOnSeedRead.floorPct = 70;
+  stayOnSeedRead.matchKey = true;
+  const nvslayout::AutoDjStored none;
+  const nvslayout::AutoDjSaved off;
   const Unit units[] = {
-      {"a fresh unit", false, 0, false, 0, Kind::None, nullptr, false, A::Write, 0, Lang::En, true},
+      {"a fresh unit", false, 0, false, 0, Kind::None, nullptr, false, A::Write, 0, Lang::En, true, none, off},
       {"v0.5.0-beta.1 (no schema, the tips seen)", false, 0, false, 0, Kind::None, nullptr, true, A::Write, 0,
-       Lang::En, false},
-      {"v0.5.0 (schema 1, no anchor)", true, 1, false, 0, Kind::None, nullptr, true, A::Migrate, 0, Lang::En, false},
-      {"0.6.0 (schema 1, an MP3 anchor)", true, 1, false, 0, Kind::Mp3, nullptr, true, A::Migrate, 0, Lang::En, false},
+       Lang::En, false, none, off},
+      {"v0.5.0 (schema 1, no anchor)", true, 1, false, 0, Kind::None, nullptr, true, A::Migrate, 0, Lang::En, false,
+       none, off},
+      {"0.6.0 (schema 1, an MP3 anchor)", true, 1, false, 0, Kind::Mp3, nullptr, true, A::Migrate, 0, Lang::En, false,
+       none, off},
       {"0.6.0 (schema 1, a FLAC anchor, the tips never seen)", true, 1, false, 0, Kind::Flac, nullptr, false,
-       A::Migrate, 0, Lang::En, false},
+       A::Migrate, 0, Lang::En, false, none, off},
       {"the Opus build before the merge (schema 1, an Opus anchor)", true, 1, false, 0, Kind::Opus, nullptr, true,
-       A::Migrate, 0, Lang::En, false},
+       A::Migrate, 0, Lang::En, false, none, off},
       {"the queue modes build before the merge (schema 2, Repeat One)", true, 2, true, 2, Kind::Mp3, nullptr, true,
-       A::Migrate, 2, Lang::En, false},
+       A::Migrate, 2, Lang::En, false, none, off},
       {"0.9.0 (schema 2, Repeat All, an Opus anchor, the tips never seen)", true, 2, true, 1, Kind::Opus, nullptr,
-       false, A::Migrate, 1, Lang::En, false},
-      {"this firmware, back from a downgrade to 0.9.0 (schema 3 kept, German)", true, 3, true, 1, Kind::Mp3, "de",
-       true, A::None, 1, Lang::De, false},
-      {"this firmware (schema 3, Polish, Repeat One)", true, 3, true, 2, Kind::Flac, "pl", true, A::None, 2, Lang::Pl,
-       false},
-      {"this firmware, its picker left without a choice (the tips not seen yet)", true, 3, false, 0, Kind::None,
-       nullptr, false, A::None, 0, Lang::En, true},
+       false, A::Migrate, 1, Lang::En, false, none, off},
+      {"0.10.0, back from a downgrade to 0.9.0 (schema 3 kept, German)", true, 3, true, 1, Kind::Mp3, "de", true,
+       A::Migrate, 1, Lang::De, false, none, off},
+      {"0.10.0 (schema 3, Polish, Repeat One)", true, 3, true, 2, Kind::Flac, "pl", true, A::Migrate, 2, Lang::Pl,
+       false, none, off},
+      {"0.10.0, its picker left without a choice (the tips not seen yet)", true, 3, false, 0, Kind::None, nullptr,
+       false, A::Migrate, 0, Lang::En, true, none, off},
+      {"this firmware (schema 4, Auto DJ never touched)", true, 4, true, 1, Kind::Opus, "de", true, A::None, 1,
+       Lang::De, false, none, off},
+      {"this firmware (schema 4, Auto DJ on in Stay on seed)", true, 4, true, 0, Kind::Mp3, "en", true, A::None, 0,
+       Lang::En, false, stayOnSeed, stayOnSeedRead},
+      {"this firmware, back from a downgrade to 0.10.0 (schema 4 kept, Auto DJ on)", true, 4, true, 2, Kind::Flac,
+       "pl", true, A::None, 2, Lang::Pl, false, stayOnSeed, stayOnSeedRead},
+      {"this firmware, its picker left without a choice (the tips not seen yet)", true, 4, false, 0, Kind::None,
+       nullptr, false, A::None, 0, Lang::En, true, none, off},
   };
   for (const Unit& u : units) {
     const SchemaStep s = nvslayout::schemaStep(u.haveSchema, u.schema);
@@ -366,6 +501,14 @@ void test_migration_matrix() {
     if (u.want == A::Migrate && nvslayout::migrateWritesLang(s.from, lang != nullptr)) lang = "en";
     TEST_ASSERT_TRUE_MESSAGE(nvslayout::langFrom(lang != nullptr, lang) == u.wantLang, u.ran);
     TEST_ASSERT_EQUAL_MESSAGE(u.wantPicker, nvslayout::langPickerDue(lang != nullptr, u.coachSeen), u.ran);
+    // Auto DJ (app/AutoDjStore): migrate(3, 4) writes nothing; absent is
+    // off, with the defaults.
+    const nvslayout::AutoDjSaved dj = nvslayout::autoDjFrom(u.dj);
+    TEST_ASSERT_EQUAL_MESSAGE(u.wantDj.on, dj.on, u.ran);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(u.wantDj.mode, dj.mode, u.ran);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(u.wantDj.floorPct, dj.floorPct, u.ran);
+    TEST_ASSERT_EQUAL_MESSAGE(u.wantDj.matchTempo, dj.matchTempo, u.ran);
+    TEST_ASSERT_EQUAL_MESSAGE(u.wantDj.matchKey, dj.matchKey, u.ran);
     QueueResume saved = u.kind == Kind::None ? sample() : anchored();
     saved.anchor.kind = u.kind;
     if (u.kind == Kind::Flac || u.kind == Kind::Opus) {  // the FLAC model: no byte fields
@@ -378,9 +521,13 @@ void test_migration_matrix() {
     assertSame(saved, r);
     TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(u.kind), static_cast<int>(r.anchor.kind), u.ran);
   }
-  // The downgrade to 0.9.0 (schema 2) from this firmware: "newer, left as
-  // it is", every key as 0.9.0 wrote it ("lang" never read: English).
+  // The downgrade to 0.9.0 (schema 2) from 0.10.0 or this firmware: "newer,
+  // left as it is", every key as 0.9.0 wrote it ("lang" never read:
+  // English). To 0.10.0 (schema 3) from this firmware: the same, "autodj"
+  // never read (no Auto DJ there), and back here it is as it was.
   TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 3, 2).action));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 4, 2).action));
+  TEST_ASSERT_EQUAL_INT(static_cast<int>(A::Newer), static_cast<int>(nvslayout::schemaStep(true, 4, 3).action));
   // The downgrades from schema 2 (perhaps an Opus anchor),
   // each modelled by the rule that build has: to the queue modes build
   // (schema 2: nothing to do; its reader knew the kinds up to FLAC, so an
@@ -413,10 +560,11 @@ int main(int, char**) {
   RUN_TEST(test_resume_blob_unknown_is_ignored);
   RUN_TEST(test_resume_blob_opus_anchor);
   RUN_TEST(test_resume_blob_unknown_kind_keeps_the_position);
-  RUN_TEST(test_the_schema_is_three);
+  RUN_TEST(test_the_schema_is_four);
   RUN_TEST(test_repeat_from_what_is_saved);
   RUN_TEST(test_language_from_what_is_saved);
   RUN_TEST(test_language_picker_and_its_migration);
+  RUN_TEST(test_auto_dj_from_what_is_saved);
   RUN_TEST(test_migration_matrix);
   return UNITY_END();
 }

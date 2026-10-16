@@ -110,7 +110,7 @@ void ScanScheduler::decide(const In& in, Out& o) const {
     return;
   }
   const Source src = sourceOf(in);
-  const bool background = in.walk || in.compact || src != Source::None || in.djCheck;
+  const bool background = in.walk || in.compact || src != Source::None;
   if (!in.cover && !in.save && !background) return;  // nothing to do
   if (in.listMoving) {
     o.wait = Wait::List;
@@ -131,12 +131,10 @@ void ScanScheduler::decide(const In& in, Out& o) const {
     next = Job::Walk;
   } else if (in.compact) {
     next = Job::Compact;
-  } else if (src != Source::None) {
-    next = Job::Scan;
   } else {
-    next = Job::DjCheck;
+    next = Job::Scan;  // (only the scan is left: `background` holds)
   }
-  if ((next == Job::Scan || next == Job::DjCheck) && batteryLow_) {
+  if (next == Job::Scan && batteryLow_) {
     o.wait = Wait::Battery;
     return;
   }
@@ -241,7 +239,6 @@ const char* ScanScheduler::jobName(Job j) {
     case Job::Walk: return "walk";
     case Job::Compact: return "compaction";
     case Job::Scan: return "scan";
-    case Job::DjCheck: return "DJ check";
   }
   return "?";
 }

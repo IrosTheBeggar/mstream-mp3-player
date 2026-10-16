@@ -5,8 +5,10 @@
 // shuffle and its ranks: docs/QUEUE-MODES.md; its memory: release() and
 // the exact trim), TrackCatalog (library and built-in ids), QueueText (the
 // queue saved as paths, and read back after a library rebuild), QueueSaver
-// and QueueRemap (the queue carried across a rebuild through queue.txt:
-// docs/METADATA.md 3.4.2, milestone N3). Run: pio test -e native
+// (its timing; edits that never settle: an hour of Auto DJ appending a
+// track every second, written from snapshots) and QueueRemap (the queue
+// carried across a rebuild through queue.txt: docs/METADATA.md 3.4.2,
+// milestone N3). Run: pio test -e native
 #include <unity.h>
 
 #include <algorithm>
@@ -4354,6 +4356,822 @@ void test_remap_in_two_halves_that_cant_carry_the_queue() {
   }
 }
 
+// ---- Auto DJ: the quiet append and the play epoch (the engine design's 2.12) ----
+
+namespace {
+using Edit = QueueModel::Edit;
+
+void expectUndoable(Edit want, const QueueModel& q, const char* what) {
+  TEST_ASSERT_EQUAL_INT_MESSAGE(static_cast<int>(want), static_cast<int>(q.undoable()), what);
+}
+
+// Every rank distinct (a shuffled queue's rule).
+bool distinctRanks(const QueueModel& q) {
+  std::set<uint32_t> r;
+  for (uint32_t i = 0; i < q.size(); ++i) r.insert(q.rankAt(i));
+  return r.size() == q.size();
+}
+}  // namespace
+
+// Auto DJ's append takes no undo of its own: the listener's last edit stays
+// the one Undo undoes, with Auto DJ's entries still at the end afterwards
+// (their keys kept: the DJ marks follow them). Mirrored into every in-place
+// edit's snapshot; not into a Play's or a Clear's (their undo brings back a
+// queue that never held them).
+void test_a_quiet_append_keeps_the_listeners_undo() {
+  {
+    QueueModel q;
+    fill(q, 4, 1);  // 10 [11] 12 13, no undo (assign)
+    const uint32_t content = q.contentVersion(), position = q.positionVersion(), epoch = q.playEpoch();
+    TEST_ASSERT_TRUE(q.appendQuiet(50));
+    expectTracks(q, {10, 11, 12, 13, 50});
+    TEST_ASSERT_EQUAL_INT(1, q.current());
+    TEST_ASSERT_FALSE(q.heardAt(4));
+    TEST_ASSERT_TRUE(q.contentVersion() != content);  // (the saver and the Queue tab see it)
+    TEST_ASSERT_TRUE(q.positionVersion() != position);
+    TEST_ASSERT_EQUAL_UINT32(epoch, q.playEpoch());
+    expectUndoable(Edit::None, q, "nothing to undo, nothing taken");
+    TEST_ASSERT_FALSE(q.undo());
+  }
+  struct Case {
+    const char* name;
+    std::function<void(QueueModel&)> edit;
+    Edit kind;
+    std::vector<uint32_t> edited;  // after the edit and two quiet appends (50, 51)
+    std::vector<uint32_t> undone;  // after Undo
+    uint32_t currentAfterUndo;     // its track
+  };
+  static const uint32_t sixty[] = {60};
+  const Case cases[] = {
+      {"+ Queue", [](QueueModel& q) { TEST_ASSERT_TRUE(q.append(sixty, 1)); }, Edit::Append,
+       {10, 11, 12, 13, 60, 50, 51}, {10, 11, 12, 13, 50, 51}, 11},
+      {"Play next", [](QueueModel& q) { TEST_ASSERT_TRUE(q.insertNext(sixty, 1)); }, Edit::InsertNext,
+       {10, 11, 60, 12, 13, 50, 51}, {10, 11, 12, 13, 50, 51}, 11},
+      {"Remove",
+       [](QueueModel& q) {
+         const uint32_t pos[] = {2};
+         TEST_ASSERT_EQUAL_UINT32(1, q.remove(pos, 1).count);
+       },
+       Edit::Remove, {10, 11, 13, 50, 51}, {10, 11, 12, 13, 50, 51}, 11},
+      {"Remove the current entry",
+       [](QueueModel& q) {
+         const uint32_t pos[] = {1};
+         TEST_ASSERT_TRUE(q.remove(pos, 1).current);
+       },
+       Edit::Remove, {10, 12, 13, 50, 51}, {10, 11, 12, 13, 50, 51}, 12},
+      {"a move",
+       [](QueueModel& q) {
+         const uint32_t pos[] = {3};
+         TEST_ASSERT_TRUE(q.moveNext(pos, 1));
+       },
+       Edit::MoveNext, {10, 11, 13, 12, 50, 51}, {10, 11, 12, 13, 50, 51}, 11},
+      {"Clear up next", [](QueueModel& q) { TEST_ASSERT_TRUE(q.clearUpNext()); }, Edit::ClearUpNext,
+       {10, 11, 50, 51}, {10, 11, 12, 13, 50, 51}, 11},
+  };
+  for (const Case& c : cases) {
+    QueueModel q;
+    fill(q, 4, 1);
+    c.edit(q);
+    TEST_ASSERT_TRUE_MESSAGE(q.appendQuiet(50), c.name);
+    TEST_ASSERT_TRUE_MESSAGE(q.appendQuiet(51), c.name);
+    TEST_ASSERT_TRUE_MESSAGE(tracks(q) == c.edited, c.name);
+    expectUndoable(c.kind, q, c.name);  // still the listener's edit
+    const uint32_t k50 = q.keyAt(q.size() - 2), k51 = q.keyAt(q.size() - 1);
+    const uint32_t epoch = q.playEpoch();
+    TEST_ASSERT_TRUE_MESSAGE(q.undo(), c.name);
+    TEST_ASSERT_TRUE_MESSAGE(tracks(q) == c.undone, c.name);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(k50, q.keyAt(4), c.name);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(k51, q.keyAt(5), c.name);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(c.currentAfterUndo, q.currentTrack(), c.name);
+    TEST_ASSERT_FALSE_MESSAGE(q.heardAt(4) || q.heardAt(5), c.name);
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(epoch, q.playEpoch(), c.name);  // (an in-place edit's undo)
+    TEST_ASSERT_FALSE(q.undo());                                     // one level, as ever
+  }
+  // A Play's snapshot: not mirrored. Its undo brings back the queue before
+  // the Play (the pick isn't playing: what was current then is).
+  {
+    QueueModel q;
+    fill(q, 4, 1);
+    const uint32_t album[] = {1, 2, 3};
+    TEST_ASSERT_TRUE(q.replace(album, 3, 2));
+    TEST_ASSERT_TRUE(q.appendQuiet(50));
+    expectTracks(q, {1, 2, 3, 50});
+    expectUndoable(Edit::Replace, q, "a Play's");
+    TEST_ASSERT_TRUE(q.undo());
+    expectTracks(q, {10, 11, 12, 13});
+    TEST_ASSERT_EQUAL_UINT32(11, q.currentTrack());
+  }
+  // A Clear's: the same. (Into an empty queue the pick is the current entry.)
+  {
+    QueueModel q;
+    fill(q, 4, 1);
+    TEST_ASSERT_TRUE(q.clear());
+    TEST_ASSERT_TRUE(q.appendQuiet(50));
+    expectTracks(q, {50});
+    TEST_ASSERT_EQUAL_INT(0, q.current());
+    expectUndoable(Edit::Clear, q, "a Clear's");
+    TEST_ASSERT_TRUE(q.undo());
+    expectTracks(q, {10, 11, 12, 13});
+    TEST_ASSERT_EQUAL_UINT32(11, q.currentTrack());
+  }
+  // The heard marks: a mirrored entry heard since (it played) is heard after
+  // the undo too (carryHeard(), by key); one never current stays unheard.
+  {
+    QueueModel q;
+    fill(q, 3, 2);  // 10 11 [12]
+    TEST_ASSERT_TRUE(q.append(sixty, 1));
+    TEST_ASSERT_TRUE(q.appendQuiet(50));
+    TEST_ASSERT_TRUE(q.setCurrent(4));  // the pick plays (60 jumped over)
+    TEST_ASSERT_TRUE(q.appendQuiet(51));
+    TEST_ASSERT_TRUE(q.undo());
+    expectTracks(q, {10, 11, 12, 50, 51});
+    TEST_ASSERT_EQUAL_INT(3, q.current());  // what plays keeps playing
+    TEST_ASSERT_TRUE(q.heardAt(3));
+    TEST_ASSERT_FALSE(q.heardAt(4));
+  }
+}
+
+// Shuffled, the quiet entry ranks after the highest rank, in the queue
+// (as + Queue's) and in the snapshot by the snapshot's own highest rank:
+// never two ranks alike in either, and each one's own order ends with it.
+// (An in-place edit's snapshot is always in the queue's mode: a toggle
+// drops the undo, and only a Play changes the mode as part of an edit.)
+void test_a_quiet_append_ranks_in_its_snapshot() {
+  const uint32_t ids[] = {1, 2, 3, 4, 5, 6};
+  const uint32_t r[] = {0, 1, 2, 3, 4, 50};
+  // The snapshot's top above the queue's: a Remove took the highest rank.
+  {
+    QueueModel q;
+    TEST_ASSERT_TRUE(q.assign(ids, 6, 0, true, r));
+    const uint32_t pos[] = {5};
+    TEST_ASSERT_EQUAL_UINT32(1, q.remove(pos, 1).count);
+    TEST_ASSERT_TRUE(q.appendQuiet(70));
+    TEST_ASSERT_EQUAL_UINT32(5, q.rankAt(5));  // after the queue's 4
+    TEST_ASSERT_TRUE(distinctRanks(q));
+    TEST_ASSERT_TRUE(q.undo());
+    expectTracks(q, {1, 2, 3, 4, 5, 6, 70});
+    TEST_ASSERT_EQUAL_UINT32(51, q.rankAt(6));  // after the snapshot's 50
+    TEST_ASSERT_TRUE(distinctRanks(q));
+    TEST_ASSERT_TRUE(q.shuffled());
+    TEST_ASSERT_TRUE(ownOrder(q) == std::vector<uint32_t>({1, 2, 3, 4, 5, 6, 70}));
+  }
+  // The queue's top above the snapshot's: + Queue ranked after it.
+  {
+    QueueModel q;
+    TEST_ASSERT_TRUE(q.assign(ids, 6, 0, true, r));
+    const uint32_t add[] = {80, 81};
+    TEST_ASSERT_TRUE(q.append(add, 2));  // ranks 51, 52
+    TEST_ASSERT_TRUE(q.appendQuiet(90));
+    TEST_ASSERT_EQUAL_UINT32(53, q.rankAt(8));
+    TEST_ASSERT_TRUE(q.undo());
+    expectTracks(q, {1, 2, 3, 4, 5, 6, 90});
+    TEST_ASSERT_EQUAL_UINT32(51, q.rankAt(6));
+    TEST_ASSERT_TRUE(distinctRanks(q));
+    q.setShuffled(false);
+    expectTracks(q, {1, 2, 3, 4, 5, 6, 90});
+  }
+  // Rank 0 in an empty snapshot's place (a Remove that emptied the queue),
+  // as an add to an empty shuffled queue is laid out.
+  {
+    QueueModel q;
+    const uint32_t one[] = {1};
+    const uint32_t rank[] = {9};
+    TEST_ASSERT_TRUE(q.assign(one, 1, 0, true, rank));
+    const uint32_t pos[] = {0};
+    TEST_ASSERT_TRUE(q.remove(pos, 1).pastEnd);
+    TEST_ASSERT_TRUE(q.appendQuiet(70));
+    TEST_ASSERT_EQUAL_UINT32(0, q.rankAt(0));
+    TEST_ASSERT_TRUE(q.undo());
+    expectTracks(q, {1, 70});
+    TEST_ASSERT_EQUAL_UINT32(9, q.rankAt(0));
+    TEST_ASSERT_EQUAL_UINT32(10, q.rankAt(1));
+    TEST_ASSERT_EQUAL_UINT32(70, q.currentTrack());  // (it was current: it stays)
+  }
+}
+
+// The undo goes when the snapshot can't take the entry: at the cap, no
+// memory to grow, a rank past 0xFFFFFFFF. The append itself goes in all the
+// same; only no memory for the queue's own entries (or a rank past the
+// top in the queue) refuses it, nothing changed and the undo kept.
+void test_a_quiet_append_drops_an_undo_it_cant_keep() {
+  // The snapshot at the cap while the queue isn't.
+  {
+    QueueModel q;
+    fill(q, 5000, 0);
+    const uint32_t pos[] = {4999};
+    TEST_ASSERT_EQUAL_UINT32(1, q.remove(pos, 1).count);
+    expectUndoable(Edit::Remove, q, "before");
+    TEST_ASSERT_TRUE(q.appendQuiet(7));
+    TEST_ASSERT_EQUAL_UINT32(5000, q.size());
+    TEST_ASSERT_EQUAL_UINT32(7, q.trackAt(4999));
+    expectUndoable(Edit::None, q, "a snapshot of 5,000 can't grow");
+  }
+  // No memory for the snapshot to grow: dropped (its memory given back),
+  // the entry added.
+  {
+    QueueModel q(Heap::alloc, Heap::release);
+    fill(q, 16, 0);  // a block of exactly 16
+    const uint32_t one[] = {60};
+    TEST_ASSERT_TRUE(q.append(one, 1));  // the snapshot's block: 16, full
+    const long live = Heap::live;
+    Heap::failing = true;
+    TEST_ASSERT_TRUE(q.appendQuiet(7));  // the queue's block has room (32)
+    Heap::failing = false;
+    TEST_ASSERT_EQUAL_UINT32(18, q.size());
+    TEST_ASSERT_EQUAL_UINT32(7, q.trackAt(17));
+    expectUndoable(Edit::None, q, "no memory");
+    TEST_ASSERT_EQUAL_INT(live - 1, Heap::live);  // the snapshot's block went back
+  }
+  // No memory for the queue's own entries: refused, the undo kept.
+  {
+    QueueModel q(Heap::alloc, Heap::release);
+    fill(q, 16, 0);
+    const uint32_t pos[] = {3};
+    TEST_ASSERT_TRUE(q.moveNext(pos, 1));  // a full block, an undo held
+    const uint32_t content = q.contentVersion();
+    Heap::failing = true;
+    TEST_ASSERT_FALSE(q.appendQuiet(7));
+    Heap::failing = false;
+    TEST_ASSERT_EQUAL_UINT32(16, q.size());
+    TEST_ASSERT_EQUAL_UINT32(content, q.contentVersion());
+    expectUndoable(Edit::MoveNext, q, "kept");
+  }
+  // Ranks: past 0xFFFFFFFF in the queue, refused; in the snapshot only,
+  // the undo dropped.
+  {
+    QueueModel q;
+    const uint32_t ids[] = {1, 2, 3};
+    const uint32_t top[] = {0, 1, 0xFFFFFFFFu};
+    TEST_ASSERT_TRUE(q.assign(ids, 3, 0, true, top));
+    const uint32_t content = q.contentVersion();
+    TEST_ASSERT_FALSE(q.appendQuiet(7));
+    TEST_ASSERT_EQUAL_UINT32(content, q.contentVersion());
+    const uint32_t pos[] = {2};
+    TEST_ASSERT_EQUAL_UINT32(1, q.remove(pos, 1).count);  // the snapshot keeps 0xFFFFFFFF
+    TEST_ASSERT_TRUE(q.appendQuiet(7));
+    TEST_ASSERT_EQUAL_UINT32(2, q.rankAt(2));
+    expectUndoable(Edit::None, q, "no rank for it in the snapshot");
+  }
+}
+
+// At the cap the quiet append pushes out the oldest played entry, as an add
+// does, and the undo goes with it; with nothing played, refused.
+void test_a_quiet_append_at_the_cap() {
+  {
+    QueueModel q;
+    fill(q, 5000, 100);  // 100 played
+    const uint32_t pos[] = {200};
+    TEST_ASSERT_TRUE(q.moveNext(pos, 1));
+    const std::vector<uint32_t> before = keys(q);
+    const uint32_t cur = q.currentKey();
+    TEST_ASSERT_TRUE(q.appendQuiet(7));
+    TEST_ASSERT_EQUAL_UINT32(5000, q.size());
+    TEST_ASSERT_EQUAL_INT(99, q.current());
+    TEST_ASSERT_EQUAL_UINT32(cur, q.currentKey());
+    for (uint32_t i = 0; i < 4999; ++i) TEST_ASSERT_EQUAL_UINT32(before[i + 1], q.keyAt(i));
+    TEST_ASSERT_EQUAL_UINT32(7, q.trackAt(4999));
+    expectUndoable(Edit::None, q, "pushed out: no undo");
+    // The first heard one goes, not one jumped over; a Play's undo goes too.
+    QueueModel p;
+    const std::vector<uint32_t> all = range(5000);
+    TEST_ASSERT_TRUE(p.replace(all.data(), 5000, 3));
+    TEST_ASSERT_TRUE(p.step(+1, false));  // 0-2 jumped over (unheard), 3 heard
+    TEST_ASSERT_TRUE(p.appendQuiet(7));
+    TEST_ASSERT_EQUAL_UINT32(10, p.trackAt(0));  // the unheard ones stay
+    TEST_ASSERT_EQUAL_UINT32(14, p.currentTrack());
+    TEST_ASSERT_EQUAL_INT(3, p.current());
+    expectUndoable(Edit::None, p, "a Play's");
+  }
+  // Nothing played: refused, nothing changed.
+  {
+    QueueModel q;
+    fill(q, 5000, 0);
+    const uint32_t content = q.contentVersion();
+    TEST_ASSERT_FALSE(q.appendQuiet(7));
+    TEST_ASSERT_EQUAL_UINT32(5000, q.size());
+    TEST_ASSERT_EQUAL_UINT32(content, q.contentVersion());
+  }
+  // Shuffled: the first position goes (play order), the new entry ranks
+  // after what stays.
+  {
+    QueueModel q;
+    fill(q, 5000, 0);
+    q.setShuffled(true);
+    for (int i = 0; i < 3; ++i) TEST_ASSERT_TRUE(q.step(+1, false));
+    const uint32_t gone = q.keyAt(0);
+    TEST_ASSERT_TRUE(q.appendQuiet(7));
+    TEST_ASSERT_EQUAL_UINT32(QueueModel::kNone, q.positionOf(gone));
+    TEST_ASSERT_EQUAL_INT(2, q.current());
+    for (uint32_t i = 0; i < 4999; ++i) TEST_ASSERT_TRUE(q.rankAt(i) < q.rankAt(4999));
+    TEST_ASSERT_TRUE(distinctRanks(q));
+  }
+}
+
+// An empty queue: the quiet entry is current (heard), as any add's first.
+void test_a_quiet_append_to_an_empty_queue() {
+  QueueModel q;
+  TEST_ASSERT_TRUE(q.appendQuiet(5));
+  TEST_ASSERT_EQUAL_INT(0, q.current());
+  TEST_ASSERT_TRUE(q.heardAt(0));
+  TEST_ASSERT_EQUAL_UINT32(0, q.upNext());
+  QueueModel s;
+  s.setShuffled(true);
+  TEST_ASSERT_TRUE(s.appendQuiet(5));
+  TEST_ASSERT_EQUAL_UINT32(0, s.rankAt(0));
+}
+
+// playEpoch(): a new queue (a Play, a Clear, the undo of either); nothing
+// else.
+void test_the_play_epoch() {
+  QueueModel q;
+  uint32_t e = q.playEpoch();
+  const auto bumped = [&](const char* what) {
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(e + 1, q.playEpoch(), what);
+    e = q.playEpoch();
+  };
+  const auto same = [&](const char* what) { TEST_ASSERT_EQUAL_UINT32_MESSAGE(e, q.playEpoch(), what); };
+  fill(q, 4, 1);
+  same("assign (the boot's restore)");
+  const uint32_t album[] = {1, 2, 3};
+  TEST_ASSERT_TRUE(q.replace(album, 3, 1));
+  bumped("a Play");
+  TEST_ASSERT_TRUE(q.replace(album, 3, QueueModel::kAnyStart, true));
+  bumped("Shuffle all's Play");
+  TEST_ASSERT_TRUE(q.undo());
+  bumped("the undo of a Play");
+  const uint32_t two[] = {7, 8};
+  TEST_ASSERT_TRUE(q.append(two, 2));
+  same("+ Queue");
+  TEST_ASSERT_TRUE(q.insertNext(two, 1));
+  same("Play next");
+  TEST_ASSERT_TRUE(q.appendQuiet(9));
+  same("Auto DJ's append");
+  const uint32_t pos[] = {0};
+  TEST_ASSERT_EQUAL_UINT32(1, q.remove(pos, 1).count);
+  same("a remove");
+  TEST_ASSERT_TRUE(q.undo());
+  same("the undo of a remove");
+  const uint32_t mv[] = {4};
+  TEST_ASSERT_TRUE(q.moveNext(mv, 1));
+  same("a move");
+  TEST_ASSERT_TRUE(q.clearUpNext());
+  same("Clear up next");
+  TEST_ASSERT_TRUE(q.undo());
+  same("its undo");
+  TEST_ASSERT_TRUE(q.setShuffled(true));
+  TEST_ASSERT_TRUE(q.setShuffled(false));
+  same("toggles");
+  TEST_ASSERT_TRUE(q.step(+1, true));
+  TEST_ASSERT_TRUE(q.setCurrent(0));
+  same("moves of the current entry");
+  q.dropUndo();
+  same("dropUndo");
+  TEST_ASSERT_TRUE(q.clear());
+  bumped("a Clear");
+  TEST_ASSERT_TRUE(q.undo());
+  bumped("the undo of a Clear");
+  TEST_ASSERT_TRUE(q.replace(nullptr, 0, 0));
+  bumped("a Play of nothing (a Clear)");
+  TEST_ASSERT_TRUE(q.undo());
+  bumped("its undo");
+  TEST_ASSERT_TRUE(q.replace(nullptr, 0, 0, !q.shuffled()));
+  bumped("a Play of nothing in the other mode (a Clear's snapshot)");
+  TEST_ASSERT_TRUE(q.undo());
+  bumped("its undo");
+  TEST_ASSERT_TRUE(q.clear());
+  bumped("a Clear");
+  TEST_ASSERT_TRUE(q.clear());
+  bumped("a Clear of an empty queue");
+  q.release();
+  same("release (a library rebuild)");
+  fill(q, 4, 2);
+  same("assign (its read-back)");
+  // Refused (out of memory): no Play, no new session.
+  QueueModel h(Heap::alloc, Heap::release);
+  fill(h, 4, 0);
+  const uint32_t he = h.playEpoch();
+  const std::vector<uint32_t> many = range(100);
+  Heap::failing = true;
+  TEST_ASSERT_FALSE(h.replace(many.data(), 100, 0));
+  Heap::failing = false;
+  TEST_ASSERT_EQUAL_UINT32(he, h.playEpoch());
+}
+
+// A long random run with Auto DJ's appends among the listener's edits,
+// against a plain model: the queue, the current entry, what Undo puts back
+// (the quiet entries mirrored into an in-place edit's snapshot only) and
+// the play epoch agree after every step.
+void test_random_quiet_appends_match_a_model() {
+  QueueModel q;
+  struct E {
+    uint32_t track, key;
+  };
+  enum class Kind { None, NewQueue, InPlace };
+  std::vector<E> m, undoM;
+  int32_t cur = -1, undoCur = -1;
+  Kind undoKind = Kind::None;
+  uint32_t epoch = q.playEpoch();
+  uint32_t x = 4242;
+  auto rnd = [&](uint32_t n) {
+    x = x * 1664525u + 1013904223u;
+    return n ? (x >> 8) % n : 0;
+  };
+  auto newAt = [&](uint32_t at, uint32_t n) {
+    std::vector<E> added;
+    for (uint32_t i = 0; i < n; ++i) added.push_back({q.trackAt(at + i), q.keyAt(at + i)});
+    return added;
+  };
+  int quiet = 0, mirrored = 0, undone = 0;
+  for (int it = 0; it < 4000; ++it) {
+    const uint32_t op = rnd(10);
+    std::vector<uint32_t> ids;
+    for (uint32_t i = rnd(4); i > 0; --i) ids.push_back(rnd(50));
+    const auto save = [&](Kind k) {
+      undoM = m;
+      undoCur = cur;
+      undoKind = k;
+    };
+    if (op == 0) {
+      // A Play (of nothing: a Clear, whose snapshot is taken of a queue
+      // that isn't empty).
+      if (!m.empty() || !ids.empty()) save(Kind::NewQueue);
+      const uint32_t start = rnd(5);
+      TEST_ASSERT_TRUE(q.replace(ids.data(), static_cast<uint32_t>(ids.size()), start));
+      m = newAt(0, static_cast<uint32_t>(ids.size()));
+      cur = ids.empty() ? -1 : static_cast<int32_t>(std::min<uint32_t>(start, static_cast<uint32_t>(ids.size()) - 1));
+      ++epoch;
+    } else if ((op == 1 || op == 2) && !ids.empty()) {
+      save(Kind::InPlace);
+      const auto at = op == 1 && cur >= 0 ? static_cast<uint32_t>(cur) + 1 : static_cast<uint32_t>(m.size());
+      TEST_ASSERT_TRUE(op == 1 ? q.insertNext(ids.data(), static_cast<uint32_t>(ids.size()))
+                               : q.append(ids.data(), static_cast<uint32_t>(ids.size())));
+      const std::vector<E> added = newAt(at, static_cast<uint32_t>(ids.size()));
+      m.insert(m.begin() + at, added.begin(), added.end());
+      if (cur < 0) cur = static_cast<int32_t>(at);
+    } else if (op == 3 && !m.empty()) {
+      const auto p = rnd(static_cast<uint32_t>(m.size()));
+      save(Kind::InPlace);
+      const QueueModel::Removed r = q.remove(&p, 1);
+      m.erase(m.begin() + p);
+      if (static_cast<int32_t>(p) < cur) {
+        --cur;
+      } else if (static_cast<int32_t>(p) == cur && r.pastEnd) {
+        cur = static_cast<int32_t>(m.size()) - 1;
+      }
+    } else if (op == 4 && cur >= 0 && static_cast<size_t>(cur) + 1 < m.size()) {
+      save(Kind::InPlace);
+      TEST_ASSERT_TRUE(q.clearUpNext());
+      m.resize(static_cast<size_t>(cur) + 1);
+    } else if (op == 5 && rnd(3) == 0) {
+      if (!m.empty()) save(Kind::NewQueue);
+      TEST_ASSERT_TRUE(q.clear());
+      m.clear();
+      cur = -1;
+      ++epoch;
+    } else if (op == 6 && !m.empty()) {
+      const int d = static_cast<int>(rnd(5)) - 2;
+      q.step(d, true);
+      const auto n = static_cast<int32_t>(m.size());
+      cur = ((cur + d) % n + n) % n;
+    } else if (op == 7) {
+      const bool did = q.undo();
+      TEST_ASSERT_EQUAL(undoKind != Kind::None, did);
+      if (did) {
+        ++undone;
+        if (undoKind == Kind::NewQueue) ++epoch;
+        const uint32_t key = cur >= 0 ? m[cur].key : QueueModel::kNone;
+        m = undoM;
+        int32_t found = -1;
+        for (uint32_t i = 0; i < m.size(); ++i)
+          if (m[i].key == key) found = static_cast<int32_t>(i);
+        cur = found >= 0 ? found : undoCur;
+        undoKind = Kind::None;
+      }
+    } else if (op >= 8) {
+      TEST_ASSERT_TRUE(q.appendQuiet(100 + rnd(50)));
+      ++quiet;
+      const E e{q.trackAt(q.size() - 1), q.keyAt(q.size() - 1)};
+      m.push_back(e);
+      if (cur < 0) cur = 0;
+      if (undoKind == Kind::InPlace) {
+        undoM.push_back(e);
+        if (undoCur < 0) undoCur = 0;  // (the snapshot of an empty queue: an add's first is current there)
+        ++mirrored;
+      }
+    }
+    TEST_ASSERT_EQUAL_UINT32(m.size(), q.size());
+    for (uint32_t i = 0; i < m.size(); ++i) {
+      TEST_ASSERT_EQUAL_UINT32(m[i].track, q.trackAt(i));
+      TEST_ASSERT_EQUAL_UINT32(m[i].key, q.keyAt(i));
+    }
+    TEST_ASSERT_EQUAL_INT(cur, q.current());
+    TEST_ASSERT_EQUAL_UINT32(epoch, q.playEpoch());
+    TEST_ASSERT_EQUAL(undoKind != Kind::None, q.undoable() != QueueModel::Edit::None);
+  }
+  TEST_ASSERT_TRUE(quiet > 500);
+  TEST_ASSERT_TRUE(mirrored > 100);
+  TEST_ASSERT_TRUE(undone > 100);
+}
+
+// ---------------------------------------------------------------------------
+// Edits that never settle (Auto DJ's appends of 1-second tracks, the
+// device's soak of 2026-10-13: no queue.txt for 59 minutes): once the
+// file is QueueSaver::kMaxStaleMs behind, a snapshot's write that edits
+// don't drop.
+// ---------------------------------------------------------------------------
+namespace {
+
+// The file's lines after its header (the queue's tracks, as text).
+std::string bodyOf(const std::string& text) {
+  const size_t nl = text.find('\n');
+  return nl == std::string::npos ? std::string() : text.substr(nl + 1);
+}
+
+// The header's numbers: entries, current, generation; false: not a header.
+bool headerOf(const std::string& text, uint32_t* entries, int32_t* current, uint32_t* generation) {
+  unsigned version = 0, n = 0, g = 0;
+  long cur = 0;
+  if (std::sscanf(text.c_str(), "mstream-queue %u %u %ld %u", &version, &n, &cur, &g) != 4) return false;
+  *entries = n;
+  *current = static_cast<int32_t>(cur);
+  *generation = g;
+  return version == 1 || version == 2;
+}
+
+// The file a boot would read at any moment: whole (queuetext::read()
+// takes it, every line a track), and the line it picks, the position
+// saved for its generation (else its header's), one of its lines.
+void expectWhole(const std::string& file, const TrackCatalog& c, const MemStore& st, const char* when) {
+  QueueModel back;
+  MemorySource in(file.data(), file.size());
+  const queuetext::Restored r = queuetext::read(in, c, back);
+  TEST_ASSERT_TRUE_MESSAGE(r.ok, when);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(r.header.entries, back.size(), when);
+  TEST_ASSERT_EQUAL_UINT32_MESSAGE(0, r.dropped, when);
+  if (st.posGeneration == r.header.generation) {
+    TEST_ASSERT_TRUE_MESSAGE(st.pos >= 0 && static_cast<uint32_t>(st.pos) < r.header.entries, when);
+  }
+}
+
+struct Soak {
+  uint32_t commits = 0, snapshots = 0;
+  uint32_t longestGapMs = 0;  // the longest between two writes (the first: from the first edit)
+  uint32_t staleStarts = 0;   // snapshot writes begun, each kMaxStaleMs after the first edit the last one missed
+  uint32_t positionsForTheFile = 0;
+  size_t mostSnapshot = 0;
+};
+
+// `ms` of Auto DJ on 1-second tracks: every second the playing track ends
+// (the next one current: the last) and Auto DJ appends one (appendQuiet():
+// at the cap, the oldest played entry goes); a loop pass every 20 ms.
+Soak soak(QueueModel& q, QueueSaver& saver, MemStore& st, const TrackCatalog& c, uint32_t ms, uint32_t tracks) {
+  Soak s;
+  std::string expected;  // the snapshot's text, when its write began
+  uint32_t expectedGen = 0, next = 1, lastCommit = 1000;  // (the first edit's second)
+  // The first edit the file doesn't have yet (none: kNone), from which
+  // the next snapshot's write is kMaxStaleMs away (QueueSaver's rule: not
+  // from the end of the write before).
+  // (A queue loaded to be written again is behind the file from then: 0.)
+  constexpr uint32_t kNone = 0xFFFFFFFFu;
+  uint32_t firstEdit = saver.contentDirty() ? 0 : kNone;
+  bool wasWriting = false;
+  int commits = st.commits, positions = st.positions;
+  Meter::mark();
+  for (uint32_t t = 20; t <= ms; t += 20) {
+    if (t % 1000 == 0) {
+      TEST_ASSERT_TRUE(q.step(1, false));
+      TEST_ASSERT_TRUE(q.appendQuiet((next++ * 7919u) % tracks));
+      if (firstEdit == kNone) firstEdit = t;
+    }
+    saver.loop(t);
+    if (saver.writingSnapshot() && !wasWriting) {
+      // (This pass took the snapshot: nothing edited the queue since.)
+      expectedGen = saver.generation() + 1;
+      expected = wholeText(q, c, expectedGen);
+      TEST_ASSERT_TRUE(firstEdit != kNone);
+      const uint32_t stale = t - firstEdit;
+      TEST_ASSERT_TRUE_MESSAGE(stale >= QueueSaver::kMaxStaleMs && stale <= QueueSaver::kMaxStaleMs + 40,
+                               "a snapshot's write kMaxStaleMs after the first edit the file missed");
+      firstEdit = kNone;  // (this one has every edit so far)
+      ++s.staleStarts;
+    }
+    wasWriting = saver.writing();
+    if (st.commits != commits) {
+      commits = st.commits;
+      ++s.commits;
+      uint32_t n = 0, gen = 0;
+      int32_t cur = -1;
+      TEST_ASSERT_TRUE(headerOf(st.file, &n, &cur, &gen));
+      TEST_ASSERT_EQUAL_UINT32(saver.generation(), gen);
+      if (!expected.empty() && expectedGen == gen) {
+        TEST_ASSERT_EQUAL_STRING(expected.c_str(), st.file.c_str());  // the snapshot, whole, as QueueText writes it
+        ++s.snapshots;
+      }
+      expected.clear();
+      expectWhole(st.file, c, st, "a write");
+      s.longestGapMs = std::max(s.longestGapMs, t - lastCommit);
+      lastCommit = t;
+    }
+    if (st.positions != positions) {
+      positions = st.positions;
+      // A position is saved only for a file that is the queue.
+      uint32_t n = 0, gen = 0;
+      int32_t cur = -1;
+      TEST_ASSERT_TRUE(headerOf(st.file, &n, &cur, &gen));
+      TEST_ASSERT_EQUAL_UINT32(gen, st.posGeneration);
+      TEST_ASSERT_EQUAL_STRING(bodyOf(wholeText(q, c, gen)).c_str(), bodyOf(st.file).c_str());
+      TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+      ++s.positionsForTheFile;
+    }
+    // A cut at any moment (every 13th second, mid-write or not): the last
+    // good file, whole.
+    if (t % 13000 == 0) expectWhole(st.file, c, st, "a cut");
+  }
+  s.mostSnapshot = Meter::peak;
+  return s;
+}
+
+}  // namespace
+
+// The device's soak on the host: an hour of a track appended every second
+// to a queue that reaches the cap (5,000) and stays there. queue.txt is
+// written at least every kMaxStaleMs and a write's time (each a snapshot's
+// whole queue; at any moment a file a boot reads whole), the snapshot's
+// memory given back each time; a position only ever paired with a file
+// that is the queue. The edits stop: the file catches up with the queue,
+// its position with it.
+void test_the_saver_keeps_up_with_appends_every_second() {
+  constexpr uint32_t kTracks = 20000, kStart = 3800;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kTracks));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  std::vector<uint32_t> ids;
+  for (uint32_t i = 0; i < kStart; ++i) ids.push_back((i * 31u) % kTracks);
+  TEST_ASSERT_TRUE(q.assign(ids.data(), kStart, kStart - 2));  // (Auto DJ's pick up next)
+  MemStore st;
+  Meter::reset();
+  QueueSaver saver(st, q, c, Meter::alloc, Meter::release);
+  saver.loaded(5, false, 0);
+  st.file = wholeText(q, c, 5);
+  const Soak s = soak(q, saver, st, c, 3600u * 1000u, kTracks);
+  printf("[saver] an hour of appends every second (%u entries at the end): %u writes (%u from a snapshot), at "
+         "most %u ms between two, %u positions saved for the file, the snapshot at most %u B\n",
+         (unsigned)q.size(), (unsigned)s.commits, (unsigned)saver.snapshotWrites(), (unsigned)s.longestGapMs,
+         (unsigned)s.positionsForTheFile, (unsigned)s.mostSnapshot);
+  TEST_ASSERT_EQUAL_UINT32(QueueModel::kMaxEntries, q.size());
+  // A write at least every kMaxStaleMs and a write's time (157 passes of
+  // 20 ms at the cap).
+  TEST_ASSERT_TRUE(s.longestGapMs <= QueueSaver::kMaxStaleMs + 4000);
+  TEST_ASSERT_TRUE(s.commits >= 3600 / 35);
+  TEST_ASSERT_EQUAL_UINT32(s.commits, saver.writes());
+  TEST_ASSERT_EQUAL_UINT32(s.commits, saver.snapshotWrites());
+  TEST_ASSERT_EQUAL_UINT32(s.commits, s.snapshots);
+  TEST_ASSERT_EQUAL_UINT32(s.commits, s.staleStarts);
+  TEST_ASSERT_EQUAL_INT(0, st.discards);  // (no edit dropped one)
+  TEST_ASSERT_TRUE(s.mostSnapshot <= QueueModel::kMaxEntries * 4u);
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+  // The edits stop (the queue pauses): 2 s later the queue as it is, and
+  // its position for the file.
+  for (uint32_t t = 3600u * 1000u + 20; t < 3600u * 1000u + 12000; t += 20) saver.loop(t);
+  TEST_ASSERT_FALSE(saver.busy());
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, saver.generation()).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(saver.generation(), st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+}
+
+// The same shuffled for ten minutes (version 2: each line's rank from the
+// snapshot), then a power-off in the middle of a snapshot's write: the
+// queue has moved on, so that write is dropped and the queue as it is now
+// written whole, its position with it.
+void test_a_shuffled_soak_and_a_power_off_mid_snapshot() {
+  constexpr uint32_t kTracks = 20000, kStart = 4990;
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kTracks));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  std::vector<uint32_t> ids;
+  for (uint32_t i = 0; i < kStart; ++i) ids.push_back((i * 31u) % kTracks);
+  TEST_ASSERT_TRUE(q.assign(ids.data(), kStart, kStart - 2));  // (Auto DJ's pick up next)
+  TEST_ASSERT_TRUE(q.setShuffled(true));
+  MemStore st;
+  Meter::reset();
+  QueueSaver saver(st, q, c, Meter::alloc, Meter::release);
+  saver.loaded(9, true, 0);
+  st.file = wholeText(q, c, 9);
+  const Soak s = soak(q, saver, st, c, 600u * 1000u, kTracks);
+  TEST_ASSERT_TRUE(s.commits >= 600 / 35);
+  TEST_ASSERT_TRUE(s.longestGapMs <= QueueSaver::kMaxStaleMs + 4000);
+  TEST_ASSERT_EQUAL_INT(0, st.file.compare(0, 16, "mstream-queue 2 "));
+  TEST_ASSERT_TRUE(s.mostSnapshot <= QueueModel::kMaxEntries * 8u);
+  // On to the next snapshot's write, an edit into it, then the power-off.
+  uint32_t t = 600u * 1000u;
+  for (bool was = true; !(saver.writingSnapshot() && !was);) {
+    was = saver.writing();
+    t += 20;
+    if (t % 1000 == 0) {
+      q.step(1, false);
+      q.appendQuiet(t % kTracks);
+    }
+    saver.loop(t);
+  }
+  const std::string before = st.file;
+  q.step(1, false);
+  q.appendQuiet(7);
+  saver.loop(t + 20);
+  TEST_ASSERT_TRUE(saver.writingSnapshot());  // (an edit doesn't drop it)
+  TEST_ASSERT_EQUAL_STRING(before.c_str(), st.file.c_str());
+  const int discards = st.discards;
+  TEST_ASSERT_TRUE(saver.flushNow(t + 40));
+  TEST_ASSERT_EQUAL_INT(discards + 1, st.discards);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, saver.generation()).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(saver.generation(), st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  TEST_ASSERT_FALSE(saver.writing());
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+}
+
+// A snapshot's write: a toggle doesn't drop it, a power-off after one does
+// (the queue isn't the snapshot's: written whole); one the queue only
+// moved in is finished (its file, then the position). No memory for a
+// snapshot: nothing is begun (no temporary file), and once the edits stop,
+// the plain write after its 2 s.
+void test_a_snapshot_write_and_no_memory_for_one() {
+  constexpr uint32_t kTracks = 6000, kStart = 3000;  // (a write of 94 passes: longer than a second)
+  LibraryIndex idx;
+  TEST_ASSERT_TRUE(buildSynth(idx, kTracks));
+  TrackCatalog c(&idx);
+  QueueModel q;
+  std::vector<uint32_t> ids;
+  for (uint32_t i = 0; i < kStart; ++i) ids.push_back(i * 13u % kTracks);
+  TEST_ASSERT_TRUE(q.assign(ids.data(), kStart, 100));
+  MemStore st;
+  Meter::reset();
+  QueueSaver saver(st, q, c, Meter::alloc, Meter::release);
+  saver.loaded(2, false, 0);
+  // An edit a second: the snapshot's write begins kMaxStaleMs after the first.
+  uint32_t t = 0;
+  while (!saver.writing()) {
+    t += 20;
+    if (t % 1000 == 0) TEST_ASSERT_TRUE(q.appendQuiet(t / 1000));
+    saver.loop(t);
+    TEST_ASSERT_TRUE(t <= 1000 + QueueSaver::kMaxStaleMs);
+  }
+  TEST_ASSERT_TRUE(saver.writingSnapshot());
+  TEST_ASSERT_EQUAL_UINT32(1000 + QueueSaver::kMaxStaleMs, t);
+  TEST_ASSERT_EQUAL_size_t(static_cast<size_t>(q.size()) * 4, Meter::live);
+  q.setShuffled(true);  // a toggle: an edit, the snapshot's write goes on
+  saver.loop(t + 20);
+  TEST_ASSERT_TRUE(saver.writingSnapshot());
+  q.setShuffled(false);
+  q.step(1, false);
+  // The power-off: the queue isn't the snapshot's (two toggles are two
+  // edits), so it is written whole.
+  TEST_ASSERT_TRUE(saver.flushNow(t + 40));
+  TEST_ASSERT_EQUAL_INT(1, st.discards);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, 3).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(3, st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+  // A snapshot's write the queue only moves in: finished by the power-off,
+  // its header's line the snapshot's, the position the queue's.
+  t += 1000;
+  const uint32_t from = t;
+  while (!saver.writingSnapshot()) {
+    t += 20;
+    if (t % 1000 == 0) q.appendQuiet(t / 1000);
+    saver.loop(t);
+    TEST_ASSERT_TRUE(t <= from + 1000 + QueueSaver::kMaxStaleMs + 20);
+  }
+  const std::string whole = wholeText(q, c, saver.generation() + 1);
+  q.step(1, false);  // a move, no edit
+  TEST_ASSERT_TRUE(saver.flushNow(t + 20));
+  TEST_ASSERT_EQUAL_STRING(whole.c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_UINT32(saver.generation(), st.posGeneration);
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  TEST_ASSERT_EQUAL_UINT32(1, saver.snapshotWrites());
+  TEST_ASSERT_EQUAL_size_t(0, Meter::live);
+
+  // No memory for a snapshot: two minutes of an edit a second open no
+  // temporary file; the edits over, the plain write 2 s later.
+  const int commits = st.commits, opens = st.opens;
+  Meter::ceiling = 0;
+  const uint32_t start = t + 1000 - (t + 1000) % 1000;
+  for (t = start; t < start + 120000; t += 20) {
+    if (t % 1000 == 0) q.appendQuiet(t / 1000 % kTracks);
+    saver.loop(t);
+  }
+  TEST_ASSERT_EQUAL_INT(commits, st.commits);
+  TEST_ASSERT_EQUAL_INT(opens, st.opens);
+  TEST_ASSERT_TRUE(saver.contentDirty());
+  for (const uint32_t end = t + 10000; t < end; t += 20) saver.loop(t);
+  TEST_ASSERT_EQUAL_INT(commits + 1, st.commits);
+  TEST_ASSERT_EQUAL_STRING(wholeText(q, c, saver.generation()).c_str(), st.file.c_str());
+  TEST_ASSERT_EQUAL_INT(q.current(), st.pos);
+  Meter::reset();
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_empty_queue);
@@ -4417,6 +5235,9 @@ int main(int, char**) {
   RUN_TEST(test_a_toggle_during_a_write_restarts_it);
   RUN_TEST(test_shuffle_alls_undo_writes_version_1_again);
   RUN_TEST(test_off_while_paused_pairs_the_resume_point_again);
+  RUN_TEST(test_the_saver_keeps_up_with_appends_every_second);
+  RUN_TEST(test_a_shuffled_soak_and_a_power_off_mid_snapshot);
+  RUN_TEST(test_a_snapshot_write_and_no_memory_for_one);
   RUN_TEST(test_assign_is_exact_and_growth_is_bounded);
   RUN_TEST(test_release_gives_everything_back);
   RUN_TEST(test_window_holds_the_current_entry);
@@ -4450,5 +5271,12 @@ int main(int, char**) {
   RUN_TEST(test_remap_reads_a_kept_longer_file_in_its_window);
   RUN_TEST(test_remap_in_two_halves_around_a_build_elsewhere);
   RUN_TEST(test_remap_in_two_halves_that_cant_carry_the_queue);
+  RUN_TEST(test_a_quiet_append_keeps_the_listeners_undo);
+  RUN_TEST(test_a_quiet_append_ranks_in_its_snapshot);
+  RUN_TEST(test_a_quiet_append_drops_an_undo_it_cant_keep);
+  RUN_TEST(test_a_quiet_append_at_the_cap);
+  RUN_TEST(test_a_quiet_append_to_an_empty_queue);
+  RUN_TEST(test_the_play_epoch);
+  RUN_TEST(test_random_quiet_appends_match_a_model);
   return UNITY_END();
 }

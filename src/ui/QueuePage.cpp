@@ -77,7 +77,7 @@ void QueuePage::enter(NavModel::PageRef& ref) {
   showAdded_ = false;
   queueview::AddedMark& added = ui_.added();
   if (added.pending()) {
-    const uint32_t first = added.firstPosition(ui_.queue());
+    const uint32_t first = added.firstPosition(ui_.queue(), ui_.djKeys());  // (never Auto DJ's appends)
     if (first != queueview::AddedMark::kNone) {
       if (showPos_ < 0) showPos_ = static_cast<int32_t>(first);
       showAdded_ = true;
@@ -91,6 +91,7 @@ void QueuePage::enter(NavModel::PageRef& ref) {
   }
   content_ = s.contentVersion;
   position_ = s.positionVersion;
+  emptyDj_ = autodjview::emptyButton(s.autoDj, s.libraryTracks);
   selecting_ = false;
   touchOn_ = TouchOn::None;
   headerPressed_ = 0;
@@ -263,6 +264,13 @@ bool QueuePage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
   } else if (s.positionVersion != position_) {
     position_ = s.positionVersion;  // another track plays: its row and the last one change
     list.refreshAll();
+  }
+  // Empty: Auto DJ's button comes or goes with a usable index (a card
+  // mounted again): the empty state drawn again.
+  const bool dj = autodjview::emptyButton(s.autoDj, s.libraryTracks);
+  if (dj != emptyDj_) {
+    emptyDj_ = dj;
+    if (s.queueSize == 0) list.reload();
   }
   refreshSummary();
   if (headerSig() != headerSig_) repaintHeader();
@@ -599,7 +607,7 @@ uint16_t QueuePage::accent() { return accent::Queue; }
 // the playing row had no checkbox in selection mode).
 bool QueuePage::tinted(uint32_t row) {
   return static_cast<int32_t>(row) == ui_.queue().current() ||
-         (showAdded_ && ui_.added().marks(ui_.queue().keyAt(row)));
+         (showAdded_ && ui_.added().marks(ui_.queue().keyAt(row), ui_.djKeys()));
 }
 
 void QueuePage::drawRow(ListView::Row& r) {
@@ -611,7 +619,7 @@ void QueuePage::drawRow(ListView::Row& r) {
   const uint32_t key = q.keyAt(r.row);
   if (isCurrent) r.c.fillRect(0, 0, 3, kRowH, accent::Queue);
   // Added by the Library since the last visit: a dot in the accent.
-  const bool added = showAdded_ && ui_.added().marks(key);
+  const bool added = showAdded_ && ui_.added().marks(key, ui_.djKeys());
   if (added && !r.selected) r.c.fillCircle(r.x + 6, kRowH / 2, 3, accent::Queue);
   const uint32_t track = q.trackAt(r.row);
   const int x = isCurrent ? ListView::playing(r, accent::Queue)
@@ -621,6 +629,11 @@ void QueuePage::drawRow(ListView::Row& r) {
     // Couldn't be played: a small amber "!" at the right.
     icons::drawCentred(r.c, icons::kWarn, r.right - 18, kRowH / 2, col::AMBER);
     right = r.right - 32;
+  } else if (ui_.host().autoDjMarked(key)) {
+    // Auto DJ added it: its small mark there, dim (the engine design's
+    // 2.14; RAM only, the last 64 of its picks).
+    icons::drawCentred(r.c, icons::kAutoDjSmall, r.right - 16, kRowH / 2, col::DIM);
+    right = r.right - 28;
   }
   char title[128];
   if (!cat.title(track, title, sizeof(title))) snprintf(title, sizeof(title), "%s", tr(S::queue_not_in_library));
@@ -727,7 +740,12 @@ bool QueuePage::emptyState(EmptyState& e) {
   e.lines = tr(S::empty_pick_in_library);
   e.buttons[0] = tr(S::empty_open_library);
   e.buttonIcons[0] = &icons::kLibrary;
-  if (ui_.state().libraryTracks > 0) {
+  const AppState& s = ui_.state();
+  if (autodjview::emptyButton(s.autoDj, s.libraryTracks)) {
+    // A usable Auto DJ index: Auto DJ in Shuffle all's place (D4).
+    e.buttons[1] = tr(S::empty_autodj);
+    e.buttonIcons[1] = &icons::kAutoDj;
+  } else if (s.libraryTracks > 0) {
     e.buttons[1] = tr(S::empty_shuffle_all);
     e.buttonIcons[1] = &icons::kShuffle;
   }
@@ -741,6 +759,8 @@ void QueuePage::onEmptyAction(int i) {
   }
   if (i == 0) {
     ui_.showTab(NavModel::Tab::Library);
+  } else if (emptyDj_) {
+    ui_.autoDjStart();  // (the button drawn: update() draws the state again when it changes)
   } else {
     ui_.shuffleAll();
   }

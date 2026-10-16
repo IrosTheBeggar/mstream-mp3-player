@@ -522,86 +522,6 @@
   "check": "a newer major"
  },
  {
-  "file": "mpdj-index-bytes.bin",
-  "format": "MPDJ",
-  "uses": "all",
-  "expect": "absent",
-  "why": "enum",
-  "check": "header: indexBytes 4 for 6 rows"
- },
- {
-  "file": "mpdj-k-zero.bin",
-  "format": "MPDJ",
-  "uses": "all",
-  "expect": "absent",
-  "why": "enum",
-  "check": "header: k 0"
- },
- {
-  "file": "mpdj-score-kind.bin",
-  "format": "MPDJ",
-  "uses": "all",
-  "expect": "absent",
-  "why": "enum",
-  "check": "header: scoreKind 2"
- },
- {
-  "file": "mpdj-rows-unsorted.bin",
-  "format": "MPDJ",
-  "uses": "all",
-  "expect": "absent",
-  "why": "djRows",
-  "check": "DJRW: rows out of hashPrefix order"
- },
- {
-  "file": "mpdj-paths-unsorted.bin",
-  "format": "MPDJ",
-  "uses": "all",
-  "expect": "absent",
-  "why": "djPaths",
-  "check": "DJPH: entries out of order"
- },
- {
-  "file": "mpdj-paths-row-range.bin",
-  "format": "MPDJ",
-  "uses": "all",
-  "expect": "absent",
-  "why": "djPaths",
-  "check": "DJPH: a row out of range"
- },
- {
-  "file": "mpdj-neighbour-range.bin",
-  "format": "MPDJ",
-  "uses": "all",
-  "expect": "absent",
-  "why": "djNeighbours",
-  "check": "DJNB: an index out of range (not the unused all-ones)"
- },
- {
-  "file": "mpdj-row-count.bin",
-  "format": "MPDJ",
-  "uses": "all",
-  "expect": "absent",
-  "why": "counts",
-  "check": "header: rowCount isn't DJRW's count"
- },
- {
-  "file": "mpdj-path-count.bin",
-  "format": "MPDJ",
-  "uses": "all",
-  "expect": "absent",
-  "why": "counts",
-  "check": "header: pathCount isn't DJPH's count"
- },
- {
-  "file": "mpdj-neighbour-stride.bin",
-  "format": "MPDJ",
-  "uses": "all",
-  "expect": "absent",
-  "why": "shape",
-  "check": "header: k 2, so DJNB's stride (9) isn't k x (indexBytes + 1)"
- },
- {
   "file": "mspd-order.bin",
   "format": "MSPD",
   "uses": "all",
@@ -672,5 +592,443 @@
   "expect": "present",
   "why": "ok",
   "check": "PEND: an op above 3: the plan reads, and stops the software"
+ },
+ {
+  "file": "mpdj-major-1.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "major",
+  "check": "major 1: the retired v1 draft, an older major (unknownMajor false)"
+ },
+ {
+  "file": "mpdj-major-3.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "major",
+  "check": "major 3: a newer major"
+ },
+ {
+  "file": "mpdj-header-bytes-short.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "headerBytes",
+  "check": "headerBytes 96, below minor 0's 104"
+ },
+ {
+  "file": "mpdj-misaligned.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djLayout",
+  "check": "headerBytes 136: DJSL at 264, not on a slot boundary"
+ },
+ {
+  "file": "mpdj-djsl-not-first.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djLayout",
+  "check": "DJRF before DJSL: DJSL isn't the first directory entry"
+ },
+ {
+  "file": "mpdj-section-order.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djLayout",
+  "check": "STRS before DJPH"
+ },
+ {
+  "file": "mpdj-rows-zero.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "rowCount 0"
+ },
+ {
+  "file": "mpdj-k-one.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "k 1 (2-169)"
+ },
+ {
+  "file": "mpdj-k-170.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "k 170 (2-169)"
+ },
+ {
+  "file": "mpdj-slot-bytes.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "slotBytes 512 with k 4 (k 2-84 takes 256)"
+ },
+ {
+  "file": "mpdj-index-bytes.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "indexBytes 4"
+ },
+ {
+  "file": "mpdj-score-kind.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "enum",
+  "check": "scoreKind 2"
+ },
+ {
+  "file": "mpdj-sel-kind0-head.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSelection",
+  "check": "selKind 0 with selHead 3, not k"
+ },
+ {
+  "file": "mpdj-sel-kind0-floor.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSelection",
+  "check": "selKind 0 with selFloor 140, not 0"
+ },
+ {
+  "file": "mpdj-sel-head-zero.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSelection",
+  "check": "selKind 1 with selHead 0"
+ },
+ {
+  "file": "mpdj-sel-head-big.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSelection",
+  "check": "selKind 1 with selHead 3 = k - 1"
+ },
+ {
+  "file": "mpdj-sel-floor-zero.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSelection",
+  "check": "selKind 1 with selFloor 0"
+ },
+ {
+  "file": "mpdj-sel-unknown-head.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSelection",
+  "check": "an unknown selKind 7 with selHead 5, above k"
+ },
+ {
+  "file": "mpdj-row-count.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "counts",
+  "check": "rowCount 7, DJSL and DJRF hold 6"
+ },
+ {
+  "file": "mpdj-path-count.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "counts",
+  "check": "pathCount 8, DJPH holds 7"
+ },
+ {
+  "file": "mpdj-djrf-count.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "counts",
+  "check": "DJRF of 5 records for 6 rows"
+ },
+ {
+  "file": "mpdj-slot-stride.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "shape",
+  "check": "DJSL's stride 512, slotBytes 256"
+ },
+ {
+  "file": "mpdj-missing-djrf.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "missing",
+  "check": "no DJRF (a REQUIRED section)"
+ },
+ {
+  "file": "mpdj-unknown-required.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "unknownRequired",
+  "check": "an unknown REQUIRED section DJZZ before STRS"
+ },
+ {
+  "file": "mpdj-paths-empty-stride-zero.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "shape",
+  "check": "pathCount 0 with DJPH's stride 0: an empty array keeps its stride (10)"
+ },
+ {
+  "file": "mpdj-header-bytes-wrap.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "short",
+  "check": "headerBytes 0xFFFFFFF8: headerBytes + 32 x sectionCount is past the file (wrapped to 32 bits it is 120, and the header CRC is right for that)"
+ },
+ {
+  "file": "mpdj-section-end-wrap.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "layout",
+  "check": "an optional section of 0xFFFFFFF8 bytes before STRS: its end is past the file (wrapped to 32 bits it is the start of STRS, placed there)"
+ },
+ {
+  "file": "mpdj-array-bytes-wrap.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "shape",
+  "check": "DJPH's count and pathCount 7 + 2^31: count x stride isn't its 70 bytes (wrapped to 32 bits it is)"
+ },
+ {
+  "file": "mpdj-strs-first-byte.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "string",
+  "check": "STRS: byte 0 isn't NUL"
+ },
+ {
+  "file": "mpdj-string-no-nul.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "string",
+  "check": "STRS: the last string has no NUL"
+ },
+ {
+  "file": "mpdj-string-out-of-range.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "string",
+  "check": "attribution's offset at STRS's end"
+ },
+ {
+  "file": "mpdj-string-order.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "stringOrder",
+  "check": "modelId's and modelVersion's offsets swapped (each string valid)"
+ },
+ {
+  "file": "mpdj-paths-unsorted.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djPaths",
+  "check": "DJPH: two entries swapped"
+ },
+ {
+  "file": "mpdj-paths-equal.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djPaths",
+  "check": "DJPH: two equal hashes"
+ },
+ {
+  "file": "mpdj-paths-row-range.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djPaths",
+  "check": "DJPH: a row of 6 (rowCount 6)"
+ },
+ {
+  "file": "mpdj-slot-crc.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSlotCrc",
+  "check": "slot 2's CRC wrong",
+  "slot": {
+   "row": 2,
+   "read": "damaged"
+  }
+ },
+ {
+  "file": "mpdj-slot-wrong-row.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSlotCrc",
+  "check": "slots 1 and 2 swapped, each CRC right for its own row",
+  "slot": {
+   "row": 1,
+   "read": "damaged"
+  }
+ },
+ {
+  "file": "mpdj-slot-unused.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSlotUnused",
+  "check": "slot 3: an unused entry (0xFFFF) before a used one",
+  "slot": {
+   "row": 3,
+   "read": "broken"
+  }
+ },
+ {
+  "file": "mpdj-slot-index-range.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSlotIndex",
+  "check": "slot 0: entry 3's index 6 = rowCount",
+  "slot": {
+   "row": 0,
+   "read": "broken"
+  }
+ },
+ {
+  "file": "mpdj-slot-self.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSlotIndex",
+  "check": "slot 0: entry 3's index 0, the row itself",
+  "slot": {
+   "row": 0,
+   "read": "broken"
+  }
+ },
+ {
+  "file": "mpdj-slot-level-rises.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSlotOrder",
+  "check": "slot 0: entry 1's level 201 after entry 0's 200",
+  "slot": {
+   "row": 0,
+   "read": "broken"
+  }
+ },
+ {
+  "file": "mpdj-slot-tie-order.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "absent",
+  "why": "djSlotOrder",
+  "check": "slot 2: entry 2's level 171, so rows 5 then 4 tie with the index falling",
+  "slot": {
+   "row": 2,
+   "read": "broken"
+  }
+ },
+ {
+  "file": "mpdj-minor-1.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "minor 1: a 112-byte header (a field at 104, a string offset at 108 after attribution), DJRF and DJPH strides 12 with non-zero tails, an unknown optional section before STRS",
+  "same": "autodj-00000029.bin"
+ },
+ {
+  "file": "mpdj-unknown-optional.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "an unknown optional section DJZZ before STRS",
+  "same": "autodj-00000029.bin"
+ },
+ {
+  "file": "mpdj-header-bigger.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "headerBytes 384 on 256-byte slots (not the smallest; still aligned)",
+  "same": "autodj-00000029.bin"
+ },
+ {
+  "file": "mpdj-paths-empty.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "pathCount 0 (every card file's hash in a collision, 4.5): DJPH empty, count 0 and stride 10; the rows and their lists stay"
+ },
+ {
+  "file": "mpdj-sel-unknown-kind.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "an unknown selKind 7 (selHead 2, selFloor 9): readers use only selHead and selFloor",
+  "same": "autodj-00000029.bin"
+ },
+ {
+  "file": "mpdj-slot-unused-level.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "slot 3: the unused entry's level byte 7 (not checked; CRC made right)",
+  "same": "autodj-00000029.bin"
+ },
+ {
+  "file": "mpdj-slot-padding.bin",
+  "format": "MPDJ",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "autodj-small-default's slot 0: padding byte 507 set (not checked; CRC made right)",
+  "same": "autodj-small-default.bin"
+ },
+ {
+  "file": "mpdj-uses-device-slot-crc.bin",
+  "format": "MPDJ",
+  "uses": "device",
+  "expect": "present",
+  "why": "ok",
+  "check": "mpdj-slot-crc read by the device: the join's sections are good; the slot fails when read",
+  "slot": {
+   "row": 2,
+   "read": "damaged"
+  }
  }
 ]

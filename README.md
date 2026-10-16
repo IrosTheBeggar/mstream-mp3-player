@@ -10,8 +10,9 @@ speaker as a fallback.
 > tab bar (Now Playing, Library, Queue, Dance, Output), all five built:
 > Now Playing with the album cover, the Library (artists, albums with
 > covers, folders, the A-Z jump grid), the Queue (editing, Undo), Output
-> (Bluetooth pairing, per-output volume, settings, About); library sync and
-> AutoDJ come next. The UI's language can be set to the mobile app's ten
+> (Bluetooth pairing, per-output volume, settings, About), and Auto DJ, which
+> keeps the queue going from the card's AutoDJ index (from 0.11.0); library
+> sync comes next. The UI's language can be set to the mobile app's ten
 > (Output > Language): the nine besides English are machine translations,
 > from the mStream apps' words, not yet reviewed by native speakers. The library is indexed from the card (and cached there), and the
 > play queue survives a restart. Measurements: [docs/POC-RESULTS.md](docs/POC-RESULTS.md).
@@ -402,10 +403,11 @@ pages do:
   track (never into its last 6 s; slide off it, or back onto where it
   plays, to leave it; paused, it stays paused, and play, or the next boot,
   starts there). Then the volume (tap: a slider), prev / play-pause / next,
-  and "..." for **Shuffle** (on, off), **Repeat** (off, all, one) and the
-  **Sleep timer**: a tap on Shuffle or Repeat changes it there and then, the
-  menu staying open. A small shuffle and repeat sign under the "..." shows
-  which is on (the loop with a "1" beside it is Repeat One).
+  and "..." for **Shuffle** (on, off), **Repeat** (off, all, one), the
+  **Sleep timer** and **Auto DJ** (below): a tap on Shuffle, Repeat or Auto
+  DJ changes it there and then, the menu staying open. A small shuffle and
+  repeat sign under the "..." shows which is on (the loop with a "1"
+  beside it is Repeat One).
 - **Library**: three lists at the top: **Artists**, **Albums** (with their
   covers) and **Folders** (the card's folders; only audio files are listed,
   the others counted: "14 audio files, 1 other"). An artist opens its
@@ -420,8 +422,9 @@ pages do:
   next / + Queue sit at the top of each (at the Folders' top: "Play all N"
   and + Queue), and under a track once you tap it (Play on a track plays its
   album or folder from there); a long press on any row offers the same
-  without opening it. What plays is tinted in every list. Every change to
-  the queue shows a message at the top with **Undo** (and **View** after an
+  without opening it (on a track the card's AutoDJ index knows, with
+  **Auto DJ from here** first: below). What plays is tinted in every
+  list. Every change to the queue shows a message at the top with **Undo** (and **View** after an
   add: the Queue at the added tracks). Two levels down, "‹ Library" in the
   header goes straight back to the lists.
 - **Queue**: the queue, opened on the playing track, with what's left in
@@ -433,8 +436,9 @@ pages do:
   Clear... ("Clear up next" keeps the playing song; "Clear queue" stops the
   music, and asks first). Every change can be undone from the message at
   the top. A track that couldn't be played is skipped with a note, and
-  keeps a small "!". Tap the "Queue" title to go to the playing track, the
-  top, the end, in turn. Empty, it offers Open Library and Shuffle all.
+  keeps a small "!", and a track Auto DJ added a small DJ mark. Tap the
+  "Queue" title to go to the playing track, the top, the end, in turn.
+  Empty, it offers Open Library and Shuffle all (or Auto DJ: below).
 - **Dance**: the dancer (below).
 - **Output**: a card for the Bluetooth headphones (connected, with the
   codec and delay; connecting, "try 2 of 3", with Cancel; failed, with Try
@@ -453,8 +457,8 @@ pages do:
   always acts), then the normal screen timeout again; **Search again**
   starts another. Each search is in the serial log: every audio device
   it found, and at its end how many devices it saw. Then the line-out
-  module's place (not fitted yet), **Haptics** on/off, **Screen off after**,
-  **Brightness**, **Turn off when idle**, **CPU speed** (240 MHz, the default,
+  module's place (not fitted yet), **Auto DJ** (below), **Haptics**
+  on/off, **Screen off after**, **Brightness**, **Turn off when idle**, **CPU speed** (240 MHz, the default,
   is the smooth one; 160 MHz saves a little battery, but lists scroll at
   about half speed while music plays; it takes a restart, asked first: the
   music pauses, and after it waits at the same second until you play) and
@@ -612,6 +616,55 @@ of the track that plays next in the shuffled order. Going back to a
 firmware from before 0.7.0 while shuffled loses the queue once (it can't
 read the shuffled file).
 
+**Auto DJ** (from 0.11.0; [docs/AUTODJ.md](docs/AUTODJ.md)) keeps the music
+going: when the last track in the queue starts, it adds one more that
+sounds like what has been playing, so the music goes on without a gap. It
+never starts music by itself, and never changes the output or the volume.
+
+- **Switch it on** in Now Playing's "..." menu (its Auto DJ row: On, Off,
+  Waiting while Repeat One is on or the sleep timer is set to End of
+  queue, Paused after three of its tracks in a row failed to play), or in
+  **Output > Auto DJ**. It stays on after a restart, and waits there for
+  Play. Switched on with nothing queued, it follows the next track you
+  play.
+- **Output > Auto DJ**: the switch; **Anchor**, Follow the vibe (each pick
+  close to the last few tracks that played; the default) or Stay on seed
+  (every pick close to the first track, the seed); **Match strictness**,
+  from "55% or closer" (the default, the most variety) to "75% or closer",
+  a tap for the next step; **BPM continuity** (prefer tracks within 8 BPM,
+  or at half or double the tempo) and **Harmonic mixing** (prefer keys that
+  mix well), both off by default; and a status line: how many of the
+  library's tracks have neighbours, or why Auto DJ has no index or waits.
+- **What steers it:** every track that plays, yours as well as its own,
+  except one you skip in its first 30 s. Each Play (a new queue) starts it
+  afresh from the track it plays. Where it can, it avoids the last 50
+  tracks and the last 3 artists.
+- **An empty queue** offers **Auto DJ** in place of Shuffle all (on Now
+  Playing and in the Queue, on a card with an AutoDJ index): a tap plays a
+  random track that has neighbours and switches Auto DJ on. **Auto DJ from
+  here**, the first row of a long press on a track in the Library, plays
+  that track as a new queue with Auto DJ on. Both messages have Undo,
+  which also switches Auto DJ off again if that tap had switched it on.
+- **The DJ mark:** in the Queue, the tracks Auto DJ added have a small DJ
+  mark on the right (its last 64; not kept across a restart). Its
+  additions don't flash the Queue tab's badge.
+- **The end of the queue:** if the queue had already stopped at its end
+  (Auto DJ switched on after it, or the sleep timer's End of queue stopped
+  it there), Auto DJ gets the next track ready, paused at 0:00, and says
+  "the next track is ready, press play": nothing plays until you do (the
+  headphones' play button doesn't start it). Repeat All doesn't come round
+  to the first track while Auto DJ adds; Repeat One holds it.
+- **What a card needs: an AutoDJ index** (`/.mstream/autodj-<gen>.bin`),
+  which the transfer software writes from mStream's audio analysis
+  ([docs/AUTODJ-INDEX.md](docs/AUTODJ-INDEX.md)). It writes one only for a
+  player that says it reads it: from 0.11.0 the player says so on the card
+  (`/.player/device.txt`), so after the update, start the player once with
+  the card in before the next transfer. Without an index (a card filled by
+  hand), Auto DJ adds random tracks from the library and says so once,
+  and its settings are dimmed. With one, tracks it doesn't cover (files
+  you copied yourself, tracks mStream hasn't analysed) play as usual, but
+  Auto DJ doesn't pick them and they don't steer it.
+
 **Touch calibration.** Core2 touch panels differ: one measured reads
 touches on the right half of the screen too far right (about 20 px at x
 190, 35-45 px from x 240, and it stops at 319), the same with any finger;
@@ -714,6 +767,7 @@ The serial console (115200 baud) is there for scripted testing:
 | | | `G...` | gapless playback ([docs/GAPLESS.md](docs/GAPLESS.md)): `G` its status (what the player says comes next, the join waiting to be heard, joins, cuts and failed opens since boot, the decoding track's LAME trim); `G0` / `G1` off / on (off: tracks end as before 0.6.0, for an A/B; RAM only); `Gt0` / `Gt1` trimming by the LAME tag off / on from the next track; `Gx<n>` the ring's cut against a reader on the other core (a stress test: stops the player, keeping your place) |
 | | | `O...` | Opus knobs for the device checks ([docs/OPUS.md](docs/OPUS.md); a file the library doesn't list plays by its path, `Rf</bench/opus/x.opus>` in silent mode, or benches by it, `b</bench/opus/x.opus>`): `O` status, `Ol` / `Oi` / `Oh` the decoder's state in the pinned PSRAM block / internal RAM / the PSRAM above 0x3FA00000 from the next open (an A/B of where it decodes fastest), `Ot1` / `Ot0` the rate converter's 7.6 KB table copy in a PSRAM block pinned next to it (the default: 7.6 KB of internal RAM stay free, for about 3 points of a core) / in internal RAM, from the next converted track |
 | | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
+| | | `D...` | Auto DJ ([docs/AUTODJ.md](docs/AUTODJ.md)): `D` its status (the settings, the index or why there is none, the join, the session, the counters, the memory, the last pick's reads and time); `D0` / `D1` off / on; `Dm0` / `Dm1` Anchor: Follow the vibe / Stay on seed; `Df55`-`Df75` Match strictness, by 5; `Dt0` / `Dt1` BPM continuity off / on, `Dk0` / `Dk1` Harmonic mixing off / on (each saved, as the UI's); `Ds<hex>` the next session's seed (1-8 hex digits, for a reproducible run), `Dr` a new session now; `Dp` a pick appended now, whatever the trigger says (cued at a finished queue), with its decision; `Dn<k>` k dry-run picks (1-2,000) on a copy of the session, the live one untouched, `Db<n>` n slot reads of random rows (1-5,000), a bench, both one a loop pass, `Dx` stops either with its summary so far; `Dj` the join again (only while Auto DJ is on), `Dc` the index file closed and opened again (a new session); `Dh` / `Dh<id>` Auto DJ from here on the current track or on library track id, `De` the empty states' Auto DJ button (both play, as `qp` does); `D?` the list. None touches the output or the volume |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
 | | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md); the board's status for the terminal player's MP3 Player tab, `@status`, `@count` and `@identify <port>`, [docs/HOST-STATUS.md](docs/HOST-STATUS.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else (but `@status` answers, `@count` counts and `@identify COM5` shows the banner, as a computer's would). `tools/usb_viz.py` sends the visualizer's (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
 
@@ -873,7 +927,19 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
   CardContract, CardContainer, CardTags, CardManifest, CardAutoDj
                       The card contract with the transfer software
                       (docs/METADATA.md part 2): its files' readers and
-                      writers, CRC-32, the path hash, the fingerprint
+                      writers, CRC-32, the path hash, the fingerprint;
+                      CardAutoDj the AutoDJ index (docs/AUTODJ-INDEX.md)
+  AutoDjEngine, AutoDjTiers, AutoDjRng
+                      Auto DJ's pick (docs/AUTODJ.md): a session's anchors,
+                      seed and cooldowns, the gate over the AutoDJ index's
+                      slots, the BPM and Camelot preferences, a PCG32
+  AutoDjJoin          The AutoDJ index's rows to the library's track ids
+                      and its filters, in slices
+  AutoDjTrigger, AutoDjDriver, AutoDjCommand
+                      When Auto DJ adds a track; its loop step (sessions,
+                      steering, the picks, the DJ marks); the console's D
+  AutoDjView          What the UI shows and says of Auto DJ
+  SheetLayout         Where a sheet sits (3 rows, or 4 from y 40)
   LibraryIndex, LibraryBuilder, LibraryBoot
                       The library index (library.idx v6), its build from
                       the tag records, the boot's decision
@@ -930,7 +996,10 @@ src/                  Core2 firmware
                       app description), BoardGuard (not a Core2: says so
                       and stops), NvsSchema (the NVS layout's number),
                       UsbViz (the USB visualizer), HostQuery (a computer's
-                      @status, @count and @identify: docs/HOST-STATUS.md)
+                      @status, @count and @identify: docs/HOST-STATUS.md),
+                      AutoDj + AutoDjStore (Auto DJ on the device: the
+                      card's AutoDJ index, its join, the loop step, the
+                      console's D; its settings in NVS)
   spike/              UI spike tools: input lab, scroll lab, font and thumbnail
                       probes (docs/UI-SPIKE.md)
   main.cpp            Wires it together; input events (the buttons' policy),
@@ -962,7 +1031,25 @@ tools/                make_test_audio.py; version.py (build pre-script: the
                       lib/core/ResamplerTables.cpp);
                       usb_viz.py + test_usb_viz.py (the USB visualizer's
                       reference sender, and its tests: python -m unittest
-                      discover -s tools -p "test_usb_viz.py")
+                      discover -s tools -p "test_usb_viz.py");
+                      card_fixtures.py (the card contract's shared fixtures
+                      -> test/fixtures/card, --check; docs/METADATA.md 2.17);
+                      mpdj.py + test_mpdj.py (the AutoDJ index's reference
+                      writer, reader and test vectors, docs/AUTODJ-INDEX.md;
+                      tests: python -m unittest discover -s tools -p
+                      "test_mpdj.py");
+                      autodj_ref.py + test_autodj_ref.py (Auto DJ's pick
+                      rule in plain Python, the engine's reference; it
+                      writes test/fixtures/autodj, --check; tests: python
+                      -m unittest discover -s tools -p "test_autodj_ref.py");
+                      synthtransfer.py + test_synthtransfer.py (a test
+                      card's /.mstream: a tags file with no records, an
+                      AutoDJ index, synthetic or given, and the root
+                      written last, so a synthcard.py tree or any FAT32
+                      card gets an index the firmware accepts; --dry-run,
+                      --check; it writes nothing outside /.mstream;
+                      tests: python -m unittest discover -s tools -p
+                      "test_synthtransfer.py")
                       beat_eval/ (the beat tracker's evaluation harness: the
                       firmware's tracker on a music corpus, scored against
                       reference beats; docs/BEAT-TRACKER-EVAL.md)
@@ -972,7 +1059,11 @@ site/                 The web installer's page (filled in by package_release.py)
                       release-notes.md (the release notes' template)
 docker/               mStream dev server
 docs/                 ARCHITECTURE.md, POC-RESULTS.md, MASCOT-POC.md, UI-SPIKE.md,
-                      RESAMPLER.md, BEAT-TRACKER-EVAL.md, HOST-STATUS.md
+                      RESAMPLER.md, BEAT-TRACKER-EVAL.md, HOST-STATUS.md,
+                      METADATA.md (the card contract), AUTODJ-INDEX.md
+                      (the AutoDJ index, MPDJ v2), AUTODJ.md (the
+                      device's Auto DJ), QUEUE-MODES.md (shuffle, repeat,
+                      the queue's cap; Auto DJ with them)
 LICENSES/             The licence texts THIRD-PARTY-NOTICES.md refers to
 THIRD-PARTY-NOTICES.md What else is in the firmware binary, and its licences
 ```

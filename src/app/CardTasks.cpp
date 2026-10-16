@@ -192,6 +192,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     ui.waiting = env.waiting;
     ui.trackLeftMs = env.trackLeftMs;
     ui.seekSeq = env.seekSeq;
+    ui.autoDjOwed = env.autoDjOwed;
     if (up->phase() == LibraryUpdate::Phase::Asked) {  // (the memory check's: read only when it may be asked)
       ui.psramFree = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
       ui.psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
@@ -638,11 +639,14 @@ librarytext::Status CardTasks::status() const {
   using P = librarytext::Status::Phase;
   const LibraryUpdate::Phase up = const_cast<Library&>(lib_).update()->phase();
   // From the step's fence to its Live (the library hidden), and while it
-  // waits only for the safe point or the worker (its compaction done).
+  // waits only for the safe point, Auto DJ's pick or the worker (its
+  // compaction done).
+  const LibraryUpdate::Wait w = lastUpdate_.wait;
   const bool updating = up == LibraryUpdate::Phase::Fence || up == LibraryUpdate::Phase::Build ||
                         up == LibraryUpdate::Phase::Building || up == LibraryUpdate::Phase::Live ||
-                        (up == LibraryUpdate::Phase::Asked && (lastUpdate_.wait == LibraryUpdate::Wait::SafePoint ||
-                                                                lastUpdate_.wait == LibraryUpdate::Wait::Worker));
+                        (up == LibraryUpdate::Phase::Asked &&
+                         (w == LibraryUpdate::Wait::SafePoint || w == LibraryUpdate::Wait::AutoDj ||
+                          w == LibraryUpdate::Wait::Worker));
   if (updating) {
     s.phase = P::Updating;
   } else if (jobs_.walking() || walkSeen_ || walkArmed_) {
@@ -673,7 +677,9 @@ void CardTasks::state(librarytext::Status* s, char* line, size_t size) const {
     return;
   }
   const cardjobs::Jobs::Counts& c = jobs_.counts();
-  static const char* const kUpdateWaits[] = {"", "a walk's end", "its compaction", "the worker", "the safe point"};
+  static const char* const kUpdateWaits[] = {"",           "a walk's end",   "its compaction",
+                                             "the worker", "the safe point", "Auto DJ's pick"};
+  constexpr int kWaits = static_cast<int>(sizeof(kUpdateWaits) / sizeof(kUpdateWaits[0]));
   char update[112] = "";
   if (updateAsked()) {
     const int w = static_cast<int>(lastUpdate_.wait);
@@ -684,7 +690,7 @@ void CardTasks::state(librarytext::Status* s, char* line, size_t size) const {
                const_cast<Library&>(lib_).update()->safeLeftMs() / 1000.0);
     }
     snprintf(update, sizeof(update), "; the update step is asked%s%s%s", w ? ", waiting for " : "",
-             w > 0 && w < 5 ? kUpdateWaits[w] : "", left);
+             w > 0 && w < kWaits ? kUpdateWaits[w] : "", left);
   }
   snprintf(line, size, "%lu read (%lu unreadable, %lu partial, %lu read errors, %lu skipped); waiting for %s%s",
            (unsigned long)c.scanned, (unsigned long)c.unreadable, (unsigned long)c.partial,

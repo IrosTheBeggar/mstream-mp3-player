@@ -63,6 +63,32 @@ bool langPickerDue(bool haveLang, bool coachSeen) { return !haveLang && !coachSe
 
 bool migrateWritesLang(uint16_t from, bool haveLang) { return from < 3 && !haveLang; }
 
+bool autoDjFloorValid(uint8_t pct) {
+  return pct >= kAutoDjFloorMin && pct <= kAutoDjFloorMax && (pct - kAutoDjFloorMin) % kAutoDjFloorStep == 0;
+}
+
+AutoDjSaved autoDjFrom(const AutoDjStored& s) {
+  AutoDjSaved a;
+  a.on = s.haveOn && s.on == 1;
+  a.mode = s.haveMode && s.mode < kAutoDjModes ? s.mode : 0;
+  a.floorPct = s.haveFloor && autoDjFloorValid(s.floor) ? s.floor : kAutoDjFloorMin;
+  if (s.haveMatch) {
+    a.matchTempo = (s.match & kAutoDjMatchTempo) != 0;
+    a.matchKey = (s.match & kAutoDjMatchKeys) != 0;
+  }
+  return a;
+}
+
+AutoDjStored autoDjTo(const AutoDjSaved& a) {
+  AutoDjStored s;
+  s.haveOn = s.haveMode = s.haveFloor = s.haveMatch = true;
+  s.on = a.on ? 1 : 0;
+  s.mode = a.mode < kAutoDjModes ? a.mode : 0;
+  s.floor = autoDjFloorValid(a.floorPct) ? a.floorPct : kAutoDjFloorMin;
+  s.match = static_cast<uint8_t>((a.matchTempo ? kAutoDjMatchTempo : 0) | (a.matchKey ? kAutoDjMatchKeys : 0));
+  return s;
+}
+
 size_t encodeResume(const QueueResume& r, uint8_t out[kResumeBytes]) {
   for (size_t i = 0; i < kResumeBytes; ++i) out[i] = 0;
   const ResumeAnchor& a = r.anchor;

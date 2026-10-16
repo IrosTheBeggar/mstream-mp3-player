@@ -88,9 +88,11 @@ struct Header {
 // instead. A Down lights the area (ROW_SEL around the cover, which stays as
 // it is). "..." opens the playback menu, "Playback": Shuffle (On/Off) and
 // Repeat (Off/All/One), which change in place with the sheet staying up,
-// then Sleep timer (its state; a tap opens the Sleep timer sheet). Every
-// sheet ignores a touch that starts within 300 ms of its opening, so a
-// double tap never picks a row.
+// then Sleep timer (its state; a tap opens the Sleep timer sheet), then
+// Auto DJ (On/Off/Waiting/Paused: autodjview::rowState()), in place as
+// Shuffle; the 4-row sheet rises into the header row. Every sheet ignores
+// a touch that starts within 300 ms of its opening, so a double tap never
+// picks a row.
 //
 // The progress line is a seek bar (docs/SEEK-BAR.md; lib/core/SeekBar): a
 // knob at where it plays. A tap goes to the second under the finger (not a
@@ -121,8 +123,10 @@ struct Header {
 // when the wait's status does), the times once a second, the transport on
 // a change (the play state, the volume, the output, shuffle, repeat), and
 // the seek bar's frames on the 30 fps deadlines while a finger scrubs.
-// Nothing queued: "Nothing playing" with Open Library and Shuffle all (or,
-// with no card and no music, "No microSD card" and Try again).
+// Nothing queued: "Nothing playing" with Open Library and Shuffle all, or
+// Auto DJ in Shuffle all's place while the card has a usable Auto DJ index
+// (the user's D4: a random track it knows plays, Auto DJ on); with no card
+// and no music, "No microSD card" and Try again.
 class NowPlayingPage : public Page {
 public:
   explicit NowPlayingPage(Ui& ui) : Page(ui) {}
@@ -230,6 +234,7 @@ private:
     bool empty = false;       // the empty state is what's drawn
     bool noCard = false;
     cardformat::Kind cardKind = cardformat::Kind::Unreadable;  // the no-card message drawn
+    bool autoDjButton = false;  // ... with Auto DJ in Shuffle all's place
     bool waiting = false;     // the waiting panel is what's drawn
     uint32_t waitSig = 0;     // waitSig()
     uint32_t sleep = 0;       // the sleep timer's text on the progress line (a hash)
@@ -272,7 +277,10 @@ private:
 // A container's list starts with its Play / Play next / + Queue bar; a
 // tapped track or file opens the same bar under it (Play: its album or
 // folder from it, so the rest follows; the other two: it alone); a long
-// press on any row offers the three in a sheet. Two levels down, the
+// press on any row offers the three in a sheet (and on a track the Auto DJ
+// index knows, a 4th: "Auto DJ from here", the track as a new queue and
+// Auto DJ on from it: the engine design's 2.4; the sheet's first row, so
+// the three stay where they are). Two levels down, the
 // header's pill is "‹ Library", the root crumb. Long alphabetical lists
 // (over 30) have the A-Z rail and its jump grid. The row that holds what
 // plays now (the artist, the album, the track, the folders on its path) is
@@ -351,6 +359,8 @@ private:
   // What a container row (or, kind None, the page itself) plays, and its name.
   bool container(const RowRef& r, LibraryIndex::Span* span, const char** name) const;
   void onRowAction(const RowRef& r, int action);
+  // The long-press sheet's "Auto DJ from here" on `track`.
+  void autoDjFromHere(uint32_t track);
   Header header() const;
   void drawSegments();
   void switchSegment(LibrarySegment s);
@@ -375,6 +385,7 @@ private:
   int playDepth_ = 0;
   // A long press's row, for its sheet.
   RowRef held_;
+  bool heldDj_ = false;  // its sheet has "Auto DJ from here" (the first row)
   // The Album page's disc dividers (read at enter()).
   librarytext::Discs discs_;
 };
@@ -391,10 +402,12 @@ private:
 //            two)
 //            (a tap on the title: the playing track, the top, the end)
 //   72-239   every entry; the playing one tinted with the accent's edge,
-//            the played ones dim, a failed one with an amber "!", what a
-//            Library add put in highlighted on the next visit (scrolled
-//            to). A tap opens the row's bar: Play now / Play next /
-//            Remove. A long press: selection mode, that row selected.
+//            the played ones dim, a failed one with an amber "!", one
+//            Auto DJ added with its small DJ mark there (dim; the "!"
+//            wins), what a Library add put in highlighted on the next
+//            visit (scrolled to; never Auto DJ's appends). A tap opens the
+//            row's bar: Play now / Play next / Remove. A long press:
+//            selection mode, that row selected.
 // Selection mode (mockup 17):
 //   36-71    [✕]  "2 selected  of 16"                              [All]
 //   72-197   the entries, three rows, checkboxes (the LCD's scroll band
@@ -402,8 +415,9 @@ private:
 //   198-239  [Remove 2] [Play next] [Clear...]  (Clear: a sheet, "Clear up
 //            next" keeps what plays, "Clear queue" stops it after a
 //            confirmation; every edit has Undo)
-// Empty (mockup 18): "Your queue is empty" [Open Library] [Shuffle all];
-// with no card and nothing queued, the no-card state.
+// Empty (mockup 18): "Your queue is empty" [Open Library] [Shuffle all],
+// or [Auto DJ] in Shuffle all's place while the card has a usable Auto DJ
+// index (D4); with no card and nothing queued, the no-card state.
 class QueuePage : public Page, public ListView::Source {
 public:
   // The band in selection mode: three rows over the bar.
@@ -476,6 +490,7 @@ private:
   uint32_t leftContent_ = 0;
   int32_t showPos_ = -1;
   bool showAdded_ = false;  // what the Library added is highlighted (this visit)
+  bool emptyDj_ = false;    // the empty state has Auto DJ's button (not Shuffle all)
   uint8_t jump_ = 0;
   BitSet selection_;
   bool selecting_ = false;
@@ -539,6 +554,7 @@ private:
 //       (pausing first, like the B hold)
 //   line out: the 3.5 mm / RCA module's place (not fitted yet)
 //   + Pair new headphones  >  the Pair screen
+//   Auto DJ >  (its page: "On · Follow the vibe", "Off" under it)
 //   Haptics (on / off), Screen off after (15 s ... Never), Brightness
 //   (Low ... Max), Turn off when idle (10 min ... Never), Touch
 //   calibration >, Language > (the one in use, in its own name), About >
@@ -554,6 +570,19 @@ private:
 // fresh unit's first screen (kFirstBootPicker: no back arrow; a pick goes
 // on to Now Playing, the touch check and the tips). Full-width rows hit by
 // y, as the touch check's: a panel that reads x wrong still picks right.
+// Auto DJ (the engine design's 5.1, the user's D6; lib/core/AutoDjView):
+// Language's list (no icons, from x 16): Auto DJ (a switch; on with
+// nothing queued, a toast: it follows the next track played, nothing
+// starts), Anchor (Follow the vibe / Stay on seed, its value right on the
+// title's line, its hint under it; a tap swaps), Match strictness ("55% or
+// closer", the steps 55-75 by 5: a tap the next), BPM continuity and
+// Harmonic mixing (switches), and a status row that is no control (the
+// index's coverage, or why there is none, or why Auto DJ waits). Without a
+// usable index the four settings are dim, "needs an Auto DJ index" under
+// each (a value that can't sit beside its title, Match strictness's in
+// some languages, there instead), a tap a note; the switch and the status
+// stay live. Each change saved at once (NVS, app/AutoDjStore) and applied
+// from the next pick.
 // Device info: what the boot screen used to list (the board, the power
 // chip, the IMU, the chip, flash, PSRAM, the last reset, the battery, the
 // library, internal RAM), with the CPU's clock, the uptime, the firmware
@@ -588,6 +617,7 @@ public:
   uint16_t accent() override;
   ListView::Tap onTapAt(uint32_t row, int x, bool rightEdge) override;
   bool emptyState(EmptyState& e) override;
+  bool pressable(uint32_t row) override;
 
 private:
   // What the dialog or sheet up is asking.
@@ -598,6 +628,7 @@ private:
     SpeakerRow,
     LineOut,
     PairNew,
+    AutoDjRow,
     Haptics,
     ScreenOff,
     Brightness,
@@ -656,6 +687,14 @@ private:
   void drawLanguage(ListView::Row& r);
   void drawAbout(ListView::Row& r);
   void drawDeviceInfo(ListView::Row& r);
+  // Output > Auto DJ: a row of its page (autodjview::PageRow), its switch
+  // rows, its value rows, and a tap on one.
+  void drawAutoDj(ListView::Row& r);
+  void drawAutoDjSwitch(ListView::Row& r, const char* title, const char* sub, bool on, bool live);
+  void drawAutoDjValue(ListView::Row& r, const char* title, const char* value, const char* hint, bool live);
+  void onAutoDjTap(uint32_t row);
+  // What Auto DJ's rows show (the root's row, the page's): drawn again when it changes.
+  static uint32_t autoDjSig(const autodjview::State& d);
   // The card's buttons: how many, and each one's x and width.
   int buttonBoxes(const BtCardView& v, int* x, int* w) const;
   void onCardButton(BtButton b);
@@ -678,6 +717,7 @@ private:
   bool drawnCalibrated_ = false;
   uint32_t drawnScreen_ = 0xFFFFFFFFu;  // the screen, idle and power settings drawn (screenSig())
   uint32_t drawnLibrary_ = 0xFFFFFFFFu;  // the Library row drawn (librarySig())
+  uint32_t drawnAutoDj_ = 0xFFFFFFFFu;   // Auto DJ's rows drawn (autoDjSig())
   uint32_t nextSpinMs_ = 0;
   uint8_t spin_ = 0;  // the spinner's step (8 a turn)
   // Pair: the scan's list as last copied, and the device picked.

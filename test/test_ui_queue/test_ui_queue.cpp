@@ -4,9 +4,9 @@
 // Host tests for the Queue screen's portable pieces (QueueView): the
 // "12 up next · 49 min" summary from learned track lengths, the mark on
 // what a Library add put in the queue, the failed-track ring, when an
-// Undo toast goes because the undo went from under it (UndoWatch), and the
-// texts of the queue's cap. (The shuffle's loop moved to
-// lib/core/Shuffle.h: test_queue.)
+// Undo toast goes because the undo went from under it (UndoWatch: a
+// toggle, qu, Auto DJ's pick), and the texts of the queue's cap. (The
+// shuffle's loop moved to lib/core/Shuffle.h: test_queue.)
 // Run: pio test -e native
 #include <unity.h>
 
@@ -141,19 +141,43 @@ void test_added_mark_finds_what_was_added() {
   TEST_ASSERT_FALSE(m.pending());
 }
 
-void test_failed_keys_ring() {
-  KeyRing r;
+// A ring of N keys: a key once, the oldest goes, kNone never; cleared, it
+// starts again from empty. FailedKeys holds 16; a larger one the same way.
+template <int N>
+void ringOf() {
+  KeyRing<N> r;
   r.add(5);
   r.add(5);
   TEST_ASSERT_EQUAL_INT(1, r.count());
   TEST_ASSERT_TRUE(r.has(5));
-  for (uint32_t k = 100; k < 100 + KeyRing::kSize; ++k) r.add(k);
-  TEST_ASSERT_EQUAL_INT(KeyRing::kSize, r.count());
+  for (uint32_t k = 100; k < 100 + N; ++k) r.add(k);
+  TEST_ASSERT_EQUAL_INT(N, r.count());
   TEST_ASSERT_FALSE(r.has(5));  // the oldest went
   TEST_ASSERT_TRUE(r.has(100));
-  TEST_ASSERT_TRUE(r.has(100 + KeyRing::kSize - 1));
+  TEST_ASSERT_TRUE(r.has(100 + N - 1));
+  r.add(100);  // there already: the ring doesn't move
+  TEST_ASSERT_TRUE(r.has(100));
   r.add(QueueModel::kNone);
   TEST_ASSERT_FALSE(r.has(QueueModel::kNone));
+  // Cleared part way round: empty, then filled from its start again.
+  r.add(1000);
+  r.clear();
+  TEST_ASSERT_EQUAL_INT(0, r.count());
+  TEST_ASSERT_FALSE(r.has(1000));
+  for (uint32_t k = 2000; k < 2000 + N + 1; ++k) {
+    r.add(k);
+    TEST_ASSERT_TRUE(r.has(k));
+  }
+  TEST_ASSERT_EQUAL_INT(N, r.count());
+  TEST_ASSERT_FALSE(r.has(2000));
+  TEST_ASSERT_TRUE(r.has(2001));
+}
+
+void test_failed_keys_ring() {
+  TEST_ASSERT_EQUAL_INT(16, FailedKeys::kSize);
+  ringOf<FailedKeys::kSize>();
+  ringOf<64>();
+  ringOf<1>();
 }
 
 // Ui's pass, as Ui::loop makes it: the mode, an Undo toast up, the undo.
@@ -238,6 +262,49 @@ void test_undo_watch_qu_of_any_edit() {
   TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));
 }
 
+// Auto DJ's pick (QueueModel::appendQuiet()) can drop the undo a toast
+// offers: at a full queue it pushes out the oldest played entry, and the
+// undo goes with it. The glue tells the watch (dropped(): undoable() was an
+// edit before the pick and None after): the toast goes, "Auto DJ's pick
+// took the undo". Not told, the toast stays (an undo gone for no known
+// reason, as before); a pick mirrored into the undo keeps its toast,
+// whatever was said, and the word is told once.
+void test_undo_watch_auto_dj_s_pick_drops_the_undo() {
+  QueueModel q;
+  fill(q, QueueModel::kMaxEntries, 100);  // 100 played
+  UndoWatch w;
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, false));
+  const uint32_t pos[] = {200};
+  TEST_ASSERT_TRUE(q.moveNext(pos, 1));  // Play next, its toast with Undo
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));
+  TEST_ASSERT_TRUE(q.undoable() != QueueModel::Edit::None);
+  TEST_ASSERT_TRUE(q.appendQuiet(7));
+  TEST_ASSERT_EQUAL(QueueModel::kMaxEntries, q.size());
+  TEST_ASSERT_EQUAL(QueueModel::Edit::None, q.undoable());
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, true));  // not told
+  w.dropped();
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Dropped, pass(w, q, true));
+  TEST_ASSERT_FALSE(w.modeChanged());
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, q, false));
+  // qu and a drop told in one pass: qu's.
+  TEST_ASSERT_TRUE(q.moveNext(pos, 1));
+  TEST_ASSERT_TRUE(q.undo());
+  w.undone();
+  w.dropped();
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Undone, pass(w, q, true));
+  // Room in the queue: the pick mirrored into the undo, which stays.
+  QueueModel r;
+  fill(r, 5, 1);
+  const uint32_t one[] = {12};
+  TEST_ASSERT_TRUE(r.insertNext(one, 1));
+  TEST_ASSERT_TRUE(r.appendQuiet(8));
+  TEST_ASSERT_TRUE(r.undoable() != QueueModel::Edit::None);
+  w.dropped();
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Stays, pass(w, r, true));
+  TEST_ASSERT_TRUE(r.setShuffled(true));
+  TEST_ASSERT_EQUAL(UndoWatch::Gone::Toggle, pass(w, r, true));  // (the word went)
+}
+
 // The queue's cap (QueueModel::kMaxEntries, docs/QUEUE-MODES.md 15): its
 // counts grouped by thousands, and the toast of what it cut short.
 void test_capped_texts() {
@@ -317,6 +384,61 @@ void test_a_refusal_keeps_the_last_undo() {
   TEST_ASSERT_FALSE(k.undo);
 }
 
+// Auto DJ's appends (the engine design's 2.14) aren't the listener's add:
+// after a + Queue they have higher keys, yet neither the highlight nor the
+// scroll-to takes them; with only its appends left, nothing shows.
+void test_added_mark_leaves_auto_dj_s_appends() {
+  QueueModel q;
+  fill(q, 4, 1);
+  AddedMark m;
+  const uint32_t two[] = {10, 11};
+  const uint32_t at = q.size();
+  q.append(two, 2);
+  m.noteAdded(q.keyAt(at));
+  // Auto DJ appends two after them (its DJ marks: their keys).
+  TEST_ASSERT_TRUE(q.appendQuiet(20));
+  TEST_ASSERT_TRUE(q.appendQuiet(21));
+  const uint32_t djKeys[2] = {q.keyAt(q.size() - 2), q.keyAt(q.size() - 1)};
+  AddedMark::Quiet quiet;
+  quiet.ctx = djKeys;
+  quiet.has = [](uint32_t key, const void* ctx) {
+    const uint32_t* k = static_cast<const uint32_t*>(ctx);
+    return key == k[0] || key == k[1];
+  };
+  int marked = 0, markedQuiet = 0;
+  for (uint32_t p = 0; p < q.size(); ++p) {
+    marked += m.marks(q.keyAt(p)) ? 1 : 0;
+    markedQuiet += m.marks(q.keyAt(p), quiet) ? 1 : 0;
+  }
+  TEST_ASSERT_EQUAL_INT(4, marked);       // (keys alone: every key since the add's)
+  TEST_ASSERT_EQUAL_INT(2, markedQuiet);  // the listener's two
+  TEST_ASSERT_FALSE(m.marks(djKeys[0], quiet));
+  TEST_ASSERT_EQUAL_UINT32(at, m.firstPosition(q, quiet));
+  // The listener's two removed: only Auto DJ's are left above the add's
+  // key, and there is nothing to show.
+  const uint32_t mine[] = {at, at + 1};
+  q.remove(mine, 2);
+  TEST_ASSERT_EQUAL_UINT32(at, m.firstPosition(q));  // (keys alone: Auto DJ's first)
+  TEST_ASSERT_EQUAL_UINT32(AddedMark::kNone, m.firstPosition(q, quiet));
+  TEST_ASSERT_FALSE(AddedMark::Quiet().of(djKeys[0]));
+}
+
+// The Queue tab's badge: up next growing flashes it, unless the growth is
+// Auto DJ's own append (one a track: it would flash every track), a change
+// of mode, or no change of the queue's content at all.
+void test_the_badge_and_auto_dj_s_appends() {
+  TEST_ASSERT_TRUE(badgeFlashes(0, 3, true, false, 0));    // a Library add
+  TEST_ASSERT_FALSE(badgeFlashes(0, 1, true, false, 1));   // Auto DJ's pick
+  TEST_ASSERT_FALSE(badgeFlashes(3, 4, true, false, 1));
+  TEST_ASSERT_TRUE(badgeFlashes(0, 2, true, false, 1));    // the listener's add in the same pass
+  TEST_ASSERT_FALSE(badgeFlashes(0, 2, true, false, 2));
+  TEST_ASSERT_FALSE(badgeFlashes(0, 5, true, true, 0));    // a shuffle toggle
+  TEST_ASSERT_FALSE(badgeFlashes(0, 5, false, false, 0));  // no content change (a skip back)
+  TEST_ASSERT_FALSE(badgeFlashes(5, 4, true, false, 0));   // fewer
+  TEST_ASSERT_FALSE(badgeFlashes(5, 5, true, false, 0));
+  TEST_ASSERT_FALSE(badgeFlashes(1, 1, true, false, 1));   // its pick while the one before played out
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_capped_texts);
@@ -330,5 +452,8 @@ int main(int, char**) {
   RUN_TEST(test_undo_watch_a_toggle_takes_the_undo);
   RUN_TEST(test_undo_watch_qu_of_shuffle_all_is_no_toggle);
   RUN_TEST(test_undo_watch_qu_of_any_edit);
+  RUN_TEST(test_undo_watch_auto_dj_s_pick_drops_the_undo);
+  RUN_TEST(test_added_mark_leaves_auto_dj_s_appends);
+  RUN_TEST(test_the_badge_and_auto_dj_s_appends);
   return UNITY_END();
 }

@@ -725,6 +725,130 @@
     "bytes": 96,
     "note": "Keep ': ' (a no-break space before it, as French writes, is fine): the toast looks for it."
   },
+  "toast.autodj_on_empty": "Auto DJ on: it follows the next track you play",
+  "@toast.autodj_on_empty": {
+    "context": "Toast after Auto DJ is switched on (Output > Auto DJ) with nothing queued: nothing plays by itself; once the listener plays a track, Auto DJ adds after it.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "toast.autodj_cued": "Auto DJ: the next track is ready, press play",
+  "@toast.autodj_cued": {
+    "context": "Toast when the queue had finished (stopped at its end) and Auto DJ added a track: it waits, paused at 0:00, until the listener presses play (nothing starts by itself).",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "toast.autodj_random": "No Auto DJ index: picks are random",
+  "@toast.autodj_random": {
+    "context": "Toast, once a switch on (or once after a boot): Auto DJ is on but the card has no index it can use (no AutoDJ index from the transfer, or one that failed its checks), so its picks are random library tracks.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "toast.autodj_paused": "Auto DJ paused: tracks failed to play",
+  "@toast.autodj_paused": {
+    "context": "Note (amber) when three of Auto DJ's picks in a row couldn't be played: it adds nothing until a track plays, or it is switched off and on.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "toast.autodj_no_neighbours": "This track has no Auto DJ neighbours yet: the next track is random",
+  "@toast.autodj_no_neighbours": {
+    "context": "Toast at the start of an Auto DJ session (Anchor: Follow the vibe) when the playing track isn't in the index (the server hasn't analysed it): the first pick is random, and the picks after it follow that one.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "toast.autodj_seed_moved": "This track has no Auto DJ neighbours yet: the first pick becomes the seed",
+  "@toast.autodj_seed_moved": {
+    "context": "As toast.autodj_no_neighbours, with Anchor: Stay on seed: the first (random) pick becomes the seed every later pick stays close to.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "toast.autodj_from_here": "Auto DJ from here: {0}",
+  "@toast.autodj_from_here": {
+    "context": "Toast after 'Auto DJ from here' (the Library's long-press sheet): the track plays as a new queue, Auto DJ on and seeded by it (with Undo: the queue as it was and, if the tap switched Auto DJ on, Auto DJ off again).",
+    "room": {
+      "font": "Body",
+      "px": 228,
+      "layout": "toast",
+      "two_line_px": 254
+    },
+    "placeholders": {
+      "0": {
+        "means": "the track's title (cut to fit)",
+        "type": "text",
+        "worst": "A Fairly Long Track Title"
+      }
+    },
+    "bytes": 128
+  },
+  "toast.autodj_started": "Auto DJ: {0}",
+  "@toast.autodj_started": {
+    "context": "Toast after the empty states' Auto DJ button: a random track with Auto DJ neighbours plays as a new queue, Auto DJ on (with Undo: the queue as it was and, if the tap switched Auto DJ on, Auto DJ off again). {0} is that track's title.",
+    "room": {
+      "font": "Body",
+      "px": 228,
+      "layout": "toast",
+      "two_line_px": 254
+    },
+    "placeholders": {
+      "0": {
+        "means": "the track's title (cut to fit)",
+        "type": "text",
+        "worst": "A Fairly Long Track Title"
+      }
+    },
+    "bytes": 128
+  },
+  "toast.autodj_no_start": "Found no track with Auto DJ neighbours: try again",
+  "@toast.autodj_no_start": {
+    "context": "Note when the empty states' Auto DJ button found no track the index knows in its random draws (a library mostly not analysed by the server): nothing plays; another tap draws again.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
+  "toast.autodj_needs_index": "Needs an Auto DJ index: a transfer to the card adds one",
+  "@toast.autodj_needs_index": {
+    "context": "Note on a tap on a dimmed row of Output > Auto DJ (Anchor, Match strictness, BPM continuity, Harmonic mixing) when the card has no index: the transfer software writes one to the card; also on a tap on the empty states' Auto DJ button when the index went since it was drawn.",
+    "room": {
+      "font": "Body",
+      "px": 284,
+      "layout": "toast",
+      "two_line_px": 284
+    },
+    "bytes": 128
+  },
   "hud.bluetooth": "Bluetooth: {0}",
   "@hud.bluetooth": {
     "context": "The HUD over the tab bar after a B hold moved the output to the headphones: their name, or hud.connecting.",
@@ -1208,6 +1332,76 @@
     },
     "bytes": 96
   },
+  "now_playing.autodj": "Auto DJ",
+  "@now_playing.autodj": {
+    "context": "Playback sheet row 4 ('...' button): Auto DJ on or off, its state as the detail (On, Off, Waiting, Paused); a tap switches it, the sheet staying up.",
+    "room": {
+      "font": "Body",
+      "px": 288
+    },
+    "bytes": 64
+  },
+  "now_playing.autodj_on": "On",
+  "@now_playing.autodj_on": {
+    "context": "The Auto DJ row's state (the playback menu): Auto DJ is on. Its own id: it agrees with 'Auto DJ', not with Shuffle (now_playing.on). Beside the row's label when it fits whole there (213 px in English), else under it: never cut. Also Output's Auto DJ row's line alone (Small 242 px) when the line with the Anchor (output.autodj_sub_on) doesn't fit there, or the card has no usable index.",
+    "room": [
+      {
+        "font": "Small",
+        "px": 288,
+        "const": "sheet::kTwoLineW"
+      },
+      {
+        "font": "Small",
+        "px": 242,
+        "const": "uitext::kAutoDjRowW"
+      }
+    ],
+    "bytes": 96
+  },
+  "now_playing.autodj_off": "Off",
+  "@now_playing.autodj_off": {
+    "context": "The Auto DJ row's state: off. As now_playing.autodj_on.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "sheet::kTwoLineW"
+    },
+    "bytes": 96
+  },
+  "now_playing.autodj_waiting": "Waiting",
+  "@now_playing.autodj_waiting": {
+    "context": "The Auto DJ row's state: on, but it adds nothing while Repeat One is on or the sleep timer ends at the queue's end. As now_playing.autodj_on. Also Output's Auto DJ row's line alone (Small 242 px) when the line with the Anchor (output.autodj_sub_waiting) doesn't fit there, or the card has no usable index.",
+    "room": [
+      {
+        "font": "Small",
+        "px": 288,
+        "const": "sheet::kTwoLineW"
+      },
+      {
+        "font": "Small",
+        "px": 242,
+        "const": "uitext::kAutoDjRowW"
+      }
+    ],
+    "bytes": 96
+  },
+  "now_playing.autodj_paused": "Paused",
+  "@now_playing.autodj_paused": {
+    "context": "The Auto DJ row's state: on, but paused after three of its picks failed to play. As now_playing.autodj_on. Also Output's Auto DJ row's line alone (Small 242 px) when the line with the Anchor (output.autodj_sub_paused) doesn't fit there, or the card has no usable index.",
+    "room": [
+      {
+        "font": "Small",
+        "px": 288,
+        "const": "sheet::kTwoLineW"
+      },
+      {
+        "font": "Small",
+        "px": 242,
+        "const": "uitext::kAutoDjRowW"
+      }
+    ],
+    "bytes": 96
+  },
   "sleep.title_left": "Sleep timer: {0} left",
   "@sleep.title_left": {
     "context": "The Sleep timer sheet's title while a timer counts down, and the toast after +10 min.",
@@ -1646,6 +1840,15 @@
       "font": "Body",
       "else": "Small",
       "px": 81
+    },
+    "bytes": 64
+  },
+  "library.autodj_here": "Auto DJ from here",
+  "@library.autodj_here": {
+    "context": "The Library's long-press sheet, its first row (above Play, Play next and + Queue, which stay where they are), on a track the Auto DJ index knows: play it as a new queue and let Auto DJ carry on from it (Auto DJ switched on).",
+    "room": {
+      "font": "Body",
+      "px": 288
     },
     "bytes": 64
   },
@@ -3043,6 +3246,15 @@
     },
     "note": "The icon makes way when it doesn't fit beside it (then 112 px)."
   },
+  "empty.autodj": "Auto DJ",
+  "@empty.autodj": {
+    "context": "The empty states' second button (Now Playing, Queue) when the card has an Auto DJ index, in Shuffle all's place: a random track plays and Auto DJ carries on from it.",
+    "room": {
+      "font": "Body",
+      "px": 84
+    },
+    "note": "The icon makes way when it doesn't fit beside it (then 112 px)."
+  },
   "empty.try_again": "Try again",
   "@empty.try_again": {
     "context": "The one button of the no-card and no-music screens: look for the card / the music again.",
@@ -3317,6 +3529,427 @@
       "font": "Small",
       "px": 242
     }
+  },
+  "output.autodj": "Auto DJ",
+  "@output.autodj": {
+    "context": "Output row (chevron): opens the Auto DJ page. Also that page's title, and its first row (a switch at the right).",
+    "room": [
+      {
+        "font": "Body",
+        "px": 242
+      },
+      {
+        "font": "Bold",
+        "px": 282
+      },
+      {
+        "font": "Body",
+        "px": 232,
+        "const": "uitext::kAutoDjSwitchW"
+      }
+    ]
+  },
+  "output.autodj_sub_on": "On · {0}",
+  "@output.autodj_sub_on": {
+    "context": "The Auto DJ row's line when on: the Anchor in use. Drawn only when the whole line fits (242 px); else the state alone (now_playing.autodj_on), so the Anchor keeps the mobile app's words. Also the state alone without a usable index.",
+    "room": {
+      "font": "Small",
+      "px": 242,
+      "optional": true
+    },
+    "placeholders": {
+      "0": {
+        "means": "the Anchor in use: autodj.anchor_rolling or autodj.anchor_locked",
+        "type": "message",
+        "worst": "autodj.anchor_rolling",
+        "or": [
+          "autodj.anchor_locked"
+        ]
+      }
+    },
+    "bytes": 96
+  },
+  "output.autodj_sub_waiting": "Waiting · {0}",
+  "@output.autodj_sub_waiting": {
+    "context": "The Auto DJ row's line when on but waiting (Repeat One, or the sleep timer's End of queue): the Anchor in use. Drawn only when the whole line fits (242 px); else the state alone (now_playing.autodj_waiting), so the Anchor keeps the mobile app's words. Also the state alone without a usable index.",
+    "room": {
+      "font": "Small",
+      "px": 242,
+      "optional": true
+    },
+    "placeholders": {
+      "0": {
+        "means": "the Anchor in use: autodj.anchor_rolling or autodj.anchor_locked",
+        "type": "message",
+        "worst": "autodj.anchor_rolling",
+        "or": [
+          "autodj.anchor_locked"
+        ]
+      }
+    },
+    "bytes": 96
+  },
+  "output.autodj_sub_paused": "Paused · {0}",
+  "@output.autodj_sub_paused": {
+    "context": "The Auto DJ row's line when on but paused (its picks failed to play): the Anchor in use. Drawn only when the whole line fits (242 px); else the state alone (now_playing.autodj_paused), so the Anchor keeps the mobile app's words. Also the state alone without a usable index.",
+    "room": {
+      "font": "Small",
+      "px": 242,
+      "optional": true
+    },
+    "placeholders": {
+      "0": {
+        "means": "the Anchor in use: autodj.anchor_rolling or autodj.anchor_locked",
+        "type": "message",
+        "worst": "autodj.anchor_rolling",
+        "or": [
+          "autodj.anchor_locked"
+        ]
+      }
+    },
+    "bytes": 96
+  },
+  "output.autodj_sub_off": "Off",
+  "@output.autodj_sub_off": {
+    "context": "The Auto DJ row's line when off.",
+    "room": {
+      "font": "Small",
+      "px": 242
+    },
+    "bytes": 96
+  },
+  "autodj.subtitle": "keeps the queue going",
+  "@autodj.subtitle": {
+    "context": "The Auto DJ page's header line after its title: what Auto DJ does (adds a track whenever the queue's last one starts).",
+    "room": {
+      "font": "Small",
+      "px": 207
+    }
+  },
+  "autodj.on_sub": "adds a track as the last one starts",
+  "@autodj.on_sub": {
+    "context": "The Auto DJ page, row 1's line under 'Auto DJ' (a switch at the right): when the queue's last track starts, Auto DJ adds one more.",
+    "room": {
+      "font": "Small",
+      "px": 232,
+      "const": "uitext::kAutoDjSwitchW"
+    }
+  },
+  "autodj.anchor": "Anchor",
+  "@autodj.anchor": {
+    "context": "The Auto DJ page, row 2: what the picks stay close to (a tap swaps Follow the vibe and Stay on seed). The mobile app's word.",
+    "room": {
+      "font": "Body",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    }
+  },
+  "autodj.anchor_rolling": "Follow the vibe",
+  "@autodj.anchor_rolling": {
+    "context": "Anchor's value (Follow the vibe): each pick close to one of the last few tracks played. The mobile app's words. Beside 'Anchor' when it fits whole there (215 px in English), else on the row's second line; also after 'On ·' on the Output row when that whole line fits (else that row shows the state alone).",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 56
+  },
+  "autodj.anchor_locked": "Stay on seed",
+  "@autodj.anchor_locked": {
+    "context": "Anchor's value (Stay on seed): every pick close to the session's first track, the seed. As autodj.anchor_rolling.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 56
+  },
+  "autodj.anchor_rolling_sub": "each pick follows the last few tracks",
+  "@autodj.anchor_rolling_sub": {
+    "context": "Anchor's line under it with Follow the vibe: the sound can slowly drift.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    }
+  },
+  "autodj.anchor_locked_sub": "every pick stays close to the seed song",
+  "@autodj.anchor_locked_sub": {
+    "context": "Anchor's line under it with Stay on seed: the session's first track is the seed.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    }
+  },
+  "autodj.strictness": "Match strictness",
+  "@autodj.strictness": {
+    "context": "The Auto DJ page, row 3: how close a pick's sound must be (a tap takes the next step: 55, 60, 65, 70, 75 %, then 55 again). The mobile app's words.",
+    "room": {
+      "font": "Body",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    }
+  },
+  "autodj.strictness_value": "{0}% or closer",
+  "@autodj.strictness_value": {
+    "context": "Match strictness's value: a pick at least this similar. The mobile app's words. Beside 'Match strictness' when it fits whole there (142 px in English), else on the row's second line (also when the row is dim without an index: in the place of 'needs an Auto DJ index').",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "placeholders": {
+      "0": {
+        "means": "the percentage",
+        "type": "digits",
+        "worst": 75
+      }
+    },
+    "bytes": 48
+  },
+  "autodj.strictness_sub": "how similar each pick must sound",
+  "@autodj.strictness_sub": {
+    "context": "Match strictness's line under it.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    }
+  },
+  "autodj.bpm": "BPM continuity",
+  "@autodj.bpm": {
+    "context": "The Auto DJ page, row 4 (a switch): prefer picks near the playing track's tempo. The mobile app's words.",
+    "room": {
+      "font": "Body",
+      "px": 232,
+      "const": "uitext::kAutoDjSwitchW"
+    },
+    "translate": "maybe"
+  },
+  "autodj.bpm_sub": "within 8 BPM, or half/double tempo",
+  "@autodj.bpm_sub": {
+    "context": "BPM continuity's line: within 8 beats a minute of the playing track's tempo, or of half or double it.",
+    "room": {
+      "font": "Small",
+      "px": 232,
+      "const": "uitext::kAutoDjSwitchW"
+    },
+    "translate": "maybe"
+  },
+  "autodj.harmonic": "Harmonic mixing",
+  "@autodj.harmonic": {
+    "context": "The Auto DJ page, row 5 (a switch): prefer picks in keys that mix well (the Camelot wheel's neighbours). The mobile app's words.",
+    "room": {
+      "font": "Body",
+      "px": 232,
+      "const": "uitext::kAutoDjSwitchW"
+    }
+  },
+  "autodj.harmonic_sub": "keys that mix well",
+  "@autodj.harmonic_sub": {
+    "context": "Harmonic mixing's line.",
+    "room": {
+      "font": "Small",
+      "px": 232,
+      "const": "uitext::kAutoDjSwitchW"
+    }
+  },
+  "autodj.needs_index": "needs an Auto DJ index",
+  "@autodj.needs_index": {
+    "context": "The line of the Auto DJ page's rows that need the card's index (Anchor, Match strictness, BPM continuity, Harmonic mixing) when it has none: they are drawn dim. A value that doesn't fit beside its row's title (Match strictness's in some languages) takes this line instead, dim too.",
+    "room": [
+      {
+        "font": "Small",
+        "px": 232,
+        "const": "uitext::kAutoDjSwitchW"
+      },
+      {
+        "font": "Small",
+        "px": 288,
+        "const": "uitext::kAutoDjLineW"
+      }
+    ]
+  },
+  "autodj.status_ready": {
+    "one": "{0} of {1} track has neighbours",
+    "other": "{0} of {1} tracks have neighbours"
+  },
+  "@autodj.status_ready": {
+    "context": "The Auto DJ page's last row (not a control), its first line once the index is read: how many of the library's tracks the index knows (they have neighbours to follow).",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "placeholders": {
+      "0": {
+        "means": "the tracks the index knows",
+        "type": "grouped",
+        "worst": 99999
+      },
+      "1": {
+        "means": "the library's tracks",
+        "type": "grouped",
+        "worst": 99999
+      }
+    },
+    "count": "1",
+    "bytes": 96
+  },
+  "autodj.status_coverage": "BPM {0}% · key {1}%",
+  "@autodj.status_coverage": {
+    "context": "The status row's second line once the index is read: the share of those tracks with a tempo, and with a key.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "placeholders": {
+      "0": {
+        "means": "a percentage",
+        "type": "digits",
+        "worst": 100
+      },
+      "1": {
+        "means": "a percentage",
+        "type": "digits",
+        "worst": 100
+      }
+    },
+    "translate": "maybe",
+    "bytes": 96
+  },
+  "autodj.status_found": {
+    "one": "Auto DJ index: {0} track",
+    "other": "Auto DJ index: {0} tracks"
+  },
+  "@autodj.status_found": {
+    "context": "The status row's first line while Auto DJ is off: the card has an index, of this many tracks (it is read when Auto DJ is switched on).",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "placeholders": {
+      "0": {
+        "means": "the index's tracks",
+        "type": "grouped",
+        "worst": 99999
+      }
+    },
+    "count": "0",
+    "bytes": 96
+  },
+  "autodj.status_found_sub": "read when Auto DJ is switched on",
+  "@autodj.status_found_sub": {
+    "context": "The status row's second line under autodj.status_found.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
+  "autodj.status_reading": "Reading the Auto DJ index…",
+  "@autodj.status_reading": {
+    "context": "The status row's first line while Auto DJ reads the index (a few seconds after it is switched on).",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
+  "autodj.status_none": "No Auto DJ index on this card",
+  "@autodj.status_none": {
+    "context": "The status row's first line when the card has no index (the transfer writes one).",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
+  "autodj.status_bad": "The Auto DJ index failed its checks",
+  "@autodj.status_bad": {
+    "context": "The status row's first line when the card's index failed a check (damaged, or not the file the card's root names). A read that failed is autodj.status_unreadable.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
+  "autodj.status_unreadable": "Can't read the Auto DJ index",
+  "@autodj.status_unreadable": {
+    "context": "The status row's first line when a read of the index failed (the file the card's root names didn't open, a card read error, no memory to read the root after the card was mounted again): tried again when the card is mounted again, or at the next boot. As card.unknown_title says it of a card.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
+  "autodj.status_no_memory": "Not enough memory for the Auto DJ index",
+  "@autodj.status_no_memory": {
+    "context": "The status row's first line when there wasn't the memory to read the index (tried again after the library's next update, or Auto DJ off and on).",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
+  "autodj.status_too_big": "Too many tracks for the Auto DJ index",
+  "@autodj.status_too_big": {
+    "context": "The status row's first line for a library of over 65,534 tracks: the index can't be used.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
+  "autodj.status_random": "picks are random",
+  "@autodj.status_random": {
+    "context": "The status row's second line under autodj.status_none, status_bad, status_no_memory and status_too_big: with no index Auto DJ picks random library tracks.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
+  "autodj.status_waits_repeat": "Waiting: Repeat One is on",
+  "@autodj.status_waits_repeat": {
+    "context": "The status row's first line while Auto DJ is on but adds nothing: Repeat One loops the track.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
+  "autodj.status_waits_sleep": "Waiting: sleep timer set to End of queue",
+  "@autodj.status_waits_sleep": {
+    "context": "The status row's first line while the sleep timer is set to End of queue (the sleep sheet's word for that setting, sleep.end_queue): Auto DJ adds nothing, so the queue's end is where the timer stops.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
+  },
+  "autodj.status_paused": "Paused: tracks failed to play",
+  "@autodj.status_paused": {
+    "context": "The status row's first line after three of Auto DJ's picks failed to play: it adds nothing until a track plays, or it is switched off and on.",
+    "room": {
+      "font": "Small",
+      "px": 288,
+      "const": "uitext::kAutoDjLineW"
+    },
+    "bytes": 96
   },
   "settings.screen_off": "Screen off after",
   "@settings.screen_off": {

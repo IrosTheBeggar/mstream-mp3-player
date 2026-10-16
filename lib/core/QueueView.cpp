@@ -131,12 +131,17 @@ SummaryPick placeSummary(const int (&widths)[kSummaryForms], int beside, int bel
 
 // ---- AddedMark ----
 
-uint32_t AddedMark::firstPosition(const QueueModel& q) const {
+uint32_t AddedMark::firstPosition(const QueueModel& q, const Quiet& quiet) const {
   if (since_ == kNone) return kNone;
   for (uint32_t p = 0; p < q.size(); ++p) {
-    if (marks(q.keyAt(p))) return p;
+    if (marks(q.keyAt(p), quiet)) return p;
   }
   return kNone;
+}
+
+bool badgeFlashes(uint32_t upNextWas, uint32_t upNextNow, bool contentChanged, bool modeChanged, uint32_t djAdds) {
+  if (!contentChanged || modeChanged || upNextNow <= upNextWas) return false;
+  return upNextNow - upNextWas > djAdds;
 }
 
 // ---- the queue's cap ----
@@ -212,22 +217,6 @@ AddOutcome addOutcome(const QueueModel& q, uint32_t sizeBefore, uint32_t asked, 
   return o;
 }
 
-// ---- KeyRing ----
-
-void KeyRing::add(uint32_t key) {
-  if (key == QueueModel::kNone || has(key)) return;
-  k_[next_] = key;
-  next_ = (next_ + 1) % kSize;
-  if (n_ < kSize) ++n_;
-}
-
-bool KeyRing::has(uint32_t key) const {
-  for (int i = 0; i < n_; ++i) {
-    if (k_[i] == key) return true;
-  }
-  return false;
-}
-
 // ---- a refused add's note ----
 
 ToastButtons keptByRefusal(bool up, bool undo, bool view, uint32_t viewKey, QueueModel::Edit undoable) {
@@ -243,10 +232,11 @@ ToastButtons keptByRefusal(bool up, bool undo, bool view, uint32_t viewKey, Queu
 UndoWatch::Gone UndoWatch::pass(bool shuffled, bool undoToast, QueueModel::Edit undoable) {
   changed_ = shuffled != last_;
   last_ = shuffled;
-  const bool undone = undone_;
-  undone_ = false;  // (told once: a later pass's toast is another's)
+  const bool undone = undone_, dropped = dropped_;
+  undone_ = dropped_ = false;  // (told once: a later pass's toast is another's)
   if (!undoToast || undoable != QueueModel::Edit::None) return Gone::Stays;
   if (undone) return Gone::Undone;
+  if (dropped) return Gone::Dropped;
   return changed_ ? Gone::Toggle : Gone::Stays;
 }
 

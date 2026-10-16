@@ -93,13 +93,90 @@ inline constexpr int kToastTextRight = 306;  // a note (Ui::warn) on one line, n
 // toast.why_opus_*: oggopus::Reader::refusalNote()); else
 // toast.why_cant_play.
 inline constexpr int kToastTwoLineW = 306 - kToastTextX;
+// The two lines' rows (Toast::show()): the toast is 36 px (y 36-71, never
+// in the list's scrolled band), its card rows 2-33 with a 1 px border. The
+// glyph store's Chinese and Japanese are 16 px in every role, 17 rows for
+// some (机, 青: docs/I18N.md), taller than the Small font's Latin, so fixed
+// rows put a CJK first line into the second and over the card's top edge
+// (the device check of 2026-10-14: H-fromhere, H-onempty, H-noneigh in ja
+// and zh; and ru's "й" breve touched the line above). So each line goes by
+// the rows it inks (textink::inkOf(), as ui/Fonts draws: the fitted text,
+// the font's glyphs and the store's): at least one empty row between the
+// two lines, both inside the card, in the first of these that holds them:
+//   1. the card at rows 2-33, a row clear above and below the ink too;
+//   2. the card at all 36 rows (kToastTallBoxTop, kToastTallBoxH), the ink
+//      inside its border;
+//   3. the same without its top and bottom border lines (`border` false):
+//      two lines of 17-row CJK need 35.
+// What's free is shared: the gap between the lines a third of it (a row at
+// least), the rest above and below (the odd row below).
+inline constexpr int kToastH = 36;
+inline constexpr int kToastBoxTop = 2, kToastBoxH = 32;
+inline constexpr int kToastTallBoxTop = 0, kToastTallBoxH = 36;
+// A line: the rows it inks from its own top (bottom < top: none), and its
+// height (its font's: Fonts::draw() centres it on y, its top y - lineH / 2).
+struct ToastLine {
+  int top = 0, bottom = -1;
+  int lineH = 0;
+};
+struct ToastLines {
+  bool fits = false;
+  bool restSmall = false;                        // the second line in Small (toastLines())
+  int boxTop = kToastBoxTop, boxH = kToastBoxH;  // the card
+  bool border = true;                            // ... with its top and bottom border lines
+  int y1 = 0, y2 = 0;                            // the lines' centres (Fonts::draw()'s y)
+};
+// `first` over `second`; fits false: they can't share the toast so.
+constexpr ToastLines toastPlace(const ToastLine& first, const ToastLine& second) {
+  const int h1 = first.bottom >= first.top ? first.bottom - first.top + 1 : 0;
+  const int h2 = second.bottom >= second.top ? second.bottom - second.top + 1 : 0;
+  // (A line with no ink takes no rows: its top as if its ink began there.)
+  const int t1 = h1 ? first.top : 0, t2 = h2 ? second.top : 0;
+  ToastLines out;
+  for (int card = 0; card < 3; ++card) {
+    const int boxTop = card ? kToastTallBoxTop : kToastBoxTop;
+    const int boxH = card ? kToastTallBoxH : kToastBoxH;
+    const int edge = card < 2 ? 1 : 0;   // a border line's row, above and below
+    const int inner = boxH - 2 * edge;
+    const int free = inner - h1 - h2;
+    if (free < (card ? 1 : 3)) continue;
+    const int gap = 1 + (free - 1) / 3;
+    const int above = (free - gap) / 2;
+    const int ink1 = boxTop + edge + above;  // the first line's top ink row
+    const int ink2 = ink1 + h1 + gap;
+    out.fits = true;
+    out.boxTop = boxTop;
+    out.boxH = boxH;
+    out.border = edge != 0;
+    out.y1 = ink1 - t1 + first.lineH / 2;
+    out.y2 = ink2 - t2 + second.lineH / 2;
+    return out;
+  }
+  return out;
+}
+// "What: the rest": the what (Small) over the rest, in Body when it fits
+// the width (`bodyFits`) and the two lines fit so, else in Small (a Latin
+// name's accented capitals and descenders under a CJK what: 17 + 18 rows
+// don't fit with a gap, 17 + 15 do). Neither: fits false, one line
+// instead, cut (no line of the fonts or the store inks more than 17 rows
+// in Small: never, test_ui_strings).
+constexpr ToastLines toastLines(const ToastLine& what, const ToastLine& restBody, const ToastLine& restSmall,
+                                bool bodyFits) {
+  if (bodyFits) {
+    const ToastLines body = toastPlace(what, restBody);
+    if (body.fits) return body;
+  }
+  ToastLines small = toastPlace(what, restSmall);
+  small.restSmall = true;
+  return small;
+}
 
 // ---- the empty states (ui/EmptyState): two buttons ----
 // The primary (Bold, its icon 26 px + 8 before the text) and the second
 // (Body, its icon), each with 6 px inside at each end.
 inline constexpr int kEmptyPrimaryX = 12, kEmptyPrimaryW = 166;
 inline constexpr int kEmptySecondX = 184, kEmptySecondW = 124;
-inline constexpr int kEmptyIconW[2] = {26, 20};  // the Library's and Shuffle's icons (ui/IconData.cpp)
+inline constexpr int kEmptyIconW[2] = {26, 20};  // the Library's, and Shuffle's or Auto DJ's (ui/IconData.cpp)
 inline constexpr int kEmptyLineW = 304;  // a line (Small), centred
 // The title (Title, centred in kW - 16).
 inline constexpr int kEmptyTitleW = 304;
@@ -533,6 +610,40 @@ inline constexpr int kLangRowX = 16;
 inline constexpr int kLangRowW = 312 - 44 - kLangRowX;
 inline constexpr int kLangLineW = 242;
 inline constexpr int kDeviceInfoW = 312 - 8 - kDeviceInfoX;
+
+// ---- Output > Auto DJ (ui/OutputPage; the engine design's 5.1) ----
+// A list (Language's: no icons, from x 16; the scroll bar's 312 the
+// rows' right). Its switches (Auto DJ, BPM continuity, Harmonic mixing):
+// the title (Body) over its line (Small) up to the switch (Haptics', 64 px
+// from the right). Anchor and Match strictness: the title (Body) and its
+// value (Small, the section's blue) right-aligned on the first line, when
+// the value fits whole in what the title leaves it less kAutoDjValueGap
+// (autoDjValueBeside()); else the value on the second line, in the hint's
+// place: the value is the setting. The hint (Small, dim) on the second
+// line. Dim without a usable index, the same: the hint is why ("needs an
+// Auto DJ index"), and a value under its title takes its place there too
+// (Match strictness's in de, es, it and pt). The value and why on that
+// line together ("{value} · {why}") fit only in it (271 px; de 324, es
+// 334, pt 361 of 288); the rows around it and the status row say why, and
+// a tap gives the note. (Until 2026-10-16 a dim row drew why there, and
+// the value went unseen in those four.) The status row (not a control):
+// two lines of Small. Each line kAutoDjLineW wide.
+// Output's row to it (an icon, a chevron): the title (Body) over its line
+// (Small, autodjview::rootLine()), from the icon's column (x 44) to the
+// chevron: the state and the Anchor in use when that fits whole, else the
+// state alone.
+inline constexpr int kAutoDjRowW = 312 - 26 - 44;  // 242
+inline constexpr int kAutoDjX = 16;
+inline constexpr int kAutoDjSwitchW = 312 - 64 - kAutoDjX;  // 232
+inline constexpr int kAutoDjLineW = 312 - 8 - kAutoDjX;     // 288
+inline constexpr int kAutoDjValueGap = 16;
+constexpr int autoDjValueRoom(int titleW) { return kAutoDjLineW - titleW - kAutoDjValueGap; }
+constexpr bool autoDjValueBeside(int titleW, int valueW) { return valueW <= autoDjValueRoom(titleW); }
+// A value row's second line: the hint (dim: why) under a value beside its
+// title, else the value itself, live or dim.
+constexpr const char* autoDjSecondLine(int titleW, int valueW, const char* value, const char* hint) {
+  return autoDjValueBeside(titleW, valueW) ? hint : value;
+}
 
 // ---- the touch check and calibration (ui/CalibrationScreen; TouchCheck) ----
 // The whole screen. A 26 px header: at its left, on the pages that have one,

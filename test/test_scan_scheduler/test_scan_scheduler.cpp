@@ -125,7 +125,7 @@ void test_one_step_at_a_time() {
   S s;
   S::In in = base(0);
   in.cover = in.build = in.save = in.walk = true;
-  const J kinds[] = {J::Cover, J::Build, J::Save, J::Walk, J::Compact, J::Scan, J::DjCheck};
+  const J kinds[] = {J::Cover, J::Build, J::Save, J::Walk, J::Compact, J::Scan};
   for (J running : kinds) {
     for (int moving = 0; moving < 2; ++moving) {
       for (int dark = 0; dark < 2; ++dark) {
@@ -140,12 +140,10 @@ void test_one_step_at_a_time() {
         // moves (Thumbs' rule); the build stays level with it (the listener
         // waits for it); the scan's slices, a compaction and the save are
         // level with it only while the screen is dark (3.3.9; the 2026-10-09
-        // device run); the DJNB check is below it.
-        const bool darkOnes = running == J::Scan || running == J::Compact || running == J::Save;
+        // device run).
         const uint8_t want = running == J::Build                         ? S::kHighPriority
                              : running == J::Cover || running == J::Walk ? (moving ? S::kLowPriority : S::kHighPriority)
-                             : darkOnes                                  ? (dark && !moving ? S::kHighPriority
-                                                                                            : S::kLowPriority)
+                             : dark && !moving                           ? S::kHighPriority
                                                                          : S::kLowPriority;
         TEST_ASSERT_EQUAL_UINT8(want, o.priority);
         TEST_ASSERT_EQUAL_UINT8(want, S::priorityOf(running, moving == 1, dark == 1));
@@ -186,15 +184,6 @@ void test_one_step_at_a_time() {
   o = t.update(h);
   TEST_ASSERT_EQUAL(J::Save, o.job);
   TEST_ASSERT_EQUAL_UINT8(S::kHighPriority, o.priority);
-  // The DJNB check stays below it.
-  S u;
-  S::In d = base(0);
-  d.dark = true;
-  d.restPending = false;
-  d.djCheck = true;
-  o = u.update(d);
-  TEST_ASSERT_EQUAL(J::DjCheck, o.job);
-  TEST_ASSERT_EQUAL_UINT8(S::kLowPriority, o.priority);
 }
 
 // A slice of the walk or the scan under way (CardJobs, 2026-10-09) is cut
@@ -534,9 +523,9 @@ void test_the_order_of_the_yields() {
   TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
 }
 
-// U13: below 10% off USB the scan and the DJNB check pause; 10-15% keeps
-// the state; above 15%, or USB, lets them go. A reading not known keeps it.
-// The rest doesn't stop for it.
+// U13: below 10% off USB the scan pauses; 10-15% keeps the state; above
+// 15%, or USB, lets it go. A reading not known keeps it. The rest doesn't
+// stop for it.
 void test_the_battery_floor() {
   S s;
   S::In in = base(0);
@@ -575,13 +564,10 @@ void test_the_battery_floor() {
   o = s.update(in);
   TEST_ASSERT_TRUE(o.batteryReleased);
   TEST_ASSERT_EQUAL(J::Scan, o.job);
-  // Held: the DJNB check too; the walk, a compaction, the save, a cover and
-  // the build go on.
+  // Held: the walk, a compaction, the save, a cover and the build go on.
   in.usb = false;
   s.update(in);
   TEST_ASSERT_TRUE(s.batteryLow());
-  in.restPending = false;
-  in.djCheck = true;
   TEST_ASSERT_EQUAL(W::Battery, s.update(in).wait);
   struct {
     bool S::In::*flag;
@@ -590,13 +576,12 @@ void test_the_battery_floor() {
             {&S::In::cover, J::Cover}, {&S::In::build, J::Build}};
   for (const auto& g : go) {
     S::In one = in;
-    one.restPending = true;
     one.*(g.flag) = true;
     o = s.update(one);
     TEST_ASSERT_EQUAL(g.job, o.job);
   }
   // The playing track's file is the scan's too: held.
-  in.djCheck = false;
+  in.restPending = false;
   in.playingPending = true;
   TEST_ASSERT_EQUAL(W::Battery, s.update(in).wait);
 }
@@ -616,7 +601,7 @@ void test_covers_come_first() {
   in.seeking = true;
   in.btSetup = true;
   in.battery = 3;
-  in.cover = in.save = in.walk = in.compact = in.djCheck = true;
+  in.cover = in.save = in.walk = in.compact = true;
   in.playingPending = true;
   S::Out o = s.update(in);
   TEST_ASSERT_EQUAL(J::Cover, o.job);
@@ -699,12 +684,12 @@ void test_the_update_step() {
   TEST_ASSERT_EQUAL(J::Scan, s.update(in).job);
 }
 
-// One job at a time, the first with work: the walk, a compaction, the scan,
-// the DJNB check; the scan's file from 3.3.3's sources in order.
+// One job at a time, the first with work: the walk, a compaction, the scan;
+// the scan's file from 3.3.3's sources in order.
 void test_the_order_of_the_work() {
   S s;
   S::In in = base(0);
-  in.walk = in.compact = in.djCheck = true;
+  in.walk = in.compact = true;
   in.playingPending = in.queueNextPending = in.queueSoonPending = in.shownPending = true;
   const J jobs[] = {J::Walk, J::Compact, J::Scan};
   for (J j : jobs) {
@@ -727,12 +712,9 @@ void test_the_order_of_the_work() {
       default: in.restPending = false; break;
     }
   }
-  S::Out o = s.update(in);
-  TEST_ASSERT_EQUAL(J::DjCheck, o.job);
-  TEST_ASSERT_EQUAL(Src::None, o.source);
-  in.djCheck = false;
-  o = s.update(in);
+  const S::Out o = s.update(in);
   TEST_ASSERT_EQUAL(J::None, o.job);
+  TEST_ASSERT_EQUAL(Src::None, o.source);
   TEST_ASSERT_EQUAL(W::None, o.wait);
 }
 
@@ -934,7 +916,7 @@ struct Model {
       o.priority = 1;
       return o;
     }
-    const bool bg = in.walk || in.compact || scan || in.djCheck;
+    const bool bg = in.walk || in.compact || scan;
     if (!in.cover && !in.save && !bg) return o;
     if (in.listMoving) {
       o.wait = W::List;
@@ -945,14 +927,12 @@ struct Model {
       o.priority = 1;
       return o;
     }
-    J next = in.save ? J::Save : in.updating ? J::None : in.walk ? J::Walk : in.compact ? J::Compact
-                                                     : scan     ? J::Scan
-                                                                : J::DjCheck;
+    J next = in.save ? J::Save : in.updating ? J::None : in.walk ? J::Walk : in.compact ? J::Compact : J::Scan;
     if (next == J::None) {
       o.wait = W::Updating;
       return o;
     }
-    const W w = (next == J::Scan || next == J::DjCheck) && low ? W::Battery : yield;
+    const W w = next == J::Scan && low ? W::Battery : yield;
     if (w != W::None) {
       o.wait = w;
       return o;
@@ -1004,7 +984,6 @@ void test_random_against_a_model() {
     if (chance(1000)) in.cover = chance(40000);
     if (chance(300)) in.walk = chance(20000);
     if (chance(300)) in.compact = chance(20000);
-    if (chance(300)) in.djCheck = chance(20000);
     if (chance(500)) in.playingPending = chance(20000);
     if (chance(500)) in.queueNextPending = chance(30000);
     if (chance(500)) in.queueSoonPending = chance(40000);
@@ -1035,8 +1014,10 @@ void test_random_against_a_model() {
     if (got.cut) ++cuts;
     if (got.job != J::None) {
       TEST_ASSERT_EQUAL(J::None, in.running);
-      if ((got.job == J::Scan || got.job == J::DjCheck)) TEST_ASSERT_FALSE(s.batteryLow());
-      if (got.job == J::Scan) ++scans;
+      if (got.job == J::Scan) {
+        TEST_ASSERT_FALSE(s.batteryLow());
+        ++scans;
+      }
       if (got.job == J::Cover) ++covers;
       if (got.job == J::Build) ++builds;
       in.running = got.job;

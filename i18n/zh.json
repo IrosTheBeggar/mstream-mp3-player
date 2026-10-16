@@ -66,6 +66,22 @@
   "toast.why_opus_frames": "不支持 {0} 毫秒帧的 Opus",
   "toast.why_opus_no_ram": "Opus 解码器内存不足",
   "toast.what_why": "{0}: {1}",
+  "toast.autodj_on_empty": "Auto DJ 已开启: 接在你下次播放的曲目之后",
+  "toast.autodj_cued": "Auto DJ: 下一首已就绪, 按 B 播放",
+  "@toast.autodj_cued": {
+    "note": "按 B 播放 for 'press play', as hud.speaker_paused and toast.touch_first say it."
+  },
+  "toast.autodj_random": "没有 Auto DJ 索引: 选曲随机",
+  "toast.autodj_paused": "Auto DJ 已暂停: 曲目无法播放",
+  "toast.autodj_no_neighbours": "这首曲目还没有相似曲目: 下一首随机选取",
+  "@toast.autodj_no_neighbours": {
+    "note": "相似曲目 (a similar track) for the index's 'neighbours', here and in toast.autodj_seed_moved, toast.autodj_no_start and autodj.status_ready, after the mobile app's 相似度."
+  },
+  "toast.autodj_seed_moved": "这首曲目还没有相似曲目: 第一首选曲将成为种子歌曲",
+  "toast.autodj_from_here": "从这里开始 Auto DJ: {0}",
+  "toast.autodj_started": "Auto DJ: {0}",
+  "toast.autodj_no_start": "没找到有相似曲目的曲目: 请再试一次",
+  "toast.autodj_needs_index": "需要 Auto DJ 索引: 传输到存储卡时会生成",
   "hud.bluetooth": "蓝牙: {0}",
   "@hud.bluetooth": {
     "note": "'蓝牙' is the universal Chinese name for Bluetooth (phones, headphones); neither app has the word."
@@ -111,6 +127,11 @@
   "now_playing.repeat_off": "关闭",
   "now_playing.repeat_all": "全部",
   "now_playing.repeat_one": "单曲",
+  "now_playing.autodj": "Auto DJ",
+  "now_playing.autodj_on": "开启",
+  "now_playing.autodj_off": "关闭",
+  "now_playing.autodj_waiting": "等待中",
+  "now_playing.autodj_paused": "已暂停",
   "sleep.title_left": "睡眠定时器: 剩余 {0}",
   "sleep.title_end_track": "睡眠定时器: 播完本曲",
   "sleep.title_end_album": "睡眠定时器: 播完专辑",
@@ -158,6 +179,7 @@
     "note": "'下首播放' (play next): the compact form of '下一首播放', as Chinese music apps write it (80 px in Body; the button has 77, the Queue's bar 74). Not '下一首' alone: that is the next-track button's label (coach.click_next). The toasts say '下一首播放' in full. The mobile app's '添加为下一首' (Add next) is 96 px."
   },
   "library.action_queue": "+ 队列",
+  "library.autodj_here": "从这里开始 Auto DJ",
   "library.play_all": {
     "other": "播放 {0} 首"
   },
@@ -324,6 +346,7 @@
   "@empty.shuffle_all": {
     "note": "'随机播放' (the mobile app's Shuffle): '随机播放全部' is 96 px, the button has 84."
   },
+  "empty.autodj": "Auto DJ",
   "empty.try_again": "重试",
   "empty.no_music_title": "未找到音乐",
   "empty.no_music_lines": "把专辑放在 /music/Artist/Album/ 下\n(MP3、FLAC 或 Opus), 然后点“重试”。",
@@ -356,6 +379,47 @@
   "output.haptics_off": "关闭",
   "output.about": "关于",
   "output.about_sub": "电池、存储、曲库、版本",
+  "output.autodj": "Auto DJ",
+  "output.autodj_sub_on": "开启 · {0}",
+  "output.autodj_sub_waiting": "等待中 · {0}",
+  "output.autodj_sub_paused": "已暂停 · {0}",
+  "output.autodj_sub_off": "关闭",
+  "autodj.subtitle": "让队列一直播下去",
+  "autodj.on_sub": "最后一首开播时再加一首",
+  "autodj.anchor": "锚点",
+  "autodj.anchor_rolling": "跟随氛围",
+  "autodj.anchor_locked": "固定在种子歌曲",
+  "@autodj.anchor_locked": {
+    "note": "The mobile app's 固定在种子歌曲, its 歌曲 kept in the term (the device says 曲目 elsewhere); the hints say 种子歌曲 too."
+  },
+  "autodj.anchor_rolling_sub": "每首选曲跟随最近几首",
+  "autodj.anchor_locked_sub": "每首选曲都接近种子歌曲",
+  "autodj.strictness": "相似度门槛",
+  "autodj.strictness_value": "{0}% 或更相似",
+  "autodj.strictness_sub": "选曲至少要有多相似",
+  "autodj.bpm": "BPM 连贯性",
+  "autodj.bpm_sub": "相差 8 BPM 以内, 或半速/倍速",
+  "autodj.harmonic": "和声混音",
+  "autodj.harmonic_sub": "相配的调性",
+  "autodj.needs_index": "需要 Auto DJ 索引",
+  "autodj.status_ready": {
+    "other": "{0} / {1} 首有相似曲目"
+  },
+  "autodj.status_coverage": "BPM {0}% · 调性 {1}%",
+  "autodj.status_found": {
+    "other": "Auto DJ 索引: {0} 首曲目"
+  },
+  "autodj.status_found_sub": "开启 Auto DJ 时读取",
+  "autodj.status_reading": "正在读取 Auto DJ 索引…",
+  "autodj.status_none": "此存储卡上没有 Auto DJ 索引",
+  "autodj.status_bad": "Auto DJ 索引未通过检查",
+  "autodj.status_unreadable": "无法读取 Auto DJ 索引",
+  "autodj.status_no_memory": "内存不足, 无法读取 Auto DJ 索引",
+  "autodj.status_too_big": "曲目太多, Auto DJ 索引无法使用",
+  "autodj.status_random": "选曲随机",
+  "autodj.status_waits_repeat": "等待中: 单曲循环已开启",
+  "autodj.status_waits_sleep": "等待中: 睡眠定时器设为播完队列",
+  "autodj.status_paused": "已暂停: 曲目无法播放",
   "settings.screen_off": "自动熄屏",
   "@settings.screen_off": {
     "note": "'自动熄屏' (auto screen-off) with the delay as its value."

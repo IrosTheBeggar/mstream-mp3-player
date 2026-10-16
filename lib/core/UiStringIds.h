@@ -64,6 +64,16 @@ enum class S : uint16_t {
   toast_why_opus_frames,  // Opus with {0} ms frames isn't supported
   toast_why_opus_no_ram,  // no RAM for the Opus decoder
   toast_what_why,  // {0}: {1}
+  toast_autodj_on_empty,  // Auto DJ on: it follows the next track you play
+  toast_autodj_cued,  // Auto DJ: the next track is ready, press play
+  toast_autodj_random,  // No Auto DJ index: picks are random
+  toast_autodj_paused,  // Auto DJ paused: tracks failed to play
+  toast_autodj_no_neighbours,  // This track has no Auto DJ neighbours yet: the next track is random
+  toast_autodj_seed_moved,  // This track has no Auto DJ neighbours yet: the first pick becomes th...
+  toast_autodj_from_here,  // Auto DJ from here: {0}
+  toast_autodj_started,  // Auto DJ: {0}
+  toast_autodj_no_start,  // Found no track with Auto DJ neighbours: try again
+  toast_autodj_needs_index,  // Needs an Auto DJ index: a transfer to the card adds one
   hud_bluetooth,  // Bluetooth: {0}
   hud_bluetooth_connecting,  // Bluetooth: connecting...
   hud_speaker_paused,  // Speaker, paused: B plays
@@ -106,6 +116,11 @@ enum class S : uint16_t {
   now_playing_repeat_off,  // Off
   now_playing_repeat_all,  // All
   now_playing_repeat_one,  // One
+  now_playing_autodj,  // Auto DJ
+  now_playing_autodj_on,  // On
+  now_playing_autodj_off,  // Off
+  now_playing_autodj_waiting,  // Waiting
+  now_playing_autodj_paused,  // Paused
   sleep_title_left,  // Sleep timer: {0} left
   sleep_title_end_track,  // Sleep timer: end of track
   sleep_title_end_album,  // Sleep timer: end of album
@@ -144,6 +159,7 @@ enum class S : uint16_t {
   library_action_play,  // Play
   library_action_play_next,  // Play next
   library_action_queue,  // + Queue
+  library_autodj_here,  // Auto DJ from here
   library_play_all,  // Play all {0}
   library_hold_title,  // {0}, {1} tracks
   library_header_artist,  // Artist
@@ -238,6 +254,7 @@ enum class S : uint16_t {
   empty_pick_in_library,  // Pick an album, folder or track in the Library.
   empty_open_library,  // Open Library
   empty_shuffle_all,  // Shuffle all
+  empty_autodj,  // Auto DJ
   empty_try_again,  // Try again
   empty_no_music_title,  // No music found
   empty_no_music_lines,  // Put your albums in /music/Artist/Album/\n(MP3, FLAC or Opus), then ...
@@ -267,6 +284,40 @@ enum class S : uint16_t {
   output_haptics_off,  // off
   output_about,  // About
   output_about_sub,  // battery, storage, library, version
+  output_autodj,  // Auto DJ
+  output_autodj_sub_on,  // On · {0}
+  output_autodj_sub_waiting,  // Waiting · {0}
+  output_autodj_sub_paused,  // Paused · {0}
+  output_autodj_sub_off,  // Off
+  autodj_subtitle,  // keeps the queue going
+  autodj_on_sub,  // adds a track as the last one starts
+  autodj_anchor,  // Anchor
+  autodj_anchor_rolling,  // Follow the vibe
+  autodj_anchor_locked,  // Stay on seed
+  autodj_anchor_rolling_sub,  // each pick follows the last few tracks
+  autodj_anchor_locked_sub,  // every pick stays close to the seed song
+  autodj_strictness,  // Match strictness
+  autodj_strictness_value,  // {0}% or closer
+  autodj_strictness_sub,  // how similar each pick must sound
+  autodj_bpm,  // BPM continuity
+  autodj_bpm_sub,  // within 8 BPM, or half/double tempo
+  autodj_harmonic,  // Harmonic mixing
+  autodj_harmonic_sub,  // keys that mix well
+  autodj_needs_index,  // needs an Auto DJ index
+  autodj_status_ready,  // {0} of {1} tracks have neighbours
+  autodj_status_coverage,  // BPM {0}% · key {1}%
+  autodj_status_found,  // Auto DJ index: {0} tracks
+  autodj_status_found_sub,  // read when Auto DJ is switched on
+  autodj_status_reading,  // Reading the Auto DJ index…
+  autodj_status_none,  // No Auto DJ index on this card
+  autodj_status_bad,  // The Auto DJ index failed its checks
+  autodj_status_unreadable,  // Can't read the Auto DJ index
+  autodj_status_no_memory,  // Not enough memory for the Auto DJ index
+  autodj_status_too_big,  // Too many tracks for the Auto DJ index
+  autodj_status_random,  // picks are random
+  autodj_status_waits_repeat,  // Waiting: Repeat One is on
+  autodj_status_waits_sleep,  // Waiting: sleep timer set to End of queue
+  autodj_status_paused,  // Paused: tracks failed to play
   settings_screen_off,  // Screen off after
   settings_screen_off_sub,  // dims first; a tap wakes it
   settings_screen_never_sub,  // stays on: more battery
@@ -564,7 +615,7 @@ enum class S : uint16_t {
   format_hz,  // {0} Hz
   format_list_sep,  // , 
 };
-inline constexpr unsigned kStrings = 555;
+inline constexpr unsigned kStrings = 606;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO

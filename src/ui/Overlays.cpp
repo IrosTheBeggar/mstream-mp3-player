@@ -78,6 +78,8 @@ int textRightOf(bool icons, bool undo, bool view) {
 }
 }  // namespace
 
+static_assert(Toast::kH == uitext::kToastH, "the two lines' rows (uitext::toastLines()) are the toast's");
+
 void Toast::show(const char* text, bool undo, bool view, uint16_t accent, uint32_t nowMs, uint32_t holdMs) {
   copy(text_, sizeof(text_), text);
   sleep_ = idle_ = false;
@@ -88,13 +90,47 @@ void Toast::show(const char* text, bool undo, bool view, uint16_t accent, uint32
   untilMs_ = nowMs + (holdMs ? holdMs : undo ? 4000 : 1800);
   // The buttons as icons when a label doesn't fit its pill. One line if it
   // fits beside the buttons; else "what: <name>" on two, with the buttons
-  // as icons.
+  // as icons (and on one, cut, if the two lines' ink can't share the
+  // toast: placeLines()).
   Fonts& f = Fonts::instance();
   const bool labels = uitext::toastIcons(undo, undo ? f.width(Font::Bold, tr(S::toast_undo)) : 0, view,
                                          view ? f.width(Font::Bold, tr(S::toast_view)) : 0);
-  compact_ = strstr(text_, ": ") && f.width(Font::Body, text_) > textRightOf(labels, undo, view) - kTextX;
-  icons_ = labels || compact_;
+  const bool split = strstr(text_, ": ") && f.width(Font::Body, text_) > textRightOf(labels, undo, view) - kTextX;
+  icons_ = labels || split;
+  compact_ = split && placeLines();
   draw();
+}
+
+bool Toast::placeLines() {
+  Fonts& f = Fonts::instance();
+  const int textW = textRightOf(true, undo_, view_) - kTextX;
+  const char* colon = strstr(text_, ": ");
+  const char* name = colon + 2;
+  const size_t nameLen = strlen(name);
+  // Each line's ink rows, as drawn (fitted to textW): the what in Small,
+  // the rest in Body (when it fits the width) and in Small
+  // (uitext::toastLines() takes Small when Body's rows don't fit).
+  const auto line = [&](Font font, const char* t, size_t len) {
+    const textink::Rows r = f.ink(font, t, len, textW);
+    uitext::ToastLine l;
+    l.top = r.top;
+    l.bottom = r.bottom;
+    l.lineH = f.height(font);
+    return l;
+  };
+  const bool bodyFits = f.width(Font::Body, name) <= textW;
+  const uitext::ToastLine what = line(Font::Small, text_, static_cast<size_t>(colon - text_));
+  const uitext::ToastLine restBody = bodyFits ? line(Font::Body, name, nameLen) : uitext::ToastLine();
+  const uitext::ToastLine restSmall = line(Font::Small, name, nameLen);
+  const uitext::ToastLines at = uitext::toastLines(what, restBody, restSmall, bodyFits);
+  if (!at.fits) return false;
+  nameSmall_ = at.restSmall;
+  boxTop_ = static_cast<int8_t>(at.boxTop);
+  boxH_ = static_cast<int8_t>(at.boxH);
+  border_ = at.border;
+  y1_ = static_cast<int8_t>(at.y1);
+  y2_ = static_cast<int8_t>(at.y2);
+  return true;
 }
 
 void Toast::showSleep(uint16_t accent, uint32_t nowMs) {
@@ -127,9 +163,19 @@ void Toast::draw(int pressed) {
   if (!up_) return;
   M5Canvas& s = gfx::strip();
   Fonts& f = Fonts::instance();
+  // The card: rows 2-33, or all 36 for two lines that need them, without
+  // its outline's top and bottom lines for two lines of 17-row CJK
+  // (placeLines(): their ink takes those rows); its sides and corners, in
+  // the toast's colour, stay (left of x 22 and right of the text).
+  const int boxTop = compact_ ? boxTop_ : uitext::kToastBoxTop;
+  const int boxH = compact_ ? boxH_ : uitext::kToastBoxH;
   s.fillRect(0, 0, kW, kH, col::BG);
-  s.fillRoundRect(4, 2, 312, 32, 8, col::CARD);
-  s.drawRoundRect(4, 2, 312, 32, 8, accent_);
+  s.fillRoundRect(4, boxTop, 312, boxH, 8, col::CARD);
+  s.drawRoundRect(4, boxTop, 312, boxH, 8, accent_);
+  if (compact_ && !border_) {
+    s.drawFastHLine(4 + 8, boxTop, 312 - 16, col::CARD);
+    s.drawFastHLine(4 + 8, boxTop + boxH - 1, 312 - 16, col::CARD);
+  }
   s.fillRect(10, 10, 4, 16, accent_);
   if (sleep_) {
     // "Sleep timer: fading" [+10 min] [Turn off]: only these act on the
@@ -164,14 +210,14 @@ void Toast::draw(int pressed) {
     f.draw(s, Font::Body, text_, kTextX, 18, textW, col::TXT, col::CARD);
   } else {
     // "Plays next: <a long name>": what happened (small) over the name, in
-    // Body if it fits, else Small ("Harder, Better, Faster, Stronger").
+    // Body if it fits, else Small ("Harder, Better, Faster, Stronger"),
+    // each where its ink goes (placeLines()).
     const char* colon = strstr(text_, ": ");
     const char* name = colon + 2;
     // Glyphs only (no line fill): each line's fill cut the other's
     // descenders and the box's border (seen on the device).
-    f.draw(s, Font::Small, text_, static_cast<size_t>(colon - text_), kTextX, 10, textW, col::DIM, col::DIM);
-    f.draw(s, f.width(Font::Body, name) <= textW ? Font::Body : Font::Small, name, kTextX, 24, textW, col::TXT,
-           col::TXT);
+    f.draw(s, Font::Small, text_, static_cast<size_t>(colon - text_), kTextX, y1_, textW, col::DIM, col::DIM);
+    f.draw(s, nameSmall_ ? Font::Small : Font::Body, name, kTextX, y2_, textW, col::TXT, col::TXT);
   }
   if (undo_) {
     const uint16_t b = pressed == 2 ? col::BTN_HI : col::BTN;

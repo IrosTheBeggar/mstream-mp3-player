@@ -4,9 +4,9 @@
 // The Output tab (the tab bar spec §6.6, mockups 19-21 and 23, with the
 // review's grafts; the page's shape is in Pages.h): where the music plays,
 // each output's volume, the Pair screen, the settings, the language, About
-// and its Device info. One page object for the tab's five kinds of page
-// (Output, Pair, Language, About, Device info), each a list on the
-// hardware scroll.
+// and its Device info. One page object for the tab's six kinds of page
+// (Output, Pair, Language, About, Device info, Auto DJ), each a list on
+// the hardware scroll.
 //
 // What the Bluetooth card shows and offers is OutputModel's (host-tested);
 // what its buttons do goes through the UiHost to BtSink. The rules it keeps:
@@ -142,6 +142,7 @@ void OutputPage::enter(NavModel::PageRef& ref) {
   drawnHaptics_ = ui_.input().hapticsOn();
   drawnCalibrated_ = ui_.input().calibrated();
   drawnScreen_ = screenSig(ui_.state());
+  drawnAutoDj_ = autoDjSig(ui_.state().autoDj);
   if (kind_ == PageKind::Pair) {
     scan_.clear();
     scanVersion_ = 0;
@@ -230,6 +231,11 @@ Header OutputPage::header() const {
       h.title = tr(S::about_device_info);
       h.sub = tr(S::device_info_subtitle);
       break;
+    case PageKind::AutoDj:
+      h.back = true;
+      h.title = tr(S::output_autodj);
+      h.sub = tr(S::autodj_subtitle);
+      break;
     case PageKind::Language:
       // The first boot's: nothing behind it, and where it is found later.
       h.back = !firstBoot_;
@@ -299,6 +305,11 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       drawnLibrary_ = lib;
       list.refreshRow(LibraryRow);
     }
+    const uint32_t dj = autoDjSig(ui_.state().autoDj);
+    if (dj != drawnAutoDj_ && still) {
+      drawnAutoDj_ = dj;
+      list.refreshRow(AutoDjRow);
+    }
     const uint32_t sc = screenSig(ui_.state());
     if (sc != drawnScreen_ && still) {
       drawnScreen_ = sc;
@@ -338,6 +349,14 @@ bool OutputPage::update(uint32_t nowMs, bool frameDue, bool wholeRows) {
       nextSpinMs_ = nowMs + kSpinMs;
       spin_ = static_cast<uint8_t>((spin_ + 1) % 8);
       list.refreshRow(0);
+    }
+  } else if (kind_ == PageKind::AutoDj) {
+    // A setting, the index's state, a hold: the rows in place (a tap's
+    // change shows here, from the next pass's snapshot).
+    const uint32_t dj = autoDjSig(ui_.state().autoDj);
+    if (dj != drawnAutoDj_ && still) {
+      drawnAutoDj_ = dj;
+      for (uint32_t i = 0; i < autodjview::kPageRows; ++i) list.refreshRow(i);
     }
   } else if (kind_ == PageKind::About) {
     if (static_cast<int32_t>(nowMs - nextAboutMs_) >= 0 && still) {
@@ -390,6 +409,15 @@ void OutputPage::onEvent(const InputEvent& e) {
 
 void OutputPage::describe(char* buf, size_t size) const {
   const AppState& s = ui_.state();
+  if (kind_ == PageKind::AutoDj) {
+    const autodjview::State& d = s.autoDj;
+    snprintf(buf, size, "Output (AutoDj): Auto DJ %s, %s, %u %% (shown %u %%), BPM %s, key %s; the index %s%s",
+             tr(autodjview::rowText(autodjview::rowState(d))),
+             d.mode == autodj::Mode::Locked ? "Stay on seed" : "Follow the vibe", static_cast<unsigned>(d.floorPct),
+             static_cast<unsigned>(d.floorShown), d.matchTempo ? "on" : "off", d.matchKey ? "on" : "off",
+             autodjview::indexName(d.index), d.usable ? " (usable)" : " (not usable: the settings dim)");
+    return;
+  }
   const BtCardView v = btCardView(s.btLink, s.btSession, s.btLost);
   snprintf(buf, size, "Output (%s): %s, the card %s (link %s), volume %u%% (speaker %u%%, bluetooth %u%%)%s",
            pageKindName(static_cast<uint8_t>(kind_)), s.onBluetooth ? "bluetooth" : "speaker", btCardName(v.card),
@@ -405,6 +433,7 @@ uint32_t OutputPage::rows() {
     case PageKind::About: return kAboutRows;
     case PageKind::DeviceInfo: return deviceinfo::kItems;
     case PageKind::Language: return uistr::kLangs;
+    case PageKind::AutoDj: return autodjview::kPageRows;
     default: return kRootRows;
   }
 }
@@ -413,6 +442,9 @@ bool OutputPage::emptyState(EmptyState& e) {
   (void)e;
   return false;  // never empty
 }
+
+// Auto DJ's status row is no control: no press, no tick.
+bool OutputPage::pressable(uint32_t row) { return !(kind_ == PageKind::AutoDj && row == autodjview::StatusRow); }
 
 void OutputPage::drawRow(ListView::Row& r) {
   if (kind_ == PageKind::Pair) {
@@ -435,6 +467,10 @@ void OutputPage::drawRow(ListView::Row& r) {
     drawLanguage(r);
     return;
   }
+  if (kind_ == PageKind::AutoDj) {
+    drawAutoDj(r);
+    return;
+  }
   const AppState& s = ui_.state();
   switch (static_cast<RootRow>(r.row)) {
     case BtTop: drawBtTop(r); break;
@@ -446,6 +482,18 @@ void OutputPage::drawRow(ListView::Row& r) {
     case PairNew:
       drawSetting(r, icons::kPlus, tr(S::output_pair_new), "", accent::Output, true);
       break;
+    case AutoDjRow: {
+      // "Auto DJ", and under it "On · Follow the vibe" or "Off": the state
+      // alone when the line with the Anchor doesn't fit whole (the Anchor
+      // keeps the mobile app's words), or with no usable index.
+      char sub[96];
+      autodjview::rootLine(s.autoDj, sub, sizeof(sub));
+      if (Fonts::instance().width(Font::Small, sub) > uitext::kAutoDjRowW) {
+        autodjview::rootLine(s.autoDj, sub, sizeof(sub), false);
+      }
+      drawSetting(r, icons::kAutoDj, tr(S::output_autodj), sub, col::TXT, true);
+      break;
+    }
     case Haptics: {
       const bool on = ui_.input().hapticsOn();
       drawSetting(r, icons::kVibrate, tr(S::output_haptics), tr(on ? S::output_haptics_on : S::output_haptics_off),
@@ -961,6 +1009,145 @@ void OutputPage::drawDeviceInfo(ListView::Row& r) {
   f.draw(r.c, f.width(Font::Body, value) <= room ? Font::Body : Font::Small, value, x, 30, room, col::TXT, r.bg);
 }
 
+// ---- Output > Auto DJ ----
+
+uint32_t OutputPage::autoDjSig(const autodjview::State& d) {
+  uint32_t h = 2166136261u;
+  const uint32_t flags = static_cast<uint32_t>(d.on) | static_cast<uint32_t>(d.matchTempo) << 1 |
+                         static_cast<uint32_t>(d.matchKey) << 2 | static_cast<uint32_t>(d.usable) << 3 |
+                         static_cast<uint32_t>(d.mode) << 4 | static_cast<uint32_t>(d.hold) << 6 |
+                         static_cast<uint32_t>(d.index) << 9 | static_cast<uint32_t>(d.floorPct) << 16 |
+                         static_cast<uint32_t>(d.floorShown) << 24;
+  for (uint32_t v : {flags, d.rows, d.mapped, d.tracks, static_cast<uint32_t>(d.bpmPct) << 8 | d.keyPct}) {
+    h = (h ^ v) * 16777619u;
+  }
+  // (The language: everything is drawn again when it changes.)
+  return h;
+}
+
+void OutputPage::drawAutoDj(ListView::Row& r) {
+  namespace dv = autodjview;
+  using namespace uitext;
+  const dv::State& d = ui_.state().autoDj;
+  if (r.row >= dv::kPageRows) return;
+  const auto row = static_cast<dv::PageRow>(r.row);
+  const bool live = dv::rowLive(row, d);
+  const char* needs = tr(S::autodj_needs_index);
+  switch (row) {
+    case dv::OnRow: drawAutoDjSwitch(r, tr(S::output_autodj), tr(S::autodj_on_sub), d.on, true); break;
+    case dv::AnchorRow:
+      drawAutoDjValue(r, tr(S::autodj_anchor), tr(dv::modeText(d.mode)), live ? tr(dv::anchorHint(d.mode)) : needs,
+                      live);
+      break;
+    case dv::StrictRow: {
+      char value[48];
+      dv::strictnessText(d.floorShown, value, sizeof(value));
+      drawAutoDjValue(r, tr(S::autodj_strictness), value, live ? tr(S::autodj_strictness_sub) : needs, live);
+      break;
+    }
+    case dv::BpmRow: drawAutoDjSwitch(r, tr(S::autodj_bpm), live ? tr(S::autodj_bpm_sub) : needs, d.matchTempo, live); break;
+    case dv::KeyRow:
+      drawAutoDjSwitch(r, tr(S::autodj_harmonic), live ? tr(S::autodj_harmonic_sub) : needs, d.matchKey, live);
+      break;
+    case dv::StatusRow: {
+      // Two lines of Small, no control: why it waits (amber when paused)
+      // over the index, or the index's two.
+      Fonts& f = Fonts::instance();
+      char a[96], b[96];
+      dv::statusLines(d, a, sizeof(a), b, sizeof(b));
+      const int x = r.x + kAutoDjX;
+      const bool paused = dv::rowState(d) == dv::RowState::Paused;
+      if (!b[0]) {
+        f.draw(r.c, Font::Small, a, x, 21, kAutoDjLineW, col::SOFT, r.bg);
+        break;
+      }
+      f.draw(r.c, Font::Small, a, x, 12, kAutoDjLineW, paused ? col::AMBER : col::SOFT, r.bg);
+      f.draw(r.c, Font::Small, b, x, 30, kAutoDjLineW, col::DIM, r.bg);
+      break;
+    }
+    default: break;
+  }
+}
+
+// A switch row: the title over its line up to the switch (Haptics'), the
+// switch at the right; dim without the index it needs.
+void OutputPage::drawAutoDjSwitch(ListView::Row& r, const char* title, const char* sub, bool on, bool live) {
+  const int x = r.x + uitext::kAutoDjX;
+  ListView::lines(r, x, x + uitext::kAutoDjSwitchW, title, strlen(title), sub, strlen(sub), live ? col::TXT : col::FAINT);
+  const int sx = r.right - 58;
+  const uint16_t track = !live ? col::DIV : on ? accent::Output : col::BTN;
+  r.c.fillRoundRect(sx, 11, 44, 20, 10, track);
+  r.c.fillCircle(on ? sx + 34 : sx + 10, 21, 8, !live ? col::FAINT : on ? col::DARK : col::DIM);
+}
+
+// A value row: the title and its value (the section's blue) on the first
+// line when the value fits whole beside it (uitext::autoDjValueBeside()),
+// the hint under them; else the value on the second line, in the hint's
+// place (the value is the setting). Dim without the index the same, the
+// hint being why ("needs an Auto DJ index"): a value under its title
+// takes that line too (uitext::autoDjSecondLine(); UiText.h's Output >
+// Auto DJ note says why).
+void OutputPage::drawAutoDjValue(ListView::Row& r, const char* title, const char* value, const char* hint,
+                                 bool live) {
+  using namespace uitext;
+  Fonts& f = Fonts::instance();
+  const int x = r.x + kAutoDjX;
+  const int tw = f.width(Font::Body, title);
+  const int vw = f.width(Font::Small, value);
+  const uint16_t ink = live ? col::TXT : col::FAINT;
+  const uint16_t valueInk = live ? accent::Output : col::FAINT;
+  const bool beside = autoDjValueBeside(tw, vw);
+  f.draw(r.c, Font::Body, title, x, 13, beside ? kAutoDjLineW - vw - kAutoDjValueGap : kAutoDjLineW, ink, r.bg);
+  if (beside) f.draw(r.c, Font::Small, value, x + kAutoDjLineW, 13, vw, valueInk, r.bg, Fonts::Align::Right);
+  f.draw(r.c, Font::Small, autoDjSecondLine(tw, vw, value, hint), x, 31, kAutoDjLineW, beside ? col::DIM : valueInk,
+         r.bg);
+}
+
+// A tap on a row of Output > Auto DJ: saved and applied at once (app/AutoDj,
+// NVS); the rows follow from the next snapshot. A dim row: why, as a note.
+void OutputPage::onAutoDjTap(uint32_t row) {
+  namespace dv = autodjview;
+  if (row >= dv::kPageRows || row == dv::StatusRow) return;
+  const AppState& s = ui_.state();
+  const dv::State& d = s.autoDj;
+  const auto r = static_cast<dv::PageRow>(row);
+  if (!dv::rowLive(r, d)) {
+    ui_.warn(tr(S::toast_autodj_needs_index));
+    return;
+  }
+  UiHost& h = ui_.host();
+  switch (r) {
+    case dv::OnRow:
+      Serial.printf("[ui] output: Auto DJ %s\n", d.on ? "off" : "on");
+      // On with nothing queued: nothing starts (B stays inert); it follows
+      // the next track the listener plays. (No usable index: its toast,
+      // random picks, comes from app/AutoDj.)
+      if (h.autoDjSetOn(!d.on) && !d.on && s.queueSize == 0 && d.usable) {
+        ui_.toast(tr(S::toast_autodj_on_empty), false);
+      }
+      break;
+    case dv::AnchorRow:
+      Serial.printf("[ui] output: Auto DJ's Anchor: %s\n", d.mode == autodj::Mode::Locked ? "Follow the vibe" : "Stay on seed");
+      h.autoDjSetMode(d.mode == autodj::Mode::Locked ? autodj::Mode::Rolling : autodj::Mode::Locked);
+      break;
+    case dv::StrictRow: {
+      const uint8_t next = dv::tapFloor(d);  // (the step after the value shown)
+      Serial.printf("[ui] output: Auto DJ's Match strictness %u %%\n", static_cast<unsigned>(next));
+      h.autoDjSetFloor(next);
+      break;
+    }
+    case dv::BpmRow:
+      Serial.printf("[ui] output: BPM continuity %s\n", d.matchTempo ? "off" : "on");
+      h.autoDjSetMatch(!d.matchTempo, d.matchKey);
+      break;
+    case dv::KeyRow:
+      Serial.printf("[ui] output: Harmonic mixing %s\n", d.matchKey ? "off" : "on");
+      h.autoDjSetMatch(d.matchTempo, !d.matchKey);
+      break;
+    default: break;
+  }
+}
+
 // ---- taps ----
 
 ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
@@ -989,6 +1176,10 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
     return ListView::Tap::Handled;
   }
   if (kind_ == PageKind::DeviceInfo) return ListView::Tap::Handled;  // nothing to tap
+  if (kind_ == PageKind::AutoDj) {
+    onAutoDjTap(row);
+    return ListView::Tap::Handled;
+  }
   if (kind_ == PageKind::Language) {
     // At once: saved, and everything drawn again in it (the first boot's
     // goes on to Now Playing).
@@ -1019,6 +1210,7 @@ ListView::Tap OutputPage::onTapAt(uint32_t row, int x, bool rightEdge) {
       break;
     case LineOut: ui_.warn(tr(S::output_line_out_note)); break;
     case PairNew: ui_.push(page(PageKind::Pair)); break;
+    case AutoDjRow: ui_.push(page(PageKind::AutoDj)); break;
     case Haptics: {
       Input& in = ui_.input();
       in.setHapticsOn(!in.hapticsOn());

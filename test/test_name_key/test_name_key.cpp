@@ -3,7 +3,8 @@
 
 // Host tests for NameKey: mStream's nameKey as docs/METADATA.md 5.4 pins it
 // (Rust's White_Space and full lowercase with Final_Sigma), orderName, the
-// artist display join and DJRW's artistKey. Run: pio test -e native
+// artist display join and AutoDJ's keys (DJRF's artistKey and the song key,
+// docs/AUTODJ-INDEX.md 2.4). Run: pio test -e native
 #include <unity.h>
 
 #include <cstring>
@@ -186,33 +187,81 @@ void test_display_join() {
   TEST_ASSERT_EQUAL_STRING("Ab", tiny);
 }
 
-// The shared fixture's AutoDJ table gives nameKey's outputs: each row's
-// artistNameKey is nameKey of its artist, its songKey ends in nameKey of
-// its title, and DJRW's artistKey is the low 32 bits of that key's hash.
+// The shared fixtures' AutoDJ descriptions give nameKey's outputs for each
+// row's primary file (its smallest path hash; a tie by the path's bytes):
+// artistNameKey is the nameKey of the first artist value that isn't blank,
+// and DJRF's artistKey the low 32 bits of its hash (0 with none); songKey
+// is nameKey(artist display) + "|" + nameKey(title), and null when the
+// title is absent or blank (the row is then nobody's same song).
 void test_fixture_keys() {
-  minijson::Value lib;
-  TEST_ASSERT_TRUE(cardfixtures::json("libraries/autodj-00000029.json", &lib));
-  const minijson::Value& rows = lib["rows"];
-  TEST_ASSERT_TRUE(rows.size() >= 6);
-  for (size_t i = 0; i < rows.size(); ++i) {
-    const minijson::Value& r = rows[i];
-    const std::string artist = r["artist"].str();
-    TEST_ASSERT_EQUAL_STRING(r["artistNameKey"].c_str(), key(artist.c_str()).c_str());
-    const std::string song = r["songKey"].str();
-    const size_t bar = song.rfind('|');
-    TEST_ASSERT_TRUE(bar != std::string::npos);
-    TEST_ASSERT_EQUAL_STRING(song.substr(bar + 1).c_str(), key(r["title"].c_str()).c_str());
-    const std::string left = song.substr(0, bar);
-    TEST_ASSERT_EQUAL_STRING(left.c_str(), key(left.c_str()).c_str());  // a key already
-    const uint32_t want = artist.empty() ? 0 : static_cast<uint32_t>(cardcontract::fnv1a64Str(r["artistNameKey"].c_str()));
-    TEST_ASSERT_EQUAL_UINT32(want, namekey::artistKey(artist.data(), artist.size()));
+  for (const char* name :
+       {"libraries/autodj-00000029.json", "libraries/autodj-mid.json", "libraries/autodj-tiny.json"}) {
+    minijson::Value lib;
+    TEST_ASSERT_TRUE_MESSAGE(cardfixtures::json(name, &lib), name);
+    const minijson::Value& rows = lib["rows"];
+    const bool tiny = std::string(name).find("tiny") != std::string::npos;
+    TEST_ASSERT_TRUE(rows.size() >= (tiny ? 2u : 6u));
+    size_t noSong = 0, noArtist = 0;
+    for (size_t i = 0; i < rows.size(); ++i) {
+      const minijson::Value& r = rows[i];
+      const minijson::Value* primary = nullptr;
+      uint64_t best = 0;
+      for (size_t f = 0; f < r["files"].size(); ++f) {
+        const minijson::Value& file = r["files"][f];
+        const uint64_t h = cardcontract::pathHash(file["path"].c_str());
+        if (!primary || h < best || (h == best && file["path"].str() < (*primary)["path"].str())) {
+          primary = &file;
+          best = h;
+        }
+      }
+      TEST_ASSERT_NOT_NULL(primary);
+      TEST_ASSERT_EQUAL_STRING(r["primaryPath"].c_str(), (*primary)["path"].c_str());
+      const minijson::Value& artists = (*primary)["artists"];
+      std::string list, first;
+      bool found = false;
+      for (size_t a = 0; a < artists.size(); ++a) {
+        const std::string& v = artists[a].str();
+        if (a) list += '\x1F';
+        list += v;
+        if (!found && !namekey::blank(v.data(), v.size())) {
+          first = key(v.c_str());
+          found = true;
+        }
+      }
+      TEST_ASSERT_EQUAL_STRING(r["artistNameKey"].c_str(), first.c_str());
+      const uint32_t want = first.empty() ? 0 : static_cast<uint32_t>(cardcontract::fnv1a64Str(first.c_str()));
+      TEST_ASSERT_EQUAL_UINT32(want, namekey::artistKey(list.data(), list.size()));
+      noArtist += first.empty();
+      const std::string& title = (*primary)["title"].str();
+      if (!primary->has("title") || namekey::blank(title.data(), title.size())) {
+        TEST_ASSERT_TRUE_MESSAGE(r["songKey"].isNull(), r["hash"].c_str());
+        ++noSong;
+        continue;
+      }
+      const std::string song = key(join(list.data(), list.size()).c_str()) + "|" + key(title.c_str());
+      TEST_ASSERT_EQUAL_STRING(r["songKey"].c_str(), song.c_str());
+    }
+    if (!tiny) TEST_ASSERT_TRUE(noArtist > 0);  // a row with none
+    if (std::string(name).find("mid") != std::string::npos) TEST_ASSERT_TRUE(noSong > 0);
+    // autodj-tiny's two titles are one song only by the full lowercase
+    // with Final_Sigma: U+0130 and "i" + U+0307, a capital sigma ending a
+    // word and the final sigma.
+    if (tiny) TEST_ASSERT_EQUAL_STRING(rows[0]["songKey"].c_str(), rows[1]["songKey"].c_str());
   }
   // The row whose record lists "X", "X", "Y": its display is "X, Y".
   const char xy[] = "X\x1FY";
   TEST_ASSERT_EQUAL_STRING("x, y", key(join(xy, sizeof(xy) - 1).c_str()).c_str());
-  // artistKey takes the first value only.
+  // artistKey takes the first value that isn't blank.
   TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(cardcontract::fnv1a64Str("x")), namekey::artistKey(xy, sizeof(xy) - 1));
+  const char blankFirst[] = "  \x1FX";
+  TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(cardcontract::fnv1a64Str("x")),
+                           namekey::artistKey(blankFirst, sizeof(blankFirst) - 1));
+  const char emptyFirst[] = "\x1F\xC2\xA0\x1F" "Y";  // an empty value, a no-break space alone
+  TEST_ASSERT_EQUAL_UINT32(static_cast<uint32_t>(cardcontract::fnv1a64Str("y")),
+                           namekey::artistKey(emptyFirst, sizeof(emptyFirst) - 1));
   TEST_ASSERT_EQUAL_UINT32(0, namekey::artistKey("  ", 2));
+  TEST_ASSERT_EQUAL_UINT32(0, namekey::artistKey(" \x1F\t", 3));
+  TEST_ASSERT_EQUAL_UINT32(0, namekey::artistKey("", 0));
 }
 
 int main(int, char**) {

@@ -6,10 +6,13 @@
 // Where a sheet sits (ui/Overlays' Sheet: a title with a close pill, then
 // rows, from the bottom of the screen): every row kRowH, the 40 px touch
 // minimum, however many rows. Up to 3 rows it stays in the list's band
-// (from y 72; 3 rows from y 80, Now Playing's two menus: docs/QUEUE-MODES.md).
-// A 4-row sheet would rise into the header row (from y 40), as the dialog
-// and the jump grid do, never onto the tab bar; none has 4 rows now, and
-// kMaxRows keeps the room. A 4 px margin keeps its last row off the touch
+// (from y 72; 3 rows from y 80, Now Playing's navigation menu:
+// docs/QUEUE-MODES.md). A 4-row sheet rises into the header row (from y
+// 40), as the dialog and the jump grid do, never onto the tab bar: Now
+// Playing's playback menu (its 4th row Auto DJ) and the Library's
+// long-press sheet on a track the Auto DJ index knows ("Auto DJ from here"
+// its first row: the three below stay where a 3-row sheet has them);
+// kMaxRows is 4. A 4 px margin keeps its last row off the touch
 // strip. The panel sprite the sheets are drawn in (overlaysBegin()) is
 // kPanelH tall: the content area, the tallest any overlay needs. A row's
 // label (Body) starts 16 px in; its detail (Small, dim) is right-aligned

@@ -56,6 +56,7 @@ const char* pageKindName(uint8_t kind) {
     case PageKind::About: return "About";
     case PageKind::DeviceInfo: return "DeviceInfo";
     case PageKind::Language: return "Language";
+    case PageKind::AutoDj: return "AutoDj";
     default: return "-";
   }
 }
@@ -136,6 +137,7 @@ void Ui::start(uint32_t nowMs) {
   gateFailuresSeen_ = state_.gateFailures;
   lastContent_ = state_.contentVersion;
   lastUpNext_ = state_.upNext;
+  lastDjAdds_ = state_.autoDj.adds;
   failuresSeen_ = player_.lastFailure().count;
   started_ = true;
   // A fresh unit: the language first (the touch check and the tips then
@@ -254,7 +256,8 @@ Page* Ui::pageFor(uint8_t kind) {
     case PageKind::Pair:
     case PageKind::About:
     case PageKind::DeviceInfo:
-    case PageKind::Language: return &outputPage_;
+    case PageKind::Language:
+    case PageKind::AutoDj: return &outputPage_;
     default: return &nowPlaying_;
   }
 }
@@ -343,6 +346,80 @@ void Ui::shuffleAll() {
     trnf(text, sizeof(text), S::toast_shuffling, all.count, all.count);
   }
   toast(ok ? text : tr(S::toast_no_memory), ok);
+}
+
+void Ui::autoDjStart() {
+  if (state_.libraryFenced) {  // the library update's fence: the index is the build's
+    toast(tr(S::library_updating_wait), false);
+    return;
+  }
+  const bool wasOn = state_.autoDj.on;
+  const autodjview::Started r = host_.autoDjStart();
+  if (r == autodjview::Started::Refused) {
+    Serial.println("[ui] the Auto DJ button: the Play was refused (no memory)");
+    toast(tr(S::toast_no_memory), false);
+    return;
+  }
+  if (r == autodjview::Started::NoIndex) {
+    // The index went (a remount, a check) since the button was drawn: the
+    // empty state draws Shuffle all again at the next pass.
+    warn(tr(S::toast_autodj_needs_index));
+    return;
+  }
+  if (r != autodjview::Started::Played) {
+    warn(tr(S::toast_autodj_no_start));  // (another tap draws again)
+    return;
+  }
+  added_.clear();  // a new queue: nothing "added" to show in it
+  char title[96], text[128];
+  if (!player_.catalog().title(queue_.currentTrack(), title, sizeof(title))) {
+    snprintf(title, sizeof(title), "%s", tr(S::queue_it));
+  }
+  if (player_.state() == PlayState::Waiting) {
+    // The headphones aren't connected: it plays once they are (as the
+    // Library's Play says it).
+    if (state_.btName[0]) {
+      trf(text, sizeof(text), S::library_waiting_for, state_.btName, title);
+    } else {
+      trf(text, sizeof(text), S::library_waiting_for_headphones, title);
+    }
+  } else {
+    trf(text, sizeof(text), S::toast_autodj_started, title);
+  }
+  Serial.printf("[ui] the Auto DJ button: %s\n", title);
+  autoDjToast(text, !wasOn);  // (Undo: the queue as it was, empty, and Auto DJ off if this tap switched it on)
+}
+
+void Ui::autoDjToast(const char* text, bool switchedOn) {
+  toast(text, true);
+  undoSwitchesDjOff_ = switchedOn;
+}
+
+void Ui::autoDjNews(uint8_t news) {
+  // An Undo toast up (a Play's, the button's, "Auto DJ from here"'s): what
+  // Auto DJ says waits until it goes, so its Undo stays offered for its 4
+  // s (a pick lands half a second after a one-track Play starts). The
+  // failure pause, a note, at once.
+  if (!(news & autodjview::kNewsPaused) && toast_.up() && toast_.undo()) {
+    pendingNews_ = static_cast<uint8_t>(pendingNews_ | news);
+    return;
+  }
+  news = static_cast<uint8_t>(news | pendingNews_);
+  pendingNews_ = 0;
+  autodjview::Toast t;
+  if (!autodjview::newsToast(news, &t)) return;
+  if (t.warn) {
+    warn(tr(t.text));
+  } else {
+    toast(tr(t.text), false);
+  }
+}
+
+queueview::QuietKeys Ui::djKeys() const {
+  queueview::QuietKeys q;
+  q.ctx = &host_;
+  q.has = [](uint32_t key, const void* ctx) { return static_cast<const UiHost*>(ctx)->autoDjMarked(key); };
+  return q;
 }
 
 void Ui::showTop() {
@@ -612,6 +689,7 @@ void Ui::uncover(int oldBottom) {
 
 void Ui::toast(const char* text, bool undo, uint32_t viewKey) {
   viewKey_ = viewKey;
+  undoSwitchesDjOff_ = false;  // (autoDjToast() sets it after)
   // An add: the next visit to the Queue shows it (the review's graft).
   if (viewKey != QueueModel::kNone) added_.noteAdded(viewKey);
   // Not over the start-up screen or a screen of its own (the calibration):
@@ -724,6 +802,7 @@ void Ui::followSheet(int pressed) {
       case SheetFollow::Sleep: text = state_.sleepRow; break;
       case SheetFollow::Shuffle: text = tr(state_.shuffle ? S::now_playing_on : S::now_playing_off); break;
       case SheetFollow::Repeat: text = tr(uitext::repeatMode(state_.repeat)); break;
+      case SheetFollow::AutoDj: text = tr(autodjview::rowText(autodjview::rowState(state_.autoDj))); break;
       default: continue;
     }
     if (sheet_.setDetail(i, text) && i == pressed) pressedDrawn = true;
@@ -1216,9 +1295,10 @@ void Ui::loop(uint32_t nowMs) {
   }
   // The page's deadlines (under a modal too, and in the dark).
   if (page_) page_->tick(nowMs);
-  // A shuffle toggle drops the queue's undo (docs/QUEUE-MODES.md 2.6), and
-  // the console's qu uses it: an Undo toast still up would answer "Nothing
-  // to undo", so it goes, its line saying which. (Shuffle all's toast
+  // A shuffle toggle drops the queue's undo (docs/QUEUE-MODES.md 2.6), the
+  // console's qu uses it, and Auto DJ's pick can drop it (queueUndoDropped()):
+  // an Undo toast still up would answer "Nothing to undo", so it goes, its
+  // line saying which. (Shuffle all's toast
   // stays: its Play set the mode as part of the edit, and its Undo puts
   // both back; qu's undo of it changes the mode back, no toggle.) And no
   // badge flash for a change of mode: Off can grow "up next" without
@@ -1229,17 +1309,25 @@ void Ui::loop(uint32_t nowMs) {
     const int was = toast_.bottom();
     toast_.hide();
     uncover(was);
-    Serial.printf("[ui] the Undo toast went: %s\n", gone == queueview::UndoWatch::Gone::Undone
-                                                        ? "undone from the console"
-                                                        : "a shuffle toggle took the undo");
+    using Gone = queueview::UndoWatch::Gone;
+    Serial.printf("[ui] the Undo toast went: %s\n", gone == Gone::Undone    ? "undone from the console"
+                                                    : gone == Gone::Dropped ? "Auto DJ's pick took the undo"
+                                                                            : "a shuffle toggle took the undo");
   }
   const bool toggled = undoWatch_.modeChanged();
-  // Tracks added: the Queue badge flashes.
-  if (state_.contentVersion != lastContent_) {
-    if (state_.upNext > lastUpNext_ && !toggled) badgeUntilMs_ = nowMs + 1500;
-    lastContent_ = state_.contentVersion;
+  // What Auto DJ had to say while an Undo toast was up: now it has gone
+  // (moot if Auto DJ was switched off meanwhile).
+  if (pendingNews_ && !state_.autoDj.on) pendingNews_ = 0;
+  if (pendingNews_ && !(toast_.up() && toast_.undo())) autoDjNews(0);
+  // Tracks added: the Queue badge flashes (not for Auto DJ's own appends:
+  // one each time the last track starts; the engine design's 2.14).
+  const bool contentChanged = state_.contentVersion != lastContent_;
+  if (queueview::badgeFlashes(lastUpNext_, state_.upNext, contentChanged, toggled, state_.autoDj.adds - lastDjAdds_)) {
+    badgeUntilMs_ = nowMs + 1500;
   }
+  lastContent_ = state_.contentVersion;
   lastUpNext_ = state_.upNext;
+  lastDjAdds_ = state_.autoDj.adds;
   if (dark_ || identifying_) {
     // The screen is off, or identify()'s banner covers it: nothing drawn
     // (the page, the tab bar, frames); what the cover worker made comes
@@ -1613,6 +1701,15 @@ void Ui::route(const InputEvent& e) {
           Serial.printf("[ui] undo: %s%s%s\n", undone ? "done" : "nothing to undo",
                         player_.shuffle() == shuffled ? "" : shuffled ? " (shuffle off again)" : " (shuffle on again)",
                         back);
+          // The Auto DJ button's or "Auto DJ from here"'s Play, which also
+          // switched Auto DJ on: undone whole, Auto DJ off again. What
+          // Auto DJ had to say about that queue goes with it.
+          pendingNews_ = 0;
+          if (undone && undoSwitchesDjOff_) {
+            Serial.println("[ui] undo: Auto DJ off again (the tap undone had switched it on)");
+            host_.autoDjSetOn(false);
+          }
+          undoSwitchesDjOff_ = false;
           toast_.show(tr(undone ? S::toast_undone : S::toast_nothing_to_undo), false, false, accent(), nowMs_);
           uncover(was);
         } else if (hit == 3) {

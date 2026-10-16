@@ -1,0 +1,3 @@
+# The fixtures are compared byte for byte (tools/autodj_ref.py --check):
+# never convert their line ends.
+* -text

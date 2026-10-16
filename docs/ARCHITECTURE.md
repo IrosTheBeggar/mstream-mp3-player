@@ -35,6 +35,8 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  DeviceInfo  BootLayout  LogoArt (generated)  RleImage        |
               |  GlyphStore  CjkGlyphs16 (generated)                          |
               |  HopFrontEnd  HostLine  HostLink  HostClock (USB visualizer)  |
+              |  AutoDjEngine  AutoDjTiers  AutoDjJoin  AutoDjDriver          |
+              |  AutoDjTrigger  AutoDjCommand  AutoDjView (Auto DJ)           |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -57,6 +59,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  ui/BootScreen (the mStream logo and the version)             |
               |  app/Version (the version from git, the app description)      |
               |  app/UsbViz (the USB visualizer: a computer drives the dancer)|
+              |  app/AutoDj + app/AutoDjStore (Auto DJ: its index, NVS)       |
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
@@ -384,8 +387,88 @@ The rules that keep it deadlock- and glitch-free:
 | decode | 1 | 2 | 16 KB stack in internal RAM (flash reads can't use a PSRAM stack); decodes and converts to 44.1 kHz (the converter, measured with `Rb`: 1.4 M cycles per second of audio for 44.1 kHz's passthrough, the old path, 5 cycles a frame cheaper (an MP3 still measures 0.8 points above the build before the converter, its decoder's loop 2 % slower in the new image: RESAMPLER.md section 10b); 5.8-5.9 % of a core at 240 MHz for 48 kHz, 8.8 % at 160: RESAMPLER.md sections 10 and 10b); after a track start, once 500 ms are buffered, it sleeps after each pass so it refills at most 1.5x realtime (`RefillPacer`, on by default: it halved the UI's stall at every start); at a file's end it opens the next track with the ring still full (a gapless join: no refill from empty at natural ends, GAPLESS.md). Its rests are `ulTaskNotifyTake()`, so a request or a new word (`setNext()`) wakes it |
 | speaker pump | 1 | 3 | three 1024-frame buffers, release-callback handshake; switches the amp and I2S (M5.Speaker end/begin) off 2 s after it last queued audio and on again before the next buffer (`AmpGate`) |
 | M5.Speaker | 1 | 2 | mixes to 44.1 kHz mono (its input is always 44.1 kHz now); runs only while the amp is on |
-| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover (0 while a list moves), the library update's build, a slice of the walk, and while the screen is dark a slice of the tag scan, a compaction and the update's save (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply; a compaction or a save drops to 0 when the screen lights); 0 for the tag scan, compactions and the save while the screen is lit, and the DJNB check | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a slice of the validation walk (its folders for 18 ms lit, 250 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB (3,916 B MEASURED on 6c2a928, 2,228 B left), about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build MEASURED at 5,360 B on 6c2a928, 784 B left, its views' `std::sort` at libstdc++'s depth limit on the records' byte order, about 3.3-3.6 KB since `lib/core/IdSort` bounds the recursion at lg(n/16) + 1 frames, METADATA.md 3.9); reads the card in 4 KB pieces and writes it in 4 KB pieces that end on the file's 4 KB boundaries; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the tag scan, compactions and the update's save at 0 while the screen is lit, since the SD driver's reads busy-wait the CPU (the walk's slices, and while the screen is dark the scan's slices, a compaction and the save, at 1: above; at 0 the 2026-10-09 run measured a compaction about 1.75x its modelled card time, none having run at 1 there, and the save 2-4.5x its time on the loop at the boot); always below the decoder (below) |
-| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms) |
+| the card worker (`card`, app/CardWorker) | 1 | 1 for a cover (0 while a list moves), the library update's build, a slice of the walk, and while the screen is dark a slice of the tag scan, a compaction and the update's save (a slice drops to 0, and ends after its unit, when a list moves or the scan's yields apply; a compaction or a save drops to 0 when the screen lights); 0 for the tag scan, compactions and the save while the screen is lit | one step at a time, only the one the loop hands it (app/CardTasks, ScanScheduler: docs/METADATA.md 3.3.4, 3.3.9, 3.8, 3.9): a cover (ui/Thumbs), a slice of the validation walk (its folders for 18 ms lit, 250 ms dark), a compaction of `tags.bin`, a file of the tag scan a loop source names or a slice of its rest's files, the update step's build of the index and its save of `library.idx` (lib/core LibraryUpdate); made for the first step, gone after 3 s without one; 6 KB internal stack while it lives (2.3 KB used at most on the device as the covers' worker; the card's jobs about 3.0 KB on N11's card, 3,140 B least left over 5,190 steps, MEASURED on df92c01 by `gs`; the deepest, ESTIMATED from the image, a compaction's reopen of D under its folders: about 4.0 KB (3,916 B MEASURED on 6c2a928, 2,228 B left), about 5.0 KB with the SD driver's log line on top, about 1.1 KB left before an interrupt's frame, 512 B more than before the 2026-10-09 review's `Container::open()`; the build MEASURED at 5,360 B on 6c2a928, 784 B left, its views' `std::sort` at libstdc++'s depth limit on the records' byte order, about 3.3-3.6 KB since `lib/core/IdSort` bounds the recursion at lg(n/16) + 1 frames, METADATA.md 3.9); reads the card in 4 KB pieces and writes it in 4 KB pieces that end on the file's 4 KB boundaries; covers level with the loop while nothing moves (at 0 they shared what was left with the idle task: 2-2.5x slower), below it the moment a list moves; the tag scan, compactions and the update's save at 0 while the screen is lit, since the SD driver's reads busy-wait the CPU (the walk's slices, and while the screen is dark the scan's slices, a compaction and the save, at 1: above; at 0 the 2026-10-09 run measured a compaction about 1.75x its modelled card time, none having run at 1 there, and the save 2-4.5x its time on the loop at the boot); always below the decoder (below) |
+| Arduino loop (UI, console, input) | 1 | 1 | the input layer every pass (touch panel over I2C, the buttons); the UI (the one task that draws): what changed, and list frames at up to 30 fps on deadlines, each piece under its own short bus hold; on the Dance tab, the beat tracker and the dancer's frames (10/s idle; dancing 30/s at 240 MHz, 24/s below: `DanceRate`); sleeps 1-5 ms every pass (less while a list frame is due), 20 ms while the screen is off (`Ui::idleMs`; with no UI, main's own 20 ms), at most 2 ms while Auto DJ's join works; Auto DJ's step (below) |
+
+### The loop's pass
+
+`loop()` (main.cpp) takes these steps every pass, in this order:
+
+1. **Input and the player:** `M5.update()`, the input layer's events,
+   the console's bytes, the Bluetooth events and the session, PlayGate,
+   the sleep timer, `player.update()` (a natural end, a failure, a heard
+   gapless join), the idle power-off, the power settings and a CPU
+   speed's restart, `audio.loop()`, the power lab.
+2. **`stepCardGuard()`:** what the SD wrapper's guard found at FatFs's
+   remounts (a card pulled and put back, or another put in: METADATA.md
+   3.8).
+3. **`stepAutoDj()`:** Auto DJ's step (`app/AutoDj::step()`,
+   [AUTODJ.md](AUTODJ.md)): a remount seen first; a slice of the join
+   while Auto DJ is on (at most 8 ms of slices and one card read a pass,
+   never while a list moves or the card is held); the Driver's pass (a
+   new session at a new queue, the tracks that steer, the trigger, and a
+   pick appended, or cued at a finished queue, else one slot read ahead);
+   a long `D` command's step. A due pick waits while the decoder fills
+   its ring from empty after a start or a skip (main.cpp's
+   `decoderRefilling()`: until 500 ms are buffered, the track's source
+   has ended, or 1.5 s have passed; a pick timed across that refill
+   measured the decoder, 108 ms on 2026-10-13). Then main.cpp hands the
+   UI what the step had to say (`Ui::autoDjNews()`), and takes the Undo
+   toast down when a pick took the listener's undo
+   (`Ui::queueUndoDropped()`). It comes
+   after the card's guard, so a remount is seen before any read of the
+   index, and before the card's step, so a pick due this pass lands
+   before the update step can raise its fence in the same pass.
+4. **`queueStore.loop()`** (not while the card is held): `queue.txt`, the
+   position and the resume point (Library and queue, below).
+5. A track's learned length, a restart that is due, the `[queue] now at`
+   and Repeat One lines, the spike tools, the calibration, the dancer.
+6. **`userInterface->loop()`:** the snapshot (`MainUiHost::snapshot()`,
+   with Auto DJ's `AutoDj::view()`), the tab bar, the overlays, the page.
+7. **`stepCard()`** (not while the card is held): the card worker's loop
+   side (`CardTasks::loop()`). Its `UpdateEnv` is what the library update
+   step needs from the rest of the firmware (METADATA.md 3.4.2):
+   - the safe point's inputs (playing, waiting, what is left of the heard
+     track, the seeks);
+   - `alsoFreed`, what the step frees besides the index: the queue's
+     entries and undo snapshot, a `queue.txt` snapshot write under way
+     (`QueueStore::savingBytes()`), Thumbs' pools, and Auto DJ's join
+     (`AutoDj::fenceBytes()`: 0 while Auto DJ is off);
+   - `autoDjOwed`: a pick is due but Auto DJ's index still joins or
+     reopens (`autodj::decide()`'s `owed`, this pass's: `stepAutoDj()`
+     ran before). The step then waits before its fence
+     (`LibraryUpdate::Wait::AutoDj`, "Auto DJ's pick" in `gs`) until the
+     pick lands. A held Auto DJ (Repeat One, the sleep timer's End of
+     queue, its failure pause) never owes one, so it never blocks a step.
+   Then the act: `Fence` (`enterFence()`), `Live` (`leaveFence()`) or
+   `Deferred`.
+8. The USB visualizer, the host's queries, a screenshot, the screen's
+   step, the `[stats]` line, and the loop's sleep: `Ui::idleMs()` (1-5
+   ms, 20 ms dark), at most 2 ms while Auto DJ's join works
+   (`kJoinLoopDelayMs`: on 2026-10-13, 20 ms a pass in the dark made a
+   join 4.6-7.2 s).
+
+**Auto DJ and the library update step** (METADATA.md 3.4.2, 3.9):
+
+- **The fence.** `enterFence()` calls `AutoDj::beforeFence()` (the DJ
+  marks' positions while the queue is there), then, before the old index
+  goes, `AutoDj::fence()`: the join's maps released (their bytes were in
+  `alsoFreed`; the fence's log line says how many). `leaveFence()` calls
+  `AutoDj::live()` after the queue's read-back: the marks carried to the
+  new keys, and the join again, on the new track ids, while Auto DJ is on.
+  Behind the fence the trigger says "the library update's fence" and
+  nothing is picked.
+- **The give-back** (`LibraryUpdate::setGiveBack()`, main.cpp's
+  `autoDjGiveBack()`): the join's blocks that fit no smaller free block
+  sit at the top of PSRAM's largest free block (`Join::setPlacement()`),
+  which the memory check can't see past. When the check fails only
+  because the new track table fits no block (not for room, and not after
+  `gb!`), the hook releases the join, measures PSRAM again and the check
+  runs once more, the join's bytes taken out of `alsoFreed`. Auto DJ
+  joins again after the step's Live, or at once when the step defers or
+  fails. So Auto DJ never puts a library update off to the next boot
+  (logged: `[dj] the library update's memory check: the join given back
+  ...`).
 
 ### The loop task's stack
 
@@ -1257,7 +1340,7 @@ thumbnails, below); on the card also `tags.bin` and its journals
 3.3.2), `device.txt` (what this firmware reads, for the transfer software:
 METADATA.md 2.15) and, for one boot, `build.req` (a library build deferred
 to the next boot). The transfer software's `/.mstream` (its root, its tags
-file, its thumbnails) is read, never written.
+file, its AutoDJ index, its thumbnails) is read, never written.
 
 **FatFs itself, for the card's records** (`storage/CardFat`, METADATA.md
 3.8): the validation walk lists `/music` with `f_readdir`, whose `FILINFO`
@@ -1266,9 +1349,13 @@ POSIX walk needs a `stat()` per file for those), and the device's records,
 `library.idx` and `device.txt` are written through N4's file interface over
 FatFs, which gives a file's first cluster (2.12.6's cut-rename rule). Paths
 name the SD library's FatFs drive (`"0:/music/..."`); the `FIL`s, `FF_DIR`
-and `FILINFO` are in PSRAM (a `FIL` is about 4.1 KB here). The decoder, the
-queue and the covers keep the VFS: both reach the one FatFs volume under its
-lock. What reaches the card is card commands, and FatFs makes one of a
+and `FILINFO` are in PSRAM (a `FIL` is about 4.1 KB here). Auto DJ keeps
+its index open the same way, one `FatFile` from the boot on (`app/AutoDj`),
+so a slot is one read (512 bytes at the writers' default) on the raw
+path, never through the VFS or the card worker ([AUTODJ.md](AUTODJ.md);
+AUTODJ-INDEX.md 11.3). The decoder, the queue and the covers keep the
+VFS: both reach the one FatFs volume under its lock. What reaches the
+card is card commands, and FatFs makes one of a
 single sector of every partial sector (through the file's one-sector buffer,
 read first when it is inside the file) and one of several whole sectors when
 a read or a write covers them from a sector's start. So `CardFat`'s
@@ -1541,7 +1628,15 @@ writes "en" there when there is none, so an updated unit stays in English
 and never gets the first boot's language picker, which is a fresh NVS's
 alone (no `schema` key, no step). 0.9.0 leaves a schema-3 NVS as it is,
 never reads `lang` (it draws English) and keeps every other setting; back
-on 0.10.0 the language is still there.
+on 0.10.0 the language is still there. Schema 4 (from 0.11.0) is schema
+3's keys and the `autodj` namespace, Auto DJ's switch and settings: four
+u8s, `on` (1 on), `mode` (0 Follow the vibe, 1 Stay on seed), `floor`
+(Match strictness in percent: 55, 60, 65, 70 or 75) and `match` (bit 0
+BPM continuity, bit 1 Harmonic mixing), each written at once when it
+changes (`app/AutoDjStore`, [AUTODJ.md](AUTODJ.md)). Its `migrate(3, 4)`
+step does nothing: an absent key, or a value this firmware doesn't take,
+reads as its default (off, Follow the vibe, 55 %, both off). 0.10.0
+leaves a schema-4 NVS as it is and never reads the namespace.
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
@@ -1567,13 +1662,14 @@ The rules:
   atomic.
 - Keys are at most 15 characters (NVS's limit).
 
-The keys of schema 3, by namespace: `meta` (schema); `input` (cal,
+The keys of schema 4, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
 ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu_mhz,
 bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
 (coach, and schema 3's lang); `queue` (gen, pos, resume, and schema 2's
-repeat). Schema 2's are the same without `ui`/`lang`, schema 1's without
-`queue`/`repeat` too. The Bluetooth stack keeps its bonds in
+repeat); `autodj` (schema 4's on, mode, floor, match). Schema 3's are the
+same without `autodj`, schema 2's without `ui`/`lang` too, schema 1's
+without `queue`/`repeat` too. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
 
 ### Moving an existing unit to the new layout
@@ -1989,6 +2085,27 @@ the browsing UI hold its **track ids**, never strings.
   listener put them there); a move to play next ranks the moved right after
   the current entry; an add to an empty queue is laid out as a Play from
   its first.
+  **Auto DJ's add** ([AUTODJ.md](AUTODJ.md)) is `appendQuiet(track)`: one
+  entry at the end, as an `append()` of one (ranked after the highest
+  rank while shuffled, never shuffled in; the current entry on an empty
+  queue), but no edit: it takes no snapshot, so the listener's last edit
+  stays the one Undo undoes (its toast's Undo never takes Auto DJ's pick
+  away instead). The new entry is added to that edit's snapshot as well,
+  so the Undo of a + Queue, a Play next, a Remove, a move or a Clear up
+  next puts back the listener's queue with Auto DJ's entry still last;
+  not to a Play's or a Clear's snapshot, whose Undo brings back a queue
+  that never held it. The undo is dropped instead when that snapshot
+  holds 5,000 entries, can't grow or would rank past 0xFFFFFFFF, and
+  when the queue is full: the oldest played entry is pushed out, as an
+  add's is (QUEUE-MODES.md 15.8), and the undo goes with it (an Undo
+  toast still up then goes: `Ui::queueUndoDropped()`, `UndoWatch`'s
+  `Gone::Dropped`). Full with nothing played, it is refused.
+  **`playEpoch()`** counts the new queues: every Play (Shuffle all's, and a Play of nothing), every Clear
+  (of an empty queue too) and the Undo of either. Not `assign()` or
+  `release()` (the boot's restore, a rebuild's read-back), the other
+  edits, a toggle, a move of the current entry or `appendQuiet()`. Each
+  one starts a new Auto DJ session, so no caller of Play or Clear has to
+  say so.
 - **Transport** (`PlaybackController`) plays the queue's current entry through
   the catalog and keeps its rules. **Repeat** (`setRepeat()`: Off, All or
   One; QUEUE-MODES.md section 3): a natural end follows the mode, a skip
@@ -2004,7 +2121,21 @@ the browsing UI hold its **track ids**, never strings.
   as an action: the same entry stays current in the same state, the word
   on what follows moves to the new next. A track that can't be
   played is skipped, and once every track in the queue has failed in a row it
-  stops. **Prev restarts a track past its first 3 s** (`prevRule()`,
+  stops (on the last entry with repeat Off, as the queue's end: a finished
+  queue, below). **Auto DJ** ([AUTODJ.md](AUTODJ.md);
+  [QUEUE-MODES.md](QUEUE-MODES.md) section 16): `addFromAutoDj(track,
+  cue)` appends a pick inside an action (`appendQuiet()`), so the word on
+  what follows reaches the backend at once and the pick joins gaplessly.
+  At a finished queue (`endedAtEnd()`: stopped on its last entry at its
+  end with repeat Off, nothing moved or started since; a natural end, a
+  skip, a failure, the sleep timer's End of queue, or a track that ended
+  inside the library update's fence with none after it) it cues the pick
+  instead: the new entry current, paused at 0:00, marked
+  `cuedByAutoDj()`, so nothing starts by itself after a silence and the
+  headphones' Play doesn't start it (`pausedNotByListener()`, as after
+  the sleep timer's pause); Play does. `naturalEnds()` counts the tracks
+  that reached their end, so Auto DJ tells a skip from an end (its quick
+  skip). **Prev restarts a track past its first 3 s** (`prevRule()`,
   host-tested in test_playback; every prev: the A click, Now Playing's, the
   console's `p`, the headphones'): more than 3 s in, the same entry from
   0:00 in the same state. Playing, it starts again (a start like any, faded
@@ -2068,7 +2199,29 @@ the browsing UI hold its **track ids**, never strings.
   queue once. The repeat mode is NVS's (`queue`/`repeat`, written at once
   on a change, read at boot before the queue). The file is rewritten 2 s after the
   last edit, 32 lines a loop pass (a 10,000-track queue is ~700 KB and never
-  holds the loop), into `queue.tmp`, then renamed over `queue.txt`. The
+  holds the loop), into `queue.tmp`, then renamed over `queue.txt`; an
+  edit while a write is under way drops that write. **Edits that never
+  settle** (Auto DJ appending a 1-second track every second, at the cap
+  each also pushing out the oldest entry: on the device's soak of
+  2026-10-13 the file wasn't written for the last 59 minutes) get a
+  **snapshot write**: once the queue has differed from the file for 30 s
+  (`QueueSaver::kMaxStaleMs`), the next write starts without its 2 s and
+  writes a snapshot of the queue as it is then (its tracks, and its ranks
+  while shuffled: 4-8 B an entry, at most 40 KB, in PSRAM), which edits
+  don't drop: it runs to its end, and the edits after it are the next
+  write's. A full queue's write takes 3-6 s of passes, so the file is at
+  most about 36 s behind. The file is the snapshot's whole queue, its
+  header's current line the snapshot's; a position (and a resume point)
+  is saved for it only while the queue is still the snapshot's, else NVS
+  keeps the older generation's, which a boot never pairs with this file.
+  A queue that fits one pass gets the plain write; with no memory for a
+  snapshot, none is tried for 10 s and the plain write after 2 s of
+  quiet goes on meanwhile. The snapshot and the plain writer share
+  `QueueText`'s header and entry writers (`queuetext::writeHeader()`,
+  `writeEntry()`), byte for byte. A snapshot write's bytes count in the
+  update step's `alsoFreed` (`QueueStore::savingBytes()`: the fence's
+  flush frees them); `q` says `(writing a snapshot)` and `N writes (S
+  from a snapshot; last L ms)`. The
   position goes to NVS (at most once a second), tagged with the file's
   generation, so a track change doesn't rewrite the file and a position is
   never paired with an older file. The **resume point** goes to NVS too
@@ -2185,6 +2338,19 @@ the browsing UI hold its **track ids**, never strings.
   free: …` line between): heap_caps' since-boot PSRAM minimum reads 0 B
   from the first line on, the IDF's and the Arduino core's init
   (METADATA.md 3.5).
+- **Auto DJ** ([AUTODJ.md](AUTODJ.md)): `setup()` makes `app/AutoDj`
+  after the library and the queue: its settings (NVS `autodj`), the
+  engine's one block (19,016 B), and the index the card's root names,
+  opened and checked against the root's COMP entry (1-2 small reads:
+  5.5-6.5 ms MEASURED on 2026-10-13, at 19,410 rows),
+  Auto DJ on or off. The join (the index's rows to this library's track
+  ids and its filters, AUTODJ-INDEX.md 11.2) runs only while Auto DJ is
+  on: when it is switched on, after the UI's first frame at a boot with
+  it on, after each library update's Live, and after a remount that found
+  another index. Switched off, the join is given back (155,284 B at
+  19,410 tracks, MEASURED 2026-10-13), so a listener who never uses Auto
+  DJ keeps that PSRAM. All of it is in PSRAM; internal RAM holds
+  main.cpp's pointer.
 
 ## Input
 
@@ -2611,7 +2777,8 @@ Queue, Dance and Output (with its Pair and About pages).
   A tap is still the cell's tab wherever the label runs. Status: the Now
   Playing icon's EQ bars move 4 times a second while playing, with a progress
   hairline (dotted while the length isn't known); the Queue's up-next badge
-  (flashing for 1.5 s when tracks are added); the Output icon's colour is the
+  (flashing for 1.5 s when tracks are added, not for Auto DJ's own
+  appends: `queueview::badgeFlashes()`); the Output icon's colour is the
   Bluetooth state (cyan connected, amber connecting, red lost or a
   connection that failed); the EQ bars lie flat in amber while a play
   waits for the headphones; a 7 x 7 moon in the Now Playing cell's corner
@@ -2658,6 +2825,9 @@ Queue, Dance and Output (with its Pair and About pages).
   icons (Undo's arrow, View as the Queue tab's icon; hit areas 228-263 and
   264 to the edge), so the name has 216 px (Body, else Small): "Can'T
   Tell Me Nothing" and "Harder, Better, Faster, Stronger" both fit. The
+  two lines go by the rows they ink (`uitext::toastLines()`, `TextInk`),
+  a clear row between them inside the card, which takes all 36 rows when
+  they need them (CJK's 16-17 px glyphs: AUTODJ.md 9.6). The
   buttons are the icons too, the text on one line beside them when it
   fits, whenever a label doesn't fit its pill (German's "Rückgängig":
   `uitext::toastIcons()`). It
@@ -2699,12 +2869,14 @@ Queue, Dance and Output (with its Pair and About pages).
   each over its button with an arrow down to its dot, then "tap the tab
   you're on again: back to its start"; a tap anywhere goes on, a tab tap
   ends them. A **sheet**
-  (from the bottom, rows of 40 px: up to 3 in the list's band from y 72,
-  Now Playing's two menus 3 rows from y 80; a 4th would rise to y 40, never
-  onto the tab bar; a touch that starts within 300 ms of its opening goes
+  (from the bottom, rows of 40 px: up to 3 in the list's band, 3 rows
+  from y 80; 4 rows rise into the header row, from y 40, never onto the
+  tab bar: Now Playing's playback menu and the Library's long-press sheet
+  on a track the Auto DJ index knows, `lib/core/SheetLayout`; a touch
+  that starts within 300 ms of its opening goes
   nowhere, as on the volume sheet, so a double tap never picks a row; a
-  row can stay up and show its new state, Now Playing's Shuffle and
-  Repeat) and a **dialog** (modal, the tab bar
+  row can stay up and show its new state, Now Playing's Shuffle, Repeat
+  and Auto DJ) and a **dialog** (modal, the tab bar
   still works; optionally an icon, a live status line and a red primary
   button) freeze the page under them; one that opens while a finger is
   on the page (the headphones' drop dialog) ends that touch for the page (a
@@ -2941,21 +3113,26 @@ Queue, Dance and Output (with its Pair and About pages).
     in the Library"; the index not ready (a rebuild), "The Library isn't
     ready yet" (the built-in text said that, wrongly, until now); a
     synthetic browse (`uil<n>`), its refusal as before.
-  - **The playback menu** ("...": a 3-row sheet from y 80, titled
+  - **The playback menu** ("...": a 4-row sheet from y 40, titled
     "Playback"): **Shuffle** ("On", "Off"), **Repeat** ("Off", "All",
-    "One") and **Sleep timer** ("Off", "23 min", "End of track": it
-    follows the timer while the sheet is up). Each state is its row's dim
-    detail on the right, as the Sleep timer row's always was. **A tap on
-    Shuffle or Repeat changes it in place**: the tick, the row's new
-    state, its highlight gone, and the sheet stays up (Repeat goes Off,
-    All, One, Off; a change from the console shows on it too). Sleep timer
-    closes it and opens the Sleep timer sheet, as before. Sleep timer is
-    the last row on purpose: a quick second tap on "..." (y 168-239) lands
-    on the sheet's lower rows (156-235), and the last of them opens a
-    sheet rather than changing anything. **Every sheet ignores a touch that
-    starts within 300 ms of its opening** (as the volume sheet does): what
-    keeps a double tap off Repeat, and a double tap on the album row off Go
-    to artist.
+    "One"), **Sleep timer** ("Off", "23 min", "End of track": it
+    follows the timer while the sheet is up) and **Auto DJ** ("On",
+    "Off", "Waiting", "Paused": `autodjview::rowState()`, below). Each
+    state is its row's dim detail on the right, as the Sleep timer row's
+    always was. **A tap on Shuffle, Repeat or Auto DJ changes it in
+    place**: the tick, the row's new state, its highlight gone, and the
+    sheet stays up (Repeat goes Off, All, One, Off; a change from the
+    console shows on it too). Sleep timer closes it and opens the Sleep
+    timer sheet, as before. Until Auto DJ's row came (2026-10-14) it was a
+    3-row sheet from y 80 with Sleep timer last, so that a quick second
+    tap on "..." (y 168-239), landing on the sheet's lower rows (156-235),
+    would open a sheet rather than change anything. Now the rows are
+    Shuffle 76-115, Repeat 116-155, Sleep timer 156-195 and Auto DJ
+    196-235: a second tap there would land on Sleep timer or Auto DJ, and
+    the 300 ms guard is what keeps it off them. **Every sheet ignores a
+    touch that starts within 300 ms of its opening** (as the volume sheet
+    does): what keeps a double tap on "..." off Sleep timer and Auto DJ,
+    and a double tap on the album row off Go to artist.
   - **Shuffle and repeat** (the player's: [QUEUE-MODES.md](QUEUE-MODES.md)):
     shuffle is a toggle that reorders the queue itself. On, what is up
     next is shuffled and what plays plays on; off, the queue's own order
@@ -2967,9 +3144,11 @@ Queue, Dance and Output (with its Pair and About pages).
     with the queue (`queue.txt` version 2), repeat in NVS
     (`queue`/`repeat`). The sleep timer wins over Repeat One: End of
     track, album or queue pauses at this track's end, the same entry cued
-    at 0:00. "Shuffle all" (the empty states) turns shuffle on and plays
-    the library from a random track, as one edit: its toast's Undo puts
-    back the queue and the shuffle mode it found.
+    at 0:00. "Shuffle all" (the empty states, on a card with no usable
+    Auto DJ index) turns shuffle on and plays the library from a random
+    track, as one edit: its toast's Undo puts back the queue and the
+    shuffle mode it found. With Auto DJ: [QUEUE-MODES.md](QUEUE-MODES.md)
+    section 16.
   - **The indicator**: in the "..." zone under its dots (centred at
     (288, 218), in the Now Playing accent), as the volume zone has its
     "60%" under its icon: a small shuffle glyph while shuffle is on, a
@@ -3086,7 +3265,14 @@ Queue, Dance and Output (with its Pair and About pages).
   whole card. Every container's list starts with its bar; a tapped track
   or file opens the **inline action row** under it (Play: its album or
   folder from it, the rest following; Play next and + Queue: it alone);
-  **a long press on any row** gives the same three in a sheet. Deeper than
+  **a long press on any row** gives the same three in a sheet; on a track
+  or file the card's Auto DJ index knows (a usable index, and
+  `UiHost::autoDjHasNeighbours()`: a row in the joined maps, or, before
+  the join, the track's path hash in the index's path map, a binary
+  search of a few small reads), a 4-row sheet whose **first** row is
+  **Auto DJ from here** (below), so Play, Play next and + Queue stay
+  where a 3-row sheet has them and a tap from habit never lands on
+  another action. Deeper than
   one level the header's pill is **"‹ Library"**, the root crumb (its
   label in Bold up to 82 px, else Small: the title keeps its room; hit
   from x 240 to the edge, or, when it starts left of English's, from its
@@ -3106,7 +3292,14 @@ Queue, Dance and Output (with its Pair and About pages).
   scrolls to the first added entry and highlights what was added
   (`AddedMark`: every entry's key only grows, so what came since the first
   add is every key from that one's; the visit clears it, a Play in the
-  Library clears it, the toast's View does the same at once). **Selection
+  Library clears it, the toast's View does the same at once; Auto DJ's
+  entries, whose keys are higher too, are never marked nor scrolled to:
+  `queueview::QuietKeys`, `Ui::djKeys()`). An entry Auto DJ added carries
+  its small **DJ mark** at the right of its row, dim (an amber "!" wins:
+  one mark a row), from `UiHost::autoDjMarked(key)`: the keys of its
+  last 64 picks, in RAM only (none after a reboot), carried across a
+  library rebuild's read-back by their positions (`autodj::MarkCarry`:
+  none when the queue's size changed). **Selection
   mode** (Edit, or a long press: that row selected): ✕, "2 selected of
   16", **All**/None, and a bar under a shorter list band: **Remove N**
   (red, wide enough for "Remove 16"; a bigger count drops the icon, never
@@ -3117,7 +3310,8 @@ Queue, Dance and Output (with its Pair and About pages).
   amber "!" (`KeyRing`, the last 16 entries by key). Empty: "Your queue is
   empty", Open Library, Shuffle all (the whole library from a random
   track, shuffle on, one edit whose Undo puts the mode back too:
-  QUEUE-MODES.md sections 2.5 and 2.6).
+  QUEUE-MODES.md sections 2.5 and 2.6), or **Auto DJ** in Shuffle all's
+  place while the card has a usable Auto DJ index (below).
 - **Output** (spec §6.6, mockups 19-21, with the grafts; a list, so it
   scrolls): the **Bluetooth card** (two rows; `OutputModel`'s view of the
   link and the session: No headphones paired [Pair new headphones], Not
@@ -3144,7 +3338,8 @@ Queue, Dance and Output (with its Pair and About pages).
   screen goes off, then "Search again", a tap on it), the audio devices found,
   their kind and 4 signal bars, in the order found so no row moves under a
   finger; a tap pairs, after a confirmation when it replaces the
-  remembered pair, and goes back to the card), **Haptics** on/off (the
+  remembered pair, and goes back to the card), **Auto DJ** (its page:
+  below), **Haptics** on/off (the
   input layer's saved setting), **Screen off after** and **Brightness**
   (the screen policy's; the value in a pill, a tap takes the next choice,
   saved), **Turn off when idle** (the idle power-off's, the same way: 10 /
@@ -3165,6 +3360,106 @@ Queue, Dance and Output (with its Pair and About pages).
   and "Show the tips again"). The tab bar's Output icon is amber while a connection the
   listener asked for is on its way, and while the link looks for them; the
   plain icon while the search rests (`tabbar::outputFor()`, host-tested).
+- **Auto DJ** (the engine and its rules: [AUTODJ.md](AUTODJ.md); the
+  user's D4 and D6): what the UI shows and says of it is
+  `lib/core/AutoDjView`'s, host-tested in `test_ui_autodj`;
+  `app/AutoDj::view()` fills `AppState::autoDj` (an `autodjview::State`:
+  on, the settings, the strictness as it acts, whether the card's index
+  is usable, its state and coverage, what holds Auto DJ, its appends)
+  every pass. Nothing in the UI's Auto DJ code starts playback or touches
+  the output or the volume, but the two taps that play on purpose (the
+  empty states' button and Auto DJ from here); switching on never plays,
+  and B stays inert on an empty queue.
+  - **Now Playing's "..." row** (above): `rowState()`: **Off**; **On**;
+    **Waiting** while Repeat One or the sleep timer's End of queue holds
+    it; **Paused** after 3 of its picks in a row failed to play. A tap
+    switches it in place.
+  - **Output > Auto DJ** (`PageKind::AutoDj`; a list like Language's, no
+    icons). The Output root's row, under Pair new headphones, has its
+    icon and a line, `rootLine()`: "On · Follow the vibe", "Waiting ·
+    Stay on seed", "Paused · ...", "Off". The Anchor is there only when
+    the whole line fits its 242 px (`uitext::kAutoDjRowW`); else the
+    state alone ("On", "Waiting", "Paused"), so the Anchor keeps the
+    mobile app's words in every language. Without a usable index, the
+    state alone (the Anchor does nothing then). The page's rows:
+    - the switch ("adds a track as the last one starts");
+    - **Anchor**, Follow the vibe or Stay on seed: its value right of the
+      title in the Output blue, its hint under it, or the value on the
+      second line in the hint's place when it doesn't fit beside; a tap
+      swaps;
+    - **Match strictness**, "55% or closer": a tap takes the next step
+      (55, 60, 65, 70, 75, then 55). The row shows the strictness as it
+      acts: an index whose own floor is above the setting shows that
+      floor (`shownFloor()`), and a tap steps from what is shown
+      (`tapFloor()`), so no tap is dead;
+    - **BPM continuity** and **Harmonic mixing**: switches, off by default;
+    - a **status** row that is no control (`statusLines()`): the
+      coverage ("19,000 of 19,410 tracks have neighbours" over "BPM 92%
+      · key 88%"); an index found but not joined ("Auto DJ index: 19,410
+      tracks" over "read when Auto DJ is switched on"); "Reading the Auto
+      DJ index…"; why there is none over "picks are random" (no index,
+      failed its checks, can't read it, not enough memory, too many
+      tracks); while held, why it waits ("Waiting: Repeat One is on",
+      "Waiting: sleep timer set to End of queue", "Paused: tracks failed
+      to play").
+    Without a usable index the four settings are dim with "needs an Auto
+    DJ index" under each, and a tap on one gives that note; the switch
+    and the status stay live. A value that can't sit beside its title
+    (Match strictness's in de, es, it and pt) takes that line instead,
+    dim or live (`uitext::autoDjSecondLine()`), so every language shows
+    it. Each change is saved at once (NVS `autodj`, schema 4) and applies
+    from the next pick. Switched on here with nothing queued and a usable
+    index: the toast "Auto DJ on: it follows the next track you play",
+    and nothing starts.
+  - **The empty states' button** (Now Playing's and the Queue's):
+    [Open Library] [Auto DJ] in Shuffle all's place while the card has a
+    usable index and a library (`emptyButton()`); without one, Shuffle
+    all stays. A tap (`Ui::autoDjStart()`): a random library track the
+    index knows plays as a new queue, Auto DJ on, a session seeded by it.
+    Auto DJ off, nothing is joined yet: up to 8 library tracks are drawn
+    and each looked up in the index's path map (`Driver::surpriseTrack()`),
+    and the join follows the Play. Its toast, "Auto DJ: <title>", has
+    Undo: the queue as it was and, when this tap switched Auto DJ on,
+    Auto DJ off again (`Ui::autoDjToast()`). None found: the note "Found
+    no track with Auto DJ neighbours: try again" (another tap draws
+    again); the index gone since the button was drawn: "Needs an Auto DJ
+    index: a transfer to the card adds one"; behind the library update's
+    fence, "Updating the library: a moment".
+  - **Auto DJ from here** (the Library's long-press sheet, its first row
+    on a track the index knows: above): the track plays as a new queue (a
+    one-track Play), Auto DJ on, a session seeded by it; its toast, "Auto
+    DJ from here: <title>", has the same Undo.
+  - **The Queue:** the DJ mark; no "added" mark and no badge flash for
+    Auto DJ's appends: `badgeFlashes()` takes the appends since the last
+    pass (`State::adds`) off the growth, so the listener's add in the
+    same pass still flashes.
+  - **Toasts** (`newsToast()`, from `AutoDj::takeNews()` after its step;
+    one a pass, the most pressing first): the failure pause, an amber
+    note, "Auto DJ paused: tracks failed to play"; a finished queue's
+    cued pick, "Auto DJ: the next track is ready, press play"; a
+    session's first pick random because its track has no row, "This
+    track has no Auto DJ neighbours yet: the next track is random"
+    (Follow the vibe) or "...: the first pick becomes the seed" (Stay on
+    seed); "No Auto DJ index: picks are random", once a switch on or a
+    boot (each Play is a session, so once a session would repeat it at
+    every album's end). A pick the queue refused says nothing. **They
+    wait while a toast with Undo is up** (`Ui::pendingNews_`: a pick
+    lands about half a second after a one-track Play starts, and would
+    take its Undo off the screen); the failure pause doesn't wait. A tap
+    on Undo, or Auto DJ switched off, drops what waits. When a pick takes
+    the listener's undo (`appendQuiet()`, above), main.cpp calls
+    `Ui::queueUndoDropped()` and the Undo toast goes (`[ui] the Undo toast
+    went: Auto DJ's pick took the undo`).
+  - **UiHost's Auto DJ calls** (main.cpp's `MainUiHost`, into
+    `app/AutoDj`): `autoDjSetOn()`, `autoDjSetMode()`, `autoDjSetFloor()`,
+    `autoDjSetMatch()` (applied, saved, logged; true when changed);
+    `autoDjStart()` (the button: `autodjview::Started` Played, NoTrack,
+    NoIndex or Refused, Refused behind the fence or with no memory);
+    `autoDjFromHere(track)` (false behind the fence or with no memory);
+    `autoDjHasNeighbours(track)` (the sheet's first row);
+    `autoDjMarked(key)` (the DJ mark). Into the UI, main.cpp calls
+    `Ui::autoDjNews()` and `Ui::queueUndoDropped()` after Auto DJ's step
+    (the loop's pass, above).
 - **Device info** (Output > About > Device info, `PageKind::DeviceInfo`,
   OutputPage's fourth kind of page): what the boot screen used to list,
   and a little more, one row each, a label (Small) over its value (Body,
@@ -3242,9 +3537,10 @@ Queue, Dance and Output (with its Pair and About pages).
   closes itself when they connect after all or the speaker becomes the
   output. A Library Play or a Queue Play now that waits says so in its
   note ("Waiting for SPYDRONE: One More Time"). Now Playing with nothing
-  queued: "Nothing playing", Open Library, Shuffle all. With nothing
-  queued the A/B/C clicks are inert: a short double buzz instead of the
-  tap tick (`ButtonPolicy::Transport::idle()`; the input layer plays the
+  queued: "Nothing playing", Open Library, Shuffle all (or Auto DJ in its
+  place while the card has a usable Auto DJ index: above). With nothing
+  queued the A/B/C clicks are inert, Auto DJ on or not: a short double
+  buzz instead of the tap tick (`ButtonPolicy::Transport::idle()`; the input layer plays the
   buttons' feedback once the policy has acted).
 - **Dance** (the dancer's box, the beat and the dancer's name around it; no
   tap zone at the bottom, which sat over BtnC).
@@ -3632,10 +3928,20 @@ their own (the player stopped first, so nothing follows them).
    transfer's thumbnails, read since N10; the records' lengths are the
    index's); the Output tab's Library row and Rescan tags (METADATA.md
    3.3.6); a double buzz for inert buttons.
-3. **AutoDJ:** the transfer writes a similar-tracks table (MPDJ: top-K
-   neighbours per track from mStream's embeddings, METADATA.md 2.13) that
-   the player walks with mStream's session-centroid scoring plus its
-   BPM/key/artist filters.
+3. **AutoDJ:** the transfer writes the AutoDJ index (MPDJ v2,
+   [AUTODJ-INDEX.md](AUTODJ-INDEX.md), the format decided 2026-10-13): per
+   track a 512-byte slot of 169 neighbours from mStream's embeddings (the
+   exact 84 nearest, then a spread sample down to level 140, cosine
+   0.547). **The player's Auto DJ is built** (2026-10-14, for 0.11.0:
+   [AUTODJ.md](AUTODJ.md)): it reads the anchors' slots ahead, one a
+   loop pass, so a pick usually reads none (at most 2), gates on the best
+   listed score to the last 5
+   tracks that played or to the seed, with its cooldowns and its BPM/key
+   preferences, and adds a track as the queue's last one starts. Three
+   device checks ran (2026-10-13 to 16, AUTODJ.md section 14). Left: the
+   two-hop through the head in "stay on seed" (M7, only if the breaks it
+   would cut are heard), and mStream's exact DJ, a later addition to the
+   file (cell-ordered codes, AUTODJ-INDEX.md Appendix A, provisional).
 4. **Server discovery without mDNS** (it doesn't work in Docker installs), then
    the device-code pairing flow.
 5. The rate converter's Bluetooth switch check and the 88.2/96 kHz gate
