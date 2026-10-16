@@ -198,7 +198,17 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
       ui.psramLargest = heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM);
       ui.alsoFreed = env.alsoFreed;
     }
-    uo = up->update(ui);
+    if (consoleHold_ != tagcheck::Hold::None && up->phase() == LibraryUpdate::Phase::Asked) {
+      // gs holds the worker (holdForConsole()): the step stays as asked,
+      // the scan held as Asked holds it, its wait as it was (gs's scan line
+      // says what it said before gs); its compaction and fence after gs.
+      uo = lastUpdate_;
+      uo.act = LibraryUpdate::Do::None;
+      uo.wantWorker = false;
+      uo.holdScan = true;
+    } else {
+      uo = up->update(ui);
+    }
     // The fence goes up only once the build can start at once: the task
     // first (no internal RAM for it: the step waits, the index untouched).
     if (uo.wantWorker) worker_.ensure(now);
@@ -232,7 +242,9 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   in.running = worker_.running();
   // Internal RAM's lowest while a step runs (gs; L3 and L4).
   if (in.running != Job::None) worker_.noteInternal(static_cast<uint32_t>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
-  const bool free = !worker_.busy();
+  // (While gs waits for the step under way, nothing is handed:
+  // holdForConsole().)
+  const bool free = !worker_.busy() && consoleHold_ != tagcheck::Hold::Worker;
   if (free) {
     // (Not in the pass that puts the fence up: Thumbs' pools go with it.)
     in.cover = covers && thumbs && thumbs->wantsCover(now) && uo.act != LibraryUpdate::Do::Fence;
@@ -242,10 +254,15 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
       // (the step would build from tags.bin alone).
       in.walk = (!uo.holdScan || jobs_.walking()) && jobs_.walkWork();
       in.compact = (jobs_.compactWork() || uo.compact) && !(uo.compact && lastCompactFailed_);
+      // While gs reads the records, no compaction (it replaces tags.bin
+      // under them): it waits for gs's last line, and the scan with it, as
+      // it waits for any compaction.
+      const bool compactHeld = in.compact && consoleHold_ == tagcheck::Hold::Records;
+      if (compactHeld) in.compact = false;
       // The scan once the boot's walk has said what D's to-do is (3.3.9);
       // not while the update step is asked or under way (the index is the
       // build's, then the save's).
-      const bool held = uo.holdScan || uo.updating;
+      const bool held = uo.holdScan || uo.updating || compactHeld;
       if (!held && !in.walk && !in.compact && bootWalkDone_) sources(in, src);
       // The scan's end: nothing for it anywhere, no walk under way or asked.
       const bool scanWork = in.playingPending || in.queueNextPending || in.queueSoonPending || in.shownPending ||
@@ -271,7 +288,9 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   const ScanScheduler::Out o = sched_.update(in);
   if (o.batteryHeld) Serial.println("[card] the battery is below 10%: the scan waits for USB or 15%");
   if (o.batteryReleased) Serial.println("[card] the battery floor lifted: the scan goes on");
-  lastWait_ = o.wait;
+  // (While gs waits for the step under way, the wait it will report is the
+  // one before it, as when it blocked the loop: holdForConsole().)
+  if (consoleHold_ != tagcheck::Hold::Worker) lastWait_ = o.wait;
   if (in.running != Job::None) {
     worker_.setPriority(o.priority);
     // A wait came, or a list moves: the slice under way ends after its unit.
@@ -300,6 +319,7 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
     if (jobs_.prepare(o.job, o.source, rel, len, now) && worker_.start(o.job, o.priority, stepEntry, this, now)) {
       if (o.job == Job::Compact) {
         compacting_ = true;
+        ++compactions_;
         compactReads_ = card.cardReads;
         compactSectors_ = card.cardReadSectors;
         compactReadUs_ = card.cardReadUs;
@@ -319,7 +339,8 @@ void CardTasks::loop(ScanScheduler::In in, const Sources& src, ui::Thumbs* thumb
   // is a FatFs open, about 1 s of the SD driver's retries on a pulled card),
   // and its memory back once it has nothing.
   if (active_ && !worker_.busy()) {
-    if (jobs_.chunkPending() && now - lastScanStepMs_ >= kChunkIdleMs) jobs_.idleFlush(now);
+    if (consoleHold_ != tagcheck::Hold::Worker && jobs_.chunkPending() && now - lastScanStepMs_ >= kChunkIdleMs)
+      jobs_.idleFlush(now);
     if (now - lastScanStepMs_ >= kTrimMs && !jobs_.restWork()) jobs_.trim();
   }
 }
@@ -627,6 +648,12 @@ bool CardTasks::waitIdle(uint32_t maxMs) {
   return ok;
 }
 
+void CardTasks::holdForConsole(tagcheck::Hold h) {
+  // (prepare() clears the cut for the next step.)
+  if (h == tagcheck::Hold::Worker && consoleHold_ != tagcheck::Hold::Worker) jobs_.cutSlice();
+  consoleHold_ = h;
+}
+
 void CardTasks::flushNow() {
   if (!active_) return;
   waitIdle(5000);
@@ -721,6 +748,9 @@ void CardTasks::report() const {
   // task (each life's own mark starts again), internal RAM's lowest while a
   // step ran (sampled at each step's start and end and each loop pass
   // during it); and internal RAM's lowest since the boot.
+  // "up" while the task is alive (a step in its last kIdleExitMs: a scan
+  // under way keeps it up), "not running" once it ended itself; a step
+  // under way is the waits line's "now:".
   const uint32_t internalMin = worker_.internalMin();
   char lowest[24] = "(no step)";
   if (internalMin != UINT32_MAX) snprintf(lowest, sizeof(lowest), "%lu B", (unsigned long)internalMin);

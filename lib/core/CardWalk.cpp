@@ -92,6 +92,7 @@ bool StreamedTransfer::advance() {
         have_ = true;
         return true;
       case mptg::Walker::Step::Folder:
+      case mptg::Walker::Step::Checking:  // (never: no setEndPiece())
         break;
       case mptg::Walker::Step::End:
       case mptg::Walker::Step::Bad:

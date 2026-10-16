@@ -141,8 +141,18 @@ public:
   // libraryChanged() follows.
   void libraryUpdating();
   // ---- for the card worker (app/CardTasks, ScanScheduler's inputs) ----
-  // A list moves (the page's animating(): a drag, a fling, a snap).
-  bool listMoving() const { return started_ && !suspended_ && page_ && page_->animating(); }
+  // A list moves (the page's animating(): a drag, a fling, a snap). None
+  // while its page draws no frame: the screen dark, identify()'s banner, a
+  // modal over it (loop() draws the page under none of them). The page
+  // then owes its list's frame to the wake, or to the modal's end (a
+  // reload in the dark leaves the list "animating" until then, and so does
+  // a fling a dialog that opened by itself caught: the headphones lost, a
+  // play that failed), and on 2026-10-14 that held the library update's
+  // save 260 s with the screen off. (ScanScheduler::listHolds() holds
+  // nothing for one in the dark either.)
+  bool listMoving() const {
+    return started_ && !suspended_ && !dark_ && !identifying_ && !modalUp() && page_ && page_->animating();
+  }
   // A cover may be made now: the UI is up and lit.
   bool coversAllowed() const { return started_ && !suspended_ && !dark_ && !identifying_; }
   // The Library tab's open album, artist or folder: its tracks (the scan's

@@ -3402,6 +3402,20 @@ void setup() {
       if (cardTasks) cardTasks->resetStats();
     };
     j.idle = [] { return !cardTasks || cardTasks->waitIdle(10000); };
+    // gs reads the records a piece a loop pass: the step under way taken
+    // in first, no new compaction meanwhile and D not read while one is
+    // under way (gt reads nothing then: it says so), no piece while a list
+    // moves on a lit screen (TagConsole reads the card's guard's remounts
+    // itself).
+    j.hold = [](tagcheck::Hold h) {
+      if (cardTasks) cardTasks->holdForConsole(h);
+    };
+    j.busy = [] { return cardTasks && cardTasks->worker().busy(); };
+    j.replacing = [] { return cardTasks && cardTasks->replacing(); };
+    j.compactions = []() -> uint32_t { return cardTasks ? cardTasks->compactions() : 0; };
+    j.listMoving = [] { return userInterface && userInterface->listMoving(); };
+    // (CardTasks' ScanScheduler::In::dark: nothing drawn.)
+    j.dark = [] { return !userInterface || !userInterface->coversAllowed(); };
     tc->setJobs(j);
   }
   // Auto DJ: its settings, and the index the card's root names, opened and

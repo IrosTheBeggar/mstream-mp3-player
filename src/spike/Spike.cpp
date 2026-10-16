@@ -79,6 +79,7 @@ void Spike::closeAllBut(Screen keep) {
 void Spike::loop(uint32_t nowMs) {
   if (input_) input_->loop(nowMs);
   if (scroll_) scroll_->loop(nowMs);
+  if (tags_) tags_->loop(nowMs);  // gs's reads, a piece a pass
   const bool owned = ownsScreen();
   if (owned_ && !owned && released_) released_();
   owned_ = owned;

@@ -36,4 +36,21 @@ uint32_t leftSinceArm();
 // The lowest since the boot, across arms.
 uint32_t lowestLeft();
 
+// The console's line after a command: "[console] <key><arg>: the loop
+// task's stack: <left> B never used during it (...)", LOW under kMinLeft.
+void printLine(char key, const char* arg, uint32_t left);
+
+// A command whose work goes on over the next loop passes (gs reads the
+// card's records a piece a pass: app/TagConsole) prints its line at its
+// end: holdLine() while the command runs; the console's lineHeld() then
+// keeps the line (its depth so far) instead of printing it; each piece
+// after it is measured on its own (arm() before it, leftSinceArm() after),
+// and heldLine() prints the line with the least of them all.
+void holdLine();
+// The console, after a command (`left`: its depth): true, it held its
+// line (kept until heldLine()); false, print it as ever.
+bool lineHeld(char key, const char* arg, uint32_t left);
+// The held line, now: `left` the least its pieces left.
+void heldLine(uint32_t left);
+
 }  // namespace loopstack
