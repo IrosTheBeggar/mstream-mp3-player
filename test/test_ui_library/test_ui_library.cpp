@@ -3688,7 +3688,10 @@ void test_auto_dj_texts_fit() {
       fits(small, tr(t), kAutoDjSwitchW);
     }
     // The value rows: each value beside its title, or on the line under
-    // it; the hints (and why they're dim) on that line.
+    // it; the hints (and why they're dim) on that line. Dim without the
+    // index, the value shows too: beside its title with why under it, or
+    // under it in why's place (until 2026-10-16 why took that line, and
+    // Match strictness's value went unseen in de, es, it and pt).
     struct Value {
       S title;
       std::vector<std::string> values;
@@ -3704,15 +3707,20 @@ void test_auto_dj_texts_fit() {
         {S::autodj_anchor, {tr(S::autodj_anchor_rolling), tr(S::autodj_anchor_locked)}},
         {S::autodj_strictness, steps},
     };
+    const char* needs = tr(S::autodj_needs_index);
     for (const Value& r : rows) {
       const char* title = tr(r.title);
       fits(body, title, kAutoDjLineW);
       for (const std::string& v : r.values) {
         const int vw = small.width(v.c_str());
+        const char* dim = autoDjSecondLine(body.width(title), vw, v.c_str(), needs);
+        fits(small, dim, kAutoDjLineW);
         if (autoDjValueBeside(body.width(title), vw)) {
           fits(small, v.c_str(), autoDjValueRoom(body.width(title)));
+          TEST_ASSERT_EQUAL_STRING(needs, dim);
           continue;
         }
+        TEST_ASSERT_EQUAL_STRING(v.c_str(), dim);
         fits(small, v.c_str(), kAutoDjLineW);
         TEST_ASSERT_TRUE_MESSAGE(l != uistr::Lang::En, v.c_str());  // English: beside its title
         char m[160];

@@ -284,9 +284,11 @@ cued at 0:00, its pause's marks back; stopped: stopped), else in the
 player's state at the Undo (Shuffle all started playing, so it plays
 unless paused since). An Undo never starts what was silent: until the
 device check of 2026-10-14 it took the state at the Undo alone, so a
-Play over a paused queue, then its Undo, played the old queue. A start
-point it had is gone, and the Queue's "added" marks stay cleared. Repeat
-isn't touched by Shuffle all.
+Play over a paused queue, then its Undo, played the old queue. The
+device check of 2026-10-15 saw the rule hold for every Play's and
+Clear's Undo it ran (AUTODJ.md 9.4). A start point it had is gone, and
+the Queue's "added" marks stay cleared. Repeat isn't touched by Shuffle
+all.
 
 An Undo toast still up after a toggle would answer "Nothing to undo"
 (Ui.cpp:1280). Ui hides it instead (section 4.5). So too after the

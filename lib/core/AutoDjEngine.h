@@ -200,6 +200,12 @@ struct Pick {
   bool tempoBreak = false;  // a known BPM outside the tight windows of a known reference
   bool keyBreak = false;    // a known key outside the anchor's 6 codes
   uint8_t reads = 0;        // slot reads this pick (0-kReadsPerPick)
+  // The rows this pick's reads put in the damaged ring (a CRC that failed
+  // again: read twice here, or suspect since a read ahead), for the
+  // console's line, once a row: a damaged row isn't read again until the
+  // file is reopened. (A read ahead's says so in its SlotResult.)
+  uint8_t damaged = 0;
+  uint16_t damagedRow[kReadsPerPick] = {};
   bool broken = false;      // the file is broken: absent from now (until fileReopened())
   uint16_t candidates = 0, gated = 0, inClass = 0;
 };

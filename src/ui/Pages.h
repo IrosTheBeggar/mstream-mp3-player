@@ -579,8 +579,10 @@ private:
 // Harmonic mixing (switches), and a status row that is no control (the
 // index's coverage, or why there is none, or why Auto DJ waits). Without a
 // usable index the four settings are dim, "needs an Auto DJ index" under
-// each, a tap a note; the switch and the status stay live. Each change
-// saved at once (NVS, app/AutoDjStore) and applied from the next pick.
+// each (a value that can't sit beside its title, Match strictness's in
+// some languages, there instead), a tap a note; the switch and the status
+// stay live. Each change saved at once (NVS, app/AutoDjStore) and applied
+// from the next pick.
 // Device info: what the boot screen used to list (the board, the power
 // chip, the IMU, the chip, flash, PSRAM, the last reset, the battery, the
 // library, internal RAM), with the CPU's clock, the uptime, the firmware

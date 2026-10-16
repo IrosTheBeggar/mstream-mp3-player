@@ -459,15 +459,16 @@ The rules that keep it deadlock- and glitch-free:
   Behind the fence the trigger says "the library update's fence" and
   nothing is picked.
 - **The give-back** (`LibraryUpdate::setGiveBack()`, main.cpp's
-  `autoDjGiveBack()`): the join's blocks sit at the top of PSRAM's
-  largest free block (`Join::setPlacement()`), which the memory check
-  can't see past. When the check fails only because the new track table
-  fits no block (not for room, and not after `gb!`), the hook releases the
-  join, measures PSRAM again and the check runs once more, the join's
-  bytes taken out of `alsoFreed`. Auto DJ joins again after the step's
-  Live, or at once when the step defers or fails. So Auto DJ never puts a
-  library update off to the next boot (logged: `[dj] the library
-  update's memory check: the join given back ...`).
+  `autoDjGiveBack()`): the join's blocks that fit no smaller free block
+  sit at the top of PSRAM's largest free block (`Join::setPlacement()`),
+  which the memory check can't see past. When the check fails only
+  because the new track table fits no block (not for room, and not after
+  `gb!`), the hook releases the join, measures PSRAM again and the check
+  runs once more, the join's bytes taken out of `alsoFreed`. Auto DJ
+  joins again after the step's Live, or at once when the step defers or
+  fails. So Auto DJ never puts a library update off to the next boot
+  (logged: `[dj] the library update's memory check: the join given back
+  ...`).
 
 ### The loop task's stack
 
@@ -3403,10 +3404,13 @@ Queue, Dance and Output (with its Pair and About pages).
       to play").
     Without a usable index the four settings are dim with "needs an Auto
     DJ index" under each, and a tap on one gives that note; the switch
-    and the status stay live. Each change is saved at once (NVS
-    `autodj`, schema 4) and applies from the next pick. Switched on here
-    with nothing queued and a usable index: the toast "Auto DJ on: it
-    follows the next track you play", and nothing starts.
+    and the status stay live. A value that can't sit beside its title
+    (Match strictness's in de, es, it and pt) takes that line instead,
+    dim or live (`uitext::autoDjSecondLine()`), so every language shows
+    it. Each change is saved at once (NVS `autodj`, schema 4) and applies
+    from the next pick. Switched on here with nothing queued and a usable
+    index: the toast "Auto DJ on: it follows the next track you play",
+    and nothing starts.
   - **The empty states' button** (Now Playing's and the Queue's):
     [Open Library] [Auto DJ] in Shuffle all's place while the card has a
     usable index and a library (`emptyButton()`); without one, Shuffle
@@ -3933,12 +3937,11 @@ their own (the player stopped first, so nothing follows them).
    loop pass, so a pick usually reads none (at most 2), gates on the best
    listed score to the last 5
    tracks that played or to the seed, with its cooldowns and its BPM/key
-   preferences, and adds a track as the queue's last one starts. Left:
-   the two-hop through the head in "stay on seed" (M7, only if the
-   breaks it would cut are heard); a re-measure of the pick's CPU on the
-   device after the fix round's optimisation; and mStream's exact DJ, a
-   later addition to the file (cell-ordered codes, AUTODJ-INDEX.md
-   Appendix A, provisional).
+   preferences, and adds a track as the queue's last one starts. Three
+   device checks ran (2026-10-13 to 16, AUTODJ.md section 14). Left: the
+   two-hop through the head in "stay on seed" (M7, only if the breaks it
+   would cut are heard), and mStream's exact DJ, a later addition to the
+   file (cell-ordered codes, AUTODJ-INDEX.md Appendix A, provisional).
 4. **Server discovery without mDNS** (it doesn't work in Docker installs), then
    the device-code pairing flow.
 5. The rate converter's Bluetooth switch check and the 88.2/96 kHz gate

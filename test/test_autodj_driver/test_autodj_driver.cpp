@@ -24,7 +24,8 @@
 //   their path's hash in DJPH, which agrees with the join); Dp; Dn's dry
 //   run on a copy (the live session untouched);
 // - a due pick waiting while the decoder refills the ring from empty; a
-//   quick skip's row (none for a file the index doesn't have).
+//   quick skip's row (none for a file the index doesn't have);
+// - a slot whose CRC fails again at a pick: the pass names its row, once.
 // An AutoDJ index written with mpdj::write for a made-up library, joined
 // (AutoDjJoin), its slots read through mpdj::Table::slot(), and a real
 // PlaybackController over a small backend.
@@ -36,6 +37,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -114,10 +116,15 @@ public:
       if (why) *why = cc::Why::Io;
       return mpdj::SlotRead::Damaged;
     }
+    if (crc.count(row)) {  // (the slot's bytes changed: its CRC fails)
+      if (why) *why = cc::Why::DjSlotCrc;
+      return mpdj::SlotRead::Damaged;
+    }
     return t_.slot(row, bytes, nullptr, count, why);
   }
   int reads = 0;
   bool fail = false;
+  std::set<uint16_t> crc;
 
 private:
   const mpdj::Table& t_;
@@ -672,6 +679,59 @@ void test_a_failed_read_ahead_waits() {
   TEST_ASSERT_TRUE(a.prefetch == autodj::SlotResult::Ok);
   TEST_ASSERT_EQUAL_UINT8(0, r.dj.engine().damagedRows());
   TEST_ASSERT_TRUE(r.dj.engine().stats().ioSkips >= 1);
+}
+
+// A slot whose CRC fails on the read ahead and again when the next pick
+// reads it (the device check of 2026-10-15: an album's slots changed on
+// the card): the read ahead's pass says its first failure (Suspect), the
+// pick's pass names the row it put in the damaged ring (the glue's "read
+// at the pick, row R: DAMAGED" line), and no later pass names it again:
+// it isn't read again.
+void test_a_slot_damaged_at_the_pick_is_named_once() {
+  Rig r;
+  TEST_ASSERT_TRUE(r.dj.setOn(true));
+  r.playOne(r.card.trackOf(5));
+  Pass a = r.playTo(700);
+  TEST_ASSERT_TRUE(a.added);  // (its row joined the ring, unread)
+  const uint16_t row = a.pick.row;
+  TEST_ASSERT_TRUE(row != autodj::kNoRow);
+  TEST_ASSERT_EQUAL_UINT8(0, a.pick.damaged);
+  r.reader.crc.insert(row);
+  a = r.pass();
+  TEST_ASSERT_TRUE(a.prefetched);
+  TEST_ASSERT_EQUAL_UINT16(row, a.prefetchRow);
+  TEST_ASSERT_TRUE(a.prefetch == autodj::SlotResult::Suspect);
+  TEST_ASSERT_FALSE(r.dj.engine().rowDamaged(row));
+  a = r.end();  // the pick starts, the last entry: the next pick reads its slot
+  TEST_ASSERT_TRUE(a.picked && a.added);
+  TEST_ASSERT_EQUAL_UINT8(1, a.pick.reads);
+  TEST_ASSERT_EQUAL_UINT8(1, a.pick.damaged);
+  TEST_ASSERT_EQUAL_UINT16(row, a.pick.damagedRow[0]);
+  TEST_ASSERT_FALSE(a.pick.random);  // (the seed's slot, cached, still anchors)
+  TEST_ASSERT_TRUE(r.dj.engine().rowDamaged(row));
+  TEST_ASSERT_EQUAL_UINT32(1, r.dj.engine().stats().damaged);
+  const int reads = r.reader.reads;
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 5; ++j) {
+      a = r.playTo(700);  // (it plays: no failure pause)
+      TEST_ASSERT_FALSE(a.prefetched && a.prefetchRow == row);
+    }
+    a = r.end();
+    TEST_ASSERT_TRUE(a.picked && a.added);
+    TEST_ASSERT_EQUAL_UINT8(0, a.pick.damaged);
+  }
+  TEST_ASSERT_EQUAL_UINT32(1, r.dj.engine().stats().damaged);
+  TEST_ASSERT_TRUE(r.reader.reads > reads);  // (the new picks' slots: read ahead or at the pick)
+  // Read twice at one pick (no read ahead between): named the same way.
+  const uint16_t next = a.pick.row;
+  TEST_ASSERT_TRUE(next != row);
+  r.reader.crc.insert(next);
+  a = r.end();
+  TEST_ASSERT_TRUE(a.picked);
+  TEST_ASSERT_EQUAL_UINT8(2, a.pick.reads);
+  TEST_ASSERT_EQUAL_UINT8(1, a.pick.damaged);
+  TEST_ASSERT_EQUAL_UINT16(next, a.pick.damagedRow[0]);
+  TEST_ASSERT_EQUAL_UINT32(2, r.dj.engine().stats().damaged);
 }
 
 // A snapshot at the cap: Auto DJ's append drops the listener's undo, and
@@ -1567,6 +1627,7 @@ int main(int, char**) {
   RUN_TEST(test_a_finished_queue_gets_a_cued_pick_and_no_quick_skip);
   RUN_TEST(test_picks_are_appended_marked_and_keep_the_undo);
   RUN_TEST(test_a_failed_read_ahead_waits);
+  RUN_TEST(test_a_slot_damaged_at_the_pick_is_named_once);
   RUN_TEST(test_the_undo_it_drops_is_said);
   RUN_TEST(test_a_pick_removed_before_it_played_leaves_the_ring);
   RUN_TEST(test_the_holds_add_nothing);

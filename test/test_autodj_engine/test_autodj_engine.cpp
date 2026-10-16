@@ -23,8 +23,9 @@
 // anywhere; empty lists; the read budget and the prefetch; the runs
 // following the maps (mapsChanged(), runDue(), moved arrays, arrays filled
 // again unannounced); the cache keeping the ring and the pin; damaged (a
-// damaged pin giving way), failed and broken slots, in hand-made readers
-// and in the hardening files; picks by track id; the empty states' button;
+// damaged pin giving way; the rows a pick's reads damaged, named once),
+// failed and broken slots, in hand-made readers and in the hardening
+// files; picks by track id; the empty states' button;
 // the same seed giving the same session; no allocation in pick(); the
 // console's dry-run copy.
 // Run: pio test -e native
@@ -1223,6 +1224,81 @@ void test_every_anchor_damaged_gives_a_random_pick() {
   TEST_ASSERT_FALSE(f->pick(settings(), t.in(r.track)).random);
 }
 
+// A pick names the rows its reads put in the damaged ring (the console's
+// "read at the pick, row R: DAMAGED" line), each once: a row suspect since
+// a read ahead whose CRC fails again at the pick (1 read: the device check
+// of 2026-10-15), a row read twice in one pick. Not a suspect the budget
+// leaves, a row a read ahead damaged (its line is the read ahead's), a
+// read that failed (Io), or a damaged row later (never read again).
+void test_a_pick_names_the_rows_it_found_damaged() {
+  Table t(full(30));
+  const Maps* m = &t.maps.m;
+  t.reader.damaged = {3, 4};
+  auto e = engine();
+  e->newSession(1, 0, m);
+  for (uint32_t tr : {3, 4}) e->trackStarted(tr, m, false);  // the ring: 0, 3, 4
+  uint16_t row = 0;
+  TEST_ASSERT_TRUE(e->prefetchDue(settings(), &row));
+  TEST_ASSERT_EQUAL(4, row);
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Suspect), static_cast<int>(e->prefetch(t.reader, 4)));
+  // Row 4 fails again (1 read: damaged, named), row 3 once (suspect: the
+  // budget's second read), row 0 left out: a random pick.
+  const Pick p = e->pick(settings(), t.in(4));
+  TEST_ASSERT_TRUE(p.ok && p.random);
+  TEST_ASSERT_EQUAL(2, p.reads);
+  TEST_ASSERT_EQUAL(1, p.damaged);
+  TEST_ASSERT_EQUAL(4, p.damagedRow[0]);
+  TEST_ASSERT_TRUE(e->rowDamaged(4));
+  TEST_ASSERT_FALSE(e->rowDamaged(3));
+  // The random pick's row joined the ring (the ring: 0, 3, 4, its row),
+  // so it anchors now, read first (1 read, ok); row 4 is skipped
+  // (damaged); row 3, suspect since, fails again: named (the second
+  // read); row 0 left out again.
+  const Pick q = e->pick(settings(), t.in(p.track));
+  TEST_ASSERT_FALSE(q.random);
+  TEST_ASSERT_EQUAL(2, q.reads);
+  TEST_ASSERT_EQUAL(1, q.damaged);
+  TEST_ASSERT_EQUAL(3, q.damagedRow[0]);
+  TEST_ASSERT_EQUAL(2, e->stats().damaged);
+  TEST_ASSERT_EQUAL(1, t.reader.count[p.row]);
+  TEST_ASSERT_EQUAL(0, t.reader.count[0]);
+  // Named once: rows 3 and 4 aren't read again.
+  const int reads3 = t.reader.count[3], reads4 = t.reader.count[4];
+  const Pick r = e->pick(settings(), t.in(q.track));
+  TEST_ASSERT_EQUAL(0, r.damaged);
+  TEST_ASSERT_EQUAL(reads3, t.reader.count[3]);
+  TEST_ASSERT_EQUAL(reads4, t.reader.count[4]);
+  // Read twice in one pick: named.
+  t.reader.damaged = {5};
+  auto f = engine();
+  f->newSession(1, 5, m);
+  const Pick s = f->pick(settings(), t.in(5));
+  TEST_ASSERT_TRUE(s.random);
+  TEST_ASSERT_EQUAL(2, s.reads);
+  TEST_ASSERT_EQUAL(1, s.damaged);
+  TEST_ASSERT_EQUAL(5, s.damagedRow[0]);
+  // Damaged by two reads ahead: the pick reads nothing and names nothing.
+  t.reader.damaged = {6};
+  auto g = engine();
+  g->newSession(1, 6, m);
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Suspect), static_cast<int>(g->prefetch(t.reader, 6)));
+  TEST_ASSERT_EQUAL(static_cast<int>(SlotResult::Damaged), static_cast<int>(g->prefetch(t.reader, 6)));
+  const Pick u = g->pick(settings(), t.in(6));
+  TEST_ASSERT_TRUE(u.random);
+  TEST_ASSERT_EQUAL(0, u.reads);
+  TEST_ASSERT_EQUAL(0, u.damaged);
+  // A read that failed (the card pulled): skipped, never damaged.
+  Table w(full(30));
+  w.reader.io = {7};
+  auto h = engine();
+  h->newSession(1, 7, &w.maps.m);
+  const Pick v = h->pick(settings(), w.in(7));
+  TEST_ASSERT_EQUAL(1, v.reads);
+  TEST_ASSERT_EQUAL(0, v.damaged);
+  TEST_ASSERT_EQUAL(1, h->stats().ioSkips);
+  TEST_ASSERT_FALSE(h->rowDamaged(7));
+}
+
 void test_a_broken_slot() {
   Table t(full(12));
   t.reader.broken = {5};
@@ -1440,6 +1516,7 @@ int main(int, char**) {
   RUN_TEST(test_the_cache_keeps_the_ring_and_the_pin);
   RUN_TEST(test_damaged_failed_and_the_ring_of_8);
   RUN_TEST(test_every_anchor_damaged_gives_a_random_pick);
+  RUN_TEST(test_a_pick_names_the_rows_it_found_damaged);
   RUN_TEST(test_a_broken_slot);
   RUN_TEST(test_damaged_and_broken_in_real_files);
   RUN_TEST(test_no_index_by_track_id);

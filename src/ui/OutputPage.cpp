@@ -1083,8 +1083,10 @@ void OutputPage::drawAutoDjSwitch(ListView::Row& r, const char* title, const cha
 // A value row: the title and its value (the section's blue) on the first
 // line when the value fits whole beside it (uitext::autoDjValueBeside()),
 // the hint under them; else the value on the second line, in the hint's
-// place (the value is the setting). Dim without the index: the hint is
-// why, and the value beside only when it fits there.
+// place (the value is the setting). Dim without the index the same, the
+// hint being why ("needs an Auto DJ index"): a value under its title
+// takes that line too (uitext::autoDjSecondLine(); UiText.h's Output >
+// Auto DJ note says why).
 void OutputPage::drawAutoDjValue(ListView::Row& r, const char* title, const char* value, const char* hint,
                                  bool live) {
   using namespace uitext;
@@ -1096,14 +1098,9 @@ void OutputPage::drawAutoDjValue(ListView::Row& r, const char* title, const char
   const uint16_t valueInk = live ? accent::Output : col::FAINT;
   const bool beside = autoDjValueBeside(tw, vw);
   f.draw(r.c, Font::Body, title, x, 13, beside ? kAutoDjLineW - vw - kAutoDjValueGap : kAutoDjLineW, ink, r.bg);
-  if (beside) {
-    f.draw(r.c, Font::Small, value, x + kAutoDjLineW, 13, vw, valueInk, r.bg, Fonts::Align::Right);
-    f.draw(r.c, Font::Small, hint, x, 31, kAutoDjLineW, col::DIM, r.bg);
-  } else if (live) {
-    f.draw(r.c, Font::Small, value, x, 31, kAutoDjLineW, valueInk, r.bg);
-  } else {
-    f.draw(r.c, Font::Small, hint, x, 31, kAutoDjLineW, col::DIM, r.bg);
-  }
+  if (beside) f.draw(r.c, Font::Small, value, x + kAutoDjLineW, 13, vw, valueInk, r.bg, Fonts::Align::Right);
+  f.draw(r.c, Font::Small, autoDjSecondLine(tw, vw, value, hint), x, 31, kAutoDjLineW, beside ? col::DIM : valueInk,
+         r.bg);
 }
 
 // A tap on a row of Output > Auto DJ: saved and applied at once (app/AutoDj,

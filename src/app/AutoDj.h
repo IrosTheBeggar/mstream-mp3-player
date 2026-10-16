@@ -201,7 +201,8 @@ private:
   void stepJob(const Env& env);
   void report(const autodj::Pass& p);
   void logSession(autodj::Began why, uint32_t track);
-  void logPick(const autodj::Pass& p, const char* how);
+  void logPick(const autodj::Pass& p, const char* how);  // the pick's line, and the rows its reads found damaged
+  void logPickLine(const autodj::Pass& p, const char* how);
   void status(const Env& env);
   void dryRunSummary(bool stopped);
   void stopDryRun(const char* by);

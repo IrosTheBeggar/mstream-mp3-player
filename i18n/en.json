@@ -3693,7 +3693,7 @@
   },
   "autodj.strictness_value": "{0}% or closer",
   "@autodj.strictness_value": {
-    "context": "Match strictness's value: a pick at least this similar. The mobile app's words. Beside 'Match strictness' when it fits whole there (142 px in English), else on the row's second line.",
+    "context": "Match strictness's value: a pick at least this similar. The mobile app's words. Beside 'Match strictness' when it fits whole there (142 px in English), else on the row's second line (also when the row is dim without an index: in the place of 'needs an Auto DJ index').",
     "room": {
       "font": "Small",
       "px": 288,
@@ -3757,7 +3757,7 @@
   },
   "autodj.needs_index": "needs an Auto DJ index",
   "@autodj.needs_index": {
-    "context": "The line of the Auto DJ page's rows that need the card's index (Anchor, Match strictness, BPM continuity, Harmonic mixing) when it has none: they are drawn dim.",
+    "context": "The line of the Auto DJ page's rows that need the card's index (Anchor, Match strictness, BPM continuity, Harmonic mixing) when it has none: they are drawn dim. A value that doesn't fit beside its row's title (Match strictness's in some languages) takes this line instead, dim too.",
     "room": [
       {
         "font": "Small",

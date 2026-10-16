@@ -553,6 +553,8 @@ Pick Engine::pick(const Settings& s, const PickIn& in) {
         while (out.reads < kReadsPerPick) {
           ++out.reads;
           res = read(*in.slots, r);
+          // (At most one a read: within kReadsPerPick.)
+          if (res == SlotResult::Damaged && out.damaged < kReadsPerPick) out.damagedRow[out.damaged++] = r;
           if (res != SlotResult::Suspect) break;
         }
         if (res == SlotResult::Broken) break;

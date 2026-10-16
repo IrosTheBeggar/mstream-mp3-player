@@ -550,6 +550,19 @@ void AutoDj::logSession(Began why, uint32_t track) {
 
 void AutoDj::logPick(const Pass& p, const char* how) {
   const autodj::Pick& k = p.pick;
+  logPickLine(p, how);
+  // A slot whose CRC failed again at this pick's read (read twice here, or
+  // suspect since a read ahead): in the damaged ring from now, as the read
+  // ahead's "DAMAGED" line says for its own. Once a row: a damaged row
+  // isn't read again until the file is reopened.
+  for (uint8_t i = 0; i < k.damaged; ++i) {
+    Serial.printf("[dj] read at the pick, row %u: %s\n", (unsigned)k.damagedRow[i],
+                  slotName(autodj::SlotResult::Damaged));
+  }
+}
+
+void AutoDj::logPickLine(const Pass& p, const char* how) {
+  const autodj::Pick& k = p.pick;
   if (!k.ok) {
     Serial.printf("[dj] %s: no track (%s): again in %lu s\n", how,
                   joined() ? "nothing to draw from" : "no index and no library track",

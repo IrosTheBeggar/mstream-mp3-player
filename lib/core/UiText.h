@@ -620,8 +620,14 @@ inline constexpr int kDeviceInfoW = 312 - 8 - kDeviceInfoX;
 // the value fits whole in what the title leaves it less kAutoDjValueGap
 // (autoDjValueBeside()); else the value on the second line, in the hint's
 // place: the value is the setting. The hint (Small, dim) on the second
-// line. The status row (not a control): two lines of Small. Each line
-// kAutoDjLineW wide.
+// line. Dim without a usable index, the same: the hint is why ("needs an
+// Auto DJ index"), and a value under its title takes its place there too
+// (Match strictness's in de, es, it and pt). The value and why on that
+// line together ("{value} · {why}") fit only in it (271 px; de 324, es
+// 334, pt 361 of 288); the rows around it and the status row say why, and
+// a tap gives the note. (Until 2026-10-16 a dim row drew why there, and
+// the value went unseen in those four.) The status row (not a control):
+// two lines of Small. Each line kAutoDjLineW wide.
 // Output's row to it (an icon, a chevron): the title (Body) over its line
 // (Small, autodjview::rootLine()), from the icon's column (x 44) to the
 // chevron: the state and the Anchor in use when that fits whole, else the
@@ -633,6 +639,11 @@ inline constexpr int kAutoDjLineW = 312 - 8 - kAutoDjX;     // 288
 inline constexpr int kAutoDjValueGap = 16;
 constexpr int autoDjValueRoom(int titleW) { return kAutoDjLineW - titleW - kAutoDjValueGap; }
 constexpr bool autoDjValueBeside(int titleW, int valueW) { return valueW <= autoDjValueRoom(titleW); }
+// A value row's second line: the hint (dim: why) under a value beside its
+// title, else the value itself, live or dim.
+constexpr const char* autoDjSecondLine(int titleW, int valueW, const char* value, const char* hint) {
+  return autoDjValueBeside(titleW, valueW) ? hint : value;
+}
 
 // ---- the touch check and calibration (ui/CalibrationScreen; TouchCheck) ----
 // The whole screen. A 26 px header: at its left, on the pages that have one,

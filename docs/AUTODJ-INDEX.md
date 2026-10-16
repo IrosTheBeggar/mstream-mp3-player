@@ -1,6 +1,6 @@
 # AutoDJ index: `autodj-<gen>.bin` (MPDJ v2)
 
-**Status (2026-10-13; the device notes 2026-10-14):** the format of
+**Status (2026-10-13; the device notes 2026-10-16):** the format of
 record for the AutoDJ index that the transfer software writes to the card,
 mstream-terminal first. It replaces the MPDJ v1 draft that
 docs/METADATA.md 2.13 held, which never had a reader. The player's reader
@@ -977,9 +977,10 @@ docs/AUTODJ.md has the whole engine, its settings, its UI and its tests;
 this section keeps what concerns the file. Labels (Appendix C): MEASURED
 on the Core2 at 240 MHz with the synthetic test card's 19,410-row index
 (the first Auto DJ device check, 2026-10-13, on the build before the fix
-round of 2026-10-14); ESTIMATED at 20,000 tracks from the Core2's
-measured card and CPU rates; MEASURED-SYN for session figures on the
-synthetic test card; READ from the firmware's code.
+round of 2026-10-14, unless a later check's date is given: 2026-10-14,
+15 or 16); ESTIMATED at 20,000 tracks from the Core2's measured card and
+CPU rates; MEASURED-SYN for session figures on the synthetic test card;
+READ from the firmware's code.
 
 ### 11.1 At boot
 
@@ -1026,7 +1027,13 @@ synthetic test card; READ from the firmware's code.
   update's memory check can have them given back (docs/AUTODJ.md 6.2).
   Since 2026-10-14 each folder's path is hashed once (10 B a folder while
   the join runs) and a track's hash goes on from its folder's: the join's
-  CPU about half (docs/AUTODJ.md 7.3).
+  CPU about half (docs/AUTODJ.md 7.3). MEASURED 2026-10-15: 300,722 B at
+  the peak with 2,477 folders; after a library update the join took
+  73,728 B of PSRAM's largest free block (about 170 KB before), with
+  PSRAM's free at least 177,388 B while it placed its blocks. The lowest
+  of any join, 86,868 B, was a fresh join on a heap that a library
+  update with Auto DJ off had rebuilt (about 10 KB at every join before;
+  docs/AUTODJ.md 7.4).
 - **Slices:** on the loop, between frames. A slice hashes 250 folders or
   250 tracks, sorts one run, or takes what one 4 KB read of DJRF or DJPH
   holds (at most 100 full hashes confirmed); up to 8 ms of slices and one
@@ -1036,8 +1043,10 @@ synthetic test card; READ from the firmware's code.
   boot, idle; 4.6 s paused and 7.2 s with an MP3 playing, after a library
   update's fence; 30 fps kept while a list scrolled. MEASURED with them
   (2026-10-14, before the folders' hashing): 2.0 s idle, 3.8 s with the
-  MP3, 6.6-6.9 s after a fence; ESTIMATED since: about 1.1-1.3 s idle and
-  2.1-2.4 s with the MP3 (docs/AUTODJ.md 7.3).
+  MP3, 6.6-6.9 s after a fence. MEASURED with the folders' hashing
+  (2026-10-15): 1.48 s idle in 110 loop passes, 3.0 s with the MP3,
+  5.9-6.2 s after a fence (the estimates were 1.1-1.3 s, 2.1-2.4 s and
+  4.5-5 s; docs/AUTODJ.md 7.3).
 - **No whole-file check of DJSL:** Auto DJ uses the file as soon as the
   join ends. Before the join (Auto DJ off), the device can still tell
   whether a track has a row: DJPH is in hash order, so a binary search
@@ -1190,8 +1199,9 @@ follows is the design, kept for when it is built.
   engine: 0 differences). ESTIMATED (a model of the ESP32's PSRAM cache):
   PSRAM line misses a pick 2,138 → 309 at 0.55 (1,342 → 256 at 0.75;
   "stay on seed" 416 → 65); docs/AUTODJ.md's costs turn that and a host
-  benchmark into estimated device times. **The device figure is not
-  re-measured yet** (docs/AUTODJ.md's device checks, the pick CPU).
+  benchmark into estimated device times. **Re-measured on 2026-10-14:**
+  p90 0.38-1.70 ms at 240 MHz and 0.52-2.31 ms at 160 MHz, inside the
+  targets; a live soak's p50 1.32 ms, p90 1.58 ms (docs/AUTODJ.md 7.2).
 - **PSRAM** (READ and MEASURED): the join's maps and filters, 155,284 B
   at 19,410 tracks, only while Auto DJ is on (275,952 B at the join's
   peak); the engine's one block, 19,016 B (its 7 slot buffers, their
@@ -1242,7 +1252,8 @@ Their state on 2026-10-14 (docs/AUTODJ.md):
 - The per-slot check, damaged against broken (8.5): **done.** A slot whose
   CRC fails twice is not read again until the file is reopened (a ring of
   8 rows); a failed read is skipped and never counted as damage; a broken
-  slot makes the file absent until it is reopened.
+  slot makes the file absent until it is reopened. Both ran on the device
+  on 2026-10-16 (docs/AUTODJ.md 14.2, check 8).
 - The gate, with the floor clamped at selFloor (11.4); the dry fallback:
   **done**, with loosen before repeating.
 - Two-hop through the head in seed mode, with its j rule tuned (11.5):
