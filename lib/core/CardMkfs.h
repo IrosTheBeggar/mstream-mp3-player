@@ -202,11 +202,14 @@ public:
   virtual bool mkdir(const char* path) = 0;
   // A new file, whole and synced.
   virtual bool write(const char* path, const void* data, uint32_t n) = 0;
+  // After every mount(), a failed one too: FatFs keeps the object a failed
+  // f_mount() registered, and the next f_mount() on the drive (the boot's
+  // SD.begin()) would write through it once it is freed.
   virtual void unmount() = 0;
 };
 // After check(): mounted, /music and /.player made, /.player/device.txt
-// (`text`, `n` bytes: cardcontract::devicetxt's) written, let go. Ok or
-// Files.
+// (`text`, `n` bytes: cardcontract::devicetxt's) written, let go (also
+// when the mount failed). Ok or Files.
 Why finish(Files& files, const char* text, uint32_t n);
 
 // f_mkfs on the card's drive with these options, its partition set to 1:

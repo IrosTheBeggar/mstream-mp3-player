@@ -907,7 +907,9 @@ void Dialog::render() {
     tx = 14 + icon_->w + 8;
   }
   f.draw(s, Font::Bold, title_, tx, 22, kW - (icon_ ? 12 : 16) - tx, col::TXT, col::CARD);
-  char lines[3][64];
+  // (A line longer than its buffer loses its end: en.json's line_bytes for
+  // the bodies, which test_ui_strings holds every language's lines to.)
+  char lines[3][96];
   const int maxLines = status_[0] ? 2 : 3;
   const int nl =
       textfit::wrap(f.fit(Font::Small), body_, strlen(body_), kW - 32, maxLines, &lines[0][0], sizeof(lines[0]));

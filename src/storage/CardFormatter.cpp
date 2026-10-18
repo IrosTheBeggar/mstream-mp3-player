@@ -138,6 +138,8 @@ public:
     const bool ok = f_write(fil_, data, n, &put) == FR_OK && put == n;
     return f_close(fil_) == FR_OK && ok;
   }
+  // (After a failed mount too: f_mount() registered fs_ before it failed,
+  // and SD.begin()'s f_mount() would write through it once freed.)
   void unmount() override {
     if (mounted_ && hoststatus::freeCountValid(fs_->free_clst, fs_->n_fatent)) freeClusters = fs_->free_clst;
     char drv[4];

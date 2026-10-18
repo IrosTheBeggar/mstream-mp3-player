@@ -277,9 +277,9 @@ Why check(SectorCache::Device& card, const Layout& l, uint8_t* s) {
 }
 
 Why finish(Files& files, const char* text, uint32_t n) {
-  if (!files.mount()) return Why::Files;
-  const bool ok = files.mkdir("/music") && files.mkdir("/.player") && files.write("/.player/device.txt", text, n);
-  files.unmount();
+  const bool ok = files.mount() && files.mkdir("/music") && files.mkdir("/.player") &&
+                  files.write("/.player/device.txt", text, n);
+  files.unmount();  // (a failed mount's too: Files::unmount())
   return ok ? Why::Ok : Why::Files;
 }
 

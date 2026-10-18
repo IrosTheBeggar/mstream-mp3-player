@@ -106,9 +106,17 @@ int miscountingMkfs(const cardmkfs::Mkfs& o, void* ctx) {
 }
 
 // cardmkfs::Files over the model's FatFs, as storage/CardFormatter's.
+// `failMount`: the card stops answering for the mount (after the check).
 class ModelFiles : public cardmkfs::Files {
 public:
-  bool mount() override { return f_mount(&fs, "0:", 1) == FR_OK; }
+  bool mount() override {
+    ++mounts;
+    fatmodel::RamDisk* d = fatmodel::drive(0).disk;
+    if (failMount) fatmodel::drive(0).disk = nullptr;
+    const bool ok = f_mount(&fs, "0:", 1) == FR_OK;
+    fatmodel::drive(0).disk = d;
+    return ok;
+  }
   bool mkdir(const char* path) override {
     if (failMkdir) return false;
     const FRESULT r = f_mkdir(fatmodel::path(0, path + 1).c_str());
@@ -121,9 +129,14 @@ public:
     const bool ok = f_write(&f, data, n, &put) == FR_OK && put == n;
     return f_close(&f) == FR_OK && ok;
   }
-  void unmount() override { f_mount(nullptr, "0:", 0); }
+  void unmount() override {
+    ++unmounts;
+    f_mount(nullptr, "0:", 0);
+  }
   FATFS fs;
   bool failMkdir = false;
+  bool failMount = false;
+  int mounts = 0, unmounts = 0;
 };
 
 std::string deviceTxt() {
@@ -642,6 +655,29 @@ void test_refusals() {
     const Formatted f = format(disk, card, 1, modelMkfs, &files);
     TEST_ASSERT_EQUAL(static_cast<int>(Why::Files), static_cast<int>(f.r.why));
     TEST_ASSERT_EQUAL_STRING("files", cardmkfs::detail(f.r.why));
+    TEST_ASSERT_EQUAL(1, files.unmounts);
+  }
+  // The mount refused (the card stopped answering after the check): Files,
+  // and FatFs let go of the object the failed f_mount() registered (the
+  // device frees it then): the boot's next mount, SD.begin()'s f_mount(),
+  // writes nothing through it.
+  {
+    fatmodel::RamDisk disk(n);
+    Card card(disk);
+    ModelFiles files;
+    files.failMount = true;
+    const Formatted f = format(disk, card, 1, modelMkfs, &files);
+    TEST_ASSERT_EQUAL(static_cast<int>(Why::Files), static_cast<int>(f.r.why));
+    TEST_ASSERT_EQUAL(1, files.mounts);
+    TEST_ASSERT_EQUAL(1, files.unmounts);
+    files.fs.fs_type = 0xA5;  // (freed: whatever the next allocation put there)
+    FATFS next;
+    f_mount(&next, "0:", 0);
+    TEST_ASSERT_EQUAL_HEX8(0xA5, files.fs.fs_type);
+    f_mount(nullptr, "0:", 0);
+    // The card itself formatted whole: it mounts once it answers.
+    fatmodel::drive(0).disk = &disk;
+    TEST_ASSERT_EQUAL(FR_OK, f_mount(&next, "0:", 1));
   }
   {
     fatmodel::RamDisk disk(n);
