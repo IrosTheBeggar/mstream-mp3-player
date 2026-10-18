@@ -2074,12 +2074,13 @@ on any difference. The folder's README says how to read them.
    MPDJ, MSPD and MPTH (an MPTH from given pixels: the scaling filter
    isn't pinned, and PCs' JPEG decoders differ anyway). The C++ writers
    predate 2.5.5 and make the goldens of one server only (`server` 0, no
-   SRVS); the device writes no `/.mstream` until it syncs itself
-   (2.12.4), which needs them. Tag values go in
-   raw: each writer applies 2.3.6 and sets TRUNCATED. MPDJ's fixtures
-   (AUTODJ-INDEX.md 13) use small synthetic embeddings (no real index:
-   2.13.4's licence), with ties at the floor and at a stride, same-song
-   groups, title-less rows and a float32 trap.
+   SRVS): the player's tests check that their bytes for the two goldens
+   of several servers differ from them there alone. The device writes no
+   `/.mstream` until it syncs itself (2.12.4), which needs them. Tag
+   values go in raw: each writer applies 2.3.6 and sets TRUNCATED. MPDJ's
+   fixtures (AUTODJ-INDEX.md 13) use small synthetic embeddings (no real
+   index: 2.13.4's licence), with ties at the floor and at a stride,
+   same-song groups, title-less rows and a float32 trap.
 3. **Reader parity.** A corpus of synthetic audio files (no real
    library's files) goes through the software's reference reader and the
    device's TagScan built on the host. Their records MUST be field-equal,
