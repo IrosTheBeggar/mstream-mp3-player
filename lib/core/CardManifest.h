@@ -133,6 +133,39 @@ struct ManifestIn {
 };
 bool write(Sink& out, const ManifestIn& in, uint32_t* fileBytes, uint32_t* headerCrc, const char** error);
 
+// ACKS (2.5.6): the plays of the device's log (2.20, lib/core PlayLog) the
+// software has. An entry says every play slot of one deviceId and epoch up
+// to its seq is settled, so the device may trim its log. Not in kSpec: a
+// bad ACKS costs only itself, never the root, so it is read on its own.
+constexpr uint32_t kAcks = fourcc("ACKS");
+constexpr uint32_t kAcksStride = 24;
+struct Ack {
+  uint8_t deviceId[6] = {};
+  uint64_t epoch = 0;
+  uint32_t seq = 0;
+};
+struct Acks {
+  // The entries kept: the first kMax. A section with more only keeps
+  // plays the rest would let go (ACKS only trims).
+  static constexpr uint32_t kMax = 16;
+  bool present = false;  // a section that passed its checks
+  uint32_t rows = 0;     // its entries
+  uint32_t count = 0;    // ... kept
+  Ack entries[kMax];
+  // The seq up to which this device's plays of `epoch` are acknowledged
+  // (0: none).
+  uint32_t seqOf(const uint8_t deviceId[6], uint64_t epoch) const;
+};
+// ACKS of a root open() checked, through the same `src`: found by its type
+// in the directory and checked on its own (2.4.3, 2.5.6): rows of at least
+// 24 bytes (a newer minor's longer rows read by their prefix), bytes =
+// count x stride, its CRC, its entries strictly increasing by (deviceId's
+// bytes, epoch as an unsigned integer). Ok: `out` holds them. Missing: no
+// ACKS. Any other (Shape, SectionCrc, AcksOrder, Io): ACKS fails and is
+// absent (`out` empty); the root stays as open() found it. `scratch`: at
+// least 32 bytes.
+Why readAcks(Source& src, uint8_t* scratch, uint32_t scratchBytes, Acks* out);
+
 }  // namespace msmf
 
 namespace mspd {

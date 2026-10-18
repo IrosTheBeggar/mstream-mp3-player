@@ -89,6 +89,15 @@ AutoDjStored autoDjTo(const AutoDjSaved& a) {
   return s;
 }
 
+PlaysIds playsFrom(const PlaysStored& s) {
+  PlaysIds p;
+  if (!s.haveEpoch || s.epoch == 0) return p;
+  p.epoch = s.epoch;
+  p.seq = s.haveSeq ? s.seq : 0;
+  p.boots = s.haveBoots ? s.boots : 0;
+  return p;
+}
+
 size_t encodeResume(const QueueResume& r, uint8_t out[kResumeBytes]) {
   for (size_t i = 0; i < kResumeBytes; ++i) out[i] = 0;
   const ResumeAnchor& a = r.anchor;

@@ -255,6 +255,68 @@ bool write(Sink& out, const ManifestIn& in, uint32_t* fileBytes, uint32_t* heade
   return true;
 }
 
+uint32_t Acks::seqOf(const uint8_t deviceId[6], uint64_t epoch) const {
+  for (uint32_t i = 0; i < count; ++i)
+    if (entries[i].epoch == epoch && std::memcmp(entries[i].deviceId, deviceId, 6) == 0) return entries[i].seq;
+  return 0;
+}
+
+Why readAcks(Source& src, uint8_t* scratch, uint32_t scratchBytes, Acks* out) {
+  *out = Acks();
+  if (scratchBytes < kDirEntryBytes) return Why::Io;
+  // The directory, an entry at a time (the root open() checked: its
+  // header and layout are sound).
+  uint8_t h[kCommonHeaderBytes];
+  if (!src.read(0, h, sizeof(h))) return Why::Io;
+  const uint32_t headerBytes = get32(h + 8), sections = get32(h + 12);
+  Section acks;
+  for (uint32_t i = 0; i < sections && !acks.present(); ++i) {
+    uint8_t e[kDirEntryBytes];
+    if (!src.read(headerBytes + i * kDirEntryBytes, e, sizeof(e))) return Why::Io;
+    if (get32(e) != kAcks) continue;
+    acks.type = kAcks;
+    acks.offset = get32(e + 8);
+    acks.bytes = get32(e + 12);
+    acks.count = get32(e + 16);
+    acks.stride = get32(e + 20);
+    acks.crc = get32(e + 24);
+  }
+  if (!acks.present()) return Why::Missing;
+  if (acks.stride < kAcksStride || static_cast<uint64_t>(acks.count) * acks.stride != acks.bytes) return Why::Shape;
+  // Its CRC over the whole section, then the rows by their 24-byte prefix.
+  uint32_t crc = 0;
+  for (uint32_t at = 0; at < acks.bytes;) {
+    const uint32_t n = std::min(scratchBytes, acks.bytes - at);
+    if (!src.read(acks.offset + at, scratch, n)) return Why::Io;
+    crc = crc32(scratch, n, crc);
+    at += n;
+  }
+  if (crc != acks.crc) return Why::SectionCrc;
+  Acks a;
+  uint8_t prev[14] = {};
+  for (uint32_t i = 0; i < acks.count; ++i) {
+    uint8_t r[kAcksStride];
+    if (!src.read(acks.offset + i * acks.stride, r, sizeof(r))) return Why::Io;
+    // (deviceId, epoch) as one key: the 6 bytes, then the epoch most
+    // significant byte first.
+    uint8_t key[14];
+    std::memcpy(key, r, 6);
+    for (int b = 0; b < 8; ++b) key[6 + b] = r[15 - b];
+    if (i > 0 && std::memcmp(prev, key, sizeof(key)) >= 0) return Why::AcksOrder;
+    std::memcpy(prev, key, sizeof(key));
+    if (a.count < Acks::kMax) {
+      Ack& e = a.entries[a.count++];
+      std::memcpy(e.deviceId, r, 6);
+      e.epoch = get64(r + 8);
+      e.seq = get32(r + 16);
+    }
+  }
+  a.present = true;
+  a.rows = acks.count;
+  *out = a;
+  return Why::Ok;
+}
+
 }  // namespace msmf
 
 // ---------------------------------------------------------------------------

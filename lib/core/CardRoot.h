@@ -80,6 +80,12 @@ struct Root {
     char path[48] = "";  // "/.mstream/autodj-00000029.bin"
     cardcontract::msmf::Comp entry;
   } autoDj;
+  // The root's ACKS (2.5.6), read whenever the root is (hasRoot), T or
+  // not: the plays of the device's log the software has, which the play
+  // log trims by (lib/core PlayLog). Not present: none, or a section that
+  // failed its own checks (the root stays valid); `acksWhy` says which.
+  cardcontract::msmf::Acks acks;
+  cardcontract::Why acksWhy = cardcontract::Why::Missing;
 
 private:
   const char* rootPtrs_[kMaxRoots] = {};

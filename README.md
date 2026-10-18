@@ -944,6 +944,10 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       When Auto DJ adds a track; its loop step (sessions,
                       steering, the picks, the DJ marks); the console's D
   AutoDjView          What the UI shows and says of Auto DJ
+  PlayLog             The play log (/.player/plays.jnl, docs/METADATA.md
+                      2.20): its slot, the device's files (the boot rules,
+                      the rotation, the trim by the root's ACKS), a play
+                      from its start to its end, when the loop may write
   SheetLayout         Where a sheet sits (3 rows, or 4 from y 40)
   LibraryIndex, LibraryBuilder, LibraryBoot
                       The library index (library.idx v6), its build from
@@ -959,7 +963,8 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       again, the card's identity: a card swapped while on
                       is write-protected), the SD driver's busy waits
   NvsLayout           The NVS schema number's boot step; the resume point's
-                      versioned blob; the repeat mode's key
+                      versioned blob; the repeat mode's key; the play
+                      log's ids
   hal/                IAudioBackend, IStorage
 lib/SD/               The Arduino core's SD library (Apache-2.0), with
                       sd_diskio.cpp patched to wait out the card's busy
@@ -1006,7 +1011,9 @@ src/                  Core2 firmware
                       boot and for a @time; now() for the firmware),
                       AutoDj + AutoDjStore (Auto DJ on the device: the
                       card's AutoDJ index, its join, the loop step, the
-                      console's D; its settings in NVS)
+                      console's D; its settings in NVS), PlayHistory (the
+                      play log on the card: the player's plays, a slot
+                      each, written on the loop; NVS's ids)
   spike/              UI spike tools: input lab, scroll lab, font and thumbnail
                       probes (docs/UI-SPIKE.md)
   main.cpp            Wires it together; input events (the buttons' policy),

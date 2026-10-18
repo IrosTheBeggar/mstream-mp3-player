@@ -37,6 +37,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  HopFrontEnd  HostLine  HostLink  HostClock (USB visualizer)  |
               |  AutoDjEngine  AutoDjTiers  AutoDjJoin  AutoDjDriver          |
               |  AutoDjTrigger  AutoDjCommand  AutoDjView (Auto DJ)           |
+              |  PlayLog (the play log: its slot, files, tracker, gate)       |
               +------------------------------+--------------------------------+
                                              |
               +------------------------------+--------------------------------+
@@ -60,6 +61,7 @@ nothing about hardware.** Anything that can be tested on the laptop lives in
               |  app/Version (the version from git, the app description)      |
               |  app/UsbViz (the USB visualizer: a computer drives the dancer)|
               |  app/AutoDj + app/AutoDjStore (Auto DJ: its index, NVS)       |
+              |  app/PlayHistory (the play log on the card: plays.jnl, NVS)   |
               |  main.cpp: input events, Bluetooth events, UiHost             |  ESP8266Audio
               +---------------------------------------------------------------+
 ```
@@ -420,7 +422,11 @@ The rules that keep it deadlock- and glitch-free:
    index, and before the card's step, so a pick due this pass lands
    before the update step can raise its fence in the same pass.
 4. **`queueStore.loop()`** (not while the card is held): `queue.txt`, the
-   position and the resume point (Library and queue, below).
+   position and the resume point (Library and queue, below). Then
+   **`stepPlays()`**: the play log's look at the backend's position for
+   the play under way (`app/PlayHistory`, Storage below), and, when the
+   pass's audio lets it (lib/core `PlayLog`'s `WriteGate`) and the card
+   isn't held, a piece of the boot's scan of the log or one play's slot.
 5. A track's learned length, a restart that is due, the `[queue] now at`
    and Repeat One lines, the spike tools, the calibration, the dancer.
 6. **`userInterface->loop()`:** the snapshot (`MainUiHost::snapshot()`,
@@ -1134,7 +1140,9 @@ out:
    from CONNECTED until DISCONNECTED: the library's `connected()` goes
    false as soon as the disconnect starts, the stack's DISCONNECTING,
    0.15-1.5 s before the link is gone): the power status read once more (USB plugged in meanwhile:
-   it stays on), haptics stopped, `Serial.flush()`, `M5.Power.powerOff()`
+   it stays on), the play log's open play ended (stopped) and every play
+   waiting written (`PlayHistory::flush()`), haptics stopped,
+   `Serial.flush()`, `M5.Power.powerOff()`
    (the AXP192's power-off bit; M5Unified then deep-sleeps with no wake
    source in case it didn't take). Input or a blocker during step 3's wait
    cancels it: the note is cleared, the headphones stay let go (a play
@@ -1176,7 +1184,9 @@ host-tested in test_power_choices; `app/PowerSettings` keeps them in NVS
   (NVS "boot_cpu"), lets go of the headphones the idle power-off's way and
   asks the speaker's pump to switch the amp off (`requestAmp(Off)`, as
   `Pa0`: the AXP192 isn't reset by `esp_restart()`, so a live amp would pop
-  as its clock pins are reconfigured); `stepCpuRestart()` then calls
+  as its clock pins are reconfigured); `stepCpuRestart()` then flushes the
+  play log (the paused play ended, stopped, and written:
+  `PlayHistory::flush()`) and calls
   `esp_restart()` (under the LCD lock) once the headphones are unlinked
   (`BtSink::linkUp()` false: the disconnect done, as the idle power-off
   waits) and the amp is off, at most 3 s later
@@ -1353,9 +1363,36 @@ is one read; OPUS.md section 10) and `thumbs/` (the album covers'
 thumbnails, below); on the card also `tags.bin` and its journals
 `tags.jnl` and `walk.jnl` (the device's tag records: docs/METADATA.md
 3.3.2), `device.txt` (what this firmware reads, for the transfer software:
-METADATA.md 2.15) and, for one boot, `build.req` (a library build deferred
-to the next boot). The transfer software's `/.mstream` (its root, its tags
-file, its AutoDJ index, its thumbnails) is read, never written.
+METADATA.md 2.15), `plays.jnl` and `plays.1.jnl` (the play log, below)
+and, for one boot, `build.req` (a library build deferred to the next
+boot). The transfer software's `/.mstream` (its root, its tags file, its
+AutoDJ index, its thumbnails) is read, never written, but for the root's
+ACKS section, which the play log trims by.
+
+**The play log** (`/.player/plays.jnl`, METADATA.md 2.20; lib/core
+`PlayLog`, host-tested in test_play_log against tools/playlog.py's
+goldens; `app/PlayHistory`): one 80-byte slot for each play of a card
+file under `/music`, which the transfer software reads in a card reader
+and reports to the listener's mStream. `PlaybackController` says when a
+play begins (a start from 0:00 or a start point, a gapless join heard)
+and how it ends (completed, skipped, stopped: `setPlays()`); the
+`Tracker` counts the audio played from the backend's position each pass
+(pauses and a seek's jump left out) and the pauses. At its end the play
+waits; the loop writes it when `WriteGate` lets it (not from 5 s before
+the heard track's end to 2 s after the next one's start, not during a
+seek or a start's refill, not with the ring under half, not within 5 s of
+an underrun): the file's size and FAT time (`f_stat`), its start from the
+board's clock (`boardclock::at()`; 0 while unset), the seq in NVS
+("plays"/"seq") first, then one append and its `f_sync`, rotating into
+`plays.1.jnl` at 6,553 slots with a drop note when plays no software read
+go. At boot: NVS's epoch ("plays"/"epoch": a new random one when NVS has
+none), the cut-rename rule (`plays.xl1` to `plays.xl9`), then a scan of
+the log's files a few reads a pass (the boot rules for the seq and the
+boot count; the trim of the files the root's ACKS acknowledges whole).
+Before every orderly power-off and restart the open play ends, stopped,
+and is written (`PlayHistory::flush()`: the idle power-off, the CPU
+speed's restart, `restartNow()`). Log lines: `[plays] ...`, one per slot
+with the time its write took.
 
 **FatFs itself, for the card's records** (`storage/CardFat`, METADATA.md
 3.8): the validation walk lists `/music` with `f_readdir`, whose `FILINFO`
@@ -1651,7 +1688,17 @@ BPM continuity, bit 1 Harmonic mixing), each written at once when it
 changes (`app/AutoDjStore`, [AUTODJ.md](AUTODJ.md)). Its `migrate(3, 4)`
 step does nothing: an absent key, or a value this firmware doesn't take,
 reads as its default (off, Follow the vibe, 55 %, both off). 0.10.0
-leaves a schema-4 NVS as it is and never reads the namespace.
+leaves a schema-4 NVS as it is and never reads the namespace. Schema 5
+(from 0.12.0) is schema 4's keys and the `plays` namespace, the play
+log's ids ([METADATA.md](METADATA.md) 2.20.4; `app/PlayHistory`): `epoch`
+(a u64, a random value other than 0, drawn whenever there is none),
+`seq` (a u32, the last seq a slot used, written before the slot) and
+`boots` (a u32, the boot count of that epoch, written at each boot). A new
+epoch writes `seq` and `boots` first and `epoch` last. Its
+`migrate(4, 5)` step does nothing: no epoch, the first boot draws one.
+0.11.0 leaves a schema-5 NVS as it is and never reads the namespace (it
+keeps no log); an NVS erase drops the three, and the next boot's new
+epoch keeps the plays' ids new to mStream.
 The rules:
 
 - **Never reuse a key name** (or a namespace) for anything else, even after
@@ -1677,13 +1724,14 @@ The rules:
   atomic.
 - Keys are at most 15 characters (NVS's limit).
 
-The keys of schema 4, by namespace: `meta` (schema); `input` (cal,
+The keys of schema 5, by namespace: `meta` (schema); `input` (cal,
 cal_ask, haptics, railtick); `player` (bt_name, bt_forgot, bt_fresh);
 ESP32-A2DP's `connected_bda` (last_bda: the remembered headphones); `power` (cpu_mhz,
 bt_tx, boot_cpu, idle_after, off_idle); `screen` (off_after, bright); `ui`
 (coach, and schema 3's lang); `queue` (gen, pos, resume, and schema 2's
-repeat); `autodj` (schema 4's on, mode, floor, match). Schema 3's are the
-same without `autodj`, schema 2's without `ui`/`lang` too, schema 1's
+repeat); `autodj` (schema 4's on, mode, floor, match); `plays` (schema
+5's epoch, seq, boots). Schema 4's are the same without `plays`, schema
+3's without `autodj` too, schema 2's without `ui`/`lang` too, schema 1's
 without `queue`/`repeat` too. The Bluetooth stack keeps its bonds in
 its own namespace, which the firmware never touches.
 

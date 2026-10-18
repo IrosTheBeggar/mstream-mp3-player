@@ -59,6 +59,7 @@
 #include "app/IdlePower.h"
 #include "app/Library.h"
 #include "app/NvsSchema.h"
+#include "app/PlayHistory.h"
 #include "app/PowerLab.h"
 #include "app/PowerSettings.h"
 #include "app/Psram.h"
@@ -128,6 +129,10 @@ static Frozen frozen;
 static QueueModel queue(psramAlloc, psramFree, esp_random);
 static PlaybackController player(audio, queue, library.catalog());
 static QueueStore queueStore(storage, queue, player, library.catalog());
+// The play log on the card (/.player/plays.jnl, docs/METADATA.md 2.20): the
+// player's plays, a slot each at its end, written on the loop out of the
+// gapless window; flushed before every orderly power-off and restart.
+static PlayHistory playHistory(library, player);
 static DanceMode danceMode(audio, player);
 static Screenshot shot;
 static Haptics haptics;
@@ -253,6 +258,7 @@ static void restartNow() {
   if (!cardWorker.waitIdle(kRestartWaitMs))
     Serial.printf("[card] the card worker's step still under way after %lu s: restarting once its SD call ends\n",
                   (unsigned long)(kRestartWaitMs / 1000));
+  playHistory.flush("restart");  // (the open play, stopped: not to another card)
   powerSettings.restart();  // (Serial flushed; doesn't return)
 }
 
@@ -2751,6 +2757,7 @@ static void stepIdle(uint32_t now, bool input) {
       return;
     }
     Serial.printf("[power] off now (%s)\n", bt.linkUp() ? "the headphones still linked after 3 s" : "headphones let go");
+    playHistory.flush("power-off");  // (the open play, paused: stopped)
     haptics.stop();
     idlePower.powerOff();  // (doesn't return)
   }
@@ -2843,6 +2850,7 @@ static void stepCpuRestart(uint32_t now) {
   Serial.printf("[power] restarting now at %u MHz (%s%s)\n", (unsigned)cpuRestartMhz,
                 linked ? "the headphones still linked after 3 s" : "headphones let go",
                 amp ? "; the speaker's amp still on after 3 s" : "");
+  playHistory.flush("restart");  // (the open play, paused first: stopped)
   haptics.stop();
   powerSettings.restart();  // (doesn't return)
 }
@@ -2913,6 +2921,7 @@ static void stepCardGuard() {
   }
   const tagstore::TagStore::Opened o = library.store()->open();
   const bool begun = cardTasks->begin();
+  playHistory.remounted();  // (its cut-rename rule again before the next slot)
   Serial.printf("[card] the card answered again (the same card): its records opened again (D %s, %lu journal "
                 "chunks), the card jobs %s%s\n",
                 library.store()->device().present ? "present" : "none", (unsigned long)o.chunks,
@@ -3113,6 +3122,29 @@ static void leaveFence() {
                   library.transferBad() ? "; T left out" : "", (unsigned)(index ? index->memory().buildPeak : 0));
   }
   if (s.journalsLeft) Serial.println("[lib] the journals couldn't be compacted first: built from tags.bin alone");
+}
+
+// Every loop pass, after the player's update() (a join taken first): the
+// play log's look at the backend, then a piece of its boot's scan or one
+// play's slot when this pass's audio lets it (lib/core PlayLog's
+// WriteGate: never in the gapless window or a start's refill).
+static void stepPlays(uint32_t now) {
+  PlayHistory::Look look;
+  look.state = player.state();
+  look.positionMs = audio.positionMs();
+  look.positionKnown = audio.positionKnown();
+  look.durationMs = audio.durationMs();
+  playlog::WriteGate::In in;
+  in.nowMs = now;
+  in.playing = look.state == PlayState::Playing;
+  in.ringMs = audio.bufferedMsNow();
+  in.ringCapacityMs = audio.ringCapacityMs();
+  in.underruns = audio.underrunsNow();
+  in.trackSeq = audio.trackSeq();
+  in.seeking = !look.positionKnown;
+  in.decoderAtEnd = in.playing && audio.heardSourceEnded();
+  in.trackLeftMs = trackLeftMs();
+  playHistory.loop(look, in, cardHeld);
 }
 
 // Every loop pass, after the UI's (its covers taken in, its list's motion
@@ -3446,6 +3478,10 @@ void setup() {
   } else {
     Serial.println("[dj] no PSRAM for Auto DJ: off for this boot");
   }
+  // The play log: NVS's ids, the cut-rename rule, the root's ACKS; the
+  // boot's scan and the slots on the loop (Auto DJ's marks name a play's
+  // source).
+  playHistory.begin(autoDj);
   Serial.printf("[lib] library + queue: internal RAM %lu B free before, %lu B after\n",
                 (unsigned long)freeBeforeLibrary, (unsigned long)diag::heap().internalFree);
   diag::logHeap("library");
@@ -3572,6 +3608,7 @@ void loop() {
   stepCardGuard();
   stepAutoDj(now);
   if (!cardHeld) queueStore.loop(now);
+  stepPlays(now);
   // What a track's length is, once the backend knows it (read from the
   // file; or its estimate 20 s in, exact for a constant bitrate): the
   // Queue's "49 min"; once per entry (each change redoes the Queue's sum).
