@@ -1366,6 +1366,8 @@ name came from.
 The result is recorded, so the ledger, not this algorithm, is
 authoritative for existing files. The algorithm is RECOMMENDED so the
 terminal and a future device sync name new files alike.
+`tools/cardnames.py` is its reference, and `vectors.json`'s `names`
+group its vectors (2.18).
 
 1. **Split** mStream's `filepath` at `/` into [vpath, c1, …, cn]. By
    default the vpath is dropped and the card path is `c1/…/cn`; under the
@@ -1390,22 +1392,51 @@ terminal and a future device sync name new files alike.
 4. **Depth.** Past 8 folder levels, join the 8th and deeper folders into
    one, with ` - ` between them.
 5. **Length.** While `/music/` + the path exceeds 255 bytes, or a name
-   exceeds 255 UTF-16 units:
-   1. take the longest component (ties: the deepest; for the file, its
-      stem);
-   2. cut it at a code-point boundary;
-   3. append `~` and 4 uppercase hex digits: the low 16 bits of the
-      FNV-1a 64 of the original component's bytes.
+   exceeds 255 UTF-16 units, cut one of the names this file adds (a
+   folder the card has keeps its name: step 6) and mark it:
+   1. **Which.** The longest, by the bytes that can be cut: a folder's
+      whole name, the file's stem (its extension and a ` (n)` of step 6
+      are never cut), and for a name cut already the bytes it kept
+      before its mark. Ties: the deepest. A name cut to its mark alone
+      is passed over; with none left to cut, the file is skipped and
+      reported.
+   2. **How much.** A folder whose path ends past byte 191 (`/music/`
+      counted: 64 bytes short of 255) is cut to end there. It is the
+      folder of all its files, so this leaves each of them room below
+      it, and it is cut alike whichever of its files is named first, in
+      this run or a later one. Any other name (the file, or a folder
+      ending at byte 191 or before) is cut by as much as the path is
+      over. The new name, mark included, is that much shorter, or a
+      byte or three more where the cut steps back to a code-point
+      boundary.
+   3. **The mark.** Append `~` and 4 uppercase hex digits: the low 16
+      bits of the FNV-1a 64 of the name's bytes as steps 2-4 left it,
+      before any cut: a folder's whole name (step 4's joined one
+      included), the file's stem without its extension (`Title` for
+      `Title.mp3`). A name cut twice keeps its one mark.
+
+   Under the vpath layout (2.8.6) a library's root folder is its vpath
+   as a name of step 2, cut as a folder is when it ends past byte 191,
+   whatever lies below it: every run names it alike.
 6. **Collisions.** Within a folder, compare names by their **match key**:
    the NFC form, then each code point's Unicode simple upper case. That
    is FAT's case-insensitive rule, and a little wider (FAT itself keeps
    an NFC and an NFD spelling apart; the key merges them, so no
    look-alike twin is ever made). An existing folder's on-card spelling
-   wins, so the folders merge. Of two
+   wins, so the folders merge: a new folder, cut or not, goes into the
+   folder of its key (the one spelled alike, else the first by bytes).
+   The files are named in order of (server index, mStream id), so of two
    files that collide, the one with the lower mStream id keeps the name
    (of two servers' files, the lower server index first: 2.6.6, since
    ids are each server's own); the others take ` (2)`, ` (3)`… before the
-   extension. An "already exists" from the OS is also a collision.
+   extension. A folder and a file never share a key: a new folder named
+   like a file takes ` (2)`… after its name, a new file named like a
+   folder before its extension. Under the vpath layout the libraries
+   take their roots in order of (server index, vpath bytes): the card's
+   folder of the root's key that no other library has (the one spelled
+   alike, else the first by bytes), else a new folder, ` (2)`… after its
+   name when the key is taken. An "already exists" from the OS is also a
+   collision.
 7. **Read back** the names after writing, brought back to the stored
    form by 2.8.5's per-OS rule, and record those.
 
@@ -2661,6 +2692,35 @@ takes `/music/Artist` (4296E8541CC39B71).
 
 **The extension** (2.8.3): an Opus stream the server stores as `x.ogg`
 goes on the card as `x.opus`, its bytes unchanged, convertedTo 0.
+
+**Card paths** (2.8.3-2.8.6; `vectors.json`'s `names`, the software's,
+made by `tools/cardnames.py`: runs on a card, each with its layout,
+`extensions`, what the card lists and the files named):
+
+- The mark of `01 - Title.mp3` is that of `01 - Title`, the stem alone:
+  ~DBDB.
+- `Music/Artist/Album/` + 300 × `a` + `.mp3` goes on the card as
+  `Artist/Album/` + 226 × `a` + `~7E21.mp3`, 255 bytes with `/music/`;
+  with 100 × `€` instead, 75 of them are kept: 254 bytes, the cut at a
+  code-point boundary. A folder of 200 × `B` over a stem of 200 × `c`:
+  the tie goes to the file.
+- A folder of 250 × `F` in `A` is cut to 177 × `F` + `~572D`, ending at
+  byte 191, whichever of its files comes first: `x.mp3`, a 63-byte name
+  (whole) or 100 × `t` + `.mp3` (cut itself, to 54 × `t` and its mark).
+  A later run whose card lists that folder, with no ledger row, puts
+  the album's next file there. A file of 80 × `u` + `.mp3` named first
+  cuts it to 156 × `F`: only there is the folder still the longest name.
+- A card folder of 247 × `G` leaves no room: its file is refused
+  (`tooLong`).
+- One run, on an empty card, naming `V/A/One.mp3` (id 7),
+  `V/A/one.MP3` (id 3) and `W/a/ONE.mp3` (id 5): `A/one.MP3`,
+  `A/ONE (2).mp3`, `A/One (3).mp3`. A card listing `Intro` as a file
+  makes `V/Intro/x.mp3` `Intro (2)/x.mp3`; one listing the folder
+  `Mine/Live.mp3` makes `V/Mine/Live.mp3` `Mine/Live (2).mp3`.
+- Under the vpath layout, libraries `Music` of servers 0 and 1 on a
+  card with the folder `music`: `music` (server 0's) and `Music (2)`; a
+  vpath of 300 × `L` becomes the root 179 × `L` + `~D665`, ending at
+  byte 191.
 
 ### 2.19 Sizes at 20,000 tracks (ESTIMATED)
 

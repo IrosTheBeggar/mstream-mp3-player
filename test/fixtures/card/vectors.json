@@ -667,6 +667,534 @@
    "an Opus stream the server stores as x.ogg goes on the card as x.opus, its bytes unchanged, convertedTo 0"
   ]
  },
+ "names": {
+  "who": "software",
+  "note": "2.8.3-2.8.6: card paths from mStream's. marks: step 5's mark of a name: the FNV-1a 64 of the name as steps 2-4 left it, uncut (a file's stem, without its extension). runs: one run on a card each: its layout ('default', or the vpath layout's libraries), device.txt's extensions, what the card lists ('folder': a folder, else a file; relative to /music, as stored), and the files the run names ('bytes': original when absent, oggOpus, a conversion's format, or notAudio; 'size' 4,000,000 when absent), named in order of (server, id). names: each file's path relative to /music, in the files' order, or {'refused': why}: noName, noRoot, unlisted, tooBig, tooLong, folderFull. Made by tools/cardnames.py.",
+  "marks": [
+   {
+    "name": "01 - Title.mp3",
+    "component": "01 - Title",
+    "mark": "~DBDB"
+   },
+   {
+    "name": "Album",
+    "component": "Album",
+    "mark": "~14CC"
+   },
+   {
+    "name": "Café",
+    "component": "Café",
+    "mark": "~0129"
+   },
+   {
+    "name": "8 - 9 - 10",
+    "component": "8 - 9 - 10",
+    "mark": "~8CDD"
+   }
+  ],
+  "runs": [
+   {
+    "note": "steps 1-4 on an empty card: the vpath dropped, names made safe, the extension gated, folders past the 8th joined",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "Music/Artist/Album/01 - Title.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "Music/a\"b*c:d<e>f?g\\h|i/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "Music/  Lead/Trail. . /.dot/x.flac"
+     },
+     {
+      "server": 0,
+      "id": 4,
+      "serverPath": "Music/CON/aux.mp3"
+     },
+     {
+      "server": 0,
+      "id": 5,
+      "serverPath": "Music/Café/x.opus"
+     },
+     {
+      "server": 0,
+      "id": 6,
+      "serverPath": "Music/tab\there/\u0001x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 7,
+      "serverPath": "Music/1/2/3/4/5/6/7/8/9/10/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 8,
+      "serverPath": "Music/A/x.ogg",
+      "bytes": "oggOpus"
+     },
+     {
+      "server": 0,
+      "id": 9,
+      "serverPath": "Music/A/y.ogg"
+     },
+     {
+      "server": 0,
+      "id": 10,
+      "serverPath": "Music/A/z.wav",
+      "bytes": "opus"
+     },
+     {
+      "server": 0,
+      "id": 11,
+      "serverPath": "Music/A/w.m4a"
+     },
+     {
+      "server": 0,
+      "id": 12,
+      "serverPath": "Music/A/huge.flac",
+      "size": 4294967296
+     },
+     {
+      "server": 0,
+      "id": 13,
+      "serverPath": "Music"
+     },
+     {
+      "server": 0,
+      "id": 14,
+      "serverPath": "Music/A/cover.jpg",
+      "bytes": "notAudio"
+     },
+     {
+      "server": 0,
+      "id": 15,
+      "serverPath": "Music/A/con.flac",
+      "bytes": "mp3"
+     }
+    ],
+    "names": [
+     "Artist/Album/01 - Title.mp3",
+     "a_b_c_d_e_f_g_h_i/x.mp3",
+     "Lead/Trail/_dot/x.flac",
+     "CON_/aux_.mp3",
+     "Café/x.opus",
+     "tab_here/_x.mp3",
+     "1/2/3/4/5/6/7/8 - 9 - 10/x.mp3",
+     "A/x.opus",
+     {
+      "refused": "unlisted"
+     },
+     "A/z.opus",
+     {
+      "refused": "unlisted"
+     },
+     {
+      "refused": "tooBig"
+     },
+     {
+      "refused": "noName"
+     },
+     "A/cover.jpg",
+     "A/con_.mp3"
+    ]
+   },
+   {
+    "note": "a card with no device.txt: mp3 and flac only (2.15)",
+    "layout": "default",
+    "extensions": "mp3,flac",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/A/x.opus"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "V/A/x.ogg",
+      "bytes": "oggOpus"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "V/A/x.flac"
+     }
+    ],
+    "names": [
+     {
+      "refused": "unlisted"
+     },
+     {
+      "refused": "unlisted"
+     },
+     "A/x.flac"
+    ]
+   },
+   {
+    "note": "step 5: the file is the longest, its stem cut and marked with the stem's hash, to 255 bytes with /music/ (at a code point boundary: 254 for 3-byte characters); a tie goes to the deepest",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/Artist/Album/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "V/Artist/Album/€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "V/BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.mp3"
+     }
+    ],
+    "names": [
+     "Artist/Album/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa~7E21.mp3",
+     "Artist/Album/€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€~96E5.mp3",
+     "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB/cccccccccccccccccccccccccccccccccccccc~F18D.mp3"
+    ]
+   },
+   {
+    "note": "step 5: the album folder is the longest: cut to end 64 bytes short of 255, so a sibling of 63 bytes fits whole and a longer one is cut itself",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/sssssssssssssssssssssssssssssssssssssssssssssssssssssssssss.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt.mp3"
+     }
+    ],
+    "names": [
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/x.mp3",
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/sssssssssssssssssssssssssssssssssssssssssssssssssssssssssss.mp3",
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/tttttttttttttttttttttttttttttttttttttttttttttttttttttt~0B05.mp3"
+    ]
+   },
+   {
+    "note": "the same album first named by a long file: the folder's cut is the same",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt.mp3"
+     }
+    ],
+    "names": [
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/tttttttttttttttttttttttttttttttttttttttttttttttttttttt~C3E5.mp3"
+    ]
+   },
+   {
+    "note": "a folder still the longest name once 64 bytes short is cut again, as far as its file needs",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu.mp3"
+     }
+    ],
+    "names": [
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu.mp3"
+    ]
+   },
+   {
+    "note": "a later run, the card listing the cut folder and no ledger row: its files join it",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "card": [
+     {
+      "path": "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/x.mp3"
+     }
+    ],
+    "files": [
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "V/A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF/tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt.mp3"
+     }
+    ],
+    "names": [
+     "A/FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF~572D/tttttttttttttttttttttttttttttttttttttttttttttttttttttt~C3E5.mp3"
+    ]
+   },
+   {
+    "note": "a folder the card has that leaves no room below it: refused, not misnamed",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "card": [
+     {
+      "path": "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+      "folder": true
+     }
+    ],
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG/x.mp3"
+     }
+    ],
+    "names": [
+     {
+      "refused": "tooLong"
+     }
+    ]
+   },
+   {
+    "note": "step 6 in one run: by match key; the lower (server, mStream id) keeps the name, the lower server first; an NFC and an NFD spelling are one name; folders merge",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 7,
+      "serverPath": "V/A/One.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "V/A/one.MP3"
+     },
+     {
+      "server": 0,
+      "id": 5,
+      "serverPath": "W/a/ONE.mp3"
+     },
+     {
+      "server": 1,
+      "id": 1,
+      "serverPath": "V/B/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 9,
+      "serverPath": "V/B/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "V/Café.mp3"
+     },
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "V/Café.mp3"
+     }
+    ],
+    "names": [
+     "A/One (3).mp3",
+     "A/one.MP3",
+     "A/ONE (2).mp3",
+     "B/x (2).mp3",
+     "B/x.mp3",
+     "Café (2).mp3",
+     "Café.mp3"
+    ]
+   },
+   {
+    "note": "step 6 against what the card lists: its folders keep their spelling and merge (an NFD one too); a file named like the listener's file, a file named like a folder and a folder named like a file each take ' (2)'",
+    "layout": "default",
+    "extensions": "mp3,flac,opus",
+    "card": [
+     {
+      "path": "Acme/Hits/01.mp3"
+     },
+     {
+      "path": "Mine/Song.mp3"
+     },
+     {
+      "path": "Mine/Live.mp3",
+      "folder": true
+     },
+     {
+      "path": "Intro"
+     },
+     {
+      "path": "Café/a.mp3"
+     }
+    ],
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "Music/ACME/Hits/02.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "Other/acme/HITS/03.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "V/Mine/song.mp3"
+     },
+     {
+      "server": 0,
+      "id": 4,
+      "serverPath": "V/Mine/Live.mp3"
+     },
+     {
+      "server": 0,
+      "id": 5,
+      "serverPath": "V/Intro/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 6,
+      "serverPath": "V/Intro/y.mp3"
+     },
+     {
+      "server": 0,
+      "id": 7,
+      "serverPath": "V/Café/b.mp3"
+     }
+    ],
+    "names": [
+     "Acme/Hits/02.mp3",
+     "Acme/Hits/03.mp3",
+     "Mine/song (2).mp3",
+     "Mine/Live (2).mp3",
+     "Intro (2)/x.mp3",
+     "Intro (2)/y.mp3",
+     "Café/b.mp3"
+    ]
+   },
+   {
+    "note": "the vpath layout (2.8.6): a root per library, in order of (server, vpath); the card's own folder of a root's name becomes that root; another library of the same name takes ' (2)'; the root is the first of the 8 levels",
+    "layout": {
+     "vpath": [
+      {
+       "server": 1,
+       "vpath": "Music"
+      },
+      {
+       "server": 0,
+       "vpath": "Music"
+      },
+      {
+       "server": 0,
+       "vpath": "Audio Books"
+      },
+      {
+       "server": 0,
+       "vpath": "a:b"
+      }
+     ]
+    },
+    "extensions": "mp3,flac,opus",
+    "card": [
+     {
+      "path": "music/mine.mp3"
+     }
+    ],
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "Music/A/x.mp3"
+     },
+     {
+      "server": 1,
+      "id": 1,
+      "serverPath": "Music/A/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 2,
+      "serverPath": "Audio Books/B/y.mp3"
+     },
+     {
+      "server": 0,
+      "id": 3,
+      "serverPath": "a:b/z.mp3"
+     },
+     {
+      "server": 2,
+      "id": 1,
+      "serverPath": "Music/A/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 4,
+      "serverPath": "Other/x.mp3"
+     },
+     {
+      "server": 0,
+      "id": 5,
+      "serverPath": "Music"
+     },
+     {
+      "server": 0,
+      "id": 6,
+      "serverPath": "Music/1/2/3/4/5/6/7/8/9/10/x.mp3"
+     }
+    ],
+    "names": [
+     "music/A/x.mp3",
+     "Music (2)/A/x.mp3",
+     "Audio Books/B/y.mp3",
+     "a_b/z.mp3",
+     {
+      "refused": "noRoot"
+     },
+     {
+      "refused": "noRoot"
+     },
+     {
+      "refused": "noName"
+     },
+     "music/1/2/3/4/5/6/7 - 8 - 9 - 10/x.mp3"
+    ]
+   },
+   {
+    "note": "a vpath too long for a root: cut as a folder, to end 64 bytes short of 255, whatever is below",
+    "layout": {
+     "vpath": [
+      {
+       "server": 0,
+       "vpath": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"
+      }
+     ]
+    },
+    "extensions": "mp3,flac,opus",
+    "files": [
+     {
+      "server": 0,
+      "id": 1,
+      "serverPath": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL/A/x.mp3"
+     }
+    ],
+    "names": [
+     "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL~D665/A/x.mp3"
+    ]
+   }
+  ]
+ },
  "servers": {
   "who": "software",
   "note": "2.5.5, 2.6.6, 2.11: a ledger row's server. origServer: ORIG's bytes 74-79 for a row's server index. rows: the golden tags file's records in record order with their server. srvs: the golden root's SRVS entries (entry i - 1 is server i), as stored. sameServer: 2.11's test of server 'index' of the card whose root description is 'card' against what the software reads: the server at 'url' ('serverInstance': its instance, when known; 'confirmed': keys the listener has called the same server as 'url'), or, with 'peerId', that peer of it ('peerInstance': the peer's instance, when known). brokenEntries: the same test on cards whose SRVS breaks a writer rule of 2.5.5, each 'card' a root description's server fields: the entry's server is unknown, the root stays valid. The device reads neither ORIG nor SRVS.",

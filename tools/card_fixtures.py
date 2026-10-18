@@ -38,6 +38,7 @@ import zlib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cardnames  # noqa: E402  (the card path rules: METADATA 2.8.3-2.8.6)
 import mpdj  # noqa: E402  (every MPDJ fixture: AUTODJ-INDEX.md 13)
 import playlog  # noqa: E402  (the play log's fixtures: METADATA 2.20)
 
@@ -1722,6 +1723,133 @@ def private_vectors():
     }
 
 
+def names_vectors():
+    """2.8.3-2.8.6 as runs of tools/cardnames.py's namer: each a card (its
+    layout, device.txt's extensions, what it lists) and the files one run
+    names on it. The names come from the namer; the spec's own examples
+    are asserted here first, typed from 2.8.3's arithmetic."""
+    mk = cardnames.mark
+    exts = "mp3,flac,opus"
+
+    def f(server, id_, path, **kw):
+        return dict({"server": server, "id": id_, "serverPath": path}, **kw)
+
+    a300, euros, b200, c200 = "a" * 300, "€" * 100, "B" * 200, "c" * 200
+    f250, t100, t200, u80, g247, l300 = "F" * 250, "t" * 100, "t" * 200, "u" * 80, "G" * 247, "L" * 300
+    cut_album = "F" * 177 + mk(f250)            # ends 64 bytes short of 255: 7 + 2 + 182 = 191
+    runs = [
+        {"note": "steps 1-4 on an empty card: the vpath dropped, names made safe, the extension gated, "
+                 "folders past the 8th joined",
+         "files": [f(0, 1, "Music/Artist/Album/01 - Title.mp3"),
+                   f(0, 2, "Music/a\"b*c:d<e>f?g\\h|i/x.mp3"),
+                   f(0, 3, "Music/  Lead/Trail. . /.dot/x.flac"),
+                   f(0, 4, "Music/CON/aux.mp3"),
+                   f(0, 5, "Music/Café/x.opus"),
+                   f(0, 6, "Music/tab\there/\u0001x.mp3"),
+                   f(0, 7, "Music/1/2/3/4/5/6/7/8/9/10/x.mp3"),
+                   f(0, 8, "Music/A/x.ogg", bytes="oggOpus"),
+                   f(0, 9, "Music/A/y.ogg"),
+                   f(0, 10, "Music/A/z.wav", bytes="opus"),
+                   f(0, 11, "Music/A/w.m4a"),
+                   f(0, 12, "Music/A/huge.flac", size=1 << 32),
+                   f(0, 13, "Music"),
+                   f(0, 14, "Music/A/cover.jpg", bytes="notAudio"),
+                   f(0, 15, "Music/A/con.flac", bytes="mp3")],
+         "spec": ["Artist/Album/01 - Title.mp3", "a_b_c_d_e_f_g_h_i/x.mp3", "Lead/Trail/_dot/x.flac",
+                  "CON_/aux_.mp3", "Café/x.opus", "tab_here/_x.mp3", "1/2/3/4/5/6/7/8 - 9 - 10/x.mp3",
+                  "A/x.opus", {"refused": "unlisted"}, "A/z.opus", {"refused": "unlisted"},
+                  {"refused": "tooBig"}, {"refused": "noName"}, "A/cover.jpg", "A/con_.mp3"]},
+        {"note": "a card with no device.txt: mp3 and flac only (2.15)", "extensions": "mp3,flac",
+         "files": [f(0, 1, "V/A/x.opus"), f(0, 2, "V/A/x.ogg", bytes="oggOpus"), f(0, 3, "V/A/x.flac")],
+         "spec": [{"refused": "unlisted"}, {"refused": "unlisted"}, "A/x.flac"]},
+        {"note": "step 5: the file is the longest, its stem cut and marked with the stem's hash, to 255 bytes "
+                 "with /music/ (at a code point boundary: 254 for 3-byte characters); a tie goes to the deepest",
+         "files": [f(0, 1, "V/Artist/Album/%s.mp3" % a300), f(0, 2, "V/Artist/Album/%s.mp3" % euros),
+                   f(0, 3, "V/%s/%s.mp3" % (b200, c200))],
+         "spec": ["Artist/Album/%s%s.mp3" % ("a" * 226, mk(a300)), "Artist/Album/%s%s.mp3" % (euros[:75], mk(euros)),
+                  "%s/%s%s.mp3" % (b200, "c" * 38, mk(c200))]},
+        {"note": "step 5: the album folder is the longest: cut to end 64 bytes short of 255, so a sibling of 63 "
+                 "bytes fits whole and a longer one is cut itself",
+         "files": [f(0, 1, "V/A/%s/x.mp3" % f250), f(0, 2, "V/A/%s/%s.mp3" % (f250, "s" * 59)),
+                   f(0, 3, "V/A/%s/%s.mp3" % (f250, t100))],
+         "spec": ["A/%s/x.mp3" % cut_album, "A/%s/%s.mp3" % (cut_album, "s" * 59),
+                  "A/%s/%s%s.mp3" % (cut_album, "t" * 54, mk(t100))]},
+        {"note": "the same album first named by a long file: the folder's cut is the same",
+         "files": [f(0, 1, "V/A/%s/%s.mp3" % (f250, t200))],
+         "spec": ["A/%s/%s%s.mp3" % (cut_album, "t" * 54, mk(t200))]},
+        {"note": "a folder still the longest name once 64 bytes short is cut again, as far as its file needs",
+         "files": [f(0, 1, "V/A/%s/%s.mp3" % (f250, u80))],
+         "spec": ["A/%s%s/%s.mp3" % ("F" * 156, mk(f250), u80)]},
+        {"note": "a later run, the card listing the cut folder and no ledger row: its files join it",
+         "card": [{"path": "A/%s/x.mp3" % cut_album}],
+         "files": [f(0, 2, "V/A/%s/%s.mp3" % (f250, t200))],
+         "spec": ["A/%s/%s%s.mp3" % (cut_album, "t" * 54, mk(t200))]},
+        {"note": "a folder the card has that leaves no room below it: refused, not misnamed",
+         "card": [{"path": g247, "folder": True}],
+         "files": [f(0, 1, "V/%s/x.mp3" % g247)],
+         "spec": [{"refused": "tooLong"}]},
+        {"note": "step 6 in one run: by match key; the lower (server, mStream id) keeps the name, the lower "
+                 "server first; an NFC and an NFD spelling are one name; folders merge",
+         "files": [f(0, 7, "V/A/One.mp3"), f(0, 3, "V/A/one.MP3"), f(0, 5, "W/a/ONE.mp3"),
+                   f(1, 1, "V/B/x.mp3"), f(0, 9, "V/B/x.mp3"),
+                   f(0, 2, "V/Café.mp3"), f(0, 1, "V/Café.mp3")],
+         "spec": ["A/One (3).mp3", "A/one.MP3", "A/ONE (2).mp3", "B/x (2).mp3", "B/x.mp3",
+                  "Café (2).mp3", "Café.mp3"]},
+        {"note": "step 6 against what the card lists: its folders keep their spelling and merge (an NFD one "
+                 "too); a file named like the listener's file, a file named like a folder and a folder named "
+                 "like a file each take ' (2)'",
+         "card": [{"path": "Acme/Hits/01.mp3"}, {"path": "Mine/Song.mp3"}, {"path": "Mine/Live.mp3", "folder": True},
+                  {"path": "Intro"}, {"path": "Café/a.mp3"}],
+         "files": [f(0, 1, "Music/ACME/Hits/02.mp3"), f(0, 2, "Other/acme/HITS/03.mp3"),
+                   f(0, 3, "V/Mine/song.mp3"), f(0, 4, "V/Mine/Live.mp3"), f(0, 5, "V/Intro/x.mp3"),
+                   f(0, 6, "V/Intro/y.mp3"), f(0, 7, "V/Café/b.mp3")],
+         "spec": ["Acme/Hits/02.mp3", "Acme/Hits/03.mp3", "Mine/song (2).mp3", "Mine/Live (2).mp3",
+                  "Intro (2)/x.mp3", "Intro (2)/y.mp3", "Café/b.mp3"]},
+        {"note": "the vpath layout (2.8.6): a root per library, in order of (server, vpath); the card's own "
+                 "folder of a root's name becomes that root; another library of the same name takes ' (2)'; "
+                 "the root is the first of the 8 levels",
+         "layout": {"vpath": [{"server": 1, "vpath": "Music"}, {"server": 0, "vpath": "Music"},
+                              {"server": 0, "vpath": "Audio Books"}, {"server": 0, "vpath": "a:b"}]},
+         "card": [{"path": "music/mine.mp3"}],
+         "files": [f(0, 1, "Music/A/x.mp3"), f(1, 1, "Music/A/x.mp3"), f(0, 2, "Audio Books/B/y.mp3"),
+                   f(0, 3, "a:b/z.mp3"), f(2, 1, "Music/A/x.mp3"), f(0, 4, "Other/x.mp3"), f(0, 5, "Music"),
+                   f(0, 6, "Music/1/2/3/4/5/6/7/8/9/10/x.mp3")],
+         "spec": ["music/A/x.mp3", "Music (2)/A/x.mp3", "Audio Books/B/y.mp3", "a_b/z.mp3", {"refused": "noRoot"},
+                  {"refused": "noRoot"}, {"refused": "noName"}, "music/1/2/3/4/5/6/7 - 8 - 9 - 10/x.mp3"]},
+        {"note": "a vpath too long for a root: cut as a folder, to end 64 bytes short of 255, whatever is below",
+         "layout": {"vpath": [{"server": 0, "vpath": l300}]},
+         "files": [f(0, 1, "%s/A/x.mp3" % l300)],
+         "spec": ["%s%s/A/x.mp3" % ("L" * 179, mk(l300))]},
+    ]
+    assert len("/music/" + runs[2]["spec"][0]) == 255 and len(("/music/" + runs[2]["spec"][1]).encode()) == 254
+    assert len("/music/A/" + cut_album) == 255 - cardnames.ROOM_BELOW_CUT
+    assert len("/music/" + runs[3]["spec"][2]) == 255 and len("/music/" + runs[5]["spec"][0]) == 255
+    assert len("/music/" + runs[-1]["spec"][0].split("/")[0]) == 255 - cardnames.ROOM_BELOW_CUT
+    out = []
+    for r in runs:
+        case = {"note": r["note"], "layout": r.get("layout", "default"), "extensions": r.get("extensions", exts)}
+        if "card" in r:
+            case["card"] = r["card"]
+        case["files"] = r["files"]
+        case["names"] = cardnames.run(case)
+        assert case["names"] == r["spec"], (r["note"], case["names"])
+        out.append(case)
+    marks = [{"name": n, "component": c, "mark": mk(c)}
+             for n, c in [("01 - Title.mp3", "01 - Title"), ("Album", "Album"), ("Café", "Café"),
+                          ("8 - 9 - 10", "8 - 9 - 10")]]
+    return {"who": "software",
+            "note": ("2.8.3-2.8.6: card paths from mStream's. marks: step 5's mark of a name: the FNV-1a 64 of "
+                     "the name as steps 2-4 left it, uncut (a file's stem, without its extension). runs: one run "
+                     "on a card each: its layout ('default', or the vpath layout's libraries), device.txt's "
+                     "extensions, what the card lists ('folder': a folder, else a file; relative to /music, as "
+                     "stored), and the files the run names ('bytes': original when absent, oggOpus, a "
+                     "conversion's format, or notAudio; 'size' 4,000,000 when absent), named in order of "
+                     "(server, id). names: each file's path relative to /music, in the files' order, or "
+                     "{'refused': why}: noName, noRoot, unlisted, tooBig, tooLong, folderFull. Made by "
+                     "tools/cardnames.py."),
+            "marks": marks, "runs": out}
+
+
 def vectors(golden: dict):
     v = {}
     v["note"] = ("docs/METADATA.md 2.18 as data. 'who': both (every implementation), software (the transfer "
@@ -1876,6 +2004,7 @@ def vectors(golden: dict):
         "a plan's write target that is on the card but not in the ledger is replaced in place",
         "on macOS, a listed 'Cafe' + U+0301 is recorded in NFC (C3 A9), hash F1B24FC757494F2B",
         "an Opus stream the server stores as x.ogg goes on the card as x.opus, its bytes unchanged, convertedTo 0"]}
+    v["names"] = names_vectors()
     other = "00112233-4455-4677-8899-aabbccddeeff"
     v["servers"] = {
         "who": "software",
@@ -2262,6 +2391,12 @@ def check_vectors(v, golden: dict):
              got.get("then", "start over") == e["then"], "resumeFetch " + e["note"])
     want(private_parse(json.dumps(pf["resumeExample"]), RESUME_FORMAT)[0] == "valid" and
          len(resume_parts(pf["resumeExample"])) == len(pf["resumeExample"]["parts"]), "resume example")
+    for e in v["names"]["marks"]:
+        want(e["mark"] == "~%04X" % (fnv(e["component"].encode("utf-8")) & 0xFFFF), "name mark " + e["name"])
+    for e in v["names"]["runs"]:
+        want(cardnames.run(e) == e["names"], "names " + e["note"])
+        want(all(len(("/music/" + n).encode("utf-8")) <= 255 for n in e["names"] if isinstance(n, str)),
+             "names within 255 bytes: " + e["note"])
     check_plays(v["plays"], golden, want)
     if bad:
         raise SystemExit("vectors that don't match: " + ", ".join(bad))
