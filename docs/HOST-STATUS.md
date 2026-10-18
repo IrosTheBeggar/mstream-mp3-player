@@ -3,16 +3,18 @@
 The mStream terminal player (a Rust desktop app) shows each plugged-in
 Core2 on its MP3 Player tab: whether its firmware is up to date, its
 microSD card's size and free space, its library, its battery, and a way to
-tell two identical boards apart. It asks the **running firmware**, over
+tell two identical boards apart; and it sets the board's clock, for the
+play log's dates. It asks the **running firmware**, over
 the USB serial port, without resetting the board (the bootloader probe it
-used before resets it, stops the music and can't see the card). Three
-questions, on the USB visualizer's `@` lines ([USB-VISUALIZER.md](USB-VISUALIZER.md)):
+used before resets it, stops the music and can't see the card). Four
+lines, on the USB visualizer's `@` lines ([USB-VISUALIZER.md](USB-VISUALIZER.md)):
 
 | Line | Answer |
 |---|---|
-| `@status` | at once, one line: `@status fw=... elf=... card=... size=... free=... tracks=... music=... bat=... state=... cid=... bt=...` |
+| `@status` | at once, one line: `@status fw=... elf=... card=... size=... free=... tracks=... music=... bat=... state=... cid=... clock=... bt=...` |
 | `@count` | one count of the card's free clusters, on request: `@count 0`, `@count <percent>` about every tenth, `@count 100`, `@count done free=<bytes>` |
 | `@identify <label>` | "This one" and the label on the board's screen for 5 s, one buzz: `@identify ok` |
+| `@time [<unix-ms>]` | the board's clock: alone, `@time <unix-ms>` or `@time unset`; with the computer's time, the board's RTC set to it: `@time ok` |
 
 Status: **built** (October 2026), in the release after v0.8.0 (0.9.0):
 the host tests below pass, and both firmware builds pass their guards. The
@@ -21,7 +23,9 @@ the MP3 Player tab's set in the mStream repository
 (`docs/designs/mp3-tab`, cards 01 section 5 and 05: alternate A).
 `@status cid=` (which card, at which commit) is newer, in the release
 after v0.11.0 (0.12.0): host-tested and built; its device check is step 9
-of the plan.
+of the plan. So are `@time` and `@status clock=` (the board's clock, for
+the play log), in 0.12.0 too: host-tested and built; their device check
+is step 10.
 
 ## The link
 
@@ -35,29 +39,33 @@ of the plan.
   in `\n` (strip a `\r`); each is written with one `printf`, and a log line
   from another task can still land between two of them: a reader skips the
   lines that don't start with `@`.
-- **No session.** The three are answered with or without a visualizer
+- **No session.** The four are answered with or without a visualizer
   session (`@hello`), and while the visualizer is declined (the listener
   ended it on the Core2): they drive nothing on the board's screen but the
-  identify banner. They don't keep a session alive, and they don't count as
-  the computer talking for a decline's quiet, so a player that asks for
-  `@status` every second can still start the dancer once its own user asks.
+  identify banner, and change nothing but the clock (`@time`). They don't
+  keep a session alive, and they don't count as the computer talking for a
+  decline's quiet, so a player that asks for `@status` every second can
+  still start the dancer once its own user asks.
 - **Older firmware.** A verb a firmware doesn't know gets `@err 7 <verb>`:
   v0.6.0 to v0.8.0 answer `@status` with `@err 7 status`, which says "this
   firmware is older than 0.9.0". The player then sends the console's `L`
   for the version (on its own, not with an Enter in the same write: right
   after a boot the console's Sync drops a key sent with its Enter) and says
   the card needs a firmware update. A board that answers `@status` is new
-  enough for all three. No answer to either within about a second: not
-  this firmware running (another firmware, or none booted); only a reset
-  can say more. A key added to `@status` later is missing from an older
-  firmware's line, and its absence is how a reader tells, never the
-  version: `cid=` came in 0.12.0.
+  enough for `@count` and `@identify`. `@time` came in 0.12.0: an older
+  board answers it `@err 7 time` (and its `@status` has no `clock=`), and
+  that answer is how a sender tells, never the version. No answer to
+  either within about a second: not this firmware running (another
+  firmware, or none booted); only a reset can say more. A key added to
+  `@status` later is missing from an older firmware's line, and its
+  absence is how a reader tells, never the version: `cid=` and `clock=`
+  came in 0.12.0.
 
 ## @status
 
 ```
 → @status
-← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=playing cid=5eedc0de0a1b2c3d.0000002a bt=Alex%27s%20headphones
+← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=playing cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones
 ```
 
 One line, answered in the loop pass that reads the question, **never a
@@ -82,6 +90,7 @@ long, `bt=` gives way first, down to 36 bytes; past that the keys after
 | `bat` | 0-100, or `-` | the power chip's battery reading the UI takes every 10 s (the tab bar's); `-` until the first |
 | `state` | `playing`, `paused`, `idle`, `host` | the player: `playing` also while a play waits for the headphones; `idle` stopped; `host` while a computer drives the dancer (the visualizer's host mode) |
 | `cid` | the card's id and its commit's generation, `<cardId>.<generation>`: 16 and 8 hex digits in lower case, leading zeros kept (`5eedc0de0a1b2c3d.0000002a`); or `-`. Since 0.12.0 | the root the boot read (docs/METADATA.md 2.5.2, 2.5.4: `/.mstream/manifest.bin` or `.tmp`, the one the election picked, checked whole; `Library::root()`): its `cardId`, and its `generation`, the number in the commit's file names (`tags-0000002a.bin`). Kept when the root's tags file then fails the boot's checks (the boot log's `[lib] the card:` line names that file, the generation and why: `no transfer data (the root's T tags-0000002a.bin, generation 42: missing)`; the library is the walk's alone): the root still names the card. `-`: no root (no `/.mstream`, or none valid), no PSRAM to read it, the internal flash, or no card mounted now (`card=` isn't `fat32` or `fat16`: a card pulled reads `none`). **Read once, at the boot**, never during `@status`: another card put in while on is a restart (the card's guard, at FatFs's remount, its first read of that card: ARCHITECTURE.md, Storage), and from the moment the guard finds it until that restart (about a second: FatFs has the other card mounted then, and `card=` says its kind) `cid=` is `-` (before that first read nothing on the board knows the card changed); but the same card pulled and put back keeps the boot's root until a restart, even if a computer wrote a new commit to it meanwhile |
+| `clock` | `ok` or `unset`. Since 0.12.0 | the board's clock ([@time](#time); `boardclock::ok()`): `ok` while it has a time it believes, the RTC's read at the boot or a computer's `@time` since; `unset` when the boot's reading wasn't believed (the RTC's voltage-low flag set, a date outside 2026-2099, no RTC) and no `@time` came since. A reader takes any other value as `unset` |
 | `bt` | the paired headphones' name, percent-encoded, or `-` | their own name once linked, before that the one saved at the pairing (`BtSink::shownName()`, the Output tab's); `-` with nothing paired, or a pairing whose name the board never learnt |
 
 **Percent-encoding** (`bt=`): RFC 3986's unreserved bytes (`A-Z a-z 0-9 -
@@ -107,29 +116,30 @@ board can send them:
 | ` bat=` | 5 + 3 | `100` |
 | ` state=` | 7 + 7 | `playing` |
 | ` cid=` | 5 + 25 | always 25 (`-` is 1) |
-| ` clock=` | 7 + 5 | **not in this firmware**: room kept for a later release's key (`ok` or `unset`), which goes in after `cid=` |
+| ` clock=` | 7 + 5 | `unset` (`ok` is 2) |
 | ` bt=` | 4 | |
 | **before `bt=`'s value** | **215** | |
 
-So `bt=` keeps 40 bytes at least (52 while there is no `clock=`). The
-section's first line leaves it 104, a dev build's on a 1 TB card about 88,
-so a name of up to 63 bytes (all BtSink keeps) fits whole unless much of
-it needs encoding. A name that doesn't fit is cut at a character (never
-inside a UTF-8 sequence or a `%XX`) and ends with `%E2%80%A6`, "…".
+So `bt=` keeps 40 bytes at least. The section's first line leaves it 95,
+a dev build's on a 1 TB card about 80, so a name of up to 63 bytes (all
+BtSink keeps) fits whole unless much of it needs encoding. A name that
+doesn't fit is cut at a character (never inside a UTF-8 sequence or a
+`%XX`) and ends with `%E2%80%A6`, "…".
 
 **The give-way rule.** `bt=` keeps 36 bytes whatever the other fields hold
-(`hoststatus::kBtRoom`). The keys after `state=` (`cid=`, today) are each
-put whole or left out, never cut: while they would leave `bt=` under 36,
-the last of them is left out, then the one before it. With the widths
-above they all fit, with 4 bytes to spare. Only the formatter's own caps,
-wider than any field a board sends, can make one give way: with `fw=` at
-its cut of 48 bytes, `elf=` at 16, `size=`, `free=` and `music=` (64-bit)
-at 20 digits and `tracks=` (32-bit) at its 10, the fields to `state=` and
-` bt=` take 219 bytes, which leaves `bt=` its 36 exactly and no room for
-`cid=`. A key added later goes in after the last of these
-(so it gives way first), with its row in the table above; a key wider than
-the spare bytes would give way on a real line. `test_host_status` checks
-the widest line, the line at the cap, and the rule's edge.
+(`hoststatus::kBtRoom`). The keys after `state=` (`cid=` and `clock=`,
+today) are each put whole or left out, never cut: while they would leave
+`bt=` under 36, the last of them is left out (`clock=`), then the one
+before it (`cid=`). With the widths above they all fit, with 4 bytes to
+spare. Only the formatter's own caps, wider than any field a board sends,
+can make one give way: with `fw=` at its cut of 48 bytes, `elf=` at 16,
+`size=`, `free=` and `music=` (64-bit) at 20 digits and `tracks=` (32-bit)
+at its 10, the fields to `state=` and ` bt=` take 219 bytes, which leaves
+`bt=` its 36 exactly and no room for `cid=` or `clock=`. A key added later
+goes in after the last of these (so it gives way first), with its row in
+the table above; a key wider than the spare bytes (4) would give way on a
+real line. `test_host_status` checks the widest line, the line at the cap,
+and the rule's edges (`clock=` left out first, then `cid=`).
 
 ### The FSINFO rule
 
@@ -272,6 +282,69 @@ up: the new label, 5 s from then.
   stop the dancer the session needs, and end the session in the same
   loop pass (`@bye dance`).
 
+## @time
+
+```
+→ @time
+← @time unset                         (the RTC lost its time, or was never set)
+→ @time 1792332202123
+← @time ok                            (2026-10-18 14:03:22.123 UTC)
+→ @time
+← @time 1792332204870                 (2.7 s later)
+```
+
+The board's clock, since 0.12.0: the Core2's RTC (a BM8563 on its
+internal I2C bus, M5Unified's `M5.Rtc`), read once at the boot, and set
+by a computer. The play log (docs/METADATA.md 2.20) takes its plays'
+start times from it, so the MP3 Player tab sets it when it sees the board
+and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no time zone.
+
+- **`@time`** alone asks: `@time <unix-ms>`, the board's time now in ms
+  since 1970-01-01 00:00 UTC, or `@time unset`. At once, with no read of
+  the chip (the time is the boot's reading, or the last `@time`, plus the
+  board's monotonic ms since); not logged.
+- **`@time <unix-ms>`** sets it: the computer's time in ms since
+  1970-01-01 00:00 UTC (JavaScript's `Date.now()`; in Rust,
+  `SystemTime::now()` since `UNIX_EPOCH`, as ms), digits only (the
+  protocol's numbers: no sign, point or exponent; 64 bits at most).
+  **Accepted: `1767225600000` (2026-01-01 00:00:00.000 UTC) to
+  `4102444799999` (2099-12-31 23:59:59.999 UTC)** (`wallclock::kMinMs`,
+  `kMaxMs`): no board ran this firmware earlier, and the RTC's calendar
+  ends with 2099. So a computer whose own clock was never set (1970,
+  1980), seconds sent for ms (10 digits: January 1970) and microseconds
+  (16 digits: past 2099) are refused, `@err 5 time`; not a number is
+  `@err 1 time`. Either way nothing changes.
+- **Setting it**: the second it is in goes to the RTC (which counts whole
+  seconds; writing them clears its voltage-low flag), is read back, and
+  the ms are kept for this boot: `@time ok`, and the log's `[clock]
+  2026-10-18 14:03:22.123 UTC, set by a computer's @time (it was 1.4 s
+  behind)` (or `(it was unset)`). The system time follows (FatFs dates the
+  files the board writes by it, and `M5.begin()` copies it from the RTC at
+  every boot). A chip that doesn't take it (no RTC answered at the boot,
+  or the read-back isn't that second, or the flag is still set): `@err 4
+  time rtc`, the log's `[clock] @time: the RTC didn't take it (...)`, and
+  nothing changed. Nothing else refuses it: while music plays, in a
+  session, declined or not. Sent again, the latest wins.
+- **At the boot** (an early `[clock]` line): the RTC's time is believed
+  only when the chip answered, its **voltage-low flag** is clear (VL, bit
+  7 of its seconds register: set at the chip's first power-up and whenever
+  its supply failed since, cleared only by setting the time), and its date
+  is a real one in the range above: `[clock] 2026-10-18 14:03:22 UTC, from
+  the RTC (to the second)`. To the second: the chip's fraction of a second
+  isn't readable, so the board starts up to 1 s behind. Otherwise
+  `clock=unset`, and the line says why: `the RTC lost its time (its
+  voltage-low flag: ...)`, `the RTC says 2000-01-01 00:00:12 UTC, outside
+  2026-2099 (never set, or set wrong)` (a chip never set counts from
+  2000), `the RTC's reading isn't a date`, `no RTC answered`.
+- **With the board off** the RTC runs on its own supply (ESTIMATED: step
+  10 of the plan checks that it keeps the time while off). It drifts, by
+  a second or two a day (ESTIMATED: a watch crystal's 20 ppm), which the
+  tab's 2 s rule takes back whenever it sees the board.
+- **Who reads it**: `app/BoardClock`: `now()` (Unix ms, 0 while unset),
+  `at()` (the time at an earlier moment of the boot, before the clock was
+  set too: a play's start, dated at its end), `source()` (the play log's
+  clock byte: 1 the RTC's, 2 a computer's). Any task may read them.
+
 ## Errors
 
 The visualizer's codes ([USB-VISUALIZER.md, "Errors"](USB-VISUALIZER.md#errors)),
@@ -285,13 +358,17 @@ counted. An error changes nothing.
 | `@identify` with no label | `@err 1 identify` | (syntax) |
 | `@identify` with a label over 16 bytes | `@err 5 identify` | (range) |
 | `@identify` | `@err 4 identify <why>` | `ui`, `screen`, `viz` |
+| `@time` with a time that isn't digits | `@err 1 time` | (syntax) |
+| `@time` before 2026 or after 2099 | `@err 5 time` | (range) |
+| `@time <unix-ms>` | `@err 4 time rtc` | the RTC didn't take it |
+| `@time` on v0.9.0-v0.11.0 | `@err 7 time` | (verb: not in this firmware) |
 
 ## A visit, line by line
 
 ```
 (the port opened with DTR and RTS low: no reset, the music plays on)
 → @status
-← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=? tracks=1284 music=? bat=87 state=playing cid=5eedc0de0a1b2c3d.0000002a bt=Alex%27s%20headphones
+← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=? tracks=1284 music=? bat=87 state=playing cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones
                                       (FSINFO's count unknown: the page offers a count;
                                        the card is the one whose root is generation 42)
 → @count
@@ -303,17 +380,29 @@ counted. An error changes nothing.
 ← @count 100
 ← @count done free=38214565888
 → @status
-← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=paused cid=5eedc0de0a1b2c3d.0000002a bt=Alex%27s%20headphones
+← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=paused cid=5eedc0de0a1b2c3d.0000002a clock=ok bt=Alex%27s%20headphones
 → @identify COM5
 ← @identify ok                        ("This one / COM5" on the board for 5 s, one buzz)
+→ @time
+← @time 1792332201694                 (0.4 s behind the computer's: nothing to do)
 
 (a board whose card has no /.mstream)
 → @status
-← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=31914983424 free=20401094656 tracks=412 music=? bat=100 state=idle cid=- bt=-
+← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=31914983424 free=20401094656 tracks=412 music=? bat=100 state=idle cid=- clock=ok bt=-
 
-(a v0.11.0 board: no cid=)
+(a board whose RTC lost its time: its battery ran flat)
+→ @status
+← @status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=12 state=idle cid=5eedc0de0a1b2c3d.0000002a clock=unset bt=Alex%27s%20headphones
+→ @time 1792332202
+← @err 5 time                         (seconds, not ms: 1970-01-21)
+→ @time 1792332202123
+← @time ok
+
+(a v0.11.0 board: no cid=, no clock=)
 → @status
 ← @status fw=v0.11.0 elf=5d0c9e41 card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 state=paused bt=Alex%27s%20headphones
+→ @time 1792332202123
+← @err 7 time                         (older than 0.12.0: no clock to set)
 
 (a v0.8.0 board)
 → @status
@@ -324,29 +413,44 @@ counted. An error changes nothing.
 
 - **`lib/core/HostStatus`** (portable, host-tested in `test_host_status`):
   the `@status` line from its facts (`format()`: the order, the cases, the
-  255-byte cap, how `bt=` gives way and how the keys after `state=` give
-  way to its 36 bytes, `kBtRoom`), `percentEncode()`, the label's
-  rule (`validLabel()`), the FSINFO rule (`freeCountValid()`), and when
-  the count's progress lines go out (`Progress`).
+  255-byte cap, how `bt=` gives way and how the keys after `state=`
+  (`cid=`, `clock=`) give way to its 36 bytes, `kBtRoom`),
+  `percentEncode()`, the label's rule (`validLabel()`), the FSINFO rule
+  (`freeCountValid()`), and when the count's progress lines go out
+  (`Progress`).
 - **`lib/core/CardRoot`** (`test_card_jobs`' `test_the_root`): the root
   that won the election keeps its card id and generation (`Root::hasRoot`,
   `cardId`, `generation`), also when its tags file then fails: `cid=`.
   The boot log's line (`describe()`) then names that file, the generation
   and why, never "none on the card".
+- **`lib/core/WallClock`** (portable, `test_wall_clock`): the clock
+  (`Clock`): the boot's rule (`boot()`: the chip, its voltage-low flag, a
+  real date, the range), a `@time` (`set()`), the time at any moment of
+  the boot (`at()`) and where it came from (`source()`); the range
+  (`believable()`), and the UTC calendar both ways (`toCivil()`,
+  `fromCivil()`: every day from 1970 to 2100 round-trips).
 - **`lib/core/FreeCount`** (portable, `test_free_count`): the count's
   pieces, the per-piece counts, the pieces to read again, FatFs's window
   over the card's sectors, and one step under the lock (`step()` over a
   `Source`: the card's sectors and FatFs's window).
 - **`lib/core/HostLink`**: `@status` and `@count` are events (`Status`,
   `Count`) with no reply of its own, `@identify` one (`Identify`) with its
-  label checked; in a session or not, declined or not, and none of them
-  keeps a session alive or a decline going. `refuse()` gives the
-  firmware's own refusals HostLink's `@err` and rate limit.
-  `test_host_link`'s `test_board_questions`.
-- **`src/app/HostQuery`**: answers the three. `@status` from main.cpp's
-  facts hook and `storage/CardSpace`'s free count; `@count` started,
-  stepped every loop pass and ended, with its lines; `@identify` through
-  main.cpp's hook. `app/UsbViz` hands it the events.
+  label checked, `@time` one (`Time`) with its time checked (digits:
+  `parseHostU64()`, `HostLine`; the range), 0 for the question; in a
+  session or not, declined or not, and none of them keeps a session alive
+  or a decline going. `refuse()` gives the firmware's own refusals
+  HostLink's `@err` and rate limit. `test_host_link`'s
+  `test_board_questions` and `test_time`.
+- **`src/app/HostQuery`**: answers the four. `@status` from main.cpp's
+  facts hook, `storage/CardSpace`'s free count and `app/BoardClock`'s
+  `ok()`; `@count` started, stepped every loop pass and ended, with its
+  lines; `@identify` through main.cpp's hook; `@time` through
+  `app/BoardClock`. `app/UsbViz` hands it the events.
+- **`src/app/BoardClock`**: the RTC read at the boot (`begin()`, after
+  `M5.begin()`, which found the chip), written and read back for a
+  `@time` (`set()`, with the system time), and the clock's words behind a
+  spinlock, so any task reads `now()`; the RTC itself only on the loop
+  task (its I2C port is the AXP192's and the touch panel's).
 - **`src/storage/CardSpace`**: the volume's `FATFS`, found once after the
   mount (a FatFs directory of the root names it: no sector read), FatFs's
   type, cluster size and count read as words, and the count's driver (the
@@ -364,7 +468,8 @@ counted. An error changes nothing.
   taking the display end it too. `ui/Input::identifyBuzz()`. Its texts:
   `UiText.h` (`kIdentifyTitle` and its room), measured in
   `test_ui_library`.
-- **`src/main.cpp`**: the facts hook (`hostFacts()`; `cid=` from
+- **`src/main.cpp`**: `boardclock::begin()` early in `setup()`; the
+  facts hook (`hostFacts()`; `cid=` from
   `Library::root()`, which `setup()` reads before the loop answers
   anything, and nothing writes again; `-` once the card's guard has found
   another card, `sectordisk::guard().foreign`), what blocks a count
@@ -389,6 +494,14 @@ counted. An error changes nothing.
   file failed) add 144 B more (4,358,960), IRAM still 124,883 B. Every
   guard passes. `@status` takes about 50 bytes more of the loop task's
   stack (ESTIMATED: the key's 31-byte buffer and its lengths).
+  **`@time` and `clock=`** (0.12.0), against 8db6c24, core2: IRAM
+  unchanged (`.iram0.text` 124,883 B); internal DRAM +40 B (`.dram0.data`
+  +16, `.dram0.bss` +24: the clock's words and its spinlock); flash
+  `.text` +3,268 B (the calendar, the RTC's write and read-back, the
+  verb), `.rodata` +1,008 B; `firmware.bin` +4,576 B (4,358,944 to
+  4,363,520). Every guard passes. The RTC is read once at the boot and
+  written once a `@time` (a few I2C transactions, about a millisecond:
+  ESTIMATED), on the loop task.
 
 ## Device test plan
 
@@ -444,3 +557,31 @@ each line whole with its `\n`. Close every other owner of the port first.
    computer): `cid=` still that root's, and the boot log's line `no
    transfer data (the root's T tags-<8 hex>.bin, generation <n>:
    missing)`. Every line still ends in `bt=`, whole for a usual name.
+10. **The clock** (0.12.0). The computer's time in ms comes from Python's
+    `int(time.time() * 1000)`; note it beside each answer.
+    - **The boot's line.** After a restart, the log's `[clock]` line:
+      `... UTC, from the RTC` or `unset: ...` and why (a board fresh from
+      the factory may hold a time of M5's, or count from 2000). `@status`'s
+      `clock=` agrees (`ok` or `unset`), and so does `@time` (a time, or
+      `@time unset`).
+    - **Set.** `@time <the computer's ms>`: `@time ok`, and the log's
+      `[clock] ..., set by a computer's @time (it was unset)` or `(it was
+      <n> s behind/ahead)`. `@status`: `clock=ok`. `@time`: within about
+      50 ms of the computer's. With music playing: no skip.
+    - **Refused.** `@time 1792332202` (seconds): `@err 5 time`;
+      `@time 2026-10-18`: `@err 1 time`; `@time 4102444800000`: `@err 5
+      time`. `@time` still says the time set above.
+    - **Restart.** An RTS pulse (or the power button): `[clock] <the time>
+      UTC, from the RTC (to the second)`, and `@time` within about 1 s of
+      the computer's.
+    - **Off** (the RTC keeps time, ESTIMATED until this). On battery,
+      off (a long press on the power button, or the idle power-off) for an
+      hour at least, overnight better, then on: `from the RTC`, and `@time`
+      against the computer's; note the difference and how long it was off
+      (the drift, a second or two a day expected). Then a set again:
+      the log's `(it was <n> s ...)` says the same.
+    - **Flat** (only if it happens anyway: don't drain a battery for it).
+      A boot after the battery ran flat: `unset: the RTC lost its time
+      (its voltage-low flag ...)`, `clock=unset`, until a `@time`.
+    - **Old firmware.** On a v0.11.0 board: `@time <ms>` gives `@err 7
+      time`.

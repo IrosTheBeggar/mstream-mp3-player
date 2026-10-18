@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "WallClock.h"
+
 namespace {
 // Milliseconds from `thenMs` to `nowMs`; 0 when `thenMs` is the later one.
 // The loop reads its clock once a pass, before the console stamps the
@@ -140,6 +142,7 @@ HostLink::Out HostLink::line(char* text, uint32_t nowMs, Busy busy) {
     return o;
   }
   if (split && sameVerb(f, "identify")) return identifyLine(f, nowMs);
+  if (split && sameVerb(f, "time")) return timeLine(f, nowMs);
   heardFrom(nowMs);
   if (!split) return error(nowMs, kSyntax, "-");
   if (sameVerb(f, "hello")) return hello(f, nowMs, busy);
@@ -318,6 +321,20 @@ HostLink::Out HostLink::identifyLine(const HostFields& f, uint32_t nowMs) {
   Out o;
   o.event = Event::Identify;
   std::snprintf(o.label, sizeof(o.label), "%s", f.field[0]);
+  return o;
+}
+
+HostLink::Out HostLink::timeLine(const HostFields& f, uint32_t nowMs) {
+  Out o;
+  if (f.count >= 1) {
+    uint64_t ms = 0;
+    if (!parseHostU64(f.field[0], &ms)) return error(nowMs, kSyntax, "time");
+    // 2026 to 2099: a computer's unset clock, seconds or microseconds sent
+    // for ms, all land outside (and 0 is the question's mark).
+    if (!wallclock::believable(ms)) return error(nowMs, kRange, "time");
+    o.timeMs = ms;
+  }
+  o.event = Event::Time;
   return o;
 }
 

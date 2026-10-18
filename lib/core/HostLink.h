@@ -37,6 +37,10 @@
 //   @count                                Count (... starts one, or refuses).
 //   @identify <label>                     Identify, with the label (1 to 16
 //       bytes: hoststatus::validLabel()); none: @err 1, longer: @err 5.
+//   @time [<unix-ms>]                     Time (since 0.12.0): alone, a
+//       question (timeMs 0); with a time, set the board's clock to it: Unix
+//       ms, digits only (not one: @err 1), a time wallclock::believable()
+//       (2026 to 2099, else @err 5).
 // They change nothing here: not a session's timeout, nor its counters, nor
 // a decline's quiet (a player that asks for @status every second can start
 // the dancer again once its own user asks).
@@ -72,7 +76,7 @@ public:
   static constexpr float kMaxEnergy = 1e4f;
   static constexpr const char* kCaps = "viz,log";
 
-  enum class Event : uint8_t { None, Enter, Restart, Exit, Epoch, Prior, Hop, Clock, Log, Status, Count, Identify };
+  enum class Event : uint8_t { None, Enter, Restart, Exit, Epoch, Prior, Hop, Clock, Log, Status, Count, Identify, Time };
   enum class Why : uint8_t { Bye, Timeout, Unplugged, Touch, Button, HeadsetKey, DanceGone };
   // Why an @hello can't start host mode now (the first that applies).
   enum class Busy : uint8_t { None, Ui, Screen, Pairing, Dance };
@@ -93,6 +97,7 @@ public:
     bool playing = false;          // Clock
     uint8_t level = 0;             // Log
     char label[hoststatus::kMaxLabel + 1] = "";  // Identify
+    uint64_t timeMs = 0;           // Time: the Unix ms to set (believable); 0: @time alone, a question
     char reply[96] = "";           // a line to send back (without its '\n'), or ""
   };
 
@@ -138,6 +143,7 @@ private:
   Out clockLine(const HostFields& f, uint32_t nowMs);
   Out logLine(const HostFields& f, uint32_t nowMs);
   Out identifyLine(const HostFields& f, uint32_t nowMs);
+  Out timeLine(const HostFields& f, uint32_t nowMs);
   void heardFrom(uint32_t nowMs);  // any line: the decline's quiet starts again
   void valid(uint32_t nowMs);      // a valid line in a session: alive
 

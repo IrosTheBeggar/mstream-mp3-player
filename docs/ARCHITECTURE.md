@@ -1322,16 +1322,21 @@ reset and without a session, about the board ([HOST-STATUS.md](HOST-STATUS.md)):
 `@status` (one line at once, from what the firmware holds: the version,
 the card's kind, size and free space, the library's tracks, the battery,
 the player's state, the card's id and commit from the root the boot read,
-the paired headphones), `@count` (the card's free
-clusters counted once, on request: Storage, "The free space") and
+whether the clock is set, the paired headphones), `@count` (the card's free
+clusters counted once, on request: Storage, "The free space"),
 `@identify <label>` (a full-screen "This one" banner for 5 s and a buzz,
-to tell two boards apart). `HostLink` routes them (in a session or not,
+to tell two boards apart) and `@time [<unix-ms>]` (the board's clock, or
+set it). `HostLink` routes them (in a session or not,
 declined or not, and none keeps a session alive or a decline going);
 `app/HostQuery` answers, with `lib/core/HostStatus` (the line, the FSINFO
 rule, the label's rule), `lib/core/FreeCount` and `storage/CardSpace` (the
-count), and `Ui::identify()` (the banner: drawn over everything, then the
+count), `Ui::identify()` (the banner: drawn over everything, then the
 UI's own drawing gated as while the screen is dark, everything drawn again
-when it goes). Older firmware answers `@err 7 status`.
+when it goes), and `app/BoardClock` over `lib/core/WallClock` (the clock:
+the RTC, a BM8563, read at the boot with its voltage-low flag, written
+for a `@time`; then the time is that plus the board's monotonic ms, and
+`boardclock::now()` is how the firmware reads it). Older firmware answers
+`@err 7 status`, and before 0.12.0 `@err 7 time`.
 
 ## Storage
 

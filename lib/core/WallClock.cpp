@@ -1,0 +1,111 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Copyright (C) 2026 IrosTheBeggar
+
+#include "WallClock.h"
+
+#include <cstdio>
+
+namespace wallclock {
+
+namespace {
+
+constexpr uint64_t kDayMs = 86400000ull;
+
+bool leapYear(int y) { return (y % 4 == 0 && y % 100 != 0) || y % 400 == 0; }
+
+int monthDays(int y, int m) {
+  static const int kDays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  return m == 2 && leapYear(y) ? 29 : kDays[m - 1];
+}
+
+// Days from 1970-01-01 to y-m-d, y from 1970 (Howard Hinnant's
+// days_from_civil: the year begins in March, so the leap day is its last).
+int64_t daysFromCivil(int y, int m, int d) {
+  y -= m <= 2;
+  const int64_t era = y / 400;
+  const int64_t yoe = y - era * 400;                              // 0-399
+  const int64_t doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1;  // 0-365
+  const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;     // 0-146096
+  return era * 146097 + doe - 719468;
+}
+
+}  // namespace
+
+Civil toCivil(uint64_t unixMs) {
+  const int64_t days = static_cast<int64_t>(unixMs / kDayMs);
+  const uint64_t msOfDay = unixMs % kDayMs;
+  // civil_from_days, its inverse.
+  const int64_t z = days + 719468;
+  const int64_t era = z / 146097;
+  const int64_t doe = z - era * 146097;
+  const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+  const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+  const int64_t mp = (5 * doy + 2) / 153;
+  Civil c;
+  c.day = static_cast<int>(doy - (153 * mp + 2) / 5 + 1);
+  c.month = static_cast<int>(mp < 10 ? mp + 3 : mp - 9);
+  c.year = static_cast<int>(yoe + era * 400 + (c.month <= 2));
+  const uint64_t s = msOfDay / 1000;
+  c.hour = static_cast<int>(s / 3600);
+  c.minute = static_cast<int>(s / 60 % 60);
+  c.second = static_cast<int>(s % 60);
+  c.weekday = static_cast<int>((days + 4) % 7);
+  return c;
+}
+
+bool fromCivil(const Civil& c, uint64_t* unixMs) {
+  if (c.year < 1970 || c.year > 9999 || c.month < 1 || c.month > 12 || c.day < 1 ||
+      c.day > monthDays(c.year, c.month) || c.hour < 0 || c.hour > 23 || c.minute < 0 || c.minute > 59 ||
+      c.second < 0 || c.second > 59) {
+    return false;
+  }
+  const auto days = static_cast<uint64_t>(daysFromCivil(c.year, c.month, c.day));
+  *unixMs = days * kDayMs + (static_cast<uint64_t>(c.hour) * 3600 + c.minute * 60 + c.second) * 1000;
+  return true;
+}
+
+void text(const Civil& c, char* out, size_t size) {
+  if (size == 0) return;
+  std::snprintf(out, size, "%04d-%02d-%02d %02d:%02d:%02d", c.year, c.month, c.day, c.hour, c.minute, c.second);
+}
+
+const char* bootName(Boot b) {
+  switch (b) {
+    case Boot::Ok: return "ok";
+    case Boot::NoChip: return "no RTC";
+    case Boot::Unreadable: return "unreadable";
+    case Boot::VoltLow: return "voltage low";
+    case Boot::Range: return "out of range";
+  }
+  return "?";
+}
+
+Boot Clock::boot(const Reading& r, uint64_t monoMs) {
+  source_ = Source::Unset;
+  uint64_t ms = 0;
+  if (!r.chip) return Boot::NoChip;
+  if (r.voltLow) return Boot::VoltLow;  // (whatever its registers say)
+  if (!r.read || !fromCivil(r.civil, &ms)) return Boot::Unreadable;
+  if (!believable(ms)) return Boot::Range;
+  source_ = Source::Rtc;
+  unixMs_ = ms;
+  monoMs_ = monoMs;
+  return Boot::Ok;
+}
+
+bool Clock::set(uint64_t unixMs, uint64_t monoMs) {
+  if (!believable(unixMs)) return false;
+  source_ = Source::Host;
+  unixMs_ = unixMs;
+  monoMs_ = monoMs;
+  return true;
+}
+
+uint64_t Clock::at(uint64_t monoMs) const {
+  if (!ok()) return 0;
+  // (Signed: a moment before the reading or the @time. Never below
+  // kMinMs less this boot's uptime: far from 0.)
+  return static_cast<uint64_t>(static_cast<int64_t>(unixMs_) + static_cast<int64_t>(monoMs - monoMs_));
+}
+
+}  // namespace wallclock

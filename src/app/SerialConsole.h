@@ -75,6 +75,7 @@
 //   @count             the card's free space counted once (not while playing),
 //                      with progress lines
 //   @identify <label>  "This one" and the label on the screen for 5 s, a buzz
+//   @time [<unix-ms>]  the board's clock (Unix ms, or unset), or set it
 // Reading that starts mid-line (a boot while a computer sends, input lost
 // to an overflow) drops the line's tail instead of running it as keys
 // (HostLine's Sync, logged): the first key after a boot, sent with its

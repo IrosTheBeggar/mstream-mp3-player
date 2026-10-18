@@ -10,7 +10,8 @@
 // from the card at boot; the first time it's the whole library followed by
 // the built-in test tones. A computer can drive the Dance tab's dancer over
 // the same USB serial port (app/UsbViz: the USB visualizer), and ask
-// what the board is and has (app/HostQuery: @status, @count, @identify).
+// what the board is and has, and set its clock (app/HostQuery: @status,
+// @count, @identify, @time).
 
 #include <Arduino.h>
 #include <M5Unified.h>
@@ -49,6 +50,7 @@
 #include "app/CardTasks.h"
 #include "app/CardWorker.h"
 #include "app/DanceMode.h"
+#include "app/BoardClock.h"
 #include "app/BoardGuard.h"
 #include "app/BoardPower.h"
 #include "app/Diagnostics.h"
@@ -3346,6 +3348,7 @@ void setup() {
   uilang::log();
   powerSettings.begin();  // what the boot clock is, the Bluetooth power, and whether it restarted for the speed
   board::applyBootPower();  // the IMU suspended: nothing reads it
+  boardclock::begin();      // the RTC's time (M5.begin() found it), or unset: [clock]
   diag::logHeap("boot");
 
   bootScreen.begin(version::player());
@@ -3524,7 +3527,7 @@ void setup() {
                  "internal RAM); "
                  "D Auto DJ (D status, D0/D1 off/on, D? its commands); "
                  "@ lines: a computer's (the USB visualizer, docs/USB-VISUALIZER.md; @status, @count, @identify, "
-                 "docs/HOST-STATUS.md), never commands");
+                 "@time, docs/HOST-STATUS.md), never commands");
   // PSRAM's lowest from here is the running player's ([stats]' pmin=, the
   // [heap] lines' min=, the update step's line beside its fence's own):
   // setup()'s (the boot's library build among it) and the init's, once.

@@ -570,6 +570,68 @@ void test_board_questions() {
   TEST_ASSERT_EQUAL_INT(4, sent);
 }
 
+// @time (docs/HOST-STATUS.md, "@time"): alone a question; with Unix ms
+// from 2026 to 2099 the time to set; anything else an @err, nothing set.
+// As the other questions: in a session or not, declined or not, and it
+// keeps nothing alive. A verb this firmware doesn't know is still @err 7.
+void test_time() {
+  HostLink l;
+  l.begin(kFw);
+  HostLink::Out o = send(l, "@time", 0);
+  TEST_ASSERT_TRUE(o.event == E::Time);
+  TEST_ASSERT_EQUAL_UINT64(0, o.timeMs);  // the question
+  expectReply(o, "");
+  o = send(l, "@time 1792332202123", 0);  // 2026-10-18 14:03:22.123 UTC
+  TEST_ASSERT_TRUE(o.event == E::Time);
+  TEST_ASSERT_EQUAL_UINT64(1792332202123ull, o.timeMs);
+  expectReply(o, "");
+  // The range's ends, a leading zero, a field more (ignored, as anywhere).
+  TEST_ASSERT_EQUAL_UINT64(1767225600000ull, send(l, "@time 1767225600000", 0).timeMs);  // 2026-01-01
+  TEST_ASSERT_EQUAL_UINT64(4102444799999ull, send(l, "@time 4102444799999", 0).timeMs);  // 2099's last ms
+  TEST_ASSERT_EQUAL_UINT64(1792332202123ull, send(l, "@time 01792332202123", 0).timeMs);
+  TEST_ASSERT_EQUAL_UINT64(1792332202123ull, send(l, "@time 1792332202123 +0200", 0).timeMs);
+  TEST_ASSERT_EQUAL_UINT32(0, l.stats().errors);
+  // Out of range, @err 5: before 2026 (a computer's unset clock, seconds
+  // for ms), from 2100 (microseconds for ms), 0.
+  HostLink r;
+  r.begin(kFw);
+  const char* range[] = {"@time 1767225599999", "@time 4102444800000", "@time 315532800000", "@time 1792332202",
+                         "@time 1792332202123000", "@time 0"};
+  for (size_t i = 0; i < sizeof(range) / sizeof(range[0]); ++i) {
+    o = send(r, range[i], static_cast<uint32_t>(i) * 1000);  // (a second apart: the rate limit)
+    TEST_ASSERT_TRUE_MESSAGE(o.event == E::None, range[i]);
+    expectReply(o, "@err 5 time");
+  }
+  // Not a number, @err 1: the protocol's numbers are digits only.
+  const char* syntax[] = {"@time -1", "@time +1792332202123", "@time 1.792e12", "@time 0x1a1b2c3d4e5",
+                          "@time 2026-10-18T14:03:22Z", "@time 99999999999999999999999", "@time now"};
+  for (size_t i = 0; i < sizeof(syntax) / sizeof(syntax[0]); ++i) {
+    o = send(r, syntax[i], 100000 + static_cast<uint32_t>(i) * 1000);
+    TEST_ASSERT_TRUE_MESSAGE(o.event == E::None, syntax[i]);
+    expectReply(o, "@err 1 time");
+  }
+  // The firmware's own refusal: the RTC didn't take it.
+  expectReply(r.refuse(200000, HostLink::kBusy, "time", "rtc"), "@err 4 time rtc");
+  // Verbs this firmware doesn't know, near this one or not: @err 7, as an
+  // older firmware answers @time.
+  expectReply(send(r, "@times 1792332202123", 300000), "@err 7 times");
+  expectReply(send(r, "@clock", 300000), "@err 7 clock");
+  expectReply(send(r, "@date", 300000), "@err 7 date");
+  // In a session: no line of it, nothing kept alive.
+  l = inSession(10000);
+  TEST_ASSERT_TRUE(send(l, "@time", 11000).event == E::Time);
+  TEST_ASSERT_TRUE(send(l, "@time 1792332202123", 12000).event == E::Time);
+  TEST_ASSERT_EQUAL_UINT32(2, l.stats().lines);
+  TEST_ASSERT_TRUE(l.poll(13000, true).event == E::Exit);  // 3 s after @e: timed out
+  // Declined: answered, and the decline's quiet goes on through it.
+  l = inSession(0);
+  l.end(W::Touch, 1000);
+  TEST_ASSERT_TRUE(send(l, "@time 1792332202123", 2000).event == E::Time);
+  TEST_ASSERT_TRUE(send(l, "@time", 3500).event == E::Time);
+  TEST_ASSERT_TRUE(l.declined());
+  TEST_ASSERT_TRUE(send(l, "@hello 1 back viz", 4000).event == E::Enter);  // 3 s after the exit
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_hello_enters);
@@ -593,5 +655,6 @@ int main(int, char**) {
   RUN_TEST(test_error_rate_limit);
   RUN_TEST(test_a_session_line_by_line);
   RUN_TEST(test_board_questions);
+  RUN_TEST(test_time);
   return UNITY_END();
 }

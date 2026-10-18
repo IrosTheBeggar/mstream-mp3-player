@@ -744,7 +744,9 @@ headphones (`@status`); counts the card's free space once when asked
 (`@count`, never while music plays, and FatFs keeps the count after it);
 and can light the screen with "This one" and the port's name for 5 s,
 with a buzz (`@identify COM5`), to tell two boards apart. Since 0.9.0;
-older firmware answers `@err 7 status`.
+older firmware answers `@err 7 status`. Since 0.12.0 it also reads and
+sets the board's clock (`@time`: the Core2's RTC, which dates the plays
+the player will log; `@status` says `clock=ok` or `unset`).
 
 ![The crab over two beats, phase 0/8 to 7/8 of each](docs/img/crab-phases.png)
 
@@ -769,7 +771,7 @@ The serial console (115200 baud) is there for scripted testing:
 | | | `B...` | Bluetooth tests that leave your pairing alone: `B` status; `Bs` auto-pair by signal for the next scan (a device at -55 dBm or closer, whatever its name; RAM only, off at boot, logged; it starts that scan, with none remembered: `Bn` first), `Bs0` off; `Bf` the next boot as a fresh unit (a flag that boot clears: as if nothing were remembered and there were no `BT_SINK_NAME`, the stored address and the bond not read or touched; restarts now); `Bn` the same for this session (RAM only; not while linked or pairing), `Bn0` back |
 | | | `D...` | Auto DJ ([docs/AUTODJ.md](docs/AUTODJ.md)): `D` its status (the settings, the index or why there is none, the join, the session, the counters, the memory, the last pick's reads and time); `D0` / `D1` off / on; `Dm0` / `Dm1` Anchor: Follow the vibe / Stay on seed; `Df55`-`Df75` Match strictness, by 5; `Dt0` / `Dt1` BPM continuity off / on, `Dk0` / `Dk1` Harmonic mixing off / on (each saved, as the UI's); `Ds<hex>` the next session's seed (1-8 hex digits, for a reproducible run), `Dr` a new session now; `Dp` a pick appended now, whatever the trigger says (cued at a finished queue), with its decision; `Dn<k>` k dry-run picks (1-2,000) on a copy of the session, the live one untouched, `Db<n>` n slot reads of random rows (1-5,000), a bench, both one a loop pass, `Dx` stops either with its summary so far; `Dj` the join again (only while Auto DJ is on), `Dc` the index file closed and opened again (a new session); `Dh` / `Dh<id>` Auto DJ from here on the current track or on library track id, `De` the empty states' Auto DJ button (both play, as `qp` does); `D?` the list. None touches the output or the volume |
 | | | `a...` | touch and haptics: `a` touch calibration (9 crosses; `a5`-`a9` for fewer), `ac` test taps, `ab` the first-start touch check (`ab0`: ask it again at the next start), `as` status, `ad` remove the calibration (no correction), `ah0` / `ah1` haptics off / on, `ar0` / `ar1` the A-Z rail's ticks off / on, `aq` close (saved on the device) |
-| | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md); the board's status for the terminal player's MP3 Player tab, `@status`, `@count` and `@identify <port>`, [docs/HOST-STATUS.md](docs/HOST-STATUS.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else (but `@status` answers, `@count` counts and `@identify COM5` shows the banner, as a computer's would). `tools/usb_viz.py` sends the visualizer's (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
+| | | `@...` | not a command: a computer's line (the USB visualizer, [docs/USB-VISUALIZER.md](docs/USB-VISUALIZER.md); the board's status for the terminal player's MP3 Player tab, `@status`, `@count`, `@identify <port>` and `@time [<unix-ms>]`, [docs/HOST-STATUS.md](docs/HOST-STATUS.md)). Every byte from the `@` to the end of the line is the line's, never a key; an `@` abandons a half-typed command (logged), except inside an `R` argument that has text (`Rttone:1000@48000`). Typed by hand such a line gets an `@err` reply and does nothing else (but `@status` answers, `@count` counts, `@identify COM5` shows the banner and `@time` says the board's time or sets it, as a computer's would). `tools/usb_viz.py` sends the visualizer's (`--dry-run` prints them instead). If the Core2 starts reading in the middle of one (it booted while the computer sent, or input was lost), the rest of that line is dropped, not run as keys (`[console] dropped ...`); a command sent with its Enter in that moment goes too: send it again |
 
 The UI spike's tools ([docs/UI-SPIKE.md](docs/UI-SPIKE.md)) measure the
 browsing UI's risks before its screens are built. Each is a letter, an
@@ -924,6 +926,9 @@ lib/core/             Portable logic, framework-agnostic (also compiled for nati
                       @status line, the FSINFO rule, @identify's label; the
                       card's free clusters counted a piece of the FAT at a
                       time, exact with FatFs writing between the pieces
+  WallClock           The board's clock: the RTC's boot reading (its
+                      voltage-low flag, the range 2026-2099), a computer's
+                      @time, the UTC calendar both ways
   CardContract, CardContainer, CardTags, CardManifest, CardAutoDj
                       The card contract with the transfer software
                       (docs/METADATA.md part 2): its files' readers and
@@ -996,7 +1001,9 @@ src/                  Core2 firmware
                       app description), BoardGuard (not a Core2: says so
                       and stops), NvsSchema (the NVS layout's number),
                       UsbViz (the USB visualizer), HostQuery (a computer's
-                      @status, @count and @identify: docs/HOST-STATUS.md),
+                      @status, @count, @identify and @time:
+                      docs/HOST-STATUS.md), BoardClock (the RTC at the
+                      boot and for a @time; now() for the firmware),
                       AutoDj + AutoDjStore (Auto DJ on the device: the
                       card's AutoDJ index, its join, the loop step, the
                       console's D; its settings in NVS)

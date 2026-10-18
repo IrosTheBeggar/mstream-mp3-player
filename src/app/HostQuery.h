@@ -31,9 +31,14 @@
 //   @identify <label>  "This one" and the label over the whole screen for
 //                      5 s and one buzz (ui/Ui::identify(), main.cpp's hook):
 //                      "@identify ok".
+//   @time [<unix-ms>]  the board's clock (app/BoardClock): alone, "@time
+//                      <unix-ms>" or "@time unset"; with a time, the RTC
+//                      and the clock set to it: "@time ok". Refused when
+//                      the RTC doesn't take it ("rtc").
 //
-// Logged: a count's start and end; an identify. Not a @status (a computer
-// may ask every second). Loop task.
+// Logged: a count's start and end; an identify; a @time that sets the
+// clock. Not a @status or a @time question (a computer may ask every
+// second). Loop task.
 class HostQuery {
 public:
   struct Hooks {
@@ -60,6 +65,11 @@ public:
   // @identify: nullptr, "@identify ok" is the answer; else the refusal's
   // detail for "@err 4 identify <detail>".
   const char* identify(const char* label);
+  // @time alone: "@time <unix-ms>" or "@time unset", written now.
+  void time();
+  // @time <unix-ms> (believable: HostLink checked it): nullptr, "@time ok"
+  // written; else the refusal's detail for "@err 4 time <detail>".
+  const char* setTime(uint64_t unixMs);
   // Every loop pass: a step of the count under way, its lines.
   void loop(uint32_t nowMs);
   bool counting() const;
