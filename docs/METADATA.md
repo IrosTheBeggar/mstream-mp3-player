@@ -327,6 +327,7 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
 └─ .player/                     OWNED BY THE DEVICE
     ├─ device.txt               what this firmware reads (the software reads it)
     ├─ tags.bin                 MPTG, source 1: the device's records
+    ├─ plays.jnl, plays.1.jnl   MPPL: the play log (2.20; the software reads it)
     └─ tags.jnl, walk.jnl, library.idx, queue.txt, opus.idx, thumbs/ ...
                                 device-internal; may change in any firmware
 ```
@@ -669,6 +670,9 @@ absent:
   generation.
 - **LIBR:** each root a relative path made of names (as above), the
   roots strictly increasing by bytes.
+- **ACKS**, the one optional section whose failure costs only itself
+  (2.5.6): a reader that uses it checks its stride, its length, its CRC
+  and its order, and one that fails makes ACKS absent, never the root.
 - **MPDJ:** AUTODJ-INDEX.md section 8's checks: the header's values, the
   selection fields, the sections' order, DJPH strictly increasing with
   its rows in range, and each slot as it is used (a slot whose own CRC
@@ -703,7 +707,8 @@ generation) and noted it in `/.player`.
 - **The order:** the leading NUL; then the strings the header names, in
   header-field order; then the format's own:
   - MSMF: `producer`, `serverRevision`; then the COMP names in COMP
-    order; then the LIBR roots in LIBR order (SRVS has no strings);
+    order; then the LIBR roots in LIBR order (SRVS and ACKS have no
+    strings);
   - MPTG: `producer`; then 2.6.8's order;
   - MPDJ: `modelId`, `modelVersion`, `metric`, `license`, `attribution`;
     nothing else in its minor 0 (AUTODJ-INDEX.md 4.6);
@@ -839,6 +844,7 @@ reads the root with one small read at every boot.
 | `LIBR` | | 4 | library roots: STRS offsets of folders relative to `/music` (2.8.6), sorted by their bytes; present exactly when there is a root other than `/music` (absent: one root, `/music`) |
 | `STRS` | REQUIRED | blob | strings |
 | `SRVS` | | 40 | the card's servers other than the root's (2.5.5); present exactly when a row of the root's tags file names one. The device never reads it |
+| `ACKS` | | 24 | the plays of the device's log the software has (2.5.6); present exactly when it has one to acknowledge |
 
 `COMP` entry (40 bytes):
 
@@ -962,6 +968,55 @@ derived again from the card or from a server, so 2.4.5 rules it out of a
 minor version: an older writer would carry the rows forward without it,
 and the next run would read another server's files as files that left
 the selection. Before any writer has shipped, it costs nothing.
+
+#### 2.5.6 `ACKS`: the plays the software has
+
+The device's play log (2.20) is the device's to trim, and the software
+never writes `/.player`. So the root tells the device which plays the
+software has: an ACKS entry says that every play slot of one device and
+epoch up to a seq is settled (2.20.6), and the card's copies are needed
+no more.
+
+`ACKS` entry (24 bytes):
+
+| Off | Size | Field | Meaning |
+|---|---|---|---|
+| 0 | 6 | deviceId | the device's id, as its play slots give it (2.20.4) |
+| 6 | 2 | reserved | 0 |
+| 8 | 8 | epoch | the epoch (2.20.4) |
+| 16 | 4 | seq | every play slot of this deviceId and epoch with a seq up to this one is acknowledged |
+| 20 | 4 | reserved | 0 |
+
+**Writers:**
+
+- Entries in order: by deviceId's bytes, then epoch as an unsigned
+  integer, each (deviceId, epoch) once. Present exactly when there is an
+  entry; never REQUIRED (the device before the play log doesn't know it,
+  and an unknown REQUIRED section would make the root absent to it); no
+  strings.
+- An entry's seq is the posted mark of 2.20.6, never above the highest
+  seq the software read from this card's log for that device and epoch.
+- **ACKS goes only into a commit a run makes anyway**: a checkpoint or
+  the final commit of a run that syncs (2.12.1, steps 9 and 12), never a
+  commit made for it alone. Every new commit makes the device build its
+  library again at its next boot (3.2.2), which acknowledging plays isn't
+  worth. Between syncs the device trims by its cap (2.20.2).
+- Each commit carries the root before's entries forward, each raised to
+  the software's mark and never lowered; a run that doesn't read the log
+  carries them unchanged. An entry MAY be left out once the log holds no
+  play of its deviceId and epoch (the device trimmed them): it keeps
+  nothing more.
+
+**Readers:**
+
+- **The device** reads ACKS to trim its log (2.20.2). It checks the
+  section as 2.4.3 says (rows of at least 24 bytes, bytes = count ×
+  stride, its CRC, the order); one that fails is ignored, and the root
+  stays valid: ACKS only trims, so losing it only keeps more plays.
+  Firmware before the play log skips it as an optional section it
+  doesn't know (2.4.5).
+- **The software** reads it to carry it forward, by the same checks, and
+  writes it again from its marks (`state.json`, 2.12.7) when it fails.
 
 ### 2.6 Tags files (MPTG v1)
 
@@ -1575,7 +1630,7 @@ each, about 1-2 minutes for 20,000 files through a USB reader
 | `/music/**` folders | create; remove only OWNED folders that are empty (OWNED in the ledger, or a folder op of the current plan: 2.12.5) | none | anything |
 | `/music` itself | create if missing | read | anything |
 | `/.mstream/**` | everything | **read only** (except as the sync agent: 2.12.4) | may delete it all (the device then scans; the software then sees a card with no ledger) |
-| `/.player/**` | **read only**; it relies on `device.txt` alone | everything | may delete it all (the device rebuilds) |
+| `/.player/**` | **read only**; it relies on `device.txt` and the play log (`plays*.jnl`, 2.20) alone | everything | may delete it all (the device rebuilds; the log's plays not yet read are lost) |
 | anything else on the card | never | never | anything |
 
 - **A file the listener changed** stops being the software's at the next
@@ -1645,7 +1700,10 @@ rules handle.
    doesn't name, and every file in `resume/` that `resume.json` doesn't
    keep (2.12.8). The private files stay (2.12.7). If there was a plan,
    the last run was cut short: recover (2.12.3).
-5. **List** the card; read the server's selection; plan (2.10.2).
+5. **List** the card. **Resolve the plays** when `/.player` holds a play
+   log (2.20.6): map each new play through T and keep the result in the
+   software's own store, before a checkpoint (step 9) deletes the tags
+   file they map through. Read the server's selection; plan (2.10.2).
 6. **Write `pending.bin`** (MSPD, 2.12.5) through `pending.tmp` and a
    rename: the paths this run will delete, the folders it will create,
    the paths it will write.
@@ -1843,7 +1901,7 @@ section and 2.12.8 say.
 
 | Name | What it holds |
 |---|---|
-| `state.json`, written through `state.new` | the card's settings and the software's private state: the card's label and the volume serial it was set up on; its selection (each source's libraries) and settings (layout, conversion, covers, AutoDJ); for a card of a multi-card set, the set and this card's place in it (the set's whole table, on each of its cards); for each of the card's servers, the keys the listener called that server (2.5.1), its manifest's revision when it isn't server 0 (2.10.2), a peer's endpointId (2.5.5); whether albums' art changed (2.12.1, step 10); the plays already sent from the card's play log, per device. Its members are the software's, versioned by its `version` |
+| `state.json`, written through `state.new` | the card's settings and the software's private state: the card's label and the volume serial it was set up on; its selection (each source's libraries) and settings (layout, conversion, covers, AutoDJ); for a card of a multi-card set, the set and this card's place in it (the set's whole table, on each of its cards); for each of the card's servers, the keys the listener called that server (2.5.1), its manifest's revision when it isn't server 0 (2.10.2), a peer's endpointId (2.5.5); whether albums' art changed (2.12.1, step 10); the play log's posted mark of each (deviceId, epoch) (2.20.6). Its members are the software's, versioned by its `version` |
 | `resume.json`, written through `resume.new` | the partial downloads kept for a later run; its members are 2.12.8's |
 | `resume/<8 hex>.part` | those partials (2.12.8) |
 | `run.lock` | informational: a run is writing the card (below) |
@@ -2191,9 +2249,9 @@ thumbnail covers them, since the PC decodes any format.
 
 ### 2.15 `/.player/device.txt`: what the firmware reads
 
-The one `/.player` file the software relies on. ASCII, LF line ends, one
-`key=value` per line; unknown keys are ignored. The device rewrites it at
-boot when its content would change.
+The `/.player` file the software relies on, with the play log (2.20).
+ASCII, LF line ends, one `key=value` per line; unknown keys are ignored.
+The device rewrites it at boot when its content would change.
 
 ```
 contract=1
@@ -2216,6 +2274,12 @@ max_channels=2
 - `codecs` lists what it decodes; `extensions` the file extensions its
   walk lists as audio (any case). The device recognises audio by
   extension, not by content, so both matter.
+- `history` lists the majors of the play log (2.20) the firmware writes:
+  `history=1` from the firmware that keeps it (not built yet); missing
+  or empty, it keeps none. It tells the software that this player logs
+  plays, so its clock is worth setting; the software reads the log files
+  whatever the key says (an older firmware's log stays on the card), each
+  slot by its own major (2.20.7).
 - **The software** writes the newest major of each format that the device
   lists, and converts (or skips) anything not in `codecs`, or above
   `max_rate` or `max_channels`. A card file's extension MUST be one of
@@ -2223,10 +2287,10 @@ max_channels=2
   writes MPDJ v2 only when `read.mpdj` lists 2, and no MPDJ otherwise
   (AUTODJ-INDEX.md 7.4): no reader of v1 exists.
 - **No file** (a new card, or firmware before this design) means
-  `read.*=1` except `read.mpdj`, which is none, and `codecs=mp3,flac`,
-  `extensions=mp3,flac`, `max_rate=48000` and `max_channels=2`. Firmware
-  0.7.0 plays Opus but can't say so; the software MAY ask the listener
-  rather than convert.
+  `read.*=1` except `read.mpdj`, which is none, no `history`, and
+  `codecs=mp3,flac`, `extensions=mp3,flac`, `max_rate=48000` and
+  `max_channels=2`. Firmware 0.7.0 plays Opus but can't say so; the
+  software MAY ask the listener rather than convert.
 - **A key missing** from a file reads as its no-file value; a key with an
   empty value (`read.mpdj=`) says "none". The `contract` line is what
   makes a file a `device.txt`; a reader reads the keys it knows whatever
@@ -2245,9 +2309,10 @@ max_channels=2
 | An unknown flag bit | Ignored |
 | An unknown enum value | As 2.4.5's table says for that field |
 | Firmware with no `device.txt` | The software writes v1 of everything, and no MPDJ (2.15) |
-| Damage (any CRC) | That file is absent; a damaged root means no transfer data. One MPDJ slot whose own CRC fails is the exception: only that slot is unused (AUTODJ-INDEX.md 8.5) |
+| Damage (any CRC) | That file is absent; a damaged root means no transfer data. One MPDJ slot whose own CRC fails is the exception: only that slot is unused (AUTODJ-INDEX.md 8.5); so is MSMF's ACKS, which is then ignored (2.5.6), and so is a play slot, which is skipped (2.20.6) |
 | A new string field | Appended to the run; older readers stop at the fields they know |
 | A card filled from several servers (SRVS, ORIG's `server`) | The device: no change, it reads neither. The software: each row is paired and guarded with its own server (2.5.5, 2.11) |
+| The play log (2.20) and ACKS (2.5.6) | Firmware before the log: writes none, and skips ACKS. The software: reads the log whatever `device.txt` says; skips and counts a slot of a newer major or an unknown kind; writes ACKS only with a run's commits |
 
 ### 2.17 Conformance (no device needed)
 
@@ -2312,6 +2377,19 @@ on any difference. The folder's README says how to read them.
    new commit, the next run brings it to the planned state, and no cut
    ever leads to a cluster chain being freed while an entry still uses
    it (2.12.1's "Cut renames", 2.12.6).
+7. **The play log** (2.20), made with `tools/playlog.py`, its reference
+   reader and writer. `plays/log.json` is one device's script on the
+   fixture card (a cap of 4 slots a file, so the rotation shows: two
+   epochs, an NVS erase, a trim by ACKS, a drop note); the device's
+   writer MUST make `plays/golden/<snapshot>/`'s files of it byte for
+   byte. `plays/index.json` lists the reader's cases (a
+   torn slot, a cut append's tail, a newer major, an unknown kind, a
+   rotation's twins, a conflict, unusable slots, two devices, unknown
+   enums, dating across an uptime wrap), each with the plays' ids and
+   the counts the software's reader MUST find.
+   `golden/manifest-acks.bin` is a root with ACKS (2.5.6), and the
+   `msmf-acks-*` hardening files roots that read whatever their ACKS
+   holds.
 
 ### 2.18 Conformance vectors
 
@@ -2491,6 +2569,39 @@ software's):
   `Mon, 21 Sep 2026 14:13:20 GMT`); a 200, a changed `file-size` or
   `modified`: it starts over.
 
+**The play log** (2.20, 2.5.6; `vectors.json`'s `plays`, over the
+goldens in `plays/` and `tags-0000002a.bin`):
+
+- A play slot is 80 bytes, `4D 50 50 4C 01 01` then its fields, its CRC
+  over bytes 0-75 at 76 (`plays.slot`: the golden's first play, its bytes
+  and CRC 0xC2F1CF6F).
+- Ids: deviceId `00:00:5e:00:53:01`, epoch 0x1122334455667788, seq 42 is
+  `core2-00005e005301-1122334455667788-42`; epoch 1 keeps its zeros
+  (`-0000000000000001-`); the longest, 46 characters, is
+  `core2-fffffffffffe-ffffffffffffffff-4294967295`.
+- Outcome 0 or 4 reads as stopped; source 4 as not said (`other`).
+- The seq at boot over the golden at its first sync (seven plays of
+  EPOCH_1): NVS at 0 gives 8, NVS at 9 gives 10, a new epoch 1.
+- The first sync's seven plays through `tags-0000002a.bin`: five sent
+  (the first dated from the second, 185,000 ms of uptime later; a
+  converted file's play goes to its row's `Music/Loose Intro.flac`), one
+  the listener's file, one whose ledger stamp is invalid (sec2 31):
+  neither sent; once the five are settled the mark is 7. At the end, a
+  new epoch's plays 5-9 are sent and its plays 1-4 were dropped (a drop
+  note of 4).
+- One play of `Artist/Album/02 - Other.mp3`: a byte longer, not sent; an
+  hour later, sent under a skew of +3,600 and not with none; a 0 stamp,
+  not sent; no start and no dated play after it in its boot, not sent.
+- On the card of several servers, a play of server 2 (peer 3 of the
+  root's server) goes to server 0 with peerId 3; of server 3, to server
+  1 with peerId 1.
+- ACKS: deviceId `00:00:5e:00:53:01`, epoch 0x1122334455667788, seq 7
+  is `00 00 5E 00 53 01 00 00 88 77 66 55 44 33 22 11 07 00 00 00 00 00
+  00 00`. EPOCH_2 (0xF0E1D2C3B4A59687) sorts after EPOCH_1: unsigned. An
+  ACKS whose CRC fails, out of order, or of 16-byte rows is ignored and
+  the root reads; 32-byte rows read by their prefix.
+- `history=1` lists major 1; `history=`, no key, or no file: none.
+
 **HASH_SAMPLED** (2.6.6): 26,214,399 bytes with hash-v 2 is a full MD5
 (a download can be VERIFIED); 26,214,400 bytes with hash-v 2 is sampled;
 30 MB with hash-v 1 is a full MD5.
@@ -2546,8 +2657,251 @@ goes on the card as `x.opus`, its bytes unchanged, convertedTo 0.
 | `/.mstream/thumbs` | about 39 MB for 1,800 albums |
 | `/.mstream/state.json`, `resume.json`, `run.lock` | a few KB; `resume/` holds the partials a parked run keeps, while they wait (2.12.8) |
 | `/.player/tags.bin` | about 2.3 MB when the software covers every file (status rows, names); about 4.1 MB when the device scanned everything (HIDX, 0.24 MB, included) |
+| `/.player/plays.jnl`, `plays.1.jnl` | at most 1,048,480 bytes together (2.20.2): 80 bytes a play, 13,106 plays, about 52 days at 250 plays a day |
 
 All of it is small next to the music (about 700 MB per 100 tracks).
+
+### 2.20 The play log: `/.player/plays.jnl` (MPPL v1)
+
+#### 2.20.1 What it is
+
+The device records every play of a card file in a log on the card. The
+software reads it when the card is in a PC's reader, maps each play
+through the ledger to its server's file, reports it to mStream
+(`POST /api/v1/stats/plays`, part 4) and, in the next commit of a sync,
+tells the device which plays it has (ACKS, 2.5.6). The log is the
+device's (2.11): the software only reads it. `device.txt`'s `history`
+says the firmware keeps one (2.15).
+
+- **One format, fixed-size slots,** each with its own CRC: an append
+  writes one slot, and a torn write loses only the slots it tore.
+- **A play is (deviceId, epoch, seq):** the board's MAC, a random epoch
+  that NVS keeps, a sequence number. The epoch is there because NVS gets
+  erased (the firmware's own recovery; a flasher's install): without it,
+  the seq would start again at 1, and mStream would take the new plays
+  for repeats of plays it already has and drop them.
+- **Nothing in it is believed on its word:** a play is sent only when
+  its slot is whole, its file is still the ledger's (size and FAT time)
+  and its start time is known.
+
+#### 2.20.2 The files
+
+- **`/.player/plays.jnl`** is the file the device appends to, and
+  **`/.player/plays.1.jnl`** the one before it. A reader reads both, and
+  `plays.<n>.jnl` for n from 2 to 9 (a later firmware's longer
+  rotation), in any order: a play's place is its seq, not its file.
+- A file is a sequence of 80-byte slots from offset 0, with no header.
+  A trailing part shorter than a slot (a cut append) is ignored, and the
+  device cuts it off before its next append, so it always appends at a
+  slot boundary. A slot, once written, is never rewritten.
+- **The cap:** a file holds at most 6,553 slots (524,240 bytes), the two
+  together at most 1,048,480 bytes: the room the software keeps for the
+  log when it fills a card. A device MAY use a smaller cap.
+- **Rotation**, when the next slot would pass the cap:
+  1. delete `plays.1.jnl`, counting its valid play slots that the root's
+     ACKS (2.5.6) doesn't acknowledge;
+  2. rename `plays.jnl` to `plays.1.jnl`;
+  3. create `plays.jnl` and write a drop note first (2.20.3) when step 1
+     counted any, then the play.
+
+  A cut between steps 1 and 2 leaves `plays.jnl` alone, one between 2
+  and 3 `plays.1.jnl` alone: the next append goes on either way. A cut
+  inside step 2's rename (both names on one cluster chain: 2.12.1, "Cut
+  renames") is 2.12.6's case: the device compares the two files' first
+  clusters, and on equal ones renames `plays.jnl` to a twin name
+  (`plays.xl1`, then `plays.xl2`) that it never deletes while it shares
+  the chain, and starts a new `plays.jnl`. The twin's slots are
+  `plays.1.jnl`'s; the software doesn't read twin names.
+- **Trimming by ACKS.** The device MAY delete a log file when the root's
+  ACKS acknowledges every valid play slot in it (the file it appends to
+  included: the next play starts a new one). It MUST NOT delete a file
+  holding a play ACKS doesn't acknowledge, except by the rotation.
+
+#### 2.20.3 The slot (80 bytes)
+
+| Off | Size | Field | Meaning |
+|---|---|---|---|
+| 0 | 4 | magic | `MPPL` (the u32 0x4C50504D) |
+| 4 | 1 | major | 1 |
+| 5 | 1 | kind | 1 a play, 2 a drop note; any other: a later minor's (2.20.7) |
+| 6 | 1 | outcome | a play's: 1 completed, 2 skipped, 3 stopped (below) |
+| 7 | 1 | source | a play's: 0 not said, 1 manual, 2 shuffle, 3 autodj (below) |
+| 8 | 4 | seq | a play's sequence number, from 1 (2.20.4) |
+| 12 | 2 | pauseCount | a play's pauses, saturating at 65,535 |
+| 14 | 1 | clock | 0 unset, 1 the RTC's time (valid at boot), 2 a host's (`@time`, this boot); informational: startedAt decides |
+| 15 | 1 | reserved | 0 |
+| 16 | 8 | epoch | the device's epoch (2.20.4) |
+| 24 | 6 | deviceId | the device's id, 6 bytes (2.20.4) |
+| 30 | 2 | reserved | 0 |
+| 32 | 8 | startedAt | Unix ms (UTC) when the play began; 0 unknown, while the clock is unset |
+| 40 | 4 | bootSeq | the device's boots in this epoch, from 1 |
+| 44 | 4 | uptimeMs | ms since that boot when the play began, mod 2^32 |
+| 48 | 4 | playedMs | the audio played, pauses excluded; a drop note's: `dropped` |
+| 52 | 4 | durationMs | the track's length as the device knew it; 0 unknown |
+| 56 | 8 | pathHash | the played file's path hash (2.3.3) |
+| 64 | 4 | size | its size |
+| 68 | 4 | fatTime | its fatTime (2.3.4) |
+| 72 | 4 | generation | the generation of the root that counted when the play began (2.5.4); 0 none |
+| 76 | 4 | crc | CRC-32 (2.3.2) of bytes [0, 76) |
+
+- **A drop note** (kind 2) says the rotation deleted `dropped` play
+  slots that ACKS didn't acknowledge: plays lost before any software read
+  them. It is written just before the play whose append caused the
+  rotation, with that play's clock, epoch, deviceId, startedAt, bootSeq
+  and uptimeMs; its outcome, source, seq, pauseCount and bytes 52-75 are
+  0.
+- **outcome:** 1 **completed**, played to its end; 2 **skipped**, the
+  listener went to another track (next, previous, a pick) before its
+  end; 3 **stopped**, playback ended any other way (stop, a power-off or
+  restart, the card pulled, the sleep timer).
+- **source:** 1 **manual**, the queue as the listener built it; 2
+  **shuffle**, the queue shuffled; 3 **autodj**, a track Auto DJ added;
+  0 not said.
+
+| Field | An unknown value reads as |
+|---|---|
+| `kind` (3-255) | a later minor's slot: skipped, counted |
+| `outcome` (0, or above 3) | 3, stopped |
+| `source` (above 3) | 0, not said |
+| `clock` (above 2) | not said: startedAt decides |
+
+#### 2.20.4 The device's ids, the seq, the play's id
+
+- **deviceId** is the ESP32's base MAC from eFuse, its 6 bytes in their
+  printed order (`esp_efuse_mac_get_default`); never all zeros.
+- **epoch** is a random u64 other than 0, from the hardware RNG, made
+  whenever NVS holds none: the first boot, the firmware's NVS recovery
+  (`nvs_flash_erase`), a flasher's erase (an install over another
+  firmware, or a chosen erase). NVS keeps it with the seq and the boot
+  count.
+- **seq** counts the play slots of one deviceId and epoch, from 1; no
+  seq is used twice. The device stores a seq in NVS before it appends the
+  slot that uses it (it MAY reserve several at once; the unused ones are
+  skipped, and a reader takes no gap for a loss). **At boot:** the next
+  seq is max(NVS's seq, the highest seq of a valid play slot of this
+  deviceId and epoch in the mounted card's log) + 1. A seq that would
+  pass 2^32 − 1 takes a new epoch.
+- **bootSeq and uptimeMs** place a play inside one boot: they date a
+  play made before the clock was set (2.20.6).
+- **The play's id**, mStream's idempotency key, is `core2-`, deviceId as
+  12 lowercase hex digits, `-`, epoch as 16 lowercase hex digits (most
+  significant first), `-`, seq in decimal without leading zeros: at most
+  46 characters, under mStream's 128 (`src/api/stats.js`). deviceId
+  `00:00:5e:00:53:01`, epoch 0x1122334455667788, seq 42:
+  `core2-00005e005301-1122334455667788-42`. mStream answers an id it
+  already has as a duplicate and an id another user sent as invalid: the
+  MAC and the random epoch make the ids the board's own. The MAC goes
+  only to the listener's own server.
+
+#### 2.20.5 Writing (the device)
+
+- **Which plays:** one slot for each play of a card file under `/music`:
+  a track the player started, from its beginning or a resume point,
+  until it ended or another took its place. A repeat is a new play; the
+  built-in tracks aren't logged. The device MAY leave out plays of under
+  1 s of audio.
+- **When:** at the play's end, one append and an `f_sync`, kept out of
+  the gapless window. The open play is ended (stopped) and written at
+  every orderly power-off or restart: the idle power-off, the CPU
+  speed's restart and the card guard's.
+- **The fields:** startedAt is the wall time the play began, the clock
+  at the slot's write less the uptime since it began, so a clock set
+  during the play still dates it; 0 (clock 0) while the clock is unset.
+  playedMs counts the audio played, pauses excluded (after a seek, the
+  time played, not the position). pathHash, size and fatTime are the
+  file as the device's library has it: its names as FatFs gives them,
+  the raw FAT fields, as the walk reads them (2.10.1).
+- **What a cut loses.** A cut during an append can tear the sectors being
+  written (on an SD card perhaps a little more, the card's own pages):
+  the slots in them fail their CRC, and those plays are lost, never one
+  credited wrongly. A hard power-off or a flat battery loses the open
+  play. Every other slot was synced.
+
+#### 2.20.6 Reading (the software)
+
+1. **The slots.** The software reads the files of 2.20.2 and never
+   writes, renames or deletes them. A slot is **valid** when its magic is
+   `MPPL`, its major 1 and its CRC good. One whose magic is `MPPL` and
+   major another is a newer firmware's: skipped and counted (the
+   software needs an update). Any other invalid slot is damaged: skipped
+   and counted, and reading goes on with the next one. A valid slot of
+   an unknown kind is skipped.
+2. **A play slot is used** when its epoch isn't 0, its seq is at least 1
+   and its deviceId isn't all zeros.
+3. **Each play once.** Slots with one (deviceId, epoch, seq) that are
+   byte-equal (a cut rotation's twins) are one play. Slots with one key
+   and different bytes are both dropped and counted: a play is never
+   credited wrongly. Byte-equal drop notes count once.
+4. **The new plays** are those above the posted mark of their (deviceId,
+   epoch) in `state.json` (2.12.7).
+5. **When.** At step 5 of a run (2.12.1), once the card is listed (T's
+   skew and its spellings come from the listing), before the run plans,
+   and before a checkpoint deletes the tags file the plays map through
+   (step 9): the software maps each new play and keeps the result in its
+   own store (the terminal's play outbox). A post that fails blocks nothing and loses
+   nothing. A look that only reads (a status) maps them the same way.
+6. **Its file.** T of the root that counts (2.5.4) has the record whose
+   path hash is the slot's pathHash (HIDX, 2.6.7; two records with that
+   hash: none), with the slot's size, and a fatTime equal to the slot's or
+   differing from it by T's skew (2.3.4), both stamps valid: a 0 or an
+   invalid stamp never matches, since a slot has no qfp. The software MAY
+   also take the path hashes of this run's listing, where 2.10.2 matched
+   a listed file to a ledger row under another spelling. The play is of
+   that row's serverPath on that row's server (2.5.5). A row renamed on
+   the server since MAY be mapped to its new path by the row's audioHash
+   in the server's manifest.
+7. **Its start.** A startedAt other than 0 is the play's start. A play
+   with 0 takes it from the first play after it, by seq, of the same
+   deviceId, epoch and bootSeq that has one: that play's startedAt less
+   ((its uptimeMs − this one's uptimeMs) mod 2^32). With none, the start
+   is unknown.
+8. **Not sent, counted:** a play with no row (the listener's own file),
+   one whose file isn't the row's (its size or time differ), one with no
+   start (played before the clock was ever set). The software shows how
+   many, and the drop notes' sum: plays lost before it read them.
+9. **Where it goes:** only to the server that 2.11's test says is the
+   row's own; a peer's play goes to its parent, with the peer's id and a
+   track snapshot (mStream's federated plays). A play for a server the
+   software doesn't reach now waits in its store.
+10. **The posted mark** of each (deviceId, epoch) rises to the highest
+    seq up to which every play on the card is settled (the server
+    answered it: accepted, a duplicate, or rejected) or isn't sent. A
+    play still waiting holds it back; a seq the card doesn't hold (lost,
+    or reserved and never used) doesn't. The next commit's ACKS follow
+    the marks (2.5.6).
+
+**The post** (proposed, the software's; mStream's
+`POST /api/v1/stats/plays` takes up to 200 plays a call):
+
+| From the play | mStream |
+|---|---|
+| its id (2.20.4) | `id` |
+| the row's serverPath | `filePath` |
+| its start | `startedAt`, epoch ms |
+| playedMs, pauseCount | `playedMs`, `pauseCount` |
+| durationMs, when not 0 | `durationMs` |
+| outcome | `outcome`: `completed`, `skipped`, `stopped` |
+| source | `source`: `manual`, `shuffle`, `autodj`; not said: `other` |
+| the card | `client`: `name` `mstream-core2`, `version` the firmware in `device.txt`, `instanceId` the cardId as 16 lowercase hex digits |
+| a peer's row | posted to its parent, with `peerId` and `track` (title, artist and album from T's record; durationMs) |
+
+mStream decides what counts as a play (30 s, or half the track), and
+takes a startedAt at most 5 minutes ahead of its clock and within its
+retention (24 months by default): an older play comes back rejected,
+which settles it.
+
+#### 2.20.7 Versions
+
+- **The slot's major** is 1. A reader skips a slot of another major and
+  counts it; a writer writes the one it knows. `device.txt`'s `history`
+  lists the majors the firmware writes (2.15).
+- **A minor** adds kinds, which older readers skip; fields in the
+  reserved bytes (byte 15, bytes 30-31), where zero means absent; enum
+  values, as 2.20.3's table says. The slot stays 80 bytes in major 1: a
+  longer slot, or a field given another meaning, is a new major.
+- 2.4.5's rule that a minor's fields be re-derivable is for files a
+  writer carries forward. Nobody rewrites a play slot: a field a minor
+  adds is simply zero in the slots of a firmware older than it.
 
 ---
 
@@ -5307,6 +5661,7 @@ the whole contract when the software reads the tags from the card bytes
 | The bytes | `GET /media/<vpath>/<rel>?token=` | `express.static`: byte-exact, `Range` works, so downloads resume. |
 | A conversion | `GET /transcode/<vpath>/<rel>?codec=opus&bitrate=192k` | ffmpeg to a pipe: codecs `mp3`, `opus`, `aac`; bitrates 64k, 96k, 128k, 192k; no sample-rate option; pictures dropped (`-vn`); text tags through ffmpeg's default mapping; streamed with no length and no resume. **The player plays mStream's Opus output sample-exact and gapless** (OPUS.md), so Opus 192k is the conversion that needs nothing new. An MP3 to a pipe probably gets no Xing/LAME header (ESTIMATED, not tested), which makes its length a CBR estimate. |
 | Covers | `GET /album-art/<file>`; `HEAD /media/<vpath>/<dir>/<name>` | The original image (`?compress=l` and `?compress=s` serve 256 px and 92 px JPEG copies when made). Folder images can't be listed; the software probes the names (2.14.2). |
+| Plays (the play log, 2.20) | `POST /api/v1/stats/plays` `{client, plays: 1..200}` (READ at 926b97b1) | Each play: `id` (the client's idempotency key, at most 128 characters; a repeat comes back in `duplicates`, another user's id is invalid), `filePath`, `startedAt` (backdated: at most 5 minutes ahead, within the retention, 24 months by default), `playedMs`, `outcome`, optional `durationMs`, `source`, `pauseCount`; a federated track's `peerId` and `track` snapshot. A real account only: a federation key or a guest gets 403. Answers `{accepted, duplicates, rejected}`. |
 | Embeddings | `POST /api/v1/discovery/local/embeddings` `{filePaths: 1..8}` | `{model:{id,version}, dim, tracks:[{filePath, audioHash, notAnalyzed, embedding}]}`, the embedding base64 of 1,280 little-endian float32, L2-normalised. 403 when discovery is off; **one unresolvable path fails the whole call (404)**, so only manifest paths are sent. For 10k tracks: about 1,250 calls and 68 MB of base64, 1-3 min on a LAN (ESTIMATED). |
 
 Not usable for the table: `/discovery/local/similar/tracks` ranks against

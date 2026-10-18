@@ -39,6 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import mpdj  # noqa: E402  (every MPDJ fixture: AUTODJ-INDEX.md 13)
+import playlog  # noqa: E402  (the play log's fixtures: METADATA 2.20)
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "test" / "fixtures" / "card"
@@ -578,9 +579,10 @@ def srvs_row(e: dict, stride=40) -> bytes:
     return row + bytes([0xAB]) * (stride - 40)
 
 
-def msmf_raw(desc, comps_rows, roots, minor=0, servers=(), srvs_stride=40, extra_sections=()):
+def msmf_raw(desc, comps_rows, roots, minor=0, servers=(), srvs_stride=40, extra_sections=(), acks=None):
     """comps_rows: [(kind, generation, fileBytes, headerCrc, name, key)] as given;
-    servers: SRVS's entries (server_entry), in index order (2.5.5)."""
+    servers: SRVS's entries (server_entry), in index order (2.5.5); acks:
+    ACKS's bytes as given (2.5.6), or None."""
     strs = Strs()
     producer = strs.add(desc.get("producer", ""))
     revision = strs.add(desc.get("serverRevision", ""))
@@ -598,6 +600,10 @@ def msmf_raw(desc, comps_rows, roots, minor=0, servers=(), srvs_stride=40, extra
     if servers:
         # Optional, never REQUIRED: the device doesn't know it (2.5.5).
         sections.append(("SRVS", 0, len(servers), srvs_stride, b"".join(srvs_row(e, srvs_stride) for e in servers)))
+    if acks is not None:
+        # Optional, never REQUIRED, after SRVS (2.5.3, 2.5.6).
+        data, stride = acks if isinstance(acks, tuple) else (acks, playlog.ACK_STRIDE)
+        sections.append(("ACKS", 0, len(data) // stride, stride, data))
     sections += list(extra_sections)
     return build_container("MSMF", desc["generation"], u64(desc.get("cardId", 0)), th, sections, minor=minor)
 
@@ -625,7 +631,10 @@ def msmf(desc, golden: dict):
     has_orig = any(s[0] == "ORIG" for s in parse_container(tags)["sections"])
     used = {server for _, server in ledger_servers(tags)} if has_orig else set()
     assert used - {0} == set(range(1, len(servers) + 1)), (desc["file"], sorted(used), len(servers))
-    return msmf_raw(desc, rows, roots, desc.get("minor", 0), servers)
+    acks = None
+    if desc.get("acks"):
+        acks = playlog.acks_bytes([(a["deviceId"], a["epoch"], a["seq"]) for a in desc["acks"]])
+    return msmf_raw(desc, rows, roots, desc.get("minor", 0), servers, acks=acks)
 
 
 OPS = {"write": 1, "delete": 2, "folder": 3}
@@ -1051,6 +1060,26 @@ def manifest_main():
             "roots": ["Lib B", "Lib A"]}
 
 
+DEVICE_A, DEVICE_B = "00:00:5e:00:53:01", "00:00:5e:00:53:02"  # RFC 7042's documentation MACs
+EPOCH_1, EPOCH_2, EPOCH_B = "0x1122334455667788", "0xF0E1D2C3B4A59687", "0x0A0B0C0D0E0F1011"
+
+
+def manifest_acks():
+    return {"format": "MSMF", "file": "manifest-acks.bin", "generation": 43, "cardId": CARD_ID,
+            "commitTime": 1792000000, "flags": 1, "commitId": "0x0000002BACC5ACC5",
+            "serverInstance": "00112233-4455-6677-8899-aabbccddeeff", "producer": "mstream-terminal 0.13.0",
+            "serverRevision": "\"r-412-99-1790000000999-300\"", "baseGeneration": 42,
+            "serverUrl": "HTTP://Music.Example:3000/",
+            "note": "A root with ACKS (2.5.6): the plays of the device's log the software has, per device and epoch, "
+                    "given out of order (the writer sorts them: by deviceId's bytes, then epoch as an unsigned "
+                    "integer). Its companions are manifest.bin's.",
+            "companions": [{"file": "tags-0000002a.bin"}, {"file": "autodj-00000029.bin"}],
+            "roots": ["Lib B", "Lib A"],
+            "acks": [{"deviceId": DEVICE_B, "epoch": EPOCH_B, "seq": 3},
+                     {"deviceId": DEVICE_A, "epoch": EPOCH_2, "seq": 2},
+                     {"deviceId": DEVICE_A, "epoch": EPOCH_1, "seq": 7}]}
+
+
 def manifest_min():
     return {"format": "MSMF", "file": "manifest-min.bin", "generation": 1, "cardId": CARD_ID, "commitTime": 1791300000,
             "flags": 0, "commitId": "0x0000000000000001", "producer": "mstream-terminal 0.13.0",
@@ -1088,7 +1117,7 @@ def device_main():
 
 
 LIBRARIES = [tags_transfer, tags_device, tags_empty, manifest_min, manifest_main, pending_main, thumb_main,
-             device_main, tags_servers, manifest_servers]
+             device_main, tags_servers, manifest_servers, manifest_acks]
 
 
 def build(desc, golden: dict):
@@ -1104,6 +1133,368 @@ def build(desc, golden: dict):
     if f == "device.txt":
         return device_txt(desc)
     raise ValueError(f)
+
+
+# ---------------------------------------------------------------------------
+# The play log (2.20; tools/playlog.py is its reference reader and writer)
+# ---------------------------------------------------------------------------
+def ledger_rows(b: bytes):
+    """A tags file read back: per record, in record order, its path,
+    pathHash, size, fatTime and durationMs and, with ORIG, its serverPath
+    and server (2.6.4, 2.6.6)."""
+    p = parse_container(b)
+    strs = bytes(section(p, "STRS")[4])
+    names = {s[0] for s in p["sections"]}
+
+    def text(blob, off):
+        return blob[off:blob.index(0, off)].decode("utf-8") if off else ""
+
+    def join(a, n):
+        return a + "/" + n if a else n
+
+    fold, folders = section(p, "FOLD"), []
+    for i in range(fold[2]):
+        parent, name = struct.unpack_from("<II", fold[4], fold[3] * i)
+        folders.append("" if i == 0 else join(folders[parent], text(strs, name)))
+    recs, out = section(p, "RECS"), []
+    for i in range(recs[2]):
+        f, n, _, size, fat, dur = struct.unpack_from("<IIIIII", recs[4], recs[3] * i)
+        path = join(folders[f], text(strs, n))
+        out.append({"path": path, "pathHash": path_hash(path), "size": size, "fatTime": fat, "durationMs": dur})
+    if "ORIG" in names:
+        orig, ostr = section(p, "ORIG"), bytes(section(p, "OSTR")[4])
+        for i, r in enumerate(out):
+            r["serverPath"] = text(ostr, struct.unpack_from("<I", orig[4], orig[3] * i)[0])
+            r["server"] = struct.unpack_from("<H", orig[4], orig[3] * i + 74)[0]
+    return out
+
+
+PLAYS_BOOT = (1791900000000, 1791986400000, 1792072800000)  # the script's boots, epoch ms
+CLOCK = {"unset": 0, "rtc": 1, "host": 2}
+NFC_TITLE, NFD_TITLE = NFC_CAFE + "/Album/01 - Title.mp3", NFD_CAFE + "/Album/01 - Title.mp3"
+EPOCH_2_PATHS = ["B/w.opus", "A B/y.mp3", "A-/z.flac", "Artist/Album/CD2/01 - Disc Two.opus", "a/v.mp3", "É/u.mp3",
+                 NFC_TITLE, NFD_TITLE, "Artist/Album/01 - Title.mp3"]
+
+
+def plays_script(golden: dict):
+    """The device's script for the play log's goldens (2.20): one Core2 and
+    the fixture card (tags-0000002a.bin's files, generation 42), with a cap
+    of 4 slots a file so the rotation shows. Every value a writer would
+    otherwise choose is given."""
+    rows = {r["path"]: r for r in ledger_rows(golden["tags-0000002a.bin"])}
+    hand = {r["path"]: r for r in ledger_rows(golden["tags-device.bin"])}
+
+    def play(path, outcome, source, played, uptime, boot, clock=True, pauses=0, duration=None, src=rows):
+        r = src[path]
+        return {"play": {"path": path, "pathHash": "0x%016X" % r["pathHash"], "size": r["size"],
+                         "fatTime": "0x%08X" % r["fatTime"], "generation": 42, "outcome": outcome, "source": source,
+                         "playedMs": played, "durationMs": r["durationMs"] if duration is None else duration,
+                         "uptimeMs": uptime, "startedAt": PLAYS_BOOT[boot] + uptime if clock else 0,
+                         "pauseCount": pauses}}
+    events = [
+        {"boot": {"clock": "unset"}, "note": "the first boot: NVS has no epoch, so EPOCH_1 is made; no clock"},
+        play("Artist/Album/01 - Title.mp3", 1, 1, 180000, 5000, 0, clock=False),
+        {"setClock": {}, "note": "a host's @time, during this boot"},
+        play("Artist/Album/02 - Other.mp3", 2, 1, 12000, 190000, 0),
+        play("Artist/Album/CD1/01 - Disc One.flac", 3, 3, 90500, 205000, 0, pauses=2),
+        {"boot": {"clock": "rtc"}, "note": "the second boot: the RTC kept the time"},
+        play("A/x.mp3", 1, 2, 186000, 8000, 1),
+        play("Hand Copied/Album/01 - First.flac", 1, 2, 200000, 200000, 1, src=hand),
+        play("Artist/x.mp3", 2, 1, 30000, 410000, 1, duration=0),
+        play("Loose Intro.mp3", 1, 3, 194000, 450000, 1),
+        {"snapshot": "sync-1", "note": "the card goes into a PC; the software resolves the seven plays"},
+        {"acks": [{"deviceId": DEVICE_A, "epoch": EPOCH_1, "seq": 7}],
+         "note": "the root of the sync's commit acknowledges them all (2.5.6)"},
+        {"eraseNvs": {}, "note": "a flasher's install erases NVS"},
+        {"boot": {"clock": "rtc"}, "note": "NVS has no epoch: EPOCH_2 is made; the acknowledged files go (2.20.2)"},
+    ]
+    for i, path in enumerate(EPOCH_2_PATHS):
+        events.append(play(path, 1, (1, 2, 3)[i % 3], rows[path]["durationMs"], 10000 + 300000 * i, 2))
+    events.append({"snapshot": "end", "note": "no sync since: the rotation dropped four plays, and said so"})
+    return {"format": "MPPL", "file": "log.json", "cap": 4,
+            "device": {"deviceId": DEVICE_A, "epochs": [EPOCH_1, EPOCH_2]},
+            "note": "The play log's goldens (2.20): the events of one device with the fixture card. A play's file "
+                    "is a record of tags-0000002a.bin (Hand Copied/...: of tags-device.bin, a file the ledger "
+                    "doesn't hold); its fields are given. A snapshot is the log's files at that point, in "
+                    "plays/golden/<name>/. The rotation's drop note takes the clock, startedAt, bootSeq and "
+                    "uptimeMs of the play written after it (2.20.3).",
+            "events": events}
+
+
+def run_plays(desc):
+    """The script through playlog.Device: {snapshot: {file name: bytes}},
+    and the device's steps."""
+    d = playlog.Device(desc["device"]["deviceId"], [u64(e) for e in desc["device"]["epochs"]], cap=desc["cap"])
+    acks, snaps = None, {}
+    for e in desc["events"]:
+        if "boot" in e:
+            d.boot(CLOCK[e["boot"]["clock"]], acks)
+        elif "setClock" in e:
+            d.set_clock()
+        elif "eraseNvs" in e:
+            d.erase_nvs()
+        elif "acks" in e:
+            acks = [(playlog.device_bytes(a["deviceId"]).hex(), u64(a["epoch"]), a["seq"]) for a in e["acks"]]
+        elif "snapshot" in e:
+            snaps[e["snapshot"]] = dict(d.files)
+        else:
+            p = e["play"]
+            d.play(u64(p["pathHash"]), p["size"], u64(p["fatTime"]), p["generation"], p["playedMs"],
+                   p["durationMs"], p["outcome"], p["source"], p["uptimeMs"], p["startedAt"], p["pauseCount"], acks)
+    return snaps, d.ops
+
+
+def play_slot(device, epoch, seq, **kw):
+    """A play slot for the reader's cases."""
+    s = {"kind": playlog.KIND_PLAY, "deviceId": device, "epoch": u64(epoch), "seq": seq, "outcome": 1, "source": 1,
+         "clock": 1, "startedAt": 1792100000000 + 1000 * seq, "bootSeq": 1, "uptimeMs": 1000 * seq,
+         "playedMs": 60000, "durationMs": 60000, "pathHash": path_hash("Artist/Album/01 - Title.mp3"), "size": 1000,
+         "fatTime": fat_time(2026, 10, 7, 14, 30, 42), "generation": 42}
+    s.update(kw)
+    return playlog.encode(s)
+
+
+def plays_read_cases(snaps):
+    """The reader's cases (2.20.6): [(case, {file name: bytes}, ids, counts,
+    extra, note)], the expected values typed from the spec."""
+    a1 = lambda n: "core2-00005e005301-1122334455667788-%d" % n  # noqa: E731
+    a2 = lambda n: "core2-00005e005301-f0e1d2c3b4a59687-%d" % n  # noqa: E731
+    b = lambda n: "core2-00005e005302-0a0b0c0d0e0f1011-%d" % n  # noqa: E731
+    s1, end = snaps["sync-1"], snaps["end"]
+    zero = {k: 0 for k in ("slots", "damaged", "tail", "newer", "unknownKinds", "unusable", "twins", "conflicts",
+                           "dropped")}
+    c = lambda **kw: dict(zero, **kw)  # noqa: E731
+    torn = bytearray(s1["plays.1.jnl"])
+    torn[100:140] = bytes(40)
+    newer = bytearray(play_slot(DEVICE_A, EPOCH_1, 9))
+    newer[4] = 2
+    struct.pack_into("<I", newer, 76, crc(bytes(newer[:76])))
+    a2_other = playlog.read_log({"plays.1.jnl": s1["plays.1.jnl"]})["plays"][1]
+    conflict = playlog.encode(dict(a2_other, playedMs=a2_other["playedMs"] + 1))
+    dating = (play_slot(DEVICE_B, EPOCH_B, 3, startedAt=0, clock=0, bootSeq=4, uptimeMs=0xFFFFF000) +
+              play_slot(DEVICE_B, EPOCH_B, 4, startedAt=1792100000000, clock=2, bootSeq=4, uptimeMs=0x1000) +
+              play_slot(DEVICE_B, EPOCH_B, 5, startedAt=0, clock=0, bootSeq=5, uptimeMs=3000))
+    return [
+        ("sync-1", s1, [a1(n) for n in range(1, 8)], c(slots=7), {}, "the golden at the first sync"),
+        ("end", end, [a2(n) for n in range(5, 10)], c(slots=6, dropped=4),
+         {}, "the golden at the end: a new epoch; a drop note of 4 plays"),
+        ("tail", dict(s1, **{"plays.jnl": s1["plays.jnl"] + b"\x5a" * 37}), [a1(n) for n in range(1, 8)],
+         c(slots=7, tail=1), {}, "a cut append: 37 bytes after the last slot, ignored"),
+        ("torn", dict(s1, **{"plays.1.jnl": bytes(torn)}), [a1(n) for n in (1, 3, 4, 5, 6, 7)],
+         c(slots=7, damaged=1), {}, "a torn sector: the second slot's bytes 20-59 zeroed, its CRC fails"),
+        ("newer", dict(s1, **{"plays.jnl": s1["plays.jnl"] + bytes(newer)}), [a1(n) for n in range(1, 8)],
+         c(slots=8, newer=1), {}, "a slot of major 2, its CRC good: a newer firmware's, skipped and counted"),
+        ("unknown-kind", dict(s1, **{"plays.jnl": s1["plays.jnl"] + play_slot(DEVICE_A, EPOCH_1, 8, kind=9)}),
+         [a1(n) for n in range(1, 8)], c(slots=8, unknownKinds=1), {}, "a valid slot of kind 9: skipped"),
+        ("twins", {"plays.jnl": s1["plays.1.jnl"], "plays.1.jnl": s1["plays.1.jnl"]}, [a1(n) for n in range(1, 5)],
+         c(slots=8, twins=4), {}, "a rotation's rename cut between its two directory writes: both names, one chain"),
+        ("conflict", {"plays.1.jnl": s1["plays.1.jnl"], "plays.jnl": conflict}, [a1(n) for n in (1, 3, 4)],
+         c(slots=5, conflicts=1), {}, "one key, two different slots: neither is used"),
+        ("unusable", {"plays.jnl": play_slot(DEVICE_A, 0, 1) + play_slot(DEVICE_A, EPOCH_1, 0) +
+                      play_slot("00:00:00:00:00:00", EPOCH_1, 1)}, [], c(slots=3, unusable=3), {},
+         "valid slots without an epoch, a seq, or a deviceId"),
+        ("magic", {"plays.jnl": play_slot(DEVICE_A, EPOCH_1, 1) + bytes(80) + play_slot(DEVICE_A, EPOCH_1, 2)},
+         [a1(1), a1(2)], c(slots=3, damaged=1), {}, "a zeroed slot between two plays: reading goes on"),
+        ("two-devices", {"plays.jnl": play_slot(DEVICE_B, EPOCH_B, 2) + play_slot(DEVICE_A, EPOCH_1, 8) +
+                         play_slot(DEVICE_B, EPOCH_B, 1)}, [a1(8), b(1), b(2)], c(slots=3), {},
+         "two devices on one card: by deviceId's bytes, then epoch, then seq"),
+        ("enums", {"plays.jnl": play_slot(DEVICE_A, EPOCH_1, 1, outcome=9, source=7, clock=5) +
+                   play_slot(DEVICE_A, EPOCH_1, 2, outcome=0, source=0)}, [a1(1), a1(2)], c(slots=2),
+         {"names": {a1(1): ["stopped", "other"], a1(2): ["stopped", "other"]}},
+         "unknown values: outcome 9 and 0 read as stopped, source 7 as not said (other), clock 5 is ignored"),
+        ("dating", {"plays.jnl": dating}, [b(3), b(4), b(5)], c(slots=3),
+         {"dates": {b(3): 1792100000000 - 0x2000, b(4): 1792100000000, b(5): None}},
+         "no clock: dated by the next dated play of its boot, the uptime wrapping (0xFFFFF000 to 0x1000 is 8,192 "
+         "ms); with none in its boot, no start"),
+    ]
+
+
+def plays_files(golden: dict):
+    """test/fixtures/card/plays: the script (log.json), the log files at each
+    snapshot (golden/<snapshot>/), the reader's cases (read/<case>/, listed
+    in index.json with what a reader takes from each), every case read back
+    by tools/playlog.py first."""
+    desc = plays_script(golden)
+    snaps, ops = run_plays(desc)
+    files = {"plays/log.json": (json.dumps(desc, indent=1, ensure_ascii=False) + "\n").encode("utf-8")}
+    for snap, logs in snaps.items():
+        for name, data in logs.items():
+            files["plays/golden/%s/%s" % (snap, name)] = data
+    known = {data: path[len("plays/"):] for path, data in files.items() if path.startswith("plays/golden/")}
+    index = []
+    for case, logs, ids, counts, extra, note in plays_read_cases(snaps):
+        log = playlog.read_log(logs)
+        got = [playlog.play_id(p) for p in log["plays"]]
+        assert got == ids and log["counts"] == counts, (case, got, log["counts"])
+        when = playlog.dates(log["plays"])
+        for i, ms in extra.get("dates", {}).items():
+            assert when[next(playlog.key(p) for p in log["plays"] if playlog.play_id(p) == i)] == ms, (case, i)
+        for i, (o, s) in extra.get("names", {}).items():
+            p = next(p for p in log["plays"] if playlog.play_id(p) == i)
+            assert (playlog.outcome_name(p["outcome"]), playlog.source_name(p["source"])) == (o, s), (case, i)
+        where = {}
+        for name in sorted(logs, key=playlog.NAMES.index):
+            # A golden file is named where it is; a case's own file is in
+            # read/<case>/, under the name it has on the card.
+            where[name] = known.get(logs[name], "read/%s/%s" % (case, name))
+            if where[name].startswith("read/"):
+                files["plays/" + where[name]] = logs[name]
+        index.append(dict({"case": case, "files": where, "ids": ids, "counts": counts}, **extra, note=note))
+    files["plays/index.json"] = (json.dumps(index, indent=1, ensure_ascii=False) + "\n").encode("utf-8")
+    return files, snaps, ops
+
+
+def play_target(root, server):
+    """2.20.6, 2.5.5: where a play of a row of `server` goes, on the card
+    whose root description is `root`: {"server": the card's server it is
+    posted to, "peerId": a peer's id, else None}; None for an unknown
+    server. A peer's goes to its parent, the card's server of parentKey
+    (when the card has none: "server" None, the parent by its key)."""
+    srv = card_server(root, server)
+    if srv is None:
+        return None
+    if not srv["flags"] & PEER:
+        return {"server": server, "peerId": None}
+    return {"server": card_parent(root, srv["parentKey"]), "peerId": srv["peerId"]}
+
+
+def history_majors(text):
+    """2.15's history key: the play log's majors a firmware writes ([] none);
+    text None: no device.txt."""
+    if text is None:
+        return []
+    for line in text.replace("\r\n", "\n").split("\n"):
+        k, _, v = line.partition("=")
+        if k == "history":
+            return sorted({int(x) for x in v.split(",") if x.strip().isdigit()})
+    return []
+
+
+def slot_json(f):
+    """A slot's fields for the fixtures: the integers that may pass 2^53
+    (epoch, pathHash) as hex strings."""
+    out = dict(f)
+    for k in ("epoch", "pathHash"):
+        if k in out:
+            out[k] = "0x%016X" % out[k]
+    return out
+
+
+def plays_vectors(golden: dict, snaps, ops):
+    """vectors.json's plays group (2.20, 2.5.6)."""
+    a = lambda n: "core2-00005e005301-1122334455667788-%d" % n  # noqa: E731
+    a2 = lambda n: "core2-00005e005301-f0e1d2c3b4a59687-%d" % n  # noqa: E731
+    first = snaps["sync-1"]["plays.1.jnl"][:80]
+    note = snaps["end"]["plays.jnl"][:80]
+    t1, t2, t3 = PLAYS_BOOT
+    sync1 = [
+        (a(1), True, "Music/Artist/Album/01 - Title.mp3", t1 + 190000 - 185000,
+         "no clock at its start: dated by play 2 of its boot, 185,000 ms of uptime later"),
+        (a(2), True, "Music/Artist/Album/02 - Other.mp3", t1 + 190000, "skipped"),
+        (a(3), True, "Music/Artist/Album/CD1/01 - Disc One.flac", t1 + 205000, "stopped, 2 pauses, Auto DJ"),
+        (a(4), True, "Music/A/x.mp3", t2 + 8000, "a second boot, the RTC's time"),
+        (a(5), False, "file", None, "Hand Copied/...: no ledger row, the listener's file: counted, not sent"),
+        (a(6), False, "file", None, "Artist/x.mp3: the ledger's stamp is invalid (sec2 31), so no time "
+                                    "matches: counted, not sent"),
+        (a(7), True, "Music/Loose Intro.flac", t2 + 450000, "a converted file: its ledger row's server path"),
+    ]
+    end = [(a2(n), True, "Music/" + EPOCH_2_PATHS[n - 1], t3 + 10000 + 300000 * (n - 1), "")
+           for n in range(5, 10)]
+    to = lambda server, peer=None: {"server": server, "peerId": peer}  # noqa: E731
+    peers = [{"path": "Artist/Album/01 - Title.mp3", "server": 0, "to": to(0)},
+             {"path": "Both/One (2).mp3", "server": 1, "to": to(1)},
+             {"path": "Both/One.mp3", "server": 0, "to": to(0)},
+             {"path": "Far Artist/Far Album/01 - Far.opus", "server": 3, "to": to(1, 1)},
+             {"path": "Peer Artist/Peer Album/01 - Tune.opus", "server": 2, "to": to(0, 3)},
+             {"path": "Second Artist/Album/01 - Song.flac", "server": 1, "to": to(1)}]
+    rows2a = {r["path"]: r for r in ledger_rows(golden["tags-0000002a.bin"])}
+    other = rows2a["Artist/Album/02 - Other.mp3"]
+    hour_later = fat_from_wall(fat_wall(other["fatTime"]) + 3600)
+    ack_rows = parse_container(golden["manifest-acks.bin"])
+    acks = section(ack_rows, "ACKS")
+    return {
+        "who": "both",
+        "note": ("2.20 and 2.5.6: the play log. slot: one play slot's fields and bytes; note: a drop note's. ids: "
+                 "a play's id. names: what an outcome and a source read as. bootSeq: the next seq at boot, over "
+                 "the golden sync-1 log (the device's). deviceOps: what the device model did with log.json's "
+                 "events (informative). files: plays/'s files (the goldens, the reader's cases in "
+                 "plays/index.json). acks: ACKS's bytes, the golden root's entries, and the hardening files. "
+                 "resolve: a golden log through a golden tags file (the software's): each new play, sent or not "
+                 "(why: 'file' its file isn't a ledger row's, 'clock' no start), where to and its start; then the "
+                 "posted marks once the server settled the sent ones. resolveCases: single plays. peers: where "
+                 "a play of each row of the card of several servers goes. deviceTxt: the history key."),
+        "slot": {"fields": slot_json(playlog.decode(first)[1]), "bytes": first.hex(" ").upper(),
+                 "crc": "0x%08X" % struct.unpack_from("<I", first, 76)[0], "id": a(1)},
+        "dropNote": {"fields": slot_json(playlog.decode(note)[1]), "bytes": note.hex(" ").upper()},
+        "ids": [
+            {"deviceId": DEVICE_A, "epoch": EPOCH_1, "seq": 42, "id": "core2-00005e005301-1122334455667788-42"},
+            {"deviceId": DEVICE_A, "epoch": EPOCH_2, "seq": 1, "id": "core2-00005e005301-f0e1d2c3b4a59687-1"},
+            {"deviceId": "FF:FF:FF:FF:FF:FE", "epoch": "0xFFFFFFFFFFFFFFFF", "seq": 4294967295,
+             "id": "core2-fffffffffffe-ffffffffffffffff-4294967295", "note": "the longest: 46 characters"},
+            {"deviceId": DEVICE_A, "epoch": "0x0000000000000001", "seq": 1,
+             "id": "core2-00005e005301-0000000000000001-1",
+             "note": "the epoch's leading zeros are written"}],
+        "names": {"outcome": {"0": "stopped", "1": "completed", "2": "skipped", "3": "stopped", "4": "stopped"},
+                  "source": {"0": "other", "1": "manual", "2": "shuffle", "3": "autodj", "4": "other"}},
+        "bootSeq": {"log": "plays/golden/sync-1", "cases": [
+            {"nvsSeq": 0, "deviceId": DEVICE_A, "epoch": EPOCH_1, "next": 8, "note": "NVS behind the card"},
+            {"nvsSeq": 9, "deviceId": DEVICE_A, "epoch": EPOCH_1, "next": 10, "note": "NVS ahead (seqs reserved)"},
+            {"nvsSeq": 0, "deviceId": DEVICE_A, "epoch": EPOCH_2, "next": 1, "note": "a new epoch"},
+            {"nvsSeq": 3, "deviceId": DEVICE_B, "epoch": EPOCH_1, "next": 4, "note": "another device's plays"}]},
+        "deviceOps": [list(o) for o in ops],
+        "files": {"golden": sorted("plays/golden/%s/%s" % (s, n) for s in snaps for n in snaps[s])},
+        "acks": {
+            "entry": {"deviceId": DEVICE_A, "epoch": EPOCH_1, "seq": 7,
+                      "stored": "00 00 5E 00 53 01 00 00 88 77 66 55 44 33 22 11 07 00 00 00 00 00 00 00"},
+            "golden": {"file": "manifest-acks.bin", "stride": acks[3], "entries": [
+                {"deviceId": "00005e005301", "epoch": EPOCH_1, "seq": 7},
+                {"deviceId": "00005e005301", "epoch": EPOCH_2, "seq": 2},
+                {"deviceId": "00005e005302", "epoch": EPOCH_B, "seq": 3}],
+                "note": "EPOCH_2 has its top bit set: unsigned, it sorts after EPOCH_1"},
+            "hardening": [
+                {"file": "msmf-acks-damaged.bin", "acks": None, "root": "present", "note": "its CRC fails"},
+                {"file": "msmf-acks-order.bin", "acks": None, "root": "present", "note": "two entries out of order"},
+                {"file": "msmf-acks-short.bin", "acks": None, "root": "present", "note": "rows of 16 bytes"},
+                {"file": "msmf-acks-minor-1.bin", "acks": [
+                    {"deviceId": "00005e005301", "epoch": EPOCH_1, "seq": 7},
+                    {"deviceId": "00005e005301", "epoch": EPOCH_2, "seq": 2},
+                    {"deviceId": "00005e005302", "epoch": EPOCH_B, "seq": 3}],
+                 "root": "present", "note": "rows of 32 bytes, read by their 24-byte prefix: the golden's entries"}]},
+        "resolve": [
+            {"log": "plays/golden/sync-1", "ledger": "tags-0000002a.bin", "skew": 0, "posted": [],
+             "plays": [{"id": i, "send": s_, "filePath" if s_ else "why": w, "startedAt": t, "note": n}
+                       for i, s_, w, t, n in sync1],
+             "settled": [i for i, s_, _, _, _ in sync1 if s_],
+             "marks": [{"deviceId": "00005e005301", "epoch": EPOCH_1, "seq": 7}]},
+            {"log": "plays/golden/end", "ledger": "tags-0000002a.bin", "skew": 0,
+             "posted": [{"deviceId": "00005e005301", "epoch": EPOCH_1, "seq": 7}],
+             "plays": [{"id": i, "send": s_, "filePath": w, "startedAt": t} for i, s_, w, t, _ in end],
+             "settled": [i for i, _, _, _, _ in end],
+             "marks": [{"deviceId": "00005e005301", "epoch": EPOCH_1, "seq": 7},
+                       {"deviceId": "00005e005301", "epoch": EPOCH_2, "seq": 9}],
+             "dropped": 4, "note": "the epoch's plays 1-4 were dropped by the rotation before a sync read them"}],
+        "resolveCases": [
+            {"slot": {"size": other["size"] + 1}, "skew": 0, "send": False, "why": "file",
+             "note": "Artist/Album/02 - Other.mp3, one byte longer: not the ledger's file"},
+            {"slot": {"fatTime": "0x%08X" % hour_later}, "skew": 3600, "send": True,
+             "note": "an hour later under T's skew of +3,600: the ledger's file"},
+            {"slot": {"fatTime": "0x%08X" % hour_later}, "skew": 0, "send": False, "why": "file",
+             "note": "the same with no skew"},
+            {"slot": {"fatTime": "0x00000000"}, "skew": 0, "send": False, "why": "file", "note": "a 0 stamp"},
+            {"slot": {"startedAt": 0, "clock": 0}, "skew": 0, "send": False, "why": "clock",
+             "note": "no start, and no later dated play of its boot"},
+            {"slot": {"seq": 3}, "posted": 3, "skew": 0, "send": None, "note": "at the posted mark: not new"}],
+        "resolveCasesBase": {"deviceId": DEVICE_A, "epoch": EPOCH_1, "seq": 4, "path": "Artist/Album/02 - Other.mp3",
+                             "ledger": "tags-0000002a.bin"},
+        "peers": {"card": "manifest-servers.json", "ledger": "tags-00000007.bin", "rows": peers,
+                  "note": "server 2 is peer 3 of the root's server (posted to server 0 with peerId 3), server 3 peer "
+                          "1 of server 1"},
+        "deviceTxt": [{"text": "contract=1\nhistory=1\n", "history": [1]},
+                      {"text": "contract=1\nfirmware=0.11.0\n", "history": [], "note": "no key: no log"},
+                      {"text": "contract=1\nhistory=\n", "history": [], "note": "empty: none"},
+                      {"text": "contract=1\nhistory=1,2\n", "history": [1, 2]},
+                      {"text": None, "history": [], "note": "no device.txt"}],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -1526,6 +1917,8 @@ def vectors(golden: dict):
         "brokenEntries": {"cases": broken_server_cases()},
     }
     v["privateFiles"] = private_vectors()
+    _, snaps, ops = plays_files(golden)
+    v["plays"] = plays_vectors(golden, snaps, ops)
     v["deviceTxt"] = {"text": device_txt(device_main()).decode("ascii"),
                       "noFile": {"read.msmf": "1", "read.mptg": "1", "read.mpdj": "", "read.mpth": "1",
                                  "codecs": "mp3,flac", "extensions": "mp3,flac", "max_rate": "48000",
@@ -1623,6 +2016,95 @@ def elect(b, t):
 
 def hexint(s):
     return int(s, 16)
+
+
+def root_acks(b: bytes):
+    """ACKS as a reader that uses it takes it from a root (2.5.6): its
+    entries [(deviceId hex, epoch, seq)], or None when the root has none or
+    the section breaks a rule (its CRC, stride, length or order): then it
+    is ignored, and the root stays valid."""
+    hb, n = struct.unpack_from("<II", b, 8)
+    for i in range(n):
+        t, _, off, ln, count, stride, c, _ = struct.unpack_from("<4sIIIIIII", b, hb + 32 * i)
+        if t == b"ACKS":
+            data = bytes(b[off:off + ln])
+            return playlog.read_acks(data, count, stride) if crc(data) == c else None
+    return None
+
+
+def check_plays(pv, golden: dict, want):
+    """The plays group recomputed (2.20, 2.5.6)."""
+    snaps, _ = run_plays(plays_script(golden))
+
+    def log_of(path):
+        return snaps[path.rsplit("/", 1)[1]]
+
+    def hexbytes(s):
+        return bytes.fromhex(s.replace(" ", ""))
+
+    def unjson(f):
+        return {k: (u64(x) if k in ("epoch", "pathHash") else x) for k, x in f.items()}
+    slot = hexbytes(pv["slot"]["bytes"])
+    want(playlog.decode(slot) == ("ok", unjson(pv["slot"]["fields"])) and
+         playlog.encode(pv["slot"]["fields"]) == slot and
+         crc(slot[:76]) == hexint(pv["slot"]["crc"]) and playlog.play_id(pv["slot"]["fields"]) == pv["slot"]["id"],
+         "plays slot")
+    note = hexbytes(pv["dropNote"]["bytes"])
+    want(playlog.decode(note) == ("ok", unjson(pv["dropNote"]["fields"])) and
+         playlog.encode(pv["dropNote"]["fields"]) == note, "plays drop note")
+    for e in pv["ids"]:
+        got = playlog.play_id({"deviceId": e["deviceId"], "epoch": e["epoch"], "seq": e["seq"]})
+        want(got == e["id"] and len(got) <= 46, "play id " + e["id"])
+    for o, n in pv["names"]["outcome"].items():
+        want(playlog.outcome_name(int(o)) == n, "outcome %s" % o)
+    for o, n in pv["names"]["source"].items():
+        want(playlog.source_name(int(o)) == n, "source %s" % o)
+    plays = playlog.read_log(log_of(pv["bootSeq"]["log"]))["plays"]
+    for e in pv["bootSeq"]["cases"]:
+        want(playlog.boot_seq(e["nvsSeq"], plays, e["deviceId"], e["epoch"]) == e["next"], "bootSeq %r" % e)
+    a = pv["acks"]
+    want(playlog.acks_bytes([(a["entry"]["deviceId"], a["entry"]["epoch"], a["entry"]["seq"])]) ==
+         hexbytes(a["entry"]["stored"]), "acks entry")
+    want(root_acks(golden[a["golden"]["file"]]) ==
+         [(e["deviceId"], u64(e["epoch"]), e["seq"]) for e in a["golden"]["entries"]], "acks golden")
+    for r in pv["resolve"]:
+        logs = log_of(r["log"])
+        log = playlog.read_log(logs)
+        posted = {(e["deviceId"], u64(e["epoch"])): e["seq"] for e in r["posted"]}
+        got = playlog.resolve(log["plays"], ledger_rows(golden[r["ledger"]]), r["skew"], posted)
+        want([e["id"] for e in got] == [e["id"] for e in r["plays"]], "resolve ids " + r["log"])
+        for g, e in zip(got, r["plays"]):
+            ok = g["send"] == e["send"]
+            if e["send"]:
+                ok = ok and g["filePath"] == e["filePath"] and g["startedAt"] == e["startedAt"]
+            else:
+                ok = ok and g["why"].startswith({"file": "not", "clock": "no clock"}[e["why"]])
+            want(ok, "resolve %s: %r" % (e["id"], g))
+        marks = playlog.next_mark(log["plays"], got, posted, r["settled"])
+        want(marks == {(e["deviceId"], u64(e["epoch"])): e["seq"] for e in r["marks"]}, "marks " + r["log"])
+        want(log["counts"]["dropped"] == r.get("dropped", 0), "dropped " + r["log"])
+    base = pv["resolveCasesBase"]
+    rows = {x["path"]: x for x in ledger_rows(golden[base["ledger"]])}
+    rec = rows[base["path"]]
+    for e in pv["resolveCases"]:
+        p = {"kind": 1, "deviceId": playlog.device_bytes(base["deviceId"]).hex(), "epoch": u64(base["epoch"]),
+             "seq": base["seq"], "outcome": 1, "source": 1, "pauseCount": 0, "clock": 1, "startedAt": 1792200000000,
+             "bootSeq": 1, "uptimeMs": 1000, "playedMs": 1000, "durationMs": 0, "pathHash": rec["pathHash"],
+             "size": rec["size"], "fatTime": rec["fatTime"], "generation": 42}
+        p.update({k: u64(x) for k, x in e["slot"].items()})
+        posted = {(p["deviceId"], p["epoch"]): e["posted"]} if "posted" in e else None
+        got = playlog.resolve([p], list(rows.values()), e["skew"], posted)
+        if e["send"] is None:
+            want(got == [], "resolveCase " + e["note"])
+        else:
+            want(len(got) == 1 and got[0]["send"] == e["send"] and (e["send"] or got[0]["why"].startswith(
+                {"file": "not", "clock": "no clock"}[e["why"]])), "resolveCase " + e["note"])
+    card = manifest_servers()
+    rows7 = [x for x in ledger_rows(golden[pv["peers"]["ledger"]]) if x["serverPath"]]
+    want([{"path": x["path"], "server": x["server"], "to": play_target(card, x["server"])} for x in rows7] ==
+         pv["peers"]["rows"], "peers")
+    for e in pv["deviceTxt"]:
+        want(history_majors(e["text"]) == e["history"], "history %r" % e["text"])
 
 
 def check_vectors(v, golden: dict):
@@ -1749,6 +2231,7 @@ def check_vectors(v, golden: dict):
              got.get("then", "start over") == e["then"], "resumeFetch " + e["note"])
     want(private_parse(json.dumps(pf["resumeExample"]), RESUME_FORMAT)[0] == "valid" and
          len(resume_parts(pf["resumeExample"])) == len(pf["resumeExample"]["parts"]), "resume example")
+    check_plays(v["plays"], golden, want)
     if bad:
         raise SystemExit("vectors that don't match: " + ", ".join(bad))
 
@@ -2205,6 +2688,32 @@ def hardening(golden: dict):
          msmf_raw(sd, [comp_row(c["file"], golden[c["file"]]) for c in sd["companions"]], [], 0,
                   [server_entry(s) for s in rule_breaks]))
 
+    # MSMF's ACKS (2.5.6): whatever it holds, the root reads; a reader that
+    # uses ACKS ignores one that breaks its rules.
+    ad = manifest_acks()
+    acks_comps = [comp_row(c["file"], golden[c["file"]]) for c in ad["companions"]]
+    roots = sorted(ad["roots"], key=lambda r: r.encode("utf-8"))
+    entries = [(x["deviceId"], x["epoch"], x["seq"]) for x in ad["acks"]]
+    rows = playlog.acks_bytes(entries)
+
+    damaged = bytearray(golden["manifest-acks.bin"])
+    hb, n = struct.unpack_from("<II", damaged, 8)
+    for i in range(n):
+        t, _, off, ln = struct.unpack_from("<4sIII", damaged, hb + 32 * i)
+        if t == b"ACKS":
+            damaged[off + 16] ^= 1  # a seq's byte: the section's CRC now fails
+    good("msmf-acks-damaged", "MSMF", "ACKS: its CRC fails: the section is ignored, never the root (2.5.6)",
+         bytes(damaged))
+    swapped = rows[24:48] + rows[:24] + rows[48:]
+    order = msmf_raw(ad, acks_comps, roots, acks=swapped)
+    good("msmf-acks-order", "MSMF", "ACKS: two entries out of order, its CRC good: ignored, the root reads", order)
+    short = msmf_raw(ad, acks_comps, roots, acks=(b"".join(rows[24 * i:24 * i + 16] for i in range(3)), 16))
+    good("msmf-acks-short", "MSMF", "ACKS: rows of 16 bytes, below v1's 24: ignored, the root reads", short)
+    longer = msmf_raw(ad, acks_comps, roots, minor=1,
+                      acks=(b"".join(rows[24 * i:24 * (i + 1)] + bytes([0xAB]) * 8 for i in range(3)), 32))
+    good("msmf-acks-minor-1", "MSMF", "ACKS: rows of 32 bytes, a newer minor's, read by their 24-byte prefix", longer)
+    full = root_acks(golden["manifest-acks.bin"])
+    assert full and [root_acks(b) for b in (bytes(damaged), order, short, longer)] == [None, None, None, full]
     # MSPD.
     pd = pending_main()
     bad("mspd-order", "MSPD", "pendOrder", "PEND: a write before a delete",
@@ -2286,11 +2795,28 @@ card_fixtures.py imports. `libraries/autodj-mid.f32` holds the vectors
 that `autodj-mid.json` and `autodj-mid-default.json` name (raw
 little-endian f32, 16 a row, in the descriptions' row order).
 
+The play log (docs/METADATA.md 2.20) has its fixtures in `plays/`, made
+with `tools/playlog.py`, its reference reader and writer, which
+card_fixtures.py imports. `plays/log.json` is one device's script on the
+fixture card (every value a writer would otherwise choose given; a cap of
+4 slots a file, so the rotation shows). `plays/golden/<snapshot>/` holds
+the log's files at each of its snapshots: what a writer MUST make of the
+script, byte for byte. `plays/index.json` lists the reader's cases, each
+a card's log files (a golden one by its path, a case's own in
+`plays/read/<case>/`) with what a reader takes from them: the plays' ids
+in order, the counts of what it skipped, and where given the plays'
+starts and what their enums read as. `golden/manifest-acks.bin` is a root
+with ACKS (2.5.6); the `msmf-acks-*` hardening files are roots that
+read, whatever their ACKS holds (`vectors.json`'s `plays.acks` says what
+a reader that uses ACKS takes from each).
+
 The player's tests: `test/test_card_contract` (the vectors),
 `test/test_card_files` (the goldens, round trips, the hardening files,
 truncation at every byte and every flipped bit), `test/test_card_autodj`
 (the AutoDJ index's own rules) and `test/test_name_key` (the keys the
-AutoDJ descriptions give).
+AutoDJ descriptions give). The play log's fixtures are for the
+firmware's log and the transfer software's reader, neither built yet;
+`tools/test_playlog.py` reads them today.
 """
 
 
@@ -2311,6 +2837,7 @@ def generate():
         files["libraries/" + name] = data
     for name, data in golden.items():
         files["golden/" + name] = data
+    files.update(plays_files(golden)[0])
     v = vectors(golden)
     check_vectors(v, golden)
     files["vectors.json"] = (json.dumps(v, indent=1, ensure_ascii=False) + "\n").encode("utf-8")

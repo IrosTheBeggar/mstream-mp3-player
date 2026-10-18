@@ -1955,6 +1955,598 @@
    "producer": "mstream-terminal 0.14.0"
   }
  },
+ "plays": {
+  "who": "both",
+  "note": "2.20 and 2.5.6: the play log. slot: one play slot's fields and bytes; note: a drop note's. ids: a play's id. names: what an outcome and a source read as. bootSeq: the next seq at boot, over the golden sync-1 log (the device's). deviceOps: what the device model did with log.json's events (informative). files: plays/'s files (the goldens, the reader's cases in plays/index.json). acks: ACKS's bytes, the golden root's entries, and the hardening files. resolve: a golden log through a golden tags file (the software's): each new play, sent or not (why: 'file' its file isn't a ledger row's, 'clock' no start), where to and its start; then the posted marks once the server settled the sent ones. resolveCases: single plays. peers: where a play of each row of the card of several servers goes. deviceTxt: the history key.",
+  "slot": {
+   "fields": {
+    "kind": 1,
+    "outcome": 1,
+    "source": 1,
+    "seq": 1,
+    "pauseCount": 0,
+    "clock": 0,
+    "epoch": "0x1122334455667788",
+    "deviceId": "00005e005301",
+    "startedAt": 0,
+    "bootSeq": 1,
+    "uptimeMs": 5000,
+    "playedMs": 180000,
+    "durationMs": 180000,
+    "pathHash": "0xDA70B312760188D8",
+    "size": 1000,
+    "fatTime": 1564963797,
+    "generation": 42
+   },
+   "bytes": "4D 50 50 4C 01 01 01 01 01 00 00 00 00 00 00 00 88 77 66 55 44 33 22 11 00 00 5E 00 53 01 00 00 00 00 00 00 00 00 00 00 01 00 00 00 88 13 00 00 20 BF 02 00 20 BF 02 00 D8 88 01 76 12 B3 70 DA E8 03 00 00 D5 73 47 5D 2A 00 00 00 6F CF F1 C2",
+   "crc": "0xC2F1CF6F",
+   "id": "core2-00005e005301-1122334455667788-1"
+  },
+  "dropNote": {
+   "fields": {
+    "kind": 2,
+    "clock": 1,
+    "epoch": "0xF0E1D2C3B4A59687",
+    "deviceId": "00005e005301",
+    "startedAt": 1792075210000,
+    "bootSeq": 1,
+    "uptimeMs": 2410000,
+    "dropped": 4
+   },
+   "bytes": "4D 50 50 4C 01 02 00 00 00 00 00 00 00 00 01 00 87 96 A5 B4 C3 D2 E1 F0 00 00 5E 00 53 01 00 00 10 9D 01 40 A1 01 00 00 01 00 00 00 10 C6 24 00 04 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 2E C7 E9 9F"
+  },
+  "ids": [
+   {
+    "deviceId": "00:00:5e:00:53:01",
+    "epoch": "0x1122334455667788",
+    "seq": 42,
+    "id": "core2-00005e005301-1122334455667788-42"
+   },
+   {
+    "deviceId": "00:00:5e:00:53:01",
+    "epoch": "0xF0E1D2C3B4A59687",
+    "seq": 1,
+    "id": "core2-00005e005301-f0e1d2c3b4a59687-1"
+   },
+   {
+    "deviceId": "FF:FF:FF:FF:FF:FE",
+    "epoch": "0xFFFFFFFFFFFFFFFF",
+    "seq": 4294967295,
+    "id": "core2-fffffffffffe-ffffffffffffffff-4294967295",
+    "note": "the longest: 46 characters"
+   },
+   {
+    "deviceId": "00:00:5e:00:53:01",
+    "epoch": "0x0000000000000001",
+    "seq": 1,
+    "id": "core2-00005e005301-0000000000000001-1",
+    "note": "the epoch's leading zeros are written"
+   }
+  ],
+  "names": {
+   "outcome": {
+    "0": "stopped",
+    "1": "completed",
+    "2": "skipped",
+    "3": "stopped",
+    "4": "stopped"
+   },
+   "source": {
+    "0": "other",
+    "1": "manual",
+    "2": "shuffle",
+    "3": "autodj",
+    "4": "other"
+   }
+  },
+  "bootSeq": {
+   "log": "plays/golden/sync-1",
+   "cases": [
+    {
+     "nvsSeq": 0,
+     "deviceId": "00:00:5e:00:53:01",
+     "epoch": "0x1122334455667788",
+     "next": 8,
+     "note": "NVS behind the card"
+    },
+    {
+     "nvsSeq": 9,
+     "deviceId": "00:00:5e:00:53:01",
+     "epoch": "0x1122334455667788",
+     "next": 10,
+     "note": "NVS ahead (seqs reserved)"
+    },
+    {
+     "nvsSeq": 0,
+     "deviceId": "00:00:5e:00:53:01",
+     "epoch": "0xF0E1D2C3B4A59687",
+     "next": 1,
+     "note": "a new epoch"
+    },
+    {
+     "nvsSeq": 3,
+     "deviceId": "00:00:5e:00:53:02",
+     "epoch": "0x1122334455667788",
+     "next": 4,
+     "note": "another device's plays"
+    }
+   ]
+  },
+  "deviceOps": [
+   [
+    "epoch",
+    "1122334455667788"
+   ],
+   [
+    "play",
+    1
+   ],
+   [
+    "play",
+    2
+   ],
+   [
+    "play",
+    3
+   ],
+   [
+    "play",
+    4
+   ],
+   [
+    "rename",
+    "plays.jnl",
+    "plays.1.jnl"
+   ],
+   [
+    "play",
+    5
+   ],
+   [
+    "play",
+    6
+   ],
+   [
+    "play",
+    7
+   ],
+   [
+    "epoch",
+    "f0e1d2c3b4a59687"
+   ],
+   [
+    "delete",
+    "plays.1.jnl",
+    "acknowledged"
+   ],
+   [
+    "delete",
+    "plays.jnl",
+    "acknowledged"
+   ],
+   [
+    "play",
+    1
+   ],
+   [
+    "play",
+    2
+   ],
+   [
+    "play",
+    3
+   ],
+   [
+    "play",
+    4
+   ],
+   [
+    "rename",
+    "plays.jnl",
+    "plays.1.jnl"
+   ],
+   [
+    "play",
+    5
+   ],
+   [
+    "play",
+    6
+   ],
+   [
+    "play",
+    7
+   ],
+   [
+    "play",
+    8
+   ],
+   [
+    "delete",
+    "plays.1.jnl",
+    "rotation"
+   ],
+   [
+    "rename",
+    "plays.jnl",
+    "plays.1.jnl"
+   ],
+   [
+    "note",
+    4
+   ],
+   [
+    "play",
+    9
+   ]
+  ],
+  "files": {
+   "golden": [
+    "plays/golden/end/plays.1.jnl",
+    "plays/golden/end/plays.jnl",
+    "plays/golden/sync-1/plays.1.jnl",
+    "plays/golden/sync-1/plays.jnl"
+   ]
+  },
+  "acks": {
+   "entry": {
+    "deviceId": "00:00:5e:00:53:01",
+    "epoch": "0x1122334455667788",
+    "seq": 7,
+    "stored": "00 00 5E 00 53 01 00 00 88 77 66 55 44 33 22 11 07 00 00 00 00 00 00 00"
+   },
+   "golden": {
+    "file": "manifest-acks.bin",
+    "stride": 24,
+    "entries": [
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0x1122334455667788",
+      "seq": 7
+     },
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0xF0E1D2C3B4A59687",
+      "seq": 2
+     },
+     {
+      "deviceId": "00005e005302",
+      "epoch": "0x0A0B0C0D0E0F1011",
+      "seq": 3
+     }
+    ],
+    "note": "EPOCH_2 has its top bit set: unsigned, it sorts after EPOCH_1"
+   },
+   "hardening": [
+    {
+     "file": "msmf-acks-damaged.bin",
+     "acks": null,
+     "root": "present",
+     "note": "its CRC fails"
+    },
+    {
+     "file": "msmf-acks-order.bin",
+     "acks": null,
+     "root": "present",
+     "note": "two entries out of order"
+    },
+    {
+     "file": "msmf-acks-short.bin",
+     "acks": null,
+     "root": "present",
+     "note": "rows of 16 bytes"
+    },
+    {
+     "file": "msmf-acks-minor-1.bin",
+     "acks": [
+      {
+       "deviceId": "00005e005301",
+       "epoch": "0x1122334455667788",
+       "seq": 7
+      },
+      {
+       "deviceId": "00005e005301",
+       "epoch": "0xF0E1D2C3B4A59687",
+       "seq": 2
+      },
+      {
+       "deviceId": "00005e005302",
+       "epoch": "0x0A0B0C0D0E0F1011",
+       "seq": 3
+      }
+     ],
+     "root": "present",
+     "note": "rows of 32 bytes, read by their 24-byte prefix: the golden's entries"
+    }
+   ]
+  },
+  "resolve": [
+   {
+    "log": "plays/golden/sync-1",
+    "ledger": "tags-0000002a.bin",
+    "skew": 0,
+    "posted": [],
+    "plays": [
+     {
+      "id": "core2-00005e005301-1122334455667788-1",
+      "send": true,
+      "filePath": "Music/Artist/Album/01 - Title.mp3",
+      "startedAt": 1791900005000,
+      "note": "no clock at its start: dated by play 2 of its boot, 185,000 ms of uptime later"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-2",
+      "send": true,
+      "filePath": "Music/Artist/Album/02 - Other.mp3",
+      "startedAt": 1791900190000,
+      "note": "skipped"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-3",
+      "send": true,
+      "filePath": "Music/Artist/Album/CD1/01 - Disc One.flac",
+      "startedAt": 1791900205000,
+      "note": "stopped, 2 pauses, Auto DJ"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-4",
+      "send": true,
+      "filePath": "Music/A/x.mp3",
+      "startedAt": 1791986408000,
+      "note": "a second boot, the RTC's time"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-5",
+      "send": false,
+      "why": "file",
+      "startedAt": null,
+      "note": "Hand Copied/...: no ledger row, the listener's file: counted, not sent"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-6",
+      "send": false,
+      "why": "file",
+      "startedAt": null,
+      "note": "Artist/x.mp3: the ledger's stamp is invalid (sec2 31), so no time matches: counted, not sent"
+     },
+     {
+      "id": "core2-00005e005301-1122334455667788-7",
+      "send": true,
+      "filePath": "Music/Loose Intro.flac",
+      "startedAt": 1791986850000,
+      "note": "a converted file: its ledger row's server path"
+     }
+    ],
+    "settled": [
+     "core2-00005e005301-1122334455667788-1",
+     "core2-00005e005301-1122334455667788-2",
+     "core2-00005e005301-1122334455667788-3",
+     "core2-00005e005301-1122334455667788-4",
+     "core2-00005e005301-1122334455667788-7"
+    ],
+    "marks": [
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0x1122334455667788",
+      "seq": 7
+     }
+    ]
+   },
+   {
+    "log": "plays/golden/end",
+    "ledger": "tags-0000002a.bin",
+    "skew": 0,
+    "posted": [
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0x1122334455667788",
+      "seq": 7
+     }
+    ],
+    "plays": [
+     {
+      "id": "core2-00005e005301-f0e1d2c3b4a59687-5",
+      "send": true,
+      "filePath": "Music/a/v.mp3",
+      "startedAt": 1792074010000
+     },
+     {
+      "id": "core2-00005e005301-f0e1d2c3b4a59687-6",
+      "send": true,
+      "filePath": "Music/É/u.mp3",
+      "startedAt": 1792074310000
+     },
+     {
+      "id": "core2-00005e005301-f0e1d2c3b4a59687-7",
+      "send": true,
+      "filePath": "Music/Café/Album/01 - Title.mp3",
+      "startedAt": 1792074610000
+     },
+     {
+      "id": "core2-00005e005301-f0e1d2c3b4a59687-8",
+      "send": true,
+      "filePath": "Music/Café/Album/01 - Title.mp3",
+      "startedAt": 1792074910000
+     },
+     {
+      "id": "core2-00005e005301-f0e1d2c3b4a59687-9",
+      "send": true,
+      "filePath": "Music/Artist/Album/01 - Title.mp3",
+      "startedAt": 1792075210000
+     }
+    ],
+    "settled": [
+     "core2-00005e005301-f0e1d2c3b4a59687-5",
+     "core2-00005e005301-f0e1d2c3b4a59687-6",
+     "core2-00005e005301-f0e1d2c3b4a59687-7",
+     "core2-00005e005301-f0e1d2c3b4a59687-8",
+     "core2-00005e005301-f0e1d2c3b4a59687-9"
+    ],
+    "marks": [
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0x1122334455667788",
+      "seq": 7
+     },
+     {
+      "deviceId": "00005e005301",
+      "epoch": "0xF0E1D2C3B4A59687",
+      "seq": 9
+     }
+    ],
+    "dropped": 4,
+    "note": "the epoch's plays 1-4 were dropped by the rotation before a sync read them"
+   }
+  ],
+  "resolveCases": [
+   {
+    "slot": {
+     "size": 1038
+    },
+    "skew": 0,
+    "send": false,
+    "why": "file",
+    "note": "Artist/Album/02 - Other.mp3, one byte longer: not the ledger's file"
+   },
+   {
+    "slot": {
+     "fatTime": "0x5D477BD7"
+    },
+    "skew": 3600,
+    "send": true,
+    "note": "an hour later under T's skew of +3,600: the ledger's file"
+   },
+   {
+    "slot": {
+     "fatTime": "0x5D477BD7"
+    },
+    "skew": 0,
+    "send": false,
+    "why": "file",
+    "note": "the same with no skew"
+   },
+   {
+    "slot": {
+     "fatTime": "0x00000000"
+    },
+    "skew": 0,
+    "send": false,
+    "why": "file",
+    "note": "a 0 stamp"
+   },
+   {
+    "slot": {
+     "startedAt": 0,
+     "clock": 0
+    },
+    "skew": 0,
+    "send": false,
+    "why": "clock",
+    "note": "no start, and no later dated play of its boot"
+   },
+   {
+    "slot": {
+     "seq": 3
+    },
+    "posted": 3,
+    "skew": 0,
+    "send": null,
+    "note": "at the posted mark: not new"
+   }
+  ],
+  "resolveCasesBase": {
+   "deviceId": "00:00:5e:00:53:01",
+   "epoch": "0x1122334455667788",
+   "seq": 4,
+   "path": "Artist/Album/02 - Other.mp3",
+   "ledger": "tags-0000002a.bin"
+  },
+  "peers": {
+   "card": "manifest-servers.json",
+   "ledger": "tags-00000007.bin",
+   "rows": [
+    {
+     "path": "Artist/Album/01 - Title.mp3",
+     "server": 0,
+     "to": {
+      "server": 0,
+      "peerId": null
+     }
+    },
+    {
+     "path": "Both/One (2).mp3",
+     "server": 1,
+     "to": {
+      "server": 1,
+      "peerId": null
+     }
+    },
+    {
+     "path": "Both/One.mp3",
+     "server": 0,
+     "to": {
+      "server": 0,
+      "peerId": null
+     }
+    },
+    {
+     "path": "Far Artist/Far Album/01 - Far.opus",
+     "server": 3,
+     "to": {
+      "server": 1,
+      "peerId": 1
+     }
+    },
+    {
+     "path": "Peer Artist/Peer Album/01 - Tune.opus",
+     "server": 2,
+     "to": {
+      "server": 0,
+      "peerId": 3
+     }
+    },
+    {
+     "path": "Second Artist/Album/01 - Song.flac",
+     "server": 1,
+     "to": {
+      "server": 1,
+      "peerId": null
+     }
+    }
+   ],
+   "note": "server 2 is peer 3 of the root's server (posted to server 0 with peerId 3), server 3 peer 1 of server 1"
+  },
+  "deviceTxt": [
+   {
+    "text": "contract=1\nhistory=1\n",
+    "history": [
+     1
+    ]
+   },
+   {
+    "text": "contract=1\nfirmware=0.11.0\n",
+    "history": [],
+    "note": "no key: no log"
+   },
+   {
+    "text": "contract=1\nhistory=\n",
+    "history": [],
+    "note": "empty: none"
+   },
+   {
+    "text": "contract=1\nhistory=1,2\n",
+    "history": [
+     1,
+     2
+    ]
+   },
+   {
+    "text": null,
+    "history": [],
+    "note": "no device.txt"
+   }
+  ]
+ },
  "deviceTxt": {
   "text": "contract=1\nfirmware=0.11.0\nread.msmf=1\nread.mptg=1\nread.mpdj=2\nread.mpth=1\ncodecs=mp3,flac,opus\nextensions=mp3,flac,opus\nmax_rate=48000\nmax_channels=2\n",
   "noFile": {

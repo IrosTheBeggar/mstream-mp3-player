@@ -555,6 +555,38 @@
   "check": "SRVS: entries that break 2.5.5's writer rules (the root's own URL key, one instance twice, a peer with no peerId): not damage, the root reads; their rows' servers are unknown (2.11)"
  },
  {
+  "file": "msmf-acks-damaged.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "ACKS: its CRC fails: the section is ignored, never the root (2.5.6)"
+ },
+ {
+  "file": "msmf-acks-order.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "ACKS: two entries out of order, its CRC good: ignored, the root reads"
+ },
+ {
+  "file": "msmf-acks-short.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "ACKS: rows of 16 bytes, below v1's 24: ignored, the root reads"
+ },
+ {
+  "file": "msmf-acks-minor-1.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "ACKS: rows of 32 bytes, a newer minor's, read by their 24-byte prefix"
+ },
+ {
   "file": "mspd-order.bin",
   "format": "MSPD",
   "uses": "all",
