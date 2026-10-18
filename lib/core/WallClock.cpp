@@ -69,6 +69,31 @@ void text(const Civil& c, char* out, size_t size) {
   std::snprintf(out, size, "%04d-%02d-%02d %02d:%02d:%02d", c.year, c.month, c.day, c.hour, c.minute, c.second);
 }
 
+uint64_t rtcSecond(uint64_t unixMs) {
+  const uint64_t s = (unixMs + 500) / 1000 * 1000;
+  return s > kMaxMs ? kMaxMs / 1000 * 1000 : s;  // (not 2100: the chip's 2000)
+}
+
+void rtcWrites(const Civil& c, RtcWrite (&out)[kRtcWrites]) {
+  const auto bcd = [](int v) { return static_cast<uint8_t>(((v / 10) << 4) | (v % 10)); };
+  RtcWrite time;
+  time.reg = kRtcTimeReg;
+  time.len = 7;
+  time.data[0] = bcd(c.second);  // (VL clear)
+  time.data[1] = bcd(c.minute);
+  time.data[2] = bcd(c.hour);
+  time.data[3] = bcd(c.day);
+  time.data[4] = static_cast<uint8_t>(c.weekday & 7);
+  time.data[5] = bcd(c.month);  // (20yy)
+  time.data[6] = bcd(c.year % 100);
+  out[0].reg = kRtcMonthReg;
+  out[0].len = 1;
+  out[0].data[0] = time.data[5] | kRtcCentury;
+  out[1] = time;
+  out[1].data[5] |= kRtcCentury;
+  out[2] = time;
+}
+
 const char* bootName(Boot b) {
   switch (b) {
     case Boot::Ok: return "ok";
@@ -85,8 +110,12 @@ Boot Clock::boot(const Reading& r, uint64_t monoMs) {
   uint64_t ms = 0;
   if (!r.chip) return Boot::NoChip;
   if (r.voltLow) return Boot::VoltLow;  // (whatever its registers say)
-  if (!r.read || !fromCivil(r.civil, &ms)) return Boot::Unreadable;
-  if (!believable(ms)) return Boot::Range;
+  if (!r.read) return Boot::Unreadable;
+  // The year before the rest: a 19yy (M5Unified's read of the century
+  // bit, a @time cut short's) is a date out of the range, before 1970 too.
+  if (r.civil.year < kMinYear || r.civil.year > kMaxYear) return Boot::Range;
+  if (!fromCivil(r.civil, &ms)) return Boot::Unreadable;
+  if (!believable(ms)) return Boot::Range;  // (never, the year in it)
   source_ = Source::Rtc;
   unixMs_ = ms;
   monoMs_ = monoMs;

@@ -177,7 +177,13 @@ void test_boot() {
   TEST_ASSERT_TRUE(k.boot(rtc(civil(2025, 12, 31, 23, 59, 59)), 0) == Boot::Range);
   TEST_ASSERT_TRUE(k.boot(rtc(civil(2026, 1, 1)), 0) == Boot::Ok);
   TEST_ASSERT_TRUE(k.boot(rtc(civil(2099, 12, 31, 23, 59, 59)), 0) == Boot::Ok);
-  TEST_ASSERT_FALSE(k.boot(rtc(civil(1999, 12, 31)), 0) == Boot::Ok);  // (M5Unified's 1900s: the century bit)
+  // M5Unified's 1900s (the century bit): dates out of the range, before
+  // 1970 too, and whatever the rest says (the year is read first).
+  TEST_ASSERT_TRUE(k.boot(rtc(civil(1999, 12, 31)), 0) == Boot::Range);
+  TEST_ASSERT_TRUE(k.boot(rtc(civil(1950, 6, 1)), 0) == Boot::Range);
+  TEST_ASSERT_TRUE(k.boot(rtc(civil(1926, 10, 18, 14, 3, 22)), 0) == Boot::Range);  // a @time cut short
+  TEST_ASSERT_TRUE(k.boot(rtc(civil(1926, 2, 30)), 0) == Boot::Range);
+  TEST_ASSERT_TRUE(k.boot(rtc(civil(2100, 1, 1)), 0) == Boot::Range);
   TEST_ASSERT_FALSE(k.ok());
   TEST_ASSERT_EQUAL_STRING("voltage low", bootName(Boot::VoltLow));
 }
@@ -221,6 +227,197 @@ void test_at_any_moment() {
   TEST_ASSERT_EQUAL_UINT64(1792332202123ull + 0x100000000ull, k.at(later));
 }
 
+// The second a @time writes: the nearest, 2099's last at most.
+void test_rtc_second() {
+  const uint64_t s = 1792332202000ull;  // 2026-10-18 14:03:22
+  TEST_ASSERT_EQUAL_UINT64(s, rtcSecond(s));
+  TEST_ASSERT_EQUAL_UINT64(s, rtcSecond(s + 123));
+  TEST_ASSERT_EQUAL_UINT64(s, rtcSecond(s + 499));
+  TEST_ASSERT_EQUAL_UINT64(s + 1000, rtcSecond(s + 500));
+  TEST_ASSERT_EQUAL_UINT64(s + 1000, rtcSecond(s + 999));
+  TEST_ASSERT_EQUAL_UINT64(kMinMs, rtcSecond(kMinMs));
+  TEST_ASSERT_EQUAL_UINT64(kMaxMs - 999, rtcSecond(kMaxMs - 500));
+  TEST_ASSERT_EQUAL_UINT64(kMaxMs - 999, rtcSecond(kMaxMs - 499));  // (not 2100-01-01)
+  TEST_ASSERT_EQUAL_UINT64(kMaxMs - 999, rtcSecond(kMaxMs));
+  TEST_ASSERT_TRUE(believable(rtcSecond(kMaxMs)));
+}
+
+// What a restart then reads, in a model of the chip: its first tick comes
+// any time up to a second after the write (its divider runs on: the
+// estimate rtcSecond() is made for), and the boot reads at any moment of a
+// later second. Every 10 ms of the time's fraction, the first tick and the
+// read: never 1.5 s off either way, right on average, two times in three
+// within 0.5 s. (The second the time is in, the earlier write, read 0.5 s
+// behind on average and up to 2 s.)
+void test_rtc_second_restart() {
+  const uint64_t base = 1792332202000ull;
+  int64_t worst = 0;
+  int64_t sum = 0;
+  int near = 0;
+  int n = 0;
+  for (int f = 0; f < 1000; f += 10) {
+    const uint64_t t = base + f;  // the @time
+    const uint64_t written = rtcSecond(t);
+    for (int first = 10; first <= 1000; first += 10) {
+      for (int r = 5000; r < 6000; r += 10) {  // the boot's read, r ms after the write
+        const int ticks = r < first ? 0 : (r - first) / 1000 + 1;
+        const uint64_t read = written + 1000ull * ticks;  // what it says, taken as the second's start
+        const int64_t e = static_cast<int64_t>(read) - static_cast<int64_t>(t + r);
+        if ((e < 0 ? -e : e) > worst) worst = e < 0 ? -e : e;
+        sum += e;
+        near += e >= -500 && e <= 500;
+        ++n;
+      }
+    }
+  }
+  TEST_ASSERT_TRUE(worst < 1500);
+  TEST_ASSERT_TRUE(sum / n >= -20 && sum / n <= 20);
+  TEST_ASSERT_TRUE(near * 100 >= n * 66);  // (2/3, to the grid's 1 %)
+}
+
+namespace {
+
+// The BM8563's time registers, 02h-08h, byte by byte as written; and
+// M5Unified 0.2.23's read of them (PCF8563_Class::getDateTime(), its masks,
+// its BCD and range checks, 19yy for the century bit; getVoltLow()).
+struct Chip {
+  uint8_t r[7];
+};
+
+// A chip saying `c` (2000-2099), its own encoding (not rtcWrites()'s).
+Chip chipAt(const Civil& c, bool voltLow) {
+  const auto bcd = [](int v) { return static_cast<uint8_t>(v / 10 * 16 + v % 10); };
+  Chip k = {{bcd(c.second), bcd(c.minute), bcd(c.hour), bcd(c.day), static_cast<uint8_t>(c.weekday), bcd(c.month),
+             bcd(c.year - 2000)}};
+  if (voltLow) k.r[0] |= 0x80;
+  return k;
+}
+
+Reading readChip(const Chip& k) {
+  const auto bcdOk = [](uint8_t v) { return (v & 0x0F) <= 9 && (v >> 4) <= 9; };
+  const auto dec = [](uint8_t v) { return (v >> 4) * 10 + (v & 0x0F); };
+  Reading r;
+  r.chip = true;
+  r.voltLow = (k.r[0] & 0x80) != 0;
+  const uint8_t sec = k.r[0] & 0x7f, min = k.r[1] & 0x7f, hour = k.r[2] & 0x3f, day = k.r[3] & 0x3f;
+  const uint8_t mo = k.r[5] & 0x1f, yy = k.r[6];
+  if (!bcdOk(sec) || !bcdOk(min) || !bcdOk(hour) || !bcdOk(day) || !bcdOk(mo) || !bcdOk(yy)) return r;
+  Civil c;
+  c.second = dec(sec);
+  c.minute = dec(min);
+  c.hour = dec(hour);
+  c.day = dec(day);
+  c.weekday = k.r[4] & 0x07;
+  c.month = dec(mo);
+  c.year = dec(yy) + ((k.r[5] & 0x80) ? 1900 : 2000);
+  if (c.second > 59 || c.minute > 59 || c.hour > 23 || c.day < 1 || c.day > 31 || c.month < 1 || c.month > 12) {
+    return r;
+  }
+  r.read = true;
+  r.civil = c;
+  return r;
+}
+
+// The writes' first `cut` bytes on `from`.
+Chip cutShort(Chip from, const RtcWrite* w, int writes, int cut) {
+  int sent = 0;
+  for (int i = 0; i < writes; ++i) {
+    for (int b = 0; b < w[i].len && sent < cut; ++b, ++sent) from.r[w[i].reg - kRtcTimeReg + b] = w[i].data[b];
+  }
+  return from;
+}
+
+struct Before {
+  Chip chip;
+  Civil target;  // the @time's second
+};
+
+// The chips a @time meets, each with a second to write that differs from
+// it in a carry (or isn't a time at all).
+void befores(Before (&out)[6]) {
+  const Civil autumn = civil(2026, 10, 18, 14, 3, 22);
+  out[0] = {chipAt(civil(2000, 1, 1, 0, 0, 12), true), autumn};          // never set: VL, 2000
+  out[1] = {chipAt(civil(2026, 10, 17, 9, 15, 0), true), autumn};        // its supply failed after a set
+  out[2] = {chipAt(civil(2026, 10, 18, 14, 3, 19), false), autumn};      // believed, 3 s behind
+  out[3] = {chipAt(civil(2026, 10, 18, 13, 59, 58), false), civil(2026, 10, 18, 14, 0, 1)};  // over an hour
+  out[4] = {chipAt(civil(2026, 12, 31, 23, 59, 58), false), civil(2027, 1, 1, 0, 0, 1)};     // over a year
+  Chip junk;
+  std::memset(junk.r, 0xFF, sizeof(junk.r));  // not a time
+  out[5] = {junk, autumn};
+}
+
+}  // namespace
+
+// The bytes a @time writes, and their order.
+void test_rtc_writes() {
+  RtcWrite w[kRtcWrites];
+  rtcWrites(toCivil(1792332202000ull), w);  // 2026-10-18 14:03:22, a Sunday
+  TEST_ASSERT_EQUAL_UINT8(0x07, w[0].reg);
+  TEST_ASSERT_EQUAL_UINT8(1, w[0].len);
+  TEST_ASSERT_EQUAL_HEX8(0x90, w[0].data[0]);  // October, the century bit
+  const uint8_t marked[7] = {0x22, 0x03, 0x14, 0x18, 0x00, 0x90, 0x26};
+  const uint8_t time[7] = {0x22, 0x03, 0x14, 0x18, 0x00, 0x10, 0x26};
+  TEST_ASSERT_EQUAL_UINT8(0x02, w[1].reg);
+  TEST_ASSERT_EQUAL_UINT8(7, w[1].len);
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(marked, w[1].data, 7);
+  TEST_ASSERT_EQUAL_UINT8(0x02, w[2].reg);
+  TEST_ASSERT_EQUAL_UINT8(7, w[2].len);
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(time, w[2].data, 7);
+  // The range's ends.
+  rtcWrites(toCivil(kMaxMs), w);  // 2099-12-31 23:59:59, a Thursday
+  const uint8_t last[7] = {0x59, 0x59, 0x23, 0x31, 0x04, 0x12, 0x99};
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(last, w[2].data, 7);
+  rtcWrites(toCivil(kMinMs), w);
+  const uint8_t firstSecond[7] = {0x00, 0x00, 0x00, 0x01, 0x04, 0x01, 0x26};
+  TEST_ASSERT_EQUAL_HEX8_ARRAY(firstSecond, w[2].data, 7);
+  // M5Unified reads back what was written (and the marked write as 1926).
+  Chip k = cutShort(chipAt(civil(2000, 1, 1), true), w, kRtcWrites, 15);
+  Reading r = readChip(k);
+  TEST_ASSERT_TRUE(r.read && !r.voltLow);
+  uint64_t v = 0;
+  TEST_ASSERT_TRUE(fromCivil(r.civil, &v));
+  TEST_ASSERT_EQUAL_UINT64(kMinMs, v);
+}
+
+// A cut at any byte of a @time's writes (a reset, a brown-out), on each
+// chip it may meet: the chip as it was (no byte sent), unset at the next
+// boot, or the time written; never a mix the boot believes. And the model
+// finds the hole one write of 02h-08h, the seconds first, had.
+void test_rtc_write_cut() {
+  Before bs[6];
+  befores(bs);
+  for (const Before& b : bs) {
+    uint64_t want = 0;
+    TEST_ASSERT_TRUE(fromCivil(b.target, &want));
+    RtcWrite w[kRtcWrites];
+    rtcWrites(b.target, w);
+    for (int cut = 0; cut <= 15; ++cut) {
+      const Chip k = cutShort(b.chip, w, kRtcWrites, cut);
+      Clock c;
+      const Boot boot = c.boot(readChip(k), 0);
+      if (cut == 0) {
+        TEST_ASSERT_EQUAL_MEMORY(b.chip.r, k.r, 7);
+      } else if (cut < 14) {
+        TEST_ASSERT_FALSE(boot == Boot::Ok);  // 19yy from the first byte, until the last write's 07h
+      } else {
+        TEST_ASSERT_TRUE(boot == Boot::Ok);  // its 08h already the year
+        TEST_ASSERT_EQUAL_UINT64(want, c.at(0));
+      }
+    }
+  }
+  // One write, 02h-08h: cut after the seconds and minutes over a chip
+  // believed 3 s behind across an hour, 13:00:01 believed for 14:00:01.
+  RtcWrite one[1];
+  {
+    RtcWrite w[kRtcWrites];
+    rtcWrites(bs[3].target, w);
+    one[0] = w[2];
+  }
+  Clock c;
+  TEST_ASSERT_TRUE(c.boot(readChip(cutShort(bs[3].chip, one, 1, 2)), 0) == Boot::Ok);
+  TEST_ASSERT_EQUAL_UINT64(ms(civil(2026, 10, 18, 13, 0, 1)), c.at(0));
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_known_days);
@@ -231,5 +428,9 @@ int main(int, char**) {
   RUN_TEST(test_boot);
   RUN_TEST(test_set);
   RUN_TEST(test_at_any_moment);
+  RUN_TEST(test_rtc_second);
+  RUN_TEST(test_rtc_second_restart);
+  RUN_TEST(test_rtc_writes);
+  RUN_TEST(test_rtc_write_cut);
   return UNITY_END();
 }

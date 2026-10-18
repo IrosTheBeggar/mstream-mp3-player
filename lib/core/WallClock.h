@@ -24,6 +24,8 @@ namespace wallclock {
 // microseconds sent for ms read past it).
 inline constexpr uint64_t kMinMs = 1767225600000ull;  // 2026-01-01T00:00:00Z
 inline constexpr uint64_t kMaxMs = 4102444799999ull;  // 2099-12-31T23:59:59.999Z
+inline constexpr int kMinYear = 2026;                 // their years
+inline constexpr int kMaxYear = 2099;
 constexpr bool believable(uint64_t unixMs) { return unixMs >= kMinMs && unixMs <= kMaxMs; }
 
 // A time as the RTC keeps it: the UTC calendar, to the second.
@@ -44,6 +46,44 @@ Civil toCivil(uint64_t unixMs);
 bool fromCivil(const Civil& c, uint64_t* unixMs);
 // "2026-10-18 14:03:22" (19 bytes and the terminator), cut to `size`.
 void text(const Civil& c, char* out, size_t size);
+
+// The second a @time writes to the RTC (it counts whole seconds): the
+// nearest to `unixMs` (believable), 2099's last at most. Its seconds then
+// tick in the chip's own phase, not the write's (ESTIMATED: the BM8563's
+// divider runs on through a write, as the PCF8563's does), so its count
+// runs on average half a second ahead of the time set; and a boot reads
+// the second at a moment within it, half a second into it on average. The
+// two cancel: a restart reads the time within 1.5 s of it either way, two
+// times in three within 0.5 s, plus the drift while off (writing the
+// second it is in would read 0.5 s behind on average, up to 2 s).
+uint64_t rtcSecond(uint64_t unixMs);
+
+// How a @time writes it: the chip's time registers, 02h-08h (VL_seconds,
+// minutes, hours, days, weekdays, century_months, years: BCD), in three
+// I2C writes, each a run of registers from `reg`. Each byte takes as it
+// arrives, so in this order a cut at any byte (a reset, the flasher's RTS
+// pulse, a brown-out) leaves the chip as it was, read at the next boot as
+// 19yy (outside the range: unset, never a wrong time), or at `c`:
+//   1. 07h: `c`'s month with the century bit set (M5Unified reads 19yy
+//      from here on, whatever else the chip says);
+//   2. 02h-08h: `c`, the century bit still set (the seconds' byte, first,
+//      clears the voltage-low flag);
+//   3. 02h-08h: `c` again, the century bit clear (the year after it is
+//      already `c`'s; a tick between 2 and 3 is undone, not carried into
+//      a month written stale).
+// (One write of 02h-08h, the seconds first, could leave a believed mix
+// of the new time and the old date.)
+inline constexpr uint8_t kRtcTimeReg = 0x02;   // VL_seconds, the first
+inline constexpr uint8_t kRtcMonthReg = 0x07;  // century_months
+inline constexpr uint8_t kRtcCentury = 0x80;   // its bit 7: 19yy
+inline constexpr uint8_t kRtcVoltLow = 0x80;   // VL_seconds' bit 7
+struct RtcWrite {
+  uint8_t reg = 0;
+  uint8_t len = 0;
+  uint8_t data[7] = {};
+};
+inline constexpr int kRtcWrites = 3;
+void rtcWrites(const Civil& c, RtcWrite (&out)[kRtcWrites]);
 
 // Where the time came from: the play log's clock byte (docs/METADATA.md
 // 2.20.2), the same numbers.
@@ -70,9 +110,11 @@ enum class Boot : uint8_t {
                // battery ran flat or was out), or was never set: the
                // flag is set at its power-on and cleared only by setting
                // the time, so its time isn't kept, whatever it says
-  Unreadable,  // the read failed, or the registers aren't a date
-  Range,       // a date outside kMinMs..kMaxMs: never set (a fresh
-               // chip counts from 2000), or set wrong
+  Unreadable,  // the read failed, or the registers aren't a date (in a
+               // year in the range)
+  Range,       // a year outside kMinYear..kMaxYear (whatever the rest):
+               // never set (a fresh chip counts from 2000), set wrong,
+               // or a @time cut short (its 19yy: rtcWrites())
 };
 const char* bootName(Boot b);  // "ok", "no RTC", "unreadable", "voltage low", "out of range"
 

@@ -18,11 +18,12 @@ namespace boardclock {
 
 // setup(), after M5.begin(): the RTC read, and the boot log's [clock] line.
 void begin();
-// A computer's @time (believable: HostLink checked it): the RTC written and
-// read back, then this boot's clock, and the system time (FatFs's file
-// dates, which M5.begin() copies from the RTC at every boot). nullptr: done
-// ("@time ok"); else why not ("rtc": the chip didn't take it, nothing
-// changed).
+// A computer's @time (believable: HostLink checked it): the RTC written
+// (its nearest second, in WallClock's rtcWrites() steps) and read back,
+// then this boot's clock, and the system time (FatFs's file dates, which
+// M5.begin() copies from the RTC at every boot). nullptr: done ("@time
+// ok"); else why not ("rtc": the chip didn't take it, this boot's clock
+// unchanged; the RTC as it was, or read unset at the next boot).
 const char* set(uint64_t unixMs);
 // The board's monotonic ms since the boot (esp_timer's: no wrap).
 uint64_t monoMs();

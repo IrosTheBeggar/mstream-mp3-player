@@ -82,8 +82,8 @@ void begin() {
       Serial.printf("[clock] unset: the RTC's reading isn't a date (or the read failed); a computer's @time sets it\n");
       return;
     case wallclock::Boot::Range:
-      Serial.printf("[clock] unset: the RTC says %s UTC, outside 2026-2099 (never set, or set wrong); a computer's "
-                    "@time sets it\n",
+      Serial.printf("[clock] unset: the RTC says %s UTC, outside 2026-2099 (never set, set wrong, or a @time cut "
+                    "short); a computer's @time sets it\n",
                     when);
       return;
   }
@@ -93,34 +93,39 @@ const char* set(uint64_t unixMs) {
   const uint64_t mono = monoMs();  // (as the line came: the I2C below takes a few ms)
   if (!wallclock::believable(unixMs)) return "rtc";  // (HostLink's check: never)
   const uint64_t was = at(mono);
-  if (!M5.Rtc.isEnabled()) {
+  // The chip's own registers (M5.begin() found a BM8563 on the Core2:
+  // M5Unified's PCF8563 driver), written in WallClock's three steps, so a
+  // cut at any byte leaves no time the next boot believes wrongly.
+  m5::RTC_Base* rtc = M5.Rtc.getRtcInstancePtr();
+  if (rtc == nullptr) {
     Serial.printf("[clock] @time: no RTC to set (it didn't answer at the boot); nothing changed\n");
     return "rtc";
   }
-  // The second it is in (the RTC counts whole seconds). Writing the seconds
+  // The nearest second (the RTC counts whole ones). Writing the seconds
   // clears the voltage-low flag.
-  const wallclock::Civil c = wallclock::toCivil(unixMs);
-  m5::rtc_datetime_t dt;
-  dt.date.year = static_cast<int16_t>(c.year);
-  dt.date.month = static_cast<int8_t>(c.month);
-  dt.date.date = static_cast<int8_t>(c.day);
-  dt.date.weekDay = static_cast<int8_t>(c.weekday);
-  dt.time.hours = static_cast<int8_t>(c.hour);
-  dt.time.minutes = static_cast<int8_t>(c.minute);
-  dt.time.seconds = static_cast<int8_t>(c.second);
-  M5.Rtc.setDateTime(dt);  // (no result: read it back)
-  // Read back: the flag clear, and the second written or the next (one may
-  // tick between the write and the read).
-  const uint64_t second = unixMs / 1000 * 1000;
+  const uint64_t second = wallclock::rtcSecond(unixMs);
+  wallclock::RtcWrite w[wallclock::kRtcWrites];
+  wallclock::rtcWrites(wallclock::toCivil(second), w);
+  bool wrote = true;
+  for (const wallclock::RtcWrite& x : w) {
+    wrote = rtc->writeRegister(x.reg, x.data, x.len);
+    if (!wrote) break;  // (the rest not sent: as it was, or 19yy)
+  }
+  // Read back: the flag clear, and the second written or a later one (one
+  // may tick between the write and the read).
   wallclock::Civil back;
   uint64_t backMs = 0;
   const bool flag = M5.Rtc.getVoltLow();
-  const bool read = readRtc(&back) && wallclock::fromCivil(back, &backMs);
-  if (flag || !read || backMs < second || backMs > second + 2000) {
+  const bool got = readRtc(&back);
+  const bool read = got && wallclock::fromCivil(back, &backMs);
+  if (!wrote || flag || !read || backMs < second || backMs > second + 2000) {
     char said[24] = "?";
-    if (read) wallclock::text(back, said, sizeof(said));
-    Serial.printf("[clock] @time: the RTC didn't take it (read back: %s, voltage-low flag %s); nothing changed\n", said,
-                  flag ? "set" : "clear");
+    if (got) wallclock::text(back, said, sizeof(said));
+    // (Cut short, the RTC reads 19yy or as it was: unset or the same at
+    // the next boot.)
+    Serial.printf("[clock] @time: the RTC didn't take it (%s, read back: %s, voltage-low flag %s); the clock is "
+                  "unchanged\n",
+                  wrote ? "written" : "a write failed", said, flag ? "set" : "clear");
     return "rtc";
   }
   portENTER_CRITICAL(&lock_);
@@ -133,7 +138,7 @@ const char* set(uint64_t unixMs) {
   tv.tv_usec = static_cast<suseconds_t>(unixMs % 1000 * 1000);
   settimeofday(&tv, nullptr);
   char when[24];
-  wallclock::text(c, when, sizeof(when));
+  wallclock::text(wallclock::toCivil(unixMs), when, sizeof(when));
   if (was == 0) {
     Serial.printf("[clock] %s.%03u UTC, set by a computer's @time (it was unset)\n", when,
                   static_cast<unsigned>(unixMs % 1000));

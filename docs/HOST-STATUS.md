@@ -314,28 +314,53 @@ and the clock is `unset` or more than 2 s off. Always UTC: the board keeps no ti
   1980), seconds sent for ms (10 digits: January 1970) and microseconds
   (16 digits: past 2099) are refused, `@err 5 time`; not a number is
   `@err 1 time`. Either way nothing changes.
-- **Setting it**: the second it is in goes to the RTC (which counts whole
-  seconds; writing them clears its voltage-low flag), is read back, and
-  the ms are kept for this boot: `@time ok`, and the log's `[clock]
-  2026-10-18 14:03:22.123 UTC, set by a computer's @time (it was 1.4 s
-  behind)` (or `(it was unset)`). The system time follows (FatFs dates the
-  files the board writes by it, and `M5.begin()` copies it from the RTC at
-  every boot). A chip that doesn't take it (no RTC answered at the boot,
-  or the read-back isn't that second, or the flag is still set): `@err 4
-  time rtc`, the log's `[clock] @time: the RTC didn't take it (...)`, and
-  nothing changed. Nothing else refuses it: while music plays, in a
-  session, declined or not. Sent again, the latest wins.
+- **Setting it**: the nearest second goes to the RTC (which counts whole
+  seconds; writing them clears its voltage-low flag; `wallclock::
+  rtcSecond()`, 2099's last at most), is read back, and the ms are kept
+  for this boot: `@time ok`, and the log's `[clock] 2026-10-18
+  14:03:22.123 UTC, set by a computer's @time (it was 1.4 s behind)` (or
+  `(it was unset)`). The system time follows (FatFs dates the files the
+  board writes by it, and `M5.begin()` copies it from the RTC at every
+  boot). A chip that doesn't take it (no RTC answered at the boot, a
+  write failed, the read-back isn't that second or one after, or the
+  flag is still set): `@err 4 time rtc`, the log's `[clock] @time: the
+  RTC didn't take it (...)`, and this boot's clock unchanged. Nothing
+  else refuses it: while music plays, in a session, declined or not. Sent
+  again, the latest wins.
+- **Cut short**: the chip takes each byte as it comes, so a reset in the
+  middle of the write (the flasher's RTS pulse, a crash, a brown-out)
+  would leave part new, part old, and one write of its seven time
+  registers, the seconds first, could leave a time the next boot believes
+  wrongly (the new seconds and minutes with the old hour or date). So it
+  goes in three writes (`wallclock::rtcWrites()`): the month register's
+  century bit set first (M5Unified then reads 19yy: outside the range),
+  then the seven with the bit still set, then the seven with it clear.
+  Cut at any byte, the next boot finds the RTC as it was, unset (`the RTC
+  says 19..`, or its voltage-low flag), or at the time sent; never a
+  mix (`test_wall_clock`'s `test_rtc_write_cut`, every byte over chips
+  never set, believed, and a carry away).
 - **At the boot** (an early `[clock]` line): the RTC's time is believed
   only when the chip answered, its **voltage-low flag** is clear (VL, bit
   7 of its seconds register: set at the chip's first power-up and whenever
   its supply failed since, cleared only by setting the time), and its date
   is a real one in the range above: `[clock] 2026-10-18 14:03:22 UTC, from
   the RTC (to the second)`. To the second: the chip's fraction of a second
-  isn't readable, so the board starts up to 1 s behind. Otherwise
-  `clock=unset`, and the line says why: `the RTC lost its time (its
-  voltage-low flag: ...)`, `the RTC says 2000-01-01 00:00:12 UTC, outside
-  2026-2099 (never set, or set wrong)` (a chip never set counts from
-  2000), `the RTC's reading isn't a date`, `no RTC answered`.
+  isn't readable, and its seconds tick in its own phase, not the write's
+  (ESTIMATED: the BM8563's divider runs on through a write, as the
+  PCF8563's does), so they run on average half a second ahead of the time
+  set, and the boot reads one half a second into it on average. The two
+  cancel, as the nearest second was written: after a restart the clock is
+  **within 1.5 s of the time set, either way** (two times in three within
+  0.5 s, 96 % within 1 s, right on average: `test_rtc_second_restart`'s
+  model; within 1.5 s too if the chip restarts its count at a write),
+  plus the drift while off; under the tab's 2 s, so a restart alone
+  doesn't make it set the clock. (The second the time is in would read
+  0.5 s behind on average and up to 2 s.) Otherwise `clock=unset`,
+  and the line says why: `the RTC lost its time (its voltage-low flag:
+  ...)`, `the RTC says 2000-01-01 00:00:12 UTC, outside 2026-2099 (never
+  set, set wrong, or a @time cut short)` (a chip never set counts from
+  2000; the year is read first, so a 19yy is this too), `the RTC's reading
+  isn't a date`, `no RTC answered`.
 - **With the board off** the RTC runs on its own supply (ESTIMATED: step
   10 of the plan checks that it keeps the time while off). It drifts, by
   a second or two a day (ESTIMATED: a watch crystal's 20 ppm), which the
@@ -427,8 +452,10 @@ counted. An error changes nothing.
   (`Clock`): the boot's rule (`boot()`: the chip, its voltage-low flag, a
   real date, the range), a `@time` (`set()`), the time at any moment of
   the boot (`at()`) and where it came from (`source()`); the range
-  (`believable()`), and the UTC calendar both ways (`toCivil()`,
-  `fromCivil()`: every day from 1970 to 2100 round-trips).
+  (`believable()`), the UTC calendar both ways (`toCivil()`,
+  `fromCivil()`: every day from 1970 to 2100 round-trips), and the RTC's
+  write: its second (`rtcSecond()`) and bytes (`rtcWrites()`, cut at
+  every byte against a model of the chip and M5Unified's read).
 - **`lib/core/FreeCount`** (portable, `test_free_count`): the count's
   pieces, the per-piece counts, the pieces to read again, FatFs's window
   over the card's sectors, and one step under the lock (`step()` over a
@@ -447,8 +474,9 @@ counted. An error changes nothing.
   lines; `@identify` through main.cpp's hook; `@time` through
   `app/BoardClock`. `app/UsbViz` hands it the events.
 - **`src/app/BoardClock`**: the RTC read at the boot (`begin()`, after
-  `M5.begin()`, which found the chip), written and read back for a
-  `@time` (`set()`, with the system time), and the clock's words behind a
+  `M5.begin()`, which found the chip), written (`rtcWrites()`' three, to
+  its registers through M5Unified's driver) and read back for a `@time`
+  (`set()`, with the system time), and the clock's words behind a
   spinlock, so any task reads `now()`; the RTC itself only on the loop
   task (its I2C port is the AXP192's and the touch panel's).
 - **`src/storage/CardSpace`**: the volume's `FATFS`, found once after the
@@ -501,7 +529,11 @@ counted. An error changes nothing.
   verb), `.rodata` +1,008 B; `firmware.bin` +4,576 B (4,358,944 to
   4,363,520). Every guard passes. The RTC is read once at the boot and
   written once a `@time` (a few I2C transactions, about a millisecond:
-  ESTIMATED), on the loop task.
+  ESTIMATED), on the loop task. Its review's fixes (the nearest second,
+  the three writes, the year read first) add `.text` 228 B and `.rodata`
+  64 B: `firmware.bin` +256 B (4,363,776), IRAM and internal DRAM
+  unchanged; the write is 15 bytes in three transactions where it was 7
+  in one.
 
 ## Device test plan
 
@@ -572,8 +604,11 @@ each line whole with its `\n`. Close every other owner of the port first.
       `@time 2026-10-18`: `@err 1 time`; `@time 4102444800000`: `@err 5
       time`. `@time` still says the time set above.
     - **Restart.** An RTS pulse (or the power button): `[clock] <the time>
-      UTC, from the RTC (to the second)`, and `@time` within about 1 s of
-      the computer's.
+      UTC, from the RTC (to the second)`, and `@time` within 1.5 s of the
+      computer's (most often within 0.5 s; restart a few times and note
+      each: they spread over up to a second, never past 1.5 s). `unset:
+      the RTC says 19..` here would mean the write's last step didn't
+      take: a bug.
     - **Off** (the RTC keeps time, ESTIMATED until this). On battery,
       off (a long press on the power button, or the idle power-off) for an
       hour at least, overnight better, then on: `from the RTC`, and `@time`
