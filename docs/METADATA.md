@@ -345,10 +345,10 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
 - Every integer is **little-endian** and unsigned unless written `iNN`.
 - **Identifiers come in two kinds,** and each is stored one way only:
   - **Computed as integers:** the FNV-1a 64 values (path hashes, qfp,
-    artistKey, serverUrlKey) and the random ids (cardId, commitId,
-    runId). Stored as little-endian integers, and sorted and compared as
-    unsigned integers: B1F7E69FBD466B59 is the bytes
-    `59 6B 46 BD 9F E6 F7 B1`.
+    artistKey, serverUrlKey and SRVS's parentKey) and the random ids
+    (cardId, commitId, runId). Stored as little-endian integers, and
+    sorted and compared as unsigned integers: B1F7E69FBD466B59 is the
+    bytes `59 6B 46 BD 9F E6 F7 B1`.
   - **Byte strings:** MD5 digests (`hash`, `audio-hash`), the SHA-256
     prefixes (COMP `key`, MPDJ `selectionSig`) and UUIDs
     (`serverInstance`). Stored as their bytes in the order of their
@@ -591,8 +591,8 @@ So that two writers produce the same bytes:
   records. An optional section is present exactly when its format's
   table says so, and is never written empty.
 - **The values a writer would otherwise choose** (cardId, commitId,
-  runId, the times, the generation) come from the caller; the
-  conformance fixtures supply them (2.17).
+  runId, the times, the generation, the order of SRVS's servers) come
+  from the caller; the conformance fixtures supply them (2.17).
 - The device's private sections in `/.player/tags.bin` (3.3.2) follow
   the contract's sections.
 
@@ -697,7 +697,7 @@ generation) and noted it in `/.player`.
 - **The order:** the leading NUL; then the strings the header names, in
   header-field order; then the format's own:
   - MSMF: `producer`, `serverRevision`; then the COMP names in COMP
-    order; then the LIBR roots in LIBR order;
+    order; then the LIBR roots in LIBR order (SRVS has no strings);
   - MPTG: `producer`; then 2.6.8's order;
   - MPDJ: `modelId`, `modelVersion`, `metric`, `license`, `attribution`;
     nothing else in its minor 0 (AUTODJ-INDEX.md 4.6);
@@ -793,7 +793,13 @@ reads the root with one small read at every boot.
 - The same server reached through two URLs (the LAN and a tunnel, say)
   has two keys. The listener's "same server" answer (2.11) is kept in the
   software's private state, as a list of keys known to be this card's
-  server.
+  server (one list for each of the card's servers: 2.5.5).
+- **The root's server is server 0 of the ledger.** Each ledger row names
+  the server its file came from (ORIG's `server`, 2.6.6): 0 is the one
+  these header fields describe, and the card's other servers are listed
+  in SRVS (2.5.5). The root's server is one the software reaches by its
+  own URL, never a federation peer: a card filled from peers alone names
+  their parent here.
 
 #### 2.5.2 Generation, commit id, card id
 
@@ -816,6 +822,7 @@ reads the root with one small read at every boot.
 | `COMP` | REQUIRED | 40 | the commit's companion files |
 | `LIBR` | | 4 | library roots: STRS offsets of folders relative to `/music` (2.8.6), sorted by their bytes; present exactly when there is a root other than `/music` (absent: one root, `/music`) |
 | `STRS` | REQUIRED | blob | strings |
+| `SRVS` | | 40 | the card's servers other than the root's (2.5.5); present exactly when a row of the root's tags file names one. The device never reads it |
 
 `COMP` entry (40 bytes):
 
@@ -857,6 +864,64 @@ Two valid roots with the same commitId and headerCrc are one commit seen
 twice: a rename cut between its two directory writes (2.12.1, "Cut
 renames"). Readers use either. The two may share one cluster chain, so
 the software deletes neither until a disk check has run.
+
+#### 2.5.5 `SRVS`: the card's other servers
+
+A card MAY hold files from more than one server: a second mStream server,
+or a federation peer reached through a server the software signs in to.
+Each ledger row says which (ORIG's `server`, 2.6.6): **0 is the root's own
+server** (2.5.1), and **server i ≥ 1 is SRVS entry i − 1**.
+
+`SRVS` entry (40 bytes):
+
+| Off | Size | Field | Meaning |
+|---|---|---|---|
+| 0 | 16 | serverInstance | the server's instance UUID, 16 bytes in RFC 4122 order (2.3.1); zeros: unknown (part 4, A6) |
+| 16 | 8 | serverUrlKey | the key of the base URL the software reaches it at (2.5.1); 0 for a peer |
+| 24 | 8 | parentKey | a peer's: the serverUrlKey of its parent, the server whose federation peer list names it; 0 otherwise |
+| 32 | 4 | peerId | a peer's: its `id` in that list (mStream's `GET /api/v1/federation/peers`); 0 otherwise |
+| 36 | 4 | flags | bit 0 PEER: a federation peer, reached through its parent (the parent's proxy, or a guest token the parent grants); bits 1-31 reserved |
+
+**Writers:**
+
+- SRVS is present exactly when a row of the root's tags file names a
+  server other than the root's, and it lists only servers some row
+  names. A card filled from one server has no SRVS and a `server` of 0 in
+  every row: the bytes it had before these fields.
+- **Each server once.** No entry for the root's own server; no two
+  entries with the same non-zero serverInstance or the same non-zero
+  serverUrlKey; no two peers with the same parentKey and peerId. A server
+  reached by its own URL has a non-zero serverUrlKey and no PEER; a peer
+  has PEER, a non-zero parentKey and peerId, and serverUrlKey 0.
+- **The order is the writer's** (2.4.2). A writer keeps each server's
+  index from the commit before while it can. When it must renumber (a
+  server's last row went), it rewrites every row's `server` in the same
+  commit: SRVS and the rows' indexes are one table, read from one root and
+  the tags file it names.
+- No strings (2.4.4). Never REQUIRED: the device doesn't know SRVS, and an
+  unknown REQUIRED section would make the whole root absent to it (2.4.2).
+
+**Readers:**
+
+- **The device never reads SRVS** (an optional section it doesn't know is
+  skipped: 2.4.5), nor ORIG (2.6.6). Its boot, its library and its Auto DJ
+  are the same with or without them.
+- **The software** checks SRVS as any section it uses (2.4.3: rows of at
+  least 40 bytes, bytes = count × stride, its CRC); a root whose SRVS
+  fails is absent to it, as with any damage.
+- A row whose `server` names no entry (no SRVS, or fewer entries) has an
+  **unknown** server (2.11).
+
+**What a row's server decides,** for that row alone: the server listing
+it pairs with (2.10.2), the same-server guard (2.11), and where anything
+the software reports about the file goes. A play, say, goes to the row's
+server; a peer's goes to its parent, with the peer's id.
+
+**Why v1 has it from the start.** Which server a file came from can't be
+derived again from the card or from a server, so 2.4.5 rules it out of a
+minor version: an older writer would carry the rows forward without it,
+and the next run would read another server's files as files that left
+the selection. Before any writer has shipped, it costs nothing.
 
 ### 2.6 Tags files (MPTG v1)
 
@@ -1067,11 +1132,18 @@ is a card with no ledger (2.11); the device still uses its records.
 | 70 | 1 | originFlags | bit 0 HASH_SAMPLED: the server's hashes are sampled digests, exactly when `hash-v` is 2 or more and `file-size` is 26,214,400 bytes (25 MiB) or more (mStream's rust-parser, `file_size >= sample_threshold`); bit 1 VERIFIED: the download's MD5 matched `hash`; bit 2 ADOPTED: the file was on the card before and was taken into the ledger |
 | 71 | 1 | convertedTo | 0: the card file is the server's bytes; else the container code (2.6.4) of a conversion |
 | 72 | 2 | convertKbps | the conversion's bitrate in kbit/s (0) |
-| 74 | 6 | reserved | 0 |
+| 74 | 2 | server | the server the file came from (2.5.5): 0 the root's own (2.5.1), i ≥ 1 SRVS entry i − 1; for a row with no server track (an owned `cover.jpg`), the server of the files it was made for |
+| 76 | 4 | reserved | 0 |
 
 mStream's canonical key is `audio-hash`, else `hash`
 (`COALESCE(audio_hash, file_hash)`): the key of AutoDJ rows, stars and
 play counts.
+
+**Each row is its server's.** A row's serverPath, ids and hashes are its
+own server's (a peer's own, not its parent's), so two servers' rows may
+share a serverPath or an id. The software pairs, guards and reports each
+row with its own server (2.5.5, 2.10.2, 2.11). On a card filled from one
+server every row's `server` is 0.
 
 #### 2.6.7 `HIDX`: the path-hash index (12 bytes)
 
@@ -1231,9 +1303,10 @@ terminal and a future device sync name new files alike.
    an NFC and an NFD spelling apart; the key merges them, so no
    look-alike twin is ever made). An existing folder's on-card spelling
    wins, so the folders merge. Of two
-   files that collide, the one with the lower mStream id keeps the name;
-   the others take ` (2)`, ` (3)`… before the extension. An "already
-   exists" from the OS is also a collision.
+   files that collide, the one with the lower mStream id keeps the name
+   (of two servers' files, the lower server index first: 2.6.6, since
+   ids are each server's own); the others take ` (2)`, ` (3)`… before the
+   extension. An "already exists" from the OS is also a collision.
 7. **Read back** the names after writing, brought back to the stored
    form by 2.8.5's per-OS rule, and record those.
 
@@ -1368,6 +1441,15 @@ other producer's record. A file with no record indexes exactly as today.
 #### 2.10.2 The software
 
 1. **The server.**
+   - **Per server** (2.5.5). Everything in this step is done for each of
+     the card's servers apart: a row pairs only with its own server's
+     entries (2.6.6's `server`). A run reads the servers it reaches and
+     has a selection for. The rows of every other server are carried
+     forward with their server side unchanged: never planned as "left
+     the selection", and a file of theirs found missing is written again
+     only by a run that reads its server. Their card side is still
+     matched (step 2), so their stamps come from this run's listing
+     (2.3.4).
    - **A 304 means "probably unchanged".** The manifest's `revision` (its
      ETag, sent back as If-None-Match on the first page) is the visible
      tracks' count, highest id, newest `modified` and number with art
@@ -1432,9 +1514,10 @@ other producer's record. A file with no record indexes exactly as today.
 | left the selection | changed by the listener | keep, drop from the ledger, report |
 
 5. **A mass-deletion guard.** When the plan would delete more than half of
-   the ledger's files, or most of the ledger's audio hashes are missing
-   from the whole manifest (another server, a rebuilt or emptied
-   library), the software asks before deleting anything (part 7, U7).
+   the ledger's files, or most of one server's rows' audio hashes are
+   missing from that server's whole manifest (another server, a rebuilt
+   or emptied library), the software asks before deleting anything
+   (part 7, U7).
 
 An optional **deep check** compares qfp for every owned file: two reads
 each, about 1-2 minutes for 20,000 files through a USB reader
@@ -1456,14 +1539,26 @@ each, about 1-2 minutes for 20,000 files through a USB reader
 - **A file the listener changed** stops being the software's at the next
   run (2.10.2). The software MUST NOT replace or delete it without the
   listener's explicit say-so.
-- **Which server filled the card** (2.5.1). The root's server is the
-  same as the one the software talks to when both serverInstance values
-  are known and equal, or, failing that, when the root's serverUrlKey is
-  this URL's key or one the listener has already called this card's
-  server. It is **different** when both serverInstance values are known
-  and differ, and **unknown** otherwise. Different or unknown: the
-  software MUST NOT delete or replace the files that root owns without
-  asking (part 7, U7). The guard of 2.10.2, step 5, applies as well.
+- **Which server filled each file** (2.5.1, 2.5.5). A ledger row's
+  server is the root's (`server` 0) or an SRVS entry. The software tests
+  it against what it reads now:
+  - **a server reached by its own URL** (the root's, or an entry
+    without PEER) is the **same** when both serverInstance values are
+    known and equal, or, failing that, when its serverUrlKey is this
+    URL's key, or a key the listener has already called the same server
+    as this URL (the private list of 2.5.1);
+  - **a peer** (PEER) is the **same** when both serverInstance values
+    are known and equal, or, failing that, when the software reads it
+    as peer peerId of a server that passes that key rule for parentKey;
+  - either is **different** when both serverInstance values are known
+    and differ, and **unknown** otherwise. Reading a server never makes
+    its peers' rows the same, nor reading a peer its parent's. A row
+    whose `server` names no entry is unknown.
+
+  Different or unknown: the software MUST NOT delete or replace that
+  row's file without asking (part 7, U7). The guard of 2.10.2, step 5,
+  applies to each server's rows as well. On a card filled from one
+  server this is the test of the root's server alone, as before.
 - **A card with music and no ledger:** every file on it is the
   listener's. The software MAY take files that equal what it would write
   into the ledger (ADOPTED), only with the listener's consent (part 7,
@@ -1610,9 +1705,10 @@ each folder the run was to create.
 
 The device's sync task writes `/.mstream` with source 3, following
 2.12.1-2.12.3 exactly: the same cardId, the next generation, ORIG rows
-from the API, records read from the bytes it wrote. The terminal and the
-device can then take turns on one card. The device MUST NOT write
-`/.mstream` in any other role.
+from the API, records read from the bytes it wrote, every row's `server`
+and the root's SRVS carried forward (2.5.5). The terminal and the device
+can then take turns on one card. The device MUST NOT write `/.mstream`
+in any other role.
 
 #### 2.12.5 `pending.bin` (MSPD)
 
@@ -1919,6 +2015,7 @@ max_channels=2
 | Firmware with no `device.txt` | The software writes v1 of everything, and no MPDJ (2.15) |
 | Damage (any CRC) | That file is absent; a damaged root means no transfer data. One MPDJ slot whose own CRC fails is the exception: only that slot is unused (AUTODJ-INDEX.md 8.5) |
 | A new string field | Appended to the run; older readers stop at the fields they know |
+| A card filled from several servers (SRVS, ORIG's `server`) | The device: no change, it reads neither. The software: each row is paired and guarded with its own server (2.5.5, 2.11) |
 
 ### 2.17 Conformance (no device needed)
 
@@ -1938,7 +2035,10 @@ on any difference. The folder's README says how to read them.
    writers. The C++ writer (host-built, `lib/core`) and the Rust writer
    MUST produce byte-identical MPTG files (2.6.8), and the same for MSMF,
    MPDJ, MSPD and MPTH (an MPTH from given pixels: the scaling filter
-   isn't pinned, and PCs' JPEG decoders differ anyway). Tag values go in
+   isn't pinned, and PCs' JPEG decoders differ anyway). The C++ writers
+   predate 2.5.5 and make the goldens of one server only (`server` 0, no
+   SRVS); the device writes no `/.mstream` until it syncs itself
+   (2.12.4), which needs them. Tag values go in
    raw: each writer applies 2.3.6 and sets TRUNCATED. MPDJ's fixtures
    (AUTODJ-INDEX.md 13) use small synthetic embeddings (no real index:
    2.13.4's licence), with ties at the floor and at a stride, same-song
@@ -2087,6 +2187,35 @@ cases, and the float32 trap.
 - BPM: `120.5` gives bpm10 1210; `19.5` gives 200; `300.5`, `0x78` and
   `120 BPM` are absent.
 
+**Servers** (2.5.5, 2.6.6, 2.11; `vectors.json`'s `servers`, over the
+goldens `tags-00000007.bin` and `manifest-servers.bin`):
+
+- ORIG's `server` is a row's bytes 74-75, little-endian: server 2 is
+  `02 00`, server 258 is `02 01`; bytes 76-79 stay 0. A card filled from
+  one server has `00 00` there in every row.
+- Peer 3 of the server at `http://music.example:3000` (parentKey
+  ED901EA3EE763AC7), its instance unknown, is the SRVS entry of 16 zero
+  bytes, 8 more (serverUrlKey 0), then
+  `C7 3A 76 EE A3 1E 90 ED 03 00 00 00 01 00 00 00`.
+- On that card (its root's serverUrlKey ED901EA3EE763AC7, its instance
+  unknown; server 1 at `https://second.example/mstream`, its instance
+  known; server 2 that peer 3; server 3 peer 1 of server 1), the
+  software reading:
+  - `http://music.example:3000`: server 0 is the same, server 1
+    unknown, server 2 unknown (a peer isn't its parent), server 4 (no
+    such entry) unknown;
+  - another URL of the same server: server 0 unknown, until the
+    listener has called the two the same server: then the same;
+  - peer 3 through `http://music.example:3000`: server 2 the same;
+    peer 4: unknown; peer 3 through `https://second.example/mstream`:
+    unknown;
+  - `https://second.example/mstream` with another instance known:
+    server 1 different, whatever the key; any URL with server 1's
+    instance: the same.
+- The golden's two files with one serverPath on two servers: the lower
+  server index has the name (`Both/One.mp3`), though its mStream id is
+  the higher (2.8.3, step 6).
+
 **HASH_SAMPLED** (2.6.6): 26,214,399 bytes with hash-v 2 is a full MD5
 (a download can be VERIFIED); 26,214,400 bytes with hash-v 2 is sampled;
 30 MB with hash-v 1 is a full MD5.
@@ -2136,7 +2265,7 @@ goes on the card as `x.opus`, its bytes unchanged, convertedTo 0.
 
 | File | Size |
 |---|---|
-| `manifest.bin` | under 4 KB |
+| `manifest.bin` | under 4 KB (SRVS: 40 bytes for each server besides the root's) |
 | `tags-<g>.bin` | about 6.9 MB: RECS 1.44 MB, STRS about 2.4 MB (names about 31 B and runs about 87 B per track), HIDX 0.24 MB, ORIG 1.6 MB, OSTR about 1.2 MB. The device reads FOLD, RECS and STRS: about 3.9 MB, 2.3-3.3 s at 1.2-1.7 MB/s, during a build only |
 | `autodj-<g>.bin`, MPDJ v2 at k = 169 | about 10.6 MB (DJSL 10.24 MB; DJRF, DJPH and STRS 0.36 MB, the join's); one 512-byte slot read per pick (AUTODJ-INDEX.md 10.2) |
 | `/.mstream/thumbs` | about 39 MB for 1,800 albums |
@@ -5739,9 +5868,9 @@ The user answered U8, U11, U12, U13 and U14 on 2026-10-07 (marked
   selection (same path and size, qfp checked) after asking, or always
   write beside them?
 - **U7. A card filled from another mStream server**, or one whose server
-  can't be told (2.11: different or unknown), or a run that would delete
-  most of the ledger (2.10.2, step 5): refuse, ask (proposed), or take it
-  over?
+  can't be told (2.11: different or unknown; on a card of several
+  servers, per row: 2.5.5), or a run that would delete most of the
+  ledger (2.10.2, step 5): refuse, ask (proposed), or take it over?
 - **U8. Rescan tags:** should it override transfer records? Today a
   matching transfer record wins, so a retag that kept both the size and
   the time of a software-owned file stays invisible until the next
