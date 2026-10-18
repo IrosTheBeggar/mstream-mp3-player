@@ -3738,6 +3738,226 @@ void test_natural_ends_are_counted_and_skips_are_not() {
   TEST_ASSERT_EQUAL_UINT32(6, p.naturalEnds());
 }
 
+// ---- the play log's word (setPlays(); docs/METADATA.md 2.20.5) ----
+
+namespace {
+// What the player told the play log, as words: "+<track>@<ms>" a play
+// began, then how it ended.
+struct PlayWords : PlaybackController::Plays {
+  std::vector<std::string> v;
+  void began(uint32_t key, uint32_t track, uint32_t fromMs) override {
+    (void)key;
+    char b[32];
+    snprintf(b, sizeof(b), "+%u@%u", static_cast<unsigned>(track), static_cast<unsigned>(fromMs));
+    v.push_back(b);
+  }
+  void ended(End how) override {
+    v.push_back(how == End::Completed ? "completed" : how == End::Skipped ? "skipped" : "stopped");
+  }
+  // The words since the last take.
+  std::string take() {
+    std::string s;
+    for (const std::string& w : v) s += (s.empty() ? "" : " ") + w;
+    v.clear();
+    return s;
+  }
+};
+}  // namespace
+
+// A play begins at each start from 0:00 or a start point and ends when
+// the track goes: a natural end Completed; next, prev, a pick, a restart
+// (prev past 3 s, a seek to 0:00), a cue Skipped; stop and Clear Stopped.
+// A pause, its resume and a seek (playing or paused) are the same play.
+void test_the_play_logs_word_for_each_action() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  PlayWords w;
+  p.setPlays(&w);
+  a.duration = 200000;
+  p.setGapless(false);  // (natural ends through update(), not joins)
+  p.play(0);
+  TEST_ASSERT_EQUAL_STRING("+0@0", w.take().c_str());
+  TEST_ASSERT_TRUE(p.playOpen());
+  a.finish();
+  p.update(0);
+  TEST_ASSERT_EQUAL_STRING("completed +1@0", w.take().c_str());
+  p.next();
+  TEST_ASSERT_EQUAL_STRING("skipped +2@0", w.take().c_str());
+  p.togglePlayPause();
+  p.togglePlayPause();
+  TEST_ASSERT_EQUAL_STRING("", w.take().c_str());
+  // Seeks: playing, and paused (the track let go, the start goes on with
+  // the play at the next Play).
+  TEST_ASSERT_TRUE(p.seek(r.queue.currentKey(), 60000, 200000) == PlaybackController::Seek::Started);
+  p.togglePlayPause();
+  TEST_ASSERT_TRUE(p.seek(r.queue.currentKey(), 90000, 200000) == PlaybackController::Seek::Waits);
+  p.togglePlayPause();
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Playing, (int)p.state());
+  TEST_ASSERT_EQUAL_UINT32(90000, a.lastStartMs);
+  TEST_ASSERT_EQUAL_STRING("", w.take().c_str());
+  // A restart: prev past 3 s; a seek to 0:00.
+  a.position = 10000;
+  p.prev();
+  TEST_ASSERT_EQUAL_STRING("skipped +2@0", w.take().c_str());
+  a.position = 10000;
+  p.seek(r.queue.currentKey(), 0, 200000);
+  TEST_ASSERT_EQUAL_STRING("skipped +2@0", w.take().c_str());
+  // Paused: prev past 3 s cues 0:00 (the play is over); Play begins one.
+  p.togglePlayPause();
+  a.position = 10000;
+  p.prev();
+  TEST_ASSERT_EQUAL_STRING("skipped", w.take().c_str());
+  p.togglePlayPause();
+  TEST_ASSERT_EQUAL_STRING("+2@0", w.take().c_str());
+  // Paused: a cue to the next (a seek's start point dropped with it).
+  p.togglePlayPause();
+  p.seek(r.queue.currentKey(), 50000, 200000);
+  p.cueNext();
+  TEST_ASSERT_EQUAL_STRING("skipped", w.take().c_str());
+  p.togglePlayPause();
+  TEST_ASSERT_EQUAL_STRING("+0@0", w.take().c_str());
+  p.play(1);
+  TEST_ASSERT_EQUAL_STRING("skipped +1@0", w.take().c_str());
+  p.stop();
+  TEST_ASSERT_EQUAL_STRING("stopped", w.take().c_str());
+  TEST_ASSERT_FALSE(p.playOpen());
+  p.togglePlayPause();
+  p.togglePlayPause();
+  p.stop();  // (paused)
+  TEST_ASSERT_EQUAL_STRING("+1@0 stopped", w.take().c_str());
+  p.play(0);
+  p.clearQueue();
+  TEST_ASSERT_EQUAL_STRING("+0@0 stopped", w.take().c_str());
+  p.stop();
+  TEST_ASSERT_EQUAL_STRING("", w.take().c_str());
+}
+
+// A join heard ends the track before (Completed) and begins the joined
+// one from 0:00, without a play(); Repeat One's loop is a new play; a
+// failure ends the play (Stopped) and the next begins; next at the last
+// entry with repeat Off is a skip that stops; the sleep timer's end of
+// track is Completed, and the cued entry begins only at Play.
+void test_the_play_logs_word_at_joins_loops_and_failures() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  PlayWords w;
+  p.setPlays(&w);
+  p.play(0);
+  a.advances.push_back(a.nexts.back().token);
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(1, a.playCount);
+  TEST_ASSERT_EQUAL_STRING("+0@0 completed +1@0", w.take().c_str());
+  p.setRepeat(PlaybackController::Repeat::One);
+  a.advances.push_back(a.nexts.back().token);
+  p.update(0);
+  TEST_ASSERT_EQUAL_INT(1, p.currentIndex());
+  TEST_ASSERT_EQUAL_STRING("completed +1@0", w.take().c_str());
+  p.setRepeat(PlaybackController::Repeat::Off);
+  a.failedFlag = true;
+  p.update(0);
+  TEST_ASSERT_EQUAL_STRING("stopped +2@0", w.take().c_str());
+  p.next();  // the last entry, repeat Off: stopped there
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Stopped, (int)p.state());
+  TEST_ASSERT_EQUAL_STRING("skipped", w.take().c_str());
+  p.play(0);
+  p.setPauseAfterTrack(true);
+  p.setGapless(false);
+  a.finish();
+  p.update(0);
+  TEST_ASSERT_EQUAL_STRING("+0@0 completed", w.take().c_str());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
+  p.togglePlayPause();
+  TEST_ASSERT_EQUAL_STRING("+1@0", w.take().c_str());
+}
+
+// A play waiting for the headphones begins when it starts; a wait on the
+// paused track is the same play; a resume point begins one at its second;
+// the current entry removed is a skip; an Undo back to a paused queue ends
+// the edit's play; the library update's fence: a track that ended inside
+// it is Completed, one the build took away Stopped; stopKeepingPlace() and
+// the firmware's endPlay() (a power-off) Stopped.
+void test_the_play_logs_word_through_waits_edits_and_the_fence() {
+  Rig r(3);
+  FakeAudioBackend& a = r.audio;
+  PlaybackController& p = r.player;
+  PlayWords w;
+  TestHold hold;
+  p.setPlays(&w);
+  p.setHold(&hold);
+  hold.hold = true;
+  p.play(0);
+  TEST_ASSERT_EQUAL_STRING("", w.take().c_str());
+  hold.hold = false;
+  p.release();
+  TEST_ASSERT_EQUAL_STRING("+0@0", w.take().c_str());
+  p.togglePlayPause();
+  hold.hold = true;
+  p.togglePlayPause();  // waits on the paused track
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Waiting, (int)p.state());
+  hold.hold = false;
+  p.release();
+  TEST_ASSERT_EQUAL_STRING("", w.take().c_str());
+  hold.hold = true;
+  p.next();  // a skip while held: the play ends, the next waits
+  TEST_ASSERT_EQUAL_STRING("skipped", w.take().c_str());
+  hold.hold = false;
+  p.release();
+  TEST_ASSERT_EQUAL_STRING("+1@0", w.take().c_str());
+  p.stop();
+  w.take();
+  // A resume point (a boot's): the play begins at its second.
+  p.setStartPoint(30000, 200000);
+  p.togglePlayPause();
+  TEST_ASSERT_EQUAL_STRING("+1@30000", w.take().c_str());
+  const uint32_t cur = static_cast<uint32_t>(p.currentIndex());
+  p.remove(&cur, 1);
+  TEST_ASSERT_EQUAL_STRING("skipped +2@0", w.take().c_str());
+  // Undo of a Play made while paused: the edit's play ends, the old entry
+  // cued.
+  p.togglePlayPause();
+  const uint32_t ids[] = {0, 2};
+  p.playNow(ids, 2, 0);
+  TEST_ASSERT_EQUAL_STRING("skipped +0@0", w.take().c_str());
+  TEST_ASSERT_TRUE(p.undo());
+  TEST_ASSERT_EQUAL_STRING("skipped", w.take().c_str());
+  TEST_ASSERT_EQUAL_INT((int)PlayState::Paused, (int)p.state());
+  // The fence: a track that ended inside it.
+  const uint32_t three[] = {0, 1, 2};
+  r.queue.assign(three, 3, 0);
+  p.queueReplaced(false);
+  w.take();
+  p.play(0);
+  p.setFenced(true);
+  a.finish();
+  p.update(0);
+  TEST_ASSERT_EQUAL_STRING("+0@0", w.take().c_str());
+  p.setFenced(false);
+  r.queue.assign(three, 3, 0);
+  p.queueReplaced(true);
+  TEST_ASSERT_EQUAL_STRING("completed", w.take().c_str());
+  // A track the build took away (the current entry not kept).
+  p.play(0);
+  r.queue.assign(three, 3, 1);
+  p.queueReplaced(false);
+  TEST_ASSERT_EQUAL_STRING("+0@0 stopped +1@0", w.take().c_str());
+  // The console's stop keeping the place: Stopped, and the next play
+  // begins at that second.
+  a.position = 42000;
+  TEST_ASSERT_TRUE(p.stopKeepingPlace());
+  TEST_ASSERT_EQUAL_STRING("stopped", w.take().c_str());
+  p.togglePlayPause();
+  TEST_ASSERT_EQUAL_STRING("+1@42000", w.take().c_str());
+  // The firmware's power-off: the open play Stopped (paused or playing).
+  p.togglePlayPause();
+  p.endPlay();
+  TEST_ASSERT_EQUAL_STRING("stopped", w.take().c_str());
+  TEST_ASSERT_FALSE(p.playOpen());
+  p.endPlay();
+  TEST_ASSERT_EQUAL_STRING("", w.take().c_str());
+}
+
 int main(int, char**) {
   UNITY_BEGIN();
   RUN_TEST(test_a_new_queue_selects_first_and_stops);
@@ -3858,5 +4078,8 @@ int main(int, char**) {
   RUN_TEST(test_auto_dj_s_cue_only_at_a_finished_queue);
   RUN_TEST(test_every_play_and_clear_bumps_the_epoch);
   RUN_TEST(test_natural_ends_are_counted_and_skips_are_not);
+  RUN_TEST(test_the_play_logs_word_for_each_action);
+  RUN_TEST(test_the_play_logs_word_at_joins_loops_and_failures);
+  RUN_TEST(test_the_play_logs_word_through_waits_edits_and_the_fence);
   return UNITY_END();
 }
