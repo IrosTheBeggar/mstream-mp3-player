@@ -522,7 +522,8 @@ void test_the_root() {
     TEST_ASSERT_TRUE(std::strstr(line, "tags-00000005.bin") != nullptr);
   }
   // A newer manifest.tmp wins the election; its T isn't on the card: absent,
-  // and the card is still named by that root.
+  // and the card is still named by that root. The log's line says so (not
+  // "none on the card": @status cid= names this root).
   const std::vector<uint8_t> t6 = transferOf(card, 6);
   fs.put("/.mstream/manifest.tmp", manifestFor(t6, 6, 0xDEF).bytes);
   {
@@ -533,6 +534,9 @@ void test_the_root() {
     TEST_ASSERT_TRUE(r->hasRoot);
     TEST_ASSERT_EQUAL_UINT64(kCardId, r->cardId);
     TEST_ASSERT_EQUAL_UINT32(6, r->generation);
+    char line[160];
+    cardroot::describe(*r, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("no transfer data (the root's T tags-00000006.bin, generation 6: missing)", line);
   }
   fs.put(tagsName(6), t6);
   {
@@ -549,6 +553,9 @@ void test_the_root() {
     TEST_ASSERT_TRUE(r->why == cc::Why::Comp);
     TEST_ASSERT_TRUE(r->hasRoot);
     TEST_ASSERT_EQUAL_UINT32(6, r->generation);
+    char line[160];
+    cardroot::describe(*r, line, sizeof(line));
+    TEST_ASSERT_EQUAL_STRING("no transfer data (the root's T tags-00000006.bin, generation 6: comp)", line);
   }
   std::vector<uint8_t> broken = t6;
   broken[20] ^= 1;  // the header's CRC fails
@@ -559,6 +566,11 @@ void test_the_root() {
     TEST_ASSERT_TRUE(r->why != cc::Why::Ok);
     TEST_ASSERT_TRUE(r->hasRoot);
     TEST_ASSERT_EQUAL_UINT32(6, r->generation);
+    char line[160];
+    cardroot::describe(*r, line, sizeof(line));
+    const std::string want = std::string("no transfer data (the root's T tags-00000006.bin, generation 6: ") +
+                             cc::whyName(r->why) + ")";
+    TEST_ASSERT_EQUAL_STRING(want.c_str(), line);
   }
   // The .tmp damaged: the .bin's commit counts again.
   std::vector<uint8_t> m6 = fs.bytes("/.mstream/manifest.tmp");
@@ -587,6 +599,12 @@ void test_the_root() {
   TEST_ASSERT_FALSE(kept->hasRoot);
   TEST_ASSERT_EQUAL_UINT64(0, kept->cardId);
   TEST_ASSERT_EQUAL_UINT32(0, kept->generation);
+  // ... and the log's line says why the root failed, with the plan.
+  char line[200];
+  cardroot::describe(*kept, line, sizeof(line));
+  const std::string want = std::string("no transfer data (") + cc::whyName(kept->why) +
+                           "); a transfer's plan is on the card (it didn't finish)";
+  TEST_ASSERT_EQUAL_STRING(want.c_str(), line);
 }
 
 // ---------------------------------------------------------------------------

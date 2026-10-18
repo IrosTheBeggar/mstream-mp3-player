@@ -34,8 +34,8 @@ constexpr const char* kEllipsis = "%E2%80%A6";
 // fields hold: the keys after state= (cid=) are left out first, each whole.
 // With the fields' real widths they all fit, and a later key's room is
 // kept (docs/HOST-STATUS.md, "The budget": bt= keeps 40); only the
-// formatter's own caps (a 48-byte fw=, 20-digit numbers) make one give
-// way.
+// formatter's own caps (a 48-byte fw=, a 16-byte elf=, the 64-bit numbers
+// at 20 digits and tracks= at its 10) make one give way.
 constexpr size_t kBtRoom = 36;
 
 // card=: what is in the slot. Fat32 and Fat16 are mounted (FAT12, a card of

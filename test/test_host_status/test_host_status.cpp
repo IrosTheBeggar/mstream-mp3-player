@@ -229,7 +229,7 @@ void test_status_cap_and_bt() {
   f.elf = "0123456789abcdef0123";                                // cut to 16
   f.card = Card::Unreadable;
   f.sizeBytes = f.freeBytes = 18446744073709551615ull;
-  f.trackCount = 4294967295u;
+  f.trackCount = 4294967295u;  // a u32: 10 digits (the 64-bit numbers 20)
   f.musicKnown = true;
   f.musicBytes = 18446744073709551615ull;
   f.battery = 100;

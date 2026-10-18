@@ -1884,8 +1884,13 @@ static void hostFacts(hoststatus::Facts& f) {
   // the loop answers anything, and nothing writes it again), while a FAT
   // card is mounted. Another card put in is a restart (the card's guard);
   // the same card put back keeps the boot's root, as the library does.
+  // From the remount that found another card until that restart (the
+  // toast's 1.2 s, the worker's step), FatFs has that card mounted (card=
+  // says its kind) and the root is still the boot card's: '-'. (The
+  // guard's flag, an atomic read: no card I/O. cardHeld isn't the test:
+  // it also holds the same card for a restart, whose cid= is right.)
   const cardroot::Root* root = library.root();
-  if ((f.card == Card::Fat32 || f.card == Card::Fat16) && root && root->hasRoot) {
+  if ((f.card == Card::Fat32 || f.card == Card::Fat16) && root && root->hasRoot && !sectordisk::guard().foreign) {
     f.cidKnown = true;
     f.cardId = root->cardId;
     f.generation = root->generation;

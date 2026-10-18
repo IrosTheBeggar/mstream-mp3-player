@@ -81,7 +81,7 @@ long, `bt=` gives way first, down to 36 bytes; past that the keys after
 | `music` | bytes or `?` | the indexed tracks' bytes. This firmware's index keeps no file sizes (a track's record is 32 bytes: its names, numbers and length), so it is always `?`; it is not read from the card. A later release can sum the sizes the walk records hold at the build and save the sum with `library.idx` |
 | `bat` | 0-100, or `-` | the power chip's battery reading the UI takes every 10 s (the tab bar's); `-` until the first |
 | `state` | `playing`, `paused`, `idle`, `host` | the player: `playing` also while a play waits for the headphones; `idle` stopped; `host` while a computer drives the dancer (the visualizer's host mode) |
-| `cid` | the card's id and its commit's generation, `<cardId>.<generation>`: 16 and 8 hex digits in lower case, leading zeros kept (`5eedc0de0a1b2c3d.0000002a`); or `-`. Since 0.12.0 | the root the boot read (docs/METADATA.md 2.5.2, 2.5.4: `/.mstream/manifest.bin` or `.tmp`, the one the election picked, checked whole; `Library::root()`): its `cardId`, and its `generation`, the number in the commit's file names (`tags-0000002a.bin`). Kept when the root's tags file then fails the boot's checks (the boot log's `[lib] the card:` line says why, and the library is the walk's alone): the root still names the card. `-`: no root (no `/.mstream`, or none valid), no PSRAM to read it, the internal flash, or no card mounted now (`card=` isn't `fat32` or `fat16`: a card pulled reads `none`). **Read once, at the boot**, never during `@status`: another card put in while on is a restart (the card's guard: ARCHITECTURE.md, Storage), but the same card pulled and put back keeps the boot's root until a restart, even if a computer wrote a new commit to it meanwhile |
+| `cid` | the card's id and its commit's generation, `<cardId>.<generation>`: 16 and 8 hex digits in lower case, leading zeros kept (`5eedc0de0a1b2c3d.0000002a`); or `-`. Since 0.12.0 | the root the boot read (docs/METADATA.md 2.5.2, 2.5.4: `/.mstream/manifest.bin` or `.tmp`, the one the election picked, checked whole; `Library::root()`): its `cardId`, and its `generation`, the number in the commit's file names (`tags-0000002a.bin`). Kept when the root's tags file then fails the boot's checks (the boot log's `[lib] the card:` line names that file, the generation and why: `no transfer data (the root's T tags-0000002a.bin, generation 42: missing)`; the library is the walk's alone): the root still names the card. `-`: no root (no `/.mstream`, or none valid), no PSRAM to read it, the internal flash, or no card mounted now (`card=` isn't `fat32` or `fat16`: a card pulled reads `none`). **Read once, at the boot**, never during `@status`: another card put in while on is a restart (the card's guard, at FatFs's remount, its first read of that card: ARCHITECTURE.md, Storage), and from the moment the guard finds it until that restart (about a second: FatFs has the other card mounted then, and `card=` says its kind) `cid=` is `-` (before that first read nothing on the board knows the card changed); but the same card pulled and put back keeps the boot's root until a restart, even if a computer wrote a new commit to it meanwhile |
 | `bt` | the paired headphones' name, percent-encoded, or `-` | their own name once linked, before that the one saved at the pairing (`BtSink::shownName()`, the Output tab's); `-` with nothing paired, or a pairing whose name the board never learnt |
 
 **Percent-encoding** (`bt=`): RFC 3986's unreserved bytes (`A-Z a-z 0-9 -
@@ -123,9 +123,10 @@ put whole or left out, never cut: while they would leave `bt=` under 36,
 the last of them is left out, then the one before it. With the widths
 above they all fit, with 4 bytes to spare. Only the formatter's own caps,
 wider than any field a board sends, can make one give way: with `fw=` at
-its cut of 48 bytes, `elf=` at 16 and every number at 20 digits, the fields
-to `state=` and ` bt=` take 219 bytes, which leaves `bt=` its 36 exactly
-and no room for `cid=`. A key added later goes in after the last of these
+its cut of 48 bytes, `elf=` at 16, `size=`, `free=` and `music=` (64-bit)
+at 20 digits and `tracks=` (32-bit) at its 10, the fields to `state=` and
+` bt=` take 219 bytes, which leaves `bt=` its 36 exactly and no room for
+`cid=`. A key added later goes in after the last of these
 (so it gives way first), with its row in the table above; a key wider than
 the spare bytes would give way on a real line. `test_host_status` checks
 the widest line, the line at the cap, and the rule's edge.
@@ -330,6 +331,8 @@ counted. An error changes nothing.
 - **`lib/core/CardRoot`** (`test_card_jobs`' `test_the_root`): the root
   that won the election keeps its card id and generation (`Root::hasRoot`,
   `cardId`, `generation`), also when its tags file then fails: `cid=`.
+  The boot log's line (`describe()`) then names that file, the generation
+  and why, never "none on the card".
 - **`lib/core/FreeCount`** (portable, `test_free_count`): the count's
   pieces, the per-piece counts, the pieces to read again, FatFs's window
   over the card's sectors, and one step under the lock (`step()` over a
@@ -363,7 +366,8 @@ counted. An error changes nothing.
   `test_ui_library`.
 - **`src/main.cpp`**: the facts hook (`hostFacts()`; `cid=` from
   `Library::root()`, which `setup()` reads before the loop answers
-  anything, and nothing writes again), what blocks a count
+  anything, and nothing writes again; `-` once the card's guard has found
+  another card, `sectordisk::guard().foreign`), what blocks a count
   (`countBlocked()`), the identify hook (the screen woken first, the
   banner once the panel is awake), `hostQuery.loop()` every pass, the
   screen kept lit for the banner, the idle power-off held while a count
@@ -380,9 +384,11 @@ counted. An error changes nothing.
   after it, `[console] ...`, isn't printed for an `@` line).
   **`cid=`** (0.12.0), against 12a748e, core2: IRAM and internal DRAM
   unchanged (`.iram0.text` 124,883 B); flash `.text` +320 B, `.rodata`
-  -32 B; `firmware.bin` +288 B (4,358,528 to 4,358,816). Every guard
-  passes. `@status` takes about 50 bytes more of the loop task's stack
-  (ESTIMATED: the key's 31-byte buffer and its lengths).
+  -32 B; `firmware.bin` +288 B (4,358,528 to 4,358,816). Its review's
+  fixes (the guard's flag read, the boot log's line for a root whose tags
+  file failed) add 144 B more (4,358,960), IRAM still 124,883 B. Every
+  guard passes. `@status` takes about 50 bytes more of the loop task's
+  stack (ESTIMATED: the key's 31-byte buffer and its lengths).
 
 ## Device test plan
 
@@ -431,5 +437,10 @@ each line whole with its `\n`. Close every other owner of the port first.
    boot log's `[lib] the card: T tags-<8 hex>.bin, generation <n>` names
    (`<n>` in decimal there, 8 hex digits here). With a card that has no
    `/.mstream`: `cid=-`. Pull the card while on: `card=none` and `cid=-`;
-   put it back: the boot's `cid=` again. Every line still ends in `bt=`,
-   whole for a usual name.
+   put it back: the boot's `cid=` again. Pull it and put in another card
+   while it plays from the card and `@status` goes every second: from the
+   log's `[card] ANOTHER CARD` line on, `cid=-` until the restart, then
+   the other card's. A root whose tags file is gone (renamed on a
+   computer): `cid=` still that root's, and the boot log's line `no
+   transfer data (the root's T tags-<8 hex>.bin, generation <n>:
+   missing)`. Every line still ends in `bt=`, whole for a usual name.
