@@ -535,6 +535,41 @@ def server_entry(s) -> dict:
             "peerId": s.get("peerId", 0), "flags": s.get("flags", 0)}
 
 
+def root_server(root) -> dict:
+    """Server 0 of a root description (2.5.1): the header's, as an entry."""
+    key = server_url_key(root["serverUrl"]) if root.get("serverUrl") else u64(root.get("serverUrlKey", 0))
+    return {"instance": uuid_bytes(root.get("serverInstance")), "serverUrlKey": key, "parentKey": 0, "peerId": 0,
+            "flags": 0}
+
+
+def srvs_breaks(root: dict, entries) -> set:
+    """The servers (i >= 1, entry i - 1) whose SRVS entry breaks a writer
+    rule of 2.5.5, given server 0 (root_server). A reserved flag bit is a
+    newer minor's (2.4.5), not a broken rule."""
+    zero, out = bytes(16), set()
+    for i, e in enumerate(entries, 1):
+        if e["flags"] & PEER:
+            fields = e["serverUrlKey"] == 0 and e["parentKey"] != 0 and e["peerId"] != 0
+        else:
+            fields = e["serverUrlKey"] != 0 and e["parentKey"] == 0 and e["peerId"] == 0
+        roots = (e["instance"] != zero and e["instance"] == root["instance"]) or \
+                (e["serverUrlKey"] != 0 and e["serverUrlKey"] == root["serverUrlKey"])
+        if not fields or roots:
+            out.add(i)
+    # Each server once: both of two entries that name one server are broken.
+    for name in ("instance", "serverUrlKey", "peer"):
+        seen = {}
+        for i, e in enumerate(entries, 1):
+            v = (e["parentKey"], e["peerId"]) if name == "peer" else e[name]
+            if (name == "peer" and not e["flags"] & PEER) or v in (zero, 0):
+                continue
+            seen.setdefault(v, []).append(i)
+        for same in seen.values():
+            if len(same) > 1:
+                out.update(same)
+    return out
+
+
 def srvs_row(e: dict, stride=40) -> bytes:
     row = struct.pack("<16sQQII", e["instance"], e["serverUrlKey"], e["parentKey"], e["peerId"], e["flags"])
     return row + bytes([0xAB]) * (stride - 40)
@@ -550,10 +585,9 @@ def msmf_raw(desc, comps_rows, roots, minor=0, servers=(), srvs_stride=40, extra
     for kind, gen, fb, hc, name, key in comps_rows:
         comp += struct.pack("<4sIIIII16s", fourcc(kind), gen, fb, hc, strs.add(name), 0, key)
     libr = b"".join(struct.pack("<I", strs.add(r)) for r in roots)
-    instance = uuid_bytes(desc.get("serverInstance"))
-    key = server_url_key(desc["serverUrl"]) if desc.get("serverUrl") else u64(desc.get("serverUrlKey", 0))
+    server = root_server(desc)
     th = struct.pack("<IIQ16sIIIIQ", desc.get("commitTime", 0), desc.get("flags", 0), u64(desc.get("commitId", 0)),
-                     instance, producer, revision, desc.get("baseGeneration", 0), 0, key)
+                     server["instance"], producer, revision, desc.get("baseGeneration", 0), 0, server["serverUrlKey"])
     sections = [("COMP", REQUIRED, len(comps_rows), 40, bytes(comp))]
     if roots:
         sections.append(("LIBR", 0, len(roots), 4, libr))
@@ -577,6 +611,17 @@ def msmf(desc, golden: dict):
     rows = [comp_row(c["file"], golden[c["file"]]) for c in desc["companions"]]
     roots = sorted(desc.get("roots", []), key=lambda r: r.encode("utf-8"))
     servers = [server_entry(s) for s in desc.get("servers", [])]
+    # 2.5.5's writer rules, which a description must keep (msmf_raw writes
+    # whatever it is given, for the hardening files): each server once,
+    # each entry's fields as its kind says, only the flag bits v1 defines.
+    broken = srvs_breaks(root_server(desc), servers)
+    assert not broken and all(e["flags"] in (0, PEER) for e in servers), (desc["file"], sorted(broken))
+    # And with the tags file it names: SRVS lists exactly the servers its
+    # rows name besides the root's, and every row names 0 or an entry.
+    tags = golden[desc["companions"][0]["file"]]
+    has_orig = any(s[0] == "ORIG" for s in parse_container(tags)["sections"])
+    used = {server for _, server in ledger_servers(tags)} if has_orig else set()
+    assert used - {0} == set(range(1, len(servers) + 1)), (desc["file"], sorted(used), len(servers))
     return msmf_raw(desc, rows, roots, desc.get("minor", 0), servers)
 
 
@@ -909,6 +954,54 @@ def pairs_for(groups):
     return out
 
 
+ROOT_INSTANCE = "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233"
+
+
+def broken_server_cases():
+    """2.5.5's readers: an SRVS entry that breaks a writer rule names an
+    unknown server (2.11), though its fields alone would pass; the root
+    stays valid, and the other entries keep their test (the controls)."""
+    root = {"serverUrl": HOME_URL, "serverInstance": ROOT_INSTANCE}
+    peer = {"parentUrl": HOME_URL, "peerId": 3, "flags": PEER}
+    cases = [
+        ([{"serverUrl": HOME_URL}], 1, {"url": HOME_URL}, "the root's own server again (its URL key)"),
+        ([{"serverInstance": ROOT_INSTANCE, "serverUrl": SECOND_URL}], 1, {"url": SECOND_URL},
+         "the root's own server again (its instance)"),
+        ([{"serverInstance": SECOND_INSTANCE, "serverUrl": SECOND_URL}, {"serverInstance": SECOND_INSTANCE,
+          "serverUrl": "http://192.0.2.20"}], 1, {"url": SECOND_URL, "serverInstance": SECOND_INSTANCE},
+         "two entries with one instance: both"),
+        ([{"serverUrl": SECOND_URL}, {"serverUrl": "HTTPS://Second.Example/mstream/"}], 2, {"url": SECOND_URL},
+         "two entries with one URL key (the URLs normalised: 2.5.1)"),
+        ([{"serverInstance": SECOND_INSTANCE}], 1, {"url": SECOND_URL, "serverInstance": SECOND_INSTANCE},
+         "no PEER and no URL key, though its instance is the one read"),
+        ([{"serverUrl": SECOND_URL, "peerId": 2}], 1, {"url": SECOND_URL}, "no PEER, and a peerId"),
+        ([dict(peer, serverUrl=SECOND_URL)], 1, {"url": HOME_URL, "peerId": 3}, "a peer with a URL key"),
+        ([{"serverInstance": FAR_INSTANCE, "peerId": 3, "flags": PEER}], 1,
+         {"url": HOME_URL, "peerId": 3, "peerInstance": FAR_INSTANCE},
+         "a peer with no parentKey, though its instance is the one read"),
+        ([dict(peer, peerId=0)], 1, {"url": HOME_URL, "peerId": 0}, "a peer with no peerId"),
+        ([peer, dict(peer)], 2, {"url": HOME_URL, "peerId": 3}, "two peers with one parentKey and peerId"),
+    ]
+    controls = [
+        ([{"serverInstance": SECOND_INSTANCE, "serverUrl": SECOND_URL}, {"serverInstance": SECOND_INSTANCE,
+          "serverUrl": "http://192.0.2.20"}, {"serverUrl": "http://198.51.100.7"}], 3,
+         {"url": "http://198.51.100.7"}, "the other entries keep their test"),
+        ([{"serverUrl": SECOND_URL, "flags": 2}], 1, {"url": SECOND_URL},
+         "a reserved flag bit is a newer minor's, ignored (2.4.5): no broken rule"),
+        ([{"parentUrl": SECOND_URL, "peerId": 1, "flags": PEER}], 1, {"url": SECOND_URL, "peerId": 1},
+         "a peer whose parent has no rows on the card: parentKey by the key rule alone"),
+    ]
+    out = []
+    for (servers, index, talk, note), verdict in [(c, "unknown") for c in cases] + [(c, "same") for c in controls]:
+        card = dict(root, servers=servers)
+        broken = index in srvs_breaks(root_server(card), [server_entry(s) for s in servers])
+        # Each case is unknown by the rule alone (read without it, it is the
+        # same), and each control breaks none.
+        assert broken == (verdict == "unknown") and same_server(card, index, talk, rules=False) == "same", note
+        out.append({"card": card, "index": index, "talk": talk, "verdict": verdict, "note": note})
+    return out
+
+
 def vectors(golden: dict):
     v = {}
     v["note"] = ("docs/METADATA.md 2.18 as data. 'who': both (every implementation), software (the transfer "
@@ -1070,9 +1163,11 @@ def vectors(golden: dict):
                  "index. rows: the golden tags file's records in record order with their server. srvs: the golden "
                  "root's SRVS entries (entry i - 1 is server i), as stored. sameServer: 2.11's test of server "
                  "'index' of the card whose root description is 'card' against what the software reads: the "
-                 "server at 'url' ('confirmed': keys the listener has called the same server as 'url'), or with "
-                 "'peerId' that peer of it; 'serverInstance' is the instance of what it reads, when known. The "
-                 "device reads neither ORIG nor SRVS."),
+                 "server at 'url' ('serverInstance': its instance, when known; 'confirmed': keys the listener has "
+                 "called the same server as 'url'), or, with 'peerId', that peer of it ('peerInstance': the "
+                 "peer's instance, when known). brokenEntries: the same test on cards whose SRVS breaks a writer "
+                 "rule of 2.5.5, each 'card' a root description's server fields: the entry's server is unknown, "
+                 "the root stays valid. The device reads neither ORIG nor SRVS."),
         "origServer": [{"server": 0, "bytes74to79": "00 00 00 00 00 00", "note": "a card filled from one server"},
                        {"server": 2, "bytes74to79": "02 00 00 00 00 00"},
                        {"server": 258, "bytes74to79": "02 01 00 00 00 00"}],
@@ -1114,11 +1209,21 @@ def vectors(golden: dict):
             {"index": 2, "talk": {"url": HOME_URL}, "verdict": "unknown", "note": "the parent is not its peer"},
             {"index": 2, "talk": {"url": SECOND_URL, "peerId": 3}, "verdict": "unknown",
              "note": "peer 3 of another parent"},
+            {"index": 2, "talk": {"url": "http://192.0.2.10:3000", "serverInstance": other, "peerId": 3},
+             "verdict": "unknown", "note": "its parent at a new URL: the root's instance is unknown, so only a key "
+                                           "the listener confirmed ties the URL to it"},
+            {"index": 2, "talk": {"url": "http://192.0.2.10:3000", "peerId": 3,
+                                  "confirmed": ["0x%016X" % server_url_key(HOME_URL)]}, "verdict": "same"},
             {"index": 3, "talk": {"url": SECOND_URL, "peerId": 1}, "verdict": "same"},
-            {"index": 3, "talk": {"url": SECOND_URL, "peerId": 1, "serverInstance": other}, "verdict": "different"},
+            {"index": 3, "talk": {"url": SECOND_URL, "peerId": 1, "peerInstance": other}, "verdict": "different"},
             {"index": 3, "talk": {"url": HOME_URL, "peerId": 1}, "verdict": "unknown"},
+            {"index": 3, "talk": {"url": "http://192.0.2.20", "serverInstance": SECOND_INSTANCE, "peerId": 1},
+             "verdict": "same", "note": "its parent at a new URL, known by its instance (server 1's)"},
+            {"index": 3, "talk": {"url": SECOND_URL, "serverInstance": other, "peerId": 1}, "verdict": "unknown",
+             "note": "the server at its parent's URL is another server now, by instance: not its parent"},
             {"index": 4, "talk": {"url": HOME_URL}, "verdict": "unknown", "note": "a server no SRVS entry names"},
             {"index": 65535, "talk": {"url": HOME_URL}, "verdict": "unknown"}]},
+        "brokenEntries": {"cases": broken_server_cases()},
     }
     v["deviceTxt"] = {"text": device_txt(device_main()).decode("ascii"),
                       "noFile": {"read.msmf": "1", "read.mptg": "1", "read.mpdj": "", "read.mpth": "1",
@@ -1128,33 +1233,59 @@ def vectors(golden: dict):
     return v
 
 
-def card_server(root, index):
+def card_server(root, index, rules=True):
     """Server `index` of a root description (2.5.5): 0 the header's, i >= 1
-    SRVS entry i - 1; None when no entry has that index."""
+    SRVS entry i - 1; None when no entry has that index, or when its entry
+    breaks a writer rule (to a reader, that server is unknown; rules=False
+    reads it anyway, for the vectors' own check)."""
     if index == 0:
-        key = server_url_key(root["serverUrl"]) if root.get("serverUrl") else u64(root.get("serverUrlKey", 0))
-        return {"instance": uuid_bytes(root.get("serverInstance")), "serverUrlKey": key, "parentKey": 0, "peerId": 0,
-                "flags": 0}
-    servers = root.get("servers", [])
-    return server_entry(servers[index - 1]) if index <= len(servers) else None
+        return root_server(root)
+    entries = [server_entry(s) for s in root.get("servers", [])]
+    if index > len(entries) or (rules and index in srvs_breaks(root_server(root), entries)):
+        return None
+    return entries[index - 1]
 
 
-def same_server(srv, talk):
-    """2.11's test of one of a card's servers against the one the software
-    reads. talk: the server at "url" ("confirmed": keys the listener has
-    called the same server as it), or with "peerId" that peer of it;
-    "serverInstance": the instance of what it reads, when known."""
+def card_parent(root, key, rules=True):
+    """A peer's parent on the card (2.11): the index of the server reached by
+    its own URL whose serverUrlKey is `key`, or None."""
+    for i in range(len(root.get("servers", [])) + 1):
+        s = card_server(root, i, rules)
+        if key and s and not s["flags"] & PEER and s["serverUrlKey"] == key:
+            return i
+    return None
+
+
+def same_server(root, index, talk, rules=True):
+    """2.11's test of server `index` of a card (its root description) against
+    what the software reads. talk: the server at "url" ("serverInstance": its
+    instance, when known; "confirmed": keys the listener has called the same
+    server as it), or, with "peerId", that peer of it ("peerInstance": the
+    peer's instance, when known)."""
+    srv = card_server(root, index, rules)
     if srv is None:
         return "unknown"
-    a, b = srv["instance"], uuid_bytes(talk.get("serverInstance"))
+    peer = "peerId" in talk
+    a, b = srv["instance"], uuid_bytes(talk.get("peerInstance" if peer else "serverInstance"))
     if a != bytes(16) and b != bytes(16):
         return "same" if a == b else "different"
-    keys = {server_url_key(talk["url"])} | {u64(k) for k in talk.get("confirmed", [])}
-    if srv["flags"] & PEER:
-        same = "peerId" in talk and srv["parentKey"] in keys and srv["peerId"] == talk["peerId"]
+    # Reading a server never makes its peers' rows the same, nor reading a
+    # peer its parent's.
+    if bool(srv["flags"] & PEER) != peer:
+        return "unknown"
+    via = {k: talk[k] for k in ("url", "serverInstance", "confirmed") if k in talk}
+    if not peer:
+        keys = {server_url_key(via["url"])} | {u64(k) for k in via.get("confirmed", [])}
+        return "same" if srv["serverUrlKey"] in keys else "unknown"
+    # A peer: its parent is the card's server of parentKey when the card has
+    # one, tested as that server (instance, then key); else parentKey alone
+    # by the key rule.
+    parent = card_parent(root, srv["parentKey"], rules)
+    if parent is not None:
+        through = same_server(root, parent, via, rules) == "same"
     else:
-        same = "peerId" not in talk and srv["serverUrlKey"] in keys
-    return "same" if same else "unknown"
+        through = same_server({"serverUrlKey": srv["parentKey"]}, 0, via) == "same"
+    return "same" if through and srv["peerId"] == talk["peerId"] else "unknown"
 
 
 def ledger_servers(b: bytes):
@@ -1296,7 +1427,9 @@ def check_vectors(v, golden: dict):
     card = manifest_servers()
     want(sv["sameServer"]["card"] == card["file"].rsplit(".", 1)[0] + ".json", "sameServer card")
     for e in sv["sameServer"]["cases"]:
-        want(same_server(card_server(card, e["index"]), e["talk"]) == e["verdict"], "sameServer %r" % e)
+        want(same_server(card, e["index"], e["talk"]) == e["verdict"], "sameServer %r" % e)
+    for e in sv["brokenEntries"]["cases"]:
+        want(same_server(e["card"], e["index"], e["talk"]) == e["verdict"], "brokenEntries %r" % e)
     if bad:
         raise SystemExit("vectors that don't match: " + ", ".join(bad))
 
@@ -1745,6 +1878,13 @@ def hardening(golden: dict):
          "manifest-servers.bin), and an unknown section",
          msmf_raw(sd, [comp_row(c["file"], golden[c["file"]]) for c in sd["companions"]], [], 1,
                   [server_entry(s) for s in sd["servers"]], srvs_stride=48, extra_sections=[("XTRA", 0, 0, 0, b"new")]))
+    rule_breaks = [{"serverUrl": HOME_URL}, {"serverInstance": SECOND_INSTANCE, "serverUrl": SECOND_URL},
+                   {"serverInstance": SECOND_INSTANCE, "parentUrl": SECOND_URL, "flags": PEER}]
+    assert srvs_breaks(root_server(sd), [server_entry(s) for s in rule_breaks]) == {1, 2, 3}
+    good("msmf-srvs-rules", "MSMF", "SRVS: entries that break 2.5.5's writer rules (the root's own URL key, one "
+         "instance twice, a peer with no peerId): not damage, the root reads; their rows' servers are unknown (2.11)",
+         msmf_raw(sd, [comp_row(c["file"], golden[c["file"]]) for c in sd["companions"]], [], 0,
+                  [server_entry(s) for s in rule_breaks]))
 
     # MSPD.
     pd = pending_main()

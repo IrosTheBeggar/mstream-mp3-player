@@ -669,7 +669,7 @@
  },
  "servers": {
   "who": "software",
-  "note": "2.5.5, 2.6.6, 2.11: a ledger row's server. origServer: ORIG's bytes 74-79 for a row's server index. rows: the golden tags file's records in record order with their server. srvs: the golden root's SRVS entries (entry i - 1 is server i), as stored. sameServer: 2.11's test of server 'index' of the card whose root description is 'card' against what the software reads: the server at 'url' ('confirmed': keys the listener has called the same server as 'url'), or with 'peerId' that peer of it; 'serverInstance' is the instance of what it reads, when known. The device reads neither ORIG nor SRVS.",
+  "note": "2.5.5, 2.6.6, 2.11: a ledger row's server. origServer: ORIG's bytes 74-79 for a row's server index. rows: the golden tags file's records in record order with their server. srvs: the golden root's SRVS entries (entry i - 1 is server i), as stored. sameServer: 2.11's test of server 'index' of the card whose root description is 'card' against what the software reads: the server at 'url' ('serverInstance': its instance, when known; 'confirmed': keys the listener has called the same server as 'url'), or, with 'peerId', that peer of it ('peerInstance': the peer's instance, when known). brokenEntries: the same test on cards whose SRVS breaks a writer rule of 2.5.5, each 'card' a root description's server fields: the entry's server is unknown, the root stays valid. The device reads neither ORIG nor SRVS.",
   "origServer": [
    {
     "server": 0,
@@ -852,6 +852,27 @@
      "note": "peer 3 of another parent"
     },
     {
+     "index": 2,
+     "talk": {
+      "url": "http://192.0.2.10:3000",
+      "serverInstance": "00112233-4455-4677-8899-aabbccddeeff",
+      "peerId": 3
+     },
+     "verdict": "unknown",
+     "note": "its parent at a new URL: the root's instance is unknown, so only a key the listener confirmed ties the URL to it"
+    },
+    {
+     "index": 2,
+     "talk": {
+      "url": "http://192.0.2.10:3000",
+      "peerId": 3,
+      "confirmed": [
+       "0xED901EA3EE763AC7"
+      ]
+     },
+     "verdict": "same"
+    },
+    {
      "index": 3,
      "talk": {
       "url": "https://second.example/mstream",
@@ -864,7 +885,7 @@
      "talk": {
       "url": "https://second.example/mstream",
       "peerId": 1,
-      "serverInstance": "00112233-4455-4677-8899-aabbccddeeff"
+      "peerInstance": "00112233-4455-4677-8899-aabbccddeeff"
      },
      "verdict": "different"
     },
@@ -875,6 +896,26 @@
       "peerId": 1
      },
      "verdict": "unknown"
+    },
+    {
+     "index": 3,
+     "talk": {
+      "url": "http://192.0.2.20",
+      "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677",
+      "peerId": 1
+     },
+     "verdict": "same",
+     "note": "its parent at a new URL, known by its instance (server 1's)"
+    },
+    {
+     "index": 3,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "serverInstance": "00112233-4455-4677-8899-aabbccddeeff",
+      "peerId": 1
+     },
+     "verdict": "unknown",
+     "note": "the server at its parent's URL is another server now, by instance: not its parent"
     },
     {
      "index": 4,
@@ -890,6 +931,274 @@
       "url": "http://music.example:3000"
      },
      "verdict": "unknown"
+    }
+   ]
+  },
+  "brokenEntries": {
+   "cases": [
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverUrl": "http://music.example:3000"
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "unknown",
+     "note": "the root's own server again (its URL key)"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+        "serverUrl": "https://second.example/mstream"
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream"
+     },
+     "verdict": "unknown",
+     "note": "the root's own server again (its instance)"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677",
+        "serverUrl": "https://second.example/mstream"
+       },
+       {
+        "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677",
+        "serverUrl": "http://192.0.2.20"
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677"
+     },
+     "verdict": "unknown",
+     "note": "two entries with one instance: both"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverUrl": "https://second.example/mstream"
+       },
+       {
+        "serverUrl": "HTTPS://Second.Example/mstream/"
+       }
+      ]
+     },
+     "index": 2,
+     "talk": {
+      "url": "https://second.example/mstream"
+     },
+     "verdict": "unknown",
+     "note": "two entries with one URL key (the URLs normalised: 2.5.1)"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677"
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677"
+     },
+     "verdict": "unknown",
+     "note": "no PEER and no URL key, though its instance is the one read"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverUrl": "https://second.example/mstream",
+        "peerId": 2
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream"
+     },
+     "verdict": "unknown",
+     "note": "no PEER, and a peerId"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "parentUrl": "http://music.example:3000",
+        "peerId": 3,
+        "flags": 1,
+        "serverUrl": "https://second.example/mstream"
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 3
+     },
+     "verdict": "unknown",
+     "note": "a peer with a URL key"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverInstance": "0f1e2d3c-4b5a-4968-8796-a5b4c3d2e1f0",
+        "peerId": 3,
+        "flags": 1
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 3,
+      "peerInstance": "0f1e2d3c-4b5a-4968-8796-a5b4c3d2e1f0"
+     },
+     "verdict": "unknown",
+     "note": "a peer with no parentKey, though its instance is the one read"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "parentUrl": "http://music.example:3000",
+        "peerId": 0,
+        "flags": 1
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 0
+     },
+     "verdict": "unknown",
+     "note": "a peer with no peerId"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "parentUrl": "http://music.example:3000",
+        "peerId": 3,
+        "flags": 1
+       },
+       {
+        "parentUrl": "http://music.example:3000",
+        "peerId": 3,
+        "flags": 1
+       }
+      ]
+     },
+     "index": 2,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 3
+     },
+     "verdict": "unknown",
+     "note": "two peers with one parentKey and peerId"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677",
+        "serverUrl": "https://second.example/mstream"
+       },
+       {
+        "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677",
+        "serverUrl": "http://192.0.2.20"
+       },
+       {
+        "serverUrl": "http://198.51.100.7"
+       }
+      ]
+     },
+     "index": 3,
+     "talk": {
+      "url": "http://198.51.100.7"
+     },
+     "verdict": "same",
+     "note": "the other entries keep their test"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "serverUrl": "https://second.example/mstream",
+        "flags": 2
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream"
+     },
+     "verdict": "same",
+     "note": "a reserved flag bit is a newer minor's, ignored (2.4.5): no broken rule"
+    },
+    {
+     "card": {
+      "serverUrl": "http://music.example:3000",
+      "serverInstance": "a0b1c2d3-e4f5-4a6b-8c7d-8e9f00112233",
+      "servers": [
+       {
+        "parentUrl": "https://second.example/mstream",
+        "peerId": 1,
+        "flags": 1
+       }
+      ]
+     },
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "peerId": 1
+     },
+     "verdict": "same",
+     "note": "a peer whose parent has no rows on the card: parentKey by the key rule alone"
     }
    ]
   }

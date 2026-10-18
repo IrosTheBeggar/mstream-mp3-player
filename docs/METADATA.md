@@ -800,6 +800,12 @@ reads the root with one small read at every boot.
   in SRVS (2.5.5). The root's server is one the software reaches by its
   own URL, never a federation peer: a card filled from peers alone names
   their parent here.
+- **These fields are server 0's alone.** A run that doesn't read server 0
+  carries serverInstance, serverUrlKey and serverRevision forward from
+  the root before, unchanged: written from the server it did read, they
+  would make every row of server 0 that server's. Another server's
+  revision (2.10.2) is the software's private state; a peer has no sync
+  manifest.
 
 #### 2.5.2 Generation, commit id, card id
 
@@ -885,14 +891,17 @@ server** (2.5.1), and **server i ≥ 1 is SRVS entry i − 1**.
 **Writers:**
 
 - SRVS is present exactly when a row of the root's tags file names a
-  server other than the root's, and it lists only servers some row
-  names. A card filled from one server has no SRVS and a `server` of 0 in
-  every row: the bytes it had before these fields.
-- **Each server once.** No entry for the root's own server; no two
+  server other than the root's; it lists only servers some row names,
+  and every row's `server` is 0 or names an entry. A card filled from one
+  server has no SRVS and a `server` of 0 in every row: the bytes it had
+  before these fields.
+- **Each server once.** No entry for the root's own server: none with
+  the root's serverInstance (when known) or its serverUrlKey. No two
   entries with the same non-zero serverInstance or the same non-zero
   serverUrlKey; no two peers with the same parentKey and peerId. A server
-  reached by its own URL has a non-zero serverUrlKey and no PEER; a peer
-  has PEER, a non-zero parentKey and peerId, and serverUrlKey 0.
+  reached by its own URL has a non-zero serverUrlKey, no PEER, and
+  parentKey and peerId 0; a peer has PEER, a non-zero parentKey and
+  peerId, and serverUrlKey 0. Writers set no other flag bit (2.4.5).
 - **The order is the writer's** (2.4.2). A writer keeps each server's
   index from the commit before while it can. When it must renumber (a
   server's last row went), it rewrites every row's `server` in the same
@@ -911,6 +920,26 @@ server** (2.5.1), and **server i ≥ 1 is SRVS entry i − 1**.
   fails is absent to it, as with any damage.
 - A row whose `server` names no entry (no SRVS, or fewer entries) has an
   **unknown** server (2.11).
+- **An entry that breaks a writer rule** above (an entry for the root's
+  server; each of two entries for one server; a PEER without parentKey
+  or peerId, or with a serverUrlKey; an entry without PEER that has no
+  serverUrlKey, or has a parentKey or peerId) is not damage: the root
+  stays valid, and every row that names it has an **unknown** server
+  (2.11), whatever its fields say. The other entries keep their own
+  test. A reserved flag bit is a newer minor's (2.4.5), not a broken
+  rule.
+
+**A peer's id** is its row in the parent's peer table. mStream never
+gives a removed peer's id to another peer (the table's ids are
+`AUTOINCREMENT`, `src/db/schema.js`): a peer paired again gets a new id,
+and the old one's rows test unknown. But a parent whose database was
+made anew numbers its peers from 1 again, so an old id can name another
+peer. So the software keeps, in its private state, the `endpointId` that
+the listing gives each peer of the card (the peer's iroh identity, a
+public key), and reads a peer listed under the same id with another
+endpointId as not that peer: unknown (proposed). Once mStream gives a
+server's instance (part 4, A6; for a peer, in an answer a federation key
+may read, such as its `/api/`), the instance decides first (2.11).
 
 **What a row's server decides,** for that row alone: the server listing
 it pairs with (2.10.2), the same-server guard (2.11), and where anything
@@ -1451,9 +1480,11 @@ other producer's record. A file with no record indexes exactly as today.
      matched (step 2), so their stamps come from this run's listing
      (2.3.4).
    - **A 304 means "probably unchanged".** The manifest's `revision` (its
-     ETag, sent back as If-None-Match on the first page) is the visible
-     tracks' count, highest id, newest `modified` and number with art
-     (`manifestRevision`, `src/api/sync.js`). mStream's scanner updates a
+     ETag, sent back as If-None-Match on the first page; server 0's is the
+     root's serverRevision, another server's the software's private
+     state: 2.5.1) is the visible tracks' count, highest id, newest
+     `modified` and number with art (`manifestRevision`,
+     `src/api/sync.js`). mStream's scanner updates a
      changed file's row in place and keeps its id (an UPSERT), so a file
      replaced by one whose mtime isn't the library's newest (a remaster
      copied with its old mtimes kept) leaves `revision` unchanged. So the
@@ -1544,16 +1575,22 @@ each, about 1-2 minutes for 20,000 files through a USB reader
   it against what it reads now:
   - **a server reached by its own URL** (the root's, or an entry
     without PEER) is the **same** when both serverInstance values are
-    known and equal, or, failing that, when its serverUrlKey is this
-    URL's key, or a key the listener has already called the same server
-    as this URL (the private list of 2.5.1);
+    known and equal, or, failing that, by the **key rule**: its
+    serverUrlKey is this URL's key, or a key the listener has already
+    called the same server as this URL (the private list of 2.5.1);
   - **a peer** (PEER) is the **same** when both serverInstance values
     are known and equal, or, failing that, when the software reads it
-    as peer peerId of a server that passes that key rule for parentKey;
+    as peer peerId of its parent. The parent is the card's server whose
+    serverUrlKey is parentKey (the root's, or an entry without PEER),
+    tested by the rule above: known by its instance, it passes at a new
+    URL, and with another instance it fails, whatever the key. When the
+    card has no such server, the parent is tested by the key rule alone,
+    with parentKey as its key;
   - either is **different** when both serverInstance values are known
     and differ, and **unknown** otherwise. Reading a server never makes
     its peers' rows the same, nor reading a peer its parent's. A row
-    whose `server` names no entry is unknown.
+    whose `server` names no entry, or an entry that breaks a writer
+    rule (2.5.5), is unknown.
 
   Different or unknown: the software MUST NOT delete or replace that
   row's file without asking (part 7, U7). The guard of 2.10.2, step 5,
@@ -2208,10 +2245,25 @@ goldens `tags-00000007.bin` and `manifest-servers.bin`):
     listener has called the two the same server: then the same;
   - peer 3 through `http://music.example:3000`: server 2 the same;
     peer 4: unknown; peer 3 through `https://second.example/mstream`:
-    unknown;
+    unknown; peer 3 through another URL of the root's server: unknown
+    (the root's instance is unknown), until the listener has called the
+    two the same server: then the same;
   - `https://second.example/mstream` with another instance known:
     server 1 different, whatever the key; any URL with server 1's
-    instance: the same.
+    instance: the same;
+  - peer 1 through `https://second.example/mstream`: server 3 the same;
+    through any URL whose server has server 1's instance: the same;
+    through `https://second.example/mstream` when the server there has
+    another instance: unknown (not its parent), whatever the key.
+- An SRVS entry that breaks a writer rule (the root's own server again,
+  by key or by instance; two entries for one server, by instance, by
+  URL key or as one parent's peer; a peer with no parentKey or peerId,
+  or with a URL key; an entry without PEER with no URL key, or with a
+  peerId): its server is unknown, though its fields alone would pass;
+  the root stays valid (hardening `msmf-srvs-rules`, present) and the
+  other entries test as before. A reserved flag bit breaks no rule; a
+  peer whose parent has no rows on the card passes by parentKey's key
+  rule (`servers.brokenEntries`).
 - The golden's two files with one serverPath on two servers: the lower
   server index has the name (`Both/One.mp3`), though its mStream id is
   the higher (2.8.3, step 6).
