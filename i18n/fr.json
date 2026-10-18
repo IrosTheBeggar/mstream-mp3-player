@@ -372,8 +372,6 @@
   "format.button": "Formater…",
   "format.ask_title": "Formater cette carte ?",
   "format.ask_body": "Elle devient une carte FAT32 vide pour ce lecteur. Tout est effacé, même ce que le lecteur ne sait pas lire.",
-  "format.music_body": "Tout est effacé : votre musique, les fichiers du lecteur et ce qu'il ne sait pas lire.",
-  "format.plan_body": "Un transfert vers elle n'a pas abouti. Tout est effacé, même ce que le lecteur ne sait pas lire.",
   "format.damaged_title": "Vérifiez-la sur ordinateur",
   "format.damaged_body": "Un ordinateur pourra peut-être sauver son contenu. Formater efface tout, même ce que le lecteur ne lit pas.",
   "format.sure_title": "Effacer toute la carte ?",

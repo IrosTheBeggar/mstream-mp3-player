@@ -317,16 +317,14 @@ bool Ui::askFormat(bool fromComputer) {
     return true;
   }
   host_.wakeScreen("the format's question");  // (the listener answers it)
-  host_.snapshot(state_);                     // the card in the slot now
+  host_.snapshot(state_);                     // the card in the slot now (not one the player reads: main.cpp)
   const AppState& s = state_;
   // A card that answered but holds nothing the player knows (blank, a FAT
   // that didn't mount, unreadable): a computer's disk check first; erasing
   // is the second, explicit step.
   const bool damaged =
       !s.card && (s.cardKind == cardformat::Kind::Other || s.cardKind == cardformat::Kind::Unreadable);
-  const S body = s.card ? (s.cardPlan ? S::format_plan_body : S::format_music_body)
-                 : damaged ? S::format_damaged_body
-                           : S::format_ask_body;
+  const S body = damaged ? S::format_damaged_body : S::format_ask_body;
   const char* const buttons[2] = {tr(S::dialog_cancel), tr(S::format_button)};
   endPageTouch();
   closeModal(true);
@@ -340,10 +338,8 @@ bool Ui::askFormat(bool fromComputer) {
   formatOpenedMs_ = nowMs_;
   formatGone_ = nullptr;
   applyCover();
-  Serial.printf("[ui] format: \"%s\" (%s; %s%s)\n", tr(damaged ? S::format_damaged_title : S::format_ask_title),
-                fromComputer ? "a computer's @format" : "Format... on the no-card page",
-                s.card ? "the card the player reads" : cardformat::name(s.cardKind),
-                s.cardPlan ? ", a transfer's plan on it" : "");
+  Serial.printf("[ui] format: \"%s\" (%s; %s)\n", tr(damaged ? S::format_damaged_title : S::format_ask_title),
+                fromComputer ? "a computer's @format" : "Format... on the no-card page", cardformat::name(s.cardKind));
   return true;
 }
 

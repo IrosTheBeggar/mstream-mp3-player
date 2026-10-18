@@ -363,8 +363,6 @@
   "format.button": "Formatta…",
   "format.ask_title": "Formattare questa scheda?",
   "format.ask_body": "Diventa una scheda FAT32 vuota per questo lettore. Si cancella tutto, anche ciò che il lettore non riesce a leggere.",
-  "format.music_body": "Si cancella tutto: la tua musica, i file del lettore e ciò che non riesce a leggere.",
-  "format.plan_body": "Un trasferimento non è finito. Si cancella tutto, anche ciò che il lettore non riesce a leggere.",
   "format.damaged_title": "Controllala su un computer",
   "format.damaged_body": "Un computer può forse salvarne il contenuto. Formattare cancella tutto, anche ciò che il lettore non legge.",
   "format.sure_title": "Cancellare tutta la scheda?",

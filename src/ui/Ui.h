@@ -320,10 +320,10 @@ public:
   // The format's question (docs/HOST-STATUS.md, "@format"): from a no-card
   // page's Format… (a card that is in but isn't FAT32 or can't be read),
   // or a computer's @format (`fromComputer`), which can do no more than
-  // this. Two dialogs, each with Cancel: first what it does ("Format this
-  // card?": the whole card erased, even what the player can't read; a
-  // card the player reads, its music named; a transfer that didn't finish
-  // on it, said; a damaged card's "Check it on a computer first"), then
+  // this, and never over a card the player reads (main.cpp,
+  // cardmkfs::refusal()). Two dialogs, each with Cancel: first what it
+  // does ("Format this card?": the whole card erased, even what the player
+  // can't read; a damaged card's "Check it on a computer first"), then
   // "Erase the whole card?" with Format, red, where the first one's
   // Cancel was, and a touch in its first kFormatSettleMs ignored (a double
   // tap never answers both). Cancel is the default: anything but a tap on

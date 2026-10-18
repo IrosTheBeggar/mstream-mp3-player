@@ -276,8 +276,6 @@ enum class S : uint16_t {
   format_button,  // Format…
   format_ask_title,  // Format this card?
   format_ask_body,  // It becomes an empty FAT32 card for this player. Everything on it is...
-  format_music_body,  // Everything on it is erased: your music, the player's files, and wha...
-  format_plan_body,  // A transfer to it didn't finish. Everything on it is erased, even wh...
   format_damaged_title,  // Check it on a computer first
   format_damaged_body,  // A computer's disk check may save what's on it. Formatting erases it...
   format_sure_title,  // Erase the whole card?
@@ -630,7 +628,7 @@ enum class S : uint16_t {
   format_hz,  // {0} Hz
   format_list_sep,  // , 
 };
-inline constexpr unsigned kStrings = 621;
+inline constexpr unsigned kStrings = 619;
 
 // The languages, English first: the mobile app's ten (one without a
 // catalogue yet draws English), and the pseudo-locale where UISTR_PSEUDO

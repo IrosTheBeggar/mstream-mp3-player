@@ -396,8 +396,6 @@
   "format.button": "Formatear…",
   "format.ask_title": "¿Formatear esta tarjeta?",
   "format.ask_body": "Será una tarjeta FAT32 vacía para este reproductor. Se borra todo, incluso lo que el reproductor no puede leer.",
-  "format.music_body": "Se borra todo: tu música, los archivos del reproductor y lo que no puede leer.",
-  "format.plan_body": "Una transferencia a ella no terminó. Se borra todo, incluso lo que el reproductor no puede leer.",
   "format.damaged_title": "Revísala en un ordenador",
   "format.damaged_body": "Un ordenador quizá salve su contenido. Formatear lo borra todo, incluso lo que el reproductor no lee.",
   "format.sure_title": "¿Borrar toda la tarjeta?",

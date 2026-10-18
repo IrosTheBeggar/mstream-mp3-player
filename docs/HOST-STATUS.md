@@ -395,28 +395,27 @@ format a card: `@format` only brings up the question on the board's
 screen, the one the board asks itself on a card it can't use (the
 no-card page's Format...), and the listener answers it there, twice, or
 not. Nothing on the computer's side formats, partitions or writes the
-card. Older firmware: `@err 7 format`.
+card. Never a card the player reads (`card=fat32`, `fat16`), whatever is
+on it: the software sets such a card up as it is (docs/METADATA.md 2.2),
+and a computer can't put the question over the music card. Older
+firmware: `@err 7 format`.
 
 - **The answer**, at once: `@format ok`, the question is on the screen
   (the screen wakes for it); or `@err 4 format <why>`, and nothing is
   asked: `ui` the start-up screen; `screen` another screen has the
   display (the touch calibration, a spike tool); `viz` a computer drives
   the dancer; `busy` a restart is under way (the format's own, the CPU
-  speed's, the card guard's); `card` nothing answered in the slot
-  (`card=none`). Sent again while the question is up: `@format ok`
-  again, and the answer comes once.
+  speed's, the card guard's); `card` no card to format: nothing answered
+  in the slot (`card=none`), or the player reads the card (`card=fat32`,
+  `fat16`; `cardmkfs::refusal()`). Sent again while the question is up:
+  `@format ok` again, and the answer comes once.
 - **The question** (`ui/Ui::askFormat()`): two dialogs, each with Cancel.
   - The first, "Format this card?" with Cancel and Format... (red), its
     body by the card: one that isn't FAT32 (`card=exfat`, `ntfs`, `gpt`):
     "It becomes an empty FAT32 card for this player. Everything on it is
-    erased, even what the player can't read." One the player reads (only
-    `@format` asks that): "Everything on it is erased: your music, the
-    player's files, and what the player can't read."; and when a
-    computer's transfer didn't finish on it (the root's plan,
-    `/.mstream/pending.bin`, docs/METADATA.md 2.12.5), that first: "A
-    transfer to it didn't finish. Everything on it is erased, ...". A
-    damaged card (`card=other`: blank, Linux's, a FAT that didn't mount;
-    or `unreadable`) is first sent to a computer: "Check it on a computer
+    erased, even what the player can't read." A damaged card
+    (`card=other`: blank, Linux's, a FAT that didn't mount; or
+    `unreadable`) is first sent to a computer: "Check it on a computer
     first", "A computer's disk check may save what's on it. Formatting
     erases it all, even what the player can't read."; erasing it is the
     second, explicit step.
@@ -437,15 +436,16 @@ card. Older firmware: `@err 7 format`.
   saved, the headphones let go and the speaker's amp off (at most 3 s;
   never while the library's files are written), the card worker's step
   finished, the play log flushed. Just before it, the card's identity
-  (the card guard's: its size from the CSD, the CRC-32 of sector 0 and of
-  its first partition's first sector) and who asked go into RTC memory,
-  which a restart keeps and a power cut doesn't: a later power-on never
-  formats. Refused then, nothing restarts (the note "Couldn't format the
-  card: try again", the log's line, and to a question `@format` asked its
-  `@err 4 format <why>`): `card` (another card in the slot since the
-  boot, no card answering, no identity kept), `size` (a card FAT32 can't
-  take: under 41.9 MB, or 2 TiB and more), `busy`; and on the console's
-  pretend card states (`uiF...`), whose card isn't the one in the slot.
+  (as the boot read it, by the card guard's rule: its size from the CSD,
+  the CRC-32 of sector 0 and of its first partition's first sector) and
+  who asked go into RTC memory, which a restart keeps and a power cut
+  doesn't: a later power-on never formats. Refused then, nothing
+  restarts (the note "Couldn't format the card: try again", the log's
+  line, and to a question `@format` asked its `@err 4 format <why>`):
+  `card` (no card answering, or one the player reads), `size` (a card
+  FAT32 can't take: under 41.9 MB, or 2 TiB and more), `busy`; and on
+  the console's pretend card states (`uiF...`), whose card isn't the one
+  in the slot.
 - **The format, at the boot** (`storage/CardFormatter`, over
   `lib/core/CardMkfs`), before anything mounts the card: the request
   taken and cleared first (a crash or a cut doesn't format again), the
@@ -633,16 +633,19 @@ counted. An error changes nothing.
   MBR (`mbr()`), the `Writer` (what comes before `f_mkfs()`, its writes
   counted, the boot sector and its backup held back to the last), the
   read-back (`check()`), the files after (`finish()` over the platform's
-  `Files`), the whole (`run()`), and the request across the restart
-  (`Request`: the identity, its magic and CRC; `sameCard()`). Tested on
-  ChaN's FatFs as the Core2 builds it (`test/support/FatModel.h`, now
-  with ESP-IDF's `FF_MULTI_PARTITION` and `VolToPart[]`): cluster sizes
-  from 512 B at 41.9 MB to 32 KB at FatFs's last sector, each layout
-  against what `f_mkfs()` itself writes, the MBR's bytes, blank, exFAT,
-  GPT and old FAT32 cards formatted and mounted (FSINFO's count against a
-  count of the FAT; `/music`, `device.txt`; nothing of the old schemes
-  left; the guard's identity changed), a format cut at 14 points never
-  mounting as FAT, each step's refusal, the request's every bit.
+  `Files`), the whole (`run()`), the request across the restart
+  (`Request`: the identity, its magic and CRC; `sameCard()`), and which
+  card is formatted at all (`refusal()`: one the player doesn't read).
+  Tested on ChaN's FatFs as the Core2 builds it
+  (`test/support/FatModel.h`, now with ESP-IDF's `FF_MULTI_PARTITION`
+  and `VolToPart[]`): cluster sizes from 512 B at 41.9 MB to 32 KB at
+  FatFs's last sector, each layout against what `f_mkfs()` itself
+  writes, the MBR's bytes, blank, exFAT, GPT and old FAT32 cards
+  formatted and mounted (FSINFO's count against a count of the FAT;
+  `/music`, `device.txt`; nothing of the old schemes left; the guard's
+  identity changed), a format cut at 14 points never mounting as FAT,
+  each step's refusal (a mount refused after the check lets FatFs go of
+  its object), the request's every bit, which card.
 - **`lib/core/CachedDrive`**: `identityOf()`, the guard's identity rule
   over any card (the format holds the card to it across the restart).
 - **`lib/core/HostLink`**: `@status`, `@count` and `@format` are events
@@ -676,8 +679,7 @@ counted. An error changes nothing.
   type, cluster size and count read as words, and the count's driver (the
   lock, the reads through the disk functions, the window, the commit).
 - **`src/storage/SectorDisk`**: `watchWrites()`, the count's write watch,
-  called in the wrapper's write under FatFs's lock; `mountIdentity()`,
-  the mounted card's identity for the format.
+  called in the wrapper's write under FatFs's lock.
 - **`src/storage/LocalStorage`**: `cardspace::begin()` after the mount; a
   card that didn't mount keeps whether it answered, its CSD size and its
   identity (`card=unreadable` against `none`, `size=` for an exFAT card,
@@ -705,12 +707,13 @@ counted. An error changes nothing.
   (`countBlocked()`), the identify hook (the screen woken first, the
   banner once the panel is awake), `hostQuery.loop()` every pass, the
   screen kept lit for the banner, the idle power-off held while a count
-  runs; the format's hook (`askFormatQuestion()`), its Format
-  (`MainUiHost::formatCard()`: the card's identity, the pause, the saves,
-  the headphones let go; `stepFormatRestart()`: the request, then
-  `restartNow()`), a question gone (`formatDeclined()`: `@format no`),
-  the boot's format before the storage's mount (the boot screen's bar),
-  and its note at the first screen.
+  runs; the format's hook (`askFormatQuestion()`: not over a card the
+  player reads), its Format (`MainUiHost::formatCard()`: the same rule,
+  the card's identity, the pause, the saves, the headphones let go;
+  `stepFormatRestart()`: the request, then `restartNow()`), a question
+  gone (`formatDeclined()`: `@format no`), the boot's format before the
+  storage's mount (the boot screen's bar), and its note at the first
+  screen.
 - **Cost**, 9899eb4 against aed9014 (v0.8.0 and the 0.9.0 version
   bump), both builds: IRAM unchanged (`.iram0.text` 124,883 B); internal
   DRAM +224 B (`.dram0.data` +16, `.dram0.bss` +208: the count's state,
@@ -750,6 +753,12 @@ counted. An error changes nothing.
   `format_if_empty`, never used), so it adds nothing. Every guard passes.
   While the boot's format runs: 64 KB of PSRAM for its work area and
   about 8.5 KB for FatFs's `FATFS` and `FIL`; nothing else runs then.
+  Its review's fixes (a failed mount let go, a dialog's lines 96 B, never
+  a card the player reads) take 2,304 B off (`firmware.bin` 4,395,792):
+  flash `.text` -140 B, `.rodata` -2,160 B (two texts in ten languages
+  and the mounted card's branch gone); IRAM, internal DRAM and RTC memory
+  unchanged; a dialog's draw takes 96 B more of the loop task's stack.
+  Every guard passes.
 
 ## Device test plan
 
@@ -839,15 +848,16 @@ each line whole with its `\n`. Close every other owner of the port first.
 11. **@format** (0.12.0). **On the spare card only, never the music
     card**: take the music card out first. Have a computer with a card
     reader at hand to look at the spare after each format.
-    - **Declined.** With any card in: `@format` gives `@format ok` and the
-      question on the board. Tap Cancel: `@format no` and the log's
-      `[format] the question went (Cancel): nothing formatted`. Again, and
-      tap a tab: `@format no` (`closed ...`). Again, and wait a minute:
-      `@format no` (`no answer in a minute`). Again: Format..., then
-      Cancel on the second question: `@format no`. Again: double-tap
-      Format... quickly: the second question stays up, the log's `a touch
-      right after the second question opened, ignored`; Cancel. Nothing
-      on the card changed (the computer shows it as before).
+    - **Declined.** With the spare in as exFAT (below; or GPT):
+      `@format` gives `@format ok` and the question on the board. Tap
+      Cancel: `@format no` and the log's `[format] the question went
+      (Cancel): nothing formatted`. Again, and tap a tab: `@format no`
+      (`closed ...`). Again, and wait a minute: `@format no` (`no answer
+      in a minute`). Again: Format..., then Cancel on the second
+      question: `@format no`. Again: double-tap Format... quickly: the
+      second question stays up, the log's `a touch right after the
+      second question opened, ignored`; Cancel. Nothing on the card
+      changed (the computer shows it as before).
     - **exFAT.** Format the spare exFAT on the computer (or use it as it
       came). The board: "This card is exFAT" with Try again and
       Format...; Format..., Format: the note "Restarting to format the
@@ -866,18 +876,21 @@ each line whole with its `\n`. Close every other owner of the port first.
       `diskpart` `convert gpt` on Windows): "This card uses GPT", then as
       above; on the computer the card is MBR now (`diskpart` `list disk`:
       no `*` under Gpt), one partition.
-    - **A card the player reads.** With the formatted spare in and a
-      file in `/music`: `@format` (the board can't be asked otherwise):
-      "Everything on it is erased: your music, ..."; Format..., Format:
-      as above, and the file is gone.
-    - **Pulled.** `@format` again, Format..., Format, and pull the card
-      at about 50 %: `@err 4 format write`, the log's `NOT FORMATTED`,
-      "Couldn't format the card: try again", and the card reads "Can't
-      read this card". Put it back, Try again: the same. Format...: the
-      damaged card's "Check it on a computer first"; Format..., Format:
-      whole again.
-    - **Playing.** A track playing on the speaker (and once on the
+    - **A card the player reads.** With the formatted spare in (FAT32
+      now) and a file in `/music`: `@format` gives `@err 4 format card`,
+      nothing on the screen, the log's `[host] format: a computer asked;
+      the question not shown (card)`; the file is still there.
+    - **Pulled.** Make the spare exFAT again on the computer, then
+      `@format`, Format..., Format, and pull the card at about 50 %:
+      `@err 4 format write`, the log's `NOT FORMATTED`, "Couldn't format
+      the card: try again", and the card reads "Can't read this card".
+      Put it back, Try again: the same. Format...: the damaged card's
+      "Check it on a computer first"; Format..., Format: whole again.
+    - **Playing.** Only on a board with the flash's test tracks (no card
+      the player reads in, so nothing plays from a card): the exFAT spare
+      in, a test track playing on the speaker (and once on the
       headphones): `@format`, Format..., Format: paused first, no pop, the
-      headphones let go, then the restart.
+      headphones let go, then the restart. Without them: the headphones
+      connected and idle, the same, the headphones let go.
     - **Old firmware.** On a v0.11.0 board: `@format` gives `@err 7
       format`.

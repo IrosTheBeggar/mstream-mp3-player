@@ -399,8 +399,6 @@
   "format.button": "Formatieren",
   "format.ask_title": "Diese Karte formatieren?",
   "format.ask_body": "Sie wird eine leere FAT32-Karte für den Player. Alles darauf wird gelöscht, auch was er nicht lesen kann.",
-  "format.music_body": "Alles darauf wird gelöscht: deine Musik, die Dateien des Players und was er nicht lesen kann.",
-  "format.plan_body": "Eine Übertragung darauf wurde nicht fertig. Alles darauf wird gelöscht, auch was der Player nicht lesen kann.",
   "format.damaged_title": "Erst am Computer prüfen",
   "format.damaged_body": "Ein Computer rettet vielleicht, was darauf ist. Formatieren löscht alles, auch was der Player nicht lesen kann.",
   "format.sure_title": "Ganze Karte löschen?",

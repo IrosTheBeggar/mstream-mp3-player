@@ -635,9 +635,9 @@ static char uiFake = 0;
 // ---- the format in the player (docs/HOST-STATUS.md, "@format") ----
 
 // The listener confirmed it twice (MainUiHost::formatCard()): the card's
-// identity as the boot will hold it (the sector cache's mount identity,
-// or what LocalStorage read of a card that didn't mount), who asked, when;
-// stepFormatRestart() restarts once the player has let go of everything.
+// identity as the boot will hold it (what LocalStorage read of the card
+// that didn't mount), who asked, when; stepFormatRestart() restarts once
+// the player has let go of everything.
 struct FormatRestart {
   bool on = false;
   uint32_t askedMs = 0;
@@ -722,7 +722,6 @@ struct MainUiHost : ui::UiHost {
     s.card = storage.onCard();
     s.cardKind = s.card ? cardformat::Kind::Unreadable : storage.cardKind();
     s.cardBytes = s.card ? storage.totalBytes() : storage.unmountedBytes();
-    s.cardPlan = s.card && library.root() && library.root()->plan;
     const LibraryIndex* index = library.index();
     s.libraryTracks = frozen.on ? frozen.libraryTracks : index && index->ready() ? index->trackCount() : 0;
     s.libraryStatus = cardTasks ? cardTasks->status() : librarytext::Status{};
@@ -792,7 +791,6 @@ struct MainUiHost : ui::UiHost {
                    : uiFake == 'g' ? Kind::Gpt
                    : uiFake == 'u' ? Kind::Other
                                    : Kind::Unreadable;
-      s.cardPlan = false;
       s.libraryTracks = 0;
       s.current = -1;
       return;
@@ -1965,13 +1963,14 @@ static bool restartPending();
 // all a computer can do: the listener answers it there, twice
 // (MainUiHost::formatCard(), formatDeclined()). Not on the start-up screen
 // or another screen's, nor under the dancer a computer drives, nor while a
-// restart is under way; nor with nothing in the slot.
+// restart is under way; nor with nothing in the slot, nor over a card the
+// player reads (cardmkfs::refusal(): the no-card page's question only).
 static const char* askFormatQuestion() {
   if (!userInterface || !userInterface->started()) return "ui";
   if (screenTaken() || uiHeld || userInterface->suspended()) return "screen";
   if (hostModeOn()) return "viz";
   if (restartPending()) return "busy";
-  if (!storage.onCard() && !storage.cardAnswered()) return "card";  // (card=none)
+  if (const char* why = cardmkfs::refusal(storage.onCard(), storage.cardAnswered())) return why;
   return userInterface->askFormat(true) ? nullptr : "ui";
 }
 
@@ -2910,9 +2909,9 @@ static bool restartPending() { return formatRestart.on || cpuRestartMhz || resta
 // stepFormatRestart() once they are (at most 3 s; never while the
 // library's files are written), the play log flushed (restartNow()).
 // Refused: the console's pretend card (uiF...: the card in the slot isn't
-// the one on screen), a restart under way, no card answering, a card the
-// boot couldn't hold to (no identity), a size FAT32 can't take; each
-// said in the log, and to a computer that asked as its @err.
+// the one on screen), a restart under way, no card answering or one the
+// player reads (cardmkfs::refusal()), a size FAT32 can't take; each said
+// in the log, and to a computer that asked as its @err.
 bool MainUiHost::formatCard(bool fromComputer) {
   auto refuse = [fromComputer](const char* why, const char* detail) {
     Serial.printf("[format] confirmed, but not now (%s): nothing formatted\n", why);
@@ -2921,15 +2920,10 @@ bool MainUiHost::formatCard(bool fromComputer) {
   };
   if (uiFake) return refuse("the console's pretend card state is up (uiF0 ends it)", "card");
   if (restartPending()) return refuse("a restart is under way", "busy");
-  CachedDrive::Identity id;
-  if (storage.onCard()) {
-    if (sectordisk::guard().foreign) return refuse("another card is in the slot since the boot", "card");
-    id = sectordisk::mountIdentity();
-    if (!id.valid) return refuse("the mounted card's identity isn't kept (no sector cache)", "card");
-  } else {
-    if (!storage.cardAnswered()) return refuse("no card answered", "card");
-    id = storage.unmountedIdentity();
+  if (const char* why = cardmkfs::refusal(storage.onCard(), storage.cardAnswered())) {
+    return refuse(storage.onCard() ? "the player reads this card: never formatted" : "no card answered", why);
   }
+  const CachedDrive::Identity id = storage.unmountedIdentity();
   const cardmkfs::Layout l = cardmkfs::plan(id.sectors);
   if (!l.ok()) return refuse(cardmkfs::text(l.why), cardmkfs::detail(l.why));
   const bool paused = pauseIfPlaying();
@@ -2946,7 +2940,7 @@ bool MainUiHost::formatCard(bool fromComputer) {
   Serial.printf("[format] confirmed twice (%s): restarting to format the card (%lu sectors, %s, %.1f GB) at the "
                 "boot%s\n",
                 cardmkfs::originName(formatRestart.origin), static_cast<unsigned long>(id.sectors),
-                storage.onCard() ? "mounted" : cardformat::name(storage.cardKind()), l.cardBytes() / 1e9,
+                cardformat::name(storage.cardKind()), l.cardBytes() / 1e9,
                 paused ? "; paused first" : "");
   return true;
 }

@@ -329,8 +329,6 @@
   "format.button": "フォーマット…",
   "format.ask_title": "このカードをフォーマット?",
   "format.ask_body": "このプレーヤー用の空の FAT32 カードになり、読めない部分も含めすべて消去されます。",
-  "format.music_body": "音楽、プレーヤーのファイル、読めない部分も含め、すべて消去されます。",
-  "format.plan_body": "このカードへの転送が完了していません。読めない部分も含め、すべて消去されます。",
   "format.damaged_title": "先にパソコンで確認を",
   "format.damaged_body": "パソコンのディスクチェックで中身を救えるかもしれません。フォーマットはカード全体を消去します。",
   "format.sure_title": "カード全体を消去?",
