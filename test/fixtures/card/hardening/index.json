@@ -522,6 +522,31 @@
   "check": "a newer major"
  },
  {
+  "file": "mptg-orig-server.bin",
+  "format": "MPTG",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "ORIG: rows naming servers 1, 2 and 65,535 (2.6.6): the same records; a server no SRVS entry names is the guard's unknown (2.11), not damage",
+  "same": "tags-0000002a.bin"
+ },
+ {
+  "file": "msmf-srvs-ignored.bin",
+  "format": "MSMF",
+  "uses": "device",
+  "expect": "present",
+  "why": "ok",
+  "check": "SRVS broken (rows of 32 bytes, below v1's 40), read by the device, which never reads SRVS (to a reader that uses it, the root is absent: 2.4.3)"
+ },
+ {
+  "file": "msmf-minor-1.bin",
+  "format": "MSMF",
+  "uses": "all",
+  "expect": "present",
+  "why": "ok",
+  "check": "a newer minor: SRVS rows of 48 bytes, read by their 40-byte prefix (the servers of manifest-servers.bin), and an unknown section"
+ },
+ {
   "file": "mspd-order.bin",
   "format": "MSPD",
   "uses": "all",

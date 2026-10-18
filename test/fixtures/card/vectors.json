@@ -667,6 +667,233 @@
    "an Opus stream the server stores as x.ogg goes on the card as x.opus, its bytes unchanged, convertedTo 0"
   ]
  },
+ "servers": {
+  "who": "software",
+  "note": "2.5.5, 2.6.6, 2.11: a ledger row's server. origServer: ORIG's bytes 74-79 for a row's server index. rows: the golden tags file's records in record order with their server. srvs: the golden root's SRVS entries (entry i - 1 is server i), as stored. sameServer: 2.11's test of server 'index' of the card whose root description is 'card' against what the software reads: the server at 'url' ('confirmed': keys the listener has called the same server as 'url'), or with 'peerId' that peer of it; 'serverInstance' is the instance of what it reads, when known. The device reads neither ORIG nor SRVS.",
+  "origServer": [
+   {
+    "server": 0,
+    "bytes74to79": "00 00 00 00 00 00",
+    "note": "a card filled from one server"
+   },
+   {
+    "server": 2,
+    "bytes74to79": "02 00 00 00 00 00"
+   },
+   {
+    "server": 258,
+    "bytes74to79": "02 01 00 00 00 00"
+   }
+  ],
+  "rows": {
+   "file": "tags-00000007.bin",
+   "rows": [
+    {
+     "path": "Artist/Album/01 - Title.mp3",
+     "server": 0
+    },
+    {
+     "path": "Artist/Album/cover.jpg",
+     "server": 0
+    },
+    {
+     "path": "Both/One (2).mp3",
+     "server": 1
+    },
+    {
+     "path": "Both/One.mp3",
+     "server": 0
+    },
+    {
+     "path": "Far Artist/Far Album/01 - Far.opus",
+     "server": 3
+    },
+    {
+     "path": "Peer Artist/Peer Album/01 - Tune.opus",
+     "server": 2
+    },
+    {
+     "path": "Peer Artist/Peer Album/cover.jpg",
+     "server": 2
+    },
+    {
+     "path": "Second Artist/Album/01 - Song.flac",
+     "server": 1
+    }
+   ]
+  },
+  "srvs": {
+   "file": "manifest-servers.bin",
+   "stride": 40,
+   "entries": [
+    {
+     "server": 1,
+     "stored": "88 99 AA BB CC DD 4E FF 80 11 22 33 44 55 66 77 6E 9D 52 CA 80 E7 CA 36 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"
+    },
+    {
+     "server": 2,
+     "stored": "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 C7 3A 76 EE A3 1E 90 ED 03 00 00 00 01 00 00 00"
+    },
+    {
+     "server": 3,
+     "stored": "0F 1E 2D 3C 4B 5A 49 68 87 96 A5 B4 C3 D2 E1 F0 00 00 00 00 00 00 00 00 6E 9D 52 CA 80 E7 CA 36 01 00 00 00 01 00 00 00"
+    }
+   ]
+  },
+  "sameServer": {
+   "card": "manifest-servers.json",
+   "cases": [
+    {
+     "index": 0,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "same"
+    },
+    {
+     "index": 0,
+     "talk": {
+      "url": "HTTP://Music.Example:3000/"
+     },
+     "verdict": "same",
+     "note": "the URL normalised first (2.5.1)"
+    },
+    {
+     "index": 0,
+     "talk": {
+      "url": "http://192.0.2.10:3000"
+     },
+     "verdict": "unknown",
+     "note": "a second URL of the same server: another key"
+    },
+    {
+     "index": 0,
+     "talk": {
+      "url": "http://192.0.2.10:3000",
+      "confirmed": [
+       "0xED901EA3EE763AC7"
+      ]
+     },
+     "verdict": "same",
+     "note": "the listener has called the two the same server"
+    },
+    {
+     "index": 0,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 3
+     },
+     "verdict": "unknown",
+     "note": "a peer is not its parent"
+    },
+    {
+     "index": 1,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "unknown"
+    },
+    {
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream"
+     },
+     "verdict": "same"
+    },
+    {
+     "index": 1,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "serverInstance": "00112233-4455-4677-8899-aabbccddeeff"
+     },
+     "verdict": "different",
+     "note": "both instances known and different, whatever the keys"
+    },
+    {
+     "index": 1,
+     "talk": {
+      "url": "http://192.0.2.20",
+      "serverInstance": "8899aabb-ccdd-4eff-8011-223344556677"
+     },
+     "verdict": "same",
+     "note": "both instances known and equal, whatever the keys"
+    },
+    {
+     "index": 2,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 3
+     },
+     "verdict": "same"
+    },
+    {
+     "index": 2,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 4
+     },
+     "verdict": "unknown"
+    },
+    {
+     "index": 2,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "unknown",
+     "note": "the parent is not its peer"
+    },
+    {
+     "index": 2,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "peerId": 3
+     },
+     "verdict": "unknown",
+     "note": "peer 3 of another parent"
+    },
+    {
+     "index": 3,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "peerId": 1
+     },
+     "verdict": "same"
+    },
+    {
+     "index": 3,
+     "talk": {
+      "url": "https://second.example/mstream",
+      "peerId": 1,
+      "serverInstance": "00112233-4455-4677-8899-aabbccddeeff"
+     },
+     "verdict": "different"
+    },
+    {
+     "index": 3,
+     "talk": {
+      "url": "http://music.example:3000",
+      "peerId": 1
+     },
+     "verdict": "unknown"
+    },
+    {
+     "index": 4,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "unknown",
+     "note": "a server no SRVS entry names"
+    },
+    {
+     "index": 65535,
+     "talk": {
+      "url": "http://music.example:3000"
+     },
+     "verdict": "unknown"
+    }
+   ]
+  }
+ },
  "deviceTxt": {
   "text": "contract=1\nfirmware=0.11.0\nread.msmf=1\nread.mptg=1\nread.mpdj=2\nread.mpth=1\ncodecs=mp3,flac,opus\nextensions=mp3,flac,opus\nmax_rate=48000\nmax_channels=2\n",
   "noFile": {

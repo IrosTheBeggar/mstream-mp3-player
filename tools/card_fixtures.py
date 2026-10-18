@@ -494,11 +494,13 @@ def mptg(desc, order="canonical", rec_stride=72, extra_header=b"", extra_run_fie
         orig = bytearray()
         for r in recs:
             l = r.get("ledger", {})
-            orig += struct.pack("<IIII16s16sQQIHBBH6s", ostr.add(l.get("serverPath", "")), l.get("mstreamId", 0),
+            # Bytes 74-75: the row's server (2.6.6, 2.5.5), 0 the root's own.
+            orig += struct.pack("<IIII16s16sQQIHBBHH4s", ostr.add(l.get("serverPath", "")), l.get("mstreamId", 0),
                                 l.get("albumId", 0), l.get("artistId", 0), bytes.fromhex(l.get("audioHash", "00" * 16)),
                                 bytes.fromhex(l.get("fileHash", "00" * 16)), l.get("serverModified", 0),
                                 l.get("serverSize", 0), l.get("createdAt", 0), l.get("hashV", 0),
-                                l.get("originFlags", 0), l.get("convertedTo", 0), l.get("convertKbps", 0), bytes(6))
+                                l.get("originFlags", 0), l.get("convertedTo", 0), l.get("convertKbps", 0),
+                                l.get("server", 0), bytes(4))
         sections.append(("ORIG", 0, len(recs), 80, bytes(orig)))
         sections.append(("OSTR", 0, 0, 0, bytes(ostr.b)))
     sections += list(extra_sections)
@@ -516,8 +518,31 @@ def companion_name(kind, gen):
     return ("tags-%08x.bin" if kind == "MPTG" else "autodj-%08x.bin") % gen
 
 
-def msmf_raw(desc, comps_rows, roots, minor=0):
-    """comps_rows: [(kind, generation, fileBytes, headerCrc, name, key)] as given."""
+PEER = 1  # SRVS flags bit 0 (2.5.5)
+
+
+def uuid_bytes(s) -> bytes:
+    """A UUID's 16 bytes in RFC 4122 order (2.3.1); absent: zeros, unknown."""
+    return bytes.fromhex((s or "0" * 32).replace("-", ""))
+
+
+def server_entry(s) -> dict:
+    """One SRVS entry (2.5.5) from a description: the keys from the URLs
+    given (2.5.1), 0 where none is."""
+    return {"instance": uuid_bytes(s.get("serverInstance")),
+            "serverUrlKey": server_url_key(s["serverUrl"]) if s.get("serverUrl") else 0,
+            "parentKey": server_url_key(s["parentUrl"]) if s.get("parentUrl") else 0,
+            "peerId": s.get("peerId", 0), "flags": s.get("flags", 0)}
+
+
+def srvs_row(e: dict, stride=40) -> bytes:
+    row = struct.pack("<16sQQII", e["instance"], e["serverUrlKey"], e["parentKey"], e["peerId"], e["flags"])
+    return row + bytes([0xAB]) * (stride - 40)
+
+
+def msmf_raw(desc, comps_rows, roots, minor=0, servers=(), srvs_stride=40, extra_sections=()):
+    """comps_rows: [(kind, generation, fileBytes, headerCrc, name, key)] as given;
+    servers: SRVS's entries (server_entry), in index order (2.5.5)."""
     strs = Strs()
     producer = strs.add(desc.get("producer", ""))
     revision = strs.add(desc.get("serverRevision", ""))
@@ -525,7 +550,7 @@ def msmf_raw(desc, comps_rows, roots, minor=0):
     for kind, gen, fb, hc, name, key in comps_rows:
         comp += struct.pack("<4sIIIII16s", fourcc(kind), gen, fb, hc, strs.add(name), 0, key)
     libr = b"".join(struct.pack("<I", strs.add(r)) for r in roots)
-    instance = bytes.fromhex(desc.get("serverInstance", "0" * 32).replace("-", ""))
+    instance = uuid_bytes(desc.get("serverInstance"))
     key = server_url_key(desc["serverUrl"]) if desc.get("serverUrl") else u64(desc.get("serverUrlKey", 0))
     th = struct.pack("<IIQ16sIIIIQ", desc.get("commitTime", 0), desc.get("flags", 0), u64(desc.get("commitId", 0)),
                      instance, producer, revision, desc.get("baseGeneration", 0), 0, key)
@@ -533,6 +558,10 @@ def msmf_raw(desc, comps_rows, roots, minor=0):
     if roots:
         sections.append(("LIBR", 0, len(roots), 4, libr))
     sections.append(("STRS", REQUIRED, 0, 0, bytes(strs.b)))
+    if servers:
+        # Optional, never REQUIRED: the device doesn't know it (2.5.5).
+        sections.append(("SRVS", 0, len(servers), srvs_stride, b"".join(srvs_row(e, srvs_stride) for e in servers)))
+    sections += list(extra_sections)
     return build_container("MSMF", desc["generation"], u64(desc.get("cardId", 0)), th, sections, minor=minor)
 
 
@@ -547,7 +576,8 @@ def comp_row(name: str, data: bytes):
 def msmf(desc, golden: dict):
     rows = [comp_row(c["file"], golden[c["file"]]) for c in desc["companions"]]
     roots = sorted(desc.get("roots", []), key=lambda r: r.encode("utf-8"))
-    return msmf_raw(desc, rows, roots, desc.get("minor", 0))
+    servers = [server_entry(s) for s in desc.get("servers", [])]
+    return msmf_raw(desc, rows, roots, desc.get("minor", 0), servers)
 
 
 OPS = {"write": 1, "delete": 2, "folder": 3}
@@ -714,6 +744,84 @@ def tags_empty():
             "folders": [{"path": "Owned Empty", "flags": FOLDER_OWNED}], "records": []}
 
 
+HOME_URL = "http://music.example:3000"  # ED901EA3EE763AC7, as 2.18's serverUrlKey vector
+SECOND_URL = "https://second.example/mstream"
+SECOND_INSTANCE = "8899aabb-ccdd-4eff-8011-223344556677"
+FAR_INSTANCE = "0f1e2d3c-4b5a-4968-8796-a5b4c3d2e1f0"
+
+
+def tags_servers():
+    """A card filled from four servers (2.5.5, 2.6.6): the root's, a second
+    server reached by its own URL, a peer of each."""
+    t = fat_time(2026, 10, 9, 9, 15, 20)
+    rec = []
+
+    def add(path, server, server_path, **kw):
+        r = {"path": path, "size": 2000 + 53 * len(rec), "fatTime": "0x%08X" % (t + 2 * len(rec)),
+             "durationMs": 200000 + 1000 * len(rec), "qfp": "0x%016X" % fnv(b"servers " + path.encode("utf-8")),
+             "known": KNOWN_RULES1, "container": 1}
+        r.update(kw)
+        r.setdefault("ledger", {"serverPath": server_path, "mstreamId": 100 + len(rec), "albumId": 5, "artistId": 2,
+                                "audioHash": h16("sa" + server_path), "fileHash": h16("sf" + server_path),
+                                "serverModified": 1790500000000 + len(rec), "serverSize": r["size"],
+                                "createdAt": 1790500000, "hashV": 2, "originFlags": 2})
+        r["ledger"]["server"] = server
+        rec.append(r)
+
+    add("Artist/Album/01 - Title.mp3", 0, "Music/Artist/Album/01 - Title.mp3", note="the root's own server: 0",
+        tags={"title": ["Title"], "artist": ["Lantern Choir"], "album": ["Album"]})
+    add("Artist/Album/cover.jpg", 0, "", note="an owned file with no server track: its album's server",
+        container=255, known=0, durationMs=0)
+    add("Second Artist/Album/01 - Song.flac", 1, "Library/Second Artist/Album/01 - Song.flac", container=2,
+        note="server 1, reached by its own URL; mStream id 100 again (ids are each server's own)",
+        tags={"title": ["Song"], "artist": ["Second Artist"], "album": ["Album"]})
+    add("Both/One.mp3", 0, "Music/Both/One.mp3", note="one serverPath on two servers: the lower server keeps the name "
+        "(2.8.3, step 6), though its mStream id is the higher", tags={"title": ["One"]})
+    rec[-1]["ledger"]["mstreamId"] = 9
+    add("Both/One (2).mp3", 1, "Music/Both/One.mp3", tags={"title": ["One"]})
+    rec[-1]["ledger"]["mstreamId"] = 4
+    add("Peer Artist/Peer Album/01 - Tune.opus", 2, "Shared/Peer Artist/Peer Album/01 - Tune.opus", container=3,
+        note="server 2, a peer of the root's server: its own serverPath and ids, not its parent's",
+        tags={"title": ["Tune"], "artist": ["Peer Artist"], "album": ["Peer Album"]})
+    add("Peer Artist/Peer Album/cover.jpg", 2, "", note="an owned cover made for the peer's album: the peer's server",
+        container=255, known=0, durationMs=0)
+    add("Far Artist/Far Album/01 - Far.opus", 3, "Music/Far Artist/Far Album/01 - Far.flac", container=3,
+        note="server 3, a peer of server 1, converted on the PC: not VERIFIED",
+        tags={"title": ["Far"], "artist": ["Far Artist"], "album": ["Far Album"]})
+    rec[-1]["ledger"].update(originFlags=0, convertedTo=3, convertKbps=192)
+    for r in rec:
+        if r["container"] == 255:
+            r["ledger"] = {"serverPath": "", "originFlags": 0, "server": r["ledger"]["server"]}
+    return {
+        "format": "MPTG", "file": "tags-00000007.bin", "generation": 7, "cardId": CARD_ID, "minor": 0,
+        "source": 2, "parserVersion": 1, "readRules": 1, "producer": "mstream-terminal 0.13.0",
+        "note": "A card filled from several servers (2.5.5): each ledger row's 'server' is ORIG's server index, 0 "
+                "the root's own; manifest-servers.json lists the others.",
+        "folders": [{"path": "Peer Artist", "flags": FOLDER_OWNED},
+                    {"path": "Peer Artist/Peer Album", "flags": FOLDER_OWNED}],
+        "records": rec,
+    }
+
+
+def manifest_servers():
+    return {"format": "MSMF", "file": "manifest-servers.bin", "generation": 7, "cardId": CARD_ID,
+            "commitTime": 1791500000, "flags": 1, "commitId": "0x00000007C0DEC0DE",
+            "producer": "mstream-terminal 0.13.0", "serverRevision": "\"r-5-104-1790500000004-0\"",
+            "baseGeneration": 6, "serverUrl": HOME_URL,
+            "note": "The root of a card filled from several servers: SRVS lists the servers other than the root's "
+                    "(server i is entry i - 1; 2.5.5), each key from the URL given (2.5.1). The root's own "
+                    "instance is unknown.",
+            "companions": [{"file": "tags-00000007.bin"}], "roots": [],
+            "servers": [
+                {"serverInstance": SECOND_INSTANCE, "serverUrl": SECOND_URL,
+                 "note": "server 1: another server, reached by its own URL, its instance known"},
+                {"parentUrl": HOME_URL, "peerId": 3, "flags": PEER,
+                 "note": "server 2: peer 3 of the root's server, its instance unknown"},
+                {"serverInstance": FAR_INSTANCE, "parentUrl": SECOND_URL, "peerId": 1, "flags": PEER,
+                 "note": "server 3: peer 1 of server 1, its instance known"},
+            ]}
+
+
 def manifest_main():
     return {"format": "MSMF", "file": "manifest.bin", "generation": 42, "cardId": CARD_ID, "commitTime": 1791400000,
             "flags": 1, "commitId": "0x0DDBA11CAFEF00D5", "serverInstance": "00112233-4455-6677-8899-aabbccddeeff",
@@ -763,7 +871,7 @@ def device_main():
 
 
 LIBRARIES = [tags_transfer, tags_device, tags_empty, manifest_min, manifest_main, pending_main, thumb_main,
-             device_main]
+             device_main, tags_servers, manifest_servers]
 
 
 def build(desc, golden: dict):
@@ -955,12 +1063,122 @@ def vectors(golden: dict):
         "a plan's write target that is on the card but not in the ledger is replaced in place",
         "on macOS, a listed 'Cafe' + U+0301 is recorded in NFC (C3 A9), hash F1B24FC757494F2B",
         "an Opus stream the server stores as x.ogg goes on the card as x.opus, its bytes unchanged, convertedTo 0"]}
+    other = "00112233-4455-4677-8899-aabbccddeeff"
+    v["servers"] = {
+        "who": "software",
+        "note": ("2.5.5, 2.6.6, 2.11: a ledger row's server. origServer: ORIG's bytes 74-79 for a row's server "
+                 "index. rows: the golden tags file's records in record order with their server. srvs: the golden "
+                 "root's SRVS entries (entry i - 1 is server i), as stored. sameServer: 2.11's test of server "
+                 "'index' of the card whose root description is 'card' against what the software reads: the "
+                 "server at 'url' ('confirmed': keys the listener has called the same server as 'url'), or with "
+                 "'peerId' that peer of it; 'serverInstance' is the instance of what it reads, when known. The "
+                 "device reads neither ORIG nor SRVS."),
+        "origServer": [{"server": 0, "bytes74to79": "00 00 00 00 00 00", "note": "a card filled from one server"},
+                       {"server": 2, "bytes74to79": "02 00 00 00 00 00"},
+                       {"server": 258, "bytes74to79": "02 01 00 00 00 00"}],
+        "rows": {"file": "tags-00000007.bin", "rows": [
+            {"path": "Artist/Album/01 - Title.mp3", "server": 0},
+            {"path": "Artist/Album/cover.jpg", "server": 0},
+            {"path": "Both/One (2).mp3", "server": 1},
+            {"path": "Both/One.mp3", "server": 0},
+            {"path": "Far Artist/Far Album/01 - Far.opus", "server": 3},
+            {"path": "Peer Artist/Peer Album/01 - Tune.opus", "server": 2},
+            {"path": "Peer Artist/Peer Album/cover.jpg", "server": 2},
+            {"path": "Second Artist/Album/01 - Song.flac", "server": 1}]},
+        "srvs": {"file": "manifest-servers.bin", "stride": 40, "entries": [
+            {"server": 1, "stored": "88 99 AA BB CC DD 4E FF 80 11 22 33 44 55 66 77 6E 9D 52 CA 80 E7 CA 36 "
+                                    "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00"},
+            {"server": 2, "stored": "00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 "
+                                    "C7 3A 76 EE A3 1E 90 ED 03 00 00 00 01 00 00 00"},
+            {"server": 3, "stored": "0F 1E 2D 3C 4B 5A 49 68 87 96 A5 B4 C3 D2 E1 F0 00 00 00 00 00 00 00 00 "
+                                    "6E 9D 52 CA 80 E7 CA 36 01 00 00 00 01 00 00 00"}]},
+        "sameServer": {"card": "manifest-servers.json", "cases": [
+            {"index": 0, "talk": {"url": HOME_URL}, "verdict": "same"},
+            {"index": 0, "talk": {"url": "HTTP://Music.Example:3000/"}, "verdict": "same",
+             "note": "the URL normalised first (2.5.1)"},
+            {"index": 0, "talk": {"url": "http://192.0.2.10:3000"}, "verdict": "unknown",
+             "note": "a second URL of the same server: another key"},
+            {"index": 0, "talk": {"url": "http://192.0.2.10:3000",
+                                  "confirmed": ["0x%016X" % server_url_key(HOME_URL)]},
+             "verdict": "same", "note": "the listener has called the two the same server"},
+            {"index": 0, "talk": {"url": HOME_URL, "peerId": 3}, "verdict": "unknown",
+             "note": "a peer is not its parent"},
+            {"index": 1, "talk": {"url": HOME_URL}, "verdict": "unknown"},
+            {"index": 1, "talk": {"url": SECOND_URL}, "verdict": "same"},
+            {"index": 1, "talk": {"url": SECOND_URL, "serverInstance": other}, "verdict": "different",
+             "note": "both instances known and different, whatever the keys"},
+            {"index": 1, "talk": {"url": "http://192.0.2.20", "serverInstance": SECOND_INSTANCE}, "verdict": "same",
+             "note": "both instances known and equal, whatever the keys"},
+            {"index": 2, "talk": {"url": HOME_URL, "peerId": 3}, "verdict": "same"},
+            {"index": 2, "talk": {"url": HOME_URL, "peerId": 4}, "verdict": "unknown"},
+            {"index": 2, "talk": {"url": HOME_URL}, "verdict": "unknown", "note": "the parent is not its peer"},
+            {"index": 2, "talk": {"url": SECOND_URL, "peerId": 3}, "verdict": "unknown",
+             "note": "peer 3 of another parent"},
+            {"index": 3, "talk": {"url": SECOND_URL, "peerId": 1}, "verdict": "same"},
+            {"index": 3, "talk": {"url": SECOND_URL, "peerId": 1, "serverInstance": other}, "verdict": "different"},
+            {"index": 3, "talk": {"url": HOME_URL, "peerId": 1}, "verdict": "unknown"},
+            {"index": 4, "talk": {"url": HOME_URL}, "verdict": "unknown", "note": "a server no SRVS entry names"},
+            {"index": 65535, "talk": {"url": HOME_URL}, "verdict": "unknown"}]},
+    }
     v["deviceTxt"] = {"text": device_txt(device_main()).decode("ascii"),
                       "noFile": {"read.msmf": "1", "read.mptg": "1", "read.mpdj": "", "read.mpth": "1",
                                  "codecs": "mp3,flac", "extensions": "mp3,flac", "max_rate": "48000",
                                  "max_channels": "2"}}
     v["mpdj"] = mpdj.fixture_vectors(golden)
     return v
+
+
+def card_server(root, index):
+    """Server `index` of a root description (2.5.5): 0 the header's, i >= 1
+    SRVS entry i - 1; None when no entry has that index."""
+    if index == 0:
+        key = server_url_key(root["serverUrl"]) if root.get("serverUrl") else u64(root.get("serverUrlKey", 0))
+        return {"instance": uuid_bytes(root.get("serverInstance")), "serverUrlKey": key, "parentKey": 0, "peerId": 0,
+                "flags": 0}
+    servers = root.get("servers", [])
+    return server_entry(servers[index - 1]) if index <= len(servers) else None
+
+
+def same_server(srv, talk):
+    """2.11's test of one of a card's servers against the one the software
+    reads. talk: the server at "url" ("confirmed": keys the listener has
+    called the same server as it), or with "peerId" that peer of it;
+    "serverInstance": the instance of what it reads, when known."""
+    if srv is None:
+        return "unknown"
+    a, b = srv["instance"], uuid_bytes(talk.get("serverInstance"))
+    if a != bytes(16) and b != bytes(16):
+        return "same" if a == b else "different"
+    keys = {server_url_key(talk["url"])} | {u64(k) for k in talk.get("confirmed", [])}
+    if srv["flags"] & PEER:
+        same = "peerId" in talk and srv["parentKey"] in keys and srv["peerId"] == talk["peerId"]
+    else:
+        same = "peerId" not in talk and srv["serverUrlKey"] in keys
+    return "same" if same else "unknown"
+
+
+def ledger_servers(b: bytes):
+    """A tags file read back: (path, ORIG's server) per record, in record
+    order."""
+    p = parse_container(b)
+    strs = bytes(section(p, "STRS")[4])
+
+    def text(off):
+        return strs[off:strs.index(0, off)].decode("utf-8") if off else ""
+
+    def join(a, n):
+        return a + "/" + n if a else n
+
+    fold, folders = section(p, "FOLD"), []
+    for i in range(fold[2]):
+        parent, name = struct.unpack_from("<II", fold[4], fold[3] * i)
+        folders.append("" if i == 0 else join(folders[parent], text(name)))
+    recs, orig = section(p, "RECS"), section(p, "ORIG")
+    out = []
+    for i in range(recs[2]):
+        f, n = struct.unpack_from("<II", recs[4], recs[3] * i)
+        out.append((join(folders[f], text(n)), struct.unpack_from("<H", orig[4], orig[3] * i + 74)[0]))
+    return out
 
 
 def elect(b, t):
@@ -1064,6 +1282,21 @@ def check_vectors(v, golden: dict):
          v["bytes"]["serverInstance"]["stored"], "uuid")
     want(bytes.fromhex(v["bytes"]["audioHash"]["audioHash"]).hex(" ").upper() == v["bytes"]["audioHash"]["stored"],
          "audioHash")
+    sv = v["servers"]
+    for e in sv["origServer"]:
+        want(struct.pack("<H4s", e["server"], bytes(4)).hex(" ").upper() == e["bytes74to79"], "origServer %r" % e)
+    want(ledger_servers(golden[sv["rows"]["file"]]) == [(e["path"], e["server"]) for e in sv["rows"]["rows"]],
+         "server rows")
+    ps = parse_container(golden[sv["srvs"]["file"]])
+    srvs = section(ps, "SRVS")
+    want(srvs[3] == sv["srvs"]["stride"] and [bytes(srvs[4][srvs[3] * i:srvs[3] * (i + 1)]).hex(" ").upper()
+                                              for i in range(srvs[2])] == [e["stored"] for e in sv["srvs"]["entries"]],
+         "srvs entries")
+    want([e["server"] for e in sv["srvs"]["entries"]] == list(range(1, srvs[2] + 1)), "srvs indexes")
+    card = manifest_servers()
+    want(sv["sameServer"]["card"] == card["file"].rsplit(".", 1)[0] + ".json", "sameServer card")
+    for e in sv["sameServer"]["cases"]:
+        want(same_server(card_server(card, e["index"]), e["talk"]) == e["verdict"], "sameServer %r" % e)
     if bad:
         raise SystemExit("vectors that don't match: " + ", ".join(bad))
 
@@ -1489,6 +1722,30 @@ def hardening(golden: dict):
          msmf_raw(md, [t_row, d_row], ["L" * 120 + "/" + "M" * 127]))
     bad("msmf-major-2", "MSMF", "major", "a newer major", edit(major, man))
 
+    # A server per ledger row (2.5.5, 2.6.6): the device reads neither ORIG
+    # nor SRVS, so neither can make its tags file or its root absent.
+    def orig_servers(p):
+        s = section(p, "ORIG")
+        for i, server in ((1, 1), (3, 2), (s[2] - 1, 0xFFFF)):
+            struct.pack_into("<H", s[4], s[3] * i + 74, server)
+
+    good("mptg-orig-server", "MPTG", "ORIG: rows naming servers 1, 2 and 65,535 (2.6.6): the same records; a server "
+         "no SRVS entry names is the guard's unknown (2.11), not damage", edit(orig_servers), same="tags-0000002a.bin")
+
+    def srvs_short(p):
+        s = section(p, "SRVS")
+        s[4] = bytearray(b"".join(s[4][s[3] * i:s[3] * i + 32] for i in range(s[2])))
+        s[3] = 32
+
+    good("msmf-srvs-ignored", "MSMF", "SRVS broken (rows of 32 bytes, below v1's 40), read by the device, which never "
+         "reads SRVS (to a reader that uses it, the root is absent: 2.4.3)",
+         edit(srvs_short, golden["manifest-servers.bin"]), uses="device")
+    sd = manifest_servers()
+    good("msmf-minor-1", "MSMF", "a newer minor: SRVS rows of 48 bytes, read by their 40-byte prefix (the servers of "
+         "manifest-servers.bin), and an unknown section",
+         msmf_raw(sd, [comp_row(c["file"], golden[c["file"]]) for c in sd["companions"]], [], 1,
+                  [server_entry(s) for s in sd["servers"]], srvs_stride=48, extra_sections=[("XTRA", 0, 0, 0, b"new")]))
+
     # MSPD.
     pd = pending_main()
     bad("mspd-order", "MSPD", "pendOrder", "PEND: a write before a delete",
@@ -1543,7 +1800,11 @@ elsewhere. Made-up names only, synthetic embeddings.
   replaces and drops nothing in them (AUTODJ-INDEX.md 13.2). Integers above
   2^53 are hex strings. A manifest names its companions by file; their
   generation, length, header CRC and (MPDJ) selection signature come from
-  the golden companion.
+  the golden companion. A manifest's `servers` are its SRVS entries in
+  order (server i is entry i - 1), each key computed from the URL given
+  (`serverUrl`, `parentUrl`: 2.5.1), 0 where none is; a ledger's `server`
+  is ORIG's server index, 0 (the root's own server) when absent (2.5.5,
+  2.6.6).
 - `golden/`: what a writer MUST produce from each description, byte for
   byte (2.17, item 2). The MPTH pixels are the synthetic picture the
   description names: the scaling filter isn't pinned.
@@ -1551,7 +1812,8 @@ elsewhere. Made-up names only, synthetic embeddings.
   4), at least one for every check of 2.4.3, so a reader that skips a
   check fails on its file. `index.json` lists each with the reader's uses
   (`all`: every section; `device`: MPTG's FOLD, RECS and STRS, MPDJ's
-  DJRF, DJPH and STRS), whether it must read as absent or present, the
+  DJRF, DJPH and STRS, MSMF's COMP, LIBR and STRS: the device never reads
+  ORIG, OSTR or SRVS), whether it must read as absent or present, the
   check it breaks, and the player's reason code. A `present` file with
   `same` reads as the same records as that golden file (MPDJ: every row's
   filter record and used slot entries, every DJPH hash's row, the five

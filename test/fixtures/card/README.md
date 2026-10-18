@@ -26,7 +26,11 @@ elsewhere. Made-up names only, synthetic embeddings.
   replaces and drops nothing in them (AUTODJ-INDEX.md 13.2). Integers above
   2^53 are hex strings. A manifest names its companions by file; their
   generation, length, header CRC and (MPDJ) selection signature come from
-  the golden companion.
+  the golden companion. A manifest's `servers` are its SRVS entries in
+  order (server i is entry i - 1), each key computed from the URL given
+  (`serverUrl`, `parentUrl`: 2.5.1), 0 where none is; a ledger's `server`
+  is ORIG's server index, 0 (the root's own server) when absent (2.5.5,
+  2.6.6).
 - `golden/`: what a writer MUST produce from each description, byte for
   byte (2.17, item 2). The MPTH pixels are the synthetic picture the
   description names: the scaling filter isn't pinned.
@@ -34,7 +38,8 @@ elsewhere. Made-up names only, synthetic embeddings.
   4), at least one for every check of 2.4.3, so a reader that skips a
   check fails on its file. `index.json` lists each with the reader's uses
   (`all`: every section; `device`: MPTG's FOLD, RECS and STRS, MPDJ's
-  DJRF, DJPH and STRS), whether it must read as absent or present, the
+  DJRF, DJPH and STRS, MSMF's COMP, LIBR and STRS: the device never reads
+  ORIG, OSTR or SRVS), whether it must read as absent or present, the
   check it breaks, and the player's reason code. A `present` file with
   `same` reads as the same records as that golden file (MPDJ: every row's
   filter record and used slot entries, every DJPH hash's row, the five
