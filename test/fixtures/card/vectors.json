@@ -1311,6 +1311,21 @@
     "name": "resume/old/0000002a.part",
     "ok": false,
     "why": "resume/ holds only 2.12.8's partials"
+   },
+   {
+    "name": "stage",
+    "ok": false,
+    "why": "a folder's name (2.2, 2.12.8)"
+   },
+   {
+    "name": "thumbs",
+    "ok": false,
+    "why": "a folder's name (2.2, 2.12.8)"
+   },
+   {
+    "name": "resume",
+    "ok": false,
+    "why": "a folder's name (2.2, 2.12.8)"
    }
   ],
   "settle": [
@@ -1897,6 +1912,141 @@
     "headers": null,
     "then": "start over",
     "note": "modified changed: start over"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": -5
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "have below 0: not a count, so start over (step 4 kept the file by its name and size)"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 31457281
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "have past size: start over"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760.0
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "have not an integer: start over"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": "10485760"
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "have a string: start over"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": 5,
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "etag not a string: start over"
    }
   ],
   "resumeExample": {
@@ -1957,7 +2107,7 @@
  },
  "plays": {
   "who": "both",
-  "note": "2.20 and 2.5.6: the play log. slot: one play slot's fields and bytes; note: a drop note's. ids: a play's id. names: what an outcome and a source read as. bootSeq: the next seq at boot, over the golden sync-1 log (the device's). deviceOps: what the device model did with log.json's events (informative). files: plays/'s files (the goldens, the reader's cases in plays/index.json). acks: ACKS's bytes, the golden root's entries, and the hardening files. resolve: a golden log through a golden tags file (the software's): each new play, sent or not (why: 'file' its file isn't a ledger row's, 'clock' no start), where to and its start; then the posted marks once the server settled the sent ones. resolveCases: single plays. peers: where a play of each row of the card of several servers goes. deviceTxt: the history key.",
+  "note": "2.20 and 2.5.6: the play log. slot: one play slot's fields and bytes; note: a drop note's. ids: a play's id. names: what an outcome and a source read as. atBoot: the next seq and the next bootSeq at boot from NVS's values and the card's log (the golden sync-1, or readCase's files in plays/index.json), every valid slot counting (2.20.4). deviceOps: what the device model did with log.json's events (informative). files: plays/'s files (the goldens, the reader's cases in plays/index.json). acks: ACKS's bytes, the golden root's entries, and the hardening files. resolve: a golden log through a golden tags file (the software's): each new play, sent or not (why: 'file' its file isn't a ledger row's, 'clock' no start), where to and its start; then the posted marks once the server settled the sent ones. resolveCases: single plays. peers: where a play of each row of the card of several servers goes. deviceTxt: the history key.",
   "slot": {
    "fields": {
     "kind": 1,
@@ -2039,36 +2189,54 @@
     "4": "other"
    }
   },
-  "bootSeq": {
+  "atBoot": {
    "log": "plays/golden/sync-1",
    "cases": [
     {
      "nvsSeq": 0,
+     "nvsBoots": 0,
      "deviceId": "00:00:5e:00:53:01",
      "epoch": "0x1122334455667788",
-     "next": 8,
-     "note": "NVS behind the card"
+     "nextSeq": 8,
+     "nextBootSeq": 3,
+     "note": "NVS behind the card, for the seq and the boot count"
     },
     {
      "nvsSeq": 9,
+     "nvsBoots": 5,
      "deviceId": "00:00:5e:00:53:01",
      "epoch": "0x1122334455667788",
-     "next": 10,
-     "note": "NVS ahead (seqs reserved)"
+     "nextSeq": 10,
+     "nextBootSeq": 6,
+     "note": "NVS ahead (seqs reserved, boots with no play)"
     },
     {
      "nvsSeq": 0,
+     "nvsBoots": 0,
      "deviceId": "00:00:5e:00:53:01",
      "epoch": "0xF0E1D2C3B4A59687",
-     "next": 1,
+     "nextSeq": 1,
+     "nextBootSeq": 1,
      "note": "a new epoch"
     },
     {
      "nvsSeq": 3,
+     "nvsBoots": 1,
      "deviceId": "00:00:5e:00:53:02",
      "epoch": "0x1122334455667788",
-     "next": 4,
+     "nextSeq": 4,
+     "nextBootSeq": 2,
      "note": "another device's plays"
+    },
+    {
+     "readCase": "conflict-top",
+     "nvsSeq": 0,
+     "nvsBoots": 0,
+     "deviceId": "00:00:5e:00:53:01",
+     "epoch": "0x1122334455667788",
+     "nextSeq": 8,
+     "nextBootSeq": 3,
+     "note": "seq 7's two slots conflict, so a reader uses neither; the boot rule counts both"
     }
    ]
   },

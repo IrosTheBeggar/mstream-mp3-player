@@ -214,6 +214,33 @@
   "note": "one key, two different slots: neither is used"
  },
  {
+  "case": "conflict-top",
+  "files": {
+   "plays.jnl": "read/conflict-top/plays.jnl",
+   "plays.1.jnl": "golden/sync-1/plays.1.jnl"
+  },
+  "ids": [
+   "core2-00005e005301-1122334455667788-1",
+   "core2-00005e005301-1122334455667788-2",
+   "core2-00005e005301-1122334455667788-3",
+   "core2-00005e005301-1122334455667788-4",
+   "core2-00005e005301-1122334455667788-5",
+   "core2-00005e005301-1122334455667788-6"
+  ],
+  "counts": {
+   "slots": 8,
+   "damaged": 0,
+   "tail": 0,
+   "newer": 0,
+   "unknownKinds": 0,
+   "unusable": 0,
+   "twins": 0,
+   "conflicts": 1,
+   "dropped": 0
+  },
+  "note": "a conflict at the log's end: seq 7's two slots differ, neither is used (the next seq at boot is still 8: vectors.json's plays.atBoot)"
+ },
+ {
   "case": "unusable",
   "files": {
    "plays.jnl": "read/unusable/plays.jnl"

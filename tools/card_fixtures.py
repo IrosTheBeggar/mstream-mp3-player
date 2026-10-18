@@ -709,6 +709,8 @@ def private_name(rel: str):
         return ok, "reserved: a partial (2.12.8)" if ok else "resume/ holds only 2.12.8's partials"
     if parts[0] in ("stage", "thumbs") and len(parts) > 1:
         return False, "inside %s/" % parts[0]
+    if len(parts) == 1 and rel in ("stage", "thumbs", "resume"):
+        return False, "a folder's name (2.2, 2.12.8)"
     name = parts[-1]
     if name.endswith(".tmp"):
         return False, "*.tmp: step 4 deletes it"
@@ -841,9 +843,13 @@ def resume_fetch(entry, part_size, server, status=None):
     {"serverPath", "file-size", "modified"}; status: the answer to the
     ranged GET, when there is one. -> {"from": the byte it goes on from, or
     None (start over), "headers": the request's, "then": what the answer
-    does}."""
-    same = (server.get("serverPath") == entry["serverPath"] and server.get("file-size") == entry["size"] and
-            server.get("modified") == entry["modified"] and part_size <= entry["size"])
+    does}. An entry whose `have` isn't an integer from 0 to `size`, or
+    whose `etag` isn't a string, starts over (step 4 kept its file all the
+    same: it looks at names and sizes only)."""
+    sound = (_is_int(entry.get("have")) and _is_int(entry.get("size")) and 0 <= entry["have"] <= entry["size"] and
+             isinstance(entry.get("etag"), str))
+    same = sound and (server.get("serverPath") == entry["serverPath"] and server.get("file-size") == entry["size"]
+                      and server.get("modified") == entry["modified"] and part_size <= entry["size"])
     if not same:
         return {"from": None, "headers": {}, "then": "start over"}
     at = min(part_size, entry["have"])
@@ -1271,6 +1277,8 @@ def plays_read_cases(snaps):
     struct.pack_into("<I", newer, 76, crc(bytes(newer[:76])))
     a2_other = playlog.read_log({"plays.1.jnl": s1["plays.1.jnl"]})["plays"][1]
     conflict = playlog.encode(dict(a2_other, playedMs=a2_other["playedMs"] + 1))
+    a1_last = playlog.read_log({"plays.jnl": s1["plays.jnl"]})["plays"][-1]
+    conflict_top = s1["plays.jnl"] + playlog.encode(dict(a1_last, playedMs=a1_last["playedMs"] + 1))
     dating = (play_slot(DEVICE_B, EPOCH_B, 3, startedAt=0, clock=0, bootSeq=4, uptimeMs=0xFFFFF000) +
               play_slot(DEVICE_B, EPOCH_B, 4, startedAt=1792100000000, clock=2, bootSeq=4, uptimeMs=0x1000) +
               play_slot(DEVICE_B, EPOCH_B, 5, startedAt=0, clock=0, bootSeq=5, uptimeMs=3000))
@@ -1290,6 +1298,9 @@ def plays_read_cases(snaps):
          c(slots=8, twins=4), {}, "a rotation's rename cut between its two directory writes: both names, one chain"),
         ("conflict", {"plays.1.jnl": s1["plays.1.jnl"], "plays.jnl": conflict}, [a1(n) for n in (1, 3, 4)],
          c(slots=5, conflicts=1), {}, "one key, two different slots: neither is used"),
+        ("conflict-top", dict(s1, **{"plays.jnl": conflict_top}), [a1(n) for n in range(1, 7)],
+         c(slots=8, conflicts=1), {}, "a conflict at the log's end: seq 7's two slots differ, neither is used "
+                                      "(the next seq at boot is still 8: vectors.json's plays.atBoot)"),
         ("unusable", {"plays.jnl": play_slot(DEVICE_A, 0, 1) + play_slot(DEVICE_A, EPOCH_1, 0) +
                       play_slot("00:00:00:00:00:00", EPOCH_1, 1)}, [], c(slots=3, unusable=3), {},
          "valid slots without an epoch, a seq, or a deviceId"),
@@ -1415,9 +1426,10 @@ def plays_vectors(golden: dict, snaps, ops):
     return {
         "who": "both",
         "note": ("2.20 and 2.5.6: the play log. slot: one play slot's fields and bytes; note: a drop note's. ids: "
-                 "a play's id. names: what an outcome and a source read as. bootSeq: the next seq at boot, over "
-                 "the golden sync-1 log (the device's). deviceOps: what the device model did with log.json's "
-                 "events (informative). files: plays/'s files (the goldens, the reader's cases in "
+                 "a play's id. names: what an outcome and a source read as. atBoot: the next seq and the next "
+                 "bootSeq at boot from NVS's values and the card's log (the golden sync-1, or readCase's files in "
+                 "plays/index.json), every valid slot counting (2.20.4). deviceOps: what the device model did "
+                 "with log.json's events (informative). files: plays/'s files (the goldens, the reader's cases in "
                  "plays/index.json). acks: ACKS's bytes, the golden root's entries, and the hardening files. "
                  "resolve: a golden log through a golden tags file (the software's): each new play, sent or not "
                  "(why: 'file' its file isn't a ledger row's, 'clock' no start), where to and its start; then the "
@@ -1436,11 +1448,18 @@ def plays_vectors(golden: dict, snaps, ops):
              "note": "the epoch's leading zeros are written"}],
         "names": {"outcome": {"0": "stopped", "1": "completed", "2": "skipped", "3": "stopped", "4": "stopped"},
                   "source": {"0": "other", "1": "manual", "2": "shuffle", "3": "autodj", "4": "other"}},
-        "bootSeq": {"log": "plays/golden/sync-1", "cases": [
-            {"nvsSeq": 0, "deviceId": DEVICE_A, "epoch": EPOCH_1, "next": 8, "note": "NVS behind the card"},
-            {"nvsSeq": 9, "deviceId": DEVICE_A, "epoch": EPOCH_1, "next": 10, "note": "NVS ahead (seqs reserved)"},
-            {"nvsSeq": 0, "deviceId": DEVICE_A, "epoch": EPOCH_2, "next": 1, "note": "a new epoch"},
-            {"nvsSeq": 3, "deviceId": DEVICE_B, "epoch": EPOCH_1, "next": 4, "note": "another device's plays"}]},
+        "atBoot": {"log": "plays/golden/sync-1", "cases": [
+            {"nvsSeq": 0, "nvsBoots": 0, "deviceId": DEVICE_A, "epoch": EPOCH_1, "nextSeq": 8, "nextBootSeq": 3,
+             "note": "NVS behind the card, for the seq and the boot count"},
+            {"nvsSeq": 9, "nvsBoots": 5, "deviceId": DEVICE_A, "epoch": EPOCH_1, "nextSeq": 10, "nextBootSeq": 6,
+             "note": "NVS ahead (seqs reserved, boots with no play)"},
+            {"nvsSeq": 0, "nvsBoots": 0, "deviceId": DEVICE_A, "epoch": EPOCH_2, "nextSeq": 1, "nextBootSeq": 1,
+             "note": "a new epoch"},
+            {"nvsSeq": 3, "nvsBoots": 1, "deviceId": DEVICE_B, "epoch": EPOCH_1, "nextSeq": 4, "nextBootSeq": 2,
+             "note": "another device's plays"},
+            {"readCase": "conflict-top", "nvsSeq": 0, "nvsBoots": 0, "deviceId": DEVICE_A, "epoch": EPOCH_1,
+             "nextSeq": 8, "nextBootSeq": 3,
+             "note": "seq 7's two slots conflict, so a reader uses neither; the boot rule counts both"}]},
         "deviceOps": [list(o) for o in ops],
         "files": {"golden": sorted("plays/golden/%s/%s" % (s, n) for s in snaps for n in snaps[s])},
         "acks": {
@@ -1582,7 +1601,7 @@ def private_vectors():
         ("State.json", False), ("state.tmp", False), ("tags-0000002a.bin", False), ("tags-backup.bin", False),
         ("autodj-old.bin", False), ("manifest.json", False), ("pending.txt", False), ("stage/keep.bin", False),
         ("thumbs/state.json", False), ("resume/notes.txt", False), ("resume/0000002A.part", False),
-        ("resume/old/0000002a.part", False)]
+        ("resume/old/0000002a.part", False), ("stage", False), ("thumbs", False), ("resume", False)]
     settle = [
         ("state", state(3), None, "state.json", 3, [], False, False, False, "only state.json"),
         ("state", None, state(4), "state.new", 4, [], True, False, False,
@@ -1667,6 +1686,16 @@ def private_vectors():
          "the server's size changed: start over without asking"),
         (part, 10485760, now(part, modified=part["modified"] + 1), None, None, None, "start over",
          "modified changed: start over"),
+        (dict(part, have=-5), 10485760, now(part), None, None, None, "start over",
+         "have below 0: not a count, so start over (step 4 kept the file by its name and size)"),
+        (dict(part, have=part["size"] + 1), 10485760, now(part), None, None, None, "start over",
+         "have past size: start over"),
+        (dict(part, have=10485760.0), 10485760, now(part), None, None, None, "start over",
+         "have not an integer: start over"),
+        (dict(part, have="10485760"), 10485760, now(part), None, None, None, "start over",
+         "have a string: start over"),
+        (dict(part, etag=5), 10485760, now(part), None, None, None, "start over",
+         "etag not a string: start over"),
     ]
     return {
         "who": "software",
@@ -2059,9 +2088,11 @@ def check_plays(pv, golden: dict, want):
         want(playlog.outcome_name(int(o)) == n, "outcome %s" % o)
     for o, n in pv["names"]["source"].items():
         want(playlog.source_name(int(o)) == n, "source %s" % o)
-    plays = playlog.read_log(log_of(pv["bootSeq"]["log"]))["plays"]
-    for e in pv["bootSeq"]["cases"]:
-        want(playlog.boot_seq(e["nvsSeq"], plays, e["deviceId"], e["epoch"]) == e["next"], "bootSeq %r" % e)
+    cases = {c[0]: c[1] for c in plays_read_cases(snaps)}
+    for e in pv["atBoot"]["cases"]:
+        slots = playlog.valid_slots(cases[e["readCase"]] if "readCase" in e else log_of(pv["atBoot"]["log"]))
+        want(playlog.boot_seq(e["nvsSeq"], slots, e["deviceId"], e["epoch"]) == e["nextSeq"] and
+             playlog.boot_count(e["nvsBoots"], slots, e["deviceId"], e["epoch"]) == e["nextBootSeq"], "atBoot %r" % e)
     a = pv["acks"]
     want(playlog.acks_bytes([(a["entry"]["deviceId"], a["entry"]["epoch"], a["entry"]["seq"])]) ==
          hexbytes(a["entry"]["stored"]), "acks entry")
@@ -2808,7 +2839,10 @@ in order, the counts of what it skipped, and where given the plays'
 starts and what their enums read as. `golden/manifest-acks.bin` is a root
 with ACKS (2.5.6); the `msmf-acks-*` hardening files are roots that
 read, whatever their ACKS holds (`vectors.json`'s `plays.acks` says what
-a reader that uses ACKS takes from each).
+a reader that uses ACKS takes from each). So a reader takes ACKS outside
+its container's check of known sections, whose stride and length rules
+would make the root absent: it finds ACKS by its type in the directory
+and checks it on its own.
 
 The player's tests: `test/test_card_contract` (the vectors),
 `test/test_card_files` (the goldens, round trips, the hardening files,

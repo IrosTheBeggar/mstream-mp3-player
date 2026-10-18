@@ -616,9 +616,9 @@ A reader MUST treat a file as **absent** when any of these fails:
   8 bytes past the end of the one before, the last ending at fileBytes, no
   type twice); no REQUIRED section of a type the reader doesn't know
   (2.4.5); every section its format requires present; for each known
-  array, a stride at least its v1 stride (a later minor's longer rows are
-  read by their known prefix) and bytes = count × stride; for each known
-  blob, count and stride 0;
+  array (MSMF's ACKS aside: below), a stride at least its v1 stride (a
+  later minor's longer rows are read by their known prefix) and bytes =
+  count × stride; for each known blob, count and stride 0;
 - **the header's own fields:** the counts it states equal its sections'
   (MPTG recordCount and folderCount, MPDJ rowCount and pathCount), and
   2.4.5's values that make a file absent (MPTG source, MPDJ scoreKind);
@@ -1013,8 +1013,12 @@ no more.
   section as 2.4.3 says (rows of at least 24 bytes, bytes = count ×
   stride, its CRC, the order); one that fails is ignored, and the root
   stays valid: ACKS only trims, so losing it only keeps more plays.
-  Firmware before the play log skips it as an optional section it
-  doesn't know (2.4.5).
+  So a reader takes ACKS outside its container's check of the sections
+  it knows (whose stride and length rules make the file absent: 2.4.3,
+  the directory): it finds ACKS by its type in the directory and checks
+  it on its own, so a bad ACKS never changes the root's verdict (the
+  `msmf-acks-*` hardening files, 2.17). Firmware before the play log
+  skips it as an optional section it doesn't know (2.4.5).
 - **The software** reads it to carry it forward, by the same checks, and
   writes it again from its marks (`state.json`, 2.12.7) when it fails.
 
@@ -1896,7 +1900,9 @@ section and 2.12.8 say.
   deletes or the device reads: not `manifest.*`, `pending.*`,
   `tags-*.bin` or `autodj-*.bin`; not ending in `.tmp` (step 4 deletes
   those); not inside `stage/` (step 4 empties it) or `thumbs/` (the
-  thumbnails': steps 4 and 13 delete in it). `resume/` is 2.12.8's.
+  thumbnails': steps 4 and 13 delete in it); not `stage`, `thumbs` or
+  `resume` themselves, the folders' names (a file there would stand in
+  the folder's way). `resume/` is 2.12.8's.
 - **The names this contract reserves:**
 
 | Name | What it holds |
@@ -2014,16 +2020,18 @@ in the current plan, which the next plan renumbers, and step 4 empties
   any folder with what it holds). These are local facts only: the server
   isn't read until step 5. The next write of `resume.json` drops the
   entries whose file is gone.
-- **At fetch time** (step 8) a partial goes on only when the server's
-  entry still names the same file: the same serverPath on the same
-  server (2.11's test), `file-size` equal to `size` and `modified` to
-  `modified`; otherwise it starts over. The software cuts it back to the
-  smaller of its size and `have`, then asks for the rest with
-  `Range: bytes=<that>-` and `If-Range: <etag>` (with no ETag, the HTTP
-  date of `modified`). A 206 continues it; a 200 means the server's file
-  changed, and the partial starts over from that response's first byte.
-  qfp and the MD5 (step 8) cover the whole file, the kept bytes read
-  back from the card.
+- **At fetch time** (step 8) a partial goes on only when its entry is
+  sound (`have` an integer from 0 to `size`, `etag` a string) and the
+  server's entry still names the same file: the same serverPath on the
+  same server (2.11's test), `file-size` equal to `size` and `modified`
+  to `modified`; otherwise it starts over (an unsound entry's file was
+  kept by step 4 all the same, which looks at names and sizes only). The
+  software cuts it back to the smaller of its size and `have`, then asks
+  for the rest with `Range: bytes=<that>-` and `If-Range: <etag>` (with
+  no ETag, the HTTP date of `modified`). A 206 continues it; a 200 means
+  the server's file changed, and the partial starts over from that
+  response's first byte. qfp and the MD5 (step 8) cover the whole file,
+  the kept bytes read back from the card.
 - **A finished partial** is checked as a stage file is (step 8.2),
   renamed straight into its `/music` path (the file it replaces deleted
   first) and read back (step 8.4); its entry goes at the next write of
@@ -2382,12 +2390,14 @@ on any difference. The folder's README says how to read them.
    fixture card (a cap of 4 slots a file, so the rotation shows: two
    epochs, an NVS erase, a trim by ACKS, a drop note); the device's
    writer MUST make `plays/golden/<snapshot>/`'s files of it byte for
-   byte. `plays/index.json` lists the reader's cases (a
-   torn slot, a cut append's tail, a newer major, an unknown kind, a
-   rotation's twins, a conflict, unusable slots, two devices, unknown
+   byte. `plays/index.json` lists the reader's cases (a torn slot, a cut
+   append's tail, a newer major, an unknown kind, a rotation's twins, a
+   conflict, one at the log's end, unusable slots, two devices, unknown
    enums, dating across an uptime wrap), each with the plays' ids and
-   the counts the software's reader MUST find.
-   `golden/manifest-acks.bin` is a root with ACKS (2.5.6), and the
+   the counts the software's reader MUST find. The cuts inside a
+   rotation and the twins they leave (2.20.2) are the model's, tested in
+   `tools/test_playlog.py`, for the device's host tests to follow (item
+   6). `golden/manifest-acks.bin` is a root with ACKS (2.5.6), and the
    `msmf-acks-*` hardening files roots that read whatever their ACKS
    holds.
 
@@ -2549,7 +2559,8 @@ software's):
   `resume/0000002a.part` and `notes.txt` are private names;
   `State.json`, `state.tmp`, `tags-backup.bin`, `manifest.json`,
   `pending.txt`, `stage/keep.bin`, `thumbs/state.json`,
-  `resume/notes.txt` and `resume/0000002A.part` are not.
+  `resume/notes.txt`, `resume/0000002A.part`, and a file named `stage`,
+  `thumbs` or `resume` are not.
 - The read: `state.json` at seq 3 and `state.new` at 4: the new one; the
   run deletes `state.json` and renames, and the next write's seq is 5.
   The two byte-equal: either is used, neither deleted, a disk check.
@@ -2567,7 +2578,8 @@ software's):
   10,485,760 (`Range: bytes=10485760-`, `If-Range` its ETag); with no
   ETag, `If-Range` is the HTTP date of `modified` (1790000000123 ms is
   `Mon, 21 Sep 2026 14:13:20 GMT`); a 200, a changed `file-size` or
-  `modified`: it starts over.
+  `modified`: it starts over. So does an entry whose `have` is −5, past
+  `size`, 10485760.0 or a string, or whose `etag` is a number.
 
 **The play log** (2.20, 2.5.6; `vectors.json`'s `plays`, over the
 goldens in `plays/` and `tags-0000002a.bin`):
@@ -2580,8 +2592,11 @@ goldens in `plays/` and `tags-0000002a.bin`):
   (`-0000000000000001-`); the longest, 46 characters, is
   `core2-fffffffffffe-ffffffffffffffff-4294967295`.
 - Outcome 0 or 4 reads as stopped; source 4 as not said (`other`).
-- The seq at boot over the golden at its first sync (seven plays of
-  EPOCH_1): NVS at 0 gives 8, NVS at 9 gives 10, a new epoch 1.
+- The seq and bootSeq at boot (`plays.atBoot`) over the golden at its
+  first sync (seven plays of EPOCH_1 in two boots): NVS at seq 0 and
+  boot count 0 gives seq 8 and bootSeq 3, NVS at 9 and 5 gives 10 and 6,
+  a new epoch 1 and 1. With seq 7's slot twice, different (a conflict a
+  reader drops), the next seq is still 8.
 - The first sync's seven plays through `tags-0000002a.bin`: five sent
   (the first dated from the second, 185,000 ms of uptime later; a
   converted file's play goes to its row's `Music/Loose Intro.flac`), one
@@ -2698,24 +2713,46 @@ says the firmware keeps one (2.15).
   together at most 1,048,480 bytes: the room the software keeps for the
   log when it fills a card. A device MAY use a smaller cap.
 - **Rotation**, when the next slot would pass the cap:
-  1. delete `plays.1.jnl`, counting its valid play slots that the root's
-     ACKS (2.5.6) doesn't acknowledge;
+  1. delete `plays.1.jnl` (or, while a twin shares its first cluster,
+     rename it to a twin name: below), counting its valid play slots
+     that the root's ACKS (2.5.6) doesn't acknowledge, and the `dropped`
+     of each drop note in it that no acknowledged play follows (a note
+     the software hasn't read: its count goes on);
   2. rename `plays.jnl` to `plays.1.jnl`;
   3. create `plays.jnl` and write a drop note first (2.20.3) when step 1
      counted any, then the play.
 
   A cut between steps 1 and 2 leaves `plays.jnl` alone, one between 2
-  and 3 `plays.1.jnl` alone: the next append goes on either way. A cut
-  inside step 2's rename (both names on one cluster chain: 2.12.1, "Cut
-  renames") is 2.12.6's case: the device compares the two files' first
-  clusters, and on equal ones renames `plays.jnl` to a twin name
-  (`plays.xl1`, then `plays.xl2`) that it never deletes while it shares
-  the chain, and starts a new `plays.jnl`. The twin's slots are
-  `plays.1.jnl`'s; the software doesn't read twin names.
-- **Trimming by ACKS.** The device MAY delete a log file when the root's
-  ACKS acknowledges every valid play slot in it (the file it appends to
-  included: the next play starts a new one). It MUST NOT delete a file
-  holding a play ACKS doesn't acknowledge, except by the rotation.
+  and 3 `plays.1.jnl` alone: the next append goes on either way (that
+  rotation's drop note is lost: 2.20.5).
+- **A cut inside step 2's rename** leaves both names on one cluster
+  chain (2.12.1, "Cut renames"), and deleting either would free clusters
+  the other still uses: 2.12.6's case, with `plays.jnl` as its tmp. So:
+  - at each mount, before its first append, the device compares the two
+    files' first clusters (`FIL.obj.sclust` after `f_open`); on equal
+    ones it renames `plays.jnl` to a **twin name**, the first of
+    `plays.xl1` to `plays.xl9` not on the card (a rename frees nothing),
+    and the next play starts a new `plays.jnl`. The twin's slots are
+    `plays.1.jnl`'s; the software doesn't read twin names;
+  - while a twin shares `plays.1.jnl`'s first cluster, nothing deletes
+    `plays.1.jnl`: the rotation's step 1 renames it to the next free twin
+    name instead (its plays counted as the step says), and a trim leaves
+    it;
+  - a twin is deleted, at a mount, once no other file of the log
+    (`plays.jnl`, `plays.1.jnl`, another twin) shares its first cluster,
+    never before (a disk check on a PC copies cross-linked chains apart);
+  - with all nine twin names taken, the device can't make the rename it
+    needs and writes no slot until a disk check frees one: those plays
+    are lost.
+- **Trimming by ACKS.** The device MAY delete a log file (the file it
+  appends to included: the next play starts a new one) when the root's
+  ACKS acknowledges every valid play slot in it, it holds at least one,
+  and a play slot comes after its last drop note (the software read each
+  note with a play after it). Except by the rotation, it MUST NOT delete
+  a file holding a play ACKS doesn't acknowledge, a drop note no play
+  follows, or a slot it can't judge (a newer major's, or a valid slot of
+  a kind it doesn't know: perhaps a later firmware's play). Neither the
+  trim nor the rotation deletes a file a twin shares (above).
 
 #### 2.20.3 The slot (80 bytes)
 
@@ -2734,7 +2771,7 @@ says the firmware keeps one (2.15).
 | 24 | 6 | deviceId | the device's id, 6 bytes (2.20.4) |
 | 30 | 2 | reserved | 0 |
 | 32 | 8 | startedAt | Unix ms (UTC) when the play began; 0 unknown, while the clock is unset |
-| 40 | 4 | bootSeq | the device's boots in this epoch, from 1 |
+| 40 | 4 | bootSeq | the device's boots in this epoch, from 1 (2.20.4) |
 | 44 | 4 | uptimeMs | ms since that boot when the play began, mod 2^32 |
 | 48 | 4 | playedMs | the audio played, pauses excluded; a drop note's: `dropped` |
 | 52 | 4 | durationMs | the track's length as the device knew it; 0 unknown |
@@ -2744,12 +2781,13 @@ says the firmware keeps one (2.15).
 | 72 | 4 | generation | the generation of the root that counted when the play began (2.5.4); 0 none |
 | 76 | 4 | crc | CRC-32 (2.3.2) of bytes [0, 76) |
 
-- **A drop note** (kind 2) says the rotation deleted `dropped` play
-  slots that ACKS didn't acknowledge: plays lost before any software read
-  them. It is written just before the play whose append caused the
-  rotation, with that play's clock, epoch, deviceId, startedAt, bootSeq
-  and uptimeMs; its outcome, source, seq, pauseCount and bytes 52-75 are
-  0.
+- **A drop note** (kind 2) says the rotation removed `dropped` play
+  slots that ACKS didn't acknowledge, the unread drop notes it removed
+  counted in (2.20.2, step 1; saturating at 2^32 − 1): plays lost before
+  any software read them. It is written just before the play whose
+  append caused the rotation, with that play's clock, epoch, deviceId,
+  startedAt, bootSeq and uptimeMs; its outcome, source, seq, pauseCount
+  and bytes 52-75 are 0.
 - **outcome:** 1 **completed**, played to its end; 2 **skipped**, the
   listener went to another track (next, previous, a pick) before its
   end; 3 **stopped**, playback ended any other way (stop, a power-off or
@@ -2779,8 +2817,17 @@ says the firmware keeps one (2.15).
   slot that uses it (it MAY reserve several at once; the unused ones are
   skipped, and a reader takes no gap for a loss). **At boot:** the next
   seq is max(NVS's seq, the highest seq of a valid play slot of this
-  deviceId and epoch in the mounted card's log) + 1. A seq that would
-  pass 2^32 − 1 takes a new epoch.
+  deviceId and epoch in the mounted card's log) + 1. Every valid slot
+  counts: twins, and both slots of a conflict, which a reader drops
+  (2.20.6, item 3), since that seq was used. A seq that would pass
+  2^32 − 1 takes a new epoch.
+- **bootSeq** counts the device's boots in one epoch, from 1; NVS keeps
+  the count, stored at boot before any slot uses it. **At boot:** this
+  boot's bootSeq is max(NVS's boot count, the highest bootSeq of a valid
+  slot, a play or a drop note, of this deviceId and epoch in the mounted
+  card's log) + 1. NVS behind the card for the seq is behind for the
+  boot count too, and two boots with one bootSeq would date a play from
+  another boot's (2.20.6, item 7).
 - **bootSeq and uptimeMs** place a play inside one boot: they date a
   play made before the clock was set (2.20.6).
 - **The play's id**, mStream's idempotency key, is `core2-`, deviceId as
@@ -2815,7 +2862,10 @@ says the firmware keeps one (2.15).
   written (on an SD card perhaps a little more, the card's own pages):
   the slots in them fail their CRC, and those plays are lost, never one
   credited wrongly. A hard power-off or a flat battery loses the open
-  play. Every other slot was synced.
+  play. Every other slot was synced. A cut between a rotation's steps
+  (2.20.2) also loses that rotation's drop note: step 1's count is held
+  in memory only, and the next rotation finds nothing left to count. The
+  plays it counted were going either way, and no slot written is lost.
 
 #### 2.20.6 Reading (the software)
 
@@ -2825,7 +2875,10 @@ says the firmware keeps one (2.15).
    major another is a newer firmware's: skipped and counted (the
    software needs an update). Any other invalid slot is damaged: skipped
    and counted, and reading goes on with the next one. A valid slot of
-   an unknown kind is skipped.
+   an unknown kind is skipped. A file longer than the cap (2.20.2) holds
+   bytes no device wrote: a reader MAY read only its first 524,240 bytes,
+   counting what it leaves as damaged slots, one for each 80 bytes or
+   part of them.
 2. **A play slot is used** when its epoch isn't 0, its seq is at least 1
    and its deviceId isn't all zeros.
 3. **Each play once.** Slots with one (deviceId, epoch, seq) that are
@@ -2838,8 +2891,9 @@ says the firmware keeps one (2.15).
    skew and its spellings come from the listing), before the run plans,
    and before a checkpoint deletes the tags file the plays map through
    (step 9): the software maps each new play and keeps the result in its
-   own store (the terminal's play outbox). A post that fails blocks nothing and loses
-   nothing. A look that only reads (a status) maps them the same way.
+   own store (the terminal's play outbox). A post that fails blocks
+   nothing and loses nothing. A look that only reads (a status) maps them
+   the same way.
 6. **Its file.** T of the root that counts (2.5.4) has the record whose
    path hash is the slot's pathHash (HIDX, 2.6.7; two records with that
    hash: none), with the slot's size, and a fatTime equal to the slot's or
@@ -2852,9 +2906,10 @@ says the firmware keeps one (2.15).
    in the server's manifest.
 7. **Its start.** A startedAt other than 0 is the play's start. A play
    with 0 takes it from the first play after it, by seq, of the same
-   deviceId, epoch and bootSeq that has one: that play's startedAt less
-   ((its uptimeMs − this one's uptimeMs) mod 2^32). With none, the start
-   is unknown.
+   deviceId, epoch and bootSeq that has one (2.20.4's boot rule keeps
+   two boots of an epoch apart): that play's startedAt less ((its
+   uptimeMs − this one's uptimeMs) mod 2^32). With none, the start is
+   unknown, and the play isn't sent (item 8).
 8. **Not sent, counted:** a play with no row (the listener's own file),
    one whose file isn't the row's (its size or time differ), one with no
    start (played before the clock was ever set). The software shows how

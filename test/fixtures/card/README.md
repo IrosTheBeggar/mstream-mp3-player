@@ -66,7 +66,10 @@ in order, the counts of what it skipped, and where given the plays'
 starts and what their enums read as. `golden/manifest-acks.bin` is a root
 with ACKS (2.5.6); the `msmf-acks-*` hardening files are roots that
 read, whatever their ACKS holds (`vectors.json`'s `plays.acks` says what
-a reader that uses ACKS takes from each).
+a reader that uses ACKS takes from each). So a reader takes ACKS outside
+its container's check of known sections, whose stride and length rules
+would make the root absent: it finds ACKS by its type in the directory
+and checks it on its own.
 
 The player's tests: `test/test_card_contract` (the vectors),
 `test/test_card_files` (the goldens, round trips, the hardening files,

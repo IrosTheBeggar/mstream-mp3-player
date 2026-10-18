@@ -11,10 +11,14 @@ MSMF's ACKS, 2.5.6).
 - The ids: core2-<12 hex>-<16 hex>-<decimal>, at most 46 characters.
 - The log: each play once whatever file holds it, twins counted, two
   slots with one key both dropped, the order by (deviceId, epoch, seq),
-  the files' order irrelevant.
-- The device's model: the seq at boot (NVS behind or ahead of the card),
-  a new epoch after an NVS erase, the rotation under the cap, its drop
-  note, the trim by ACKS.
+  the files' order irrelevant, a file read no further than the cap.
+- The device's model: the seq and the bootSeq at boot (NVS behind or
+  ahead of the card, every valid slot counting), a new epoch after an
+  NVS erase, the rotation under the cap, its drop note (an unread one's
+  count carried on), the trim by ACKS (never a note nobody read, nor a
+  slot it can't judge), a power cut between or inside the rotation's
+  steps and the twins it leaves, with no chain freed while a name uses
+  it.
 - The reader's rules: dating by the next dated play of a boot (the
   uptime wrapping), a play's file through the ledger (size, time, the
   skew), the posted mark held by a play still waiting.
@@ -147,12 +151,61 @@ class LogTests(unittest.TestCase):
         c = log["counts"]
         self.assertEqual((c["slots"], c["damaged"], c["unusable"], c["unknownKinds"], c["tail"]), (6, 1, 2, 1, 1))
 
+    def test_past_the_cap(self):
+        # 2.20.6, item 1: a file longer than the cap holds bytes no device
+        # wrote; they are counted as damaged slots, not read.
+        data = b"".join(pl.encode(play(i)) for i in range(1, pl.FILE_SLOTS + 3)) + b"\x00" * 5
+        log = pl.read_log({"plays.jnl": data})
+        self.assertEqual(len(log["plays"]), pl.FILE_SLOTS)
+        self.assertEqual(log["plays"][-1]["seq"], pl.FILE_SLOTS)
+        c = log["counts"]
+        self.assertEqual((c["slots"], c["damaged"], c["tail"]), (pl.FILE_SLOTS + 3, 3, 0))
+        self.assertEqual(pl.read_file(data)[-1][:3], (pl.FILE_SLOTS * pl.SLOT, "past", {"slots": 3}))
+        whole = pl.read_file(data, limit=None)
+        self.assertEqual([w[1] for w in whole[-3:]], ["ok", "ok", "short"])
+        self.assertEqual(pl.read_file(data[:pl.FILE_SLOTS * pl.SLOT])[-1][1], "ok", "at the cap: all read")
+
     def test_boot_seq(self):
         plays = pl.read_log({"plays.jnl": pl.encode(play(5)) + pl.encode(play(9, epoch=7))})["plays"]
         self.assertEqual(pl.boot_seq(0, plays, DEV, EPOCH), 6)
         self.assertEqual(pl.boot_seq(8, plays, DEV, EPOCH), 9)
         self.assertEqual(pl.boot_seq(0, plays, DEV, 7), 10)
         self.assertEqual(pl.boot_seq(2, plays, "00:00:5e:00:53:02", EPOCH), 3)
+
+    def test_the_boot_rules_take_every_valid_slot(self):
+        # 2.20.4: a conflict's seq was used, though a reader drops both slots.
+        files = {"plays.jnl": pl.encode(play(1)) + pl.encode(play(2, bootSeq=3)) +
+                 pl.encode(play(2, bootSeq=3, playedMs=7)) + bytes(80)}
+        plays = pl.read_log(files)["plays"]
+        self.assertEqual([p["seq"] for p in plays], [1])
+        self.assertEqual(pl.boot_seq(0, plays, DEV, EPOCH), 2, "the reader's plays alone would reuse seq 2")
+        slots = pl.valid_slots(files)
+        self.assertEqual(len(slots), 3)
+        self.assertEqual(pl.boot_seq(0, slots, DEV, EPOCH), 3)
+        # bootSeq: NVS's count, or the card's highest, + 1.
+        self.assertEqual(pl.boot_count(0, slots, DEV, EPOCH), 4)
+        self.assertEqual(pl.boot_count(9, slots, DEV, EPOCH), 10)
+        self.assertEqual(pl.boot_count(0, slots, DEV, 7), 1, "another epoch's boots don't count")
+        note = pl.encode({"kind": 2, "deviceId": DEV, "epoch": EPOCH, "dropped": 1, "bootSeq": 6})
+        self.assertEqual(pl.boot_count(0, pl.valid_slots({"plays.1.jnl": note}), DEV, EPOCH), 7, "a drop note's")
+        self.assertEqual(pl.boot_seq(0, pl.valid_slots({"plays.1.jnl": note}), DEV, EPOCH), 1, "a note has no seq")
+        self.assertEqual(pl.valid_slots({"plays.xl1": files["plays.jnl"]}), [], "a twin isn't the log")
+
+    def test_wall_is_card_fixtures_rule(self):
+        # playlog keeps its own copy of 2.3.4's W (it stands alone, as
+        # mpdj.py does): pinned to card_fixtures.fat_wall here.
+        stamps = [0, 0xFFFFFFFF, cf.fat_time(2023, 2, 29, 0, 0, 0), cf.fat_time(2026, 10, 7, 14, 30, 60),
+                  cf.fat_time(2026, 13, 1, 0, 0, 0), cf.fat_time(2026, 10, 0, 0, 0, 0),
+                  cf.fat_time(2026, 4, 31, 0, 0, 0), cf.fat_time(2026, 10, 7, 24, 0, 0),
+                  cf.fat_time(2026, 10, 7, 0, 60, 0)]
+        for y in (1980, 1999, 2000, 2024, 2100, 2107):
+            for mo in range(1, 13):
+                for d in (1, 28, 29, 30, 31):
+                    stamps += [cf.fat_time(y, mo, d, 0, 0, 0), cf.fat_time(y, mo, d, 23, 59, 58)]
+        stamps += list(range(0, 1 << 32, (1 << 20) + 12345))
+        self.assertTrue(any(pl.wall(t) is None for t in stamps) and any(pl.wall(t) for t in stamps))
+        for t in stamps:
+            self.assertEqual(pl.wall(t), cf.fat_wall(t), "0x%08X" % t)
 
     def test_dates(self):
         plays = pl.read_log({"plays.jnl": b"".join(pl.encode(p) for p in [
@@ -217,6 +270,155 @@ class DeviceTests(unittest.TestCase):
         # No clock: startedAt 0 whatever the caller says.
         d.clock = 0
         self.assertEqual(d.play(1, 1000, 0x5D4773D5, 42, 1000, 2000, 1, 1, 50, 1792100000000)["startedAt"], 0)
+
+    def test_nvs_behind_for_the_boot_count(self):
+        d = pl.Device(DEV, [EPOCH], cap=10)
+        d.boot()
+        d.play(1, 1000, 0x5D4773D5, 42, 1000, 2000, 1, 1, 10)
+        d.boot()
+        self.assertEqual(d.play(1, 1000, 0x5D4773D5, 42, 1000, 2000, 1, 1, 20)["bootSeq"], 2)
+        d.nvs.update(seq=0, boots=0)          # NVS behind the card (its writes lost)
+        d.boot()
+        s = d.play(1, 1000, 0x5D4773D5, 42, 1000, 2000, 1, 1, 30)
+        self.assertEqual((s["seq"], s["bootSeq"]), (3, 3), "not boot 1 again: its plays would date this one")
+
+
+def player(d):
+    """d's play(), the fields that don't matter fixed: (n, cut) -> slot."""
+    return lambda n, **kw: d.play(1, 1000, 0x5D4773D5, 42, 1000, 2000, 1, 1, 1000 * n, 1792100000000 + 1000 * n, **kw)
+
+
+def log_of(d):
+    """What the software reads of d's card: the log's names, no twins."""
+    return pl.read_log({n: b for n, b in d.files.items() if n in pl.NAMES})
+
+
+class CutTests(unittest.TestCase):
+    """2.20.2 and 2.20.5: a power cut inside the rotation. The model's
+    _delete asserts no chain is freed while another name uses it, so every
+    step below also checks 2.17's item 6."""
+
+    def test_a_cut_inside_the_rename_leaves_twins(self):
+        d = pl.Device(DEV, [EPOCH], cap=2)
+        d.boot(clock=1)
+        p = player(d)
+        p(1), p(2)
+        self.assertIsNone(p(3, cut="rename"), "the play whose append was cut is lost")
+        self.assertEqual(sorted(d.files), ["plays.1.jnl", "plays.jnl"])
+        self.assertEqual(d.chains["plays.jnl"], d.chains["plays.1.jnl"], "both names on one chain")
+        log = log_of(d)
+        self.assertEqual(([q["seq"] for q in log["plays"]], log["counts"]["twins"]), ([1, 2], 2))
+        with self.assertRaises(AssertionError):
+            p(4)                              # nothing before the next boot
+        # The mount: plays.jnl goes to a twin name, the slots stay plays.1.jnl's.
+        d.boot(clock=1)
+        self.assertEqual(sorted(d.files), ["plays.1.jnl", "plays.xl1"])
+        self.assertEqual(d.chains["plays.1.jnl"], d.chains["plays.xl1"])
+        # A trim leaves a file a twin shares, though ACKS covers it.
+        d.trim([(pl.device_bytes(DEV).hex(), EPOCH, 2)])
+        self.assertIn("plays.1.jnl", d.files)
+        self.assertEqual(p(4)["seq"], 4, "seq 3 was taken (NVS first) and its slot lost")
+        p(5)
+        # The next rotation renames plays.1.jnl to the next twin name: deleting it would free plays.xl1's chain.
+        p(6)
+        self.assertEqual(sorted(d.files), ["plays.1.jnl", "plays.jnl", "plays.xl1", "plays.xl2"])
+        log = log_of(d)
+        self.assertEqual([q["seq"] for q in log["plays"]], [4, 5, 6])
+        self.assertEqual(log["counts"]["dropped"], 2, "plays 1 and 2, in the twins only now")
+        # Twins stay while they share a chain; a disk check copies them apart, and the next mount deletes them.
+        d.boot(clock=1)
+        self.assertIn("plays.xl1", d.files)
+        d.disk_check()
+        d.boot(clock=1)
+        self.assertEqual(sorted(d.files), ["plays.1.jnl", "plays.jnl"])
+        self.assertEqual([o for o in d.ops if o[0] in ("cut", "lost", "twin") or o[2:] == ("twin",)],
+                         [("cut", "rename"), ("lost", 3), ("twin", "plays.jnl", "plays.xl1"),
+                          ("twin", "plays.1.jnl", "plays.xl2"), ("delete", "plays.xl1", "twin"),
+                          ("delete", "plays.xl2", "twin")])
+
+    def test_no_twin_name_free(self):
+        d = pl.Device(DEV, [EPOCH], cap=1)
+        d.boot(clock=1)
+        p = player(d)
+        p(1), p(2)
+        for t in pl.TWINS:                    # nine twins on plays.1.jnl's chain
+            d.files[t], d.chains[t] = d.files["plays.1.jnl"], d.chains["plays.1.jnl"]
+        self.assertIsNone(p(3), "plays.1.jnl can be neither deleted nor renamed")
+        self.assertIsNone(p(4))
+        d.boot(clock=1)
+        self.assertIsNone(p(5), "still none free")
+        self.assertEqual([q["seq"] for q in log_of(d)["plays"]], [1, 2])
+        d.disk_check()
+        d.boot(clock=1)
+        self.assertEqual(sorted(d.files), ["plays.1.jnl", "plays.jnl"])
+        p(6)
+        log = log_of(d)
+        self.assertEqual(([q["seq"] for q in log["plays"]], log["counts"]["dropped"]), ([2, 6], 1))
+        self.assertEqual([o[1] for o in d.ops if o[0] == "lost"], [3, 4, 5])
+
+    def test_a_cut_between_the_steps_loses_the_note(self):
+        # 2.20.5: step 1's count is in memory only; no slot written is lost.
+        for cut, left in (("delete", ["plays.jnl"]), ("renamed", ["plays.1.jnl"])):
+            d = pl.Device(DEV, [EPOCH], cap=2)
+            d.boot(clock=1)
+            p = player(d)
+            for n in range(1, 5):
+                p(n)
+            self.assertIsNone(p(5, cut=cut))
+            self.assertEqual(sorted(d.files), left, cut)
+            d.boot(clock=1)
+            p(6)
+            log = log_of(d)
+            self.assertEqual(([q["seq"] for q in log["plays"]], log["counts"]["dropped"]), ([3, 4, 6], 0), cut)
+
+
+class TrimTests(unittest.TestCase):
+    ACKS = [(pl.device_bytes(DEV).hex(), EPOCH, 9)]
+
+    @staticmethod
+    def note(n):
+        return pl.encode({"kind": 2, "deviceId": DEV, "epoch": EPOCH, "dropped": n, "bootSeq": 1})
+
+    def test_what_a_trim_may_delete(self):
+        one = pl.encode(play(1))
+        torn = bytearray(pl.encode(play(2)))
+        torn[40] ^= 1
+        newer = bytearray(pl.encode(play(2)))
+        newer[4] = 2
+        struct.pack_into("<I", newer, 76, cf.crc(bytes(newer[:76])))
+        cases = [(one, True, "every play acknowledged"),
+                 (self.note(3), False, "a drop note alone: nobody read it"),
+                 (self.note(3) + one, True, "the note read with the play after it"),
+                 (one + self.note(3), False, "no play after the note"),
+                 (self.note(3) + bytes(torn), False, "the play after the note is torn"),
+                 (one + bytes(80), True, "a damaged slot: no play anyone can read"),
+                 (one + bytes(newer), False, "a newer major's slot: it can't judge it"),
+                 (one + pl.encode(play(2, kind=9)), False, "a kind it doesn't know"),
+                 (one + pl.encode(play(10)), False, "a play past ACKS's seq"),
+                 (one + b"\x01\x02", True, "a cut append's tail"),
+                 (b"", False, "no play")]
+        for data, ok, why in cases:
+            self.assertEqual(pl.trimmable(data, self.ACKS), ok, why)
+            d = pl.Device(DEV, [EPOCH])
+            d.files["plays.1.jnl"] = data
+            d.trim(self.ACKS)
+            self.assertEqual("plays.1.jnl" not in d.files, ok, why)
+
+    def test_a_rotation_carries_an_unread_note_on(self):
+        dev = pl.device_bytes(DEV).hex()
+        n3, a, b = self.note(3), pl.encode(play(1)), pl.encode(play(2))
+        self.assertEqual(pl.unread(n3 + a + b, None), 5)
+        self.assertEqual(pl.unread(n3 + a + b, [(dev, EPOCH, 1)]), 1, "the note was read with play 1")
+        self.assertEqual(pl.unread(a + n3, [(dev, EPOCH, 1)]), 3, "no acknowledged play after the note")
+        self.assertEqual(pl.unread(self.note(pl.M32) + self.note(9), None), pl.M32, "saturating")
+        # Five plays lost over three rotations with no sync: the notes on the card say five.
+        d = pl.Device(DEV, [EPOCH], cap=2)
+        d.boot(clock=1)
+        p = player(d)
+        for n in range(1, 8):
+            p(n)
+        log = log_of(d)
+        self.assertEqual(([q["seq"] for q in log["plays"]], log["counts"]["dropped"]), ([6, 7], 5))
 
 
 class ResolveTests(unittest.TestCase):

@@ -20,7 +20,8 @@ test_playlog.py tests it. Standard library only.
 
 `Device` models the firmware's side: its NVS (epoch, seq, boot count),
 the files on the card, a play's slot appended at its end, the rotation
-under a cap, the trim by a root's ACKS. Its cap is a parameter (the
+under a cap, the trim by a root's ACKS, and a power cut inside the
+rotation with the twins a cut rename leaves. Its cap is a parameter (the
 contract's is 6,553 slots a file; the fixtures use 4 to show a rotation).
 """
 import argparse
@@ -42,6 +43,7 @@ CLOCKS = {0: "unset", 1: "rtc", 2: "host"}
 FILE_SLOTS = 6553                       # a file's cap: 524,240 bytes, under 512 KiB (2.20.2)
 LOG_BYTES = 1 << 20                     # the two files together, for the software's room on the card
 NAMES = ["plays.jnl", "plays.1.jnl"] + ["plays.%d.jnl" % n for n in range(2, 10)]  # what a reader reads
+TWINS = ["plays.xl%d" % n for n in range(1, 10)]  # a cut rename's twins (2.20.2): the device's; nobody reads them
 ID_PREFIX = "core2"
 M32, M64 = (1 << 32) - 1, (1 << 64) - 1
 
@@ -146,15 +148,28 @@ def key(p: dict):
 # ---------------------------------------------------------------------------
 # Reading (2.20.6)
 # ---------------------------------------------------------------------------
-def read_file(data: bytes):
+def read_file(data: bytes, limit=FILE_SLOTS * SLOT):
     """Every slot of one file: [(offset, why, slot, raw)], a tail shorter
-    than a slot as one "short" entry."""
+    than a slot as one "short" entry. The bytes past `limit`, the cap, are
+    no device's (2.20.6, item 1): one "past" entry, its slot {"slots": the
+    80-byte slots, or parts of one, they hold}, unread. None reads all."""
     out = []
-    for off in range(0, len(data), SLOT):
-        raw = bytes(data[off:off + SLOT])
+    end = len(data) if limit is None else min(len(data), limit)
+    for off in range(0, end, SLOT):
+        raw = bytes(data[off:min(off + SLOT, end)])
         why, slot = decode(raw)
         out.append((off, why, slot, raw))
+    if end < len(data):
+        out.append((end, "past", {"slots": -(-(len(data) - end) // SLOT)}, b""))
     return out
+
+
+def valid_slots(files):
+    """Every valid slot, play or drop note, of the log's files (2.20.2's
+    names) in {name: bytes}: twins and conflicting slots each counted,
+    since the boot rules (2.20.4) take them all."""
+    return [s for name in sorted(files) if name in NAMES for _, why, s, _ in read_file(files[name])
+            if why == "ok" and s["kind"] in (KIND_PLAY, KIND_DROP)]
 
 
 def usable(p: dict) -> bool:
@@ -174,6 +189,11 @@ def read_log(files: dict):
         for _, why, slot, raw in read_file(files[name]):
             if why == "short":
                 counts["tail"] += 1
+                continue
+            if why == "past":
+                # Past the cap: counted as damaged slots, not read (2.20.6, item 1).
+                counts["slots"] += slot["slots"]
+                counts["damaged"] += slot["slots"]
                 continue
             counts["slots"] += 1
             if why in ("magic", "crc"):
@@ -209,16 +229,30 @@ def read_log(files: dict):
     return {"plays": plays, "counts": counts}
 
 
-def last_seq(plays, device_id, epoch) -> int:
-    """The highest seq of one device and epoch among valid plays (0: none)."""
+def _mine(slots, device_id, epoch):
     d, e = device_bytes(device_id), u64(epoch)
-    return max((p["seq"] for p in plays if device_bytes(p["deviceId"]) == d and u64(p["epoch"]) == e), default=0)
+    return [s for s in slots if device_bytes(s["deviceId"]) == d and u64(s["epoch"]) == e]
 
 
-def boot_seq(nvs_seq: int, plays, device_id, epoch) -> int:
+def last_seq(slots, device_id, epoch) -> int:
+    """The highest seq of one device and epoch among valid play slots (0:
+    none). slots: valid_slots()'s, or read_log()'s plays."""
+    return max((s["seq"] for s in _mine(slots, device_id, epoch) if s.get("kind", KIND_PLAY) == KIND_PLAY),
+               default=0)
+
+
+def boot_seq(nvs_seq: int, slots, device_id, epoch) -> int:
     """2.20.4: the next seq at boot, max(NVS's, the card's last for this
-    device and epoch) + 1."""
-    return max(nvs_seq, last_seq(plays, device_id, epoch)) + 1
+    device and epoch) + 1, over every valid play slot (valid_slots(): a
+    conflicting pair's seq is used, though a reader drops both)."""
+    return max(nvs_seq, last_seq(slots, device_id, epoch)) + 1
+
+
+def boot_count(nvs_boots: int, slots, device_id, epoch) -> int:
+    """2.20.4: this boot's bootSeq, max(NVS's boot count, the highest
+    bootSeq of a valid slot of this device and epoch, a play's or a drop
+    note's) + 1: NVS behind the card for one is behind for the other."""
+    return max([nvs_boots] + [s["bootSeq"] for s in _mine(slots, device_id, epoch)]) + 1
 
 
 def dates(plays):
@@ -374,9 +408,44 @@ def acknowledged(slot, acks) -> bool:
 # ---------------------------------------------------------------------------
 # The device's side (2.20.2, 2.20.4, 2.20.5): a model of the writer
 # ---------------------------------------------------------------------------
+def unread(data: bytes, acks) -> int:
+    """What a rotation's step 1 counts in the file it removes (2.20.2): its
+    valid play slots ACKS doesn't acknowledge, and the `dropped` of each
+    drop note no acknowledged play follows in it (a note the software
+    hasn't read: its count goes on into the next note). Saturating."""
+    lost = pending = 0
+    for _, why, s, _ in read_file(data):
+        if why != "ok":
+            continue
+        if s["kind"] == KIND_DROP:
+            pending += s["dropped"]
+        elif s["kind"] == KIND_PLAY:
+            if acknowledged(s, acks):
+                pending = 0
+            else:
+                lost += 1
+    return min(lost + pending, M32)
+
+
+def trimmable(data: bytes, acks) -> bool:
+    """2.20.2's trim, for one file's bytes: ACKS acknowledges every valid
+    play slot, there is at least one, and a play comes after the last drop
+    note (the software read each note with a play after it); no slot the
+    device can't judge (a newer major's, a kind it doesn't know)."""
+    entries = [(why, s) for _, why, s, _ in read_file(data)]
+    if any(why in ("newer", "kind", "past") for why, _ in entries):
+        return False
+    valid = [s for why, s in entries if why == "ok"]
+    plays = [s for s in valid if s["kind"] == KIND_PLAY]
+    return bool(plays) and valid[-1]["kind"] == KIND_PLAY and all(acknowledged(s, acks) for s in plays)
+
+
 class Device:
     """The firmware's play log, step by step, with the card's files in
-    `files` ({name: bytes}). NVS holds epoch, seq and the boot count; the
+    `files` ({name: bytes}, the log's and its twins') and each one's first
+    cluster in `chains`: a cut inside a rename leaves two names on one
+    chain, and the model asserts no delete ever frees a chain another name
+    uses (2.17, item 6). NVS holds epoch, seq and the boot count; the
     epochs a fresh NVS makes come from `epochs` in order (the fixtures give
     them: the firmware draws them from its RNG)."""
 
@@ -385,26 +454,92 @@ class Device:
         self.epochs = list(epochs)
         self.cap = cap
         self.files = {}
+        self.chains = {}            # {name: first cluster}; a file a test puts in `files` gets its own
+        self.chain = 0
         self.nvs = None             # {"epoch", "seq", "boots"}; None: erased
-        self.boot_n = 0
         self.clock = 0
+        self.down = False           # a power cut: nothing more until the next boot
+        self.blocked = False        # no twin name free: no slot is written until a disk check frees one
         self.ops = []
 
     def plays_on_card(self):
-        return read_log(self.files)["plays"]
+        return read_log({n: b for n, b in self.files.items() if n in NAMES})["plays"]
 
     def erase_nvs(self):
         """The firmware's NVS recovery, or a flasher's erase."""
         self.nvs = None
 
+    def disk_check(self):
+        """A PC's disk check: cross-linked chains copied apart."""
+        for name in sorted(self.files):
+            self.chain += 1
+            self.chains[name] = self.chain
+
+    # The file system, as far as the cut-rename rule needs it.
+    def _first(self, name):
+        if name not in self.chains:
+            self.chain += 1
+            self.chains[name] = self.chain
+        return self.chains[name]
+
+    def _shared(self, name):
+        c = self._first(name)
+        return any(n != name and self._first(n) == c for n in self.files)
+
+    def _create(self, name, data):
+        self.chain += 1
+        self.files[name], self.chains[name] = data, self.chain
+
+    def _delete(self, name, why):
+        assert not self._shared(name), "a delete would free a chain %s shares" % name
+        del self.files[name]
+        self.chains.pop(name, None)
+        self.ops.append(("delete", name, why))
+
+    def _rename(self, a, b):
+        self._first(a)
+        self.files[b], self.chains[b] = self.files.pop(a), self.chains.pop(a)
+
+    def _to_twin(self, name):
+        """name renamed to the first free twin name (a rename frees
+        nothing); False, and blocked, with none free."""
+        t = next((t for t in TWINS if t not in self.files), None)
+        if t is None:
+            self.blocked = True
+            self.ops.append(("blocked", name))
+            return False
+        self._rename(name, t)
+        self.ops.append(("twin", name, t))
+        return True
+
+    def _cut(self, where):
+        self.down = True
+        self.ops.append(("cut", where))
+        return False
+
+    def settle(self):
+        """2.20.2 at a mount: plays.jnl and plays.1.jnl on one chain (a cut
+        inside the rotation's rename) sends plays.jnl to a twin name, so the
+        next play starts a new one; a twin no other name shares goes."""
+        if "plays.jnl" in self.files and "plays.1.jnl" in self.files and \
+                self._first("plays.jnl") == self._first("plays.1.jnl"):
+            self._to_twin("plays.jnl")
+        for t in TWINS:
+            if t in self.files and not self._shared(t):
+                self._delete(t, "twin")
+
     def boot(self, clock=0, acks=None):
         """A boot with this card: NVS (a new epoch when it has none), the
-        boot count, the seq rule; the trim by the root's ACKS."""
+        settling of a cut rename, the boot rules (2.20.4); the trim by the
+        root's ACKS."""
+        self.down = self.blocked = False
         if self.nvs is None:
             self.nvs = {"epoch": self.epochs.pop(0), "seq": 0, "boots": 0}
             self.ops.append(("epoch", "%016x" % self.nvs["epoch"]))
-        self.nvs["boots"] += 1
-        self.nvs["seq"] = boot_seq(self.nvs["seq"], self.plays_on_card(), self.device_id, self.nvs["epoch"]) - 1
+        self.settle()
+        slots = valid_slots(self.files)
+        self.nvs["boots"] = boot_count(self.nvs["boots"], slots, self.device_id, self.nvs["epoch"])
+        self.nvs["seq"] = boot_seq(self.nvs["seq"], slots, self.device_id, self.nvs["epoch"]) - 1
         self.clock = clock
         if acks:
             self.trim(acks)
@@ -414,41 +549,59 @@ class Device:
         self.clock = 2
 
     def trim(self, acks):
-        """2.20.2: a file every valid play slot of which ACKS acknowledges
-        may go (the device here deletes every such file)."""
-        for name in sorted(self.files):
-            slots = [s for _, why, s, _ in read_file(self.files[name]) if why == "ok" and s["kind"] == KIND_PLAY]
-            if all(acknowledged(s, acks) for s in slots):
-                del self.files[name]
-                self.ops.append(("delete", name, "acknowledged"))
+        """2.20.2: a log file trimmable() says may go, and no twin shares
+        (the device here deletes every such file)."""
+        for name in sorted(n for n in self.files if n in NAMES):
+            if trimmable(self.files[name], acks) and not self._shared(name):
+                self._delete(name, "acknowledged")
 
-    def append(self, raw, acks=None):
+    def append(self, raw, acks=None, cut=None):
+        """One slot at plays.jnl's end, after the rotation when it would
+        pass the cap. cut: where a power cut stops the rotation ("delete":
+        after step 1; "rename": inside step 2's rename, its new entry
+        written and its old one not yet removed; "renamed": after step 2).
+        False when the slot isn't written."""
         cur = self.files.get("plays.jnl", b"")
         if len(cur) // SLOT + 1 > self.cap:
-            # The rotation: plays.1.jnl goes (its unacknowledged plays
-            # counted), plays.jnl becomes plays.1.jnl, a new plays.jnl
-            # starts, with a drop note first when plays were lost.
+            # The rotation: plays.1.jnl goes (what it holds unread counted),
+            # plays.jnl becomes plays.1.jnl, a new plays.jnl starts, with a
+            # drop note first when plays were lost.
             lost = 0
             if "plays.1.jnl" in self.files:
-                lost = sum(1 for _, why, s, _ in read_file(self.files["plays.1.jnl"])
-                           if why == "ok" and s["kind"] == KIND_PLAY and not acknowledged(s, acks))
-                del self.files["plays.1.jnl"]
-                self.ops.append(("delete", "plays.1.jnl", "rotation"))
-            self.files["plays.1.jnl"] = self.files.pop("plays.jnl")
+                lost = unread(self.files["plays.1.jnl"], acks)
+                if not self._shared("plays.1.jnl"):
+                    self._delete("plays.1.jnl", "rotation")
+                elif not self._to_twin("plays.1.jnl"):
+                    return False
+            if cut == "delete":
+                return self._cut(cut)
+            if cut == "rename":
+                self.files["plays.1.jnl"], self.chains["plays.1.jnl"] = cur, self._first("plays.jnl")
+                return self._cut(cut)
+            self._rename("plays.jnl", "plays.1.jnl")
             self.ops.append(("rename", "plays.jnl", "plays.1.jnl"))
-            cur = b""
+            if cut == "renamed":
+                return self._cut(cut)
+            note = b""
             if lost:
-                cur = encode({"kind": KIND_DROP, "deviceId": self.device_id, "epoch": self.nvs["epoch"],
-                              "clock": self.clock, "startedAt": self._now, "bootSeq": self.nvs["boots"],
-                              "uptimeMs": self._up, "dropped": lost})
+                note = encode({"kind": KIND_DROP, "deviceId": self.device_id, "epoch": self.nvs["epoch"],
+                               "clock": self.clock, "startedAt": self._now, "bootSeq": self.nvs["boots"],
+                               "uptimeMs": self._up, "dropped": lost})
                 self.ops.append(("note", lost))
-        self.files["plays.jnl"] = cur + raw
+            self._create("plays.jnl", note + raw)
+        elif "plays.jnl" in self.files:
+            self.files["plays.jnl"] = cur + raw
+        else:
+            self._create("plays.jnl", raw)
+        return True
 
     def play(self, path_hash, size, fat_time, generation, played_ms, duration_ms, outcome, source, uptime_ms,
-             started_at=0, pause_count=0, acks=None):
+             started_at=0, pause_count=0, acks=None, cut=None):
         """One play, written at its end: the seq taken (NVS first), the slot
         appended. started_at: the wall time it began, 0 while the clock is
-        unset."""
+        unset. cut: append()'s. The slot, or None when it is lost (a cut,
+        or no twin name free)."""
+        assert not self.down, "a power cut: the device boots first"
         if self.clock == 0:
             started_at = 0
         self.nvs["seq"] += 1
@@ -458,7 +611,9 @@ class Device:
                 "deviceId": self.device_id, "startedAt": started_at, "bootSeq": self.nvs["boots"],
                 "uptimeMs": uptime_ms & M32, "playedMs": played_ms, "durationMs": duration_ms,
                 "pathHash": path_hash, "size": size, "fatTime": fat_time, "generation": generation}
-        self.append(encode(slot), acks)
+        if self.blocked or not self.append(encode(slot), acks, cut):
+            self.ops.append(("lost", self.nvs["seq"]))
+            return None
         self.ops.append(("play", self.nvs["seq"]))
         return slot
 
