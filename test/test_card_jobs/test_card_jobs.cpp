@@ -466,6 +466,8 @@ void test_the_boots_decision() {
 // ---------------------------------------------------------------------------
 // The root as the boot reads it (2.5.4): the election, T's frame and header
 // against COMP, LIBR, the plan; anything that fails is "no transfer data".
+// The root that won names the card (its id and generation: @status cid=,
+// docs/HOST-STATUS.md) also when its T then fails.
 // ---------------------------------------------------------------------------
 void test_the_root() {
   CutFs fs;
@@ -482,6 +484,9 @@ void test_the_root() {
     TEST_ASSERT_FALSE(r->present);
     TEST_ASSERT_TRUE(r->why == cc::Why::Missing);
     TEST_ASSERT_FALSE(r->plan);
+    TEST_ASSERT_FALSE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT64(0, r->cardId);
+    TEST_ASSERT_EQUAL_UINT32(0, r->generation);
     char line[160];
     cardroot::describe(*r, line, sizeof(line));
     TEST_ASSERT_EQUAL_STRING("no transfer data (none on the card)", line);
@@ -498,6 +503,9 @@ void test_the_root() {
     TEST_ASSERT_EQUAL_UINT64(kCardId, r->identity.cardId);
     TEST_ASSERT_EQUAL_UINT32(5, r->identity.generation);
     TEST_ASSERT_EQUAL_UINT64(0xABC, r->identity.commitId);
+    TEST_ASSERT_TRUE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT64(kCardId, r->cardId);
+    TEST_ASSERT_EQUAL_UINT32(5, r->generation);
     cc::MemSource src(t5.data(), static_cast<uint32_t>(t5.size()));
     cc::Container c;
     mptg::Info info;
@@ -513,13 +521,18 @@ void test_the_root() {
     cardroot::describe(*r, line, sizeof(line));
     TEST_ASSERT_TRUE(std::strstr(line, "tags-00000005.bin") != nullptr);
   }
-  // A newer manifest.tmp wins the election; its T isn't on the card: absent.
+  // A newer manifest.tmp wins the election; its T isn't on the card: absent,
+  // and the card is still named by that root.
   const std::vector<uint8_t> t6 = transferOf(card, 6);
   fs.put("/.mstream/manifest.tmp", manifestFor(t6, 6, 0xDEF).bytes);
   {
     auto r = read();
     TEST_ASSERT_FALSE(r->present);
     TEST_ASSERT_TRUE(r->why == cc::Why::Missing);
+    TEST_ASSERT_FALSE(r->identity.present);
+    TEST_ASSERT_TRUE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT64(kCardId, r->cardId);
+    TEST_ASSERT_EQUAL_UINT32(6, r->generation);
   }
   fs.put(tagsName(6), t6);
   {
@@ -531,7 +544,12 @@ void test_the_root() {
   // T replaced by another file of the same name (another generation inside,
   // or a header that isn't the entry's): not the root's.
   fs.put(tagsName(6), transferOf(card, 7));
-  TEST_ASSERT_TRUE(read()->why == cc::Why::Comp);
+  {
+    auto r = read();
+    TEST_ASSERT_TRUE(r->why == cc::Why::Comp);
+    TEST_ASSERT_TRUE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT32(6, r->generation);
+  }
   std::vector<uint8_t> broken = t6;
   broken[20] ^= 1;  // the header's CRC fails
   fs.put(tagsName(6), broken);
@@ -539,6 +557,8 @@ void test_the_root() {
     auto r = read();
     TEST_ASSERT_FALSE(r->present);
     TEST_ASSERT_TRUE(r->why != cc::Why::Ok);
+    TEST_ASSERT_TRUE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT32(6, r->generation);
   }
   // The .tmp damaged: the .bin's commit counts again.
   std::vector<uint8_t> m6 = fs.bytes("/.mstream/manifest.tmp");
@@ -548,10 +568,25 @@ void test_the_root() {
     auto r = read();
     TEST_ASSERT_TRUE(r->present);
     TEST_ASSERT_EQUAL_UINT32(5, r->identity.generation);
+    TEST_ASSERT_TRUE(r->hasRoot);
+    TEST_ASSERT_EQUAL_UINT32(5, r->generation);
   }
   // A plan on the card: the last transfer didn't finish.
   fs.put("/.mstream/pending.bin", std::vector<uint8_t>{1, 2, 3});
   TEST_ASSERT_TRUE(read()->plan);
+  // Both roots damaged: no root, nothing names the card; a Root read again
+  // (a remount's) forgets the one it held.
+  auto kept = read();
+  TEST_ASSERT_TRUE(kept->hasRoot);
+  std::vector<uint8_t> m5 = fs.bytes("/.mstream/manifest.bin");
+  m5[m5.size() - 1] ^= 0xFF;
+  fs.put("/.mstream/manifest.bin", m5);
+  cardroot::read(fs, scratch.data(), static_cast<uint32_t>(scratch.size()), kept.get());
+  TEST_ASSERT_FALSE(kept->present);
+  TEST_ASSERT_TRUE(kept->why != cc::Why::Ok && kept->why != cc::Why::Missing);
+  TEST_ASSERT_FALSE(kept->hasRoot);
+  TEST_ASSERT_EQUAL_UINT64(0, kept->cardId);
+  TEST_ASSERT_EQUAL_UINT32(0, kept->generation);
 }
 
 // ---------------------------------------------------------------------------

@@ -1841,7 +1841,8 @@ static bool hostModeOn();  // (the visualizer's session: below)
 // What @status says, from what the firmware holds (the free space is
 // app/HostQuery's: storage/CardSpace). No card I/O, no lock: the card's
 // size is the CSD's kept since the mount (About's), the battery the UI's
-// reading (every 10 s), the library the index's count.
+// reading (every 10 s), the library the index's count, the card's id and
+// generation the root the boot read.
 static void hostFacts(hoststatus::Facts& f) {
   using hoststatus::Card;
   f.fw = version::appDesc();
@@ -1879,6 +1880,16 @@ static void hostFacts(hoststatus::Facts& f) {
   // the pairing: BtSink::shownName()); none with nothing paired.
   BtSink& bt = audio.bluetooth();
   f.bt = bt.link().remembered ? bt.shownName() : nullptr;
+  // cid=: the root the boot read (Library::root(): setup() reads it before
+  // the loop answers anything, and nothing writes it again), while a FAT
+  // card is mounted. Another card put in is a restart (the card's guard);
+  // the same card put back keeps the boot's root, as the library does.
+  const cardroot::Root* root = library.root();
+  if ((f.card == Card::Fat32 || f.card == Card::Fat16) && root && root->hasRoot) {
+    f.cidKnown = true;
+    f.cardId = root->cardId;
+    f.generation = root->generation;
+  }
 }
 
 // Why @count can't start, or go on, now: music (a play waiting for the

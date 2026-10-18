@@ -38,6 +38,13 @@ namespace cardroot {
 constexpr uint32_t kMaxRoots = 16;
 
 struct Root {
+  // The root that won the election (2.5.4), checked whole: the card's id
+  // and that commit's generation (2.5.2). Kept also when T then fails (the
+  // root still names the card: @status cid=, docs/HOST-STATUS.md). False:
+  // no root, or none valid.
+  bool hasRoot = false;
+  uint64_t cardId = 0;
+  uint32_t generation = 0;
   // T: the root's tags file, checked as above.
   bool present = false;
   tagstore::Identity identity;  // present: the commit (cardId, generation, commitId, T's headerCrc)

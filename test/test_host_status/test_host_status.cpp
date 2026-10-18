@@ -3,8 +3,9 @@
 
 // Host tests for HostStatus (docs/HOST-STATUS.md): the @status line (its
 // fields in their order, each case of each, the percent-encoding, the
-// 255-byte cap and how bt= gives way to it), @identify's label, the FSINFO
-// rule, and when @count's progress lines go out.
+// 255-byte cap, the budget and how bt= and the keys after state= give way
+// to it), @identify's label, the FSINFO rule, and when @count's progress
+// lines go out.
 // Run: pio test -e native -f test_host_status
 #include <unity.h>
 
@@ -27,11 +28,12 @@ std::string line(const Facts& f) {
   return buf;
 }
 
-// A board playing from a 64 GB FAT32 card whose FSINFO count is valid,
-// paired with "Paul's headphones".
+// A board playing from a 64 GB FAT32 card whose FSINFO count is valid and
+// whose root is generation 42 (the fixtures' card id), paired with "Alex's
+// headphones".
 Facts playing64() {
   Facts f;
-  f.fw = "v0.9.0";
+  f.fw = "v0.12.0";
   f.elf = "63ee7a2b";
   f.card = Card::Fat32;
   f.sizeBytes = 63864569856ull;  // 124,735,488 sectors
@@ -41,9 +43,16 @@ Facts playing64() {
   f.trackCount = 1284;
   f.battery = 87;
   f.state = State::Playing;
-  f.bt = "Paul's headphones";
+  f.cidKnown = true;
+  f.cardId = 0x5EEDC0DE0A1B2C3Dull;
+  f.generation = 42;
+  f.bt = "Alex's headphones";
   return f;
 }
+
+// " clock=unset": the room the budget keeps for a later release's key
+// (docs/HOST-STATUS.md, "The budget"), which goes in after cid=.
+constexpr size_t kReserved = 12;
 
 // The value of `key` in a line ("" when absent).
 std::string field(const std::string& l, const char* key) {
@@ -79,8 +88,8 @@ void tearDown() {}
 // The line for the board above, exactly: the fields in their order.
 void test_status_line_exact() {
   TEST_ASSERT_EQUAL_STRING(
-      "@status fw=v0.9.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 "
-      "state=playing bt=Paul%27s%20headphones",
+      "@status fw=v0.12.0 elf=63ee7a2b card=fat32 size=63864569856 free=38214565888 tracks=1284 music=? bat=87 "
+      "state=playing cid=5eedc0de0a1b2c3d.0000002a bt=Alex%27s%20headphones",
       line(playing64()).c_str());
 }
 
@@ -90,7 +99,8 @@ void test_status_unknowns() {
   f.fw = "v0.9.0-3-gabc1234-dirty";
   f.elf = "0123abcd";
   TEST_ASSERT_EQUAL_STRING(
-      "@status fw=v0.9.0-3-gabc1234-dirty elf=0123abcd card=none size=- free=? tracks=- music=? bat=- state=idle bt=-",
+      "@status fw=v0.9.0-3-gabc1234-dirty elf=0123abcd card=none size=- free=? tracks=- music=? bat=- state=idle "
+      "cid=- bt=-",
       line(f).c_str());
   f = playing64();
   f.freeKnown = false;  // FSINFO's count unknown: '?', never 0 or the size
@@ -113,6 +123,19 @@ void test_status_unknowns() {
   TEST_ASSERT_EQUAL_STRING("0", field(line(f), "bat").c_str());
   f.bt = "";
   TEST_ASSERT_EQUAL_STRING("-", field(line(f), "bt").c_str());
+  // cid=: 16 and 8 hex digits, lower case, their leading zeros kept; '-'
+  // with no root.
+  f.cardId = 1;
+  f.generation = 1;
+  TEST_ASSERT_EQUAL_STRING("0000000000000001.00000001", field(line(f), "cid").c_str());
+  f.cardId = 0xFFFFFFFFFFFFFFFFull;
+  f.generation = 0xFFFFFFFFu;
+  TEST_ASSERT_EQUAL_STRING("ffffffffffffffff.ffffffff", field(line(f), "cid").c_str());
+  f.cardId = 0x00ABCDEF01234567ull;
+  f.generation = 0x0000BEEFu;
+  TEST_ASSERT_EQUAL_STRING("00abcdef01234567.0000beef", field(line(f), "cid").c_str());
+  f.cidKnown = false;
+  TEST_ASSERT_EQUAL_STRING("-", field(line(f), "cid").c_str());
   // The states and the cards, each by its name.
   const State states[] = {State::Idle, State::Paused, State::Playing, State::Host};
   const char* stateNames[] = {"idle", "paused", "playing", "host"};
@@ -141,7 +164,7 @@ void test_status_is_a_host_line() {
   f.fw = "v1 2\t3";  // (can't happen: a space or a control byte would break the line)
   f.bt = "My @ headphones = 100% \xC3\xA9t\xC3\xA9 \xF0\x9F\x8E\xA7";
   const std::string l = line(f);
-  const char* keys[] = {"fw", "elf", "card", "size", "free", "tracks", "music", "bat", "state", "bt"};
+  const char* keys[] = {"fw", "elf", "card", "size", "free", "tracks", "music", "bat", "state", "cid", "bt"};
   size_t at = 0;
   for (const char* k : keys) {
     const size_t p = l.find(std::string(" ") + k + "=", at);
@@ -157,7 +180,7 @@ void test_status_is_a_host_line() {
   TEST_ASSERT_EQUAL_UINT32(1, std::count(l.begin(), l.end(), '@'));
   // The headphones' name comes back from a URL decoder byte for byte.
   TEST_ASSERT_EQUAL_STRING(f.bt, decode(field(l, "bt")).c_str());
-  // And the console reads it as one host line, its verb and ten fields.
+  // And the console reads it as one host line, its verb and eleven fields.
   char buf[kMaxLine + 1];
   std::snprintf(buf, sizeof(buf), "%s", l.c_str());
   HostFields hf;
@@ -172,8 +195,8 @@ void test_status_is_a_host_line() {
 void test_percent_encode() {
   char out[64];
   size_t taken = 0;
-  TEST_ASSERT_EQUAL_size_t(21, percentEncode("Paul's headphones", 17, out, 63, &taken));
-  TEST_ASSERT_EQUAL_STRING("Paul%27s%20headphones", out);
+  TEST_ASSERT_EQUAL_size_t(21, percentEncode("Alex's headphones", 17, out, 63, &taken));
+  TEST_ASSERT_EQUAL_STRING("Alex%27s%20headphones", out);
   TEST_ASSERT_EQUAL_size_t(17, taken);
   percentEncode("A-Z_a.z~09", 10, out, 63);
   TEST_ASSERT_EQUAL_STRING("A-Z_a.z~09", out);
@@ -216,7 +239,12 @@ void test_status_cap_and_bt() {
   char msg[64];
   std::snprintf(msg, sizeof(msg), "the fields before bt's value: %u bytes", static_cast<unsigned>(before));
   TEST_MESSAGE(msg);
-  TEST_ASSERT_TRUE(before <= 219);
+  TEST_ASSERT_EQUAL_size_t(219, before);
+  TEST_ASSERT_EQUAL_size_t(kMaxLine - kBtRoom, before);         // bt= keeps its 36 ...
+  TEST_ASSERT_TRUE(widest.find(" cid=") == std::string::npos);  // ... and cid= gave way to it
+  f.cidKnown = false;
+  TEST_ASSERT_TRUE(line(f).find(" cid=") == std::string::npos);  // cid=- too (6 bytes would leave bt= 30)
+  f.cidKnown = true;
   TEST_ASSERT_EQUAL_size_t(48, field(widest, "fw").size());
   TEST_ASSERT_EQUAL_size_t(16, field(widest, "elf").size());
   // A name that fits exactly: whole, no "…".
@@ -253,7 +281,80 @@ void test_status_cap_and_bt() {
   // The output buffer's size cuts too (a caller's short buffer).
   char small[16];
   TEST_ASSERT_EQUAL_size_t(15, format(playing64(), small, sizeof(small)));
-  TEST_ASSERT_EQUAL_STRING("@status fw=v0.9", small);
+  TEST_ASSERT_EQUAL_STRING("@status fw=v0.1", small);
+}
+
+// The budget with the fields' real widths (docs/HOST-STATUS.md, "The
+// budget"): the widest line a board can send keeps cid= and the room kept
+// for a later key, and still leaves bt= more than its 36 bytes; that line
+// at the cap; and the edge where cid= gives way.
+void test_status_budget() {
+  Facts f = playing64();
+  f.fw = "v0.12.0-rc.1-123-gabcdef1-dirty";  // 31: all the app description's version holds
+  f.elf = "63ee7a2b";                        // always 8
+  f.card = Card::Unreadable;                 // the longest name
+  // SDXC's most, 2 TiB (the CSD's sector count x 512; FatFs's LBA is 32
+  // bits): 13 digits. free= and music= are never more than the size.
+  f.sizeBytes = f.freeBytes = 2199023255552ull;
+  f.musicKnown = true;
+  f.musicBytes = 2199023255552ull;
+  f.trackCount = 4294967295u;  // a u32
+  f.battery = 100;
+  f.state = State::Playing;
+  f.cardId = 0xFFFFFFFFFFFFFFFFull;
+  f.generation = 0xFFFFFFFFu;
+  f.bt = "";
+  const std::string widest = line(f);
+  TEST_ASSERT_EQUAL_size_t(31, field(widest, "fw").size());
+  TEST_ASSERT_EQUAL_size_t(13, field(widest, "size").size());
+  TEST_ASSERT_EQUAL_STRING("ffffffffffffffff.ffffffff", field(widest, "cid").c_str());
+  const size_t before = widest.size() - 1;  // without bt's '-'
+  TEST_ASSERT_EQUAL_size_t(203, before);    // 169 to state='s value, 30 for cid=, 4 for " bt="
+  TEST_ASSERT_EQUAL_size_t(52, kMaxLine - before);
+  TEST_ASSERT_TRUE(kMaxLine - before >= kBtRoom + kReserved);  // 40 once the reserved key is in
+  // The words the other cases put in a number's place are never longer.
+  Facts g = f;
+  g.counting = true;
+  g.tracks = Tracks::Building;
+  TEST_ASSERT_TRUE(line(g).size() <= widest.size());
+  // At the cap: a name that fills the line exactly is whole, cid= kept.
+  std::string name(kMaxLine - before, 'x');
+  f.bt = name.c_str();
+  std::string l = line(f);
+  TEST_ASSERT_EQUAL_size_t(kMaxLine, l.size());
+  TEST_ASSERT_EQUAL_STRING(name.c_str(), field(l, "bt").c_str());
+  TEST_ASSERT_EQUAL_STRING("ffffffffffffffff.ffffffff", field(l, "cid").c_str());
+  // One byte more: bt= is cut ("…" at its end), never cid=.
+  name += "y";
+  f.bt = name.c_str();
+  l = line(f);
+  TEST_ASSERT_TRUE(l.size() <= kMaxLine && l.size() >= kMaxLine - 2);
+  std::string v = field(l, "bt");
+  TEST_ASSERT_EQUAL_STRING(kEllipsis, v.substr(v.size() - std::strlen(kEllipsis)).c_str());
+  TEST_ASSERT_EQUAL_STRING("ffffffffffffffff.ffffffff", field(l, "cid").c_str());
+  // The give-way rule's edge, past the real widths (fw= up to its cap of
+  // 48 bytes): cid= stays while bt= keeps its 36, and is left out whole
+  // (never cut) one byte later; bt= then has the room.
+  const std::string fw47(47, 'v');
+  f.fw = fw47.c_str();
+  f.bt = "";
+  l = line(f);
+  TEST_ASSERT_EQUAL_STRING("ffffffffffffffff.ffffffff", field(l, "cid").c_str());
+  TEST_ASSERT_EQUAL_size_t(kMaxLine - kBtRoom, l.size() - 1);  // 185 + 30 + 4: bt= keeps 36 exactly
+  const std::string fw48(48, 'v');
+  f.fw = fw48.c_str();
+  l = line(f);
+  TEST_ASSERT_TRUE(l.find(" cid=") == std::string::npos);
+  TEST_ASSERT_EQUAL_size_t(190, l.size() - 1);  // 186 + 4: bt= keeps 65
+  std::string full(kMaxLine, 'z');
+  f.bt = full.c_str();
+  l = line(f);
+  TEST_ASSERT_TRUE(l.size() <= kMaxLine);
+  TEST_ASSERT_TRUE(field(l, "bt").size() > kBtRoom);
+  // With no root: cid=- (6 bytes), by the same rule.
+  f.cidKnown = false;
+  f.bt = "";
+  TEST_ASSERT_EQUAL_STRING("-", field(line(f), "cid").c_str());  // 186 + 6 + 4: bt= keeps 59
 }
 
 // ---- @identify's label ----
@@ -327,6 +428,7 @@ int main(int, char**) {
   RUN_TEST(test_status_is_a_host_line);
   RUN_TEST(test_percent_encode);
   RUN_TEST(test_status_cap_and_bt);
+  RUN_TEST(test_status_budget);
   RUN_TEST(test_identify_label);
   RUN_TEST(test_fsinfo_rule);
   RUN_TEST(test_count_progress);

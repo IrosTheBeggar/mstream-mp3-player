@@ -1321,7 +1321,8 @@ same USB serial port and the same `@` lines as the visualizer, without a
 reset and without a session, about the board ([HOST-STATUS.md](HOST-STATUS.md)):
 `@status` (one line at once, from what the firmware holds: the version,
 the card's kind, size and free space, the library's tracks, the battery,
-the player's state, the paired headphones), `@count` (the card's free
+the player's state, the card's id and commit from the root the boot read,
+the paired headphones), `@count` (the card's free
 clusters counted once, on request: Storage, "The free space") and
 `@identify <label>` (a full-screen "This one" banner for 5 s and a buzz,
 to tell two boards apart). `HostLink` routes them (in a session or not,
