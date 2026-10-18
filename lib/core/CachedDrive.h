@@ -112,6 +112,11 @@ public:
   // (`sectors`: its size, the SD driver's). Invalid when a read fails, or
   // without a scratch.
   Identity readIdentity(uint32_t sectors);
+  // The same rule over any card (`sector`: 512 bytes of the caller's):
+  // what the format in the player holds a card to across its restart
+  // (lib/core CardMkfs, docs/HOST-STATUS.md "@format"). Each sector read
+  // twice at most.
+  static Identity identityOf(SectorCache::Device& card, uint32_t sectors, uint8_t* sector);
   // At the mount (the firmware's install(), before any other task reads
   // the card): this card's identity is the one remounts are held to. The
   // guard is armed from here on, even when the identity can't be read

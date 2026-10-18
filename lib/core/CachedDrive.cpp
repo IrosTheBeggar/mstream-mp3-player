@@ -121,20 +121,20 @@ void CachedDrive::trim(uint32_t first, uint32_t last) {
   ++stats_.trims;
 }
 
-CachedDrive::Identity CachedDrive::readIdentity(uint32_t sectors) {
+CachedDrive::Identity CachedDrive::readIdentity(uint32_t sectors) { return identityOf(counted_, sectors, check_); }
+
+CachedDrive::Identity CachedDrive::identityOf(SectorCache::Device& card, uint32_t sectors, uint8_t* sector) {
   Identity id;
   id.sectors = sectors;
   // Each sector read twice at most: an unreadable identity counts as
   // another card (a restart), so one failed read shouldn't make one.
-  auto readSector = [this](uint32_t lba) {
-    return counted_.read(lba, check_, 1) || counted_.read(lba, check_, 1);
-  };
-  if (!check_ || !readSector(0)) return id;
-  id.sector0Crc = crc32(check_, SectorCache::kSectorBytes);
-  id.bootLba = firstPartition(check_, sectors);
+  auto readSector = [&card, sector](uint32_t lba) { return card.read(lba, sector, 1) || card.read(lba, sector, 1); };
+  if (!sector || !readSector(0)) return id;
+  id.sector0Crc = crc32(sector, SectorCache::kSectorBytes);
+  id.bootLba = firstPartition(sector, sectors);
   if (id.bootLba) {
     if (!readSector(id.bootLba)) return id;
-    id.bootCrc = crc32(check_, SectorCache::kSectorBytes);
+    id.bootCrc = crc32(sector, SectorCache::kSectorBytes);
   }
   id.valid = true;
   return id;
