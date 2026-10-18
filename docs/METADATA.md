@@ -319,7 +319,11 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
 │   ├─ pending.bin              MSPD: an unfinished run's plan (only while one is; written through pending.tmp)
 │   ├─ stage/<8 hex>.tmp        files being downloaded
 │   ├─ thumbs/<h>/<8 HEX>.565   MPTH v1: album thumbnails
-│   └─ (any other name)         the software's private files; the device ignores them
+│   ├─ state.json               the software's private state: the card's settings (2.12.7)
+│   ├─ resume.json              the partial downloads kept for a later run (2.12.8)
+│   ├─ resume/<8 hex>.part      those partials
+│   ├─ run.lock                 a run is writing the card (informational; 2.12.7)
+│   └─ (any other name)         the software's private files (2.12.7); the device ignores them
 └─ .player/                     OWNED BY THE DEVICE
     ├─ device.txt               what this firmware reads (the software reads it)
     ├─ tags.bin                 MPTG, source 1: the device's records
@@ -332,8 +336,10 @@ built without exFAT and without GPT (`lib/core/CardFormat`). The tree:
 - File names in `/.mstream/` are lowercase. FAT matches names
   case-insensitively, but writers MUST use these spellings.
 - The software MAY keep private files in `/.mstream/` under names this
-  contract doesn't define (for example the selection and its settings as
-  `state.json`; part 7, T3). The device never reads them.
+  contract doesn't define as its own files: its settings and state in
+  `state.json`, and the other names of 2.12.7 (part 7, T3). Their names,
+  how they are written and when they are read are 2.12.7's. The device
+  never reads them.
 - The device's library walk starts at `/music`. It never sees `/.mstream`
   or `/.player`, and it skips every name under `/music` that starts with
   a dot (`src/storage/LocalStorage.cpp`, `walk()`).
@@ -717,7 +723,10 @@ generation) and noted it in `/.player`.
   a major it doesn't know (for MPDJ it knows 1, the retired v1 draft, and
   2). It checks the magic and the major alone, before any CRC, so a newer
   writer's half-finished commit stops it too; it reports the card
-  read-only and asks for an update.
+  read-only and asks for an update. The check comes before its first
+  write of any kind, `run.lock` and the private files included, and a
+  private file of 2.12.7 whose `version` it doesn't know stops it the
+  same way.
 - **Minor.** Readers accept any minor.
   - New fields go only at the **end** of a record (a larger stride) or of
     the header (a larger headerBytes).
@@ -729,7 +738,7 @@ generation) and noted it in `/.player`.
     server.** An older writer that carries a file forward drops what it
     doesn't know, and the next newer run derives it again. A fact that
     can't be re-derived (a listener's answer, say) needs a new major, or
-    the software's private state.
+    the software's private state (`state.json`, 2.12.7).
 - **New sections** are skipped by readers that don't know them, unless
   flagged REQUIRED.
 - **New flag bits** are ignored by older readers. Writers set only bits
@@ -792,8 +801,9 @@ reads the root with one small read at every boot.
   URL or a token.
 - The same server reached through two URLs (the LAN and a tunnel, say)
   has two keys. The listener's "same server" answer (2.11) is kept in the
-  software's private state, as a list of keys known to be this card's
-  server (one list for each of the card's servers: 2.5.5).
+  software's private state (`state.json`, 2.12.7), as a list of keys known
+  to be this card's server (one list for each of the card's servers:
+  2.5.5).
 - **The root's server is server 0 of the ledger.** Each ledger row names
   the server its file came from (ORIG's `server`, 2.6.6): 0 is the one
   these header fields describe, and the card's other servers are listed
@@ -804,8 +814,8 @@ reads the root with one small read at every boot.
   carries serverInstance, serverUrlKey and serverRevision forward from
   the root before, unchanged: written from the server it did read, they
   would make every row of server 0 that server's. Another server's
-  revision (2.10.2) is the software's private state; a peer has no sync
-  manifest.
+  revision (2.10.2) is the software's private state (2.12.7); a peer has
+  no sync manifest.
 
 #### 2.5.2 Generation, commit id, card id
 
@@ -934,12 +944,13 @@ gives a removed peer's id to another peer (the table's ids are
 `AUTOINCREMENT`, `src/db/schema.js`): a peer paired again gets a new id,
 and the old one's rows test unknown. But a parent whose database was
 made anew numbers its peers from 1 again, so an old id can name another
-peer. So the software keeps, in its private state, the `endpointId` that
-the listing gives each peer of the card (the peer's iroh identity, a
-public key), and reads a peer listed under the same id with another
-endpointId as not that peer: unknown (proposed). Once mStream gives a
-server's instance (part 4, A6; for a peer, in an answer a federation key
-may read, such as its `/api/`), the instance decides first (2.11).
+peer. So the software keeps, in its private state (2.12.7), the
+`endpointId` that the listing gives each peer of the card (the peer's
+iroh identity, a public key), and reads a peer listed under the same id
+with another endpointId as not that peer: unknown (proposed). Once
+mStream gives a server's instance (part 4, A6; for a peer, in an answer
+a federation key may read, such as its `/api/`), the instance decides
+first (2.11).
 
 **What a row's server decides,** for that row alone: the server listing
 it pairs with (2.10.2), the same-server guard (2.11), and where anything
@@ -1623,15 +1634,17 @@ rules handle.
 2. **Settle the plan.** The cut run's plan is `pending.bin`, or a valid
    `pending.tmp` when `pending.bin` is missing (2.12.5); a `pending.tmp`
    that wins is renamed into place. It is read now, before step 4 deletes
-   any `*.tmp`.
+   any `*.tmp`. So are the private files (2.12.7), each settled by its
+   recovery rule: `resume.json` says which partials step 4 keeps.
 3. **Look for cut renames** (below). If one may have happened, the run
    stops before it deletes or writes anything, and asks the listener to
    run the OS's disk check (`chkdsk /f` on Windows, `fsck.vfat` on Linux,
    First Aid on macOS) and then to start it again.
 4. **Clean up.** Delete everything in `stage/`, every `*.tmp` in
-   `/.mstream` and its `thumbs/` folders, and every companion the root
-   doesn't name. If there was a plan, the last run was cut short: recover
-   (2.12.3).
+   `/.mstream` and its `thumbs/` folders, every companion the root
+   doesn't name, and every file in `resume/` that `resume.json` doesn't
+   keep (2.12.8). The private files stay (2.12.7). If there was a plan,
+   the last run was cut short: recover (2.12.3).
 5. **List** the card; read the server's selection; plan (2.10.2).
 6. **Write `pending.bin`** (MSPD, 2.12.5) through `pending.tmp` and a
    rename: the paths this run will delete, the folders it will create,
@@ -1642,7 +1655,8 @@ rules handle.
 8. **Copy each file:**
    1. download into `stage/<n>.tmp` (an 8.3 name; n is the op's index in
       the current PEND, in hex), computing qfp, and the MD5 when the
-      server's hash is a full digest;
+      server's hash is a full digest; a download a later run may continue
+      goes to `resume/` instead (2.12.8);
    2. check the MD5 against `hash` when HASH_SAMPLED is clear and the file
       isn't converted (VERIFIED);
    3. close it and rename it into its `/music` path, creating the plan's
@@ -1669,7 +1683,8 @@ rules handle.
 12. **The final commit** is step 9's write and rename with FINAL set; then
     delete `pending.bin`.
 13. **Collect:** delete the companions the root doesn't name, thumbnails
-    whose folder no longer has THUMB, and empty OWNED folders.
+    whose folder no longer has THUMB, empty OWNED folders, and the
+    partials no plan wants (2.12.8).
 
 **Renames over an existing file:** Rust's `fs::rename` may or may not
 replace atomically on a FAT driver (Windows `MoveFileExW` with
@@ -1690,9 +1705,11 @@ and time still match. So step 3 looks for the pairs a cut rename leaves:
 
 - a plan's write op n whose `stage/<n>.tmp` and whose target both exist,
   with the same size and the same qfp;
+- a file in `resume/` and a plan's write target that both exist with the
+  same size and the same qfp (a finished partial's rename: 2.12.8);
 - `manifest.tmp` and `manifest.bin` that are one commit (step 1);
-- `pending.tmp` and `pending.bin`, or a thumbnail's `.tmp` and `.565`,
-  that are byte-equal.
+- `pending.tmp` and `pending.bin`, a thumbnail's `.tmp` and `.565`, or a
+  private file's `.new` and `.json` (2.12.7), that are byte-equal.
 
 A legitimate pair can look the same (a replacement with identical bytes);
 it costs one unneeded disk check. A disk check copies cross-linked chains
@@ -1714,7 +1731,13 @@ handle what is left. The device's own renames follow 2.12.6.
 | `pending.bin`'s replacement | `pending.tmp` only | says the last transfer didn't finish | reads the tmp as the plan (step 2) |
 | a thumbnail's write | a partial `.tmp` | ignored (wrong name; the header is checked too) | deletes it |
 | a thumbnail's replacement, after the old `.565` went | THUMB set, no `.565` | its own cover order (2.14.3) | rewrites it (step 10's check) |
+| a resumable download | a partial `resume/<x>.part` | never sees it | keeps it when `resume.json` lists it and it isn't too long, else deletes it (step 4; 2.12.8) |
+| a finished partial's rename into `/music`, between its two directory writes | the partial and the target on one cluster chain | reads the target: identity mismatch, scans it | stops for a disk check (step 3) |
+| a private file's write (`state.new`) | a torn or whole `.new` beside the old file | never sees either | the valid one with the higher `seq` (2.12.7) |
+| between deleting `state.json` and the rename | `state.new` only | never sees it | renames it (2.12.7) |
+| that rename, between its two directory writes | both names, one chain | never sees them | stops for a disk check (step 3) |
 | the collection | leftovers | ignored | collects again |
+| any step, while `run.lock` is held | `run.lock`, with no live lock behind it | never sees it | takes it over and says so (2.12.7) |
 
 **FAT itself:** an interrupted directory or FAT update can leave lost
 clusters, and rarely a cross-linked chain. The software SHOULD ask for
@@ -1743,9 +1766,13 @@ each folder the run was to create.
 The device's sync task writes `/.mstream` with source 3, following
 2.12.1-2.12.3 exactly: the same cardId, the next generation, ORIG rows
 from the API, records read from the bytes it wrote, every row's `server`
-and the root's SRVS carried forward (2.5.5). The terminal and the device
-can then take turns on one card. The device MUST NOT write `/.mstream`
-in any other role.
+and the root's SRVS carried forward (2.5.5). It follows the private
+files' rules too (2.12.7, 2.12.8): it reads and settles them before its
+clean-up, keeps the members of `state.json` it doesn't know, writes them
+through `.new`, keeps the partials `resume.json` lists, and takes
+`run.lock` (without the PC's OS lock: the card is in one place at a
+time). The terminal and the device can then take turns on one card. The
+device MUST NOT write `/.mstream` in any other role.
 
 #### 2.12.5 `pending.bin` (MSPD)
 
@@ -1795,6 +1822,165 @@ in any other role.
   verdict: the tmp is kept as it is, and nothing removes it until a
   check runs (the next boot's). For `tags.tmp`, then the only D, the
   compaction is refused meanwhile (the r3 review, 3.3.2).
+
+#### 2.12.7 The software's private files
+
+What the software keeps about a card that no contract file carries and
+nothing can derive again (the listener's answers, the card's settings, an
+unfinished run's state) lives in private files in `/.mstream`. The device
+opens only the names 2.2 gives it (`lib/core/CardRoot`), so these change
+nothing on the device; their content is the software's, except where this
+section and 2.12.8 say.
+
+**Names.**
+
+- A private file's name is lowercase (2.2) and MUST NOT be one a run
+  deletes or the device reads: not `manifest.*`, `pending.*`,
+  `tags-*.bin` or `autodj-*.bin`; not ending in `.tmp` (step 4 deletes
+  those); not inside `stage/` (step 4 empties it) or `thumbs/` (the
+  thumbnails': steps 4 and 13 delete in it). `resume/` is 2.12.8's.
+- **The names this contract reserves:**
+
+| Name | What it holds |
+|---|---|
+| `state.json`, written through `state.new` | the card's settings and the software's private state: the card's label and the volume serial it was set up on; its selection (each source's libraries) and settings (layout, conversion, covers, AutoDJ); for a card of a multi-card set, the set and this card's place in it (the set's whole table, on each of its cards); for each of the card's servers, the keys the listener called that server (2.5.1), its manifest's revision when it isn't server 0 (2.10.2), a peer's endpointId (2.5.5); whether albums' art changed (2.12.1, step 10); the plays already sent from the card's play log, per device. Its members are the software's, versioned by its `version` |
+| `resume.json`, written through `resume.new` | the partial downloads kept for a later run; its members are 2.12.8's |
+| `resume/<8 hex>.part` | those partials (2.12.8) |
+| `run.lock` | informational: a run is writing the card (below) |
+
+  Any other private name is the software's to choose, under the rules
+  above; a file that must survive a cut follows the write rule below.
+
+**Their form.** `state.json` and `resume.json` are UTF-8 JSON text with
+no byte-order mark: one object, with at least
+
+- `format`: `"mstream-card-state"` or `"mstream-card-resume"`;
+- `version`: the major of its members' schema, an integer from 1;
+- `seq`: an integer from 1 (at most 2^53 − 1), one more at each write.
+
+A file is **valid** when it decodes and parses whole as such an object
+with its own `format`. Integers that may pass 2^53 (keys, ids) are hex
+strings inside them, as in the fixtures (`"0xED901EA3EE763AC7"`). A
+writer keeps every member it doesn't know, unchanged, at the top level
+and in each object it rewrites: a newer software's. A file whose
+`version` the software doesn't know stops it as an unknown major does
+(2.4.5): it reads none of it and writes nothing to the card.
+
+**The write**, for `X` = `state` or `resume`:
+
+1. write `X.new` whole (deleting a leftover one first), its `seq` one
+   more than the file it replaces;
+2. flush it to the card (fsync) and close it;
+3. delete `X.json`;
+4. rename `X.new` to `X.json`.
+
+**The read**, with the recovery, at step 2 of every run (2.12.1), before
+the clean-up:
+
+- only `X.json`: it, when valid;
+- only `X.new` (a cut between 3 and 4): it, when valid, and the rename is
+  finished;
+- both, **byte-equal**: one write seen twice (the rename cut between its
+  two directory writes: 2.12.1, "Cut renames"); either is used, neither
+  deleted, and step 3 stops for a disk check;
+- both, different: the valid one with the higher `seq` (equal: `X.json`).
+  When `X.new` wins, steps 3 and 4 are finished; when it loses (cut
+  before step 3, or torn), it is deleted;
+- neither valid: no private state; the settings are asked again (or
+  taken from the software's own cache: the terminal's `cards.json`,
+  proposed). An invalid file stays until the next write replaces it.
+
+The deletes and the rename are writes, so only a run makes them; a look
+that only reads (a status) takes the same winner and changes nothing.
+
+**`run.lock`.**
+
+- A run creates it before its first other write (after 2.4.5's check),
+  writes into it which run it is (JSON: `format` `"mstream-card-run"`,
+  `runId` as a hex string, `started` in Unix seconds, `producer` as
+  MSMF's; never a host or user name), flushes it, and keeps it open for
+  the whole run with an OS advisory lock on the handle (`LockFileEx` on
+  Windows, `flock` on Linux and macOS). Another process on the same PC
+  that can't take the lock leaves the card alone, and a pulled card shows
+  up as a failed operation on the open handle.
+- The run closes and deletes it once it has nothing more to write: after
+  step 13 (and the checks it makes after it), or when it stops early
+  (parked, stopped at a save, refused).
+- **Its content is never trusted.** FAT has no lock across PCs. A run
+  that finds `run.lock` with no live lock behind it (a crash, a
+  force-quit, a pulled card, another PC) takes it over and says so;
+  steps 1-4 bring the card back from whatever that run left. It is
+  written in place, not through `.new`: a torn one is one with no lock
+  behind it.
+
+**Privacy (proposed).** No private file holds a URL, a token, a user
+name, a host name or an IP address: servers are named by their keys and
+instances (2.5.1, 2.5.5), with a display name the listener can edit,
+written only when it doesn't look like an address. Library names are
+kept as text. A PC that doesn't know the server can then say whose card
+it is, but can't find the server (part 7, T3).
+
+#### 2.12.8 Resumable downloads: `/.mstream/resume/`
+
+A download that a later run may continue (a federation peer's file under
+the peer's daily quota, say, whose run is parked until the next day) is
+written to `resume/<8 hex>.part` from its first byte, instead of
+`stage/<n>.tmp` (2.12.1, step 8). A stage file is named by its op's index
+in the current plan, which the next plan renumbers, and step 4 empties
+`stage/`; a partial has a name of its own, kept across runs.
+
+- **The name:** 8 lowercase hex digits the software chooses, unique in
+  `resume/` (a counter, say), then `.part`.
+- **Nothing moves between `stage/` and `resume/`**, either way. A
+  conversion is never resumed (mStream's `/transcode` has no Range): it
+  goes to `stage/`.
+- **`resume.json`** (2.12.7's form and write rule; `format`
+  `"mstream-card-resume"`, `version` 1) lists the partials to keep in
+  `parts`, an array of objects:
+
+| Member | What |
+|---|---|
+| `name` | the file's name in `resume/` (`0000002a.part`) |
+| `server` | the server its bytes come from, by the fields of an SRVS entry (2.5.5): `serverInstance` (UUID text, `""` unknown), `serverUrlKey` and `parentKey` (hex strings, `"0x0"` none), `peerId` (0 none). Not by its index, which a commit may renumber |
+| `serverPath` | mStream's `filepath` on that server |
+| `size` | the size the file will have: the manifest's (or the listing's) `file-size` |
+| `etag` | the ETag the server gave for those bytes (`""` none) |
+| `modified` | mStream's `modified` for the file, epoch ms |
+| `have` | how many leading bytes of the partial were flushed to the card before this `resume.json` was written |
+
+  A partial is listed only once its first `have` bytes are flushed, and
+  its bytes after `have` are never trusted.
+- **Step 4 keeps** a file in `resume/` exactly when the `resume.json`
+  settled at step 2 lists its name and its size is at most the entry's
+  `size`. Every other file there goes (an unlisted one, a longer one,
+  any folder with what it holds). These are local facts only: the server
+  isn't read until step 5. The next write of `resume.json` drops the
+  entries whose file is gone.
+- **At fetch time** (step 8) a partial goes on only when the server's
+  entry still names the same file: the same serverPath on the same
+  server (2.11's test), `file-size` equal to `size` and `modified` to
+  `modified`; otherwise it starts over. The software cuts it back to the
+  smaller of its size and `have`, then asks for the rest with
+  `Range: bytes=<that>-` and `If-Range: <etag>` (with no ETag, the HTTP
+  date of `modified`). A 206 continues it; a 200 means the server's file
+  changed, and the partial starts over from that response's first byte.
+  qfp and the MD5 (step 8) cover the whole file, the kept bytes read
+  back from the card.
+- **A finished partial** is checked as a stage file is (step 8.2),
+  renamed straight into its `/music` path (the file it replaces deleted
+  first) and read back (step 8.4); its entry goes at the next write of
+  `resume.json`. Step 3 looks for the pair a cut in that rename leaves:
+  a file in `resume/` and a plan's write target with the same size and
+  qfp (only the write ops whose expectedSize is the partial's size need
+  a look).
+- **Parking.** A run that stops for a quota keeps the file's partial
+  listed, writes a checkpoint (step 9) and keeps `pending.bin`, so the
+  next run takes up the plan and the partial.
+- **Collect** (step 13): a partial no plan wants any more (its file
+  written, gone from the selection, or changed on the server) is deleted
+  and its entry dropped.
+- **The device never reads `resume/`.** A partial's bytes take the card's
+  free space while they wait.
 
 ### 2.13 AutoDJ: `autodj-<gen>.bin` (MPDJ v2)
 
@@ -1969,6 +2155,15 @@ looking where `LibraryIndex::albumCover()` looks: the album folder
    and `zs-` copies). That is mStream's choice: embedded art first by
    default (`albumArtPriority: 'metadata'`), or an online lookup.
 3. **Else** no thumbnail.
+
+**A federation peer's albums** (a row whose server is a peer: 2.5.5)
+are the one deviation (proposed): the software MAY fetch item 2's image
+as the `compress=l` copy (mStream's `zl-`, at most 256 px, plenty for a
+96 × 96 thumbnail) through the parent's art proxy, to spare the peer's
+daily quota, which counts every byte the peer serves. Item 1's probes
+cost quota too: through the parent's stream proxy a `HEAD` may fetch the
+whole file (ESTIMATED), so there the software probes with `GET` and
+`Range: bytes=0-0`, or skips item 1.
 
 #### 2.14.3 The device's cover order for an album
 
@@ -2269,6 +2464,33 @@ goldens `tags-00000007.bin` and `manifest-servers.bin`):
   server index has the name (`Both/One.mp3`), though its mStream id is
   the higher (2.8.3, step 6).
 
+**Private files** (2.12.7, 2.12.8; `vectors.json`'s `privateFiles`, the
+software's):
+
+- `state.json`, `state.new`, `resume.json`, `resume.new`, `run.lock`,
+  `resume/0000002a.part` and `notes.txt` are private names;
+  `State.json`, `state.tmp`, `tags-backup.bin`, `manifest.json`,
+  `pending.txt`, `stage/keep.bin`, `thumbs/state.json`,
+  `resume/notes.txt` and `resume/0000002A.part` are not.
+- The read: `state.json` at seq 3 and `state.new` at 4: the new one; the
+  run deletes `state.json` and renames, and the next write's seq is 5.
+  The two byte-equal: either is used, neither deleted, a disk check.
+  Equal seqs, other bytes: `state.json`. A torn file loses to a valid
+  one; neither valid: no private state. A version 2: the software
+  stops. A byte-order mark, a seq that is a string, 0, or 3.0, a member
+  named twice, `NaN`, another `format`: invalid.
+- Step 4 over a listing deletes the companion the root doesn't name, a
+  `manifest.tmp`, `stage/`'s files, a thumbnail's `.tmp`, and in
+  `resume/` the files `resume.json` doesn't list, those longer than
+  listed, and a folder's; it keeps `pending.bin`, the `.565` files, the
+  private files and the listed partials. With no `resume.json`, or a
+  torn one, every partial goes; a name listed twice keeps nothing.
+- A partial of 12,000,000 bytes whose `have` is 10,485,760 goes on from
+  10,485,760 (`Range: bytes=10485760-`, `If-Range` its ETag); with no
+  ETag, `If-Range` is the HTTP date of `modified` (1790000000123 ms is
+  `Mon, 21 Sep 2026 14:13:20 GMT`); a 200, a changed `file-size` or
+  `modified`: it starts over.
+
 **HASH_SAMPLED** (2.6.6): 26,214,399 bytes with hash-v 2 is a full MD5
 (a download can be VERIFIED); 26,214,400 bytes with hash-v 2 is sampled;
 30 MB with hash-v 1 is a full MD5.
@@ -2322,6 +2544,7 @@ goes on the card as `x.opus`, its bytes unchanged, convertedTo 0.
 | `tags-<g>.bin` | about 6.9 MB: RECS 1.44 MB, STRS about 2.4 MB (names about 31 B and runs about 87 B per track), HIDX 0.24 MB, ORIG 1.6 MB, OSTR about 1.2 MB. The device reads FOLD, RECS and STRS: about 3.9 MB, 2.3-3.3 s at 1.2-1.7 MB/s, during a build only |
 | `autodj-<g>.bin`, MPDJ v2 at k = 169 | about 10.6 MB (DJSL 10.24 MB; DJRF, DJPH and STRS 0.36 MB, the join's); one 512-byte slot read per pick (AUTODJ-INDEX.md 10.2) |
 | `/.mstream/thumbs` | about 39 MB for 1,800 albums |
+| `/.mstream/state.json`, `resume.json`, `run.lock` | a few KB; `resume/` holds the partials a parked run keeps, while they wait (2.12.8) |
 | `/.player/tags.bin` | about 2.3 MB when the software covers every file (status rows, names); about 4.1 MB when the device scanned everything (HIDX, 0.24 MB, included) |
 
 All of it is small next to the music (about 700 MB per 100 tracks).
@@ -6001,7 +6224,18 @@ The user answered U8, U11, U12, U13 and U14 on 2026-10-07 (marked
   so any PC with the terminal can continue), in the terminal's config, or
   later on the server so mStream's web panel can show it? The same
   question holds for the list of server keys the listener has called
-  this card's server (2.5.1).
+  this card's server (2.5.1). **Proposed (2026-10-18, with the transfer's
+  plan):** on the card, in `state.json`, with the terminal's own
+  `cards.json` as a cache (a card id to its label, set and last
+  revision). 2.12.7 now sets the private files' rules: the names the
+  contract reserves (`state.json`, `resume.json` and `resume/`,
+  `run.lock`), the names a private file must avoid, the write through
+  `.new` and its recovery by `seq`, their reading before step 4's
+  clean-up, a version that stops an older software, and the same rules
+  for the device's future sync (2.12.4); 2.12.8 keeps partial downloads
+  across runs. The card names its servers by keys and an editable
+  display name, never by a URL: a PC that doesn't know the server can
+  say whose card it is, but can't find the server by itself.
 - **T4. The read-back:** will the software read names and FAT times back
   from the card with the per-OS recipes (2.3.4, 2.8.5: NFC on macOS, a
   `utf8` mount on Linux), compute path hashes from the names read back,

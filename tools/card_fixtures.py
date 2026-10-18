@@ -27,8 +27,11 @@ The fixtures are made-up libraries (no real names) and synthetic
 embeddings, under CC0 (test/fixtures/card/README.md; part 7, U18).
 """
 import argparse
+import email.utils
+import fnmatch
 import hashlib
 import json
+import re
 import struct
 import sys
 import zlib
@@ -674,6 +677,175 @@ def device_txt(desc):
 
 
 # ---------------------------------------------------------------------------
+# The software's private files (2.12.7) and the resumable partials (2.12.8)
+# ---------------------------------------------------------------------------
+STATE_FORMAT, RESUME_FORMAT, RUN_FORMAT = "mstream-card-state", "mstream-card-resume", "mstream-card-run"
+PRIVATE_VERSION = 1                       # the version of the members this implementation knows
+MAX_SEQ = (1 << 53) - 1
+RESERVED = {"state.json": "reserved: the private state", "state.new": "reserved: its next write",
+            "resume.json": "reserved: the partials kept", "resume.new": "reserved: its next write",
+            "run.lock": "reserved: a run is writing the card"}
+COMPANION_NAME = re.compile(r"^(tags|autodj)-[0-9a-f]{8}\.bin$")  # 2.4.3's COMP names
+PART_NAME = re.compile(r"^[0-9a-f]{8}\.part$")
+
+
+def private_name(rel: str):
+    """2.12.7: may the software keep a private file at /.mstream/<rel> ('/'
+    between names)? (ok, why)."""
+    if rel != rel.lower():
+        return False, "not lowercase"
+    parts = rel.split("/")
+    if parts[0] == "resume" and len(parts) > 1:
+        ok = len(parts) == 2 and PART_NAME.match(parts[1]) is not None
+        return ok, "reserved: a partial (2.12.8)" if ok else "resume/ holds only 2.12.8's partials"
+    if parts[0] in ("stage", "thumbs") and len(parts) > 1:
+        return False, "inside %s/" % parts[0]
+    name = parts[-1]
+    if name.endswith(".tmp"):
+        return False, "*.tmp: step 4 deletes it"
+    if len(parts) == 1 and (fnmatch.fnmatchcase(name, "tags-*.bin") or fnmatch.fnmatchcase(name, "autodj-*.bin")):
+        return False, "a companion's name"
+    if len(parts) == 1 and (name.startswith("manifest.") or name.startswith("pending.")):
+        return False, "a contract file's name"
+    return True, RESERVED.get(rel, "the software's own")
+
+
+def _is_int(x):
+    return isinstance(x, int) and not isinstance(x, bool)
+
+
+def private_parse(data, fmt):
+    """2.12.7's form: ("valid", obj), ("version", obj) for a version this
+    software doesn't know (it stops: 2.4.5), ("invalid", None) or
+    ("missing", None). `data`: the file's bytes or text, None: no file."""
+    if data is None:
+        return "missing", None
+    raw = data.encode("utf-8") if isinstance(data, str) else bytes(data)
+    if raw.startswith(b"\xef\xbb\xbf"):
+        return "invalid", None
+
+    def pairs(kv):
+        names = [k for k, _ in kv]
+        if len(set(names)) != len(names):
+            raise ValueError("a member named twice")
+        return dict(kv)
+
+    def no_constant(c):
+        raise ValueError(c)
+    try:
+        obj = json.loads(raw.decode("utf-8"), object_pairs_hook=pairs, parse_constant=no_constant)
+    except (UnicodeDecodeError, ValueError):
+        return "invalid", None
+    if not isinstance(obj, dict) or obj.get("format") != fmt:
+        return "invalid", None
+    version, seq = obj.get("version"), obj.get("seq")
+    if not _is_int(version) or version < 1:
+        return "invalid", None
+    if version != PRIVATE_VERSION:
+        return "version", obj
+    if not _is_int(seq) or not 1 <= seq <= MAX_SEQ:
+        return "invalid", None
+    return "valid", obj
+
+
+def settle_private(stem, json_data, new_data):
+    """2.12.7's read with its recovery, for X = stem ("state", "resume"):
+    which file counts and what a run then does."""
+    fmt = {"state": STATE_FORMAT, "resume": RESUME_FORMAT}[stem]
+    a, b = private_parse(json_data, fmt), private_parse(new_data, fmt)
+    out = {"pick": "none", "seq": None, "nextSeq": 1, "delete": [], "rename": False, "diskCheck": False,
+           "stops": False}
+    if "version" in (a[0], b[0]):
+        return dict(out, stops=True)
+
+    def raw(d):
+        return d.encode("utf-8") if isinstance(d, str) else bytes(d)
+    if json_data is not None and new_data is not None and raw(json_data) == raw(new_data):
+        # One write seen twice: the rename cut between its two directory
+        # writes. Either is used, neither deleted (2.12.1, "Cut renames").
+        out.update(diskCheck=True)
+        if a[0] == "valid":
+            out.update(pick=stem + ".json", seq=a[1]["seq"], nextSeq=a[1]["seq"] + 1)
+        return out
+    if a[0] == "valid" and (b[0] != "valid" or a[1]["seq"] >= b[1]["seq"]):
+        out.update(pick=stem + ".json", seq=a[1]["seq"], nextSeq=a[1]["seq"] + 1,
+                   delete=[stem + ".new"] if new_data is not None else [])
+    elif b[0] == "valid":
+        out.update(pick=stem + ".new", seq=b[1]["seq"], nextSeq=b[1]["seq"] + 1,
+                   delete=[stem + ".json"] if json_data is not None else [], rename=True)
+    return out
+
+
+def resume_parts(obj):
+    """The partials a valid resume.json keeps: {name: size}. An entry that
+    isn't one (a bad name, a size that isn't a count) keeps nothing; a name
+    listed twice keeps nothing."""
+    seen, out = set(), {}
+    for p in obj.get("parts", []) if isinstance(obj.get("parts"), list) else []:
+        ok = isinstance(p, dict) and isinstance(p.get("name"), str) and PART_NAME.match(p["name"]) is not None and \
+            _is_int(p.get("size")) and p["size"] >= 0
+        if not ok:
+            continue
+        if p["name"] in seen:
+            out.pop(p["name"], None)
+            continue
+        seen.add(p["name"])
+        out[p["name"]] = p["size"]
+    return out
+
+
+def cleanup(files, root_names, resume_json):
+    """2.12.1, step 4, over /.mstream after steps 1-3: `files` {rel path:
+    size}, `root_names` the companions the root names, `resume_json` the
+    resume.json step 2 settled (text; None: none). The sorted paths it
+    deletes; every other file stays, the private files among them."""
+    st, obj = private_parse(resume_json, RESUME_FORMAT)
+    keep = resume_parts(obj) if st == "valid" else {}
+    named = {n.lower() for n in root_names}
+    gone = []
+    for rel, size in files.items():
+        parts = rel.split("/")
+        top, low = parts[0].lower(), rel.lower()
+        if len(parts) > 1:
+            if top == "stage":
+                gone.append(rel)
+            elif top == "thumbs" and low.endswith(".tmp"):
+                gone.append(rel)
+            elif top == "resume":
+                name = parts[1].lower()
+                if len(parts) > 2 or name not in keep or size > keep[name]:
+                    gone.append(rel)
+        elif low.endswith(".tmp") or (COMPANION_NAME.match(low) and low not in named):
+            gone.append(rel)
+    return sorted(gone, key=lambda r: r.encode("utf-8"))
+
+
+def http_date(ms):
+    """An If-Range date (2.12.8): RFC 9110's IMF-fixdate of a time in epoch
+    ms, its seconds floored."""
+    return email.utils.formatdate(ms // 1000, usegmt=True)
+
+
+def resume_fetch(entry, part_size, server, status=None):
+    """2.12.8 at fetch time. entry: resume.json's; part_size: the partial's
+    size on the card; server: the server's entry for the file now
+    {"serverPath", "file-size", "modified"}; status: the answer to the
+    ranged GET, when there is one. -> {"from": the byte it goes on from, or
+    None (start over), "headers": the request's, "then": what the answer
+    does}."""
+    same = (server.get("serverPath") == entry["serverPath"] and server.get("file-size") == entry["size"] and
+            server.get("modified") == entry["modified"] and part_size <= entry["size"])
+    if not same:
+        return {"from": None, "headers": {}, "then": "start over"}
+    at = min(part_size, entry["have"])
+    validator = entry["etag"] if entry.get("etag") else http_date(entry["modified"])
+    out = {"from": at, "headers": {"Range": "bytes=%d-" % at, "If-Range": validator}}
+    if status is not None:
+        out["then"] = "continue" if status == 206 else "start over"
+    return out
+
+
+# ---------------------------------------------------------------------------
 # The library descriptions (made-up names only)
 # ---------------------------------------------------------------------------
 CARD_ID = "0x5EEDC0DE0A1B2C3D"
@@ -1002,6 +1174,134 @@ def broken_server_cases():
     return out
 
 
+def private_text(fmt, seq, version=PRIVATE_VERSION, **members):
+    """A private file's text as the fixtures write it (2.12.7's form)."""
+    return json.dumps(dict({"format": fmt, "version": version, "seq": seq}, **members), ensure_ascii=False) + "\n"
+
+
+def private_vectors():
+    """2.12.7 and 2.12.8 as cases: the names, the read with its recovery,
+    step 4's clean-up and a partial's fetch. The expected values are typed
+    from the spec; check_vectors() recomputes each one."""
+    state = lambda seq, **m: private_text(STATE_FORMAT, seq, label="Card A", **m)  # noqa: E731
+    torn = state(4)[:30]
+    names = [
+        ("state.json", True), ("state.new", True), ("resume.json", True), ("resume.new", True), ("run.lock", True),
+        ("resume/0000002a.part", True), ("notes.txt", True), ("cache/index.bin", True), ("cache/old.tmp", False),
+        ("State.json", False), ("state.tmp", False), ("tags-0000002a.bin", False), ("tags-backup.bin", False),
+        ("autodj-old.bin", False), ("manifest.json", False), ("pending.txt", False), ("stage/keep.bin", False),
+        ("thumbs/state.json", False), ("resume/notes.txt", False), ("resume/0000002A.part", False),
+        ("resume/old/0000002a.part", False)]
+    settle = [
+        ("state", state(3), None, "state.json", 3, [], False, False, False, "only state.json"),
+        ("state", None, state(4), "state.new", 4, [], True, False, False,
+         "only state.new: a cut between the delete and the rename"),
+        ("state", state(3), state(4), "state.new", 4, ["state.json"], True, False, False,
+         "both, the new one higher: a cut before the delete"),
+        ("state", state(3), torn, "state.json", 3, ["state.new"], False, False, False, "a torn state.new"),
+        ("state", torn, state(4), "state.new", 4, ["state.json"], True, False, False, "a torn state.json"),
+        ("state", state(4), state(4), "state.json", 4, [], False, True, False,
+         "byte-equal: the rename cut between its two directory writes; neither deleted"),
+        ("state", state(4), state(4, note="other"), "state.json", 4, ["state.new"], False, False, False,
+         "equal seqs, different bytes: state.json"),
+        ("state", state(5), state(4), "state.json", 5, ["state.new"], False, False, False, "the higher seq wins"),
+        ("state", torn, torn[:20], "none", None, [], False, False, False, "neither valid: no private state"),
+        ("state", private_text(STATE_FORMAT, 3, version=2), None, "none", None, [], False, False, True,
+         "a version this software doesn't know: it stops (2.4.5)"),
+        ("state", state(3), private_text(STATE_FORMAT, 4, version=2), "none", None, [], False, False, True,
+         "an unknown version in state.new stops it too"),
+        ("state", "﻿" + state(3), None, "none", None, [], False, False, False, "a byte-order mark: invalid"),
+        ("state", state(3).replace('"seq": 3', '"seq": "3"'), None, "none", None, [], False, False, False,
+         "seq a string: invalid"),
+        ("state", state(3).replace('"seq": 3', '"seq": 0'), None, "none", None, [], False, False, False,
+         "seq 0: invalid"),
+        ("state", state(3).replace('"seq": 3', '"seq": 3.0'), None, "none", None, [], False, False, False,
+         "seq not an integer: invalid"),
+        ("state", state(3).replace('"seq": 3', '"seq": 3, "seq": 4'), None, "none", None, [], False, False, False,
+         "a member named twice: invalid"),
+        ("state", private_text(RESUME_FORMAT, 3), None, "none", None, [], False, False, False,
+         "another format: invalid"),
+        ("state", '[{"format": "mstream-card-state", "version": 1, "seq": 3}]\n', None, "none", None, [], False,
+         False, False, "not an object: invalid"),
+        ("state", state(3, gain=float("nan")), None, "none", None, [], False, False, False,
+         "NaN is not JSON: invalid"),
+        ("resume", private_text(RESUME_FORMAT, 2, parts=[]), private_text(RESUME_FORMAT, 3, parts=[]), "resume.new",
+         3, ["resume.json"], True, False, False, "resume.json follows the same rule"),
+    ]
+    home = "0x%016X" % server_url_key(HOME_URL)
+    part = {"name": "0000002a.part", "server": {"serverInstance": "", "serverUrlKey": "0x0", "parentKey": home,
+                                                "peerId": 3},
+            "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac", "size": 31457280,
+            "etag": "W/\"1e00000-19a1b2c3d4e\"", "modified": 1790500000005, "have": 10485760}
+    own = {"name": "0000002b.part", "server": {"serverInstance": "", "serverUrlKey": home, "parentKey": "0x0",
+                                               "peerId": 0},
+           "serverPath": "Music/Artist/Album/02 - Long.flac", "size": 52428800, "etag": "",
+           "modified": 1790000000123, "have": 4194304}
+    resume = private_text(RESUME_FORMAT, 7, parts=[part, own, dict(own, name="0000002c.part", size=100)])
+    listing = {"manifest.bin": 480, "tags-0000002a.bin": 6432, "tags-00000029.bin": 6400, "autodj-00000029.bin": 9000,
+               "manifest.tmp": 470, "pending.bin": 300, "stage/00000003.tmp": 5000, "thumbs/B/B1F7E69F.565": 21656,
+               "thumbs/B/B1F7E69F.tmp": 21656, "state.json": 200, "resume.json": 900,
+               "resume/0000002a.part": 10485760, "resume/0000002b.part": 52428801, "resume/0000002c.part": 100,
+               "resume/0000002d.part": 4096, "resume/old/0000002e.part": 10, "run.lock": 120, "notes.txt": 5,
+               "cache/index.bin": 64}
+    root = ["tags-0000002a.bin", "autodj-00000029.bin"]
+    every = ["manifest.tmp", "resume/0000002a.part", "resume/0000002b.part", "resume/0000002c.part",
+             "resume/0000002d.part", "resume/old/0000002e.part", "stage/00000003.tmp", "tags-00000029.bin",
+             "thumbs/B/B1F7E69F.tmp"]
+    clean = [
+        (listing, root, resume, [n for n in every if n not in ("resume/0000002a.part", "resume/0000002c.part")],
+         "autodj-00000029.bin is named, tags-00000029.bin isn't; step 1 left manifest.tmp; 0000002a and 0000002c "
+         "are listed and no longer than their size, 0000002b is longer, 0000002d isn't listed, resume/old/ is a "
+         "folder; the private files stay"),
+        (listing, root, None, every, "no resume.json: every partial goes"),
+        (listing, root, resume[:40], every, "a torn resume.json keeps nothing"),
+        ({"resume/0000002a.part": 1, "resume/0000002b.part": 1}, root,
+         private_text(RESUME_FORMAT, 2, parts=[dict(part, size=5), dict(part, size=9), dict(own, name="bad.part")]),
+         ["resume/0000002a.part", "resume/0000002b.part"],
+         "a name listed twice keeps nothing; an entry whose name isn't a partial's keeps nothing"),
+    ]
+    now = lambda e, **kw: dict({"serverPath": e["serverPath"], "file-size": e["size"],  # noqa: E731
+                                "modified": e["modified"]}, **kw)
+    by_etag = {"If-Range": part["etag"]}
+    fetch = [
+        (part, 10485760, now(part), 206, 10485760, by_etag, "continue",
+         "the server's file unchanged: on from have, by its ETag"),
+        (part, 12000000, now(part), 206, 10485760, by_etag, "continue",
+         "the bytes past have were never flushed: cut back to have"),
+        (part, 8000000, now(part), 200, 8000000, by_etag, "start over",
+         "shorter than have; the server answers 200: its file changed"),
+        (own, 4194304, now(own), 206, 4194304, {"If-Range": "Mon, 21 Sep 2026 14:13:20 GMT"}, "continue",
+         "no ETag: If-Range carries the HTTP date of modified (1790000000123 ms)"),
+        (part, 10485760, now(part, **{"file-size": part["size"] + 1}), None, None, None, "start over",
+         "the server's size changed: start over without asking"),
+        (part, 10485760, now(part, modified=part["modified"] + 1), None, None, None, "start over",
+         "modified changed: start over"),
+    ]
+    return {
+        "who": "software",
+        "note": ("2.12.7, 2.12.8: the software's private files in /.mstream. names: may a private file have this "
+                 "path ('/' between names), and why. settle: the read with its recovery for X = stem, the two "
+                 "files' text (null: no file): which counts, its seq and the next write's, what a run deletes, "
+                 "whether it finishes the rename, whether step 3 stops for a disk check, whether an unknown "
+                 "version stops the software. cleanup: step 4 over a /.mstream listing (path: size), the "
+                 "companions the root names and the settled resume.json: the paths it deletes, every other file "
+                 "staying. resumeFetch: a listed partial at fetch time, its size on the card, the server's entry "
+                 "for the file now and the answer to the ranged GET: where it goes on from (null: it starts "
+                 "over) and the request's headers. run: what run.lock holds (informational, never trusted)."),
+        "names": [{"name": n, "ok": ok, "why": private_name(n)[1]} for n, ok in names],
+        "settle": [{"stem": s, "json": j, "new": nw, "pick": p, "seq": q, "nextSeq": (q or 0) + 1, "delete": d,
+                    "rename": r, "diskCheck": dc, "stops": stop, "note": note}
+                   for s, j, nw, p, q, d, r, dc, stop, note in settle],
+        "cleanup": [{"files": f, "root": r, "resume": rj, "delete": d, "note": n} for f, r, rj, d, n in clean],
+        "resumeFetch": [{"entry": e, "partSize": size, "server": srv, "status": status, "from": at,
+                         "headers": None if at is None else dict({"Range": "bytes=%d-" % at}, **h), "then": then,
+                         "note": n} for e, size, srv, status, at, h, then, n in fetch],
+        "resumeExample": json.loads(resume),
+        "run": {"format": RUN_FORMAT, "runId": "0x00C0FFEE00C0FFEE", "started": 1791900000,
+                "producer": "mstream-terminal 0.14.0"},
+    }
+
+
 def vectors(golden: dict):
     v = {}
     v["note"] = ("docs/METADATA.md 2.18 as data. 'who': both (every implementation), software (the transfer "
@@ -1225,6 +1525,7 @@ def vectors(golden: dict):
             {"index": 65535, "talk": {"url": HOME_URL}, "verdict": "unknown"}]},
         "brokenEntries": {"cases": broken_server_cases()},
     }
+    v["privateFiles"] = private_vectors()
     v["deviceTxt"] = {"text": device_txt(device_main()).decode("ascii"),
                       "noFile": {"read.msmf": "1", "read.mptg": "1", "read.mpdj": "", "read.mpth": "1",
                                  "codecs": "mp3,flac", "extensions": "mp3,flac", "max_rate": "48000",
@@ -1430,6 +1731,24 @@ def check_vectors(v, golden: dict):
         want(same_server(card, e["index"], e["talk"]) == e["verdict"], "sameServer %r" % e)
     for e in sv["brokenEntries"]["cases"]:
         want(same_server(e["card"], e["index"], e["talk"]) == e["verdict"], "brokenEntries %r" % e)
+    pf = v["privateFiles"]
+    for e in pf["names"]:
+        want(private_name(e["name"]) == (e["ok"], e["why"]), "private name " + e["name"])
+    want(all(private_name(n)[0] for n in RESERVED), "the reserved names are private names")
+    for e in pf["settle"]:
+        got = settle_private(e["stem"], e["json"], e["new"])
+        exp = {k: e[k] for k in ("pick", "seq", "nextSeq", "delete", "rename", "diskCheck", "stops")}
+        if exp["pick"] == "none":
+            exp["nextSeq"] = 1
+        want(got == exp, "settle %s: got %r" % (e["note"], got))
+    for e in pf["cleanup"]:
+        want(cleanup(e["files"], e["root"], e["resume"]) == e["delete"], "cleanup " + e["note"])
+    for e in pf["resumeFetch"]:
+        got = resume_fetch(e["entry"], e["partSize"], e["server"], e["status"])
+        want(got["from"] == e["from"] and (got["headers"] or None) == e["headers"] and
+             got.get("then", "start over") == e["then"], "resumeFetch " + e["note"])
+    want(private_parse(json.dumps(pf["resumeExample"]), RESUME_FORMAT)[0] == "valid" and
+         len(resume_parts(pf["resumeExample"])) == len(pf["resumeExample"]["parts"]), "resume example")
     if bad:
         raise SystemExit("vectors that don't match: " + ", ".join(bad))
 

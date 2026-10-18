@@ -1203,6 +1203,758 @@
    ]
   }
  },
+ "privateFiles": {
+  "who": "software",
+  "note": "2.12.7, 2.12.8: the software's private files in /.mstream. names: may a private file have this path ('/' between names), and why. settle: the read with its recovery for X = stem, the two files' text (null: no file): which counts, its seq and the next write's, what a run deletes, whether it finishes the rename, whether step 3 stops for a disk check, whether an unknown version stops the software. cleanup: step 4 over a /.mstream listing (path: size), the companions the root names and the settled resume.json: the paths it deletes, every other file staying. resumeFetch: a listed partial at fetch time, its size on the card, the server's entry for the file now and the answer to the ranged GET: where it goes on from (null: it starts over) and the request's headers. run: what run.lock holds (informational, never trusted).",
+  "names": [
+   {
+    "name": "state.json",
+    "ok": true,
+    "why": "reserved: the private state"
+   },
+   {
+    "name": "state.new",
+    "ok": true,
+    "why": "reserved: its next write"
+   },
+   {
+    "name": "resume.json",
+    "ok": true,
+    "why": "reserved: the partials kept"
+   },
+   {
+    "name": "resume.new",
+    "ok": true,
+    "why": "reserved: its next write"
+   },
+   {
+    "name": "run.lock",
+    "ok": true,
+    "why": "reserved: a run is writing the card"
+   },
+   {
+    "name": "resume/0000002a.part",
+    "ok": true,
+    "why": "reserved: a partial (2.12.8)"
+   },
+   {
+    "name": "notes.txt",
+    "ok": true,
+    "why": "the software's own"
+   },
+   {
+    "name": "cache/index.bin",
+    "ok": true,
+    "why": "the software's own"
+   },
+   {
+    "name": "cache/old.tmp",
+    "ok": false,
+    "why": "*.tmp: step 4 deletes it"
+   },
+   {
+    "name": "State.json",
+    "ok": false,
+    "why": "not lowercase"
+   },
+   {
+    "name": "state.tmp",
+    "ok": false,
+    "why": "*.tmp: step 4 deletes it"
+   },
+   {
+    "name": "tags-0000002a.bin",
+    "ok": false,
+    "why": "a companion's name"
+   },
+   {
+    "name": "tags-backup.bin",
+    "ok": false,
+    "why": "a companion's name"
+   },
+   {
+    "name": "autodj-old.bin",
+    "ok": false,
+    "why": "a companion's name"
+   },
+   {
+    "name": "manifest.json",
+    "ok": false,
+    "why": "a contract file's name"
+   },
+   {
+    "name": "pending.txt",
+    "ok": false,
+    "why": "a contract file's name"
+   },
+   {
+    "name": "stage/keep.bin",
+    "ok": false,
+    "why": "inside stage/"
+   },
+   {
+    "name": "thumbs/state.json",
+    "ok": false,
+    "why": "inside thumbs/"
+   },
+   {
+    "name": "resume/notes.txt",
+    "ok": false,
+    "why": "resume/ holds only 2.12.8's partials"
+   },
+   {
+    "name": "resume/0000002A.part",
+    "ok": false,
+    "why": "not lowercase"
+   },
+   {
+    "name": "resume/old/0000002a.part",
+    "ok": false,
+    "why": "resume/ holds only 2.12.8's partials"
+   }
+  ],
+  "settle": [
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "state.json",
+    "seq": 3,
+    "nextSeq": 4,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "only state.json"
+   },
+   {
+    "stem": "state",
+    "json": null,
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "pick": "state.new",
+    "seq": 4,
+    "nextSeq": 5,
+    "delete": [],
+    "rename": true,
+    "diskCheck": false,
+    "stops": false,
+    "note": "only state.new: a cut between the delete and the rename"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "pick": "state.new",
+    "seq": 4,
+    "nextSeq": 5,
+    "delete": [
+     "state.json"
+    ],
+    "rename": true,
+    "diskCheck": false,
+    "stops": false,
+    "note": "both, the new one higher: a cut before the delete"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state",
+    "pick": "state.json",
+    "seq": 3,
+    "nextSeq": 4,
+    "delete": [
+     "state.new"
+    ],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "a torn state.new"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "pick": "state.new",
+    "seq": 4,
+    "nextSeq": 5,
+    "delete": [
+     "state.json"
+    ],
+    "rename": true,
+    "diskCheck": false,
+    "stops": false,
+    "note": "a torn state.json"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "pick": "state.json",
+    "seq": 4,
+    "nextSeq": 5,
+    "delete": [],
+    "rename": false,
+    "diskCheck": true,
+    "stops": false,
+    "note": "byte-equal: the rename cut between its two directory writes; neither deleted"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\", \"note\": \"other\"}\n",
+    "pick": "state.json",
+    "seq": 4,
+    "nextSeq": 5,
+    "delete": [
+     "state.new"
+    ],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "equal seqs, different bytes: state.json"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 5, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "pick": "state.json",
+    "seq": 5,
+    "nextSeq": 6,
+    "delete": [
+     "state.new"
+    ],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "the higher seq wins"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state",
+    "new": "{\"format\": \"mstream-",
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "neither valid: no private state"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 2, \"seq\": 3}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": true,
+    "note": "a version this software doesn't know: it stops (2.4.5)"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\"}\n",
+    "new": "{\"format\": \"mstream-card-state\", \"version\": 2, \"seq\": 4}\n",
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": true,
+    "note": "an unknown version in state.new stops it too"
+   },
+   {
+    "stem": "state",
+    "json": "﻿{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "a byte-order mark: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": \"3\", \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "seq a string: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 0, \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "seq 0: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3.0, \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "seq not an integer: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"seq\": 4, \"label\": \"Card A\"}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "a member named twice: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 3}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "another format: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "[{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3}]\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "not an object: invalid"
+   },
+   {
+    "stem": "state",
+    "json": "{\"format\": \"mstream-card-state\", \"version\": 1, \"seq\": 3, \"label\": \"Card A\", \"gain\": NaN}\n",
+    "new": null,
+    "pick": "none",
+    "seq": null,
+    "nextSeq": 1,
+    "delete": [],
+    "rename": false,
+    "diskCheck": false,
+    "stops": false,
+    "note": "NaN is not JSON: invalid"
+   },
+   {
+    "stem": "resume",
+    "json": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 2, \"parts\": []}\n",
+    "new": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 3, \"parts\": []}\n",
+    "pick": "resume.new",
+    "seq": 3,
+    "nextSeq": 4,
+    "delete": [
+     "resume.json"
+    ],
+    "rename": true,
+    "diskCheck": false,
+    "stops": false,
+    "note": "resume.json follows the same rule"
+   }
+  ],
+  "cleanup": [
+   {
+    "files": {
+     "manifest.bin": 480,
+     "tags-0000002a.bin": 6432,
+     "tags-00000029.bin": 6400,
+     "autodj-00000029.bin": 9000,
+     "manifest.tmp": 470,
+     "pending.bin": 300,
+     "stage/00000003.tmp": 5000,
+     "thumbs/B/B1F7E69F.565": 21656,
+     "thumbs/B/B1F7E69F.tmp": 21656,
+     "state.json": 200,
+     "resume.json": 900,
+     "resume/0000002a.part": 10485760,
+     "resume/0000002b.part": 52428801,
+     "resume/0000002c.part": 100,
+     "resume/0000002d.part": 4096,
+     "resume/old/0000002e.part": 10,
+     "run.lock": 120,
+     "notes.txt": 5,
+     "cache/index.bin": 64
+    },
+    "root": [
+     "tags-0000002a.bin",
+     "autodj-00000029.bin"
+    ],
+    "resume": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 7, \"parts\": [{\"name\": \"0000002a.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0x0\", \"parentKey\": \"0xED901EA3EE763AC7\", \"peerId\": 3}, \"serverPath\": \"Shared/Peer Artist/Peer Album/01 - Tune.flac\", \"size\": 31457280, \"etag\": \"W/\\\"1e00000-19a1b2c3d4e\\\"\", \"modified\": 1790500000005, \"have\": 10485760}, {\"name\": \"0000002b.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0xED901EA3EE763AC7\", \"parentKey\": \"0x0\", \"peerId\": 0}, \"serverPath\": \"Music/Artist/Album/02 - Long.flac\", \"size\": 52428800, \"etag\": \"\", \"modified\": 1790000000123, \"have\": 4194304}, {\"name\": \"0000002c.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0xED901EA3EE763AC7\", \"parentKey\": \"0x0\", \"peerId\": 0}, \"serverPath\": \"Music/Artist/Album/02 - Long.flac\", \"size\": 100, \"etag\": \"\", \"modified\": 1790000000123, \"have\": 4194304}]}\n",
+    "delete": [
+     "manifest.tmp",
+     "resume/0000002b.part",
+     "resume/0000002d.part",
+     "resume/old/0000002e.part",
+     "stage/00000003.tmp",
+     "tags-00000029.bin",
+     "thumbs/B/B1F7E69F.tmp"
+    ],
+    "note": "autodj-00000029.bin is named, tags-00000029.bin isn't; step 1 left manifest.tmp; 0000002a and 0000002c are listed and no longer than their size, 0000002b is longer, 0000002d isn't listed, resume/old/ is a folder; the private files stay"
+   },
+   {
+    "files": {
+     "manifest.bin": 480,
+     "tags-0000002a.bin": 6432,
+     "tags-00000029.bin": 6400,
+     "autodj-00000029.bin": 9000,
+     "manifest.tmp": 470,
+     "pending.bin": 300,
+     "stage/00000003.tmp": 5000,
+     "thumbs/B/B1F7E69F.565": 21656,
+     "thumbs/B/B1F7E69F.tmp": 21656,
+     "state.json": 200,
+     "resume.json": 900,
+     "resume/0000002a.part": 10485760,
+     "resume/0000002b.part": 52428801,
+     "resume/0000002c.part": 100,
+     "resume/0000002d.part": 4096,
+     "resume/old/0000002e.part": 10,
+     "run.lock": 120,
+     "notes.txt": 5,
+     "cache/index.bin": 64
+    },
+    "root": [
+     "tags-0000002a.bin",
+     "autodj-00000029.bin"
+    ],
+    "resume": null,
+    "delete": [
+     "manifest.tmp",
+     "resume/0000002a.part",
+     "resume/0000002b.part",
+     "resume/0000002c.part",
+     "resume/0000002d.part",
+     "resume/old/0000002e.part",
+     "stage/00000003.tmp",
+     "tags-00000029.bin",
+     "thumbs/B/B1F7E69F.tmp"
+    ],
+    "note": "no resume.json: every partial goes"
+   },
+   {
+    "files": {
+     "manifest.bin": 480,
+     "tags-0000002a.bin": 6432,
+     "tags-00000029.bin": 6400,
+     "autodj-00000029.bin": 9000,
+     "manifest.tmp": 470,
+     "pending.bin": 300,
+     "stage/00000003.tmp": 5000,
+     "thumbs/B/B1F7E69F.565": 21656,
+     "thumbs/B/B1F7E69F.tmp": 21656,
+     "state.json": 200,
+     "resume.json": 900,
+     "resume/0000002a.part": 10485760,
+     "resume/0000002b.part": 52428801,
+     "resume/0000002c.part": 100,
+     "resume/0000002d.part": 4096,
+     "resume/old/0000002e.part": 10,
+     "run.lock": 120,
+     "notes.txt": 5,
+     "cache/index.bin": 64
+    },
+    "root": [
+     "tags-0000002a.bin",
+     "autodj-00000029.bin"
+    ],
+    "resume": "{\"format\": \"mstream-card-resume\", \"versi",
+    "delete": [
+     "manifest.tmp",
+     "resume/0000002a.part",
+     "resume/0000002b.part",
+     "resume/0000002c.part",
+     "resume/0000002d.part",
+     "resume/old/0000002e.part",
+     "stage/00000003.tmp",
+     "tags-00000029.bin",
+     "thumbs/B/B1F7E69F.tmp"
+    ],
+    "note": "a torn resume.json keeps nothing"
+   },
+   {
+    "files": {
+     "resume/0000002a.part": 1,
+     "resume/0000002b.part": 1
+    },
+    "root": [
+     "tags-0000002a.bin",
+     "autodj-00000029.bin"
+    ],
+    "resume": "{\"format\": \"mstream-card-resume\", \"version\": 1, \"seq\": 2, \"parts\": [{\"name\": \"0000002a.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0x0\", \"parentKey\": \"0xED901EA3EE763AC7\", \"peerId\": 3}, \"serverPath\": \"Shared/Peer Artist/Peer Album/01 - Tune.flac\", \"size\": 5, \"etag\": \"W/\\\"1e00000-19a1b2c3d4e\\\"\", \"modified\": 1790500000005, \"have\": 10485760}, {\"name\": \"0000002a.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0x0\", \"parentKey\": \"0xED901EA3EE763AC7\", \"peerId\": 3}, \"serverPath\": \"Shared/Peer Artist/Peer Album/01 - Tune.flac\", \"size\": 9, \"etag\": \"W/\\\"1e00000-19a1b2c3d4e\\\"\", \"modified\": 1790500000005, \"have\": 10485760}, {\"name\": \"bad.part\", \"server\": {\"serverInstance\": \"\", \"serverUrlKey\": \"0xED901EA3EE763AC7\", \"parentKey\": \"0x0\", \"peerId\": 0}, \"serverPath\": \"Music/Artist/Album/02 - Long.flac\", \"size\": 52428800, \"etag\": \"\", \"modified\": 1790000000123, \"have\": 4194304}]}\n",
+    "delete": [
+     "resume/0000002a.part",
+     "resume/0000002b.part"
+    ],
+    "note": "a name listed twice keeps nothing; an entry whose name isn't a partial's keeps nothing"
+   }
+  ],
+  "resumeFetch": [
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": 206,
+    "from": 10485760,
+    "headers": {
+     "Range": "bytes=10485760-",
+     "If-Range": "W/\"1e00000-19a1b2c3d4e\""
+    },
+    "then": "continue",
+    "note": "the server's file unchanged: on from have, by its ETag"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 12000000,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": 206,
+    "from": 10485760,
+    "headers": {
+     "Range": "bytes=10485760-",
+     "If-Range": "W/\"1e00000-19a1b2c3d4e\""
+    },
+    "then": "continue",
+    "note": "the bytes past have were never flushed: cut back to have"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 8000000,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000005
+    },
+    "status": 200,
+    "from": 8000000,
+    "headers": {
+     "Range": "bytes=8000000-",
+     "If-Range": "W/\"1e00000-19a1b2c3d4e\""
+    },
+    "then": "start over",
+    "note": "shorter than have; the server answers 200: its file changed"
+   },
+   {
+    "entry": {
+     "name": "0000002b.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0xED901EA3EE763AC7",
+      "parentKey": "0x0",
+      "peerId": 0
+     },
+     "serverPath": "Music/Artist/Album/02 - Long.flac",
+     "size": 52428800,
+     "etag": "",
+     "modified": 1790000000123,
+     "have": 4194304
+    },
+    "partSize": 4194304,
+    "server": {
+     "serverPath": "Music/Artist/Album/02 - Long.flac",
+     "file-size": 52428800,
+     "modified": 1790000000123
+    },
+    "status": 206,
+    "from": 4194304,
+    "headers": {
+     "Range": "bytes=4194304-",
+     "If-Range": "Mon, 21 Sep 2026 14:13:20 GMT"
+    },
+    "then": "continue",
+    "note": "no ETag: If-Range carries the HTTP date of modified (1790000000123 ms)"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457281,
+     "modified": 1790500000005
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "the server's size changed: start over without asking"
+   },
+   {
+    "entry": {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    "partSize": 10485760,
+    "server": {
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "file-size": 31457280,
+     "modified": 1790500000006
+    },
+    "status": null,
+    "from": null,
+    "headers": null,
+    "then": "start over",
+    "note": "modified changed: start over"
+   }
+  ],
+  "resumeExample": {
+   "format": "mstream-card-resume",
+   "version": 1,
+   "seq": 7,
+   "parts": [
+    {
+     "name": "0000002a.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0x0",
+      "parentKey": "0xED901EA3EE763AC7",
+      "peerId": 3
+     },
+     "serverPath": "Shared/Peer Artist/Peer Album/01 - Tune.flac",
+     "size": 31457280,
+     "etag": "W/\"1e00000-19a1b2c3d4e\"",
+     "modified": 1790500000005,
+     "have": 10485760
+    },
+    {
+     "name": "0000002b.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0xED901EA3EE763AC7",
+      "parentKey": "0x0",
+      "peerId": 0
+     },
+     "serverPath": "Music/Artist/Album/02 - Long.flac",
+     "size": 52428800,
+     "etag": "",
+     "modified": 1790000000123,
+     "have": 4194304
+    },
+    {
+     "name": "0000002c.part",
+     "server": {
+      "serverInstance": "",
+      "serverUrlKey": "0xED901EA3EE763AC7",
+      "parentKey": "0x0",
+      "peerId": 0
+     },
+     "serverPath": "Music/Artist/Album/02 - Long.flac",
+     "size": 100,
+     "etag": "",
+     "modified": 1790000000123,
+     "have": 4194304
+    }
+   ]
+  },
+  "run": {
+   "format": "mstream-card-run",
+   "runId": "0x00C0FFEE00C0FFEE",
+   "started": 1791900000,
+   "producer": "mstream-terminal 0.14.0"
+  }
+ },
  "deviceTxt": {
   "text": "contract=1\nfirmware=0.11.0\nread.msmf=1\nread.mptg=1\nread.mpdj=2\nread.mpth=1\ncodecs=mp3,flac,opus\nextensions=mp3,flac,opus\nmax_rate=48000\nmax_channels=2\n",
   "noFile": {
