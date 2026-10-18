@@ -403,7 +403,7 @@ The rules that keep it deadlock- and glitch-free:
    speed's restart, `audio.loop()`, the power lab.
 2. **`stepCardGuard()`:** what the SD wrapper's guard found at FatFs's
    remounts (a card pulled and put back, or another put in: METADATA.md
-   3.8).
+   3.8); the same card: the play log's `remounted()` first.
 3. **`stepAutoDj()`:** Auto DJ's step (`app/AutoDj::step()`,
    [AUTODJ.md](AUTODJ.md)): a remount seen first; a slice of the join
    while Auto DJ is on (at most 8 ms of slices and one card read a pass,
@@ -1388,7 +1388,10 @@ board's clock (`boardclock::at()`; 0 while unset), the seq in NVS
 go. At boot: NVS's epoch ("plays"/"epoch": a new random one when NVS has
 none), the cut-rename rule (`plays.xl1` to `plays.xl9`), then a scan of
 the log's files a few reads a pass (the boot rules for the seq and the
-boot count; the trim of the files the root's ACKS acknowledges whole).
+boot count; the trim of the files the root's ACKS acknowledges whole:
+the root is read with the board's id, its ACKS rows kept first). The same
+card mounted again (`stepCardGuard()`): the cut-rename rule again, and
+before the boot's first slot the scan again from its start.
 Before every orderly power-off and restart the open play ends, stopped,
 and is written (`PlayHistory::flush()`: the idle power-off, the CPU
 speed's restart, `restartNow()`). Log lines: `[plays] ...`, one per slot

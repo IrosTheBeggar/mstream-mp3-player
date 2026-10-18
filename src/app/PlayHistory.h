@@ -62,8 +62,9 @@ public:
   // waiting written now, whatever the gate says. Not to another card in
   // the slot (FatFs refuses every write to it: those plays are lost).
   void flush(const char* why);
-  // The same card back (the card guard's remount, nothing under way): the
-  // cut-rename rule again before the next append.
+  // The same card back (the card guard's remount): the cut-rename rule
+  // again before the next append, and before this boot's first slot the
+  // boot's scan again from its start (Journal::remounted()).
   void remounted();
 
   // The boot's scan: slots a pass (four reads: about 10 KB).

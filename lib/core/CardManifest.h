@@ -145,12 +145,17 @@ struct Ack {
   uint32_t seq = 0;
 };
 struct Acks {
-  // The entries kept: the first kMax. A section with more only keeps
-  // plays the rest would let go (ACKS only trims).
+  // The entries kept: at most kMax, the reading device's own first
+  // (readAcks()'s `own`: its log trims by them), then the others in the
+  // section's order (the section's order whole while it has kMax or
+  // fewer). A section with more only keeps plays the rest would let go
+  // (ACKS only trims), though a rotation's drop note then counts the plays
+  // of a row left out as unread.
   static constexpr uint32_t kMax = 16;
   bool present = false;  // a section that passed its checks
   uint32_t rows = 0;     // its entries
   uint32_t count = 0;    // ... kept
+  uint32_t own = 0;      // ... of `own`'s device, kept or not
   Ack entries[kMax];
   // The seq up to which this device's plays of `epoch` are acknowledged
   // (0: none).
@@ -163,8 +168,9 @@ struct Acks {
 // bytes, epoch as an unsigned integer). Ok: `out` holds them. Missing: no
 // ACKS. Any other (Shape, SectionCrc, AcksOrder, Io): ACKS fails and is
 // absent (`out` empty); the root stays as open() found it. `scratch`: at
-// least 32 bytes.
-Why readAcks(Source& src, uint8_t* scratch, uint32_t scratchBytes, Acks* out);
+// least 32 bytes. `own`: the reading device's id, whose rows are kept
+// before any other's (nullptr: the first kMax).
+Why readAcks(Source& src, uint8_t* scratch, uint32_t scratchBytes, Acks* out, const uint8_t* own = nullptr);
 
 }  // namespace msmf
 

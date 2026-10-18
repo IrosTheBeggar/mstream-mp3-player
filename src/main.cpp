@@ -2902,6 +2902,10 @@ static void stepCardGuard() {
   }
   if (g.remounts == remountsSeen) return;
   remountsSeen = g.remounts;
+  // The play log first, whatever follows (a restart's flush() included):
+  // its cut-rename rule again, and before the boot's first slot its boot's
+  // scan again (a file it held open is gone).
+  playHistory.remounted();
   const bool active = cardTasks && cardTasks->active();
   if (!active) {
     Serial.println("[card] the card answered again (FatFs mounted it again: the same card)");
@@ -2921,7 +2925,6 @@ static void stepCardGuard() {
   }
   const tagstore::TagStore::Opened o = library.store()->open();
   const bool begun = cardTasks->begin();
-  playHistory.remounted();  // (its cut-rename rule again before the next slot)
   Serial.printf("[card] the card answered again (the same card): its records opened again (D %s, %lu journal "
                 "chunks), the card jobs %s%s\n",
                 library.store()->device().present ? "present" : "none", (unsigned long)o.chunks,

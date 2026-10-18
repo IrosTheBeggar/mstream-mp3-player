@@ -111,13 +111,20 @@ void PlayHistory::begin(AutoDj* autoDj) {
   }
   player_.setPlays(tracker_);
   active_ = true;
-  Serial.printf("[plays] the play log: epoch %016llx%s; ACKS %s (%lu entries); the boot's scan next\n",
+  // (Library::openRecords() read the root with this board's id: its rows
+  // are kept first.)
+  char left[64] = "";
+  if (acks.rows > acks.count)
+    snprintf(left, sizeof(left), "; %lu left out: the plays they name stay",
+             static_cast<unsigned long>(acks.rows - acks.count));
+  Serial.printf("[plays] the play log: epoch %016llx%s; ACKS %s (%lu entries, %lu of this board's%s); the boot's "
+                "scan next\n",
                 static_cast<unsigned long long>(journal_->epoch()),
                 journal_->newEpoch() ? " (new: NVS had none)" : "",
                 acks.present                                  ? "read"
                 : library_.root()->acksWhy == cc::Why::Missing ? "none"
                                                               : cc::whyName(library_.root()->acksWhy),
-                static_cast<unsigned long>(acks.count));
+                static_cast<unsigned long>(acks.rows), static_cast<unsigned long>(acks.own), left);
 }
 
 uint64_t PlayHistory::monoMs() { return boardclock::monoMs(); }
@@ -152,13 +159,17 @@ void PlayHistory::loop(const Look& look, const playlog::WriteGate::In& gate, boo
     booted_ = true;
     const Journal::Booted& b = journal_->booted();
     Serial.printf("[plays] %s: boot %lu of this epoch, the next seq %lu; the scan read %lu slots of %lu files (%lu "
-                  "passes)%s; %lu file%s trimmed (the transfer has its plays)%s\n",
+                  "passes%s)%s; %lu file%s trimmed (the transfer has its plays)%s%s\n",
                   journal_->off() ? "OFF (NVS didn't take the boot count)" : "ready",
                   static_cast<unsigned long>(journal_->bootSeq()), static_cast<unsigned long>(journal_->lastSeq() + 1),
                   static_cast<unsigned long>(b.slots), static_cast<unsigned long>(b.files),
-                  static_cast<unsigned long>(scanPasses_), b.cardSeq ? "" : " (none of this epoch's)",
-                  static_cast<unsigned long>(b.trimmed), b.trimmed == 1 ? "" : "s",
-                  b.twins ? "; a cut rename's twins on the card: a disk check frees them" : "");
+                  static_cast<unsigned long>(scanPasses_), b.restarts ? "; begun again after a remount" : "",
+                  b.cardSeq ? "" : " (none of this epoch's)", static_cast<unsigned long>(b.trimmed),
+                  b.trimmed == 1 ? "" : "s",
+                  b.twins ? "; a cut rename's twins on the card: a disk check frees them" : "",
+                  journal_->unsettled() ? "; plays.jnl shares plays.1.jnl's chain and the card refused its rename: "
+                                          "tried again at each play"
+                                        : "");
     return;
   }
   if (tracker_->pending()) writeOne();
@@ -206,6 +217,7 @@ void PlayHistory::writeOne() {
                 w == Journal::Wrote::Nvs       ? "NVS didn't take the seq"
                 : w == Journal::Wrote::Blocked ? "blocked: no twin name free, a disk check frees one"
                 : w == Journal::Wrote::Off     ? "no log"
+                : journal_->unsettled()        ? "the card refused the rename that parts plays.jnl from plays.1.jnl"
                                                : "the card refused it",
                 ms);
 }
@@ -229,7 +241,13 @@ void PlayHistory::flush(const char* why) {
 }
 
 void PlayHistory::remounted() {
-  if (active_ && journal_->ready()) journal_->settle();
+  if (!active_) return;
+  const bool wasReady = journal_->ready();
+  journal_->remounted();
+  if (journal_->ready() || journal_->off()) return;
+  booted_ = false;  // (its line again at the scan's end)
+  Serial.printf("[plays] the card mounted again %s: the boot's scan begins again (what it read may be partial)\n",
+                wasReady ? "before this boot's first slot" : "during the boot's scan");
 }
 
 void PlayHistory::onOp(void* ctx, playlog::Journal::Op op, const char* a, const char* b, uint64_t n) {
@@ -258,6 +276,11 @@ void PlayHistory::onOp(void* ctx, playlog::Journal::Op op, const char* a, const 
       Serial.printf("[plays] BLOCKED: %s shares a chain and all nine twin names are taken: no play is written "
                     "until a disk check on a computer\n",
                     base(a));
+      break;
+    case Journal::Op::Refused:
+      Serial.printf("[plays] the card refused to rename %s %s (a cut rename's shared chain): no play is written "
+                    "until a rename takes (tried again at each play)\n",
+                    base(a), base(b));
       break;
     case Journal::Op::Play:
     case Journal::Op::Lost:

@@ -261,7 +261,7 @@ uint32_t Acks::seqOf(const uint8_t deviceId[6], uint64_t epoch) const {
   return 0;
 }
 
-Why readAcks(Source& src, uint8_t* scratch, uint32_t scratchBytes, Acks* out) {
+Why readAcks(Source& src, uint8_t* scratch, uint32_t scratchBytes, Acks* out, const uint8_t* own) {
   *out = Acks();
   if (scratchBytes < kDirEntryBytes) return Why::Io;
   // The directory, an entry at a time (the root open() checked: its
@@ -304,11 +304,17 @@ Why readAcks(Source& src, uint8_t* scratch, uint32_t scratchBytes, Acks* out) {
     for (int b = 0; b < 8; ++b) key[6 + b] = r[15 - b];
     if (i > 0 && std::memcmp(prev, key, sizeof(key)) >= 0) return Why::AcksOrder;
     std::memcpy(prev, key, sizeof(key));
-    if (a.count < Acks::kMax) {
-      Ack& e = a.entries[a.count++];
-      std::memcpy(e.deviceId, r, 6);
-      e.epoch = get64(r + 8);
-      e.seq = get32(r + 16);
+    const bool mine = own && std::memcmp(r, own, 6) == 0;
+    a.own += mine;
+    Ack* e = a.count < Acks::kMax ? &a.entries[a.count++] : nullptr;
+    // Full: the device's own row takes the place of another device's, the
+    // last kept (its rows come together: the order is by deviceId first).
+    for (uint32_t k = a.count; !e && mine && k-- > 0;)
+      if (std::memcmp(a.entries[k].deviceId, own, 6) != 0) e = &a.entries[k];
+    if (e) {
+      std::memcpy(e->deviceId, r, 6);
+      e->epoch = get64(r + 8);
+      e->seq = get32(r + 16);
     }
   }
   a.present = true;

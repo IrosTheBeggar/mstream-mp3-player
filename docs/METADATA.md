@@ -2878,10 +2878,16 @@ says the firmware keeps one (2.15).
   slot that uses it (it MAY reserve several at once; the unused ones are
   skipped, and a reader takes no gap for a loss). **At boot:** the next
   seq is max(NVS's seq, the highest seq of a valid play slot of this
-  deviceId and epoch in the mounted card's log) + 1. Every valid slot
-  counts: twins, and both slots of a conflict, which a reader drops
-  (2.20.6, item 3), since that seq was used. A seq that would pass
-  2^32 − 1 takes a new epoch.
+  deviceId and epoch in the mounted card's log) + 1. Every valid slot of
+  the log's files (2.20.2's names) counts: both of a byte-equal pair,
+  which a reader takes once, and both slots of a conflict, which a reader
+  drops (2.20.6, item 3), since that seq was used. The twin names
+  (`plays.xl1` to `plays.xl9`) needn't be read: a twin holds the slots of
+  a `plays.1.jnl`, whose chain it still shares (read under that name), or
+  which it was until a rotation renamed it and moved `plays.jnl`, with
+  every later slot, to `plays.1.jnl`. So no twin holds a seq or a bootSeq
+  above those the log's files hold, or held before a trim. A seq that
+  would pass 2^32 − 1 takes a new epoch.
 - **bootSeq** counts the device's boots in one epoch, from 1; NVS keeps
   the count, stored at boot before any slot uses it. **At boot:** this
   boot's bootSeq is max(NVS's boot count, the highest bootSeq of a valid
@@ -5802,12 +5808,29 @@ What the code decided where 2.20 left room:
   `esp_random()` when there is none), the deviceId from
   `esp_efuse_mac_get_default()`, the cut-rename rule (2.20.2), the root's
   ACKS (`msmf::readAcks()`: found by type in the directory, checked on its
-  own; `cardroot::Root::acks`, at most 16 entries kept). Then the boot's
-  scan, a piece a pass behind the same gate (4 reads of 2,560 bytes,
-  five whole sectors each): every valid slot of `plays.jnl`,
+  own; `cardroot::Root::acks`, at most 16 entries kept, this board's
+  first: `Library::openRecords()` reads the root with the board's id, so
+  other boards' rows sorting before it never crowd out the ones its log
+  trims by; the boot's `[plays]` line gives the rows, this board's, and
+  any left out). Then the boot's scan, a piece a pass behind the same
+  gate (4 reads of 2,560 bytes, five whole sectors each): every valid
+  slot of `plays.jnl`,
   `plays.1.jnl` and `plays.2-9.jnl`, for the boot rules (2.20.4) and the
   trim (2.20.2; only with ACKS). A new epoch with no ACKS reads nothing.
   The boot count goes to NVS at the scan's end, before any slot.
+- **A remount** of the same card (the card guard's, 3.8; whatever
+  follows it, a restart's flush included): the cut-rename rule again
+  (`Journal::remounted()`), and while no slot has been asked for this
+  boot, the boot's scan again from its start. A file the scan held open
+  across the remount reads nothing more (FatFs's mount changed), and a
+  scan that ran while the card was out found no file; the scan again
+  comes to the same boot count (NVS's at the mount, not one more) or a
+  higher one, and the same trim. After a slot, only the rule. **A rename
+  the card refuses** at the rule (not all nine twin names taken) holds
+  `plays.jnl` back only until one takes: each append tries it again, and
+  the play it can't place is lost, said so (`the card refused to
+  rename`); a remount settles again, so a log blocked before a disk check
+  goes on with the same card back.
 - **Power-offs and restarts.** `PlayHistory::flush()` ends the open play
   (stopped), finishes the scan and writes every play waiting, gate or
   not: before the idle power-off's `powerOff()` (after its last look at
@@ -5833,15 +5856,22 @@ What the code decided where 2.20 left room:
   reference's ops one for one; the vectors' boot rules, in scan pieces of
   1, 3 and 1,000 slots; a new epoch; NVS refusing the seq, the seq's last
   value; a cut append's tail written over; ACKS on the golden root and the
-  four hardening files; the trim's ten cases; a power cut at each of 28
+  four hardening files, and this board's rows kept first among 21 (other
+  boards' before them: trimmed with them, kept without); the trim's ten
+  cases; a rename the card refuses, tried again, and a blocked log going
+  on after a disk check and a remount; a power cut at each of 28
   steps of appends and three rotations, three ways (CutFs): no chain freed
   that another name uses, every valid slot one the journal wrote, no seq
   twice, the log going on, the twins collected after a disk check; all
   nine twin names taken (blocked); the drop note and what a rotation
   counts (a note read or not, no ACKS, saturating); the Tracker; the
-  WriteGate; the card's commands; `history` in the vectors' `device.txt`
-  texts. `test_playback`: the controller's word for every action, at
-  joins, Repeat One, failures, the sleep timer's end of track, waits,
+  WriteGate; the card's commands; on the FatFs model, a cut append's tail
+  written over (37 bytes across a sector's end, 79, 1) and a remount
+  during the boot's scan (a file held open across it, the card out for
+  the whole scan, a scan again with the same count, none after a slot);
+  `history` in the vectors' `device.txt` texts. `test_playback`: the
+  controller's word for every action, at joins, Repeat One, failures, the
+  sleep timer's end of track, waits,
   edits, the fence and the firmware's `endPlay()`. `test_nvs_layout`
   (schema 5, `plays`), `test_card_contract` (`history=1`).
 - **The device check** (V2, on the spare card, never the music card):
@@ -5869,7 +5899,11 @@ What the code decided where 2.20 left room:
      play before it and not the open one, no damaged slot. Pull the card
      while a slot is due (right after a skip), put it back: the card
      guard's line, then the next slots written (or the restart's
-     `NOT written` line for another card).
+     `NOT written` line for another card). After a boot, before any play
+     ends, pull the card and put it back: `[plays] the card mounted again
+     before this boot's first slot: the boot's scan begins again`, then
+     the `ready` line again with `begun again after a remount` and the same
+     boot number.
   6. NVS erased (the terminal's install with `--erase`): a new epoch at
      the next boot; the old slots stay; new plays' seqs from 1 under the
      new epoch.

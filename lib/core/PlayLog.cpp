@@ -120,15 +120,34 @@ bool Journal::begin(const uint8_t deviceId[6], const cc::msmf::Acks& acks) {
   if (!nvs_.load(&ids_)) return false;
   seq_ = ids_.seq;
   if (ids_.epoch == 0 && !newEpochNow()) return false;
+  bootsAtMount_ = ids_.boots;
+  appended_ = false;
   settle();
+  startScan();
+  return state_ != State::Off;
+}
+
+void Journal::startScan() {
+  closeScan();
   scanFile_ = 0;
   file_ = FileScan();
   trimmable_ = 0;
+  booted_.files = booted_.slots = 0;
+  booted_.bytes = 0;
+  booted_.cardSeq = booted_.cardBoot = 0;
   state_ = State::Scanning;
   // A new epoch has no slot on the card (it was drawn now): with no ACKS
   // to trim by either, there is nothing to read.
   if (newEpoch_ && acks_.count == 0) finishScan();
-  return state_ != State::Off;
+}
+
+void Journal::remounted() {
+  if (state_ == State::Off) return;
+  closeScan();  // (open across the remount: FatFs refuses it from now on)
+  settle();
+  if (state_ == State::Ready && appended_) return;
+  ++booted_.restarts;
+  startScan();
 }
 
 bool Journal::shared(const char* path) {
@@ -148,7 +167,10 @@ bool Journal::toTwin(const char* path) {
   char t[kNameCap];
   for (int i = 1; i <= tagstore::kMaxTwins; ++i) {
     if (!tagstore::twinName(kTwinNames, i, t, sizeof(t)) || exists(t)) continue;
-    if (!fs_.rename(path, t)) return false;
+    if (!fs_.rename(path, t)) {
+      op(Op::Refused, path, t, 0);
+      return false;
+    }
     op(Op::Twin, path, t, 0);
     return true;
   }
@@ -171,14 +193,16 @@ void Journal::collectTwins() {
 }
 
 bool Journal::settle() {
+  blocked_ = unsettled_ = false;
   if (exists(kLogPath) && exists(kPrevPath)) {
     const uint32_t c = fs_.firstCluster(kLogPath);
-    // (A rename that fails leaves the two on one chain: no slot goes to
-    // plays.jnl until the next mount settles it.)
-    if (c != 0 && c == fs_.firstCluster(kPrevPath) && !toTwin(kLogPath)) blocked_ = true;
+    // A rename the card refuses leaves the two on one chain: no slot goes
+    // to plays.jnl until one takes (append() tries again first). All nine
+    // twin names taken: blocked until a disk check frees one.
+    if (c != 0 && c == fs_.firstCluster(kPrevPath) && !toTwin(kLogPath)) unsettled_ = !blocked_;
   }
   collectTwins();
-  return !blocked_;
+  return !blocked_ && !unsettled_;
 }
 
 bool Journal::scan(uint32_t maxSlots) {
@@ -256,8 +280,9 @@ bool Journal::scan(uint32_t maxSlots) {
 
 bool Journal::finishScan() {
   // 2.20.4: NVS's or the card's, whichever is higher, and one more; the
-  // boot count stored before any slot uses it.
-  const uint32_t boots = std::max(ids_.boots, booted_.cardBoot) + 1;
+  // boot count stored before any slot uses it (NVS's at the mount: a scan
+  // begun again comes to the same count, or a higher one).
+  const uint32_t boots = std::max(bootsAtMount_, booted_.cardBoot) + 1;
   if (!nvs_.storeBoots(boots)) {
     state_ = State::Off;
     return true;
@@ -355,6 +380,7 @@ Journal::Wrote Journal::rotate(const uint8_t slot[kSlot], const Slot& play) {
 
 Journal::Wrote Journal::append(Slot& play) {
   if (state_ != State::Ready) return Wrote::Off;
+  appended_ = true;
   if (seq_ == 0xFFFFFFFFu) {
     // 2.20.4: a seq past 2^32 - 1 takes a new epoch, whose first boot this is.
     if (!newEpochNow() || !nvs_.storeBoots(1)) return Wrote::Nvs;
@@ -370,9 +396,10 @@ Journal::Wrote Journal::append(Slot& play) {
   play.epoch = ids_.epoch;
   std::memcpy(play.deviceId, dev_, 6);
   play.bootSeq = bootSeq_;
-  if (blocked_) {
+  if (unsettled_) settle();  // (the rename the card refused: again)
+  if (blocked_ || unsettled_) {
     op(Op::Lost, nullptr, nullptr, seq);
-    return Wrote::Blocked;
+    return blocked_ ? Wrote::Blocked : Wrote::Failed;
   }
   uint8_t raw[kSlot];
   encode(play, raw);

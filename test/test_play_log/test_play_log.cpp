@@ -15,7 +15,8 @@
 //   pieces of any size;
 // - ACKS (2.5.6) read on its own: the golden root's entries, the
 //   hardening files (damaged, out of order, short rows: absent, the root
-//   present; a newer minor's longer rows read by their prefix);
+//   present; a newer minor's longer rows read by their prefix); this
+//   board's rows kept first when the section has more than 16;
 // - the trim's rules, a cut append's tail, NVS refusing the seq, the seq's
 //   last value taking a new epoch;
 // - a power cut at every step of appends and two rotations, the card as
@@ -23,14 +24,16 @@
 //   name uses, no slot credited wrongly (every valid slot is one the
 //   journal wrote, byte for byte), no seq used twice, the log going on;
 //   the twins a cut rename leaves, collected after a disk check; all nine
-//   twin names taken: blocked;
+//   twin names taken: blocked; a rename the card refuses, tried again; a
+//   remount settling again;
 // - the Tracker (the time played, pauses excluded, a seek's jump not
 //   counted, the tail of a completed play, short plays, the queue) and the
 //   WriteGate (the gapless window, a start's settle, the ring, underruns);
 // - what an append, a rotation and the boot's scan ask of the card, on the
 //   host FatFs model (ChaN's FatFs as the Core2 builds it, the sector
 //   cache in front: test_card_io's card): bytes per play and the cap's
-//   worst case.
+//   worst case; a cut append's tail written over; a remount during the
+//   boot's scan.
 // Run: pio test -e native -f test_play_log
 #include <unity.h>
 
@@ -154,6 +157,7 @@ void onOp(void* ctx, Journal::Op o, const char* a, const char* b, uint64_t n) {
     case Journal::Op::Delete: std::snprintf(t, sizeof(t), "delete %s %s", base(a).c_str(), b); break;
     case Journal::Op::Twin: std::snprintf(t, sizeof(t), "twin %s %s", base(a).c_str(), base(b).c_str()); break;
     case Journal::Op::Blocked: std::snprintf(t, sizeof(t), "blocked %s", base(a).c_str()); break;
+    case Journal::Op::Refused: std::snprintf(t, sizeof(t), "refused %s %s", base(a).c_str(), base(b).c_str()); break;
   }
   v->push_back(t);
 }
@@ -636,6 +640,121 @@ void test_acks_read_on_their_own() {
   TEST_ASSERT_FALSE(a.present);
 }
 
+// The rows kept (msmf::readAcks()'s `own`, the root the boot reads with the
+// board's id): a section of more than 16, other boards' sorting before this
+// one's, keeps this board's, which its log trims by; without `own`, the
+// first 16, none of them this board's (its log never trimmed). Of this
+// board's own rows past 16, the first 16.
+void test_acks_keep_this_boards_rows_first() {
+  const Bytes golden = fixture("golden/" + gVectors["plays"]["acks"]["golden"]["file"].str());
+  // The golden root with its ACKS section's rows replaced by `rows` (placed
+  // at the file's end; readAcks() checks only the section).
+  auto withRows = [&](const std::vector<msmf::Ack>& rows) {
+    Bytes b = golden;
+    const uint32_t headerBytes = cc::get32(b.data() + 8), sections = cc::get32(b.data() + 12);
+    size_t entry = 0;
+    for (uint32_t i = 0; i < sections; ++i)
+      if (cc::get32(b.data() + headerBytes + i * cc::kDirEntryBytes) == msmf::kAcks)
+        entry = headerBytes + i * cc::kDirEntryBytes;
+    TEST_ASSERT_TRUE(entry != 0);
+    const uint32_t at = static_cast<uint32_t>(b.size());
+    for (const msmf::Ack& r : rows) {
+      uint8_t row[msmf::kAcksStride] = {};
+      std::memcpy(row, r.deviceId, 6);
+      cc::put64(row + 8, r.epoch);
+      cc::put32(row + 16, r.seq);
+      b.insert(b.end(), row, row + sizeof(row));
+    }
+    const uint32_t bytes = static_cast<uint32_t>(rows.size()) * msmf::kAcksStride;
+    cc::put32(b.data() + entry + 8, at);
+    cc::put32(b.data() + entry + 12, bytes);
+    cc::put32(b.data() + entry + 16, static_cast<uint32_t>(rows.size()));
+    cc::put32(b.data() + entry + 20, msmf::kAcksStride);
+    cc::put32(b.data() + entry + 24, cc::crc32(b.data() + at, bytes));
+    return b;
+  };
+  auto board = [](uint8_t last) {
+    msmf::Ack a;
+    const uint8_t id[6] = {0x00, 0x00, 0x5E, 0x00, 0x53, last};  // RFC 7042's documentation range
+    std::memcpy(a.deviceId, id, 6);
+    return a;
+  };
+  auto row = [&](uint8_t last, uint64_t epoch, uint32_t seq) {
+    msmf::Ack a = board(last);
+    a.epoch = epoch;
+    a.seq = seq;
+    return a;
+  };
+  const msmf::Ack mine = board(0xF0);
+  std::vector<uint8_t> scratch(32);
+  auto read = [&](const Bytes& file, msmf::Acks* out, const uint8_t* own) {
+    VecSource src(file);
+    return msmf::readAcks(src, scratch.data(), static_cast<uint32_t>(scratch.size()), out, own);
+  };
+  // 18 other boards before this one, its two epochs, one board after.
+  std::vector<msmf::Ack> rows;
+  for (uint8_t k = 1; k <= 18; ++k) rows.push_back(row(k, 0x10 + k, 5));
+  rows.push_back(row(0xF0, 0x1111, 7));
+  rows.push_back(row(0xF0, 0x2222, 9));
+  rows.push_back(row(0xF1, 0x3333, 4));
+  const Bytes file = withRows(rows);
+  msmf::Acks a;
+  TEST_ASSERT_TRUE(read(file, &a, nullptr) == cc::Why::Ok);
+  TEST_ASSERT_EQUAL_UINT32(21, a.rows);
+  TEST_ASSERT_EQUAL_UINT32(msmf::Acks::kMax, a.count);
+  TEST_ASSERT_EQUAL_UINT32(0, a.own);
+  TEST_ASSERT_EQUAL_UINT32(0, a.seqOf(mine.deviceId, 0x2222));
+  TEST_ASSERT_TRUE(read(file, &a, mine.deviceId) == cc::Why::Ok);
+  TEST_ASSERT_EQUAL_UINT32(21, a.rows);
+  TEST_ASSERT_EQUAL_UINT32(msmf::Acks::kMax, a.count);
+  TEST_ASSERT_EQUAL_UINT32(2, a.own);
+  TEST_ASSERT_EQUAL_UINT32(7, a.seqOf(mine.deviceId, 0x1111));
+  TEST_ASSERT_EQUAL_UINT32(9, a.seqOf(mine.deviceId, 0x2222));
+  // The others kept: the first 14 (the 15th and 16th gave their places).
+  TEST_ASSERT_EQUAL_UINT32(5, a.seqOf(board(1).deviceId, 0x11));
+  TEST_ASSERT_EQUAL_UINT32(5, a.seqOf(board(14).deviceId, 0x10 + 14));
+  TEST_ASSERT_EQUAL_UINT32(0, a.seqOf(board(15).deviceId, 0x10 + 15));
+  TEST_ASSERT_EQUAL_UINT32(0, a.seqOf(board(0xF1).deviceId, 0x3333));
+  // At most 16 or fewer rows: as the section has them, `own` or not.
+  TEST_ASSERT_TRUE(read(withRows({row(1, 1, 1), row(0xF0, 2, 2), row(0xF1, 3, 3)}), &a, mine.deviceId) == cc::Why::Ok);
+  TEST_ASSERT_EQUAL_UINT32(3, a.count);
+  TEST_ASSERT_EQUAL_UINT32(1, a.own);
+  TEST_ASSERT_EQUAL_MEMORY(board(1).deviceId, a.entries[0].deviceId, 6);
+  TEST_ASSERT_EQUAL_MEMORY(mine.deviceId, a.entries[1].deviceId, 6);
+  TEST_ASSERT_EQUAL_MEMORY(board(0xF1).deviceId, a.entries[2].deviceId, 6);
+  // This board's own rows past 16: its first 16.
+  std::vector<msmf::Ack> many;
+  for (uint32_t k = 1; k <= 20; ++k) many.push_back(row(0xF0, k, k));
+  TEST_ASSERT_TRUE(read(withRows(many), &a, mine.deviceId) == cc::Why::Ok);
+  TEST_ASSERT_EQUAL_UINT32(20, a.own);
+  TEST_ASSERT_EQUAL_UINT32(16, a.seqOf(mine.deviceId, 16));
+  TEST_ASSERT_EQUAL_UINT32(0, a.seqOf(mine.deviceId, 17));
+  // The log: this board's plays of epoch 0x2222, seqs 1-3, all acknowledged
+  // by the section's row: trimmed with `own`'s rows, kept without.
+  Bytes log;
+  for (uint32_t seq = 1; seq <= 3; ++seq) {
+    Slot s = play(seq, 60000, 1000 * seq);
+    s.seq = seq;
+    s.epoch = 0x2222;
+    std::memcpy(s.deviceId, mine.deviceId, 6);
+    s.bootSeq = 1;
+    uint8_t b[pl::kSlot];
+    pl::encode(s, b);
+    log.insert(log.end(), b, b + pl::kSlot);
+  }
+  for (const bool own : {false, true}) {
+    CutFs fs;
+    fs.put(kLog, log);
+    Device d(mine.deviceId);
+    d.nvs.ids.epoch = 0x2222;
+    d.nvs.ids.seq = 3;
+    TEST_ASSERT_TRUE(read(file, &d.acks, own ? mine.deviceId : nullptr) == cc::Why::Ok);
+    TEST_ASSERT_TRUE(d.boot(fs));
+    TEST_ASSERT_EQUAL_UINT32(own ? 1 : 0, d.j->booted().trimmed);
+    TEST_ASSERT_EQUAL(own ? 0 : 1, static_cast<int>(fs.dir.count(kLog)));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // The trim (2.20.2).
 // ---------------------------------------------------------------------------
@@ -848,6 +967,66 @@ void test_twins_and_the_blocked_log() {
   s = play(100, 60000, 2000);
   TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
   TEST_ASSERT_EQUAL_UINT32(8, s.seq);  // (7 was taken: NVS has it)
+  TEST_ASSERT_TRUE(fs.violations.empty());
+}
+
+// The cut-rename rule's rename refused by the card (not all nine twin
+// names taken): the log isn't blocked. No slot goes to plays.jnl while it
+// shares plays.1.jnl's chain (the play is lost, plays.1.jnl untouched);
+// each append tries the rename again, and once the card takes it the plays
+// go on in a new plays.jnl. And a remount settles again: a log blocked
+// before a disk check goes on after it with the same card back.
+void test_a_refused_rename_is_tried_again() {
+  CutFs fs;
+  Device d(kDevA, 2);
+  TEST_ASSERT_TRUE(d.boot(fs));
+  for (int i = 0; i < 3; ++i) {
+    Slot s = play(i, 60000, 1000 * (i + 1));
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+  }
+  fs.remove(kPrev);
+  fs.link(kLog, kPrev);
+  const Bytes prev = fs.bytes(kPrev);
+  fs.refuse = true;  // (a card that takes no write for now: the rename refused)
+  d.ops.clear();
+  TEST_ASSERT_TRUE(d.boot(fs));
+  TEST_ASSERT_FALSE(d.ops.empty());
+  TEST_ASSERT_EQUAL_STRING("refused plays.jnl plays.xl1", d.ops.at(0).c_str());
+  TEST_ASSERT_FALSE(d.j->blocked());
+  TEST_ASSERT_TRUE(d.j->unsettled());
+  Slot s = play(50, 60000, 1000);
+  TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Failed);
+  TEST_ASSERT_EQUAL_STRING("refused plays.jnl plays.xl1", d.ops.at(d.ops.size() - 2).c_str());
+  TEST_ASSERT_EQUAL_STRING("lost 4", d.ops.back().c_str());
+  TEST_ASSERT_TRUE(fs.bytes(kPrev) == prev);
+  fs.refuse = false;
+  s = play(51, 60000, 2000);
+  TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+  TEST_ASSERT_EQUAL_UINT32(5, s.seq);
+  TEST_ASSERT_FALSE(d.j->unsettled());
+  TEST_ASSERT_TRUE(fs.shared(kPrev, "/.player/plays.xl1"));
+  TEST_ASSERT_EQUAL_size_t(pl::kSlot, fs.bytes(kLog).size());
+  TEST_ASSERT_TRUE(fs.bytes(kPrev) == prev);
+  TEST_ASSERT_TRUE(fs.violations.empty());
+
+  // Blocked: plays.jnl on plays.1.jnl's chain, all nine twin names taken.
+  fs.dir.erase(kPrev);  // (by hand: nothing freed)
+  fs.link(kLog, kPrev);
+  for (int i = 1; i <= 9; ++i) fs.link(kLog, "/.player/plays.xl" + std::to_string(i));
+  TEST_ASSERT_TRUE(d.boot(fs));
+  TEST_ASSERT_TRUE(d.j->blocked());
+  s = play(52, 60000, 1000);
+  TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Blocked);
+  // The card to a computer for a disk check, and back: remounted().
+  fs.diskCheck();
+  d.j->remounted();
+  TEST_ASSERT_FALSE(d.j->blocked());
+  TEST_ASSERT_TRUE(d.j->ready());  // (a slot was asked for: the boot's scan stands)
+  TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().restarts);
+  for (const std::string& n : fs.names()) TEST_ASSERT_TRUE(n.find(".xl") == std::string::npos);
+  s = play(53, 60000, 2000);
+  TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+  TEST_ASSERT_EQUAL_UINT32(7, s.seq);
   TEST_ASSERT_TRUE(fs.violations.empty());
 }
 
@@ -1204,6 +1383,133 @@ void test_what_the_card_is_asked() {
   TEST_ASSERT_EQUAL_UINT32(last, d.j->booted().cardSeq);
 }
 
+// A cut append's part slot on FatFs itself (test_a_tail_is_cut_off's rule,
+// which CutFs models): f_lseek back to the slot boundary inside the file,
+// then f_write past its end, leaves the file a whole number of slots, the
+// slot whole, as a truncate first would. Tails of 37 bytes (across a
+// sector's end), 79 and 1.
+void test_a_tail_on_the_fatfs_card() {
+  std::unique_ptr<Card> card(new Card());
+  TEST_ASSERT_TRUE(card->ok);
+  fatmodel::ModelFs fs;
+  Device d(kDevA, 16);
+  TEST_ASSERT_TRUE(d.boot(fs));
+  uint32_t up = 0;
+  for (int i = 0; i < 6; ++i) {
+    Slot s = play(i, 60000, up += 1000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+  }
+  for (const uint32_t tail : {37u, 79u, 1u}) {
+    tagstore::File* f = fs.open(kLog, tagstore::Fs::Mode::Update);
+    TEST_ASSERT_NOT_NULL(f);
+    const uint32_t size = f->size();
+    TEST_ASSERT_EQUAL_UINT32(0, size % pl::kSlot);
+    const Bytes part(tail, 0x5A);
+    TEST_ASSERT_TRUE(f->write(size, part.data(), tail));
+    TEST_ASSERT_TRUE(fs.close(f));
+    Slot s = play(100 + tail, 60000, up += 1000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+    f = fs.open(kLog, tagstore::Fs::Mode::Read);
+    TEST_ASSERT_NOT_NULL(f);
+    TEST_ASSERT_EQUAL_UINT32(size + pl::kSlot, f->size());
+    uint8_t have[pl::kSlot], want[pl::kSlot];
+    TEST_ASSERT_TRUE(f->read(size, have, pl::kSlot));
+    fs.close(f);
+    pl::encode(s, want);
+    TEST_ASSERT_EQUAL_MEMORY(want, have, pl::kSlot);
+  }
+  // The next boot's scan reads every slot.
+  TEST_ASSERT_TRUE(d.boot(fs));
+  TEST_ASSERT_EQUAL_UINT32(9, d.j->booted().slots);
+  TEST_ASSERT_EQUAL_UINT32(9, d.j->booted().cardSeq);
+}
+
+// The same card mounted again during the boot (the card guard's remount),
+// on FatFs itself, with NVS behind the card (an older NVS image put back:
+// the boot rules need every slot): a file the scan holds open across the
+// remount reads nothing more, so left so the scan misses the rest of it;
+// remounted() begins the scan again. The card out for the whole scan (every
+// open refused: done with nothing) and back before the boot's first slot:
+// the scan again. A remount after a whole scan, before any slot: the same
+// boot count, not one more. After a slot: the cut-rename rule only.
+void test_a_remount_and_the_boots_scan() {
+  std::unique_ptr<Card> card(new Card());
+  TEST_ASSERT_TRUE(card->ok);
+  fatmodel::ModelFs fs;
+  Device d(kDevA, 40);
+  TEST_ASSERT_TRUE(d.boot(fs));
+  uint32_t up = 0;
+  for (int i = 0; i < 60; ++i) {  // plays.1.jnl seqs 1-40, plays.jnl 41-60, all of boot 1
+    Slot s = play(i, 60000, up += 1000);
+    TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+  }
+  auto bootBehind = [&](uint32_t piece) {
+    d.nvs.ids.seq = 0;
+    d.nvs.ids.boots = 0;
+    d.j.reset(new Journal(fs, d.nvs, d.config()));
+    TEST_ASSERT_TRUE(d.j->begin(d.id, d.acks));
+    return d.j->scan(piece);
+  };
+  auto remount = [&] {
+    fatmodel::drive(0).noInit = true;  // pulled and put back: FatFs mounts again at its next call
+    TEST_ASSERT_TRUE(fs.exists(kPrev));  // (that call)
+  };
+  auto finish = [&] {
+    for (int guard = 0; guard < 1000 && !d.j->scan(5); ++guard) {
+    }
+    TEST_ASSERT_TRUE(d.j->ready());
+  };
+  // Left so: plays.jnl (the scan's first file) open, 5 of its 20 slots read.
+  TEST_ASSERT_FALSE(bootBehind(5));
+  remount();
+  finish();
+  TEST_ASSERT_EQUAL_UINT32(45, d.j->lastSeq());  // (46 next: a seq used twice)
+  // remounted().
+  TEST_ASSERT_FALSE(bootBehind(5));
+  remount();
+  d.j->remounted();
+  TEST_ASSERT_FALSE(d.j->ready());
+  finish();
+  TEST_ASSERT_EQUAL_UINT32(1, d.j->booted().restarts);
+  TEST_ASSERT_EQUAL_UINT32(60, d.j->booted().slots);
+  TEST_ASSERT_EQUAL_UINT32(60, d.j->booted().cardSeq);
+  TEST_ASSERT_EQUAL_UINT32(60, d.j->lastSeq());
+  TEST_ASSERT_EQUAL_UINT32(2, d.j->bootSeq());
+  // The card out for the whole scan, then back.
+  TEST_ASSERT_FALSE(bootBehind(0));
+  fatmodel::RamDisk* disk = fatmodel::drive(0).disk;
+  fatmodel::drive(0).disk = nullptr;
+  finish();
+  TEST_ASSERT_EQUAL_UINT32(0, d.j->booted().slots);
+  TEST_ASSERT_EQUAL_UINT32(0, d.j->lastSeq());
+  fatmodel::drive(0).disk = disk;
+  remount();
+  d.j->remounted();
+  finish();
+  TEST_ASSERT_EQUAL_UINT32(60, d.j->lastSeq());
+  TEST_ASSERT_EQUAL_UINT32(2, d.j->bootSeq());
+  TEST_ASSERT_EQUAL_UINT32(2, d.nvs.ids.boots);
+  // Again, the scan whole: the same count.
+  remount();
+  d.j->remounted();
+  finish();
+  TEST_ASSERT_EQUAL_UINT32(2, d.j->booted().restarts);
+  TEST_ASSERT_EQUAL_UINT32(2, d.j->bootSeq());
+  TEST_ASSERT_EQUAL_UINT32(2, d.nvs.ids.boots);
+  // After a slot: no scan again.
+  Slot s = play(100, 60000, up += 1000);
+  TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+  TEST_ASSERT_EQUAL_UINT32(61, s.seq);
+  TEST_ASSERT_EQUAL_UINT32(2, s.bootSeq);
+  remount();
+  d.j->remounted();
+  TEST_ASSERT_TRUE(d.j->ready());
+  TEST_ASSERT_EQUAL_UINT32(2, d.j->booted().restarts);
+  s = play(101, 60000, up += 1000);
+  TEST_ASSERT_TRUE(d.j->append(s) == Journal::Wrote::Ok);
+  TEST_ASSERT_EQUAL_UINT32(62, s.seq);
+}
+
 // device.txt's history (2.15): the vectors' texts read as the majors they
 // list; no key, an empty one, or no file: none. This firmware writes 1.
 void test_device_txt_says_history() {
@@ -1238,14 +1544,18 @@ int main(int, char**) {
   RUN_TEST(test_nvs_first_and_the_last_seq);
   RUN_TEST(test_a_tail_is_cut_off);
   RUN_TEST(test_acks_read_on_their_own);
+  RUN_TEST(test_acks_keep_this_boards_rows_first);
   RUN_TEST(test_the_trims_rules);
   RUN_TEST(test_a_cut_at_every_step);
   RUN_TEST(test_twins_and_the_blocked_log);
+  RUN_TEST(test_a_refused_rename_is_tried_again);
   RUN_TEST(test_the_drop_note);
   RUN_TEST(test_what_a_rotation_counts);
   RUN_TEST(test_the_tracker);
   RUN_TEST(test_the_write_gate);
   RUN_TEST(test_what_the_card_is_asked);
+  RUN_TEST(test_a_tail_on_the_fatfs_card);
+  RUN_TEST(test_a_remount_and_the_boots_scan);
   RUN_TEST(test_device_txt_says_history);
   return UNITY_END();
 }

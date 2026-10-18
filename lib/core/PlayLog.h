@@ -127,8 +127,9 @@ public:
   // them with tools/playlog.py's ops): a new epoch (n), a play written (n:
   // its seq) or lost, a rename (a to b), a delete (a, why b: "rotation",
   // "acknowledged", "twin"), a drop note (n: dropped), a file renamed to a
-  // twin (a to b), no twin name free (a).
-  enum class Op : uint8_t { Epoch, Play, Lost, Rename, Delete, Note, Twin, Blocked };
+  // twin (a to b), no twin name free (a), a rename to a twin the card
+  // refused (a to b; the reference's card refuses none).
+  enum class Op : uint8_t { Epoch, Play, Lost, Rename, Delete, Note, Twin, Blocked, Refused };
   using OnOp = void (*)(void* ctx, Op op, const char* a, const char* b, uint64_t n);
   struct Config {
     // A file's cap in slots: the contract's, or smaller (a test's 4).
@@ -166,10 +167,18 @@ public:
   bool off() const { return state_ == State::Off; }
   // The cut-rename rule (2.20.2) at a mount: plays.jnl and plays.1.jnl on
   // one chain sends plays.jnl to a twin name; a twin no other file of the
-  // log shares goes. begin() does it; the firmware again at a remount of
-  // the same card. False: no twin name free (blocked: no slot until a
-  // disk check frees one).
+  // log shares goes. begin() and remounted() do it. False: no twin name
+  // free (blocked: no slot until a disk check frees one), or the card
+  // refused the rename (unsettled: append() tries it again first).
   bool settle();
+  // The same card mounted again (the card guard's remount: pulled and put
+  // back, or FatFs's own): settle() again before the next slot; and while
+  // no slot has been asked for this boot, the boot's scan again from its
+  // start, since what it read before the card went may be partial (a file
+  // open across the remount reads nothing more, a read or an open the card
+  // refused while it was out). Its boot rules come out the same or higher
+  // (the boot count from NVS's at the mount), its trim by the same ACKS.
+  void remounted();
 
   enum class Wrote : uint8_t {
     Ok,       // appended and synced
@@ -195,6 +204,7 @@ public:
   uint32_t lastSeq() const { return seq_; }  // the last seq taken (0: none)
   bool newEpoch() const { return newEpoch_; }
   bool blocked() const { return blocked_; }
+  bool unsettled() const { return unsettled_; }
   // The boot's: what its scan found and did.
   struct Booted {
     uint32_t files = 0;       // the log's files read
@@ -204,6 +214,7 @@ public:
     uint32_t cardBoot = 0;    // ... bootSeq
     uint32_t trimmed = 0;     // files ACKS let go
     uint32_t twins = 0;       // twins left (the card wants a disk check)
+    uint32_t restarts = 0;    // scans begun again (remounted())
   };
   const Booted& booted() const { return booted_; }
   // The last rotation's drop note's count (0: none written).
@@ -219,9 +230,12 @@ private:
   // cluster (a cut rename's two entries on one chain).
   bool shared(const char* path);
   // `path` renamed to the first free twin name (a rename frees nothing);
-  // false and blocked when all nine are taken.
+  // false and blocked when all nine are taken, false (Refused) when the
+  // card refuses the rename.
   bool toTwin(const char* path);
   void collectTwins();
+  // The boot's scan from its start (the cut-rename rule done first).
+  void startScan();
   // The scan's end: the boot rules, the trim.
   bool finishScan();
   void closeScan() {
@@ -253,6 +267,9 @@ private:
   uint32_t seq_ = 0;
   bool newEpoch_ = false;
   bool blocked_ = false;
+  bool unsettled_ = false;  // plays.jnl on plays.1.jnl's chain: the card refused its rename
+  bool appended_ = false;   // append() asked for this boot (its bootSeq may be on the card)
+  uint32_t bootsAtMount_ = 0;  // NVS's boot count at begin() (the boot rule's, again at a rescan)
   // The scan.
   int scanFile_ = 0;
   tagstore::File* scanF_ = nullptr;  // scanFile_'s, open between pieces
